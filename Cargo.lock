@@ -8035,6 +8035,7 @@ dependencies = [
  "rds-engine",
  "rds-insight",
  "rds-mock",
+ "rds-scratchpad",
  "rds-settings",
  "rds-shared",
  "rusqlite",

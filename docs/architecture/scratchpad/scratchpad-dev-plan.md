@@ -1,9 +1,39 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**待启动** · 关联文件：`scratchpad-prototype-design.md`（原型）、`scratchpad-prototype.html`（可交互原型）
+> 状态：**P0 + Phase A 已落地；Phase B 首个切片（只读树）已落地**（2026-09-11，`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets` 零告警；`rds-scratchpad` 5 项测试全绿） · Phase B 其余与 Phase C 待续
+> 关联文件：`scratchpad-prototype-design.md`（原型）、`scratchpad-prototype.html`（可交互原型）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：**草稿箱根 = 项目目录**（不再是 `{project}/.scratchpad/`），内部元数据迁至 `.RSmeta/scratchpad/`
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
+
+## 0. 进度记录（最近在前）
+
+### 2026-09-11 — P0 + Phase A + Phase B 首切片
+
+**已完成**
+
+| 项 | 内容 | 落点 | 验证 |
+| --- | --- | --- | --- |
+| P0.1/P0.2 | 当前项目会话：环境变量 `RDS_PROJECT_PATH` → 全局库「最近打开项目」（取路径仍存在者）→ 空态；会话写入 `Shared::project` | `crates/workbench/src/services/project_session.rs`、`panels.rs`（`Shared`）、`view.rs`（`WorkbenchView::new` + 标题栏项目名） | `cargo check` 零告警 |
+| A1/A2 | `ScratchpadStore` 根 = 项目目录；内部元数据 `{project}/.RSmeta/scratchpad/`（`config.json` + `.trash/`）；`ensure_dir` 只建 meta 目录 | `crates/scratchpad/src/store.rs` | 单测 `root_is_project_dir_and_meta_isolated` |
+| A3 | 隐藏与防护：树跳过点前缀条目（`.RSmeta` 天然不可见）；`resolve_path_impl` 拒绝首段为点的路径 | 同上 | 单测 `internal_paths_are_blocked` |
+| A4 | 旧布局迁移：`.scratchpad/.scratchpad.json` → 新配置；用户文件搬到项目根（**同名保留不覆盖**）；旧 `.trash` 并入新回收站；空目录清理；幂等 | 同上（`migrate_legacy_layout`） | 单测 `legacy_layout_is_migrated` |
+| A6 | 清理语义：`CONFIG_FILE` 改为 `config.json`；回收站统一走 `trash_dir()` | 同上 | 编译零告警 |
+| A7 | 测试：根语义/元数据隔离/路径防护/回收站落位/引用持久化/旧布局迁移 5 项 | `store.rs` `mod tests` | `cargo test -p rds-scratchpad` 5 passed |
+| B1 | 依赖接线：workspace `scratchpad` 别名 + workbench 依赖 | `Cargo.toml`、`crates/workbench/Cargo.toml` | `cargo check` |
+| B2/B3（部分） | 草稿箱面板首个切片：工具栏（＋文件 / 🗀文件夹 / ↻刷新）、只读树（展开/折叠/选中）、外部引用分组、回收站计数、空态、底部统计；`LeftPanel::Draft` 由占位接管 | `crates/workbench/src/panels.rs`（`ScratchpadView` / `render_scratchpad`） | `cargo check` 零告警 |
+| A5 | 文件监控：**未做**（`notify` 已是构建图内传递依赖，接入时仍按 workspace.dependencies 统一声明） | `crates/scratchpad/src/state.rs` | — |
+
+**Phase B 未完成（下一步）**：B4 内联新建输入与模板、导入/引用对话框；B5 搜索（文件名过滤 + 内容搜索结果落中央区）；B6 右键菜单/重命名/删除/移动/提升 + 键盘；B7 回收站管理 + 撤销栏；B8 多选/批量；B9 虚拟列表（>50）与排序；懒加载（当前 depth=4 全量，大项目需改按需加载）。
+
+**Phase C 未开始**：编辑器草稿文件模式、`file_meta` 连接恢复、拖放、冲突 Diff、搜索替换。
+
+**已知取舍**：
+- 面板加载用 `Runtime::new().block_on(...)`（与 workbench 现有服务调用模式一致）；后续可改 `cx.spawn`。
+- 新建文件默认 `未命名.sql`（冲突自动 `_1` 递补），未做模板选择。
+- 树为 depth=4 全量加载，未做懒加载；项目根很大时有 IO 开销。
+
+**关键文件**：`crates/scratchpad/src/store.rs`、`crates/scratchpad/src/state.rs`、`crates/workbench/src/panels.rs`、`crates/workbench/src/services/project_session.rs`、`crates/workbench/src/view.rs`、`Cargo.toml`、`crates/workbench/Cargo.toml`。
 
 ## 1. 现状结论（盘点摘要）
 
@@ -25,13 +55,13 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| P0.1 | 启动确定「当前项目根」：优先启动参数，其次 `GlobalDatabaseManager::get_recent_projects` 首项，最后默认工作区目录 | `crates/app/src/main.rs` + `crates/workbench/src/services/`（新增 `project_session.rs`） | 启动后可拿到 `project_root: Option<PathBuf>` |
-| P0.2 | 会话状态入 `Shared`（`Rc<RefCell<Option<ProjectSession>>>`），标题栏项目名 / 连接对话框 / 草稿箱共用 | `crates/workbench/src/panels.rs`（`Shared`）、`view.rs` | 三处读到同一项目根 |
-| P0.3 | 无项目时降级：草稿箱空态、连接项目作用域禁用（消除「手填项目路径」） | workbench | UI 有明确空态 |
+| P0.1 | 启动确定「当前项目根」：优先启动参数，其次 `GlobalDatabaseManager::get_recent_projects` 首项，最后默认工作区目录 ✅ | `crates/app/src/main.rs` + `crates/workbench/src/services/`（新增 `project_session.rs`） | 启动后可拿到 `project_root: Option<PathBuf>` |
+| P0.2 | 会话状态入 `Shared`（`Rc<RefCell<Option<ProjectSession>>>`），标题栏项目名 / 连接对话框 / 草稿箱共用 ✅ | `crates/workbench/src/panels.rs`（`Shared`）、`view.rs` | 三处读到同一项目根 |
+| P0.3 | 无项目时降级：草稿箱空态、连接项目作用域禁用（消除「手填项目路径」）⬜ | workbench | UI 有明确空态 |
 
 > P0 是草稿箱能显示内容的硬前提；若暂缓，草稿箱只能停留在空态。
 
-### Phase A — 后端根语义切换（目标：根 = 项目目录，元数据隔离）
+### Phase A — 后端根语义切换（目标：根 = 项目目录，元数据隔离）✅ 已实现（A5 文件监控除外）
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
@@ -39,17 +69,17 @@
 | A2 | `ensure_dir` 只创建 meta 目录（config 父目录 + trash），**不创建**项目根 | 同上 | 空项目首次调用后出现 `.RSmeta/scratchpad/` |
 | A3 | 隐藏与防护：`scan_dir_tree` 跳过所有点开头条目（已有）+ 显式跳过 `.RSmeta`；`resolve_path_impl` 拒绝首段为 `.RSmeta` 或点开头的相对路径（防越权读写内部目录） | 同上 | `.RSmeta` 不在列表、不可被 API 访问 |
 | A4 | 旧数据迁移：若 `{project}/.scratchpad/` 存在 → 迁移 `config.json`（原 `.scratchpad.json`）与用户文件到新语义（文件本就在根下则不移动），迁移后清理空目录（策略见原型 §8.2 待确认） | 同上（`migrate_legacy_layout`） | 迁移幂等；重复启动不报错 |
-| A5 | 文件监控接入：用 `notify` 监听项目根（忽略 `.RSmeta`），变更经事件推送刷新树；`ScratchpadState::set_watching` 落地 | `crates/scratchpad/src/state.rs`（+ 依赖 `notify`） | 外部新建/修改文件，面板自动刷新 |
+| A5 | 文件监控接入：用 `notify` 监听项目根（忽略 `.RSmeta`），变更经事件推送刷新树；`ScratchpadState::set_watching` 落地 ⬜ 未做 | `crates/scratchpad/src/state.rs`（+ 依赖 `notify`） | 外部新建/修改文件，面板自动刷新 |
 | A6 | 清理占位死文件（`model.rs` / `commands.rs` / `scratchpad_view.rs` 按需合并进 `models/state/view`） | `crates/scratchpad/src/` | `cargo check -p rds-scratchpad` 零告警 |
 | A7 | 单元/集成测试：根列表隐藏内部目录、路径穿越防护、回收站落位、引用/`file_meta` 读写、`get_analyzable_files` 相对路径 | `crates/scratchpad/tests/` | 测试全绿 |
 
-### Phase B — 面板视图接入（目标：替换 `LeftPanel::Draft` 占位）
+### Phase B — 面板视图接入（目标：替换 `LeftPanel::Draft` 占位）△ 首切片已落地（只读树）
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| B1 | 依赖接线：`Cargo.toml` workspace 增 `scratchpad` 别名；workbench 依赖 `scratchpad` | `Cargo.toml`、`crates/workbench/Cargo.toml` | 编译通过，依赖方向向下 |
-| B2 | `ScratchpadPanel` 实体：面板头 / 工具栏 / 搜索 / 分组树 / 底部状态；`Shared` 增加草稿箱状态（选中、展开集合、排序、脏点集合） | `crates/workbench/src/components/scratchpad_panel.rs`、`panels.rs` | 面板渲染，切换活动栏可见 |
-| B3 | 树渲染：递归行、类型图标、选中/悬停/脏点、相对时间、懒加载（`depth=0` → 展开加载） | 同上 | 深目录展开正确 |
+| B1 | 依赖接线：`Cargo.toml` workspace 增 `scratchpad` 别名；workbench 依赖 `scratchpad` ✅ | `Cargo.toml`、`crates/workbench/Cargo.toml` | 编译通过，依赖方向向下 |
+| B2 | `ScratchpadPanel` 实体：面板头 / 工具栏 / 搜索 / 分组树 / 底部状态；`Shared` 增加草稿箱状态（选中、展开集合、排序、脏点集合）✅ 首切片（工具栏 + 只读树 + 分组 + 底部统计，状态存于 `ScratchpadView`） | `crates/workbench/src/components/scratchpad_panel.rs`、`panels.rs` | 面板渲染，切换活动栏可见 |
+| B3 | 树渲染：递归行、类型图标、选中/悬停/脏点、相对时间、懒加载（`depth=0` → 展开加载）✅ 部分（递归行/类型色点/选中/悬停/展开折叠已做；相对时间、脏点、懒加载待补） | 同上 | 深目录展开正确 |
 | B4 | 工具栏与空态：新建文件/文件夹（内联输入 + 模板）、导入、引用、排序、刷新；空态引导 | 同上 | 各按钮闭环 |
 | B5 | 搜索：文件名实时过滤；内容模式调 `search_file_content`（正则/大小写），结果落中央编辑区 | 同上 + `panels.rs` `EditorPanel` | 结果带上下文、可跳行 |
 | B6 | 右键菜单 + 键盘：重命名/删除/剪切/复制/粘贴/打开位置/提升；F2/Delete/Ctrl+A/Ctrl+N | `scratchpad_panel.rs`（绑定 Action/快捷键） | 全操作可用 |

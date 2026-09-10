@@ -9,6 +9,7 @@
 //! 数据仍来自 `ConnectionItem::sample()`（占位），下一轮接 ConnectionService。
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
@@ -22,6 +23,8 @@ use gpui_kit::EventEmitter;
 use gpui_kit::*;
 
 use crate::components::connection_dialog;
+
+use scratchpad::{ExternalReference, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore};
 
 use crate::services::db_navigator::NavTable;
 use crate::services::query_runner::QueryOutput;
@@ -52,6 +55,8 @@ pub struct Shared {
     pub sql_for: Rc<RefCell<Option<String>>>,
     /// 编辑请求（侧边栏「编辑」→ EditorPanel 渲染时消费并打开对话框）。
     pub open_edit: Rc<RefCell<Option<String>>>,
+    /// P0：当前项目会话（草稿箱根 / 项目作用域连接 / 标题栏项目名共用）。
+    pub project: Rc<RefCell<Option<crate::services::project_session::ProjectSession>>>,
 }
 
 impl Shared {
@@ -77,6 +82,7 @@ impl Shared {
             nav_tables: Rc::new(RefCell::new(Vec::new())),
             sql_for: Rc::new(RefCell::new(None)),
             open_edit: Rc::new(RefCell::new(None)),
+            project: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -104,6 +110,81 @@ pub enum SidebarEvent {
 pub struct SidebarPanel {
     shared: Shared,
     focus_handle: FocusHandle,
+    /// M5 草稿箱面板状态（首次渲染触发加载）。
+    scratchpad: Rc<RefCell<ScratchpadView>>,
+}
+
+/// 草稿箱面板视图状态。
+///
+/// 数据来自 `rds-scratchpad` 存储，根目录 = 当前项目会话的根（`Shared::project`）。
+/// 首个切片为只读树（展开/折叠/选中/新建/刷新），重操作（重命名/删除/搜索/引用）后续补齐。
+#[derive(Default)]
+struct ScratchpadView {
+    /// 是否已尝试加载（首次渲染触发一次）。
+    loaded: bool,
+    /// 加载错误（未打开项目 / 运行时或存储错误）。
+    error: Option<String>,
+    /// 项目根下的条目树（depth=4 全量；懒加载后续再做）。
+    entries: Vec<ScratchpadEntry>,
+    /// 外部引用（来自草稿箱配置）。
+    external_refs: Vec<ExternalReference>,
+    /// 已展开的文件夹路径集合。
+    expanded: HashSet<String>,
+    /// 当前选中条目路径。
+    selected: Option<String>,
+    /// 回收站条目数。
+    trash_count: usize,
+}
+
+/// 将条目树按展开状态压平成 `(缩进层级, 条目)` 行序列。
+fn flatten_scratchpad(
+    entries: &[ScratchpadEntry],
+    depth: usize,
+    expanded: &HashSet<String>,
+    out: &mut Vec<(usize, ScratchpadEntry)>,
+) {
+    for entry in entries {
+        let key = entry.path.to_string_lossy().to_string();
+        let is_folder = matches!(entry.kind, ScratchpadEntryKind::Folder);
+        out.push((depth, entry.clone()));
+        if is_folder && expanded.contains(&key) {
+            if let Some(children) = &entry.children {
+                flatten_scratchpad(children, depth + 1, expanded, out);
+            }
+        }
+    }
+}
+
+/// 在项目根下生成一个不冲突的文件/文件夹名（`未命名.sql`、`未命名_1.sql` …）。
+fn unique_child_name(root: &std::path::Path, stem: &str, ext: &str) -> String {
+    for i in 0..1000 {
+        let name = if i == 0 {
+            format!("{stem}{ext}")
+        } else {
+            format!("{stem}_{i}{ext}")
+        };
+        if !root.join(&name).exists() {
+            return name;
+        }
+    }
+    format!("{stem}_999{ext}")
+}
+
+/// 扩展名 → 图标点色（复用主题标准色，代码零裸色）。
+fn scratchpad_icon_color(theme: &gpui_kit::component::Theme, name: &str) -> Hsla {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "sql" => theme.colors.info,
+        "py" => theme.colors.success,
+        "csv" | "tsv" | "parquet" | "xlsx" | "xls" | "json" | "ndjson" | "db" | "duckdb" => {
+            theme.colors.primary
+        }
+        _ => theme.colors.muted_foreground,
+    }
 }
 
 impl SidebarPanel {
@@ -111,6 +192,54 @@ impl SidebarPanel {
         Self {
             shared,
             focus_handle: cx.focus_handle(),
+            scratchpad: Rc::new(RefCell::new(ScratchpadView::default())),
+        }
+    }
+
+    /// 加载草稿箱数据（阻塞式，与 workbench 现有服务调用模式一致）。
+    fn load_scratchpad(&self) {
+        let root = self
+            .shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|s| s.root.clone());
+
+        let mut view = self.scratchpad.borrow_mut();
+        view.loaded = true;
+        view.error = None;
+        view.entries.clear();
+        view.external_refs.clear();
+        view.trash_count = 0;
+
+        let Some(root) = root else {
+            view.error = Some("未打开项目：草稿箱根即项目目录，请先打开项目。".to_string());
+            return;
+        };
+
+        let store = ScratchpadStore::new(root);
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                view.error = Some(format!("运行时错误: {e}"));
+                return;
+            }
+        };
+
+        let result = rt.block_on(async {
+            let entries = store.list_local_entries(4).await?;
+            let config = store.load_config().await?;
+            let trash = store.list_trash().await?;
+            Ok::<_, shared::error::CoreError>((entries, config, trash))
+        });
+
+        match result {
+            Ok((entries, config, trash)) => {
+                view.entries = entries;
+                view.external_refs = config.external_references;
+                view.trash_count = trash.len();
+            }
+            Err(e) => view.error = Some(format!("加载草稿箱失败: {e}")),
         }
     }
 
@@ -292,34 +421,320 @@ impl SidebarPanel {
             )
     }
 
-    fn render_draft_placeholder(&self, fg: Hsla) -> Div {
-        div()
+    /// 草稿箱面板（M5）：根 = 项目目录。
+    ///
+    /// 首个切片：工具栏（新建文件/文件夹、刷新）+ 只读树（展开/折叠/选中）
+    /// + 外部引用/回收站分组 + 空态。重命名/删除/搜索/引用管理后续补齐。
+    fn render_scratchpad(&self, cx: &mut Context<Self>) -> Div {
+        if !self.scratchpad.borrow().loaded {
+            self.load_scratchpad();
+        }
+
+        let theme = cx.theme();
+        let hover_bg = theme.colors.list_hover;
+        let selected_bg = theme.colors.sidebar_accent;
+        let fg = theme.colors.foreground;
+        let muted = theme.colors.muted_foreground;
+        let folder_color = theme.colors.warning;
+        let ref_color = theme.colors.info;
+
+        let entity = cx.entity();
+        let view_handle = self.scratchpad.clone();
+
+        let (rows, error, external_refs, trash_count, selected, expanded) = {
+            let view = self.scratchpad.borrow();
+            let mut flat = Vec::new();
+            flatten_scratchpad(&view.entries, 0, &view.expanded, &mut flat);
+            (
+                flat,
+                view.error.clone(),
+                view.external_refs.clone(),
+                view.trash_count,
+                view.selected.clone(),
+                view.expanded.clone(),
+            )
+        };
+
+        // ── 工具栏（新建文件 / 新建文件夹 / 刷新）──
+        let new_file_click = {
+            let shared = self.shared.clone();
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                if let Some(root) = shared.project.borrow().as_ref().map(|s| s.root.clone()) {
+                    let name = unique_child_name(&root, "未命名", ".sql");
+                    if let Ok(rt) = tokio::runtime::Runtime::new() {
+                        let store = ScratchpadStore::new(root);
+                        let _ = rt.block_on(store.create_entry(&name, None, false));
+                    }
+                    view.borrow_mut().loaded = false;
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let new_folder_click = {
+            let shared = self.shared.clone();
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                if let Some(root) = shared.project.borrow().as_ref().map(|s| s.root.clone()) {
+                    let name = unique_child_name(&root, "新建文件夹", "");
+                    if let Ok(rt) = tokio::runtime::Runtime::new() {
+                        let store = ScratchpadStore::new(root);
+                        let _ = rt.block_on(store.create_entry(&name, None, true));
+                    }
+                    view.borrow_mut().loaded = false;
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let refresh_click = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                view.borrow_mut().loaded = false;
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+
+        let tool_btn = |id: &'static str,
+                        glyph: &'static str,
+                        handler: Box<
+            dyn Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
+        >| {
+            div()
+                .id(id)
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .w(px(24.))
+                .h(px(24.))
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(muted)
+                .hover(move |s| s.bg(hover_bg))
+                .on_click(move |ev, window, app| handler(ev, window, app))
+                .child(glyph)
+        };
+
+        let toolbar = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .w_full()
+            .px(px(6.))
+            .py(px(4.))
+            .child(tool_btn("sp-new-file", "＋", Box::new(new_file_click)))
+            .child(tool_btn("sp-new-folder", "🗀", Box::new(new_folder_click)))
+            .child(div().flex_1())
+            .child(tool_btn("sp-refresh", "↻", Box::new(refresh_click)));
+
+        let group_header = |label: &str, count: usize| {
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .w_full()
+                .h(px(22.))
+                .px(px(6.))
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(muted)
+                .child(label.to_string())
+                .child(div().flex_1())
+                .child(count.to_string())
+        };
+
+        let mut panel = div().v_flex().w_full().h_full().min_h_0().child(toolbar);
+
+        if let Some(err) = &error {
+            return panel.child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .px(px(10.))
+                    .py(px(12.))
+                    .text_xs()
+                    .text_color(muted)
+                    .child(err.clone()),
+            );
+        }
+
+        let mut body = div()
             .v_flex()
+            .flex_1()
+            .min_h_0()
             .w_full()
             .gap_1()
-            .pl(px(8.))
-            .pr(px(8.))
-            .pt(px(8.))
-            .pb(px(8.))
-            .child(
+            .px(px(4.))
+            .pb(px(4.));
+
+        if rows.is_empty() {
+            body = body.child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .v_flex()
+                    .items_center()
+                    .w_full()
+                    .pt(px(24.))
+                    .px(px(8.))
                     .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .child("草稿箱"),
-            )
-            .child(
-                div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
-                    .text_xs()
-                    .text_color(fg)
-                    .child("· 草稿（暂未接入）"),
-            )
+                    .text_color(muted)
+                    .child("项目工作区还没有文件")
+                    .child(div().mt_1().child("用上方「＋」新建，或导入现有文件。")),
+            );
+        } else {
+            body = body.child(group_header("项目文件", rows.len()));
+            for (depth, entry) in &rows {
+                let key = entry.path.to_string_lossy().to_string();
+                let is_folder = entry.kind == ScratchpadEntryKind::Folder;
+                let has_children = entry
+                    .children
+                    .as_ref()
+                    .map(|c| !c.is_empty())
+                    .unwrap_or(false);
+                let is_selected = selected.as_deref() == Some(key.as_str());
+                let is_expanded = expanded.contains(&key);
+
+                let click = {
+                    let view = view_handle.clone();
+                    let entity = entity.clone();
+                    let key = key.clone();
+                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                        {
+                            let mut v = view.borrow_mut();
+                            v.selected = Some(key.clone());
+                            if is_folder {
+                                if v.expanded.contains(&key) {
+                                    v.expanded.remove(&key);
+                                } else {
+                                    v.expanded.insert(key.clone());
+                                }
+                            }
+                        }
+                        entity.update(app, |_, cx| cx.notify());
+                    }
+                };
+
+                let chevron = if is_folder && has_children {
+                    if is_expanded {
+                        "▾"
+                    } else {
+                        "▸"
+                    }
+                } else {
+                    ""
+                };
+                let icon_color = if is_folder {
+                    folder_color
+                } else {
+                    scratchpad_icon_color(theme, &entry.name)
+                };
+
+                body = body.child(
+                    div()
+                        .id(format!("sp-row-{key}"))
+                        .h_flex()
+                        .items_center()
+                        .w_full()
+                        .h(px(24.))
+                        .gap_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .when(is_selected, |this| this.bg(selected_bg))
+                        .hover(move |s| s.bg(hover_bg))
+                        .on_click(click)
+                        .child(div().w(px(*depth as f32 * 12.0)).flex_none())
+                        .child(
+                            div()
+                                .w(px(10.))
+                                .flex_none()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(chevron),
+                        )
+                        .child(
+                            div()
+                                .w(px(8.))
+                                .h(px(8.))
+                                .flex_none()
+                                .rounded_sm()
+                                .bg(icon_color),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(fg)
+                                .child(entry.name.clone()),
+                        ),
+                );
+            }
+        }
+
+        if !external_refs.is_empty() {
+            body = body.child(group_header("外部引用", external_refs.len()));
+            for r in &external_refs {
+                body = body.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .w_full()
+                        .h(px(22.))
+                        .px(px(6.))
+                        .child(
+                            div()
+                                .w(px(8.))
+                                .h(px(8.))
+                                .flex_none()
+                                .rounded_sm()
+                                .bg(ref_color),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(fg)
+                                .child(r.alias.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(r.path.to_string_lossy().to_string()),
+                        ),
+                );
+            }
+        }
+
+        if trash_count > 0 {
+            body = body.child(group_header("回收站", trash_count));
+        }
+
+        panel = panel.child(body);
+
+        let file_count = rows
+            .iter()
+            .filter(|(_, e)| e.kind == ScratchpadEntryKind::File)
+            .count();
+        let folder_count = rows.len() - file_count;
+        panel = panel.child(
+            div()
+                .w_full()
+                .px(px(8.))
+                .py(px(4.))
+                .text_xs()
+                .text_color(muted)
+                .child(format!(
+                    "{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用",
+                    external_refs.len()
+                )),
+        );
+
+        panel
     }
 
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
@@ -369,7 +784,7 @@ impl Render for SidebarPanel {
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();
         let content: Div = match active {
-            LeftPanel::Draft => self.render_draft_placeholder(fg),
+            LeftPanel::Draft => self.render_scratchpad(cx),
             LeftPanel::Database => {
                 // 数据库导航 = 数据源连接列表（保留连接管理入口）+ 导航树占位。
                 let mut panel = self.render_connection_list(cx);

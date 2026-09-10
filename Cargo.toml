@@ -43,6 +43,7 @@ connection = { path = "crates/connection", package = "rds-connection" }
 insight = { path = "crates/insight", package = "rds-insight" }
 mock = { path = "crates/mock", package = "rds-mock" }
 settings = { path = "crates/settings", package = "rds-settings" }
+scratchpad = { path = "crates/scratchpad", package = "rds-scratchpad" }
 workbench = { path = "crates/workbench", package = "rds-workbench" }
 
 # ===== 表现层 =====

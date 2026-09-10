@@ -12,6 +12,7 @@ insight.workspace = true
 shared.workspace = true
 mock.workspace = true
 settings.workspace = true
+scratchpad.workspace = true
 
 # ===== GPUI-kit 视图层（Round 19）=====
 gpui-kit.workspace = true

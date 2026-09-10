@@ -152,8 +152,11 @@ impl WorkbenchView {
     pub fn new() -> Self {
         // Round 21：从全局系统库加载真实连接（失败降级为空列表 + 提示）。
         let (connections, notice) = crate::services::workspace_loader::load_persisted_connections();
+        let shared = Shared::with_connections(connections, notice);
+        // P0：解析当前项目会话（环境变量 → 最近项目 → 空态），供标题栏/草稿箱/连接共用。
+        *shared.project.borrow_mut() = crate::services::project_session::resolve();
         Self {
-            shared: Shared::with_connections(connections, notice),
+            shared,
             area: None,
             sidebar: None,
             editor: None,
@@ -314,6 +317,14 @@ impl WorkbenchView {
 
         // 挖空项目槽：标题栏背景深一档。设计语义 token 为 `title_bar.slot.background`
         // （dark #252526 / light #F3F3F3），语义 token 注册落地前以 sidebar 角色同值替代。
+        // 项目名取自当前项目会话（P0）；未打开项目时显示占位。
+        let project_name = self
+            .shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "未打开项目".to_string());
         let slot = div()
             .h_flex()
             .items_center()
@@ -333,7 +344,7 @@ impl WorkbenchView {
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.colors.foreground)
-                    .child("营销分析"),
+                    .child(project_name),
             );
 
         // Quick Open 入口（点击唤起，Ctrl+P 见 commands.rs 绑定）。
