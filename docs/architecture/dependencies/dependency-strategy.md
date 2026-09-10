@@ -71,8 +71,13 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 - `dirs` 5.0.1 → 7.0.0、`x509-parser` 0.17.0 → 0.18.1（未改代码）
 - `aes-gcm` 0.10.3 → 0.11.1（`crates/shared/src/crypto.rs`：`OsRng` 改用 `rand::rngs::OsRng`，`Nonce::from_slice` 改 `Nonce::try_from`，旧的 `aes_gcm::aead::OsRng` 已被移除）
 - `toml` 0.8.23 → 1.1.5、`reqwest` 0.12.28 → 0.13.5（未改代码；reqwest 0.13 把 `rustls-tls` feature 改名为 `rustls`）
+- `russh` 0.49.2 → 0.63.3（`russh-keys` 并入 `russh::keys`，依赖项已删除）。代码改动集中在 `crates/connection`：
+  - `russh_keys::*` → `russh::keys::*`（含 `#[cfg(unix)]` 的 agent 路径；**Windows 上不参与编译，需在 Linux/macOS 侧补验**）
+  - `Handler` 改为原生 async trait（去掉 `#[async_trait]`），`check_server_key` 入参改为 `PublicKeyOrCertificate`（证书形式统一 `.public_key()` 后按公钥校验）
+  - `PrivateKeyWithHashAlg::new` 不再返回 `Result`，移除对应的 `map_err` 分支
+  - 单测去掉 RNG 依赖：改用两把固定测试公钥（`PublicKey::from_openssh`）—— `rand_core 0.10` 已移除 `OsRng`，且 `PrivateKey::random` 要求的 trait 与 rand 0.8 不兼容；`connection` 的 `dev-dependencies.rand` 随之删除
 
-以上验证：`cargo check-all`（= `check --workspace --all-targets`）全量通过；`cargo test -p rds-shared` 19 项全过（含 3 项密码加解密）。
+以上验证：`cargo check -p rds-connection`、`cargo test -p rds-connection`（**20 项全过**）`cargo check-all` 全量通过。
 
 待办：
 
@@ -83,10 +88,33 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | `sqlx` | 0.8.6 | 0.9.0 | 43 | 驱动 API 变更 |
 | `sqlglot-rust` | `=0.9.25` | 0.10.29 | 25 | 需 SQL 转译回归 |
 | `rand` | 0.8.8 | 0.10.2 | 19 | `thread_rng`/`gen_range` 等改名；注意 `fake` 内部仍用 rand 0.8，升完也不去重 |
-| `russh` | 0.49.2 | 0.63.3 | 13 | `russh-keys` 已并入 `russh`，结构需调整；升完 `aes-gcm` 可与本仓 0.11 合流 |
 | `arrow` | 58.4.0 | 59.3.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4） |
 
-## 5. 其他约定
+## 5. 关键依赖与约束
+
+### 业务关键依赖
+
+- **`sqlglot-rust`｜SQL 编辑器的解析 / 格式化 / 转译**：`crates/engine/src/sql/`（`mod.rs` / `engine.rs` / `parser.rs` / `formatter.rs` / `transpiler.rs` / `builder.rs`）是它在全仓的**唯一接入点**，业务模块只 `use crate::sql::SqlEngine`，不直接依赖 sqlglot API。它直接支撑编辑页面的 SQL 能力，因此保持 `=0.9.25` 精确锁定；升到 0.10.x 属于业务相关变更，需先补齐「语句分类 / 格式化 / 跨方言转译」的回归用例，并单独提交。
+- **`gpui-kit` 家族**：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` 必须同版本，随 GPUI-kit 发布节奏整套升（见 R4）。
+- **`arrow` 跟随 `duckdb`**（见 R4）。
+
+### 加密后端约束（不要改回默认）
+
+- `russh` 默认 feature 走 `aws-lc-rs` 后端，其构建脚本在 Windows 上要求本机安装 NASM，缺失会直接构建失败。本仓改用官方支持的 `ring` 后端：
+  `russh = { version = "0.63.3", default-features = false, features = ["ring", "rsa", "flate2"] }`。
+  `ring` 与 `aws-lc-rs` 同属 BoringSSL 家族，SSH 算法集合基本一致；`rsa`（RSA 密钥）与 `flate2`（压缩）保持启用。
+- `aes-gcm` 只用于 `crates/shared/src/crypto.rs` 的密码加解密（12 字节 nonce + AES-256-GCM + base64），升级后密文格式不变，已有密文可继续解开。
+- 另：`reqwest` → `rustls` 链路也会带入 `aws-lc-sys`，本机实测未触发 NASM 报错（两处配置不同）；新机器首次构建若报 NASM 缺失，优先查这条链（装 NASM 或调整 rustls 的 crypto provider）。
+
+### 存量评估
+
+- **`specta`｜v1 遗留，暂留**：全仓 31+ 处 `use specta::Type` / `#[derive(Type)]`（engine 最多），但**没有任何导出器消费**（根表无 `specta-typescript` / `tauri-specta`），当前只产出类型元数据、没有实际产物——它是 v1（Tauri + TS 前端）留下的。结论：**暂时保留**（M9 插件或未来对外类型导出可能复用；删除涉及 31 个文件，恢复成本更高）。若确定 v2 不再对外暴露类型，可作为一次独立清理移除，同时去掉 `=2.0.0-rc.25` 这个 rc pin。
+
+### 已知脆点（本轮发现，未修）
+
+- `crates/connection/src/known_hosts.rs` 的 `verify()` 用 `PublicKey == PublicKey` 比较，而 `ssh_key::PublicKey` 的 `PartialEq` **包含 `comment` 字段**；写入侧用的 `public_key_base64()` 又只输出 base64 本体（不含类型前缀与注释）。所以当 known_hosts 行尾带注释（部分工具生成或手工粘贴）时，解析出的 key 注释非空、与服务端 key（注释恒空）不等，**即使密钥一致也会判定为不匹配并报 MITM 风险**。建议改为比较 `key_data()` 或 SHA-256 指纹（语义等价、与注释无关）。
+
+## 6. 工程约定
 
 - `v1/` 为历史参考实现，自带 workspace 与 `Cargo.lock`，不参与 v2 构建；根 `Cargo.toml` 用 `exclude = ["v1"]` 显式排除（否则在 `v1/backend` 下执行 cargo 会报 “believes it's in a workspace when it's not”），该目录后续删除。
 - 新增 crate 时：先在根表确认依赖是否已有条目，没有再加到根表；crate 内只写 `dep.workspace = true`。
@@ -95,7 +123,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
   - 不要写 `[profile.*]`：Cargo 1.57 起只认根 `Cargo.toml`（`v1/backend/.cargo/config.toml` 里的 profile 就是这样失效的）
   - 当前内容：`check-all` / `test-all` / `clippy-all` 三个别名，用来弥补 `default-members` 导致裸 `cargo test` 只覆盖 app 图的行为
 
-## 6. 实现位置映射表
+## 7. 实现位置映射表
 
 | 设计决策 | 代码位置 |
 | --- | --- |
@@ -103,11 +131,12 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | R1 内部 crate 路径唯一入口 | 同上（`shared` / `engine` / `connection` / `insight` / `mock` / `settings` / `workbench` 条目） |
 | R2 crate 内写法 | `crates/*/Cargo.toml`（13 个成员） |
 | R3 版本取值来自解析结果 | `Cargo.lock` ↔ 根表版本号 |
-| R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = "0.6"` |
-| R4 例外：specta / sqlglot-rust | 同上（精确锁定条目） |
+| R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = "0.6.1"` |
+| R4 例外：specta / sqlglot-rust | 同上（精确锁定条目；sqlglot 的唯一边界见 `crates/engine/src/sql/`） |
 | R4 例外：arrow 跟随 duckdb | 同上（`arrow` / `duckdb` 条目） |
 | v1 目录不参与构建 | `Cargo.toml` → `workspace.exclude` |
 | 版本继承（version/edition） | `Cargo.toml` → `[workspace.package]` |
 | 编译时间：默认只构建 app 图 | `Cargo.toml` → `workspace.default-members` |
 | 编译时间：依赖不产 debuginfo | `Cargo.toml` → `[profile.dev.package."*"]` |
 | 项目级构建别名 | `.cargo/config.toml` → `[alias]`（`check-all` / `test-all` / `clippy-all`） |
+| 加密后端约束（ring） | `Cargo.toml` → `russh` 条目（`default-features = false`） |

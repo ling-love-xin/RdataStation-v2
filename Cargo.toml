@@ -56,8 +56,12 @@ gpui-kit = "0.6.1"
 # 因此 arrow 只在 duckdb 升级时跟着升。
 duckdb = { version = "1.10505.0", features = ["bundled"] }
 arrow = "58.4.0"
-rusqlite = { version = "0.32.1", features = ["bundled", "chrono", "serde_json"] }
-sqlx = { version = "0.8.6", features = [
+rusqlite = { version = "0.40", features = ["bundled", "chrono", "serde_json"] }
+# 只用 MySQL / Postgres：关闭默认 feature 以移除 `any` 驱动。
+# `any` 会带入 sqlx-sqlite → libsqlite3-sys（声明 links = "sqlite3"），
+# 与 rusqlite 的同名 native 库冲突，导致 rusqlite 无法升级。
+# 改回默认 feature 前请确认 sqlx 与 rusqlite 的 libsqlite3-sys 版本一致。
+sqlx = { version = "0.8.6", default-features = false, features = [
     "mysql",
     "postgres",
     "runtime-tokio",

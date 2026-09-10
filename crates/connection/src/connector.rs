@@ -414,12 +414,9 @@ pub async fn establish_ssh_tunnel(
                         reason: format!("无法加载SSH私钥 '{}': {}", key_path, e),
                     })
                 })?;
-            let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(key), None).map_err(|e| {
-                CoreError::connection(ConnectionError::InvalidConfig {
-                    conn_id: ssh_addr.clone(),
-                    reason: format!("SSH私钥哈希算法协商失败: {}", e),
-                })
-            })?;
+            // russh 0.63 起 PrivateKeyWithHashAlg::new 不再返回 Result
+            // （哈希算法不可用时由内部回退处理）
+            let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(key), None);
             session
                 .lock()
                 .await

@@ -167,7 +167,9 @@ impl KnownHosts {
         }
 
         for candidate in candidates {
-            if candidate.public_key == *server_key {
+            // 只比较密钥本体：`PublicKey` 的 PartialEq 会连带比较 comment 字段，
+            // 而 known_hosts 行可能带行尾注释，导致密钥一致却判定不匹配（误报 MITM）
+            if candidate.public_key.public_key_bytes() == server_key.public_key_bytes() {
                 tracing::info!(
                     target: "known_hosts",
                     host = %host,
@@ -347,12 +349,30 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_entry_with_trailing_comment_still_matches() -> Result<(), CoreError> {
+        // known_hosts 行尾带注释时（部分工具生成或手工粘贴），密钥一致仍应匹配成功
+        let test_key = create_test_key()?;
+        let content = format!(
+            "example.com ssh-ed25519 {} user@example.com\n",
+            test_key.public_key_base64()
+        );
+
+        let mut hosts = KnownHosts::new(false);
+        hosts.parse(&content);
+
+        assert!(hosts.verify("example.com", 22, &test_key));
+        Ok(())
+    }
+
     /// 测试用固定公钥 A（Ed25519，仅用于单测；只含公钥，无需 RNG 依赖）
+    /// 注意：不带注释——`PublicKey` 的 PartialEq 会比对 comment 字段，
+    /// 而 `public_key_base64()` 输出不含注释，带注释会导致往返比较不相等
     const TEST_KEY_A: &str =
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBkzxbG3si6k3jEXkAdanRHjo/3yA/x4NCJdxXDDfjxd rdata-test-a";
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBkzxbG3si6k3jEXkAdanRHjo/3yA/x4NCJdxXDDfjxd";
     /// 测试用固定公钥 B（与 A 不同，用于“密钥不匹配”场景）
     const TEST_KEY_B: &str =
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO7v3HWgTuQy1N/bcegB1zYs0KE0r9Y8F/ZNteVKKh5c rdata-test-b";
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO7v3HWgTuQy1N/bcegB1zYs0KE0r9Y8F/ZNteVKKh5c";
 
     fn parse_test_key(openssh: &str) -> Result<PublicKey, CoreError> {
         PublicKey::from_openssh(openssh)
