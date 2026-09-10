@@ -19,60 +19,64 @@ use workbench::commands::ToggleQuickOpen;
 use workbench::WorkbenchView;
 
 fn main() {
-    gpui_kit::application().run(move |cx| {
-        // 0. 全局系统库（global.db / analytics.duckdb）：M3 连接、M4 元数据
-        //    与工作台列表的共同持久化根，必须在任何 Feature 读取前完成初始化。
-        init_global_system();
+    // 注册内置图标资产源：gpui-kit 组件与 IconName 的 SVG 均从 AssetSource 加载，
+    // 未注册时所有图标静默渲染为空（元素在但看不到）。
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::AllAssets)
+        .run(move |cx| {
+            // 0. 全局系统库（global.db / analytics.duckdb）：M3 连接、M4 元数据
+            //    与工作台列表的共同持久化根，必须在任何 Feature 读取前完成初始化。
+            init_global_system();
 
-        gpui_kit::init(cx);
+            gpui_kit::init(cx);
 
-        // 1. 设置：加载 %APPDATA%/RdataStation/settings.json 为 global。
-        SettingsService::init(cx);
+            // 1. 设置：加载 %APPDATA%/RdataStation/settings.json 为 global。
+            SettingsService::init(cx);
 
-        // 2. 主题资产：先同步加载目录内主题并接入 `Theme`，保证首帧即为 RDS 配色。
-        //    （`watch_dir` 为异步加载，若仅依赖它，窗口创建早于加载完成时会停留在
-        //    gpui-kit 默认主题，表现为全局颜色与设计不符。）
-        let themes_dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/themes");
-        load_theme_assets(&themes_dir, cx);
-        attach_rds_theme(cx);
-
-        // 3. 主题目录监听（热更新）：文件变更后重新接入并刷新窗口。
-        let _ = ThemeRegistry::watch_dir(themes_dir, cx, |cx| {
+            // 2. 主题资产：先同步加载目录内主题并接入 `Theme`，保证首帧即为 RDS 配色。
+            //    （`watch_dir` 为异步加载，若仅依赖它，窗口创建早于加载完成时会停留在
+            //    gpui-kit 默认主题，表现为全局颜色与设计不符。）
+            let themes_dir =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/themes");
+            load_theme_assets(&themes_dir, cx);
             attach_rds_theme(cx);
+
+            // 3. 主题目录监听（热更新）：文件变更后重新接入并刷新窗口。
+            let _ = ThemeRegistry::watch_dir(themes_dir, cx, |cx| {
+                attach_rds_theme(cx);
+                let mode = SettingsService::theme_mode(cx);
+                Theme::change(mode, None, cx);
+                cx.refresh_windows();
+            });
+
+            // 4. 应用已保存的主题模式（明 / 暗），与 settings 外观节一致。
             let mode = SettingsService::theme_mode(cx);
             Theme::change(mode, None, cx);
-            cx.refresh_windows();
-        });
 
-        // 4. 应用已保存的主题模式（明 / 暗），与 settings 外观节一致。
-        let mode = SettingsService::theme_mode(cx);
-        Theme::change(mode, None, cx);
+            // 5. 快捷键：Quick Open（Ctrl+P）、设置（Ctrl+,）。
+            //    Quick Open 触发后由 workbench 的 key_context("workbench") on_action 处理。
+            cx.bind_keys([
+                KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
+                KeyBinding::new("ctrl-,", OpenSettings, Some("workbench")),
+            ]);
 
-        // 5. 快捷键：Quick Open（Ctrl+P）、设置（Ctrl+,）。
-        //    Quick Open 触发后由 workbench 的 key_context("workbench") on_action 处理。
-        cx.bind_keys([
-            KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
-            KeyBinding::new("ctrl-,", OpenSettings, Some("workbench")),
-        ]);
-
-        cx.spawn(async move |cx| {
-            // 自绘标题栏窗口：隐藏系统标题栏（appears_transparent），
-            // 拖拽与窗口控件（最小化/最大化/关闭）由 workbench 标题栏的
-            // window_control_area 自绘机制接管（Windows/macOS）。
-            let mut options = TitleBar::window_options();
-            if let Some(titlebar) = options.titlebar.as_mut() {
-                titlebar.title = Some("RdataStation".into());
-            }
-            cx.open_window(options, |window, cx| {
-                let workspace = cx.new(|_| WorkbenchView::new());
-                // 窗口第一层必须是 Root
-                cx.new(|cx| Root::new(workspace, window, cx))
+            cx.spawn(async move |cx| {
+                // 自绘标题栏窗口：隐藏系统标题栏（appears_transparent），
+                // 拖拽与窗口控件（最小化/最大化/关闭）由 workbench 标题栏的
+                // window_control_area 自绘机制接管（Windows/macOS）。
+                let mut options = TitleBar::window_options();
+                if let Some(titlebar) = options.titlebar.as_mut() {
+                    titlebar.title = Some("RdataStation".into());
+                }
+                cx.open_window(options, |window, cx| {
+                    let workspace = cx.new(|_| WorkbenchView::new());
+                    // 窗口第一层必须是 Root
+                    cx.new(|cx| Root::new(workspace, window, cx))
+                })
+                .expect("failed to open window");
             })
-            .expect("failed to open window");
-        })
-        .detach();
-    });
+            .detach();
+        });
 }
 
 /// 初始化全局系统库（执行全局迁移 + 建立连接池单例）。

@@ -145,7 +145,11 @@ fake = { version = "5.1.0", features = [
     "time",
 ] }
 extism = "1.30.0"
-reqwest = { version = "0.13.5", features = ["json", "rustls"] }
+reqwest = { version = "0.12.28", features = ["json", "rustls-tls"] }
+
+# ===== 构建脚本工具 =====
+# Windows 下把 assets/icons/icon.ico 嵌入 exe 资源（任务栏 / 窗口图标）
+winresource = "0.1"
 
 [profile.dev]
 debug = "line-tables-only"

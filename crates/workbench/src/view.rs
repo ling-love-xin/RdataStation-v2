@@ -78,13 +78,16 @@ impl LeftPanel {
         }
     }
 
-    pub fn icon(self) -> IconName {
-        match self {
-            LeftPanel::Draft => IconName::FileText,
-            LeftPanel::Database => IconName::HardDrive,
-            LeftPanel::Resources => IconName::FolderOpen,
-            LeftPanel::Plugin => IconName::Bot,
-        }
+    /// 活动栏图标（Lucide）：默认图标集（`IconName`）不含这些语义图标，
+    /// 应用已注册 `AllAssets`（全量目录），故按资产路径直接引用。
+    pub fn icon(self) -> Icon {
+        let path = match self {
+            LeftPanel::Draft => "icons/notebook-text.svg",
+            LeftPanel::Database => "icons/database.svg",
+            LeftPanel::Resources => "icons/chart-column.svg",
+            LeftPanel::Plugin => "icons/puzzle.svg",
+        };
+        Icon::default().path(path)
     }
 }
 
@@ -99,12 +102,14 @@ impl RightPanel {
         }
     }
 
-    pub fn icon(self) -> IconName {
-        match self {
-            RightPanel::Insight => IconName::Eye,
-            RightPanel::Mock => IconName::RotateCw,
-            RightPanel::History => IconName::Undo,
-        }
+    /// 活动栏图标（Lucide），与左侧同样按资产路径引用。
+    pub fn icon(self) -> Icon {
+        let path = match self {
+            RightPanel::Insight => "icons/lightbulb.svg",
+            RightPanel::Mock => "icons/dice-5.svg",
+            RightPanel::History => "icons/clock.svg",
+        };
+        Icon::default().path(path)
     }
 }
 
@@ -626,10 +631,42 @@ impl WorkbenchView {
             .selected_connection()
             .map(|c| c.name)
             .unwrap_or_else(|| "未选择连接".to_string());
-        let left_label = self.shared.active_left.get().label();
-        let right_label = self.shared.active_right.get().label();
-        let all_hidden = self.shared.left_mode.get() == SidebarMode::Hidden
-            && self.shared.right_mode.get() == SidebarMode::Hidden;
+        let active_label = self.shared.active_left.get().label();
+        let left_hidden = self.shared.left_mode.get() == SidebarMode::Hidden;
+        let right_hidden = self.shared.right_mode.get() == SidebarMode::Hidden;
+
+        // 左侧独立开关：完全隐藏 / 恢复（恢复时还原隐藏前模式）。
+        // 自绘（对齐设计稿 .sb-btn）：显式前景色 + hover 高亮，不依赖 Button 变体样式。
+        let left_shared = shared.clone();
+        let left_entity = entity.clone();
+        let left_toggle = sb_toggle(
+            "toggle-left-sidebar",
+            IconName::PanelLeftClose,
+            if left_hidden {
+                "» 恢复"
+            } else {
+                "« 完全隐藏"
+            },
+            theme.colors.primary_foreground,
+            theme.colors.primary_active,
+            move |app| toggle_sidebar_hidden(&left_shared, &left_entity, true, app),
+        );
+
+        // 右侧独立开关（镜像）。
+        let right_shared = shared.clone();
+        let right_entity = entity.clone();
+        let right_toggle = sb_toggle(
+            "toggle-right-sidebar",
+            IconName::PanelRightClose,
+            if right_hidden {
+                "« 恢复"
+            } else {
+                "完全隐藏 »"
+            },
+            theme.colors.primary_foreground,
+            theme.colors.primary_active,
+            move |app| toggle_sidebar_hidden(&right_shared, &right_entity, false, app),
+        );
 
         // 状态栏背景品牌珊瑚色（theme.colors.primary 派生，见 theme-design §5.4），文字取配对前景色。
         StatusBar::new()
@@ -641,29 +678,8 @@ impl WorkbenchView {
                     .items_center()
                     .gap_2()
                     .text_xs()
-                    .child(
-                        Button::new("hide-sidebars")
-                            .icon(IconName::PanelLeftClose)
-                            .size(px(18.))
-                            .ghost()
-                            .text_color(theme.colors.primary_foreground)
-                            .label(if all_hidden {
-                                "« 恢复"
-                            } else {
-                                "« 完全隐藏"
-                            })
-                            .on_click(move |_, _, app| {
-                                if all_hidden {
-                                    shared.left_mode.set(SidebarMode::Expanded);
-                                    shared.right_mode.set(SidebarMode::Expanded);
-                                } else {
-                                    shared.left_mode.set(SidebarMode::Hidden);
-                                    shared.right_mode.set(SidebarMode::Hidden);
-                                }
-                                entity.update(app, |_, cx| cx.notify());
-                            }),
-                    )
-                    .child(div().child(format!("左：{left_label} · 右：{right_label}"))),
+                    .child(left_toggle)
+                    .child(div().child(active_label)),
             )
             .right(
                 div()
@@ -673,8 +689,64 @@ impl WorkbenchView {
                     .text_xs()
                     .child(div().child(format!("连接：{selected}")))
                     .child(div().child("DuckDB 就绪"))
-                    .child(div().child("UTF-8")),
+                    .child(div().child("UTF-8"))
+                    .child(right_toggle),
             )
+    }
+}
+
+/// 状态栏开关按钮（自绘，对齐设计稿 .sb-btn）：图标 + 文字 + hover 高亮。
+fn sb_toggle(
+    id: &'static str,
+    icon: IconName,
+    label: &'static str,
+    fg: Hsla,
+    hover_bg: Hsla,
+    on_click: impl Fn(&mut App) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .rounded_sm()
+        .cursor_pointer()
+        .text_color(fg)
+        .hover(move |s| s.bg(hover_bg))
+        .child(Icon::new(icon).size(px(14.)))
+        .child(div().child(label))
+        .on_click(move |_, _, app| on_click(app))
+}
+
+/// 切换单侧「完全隐藏」：隐藏前记录当前模式快照，恢复时按快照还原，
+/// 保证「收起」等状态在完全隐藏 / 恢复往返后不丢失。
+fn toggle_sidebar_hidden(
+    shared: &Shared,
+    entity: &Entity<WorkbenchView>,
+    is_left: bool,
+    app: &mut App,
+) {
+    let (mode, snapshot) = if is_left {
+        (&shared.left_mode, &shared.left_mode_before_hidden)
+    } else {
+        (&shared.right_mode, &shared.right_mode_before_hidden)
+    };
+    if mode.get() == SidebarMode::Hidden {
+        mode.set(snapshot.get());
+    } else {
+        snapshot.set(mode.get());
+        mode.set(SidebarMode::Hidden);
+    }
+    entity.update(app, |_, cx| cx.notify());
+}
+
+/// 还原快照模式；快照异常为 Hidden 时兜底为展开（防御性）。
+fn restore_snapshot(mode: SidebarMode) -> SidebarMode {
+    if mode == SidebarMode::Hidden {
+        SidebarMode::Expanded
+    } else {
+        mode
     }
 }
 
@@ -720,8 +792,15 @@ impl Render for WorkbenchView {
                 let entity = cx.entity();
                 move |_: &HideSidebars, _window, cx| {
                     entity.update(cx, |this, cx| {
-                        this.shared.left_mode.set(SidebarMode::Hidden);
-                        this.shared.right_mode.set(SidebarMode::Hidden);
+                        let s = &this.shared;
+                        if s.left_mode.get() != SidebarMode::Hidden {
+                            s.left_mode_before_hidden.set(s.left_mode.get());
+                            s.left_mode.set(SidebarMode::Hidden);
+                        }
+                        if s.right_mode.get() != SidebarMode::Hidden {
+                            s.right_mode_before_hidden.set(s.right_mode.get());
+                            s.right_mode.set(SidebarMode::Hidden);
+                        }
                         cx.notify();
                     });
                 }
@@ -730,8 +809,15 @@ impl Render for WorkbenchView {
                 let entity = cx.entity();
                 move |_: &RestoreSidebars, _window, cx| {
                     entity.update(cx, |this, cx| {
-                        this.shared.left_mode.set(SidebarMode::Expanded);
-                        this.shared.right_mode.set(SidebarMode::Expanded);
+                        let s = &this.shared;
+                        if s.left_mode.get() == SidebarMode::Hidden {
+                            s.left_mode
+                                .set(restore_snapshot(s.left_mode_before_hidden.get()));
+                        }
+                        if s.right_mode.get() == SidebarMode::Hidden {
+                            s.right_mode
+                                .set(restore_snapshot(s.right_mode_before_hidden.get()));
+                        }
                         cx.notify();
                     });
                 }
@@ -995,12 +1081,26 @@ fn run_quick_command(
             shared.settings_open.set(true);
         }
         QuickOpenCommand::HideSidebars => {
-            shared.left_mode.set(SidebarMode::Hidden);
-            shared.right_mode.set(SidebarMode::Hidden);
+            if shared.left_mode.get() != SidebarMode::Hidden {
+                shared.left_mode_before_hidden.set(shared.left_mode.get());
+                shared.left_mode.set(SidebarMode::Hidden);
+            }
+            if shared.right_mode.get() != SidebarMode::Hidden {
+                shared.right_mode_before_hidden.set(shared.right_mode.get());
+                shared.right_mode.set(SidebarMode::Hidden);
+            }
         }
         QuickOpenCommand::RestoreSidebars => {
-            shared.left_mode.set(SidebarMode::Expanded);
-            shared.right_mode.set(SidebarMode::Expanded);
+            if shared.left_mode.get() == SidebarMode::Hidden {
+                shared
+                    .left_mode
+                    .set(restore_snapshot(shared.left_mode_before_hidden.get()));
+            }
+            if shared.right_mode.get() == SidebarMode::Hidden {
+                shared
+                    .right_mode
+                    .set(restore_snapshot(shared.right_mode_before_hidden.get()));
+            }
         }
     }
     shared.quick_open.set(false);

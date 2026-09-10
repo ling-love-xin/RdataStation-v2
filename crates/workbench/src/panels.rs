@@ -11,21 +11,21 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui_kit::*;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
+use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::component::{ActiveTheme, IconName};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::EventEmitter;
+use gpui_kit::*;
 
 use crate::components::connection_dialog;
 
-use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 use crate::services::db_navigator::NavTable;
 use crate::services::query_runner::QueryOutput;
+use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 
 /// 面板与工作台共享的状态。
 #[derive(Clone)]
@@ -35,6 +35,9 @@ pub struct Shared {
     /// 左右边栏三模式（展开 / 收起 / 完全隐藏），互不影响。
     pub left_mode: Rc<Cell<SidebarMode>>,
     pub right_mode: Rc<Cell<SidebarMode>>,
+    /// 完全隐藏前的模式快照：状态栏独立开关恢复时还原，避免丢失隐藏前状态。
+    pub left_mode_before_hidden: Rc<Cell<SidebarMode>>,
+    pub right_mode_before_hidden: Rc<Cell<SidebarMode>>,
     /// Quick Open 弹层开关（Ctrl+P / 标题栏搜索条）。
     pub quick_open: Rc<Cell<bool>>,
     /// 设置面板开关（活动栏底部 ⚙ / OpenSettings 命令）。
@@ -59,9 +62,15 @@ impl Shared {
             active_right: Rc::new(Cell::new(RightPanel::Insight)),
             left_mode: Rc::new(Cell::new(SidebarMode::Expanded)),
             right_mode: Rc::new(Cell::new(SidebarMode::Collapsed)),
+            left_mode_before_hidden: Rc::new(Cell::new(SidebarMode::Expanded)),
+            right_mode_before_hidden: Rc::new(Cell::new(SidebarMode::Expanded)),
             quick_open: Rc::new(Cell::new(false)),
             settings_open: Rc::new(Cell::new(false)),
-            selected: Rc::new(Cell::new(if connections.is_empty() { None } else { Some(0) })),
+            selected: Rc::new(Cell::new(if connections.is_empty() {
+                None
+            } else {
+                Some(0)
+            })),
             connections: Rc::new(RefCell::new(connections)),
             notice: Rc::new(RefCell::new(notice)),
             nav_for: Rc::new(RefCell::new(None)),
@@ -132,7 +141,9 @@ impl SidebarPanel {
                 .pr(px(12.))
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .child(notice.unwrap_or_else(|| "暂无连接，请先在「数据源连接」中创建。".to_string()));
+                .child(
+                    notice.unwrap_or_else(|| "暂无连接，请先在「数据源连接」中创建。".to_string()),
+                );
         }
 
         for (idx, item) in self.shared.connections.borrow().iter().enumerate() {
@@ -166,24 +177,23 @@ impl SidebarPanel {
                     .on_click(move |_, _, app| {
                         entity.update(app, |_, cx| cx.emit(SidebarEvent::SelectConnection(idx)));
                     })
-                    .child(
-                        div()
-                            .w(px(8.))
-                            .h(px(8.))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(if item.connected {
-                                theme.colors.success
-                            } else {
-                                theme.colors.muted
-                            }),
-                    )
+                    .child(div().w(px(8.)).h(px(8.)).flex_none().rounded_full().bg(
+                        if item.connected {
+                            theme.colors.success
+                        } else {
+                            theme.colors.muted
+                        },
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .text_xs()
-                            .text_color(if is_selected { theme.colors.foreground } else { theme.colors.muted_foreground })
+                            .text_color(if is_selected {
+                                theme.colors.foreground
+                            } else {
+                                theme.colors.muted_foreground
+                            })
                             .child(item.name),
                     )
                     .child(
@@ -208,7 +218,14 @@ impl SidebarPanel {
     }
 
     fn render_navigation_placeholder(&self, fg: Hsla) -> Div {
-        let mut tree = div().v_flex().w_full().gap_1().pl(px(8.)).pr(px(8.)).pt(px(8.)).pb(px(8.));
+        let mut tree = div()
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .pl(px(8.))
+            .pr(px(8.))
+            .pt(px(8.))
+            .pb(px(8.));
         for (depth, text) in [
             (0, "项目：营销分析"),
             (1, "数据源：本地 MySQL"),
@@ -246,10 +263,33 @@ impl SidebarPanel {
             .pt(px(8.))
             .pb(px(8.))
             .child(
-                div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().font_weight(FontWeight::MEDIUM).text_color(fg).child("分析资源（下一轮接入）"),
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(fg)
+                    .child("分析资源（下一轮接入）"),
             )
-            .child(div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("· 数据源连接引用"))
-            .child(div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("· DuckDB 分析表"))
+            .child(
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("· 数据源连接引用"),
+            )
+            .child(
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("· DuckDB 分析表"),
+            )
     }
 
     fn render_draft_placeholder(&self, fg: Hsla) -> Div {
@@ -262,9 +302,24 @@ impl SidebarPanel {
             .pt(px(8.))
             .pb(px(8.))
             .child(
-                div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().font_weight(FontWeight::MEDIUM).text_color(fg).child("草稿箱"),
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(fg)
+                    .child("草稿箱"),
             )
-            .child(div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("· 草稿（暂未接入）"))
+            .child(
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("· 草稿（暂未接入）"),
+            )
     }
 
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
@@ -277,9 +332,24 @@ impl SidebarPanel {
             .pt(px(8.))
             .pb(px(8.))
             .child(
-                div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().font_weight(FontWeight::MEDIUM).text_color(fg).child("插件"),
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(fg)
+                    .child("插件"),
             )
-            .child(div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("· 插件市场（下一轮接入）"))
+            .child(
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("· 插件市场（下一轮接入）"),
+            )
     }
 }
 
@@ -353,9 +423,7 @@ impl EditorPanel {
             dialog: None,
             sql_textarea: None,
             query_result: Rc::new(RefCell::new(None)),
-            sql_history: Rc::new(RefCell::new(
-                crate::services::query_history::load_history(),
-            )),
+            sql_history: Rc::new(RefCell::new(crate::services::query_history::load_history())),
         }
     }
 }
@@ -418,25 +486,50 @@ impl Render for EditorPanel {
 
         // Round 22：选中连接 → 真实元数据详情卡片（键值行）。
         if let Some(item) = self.shared.selected_connection() {
-
             let shared = self.shared.clone();
             let entity = entity.clone();
             let selected_id = item.id.clone();
             let selected_name = item.name.clone();
-            let status = if item.connected { "已连接" } else { "未连接" };
-            let status_color = if item.connected { theme.colors.success } else { theme.colors.muted };
+            let status = if item.connected {
+                "已连接"
+            } else {
+                "未连接"
+            };
+            let status_color = if item.connected {
+                theme.colors.success
+            } else {
+                theme.colors.muted
+            };
             let fields: Vec<(&'static str, String)> = vec![
                 ("名称", item.name.clone()),
                 ("驱动", item.driver.clone()),
                 ("主机", item.host.clone().unwrap_or_else(|| "-".to_string())),
-                ("端口", item.port.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string())),
-                ("数据库", item.database.clone().unwrap_or_else(|| "-".to_string())),
-                ("Schema", item.schema.clone().unwrap_or_else(|| "-".to_string())),
+                (
+                    "端口",
+                    item.port
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                (
+                    "数据库",
+                    item.database.clone().unwrap_or_else(|| "-".to_string()),
+                ),
+                (
+                    "Schema",
+                    item.schema.clone().unwrap_or_else(|| "-".to_string()),
+                ),
                 (
                     "DuckDB 联邦",
-                    if item.use_duckdb_fed { "开启（本地加速）".to_string() } else { "关闭".to_string() },
+                    if item.use_duckdb_fed {
+                        "开启（本地加速）".to_string()
+                    } else {
+                        "关闭".to_string()
+                    },
                 ),
-                ("描述", item.description.clone().unwrap_or_else(|| "-".to_string())),
+                (
+                    "描述",
+                    item.description.clone().unwrap_or_else(|| "-".to_string()),
+                ),
                 ("创建时间", item.created_at.clone()),
                 ("更新时间", item.updated_at.clone()),
             ];
@@ -540,25 +633,17 @@ impl Render for EditorPanel {
                     );
                 } else {
                     for table in nav.iter() {
-                        nav_content = nav_content.child(
-                            div()
-                                .v_flex()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .h_flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(format!("{}（{} 列）", table.name, table.columns.len())),
-                                        )
-
-                                )
-                                .child(
-                                    div().v_flex().gap_1().pl(px(12.)).children(
+                        nav_content =
+                            nav_content.child(
+                                div()
+                                    .v_flex()
+                                    .gap_1()
+                                    .child(div().h_flex().items_center().gap_2().child(
+                                        div().text_xs().font_weight(FontWeight::MEDIUM).child(
+                                            format!("{}（{} 列）", table.name, table.columns.len()),
+                                        ),
+                                    ))
+                                    .child(div().v_flex().gap_1().pl(px(12.)).children(
                                         table.columns.iter().map(|col| {
                                             div()
                                                 .h_flex()
@@ -579,20 +664,17 @@ impl Render for EditorPanel {
                                                         .text_color(theme.colors.muted_foreground)
                                                         .child(col.data_type.clone()),
                                                 )
-                                                .child(
-                                                    if col.is_primary_key {
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(theme.colors.info)
-                                                            .child("PK")
-                                                    } else {
-                                                        div().text_xs().child("")
-                                                    },
-                                                )
+                                                .child(if col.is_primary_key {
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(theme.colors.info)
+                                                        .child("PK")
+                                                } else {
+                                                    div().text_xs().child("")
+                                                })
                                         }),
-                                    ),
-                                ),
-                        );
+                                    )),
+                            );
                     }
                 }
                 content = content.child(nav_content);
@@ -633,27 +715,21 @@ impl Render for EditorPanel {
                             .gap_2()
                             .w_full()
                             .child(Textarea::new(&sql_state).h(px(96.)))
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .justify_end()
-                                    .w_full()
-                                    .child(
-                                        Button::new("run-sql")
-                                            .secondary()
-                                            .label("执行")
-                                            .on_click(move |_, _, app| {
+                            .child(div().h_flex().justify_end().w_full().child(
+                                Button::new("run-sql").secondary().label("执行").on_click(
+                                    move |_, _, app| {
                                         let sql = sql_state.read(app).value().to_string();
-                                        let dir = crate::services::workspace_loader::default_global_dir();
+                                        let dir =
+                                            crate::services::workspace_loader::default_global_dir();
                                         let path = dir.join("global.duckdb");
                                         let ok = match crate::services::query_runner::execute_sql(
-                                            &path,
-                                            &sql,
+                                            &path, &sql,
                                         ) {
                                             Ok(out) => {
                                                 let n = out.row_count;
                                                 *qr_closure.borrow_mut() = Some(out);
-                                                *shared.sql_for.borrow_mut() = Some(conn_id.clone());
+                                                *shared.sql_for.borrow_mut() =
+                                                    Some(conn_id.clone());
                                                 *shared.notice.borrow_mut() =
                                                     Some(format!("查询完成，返回 {} 行", n));
                                                 true
@@ -668,7 +744,11 @@ impl Render for EditorPanel {
                                         };
                                         if ok {
                                             entity.update(app, |this, cx| {
-                                                if let Ok(hist) = crate::services::query_history::append_history(&sql) {
+                                                if let Ok(hist) =
+                                                    crate::services::query_history::append_history(
+                                                        &sql,
+                                                    )
+                                                {
                                                     *this.sql_history.borrow_mut() = hist;
                                                 }
                                                 cx.notify();
@@ -676,9 +756,9 @@ impl Render for EditorPanel {
                                         } else {
                                             entity.update(app, |_, cx| cx.notify());
                                         }
-                                            }),
-                                    ),
-                            ),
+                                    },
+                                ),
+                            )),
                     );
 
                 // Round 29：SQL 历史——点击回填到编辑器（最新在前，截断预览）。
@@ -792,12 +872,8 @@ impl Render for EditorPanel {
                                                 &out_clone,
                                             ) {
                                                 Ok(path) => {
-                                                    *shared_export.notice.borrow_mut() = Some(
-                                                        format!(
-                                                            "已导出: {}",
-                                                            path.display()
-                                                        ),
-                                                    );
+                                                    *shared_export.notice.borrow_mut() =
+                                                        Some(format!("已导出: {}", path.display()));
                                                 }
                                                 Err(e) => {
                                                     *shared_export.notice.borrow_mut() = Some(e);
@@ -810,19 +886,15 @@ impl Render for EditorPanel {
                     }
                 }
                 sql_ui = sql_ui.child(
-                    div()
-                        .v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Mock 数据（生成测试数据）"),
-                        ),
+                    div().v_flex().gap_1().child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Mock 数据（生成测试数据）"),
+                    ),
                 );
 
                 content = content.child(sql_ui);
-
             }
         }
 
@@ -843,13 +915,7 @@ impl Render for EditorPanel {
                     move |_, window, app| {
                         entity.update(app, |editor, cx| {
                             if let Some(dialog) = editor.dialog.as_ref() {
-                                dialog.open(
-                                    cx.entity(),
-                                    editor.shared.clone(),
-                                    None,
-                                    window,
-                                    cx,
-                                );
+                                dialog.open(cx.entity(), editor.shared.clone(), None, window, cx);
                             }
                             cx.notify();
                         });
@@ -882,10 +948,12 @@ impl ComponentPanel for EditorPanel {
     }
 
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().text_sm().font_weight(FontWeight::MEDIUM).child("工作台")
+        div()
+            .text_sm()
+            .font_weight(FontWeight::MEDIUM)
+            .child("工作台")
     }
 }
-
 
 /// 右侧边栏面板：洞察 / Mock 生成 / 历史（占位视图，业务下一轮接入）。
 pub struct RightSidebarPanel {
@@ -911,10 +979,33 @@ impl RightSidebarPanel {
             .pt(px(8.))
             .pb(px(8.))
             .child(
-                div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().font_weight(FontWeight::MEDIUM).text_color(fg).child("洞察"),
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(fg)
+                    .child("洞察"),
             )
-            .child(div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("· 库/表/列画像（占位）"))
-            .child(div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("· 数据质量建议（占位）"))
+            .child(
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("· 库/表/列画像（占位）"),
+            )
+            .child(
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("· 数据质量建议（占位）"),
+            )
     }
 
     fn render_mock_placeholder(&self, fg: Hsla) -> Div {
@@ -927,10 +1018,33 @@ impl RightSidebarPanel {
             .pt(px(8.))
             .pb(px(8.))
             .child(
-                div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().font_weight(FontWeight::MEDIUM).text_color(fg).child("Mock 生成"),
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(fg)
+                    .child("Mock 生成"),
             )
-            .child(div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("· 表结构模板（占位）"))
-            .child(div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("· 生成任务（占位）"))
+            .child(
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("· 表结构模板（占位）"),
+            )
+            .child(
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("· 生成任务（占位）"),
+            )
     }
 
     fn render_history_placeholder(&self, fg: Hsla) -> Div {
@@ -943,12 +1057,25 @@ impl RightSidebarPanel {
             .pt(px(8.))
             .pb(px(8.))
             .child(
-                div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().font_weight(FontWeight::MEDIUM).text_color(fg).child("历史"),
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(fg)
+                    .child("历史"),
             );
         let history = crate::services::query_history::load_history();
         if history.is_empty() {
             panel = panel.child(
-                div().h(px(24.)).pl(px(8.)).pr(px(8.)).text_xs().text_color(fg).child("暂无历史记录"),
+                div()
+                    .h(px(24.))
+                    .pl(px(8.))
+                    .pr(px(8.))
+                    .text_xs()
+                    .text_color(fg)
+                    .child("暂无历史记录"),
             );
         } else {
             for (i, sql) in history.iter().take(20).enumerate() {
@@ -961,7 +1088,9 @@ impl RightSidebarPanel {
                 };
                 panel = panel.child(
                     div()
-                        .id(ElementId::Name(SharedString::from(format!("right-hist-{i}"))))
+                        .id(ElementId::Name(SharedString::from(format!(
+                            "right-hist-{i}"
+                        ))))
                         .h(px(24.))
                         .pl(px(8.))
                         .pr(px(8.))
