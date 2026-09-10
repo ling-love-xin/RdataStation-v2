@@ -3,11 +3,11 @@
 //! 使用全局 SQLite 数据库存储应用日志，支持批量写入和分页查询。
 //! 遵循 persistence 层设计模式，与 global_db.rs 保持一致。
 
-use shared::error::{CoreError, StorageError};
 use crate::logging::record::{
     LogLevel, LogLevelCounts, LogPage, LogQuery, LogRecord, LogStats, TargetStat, TIMESTAMP_FMT,
 };
 use crate::persistence::GlobalSqlitePool;
+use shared::error::{CoreError, StorageError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -125,7 +125,8 @@ impl LogStore {
         let (where_clause, params) = self.build_where_clause(query);
 
         let count_sql = format!("SELECT COUNT(*) FROM app_logs {}", where_clause);
-        let total: usize = {
+        // rusqlite 0.33+ 不再为 usize/u64 实现 FromSql：SQLite 整数为 i64，显式转换
+        let total: i64 = {
             let mut stmt = conn
                 .inner()?
                 .prepare(&count_sql)
@@ -137,6 +138,7 @@ impl LogStore {
             stmt.query_row(params_refs.as_slice(), |row| row.get(0))
                 .map_err(|e| Self::sqlite_err("count_logs_query", e.to_string()))?
         };
+        let total = total as usize;
 
         let query_sql = format!(
             "SELECT id, timestamp, level, target, message, fields, file, line, session_id \
@@ -251,10 +253,11 @@ impl LogStore {
         let conn = self.pool.acquire().await?;
 
         let result = (|| -> Result<LogStats, CoreError> {
-            let total: usize = conn
+            let total: i64 = conn
                 .inner()?
                 .query_row("SELECT COUNT(*) FROM app_logs", [], |row| row.get(0))
                 .map_err(|e| Self::sqlite_err("stats_total", e.to_string()))?;
+            let total = total as usize;
 
             let by_level = {
                 let mut stmt = conn
@@ -392,10 +395,11 @@ impl LogStore {
             }
 
             // 策略2: 数量维度 —— 超过上限 20% 时裁剪
-            let count: usize = conn
+            let count: i64 = conn
                 .inner()?
                 .query_row("SELECT COUNT(*) FROM app_logs", [], |row| row.get(0))
                 .map_err(|e| Self::sqlite_err("check_count", e.to_string()))?;
+            let count = count as usize;
 
             if count > self.max_records * 120 / 100 {
                 let excess = count - self.max_records;

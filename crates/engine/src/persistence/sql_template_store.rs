@@ -217,8 +217,8 @@ impl SqlTemplateStore {
                     template.description,
                     template.tags,
                     template.is_builtin as i32,
-                    template.created_at_ms,
-                    template.updated_at_ms,
+                    template.created_at_ms as i64,
+                    template.updated_at_ms as i64,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -246,8 +246,8 @@ impl SqlTemplateStore {
                     template.description,
                     template.tags,
                     template.is_builtin as i32,
-                    template.created_at_ms,
-                    template.updated_at_ms,
+                    template.created_at_ms as i64,
+                    template.updated_at_ms as i64,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -280,8 +280,8 @@ impl SqlTemplateStore {
                     description: row.get(5)?,
                     tags: row.get(6)?,
                     is_builtin: row.get::<_, i32>(7)? != 0,
-                    created_at_ms: row.get(8)?,
-                    updated_at_ms: row.get(9)?,
+                    created_at_ms: row.get::<_, i64>(8)? as u64,
+                    updated_at_ms: row.get::<_, i64>(9)? as u64,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -315,8 +315,8 @@ impl SqlTemplateStore {
                     description: row.get(5)?,
                     tags: row.get(6)?,
                     is_builtin: row.get::<_, i32>(7)? != 0,
-                    created_at_ms: row.get(8)?,
-                    updated_at_ms: row.get(9)?,
+                    created_at_ms: row.get::<_, i64>(8)? as u64,
+                    updated_at_ms: row.get::<_, i64>(9)? as u64,
                 })
             }).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -350,8 +350,8 @@ impl SqlTemplateStore {
                     description: row.get(5)?,
                     tags: row.get(6)?,
                     is_builtin: row.get::<_, i32>(7)? != 0,
-                    created_at_ms: row.get(8)?,
-                    updated_at_ms: row.get(9)?,
+                    created_at_ms: row.get::<_, i64>(8)? as u64,
+                    updated_at_ms: row.get::<_, i64>(9)? as u64,
                 })
             }).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -385,8 +385,8 @@ impl SqlTemplateStore {
                     description: row.get(5)?,
                     tags: row.get(6)?,
                     is_builtin: row.get::<_, i32>(7)? != 0,
-                    created_at_ms: row.get(8)?,
-                    updated_at_ms: row.get(9)?,
+                    created_at_ms: row.get::<_, i64>(8)? as u64,
+                    updated_at_ms: row.get::<_, i64>(9)? as u64,
                 })
             }).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),

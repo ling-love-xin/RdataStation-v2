@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use shared::error::{CoreError, StorageError};
 use crate::persistence::global_db::GlobalSqlitePool;
+use shared::error::{CoreError, StorageError};
 
 /// 工作台面板类型
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -168,7 +168,7 @@ impl WorkbenchContextStore {
                     layout.active_panel,
                     layout.sidebar_visible as i32,
                     layout.bottom_bar_visible as i32,
-                    layout.updated_at_ms,
+                    layout.updated_at_ms as i64,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -200,7 +200,7 @@ impl WorkbenchContextStore {
                     active_panel: row.get(3)?,
                     sidebar_visible: row.get::<_, i32>(4)? != 0,
                     bottom_bar_visible: row.get::<_, i32>(5)? != 0,
-                    updated_at_ms: row.get(6)?,
+                    updated_at_ms: row.get::<_, i64>(6)? as u64,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -223,10 +223,10 @@ impl WorkbenchContextStore {
                     context.id,
                     context.connection_id,
                     context.content,
-                    context.cursor_position,
-                    context.selection_start,
-                    context.selection_end,
-                    context.updated_at_ms,
+                    context.cursor_position as i64,
+                    context.selection_start.map(|v| v as i64),
+                    context.selection_end.map(|v| v as i64),
+                    context.updated_at_ms as i64,
                 ],
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -255,10 +255,10 @@ impl WorkbenchContextStore {
                     id: row.get(0)?,
                     connection_id: row.get(1)?,
                     content: row.get(2)?,
-                    cursor_position: row.get(3)?,
-                    selection_start: row.get(4)?,
-                    selection_end: row.get(5)?,
-                    updated_at_ms: row.get(6)?,
+                    cursor_position: row.get::<_, i64>(3)? as usize,
+                    selection_start: row.get::<_, Option<i64>>(4)?.map(|v| v as usize),
+                    selection_end: row.get::<_, Option<i64>>(5)?.map(|v| v as usize),
+                    updated_at_ms: row.get::<_, i64>(6)? as u64,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
