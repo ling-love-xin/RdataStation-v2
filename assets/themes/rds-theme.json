@@ -7,6 +7,7 @@
     {
       "name": "RDS Light",
       "mode": "light",
+      "is_default": true,
       "colors": {
         "background": "#FFFFFF",
         "foreground": "#333333",
@@ -115,6 +116,7 @@
     {
       "name": "RDS Dark",
       "mode": "dark",
+      "is_default": true,
       "colors": {
         "background": "#1E1E1E",
         "foreground": "#CCCCCC",

@@ -29,16 +29,27 @@ fn main() {
         // 1. 设置：加载 %APPDATA%/RdataStation/settings.json 为 global。
         SettingsService::init(cx);
 
-        // 2. 主题资产目录监听（assets/themes/rds-theme.json，热更新）。
+        // 2. 主题资产：先同步加载目录内主题并接入 `Theme`，保证首帧即为 RDS 配色。
+        //    （`watch_dir` 为异步加载，若仅依赖它，窗口创建早于加载完成时会停留在
+        //    gpui-kit 默认主题，表现为全局颜色与设计不符。）
         let themes_dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/themes");
-        let _ = ThemeRegistry::watch_dir(themes_dir, cx, |_| {});
+        load_theme_assets(&themes_dir, cx);
+        attach_rds_theme(cx);
 
-        // 3. 应用已保存的主题模式（明 / 暗），与 settings 外观节一致。
+        // 3. 主题目录监听（热更新）：文件变更后重新接入并刷新窗口。
+        let _ = ThemeRegistry::watch_dir(themes_dir, cx, |cx| {
+            attach_rds_theme(cx);
+            let mode = SettingsService::theme_mode(cx);
+            Theme::change(mode, None, cx);
+            cx.refresh_windows();
+        });
+
+        // 4. 应用已保存的主题模式（明 / 暗），与 settings 外观节一致。
         let mode = SettingsService::theme_mode(cx);
         Theme::change(mode, None, cx);
 
-        // 4. 快捷键：Quick Open（Ctrl+P）、设置（Ctrl+,）。
+        // 5. 快捷键：Quick Open（Ctrl+P）、设置（Ctrl+,）。
         //    Quick Open 触发后由 workbench 的 key_context("workbench") on_action 处理。
         cx.bind_keys([
             KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
@@ -80,5 +91,49 @@ fn init_global_system() {
     if let Err(e) = runtime.block_on(engine::migration::initialize_global_system()) {
         // 启动期一次性错误：stderr 供开发/诊断查看，UI 侧由工作台降级提示补充。
         eprintln!("[startup] 全局系统库初始化失败: {e}");
+    }
+}
+
+/// 同步读取主题目录内的 JSON 资产并注册到 `ThemeRegistry`。
+///
+/// `watch_dir` 的首次加载是异步的，若仅依赖它，窗口可能在加载完成前创建并以
+/// gpui-kit 默认主题渲染；此处先同步注册，保证 RDS 主题立即可用。
+fn load_theme_assets(themes_dir: &std::path::Path, cx: &mut App) {
+    let registry = ThemeRegistry::global_mut(cx);
+    let Ok(entries) = std::fs::read_dir(themes_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                if let Err(e) = registry.load_themes_from_str(&content) {
+                    eprintln!("[startup] 主题文件解析失败 {}: {e}", path.display());
+                }
+            }
+            Err(e) => eprintln!("[startup] 主题文件读取失败 {}: {e}", path.display()),
+        }
+    }
+}
+
+/// 把 RDS 明暗主题接入全局 `Theme`。
+///
+/// `Theme::change` 只应用 `light_theme` / `dark_theme` 字段所指配置，而主题目录中
+/// 的自定义主题不会自动写入这两个字段，需按名字显式接入；未注册时保持当前主题。
+fn attach_rds_theme(cx: &mut App) {
+    let (light, dark) = {
+        let registry = ThemeRegistry::global(cx);
+        (
+            registry.themes().get("RDS Light").cloned(),
+            registry.themes().get("RDS Dark").cloned(),
+        )
+    };
+    if let (Some(light), Some(dark)) = (light, dark) {
+        let theme = cx.global_mut::<Theme>();
+        theme.light_theme = light;
+        theme.dark_theme = dark;
     }
 }

@@ -385,9 +385,7 @@ impl Render for EditorPanel {
             }
         }
 
-        eprintln!("[dbg] EP-lazy-done");
         let theme = cx.theme();
-        eprintln!("[dbg] EP-theme-done");
         let notice = self.shared.notice.borrow().clone();
         let entity = cx.entity();
 
@@ -420,7 +418,6 @@ impl Render for EditorPanel {
 
         // Round 22：选中连接 → 真实元数据详情卡片（键值行）。
         if let Some(item) = self.shared.selected_connection() {
-            eprintln!("[dbg] EP-detail-entry");
 
             let shared = self.shared.clone();
             let entity = entity.clone();
@@ -445,7 +442,6 @@ impl Render for EditorPanel {
             ];
 
             let mut rows = div().v_flex().gap_1();
-            eprintln!("[dbg] EP-detail-rows-div");
             for (label, value) in fields {
                 rows = rows.child(
                     div()
@@ -471,7 +467,6 @@ impl Render for EditorPanel {
                         ),
                 );
             }
-            eprintln!("[dbg] EP-detail-rows-done");
             content = content.child(
                 div().v_flex().gap_2().w_full().rounded_md().pl(px(12.)).pr(px(12.)).pt(px(10.)).pb(px(10.))
                     .border_1().border_color(theme.colors.border)
@@ -521,10 +516,8 @@ impl Render for EditorPanel {
                             .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("数据库导航（DuckDB 分析库）")),
                     ),
             );
-            eprintln!("[dbg] EP-detail-card-done");
         }
 
-        eprintln!("[dbg] EP-detail-done");
         // Round 25：数据库导航区——选中联邦连接时按需加载分析库元数据树。
         if let Some(item) = self.shared.selected_connection() {
             if item.use_duckdb_fed {
@@ -608,7 +601,6 @@ impl Render for EditorPanel {
 
         content = content.child(div().h(px(24.)));
 
-        eprintln!("[dbg] EP-nav-done");
         // Round 26：SQL 查询区——选中联邦连接时可对分析库执行只读 SQL。
         if let Some(item) = self.shared.selected_connection() {
             if item.use_duckdb_fed {
