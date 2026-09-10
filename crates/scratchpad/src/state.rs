@@ -40,13 +40,13 @@ impl ScratchpadState {
         self.store.lock().await.clone()
     }
 
-    /// 当前项目根目录（即草稿箱根，未初始化时为 `None`）。
+    /// 当前项目根目录（未初始化时为 `None`）。
     pub async fn project_root(&self) -> Option<PathBuf> {
         self.store
             .lock()
             .await
             .as_ref()
-            .map(|s| s.scratchpad_dir().to_path_buf())
+            .map(|s| s.project_root().to_path_buf())
     }
 
     pub fn is_watching(&self) -> bool {

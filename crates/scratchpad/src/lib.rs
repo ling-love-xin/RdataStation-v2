@@ -10,12 +10,13 @@
 pub mod models;
 pub mod state;
 pub mod store;
+pub mod trash;
 
 pub use models::{
-    AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, FileMeta, ReplaceResult,
-    ScratchpadChangeEntry, ScratchpadChangeEvent, ScratchpadConfig, ScratchpadEntry,
-    ScratchpadEntryKind, ScratchpadResponse, SearchMatch, SearchResult,
+    AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
+    FileMeta, ReplaceResult, ScratchpadChangeEntry, ScratchpadChangeEvent, ScratchpadConfig,
+    ScratchpadEntry, ScratchpadEntryKind, ScratchpadResponse, SearchMatch, SearchResult,
 };
 pub use state::ScratchpadState;
-pub use store::ScratchpadStore;
-
+pub use store::{ScratchpadStore, MODULE_DIR_NAME, ORIGIN_SCRATCHPAD};
+pub use trash::{ProjectTrash, TrashEntry, TrashManifest};

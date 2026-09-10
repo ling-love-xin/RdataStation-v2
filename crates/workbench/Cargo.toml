@@ -8,6 +8,7 @@ description = "M5 查询工作台：连接管理、结果集、SQL 执行编排"
 # 依赖键别名，使 v1 迁移代码中的 `engine::` / `connection::` / `insight::` / `shared::` 引用直接生效
 engine.workspace = true
 connection.workspace = true
+database.workspace = true
 insight.workspace = true
 shared.workspace = true
 mock.workspace = true

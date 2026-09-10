@@ -7,7 +7,8 @@
 
 pub mod metadata_service;
 
-pub mod model;
 pub mod commands;
 pub mod database_view;
+pub mod model;
+pub mod navigator_service;
 pub mod property_panel;

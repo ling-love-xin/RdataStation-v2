@@ -1,12 +1,29 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**P0 + Phase A 已落地；Phase B 首个切片（只读树）已落地**（2026-09-11，`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets` 零告警；`rds-scratchpad` 5 项测试全绿） · Phase B 其余与 Phase C 待续
-> 关联文件：`scratchpad-prototype-design.md`（原型）、`scratchpad-prototype.html`（可交互原型）
+> 状态：**模块根语义 + 项目级回收站 + 文件元数据/引用 + 面板首切片已落地**（2026-09-11，`cargo check --workspace --all-targets` 零告警；`rds-scratchpad` 7 项测试全绿） · Phase B 其余、Phase D（提升/存档/取回）与 Phase C 待续
+> 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
-> 本方案核心变更：**草稿箱根 = 项目目录**（不再是 `{project}/.scratchpad/`），内部元数据迁至 `.RSmeta/scratchpad/`
+> 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-11（二次）— 模块根 + 项目级回收站 + 元数据/引用
+
+> 取代上一条中的 “根 = 项目目录” 与 “回收站落 meta” 两项（已按最终模型重写）。
+
+**已完成**
+
+| 项 | 内容 | 落点 | 验证 |
+| --- | --- | --- | --- |
+| 根语义定稿 | `ScratchpadStore::new` 改为 `root = {project}/scratchpad`（可见模块目录），`meta = {project}/.RSmeta/scratchpad`；`ensure_dir` 建模块根/meta/回收站 | `crates/scratchpad/src/store.rs` | 单测 `module_root_and_meta_isolated` |
+| 项目级回收站 | 新增 `ProjectTrash`：`.RSmeta/trash/<id>/{payload,manifest.json}`，条目携带 `origin` + `original_rel_path` + `kind/size/deleted_at`；restore 按原相对路径重建、同名自动改名；跨模块条目拒绝在草稿箱还原 | `crates/scratchpad/src/trash.rs` | 单测 `trash_is_project_level_with_origin`、`restore_refuses_other_module_entries` |
+| 旧数据迁移 | `.scratchpad/` 内容 → `scratchpad/`；旧 `.scratchpad.json` → `config.json`；旧 `.trash/` 与上一版 `{meta}/.trash` 均并入项目级回收站；空壳清理；幂等 | `store.rs`（`migrate_legacy_layout`） | 单测 `legacy_layout_is_migrated` |
+| 数据源引用 | `FileMeta` 新增 `bound_connections`；新增 `ScratchpadStore::bind_connections`（只存连接 ID） | `models.rs` / `store.rs` | 单测 `bound_connections_roundtrip` |
+| 外部引用可用性 | 新增 `ExternalReferenceStatus` + `external_reference_status()`（加载时探测路径是否存在） | `models.rs` / `store.rs` | 单测 `external_reference_persists_and_reports_status` |
+| 面板 | 外部引用显示“丢失”态（置灰 + （丢失）后缀） | `crates/workbench/src/panels.rs` | `cargo check` 零告警 |
+
+**下一步**：A5 文件监控；B4–B9（内联新建/模板、导入/引用对话框、搜索、右键菜单/重命名/删除/移动、回收站管理 + 撤销栏、多选、虚拟列表/排序、懒加载）；新增 **Phase D 提升/存档/取回**（§1.2）。
 
 ### 2026-09-11 — P0 + Phase A + Phase B 首切片
 
@@ -96,8 +113,19 @@
 | C3 | 拖拽文件到编辑区插入内容；拖放文件进树导入 | workbench | 拖放生效 |
 | C4 | 冲突处理：外部修改 → 冲突对话框 → `diff_with_content` Diff 弹窗 → 接受右侧 | `scratchpad` store + 弹窗 | 冲突可消解 |
 | C5 | 搜索替换：预览计数 → `replace_in_file`（正则）→ 原子写回 → 刷新 | 同上 | 替换历史可回看 |
-| C6 | 提升为分析资源：经 command/event 调 `analytics_resource`，可选保留原稿 | `scratchpad` 命令 + 分析资源服务 | 提升后事件刷新 |
+| C6 | 提升为分析资源：经 command/event 调 `analytics_resource`，**移动 + 归档锁定**（详见 Phase D） | `scratchpad` 命令 + 分析资源服务 | 提升后事件刷新 |
 | C7 | 迁移文档验收：`cargo check --workspace` 零告警；无 `unwrap/expect` 新增；架构红线复核 | 全仓 | 全绿 |
+
+### Phase D — 提升 / 存档 / 取回（分析资源）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| D1 | `resources/` 模块根约定（`{project}/resources/`）与资源登记模型（`resource_id / version / hash / promoted_from / readonly`） | `crates/analytics_resource` + `project.db` | 登记可查询、可回读 |
+| D2 | 提升：`scratchpad/ → resources/` **move + 归档**，随文件归档数据源绑定/来源；完成后发事件刷新两侧 | `rds-scratchpad` 命令 + 资源服务 | 提升后草稿消失、资源只读 |
+| D3 | 锁定：文件系统只读属性 + 应用守卫（禁重命名/移动；编辑器只读打开） | 存储 + 编辑器 | 资源不可写 |
+| D4 | 取回（检出）：资源**复制**回 `scratchpad/`（新名 + 派生关系），资源本体不动 | 资源服务 + 草稿箱 | 可取回并编辑 |
+| D5 | 版本：再次提升生成**新版本**（稳定 `resource_id`），旧版保留 | 资源服务 + `project.db` | 版本递增、引用不断 |
+| D6 | 资源删除 → 项目级回收站（`origin = "resources"`；在资源模块还原） | `ProjectTrash` + 资源服务 | 条目来源正确、不在草稿箱误还原 |
 
 ## 3. 测试场景清单（参照 v1 §四，Phase A 覆盖 1–6）
 
@@ -121,7 +149,9 @@
 | 风险 | 对策 |
 | --- | --- |
 | 缺少项目会话（P0）导致草稿箱无内容 | P0 优先；未完成时明确空态，不阻塞后端 A 阶段 |
-| 根 = 项目目录后，内部元数据泄露到 UI 或被 API 访问 | 列表隐藏 + `resolve_path` 拒绝内部路径（A3）；测试覆盖 |
+| 模块根内若误放内部态，泄露到 UI 或被 API 访问 | 内部态统一 `.RSmeta/<模块>/`（天然在模块根之外）+ `resolve_path` 拒绝点前缀路径；测试覆盖 |
+| 回收站被跨模块误还原 | 条目带 `origin`；`ScratchpadStore::restore_from_trash` 只接受 `scratchpad` 来源 |
+| 提升后仍能改一份，与存档分叉 | 提升 = move + 只读锁定；修改只能取回（检出）后提升新版本（Phase D） |
 | 文件监控把 `.RSmeta`（SQLite/DuckDB）变更当作刷新信号，造成抖动 | watcher 过滤 `.RSmeta` 与临时文件（`-wal`/`-shm`/`~`） |
 | 240px 面板塞入搜索/替换/Diff 过挤 | 导航留侧栏，重结果/弹窗落中央编辑区（原型 §4.3/§4.5） |
 | 根目录可能很大（用户整个项目） | 懒加载 + 虚拟列表 + 内容搜索流式/超时/截断 |
@@ -133,8 +163,10 @@
 
 | 设计决策 | 代码文件 |
 | --- | --- |
-| 根 = 项目目录；内部元数据 `.RSmeta/scratchpad/` | `crates/scratchpad/src/store.rs`（`ScratchpadStore::new` / `ensure_dir` / `scan_dir_tree` / `resolve_path_impl`） |
-| 旧 `.scratchpad/` 迁移 | `crates/scratchpad/src/store.rs`（`migrate_legacy_layout`） |
+| 模块根 = `{project}/scratchpad/`；内部元数据 `.RSmeta/scratchpad/` | `crates/scratchpad/src/store.rs`（`ScratchpadStore::new` / `ensure_dir` / `scan_dir_tree` / `resolve_path_impl`） |
+| 项目级回收站（含来源/原路径） | `crates/scratchpad/src/trash.rs`（`ProjectTrash` / `TrashEntry` / `TrashManifest`） |
+| 文件元数据 / 数据源绑定 / 外部引用可用性 | `crates/scratchpad/src/models.rs`（`FileMeta::bound_connections` / `ExternalReferenceStatus`）、`store.rs`（`bind_connections` / `external_reference_status`） |
+| 旧 `.scratchpad/` 迁移（→ 模块根/元数据/项目回收站） | `crates/scratchpad/src/store.rs`（`migrate_legacy_layout` / `move_dir_contents` / `ingest_trash_dir`） |
 | 文件监控 | `crates/scratchpad/src/state.rs`（`notify`）+ 事件推送 |
 | 域模型 / 存储 API | `crates/scratchpad/src/{models,state,store}.rs` |
 | 面板视图（头/工具栏/树/分组/空态/撤销栏） | `crates/workbench/src/components/scratchpad_panel.rs` |

@@ -1,6 +1,6 @@
 # 草稿箱模块 · 原型设计（项目工作区）
 
-> 状态：**根语义已落地（P0 + Phase A）；面板首切片（只读树）已接入**（2026-09-11） · 关联文件：`scratchpad-prototype.html`（可交互原型）、`scratchpad-dev-plan.md`（开发方案与进度）
+> 状态：**模块根语义 + 项目级回收站 + 面板首切片已落地**（2026-09-11） · 关联文件：`scratchpad-prototype.html`（可交互原型）、`scratchpad-dev-plan.md`（开发方案与进度）
 > 参考基准：v1 实现（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）与设计（`v1/docs/backend/SCRATCHPAD_DESIGN.md`、`SCRATCHPAD_SCHEMA.md`、`v1/docs/frontend/SCRATCHPAD.md`）
 > 布局服从 `docs/architecture/layout/layout-design.md`（五段布局，左侧 Dock 240px，`LeftPanel::Draft`）；配色服从 `docs/architecture/theme/theme-design.md`（RDS Light/Dark，`assets/themes/rds-theme.json`）
 > 技术栈：GPUI（gpui-kit 0.6），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
@@ -15,32 +15,31 @@
 | 配色 | `theme-design.md` | 侧栏 `sidebar`、选中 `list.active` + coral 左边条、弹层 `popover`、主按钮 `primary` |
 | 主题 | `rds-theme.json` | 复用标准字段，尽量不新增产品语义 token（见 §6） |
 
-### 1.1 核心变更：草稿箱根 = 项目目录
+### 1.1 核心模型：模块独立根目录
 
-v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 中**每一个应用实例即一个项目**，因此：
+v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 定稿为 **每个模块在项目根下拥有一个可见的内容目录**（模块中心）：
 
-- **面板树的根节点 = 项目根目录 `{project}/`**，用户看到的即为项目文件工作区（SQL 片段、Python 脚本、测试数据、随手建的目录）。
-- 草稿箱自身的**内部元数据**（外部引用列表、文件元数据、回收站）不再污染项目根，统一收纳到项目元数据目录 `.RSmeta/scratchpad/`。
-- 顶层以 `.` 开头的条目（`.RSmeta`、`.git` 等）一律**不显示**，与现有 `store.rs::scan_dir_tree` 跳过点文件/点目录的逻辑一致。
+- **草稿箱根 = `{project}/scratchpad/`**（可见、可编辑），面板只展示此目录内的内容——「在 `scratchpad/` 里的就是草稿」，无需忽略规则、无需扫描整个项目。
+- 草稿箱**内部元数据**（配置/文件元数据）落 `.RSmeta/scratchpad/`，不进内容目录。
+- **回收站为项目级 `.RSmeta/trash/`**，收录草稿与资源等模块删除的条目（自带来源信息，见 §9）。
+- 未来 `resources/`（M6 分析资源）、`mock/`（M7）同样是项目根下的模块目录。
 
 ```
-{project}/                          ← 草稿箱根（面板显示，排除点目录）
-├── .RSmeta/                        ← 隐藏：项目内部元数据（project crate 管理）
-│   ├── project.db                  # 项目 SQLite
-│   ├── project.json                # 项目配置
-│   ├── analytics.duckdb            # 项目分析库
-│   ├── config/  queries/  project_metadata/
-│   └── scratchpad/                 # 草稿箱内部目录（本模块管理）
-│       ├── config.json             # 外部引用 + file_meta（原 .scratchpad.json）
-│       └── trash/                  # 软删除回收站（原 .trash/）
-├── data/
-│   └── report.sql
-├── 临时订单分析.sql                 # 草稿文件（双击 → SQL 编辑器）
-├── transform.py
-└── sample.csv
+{project}/
+├── scratchpad/                      ← 草稿箱根（模块内容，可见）
+│   ├── data/report.sql
+│   ├── 临时订单分析.sql
+│   └── sample.csv
+├── resources/                       ← M6 分析资源（后续）
+├── mock/                            ← M7 Mock 产物（后续）
+└── .RSmeta/                         ← 隐藏：项目内部元数据
+    ├── project.db / project.json / analytics.duckdb
+    ├── session/                     # 编辑器标签/未命名缓冲区（后续）
+    ├── scratchpad/config.json       # 草稿文件元数据 + 外部引用
+    └── trash/                       # 项目级回收站（草稿 + 资源）
 ```
 
-> 设计取舍：保留面板名「草稿箱」（活动栏图标 / Quick Open `打开草稿箱` 命令已注册），语义由「隐藏草稿区」扩展为「项目工作区根」；「草稿」与「正式项目资产」在 v2 不再靠物理目录区分，而由 `analytics_resource` 的提升机制承担（§4.6）。
+> 设计取舍：保留面板名「草稿箱」（活动栏图标 / Quick Open `打开草稿箱` 命令已注册）；「草稿」与「正式资产」由 **`scratchpad/ → resources/` 的提升（存档）机制** 区分（§9.3）。
 
 ## 2. 面板布局（240px 左 Dock）
 
@@ -54,7 +53,7 @@ v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 中*
 ├ 搜索框（可切换 文件名 / 内容）────────┤
 │ [🔍 搜索文件…]              [.*][Aa] │
 ├ 树主体（滚动，虚拟列表 >50）─────────┤
-│ ▼ 📁 项目文件 · 营销分析             │
+│ ▼ 📁 草稿 · 营销分析                   │
 │   ▸ 📁 data                          │
 │   📜 临时订单分析.sql          ●     │  ← ● 脏点（未保存）
 │   🐍 transform.py                    │
@@ -109,7 +108,7 @@ v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 中*
 双击文件
   └── 按后缀选择编辑器
         ├── .sql → 中央编辑区 SQL 编辑器（草稿箱文件模式）
-        │     · 标题 = 文件名；Ctrl+S → 保存回项目文件（原子写）
+        │     · 标题 = 文件名；Ctrl+S → 保存回 `scratchpad/`（原子写）
         │     · 保留连接选择与完整执行引擎（单/多语句、选中执行）
         │     · 自动恢复 file_meta.last_connection_id
         │     · 关闭方言转换 / DuckDB 加速 / 执行计划（草稿场景不需要）
@@ -145,9 +144,9 @@ v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 中*
 - **Diff 对比**：冲突时「查看差异」→ `diff_with_content`（`similar` 行级）→ 弹窗红/绿标记 → 接受右侧。
 - **搜索替换**：结果区替换栏 → 预览计数 → 全部替换（`replace_in_file`，支持正则）→ 原子写回 → 刷新结果。
 
-### 4.6 提升为分析资源
+### 4.6 提升为分析资源（存档）
 
-右键「提升为分析资源」→ 复制/移动到 `analytics_resource` 正式区（可选保留原稿）→ 完成后发事件通知刷新。跨模块协作走 **command / event**，草稿箱不直接依赖分析资源模块的视图。
+右键「提升为分析资源」→ **移动**到 `resources/` 并**归档锁定（只读）**；数据源绑定/来源随文件归档。想修改只能从资源管理处**取回**（检出）为草稿工作副本（§9.3）。跨模块协作走 **command / event**，草稿箱不直接依赖分析资源模块的视图。
 
 ### 4.7 键盘导航
 
@@ -245,11 +244,81 @@ v1 使用黄色 `<mark>`。若沿用标准字段，可用 `accent.background`（
 | SQL 草稿模式 | `crates/workbench/src/panels.rs` `EditorPanel`（新增 scratchpad-file 模式） |
 | 提升为分析资源 | `analytics_resource` 服务，经 command/event 协作 |
 
-## 8. 待确认项
+## 8. 已确认决策
 
-1. **根目录语义**：草稿箱面板根 = 项目根目录，内部元数据迁至 `.RSmeta/scratchpad/`（`config.json` + `trash/`）——确认？
-2. **旧数据迁移**：`{project}/.scratchpad/` 若存在，一次性迁移 `config.json`/文件到新位置，并清理空目录——确认迁移策略（迁移 vs 保留只读）？
-3. **面板宽度**：240px 左 Dock 下工具栏压成单排图标；内容搜索结果、Diff、替换放中央编辑区——确认此分工？
-4. **命名**：面板仍叫「草稿箱」（活动栏/命令已注册），语义为项目工作区——是否改名「项目文件/工作区」？
-5. **搜索高亮 token**：新增 `scratchpad.search.match.background`，或先用 `accent.background` 兜底？
-6. **当前项目会话**：草稿箱需要一个「当前项目根路径」来源（启动参数 / 最近项目 / 默认工作区），这是连接模块同源的缺口，见 `scratchpad-dev-plan.md` P0。
+| # | 决策 |
+| --- | --- |
+| 1 | **模块独立根目录**：草稿箱根 = `{project}/scratchpad/`（项目根下可见目录），每个模块（草稿箱/资源/Mock）各有一个 |
+| 2 | 内容目录用**可见英文名**（`scratchpad/`、`resources/`、`mock/`）；模块内部态（config/session/trash）统一放 `.RSmeta/<模块>/` |
+| 3 | **回收站为项目级** `.RSmeta/trash/`，收录草稿 + 资源删除的条目，条目自带来源信息 |
+| 4 | 编辑器采用**无根 + `OpenFile(绝对路径)` 命令**方式（编辑器不假设项目根） |
+| 5 | 草稿**提升为资源 = 存档、锁定只读**；要修改只能从资源管理处**取回**（检出）后再提升为新版本 |
+
+## 9. 元数据、回收站与提升
+
+### 9.1 项目级回收站（已落地）
+
+位置 `.RSmeta/trash/`，条目自包含：
+
+```
+.RSmeta/trash/<id>/
+├── payload        # 被删的文件/目录（原样移入）
+└── manifest.json  # { id, name, origin, original_rel_path, kind, deleted_at, size }
+```
+
+- `origin`：来源模块（`scratchpad` / `resources` / `mock` …）；`original_rel_path`：相对来源模块根的原路径。
+- 还原按 `origin + original_rel_path` 放回；同名自动改名（`_1`），不覆盖。
+- 草稿箱的还原入口只接受 `origin == scratchpad` 的条目；其他来源报错并提示在其模块中还原。
+- 旧 `.scratchpad/.trash` 与上一版 `.RSmeta/scratchpad/.trash` 均一次性并入。
+- 代码：`crates/scratchpad/src/trash.rs`（`ProjectTrash` / `TrashEntry` / `TrashManifest`）。
+
+### 9.2 文件元数据 / 数据源引用 / 外部引用路径
+
+原则：**只存 ID / 路径，绝不存凭据**（凭据仍在 `auth_store` AES 加密）。存于 `.RSmeta/scratchpad/config.json`：
+
+```json
+{
+  "files": {
+    "queries/order.sql": {
+      "last_connection_id": "P_xxx",
+      "last_executed_at": "2026-09-11T…",
+      "bound_connections": ["P_xxx"]
+    }
+  },
+  "external_references": [
+    { "alias": "下载数据", "path": "D:\\data", "created_at": "…" }
+  ]
+}
+```
+
+- `files` 的 key = **相对 `scratchpad/` 的路径**（项目整体迁移不失效）。
+- 数据源引用存连接 ID（`G_/P_/GP_`），打开文件时解析；执行后回写 `last_connection_id`；`bound_connections` 支持显式多数据源绑定（`ScratchpadStore::bind_connections`）。
+- 外部引用存**绝对路径** + 别名（项目外的东西无法用相对路径）；`external_reference_status()` 加载时探测存在性，失效项置灰并提示「丢失」。
+- 提升为资源时，数据源绑定/来源信息随文件归档（否则资源成为“孤儿 SQL”）。
+
+### 9.3 提升 / 存档 / 取回
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft: 新建/导入
+    Draft --> Draft: 编辑
+    Draft --> Resource: 提升（move + 归档）
+    Resource --> Draft: 取回（检出，派生工作副本）
+    Draft --> Trash: 删除
+    Resource --> Trash: 删除
+    Trash --> Draft: 还原
+    Trash --> Resource: 还原
+    Trash --> [*]: 清空
+```
+
+- **提升 = move**：`scratchpad/ → resources/`，草稿不残留（避免存档后还能改一份的分裂）。
+- **锁定**：文件系统只读属性 + 应用级守卫（`resources/` 节点带锁标记，禁重命名/移动，编辑器只读打开）。
+- **取回（检出）**：从资源**复制**一份到 `scratchpad/`（新名），资源本体不动、仍只读；修改后再提升为**新版本**（稳定 `resource_id` + `version`/`hash`），不覆盖旧版。
+- 资源登记（`resource_id/version/hash/promoted_from/readonly`）建议落 `project.db`（可查询、供后续跨项目共享）；`resources/` 只存内容。
+
+### 9.4 编辑器与会话边界
+
+- 树只发 `OpenFile(绝对路径)`；编辑器无根，按**路径所属模块**决定模式：`resources/` 下→只读 + 锁标记；`scratchpad/` 下→可编辑 + 脏点 + `Ctrl+S` 回存。
+- 未命名缓冲区归**窗口**，落 `.RSmeta/session/untitled/`；打开标签/游标按项目恢复。
+- 同一文件的脏点/冲突由编辑器宿主（文档模型 + watcher）提供，树只做只读投影。
+- 多窗口 = 多项目；项目态**不得**放进程单例（`ScratchpadState` 须由窗口/会话持有）。

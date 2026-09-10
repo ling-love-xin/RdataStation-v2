@@ -7,55 +7,69 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
 use crate::models::{
-    AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ReplaceResult,
-    ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind, ScratchpadResponse, SearchMatch,
-    SearchResult,
+    AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
+    ReplaceResult, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind, ScratchpadResponse,
+    SearchMatch, SearchResult,
 };
+use crate::trash::{ProjectTrash, TrashEntry};
 use shared::error::{CoreError, StorageError};
 
 const MAX_DEPTH: u32 = 4;
 /// 草稿箱配置文件名（位于 `.RSmeta/scratchpad/` 内）。
 const CONFIG_FILE: &str = "config.json";
+/// 旧回收站目录名（v1 `.scratchpad/.trash`、上一版 `.RSmeta/scratchpad/.trash`）。
 const TRASH_DIR: &str = ".trash";
 const MAX_SEARCH_RESULTS: usize = 500;
 const SEARCH_PER_FILE_TIMEOUT_SECS: u64 = 30;
 /// 项目元数据目录（与 `project` crate 的 `RS_META_DIR_NAME` 保持一致）。
-const META_DIR_NAME: &str = ".RSmeta";
+pub(crate) const META_DIR_NAME: &str = ".RSmeta";
 /// 草稿箱在项目元数据目录下的子目录名。
 const META_SUBDIR: &str = "scratchpad";
+/// 草稿箱内容目录名（模块根，位于项目根下、可见）。
+pub const MODULE_DIR_NAME: &str = "scratchpad";
+/// 回收站条目来源：草稿箱。
+pub const ORIGIN_SCRATCHPAD: &str = "scratchpad";
 /// v1 旧布局：隐藏草稿目录与其中的配置文件名。
 const LEGACY_DIR: &str = ".scratchpad";
 const LEGACY_CONFIG_FILE: &str = ".scratchpad.json";
 
 /// 草稿箱存储。
 ///
-/// v2 语义：**草稿箱根目录 = 项目根目录**（每个应用实例即一个项目），因此
-/// `scratchpad_dir` 承载项目根，相对路径均以此为基准；草稿箱自身的内部元数据
-/// （外部引用、file_meta、回收站）收纳到 `{project}/.RSmeta/scratchpad/`，
-/// 不污染项目根，也不出现在面板树中（顶层点目录一律隐藏）。
+/// v2 语义：**草稿箱根目录 = 模块目录 `{project}/scratchpad/`**（每个应用实例即一个项目），
+/// 相对路径均以模块根为基准；草稿箱内部元数据（配置 / 文件元数据）落在
+/// `{project}/.RSmeta/scratchpad/`，回收站为**项目级** `{project}/.RSmeta/trash/`
+/// （与资源模块共用，条目自带来源信息）。
 #[derive(Clone)]
 pub struct ScratchpadStore {
-    /// 项目根目录（草稿箱根）。
+    /// 项目根目录（定位 `.RSmeta/` 用）。
+    project_root: PathBuf,
+    /// 草稿箱模块根：`{project}/scratchpad/`（相对路径基准）。
     scratchpad_dir: PathBuf,
     /// 草稿箱内部元数据目录：`{project}/.RSmeta/scratchpad`。
     meta_dir: PathBuf,
     config_path: PathBuf,
+    /// 项目级回收站：`{project}/.RSmeta/trash`。
+    trash: ProjectTrash,
     config_cache: std::sync::Arc<Mutex<Option<ScratchpadConfig>>>,
 }
 
 impl ScratchpadStore {
     pub fn new(project_path: PathBuf) -> Self {
+        let scratchpad_dir = project_path.join(MODULE_DIR_NAME);
         let meta_dir = project_path.join(META_DIR_NAME).join(META_SUBDIR);
         let config_path = meta_dir.join(CONFIG_FILE);
+        let trash = ProjectTrash::new(&project_path);
         Self {
-            scratchpad_dir: project_path,
+            project_root: project_path,
+            scratchpad_dir,
             meta_dir,
             config_path,
+            trash,
             config_cache: std::sync::Arc::new(Mutex::new(None)),
         }
     }
 
-    /// 草稿箱根目录（= 项目根）。
+    /// 草稿箱模块根目录：`{project}/scratchpad/`。
     pub fn scratchpad_dir(&self) -> &Path {
         &self.scratchpad_dir
     }
@@ -65,102 +79,120 @@ impl ScratchpadStore {
         &self.meta_dir
     }
 
-    /// 回收站目录：`{project}/.RSmeta/scratchpad/.trash`。
-    fn trash_dir(&self) -> PathBuf {
-        self.meta_dir.join(TRASH_DIR)
+    /// 项目根目录。
+    pub fn project_root(&self) -> &Path {
+        &self.project_root
+    }
+
+    /// 项目级回收站。
+    pub fn trash(&self) -> &ProjectTrash {
+        &self.trash
     }
 
     pub async fn ensure_dir(&self) -> Result<(), CoreError> {
-        // 先做一次旧布局迁移（仅当旧目录存在且尚未迁移时执行，幂等且非破坏）。
+        // 先做一次旧布局迁移（仅当旧目录存在时执行，幂等且非破坏）。
         self.migrate_legacy_layout().await;
 
-        fs::create_dir_all(&self.meta_dir).await.map_err(|e| {
-            CoreError::storage(StorageError::io(
-                self.meta_dir.display().to_string(),
-                "create_meta_dir",
-                e.to_string(),
-            ))
-        })?;
-
-        let trash_dir = self.trash_dir();
-        fs::create_dir_all(&trash_dir).await.map_err(|e| {
-            CoreError::storage(StorageError::io(
-                trash_dir.display().to_string(),
-                "create_trash_dir",
-                e.to_string(),
-            ))
-        })?;
+        fs::create_dir_all(&self.scratchpad_dir)
+            .await
+            .map_err(|e| io_err(&self.scratchpad_dir, "create_module_dir", e.to_string()))?;
+        fs::create_dir_all(&self.meta_dir)
+            .await
+            .map_err(|e| io_err(&self.meta_dir, "create_meta_dir", e.to_string()))?;
+        self.trash.ensure_dir().await?;
         Ok(())
     }
 
-    /// 旧布局迁移：v1 草稿箱位于 `{project}/.scratchpad/`，v2 改为「根 = 项目目录」。
+    /// 旧布局迁移（幂等、非破坏）：
+    /// - v1 `{project}/.scratchpad/` 内容 → `{project}/scratchpad/`（同名保留）；
+    ///   旧 `.scratchpad.json` → `config.json`；旧 `.trash/` → 项目级回收站；
+    /// - 上一版实现遗留的 `{meta}/.trash` → 项目级回收站。
     ///
-    /// 仅在 `旧目录存在` 且 `新配置尚未生成` 时执行一次：
-    /// 1. 旧配置 `.scratchpad.json` → `.RSmeta/scratchpad/config.json`；
-    /// 2. 旧目录下的用户文件 → 项目根（**同名冲突保留原文件，不覆盖**）；
-    /// 3. 旧回收站 `.trash/` → `.RSmeta/scratchpad/.trash/`；
-    /// 4. 旧目录若已空则删除（非空保留，因点前缀仍不可见）。
-    ///
-    /// 迁移是尽力而为：任何单步失败只记录日志，不阻断存储使用。
+    /// 单步失败只记录日志，不阻断存储使用。
     async fn migrate_legacy_layout(&self) {
-        let legacy_dir = self.scratchpad_dir.join(LEGACY_DIR);
-        if !legacy_dir.is_dir() {
-            return;
-        }
-        // 新配置已存在说明此前已迁移，避免重复搬运导致 `_1` 副本。
-        if self.config_path.exists() {
-            return;
-        }
+        let legacy_dir = self.project_root.join(LEGACY_DIR);
+        if legacy_dir.is_dir() {
+            if let Err(e) = fs::create_dir_all(&self.scratchpad_dir).await {
+                tracing::warn!("[Scratchpad] 迁移：创建模块目录失败: {e}");
+            }
+            if let Err(e) = fs::create_dir_all(&self.meta_dir).await {
+                tracing::warn!("[Scratchpad] 迁移：创建元数据目录失败: {e}");
+            }
+            let _ = self.trash.ensure_dir().await;
 
-        if let Err(e) = fs::create_dir_all(&self.meta_dir).await {
-            tracing::warn!("[Scratchpad] 迁移：创建元数据目录失败: {e}");
-            return;
-        }
-
-        // 1. 旧配置迁移（rename 失败时退回复制，兼容跨设备场景）。
-        let legacy_config = legacy_dir.join(LEGACY_CONFIG_FILE);
-        if legacy_config.is_file() {
-            if fs::rename(&legacy_config, &self.config_path).await.is_err() {
-                match fs::read(&legacy_config).await {
-                    Ok(content) => {
+            // 1. 旧配置迁移（rename 失败时退回复制，兼容跨设备场景）。
+            let legacy_config = legacy_dir.join(LEGACY_CONFIG_FILE);
+            if legacy_config.is_file() && !self.config_path.exists() {
+                if fs::rename(&legacy_config, &self.config_path).await.is_err() {
+                    if let Ok(content) = fs::read(&legacy_config).await {
                         let _ = fs::write(&self.config_path, content).await;
                     }
-                    Err(e) => tracing::warn!("[Scratchpad] 迁移：读取旧配置失败: {e}"),
                 }
             }
+
+            // 2. 用户文件搬进模块根（跳过隐藏项；同名保留）。
+            self.move_dir_contents(&legacy_dir, &self.scratchpad_dir, true)
+                .await;
+
+            // 3. 旧回收站条目并入项目级回收站。
+            self.ingest_trash_dir(&legacy_dir.join(TRASH_DIR)).await;
+
+            // 4. 旧目录空了再删（非空则保留，点前缀保证不可见）。
+            let _ = fs::remove_dir(&legacy_dir).await;
         }
 
-        // 2. 用户文件迁移到项目根（跳过隐藏项；同名保留）。
-        if let Ok(mut read_dir) = fs::read_dir(&legacy_dir).await {
-            while let Ok(Some(entry)) = read_dir.next_entry().await {
-                let name = entry.file_name();
-                if name.to_string_lossy().starts_with('.') {
-                    continue;
-                }
-                let dest = self.scratchpad_dir.join(&name);
-                if dest.exists() {
-                    continue;
-                }
-                if let Err(e) = fs::rename(entry.path(), &dest).await {
-                    tracing::warn!("[Scratchpad] 迁移：移动文件失败 {:?}: {e}", entry.path());
-                }
+        // 上一版实现遗留：`{meta}/.trash` → 项目级回收站。
+        self.ingest_trash_dir(&self.meta_dir.join(TRASH_DIR)).await;
+    }
+
+    /// 把 `src` 下的条目移到 `dst`（可选跳过隐藏项；同名保留不覆盖）。
+    async fn move_dir_contents(&self, src: &Path, dst: &Path, skip_hidden: bool) {
+        let Ok(mut read_dir) = fs::read_dir(src).await else {
+            return;
+        };
+        // 先收集再移动，避免边遍历边改动目录。
+        let mut names: Vec<std::ffi::OsString> = Vec::new();
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            names.push(entry.file_name());
+        }
+        for name in names {
+            if skip_hidden && name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let dest = dst.join(&name);
+            if dest.exists() {
+                continue;
+            }
+            if let Err(e) = fs::rename(src.join(&name), &dest).await {
+                tracing::warn!("[Scratchpad] 迁移：移动 {name:?} 失败: {e}");
             }
         }
+    }
 
-        // 3. 旧回收站迁移（重名走 unique_path）。
-        let legacy_trash = legacy_dir.join(TRASH_DIR);
-        if legacy_trash.is_dir() {
-            let _ = fs::create_dir_all(&self.trash_dir()).await;
-            if let Ok(mut read_dir) = fs::read_dir(&legacy_trash).await {
-                while let Ok(Some(entry)) = read_dir.next_entry().await {
-                    let dest = unique_path(self.trash_dir().join(entry.file_name()));
-                    let _ = fs::rename(entry.path(), &dest).await;
-                }
-            }
+    /// 把旧回收站目录里的条目逐一移入项目级回收站（按名称还原到模块根）。
+    async fn ingest_trash_dir(&self, old_trash: &Path) {
+        if !old_trash.is_dir() {
+            return;
         }
-
-        // 4. 旧目录空了再删（非空则保留，点前缀保证不可见）。
-        let _ = fs::remove_dir(&legacy_dir).await;
+        if self.trash.ensure_dir().await.is_err() {
+            return;
+        }
+        let Ok(mut read_dir) = fs::read_dir(old_trash).await else {
+            return;
+        };
+        let mut names: Vec<std::ffi::OsString> = Vec::new();
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            names.push(entry.file_name());
+        }
+        for name in names {
+            let name_str = name.to_string_lossy().to_string();
+            let source = old_trash.join(&name);
+            let _ = self
+                .trash
+                .move_to_trash(&source, ORIGIN_SCRATCHPAD, &name_str)
+                .await;
+        }
+        let _ = fs::remove_dir(old_trash).await;
     }
 
     pub async fn load_config(&self) -> Result<ScratchpadConfig, CoreError> {
@@ -420,117 +452,35 @@ impl ScratchpadStore {
 
     pub async fn delete_entry(&self, relative_path: &str) -> Result<(), CoreError> {
         let target_path = self.resolve_path(relative_path)?;
-
-        let trash_dir = self.trash_dir();
-        if !trash_dir.exists() {
-            fs::create_dir_all(&trash_dir).await.map_err(|e| {
-                CoreError::storage(StorageError::io(
-                    trash_dir.display().to_string(),
-                    "create_trash_dir",
-                    e.to_string(),
-                ))
-            })?;
-        }
-
-        let file_name = target_path
-            .file_name()
-            .ok_or_else(|| {
-                CoreError::storage(StorageError::io(
-                    target_path.display().to_string(),
-                    "delete_entry",
-                    "invalid file path: no file name",
-                ))
-            })?
-            .to_string_lossy()
-            .to_string();
-        let trash_target = unique_path(trash_dir.join(&file_name));
-
-        fs::rename(&target_path, &trash_target).await.map_err(|e| {
-            CoreError::storage(StorageError::io(
-                target_path.display().to_string(),
-                "move_to_trash",
-                e.to_string(),
-            ))
-        })?;
-
+        self.trash
+            .move_to_trash(&target_path, ORIGIN_SCRATCHPAD, relative_path)
+            .await?;
         Ok(())
     }
 
-    pub async fn list_trash(&self) -> Result<Vec<ScratchpadEntry>, CoreError> {
-        let trash_dir = self.trash_dir();
-        if !trash_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        self.scan_dir_tree(&trash_dir, 0, 1).await
+    /// 列出项目级回收站条目（含来源模块，便于面板统一展示）。
+    pub async fn list_trash(&self) -> Result<Vec<TrashEntry>, CoreError> {
+        self.trash.list().await
     }
 
-    pub async fn restore_from_trash(&self, trash_name: &str) -> Result<ScratchpadEntry, CoreError> {
-        let trash_path = self.trash_dir().join(trash_name);
-        if !trash_path.exists() {
-            return Err(CoreError::storage(StorageError::io(
-                trash_path.display().to_string(),
-                "restore",
-                "entry not found in trash".to_string(),
-            )));
-        }
-
-        let target_path = unique_path(self.scratchpad_dir.join(trash_name));
-        fs::rename(&trash_path, &target_path).await.map_err(|e| {
-            CoreError::storage(StorageError::io(
-                trash_path.display().to_string(),
+    /// 从回收站还原到草稿箱；条目属于其他模块时报错（应在其模块中还原）。
+    pub async fn restore_from_trash(&self, trash_id: &str) -> Result<ScratchpadEntry, CoreError> {
+        let entry = self.trash.get(trash_id).await?;
+        if entry.manifest.origin != ORIGIN_SCRATCHPAD {
+            return Err(io_err(
+                &self.trash.dir().join(trash_id),
                 "restore_from_trash",
-                e.to_string(),
-            ))
-        })?;
-
-        let is_dir = fs::metadata(&target_path)
-            .await
-            .map_err(|e| {
-                CoreError::storage(StorageError::io(
-                    target_path.display().to_string(),
-                    "metadata",
-                    e.to_string(),
-                ))
-            })?
-            .is_dir();
-
-        Ok(ScratchpadEntry {
-            name: target_path
-                .file_name()
-                .ok_or_else(|| {
-                    CoreError::storage(StorageError::io(
-                        target_path.display().to_string(),
-                        "restore_from_trash",
-                        "invalid path: no file name",
-                    ))
-                })?
-                .to_string_lossy()
-                .to_string(),
-            path: target_path,
-            kind: if is_dir {
-                ScratchpadEntryKind::Folder
-            } else {
-                ScratchpadEntryKind::File
-            },
-            size: 0,
-            modified_at: Some(Utc::now().to_rfc3339()),
-            children: if is_dir { Some(Vec::new()) } else { None },
-        })
+                format!(
+                    "该条目属于模块 '{}'，请在其模块中还原",
+                    entry.manifest.origin
+                ),
+            ));
+        }
+        self.trash.restore(trash_id, &self.scratchpad_dir).await
     }
 
     pub async fn empty_trash(&self) -> Result<(), CoreError> {
-        let trash_dir = self.trash_dir();
-        if trash_dir.exists() {
-            fs::remove_dir_all(&trash_dir).await.map_err(|e| {
-                CoreError::storage(StorageError::io(
-                    trash_dir.display().to_string(),
-                    "empty_trash",
-                    e.to_string(),
-                ))
-            })?;
-        }
-        Ok(())
+        self.trash.empty().await
     }
 
     pub async fn rename_entry(
@@ -843,6 +793,37 @@ impl ScratchpadStore {
 
         self.save_config(&config).await?;
         Ok(())
+    }
+
+    /// 外部引用可用性（加载时探测路径是否存在；失效项供 UI 置灰并允许重新定位）。
+    pub async fn external_reference_status(
+        &self,
+    ) -> Result<Vec<ExternalReferenceStatus>, CoreError> {
+        let config = self.load_config().await?;
+        Ok(config
+            .external_references
+            .into_iter()
+            .map(|r| ExternalReferenceStatus {
+                exists: r.path.exists(),
+                alias: r.alias,
+                path: r.path,
+            })
+            .collect())
+    }
+
+    /// 绑定文件使用的数据源（仅存连接 ID，不落凭据）。
+    pub async fn bind_connections(
+        &self,
+        relative_path: &str,
+        connections: Vec<String>,
+    ) -> Result<(), CoreError> {
+        let mut config = self.load_config().await?;
+        let entry = config
+            .file_meta
+            .entry(relative_path.to_string())
+            .or_default();
+        entry.bound_connections = connections;
+        self.save_config(&config).await
     }
 
     pub async fn update_file_meta(
@@ -1359,7 +1340,16 @@ fn duckdb_query_hint(ext: &str, name: &str) -> String {
     }
 }
 
-fn unique_path(path: PathBuf) -> PathBuf {
+/// 构造存储 IO 错误（统一 path / operation / reason）。
+fn io_err(path: &Path, operation: &str, reason: impl Into<String>) -> CoreError {
+    CoreError::storage(StorageError::io(
+        path.display().to_string(),
+        operation,
+        reason.into(),
+    ))
+}
+
+pub(crate) fn unique_path(path: PathBuf) -> PathBuf {
     if !path.exists() {
         return path;
     }
@@ -1411,7 +1401,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn root_is_project_dir_and_meta_isolated() {
+    async fn module_root_and_meta_isolated() {
         let project = temp_project("root");
         let store = ScratchpadStore::new(project.clone());
         store.ensure_dir().await.unwrap();
@@ -1419,8 +1409,8 @@ mod tests {
         store.create_entry("a.sql", None, false).await.unwrap();
         store.create_entry("sub", None, true).await.unwrap();
 
-        // 根即项目目录：用户文件落在项目根，内部元数据落 `.RSmeta/scratchpad`。
-        assert!(project.join("a.sql").is_file());
+        // 模块根 = 项目根下可见的 `scratchpad/`；内部元数据在 `.RSmeta/scratchpad`。
+        assert!(project.join(MODULE_DIR_NAME).join("a.sql").is_file());
         assert!(project.join(META_DIR_NAME).join(META_SUBDIR).is_dir());
 
         let entries = store.list_local_entries(2).await.unwrap();
@@ -1455,37 +1445,72 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trash_lives_under_meta() {
+    async fn trash_is_project_level_with_origin() {
         let project = temp_project("trash");
         let store = ScratchpadStore::new(project.clone());
         store.ensure_dir().await.unwrap();
         store.create_entry("doomed.sql", None, false).await.unwrap();
 
         store.delete_entry("doomed.sql").await.unwrap();
-        assert!(!project.join("doomed.sql").exists());
+        assert!(!project.join(MODULE_DIR_NAME).join("doomed.sql").exists());
+
+        let entries = store.list_trash().await.unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.manifest.name == "doomed.sql")
+            .expect("回收站应含 doomed.sql");
+        assert_eq!(entry.manifest.origin, ORIGIN_SCRATCHPAD);
+        assert_eq!(entry.manifest.original_rel_path, "doomed.sql");
         assert!(project
             .join(META_DIR_NAME)
-            .join(META_SUBDIR)
-            .join(TRASH_DIR)
-            .join("doomed.sql")
+            .join("trash")
+            .join(&entry.manifest.id)
+            .join("payload")
             .exists());
 
-        let trash = store.list_trash().await.unwrap();
-        assert!(trash.iter().any(|e| e.name == "doomed.sql"));
-
-        store.restore_from_trash("doomed.sql").await.unwrap();
-        assert!(project.join("doomed.sql").is_file());
+        let id = entry.manifest.id.clone();
+        store.restore_from_trash(&id).await.unwrap();
+        assert!(project.join(MODULE_DIR_NAME).join("doomed.sql").is_file());
+        assert!(store.list_trash().await.unwrap().is_empty());
 
         std::fs::remove_dir_all(&project).ok();
     }
 
     #[tokio::test]
-    async fn external_reference_persists_in_meta_config() {
+    async fn restore_refuses_other_module_entries() {
+        let project = temp_project("other_origin");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+
+        // 模拟资源模块删除的文件（由同一项目级回收站收录）。
+        let resources = project.join("resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::write(resources.join("keep.sql"), "select 1").unwrap();
+        let entry = store
+            .trash()
+            .move_to_trash(&resources.join("keep.sql"), "resources", "keep.sql")
+            .await
+            .unwrap();
+
+        assert!(store.restore_from_trash(&entry.manifest.id).await.is_err());
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn external_reference_persists_and_reports_status() {
         let project = temp_project("ref");
+        let existing = project.join("linked");
+        std::fs::create_dir_all(&existing).unwrap();
+
         let store = ScratchpadStore::new(project.clone());
         store.ensure_dir().await.unwrap();
         store
-            .add_external_reference("下载".into(), PathBuf::from("D:/data"))
+            .add_external_reference("已存在".into(), existing.clone())
+            .await
+            .unwrap();
+        store
+            .add_external_reference("已丢失".into(), project.join("nope"))
             .await
             .unwrap();
 
@@ -1495,10 +1520,33 @@ mod tests {
             .join(CONFIG_FILE)
             .is_file());
 
-        // 重新打开应从新位置读取到引用。
+        let statuses = store.external_reference_status().await.unwrap();
+        assert_eq!(statuses.len(), 2);
+        assert!(statuses.iter().any(|s| s.alias == "已存在" && s.exists));
+        assert!(statuses.iter().any(|s| s.alias == "已丢失" && !s.exists));
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn bound_connections_roundtrip() {
+        let project = temp_project("bind");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+
+        store
+            .bind_connections("q.sql", vec!["P_1".to_string(), "G_2".to_string()])
+            .await
+            .unwrap();
+
         let reloaded = ScratchpadStore::new(project.clone());
         let cfg = reloaded.load_config().await.unwrap();
-        assert_eq!(cfg.external_references.len(), 1);
+        assert_eq!(
+            cfg.file_meta
+                .get("q.sql")
+                .map(|m| m.bound_connections.clone()),
+            Some(vec!["P_1".to_string(), "G_2".to_string()])
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }
@@ -1520,9 +1568,20 @@ mod tests {
         store.ensure_dir().await.unwrap();
 
         let meta = project.join(META_DIR_NAME).join(META_SUBDIR);
-        assert!(project.join("old.sql").is_file(), "用户文件应迁到项目根");
+        assert!(
+            project.join(MODULE_DIR_NAME).join("old.sql").is_file(),
+            "旧用户文件应迁到模块根"
+        );
         assert!(meta.join(CONFIG_FILE).is_file(), "配置应迁到元数据目录");
-        assert!(meta.join(TRASH_DIR).join("gone.sql").exists());
+        assert!(
+            store
+                .list_trash()
+                .await
+                .unwrap()
+                .iter()
+                .any(|e| e.manifest.name == "gone.sql"),
+            "旧回收站条目应并入项目级回收站"
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }

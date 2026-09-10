@@ -49,6 +49,14 @@ pub struct ExternalReference {
     pub created_at: DateTime<Utc>,
 }
 
+/// 外部引用的可用性（加载时探测路径是否存在，用于置灰/重新定位）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalReferenceStatus {
+    pub alias: String,
+    pub path: PathBuf,
+    pub exists: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyzableFile {
     pub name: String,
@@ -60,8 +68,12 @@ pub struct AnalyzableFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FileMeta {
+    /// 最近执行时使用的数据源连接 ID（仅存 ID，凭据在 auth_store）。
     pub last_connection_id: Option<String>,
     pub last_executed_at: Option<DateTime<Utc>>,
+    /// 显式绑定的数据源连接 ID（多数据源场景；用于打开文件时预选）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bound_connections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

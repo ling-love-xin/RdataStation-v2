@@ -9,7 +9,7 @@
 //! 数据仍来自 `ConnectionItem::sample()`（占位），下一轮接 ConnectionService。
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
@@ -24,7 +24,10 @@ use gpui_kit::*;
 
 use crate::components::connection_dialog;
 
-use scratchpad::{ExternalReference, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore};
+use scratchpad::{ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore};
+
+use database::model::{NavNode, NavNodeKind, NavPath, NavScope, NavSource};
+use database::navigator_service::NavigatorService;
 
 use crate::services::db_navigator::NavTable;
 use crate::services::query_runner::QueryOutput;
@@ -112,6 +115,8 @@ pub struct SidebarPanel {
     focus_handle: FocusHandle,
     /// M5 草稿箱面板状态（首次渲染触发加载）。
     scratchpad: Rc<RefCell<ScratchpadView>>,
+    /// M4 数据源导航面板状态（懒加载对象树）。
+    database_nav: Rc<RefCell<DatabaseNavView>>,
 }
 
 /// 草稿箱面板视图状态。
@@ -126,8 +131,8 @@ struct ScratchpadView {
     error: Option<String>,
     /// 项目根下的条目树（depth=4 全量；懒加载后续再做）。
     entries: Vec<ScratchpadEntry>,
-    /// 外部引用（来自草稿箱配置）。
-    external_refs: Vec<ExternalReference>,
+    /// 外部引用（来自草稿箱配置，含路径可用性）。
+    external_refs: Vec<ExternalReferenceStatus>,
     /// 已展开的文件夹路径集合。
     expanded: HashSet<String>,
     /// 当前选中条目路径。
@@ -187,12 +192,53 @@ fn scratchpad_icon_color(theme: &gpui_kit::component::Theme, name: &str) -> Hsla
     }
 }
 
+/// 数据库导航面板状态（M4）。
+///
+/// 数据来自 `Shared::connections`（连接列表）+ `NavigatorService`（对象树懒加载）。
+/// 来源标签页、展开态、加载结果与错误就地保存在此，重启持久化在后续切片接入。
+#[derive(Default)]
+struct DatabaseNavView {
+    /// 当前来源标签页（项目 / 全局）。
+    scope: NavScope,
+    /// 已展开节点 key。
+    expanded: HashSet<String>,
+    /// 父节点 key → 已加载子节点。
+    children: HashMap<String, Vec<NavNode>>,
+    /// 已尝试加载的节点 key（避免重复请求）。
+    attempted: HashSet<String>,
+    /// 节点 key → 加载失败原因。
+    errors: HashMap<String, String>,
+    /// 本会话运行时已连接的连接 ID。
+    connected: HashSet<String>,
+}
+
+/// 懒加载导航子节点（阻塞式，与现有服务调用模式一致；Phase C 迁后台任务 + 缓存编排）。
+fn load_nav_children(conn_id: &str, path: &NavPath) -> Result<Vec<NavNode>, String> {
+    let service = NavigatorService::new(engine::get_connection_manager().clone());
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+    rt.block_on(service.load_children(conn_id, path))
+        .map_err(|e| e.to_string())
+}
+
+/// 节点图标色（复用主题标准色，代码零裸色）。
+fn nav_kind_color(kind: &NavNodeKind, theme: &gpui_kit::component::Theme) -> Hsla {
+    match kind {
+        NavNodeKind::Connection { .. } => theme.colors.primary,
+        NavNodeKind::Catalog | NavNodeKind::Schema | NavNodeKind::Folder(_) => theme.colors.warning,
+        NavNodeKind::Table { .. } => theme.colors.info,
+        NavNodeKind::View => theme.colors.success,
+        NavNodeKind::Routine { .. } => theme.colors.primary,
+        _ => theme.colors.muted_foreground,
+    }
+}
+
 impl SidebarPanel {
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
         Self {
             shared,
             focus_handle: cx.focus_handle(),
             scratchpad: Rc::new(RefCell::new(ScratchpadView::default())),
+            database_nav: Rc::new(RefCell::new(DatabaseNavView::default())),
         }
     }
 
@@ -228,22 +274,23 @@ impl SidebarPanel {
 
         let result = rt.block_on(async {
             let entries = store.list_local_entries(4).await?;
-            let config = store.load_config().await?;
+            let refs = store.external_reference_status().await?;
             let trash = store.list_trash().await?;
-            Ok::<_, shared::error::CoreError>((entries, config, trash))
+            Ok::<_, shared::error::CoreError>((entries, refs, trash))
         });
 
         match result {
-            Ok((entries, config, trash)) => {
+            Ok((entries, refs, trash)) => {
                 view.entries = entries;
-                view.external_refs = config.external_references;
+                view.external_refs = refs;
                 view.trash_count = trash.len();
             }
             Err(e) => view.error = Some(format!("加载草稿箱失败: {e}")),
         }
     }
 
-    /// 连接列表（可选中，点击切换高亮并通知工作台）。
+    /// 旧连接列表（保留供后续参考；正式导航见 `render_database_nav`）。
+    #[allow(dead_code)]
     fn render_connection_list(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let selected = self.shared.selected.get();
@@ -346,40 +393,416 @@ impl SidebarPanel {
         list
     }
 
-    fn render_navigation_placeholder(&self, fg: Hsla) -> Div {
-        let mut tree = div()
+    /// 数据源导航面板（M4）：面板头 + 来源标签页 + 对象树。
+    fn render_database_nav(&self, cx: &mut Context<Self>) -> Div {
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let border = cx.theme().colors.border;
+        let accent = cx.theme().colors.primary;
+        let scope = self.database_nav.borrow().scope;
+
+        let header = div()
+            .h_flex()
+            .items_center()
+            .w_full()
+            .h(px(30.))
+            .pl(px(10.))
+            .pr(px(8.))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(fg)
+                    .child("数据源"),
+            )
+            .child(div().flex_1());
+
+        let tabs = div()
+            .h_flex()
+            .items_center()
+            .w_full()
+            .gap_3()
+            .pl(px(10.))
+            .pr(px(8.))
+            .pb(px(6.))
+            .child(self.nav_scope_tab("项目", NavScope::Project, scope, border, accent, fg, muted, cx))
+            .child(self.nav_scope_tab("全局", NavScope::Global, scope, border, accent, fg, muted, cx));
+
+        let body = self.render_nav_tree(scope, cx);
+
+        div()
             .v_flex()
             .w_full()
+            .h_full()
+            .min_h_0()
+            .pt(px(4.))
+            .child(header)
+            .child(tabs)
+            .child(body)
+    }
+
+    /// 来源标签页（项目 / 全局）。
+    #[allow(clippy::too_many_arguments)]
+    fn nav_scope_tab(
+        &self,
+        label: &str,
+        target: NavScope,
+        current: NavScope,
+        border: Hsla,
+        accent: Hsla,
+        fg: Hsla,
+        muted: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let active = target == current;
+        let entity = cx.entity();
+        let state = self.database_nav.clone();
+        let underline = if active { accent } else { border };
+        let text = if active { fg } else { muted };
+        let weight = if active {
+            FontWeight::SEMIBOLD
+        } else {
+            FontWeight::NORMAL
+        };
+        div()
+            .id(format!("nav-scope-{}", target.as_str()))
+            .v_flex()
+            .items_center()
             .gap_1()
-            .pl(px(8.))
-            .pr(px(8.))
-            .pt(px(8.))
-            .pb(px(8.));
-        for (depth, text) in [
-            (0, "项目：营销分析"),
-            (1, "数据源：本地 MySQL"),
-            (2, "schema：analytics"),
-            (3, "表：orders"),
-            (3, "表：customers"),
-            (2, "schema：staging"),
-            (1, "数据源：生产 PG"),
-            (2, "schema：public"),
-        ] {
-            tree = tree.child(
+            .cursor_pointer()
+            .on_click(move |_, _, app| {
+                state.borrow_mut().scope = target;
+                entity.update(app, |_, cx| cx.notify());
+            })
+            .child(
                 div()
-                    .h_flex()
-                    .items_center()
-                    .h(px(24.))
-                    .rounded_md()
-                    .pl(px(8.))
-                    .pr(px(8.))
                     .text_xs()
-                    .text_color(fg)
-                    .child(div().w(px(depth as f32 * 14.0)).flex_none())
-                    .child(text),
+                    .font_weight(weight)
+                    .text_color(text)
+                    .child(label.to_string()),
+            )
+            .child(div().h(px(2.)).w_full().bg(underline))
+    }
+
+    /// 树主体：按当前标签页渲染连接节点。
+    fn render_nav_tree(&self, scope: NavScope, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let mut column = div().v_flex().w_full().min_h_0().gap_1().px_1().pt(px(2.)).pb(px(4.));
+        let conns: Vec<ConnectionItem> = self.shared.connections.borrow().iter().cloned().collect();
+        let mut shown = 0usize;
+        for conn in &conns {
+            if !scope.contains(NavSource::from_conn_id(&conn.id)) {
+                continue;
+            }
+            shown += 1;
+            column = column.child(self.render_connection_row(conn, cx));
+        }
+        if shown == 0 {
+            column = column.child(
+                div()
+                    .w_full()
+                    .pt(px(20.))
+                    .px_3()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("暂无数据源，请点击标题栏「新建连接」。"),
             );
         }
-        tree
+        column
+    }
+
+    /// 连接节点行（状态点 + 名称 + 来源短码 + 驱动 + 连接/断开）。
+    fn render_connection_row(&self, conn: &ConnectionItem, cx: &mut Context<Self>) -> Div {
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let hover = cx.theme().colors.list_hover;
+        let ok = cx.theme().colors.success;
+        let off = cx.theme().colors.muted;
+        let danger = cx.theme().colors.danger;
+        let pri = cx.theme().colors.primary;
+
+        let (expanded, connected, error, children) = {
+            let view = self.database_nav.borrow();
+            (
+                view.expanded.contains(&conn.id),
+                view.connected.contains(&conn.id) || conn.connected,
+                view.errors.get(&conn.id).cloned(),
+                view.children.get(&conn.id).cloned().unwrap_or_default(),
+            )
+        };
+
+        let source = NavSource::from_conn_id(&conn.id);
+        let project_root = self
+            .shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|p| p.root.to_string_lossy().to_string());
+        let conn_id = conn.id.clone();
+
+        let mut block = div().v_flex().w_full();
+        block = block.child(
+            div()
+                .id(format!("nav-conn-{}", conn.id))
+                .h_flex()
+                .items_center()
+                .w_full()
+                .h(px(26.))
+                .px_1()
+                .gap_1()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .on_click({
+                    let entity = cx.entity();
+                    let conn_id = conn_id.clone();
+                    move |_, _, app: &mut App| {
+                        let conn_id = conn_id.clone();
+                        entity.update(app, |this, cx| {
+                            this.toggle_nav_node(&conn_id, &conn_id, NavPath::Connection);
+                            cx.notify();
+                        });
+                    }
+                })
+                .child(
+                    div()
+                        .w(px(10.))
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(if expanded { "\u{25be}" } else { "\u{25b8}" }),
+                )
+                .child(
+                    div()
+                        .w(px(8.))
+                        .h(px(8.))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(if connected { ok } else { off }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(fg)
+                        .child(conn.name.clone()),
+                )
+                .child(div().text_xs().text_color(muted).child(source.code()))
+                .child(div().text_xs().text_color(muted).child(conn.driver.clone()))
+                .child(
+                    div()
+                        .id(format!("nav-conn-toggle-{}", conn.id))
+                        .px_1()
+                        .text_xs()
+                        .text_color(pri)
+                        .cursor_pointer()
+                        .child(if connected { "断开" } else { "连接" })
+                        .on_click({
+                            let entity = cx.entity();
+                            let conn_id = conn_id.clone();
+                            let root = project_root.clone();
+                            move |_, _, app: &mut App| {
+                                let conn_id = conn_id.clone();
+                                let root = root.clone();
+                                entity.update(app, |this, cx| {
+                                    let already =
+                                        this.database_nav.borrow().connected.contains(&conn_id);
+                                    let outcome = if already {
+                                        crate::services::nav_runtime::disconnect_entry(&conn_id)
+                                            .map(|_| false)
+                                    } else {
+                                        crate::services::nav_runtime::connect_entry(
+                                            &conn_id,
+                                            root.as_deref(),
+                                        )
+                                        .map(|_| true)
+                                    };
+                                    match outcome {
+                                        Ok(is_connected) => {
+                                            let mut view = this.database_nav.borrow_mut();
+                                            if is_connected {
+                                                view.connected.insert(conn_id.clone());
+                                            } else {
+                                                view.connected.remove(&conn_id);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            *this.shared.notice.borrow_mut() =
+                                                Some(format!("连接操作失败: {e}"));
+                                        }
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                ),
+        );
+
+        if let Some(err) = error {
+            block = block.child(div().pl(px(24.)).pb_1().text_xs().text_color(danger).child(err));
+        }
+
+        if expanded {
+            for child in children {
+                block = block.child(self.render_nav_node(&child, 1, cx));
+            }
+        }
+
+        block
+    }
+
+    /// 对象树节点行（懒加载；叶子不可展开）。
+    fn render_nav_node(&self, node: &NavNode, depth: usize, cx: &mut Context<Self>) -> Div {
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let hover = cx.theme().colors.list_hover;
+        let pri = cx.theme().colors.primary;
+        let danger = cx.theme().colors.danger;
+        let icon = {
+            let theme = cx.theme();
+            nav_kind_color(&node.kind, theme)
+        };
+
+        let (expanded, error, children) = {
+            let view = self.database_nav.borrow();
+            (
+                view.expanded.contains(&node.key),
+                view.errors.get(&node.key).cloned(),
+                view.children.get(&node.key).cloned().unwrap_or_default(),
+            )
+        };
+
+        let entity = cx.entity();
+        let n_conn_id = node.connection_id.clone();
+        let n_key = node.key.clone();
+        let n_path = node.expand_path.clone();
+
+        let right_meta: Option<(String, bool)> = match &node.kind {
+            NavNodeKind::Column {
+                data_type,
+                primary,
+                foreign,
+                ..
+            } => {
+                let mut t = data_type.clone();
+                if *primary {
+                    t.push_str("  PK");
+                }
+                if *foreign {
+                    t.push_str("  FK");
+                }
+                Some((t, *primary))
+            }
+            _ => None,
+        };
+
+        let indent = 10.0 + depth as f32 * 12.0;
+        let mut block = div().v_flex().w_full();
+        let mut row = div()
+            .id(format!("nav-node-{}", node.key))
+            .h_flex()
+            .items_center()
+            .w_full()
+            .h(px(22.))
+            .pr_1()
+            .pl(px(indent))
+            .gap_1()
+            .rounded_md()
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover))
+            .child(
+                div()
+                    .w(px(10.))
+                    .flex_none()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(if node.has_children {
+                        if expanded {
+                            "\u{25be}"
+                        } else {
+                            "\u{25b8}"
+                        }
+                    } else {
+                        ""
+                    }),
+            )
+            .child(div().w(px(8.)).h(px(8.)).flex_none().rounded_sm().bg(icon))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(fg)
+                    .child(node.name.clone()),
+            );
+        if let Some((meta, is_pk)) = right_meta {
+            row = row.child(
+                div()
+                    .text_xs()
+                    .text_color(if is_pk { pri } else { muted })
+                    .child(meta),
+            );
+        }
+        if node.has_children {
+            row = row.on_click(move |_, _, app: &mut App| {
+                let conn_id = n_conn_id.clone();
+                let key = n_key.clone();
+                let path = n_path.clone();
+                entity.update(app, |this, cx| {
+                    if let Some(p) = path {
+                        this.toggle_nav_node(&conn_id, &key, p);
+                    }
+                    cx.notify();
+                });
+            });
+        }
+        block = block.child(row);
+
+        if let Some(err) = error {
+            block = block.child(
+                div()
+                    .pl(px(indent + 18.0))
+                    .pb_1()
+                    .text_xs()
+                    .text_color(danger)
+                    .child(err),
+            );
+        }
+        if expanded {
+            for child in children {
+                block = block.child(self.render_nav_node(&child, depth + 1, cx));
+            }
+        }
+        block
+    }
+
+    /// 展开 / 折叠节点；首次展开时懒加载子节点。
+    fn toggle_nav_node(&self, conn_id: &str, key: &str, path: NavPath) {
+        {
+            let mut view = self.database_nav.borrow_mut();
+            if view.expanded.contains(key) {
+                view.expanded.remove(key);
+                return;
+            }
+            view.expanded.insert(key.to_string());
+            if view.attempted.contains(key) {
+                return;
+            }
+            view.attempted.insert(key.to_string());
+        }
+
+        let result = load_nav_children(conn_id, &path);
+        let mut view = self.database_nav.borrow_mut();
+        match result {
+            Ok(children) => {
+                view.errors.remove(key);
+                view.children.insert(key.to_string(), children);
+            }
+            Err(e) => {
+                view.errors.insert(key.to_string(), e);
+            }
+        }
     }
 
     fn render_resources_placeholder(&self, fg: Hsla) -> Div {
@@ -697,8 +1120,12 @@ impl SidebarPanel {
                                 .flex_1()
                                 .min_w_0()
                                 .text_xs()
-                                .text_color(fg)
-                                .child(r.alias.clone()),
+                                .text_color(if r.exists { fg } else { muted })
+                                .child(if r.exists {
+                                    r.alias.clone()
+                                } else {
+                                    format!("{}（丢失）", r.alias)
+                                }),
                         )
                         .child(
                             div()
@@ -785,12 +1212,7 @@ impl Render for SidebarPanel {
         let active = self.shared.active_left.get();
         let content: Div = match active {
             LeftPanel::Draft => self.render_scratchpad(cx),
-            LeftPanel::Database => {
-                // 数据库导航 = 数据源连接列表（保留连接管理入口）+ 导航树占位。
-                let mut panel = self.render_connection_list(cx);
-                panel = panel.child(self.render_navigation_placeholder(fg));
-                panel
-            }
+            LeftPanel::Database => self.render_database_nav(cx),
             LeftPanel::Resources => self.render_resources_placeholder(fg),
             LeftPanel::Plugin => self.render_plugin_placeholder(fg),
         };

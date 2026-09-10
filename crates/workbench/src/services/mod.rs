@@ -15,6 +15,7 @@ pub mod project_session;
 pub mod query_export;
 pub mod query_history;
 pub mod mock_generator;
+pub mod nav_runtime;
 pub mod query_runner;
 pub mod result_service;
 pub mod secret_integration;

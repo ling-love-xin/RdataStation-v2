@@ -4,16 +4,14 @@ use std::sync::Arc;
 
 use connection::config::ConnectionMethod;
 use connection::connector::TunnelGuard;
+use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
 use engine::driver::registry::DriverConnectionConfig;
 use engine::driver::router::DataSourceRouter;
 use engine::driver::traits::{DataSourceMeta, DynDatabase};
-use shared::error::{ConnectionError, CoreError};
 use engine::persistence::connection_store::{self, RecentConnectionInput};
 use engine::persistence::global_db::GlobalConnectionSaveInput;
 use engine::persistence::MetadataCacheManager;
-use engine::connection_manager::{
-    ConnectionInfo, ConnectionManager, ConnectionType,
-};
+use shared::error::{ConnectionError, CoreError};
 
 /// 保存全局连接输入参数
 pub struct SaveGlobalConnectionInput<'a> {
@@ -1290,11 +1288,11 @@ impl ConnectionService {
         self.manager.get_active_conn_id().await
     }
 
-    /// 关闭指定连接
+    /// 关闭指定连接（**保留元数据缓存**）。
+    ///
+    /// 依据设计 `database-navigator-prototype-design.md` §5.2：断开只关闭运行时连接，
+    /// 不删除 L2 元数据缓存（支持离线浏览 / 重连秒开）；清理仅经显式「缓存管理」入口。
     pub async fn close_connection(&self, conn_id: &str) -> Result<(), CoreError> {
-        // 获取连接信息以清理元数据缓存
-        let conn_info = self.manager.get_connection_info(&conn_id.to_string()).await;
-
         // 清理隧道守卫（释放本地端口 + 取消后台任务）
         if let Some(guards) = self.tunnels.lock().await.remove(conn_id) {
             tracing::info!(
@@ -1306,28 +1304,8 @@ impl ConnectionService {
             drop(guards);
         }
 
-        // 从连接管理器中移除连接
+        // 从连接管理器中移除连接（缓存文件保留）
         self.manager.remove_connection(&conn_id.to_string()).await;
-
-        // 清理元数据缓存文件
-        if let Some(info) = conn_info {
-            let cache_manager = MetadataCacheManager::new(
-                conn_id,
-                match info.connection_type {
-                    ConnectionType::Global => engine::persistence::ConnectionType::Global,
-                    ConnectionType::Project => engine::persistence::ConnectionType::Project,
-                },
-                info.project_id.as_deref(),
-            )?;
-
-            if let Err(e) = cache_manager.delete() {
-                tracing::warn!(
-                    "Failed to delete metadata cache for connection {}: {}",
-                    conn_id,
-                    e
-                );
-            }
-        }
 
         Ok(())
     }
@@ -1602,11 +1580,8 @@ impl ConnectionService {
 
     /// 获取全局连接的元数据路径
     fn get_global_metadata_path(&self, conn_id: &str) -> PathBuf {
-        let cache_manager = MetadataCacheManager::new(
-            conn_id,
-            engine::persistence::ConnectionType::Global,
-            None,
-        );
+        let cache_manager =
+            MetadataCacheManager::new(conn_id, engine::persistence::ConnectionType::Global, None);
         cache_manager
             .map(|m| m.db_path().clone())
             .unwrap_or_else(|_| PathBuf::from(".").join(format!("conn_global_{}.sqlite", conn_id)))
@@ -1821,14 +1796,12 @@ async fn create_proxy_tunnel_port(
         "代理隧道已建立"
     );
 
-    Ok(
-        connection::connector::TunnelGuard::new(
-            local_port,
-            shutdown_tx,
-            task,
-            format!("proxy:{}", target_host),
-        ),
-    )
+    Ok(connection::connector::TunnelGuard::new(
+        local_port,
+        shutdown_tx,
+        task,
+        format!("proxy:{}", target_host),
+    ))
 }
 
 /// 从全局 DB 解析 network_config_id → ConnectionMethod
@@ -1973,9 +1946,8 @@ pub async fn parse_network_config_json(
 ) -> Result<Option<ConnectionMethod>, CoreError> {
     match network_type {
         "chain" => {
-            let hops: Vec<connection::config::ChainHop> =
-                serde_json::from_str(config_json)
-                    .map_err(|e| CoreError::from(format!("解析协议链配置 JSON 失败: {}", e)))?;
+            let hops: Vec<connection::config::ChainHop> = serde_json::from_str(config_json)
+                .map_err(|e| CoreError::from(format!("解析协议链配置 JSON 失败: {}", e)))?;
             if hops.is_empty() {
                 return Ok(None);
             }
@@ -1998,9 +1970,8 @@ pub async fn parse_network_config_json(
             Ok(Some(ConnectionMethod::Ssh(ssh_config)))
         }
         "ssl" => {
-            let ssl_config: connection::config::SslConfig =
-                serde_json::from_str(config_json)
-                    .map_err(|e| CoreError::from(format!("解析 SSL 配置 JSON 失败: {}", e)))?;
+            let ssl_config: connection::config::SslConfig = serde_json::from_str(config_json)
+                .map_err(|e| CoreError::from(format!("解析 SSL 配置 JSON 失败: {}", e)))?;
             Ok(Some(ConnectionMethod::Ssl(ssl_config)))
         }
         "proxy" | "http_proxy" | "socks" | "socks5" => {
@@ -2055,9 +2026,8 @@ async fn load_auth_data_from_db_for_network(
                 if let Ok(Some(auth_config)) =
                     engine::persistence::auth_store::get_auth_config(&conn, auth_config_id)
                 {
-                    let auth_data = engine::persistence::auth_store::decrypt_auth_data(
-                        &auth_config.auth_data,
-                    )?;
+                    let auth_data =
+                        engine::persistence::auth_store::decrypt_auth_data(&auth_config.auth_data)?;
                     return Ok(Some(auth_data));
                 }
             }

@@ -8032,6 +8032,7 @@ dependencies = [
  "gpui-kit",
  "percent-encoding",
  "rds-connection",
+ "rds-database",
  "rds-engine",
  "rds-insight",
  "rds-mock",

@@ -1,342 +1,469 @@
 # 数据源管理 / 数据库导航模块 · 原型设计
 
-> 状态：**待确认** · 关联文件：`database-navigator-prototype.html`（可交互原型）、`database-nav-dev-plan.md`（开发方案，确认后编写）
-> 参考基准：v1 导航器（`v1/docs/navigator/*`）、连接模块（`docs/architecture/connection/connection-prototype-design.md`）、布局（`docs/architecture/layout/layout-design.md`）、主题（`docs/architecture/theme/theme-design.md`）
+> 状态：**待确认（v4，依据反馈修订）** · 关联文件：`database-navigator-prototype.html`（可交互原型）、`database-nav-dev-plan.md`（确认后编写）
+> 参考基准：v1 导航器（`v1/docs/navigator/*`、`v1/frontend/extensions/builtin/database/**`、`v1/prototype/properties-panel-dbeaver.html`）、连接模块、布局、主题
 > 技术栈：GPUI（gpui-kit 0.6），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
+
+### v4 修订点
+
+| # | 反馈 | 修订 |
+| --- | --- | --- |
+| 1 | 未打开项目无法启动软件 | 移除「未打开项目」分支；启动即绑定当前项目，项目标签恒可用（§2.1） |
+| 2 | 连接可属多个分组、也可打多个标签 | 分组改 **多对多**（关联表）+ 新增多值 `tags` 字段（§2.2） |
+| 3 | 元数据缓存与状态缓存都不应删除 | 断开 / 刷新 / 删除连接均**不删缓存**；仅显式「清理缓存」（§4.5 / §5.2） |
+| 4 | 属性面板靠右，类似占用一个编辑面板 | 属性面板从模态改为**停靠中央编辑区右侧**的编辑面板（§7） |
+| 5 | 来源用短码 | 来源标识用 **P / G / GP** 短码（§2.3） |
+| 6 | 预热选 C | 首版采用折中方案（仅预热 databases/schemas）（§4.3） |
+| 7 | 分组栏简单配色 | 分组头统一色（左侧 2px 色条），不做 8 色自定义（§2.2 / §9） |
+| 8 | 新增通用 `search.match.background` | 采用该通用 token（§9） |
+| 9 | DuckDB 分析表不属本模块 | **移除**内置「DuckDB 分析表」分组；本面板只管理数据源，分析资产归 M6（§3） |
 
 ## 0. 一句话定位
 
-把当前左 Dock 里「连接列表（M3）+ 导航占位（M4）」两块，**合并为单一面板「数据源」**：上半是数据源管理（新建 / 编辑 / 连接 / 测试 / 删除 / 作用域），下半按作用域分组展开完整对象树（schema → 表 / 视图 / 存储过程 → 列）。这是 `LeftPanel::Database` 的正式内容。
+左 Dock `LeftPanel::Database` 面板：顶部**来源标签页（项目 / 全局）**按来源过滤，下面是**数据源管理 + 对象树**；数据源可属于多个**分组**、可打多个**标签**；连接下展开对象树（schema → 表 / 视图 / 存储过程 → 列）；双击对象或右键打开**靠右停靠的 DBeaver 式属性面板**。**本模块只管理数据源，不涉及分析资产。**
 
-## 1. 设计基准与 v2 语义变更
+## 1. 设计基准与语义
 
 | 维度 | 基准 | 说明 |
 | --- | --- | --- |
-| 布局 | 五段布局（已定） | 面板 = 左侧 Dock 内容，`LeftPanel::Database`，起步 240px（Dock 可拖拽调宽） |
-| 数据源 | M3 `connection`（已实现） | 连接配置双轨：`G_` 仅全局 / `P_` 仅项目 / `GP_` 项目引用全局快照 |
-| 导航 | M4 `database` + engine 元数据缓存（已实现） | `MetadataService`（实时内省）+ `MetadataCacheManager`（L2 每连接 SQLite）+ `IntrospectionLevel` |
-| 交互蓝本 | v1 `database-navigator.vue` + navigator 文档 | 懒加载树 / 搜索 / 展开状态持久化 / 分级内省 / 右键操作 |
-| 配色 | `theme-design.md` | 侧栏 `sidebar`、选中 `list.active` + coral 左边条、弹层 `popover`、主按钮 `primary` |
-| 主题 | `rds-theme.json` | 复用标准字段，尽量不新增产品语义 token（见 §9） |
+| 布局 | 五段布局（已定） | 面板 = 左侧 Dock 内容，起步 240px（可拖拽调宽） |
+| 数据源 | M3 `connection`（已实现） | 连接带**来源短码**：项目 `P` / 全局 `G` / 共享 `GP` |
+| 导航 | M4 `database` + engine 元数据缓存（已实现） | `MetadataService` + `MetadataCacheManager` + `IntrospectionLevel` |
+| 刷新 / 缓存 | v1 设计（§4） | 三级缓存 / 增量刷新 / 预热（C）/ 版本迁移；**缓存只增不删** |
+| 分组 / 标签 | v1 `useGroupManager`（语义校正） | 分组多对多 + 多标签，项目级、与来源/标签页正交 |
+| 属性面板 | DBeaver（`properties-panel-dbeaver.html` / `properties-registry.ts`） | 停靠编辑区右侧，属性网格 + 子实体 Tab |
+| 配色 | `theme-design.md` | 侧栏 `sidebar`、选中 `list.active` + coral、弹层 `popover`、主按钮 `primary` |
 
-### 1.1 为什么合并「管理」与「导航」
+### 1.1 三个正交概念
 
-`layout-design.md` §7 未决项已写明「连接入口归属 → 并入数据库导航栏数据源节点」。v1 里数据源管理与对象树也是同一面板的两态。合并后：
+| 概念 | 定义 | 取值 | 存储 |
+| --- | --- | --- | --- |
+| **来源标识** | 连接的归属来源（决定可见性与生命周期） | 短码 `P` / `G` / `GP` | 连接记录字段 |
+| **标签页** | 面板顶部按来源过滤的视图 | 项目 / 全局 | 视图状态（记忆） |
+| **分组** | **项目下**用户自定义的连接集合（树形组织） | 任意，**多对多** | 关联表（项目库） |
+| **标签** | 连接上的**多值**轻量标记（横切检索/过滤） | 任意多值 | 连接 `tags` 字段 |
 
-- 顶部工具栏 = 数据源管理动作（新建 / 刷新 / 折叠 / 更多）；
-- 树根 = 数据源节点（连接），节点本身承载「管理」上下文菜单；
-- 不再需要单独的「连接列表」页，避免连接与对象树两处入口、状态割裂。
+- 四者互不隶属：分组与标签都**不随来源/标签页改变定义**；一个连接可同时属于多个分组、带多个标签。
+- 「共享」`GP` = 全局定义 + 当前项目快照，在**项目标签**下可见。
 
-### 1.2 现状与目标
+### 1.2 为什么合并「管理」与「导航」
+
+`layout-design.md` §7 未决项已写明「连接入口归属 → 并入数据库导航栏数据源节点」：顶部工具栏 = 管理动作，树根 = 数据源节点，节点右键承载管理菜单。
+
+### 1.3 现状与目标
 
 | 层 | 现状 | 本设计 |
 | --- | --- | --- |
-| 视图 | `panels.rs::render_connection_list`（M3 列表）+ `render_navigation_placeholder`（假数据） | 新面板 `DatabaseNavPanel`，连接节点 + 真实对象树 |
-| 导航数据 | `workbench/services/db_navigator.rs` 只读 DuckDB **分析库**（表→列） | 扩展为统一导航服务：外部库走 `MetadataService`，本地分析库保留 |
-| 元数据缓存 | engine 已实现（L1 内存 + L2 每连接 SQLite），**导航未接入** | 导航服务接入 L1/L2/L3 三级读取与回写 |
-| 展开状态 | 无 | 按连接/作用域持久化（§5.4） |
+| 视图 | `panels.rs::render_connection_list` + `render_navigation_placeholder` | 新面板 `DatabaseNavPanel`：标签页 + 分组 + 对象树 |
+| 导航数据 | `workbench/services/db_navigator.rs` 只读 DuckDB 分析库 | **移出本模块**；外部库走 `MetadataService` |
+| 缓存 | engine 已实现 L1/L2，导航未接入 | 导航服务编排（§4），**不删缓存** |
+| 连接状态 | `ConnectionItem.connected` 仅记录有效性 | 接入运行时连接服务（§5） |
+| 分组 / 标签 / 展开态 | 无 | **新增后台表 / 字段**（§2.2 / §6.4） |
 
 ## 2. 面板布局
 
 ```
 ┌ 左侧 Dock 240px（sidebar 底）────────────────┐
-│ 数据源                    [＋][⟳][⤒][⋯]      │  ← 面板头 36px（Dock tab）
-├ 搜索（筛选 连接/表/列）───────────────────────┤
-│ [🔍 筛选数据源 / 表 / 列…]         [.*] [Aa] │
+│ 数据源              [＋][🗂＋][⟳][断开][⋯]   │  ← 面板头 36px
+├ 标签页（按来源过滤）──────────────────────────┤
+│ [ 项目 ●3 ]  [ 全局 ]                        │
+├ 搜索（筛选 数据源/表/列/标签）─────────────────┤
+│ [🔍 筛选数据源 / 表 / 列 / 标签…]   [.*] [Aa] │
 ├ 树主体（滚动、虚拟化 >50）───────────────────┤
-│ ▾ 本项目                            2       │  ← 作用域分组
-│   ▾ ● 生产 PG                  GP  PG       │  ← 连接节点（状态点+驱动徽标）
-│     ▾ 📁 analytics                           │
-│       ▾ ▦ 表                        23      │  ← 类别文件夹
-│         ▾ orders                    1.2M    │  ← 表（选中）
-│             order_id          PK  bigint    │  ← 列（选中表的列内联）
-│             customer_id        bigint · FK  │
-│             amount             numeric(12,2)│
-│         ▸ customers                 86K     │
-│         ▸ payments                  1.1M    │
-│       ▸ 👁 视图                      4       │
-│       ▸ ƒ 存储过程 / 函数            7       │
-│       ▸ ≡ 序列 / 触发器              3       │
-│     ▸ 📁 public                              │
-│   ▸ ○ 本地 MySQL                 P  MY       │
-│ ▾ 全局                              2       │
-│   ▸ ● 测试 SQLite                G  SQ       │
-│   ▸ ● 报表 PG（离线）            G  PG       │
-│ ▾ DuckDB 分析表                     5       │  ← 本地分析引擎
-│   ▦ orders_clean                    本地     │
-│   ▦ customer_profile                本地     │
-│   ▸ v_monthly_sales                 视图     │
+│ ▾ 核心库                      2              │  ← 自定义分组（简单配色：左侧色条）
+│     ▾ ● 生产 PG          GP  PG              │  ← 连接（状态点 + 来源短码 + 驱动）
+│       ▾ 📁 analytics                         │
+│         ▾ ▦ 表                      23       │
+│           ▾ orders                 1.2M      │  ← 选中
+│               order_id        PK  bigint     │
+│               customer_id      bigint · FK   │
+│           ▸ customers               86K      │
+│         ▸ 👁 视图 / ƒ 过程 / ≡ 序列           │
+│     ▸ ○ 本地 MySQL       P   MY              │
+│ ▾ 报表                        1              │
+│     ▸ ● 报表 SQLite      P   SQ              │
+│ ▾ 未分组                      1              │
+│     ▸ ○ 临时 PG          P   PG              │
 ├ 底部状态（10.5px muted）─────────────────────┤
 │ 3 已连接 · 1 离线 · 缓存 12 分钟前           │
 └──────────────────────────────────────────────┘
 ```
 
-| 区域 | 内容 | 说明 |
+### 2.1 标签页（项目 / 全局）
+
+- 面板头下方标签栏：「项目」/「全局」，按来源过滤；激活下划线 `list.active.border`（coral）。
+- 「项目」= 来源为 `P` 与 `GP` 的连接；「全局」= 来源为 `G` 的连接。
+- **应用启动即绑定当前项目**（未打开项目无法启动），故「项目」标签恒可用，无「未打开项目」分支。
+- 各标签独立记忆：搜索词、展开态、滚动位置、选中项。
+
+### 2.2 分组（多对多）与标签（多值）
+
+| 维度 | 分组 Group | 标签 Tag |
 | --- | --- | --- |
-| 面板头 | 标题 + 4 个图标按钮 | 新建连接 / 刷新当前连接 / 全部折叠 / 更多（管理项：刷新全部、导入模板、连接设置） |
-| 搜索 | 单行输入 + `.*` 正则 + `Aa` 大小写 | 默认本地筛选已加载节点；有内容词时切 FTS 全量搜索（§5.3） |
-| 树主体 | 分组 / 连接 / schema / 文件夹 / 对象 / 列 | 懒加载，展开时拉取子级 |
-| 底部状态 | 连接统计 + 缓存新鲜度 | 「N 已连接 · M 离线 · 缓存 X 前」 |
+| 语义 | 树形组织（用户自定义集合） | 轻量横切标记（检索/过滤） |
+| 基数 | 连接 ↔ 分组 = **多对多** | 连接 → 标签 = **多值** |
+| 属性 | 名称、描述、（可选）排序 | 纯文本 |
+| 归属 | 项目级（项目库） | 连接字段 |
+| 与来源关系 | 正交，不随标签页变 | 正交 |
 
-### 2.1 空态
+**落库（新增后台表 / 字段）**
 
-无任何数据源时，树区显示引导：大图标 + 标题「还没有数据源」+ 说明 + 「新建连接」「从模板导入」双按钮（原型 html 的 `空态` 状态）。
+```
+connection_groups              -- 项目库：分组定义
+  id, name, description, sort_order, created_at, updated_at
+connection_group_members       -- 项目库：分组↔连接 多对多关联
+  group_id, connection_id, sort_order          -- (group_id, connection_id) 唯一
+connection_tags                -- 标签（独立表）：连接↔标签 多值
+  connection_id, tag, created_at               -- (connection_id, tag) 唯一
+```
 
-### 2.2 与活动栏的关系
+- 新增分组：面板头 `🗂＋` 或分组右键；表单 = 名称 + 描述。
+- 归组：拖拽连接进/出分组、组内外排序；连接右键「分组 ▸」可多选组；批量移动。
+- 标签：连接右键「标签 ▸」或连接属性里编辑；支持多值；搜索支持按标签过滤。
+- 「未分组」固定分组（收纳不属于任何组的连接），不可删；**允许手动排序**；空分组隐藏。
+- **配色**：分组头仅用统一色（左侧 2px 色条 + 略深底），不做 per-group 8 色自定义（反馈 7）。
+- 标签用**独立表**（非 JSON 字段），便于 `tag:x` 检索与统计。
 
-活动栏「数据库导航」图标切换本面板（沿用现有点击三态逻辑）；面板头标题使用「数据源」（现 `LeftPanel::Database::label()` 为「数据库导航」，见待确认项 6）。
+### 2.3 来源短码（项目 / 全局 / 共享）
 
-## 3. 树模型与分组
-
-### 3.1 分组顺序（按可见性）
-
-| 顺序 | 分组 | 来源 | 条件 |
+| 短码 | 语义 | 取色（token） | 提示（tooltip） |
 | --- | --- | --- | --- |
-| 1 | **本项目** | `project.db` / `connections`（`P_`）+ `GP_` 快照 | 打开项目时显示 |
-| 2 | **全局** | `global.db` / `global_connections`（`G_`） | 始终显示 |
-| 3 | **DuckDB 分析表** | 本地分析库 `analytics.duckdb` | 始终显示（空则隐藏） |
-| 4 | 分析资源（可选） | M6 `analytics_resource` 目录 | 后续接入（待确认项 5） |
+| `P` | 本项目创建、仅本项目可见 | `info` | 项目连接 |
+| `G` | 系统级、所有项目可见 | `muted.foreground` | 全局连接 |
+| `GP` | 全局定义 + 当前项目共享快照 | `primary`（coral） | 项目共享（全局快照） |
 
-> 每个应用实例 = 一个项目（v2 语义）。`GP_` 节点同属「本项目」分组并带共享徽标。
+状态点：已连接 `success` / 连接中 `info`+脉冲 / 未连接 `muted` / 失败 `danger`。驱动徽标：`info`(PG) / `warning`(MySQL) / `success`(SQLite) / `primary`(DuckDB)。
 
-### 3.2 节点类型
+### 2.4 空态
+
+当前项目无数据源时显示引导（图标 + 标题「还没有数据源」+ 说明 + 「新建连接」）。
+
+## 3. 树模型与节点（不含分析资产）
 
 | 节点 | 图标角色 | 数据来源 | 可展开 |
 | --- | --- | --- | --- |
-| 连接（数据源） | 驱动徽标 + 状态点 | `DataSourceService::list()` | ✅ 加载 catalog/schema |
+| 分组 | 色条 + 计数 | `connection_groups` | ✅ |
+| 连接（数据源） | 驱动徽标 + 状态点 + 来源短码 | `DataSourceService::list()` | ✅ catalog/schema |
 | Catalog / Schema | 文件夹 | `MetadataService::list_catalogs/list_schemas` | ✅ |
-| 类别文件夹 | 表 / 视图 / 存储过程·函数 / 序列·触发器 | 由对象 `kind` 分组 | ✅ |
-| 表 / 视图 | `i-table` / `i-view` | `list_tables` | ✅ 加载列 |
-| 列 | `i-col` + 类型 + `PK`/`FK` 标记 | `list_columns` | ❌ |
+| 类别文件夹 | 表 / 视图 / 存储过程·函数 / 序列·触发器 | 按对象 `kind` 分组 | ✅ |
+| 表 / 视图 | `i-table` / `i-view` | `list_tables` | ✅ 列 |
+| 列 | `i-col` + 类型 + `PK`/`FK` | `list_columns` | ❌ |
 | 存储过程 / 函数 | `i-fn` | `list_procedures` / `list_functions` | 源码预览 |
 | 序列 / 触发器 | `i-seq` / `i-bolt` | `list_sequences` / `list_triggers` | ❌ |
-| DuckDB 表 / 视图 | coral 图标 | `db_navigator::load_navigator_tree` | ✅ 列 |
 
-### 3.3 作用域与状态徽标
+> **范围**：DuckDB 分析表 / 分析资源（M6）**不在本面板**；本模块只管理数据源与其元数据对象树。
 
-| 徽标 | 语义 | 取色 |
-| --- | --- | --- |
-| `G` | 仅全局 | `border` + `muted.foreground` |
-| `P` | 仅项目 | `info` 系 |
-| `GP` | 全局 + 项目共享（快照） | `primary`（品牌 coral） |
-| 状态点 | 已连接 / 未连接 / 连接中 / 失败 | `success` / `muted` / `info`+脉冲 / `danger` |
+## 4. 元数据加载与缓存（对齐 v1，缓存只增不删）
 
-## 4. 元数据加载管线（复用 engine 三级缓存）
+> v1 缓存文档：`v1/docs/navigator/06-CACHE-OPTIMIZATION.md`、`database-navigator-optimizations.md` §2.17/§3。
 
-后端已具备完整缓存与内省能力，导航只需编排读取顺序：
+### 4.1 三级缓存读取
 
 ```
-展开节点 → 1. L1 内存缓存（engine MetadataCache，命中 <0.1ms）
+展开节点 → L1 内存（MetadataCache / CacheManager，<0.1ms）
            ├ 命中 → 渲染
            └ 未命中 ↓
-        2. L2 每连接 SQLite（MetadataCacheManager / MetadataCacheOps，命中 <5ms）
+         L2 每连接 SQLite（MetadataCacheManager::open + MetadataCacheOps，<5ms）
            ├ 命中 → 回填 L1 + 渲染
            └ 未命中 ↓
-        3. L3 实时内省（database::MetadataService → ConnectionManager，10~500ms）
+         L3 实时内省（database::MetadataService，10~500ms）
            └ 成功 → 异步回写 L2 + L1 → 渲染
 ```
 
-| 能力 | 复用现有实现 |
-| --- | --- |
-| L2 缓存文件 | `MetadataCacheManager::build_metadata_path`：全局 `system/global_metadata/conn_{id}.sqlite`；项目 `{project}/meta/connection_metadata/conn_{id}.sqlite` |
-| 节点明细读写 | `MetadataCacheOps::load_node_detail` / `save_node_detail` / `list_tables_normalized` / `list_columns_normalized` |
-| 分级内省 | `IntrospectionLevel::from_object_count`（≤1000 → L3，≤3000 → L2，否则 L1）+ `set_level` / `get_level` |
-| 大 schema 分页 | `get_tables_chunk` → `ChunkResult`（「加载更多」） |
-| 同步状态 | `get_sync_status` → `SyncStatusInfo`（进度条 / 当前对象） |
-| 搜索 | `search_fts` → `FtsSearchResult`（snippet 高亮） |
-| 缓存失效 | `invalidate_metadata_cache`（刷新连接）、level 变更标记 L2 过期 |
+L2 路径（engine `build_metadata_path`）：全局 `{system}/global_metadata/conn_{id}.sqlite`；项目 `{project}/meta/connection_metadata/conn_{id}.sqlite`。
 
-### 4.1 加载状态机
+### 4.2 增量刷新（v1 V7）
 
-```mermaid
-stateDiagram-v2
-    [*] --> Collapsed
-    Collapsed --> Loading: 展开节点
-    Loading --> Loaded: L1/L2 命中或 L3 返回
-    Loading --> Error: 内省失败
-    Error --> Loading: 点击重试
-    Loaded --> Loading: 刷新元数据
-    Loaded --> Stale: 连接断开/level 变更
-    Stale --> Loading: 重新展开
-```
+- `detect_all_changes`（对象 hash 快照比对）→ `ChangeDetectionResult` → `incremental_sync` 只落变更；快照 `save_snapshot` / `get_snapshot` / `has_snapshot`。
+- 刷新粒度：单连接（工具栏 ⟳）/ 单 schema / 单表（节点右键）/ 全部（「更多」）。
+- 触发：手动、连接重建、内省级别变更、预热完成。
 
-- 加载中：节点右侧转圈 + 底部进度（`SyncStatusInfo`）；已缓存节点仍可浏览。
-- 失败：该节点显示红色错误占位 + 「重试」，**不静默吞噬**（v1 V10.8 教训）。
-- 大 schema：`get_tables_chunk` 分批，末尾「加载更多」。
+### 4.3 预热（采用方案 C）
 
-### 4.2 刷新与失效
+| 方案 | 首次体验 | 额外负载 | 复杂度 | 结论 |
+| --- | --- | --- | --- | --- |
+| A 懒加载 | 逐节点等待 | 最低 | 最低 | — |
+| B v1 智能预热（并发 2 / 100ms / 上限 5·10·50） | 顺畅 | 中 | 中 | 后续可升 |
+| **C 折中：仅预热 databases / schemas** | schema 秒开、表按需 | 低 | 低 | **首版采用** |
+
+- C 参数：`enabled=true, depth=databases|schemas, delay=100ms, maxDatabases=5, maxSchemas=10, maxTables=0, concurrency=2`。
+- 进度 / 取消 / 状态复用 `is_syncing` / `get_sync_status` / `cancel_sync`。
+
+### 4.4 邻接节点预加载
+
+展开表时预取相邻表/列（可配置并发/深度，失败静默）。
+
+### 4.5 缓存失效（不删除）
 
 | 触发 | 动作 |
 | --- | --- |
-| 工具栏 ⟳ | 刷新当前选中连接：清 L1 → 标记 L2 stale → 重新内省 |
-| 连接右键「刷新元数据」 | 同上，单连接 |
-| 断开连接 | 清 L1，保留 L2（离线可浏览缓存） |
-| 内省级别变更 | 标记 L2 过期，下次展开重载 |
+| 手动刷新 | 清 L1；L2 标记 stale，展开时增量重载（**不删 L2**） |
+| 断开连接 | 只关运行时连接，**L2 保留**（离线可浏览 / 重连秒开） |
+| 删除连接 | **缓存文件保留**（避免误删后全量重拉）；提供显式「清理缓存」入口 |
+| 内省级别变更 | 标记 L2 过期（`set_level` / `from_object_count`） |
+| DDL 监听（未来） | 智能失效相关表（v1 设计，未落地） |
+| 版本不符 | `CacheVersionManager` 迁移 |
 
-## 5. 核心交互
+> 提供「缓存管理」入口：查看各连接缓存占用、显式清理（唯一删除路径）。入口**两处都有**：设置面板 + 数据源面板头「更多」。
 
-### 5.1 节点操作
+### 4.6 缓存版本迁移
+
+engine 已迁移 `CacheVersionManager` + `CURRENT_CACHE_VERSION`（V1→…→V8 策略链）：打开 L2 校验版本，`needs_upgrade` 则 `migrate`；启动时静默执行。
+
+### 4.7 进度与取消
+
+| 能力 | 后端 | UI |
+| --- | --- | --- |
+| 同步状态 | `get_sync_status` → `SyncStatusInfo` | 连接节点转圈 + 底部进度 |
+| 是否同步中 | `is_syncing` | 禁重复刷新 |
+| 取消 | `cancel_sync` | 进度条「取消」 |
+| 后台队列 | `enqueue_sync_task` / `get_next_sync_task` / `complete_sync_task` / `get_pending_task_count` | 「更多」查看队列 |
+| 分块读取 | `get_tables_chunk` → `ChunkResult` | 大 schema「加载更多」 |
+
+### 4.8 v1 API → v2 落点映射
+
+| v1 接口 / 能力 | v2 落点 |
+| --- | --- |
+| `refresh_metadata_cache` / `clearMetadataCache` | `MetadataCacheOps::clear_metadata` + L1 清理 |
+| `build_cache_index`（增量） | `MetadataCacheOps::build_metadata_index` / `enqueue_indexing_tasks` |
+| `start_cache_warming` / `get_warming_progress` / `cancel_cache_warming` | 导航服务编排 `build_metadata_index` + `is_syncing` / `cancel_sync`（预热调度器为本模块新增） |
+| `check_cache_version` / `execute_cache_migration` | `CacheVersionManager` / `CURRENT_CACHE_VERSION` |
+| 增量同步（V7） | `detect_all_changes` / `incremental_sync` / `save_snapshot` |
+| 分块读取 | `get_tables_chunk` |
+| FTS 搜索 | `search_fts` |
+| 内省级别 | `IntrospectionLevel` + `set_level` / `get_level` |
+
+## 5. 连接 / 断开
+
+### 5.1 动作与后端
+
+| 动作 | 后端 | 缓存联动 |
+| --- | --- | --- |
+| 连接 | `ConnectionService::connect_with_type(ConnectRequest{connection_type, project_path, …})` | 打开/建 L2 + 预热（C） |
+| 断开 | `ConnectionService::close_connection(conn_id)` | **保留缓存**（去掉 v1 的 `cache_manager.delete()`） |
+| 切换活动连接 | `switch_connection(conn_id)` | 更新状态栏连接名 |
+| 探测状态 | `has_connection` / `list_connections()` | 状态点 |
+| 启动恢复 | `get_recent_connections()` | 可选重开上次连接 |
+
+状态机：`未连接 → 连接中 → 已连接 / 失败`；连接中禁重复触发；失败节点内联可读原因 + 重试。
+
+### 5.2 缓存永不删除（本版策略）
+
+- 无论**元数据缓存**（L2 SQLite）还是**状态缓存**（`navigator_state` / 分组），**默认都不删除**。
+- 断开 / 刷新 / 删除连接：均保留缓存文件与状态记录。
+- 唯一删除路径：设置里的**「缓存管理 → 清理」**（可单连接 / 全量），并给出占用大小预览。
+- 优点：离线可浏览、重连秒开、误删连接可恢复元数据；代价：磁盘会累积 —— 用「缓存管理」与 TTL 标记（而非删除）来治理。
+
+## 6. 核心交互
+
+### 6.1 节点操作
 
 | 交互 | 行为 |
 | --- | --- |
-| 单击节点 | 选中：更新右侧属性面板（§7），不改变中央编辑区 |
-| 单击箭头 / 双击节点 | 展开 / 折叠（懒加载子级） |
-| 双击表 / 视图 | 中央编辑区打开**只读数据预览**（自动 `LIMIT 200`，可排序/过滤） |
-| 双击连接 | 连接 / 断开切换 |
+| 单击节点 | 选中 |
+| 单击箭头 | 展开 / 折叠（懒加载） |
+| **双击对象** | **右侧属性面板**（DBeaver，§7） |
+| **双击连接** | 连接 / 断开切换 |
 | 拖拽表到编辑器 | 插入限定名到 SQL 光标处 |
+| 右键 | 上下文菜单（6.2） |
 
-### 5.2 右键菜单
+### 6.2 右键菜单
 
-**连接节点**
+**连接节点**：连接 / 断开 · 编辑连接… · 测试连接 · 查看属性 · 刷新元数据 · **分组 ▸**（多选）· **标签 ▸**（多值）· 复制连接（模板，无明文凭据）· 共享至项目 / 取消共享 · 删除连接（二次确认 + 清理 DuckDB Secret，**保留缓存**）。
 
-| 项 | 行为 | 后端 |
+**表 / 视图**：查看数据（中央只读预览，`LIMIT 200`）· 查看属性 · 新建查询（SELECT）· 生成 INSERT/UPDATE/DELETE · 复制名称 / 限定名 · 生成 Mock 数据 · 刷新此表元数据。
+
+**分组节点**：新建分组 / 重命名 / 编辑描述 · 删除分组（**不删成员连接与缓存**）· 在此新建连接 · 折叠。
+
+**列 / 索引 / 约束 / 例程**：查看属性 · 复制名 · 生成 Mock（列）。
+
+### 6.3 搜索
+
+- 本地筛选：过滤已加载节点的名称与标签，命中自动展开祖先链。
+- FTS 全量搜索（≥2 字符）：`MetadataCacheOps::search_fts`，snippet 高亮；结果落**中央编辑区**专用面板。
+- 可按**标签**过滤（`tag:prod` 式语法可选）。
+- `↑↓` 选择、`Enter` 打开、`Esc` 清空；300ms 防抖、上限 500。
+
+### 6.4 状态持久化：SQLite 表 vs K-V 文件（选型建议）
+
+先区分两类「状态」：
+
+| 类别 | 内容 | 特征 | 建议落点 |
+| --- | --- | --- | --- |
+| **结构化状态** | 展开/选中/过滤（`navigator_state`）、分组与成员（M:N）、标签（多值） | 关系型、随项目物理隔离、量大、需按连接/标签检索 | **SQLite**（project.db / global.db，新增表 + migrations） |
+| **UI 偏好** | 属性面板宽度、导航面板宽度、短码⇄文字开关、主题 | app 级、跨项目、非结构化、极小 | **settings.json**（`crates/settings` 已有持久化） |
+
+**为什么结构化状态用 SQLite，而不是 v1 式 K-V**：
+
+| 维度 | SQLite 表 | K-V 文件（v1 localStorage 等价物） |
 | --- | --- | --- |
-| 连接 / 断开 | 建 / 断运行时连接 | `ConnectionManager`（待接入连接服务，见 connection-dev-plan 遗留项） |
-| 编辑连接… | 打开既有连接对话框（全 Tab 预填） | `connection_dialog.rs` |
-| 测试连接 | 内联显示 成功·版本·延迟 | `DataSourceService::test` |
-| 刷新元数据 | 清缓存 + 重新内省 | §4.2 |
-| 复制连接 | 以模板新建（不含明文凭据） | `DataSourceService::save` |
-| 共享至项目 / 取消共享 | `G_` ↔ `GP_` 快照 | `snapshot_service` |
-| 删除连接 | 二次确认 + 清理 DuckDB Secret | `DataSourceService::delete` |
+| 关系（多对多 / 多标签 / 按标签检索） | ✅ join + 索引 | ❌ 需全量反序列化后内存过滤 |
+| 项目物理隔离 | ✅ project.db 天然隔离 | ⚠️ 单文件，需自造 key 前缀隔离 |
+| 事务 / 迁移 / 版本 | ✅ engine `migrations` + `CacheVersionManager` | ⚠️ 手写版本号与迁移 |
+| 数据量（展开键 / 大库对象） | ✅ | ⚠️ 全量读写 |
+| 纯 UI 偏好（面板宽度） | 过重 | ✅ 轻 |
 
-**表 / 视图节点**
+- v1 用 localStorage 是 webview 环境所限；v2 原生 + 双层 SQLite，没有 localStorage，等价选择就是「SQLite 表 vs JSON/K-V 文件」。
+- **结论**：结构化状态进 SQLite（新增表，随项目/全局库分区），UI 偏好进 `settings.json`；**不新增独立 K-V 文件**（避免绕开事务/迁移/检索）。
+- 参考现有设施：engine `WorkbenchContextStore`（`global.db` 结构化表，已含 `Navigator`/`Properties` 面板类型）可复用其形态；本模块的 `navigator_state` 因是项目级，建议落 `project.db`（全局连接的状态落 `global.db`）。
 
-| 项 | 行为 |
-| --- | --- |
-| 查看数据 | 同双击（只读预览） |
-| 新建查询（SELECT） | 中央编辑区新 tab，生成 `SELECT * FROM <限定名> LIMIT 200` |
-| 生成 INSERT / UPDATE / DELETE | 追加到当前编辑器 |
-| 复制名称 / 复制限定名 | 剪贴板 |
-| 生成 Mock 数据 | 切右侧 `RightPanel::Mock`（M7） |
-| 刷新此表元数据 | 单表失效（`save_node_detail` 覆盖） |
-| 查看属性 | 右侧属性面板 |
+**新增表**（结构化状态）：
 
-**列节点**：复制列名 / 复制限定名 / 查看属性 / 生成 Mock。
+```
+navigator_state   -- conn_id, scope, expanded_keys, selected_key, filter_text, version, updated_at
+connection_groups / connection_group_members / connection_tags   -- 见 §2.2
+```
 
-> 生成 SQL 统一走编辑器命令（`workbench/commands.rs`），导航面板不直接依赖编辑器 view。
+- 写入防抖 800ms；状态与缓存一样**不随断开/删除清除**。
 
-### 5.3 搜索
+### 6.5 快捷键与显示偏好
 
-- **本地筛选**（默认，即时）：过滤已加载节点的名称，命中节点自动展开祖先链。
-- **FTS 全量搜索**（输入 ≥2 字符且有连接）：调 `MetadataCacheOps::search_fts`，跨连接检索表/列/视图，结果含 snippet 高亮。
-- 结果集较重 → **落中央编辑区**（专用「搜索」面板），侧栏只承载输入与摘要（与草稿箱 §4.3 同策略，避免 240px 拥挤）。
-- 交互：`↑↓` 选择、`Enter` 在编辑区打开、`Esc` 清空；输入 300ms 防抖。
+- `↑↓` 移动、`→`/`←` 展开折叠、`Enter` / `F4` 打开属性、`F2` 编辑连接、`Ctrl+F` 聚焦搜索。
+- **来源短码 ⇄ 文字**：提供用户开关（设置内），默认短码 `P/G/GP`，可切换为「项目 / 全局 / 共享」。偏好存 `settings.json`。
 
-### 5.4 展开状态持久化
+## 7. 属性面板（DBeaver 对标，停靠编辑区右侧）
 
-沿用 v1 双链路语义（global / project 分键），但 v2 落库而非 localStorage：
+> 参考 `v1/prototype/properties-panel-dbeaver.html` 与 `properties-registry.ts`。**形态：占据中央编辑区右侧的编辑面板**（不是模态），可通过关闭按钮/tab 收起。
 
-- 全局连接：`navigator_state`（global.db），key = `conn_id`
-- 项目连接：`navigator_state`（project.db），key = `conn_id`
+```
+中央编辑区（DockArea Center）
+┌───────────────────────────────┬──────────────────────┐
+│ 查询编辑器 / 数据预览            │ 属性面板（靠右停靠）    │
+│                               │ ┌──────────────────┐ │
+│                               │ │ ▦ analytics.orders│ │  ← 对象头 + 关闭
+│                               │ ├──────────────────┤ │
+│                               │ │ 属性 | 数据        │ │  ← 顶部 Tab
+│                               │ ├──────────────────┤ │
+│                               │ │ 类型     BASE TABLE│ │  ← 属性网格（label/value）
+│                               │ │ 行数     1,204,388 │ │
+│                               │ │ 引擎     InnoDB    │ │
+│                               │ │ 列数     18        │ │
+│                               │ ├──────────────────┤ │
+│                               │ │ 列 约束 索引 外键 DDL│ │  ← 子实体 Tab
+│                               │ │ # 名称    类型      │ │  ← 内容表 / DDL
+│                               │ │ 1 order_id bigint  │ │
+│                               │ └──────────────────┘ │
+└───────────────────────────────┴──────────────────────┘
+```
 
-存 `expanded_keys / selected_key / filter_text / last_updated / version`。防抖 800ms 写入。**表结构待确认项 4**（新增迁移 vs 复用 metadata cache 表）。
+- **入口**：双击任意对象节点；右键「查看属性」；`F4`。同节点 300ms 去抖。
+- **位置**：打开后**直接填充编辑区右侧内容区**（与编辑区左右分栏，分隔条可拖拽，**宽度记忆到 `settings.json`**），与「查看数据」共用同一分栏；关闭后编辑区恢复整宽。
+- **顶部 Tab**：`属性` / `数据`（`数据` = 只读预览）。
+- **属性网格**：由**类型注册表**给出 label/value；窄栏下为单列 label/value 行。
+- **子实体 Tab**：列 / 约束 / 索引 / 外键 / 触发器 / DDL（按类型裁剪），内容为表格或 DDL 代码。
+- **类型注册表**（v1 `properties-registry.ts`）覆盖：connection / catalog / schema / table / view / column / index / constraint / procedure / function / sequence / trigger。
+- **数据来源**：缓存明细优先（`load_node_detail` / `load_table_indexes` / `load_table_foreign_keys`），缺字段按需实时补齐；DDL 由内省拼装。
 
-### 5.5 快捷键
-
-`↑↓` 移动选中、`→`/`←` 展开折叠、`Enter` 打开数据、`F2` 编辑连接、`Ctrl+F` 聚焦搜索、`Ctrl+Shift+P`（Quick Open）已全局。
-
-## 6. 数据源管理动作汇总
-
-| 动作 | 入口 |
-| --- | --- |
-| 新建连接 | 工具栏 `＋` / 空态按钮 / Quick Open 命令 |
-| 编辑 / 测试 / 删除 / 复制 | 连接节点右键 |
-| 连接 / 断开 | 双击连接 / 右键 |
-| 作用域与共享 | 连接对话框（已有三态）+ 节点右键「共享至项目」 |
-| 刷新 | 工具栏 ⟳ / 连接右键 |
-| 导入 / 导出模板 | 面板头「更多」（无密码，C4） |
-
-> 新建 / 编辑一律**复用现有连接对话框**（`workbench/components/connection_dialog.rs`），导航面板只负责打开并接收刷新事件。
-
-## 7. 对象属性面板归属（M4 `property_panel`）
-
-M4 规格含「对象树 + 属性面板」。当前右活动栏固定为 洞察 / Mock / 历史，属性面板落点有三选（**待确认项 1**）：
-
-| 方案 | 描述 | 取舍 |
-| --- | --- | --- |
-| A（推荐） | 右侧 Dock 新增第 4 个面板「属性」（`RightPanel::Properties`），选中节点自动展开右侧 | 符合 DataGrip 习惯；改动右侧活动栏布局 |
-| B | 作为中央编辑区的标签页显示 | 不动布局；属性与数据预览争空间 |
-| C | 底部浮动详情条 / 弹层 | 最轻；信息量受限 |
+落点：`crates/database/src/property_panel.rs`（注册表 + 字段组装）+ 编辑区右侧面板视图（`crates/workbench`）。
 
 ## 8. 关键帧与状态流
 
 ```mermaid
 flowchart TD
-    A[点击活动栏「数据库导航」] --> B{有数据源?}
-    B -- 否 --> C[空态: 新建连接 / 导入模板]
-    B -- 是 --> D[按作用域分组渲染连接节点]
-    D --> E[展开连接 → 加载 catalog/schema]
-    E --> F{L1/L2 命中?}
-    F -- 是 --> G[即时渲染]
-    F -- 否 --> H[L3 实时内省 + 进度条]
-    H --> I[回写 L2/L1] --> G
-    G --> J[展开 schema → 类别 → 表]
-    J --> K[展开表 → 列]
-    J --> L[双击表 → 中央只读预览]
-    J --> M[右键 → 生成 SQL / Mock / 复制]
-    D --> N[搜索 → FTS → 结果落编辑区]
-    E --> O[断开/刷新 → 缓存失效 → 重载]
+    A[启动, 已绑定当前项目] --> B{当前项目有数据源?}
+    B -- 否 --> C[空态: 新建连接]
+    B -- 是 --> D[默认标签: 项目]
+    D --> E[按分组渲染连接, 带来源短码/标签]
+    E --> F[双击对象 → 右侧属性面板 / 双击连接 → 连接切换]
+    F --> G[连接中 → 已连接]
+    G --> H[打开 L2 缓存 + 版本迁移, 不删缓存]
+    H --> I[后台预热 databases/schemas, 可取消]
+    D --> J[展开节点]
+    J --> K{L1/L2 命中?}
+    K -- 是 --> L[即时渲染]
+    K -- 否 --> M[L3 内省 + 进度] --> N[增量回写 L2/L1] --> L
+    E --> O[右键 → 查看数据 / 生成 SQL / Mock / 分组 / 标签]
+    E --> P[搜索 → FTS → 结果落编辑区]
+    E --> Q[刷新 → 清 L1 / L2 stale → 增量重载]
+    F --> R[断开 → 关闭运行时连接, 保留 L2 与状态]
 ```
 
 ## 9. 主题映射（token → 视觉）
 
-> 实现时色值只存在于 `assets/themes/rds-theme.json`，组件经 `cx.theme()` 读取，**禁止写裸 hex**。
+> 色值只存在于 `assets/themes/rds-theme.json`，组件经 `cx.theme()` 读取，**禁止写裸 hex**。
 
 | 元素 | Token | RDS Light | RDS Dark |
 | --- | --- | --- | --- |
 | 面板底 | `sidebar.background` | `#F3F3F3` | `#252526` |
 | 面板头 / 分隔线 | `sidebar.border` | `#E7E7E7` | `#3C3C3C` |
+| 标签激活下划线 | `list.active.border`（coral） | `#C25B46` | `#E8846F` |
 | 正文 / 弱文字 | `sidebar.foreground` / `muted.foreground` | `#616161` / `#8E8E8E` | `#CCCCCC` / `#8A8A8A` |
-| 行悬停 | `list.hover.background` | `#F0F0F0` | `#2A2D2E` |
-| 行选中底 | `list.active.background` | `#E4E4E4` | `#37373D` |
-| 选中左边条 | `list.active.border`（品牌 coral） | `#C25B46` | `#E8846F` |
-| 搜索输入框 | `background` + `input.border`；聚焦 `caret`/`primary` | `#FFFFFF` / `#D4D4D4` | `#1E1E1E` / `#3C3C3C` |
-| 状态点（已连接） | `success` | `#16A34A` | `#89D185` |
-| 状态点（未连接） | `muted.foreground` | `#8E8E8E` | `#8A8A8A` |
-| 状态点（连接中） | `info` | `#2563EB` | `#3794FF` |
-| 状态点（失败） | `danger` | `#DC2626` | `#F14C4C` |
+| 行悬停 / 选中 | `list.hover.background` / `list.active.background` | `#F0F0F0` / `#E4E4E4` | `#2A2D2E` / `#37373D` |
+| 分组头（统一色） | 左色条 `list.active.border` + 底 `sidebar.accent.background` | — | — |
+| 来源短码 `P` / `G` / `GP` | `info` / `muted.foreground` / `primary` | — | — |
+| 状态点 | `success` / `info` / `muted` / `danger` | — | — |
 | 驱动徽标 | `info`(PG) / `warning`(MySQL) / `success`(SQLite) / `primary`(DuckDB) | — | — |
-| `GP` 共享徽标 | `primary` | `#C25B46` | `#E8846F` |
-| DuckDB 分析表节点 | `primary` | `#C25B46` | `#E8846F` |
-| 右键菜单 | `popover.background` / `foreground` + `border` | `#FFFFFF` / `#333333` | `#252526` / `#CCCCCC` |
-| 搜索命中高亮 | 待定（见下） | — | — |
+| 属性面板 / 右键菜单 | `popover.background` / `foreground` + `border` | `#FFFFFF` / `#333333` | `#252526` / `#CCCCCC` |
+| 属性子实体 Tab 激活 | `tab.active.background` + 顶条 `list.active.border` | — | — |
+| 搜索命中高亮 | **新增通用 `search.match.background`** | `#FFF3C4` | `#4A3F00` |
+| 预热进度条 | `accent.background` 底 + `primary` 进度 | — | — |
 
-- 驱动徽标默认复用语义色（与草稿箱文件图标同策略）；若浅色下 `warning`(`#B45309`) 对比不足再调整。
-- **搜索命中高亮**：v1 用黄色 `<mark>`，与草稿箱同源问题。建议新增产品语义 token `navigator.search.match.background`（Light `#FFF3C4` / Dark `#4A3F00`），未落地前用 `accent.background` 兜底（与 `scratchpad.search.match.background` 可合并为一个通用 `search.match.background`）。
+新增产品语义 token（与草稿箱共用）：
+
+| 产品角色 | RDS Light | RDS Dark | 消费方 |
+| --- | --- | --- | --- |
+| `search.match.background` | `#FFF3C4` | `#4A3F00` | 搜索结果命中文本底 |
 
 ## 10. GPUI 落点映射
 
 | 原型元素 | GPUI 落点 |
 | --- | --- |
-| 面板容器（数据源） | `crates/workbench/src/components/database_nav_panel.rs`（`DatabaseNavPanel: Entity<T>`，新增） |
-| 左 Dock 内容装配 | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `LeftPanel::Database` 分支改为调新面板，替换 `render_connection_list` / `render_navigation_placeholder`） |
-| 导航领域模型（节点 / 状态 / 展开键） | `crates/database/src/model.rs`（填充占位：`NavNode` / `NavNodeKind` / `NavState`） |
-| 导航编排服务（L1/L2/L3 + 搜索 + 分页 + 状态持久化） | `crates/database/src/navigator_service.rs`（新增） |
-| 实时内省 | `crates/database/src/metadata_service.rs`（已有，直接调用） |
-| 元数据缓存接入 | engine `MetadataCacheManager` / `MetadataCacheOps`（已有） |
-| 对象属性 | `crates/database/src/property_panel.rs`（填充占位） |
-| 本地 DuckDB 分析表 | `crates/workbench/src/services/db_navigator.rs`（并入导航服务；改用 `workspace_loader::global_analysis_db_path()`，修正现读 `global.duckdb` 的偏差） |
+| 面板容器 | `crates/workbench/src/components/database_nav_panel.rs`（`DatabaseNavPanel: Entity<T>`，新增） |
+| 左 Dock 装配 | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `LeftPanel::Database` 分支改调新面板） |
+| 标签页 | 面板内自绘（或 gpui-kit `Tabs`） |
+| 分组 / 标签模型与服务 | `crates/database/src/group.rs`（新增，`ConnectionGroup` + 多对多 + `tags`） |
+| 分组 / 成员 / 标签持久化 | 新增 `connection_groups` / `connection_group_members` + `connections.tags`（`migrations`） |
+| 展开态持久化 | 新增 `navigator_state`（engine `persistence`） |
+| 导航领域模型 / 状态 | `crates/database/src/model.rs` |
+| 导航编排服务（缓存/刷新/预热/搜索/分页） | `crates/database/src/navigator_service.rs`（新增） |
+| 实时内省 | `crates/database/src/metadata_service.rs`（已有） |
+| 缓存与增量/预热/队列/版本 | engine `MetadataCacheManager` / `MetadataCacheOps` / `CacheVersionManager`（已有） |
+| 属性面板（注册表 + 视图） | `crates/database/src/property_panel.rs` + 编辑区右侧面板（`crates/workbench`） |
+| 缓存管理（占用 / 清理） | engine `MetadataCacheManager::size` / `delete`，仅由设置入口调用 |
+| 连接 / 断开 | `crates/workbench/src/services/connection_service.rs`（断开不再删缓存） |
 | 新建 / 编辑连接对话框 | `crates/workbench/src/components/connection_dialog.rs`（复用） |
-| 连接数据源 | `crates/workbench/src/services/data_source_service.rs`（已有） |
-| 树 / 分组 / 折叠 | 自绘递归行 + `Disclosure`；>50 条用虚拟列表 |
-| 右键菜单 | gpui-kit 弹层（`PopupMenu` / 自绘 overlay），`popover` 取色 |
-| 面板头 / 工具栏 | gpui-kit `Button`（`.icon().ghost()` 小尺寸） |
-| 搜索输入 | `Input` + `InputState` |
-| 依赖声明 | `crates/workbench/Cargo.toml` 增加 `database.workspace = true`（workbench → database，无环） |
+| 数据源列表 / CRUD / 标签 | `crates/workbench/src/services/data_source_service.rs`（已有，扩展 tags） |
+| 主题 token | `assets/themes/rds-theme.json`（+ `search.match.background`） |
+| 依赖声明 | `crates/workbench/Cargo.toml` 增加 `database.workspace = true`（无环） |
 
-> 架构遵循既有约定：M4 领域模型与服务在 `crates/database`（非 UI），GPUI 视图在 `workbench`（同 `connection` 模块的落点方式）。
+> M4 领域模型与服务在 `crates/database`（非 UI），GPUI 视图在 `workbench`。
 
-## 11. 待确认项
+## 11. 补充建议（供参考）
 
-1. **属性面板归属**（§7）：右侧新增「属性」面板（A，推荐）／中央编辑区标签（B）／底部详情条（C）——选哪个？
-2. **面板命名**：面板头用「数据源」，而活动栏图标 tooltip 现为「数据库导航」——是否统一为「数据源」？
-3. **分析资源分组**（§3.1 第 4 组）：是否在本轮纳入 `analytics_resource`（M6）只读引用？还是留到 M6 单独接？
-4. **展开状态存储**：新增 `navigator_state` 表（global.db + project.db）承接入 `migrations`，还是暂存各自 metadata cache（`conn_{id}.sqlite`）？前者跨连接统一、后者随缓存清理。
-5. **连接动作依赖**：「连接 / 断开」需要运行时连接服务（`ConnectionService`）接入，connection-dev-plan 中该遗留项尚未完成——本轮导航是否先只做「已保存连接」的元数据浏览，连接动作下一轮补齐？
-6. **本地分析库路径**：现 `panels.rs` 读 `global.duckdb`，而 `workspace_loader::global_analysis_db_path()` 指向 `analytics.duckdb`——本轮顺带修正为后者（推荐）？
-7. **搜索高亮 token**：新增通用 `search.match.background`，或先用 `accent.background` 兜底？
-8. **搜索防抖 / 结果上限**：沿用 v1（300ms、结果上限 500）？
+1. **`search.match.background` 与草稿箱合并**：草稿箱也缺此 token，一次注册两处共用，避免重复定义。
+2. **多对多 + 多标签的索引**：`connection_group_members(group_id, connection_id)` 建联合主键/唯一索引；`tags` 若用 JSON 建议同时维护一张 `connection_tags(connection_id, tag)` 便于检索（避免全表 JSON 扫描）。
+3. **分组/标签管理入口**：面板头加「管理分组与标签」覆盖层（批量重命名、合并分组、清理空标签），否则拖拽归组在连接多时效率低。
+4. **缓存的可见与可控**：既然不删缓存，建议底部状态或设置里显示**缓存总占用**，并提供「清理某连接缓存」。避免磁盘无感膨胀。
+5. **孤儿缓存回收策略**：删除连接后缓存保留，需定义「多久无引用后可提示清理」，否则长期会残留大量 `conn_{id}.sqlite`。
+6. **来源短码需图例/tooltip**：`P/G/GP` 对新手有歧义，建议首次显示 tooltip + 设置里可切换为文字。
+7. **属性面板与数据预览共用面板位**：避免编辑区同时开「数据」和「属性」两个面板占满右侧；用一个面板的两个 Tab 更省空间。
+8. **标签命名规范**：建议约定 `key:value`（如 `env:prod`、`team:data`）以便搜索语法 `tag:env:prod` 稳定解析。
+9. **连接排序**：分组内连接支持手动排序，且在「未分组」下按名称/最近使用排序，需明确默认规则。
+10. **大 schema 的列内联展开阈值**：列内联展开在 >50 列时可能卡顿，建议超过阈值改为「在属性面板查看列」而不内联渲染。
+
+## 12. 已确认决策（v4）
+
+| # | 事项 | 决策 |
+| --- | --- | --- |
+| 1 | 标签存储 | **独立表** `connection_tags(connection_id, tag)`（非 JSON 字段） |
+| 2 | 「未分组」排序 | **允许手动排序** |
+| 3 | 属性面板宽度 | **记住拖拽宽度**（存 `settings.json`） |
+| 4 | 缓存管理入口 | **两处都有**：设置面板 + 面板头「更多」 |
+| 5 | 来源短码 | 默认短码 `P/G/GP`，**提供「短码 ⇄ 文字」开关** |
+| 6 | 预热方案 | **C**（仅预热 databases/schemas） |
+| 7 | 未打开项目 | 不存在该状态；启动即绑定当前项目 |
+| 8 | 缓存删除 | 元数据/状态缓存**都不删**，仅显式「缓存管理 → 清理」 |
+| 9 | 范围 | 本面板只管理数据源；DuckDB 分析表 / 分析资源归 M6 |
+| 10 | 状态存储 | 结构化状态 → **SQLite 新增表**；UI 偏好 → `settings.json`（§6.4） |
+
+## 13. 已确认细节
+
+| # | 事项 | 决策 |
+| --- | --- | --- |
+| 1 | 属性面板宽度 | 打开即**填充编辑区右侧内容区**（左右分栏，可拖拽，宽度记忆） |
+| 2 | `navigator_state` 分区 | 认可：项目级 → `project.db`，全局连接 → `global.db` |
+| 3 | 同组连接默认排序 | 手动优先；未手动排序的**按名称**升序 |
 
 ---
 
-确认以上项后，编写 `database-nav-dev-plan.md`（Phase A/B/C 任务与验收）并进入开发。
+设计已冻结，开发方案见 `database-nav-dev-plan.md`。

@@ -10,7 +10,8 @@
   --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
   --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
   --titlebar:#DDDDDD; --tabbar:#F3F3F3; --tabactive-bg:#FFFFFF; --tabactive-fg:#333333;
-  --activity:#ECECEC; --activity-active:#333333; --activity-inactive:#616161; --slot:#F3F3F3;
+  --activity:#ECECEC; --activity-active:#333333; --activity-inactive:#616161;
+  --match:#FFF3C4;
   --success:#16A34A; --success-bg:#F0FDF4; --warning:#B45309; --warning-bg:#FFFBEB;
   --info:#2563EB; --info-bg:#EFF6FF; --danger:#DC2626; --danger-bg:#FEF2F2;
   --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
@@ -20,7 +21,8 @@
   --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
   --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
   --titlebar:#323233; --tabbar:#252526; --tabactive-bg:#1E1E1E; --tabactive-fg:#FFFFFF;
-  --activity:#333333; --activity-active:#FFFFFF; --activity-inactive:#858585; --slot:#252526;
+  --activity:#333333; --activity-active:#FFFFFF; --activity-inactive:#858585;
+  --match:#4A3F00;
   --success:#89D185; --success-bg:#14532D; --warning:#CCA700; --warning-bg:#3A3105;
   --info:#3794FF; --info-bg:#0F2A4A; --danger:#F14C4C; --danger-bg:#4A1A1A;
   --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
@@ -42,7 +44,7 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .statebar button{border:1px solid var(--border);background:var(--bg);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:12px;cursor:pointer;transition:all .15s;}
 .statebar button:hover{background:var(--hover);color:var(--fg);}
 .statebar button.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:600;}
-.workbench{max-width:1000px;margin:0 auto;display:flex;height:600px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.workbench{position:relative;max-width:1000px;margin:0 auto;display:flex;height:640px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
 .activitybar{width:48px;flex:none;background:var(--activity);display:flex;flex-direction:column;align-items:center;padding:6px 0;gap:2px;border-right:1px solid var(--sidebar-border);}
 .act{position:relative;width:48px;height:44px;display:flex;align-items:center;justify-content:center;color:var(--activity-inactive);cursor:pointer;transition:color .12s;}
 .act:hover{color:var(--activity-active);}
@@ -51,7 +53,7 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .act .tip{position:absolute;left:54px;top:50%;transform:translateY(-50%);background:var(--activity-active);color:var(--bg);font-size:11px;padding:3px 8px;border-radius:5px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:30;}
 .act:hover .tip{opacity:1;}
 .act.spacer{margin-top:auto;}
-.navpanel{width:240px;flex:none;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;min-width:0;}
+.navpanel{width:250px;flex:none;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;min-width:0;}
 .panel-head{height:36px;flex:none;display:flex;align-items:center;gap:6px;padding:0 6px 0 12px;border-bottom:1px solid var(--sidebar-border);}
 .panel-head .ttl{font-size:11px;font-weight:700;letter-spacing:.6px;color:var(--fg);text-transform:uppercase;}
 .panel-head .acts{margin-left:auto;display:flex;gap:2px;}
@@ -60,10 +62,17 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .iconbtn.danger:hover{background:var(--danger-bg);color:var(--danger);}
 .navpanel .st{display:none;flex:1;min-height:0;flex-direction:column;}
 .workbench[data-state="default"] .st-default,
+.workbench[data-state="menu"] .st-default,
+.workbench[data-state="property"] .st-default,
 .workbench[data-state="empty"]   .st-empty,
 .workbench[data-state="loading"] .st-loading,
 .workbench[data-state="search"]  .st-search{display:flex;}
-.workbench[data-state="menu"] .st-default{display:flex;}
+.scope-tabs{display:flex;gap:2px;border-bottom:1px solid var(--sidebar-border);padding:0 8px;flex:none;}
+.scope-tab{display:flex;align-items:center;gap:6px;padding:7px 10px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;transition:color .12s,border-color .12s;}
+.scope-tab:hover{color:var(--fg);}
+.scope-tab.on{color:var(--fg);border-bottom-color:var(--active-border);font-weight:600;}
+.scope-tab .badge{font-size:9.5px;background:color-mix(in srgb,var(--muted) 16%,transparent);border-radius:8px;padding:0 6px;line-height:15px;color:var(--muted);font-weight:600;}
+.scope-tab.on .badge{background:color-mix(in srgb,var(--primary) 18%,transparent);color:var(--primary);}
 .searchbar{padding:8px 10px 6px;flex:none;display:flex;gap:6px;align-items:center;}
 .searchbar .box{flex:1;position:relative;}
 .searchbar input{width:100%;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);color:var(--fg);padding:5px 10px 5px 28px;font-size:12px;outline:none;transition:border-color .15s,box-shadow .15s;}
@@ -72,8 +81,11 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .searchbar .s-ic{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;}
 .tgl{border:1px solid var(--input-border);background:var(--bg);color:var(--muted);border-radius:6px;min-width:24px;height:26px;font-size:11px;cursor:pointer;transition:all .12s;}
 .tgl:hover{background:var(--hover);color:var(--fg);}
-.tgl.on{background:var(--accent);color:var(--fg);border-color:var(--active-border);font-weight:700;}
+.tree-wrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;}
 .tree{flex:1;min-height:0;overflow:auto;padding:2px 6px 8px;}
+.pane{display:none;flex:1;min-height:0;flex-direction:column;}
+.workbench[data-scope="project"] .pane-project,
+.workbench[data-scope="global"]  .pane-global{display:flex;}
 .row{display:flex;align-items:center;gap:6px;height:24px;border-radius:6px;cursor:pointer;color:var(--fg);font-size:12px;white-space:nowrap;transition:background .1s;}
 .row:hover{background:var(--hover);}
 .row.sel{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
@@ -81,10 +93,11 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .row .nm{overflow:hidden;text-overflow:ellipsis;min-width:0;}
 .row .nm.mut{color:var(--muted);}
 .row .sp{margin-left:auto;display:flex;align-items:center;gap:4px;}
-.grp{display:flex;align-items:center;gap:6px;height:26px;border-radius:6px;cursor:pointer;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);padding:0 8px;margin-top:4px;}
-.grp:hover{background:var(--hover);}
-.grp .cnt{margin-left:auto;font-weight:600;font-size:10px;background:color-mix(in srgb,var(--muted) 14%,transparent);border-radius:8px;padding:0 6px;line-height:15px;}
+.grp{position:relative;display:flex;align-items:center;gap:7px;height:26px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600;color:var(--fg);padding:0 8px 0 11px;margin-top:4px;background:color-mix(in srgb,var(--muted) 8%,transparent);}
+.grp:hover{background:color-mix(in srgb,var(--muted) 15%,transparent);}
+.grp::before{content:"";position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:2px;background:var(--active-border);}
 .grp .tw{width:12px;color:var(--muted);font-size:9px;text-align:center;}
+.grp .cnt{margin-left:auto;font-weight:600;font-size:10px;background:color-mix(in srgb,var(--muted) 14%,transparent);border-radius:8px;padding:0 6px;line-height:15px;color:var(--muted);}
 .dot{width:8px;height:8px;border-radius:50%;flex:none;}
 .dot.ok{background:var(--success);}
 .dot.off{background:var(--muted);}
@@ -96,12 +109,13 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .drv.my{background:var(--warning);}
 .drv.sq{background:var(--success);}
 .drv.du{background:var(--active-border);}
-.scope{font-size:9px;font-weight:700;border:1px solid var(--border);border-radius:6px;padding:0 5px;line-height:14px;color:var(--muted);}
-.scope.gp{color:var(--active-border);border-color:color-mix(in srgb,var(--active-border) 45%,var(--border));}
-.scope.pj{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,var(--border));}
+.scope{font-size:9px;font-weight:700;border:1px solid var(--border);border-radius:5px;padding:0 4px;line-height:14px;color:var(--muted);letter-spacing:.3px;}
+.scope.src-p{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,var(--border));}
+.scope.src-g{color:var(--muted);}
+.scope.src-gp{color:var(--primary);border-color:color-mix(in srgb,var(--primary) 45%,var(--border));}
 .colmeta{font-size:10px;color:var(--muted);margin-left:auto;flex:none;}
 .pk{color:var(--warning);font-size:9px;font-weight:700;flex:none;}
-.nav-status{flex:none;border-top:1px solid var(--sidebar-border);padding:6px 10px;font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:8px;}
+.nav-status{flex:none;border-top:1px solid var(--sidebar-border);padding:6px 10px;font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;}
 .empty .big{width:44px;height:44px;border-radius:12px;background:var(--accent);color:var(--muted);display:flex;align-items:center;justify-content:center;}
 .empty h4{font-size:13px;font-weight:600;}
@@ -122,18 +136,20 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .res .rt{font-size:12px;display:flex;align-items:center;gap:7px;}
 .res .rp{font-size:10.5px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .res .rp b{color:var(--fg);font-weight:600;}
-mark{background:color-mix(in srgb,var(--warning) 34%,transparent);color:inherit;border-radius:3px;padding:0 2px;}
-.ctx{position:absolute;z-index:40;min-width:198px;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:5px;}
+mark{background:var(--match);color:inherit;border-radius:3px;padding:0 2px;}
+.ctx{position:absolute;z-index:40;min-width:206px;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:5px;display:none;}
+.workbench[data-state="menu"] .ctx{display:block;}
 .ctx .mi{display:flex;align-items:center;gap:9px;height:26px;padding:0 9px;border-radius:6px;font-size:12px;cursor:pointer;color:var(--fg);}
 .ctx .mi:hover{background:var(--accent);}
 .ctx .mi.danger{color:var(--danger);}
 .ctx .mi .k{margin-left:auto;font-size:10.5px;color:var(--muted);}
 .ctx .sep{height:1px;background:var(--sidebar-border);margin:4px 6px;}
-.tree-wrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;}
 .editor{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);}
 .tabs{height:36px;flex:none;display:flex;align-items:flex-end;gap:2px;background:var(--tabbar);border-bottom:1px solid var(--border);padding:0 8px;}
 .tab{display:flex;align-items:center;gap:7px;height:29px;padding:0 12px;font-size:12px;color:var(--muted);border-top:2px solid transparent;border-radius:6px 6px 0 0;cursor:pointer;}
 .tab.on{background:var(--tabactive-bg);color:var(--tabactive-fg);border-top-color:var(--active-border);font-weight:600;}
+.editor-body{flex:1;min-height:0;display:flex;}
+.ed-main{flex:1;min-width:0;display:flex;flex-direction:column;}
 .edbody{flex:1;min-height:0;overflow:auto;padding:14px 16px;}
 .edbody h3{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:4px;}
 .edbody .sub{font-size:11px;color:var(--muted);margin-bottom:12px;}
@@ -148,6 +164,28 @@ table.grid td.null{color:var(--muted);font-style:italic;}
 .workbench[data-state="loading"] .ed-loading,
 .workbench[data-state="empty"] .ed-empty,
 .workbench[data-state="search"] .ed-search{display:flex;}
+.prop-panel{width:392px;flex:none;border-left:1px solid var(--border);display:none;flex-direction:column;min-width:0;background:var(--bg);}
+.workbench[data-state="property"] .prop-panel{display:flex;}
+.prop-head{height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 8px 0 12px;border-bottom:1px solid var(--border);}
+.prop-head .t{font-size:12.5px;font-weight:600;}
+.prop-head .t .path{color:var(--muted);font-weight:400;font-size:11px;}
+.prop-head .x{margin-left:auto;color:var(--muted);cursor:pointer;border:none;background:transparent;width:24px;height:24px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;}
+.prop-head .x:hover{background:var(--hover);color:var(--fg);}
+.prop-tabs2{display:flex;gap:2px;padding:0 8px;border-bottom:1px solid var(--border);flex:none;}
+.pt2{padding:7px 10px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;}
+.pt2.on{color:var(--fg);border-bottom-color:var(--active-border);font-weight:600;}
+.prop-body{flex:1;min-height:0;overflow:auto;padding:8px 12px;}
+.prow{display:grid;grid-template-columns:78px 1fr;gap:8px;font-size:11.5px;padding:4px 0;border-bottom:1px solid color-mix(in srgb,var(--sidebar-border) 60%,transparent);}
+.prow .pl{color:var(--muted);}
+.prow .pv{color:var(--fg);word-break:break-all;}
+.sec-tabs{display:flex;flex-wrap:wrap;gap:4px;margin:12px 0 6px;}
+.sec-tab{font-size:11px;padding:3px 9px;border:1px solid var(--border);border-radius:12px;color:var(--muted);cursor:pointer;}
+.sec-tab.on{background:var(--accent);color:var(--fg);border-color:var(--active-border);font-weight:600;}
+.sub-table{width:100%;border-collapse:collapse;font-size:11.5px;}
+.sub-table th{position:sticky;top:0;background:var(--tabbar);color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);font-weight:600;white-space:nowrap;}
+.sub-table td{padding:5px 8px;border-bottom:1px solid color-mix(in srgb,var(--sidebar-border) 70%,transparent);white-space:nowrap;}
+.sub-table .cpk{color:var(--warning);font-weight:700;font-size:10px;}
+.sub-table .cfk{color:var(--info);font-size:10px;}
 .notes{max-width:1000px;margin:18px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
 .card{border:1px solid var(--border);background:var(--bg);border-radius:11px;padding:14px 16px;}
 .card h4{font-size:12.5px;font-weight:700;margin-bottom:9px;display:flex;align-items:center;gap:7px;color:var(--fg);}
@@ -163,6 +201,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
 <svg style="display:none" aria-hidden="true">
   <symbol id="i-db" viewBox="0 0 16 16"><ellipse cx="8" cy="3.6" rx="5.4" ry="2.2"/><path d="M2.6 3.6v8.8c0 1.2 2.4 2.2 5.4 2.2s5.4-1 5.4-2.2V3.6"/><path d="M2.6 8c0 1.2 2.4 2.2 5.4 2.2s5.4-1 5.4-2.2"/></symbol>
   <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.6h5.4A1.6 1.6 0 0 1 14 6.2v5.2A1.6 1.6 0 0 1 12.4 13H3.6A1.6 1.6 0 0 1 2 11.4z"/></symbol>
+  <symbol id="i-folderplus" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.6h5.4A1.6 1.6 0 0 1 14 6.2v5.2A1.6 1.6 0 0 1 12.4 13H3.6A1.6 1.6 0 0 1 2 11.4z"/><path d="M8 8.2v3.4M6.3 9.9h3.4"/></symbol>
   <symbol id="i-table" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="M2 6.4h12M6.2 6.4V13M9.8 6.4V13"/></symbol>
   <symbol id="i-view" viewBox="0 0 16 16"><path d="M1.5 8s2.5-4.4 6.5-4.4S14.5 8 14.5 8s-2.5 4.4-6.5 4.4S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.9"/></symbol>
   <symbol id="i-col" viewBox="0 0 16 16"><rect x="5" y="2.6" width="6" height="10.8" rx="1.2"/><path d="M5 6h6M5 9.4h6"/></symbol>
@@ -173,12 +212,14 @@ table.grid td.null{color:var(--muted);font-style:italic;}
   <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.2v9.6M3.2 8h9.6"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.7"/><path d="M13.4 2.8v3.4H10"/></symbol>
   <symbol id="i-collapse" viewBox="0 0 16 16"><path d="M5 6.2 8 3.4l3 2.8M5 9.8l3 2.8 3-2.8"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 16 16"><path d="M6 2.4v2.8M10 2.4v2.8M3.8 5.2h8.4v2.6a4.2 4.2 0 0 1-8.4 0zM8 12.2v1.4"/></symbol>
   <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r=".9" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.6 3.2 12.2 8l-7.6 4.8z"/></symbol>
   <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.2" y="5.2" width="7.6" height="7.6" rx="1.4"/><path d="M3.2 10.4V4.4a1.2 1.2 0 0 1 1.2-1.2h6"/></symbol>
   <symbol id="i-edit" viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 6.4 11.8l-2.4.8.8-2.4z"/></symbol>
   <symbol id="i-trash" viewBox="0 0 16 16"><path d="M3.2 4.6h9.6M5.2 4.6V3.2h5.6v1.4M4.4 4.6l.6 8.2h6l.6-8.2"/></symbol>
-  <symbol id="i-dots" viewBox="0 0 16 16"><circle cx="4" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="12" cy="8" r="1.4"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6"/><path d="M8 7.2v3.4M8 5.6h.01"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
 </svg>
 
 <header class="page-head">
@@ -186,7 +227,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     <span class="logo"><svg class="ico" style="width:15px;height:15px"><use href="#i-db"/></svg></span>
     <div>
       <h1>数据源管理 / 数据库导航 · 原型</h1>
-      <div class="sub">M4 数据库导航 · 左侧 Dock 240px · 与 database-navigator-prototype-design.md 配套</div>
+      <div class="sub">M4 · 来源标签页 + 多分组/多标签 + 对象树 + 右侧停靠属性面板（仅数据源，不含分析资产）</div>
     </div>
   </div>
   <button class="theme-toggle" id="themeBtn">
@@ -196,21 +237,22 @@ table.grid td.null{color:var(--muted);font-style:italic;}
 
 <div class="statebar">
   <span class="lbl">状态：</span>
-  <button data-go="default" class="on">默认（树）</button>
-  <button data-go="loading">内省加载中</button>
+  <button data-go="default" class="on">默认（项目标签）</button>
+  <button data-go="loading">连接 / 预热中</button>
   <button data-go="menu">节点右键菜单</button>
   <button data-go="search">搜索（连接 / 表 / 列）</button>
-  <button data-go="empty">空态（无数据源）</button>
+  <button data-go="property">属性面板（右侧停靠）</button>
+  <button data-go="empty">空态</button>
 </div>
 
-<div class="workbench" data-state="default" id="wb">
+<div class="workbench" data-state="default" data-scope="project" id="wb">
 
   <nav class="activitybar">
     <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-fn"/></svg><span class="tip">草稿箱</span></div>
     <div class="act on"><svg class="ico" style="width:20px;height:20px"><use href="#i-db"/></svg><span class="tip">数据库导航</span></div>
     <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-seq"/></svg><span class="tip">资源分析</span></div>
     <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-bolt"/></svg><span class="tip">插件</span></div>
-    <div class="act spacer"><svg class="ico" style="width:20px;height:20px"><use href="#i-dots"/></svg><span class="tip">设置</span></div>
+    <div class="act spacer"><svg class="ico" style="width:20px;height:20px"><use href="#i-more"/></svg><span class="tip">设置</span></div>
   </nav>
 
   <aside class="navpanel">
@@ -218,125 +260,131 @@ table.grid td.null{color:var(--muted);font-style:italic;}
       <span class="ttl">数据源</span>
       <div class="acts">
         <button class="iconbtn" title="新建连接"><svg class="ico-sm"><use href="#i-plus"/></svg></button>
-        <button class="iconbtn" title="刷新当前连接元数据"><svg class="ico-sm"><use href="#i-refresh"/></svg></button>
-        <button class="iconbtn" title="全部折叠"><svg class="ico-sm"><use href="#i-collapse"/></svg></button>
+        <button class="iconbtn" title="新建分组"><svg class="ico-sm"><use href="#i-folderplus"/></svg></button>
+        <button class="iconbtn" title="刷新元数据"><svg class="ico-sm"><use href="#i-refresh"/></svg></button>
+        <button class="iconbtn danger" title="断开当前连接"><svg class="ico-sm"><use href="#i-plug"/></svg></button>
         <button class="iconbtn" title="更多"><svg class="ico-sm"><use href="#i-more"/></svg></button>
       </div>
     </div>
 
     <div class="st st-default">
+      <div class="scope-tabs">
+        <div class="scope-tab on" data-scope="project">项目<span class="badge">3</span></div>
+        <div class="scope-tab" data-scope="global">全局<span class="badge">3</span></div>
+      </div>
       <div class="searchbar">
         <div class="box">
           <svg class="ico-sm s-ic"><use href="#i-search"/></svg>
-          <input placeholder="筛选数据源 / 表 / 列…">
+          <input placeholder="筛选数据源 / 表 / 列 / 标签…">
         </div>
         <button class="tgl" title="正则">.*</button>
         <button class="tgl" title="区分大小写">Aa</button>
       </div>
+
       <div class="tree-wrap">
-        <div class="tree">
-          <div class="grp"><span class="tw">▾</span>本项目<span class="cnt">2</span></div>
+        <!-- 项目标签：来源 = P / GP；同一连接可出现在多个分组 -->
+        <div class="pane pane-project">
+          <div class="tree">
+            <div class="grp">
+              <span class="tw">&#9662;</span>核心库<span class="cnt">2</span>
+            </div>
+            <div class="row" style="padding-left:12px">
+              <span class="tw">&#9662;</span><span class="dot ok"></span>
+              <span class="nm">生产 PG</span>
+              <span class="sp"><span class="scope src-gp" title="项目共享（全局快照）">GP</span><span class="drv pg">PG</span></span>
+            </div>
+            <div class="row" style="padding-left:34px">
+              <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-folder"/></svg>
+              <span class="nm">analytics</span><span class="colmeta">schema</span>
+            </div>
+            <div class="row" style="padding-left:52px">
+              <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
+              <span class="nm">表</span><span class="colmeta">23</span>
+            </div>
+            <div class="row sel" style="padding-left:70px" id="rowOrders">
+              <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-table"/></svg>
+              <span class="nm">orders</span><span class="colmeta">1.2M 行</span>
+            </div>
+            <div class="row" style="padding-left:88px">
+              <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
+              <span class="nm mut">order_id</span><span class="pk">PK</span><span class="colmeta">bigint</span>
+            </div>
+            <div class="row" style="padding-left:88px">
+              <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
+              <span class="nm mut">customer_id</span><span class="colmeta">bigint &#183; FK</span>
+            </div>
+            <div class="row" style="padding-left:88px">
+              <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
+              <span class="nm mut">amount</span><span class="colmeta">numeric(12,2)</span>
+            </div>
+            <div class="row" style="padding-left:52px">
+              <span class="tw">&#9656;</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-view"/></svg>
+              <span class="nm">视图 / 过程 / 序列</span><span class="colmeta">14</span>
+            </div>
+            <div class="row" style="padding-left:12px">
+              <span class="tw">&#9656;</span><span class="dot off"></span>
+              <span class="nm">本地 MySQL</span>
+              <span class="sp"><span class="scope src-p" title="项目连接">P</span><span class="drv my">MY</span></span>
+            </div>
 
-          <div class="row" style="padding-left:12px">
-            <span class="tw">▾</span><span class="dot ok"></span>
-            <span class="nm">生产 PG</span>
-            <span class="sp"><span class="scope gp">GP</span><span class="drv pg">PG</span></span>
-          </div>
-          <div class="row" style="padding-left:34px">
-            <span class="tw">▾</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-folder"/></svg>
-            <span class="nm">analytics</span><span class="colmeta">schema</span>
-          </div>
-          <div class="row" style="padding-left:52px">
-            <span class="tw">▾</span><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
-            <span class="nm">表</span><span class="colmeta">23</span>
-          </div>
-          <div class="row sel" style="padding-left:70px" id="rowOrders">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-table"/></svg>
-            <span class="nm">orders</span><span class="colmeta">1.2M 行</span>
-          </div>
-          <div class="row" style="padding-left:88px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
-            <span class="nm mut">order_id</span><span class="pk">PK</span><span class="colmeta">bigint</span>
-          </div>
-          <div class="row" style="padding-left:88px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
-            <span class="nm mut">customer_id</span><span class="colmeta">bigint · FK</span>
-          </div>
-          <div class="row" style="padding-left:88px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
-            <span class="nm mut">amount</span><span class="colmeta">numeric(12,2)</span>
-          </div>
-          <div class="row" style="padding-left:88px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
-            <span class="nm mut">created_at</span><span class="colmeta">timestamptz</span>
-          </div>
-          <div class="row" style="padding-left:70px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-table"/></svg>
-            <span class="nm">customers</span><span class="colmeta">86K</span>
-          </div>
-          <div class="row" style="padding-left:70px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-table"/></svg>
-            <span class="nm">payments</span><span class="colmeta">1.1M</span>
-          </div>
-          <div class="row" style="padding-left:52px">
-            <span class="tw">▸</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-view"/></svg>
-            <span class="nm">视图</span><span class="colmeta">4</span>
-          </div>
-          <div class="row" style="padding-left:52px">
-            <span class="tw">▸</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-fn"/></svg>
-            <span class="nm">存储过程 / 函数</span><span class="colmeta">7</span>
-          </div>
-          <div class="row" style="padding-left:52px">
-            <span class="tw">▸</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-seq"/></svg>
-            <span class="nm">序列 / 触发器</span><span class="colmeta">3</span>
-          </div>
-          <div class="row" style="padding-left:34px">
-            <span class="tw">▸</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-folder"/></svg>
-            <span class="nm">public</span><span class="colmeta">schema</span>
-          </div>
-          <div class="row" style="padding-left:12px">
-            <span class="tw">▸</span><span class="dot off"></span>
-            <span class="nm">本地 MySQL</span>
-            <span class="sp"><span class="scope pj">P</span><span class="drv my">MY</span></span>
-          </div>
+            <div class="grp">
+              <span class="tw">&#9662;</span>报表<span class="cnt">2</span>
+            </div>
+            <div class="row" style="padding-left:12px">
+              <span class="tw">&#9656;</span><span class="dot ok"></span>
+              <span class="nm">生产 PG</span>
+              <span class="sp"><span class="scope src-gp" title="项目共享（全局快照）">GP</span><span class="drv pg">PG</span></span>
+            </div>
+            <div class="row" style="padding-left:12px">
+              <span class="tw">&#9656;</span><span class="dot off"></span>
+              <span class="nm">报表 SQLite</span>
+              <span class="sp"><span class="scope src-p" title="项目连接">P</span><span class="drv sq">SQ</span></span>
+            </div>
 
-          <div class="grp"><span class="tw">▾</span>全局<span class="cnt">2</span></div>
-          <div class="row" style="padding-left:12px">
-            <span class="tw">▸</span><span class="dot ok"></span>
-            <span class="nm">测试 SQLite</span>
-            <span class="sp"><span class="scope">G</span><span class="drv sq">SQ</span></span>
-          </div>
-          <div class="row" style="padding-left:12px">
-            <span class="tw">▸</span><span class="dot err"></span>
-            <span class="nm">报表 PG（离线）</span>
-            <span class="sp"><span class="scope">G</span><span class="drv pg">PG</span></span>
-          </div>
-
-          <div class="grp"><span class="tw">▾</span>DuckDB 分析表<span class="cnt">5</span></div>
-          <div class="row" style="padding-left:12px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-table"/></svg>
-            <span class="nm">orders_clean</span><span class="colmeta">本地</span>
-          </div>
-          <div class="row" style="padding-left:12px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-table"/></svg>
-            <span class="nm">customer_profile</span><span class="colmeta">本地</span>
-          </div>
-          <div class="row" style="padding-left:12px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-view"/></svg>
-            <span class="nm">v_monthly_sales</span><span class="colmeta">视图</span>
-          </div>
-          <div class="row" style="padding-left:12px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-table"/></svg>
-            <span class="nm">mock_customers</span><span class="colmeta">mock</span>
-          </div>
-          <div class="row" style="padding-left:12px">
-            <span class="tw"></span><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-table"/></svg>
-            <span class="nm">tmp_join_test</span><span class="colmeta">临时</span>
+            <div class="grp">
+              <span class="tw">&#9662;</span>未分组<span class="cnt">1</span>
+            </div>
+            <div class="row" style="padding-left:12px">
+              <span class="tw">&#9656;</span><span class="dot off"></span>
+              <span class="nm">临时 PG</span>
+              <span class="sp"><span class="scope src-p" title="项目连接">P</span><span class="drv pg">PG</span></span>
+            </div>
           </div>
         </div>
 
-        <div class="ctx" id="ctxMenu" style="left:58px;top:196px;display:none">
-          <div class="mi"><svg class="ico-sm"><use href="#i-play"/></svg>查看数据<span class="k">Ctrl+Enter</span></div>
+        <!-- 全局标签：来源 = G（分组名与项目标签同一套，体现跨标签） -->
+        <div class="pane pane-global">
+          <div class="tree">
+            <div class="grp">
+              <span class="tw">&#9662;</span>核心库<span class="cnt">1</span>
+            </div>
+            <div class="row" style="padding-left:12px">
+              <span class="tw">&#9656;</span><span class="dot load"></span>
+              <span class="nm">数仓 PG</span><span class="colmeta">连接中…</span>
+              <span class="sp"><span class="scope src-g" title="全局连接">G</span><span class="drv pg">PG</span></span>
+            </div>
+            <div class="grp">
+              <span class="tw">&#9662;</span>报表<span class="cnt">1</span>
+            </div>
+            <div class="row" style="padding-left:12px">
+              <span class="tw">&#9656;</span><span class="dot err"></span>
+              <span class="nm">报表 PG（离线）</span>
+              <span class="sp"><span class="scope src-g" title="全局连接">G</span><span class="drv pg">PG</span></span>
+            </div>
+            <div class="grp">
+              <span class="tw">&#9662;</span>未分组<span class="cnt">1</span>
+            </div>
+            <div class="row" style="padding-left:12px">
+              <span class="tw">&#9656;</span><span class="dot ok"></span>
+              <span class="nm">测试 SQLite</span>
+              <span class="sp"><span class="scope src-g" title="全局连接">G</span><span class="drv sq">SQ</span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ctx" style="left:64px;top:214px">
+          <div class="mi"><svg class="ico-sm"><use href="#i-info"/></svg>查看属性<span class="k">双击 / F4</span></div>
+          <div class="mi"><svg class="ico-sm"><use href="#i-play"/></svg>查看数据</div>
           <div class="mi"><svg class="ico-sm"><use href="#i-edit"/></svg>新建查询（SELECT）</div>
           <div class="sep"></div>
           <div class="mi"><svg class="ico-sm"><use href="#i-copy"/></svg>复制名称</div>
@@ -344,31 +392,32 @@ table.grid td.null{color:var(--muted);font-style:italic;}
           <div class="sep"></div>
           <div class="mi"><svg class="ico-sm"><use href="#i-bolt"/></svg>生成 Mock 数据</div>
           <div class="mi"><svg class="ico-sm"><use href="#i-refresh"/></svg>刷新此表元数据</div>
-          <div class="sep"></div>
-          <div class="mi danger"><svg class="ico-sm"><use href="#i-trash"/></svg>删除连接</div>
         </div>
       </div>
-      <div class="nav-status"><span class="dot ok"></span>3 已连接 · 1 离线 · 缓存 12 分钟前</div>
+
+      <div class="nav-status">
+        <span class="dot ok"></span>3 已连接 &#183; 2 离线 &#183; 缓存 12 分钟前（不自动删除）
+      </div>
     </div>
 
     <div class="st st-loading">
-      <div class="searchbar">
-        <div class="box">
-          <svg class="ico-sm s-ic"><use href="#i-search"/></svg>
-          <input placeholder="筛选数据源 / 表 / 列…">
-        </div>
+      <div class="scope-tabs">
+        <div class="scope-tab on">项目<span class="badge">3</span></div>
+        <div class="scope-tab">全局<span class="badge">3</span></div>
       </div>
       <div class="progress"><i></i></div>
-      <div class="loadnote"><span>正在内省 生产 PG · analytics</span><span>128 / 512</span></div>
+      <div class="loadnote"><span>正在连接并预热 schema &#183; 生产 PG</span><span>4 / 10</span></div>
       <div class="tree">
-        <div class="grp"><span class="tw">▾</span>本项目<span class="cnt">2</span></div>
+        <div class="grp">
+          <span class="tw">&#9662;</span>核心库<span class="cnt">2</span>
+        </div>
         <div class="row" style="padding-left:12px">
-          <span class="tw">▾</span><span class="dot load"></span>
+          <span class="tw">&#9662;</span><span class="dot load"></span>
           <span class="nm">生产 PG</span>
-          <span class="sp"><span class="scope gp">GP</span><span class="drv pg">PG</span></span>
+          <span class="sp"><span class="scope src-gp" title="项目共享（全局快照）">GP</span><span class="drv pg">PG</span></span>
         </div>
         <div class="row" style="padding-left:34px">
-          <span class="tw">▾</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-folder"/></svg>
+          <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-folder"/></svg>
           <span class="nm">analytics</span><span class="colmeta">正在读取…</span>
         </div>
         <div style="padding:8px 12px 8px 56px;display:flex;flex-direction:column;gap:9px;">
@@ -378,12 +427,12 @@ table.grid td.null{color:var(--muted);font-style:italic;}
           <div class="skel" style="width:44%"></div>
         </div>
         <div class="row" style="padding-left:12px">
-          <span class="tw">▸</span><span class="dot off"></span>
+          <span class="tw">&#9656;</span><span class="dot off"></span>
           <span class="nm">本地 MySQL</span>
-          <span class="sp"><span class="scope pj">P</span><span class="drv my">MY</span></span>
+          <span class="sp"><span class="scope src-p" title="项目连接">P</span><span class="drv my">MY</span></span>
         </div>
       </div>
-      <div class="nav-status"><span class="dot load"></span>内省进行中 · 可继续浏览已缓存节点</div>
+      <div class="nav-status"><span class="dot load"></span>连接中 &#183; 预热可取消 &#183; 已缓存节点仍可浏览</div>
     </div>
 
     <div class="st st-search">
@@ -399,47 +448,33 @@ table.grid td.null{color:var(--muted);font-style:italic;}
         <div class="res">
           <div class="rt"><span class="drv pg">PG</span>
             <b>analytics.orders</b>
-            <span class="scope" style="margin-left:auto">表</span>
+            <span class="scope src-gp" style="margin-left:auto" title="项目共享（全局快照）">GP</span>
           </div>
-          <div class="rp"><b>orders</b> · 1.2M 行 · 创建于 2024-08</div>
+          <div class="rp"><b>orders</b> &#183; 1.2M 行 &#183; 标签 prod</div>
         </div>
         <div class="res sel">
           <div class="rt"><span class="drv pg">PG</span>
             <b>analytics.orders.order_id</b>
-            <span class="scope" style="margin-left:auto">列</span>
+            <span class="scope src-gp" style="margin-left:auto" title="项目共享（全局快照）">GP</span>
           </div>
-          <div class="rp">order_id · bigint · <mark>order</mark> 主键</div>
+          <div class="rp">order_id &#183; bigint &#183; <mark>order</mark> 主键</div>
         </div>
         <div class="res">
           <div class="rt"><span class="drv pg">PG</span>
             <b>analytics.customer_orders</b>
-            <span class="scope" style="margin-left:auto">视图</span>
+            <span class="scope src-gp" style="margin-left:auto" title="项目共享（全局快照）">GP</span>
           </div>
           <div class="rp">客户订单汇总视图</div>
         </div>
         <div class="res">
-          <div class="rt"><span class="drv du">DU</span>
-            <b>main.orders_clean</b>
-            <span class="scope" style="margin-left:auto">DuckDB</span>
-          </div>
-          <div class="rp">本地分析表 · 由「生产 PG · orders」清洗而来</div>
-        </div>
-        <div class="res">
           <div class="rt"><span class="drv my">MY</span>
             <b>shop.order_items</b>
-            <span class="scope" style="margin-left:auto">表</span>
+            <span class="scope src-p" style="margin-left:auto" title="项目连接">P</span>
           </div>
-          <div class="rp">order_id · bigint · 外键 → orders</div>
-        </div>
-        <div class="res">
-          <div class="rt"><span class="drv pg">PG</span>
-            <b>analytics.v_monthly_orders</b>
-            <span class="scope" style="margin-left:auto">视图</span>
-          </div>
-          <div class="rp">按月聚合订单</div>
+          <div class="rp">order_id &#183; bigint &#183; 外键 &#8594; orders</div>
         </div>
       </div>
-      <div class="nav-status">12 条结果 · FTS 缓存检索 · <b>Enter</b> 在编辑区打开全部</div>
+      <div class="nav-status">12 条结果 &#183; FTS 缓存检索 &#183; <b>Enter</b> 在编辑区打开全部</div>
     </div>
 
     <div class="st st-empty">
@@ -457,111 +492,170 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     <div class="tabs">
       <div class="tab on"><svg class="ico-sm"><use href="#i-table"/></svg>orders</div>
       <div class="tab"><svg class="ico-sm"><use href="#i-fn"/></svg>查询 1</div>
+      <div class="tab"><svg class="ico-sm"><use href="#i-info"/></svg>属性</div>
     </div>
 
-    <div class="edstate ed-default">
-      <div class="edbody">
-        <h3><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>analytics.orders</h3>
-        <div class="sub">双击表 → 数据预览（只读，自动加 <span class="kbd">LIMIT 200</span>）· 右键可生成 SELECT/INSERT/UPDATE/DELETE 到「查询 1」</div>
-        <table class="grid">
-          <thead>
-            <tr><th>order_id</th><th>customer_id</th><th>amount</th><th>status</th><th>created_at</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>1024101</td><td>20455</td><td>1299.00</td><td>paid</td><td>2024-08-01 09:12:44</td></tr>
-            <tr><td>1024102</td><td>20456</td><td>88.50</td><td>paid</td><td>2024-08-01 09:15:02</td></tr>
-            <tr><td>1024103</td><td>20455</td><td>349.90</td><td class="null">pending</td><td>2024-08-01 09:20:31</td></tr>
-            <tr><td>1024104</td><td>20461</td><td>2150.00</td><td>refunded</td><td>2024-08-01 09:41:18</td></tr>
-            <tr><td>1024105</td><td>20448</td><td class="null">NULL</td><td>cancelled</td><td>2024-08-01 10:02:55</td></tr>
-          </tbody>
-        </table>
+    <div class="editor-body">
+      <div class="ed-main">
+        <div class="edstate ed-default">
+          <div class="edbody">
+            <h3><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>analytics.orders</h3>
+            <div class="sub">双击对象或右键「查看属性」&#8594; 右侧停靠属性面板；右键「查看数据」预览（自动 <span class="kbd">LIMIT 200</span>）</div>
+            <table class="grid">
+              <thead>
+                <tr><th>order_id</th><th>customer_id</th><th>amount</th><th>status</th><th>created_at</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1024101</td><td>20455</td><td>1299.00</td><td>paid</td><td>2024-08-01 09:12:44</td></tr>
+                <tr><td>1024102</td><td>20456</td><td>88.50</td><td>paid</td><td>2024-08-01 09:15:02</td></tr>
+                <tr><td>1024103</td><td>20455</td><td>349.90</td><td class="null">pending</td><td>2024-08-01 09:20:31</td></tr>
+                <tr><td>1024104</td><td>20461</td><td>2150.00</td><td>refunded</td><td>2024-08-01 09:41:18</td></tr>
+                <tr><td>1024105</td><td>20448</td><td class="null">NULL</td><td>cancelled</td><td>2024-08-01 10:02:55</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="nav-status" style="border-top:1px solid var(--border)">5 / 1,204,388 行 &#183; 只读预览 &#183; 排序 / 过滤</div>
+        </div>
+
+        <div class="edstate ed-loading">
+          <div class="ph">正在连接并内省 <b style="color:var(--fg)">生产 PG</b> …<br><span style="font-size:11px">首次连接较慢，结果写入本地缓存并预热 schema，下次打开 &lt; 100ms</span></div>
+        </div>
+
+        <div class="edstate ed-search">
+          <div class="edbody">
+            <h3><svg class="ico-sm"><use href="#i-search"/></svg>「order」的搜索结果</h3>
+            <div class="sub">连接 / 表 / 列 / 视图混排 &#183; 点击跳转到对象 &#183; <b>Enter</b> 打开全部</div>
+            <table class="grid">
+              <thead>
+                <tr><th>对象</th><th>来源</th><th>匹配</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>analytics.orders</td><td>GP</td><td><mark>order</mark>s</td></tr>
+                <tr><td>analytics.orders.order_id</td><td>GP</td><td><mark>order</mark>_id</td></tr>
+                <tr><td>analytics.customer_orders</td><td>GP</td><td>customer_<mark>order</mark>s</td></tr>
+                <tr><td>shop.order_items</td><td>P</td><td><mark>order</mark>_items</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="edstate ed-empty">
+          <div class="ph">新建或选择一个数据源后<br>这里显示表数据 / 查询编辑器</div>
+        </div>
       </div>
-      <div class="nav-status" style="border-top:1px solid var(--border)">5 / 1,204,388 行 · 只读预览 · 排序 / 过滤</div>
-    </div>
 
-    <div class="edstate ed-loading">
-      <div class="ph">正在从数据库内省 <b style="color:var(--fg)">analytics</b> …<br><span style="font-size:11px">首次连接较慢，结果会写入本地缓存，下次打开 &lt; 100ms</span></div>
-    </div>
+      <!-- 属性面板：靠右停靠，占用一个编辑面板位 -->
+      <aside class="prop-panel">
+        <div class="prop-head">
+          <svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
+          <span class="t">orders <span class="path">analytics</span></span>
+          <button class="x"><svg class="ico-sm"><use href="#i-x"/></svg></button>
+        </div>
+        <div class="prop-tabs2">
+          <div class="pt2 on">属性</div>
+          <div class="pt2">数据</div>
+        </div>
+        <div class="prop-body">
+          <div class="prow"><span class="pl">限定名</span><span class="pv">analytics.orders</span></div>
+          <div class="prow"><span class="pl">来源</span><span class="pv">GP（项目共享）</span></div>
+          <div class="prow"><span class="pl">类型</span><span class="pv">BASE TABLE</span></div>
+          <div class="prow"><span class="pl">行数估算</span><span class="pv">1,204,388</span></div>
+          <div class="prow"><span class="pl">引擎</span><span class="pv">InnoDB</span></div>
+          <div class="prow"><span class="pl">列数</span><span class="pv">18</span></div>
+          <div class="prow"><span class="pl">标签</span><span class="pv">prod, core</span></div>
+          <div class="prow"><span class="pl">注释</span><span class="pv">订单主表</span></div>
 
-    <div class="edstate ed-search">
-      <div class="edbody">
-        <h3><svg class="ico-sm"><use href="#i-search"/></svg>「order」的搜索结果</h3>
-        <div class="sub">连接 / 表 / 列 / 视图混排 · 点击跳转到对象 · <b>Enter</b> 打开全部</div>
-        <table class="grid">
-          <thead>
-            <tr><th>对象</th><th>类型</th><th>匹配</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>analytics.orders</td><td>表</td><td><mark>order</mark>s</td></tr>
-            <tr><td>analytics.orders.order_id</td><td>列</td><td><mark>order</mark>_id</td></tr>
-            <tr><td>analytics.customer_orders</td><td>视图</td><td>customer_<mark>order</mark>s</td></tr>
-            <tr><td>main.orders_clean</td><td>DuckDB 表</td><td><mark>order</mark>s_clean</td></tr>
-            <tr><td>shop.order_items</td><td>表</td><td><mark>order</mark>_items</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="edstate ed-empty">
-      <div class="ph">新建或选择一个数据源后<br>这里显示表数据 / 查询编辑器</div>
+          <div class="sec-tabs">
+            <span class="sec-tab on">列 18</span>
+            <span class="sec-tab">约束 4</span>
+            <span class="sec-tab">索引 5</span>
+            <span class="sec-tab">外键 2</span>
+            <span class="sec-tab">触发器 0</span>
+            <span class="sec-tab">DDL</span>
+          </div>
+          <table class="sub-table">
+            <thead>
+              <tr><th>#</th><th>名称</th><th>类型</th><th>非空</th><th>默认</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>1</td><td><span class="cpk">PK</span> order_id</td><td>bigint</td><td>是</td><td></td></tr>
+              <tr><td>2</td><td><span class="cfk">FK</span> customer_id</td><td>bigint</td><td>是</td><td></td></tr>
+              <tr><td>3</td><td>amount</td><td>numeric(12,2)</td><td>是</td><td>0.00</td></tr>
+              <tr><td>4</td><td>status</td><td>varchar(20)</td><td>是</td><td>paid</td></tr>
+              <tr><td>5</td><td>created_at</td><td>timestamptz</td><td>是</td><td>now()</td></tr>
+              <tr><td>6</td><td>remark</td><td>text</td><td>否</td><td></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </aside>
     </div>
   </section>
 </div>
 
 <section class="notes">
   <div class="card">
-    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-db"/></svg>面板结构</h4>
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-db"/></svg>三个正交概念 + 标签</h4>
     <ul>
-      <li>面板头：标题「数据源」+ 新建 / 刷新 / 全部折叠 / 更多</li>
-      <li>搜索：本地筛选（连接 / 表 / 列），<span class="kbd">.*</span> 正则、<span class="kbd">Aa</span> 大小写</li>
-      <li>树主体：分组 → 连接 → catalog/schema → 类别文件夹 → 表 → 列</li>
-      <li>底部状态：已连接数 / 离线数 / 缓存新鲜度</li>
+      <li><b>来源短码</b>：<code>P</code> 项目 / <code>G</code> 全局 / <code>GP</code> 共享</li>
+      <li><b>标签页</b>：项目 / 全局，按来源过滤视图</li>
+      <li><b>分组</b>：项目级用户自定义，<b>多对多</b>（同一连接可出现在多个分组）</li>
+      <li><b>标签</b>：连接上的多值标记，用于检索/过滤</li>
+      <li>来源短码可切换为文字（设置内开关，偏好存 settings.json）</li>
+    </ul>
+    <div class="legend" style="margin-top:10px">
+      <span class="li"><span class="scope src-p">P</span>项目连接</span>
+      <span class="li"><span class="scope src-g">G</span>全局连接</span>
+      <span class="li"><span class="scope src-gp">GP</span>项目共享（全局快照）</span>
+    </div>
+  </div>
+  <div class="card">
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-folderplus"/></svg>分组与标签</h4>
+    <ul>
+      <li>分组 = 名称 + 描述 + 成员；<b>多对多</b>，可拖拽归组、组内外排序、折叠计数</li>
+      <li>连接右键「分组 ▸」多选、「标签 ▸」多值</li>
+      <li>分组栏简单配色：统一左侧 2px 色条（不做 per-group 自定义色）</li>
+      <li>「未分组」支持手动排序</li>
+      <li>落库：<code>connection_groups</code> + <code>connection_group_members</code> + <code>connection_tags</code>（均为独立表）</li>
     </ul>
   </div>
   <div class="card">
-    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-table"/></svg>连接节点状态与徽标</h4>
-    <div class="legend">
-      <span class="li"><span class="dot ok"></span>已连接</span>
-      <span class="li"><span class="dot off"></span>未连接（已保存）</span>
-      <span class="li"><span class="dot load"></span>连接 / 内省中</span>
-      <span class="li"><span class="dot err"></span>连接失败</span>
-    </div>
-    <div class="legend" style="margin-top:10px">
-      <span class="li"><span class="scope gp">GP</span>全局 + 项目共享</span>
-      <span class="li"><span class="scope pj">P</span>仅项目</span>
-      <span class="li"><span class="scope">G</span>仅全局</span>
-    </div>
-    <div class="legend" style="margin-top:10px">
-      <span class="li"><span class="drv pg">PG</span>PostgreSQL</span>
-      <span class="li"><span class="drv my">MY</span>MySQL</span>
-      <span class="li"><span class="drv sq">SQ</span>SQLite</span>
-      <span class="li"><span class="drv du">DU</span>DuckDB</span>
-    </div>
-  </div>
-  <div class="card">
-    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-play"/></svg>关键交互</h4>
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-info"/></svg>属性面板（靠右停靠）</h4>
     <ul>
-      <li>单击节点：选中（右侧属性面板联动）</li>
-      <li>双击表 / 视图：中央编辑区打开只读数据预览</li>
-      <li>右键：查看数据 / 新建查询 / 复制名 / 生成 SQL / Mock / 刷新</li>
-      <li>连接节点右键：连接 / 断开 / 编辑 / 复制 / 测试 / 删除</li>
-      <li>展开状态按连接持久化，重开面板即恢复</li>
+      <li>占用编辑区右侧的编辑面板位（默认约 392px，可拖拽调宽，宽度会被记住）</li>
+      <li>顶部 Tab：属性 / 数据；属性网格 + 子实体 Tab（列/约束/索引/外键/触发器/DDL）</li>
+      <li>入口：双击对象 / 右键「查看属性」/ <span class="kbd">F4</span>；关闭后回到编辑区 tab</li>
     </ul>
   </div>
   <div class="card">
-    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-refresh"/></svg>主题与来源</h4>
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-refresh"/></svg>缓存策略（永不自动删除）</h4>
     <ul>
-      <li>配色取自 <code>assets/themes/rds-theme.json</code>（RDS Light/Dark），代码零裸 hex</li>
-      <li>coral（<code>--active-border</code>）= 品牌色：选中左边条 / DuckDB 节点</li>
-      <li>本节为设计示意，落地见 <code>database-navigator-prototype-design.md</code> §10 落点映射</li>
+      <li>元数据缓存（L2 SQLite）与状态缓存（分组/展开态）<b>都不删除</b></li>
+      <li>断开 / 刷新 / 删除连接均保留缓存，可离线浏览、重连秒开</li>
+      <li>唯一删除路径：设置内「缓存管理 → 清理」（可单连接/全量；设置 + 面板头「更多」两处入口）</li>
+      <li>预热采用方案 C（仅 databases/schemas），不预取表</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-plus"/></svg>范围边界</h4>
+    <ul>
+      <li>本面板<b>只管理数据源</b>与其对象树</li>
+      <li>DuckDB 分析表 / 分析资源（M6）不在本面板，归「资源分析」</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-search"/></svg>主题</h4>
+    <ul>
+      <li>配色取自 <code>assets/themes/rds-theme.json</code>，代码零裸 hex</li>
+      <li>新增通用 token <code>search.match.background</code>（与草稿箱共用）</li>
+      <li>来源短码 P/G/GP 分别取 <code>info</code> / <code>muted</code> / <code>primary</code></li>
     </ul>
   </div>
 </section>
 
 <script>
-  const root = document.documentElement;
-  const themeBtn = document.getElementById('themeBtn');
-  const themeTxt = document.getElementById('themeTxt');
+  var root = document.documentElement;
+  var themeBtn = document.getElementById('themeBtn');
+  var themeTxt = document.getElementById('themeTxt');
   themeBtn.addEventListener('click', function () {
     var dark = root.getAttribute('data-theme') === 'dark';
     root.setAttribute('data-theme', dark ? 'light' : 'dark');
@@ -569,15 +663,36 @@ table.grid td.null{color:var(--muted);font-style:italic;}
   });
 
   var wb = document.getElementById('wb');
-  var ctx = document.getElementById('ctxMenu');
   var buttons = document.querySelectorAll('.statebar button');
   buttons.forEach(function (b) {
     b.addEventListener('click', function () {
       buttons.forEach(function (x) { x.classList.remove('on'); });
       b.classList.add('on');
-      var go = b.dataset.go;
-      wb.dataset.state = go;
-      ctx.style.display = go === 'menu' ? 'block' : 'none';
+      wb.dataset.state = b.dataset.go;
+    });
+  });
+
+  document.querySelectorAll('.scope-tab').forEach(function (t) {
+    t.addEventListener('click', function () {
+      var scope = t.dataset.scope;
+      if (!scope) return;
+      document.querySelectorAll('.scope-tab').forEach(function (x) { x.classList.remove('on'); });
+      t.classList.add('on');
+      wb.dataset.scope = scope;
+    });
+  });
+
+  document.querySelectorAll('.pt2').forEach(function (t) {
+    t.addEventListener('click', function () {
+      t.parentNode.querySelectorAll('.pt2').forEach(function (x) { x.classList.remove('on'); });
+      t.classList.add('on');
+    });
+  });
+
+  document.querySelectorAll('.sec-tab').forEach(function (t) {
+    t.addEventListener('click', function () {
+      t.parentNode.querySelectorAll('.sec-tab').forEach(function (x) { x.classList.remove('on'); });
+      t.classList.add('on');
     });
   });
 

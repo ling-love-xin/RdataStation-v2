@@ -40,6 +40,7 @@ edition = "2021"
 shared = { path = "crates/shared", package = "rds-shared" }
 engine = { path = "crates/engine", package = "rds-engine" }
 connection = { path = "crates/connection", package = "rds-connection" }
+database = { path = "crates/database", package = "rds-database" }
 insight = { path = "crates/insight", package = "rds-insight" }
 mock = { path = "crates/mock", package = "rds-mock" }
 settings = { path = "crates/settings", package = "rds-settings" }
