@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 草稿箱（项目工作区）· 原型</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3; --tabactive-bg:#FFFFFF; --tabactive-fg:#333333;
+  --activity-bar:#ECECEC; --activity-fg:#616161; --activity-active:#333333;
+  --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
+  --ic-folder:#B45309; --ic-sql:#2563EB; --ic-py:#16A34A; --ic-data:#0891B2; --ic-file:#8E8E8E;
+  --search-match:#FFF3C4; --search-match-fg:#333333;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526; --tabactive-bg:#1E1E1E; --tabactive-fg:#FFFFFF;
+  --activity-bar:#333333; --activity-fg:#858585; --activity-active:#FFFFFF;
+  --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
+  --ic-folder:#CCA700; --ic-sql:#3794FF; --ic-py:#89D185; --ic-data:#4EC9B0; --ic-file:#8A8A8A;
+  --search-match:#4A3F00; --search-match-fg:#FFE9A8;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);padding:30px 20px 24px;font-size:13px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;cursor:pointer;}
+.page-head{display:flex;align-items:center;justify-content:space-between;max-width:1180px;margin:0 auto 16px;padding:0 4px;}
+.brand{display:flex;align-items:center;gap:10px;}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(194,91,70,.35);color:#fff;font-weight:700;font-size:12px;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:2px;}
+.theme-toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:all .15s;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+
+/* ── 窗口 ── */
+.wrap{max-width:1180px;margin:0 auto;overflow-x:auto;padding-bottom:6px;}
+.app{min-width:1080px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.titlebar{display:flex;align-items:center;height:36px;background:var(--titlebar);border-bottom:1px solid var(--border);}
+.tb-left{display:flex;align-items:center;flex:0 0 auto;padding-left:10px;gap:8px;}
+.app-logo{width:20px;height:20px;border-radius:5px;background:linear-gradient(135deg,#F5A188,#C25B46);}
+.cutout{display:flex;align-items:center;gap:7px;margin-left:6px;padding:3px 12px;background:var(--sidebar);border:1px dashed var(--active-border);border-radius:6px;}
+.cutout-label{font-size:11px;color:var(--muted);}
+.cutout-name{font-size:12.5px;font-weight:600;color:var(--fg);}
+.tb-center{flex:1;display:flex;justify-content:center;min-width:0;}
+.quick-open{display:flex;align-items:center;gap:8px;width:320px;max-width:46%;height:24px;background:var(--bg);border:1px solid var(--input-border);border-radius:5px;padding:0 9px;font-size:12px;color:var(--muted);}
+.quick-open kbd{margin-left:auto;font-size:10px;border:1px solid var(--border);border-radius:3px;padding:0 4px;color:var(--muted);}
+.tb-right{flex:0 0 auto;display:flex;height:100%;}
+.wc{width:44px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--fg);}
+.wc:hover{background:var(--hover);}
+.wc.close:hover{background:#e81123;color:#fff;}
+
+.main{display:flex;align-items:stretch;height:560px;}
+.activity{width:48px;flex:none;background:var(--activity-bar);display:flex;flex-direction:column;align-items:center;padding:4px 0;}
+.activity.l{border-right:1px solid var(--border);}
+.activity.r{border-left:1px solid var(--border);}
+.a-icon{width:44px;height:40px;display:flex;align-items:center;justify-content:center;color:var(--activity-fg);font-size:16px;border-left:2px solid transparent;}
+.activity.r .a-icon{border-left:none;border-right:2px solid transparent;}
+.a-icon.active{color:var(--activity-active);border-left-color:var(--activity-active);}
+.activity.r .a-icon.active{border-right-color:var(--activity-active);}
+.a-icon:not(.active):hover{color:var(--fg);}
+.a-spacer{flex:1;}
+.a-btn{width:40px;height:32px;display:flex;align-items:center;justify-content:center;color:var(--activity-fg);font-size:15px;}
+.a-btn:hover{color:var(--fg);}
+
+/* ── 左侧边栏（草稿箱面板） ── */
+.sidebar-l{width:240px;flex:none;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;}
+.panel-head{display:flex;align-items:center;height:36px;padding:0 8px 0 12px;background:var(--tabbar);border-bottom:1px solid var(--sidebar-border);}
+.panel-head .ttl{font-size:12px;font-weight:600;color:var(--fg);}
+.panel-head .actions{margin-left:auto;display:flex;gap:2px;color:var(--muted);font-size:13px;}
+.panel-head .actions span{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:4px;}
+.panel-head .actions span:hover{background:var(--hover);color:var(--fg);}
+
+.toolbar{display:flex;align-items:center;gap:2px;padding:5px 8px;border-bottom:1px solid var(--sidebar-border);}
+.tb-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:5px;font-size:13px;}
+.tb-btn:hover{background:var(--hover);color:var(--fg);}
+.tb-sep{width:1px;height:16px;background:var(--border);margin:0 3px;}
+
+.search{display:flex;align-items:center;gap:5px;padding:6px 8px 7px;}
+.search .box{flex:1;display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--input-border);border-radius:6px;padding:4px 8px;}
+.search .box .mag{color:var(--muted);font-size:12px;}
+.search .box input{flex:1;border:none;outline:none;background:transparent;color:var(--fg);font-size:12px;min-width:0;}
+.search .box input::placeholder{color:var(--muted);}
+.chip-btn{border:1px solid var(--input-border);background:var(--bg);color:var(--muted);border-radius:5px;font-size:10px;padding:3px 5px;font-family:Consolas,monospace;}
+.chip-btn.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:700;}
+
+.panel-body{flex:1;overflow:hidden;padding:4px 6px;font-size:12px;}
+.group{margin-bottom:4px;}
+.group-head{display:flex;align-items:center;gap:5px;height:24px;padding:0 6px;color:var(--muted);font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;}
+.group-head .badge{margin-left:auto;background:var(--muted);color:var(--sidebar);border-radius:9px;font-size:9.5px;font-weight:600;padding:0 6px;line-height:15px;text-transform:none;letter-spacing:0;}
+.group-head .chev{font-size:9px;}
+
+.row{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;border-radius:5px;color:var(--fg);white-space:nowrap;position:relative;}
+.row:hover{background:var(--hover);}
+.row.sel{background:var(--accent);}
+.row.sel::before{content:"";position:absolute;left:0;top:3px;bottom:3px;width:2px;border-radius:2px;background:var(--active-border);}
+.row .chev{width:10px;color:var(--muted);font-size:9px;flex:none;text-align:center;}
+.row .indent{width:14px;flex:none;}
+.row .nm{overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;}
+.row .meta{color:var(--muted);font-size:10px;flex:none;}
+.row .dirty{color:var(--primary);font-size:14px;line-height:1;flex:none;}
+.row.dim{color:var(--muted);}
+.row.hl{background:var(--accent);}
+.row .tag{font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 5px;flex:none;}
+.newrow{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;}
+.newrow input{flex:1;border:1px solid var(--active-border);border-radius:5px;background:var(--bg);color:var(--fg);font-size:12px;padding:3px 7px;outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent);}
+
+.ic{width:15px;height:15px;flex:none;stroke-width:1.5;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;}
+.ic.folder{color:var(--ic-folder);}
+.ic.sql{color:var(--ic-sql);}
+.ic.py{color:var(--ic-py);}
+.ic.data{color:var(--ic-data);}
+.ic.file{color:var(--ic-file);}
+.ic.ref{color:var(--info);}
+.ic.trash{color:var(--muted);}
+
+.panel-foot{border-top:1px solid var(--sidebar-border);padding:6px 10px;font-size:10.5px;color:var(--muted);}
+
+/* ── 中央编辑区 ── */
+.editor{flex:1;min-width:320px;background:var(--bg);display:flex;flex-direction:column;}
+.editor-tabs{display:flex;height:34px;background:var(--tabbar);border-bottom:1px solid var(--border);}
+.etab{display:flex;align-items:center;gap:7px;padding:0 13px;font-size:12px;background:var(--tabactive-bg);color:var(--tabactive-fg);border-right:1px solid var(--border);border-top:2px solid var(--active-border);}
+.etab .x{color:var(--muted);margin-left:5px;}
+.editor-body{flex:1;overflow:hidden;display:flex;flex-direction:column;}
+.sql{padding:12px 16px;font-family:Consolas,'Courier New',monospace;font-size:12.5px;line-height:1.9;color:var(--fg);}
+.sql .kw{color:#569cd6;} .sql .fn{color:#dcdcaa;} .sql .str{color:#ce9178;} .sql .cmt{color:var(--muted);}
+[data-theme="light"] .sql .kw{color:#0000ff;} [data-theme="light"] .sql .fn{color:#795e26;} [data-theme="light"] .sql .str{color:#a31515;}
+.search-pane{border-top:1px solid var(--border);flex:1;display:flex;flex-direction:column;min-height:0;}
+.search-pane .sp-head{height:30px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);}
+.search-pane .sp-head b{color:var(--fg);font-weight:600;}
+.search-pane .sp-body{flex:1;overflow:auto;padding:4px 0;}
+.hit{padding:3px 12px;font-family:Consolas,monospace;font-size:11.5px;color:var(--muted);white-space:pre;}
+.hit .file{color:var(--fg);}
+.hit .ln{color:var(--info);}
+.hit.ctx{opacity:.72;}
+.hit mark{background:var(--search-match);color:var(--search-match-fg);border-radius:2px;padding:0 1px;}
+
+/* ── 右侧边栏 ── */
+.sidebar-r{width:250px;flex:none;background:var(--sidebar);border-left:1px solid var(--sidebar-border);display:flex;flex-direction:column;padding:8px;}
+.card{border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:8px;background:var(--bg);}
+.card-head{height:28px;display:flex;align-items:center;padding:0 10px;font-size:11.5px;color:var(--muted);background:var(--tabbar);}
+.card-body{padding:8px 10px;font-size:11.5px;color:var(--muted);line-height:1.75;}
+
+.statusbar{display:flex;align-items:center;justify-content:space-between;height:24px;background:var(--primary);color:var(--primary-fg);font-size:11.5px;padding:0 10px;}
+.statusbar .l,.statusbar .r{display:flex;align-items:center;gap:14px;}
+.statusbar .btn{padding:0 5px;border-radius:3px;}
+.statusbar .btn:hover{background:color-mix(in srgb,var(--primary-fg) 22%,transparent);}
+
+/* ── 状态示意 ── */
+.states{max-width:1180px;margin:16px auto 0;display:flex;gap:14px;flex-wrap:wrap;}
+.state{flex:1;min-width:300px;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+.state h4{font-size:12px;font-weight:700;margin-bottom:9px;color:var(--fg);}
+.state .hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6;}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:14px 8px;color:var(--muted);}
+.empty .big{font-size:30px;margin-bottom:8px;color:var(--ic-folder);}
+.empty .t{font-size:12.5px;font-weight:600;color:var(--fg);margin-bottom:4px;}
+.empty .d{font-size:11px;line-height:1.6;margin-bottom:10px;}
+.empty .btns{display:flex;gap:8px;}
+.btn-p{background:var(--primary);color:var(--primary-fg);border:none;border-radius:6px;padding:5px 12px;font-size:11.5px;font-weight:600;}
+.btn-s{background:var(--bg);color:var(--fg);border:1px solid var(--input-border);border-radius:6px;padding:5px 12px;font-size:11.5px;}
+.menu{border:1px solid var(--border);border-radius:7px;background:var(--popover-bg,var(--bg));box-shadow:var(--shadow);padding:4px;max-width:230px;}
+[data-theme="dark"] .menu{background:var(--sidebar);}
+.menu .mi{display:flex;align-items:center;gap:8px;padding:5px 9px;border-radius:5px;font-size:12px;color:var(--fg);}
+.menu .mi:hover{background:var(--hover);}
+.menu .sep{height:1px;background:var(--border);margin:4px 6px;}
+.menu .mi.danger{color:var(--danger);}
+.menu .shortcut{margin-left:auto;color:var(--muted);font-size:10.5px;}
+.undo{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:7px;background:var(--sidebar);padding:8px 12px;font-size:12px;color:var(--fg);}
+.undo .grow{flex:1;}
+.undo .link{color:var(--primary);font-weight:600;}
+
+/* ── token 对照 ── */
+.tokens{max-width:1180px;margin:18px auto 0;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:14px 16px;}
+.tokens h3{font-size:13px;margin-bottom:10px;color:var(--fg);}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:7px;}
+.chip{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);}
+.sw{width:26px;height:18px;border-radius:4px;border:1px solid rgba(0,0,0,.16);flex:none;}
+.chip .name{flex:1;color:var(--fg);}
+.foot{max-width:1180px;margin:14px auto 0;color:var(--muted);font-size:11.5px;line-height:1.8;}
+.foot code{background:var(--sidebar);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-family:Consolas,monospace;}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <div class="brand">
+    <div class="logo">R</div>
+    <div>
+      <h1>草稿箱（项目工作区）· 原型</h1>
+      <div class="sub">根 = 项目目录 · 左侧 Dock 240px · 内部元数据隐藏于 .RSmeta/scratchpad/</div>
+    </div>
+  </div>
+  <button class="theme-toggle" onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';">◐ 切换明暗</button>
+</div>
+
+<div class="wrap">
+<div class="app">
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <div class="tb-left">
+      <div class="app-logo"></div>
+      <div class="cutout"><span class="cutout-label">项目</span><span class="cutout-name">营销分析</span></div>
+    </div>
+    <div class="tb-center"><div class="quick-open"><span>⌕</span> 搜索或输入命令… <kbd>Ctrl+P</kbd></div></div>
+    <div class="tb-right"><div class="wc">─</div><div class="wc">□</div><div class="wc close">✕</div></div>
+  </div>
+
+  <div class="main">
+    <!-- 左活动栏 -->
+    <div class="activity l">
+      <div class="a-icon active">▤</div>
+      <div class="a-icon">▣</div>
+      <div class="a-icon">▥</div>
+      <div class="a-icon">▦</div>
+      <div class="a-spacer"></div>
+      <div class="a-btn">⚙</div>
+    </div>
+
+    <!-- 左侧边栏：草稿箱 -->
+    <div class="sidebar-l">
+      <div class="panel-head">
+        <span class="ttl">草稿箱</span>
+        <div class="actions"><span>⋯</span></div>
+      </div>
+
+      <div class="toolbar">
+        <button class="tb-btn" title="新建文件">＋</button>
+        <button class="tb-btn" title="新建文件夹">🗀</button>
+        <div class="tb-sep"></div>
+        <button class="tb-btn" title="导入文件">⬇</button>
+        <button class="tb-btn" title="添加外部引用">🔗</button>
+        <div class="tb-sep"></div>
+        <button class="tb-btn" title="排序：名称/大小/修改时间">⇅</button>
+        <button class="tb-btn" title="刷新">↻</button>
+      </div>
+
+      <div class="search">
+        <div class="box"><span class="mag">⌕</span><input placeholder="搜索文件…"></div>
+        <button class="chip-btn" title="正则">.*</button>
+        <button class="chip-btn" title="区分大小写">Aa</button>
+      </div>
+
+      <div class="panel-body">
+        <!-- 项目文件 -->
+        <div class="group">
+          <div class="group-head"><span class="chev">▼</span> 项目文件 · 营销分析</div>
+
+          <div class="row"><span class="chev">▸</span>
+            <svg class="ic folder" viewBox="0 0 16 16"><path d="M1.5 3.5h4l1.3 1.8h7.7v7.2h-13z"/></svg>
+            <span class="nm">data</span><span class="meta">3 项</span></div>
+
+          <div class="row sel"><span class="chev">▸</span>
+            <svg class="ic sql" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+            <span class="nm">临时订单分析.sql</span><span class="dirty">●</span><span class="meta">2 分钟</span></div>
+
+          <div class="row"><span class="chev"></span>
+            <svg class="ic py" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+            <span class="nm">transform.py</span><span class="meta">1 小时</span></div>
+
+          <div class="row"><span class="chev"></span>
+            <svg class="ic data" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+            <span class="nm">sample.csv</span><span class="meta">1.2 MB</span></div>
+
+          <div class="row"><span class="chev"></span>
+            <svg class="ic file" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+            <span class="nm">README.md</span><span class="meta">昨天</span></div>
+
+          <!-- 内联新建（选中 data 文件夹后） -->
+          <div class="newrow"><span class="indent"></span>
+            <svg class="ic file" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+            <input value="新建查询.sql" autofocus></div>
+        </div>
+
+        <!-- 外部引用 -->
+        <div class="group">
+          <div class="group-head"><span class="chev">▼</span> 外部引用 <span class="badge">1</span></div>
+          <div class="row"><span class="chev"></span>
+            <svg class="ic ref" viewBox="0 0 16 16"><path d="M6.5 9.5l3-3"/><path d="M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1"/><path d="M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/></svg>
+            <span class="nm">下载数据</span><span class="meta">D:\data\</span></div>
+        </div>
+
+        <!-- 回收站 -->
+        <div class="group">
+          <div class="group-head"><span class="chev">▶</span> 回收站 <span class="badge">3</span></div>
+        </div>
+      </div>
+
+      <div class="panel-foot">12 个文件 · 3 个文件夹 · 项目:营销分析</div>
+    </div>
+
+    <!-- 中央编辑区 -->
+    <div class="editor">
+      <div class="editor-tabs">
+        <div class="etab">
+          <svg class="ic sql" viewBox="0 0 16 16" style="width:13px;height:13px"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
+          临时订单分析.sql <span class="x">✕</span>
+        </div>
+      </div>
+      <div class="editor-body">
+        <div class="sql">
+          <span class="cmt">-- 草稿箱文件模式：连接 + 执行，Ctrl+S 回存项目文件</span><br>
+          <span class="kw">SELECT</span> <span class="fn">date_trunc</span>(<span class="str">'day'</span>, created_at) <span class="kw">AS</span> d,<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="fn">count</span>(*) <span class="kw">AS</span> cnt<br>
+          <span class="kw">FROM</span> analytics.orders<br>
+          <span class="kw">WHERE</span> created_at <span class="kw">>=</span> <span class="str">'2026-01-01'</span><br>
+          <span class="kw">GROUP BY</span> 1 <span class="kw">ORDER BY</span> 1;
+        </div>
+        <div class="search-pane">
+          <div class="sp-head">搜索：<b>created_at</b> · 4 个文件 · 12 处匹配 <span style="margin-left:auto">正则 ✕ · 大小写 ✕</span></div>
+          <div class="sp-body">
+            <div class="hit"><span class="file">临时订单分析.sql</span></div>
+            <div class="hit ctx">  4: <span class="kw">SELECT</span> date_trunc('day', created_at) AS d,</div>
+            <div class="hit ctx">  5:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;count(*) AS cnt</div>
+            <div class="hit">  6: <span class="kw">WHERE</span> <mark>created_at</mark> &gt;= '2026-01-01'</div>
+            <div class="hit ctx">  7: <span class="kw">GROUP BY</span> 1 ORDER BY 1;</div>
+            <div class="hit" style="margin-top:6px"><span class="file">data\report.sql</span> <span class="ln">12</span></div>
+            <div class="hit"> 12: <span class="kw">WHERE</span> <mark>created_at</mark> &gt; now() - interval '7 day'</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右活动栏 + 右侧边栏 -->
+    <div class="activity r">
+      <div class="a-icon">✦</div>
+      <div class="a-icon">⚗</div>
+      <div class="a-icon">◷</div>
+      <div class="a-spacer"></div>
+      <div class="a-btn">⚙</div>
+    </div>
+    <div class="sidebar-r">
+      <div class="card">
+        <div class="card-head">洞察</div>
+        <div class="card-body">库/表/列画像占位。<br>草稿箱文件可右键「提升为分析资源」。</div>
+      </div>
+      <div class="card">
+        <div class="card-head">最近打开</div>
+        <div class="card-body">临时订单分析.sql<br>transform.py</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="statusbar">
+    <div class="l"><span class="btn">« 完全隐藏</span><span>草稿箱</span></div>
+    <div class="r"><span>16 项 · 1 个脏文件</span><span>本地 MySQL · DuckDB · UTF-8</span></div>
+  </div>
+</div>
+</div>
+
+<!-- 状态示意 -->
+<div class="states">
+  <div class="state">
+    <h4>空态（项目根无用户文件）</h4>
+    <div class="empty">
+      <div class="big">🗀</div>
+      <div class="t">项目工作区还没有文件</div>
+      <div class="d">草稿箱根即项目目录，随手新建或导入 SQL、脚本、数据文件。</div>
+      <div class="btns"><button class="btn-p">新建文件</button><button class="btn-s">导入文件</button></div>
+    </div>
+    <div class="hint">项目未打开时显示提示，并禁用项目作用域操作。</div>
+  </div>
+
+  <div class="state">
+    <h4>右键菜单（文件）</h4>
+    <div class="menu">
+      <div class="mi">打开 <span class="shortcut">Enter</span></div>
+      <div class="mi">重命名 <span class="shortcut">F2</span></div>
+      <div class="sep"></div>
+      <div class="mi">剪切 <span class="shortcut">Ctrl+X</span></div>
+      <div class="mi">复制 <span class="shortcut">Ctrl+C</span></div>
+      <div class="mi">粘贴到此文件夹</div>
+      <div class="sep"></div>
+      <div class="mi">提升为分析资源</div>
+      <div class="mi">在文件管理器中显示</div>
+      <div class="sep"></div>
+      <div class="mi danger">删除 <span class="shortcut">Del</span></div>
+    </div>
+  </div>
+
+  <div class="state">
+    <h4>删除撤销栏（5 秒）</h4>
+    <div class="undo"><span>已删除 <b>sample.csv</b> 到回收站</span><span class="grow"></span><span class="link">撤销</span></div>
+    <div class="hint" style="margin-top:12px">移动/剪切同样弹出撤销栏；回收站折叠区可恢复或清空。</div>
+  </div>
+</div>
+
+<!-- token 对照 -->
+<div class="tokens">
+  <h3>草稿箱主题映射（当前主题实时取色）</h3>
+  <div class="grid">
+    <div class="chip"><div class="sw" style="background:var(--sidebar)"></div><span class="name">面板底 sidebar</span></div>
+    <div class="chip"><div class="sw" style="background:var(--hover)"></div><span class="name">行悬停 list.hover</span></div>
+    <div class="chip"><div class="sw" style="background:var(--accent)"></div><span class="name">行选中 sidebar.accent</span></div>
+    <div class="chip"><div class="sw" style="background:var(--active-border)"></div><span class="name">选中左边条 list.active.border</span></div>
+    <div class="chip"><div class="sw" style="background:var(--bg)"></div><span class="name">搜索框 / 弹层 background</span></div>
+    <div class="chip"><div class="sw" style="background:var(--primary)"></div><span class="name">脏点 / 主按钮 primary</span></div>
+    <div class="chip"><div class="sw" style="background:var(--ic-folder)"></div><span class="name">文件夹图标 warning</span></div>
+    <div class="chip"><div class="sw" style="background:var(--ic-sql)"></div><span class="name">SQL 图标 info</span></div>
+    <div class="chip"><div class="sw" style="background:var(--ic-py)"></div><span class="name">Python 图标 success</span></div>
+    <div class="chip"><div class="sw" style="background:var(--ic-data)"></div><span class="name">数据文件 base.cyan</span></div>
+    <div class="chip"><div class="sw" style="background:var(--search-match)"></div><span class="name">搜索高亮（产品 token，待定）</span></div>
+    <div class="chip"><div class="sw" style="background:var(--danger)"></div><span class="name">危险操作 danger</span></div>
+  </div>
+</div>
+
+<div class="foot">
+  落地：面板视图 <code>crates/workbench/src/components/scratchpad_panel.rs</code>，域模型/存储 <code>crates/scratchpad</code>，根目录语义与 <code>.RSmeta/scratchpad/</code> 元数据迁移见 <code>scratchpad-dev-plan.md</code> Phase A。<br>
+  色值只存在于主题资产，组件经 <code>cx.theme()</code> 读取，代码零裸 hex。
+</div>
+</body>
+</html>

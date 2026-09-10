@@ -16,6 +16,11 @@
 | `connection/connection-prototype-design.md` | 连接模块原型 | 新增连接对话框布局（v5 对齐）/ 五 Tab / 交互 / 主题映射 |
 | `connection/connection-dialog-prototype.html` | 连接模块原型（交互稿） | RDS Light/Dark 双主题新增连接对话框示意（可交互） |
 | `connection/connection-dev-plan.md` | 连接模块开发方案 | Phase A/B/C 任务 / 文件落点 / 测试场景 / 风险 |
+| `database/database-navigator-prototype-design.md` | 数据源管理 / 数据库导航原型 | 合并面板布局 / 树模型与作用域 / 三级元数据管线 / 交互 / 主题映射 / 落点 |
+| `database/database-navigator-prototype.html` | 数据源管理 / 数据库导航原型（交互稿） | RDS Light/Dark 双主题面板示意（树 / 加载 / 搜索 / 右键菜单 / 空态可切） |
+| `scratchpad/scratchpad-prototype-design.md` | 草稿箱原型 | 根 = 项目目录 / 240px 左 Dock 面板 / 树与交互 / 主题映射 |
+| `scratchpad/scratchpad-prototype.html` | 草稿箱原型（交互稿） | RDS Light/Dark 项目工作区示意（可交互） |
+| `scratchpad/scratchpad-dev-plan.md` | 草稿箱开发方案 | P0 项目会话 + Phase A/B/C / 文件落点 / 测试场景 / 风险 |
 | `dependencies/dependency-strategy.md` | 依赖治理 | 版本唯一入口 / 升级流程 / 编译时间手段 / 跨大版本待办 |
 
 ## 关联目录
@@ -25,4 +30,4 @@
 
 ## 阅读顺序建议
 
-1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/`
+1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `scratchpad/`

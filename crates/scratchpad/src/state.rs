@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use shared::error::CoreError;
 use crate::ScratchpadStore;
+use shared::error::CoreError;
 
 pub struct ScratchpadState {
     pub store: Arc<Mutex<Option<ScratchpadStore>>>,
@@ -20,6 +20,7 @@ impl ScratchpadState {
     }
 
     pub async fn init(&self, project_path: PathBuf) -> Result<(), CoreError> {
+        // v2 语义：`project_path` 即项目根（草稿箱根）；内部元数据落 `.RSmeta/scratchpad`。
         let store = ScratchpadStore::new(project_path);
         {
             let mut guard = self.store.lock().await;
@@ -32,6 +33,20 @@ impl ScratchpadState {
             );
         }
         Ok(())
+    }
+
+    /// 当前草稿箱存储句柄（未初始化时为 `None`）。
+    pub async fn store(&self) -> Option<ScratchpadStore> {
+        self.store.lock().await.clone()
+    }
+
+    /// 当前项目根目录（即草稿箱根，未初始化时为 `None`）。
+    pub async fn project_root(&self) -> Option<PathBuf> {
+        self.store
+            .lock()
+            .await
+            .as_ref()
+            .map(|s| s.scratchpad_dir().to_path_buf())
     }
 
     pub fn is_watching(&self) -> bool {
