@@ -1,0 +1,148 @@
+{
+  "driverId": "postgres",
+  "driverName": "PostgreSQL",
+  "version": "16.0",
+  "metadata": {
+    "category": "relational",
+    "description": "PostgreSQL 强大的开源关系型数据库",
+    "features": ["事务", "视图", "存储过程", "触发器", "JSON 支持", "全文搜索", "流复制"],
+    "defaultPort": 5432,
+    "driverKind": "native",
+    "urlTemplate": "postgres://{username}:{password}@{host}:{port}/{database}",
+    "requireFile": false,
+    "requireDatabase": true,
+    "supportsSsl": true,
+    "supportsSshTunnel": true,
+    "supportsHttpProxy": true,
+    "supportsSocksProxy": true
+  },
+  "sections": [
+    {
+      "key": "connection",
+      "title": "连接设置",
+      "icon": "database",
+      "fields": [
+        {
+          "key": "host",
+          "label": "主机",
+          "type": "text",
+          "placeholder": "localhost",
+          "required": true,
+          "default": "localhost",
+          "inline": true,
+          "flex": 2
+        },
+        {
+          "key": "port",
+          "label": "端口",
+          "type": "number",
+          "placeholder": "5432",
+          "required": true,
+          "default": 5432,
+          "inline": true,
+          "flex": 1
+        },
+        {
+          "key": "database",
+          "label": "数据库",
+          "type": "text",
+          "placeholder": "postgres",
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "auth",
+      "title": "身份验证",
+      "icon": "user",
+      "fields": [
+        {
+          "key": "authMethod",
+          "label": "认证方式",
+          "type": "select",
+          "default": "password",
+          "options": [
+            { "label": "密码", "value": "password" },
+            { "label": "信任", "value": "trust" },
+            { "label": "证书", "value": "cert" },
+            { "label": "MD5", "value": "md5" },
+            { "label": "SCRAM-SHA-256", "value": "scram-sha-256" }
+          ]
+        },
+        {
+          "key": "username",
+          "label": "用户名",
+          "type": "text",
+          "placeholder": "postgres",
+          "required": true
+        },
+        {
+          "key": "password",
+          "label": "密码",
+          "type": "password",
+          "placeholder": "输入密码"
+        }
+      ]
+    },
+    {
+      "key": "advanced",
+      "title": "高级选项",
+      "icon": "settings",
+      "collapsible": true,
+      "collapsed": true,
+      "fields": [
+        {
+          "key": "applicationName",
+          "label": "应用名称",
+          "type": "text",
+          "placeholder": "RdataStation",
+          "default": "RdataStation"
+        },
+        {
+          "key": "connectTimeout",
+          "label": "连接超时 (秒)",
+          "type": "number",
+          "default": 10,
+          "validation": { "min": 1, "max": 300 }
+        },
+        {
+          "key": "useCompression",
+          "label": "启用压缩",
+          "type": "checkbox",
+          "default": false
+        }
+      ]
+    }
+  ],
+  "navigation": {
+    "hasCatalogs": true,
+    "hasSchemas": true,
+    "systemSchemas": ["information_schema", "pg_catalog", "pg_toast"],
+    "folders": {
+      "tables": { "enabled": true, "label": "Tables", "icon": "table", "childTypes": ["table"] },
+      "views": { "enabled": true, "label": "Views", "icon": "eye", "childTypes": ["view"] },
+      "functions": {
+        "enabled": true,
+        "label": "Functions",
+        "icon": "function",
+        "childTypes": ["function"]
+      },
+      "procedures": {
+        "enabled": true,
+        "label": "Procedures",
+        "icon": "terminal",
+        "childTypes": ["procedure"]
+      },
+      "sequences": { "enabled": true, "label": "Sequences", "icon": "hash", "childTypes": [] },
+      "triggers": { "enabled": true, "label": "Triggers", "icon": "zap", "childTypes": [] }
+    },
+    "tableChildren": {
+      "columns": true,
+      "indexes": true,
+      "constraints": true,
+      "triggers": true,
+      "foreignKeys": true,
+      "references": false
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "query",
+  "publisher": "rdatastation",
+  "version": "1.0.0",
+  "displayName": "Query",
+  "description": "query module for RdataStation",
+  "categories": [
+    "Core"
+  ],
+  "keywords": [
+    "query"
+  ],
+  "engines": {
+    "rdatastation": "^0.1.0"
+  },
+  "activationEvents": [
+    "onProjectOpen"
+  ],
+  "contributes": {
+    "commands": [],
+    "menus": {},
+    "views": {}
+  },
+  "main": "./extension.ts"
+}

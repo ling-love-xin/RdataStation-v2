@@ -1,0 +1,36 @@
+[meta]
+id = "boolean-ratio"
+name = "布尔值比例"
+description = "计算布尔列 True/False 数量和比例"
+version = "1.0"
+category = "column"
+applies_to = ["Boolean", "BOOLEAN", "BOOL"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    COUNT(*) FILTER (WHERE "{col}") AS true_count,
+    COUNT(*) FILTER (WHERE NOT "{col}") AS false_count
+FROM "{table}"
+"""
+parameters = ["table", "col"]
+
+[[output]]
+sql_name = "true_count"
+json_name = "true_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "false_count"
+json_name = "false_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "true_count"
+json_name = "true_ratio"
+value_type = "f64"
+
+[render]
+component = "BooleanStatsInfo"
+display_order = 7

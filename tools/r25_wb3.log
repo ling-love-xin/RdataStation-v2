@@ -1,0 +1,69 @@
+﻿cargo : warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc7358
+54a.lib 和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a.exp
+所在位置 行:1 字符: 1
++ cargo test -p rds-workbench -j 2 --manifest-path "D:\RdataStation\RDS ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: linker...bbdc735854a.exp:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (lib test) generated 1 warning
+   Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-2f7cb662bf0cd4ed.l
+ib 和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-2f7cb662bf0cd4ed.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "real_connections") generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\examples\seed_demo.lib 和对象 D:\RdataStati
+on\RDS\RdataStation-v2\target\debug\examples\seed_demo.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (example "seed_demo") generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\db_navigator-b4bdacc0ed4de0f4.lib 和
+对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\db_navigator-b4bdacc0ed4de0f4.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "db_navigator") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.13s
+     Running unittests src\lib.rs (D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a
+.exe)
+
+running 8 tests
+test services::secret_integration::tests::test_parse_full_url ... ok
+test services::secret_integration::tests::test_parse_file_db ... ok
+test services::secret_integration::tests::test_db_type_mapping ... ok
+test services::secret_integration::tests::test_parse_without_creds ... ok
+test services::secret_integration::tests::test_secret_name_sanitize ... ok
+test services::connection_service::tests::test_connect_empty_url ... ok
+test services::connection_service::tests::test_connect_invalid_db_type ... ok
+test services::secret_integration::tests::test_register_postgres_secret_roundtrip ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests\db_navigator.rs (D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\db_navigator-b4bdacc0ed4de0f4
+.exe)
+
+running 2 tests
+test navigator_empty_db_returns_empty ... ok
+test navigator_reads_tables_and_columns ... FAILED
+
+failures:
+
+---- navigator_reads_tables_and_columns stdout ----
+
+thread 'navigator_reads_tables_and_columns' (9984) panicked at crates\workbench\tests\db_navigator.rs:40:5:
+assertion failed: orders.columns.iter().any(|c| c.name == "order_id" && c.is_primary_key)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    navigator_reads_tables_and_columns
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+error: test failed, to rerun pass `-p rds-workbench --test db_navigator`

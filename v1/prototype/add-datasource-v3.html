@@ -1,0 +1,2002 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>添加数据源 — RdataStation 原型</title>
+    <style>
+      :root {
+        --bg-base: #1e1e2e;
+        --bg-surface: #1a1b26;
+        --bg-raised: #11111b;
+        --bg-hover: rgba(255, 255, 255, 0.05);
+        --bg-active: #2a2a3c;
+        --border: rgba(255, 255, 255, 0.07);
+        --text-primary: #cdd6f4;
+        --text-secondary: #a6adc8;
+        --text-muted: #6c7086;
+        --accent: #89b4fa;
+        --accent-bg: rgba(137, 180, 250, 0.1);
+        --success: #a6e3a1;
+        --warning: #f9e2af;
+        --danger: #f38ba8;
+        --purple: #cba6f7;
+        --green: #94e2d5;
+        --orange: #fab387;
+        --radius: 8px;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: var(--bg-base);
+        color: var(--text-primary);
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        min-height: 100vh;
+        padding: 32px 20px;
+      }
+      .outer {
+        width: 100%;
+        max-width: 1100px;
+      }
+
+      /* ===== 对话框壳 ===== */
+      .dialog {
+        background: var(--bg-surface);
+        border-radius: 12px;
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.05),
+          0 24px 64px rgba(0, 0, 0, 0.5);
+        display: flex;
+        flex-direction: column;
+        max-height: 750px;
+        overflow: hidden;
+      }
+      .dialog-titlebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 22px;
+        border-bottom: 1px solid var(--border);
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        user-select: none;
+      }
+      .title-actions {
+        display: flex;
+        gap: 10px;
+      }
+      .title-actions .dot {
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+      }
+      .title-actions .dot.min {
+        background: #f9e2af;
+      }
+      .title-actions .dot.max {
+        background: #a6e3a1;
+      }
+      .title-actions .dot.cls {
+        background: #f38ba8;
+      }
+
+      .dialog-body {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      /* ===== 左侧栏 ===== */
+      .sidebar {
+        width: 250px;
+        min-width: 250px;
+        background: var(--bg-raised);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+      }
+      .sidebar-search {
+        padding: 12px;
+        position: relative;
+      }
+      .sidebar-search input {
+        width: 100%;
+        height: 34px;
+        padding: 0 12px 0 34px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 12px;
+        outline: none;
+        transition: border 0.2s;
+      }
+      .sidebar-search input:focus {
+        border-color: var(--accent);
+      }
+      .sidebar-search .search-icon {
+        position: absolute;
+        left: 22px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        font-size: 14px;
+        pointer-events: none;
+      }
+
+      /* 已保存数据源 */
+      .saved-section {
+        padding: 0 0 6px;
+      }
+      .saved-section-title {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        padding: 8px 14px 6px;
+        letter-spacing: 0.7px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .saved-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-secondary);
+        transition: all 0.12s;
+        border-radius: 0;
+      }
+      .saved-item:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .saved-item.active {
+        background: var(--bg-active);
+        color: var(--accent);
+        font-weight: 500;
+      }
+      .saved-item .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .status-dot.connected {
+        background: var(--success);
+      }
+      .status-dot.disconnected {
+        background: var(--text-muted);
+      }
+      .saved-item .db-icon-mini {
+        width: 18px;
+        height: 18px;
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+      .db-icon-mini.mysql {
+        background: #00758f;
+        color: #fff;
+      }
+      .db-icon-mini.pg {
+        background: #336791;
+        color: #fff;
+      }
+      .db-icon-mini.sqlite {
+        background: #003b57;
+        color: #a6e3a1;
+      }
+      .db-icon-mini.duckdb {
+        background: #f9a825;
+        color: #000;
+      }
+      .saved-item .item-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .sidebar-divider {
+        height: 1px;
+        background: var(--border);
+        margin: 6px 12px;
+      }
+
+      /* 数据库类型手风琴 */
+      .db-section {
+        padding: 4px 0;
+      }
+      .db-section-title {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        padding: 8px 14px 6px;
+        letter-spacing: 0.7px;
+      }
+      .db-category {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 14px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-muted);
+        transition: all 0.12s;
+      }
+      .db-category:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .db-category.expanded {
+        color: var(--text-primary);
+      }
+      .db-category .arrow {
+        font-size: 9px;
+        color: var(--text-muted);
+        transition: transform 0.15s;
+        width: 12px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      .db-category.expanded .arrow {
+        transform: rotate(90deg);
+      }
+      .db-category .cat-icon {
+        font-size: 15px;
+        width: 20px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      .db-category .cat-count {
+        margin-left: auto;
+        font-size: 10px;
+        color: var(--text-muted);
+        padding: 1px 6px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 8px;
+      }
+
+      .db-type-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px 6px 32px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-muted);
+        transition: all 0.12s;
+      }
+      .db-type-item:hover {
+        background: var(--bg-hover);
+        color: var(--text-secondary);
+      }
+      .db-type-item.selected {
+        background: var(--bg-active);
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .db-type-item .type-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .db-type-item .driver-count {
+        margin-left: auto;
+        font-size: 10px;
+        color: var(--text-muted);
+        padding: 1px 6px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 8px;
+      }
+
+      /* ===== 右侧主面板 ===== */
+      .main-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ===== Header 三行 ===== */
+      .panel-header {
+        padding: 16px 24px 12px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .header-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .header-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-muted);
+        width: 64px;
+        flex-shrink: 0;
+        text-align: right;
+      }
+      .header-input {
+        flex: 1;
+        height: 34px;
+        padding: 0 12px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 13px;
+        outline: none;
+        transition: border 0.2s;
+      }
+      .header-input:focus {
+        border-color: var(--accent);
+      }
+      .header-input.error {
+        border-color: var(--danger);
+      }
+
+      .scope-toggles {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-shrink: 0;
+      }
+      .scope-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-secondary);
+        user-select: none;
+      }
+      .scope-checkbox .cb {
+        width: 15px;
+        height: 15px;
+        border: 1.5px solid rgba(255, 255, 255, 0.15);
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+        flex-shrink: 0;
+      }
+      .scope-checkbox input {
+        display: none;
+      }
+      .scope-checkbox input:checked + .cb {
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+      .scope-checkbox input:checked + .cb::after {
+        content: '✓';
+        color: var(--bg-raised);
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .scope-checkbox.disabled {
+        opacity: 0.35;
+        pointer-events: none;
+      }
+
+      .driver-select-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .driver-select {
+        height: 34px;
+        padding: 0 12px;
+        min-width: 200px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 12px;
+        outline: none;
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236c7086' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 10px center;
+        padding-right: 32px;
+        transition: border 0.2s;
+      }
+      .driver-select:focus {
+        border-color: var(--accent);
+      }
+      .uri-display {
+        flex: 1;
+        height: 34px;
+        padding: 0 12px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--success);
+        font-size: 11px;
+        font-family: 'JetBrains Mono', monospace;
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .uri-edit-btn {
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        border-radius: 5px;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 14px;
+        flex-shrink: 0;
+        transition: all 0.12s;
+      }
+      .uri-edit-btn:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+
+      /* ===== 标签页导航 ===== */
+      .tabs-bar {
+        display: flex;
+        gap: 0;
+        padding: 0 24px;
+        border-bottom: 1px solid var(--border);
+        background: #181825;
+      }
+      .tab-btn {
+        padding: 10px 18px;
+        border: none;
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s;
+        border-bottom: 2px solid transparent;
+        position: relative;
+        top: 1px;
+      }
+      .tab-btn:hover {
+        color: var(--text-primary);
+      }
+      .tab-btn.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+
+      /* ===== 标签页内容 ===== */
+      .tab-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 24px;
+      }
+      .tab-pane {
+        display: none;
+      }
+      .tab-pane.active {
+        display: block;
+      }
+
+      /* 表单 */
+      .form-section {
+        margin-bottom: 22px;
+      }
+      .form-section .section-title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 12px;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .section-title .drv-tag {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+      }
+      .drv-tag.sqlx {
+        background: rgba(244, 102, 35, 0.15);
+        color: #f46623;
+      }
+      .drv-tag.diesel {
+        background: rgba(102, 68, 184, 0.15);
+        color: #b794f4;
+      }
+      .drv-tag.python {
+        background: rgba(55, 118, 171, 0.15);
+        color: #5d9fd3;
+      }
+      .drv-tag.go {
+        background: rgba(0, 173, 216, 0.15);
+        color: #00add8;
+      }
+      .drv-tag.native {
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text-secondary);
+      }
+
+      .form-row {
+        display: flex;
+        gap: 14px;
+        margin-bottom: 12px;
+      }
+      .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .form-group.f2 {
+        flex: 2;
+      }
+      .form-group.f1 {
+        flex: 1;
+      }
+      .form-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        font-weight: 500;
+      }
+      .form-input,
+      .form-select {
+        height: 34px;
+        padding: 0 12px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 13px;
+        outline: none;
+        transition: border 0.2s;
+        width: 100%;
+      }
+      .form-input:focus,
+      .form-select:focus {
+        border-color: var(--accent);
+      }
+      .form-select {
+        cursor: pointer;
+      }
+      .form-hint {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 3px;
+      }
+      textarea.form-input {
+        height: auto;
+        min-height: 60px;
+        resize: vertical;
+        padding: 10px 12px;
+      }
+
+      .info-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px 14px;
+        background: rgba(137, 180, 250, 0.04);
+        border: 1px solid rgba(137, 180, 250, 0.1);
+        border-radius: 6px;
+        font-size: 12px;
+        color: var(--accent);
+        margin-bottom: 16px;
+        line-height: 1.5;
+      }
+      .info-banner .bicon {
+        font-size: 15px;
+        flex-shrink: 0;
+        margin-top: 1px;
+      }
+
+      /* 文件选择 */
+      .file-input-row {
+        display: flex;
+        gap: 8px;
+      }
+      .file-input-row .form-input {
+        flex: 1;
+      }
+      .btn-browse {
+        height: 34px;
+        padding: 0 14px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-secondary);
+        font-size: 12px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.15s;
+      }
+      .btn-browse:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      /* Props 表格 */
+      .props-table {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        font-size: 12px;
+      }
+      .props-table th {
+        text-align: left;
+        padding: 10px 14px;
+        background: var(--bg-raised);
+        color: var(--text-muted);
+        font-weight: 600;
+        border-bottom: 1px solid var(--border);
+      }
+      .props-table td {
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-secondary);
+      }
+      .props-table tr:last-child td {
+        border-bottom: none;
+      }
+      .props-table td input {
+        width: 100%;
+        height: 30px;
+        padding: 0 10px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 4px;
+        color: var(--text-primary);
+        font-size: 12px;
+        outline: none;
+      }
+      .props-table td input:focus {
+        border-color: var(--accent);
+      }
+      .cap-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+      }
+      .cap-badge.yes {
+        background: rgba(166, 227, 161, 0.08);
+        color: var(--success);
+      }
+      .cap-badge.no {
+        background: rgba(243, 139, 168, 0.08);
+        color: var(--danger);
+      }
+
+      /* 折叠面板 */
+      .collapse-panel {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        margin-bottom: 12px;
+        overflow: hidden;
+      }
+      .collapse-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: var(--bg-raised);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        user-select: none;
+        transition: background 0.15s;
+      }
+      .collapse-header:hover {
+        background: #181825;
+      }
+      .collapse-header .carrow {
+        font-size: 10px;
+        color: var(--text-muted);
+        transition: transform 0.2s;
+        width: 12px;
+        flex-shrink: 0;
+      }
+      .collapse-header .carrow.open {
+        transform: rotate(90deg);
+      }
+      .collapse-body {
+        padding: 16px;
+        background: var(--bg-surface);
+        display: none;
+      }
+      .collapse-body.open {
+        display: block;
+      }
+      .cswitch {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+      .cswitch .switch-toggle {
+        width: 36px;
+        height: 20px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        position: relative;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      .cswitch .switch-toggle.on {
+        background: var(--accent);
+      }
+      .cswitch .switch-toggle::after {
+        content: '';
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        transition: left 0.2s;
+      }
+      .cswitch .switch-toggle.on::after {
+        left: 18px;
+      }
+
+      /* 高级 tab */
+      .adv-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      /* duckdb 加速区 */
+      .accel-card {
+        border: 1px solid rgba(249, 168, 37, 0.2);
+        border-radius: var(--radius);
+        padding: 16px;
+        margin-top: 16px;
+        background: rgba(249, 168, 37, 0.03);
+      }
+      .accel-card .accel-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .accel-card .accel-header .accel-icon {
+        color: var(--warning);
+        font-size: 18px;
+      }
+      .accel-card .accel-header .accel-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--warning);
+      }
+      .accel-card .accel-header .accel-switch {
+        margin-left: auto;
+      }
+      .accel-card .accel-body {
+        display: none;
+      }
+      .accel-card .accel-body.show {
+        display: block;
+      }
+      .accel-card .accel-desc {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-bottom: 12px;
+        line-height: 1.5;
+      }
+
+      /* 底部操作栏 */
+      .dialog-footer {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 24px;
+        border-top: 1px solid var(--border);
+        background: #181825;
+      }
+      .test-result {
+        flex: 1;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .test-result.success {
+        color: var(--success);
+      }
+      .test-result.error {
+        color: var(--danger);
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 18px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s;
+        border: none;
+      }
+      .btn-test {
+        background: var(--bg-raised);
+        color: var(--text-secondary);
+        border: 1px solid var(--border);
+      }
+      .btn-test:hover {
+        background: var(--bg-active);
+        color: var(--text-primary);
+      }
+      .btn-cancel {
+        background: transparent;
+        color: var(--text-muted);
+      }
+      .btn-cancel:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #111;
+        font-weight: 600;
+      }
+      .btn-primary:hover {
+        filter: brightness(1.1);
+      }
+
+      /* 滚动条 */
+      ::-webkit-scrollbar {
+        width: 5px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      /* 放大提示 */
+      .annotation {
+        position: absolute;
+        font-size: 10px;
+        color: var(--warning);
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: rgba(249, 226, 175, 0.08);
+        pointer-events: none;
+        white-space: nowrap;
+      }
+      .relative {
+        position: relative;
+      }
+
+      .watermark {
+        font-size: 10px;
+        color: var(--text-muted);
+        text-align: center;
+        margin-top: 12px;
+        opacity: 0.4;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="outer">
+      <!-- ========== 对话框 ========== -->
+      <div class="dialog">
+        <div class="dialog-titlebar">
+          <span>✦ 添加数据源</span>
+          <div class="title-actions"
+            ><span class="dot min"></span><span class="dot max"></span><span class="dot cls"></span
+          ></div>
+        </div>
+
+        <div class="dialog-body">
+          <!-- ===== 左侧栏: 搜索 + 已保存 + 数据库分类 ===== -->
+          <div class="sidebar">
+            <!-- 搜索 -->
+            <div class="sidebar-search">
+              <span class="search-icon">🔍</span>
+              <input
+                type="text"
+                id="sidebarSearch"
+                placeholder="搜索数据库类型..."
+                oninput="filterDbTree(this.value)"
+              />
+            </div>
+
+            <!-- 暂存列表：当前添加会话中待保存的数据源 -->
+            <div class="saved-section">
+              <div class="saved-section-title">
+                暂存列表
+                <span
+                  style="font-weight: 400; opacity: 0.5; cursor: pointer"
+                  onclick="addStagingEntry()"
+                  title="添加新数据源到暂存区"
+                  >+ 添加</span
+                >
+              </div>
+              <div class="saved-item active" id="staging-item-0">
+                <span
+                  class="type-dot"
+                  style="background: var(--accent); width: 7px; height: 7px; border-radius: 50%"
+                  id="staging-status-0"
+                ></span>
+                <span class="db-icon-mini mysql" id="staging-icon-0">My</span>
+                <span class="item-name" id="staging-name-0">MySQL@localhost</span>
+                <span
+                  style="font-size: 10px; color: var(--text-muted); cursor: pointer; flex-shrink: 0"
+                  onclick="removeStagingEntry(0)"
+                  title="移除暂存"
+                  >✕</span
+                >
+              </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <!-- 数据库类型 手风琴 -->
+            <div class="db-section">
+              <div class="db-section-title">数据库类型</div>
+
+              <!-- 关系型 -->
+              <div
+                class="db-category expanded"
+                id="cat-relational"
+                onclick="toggleCategory('relational')"
+              >
+                <span class="arrow">▶</span>
+                <span class="cat-icon">🗄</span>
+                <span>关系型数据库</span>
+                <span class="cat-count">4</span>
+              </div>
+              <div id="items-relational" class="cat-items">
+                <div
+                  class="db-type-item selected"
+                  data-db="mysql"
+                  onclick="selectDbType('mysql', event)"
+                  title="MySQL"
+                >
+                  <span class="type-dot" style="background: #00758f"></span> MySQL
+                  <span class="driver-count">4 驱动</span>
+                </div>
+                <div
+                  class="db-type-item"
+                  data-db="postgresql"
+                  onclick="selectDbType('postgresql', event)"
+                  title="PostgreSQL"
+                >
+                  <span class="type-dot" style="background: #336791"></span> PostgreSQL
+                  <span class="driver-count">3 驱动</span>
+                </div>
+                <div
+                  class="db-type-item"
+                  data-db="mariadb"
+                  onclick="selectDbType('mariadb', event)"
+                  title="MariaDB"
+                >
+                  <span class="type-dot" style="background: #c0765a"></span> MariaDB
+                  <span class="driver-count">1 驱动</span>
+                </div>
+                <div
+                  class="db-type-item"
+                  data-db="sqlserver"
+                  onclick="selectDbType('sqlserver', event)"
+                  title="SQL Server"
+                >
+                  <span class="type-dot" style="background: #cc2927"></span> SQL Server
+                  <span class="driver-count">1 驱动</span>
+                </div>
+              </div>
+
+              <!-- 文件型 -->
+              <div class="db-category" id="cat-file" onclick="toggleCategory('file')">
+                <span class="arrow">▶</span>
+                <span class="cat-icon">📁</span>
+                <span>文件数据库</span>
+                <span class="cat-count">2</span>
+              </div>
+              <div id="items-file" class="cat-items" style="display: none">
+                <div
+                  class="db-type-item"
+                  data-db="sqlite"
+                  onclick="selectDbType('sqlite', event)"
+                  title="SQLite"
+                >
+                  <span class="type-dot" style="background: #687386"></span> SQLite
+                  <span class="driver-count">2 驱动</span>
+                </div>
+                <div
+                  class="db-type-item"
+                  data-db="duckdb"
+                  onclick="selectDbType('duckdb', event)"
+                  title="DuckDB"
+                >
+                  <span class="type-dot" style="background: #f9a825"></span> DuckDB
+                  <span class="driver-count">2 驱动</span>
+                </div>
+              </div>
+
+              <!-- NoSQL -->
+              <div class="db-category" id="cat-nosql" onclick="toggleCategory('nosql')">
+                <span class="arrow">▶</span>
+                <span class="cat-icon">📡</span>
+                <span>NoSQL</span>
+                <span class="cat-count">2</span>
+              </div>
+              <div id="items-nosql" class="cat-items" style="display: none">
+                <div
+                  class="db-type-item"
+                  data-db="mongodb"
+                  onclick="selectDbType('mongodb', event)"
+                  title="MongoDB"
+                >
+                  <span class="type-dot" style="background: #4db33d"></span> MongoDB
+                  <span class="driver-count">1 驱动</span>
+                </div>
+                <div
+                  class="db-type-item"
+                  data-db="redis"
+                  onclick="selectDbType('redis', event)"
+                  title="Redis"
+                >
+                  <span class="type-dot" style="background: #d82c20"></span> Redis
+                  <span class="driver-count">1 驱动</span>
+                </div>
+              </div>
+
+              <!-- 分析型 -->
+              <div class="db-category" id="cat-analytics" onclick="toggleCategory('analytics')">
+                <span class="arrow">▶</span>
+                <span class="cat-icon">📊</span>
+                <span>分析型数据库</span>
+                <span class="cat-count">1</span>
+              </div>
+              <div id="items-analytics" class="cat-items" style="display: none">
+                <div
+                  class="db-type-item"
+                  data-db="clickhouse"
+                  onclick="selectDbType('clickhouse', event)"
+                  title="ClickHouse"
+                >
+                  <span class="type-dot" style="background: #f9a825"></span> ClickHouse
+                  <span class="driver-count">1 驱动</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== 右侧主面板 ===== -->
+          <div class="main-panel">
+            <!-- === Header 三行 === -->
+            <div class="panel-header">
+              <!-- 行 1: 名称 + 范围 -->
+              <div class="header-row">
+                <span class="header-label">名称</span>
+                <input
+                  class="header-input"
+                  id="nameInput"
+                  value="MySQL@localhost"
+                  placeholder="数据源名称"
+                  style="max-width: 280px; font-weight: 500"
+                />
+                <div class="scope-toggles">
+                  <label class="scope-checkbox">
+                    <input type="checkbox" id="scopeGlobal" checked />
+                    <span class="cb"></span> 全局链接
+                  </label>
+                  <label class="scope-checkbox" id="scopeProjectLabel">
+                    <input type="checkbox" id="scopeProject" />
+                    <span class="cb"></span> 项目链接
+                  </label>
+                </div>
+              </div>
+
+              <!-- 行 2: 数据描述 -->
+              <div class="header-row">
+                <span class="header-label">描述</span>
+                <textarea
+                  class="header-input"
+                  id="descInput"
+                  rows="2"
+                  placeholder="可选：描述这个数据源的用途"
+                  style="height: 44px; resize: none"
+                >
+生产环境 MySQL 主库</textarea
+                >
+              </div>
+
+              <!-- 行 3: 驱动类型 + URI -->
+              <div class="header-row">
+                <span class="header-label">驱动</span>
+                <select
+                  class="driver-select"
+                  id="driverSelect"
+                  onchange="onDriverChange(this.value)"
+                >
+                </select>
+                <span style="color: var(--text-muted); flex-shrink: 0">URI</span>
+                <div class="uri-display" id="uriDisplay">mysql://root:****@localhost:3306/mydb</div>
+                <button class="uri-edit-btn" title="编辑 URI">✎</button>
+              </div>
+            </div>
+
+            <!-- === 标签页 === -->
+            <div class="tabs-bar">
+              <button class="tab-btn active" onclick="switchTab('general')">常规</button>
+              <button class="tab-btn" onclick="switchTab('network')">网络</button>
+              <button class="tab-btn" onclick="switchTab('capabilities')">能力</button>
+              <button class="tab-btn" onclick="switchTab('properties')">驱动属性</button>
+              <button class="tab-btn" onclick="switchTab('advanced')">高级</button>
+            </div>
+
+            <!-- === 标签页内容 === -->
+            <div class="tab-content">
+              <!-- ========== 常规 ========== -->
+              <div class="tab-pane active" id="tab-general">
+                <div class="info-banner" id="driverBanner">
+                  <span class="bicon">🔌</span>
+                  <span id="driverInfo">sqlx (Rust, async) — 编译期 SQL 校验 + Arrow 零拷贝</span>
+                </div>
+
+                <div class="form-section">
+                  <div class="section-title">
+                    <span class="drv-tag sqlx" id="drvTag">sqlx</span>
+                    连接参数
+                  </div>
+                  <!-- 网络型 DB -->
+                  <div id="form-network" class="form-fields">
+                    <div class="form-row">
+                      <div class="form-group f2">
+                        <span class="form-label">主机</span>
+                        <input class="form-input" placeholder="localhost" value="localhost" />
+                      </div>
+                      <div class="form-group f1">
+                        <span class="form-label">端口</span>
+                        <input class="form-input" type="number" value="3306" />
+                      </div>
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group f1">
+                        <span class="form-label">数据库</span>
+                        <input class="form-input" placeholder="mydb" value="mydb" />
+                      </div>
+                    </div>
+                  </div>
+                  <!-- 文件型 DB (隐藏) -->
+                  <div id="form-file" class="form-fields" style="display: none">
+                    <div class="form-row">
+                      <div class="form-group" style="flex: 1">
+                        <span class="form-label">数据库文件</span>
+                        <div class="file-input-row">
+                          <input
+                            class="form-input"
+                            placeholder="./database.db"
+                            value="./database.db"
+                          />
+                          <button class="btn-browse">📂 浏览</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- 认证 -->
+                  <div id="form-auth" class="form-fields">
+                    <div class="form-row" style="margin-top: 8px">
+                      <div class="form-group f1">
+                        <span class="form-label">用户</span>
+                        <input class="form-input" placeholder="root" value="root" />
+                      </div>
+                      <div class="form-group f1">
+                        <span class="form-label">密码</span>
+                        <input class="form-input" type="password" value="secret123" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 驱动特有扩展区 -->
+                  <div id="form-driver-specific" style="margin-top: 12px"></div>
+                </div>
+              </div>
+
+              <!-- ========== 网络 ========== -->
+              <div class="tab-pane" id="tab-network">
+                <div class="collapse-panel">
+                  <div class="collapse-header" onclick="toggleCollapse('sshPanel')">
+                    <span class="carrow" id="carrow-ssh">▶</span> SSH 隧道
+                    <div class="cswitch" onclick="event.stopPropagation()">
+                      已禁用
+                      <div
+                        class="switch-toggle"
+                        onclick="toggleSwitch(this, 'sshPanel', 'carrow-ssh')"
+                      ></div>
+                    </div>
+                  </div>
+                  <div class="collapse-body" id="sshPanel">
+                    <div class="form-row">
+                      <div class="form-group f2"
+                        ><span class="form-label">SSH 主机</span
+                        ><input class="form-input" placeholder="192.168.1.100"
+                      /></div>
+                      <div class="form-group f1"
+                        ><span class="form-label">端口</span
+                        ><input class="form-input" type="number" value="22"
+                      /></div>
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group f1"
+                        ><span class="form-label">用户名</span
+                        ><input class="form-input" placeholder="root"
+                      /></div>
+                      <div class="form-group f1"
+                        ><span class="form-label">认证方式</span
+                        ><select class="form-select"
+                          ><option>密码</option
+                          ><option>密钥文件</option></select
+                        ></div
+                      >
+                    </div>
+                  </div>
+                </div>
+                <div class="collapse-panel">
+                  <div class="collapse-header" onclick="toggleCollapse('sslPanel')">
+                    <span class="carrow" id="carrow-ssl">▶</span> SSL/TLS
+                    <div class="cswitch" onclick="event.stopPropagation()">
+                      已禁用
+                      <div
+                        class="switch-toggle"
+                        onclick="toggleSwitch(this, 'sslPanel', 'carrow-ssl')"
+                      ></div>
+                    </div>
+                  </div>
+                  <div class="collapse-body" id="sslPanel">
+                    <div class="form-row">
+                      <div class="form-group f1"
+                        ><span class="form-label">SSL 模式</span
+                        ><select class="form-select"
+                          ><option>disable</option
+                          ><option>require</option
+                          ><option>verify-ca</option></select
+                        ></div
+                      >
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group f1"
+                        ><span class="form-label">CA 证书</span
+                        ><input class="form-input" placeholder="ca.pem"
+                      /></div>
+                      <div class="form-group f1"
+                        ><span class="form-label">客户端证书</span
+                        ><input class="form-input" placeholder="client-cert.pem"
+                      /></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="collapse-panel">
+                  <div class="collapse-header" onclick="toggleCollapse('proxyPanel')">
+                    <span class="carrow" id="carrow-proxy">▶</span> 代理
+                    <div class="cswitch" onclick="event.stopPropagation()">
+                      已禁用
+                      <div
+                        class="switch-toggle"
+                        onclick="toggleSwitch(this, 'proxyPanel', 'carrow-proxy')"
+                      ></div>
+                    </div>
+                  </div>
+                  <div class="collapse-body" id="proxyPanel">
+                    <div class="form-row">
+                      <div class="form-group f1"
+                        ><span class="form-label">类型</span
+                        ><select class="form-select"
+                          ><option>SOCKS5</option
+                          ><option>HTTP</option
+                          ><option>SOCKS4</option></select
+                        ></div
+                      >
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group f2"
+                        ><span class="form-label">主机</span
+                        ><input class="form-input" placeholder="proxy.example.com"
+                      /></div>
+                      <div class="form-group f1"
+                        ><span class="form-label">端口</span
+                        ><input class="form-input" type="number" value="1080"
+                      /></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ========== 能力 ========== -->
+              <div class="tab-pane" id="tab-capabilities">
+                <div class="info-banner">
+                  <span class="bicon">📊</span>
+                  <span
+                    >驱动能力矩阵：动态展示当前驱动支持的功能。不同驱动 ×
+                    不同数据库提供不同的能力。</span
+                  >
+                </div>
+                <table class="props-table">
+                  <thead
+                    ><tr
+                      ><th style="width: 35%">能力项</th><th style="width: 20%">状态</th
+                      ><th>说明</th></tr
+                    ></thead
+                  >
+                  <tbody id="capTableBody"></tbody>
+                </table>
+              </div>
+
+              <!-- ========== 驱动属性 ========== -->
+              <div class="tab-pane" id="tab-properties">
+                <div class="info-banner">
+                  <span class="bicon">⚙</span>
+                  <span>驱动属性：可扩展的 key-value 配置，不同驱动暴露不同的可调参数。</span>
+                </div>
+                <table class="props-table">
+                  <thead
+                    ><tr
+                      ><th style="width: 30%">属性名</th><th style="width: 35%">值</th
+                      ><th>说明</th></tr
+                    ></thead
+                  >
+                  <tbody id="propsTableBody"></tbody>
+                </table>
+              </div>
+
+              <!-- ========== 高级 ========== -->
+              <div class="tab-pane" id="tab-advanced">
+                <div class="form-section">
+                  <div class="section-title">连接参数</div>
+                  <div class="adv-grid">
+                    <div class="form-group"
+                      ><span class="form-label">连接超时 (秒)</span
+                      ><input class="form-input" type="number" value="30"
+                    /></div>
+                    <div class="form-group"
+                      ><span class="form-label">查询超时 (秒)</span
+                      ><input class="form-input" type="number" value="0" placeholder="0=不限制"
+                    /></div>
+                    <div class="form-group"
+                      ><span class="form-label">保活间隔 (秒)</span
+                      ><input class="form-input" type="number" value="60" placeholder="0=禁用"
+                    /></div>
+                    <div class="form-group"
+                      ><span class="form-label">最大重连次数</span
+                      ><input class="form-input" type="number" value="3"
+                    /></div>
+                  </div>
+                </div>
+                <div class="form-section">
+                  <div class="section-title">Schema 加载</div>
+                  <select class="form-select" style="max-width: 280px">
+                    <option>连接时自动加载所有 Schema</option>
+                    <option>按需手动加载 Schema</option>
+                    <option>仅加载指定 Schema 列表</option>
+                  </select>
+                </div>
+
+                <!-- ===== 本地 DuckDB 查询加速 ===== -->
+                <div class="form-section" id="duckdb-accel-section">
+                  <div class="section-title" style="color: var(--warning)">⚡ 本地加速引擎</div>
+                  <div class="accel-card">
+                    <div class="accel-header">
+                      <span class="accel-icon">🦆</span>
+                      <span class="accel-title">启用 DuckDB 本地查询加速</span>
+                      <div class="accel-switch">
+                        <div
+                          class="switch-toggle"
+                          id="duckdbAccelSwitch"
+                          onclick="toggleDuckdbAccel()"
+                        ></div>
+                      </div>
+                    </div>
+                    <div class="accel-body" id="duckdbAccelBody">
+                      <p class="accel-desc">
+                        通过本地 DuckDB 实例对
+                        <strong id="accelTargetDb">MySQL</strong> 的查询结果进行加速。
+                        查询数据自动同步到本地 DuckDB，联邦查询、跨库
+                        JOIN、聚合分析在本地极速完成。<br />
+                        适合 OLAP 分析场景。加速数据库文件：<code>.rdata/duckdb/accel.duckdb</code>
+                      </p>
+                      <div class="form-row">
+                        <div class="form-group f1">
+                          <span class="form-label">同步策略</span>
+                          <select class="form-select">
+                            <option>自动：查询时自动同步</option>
+                            <option>定时：按间隔同步</option>
+                            <option>手动：仅手动触发</option>
+                          </select>
+                        </div>
+                        <div class="form-group f1">
+                          <span class="form-label">同步间隔 (分钟)</span>
+                          <input class="form-input" type="number" value="15" disabled />
+                        </div>
+                      </div>
+                      <div class="form-row">
+                        <div class="form-group f1">
+                          <span class="form-label">内存限制 (MB)</span>
+                          <input class="form-input" type="number" value="512" placeholder="512" />
+                        </div>
+                        <div class="form-group f1">
+                          <span class="form-label">线程数</span>
+                          <input class="form-input" type="number" value="4" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-section">
+                  <div class="section-title">字符编码</div>
+                  <select class="form-select" style="max-width: 200px">
+                    <option>UTF-8（默认）</option>
+                    <option>GBK</option>
+                    <option>Latin1</option>
+                    <option>UTF-16</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- === 底部操作栏 === -->
+            <div class="dialog-footer">
+              <div class="test-result" id="testResultArea"></div>
+              <button class="btn btn-test" onclick="pretendTest()">🔌 测试连接</button>
+              <button class="btn btn-cancel" onclick="alert('取消')">取消</button>
+              <button class="btn btn-primary" onclick="alert('数据源已保存！')">保存数据源</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="watermark"
+        >← 点击「常规/网络/能力/驱动属性/高级」标签切换 · 切换左侧数据库类型观察动态联动 · DuckDB
+        场景显示高级加速面板</p
+      >
+    </div>
+
+    <script>
+      // ===== 驱动注册表 =====
+      const DRIVERS = {
+        'mysql-sqlx': {
+          id: 'mysql-sqlx',
+          dbType: 'mysql',
+          lang: 'Rust',
+          tag: 'sqlx',
+          tagClass: 'sqlx',
+          name: 'sqlx (Rust, async)',
+          urlTemplate: 'mysql://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 3306,
+          isFile: false,
+          info: '异步运行时 + 编译期 SQL 校验 + Arrow 零拷贝。连接池 sqlx::MySqlPool。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 1,
+            arrowExport: 1,
+            pluginCompat: 0,
+          },
+          properties: {
+            'pool.max_connections': '10',
+            'pool.min_connections': '1',
+            'pool.acquire_timeout': '30',
+            tcp_nodelay: 'true',
+          },
+        },
+        'mysql-diesel': {
+          id: 'mysql-diesel',
+          dbType: 'mysql',
+          lang: 'Rust',
+          tag: 'diesel',
+          tagClass: 'diesel',
+          name: 'diesel (Rust, ORM)',
+          urlTemplate: 'mysql://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 3306,
+          isFile: false,
+          info: 'ORM 风格 + Schema DSL + 编译期迁移。适合需要 ORM 映射的场景。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 1,
+            arrowExport: 0,
+            pluginCompat: 0,
+          },
+          properties: { 'diesel.print_schema': 'false', 'connection.keep_alive': '60' },
+        },
+        'mysql-python': {
+          id: 'mysql-python',
+          dbType: 'mysql',
+          lang: 'Python',
+          tag: 'python',
+          tagClass: 'python',
+          name: 'Python (WASI, PyMySQL)',
+          urlTemplate: 'mysql+pymysql://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 3306,
+          isFile: false,
+          info: 'Python WASI 沙箱：Pandas DataFame 直写。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 0,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { 'pandas.chunksize': '10000', charset: 'utf8mb4' },
+        },
+        'mysql-go': {
+          id: 'mysql-go',
+          dbType: 'mysql',
+          lang: 'Go',
+          tag: 'go',
+          tagClass: 'go',
+          name: 'Go (WASI, go-sql-driver)',
+          urlTemplate: '{user}:{password}@tcp({host}:{port})/{database}',
+          defaultPort: 3306,
+          isFile: false,
+          info: 'Go WASI 高性能查询引擎。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 1,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { maxAllowedPacket: '4194304', parseTime: 'true' },
+        },
+        'pg-sqlx': {
+          id: 'pg-sqlx',
+          dbType: 'postgresql',
+          lang: 'Rust',
+          tag: 'sqlx',
+          tagClass: 'sqlx',
+          name: 'sqlx (Rust, async)',
+          urlTemplate: 'postgres://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 5432,
+          isFile: false,
+          info: '异步运行时 + COPY 协议 + 编译期 SQL 校验。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 1,
+            arrowExport: 1,
+            pluginCompat: 0,
+          },
+          properties: { 'pool.max_connections': '20', application_name: 'RdataStation' },
+        },
+        'pg-diesel': {
+          id: 'pg-diesel',
+          dbType: 'postgresql',
+          lang: 'Rust',
+          tag: 'diesel',
+          tagClass: 'diesel',
+          name: 'diesel (Rust, ORM)',
+          urlTemplate: 'postgres://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 5432,
+          isFile: false,
+          info: 'ORM 风格 PG 驱动。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 1,
+            arrowExport: 0,
+            pluginCompat: 0,
+          },
+          properties: { 'diesel.print_schema': 'false' },
+        },
+        'pg-python': {
+          id: 'pg-python',
+          dbType: 'postgresql',
+          lang: 'Python',
+          tag: 'python',
+          tagClass: 'python',
+          name: 'Python (WASI, psycopg2)',
+          urlTemplate: 'postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 5432,
+          isFile: false,
+          info: 'Python 数据分析栈接入 PG。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 0,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { 'pandas.chunksize': '10000' },
+        },
+        'sqlite-rusqlite': {
+          id: 'sqlite-rusqlite',
+          dbType: 'sqlite',
+          lang: 'Rust',
+          tag: 'native',
+          tagClass: 'native',
+          name: 'rusqlite (Rust, native)',
+          urlTemplate: 'sqlite://{file_path}',
+          defaultPort: null,
+          isFile: true,
+          info: 'Rust 原生 SQLite，bundled 编译。JSON1/FTS5 扩展内置。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 1,
+            arrowExport: 0,
+            pluginCompat: 0,
+          },
+          properties: {
+            journal_mode: 'WAL',
+            synchronous: 'NORMAL',
+            busy_timeout: '5000',
+            foreign_keys: 'ON',
+          },
+        },
+        'sqlite-py': {
+          id: 'sqlite-py',
+          dbType: 'sqlite',
+          lang: 'Python',
+          tag: 'python',
+          tagClass: 'python',
+          name: 'Python (WASI, sqlite3)',
+          urlTemplate: 'sqlite://{file_path}',
+          defaultPort: null,
+          isFile: true,
+          info: 'Python 标准库 sqlite3，WASI 沙箱隔离。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 0,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { detect_types: '1', isolation_level: 'DEFERRED' },
+        },
+        'duckdb-native': {
+          id: 'duckdb-native',
+          dbType: 'duckdb',
+          lang: 'Rust',
+          tag: 'native',
+          tagClass: 'native',
+          name: 'duckdb-rs (Rust, native)',
+          urlTemplate: 'duckdb://{file_path}',
+          defaultPort: null,
+          isFile: true,
+          info: 'Rust 原生 DuckDB，OLAP 分析引擎。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 1,
+            arrowExport: 1,
+            pluginCompat: 0,
+          },
+          properties: { memory_limit: '512', threads: '4', access_mode: 'read_write' },
+        },
+        'duckdb-py': {
+          id: 'duckdb-py',
+          dbType: 'duckdb',
+          lang: 'Python',
+          tag: 'python',
+          tagClass: 'python',
+          name: 'Python (WASI, duckdb)',
+          urlTemplate: 'duckdb://{file_path}',
+          defaultPort: null,
+          isFile: true,
+          info: 'Python DuckDB WASI，零配置分析。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 0,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { memory_limit: '512', threads: '4' },
+        },
+      }
+
+      function dbDrivers(dbType) {
+        return Object.values(DRIVERS).filter(d => d.dbType === dbType)
+      }
+      function defaultDriver(dbType) {
+        return dbDrivers(dbType)[0]
+      }
+
+      let currentDbType = 'mysql'
+      let currentDriver = DRIVERS['mysql-sqlx']
+
+      // ===== 左侧栏 =====
+      function toggleCategory(name) {
+        const cat = document.getElementById('cat-' + name)
+        cat.classList.toggle('expanded')
+        const items = document.getElementById('items-' + name)
+        items.style.display = cat.classList.contains('expanded') ? '' : 'none'
+      }
+
+      function selectDbType(dbType, event) {
+        if (event) event.stopPropagation()
+        currentDbType = dbType
+        document.querySelectorAll('.db-type-item').forEach(el => el.classList.remove('selected'))
+        document.querySelector(`.db-type-item[data-db="${dbType}"]`)?.classList.add('selected')
+        // 默认选该 DB 的第一个驱动
+        const drv = defaultDriver(dbType)
+        if (drv) applyDriver(drv)
+      }
+
+      function filterDbTree(query) {
+        // 简化：只高亮匹配项
+      }
+
+      // ===== 右侧 =====
+      function applyDriver(drv) {
+        currentDriver = drv
+        // 更新驱动下拉
+        const sel = document.getElementById('driverSelect')
+        sel.innerHTML = dbDrivers(drv.dbType)
+          .map(
+            d => `<option value="${d.id}" ${d.id === drv.id ? 'selected' : ''}>${d.name}</option>`
+          )
+          .join('')
+
+        // URI
+        const uri = drv.isFile
+          ? drv.urlTemplate.replace(
+              '{file_path}',
+              './mydb.' + (drv.dbType === 'duckdb' ? 'duckdb' : 'db')
+            )
+          : drv.urlTemplate
+              .replace('{user}', 'root')
+              .replace('{password}', '****')
+              .replace('{host}', 'localhost')
+              .replace('{port}', String(drv.defaultPort))
+              .replace('{database}', 'mydb')
+        document.getElementById('uriDisplay').textContent = uri
+
+        // info banner
+        document.getElementById('driverInfo').textContent = drv.info
+        document.getElementById('driverBanner').style.borderColor =
+          drv.lang === 'Rust'
+            ? 'rgba(244,102,35,0.2)'
+            : drv.lang === 'Python'
+              ? 'rgba(55,118,171,0.2)'
+              : 'rgba(0,173,216,0.2)'
+        document.getElementById('driverBanner').style.background =
+          drv.lang === 'Rust'
+            ? 'rgba(244,102,35,0.04)'
+            : drv.lang === 'Python'
+              ? 'rgba(55,118,171,0.04)'
+              : 'rgba(0,173,216,0.04)'
+
+        // drv tag
+        const tag = document.getElementById('drvTag')
+        tag.textContent = drv.tag
+        tag.className = 'drv-tag ' + drv.tagClass
+
+        // 切换表单类型
+        document.getElementById('form-network').style.display = drv.isFile ? 'none' : ''
+        document.getElementById('form-file').style.display = drv.isFile ? '' : 'none'
+        document.getElementById('form-auth').style.display = drv.isFile ? 'none' : ''
+
+        // 驱动特有
+        const spec = document.getElementById('form-driver-specific')
+        if (drv.lang === 'Python') {
+          spec.innerHTML = `<div class="form-section" style="margin-top:8px">
+      <div class="form-row">
+        <div class="form-group f1"><span class="form-label">Python 环境</span><select class="form-select"><option>内置 WASI Python 3.12</option><option>本地 Python 环境</option></select></div>
+        <div class="form-group f1"><span class="form-label">预装模块</span><input class="form-input" value="pandas, numpy, matplotlib"></div>
+      </div></div>`
+        } else if (drv.id === 'mysql-diesel') {
+          spec.innerHTML = `<div class="form-row" style="margin-top:8px">
+      <div class="form-group f1"><span class="form-label">Migration 目录</span><input class="form-input" value="./migrations"></div></div>`
+        } else if (drv.lang === 'Go') {
+          spec.innerHTML = `<div class="form-section" style="margin-top:8px">
+      <div class="form-row">
+        <div class="form-group f1"><span class="form-label">GOMAXPROCS</span><input class="form-input" type="number" value="4"></div>
+        <div class="form-group f1"><span class="form-label">GC 策略</span><select class="form-select"><option>默认</option><option>低延迟</option><option>高吞吐</option></select></div>
+      </div></div>`
+        } else {
+          spec.innerHTML = ''
+        }
+
+        // 能力表
+        const capLabels = {
+          transactions: '事务支持',
+          preparedStmt: '预编译语句',
+          streaming: '流式查询',
+          introspection: 'Schema 自省',
+          arrowExport: 'Arrow 导出',
+          pluginCompat: '插件兼容',
+        }
+        document.getElementById('capTableBody').innerHTML = Object.entries(drv.capabilities)
+          .map(
+            ([k, v]) =>
+              `<tr><td>${capLabels[k]}</td><td><span class="cap-badge ${v ? 'yes' : 'no'}">${v ? '✓ 支持' : '✗ 不支持'}</span></td><td>—</td></tr>`
+          )
+          .join('')
+
+        // 属性表
+        document.getElementById('propsTableBody').innerHTML = Object.entries(drv.properties)
+          .map(([k, v]) => `<tr><td>${k}</td><td><input value="${v}"></td><td>—</td></tr>`)
+          .join('')
+
+        // duckdb 加速 — 对所有数据库可用，更新描述中的目标数据库名
+        const dbNameMap = {
+          mysql: 'MySQL',
+          postgresql: 'PostgreSQL',
+          mariadb: 'MariaDB',
+          sqlserver: 'SQL Server',
+          sqlite: 'SQLite',
+          duckdb: 'DuckDB',
+          mongodb: 'MongoDB',
+          redis: 'Redis',
+          clickhouse: 'ClickHouse',
+        }
+        const el = document.getElementById('accelTargetDb')
+        if (el) el.textContent = dbNameMap[drv.dbType] || drv.dbType
+
+        // 自动同步左侧选中态
+        document.querySelectorAll('.db-type-item').forEach(el => el.classList.remove('selected'))
+        document.querySelector(`.db-type-item[data-db="${drv.dbType}"]`)?.classList.add('selected')
+        // 展开对应分类
+        ;['relational', 'file', 'nosql', 'analytics'].forEach(name => {
+          const itemsDiv = document.getElementById('items-' + name)
+          if (itemsDiv && itemsDiv.querySelector(`[data-db="${drv.dbType}"]`)) {
+            const cat = document.getElementById('cat-' + name)
+            if (cat && !cat.classList.contains('expanded')) toggleCategory(name)
+          }
+        })
+      }
+
+      function onDriverChange(id) {
+        const drv = DRIVERS[id]
+        if (drv) applyDriver(drv)
+      }
+
+      // ===== 标签页 =====
+      function switchTab(name) {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'))
+        document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'))
+        const idx = ['general', 'network', 'capabilities', 'properties', 'advanced'].indexOf(name)
+        document.querySelectorAll('.tab-btn')[idx].classList.add('active')
+        document.getElementById('tab-' + name).classList.add('active')
+      }
+
+      // ===== 折叠面板 =====
+      function toggleCollapse(id) {
+        const body = document.getElementById(id)
+        body.classList.toggle('open')
+        document
+          .getElementById('carrow-' + id.replace('Panel', ''))
+          .classList.toggle('open', body.classList.contains('open'))
+      }
+      function toggleSwitch(el, bodyId, arrowId) {
+        el.classList.toggle('on')
+        const body = document.getElementById(bodyId)
+        body.classList.toggle('open', el.classList.contains('on'))
+        const arrow = document.getElementById(arrowId)
+        if (arrow) arrow.classList.toggle('open', el.classList.contains('on'))
+      }
+
+      // ===== DuckDB 加速 =====
+      function toggleDuckdbAccel() {
+        const sw = document.getElementById('duckdbAccelSwitch')
+        sw.classList.toggle('on')
+        document
+          .getElementById('duckdbAccelBody')
+          .classList.toggle('show', sw.classList.contains('on'))
+      }
+
+      // ===== 测试 =====
+      function pretendTest() {
+        const el = document.getElementById('testResultArea')
+        el.className = 'test-result success'
+        el.innerHTML =
+          '✓ 连接成功 &nbsp;—&nbsp; <span style="opacity:0.7">' +
+          currentDriver.name +
+          '</span> &nbsp;—&nbsp; <span style="opacity:0.5;font-size:11px">32ms</span>'
+        setTimeout(() => {
+          el.innerHTML = ''
+        }, 5000)
+      }
+
+      // ===== 暂存列表 =====
+      let stagingCount = 1
+      const dbIcons = {
+        mysql: 'My',
+        postgresql: 'PG',
+        mariadb: 'MA',
+        sqlserver: 'MS',
+        sqlite: 'SL',
+        duckdb: 'DK',
+        mongodb: 'MG',
+        redis: 'RD',
+        clickhouse: 'CH',
+      }
+      const dbIconClass = {
+        mysql: 'mysql',
+        postgresql: 'pg',
+        mariadb: 'mysql',
+        sqlserver: 'pg',
+        sqlite: 'sqlite',
+        duckdb: 'duckdb',
+        mongodb: 'pg',
+        redis: 'pg',
+        clickhouse: 'duckdb',
+      }
+
+      function addStagingEntry() {
+        const section = document.querySelector('.saved-section')
+        const newItem = document.createElement('div')
+        newItem.className = 'saved-item'
+        newItem.id = 'staging-item-' + stagingCount
+        newItem.innerHTML = `
+    <span class="type-dot" style="background:var(--accent);width:7px;height:7px;border-radius:50%"></span>
+    <span class="db-icon-mini mysql">My</span>
+    <span class="item-name">新建数据源</span>
+    <span style="font-size:10px;color:var(--text-muted);cursor:pointer;flex-shrink:0"
+          onclick="removeStagingEntry(${stagingCount})" title="移除暂存">✕</span>
+  `
+        section.appendChild(newItem)
+        stagingCount++
+      }
+
+      function removeStagingEntry(id) {
+        const item = document.getElementById('staging-item-' + id)
+        if (item) item.remove()
+        // 确保至少保留一条
+        const remaining = document.querySelectorAll('[id^="staging-item-"]')
+        if (remaining.length === 0) addStagingEntry()
+      }
+
+      // ===== 初始化 =====
+      applyDriver(currentDriver)
+    </script>
+  </body>
+</html>

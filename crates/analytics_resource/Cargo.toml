@@ -1,0 +1,25 @@
+[package]
+name = "rds-analytics-resource"
+version.workspace = true
+edition.workspace = true
+description = "M6 资源分析：分析资源（数据源连接/DuckDB 表）管理"
+
+[dependencies]
+engine = { path = "../engine", package = "rds-engine" }
+shared = { path = "../shared", package = "rds-shared" }
+
+# ===== 时间 =====
+chrono = { version = "0.4.39", features = ["serde"] }
+
+# ===== 序列化 =====
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.135"
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json", "chrono"] }
+
+# ===== Async 运行时 =====
+tokio = { version = "1.44.1", features = ["full"] }
+
+# ===== 其他 =====
+tracing = "0.1.41"
+rusqlite = { version = "0.32.1", features = ["bundled", "chrono", "serde_json"] }
+uuid = { version = "1.16.0", features = ["v4", "serde"] }

@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/app",
+    "crates/workbench",
+    "crates/project",
+    "crates/engine",
+    "crates/connection",
+    "crates/database",
+    "crates/scratchpad",
+    "crates/analytics_resource",
+    "crates/mock",
+    "crates/insight",
+    "crates/plugin",
+    "crates/shared",
+    "crates/settings",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+# 跨 crate 共享的依赖版本统一在此锁定。
+# 注意：engine 承载 v1 core，其驱动类依赖（rusqlite/duckdb/sqlx 等）与 v1 保持
+# 版本一致，单独声明于 crates/engine/Cargo.toml，避免 workspace 共享导致漂移。
+gpui-kit = "0.6"
+
+[profile.dev]
+debug = "line-tables-only"

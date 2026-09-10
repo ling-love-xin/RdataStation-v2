@@ -1,0 +1,2586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 结果集模块原型 — DBeaver 风格</title>
+<style>
+  :root {
+    --bg-primary: #1e1e1e;
+    --bg-secondary: #252526;
+    --bg-tertiary: #2d2d30;
+    --bg-hover: #3a3a3a;
+    --bg-input: #3c3c3c;
+    --bg-card: #333;
+    --border: #3e3e42;
+    --border-subtle: #444;
+    --fg: #cccccc;
+    --fg-bright: #e0e0e0;
+    --fg-dim: #858585;
+    --fg-accent: #4fc1ff;
+    --primary: #0078d4;
+    --success: #0a0;
+    --warning: #f0a030;
+    --error: #e74856;
+    --dirty: #f0c040;
+    --font-mono: 'Cascadia Code','Fira Code','JetBrains Mono','Consolas',monospace;
+    --font-ui: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    --radius: 4px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d0d; color: var(--fg);
+    font-family: var(--font-ui); font-size: 13px;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ===== 顶部演示工具栏 ===== */
+  .demo-toolbar {
+    display: flex; align-items: center; gap: 8px; padding: 4px 12px;
+    background: #323233; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; height: 32px;
+  }
+  .demo-title { font-size: 12px; color: var(--fg-bright); font-weight: 500; }
+  .demo-btn {
+    padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-input); color: var(--fg); cursor: pointer;
+    font-size: 12px; font-family: var(--font-ui); transition: all 0.1s;
+  }
+  .demo-btn:hover { background: var(--bg-hover); border-color: var(--fg-dim); }
+  .demo-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+  /* ===== 主容器 ===== */
+  .result-panel-root {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bg-primary); min-height: 0;
+  }
+
+  /* ===== 1. 结果标签栏 ===== */
+  .result-tabs {
+    display: flex; align-items: stretch; height: 28px; flex-shrink: 0;
+    background: var(--bg-tertiary); border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .result-tab {
+    display: flex; align-items: center; gap: 4px; padding: 0 10px;
+    font-size: 11px; cursor: pointer; color: var(--fg-dim);
+    white-space: nowrap; border-right: 1px solid var(--border);
+    user-select: none; transition: all 0.1s;
+  }
+  .result-tab:hover { background: var(--bg-hover); color: var(--fg); }
+  .result-tab.active {
+    background: var(--bg-primary); color: var(--fg-bright);
+    border-bottom: 2px solid var(--primary);
+  }
+  .result-tab .tab-close { font-size: 13px; opacity: 0.4; }
+  .result-tab:hover .tab-close { opacity: 0.8; }
+  .result-tab .tab-close:hover { opacity: 1; color: var(--error); }
+
+  /* ===== 2. 工具栏条 ===== */
+  .toolbar-strip {
+    display: flex; align-items: center; padding: 2px 6px; gap: 6px;
+    flex-shrink: 0; min-height: 28px;
+    background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+  }
+  .toolbar-strip .strip-right { flex: 1; min-width: 0; display: flex; justify-content: flex-end; }
+  .tb-btn {
+    display: flex; align-items: center; gap: 3px; padding: 3px 8px;
+    border: none; background: transparent; color: var(--fg);
+    cursor: pointer; font-size: 11px; font-family: var(--font-ui);
+    transition: background 0.1s; white-space: nowrap;
+  }
+  .tb-btn:hover { background: var(--bg-hover); }
+  .tb-btn.active { background: var(--primary); color: #fff; }
+  .tb-select {
+    background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--fg); padding: 2px 6px; border-radius: 3px;
+    font-size: 11px; font-family: var(--font-ui); outline: none;
+  }
+  .tb-select:focus { border-color: var(--primary); }
+  .tb-label { font-size: 10px; color: var(--fg-dim); }
+  .filter-mode-badge {
+    padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 600;
+    cursor: pointer; transition: all 0.1s;
+  }
+  .filter-mode-badge.quick { background: rgba(0,184,148,0.2); color: #00b894; }
+  .filter-mode-badge.sql { background: rgba(26,90,138,0.2); color: #1890ff; }
+  .filter-mode-badge.duckdb { background: rgba(97,58,138,0.2); color: #b37feb; }
+  .filter-mode-badge:hover { opacity: 0.8; }
+  .filter-input {
+    background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--fg); padding: 3px 8px; border-radius: 3px;
+    font-size: 11px; font-family: var(--font-mono); outline: none;
+    width: 200px; transition: border-color 0.1s;
+  }
+  .filter-input:focus { border-color: var(--primary); }
+  .filter-input::placeholder { color: var(--fg-dim); }
+
+  /* ===== 3. 主体区域（三栏布局） ===== */
+  .result-body {
+    flex: 1; min-height: 0; display: flex; position: relative; overflow: hidden;
+  }
+
+  /* 左侧视图切换栏 */
+  .view-sidebar {
+    display: flex; flex-direction: column; gap: 1px; padding: 2px;
+    flex-shrink: 0; background: var(--bg-tertiary);
+    border-right: 1px solid var(--border);
+  }
+  .view-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border: none; border-radius: 3px;
+    background: transparent; color: var(--fg-dim);
+    cursor: pointer; transition: all 0.12s; position: relative;
+  }
+  .view-btn:hover { background: var(--bg-hover); color: var(--fg); }
+  .view-btn.active { background: var(--primary); color: #fff; }
+  .view-btn .tooltip {
+    position: absolute; left: 34px; top: 50%; transform: translateY(-50%);
+    background: #1a1a1a; color: var(--fg); padding: 3px 8px; border-radius: 3px;
+    font-size: 10px; white-space: nowrap; pointer-events: none; opacity: 0;
+    border: 1px solid var(--border); transition: opacity 0.15s;
+    z-index: 20;
+  }
+  .view-btn:hover .tooltip { opacity: 1; }
+
+  /* 中间网格区域 */
+  .grid-area {
+    flex: 1; min-width: 0; position: relative; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .ag-wrapper {
+    flex: 1; overflow: auto; position: relative;
+  }
+  .ag-table {
+    width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 12px;
+    table-layout: fixed;
+  }
+  .ag-table thead { position: sticky; top: 0; z-index: 2; }
+  .ag-table th {
+    background: #2d2d30; color: var(--fg-bright); text-align: left;
+    padding: 4px 8px; border-bottom: 2px solid var(--primary);
+    font-weight: 600; white-space: nowrap; cursor: pointer;
+    border-right: 1px solid var(--border); user-select: none;
+    position: relative;
+  }
+  .ag-table th:hover { background: #3a3a3a; }
+  .ag-table th .sort-icon { font-size: 10px; margin-left: 4px; opacity: 0.4; }
+  .ag-table th.sorted .sort-icon { opacity: 1; color: var(--fg-accent); }
+  .ag-table th.row-num-col { width: 50px; text-align: center; color: var(--fg-dim); background: var(--bg-secondary); font-size: 10px; cursor: default; }
+  .ag-table th .col-type-icon { font-size: 9px; color: var(--fg-dim); margin-left: 4px; cursor: grab; }
+  .ag-table th .col-type-icon:hover { color: var(--fg-accent); }
+  .ag-table td {
+    padding: 3px 8px; border-bottom: 1px solid rgba(255,255,255,0.03);
+    border-right: 1px solid rgba(255,255,255,0.02);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 280px; cursor: default;
+  }
+  .ag-table td.row-num { text-align: center; color: var(--fg-dim); font-size: 10px; background: var(--bg-secondary); }
+  .ag-table td.num { text-align: right; }
+  .ag-table td.null { color: var(--fg-dim); font-style: italic; font-size: 11px; }
+  .ag-table tr:nth-child(even) td { background: rgba(128,128,128,0.02); }
+  .ag-table tr:hover td { background: rgba(255,255,255,0.04); }
+  .ag-table tr.selected td { background: rgba(0,120,212,0.15); }
+  .ag-table td.dirty { background: rgba(240,192,64,0.12) !important; }
+  .ag-table td.editing {
+    padding: 0; outline: 2px solid var(--primary); outline-offset: -1px;
+  }
+  .ag-table td.editing input {
+    width: 100%; height: 100%; border: none; background: var(--bg-input);
+    color: var(--fg); font-family: var(--font-mono); font-size: 12px;
+    padding: 3px 8px; outline: none;
+  }
+  .ag-table td.range-selected { background: rgba(0,120,212,0.2) !important; }
+
+  /* 文本视图 */
+  .text-view {
+    flex: 1; overflow: auto; padding: 8px; background: var(--bg-primary);
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+    white-space: pre; color: var(--fg);
+  }
+  /* 记录视图 */
+  .record-view {
+    flex: 1; overflow-y: auto; padding: 12px;
+    display: flex; flex-direction: column;
+  }
+  .record-nav {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+  .record-nav-text { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); min-width: 80px; text-align: center; }
+  .record-form { display: flex; flex-direction: column; gap: 2px; }
+  .record-field { display: flex; align-items: flex-start; gap: 12px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+  .record-field-label { min-width: 140px; font-size: 12px; color: var(--fg-dim); font-family: var(--font-mono); padding-top: 2px; }
+  .record-field-value { font-family: var(--font-mono); font-size: 12px; color: var(--fg); word-break: break-all; flex: 1; min-width: 0; }
+  .record-field-value.null { color: var(--fg-dim); font-style: italic; }
+  /* 图表视图 */
+  .chart-view {
+    flex: 1; overflow: auto; padding: 16px; display: flex; align-items: center; justify-content: center;
+  }
+  .chart-placeholder { text-align: center; color: var(--fg-dim); }
+  .chart-placeholder .chart-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.3; }
+  .chart-placeholder .chart-msg { font-size: 13px; }
+
+  /* ===== 可拖拽分割条 ===== */
+  .splitter {
+    width: 4px; flex-shrink: 0; cursor: col-resize;
+    background: var(--border); position: relative;
+    transition: background 0.1s;
+  }
+  .splitter:hover, .splitter.dragging { background: var(--primary); }
+  .splitter::after {
+    content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    width: 2px; height: 24px; border-radius: 1px; background: var(--fg-dim);
+    opacity: 0; transition: opacity 0.1s;
+  }
+  .splitter:hover::after { opacity: 1; }
+
+  /* ===== 右侧面板区域 ===== */
+  .right-panels {
+    width: 300px; flex-shrink: 0; display: flex; flex-direction: column;
+    border-left: 1px solid var(--border); background: var(--bg-secondary);
+    overflow: hidden; transition: width 0.2s, border 0.2s;
+  }
+  .right-panels.collapsed { width: 0; border-left: none; overflow: hidden; }
+  .panel-tabs {
+    display: flex; align-items: stretch; height: 26px; flex-shrink: 0;
+    background: var(--bg-tertiary); border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .panel-tab {
+    display: flex; align-items: center; gap: 3px; padding: 0 8px;
+    font-size: 10px; cursor: pointer; color: var(--fg-dim);
+    white-space: nowrap; border-right: 1px solid var(--border);
+    user-select: none; transition: all 0.1s; position: relative;
+  }
+  .panel-tab:hover { background: var(--bg-hover); color: var(--fg); }
+  .panel-tab.active { background: var(--bg-secondary); color: var(--fg-bright); border-bottom: 2px solid var(--primary); }
+  .panel-content { flex: 1; overflow: auto; min-height: 0; }
+  .panel-pane { display: none; height: 100%; }
+  .panel-pane.active { display: flex; flex-direction: column; }
+
+  /* --- Value Viewer --- */
+  .value-viewer-content { padding: 8px; overflow: auto; }
+  .vv-toolbar {
+    display: flex; align-items: center; gap: 2px; padding: 4px 6px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .vv-toolbar .vv-btn {
+    width: 22px; height: 22px; border: none; border-radius: 2px;
+    background: transparent; color: var(--fg-dim); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 12px;
+    transition: all 0.1s;
+  }
+  .vv-toolbar .vv-btn:hover { background: var(--bg-hover); color: var(--fg); }
+  .vv-toolbar .vv-btn.active { background: var(--primary); color: #fff; }
+  .vv-field { margin-bottom: 8px; }
+  .vv-field .label { font-size: 10px; color: var(--fg-dim); font-weight: 600; margin-bottom: 2px; text-transform: uppercase; }
+  .vv-field .val {
+    font-family: var(--font-mono); font-size: 11px; background: var(--bg-card);
+    padding: 4px 6px; border-radius: var(--radius); word-break: break-all;
+    max-height: 120px; overflow: auto; min-height: 24px;
+    border: 1px solid transparent; transition: border-color 0.1s;
+  }
+  .vv-field .val:focus { border-color: var(--primary); outline: none; }
+  .vv-field .val[contenteditable="true"] { cursor: text; }
+  .vv-field .val.null { color: var(--fg-dim); font-style: italic; }
+
+  /* --- Metadata Panel --- */
+  .meta-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .meta-table th {
+    background: var(--bg-tertiary); padding: 4px 8px; text-align: left;
+    font-weight: 600; color: var(--fg-dim); font-size: 10px; text-transform: uppercase;
+    border-bottom: 1px solid var(--border); position: sticky; top: 0;
+  }
+  .meta-table td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); font-family: var(--font-mono); }
+  .meta-table td.name { color: var(--fg-accent); }
+  .meta-table td.type { color: #00b894; }
+  .meta-table td.nullable { font-size: 10px; }
+  .meta-table td.nullable.yes { color: var(--warning); }
+  .meta-table td.nullable.no { color: var(--fg-dim); }
+
+  /* --- Calc Panel --- */
+  .calc-toolbar {
+    display: flex; align-items: center; gap: 2px; padding: 4px 6px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .calc-toolbar .calc-btn {
+    width: 22px; height: 22px; border: none; border-radius: 2px;
+    background: transparent; color: var(--fg-dim); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 12px;
+    transition: all 0.1s;
+  }
+  .calc-toolbar .calc-btn:hover { background: var(--bg-hover); color: var(--fg); }
+  .calc-toolbar .calc-spacer { flex: 1; }
+  .calc-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .calc-table th {
+    background: var(--bg-tertiary); padding: 4px 8px; text-align: left;
+    font-weight: 600; color: var(--fg-dim); font-size: 10px; text-transform: uppercase;
+    border-bottom: 1px solid var(--border); position: sticky; top: 0;
+  }
+  .calc-table td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); font-family: var(--font-mono); }
+  .calc-table td.func-name { color: var(--fg-accent); }
+  .calc-table td.func-val { text-align: right; }
+  .calc-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .calc-empty { padding: 20px; text-align: center; color: var(--fg-dim); font-size: 12px; }
+  .calc-empty .icon { font-size: 28px; opacity: 0.3; margin-bottom: 8px; }
+  .calc-add-menu {
+    position: absolute; z-index: 100; background: #2d2d30; border: 1px solid var(--border);
+    border-radius: 6px; min-width: 160px; padding: 4px 0; display: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  .calc-add-menu.visible { display: block; }
+  .calc-add-item {
+    padding: 5px 12px; font-size: 11px; cursor: pointer; color: var(--fg);
+    transition: background 0.08s;
+  }
+  .calc-add-item:hover { background: var(--primary); color: #fff; }
+
+  /* --- Grouping Panel --- */
+  .group-toolbar {
+    display: flex; align-items: center; gap: 2px; padding: 4px 6px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .group-drop-zone {
+    margin: 8px; padding: 8px; border: 2px dashed var(--border);
+    border-radius: 6px; min-height: 60px; display: flex; flex-wrap: wrap;
+    gap: 4px; align-items: flex-start; align-content: flex-start;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .group-drop-zone.drag-over { border-color: var(--primary); background: rgba(0,120,212,0.05); }
+  .group-drop-zone .drop-hint {
+    width: 100%; text-align: center; color: var(--fg-dim); font-size: 11px;
+    padding: 16px; pointer-events: none;
+  }
+  .group-chip {
+    display: flex; align-items: center; gap: 4px; padding: 3px 8px;
+    background: rgba(0,120,212,0.15); border: 1px solid rgba(0,120,212,0.3);
+    border-radius: 12px; font-size: 11px; color: var(--fg-accent);
+    font-family: var(--font-mono); user-select: none;
+  }
+  .group-chip .remove { cursor: pointer; font-size: 13px; opacity: 0.5; }
+  .group-chip .remove:hover { opacity: 1; color: var(--error); }
+  .group-result { flex: 1; overflow: auto; padding: 4px; }
+  .group-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .group-table th {
+    background: var(--bg-tertiary); padding: 4px 8px; text-align: left;
+    font-weight: 600; color: var(--fg-dim); font-size: 10px; text-transform: uppercase;
+    border-bottom: 1px solid var(--border); position: sticky; top: 0;
+  }
+  .group-table td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); font-family: var(--font-mono); }
+  .group-empty { padding: 20px; text-align: center; color: var(--fg-dim); font-size: 12px; }
+
+  /* --- Insight Panel --- */
+  .insight-scroll { flex: 1; overflow: auto; padding: 8px; }
+  .insight-empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 30px; gap: 8px; color: var(--fg-dim); font-size: 12px; text-align: center;
+  }
+  .insight-section { margin-bottom: 12px; }
+  .insight-section-title {
+    font-size: 10px; font-weight: 600; color: var(--fg-dim);
+    text-transform: uppercase; margin-bottom: 6px; padding-bottom: 3px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .insight-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 11px; }
+  .insight-row .label { color: var(--fg-dim); }
+  .insight-row .val { font-family: var(--font-mono); }
+  .insight-row .val.null { color: var(--fg-dim); }
+  .insight-row .val.num { color: var(--fg-accent); }
+  .quality-bar-wrap { margin: 4px 0; }
+  .quality-bar {
+    height: 6px; border-radius: 3px; background: var(--bg-input);
+    overflow: hidden; margin-bottom: 2px;
+  }
+  .quality-bar-fill {
+    height: 100%; border-radius: 3px; transition: width 0.5s;
+  }
+  .quality-bar-fill.good { background: #00b894; }
+  .quality-bar-fill.ok { background: #f0a030; }
+  .quality-bar-fill.bad { background: #e74856; }
+  .quality-score {
+    font-size: 24px; font-weight: 700; font-family: var(--font-mono);
+    text-align: center; padding: 8px;
+  }
+  .quality-score.good { color: #00b894; }
+  .quality-score.ok { color: #f0a030; }
+  .quality-score.bad { color: #e74856; }
+  .distribution-bar-wrap { margin: 2px 0; display: flex; align-items: center; gap: 6px; }
+  .distribution-label { font-size: 10px; color: var(--fg-dim); min-width: 60px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .distribution-bar {
+    flex: 1; height: 14px; background: var(--bg-input); border-radius: 3px;
+    overflow: hidden; position: relative;
+  }
+  .distribution-bar-fill {
+    height: 100%; background: var(--primary); border-radius: 3px;
+    transition: width 0.5s; min-width: 2px;
+  }
+  .distribution-count { font-size: 10px; color: var(--fg-dim); font-family: var(--font-mono); min-width: 40px; text-align: right; }
+  .insight-tabs {
+    display: flex; gap: 0; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; margin-bottom: 0;
+  }
+  .insight-tab {
+    padding: 4px 10px; font-size: 10px; cursor: pointer; color: var(--fg-dim);
+    border-bottom: 2px solid transparent; transition: all 0.1s;
+    white-space: nowrap;
+  }
+  .insight-tab:hover { color: var(--fg); }
+  .insight-tab.active { color: var(--fg-bright); border-bottom-color: var(--primary); }
+  .insight-tab-content { display: none; }
+  .insight-tab-content.active { display: block; }
+  .insight-mode-tabs {
+    display: flex; gap: 0; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; background: var(--bg-tertiary);
+  }
+  .insight-mode-tab {
+    padding: 5px 12px; font-size: 11px; cursor: pointer; color: var(--fg-dim);
+    border-bottom: 2px solid transparent; transition: all 0.1s;
+    white-space: nowrap; font-weight: 500;
+  }
+  .insight-mode-tab:hover { color: var(--fg); }
+  .insight-mode-tab.active { color: var(--fg-bright); border-bottom-color: var(--primary); }
+  .insight-mode-pane { display: none; }
+  .insight-mode-pane.active { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .refs-toolbar {
+    display: flex; align-items: center; gap: 2px; padding: 4px 6px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .tag {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    font-size: 10px; font-weight: 500; margin: 1px;
+  }
+  .tag.info { background: rgba(0,120,212,0.15); color: var(--fg-accent); }
+  .tag.warn { background: rgba(240,160,48,0.15); color: var(--warning); }
+  .tag.good { background: rgba(0,160,0,0.15); color: var(--success); }
+  .tag.bad { background: rgba(231,72,86,0.15); color: var(--error); }
+
+  /* ===== 4. 底部状态栏 ===== */
+  .result-statusbar {
+    display: flex; align-items: center; height: 26px; padding: 0 6px;
+    gap: 6px; flex-shrink: 0; font-size: 10px;
+    color: var(--fg-dim); background: var(--bg-tertiary);
+    border-top: 1px solid var(--border);
+  }
+  .sbar-left { display: flex; align-items: center; gap: 4px; }
+  .sbar-center { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .sbar-right { display: flex; align-items: center; gap: 2px; }
+  .sbar-badge { padding: 1px 6px; border-radius: 2px; font-size: 9px; font-weight: 600; }
+  .sbar-badge.quick { background: rgba(0,184,148,0.2); color: #00b894; }
+  .sbar-badge.sql { background: rgba(26,90,138,0.2); color: #1890ff; }
+  .sbar-badge.duckdb { background: rgba(97,58,138,0.2); color: #b37feb; }
+  .sbar-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border: none; border-radius: 3px;
+    background: transparent; color: var(--fg-dim); cursor: pointer;
+    font-size: 12px; transition: all 0.1s;
+  }
+  .sbar-btn:hover { background: var(--bg-hover); color: var(--fg); }
+  .sbar-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .sbar-btn.active { background: var(--primary); color: #fff; }
+  .sbar-page { font-family: var(--font-mono); }
+  .sbar-input {
+    width: 50px; background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--fg); padding: 1px 4px; border-radius: 2px;
+    font-size: 10px; font-family: var(--font-mono); text-align: center;
+    outline: none;
+  }
+  .sbar-input:focus { border-color: var(--primary); }
+  .sbar-row-info { font-family: var(--font-mono); color: var(--fg); }
+  .sbar-time { color: var(--fg-accent); font-family: var(--font-mono); }
+
+  /* ===== 面板折叠按钮组 ===== */
+  .panel-toggle-group {
+    position: absolute; right: 0; top: 4px; z-index: 10;
+    display: flex; flex-direction: column; gap: 2px;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .result-body:hover .panel-toggle-group { opacity: 1; }
+  .panel-toggle-btn {
+    width: 22px; height: 22px; border: none; border-radius: 3px;
+    background: rgba(45,45,48,0.9); color: var(--fg-dim);
+    cursor: pointer; font-size: 12px; display: flex;
+    align-items: center; justify-content: center;
+    transition: all 0.1s; backdrop-filter: blur(4px);
+  }
+  .panel-toggle-btn:hover { background: var(--bg-hover); color: var(--fg); }
+  .panel-toggle-group.collapsed { right: 4px; }
+
+  /* ===== 右键菜单 ===== */
+  .context-menu {
+    position: fixed; z-index: 1000; min-width: 200px;
+    background: #2d2d30; border: 1px solid var(--border);
+    border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    padding: 4px 0; display: none;
+  }
+  .context-menu.visible { display: block; }
+  .ctx-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 12px; font-size: 12px; color: var(--fg);
+    cursor: pointer; transition: background 0.08s;
+  }
+  .ctx-item:hover { background: var(--primary); color: #fff; }
+  .ctx-item .shortcut { font-size: 10px; color: var(--fg-dim); margin-left: 24px; }
+  .ctx-item:hover .shortcut { color: rgba(255,255,255,0.6); }
+  .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
+  .ctx-item.disabled { opacity: 0.4; cursor: not-allowed; }
+  .ctx-item.disabled:hover { background: transparent; color: var(--fg); }
+
+  /* ===== 结果对比 Modal ===== */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 2000;
+    background: rgba(0,0,0,0.5); display: none;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.visible { display: flex; }
+  .modal {
+    background: #252526; border: 1px solid var(--border);
+    border-radius: 8px; width: 900px; max-height: 80vh;
+    display: flex; flex-direction: column; box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  }
+  .modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    font-size: 14px; font-weight: 600;
+  }
+  .modal-body { flex: 1; overflow: auto; padding: 16px; }
+  .modal-close {
+    width: 24px; height: 24px; border: none; border-radius: 3px;
+    background: transparent; color: var(--fg-dim); cursor: pointer;
+    font-size: 16px; display: flex; align-items: center; justify-content: center;
+  }
+  .modal-close:hover { background: var(--bg-hover); color: var(--fg); }
+  .diff-config { display: flex; gap: 12px; margin-bottom: 16px; align-items: flex-end; }
+  .diff-field { flex: 1; }
+  .diff-label { font-size: 11px; color: var(--fg-dim); margin-bottom: 4px; }
+  .diff-select {
+    width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--fg); padding: 6px 8px; border-radius: var(--radius);
+    font-size: 12px; font-family: var(--font-ui); outline: none;
+  }
+  .diff-select:focus { border-color: var(--primary); }
+  .diff-swap { color: var(--fg-dim); margin-bottom: 6px; cursor: pointer; }
+  .diff-swap:hover { color: var(--fg); }
+  .diff-summary { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .diff-tag { padding: 3px 8px; border-radius: 3px; font-size: 11px; font-weight: 500; }
+  .diff-tag.info { background: rgba(0,120,212,0.15); color: var(--fg-accent); }
+  .diff-tag.success { background: rgba(0,160,0,0.15); color: var(--success); }
+  .diff-tag.error { background: rgba(231,72,86,0.15); color: var(--error); }
+  .diff-tag.warning { background: rgba(240,160,48,0.15); color: var(--warning); }
+  .diff-table-wrap { overflow: auto; max-height: 400px; border: 1px solid var(--border); border-radius: 6px; }
+  .diff-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .diff-table th { position: sticky; top: 0; background: #2d2d30; padding: 6px 10px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); z-index: 1; }
+  .diff-table td { padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,0.03); font-family: var(--font-mono); font-size: 11px; }
+  .diff-table tr.row-added td { background: rgba(0,160,0,0.08); }
+  .diff-table tr.row-removed td { background: rgba(231,72,86,0.08); }
+  .diff-table tr.row-modified td { background: rgba(240,160,48,0.08); }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 40px; right: 20px; z-index: 9999;
+    padding: 8px 16px; background: var(--primary); color: #fff;
+    border-radius: 4px; font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    transition: all 0.3s; pointer-events: none;
+  }
+
+  /* 导出下拉 */
+  .export-dropdown {
+    position: absolute; bottom: 100%; right: 0; z-index: 100;
+    background: #2d2d30; border: 1px solid var(--border);
+    border-radius: 6px; min-width: 140px; padding: 4px 0;
+    display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    margin-bottom: 4px;
+  }
+  .export-dropdown.visible { display: block; }
+  .export-item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+    font-size: 12px; color: var(--fg); cursor: pointer;
+    transition: background 0.08s;
+  }
+  .export-item:hover { background: var(--primary); color: #fff; }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+</style>
+</head>
+<body>
+
+<!-- 顶部演示控制 -->
+<div class="demo-toolbar">
+  <span class="demo-title">结果集模块原型 (DBeaver 风格)</span>
+  <button class="demo-btn active" onclick="resetData()">重置数据</button>
+  <button class="demo-btn" onclick="addMoreRows()">+ 增加行数</button>
+  <button class="demo-btn" onclick="simulateCellEdit()">模拟编辑</button>
+  <button class="demo-btn" onclick="openDiffModal()">结果集对比</button>
+</div>
+
+<!-- ===== 结果集面板 ===== -->
+<div class="result-panel-root" id="result-panel">
+
+  <!-- 1. 结果标签栏 -->
+  <div class="result-tabs" id="result-tabs">
+    <div class="result-tab active" data-tab="result1" onclick="switchTab('result1')">
+      结果 #1 (6 行)
+      <span class="tab-close" onclick="event.stopPropagation();closeTab('result1')">×</span>
+    </div>
+    <div class="result-tab" data-tab="result2" onclick="switchTab('result2')">
+      结果 #2 (0 行)
+      <span class="tab-close" onclick="event.stopPropagation();closeTab('result2')">×</span>
+    </div>
+  </div>
+
+  <!-- 2. 工具栏条 -->
+  <div class="toolbar-strip">
+    <span class="filter-mode-badge quick" id="filter-mode-badge" onclick="cycleFilterMode()">快速</span>
+    <input class="filter-input" id="quick-filter" placeholder="输入过滤表达式..." oninput="onQuickFilter()" onkeydown="if(event.key==='Enter')applyQuickFilter()">
+    <button class="tb-btn" onclick="applyQuickFilter()" style="color:var(--fg-accent);">应用</button>
+    <button class="tb-btn" onclick="clearQuickFilter()">清除</button>
+    <span style="font-size:10px;color:var(--fg-dim);" id="filtered-count"></span>
+    <div class="strip-right">
+      <span class="tb-label">过滤预设:</span>
+      <select class="tb-select" onchange="applyPreset(this.value)">
+        <option value="">选择预设...</option>
+        <option value="active_users">活跃用户 (status=active)</option>
+        <option value="high_spenders">高消费 (>5000)</option>
+        <option value="recent">最近订单 (30天)</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- 3. 主体区域（三栏布局） -->
+  <div class="result-body">
+    <!-- 左侧视图切换栏 -->
+    <div class="view-sidebar">
+      <button class="view-btn active" data-view="grid" onclick="switchView('grid')" title="表格视图">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+        <span class="tooltip">表格视图</span>
+      </button>
+      <button class="view-btn" data-view="text" onclick="switchView('text')" title="文本视图">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>
+        <span class="tooltip">文本视图</span>
+      </button>
+      <button class="view-btn" data-view="record" onclick="switchView('record')" title="记录视图">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span class="tooltip">记录视图</span>
+      </button>
+      <button class="view-btn" data-view="chart" onclick="switchView('chart')" title="图表视图">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        <span class="tooltip">图表视图</span>
+      </button>
+    </div>
+
+    <!-- 中间内容区 -->
+    <div class="grid-area" id="grid-area">
+      <div class="ag-wrapper" id="view-grid" oncontextmenu="return showContextMenu(event,'cell')">
+        <table class="ag-table" id="ag-table">
+          <thead id="ag-header"></thead>
+          <tbody id="ag-body"></tbody>
+        </table>
+      </div>
+      <div class="text-view" id="view-text" style="display:none;"></div>
+      <div class="record-view" id="view-record" style="display:none;">
+        <div class="record-nav">
+          <button class="tb-btn" onclick="prevRecord()">◀</button>
+          <span class="record-nav-text" id="record-nav-text">1 / 6</span>
+          <button class="tb-btn" onclick="nextRecord()">▶</button>
+        </div>
+        <div class="record-form" id="record-form"></div>
+      </div>
+      <div class="chart-view" id="view-chart" style="display:none;">
+        <div class="chart-placeholder">
+          <div class="chart-icon">📊</div>
+          <div class="chart-msg">选择列以生成图表</div>
+          <div style="margin-top:12px;display:flex;gap:8px;justify-content:center;">
+            <button class="tb-btn" onclick="toast('柱状图')">柱状图</button>
+            <button class="tb-btn" onclick="toast('折线图')">折线图</button>
+            <button class="tb-btn" onclick="toast('饼图')">饼图</button>
+            <button class="tb-btn" onclick="toast('散点图')">散点图</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 右侧面板区域（DBeaver 风格） ===== -->
+    <div class="right-panels" id="right-panels">
+      <!-- 面板标签 -->
+      <div class="panel-tabs" id="panel-tabs">
+        <div class="panel-tab active" data-panel="value" onclick="switchPanel('value')" title="值查看器">值</div>
+        <div class="panel-tab" data-panel="metadata" onclick="switchPanel('metadata')" title="元数据">元数据</div>
+        <div class="panel-tab" data-panel="calc" onclick="switchPanel('calc')" title="计算">计算</div>
+        <div class="panel-tab" data-panel="grouping" onclick="switchPanel('grouping')" title="分组">分组</div>
+        <div class="panel-tab" data-panel="refs" onclick="switchPanel('refs')" title="引用">引用</div>
+        <div class="panel-tab" data-panel="insight" onclick="switchPanel('insight')" title="洞察">洞察</div>
+      </div>
+
+      <!-- 面板内容 -->
+      <div class="panel-content">
+
+        <!-- Value Viewer 面板 -->
+        <div class="panel-pane active" id="pane-value">
+          <div class="vv-toolbar">
+            <button class="vv-btn" onclick="toast('内容查看器设置')" title="设置">⚙</button>
+            <button class="vv-btn" onclick="toast('保存到文件')" title="保存到文件">💾</button>
+            <button class="vv-btn" onclick="toast('从文件加载')" title="从文件加载">📂</button>
+            <span style="flex:1;"></span>
+            <button class="vv-btn" id="vv-auto-apply" onclick="toggleAutoApply()" title="自动应用">⚡</button>
+            <button class="vv-btn" onclick="applyCellValue()" title="应用单元格值">✓</button>
+          </div>
+          <div class="value-viewer-content">
+            <div class="vv-field">
+              <div class="label">列</div>
+              <div class="val" id="viewer-col">-</div>
+            </div>
+            <div class="vv-field">
+              <div class="label">行</div>
+              <div class="val" id="viewer-row">-</div>
+            </div>
+            <div class="vv-field">
+              <div class="label">值</div>
+              <div class="val" id="viewer-val" contenteditable="true" style="max-height:250px;overflow:auto;">-</div>
+            </div>
+            <div class="vv-field">
+              <div class="label">类型</div>
+              <div class="val" id="viewer-type" style="color:var(--fg-dim);">-</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Metadata 面板 -->
+        <div class="panel-pane" id="pane-metadata" style="overflow:auto;">
+          <table class="meta-table">
+            <thead><tr><th>属性</th><th>值</th></tr></thead>
+            <tbody id="meta-body">
+              <tr><td class="name">列名</td><td id="meta-colName">-</td></tr>
+              <tr><td class="name">数据类型</td><td class="type" id="meta-dataType">-</td></tr>
+              <tr><td class="name">可为空</td><td class="nullable" id="meta-nullable">-</td></tr>
+              <tr><td class="name">主键</td><td id="meta-pk">-</td></tr>
+              <tr><td class="name">默认值</td><td id="meta-default">-</td></tr>
+              <tr><td class="name">字符集</td><td id="meta-charset">-</td></tr>
+              <tr><td class="name">排序规则</td><td id="meta-collation">-</td></tr>
+              <tr><td class="name">注释</td><td id="meta-comment">-</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Calc 面板 -->
+        <div class="panel-pane" id="pane-calc">
+          <div class="calc-toolbar">
+            <span style="font-size:10px;color:var(--fg-dim);">函数:</span>
+            <button class="calc-btn" onclick="toggleCalcMenu()" title="添加函数">+</button>
+            <button class="calc-btn" onclick="removeCalcFunction()" title="移除函数">−</button>
+            <span class="calc-spacer"></span>
+            <button class="calc-btn" onclick="toggleCalcGroupBy()" id="calc-groupby-btn" title="按列分组">⊞</button>
+            <button class="calc-btn" onclick="resetCalc()" title="重置">↺</button>
+            <div class="calc-add-menu" id="calc-add-menu">
+              <div class="calc-add-item" onclick="addCalcFunc('count')">Count</div>
+              <div class="calc-add-item" onclick="addCalcFunc('countDistinct')">Count Distinct</div>
+              <div class="calc-add-item" onclick="addCalcFunc('countNulls')">Count Nulls</div>
+              <div class="calc-add-item" onclick="addCalcFunc('sum')">Sum</div>
+              <div class="calc-add-item" onclick="addCalcFunc('avg')">Average</div>
+              <div class="calc-add-item" onclick="addCalcFunc('min')">Minimum</div>
+              <div class="calc-add-item" onclick="addCalcFunc('max')">Maximum</div>
+              <div class="calc-add-item" onclick="addCalcFunc('median')">Median</div>
+              <div class="calc-add-item" onclick="addCalcFunc('mode')">Mode</div>
+            </div>
+          </div>
+          <div id="calc-result" style="flex:1;overflow:auto;">
+            <div class="calc-empty">
+              <div class="icon">🔢</div>
+              <div>在表格中选中单元格以查看统计</div>
+              <div style="font-size:10px;margin-top:4px;">Ctrl/Cmd+点击多选</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Grouping 面板 -->
+        <div class="panel-pane" id="pane-grouping">
+          <div class="group-toolbar">
+            <span style="font-size:10px;color:var(--fg-dim);">拖拽列标题到下方:</span>
+            <span style="flex:1;"></span>
+            <button class="calc-btn" onclick="showGroupQuery()" title="查看查询">📝</button>
+            <button class="calc-btn" onclick="clearGrouping()" title="清除">↺</button>
+          </div>
+          <div class="group-drop-zone" id="group-drop-zone"
+            ondragover="event.preventDefault();this.classList.add('drag-over')"
+            ondragleave="this.classList.remove('drag-over')"
+            ondrop="handleGroupDrop(event)">
+            <div class="drop-hint" id="group-drop-hint">拖拽列标题到此处进行分组</div>
+          </div>
+          <div class="group-result" id="group-result">
+            <div class="group-empty">添加列后显示分组结果</div>
+          </div>
+        </div>
+
+        <!-- References 面板 -->
+        <div class="panel-pane" id="pane-refs" style="overflow:auto;">
+          <div class="refs-toolbar">
+            <span style="font-size:10px;color:var(--fg-dim);">外键引用:</span>
+            <span style="flex:1;"></span>
+            <button class="calc-btn" onclick="toast('刷新引用')" title="刷新">↻</button>
+          </div>
+          <div style="padding:8px;">
+            <div class="insight-section">
+              <div class="insight-section-title">引用此列的表</div>
+              <div id="refs-referencing" style="font-size:11px;color:var(--fg-dim);">
+                <div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+                  <span style="color:var(--fg-accent);">orders.user_id</span> → <span style="color:var(--fg);">users.id</span>
+                  <div style="font-size:10px;color:var(--fg-dim);">CASCADE ON DELETE</div>
+                </div>
+                <div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+                  <span style="color:var(--fg-accent);">payments.user_id</span> → <span style="color:var(--fg);">users.id</span>
+                  <div style="font-size:10px;color:var(--fg-dim);">SET NULL ON DELETE</div>
+                </div>
+              </div>
+            </div>
+            <div class="insight-section" style="margin-top:12px;">
+              <div class="insight-section-title">此列引用的表</div>
+              <div id="refs-referenced" style="font-size:11px;color:var(--fg-dim);">
+                <div style="padding:6px 0;">无外键引用</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Insight 面板（完整列洞察 + 表分析 + Schema 洞察） -->
+        <div class="panel-pane" id="pane-insight">
+          <div id="insight-empty" class="insight-scroll" style="display:flex;">
+            <div class="insight-empty">
+              <div style="font-size:28px;opacity:0.3;">📊</div>
+              <div>右键点击列 → 「列洞察」</div>
+              <div style="font-size:10px;color:var(--fg-dim);">查看列统计、分布、质量评分、历史趋势</div>
+              <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
+                <button class="demo-btn" onclick="openTableProfile()" style="font-size:10px;">表分析</button>
+                <button class="demo-btn" onclick="openSchemaInsight()" style="font-size:10px;">Schema 洞察</button>
+              </div>
+            </div>
+          </div>
+          <div id="insight-content" style="display:none;flex-direction:column;height:100%;">
+            <!-- 洞察模式切换 -->
+            <div class="insight-mode-tabs">
+              <div class="insight-mode-tab active" data-imode="column" onclick="switchInsightMode('column')">列洞察</div>
+              <div class="insight-mode-tab" data-imode="table" onclick="switchInsightMode('table')">表分析</div>
+              <div class="insight-mode-tab" data-imode="schema" onclick="switchInsightMode('schema')">Schema</div>
+            </div>
+            <div class="insight-mode-content" style="flex:1;overflow:auto;">
+
+              <!-- ===== 列洞察模式 ===== -->
+              <div class="insight-mode-pane active" id="imode-column">
+                <!-- 洞察子标签 -->
+                <div class="insight-tabs">
+                  <div class="insight-tab active" data-itab="stats" onclick="switchInsightTab('stats')">统计</div>
+                  <div class="insight-tab" data-itab="dist" onclick="switchInsightTab('dist')">分布</div>
+                  <div class="insight-tab" data-itab="quality" onclick="switchInsightTab('quality')">质量</div>
+                  <div class="insight-tab" data-itab="history" onclick="switchInsightTab('history')">历史</div>
+                  <div class="insight-tab" data-itab="multi" onclick="switchInsightTab('multi')">多列</div>
+                </div>
+
+                <div class="insight-scroll">
+                  <!-- 统计 -->
+                  <div class="insight-tab-content active" id="itab-stats">
+                    <div class="insight-section">
+                      <div class="insight-section-title">基本统计 <span style="font-weight:400;font-size:10px;" id="insight-col-type"></span></div>
+                      <div class="insight-row"><span class="label">总行数</span><span class="val num" id="is-total">-</span></div>
+                      <div class="insight-row"><span class="label">非空值</span><span class="val" id="is-nonnull">-</span></div>
+                      <div class="insight-row"><span class="label">空值</span><span class="val null" id="is-null">-</span></div>
+                      <div class="insight-row"><span class="label">空值率</span><span class="val" id="is-nullrate">-</span></div>
+                      <div class="insight-row"><span class="label">唯一值</span><span class="val" id="is-unique">-</span></div>
+                      <div class="insight-row"><span class="label">去重率</span><span class="val" id="is-uniquerate">-</span></div>
+                    </div>
+                    <div class="insight-section" id="insight-numeric-section" style="display:none;">
+                      <div class="insight-section-title">数值统计</div>
+                      <div class="insight-row"><span class="label">最小值</span><span class="val num" id="is-min">-</span></div>
+                      <div class="insight-row"><span class="label">最大值</span><span class="val num" id="is-max">-</span></div>
+                      <div class="insight-row"><span class="label">平均值</span><span class="val num" id="is-avg">-</span></div>
+                      <div class="insight-row"><span class="label">中位数</span><span class="val num" id="is-median">-</span></div>
+                      <div class="insight-row"><span class="label">总和</span><span class="val num" id="is-sum">-</span></div>
+                      <div class="insight-row"><span class="label">标准差</span><span class="val num" id="is-stddev">-</span></div>
+                      <div class="insight-row"><span class="label">P25</span><span class="val num" id="is-p25">-</span></div>
+                      <div class="insight-row"><span class="label">P75</span><span class="val num" id="is-p75">-</span></div>
+                      <div class="insight-row"><span class="label">偏度</span><span class="val num" id="is-skew">-</span></div>
+                      <div class="insight-row"><span class="label">峰度</span><span class="val num" id="is-kurtosis">-</span></div>
+                    </div>
+                    <div class="insight-section" id="insight-text-section" style="display:none;">
+                      <div class="insight-section-title">文本统计</div>
+                      <div class="insight-row"><span class="label">最短长度</span><span class="val" id="is-minlen">-</span></div>
+                      <div class="insight-row"><span class="label">最长长度</span><span class="val" id="is-maxlen">-</span></div>
+                      <div class="insight-row"><span class="label">平均长度</span><span class="val" id="is-avglen">-</span></div>
+                    </div>
+                    <div class="insight-section" id="insight-sample-section">
+                      <div class="insight-section-title">样本值 <span style="font-weight:400;font-size:10px;">(前5条)</span></div>
+                      <div id="insight-samples" style="font-size:11px;font-family:var(--font-mono);"></div>
+                    </div>
+                  </div>
+
+                  <!-- 分布 -->
+                  <div class="insight-tab-content" id="itab-dist">
+                    <div class="insight-section">
+                      <div class="insight-section-title">值分布 (Top 10)</div>
+                      <div id="insight-distribution"></div>
+                    </div>
+                    <div class="insight-section" id="insight-histogram-section" style="display:none;">
+                      <div class="insight-section-title">直方图 <span style="font-weight:400;font-size:10px;">(10 桶)</span></div>
+                      <div id="insight-histogram"></div>
+                    </div>
+                  </div>
+
+                  <!-- 质量 -->
+                  <div class="insight-tab-content" id="itab-quality">
+                    <div class="quality-score good" id="iq-score">92</div>
+                    <div style="text-align:center;font-size:11px;color:var(--fg-dim);margin-bottom:12px;" id="iq-level">优秀</div>
+                    <div class="insight-section">
+                      <div class="insight-section-title">维度评分</div>
+                      <div id="iq-dimensions"></div>
+                    </div>
+                    <div class="insight-section">
+                      <div class="insight-section-title">异常检测</div>
+                      <div id="iq-anomalies" style="font-size:11px;color:var(--fg-dim);">
+                        <span class="tag good">无异常值</span>
+                      </div>
+                    </div>
+                    <div class="insight-section">
+                      <div class="insight-section-title">摘要</div>
+                      <div style="font-size:11px;color:var(--fg-dim);" id="iq-summary">该列数据质量良好，无异常值检测。</div>
+                    </div>
+                  </div>
+
+                  <!-- 历史 -->
+                  <div class="insight-tab-content" id="itab-history">
+                    <div class="insight-section">
+                      <div class="insight-section-title">快照历史
+                        <span style="font-weight:400;font-size:10px;cursor:pointer;color:var(--fg-accent);" onclick="saveInsightSnapshot()">保存快照</span>
+                      </div>
+                      <div id="insight-history-list">
+                        <div style="font-size:11px;color:var(--fg-dim);padding:8px;">暂无历史快照</div>
+                      </div>
+                    </div>
+                    <div class="insight-section" id="insight-compare-section" style="display:none;">
+                      <div class="insight-section-title">版本对比
+                        <span style="font-weight:400;font-size:10px;cursor:pointer;color:var(--fg-dim);" onclick="clearComparison()">清除</span>
+                      </div>
+                      <div id="insight-compare-content"></div>
+                    </div>
+                  </div>
+
+                  <!-- 多列 -->
+                  <div class="insight-tab-content" id="itab-multi">
+                    <div class="insight-section">
+                      <div class="insight-section-title">多列分析规则</div>
+                      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;" id="insight-rules">
+                        <span class="tag info" onclick="toast('相关性分析: 计算列间Pearson相关系数')">相关性分析</span>
+                        <span class="tag info" onclick="toast('异常检测: 基于IQR/Z-score检测异常')">异常检测</span>
+                        <span class="tag info" onclick="toast('重复检测: 检测完全重复的行')">重复检测</span>
+                        <span class="tag info" onclick="toast('模式识别: 使用正则匹配模式')">模式识别</span>
+                      </div>
+                      <div style="display:flex;gap:6px;margin-bottom:8px;">
+                        <select class="tb-select" id="multi-col-select-1" style="flex:1;">
+                          <option value="">选择列 1...</option>
+                        </select>
+                        <select class="tb-select" id="multi-col-select-2" style="flex:1;">
+                          <option value="">选择列 2...</option>
+                        </select>
+                      </div>
+                      <button class="demo-btn" style="width:100%;" onclick="executeMultiAnalysis()">执行分析</button>
+                      <div id="multi-analysis-result" style="margin-top:8px;font-size:11px;"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ===== 表分析模式 ===== -->
+              <div class="insight-mode-pane" id="imode-table" style="overflow:auto;padding:8px;">
+                <div class="insight-section">
+                  <div class="insight-section-title">表概况 <span id="table-profile-name" style="font-weight:400;font-size:10px;">users</span></div>
+                  <div class="insight-row"><span class="label">总行数</span><span class="val num" id="tp-rowcount">6</span></div>
+                  <div class="insight-row"><span class="label">总列数</span><span class="val num" id="tp-colcount">7</span></div>
+                  <div class="insight-row"><span class="label">数据大小</span><span class="val" id="tp-datasize">~2.4 KB</span></div>
+                  <div class="insight-row"><span class="label">索引数</span><span class="val num" id="tp-idxcount">3</span></div>
+                </div>
+                <div class="insight-section">
+                  <div class="insight-section-title">表质量评分</div>
+                  <div class="quality-score good" id="tp-score">87</div>
+                  <div style="text-align:center;font-size:11px;color:var(--fg-dim);">良好</div>
+                </div>
+                <div class="insight-section">
+                  <div class="insight-section-title">列质量概览</div>
+                  <div id="tp-column-scores"></div>
+                </div>
+                <div class="insight-section">
+                  <div class="insight-section-title">建议</div>
+                  <div style="font-size:11px;color:var(--fg-dim);" id="tp-suggestions">
+                    <div style="padding:3px 0;">• email 列空值率较高 (16.7%)</div>
+                    <div style="padding:3px 0;">• 考虑为 status 列添加索引</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ===== Schema 洞察模式 ===== -->
+              <div class="insight-mode-pane" id="imode-schema" style="overflow:auto;padding:8px;">
+                <div class="insight-section">
+                  <div class="insight-section-title">Schema 概况</div>
+                  <div class="insight-row"><span class="label">表数量</span><span class="val num" id="si-tablecount">12</span></div>
+                  <div class="insight-row"><span class="label">总列数</span><span class="val num" id="si-coltotal">86</span></div>
+                  <div class="insight-row"><span class="label">外键数</span><span class="val num" id="si-fkcount">8</span></div>
+                  <div class="insight-row"><span class="label">视图数</span><span class="val num" id="si-viewcount">3</span></div>
+                </div>
+                <div class="insight-section">
+                  <div class="insight-section-title">Schema 健康评分</div>
+                  <div class="quality-score good" id="si-score">78</div>
+                  <div style="text-align:center;font-size:11px;color:var(--fg-dim);">良好</div>
+                </div>
+                <div class="insight-section">
+                  <div class="insight-section-title">外键候选</div>
+                  <div id="si-fk-candidates" style="font-size:11px;">
+                    <div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+                      <span style="color:var(--fg-accent);">orders.user_id</span> → users.id
+                      <span class="tag info">高置信度</span>
+                    </div>
+                    <div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+                      <span style="color:var(--fg-accent);">payments.user_id</span> → users.id
+                      <span class="tag info">高置信度</span>
+                    </div>
+                    <div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.03);">
+                      <span style="color:var(--fg-accent);">reviews.user_id</span> → users.id
+                      <span class="tag warn">中置信度</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="insight-section">
+                  <div class="insight-section-title">类型不匹配</div>
+                  <div id="si-type-mismatch" style="font-size:11px;color:var(--fg-dim);">
+                    <div style="padding:3px 0;">• user_id: users.id (int) vs reviews.user_id (varchar)</div>
+                  </div>
+                </div>
+                <div class="insight-section">
+                  <div class="insight-section-title">孤立表</div>
+                  <div id="si-orphan-tables" style="font-size:11px;color:var(--fg-dim);">
+                    <div style="padding:3px 0;">• temp_data (0 外键引用)</div>
+                    <div style="padding:3px 0;">• audit_log (0 外键引用)</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 可拖拽分割条 -->
+    <div class="splitter" id="splitter" onmousedown="startSplitterDrag(event)"></div>
+
+    <!-- 面板折叠按钮组 -->
+    <div class="panel-toggle-group" id="panel-toggle-group">
+      <button class="panel-toggle-btn" id="panel-toggle-btn" onclick="toggleRightPanels()" title="折叠/展开面板">◀</button>
+      <button class="panel-toggle-btn" id="panel-max-btn" onclick="maximizePanel()" title="最大化面板">□</button>
+    </div>
+  </div>
+
+  <!-- 4. 底部状态栏 -->
+  <div class="result-statusbar">
+    <div class="sbar-left">
+      <span class="sbar-badge quick" id="sbar-mode-badge">快速</span>
+      <button class="sbar-btn" onclick="toast('刷新结果')" title="刷新">↻</button>
+      <button class="sbar-btn" onclick="toast('保存更改')" title="保存" id="sbar-save-btn" disabled>💾</button>
+      <button class="sbar-btn" onclick="cancelEdits()" title="取消更改" id="sbar-cancel-btn" disabled>✕</button>
+      <button class="sbar-btn" onclick="openDiffModal()" title="对比结果集">⇄</button>
+      <div style="position:relative;">
+        <button class="sbar-btn" onclick="toggleExportMenu()" title="导出">↓</button>
+        <div class="export-dropdown" id="export-dropdown">
+          <div class="export-item" onclick="doExport('csv')">CSV 格式</div>
+          <div class="export-item" onclick="doExport('json')">JSON 格式</div>
+          <div class="export-item" onclick="doExport('insert')">INSERT 语句</div>
+          <div class="export-item" onclick="doExport('sql')">SQL 脚本</div>
+          <div class="export-item" onclick="doExport('xlsx')">Excel (XLSX)</div>
+          <div class="export-item" onclick="doExport('parquet')">Parquet</div>
+        </div>
+      </div>
+      <button class="sbar-btn" id="sbar-panels-btn" onclick="toggleRightPanels()" title="切换面板">⊟</button>
+    </div>
+    <div class="sbar-center">
+      <span class="sbar-row-info" id="sbar-rows">6 行</span>
+      <span class="sbar-time" id="sbar-time">0.234s</span>
+    </div>
+    <div class="sbar-right">
+      <button class="sbar-btn" onclick="firstPage()" title="首页">⏮</button>
+      <button class="sbar-btn" onclick="prevPage()" title="上一页">◀</button>
+      <span class="sbar-page" id="sbar-page">1/1 页</span>
+      <button class="sbar-btn" onclick="nextPage()" title="下一页">▶</button>
+      <button class="sbar-btn" onclick="lastPage()" title="末页">⏭</button>
+      <input class="sbar-input" id="goto-page" placeholder="跳转" onkeydown="if(event.key==='Enter')goToPage()">
+      <button class="sbar-btn" onclick="togglePagination()" title="切换分页" id="sbar-pagination-btn">⊞</button>
+    </div>
+  </div>
+</div>
+
+<!-- 右键菜单 -->
+<div class="context-menu" id="context-menu">
+  <div class="ctx-item" onclick="ctxAction('copyCell')">复制单元格 <span class="shortcut">Ctrl+C</span></div>
+  <div class="ctx-item" onclick="ctxAction('copyRow')">复制行</div>
+  <div class="ctx-item" onclick="ctxAction('copyRowJson')">复制行 (JSON)</div>
+  <div class="ctx-item" onclick="ctxAction('copyRowInsert')">复制行 (INSERT)</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxAction('filterByValue')">按此值过滤</div>
+  <div class="ctx-item" onclick="ctxAction('sqlFilterByValue')">SQL 按此值过滤</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxAction('sortAsc')">升序排序</div>
+  <div class="ctx-item" onclick="ctxAction('sortDesc')">降序排序</div>
+  <div class="ctx-item" onclick="ctxAction('sendSortToSql')">发送排序至 SQL</div>
+  <div class="ctx-item" onclick="ctxAction('sendSortToDuckdb')">发送排序至 DuckDB</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxAction('columnSummary')">列统计</div>
+  <div class="ctx-item" onclick="ctxAction('openColumnInsights')">列洞察</div>
+  <div class="ctx-item" onclick="ctxAction('openColumnVisualization')">打开列可视化</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxAction('hideColumn')">隐藏此列</div>
+  <div class="ctx-item" onclick="ctxAction('autoSizeColumn')">自动调整列宽</div>
+  <div class="ctx-item" onclick="ctxAction('autoSizeAll')">自动调整所有列宽</div>
+</div>
+
+<!-- 结果对比 Modal -->
+<div class="modal-overlay" id="diff-modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <span>结果集对比</span>
+      <button class="modal-close" onclick="closeDiffModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="diff-config">
+        <div class="diff-field">
+          <div class="diff-label">对比表 A</div>
+          <select class="diff-select" id="diff-tab-a">
+            <option value="result1">结果 #1 (6 行)</option>
+            <option value="result2">结果 #2 (0 行)</option>
+          </select>
+        </div>
+        <div class="diff-swap" onclick="swapDiffTabs()" title="交换">⇄</div>
+        <div class="diff-field">
+          <div class="diff-label">对比表 B</div>
+          <select class="diff-select" id="diff-tab-b">
+            <option value="result1">结果 #1 (6 行)</option>
+            <option value="result2" selected>结果 #2 (0 行)</option>
+          </select>
+        </div>
+      </div>
+      <div class="diff-summary" id="diff-summary"></div>
+      <div class="diff-table-wrap" id="diff-table-wrap"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========== 数据 ==========
+const columns = ['id', 'username', 'email', 'order_count', 'total_spent', 'last_order_date', 'status'];
+const colTypes = {
+  id: { type: 'int', nullable: false, pk: true, default: 'AUTO_INCREMENT' },
+  username: { type: 'varchar(50)', nullable: false, pk: false, default: null },
+  email: { type: 'varchar(100)', nullable: true, pk: false, default: null },
+  order_count: { type: 'int', nullable: false, pk: false, default: '0' },
+  total_spent: { type: 'decimal(10,2)', nullable: false, pk: false, default: '0.00' },
+  last_order_date: { type: 'date', nullable: true, pk: false, default: null },
+  status: { type: 'varchar(20)', nullable: false, pk: false, default: "'active'" },
+};
+
+const baseData = [
+  [1, 'alice', 'alice@example.com', 42, 12450.00, '2026-07-30', 'active'],
+  [2, 'bob', 'bob@example.com', 38, 9820.50, '2026-07-29', 'active'],
+  [3, 'charlie', 'charlie@example.com', 27, 7340.00, '2026-07-28', 'inactive'],
+  [4, 'diana', 'diana@example.com', 15, 3210.75, '2026-07-25', 'active'],
+  [5, 'eve', 'eve@example.com', 8, 1550.00, '2026-07-20', 'active'],
+  [6, 'frank', null, 3, 420.00, '2026-07-15', 'inactive'],
+];
+
+let allRows = JSON.parse(JSON.stringify(baseData));
+let filteredRows = [...allRows];
+let currentView = 'grid';
+let currentRecordIdx = 0;
+let dirtyCells = {};
+let sortState = { col: null, dir: null };
+let paginationEnabled = true;
+let pageSize = 100;
+let currentPage = 0;
+let activeTab = 'result1';
+let filterMode = 'quick';
+let rightPanelsVisible = true;
+let activePanel = 'value';
+let selectedCell = null;
+let selectedCells = []; // for Calc panel multi-select
+let calcFunctions = ['count', 'countDistinct'];
+let calcGroupBy = false;
+let groupColumns = [];
+let autoApply = true;
+
+// ========== 渲染 ==========
+function renderAll() {
+  renderTable();
+  renderTextView();
+  renderRecordView();
+  updateStatusBar();
+  updateCalcPanel();
+}
+
+function getDisplayRows() {
+  let rows = [...filteredRows];
+  if (sortState.col !== null) {
+    const ci = columns.indexOf(sortState.col);
+    rows.sort((a, b) => {
+      const va = a[ci], vb = b[ci];
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      const cmp = typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb));
+      return sortState.dir === 'desc' ? -cmp : cmp;
+    });
+  }
+  return rows;
+}
+
+function getPagedRows() {
+  const rows = getDisplayRows();
+  if (!paginationEnabled || rows.length <= pageSize) return rows;
+  const start = currentPage * pageSize;
+  return rows.slice(start, start + pageSize);
+}
+
+function renderTable() {
+  const header = document.getElementById('ag-header');
+  const body = document.getElementById('ag-body');
+
+  // Header
+  let h = '<tr><th class="row-num-col">#</th>';
+  for (const col of columns) {
+    const sorted = sortState.col === col ? ' sorted' : '';
+    const icon = sortState.col === col ? (sortState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    const typeIcon = colTypes[col] ? colTypes[col].type.match(/^(int|decimal|varchar|date)/)?.[1]?.charAt(0).toUpperCase() : '?';
+    h += `<th class="${sorted}" onclick="toggleSort('${col}')" oncontextmenu="event.stopPropagation();showContextMenu(event,'header','${col}')" draggable="true" ondragstart="handleDragStart(event,'${col}')">${col}<span class="sort-icon">${icon}</span><span class="col-type-icon" title="拖拽到分组面板">${typeIcon}</span></th>`;
+  }
+  h += '</tr>';
+  header.innerHTML = h;
+
+  // Body
+  const rows = getPagedRows();
+  let b = '';
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowNum = paginationEnabled && filteredRows.length > pageSize ? (currentPage * pageSize + i + 1) : (i + 1);
+    const dirtyClass = dirtyCells[i] ? ' class="dirty-row"' : '';
+    b += `<tr${dirtyClass} onclick="selectRow(${i})" ondblclick="editCell(${i},'${columns[0]}')">`;
+    b += `<td class="row-num">${rowNum}</td>`;
+    for (let j = 0; j < columns.length; j++) {
+      const val = row[j];
+      const col = columns[j];
+      const isNum = typeof val === 'number';
+      const isNull = val === null;
+      const dirty = dirtyCells[i] && dirtyCells[i][col];
+      const cls = [isNum ? 'num' : '', isNull ? 'null' : '', dirty ? 'dirty' : ''].filter(Boolean).join(' ');
+      const display = isNull ? 'NULL' : String(val);
+      b += `<td class="${cls}" onclick="event.stopPropagation();onCellClick(event,${i},'${col}')" oncontextmenu="event.stopPropagation();showContextMenu(event,'cell','${col}',${i})" ondblclick="event.stopPropagation();editCell(${i},'${col}')">${display}</td>`;
+    }
+    b += '</tr>';
+  }
+  body.innerHTML = b;
+  updateFilteredCount();
+}
+
+function renderTextView() {
+  const el = document.getElementById('view-text');
+  const rows = getDisplayRows();
+  let txt = '═══════════════════ 文本视图 ═══════════════════\n\n';
+  txt += columns.map(c => c.padEnd(15)).join(' | ') + '\n';
+  txt += columns.map(() => '──────────────').join('─┼─') + '\n';
+  for (const row of rows) {
+    txt += row.map(v => (v === null ? 'NULL' : String(v)).padEnd(15)).join(' | ') + '\n';
+  }
+  txt += `\n${rows.length} 行 (共 ${filteredRows.length} 行)\n`;
+  el.textContent = txt;
+}
+
+function renderRecordView() {
+  const form = document.getElementById('record-form');
+  const rows = getDisplayRows();
+  if (rows.length === 0) { form.innerHTML = '<div style="color:var(--fg-dim);padding:20px;">无数据</div>'; return; }
+  const idx = Math.min(currentRecordIdx, rows.length - 1);
+  const row = rows[idx];
+  document.getElementById('record-nav-text').textContent = `${idx + 1} / ${rows.length}`;
+
+  let html = '';
+  for (let i = 0; i < columns.length; i++) {
+    const val = row[i];
+    const isNull = val === null;
+    html += `<div class="record-field">`;
+    html += `<span class="record-field-label">${columns[i]}</span>`;
+    html += `<span class="record-field-value${isNull ? ' null' : ''}">${isNull ? 'NULL' : String(val)}</span>`;
+    html += `</div>`;
+  }
+  form.innerHTML = html;
+}
+
+function updateStatusBar() {
+  const rows = filteredRows;
+  document.getElementById('sbar-rows').textContent = `${rows.length} 行`;
+  document.getElementById('sbar-page').textContent = paginationEnabled && rows.length > pageSize
+    ? `${currentPage + 1}/${Math.ceil(rows.length / pageSize)} 页`
+    : '1/1 页';
+  document.getElementById('sbar-mode-badge').textContent = filterMode === 'quick' ? '快速' : filterMode === 'sql' ? 'SQL' : 'DuckDB';
+  document.getElementById('sbar-mode-badge').className = 'sbar-badge ' + filterMode;
+  const hasDirty = Object.keys(dirtyCells).length > 0;
+  document.getElementById('sbar-save-btn').disabled = !hasDirty;
+  document.getElementById('sbar-cancel-btn').disabled = !hasDirty;
+  document.getElementById('sbar-panels-btn').classList.toggle('active', rightPanelsVisible);
+}
+
+function updateFilteredCount() {
+  const el = document.getElementById('filtered-count');
+  if (filteredRows.length !== allRows.length) {
+    el.textContent = `${allRows.length} → ${filteredRows.length} 行`;
+  } else {
+    el.textContent = '';
+  }
+}
+
+// ========== 右侧面板切换 ==========
+function switchPanel(name) {
+  activePanel = name;
+  document.querySelectorAll('.panel-tab').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
+  document.querySelectorAll('.panel-pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
+  if (!rightPanelsVisible) {
+    rightPanelsVisible = true;
+    document.getElementById('right-panels').classList.remove('collapsed');
+    document.getElementById('panel-toggle-btn').style.display = 'none';
+    updateStatusBar();
+  }
+}
+
+function toggleRightPanels() {
+  rightPanelsVisible = !rightPanelsVisible;
+  const panels = document.getElementById('right-panels');
+  const splitter = document.getElementById('splitter');
+  const toggleBtn = document.getElementById('panel-toggle-btn');
+  panels.classList.toggle('collapsed', !rightPanelsVisible);
+  splitter.style.display = rightPanelsVisible ? '' : 'none';
+  toggleBtn.textContent = rightPanelsVisible ? '▶' : '◀';
+  document.getElementById('panel-toggle-group').classList.toggle('collapsed', !rightPanelsVisible);
+  updateStatusBar();
+}
+
+// ========== 分割条拖拽 ==========
+let isDragging = false;
+let splitterStartX = 0;
+let panelStartWidth = 0;
+
+function startSplitterDrag(e) {
+  isDragging = true;
+  splitterStartX = e.clientX;
+  const panels = document.getElementById('right-panels');
+  panelStartWidth = panels.offsetWidth;
+  document.getElementById('splitter').classList.add('dragging');
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+}
+
+document.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  const dx = splitterStartX - e.clientX;
+  const newWidth = Math.max(200, Math.min(600, panelStartWidth + dx));
+  const panels = document.getElementById('right-panels');
+  panels.style.width = newWidth + 'px';
+  panels.style.transition = 'none';
+});
+
+document.addEventListener('mouseup', () => {
+  if (!isDragging) return;
+  isDragging = false;
+  document.getElementById('splitter').classList.remove('dragging');
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  const panels = document.getElementById('right-panels');
+  panels.style.transition = 'width 0.2s, border 0.2s';
+  if (!rightPanelsVisible) {
+    rightPanelsVisible = true;
+    panels.classList.remove('collapsed');
+    document.getElementById('splitter').style.display = '';
+    document.getElementById('panel-toggle-btn').textContent = '▶';
+    document.getElementById('panel-toggle-group').classList.remove('collapsed');
+    updateStatusBar();
+  }
+});
+
+// ========== 最大化面板 ==========
+let panelIsMaximized = false;
+let savedPanelWidth = 300;
+
+function maximizePanel() {
+  const panels = document.getElementById('right-panels');
+  const maxBtn = document.getElementById('panel-max-btn');
+  if (!rightPanelsVisible) {
+    toggleRightPanels();
+  }
+  if (panelIsMaximized) {
+    panels.style.width = savedPanelWidth + 'px';
+    maxBtn.textContent = '□';
+    maxBtn.style.background = 'rgba(45,45,48,0.9)';
+  } else {
+    savedPanelWidth = panels.offsetWidth;
+    panels.style.width = '500px';
+    maxBtn.textContent = '❐';
+    maxBtn.style.background = 'var(--primary)';
+  }
+  panelIsMaximized = !panelIsMaximized;
+}
+
+// ========== Value Viewer ==========
+function toggleAutoApply() {
+  autoApply = !autoApply;
+  document.getElementById('vv-auto-apply').classList.toggle('active', autoApply);
+  toast(autoApply ? '自动应用: 开启' : '自动应用: 关闭');
+}
+
+function applyCellValue() {
+  if (!selectedCell) return;
+  const newVal = document.getElementById('viewer-val').textContent;
+  const rowIdx = selectedCell.row;
+  const col = selectedCell.col;
+  const rows = getDisplayRows();
+  const ci = columns.indexOf(col);
+  let parsed = newVal === 'NULL' ? null : (isNaN(newVal) || newVal.trim() === '' ? newVal : parseFloat(newVal));
+  if (!dirtyCells[rowIdx]) dirtyCells[rowIdx] = {};
+  dirtyCells[rowIdx][col] = { oldVal: rows[rowIdx][ci], newVal: parsed };
+  rows[rowIdx][ci] = parsed;
+  selectedCell.value = parsed;
+  renderAll();
+  toast('单元格值已应用（未保存到数据库）');
+}
+
+// ========== Metadata 面板 ==========
+function updateMetadataPanel(col) {
+  const meta = colTypes[col];
+  if (!meta) {
+    document.getElementById('meta-colName').textContent = col || '-';
+    document.getElementById('meta-dataType').textContent = '-';
+    document.getElementById('meta-nullable').textContent = '-';
+    document.getElementById('meta-pk').textContent = '-';
+    document.getElementById('meta-default').textContent = '-';
+    document.getElementById('meta-charset').textContent = '-';
+    document.getElementById('meta-collation').textContent = '-';
+    document.getElementById('meta-comment').textContent = '-';
+    return;
+  }
+  document.getElementById('meta-colName').textContent = col;
+  document.getElementById('meta-dataType').textContent = meta.type;
+  const nullableEl = document.getElementById('meta-nullable');
+  nullableEl.textContent = meta.nullable ? 'YES' : 'NO';
+  nullableEl.className = 'nullable ' + (meta.nullable ? 'yes' : 'no');
+  document.getElementById('meta-pk').textContent = meta.pk ? 'YES' : 'NO';
+  document.getElementById('meta-default').textContent = meta.default || 'NULL';
+  document.getElementById('meta-charset').textContent = 'utf8mb4';
+  document.getElementById('meta-collation').textContent = 'utf8mb4_unicode_ci';
+  document.getElementById('meta-comment').textContent = '-';
+}
+
+// ========== Calc 面板 ==========
+function calcFuncName(f) {
+  const map = { count: 'Count', countDistinct: 'Count Distinct', countNulls: 'Count Nulls', sum: 'Sum', avg: 'Average', min: 'Minimum', max: 'Maximum', median: 'Median', mode: 'Mode' };
+  return map[f] || f;
+}
+
+function updateCalcPanel() {
+  const container = document.getElementById('calc-result');
+  if (selectedCells.length === 0) {
+    container.innerHTML = '<div class="calc-empty"><div class="icon">🔢</div><div>在表格中选中单元格以查看统计</div><div style="font-size:10px;margin-top:4px;">Ctrl/Cmd+点击多选</div></div>';
+    return;
+  }
+
+  // Extract values from selected cells
+  const values = selectedCells.map(c => c.value).filter(v => v !== null && v !== undefined);
+  const numericVals = values.filter(v => typeof v === 'number' || (!isNaN(v) && v !== ''));
+
+  let html = '<table class="calc-table"><thead><tr><th>函数</th><th>值</th></tr></thead><tbody>';
+  for (const func of calcFunctions) {
+    let result = '-';
+    switch (func) {
+      case 'count': result = values.length; break;
+      case 'countDistinct': result = new Set(values.map(v => String(v))).size; break;
+      case 'countNulls': result = selectedCells.filter(c => c.value === null || c.value === undefined).length; break;
+      case 'sum': result = numericVals.length > 0 ? numericVals.map(Number).reduce((a, b) => a + b, 0).toFixed(2) : 'N/A'; break;
+      case 'avg': result = numericVals.length > 0 ? (numericVals.map(Number).reduce((a, b) => a + b, 0) / numericVals.length).toFixed(2) : 'N/A'; break;
+      case 'min': result = numericVals.length > 0 ? Math.min(...numericVals.map(Number)).toFixed(2) : 'N/A'; break;
+      case 'max': result = numericVals.length > 0 ? Math.max(...numericVals.map(Number)).toFixed(2) : 'N/A'; break;
+      case 'median': {
+        if (numericVals.length === 0) { result = 'N/A'; break; }
+        const sorted = numericVals.map(Number).sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        result = sorted.length % 2 === 0 ? ((sorted[mid - 1] + sorted[mid]) / 2).toFixed(2) : sorted[mid].toFixed(2);
+        break;
+      }
+      case 'mode': {
+        if (values.length === 0) { result = 'N/A'; break; }
+        const freq = {};
+        values.forEach(v => { const k = String(v); freq[k] = (freq[k] || 0) + 1; });
+        const maxFreq = Math.max(...Object.values(freq));
+        result = Object.entries(freq).filter(([, c]) => c === maxFreq).map(([v]) => v).join(', ');
+        break;
+      }
+    }
+    html += `<tr><td class="func-name">${calcFuncName(func)}</td><td class="func-val">${result}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function toggleCalcMenu() {
+  document.getElementById('calc-add-menu').classList.toggle('visible');
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#calc-add-menu') && !e.target.closest('.calc-btn[title="添加函数"]')) {
+    document.getElementById('calc-add-menu').classList.remove('visible');
+  }
+});
+
+function addCalcFunc(func) {
+  if (!calcFunctions.includes(func)) {
+    calcFunctions.push(func);
+  }
+  document.getElementById('calc-add-menu').classList.remove('visible');
+  updateCalcPanel();
+}
+
+function removeCalcFunction() {
+  if (calcFunctions.length > 1) {
+    calcFunctions.pop();
+    updateCalcPanel();
+  }
+}
+
+function resetCalc() {
+  calcFunctions = ['count', 'countDistinct'];
+  calcGroupBy = false;
+  document.getElementById('calc-groupby-btn').classList.remove('active');
+  updateCalcPanel();
+}
+
+function toggleCalcGroupBy() {
+  calcGroupBy = !calcGroupBy;
+  document.getElementById('calc-groupby-btn').classList.toggle('active', calcGroupBy);
+  toast(calcGroupBy ? '按列分组: 开启' : '按列分组: 关闭');
+  updateCalcPanel();
+}
+
+// ========== Grouping 面板 ==========
+function handleDragStart(e, col) {
+  e.dataTransfer.setData('text/plain', col);
+  e.dataTransfer.effectAllowed = 'copy';
+}
+
+function handleGroupDrop(e) {
+  e.preventDefault();
+  e.target.classList.remove('drag-over');
+  const col = e.dataTransfer.getData('text/plain');
+  if (col && !groupColumns.includes(col)) {
+    groupColumns.push(col);
+    renderGroupChips();
+    computeGrouping();
+  }
+}
+
+function renderGroupChips() {
+  const zone = document.getElementById('group-drop-zone');
+  const hint = document.getElementById('group-drop-hint');
+  if (groupColumns.length === 0) {
+    hint.style.display = '';
+    zone.querySelectorAll('.group-chip').forEach(c => c.remove());
+    document.getElementById('group-result').innerHTML = '<div class="group-empty">添加列后显示分组结果</div>';
+    return;
+  }
+  hint.style.display = 'none';
+  zone.querySelectorAll('.group-chip').forEach(c => c.remove());
+  groupColumns.forEach(col => {
+    const chip = document.createElement('span');
+    chip.className = 'group-chip';
+    chip.innerHTML = `${col} <span class="remove" onclick="removeGroupCol('${col}')">×</span>`;
+    zone.appendChild(chip);
+  });
+}
+
+function removeGroupCol(col) {
+  groupColumns = groupColumns.filter(c => c !== col);
+  renderGroupChips();
+  if (groupColumns.length === 0) {
+    document.getElementById('group-result').innerHTML = '<div class="group-empty">添加列后显示分组结果</div>';
+  } else {
+    computeGrouping();
+  }
+}
+
+function computeGrouping() {
+  if (groupColumns.length === 0) return;
+  const rows = getDisplayRows();
+  const groups = {};
+  for (const row of rows) {
+    const key = groupColumns.map(c => {
+      const ci = columns.indexOf(c);
+      return row[ci] === null ? 'NULL' : String(row[ci]);
+    }).join(' | ');
+    if (!groups[key]) groups[key] = { count: 0, rows: [] };
+    groups[key].count++;
+    groups[key].rows.push(row);
+  }
+
+  // Calculate sum of first numeric column for each group
+  const firstNumCol = columns.find(c => colTypes[c] && (colTypes[c].type.startsWith('int') || colTypes[c].type.startsWith('decimal')));
+  let html = '<table class="group-table"><thead><tr>';
+  groupColumns.forEach(c => html += `<th>${c}</th>`);
+  html += '<th>Count</th>';
+  if (firstNumCol) html += `<th>SUM(${firstNumCol})</th>`;
+  html += '</tr></thead><tbody>';
+
+  for (const [key, group] of Object.entries(groups)) {
+    html += '<tr>';
+    const parts = key.split(' | ');
+    parts.forEach(p => html += `<td>${p}</td>`);
+    html += `<td>${group.count}</td>`;
+    if (firstNumCol) {
+      const ci = columns.indexOf(firstNumCol);
+      const sum = group.rows.reduce((s, r) => s + (Number(r[ci]) || 0), 0);
+      html += `<td>${sum.toFixed(2)}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('group-result').innerHTML = html;
+}
+
+function showGroupQuery() {
+  if (groupColumns.length === 0) { toast('请先添加分组列'); return; }
+  const cols = groupColumns.join(', ');
+  const firstNumCol = columns.find(c => colTypes[c] && (colTypes[c].type.startsWith('int') || colTypes[c].type.startsWith('decimal')));
+  let sql = `SELECT ${cols}, COUNT(*)`;
+  if (firstNumCol) sql += `, SUM(${firstNumCol})`;
+  sql += `\nFROM table_name\nGROUP BY ${cols}\nORDER BY ${cols}`;
+  toast('查询已复制: ' + sql.substring(0, 50) + '...');
+  navigator.clipboard.writeText(sql);
+}
+
+function clearGrouping() {
+  groupColumns = [];
+  renderGroupChips();
+  document.getElementById('group-result').innerHTML = '<div class="group-empty">添加列后显示分组结果</div>';
+}
+
+// ========== Insight 面板 ==========
+let insightSnapshotCount = 0;
+let insightSnapshots = [];
+let currentInsightCol = null;
+
+function openInsightForColumn(col) {
+  switchPanel('insight');
+  currentInsightCol = col;
+  document.getElementById('insight-empty').style.display = 'none';
+  document.getElementById('insight-content').style.display = 'flex';
+  switchInsightMode('column');
+  const rows = getDisplayRows();
+  const ci = columns.indexOf(col);
+  const vals = rows.map(r => r[ci]);
+  const nonNull = vals.filter(v => v !== null);
+  const type = colTypes[col]?.type || 'varchar';
+  const isNumeric = type.startsWith('int') || type.startsWith('decimal') || type.startsWith('float');
+
+  // Basic stats
+  document.getElementById('insight-col-type').textContent = `(${type})`;
+  document.getElementById('is-total').textContent = vals.length.toLocaleString();
+  document.getElementById('is-nonnull').textContent = nonNull.length.toLocaleString();
+  document.getElementById('is-null').textContent = (vals.length - nonNull.length).toLocaleString();
+  const nullRate = vals.length > 0 ? ((vals.length - nonNull.length) / vals.length * 100).toFixed(1) : '0.0';
+  document.getElementById('is-nullrate').textContent = nullRate + '%';
+  const uniqueCount = new Set(nonNull.map(v => String(v))).size;
+  document.getElementById('is-unique').textContent = uniqueCount.toLocaleString();
+  const uniqueRate = nonNull.length > 0 ? (uniqueCount / nonNull.length * 100).toFixed(1) : '0.0';
+  document.getElementById('is-uniquerate').textContent = uniqueRate + '%';
+
+  // Numeric section
+  const numVals = nonNull.filter(v => typeof v === 'number' || (!isNaN(v) && v !== ''));
+  const numSection = document.getElementById('insight-numeric-section');
+  const textSection = document.getElementById('insight-text-section');
+  const histSection = document.getElementById('insight-histogram-section');
+  if (isNumeric && numVals.length > 0) {
+    numSection.style.display = '';
+    textSection.style.display = 'none';
+    histSection.style.display = '';
+    const nums = numVals.map(Number).sort((a, b) => a - b);
+    document.getElementById('is-min').textContent = nums[0].toFixed(2);
+    document.getElementById('is-max').textContent = nums[nums.length - 1].toFixed(2);
+    const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+    document.getElementById('is-avg').textContent = mean.toFixed(2);
+    const mid = Math.floor(nums.length / 2);
+    const median = nums.length % 2 === 0 ? (nums[mid - 1] + nums[mid]) / 2 : nums[mid];
+    document.getElementById('is-median').textContent = median.toFixed(2);
+    document.getElementById('is-sum').textContent = nums.reduce((a, b) => a + b, 0).toFixed(2);
+    const variance = nums.reduce((s, v) => s + (v - mean) ** 2, 0) / nums.length;
+    const stddev = Math.sqrt(variance);
+    document.getElementById('is-stddev').textContent = stddev.toFixed(2);
+    document.getElementById('is-p25').textContent = nums[Math.floor(nums.length * 0.25)].toFixed(2);
+    document.getElementById('is-p75').textContent = nums[Math.floor(nums.length * 0.75)].toFixed(2);
+    // Skewness
+    const n = nums.length;
+    const m3 = nums.reduce((s, v) => s + (v - mean) ** 3, 0) / n;
+    const skew = stddev > 0 ? m3 / (stddev ** 3) : 0;
+    document.getElementById('is-skew').textContent = skew.toFixed(3);
+    // Kurtosis (excess)
+    const m4 = nums.reduce((s, v) => s + (v - mean) ** 4, 0) / n;
+    const kurt = stddev > 0 ? (m4 / (stddev ** 4)) - 3 : 0;
+    document.getElementById('is-kurtosis').textContent = kurt.toFixed(3);
+
+    // Histogram
+    const bins = 10;
+    const min = nums[0], max = nums[nums.length - 1];
+    const binWidth = (max - min) / bins || 1;
+    const histData = Array(bins).fill(0);
+    nums.forEach(v => {
+      const idx = Math.min(bins - 1, Math.floor((v - min) / binWidth));
+      histData[idx]++;
+    });
+    const maxHist = Math.max(...histData, 1);
+    let histHtml = '';
+    for (let i = 0; i < bins; i++) {
+      const lo = (min + i * binWidth).toFixed(1);
+      const hi = (min + (i + 1) * binWidth).toFixed(1);
+      const pct = (histData[i] / maxHist * 100).toFixed(0);
+      histHtml += `<div class="distribution-bar-wrap"><span class="distribution-label">${lo}-${hi}</span><div class="distribution-bar"><div class="distribution-bar-fill" style="width:${pct}%"></div></div><span class="distribution-count">${histData[i]}</span></div>`;
+    }
+    document.getElementById('insight-histogram').innerHTML = histHtml;
+  } else {
+    numSection.style.display = 'none';
+    textSection.style.display = '';
+    histSection.style.display = 'none';
+    const strLens = nonNull.map(v => String(v).length);
+    document.getElementById('is-minlen').textContent = strLens.length > 0 ? Math.min(...strLens) : '-';
+    document.getElementById('is-maxlen').textContent = strLens.length > 0 ? Math.max(...strLens) : '-';
+    document.getElementById('is-avglen').textContent = strLens.length > 0 ? (strLens.reduce((a, b) => a + b, 0) / strLens.length).toFixed(1) : '-';
+  }
+
+  // Samples
+  const samples = nonNull.slice(0, 5).map(v => String(v).substring(0, 40));
+  document.getElementById('insight-samples').innerHTML = samples.map(s => `<div style="padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.03);">${s}</div>`).join('');
+
+  // Distribution
+  const freq = {};
+  nonNull.forEach(v => { const k = String(v); freq[k] = (freq[k] || 0) + 1; });
+  const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const maxCount = sorted.length > 0 ? sorted[0][1] : 1;
+  let distHtml = '';
+  for (const [val, count] of sorted) {
+    const pct = (count / maxCount * 100).toFixed(0);
+    distHtml += `<div class="distribution-bar-wrap"><span class="distribution-label">${val.length > 15 ? val.substring(0,15)+'...' : val}</span><div class="distribution-bar"><div class="distribution-bar-fill" style="width:${pct}%"></div></div><span class="distribution-count">${count}</span></div>`;
+  }
+  document.getElementById('insight-distribution').innerHTML = distHtml || '<div style="font-size:11px;color:var(--fg-dim);">无分布数据</div>';
+
+  // Quality
+  const completeness = Math.round((1 - (vals.length - nonNull.length) / Math.max(1, vals.length)) * 100);
+  const uniqueness = Math.round((uniqueCount / Math.max(1, nonNull.length)) * 100);
+  const consistency = isNumeric ? 90 : 85;
+  const score = Math.round(completeness * 0.4 + uniqueness * 0.3 + consistency * 0.3);
+  const qEl = document.getElementById('iq-score');
+  const qLevel = document.getElementById('iq-level');
+  qEl.textContent = score;
+  qEl.className = 'quality-score ' + (score >= 80 ? 'good' : score >= 60 ? 'ok' : 'bad');
+  qLevel.textContent = score >= 80 ? '优秀' : score >= 60 ? '良好' : '需改进';
+  qLevel.style.color = score >= 80 ? '#00b894' : score >= 60 ? '#f0a030' : '#e74856';
+
+  const dims = [
+    { name: '完整性', score: completeness, weight: 40 },
+    { name: '唯一性', score: uniqueness, weight: 30 },
+    { name: '一致性', score: consistency, weight: 30 },
+  ];
+  document.getElementById('iq-dimensions').innerHTML = dims.map(d => `
+    <div style="margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px;"><span>${d.name}</span><span style="font-family:var(--font-mono);">${d.score}% (权重 ${d.weight}%)</span></div>
+      <div class="quality-bar"><div class="quality-bar-fill ${d.score >= 80 ? 'good' : d.score >= 60 ? 'ok' : 'bad'}" style="width:${d.score}%"></div></div>
+    </div>
+  `).join('');
+
+  // Anomaly detection
+  const anomalies = [];
+  if (isNumeric && numVals.length > 0) {
+    const nums = numVals.map(Number);
+    const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+    const stddev = Math.sqrt(nums.reduce((s, v) => s + (v - mean) ** 2, 0) / nums.length);
+    const outliers = nums.filter(v => Math.abs(v - mean) > 3 * stddev);
+    if (outliers.length > 0) anomalies.push(`${outliers.length} 个异常值 (Z-score > 3)`);
+    const q1 = nums[Math.floor(nums.length * 0.25)];
+    const q3 = nums[Math.floor(nums.length * 0.75)];
+    const iqr = q3 - q1;
+    const iqrOutliers = nums.filter(v => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr);
+    if (iqrOutliers.length > 0) anomalies.push(`${iqrOutliers.length} 个异常值 (IQR)`);
+  }
+  const anomEl = document.getElementById('iq-anomalies');
+  if (anomalies.length > 0) {
+    anomEl.innerHTML = anomalies.map(a => `<span class="tag warn">${a}</span>`).join('');
+  } else {
+    anomEl.innerHTML = '<span class="tag good">无异常值</span>';
+  }
+  document.getElementById('iq-summary').textContent = score >= 80 ? '该列数据质量良好，分布均匀，无异常值。' : score >= 60 ? '该列存在部分空值或重复值，建议关注。' : '该列数据质量较差，空值率较高或唯一性不足。';
+
+  // History
+  renderInsightHistory();
+
+  // Multi-column: populate selects
+  const sel1 = document.getElementById('multi-col-select-1');
+  const sel2 = document.getElementById('multi-col-select-2');
+  sel1.innerHTML = '<option value="">选择列 1...</option>' + columns.map(c => `<option value="${c}">${c}</option>`).join('');
+  sel2.innerHTML = '<option value="">选择列 2...</option>' + columns.map(c => `<option value="${c}">${c}</option>`).join('');
+
+  // Reset to stats tab
+  switchInsightTab('stats');
+}
+
+function switchInsightMode(mode) {
+  document.querySelectorAll('.insight-mode-tab').forEach(t => t.classList.toggle('active', t.dataset.imode === mode));
+  document.querySelectorAll('.insight-mode-pane').forEach(p => p.classList.toggle('active', p.id === 'imode-' + mode));
+  if (mode === 'table') populateTableProfile();
+  if (mode === 'schema') populateSchemaInsight();
+}
+
+function switchInsightTab(tab) {
+  document.querySelectorAll('.insight-tab').forEach(t => t.classList.toggle('active', t.dataset.itab === tab));
+  document.querySelectorAll('.insight-tab-content').forEach(c => c.classList.toggle('active', c.id === 'itab-' + tab));
+}
+
+function openTableProfile() {
+  switchPanel('insight');
+  document.getElementById('insight-empty').style.display = 'none';
+  document.getElementById('insight-content').style.display = 'flex';
+  switchInsightMode('table');
+  populateTableProfile();
+}
+
+function populateTableProfile() {
+  const rows = getDisplayRows();
+  const cols = columns;
+  document.getElementById('tp-rowcount').textContent = rows.length;
+  document.getElementById('tp-colcount').textContent = cols.length;
+  document.getElementById('tp-datasize').textContent = '~' + (JSON.stringify(rows).length / 1024).toFixed(1) + ' KB';
+
+  // Column quality scores
+  let colScoresHtml = '';
+  for (const col of cols) {
+    const ci = columns.indexOf(col);
+    const vals = rows.map(r => r[ci]);
+    const nonNull = vals.filter(v => v !== null);
+    const nullRate = ((vals.length - nonNull.length) / Math.max(1, vals.length) * 100).toFixed(0);
+    const unique = new Set(nonNull.map(v => String(v))).size;
+    const uniqueRate = nonNull.length > 0 ? (unique / nonNull.length * 100).toFixed(0) : 0;
+    const colScore = Math.round(100 - parseInt(nullRate) * 0.5 - (100 - parseInt(uniqueRate)) * 0.2);
+    const cls = colScore >= 80 ? 'good' : colScore >= 60 ? 'ok' : 'bad';
+    colScoresHtml += `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.03);">
+      <span style="font-family:var(--font-mono);">${col}</span>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <div class="quality-bar" style="width:60px;"><div class="quality-bar-fill ${cls}" style="width:${colScore}%"></div></div>
+        <span style="font-family:var(--font-mono);width:30px;text-align:right;">${colScore}</span>
+      </div>
+    </div>`;
+  }
+  document.getElementById('tp-column-scores').innerHTML = colScoresHtml;
+
+  // Overall table score
+  const allScores = [];
+  for (const col of cols) {
+    const ci = columns.indexOf(col);
+    const vals = rows.map(r => r[ci]);
+    const nonNull = vals.filter(v => v !== null);
+    const nullRate = ((vals.length - nonNull.length) / Math.max(1, vals.length) * 100);
+    const unique = new Set(nonNull.map(v => String(v))).size;
+    const uniqueRate = nonNull.length > 0 ? (unique / nonNull.length * 100) : 0;
+    allScores.push(Math.round(100 - nullRate * 0.5 - (100 - uniqueRate) * 0.2));
+  }
+  const avgScore = allScores.reduce((a, b) => a + b, 0) / allScores.length;
+  const tpEl = document.getElementById('tp-score');
+  tpEl.textContent = Math.round(avgScore);
+  tpEl.className = 'quality-score ' + (avgScore >= 80 ? 'good' : avgScore >= 60 ? 'ok' : 'bad');
+}
+
+function openSchemaInsight() {
+  switchPanel('insight');
+  document.getElementById('insight-empty').style.display = 'none';
+  document.getElementById('insight-content').style.display = 'flex';
+  switchInsightMode('schema');
+  populateSchemaInsight();
+}
+
+function populateSchemaInsight() {
+  // Schema data is static for prototype
+  document.getElementById('si-tablecount').textContent = '12';
+  document.getElementById('si-coltotal').textContent = '86';
+  document.getElementById('si-fkcount').textContent = '8';
+  document.getElementById('si-viewcount').textContent = '3';
+}
+
+function renderInsightHistory() {
+  if (insightSnapshots.length === 0) {
+    document.getElementById('insight-history-list').innerHTML = '<div style="font-size:11px;color:var(--fg-dim);padding:8px;">暂无历史快照</div>';
+    document.getElementById('insight-compare-section').style.display = 'none';
+    return;
+  }
+  let html = '';
+  for (const snap of insightSnapshots) {
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.03);">
+      <span style="color:var(--fg-dim);">${snap.time}</span>
+      <div style="display:flex;gap:6px;">
+        <span style="cursor:pointer;color:var(--fg-accent);" onclick="viewSnapshot('${snap.id}')">查看</span>
+        <span style="cursor:pointer;color:var(--fg-dim);" onclick="compareSnapshot('${snap.id}')">对比</span>
+      </div>
+    </div>`;
+  }
+  html += '<div style="font-size:11px;color:var(--fg-dim);padding:4px 0;">点击「保存快照」创建新快照</div>';
+  document.getElementById('insight-history-list').innerHTML = html;
+}
+
+function saveInsightSnapshot() {
+  if (!currentInsightCol) return;
+  insightSnapshotCount++;
+  const now = new Date();
+  const timeStr = now.toLocaleString('zh-CN', { hour12: false });
+  insightSnapshots.push({
+    id: 'snap_' + insightSnapshotCount,
+    time: timeStr,
+    col: currentInsightCol,
+    totalRows: document.getElementById('is-total').textContent,
+    nullRate: document.getElementById('is-nullrate').textContent,
+    unique: document.getElementById('is-unique').textContent,
+  });
+  renderInsightHistory();
+  toast('快照已保存: ' + timeStr);
+}
+
+function viewSnapshot(id) {
+  const snap = insightSnapshots.find(s => s.id === id);
+  if (!snap) return;
+  toast(`快照 ${id}: ${snap.col} | ${snap.totalRows} 行 | 空值率 ${snap.nullRate}`);
+}
+
+function compareSnapshot(id) {
+  const snap = insightSnapshots.find(s => s.id === id);
+  if (!snap) return;
+  document.getElementById('insight-compare-section').style.display = '';
+  document.getElementById('insight-compare-content').innerHTML = `
+    <div style="display:flex;gap:8px;font-size:11px;margin-bottom:4px;">
+      <div style="flex:1;padding:6px;background:var(--bg-card);border-radius:4px;">
+        <div style="color:var(--fg-dim);font-size:10px;">当前</div>
+        <div>${document.getElementById('is-total').textContent} 行</div>
+        <div>空值率: ${document.getElementById('is-nullrate').textContent}</div>
+      </div>
+      <div style="flex:1;padding:6px;background:var(--bg-card);border-radius:4px;">
+        <div style="color:var(--fg-dim);font-size:10px;">快照 ${snap.time}</div>
+        <div>${snap.totalRows} 行</div>
+        <div>空值率: ${snap.nullRate}</div>
+      </div>
+    </div>
+  `;
+}
+
+function clearComparison() {
+  document.getElementById('insight-compare-section').style.display = 'none';
+  document.getElementById('insight-compare-content').innerHTML = '';
+}
+
+function executeMultiAnalysis() {
+  const col1 = document.getElementById('multi-col-select-1').value;
+  const col2 = document.getElementById('multi-col-select-2').value;
+  if (!col1 || !col2) { toast('请选择两个列'); return; }
+  const rows = getDisplayRows();
+  const ci1 = columns.indexOf(col1);
+  const ci2 = columns.indexOf(col2);
+  const vals1 = rows.map(r => Number(r[ci1])).filter(v => !isNaN(v));
+  const vals2 = rows.map(r => Number(r[ci2])).filter(v => !isNaN(v));
+  const minLen = Math.min(vals1.length, vals2.length);
+  if (minLen < 2) { toast('需要至少 2 个有效数值'); return; }
+
+  const v1 = vals1.slice(0, minLen);
+  const v2 = vals2.slice(0, minLen);
+  const mean1 = v1.reduce((a, b) => a + b, 0) / minLen;
+  const mean2 = v2.reduce((a, b) => a + b, 0) / minLen;
+  const cov = v1.reduce((s, a, i) => s + (a - mean1) * (v2[i] - mean2), 0) / minLen;
+  const std1 = Math.sqrt(v1.reduce((s, a) => s + (a - mean1) ** 2, 0) / minLen);
+  const std2 = Math.sqrt(v2.reduce((s, a) => s + (a - mean2) ** 2, 0) / minLen);
+  const corr = std1 > 0 && std2 > 0 ? (cov / (std1 * std2)).toFixed(4) : 'N/A';
+
+  document.getElementById('multi-analysis-result').innerHTML = `
+    <div style="background:var(--bg-card);padding:8px;border-radius:4px;">
+      <div style="font-size:11px;color:var(--fg-dim);margin-bottom:4px;">相关性分析结果</div>
+      <div class="insight-row"><span class="label">Pearson 相关系数</span><span class="val num">${corr}</span></div>
+      <div class="insight-row"><span class="label">协方差</span><span class="val num">${cov.toFixed(2)}</span></div>
+      <div class="insight-row"><span class="label">样本量</span><span class="val num">${minLen}</span></div>
+      <div style="font-size:10px;color:var(--fg-dim);margin-top:4px;">${Number(corr) > 0.7 ? '强正相关' : Number(corr) > 0.3 ? '中等正相关' : Number(corr) > -0.3 ? '弱相关' : Number(corr) > -0.7 ? '中等负相关' : '强负相关'}</div>
+    </div>
+  `;
+}
+
+// ========== 过滤 ==========
+function onQuickFilter() {
+  const expr = document.getElementById('quick-filter').value.trim();
+  if (!expr) { filteredRows = [...allRows]; renderAll(); return; }
+  filteredRows = allRows.filter(row => {
+    try {
+      const eqMatch = expr.match(/^(\w+)\s*=\s*(.+)$/);
+      if (eqMatch) {
+        const col = eqMatch[1], val = eqMatch[2].replace(/^['"]|['"]$/g, '');
+        const ci = columns.indexOf(col);
+        if (ci === -1) return true;
+        return String(row[ci] ?? '').toLowerCase().includes(val.toLowerCase());
+      }
+      const gtMatch = expr.match(/^(\w+)\s*>\s*(\d+\.?\d*)$/);
+      if (gtMatch) {
+        const col = gtMatch[1], val = parseFloat(gtMatch[2]);
+        const ci = columns.indexOf(col);
+        if (ci === -1) return true;
+        return (Number(row[ci]) || 0) > val;
+      }
+      return row.some(v => v !== null && String(v).toLowerCase().includes(expr.toLowerCase()));
+    } catch { return true; }
+  });
+  currentPage = 0;
+  renderAll();
+}
+
+function applyQuickFilter() { onQuickFilter(); }
+function clearQuickFilter() {
+  document.getElementById('quick-filter').value = '';
+  filteredRows = [...allRows];
+  currentPage = 0;
+  renderAll();
+}
+
+function applyPreset(val) {
+  if (!val) return;
+  const filterInput = document.getElementById('quick-filter');
+  if (val === 'active_users') { filterInput.value = "status = 'active'"; }
+  else if (val === 'high_spenders') { filterInput.value = "total_spent > 5000"; }
+  else if (val === 'recent') { filterInput.value = "last_order_date > 2026-07-01"; }
+  onQuickFilter();
+}
+
+function cycleFilterMode() {
+  const modes = ['quick', 'sql', 'duckdb'];
+  const idx = modes.indexOf(filterMode);
+  filterMode = modes[(idx + 1) % 3];
+  const badge = document.getElementById('filter-mode-badge');
+  const labels = { quick: '快速', sql: 'SQL', duckdb: 'DuckDB' };
+  badge.textContent = labels[filterMode];
+  badge.className = 'filter-mode-badge ' + filterMode;
+  updateStatusBar();
+  toast(`切换到 ${labels[filterMode]} 过滤模式`);
+}
+
+// ========== 视图切换 ==========
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  document.getElementById('view-grid').style.display = view === 'grid' ? '' : 'none';
+  document.getElementById('view-text').style.display = view === 'text' ? '' : 'none';
+  document.getElementById('view-record').style.display = view === 'record' ? '' : 'none';
+  document.getElementById('view-chart').style.display = view === 'chart' ? '' : 'none';
+  if (view === 'text') renderTextView();
+  if (view === 'record') renderRecordView();
+}
+
+// ========== 排序 ==========
+function toggleSort(col) {
+  if (sortState.col === col) {
+    if (sortState.dir === 'asc') sortState.dir = 'desc';
+    else if (sortState.dir === 'desc') { sortState.col = null; sortState.dir = null; }
+  } else {
+    sortState = { col, dir: 'asc' };
+  }
+  currentPage = 0;
+  renderAll();
+}
+
+// ========== 分页 ==========
+function firstPage() { currentPage = 0; renderAll(); }
+function prevPage() { if (currentPage > 0) { currentPage--; renderAll(); } }
+function nextPage() {
+  const maxPage = Math.ceil(filteredRows.length / pageSize) - 1;
+  if (currentPage < maxPage) { currentPage++; renderAll(); }
+}
+function lastPage() { currentPage = Math.ceil(filteredRows.length / pageSize) - 1; renderAll(); }
+function goToPage() {
+  const p = parseInt(document.getElementById('goto-page').value, 10);
+  const max = Math.ceil(filteredRows.length / pageSize);
+  if (p >= 1 && p <= max) { currentPage = p - 1; renderAll(); }
+  document.getElementById('goto-page').value = '';
+}
+function togglePagination() {
+  paginationEnabled = !paginationEnabled;
+  document.getElementById('sbar-pagination-btn').style.opacity = paginationEnabled ? '1' : '0.4';
+  currentPage = 0;
+  renderAll();
+}
+
+// ========== 记录视图导航 ==========
+function prevRecord() {
+  const rows = getDisplayRows();
+  if (currentRecordIdx > 0) currentRecordIdx--;
+  renderRecordView();
+}
+function nextRecord() {
+  const rows = getDisplayRows();
+  if (currentRecordIdx < rows.length - 1) currentRecordIdx++;
+  renderRecordView();
+}
+
+// ========== 单元格操作 ==========
+function onCellClick(e, rowIdx, col) {
+  const rows = getPagedRows();
+  const row = rows[rowIdx];
+  const ci = columns.indexOf(col);
+  const value = row[ci];
+
+  // Multi-select for Calc panel
+  if (e.ctrlKey || e.metaKey) {
+    const exists = selectedCells.findIndex(c => c.row === rowIdx && c.col === col);
+    if (exists >= 0) {
+      selectedCells.splice(exists, 1);
+    } else {
+      selectedCells.push({ row: rowIdx, col, value });
+    }
+  } else {
+    selectedCells = [{ row: rowIdx, col, value }];
+  }
+
+  selectedCell = { row: rowIdx, col, value };
+  updateValueViewer();
+  updateMetadataPanel(col);
+  updateCalcPanel();
+
+  // Highlight selected cells
+  document.querySelectorAll('#ag-body td').forEach(td => td.classList.remove('range-selected'));
+  selectedCells.forEach(sc => {
+    const row = document.querySelector(`#ag-body tr:nth-child(${sc.row + 1})`);
+    if (row) {
+      const ci = columns.indexOf(sc.col);
+      const td = row.querySelector(`td:nth-child(${ci + 2})`);
+      if (td) td.classList.add('range-selected');
+    }
+  });
+}
+
+function editCell(rowIdx, col) {
+  const rows = getPagedRows();
+  const row = rows[rowIdx];
+  const ci = columns.indexOf(col);
+  const cell = document.querySelector(`#ag-body tr:nth-child(${rowIdx + 1}) td:nth-child(${ci + 2})`);
+  if (!cell) return;
+  const oldVal = row[ci] === null ? '' : String(row[ci]);
+  cell.classList.add('editing');
+  cell.innerHTML = `<input value="${oldVal.replace(/"/g, '&quot;')}" onblur="commitEdit(${rowIdx},'${col}',this.value)" onkeydown="if(event.key==='Enter')commitEdit(${rowIdx},'${col}',this.value);if(event.key==='Escape')cancelEdit(${rowIdx},'${col}')">`;
+  cell.querySelector('input').focus();
+  cell.querySelector('input').select();
+}
+
+function commitEdit(rowIdx, col, newVal) {
+  const rows = getDisplayRows();
+  const row = rows[rowIdx];
+  const ci = columns.indexOf(col);
+  const oldVal = row[ci];
+  let parsed = newVal;
+  if (newVal.toLowerCase() === 'null') parsed = null;
+  else if (!isNaN(newVal) && newVal.trim() !== '') parsed = parseFloat(newVal);
+  if (!dirtyCells[rowIdx]) dirtyCells[rowIdx] = {};
+  dirtyCells[rowIdx][col] = { oldVal, newVal: parsed };
+  row[ci] = parsed;
+  selectedCell = { row: rowIdx, col, value: parsed };
+  renderAll();
+  updateValueViewer();
+}
+
+function cancelEdit(rowIdx, col) {
+  renderAll();
+}
+
+function cancelEdits() {
+  for (const [ri, cells] of Object.entries(dirtyCells)) {
+    const row = getDisplayRows()[parseInt(ri)];
+    for (const [col, info] of Object.entries(cells)) {
+      const ci = columns.indexOf(col);
+      row[ci] = info.oldVal;
+    }
+  }
+  dirtyCells = {};
+  selectedCells = [];
+  renderAll();
+  toast('已撤销所有更改');
+}
+
+function simulateCellEdit() {
+  editCell(0, 'username');
+}
+
+// ========== 值查看器 ==========
+function updateValueViewer() {
+  if (!selectedCell) {
+    document.getElementById('viewer-col').textContent = '-';
+    document.getElementById('viewer-row').textContent = '-';
+    document.getElementById('viewer-val').textContent = '-';
+    document.getElementById('viewer-type').textContent = '-';
+    return;
+  }
+  document.getElementById('viewer-col').textContent = selectedCell.col;
+  document.getElementById('viewer-row').textContent = selectedCell.row + 1;
+  const v = selectedCell.value;
+  document.getElementById('viewer-val').textContent = v === null ? 'NULL' : (typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v));
+  document.getElementById('viewer-type').textContent = v === null ? 'NULL' : (typeof v === 'number' ? 'number' : 'string');
+}
+
+// ========== 右键菜单 ==========
+let ctxTarget = {};
+
+function showContextMenu(e, type, col, rowIdx) {
+  e.preventDefault();
+  ctxTarget = { type, col, rowIdx, value: null };
+  if (type === 'cell' && rowIdx !== undefined) {
+    const rows = getPagedRows();
+    const ci = columns.indexOf(col);
+    ctxTarget.value = rows[rowIdx] ? rows[rowIdx][ci] : null;
+  }
+  const menu = document.getElementById('context-menu');
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.classList.add('visible');
+}
+
+function ctxAction(action) {
+  const { type, col, rowIdx, value } = ctxTarget;
+  closeContextMenu();
+  switch (action) {
+    case 'copyCell':
+      if (value !== null && value !== undefined) navigator.clipboard.writeText(String(value));
+      toast('已复制单元格');
+      break;
+    case 'copyRow': {
+      const rows = getPagedRows();
+      const row = rows[rowIdx];
+      navigator.clipboard.writeText(row.map(v => v === null ? 'NULL' : String(v)).join('\t'));
+      toast('已复制行');
+      break;
+    }
+    case 'copyRowJson': {
+      const rows = getPagedRows();
+      const row = rows[rowIdx];
+      const obj = {};
+      columns.forEach((c, i) => obj[c] = row[i]);
+      navigator.clipboard.writeText(JSON.stringify(obj, null, 2));
+      toast('已复制行 (JSON)');
+      break;
+    }
+    case 'copyRowInsert': {
+      const rows = getPagedRows();
+      const row = rows[rowIdx];
+      const vals = row.map(v => v === null ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`).join(', ');
+      navigator.clipboard.writeText(`INSERT INTO table_name (${columns.join(', ')}) VALUES (${vals});`);
+      toast('已复制行 (INSERT)');
+      break;
+    }
+    case 'filterByValue': {
+      filterMode = 'quick';
+      const filterInput = document.getElementById('quick-filter');
+      if (typeof value === 'string') filterInput.value = `${col} = '${value}'`;
+      else filterInput.value = `${col} = ${value}`;
+      onQuickFilter();
+      break;
+    }
+    case 'sqlFilterByValue': {
+      filterMode = 'sql';
+      const filterInput = document.getElementById('quick-filter');
+      if (typeof value === 'string') filterInput.value = `${col} = '${value}'`;
+      else filterInput.value = `${col} = ${value}`;
+      document.getElementById('filter-mode-badge').textContent = 'SQL';
+      document.getElementById('filter-mode-badge').className = 'filter-mode-badge sql';
+      onQuickFilter();
+      break;
+    }
+    case 'sortAsc':
+      sortState = { col, dir: 'asc' };
+      currentPage = 0;
+      renderAll();
+      break;
+    case 'sortDesc':
+      sortState = { col, dir: 'desc' };
+      currentPage = 0;
+      renderAll();
+      break;
+    case 'sendSortToSql':
+      toast(`发送排序至 SQL: ORDER BY ${col} ASC`);
+      break;
+    case 'sendSortToDuckdb':
+      toast(`发送排序至 DuckDB: ORDER BY ${col} DESC`);
+      break;
+    case 'columnSummary': {
+      const rows = getDisplayRows();
+      const ci = columns.indexOf(col);
+      const vals = rows.map(r => r[ci]).filter(v => v !== null);
+      if (typeof vals[0] === 'number') {
+        const sum = vals.reduce((a, b) => a + b, 0);
+        const avg = sum / vals.length;
+        const min = Math.min(...vals);
+        const max = Math.max(...vals);
+        toast(`${col}: 数量=${vals.length}, 总和=${sum.toFixed(2)}, 均值=${avg.toFixed(2)}, 最小=${min}, 最大=${max}`);
+      } else {
+        const unique = new Set(vals).size;
+        toast(`${col}: 数量=${vals.length}, 去重=${unique}`);
+      }
+      break;
+    }
+    case 'openColumnInsights':
+      openInsightForColumn(col);
+      break;
+    case 'openColumnVisualization':
+      switchView('chart');
+      switchPanel('insight');
+      openInsightForColumn(col);
+      toast('可视化视图已打开');
+      break;
+    case 'hideColumn':
+      toast(`隐藏列: ${col}`);
+      break;
+    case 'autoSizeColumn':
+      toast(`自动调整列宽: ${col}`);
+      break;
+    case 'autoSizeAll':
+      toast('自动调整所有列宽');
+      break;
+  }
+}
+
+function closeContextMenu() {
+  document.getElementById('context-menu').classList.remove('visible');
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.context-menu')) closeContextMenu();
+});
+
+// ========== 导出 ==========
+function toggleExportMenu() {
+  document.getElementById('export-dropdown').classList.toggle('visible');
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#export-dropdown') && !e.target.closest('.sbar-btn[title="导出"]')) {
+    document.getElementById('export-dropdown').classList.remove('visible');
+  }
+});
+
+function doExport(format) {
+  document.getElementById('export-dropdown').classList.remove('visible');
+  const rows = getDisplayRows();
+  let content = '';
+  if (format === 'csv') {
+    content = [columns.join(','), ...rows.map(r => r.map(v => v === null ? '' : String(v)).join(','))].join('\n');
+  } else if (format === 'json') {
+    content = JSON.stringify(rows.map(r => { const o = {}; columns.forEach((c, i) => o[c] = r[i]); return o; }), null, 2);
+  } else if (format === 'insert') {
+    content = rows.map(r => {
+      const vals = r.map(v => v === null ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`).join(', ');
+      return `INSERT INTO table_name (${columns.join(', ')}) VALUES (${vals});`;
+    }).join('\n');
+  } else if (format === 'sql') {
+    content = `-- 导出 ${rows.length} 行\n` + rows.map(r => {
+      const vals = r.map(v => v === null ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`).join(', ');
+      return `INSERT INTO table_name (${columns.join(', ')}) VALUES (${vals});`;
+    }).join('\n') + '\n';
+  }
+  navigator.clipboard.writeText(content);
+  toast(`已导出 ${format.toUpperCase()} (${rows.length} 行) 到剪贴板`);
+}
+
+// ========== 标签 ==========
+function switchTab(id) {
+  activeTab = id;
+  document.querySelectorAll('.result-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === id));
+  if (id === 'result2') {
+    allRows = []; filteredRows = []; dirtyCells = {}; sortState = { col: null, dir: null };
+    selectedCells = [];
+    renderAll();
+  }
+}
+
+function closeTab(id) {
+  toast('关闭标签: ' + id);
+}
+
+// ========== 结果对比 ==========
+function openDiffModal() {
+  document.getElementById('diff-modal-overlay').classList.add('visible');
+  computeDiff();
+}
+
+function closeDiffModal() {
+  document.getElementById('diff-modal-overlay').classList.remove('visible');
+}
+
+function swapDiffTabs() {
+  const a = document.getElementById('diff-tab-a');
+  const b = document.getElementById('diff-tab-b');
+  const tmp = a.value; a.value = b.value; b.value = tmp;
+  computeDiff();
+}
+
+function computeDiff() {
+  const aId = document.getElementById('diff-tab-a').value;
+  const bId = document.getElementById('diff-tab-b').value;
+  const dataA = aId === 'result1' ? allRows : [];
+  const dataB = bId === 'result1' ? allRows : [];
+
+  const mapA = new Map(dataA.map(r => [String(r[0]), r]));
+  const mapB = new Map(dataB.map(r => [String(r[0]), r]));
+
+  const allKeys = new Set([...mapA.keys(), ...mapB.keys()]);
+  const diffRows = [];
+  let unchanged = 0, added = 0, removed = 0, modified = 0;
+
+  for (const key of allKeys) {
+    const rowA = mapA.get(key);
+    const rowB = mapB.get(key);
+    if (rowA && rowB) {
+      const same = rowA.every((v, i) => v === rowB[i]);
+      if (same) { unchanged++; diffRows.push({ status: 'unchanged', key, rowA, rowB }); }
+      else { modified++; diffRows.push({ status: 'modified', key, rowA, rowB }); }
+    } else if (rowA && !rowB) {
+      removed++; diffRows.push({ status: 'removed', key, rowA, rowB: null });
+    } else {
+      added++; diffRows.push({ status: 'added', key, rowA: null, rowB });
+    }
+  }
+
+  document.getElementById('diff-summary').innerHTML = `
+    <span class="diff-tag info">列: ${columns.length}</span>
+    <span class="diff-tag success">未变: ${unchanged}</span>
+    ${added > 0 ? `<span class="diff-tag info">新增: ${added}</span>` : ''}
+    ${removed > 0 ? `<span class="diff-tag error">删除: ${removed}</span>` : ''}
+    ${modified > 0 ? `<span class="diff-tag warning">修改: ${modified}</span>` : ''}
+  `;
+
+  const statusLabel = { unchanged: '未变', added: '新增', removed: '删除', modified: '修改' };
+  let html = '<table class="diff-table"><thead><tr><th>状态</th><th>Key</th>';
+  html += `<th>${aId === 'result1' ? '结果 #1' : '结果 #2'}</th>`;
+  html += `<th>${bId === 'result1' ? '结果 #1' : '结果 #2'}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const row of diffRows.slice(0, 100)) {
+    html += `<tr class="row-${row.status}">`;
+    html += `<td>${statusLabel[row.status]}</td>`;
+    html += `<td>${row.key}</td>`;
+    html += `<td>${row.rowA ? rowPreview(row.rowA) : '—'}</td>`;
+    html += `<td>${row.rowB ? rowPreview(row.rowB) : '—'}</td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('diff-table-wrap').innerHTML = html;
+}
+
+function rowPreview(row) {
+  return row.map((v, i) => `${columns[i]}: ${v === null ? 'NULL' : String(v)}`).slice(0, 3).join(' | ');
+}
+
+// ========== 工具函数 ==========
+function selectRow(idx) {
+  const rows = getPagedRows();
+  const trs = document.querySelectorAll('#ag-body tr');
+  trs.forEach((tr, i) => tr.classList.toggle('selected', i === idx));
+  if (rows[idx]) {
+    selectedCells = [{ row: idx, col: columns[0], value: rows[idx][0] }];
+    selectedCell = { row: idx, col: columns[0], value: rows[idx][0] };
+    updateValueViewer();
+    updateMetadataPanel(columns[0]);
+    updateCalcPanel();
+  }
+}
+
+function addMoreRows() {
+  const extra = [
+    [7, 'grace', 'grace@example.com', 22, 5670.00, '2026-07-10', 'active'],
+    [8, 'henry', 'henry@example.com', 45, 15800.00, '2026-07-31', 'active'],
+    [9, 'iris', null, 12, 2340.00, '2026-06-28', 'inactive'],
+    [10, 'jack', 'jack@example.com', 31, 8900.00, '2026-07-22', 'active'],
+    [11, 'kate', 'kate@example.com', 5, 890.00, '2026-07-01', 'active'],
+    [12, 'leo', 'leo@example.com', 18, 4200.00, '2026-07-18', 'inactive'],
+  ];
+  allRows = [...allRows, ...extra];
+  filteredRows = [...allRows];
+  currentPage = 0;
+  renderAll();
+  toast(`增加了 ${extra.length} 行，共 ${allRows.length} 行`);
+}
+
+function resetData() {
+  allRows = JSON.parse(JSON.stringify(baseData));
+  filteredRows = [...allRows];
+  dirtyCells = {};
+  selectedCells = [];
+  groupColumns = [];
+  sortState = { col: null, dir: null };
+  currentPage = 0;
+  filterMode = 'quick';
+  document.getElementById('quick-filter').value = '';
+  document.getElementById('filter-mode-badge').textContent = '快速';
+  document.getElementById('filter-mode-badge').className = 'filter-mode-badge quick';
+  renderGroupChips();
+  document.getElementById('group-result').innerHTML = '<div class="group-empty">添加列后显示分组结果</div>';
+  renderAll();
+  toast('数据已重置');
+}
+
+function toast(msg) {
+  const el = document.createElement('div');
+  el.className = 'toast'; el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateY(-8px)'; setTimeout(() => el.remove(), 300); }, 1800);
+}
+
+// 快捷键
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key === 'f') {
+    e.preventDefault();
+    document.getElementById('quick-filter').focus();
+  }
+  if (e.ctrlKey && e.key === 'r') {
+    e.preventDefault();
+    toast('刷新结果');
+  }
+  if (e.ctrlKey && e.key === 's') {
+    e.preventDefault();
+    if (Object.keys(dirtyCells).length > 0) {
+      dirtyCells = {};
+      renderAll();
+      toast('已保存更改');
+    }
+  }
+  if (e.key === 'Escape') {
+    closeContextMenu();
+    document.getElementById('export-dropdown').classList.remove('visible');
+    document.getElementById('calc-add-menu').classList.remove('visible');
+  }
+  if (e.key === 'F7') {
+    e.preventDefault();
+    switchPanel('value');
+  }
+});
+
+// 初始化
+renderAll();
+console.log('%c结果集模块原型 v3.0%c — DBeaver 风格 (完整版)',
+  'color:#4fc1ff;font-size:14px;', 'color:#858585;');
+console.log('  右侧面板: 值查看器 | 元数据 | 计算 | 分组 | 引用 | 洞察');
+console.log('  分割条: 可拖拽调整面板宽度 | 面板折叠/最大化');
+console.log('  计算面板: 选中单元格实时统计 (Count/Sum/Avg/Min/Max/Median/Mode)');
+console.log('  分组面板: 拖拽列标题进行 GROUP BY 聚合');
+console.log('  洞察面板: 列洞察 | 表分析 | Schema 洞察');
+console.log('    - 统计: 基础统计 + 数值统计(偏度/峰度) + 直方图');
+console.log('    - 分布: 值分布 Top 10');
+console.log('    - 质量: 评分 + 维度分析 + 异常检测(Z-score/IQR)');
+console.log('    - 历史: 快照保存/查看/对比');
+console.log('    - 多列: 相关性分析(Pearson)');
+console.log('  引用面板: 外键引用关系');
+console.log('  F7: 快速打开值查看器 | Ctrl+F: 过滤');
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:1 字符: 1
++ cargo test -p rds-workbench -j 2 --manifest-path "D:\RdataStation\RDS ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+  --> crates\workbench\src\services\query_runner.rs:43:38
+   |
+43 |         .map(|i| stmt.column_name(i).map_or_else(|| "unknown".to_string(), |v| v.to_string()))
+   |                                      ^^^^^^^^^^^ -- takes 0 arguments
+   |                                      |
+   |                                      expected closure that takes 1 argument
+   |
+help: consider changing the closure to take and ignore the expected argument
+   |
+43 |         .map(|i| stmt.column_name(i).map_or_else(|_| "unknown".to_string(), |v| v.to_string()))
+   |                                                   +
+
+For more information about this error, try `rustc --explain E0593`.
+error: could not compile `rds-workbench` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `rds-workbench` (lib test) due to 1 previous error

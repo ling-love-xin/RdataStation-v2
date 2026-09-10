@@ -1,0 +1,21 @@
+[plugin]
+id = "rdatastation.query"
+name = "Query"
+version = "1.0.0"
+publisher = "rdatastation"
+description = "query module for RdataStation"
+engines = { rdatastation = "^0.1.0" }
+
+[capabilities.frontend]
+entry = "./extension.ts"
+activation_events = ["onProjectOpen"]
+
+[contributes.panels]
+fileResultPanel = { title = "Result", icon = "Table2", order = 5 }
+columnInsights = { title = "列洞察", icon = "Eye", order = 4 }
+editorPanel = { title = "编辑器", icon = "Code", order = 3 }
+
+[contributes.commands]
+"query.execute" = { title = "执行 SQL 查询" }
+"query.cancel" = { title = "取消执行" }
+"query.history" = { title = "查询历史" }

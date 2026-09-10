@@ -1,0 +1,36 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:11 字符: 4
++ "; cargo test -p rds-workbench -j 2 --manifest-path "D:\RdataStation\ ...
++    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0382]: borrow of moved value: `sql_state`
+   --> crates\workbench\src\panels.rs:673:38
+    |
+580 |                 let sql_state = self.sql_textarea.clone().expect("lazy init");
+    |                     --------- move occurs because `sql_state` has type `gpui_kit::Entity<InputBaseState<TextareaM
+ode>>`, which does not implement the `Copy` trait
+...
+615 |                                             .on_click(move |_, _, app| {
+    |                                                       ---------------- value moved into closure here
+616 |                                         let sql = sql_state.read(app).value().to_string();
+    |                                                   --------- variable moved due to use in closure
+...
+673 |                             let st = sql_state.clone();
+    |                                      ^^^^^^^^^ value borrowed here after move
+    |
+help: consider cloning the value before moving it into the closure
+    |
+589 ~                 let value = sql_state.clone();
+590 ~                 let mut sql_ui = div()
+591 |                     .v_flex()
+...
+616 |                                             .on_click(move |_, _, app| {
+617 ~                                         let sql = value.read(app).value().to_string();
+    |
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `rds-workbench` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `rds-workbench` (lib test) due to 1 previous error

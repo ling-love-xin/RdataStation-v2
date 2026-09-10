@@ -1,0 +1,15 @@
+[package]
+name = "rds-app"
+version.workspace = true
+edition.workspace = true
+description = "App Shell：组合窗口与 Feature 装配，不承载业务逻辑"
+
+[[bin]]
+name = "rds-app"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+# Round 19：工作台视图（首个可交互骨架）
+workbench = { path = "../workbench", package = "rds-workbench" }
+settings = { path = "../settings", package = "rds-settings" }

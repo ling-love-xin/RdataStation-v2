@@ -1,0 +1,51 @@
+[meta]
+id = "histogram"
+name = "数值分箱直方图"
+description = "计算数值列 10 分箱分布"
+version = "1.0"
+category = "column"
+applies_to = ["Numeric"]
+builtin = true
+
+[query]
+template = """
+WITH bounds AS (
+    SELECT MIN("{col}")::DOUBLE AS lo, MAX("{col}")::DOUBLE AS hi
+    FROM "{table}" WHERE "{col}" IS NOT NULL
+)
+SELECT
+    CASE
+        WHEN r = 10 THEN '> ' || CAST(lo + 9.0 * (hi - lo) / 10.0 AS VARCHAR)
+        ELSE CAST(lo + (r - 1) * (hi - lo) / 10.0 AS VARCHAR)
+             || ' - ' || CAST(lo + r * (hi - lo) / 10.0 AS VARCHAR)
+    END AS label,
+    COUNT(*) AS count,
+    COUNT(*) * 1.0 / SUM(COUNT(*)) OVER() AS ratio
+FROM "{table}", bounds, (SELECT UNNEST(GENERATE_SERIES(1, 10)) AS r) bins
+WHERE "{col}" IS NOT NULL
+  AND "{col}" >= lo + (r - 1) * (hi - lo) / 10.0
+  AND ("{col}" < lo + r * (hi - lo) / 10.0 OR r = 10)
+GROUP BY r, lo, hi
+ORDER BY r
+"""
+parameters = ["table", "col"]
+result_type = "list"
+
+[[output]]
+sql_name = "label"
+json_name = "label"
+value_type = "string"
+
+[[output]]
+sql_name = "count"
+json_name = "count"
+value_type = "usize"
+
+[[output]]
+sql_name = "ratio"
+json_name = "ratio"
+value_type = "f64"
+
+[render]
+component = "HistogramChart"
+display_order = 8

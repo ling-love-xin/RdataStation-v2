@@ -1,0 +1,28 @@
+[plugin]
+id = "rdatastation.connection"
+name = "Connection Manager"
+version = "1.0.0"
+publisher = "rdatastation"
+description = "Database connection management for RdataStation"
+engines = { rdatastation = "^0.1.0" }
+
+[capabilities.frontend]
+entry = "./extension.ts"
+activation_events = ["onProjectOpen"]
+
+[contributes.commands]
+"connection.create" = { title = "Create Connection", icon = "Plus" }
+"connection.test" = { title = "Test Connection", icon = "Play" }
+"connection.delete" = { title = "Delete Connection", icon = "Trash2" }
+"connection.refresh" = { title = "Refresh Connections", icon = "RefreshCw" }
+"connection.getConnections" = { title = "Get Connections" }
+"connection.createConnection" = { title = "Create Connection (API)" }
+"connection.testConnection" = { title = "Test Connection (API)" }
+"connection.disconnect" = { title = "Disconnect Connection" }
+
+[contributes.menus]
+"connection.create" = { when = "true" }
+"connection.test" = { when = "connectionSelected" }
+
+[contributes.views]
+"connection.explorer" = { title = "Connections", when = "true" }

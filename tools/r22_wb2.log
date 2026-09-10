@@ -1,0 +1,54 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:1 字符: 1
++ cargo test -p rds-workbench -j 2 --manifest-path "D:\RdataStation\RDS ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0462]: found staticlib `std` instead of rlib or dylib
+  --> crates\workbench\tests\real_connections.rs:10:5
+   |
+10 | use std::path::PathBuf;
+   |     ^^^
+   |
+   = note: the following crate versions were found:
+           crate `std`: D:\Dev\Rust\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc
+\lib\std-f01d16aa207effe6.dll.lib
+   = help: please recompile that crate using --crate-type lib
+
+error[E0786]: found invalid metadata files for crate `engine`
+  --> crates\workbench\tests\real_connections.rs:12:5
+   |
+12 | use engine::persistence::global_db::{GlobalConnectionSaveInput, GlobalDatabaseManager};
+   |     ^^^^^^
+   |
+   = note: failed to mmap file '\\?\D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\librds_engine-7ebdded8449f6ed
+6.rlib': 页面文件太小，无法完成操作。 (os error 1455)
+
+error[E0786]: found invalid metadata files for crate `rds_workbench`
+  --> crates\workbench\tests\real_connections.rs:13:5
+   |
+13 | use rds_workbench::ConnectionItem;
+   |     ^^^^^^^^^^^^^
+   |
+   = note: failed to mmap file '\\?\D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\librds_workbench-e578858cc96e
+bef6.rlib': 页面文件太小，无法完成操作。 (os error 1455)
+
+Some errors have detailed explanations: E0462, E0786.
+For more information about an error, try `rustc --explain E0462`.
+error: could not compile `rds-workbench` (test "real_connections") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0463]: can't find crate for `rds_insight`
+ --> crates\workbench\src\services\persistence_service.rs:2:5
+  |
+2 | use insight::insight_engine;
+  |     ^^^^^^^ can't find crate
+
+error[E0463]: can't find crate for `rds_engine`
+ --> crates\workbench\src\services\persistence_service.rs:3:5
+  |
+3 | use engine::persistence::insight_types::ColumnInsightFull;
+  |     ^^^^^^ can't find crate
+
+For more information about this error, try `rustc --explain E0463`.
+error: could not compile `rds-workbench` (lib test) due to 2 previous errors

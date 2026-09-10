@@ -1,0 +1,35 @@
+[meta]
+id = "scatter-sample"
+name = "散点图采样"
+description = "获取两个数值列的采样点数据，用于散点图渲染"
+version = "1.0"
+category = "multi"
+applies_to = ["Numeric", "Numeric"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    "{col1}"::DOUBLE AS x,
+    "{col2}"::DOUBLE AS y
+FROM "{table}"
+WHERE "{col1}" IS NOT NULL AND "{col2}" IS NOT NULL
+ORDER BY "{col1}"
+LIMIT 1000
+"""
+parameters = ["table", "col1", "col2"]
+result_type = "list"
+
+[[output]]
+sql_name = "x"
+json_name = "x"
+value_type = "f64"
+
+[[output]]
+sql_name = "y"
+json_name = "y"
+value_type = "f64"
+
+[render]
+component = "ScatterChart"
+display_order = 4

@@ -1,0 +1,41 @@
+[meta]
+id = "datetime-monthly"
+name = "日期月度分布"
+description = "计算日期列按月分布统计"
+version = "1.0"
+category = "column"
+applies_to = ["DateTime", "TIMESTAMP", "DATE"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    STRFTIME("{col}", '%Y-%m') AS month,
+    COUNT(*) AS count,
+    COUNT(*) * 1.0 / SUM(COUNT(*)) OVER() AS ratio
+FROM "{table}"
+WHERE "{col}" IS NOT NULL
+GROUP BY 1
+ORDER BY 1
+"""
+parameters = ["table", "col"]
+result_type = "list"
+
+[[output]]
+sql_name = "month"
+json_name = "value"
+value_type = "string"
+
+[[output]]
+sql_name = "count"
+json_name = "count"
+value_type = "usize"
+
+[[output]]
+sql_name = "ratio"
+json_name = "ratio"
+value_type = "f64"
+
+[render]
+component = "MonthlyDistribution"
+display_order = 6

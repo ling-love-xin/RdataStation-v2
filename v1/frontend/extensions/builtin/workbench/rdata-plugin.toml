@@ -1,0 +1,24 @@
+[plugin]
+id = "rdatastation.workbench"
+name = "Workbench"
+version = "1.0.0"
+publisher = "rdatastation"
+description = "workbench module for RdataStation"
+engines = { rdatastation = "^0.1.0" }
+
+[capabilities.frontend]
+entry = "./extension.ts"
+activation_events = ["onProjectOpen"]
+
+[contributes.panels]
+emptyWorkbench = { title = "欢迎", icon = "Home" }
+sqlHistory = { title = "SQL历史", icon = "Clock" }
+outputPanel = { title = "输出", icon = "Terminal" }
+plugins = { title = "插件", icon = "Puzzle" }
+mockPanel = { title = "Mock 数据", icon = "Database" }
+dynamicObjectProperties = { title = "对象属性", icon = "Info" }
+
+[contributes.commands]
+"workbench.openPanel" = { title = "打开面板" }
+"workbench.closePanel" = { title = "关闭面板" }
+"workbench.focusPanel" = { title = "聚焦面板" }

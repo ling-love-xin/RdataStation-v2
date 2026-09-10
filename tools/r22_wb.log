@@ -1,0 +1,187 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:1 字符: 1
++ cargo test -p rds-workbench -j 2 --manifest-path "D:\RdataStation\RDS ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: linking with `link.exe` failed: exit code: 1180
+  |
+  = note: "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64
+\\x64\\link.exe" "/NOLOGO" "D:\\RdataStation\\RDS\\RdataStation-v2\\target\\debug\\deps\\rustcOdBo6W\\symbols.o" "<152 
+object files omitted>" "<sysroot>\\lib\\rustlib\\x86_64-pc-windows-msvc\\lib/{libtest-*,libgetopts-*,librustc_std_works
+pace_std-*}.rlib" "D:\\RdataStation\\RDS\\RdataStation-v2\\target\\debug\\deps/{librds_insight-f16c269f46888cd1,libtoml
+-a5f69e04f63d92d7,libtoml_edit-70089be031f53eba,libserde_spanned-fd5b453f37270985,libwinnow-a4a3d0e6b0ab66c9,libtoml_wr
+ite-e7bbbe19a23c2dc2,libtoml_datetime-893b25275353008a,librds_engine-7ebdded8449f6ed6,libtracing_appender-eb8296818433a
+ed5,libsymlink-1f53f74cb3ced364,libpostgres_native_tls-b1e939de6b6a9455,libtokio_postgres-a0e7fada98ff7f3f,libphf-31034
+790b8f999a4,libphf_shared-48ae4a1206cd92af,libwhoami-85aefe91d046c9b1,libpostgres_types-97623f5abaf8b1fb,libpostgres_pr
+otocol-9ce5d51aee8df6b2,librand-50ddf4c4c3e66b6f,libchacha20-527c2983e8148416,libhmac-479148abbb656eac,libmd5-3c92355a0
+059835d,libfallible_iterator-184d1e32dfd32604,libsqlglot_rust-7ede2b2864a02e16,libinclude_dir-b546f92800353cd8,libtraci
+ng_subscriber-0967a10f288ed631,libtracing_serde-8edd9d53ebc6d712,libsharded_slab-34fea065620dea63,libmatchers-cf0c6c305
+d913914,libnu_ansi_term-d6f0a380f193a238,libthread_local-01e2ce0f7a56818a,libtracing_log-9bd712f8282c3dec,libmysql_asyn
+c-e2acdea18c705651,libpem-e5da5748f6abe37b,libsocket2-0b9ec38f22255624,libtwox_hash-bdd55e5ff5794a19,liblru-3ee2d4bee95
+a6500,libkeyed_priority_queue-893de12a97f2883a,libcrossbeam-3badc1c1d6921739,libcrossbeam_channel-490b186645c08e16,libm
+ysql_common-963c265b2630f4ac,libsaturating-d60a929307e7df5a,libbtoi-d031ccecdbfaa03a,libbase64-65d4d6cee5290bb5,libsqlx
+-2d64101efad98e75,libsqlx_postgres-9e7fcd056203ab4d,libhex-e33b9c7d2442a927,libwhoami-23bf8189a646df25,libetcetera-06bb
+88ad2ab09b79,libmd5-6a0c8a54a26c2f8a,libstringprep-3090d11e47ee105a,libunicode_normalization-8e7bf9a72fe0ac5a,libsqlx_m
+ysql-1fd59554bfe149e4,libdotenvy-c580757fbd7452ed,libcrc-a13f36fe104853bf,libcrc_catalog-84142e6266d74e39,libsqlx_core-
+87ad9e32730753f0,libcrossbeam_queue-65114a8ef9ae320a,libtokio_util-74990052d2d208c7,librds_connection-db1fcab74e7d1dea,
+libx509_parser-b6137647a76131e3,liboid_registry-76c8595e49f893f0,libder_parser-d039c031579ef77d,libasn1_rs-5ea98976bfe8
+4b9f,librusticata_macros-d990c46bd160150f,libnom-8fcbe8f3557ffc2c,libtime-a01bb031b34301c5,libpowerfmt-6352ff017dba0276
+,libnum_conv-5aa3cee781dff84b,libderanged-e3c20676f442ae47,libtime_core-f7808adc264968e5,librussh-9ab49e0a0e00b728,libh
+ex_literal-d3d19f3574f2e65b,libdes-17f6f714382aafda,libtokio_socks-160e8d1fc14804f8,libtokio_native_tls-92c316c8b92088c
+6,libnative_tls-88e75225e9f6a449,libschannel-198e7fb30770b82f,librds_shared-73b2b777fdcccb89,librusqlite-72f2fac0d70149
+3c,libhashlink-3f39e73826ed23a2,libhashbrown-9a480478fbf40563,liblibsqlite3_sys-505a3950e669e5bd,libduckdb-faab93ecca7a
+3ac4,libcast-df2a4c79e11349d0,libfallible_streaming_iterator-e94b2c2fbd185cd3,libfallible_iterator-bbca285eb7e0a6e2,lib
+strum-d9d28372c928b72e,libhashlink-36ad026de438c84e,libhashbrown-155965cc94eff8ba,libfoldhash-4f2e6a4c4bbd885d,liballoc
+ator_api2-205e4408ad8d068a,liblibduckdb_sys-b988057bbeef2962,libdirs-78ec9371db835b54,libdirs_sys-ef0ed5bcf018ef7b,libw
+indows_sys-037526769f5a5c86,libwindows_targets-f96515c8ccf0a4ca,liboption_ext-d2f44bc7249a3a1d,libarrow-bcd4cd7cfe57e10
+a,libarrow_row-ab2bcf95f7351207,libarrow_json-b7b101906187bf64,libsimdutf8-8375dd6cf764cc38,libarrow_ipc-931ad0ba1e6923
+30,libflatbuffers-0b1efc8728e989d5,libarrow_csv-8bd1646f10c6b489,libcsv-a5b41bd5b24d1e7c,libcsv_core-452ea830043da76a,l
+ibarrow_string-f4886948b90325dd,libarrow_cast-9fd9f3572d6ef221,libatoi-e1e39d7242fa0dc6,libcomfy_table-c3860d7b5d312a6d
+,libunicode_width-5e5711d76d4e1bc6,libcrossterm-98e79602270fb74b,libcrossterm_winapi-b86f4d62dd5704e4,liblexical_core-2
+31278437ab37cef,liblexical_write_float-2d1c08722c65e190,liblexical_write_integer-d6171747da1a6008,liblexical_parse_floa
+t-5c502df3a6115c4e,liblexical_parse_integer-4fa6180bbdc7efea,liblexical_util-8f14edf448d21d5a,libarrow_arith-6848ae1bf8
+4b4926,libarrow_ord-e4e78a6dde2495b4,libarrow_select-ade623c79cc0a9d9,libarrow_array-56cc9b9865cc1339,libahash-acd203d4
+debde21f,libarrow_data-cf9489970d753c34,libarrow_schema-e4afcb3ac3b50fdb,libarrow_buffer-f7ab9d74e58a18fd,libnum_bigint
+-cc92e08cda75b8f6,librussh_keys-aba99d343f4ac83a,libhome-54ec18624aeb5112,librussh_util-c01cb4dec572a4e7,libpageant-125
+43fab63df99a6,libmd5-9a3dca4900236e5a,libtokio-5400eef50ba3e444,libsocket2-1640f7487f488e3f,libmio-3561db55918bb76d,lib
+russh_cryptovec-9eee063f07c45cee,libwinapi-3b1cf9c0368ca0af,liblibc-b7ec54fc3a462ab3,libsha1-dbce14f6d534fbde,libssh_ke
+y-50bac9876c1f0a1e,libed25519_dalek-9c601e40b0a2d604,libcurve25519_dalek-cef7ace70b19948a,libed25519-69e7c30c8a8d25e0,l
+ibp521-3769c4e877f8fbc4,libp384-44d163be211e93fd,libp256-59feb3d4369c9681,libecdsa-33cfb93bd056aab2,librfc6979-e80cbf6e
+9f273280,libprimeorder-9340cbeccf7453be,libelliptic_curve-d145f2022cd99998,libhkdf-05a37ba58a329e0e,libcrypto_bigint-40
+ec68a4d3530a9b,libgroup-243dbd18362398c7,libff-d1bb2744ebaac80c,libbcrypt_pbkdf-7842d28720338251,libblowfish-f2130e9427
+cb2f9d,libssh_cipher-8f031e482832bb1b,libaes_gcm-db2a9acdcdbc27b5,libctr-aef87edea0c4bcf7,libghash-9f615d77f0c7d6a6,lib
+polyval-fe539b9d0843e67c,libaead-7ded12d15d96c9c8,libpoly1305-4fc9f22484f15421,libopaque_debug-7a5c9e053a591650,libuniv
+ersal_hash-14b6a719538ec771,libchacha20-5364c985b7096e96,librsa-df7ec14c6de2b6b7,libpkcs1-f7554d5227046a6f,libsignature
+-350cf49f2a11bc38,libnum_bigint_dig-c5a7a962e0b57474,liblibm-011198908a8f0d69,libnum_iter-dbb91246709b79aa,librand-bf73
+50cecd46df5c,librand_chacha-1d299fe62f2ff5db,libnum_integer-f4f6851b285bb66c,liblazy_static-4e9ff317b6bac07a,libsec1-c7
+665a900aad42ce,libpkcs8-9dfeac50d2ac78be,libpkcs5-ce3b5727ac840099,libspki-0d52205761305d4b,libscrypt-8776dfdab6183d43,
+libsalsa20-5ef85078fa2484a2,libpbkdf2-52701b7766b15ed0,libhmac-805674ffce87b864,libcbc-8db97b0fe94c662b,libder-b8bd1d34
+51a9a289,libbase16ct-ba08097f852ea5d9,libssh_encoding-0e0e1a49cbc51b99,libsha2-7032475b32feb9f5,libdigest-d3fb676605329
+c1b,libsubtle-c9006d7963a8142e,libconst_oid-462a2363546ccf59,libblock_buffer-c53e4d1507650d2c,libpem_rfc7468-6ebd5b99ed
+321d74,libbase64ct-e1091dfafbee4bc8,libthiserror-79964793676ac471,libdata_encoding-0ff470114c89913c,libaes-ee9607c7fc14
+dd52,libcpufeatures-7c683ec64b9c4309,libcipher-6faea568d1937565,libinout-ff8c002e56c7dd77,libblock_padding-807862b13250
+1e40,libcrypto_common-f890cfc52213ab7a,libgeneric_array-53bdf8e68624f489,libzeroize-2f5562d7a3ab053b,librand_core-31a11
+bd0cfa867f0,libgetrandom-e701ef3a7617f2b0,libspecta-bc052467b36397c4,libgpui_kit-5f44e64f985a7346,libgpui_kit_assets-de
+faa5ec7432f563,librust_embed-0cb69455b114d04f,librust_embed_utils-6bef00497c2d11bd,libglobset-5d3c6783ed838388,libbstr-
+d58c4d2e14f046d4,libsha2-e4de2c8c79470c52,libcpufeatures-99edfed92c7fa8c1,libdigest-2032ff42445eb645,libctutils-8375324
+8f111cbf9,libcmov-9cfac09ac99382c7,libconst_oid-72e0cfea9c55014a,libcrypto_common-c0c0bfff41063cc8,libblock_buffer-b79a
+fd37e2428e02,libhybrid_array-be5e4a3895473e04,libtypenum-b5fc537e64bc4e40,libgpui_component-7b7fe3dc27e5b791,libnotify-
+3f218ad4e346f7c6,libwalkdir-e148b12d4eb3b352,libsame_file-e628f3c54d91a5ec,libwinapi_util-d7c63ef814144e06,libfiletime-
+289dbcae27790d41,libwindows_sys-04a841c82364ea72,libnotify_types-e8569794714a0156,libresvg-4b05e124f04f6be1,libgif-0417
+25fabf226d0e,libzune_jpeg-cce89c4d2b0898fb,libzune_core-98cdca9dd7fb9070,libusvg-363a6fb241ff5660,libimagesize-9119a56f
+f97fe038,libroxmltree-e97ffa68d2c564c4,libsvgtypes-a8b979cc36cf0acf,libkurbo-9f38e2b656666a87,libwindows-3377368ef091a1
+c9,libwindows_core-55327160b96b47f5,libwindows_strings-c8a849948a60ba95,libwindows_result-8fe686f69661a836,libwindows_t
+argets-27c76343b967d6ae,libitertools-169a3b8002fc3d63,librust_i18n-99e1d54a1e2b1b6c,librust_i18n_support-15b30c339e7e8d
+4e,libbase62-ff3e33c1420bfd4b,libtriomphe-1187065bcc1e5575,libarc_swap-3337e43900f0e12a,libgpui_platform-f89ec10be14cda
+92,libgpui_windows-24f943655e99f725,libdunce-ab11fade3d1b836b,libwindows_registry-6d9ace4ca385127d,libaccesskit_windows
+-9aa77c07ce0b6ae2,libstatic_assertions-b639bafc8a4910e9,libaccesskit_consumer-9af16bfb011295a8,libhashbrown-05db3af60d5
+7d806,libfoldhash-e568ad96bae62535,libgpui_base-ff62874a751966f9,libmarkdown-fd7b26976d16578a,libunicode_id-80291c06a88
+4f9ca,libmarkup5ever_rcdom-e74a73ddb26a2f37,libhtml5ever-444d32def139d73c,libmarkup5ever-7b11c442f7133d6c,libstring_cac
+he-555d5fd3018b120b,libprecomputed_hash-89228a894a618723,libphf-b3975727dd89b20f,libphf_shared-b844acc15377e4da,libtend
+ril-088b64c5fa41cc8e,libutf8-fed65926a2b7b5f1,libfutf-327f9627b6a92cc4,libdebug_unreachable-33a42fb3d66b63be,libmac-b4f
+4df993a3c48d2,libunicode_segmentation-29919d42b7d25030,liblsp_types-06885f31993946a1,libfluent_uri-df57b73e126d1ff0,lib
+ropey-a6e157db4e30d713,libstr_indices-3fd6ecbcd39180b3,libinstant-47a6fe792217e19d,libsmol-4b493564e2d18161,libasync_pr
+ocess-8276780975273ba1,libasync_net-b9ab59d6a66a1b59,libasync_fs-b1442b178c470dfc,libasync_lock-0387a8c57817f0b2,libblo
+cking-9098b59e9ba49143,libpiper-c4e34da3cc61b125,libatomic_waker-ab5a5114f8c746d8,libasync_io-2067890459dc614e,libpolli
+ng-8bb16eefebc42b8e,librustix-0604b9dce753e41f,liberrno-339e0bcbda869b62,libwindows_sys-aa651d6c049b9e50,libasync_execu
+tor-532d91de55f1c3c6,libfutures_lite-41c23b36a0766dd7,libgpui-0bc806e331ffe2d6,libasync_channel-8ee13599a2f09096,libeve
+nt_listener_strategy-784d5da93621b207,libevent_listener-0f3ae9c67a45f341,libconcurrent_queue-5c48f2fc13f727c7,libregex-
+7eb975d7dbbbdb46,libregex_automata-fe25a307c8a4781e,libaho_corasick-8ca72e22082d3efa,libregex_syntax-f075f26c407ce2d4,l
+ibspin-9dd21eb17ca9dc3d,libwindows-99397fd124574956,libwindows_numerics-30e54ba4bfc46fd7,libwindows_collections-cf8d144
+36384af73,libwindows_future-2b8a97d3e39f11e7,libwindows_threading-a4e30a21d270fc10,libwindows_core-17a954ab199cfd3e,lib
+windows_strings-7e5fa5167957b8ab,libwindows_result-6ca68ade897419d7,libparking-19d1aa7c8b9511e4,libnum_cpus-fb67dc0b6d0
+0e3a1,libprofiling-7d4e91d9342e4ff8,libpin_project-5e6cce68bbafb9ef,libpollster-e76d550d65333c2a,libgpui_shared_string-
+42dd18d90c786e0e,libsmol_str-b800d045f152ecd6,libctor-82199526ca3f102b,libinventory-06e72ab1f44b5b40,libaccesskit-ccefc
+c9ec3982cd2,libresvg-2b66b5630d9aa869,librgb-fc94116316dff170,libusvg-e4ad10b80c274fc4,libbase64-0aa1375ee69320e5,libun
+icode_bidi-8ce386ce9d173c4d,libunicode_vo-4cca86584cfeac9c,libimagesize-82323b60e9225872,libdata_url-44a4b409a7ba4fb5,l
+ibxmlwriter-7e37215f3d1168ee,libsimplecss-50bb6203d9ac1455,libroxmltree-6acae5b60ded6f43,libsvgtypes-408543fe64a345fb,l
+ibkurbo-ce3da6fbed704c9d,libpolycool-e2734b7a1ea92b88,libsiphasher-4a4a2609b2d52932,librustybuzz-ab033c02012ce3ab,libun
+icode_bidi_mirroring-d0b31f1dd75cfa5a,libunicode_script-8285130e5163c546,libunicode_properties-149afd31241b86e2,libunic
+ode_ccc-3033df692792255c,libfontdb-e805b5fc7e595cc8,libmemmap2-bcc837adad66d76c,libtinyvec-226931d0348ae629,libtinyvec_
+macros-411649e768da9937,libttf_parser-0b98d5993225291d,libtiny_skia-ec392c2389f76faa,libpng-5bf1f44acee1d417,libbitflag
+s-97a25c1957ca1baf,libtiny_skia_path-f7b26f80ae02f1ee,libstrict_num-279b2881f8c3de99,libfloat_cmp-55f6fcedea8ed1c5,liba
+rrayref-972c68565b60961b,libuuid-59f4011542fb7786,libgetrandom-944e80ef94e8c67d,librand_core-0c560ff0d18390fd,libsha1_s
+mol-a683eae7cb3fe4e4,libstrum-aa443edbe182fa75,libseahash-27a79de309d7fa8c,libraw_window_handle-47d4d79068755798,liblyo
+n-a5cb2616656be0db,liblyon_tessellation-71dc4e4c097d142c,libfloat_next_after-913afb9d92ffa683,liblyon_algorithms-5d86a8
+d0158a3f96,liblyon_path-4f814ffc829e9d00,liblyon_geom-86453869018fdefa,libarrayvec-71494679d7c0ddb8,libetagere-a58ccb5a
+3a31aaec,libsvg_fmt-dea68d25518b53ce,libeuclid-cfbe5639b64cae75,libtaffy-2c6b7167596df83c,libwaker_fn-d0d0a4d1bce70013,
+libsum_tree-da5aab7d63500751,libztracing-651d6e44e33b191e,libtracing-7054d355a46e4fe5,libtracing_core-3ed5a3da0ecb95ea,
+libonce_cell-5ad9373d5ad96390,libheapless-b23b827e67f48d81,libhash32-fd314a2f210f5275,libbyteorder-1523c71068ed75b7,lib
+thiserror-5340a917da500560,librefineable-99cf973917f40771,libimage-34ed865774a859b0,libqoi-4945d8aa11bf00fe,libmoxcms-9
+73c8eec092cb9f8,libpxfm-205693842b294081,librayon-7a1b6242be5b07dc,libimage_webp-920df49cf7b34560,libtiff-10b790e227f74
+4ae,libfax-6751bea747c50fc9,libquick_error-f47edb5e151a11ef,libpng-18e4a6733cd19f4a,libbitflags-44b47c76fb82f13a,libfla
+te2-ad1c407c1d51f3df,libminiz_oxide-cdf2a990b7015d1b,libfdeflate-344754556d128016,libcrc32fast-37c4da14dafbf96b,libexr-
+0bcb24a718ba95bf,librayon_core-7a1df5d9d07dc968,libcrossbeam_deque-0e17ce4417e2547c,libcrossbeam_epoch-25cc76a6c35876d4
+,libcrossbeam_utils-da83da9e9f206228,libminiz_oxide-071d68e876fb3afb,libzune_inflate-125217defd3833e4,libsimd_adler32-4
+a57545108c27987,libbit_field-06244ba94340e74d,libpulp-05d22d46693f1658,libnum_complex-2ffacaba3c3b1139,libbytemuck-fa35
+52f0c5a6fe44,liblebe-6a32546517774c2b,libhalf-87f564cb1da79c0f,libzune_jpeg-1a937bdc655557b4,libzune_core-98c6ed94127d6
+791,libgif-c5e25feee1b37e84,libcolor_quant-ae1b0140d88f1865,libweezl-38d8463741d5675e,libbyteorder_lite-bf583fba0dfc4e8
+7,libhttp_client-ca894bb27751c45b,libserde_urlencoded-0c82171d4d110422,libryu-a957e79795396f89,liburl-a1ddeaac68a5e512,
+libidna-ca6542c9cb11d5f2,libidna_adapter-80f6e1f7ce8661c7,libicu_properties-b09d85fad6363b10,libicu_properties_data-cbe
+3abc7ec6e3092,libicu_normalizer-e26de27a7d9ef909,libicu_normalizer_data-53e13f20c3f48d26,libicu_collections-8f49540d642
+59a27,libutf8_iter-fb23d0383b0c1baa,libpotential_utf-40199b857b2d91a5,libicu_provider-c0d06509291679a8,libicu_locale_co
+re-e9bdf5469b1e588e,libtinystr-de68e69400165461,liblitemap-e8b3354df375dbb4,libwriteable-85a29a84239b69e7,libzerovec-a0
+dbbc20a40cb811,libzerotrie-761ea595978fa40a,libyoke-93734da06929e1b5,libstable_deref_trait-1385da851d33241c,libzerofrom
+-8484444b2be763fb,libform_urlencoded-1d90b9ffc1faf0c3,libpercent_encoding-33dc516f615cccda,libhttp_body-48b0f42595419f2
+8,libhttp-ecb4f04a7dd948a7,libbytes-12e5dd47fc793850,libslotmap-7d38caff1ffc4424,libitertools-a7215c8621df3e16,libeithe
+r-7e0d31073589b352,libderive_more-9b5683be21b3a9d6,libscheduler-da0a01c3166fdbd2,libflume-c733a4dade46e17f,libfastrand-
+d0423dbcfab9ec49,libspin-75cb14d2b5bfff87,librand-309b5dffc25fee1a,librand_chacha-5d6e3cb324b4b2ca,libppv_lite86-0dd5e2
+06850c6c38,libzerocopy-bb9b86b06848a2db,librand_core-f8741496009c15a0,libgetrandom-acdd415536f36f71,libfutures-bd974120
+0a10ae39,libfutures_executor-fbae858c37de00cf,libfutures_util-55e92518212e2cc4,libfutures_io-83ead63fc7162864,libslab-6
+188fcd60293b748,libfutures_channel-3a18af3d3137d276,libpin_project_lite-ecbaed1478353cbb,libfutures_sink-97026c248eb19d
+c8,libfutures_task-151110d2ec4c484c,libfutures_core-2c18e18f4a46d0e2,libbacktrace-99fa7a9479357f78,librustc_demangle-d6
+9288528b3d8993,libasync_task-c535f704c0be84dc,libweb_time-406a6d7e53b06398,libparking_lot-ed864e078161f965,libparking_l
+ot_core-5455b3cbfa030527,libcfg_if-a4710df32d46bd63,libsmallvec-80e405a94bccb0bf,liblock_api-2092286a419c996c,libscopeg
+uard-368fde3155366e49,libchrono-84a83c40b8136778,libwindows_link-914241c5e399509b,libnum_traits-dae6395b00871dcd,libsch
+emars-f65d8c1c51ea2d65,libdyn_clone-58e31540b32a19ed,libserde-b94b664c9a8796d4,libref_cast-db670f23c272db34,libserde_js
+on-d03351ca72382d8c,libmemchr-6920036467c17085,libitoa-c1be6628aeb92ce7,libzmij-7cf98b1e85fa8bb1,libcollections-9df0490
+da94bbd1f,libgpui_util-6e60736a4d31f4bc,libwhich-11fbde5cbda221c2,liblog-cc0430e4c104ac5b,libvalue_bag-7ddb15e0fe43e240
+,libvalue_bag_serde1-6b6476122aa76774,libserde_fmt-972643109668b75c,liberased_serde-9b2ad4fb14e76e42,libtypeid-7892e0ac
+c02ac0e5,librustc_hash-134cade16f665497,libindexmap-cb07f29b28858de6,libequivalent-cab6a6905e1f143c,libserde_core-6ed04
+e13aa8a9964,libhashbrown-bafe3ecaae148a06,libanyhow-d977a03c91d0f3f3}.rlib" "<sysroot>\\lib\\rustlib\\x86_64-pc-windows
+-msvc\\lib/{libstd-*,libpanic_unwind-*,libcfg_if-*,libwindows_link-*,librustc_demangle-*,libstd_detect-*,libhashbrown-*
+,librustc_std_workspace_alloc-*,libunwind-*,librustc_std_workspace_core-*,liballoc-*,libcore-*,libcompiler_builtins-*}.
+rlib" "kernel32.lib" "secur32.lib" "advapi32.lib" "kernel32.lib" "secur32.lib" "advapi32.lib" "kernel32.lib" "kernel32.
+lib" "ws2_32.lib" "rstrtmgr.lib" "bcrypt.lib" "D:\\Dev\\Rust\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-4dc01
+642fd091eda\\windows_x86_64_msvc-0.48.5\\lib\\windows.0.48.5.lib" "advapi32.lib" "cfgmgr32.lib" "gdi32.lib" "kernel32.l
+ib" "msimg32.lib" "opengl32.lib" "synchronization.lib" "user32.lib" "winspool.lib" "legacy_stdio_definitions.lib" "bcry
+pt.lib" "advapi32.lib" "D:\\Dev\\Rust\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\\windows_x8
+6_64_msvc-0.52.6\\lib\\windows.0.52.0.lib" "D:\\Dev\\Rust\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-4dc01642
+fd091eda\\windows_x86_64_msvc-0.52.6\\lib\\windows.0.52.0.lib" "D:\\Dev\\Rust\\.cargo\\registry\\src\\mirrors.tuna.tsin
+ghua.edu.cn-4dc01642fd091eda\\windows_x86_64_msvc-0.52.6\\lib\\windows.0.52.0.lib" "D:\\Dev\\Rust\\.cargo\\registry\\sr
+c\\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\\windows_x86_64_msvc-0.52.6\\lib\\windows.0.52.0.lib" "D:\\Dev\\Rust\\
+.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\\windows_x86_64_msvc-0.52.6\\lib\\windows.0.52.0.l
+ib" "D:\\RdataStation\\RDS\\RdataStation-v2\\target\\debug\\build\\gpui-pre-ae845b38e03581a2\\out\\gpui.lib" "kernel32.
+lib" "kernel32.lib" "kernel32.lib" "ntdll.lib" "userenv.lib" "ws2_32.lib" "dbghelp.lib" "/defaultlib:msvcrt" "/NXCOMPAT
+" "/LIBPATH:D:\\RdataStation\\RDS\\RdataStation-v2\\target\\debug\\build\\libduckdb-sys-e3d969bda6341276\\out" "/LIBPAT
+H:D:\\RdataStation\\RDS\\RdataStation-v2\\target\\debug\\build\\gpui-pre-ae845b38e03581a2\\out" "/LIBPATH:D:\\RdataStat
+ion\\RDS\\RdataStation-v2\\target\\debug\\build\\aws-lc-sys-65ae161f3bcb1067\\out" "/LIBPATH:D:\\RdataStation\\RDS\\Rda
+taStation-v2\\target\\debug\\build\\ring-183b0599cec1fdfd\\out" "/LIBPATH:D:\\RdataStation\\RDS\\RdataStation-v2\\targe
+t\\debug\\build\\libsqlite3-sys-bbbf98c94c199f7b\\out" "/LIBPATH:D:\\RdataStation\\RDS\\RdataStation-v2\\target\\debug\
+\build\\zstd-sys-8946674b715b6233\\out" "/LIBPATH:D:\\Dev\\Rust\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.edu.cn-4d
+c01642fd091eda\\windows_x86_64_msvc-0.52.6\\lib" "/LIBPATH:D:\\Dev\\Rust\\.cargo\\registry\\src\\mirrors.tuna.tsinghua.
+edu.cn-4dc01642fd091eda\\windows_x86_64_msvc-0.53.1\\lib" "/LIBPATH:D:\\Dev\\Rust\\.cargo\\registry\\src\\mirrors.tuna.
+tsinghua.edu.cn-4dc01642fd091eda\\windows_x86_64_msvc-0.48.5\\lib" "/OUT:D:\\RdataStation\\RDS\\RdataStation-v2\\target
+\\debug\\deps\\rds_workbench-81daebbdc735854a.exe" "/OPT:REF,NOICF" "/DEBUG" "/PDBALTPATH:%_PDB%" "/NATVIS:<sysroot>\\l
+ib\\rustlib\\etc\\intrinsic.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\liballoc.natvis" "/NATVIS:<sysroot>\\lib\\ru
+stlib\\etc\\libcore.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\libstd.natvis" "/NATVIS:D:\\RdataStation\\RDS\\Rdata
+Station-v2\\target\\debug\\deps\\rustcOdBo6W\\rds_workbench-0.natvis" "/NATVIS:D:\\RdataStation\\RDS\\RdataStation-v2\\
+target\\debug\\deps\\rustcOdBo6W\\rds_workbench-1.natvis" "/NATVIS:D:\\RdataStation\\RDS\\RdataStation-v2\\target\\debu
+g\\deps\\rustcOdBo6W\\rds_workbench-2.natvis"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note:   正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a.lib 和对象 D:\Rdata
+Station\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a.exp
+          D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a.exe : fatal error LNK118
+0: 没有足够的磁盘空间完成链接
+          
+
+error: could not compile `rds-workbench` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\examples\seed_demo.lib 和对象 D:\RdataStati
+on\RDS\RdataStation-v2\target\debug\examples\seed_demo.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (example "seed_demo") generated 1 warning

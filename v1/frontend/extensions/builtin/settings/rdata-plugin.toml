@@ -1,0 +1,14 @@
+[plugin]
+id = "rdatastation.settings"
+name = "Settings"
+version = "1.0.0"
+publisher = "rdatastation"
+description = "Settings module for RdataStation"
+engines = { rdatastation = "^0.1.0" }
+
+[capabilities.frontend]
+entry = "./extension.ts"
+activation_events = ["onProjectOpen"]
+
+[contributes.commands]
+"settings.open" = { title = "打开设置" }

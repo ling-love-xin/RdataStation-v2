@@ -1,0 +1,139 @@
+[package]
+name = "rdata-station"
+version = "0.1.0"
+description = "Personal Data Station"
+authors = ["ling"]
+edition = "2021"
+
+[lib]
+name = "rdata_station_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# ---------- Build Dependencies ----------
+[build-dependencies]
+# ✅ 与 tauri 2.11.2 兼容（2.5.6→2.6.2 修复 capabilities 解析）
+tauri-build = { version = "2.6.2", features = [] }
+
+# ---------- Dependencies ----------
+[dependencies]
+# ===== Tauri 生态 (Perfect Match) =====
+tauri = { version = "2.10.3", features = [] } # ✅ 核心库升级至此
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+
+# ===== Async 运行时 =====
+tokio = { version = "1.44.1", features = ["full"] }
+tokio-util = { version = "0.7.12", features = ["full"] }
+async-trait = "0.1.88"
+
+# ===== 数据库驱动 =====
+# MySQL / PostgreSQL (网络数据库)
+sqlx = { version = "0.8.3", features = [
+    "mysql",
+    "postgres",
+    "runtime-tokio",
+    "runtime-tokio-native-tls"
+] }
+# SQLite (本地文件数据库，官方驱动)
+rusqlite = { version = "0.32.1", features = ["bundled", "chrono", "serde_json"] }
+# DuckDB (分析型数据库，官方驱动，bundled 静态链接)
+duckdb = { version = "1.10502.0", features = ["bundled"] }
+# MySQL 官方 Rust 驱动 (mysql_async)
+mysql_async = { version = "0.34", default-features = false, features = ["native-tls-tls"] }
+# PostgreSQL 官方 Rust 驱动 (tokio-postgres)
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+# PostgreSQL TLS 支持 (native-tls)
+postgres-native-tls = "0.5"
+
+# ===== 序列化 =====
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.135"
+# ===== TypeScript 类型生成 (specta 替代 ts-rs) =====
+specta = { version = "=2.0.0-rc.25", features = ["derive", "function", "collect", "serde_json", "chrono"] }
+specta-typescript = "0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["typescript", "derive"] }
+
+# ===== 错误处理 =====
+thiserror = "1.0.69"
+
+# ===== 时间与项目 =====
+chrono = { version = "0.4.41", features = ["serde"] }
+uuid = { version = "1.16.0", features = ["v4", "serde"] }
+
+# ===== 工具库 =====
+dashmap = "6.1.0"
+once_cell = "1.20.0"
+dirs = "5.0.1"
+opener = "0.7"
+rand = "0.8"
+lru = "0.12.3"
+futures = "0.3.30"
+sha2 = "0.10"
+hex = "0.4"
+aes-gcm = "0.10"
+percent-encoding = "2"
+
+# ===== Arrow 格式支持 =====
+arrow = "58.1.0"
+
+# ===== 日志追踪 =====
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "time", "local-time"] }
+tracing-appender = "0.2.3"
+
+# ===== 连接层 (SSL / SSH / Proxy) =====
+native-tls = "0.2.13"
+tokio-native-tls = "0.3.1"
+russh = "0.49.0"        # ⚠️ 注意：可能需要微小代码调整
+russh-keys = "0.49.0"
+tokio-socks = "0.5.2"
+base64 = "0.22.1"
+x509-parser = "0.17"
+
+# ===== Wasm 插件运行时 (Extism) =====
+extism = "1.21.0"
+
+# ===== 迁移系统 =====
+include_dir = "0.7.4"
+
+# ===== 模拟数据生成 =====
+fake = { version = "5", features = [
+    "derive",
+    "chrono",
+    "uuid",
+    "http",
+    "ferroid",
+    "ulid",
+    "semver",
+    "random_color",
+    "geo",
+    "url",
+    "serde_json",
+    "bigdecimal",
+    "rust_decimal",
+    "time",
+] }
+
+# ===== 压缩存储 =====
+flate2 = "1.0.35"
+
+# ===== 配置文件解析 (规则引擎) =====
+toml = "0.8"
+
+# ===== 文件系统监控 =====
+notify = "6"
+
+# ===== SQL 解析与转译 =====
+sqlglot-rust = "0.9.24"
+
+# ===== 正则表达式（搜索替换） =====
+regex = "1.11"
+
+# ===== 文本差异对比（Diff 视图） =====
+similar = "2.6"
+
+# 空 features 防止 Tauri dev 命令追加 --no-default-features
+# 该 flag 在 Windows 上会导致增量编译时 DLL 文件锁冲突
+[features]
+default = []

@@ -1,0 +1,37 @@
+[meta]
+id = "table-quality-overview"
+name = "表质量总览"
+category = "table"
+applies_to = ["Any"]
+result_type = "list"
+version = "1.0"
+description = "聚合表中所有列的质量评分，输出表级质量总览"
+
+[query]
+template = """
+SELECT
+    column_name,
+    data_type,
+    total_count,
+    null_rate,
+    CASE
+        WHEN null_rate <= 0.05 THEN 95.0
+        WHEN null_rate <= 0.15 THEN 80.0
+        WHEN null_rate <= 0.30 THEN 60.0
+        WHEN null_rate <= 0.50 THEN 40.0
+        ELSE 20.0
+    END as completeness_score,
+    CASE
+        WHEN total_count = 0 THEN 0.0
+        WHEN CAST(COALESCE(unique_count, 0) AS FLOAT) / CAST(total_count AS FLOAT) > 0.9 THEN 95.0
+        WHEN CAST(COALESCE(unique_count, 0) AS FLOAT) / CAST(total_count AS FLOAT) > 0.5 THEN 80.0
+        WHEN CAST(COALESCE(unique_count, 0) AS FLOAT) / CAST(total_count AS FLOAT) > 0.2 THEN 60.0
+        WHEN CAST(COALESCE(unique_count, 0) AS FLOAT) / CAST(total_count AS FLOAT) > 0.05 THEN 40.0
+        ELSE 20.0
+    END as uniqueness_score,
+    stats_detail_kind
+FROM insight_column_stats
+WHERE table_name = "{table}"
+ORDER BY null_rate DESC
+"""
+parameters = ["table"]

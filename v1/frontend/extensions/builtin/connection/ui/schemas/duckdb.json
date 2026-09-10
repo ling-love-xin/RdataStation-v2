@@ -1,0 +1,116 @@
+{
+  "driverId": "duckdb",
+  "driverName": "DuckDB",
+  "version": "1.1",
+  "metadata": {
+    "category": "file-based",
+    "description": "DuckDB 分析型数据库",
+    "features": ["列式存储", "向量化执行", "并行查询", "SQL 兼容"],
+    "defaultPort": null,
+    "driverKind": "native",
+    "urlTemplate": "duckdb://{file_path}",
+    "requireFile": true,
+    "requireDatabase": false,
+    "supportsSsl": false,
+    "supportsSshTunnel": false,
+    "supportsHttpProxy": false,
+    "supportsSocksProxy": false
+  },
+  "sections": [
+    {
+      "key": "database",
+      "title": "数据库文件",
+      "icon": "database",
+      "fields": [
+        {
+          "key": "database",
+          "label": "数据库文件",
+          "type": "file",
+          "placeholder": "选择或输入 DuckDB 数据库文件路径",
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "advanced",
+      "title": "高级选项",
+      "icon": "settings",
+      "collapsible": true,
+      "collapsed": true,
+      "fields": [
+        {
+          "key": "threads",
+          "label": "线程数",
+          "type": "select",
+          "default": "auto",
+          "options": [
+            { "label": "自动", "value": "auto" },
+            { "label": "1", "value": "1" },
+            { "label": "2", "value": "2" },
+            { "label": "4", "value": "4" },
+            { "label": "8", "value": "8" }
+          ]
+        },
+        {
+          "key": "connectTimeout",
+          "label": "连接超时 (秒)",
+          "type": "number",
+          "default": 30,
+          "validation": { "min": 1, "max": 300 }
+        },
+        {
+          "key": "memoryLimit",
+          "label": "内存限制 (GB)",
+          "type": "number",
+          "placeholder": "0 表示不限制",
+          "default": 0,
+          "min": 0,
+          "max": 64
+        },
+        {
+          "key": "readOnly",
+          "label": "只读模式",
+          "type": "checkbox",
+          "default": false
+        },
+        {
+          "key": "allowUnsignedExtensions",
+          "label": "允许未签名扩展",
+          "type": "checkbox",
+          "default": false
+        }
+      ]
+    }
+  ],
+  "navigation": {
+    "hasCatalogs": false,
+    "hasSchemas": false,
+    "systemSchemas": [],
+    "folders": {
+      "tables": { "enabled": true, "label": "Tables", "icon": "table", "childTypes": ["table"] },
+      "views": { "enabled": true, "label": "Views", "icon": "eye", "childTypes": ["view"] },
+      "functions": {
+        "enabled": true,
+        "label": "Functions",
+        "icon": "function",
+        "childTypes": ["function"]
+      },
+      "procedures": {
+        "enabled": false,
+        "label": "Procedures",
+        "icon": "terminal",
+        "childTypes": []
+      },
+      "sequences": { "enabled": false, "label": "Sequences", "icon": "hash", "childTypes": [] },
+      "triggers": { "enabled": false, "label": "Triggers", "icon": "zap", "childTypes": [] }
+    },
+    "tableChildren": {
+      "columns": true,
+      "indexes": false,
+      "constraints": false,
+      "triggers": false,
+      "foreignKeys": false,
+      "references": false
+    }
+  }
+}

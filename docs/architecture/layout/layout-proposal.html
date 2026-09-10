@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation v2 布局设计示意 v5</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1e1e1e; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; color: #d4d4d4; padding: 16px; }
+  .note { color: #9cdcfe; font-size: 13px; margin-bottom: 12px; }
+  .app { border: 1px solid #3c3c3c; border-radius: 6px; overflow: hidden; min-width: 1020px; position: relative; }
+
+  /* ── 标题栏 ── */
+  .titlebar { display: flex; align-items: center; height: 36px; background: #252526; border-bottom: 1px solid #3c3c3c; }
+  .tb-left { display: flex; align-items: center; flex: 0 0 auto; }
+  .app-logo { width: 20px; height: 20px; border-radius: 4px; overflow: hidden; margin-left: 10px; flex: none; }
+  .app-logo img { width: 100%; height: 100%; display: block; }
+  .cutout { display: flex; align-items: center; gap: 8px; margin: 4px 0 4px 8px; padding: 4px 14px; background: #1e1e1e; border: 1px dashed #0e639c; border-radius: 6px; }
+  .cutout-label { font-size: 11px; color: #9cdcfe; }
+  .cutout-name { font-size: 13px; font-weight: 600; color: #e8e8e8; }
+  .tb-center { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; }
+  .quick-open { display: flex; align-items: center; width: 320px; max-width: 46%; height: 26px; background: #3c3c3c; border: 1px solid #0e639c; border-radius: 4px; padding: 0 8px; font-size: 12px; color: #969696; cursor: pointer; }
+  .quick-open .mag { color: #c8c8c8; margin-right: 6px; font-size: 14px; }
+  .quick-open .kbd { margin-left: auto; font-size: 10px; color: #6f6f6f; border: 1px solid #555; border-radius: 3px; padding: 0 4px; }
+  .tb-right { flex: 0 0 auto; display: flex; align-items: center; }
+  .win-controls { display: flex; align-items: stretch; height: 100%; }
+  .wc { width: 46px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: #c8c8c8; cursor: pointer; }
+  .wc:hover { background: #3c3c3c; }
+  .wc.close:hover { background: #e81123; color: #fff; }
+
+  /* ── Quick Open 弹出面板（居中，示意） ── */
+  .qo-panel { position: absolute; top: 42px; left: 50%; transform: translateX(-50%); width: 560px; max-width: 90%; background: #252526; border: 1px solid #0e639c; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 5; }
+  .qo-input { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #3c3c3c; }
+  .qo-input .mag { color: #0e639c; font-size: 16px; }
+  .qo-input .field { flex: 1; font-size: 13px; color: #e8e8e8; }
+  .qo-input .field .caret { display: inline-block; width: 1px; height: 14px; background: #0e639c; vertical-align: -2px; animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .qo-body { padding: 6px 0; max-height: 260px; overflow: hidden; }
+  .qo-group { padding: 4px 12px; font-size: 11px; color: #6f6f6f; }
+  .qo-item { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; color: #c8c8c8; }
+  .qo-item.hl { background: #094771; color: #fff; }
+  .qo-item .t { color: #6f6f6f; margin-left: auto; font-size: 11px; }
+  .qo-item .ic { width: 16px; text-align: center; color: #519aba; }
+  .qo-item.cmd .ic { color: #c09553; }
+  .qo-foot { padding: 5px 12px; border-top: 1px solid #3c3c3c; font-size: 11px; color: #6f6f6f; display: flex; gap: 14px; }
+
+  /* ── 主体行 ── */
+  .main { display: flex; align-items: stretch; min-height: 440px; }
+
+  /* ── 活动栏（左右共用样式） ── */
+  .activity { width: 48px; flex: none; background: #333333; display: flex; flex-direction: column; align-items: center; padding: 4px 0; }
+  .activity.l { border-right: 1px solid #3c3c3c; }
+  .activity.r { border-left: 1px solid #3c3c3c; }
+  .a-icon { width: 44px; height: 40px; display: flex; align-items: center; justify-content: center; color: #858585; cursor: pointer; border-left: 2px solid transparent; }
+  .activity.r .a-icon { border-left: none; border-right: 2px solid transparent; }
+  .a-icon.active { color: #e8e8e8; border-left-color: #fff; }
+  .activity.r .a-icon.active { border-right-color: #fff; }
+  .a-icon:not(.active):hover { color: #c8c8c8; }
+  .a-spacer { flex: 1; }
+  .a-sep { width: 28px; height: 1px; background: #4a4a4a; margin: 6px 0; }
+  .a-bottom { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .a-btn { width: 40px; height: 32px; display: flex; align-items: center; justify-content: center; color: #858585; cursor: pointer; font-size: 15px; }
+  .a-btn:hover { color: #e8e8e8; }
+  .a-svg { width: 20px; height: 20px; }
+  .a-svg * { stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ── 左侧边栏 ── */
+  .sidebar-l { width: 240px; flex: none; background: #252526; border-right: 1px solid #3c3c3c; display: flex; flex-direction: column; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 8px 0 14px; background: #2d2d30; border-bottom: 1px solid #3c3c3c; font-size: 12px; color: #e8e8e8; font-weight: 600; }
+  .panel-head .actions { display: flex; gap: 2px; color: #969696; }
+  .panel-body { flex: 1; padding: 8px; font-size: 12px; overflow: hidden; }
+  .tree-row { display: flex; align-items: center; gap: 6px; height: 24px; color: #c8c8c8; }
+  .tree-row.dim { color: #6f6f6f; }
+  .tree-row .icon { width: 14px; text-align: center; color: #519aba; flex: none; }
+  .tree-row.folder .icon { color: #c09553; }
+  .tree-row.file .icon { color: #d4d4d4; }
+  .indent { width: 14px; flex: none; }
+  .panel-foot { border-top: 1px solid #3c3c3c; padding: 6px 10px; font-size: 11px; color: #6f6f6f; }
+
+  /* ── 中央编辑区 ── */
+  .editor { flex: 1; min-width: 320px; background: #1e1e1e; display: flex; flex-direction: column; }
+  .editor-tabs { display: flex; height: 34px; background: #252526; border-bottom: 1px solid #3c3c3c; }
+  .etab { display: flex; align-items: center; gap: 6px; padding: 0 14px; font-size: 12px; background: #1e1e1e; color: #e8e8e8; border-right: 1px solid #3c3c3c; }
+  .etab .dot { width: 10px; height: 10px; border-radius: 2px; background: #0e639c; }
+  .etab .x { color: #6f6f6f; margin-left: 6px; }
+  .editor-body { flex: 1; display: flex; flex-direction: column; }
+  .sql { padding: 12px 16px; font-family: Consolas, monospace; font-size: 13px; line-height: 1.9; color: #9cdcfe; }
+  .sql .kw { color: #569cd6; }
+  .sql .fn { color: #dcdcaa; }
+  .sql .str { color: #ce9178; }
+  .sql .cmt { color: #6a9955; }
+  .results { margin: 0 16px 16px; border: 1px solid #3c3c3c; border-radius: 4px; overflow: hidden; }
+  .results-head { height: 26px; background: #252526; padding: 0 10px; font-size: 12px; display: flex; align-items: center; justify-content: space-between; color: #969696; }
+  .results-head .stat { color: #4ec9b0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #2d2d30; color: #c8c8c8; text-align: left; padding: 5px 10px; border-bottom: 1px solid #3c3c3c; font-weight: 500; }
+  td { padding: 5px 10px; border-bottom: 1px solid #2d2d30; color: #d4d4d4; }
+  tr:hover td { background: #262626; }
+
+  /* ── 右侧边栏 ── */
+  .sidebar-r { width: 280px; flex: none; background: #252526; border-right: 1px solid #3c3c3c; display: flex; flex-direction: column; }
+  .card { border: 1px solid #3c3c3c; border-radius: 4px; margin-bottom: 8px; overflow: hidden; }
+  .card-head { height: 26px; background: #2d2d30; padding: 0 10px; font-size: 12px; display: flex; align-items: center; color: #c8c8c8; }
+  .card-body { padding: 8px 10px; font-size: 12px; color: #969696; line-height: 1.7; }
+
+  /* ── 状态栏 ── */
+  .statusbar { display: flex; align-items: center; justify-content: space-between; height: 24px; background: #0e639c; color: #fff; font-size: 12px; padding: 0 8px; }
+  .sb-left { display: flex; align-items: center; gap: 14px; }
+  .sb-right { display: flex; align-items: center; gap: 18px; }
+  .sb-item { display: flex; align-items: center; gap: 5px; }
+  .sb-btn { display: flex; align-items: center; gap: 4px; color: #fff; cursor: pointer; opacity: .95; padding: 0 4px; }
+  .sb-btn:hover { opacity: 1; background: rgba(255,255,255,.15); border-radius: 3px; }
+
+  /* ── 模式示意条 ── */
+  .modes { margin-top: 14px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .mode { border: 1px solid #3c3c3c; border-radius: 6px; padding: 10px 14px; flex: 1; min-width: 280px; background: #252526; }
+  .mode h4 { font-size: 12px; color: #e8e8e8; margin-bottom: 8px; font-weight: 600; }
+  .mode .strip { display: flex; height: 34px; border-radius: 4px; overflow: hidden; border: 1px solid #3c3c3c; }
+  .mode .strip > div { display: flex; align-items: center; justify-content: center; font-size: 10px; color: #9a9a9a; }
+  .mode .s-act { width: 22px; background: #333; }
+  .mode .s-bar { background: #2d2d30; }
+  .mode .s-editor { flex: 1; background: #1e1e1e; }
+  .mode .s-empty { background: #1e1e1e; color: #6f6f6f; }
+  .mode p { margin-top: 6px; font-size: 11px; color: #6f6f6f; line-height: 1.6; }
+  .legend { margin-top: 12px; display: flex; gap: 20px; font-size: 12px; color: #969696; flex-wrap: wrap; }
+  .legend span b { font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="note">RdataStation v2 布局设计 · 示意 v5（真实软件图标 · 搜索框居中 · 设置↔完全隐藏位置互换）</div>
+
+<div class="app">
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <div class="tb-left">
+      <div class="app-logo"><img src="../../../assets/icons/32x32.png" alt="RdataStation"></div>
+      <div class="cutout">
+        <span class="cutout-label">项目</span>
+        <span class="cutout-name">营销分析</span>
+      </div>
+    </div>
+    <div class="tb-center">
+      <div class="quick-open"><span class="mag">⌕</span>搜索或输入命令…<span class="kbd">Ctrl+P</span></div>
+    </div>
+    <div class="tb-right">
+      <div class="win-controls">
+        <div class="wc" title="最小化">─</div>
+        <div class="wc" title="最大化">□</div>
+        <div class="wc close" title="关闭">✕</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Open 弹出（居中，示意） -->
+  <div class="qo-panel">
+    <div class="qo-input"><span class="mag">⌕</span><span class="field">orders<span class="caret"></span></span></div>
+    <div class="qo-body">
+      <div class="qo-group">文件 / 表</div>
+      <div class="qo-item hl"><span class="ic">▤</span>analytics.orders · 表<span class="t">数据库导航</span></div>
+      <div class="qo-item"><span class="ic">📄</span>order_analysis.sql · 草稿<span class="t">草稿箱</span></div>
+      <div class="qo-group">命令</div>
+      <div class="qo-item cmd"><span class="ic">&gt;</span>执行 SQL：orders 画像<span class="t">查询</span></div>
+      <div class="qo-item cmd"><span class="ic">&gt;</span>生成 Mock：orders<span class="t">Mock 生成</span></div>
+      <div class="qo-item cmd"><span class="ic">&gt;</span>洞察：orders 表画像<span class="t">洞察</span></div>
+    </div>
+    <div class="qo-foot"><span>↑↓ 选择</span><span>↵ 打开</span><span>输入 &gt; 仅命令</span></div>
+  </div>
+
+  <div class="main">
+    <!-- 左侧活动栏 -->
+    <div class="activity l">
+      <div class="a-icon" title="草稿箱">
+        <svg class="a-svg" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/><path d="M7 7h6M7 10h6M7 13h4"/></svg>
+      </div>
+      <div class="a-icon active" title="数据库导航">
+        <svg class="a-svg" viewBox="0 0 20 20"><ellipse cx="10" cy="5" rx="6" ry="2.4"/><path d="M4 5v5c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4V5"/><path d="M4 10v5c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4v-5"/></svg>
+      </div>
+      <div class="a-icon" title="资源分析">
+        <svg class="a-svg" viewBox="0 0 20 20"><path d="M4 16V10M10 16V6M16 16v-9"/><path d="M3 16h14"/></svg>
+      </div>
+      <div class="a-icon" title="插件">
+        <svg class="a-svg" viewBox="0 0 20 20"><path d="M8 3v3M12 3v3M8 3h8v4H4V3"/><rect x="4" y="7" width="12" height="10" rx="2"/></svg>
+      </div>
+      <div class="a-spacer"></div>
+      <div class="a-sep"></div>
+      <div class="a-bottom">
+        <div class="a-btn" title="设置">⚙</div>
+      </div>
+    </div>
+
+    <!-- 左侧边栏 -->
+    <div class="sidebar-l">
+      <div class="panel-head"><span>数据库导航</span><span class="actions">⋯</span></div>
+      <div class="panel-body">
+        <div class="tree-row folder"><span class="icon">▸</span>项目：营销分析</div>
+        <div class="tree-row dim"><span class="indent"></span><span class="icon">▸</span>数据源：本地 MySQL</div>
+        <div class="tree-row dim"><span class="indent"></span><span class="indent"></span><span class="icon">▸</span>schema：analytics</div>
+        <div class="tree-row dim"><span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="icon">▤</span>orders</div>
+        <div class="tree-row dim"><span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="icon">▤</span>customers</div>
+        <div class="tree-row dim"><span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="icon">▤</span>products</div>
+        <div class="tree-row dim" style="margin-top:6px;"><span class="indent"></span><span class="icon">▸</span>数据源：生产 PG</div>
+        <div class="tree-row dim"><span class="indent"></span><span class="indent"></span><span class="icon">▸</span>schema：public</div>
+        <div class="tree-row dim"><span class="indent"></span><span class="indent"></span><span class="indent"></span><span class="icon">▤</span>users</div>
+      </div>
+      <div class="panel-foot">活动栏图标切换 panel · 再点同图标收起</div>
+    </div>
+
+    <!-- 中央编辑区 -->
+    <div class="editor">
+      <div class="editor-tabs">
+        <div class="etab"><span class="dot"></span>query.sql<span class="x">✕</span></div>
+      </div>
+      <div class="editor-body">
+        <div class="sql">
+          <span class="cmt">-- 查询订单表画像</span><br>
+          <span class="kw">SELECT</span> customer_id, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> cnt<br>
+          <span class="kw">FROM</span> analytics.orders<br>
+          <span class="kw">WHERE</span> created_at <span class="kw">&gt;=</span> <span class="str">'2026-01-01'</span><br>
+          <span class="kw">GROUP BY</span> 1 <span class="kw">ORDER BY</span> 2 <span class="kw">DESC</span>
+        </div>
+        <div class="results">
+          <div class="results-head"><span>结果集</span><span class="stat">8 行 · 12 ms</span></div>
+          <table>
+            <tr><th>customer_id</th><th>cnt</th></tr>
+            <tr><td>10086</td><td>42</td></tr>
+            <tr><td>10023</td><td>37</td></tr>
+            <tr><td>10045</td><td>29</td></tr>
+            <tr><td>…</td><td>…</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧边栏 -->
+    <div class="sidebar-r">
+      <div class="panel-head"><span>洞察</span><span class="actions">⋯</span></div>
+      <div class="panel-body">
+        <div class="card">
+          <div class="card-head">表画像 · orders</div>
+          <div class="card-body">行数 128,430 · 列 12<br>空值率 3.2% · 主键唯一 ✓</div>
+        </div>
+        <div class="card">
+          <div class="card-head">列分布 · status</div>
+          <div class="card-body">pending 62% · shipped 31% · done 7%</div>
+        </div>
+        <div class="card">
+          <div class="card-head">规则命中</div>
+          <div class="card-body">2 条建议可执行</div>
+        </div>
+      </div>
+      <div class="panel-foot">右侧活动栏切换 · 默认收起</div>
+    </div>
+
+    <!-- 右侧活动栏 -->
+    <div class="activity r">
+      <div class="a-icon active" title="洞察">
+        <svg class="a-svg" viewBox="0 0 20 20"><path d="M10 3l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5L2.8 8.3l5-.7z"/></svg>
+      </div>
+      <div class="a-icon" title="Mock 生成">
+        <svg class="a-svg" viewBox="0 0 20 20"><path d="M9 3h2v6l5 1.5v2L11 11v6H9v-6l-5 1.5v-2L9 9z"/></svg>
+      </div>
+      <div class="a-icon" title="历史">
+        <svg class="a-svg" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M10 6.5V10l2.5 1.8"/></svg>
+      </div>
+      <div class="a-spacer"></div>
+      <div class="a-sep"></div>
+      <div class="a-bottom">
+        <div class="a-btn" title="设置">⚙</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="statusbar">
+    <div class="sb-left">
+      <div class="sb-btn" title="完全隐藏边栏">« 完全隐藏</div>
+      <div class="sb-item">数据库导航</div>
+    </div>
+    <div class="sb-right">
+      <div class="sb-item">连接：本地 MySQL</div>
+      <div class="sb-item">DuckDB 就绪</div>
+      <div class="sb-item">UTF-8</div>
+    </div>
+  </div>
+</div>
+
+<!-- 三种模式示意 -->
+<div class="modes">
+  <div class="mode">
+    <h4>① 展开 · 边栏可见</h4>
+    <div class="strip"><div class="s-act">▮</div><div class="s-bar" style="width:120px;">边栏</div><div class="s-editor">编辑区</div><div class="s-bar" style="width:120px;">边栏</div><div class="s-act">▮</div></div>
+    <p>活动栏 + 边栏都显示，panel 内容可见可交互</p>
+  </div>
+  <div class="mode">
+    <h4>② 收起 · 边栏隐藏</h4>
+    <div class="strip"><div class="s-act">▮</div><div class="s-empty" style="flex:1;">编辑区（边栏已收起）</div><div class="s-act">▮</div></div>
+    <p>边栏收起，活动栏图标保留；点击图标立即重新展开</p>
+  </div>
+  <div class="mode">
+    <h4>③ 完全隐藏 · 活动栏 + 边栏</h4>
+    <div class="strip"><div class="s-empty" style="flex:1;">编辑区最大化</div></div>
+    <p>活动栏与边栏一起隐藏；经状态栏「完全隐藏」按钮 / 命令面板恢复</p>
+  </div>
+</div>
+
+<div class="legend">
+  <span><b>●</b> 标题栏：软件图标（assets/icons 明亮版）+ 挖空项目名 + 居中搜索框 + 窗口控制</span>
+  <span><b>●</b> 活动栏底部：设置入口 ⚙（左右各一）</span>
+  <span><b>●</b> 状态栏左侧：完全隐藏按钮</span>
+  <span><b>●</b> 暗黑版图标尚未设计，dark 主题先复用明亮版</span>
+</div>
+</body>
+</html>

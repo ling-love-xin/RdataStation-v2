@@ -1,0 +1,71 @@
+[package]
+name = "rds-engine"
+version = "0.1.0"
+description = "RdataStation v2 engine crate: 双引擎基础设施（DuckDB 分析引擎 + 驱动层 + DBI + 缓存 + 连接管理）"
+edition = "2021"
+
+[dependencies]
+# 依赖键命名为 shared，使 v1 迁移代码中的 `shared::` 引用直接生效
+shared = { path = "../shared", package = "rds-shared" }
+# 连接层已抽取为独立 crate（driver/factory 与 registry/config 引用它）
+connection = { path = "../connection", package = "rds-connection" }
+
+# ===== 分析引擎 =====
+duckdb = { version = "1.10502.0", features = ["bundled"] }
+arrow = "58.1.0"
+
+# ===== Async 运行时 =====
+tokio = { version = "1.44.1", features = ["full"] }
+tokio-util = { version = "0.7.12", features = ["full"] }
+futures = "0.3.30"
+async-trait = "0.1.88"
+
+# ===== 数据库驱动（native 实现，与 v1 版本一致） =====
+sqlx = { version = "0.8.3", features = [
+    "mysql",
+    "postgres",
+    "runtime-tokio",
+    "runtime-tokio-native-tls"
+] }
+rusqlite = { version = "0.32.1", features = ["bundled", "chrono", "serde_json"] }
+mysql_async = { version = "0.34", default-features = false, features = ["native-tls-tls"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+postgres-native-tls = "0.5"
+
+# ===== 连接层（SSL / SSH / Proxy） =====
+native-tls = "0.2.13"
+tokio-native-tls = "0.3.1"
+russh = "0.49.0"
+russh-keys = "0.49.0"
+tokio-socks = "0.5.2"
+base64 = "0.22.1"
+x509-parser = "0.17"
+
+# ===== 序列化 =====
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.135"
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json", "chrono"] }
+
+# ===== 时间与项目 =====
+chrono = { version = "0.4.41", features = ["serde"] }
+uuid = { version = "1.16.0", features = ["v4", "serde"] }
+
+# ===== 日志追踪 =====
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "time", "local-time"] }
+tracing-appender = "0.2.3"
+
+# ===== 工具库 =====
+dashmap = "6.1.0"
+once_cell = "1.20.0"
+lru = "0.12.3"
+rand = "0.8"
+sqlglot-rust = "=0.9.25"
+dirs = "5.0.1"
+percent-encoding = "2"
+flate2 = "1.0.35"
+toml = "0.8"
+regex = "1.11"
+include_dir = "0.7.4"
+sha2 = "0.10"
+hex = "0.4"

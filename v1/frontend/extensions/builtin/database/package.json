@@ -1,0 +1,25 @@
+{
+  "name": "database",
+  "publisher": "rdatastation",
+  "version": "1.0.0",
+  "displayName": "Database",
+  "description": "database module for RdataStation",
+  "categories": [
+    "Core"
+  ],
+  "keywords": [
+    "database"
+  ],
+  "engines": {
+    "rdatastation": "^0.1.0"
+  },
+  "activationEvents": [
+    "onProjectOpen"
+  ],
+  "contributes": {
+    "commands": [],
+    "menus": {},
+    "views": {}
+  },
+  "main": "./extension.ts"
+}

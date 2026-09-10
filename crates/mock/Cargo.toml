@@ -1,0 +1,36 @@
+[package]
+name = "rds-mock"
+version.workspace = true
+edition.workspace = true
+description = "M7 测试数据生成：基于元数据的 mock 数据（仅落 DuckDB 分析引擎）"
+
+[dependencies]
+engine = { path = "../engine", package = "rds-engine" }
+shared = { path = "../shared", package = "rds-shared" }
+
+# ===== 数据生成 =====
+fake = { version = "5", features = [
+    "derive", "chrono", "uuid", "http", "ferroid", "ulid", "semver",
+    "random_color", "geo", "url", "serde_json", "bigdecimal", "rust_decimal", "time",
+] }
+rand = "0.8"
+
+# ===== 时间 =====
+chrono = { version = "0.4.39", features = ["serde"] }
+
+# ===== 序列化 =====
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.135"
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json", "chrono"] }
+
+# ===== Async 运行时 =====
+tokio = { version = "1.44.1", features = ["full"] }
+
+# ===== DuckDB（分析引擎，mock 落临时表） =====
+duckdb = { version = "1.10502.0", features = ["bundled"] }
+
+# ===== 其他 =====
+tracing = "0.1.41"
+thiserror = "1.0.69"
+rusqlite = { version = "0.32.1", features = ["bundled", "chrono", "serde_json"] }
+uuid = { version = "1.16.0", features = ["v4", "serde"] }

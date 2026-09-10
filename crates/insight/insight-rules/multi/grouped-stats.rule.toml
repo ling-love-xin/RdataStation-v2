@@ -1,0 +1,66 @@
+[meta]
+id = "grouped-stats"
+name = "分组统计"
+description = "按分类列对数值列做分组统计：每组计数、均值、标准差、中位数"
+version = "1.0"
+category = "multi"
+applies_to = ["Numeric", "Text"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    "{cat_col}"::VARCHAR AS category,
+    COUNT(*) AS cnt,
+    AVG("{num_col}")::DOUBLE AS avg_val,
+    STDDEV_SAMP("{num_col}")::DOUBLE AS stddev_val,
+    MEDIAN("{num_col}")::DOUBLE AS median_val,
+    MIN("{num_col}")::DOUBLE AS min_val,
+    MAX("{num_col}")::DOUBLE AS max_val
+FROM "{table}"
+WHERE "{num_col}" IS NOT NULL AND "{cat_col}" IS NOT NULL
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 20
+"""
+parameters = ["table", "num_col", "cat_col"]
+result_type = "list"
+
+[[output]]
+sql_name = "category"
+json_name = "category"
+value_type = "string"
+
+[[output]]
+sql_name = "cnt"
+json_name = "count"
+value_type = "usize"
+
+[[output]]
+sql_name = "avg_val"
+json_name = "avg"
+value_type = "f64"
+
+[[output]]
+sql_name = "stddev_val"
+json_name = "stddev"
+value_type = "f64?"
+
+[[output]]
+sql_name = "median_val"
+json_name = "median"
+value_type = "f64"
+
+[[output]]
+sql_name = "min_val"
+json_name = "min"
+value_type = "f64"
+
+[[output]]
+sql_name = "max_val"
+json_name = "max"
+value_type = "f64"
+
+[render]
+component = "GroupedStatsTable"
+display_order = 2

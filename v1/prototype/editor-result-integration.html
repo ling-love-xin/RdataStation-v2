@@ -1,0 +1,2048 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation — 编辑器 + 结果集融合原型</title>
+<style>
+/* ========== Reset & Design Tokens ========== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-root: #0d0d0d; --bg-primary: #1e1e1e; --bg-secondary: #252526;
+  --bg-tertiary: #2d2d30; --bg-hover: #333; --bg-active: #37373d;
+  --bg-input: #3c3c3c;
+  --border: #3e3e42; --border-light: #4a4a4d;
+  --text-primary: #ccc; --text-secondary: #9d9d9d; --text-muted: #6a6a6a;
+  --sql: #007acc; --sql-lt: #4fc3f7; --sql-bg: rgba(0,120,212,0.12);
+  --analysis: #0e639c; --analysis-lt: #64b5f6; --analysis-bg: rgba(14,99,156,0.12);
+  --code: #68217a; --code-lt: #ce93d8; --code-bg: rgba(104,33,122,0.12);
+  --success: #4caf50; --warn: #cca700; --error: #f44747;
+  --dirty: #f0c040; --info: #3794ff;
+  --tab-active: #1e1e1e; --tab-inactive: #2d2d2d; --tab-accent: #0066b8;
+  --mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+  --ui: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --r-sm: 3px; --r-md: 5px; --r-lg: 7px;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3); --shadow-lg: 0 6px 20px rgba(0,0,0,0.5);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body {
+  font-family: var(--ui); background: var(--bg-root); color: var(--text-primary);
+  height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ========== Scrollbar ========== */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ================================================================
+   EDITOR PANEL — 对应 EditorPanel.vue
+   ================================================================ */
+.editor-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ─── EDITOR TOOLBAR — 对应 EditorToolbar.vue ─── */
+.editor-toolbar {
+  height: 36px; background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 6px; gap: 0; flex-shrink: 0;
+  transition: background 0.35s var(--ease);
+}
+/* 模式配色 */
+.editor-toolbar.mode-sql { background: #1e2a36; }
+.editor-toolbar.mode-analysis { background: #1a2633; }
+.editor-toolbar.mode-code { background: #1f1a2e; }
+
+/* ─── 模式指示器 ─── */
+.tb-mode-indicator {
+  display: flex; align-items: center; gap: 6px; padding: 0 8px; height: 28px;
+  border-radius: var(--r-md); font-size: 11px; font-weight: 600; cursor: pointer;
+  user-select: none; transition: all 0.2s var(--ease); position: relative;
+  white-space: nowrap; flex-shrink: 0;
+}
+.tb-mode-indicator.sql { color: var(--sql-lt); background: var(--sql-bg); border: 1px solid rgba(0,120,212,0.25); }
+.tb-mode-indicator.analysis { color: var(--analysis-lt); background: var(--analysis-bg); border: 1px solid rgba(14,99,156,0.25); }
+.tb-mode-indicator.code { color: var(--code-lt); background: var(--code-bg); border: 1px solid rgba(104,33,122,0.25); }
+.tb-mode-indicator:hover { filter: brightness(1.3); }
+.tb-mode-indicator .mode-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.tb-mode-indicator.sql .mode-dot { background: var(--sql); }
+.tb-mode-indicator.analysis .mode-dot { background: var(--analysis); }
+.tb-mode-indicator.code .mode-dot { background: var(--code); }
+.tb-mode-indicator .mode-chevron { font-size: 8px; opacity: 0.5; margin-left: 2px; transition: transform 0.2s; }
+.tb-mode-indicator .mode-chevron.open { transform: rotate(180deg); }
+
+/* 模式下拉菜单 */
+.tb-mode-menu {
+  position: absolute; top: 32px; left: 0; z-index: 100; background: #252526;
+  border: 1px solid #3c3c3c; border-radius: var(--r-lg); padding: 4px 0;
+  min-width: 170px; display: none; box-shadow: var(--shadow-lg);
+}
+.tb-mode-menu .mode-menu-item {
+  padding: 8px 14px; font-size: 12px; color: #ccc; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; transition: background 0.08s;
+}
+.tb-mode-menu .mode-menu-item:hover { background: #094771; color: #fff; }
+.tb-mode-menu .mode-menu-item.active { background: rgba(0,120,212,0.2); }
+.tb-mode-menu .mode-menu-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.tb-mode-menu .mode-menu-dot.sql { background: var(--sql); }
+.tb-mode-menu .mode-menu-dot.analysis { background: var(--analysis); }
+.tb-mode-menu .mode-menu-dot.code { background: var(--code); }
+.tb-mode-menu .mode-menu-desc { font-size: 10px; color: #666; margin-left: auto; }
+
+.tb-group { display: flex; align-items: center; gap: 1px; }
+.tb-btn {
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-secondary); cursor: pointer;
+  border-radius: var(--r-sm); font-size: 14px; transition: all 0.12s;
+}
+.tb-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tb-btn.run { background: var(--sql-bg); color: var(--sql); }
+.tb-btn.run:hover { background: rgba(0,120,212,0.3); }
+.tb-btn.executing { background: rgba(240,192,64,0.2); color: #f0c040; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+.tb-spacer { flex: 1; }
+.tb-conn-select {
+  font-size: 11px; color: var(--text-primary); background: var(--bg-primary);
+  border: 1px solid var(--border); border-radius: var(--r-sm); padding: 2px 8px;
+  cursor: pointer; outline: none; font-family: var(--ui); max-width: 180px;
+}
+.tb-conn-select:hover, .tb-conn-select:focus { border-color: var(--sql); }
+.tb-overflow-wrap { position: relative; }
+.tb-overflow-menu {
+  position: absolute; top: 32px; right: 0; z-index: 100; background: #252526;
+  border: 1px solid #3c3c3c; border-radius: var(--r-lg); padding: 4px 0;
+  min-width: 160px; display: none; box-shadow: var(--shadow-lg);
+}
+.tb-overflow-menu .ov-item {
+  padding: 6px 14px; font-size: 11px; color: #ccc; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; transition: background 0.08s;
+}
+.tb-overflow-menu .ov-item:hover { background: #094771; color: #fff; }
+
+.editor-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ─── READONLY WARNING ─── */
+.readonly-warning {
+  flex-shrink: 0; display: none; align-items: center; gap: 6px;
+  padding: 4px 12px; font-size: 12px; color: #b8956a;
+  background: rgba(184,149,106,0.08); border-bottom: 1px solid rgba(184,149,106,0.2);
+}
+
+/* ─── TAB BAR WRAP — 对应 EditorPanel.vue .tab-bar-wrap ─── */
+.tab-bar-wrap {
+  display: flex; align-items: stretch; height: 35px;
+  background: #252526; border-bottom: 1px solid var(--border);
+  flex-shrink: 0; position: relative;
+}
+.tab-mode-accent {
+  width: 3px; flex-shrink: 0; transition: background 0.35s var(--ease);
+}
+.tab-mode-accent.sql { background: var(--sql); }
+.tab-mode-accent.analysis { background: var(--analysis); }
+.tab-mode-accent.code { background: var(--code); }
+.tab-scroll-btn {
+  width: 20px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: var(--text-muted); background: transparent;
+  border: none; font-size: 10px; opacity: 0.4; transition: opacity 0.15s;
+}
+.tab-scroll-btn:hover { opacity: 1; color: var(--text-primary); }
+.tab-scroll-btn:disabled { opacity: 0.1; cursor: default; }
+.tab-bar {
+  flex: 1; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden;
+  scroll-behavior: smooth;
+}
+.tab-bar::-webkit-scrollbar { height: 0; }
+
+.tab-item {
+  display: flex; align-items: center; gap: 5px; height: 100%;
+  min-width: 0; max-width: 180px; padding: 0 10px; font-size: 12px;
+  color: #858585; background: var(--tab-inactive); border-right: 1px solid #252525;
+  cursor: pointer; user-select: none; white-space: nowrap;
+  transition: background 0.13s var(--ease), color 0.13s var(--ease); position: relative;
+}
+.tab-item:last-of-type { border-right: none; }
+.tab-item:hover { background: #383838; color: #ccc; }
+.tab-item.active {
+  background: var(--tab-active); color: #e0e0e0;
+  border-top: 2px solid var(--tab-accent); padding-top: 0;
+}
+.tab-item[data-type="sql"] .tab-type-dot { background: var(--sql-lt); }
+.tab-item[data-type="analysis"] .tab-type-dot { background: var(--analysis-lt); }
+.tab-item[data-type="code"] .tab-type-dot { background: var(--code-lt); }
+.tab-item .tab-type-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; opacity: 0.35;
+  transition: opacity 0.2s;
+}
+.tab-item.active .tab-type-dot { opacity: 0.9; }
+.tab-item .tab-icon {
+  display: flex; align-items: center; flex-shrink: 0; color: inherit; opacity: 0.65;
+  font-size: 13px;
+}
+.tab-item.active .tab-icon { opacity: 0.9; }
+.tab-item .tab-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
+}
+.tab-item .tab-label.modified { font-style: italic; }
+.tab-item .tab-dirty {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--dirty); flex-shrink: 0;
+  animation: dirtyPulse 2s ease-in-out infinite;
+}
+@keyframes dirtyPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+.tab-item .tab-pin {
+  font-size: 10px; opacity: 0; flex-shrink: 0; color: var(--text-muted);
+  transition: all 0.15s; cursor: pointer; display: flex; align-items: center;
+}
+.tab-item.pinned .tab-pin { opacity: 0.5; color: var(--sql-lt); }
+.tab-item:hover .tab-pin { opacity: 0.35; }
+.tab-item .tab-pin:hover { opacity: 1; color: var(--sql); }
+.tab-item.pinned { max-width: 36px; min-width: 36px; justify-content: center; padding: 0 8px; }
+.tab-item.pinned .tab-label, .tab-item.pinned .tab-type-dot, .tab-item.pinned .tab-icon { display: none; }
+.tab-item.pinned .tab-dirty { position: absolute; top: 3px; right: 3px; width: 5px; height: 5px; }
+.tab-item .tab-close {
+  display: flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+  border-radius: 4px; flex-shrink: 0; opacity: 0; font-size: 12px;
+  transition: opacity 0.1s, background 0.1s;
+}
+.tab-item:hover .tab-close { opacity: 0.5; }
+.tab-item .tab-close:hover { opacity: 1; background: rgba(255,255,255,0.12); color: #fff; }
+.tab-item.pinned .tab-close { display: none; }
+.tab-item .tab-drag-handle {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  cursor: grab; opacity: 0; transition: opacity 0.15s;
+}
+.tab-item:hover .tab-drag-handle { opacity: 0.25; }
+.tab-drag-handle:hover { opacity: 0.7; background: var(--sql); }
+.tab-item.drag-source { opacity: 0.4; }
+.tab-item.drag-over { border-left: 2px solid var(--sql); background: rgba(0,120,212,0.12); }
+
+/* Overflow menu */
+.tab-overflow-wrap { position: relative; flex-shrink: 0; }
+.tab-overflow-btn {
+  width: 22px; height: 100%; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: #858585; background: transparent; border: none;
+  transition: all 0.12s;
+}
+.tab-overflow-btn:hover { background: #333; color: #fff; }
+.tab-overflow-menu {
+  position: absolute; top: 100%; right: 0; z-index: 10002; min-width: 180px;
+  max-height: 300px; overflow-y: auto; background: #252526;
+  border: 1px solid #3c3c3c; border-radius: 6px; padding: 4px 0;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.48); display: none;
+}
+.tab-overflow-menu .overflow-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  font-size: 12px; color: #ccc; cursor: pointer; transition: background 0.08s;
+}
+.tab-overflow-menu .overflow-item:hover { background: #094771; color: #fff; }
+.tab-overflow-menu .overflow-item.active { background: #094771; }
+.overflow-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.overflow-dot.sql { background: var(--sql-lt); }
+.overflow-dot.analysis { background: var(--analysis-lt); }
+.overflow-dot.code { background: var(--code-lt); }
+.overflow-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overflow-dirty { color: #f0c040; font-size: 10px; flex-shrink: 0; }
+.overflow-close { font-size: 14px; opacity: 0; flex-shrink: 0; padding: 0 2px; }
+.overflow-item:hover .overflow-close { opacity: 0.5; }
+.overflow-close:hover { opacity: 1 !important; }
+
+.tab-new-btn {
+  width: 28px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: #858585; background: transparent; border: none;
+  font-size: 16px; border-radius: var(--r-sm); margin: 3px 3px; transition: all 0.12s;
+}
+.tab-new-btn:hover { background: #333; color: #fff; }
+
+/* ─── BREADCRUMB — 对应 EditorPanel.vue .editor-breadcrumb ─── */
+.editor-breadcrumb {
+  height: 22px; display: flex; align-items: center; padding: 0 10px; gap: 2px;
+  flex-shrink: 0; background: var(--bg-primary); border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--text-muted); overflow: hidden;
+}
+.editor-breadcrumb .crumb {
+  cursor: pointer; padding: 1px 5px; border-radius: var(--r-sm); transition: all 0.1s;
+  white-space: nowrap;
+}
+.editor-breadcrumb .crumb:hover { color: #ccc; background: var(--bg-hover); }
+.editor-breadcrumb .crumb-sep { color: var(--text-muted); opacity: 0.35; user-select: none; font-size: 9px; }
+.editor-breadcrumb .crumb-active { color: #ccc; font-weight: 500; }
+
+/* ─── EDITOR SPLIT — 对应 EditorPanel.vue .editor-split ─── */
+.editor-split { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+.editor-area {
+  overflow: hidden; position: relative; background: #1e1e1e; display: flex;
+  min-height: 60px;
+}
+.editor-gutter {
+  width: 54px; flex-shrink: 0; background: #1e1e1e; border-right: 1px solid #2d2d30;
+  padding: 10px 0; text-align: right; font-family: var(--mono); font-size: 13px;
+  line-height: 1.6; color: #858585; user-select: none; overflow: hidden;
+}
+.editor-gutter .gutter-line { padding-right: 14px; height: 1.6em; }
+.editor-gutter .gutter-line.active { color: #ccc; }
+.editor-gutter .gutter-line.error { color: var(--error); }
+.editor-gutter .gutter-line.warn { color: var(--warn); }
+.cm-editor { flex: 1; overflow: auto; }
+.cm-content {
+  padding: 10px 16px; font-family: var(--mono); font-size: 13px; line-height: 1.6;
+  color: #d4d4d4; outline: none; tab-size: 2; white-space: pre; min-height: 100%;
+  caret-color: #fff;
+}
+.cm-keyword { color: #569cd6; }
+.cm-string { color: #ce9178; }
+.cm-number { color: #b5cea8; }
+.cm-comment { color: #6a9955; }
+.cm-function { color: #dcdcaa; }
+.cm-type { color: #4ec9b0; }
+.cm-variable { color: #9cdcfe; }
+
+/* Split Handle */
+.split-handle {
+  height: 4px; cursor: row-resize; background: var(--border); flex-shrink: 0;
+  transition: background 0.15s; position: relative; display: flex;
+  align-items: center; justify-content: center;
+}
+.split-handle:hover { background: var(--sql); }
+.split-handle::after {
+  content: ''; width: 40px; height: 2px; background: var(--text-muted);
+  border-radius: 1px; transition: all 0.15s;
+}
+.split-handle:hover::after { background: #fff; width: 50px; }
+.split-handle.dragging { background: var(--sql); }
+.split-handle.dragging::after { background: #fff; width: 60px; }
+.split-handle .split-ratio-tip {
+  position: absolute; left: 50%; top: -18px; transform: translateX(-50%);
+  font-size: 9px; color: var(--text-muted); font-family: var(--mono);
+  opacity: 0; transition: opacity 0.15s;
+}
+.split-handle:hover .split-ratio-tip { opacity: 1; }
+
+/* ================================================================
+   RESULT AREA — 对应 ResultArea.vue .query-result-panel
+   ================================================================ */
+.result-area {
+  display: flex; flex-direction: column; background: var(--bg-primary);
+  overflow: hidden; min-height: 80px;
+}
+
+/* Result Tabs */
+.result-tabs {
+  display: flex; align-items: stretch; height: 30px; flex-shrink: 0;
+  background: var(--bg-tertiary); border-bottom: 1px solid var(--border); overflow-x: auto;
+}
+.result-tabs::-webkit-scrollbar { height: 0; }
+.result-tab {
+  display: flex; align-items: center; gap: 5px; padding: 0 10px; font-size: 11px;
+  cursor: pointer; color: var(--text-secondary); border-right: 1px solid var(--border);
+  white-space: nowrap; user-select: none; position: relative; transition: all 0.12s;
+}
+.result-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.result-tab.active {
+  background: var(--bg-primary); color: var(--text-primary);
+  border-bottom: 2px solid var(--sql);
+}
+.result-tab .tab-time { font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
+.result-tab .tab-close-result {
+  font-size: 12px; opacity: 0; margin-left: 2px; cursor: pointer;
+  width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-sm); transition: all 0.1s;
+}
+.result-tab:hover .tab-close-result { opacity: 0.4; }
+.result-tab .tab-close-result:hover { opacity: 1; color: #fff; background: rgba(255,255,255,0.1); }
+.result-tab .tab-sql-tooltip {
+  display: none; position: absolute; top: 32px; left: 0; z-index: 50;
+  background: #1c1c1c; border: 1px solid #555; border-radius: var(--r-md);
+  padding: 8px 12px; font-size: 11px; font-family: var(--mono); max-width: 420px;
+  white-space: pre-wrap; color: #d4d4d4; box-shadow: var(--shadow-lg); line-height: 1.5;
+}
+.result-tab:hover .tab-sql-tooltip { display: block; }
+
+/* Filter Toolbar — 对应 ResultArea.vue .toolbar-strip */
+.filter-toolbar {
+  display: flex; align-items: center; padding: 0 6px; gap: 4px; flex-shrink: 0;
+  height: 28px; background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.filter-mode-group { display: flex; border-radius: var(--r-sm); overflow: hidden; border: 1px solid var(--border); }
+.filter-mode-btn {
+  padding: 1px 8px; font-size: 10px; border: none; cursor: pointer;
+  background: transparent; color: var(--text-secondary); border-right: 1px solid var(--border);
+  transition: all 0.12s; font-weight: 500;
+}
+.filter-mode-btn:last-child { border-right: none; }
+.filter-mode-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.filter-mode-btn.active { background: var(--sql-bg); color: var(--sql-lt); }
+.filter-preset-btn {
+  padding: 0 6px; font-size: 10px; border: none; cursor: pointer;
+  background: transparent; color: var(--text-secondary); border-radius: var(--r-sm);
+  position: relative; transition: all 0.1s;
+}
+.filter-preset-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.filter-preset-menu {
+  display: none; position: absolute; top: 22px; left: 0; z-index: 50;
+  background: #252526; border: 1px solid #3c3c3c; border-radius: var(--r-md);
+  padding: 4px 0; min-width: 130px; font-size: 11px; box-shadow: var(--shadow-sm);
+}
+.filter-preset-btn.show .filter-preset-menu { display: block; }
+.filter-preset-menu .preset-item {
+  padding: 4px 12px; cursor: pointer; color: #ccc; display: flex; justify-content: space-between;
+}
+.filter-preset-menu .preset-item:hover { background: #094771; color: #fff; }
+.filter-input {
+  flex: 1; background: var(--bg-primary); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 2px 8px;
+  font-size: 11px; font-family: var(--mono); outline: none; min-width: 0;
+  transition: border-color 0.15s;
+}
+.filter-input:focus { border-color: var(--sql); }
+.filter-row-count { color: var(--text-muted); font-size: 10px; white-space: nowrap; font-family: var(--mono); }
+.filter-clear-btn {
+  padding: 0 4px; font-size: 12px; border: none; cursor: pointer;
+  background: transparent; color: var(--text-muted); border-radius: var(--r-sm);
+  transition: all 0.1s;
+}
+.filter-clear-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* Result Body */
+.result-body { flex: 1; display: flex; min-height: 0; position: relative; }
+
+/* ─── LEFT VIEW SIDEBAR — 对应 ResultArea.vue .view-sidebar-wrap ─── */
+.result-sidebar-wrap { display: flex; flex-shrink: 0; position: relative; }
+.view-sidebar {
+  display: flex; flex-direction: column; gap: 2px; padding: 5px 3px;
+  background: #252526; border-right: 1px solid var(--border);
+  width: 34px; transition: width 0.25s var(--ease); overflow: hidden;
+}
+.view-sidebar.expanded { width: 138px; }
+.view-sidebar-toggle {
+  display: flex; align-items: center; justify-content: center;
+  height: 24px; cursor: pointer; color: var(--text-muted); font-size: 10px;
+  border: none; background: transparent; border-radius: var(--r-sm); margin-bottom: 6px;
+  transition: all 0.1s;
+}
+.view-sidebar-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+.view-btn {
+  height: 30px; display: flex; align-items: center; gap: 8px;
+  border: none; border-radius: var(--r-md); background: transparent;
+  color: var(--text-secondary); cursor: pointer; font-size: 13px;
+  padding: 0 8px; overflow: hidden; white-space: nowrap;
+  transition: all 0.12s; position: relative;
+}
+.view-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.view-btn.active { background: var(--sql-bg); color: var(--sql-lt); }
+.view-btn.active::before {
+  content: ''; position: absolute; left: 0; top: 5px; width: 2px; height: 20px;
+  background: var(--sql); border-radius: 1px;
+}
+.view-btn .view-btn-icon {
+  font-size: 15px; flex-shrink: 0; width: 20px; text-align: center;
+  transition: transform 0.15s;
+}
+.view-btn:hover .view-btn-icon { transform: scale(1.1); }
+.view-btn .view-btn-label { font-size: 11px; display: none; font-weight: 500; }
+.view-sidebar.expanded .view-btn .view-btn-label { display: inline; }
+.view-btn .view-btn-shortcut {
+  font-size: 9px; color: var(--text-muted); margin-left: auto; display: none;
+  font-family: var(--mono); background: var(--bg-active); padding: 0 4px;
+  border-radius: var(--r-sm);
+}
+.view-sidebar.expanded .view-btn .view-btn-shortcut { display: inline; }
+.view-btn .view-btn-badge {
+  font-size: 9px; padding: 0 5px; border-radius: 8px; background: var(--bg-active);
+  color: var(--text-muted); display: none; font-family: var(--mono); min-width: 18px;
+  text-align: center;
+}
+.view-sidebar.expanded .view-btn .view-btn-badge { display: inline; }
+.view-btn.active .view-btn-badge { background: rgba(0,120,212,0.2); color: var(--sql-lt); }
+.view-sidebar-footer {
+  margin-top: auto; display: flex; flex-direction: column; gap: 2px;
+  padding-top: 4px; border-top: 1px solid var(--border);
+}
+.view-footer-btn {
+  height: 26px; display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-muted); cursor: pointer;
+  font-size: 13px; border-radius: var(--r-sm); transition: all 0.1s;
+}
+.view-footer-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.view-footer-btn.active { color: var(--success); }
+.view-sidebar-resize {
+  width: 3px; cursor: col-resize; background: transparent; flex-shrink: 0;
+  transition: background 0.15s; position: relative;
+}
+.view-sidebar-resize:hover, .view-sidebar-resize.dragging { background: var(--sql); }
+.view-sidebar-resize::after { content: ''; position: absolute; left: -1px; top: 0; bottom: 0; width: 5px; }
+
+/* Grid Area */
+.grid-area { flex: 1; overflow: auto; min-width: 0; }
+.result-table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: var(--mono); table-layout: auto; }
+.result-table th {
+  position: sticky; top: 0; z-index: 2; background: #2d2d30; padding: 6px 10px;
+  text-align: left; font-weight: 600; font-size: 10px; color: var(--text-secondary);
+  border-right: 1px solid var(--border); border-bottom: 2px solid var(--border);
+  white-space: nowrap; user-select: none; cursor: pointer; transition: background 0.1s;
+}
+.result-table th:hover { background: #38383d; color: var(--text-primary); }
+.result-table th .col-type { font-weight: 400; color: var(--text-muted); margin-left: 4px; font-size: 9px; }
+.result-table th .col-icon { margin-right: 4px; font-size: 10px; }
+.result-table th.sort-asc::after { content: ' \25B2'; color: var(--sql); font-size: 8px; }
+.result-table th.sort-desc::after { content: ' \25BC'; color: var(--sql); font-size: 8px; }
+.result-table td {
+  padding: 3px 10px; border-right: 1px solid rgba(62,62,66,0.5);
+  border-bottom: 1px solid rgba(62,62,66,0.3); white-space: nowrap;
+  color: var(--text-primary); position: relative; transition: background 0.08s;
+}
+.result-table tr:nth-child(even) td { background: rgba(128,128,128,0.03); }
+.result-table tr:hover td { background: rgba(255,255,255,0.04); }
+.result-table tr.selected td { background: rgba(0,120,212,0.15) !important; }
+.result-table .null-cell { color: #5a5a5a; font-style: italic; font-size: 10px; }
+.result-table .num-cell { text-align: right; font-variant-numeric: tabular-nums; }
+.result-table td.dirty::before {
+  content: ''; position: absolute; top: 0; left: 0;
+  border-style: solid; border-width: 0 7px 7px 0;
+  border-color: transparent var(--warn) transparent transparent;
+}
+
+/* ─── RIGHT PANEL — 对应 ResultArea.vue .right-panel-wrap ─── */
+.result-right-panel-wrap { display: flex; flex-shrink: 0; position: relative; }
+.result-right-panel {
+  width: 250px; display: flex; flex-direction: column; border-left: 1px solid var(--border);
+  background: var(--bg-secondary); transition: width 0.25s var(--ease); overflow: hidden;
+}
+.result-right-panel.collapsed { width: 0; border-left: none; }
+.rrp-resize {
+  width: 3px; cursor: col-resize; background: transparent; flex-shrink: 0;
+  transition: background 0.15s; position: relative;
+}
+.rrp-resize:hover, .rrp-resize.dragging { background: var(--sql); }
+.rrp-resize::after { content: ''; position: absolute; right: -1px; top: 0; bottom: 0; width: 5px; }
+
+/* RRP Tabs */
+.rrp-tabs {
+  display: flex; align-items: stretch; height: 30px; flex-shrink: 0;
+  background: var(--bg-tertiary); border-bottom: 1px solid var(--border);
+  overflow-x: auto; padding: 0 2px;
+}
+.rrp-tabs::-webkit-scrollbar { height: 0; }
+.rrp-tab {
+  padding: 0 10px; font-size: 10px; display: flex; align-items: center; gap: 4px;
+  cursor: pointer; color: var(--text-secondary); border-bottom: 2px solid transparent;
+  white-space: nowrap; user-select: none; transition: all 0.1s; font-weight: 500;
+}
+.rrp-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+.rrp-tab.active { color: var(--text-primary); border-bottom-color: var(--sql); }
+.rrp-tab .rrp-badge {
+  font-size: 8px; padding: 0 4px; border-radius: 8px; background: var(--sql-bg);
+  color: var(--sql-lt); min-width: 14px; text-align: center; font-weight: 600;
+}
+.rrp-header-actions { display: flex; align-items: center; margin-left: auto; gap: 2px; padding-right: 2px; }
+.rrp-pin-btn, .rrp-collapse-btn {
+  width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: var(--text-muted); border: none; background: transparent;
+  font-size: 10px; border-radius: var(--r-sm); transition: all 0.1s;
+}
+.rrp-pin-btn:hover, .rrp-collapse-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.rrp-pin-btn.pinned { color: var(--sql); }
+.rrp-content { flex: 1; overflow-y: auto; padding: 0; font-size: 11px; }
+
+/* Collapsible sections */
+.rrp-section { border-bottom: 1px solid var(--border); }
+.rrp-section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; cursor: pointer; user-select: none;
+  font-size: 10px; font-weight: 600; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  transition: background 0.1s;
+}
+.rrp-section-header:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rrp-section-header .rrp-chevron {
+  font-size: 8px; transition: transform 0.2s var(--ease); opacity: 0.5;
+}
+.rrp-section.collapsed .rrp-chevron { transform: rotate(-90deg); }
+.rrp-section-body { padding: 8px 10px; }
+.rrp-section.collapsed .rrp-section-body { display: none; }
+.rrp-content .field-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 3px 0; font-size: 11px; min-height: 22px;
+}
+.rrp-content .field-lbl { color: var(--text-secondary); font-size: 10px; }
+.rrp-content .field-val {
+  font-family: var(--mono); color: var(--text-primary); max-width: 145px;
+  overflow: hidden; text-overflow: ellipsis; font-size: 11px;
+}
+.rrp-content .field-textarea {
+  width: 100%; min-height: 55px; resize: vertical; border: 1px solid var(--border);
+  border-radius: var(--r-sm); background: var(--bg-primary); color: var(--text-primary);
+  font-family: var(--mono); font-size: 11px; padding: 6px; outline: none; margin: 4px 0;
+  transition: border-color 0.15s;
+}
+.rrp-content .field-textarea:focus { border-color: var(--sql); }
+.rrp-content .stat-bar {
+  display: flex; align-items: center; gap: 6px; margin: 3px 0; font-size: 10px;
+}
+.rrp-content .stat-bar .bar-bg {
+  flex: 1; height: 5px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden;
+}
+.rrp-content .stat-bar .bar-fill {
+  height: 100%; border-radius: 3px; transition: width 0.6s var(--ease);
+}
+.rrp-content .stat-bar .bar-fill.good { background: var(--success); }
+.rrp-content .stat-bar .bar-fill.warn { background: #ff9800; }
+.rrp-content .stat-bar .bar-fill.bad { background: #f44336; }
+.rrp-content .copy-btn {
+  padding: 0 4px; font-size: 10px; border: none; cursor: pointer;
+  background: transparent; color: var(--text-muted); border-radius: var(--r-sm);
+  transition: all 0.1s;
+}
+.rrp-content .copy-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* Mini chart */
+.rrp-mini-chart { display: flex; align-items: flex-end; gap: 2px; height: 45px; padding: 4px 0; }
+.rrp-mini-chart .mini-bar { flex: 1; border-radius: 1px 1px 0 0; min-width: 6px; transition: height 0.4s var(--ease); }
+.rrp-mini-chart .mini-bar.high { background: var(--sql); }
+.rrp-mini-chart .mini-bar.med { background: rgba(0,120,212,0.5); }
+.rrp-mini-chart .mini-bar.low { background: rgba(0,120,212,0.2); }
+.rrp-mini-hint { font-size: 9px; color: var(--text-muted); text-align: center; margin-top: 2px; }
+
+/* Quick action buttons */
+.rrp-quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 4px 0; }
+.rrp-quick-btn {
+  padding: 3px 7px; font-size: 9px; border: 1px solid var(--border);
+  border-radius: var(--r-sm); background: transparent; color: var(--text-secondary);
+  cursor: pointer; transition: all 0.1s; font-weight: 600; font-family: var(--mono);
+}
+.rrp-quick-btn:hover { border-color: var(--sql); color: var(--sql-lt); background: var(--sql-bg); }
+.rrp-empty-hint {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 16px 8px; text-align: center; color: var(--text-muted); font-size: 10px;
+  border: 1px dashed var(--border); border-radius: var(--r-sm);
+}
+.rrp-empty-hint .rrp-hint-sub { font-size: 9px; color: var(--text-muted); opacity: 0.6; }
+.rrp-more-hint { font-size: 9px; color: var(--text-muted); padding: 4px 0; text-align: center; }
+
+/* ─── RESULT STATUS BAR — 对应 ResultArea.vue .result-statusbar ─── */
+.result-statusbar {
+  display: flex; align-items: center; height: 26px; padding: 0 6px; gap: 0;
+  flex-shrink: 0; font-size: 10px; color: var(--text-secondary);
+  background: #252526; border-top: 1px solid var(--border);
+}
+.sbar-left { display: flex; align-items: center; gap: 2px; }
+.sbar-center {
+  flex: 1; text-align: center; font-family: var(--mono); font-size: 10px;
+  color: var(--text-secondary); display: flex; align-items: center;
+  justify-content: center; gap: 8px;
+}
+.sbar-right { display: flex; align-items: center; gap: 2px; }
+.sbar-sep { width: 1px; height: 14px; background: var(--border); margin: 0 5px; }
+.sbar-btn {
+  padding: 2px 5px; border: none; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  font-size: 10px; display: flex; align-items: center; gap: 3px;
+  transition: all 0.1s; height: 22px;
+}
+.sbar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sbar-btn:disabled { opacity: 0.3; cursor: default; }
+.sbar-btn.primary { color: var(--sql); }
+.sbar-btn.primary:hover { background: var(--sql-bg); }
+.mode-badge {
+  font-size: 9px; padding: 1px 6px; border-radius: var(--r-sm); font-weight: 600;
+  text-transform: uppercase;
+}
+.mode-badge.quick { background: rgba(0,120,212,0.15); color: var(--sql-lt); }
+.mode-badge.sql { background: rgba(0,120,212,0.15); color: var(--sql-lt); }
+.mode-badge.duckdb { background: rgba(76,175,80,0.15); color: var(--success); }
+.result-nav-text { font-family: var(--mono); font-size: 10px; color: var(--text-muted); }
+.rsb-auto-refresh {
+  display: flex; align-items: center; gap: 3px; font-size: 9px; color: var(--text-muted);
+  cursor: pointer; padding: 0 5px; border-radius: var(--r-sm); height: 20px;
+  transition: all 0.1s; font-weight: 500;
+}
+.rsb-auto-refresh:hover { background: var(--bg-hover); color: var(--text-primary); }
+.rsb-auto-refresh.active { color: var(--success); }
+.rsb-auto-refresh .refresh-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
+.rsb-fetch-size { font-size: 9px; color: var(--text-muted); font-family: var(--mono); }
+.rsb-conn-info { font-size: 9px; color: var(--text-muted); display: flex; align-items: center; gap: 3px; }
+.rsb-selected-info { color: var(--sql); font-family: var(--mono); font-size: 10px; }
+.page-indicator { font-family: var(--mono); font-size: 10px; color: var(--text-muted); }
+.go-page-input {
+  width: 32px; background: var(--bg-primary); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); font-family: var(--mono);
+  font-size: 10px; padding: 1px 4px; text-align: center; outline: none;
+  transition: border-color 0.15s;
+}
+.go-page-input:focus { border-color: var(--sql); }
+
+/* Export dropdown */
+.rsb-export-wrap { position: relative; }
+.rsb-export-menu {
+  display: none; position: absolute; bottom: 28px; left: 0; z-index: 50;
+  background: #252526; border: 1px solid #3c3c3c; border-radius: var(--r-md);
+  padding: 4px 0; min-width: 150px; font-size: 11px;
+  box-shadow: 0 -2px 12px rgba(0,0,0,0.5);
+}
+.rsb-export-wrap.show .rsb-export-menu { display: block; }
+.rsb-export-menu .exp-item {
+  padding: 5px 12px; cursor: pointer; color: #ccc; display: flex;
+  align-items: center; gap: 6px; transition: background 0.08s;
+}
+.rsb-export-menu .exp-item:hover { background: #094771; color: #fff; }
+.rsb-export-menu .exp-item .exp-shortcut { margin-left: auto; color: #666; font-size: 9px; }
+
+/* ================================================================
+   EDITOR STATUS BAR — 对应 EditorStatusbar.vue
+   ================================================================ */
+.editor-statusbar {
+  height: 24px; display: flex; align-items: center; padding: 0 8px; gap: 0;
+  flex-shrink: 0; font-size: 12px; color: #858585; background: #252526;
+  border-top: 1px solid var(--border); transition: background 0.3s var(--ease);
+  user-select: none;
+}
+.editor-statusbar.mode-sql { background: #1a2633; }
+.editor-statusbar.mode-analysis { background: #1a2633; }
+.editor-statusbar.mode-code { background: #1f1a2e; }
+.status-left { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.status-center { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin: 0 12px; }
+.status-spacer { flex: 1; }
+.status-notifications { display: flex; align-items: center; gap: 4px; }
+.status-right { display: flex; align-items: center; gap: 2px; }
+.status-item { white-space: nowrap; display: flex; align-items: center; gap: 3px; }
+.status-item.clickable {
+  cursor: pointer; padding: 0 3px; border-radius: 2px;
+}
+.status-item.clickable:hover { background: rgba(255,255,255,0.08); color: #ccc; }
+.status-divider { width: 1px; height: 14px; background: var(--border); margin: 0 4px; }
+.status-connection { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.conn-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+.conn-dot.connected { background: var(--success); }
+.conn-dot.connecting { background: var(--warn); animation: pulse 1.5s ease-in-out infinite; }
+.conn-dot.disconnected { background: var(--error); }
+.conn-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.status-notif {
+  display: flex; align-items: center; gap: 3px; font-size: 10px;
+  cursor: pointer; padding: 0 4px; border-radius: 2px; font-weight: 600;
+}
+.status-notif:hover { background: rgba(255,255,255,0.08); }
+.status-notif.warn { color: var(--warn); }
+.status-notif.error { color: var(--error); }
+.git-branch {
+  font-family: 'Consolas', monospace; font-size: 10px; color: #858585;
+  display: flex; align-items: center; gap: 3px;
+}
+.status-executing {
+  display: flex; align-items: center; gap: 4px; color: #e17055;
+}
+.executing-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: #e17055;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.status-time { display: flex; align-items: center; gap: 3px; }
+.status-mode { font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.status-dirty { color: var(--dirty); font-size: 10px; }
+.status-transaction {
+  display: flex; align-items: center; gap: 3px; font-weight: 600; font-size: 10px;
+  color: #ffd54f;
+}
+.tx-dot { width: 5px; height: 5px; border-radius: 50%; background: #ffd54f; }
+.tx-btn {
+  font-size: 10px; font-weight: 600; padding: 0 4px; height: 18px; border-radius: var(--r-sm);
+  border: none; background: transparent; cursor: pointer;
+}
+.tx-btn.tx-commit { color: var(--success); }
+.tx-btn.tx-commit:hover { color: var(--success); background: rgba(76,175,80,0.1); }
+.tx-btn.tx-rollback { color: var(--error); }
+.tx-btn.tx-rollback:hover { color: var(--error); background: rgba(244,71,71,0.1); }
+.cancel-btn { padding: 0 2px; font-size: 10px; }
+.status-connection-btn { font-size: 10px; }
+
+/* ========== Context Menus ========== */
+.context-menu {
+  position: fixed; z-index: 10001; background: #252526; border: 1px solid #3c3c3c;
+  border-radius: var(--r-lg); padding: 4px 0; min-width: 190px;
+  box-shadow: var(--shadow-lg); display: none;
+}
+.context-menu .ctx-item {
+  padding: 7px 16px; font-size: 12px; color: #ccc; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; transition: background 0.08s;
+}
+.context-menu .ctx-item:hover { background: #094771; color: #fff; }
+.context-menu .ctx-item.danger:hover { background: #5c1a1a; }
+.context-menu .ctx-sep { height: 1px; background: #3c3c3c; margin: 4px 0; }
+.context-menu .ctx-shortcut { margin-left: auto; color: #666; font-size: 10px; }
+.context-menu .ctx-item:hover .ctx-shortcut { color: #999; }
+.ctx-backdrop { position: fixed; inset: 0; z-index: 10000; display: none; }
+
+/* Tab context menu */
+.tab-context-menu {
+  position: fixed; z-index: 10002; background: #252526;
+  border: 1px solid #3c3c3c; border-radius: 6px; padding: 4px 0;
+  min-width: 180px; box-shadow: 0 4px 16px rgba(0,0,0,0.48); display: none;
+}
+.tab-context-menu .ctx-item {
+  padding: 7px 16px; font-size: 12px; color: #ccc; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; transition: background 0.08s;
+  user-select: none;
+}
+.tab-context-menu .ctx-item:hover { background: #094771; color: #fff; }
+.tab-context-menu .ctx-item.danger:hover { background: #5c1a1a; }
+.tab-context-menu .ctx-sep { height: 1px; background: #3c3c3c; margin: 4px 0; }
+.tab-context-menu .ctx-shortcut { margin-left: auto; color: #666; font-size: 10px; }
+
+/* ========== Toast ========== */
+.toast {
+  position: fixed; bottom: 48px; right: 24px; z-index: 9999; background: #323233;
+  color: #ccc; padding: 8px 16px; border-radius: var(--r-lg); font-size: 12px;
+  box-shadow: var(--shadow-sm); transition: opacity 0.3s; pointer-events: none; opacity: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ EDITOR PANEL ═══════════════════ -->
+<div class="editor-panel">
+
+  <!-- ═══════ EDITOR TOOLBAR — 对应 EditorToolbar.vue ═══════ -->
+  <div class="editor-toolbar mode-sql" id="editorToolbar">
+    <!-- 模式指示器 -->
+    <div class="tb-mode-indicator sql" id="tbModeIndicator" onclick="toggleModeMenu(event)" title="切换编辑器模式">
+      <span class="mode-dot"></span>
+      <span id="tbModeLabel">SQL</span>
+      <span class="mode-chevron" id="tbModeChevron">&#9660;</span>
+      <div class="tb-mode-menu" id="tbModeMenu">
+        <div class="mode-menu-item active" data-mode="sql" onclick="switchEditorMode('sql', event)">
+          <span class="mode-menu-dot sql"></span>SQL 模式
+          <span class="mode-menu-desc">查询编辑</span>
+        </div>
+        <div class="mode-menu-item" data-mode="analysis" onclick="switchEditorMode('analysis', event)">
+          <span class="mode-menu-dot analysis"></span>分析模式
+          <span class="mode-menu-desc">数据探索</span>
+        </div>
+        <div class="mode-menu-item" data-mode="code" onclick="switchEditorMode('code', event)">
+          <span class="mode-menu-dot code"></span>代码模式
+          <span class="mode-menu-desc">通用编辑</span>
+        </div>
+      </div>
+    </div>
+    <span class="tb-sep"></span>
+    <!-- 动态工具栏按钮区域 -->
+    <div class="tb-group" id="tbGroupMain"></div>
+    <div class="tb-spacer"></div>
+    <div class="tb-group">
+      <select class="tb-conn-select" id="connSelect" onchange="switchConnection(this.value)">
+        <option value="mysql">MySQL / localhost</option>
+        <option value="pg">PostgreSQL / prod</option>
+        <option value="sqlite">SQLite / local.db</option>
+        <option value="duckdb">DuckDB (本地)</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- ═══════ EDITOR BODY ═══════ -->
+  <div class="editor-body">
+
+    <!-- Tab Bar Wrap — 对应 EditorPanel.vue .tab-bar-wrap -->
+    <div class="tab-bar-wrap">
+      <div class="tab-mode-accent sql" id="tabModeAccent"></div>
+      <button class="tab-scroll-btn" id="tabScrollLeft" disabled onclick="scrollTabs(-200)">&#9664;</button>
+      <div class="tab-bar" id="tabBar" onwheel="onTabWheel(event)">
+        <div class="tab-item pinned" data-file="welcome.sql" data-type="sql" onclick="switchEditorTab(this, 'welcome.sql')" oncontextmenu="showTabContextMenu(event, 'welcome.sql')">
+          <span class="tab-type-dot"></span>
+          <span class="tab-icon">&#128451;</span>
+          <span class="tab-label">welcome.sql</span>
+          <span class="tab-dirty" style="display:none"></span>
+          <span class="tab-pin" onclick="togglePinTab(event, 'welcome.sql')">&#128204;</span>
+          <span class="tab-close" onclick="closeEditorTab(event, 'welcome.sql')">&times;</span>
+          <span class="tab-drag-handle"></span>
+        </div>
+        <div class="tab-item active" data-file="query-users.sql" data-type="sql" onclick="switchEditorTab(this, 'query-users.sql')" oncontextmenu="showTabContextMenu(event, 'query-users.sql')">
+          <span class="tab-type-dot"></span>
+          <span class="tab-icon">&#128451;</span>
+          <span class="tab-label modified">query-users.sql</span>
+          <span class="tab-dirty"></span>
+          <span class="tab-pin" onclick="togglePinTab(event, 'query-users.sql')">&#128204;</span>
+          <span class="tab-close" onclick="closeEditorTab(event, 'query-users.sql')">&times;</span>
+          <span class="tab-drag-handle"></span>
+        </div>
+        <div class="tab-item" data-file="analysis-report.sql" data-type="analysis" onclick="switchEditorTab(this, 'analysis-report.sql')" oncontextmenu="showTabContextMenu(event, 'analysis-report.sql')">
+          <span class="tab-type-dot"></span>
+          <span class="tab-icon">&#128200;</span>
+          <span class="tab-label">analysis-report.sql</span>
+          <span class="tab-dirty" style="display:none"></span>
+          <span class="tab-pin" onclick="togglePinTab(event, 'analysis-report.sql')">&#128204;</span>
+          <span class="tab-close" onclick="closeEditorTab(event, 'analysis-report.sql')">&times;</span>
+          <span class="tab-drag-handle"></span>
+        </div>
+        <div class="tab-item" data-file="schema-design.sql" data-type="sql" onclick="switchEditorTab(this, 'schema-design.sql')" oncontextmenu="showTabContextMenu(event, 'schema-design.sql')">
+          <span class="tab-type-dot"></span>
+          <span class="tab-icon">&#128451;</span>
+          <span class="tab-label">schema-design.sql</span>
+          <span class="tab-dirty" style="display:none"></span>
+          <span class="tab-pin" onclick="togglePinTab(event, 'schema-design.sql')">&#128204;</span>
+          <span class="tab-close" onclick="closeEditorTab(event, 'schema-design.sql')">&times;</span>
+          <span class="tab-drag-handle"></span>
+        </div>
+        <div class="tab-item" data-file="data-migration.sql" data-type="sql" onclick="switchEditorTab(this, 'data-migration.sql')" oncontextmenu="showTabContextMenu(event, 'data-migration.sql')">
+          <span class="tab-type-dot"></span>
+          <span class="tab-icon">&#128451;</span>
+          <span class="tab-label">data-migration.sql</span>
+          <span class="tab-dirty"></span>
+          <span class="tab-pin" onclick="togglePinTab(event, 'data-migration.sql')">&#128204;</span>
+          <span class="tab-close" onclick="closeEditorTab(event, 'data-migration.sql')">&times;</span>
+          <span class="tab-drag-handle"></span>
+        </div>
+        <div class="tab-item" data-file="index-optimize.sql" data-type="sql" onclick="switchEditorTab(this, 'index-optimize.sql')" oncontextmenu="showTabContextMenu(event, 'index-optimize.sql')">
+          <span class="tab-type-dot"></span>
+          <span class="tab-icon">&#128451;</span>
+          <span class="tab-label">index-optimize.sql</span>
+          <span class="tab-dirty" style="display:none"></span>
+          <span class="tab-pin" onclick="togglePinTab(event, 'index-optimize.sql')">&#128204;</span>
+          <span class="tab-close" onclick="closeEditorTab(event, 'index-optimize.sql')">&times;</span>
+          <span class="tab-drag-handle"></span>
+        </div>
+        <div class="tab-item" data-file="app-config.ts" data-type="code" onclick="switchEditorTab(this, 'app-config.ts')" oncontextmenu="showTabContextMenu(event, 'app-config.ts')">
+          <span class="tab-type-dot"></span>
+          <span class="tab-icon">&#123;</span>
+          <span class="tab-label">app-config.ts</span>
+          <span class="tab-dirty" style="display:none"></span>
+          <span class="tab-pin" onclick="togglePinTab(event, 'app-config.ts')">&#128204;</span>
+          <span class="tab-close" onclick="closeEditorTab(event, 'app-config.ts')">&times;</span>
+          <span class="tab-drag-handle"></span>
+        </div>
+      </div>
+      <button class="tab-scroll-btn" id="tabScrollRight" onclick="scrollTabs(200)">&#9654;</button>
+      <div class="tab-overflow-wrap" id="tabOverflowWrap" style="display:none">
+        <button class="tab-overflow-btn" onclick="toggleTabOverflow()">&#9660;</button>
+        <div class="tab-overflow-menu" id="tabOverflowMenu"></div>
+      </div>
+      <button class="tab-new-btn" title="新建文件 (Ctrl+N)" onclick="newEditorTab()">+</button>
+    </div>
+
+    <!-- Breadcrumb — 对应 EditorPanel.vue .editor-breadcrumb -->
+    <div class="editor-breadcrumb" id="editorBreadcrumb">
+      <span class="crumb">&#128193; project</span><span class="crumb-sep">&#8250;</span>
+      <span class="crumb">&#128193; queries</span><span class="crumb-sep">&#8250;</span>
+      <span class="crumb crumb-active">&#128196; query-users.sql</span>
+    </div>
+
+    <!-- Tab Context Menu -->
+    <div class="tab-context-menu" id="tabContextMenu">
+      <div class="ctx-item" onclick="closeTabById(currentTabCtx);hideAllContextMenus()">关闭<span class="ctx-shortcut">Ctrl+W</span></div>
+      <div class="ctx-item" onclick="closeOtherTabs();hideAllContextMenus()">关闭其他</div>
+      <div class="ctx-item" onclick="closeTabsToRight();hideAllContextMenus()">关闭右侧</div>
+      <div class="ctx-item danger" onclick="closeAllTabs();hideAllContextMenus()">关闭全部</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item" onclick="togglePinTabById(currentTabCtx);hideAllContextMenus()">&#128204; 固定/取消固定</div>
+      <div class="ctx-item" onclick="showToast('复制路径');hideAllContextMenus()">&#128203; 复制路径<span class="ctx-shortcut">Ctrl+Shift+C</span></div>
+    </div>
+
+    <!-- ═══════ EDITOR SPLIT — 对应 EditorPanel.vue .editor-split ═══════ -->
+    <div class="editor-split" id="editorSplit">
+      <!-- Editor Area -->
+      <div class="editor-area" id="editorArea" style="flex: 0.55">
+        <div class="editor-gutter" id="editorGutter">
+          <div class="gutter-line">1</div><div class="gutter-line">2</div>
+          <div class="gutter-line active">3</div><div class="gutter-line">4</div>
+          <div class="gutter-line">5</div><div class="gutter-line">6</div>
+          <div class="gutter-line">7</div><div class="gutter-line warn">8</div>
+          <div class="gutter-line">9</div><div class="gutter-line">10</div>
+          <div class="gutter-line">11</div><div class="gutter-line">12</div>
+          <div class="gutter-line">13</div><div class="gutter-line">14</div>
+          <div class="gutter-line">15</div>
+        </div>
+        <div class="cm-editor">
+          <div class="cm-content" id="cmContent" contenteditable="true" spellcheck="false"><span class="cm-keyword">SELECT</span>
+  <span class="cm-function">u.id</span>,
+  <span class="cm-function">u.name</span>,
+  <span class="cm-function">u.email</span>,
+  <span class="cm-function">u.created_at</span>,
+  <span class="cm-function">u.status</span>
+<span class="cm-keyword">FROM</span> users u
+<span class="cm-keyword">WHERE</span> u.status = <span class="cm-string">'active'</span>
+  <span class="cm-keyword">AND</span> u.created_at > <span class="cm-string">'2025-01-01'</span>
+<span class="cm-keyword">ORDER BY</span> u.created_at <span class="cm-keyword">DESC</span>
+<span class="cm-keyword">LIMIT</span> <span class="cm-number">100</span>;
+
+<span class="cm-comment">-- 查询所有活跃用户</span>
+<span class="cm-comment">-- 按创建时间倒序排列</span></div>
+        </div>
+      </div>
+
+      <!-- Split Handle -->
+      <div class="split-handle" id="splitHandle" onmousedown="startSplitDrag(event)" ondblclick="toggleResultArea()">
+        <span class="split-ratio-tip" id="splitRatioTip">55%</span>
+      </div>
+
+      <!-- ═══════ RESULT AREA — 对应 ResultArea.vue .query-result-panel ═══════ -->
+      <div class="result-area" id="resultArea" style="flex: 0.45">
+        <!-- Result Tabs -->
+        <div class="result-tabs" id="resultTabs">
+          <div class="result-tab active" data-result="1" onclick="switchResultTab(this, '1')">
+            <span>&#128203; 结果 #1</span><span class="tab-time">125ms</span><span class="tab-close-result" onclick="closeResultTab(event, '1')">&times;</span>
+            <div class="tab-sql-tooltip">SELECT u.id, u.name, u.email, u.created_at, u.status
+FROM users u WHERE u.status = 'active'
+  AND u.created_at > '2025-01-01'
+ORDER BY u.created_at DESC LIMIT 100;</div>
+          </div>
+          <div class="result-tab" data-result="2" onclick="switchResultTab(this, '2')">
+            <span>&#128203; 结果 #2</span><span class="tab-time">89ms</span><span class="tab-close-result" onclick="closeResultTab(event, '2')">&times;</span>
+            <div class="tab-sql-tooltip">SELECT COUNT(*) AS cnt FROM orders WHERE status = 'completed';</div>
+          </div>
+        </div>
+
+        <!-- Filter Toolbar -->
+        <div class="filter-toolbar">
+          <div class="filter-mode-group">
+            <button class="filter-mode-btn active" onclick="switchFilterMode('quick', this)">快速过滤</button>
+            <button class="filter-mode-btn" onclick="switchFilterMode('sql', this)">SQL 过滤</button>
+            <button class="filter-mode-btn" onclick="switchFilterMode('duckdb', this)">DuckDB 分析</button>
+          </div>
+          <div class="filter-preset-btn" id="filterPresetBtn" onclick="toggleFilterPreset()">
+            &#9660; 预设
+            <div class="filter-preset-menu">
+              <div class="preset-item" onclick="applyFilterPreset('活跃用户');event.stopPropagation()">活跃用户</div>
+              <div class="preset-item" onclick="applyFilterPreset('最近7天');event.stopPropagation()">最近7天</div>
+              <div class="preset-item" onclick="applyFilterPreset('空邮箱');event.stopPropagation()">空邮箱</div>
+              <div class="ctx-sep" style="margin:2px 0"></div>
+              <div class="preset-item" onclick="showToast('保存预设');event.stopPropagation()">+ 保存当前...</div>
+            </div>
+          </div>
+          <input class="filter-input" id="filterInput" placeholder="输入过滤表达式..." />
+          <button class="filter-clear-btn" title="清除过滤" onclick="clearFilter()">&#10005;</button>
+          <span class="filter-row-count" id="filterRowCount">8 行</span>
+        </div>
+
+        <!-- Result Body -->
+        <div class="result-body">
+          <!-- Left View Sidebar -->
+          <div class="result-sidebar-wrap" id="resultSidebarWrap">
+            <div class="view-sidebar" id="viewSidebar">
+              <button class="view-sidebar-toggle" title="展开/折叠视图栏" onclick="toggleViewSidebar()">&#9776;</button>
+              <button class="view-btn active" title="表格视图 (Ctrl+1)" onclick="switchResultView('grid', this)">
+                <span class="view-btn-icon">&#9638;</span>
+                <span class="view-btn-label">表格</span>
+                <span class="view-btn-badge">8</span>
+                <span class="view-btn-shortcut">Ctrl+1</span>
+              </button>
+              <button class="view-btn" title="文本视图 (Ctrl+2)" onclick="switchResultView('text', this)">
+                <span class="view-btn-icon">&#9776;</span>
+                <span class="view-btn-label">文本</span>
+                <span class="view-btn-shortcut">Ctrl+2</span>
+              </button>
+              <button class="view-btn" title="记录视图 (Ctrl+3)" onclick="switchResultView('record', this)">
+                <span class="view-btn-icon">&#9639;</span>
+                <span class="view-btn-label">记录</span>
+                <span class="view-btn-shortcut">Ctrl+3</span>
+              </button>
+              <button class="view-btn" title="图表视图 (Ctrl+4)" onclick="switchResultView('chart', this)">
+                <span class="view-btn-icon">&#128202;</span>
+                <span class="view-btn-label">图表</span>
+                <span class="view-btn-shortcut">Ctrl+4</span>
+              </button>
+              <div class="view-sidebar-footer">
+                <button class="view-footer-btn" title="导出结果集" onclick="toggleExportMenu()">&#128229;</button>
+                <button class="view-footer-btn" id="autoRefreshBtn" title="自动刷新" onclick="toggleAutoRefresh()">&#128260;</button>
+              </div>
+            </div>
+            <div class="view-sidebar-resize" id="viewSidebarResize" onmousedown="startSidebarResize(event)"></div>
+          </div>
+
+          <!-- Grid Area -->
+          <div class="grid-area" id="resultGrid">
+            <table class="result-table" id="resultTable">
+              <thead>
+                <tr>
+                  <th onclick="sortColumn('id', this)" oncontextmenu="showColContextMenu(event, 'id', this)"><span class="col-icon">&#128305;</span>id<span class="col-type">INT</span></th>
+                  <th onclick="sortColumn('name', this)" oncontextmenu="showColContextMenu(event, 'name', this)"><span class="col-icon">&#128221;</span>name<span class="col-type">VARCHAR</span></th>
+                  <th onclick="sortColumn('email', this)" oncontextmenu="showColContextMenu(event, 'email', this)"><span class="col-icon">&#128231;</span>email<span class="col-type">VARCHAR</span></th>
+                  <th onclick="sortColumn('status', this)" oncontextmenu="showColContextMenu(event, 'status', this)"><span class="col-icon">&#127991;</span>status<span class="col-type">VARCHAR</span></th>
+                  <th onclick="sortColumn('created_at', this)" oncontextmenu="showColContextMenu(event, 'created_at', this)"><span class="col-icon">&#128197;</span>created_at<span class="col-type">DATETIME</span></th>
+                  <th onclick="sortColumn('updated_at', this)" oncontextmenu="showColContextMenu(event, 'updated_at', this)"><span class="col-icon">&#128197;</span>updated_at<span class="col-type">DATETIME</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr onclick="selectRow(this,0,event)" oncontextmenu="showGridContextMenu(event,0)"><td class="num-cell">1</td><td>张三</td><td>zhangsan@example.com</td><td>active</td><td>2025-03-15 10:30:00</td><td>2025-06-20 14:22:00</td></tr>
+                <tr onclick="selectRow(this,1,event)" oncontextmenu="showGridContextMenu(event,1)"><td class="num-cell">2</td><td class="dirty">李四</td><td>lisi@example.com</td><td>active</td><td>2025-04-01 09:15:00</td><td>2025-07-10 11:00:00</td></tr>
+                <tr onclick="selectRow(this,2,event)" oncontextmenu="showGridContextMenu(event,2)"><td class="num-cell">3</td><td>王五</td><td>wangwu@example.com</td><td>inactive</td><td>2025-02-20 16:45:00</td><td>2025-05-30 08:30:00</td></tr>
+                <tr onclick="selectRow(this,3,event)" oncontextmenu="showGridContextMenu(event,3)"><td class="num-cell">4</td><td>赵六</td><td class="null-cell">NULL</td><td>active</td><td>2025-05-10 12:00:00</td><td>2025-07-15 17:20:00</td></tr>
+                <tr onclick="selectRow(this,4,event)" oncontextmenu="showGridContextMenu(event,4)"><td class="num-cell">5</td><td class="dirty">孙七</td><td>sunqi@example.com</td><td>active</td><td>2025-06-01 08:00:00</td><td>2025-07-28 09:45:00</td></tr>
+                <tr onclick="selectRow(this,5,event)" oncontextmenu="showGridContextMenu(event,5)"><td class="num-cell">6</td><td>周八</td><td>zhouba@example.com</td><td>inactive</td><td>2025-01-15 14:30:00</td><td class="null-cell">NULL</td></tr>
+                <tr onclick="selectRow(this,6,event)" oncontextmenu="showGridContextMenu(event,6)"><td class="num-cell">7</td><td>吴九</td><td>wujiu@example.com</td><td>active</td><td>2025-07-01 11:20:00</td><td>2025-07-30 20:10:00</td></tr>
+                <tr onclick="selectRow(this,7,event)" oncontextmenu="showGridContextMenu(event,7)"><td class="num-cell">8</td><td>郑十</td><td>zhengshi@example.com</td><td>active</td><td>2025-06-15 09:00:00</td><td>2025-07-25 16:40:00</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Right Panel -->
+          <div class="result-right-panel-wrap" id="resultRightPanelWrap">
+            <div class="result-right-panel" id="resultRightPanel">
+              <div class="rrp-tabs">
+                <div class="rrp-tab active" onclick="switchRRPTab('value', this)">&#128203; 值</div>
+                <div class="rrp-tab" onclick="switchRRPTab('metadata', this)">&#128269; 元数据</div>
+                <div class="rrp-tab" onclick="switchRRPTab('calc', this)">&#128202; 计算<span class="rrp-badge">1</span></div>
+                <div class="rrp-tab" onclick="switchRRPTab('group', this)">&#128230; 分组</div>
+                <div class="rrp-tab" onclick="switchRRPTab('insight', this)">&#128200; 洞察</div>
+                <div class="rrp-header-actions">
+                  <button class="rrp-pin-btn" id="rrpPinBtn" title="固定面板" onclick="togglePinRightPanel()">&#128204;</button>
+                  <button class="rrp-collapse-btn" title="折叠面板" onclick="toggleRightPanel()">&#9664;</button>
+                </div>
+              </div>
+              <div class="rrp-content" id="rrpContent">
+                <!-- Value Tab -->
+                <div id="rrpValue">
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#128203; 单元格信息<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <div class="field-row"><span class="field-lbl">列</span><span class="field-val">name</span> <button class="copy-btn" onclick="showToast('已复制')">&#128203;</button></div>
+                      <div class="field-row"><span class="field-lbl">行</span><span class="field-val">2</span></div>
+                      <div class="field-row"><span class="field-lbl">类型</span><span class="field-val">VARCHAR(100)</span></div>
+                      <div class="field-row"><span class="field-lbl">可空</span><span class="field-val">YES</span></div>
+                    </div>
+                  </div>
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#128221; 值<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <textarea class="field-textarea" readonly>李四</textarea>
+                      <div style="display:flex;justify-content:space-between;align-items:center">
+                        <span style="font-size:10px;color:var(--text-muted)">长度: 2 字符 | 字节: 6</span>
+                        <div class="rrp-quick-actions">
+                          <button class="rrp-quick-btn" onclick="showToast('已复制')">复制</button>
+                          <button class="rrp-quick-btn" onclick="showToast('编辑模式')">编辑</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Metadata Tab -->
+                <div id="rrpMetadata" style="display:none">
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#128269; 结果集信息<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <div class="field-row"><span class="field-lbl">行数</span><span class="field-val">8</span></div>
+                      <div class="field-row"><span class="field-lbl">列数</span><span class="field-val">6</span></div>
+                      <div class="field-row"><span class="field-lbl">耗时</span><span class="field-val">0.125s</span></div>
+                    </div>
+                  </div>
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#128203; 列信息<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <div class="field-row"><span class="field-lbl">id</span><span class="field-val">INT</span></div>
+                      <div class="field-row"><span class="field-lbl">name</span><span class="field-val">VARCHAR(100)</span></div>
+                      <div class="field-row"><span class="field-lbl">email</span><span class="field-val">VARCHAR(255)</span></div>
+                      <div class="field-row"><span class="field-lbl">status</span><span class="field-val">VARCHAR(20)</span></div>
+                      <div class="field-row"><span class="field-lbl">created_at</span><span class="field-val">DATETIME</span></div>
+                      <div class="field-row"><span class="field-lbl">updated_at</span><span class="field-val">DATETIME</span></div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Calc Tab -->
+                <div id="rrpCalc" style="display:none">
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#127919; 选中统计<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <div class="field-row"><span class="field-lbl">已选行</span><span class="field-val" id="calcSelected">1</span></div>
+                      <div class="field-row"><span class="field-lbl">求和</span><span class="field-val" id="calcSum">2</span></div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Group Tab -->
+                <div id="rrpGroup" style="display:none">
+                  <div class="rrp-section">
+                    <div class="rrp-section-header">&#128230; 分组面板</div>
+                    <div class="rrp-section-body">
+                      <div class="rrp-empty-hint">
+                        &#128230;
+                        <span>拖拽列到此处进行分组聚合</span>
+                        <span class="rrp-hint-sub">支持多级分组和聚合函数</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#9889; 预设聚合<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <div class="rrp-quick-actions">
+                        <button class="rrp-quick-btn" onclick="showToast('COUNT')">COUNT</button>
+                        <button class="rrp-quick-btn" onclick="showToast('SUM')">SUM</button>
+                        <button class="rrp-quick-btn" onclick="showToast('AVG')">AVG</button>
+                        <button class="rrp-quick-btn" onclick="showToast('MIN/MAX')">MIN/MAX</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Insight Tab -->
+                <div id="rrpInsight" style="display:none">
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#128200; 统计概览<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <div class="field-row"><span class="field-lbl">总行数</span><span class="field-val">8</span></div>
+                      <div class="field-row"><span class="field-lbl">列数</span><span class="field-val">6</span></div>
+                      <div class="field-row"><span class="field-lbl">NULL 列</span><span class="field-val">2</span></div>
+                      <div class="field-row"><span class="field-lbl">数值列</span><span class="field-val">1</span></div>
+                    </div>
+                  </div>
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#128202; 数据分布<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <div class="rrp-mini-chart">
+                        <div class="mini-bar high" style="height:100%"></div>
+                        <div class="mini-bar med" style="height:60%"></div>
+                        <div class="mini-bar low" style="height:30%"></div>
+                        <div class="mini-bar med" style="height:50%"></div>
+                        <div class="mini-bar high" style="height:80%"></div>
+                        <div class="mini-bar low" style="height:25%"></div>
+                        <div class="mini-bar med" style="height:45%"></div>
+                        <div class="mini-bar high" style="height:70%"></div>
+                      </div>
+                      <div class="rrp-mini-hint">值分布概览</div>
+                    </div>
+                  </div>
+                  <div class="rrp-section">
+                    <div class="rrp-section-header" onclick="toggleRRPSection(this)">&#11088; 数据质量<span class="rrp-chevron">&#9660;</span></div>
+                    <div class="rrp-section-body">
+                      <div class="stat-bar"><span>87/100</span><div class="bar-bg"><div class="bar-fill good" style="width:87%"></div></div></div>
+                      <div class="rrp-mini-hint">良好：数据完整性较高</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="rrp-resize" id="rrpResize" onmousedown="startRRPResize(event)"></div>
+          </div>
+        </div>
+
+        <!-- ═══════ RESULT STATUS BAR ═══════ -->
+        <div class="result-statusbar">
+          <div class="sbar-left">
+            <span class="mode-badge quick">快速过滤</span>
+            <span class="sbar-sep"></span>
+            <button class="sbar-btn" title="上一结果集" onclick="navigateResult(-1)" disabled>&#9650;</button>
+            <span class="result-nav-text">1/2</span>
+            <button class="sbar-btn" title="下一结果集" onclick="navigateResult(1)">&#9660;</button>
+            <span class="sbar-sep"></span>
+            <button class="sbar-btn" title="刷新" onclick="showToast('刷新')">&#128260;</button>
+            <div class="rsb-auto-refresh" id="autoRefreshToggle" onclick="toggleAutoRefresh()" title="自动刷新">
+              <span class="refresh-dot" style="display:none"></span>自动
+            </div>
+            <span class="sbar-sep"></span>
+            <span class="rsb-fetch-size">抓取 200</span>
+            <button class="sbar-btn" title="保存" onclick="showToast('保存')">&#128190;</button>
+            <button class="sbar-btn" title="取消" onclick="showToast('已取消')">&#10005;</button>
+            <button class="sbar-btn primary" title="对比结果集" onclick="showToast('结果对比')">&#8644;</button>
+            <div class="rsb-export-wrap" id="exportWrap">
+              <button class="sbar-btn" onclick="toggleExportMenu()">&#128229;</button>
+              <div class="rsb-export-menu">
+                <div class="exp-item" onclick="showToast('导出 CSV');toggleExportMenu()">&#128196; CSV<span class="exp-shortcut">.csv</span></div>
+                <div class="exp-item" onclick="showToast('导出 JSON');toggleExportMenu()">&#128203; JSON<span class="exp-shortcut">.json</span></div>
+                <div class="exp-item" onclick="showToast('导出 Excel');toggleExportMenu()">&#128202; Excel<span class="exp-shortcut">.xlsx</span></div>
+                <div class="exp-item" onclick="showToast('导出 Parquet');toggleExportMenu()">&#128230; Parquet<span class="exp-shortcut">.parquet</span></div>
+                <div class="exp-item" onclick="showToast('导出 INSERT');toggleExportMenu()">&#128190; INSERT SQL<span class="exp-shortcut">.sql</span></div>
+                <div class="ctx-sep" style="margin:2px 0"></div>
+                <div class="exp-item" onclick="showToast('导出 HTML');toggleExportMenu()">&#127760; HTML<span class="exp-shortcut">.html</span></div>
+                <div class="exp-item" onclick="showToast('导出 Markdown');toggleExportMenu()">&#128221; Markdown<span class="exp-shortcut">.md</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="sbar-center">
+            <span class="row-info">8 行</span>
+            <span>|</span>
+            <span class="exec-time">125ms</span>
+            <span>|</span>
+            <span class="rsb-conn-info">&#128268; MySQL - world</span>
+            <span class="rsb-selected-info" id="sbarSelectedInfo">| 已选 1 行</span>
+          </div>
+          <div class="sbar-right">
+            <button class="sbar-btn" title="首页" onclick="firstPage()">&#9198;</button>
+            <button class="sbar-btn" title="上一页" onclick="prevPage()">&#9664;</button>
+            <span class="page-indicator" id="pageIndicator">1/1</span>
+            <button class="sbar-btn" title="下一页" onclick="nextPage()">&#9654;</button>
+            <button class="sbar-btn" title="末页" onclick="lastPage()">&#9197;</button>
+            <input class="go-page-input" id="goPageInput" value="1" title="跳转到页" onkeydown="if(event.key==='Enter')goToPage()" />
+            <button class="sbar-btn" title="切换分页" onclick="showToast('切换分页')">&#128196;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════ EDITOR STATUS BAR — 对应 EditorStatusbar.vue ═══════ -->
+  <div class="editor-statusbar mode-sql" id="editorStatusbar">
+    <div class="status-left">
+      <span class="status-item status-connection" title="当前连接: MySQL / localhost">
+        <span class="conn-dot connected" id="connDot"></span>
+        <span class="conn-name" id="sbarConnName">MySQL / localhost</span>
+      </span>
+      <span class="status-divider"></span>
+      <span class="status-item status-statements" id="sbarStmtCount">1 stmt</span>
+      <span class="status-item status-executing" id="statusExecuting" style="display:none">
+        <span class="executing-dot"></span>
+        执行中...
+        <button class="sbar-btn cancel-btn" title="取消" onclick="showToast('已取消')">&#10005;</button>
+      </span>
+      <span class="status-item status-time" id="statusTime" style="display:none">
+        &#9200; 125ms
+      </span>
+    </div>
+    <div class="status-center">
+      <span class="status-item status-location" id="sbarCursor">Ln 3, Col 20</span>
+    </div>
+    <div class="status-spacer"></div>
+    <div class="status-notifications">
+      <span class="status-item status-notif warn" id="esbNotifWarn" title="1 个警告" onclick="showToast('查看警告')">&#9888; 1</span>
+      <span class="status-item status-notif error" id="esbNotifError" title="0 个错误" style="display:none" onclick="showToast('查看错误')">&#9432; 0</span>
+    </div>
+    <span class="status-divider"></span>
+    <div class="status-right">
+      <span class="status-item status-mode" id="sbarMode">SQL</span>
+      <span class="status-item status-dirty" id="statusDirty">&#9679; 未保存</span>
+      <span class="status-divider"></span>
+      <span class="status-item clickable" title="选择编码">UTF-8</span>
+      <span class="status-divider"></span>
+      <span class="status-item clickable" title="换行符">LF</span>
+      <span class="status-divider"></span>
+      <span class="status-item" title="缩进">Spaces: 2</span>
+      <span class="status-divider"></span>
+      <span class="status-item clickable git-branch" title="Git 分支">&#9094; main</span>
+      <span class="status-divider"></span>
+      <span class="status-item status-transaction" id="statusTxn" style="display:none">
+        <span class="tx-dot"></span>TX
+      </span>
+      <button class="sbar-btn tx-btn tx-commit" id="btnCommit" style="display:none" onclick="toggleTransaction('commit')">提交</button>
+      <button class="sbar-btn tx-btn tx-rollback" id="btnRollback" style="display:none" onclick="toggleTransaction('rollback')">回滚</button>
+    </div>
+  </div>
+</div>
+
+<!-- Row Context Menu -->
+<div class="context-menu" id="rowContextMenu">
+  <div class="ctx-item" onclick="showToast('复制值');hideAllContextMenus()">&#128203; 复制值<span class="ctx-shortcut">Ctrl+C</span></div>
+  <div class="ctx-item" onclick="showToast('复制行 TSV');hideAllContextMenus()">&#128196; 复制行 (TSV)</div>
+  <div class="ctx-item" onclick="showToast('复制行 JSON');hideAllContextMenus()">&#128203; 复制行 (JSON)</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="showToast('编辑单元格');hideAllContextMenus()">&#9999; 编辑<span class="ctx-shortcut">F2</span></div>
+  <div class="ctx-item" onclick="showToast('设为 NULL');hideAllContextMenus()">&#8709; 设为 NULL</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="showToast('列洞察');hideAllContextMenus()">&#128200; 列洞察</div>
+  <div class="ctx-item" onclick="showToast('按此值过滤');hideAllContextMenus()">&#128269; 按此值过滤</div>
+</div>
+
+<!-- Column Context Menu -->
+<div class="context-menu" id="colContextMenu">
+  <div class="ctx-item" onclick="sortColumnAction('asc');hideAllContextMenus()">&#8593; 升序排序</div>
+  <div class="ctx-item" onclick="sortColumnAction('desc');hideAllContextMenus()">&#8595; 降序排序</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="showToast('过滤此列');hideAllContextMenus()">&#128269; 过滤</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="showToast('列洞察');hideAllContextMenus()">&#128200; 列洞察</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="showToast('隐藏列');hideAllContextMenus()">&#128065; 隐藏列</div>
+  <div class="ctx-item" onclick="showToast('固定列');hideAllContextMenus()">&#128204; 固定列</div>
+  <div class="ctx-item" onclick="showToast('复制列名');hideAllContextMenus()">&#128203; 复制列名</div>
+</div>
+<div class="ctx-backdrop" id="ctxBackdrop" onclick="hideAllContextMenus()"></div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== State ==========
+let splitRatio = 0.55;
+let isDragging = false;
+let isSidebarResizing = false;
+let isRRPResizing = false;
+let resultVisible = true;
+let currentFilterMode = 'quick';
+let currentRRPTab = 'value';
+let selectedRows = new Set();
+let resultTabCount = 2;
+let inTransaction = false;
+let currentSortCol = null;
+let currentSortDir = null;
+let ctxColName = null;
+let currentTabCtx = null;
+let editorTabCount = 6;
+let viewSidebarExpanded = false;
+let rightPanelCollapsed = false;
+let rightPanelPinned = false;
+let autoRefreshEnabled = false;
+let sidebarWidth = 34;
+let rrpWidth = 250;
+let currentEditorMode = 'sql'; // sql | analysis | code
+
+// ========== Editor Mode Switching ==========
+const modeConfig = {
+  sql: {
+    label: 'SQL',
+    icon: '&#128451;',
+    desc: '查询编辑',
+    toolbarClass: 'mode-sql',
+    statusbarClass: 'mode-sql',
+    accentClass: 'sql',
+    buttons: [
+      { type: 'run', html: '&#9654;', title: '执行 (Ctrl+Enter)', onclick: 'executeSQL()' },
+      { type: 'btn', html: '+', title: '执行到新标签 (Ctrl+Shift+Enter)', onclick: 'executeNewTab()' },
+      { type: 'sep' },
+      { type: 'btn', html: '{ }', title: '格式化 (Ctrl+Shift+F)', onclick: "showToast('SQL 已格式化')" },
+      { type: 'btn', html: '&#10003;', title: '验证语法', onclick: "showToast('语法验证通过')" },
+      { type: 'sep' },
+      { type: 'btn', html: '&#9889;', title: 'DuckDB 加速', onclick: "showToast('DuckDB 加速完成 (45ms)')" },
+      { type: 'sep' },
+      { type: 'overflow', html: '&#8943;', title: '更多', items: [
+        { html: '&#128269; 执行计划', onclick: "showToast('执行计划');toggleOverflowMenu()" },
+        { html: '&#8646; 方言转译', onclick: "showToast('方言转译');toggleOverflowMenu()" },
+        { html: '&#128229; 导出 SQL', onclick: "showToast('导出 SQL');toggleOverflowMenu()" },
+        { html: '&#11088; 保存为片段', onclick: "showToast('保存为片段');toggleOverflowMenu()" }
+      ]},
+      { type: 'sep' },
+      { type: 'btn', html: '&#128506;', title: '迷你地图', onclick: "showToast('迷你地图切换')" },
+      { type: 'btn', html: '&#9881;', title: '编辑器设置', onclick: "showToast('编辑器设置')" }
+    ]
+  },
+  analysis: {
+    label: '分析',
+    icon: '&#128200;',
+    desc: '数据探索',
+    toolbarClass: 'mode-analysis',
+    statusbarClass: 'mode-analysis',
+    accentClass: 'analysis',
+    buttons: [
+      { type: 'run', html: '&#9654;', title: '执行分析 (Ctrl+Enter)', onclick: 'executeSQL()' },
+      { type: 'btn', html: '+', title: '执行到新标签', onclick: 'executeNewTab()' },
+      { type: 'btn', html: '&#9776;', title: '批量执行', onclick: "showToast('批量执行')" },
+      { type: 'btn', html: '&#9889;', title: 'DuckDB 加速', onclick: "showToast('DuckDB 加速完成 (45ms)')" },
+      { type: 'sep' },
+      { type: 'btn', html: '{ }', title: '格式化', onclick: "showToast('已格式化')" },
+      { type: 'btn', html: '&#10003;', title: '验证语法', onclick: "showToast('语法验证通过')" },
+      { type: 'btn', html: '&#8646;', title: '方言转译', onclick: "showToast('方言转译')" },
+      { type: 'btn', html: '&#128269;', title: '执行计划', onclick: "showToast('执行计划')" },
+      { type: 'btn', html: '&#11088;', title: '保存为片段', onclick: "showToast('保存为片段')" },
+      { type: 'sep' },
+      { type: 'btn', html: '&#128506;', title: '迷你地图', onclick: "showToast('迷你地图切换')" },
+      { type: 'btn', html: '&#9881;', title: '编辑器设置', onclick: "showToast('编辑器设置')" }
+    ]
+  },
+  code: {
+    label: '代码',
+    icon: '&#123;',
+    desc: '通用编辑',
+    toolbarClass: 'mode-code',
+    statusbarClass: 'mode-code',
+    accentClass: 'code',
+    buttons: [
+      { type: 'run', html: '&#9654;', title: '运行 (Ctrl+Enter)', onclick: "showToast('运行代码')" },
+      { type: 'sep' },
+      { type: 'btn', html: '{ }', title: '格式化 (Ctrl+Shift+F)', onclick: "showToast('代码已格式化')" },
+      { type: 'sep' },
+      { type: 'btn', html: '&#128506;', title: '迷你地图', onclick: "showToast('迷你地图切换')" },
+      { type: 'btn', html: '&#9881;', title: '编辑器设置', onclick: "showToast('编辑器设置')" }
+    ]
+  }
+};
+
+function buildToolbar(mode) {
+  const cfg = modeConfig[mode];
+  const container = document.getElementById('tbGroupMain');
+  let html = '';
+  cfg.buttons.forEach((b, i) => {
+    if (b.type === 'sep') {
+      html += '<span class="tb-sep"></span>';
+    } else if (b.type === 'overflow') {
+      html += `<div class="tb-overflow-wrap">
+        <button class="tb-btn" title="${b.title}" onclick="toggleOverflowMenu(event)">${b.html}</button>
+        <div class="tb-overflow-menu" id="overflowMenu">
+          ${b.items.map(it => `<div class="ov-item" onclick="${it.onclick}">${it.html}</div>`).join('')}
+        </div>
+      </div>`;
+    } else {
+      const cls = b.type === 'run' ? 'tb-btn run' : 'tb-btn';
+      html += `<button class="${cls}" title="${b.title}" onclick="${b.onclick}">${b.html}</button>`;
+    }
+  });
+  container.innerHTML = html;
+}
+
+function switchEditorMode(mode, e) {
+  if (e) { e.stopPropagation(); }
+  if (currentEditorMode === mode) { closeModeMenu(); return; }
+  currentEditorMode = mode;
+  const cfg = modeConfig[mode];
+
+  // 更新模式指示器
+  const indicator = document.getElementById('tbModeIndicator');
+  indicator.className = 'tb-mode-indicator ' + mode;
+  document.getElementById('tbModeLabel').textContent = cfg.label;
+
+  // 更新工具栏
+  const toolbar = document.getElementById('editorToolbar');
+  toolbar.className = 'editor-toolbar ' + cfg.toolbarClass;
+  buildToolbar(mode);
+
+  // 更新状态栏
+  const statusbar = document.getElementById('editorStatusbar');
+  statusbar.className = 'editor-statusbar ' + cfg.statusbarClass;
+  document.getElementById('sbarMode').textContent = cfg.label;
+
+  // 更新标签栏模式色条
+  document.getElementById('tabModeAccent').className = 'tab-mode-accent ' + cfg.accentClass;
+
+  // 更新模式菜单选中状态
+  document.querySelectorAll('.mode-menu-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.mode === mode);
+  });
+
+  closeModeMenu();
+  showToast('已切换到: ' + cfg.label + ' 模式');
+}
+
+function toggleModeMenu(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('tbModeMenu');
+  const chevron = document.getElementById('tbModeChevron');
+  const isOpen = menu.style.display === 'block';
+  menu.style.display = isOpen ? 'none' : 'block';
+  chevron.classList.toggle('open', !isOpen);
+}
+
+function closeModeMenu() {
+  document.getElementById('tbModeMenu').style.display = 'none';
+  document.getElementById('tbModeChevron').classList.remove('open');
+}
+
+// 全局点击关闭模式菜单
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.tb-mode-indicator')) closeModeMenu();
+});
+
+// ========== SQL Execution ==========
+function executeSQL() {
+  if (!resultVisible) {
+    document.getElementById('resultArea').style.display = 'flex';
+    document.getElementById('splitHandle').style.display = 'flex';
+    document.getElementById('editorArea').style.flex = '0.55';
+    document.getElementById('resultArea').style.flex = '0.45';
+    splitRatio = 0.55; resultVisible = true;
+  }
+  const runBtn = document.querySelector('.tb-btn.run');
+  runBtn.classList.add('executing');
+  const connDot = document.getElementById('connDot');
+  connDot.classList.remove('connected'); connDot.classList.add('connecting');
+  document.getElementById('statusExecuting').style.display = 'flex';
+  document.getElementById('statusTime').style.display = 'none';
+  setTimeout(() => {
+    runBtn.classList.remove('executing');
+    connDot.classList.remove('connecting'); connDot.classList.add('connected');
+    document.getElementById('statusExecuting').style.display = 'none';
+    document.getElementById('statusTime').style.display = 'flex';
+    document.getElementById('statusTime').innerHTML = '&#9200; 125ms';
+    updateSelectedInfo();
+    showToast('查询完成: 8 rows in 125ms');
+  }, 800);
+}
+
+function executeNewTab() {
+  resultTabCount++;
+  const tabs = document.getElementById('resultTabs');
+  const newTab = document.createElement('div');
+  newTab.className = 'result-tab active'; newTab.dataset.result = resultTabCount;
+  newTab.innerHTML = `<span>&#128203; 结果 #${resultTabCount}</span><span class="tab-time">...</span><span class="tab-close-result" onclick="closeResultTab(event,'${resultTabCount}')">&times;</span><div class="tab-sql-tooltip">SELECT * FROM users LIMIT 10;</div>`;
+  newTab.setAttribute('onclick', `switchResultTab(this,'${resultTabCount}')`);
+  tabs.querySelectorAll('.result-tab').forEach(t => t.classList.remove('active'));
+  tabs.appendChild(newTab);
+  if (!resultVisible) {
+    document.getElementById('resultArea').style.display = 'flex';
+    document.getElementById('splitHandle').style.display = 'flex';
+    document.getElementById('editorArea').style.flex = '0.55';
+    document.getElementById('resultArea').style.flex = '0.45';
+    splitRatio = 0.55; resultVisible = true;
+  }
+  const time = Math.floor(Math.random() * 200 + 30);
+  setTimeout(() => {
+    newTab.querySelector('.tab-time').textContent = time + 'ms';
+    showToast('结果 #' + resultTabCount + ': 8 rows in ' + time + 'ms');
+  }, 500);
+}
+
+function toggleTransaction(action) {
+  const txn = document.getElementById('statusTxn');
+  const btnC = document.getElementById('btnCommit');
+  const btnR = document.getElementById('btnRollback');
+  const connDot = document.getElementById('connDot');
+  if (action === 'begin') {
+    inTransaction = true;
+    txn.style.display = 'flex'; btnC.style.display = 'flex'; btnR.style.display = 'flex';
+    connDot.classList.remove('connected'); connDot.classList.add('connecting');
+    showToast('事务已开始');
+  } else if (action === 'commit') {
+    inTransaction = false;
+    txn.style.display = 'none'; btnC.style.display = 'none'; btnR.style.display = 'none';
+    connDot.classList.remove('connecting'); connDot.classList.add('connected');
+    showToast('事务已提交');
+  } else {
+    inTransaction = false;
+    txn.style.display = 'none'; btnC.style.display = 'none'; btnR.style.display = 'none';
+    connDot.classList.remove('connecting'); connDot.classList.add('connected');
+    showToast('事务已回滚');
+  }
+}
+
+function switchConnection(conn) {
+  const names = { mysql: 'MySQL / localhost', pg: 'PostgreSQL / prod', sqlite: 'SQLite / local.db', duckdb: 'DuckDB (本地)' };
+  document.getElementById('sbarConnName').textContent = names[conn] || conn;
+  showToast('已切换连接: ' + names[conn]);
+}
+
+function toggleOverflowMenu(e) { if (e) e.stopPropagation(); const m = document.getElementById('overflowMenu'); if (m) { m.style.display = m.style.display === 'block' ? 'none' : 'block'; } }
+document.addEventListener('click', (e) => { if (!e.target.closest('.tb-overflow-wrap')) { const m = document.getElementById('overflowMenu'); if (m) m.style.display = 'none'; } });
+
+// ========== Split Drag ==========
+function startSplitDrag(e) {
+  e.preventDefault(); isDragging = true;
+  document.addEventListener('mousemove', onSplitDrag);
+  document.addEventListener('mouseup', stopSplitDrag);
+  document.body.style.cursor = 'row-resize'; document.body.style.userSelect = 'none';
+  document.getElementById('splitHandle').classList.add('dragging');
+}
+function onSplitDrag(e) {
+  if (!isDragging) return;
+  const rect = document.getElementById('editorSplit').getBoundingClientRect();
+  splitRatio = (e.clientY - rect.top) / rect.height;
+  splitRatio = Math.min(0.85, Math.max(0.15, splitRatio));
+  document.getElementById('editorArea').style.flex = splitRatio;
+  document.getElementById('resultArea').style.flex = (1 - splitRatio);
+  document.getElementById('splitRatioTip').textContent = Math.round(splitRatio * 100) + '%';
+}
+function stopSplitDrag() {
+  isDragging = false;
+  document.removeEventListener('mousemove', onSplitDrag);
+  document.removeEventListener('mouseup', stopSplitDrag);
+  document.body.style.cursor = ''; document.body.style.userSelect = '';
+  document.getElementById('splitHandle').classList.remove('dragging');
+}
+function toggleResultArea() {
+  if (resultVisible) {
+    document.getElementById('resultArea').style.display = 'none';
+    document.getElementById('splitHandle').style.display = 'none';
+    document.getElementById('editorArea').style.flex = '1';
+    resultVisible = false;
+    showToast('结果区域已折叠 (双击展开)');
+  } else {
+    document.getElementById('resultArea').style.display = 'flex';
+    document.getElementById('splitHandle').style.display = 'flex';
+    document.getElementById('editorArea').style.flex = '0.55';
+    document.getElementById('resultArea').style.flex = '0.45';
+    splitRatio = 0.55;
+    document.getElementById('splitRatioTip').textContent = '55%';
+    resultVisible = true;
+    showToast('结果区域已展开');
+  }
+}
+
+// ========== Editor Tab Bar ==========
+const tabContents = {
+  'welcome.sql': `<span class="cm-comment">-- 欢迎使用 RdataStation</span>\n<span class="cm-comment">-- 选择一个连接并开始编写 SQL</span>\n<span class="cm-keyword">SELECT</span> <span class="cm-string">'Hello, RdataStation!'</span> <span class="cm-keyword">AS</span> greeting;`,
+  'query-users.sql': `<span class="cm-keyword">SELECT</span>\n  <span class="cm-function">u.id</span>,\n  <span class="cm-function">u.name</span>,\n  <span class="cm-function">u.email</span>,\n  <span class="cm-function">u.created_at</span>,\n  <span class="cm-function">u.status</span>\n<span class="cm-keyword">FROM</span> users u\n<span class="cm-keyword">WHERE</span> u.status = <span class="cm-string">'active'</span>\n  <span class="cm-keyword">AND</span> u.created_at > <span class="cm-string">'2025-01-01'</span>\n<span class="cm-keyword">ORDER BY</span> u.created_at <span class="cm-keyword">DESC</span>\n<span class="cm-keyword">LIMIT</span> <span class="cm-number">100</span>;\n\n<span class="cm-comment">-- 查询所有活跃用户</span>\n<span class="cm-comment">-- 按创建时间倒序排列</span>`,
+  'analysis-report.sql': `<span class="cm-comment">-- 销售分析报告</span>\n<span class="cm-keyword">SELECT</span>\n  <span class="cm-function">DATE_TRUNC</span>(<span class="cm-string">'month'</span>, o.created_at) <span class="cm-keyword">AS</span> month,\n  <span class="cm-function">COUNT</span>(<span class="cm-keyword">DISTINCT</span> o.user_id) <span class="cm-keyword">AS</span> unique_customers,\n  <span class="cm-function">SUM</span>(o.total_amount) <span class="cm-keyword">AS</span> revenue,\n  <span class="cm-function">AVG</span>(o.total_amount) <span class="cm-keyword">AS</span> avg_order_value\n<span class="cm-keyword">FROM</span> orders o\n<span class="cm-keyword">GROUP BY</span> <span class="cm-number">1</span>\n<span class="cm-keyword">ORDER BY</span> month <span class="cm-keyword">DESC</span>;`,
+  'schema-design.sql': `<span class="cm-comment">-- 数据库 Schema 设计</span>\n<span class="cm-keyword">CREATE TABLE</span> <span class="cm-keyword">IF NOT EXISTS</span> products (\n  id <span class="cm-type">INT</span> <span class="cm-keyword">PRIMARY KEY</span> <span class="cm-keyword">AUTO_INCREMENT</span>,\n  name <span class="cm-type">VARCHAR</span>(<span class="cm-number">255</span>) <span class="cm-keyword">NOT NULL</span>,\n  price <span class="cm-type">DECIMAL</span>(<span class="cm-number">10</span>, <span class="cm-number">2</span>) <span class="cm-keyword">NOT NULL</span>,\n  category_id <span class="cm-type">INT</span>,\n  created_at <span class="cm-type">TIMESTAMP</span> <span class="cm-keyword">DEFAULT</span> <span class="cm-keyword">CURRENT_TIMESTAMP</span>\n);`,
+  'data-migration.sql': `<span class="cm-comment">-- 数据迁移脚本</span>\n<span class="cm-keyword">INSERT INTO</span> users_archive\n<span class="cm-keyword">SELECT</span> * <span class="cm-keyword">FROM</span> users\n<span class="cm-keyword">WHERE</span> created_at < <span class="cm-string">'2024-01-01'</span>;`,
+  'index-optimize.sql': `<span class="cm-comment">-- 索引优化</span>\n<span class="cm-keyword">CREATE INDEX</span> idx_users_status_created\n<span class="cm-keyword">ON</span> users(status, created_at);`,
+  'app-config.ts': `<span class="cm-comment">// 应用配置</span>\n<span class="cm-keyword">export</span> <span class="cm-keyword">const</span> <span class="cm-variable">appConfig</span> = {\n  <span class="cm-variable">name</span>: <span class="cm-string">'RdataStation'</span>,\n  <span class="cm-variable">version</span>: <span class="cm-string">'0.5.8'</span>,\n  <span class="cm-variable">database</span>: {\n    <span class="cm-variable">host</span>: <span class="cm-string">'localhost'</span>,\n    <span class="cm-variable">port</span>: <span class="cm-number">3306</span>,\n    <span class="cm-variable">poolSize</span>: <span class="cm-number">10</span>\n  }\n};</span>`
+};
+
+function switchEditorTab(tab, file) {
+  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  const content = tabContents[file] || tabContents['query-users.sql'];
+  document.getElementById('cmContent').innerHTML = content;
+  const lines = content.split('\n').length;
+  document.getElementById('editorGutter').innerHTML = Array.from({length: Math.max(lines,15)}, (_,i) => {
+    const n = i + 1; let cls = 'gutter-line';
+    if (n === 8) cls += ' warn';
+    if (n === 3) cls += ' active';
+    return `<div class="${cls}">${n}</div>`;
+  }).join('');
+  document.getElementById('sbarStmtCount').textContent = '1 stmt';
+  document.getElementById('sbarCursor').textContent = 'Ln 3, Col 20';
+  const fileName = file || 'query-users.sql';
+  document.getElementById('editorBreadcrumb').innerHTML = `<span class="crumb">&#128193; project</span><span class="crumb-sep">&#8250;</span><span class="crumb">&#128193; queries</span><span class="crumb-sep">&#8250;</span><span class="crumb crumb-active">&#128196; ${fileName}</span>`;
+  // 根据标签页类型自动切换编辑器模式
+  const tabType = tab.dataset.type || 'sql';
+  if (tabType !== currentEditorMode) {
+    switchEditorMode(tabType);
+  }
+  updateTabOverflow();
+}
+
+function closeEditorTab(e, file) {
+  e.stopPropagation();
+  const tab = document.querySelector(`.tab-item[data-file="${file}"]`);
+  if (!tab) return;
+  const wasActive = tab.classList.contains('active');
+  tab.remove();
+  if (wasActive) {
+    const first = document.querySelector('.tab-item:not(.pinned)') || document.querySelector('.tab-item');
+    if (first) { first.classList.add('active'); switchEditorTab(first, first.dataset.file); }
+  }
+  updateTabOverflow();
+}
+
+function newEditorTab() {
+  editorTabCount++;
+  const bar = document.getElementById('tabBar');
+  const tab = document.createElement('div');
+  const fileName = `new-file-${editorTabCount}.sql`;
+  tab.className = 'tab-item active'; tab.dataset.file = fileName; tab.dataset.type = 'sql';
+  tab.innerHTML = `<span class="tab-type-dot"></span><span class="tab-icon">&#128451;</span><span class="tab-label">${fileName}</span><span class="tab-dirty" style="display:none"></span><span class="tab-pin" onclick="togglePinTab(event,'${fileName}')">&#128204;</span><span class="tab-close" onclick="closeEditorTab(event,'${fileName}')">&times;</span><span class="tab-drag-handle"></span>`;
+  tab.setAttribute('onclick', `switchEditorTab(this,'${fileName}')`);
+  tab.setAttribute('oncontextmenu', `showTabContextMenu(event,'${fileName}')`);
+  bar.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  bar.appendChild(tab);
+  tabContents[fileName] = `<span class="cm-comment">-- 新建 SQL 文件</span>\n`;
+  document.getElementById('cmContent').innerHTML = tabContents[fileName];
+  document.getElementById('editorGutter').innerHTML = '<div class="gutter-line active">1</div>';
+  document.getElementById('editorBreadcrumb').innerHTML = `<span class="crumb crumb-active">&#128196; ${fileName}</span>`;
+  updateTabOverflow();
+  showToast('新建文件: ' + fileName);
+}
+
+function scrollTabs(delta) { document.getElementById('tabBar').scrollBy({ left: delta, behavior: 'smooth' }); }
+function onTabWheel(e) { document.getElementById('tabBar').scrollLeft += e.deltaY; }
+
+function togglePinTab(e, file) { e.stopPropagation(); const tab = document.querySelector(`.tab-item[data-file="${file}"]`); if (!tab) return; tab.classList.toggle('pinned'); showToast(tab.classList.contains('pinned') ? '已固定标签' : '已取消固定'); }
+function togglePinTabById(file) { const tab = document.querySelector(`.tab-item[data-file="${file}"]`); if (tab) { tab.classList.toggle('pinned'); showToast(tab.classList.contains('pinned') ? '已固定标签' : '已取消固定'); } }
+function closeTabById(file) {
+  const tab = document.querySelector(`.tab-item[data-file="${file}"]`);
+  if (tab) {
+    const wasActive = tab.classList.contains('active');
+    tab.remove();
+    if (wasActive) {
+      const first = document.querySelector('.tab-item:not(.pinned)') || document.querySelector('.tab-item');
+      if (first) { first.classList.add('active'); switchEditorTab(first, first.dataset.file); }
+    }
+  }
+  updateTabOverflow();
+}
+function closeOtherTabs() {
+  document.querySelectorAll('.tab-item').forEach(t => {
+    if (t.dataset.file !== currentTabCtx && !t.classList.contains('pinned')) t.remove();
+  });
+  updateTabOverflow();
+}
+function closeTabsToRight() {
+  let found = false;
+  document.querySelectorAll('.tab-item').forEach(t => {
+    if (found && !t.classList.contains('pinned')) t.remove();
+    if (t.dataset.file === currentTabCtx) found = true;
+  });
+  updateTabOverflow();
+}
+function closeAllTabs() {
+  const pinned = document.querySelectorAll('.tab-item.pinned');
+  const bar = document.getElementById('tabBar');
+  bar.innerHTML = '';
+  pinned.forEach(p => bar.appendChild(p));
+  if (pinned.length === 0) newEditorTab();
+  updateTabOverflow();
+}
+
+// Tab overflow menu
+const MAX_VISIBLE_TABS = 6;
+function updateTabOverflow() {
+  const tabs = document.querySelectorAll('.tab-item');
+  const overflowWrap = document.getElementById('tabOverflowWrap');
+  if (tabs.length > MAX_VISIBLE_TABS) {
+    overflowWrap.style.display = 'block';
+  } else {
+    overflowWrap.style.display = 'none';
+    document.getElementById('tabOverflowMenu').style.display = 'none';
+  }
+}
+function toggleTabOverflow() {
+  const menu = document.getElementById('tabOverflowMenu');
+  const tabs = document.querySelectorAll('.tab-item');
+  const overflowTabs = Array.from(tabs).slice(MAX_VISIBLE_TABS);
+  menu.innerHTML = overflowTabs.map(t => {
+    const isActive = t.classList.contains('active');
+    const isDirty = t.querySelector('.tab-dirty') && t.querySelector('.tab-dirty').style.display !== 'none';
+    const file = t.dataset.file;
+    return `<div class="overflow-item${isActive ? ' active' : ''}" onclick="switchEditorTab(document.querySelector('.tab-item[data-file=\\'${file}\\']'), '${file}');toggleTabOverflow();">
+      <span class="overflow-dot ${t.dataset.type}"></span>
+      <span class="overflow-label">${t.querySelector('.tab-label').textContent}</span>
+      ${isDirty ? '<span class="overflow-dirty">&#9679;</span>' : ''}
+      <span class="overflow-close" onclick="event.stopPropagation();closeTabById('${file}');toggleTabOverflow();">&times;</span>
+    </div>`;
+  }).join('');
+  menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.tab-overflow-wrap')) {
+    document.getElementById('tabOverflowMenu').style.display = 'none';
+  }
+});
+
+// ========== Tab Context Menu ==========
+function showTabContextMenu(e, file) {
+  e.preventDefault(); currentTabCtx = file;
+  const menu = document.getElementById('tabContextMenu');
+  menu.style.display = 'block';
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 230) + 'px';
+  menu.style.top = Math.min(e.clientY, window.innerHeight - 340) + 'px';
+  document.getElementById('ctxBackdrop').style.display = 'block';
+  hideOtherContextMenus('tabContextMenu');
+}
+
+// ========== Result Tabs ==========
+function switchResultTab(tab, id) { document.querySelectorAll('.result-tab').forEach(t => t.classList.remove('active')); tab.classList.add('active'); }
+function closeResultTab(e, id) { e.stopPropagation(); const tab = document.querySelector(`.result-tab[data-result="${id}"]`); if (!tab) return; tab.remove(); const first = document.querySelector('.result-tab'); if (first) first.classList.add('active'); if (document.querySelectorAll('.result-tab').length === 0) toggleResultArea(); }
+function navigateResult(dir) { showToast('切换到结果 #' + (dir > 0 ? '2' : '1')); }
+
+// ========== Result View Switch ==========
+function switchResultView(view, btn) {
+  document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active');
+  const grid = document.getElementById('resultGrid');
+  if (view === 'grid') {
+    grid.innerHTML = document.getElementById('resultTable').outerHTML;
+    grid.style.overflow = 'auto';
+  } else if (view === 'text') {
+    grid.innerHTML = `<pre style="padding:12px;font-family:var(--mono);font-size:12px;color:#d4d4d4;line-height:1.5">id | name | email | status | created_at | updated_at\n-- | ---- | ----- | ------ | ---------- | ----------\n1  | 张三 | zhangsan@example.com | active | 2025-03-15 10:30:00 | 2025-06-20 14:22:00\n2  | 李四 | lisi@example.com | active | 2025-04-01 09:15:00 | 2025-07-10 11:00:00\n...\n\n8 rows in 125ms</pre>`;
+    grid.style.overflow = 'auto';
+  } else if (view === 'record') {
+    grid.innerHTML = `<div style="padding:12px;font-family:var(--mono);font-size:12px;color:#d4d4d4;line-height:1.8"><div style="color:var(--sql);font-weight:600;margin-bottom:8px">Record 2 / 8</div><div><span style="color:var(--text-secondary)">id:</span> <span style="color:#b5cea8">2</span></div><div><span style="color:var(--text-secondary)">name:</span> <span style="color:#ce9178">李四</span></div><div><span style="color:var(--text-secondary)">email:</span> <span style="color:#ce9178">lisi@example.com</span></div><div><span style="color:var(--text-secondary)">status:</span> <span style="color:#ce9178">active</span></div><div style="margin-top:12px;display:flex;gap:8px"><button onclick="showToast('上一条')" style="padding:2px 8px;background:#333;border:1px solid #555;color:#ccc;border-radius:3px;cursor:pointer">&#9664; 上一条</button><button onclick="showToast('下一条')" style="padding:2px 8px;background:#333;border:1px solid #555;color:#ccc;border-radius:3px;cursor:pointer">下一条 &#9654;</button></div></div>`;
+    grid.style.overflow = 'auto';
+  } else {
+    grid.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text-muted);display:flex;flex-direction:column;align-items:center;gap:8px"><div style="font-size:32px">&#128202;</div><div>图表视图 — 选择 X/Y 轴列后生成可视化</div><div style="font-size:10px">支持: 柱状图 | 折线图 | 饼图 | 散点图</div></div>`;
+    grid.style.overflow = 'hidden';
+  }
+}
+
+// ========== View Sidebar ==========
+function toggleViewSidebar() { viewSidebarExpanded = !viewSidebarExpanded; document.getElementById('viewSidebar').classList.toggle('expanded', viewSidebarExpanded); }
+
+function startSidebarResize(e) {
+  e.preventDefault(); isSidebarResizing = true;
+  document.addEventListener('mousemove', onSidebarResize);
+  document.addEventListener('mouseup', stopSidebarResize);
+  document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+  document.getElementById('viewSidebarResize').classList.add('dragging');
+}
+function onSidebarResize(e) {
+  if (!isSidebarResizing) return;
+  const wrap = document.getElementById('resultSidebarWrap');
+  const rect = wrap.getBoundingClientRect();
+  sidebarWidth = Math.min(200, Math.max(28, e.clientX - rect.left));
+  document.getElementById('viewSidebar').style.width = sidebarWidth + 'px';
+  if (sidebarWidth > 80) { document.getElementById('viewSidebar').classList.add('expanded'); viewSidebarExpanded = true; }
+  else { document.getElementById('viewSidebar').classList.remove('expanded'); viewSidebarExpanded = false; }
+}
+function stopSidebarResize() {
+  isSidebarResizing = false;
+  document.removeEventListener('mousemove', onSidebarResize);
+  document.removeEventListener('mouseup', stopSidebarResize);
+  document.body.style.cursor = ''; document.body.style.userSelect = '';
+  document.getElementById('viewSidebarResize').classList.remove('dragging');
+}
+
+// ========== Right Panel ==========
+function toggleRightPanel() {
+  rightPanelCollapsed = !rightPanelCollapsed;
+  const panel = document.getElementById('resultRightPanel');
+  panel.classList.toggle('collapsed', rightPanelCollapsed);
+  document.querySelector('.rrp-collapse-btn').textContent = rightPanelCollapsed ? '&#9654;' : '&#9664;';
+  if (rightPanelCollapsed) { panel.style.width = '0'; } else { panel.style.width = rrpWidth + 'px'; }
+}
+function togglePinRightPanel() {
+  rightPanelPinned = !rightPanelPinned;
+  document.getElementById('rrpPinBtn').classList.toggle('pinned', rightPanelPinned);
+  showToast(rightPanelPinned ? '已固定面板' : '已取消固定');
+}
+
+function startRRPResize(e) {
+  e.preventDefault(); isRRPResizing = true;
+  document.addEventListener('mousemove', onRRPResize);
+  document.addEventListener('mouseup', stopRRPResize);
+  document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+  document.getElementById('rrpResize').classList.add('dragging');
+}
+function onRRPResize(e) {
+  if (!isRRPResizing) return;
+  const wrap = document.getElementById('resultRightPanelWrap');
+  const rect = wrap.getBoundingClientRect();
+  rrpWidth = Math.min(420, Math.max(140, rect.right - e.clientX));
+  if (!rightPanelCollapsed) { document.getElementById('resultRightPanel').style.width = rrpWidth + 'px'; }
+}
+function stopRRPResize() {
+  isRRPResizing = false;
+  document.removeEventListener('mousemove', onRRPResize);
+  document.removeEventListener('mouseup', stopRRPResize);
+  document.body.style.cursor = ''; document.body.style.userSelect = '';
+  document.getElementById('rrpResize').classList.remove('dragging');
+}
+
+function switchRRPTab(tab, btn) {
+  currentRRPTab = tab;
+  document.querySelectorAll('.rrp-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  const ids = { value: 'rrpValue', metadata: 'rrpMetadata', calc: 'rrpCalc', group: 'rrpGroup', insight: 'rrpInsight' };
+  Object.values(ids).forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+  const target = document.getElementById(ids[tab]);
+  if (target) target.style.display = 'block';
+}
+
+function toggleRRPSection(header) { header.parentElement.classList.toggle('collapsed'); }
+
+// ========== Filter ==========
+function switchFilterMode(mode, btn) {
+  currentFilterMode = mode;
+  document.querySelectorAll('.filter-mode-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const placeholders = { quick: "输入过滤表达式，如 name LIKE '%test%'", sql: "输入 SQL WHERE 子句", duckdb: "输入 DuckDB SQL 分析语句" };
+  document.getElementById('filterInput').placeholder = placeholders[mode] || placeholders.quick;
+}
+function toggleFilterPreset() { document.getElementById('filterPresetBtn').classList.toggle('show'); }
+function applyFilterPreset(name) {
+  const values = { '活跃用户': "status = 'active'", '最近7天': "created_at > DATE_SUB(NOW(), INTERVAL 7 DAY)", '空邮箱': "email IS NULL" };
+  document.getElementById('filterInput').value = values[name] || '';
+  document.getElementById('filterPresetBtn').classList.remove('show');
+  showToast('预设已应用: ' + name);
+}
+function clearFilter() { document.getElementById('filterInput').value = ''; showToast('过滤已清除'); }
+document.addEventListener('click', (e) => { if (!e.target.closest('.filter-preset-btn')) document.getElementById('filterPresetBtn').classList.remove('show'); });
+
+// ========== Export Menu ==========
+function toggleExportMenu() { document.getElementById('exportWrap').classList.toggle('show'); }
+document.addEventListener('click', (e) => { if (!e.target.closest('.rsb-export-wrap')) document.getElementById('exportWrap').classList.remove('show'); });
+
+// ========== Auto Refresh ==========
+function toggleAutoRefresh() {
+  autoRefreshEnabled = !autoRefreshEnabled;
+  const el = document.getElementById('autoRefreshToggle');
+  const btn = document.getElementById('autoRefreshBtn');
+  el.classList.toggle('active', autoRefreshEnabled);
+  btn.classList.toggle('active', autoRefreshEnabled);
+  const dot = el.querySelector('.refresh-dot');
+  dot.style.display = autoRefreshEnabled ? 'inline-block' : 'none';
+  showToast(autoRefreshEnabled ? '自动刷新已开启 (每 5s)' : '自动刷新已关闭');
+}
+
+// ========== Row Selection ==========
+function selectRow(tr, idx, e) {
+  if (e.ctrlKey || e.metaKey) {
+    if (selectedRows.has(idx)) { selectedRows.delete(idx); tr.classList.remove('selected'); }
+    else { selectedRows.add(idx); tr.classList.add('selected'); }
+  } else {
+    selectedRows.clear();
+    document.querySelectorAll('.result-table tbody tr').forEach(r => r.classList.remove('selected'));
+    selectedRows.add(idx); tr.classList.add('selected');
+  }
+  updateSelectedInfo();
+}
+
+function updateSelectedInfo() {
+  const el = document.getElementById('sbarSelectedInfo');
+  const calcEl = document.getElementById('calcSelected');
+  const sumEl = document.getElementById('calcSum');
+  if (selectedRows.size === 0) {
+    el.style.display = 'none';
+    if (calcEl) calcEl.textContent = '0';
+    if (sumEl) sumEl.textContent = '-';
+  } else {
+    el.style.display = 'inline';
+    el.textContent = '| 已选 ' + selectedRows.size + ' 行';
+    if (calcEl) calcEl.textContent = selectedRows.size;
+    if (sumEl) sumEl.textContent = Array.from(selectedRows).reduce((a, b) => a + b + 1, 0);
+  }
+}
+
+// ========== Column Sort ==========
+function sortColumn(col, th) {
+  if (currentSortCol === col) {
+    currentSortDir = currentSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    currentSortCol = col; currentSortDir = 'asc';
+  }
+  document.querySelectorAll('.result-table th').forEach(h => {
+    h.classList.remove('sort-asc', 'sort-desc');
+  });
+  th.classList.add('sort-' + currentSortDir);
+  showToast('排序: ' + col + ' ' + (currentSortDir === 'asc' ? '升序' : '降序'));
+}
+
+function sortColumnAction(dir) {
+  if (ctxColName) {
+    const th = document.querySelector(`.result-table th[onclick*="${ctxColName}"]`);
+    if (th) sortColumn(ctxColName, th);
+  }
+}
+
+// ========== Pagination ==========
+let currentPage = 1; const totalPages = 1;
+function firstPage() { currentPage = 1; updatePageIndicator(); showToast('首页'); }
+function prevPage() { if (currentPage > 1) { currentPage--; updatePageIndicator(); showToast('上一页'); } }
+function nextPage() { if (currentPage < totalPages) { currentPage++; updatePageIndicator(); showToast('下一页'); } }
+function lastPage() { currentPage = totalPages; updatePageIndicator(); showToast('末页'); }
+function goToPage() {
+  const page = parseInt(document.getElementById('goPageInput').value, 10);
+  if (!isNaN(page) && page >= 1 && page <= totalPages) { currentPage = page; updatePageIndicator(); showToast('跳转到第 ' + page + ' 页'); }
+}
+function updatePageIndicator() { document.getElementById('pageIndicator').textContent = currentPage + '/' + totalPages; }
+
+// ========== Context Menus ==========
+function showGridContextMenu(e, row) {
+  e.preventDefault();
+  const menu = document.getElementById('rowContextMenu');
+  menu.style.display = 'block';
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 210) + 'px';
+  menu.style.top = Math.min(e.clientY, window.innerHeight - 300) + 'px';
+  document.getElementById('ctxBackdrop').style.display = 'block';
+  hideOtherContextMenus('rowContextMenu');
+}
+
+function showColContextMenu(e, col, th) {
+  e.preventDefault(); ctxColName = col;
+  const menu = document.getElementById('colContextMenu');
+  menu.style.display = 'block';
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 210) + 'px';
+  menu.style.top = Math.min(e.clientY, window.innerHeight - 280) + 'px';
+  document.getElementById('ctxBackdrop').style.display = 'block';
+  hideOtherContextMenus('colContextMenu');
+}
+
+function hideOtherContextMenus(exceptId) {
+  ['rowContextMenu', 'colContextMenu', 'tabContextMenu'].forEach(id => {
+    if (id !== exceptId) document.getElementById(id).style.display = 'none';
+  });
+}
+
+function hideAllContextMenus() {
+  document.getElementById('ctxBackdrop').style.display = 'none';
+  document.getElementById('rowContextMenu').style.display = 'none';
+  document.getElementById('colContextMenu').style.display = 'none';
+  document.getElementById('tabContextMenu').style.display = 'none';
+}
+
+// ========== Toast ==========
+let toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.style.opacity = '1';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+}
+
+// ========== Keyboard Shortcuts ==========
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'Enter') { e.preventDefault(); executeSQL(); }
+    if (e.key === 'w') { e.preventDefault(); const active = document.querySelector('.tab-item.active'); if (active && !active.classList.contains('pinned')) closeEditorTab(e, active.dataset.file); }
+    if (e.key === 'n') { e.preventDefault(); newEditorTab(); }
+  }
+  if (e.key === 'Escape') { hideAllContextMenus(); }
+});
+
+// ========== Init ==========
+buildToolbar('sql');
+updateTabOverflow();
+</script>
+</body>
+</html>

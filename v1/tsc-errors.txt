@@ -1,0 +1,1 @@
+﻿src/extensions/builtin/workbench/ui/views/ProjectSelectView.vue(378,25): error TS2339: Property 'path' does not exist on type 'never'.

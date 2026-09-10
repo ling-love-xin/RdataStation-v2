@@ -1,0 +1,3092 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>新增数据源 — RdataStation 原型 v4（网络配置文件系统）</title>
+    <style>
+      /* ============================================================
+   CSS 变量 & 全局复位 — 继承 v3 风格
+   ============================================================ */
+      :root {
+        --bg-base: #1e1e2e;
+        --bg-surface: #1a1b26;
+        --bg-raised: #11111b;
+        --bg-hover: rgba(255, 255, 255, 0.05);
+        --bg-active: #2a2a3c;
+        --border: rgba(255, 255, 255, 0.07);
+        --text-primary: #cdd6f4;
+        --text-secondary: #a6adc8;
+        --text-muted: #6c7086;
+        --accent: #89b4fa;
+        --accent-bg: rgba(137, 180, 250, 0.1);
+        --success: #a6e3a1;
+        --warning: #f9e2af;
+        --danger: #f38ba8;
+        --purple: #cba6f7;
+        --green: #94e2d5;
+        --orange: #fab387;
+        --radius: 8px;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: var(--bg-base);
+        color: var(--text-primary);
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        min-height: 100vh;
+        padding: 32px 20px;
+      }
+      .outer {
+        width: 100%;
+        max-width: 1200px;
+        transition: opacity 0.25s;
+      }
+
+      /* ===== 对话框壳 ===== */
+      .dialog {
+        background: var(--bg-surface);
+        border-radius: 12px;
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.05),
+          0 24px 64px rgba(0, 0, 0, 0.5);
+        display: flex;
+        flex-direction: column;
+        max-height: 780px;
+        overflow: hidden;
+      }
+      .dialog-titlebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 22px;
+        border-bottom: 1px solid var(--border);
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        user-select: none;
+        flex-shrink: 0;
+      }
+      .title-actions {
+        display: flex;
+        gap: 10px;
+      }
+      .title-actions .dot {
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+      }
+      .title-actions .dot.min {
+        background: #f9e2af;
+      }
+      .title-actions .dot.max {
+        background: #a6e3a1;
+      }
+      .title-actions .dot.cls {
+        background: #f38ba8;
+      }
+
+      .dialog-body {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      /* ===== 左侧栏 ===== */
+      .sidebar {
+        width: 250px;
+        min-width: 250px;
+        background: var(--bg-raised);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+        flex-shrink: 0;
+      }
+      .sidebar-search {
+        padding: 12px;
+        position: relative;
+      }
+      .sidebar-search input {
+        width: 100%;
+        height: 34px;
+        padding: 0 12px 0 34px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 12px;
+        outline: none;
+        transition: border 0.2s;
+      }
+      .sidebar-search input:focus {
+        border-color: var(--accent);
+      }
+      .sidebar-search .search-icon {
+        position: absolute;
+        left: 22px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        font-size: 14px;
+        pointer-events: none;
+      }
+
+      .saved-section {
+        padding: 0 0 6px;
+      }
+      .saved-section-title {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        padding: 8px 14px 6px;
+        letter-spacing: 0.7px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .saved-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-secondary);
+        transition: all 0.12s;
+      }
+      .saved-item:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .saved-item.active {
+        background: var(--bg-active);
+        color: var(--accent);
+        font-weight: 500;
+      }
+      .saved-item .type-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .saved-item .db-icon-mini {
+        width: 18px;
+        height: 18px;
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+      .db-icon-mini.mysql {
+        background: #00758f;
+        color: #fff;
+      }
+      .db-icon-mini.pg {
+        background: #336791;
+        color: #fff;
+      }
+      .db-icon-mini.sqlite {
+        background: #003b57;
+        color: #a6e3a1;
+      }
+      .db-icon-mini.duckdb {
+        background: #f9a825;
+        color: #000;
+      }
+      .saved-item .item-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .sidebar-divider {
+        height: 1px;
+        background: var(--border);
+        margin: 6px 12px;
+      }
+
+      .db-section {
+        padding: 4px 0;
+      }
+      .db-section-title {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        padding: 8px 14px 6px;
+        letter-spacing: 0.7px;
+      }
+      .db-category {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 14px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-muted);
+        transition: all 0.12s;
+      }
+      .db-category:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .db-category.expanded {
+        color: var(--text-primary);
+      }
+      .db-category .arrow {
+        font-size: 9px;
+        transition: transform 0.15s;
+        flex-shrink: 0;
+        width: 12px;
+      }
+      .db-category.expanded .arrow {
+        transform: rotate(90deg);
+      }
+      .db-category .cat-icon {
+        font-size: 15px;
+        width: 20px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      .db-category .cat-count {
+        margin-left: auto;
+        font-size: 10px;
+        color: var(--text-muted);
+        padding: 1px 6px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 8px;
+      }
+      .db-type-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px 6px 32px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-muted);
+        transition: all 0.12s;
+      }
+      .db-type-item:hover {
+        background: var(--bg-hover);
+        color: var(--text-secondary);
+      }
+      .db-type-item.selected {
+        background: var(--bg-active);
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .db-type-item .type-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .db-type-item .driver-count {
+        margin-left: auto;
+        font-size: 10px;
+        color: var(--text-muted);
+        padding: 1px 6px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 8px;
+      }
+
+      /* ===== 右侧主面板 ===== */
+      .main-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .panel-header {
+        padding: 16px 24px 12px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        flex-shrink: 0;
+      }
+      .header-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .header-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-muted);
+        width: 48px;
+        flex-shrink: 0;
+        text-align: right;
+      }
+      .header-input {
+        flex: 1;
+        height: 34px;
+        padding: 0 12px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 13px;
+        outline: none;
+        transition: border 0.2s;
+      }
+      .header-input:focus {
+        border-color: var(--accent);
+      }
+      textarea.header-input {
+        height: auto;
+        min-height: 44px;
+        resize: none;
+        padding: 10px 12px;
+      }
+
+      .scope-toggles {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-shrink: 0;
+      }
+      .scope-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text-secondary);
+        user-select: none;
+      }
+      .scope-checkbox .cb {
+        width: 15px;
+        height: 15px;
+        border: 1.5px solid rgba(255, 255, 255, 0.15);
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+        flex-shrink: 0;
+      }
+      .scope-checkbox input {
+        display: none;
+      }
+      .scope-checkbox input:checked + .cb {
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+      .scope-checkbox input:checked + .cb::after {
+        content: '✓';
+        color: var(--bg-raised);
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .scope-checkbox.disabled {
+        opacity: 0.35;
+        pointer-events: none;
+      }
+
+      .driver-select-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .driver-select {
+        height: 34px;
+        padding: 0 12px;
+        min-width: 200px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 12px;
+        outline: none;
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236c7086' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 10px center;
+        padding-right: 32px;
+        transition: border 0.2s;
+      }
+      .driver-select:focus {
+        border-color: var(--accent);
+      }
+      .uri-display {
+        flex: 1;
+        height: 34px;
+        padding: 0 12px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--success);
+        font-size: 11px;
+        font-family: 'JetBrains Mono', 'Consolas', monospace;
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .uri-edit-btn {
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        border-radius: 5px;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 14px;
+        flex-shrink: 0;
+        transition: all 0.12s;
+      }
+      .uri-edit-btn:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .uri-edit-btn.active {
+        background: var(--accent-bg);
+        color: var(--accent);
+      }
+
+      .tabs-bar {
+        display: flex;
+        gap: 0;
+        padding: 0 24px;
+        border-bottom: 1px solid var(--border);
+        background: #181825;
+        flex-shrink: 0;
+      }
+      .tab-btn {
+        padding: 10px 18px;
+        border: none;
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s;
+        border-bottom: 2px solid transparent;
+        position: relative;
+        top: 1px;
+      }
+      .tab-btn:hover {
+        color: var(--text-primary);
+      }
+      .tab-btn.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+
+      .tab-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px 24px;
+      }
+      .tab-pane {
+        display: none;
+      }
+      .tab-pane.active {
+        display: block;
+      }
+
+      .form-section {
+        margin-bottom: 22px;
+      }
+      .form-section .section-title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 12px;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .section-title .drv-tag {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+      }
+      .drv-tag.sqlx {
+        background: rgba(244, 102, 35, 0.15);
+        color: #f46623;
+      }
+      .drv-tag.diesel {
+        background: rgba(102, 68, 184, 0.15);
+        color: #b794f4;
+      }
+      .drv-tag.python {
+        background: rgba(55, 118, 171, 0.15);
+        color: #5d9fd3;
+      }
+      .drv-tag.go {
+        background: rgba(0, 173, 216, 0.15);
+        color: #00add8;
+      }
+      .drv-tag.native {
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--text-secondary);
+      }
+
+      .form-row {
+        display: flex;
+        gap: 14px;
+        margin-bottom: 12px;
+      }
+      .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .form-group.f2 {
+        flex: 2;
+      }
+      .form-group.f1 {
+        flex: 1;
+      }
+      .form-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        font-weight: 500;
+      }
+      .form-input,
+      .form-select {
+        height: 34px;
+        padding: 0 12px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 13px;
+        outline: none;
+        transition: border 0.2s;
+        width: 100%;
+      }
+      .form-input:focus,
+      .form-select:focus {
+        border-color: var(--accent);
+      }
+      .form-select {
+        cursor: pointer;
+      }
+      .form-hint {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 3px;
+      }
+      .info-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px 14px;
+        background: rgba(137, 180, 250, 0.04);
+        border: 1px solid rgba(137, 180, 250, 0.1);
+        border-radius: 6px;
+        font-size: 12px;
+        color: var(--accent);
+        margin-bottom: 16px;
+        line-height: 1.5;
+      }
+
+      .file-input-row {
+        display: flex;
+        gap: 8px;
+      }
+      .file-input-row .form-input {
+        flex: 1;
+      }
+      .btn-browse {
+        height: 34px;
+        padding: 0 14px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-secondary);
+        font-size: 12px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 0.15s;
+      }
+      .btn-browse:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .props-table {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        font-size: 12px;
+      }
+      .props-table th {
+        text-align: left;
+        padding: 10px 14px;
+        background: var(--bg-raised);
+        color: var(--text-muted);
+        font-weight: 600;
+        border-bottom: 1px solid var(--border);
+      }
+      .props-table td {
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-secondary);
+      }
+      .props-table tr:last-child td {
+        border-bottom: none;
+      }
+      .props-table td input {
+        width: 100%;
+        height: 30px;
+        padding: 0 10px;
+        background: var(--bg-raised);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 4px;
+        color: var(--text-primary);
+        font-size: 12px;
+        outline: none;
+      }
+      .props-table td input:focus {
+        border-color: var(--accent);
+      }
+      .cap-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+      }
+      .cap-badge.yes {
+        background: rgba(166, 227, 161, 0.08);
+        color: var(--success);
+      }
+      .cap-badge.no {
+        background: rgba(243, 139, 168, 0.08);
+        color: var(--danger);
+      }
+
+      /* ============================================================
+   网络 Tab — 配置文件选择器 + 拓扑预览
+   ============================================================ */
+      .network-hint {
+        font-size: 12px;
+        color: var(--text-muted);
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px dashed rgba(255, 255, 255, 0.06);
+        border-radius: var(--radius);
+        margin-bottom: 18px;
+        line-height: 1.6;
+        text-align: center;
+      }
+      .network-hint strong {
+        color: var(--accent);
+      }
+
+      .profile-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+        padding: 10px 14px;
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        transition: border-color 0.2s;
+      }
+      .profile-row:hover {
+        border-color: rgba(255, 255, 255, 0.12);
+      }
+      .profile-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        flex-shrink: 0;
+      }
+      .profile-icon.ssh {
+        background: rgba(166, 227, 161, 0.12);
+        color: var(--success);
+      }
+      .profile-icon.ssl {
+        background: rgba(137, 180, 250, 0.12);
+        color: var(--accent);
+      }
+      .profile-icon.proxy {
+        background: rgba(250, 179, 135, 0.12);
+        color: var(--orange);
+      }
+      .profile-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        width: 48px;
+        flex-shrink: 0;
+      }
+      .profile-select {
+        flex: 1;
+        height: 34px;
+        padding: 0 12px;
+        background: var(--bg-surface);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-size: 12px;
+        outline: none;
+        cursor: pointer;
+        transition: border 0.2s;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236c7086' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 10px center;
+        padding-right: 32px;
+      }
+      .profile-select:focus {
+        border-color: var(--accent);
+      }
+      .profile-select.custom {
+        color: var(--warning);
+      }
+      .profile-select option[data-parent='global'] {
+        color: var(--success);
+      }
+      .profile-select option[data-parent='project'] {
+        color: var(--purple);
+      }
+      .profile-select option[data-parent='custom'] {
+        color: var(--warning);
+      }
+
+      .profile-scope-badge {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-weight: 600;
+        flex-shrink: 0;
+      }
+      .profile-scope-badge.global {
+        background: rgba(166, 227, 161, 0.1);
+        color: var(--success);
+      }
+      .profile-scope-badge.project {
+        background: rgba(203, 166, 247, 0.1);
+        color: var(--purple);
+      }
+      .profile-scope-badge.custom {
+        background: rgba(249, 226, 175, 0.1);
+        color: var(--warning);
+      }
+
+      .btn-manage {
+        height: 30px;
+        padding: 0 10px;
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 5px;
+        color: var(--text-muted);
+        font-size: 11px;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: all 0.12s;
+        white-space: nowrap;
+      }
+      .btn-manage:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--accent-bg);
+      }
+
+      /* 拓扑预览 */
+      .topo-preview {
+        margin-top: 18px;
+        padding: 16px;
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+      }
+      .topo-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 12px;
+      }
+      .topo-path {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        flex-wrap: wrap;
+        font-size: 12px;
+      }
+      .topo-node {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        background: var(--bg-active);
+        border-radius: 6px;
+        color: var(--text-secondary);
+        font-weight: 500;
+        border: 1px solid var(--border);
+      }
+      .topo-node.self {
+        background: rgba(137, 180, 250, 0.06);
+        border-color: rgba(137, 180, 250, 0.15);
+        color: var(--accent);
+      }
+      .topo-node.ssh-jump {
+        background: rgba(166, 227, 161, 0.06);
+        border-color: rgba(166, 227, 161, 0.15);
+        color: var(--success);
+      }
+      .topo-node.db-target {
+        background: rgba(250, 179, 135, 0.06);
+        border-color: rgba(250, 179, 135, 0.15);
+        color: var(--orange);
+      }
+      .topo-node.proxy-node {
+        background: rgba(203, 166, 247, 0.06);
+        border-color: rgba(203, 166, 247, 0.15);
+        color: var(--purple);
+      }
+      .topo-arrow {
+        display: flex;
+        align-items: center;
+        color: var(--text-muted);
+        font-size: 10px;
+        padding: 0 6px;
+        flex-shrink: 0;
+      }
+      .topo-arrow-label {
+        font-size: 9px;
+        color: var(--text-muted);
+        padding: 2px 6px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 3px;
+        white-space: nowrap;
+      }
+      .topo-empty {
+        text-align: center;
+        padding: 20px;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+      .topo-empty .icon {
+        font-size: 28px;
+        margin-bottom: 8px;
+        opacity: 0.3;
+      }
+
+      /* ============================================================
+   网络配置文件管理器 — 覆盖层
+   ============================================================ */
+      .overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 10000;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: opacity 0.2s;
+      }
+      .overlay.hidden {
+        display: none;
+      }
+
+      .manager-dialog {
+        width: 720px;
+        max-height: 620px;
+        background: var(--bg-surface);
+        border-radius: 12px;
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.05),
+          0 32px 80px rgba(0, 0, 0, 0.6);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .manager-titlebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--border);
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        flex-shrink: 0;
+      }
+      .manager-titlebar .close-btn {
+        width: 28px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        border-radius: 5px;
+        color: var(--text-muted);
+        font-size: 18px;
+        cursor: pointer;
+        transition: all 0.12s;
+      }
+      .manager-titlebar .close-btn:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .manager-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 20px;
+      }
+      .manager-tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 16px;
+      }
+      .manager-tab-btn {
+        padding: 8px 20px;
+        border: none;
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.15s;
+      }
+      .manager-tab-btn:hover {
+        color: var(--text-primary);
+      }
+      .manager-tab-btn.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+
+      /* profile card in manager */
+      .profile-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        margin-bottom: 8px;
+        transition: border-color 0.15s;
+      }
+      .profile-card:hover {
+        border-color: rgba(255, 255, 255, 0.12);
+      }
+      .profile-card-info {
+        flex: 1;
+        min-width: 0;
+      }
+      .profile-card-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 3px;
+      }
+      .profile-card-detail {
+        font-size: 11px;
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .profile-card-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .btn-card {
+        width: 28px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 5px;
+        color: var(--text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.12s;
+      }
+      .btn-card:hover {
+        border-color: rgba(255, 255, 255, 0.15);
+        color: var(--text-primary);
+      }
+      .btn-card.danger:hover {
+        border-color: var(--danger);
+        color: var(--danger);
+      }
+      .btn-card.use {
+        min-width: 48px;
+        font-size: 10px;
+        font-weight: 600;
+      }
+      .btn-card.use:hover {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #111;
+      }
+
+      .btn-add-profile {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        padding: 10px;
+        background: transparent;
+        border: 1px dashed rgba(255, 255, 255, 0.08);
+        border-radius: var(--radius);
+        color: var(--text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .btn-add-profile:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--accent-bg);
+      }
+
+      .empty-profiles {
+        text-align: center;
+        padding: 32px 16px;
+        color: var(--text-muted);
+        font-size: 13px;
+      }
+
+      /* inline edit form */
+      .inline-form {
+        padding: 14px;
+        background: var(--bg-surface);
+        border: 1px solid var(--accent);
+        border-radius: var(--radius);
+        margin-bottom: 12px;
+      }
+      .inline-form .form-row:last-child {
+        margin-bottom: 0;
+      }
+      .btn-inline {
+        height: 32px;
+        padding: 0 14px;
+        border: none;
+        border-radius: 5px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.12s;
+      }
+      .btn-inline.save {
+        background: var(--accent);
+        color: #111;
+      }
+      .btn-inline.save:hover {
+        filter: brightness(1.1);
+      }
+      .btn-inline.cancel {
+        background: transparent;
+        color: var(--text-muted);
+      }
+      .btn-inline.cancel:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+
+      /* 高级 tab */
+      .adv-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+      .accel-card {
+        border: 1px solid rgba(249, 168, 37, 0.2);
+        border-radius: var(--radius);
+        padding: 16px;
+        margin-top: 16px;
+        background: rgba(249, 168, 37, 0.03);
+      }
+      .accel-card .accel-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .accel-card .accel-header .accel-icon {
+        font-size: 18px;
+      }
+      .accel-card .accel-header .accel-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--warning);
+      }
+      .accel-card .accel-header .accel-switch {
+        margin-left: auto;
+      }
+
+      /* switch toggle */
+      .switch-toggle {
+        width: 36px;
+        height: 20px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        position: relative;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      .switch-toggle.on {
+        background: var(--accent);
+      }
+      .switch-toggle::after {
+        content: '';
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        transition: left 0.2s;
+      }
+      .switch-toggle.on::after {
+        left: 18px;
+      }
+
+      /* 文件 DB 无网络提示 */
+      .network-file-db-hint {
+        text-align: center;
+        padding: 40px 20px;
+      }
+      .network-file-db-hint .icon {
+        font-size: 42px;
+        margin-bottom: 14px;
+        opacity: 0.3;
+      }
+      .network-file-db-hint h3 {
+        font-size: 15px;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+      }
+      .network-file-db-hint p {
+        font-size: 12px;
+        color: var(--text-muted);
+        line-height: 1.6;
+      }
+
+      /* 底部操作栏 */
+      .dialog-footer {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 24px;
+        border-top: 1px solid var(--border);
+        background: #181825;
+        flex-shrink: 0;
+      }
+      .test-result {
+        flex: 1;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .test-result.success {
+        color: var(--success);
+      }
+      .test-result.error {
+        color: var(--danger);
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 18px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s;
+        border: none;
+      }
+      .btn-test {
+        background: var(--bg-raised);
+        color: var(--text-secondary);
+        border: 1px solid var(--border);
+      }
+      .btn-test:hover {
+        background: var(--bg-active);
+        color: var(--text-primary);
+      }
+      .btn-cancel {
+        background: transparent;
+        color: var(--text-muted);
+      }
+      .btn-cancel:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #111;
+        font-weight: 600;
+      }
+      .btn-primary:hover {
+        filter: brightness(1.1);
+      }
+
+      /* 滚动条 */
+      ::-webkit-scrollbar {
+        width: 5px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .watermark {
+        font-size: 10px;
+        color: var(--text-muted);
+        text-align: center;
+        margin-top: 12px;
+        opacity: 0.4;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="outer" id="mainOuter">
+      <!-- ============================================================
+       主对话框 — 新增数据源
+       ============================================================ -->
+      <div class="dialog">
+        <div class="dialog-titlebar">
+          <span id="dialogTitle">✦ 添加数据源</span>
+          <div class="title-actions"
+            ><span class="dot min"></span><span class="dot max"></span><span class="dot cls"></span
+          ></div>
+        </div>
+
+        <div class="dialog-body">
+          <!-- ===== 左侧栏: 暂存列表 + 数据库分类 ===== -->
+          <div class="sidebar">
+            <div class="sidebar-search">
+              <span class="search-icon">🔍</span>
+              <input
+                type="text"
+                id="sidebarSearch"
+                placeholder="搜索数据库类型..."
+                oninput="filterDbTree(this.value)"
+              />
+            </div>
+
+            <div class="saved-section" id="stagingSection">
+              <div class="saved-section-title">
+                暂存列表
+                <span
+                  style="font-weight: 400; opacity: 0.5; cursor: pointer"
+                  onclick="addStagingEntry()"
+                  title="添加新数据源到暂存区"
+                  >+ 添加</span
+                >
+              </div>
+              <div class="saved-item active" id="staging-item-0" onclick="selectStaging(0)">
+                <span
+                  class="type-dot"
+                  style="background: var(--accent); width: 7px; height: 7px; border-radius: 50%"
+                ></span>
+                <span class="db-icon-mini mysql">My</span>
+                <span class="item-name">MySQL@localhost</span>
+                <span
+                  style="font-size: 10px; color: var(--text-muted); cursor: pointer; flex-shrink: 0"
+                  onclick="
+                    event.stopPropagation()
+                    removeStagingEntry(0)
+                  "
+                  >✕</span
+                >
+              </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="db-section">
+              <div class="db-section-title">数据库类型</div>
+
+              <div
+                class="db-category expanded"
+                id="cat-relational"
+                onclick="toggleCategory('relational')"
+              >
+                <span class="arrow">▶</span><span class="cat-icon">🗄</span><span>关系型数据库</span
+                ><span class="cat-count">4</span>
+              </div>
+              <div id="items-relational">
+                <div
+                  class="db-type-item selected"
+                  data-db="mysql"
+                  onclick="selectDbType('mysql', event)"
+                  ><span class="type-dot" style="background: #00758f"></span>MySQL<span
+                    class="driver-count"
+                    >4 驱动</span
+                  ></div
+                >
+                <div
+                  class="db-type-item"
+                  data-db="postgresql"
+                  onclick="selectDbType('postgresql', event)"
+                  ><span class="type-dot" style="background: #336791"></span>PostgreSQL<span
+                    class="driver-count"
+                    >3 驱动</span
+                  ></div
+                >
+                <div class="db-type-item" data-db="mariadb" onclick="selectDbType('mariadb', event)"
+                  ><span class="type-dot" style="background: #c0765a"></span>MariaDB<span
+                    class="driver-count"
+                    >1 驱动</span
+                  ></div
+                >
+                <div
+                  class="db-type-item"
+                  data-db="sqlserver"
+                  onclick="selectDbType('sqlserver', event)"
+                  ><span class="type-dot" style="background: #cc2927"></span>SQL Server<span
+                    class="driver-count"
+                    >1 驱动</span
+                  ></div
+                >
+              </div>
+
+              <div class="db-category" id="cat-file" onclick="toggleCategory('file')">
+                <span class="arrow">▶</span><span class="cat-icon">📁</span><span>文件数据库</span
+                ><span class="cat-count">2</span>
+              </div>
+              <div id="items-file" style="display: none">
+                <div class="db-type-item" data-db="sqlite" onclick="selectDbType('sqlite', event)"
+                  ><span class="type-dot" style="background: #687386"></span>SQLite<span
+                    class="driver-count"
+                    >2 驱动</span
+                  ></div
+                >
+                <div class="db-type-item" data-db="duckdb" onclick="selectDbType('duckdb', event)"
+                  ><span class="type-dot" style="background: #f9a825"></span>DuckDB<span
+                    class="driver-count"
+                    >2 驱动</span
+                  ></div
+                >
+              </div>
+
+              <div class="db-category" id="cat-nosql" onclick="toggleCategory('nosql')">
+                <span class="arrow">▶</span><span class="cat-icon">📡</span><span>NoSQL</span
+                ><span class="cat-count">2</span>
+              </div>
+              <div id="items-nosql" style="display: none">
+                <div class="db-type-item" data-db="mongodb" onclick="selectDbType('mongodb', event)"
+                  ><span class="type-dot" style="background: #4db33d"></span>MongoDB<span
+                    class="driver-count"
+                    >1 驱动</span
+                  ></div
+                >
+                <div class="db-type-item" data-db="redis" onclick="selectDbType('redis', event)"
+                  ><span class="type-dot" style="background: #d82c20"></span>Redis<span
+                    class="driver-count"
+                    >1 驱动</span
+                  ></div
+                >
+              </div>
+
+              <div class="db-category" id="cat-analytics" onclick="toggleCategory('analytics')">
+                <span class="arrow">▶</span><span class="cat-icon">📊</span><span>分析型数据库</span
+                ><span class="cat-count">1</span>
+              </div>
+              <div id="items-analytics" style="display: none">
+                <div
+                  class="db-type-item"
+                  data-db="clickhouse"
+                  onclick="selectDbType('clickhouse', event)"
+                  ><span class="type-dot" style="background: #f9a825"></span>ClickHouse<span
+                    class="driver-count"
+                    >1 驱动</span
+                  ></div
+                >
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== 右侧主面板 ===== -->
+          <div class="main-panel">
+            <!-- === Header 三行 === -->
+            <div class="panel-header">
+              <div class="header-row">
+                <span class="header-label">名称</span>
+                <input
+                  class="header-input"
+                  id="nameInput"
+                  value="MySQL@localhost"
+                  placeholder="数据源名称"
+                  style="max-width: 280px; font-weight: 500"
+                />
+                <div class="scope-toggles">
+                  <label class="scope-checkbox" id="scopeGlobalLabel">
+                    <input type="checkbox" id="scopeGlobal" checked onchange="onScopeChange()" />
+                    <span class="cb"></span> 全局链接
+                  </label>
+                  <label class="scope-checkbox" id="scopeProjectLabel">
+                    <input type="checkbox" id="scopeProject" onchange="onScopeChange()" />
+                    <span class="cb"></span> 项目链接
+                  </label>
+                </div>
+              </div>
+              <div class="header-row">
+                <span class="header-label">描述</span>
+                <textarea
+                  class="header-input"
+                  id="descInput"
+                  rows="2"
+                  placeholder="可选：描述这个数据源的用途"
+                  style="height: 44px; resize: none"
+                >
+生产环境 MySQL 主库</textarea
+                >
+              </div>
+              <div class="header-row">
+                <span class="header-label">驱动</span>
+                <select
+                  class="driver-select"
+                  id="driverSelect"
+                  onchange="onDriverChange(this.value)"
+                ></select>
+                <span style="color: var(--text-muted); flex-shrink: 0">URI</span>
+                <div class="uri-display" id="uriDisplay">mysql://root:****@localhost:3306/mydb</div>
+                <button class="uri-edit-btn" title="编辑 URI" onclick="toggleUriEdit()">✎</button>
+              </div>
+            </div>
+
+            <!-- === 标签页 === -->
+            <div class="tabs-bar">
+              <button class="tab-btn active" onclick="switchTab('general')">常规</button>
+              <button class="tab-btn" onclick="switchTab('network')">网络</button>
+              <button class="tab-btn" onclick="switchTab('capabilities')">能力</button>
+              <button class="tab-btn" onclick="switchTab('properties')">驱动属性</button>
+              <button class="tab-btn" onclick="switchTab('advanced')">高级</button>
+            </div>
+
+            <div class="tab-content">
+              <!-- ========== 常规 ========== -->
+              <div class="tab-pane active" id="tab-general">
+                <div class="info-banner" id="driverBanner">
+                  <span class="bicon">🔌</span>
+                  <span id="driverInfo">sqlx (Rust, async) — 编译期 SQL 校验 + Arrow 零拷贝</span>
+                </div>
+
+                <div class="form-section">
+                  <div class="section-title">
+                    <span class="drv-tag sqlx" id="drvTag">sqlx</span> 连接参数
+                  </div>
+                  <div id="form-network" class="form-fields">
+                    <div class="form-row">
+                      <div class="form-group f2"
+                        ><span class="form-label">主机</span
+                        ><input class="form-input" placeholder="localhost" value="localhost"
+                      /></div>
+                      <div class="form-group f1"
+                        ><span class="form-label">端口</span
+                        ><input class="form-input" type="number" value="3306"
+                      /></div>
+                    </div>
+                    <div class="form-row">
+                      <div class="form-group f1"
+                        ><span class="form-label">数据库</span
+                        ><input class="form-input" placeholder="mydb" value="mydb"
+                      /></div>
+                    </div>
+                  </div>
+                  <div id="form-file" class="form-fields" style="display: none">
+                    <div class="form-row">
+                      <div class="form-group" style="flex: 1">
+                        <span class="form-label">数据库文件</span>
+                        <div class="file-input-row">
+                          <input
+                            class="form-input"
+                            placeholder="./database.db"
+                            value="./database.db"
+                          />
+                          <button class="btn-browse">📂 浏览</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="form-auth" class="form-fields">
+                    <div class="form-row" style="margin-top: 8px">
+                      <div class="form-group f1"
+                        ><span class="form-label">用户</span
+                        ><input class="form-input" placeholder="root" value="root"
+                      /></div>
+                      <div class="form-group f1"
+                        ><span class="form-label">密码</span
+                        ><input class="form-input" type="password" value="secret123"
+                      /></div>
+                    </div>
+                  </div>
+                  <div id="form-driver-specific" style="margin-top: 12px"></div>
+                </div>
+              </div>
+
+              <!-- ========== 网络 ========== -->
+              <div class="tab-pane" id="tab-network">
+                <!-- 网络型数据库 -->
+                <div id="network-content">
+                  <div class="network-hint">
+                    <strong>配置文件引用模式</strong> —
+                    每种网络协议独立创建和管理配置，数据源只需下拉选择即可复用。<br />
+                    也可选择<strong>「自定义」</strong>直接填写参数，配置将自动归属到当前页面勾选的存储范围。
+                  </div>
+
+                  <!-- SSH -->
+                  <div class="profile-row">
+                    <div class="profile-icon ssh">🔒</div>
+                    <span class="profile-label">SSH 隧道</span>
+                    <select
+                      class="profile-select"
+                      id="sshSelect"
+                      onchange="onSshSelectChange(this.value)"
+                    >
+                      <option value="" data-parent="none">— 直连，不使用 SSH —</option>
+                      <option value="profile-prod-bastion" data-parent="global"
+                        >🌐 生产跳板机</option
+                      >
+                      <option value="profile-test-bastion" data-parent="global"
+                        >🌐 测试跳板机</option
+                      >
+                      <option value="profile-us-bastion" data-parent="global">🌐 美西跳板机</option>
+                      <option value="profile-project-tunnel" data-parent="project"
+                        >📝 项目专用隧道</option
+                      >
+                      <option value="custom" data-parent="custom" class="custom"
+                        >⚡ 自定义...</option
+                      >
+                    </select>
+                    <span
+                      class="profile-scope-badge global"
+                      id="sshScopeBadge"
+                      style="display: none"
+                      >全局</span
+                    >
+                    <button class="btn-manage" onclick="openProfileManager('ssh')">管理</button>
+                  </div>
+                  <div id="sshCustomForm" style="display: none"></div>
+
+                  <!-- SSL/TLS -->
+                  <div class="profile-row">
+                    <div class="profile-icon ssl">🛡</div>
+                    <span class="profile-label">SSL/TLS</span>
+                    <select
+                      class="profile-select"
+                      id="sslSelect"
+                      onchange="onSslSelectChange(this.value)"
+                    >
+                      <option value="" data-parent="none">— 不使用 SSL —</option>
+                      <option value="profile-rds-default" data-parent="global">🌐 RDS 默认</option>
+                      <option value="profile-self-signed" data-parent="global">🌐 自签证书</option>
+                      <option value="profile-prod-rds" data-parent="project">📝 生产 RDS</option>
+                      <option value="profile-staging-cert" data-parent="project"
+                        >📝 预发布证书</option
+                      >
+                      <option value="custom" data-parent="custom" class="custom"
+                        >⚡ 自定义...</option
+                      >
+                    </select>
+                    <span
+                      class="profile-scope-badge global"
+                      id="sslScopeBadge"
+                      style="display: none"
+                      >全局</span
+                    >
+                    <button class="btn-manage" onclick="openProfileManager('ssl')">管理</button>
+                  </div>
+                  <div id="sslCustomForm" style="display: none"></div>
+
+                  <!-- Proxy -->
+                  <div class="profile-row">
+                    <div class="profile-icon proxy">🌐</div>
+                    <span class="profile-label">代理</span>
+                    <select
+                      class="profile-select"
+                      id="proxySelect"
+                      onchange="onProxySelectChange(this.value)"
+                    >
+                      <option value="" data-parent="none">— 直连，不使用代理 —</option>
+                      <option value="profile-corp-proxy" data-parent="global">🌐 公司代理</option>
+                      <option value="profile-vpn-proxy" data-parent="global">🌐 VPN代理</option>
+                      <option value="profile-client-proxy" data-parent="project"
+                        >📝 客户代理</option
+                      >
+                      <option value="custom" data-parent="custom" class="custom"
+                        >⚡ 自定义...</option
+                      >
+                    </select>
+                    <span
+                      class="profile-scope-badge global"
+                      id="proxyScopeBadge"
+                      style="display: none"
+                      >全局</span
+                    >
+                    <button class="btn-manage" onclick="openProfileManager('proxy')">管理</button>
+                  </div>
+                  <div id="proxyCustomForm" style="display: none"></div>
+
+                  <!-- 拓扑预览 -->
+                  <div class="topo-preview" id="topoPreview">
+                    <div class="topo-title">📡 数据路径预览</div>
+                    <div id="topoContent"></div>
+                  </div>
+                </div>
+
+                <!-- 文件型数据库提示 -->
+                <div id="network-file-hint" style="display: none">
+                  <div class="network-file-db-hint">
+                    <div class="icon">🗄</div>
+                    <h3>文件数据库无需网络配置</h3>
+                    <p>
+                      SQLite / DuckDB 是本地文件数据库，<br />
+                      数据存储在本地文件系统中，<br />
+                      不需要 SSH 隧道、SSL 或代理配置。<br /><br />
+                      数据库文件路径请在「常规」标签页中配置。
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ========== 能力 ========== -->
+              <div class="tab-pane" id="tab-capabilities">
+                <div class="info-banner">
+                  <span class="bicon">📊</span>
+                  <span
+                    >驱动能力矩阵：动态展示当前驱动支持的功能。不同驱动 ×
+                    不同数据库提供不同的能力。</span
+                  >
+                </div>
+                <table class="props-table">
+                  <thead
+                    ><tr
+                      ><th style="width: 35%">能力项</th><th style="width: 20%">状态</th
+                      ><th>说明</th></tr
+                    ></thead
+                  >
+                  <tbody id="capTableBody"></tbody>
+                </table>
+              </div>
+
+              <!-- ========== 驱动属性 ========== -->
+              <div class="tab-pane" id="tab-properties">
+                <div class="info-banner">
+                  <span class="bicon">⚙</span>
+                  <span>驱动属性：可扩展的 key-value 配置，不同驱动暴露不同的可调参数。</span>
+                </div>
+                <table class="props-table">
+                  <thead
+                    ><tr
+                      ><th style="width: 30%">属性名</th><th style="width: 35%">值</th
+                      ><th>说明</th></tr
+                    ></thead
+                  >
+                  <tbody id="propsTableBody"></tbody>
+                </table>
+              </div>
+
+              <!-- ========== 高级 ========== -->
+              <div class="tab-pane" id="tab-advanced">
+                <div class="form-section">
+                  <div class="section-title">连接参数</div>
+                  <div class="adv-grid">
+                    <div class="form-group"
+                      ><span class="form-label">连接超时 (秒)</span
+                      ><input class="form-input" type="number" value="30"
+                    /></div>
+                    <div class="form-group"
+                      ><span class="form-label">查询超时 (秒)</span
+                      ><input class="form-input" type="number" value="0" placeholder="0=不限制"
+                    /></div>
+                    <div class="form-group"
+                      ><span class="form-label">保活间隔 (秒)</span
+                      ><input class="form-input" type="number" value="60" placeholder="0=禁用"
+                    /></div>
+                    <div class="form-group"
+                      ><span class="form-label">最大重连次数</span
+                      ><input class="form-input" type="number" value="3"
+                    /></div>
+                  </div>
+                </div>
+                <div class="form-section">
+                  <div class="section-title">Schema 加载</div>
+                  <select class="form-select" style="max-width: 280px">
+                    <option>连接时自动加载所有 Schema</option>
+                    <option>按需手动加载 Schema</option>
+                    <option>仅加载指定 Schema 列表</option>
+                  </select>
+                </div>
+
+                <div class="form-section" id="duckdb-accel-section">
+                  <div class="section-title" style="color: var(--warning)">⚡ 本地加速引擎</div>
+                  <div class="accel-card">
+                    <div class="accel-header">
+                      <span class="accel-icon">🦆</span>
+                      <span class="accel-title">启用 DuckDB 本地查询加速</span>
+                      <div class="accel-switch">
+                        <div
+                          class="switch-toggle"
+                          onclick="
+                            this.classList.toggle('on')
+                            document
+                              .getElementById('duckdbAccelBody')
+                              .classList.toggle('show', this.classList.contains('on'))
+                          "
+                        ></div>
+                      </div>
+                    </div>
+                    <div class="accel-body" id="duckdbAccelBody" style="display: none">
+                      <p
+                        class="accel-desc"
+                        style="
+                          font-size: 11px;
+                          color: var(--text-muted);
+                          margin-bottom: 12px;
+                          line-height: 1.5;
+                        "
+                      >
+                        通过本地 DuckDB 实例对
+                        <strong id="accelTargetDb">MySQL</strong> 的查询结果进行加速。适合 OLAP
+                        分析场景。
+                      </p>
+                      <div class="form-row">
+                        <div class="form-group f1"
+                          ><span class="form-label">同步策略</span
+                          ><select class="form-select"
+                            ><option>自动：查询时自动同步</option
+                            ><option>定时：按间隔同步</option
+                            ><option>手动：仅手动触发</option></select
+                          ></div
+                        >
+                        <div class="form-group f1"
+                          ><span class="form-label">同步间隔 (分钟)</span
+                          ><input class="form-input" type="number" value="15" disabled
+                        /></div>
+                      </div>
+                      <div class="form-row">
+                        <div class="form-group f1"
+                          ><span class="form-label">内存限制 (MB)</span
+                          ><input class="form-input" type="number" value="512" placeholder="512"
+                        /></div>
+                        <div class="form-group f1"
+                          ><span class="form-label">线程数</span
+                          ><input class="form-input" type="number" value="4"
+                        /></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-section">
+                  <div class="section-title">字符编码</div>
+                  <select class="form-select" style="max-width: 200px">
+                    <option>UTF-8（默认）</option
+                    ><option>GBK</option
+                    ><option>Latin1</option
+                    ><option>UTF-16</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- === 底部操作栏 === -->
+            <div class="dialog-footer">
+              <div class="test-result" id="testResultArea"></div>
+              <button class="btn btn-test" onclick="pretendTest()">🔌 测试连接</button>
+              <button class="btn btn-cancel" onclick="alert('取消')">取消</button>
+              <button class="btn btn-primary" onclick="handleSave()">保存数据源</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="watermark">
+        ← 点击「网络」标签体验配置文件选择器 · 选择不同协议观察拓扑变化 ·
+        点击「管理」打开协议管理器<br />
+        勾选「全局链接/项目链接」观察范围归属 · 切换左侧 SQLite/DuckDB 观察文件数据库适配
+      </p>
+    </div>
+
+    <!-- ============================================================
+     网络配置文件管理器 — 覆盖层
+     ============================================================ -->
+    <div class="overlay hidden" id="profileManagerOverlay" onclick="closeProfileManager(event)">
+      <div class="manager-dialog" onclick="event.stopPropagation()">
+        <div class="manager-titlebar">
+          <span id="managerTitle">🔒 SSH 配置文件管理器</span>
+          <button class="close-btn" onclick="closeProfileManager()">✕</button>
+        </div>
+        <div class="manager-tabs">
+          <button class="manager-tab-btn active" onclick="switchManagerTab('ssh')">SSH 隧道</button>
+          <button class="manager-tab-btn" onclick="switchManagerTab('ssl')">SSL/TLS</button>
+          <button class="manager-tab-btn" onclick="switchManagerTab('proxy')">代理</button>
+        </div>
+        <div class="manager-body" id="managerBody"></div>
+      </div>
+    </div>
+
+    <script>
+      // ============================================================
+      // 驱动注册表
+      // ============================================================
+      const DRIVERS = {
+        'mysql-sqlx': {
+          id: 'mysql-sqlx',
+          dbType: 'mysql',
+          lang: 'Rust',
+          tag: 'sqlx',
+          tagClass: 'sqlx',
+          name: 'sqlx (Rust, async)',
+          urlTemplate: 'mysql://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 3306,
+          isFile: false,
+          info: '异步运行时 + 编译期 SQL 校验 + Arrow 零拷贝。连接池 sqlx::MySqlPool。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 1,
+            arrowExport: 1,
+            pluginCompat: 0,
+          },
+          properties: {
+            'pool.max_connections': '10',
+            'pool.min_connections': '1',
+            'pool.acquire_timeout': '30',
+            tcp_nodelay: 'true',
+          },
+        },
+        'mysql-diesel': {
+          id: 'mysql-diesel',
+          dbType: 'mysql',
+          lang: 'Rust',
+          tag: 'diesel',
+          tagClass: 'diesel',
+          name: 'diesel (Rust, ORM)',
+          urlTemplate: 'mysql://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 3306,
+          isFile: false,
+          info: 'ORM 风格 + Schema DSL + 编译期迁移。适合需要 ORM 映射的场景。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 1,
+            arrowExport: 0,
+            pluginCompat: 0,
+          },
+          properties: { 'diesel.print_schema': 'false', 'connection.keep_alive': '60' },
+        },
+        'mysql-python': {
+          id: 'mysql-python',
+          dbType: 'mysql',
+          lang: 'Python',
+          tag: 'python',
+          tagClass: 'python',
+          name: 'Python (WASI, PyMySQL)',
+          urlTemplate: 'mysql+pymysql://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 3306,
+          isFile: false,
+          info: 'Python WASI 沙箱：Pandas DataFame 直写。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 0,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { 'pandas.chunksize': '10000', charset: 'utf8mb4' },
+        },
+        'mysql-go': {
+          id: 'mysql-go',
+          dbType: 'mysql',
+          lang: 'Go',
+          tag: 'go',
+          tagClass: 'go',
+          name: 'Go (WASI, go-sql-driver)',
+          urlTemplate: '{user}:{password}@tcp({host}:{port})/{database}',
+          defaultPort: 3306,
+          isFile: false,
+          info: 'Go WASI 高性能查询引擎。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 1,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { maxAllowedPacket: '4194304', parseTime: 'true' },
+        },
+        'pg-sqlx': {
+          id: 'pg-sqlx',
+          dbType: 'postgresql',
+          lang: 'Rust',
+          tag: 'sqlx',
+          tagClass: 'sqlx',
+          name: 'sqlx (Rust, async)',
+          urlTemplate: 'postgres://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 5432,
+          isFile: false,
+          info: '异步运行时 + COPY 协议 + 编译期 SQL 校验。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 1,
+            arrowExport: 1,
+            pluginCompat: 0,
+          },
+          properties: { 'pool.max_connections': '20', application_name: 'RdataStation' },
+        },
+        'pg-diesel': {
+          id: 'pg-diesel',
+          dbType: 'postgresql',
+          lang: 'Rust',
+          tag: 'diesel',
+          tagClass: 'diesel',
+          name: 'diesel (Rust, ORM)',
+          urlTemplate: 'postgres://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 5432,
+          isFile: false,
+          info: 'ORM 风格 PG 驱动。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 1,
+            arrowExport: 0,
+            pluginCompat: 0,
+          },
+          properties: { 'diesel.print_schema': 'false' },
+        },
+        'pg-python': {
+          id: 'pg-python',
+          dbType: 'postgresql',
+          lang: 'Python',
+          tag: 'python',
+          tagClass: 'python',
+          name: 'Python (WASI, psycopg2)',
+          urlTemplate: 'postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}',
+          defaultPort: 5432,
+          isFile: false,
+          info: 'Python 数据分析栈接入 PG。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 0,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { 'pandas.chunksize': '10000' },
+        },
+        'sqlite-rusqlite': {
+          id: 'sqlite-rusqlite',
+          dbType: 'sqlite',
+          lang: 'Rust',
+          tag: 'native',
+          tagClass: 'native',
+          name: 'rusqlite (Rust, native)',
+          urlTemplate: 'sqlite://{file_path}',
+          defaultPort: null,
+          isFile: true,
+          info: 'Rust 原生 SQLite，bundled 编译。JSON1/FTS5 扩展内置。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 1,
+            arrowExport: 0,
+            pluginCompat: 0,
+          },
+          properties: {
+            journal_mode: 'WAL',
+            synchronous: 'NORMAL',
+            busy_timeout: '5000',
+            foreign_keys: 'ON',
+          },
+        },
+        'sqlite-py': {
+          id: 'sqlite-py',
+          dbType: 'sqlite',
+          lang: 'Python',
+          tag: 'python',
+          tagClass: 'python',
+          name: 'Python (WASI, sqlite3)',
+          urlTemplate: 'sqlite://{file_path}',
+          defaultPort: null,
+          isFile: true,
+          info: 'Python 标准库 sqlite3，WASI 沙箱隔离。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 0,
+            introspection: 0,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { detect_types: '1', isolation_level: 'DEFERRED' },
+        },
+        'duckdb-native': {
+          id: 'duckdb-native',
+          dbType: 'duckdb',
+          lang: 'Rust',
+          tag: 'native',
+          tagClass: 'native',
+          name: 'duckdb-rs (Rust, native)',
+          urlTemplate: 'duckdb://{file_path}',
+          defaultPort: null,
+          isFile: true,
+          info: 'Rust 原生 DuckDB，OLAP 分析引擎。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 1,
+            arrowExport: 1,
+            pluginCompat: 0,
+          },
+          properties: { memory_limit: '512', threads: '4', access_mode: 'read_write' },
+        },
+        'duckdb-py': {
+          id: 'duckdb-py',
+          dbType: 'duckdb',
+          lang: 'Python',
+          tag: 'python',
+          tagClass: 'python',
+          name: 'Python (WASI, duckdb)',
+          urlTemplate: 'duckdb://{file_path}',
+          defaultPort: null,
+          isFile: true,
+          info: 'Python DuckDB WASI，零配置分析。',
+          capabilities: {
+            transactions: 1,
+            preparedStmt: 1,
+            streaming: 1,
+            introspection: 0,
+            arrowExport: 1,
+            pluginCompat: 1,
+          },
+          properties: { memory_limit: '512', threads: '4' },
+        },
+      }
+
+      function dbDrivers(dbType) {
+        return Object.values(DRIVERS).filter(d => d.dbType === dbType)
+      }
+      function defaultDriver(dbType) {
+        return dbDrivers(dbType)[0]
+      }
+
+      // ============================================================
+      // 网络配置文件数据
+      // ============================================================
+      const SSH_PROFILES = [
+        {
+          id: 'profile-prod-bastion',
+          name: '生产跳板机',
+          scope: 'global',
+          host: '192.168.1.100',
+          port: 22,
+          username: 'root',
+          authType: 'key',
+          keyPath: '~/.ssh/id_rsa',
+          keepAlive: 60,
+        },
+        {
+          id: 'profile-test-bastion',
+          name: '测试跳板机',
+          scope: 'global',
+          host: '192.168.2.100',
+          port: 22,
+          username: 'admin',
+          authType: 'password',
+          keepAlive: 30,
+        },
+        {
+          id: 'profile-us-bastion',
+          name: '美西跳板机',
+          scope: 'global',
+          host: '10.0.0.1',
+          port: 22,
+          username: 'deploy',
+          authType: 'key',
+          keyPath: '~/.ssh/us-west.pem',
+          keepAlive: 60,
+        },
+        {
+          id: 'profile-project-tunnel',
+          name: '项目专用隧道',
+          scope: 'project',
+          host: '172.16.0.1',
+          port: 2222,
+          username: 'project-user',
+          authType: 'key',
+          keyPath: '~/.ssh/project.pem',
+          keepAlive: 45,
+        },
+      ]
+
+      const SSL_PROFILES = [
+        {
+          id: 'profile-rds-default',
+          name: 'RDS 默认',
+          scope: 'global',
+          mode: 'verify-full',
+          ca: 'ca-global.pem',
+          cert: 'client-global.pem',
+        },
+        {
+          id: 'profile-self-signed',
+          name: '自签证书',
+          scope: 'global',
+          mode: 'require',
+          ca: '',
+          cert: '',
+        },
+        {
+          id: 'profile-prod-rds',
+          name: '生产 RDS',
+          scope: 'project',
+          mode: 'verify-full',
+          ca: 'prod-ca.pem',
+          cert: 'prod-client-cert.pem',
+        },
+        {
+          id: 'profile-staging-cert',
+          name: '预发布证书',
+          scope: 'project',
+          mode: 'verify-ca',
+          ca: 'staging-ca.pem',
+          cert: 'staging-cert.pem',
+        },
+      ]
+
+      const PROXY_PROFILES = [
+        {
+          id: 'profile-corp-proxy',
+          name: '公司代理',
+          scope: 'global',
+          type: 'socks5',
+          host: 'proxy.corp.com',
+          port: 1080,
+          username: '',
+          password: '',
+        },
+        {
+          id: 'profile-vpn-proxy',
+          name: 'VPN代理',
+          scope: 'global',
+          type: 'http',
+          host: 'vpn.internal',
+          port: 3128,
+          username: '',
+          password: '',
+        },
+        {
+          id: 'profile-client-proxy',
+          name: '客户代理',
+          scope: 'project',
+          type: 'http',
+          host: 'client.proxy',
+          port: 8080,
+          username: 'user',
+          password: '***',
+        },
+      ]
+
+      // ============================================================
+      // 状态
+      // ============================================================
+      let currentDbType = 'mysql'
+      let currentDriver = DRIVERS['mysql-sqlx']
+      let editingCustomSsh = false
+      let editingCustomSsl = false
+      let editingCustomProxy = false
+      let managerTab = 'ssh'
+
+      // ============================================================
+      // 左侧栏
+      // ============================================================
+      function toggleCategory(name) {
+        const cat = document.getElementById('cat-' + name)
+        cat.classList.toggle('expanded')
+        const items = document.getElementById('items-' + name)
+        items.style.display = cat.classList.contains('expanded') ? '' : 'none'
+      }
+
+      function selectDbType(dbType, event) {
+        if (event) event.stopPropagation()
+        currentDbType = dbType
+        document.querySelectorAll('.db-type-item').forEach(el => el.classList.remove('selected'))
+        document.querySelector(`.db-type-item[data-db="${dbType}"]`)?.classList.add('selected')
+        const drv = defaultDriver(dbType)
+        if (drv) applyDriver(drv)
+      }
+
+      function filterDbTree(query) {}
+
+      // ============================================================
+      // 驱动应用
+      // ============================================================
+      function applyDriver(drv) {
+        currentDriver = drv
+
+        // 更新驱动下拉
+        const sel = document.getElementById('driverSelect')
+        sel.innerHTML = dbDrivers(drv.dbType)
+          .map(
+            d => `<option value="${d.id}" ${d.id === drv.id ? 'selected' : ''}>${d.name}</option>`
+          )
+          .join('')
+
+        // URI
+        const uri = drv.isFile
+          ? drv.urlTemplate.replace(
+              '{file_path}',
+              './mydb.' + (drv.dbType === 'duckdb' ? 'duckdb' : 'db')
+            )
+          : drv.urlTemplate
+              .replace('{user}', 'root')
+              .replace('{password}', '****')
+              .replace('{host}', 'localhost')
+              .replace('{port}', String(drv.defaultPort || 3306))
+              .replace('{database}', 'mydb')
+        document.getElementById('uriDisplay').textContent = uri
+
+        // info banner
+        document.getElementById('driverInfo').textContent = drv.info
+        document.getElementById('driverBanner').style.borderColor =
+          drv.lang === 'Rust'
+            ? 'rgba(244,102,35,0.2)'
+            : drv.lang === 'Python'
+              ? 'rgba(55,118,171,0.2)'
+              : 'rgba(0,173,216,0.2)'
+        document.getElementById('driverBanner').style.background =
+          drv.lang === 'Rust'
+            ? 'rgba(244,102,35,0.04)'
+            : drv.lang === 'Python'
+              ? 'rgba(55,118,171,0.04)'
+              : 'rgba(0,173,216,0.04)'
+
+        // drv tag
+        const tag = document.getElementById('drvTag')
+        tag.textContent = drv.tag
+        tag.className = 'drv-tag ' + drv.tagClass
+
+        // 切换表单类型
+        document.getElementById('form-network').style.display = drv.isFile ? 'none' : ''
+        document.getElementById('form-file').style.display = drv.isFile ? '' : 'none'
+        document.getElementById('form-auth').style.display = drv.isFile ? 'none' : ''
+
+        // 驱动特有扩展
+        const spec = document.getElementById('form-driver-specific')
+        if (drv.lang === 'Python') {
+          spec.innerHTML = `<div class="form-section" style="margin-top:8px"><div class="form-row"><div class="form-group f1"><span class="form-label">Python 环境</span><select class="form-select"><option>内置 WASI Python 3.12</option><option>本地 Python 环境</option></select></div><div class="form-group f1"><span class="form-label">预装模块</span><input class="form-input" value="pandas, numpy, matplotlib"></div></div></div>`
+        } else if (drv.id === 'mysql-diesel') {
+          spec.innerHTML = `<div class="form-row" style="margin-top:8px"><div class="form-group f1"><span class="form-label">Migration 目录</span><input class="form-input" value="./migrations"></div></div>`
+        } else if (drv.lang === 'Go') {
+          spec.innerHTML = `<div class="form-section" style="margin-top:8px"><div class="form-row"><div class="form-group f1"><span class="form-label">GOMAXPROCS</span><input class="form-input" type="number" value="4"></div><div class="form-group f1"><span class="form-label">GC 策略</span><select class="form-select"><option>默认</option><option>低延迟</option><option>高吞吐</option></select></div></div></div>`
+        } else {
+          spec.innerHTML = ''
+        }
+
+        // 能力表
+        const capLabels = {
+          transactions: '事务支持',
+          preparedStmt: '预编译语句',
+          streaming: '流式查询',
+          introspection: 'Schema 自省',
+          arrowExport: 'Arrow 导出',
+          pluginCompat: '插件兼容',
+        }
+        document.getElementById('capTableBody').innerHTML = Object.entries(drv.capabilities)
+          .map(
+            ([k, v]) =>
+              `<tr><td>${capLabels[k]}</td><td><span class="cap-badge ${v ? 'yes' : 'no'}">${v ? '✓ 支持' : '✗ 不支持'}</span></td><td>—</td></tr>`
+          )
+          .join('')
+
+        // 属性表
+        document.getElementById('propsTableBody').innerHTML = Object.entries(drv.properties)
+          .map(([k, v]) => `<tr><td>${k}</td><td><input value="${v}"></td><td>—</td></tr>`)
+          .join('')
+
+        // duckdb 加速目标数据库名
+        const dbNameMap = {
+          mysql: 'MySQL',
+          postgresql: 'PostgreSQL',
+          mariadb: 'MariaDB',
+          sqlserver: 'SQL Server',
+          sqlite: 'SQLite',
+          duckdb: 'DuckDB',
+          mongodb: 'MongoDB',
+          redis: 'Redis',
+          clickhouse: 'ClickHouse',
+        }
+        const el = document.getElementById('accelTargetDb')
+        if (el) el.textContent = dbNameMap[drv.dbType] || drv.dbType
+
+        // 网络 Tab — 文件型数据库适配
+        updateNetworkVisibility()
+
+        // 同步左侧栏选中态
+        document.querySelectorAll('.db-type-item').forEach(el => el.classList.remove('selected'))
+        document.querySelector(`.db-type-item[data-db="${drv.dbType}"]`)?.classList.add('selected')
+        ;['relational', 'file', 'nosql', 'analytics'].forEach(name => {
+          const itemsDiv = document.getElementById('items-' + name)
+          if (itemsDiv && itemsDiv.querySelector(`[data-db="${drv.dbType}"]`)) {
+            const cat = document.getElementById('cat-' + name)
+            if (cat && !cat.classList.contains('expanded')) toggleCategory(name)
+          }
+        })
+
+        // 更新拓扑
+        updateTopology()
+      }
+
+      function onDriverChange(id) {
+        const drv = DRIVERS[id]
+        if (drv) applyDriver(drv)
+      }
+
+      // ============================================================
+      // 标签页切换
+      // ============================================================
+      function switchTab(name) {
+        document.querySelectorAll('.tabs-bar .tab-btn').forEach(b => b.classList.remove('active'))
+        document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'))
+        const idx = ['general', 'network', 'capabilities', 'properties', 'advanced'].indexOf(name)
+        document.querySelectorAll('.tabs-bar .tab-btn')[idx].classList.add('active')
+        document.getElementById('tab-' + name).classList.add('active')
+        if (name === 'network') updateTopology()
+      }
+
+      // ============================================================
+      // 范围勾选变化
+      // ============================================================
+      function onScopeChange() {
+        updateNetworkVisibility()
+        updateTopology()
+      }
+
+      function getActiveScopes() {
+        const g = document.getElementById('scopeGlobal').checked
+        const p = document.getElementById('scopeProject').checked
+        return { global: g, project: p, both: g && p, none: !g && !p }
+      }
+
+      // ============================================================
+      // 网络 Tab — 可见性
+      // ============================================================
+      function updateNetworkVisibility() {
+        const isFile = currentDriver.isFile
+        document.getElementById('network-content').style.display = isFile ? 'none' : ''
+        document.getElementById('network-file-hint').style.display = isFile ? '' : 'none'
+      }
+
+      // ============================================================
+      // 网络 Tab — SSH 选择
+      // ============================================================
+      function onSshSelectChange(val) {
+        document.getElementById('sshCustomForm').style.display = 'none'
+        document.getElementById('sshScopeBadge').style.display = 'none'
+        editingCustomSsh = false
+
+        if (val === 'custom') {
+          editingCustomSsh = true
+          showSshCustomForm()
+          document.getElementById('sshScopeBadge').style.display = ''
+          document.getElementById('sshScopeBadge').textContent = getScopeLabel()
+          document.getElementById('sshScopeBadge').className =
+            'profile-scope-badge ' + getScopeClass()
+        } else if (val) {
+          const profile = SSH_PROFILES.find(p => p.id === val)
+          if (profile) {
+            document.getElementById('sshScopeBadge').style.display = ''
+            document.getElementById('sshScopeBadge').textContent =
+              profile.scope === 'global' ? '全局' : '项目'
+            document.getElementById('sshScopeBadge').className =
+              'profile-scope-badge ' + profile.scope
+          }
+        }
+        updateTopology()
+      }
+
+      function showSshCustomForm() {
+        const form = document.getElementById('sshCustomForm')
+        form.style.display = ''
+        form.innerHTML = `<div class="inline-form">
+    <div class="form-row">
+      <div class="form-group f2"><span class="form-label">SSH 主机</span><input class="form-input" id="custSshHost" placeholder="192.168.1.100"></div>
+      <div class="form-group f1"><span class="form-label">端口</span><input class="form-input" id="custSshPort" type="number" value="22"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group f1"><span class="form-label">用户名</span><input class="form-input" id="custSshUser" placeholder="root"></div>
+      <div class="form-group f1"><span class="form-label">认证方式</span><select class="form-select" id="custSshAuth" onchange="toggleSshAuthFields()"><option value="password">密码</option><option value="key">密钥文件</option></select></div>
+    </div>
+    <div class="form-row" id="custSshPasswordRow">
+      <div class="form-group f1"><span class="form-label">密码</span><input class="form-input" type="password" id="custSshPassword"></div>
+    </div>
+    <div class="form-row" id="custSshKeyRow" style="display:none">
+      <div class="form-group f2"><span class="form-label">私钥路径</span><input class="form-input" id="custSshKey" placeholder="~/.ssh/id_rsa"></div>
+    </div>
+    <div class="form-row" style="margin-top:4px">
+      <button class="btn-inline save" onclick="saveCustomSsh()">保存自定义配置</button>
+      <button class="btn-inline cancel" onclick="cancelCustomSsh()">取消</button>
+    </div>
+  </div>`
+      }
+
+      function toggleSshAuthFields() {
+        const authVal = document.getElementById('custSshAuth').value
+        document.getElementById('custSshPasswordRow').style.display =
+          authVal === 'password' ? '' : 'none'
+        document.getElementById('custSshKeyRow').style.display = authVal === 'key' ? '' : 'none'
+      }
+
+      function saveCustomSsh() {
+        const host = document.getElementById('custSshHost').value || '192.168.1.100'
+        const name = host + ':22'
+        document.getElementById('sshCustomForm').style.display = 'none'
+        alert('自定义 SSH 配置已应用：' + name + '\n范围归属：' + getScopeLabelFull())
+        updateTopology()
+      }
+
+      function cancelCustomSsh() {
+        document.getElementById('sshCustomForm').style.display = 'none'
+        document.getElementById('sshSelect').value = ''
+        document.getElementById('sshScopeBadge').style.display = 'none'
+        editingCustomSsh = false
+        updateTopology()
+      }
+
+      // ============================================================
+      // 网络 Tab — SSL 选择
+      // ============================================================
+      function onSslSelectChange(val) {
+        document.getElementById('sslCustomForm').style.display = 'none'
+        document.getElementById('sslScopeBadge').style.display = 'none'
+        editingCustomSsl = false
+
+        if (val === 'custom') {
+          editingCustomSsl = true
+          showSslCustomForm()
+          document.getElementById('sslScopeBadge').style.display = ''
+          document.getElementById('sslScopeBadge').textContent = getScopeLabel()
+          document.getElementById('sslScopeBadge').className =
+            'profile-scope-badge ' + getScopeClass()
+        } else if (val) {
+          const profile = SSL_PROFILES.find(p => p.id === val)
+          if (profile) {
+            document.getElementById('sslScopeBadge').style.display = ''
+            document.getElementById('sslScopeBadge').textContent =
+              profile.scope === 'global' ? '全局' : '项目'
+            document.getElementById('sslScopeBadge').className =
+              'profile-scope-badge ' + profile.scope
+          }
+        }
+        updateTopology()
+      }
+
+      function showSslCustomForm() {
+        const form = document.getElementById('sslCustomForm')
+        form.style.display = ''
+        form.innerHTML = `<div class="inline-form">
+    <div class="form-row">
+      <div class="form-group f1"><span class="form-label">SSL 模式</span><select class="form-select" id="custSslMode"><option>disable</option><option>require</option><option>verify-ca</option><option>verify-full</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group f1"><span class="form-label">CA 证书路径</span><input class="form-input" id="custSslCa" placeholder="ca.pem"></div>
+      <div class="form-group f1"><span class="form-label">客户端证书路径</span><input class="form-input" id="custSslCert" placeholder="client-cert.pem"></div>
+    </div>
+    <div class="form-row" style="margin-top:4px">
+      <button class="btn-inline save" onclick="saveCustomSsl()">保存自定义配置</button>
+      <button class="btn-inline cancel" onclick="cancelCustomSsl()">取消</button>
+    </div>
+  </div>`
+      }
+
+      function saveCustomSsl() {
+        document.getElementById('sslCustomForm').style.display = 'none'
+        alert('自定义 SSL 配置已应用\n范围归属：' + getScopeLabelFull())
+        updateTopology()
+      }
+
+      function cancelCustomSsl() {
+        document.getElementById('sslCustomForm').style.display = 'none'
+        document.getElementById('sslSelect').value = ''
+        document.getElementById('sslScopeBadge').style.display = 'none'
+        editingCustomSsl = false
+        updateTopology()
+      }
+
+      // ============================================================
+      // 网络 Tab — Proxy 选择
+      // ============================================================
+      function onProxySelectChange(val) {
+        document.getElementById('proxyCustomForm').style.display = 'none'
+        document.getElementById('proxyScopeBadge').style.display = 'none'
+        editingCustomProxy = false
+
+        if (val === 'custom') {
+          editingCustomProxy = true
+          showProxyCustomForm()
+          document.getElementById('proxyScopeBadge').style.display = ''
+          document.getElementById('proxyScopeBadge').textContent = getScopeLabel()
+          document.getElementById('proxyScopeBadge').className =
+            'profile-scope-badge ' + getScopeClass()
+        } else if (val) {
+          const profile = PROXY_PROFILES.find(p => p.id === val)
+          if (profile) {
+            document.getElementById('proxyScopeBadge').style.display = ''
+            document.getElementById('proxyScopeBadge').textContent =
+              profile.scope === 'global' ? '全局' : '项目'
+            document.getElementById('proxyScopeBadge').className =
+              'profile-scope-badge ' + profile.scope
+          }
+        }
+        updateTopology()
+      }
+
+      function showProxyCustomForm() {
+        const form = document.getElementById('proxyCustomForm')
+        form.style.display = ''
+        form.innerHTML = `<div class="inline-form">
+    <div class="form-row">
+      <div class="form-group f1"><span class="form-label">代理类型</span><select class="form-select" id="custProxyType"><option>SOCKS5</option><option>HTTP</option><option>SOCKS4</option><option>HTTPS</option></select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group f2"><span class="form-label">代理主机</span><input class="form-input" id="custProxyHost" placeholder="proxy.example.com"></div>
+      <div class="form-group f1"><span class="form-label">端口</span><input class="form-input" type="number" id="custProxyPort" value="1080"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group f1"><span class="form-label">用户名</span><input class="form-input" id="custProxyUser" placeholder="可选"></div>
+      <div class="form-group f1"><span class="form-label">密码</span><input class="form-input" type="password" id="custProxyPass" placeholder="可选"></div>
+    </div>
+    <div class="form-row" style="margin-top:4px">
+      <button class="btn-inline save" onclick="saveCustomProxy()">保存自定义配置</button>
+      <button class="btn-inline cancel" onclick="cancelCustomProxy()">取消</button>
+    </div>
+  </div>`
+      }
+
+      function saveCustomProxy() {
+        document.getElementById('proxyCustomForm').style.display = 'none'
+        alert('自定义代理配置已应用\n范围归属：' + getScopeLabelFull())
+        updateTopology()
+      }
+
+      function cancelCustomProxy() {
+        document.getElementById('proxyCustomForm').style.display = 'none'
+        document.getElementById('proxySelect').value = ''
+        document.getElementById('proxyScopeBadge').style.display = 'none'
+        editingCustomProxy = false
+        updateTopology()
+      }
+
+      // ============================================================
+      // 范围归属辅助
+      // ============================================================
+      function getScopeLabel() {
+        const scopes = getActiveScopes()
+        if (scopes.both) return '全局+项目'
+        if (scopes.global) return '全局'
+        if (scopes.project) return '项目'
+        return '未选择'
+      }
+
+      function getScopeClass() {
+        const scopes = getActiveScopes()
+        if (scopes.both) return 'global'
+        if (scopes.global) return 'global'
+        if (scopes.project) return 'project'
+        return 'custom'
+      }
+
+      function getScopeLabelFull() {
+        const scopes = getActiveScopes()
+        if (scopes.both) return '全局 + 项目 (双选模式)'
+        if (scopes.global) return '全局链接'
+        if (scopes.project) return '项目链接'
+        return '无（至少选择一个）'
+      }
+
+      // ============================================================
+      // 拓扑预览
+      // ============================================================
+      function updateTopology() {
+        if (currentDriver.isFile) return
+
+        const sshVal = document.getElementById('sshSelect').value
+        const sslVal = document.getElementById('sslSelect').value
+        const proxyVal = document.getElementById('proxySelect').value
+        const customSsh = sshVal === 'custom' || editingCustomSsh
+        const customSsl = sslVal === 'custom' || editingCustomSsl
+        const customProxy = proxyVal === 'custom' || editingCustomProxy
+
+        const hasSsh = !!sshVal
+        const hasSsl = !!sslVal
+        const hasProxy = !!proxyVal
+
+        const container = document.getElementById('topoContent')
+        if (!hasSsh && !hasSsl && !hasProxy) {
+          container.innerHTML = `<div class="topo-empty"><div class="icon">🔗</div>直连模式 — 未启用任何网络代理</div>`
+          return
+        }
+
+        let pathHtml = ''
+
+        // 节点名称
+        function getNodeName(kind, val) {
+          if (!val) return ''
+          if (val === 'custom')
+            return kind === 'ssh' ? '自定义隧道' : kind === 'ssl' ? '自定义证书' : '自定义代理'
+
+          const profiles =
+            kind === 'ssh' ? SSH_PROFILES : kind === 'ssl' ? SSL_PROFILES : PROXY_PROFILES
+          const p = profiles.find(x => x.id === val)
+          if (!p) return val
+
+          if (kind === 'ssh') return p.name + ' (' + p.host + ':' + p.port + ')'
+          if (kind === 'ssl') return p.name + ' (' + p.mode + ')'
+          if (kind === 'proxy') return p.name + ' (' + p.host + ':' + p.port + ')'
+          return p.name
+        }
+
+        function getLabel(kind) {
+          if (kind === 'ssh') return 'SSH'
+          if (kind === 'ssl') return 'TLS'
+          if (kind === 'proxy') return 'Proxy'
+          return ''
+        }
+
+        const nodes = []
+        nodes.push({ type: 'self', label: '本机' })
+
+        if (hasProxy) {
+          nodes.push({ type: 'arrow', label: getLabel('proxy') })
+          nodes.push({ type: 'proxy-node', label: getNodeName('proxy', proxyVal) })
+        }
+        if (hasSsh) {
+          nodes.push({ type: 'arrow', label: getLabel('ssh') })
+          nodes.push({ type: 'ssh-jump', label: getNodeName('ssh', sshVal) })
+        }
+        if (hasSsl) {
+          nodes.push({ type: 'arrow', label: getLabel('ssl') })
+        }
+        nodes.push({ type: 'arrow', label: '' })
+        nodes.push({
+          type: 'db-target',
+          label: currentDriver.dbType.toUpperCase() + ':' + (currentDriver.defaultPort || ''),
+        })
+
+        for (const n of nodes) {
+          if (n.type === 'arrow') {
+            pathHtml += `<div class="topo-arrow">──<span class="topo-arrow-label">${n.label}</span>──▶</div>`
+          } else {
+            pathHtml += `<div class="topo-node ${n.type}">${n.label}</div>`
+          }
+        }
+
+        container.innerHTML = `<div class="topo-path">${pathHtml}</div>`
+      }
+
+      // ============================================================
+      // URI 编辑
+      // ============================================================
+      function toggleUriEdit() {
+        const btn = document.querySelector('.uri-edit-btn')
+        btn.classList.toggle('active')
+        alert('URI 编辑模式' + (btn.classList.contains('active') ? ' 已开启' : ' 已关闭'))
+      }
+
+      // ============================================================
+      // 网络配置文件管理器
+      // ============================================================
+      function openProfileManager(protocol) {
+        managerTab = protocol
+        document.getElementById('profileManagerOverlay').classList.remove('hidden')
+        updateManagerUI()
+      }
+
+      function closeProfileManager(event) {
+        if (event && event.target !== document.getElementById('profileManagerOverlay')) return
+        document.getElementById('profileManagerOverlay').classList.add('hidden')
+        // 刷新主页面下拉列表
+        refreshProfileSelects()
+        updateTopology()
+      }
+
+      function switchManagerTab(protocol) {
+        managerTab = protocol
+        document.querySelectorAll('.manager-tab-btn').forEach(b => b.classList.remove('active'))
+        const idx = ['ssh', 'ssl', 'proxy'].indexOf(protocol)
+        document.querySelectorAll('.manager-tab-btn')[idx].classList.add('active')
+        updateManagerUI()
+      }
+
+      function updateManagerUI() {
+        const titleMap = {
+          ssh: '🔒 SSH 配置文件管理器',
+          ssl: '🛡 SSL/TLS 配置文件管理器',
+          proxy: '🌐 代理配置文件管理器',
+        }
+        document.getElementById('managerTitle').textContent = titleMap[managerTab]
+
+        let profiles, kindLabel
+        if (managerTab === 'ssh') {
+          profiles = SSH_PROFILES
+          kindLabel = 'SSH 隧道'
+        } else if (managerTab === 'ssl') {
+          profiles = SSL_PROFILES
+          kindLabel = 'SSL/TLS'
+        } else {
+          profiles = PROXY_PROFILES
+          kindLabel = '代理'
+        }
+
+        const body = document.getElementById('managerBody')
+        if (profiles.length === 0) {
+          body.innerHTML = `<div class="empty-profiles">暂无${kindLabel}配置文件<br><br><button class="btn-primary" style="font-size:12px;padding:6px 16px" onclick="addNewProfile('${managerTab}')">+ 新建 ${kindLabel} 配置</button></div>`
+          return
+        }
+
+        let html = ''
+        for (const p of profiles) {
+          let detail = ''
+          if (managerTab === 'ssh') {
+            detail = `${p.host}:${p.port} · ${p.username} · ${p.authType === 'key' ? '密钥认证' : '密码认证'}`
+          } else if (managerTab === 'ssl') {
+            detail =
+              `模式: ${p.mode}` +
+              (p.ca ? ` · CA: ${p.ca}` : '') +
+              (p.cert ? ` · 证书: ${p.cert}` : '')
+          } else {
+            detail =
+              `${p.type.toUpperCase()} · ${p.host}:${p.port}` +
+              (p.username ? ` · ${p.username}` : '')
+          }
+          const scopeText = p.scope === 'global' ? '🌐 全局' : '📝 项目'
+          const scopeClass = p.scope === 'global' ? 'global' : 'project'
+
+          html += `<div class="profile-card">
+      <span class="profile-scope-badge ${scopeClass}">${scopeText}</span>
+      <div class="profile-card-info">
+        <div class="profile-card-name">${p.name}</div>
+        <div class="profile-card-detail">${detail}</div>
+      </div>
+      <div class="profile-card-actions">
+        <button class="btn-card use" onclick="useProfile('${managerTab}','${p.id}')" title="使用此配置">使用</button>
+        <button class="btn-card" onclick="editProfile('${managerTab}','${p.id}')" title="编辑">✎</button>
+        <button class="btn-card danger" onclick="deleteProfile('${managerTab}','${p.id}')" title="删除">✕</button>
+      </div>
+    </div>`
+        }
+
+        html += `<button class="btn-add-profile" onclick="addNewProfile('${managerTab}')">+ 新建 ${kindLabel} 配置</button>`
+        body.innerHTML = html
+      }
+
+      function addNewProfile(protocol) {
+        const scopeDefault = document.getElementById('scopeGlobal').checked ? 'global' : 'project'
+        let fieldsHtml = ''
+        if (protocol === 'ssh') {
+          fieldsHtml = `<div class="form-row"><div class="form-group f2"><span class="form-label">SSH 主机</span><input class="form-input" id="newSshHost" placeholder="192.168.1.100"></div><div class="form-group f1"><span class="form-label">端口</span><input class="form-input" type="number" id="newSshPort" value="22"></div></div>
+    <div class="form-row"><div class="form-group f1"><span class="form-label">用户名</span><input class="form-input" id="newSshUser" placeholder="root"></div><div class="form-group f1"><span class="form-label">认证方式</span><select class="form-select" id="newSshAuth"><option value="password">密码</option><option value="key">密钥文件</option></select></div></div>`
+        } else if (protocol === 'ssl') {
+          fieldsHtml = `<div class="form-row"><div class="form-group f1"><span class="form-label">SSL 模式</span><select class="form-select" id="newSslMode"><option value="require">require</option><option value="verify-ca">verify-ca</option><option value="verify-full">verify-full</option></select></div></div>
+    <div class="form-row"><div class="form-group f1"><span class="form-label">CA 证书路径</span><input class="form-input" id="newSslCa" placeholder="ca.pem"></div><div class="form-group f1"><span class="form-label">客户端证书路径</span><input class="form-input" id="newSslCert" placeholder="client-cert.pem"></div></div>`
+        } else {
+          fieldsHtml = `<div class="form-row"><div class="form-group f1"><span class="form-label">代理类型</span><select class="form-select" id="newProxyType"><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="socks4">SOCKS4</option><option value="https">HTTPS</option></select></div></div>
+    <div class="form-row"><div class="form-group f2"><span class="form-label">代理主机</span><input class="form-input" id="newProxyHost" placeholder="proxy.example.com"></div><div class="form-group f1"><span class="form-label">端口</span><input class="form-input" type="number" id="newProxyPort" value="1080"></div></div>`
+        }
+
+        document.getElementById('managerBody').innerHTML = `<div class="inline-form">
+    <div class="form-row"><div class="form-group f1"><span class="form-label">配置名称</span><input class="form-input" id="newProfileName" placeholder="例如：生产环境跳板机"></div><div class="form-group f1"><span class="form-label">范围</span><select class="form-select" id="newProfileScope"><option value="global" ${scopeDefault === 'global' ? 'selected' : ''}>🌐 全局</option><option value="project" ${scopeDefault === 'project' ? 'selected' : ''}>📝 项目</option></select></div></div>
+    ${fieldsHtml}
+    <div class="form-row" style="margin-top:4px">
+      <button class="btn-inline save" onclick="saveNewProfile('${protocol}')">保存</button>
+      <button class="btn-inline cancel" onclick="updateManagerUI()">取消</button>
+    </div>
+  </div>`
+      }
+
+      function saveNewProfile(protocol) {
+        const name = document.getElementById('newProfileName').value || '未命名配置'
+        const scope = document.getElementById('newProfileScope').value
+        const id = 'profile-' + Date.now()
+
+        if (protocol === 'ssh') {
+          const host = document.getElementById('newSshHost').value || 'localhost'
+          const port = parseInt(document.getElementById('newSshPort').value) || 22
+          const username = document.getElementById('newSshUser').value || 'root'
+          const authType = document.getElementById('newSshAuth').value
+          SSH_PROFILES.push({ id, name, scope, host, port, username, authType, keepAlive: 60 })
+        } else if (protocol === 'ssl') {
+          const mode = document.getElementById('newSslMode').value
+          const ca = document.getElementById('newSslCa').value
+          const cert = document.getElementById('newSslCert').value
+          SSL_PROFILES.push({ id, name, scope, mode, ca, cert })
+        } else {
+          const type = document.getElementById('newProxyType').value
+          const host = document.getElementById('newProxyHost').value || 'proxy.example.com'
+          const port = parseInt(document.getElementById('newProxyPort').value) || 1080
+          PROXY_PROFILES.push({ id, name, scope, type, host, port, username: '', password: '' })
+        }
+
+        refreshProfileSelects()
+        updateManagerUI()
+      }
+
+      function editProfile(protocol, id) {
+        let profile
+        if (protocol === 'ssh') profile = SSH_PROFILES.find(p => p.id === id)
+        else if (protocol === 'ssl') profile = SSL_PROFILES.find(p => p.id === id)
+        else profile = PROXY_PROFILES.find(p => p.id === id)
+        if (!profile) return
+
+        alert('编辑配置文件：' + profile.name + '\n\n(原型中为简化演示，点击「使用」直接应用配置)')
+      }
+
+      function deleteProfile(protocol, id) {
+        if (
+          !confirm(
+            '确定要删除该配置文件吗？此操作不可撤销。\n\n引用该配置的数据源将回退为直连模式。'
+          )
+        )
+          return
+
+        if (protocol === 'ssh')
+          SSH_PROFILES.splice(0, SSH_PROFILES.length, ...SSH_PROFILES.filter(p => p.id !== id))
+        else if (protocol === 'ssl')
+          SSL_PROFILES.splice(0, SSL_PROFILES.length, ...SSL_PROFILES.filter(p => p.id !== id))
+        else
+          PROXY_PROFILES.splice(
+            0,
+            PROXY_PROFILES.length,
+            ...PROXY_PROFILES.filter(p => p.id !== id)
+          )
+
+        refreshProfileSelects()
+        updateManagerUI()
+        updateTopology()
+      }
+
+      function useProfile(protocol, id) {
+        let selectId, profile
+        if (protocol === 'ssh') {
+          selectId = 'sshSelect'
+          profile = SSH_PROFILES.find(p => p.id === id)
+        } else if (protocol === 'ssl') {
+          selectId = 'sslSelect'
+          profile = SSL_PROFILES.find(p => p.id === id)
+        } else {
+          selectId = 'proxySelect'
+          profile = PROXY_PROFILES.find(p => p.id === id)
+        }
+
+        if (!profile) return
+        document.getElementById(selectId).value = id
+
+        if (protocol === 'ssh') onSshSelectChange(id)
+        else if (protocol === 'ssl') onSslSelectChange(id)
+        else onProxySelectChange(id)
+
+        closeProfileManager()
+      }
+
+      function refreshProfileSelects() {
+        function rebuildSelect(id, profiles, noneLabel) {
+          const sel = document.getElementById(id)
+          const curVal = sel.value
+          let opts = `<option value="" data-parent="none">${noneLabel}</option>`
+          for (const p of profiles) {
+            const scopeIcon = p.scope === 'global' ? '🌐' : '📝'
+            opts += `<option value="${p.id}" data-parent="${p.scope}">${scopeIcon} ${p.name}</option>`
+          }
+          opts += `<option value="custom" data-parent="custom" class="custom">⚡ 自定义...</option>`
+          sel.innerHTML = opts
+          if ([...sel.options].some(o => o.value === curVal)) sel.value = curVal
+          else sel.value = ''
+        }
+        rebuildSelect('sshSelect', SSH_PROFILES, '— 直连，不使用 SSH —')
+        rebuildSelect('sslSelect', SSL_PROFILES, '— 不使用 SSL —')
+        rebuildSelect('proxySelect', PROXY_PROFILES, '— 直连，不使用代理 —')
+      }
+
+      // ============================================================
+      // 暂存列表
+      // ============================================================
+      let stagingCount = 1
+      function addStagingEntry() {
+        const section = document.getElementById('stagingSection')
+        const newItem = document.createElement('div')
+        newItem.className = 'saved-item'
+        newItem.id = 'staging-item-' + stagingCount
+        newItem.setAttribute('onclick', 'selectStaging(' + stagingCount + ')')
+        newItem.innerHTML = `
+    <span class="type-dot" style="background:var(--accent);width:7px;height:7px;border-radius:50%"></span>
+    <span class="db-icon-mini mysql">My</span>
+    <span class="item-name">新建数据源</span>
+    <span style="font-size:10px;color:var(--text-muted);cursor:pointer;flex-shrink:0"
+          onclick="event.stopPropagation();removeStagingEntry(${stagingCount})" title="移除暂存">✕</span>
+  `
+        section.appendChild(newItem)
+        stagingCount++
+      }
+
+      function removeStagingEntry(id) {
+        const item = document.getElementById('staging-item-' + id)
+        if (item) item.remove()
+        const remaining = document.querySelectorAll('[id^="staging-item-"]')
+        if (remaining.length === 0) addStagingEntry()
+      }
+
+      function selectStaging(id) {
+        document.querySelectorAll('.saved-item').forEach(el => el.classList.remove('active'))
+        document.getElementById('staging-item-' + id)?.classList.add('active')
+        // 重置网络选择
+        document.getElementById('sshSelect').value = ''
+        document.getElementById('sslSelect').value = ''
+        document.getElementById('proxySelect').value = ''
+        document.getElementById('sshScopeBadge').style.display = 'none'
+        document.getElementById('sslScopeBadge').style.display = 'none'
+        document.getElementById('proxyScopeBadge').style.display = 'none'
+        document.getElementById('sshCustomForm').style.display = 'none'
+        document.getElementById('sslCustomForm').style.display = 'none'
+        document.getElementById('proxyCustomForm').style.display = 'none'
+        updateTopology()
+        document.getElementById('nameInput').value = '新建数据源'
+        document.getElementById('descInput').value = ''
+      }
+
+      // ============================================================
+      // 测试连接 & 保存
+      // ============================================================
+      function pretendTest() {
+        const el = document.getElementById('testResultArea')
+        const scopes = getActiveScopes()
+        const sshName = document.getElementById('sshSelect').selectedOptions[0]?.text || '直连'
+        const proxyName = document.getElementById('proxySelect').selectedOptions[0]?.text || '直连'
+
+        let pathDesc = '[本机]'
+        if (document.getElementById('proxySelect').value) pathDesc += ' → ' + proxyName
+        if (document.getElementById('sshSelect').value) pathDesc += ' → ' + sshName
+        pathDesc += ' → [' + currentDriver.dbType.toUpperCase() + ']'
+
+        el.className = 'test-result success'
+        el.innerHTML =
+          '✓ 连接成功 &nbsp;—&nbsp; <span style="opacity:0.7">' +
+          currentDriver.name +
+          '</span> &nbsp;—&nbsp; <span style="opacity:0.5;font-size:11px">路径: ' +
+          pathDesc +
+          ' &nbsp; 28ms</span>'
+        setTimeout(() => {
+          el.innerHTML = ''
+        }, 6000)
+      }
+
+      function handleSave() {
+        const name = document.getElementById('nameInput').value
+        const scopes = getActiveScopes()
+
+        if (!name.trim()) {
+          alert('请输入数据源名称')
+          return
+        }
+        if (scopes.none) {
+          alert('请至少选择一个存储范围（全局链接 / 项目链接）')
+          return
+        }
+
+        const sshVal = document.getElementById('sshSelect').value
+        const sslVal = document.getElementById('sslSelect').value
+        const proxyVal = document.getElementById('proxySelect').value
+
+        let saveMsg = '数据源「' + name + '」已保存！\n\n'
+        saveMsg += '存储范围：' + getScopeLabelFull() + '\n'
+        saveMsg += '驱动：' + currentDriver.name + '\n\n'
+        saveMsg += '网络配置：\n'
+        saveMsg +=
+          '  SSH: ' +
+          (sshVal
+            ? sshVal === 'custom'
+              ? '自定义（归属：' + getScopeLabel() + '）'
+              : SSH_PROFILES.find(p => p.id === sshVal)?.name || sshVal
+            : '直连') +
+          '\n'
+        saveMsg +=
+          '  SSL: ' +
+          (sslVal
+            ? sslVal === 'custom'
+              ? '自定义（归属：' + getScopeLabel() + '）'
+              : SSL_PROFILES.find(p => p.id === sslVal)?.name || sslVal
+            : '无') +
+          '\n'
+        saveMsg +=
+          '  Proxy: ' +
+          (proxyVal
+            ? proxyVal === 'custom'
+              ? '自定义（归属：' + getScopeLabel() + '）'
+              : PROXY_PROFILES.find(p => p.id === proxyVal)?.name || proxyVal
+            : '直连') +
+          '\n'
+
+        alert(saveMsg)
+      }
+
+      // ============================================================
+      // 初始化
+      // ============================================================
+      applyDriver(currentDriver)
+    </script>
+  </body>
+</html>

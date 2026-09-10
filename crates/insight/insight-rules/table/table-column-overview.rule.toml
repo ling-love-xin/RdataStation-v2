@@ -1,0 +1,46 @@
+[meta]
+id = "table-column-overview"
+name = "列类型概览"
+description = "显示表中各列的列名、数据类型和可空性"
+version = "1.0"
+category = "table"
+applies_to = ["Any"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    column_name,
+    data_type,
+    is_nullable,
+    COALESCE(column_default, '') AS column_default
+FROM information_schema.columns
+WHERE table_name = '{table}'
+ORDER BY ordinal_position
+"""
+parameters = ["table"]
+result_type = "list"
+
+[[output]]
+sql_name = "column_name"
+json_name = "column_name"
+value_type = "str"
+
+[[output]]
+sql_name = "data_type"
+json_name = "data_type"
+value_type = "str"
+
+[[output]]
+sql_name = "is_nullable"
+json_name = "is_nullable"
+value_type = "str"
+
+[[output]]
+sql_name = "column_default"
+json_name = "column_default"
+value_type = "str"
+
+[render]
+component = "ColumnOverviewTable"
+display_order = 2

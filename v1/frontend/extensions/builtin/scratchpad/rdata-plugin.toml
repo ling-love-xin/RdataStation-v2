@@ -1,0 +1,14 @@
+[plugin]
+id = "rdatastation.scratchpad"
+name = "Scratchpad"
+version = "1.0.0"
+publisher = "rdatastation"
+description = "Scratchpad - Temporary file management area for exploratory work"
+engines = { rdatastation = "^0.1.0" }
+
+[capabilities.frontend]
+entry = "./extension.ts"
+activation_events = ["onProjectOpen"]
+
+[contributes.panels]
+scratchpad = { title = "草稿箱", icon = "FileText", order = 4 }

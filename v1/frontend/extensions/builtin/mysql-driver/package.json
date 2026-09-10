@@ -1,0 +1,189 @@
+{
+  "name": "mysql-driver",
+  "publisher": "rdatastation",
+  "version": "1.0.0",
+  "displayName": "MySQL Driver",
+  "description": "MySQL database driver for RdataStation",
+  "categories": [
+    "Database Drivers"
+  ],
+  "keywords": [
+    "mysql",
+    "database",
+    "driver"
+  ],
+  "engines": {
+    "rdatastation": "^0.1.0"
+  },
+  "activationEvents": [
+    "onProjectOpen",
+    "onDatabaseConnect:mysql"
+  ],
+  "contributes": {
+    "databaseDrivers": [
+      {
+        "id": "mysql",
+        "name": "MySQL",
+        "icon": "$(database)",
+        "features": [
+          "schemas",
+          "tables",
+          "views",
+          "procedures",
+          "functions",
+          "triggers",
+          "indexes",
+          "foreignKeys",
+          "ssl",
+          "sshTunnel"
+        ],
+        "defaultPort": 3306,
+        "connectionSchema": {
+          "fields": [
+            {
+              "name": "host",
+              "label": "Host",
+              "type": "text",
+              "required": true,
+              "default": "localhost",
+              "placeholder": "localhost or IP address"
+            },
+            {
+              "name": "port",
+              "label": "Port",
+              "type": "number",
+              "required": true,
+              "default": 3306
+            },
+            {
+              "name": "database",
+              "label": "Database",
+              "type": "text",
+              "required": false,
+              "placeholder": "Optional default database"
+            },
+            {
+              "name": "username",
+              "label": "Username",
+              "type": "text",
+              "required": true,
+              "placeholder": "Database username"
+            },
+            {
+              "name": "password",
+              "label": "Password",
+              "type": "password",
+              "required": false,
+              "placeholder": "Database password"
+            },
+            {
+              "name": "ssl",
+              "label": "Use SSL",
+              "type": "checkbox",
+              "required": false,
+              "default": false
+            }
+          ]
+        }
+      }
+    ],
+    "sqlDialects": [
+      {
+        "id": "mysql",
+        "name": "MySQL",
+        "fileExtensions": [
+          ".sql",
+          ".mysql"
+        ],
+        "keywords": [
+          "SELECT",
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "FROM",
+          "WHERE",
+          "JOIN",
+          "LEFT",
+          "RIGHT",
+          "INNER",
+          "OUTER",
+          "ON",
+          "GROUP",
+          "BY",
+          "ORDER",
+          "LIMIT",
+          "OFFSET",
+          "HAVING",
+          "UNION",
+          "ALL",
+          "DISTINCT"
+        ],
+        "functions": [
+          "COUNT",
+          "SUM",
+          "AVG",
+          "MAX",
+          "MIN",
+          "CONCAT",
+          "SUBSTRING",
+          "DATE_FORMAT",
+          "NOW",
+          "CURDATE",
+          "CURTIME"
+        ],
+        "operators": [
+          "=",
+          "!=",
+          "<>",
+          "<",
+          ">",
+          "<=",
+          ">=",
+          "LIKE",
+          "IN",
+          "BETWEEN"
+        ],
+        "formatter": {
+          "indentSize": 2,
+          "keywordCase": "upper",
+          "identifierCase": "preserve"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "mysql.refreshSchema",
+        "title": "Refresh Schema",
+        "category": "MySQL",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mysql.showProcessList",
+        "title": "Show Process List",
+        "category": "MySQL",
+        "icon": "$(list-unordered)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "mysql.refreshSchema",
+          "when": "databaseDriver == mysql"
+        },
+        {
+          "command": "mysql.showProcessList",
+          "when": "databaseDriver == mysql"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "mysql.refreshSchema",
+          "when": "viewItem == mysql-connection",
+          "group": "navigation@1"
+        }
+      ]
+    }
+  },
+  "main": "./dist/extension.js",
+  "browser": "./dist/extension.js"
+}

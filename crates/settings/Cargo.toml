@@ -1,0 +1,12 @@
+[package]
+name = "rds-settings"
+version.workspace = true
+edition.workspace = true
+description = "RdataStation 设置：分节 model、JSON 持久化、设置面板视图（外观/通用/引擎/连接默认值）"
+
+[dependencies]
+gpui-kit.workspace = true
+
+# ===== 序列化 =====
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.135"

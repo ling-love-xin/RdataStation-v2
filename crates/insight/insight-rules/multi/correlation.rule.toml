@@ -1,0 +1,49 @@
+[meta]
+id = "pearson-correlation"
+name = "Pearson 相关系数"
+description = "计算两个数值列之间的 Pearson 相关系数、协方差、回归斜率"
+version = "1.0"
+category = "multi"
+applies_to = ["Numeric", "Numeric"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    CORR("{col1}", "{col2}")::DOUBLE AS corr,
+    COVAR_SAMP("{col1}", "{col2}")::DOUBLE AS covar,
+    REGR_SLOPE("{col1}", "{col2}")::DOUBLE AS slope,
+    REGR_INTERCEPT("{col1}", "{col2}")::DOUBLE AS intercept,
+    COUNT(*) FILTER (WHERE "{col1}" IS NOT NULL AND "{col2}" IS NOT NULL) AS n
+FROM "{table}"
+"""
+parameters = ["table", "col1", "col2"]
+
+[[output]]
+sql_name = "corr"
+json_name = "correlation"
+value_type = "f64?"
+
+[[output]]
+sql_name = "covar"
+json_name = "covariance"
+value_type = "f64?"
+
+[[output]]
+sql_name = "slope"
+json_name = "regression_slope"
+value_type = "f64?"
+
+[[output]]
+sql_name = "intercept"
+json_name = "regression_intercept"
+value_type = "f64?"
+
+[[output]]
+sql_name = "n"
+json_name = "sample_size"
+value_type = "i64"
+
+[render]
+component = "CorrelationResult"
+display_order = 1

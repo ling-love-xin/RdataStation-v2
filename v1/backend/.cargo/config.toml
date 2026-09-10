@@ -1,0 +1,23 @@
+[net]
+git-fetch-with-cli = true
+retry = 3
+
+# 优化编译配置，减少内存使用
+[build]
+# 使用单个代码生成单元，减少内存峰值
+incremental = true
+
+# 优化 rustc 配置
+[profile.dev]
+# 减少调试信息大小
+debug = "line-tables-only"
+# 减少优化级别以节省内存
+opt-level = 0
+# 限制并发编译
+codegen-units = 16
+
+[profile.release]
+# 发布版本保持优化
+opt-level = 3
+debug = "line-tables-only"
+codegen-units = 1

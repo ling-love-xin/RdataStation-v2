@@ -1,0 +1,112 @@
+{
+  "driverId": "sqlite",
+  "driverName": "SQLite",
+  "version": "3.45",
+  "metadata": {
+    "category": "file-based",
+    "description": "SQLite 轻量级文件数据库",
+    "features": ["事务", "触发器", "视图", "全文搜索"],
+    "defaultPort": null,
+    "driverKind": "native",
+    "urlTemplate": "sqlite://{file_path}",
+    "requireFile": true,
+    "requireDatabase": false,
+    "supportsSsl": false,
+    "supportsSshTunnel": false,
+    "supportsHttpProxy": false,
+    "supportsSocksProxy": false
+  },
+  "sections": [
+    {
+      "key": "database",
+      "title": "数据库文件",
+      "icon": "database",
+      "fields": [
+        {
+          "key": "database",
+          "label": "数据库文件",
+          "type": "file",
+          "placeholder": "选择或输入 SQLite 数据库文件路径",
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "advanced",
+      "title": "高级选项",
+      "icon": "settings",
+      "collapsible": true,
+      "collapsed": true,
+      "fields": [
+        {
+          "key": "journalMode",
+          "label": "日志模式",
+          "type": "select",
+          "default": "wal",
+          "options": [
+            { "label": "WAL", "value": "wal" },
+            { "label": "DELETE", "value": "delete" },
+            { "label": "TRUNCATE", "value": "truncate" },
+            { "label": "PERSIST", "value": "persist" }
+          ]
+        },
+        {
+          "key": "connectTimeout",
+          "label": "连接超时 (秒)",
+          "type": "number",
+          "default": 5,
+          "validation": { "min": 1, "max": 300 }
+        },
+        {
+          "key": "synchronous",
+          "label": "同步模式",
+          "type": "select",
+          "default": "normal",
+          "options": [
+            { "label": "OFF", "value": "0" },
+            { "label": "NORMAL", "value": "1" },
+            { "label": "FULL", "value": "2" }
+          ]
+        },
+        {
+          "key": "foreignKeys",
+          "label": "启用外键",
+          "type": "checkbox",
+          "default": true
+        },
+        {
+          "key": "readOnly",
+          "label": "只读模式",
+          "type": "checkbox",
+          "default": false
+        }
+      ]
+    }
+  ],
+  "navigation": {
+    "hasCatalogs": false,
+    "hasSchemas": false,
+    "systemSchemas": [],
+    "folders": {
+      "tables": { "enabled": true, "label": "Tables", "icon": "table", "childTypes": ["table"] },
+      "views": { "enabled": true, "label": "Views", "icon": "eye", "childTypes": ["view"] },
+      "functions": { "enabled": false, "label": "Functions", "icon": "function", "childTypes": [] },
+      "procedures": {
+        "enabled": false,
+        "label": "Procedures",
+        "icon": "terminal",
+        "childTypes": []
+      },
+      "sequences": { "enabled": false, "label": "Sequences", "icon": "hash", "childTypes": [] },
+      "triggers": { "enabled": false, "label": "Triggers", "icon": "zap", "childTypes": [] }
+    },
+    "tableChildren": {
+      "columns": true,
+      "indexes": false,
+      "constraints": false,
+      "triggers": false,
+      "foreignKeys": false,
+      "references": false
+    }
+  }
+}

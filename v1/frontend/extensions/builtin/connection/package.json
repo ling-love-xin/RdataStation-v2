@@ -1,0 +1,77 @@
+{
+  "name": "connection",
+  "publisher": "rdatastation",
+  "version": "1.0.0",
+  "displayName": "Connection Manager",
+  "description": "Database connection management for RdataStation",
+  "categories": [
+    "Core"
+  ],
+  "keywords": [
+    "connection",
+    "database"
+  ],
+  "engines": {
+    "rdatastation": "^0.1.0"
+  },
+  "activationEvents": [
+    "onProjectOpen"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "connection.create",
+        "title": "Create Connection",
+        "category": "Connection",
+        "icon": "$(add)"
+      },
+      {
+        "command": "connection.test",
+        "title": "Test Connection",
+        "category": "Connection",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "connection.delete",
+        "title": "Delete Connection",
+        "category": "Connection",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "connection.refresh",
+        "title": "Refresh Connections",
+        "category": "Connection",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "connection.create",
+          "when": "true"
+        },
+        {
+          "command": "connection.test",
+          "when": "connectionSelected"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "connection.create",
+          "when": "viewItem == connection-root",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "connection.explorer",
+          "name": "Connections",
+          "when": "true"
+        }
+      ]
+    }
+  },
+  "main": "./extension.ts"
+}

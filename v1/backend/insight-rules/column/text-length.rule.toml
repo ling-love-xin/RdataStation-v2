@@ -1,0 +1,30 @@
+[meta]
+id = "text-length"
+name = "文本长度范围"
+description = "计算文本列最小/最大长度"
+version = "1.0"
+category = "column"
+applies_to = ["Text", "VARCHAR", "STRING"]
+builtin = true
+
+[query]
+template = """
+SELECT MIN(LENGTH("{col}"::VARCHAR)) AS min_len, MAX(LENGTH("{col}"::VARCHAR)) AS max_len
+FROM "{table}"
+WHERE "{col}" IS NOT NULL
+"""
+parameters = ["table", "col"]
+
+[[output]]
+sql_name = "min_len"
+json_name = "min_length"
+value_type = "i64"
+
+[[output]]
+sql_name = "max_len"
+json_name = "max_length"
+value_type = "i64"
+
+[render]
+component = "TextLengthInfo"
+display_order = 4

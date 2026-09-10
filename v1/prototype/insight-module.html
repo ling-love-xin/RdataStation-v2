@@ -1,0 +1,1389 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RdataStation — 洞察模块原型 v0.1</title>
+    <style>
+      /* ========== Tokens (Catppuccin Mocha) ========== */
+      :root {
+        --color-bg-primary: #1e1f22;
+        --color-bg-secondary: #25262b;
+        --color-bg-tertiary: #2c2d31;
+        --color-bg-hover: #34353a;
+        --color-border: #3a3b40;
+        --color-border-light: #43444a;
+        --color-text-primary: #e0e0e0;
+        --color-text-secondary: #9e9e9e;
+        --color-text-muted: #6b6b6b;
+        --color-accent: #5b9bd5;
+        --color-accent-hover: #6eade4;
+        --color-success: #6bbf6b;
+        --color-warning: #e0a84c;
+        --color-error: #e05555;
+        --color-info: #5b9bd5;
+        --spacing-xs: 4px;
+        --spacing-sm: 8px;
+        --spacing-md: 12px;
+        --spacing-lg: 16px;
+        --spacing-xl: 20px;
+        --radius-sm: 4px;
+        --radius-md: 8px;
+        --radius-lg: 12px;
+        --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+        --font-sans: -apple-system, 'Segoe UI', sans-serif;
+        --score-excellent: #6bbf6b;
+        --score-good: #5b9bd5;
+        --score-fair: #e0a84c;
+        --score-poor: #e05555;
+        --score-critical: #c0392b;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: var(--font-sans);
+        background: #18191b;
+        color: var(--color-text-primary);
+        display: flex;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      /* ========== Layout: 3-column IDE ========== */
+      .ide {
+        display: flex;
+        width: 100%;
+        height: 100vh;
+      }
+
+      /* Left: navigator placeholder */
+      .nav-col {
+        width: 260px;
+        min-width: 260px;
+        background: var(--color-bg-primary);
+        border-right: 1px solid var(--color-border);
+        padding: var(--spacing-md);
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-sm);
+      }
+      .nav-title {
+        font-size: 11px;
+        text-transform: uppercase;
+        color: var(--color-text-muted);
+        letter-spacing: 0.5px;
+        padding: var(--spacing-xs) 0;
+      }
+      .nav-tree {
+        flex: 1;
+        font-size: 13px;
+        color: var(--color-text-secondary);
+        line-height: 2;
+      }
+      .nav-tree .node {
+        padding-left: 16px;
+        cursor: pointer;
+      }
+      .nav-tree .node:hover {
+        color: var(--color-text-primary);
+      }
+      .nav-tree .node.folder {
+        color: var(--color-accent);
+      }
+      .nav-tree .node.table {
+        padding-left: 32px;
+        color: var(--color-success);
+      }
+      .nav-tree .node.active {
+        background: var(--color-bg-hover);
+        border-radius: var(--radius-sm);
+      }
+
+      /* Center: main content */
+      .center-col {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: var(--color-bg-primary);
+        border-right: 1px solid var(--color-border);
+      }
+      .center-toolbar {
+        height: 32px;
+        background: var(--color-bg-secondary);
+        border-bottom: 1px solid var(--color-border);
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        padding: 0 var(--spacing-md);
+        font-size: 12px;
+      }
+      .center-content {
+        flex: 1;
+        padding: var(--spacing-lg);
+        overflow-y: auto;
+      }
+      .center-content .editor-placeholder {
+        color: var(--color-text-muted);
+        font-family: var(--font-mono);
+        font-size: 13px;
+        line-height: 1.8;
+      }
+
+      /* Right: insight sidebar */
+      .right-col {
+        width: 340px;
+        min-width: 340px;
+        background: var(--color-bg-primary);
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ========== Tabs ========== */
+      .tabs-bar {
+        display: flex;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-bg-secondary);
+        flex-shrink: 0;
+      }
+      .tab-btn {
+        padding: 6px 14px;
+        font-size: 12px;
+        color: var(--color-text-secondary);
+        border: none;
+        background: none;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.15s;
+      }
+      .tab-btn:hover {
+        color: var(--color-text-primary);
+      }
+      .tab-btn.active {
+        color: var(--color-accent);
+        border-bottom-color: var(--color-accent);
+      }
+
+      /* ========== Panel body ========== */
+      .panel-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: var(--spacing-md);
+      }
+      .panel-body::-webkit-scrollbar {
+        width: 6px;
+      }
+      .panel-body::-webkit-scrollbar-thumb {
+        background: var(--color-border);
+        border-radius: 3px;
+      }
+
+      /* ========== Empty / Loading / Error states ========== */
+      .state-empty,
+      .state-loading,
+      .state-error {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40px var(--spacing-md);
+        text-align: center;
+        gap: var(--spacing-sm);
+        color: var(--color-text-muted);
+        font-size: 13px;
+      }
+      .state-empty svg {
+        opacity: 0.4;
+      }
+      .state-error {
+        color: var(--color-error);
+      }
+      .state-error .retry-btn {
+        margin-top: var(--spacing-sm);
+        padding: 4px 12px;
+        font-size: 12px;
+        background: var(--color-bg-tertiary);
+        border: 1px solid var(--color-border);
+        color: var(--color-text-secondary);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+      }
+      .state-error .retry-btn:hover {
+        color: var(--color-text-primary);
+        border-color: var(--color-border-light);
+      }
+
+      /* Skeleton */
+      .skeleton {
+        background: var(--color-bg-tertiary);
+        border-radius: var(--radius-sm);
+        height: 14px;
+        margin-bottom: var(--spacing-sm);
+        animation: pulse 1.5s infinite;
+      }
+      .skeleton.w60 {
+        width: 60%;
+      }
+      .skeleton.w80 {
+        width: 80%;
+      }
+      .skeleton.w90 {
+        width: 90%;
+      }
+      .skeleton.w100 {
+        width: 100%;
+      }
+      .skeleton.block {
+        height: 60px;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 0.4;
+        }
+        50% {
+          opacity: 0.7;
+        }
+      }
+
+      /* ========== Panel header ========== */
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: var(--spacing-sm);
+        border-bottom: 1px solid var(--color-border-light);
+        margin-bottom: var(--spacing-md);
+      }
+      .panel-title {
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--color-accent);
+        font-weight: 600;
+      }
+      .panel-actions {
+        display: flex;
+        gap: var(--spacing-xs);
+        align-items: center;
+      }
+      .icon-btn {
+        width: 26px;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        background: none;
+        color: var(--color-text-muted);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: 14px;
+      }
+      .icon-btn:hover {
+        background: var(--color-bg-hover);
+        color: var(--color-text-primary);
+      }
+
+      /* ========== Quality Score Card ========== */
+      .quality-card {
+        background: var(--color-bg-secondary);
+        border-radius: var(--radius-md);
+        padding: var(--spacing-md);
+        margin-bottom: var(--spacing-md);
+        border: 1px solid var(--color-border-light);
+      }
+      .quality-badge {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-sm);
+      }
+      .quality-score-num {
+        font-size: 28px;
+        font-weight: 700;
+        font-family: var(--font-mono);
+      }
+      .quality-score-num.excellent {
+        color: var(--score-excellent);
+      }
+      .quality-score-num.good {
+        color: var(--score-good);
+      }
+      .quality-score-num.fair {
+        color: var(--score-fair);
+      }
+      .quality-score-num.poor {
+        color: var(--score-poor);
+      }
+      .quality-score-num.critical {
+        color: var(--score-critical);
+      }
+      .quality-level {
+        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: var(--radius-sm);
+        font-weight: 600;
+      }
+      .quality-level.excellent {
+        background: rgba(107, 191, 107, 0.15);
+        color: var(--score-excellent);
+      }
+      .quality-level.good {
+        background: rgba(91, 155, 213, 0.15);
+        color: var(--score-good);
+      }
+      .quality-level.fair {
+        background: rgba(224, 168, 76, 0.15);
+        color: var(--score-fair);
+      }
+      .quality-level.poor {
+        background: rgba(224, 85, 85, 0.15);
+        color: var(--score-poor);
+      }
+      .quality-summary {
+        font-size: 12px;
+        color: var(--color-text-secondary);
+        margin-bottom: var(--spacing-sm);
+      }
+      .quality-dim {
+        margin-bottom: var(--spacing-xs);
+      }
+      .dim-header {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        margin-bottom: 2px;
+      }
+      .dim-name {
+        color: var(--color-text-secondary);
+      }
+      .dim-score {
+        color: var(--color-text-muted);
+        font-family: var(--font-mono);
+      }
+      .dim-bar-track {
+        height: 4px;
+        background: var(--color-bg-tertiary);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .dim-bar-fill {
+        height: 100%;
+        border-radius: 2px;
+        transition: width 0.3s;
+      }
+      .dim-bar-fill.excellent {
+        background: var(--score-excellent);
+      }
+      .dim-bar-fill.good {
+        background: var(--score-good);
+      }
+      .dim-bar-fill.fair {
+        background: var(--score-fair);
+      }
+      .dim-bar-fill.poor {
+        background: var(--score-poor);
+      }
+
+      /* ========== Collapse ========== */
+      .collapse {
+        margin-bottom: var(--spacing-sm);
+      }
+      .collapse-header {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+        padding: var(--spacing-sm) 0;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--color-text-secondary);
+        user-select: none;
+        border-bottom: 1px solid transparent;
+      }
+      .collapse-header:hover {
+        color: var(--color-text-primary);
+      }
+      .collapse-arrow {
+        font-size: 10px;
+        transition: transform 0.15s;
+        color: var(--color-text-muted);
+      }
+      .collapse.open .collapse-arrow {
+        transform: rotate(90deg);
+      }
+      .collapse-body {
+        display: none;
+        padding: var(--spacing-xs) 0 var(--spacing-sm) 16px;
+      }
+      .collapse.open .collapse-body {
+        display: block;
+      }
+
+      /* ========== Stat grid ========== */
+      .stat-grid {
+        display: grid;
+        gap: var(--spacing-xs);
+      }
+      .stat-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12px;
+        padding: 2px 0;
+      }
+      .stat-label {
+        color: var(--color-text-muted);
+      }
+      .stat-value {
+        color: var(--color-text-primary);
+        font-family: var(--font-mono);
+      }
+      .stat-value.small {
+        font-size: 11px;
+      }
+      .stat-value.text-warning {
+        color: var(--color-warning);
+      }
+      .stat-sub {
+        color: var(--color-text-muted);
+        font-size: 11px;
+        font-family: var(--font-sans);
+      }
+
+      /* ========== Tag ========== */
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 1px 6px;
+        font-size: 11px;
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+      }
+      .tag.accent {
+        background: rgba(91, 155, 213, 0.15);
+        color: var(--color-accent);
+      }
+      .tag.success {
+        background: rgba(107, 191, 107, 0.15);
+        color: var(--color-success);
+      }
+      .tag.warning {
+        background: rgba(224, 168, 76, 0.15);
+        color: var(--color-warning);
+      }
+      .tag.error {
+        background: rgba(224, 85, 85, 0.15);
+        color: var(--color-error);
+      }
+
+      /* ========== Histogram / Frequency ========== */
+      .histo-row,
+      .freq-item {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        padding: 2px 0;
+        font-size: 11px;
+      }
+      .histo-label,
+      .freq-label {
+        width: 64px;
+        text-align: right;
+        color: var(--color-text-muted);
+        font-family: var(--font-mono);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .histo-bar-wrap,
+      .freq-bar-wrap {
+        flex: 1;
+        height: 8px;
+        background: var(--color-bg-tertiary);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .histo-bar,
+      .freq-bar {
+        height: 100%;
+        background: var(--color-accent);
+        border-radius: 4px;
+        min-width: 2px;
+        transition: width 0.3s;
+      }
+      .histo-ratio,
+      .freq-ratio {
+        width: 42px;
+        text-align: right;
+        font-family: var(--font-mono);
+        color: var(--color-text-muted);
+        font-size: 11px;
+      }
+      .freq-item.clickable {
+        cursor: pointer;
+      }
+      .freq-item.clickable:hover .freq-label {
+        color: var(--color-accent);
+      }
+
+      /* ========== Quality items ========== */
+      .quality-item {
+        font-size: 12px;
+        padding: 2px 0;
+        color: var(--color-text-secondary);
+      }
+      .quality-item.quality-ok {
+        color: var(--color-success);
+      }
+      .quality-item.quality-warn {
+        color: var(--color-warning);
+      }
+      .quality-item.quality-info {
+        color: var(--color-info);
+      }
+
+      /* ========== Sample values ========== */
+      .sample-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--spacing-xs);
+      }
+      .sample-value {
+        padding: 2px 8px;
+        font-size: 11px;
+        font-family: var(--font-mono);
+        background: var(--color-bg-tertiary);
+        border-radius: var(--radius-sm);
+        color: var(--color-text-secondary);
+      }
+
+      /* ========== Footer ========== */
+      .panel-footer {
+        padding: var(--spacing-sm) 0;
+        border-top: 1px solid var(--color-border-light);
+        margin-top: var(--spacing-md);
+        font-size: 11px;
+        color: var(--color-text-muted);
+        display: flex;
+        gap: var(--spacing-sm);
+        align-items: center;
+      }
+      .rules-footer {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-xs);
+        padding: var(--spacing-xs) 0;
+        font-size: 11px;
+        flex-wrap: wrap;
+      }
+      .rules-tag-label {
+        color: var(--color-text-muted);
+      }
+
+      /* ========== Schema Insight ========== */
+      .schema-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: var(--spacing-md);
+      }
+      .title-row {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+      }
+      .title-icon {
+        color: var(--color-accent);
+      }
+      .title {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .meta-info {
+        font-size: 11px;
+        color: var(--color-text-muted);
+      }
+
+      .health-bar {
+        background: var(--color-bg-secondary);
+        border-radius: var(--radius-md);
+        padding: var(--spacing-md);
+        margin-bottom: var(--spacing-md);
+        border: 1px solid var(--color-border-light);
+      }
+      .health-score {
+        display: flex;
+        align-items: baseline;
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-xs);
+      }
+      .score-num {
+        font-size: 32px;
+        font-weight: 700;
+        font-family: var(--font-mono);
+      }
+      .score-level {
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: capitalize;
+      }
+      .health-desc {
+        font-size: 12px;
+        color: var(--color-text-secondary);
+      }
+
+      /* FK / Mismatch / Orphan / Redundant rows */
+      .fk-row,
+      .mismatch-row,
+      .orphan-row,
+      .redundant-row {
+        padding: var(--spacing-xs) 0;
+        border-bottom: 1px solid var(--color-border-light);
+        font-size: 12px;
+      }
+      .fk-row:last-child,
+      .mismatch-row:last-child,
+      .orphan-row:last-child,
+      .redundant-row:last-child {
+        border-bottom: none;
+      }
+      .fk-tables {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        margin-bottom: 4px;
+      }
+      .fk-arrow {
+        color: var(--color-text-muted);
+      }
+      .fk-detail {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        font-size: 11px;
+      }
+      .fk-col {
+        color: var(--color-text-muted);
+        font-family: var(--font-mono);
+      }
+      .fk-pattern {
+        font-size: 11px;
+        color: var(--color-text-muted);
+        margin-top: 2px;
+      }
+      .mismatch-header {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        margin-bottom: 4px;
+      }
+      .mismatch-col {
+        color: var(--color-accent);
+        font-family: var(--font-mono);
+      }
+      .mismatch-tables {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--spacing-xs);
+      }
+      .mismatch-table {
+        font-size: 11px;
+        color: var(--color-text-secondary);
+        font-family: var(--font-mono);
+      }
+      .orphan-col-count {
+        font-size: 11px;
+        color: var(--color-text-muted);
+        margin-left: var(--spacing-sm);
+      }
+      .orphan-reason {
+        font-size: 11px;
+        color: var(--color-text-muted);
+        margin-left: var(--spacing-sm);
+      }
+      .redundant-col {
+        font-family: var(--font-mono);
+        color: var(--color-warning);
+      }
+      .redundant-suggest {
+        font-size: 11px;
+        color: var(--color-text-muted);
+        margin-top: 2px;
+      }
+      .empty-note {
+        font-size: 12px;
+        color: var(--color-text-muted);
+        padding: var(--spacing-sm) 0;
+      }
+
+      .clickable-tag {
+        cursor: pointer;
+      }
+      .clickable-tag:hover {
+        opacity: 0.8;
+      }
+
+      /* ========== Table Profile ========== */
+      .profile-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: var(--spacing-md);
+      }
+      .profile-title-row {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+      }
+      .profile-title {
+        font-size: 14px;
+        font-weight: 600;
+        font-family: var(--font-mono);
+      }
+      .quality-summary-bar {
+        background: var(--color-bg-secondary);
+        border-radius: var(--radius-md);
+        padding: var(--spacing-md);
+        margin-bottom: var(--spacing-md);
+        border: 1px solid var(--color-border-light);
+      }
+      .quality-score-big {
+        display: flex;
+        align-items: baseline;
+        gap: var(--spacing-sm);
+        flex-wrap: wrap;
+      }
+      .score-number {
+        font-size: 32px;
+        font-weight: 700;
+        font-family: var(--font-mono);
+      }
+      .score-label {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .quality-desc {
+        font-size: 12px;
+        color: var(--color-text-secondary);
+        margin-left: auto;
+      }
+      .btn {
+        padding: 4px 12px;
+        font-size: 12px;
+        border: 1px solid var(--color-border);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-secondary);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+      }
+      .btn:hover {
+        border-color: var(--color-border-light);
+        color: var(--color-text-primary);
+      }
+      .btn.primary {
+        background: var(--color-accent);
+        color: #fff;
+        border-color: var(--color-accent);
+      }
+      .btn.primary:hover {
+        background: var(--color-accent-hover);
+      }
+
+      /* ========== Table (profile) ========== */
+      .profile-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .profile-table th {
+        text-align: left;
+        padding: 6px 10px;
+        color: var(--color-text-muted);
+        font-weight: 600;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-bg-secondary);
+        position: sticky;
+        top: 0;
+      }
+      .profile-table td {
+        padding: 5px 10px;
+        border-bottom: 1px solid var(--color-border-light);
+        font-family: var(--font-mono);
+        color: var(--color-text-secondary);
+      }
+      .profile-table tr:hover td {
+        background: var(--color-bg-hover);
+      }
+
+      /* ========== Viz action ========== */
+      .viz-action {
+        padding: var(--spacing-sm) 0;
+        text-align: center;
+      }
+      .viz-btn {
+        font-size: 11px;
+        color: var(--color-accent);
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: var(--radius-sm);
+      }
+      .viz-btn:hover {
+        background: var(--color-bg-hover);
+      }
+
+      /* ========== Tooltip for switch ========== */
+      .tooltip {
+        position: relative;
+      }
+      .tooltip::after {
+        content: attr(data-tip);
+        position: absolute;
+        bottom: 120%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--color-bg-tertiary);
+        color: var(--color-text-primary);
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: var(--radius-sm);
+        white-space: nowrap;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s;
+        border: 1px solid var(--color-border);
+      }
+      .tooltip:hover::after {
+        opacity: 1;
+      }
+
+      /* ========== View switcher (top-right) ========== */
+      .view-switcher {
+        position: fixed;
+        top: 8px;
+        right: 16px;
+        z-index: 10;
+        display: flex;
+        gap: var(--spacing-xs);
+        background: var(--color-bg-secondary);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        padding: 2px;
+        font-size: 11px;
+      }
+      .view-switcher button {
+        padding: 4px 10px;
+        border: none;
+        background: none;
+        color: var(--color-text-muted);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+      }
+      .view-switcher button.active {
+        background: var(--color-accent);
+        color: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- View Switcher -->
+    <div class="view-switcher">
+      <button class="active" onclick="switchView('column')">列洞察</button>
+      <button onclick="switchView('schema')">Schema 洞察</button>
+      <button onclick="switchView('table')">表探查</button>
+    </div>
+
+    <div class="ide">
+      <!-- ===== LEFT: Navigator ===== -->
+      <div class="nav-col">
+        <div class="nav-title">项目浏览器</div>
+        <div class="nav-tree">
+          <div class="node folder">📁 mysql@localhost</div>
+          <div class="node table active">📄 users</div>
+          <div class="node table">📄 orders</div>
+          <div class="node table">📄 products</div>
+          <div class="node table">📄 categories</div>
+          <div class="node folder">📁 public</div>
+          <div class="node folder" style="margin-top: 8px">📁 postgres@prod</div>
+          <div class="node table">📄 accounts</div>
+          <div class="node table">📄 transactions</div>
+        </div>
+      </div>
+
+      <!-- ===== CENTER: Editor ===== -->
+      <div class="center-col">
+        <div class="center-toolbar">
+          <span>📄 query.sql</span>
+          <span style="color: var(--color-text-muted)">— 已连接 mysql@localhost</span>
+        </div>
+        <div class="center-content">
+          <div class="editor-placeholder"> SELECT * FROM users ORDER BY created_at DESC; </div>
+          <div
+            style="
+              margin-top: 16px;
+              padding: 12px;
+              background: var(--color-bg-secondary);
+              border-radius: var(--radius-md);
+              font-size: 12px;
+              color: var(--color-text-muted);
+            "
+          >
+            <div style="color: var(--color-text-primary); font-weight: 600; margin-bottom: 8px"
+              >查询结果 (1,000 rows × 8 cols)</div
+            >
+            <table
+              style="
+                width: 100%;
+                border-collapse: collapse;
+                font-family: var(--font-mono);
+                font-size: 11px;
+              "
+            >
+              <tr style="border-bottom: 1px solid var(--color-border); color: var(--color-accent)">
+                <td style="padding: 4px 8px">id</td><td style="padding: 4px 8px">username</td
+                ><td style="padding: 4px 8px">email</td><td style="padding: 4px 8px">age</td
+                ><td style="padding: 4px 8px">city</td><td style="padding: 4px 8px">created_at</td>
+              </tr>
+              <tr
+                ><td style="padding: 4px 8px">1</td><td style="padding: 4px 8px">alice</td
+                ><td style="padding: 4px 8px">alice@mail.com</td><td style="padding: 4px 8px">28</td
+                ><td style="padding: 4px 8px">Beijing</td
+                ><td style="padding: 4px 8px">2024-01-15</td></tr
+              >
+              <tr
+                ><td style="padding: 4px 8px">2</td><td style="padding: 4px 8px">bob</td
+                ><td style="padding: 4px 8px">bob@mail.com</td><td style="padding: 4px 8px">35</td
+                ><td style="padding: 4px 8px">Shanghai</td
+                ><td style="padding: 4px 8px">2024-03-22</td></tr
+              >
+              <tr
+                ><td style="padding: 4px 8px">3</td><td style="padding: 4px 8px">charlie</td
+                ><td style="padding: 4px 8px">-</td><td style="padding: 4px 8px">42</td
+                ><td style="padding: 4px 8px">Shenzhen</td
+                ><td style="padding: 4px 8px">2024-06-10</td></tr
+              >
+              <tr
+                ><td style="padding: 4px 8px">...</td><td style="padding: 4px 8px">...</td
+                ><td style="padding: 4px 8px">...</td><td style="padding: 4px 8px">...</td
+                ><td style="padding: 4px 8px">...</td><td style="padding: 4px 8px">...</td></tr
+              >
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== RIGHT: Insight Panel ===== -->
+      <div class="right-col" id="rightPanel">
+        <!-- View 1: Column Insight -->
+        <div id="view-column" class="panel-body">
+          <!-- Tab Bar -->
+          <div class="tabs-bar">
+            <button class="tab-btn active">列洞察</button>
+            <button class="tab-btn">多列分析</button>
+            <button class="tab-btn">历史 (3)</button>
+          </div>
+
+          <div style="padding: var(--spacing-md) 0">
+            <!-- Panel Header -->
+            <div class="panel-header">
+              <span class="panel-title">age</span>
+              <div class="panel-actions">
+                <button class="icon-btn tooltip" data-tip="刷新">↻</button>
+                <button class="icon-btn tooltip" data-tip="导出 JSON">⬇</button>
+              </div>
+            </div>
+
+            <!-- Quality Score Card -->
+            <div class="quality-card">
+              <div class="quality-badge">
+                <span class="quality-score-num good">85</span>
+                <span class="quality-level good">Good</span>
+              </div>
+              <div class="quality-summary">数据质量良好，完整性较高，分布均匀</div>
+              <div class="quality-dim">
+                <div class="dim-header"
+                  ><span class="dim-name">完整性</span><span class="dim-score">95</span></div
+                >
+                <div class="dim-bar-track"
+                  ><div class="dim-bar-fill excellent" style="width: 95%"></div
+                ></div>
+              </div>
+              <div class="quality-dim">
+                <div class="dim-header"
+                  ><span class="dim-name">唯一性</span><span class="dim-score">72</span></div
+                >
+                <div class="dim-bar-track"
+                  ><div class="dim-bar-fill fair" style="width: 72%"></div
+                ></div>
+              </div>
+              <div class="quality-dim">
+                <div class="dim-header"
+                  ><span class="dim-name">类型一致性</span><span class="dim-score">100</span></div
+                >
+                <div class="dim-bar-track"
+                  ><div class="dim-bar-fill excellent" style="width: 100%"></div
+                ></div>
+              </div>
+              <div class="quality-dim">
+                <div class="dim-header"
+                  ><span class="dim-name">分布合理性</span><span class="dim-score">78</span></div
+                >
+                <div class="dim-bar-track"
+                  ><div class="dim-bar-fill fair" style="width: 78%"></div
+                ></div>
+              </div>
+            </div>
+
+            <!-- Collapse: 基础统计 -->
+            <div class="collapse open">
+              <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+                <span class="collapse-arrow">▶</span> 基础统计
+              </div>
+              <div class="collapse-body">
+                <div class="stat-grid">
+                  <div class="stat-row"
+                    ><span class="stat-label">总行数</span
+                    ><span class="stat-value">1,000</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">数据类型</span
+                    ><span class="tag accent">INTEGER</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">空值率</span
+                    ><span class="stat-value text-warning"
+                      >3.2% <span class="stat-sub">(32 nulls)</span></span
+                    ></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">唯一值</span><span class="stat-value">84</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">平均值</span><span class="stat-value">34.2</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">中位数</span><span class="stat-value">32.0</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">最小值</span><span class="stat-value">18</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">最大值</span><span class="stat-value">76</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">P25 / P75</span
+                    ><span class="stat-value">25.0 / 44.0</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">标准差</span><span class="stat-value">12.8</span></div
+                  >
+                  <div class="stat-row"
+                    ><span class="stat-label">偏度</span
+                    ><span class="stat-value">0.42 <span class="stat-sub">右偏</span></span></div
+                  >
+                </div>
+              </div>
+            </div>
+
+            <!-- Collapse: 数据分布 -->
+            <div class="collapse open">
+              <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+                <span class="collapse-arrow">▶</span> 数据分布
+              </div>
+              <div class="collapse-body">
+                <div class="histo-row"
+                  ><span class="histo-label">18-25</span
+                  ><div class="histo-bar-wrap"><div class="histo-bar" style="width: 22%"></div></div
+                  ><span class="histo-ratio">22%</span></div
+                >
+                <div class="histo-row"
+                  ><span class="histo-label">25-35</span
+                  ><div class="histo-bar-wrap"><div class="histo-bar" style="width: 35%"></div></div
+                  ><span class="histo-ratio">35%</span></div
+                >
+                <div class="histo-row"
+                  ><span class="histo-label">35-45</span
+                  ><div class="histo-bar-wrap"><div class="histo-bar" style="width: 25%"></div></div
+                  ><span class="histo-ratio">25%</span></div
+                >
+                <div class="histo-row"
+                  ><span class="histo-label">45-55</span
+                  ><div class="histo-bar-wrap"><div class="histo-bar" style="width: 12%"></div></div
+                  ><span class="histo-ratio">12%</span></div
+                >
+                <div class="histo-row"
+                  ><span class="histo-label">55-65</span
+                  ><div class="histo-bar-wrap"><div class="histo-bar" style="width: 4%"></div></div
+                  ><span class="histo-ratio">4%</span></div
+                >
+                <div class="histo-row"
+                  ><span class="histo-label">65-76</span
+                  ><div class="histo-bar-wrap"><div class="histo-bar" style="width: 2%"></div></div
+                  ><span class="histo-ratio">2%</span></div
+                >
+                <div class="viz-action"><button class="viz-btn">📊 打开可视化图表</button></div>
+              </div>
+            </div>
+
+            <!-- Collapse: 数据质量 -->
+            <div class="collapse open">
+              <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+                <span class="collapse-arrow">▶</span> 数据质量
+              </div>
+              <div class="collapse-body">
+                <div class="quality-item quality-warn">⚠️ 空值率 3.2%，存在 32 个空值</div>
+                <div class="quality-item quality-info"
+                  >ℹ️ 分布略微右偏（偏度 0.42），大部分用户集中在 25-45 岁</div
+                >
+              </div>
+            </div>
+
+            <!-- Collapse: 样本值 -->
+            <div class="collapse">
+              <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+                <span class="collapse-arrow">▶</span> 样本值 (前 5)
+              </div>
+              <div class="collapse-body">
+                <div class="sample-list">
+                  <span class="sample-value">28</span>
+                  <span class="sample-value">35</span>
+                  <span class="sample-value">42</span>
+                  <span class="sample-value">23</span>
+                  <span class="sample-value">51</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="panel-footer">
+              <span>存储大小: 2.4 KB</span>
+              <button class="btn" style="margin-left: auto; font-size: 11px">清理</button>
+            </div>
+            <div class="rules-footer">
+              <span class="rules-tag-label">适用规则:</span>
+              <span class="tag accent">数值范围检查</span>
+              <span class="tag accent">空值检测</span>
+              <span class="tag accent">分布分析</span>
+              <button class="icon-btn" style="margin-left: auto">↻</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- View 2: Schema Insight -->
+        <div id="view-schema" class="panel-body" style="display: none">
+          <div class="schema-header">
+            <div class="title-row">
+              <span class="title-icon">📊</span>
+              <span class="title">public</span>
+              <span class="meta-info">4 表 / 28 列</span>
+            </div>
+            <div class="panel-actions">
+              <button class="icon-btn tooltip" data-tip="导出 JSON">⬇</button>
+              <button class="icon-btn tooltip" data-tip="导出 Markdown">📄</button>
+              <button class="icon-btn" data-tip="刷新">↻</button>
+            </div>
+          </div>
+
+          <!-- Health Score -->
+          <div class="health-bar">
+            <div class="health-score">
+              <span class="score-num" style="color: var(--score-good)">78</span>
+              <span class="score-level" style="color: var(--score-good)">良好</span>
+            </div>
+            <div class="health-desc"
+              >Schema 整体健康，发现 2 个 FK 候选、1 个类型不匹配、1 个孤儿表</div
+            >
+          </div>
+
+          <!-- Collapse Sections -->
+          <div class="collapse open">
+            <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+              <span class="collapse-arrow">▶</span> FK 候选
+              <span class="tag success" style="margin-left: 8px">2</span>
+            </div>
+            <div class="collapse-body">
+              <div class="fk-row">
+                <div class="fk-tables">
+                  <span class="tag accent clickable-tag">orders</span>
+                  <span class="fk-arrow">→</span>
+                  <span class="tag accent clickable-tag">users</span>
+                </div>
+                <div class="fk-detail">
+                  <span class="fk-col">user_id → id</span>
+                  <span class="tag success">high</span>
+                </div>
+                <div class="fk-pattern">命名模式: *_id → id</div>
+              </div>
+              <div class="fk-row">
+                <div class="fk-tables">
+                  <span class="tag accent clickable-tag">products</span>
+                  <span class="fk-arrow">→</span>
+                  <span class="tag accent clickable-tag">categories</span>
+                </div>
+                <div class="fk-detail">
+                  <span class="fk-col">category_id → id</span>
+                  <span class="tag warning">medium</span>
+                </div>
+                <div class="fk-pattern">命名模式: *_id → id (类型 VARCHAR ↔ INTEGER 不匹配)</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="collapse open">
+            <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+              <span class="collapse-arrow">▶</span> 类型不匹配
+              <span class="tag warning" style="margin-left: 8px">1</span>
+            </div>
+            <div class="collapse-body">
+              <div class="mismatch-row">
+                <div class="mismatch-header">
+                  <span class="mismatch-col">status</span>
+                  <span class="tag warning">warning</span>
+                </div>
+                <div class="mismatch-tables">
+                  <span class="tag">orders <code>VARCHAR(20)</code></span>
+                  <span class="tag">products <code>INTEGER</code></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="collapse open">
+            <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+              <span class="collapse-arrow">▶</span> 孤儿表
+              <span class="tag warning" style="margin-left: 8px">1</span>
+            </div>
+            <div class="collapse-body">
+              <div class="orphan-row">
+                <span class="tag accent clickable-tag">audit_logs</span>
+                <span class="orphan-col-count">5 列</span>
+                <span class="orphan-reason">无外键关联，可能为独立日志表</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="collapse">
+            <div class="collapse-header" onclick="this.parentElement.classList.toggle('open')">
+              <span class="collapse-arrow">▶</span> 冗余列
+              <span class="tag" style="margin-left: 8px">2</span>
+            </div>
+            <div class="collapse-body">
+              <div class="redundant-row">
+                <span class="redundant-col">created_at</span>
+                <span class="tag">4 表</span>
+                <div class="redundant-suggest">建议：提取为公共时间戳策略，或统一命名</div>
+              </div>
+              <div class="redundant-row">
+                <span class="redundant-col">updated_at</span>
+                <span class="tag">4 表</span>
+                <div class="redundant-suggest">建议：考虑使用数据库触发器自动维护</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- View 3: Table Profile -->
+        <div id="view-table" class="panel-body" style="display: none">
+          <div class="profile-header">
+            <div class="profile-title-row">
+              <span class="title-icon">📄</span>
+              <span class="profile-title">users</span>
+              <span class="tag accent">MySQL</span>
+              <span class="tag">1,000 行</span>
+            </div>
+            <div class="panel-actions">
+              <button class="btn primary" onclick="runQualityEval()">质量评估</button>
+            </div>
+          </div>
+
+          <div id="quality-result" class="quality-summary-bar" style="display: block">
+            <div class="quality-score-big">
+              <span class="score-number" style="color: var(--score-good)">82</span>
+              <span class="score-label" style="color: var(--score-good)">Good</span>
+              <span class="quality-desc">表整体质量良好，3/8 列评分超 80</span>
+            </div>
+          </div>
+
+          <div style="overflow-x: auto">
+            <table class="profile-table">
+              <thead>
+                <tr>
+                  <th>#</th><th>列名</th><th>类型</th><th>可空</th><th>主键</th><th>质量评分</th
+                  ><th>空值率</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  ><td>1</td><td>id</td><td>INTEGER</td><td>✗</td><td>✓</td
+                  ><td><span style="color: var(--score-excellent)">98</span></td
+                  ><td>0%</td></tr
+                >
+                <tr
+                  ><td>2</td><td>username</td><td>VARCHAR(50)</td><td>✗</td><td>✗</td
+                  ><td><span style="color: var(--score-excellent)">95</span></td
+                  ><td>0%</td></tr
+                >
+                <tr
+                  ><td>3</td><td>email</td><td>VARCHAR(100)</td><td>✓</td><td>✗</td
+                  ><td><span style="color: var(--score-good)">88</span></td
+                  ><td>1.2%</td></tr
+                >
+                <tr
+                  ><td>4</td><td>age</td><td>INTEGER</td><td>✓</td><td>✗</td
+                  ><td><span style="color: var(--score-good)">85</span></td
+                  ><td>3.2%</td></tr
+                >
+                <tr
+                  ><td>5</td><td>city</td><td>VARCHAR(50)</td><td>✓</td><td>✗</td
+                  ><td><span style="color: var(--score-fair)">72</span></td
+                  ><td>8.5%</td></tr
+                >
+                <tr
+                  ><td>6</td><td>phone</td><td>VARCHAR(20)</td><td>✓</td><td>✗</td
+                  ><td><span style="color: var(--score-fair)">65</span></td
+                  ><td>15.3%</td></tr
+                >
+                <tr
+                  ><td>7</td><td>created_at</td><td>TIMESTAMP</td><td>✗</td><td>✗</td
+                  ><td><span style="color: var(--score-excellent)">97</span></td
+                  ><td>0%</td></tr
+                >
+                <tr
+                  ><td>8</td><td>bio</td><td>TEXT</td><td>✓</td><td>✗</td
+                  ><td><span style="color: var(--score-poor)">45</span></td
+                  ><td>42.1%</td></tr
+                >
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ========== View switcher ==========
+      function switchView(view) {
+        ;['column', 'schema', 'table'].forEach(v => {
+          document.getElementById('view-' + v).style.display = v === view ? 'block' : 'none'
+        })
+        document.querySelectorAll('.view-switcher button').forEach((btn, i) => {
+          btn.classList.toggle('active', i === ['column', 'schema', 'table'].indexOf(view))
+        })
+      }
+
+      // ========== Quality eval simulation ==========
+      function runQualityEval() {
+        const el = document.getElementById('quality-result')
+        el.style.display = el.style.display === 'none' ? 'block' : 'none'
+      }
+    </script>
+  </body>
+</html>

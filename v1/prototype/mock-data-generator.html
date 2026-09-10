@@ -1,0 +1,2306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mock 数据生成器 — RdataStation 原型</title>
+<style>
+/* ========== Design Tokens ========== */
+:root {
+  --bg-root: #1e1e1e;
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252526;
+  --bg-tertiary: #2d2d30;
+  --bg-hover: #333333;
+  --bg-active: #094771;
+  --bg-input: #3c3c3c;
+  --bg-input-focus: #4a4a4d;
+  --bg-card: #2d2d30;
+  --bg-badge: #4a4a4d;
+  --bg-progress: #3c3c3c;
+  --bg-table-header: #2d2d30;
+  --bg-table-even: #252526;
+  --bg-table-odd: #1e1e1e;
+  --bg-overlay: rgba(0,0,0,0.5);
+  --bg-drawer: #252526;
+  --bg-tag: rgba(79,193,255,0.12);
+  --bg-tag-success: #1a3a2a;
+  --bg-tag-warning: #3a3a1a;
+  --bg-toast-success: #1a7f37;
+  --bg-toast-error: #a12222;
+  --bg-toast-warning: #6b5100;
+  --border: #3c3c3c;
+  --border-light: #4a4a4d;
+  --border-subtle: #333;
+  --border-focus: #007acc;
+  --text-primary: #cccccc;
+  --text-secondary: #9d9d9d;
+  --text-muted: #6a6a6a;
+  --text-white: #e0e0e0;
+  --text-accent: #4fc1ff;
+  --text-accent-hover: #6bc5ff;
+  --text-number: #b5cea8;
+  --text-string: #ce9178;
+  --text-keyword: #569cd6;
+  --text-function: #dcdcaa;
+  --text-boolean: #569cd6;
+  --text-null: #808080;
+  --text-success: #4ec9b0;
+  --text-warning: #cca700;
+  --text-error: #f44747;
+  --text-sql: #007acc;
+  --green: #4ec9b0;
+  --purple: #c586c0;
+  --orange: #ce9178;
+  --brand: #0078d4;
+  --brand-soft: rgba(0,120,212,0.15);
+  --mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+  --ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif;
+  --r-sm: 3px;
+  --r-md: 5px;
+  --r-lg: 7px;
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-lg: 0 6px 24px rgba(0,0,0,0.5);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--ui); background: var(--bg-root); color: var(--text-primary);
+  height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+  -webkit-font-smoothing: antialiased; font-size: 13px;
+}
+
+/* ========== Title Bar ========== */
+.title-bar {
+  height: 30px; background: #323233; display: flex; align-items: center;
+  padding: 0 12px; font-size: 12px; color: #ccc; flex-shrink: 0;
+  user-select: none; gap: 8px;
+}
+.title-bar .logo { font-weight: 700; color: #fff; font-size: 13px; letter-spacing: -0.3px; }
+.title-bar .sep { width: 1px; height: 14px; background: #555; }
+.title-bar .dim { font-size: 11px; color: var(--text-secondary); }
+
+/* ========== Main Layout ========== */
+.main-layout { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+
+/* ── ActivityBar ── */
+.activity-bar {
+  width: 48px; background: var(--bg-secondary); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 2px; flex-shrink: 0;
+}
+.activity-bar.right { border-right: none; border-left: 1px solid var(--border); }
+.act-item {
+  width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-md); cursor: pointer; color: #858585; font-size: 18px;
+  position: relative; transition: color 0.15s; user-select: none;
+}
+.act-item:hover { color: #ccc; }
+.act-item.active { color: #fff; }
+.act-item.active::before {
+  content: ''; position: absolute; left: -8px; top: 8px; width: 2px; height: 24px;
+  background: #fff; border-radius: 1px;
+}
+.activity-bar.right .act-item.active::before {
+  left: auto; right: -8px;
+}
+.act-item .badge { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); }
+.act-spacer { flex: 1; }
+.act-label {
+  font-size: 9px; color: var(--text-muted); text-align: center; line-height: 1.2;
+  margin-top: -2px; margin-bottom: 6px; user-select: none; max-width: 44px; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── Central Area ── */
+.central-area {
+  flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0;
+  background: var(--bg-primary);
+}
+.welcome-page {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: var(--text-muted); user-select: none; gap: 12px;
+}
+.welcome-icon { font-size: 56px; opacity: 0.4; }
+.welcome-title { font-size: 18px; color: var(--text-secondary); font-weight: 300; }
+.welcome-subtitle { font-size: 12px; color: var(--text-muted); }
+.welcome-hint { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
+
+/* ── Right Panel (Mock) ── */
+.right-panel {
+  width: 380px; min-width: 200px; max-width: 600px;
+  background: var(--bg-primary); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0;
+  transition: width 0.2s ease, margin-right 0.2s ease;
+}
+.right-panel.hidden {
+  width: 0; min-width: 0; border-left: none; overflow: hidden;
+}
+.right-panel-resize {
+  width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0;
+  position: relative; z-index: 5; transition: background 0.15s;
+}
+.right-panel-resize:hover, .right-panel-resize.active { background: var(--brand); }
+
+/* Panel Header */
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+  min-height: 36px; flex-shrink: 0; background: var(--bg-secondary);
+}
+.panel-title {
+  margin: 0; font-size: 13px; font-weight: 600; color: var(--text-white);
+}
+.header-actions {
+  display: flex; gap: 2px;
+}
+
+/* Panel Body */
+.panel-body {
+  flex: 1; display: flex; flex-direction: column; overflow-y: auto;
+  padding: 8px 12px; gap: 8px;
+}
+.panel-body::-webkit-scrollbar { width: 6px; }
+.panel-body::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
+/* Config Section */
+.config-section {
+  padding: 8px 12px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.config-row {
+  display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;
+}
+.config-item {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.config-label {
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.3px;
+}
+.config-item input, .config-item select {
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text-primary); padding: 4px 8px; font-size: 12px; font-family: var(--ui);
+  outline: none; transition: border-color 0.15s;
+}
+.config-item input:focus, .config-item select:focus { border-color: var(--border-focus); }
+.config-item input { width: 120px; }
+.config-item input.wide { width: 160px; }
+.config-item select { width: 100px; cursor: pointer; }
+.config-item input.narrow { width: 80px; }
+
+/* Columns Section */
+.columns-section {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 10px; background: var(--bg-card); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.section-title {
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.3px;
+}
+.columns-list {
+  padding: 4px 8px; display: flex; flex-direction: column; gap: 3px;
+  overflow-y: auto; max-height: 220px;
+}
+.columns-list::-webkit-scrollbar { width: 6px; }
+.columns-list::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
+.column-row {
+  display: flex; gap: 3px; align-items: center;
+}
+.col-name { flex: 0 0 90px; }
+.col-name input {
+  width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 3px 5px;
+  font-size: 11px; font-family: var(--ui); outline: none;
+}
+.col-name input:focus { border-color: var(--border-focus); }
+.col-type { width: 80px; flex-shrink: 0; }
+.col-type select {
+  width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 3px 3px;
+  font-size: 10px; font-family: var(--ui); outline: none; cursor: pointer;
+}
+.col-type select:focus { border-color: var(--border-focus); }
+.col-dt-param { width: 50px; flex-shrink: 0; }
+.col-dt-param input {
+  width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 3px 2px;
+  font-size: 10px; font-family: var(--ui); outline: none; text-align: center;
+}
+.col-dt-param input:focus { border-color: var(--border-focus); }
+.col-dt-param-sm { width: 42px; flex-shrink: 0; }
+.col-dt-param-sm input {
+  width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 3px 2px;
+  font-size: 10px; font-family: var(--ui); outline: none; text-align: center;
+}
+.col-dt-param-sm input:focus { border-color: var(--border-focus); }
+.col-gen { flex: 1; min-width: 100px; }
+.col-gen select {
+  width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 3px 3px;
+  font-size: 10px; font-family: var(--ui); outline: none; cursor: pointer;
+}
+.col-gen select:focus { border-color: var(--border-focus); }
+.col-null { width: 52px; flex-shrink: 0; }
+.col-null input {
+  width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 3px 2px;
+  font-size: 10px; font-family: var(--ui); outline: none; text-align: center;
+}
+.col-null input:focus { border-color: var(--border-focus); }
+.col-fx { flex-shrink: 0; }
+.fx-btn {
+  width: 24px; height: 24px; border: none; border-radius: var(--r-sm);
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  font-size: 12px; display: flex; align-items: center; justify-content: center;
+  transition: all 0.12s;
+}
+.fx-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.fx-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.fx-btn.danger:hover { color: var(--text-error); }
+.fx-btn.loading { animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.unique-tag {
+  font-size: 9px; padding: 1px 5px; border-radius: 3px;
+  background: var(--bg-tag); color: var(--text-accent);
+  white-space: nowrap; display: flex; align-items: center; gap: 2px;
+  cursor: default; flex-shrink: 0;
+}
+.unique-tag .tag-close { cursor: pointer; font-size: 10px; opacity: 0.7; line-height: 1; }
+.unique-tag .tag-close:hover { opacity: 1; color: var(--text-error); }
+
+/* Generate Section */
+.generate-section {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0;
+}
+.gen-info { font-size: 11px; color: var(--text-secondary); }
+.progress-info { color: var(--text-accent); font-weight: 500; }
+
+/* Preview Section */
+.preview-section {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.preview-section .section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 10px; background: var(--bg-card); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.preview-actions {
+  display: flex; gap: 2px; flex-wrap: wrap;
+}
+.preview-actions .btn-quaternary { font-size: 10px; padding: 3px 7px; }
+.preview-table-wrap {
+  overflow: auto; max-height: 320px;
+}
+.preview-table-wrap::-webkit-scrollbar { width: 6px; height: 6px; }
+.preview-table-wrap::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+.preview-table {
+  width: 100%; border-collapse: collapse; font-size: 11px; font-family: var(--mono);
+}
+.preview-table th {
+  position: sticky; top: 0; background: var(--bg-table-header);
+  padding: 4px 8px; text-align: left; color: var(--text-muted);
+  font-weight: 600; font-size: 10px; border-bottom: 1px solid var(--border);
+  white-space: nowrap; z-index: 2;
+}
+.preview-table td {
+  padding: 3px 8px; border-bottom: 1px solid rgba(60,60,60,0.4);
+  white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+}
+.preview-table tr:nth-child(even) td { background: var(--bg-table-even); }
+.preview-table tr:nth-child(odd) td { background: var(--bg-table-odd); }
+.preview-table .col-num { color: var(--text-number); }
+.preview-table .col-str { color: var(--text-string); }
+.preview-table .col-bool { color: var(--text-boolean); }
+.preview-table .col-null { color: var(--text-null); font-style: italic; }
+.preview-table .col-date { color: var(--green); }
+
+/* Empty State */
+.empty-state {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 12px; gap: 6px; padding: 20px;
+}
+.empty-state .icon { font-size: 32px; }
+
+/* History Section */
+.history-section {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  display: flex; flex-direction: column;
+}
+.history-list {
+  padding: 4px 6px; max-height: 140px; overflow-y: auto;
+}
+.history-list::-webkit-scrollbar { width: 6px; }
+.history-list::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+.history-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 8px; cursor: pointer; border-radius: var(--r-sm);
+  transition: background 0.12s; font-size: 12px;
+}
+.history-item:hover { background: var(--bg-hover); }
+.history-item-left { display: flex; gap: 8px; align-items: center; }
+.history-table { color: var(--text-primary); font-weight: 500; }
+.history-rows { color: var(--text-muted); }
+.history-status { color: var(--text-success); font-size: 10px; }
+.history-item-right { font-size: 10px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+.history-del {
+  width: 20px; height: 20px; border: none; border-radius: 3px;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  font-size: 12px; display: flex; align-items: center; justify-content: center;
+}
+.history-del:hover { color: var(--text-error); background: var(--bg-hover); }
+
+/* Buttons */
+.btn {
+  padding: 5px 14px; border: none; border-radius: var(--r-sm);
+  font-size: 12px; font-family: var(--ui); cursor: pointer;
+  display: flex; align-items: center; gap: 5px; transition: all 0.12s;
+}
+.btn-primary { background: var(--brand); color: #fff; }
+.btn-primary:hover { background: #1a8ad4; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); }
+.btn-secondary:hover { border-color: var(--border-light); color: var(--text-primary); }
+.btn-sm { padding: 3px 10px; font-size: 11px; }
+.btn-xs { padding: 2px 8px; font-size: 10px; }
+.btn-quaternary {
+  background: transparent; border: none; color: var(--text-muted);
+  padding: 4px 8px; font-size: 11px; cursor: pointer;
+}
+.btn-quaternary:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ========== Drawer ========== */
+.drawer-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200;
+  display: none; justify-content: flex-end;
+}
+.drawer-overlay.open { display: flex; }
+.drawer {
+  width: 400px; max-width: 90vw; background: var(--bg-drawer);
+  border-left: 1px solid var(--border); display: flex; flex-direction: column;
+  box-shadow: -8px 0 24px rgba(0,0,0,0.5);
+  animation: slideIn 0.2s ease;
+}
+@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.drawer-header {
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+}
+.drawer-header h3 { font-size: 13px; color: var(--text-white); font-weight: 600; }
+.drawer-body {
+  flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.drawer-body::-webkit-scrollbar { width: 6px; }
+.drawer-body::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+.drawer-footer {
+  padding: 10px 14px; border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+}
+.drawer-footer-right { display: flex; gap: 8px; }
+
+.field-row { display: flex; align-items: center; gap: 8px; }
+.field-label { font-size: 11px; color: var(--text-muted); width: 44px; flex-shrink: 0; }
+.field-row input, .field-row select {
+  flex: 1; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 5px 8px;
+  font-size: 12px; font-family: var(--ui); outline: none;
+}
+.field-row input:focus, .field-row select:focus { border-color: var(--border-focus); }
+
+.drawer-section-title {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  margin-top: 4px; margin-bottom: 2px;
+}
+.filter-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.filter-tab {
+  padding: 3px 10px; font-size: 11px; border-radius: 12px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-muted); cursor: pointer; transition: all 0.15s;
+  font-family: var(--ui);
+}
+.filter-tab:hover { border-color: var(--border-light); color: var(--text-primary); }
+.filter-tab.active { border-color: var(--text-accent); color: var(--text-accent); background: rgba(79,193,255,0.08); }
+
+.generator-list {
+  max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.generator-list::-webkit-scrollbar { width: 6px; }
+.generator-list::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+.generator-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 10px; cursor: pointer; border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px; transition: background 0.1s;
+}
+.generator-item:last-child { border-bottom: none; }
+.generator-item:hover { background: var(--bg-hover); }
+.generator-item.selected { background: rgba(79,193,255,0.08); border-left: 2px solid var(--text-accent); }
+.gen-info { display: flex; gap: 6px; align-items: center; }
+.gen-recommend { font-size: 10px; color: var(--text-success); font-weight: 500; }
+.gen-name { font-weight: 500; color: var(--text-primary); }
+.gen-type { font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
+.gen-example { font-size: 10px; color: var(--text-muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
+.empty-list { padding: 20px; text-align: center; font-size: 12px; color: var(--text-muted); }
+
+.params-form { display: flex; flex-direction: column; gap: 6px; }
+.param-field { display: flex; flex-direction: column; gap: 2px; }
+.param-field-label { font-size: 11px; font-weight: 500; color: var(--text-muted); }
+.param-field input, .param-field select {
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 5px 8px;
+  font-size: 12px; font-family: var(--ui); outline: none;
+}
+.param-field input:focus, .param-field select:focus { border-color: var(--border-focus); }
+
+.timeseries-section { display: flex; flex-direction: column; gap: 6px; }
+.ts-row { display: flex; align-items: center; gap: 8px; }
+.ts-label { font-size: 11px; color: var(--text-muted); width: 80px; flex-shrink: 0; }
+.ts-row select, .ts-row input {
+  flex: 1; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 5px 8px;
+  font-size: 12px; font-family: var(--ui); outline: none;
+}
+.ts-row select:focus, .ts-row input:focus { border-color: var(--border-focus); }
+
+.other-options { display: flex; flex-direction: column; gap: 6px; }
+.opt-row { display: flex; align-items: center; gap: 8px; }
+.opt-label { font-size: 11px; color: var(--text-muted); }
+.opt-pct { font-size: 11px; color: var(--text-accent); font-weight: 500; }
+.opt-row input[type="number"] {
+  width: 70px; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text-primary); padding: 4px 6px;
+  font-size: 12px; font-family: var(--ui); outline: none; text-align: center;
+}
+.opt-row input[type="number"]:focus { border-color: var(--border-focus); }
+.opt-row input[type="checkbox"] { accent-color: var(--text-accent); width: 16px; height: 16px; }
+
+.divider { height: 1px; background: var(--border); margin: 8px 0; }
+.source-info { margin-top: 4px; font-size: 10px; color: var(--text-muted); text-align: right; }
+
+/* ========== Modal ========== */
+.overlay {
+  position: fixed; inset: 0; background: var(--bg-overlay); z-index: 200;
+  display: none; align-items: center; justify-content: center;
+}
+.overlay.open { display: flex; }
+.dialog {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-lg); padding: 20px; min-width: 480px; max-width: 640px;
+  max-height: 80vh; overflow-y: auto; box-shadow: var(--shadow-lg);
+}
+.dialog::-webkit-scrollbar { width: 6px; }
+.dialog::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+.dialog h3 { font-size: 14px; margin-bottom: 12px; color: var(--text-white); }
+
+.template-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.template-card {
+  padding: 12px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  cursor: pointer; transition: all 0.15s; background: var(--bg-primary);
+}
+.template-card:hover { border-color: var(--border-light); }
+.template-card.selected { border-color: var(--text-accent); box-shadow: 0 0 0 2px rgba(79,193,255,0.2); }
+.template-card h4 { font-size: 13px; color: var(--text-white); margin-bottom: 4px; }
+.template-card .cat {
+  font-size: 10px; color: var(--text-accent); background: rgba(79,193,255,0.1);
+  padding: 1px 6px; border-radius: 3px; display: inline-block; margin-bottom: 4px;
+}
+.template-card p { font-size: 11px; color: var(--text-muted); line-height: 1.4; margin-bottom: 6px; }
+.template-card .meta { font-size: 10px; color: var(--text-muted); display: flex; gap: 8px; }
+.dialog-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+/* ========== Dropdown ========== */
+.dropdown-wrap { position: relative; display: inline-block; }
+.dropdown-menu {
+  display: none; position: absolute; bottom: 100%; left: 0;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-sm); min-width: 140px; z-index: 100;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4); margin-bottom: 4px;
+}
+.dropdown-wrap.open .dropdown-menu { display: block; }
+.dropdown-menu .item {
+  padding: 6px 12px; font-size: 12px; color: var(--text-primary); cursor: pointer;
+  transition: background 0.1s; white-space: nowrap;
+}
+.dropdown-menu .item:hover { background: var(--bg-hover); }
+
+/* ========== Toast ========== */
+.toast {
+  position: fixed; bottom: 36px; right: 20px; z-index: 300;
+  padding: 10px 20px; border-radius: var(--r-sm);
+  font-size: 12px; color: #fff; opacity: 0; transform: translateY(10px);
+  transition: all 0.3s; pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.success { background: var(--bg-toast-success); }
+.toast.error { background: var(--bg-toast-error); }
+.toast.warning { background: var(--bg-toast-warning); }
+
+/* ========== StatusBar ========== */
+.status-bar {
+  height: 22px; background: var(--brand); display: flex; align-items: center;
+  padding: 0 10px; font-size: 11px; color: #fff; flex-shrink: 0; gap: 16px;
+  user-select: none;
+}
+.status-bar .sb-item { display: flex; align-items: center; gap: 4px; }
+.status-bar .sb-spacer { flex: 1; }
+</style>
+</head>
+<body>
+
+<!-- ========== Title Bar ========== -->
+<div class="title-bar">
+  <span class="logo">RdataStation</span>
+  <span class="sep"></span>
+  <span class="dim">Mock 数据生成器 · 原型</span>
+</div>
+
+<!-- ========== Main Layout ========== -->
+<div class="main-layout">
+  <!-- Left ActivityBar -->
+  <div class="activity-bar" id="activityBarLeft">
+    <div class="act-item" data-id="scratchpad" title="草稿箱">📝</div>
+    <div class="act-label">草稿箱</div>
+    <div class="act-item" data-id="database" title="数据库导航">🗄️</div>
+    <div class="act-label">数据库</div>
+    <div class="act-item" data-id="analytics" title="分析资源管理">📊</div>
+    <div class="act-label">分析</div>
+    <div class="act-item" data-id="plugins" title="插件管理">🧩</div>
+    <div class="act-label">插件</div>
+    <div class="act-spacer"></div>
+    <div class="act-item" data-id="settings" title="设置">⚙️</div>
+  </div>
+
+  <!-- Central Area -->
+  <div class="central-area" id="centralArea">
+    <!-- Welcome Page -->
+    <div class="welcome-page" id="welcomePage">
+      <div class="welcome-icon">🗄️</div>
+      <div class="welcome-title">RdataStation</div>
+      <div class="welcome-subtitle">新一代数据库管理工具</div>
+      <div class="welcome-hint">点击右侧栏 <strong>Mock 数据</strong> 打开 Mock 数据生成器</div>
+      <div class="welcome-hint" style="margin-top: 4px;">Ctrl+N 新建查询 ｜ Ctrl+Shift+P 命令面板</div>
+    </div>
+  </div>
+
+  <!-- Right Panel Resize Handle -->
+  <div class="right-panel-resize" id="rightPanelResize" title="拖拽调整宽度"></div>
+
+  <!-- Right Panel (Mock Panel) -->
+  <div class="right-panel" id="rightPanel">
+    <!-- Panel Header -->
+    <div class="panel-header">
+      <h3 class="panel-title">Mock 数据生成器</h3>
+      <div class="header-actions">
+        <button class="fx-btn" onclick="openTemplateDialog()" title="场景模板">📋</button>
+        <button class="fx-btn" onclick="openImportDialog()" title="导入数据库结构">📥</button>
+        <button class="fx-btn" onclick="loadHistory()" title="生成历史">🕐</button>
+        <button class="fx-btn" onclick="openSaveTemplateModal()" title="保存模板">💾</button>
+      </div>
+    </div>
+
+    <!-- Panel Body -->
+    <div class="panel-body">
+      <!-- Config Section -->
+      <div class="config-section">
+        <div class="config-row">
+          <div class="config-item">
+            <label class="config-label">表名</label>
+            <input type="text" id="tableName" value="mock_users" class="wide" onchange="onConfigChange()">
+          </div>
+          <div class="config-item">
+            <label class="config-label">行数</label>
+            <input type="number" id="rowCount" value="100" min="1" max="1000000" class="narrow" onchange="onConfigChange()">
+          </div>
+          <div class="config-item">
+            <label class="config-label">种子</label>
+            <input type="text" id="seed" placeholder="可选" class="narrow" oninput="onSeedChange(this.value)">
+          </div>
+          <div class="config-item">
+            <label class="config-label">地区</label>
+            <select id="locale">
+              <option value="zh_CN">zh_CN</option>
+              <option value="zh_TW">zh_TW</option>
+              <option value="en">en</option>
+              <option value="en_US">en_US</option>
+              <option value="ja_JP">ja_JP</option>
+              <option value="fr_FR">fr_FR</option>
+            </select>
+          </div>
+          <div class="config-item">
+            <button class="btn btn-sm btn-quaternary" style="margin-top:14px;" onclick="onReset()">↺ 重置</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Columns Section -->
+      <div class="columns-section">
+        <div class="section-header">
+          <span class="section-title">列配置</span>
+          <button class="btn btn-quaternary btn-sm" onclick="addColumn()">＋ 添加列</button>
+        </div>
+        <div class="columns-list" id="columnsList"></div>
+      </div>
+
+      <!-- Generate Section -->
+      <div class="generate-section">
+        <button class="btn btn-primary" id="btnGenerate" onclick="onGenerate()" disabled>⚡ 生成 100 行</button>
+        <span class="gen-info" id="generateInfo"></span>
+        <span class="gen-info progress-info" id="progressInfo" style="display:none;"></span>
+      </div>
+
+      <!-- Preview Section -->
+      <div class="preview-section" id="previewSection">
+        <div class="section-header">
+          <span class="section-title" id="previewSectionTitle">预览</span>
+          <div class="preview-actions" id="previewActions" style="display:none;">
+            <button class="btn btn-quaternary btn-sm" onclick="onExport('csv')">📄 CSV</button>
+            <button class="btn btn-quaternary btn-sm" onclick="onExport('xlsx')">📊 XLSX</button>
+            <button class="btn btn-quaternary btn-sm" onclick="onExport('parquet')">📦 Parquet</button>
+            <button class="btn btn-quaternary btn-sm" onclick="onExport('sql')">💾 SQL</button>
+            <div class="dropdown-wrap" id="scratchpadDropdown">
+              <button class="btn btn-quaternary btn-sm" onclick="toggleScratchpad()">📝 草稿 ▼</button>
+              <div class="dropdown-menu">
+                <div class="item" onclick="onSaveToScratchpad('csv')">CSV</div>
+                <div class="item" onclick="onSaveToScratchpad('json')">JSON</div>
+                <div class="item" onclick="onSaveToScratchpad('parquet')">Parquet</div>
+              </div>
+            </div>
+            <button class="btn btn-quaternary btn-sm" onclick="onPersist()">💿 持久化</button>
+            <button class="btn btn-quaternary btn-sm" id="btnLoadMore" onclick="onLoadMore()">🔄 加载更多</button>
+          </div>
+        </div>
+        <div class="preview-table-wrap" id="previewTableWrap">
+          <table class="preview-table" id="previewTable">
+            <thead id="previewHead"></thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+          <div class="empty-state" id="emptyPreview">
+            <div class="icon">📊</div>
+            <div>添加列定义后点击生成按钮预览数据</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- History Section (inside panel-body) -->
+      <div class="history-section" id="historySection" style="display:none;">
+        <div class="section-header">
+          <span class="section-title">生成历史</span>
+        </div>
+        <div class="history-list" id="historyList"></div>
+      </div>
+    </div><!-- /panel-body -->
+
+    <!-- Templates Section (outside panel-body, matching MockPanel.vue) -->
+    <div class="history-section" id="templatesSection" style="display:none;">
+      <div class="section-header">
+        <span class="section-title">我的模板</span>
+        <button class="btn btn-quaternary btn-sm" onclick="renderTemplates()">🔄</button>
+      </div>
+      <div class="history-list" id="templatesList"></div>
+    </div>
+
+  </div><!-- /right-panel -->
+
+  <!-- Right ActivityBar -->
+  <div class="activity-bar right" id="activityBarRight">
+    <div class="act-item" data-id="column-insights" title="列洞察">🔍</div>
+    <div class="act-label">列洞察</div>
+    <div class="act-item active" data-id="mock" title="Mock 数据"><span class="badge"></span>🎲</div>
+    <div class="act-label">Mock</div>
+    <div class="act-item" data-id="sql-history" title="SQL 历史">🕐</div>
+    <div class="act-label">SQL历史</div>
+    <div class="act-spacer"></div>
+  </div>
+</div><!-- /main-layout -->
+
+<!-- ========== Status Bar ========== -->
+<div class="status-bar">
+  <span class="sb-item">🎲 Mock 数据生成器</span>
+  <span class="sb-spacer"></span>
+  <span class="sb-item" id="sbConnInfo">就绪</span>
+</div>
+
+<!-- ========== Advanced Drawer ========== -->
+<div class="drawer-overlay" id="drawerOverlay">
+  <div class="drawer">
+    <div class="drawer-header">
+      <h3 id="drawerTitle">列 · 高级配置</h3>
+      <button class="fx-btn" onclick="closeDrawer()" style="font-size:14px;">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div class="field-row">
+        <span class="field-label">字段名</span>
+        <input type="text" id="drawerFieldName">
+      </div>
+      <div class="field-row">
+        <span class="field-label">类型</span>
+        <select id="drawerDataType"></select>
+      </div>
+
+      <div class="drawer-section-title">数据类型筛选</div>
+      <div class="filter-tabs" id="filterTabs"></div>
+
+      <div class="drawer-section-title">生成器选择</div>
+      <div class="generator-list" id="drawerGeneratorList"></div>
+
+      <div class="divider"></div>
+
+      <div class="drawer-section-title">参数配置</div>
+      <div class="params-form" id="drawerParams"></div>
+
+      <div class="divider"></div>
+      <div class="drawer-section-title">时序关联（可选）</div>
+      <div class="timeseries-section" id="timeseriesSection" style="display:none;">
+        <div class="ts-row">
+          <span class="ts-label">关联日期列</span>
+          <select id="tsDateColumn"><option value="">选择日期列</option></select>
+        </div>
+        <div class="ts-row" id="tsTrendRow" style="display:none;">
+          <span class="ts-label">趋势方向</span>
+          <select id="tsTrend">
+            <option value="growth">增长</option>
+            <option value="decline">下降</option>
+            <option value="cycle">周期波动</option>
+            <option value="walk">随机游走</option>
+          </select>
+        </div>
+        <div class="ts-row" id="tsCycleRow" style="display:none;">
+          <span class="ts-label">周期长度(天)</span>
+          <input type="number" id="tsCycleLength" value="30" min="1">
+        </div>
+        <div class="ts-row" id="tsVolRow" style="display:none;">
+          <span class="ts-label">波动幅度(%)</span>
+          <input type="number" id="tsVolatility" value="10" min="0" max="100">
+        </div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="drawer-section-title">其他选项</div>
+      <div class="other-options">
+        <div class="opt-row">
+          <span class="opt-label">允许空值比例</span>
+          <input type="number" id="drawerNullRatio" value="0" min="0" max="1" step="0.05" oninput="onDrawerNullRatioInput()">
+          <span class="opt-pct" id="drawerNullRatioPct">0%</span>
+        </div>
+        <div class="opt-row">
+          <span class="opt-label">唯一值</span>
+          <input type="checkbox" id="drawerUnique">
+        </div>
+      </div>
+
+      <div class="source-info" id="drawerSourceInfo">生成器来源: -</div>
+    </div>
+    <div class="drawer-footer">
+      <button class="btn btn-sm btn-secondary" onclick="restoreDefault()">恢复智能默认</button>
+      <div class="drawer-footer-right">
+        <button class="btn btn-sm btn-secondary" onclick="closeDrawer()">取消</button>
+        <button class="btn btn-sm btn-primary" onclick="applyDrawer()">应用</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== Scene Template Dialog ========== -->
+<div class="overlay" id="templateOverlay">
+  <div class="dialog">
+    <h3>📋 场景模板 — 一键生成关联数据</h3>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">选择一个场景模板，自动填充列定义和配置。双击应用。</div>
+    <div class="template-grid" id="templateGrid"></div>
+    <div class="dialog-footer">
+      <button class="btn btn-sm btn-secondary" onclick="closeTemplateDialog()">取消</button>
+      <button class="btn btn-sm btn-primary" id="btnApplyTemplate" disabled onclick="applyTemplate()">应用模板</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== Import Dialog ========== -->
+<div class="overlay" id="importOverlay">
+  <div class="dialog" style="min-width:400px;">
+    <h3>📥 从数据库导入表结构</h3>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">选择已有数据库连接，导入真实表结构作为 Mock 列定义。</div>
+    <div class="form-group" style="margin-bottom:8px;">
+      <label class="form-label" style="font-size:12px;color:var(--text-muted);">连接</label>
+      <select id="importConn" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text-primary);padding:6px 10px;font-size:12px;font-family:var(--ui);outline:none;">
+        <option value="">-- 选择连接 --</option>
+        <option value="mysql-local">MySQL · localhost:3306</option>
+        <option value="pg-local">PostgreSQL · localhost:5432</option>
+      </select>
+    </div>
+    <div class="form-group" style="margin-bottom:8px;">
+      <label class="form-label" style="font-size:12px;color:var(--text-muted);">Schema</label>
+      <input id="importSchema" placeholder="可选，默认 public" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text-primary);padding:6px 10px;font-size:12px;font-family:var(--ui);outline:none;">
+    </div>
+    <div class="form-group" style="margin-bottom:8px;">
+      <label class="form-label" style="font-size:12px;color:var(--text-muted);">表名</label>
+      <select id="importTable" style="width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text-primary);padding:6px 10px;font-size:12px;font-family:var(--ui);outline:none;">
+        <option value="">-- 选择表 --</option>
+        <option value="users">users</option>
+        <option value="orders">orders</option>
+        <option value="products">products</option>
+      </select>
+    </div>
+    <div class="dialog-footer">
+      <button class="btn btn-sm btn-secondary" onclick="closeImportDialog()">取消</button>
+      <button class="btn btn-sm btn-primary" onclick="doImport()">导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== Save Template Modal ========== -->
+<div class="overlay" id="saveTemplateOverlay">
+  <div class="dialog" style="min-width:360px;max-width:400px;">
+    <h3>💾 保存为模板</h3>
+    <div class="save-tpl-form" style="display:flex;flex-direction:column;gap:16px;">
+      <div class="form-group" style="display:flex;flex-direction:column;gap:4px;">
+        <label class="form-label" style="font-size:12px;color:var(--text-muted);">模板名称</label>
+        <input type="text" id="saveTemplateName" placeholder="例如: 电商用户表" style="background:var(--bg-input);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text-primary);padding:6px 10px;font-size:12px;font-family:var(--ui);outline:none;">
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-sm btn-secondary" onclick="closeSaveTemplateModal()">取消</button>
+        <button class="btn btn-sm btn-primary" id="btnSaveTemplate" onclick="onSaveTemplate()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== Toast ========== -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== DATA TYPES ==========
+var DATA_TYPE_OPTIONS = [
+  { value: 'integer', label: 'INTEGER' },
+  { value: 'bigint', label: 'BIGINT' },
+  { value: 'float', label: 'FLOAT' },
+  { value: 'double', label: 'DOUBLE' },
+  { value: 'decimal', label: 'DECIMAL' },
+  { value: 'varchar', label: 'VARCHAR' },
+  { value: 'text', label: 'TEXT' },
+  { value: 'boolean', label: 'BOOLEAN' },
+  { value: 'date', label: 'DATE' },
+  { value: 'datetime', label: 'DATETIME' },
+  { value: 'timestamp', label: 'TIMESTAMP' },
+  { value: 'uuid', label: 'UUID' },
+  { value: 'blob', label: 'BLOB' },
+];
+
+// ========== GENERATOR LIST ==========
+var GENERATOR_LIST = [
+  { type: 'auto_increment', label: '自增序列', category: 'numeric', recommended: false, example: '1, 2, 3, 4...' },
+  { type: 'random_int', label: '均匀分布 (Range)', category: 'numeric', recommended: false, example: '4321, 8765, 234...' },
+  { type: 'normal', label: '正态分布 (Normal)', category: 'numeric', recommended: false, example: '487, 512, 498...' },
+  { type: 'log_normal', label: '对数正态 (LogNormal)', category: 'numeric', recommended: false, example: '234, 1567, 890...' },
+  { type: 'random_walk', label: '随机游走 (Random Walk)', category: 'numeric', recommended: false, example: '1000→1012→1005...' },
+  { type: 'random_float', label: '随机浮点数', category: 'numeric', recommended: false, example: '0.42, 0.87, 0.15...' },
+  { type: 'random_decimal', label: '随机小数', category: 'numeric', recommended: false, example: '123.45, 678.90...' },
+  { type: 'digit', label: '随机数字字符串', category: 'numeric', recommended: false, example: '38472, 10934...' },
+  { type: 'number_with_format', label: '带格式数字', category: 'numeric', recommended: false, example: '123-45-6789' },
+  { type: 'datetime', label: '随机日期时间', category: 'date', recommended: true, example: '2025-06-15 14:30:00' },
+  { type: 'datetime_between', label: '指定范围', category: 'date', recommended: false, example: '2025-03-15, 2026-09-22...' },
+  { type: 'datetime_before', label: '早于指定日期', category: 'date', recommended: false, example: '2025-12-01, 2024-03-18...' },
+  { type: 'datetime_after', label: '晚于指定日期', category: 'date', recommended: false, example: '2025-06-15, 2026-02-28...' },
+  { type: 'sequential_date', label: '递增序列', category: 'date', recommended: false, example: '01-01→01-02→01-03...' },
+  { type: 'sequential_date_with_gaps', label: '含缺失间隔', category: 'date', recommended: false, example: '01-01 → gap → 01-03...' },
+  { type: 'date', label: '纯日期', category: 'date', recommended: false, example: '2025-06-15' },
+  { type: 'time', label: '纯时间', category: 'date', recommended: false, example: '14:30:00' },
+  { type: 'duration', label: '时长', category: 'date', recommended: false, example: '+3600s, -7200s' },
+  { type: 'name', label: '姓名', category: 'text', subCategory: 'personal', recommended: false, example: '张三, 李四, 王五' },
+  { type: 'name_with_title', label: '姓名(带称谓)', category: 'text', subCategory: 'personal', recommended: false, example: 'Mr. John Smith' },
+  { type: 'first_name', label: '名', category: 'text', subCategory: 'personal', recommended: false, example: '张, 李, 王' },
+  { type: 'last_name', label: '姓', category: 'text', subCategory: 'personal', recommended: false, example: '三, 四, 五' },
+  { type: 'title', label: '头衔', category: 'text', subCategory: 'personal', recommended: false, example: 'Dr., Mr., Mrs.' },
+  { type: 'suffix', label: '姓名后缀', category: 'text', subCategory: 'personal', recommended: false, example: 'Jr., Sr., III' },
+  { type: 'phone_number', label: '手机号', category: 'text', subCategory: 'personal', recommended: false, example: '13812345678' },
+  { type: 'cell_number', label: '手机号(国际)', category: 'text', subCategory: 'personal', recommended: false, example: '1-555-123-4567' },
+  { type: 'email', label: '邮箱', category: 'text', subCategory: 'personal', recommended: false, example: 'user@example.com' },
+  { type: 'safe_email', label: '安全邮箱', category: 'text', subCategory: 'personal', recommended: false, example: 'zhangsan@example.com' },
+  { type: 'free_email', label: '免费邮箱', category: 'text', subCategory: 'personal', recommended: false, example: 'lisi@gmail.com' },
+  { type: 'free_email_provider', label: '邮箱服务商', category: 'text', subCategory: 'personal', recommended: false, example: 'gmail.com, outlook.com' },
+  { type: 'domain_suffix', label: '域名后缀', category: 'text', subCategory: 'personal', recommended: false, example: 'com, org, net' },
+  { type: 'username', label: '用户名', category: 'text', subCategory: 'personal', recommended: false, example: 'zhangsan_1985' },
+  { type: 'password', label: '密码', category: 'text', subCategory: 'personal', recommended: false, example: 'aB3$xK7!mP' },
+  { type: 'company_name', label: '公司名称', category: 'text', subCategory: 'company', recommended: false, example: '腾讯科技有限公司' },
+  { type: 'company_suffix', label: '公司后缀', category: 'text', subCategory: 'company', recommended: false, example: 'Inc, LLC, Ltd' },
+  { type: 'industry', label: '行业', category: 'text', subCategory: 'company', recommended: false, example: '信息技术, 金融服务' },
+  { type: 'profession', label: '职位', category: 'text', subCategory: 'company', recommended: false, example: '软件工程师, 市场经理' },
+  { type: 'seniority', label: '职级', category: 'text', subCategory: 'company', recommended: false, example: '初级, 高级, 总监' },
+  { type: 'field', label: '领域', category: 'text', subCategory: 'company', recommended: false, example: '信息技术, 医疗' },
+  { type: 'position', label: '岗位', category: 'text', subCategory: 'company', recommended: false, example: '产品经理, 架构师' },
+  { type: 'job_title', label: '职称', category: 'text', subCategory: 'company', recommended: false, example: '资深工程师, 总监' },
+  { type: 'buzzword', label: '公司口号', category: 'text', subCategory: 'company', recommended: false, example: '赋能数字化转型' },
+  { type: 'buzzword_middle', label: '热词中缀', category: 'text', subCategory: 'company', recommended: false, example: '创新, 智能' },
+  { type: 'buzzword_tail', label: '热词后缀', category: 'text', subCategory: 'company', recommended: false, example: '解决方案, 平台' },
+  { type: 'catch_phrase', label: '公司标语', category: 'text', subCategory: 'company', recommended: false, example: 'We lead the market' },
+  { type: 'bs_verb', label: 'BS动词', category: 'text', subCategory: 'company', recommended: false, example: 'enable, empower' },
+  { type: 'bs_adj', label: 'BS形容词', category: 'text', subCategory: 'company', recommended: false, example: 'seamless, scalable' },
+  { type: 'bs_noun', label: 'BS名词', category: 'text', subCategory: 'company', recommended: false, example: 'solutions, platforms' },
+  { type: 'bs', label: 'BS短语', category: 'text', subCategory: 'company', recommended: false, example: 'seamless scalable platforms' },
+  { type: 'ipv4', label: 'IPv4 地址', category: 'text', subCategory: 'internet', recommended: false, example: '192.168.1.1' },
+  { type: 'ipv6', label: 'IPv6 地址', category: 'text', subCategory: 'internet', recommended: false, example: '2001:db8::1' },
+  { type: 'ip_address', label: 'IP 地址', category: 'text', subCategory: 'internet', recommended: false, example: '192.168.1.1' },
+  { type: 'ip', label: 'IP 通用', category: 'text', subCategory: 'internet', recommended: false, example: '192.168.1.1 / 2001:db8::1' },
+  { type: 'mac_address', label: 'MAC 地址', category: 'text', subCategory: 'internet', recommended: false, example: '00:1A:2B:3C:4D:5E' },
+  { type: 'url', label: 'URL', category: 'text', subCategory: 'internet', recommended: false, example: 'www.example.com/product' },
+  { type: 'user_agent', label: 'User Agent', category: 'text', subCategory: 'internet', recommended: false, example: 'Mozilla/5.0...' },
+  { type: 'country', label: '国家(通用)', category: 'text', subCategory: 'address', recommended: false, example: '中国, 美国, 日本' },
+  { type: 'country_name', label: '国家名', category: 'text', subCategory: 'address', recommended: false, example: '中国, 美国, 日本' },
+  { type: 'country_code', label: '国家代码', category: 'text', subCategory: 'address', recommended: false, example: 'CN, US, JP' },
+  { type: 'city', label: '城市', category: 'text', subCategory: 'address', recommended: false, example: '北京, 上海, 深圳' },
+  { type: 'city_prefix', label: '城市前缀', category: 'text', subCategory: 'address', recommended: false, example: 'New, Old, North' },
+  { type: 'city_suffix', label: '城市后缀', category: 'text', subCategory: 'address', recommended: false, example: 'ville, town, burgh' },
+  { type: 'state_name', label: '州/省', category: 'text', subCategory: 'address', recommended: false, example: 'California, 广东' },
+  { type: 'state_abbr', label: '州缩写', category: 'text', subCategory: 'address', recommended: false, example: 'CA, NY, TX' },
+  { type: 'street_name', label: '街道名', category: 'text', subCategory: 'address', recommended: false, example: '建国路, 长安街' },
+  { type: 'street_suffix', label: '街道后缀', category: 'text', subCategory: 'address', recommended: false, example: 'Street, Avenue' },
+  { type: 'zip_code', label: '邮编', category: 'text', subCategory: 'address', recommended: false, example: '100010' },
+  { type: 'post_code', label: '邮编(通用)', category: 'text', subCategory: 'address', recommended: false, example: '90210' },
+  { type: 'building_number', label: '楼号', category: 'text', subCategory: 'address', recommended: false, example: '100, 200, 300' },
+  { type: 'secondary_address', label: '二级地址', category: 'text', subCategory: 'address', recommended: false, example: 'Apt. 3B' },
+  { type: 'secondary_address_type', label: '二级地址类型', category: 'text', subCategory: 'address', recommended: false, example: 'Apt., Suite' },
+  { type: 'latitude', label: '纬度', category: 'text', subCategory: 'address', recommended: false, example: '39.9042' },
+  { type: 'longitude', label: '经度', category: 'text', subCategory: 'address', recommended: false, example: '116.4074' },
+  { type: 'geohash', label: 'GeoHash', category: 'text', subCategory: 'address', recommended: false, example: 's33u1Kxp' },
+  { type: 'timezone', label: '时区', category: 'text', subCategory: 'address', recommended: false, example: 'Asia/Shanghai' },
+  { type: 'sentence', label: '句子', category: 'text', subCategory: 'content', recommended: false, example: '这是一个测试句子。' },
+  { type: 'sentences', label: '多句', category: 'text', subCategory: 'content', recommended: false, example: '句1。句2。句3。' },
+  { type: 'words', label: '单词序列', category: 'text', subCategory: 'content', recommended: false, example: '创新驱动未来发展' },
+  { type: 'word', label: '单个单词', category: 'text', subCategory: 'content', recommended: false, example: 'innovation' },
+  { type: 'paragraph', label: '段落', category: 'text', subCategory: 'content', recommended: false, example: '多句组成的段落...' },
+  { type: 'paragraphs', label: '多段落', category: 'text', subCategory: 'content', recommended: false, example: '段落1\n\n段落2' },
+  { type: 'md_italic', label: 'MD 斜体', category: 'text', subCategory: 'content', recommended: false, example: '*italic text*' },
+  { type: 'md_bold', label: 'MD 粗体', category: 'text', subCategory: 'content', recommended: false, example: '**bold text**' },
+  { type: 'md_link', label: 'MD 链接', category: 'text', subCategory: 'content', recommended: false, example: '[link](https://...)' },
+  { type: 'md_bullet', label: 'MD 列表项', category: 'text', subCategory: 'content', recommended: false, example: '- item' },
+  { type: 'md_list', label: 'MD 编号列表', category: 'text', subCategory: 'content', recommended: false, example: '1. first\n2. second' },
+  { type: 'md_blockquote_single', label: 'MD 引用(单)', category: 'text', subCategory: 'content', recommended: false, example: '> quote' },
+  { type: 'md_blockquote_multi', label: 'MD 引用(多)', category: 'text', subCategory: 'content', recommended: false, example: '> line1\n> line2' },
+  { type: 'md_code', label: 'MD 代码', category: 'text', subCategory: 'content', recommended: false, example: '`code`' },
+  { type: 'currency_code', label: '币种代码', category: 'text', subCategory: 'finance', recommended: false, example: 'CNY, USD, EUR' },
+  { type: 'currency_name', label: '币种名', category: 'text', subCategory: 'finance', recommended: false, example: '人民币, 美元' },
+  { type: 'currency_symbol', label: '币种符号', category: 'text', subCategory: 'finance', recommended: false, example: '¥, $, €' },
+  { type: 'bic', label: 'BIC 代码', category: 'text', subCategory: 'finance', recommended: false, example: 'BKCHCNBJ' },
+  { type: 'isin', label: 'ISIN 代码', category: 'text', subCategory: 'finance', recommended: false, example: 'CNE1000002V2' },
+  { type: 'credit_card_number', label: '信用卡号', category: 'text', subCategory: 'finance', recommended: false, example: '4532-1234-5678-9012' },
+  { type: 'uuid_v1', label: 'UUID v1', category: 'text', subCategory: 'tech', recommended: false, example: 'a1b2c3d0-e4f5-...' },
+  { type: 'uuid_v3', label: 'UUID v3', category: 'text', subCategory: 'tech', recommended: false, example: 'a1b2c3d0-e4f5-...' },
+  { type: 'uuid_v4', label: 'UUID v4', category: 'text', subCategory: 'tech', recommended: false, example: '550e8400-e29b-...' },
+  { type: 'uuid_v5', label: 'UUID v5', category: 'text', subCategory: 'tech', recommended: false, example: 'a1b2c3d0-e4f5-...' },
+  { type: 'ferroid_ulid', label: 'ULID', category: 'text', subCategory: 'tech', recommended: false, example: '01BSJ...' },
+  { type: 'ferroid_twitter_id', label: 'Twitter ID', category: 'text', subCategory: 'tech', recommended: false, example: '1234567890' },
+  { type: 'ferroid_instagram_id', label: 'Instagram ID', category: 'text', subCategory: 'tech', recommended: false, example: '123456789' },
+  { type: 'ferroid_mastodon_id', label: 'Mastodon ID', category: 'text', subCategory: 'tech', recommended: false, example: '10987654...' },
+  { type: 'ferroid_discord_id', label: 'Discord ID', category: 'text', subCategory: 'tech', recommended: false, example: '9876543...' },
+  { type: 'mime_type', label: 'MIME 类型', category: 'text', subCategory: 'tech', recommended: false, example: 'application/json' },
+  { type: 'semver', label: 'SemVer', category: 'text', subCategory: 'tech', recommended: false, example: '2.1.0' },
+  { type: 'semver_stable', label: 'SemVer(稳定)', category: 'text', subCategory: 'tech', recommended: false, example: '1.0.0' },
+  { type: 'semver_unstable', label: 'SemVer(预发)', category: 'text', subCategory: 'tech', recommended: false, example: '0.1.0-alpha' },
+  { type: 'file_path', label: '文件路径', category: 'text', subCategory: 'tech', recommended: false, example: '/home/user/data.csv' },
+  { type: 'file_name', label: '文件名', category: 'text', subCategory: 'tech', recommended: false, example: 'report_2025.pdf' },
+  { type: 'file_extension', label: '文件扩展', category: 'text', subCategory: 'tech', recommended: false, example: 'pdf, csv, json' },
+  { type: 'dir_path', label: '目录路径', category: 'text', subCategory: 'tech', recommended: false, example: '/var/data/' },
+  { type: 'image_url', label: '图片 URL', category: 'text', subCategory: 'media', recommended: false, example: 'https://picsum.photos/...' },
+  { type: 'image_url_with_seed', label: '图片(种子)', category: 'text', subCategory: 'media', recommended: false, example: 'picsum.photos/seed/abc...' },
+  { type: 'image_url_grayscale', label: '图片(灰度)', category: 'text', subCategory: 'media', recommended: false, example: 'picsum.photos/...?grayscale' },
+  { type: 'image_url_blur', label: '图片(模糊)', category: 'text', subCategory: 'media', recommended: false, example: 'picsum.photos/...?blur=2' },
+  { type: 'image_url_custom', label: '图片(自定义)', category: 'text', subCategory: 'media', recommended: false, example: 'picsum.photos/id/237/...' },
+  { type: 'hex_color', label: 'Hex 颜色', category: 'text', subCategory: 'media', recommended: false, example: '#3a8fd4' },
+  { type: 'rgb_color', label: 'RGB 颜色', category: 'text', subCategory: 'media', recommended: false, example: 'rgb(58,143,212)' },
+  { type: 'rgba_color', label: 'RGBA 颜色', category: 'text', subCategory: 'media', recommended: false, example: 'rgba(58,143,212,0.8)' },
+  { type: 'hsl_color', label: 'HSL 颜色', category: 'text', subCategory: 'media', recommended: false, example: 'hsl(216,78%,52%)' },
+  { type: 'hsla_color', label: 'HSLA 颜色', category: 'text', subCategory: 'media', recommended: false, example: 'hsla(216,78%,52%,0.8)' },
+  { type: 'color', label: '颜色(通用)', category: 'text', subCategory: 'media', recommended: false, example: '#3a8fd4' },
+  { type: 'regex', label: '自定义正则', category: 'text', subCategory: 'other', recommended: false, example: '[A-Z]{3}-[0-9]{4}' },
+  { type: 'template', label: '模板字符串', category: 'text', subCategory: 'other', recommended: false, example: '{{name}}_{{int:1-99}}' },
+  { type: 'constant', label: '常量', category: 'text', subCategory: 'other', recommended: false, example: '固定值' },
+  { type: 'isbn', label: 'ISBN', category: 'text', subCategory: 'other', recommended: false, example: '978-0-306-40615-7' },
+  { type: 'isbn10', label: 'ISBN-10', category: 'text', subCategory: 'other', recommended: false, example: '0-306-40615-2' },
+  { type: 'isbn13', label: 'ISBN-13', category: 'text', subCategory: 'other', recommended: false, example: '978-0-306-40615-7' },
+  { type: 'rfc_status', label: 'RFC 状态码', category: 'text', subCategory: 'other', recommended: false, example: '200, 301, 404' },
+  { type: 'valid_status', label: 'HTTP 有效码', category: 'text', subCategory: 'other', recommended: false, example: '200, 201, 204' },
+  { type: 'licence_plate', label: '车牌号', category: 'text', subCategory: 'other', recommended: false, example: 'ABC-1234' },
+  { type: 'health_insurance', label: '医保号', category: 'text', subCategory: 'other', recommended: false, example: '123456789012' },
+  { type: 'sequence', label: '序列循环', category: 'text', subCategory: 'other', recommended: false, example: 'A → B → C → A...' },
+  { type: 'weighted', label: '加权随机', category: 'text', subCategory: 'other', recommended: false, example: '70%A, 30%B' },
+  { type: 'boolean', label: '均匀布尔 50/50', category: 'boolean', recommended: true, example: 'True, False, True...' },
+  { type: 'foreign_key', label: '外键约束', category: 'foreign_key', recommended: false, example: '引用目标表主键' },
+];
+
+var GENERATOR_PARAM_SCHEMA = {
+  auto_increment: [
+    { name: 'start', label: '起始值', type: 'number', default: 1 },
+    { name: 'step', label: '步长', type: 'number', default: 1, min: 1 },
+  ],
+  random_int: [
+    { name: 'min', label: '最小值', type: 'number', default: 0 },
+    { name: 'max', label: '最大值', type: 'number', default: 100 },
+  ],
+  normal: [
+    { name: 'mean', label: '均值 μ', type: 'number', default: 500 },
+    { name: 'stdDev', label: '标准差 σ', type: 'number', default: 200, min: 0 },
+  ],
+  log_normal: [
+    { name: 'median', label: '中位数', type: 'number', default: 500, min: 0 },
+    { name: 'dispersion', label: '分散度', type: 'number', default: 0.8, min: 0 },
+  ],
+  random_walk: [
+    { name: 'start', label: '起始值', type: 'number', default: 1000 },
+    { name: 'step', label: '步长', type: 'number', default: 10 },
+    { name: 'volatility', label: '波动', type: 'number', default: 5, min: 0 },
+  ],
+  random_float: [
+    { name: 'min', label: '最小值', type: 'number', default: 0 },
+    { name: 'max', label: '最大值', type: 'number', default: 1 },
+    { name: 'precision', label: '小数位', type: 'number', default: 2, min: 0, max: 10 },
+  ],
+  random_decimal: [
+    { name: 'min', label: '最小值', type: 'number', default: 0 },
+    { name: 'max', label: '最大值', type: 'number', default: 1000 },
+    { name: 'scale', label: '小数位', type: 'number', default: 2, min: 0, max: 10 },
+  ],
+  number_with_format: [{ name: 'fmt', label: '格式模板', type: 'text', default: '###-###-####' }],
+  boolean: [{ name: 'ratio', label: 'True 比例 (%)', type: 'number', default: 50, min: 0, max: 100 }],
+  datetime: [
+    { name: 'min', label: '起始日期', type: 'text', default: '2020-01-01' },
+    { name: 'max', label: '结束日期', type: 'text', default: '2026-12-31' },
+  ],
+  datetime_before: [{ name: 'before', label: '早于', type: 'text', default: '2026-12-31' }],
+  datetime_after: [{ name: 'after', label: '晚于', type: 'text', default: '2020-01-01' }],
+  datetime_between: [
+    { name: 'start', label: '开始', type: 'text', default: '2020-01-01' },
+    { name: 'end', label: '结束', type: 'text', default: '2026-12-31' },
+  ],
+  sequential_date: [
+    { name: 'start', label: '起始', type: 'text', default: '2025-01-01 00:00:00' },
+    { name: 'stepSeconds', label: '步长(秒)', type: 'number', default: 3600, min: 1 },
+  ],
+  sequential_date_with_gaps: [
+    { name: 'start', label: '起始', type: 'text', default: '2025-01-01' },
+    { name: 'stepSeconds', label: '步长(秒)', type: 'number', default: 86400, min: 1 },
+    { name: 'missProbability', label: '缺失概率', type: 'number', default: 0.05, min: 0, max: 1 },
+  ],
+  date: [
+    { name: 'min', label: '起始', type: 'text', default: '2020-01-01' },
+    { name: 'max', label: '结束', type: 'text', default: '2026-12-31' },
+  ],
+  password: [
+    { name: 'min', label: '最小长度', type: 'number', default: 8, min: 1 },
+    { name: 'max', label: '最大长度', type: 'number', default: 16, min: 1 },
+  ],
+  words: [
+    { name: 'min', label: '最少词数', type: 'number', default: 3, min: 1 },
+    { name: 'max', label: '最多词数', type: 'number', default: 8, min: 1 },
+  ],
+  sentence: [
+    { name: 'min', label: '最少词数', type: 'number', default: 3, min: 1 },
+    { name: 'max', label: '最多词数', type: 'number', default: 12, min: 1 },
+  ],
+  sentences: [
+    { name: 'min', label: '最少句数', type: 'number', default: 2, min: 1 },
+    { name: 'max', label: '最多句数', type: 'number', default: 5, min: 1 },
+  ],
+  paragraph: [{ name: 'count', label: '句子数', type: 'number', default: 4, min: 1 }],
+  paragraphs: [{ name: 'count', label: '段落数', type: 'number', default: 2, min: 1 }],
+  constant: [{ name: 'value', label: '常量值', type: 'text', default: '' }],
+  regex: [{ name: 'pattern', label: '正则表达式', type: 'text', default: '[a-z]{5,10}' }],
+  template: [{ name: 'template', label: '模板字符串', type: 'text', default: '' }],
+  sequence: [
+    { name: 'values', label: '值列表(逗号分隔)', type: 'text', default: '' },
+    { name: 'cycle', label: '循环', type: 'boolean', default: true },
+  ],
+  weighted: [{ name: 'choices', label: '权重配置(值:权重,...)', type: 'text', default: '' }],
+};
+
+var GENERATOR_MODULES = {
+  auto_increment: '自定义(numeric)', random_int: '自定义(numeric)', normal: '自定义(numeric/Box-Muller)',
+  log_normal: '自定义(numeric/Box-Muller)', random_walk: '自定义(numeric/Wiener)', random_float: '自定义(numeric)',
+  random_decimal: '自定义(numeric)', digit: 'number', number_with_format: 'number',
+  datetime: 'chrono', datetime_between: 'chrono', datetime_before: 'chrono', datetime_after: 'chrono',
+  sequential_date: '自定义(chrono)', sequential_date_with_gaps: '自定义(chrono)', date: 'chrono', time: 'chrono', duration: 'chrono',
+  name: 'name', name_with_title: 'name', first_name: 'name', last_name: 'name', title: 'name', suffix: 'name',
+  phone_number: 'phone_number', cell_number: 'phone_number',
+  email: 'internet', safe_email: 'internet', free_email: 'internet', free_email_provider: 'internet',
+  domain_suffix: 'internet', username: 'internet', password: 'internet',
+  company_name: 'company', company_suffix: 'company', industry: 'company', profession: 'company',
+  seniority: 'company', field: 'job', position: 'job', job_title: 'job',
+  buzzword: 'company', buzzword_middle: 'company', buzzword_tail: 'company', catch_phrase: 'company',
+  bs_verb: 'company', bs_adj: 'company', bs_noun: 'company', bs: 'company',
+  currency_code: 'currency', currency_name: 'currency', currency_symbol: 'currency',
+  bic: 'finance', isin: 'finance', credit_card_number: 'creditcard',
+  ipv4: 'internet', ipv6: 'internet', ip_address: 'internet', ip: 'internet', mac_address: 'internet',
+  url: 'internet', user_agent: 'internet',
+  mime_type: 'filesystem', semver: 'filesystem', semver_stable: 'filesystem', semver_unstable: 'filesystem',
+  file_path: 'filesystem', file_name: 'filesystem', file_extension: 'filesystem', dir_path: 'filesystem',
+  country: 'address', country_name: 'address', country_code: 'address',
+  city: 'address', city_prefix: 'address', city_suffix: 'address', state_name: 'address', state_abbr: 'address',
+  street_name: 'address', street_suffix: 'address', zip_code: 'address', post_code: 'address',
+  building_number: 'address', secondary_address: 'address', secondary_address_type: 'address',
+  latitude: 'address', longitude: 'address', geohash: 'address', timezone: 'address',
+  image_url: 'picsum', image_url_with_seed: 'picsum', image_url_grayscale: 'picsum',
+  image_url_blur: 'picsum', image_url_custom: 'picsum',
+  hex_color: 'color', rgb_color: 'color', rgba_color: 'color', hsl_color: 'color', hsla_color: 'color', color: 'color',
+  uuid_v1: 'uuid', uuid_v3: 'uuid', uuid_v4: 'uuid', uuid_v5: 'uuid',
+  ferroid_ulid: 'ferroid', ferroid_twitter_id: 'ferroid', ferroid_instagram_id: 'ferroid',
+  ferroid_mastodon_id: 'ferroid', ferroid_discord_id: 'ferroid',
+  sentence: 'lorem', sentences: 'lorem', words: 'lorem', word: 'lorem', paragraph: 'lorem', paragraphs: 'lorem',
+  md_italic: 'markdown', md_bold: 'markdown', md_link: 'markdown', md_bullet: 'markdown',
+  md_list: 'markdown', md_blockquote_single: 'markdown', md_blockquote_multi: 'markdown', md_code: 'markdown',
+  isbn: 'barcode', isbn10: 'barcode', isbn13: 'barcode',
+  rfc_status: 'http', valid_status: 'http', licence_plate: 'automotive', health_insurance: 'administrative',
+  boolean: 'boolean', regex: '自定义(regex)', template: '自定义(template)', constant: '自定义(constant)',
+  foreign_key: '自定义(fk)', sequence: '自定义(sequence)', weighted: '自定义(weighted)',
+};
+
+var FILTER_TABS = [
+  { key: 'all', label: '全部' },
+  { key: 'numeric', label: '📊 数字型' },
+  { key: 'date', label: '📅 日期型' },
+  { key: 'text', label: '📝 文本型' },
+  { key: 'boolean', label: '✅ 布尔型' },
+  { key: 'foreign_key', label: '🔗 外键' },
+];
+
+// ========== SCENE TEMPLATES ==========
+var SCENE_TEMPLATES = [
+  {
+    id: 'ecommerce', name: '电商系统', description: '包含用户、商品、订单、订单明细四张表，模拟典型 B2C 电商数据',
+    tableCount: 4, columnCount: 24,
+    table: {
+      name: 'users', rowCount: 1000,
+      columns: [
+        { name: 'id', dataType: 'integer', generator: 'auto_increment', unique: true },
+        { name: 'username', dataType: 'varchar', generator: 'username' },
+        { name: 'email', dataType: 'varchar', generator: 'safe_email' },
+        { name: 'full_name', dataType: 'varchar', generator: 'name' },
+        { name: 'phone', dataType: 'varchar', generator: 'phone_number', nullableRatio: 0.1 },
+        { name: 'city', dataType: 'varchar', generator: 'city' },
+        { name: 'created_at', dataType: 'datetime', generator: 'datetime_between' },
+      ]
+    }
+  },
+  {
+    id: 'hr', name: '人力资源系统', description: '包含员工、部门、薪资、考勤四张表，模拟企业 HR 数据',
+    tableCount: 4, columnCount: 21,
+    table: {
+      name: 'employees', rowCount: 500,
+      columns: [
+        { name: 'id', dataType: 'integer', generator: 'auto_increment', unique: true },
+        { name: 'name', dataType: 'varchar', generator: 'name' },
+        { name: 'email', dataType: 'varchar', generator: 'email' },
+        { name: 'department', dataType: 'varchar', generator: 'word' },
+        { name: 'position', dataType: 'varchar', generator: 'job_title' },
+        { name: 'salary', dataType: 'decimal', generator: 'normal' },
+        { name: 'hire_date', dataType: 'date', generator: 'date' },
+      ]
+    }
+  },
+  {
+    id: 'finance', name: '金融/交易系统', description: '包含账户、交易记录两张表，模拟金融交易数据',
+    tableCount: 2, columnCount: 12,
+    table: {
+      name: 'accounts', rowCount: 200,
+      columns: [
+        { name: 'id', dataType: 'integer', generator: 'auto_increment', unique: true },
+        { name: 'account_no', dataType: 'varchar', generator: 'template' },
+        { name: 'owner_name', dataType: 'varchar', generator: 'name' },
+        { name: 'balance', dataType: 'decimal', generator: 'random_decimal' },
+        { name: 'currency', dataType: 'varchar', generator: 'currency_code' },
+        { name: 'opened_at', dataType: 'datetime', generator: 'datetime_between' },
+      ]
+    }
+  },
+  {
+    id: 'social', name: '社交平台', description: '包含用户、帖子、评论三张表，模拟社交网络数据',
+    tableCount: 3, columnCount: 16,
+    table: {
+      name: 'users', rowCount: 1000,
+      columns: [
+        { name: 'id', dataType: 'integer', generator: 'auto_increment', unique: true },
+        { name: 'username', dataType: 'varchar', generator: 'username' },
+        { name: 'email', dataType: 'varchar', generator: 'email' },
+        { name: 'bio', dataType: 'text', generator: 'sentence', nullableRatio: 0.3 },
+        { name: 'followers_count', dataType: 'integer', generator: 'random_int' },
+        { name: 'join_date', dataType: 'date', generator: 'date' },
+      ]
+    }
+  },
+  {
+    id: 'iot', name: 'IoT 传感器', description: '包含设备、传感器读数、告警事件三张表，模拟物联网数据',
+    tableCount: 3, columnCount: 16,
+    table: {
+      name: 'devices', rowCount: 100,
+      columns: [
+        { name: 'id', dataType: 'uuid', generator: 'uuid_v4', unique: true },
+        { name: 'name', dataType: 'varchar', generator: 'word' },
+        { name: 'type', dataType: 'varchar', generator: 'constant' },
+        { name: 'location', dataType: 'varchar', generator: 'city' },
+        { name: 'installed_at', dataType: 'datetime', generator: 'datetime_between' },
+      ]
+    }
+  },
+  {
+    id: 'logistics', name: '物流系统', description: '包含订单、包裹、配送记录、仓库四张表，模拟物流数据',
+    tableCount: 4, columnCount: 18,
+    table: {
+      name: 'orders', rowCount: 2000,
+      columns: [
+        { name: 'id', dataType: 'integer', generator: 'auto_increment', unique: true },
+        { name: 'customer_name', dataType: 'varchar', generator: 'name' },
+        { name: 'address', dataType: 'varchar', generator: 'city' },
+        { name: 'weight', dataType: 'float', generator: 'random_float' },
+        { name: 'status', dataType: 'varchar', generator: 'weighted' },
+        { name: 'created_at', dataType: 'datetime', generator: 'datetime_between' },
+      ]
+    }
+  },
+];
+
+// ========== STATE ==========
+var columns = [];
+var generatedData = { rows: [], rowCount: 0, generatedColumns: [] };
+var isGenerating = false;
+var cancelRequested = false;
+var history = [];
+var userTemplates = [];
+var drawerColumnIndex = -1;
+var drawerState = {};
+var selectedTemplateId = null;
+var mappingIndex = -1;
+var elapsedMs = 0;
+var panelVisible = true;
+var currentSeed = null;
+
+// ========== INIT ==========
+function init() {
+  addDefaultColumn('id', 'integer', 'auto_increment', true);
+  addDefaultColumn('name', 'varchar', 'name');
+  addDefaultColumn('email', 'varchar', 'safe_email');
+  addDefaultColumn('age', 'integer', 'random_int');
+  addDefaultColumn('city', 'varchar', 'city');
+  addDefaultColumn('created_at', 'datetime', 'datetime_between');
+  renderAll();
+  renderTemplateGrid();
+  initResizeHandle();
+  initActivityBar();
+  loadHistory();
+  updateGenerateButton();
+}
+
+function addDefaultColumn(name, dataType, generator, unique) {
+  if (unique === undefined) unique = false;
+  columns.push({
+    name: name, dataType: dataType, generator: generator,
+    varcharLength: dataType === 'varchar' ? 255 : undefined,
+    decimalPrecision: dataType === 'decimal' ? 18 : undefined,
+    decimalScale: dataType === 'decimal' ? 2 : undefined,
+    nullableRatio: 0, unique: unique,
+  });
+}
+
+function addColumn() {
+  var idx = columns.length + 1;
+  columns.push({
+    name: 'col_' + idx, dataType: 'integer', generator: 'auto_increment',
+    varcharLength: undefined, decimalPrecision: undefined, decimalScale: undefined,
+    nullableRatio: 0, unique: false,
+  });
+  renderAll();
+}
+
+function removeColumn(idx) {
+  if (columns.length <= 1) return;
+  columns.splice(idx, 1);
+  renderAll();
+}
+
+function updateColumn(idx, patch) {
+  var col = columns[idx];
+  if (!col) return;
+  Object.assign(col, patch);
+  if (patch.dataType && !patch.generator) {
+    var defaults = {
+      'integer': 'random_int', 'bigint': 'auto_increment', 'float': 'random_float',
+      'double': 'random_float', 'decimal': 'random_decimal', 'boolean': 'boolean',
+      'date': 'date', 'datetime': 'datetime', 'timestamp': 'datetime',
+      'uuid': 'uuid_v4', 'varchar': 'words', 'text': 'sentence', 'blob': 'constant',
+    };
+    if (defaults[patch.dataType]) col.generator = defaults[patch.dataType];
+  }
+  renderAll();
+}
+
+function getGeneratorLabel(type) {
+  var gen = GENERATOR_LIST.find(function(g) { return g.type === type; });
+  return gen ? gen.label : type;
+}
+
+function getGeneratorCategory(type) {
+  var gen = GENERATOR_LIST.find(function(g) { return g.type === type; });
+  return gen ? gen.category : 'text';
+}
+
+// ========== RENDER ==========
+function renderAll() {
+  renderColumns();
+  updateGenerateButton();
+  renderPreview();
+  updateGenerateInfo();
+}
+
+function renderColumns() {
+  var el = document.getElementById('columnsList');
+  el.innerHTML = columns.map(function(col, idx) {
+    var typeParams = '';
+    if (col.dataType === 'varchar') {
+      typeParams = '<div class="col-dt-param"><input type="number" value="' + (col.varcharLength != null ? col.varcharLength : 255) + '" min="1" max="65535" onchange="updateColumn(' + idx + ',{varcharLength:parseInt(this.value)||255})"></div>';
+    } else if (col.dataType === 'decimal') {
+      typeParams = '<div class="col-dt-param-sm"><input type="number" value="' + (col.decimalPrecision != null ? col.decimalPrecision : 18) + '" min="1" max="38" onchange="updateColumn(' + idx + ',{decimalPrecision:parseInt(this.value)||18})"></div>' +
+        '<div class="col-dt-param-sm"><input type="number" value="' + (col.decimalScale != null ? col.decimalScale : 2) + '" min="0" max="38" onchange="updateColumn(' + idx + ',{decimalScale:parseInt(this.value)||2})"></div>';
+    }
+    var genOptionsWithSel = GENERATOR_LIST.map(function(g) {
+      return '<option value="' + g.type + '" ' + (g.type === col.generator ? 'selected' : '') + '>' + g.label + (g.recommended ? ' ●' : '') + '</option>';
+    }).join('');
+
+    return '<div class="column-row">' +
+      '<div class="col-name"><input type="text" value="' + escHtml(col.name) + '" onchange="updateColumn(' + idx + ',{name:this.value})" placeholder="列名"></div>' +
+      '<div class="col-type"><select onchange="updateColumn(' + idx + ',{dataType:this.value})">' + DATA_TYPE_OPTIONS.map(function(dt) { return '<option value="' + dt.value + '" ' + (dt.value === col.dataType ? 'selected' : '') + '>' + dt.label + '</option>'; }).join('') + '</select></div>' +
+      typeParams +
+      '<div class="col-gen"><select onchange="updateColumn(' + idx + ',{generator:this.value})">' + genOptionsWithSel + '</select></div>' +
+      '<div class="col-null"><input type="number" value="' + col.nullableRatio + '" min="0" max="1" step="0.1" onchange="updateColumn(' + idx + ',{nullableRatio:parseFloat(this.value)||0})" placeholder="NULL"></div>' +
+      (col.unique
+        ? '<div class="unique-tag">UNIQUE<span class="tag-close" onclick="event.stopPropagation();updateColumn(' + idx + ',{unique:false})">✕</span></div>'
+        : '<button class="fx-btn" onclick="updateColumn(' + idx + ',{unique:true})" title="设为唯一">🔑</button>') +
+      '<button class="fx-btn" onclick="openAdvanced(' + idx + ')" title="高级配置">⚙</button>' +
+      '<button class="fx-btn" onclick="onAutoMap(' + idx + ')" title="智能映射生成器" ' + (mappingIndex === idx ? 'disabled' : '') + '><span class="' + (mappingIndex === idx ? 'loading' : '') + '" style="display:inline-flex;">✨</span></button>' +
+      '<button class="fx-btn danger" onclick="removeColumn(' + idx + ')" ' + (columns.length <= 1 ? 'disabled' : '') + ' title="删除">🗑</button>' +
+    '</div>';
+  }).join('');
+}
+
+function updateGenerateButton() {
+  var tableName = document.getElementById('tableName').value.trim();
+  var rowCount = parseInt(document.getElementById('rowCount').value) || 100;
+  var btn = document.getElementById('btnGenerate');
+  if (isGenerating) {
+    btn.disabled = true;
+    btn.textContent = '⚡ 生成中...';
+  } else {
+    btn.disabled = !tableName || columns.length === 0;
+    btn.textContent = '⚡ 生成 ' + rowCount + ' 行';
+  }
+}
+
+function updateGenerateInfo() {
+  var el = document.getElementById('generateInfo');
+  if (generatedData.rowCount > 0) {
+    el.textContent = '已生成 ' + generatedData.rowCount.toLocaleString() + ' 行，耗时 ' + elapsedMs + 'ms';
+  } else {
+    el.textContent = '';
+  }
+}
+
+function onConfigChange() { updateGenerateButton(); }
+
+function onSeedChange(value) {
+  var v = value.trim();
+  currentSeed = v === '' ? null : isNaN(parseInt(v, 10)) ? null : parseInt(v, 10);
+}
+
+// ========== GENERATE ==========
+async function onGenerate() {
+  if (isGenerating || columns.length === 0) return;
+  isGenerating = true;
+  cancelRequested = false;
+
+  var tableName = document.getElementById('tableName').value.trim();
+  var rowCount = parseInt(document.getElementById('rowCount').value) || 100;
+  var seedVal = document.getElementById('seed').value.trim();
+  var seed = seedVal ? parseInt(seedVal) || null : null;
+  var locale = document.getElementById('locale').value;
+
+  updateGenerateButton();
+  var progInfo = document.getElementById('progressInfo');
+  progInfo.style.display = '';
+  progInfo.textContent = '';
+
+  var startTime = performance.now();
+  var batches = 5;
+  var batchSize = Math.ceil(rowCount / batches);
+  generatedData.rows = [];
+  generatedData.rowCount = 0;
+  generatedData.generatedColumns = columns.map(function(c) { return c.name; });
+
+  for (var b = 0; b < batches; b++) {
+    if (cancelRequested) break;
+    var batchStart = b * batchSize;
+    var batchEnd = Math.min(batchStart + batchSize, rowCount);
+    var batchRows = batchEnd - batchStart;
+    await sleep(500);
+    for (var i = 0; i < batchRows; i++) {
+      var row = {};
+      var rowIdx = batchStart + i;
+      columns.forEach(function(col) {
+        var s = seed !== null ? seed + rowIdx : rowIdx;
+        row[col.name] = generateValue(col, s, locale);
+      });
+      generatedData.rows.push(row);
+    }
+    generatedData.rowCount = generatedData.rows.length;
+    var pct = Math.round((b + 1) / batches * 100);
+    progInfo.textContent = (b + 1) + ' / ' + batches + ' 批次 (' + pct + '%)';
+  }
+
+  elapsedMs = Math.round(performance.now() - startTime);
+
+  setTimeout(function() {
+    progInfo.style.display = 'none';
+  }, 600);
+
+  isGenerating = false;
+
+  if (cancelRequested) {
+    showToast('生成已取消', 'warning');
+    cancelRequested = false;
+  } else {
+    showToast('成功生成 ' + generatedData.rowCount.toLocaleString() + ' 行 · 耗时 ' + elapsedMs + 'ms', 'success');
+    addHistory(tableName, generatedData.rowCount, elapsedMs);
+  }
+
+  updateGenerateButton();
+  renderAll();
+  renderHistory();
+  updateStatusBar();
+}
+
+function onCancel() {
+  cancelRequested = true;
+}
+
+function generateValue(col, seed, locale) {
+  var rng = function(s) { var x = Math.sin(s * 9301 + 49297) * 233280; return x - Math.floor(x); };
+  var r = rng(seed);
+  if (col.nullableRatio > 0 && r < col.nullableRatio) return null;
+  var g = col.generator;
+  switch (g) {
+    case 'auto_increment': return seed + 1;
+    case 'random_int': return Math.floor(r * 1000);
+    case 'random_float': return (r * 100).toFixed(2);
+    case 'random_decimal': return (r * 9999.99).toFixed(2);
+    case 'normal': return Math.round(500 + (rng(seed + 1) + rng(seed + 2) - 1) * 400);
+    case 'log_normal': return Math.round(Math.exp(4 + r * 2));
+    case 'random_walk': return Math.round(1000 + (r - 0.5) * 50);
+    case 'digit': return String(Math.floor(r * 99999)).padStart(5, '0');
+    case 'number_with_format': return String(Math.floor(r*900)+100) + '-' + String(Math.floor(r*90)+10) + '-' + String(Math.floor(r*9000)+1000);
+    case 'datetime': return new Date(2020, 0, 1 + Math.floor(r * 2191), Math.floor(r * 24), Math.floor(r * 60)).toISOString().replace('T', ' ').slice(0, 19);
+    case 'datetime_between': return new Date(2020, 0, 1 + Math.floor(r * 2191), Math.floor(r * 24), Math.floor(r * 60)).toISOString().replace('T', ' ').slice(0, 19);
+    case 'datetime_before': return new Date(2020, 0, 1 + Math.floor(r * 2191), Math.floor(r * 24), Math.floor(r * 60)).toISOString().replace('T', ' ').slice(0, 19);
+    case 'datetime_after': return new Date(2020, 0, 1 + Math.floor(r * 2191), Math.floor(r * 24), Math.floor(r * 60)).toISOString().replace('T', ' ').slice(0, 19);
+    case 'sequential_date': return new Date(2025, 0, 1 + seed).toISOString().slice(0, 10);
+    case 'sequential_date_with_gaps': return (r < 0.05) ? null : new Date(2025, 0, 1 + seed).toISOString().slice(0, 10);
+    case 'date': return new Date(2020, 0, 1 + Math.floor(r * 2191)).toISOString().slice(0, 10);
+    case 'time': return String(Math.floor(r*24)).padStart(2,'0') + ':' + String(Math.floor(r*60)).padStart(2,'0') + ':' + String(Math.floor(r*60)).padStart(2,'0');
+    case 'duration': return Math.floor(r * 86400) + 's';
+    case 'name': return ['张三', '李四', '王五', '赵六', 'John Smith', 'Jane Doe', '陈七', '周八'][Math.floor(r * 8)];
+    case 'name_with_title': return ['Mr. 张三', 'Ms. 李四', 'Dr. 王五', 'Mrs. 赵六'][Math.floor(r * 4)];
+    case 'first_name': return ['张', '李', '王', '赵', 'John', 'Jane', '陈', '周'][Math.floor(r * 8)];
+    case 'last_name': return ['三', '四', '五', '六', 'Smith', 'Doe', '七', '八'][Math.floor(r * 8)];
+    case 'title': return ['Dr.', 'Mr.', 'Mrs.', 'Ms.', 'Prof.'][Math.floor(r * 5)];
+    case 'suffix': return ['Jr.', 'Sr.', 'III', 'PhD', 'MD'][Math.floor(r * 5)];
+    case 'phone_number': return '1' + String(Math.floor(r*9)+3) + String(Math.floor(r*1e8)).padStart(8,'0');
+    case 'cell_number': return '1-555-' + String(Math.floor(r*900)+100) + '-' + String(Math.floor(r*9000)+1000);
+    case 'email': return 'user' + Math.floor(r * 999) + '@example.com';
+    case 'safe_email': return 'user' + Math.floor(r * 999) + '@example.org';
+    case 'free_email': return 'user' + Math.floor(r * 999) + '@gmail.com';
+    case 'free_email_provider': return ['gmail.com', 'outlook.com', 'yahoo.com', 'qq.com'][Math.floor(r * 4)];
+    case 'domain_suffix': return ['com', 'org', 'net', 'io', 'cn'][Math.floor(r * 5)];
+    case 'username': return 'user_' + Math.floor(r * 9999);
+    case 'password': return 'P@ss' + Math.floor(r*9999) + '!';
+    case 'company_name': return ['阿里巴巴', '腾讯', '字节跳动', '华为', 'Apple', 'Google', 'Microsoft', 'Amazon'][Math.floor(r * 8)];
+    case 'company_suffix': return ['Inc', 'LLC', 'Ltd', 'Corp', 'Co'][Math.floor(r * 5)];
+    case 'industry': return ['信息技术', '金融', '医疗', '教育', '制造业', '零售', '房地产', '能源'][Math.floor(r * 8)];
+    case 'profession': return ['软件工程师', '市场经理', '数据分析师', '产品经理', '设计师', '架构师'][Math.floor(r * 6)];
+    case 'seniority': return ['初级', '中级', '高级', '资深', '总监'][Math.floor(r * 5)];
+    case 'field': return ['信息技术', '金融服务', '医疗健康', '教育培训', '电子商务'][Math.floor(r * 5)];
+    case 'position': return ['产品经理', '架构师', '运营总监', '技术主管', '项目经理'][Math.floor(r * 5)];
+    case 'job_title': return ['资深工程师', '总监', '高级经理', '首席架构师', '技术专家'][Math.floor(r * 5)];
+    case 'buzzword': return ['赋能', '数字化转型', '降本增效', '敏捷', '闭环', '引爆', '切入', '迭代'][Math.floor(r * 8)];
+    case 'buzzword_middle': return ['创新', '智能', '高效', '协同', '柔性'][Math.floor(r * 5)];
+    case 'buzzword_tail': return ['解决方案', '平台', '体系', '生态', '矩阵'][Math.floor(r * 5)];
+    case 'catch_phrase': return ['创新驱动发展', '以客户为中心', '持续改进', '追求卓越', '合作共赢'][Math.floor(r * 5)];
+    case 'bs_verb': return ['enable', 'empower', 'leverage', 'optimize', 'scale'][Math.floor(r * 5)];
+    case 'bs_adj': return ['seamless', 'scalable', 'robust', 'innovative', 'agile'][Math.floor(r * 5)];
+    case 'bs_noun': return ['solutions', 'platforms', 'frameworks', 'paradigms', 'ecosystems'][Math.floor(r * 5)];
+    case 'bs': return ['seamless scalable platforms', 'innovative robust solutions', 'agile enterprise frameworks'][Math.floor(r * 3)];
+    case 'ipv4': return Math.floor(r*256) + '.' + Math.floor(rng(seed+1)*256) + '.' + Math.floor(rng(seed+2)*256) + '.' + Math.floor(rng(seed+3)*256);
+    case 'ipv6': return '2001:db8:' + Math.floor(r*65535).toString(16) + ':' + Math.floor(rng(seed+1)*65535).toString(16) + ':' + Math.floor(rng(seed+2)*65535).toString(16) + ':' + Math.floor(rng(seed+3)*65535).toString(16);
+    case 'ip_address': return Math.floor(r*256) + '.' + Math.floor(rng(seed+1)*256) + '.' + Math.floor(rng(seed+2)*256) + '.' + Math.floor(rng(seed+3)*256);
+    case 'ip': return r < 0.5 ? (Math.floor(r*256) + '.' + Math.floor(rng(seed+1)*256) + '.' + Math.floor(rng(seed+2)*256) + '.' + Math.floor(rng(seed+3)*256)) : '2001:db8::' + Math.floor(r*65535).toString(16);
+    case 'mac_address': return Array.from({length:6}, function(_,i){ return Math.floor(rng(seed+i)*256).toString(16).padStart(2,'0'); }).join(':');
+    case 'url': return 'https://www.' + ['example','test','demo','mock'][Math.floor(r*4)] + '.com/page/' + Math.floor(r*999);
+    case 'user_agent': return ['Mozilla/5.0 Chrome/120','Mozilla/5.0 Safari/17','Mozilla/5.0 Firefox/121'][Math.floor(r*3)];
+    case 'country': return ['中国', '美国', '日本', '英国', '德国', '法国', '韩国', '印度'][Math.floor(r * 8)];
+    case 'country_name': return ['中国', '美国', '日本', '英国', '德国', '法国', '韩国', '印度'][Math.floor(r * 8)];
+    case 'country_code': return ['CN', 'US', 'JP', 'GB', 'DE', 'FR', 'KR', 'IN'][Math.floor(r * 8)];
+    case 'city': return ['北京', '上海', '广州', '深圳', '杭州', '成都', '武汉', '南京'][Math.floor(r * 8)];
+    case 'city_prefix': return ['New', 'Old', 'North', 'South', 'East'][Math.floor(r * 5)];
+    case 'city_suffix': return ['ville', 'town', 'burgh', 'ford', 'bridge'][Math.floor(r * 5)];
+    case 'state_name': return ['California', 'Texas', 'New York', 'Florida', '广东', '浙江', '江苏'][Math.floor(r * 7)];
+    case 'state_abbr': return ['CA', 'TX', 'NY', 'FL', 'IL', 'PA', 'OH'][Math.floor(r * 7)];
+    case 'street_name': return ['长安街', '南京路', '中山路', '人民路', '建设路'][Math.floor(r * 5)];
+    case 'street_suffix': return ['Street', 'Avenue', 'Road', 'Boulevard', 'Lane'][Math.floor(r * 5)];
+    case 'zip_code': return String(Math.floor(r * 900000) + 100000);
+    case 'post_code': return String(Math.floor(r * 90000) + 10000);
+    case 'building_number': return String(Math.floor(r * 900) + 100);
+    case 'secondary_address': return ['Apt. 3B', 'Suite 200', 'Floor 5', 'Room 101'][Math.floor(r * 4)];
+    case 'secondary_address_type': return ['Apt.', 'Suite', 'Floor', 'Room'][Math.floor(r * 4)];
+    case 'latitude': return (r * 180 - 90).toFixed(6);
+    case 'longitude': return (r * 360 - 180).toFixed(6);
+    case 'geohash': return Array.from({length:7}, function(_,i){ return '0123456789bcdefghjkmnpqrstuvwxyz'[Math.floor(rng(seed+i)*32)]; }).join('');
+    case 'timezone': return ['Asia/Shanghai', 'America/New_York', 'Europe/London', 'Asia/Tokyo', 'Europe/Berlin'][Math.floor(r * 5)];
+    case 'sentence': return '这是一段关于' + ['数据', '系统', '服务', '平台', '产品', '技术'][Math.floor(r * 6)] + '的测试文本，用于模拟真实内容。';
+    case 'sentences': return '句' + (Math.floor(r*9)+1) + '。句' + (Math.floor(rng(seed+1)*9)+2) + '。句' + (Math.floor(rng(seed+2)*9)+3) + '。';
+    case 'words': return ['创新', '驱动', '未来', '发展', '数据', '分析', '平台', '引擎'][Math.floor(r * 8)] + ' ' + ['智能', '高效', '协同', '优化'][Math.floor(rng(seed+1) * 4)];
+    case 'word': return ['数据', '分析', '引擎', '查询', '索引', '缓存', '服务', '平台'][Math.floor(r * 8)];
+    case 'paragraph': return '在当今数字化时代，' + ['数据驱动', '技术创新', '智能化', '自动化'][Math.floor(r*4)] + '已成为企业发展的核心驱动力。通过深入分析和挖掘数据价值，企业能够更好地理解用户需求，优化业务流程，提升竞争力。';
+    case 'paragraphs': return '段落一：' + ['数据驱动', '技术创新'][Math.floor(r*2)] + '是核心。\n\n段落二：' + ['智能化', '自动化'][Math.floor(rng(seed+1)*2)] + '是关键。';
+    case 'md_italic': return '*italic ' + ['text', 'content', 'data'][Math.floor(r*3)] + '*';
+    case 'md_bold': return '**bold ' + ['text', 'content', 'data'][Math.floor(r*3)] + '**';
+    case 'md_link': return '[link](https://' + ['example','test','demo'][Math.floor(r*3)] + '.com)';
+    case 'md_bullet': return '- ' + ['item', 'task', 'note', 'todo'][Math.floor(r*4)] + ' ' + (Math.floor(r*99)+1);
+    case 'md_list': return '1. first\n2. second\n3. third';
+    case 'md_blockquote_single': return '> ' + ['quote', 'note', 'reference'][Math.floor(r*3)];
+    case 'md_blockquote_multi': return '> line 1\n> line 2\n> line 3';
+    case 'md_code': return '`' + ['code', 'var', 'func', 'data'][Math.floor(r*4)] + '_' + Math.floor(r*99) + '`';
+    case 'currency_code': return ['CNY', 'USD', 'EUR', 'JPY', 'GBP', 'KRW', 'AUD', 'CAD'][Math.floor(r * 8)];
+    case 'currency_name': return ['人民币', '美元', '欧元', '日元', '英镑'][Math.floor(r * 5)];
+    case 'currency_symbol': return ['¥', '$', '€', '£', '¥'][Math.floor(r * 5)];
+    case 'bic': return ['BKCHCNBJ', 'ICBKCNBJ', 'ABOCCNBJ', 'PCBCCNBJ'][Math.floor(r * 4)];
+    case 'isin': return 'CNE' + String(Math.floor(r*1e7)).padStart(7, '0');
+    case 'credit_card_number': return Array.from({length:4}, function(_,i){ return String(Math.floor(rng(seed+i)*10000)).padStart(4,'0'); }).join('-');
+    case 'uuid_v1': return 'xxxxxxxx-xxxx-1xxx-xxxx-xxxxxxxxxxxx'.replace(/x/g, function(){ return '0123456789abcdef'[Math.floor(Math.random()*16)]; });
+    case 'uuid_v3': return 'xxxxxxxx-xxxx-3xxx-xxxx-xxxxxxxxxxxx'.replace(/x/g, function(){ return '0123456789abcdef'[Math.floor(Math.random()*16)]; });
+    case 'uuid_v4': return 'xxxxxxxx-xxxx-4xxx-xxxx-xxxxxxxxxxxx'.replace(/x/g, function(){ return '0123456789abcdef'[Math.floor(Math.random()*16)]; });
+    case 'uuid_v5': return 'xxxxxxxx-xxxx-5xxx-xxxx-xxxxxxxxxxxx'.replace(/x/g, function(){ return '0123456789abcdef'[Math.floor(Math.random()*16)]; });
+    case 'ferroid_ulid': return Array.from({length:26}, function(){ return '0123456789ABCDEFGHJKMNPQRSTVWXYZ'[Math.floor(Math.random()*32)]; }).join('');
+    case 'ferroid_twitter_id': return String(Math.floor(r * 1e18));
+    case 'ferroid_instagram_id': return String(Math.floor(r * 1e9));
+    case 'ferroid_mastodon_id': return String(Math.floor(r * 1e18));
+    case 'ferroid_discord_id': return String(Math.floor(r * 1e18));
+    case 'mime_type': return ['text/plain','application/json','text/csv','image/png','application/pdf'][Math.floor(r*5)];
+    case 'semver': return Math.floor(r*10) + '.' + Math.floor(r*20) + '.' + Math.floor(r*100);
+    case 'semver_stable': return (Math.floor(r*5)+1) + '.' + Math.floor(r*10) + '.' + Math.floor(r*50);
+    case 'semver_unstable': return '0.' + (Math.floor(r*9)+1) + '.' + Math.floor(r*50) + '-alpha';
+    case 'file_path': return '/home/user/' + ['docs','src','data','config'][Math.floor(r*4)] + '/file_' + Math.floor(r*999) + '.' + ['txt','json','csv','xml'][Math.floor(r*4)];
+    case 'file_name': return 'file_' + Math.floor(r*9999) + '.' + ['txt','json','csv','xml','pdf','jpg'][Math.floor(r*6)];
+    case 'file_extension': return ['txt','json','csv','xml','pdf','jpg','png'][Math.floor(r*7)];
+    case 'dir_path': return '/' + ['var','home','opt','tmp','usr'][Math.floor(r*5)] + '/' + ['data','logs','cache','config'][Math.floor(r*4)] + '/';
+    case 'image_url': return 'https://picsum.photos/' + (Math.floor(r*400)+100) + '/' + (Math.floor(rng(seed+1)*400)+100);
+    case 'image_url_with_seed': return 'https://picsum.photos/seed/' + ['abc','xyz','test','demo'][Math.floor(r*4)] + '/' + (Math.floor(r*400)+200);
+    case 'image_url_grayscale': return 'https://picsum.photos/' + (Math.floor(r*400)+200) + '/' + (Math.floor(rng(seed+1)*400)+200) + '?grayscale';
+    case 'image_url_blur': return 'https://picsum.photos/' + (Math.floor(r*400)+200) + '/' + (Math.floor(rng(seed+1)*400)+200) + '?blur=2';
+    case 'image_url_custom': return 'https://picsum.photos/id/' + Math.floor(r*1000) + '/' + (Math.floor(r*400)+200);
+    case 'hex_color': return '#' + Math.floor(r * 16777215).toString(16).padStart(6, '0');
+    case 'rgb_color': return 'rgb(' + Math.floor(r*255) + ',' + Math.floor(rng(seed+1)*255) + ',' + Math.floor(rng(seed+2)*255) + ')';
+    case 'rgba_color': return 'rgba(' + Math.floor(r*255) + ',' + Math.floor(rng(seed+1)*255) + ',' + Math.floor(rng(seed+2)*255) + ',' + (rng(seed+3)*0.8+0.2).toFixed(1) + ')';
+    case 'hsl_color': return 'hsl(' + Math.floor(r*360) + ',' + Math.floor(rng(seed+1)*60+40) + '%,' + Math.floor(rng(seed+2)*40+30) + '%)';
+    case 'hsla_color': return 'hsla(' + Math.floor(r*360) + ',' + Math.floor(rng(seed+1)*60+40) + '%,' + Math.floor(rng(seed+2)*40+30) + '%,' + (rng(seed+3)*0.8+0.2).toFixed(1) + ')';
+    case 'color': return '#' + Math.floor(r * 16777215).toString(16).padStart(6, '0');
+    case 'regex': return 'test_' + Math.floor(r*999);
+    case 'template': return 'ID-' + String(seed + 1).padStart(6, '0');
+    case 'constant': return 'FIXED_VALUE';
+    case 'isbn': return '978-' + Math.floor(r*10) + '-' + String(Math.floor(r*10000)).padStart(4,'0') + '-' + String(Math.floor(r*100)).padStart(2,'0') + '-' + Math.floor(r*10);
+    case 'isbn10': return Math.floor(r*10) + '-' + String(Math.floor(r*1000)).padStart(3,'0') + '-' + String(Math.floor(r*10000)).padStart(4,'0') + '-' + Math.floor(r*10);
+    case 'isbn13': return '978-' + Math.floor(r*10) + '-' + String(Math.floor(r*10000)).padStart(4,'0') + '-' + String(Math.floor(r*100)).padStart(2,'0') + '-' + Math.floor(r*10);
+    case 'rfc_status': return ['200','301','302','400','401','403','404','500'][Math.floor(r*8)];
+    case 'valid_status': return ['200','201','204','206','301','302','304'][Math.floor(r*7)];
+    case 'licence_plate': return 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(r*24)] + 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(rng(seed+1)*24)] + 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(rng(seed+2)*24)] + '-' + String(Math.floor(r*9999)).padStart(4,'0');
+    case 'health_insurance': return String(Math.floor(r*1e12)).padStart(12, '0');
+    case 'sequence': return ['A','B','C','D','E'][Math.floor(r * 5)];
+    case 'weighted': return r < 0.5 ? 'active' : r < 0.8 ? 'pending' : 'inactive';
+    case 'boolean': return r > 0.5;
+    case 'foreign_key': return 'FK_' + Math.floor(r * 999);
+    default: return String(r);
+  }
+}
+
+// ========== PREVIEW ==========
+function renderPreview() {
+  var emptyEl = document.getElementById('emptyPreview');
+  var tableEl = document.getElementById('previewTable');
+  var actionsEl = document.getElementById('previewActions');
+  var titleEl = document.getElementById('previewSectionTitle');
+
+  if (generatedData.rows.length === 0) {
+    emptyEl.style.display = 'flex';
+    tableEl.style.display = 'none';
+    actionsEl.style.display = 'none';
+    titleEl.textContent = '预览';
+    return;
+  }
+
+  emptyEl.style.display = 'none';
+  tableEl.style.display = '';
+  actionsEl.style.display = '';
+
+  var previewRows = generatedData.rows.slice(0, 50);
+  var displayCount = Math.min(generatedData.rowCount, 50);
+  titleEl.textContent = '预览 (前 ' + displayCount + ' 行)';
+
+  var colNames = generatedData.generatedColumns;
+  var head = document.getElementById('previewHead');
+  var body = document.getElementById('previewBody');
+  head.innerHTML = '<tr>' + colNames.map(function(n) { return '<th>' + escHtml(n) + '</th>'; }).join('') + '</tr>';
+  body.innerHTML = previewRows.map(function(row) {
+    return '<tr>' + colNames.map(function(n) {
+      var val = row[n];
+      if (val === null || val === undefined) return '<td class="col-null">NULL</td>';
+      if (typeof val === 'boolean') return '<td class="col-bool">' + val + '</td>';
+      if (typeof val === 'number') return '<td class="col-num">' + val + '</td>';
+      if (typeof val === 'string' && /^-?\d+(\.\d+)?$/.test(val) && val.length < 20) return '<td class="col-num">' + val + '</td>';
+      return '<td class="col-str">' + escHtml(String(val)) + '</td>';
+    }).join('') + '</tr>';
+  }).join('');
+}
+
+// ========== EXPORT ==========
+function onExport(format) {
+  if (generatedData.rows.length === 0) { showToast('请先生成数据', 'error'); return; }
+  var tableName = document.getElementById('tableName').value.trim() || 'mock_data';
+  var colNames = generatedData.generatedColumns;
+  switch (format) {
+    case 'csv': {
+      var header = colNames.join(',');
+      var rows = generatedData.rows.map(function(r) { return colNames.map(function(c) {
+        var v = r[c]; if (v === null) return ''; if (typeof v === 'string' && v.includes(',')) return '"' + v + '"'; return String(v);
+      }).join(','); });
+      downloadFile(tableName + '.csv', [header].concat(rows).join('\n'), 'text/csv');
+      break;
+    }
+    case 'sql': {
+      var lines = generatedData.rows.map(function(row) {
+        var vals = colNames.map(function(c) {
+          var v = row[c]; if (v === null) return 'NULL'; if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE'; if (typeof v === 'number') return String(v);
+          return "'" + String(v).replace(/'/g, "''") + "'";
+        }).join(', ');
+        return 'INSERT INTO ' + tableName + ' (' + colNames.join(', ') + ') VALUES (' + vals + ');';
+      });
+      downloadFile(tableName + '.sql', lines.join('\n'), 'text/plain');
+      break;
+    }
+    default: showToast('模拟导出 ' + format.toUpperCase() + '（实际由 Tauri Rust 后端执行）', 'success');
+  }
+}
+
+function downloadFile(filename, content, mimeType) {
+  var blob = new Blob([content], { type: mimeType });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+  showToast('已导出 ' + filename, 'success');
+}
+
+function toggleScratchpad() { document.getElementById('scratchpadDropdown').classList.toggle('open'); }
+function onSaveToScratchpad(format) {
+  document.getElementById('scratchpadDropdown').classList.remove('open');
+  showToast('已保存到草稿箱 (' + format + ')', 'success');
+}
+function onPersist() { showToast('已持久化为分析资产', 'success'); }
+function onLoadMore() {
+  if (generatedData.rows.length === 0) { showToast('请先生成数据', 'warning'); return; }
+  showToast('已加载 ' + generatedData.rows.length.toLocaleString() + ' 行', 'success');
+}
+
+// ========== AUTO-MAP ==========
+async function onAutoMap(idx) {
+  mappingIndex = idx;
+  renderColumns();
+  await sleep(500);
+  var col = columns[idx];
+  if (!col) { mappingIndex = -1; renderColumns(); return; }
+  var recs = {
+    'integer': ['auto_increment', 'random_int', 'normal', 'random_walk'],
+    'bigint': ['auto_increment', 'random_int', 'ferroid_twitter_id'],
+    'float': ['random_float', 'normal', 'log_normal'],
+    'double': ['random_float', 'normal', 'log_normal'],
+    'decimal': ['random_decimal', 'normal', 'random_float'],
+    'varchar': ['words', 'name', 'email', 'city', 'username', 'constant'],
+    'text': ['sentence', 'paragraph', 'paragraphs', 'constant'],
+    'boolean': ['boolean'],
+    'date': ['date', 'sequential_date', 'datetime_between'],
+    'datetime': ['datetime', 'datetime_between', 'sequential_date'],
+    'timestamp': ['datetime', 'datetime_between', 'sequential_date'],
+    'uuid': ['uuid_v4', 'uuid_v1', 'ferroid_ulid'],
+    'blob': ['constant'],
+  };
+  var pool = recs[col.dataType] || ['words'];
+  col.generator = pool[Math.floor(Math.random() * pool.length)];
+  if (col.generator === 'auto_increment' || col.generator === 'uuid_v4' || col.generator === 'uuid_v1') {
+    col.unique = true;
+  }
+  mappingIndex = -1;
+  renderAll();
+  showToast('已智能映射: ' + getGeneratorLabel(col.generator), 'success');
+}
+
+// ========== ADVANCED DRAWER ==========
+function openAdvanced(idx) {
+  drawerColumnIndex = idx;
+  var col = columns[idx];
+  if (!col) return;
+  document.getElementById('drawerTitle').textContent = col.name + ' 列 · 高级配置';
+  document.getElementById('drawerFieldName').value = col.name;
+  document.getElementById('drawerDataType').innerHTML = DATA_TYPE_OPTIONS.map(function(dt) {
+    return '<option value="' + dt.value + '" ' + (dt.value === col.dataType ? 'selected' : '') + '>' + dt.label + '</option>';
+  }).join('');
+  document.getElementById('drawerNullRatio').value = col.nullableRatio;
+  document.getElementById('drawerNullRatioPct').textContent = Math.round(col.nullableRatio * 100) + '%';
+  document.getElementById('drawerUnique').checked = col.unique;
+  var genCategory = getGeneratorCategory(col.generator);
+  drawerState = {
+    activeFilter: genCategory,
+    generatorType: col.generator,
+    params: col.generatorParams || {},
+    colIdx: idx,
+  };
+  renderDrawerFilterTabs();
+  renderDrawerGeneratorList();
+  renderDrawerParams();
+  updateDrawerSourceInfo();
+  renderDrawerTsConfig();
+  updateDrawerTsVisibility();
+  document.getElementById('drawerOverlay').classList.add('open');
+}
+
+function closeDrawer() {
+  drawerColumnIndex = -1;
+  document.getElementById('drawerOverlay').classList.remove('open');
+}
+
+function renderDrawerFilterTabs() {
+  var el = document.getElementById('filterTabs');
+  el.innerHTML = FILTER_TABS.map(function(tab) {
+    return '<span class="filter-tab ' + (tab.key === drawerState.activeFilter ? 'active' : '') + '" onclick="setDrawerFilter(\'' + tab.key + '\')">' + tab.label + '</span>';
+  }).join('');
+}
+
+function setDrawerFilter(key) {
+  drawerState.activeFilter = key;
+  renderDrawerFilterTabs();
+  renderDrawerGeneratorList();
+}
+
+function renderDrawerGeneratorList() {
+  var el = document.getElementById('drawerGeneratorList');
+  var filtered = drawerState.activeFilter === 'all'
+    ? GENERATOR_LIST
+    : GENERATOR_LIST.filter(function(g) { return g.category === drawerState.activeFilter; });
+  if (filtered.length === 0) {
+    el.innerHTML = '<div class="empty-list">该分类暂无可用生成器</div>';
+    return;
+  }
+  el.innerHTML = filtered.map(function(gen) {
+    return '<div class="generator-item ' + (gen.type === drawerState.generatorType ? 'selected' : '') + '" onclick="selectDrawerGenerator(\'' + gen.type + '\')">' +
+      '<div class="gen-info">' +
+        (gen.recommended ? '<span class="gen-recommend">🟢 推荐</span>' : '') +
+        '<span class="gen-name">' + gen.label + '</span>' +
+        '<span class="gen-type">' + gen.type + '</span>' +
+      '</div>' +
+      '<span class="gen-example">' + gen.example + '</span>' +
+    '</div>';
+  }).join('');
+}
+
+function selectDrawerGenerator(type) {
+  drawerState.generatorType = type;
+  drawerState.params = {};
+  renderDrawerGeneratorList();
+  renderDrawerParams();
+  updateDrawerSourceInfo();
+  updateDrawerTsVisibility();
+}
+
+function renderDrawerParams() {
+  var el = document.getElementById('drawerParams');
+  var schema = GENERATOR_PARAM_SCHEMA[drawerState.generatorType];
+  if (!schema || schema.length === 0) {
+    el.innerHTML = '<div class="empty-list" style="padding:12px;">此生成器无需额外配置参数</div>';
+    return;
+  }
+  el.innerHTML = schema.map(function(field) {
+    var val = drawerState.params[field.name] !== undefined ? drawerState.params[field.name] : field.default;
+    var input;
+    switch (field.type) {
+      case 'number':
+        input = '<input type="number" value="' + val + '" ' + (field.min !== undefined ? 'min="'+field.min+'" ' : '') + (field.max !== undefined ? 'max="'+field.max+'" ' : '') + 'onchange="setDrawerParam(\'' + field.name + '\', this.value)">';
+        break;
+      case 'text':
+        input = '<input type="text" value="' + escHtml(String(val)) + '" onchange="setDrawerParam(\'' + field.name + '\', this.value)">';
+        break;
+      case 'boolean':
+        input = '<input type="checkbox" ' + (val === true || val === 'true' ? 'checked' : '') + ' onchange="setDrawerParam(\'' + field.name + '\', this.checked)">';
+        break;
+      case 'select':
+        input = '<select onchange="setDrawerParam(\'' + field.name + '\', this.value)">' + (field.options || []).map(function(o) {
+          return '<option value="' + o.value + '" ' + (String(val) === String(o.value) ? 'selected' : '') + '>' + o.label + '</option>';
+        }).join('') + '</select>';
+        break;
+      default:
+        input = '<input type="text" value="' + escHtml(String(val)) + '" onchange="setDrawerParam(\'' + field.name + '\', this.value)">';
+    }
+    return '<div class="param-field">' +
+      '<label class="param-field-label">' + escHtml(field.label) + '</label>' +
+      input +
+    '</div>';
+  }).join('');
+}
+
+function setDrawerParam(key, value) {
+  drawerState.params[key] = value;
+}
+
+function updateDrawerSourceInfo() {
+  var el = document.getElementById('drawerSourceInfo');
+  var mod = GENERATOR_MODULES[drawerState.generatorType] || '自定义';
+  el.textContent = '生成器来源: ' + mod;
+}
+
+function renderDrawerTsConfig() {
+  var tsDateEl = document.getElementById('tsDateColumn');
+  var options = '<option value="">选择日期列</option>';
+  columns.forEach(function(c, i) {
+    var isDate = ['date', 'datetime', 'timestamp'].indexOf(c.dataType) >= 0;
+    if (isDate && i !== drawerColumnIndex) {
+      options += '<option value="' + i + '">' + escHtml(c.name) + '</option>';
+    }
+  });
+  tsDateEl.innerHTML = options;
+}
+
+function updateDrawerTsVisibility() {
+  var tsSection = document.getElementById('timeseriesSection');
+  var trendRow = document.getElementById('tsTrendRow');
+  var cycleRow = document.getElementById('tsCycleRow');
+  var volRow = document.getElementById('tsVolRow');
+  var isNumeric = ['random_int', 'normal', 'log_normal', 'random_walk', 'random_float', 'random_decimal'].indexOf(drawerState.generatorType) >= 0;
+  tsSection.style.display = isNumeric ? '' : 'none';
+  if (isNumeric) {
+    trendRow.style.display = '';
+    cycleRow.style.display = '';
+    volRow.style.display = '';
+  }
+}
+
+function onDrawerNullRatioInput() {
+  var el = document.getElementById('drawerNullRatio');
+  var pctEl = document.getElementById('drawerNullRatioPct');
+  var val = parseFloat(el.value) || 0;
+  pctEl.textContent = Math.round(val * 100) + '%';
+}
+
+function restoreDefault() {
+  var col = columns[drawerColumnIndex];
+  if (!col) return;
+  var defaults = {
+    'integer': 'random_int', 'bigint': 'auto_increment', 'float': 'random_float',
+    'double': 'random_float', 'decimal': 'random_decimal', 'boolean': 'boolean',
+    'date': 'date', 'datetime': 'datetime', 'timestamp': 'datetime',
+    'uuid': 'uuid_v4', 'varchar': 'words', 'text': 'sentence',
+  };
+  var genType = defaults[col.dataType] || 'words';
+  drawerState.generatorType = genType;
+  drawerState.params = {};
+  document.getElementById('drawerNullRatio').value = 0;
+  document.getElementById('drawerNullRatioPct').textContent = '0%';
+  document.getElementById('drawerUnique').checked = false;
+  renderDrawerFilterTabs();
+  renderDrawerGeneratorList();
+  renderDrawerParams();
+  updateDrawerSourceInfo();
+  updateDrawerTsVisibility();
+  showToast('已恢复智能默认', 'warning');
+}
+
+function applyDrawer() {
+  var col = columns[drawerColumnIndex];
+  if (!col) return;
+  col.name = document.getElementById('drawerFieldName').value.trim() || col.name;
+  col.dataType = document.getElementById('drawerDataType').value;
+  col.generator = drawerState.generatorType;
+  col.generatorParams = JSON.parse(JSON.stringify(drawerState.params));
+  col.nullableRatio = parseFloat(document.getElementById('drawerNullRatio').value) || 0;
+  col.unique = document.getElementById('drawerUnique').checked;
+  closeDrawer();
+  renderAll();
+  showToast('高级配置已应用', 'success');
+}
+
+// ========== RESET ==========
+function onReset() {
+  document.getElementById('tableName').value = 'mock_users';
+  document.getElementById('rowCount').value = '100';
+  document.getElementById('seed').value = '';
+  document.getElementById('locale').value = 'zh_CN';
+  currentSeed = null;
+  columns = [];
+  generatedData = { rows: [], rowCount: 0, generatedColumns: [] };
+  addDefaultColumn('id', 'integer', 'auto_increment', true);
+  addDefaultColumn('name', 'varchar', 'name');
+  addDefaultColumn('email', 'varchar', 'safe_email');
+  addDefaultColumn('age', 'integer', 'random_int');
+  addDefaultColumn('city', 'varchar', 'city');
+  addDefaultColumn('created_at', 'datetime', 'datetime_between');
+  renderAll();
+  showToast('已重置为默认配置', 'warning');
+}
+
+// ========== HISTORY ==========
+function addHistory(tableName, rowCount, elapsed) {
+  var now = new Date();
+  history.unshift({
+    id: 'h_' + Date.now(),
+    tableName: tableName,
+    rowCount: rowCount,
+    elapsedMs: elapsed,
+    status: 'completed',
+    createdAt: now.toISOString(),
+    columns: JSON.parse(JSON.stringify(columns)),
+  });
+  if (history.length > 20) history = history.slice(0, 20);
+  renderHistory();
+}
+
+function renderHistory() {
+  var section = document.getElementById('historySection');
+  var list = document.getElementById('historyList');
+  if (history.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  list.innerHTML = history.map(function(item) {
+    return '<div class="history-item" onclick="onReGenerate(\'' + item.id + '\')">' +
+      '<div class="history-item-left">' +
+        '<span class="history-table">' + escHtml(item.tableName) + '</span>' +
+        '<span class="history-rows">' + item.rowCount.toLocaleString() + ' 行</span>' +
+        '<span class="history-status">' + item.status + '</span>' +
+      '</div>' +
+      '<div class="history-item-right">' +
+        '<span class="history-time">' + formatTime(item.createdAt) + '</span>' +
+        '<button class="history-del" onclick="event.stopPropagation();onDeleteHistory(\'' + item.id + '\')">🗑</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function loadHistory() {
+  renderHistory();
+}
+
+function onDeleteHistory(historyId) {
+  history = history.filter(function(h) { return h.id !== historyId; });
+  renderHistory();
+  showToast('已删除历史记录', 'success');
+}
+
+function onReGenerate(historyId) {
+  var item = history.find(function(h) { return h.id === historyId; });
+  if (!item) { showToast('历史记录不存在', 'error'); return; }
+  if (item.columns && item.columns.length > 0) {
+    columns = item.columns.map(function(c) { return Object.assign({}, c); });
+    document.getElementById('tableName').value = item.tableName;
+    document.getElementById('rowCount').value = item.rowCount;
+    renderAll();
+    showToast('已从历史恢复 ' + item.tableName + '（' + item.columns.length + ' 列），请点击生成按钮', 'success');
+  } else {
+    showToast('该历史记录无字段配置', 'warning');
+  }
+}
+
+// ========== TEMPLATES ==========
+function renderTemplates() {
+  var section = document.getElementById('templatesSection');
+  var list = document.getElementById('templatesList');
+  if (userTemplates.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  list.innerHTML = userTemplates.map(function(tpl) {
+    return '<div class="history-item" onclick="onApplyTemplate(\'' + tpl.id + '\')">' +
+      '<div class="history-item-left">' +
+        '<span class="history-table">' + escHtml(tpl.name) + '</span>' +
+        '<span class="history-rows">' + (tpl.rowCount || 0) + ' 行</span>' +
+        '<span class="history-status">' + escHtml(tpl.locale || 'zh_CN') + '</span>' +
+      '</div>' +
+      '<div class="history-item-right">' +
+        '<span class="history-time">' + (tpl.createdAt ? formatTime(tpl.createdAt) : '-') + '</span>' +
+        '<button class="history-del" onclick="event.stopPropagation();onDeleteTemplate(\'' + tpl.id + '\')">🗑</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function openSaveTemplateModal() {
+  document.getElementById('saveTemplateName').value = '';
+  document.getElementById('saveTemplateOverlay').classList.add('open');
+}
+
+function closeSaveTemplateModal() {
+  document.getElementById('saveTemplateOverlay').classList.remove('open');
+}
+
+function onSaveTemplate() {
+  var name = document.getElementById('saveTemplateName').value.trim();
+  if (!name) { showToast('请输入模板名称', 'error'); return; }
+  userTemplates.push({
+    id: 'tpl_' + Date.now(),
+    name: name,
+    rowCount: parseInt(document.getElementById('rowCount').value) || 100,
+    locale: document.getElementById('locale').value,
+    createdAt: new Date().toISOString(),
+    columns: JSON.parse(JSON.stringify(columns)),
+    tableName: document.getElementById('tableName').value.trim(),
+  });
+  closeSaveTemplateModal();
+  renderTemplates();
+  showToast('模板已保存', 'success');
+}
+
+function onDeleteTemplate(tplId) {
+  userTemplates = userTemplates.filter(function(t) { return t.id !== tplId; });
+  renderTemplates();
+  showToast('模板已删除', 'success');
+}
+
+function onApplyTemplate(tplId) {
+  var tpl = userTemplates.find(function(t) { return t.id === tplId; });
+  if (!tpl) { showToast('模板不存在', 'error'); return; }
+  if (tpl.columns && tpl.columns.length > 0) {
+    columns = tpl.columns.map(function(c) { return Object.assign({}, c); });
+    document.getElementById('tableName').value = tpl.tableName || 'mock_data';
+    document.getElementById('rowCount').value = tpl.rowCount || 100;
+    renderAll();
+    showToast('模板已应用', 'success');
+  } else {
+    showToast('模板没有列定义', 'warning');
+  }
+}
+
+// ========== SCENE TEMPLATE DIALOG ==========
+function renderTemplateGrid() {
+  var grid = document.getElementById('templateGrid');
+  grid.innerHTML = SCENE_TEMPLATES.map(function(tpl) {
+    var isSelected = tpl.id === selectedTemplateId;
+    return '<div class="template-card ' + (isSelected ? 'selected' : '') + '" onclick="selectTemplate(\'' + tpl.id + '\')" ondblclick="applyTemplate()">' +
+      '<span class="cat">' + tpl.id + '</span>' +
+      '<h4>' + tpl.name + '</h4>' +
+      '<p>' + tpl.description + '</p>' +
+      '<div class="meta">' +
+        '<span>' + tpl.tableCount + ' 表</span>' +
+        '<span>' + tpl.columnCount + ' 列</span>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function selectTemplate(tplId) {
+  selectedTemplateId = tplId;
+  document.getElementById('btnApplyTemplate').disabled = false;
+  renderTemplateGrid();
+}
+
+function openTemplateDialog() {
+  selectedTemplateId = null;
+  document.getElementById('btnApplyTemplate').disabled = true;
+  renderTemplateGrid();
+  document.getElementById('templateOverlay').classList.add('open');
+}
+
+function closeTemplateDialog() {
+  document.getElementById('templateOverlay').classList.remove('open');
+}
+
+function applyTemplate() {
+  if (!selectedTemplateId) return;
+  var tpl = SCENE_TEMPLATES.find(function(t) { return t.id === selectedTemplateId; });
+  if (!tpl) return;
+  if (tpl.table && tpl.table.columns && tpl.table.columns.length > 0) {
+    columns = tpl.table.columns.map(function(c) { return Object.assign({}, c); });
+    document.getElementById('tableName').value = tpl.table.name;
+    document.getElementById('rowCount').value = tpl.table.rowCount || 100;
+    closeTemplateDialog();
+    renderAll();
+    showToast('已应用模板: ' + tpl.name, 'success');
+  } else {
+    showToast('模板没有表定义', 'warning');
+  }
+}
+
+// ========== IMPORT DIALOG ==========
+function openImportDialog() {
+  document.getElementById('importOverlay').classList.add('open');
+}
+
+function closeImportDialog() {
+  document.getElementById('importOverlay').classList.remove('open');
+}
+
+function doImport() {
+  var conn = document.getElementById('importConn').value;
+  var table = document.getElementById('importTable').value;
+  if (!conn || !table) { showToast('请选择连接和表', 'error'); return; }
+  var mockSchemas = {
+    'users': [
+      { name: 'id', dataType: 'integer', generator: 'auto_increment', unique: true },
+      { name: 'username', dataType: 'varchar', generator: 'username' },
+      { name: 'email', dataType: 'varchar', generator: 'email' },
+      { name: 'password_hash', dataType: 'varchar', generator: 'password' },
+      { name: 'full_name', dataType: 'varchar', generator: 'name' },
+      { name: 'is_active', dataType: 'boolean', generator: 'boolean' },
+      { name: 'created_at', dataType: 'datetime', generator: 'datetime' },
+    ],
+    'orders': [
+      { name: 'id', dataType: 'integer', generator: 'auto_increment', unique: true },
+      { name: 'user_id', dataType: 'integer', generator: 'foreign_key' },
+      { name: 'product_name', dataType: 'varchar', generator: 'word' },
+      { name: 'quantity', dataType: 'integer', generator: 'random_int' },
+      { name: 'total_amount', dataType: 'decimal', generator: 'random_decimal' },
+      { name: 'order_date', dataType: 'datetime', generator: 'datetime_between' },
+    ],
+    'products': [
+      { name: 'id', dataType: 'integer', generator: 'auto_increment', unique: true },
+      { name: 'name', dataType: 'varchar', generator: 'word' },
+      { name: 'category', dataType: 'varchar', generator: 'constant' },
+      { name: 'price', dataType: 'decimal', generator: 'random_decimal' },
+      { name: 'stock', dataType: 'integer', generator: 'random_int' },
+      { name: 'created_at', dataType: 'datetime', generator: 'datetime' },
+    ],
+  };
+  var cols = mockSchemas[table];
+  if (!cols) { showToast('未知表结构', 'error'); return; }
+  columns = cols.map(function(c) { return Object.assign({}, c); });
+  closeImportDialog();
+  renderAll();
+  showToast('已导入 ' + cols.length + ' 列', 'success');
+}
+
+// ========== UTILITY ==========
+function showToast(msg, type) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + (type || 'success') + ' show';
+  clearTimeout(t._timeout);
+  t._timeout = setTimeout(function() { t.classList.remove('show'); }, 2500);
+}
+
+function sleep(ms) {
+  return new Promise(function(resolve) { return setTimeout(resolve, ms); });
+}
+
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatTime(ts) {
+  try {
+    var d = new Date(ts);
+    var pad = function(n) { return String(n).padStart(2, '0'); };
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  } catch(e) { return ts; }
+}
+
+function updateStatusBar() {
+  var el = document.getElementById('sbConnInfo');
+  if (generatedData.rowCount > 0) {
+    el.textContent = '已生成 ' + generatedData.rowCount.toLocaleString() + ' 行 · ' + elapsedMs + 'ms';
+  } else {
+    el.textContent = '就绪';
+  }
+}
+
+// ========== RESIZE HANDLE ==========
+function initResizeHandle() {
+  var handle = document.getElementById('rightPanelResize');
+  var panel = document.getElementById('rightPanel');
+  var startX, startWidth;
+  handle.addEventListener('mousedown', function(e) {
+    startX = e.clientX;
+    startWidth = panel.offsetWidth;
+    handle.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+  function onMouseMove(e) {
+    var dx = startX - e.clientX;
+    var newWidth = Math.max(200, Math.min(600, startWidth + dx));
+    panel.style.width = newWidth + 'px';
+  }
+  function onMouseUp() {
+    handle.classList.remove('active');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+// ========== ACTIVITY BAR ==========
+function initActivityBar() {
+  var leftBar = document.getElementById('activityBarLeft');
+  leftBar.addEventListener('click', function(e) {
+    var item = e.target.closest('.act-item');
+    if (!item) return;
+    var id = item.getAttribute('data-id');
+    if (id === 'scratchpad') showToast('草稿箱功能已就绪', 'success');
+    else if (id === 'database') showToast('数据库导航面板已就绪', 'success');
+    else if (id === 'analytics') showToast('分析资源管理面板已就绪', 'success');
+    else if (id === 'plugins') showToast('插件管理面板已就绪', 'success');
+    else if (id === 'settings') showToast('设置面板已就绪', 'success');
+  });
+  var rightBar = document.getElementById('activityBarRight');
+  rightBar.addEventListener('click', function(e) {
+    var item = e.target.closest('.act-item');
+    if (!item) return;
+    var id = item.getAttribute('data-id');
+    if (id === 'mock') {
+      panelVisible = !panelVisible;
+      var panel = document.getElementById('rightPanel');
+      if (panelVisible) {
+        panel.classList.remove('hidden');
+      } else {
+        panel.classList.add('hidden');
+      }
+      item.classList.toggle('active', panelVisible);
+    } else if (id === 'column-insights') showToast('列洞察面板已就绪', 'success');
+    else if (id === 'sql-history') showToast('SQL 历史面板已就绪', 'success');
+  });
+}
+
+// ========== CLICK-OUTSIDE HANDLERS ==========
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#scratchpadDropdown')) {
+    document.getElementById('scratchpadDropdown').classList.remove('open');
+  }
+  if (!e.target.closest('.drawer') && !e.target.closest('.fx-btn') && document.getElementById('drawerOverlay').classList.contains('open')) {
+    if (e.target.closest('#drawerOverlay')) closeDrawer();
+  }
+  if (!e.target.closest('.dialog') && !e.target.closest('.fx-btn') && !e.target.closest('.btn')) {
+    var overlays = document.querySelectorAll('.overlay.open');
+    overlays.forEach(function(o) { o.classList.remove('open'); });
+  }
+});
+
+// ========== BOOT ==========
+window.onload = init;
+</script>
+</body>
+</html>

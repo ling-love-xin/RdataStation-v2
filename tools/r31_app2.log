@@ -1,0 +1,14 @@
+﻿cargo :    Compiling rds-app v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\app)
+所在位置 行:1 字符: 1
++ cargo build -p rds-app -j 2 --manifest-path "D:\RdataStation\RDS\Rdat ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...-v2\crates\app):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_app.lib 和对象 D:\RdataStation\RDS
+\RdataStation-v2\target\debug\deps\rds_app.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-app` (bin "rds-app") generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 47.18s

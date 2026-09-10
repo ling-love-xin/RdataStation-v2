@@ -1,0 +1,54 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:1 字符: 71
++ ... column.py"; cargo test -p rds-workbench -j 2 --manifest-path "D:\Rdat ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0308]: mismatched types
+  --> crates\workbench\src\services\query_runner.rs:43:57
+   |
+43 |         .map(|i| stmt.column_name(i).unwrap_or_else(|_| "unknown".to_string()))
+   |                                                         ^^^^^^^^^^^^^^^^^^^^^ expected `&String`, found `String`
+   |
+help: consider borrowing here
+   |
+43 |         .map(|i| stmt.column_name(i).unwrap_or_else(|_| &"unknown".to_string()))
+   |                                                         +
+
+error[E0277]: a value of type `Vec<std::string::String>` cannot be built from an iterator over elements of type `&std::
+string::String`
+    --> crates\workbench\src\services\query_runner.rs:44:10
+     |
+  44 |         .collect();
+     |          ^^^^^^^ value of type `Vec<std::string::String>` cannot be built from `std::iter::Iterator<Item=&std::s
+tring::String>`
+     |
+help: the trait `FromIterator<&std::string::String>` is not implemented for `Vec<std::string::String>`
+      but trait `FromIterator<std::string::String>` is implemented for it
+    --> D:\Dev\Rust\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\alloc\src\vec\mod.rs:
+3938:1
+     |
+3938 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `std::string::String`, found `&std::string::String`
+note: the method call chain might not have had the expected associated types
+    --> crates\workbench\src\services\query_runner.rs:43:10
+     |
+  42 |     let columns: Vec<String> = (0..stmt.column_count())
+     |                                ------------------------ this expression has type `Range<usize>`
+  43 |         .map(|i| stmt.column_name(i).unwrap_or_else(|_| "unknown".to_string()))
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Iterator::Item` is `&String` he
+re
+note: required by a bound in `collect`
+    --> D:\Dev\Rust\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\iter\traits\
+iterator.rs:2077:19
+     |
+2077 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `rds-workbench` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `rds-workbench` (lib test) due to 2 previous errors

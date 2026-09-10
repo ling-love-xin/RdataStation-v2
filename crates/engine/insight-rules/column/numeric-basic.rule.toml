@@ -1,0 +1,55 @@
+[meta]
+id = "numeric-basic"
+name = "数值列基础统计(兼容)"
+description = "计算 min/max/avg/median/sum/stddev (兼容旧版 DuckDB 无百分位函数)"
+version = "1.0"
+category = "column"
+applies_to = ["Numeric"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    MIN("{col}")::DOUBLE AS min_val,
+    MAX("{col}")::DOUBLE AS max_val,
+    AVG("{col}")::DOUBLE AS avg_val,
+    MEDIAN("{col}")::DOUBLE AS median_val,
+    SUM("{col}")::DOUBLE AS sum_val,
+    STDDEV_SAMP("{col}")::DOUBLE AS stddev_val
+FROM "{table}"
+"""
+parameters = ["table", "col"]
+
+[[output]]
+sql_name = "min_val"
+json_name = "min"
+value_type = "f64"
+
+[[output]]
+sql_name = "max_val"
+json_name = "max"
+value_type = "f64"
+
+[[output]]
+sql_name = "avg_val"
+json_name = "avg"
+value_type = "f64"
+
+[[output]]
+sql_name = "median_val"
+json_name = "median"
+value_type = "f64"
+
+[[output]]
+sql_name = "sum_val"
+json_name = "sum"
+value_type = "f64"
+
+[[output]]
+sql_name = "stddev_val"
+json_name = "stddev"
+value_type = "f64?"
+
+[render]
+component = "NumericStatsTable"
+display_order = 2

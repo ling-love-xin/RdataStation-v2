@@ -1,0 +1,9 @@
+[dbg] WV-render
+[dbg] EP-render
+[dbg] EP-lazy-done
+[dbg] EP-theme-done
+[dbg] EP-before-detail
+[dbg] EP-detail-entry
+[dbg] EP-detail-card-build
+
+thread 'main' (24740) has overflowed its stack

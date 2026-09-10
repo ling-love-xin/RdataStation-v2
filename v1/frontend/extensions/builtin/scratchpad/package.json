@@ -1,0 +1,7 @@
+{
+  "name": "scratchpad",
+  "version": "1.0.0",
+  "description": "Scratchpad - Temporary file management area for exploratory work",
+  "main": "extension.ts",
+  "author": "RdataStation Team"
+}

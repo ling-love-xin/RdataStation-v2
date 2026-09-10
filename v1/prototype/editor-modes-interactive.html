@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 编辑器模式原型</title>
+<style>
+  :root {
+    --bg-body: #1e1e1e;
+    --bg-sidebar: #252526;
+    --bg-toolbar: #2d2d30;
+    --bg-tab-bar: #252526;
+    --bg-tab-active: #1e1e1e;
+    --bg-tab-inactive: #2d2d2d;
+    --bg-editor: #1e1e1e;
+    --bg-gutter: #1e1e1e;
+    --bg-result: #1e1e1e;
+    --bg-input: #3c3c3c;
+    --bg-hover: #3a3a3a;
+    --bg-active-line: rgba(255,255,255,0.03);
+    --bg-activity-bar: #333333;
+    --bg-edge-header: #2d2d30;
+    --border: #3c3c3c;
+    --fg: #cccccc;
+    --fg-bright: #e0e0e0;
+    --fg-dim: #858585;
+    --fg-accent: #4fc1ff;
+    --fg-string: #ce9178;
+    --fg-number: #b5cea8;
+    --fg-keyword: #569cd6;
+    --fg-function: #dcdcaa;
+    --fg-comment: #6a9955;
+    --fg-type: #4ec9b0;
+    --fg-cursor: #aeafad;
+    --dirty: #f0c040;
+    --accent-sql: #007acc;
+    --accent-analysis: #0e639c;
+    --accent-code: #68217a;
+    --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --radius: 4px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0d0d0d; color: var(--fg);
+    font-family: var(--font-ui); font-size: 13px;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+    user-select: none;
+  }
+
+  @keyframes cm-cursor-blink {
+    0%,50% { border-left-color: var(--fg-cursor); }
+    51%,100% { border-left-color: transparent; }
+  }
+
+  /* ===== 应用标题栏 ===== */
+  .app-titlebar {
+    display: flex; align-items: center; gap: 12px;
+    height: 30px; padding: 0 10px;
+    background: #323233; border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .app-titlebar .app-name { font-size: 12px; color: var(--fg-bright); font-weight: 500; }
+  .app-titlebar .menu-item { font-size: 12px; color: var(--fg-dim); padding: 2px 8px; border-radius: 3px; cursor: pointer; }
+  .app-titlebar .menu-item:hover { background: var(--bg-hover); color: var(--fg); }
+
+  /* ===== dockview 主布局 ===== */
+  .dw-root { flex: 1; display: flex; overflow: hidden; }
+
+  /* ===== Activity Bar ===== */
+  .activity-bar {
+    width: 48px; flex-shrink: 0;
+    background: var(--bg-activity-bar); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center;
+    padding-top: 4px; gap: 2px;
+  }
+  .activity-bar .top-group,
+  .activity-bar .bottom-group { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .activity-bar .bottom-group { margin-top: auto; padding-bottom: 4px; }
+  .activity-icon {
+    width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+    color: var(--fg-dim); cursor: pointer; position: relative; transition: color 0.1s;
+  }
+  .activity-icon:hover { color: var(--fg); }
+  .activity-icon.active { color: var(--fg-bright); }
+  .activity-icon.active::before {
+    content: ''; position: absolute; left: 0; top: 8px; bottom: 8px;
+    width: 2px; background: var(--fg-bright);
+  }
+  .activity-bar .divider { width: 28px; height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* ===== Edge Group ===== */
+  .edge-group {
+    width: 260px; min-width: 180px; flex-shrink: 0; overflow: hidden;
+    display: flex; flex-direction: column; background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+  }
+  .edge-group.right { border-right: none; border-left: 1px solid var(--border); }
+  .edge-group.collapsed { width: 0; min-width: 0; border: none; }
+  .edge-tab-bar {
+    display: flex; align-items: stretch; height: 32px;
+    background: var(--bg-edge-header); flex-shrink: 0; overflow-x: auto;
+  }
+  .edge-tab {
+    display: flex; align-items: center; gap: 5px; height: 100%;
+    padding: 0 10px; font-size: 12px; color: var(--fg-dim);
+    cursor: pointer; white-space: nowrap; border-right: 1px solid var(--border);
+    transition: all 0.1s;
+  }
+  .edge-tab:hover { color: var(--fg); background: rgba(255,255,255,0.03); }
+  .edge-tab.active { color: var(--fg-bright); background: var(--bg-sidebar); border-bottom: 2px solid var(--accent-sql); }
+  .edge-content { flex: 1; overflow-y: auto; display: none; }
+  .edge-content.active { display: block; }
+  .tree-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 12px; font-size: 13px; color: var(--fg);
+    cursor: pointer; white-space: nowrap; transition: background 0.08s;
+  }
+  .tree-item:hover { background: var(--bg-hover); }
+  .tree-item.child { padding-left: 32px; font-size: 12px; }
+  .tree-item.child2 { padding-left: 48px; font-size: 12px; color: var(--fg-dim); }
+  .tree-item .chevron { width: 14px; text-align: center; font-size: 10px; color: var(--fg-dim); transition: transform 0.15s; display: inline-block; }
+  .tree-item .chevron.open { transform: rotate(90deg); }
+  .scratchpad-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 12px; font-size: 13px; color: var(--fg);
+    cursor: pointer; transition: background 0.08s;
+  }
+  .scratchpad-item:hover { background: var(--bg-hover); }
+  .scratchpad-item .icon { color: var(--fg-dim); flex-shrink: 0; }
+  .prop-section-title { padding: 4px 12px; font-size: 11px; font-weight: 600; color: var(--fg-dim); }
+  .prop-row { display: flex; align-items: center; padding: 3px 12px; font-size: 12px; gap: 8px; }
+  .prop-row .label { color: var(--fg-dim); min-width: 70px; flex-shrink: 0; }
+  .prop-row .value { color: var(--fg); }
+
+  .resize-h { width: 4px; cursor: col-resize; flex-shrink: 0; background: transparent; transition: background 0.1s; }
+  .resize-h:hover, .resize-h.active { background: var(--accent-sql); }
+
+  /* ===== 中央区域 ===== */
+  .panel-center { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* 中央标签栏 (dockview) */
+  .center-tab-bar {
+    display: flex; align-items: stretch; height: 34px;
+    background: var(--bg-tab-bar); flex-shrink: 0; overflow-x: auto;
+  }
+  .center-tab {
+    display: flex; align-items: center; gap: 6px; height: 100%;
+    min-width: 0; max-width: 180px; padding: 0 12px;
+    font-size: 12px; color: var(--fg-dim);
+    background: var(--bg-tab-inactive);
+    border-right: 1px solid var(--border);
+    cursor: pointer; white-space: nowrap; transition: all 0.12s;
+  }
+  .center-tab:hover { background: #353535; color: var(--fg); }
+  .center-tab.active { background: var(--bg-tab-active); color: var(--fg-bright); }
+  .center-tab .tab-dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--dirty); flex-shrink: 0; }
+  .center-tab .tab-close {
+    display: flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 3px; font-size: 14px;
+    opacity: 0; transition: opacity 0.1s; color: var(--fg-dim);
+  }
+  .center-tab:hover .tab-close { opacity: 0.6; }
+  .center-tab .tab-close:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+
+  /* 欢迎页 */
+  .welcome-page {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: var(--bg-editor); color: var(--fg-dim);
+  }
+  .welcome-page.hidden { display: none; }
+  .welcome-page .logo { font-size: 48px; margin-bottom: 16px; opacity: 0.3; }
+  .welcome-page .title { font-size: 18px; color: var(--fg-bright); margin-bottom: 8px; }
+  .welcome-page .subtitle { font-size: 13px; margin-bottom: 24px; }
+  .welcome-page .shortcuts { display: flex; gap: 20px; font-size: 12px; }
+  .welcome-page .shortcut { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .welcome-page .shortcut kbd {
+    background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 3px; padding: 2px 8px; font-size: 11px; color: var(--fg);
+    font-family: var(--font-mono);
+  }
+
+  /* ===== 编辑器面板容器 ===== */
+  .editor-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .editor-panel.hidden { display: none; }
+
+  /* ★ 编辑器标题栏（模式切换器 + 工具栏） */
+  .editor-titlebar {
+    display: flex; align-items: center; gap: 0;
+    background: var(--bg-toolbar); border-bottom: 1px solid var(--border);
+    flex-shrink: 0; min-height: 34px; overflow: hidden;
+  }
+  /* 模式切换器 - 挖空在最左侧，独立区域 */
+  .mode-switcher {
+    display: flex; align-items: center; gap: 5px;
+    padding: 0 10px; height: 34px; flex-shrink: 0;
+    cursor: pointer; font-size: 12px; font-weight: 500; color: #fff;
+    position: relative; transition: background 0.12s;
+    border-right: 1px solid var(--border);
+  }
+  .mode-switcher:hover { background: rgba(255,255,255,0.06); }
+  .mode-switcher .mode-icon { flex-shrink: 0; }
+  .mode-switcher .mode-label { min-width: 24px; text-align: center; }
+  .mode-switcher .mode-arrow { font-size: 8px; opacity: 0.5; margin-left: 2px; }
+  .mode-switcher.sql { background: var(--accent-sql); }
+  .mode-switcher.analysis { background: var(--accent-analysis); }
+  .mode-switcher.code { background: var(--accent-code); }
+  .mode-switcher.sql:hover { background: #005a99; }
+  .mode-switcher.analysis:hover { background: #0a4d7a; }
+  .mode-switcher.code:hover { background: #521669; }
+  /* 模式下拉菜单 */
+  .mode-dropdown {
+    position: absolute; top: 100%; left: 0; z-index: 100;
+    background: #2d2d30; border: 1px solid var(--border);
+    border-radius: 0 0 6px 6px; min-width: 140px;
+    display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  .mode-dropdown.visible { display: block; }
+  .mode-dropdown-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; cursor: pointer; font-size: 12px; color: var(--fg);
+    transition: background 0.08s;
+  }
+  .mode-dropdown-item:hover { background: var(--bg-hover); }
+  .mode-dropdown-item.active { color: var(--fg-bright); }
+  .mode-dropdown-item .mode-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .mode-dropdown-item .mode-dot.sql { background: var(--accent-sql); }
+  .mode-dropdown-item .mode-dot.analysis { background: var(--accent-analysis); }
+  .mode-dropdown-item .mode-dot.code { background: var(--accent-code); }
+  .mode-dropdown-item .mode-name { flex: 1; }
+  .mode-dropdown-item .mode-desc { font-size: 11px; color: var(--fg-dim); }
+  .mode-dropdown-divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* 工具栏 */
+  .toolbar {
+    display: flex; align-items: center; gap: 2px; padding: 0 6px;
+    flex: 1; min-width: 0; overflow-x: auto; height: 34px;
+  }
+  .toolbar-group { display: flex; align-items: center; gap: 1px; }
+  .toolbar-sep { width: 1px; height: 18px; background: var(--border); margin: 0 5px; flex-shrink: 0; }
+  .toolbar-spacer { flex: 1; }
+  .toolbar-btn {
+    display: flex; align-items: center; gap: 4px;
+    padding: 4px 8px; border: none; border-radius: var(--radius);
+    background: transparent; color: var(--fg);
+    cursor: pointer; font-size: 12px; font-family: var(--font-ui);
+    white-space: nowrap; transition: background 0.1s;
+  }
+  .toolbar-btn:hover { background: var(--bg-hover); }
+  .toolbar-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .toolbar-btn.primary { color: var(--fg-accent); font-weight: 500; }
+  .toolbar-btn.warning { color: var(--dirty); }
+  .toolbar-select {
+    background: var(--bg-input); border: 1px solid var(--border);
+    color: var(--fg); padding: 3px 6px; border-radius: var(--radius);
+    font-size: 12px; font-family: var(--font-ui); min-width: 80px; outline: none;
+  }
+  .toolbar-select:focus { border-color: var(--accent-sql); }
+  .toolbar-label { font-size: 11px; color: var(--fg-dim); }
+
+  /* 编辑器区域 */
+  .editor-area { flex: 1; min-height: 60px; overflow: hidden; background: var(--bg-editor); position: relative; }
+  .cm-wrap { display: flex; height: 100%; overflow: hidden; font-family: var(--font-mono); font-size: 14px; line-height: 1.6; }
+  .cm-gutter {
+    flex-shrink: 0; width: 56px; background: var(--bg-gutter);
+    border-right: 1px solid var(--border);
+    overflow: hidden; padding: 8px 0; color: #555; text-align: right; font-size: 13px;
+  }
+  .cm-gutter-line { padding: 0 8px 0 4px; height: 22.4px; }
+  .cm-content { flex: 1; overflow: auto; position: relative; }
+  .cm-content-inner { position: relative; min-height: 100%; padding: 8px 0 8px 12px; }
+  .cm-line { height: 22.4px; white-space: pre; position: relative; }
+  .cm-line .kw { color: var(--fg-keyword); }
+  .cm-line .fn { color: var(--fg-function); }
+  .cm-line .str { color: var(--fg-string); }
+  .cm-line .num { color: var(--fg-number); }
+  .cm-line .cm { color: var(--fg-comment); font-style: italic; }
+  .cm-line .tp { color: var(--fg-type); }
+  .cm-active-line { position: absolute; left: 0; right: 0; height: 22.4px; background: var(--bg-active-line); pointer-events: none; }
+  .cm-cursor {
+    position: absolute; width: 2px; height: 22.4px;
+    border-left: 2px solid var(--fg-cursor);
+    animation: cm-cursor-blink 1.2s steps(1) infinite;
+    pointer-events: none; z-index: 2;
+  }
+
+  /* 分割线 */
+  .split-h { height: 4px; cursor: row-resize; flex-shrink: 0; background: var(--border); transition: background 0.1s; }
+  .split-h:hover, .split-h.active { background: var(--accent-sql); }
+
+  /* 结果面板 */
+  .result-area {
+    height: 180px; min-height: 36px; flex-shrink: 0;
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bg-result);
+  }
+  .result-area.collapsed { height: 0; }
+  .result-tabs {
+    display: flex; align-items: stretch; height: 26px;
+    background: var(--bg-toolbar); border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .result-tab {
+    display: flex; align-items: center; gap: 5px;
+    padding: 0 10px; font-size: 11px; color: var(--fg-dim);
+    cursor: pointer; border-right: 1px solid var(--border); transition: all 0.1s;
+  }
+  .result-tab:hover { color: var(--fg); }
+  .result-tab.active { color: var(--fg-bright); background: var(--bg-result); border-bottom: 2px solid var(--accent-sql); }
+  .result-table-wrap { flex: 1; overflow: auto; }
+  .result-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 13px; }
+  .result-table th {
+    position: sticky; top: 0; z-index: 1;
+    background: #2d2d30; color: var(--fg-bright);
+    text-align: left; padding: 5px 10px; border-bottom: 2px solid var(--accent-sql);
+    font-weight: 500; white-space: nowrap;
+  }
+  .result-table td { padding: 3px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+  .result-table tr:hover td { background: rgba(255,255,255,0.03); }
+  .result-table .num { color: var(--fg-number); text-align: right; }
+  .result-table .null { color: var(--fg-dim); font-style: italic; }
+
+  /* ★ 编辑器状态栏 — 随模式变色 */
+  .editor-statusbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 12px; height: 22px; font-size: 12px;
+    flex-shrink: 0; transition: background 0.3s;
+  }
+  .editor-statusbar.sql { background: var(--accent-sql); color: #fff; }
+  .editor-statusbar.analysis { background: var(--accent-analysis); color: #fff; }
+  .editor-statusbar.code { background: var(--accent-code); color: #fff; }
+  .editor-statusbar .sbar-left { display: flex; align-items: center; gap: 10px; }
+  .editor-statusbar .sbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .editor-statusbar .sbar-item { display: flex; align-items: center; gap: 4px; opacity: 0.9; }
+
+  /* Toast */
+  .toast {
+    position: fixed; top: 40px; right: 20px; z-index: 9999;
+    padding: 8px 16px; background: var(--accent-sql); color: #fff;
+    border-radius: 4px; font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4); transition: all 0.3s;
+    pointer-events: none;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+</style>
+</head>
+<body>
+
+<!-- 应用标题栏 -->
+<div class="app-titlebar">
+  <span class="app-name">RdataStation</span>
+  <span class="menu-item">文件</span><span class="menu-item">编辑</span>
+  <span class="menu-item">视图</span><span class="menu-item">帮助</span>
+</div>
+
+<div class="dw-root">
+
+  <!-- Activity Bar -->
+  <div class="activity-bar">
+    <div class="top-group">
+      <div class="activity-icon active" id="act-scratchpad" title="草稿箱" onclick="activateLeftPanel('scratchpad')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+      </div>
+      <div class="activity-icon" id="act-database" title="数据库导航" onclick="activateLeftPanel('database')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/></svg>
+      </div>
+      <div class="activity-icon" id="act-analytics" title="分析资源管理" onclick="activateLeftPanel('analytics')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      </div>
+      <div class="activity-icon" id="act-plugins" title="插件管理" onclick="activateLeftPanel('plugins')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3H3v7h7V3z"/><path d="M21 3h-7v7h7V3z"/><path d="M21 14h-7v7h7v-7z"/><path d="M10 14H3v7h7v-7z"/></svg>
+      </div>
+    </div>
+    <div class="bottom-group">
+      <div class="activity-icon" id="act-column-insights" title="列洞察" onclick="activateRightPanel('columnInsights')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      </div>
+      <div class="activity-icon" id="act-mock" title="Mock 数据" onclick="activateRightPanel('mockPanel')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+      </div>
+      <div class="activity-icon" id="act-sql-history" title="SQL历史" onclick="activateRightPanel('sqlHistory')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </div>
+      <div class="divider"></div>
+      <div class="activity-icon" title="设置" onclick="toast('设置')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- 左侧 Edge Group -->
+  <div class="edge-group" id="edge-left">
+    <div class="edge-tab-bar">
+      <div class="edge-tab active" data-edge-tab="scratchpad" onclick="switchEdgeTab('left','scratchpad')">草稿箱</div>
+      <div class="edge-tab" data-edge-tab="databaseNavigator" onclick="switchEdgeTab('left','databaseNavigator')">数据库导航</div>
+      <div class="edge-tab" data-edge-tab="analytics-resource-manager" onclick="switchEdgeTab('left','analytics-resource-manager')">分析资源</div>
+      <div class="edge-tab" data-edge-tab="plugins" onclick="switchEdgeTab('left','plugins')">插件</div>
+    </div>
+    <div class="edge-content active" id="edge-content-scratchpad">
+      <div class="scratchpad-list">
+        <div style="font-weight:500;color:var(--fg-dim);font-size:11px;padding:8px 12px 4px;text-transform:uppercase;letter-spacing:0.5px;">草稿箱</div>
+        <div class="scratchpad-item" onclick="openTab('sql')">
+          <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>query-1.sql
+        </div>
+        <div class="scratchpad-item" onclick="openTab('analysis')">
+          <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>analysis.duckdb.sql
+        </div>
+        <div class="scratchpad-item" onclick="openTab('code')">
+          <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>config.rs
+        </div>
+      </div>
+    </div>
+    <div class="edge-content" id="edge-content-databaseNavigator">
+      <div class="tree-item" onclick="toggleTree(this)">
+        <span class="chevron open">▶</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/></svg>
+        MySQL @ 192.168.1.100
+      </div>
+      <div class="tree-item child"><span class="chevron open">▶</span> prod_db</div>
+      <div class="tree-item child2">Tables</div>
+      <div class="tree-item child2" onclick="openTab('sql')">users</div>
+      <div class="tree-item child2" onclick="openTab('sql')">orders</div>
+      <div class="tree-item child2" onclick="openTab('sql')">products</div>
+      <div class="tree-item child2">Views</div>
+      <div class="tree-item child2">Stored Procedures</div>
+      <div class="tree-item" style="margin-top:4px;" onclick="toggleTree(this)">
+        <span class="chevron">▶</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/></svg>
+        PostgreSQL @ 10.0.0.50
+      </div>
+      <div class="tree-item" style="margin-top:4px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        DuckDB (本地)
+      </div>
+    </div>
+    <div class="edge-content" id="edge-content-analytics-resource-manager">
+      <div style="padding:12px;color:var(--fg-dim);font-size:12px;">
+        <div style="margin-bottom:8px;color:var(--fg-bright);">联邦数据源</div>
+        <div class="tree-item" style="padding:4px 0;">MySQL - prod_db</div>
+        <div class="tree-item" style="padding:4px 0;">PostgreSQL - analytics</div>
+        <div class="tree-item" style="padding:4px 0;">SQLite - local_cache</div>
+        <div style="margin-top:12px;margin-bottom:8px;color:var(--fg-bright);">DuckDB 表</div>
+        <div class="tree-item" style="padding:4px 0;">user_order_summary</div>
+        <div class="tree-item" style="padding:4px 0;">page_view_stats</div>
+        <div class="tree-item" style="padding:4px 0;">daily_revenue</div>
+      </div>
+    </div>
+    <div class="edge-content" id="edge-content-plugins">
+      <div style="padding:12px;color:var(--fg-dim);font-size:12px;">
+        <div style="margin-bottom:8px;color:var(--fg-bright);">已安装插件</div>
+        <div class="tree-item" style="padding:4px 0;">query-extension v1.0.0</div>
+        <div class="tree-item" style="padding:4px 0;">connection-extension v1.0.0</div>
+        <div class="tree-item" style="padding:4px 0;">analytics-resource v1.0.0</div>
+        <div style="margin-top:12px;color:var(--fg-dim);">共 5 个插件</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="resize-h" id="resize-left" onmousedown="startResizeH(event,'left')"></div>
+
+  <!-- ===== 中央区域 ===== -->
+  <div class="panel-center">
+    <!-- 中央标签栏 (dockview) -->
+    <div class="center-tab-bar" id="center-tab-bar">
+      <div class="center-tab active" data-tab="sql" onclick="switchCenterTab('sql')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+        query-1.sql
+        <span class="tab-dirty"></span>
+        <span class="tab-close" onclick="event.stopPropagation();closeCenterTab('sql')">&times;</span>
+      </div>
+      <div class="center-tab" data-tab="analysis" onclick="switchCenterTab('analysis')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+        analysis.duckdb.sql
+        <span class="tab-close" onclick="event.stopPropagation();closeCenterTab('analysis')">&times;</span>
+      </div>
+      <div class="center-tab" data-tab="code" onclick="switchCenterTab('code')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+        config.rs
+        <span class="tab-dirty"></span>
+        <span class="tab-close" onclick="event.stopPropagation();closeCenterTab('code')">&times;</span>
+      </div>
+    </div>
+
+    <!-- 欢迎页 -->
+    <div class="welcome-page hidden" id="welcome-page">
+      <div class="logo">&#9670;</div>
+      <div class="title">RdataStation</div>
+      <div class="subtitle">新一代数据库管理工具</div>
+      <div class="shortcuts">
+        <div class="shortcut"><kbd>Ctrl+N</kbd><span>新建查询</span></div>
+        <div class="shortcut"><kbd>Ctrl+O</kbd><span>打开文件</span></div>
+        <div class="shortcut"><kbd>Ctrl+B</kbd><span>切换侧栏</span></div>
+      </div>
+    </div>
+
+    <!-- ========== SQL 编辑器 ========== -->
+    <div class="editor-panel active" id="editor-sql">
+      <!-- ★ 编辑器标题栏：模式切换器(左) + 工具栏(右) -->
+      <div class="editor-titlebar">
+        <div class="mode-switcher sql" id="mode-switcher-sql" onclick="toggleModeDropdown('sql')">
+          <svg class="mode-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/></svg>
+          <span class="mode-label">SQL</span>
+          <span class="mode-arrow">&#9660;</span>
+          <div class="mode-dropdown" id="mode-dropdown-sql">
+            <div class="mode-dropdown-item active" onclick="event.stopPropagation();setMode('sql','sql')">
+              <span class="mode-dot sql"></span>
+              <span class="mode-name">SQL 模式</span>
+              <span class="mode-desc">数据库查询</span>
+            </div>
+            <div class="mode-dropdown-item" onclick="event.stopPropagation();setMode('sql','analysis')">
+              <span class="mode-dot analysis"></span>
+              <span class="mode-name">分析模式</span>
+              <span class="mode-desc">DuckDB 联邦分析</span>
+            </div>
+            <div class="mode-dropdown-item" onclick="event.stopPropagation();setMode('sql','code')">
+              <span class="mode-dot code"></span>
+              <span class="mode-name">代码模式</span>
+              <span class="mode-desc">纯文本编辑</span>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar" id="toolbar-sql">
+          <div class="toolbar-group">
+            <button class="toolbar-btn primary" onclick="toast('执行 SQL (Ctrl+Enter)')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>执行
+            </button>
+            <button class="toolbar-btn" onclick="toast('新标签页执行')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>新标签
+            </button>
+            <button class="toolbar-btn" onclick="toast('DuckDB 本地加速')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>本地加速
+            </button>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" onclick="toast('执行计划 - 开发中')">执行计划</button>
+            <button class="toolbar-btn" onclick="formatCurrent('sql')">格式化</button>
+            <button class="toolbar-btn" onclick="toast('SQL 转译')">转译</button>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-group">
+            <span class="toolbar-label">模式:</span>
+            <select class="toolbar-select"><option>普通</option><option>分析加速</option><option>智能</option></select>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" onclick="toast('开始事务')">事务</button>
+            <button class="toolbar-btn" onclick="toast('提交')">提交</button>
+            <button class="toolbar-btn" onclick="toast('回滚')">回滚</button>
+          </div>
+          <div class="toolbar-spacer"></div>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" onclick="toast('查找')">查找</button>
+            <button class="toolbar-btn" onclick="toast('替换')">替换</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-area">
+        <div class="cm-wrap">
+          <div class="cm-gutter" id="gutter-sql"></div>
+          <div class="cm-content" id="cm-scroll-sql" onscroll="syncGutter('cm-scroll-sql','gutter-sql')">
+            <div class="cm-content-inner" id="cm-inner-sql" style="width:3000px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="split-h" id="split-sql" onmousedown="startSplitV(event,'sql')"></div>
+
+      <div class="result-area" id="result-sql">
+        <div class="result-tabs">
+          <div class="result-tab active">结果1 (6 行)</div>
+          <div class="result-tab">结果2</div>
+          <div class="result-tab">消息</div>
+        </div>
+        <div class="result-table-wrap">
+          <table class="result-table">
+            <thead><tr><th>id</th><th>username</th><th>email</th><th style="text-align:right">order_count</th><th style="text-align:right">total_spent</th><th>last_order_date</th></tr></thead>
+            <tbody>
+              <tr><td class="num">1</td><td>alice</td><td>alice@example.com</td><td class="num">42</td><td class="num">12,450.00</td><td>2026-07-30</td></tr>
+              <tr><td class="num">2</td><td>bob</td><td>bob@example.com</td><td class="num">38</td><td class="num">9,820.50</td><td>2026-07-29</td></tr>
+              <tr><td class="num">3</td><td>charlie</td><td>charlie@example.com</td><td class="num">27</td><td class="num">7,340.00</td><td>2026-07-28</td></tr>
+              <tr><td class="num">4</td><td>diana</td><td>diana@example.com</td><td class="num">15</td><td class="num">3,210.75</td><td>2026-07-25</td></tr>
+              <tr><td class="num">5</td><td>eve</td><td>eve@example.com</td><td class="num">8</td><td class="num">1,550.00</td><td>2026-07-20</td></tr>
+              <tr><td class="num">6</td><td>frank</td><td class="null">NULL</td><td class="num">3</td><td class="num">420.00</td><td>2026-07-15</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ★ 编辑器状态栏 -->
+      <div class="editor-statusbar sql" id="statusbar-sql">
+        <div class="sbar-left">
+          <span class="sbar-item">MySQL @ 192.168.1.100:3306 / prod_db</span>
+          <span class="sbar-item">Ln 12, Col 23</span>
+          <span class="sbar-item">1 条语句</span>
+          <span class="sbar-item">0.234s</span>
+        </div>
+        <div class="sbar-right">
+          <span class="sbar-item">SQL</span>
+          <span class="sbar-item">UTF-8</span>
+          <span class="sbar-item">4 空格</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 分析编辑器 ========== -->
+    <div class="editor-panel hidden" id="editor-analysis">
+      <div class="editor-titlebar">
+        <div class="mode-switcher analysis" id="mode-switcher-analysis" onclick="toggleModeDropdown('analysis')">
+          <svg class="mode-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          <span class="mode-label">分析</span>
+          <span class="mode-arrow">&#9660;</span>
+          <div class="mode-dropdown" id="mode-dropdown-analysis">
+            <div class="mode-dropdown-item" onclick="event.stopPropagation();setMode('analysis','sql')">
+              <span class="mode-dot sql"></span>
+              <span class="mode-name">SQL 模式</span>
+              <span class="mode-desc">数据库查询</span>
+            </div>
+            <div class="mode-dropdown-item active" onclick="event.stopPropagation();setMode('analysis','analysis')">
+              <span class="mode-dot analysis"></span>
+              <span class="mode-name">分析模式</span>
+              <span class="mode-desc">DuckDB 联邦分析</span>
+            </div>
+            <div class="mode-dropdown-item" onclick="event.stopPropagation();setMode('analysis','code')">
+              <span class="mode-dot code"></span>
+              <span class="mode-name">代码模式</span>
+              <span class="mode-desc">纯文本编辑</span>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar" id="toolbar-analysis">
+          <div class="toolbar-group">
+            <button class="toolbar-btn primary" onclick="toast('执行 DuckDB 查询')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>执行
+            </button>
+            <button class="toolbar-btn" onclick="toast('新标签页执行')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>新标签
+            </button>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-group">
+            <span class="toolbar-label">联邦:</span>
+            <select class="toolbar-select" style="width:180px;"><option>MySQL - prod_db</option><option>PostgreSQL - analytics</option><option>SQLite - local_cache</option></select>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" onclick="formatCurrent('analysis')">格式化</button>
+            <button class="toolbar-btn" onclick="toast('导出结果')">导出</button>
+          </div>
+          <div class="toolbar-spacer"></div>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" onclick="toast('查找')">查找</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-area">
+        <div class="cm-wrap">
+          <div class="cm-gutter" id="gutter-analysis"></div>
+          <div class="cm-content" id="cm-scroll-analysis" onscroll="syncGutter('cm-scroll-analysis','gutter-analysis')">
+            <div class="cm-content-inner" id="cm-inner-analysis" style="width:3000px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="split-h" id="split-analysis" onmousedown="startSplitV(event,'analysis')"></div>
+
+      <div class="result-area" id="result-analysis">
+        <div class="result-tabs">
+          <div class="result-tab active">分析结果 (4 行)</div>
+          <div class="result-tab">联邦查询日志</div>
+        </div>
+        <div class="result-table-wrap">
+          <table class="result-table">
+            <thead><tr><th style="text-align:right">user_id</th><th style="text-align:right">total_orders</th><th style="text-align:right">avg_amount</th><th style="text-align:right">page_views</th><th style="text-align:right">avg_session</th></tr></thead>
+            <tbody>
+              <tr><td class="num">1001</td><td class="num">42</td><td class="num">296.43</td><td class="num">1,240</td><td class="num">320.5s</td></tr>
+              <tr><td class="num">1002</td><td class="num">38</td><td class="num">258.42</td><td class="num">890</td><td class="num">245.2s</td></tr>
+              <tr><td class="num">1003</td><td class="num">27</td><td class="num">271.85</td><td class="num">560</td><td class="num">180.1s</td></tr>
+              <tr><td class="num">1004</td><td class="num">15</td><td class="num">214.05</td><td class="num">320</td><td class="num">120.0s</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="editor-statusbar analysis" id="statusbar-analysis">
+        <div class="sbar-left">
+          <span class="sbar-item">DuckDB (本地分析引擎)</span>
+          <span class="sbar-item">Ln 8, Col 15</span>
+          <span class="sbar-item">1.205s</span>
+        </div>
+        <div class="sbar-right">
+          <span class="sbar-item">联邦: MySQL, PostgreSQL</span>
+          <span class="sbar-item">UTF-8</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 代码编辑器 ========== -->
+    <div class="editor-panel hidden" id="editor-code">
+      <div class="editor-titlebar">
+        <div class="mode-switcher code" id="mode-switcher-code" onclick="toggleModeDropdown('code')">
+          <svg class="mode-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          <span class="mode-label">代码</span>
+          <span class="mode-arrow">&#9660;</span>
+          <div class="mode-dropdown" id="mode-dropdown-code">
+            <div class="mode-dropdown-item" onclick="event.stopPropagation();setMode('code','sql')">
+              <span class="mode-dot sql"></span>
+              <span class="mode-name">SQL 模式</span>
+              <span class="mode-desc">数据库查询</span>
+            </div>
+            <div class="mode-dropdown-item" onclick="event.stopPropagation();setMode('code','analysis')">
+              <span class="mode-dot analysis"></span>
+              <span class="mode-name">分析模式</span>
+              <span class="mode-desc">DuckDB 联邦分析</span>
+            </div>
+            <div class="mode-dropdown-item active" onclick="event.stopPropagation();setMode('code','code')">
+              <span class="mode-dot code"></span>
+              <span class="mode-name">代码模式</span>
+              <span class="mode-desc">纯文本编辑</span>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar" id="toolbar-code">
+          <div class="toolbar-group">
+            <button class="toolbar-btn warning" onclick="toast('保存 (Ctrl+S)')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>保存
+            </button>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" onclick="formatCurrent('code')">格式化</button>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" onclick="toast('撤销')">撤销</button>
+            <button class="toolbar-btn" onclick="toast('重做')">重做</button>
+          </div>
+          <div class="toolbar-spacer"></div>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" onclick="toast('查找')">查找</button>
+            <button class="toolbar-btn" onclick="toast('替换')">替换</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-area">
+        <div class="cm-wrap">
+          <div class="cm-gutter" id="gutter-code"></div>
+          <div class="cm-content" id="cm-scroll-code" onscroll="syncGutter('cm-scroll-code','gutter-code')">
+            <div class="cm-content-inner" id="cm-inner-code" style="width:3000px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-statusbar code" id="statusbar-code">
+        <div class="sbar-left">
+          <span class="sbar-item">Rust</span>
+          <span class="sbar-item">UTF-8</span>
+          <span class="sbar-item">4 空格</span>
+          <span class="sbar-item">Ln 12, Col 30</span>
+        </div>
+        <div class="sbar-right">
+          <span class="sbar-item" style="color:#f44747;">0 Errors</span>
+          <span class="sbar-item" style="color:#cca700;">0 Warnings</span>
+          <span class="sbar-item">CRLF</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="resize-h" id="resize-right" onmousedown="startResizeH(event,'right')"></div>
+
+  <!-- 右侧 Edge Group -->
+  <div class="edge-group right collapsed" id="edge-right">
+    <div class="edge-tab-bar">
+      <div class="edge-tab active" data-edge-tab="columnInsights" onclick="switchEdgeTab('right','columnInsights')">列洞察</div>
+      <div class="edge-tab" data-edge-tab="mockPanel" onclick="switchEdgeTab('right','mockPanel')">Mock数据</div>
+      <div class="edge-tab" data-edge-tab="sqlHistory" onclick="switchEdgeTab('right','sqlHistory')">SQL历史</div>
+    </div>
+    <div class="edge-content active" id="edge-content-columnInsights">
+      <div style="padding:12px;">
+        <div style="margin-bottom:8px;color:var(--fg-bright);">users 表</div>
+        <div class="prop-section-title">id</div>
+        <div class="prop-row"><span class="label">类型</span><span class="value">INT</span></div>
+        <div class="prop-row"><span class="label">可空</span><span class="value">否</span></div>
+        <div class="prop-row"><span class="label">去重数</span><span class="value">1,024</span></div>
+        <div class="prop-section-title">username</div>
+        <div class="prop-row"><span class="label">类型</span><span class="value">VARCHAR(50)</span></div>
+        <div class="prop-row"><span class="label">可空</span><span class="value">否</span></div>
+        <div class="prop-row"><span class="label">去重数</span><span class="value">980</span></div>
+        <div class="prop-section-title">email</div>
+        <div class="prop-row"><span class="label">类型</span><span class="value">VARCHAR(100)</span></div>
+        <div class="prop-row"><span class="label">可空</span><span class="value">是</span></div>
+        <div class="prop-row"><span class="label">去重数</span><span class="value">1,010</span></div>
+        <div class="prop-row"><span class="label">NULL数</span><span class="value">12</span></div>
+      </div>
+    </div>
+    <div class="edge-content" id="edge-content-mockPanel">
+      <div style="padding:12px;color:var(--fg-dim);font-size:12px;">
+        <div style="margin-bottom:8px;color:var(--fg-bright);">Mock 数据生成器</div>
+        <div class="tree-item" style="padding:4px 0;">生成 100 行用户数据</div>
+        <div class="tree-item" style="padding:4px 0;">生成 500 行订单数据</div>
+        <div class="tree-item" style="padding:4px 0;">自定义规则生成</div>
+      </div>
+    </div>
+    <div class="edge-content" id="edge-content-sqlHistory">
+      <div style="padding:4px 0;">
+        <div class="scratchpad-item" style="font-size:12px;">
+          <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <div style="flex:1;min-width:0;">
+            <div style="color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">SELECT * FROM users WHERE...</div>
+            <div style="color:var(--fg-dim);font-size:11px;">14:22 · 0.234s</div>
+          </div>
+        </div>
+        <div class="scratchpad-item" style="font-size:12px;">
+          <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <div style="flex:1;min-width:0;">
+            <div style="color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">SELECT COUNT(*) FROM orders...</div>
+            <div style="color:var(--fg-dim);font-size:11px;">13:05 · 1.205s</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ===== 编辑器内容 =====
+  const sqlContent = `-- 查询用户订单统计
+SELECT
+    u.id,
+    u.username,
+    u.email,
+    COUNT(o.id) AS order_count,
+    SUM(o.total_amount) AS total_spent,
+    MAX(o.created_at) AS last_order_date
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE u.status = 'active'
+  AND u.created_at >= '2024-01-01'
+GROUP BY u.id, u.username, u.email
+HAVING COUNT(o.id) > 0
+ORDER BY total_spent DESC
+LIMIT 100;`;
+
+  const analysisContent = `-- DuckDB 联邦查询分析
+ATTACH 'mysql:prod_db' AS mysql_src;
+ATTACH 'pg:analytics' AS pg_src;
+
+WITH user_orders AS (
+    SELECT * FROM mysql_src.orders
+    WHERE created_at >= '2026-01-01'
+),
+user_analytics AS (
+    SELECT * FROM pg_src.user_behavior
+)
+SELECT
+    uo.user_id,
+    COUNT(*) AS total_orders,
+    AVG(uo.amount) AS avg_amount,
+    ua.page_views,
+    ua.avg_session_duration
+FROM user_orders uo
+LEFT JOIN user_analytics ua ON uo.user_id = ua.user_id
+GROUP BY uo.user_id, ua.page_views, ua.avg_session_duration
+ORDER BY total_orders DESC;`;
+
+  const codeContent = `use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    pub pool_size: u32,
+}
+
+impl DatabaseConfig {
+    pub fn connection_string(&self) -> String {
+        format!(
+            "mysql://{}:{}@{}:{}/{}",
+            self.username, self.password,
+            self.host, self.port, self.database
+        )
+    }
+
+    pub fn with_pool_size(mut self, size: u32) -> Self {
+        self.pool_size = size;
+        self
+    }
+}`;
+
+  // ===== 语法高亮 =====
+  function highlightSQL(text) {
+    return text
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/('(?:[^'\\]|\\.)*')/g,'<span class="str">$1</span>')
+      .replace(/(--.*)/g,'<span class="cm">$1</span>')
+      .replace(/\b(\d+\.?\d*)\b/g,'<span class="num">$1</span>')
+      .replace(/\b(SELECT|FROM|WHERE|AND|OR|LEFT JOIN|RIGHT JOIN|INNER JOIN|JOIN|ON|GROUP BY|HAVING|ORDER BY|LIMIT|OFFSET|INSERT INTO|UPDATE|DELETE FROM|SET|VALUES|CREATE TABLE|ALTER TABLE|DROP TABLE|AS|WITH|UNION|ALL|DISTINCT|BETWEEN|LIKE|IN|IS|NOT|NULL|ASC|DESC|CASE|WHEN|THEN|ELSE|END|ATTACH|BY|COUNT|SUM|AVG|MAX|MIN)\b/gi,'<span class="kw">$1</span>')
+      .replace(/\b(u\.\w+|o\.\w+|uo\.\w+|ua\.\w+)/g,'<span class="fn">$1</span>');
+  }
+
+  function highlightCode(text) {
+    return text
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/('(?:[^'\\]|\\.)*')/g,'<span class="str">$1</span>')
+      .replace(/("(?:[^"\\]|\\.)*")/g,'<span class="str">$1</span>')
+      .replace(/(\/\/.*)/g,'<span class="cm">$1</span>')
+      .replace(/\b(\d+\.?\d*)\b/g,'<span class="num">$1</span>')
+      .replace(/\b(use|pub|fn|struct|impl|let|mut|self|for|in|if|else|match|return|where|as|mod|enum|trait|type|const|static|unsafe|extern|crate|super|move|ref|dyn|box|async|await|loop|while|break|continue|true|false)\b/g,'<span class="kw">$1</span>')
+      .replace(/\b(String|u16|u32|bool|Vec|HashMap|Option|Result|Self)\b/g,'<span class="tp">$1</span>')
+      .replace(/\b(DatabaseConfig|Serialize|Deserialize|Debug|Clone)\b/g,'<span class="fn">$1</span>')
+      .replace(/\b(connection_string|with_pool_size|format!)\b/g,'<span class="fn">$1</span>');
+  }
+
+  function renderCM(innerId, text, highlightFn) {
+    const inner = document.getElementById(innerId);
+    if (!inner) return;
+    const lines = text.split('\n');
+    let html = '';
+    for (let i = 0; i < lines.length; i++) html += '<div class="cm-line">' + highlightFn(lines[i]) + '</div>';
+    html += '<div class="cm-active-line" style="top:246.4px;"></div><div class="cm-cursor" style="left:109px;top:246.4px;"></div>';
+    inner.innerHTML = html;
+  }
+
+  function renderGutter(gutterId, text) {
+    const gutter = document.getElementById(gutterId);
+    if (!gutter) return;
+    const lines = text.split('\n');
+    let html = '';
+    for (let i = 0; i < lines.length; i++) html += '<div class="cm-gutter-line">' + (i + 1) + '</div>';
+    gutter.innerHTML = html;
+  }
+
+  function syncGutter(scrollId, gutterId) {
+    const scrollEl = document.getElementById(scrollId);
+    const gutter = document.getElementById(gutterId);
+    if (scrollEl && gutter) gutter.style.marginTop = (-scrollEl.scrollTop) + 'px';
+  }
+
+  function initAllEditors() {
+    renderGutter('gutter-sql', sqlContent);
+    renderCM('cm-inner-sql', sqlContent, highlightSQL);
+    renderGutter('gutter-analysis', analysisContent);
+    renderCM('cm-inner-analysis', analysisContent, highlightSQL);
+    renderGutter('gutter-code', codeContent);
+    renderCM('cm-inner-code', codeContent, highlightCode);
+  }
+
+  // ★ 每个编辑器标签独立的当前模式
+  const editorModes = { sql: 'sql', analysis: 'analysis', code: 'code' };
+
+  // ★ 模式切换
+  function setMode(editorId, newMode) {
+    if (editorModes[editorId] === newMode) {
+      document.getElementById('mode-dropdown-' + editorId).classList.remove('visible');
+      return;
+    }
+    editorModes[editorId] = newMode;
+
+    const switcher = document.getElementById('mode-switcher-' + editorId);
+    const dropdown = document.getElementById('mode-dropdown-' + editorId);
+    const statusbar = document.getElementById('statusbar-' + editorId);
+    const panel = document.getElementById('editor-' + editorId);
+
+    // 更新模式切换器外观
+    switcher.className = 'mode-switcher ' + newMode;
+    const modeNames = { sql: 'SQL', analysis: '分析', code: '代码' };
+    switcher.querySelector('.mode-label').textContent = modeNames[newMode];
+
+    // 更新下拉菜单选中状态
+    dropdown.querySelectorAll('.mode-dropdown-item').forEach(item => {
+      item.classList.toggle('active', item.querySelector('.mode-name').textContent.includes(modeNames[newMode]));
+    });
+
+    // 更新状态栏颜色
+    statusbar.className = 'editor-statusbar ' + newMode;
+
+    // 更新工具栏
+    updateToolbar(editorId, newMode);
+
+    // 更新分割线颜色
+    const split = panel.querySelector('.split-h');
+    if (split) split.style.setProperty('--accent', newMode === 'sql' ? 'var(--accent-sql)' : newMode === 'analysis' ? 'var(--accent-analysis)' : 'var(--accent-code)');
+
+    dropdown.classList.remove('visible');
+    toast('已切换到 ' + modeNames[newMode] + ' 模式');
+  }
+
+  function updateToolbar(editorId, mode) {
+    const toolbar = document.getElementById('toolbar-' + editorId);
+    const toolbars = {
+      sql: `
+        <div class="toolbar-group">
+          <button class="toolbar-btn primary" onclick="toast('执行 SQL (Ctrl+Enter)')"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>执行</button>
+          <button class="toolbar-btn" onclick="toast('新标签页执行')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>新标签</button>
+          <button class="toolbar-btn" onclick="toast('DuckDB 本地加速')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>本地加速</button>
+        </div><div class="toolbar-sep"></div>
+        <div class="toolbar-group">
+          <button class="toolbar-btn" onclick="toast('执行计划')">执行计划</button>
+          <button class="toolbar-btn" onclick="formatCurrent('${editorId}')">格式化</button>
+          <button class="toolbar-btn" onclick="toast('SQL 转译')">转译</button>
+        </div><div class="toolbar-sep"></div>
+        <div class="toolbar-group"><span class="toolbar-label">模式:</span><select class="toolbar-select"><option>普通</option><option>分析加速</option><option>智能</option></select></div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group"><button class="toolbar-btn" onclick="toast('开始事务')">事务</button><button class="toolbar-btn" onclick="toast('提交')">提交</button><button class="toolbar-btn" onclick="toast('回滚')">回滚</button></div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group"><button class="toolbar-btn" onclick="toast('查找')">查找</button><button class="toolbar-btn" onclick="toast('替换')">替换</button></div>`,
+      analysis: `
+        <div class="toolbar-group">
+          <button class="toolbar-btn primary" onclick="toast('执行 DuckDB 查询')"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>执行</button>
+          <button class="toolbar-btn" onclick="toast('新标签页执行')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>新标签</button>
+        </div><div class="toolbar-sep"></div>
+        <div class="toolbar-group"><span class="toolbar-label">联邦:</span><select class="toolbar-select" style="width:180px;"><option>MySQL - prod_db</option><option>PostgreSQL - analytics</option><option>SQLite - local_cache</option></select></div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group"><button class="toolbar-btn" onclick="formatCurrent('${editorId}')">格式化</button><button class="toolbar-btn" onclick="toast('导出结果')">导出</button></div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group"><button class="toolbar-btn" onclick="toast('查找')">查找</button></div>`,
+      code: `
+        <div class="toolbar-group"><button class="toolbar-btn warning" onclick="toast('保存 (Ctrl+S)')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>保存</button></div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group"><button class="toolbar-btn" onclick="formatCurrent('${editorId}')">格式化</button></div>
+        <div class="toolbar-sep"></div>
+        <div class="toolbar-group"><button class="toolbar-btn" onclick="toast('撤销')">撤销</button><button class="toolbar-btn" onclick="toast('重做')">重做</button></div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group"><button class="toolbar-btn" onclick="toast('查找')">查找</button><button class="toolbar-btn" onclick="toast('替换')">替换</button></div>`
+    };
+    toolbar.innerHTML = toolbars[mode] || toolbars.sql;
+  }
+
+  function toggleModeDropdown(editorId) {
+    // 关闭所有其他下拉
+    document.querySelectorAll('.mode-dropdown.visible').forEach(d => d.classList.remove('visible'));
+    const dd = document.getElementById('mode-dropdown-' + editorId);
+    dd.classList.toggle('visible');
+  }
+
+  // 点击其他地方关闭下拉
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.mode-switcher')) {
+      document.querySelectorAll('.mode-dropdown.visible').forEach(d => d.classList.remove('visible'));
+    }
+  });
+
+  // ===== 中央标签 =====
+  function switchCenterTab(tab) {
+    document.querySelectorAll('.center-tab').forEach(t => t.classList.remove('active'));
+    const tabEl = document.querySelector(`.center-tab[data-tab="${tab}"]`);
+    if (tabEl) tabEl.classList.add('active');
+    document.querySelectorAll('.editor-panel').forEach(p => p.classList.add('hidden'));
+    document.getElementById('welcome-page').classList.add('hidden');
+    const panel = document.getElementById(`editor-${tab}`);
+    if (panel) panel.classList.remove('hidden');
+  }
+
+  function openTab(tab) {
+    switchCenterTab(tab);
+  }
+
+  function closeCenterTab(tab) {
+    const tabEl = document.querySelector(`.center-tab[data-tab="${tab}"]`);
+    if (!tabEl) return;
+    const wasActive = tabEl.classList.contains('active');
+    tabEl.remove();
+    document.getElementById(`editor-${tab}`).classList.add('hidden');
+    if (wasActive) {
+      const remaining = document.querySelector('.center-tab');
+      if (remaining) { remaining.classList.add('active'); document.getElementById('editor-' + remaining.dataset.tab).classList.remove('hidden'); }
+      else document.getElementById('welcome-page').classList.remove('hidden');
+    }
+  }
+
+  // ===== Activity Bar =====
+  const leftPanelMap = { scratchpad:'scratchpad', database:'databaseNavigator', analytics:'analytics-resource-manager', plugins:'plugins' };
+  let activeLeftPanel = 'scratchpad';
+
+  function activateLeftPanel(panelKey) {
+    if (activeLeftPanel === panelKey && !document.getElementById('edge-left').classList.contains('collapsed')) { collapseLeftEdge(); return; }
+    document.querySelectorAll('.activity-bar .top-group .activity-icon').forEach(a => a.classList.remove('active'));
+    document.getElementById('act-' + panelKey).classList.add('active');
+    document.getElementById('edge-left').classList.remove('collapsed');
+    switchEdgeTab('left', leftPanelMap[panelKey]);
+    activeLeftPanel = panelKey;
+  }
+
+  function collapseLeftEdge() {
+    document.getElementById('edge-left').classList.add('collapsed');
+    document.querySelectorAll('.activity-bar .top-group .activity-icon').forEach(a => a.classList.remove('active'));
+    activeLeftPanel = null;
+  }
+
+  function activateRightPanel(panelKey) {
+    const edgeRight = document.getElementById('edge-right');
+    const isOpen = !edgeRight.classList.contains('collapsed');
+    const activeTab = edgeRight.querySelector('.edge-tab.active')?.dataset.edgeTab;
+    if (isOpen && activeTab === panelKey) { collapseRightEdge(); return; }
+    edgeRight.classList.remove('collapsed'); edgeRight.style.width = '260px';
+    document.querySelectorAll('.activity-bar .bottom-group .activity-icon').forEach(a => a.classList.remove('active'));
+    document.getElementById('act-' + panelKey).classList.add('active');
+    switchEdgeTab('right', panelKey);
+  }
+
+  function collapseRightEdge() {
+    const edgeRight = document.getElementById('edge-right');
+    edgeRight.classList.add('collapsed'); edgeRight.style.width = '';
+    document.querySelectorAll('.activity-bar .bottom-group .activity-icon').forEach(a => a.classList.remove('active'));
+  }
+
+  function switchEdgeTab(side, tabId) {
+    const edge = document.getElementById('edge-' + side);
+    edge.querySelectorAll('.edge-tab').forEach(t => t.classList.remove('active'));
+    const tabEl = edge.querySelector(`.edge-tab[data-edge-tab="${tabId}"]`);
+    if (tabEl) tabEl.classList.add('active');
+    edge.querySelectorAll('.edge-content').forEach(c => c.classList.remove('active'));
+    const contentEl = document.getElementById('edge-content-' + tabId);
+    if (contentEl) contentEl.classList.add('active');
+  }
+
+  function toggleTree(el) {
+    const chevron = el.querySelector('.chevron');
+    chevron.classList.toggle('open');
+    let next = el.nextElementSibling;
+    while (next && next.classList.contains('child')) {
+      next.style.display = next.style.display === 'none' ? '' : 'none';
+      next = next.nextElementSibling;
+    }
+  }
+
+  // ===== 拖拽 =====
+  let dragH = null;
+  function startResizeH(e, side) {
+    e.preventDefault();
+    dragH = { side, startX: e.clientX };
+    document.addEventListener('mousemove', onResizeH);
+    document.addEventListener('mouseup', stopResizeH);
+    document.getElementById('resize-' + side).classList.add('active');
+  }
+  function onResizeH(e) {
+    if (!dragH) return;
+    const dx = e.clientX - dragH.startX;
+    if (dragH.side === 'left') {
+      const left = document.getElementById('edge-left');
+      if (!left.classList.contains('collapsed')) left.style.width = Math.max(180, Math.min(500, left.offsetWidth + dx)) + 'px';
+    } else {
+      const right = document.getElementById('edge-right');
+      if (!right.classList.contains('collapsed')) right.style.width = Math.max(200, Math.min(500, right.offsetWidth - dx)) + 'px';
+    }
+    dragH.startX = e.clientX;
+  }
+  function stopResizeH() {
+    if (dragH) document.getElementById('resize-' + dragH.side).classList.remove('active');
+    dragH = null;
+    document.removeEventListener('mousemove', onResizeH);
+    document.removeEventListener('mouseup', stopResizeH);
+  }
+
+  let dragV = null;
+  function startSplitV(e, mode) {
+    e.preventDefault();
+    const panel = document.getElementById('editor-' + mode);
+    dragV = { mode, startY: e.clientY, panel };
+    document.addEventListener('mousemove', onSplitV);
+    document.addEventListener('mouseup', stopSplitV);
+    document.getElementById('split-' + mode).classList.add('active');
+  }
+  function onSplitV(e) {
+    if (!dragV) return;
+    const result = dragV.panel.querySelector('.result-area');
+    const dy = e.clientY - dragV.startY;
+    result.style.height = Math.max(36, Math.min(500, result.offsetHeight - dy)) + 'px';
+    dragV.startY = e.clientY;
+  }
+  function stopSplitV() {
+    if (dragV) document.getElementById('split-' + dragV.mode).classList.remove('active');
+    dragV = null;
+    document.removeEventListener('mousemove', onSplitV);
+    document.removeEventListener('mouseup', stopSplitV);
+  }
+
+  function formatCurrent(editorId) {
+    const panel = document.getElementById('editor-' + editorId);
+    const inner = panel.querySelector('.cm-content-inner');
+    const lines = inner.querySelectorAll('.cm-line');
+    let text = '';
+    lines.forEach(l => { text += (l.textContent || '') + '\n'; });
+    text = text.trim();
+    const keywords = ['SELECT','FROM','WHERE','AND','OR','LEFT JOIN','RIGHT JOIN','INNER JOIN','JOIN','GROUP BY','HAVING','ORDER BY','LIMIT','OFFSET','WITH','UNION','ATTACH','ON','INSERT INTO','UPDATE','DELETE FROM','SET','CREATE TABLE','ALTER TABLE','DROP TABLE'];
+    keywords.forEach(kw => { text = text.replace(new RegExp('\\b' + kw + '\\b','gi'), '\n' + kw.toUpperCase()); });
+    text = text.replace(/\n{2,}/g,'\n').replace(/^\n/,'').trim();
+    const gutterId = panel.querySelector('.cm-gutter').id;
+    const innerId = inner.id;
+    const isCode = editorModes[editorId] === 'code';
+    renderGutter(gutterId, text);
+    renderCM(innerId, text, isCode ? highlightCode : highlightSQL);
+    toast('已格式化');
+  }
+
+  function toast(msg) {
+    const el = document.createElement('div');
+    el.className = 'toast'; el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateY(-8px)'; setTimeout(() => el.remove(), 300); }, 1800);
+  }
+
+  // 快捷键
+  document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); toast('执行'); }
+    if (e.ctrlKey && e.key === 's') { e.preventDefault(); toast('保存文件'); }
+    if (e.ctrlKey && e.key === 'b') { e.preventDefault(); collapseLeftEdge(); }
+    if (e.ctrlKey && e.shiftKey && e.key === 'B') { e.preventDefault(); collapseRightEdge(); }
+  });
+
+  initAllEditors();
+  console.log('%cRdataStation 编辑器模式原型 %c— 每个标签独立模式切换',
+    'color:#4fc1ff;font-size:14px;', 'color:#858585;');
+  console.log('  ★ 编辑器标题栏最左侧: 模式切换器 (SQL | 分析 | 代码)');
+  console.log('  ★ 切换模式 → 工具栏变化 + 状态栏颜色同步变化');
+  console.log('  ★ 每个标签独立维护自己的模式状态');
+</script>
+</body>
+</html>

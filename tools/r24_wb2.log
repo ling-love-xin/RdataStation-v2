@@ -1,0 +1,59 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:1 字符: 1
++ cargo test -p rds-workbench -j 2 --manifest-path "D:\RdataStation\RDS ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\examples\seed_demo.lib 和对象 D:\RdataStati
+on\RDS\RdataStation-v2\target\debug\examples\seed_demo.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (example "seed_demo") generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a.lib 
+和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (lib test) generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-2f7cb662bf0cd4ed.l
+ib 和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-2f7cb662bf0cd4ed.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "real_connections") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 58.60s
+     Running unittests src\lib.rs (D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a
+.exe)
+
+running 8 tests
+test services::secret_integration::tests::test_db_type_mapping ... ok
+test services::secret_integration::tests::test_parse_file_db ... ok
+test services::secret_integration::tests::test_parse_full_url ... ok
+test services::secret_integration::tests::test_parse_without_creds ... ok
+test services::secret_integration::tests::test_secret_name_sanitize ... ok
+test services::connection_service::tests::test_connect_empty_url ... ok
+test services::connection_service::tests::test_connect_invalid_db_type ... ok
+test services::secret_integration::tests::test_register_postgres_secret_roundtrip ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests\real_connections.rs (D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-2f7cb662
+bf0cd4ed.exe)
+
+running 5 tests
+test empty_db_returns_empty_list ... ok
+test global_db_roundtrip_maps_to_connection_items ... ok
+test second_connection_persists_after_reopen ... ok
+test save_connection_at_then_load_roundtrip ... ok
+test delete_connection_at_removes_from_list ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+
+   Doc-tests rds_workbench
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

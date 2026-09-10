@@ -1,0 +1,100 @@
+.dockview-theme-dark {
+  --dv-background-color: #1e1f22;
+  --dv-text-color: #e5e7eb;
+  --dv-accent-color: #e17055;
+  --dv-border-color: #4a5458;
+  --dv-tab-background-color: #2d3436;
+  --dv-tab-active-background-color: #3d4446;
+  --dv-group-view-background-color: #2b2d30;
+  --dv-selection-color: rgba(225, 112, 85, 0.25);
+  --dv-paneview-background-color: #2b2d30;
+  --dv-tabs-and-actions-container-background-color: #2b2d30;
+  --dv-tab-color: #9ca3af;
+  --dv-tab-active-color: #e5e7eb;
+  --dv-group-control-background-color: #2b2d30;
+  --dv-active-sash-color: #e17055;
+  --dv-sash-color: transparent;
+  --dv-sash-hover-color: #e17055;
+  --dv-activegroup-visiblepanel-tab-background-color: #3d4446;
+  --dv-activegroup-hiddenpanel-tab-background-color: #2d3436;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #2d3436;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #2d3436;
+  --dv-activegroup-visiblepanel-tab-color: #e5e7eb;
+  --dv-activegroup-hiddenpanel-tab-color: #6b7280;
+  --dv-inactivegroup-visiblepanel-tab-color: #6b7280;
+  --dv-inactivegroup-hiddenpanel-tab-color: #6b7280;
+  --dv-tabs-and-actions-container-font-size: 12px;
+  --dv-tabs-and-actions-container-height: 35px;
+}
+
+.dockview-theme-light {
+  --dv-background-color: #ffffff;
+  --dv-text-color: #1f2937;
+  --dv-accent-color: #e17055;
+  --dv-border-color: #b2bec3;
+  --dv-tab-background-color: #f5f5f5;
+  --dv-tab-active-background-color: #ffffff;
+  --dv-group-view-background-color: #f5f5f5;
+  --dv-selection-color: rgba(225, 112, 85, 0.15);
+  --dv-paneview-background-color: #f5f5f5;
+  --dv-tabs-and-actions-container-background-color: #f5f5f5;
+  --dv-tab-color: #4b5563;
+  --dv-tab-active-color: #1f2937;
+  --dv-group-control-background-color: #f5f5f5;
+  --dv-active-sash-color: #e17055;
+  --dv-sash-color: transparent;
+  --dv-sash-hover-color: #e17055;
+  --dv-activegroup-visiblepanel-tab-background-color: #ffffff;
+  --dv-activegroup-hiddenpanel-tab-background-color: #f5f5f5;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #f5f5f5;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #f5f5f5;
+  --dv-activegroup-visiblepanel-tab-color: #1f2937;
+  --dv-activegroup-hiddenpanel-tab-color: #9ca3af;
+  --dv-inactivegroup-visiblepanel-tab-color: #9ca3af;
+  --dv-inactivegroup-hiddenpanel-tab-color: #9ca3af;
+  --dv-tabs-and-actions-container-font-size: 12px;
+  --dv-tabs-and-actions-container-height: 35px;
+}
+
+.dv-sash {
+  background: transparent !important;
+  z-index: 10 !important;
+  transition: background 0.2s ease !important;
+}
+
+.dv-sash:hover,
+.dv-sash.dv-sash-active {
+  background: var(--dv-accent-color) !important;
+}
+
+.dv-edge-group .dv-tab-close-button,
+.dv-edge-group .close-button,
+[data-edge='true'] .close-button {
+  display: none !important;
+}
+
+.dv-edge-group .dv-tab-content {
+  justify-content: center;
+}
+
+.dv-edge-group .dv-tab svg,
+.dv-edge-group .action-item svg,
+.dv-edge-group .dv-action-container svg {
+  width: 22px;
+  height: 22px;
+}
+
+.dv-edge-group .dv-tab {
+  color: var(--dv-tab-active-color);
+  opacity: 0.85;
+}
+
+.dv-edge-group .dv-tab:hover {
+  opacity: 1;
+  color: var(--dv-tab-active-color);
+}
+
+.dv-edge-group .dv-tab.dv-tab-active {
+  color: var(--dv-tab-active-color);
+  opacity: 1;
+}

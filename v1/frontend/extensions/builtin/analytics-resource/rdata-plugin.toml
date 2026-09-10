@@ -1,0 +1,14 @@
+[plugin]
+id = "rdatastation.analytics-resource"
+name = "Analytics Resource"
+version = "1.4.0"
+publisher = "rdatastation"
+description = "Analytics Resource Manager - Manage database connections, tables, and files for analysis"
+engines = { rdatastation = "^0.1.0" }
+
+[capabilities.frontend]
+entry = "./extension.ts"
+activation_events = ["onProjectOpen"]
+
+[contributes.panels]
+"analytics-resource-manager" = { title = "分析资源管理器", icon = "BarChart3", order = 2 }

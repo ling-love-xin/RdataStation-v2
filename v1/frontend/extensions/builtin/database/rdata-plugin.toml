@@ -1,0 +1,22 @@
+[plugin]
+id = "rdatastation.database"
+name = "Database"
+version = "1.0.0"
+publisher = "rdatastation"
+description = "database module for RdataStation"
+engines = { rdatastation = "^0.1.0" }
+
+[capabilities.frontend]
+entry = "./extension.ts"
+activation_events = ["onProjectOpen"]
+
+[contributes.panels]
+databaseNavigator = { title = "数据库导航", icon = "Database", order = 1 }
+
+[contributes.commands]
+"database.getCatalogs" = { title = "获取目录列表" }
+"database.getSchemas" = { title = "获取模式列表" }
+"database.getTables" = { title = "获取表列表" }
+"database.getViews" = { title = "获取视图列表" }
+"database.getColumns" = { title = "获取列列表" }
+"database.refresh" = { title = "刷新导航" }

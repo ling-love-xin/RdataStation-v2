@@ -1,0 +1,54 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:1 字符: 76
++ ... _order.py"; cargo test -p rds-workbench -j 2 --manifest-path "D:\Rdat ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0502]: cannot borrow `stmt` as immutable because it is also borrowed as mutable
+  --> crates\workbench\src\services\query_runner.rs:47:23
+   |
+46 |         let mut rows = stmt.query([]).map_err(|e| format!("执行失败: {e}"))?;
+   |                        ---- mutable borrow occurs here
+47 |         columns = (0..stmt.column_count())
+   |                       ^^^^ immutable borrow occurs here
+...
+50 |         while let Some(row) = rows.next().map_err(|e| format!("读取行失败: {e}"))? {
+   |                               ---- mutable borrow later used here
+
+error[E0502]: cannot borrow `stmt` as immutable because it is also borrowed as mutable
+  --> crates\workbench\src\services\query_runner.rs:48:18
+   |
+46 |         let mut rows = stmt.query([]).map_err(|e| format!("执行失败: {e}"))?;
+   |                        ---- mutable borrow occurs here
+47 |         columns = (0..stmt.column_count())
+48 |             .map(|i| stmt.column_name(i).map(|v| v.to_string()).unwrap_or_else(|_| "unknown".to_string()))
+   |                  ^^^ ---- second borrow occurs due to use of `stmt` in closure
+   |                  |
+   |                  immutable borrow occurs here
+49 |             .collect();
+50 |         while let Some(row) = rows.next().map_err(|e| format!("读取行失败: {e}"))? {
+   |                               ---- mutable borrow later used here
+
+error[E0382]: borrow of moved value: `rows_out`
+  --> crates\workbench\src\services\query_runner.rs:65:20
+   |
+42 |     let mut rows_out: Vec<Vec<String>> = Vec::new();
+   |         ------------ move occurs because `rows_out` has type `Vec<Vec<std::string::String>>`, which does not imple
+ment the `Copy` trait
+...
+64 |         rows: rows_out,
+   |               -------- value moved here
+65 |         row_count: rows_out.len(),
+   |                    ^^^^^^^^ value borrowed here after move
+   |
+help: consider cloning the value if the performance cost is acceptable
+   |
+64 |         rows: rows_out.clone(),
+   |                       ++++++++
+
+Some errors have detailed explanations: E0382, E0502.
+For more information about an error, try `rustc --explain E0382`.
+error: could not compile `rds-workbench` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `rds-workbench` (lib test) due to 3 previous errors

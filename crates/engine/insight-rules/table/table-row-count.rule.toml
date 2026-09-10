@@ -1,0 +1,24 @@
+[meta]
+id = "table-row-count"
+name = "表行数统计"
+description = "获取表的总行数"
+version = "1.0"
+category = "table"
+applies_to = ["Any"]
+builtin = true
+
+[query]
+template = """
+SELECT COUNT(*) AS row_count FROM "{table}"
+"""
+parameters = ["table"]
+result_type = "single"
+
+[[output]]
+sql_name = "row_count"
+json_name = "row_count"
+value_type = "i64"
+
+[render]
+component = "KeyValueRow"
+display_order = 1

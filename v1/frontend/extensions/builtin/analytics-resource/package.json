@@ -1,0 +1,7 @@
+{
+  "name": "analytics-resource",
+  "version": "1.0.0",
+  "description": "Analytics Resource Manager - Manage database connections, tables, and files for analysis",
+  "main": "extension.ts",
+  "author": "RdataStation Team"
+}

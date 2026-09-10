@@ -1,0 +1,54 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:1 字符: 1
++ cargo test -p rds-workbench -j 2 --manifest-path "D:\RdataStation\RDS ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a.lib 
+和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-81daebbdc735854a.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (lib test) generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-2f7cb662bf0cd4ed.l
+ib 和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-2f7cb662bf0cd4ed.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "real_connections") generated 1 warning
+error[E0382]: borrow of moved value: `duckdb`
+    --> crates\workbench\examples\seed_demo.rs:59:23
+     |
+  25 |     let duckdb = dir.join("global.duckdb");
+     |         ------ move occurs because `duckdb` has type `PathBuf`, which does not implement the `Copy` trait
+...
+  28 |     rt.block_on(async {
+     |                 ----- value moved here
+  29 |         let mgr = GlobalDatabaseManager::new(sqlite, duckdb, 2)
+     |                                                      ------ variable moved due to use in coroutine
+...
+  59 |     let duckdb_path = duckdb.to_string_lossy().to_string();
+     |                       ^^^^^^ value borrowed here after move
+     |
+     = note: borrow occurs due to deref coercion to `Path`
+note: deref defined here
+    --> D:\Dev\Rust\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\std\src\path.rs:2093:
+5
+     |
+2093 |     type Target = Path;
+     |     ^^^^^^^^^^^
+help: consider cloning the value if the performance cost is acceptable
+     |
+  29 |         let mgr = GlobalDatabaseManager::new(sqlite, duckdb.clone(), 2)
+     |                                                            ++++++++
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `rds-workbench` (example "seed_demo") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\db_navigator-b4bdacc0ed4de0f4.lib 和
+对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\db_navigator-b4bdacc0ed4de0f4.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "db_navigator") generated 1 warning

@@ -1,0 +1,1498 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>属性编辑器 — RdataStation 原型 v3.1（M1 已实现）</title>
+    <style>
+      /* ============================================================
+   CSS 变量 & 全局复位 — 沿用项目 prototype 设计系统
+   ============================================================ */
+      :root {
+        --bg-primary: #1e1e2e;
+        --bg-surface: #1a1b26;
+        --bg-raised: #11111b;
+        --bg-hover: rgba(255, 255, 255, 0.05);
+        --bg-active: #2a2a3c;
+        --border-color: rgba(255, 255, 255, 0.07);
+        --text-primary: #cdd6f4;
+        --text-secondary: #a6adc8;
+        --text-muted: #6c7086;
+        --accent: #89b4fa;
+        --accent-bg: rgba(137, 180, 250, 0.1);
+        --success: #a6e3a1;
+        --warning: #f9e2af;
+        --danger: #f38ba8;
+        --purple: #cba6f7;
+        --green: #94e2d5;
+        --orange: #fab387;
+        --radius: 6px;
+        /* ===== RdataStation 特有：Scope 色板 ===== */
+        --scope-global: #4fa8f5; /* 全局 = 蓝色 */
+        --scope-global-bg: rgba(79, 168, 245, 0.12);
+        --scope-project: #a6e3a1; /* 项目 = 绿色 */
+        --scope-project-bg: rgba(166, 227, 161, 0.12);
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #0d0d0d;
+        color: var(--text-primary);
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      /* ===== 页头 ===== */
+      .header {
+        background: #161616;
+        border-bottom: 1px solid #2d2d2d;
+        padding: 10px 18px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-shrink: 0;
+      }
+      .header h1 {
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .header .badge {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: rgba(0, 102, 184, 0.2);
+        color: #4fa8f5;
+      }
+      .header .badge.prototype {
+        background: rgba(166, 227, 161, 0.2);
+        color: #a6e3a1;
+      }
+
+      /* ===== 主布局 ===== */
+      .main {
+        flex: 1;
+        display: flex;
+        overflow: hidden;
+        background: var(--bg-primary);
+      }
+
+      /* ----- 左侧导航树（模拟） ----- */
+      .sidebar {
+        width: 240px;
+        flex-shrink: 0;
+        background: var(--bg-surface);
+        border-right: 1px solid var(--border-color);
+        display: flex;
+        flex-direction: column;
+        font-size: 12px;
+      }
+      .sidebar-header {
+        padding: 10px 14px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        border-bottom: 1px solid var(--border-color);
+      }
+      .sidebar-tree {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 0;
+      }
+      .tree-item {
+        padding: 4px 14px;
+        cursor: pointer;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .tree-item:hover {
+        background: var(--bg-hover);
+      }
+      .tree-item.selected {
+        background: var(--accent-bg);
+        color: var(--accent);
+      }
+      .tree-item .icon {
+        width: 16px;
+        text-align: center;
+        font-size: 12px;
+      }
+      .tree-item .name {
+        flex: 1;
+      }
+      .tree-item .scope-tag {
+        font-size: 9px;
+        padding: 1px 5px;
+        border-radius: 8px;
+        font-weight: 600;
+      }
+      .tree-item .scope-tag.global {
+        background: var(--scope-global-bg);
+        color: var(--scope-global);
+      }
+      .tree-item .scope-tag.project {
+        background: var(--scope-project-bg);
+        color: var(--scope-project);
+      }
+
+      /* ----- 右侧编辑器区域 ----- */
+      .editor-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ===== 顶部 Tab 栏 ===== */
+      .top-tabs {
+        display: flex;
+        align-items: center;
+        background: var(--bg-surface);
+        border-bottom: 1px solid var(--border-color);
+        flex-shrink: 0;
+        height: 32px;
+      }
+      .top-tab {
+        padding: 6px 16px;
+        font-size: 12px;
+        cursor: pointer;
+        color: var(--text-muted);
+        border-bottom: 2px solid transparent;
+        user-select: none;
+      }
+      .top-tab:hover {
+        color: var(--text-secondary);
+      }
+      .top-tab.active {
+        color: var(--text-primary);
+        border-bottom-color: var(--accent);
+      }
+
+      /* ===== 面包屑 + Scope 标签 ===== */
+      .breadcrumb-bar {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 12px;
+        font-size: 11px;
+        background: var(--bg-raised);
+        border-bottom: 1px solid var(--border-color);
+        flex-shrink: 0;
+      }
+      .breadcrumb-bar span {
+        color: var(--text-muted);
+      }
+      .breadcrumb-bar .sep {
+        opacity: 0.4;
+      }
+      .breadcrumb-bar .current {
+        color: var(--accent);
+        font-weight: 500;
+      }
+      /* Scope 标签（面包屑中） */
+      .scope-badge {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-weight: 600;
+        margin-left: 6px;
+      }
+      .scope-badge.global {
+        background: var(--scope-global-bg);
+        color: var(--scope-global);
+      }
+      .scope-badge.project {
+        background: var(--scope-project-bg);
+        color: var(--scope-project);
+      }
+      /* 节点类型标签（面包屑中） */
+      .node-type-badge {
+        font-size: 9px;
+        padding: 1px 6px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text-muted);
+        margin-left: 4px;
+      }
+
+      /* ===== 上下分割 ===== */
+      .properties-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ----- 上 pane：对象属性网格 ----- */
+      .top-pane {
+        flex: 0 0 auto;
+        max-height: 45%;
+        overflow-y: auto;
+        border-bottom: 1px solid var(--border-color);
+      }
+      .top-pane::-webkit-scrollbar {
+        width: 5px;
+      }
+      .top-pane::-webkit-scrollbar-thumb {
+        background: var(--border-color);
+        border-radius: 3px;
+      }
+
+      .prop-grid {
+        display: grid;
+        grid-template-columns: 160px 1fr 160px 1fr;
+        font-size: 12px;
+      }
+      .prop-cell {
+        padding: 4px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        min-height: 26px;
+        display: flex;
+        align-items: center;
+      }
+      .prop-cell.key {
+        color: var(--text-muted);
+        font-weight: 500;
+      }
+      .prop-cell.val {
+        color: var(--text-primary);
+        font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+        font-size: 11px;
+      }
+      .prop-cell.val.null {
+        color: var(--text-muted);
+        font-style: italic;
+      }
+      .prop-cell.val.editable {
+        border: 1px solid transparent;
+        border-radius: 3px;
+        padding: 2px 8px;
+        cursor: text;
+      }
+      .prop-cell.val.editable:hover {
+        border-color: var(--border-color);
+      }
+      .prop-cell.val.editable:focus {
+        border-color: var(--accent);
+        outline: none;
+        background: var(--bg-raised);
+      }
+
+      /* ----- 下 pane：左侧子实体 Tab + 右侧内容 ----- */
+      .bottom-pane {
+        flex: 1;
+        display: flex;
+        overflow: hidden;
+      }
+      .sub-tabs {
+        width: 140px;
+        flex-shrink: 0;
+        background: var(--bg-surface);
+        border-right: 1px solid var(--border-color);
+        display: flex;
+        flex-direction: column;
+        padding: 2px 0;
+        overflow-y: auto;
+      }
+      .sub-tab {
+        padding: 6px 14px;
+        font-size: 12px;
+        cursor: pointer;
+        color: var(--text-muted);
+        border-left: 2px solid transparent;
+        user-select: none;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .sub-tab:hover {
+        color: var(--text-secondary);
+        background: var(--bg-hover);
+      }
+      .sub-tab.active {
+        color: var(--text-primary);
+        background: var(--accent-bg);
+        border-left-color: var(--accent);
+      }
+      .sub-tab .icon {
+        font-size: 13px;
+        width: 16px;
+        text-align: center;
+      }
+      .sub-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* 子实体工具栏 */
+      .sub-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        background: var(--bg-raised);
+        border-bottom: 1px solid var(--border-color);
+        flex-shrink: 0;
+      }
+      .sub-toolbar .tb-btn {
+        width: 26px;
+        height: 26px;
+        border: none;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 3px;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .sub-toolbar .tb-btn:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .sub-toolbar .tb-spacer {
+        flex: 1;
+      }
+      .sub-toolbar .tb-search {
+        width: 160px;
+        padding: 3px 8px;
+        font-size: 11px;
+        background: var(--bg-raised);
+        border: 1px solid var(--border-color);
+        border-radius: 3px;
+        color: var(--text-primary);
+        outline: none;
+      }
+      .sub-toolbar .tb-search:focus {
+        border-color: var(--accent);
+      }
+      .sub-toolbar .tb-search::placeholder {
+        color: var(--text-muted);
+      }
+
+      /* 子实体表格 */
+      .sub-table-wrap {
+        flex: 1;
+        overflow: auto;
+      }
+      .sub-table-wrap::-webkit-scrollbar {
+        width: 5px;
+        height: 5px;
+      }
+      .sub-table-wrap::-webkit-scrollbar-thumb {
+        background: var(--border-color);
+        border-radius: 3px;
+      }
+      .sub-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .sub-table th {
+        padding: 5px 10px;
+        text-align: left;
+        font-weight: 600;
+        color: var(--text-muted);
+        font-size: 11px;
+        background: var(--bg-raised);
+        border-bottom: 1px solid var(--border-color);
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        white-space: nowrap;
+      }
+      .sub-table td {
+        padding: 4px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        white-space: nowrap;
+      }
+      .sub-table tbody tr:hover td {
+        background: var(--bg-hover);
+      }
+      .sub-table .pk {
+        color: var(--warning);
+        font-weight: 600;
+        font-size: 10px;
+      }
+      .sub-table .fk {
+        color: var(--purple);
+        font-size: 10px;
+      }
+      .sub-table .type {
+        color: var(--success);
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        font-size: 11px;
+      }
+      .sub-table .name {
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        font-size: 11px;
+      }
+
+      /* DDL 特殊样式 */
+      .ddl-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        background: var(--bg-raised);
+        border-bottom: 1px solid var(--border-color);
+        flex-shrink: 0;
+      }
+      .ddl-toolbar .tb-btn-text {
+        padding: 3px 10px;
+        font-size: 11px;
+        border: none;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .ddl-toolbar .tb-btn-text:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .ddl-content {
+        flex: 1;
+        overflow: auto;
+        background: var(--bg-raised);
+      }
+      .ddl-content pre {
+        padding: 12px;
+        margin: 0;
+        font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--text-primary);
+        white-space: pre;
+        overflow-x: auto;
+      }
+      .sql-kw {
+        color: #cba6f7;
+      }
+      .sql-type {
+        color: #a6e3a1;
+      }
+      .sql-func {
+        color: #89b4fa;
+      }
+      .sql-str {
+        color: #f9e2af;
+      }
+      .sql-num {
+        color: #fab387;
+      }
+
+      /* 空状态占位 */
+      .empty-state {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 8px;
+        height: 100%;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+      .empty-state .icon {
+        font-size: 28px;
+        opacity: 0.3;
+      }
+      .empty-state .hint {
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+
+      /* ===== 底部状态栏 ===== */
+      .statusbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 14px;
+        font-size: 11px;
+        background: var(--bg-surface);
+        border-top: 1px solid var(--border-color);
+        flex-shrink: 0;
+        color: var(--text-muted);
+      }
+      .statusbar .save-btn {
+        padding: 4px 14px;
+        font-size: 11px;
+        font-weight: 500;
+        background: var(--accent);
+        color: #1e1e2e;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      .statusbar .save-btn:hover {
+        opacity: 0.9;
+      }
+      .statusbar .save-btn:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+      .statusbar .revert-btn {
+        padding: 4px 10px;
+        font-size: 11px;
+        background: transparent;
+        color: var(--text-muted);
+        border: 1px solid var(--border-color);
+        border-radius: 3px;
+        cursor: pointer;
+        margin-left: 8px;
+      }
+      .statusbar .revert-btn:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+      }
+      .statusbar .revert-btn:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+
+      /* ===== 节点类型切换 Tab（演示用） ===== */
+      .demo-tabs {
+        display: flex;
+        gap: 4px;
+        padding: 6px 12px;
+        background: var(--bg-raised);
+        border-bottom: 1px solid var(--border-color);
+        flex-shrink: 0;
+        font-size: 11px;
+      }
+      .demo-tab {
+        padding: 3px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        color: var(--text-muted);
+        border: 1px solid var(--border-color);
+        background: transparent;
+      }
+      .demo-tab:hover {
+        border-color: var(--text-muted);
+        color: var(--text-secondary);
+      }
+      .demo-tab.active {
+        background: var(--accent-bg);
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      /* Toast */
+      .toast {
+        position: fixed;
+        bottom: 40px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--success);
+        color: #1e1e2e;
+        padding: 8px 20px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 500;
+        z-index: 999;
+        opacity: 0;
+        transition: opacity 0.2s;
+        pointer-events: none;
+      }
+      .toast.show {
+        opacity: 1;
+      }
+
+      /* 提示栏 */
+      .tip-bar {
+        padding: 8px 14px;
+        font-size: 11px;
+        color: var(--warning);
+        background: rgba(249, 226, 175, 0.06);
+        border-bottom: 1px solid rgba(249, 226, 175, 0.15);
+        flex-shrink: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 页头 -->
+    <div class="header">
+      <h1>RdataStation — 属性编辑器原型 v3.1</h1>
+      <span class="badge">PROTOTYPE</span>
+      <span class="badge prototype" style="margin-left: 4px">M1 IMPLEMENTED</span>
+      <span style="font-size: 12px; color: var(--text-muted); margin-left: auto">
+        对标 DBeaver Properties Editor | 5 种节点类型 · 全局/项目 Scope · 动态注册
+      </span>
+    </div>
+
+    <!-- 主布局 -->
+    <div class="main">
+      <!-- 左侧导航树（模拟） -->
+      <div class="sidebar">
+        <div class="sidebar-header">🗄 数据库导航</div>
+        <div class="sidebar-tree">
+          <!-- 全局连接 -->
+          <div
+            class="tree-item"
+            style="padding-left: 6px"
+            data-node="conn-global"
+            onclick="selectTreeNode(this, 'conn-global')"
+          >
+            <span class="icon">🖥</span><span class="name">local_postgres</span>
+            <span class="scope-tag global">全局</span>
+          </div>
+          <div
+            class="tree-item"
+            style="padding-left: 28px"
+            data-node="catalog"
+            onclick="selectTreeNode(this, 'catalog')"
+          >
+            <span class="icon">📁</span><span class="name">mydb</span>
+          </div>
+          <div
+            class="tree-item"
+            style="padding-left: 42px"
+            data-node="schema"
+            onclick="selectTreeNode(this, 'schema')"
+          >
+            <span class="icon">📂</span><span class="name">public</span>
+          </div>
+          <div class="tree-item" style="padding-left: 56px"
+            ><span class="icon">📁</span><span class="name">Tables</span></div
+          >
+          <div
+            class="tree-item selected"
+            style="padding-left: 70px"
+            data-node="table"
+            onclick="selectTreeNode(this, 'table')"
+          >
+            <span class="icon">📋</span><span class="name">users</span>
+          </div>
+          <div
+            class="tree-item"
+            style="padding-left: 70px"
+            data-node="table"
+            onclick="selectTreeNode(this, 'table')"
+          >
+            <span class="icon">📋</span><span class="name">departments</span>
+          </div>
+          <!-- 项目连接 -->
+          <div
+            class="tree-item"
+            style="padding-left: 6px; margin-top: 4px"
+            data-node="conn-project"
+            onclick="selectTreeNode(this, 'conn-project')"
+          >
+            <span class="icon">🖥</span><span class="name">analytics_db</span>
+            <span class="scope-tag project">项目</span>
+          </div>
+          <div
+            class="tree-item"
+            style="padding-left: 28px"
+            data-node="schema"
+            onclick="selectTreeNode(this, 'schema')"
+          >
+            <span class="icon">📂</span><span class="name">analytics</span>
+          </div>
+          <div class="tree-item" style="padding-left: 56px"
+            ><span class="icon">📁</span><span class="name">Views</span></div
+          >
+          <div
+            class="tree-item"
+            style="padding-left: 70px"
+            data-node="view"
+            onclick="selectTreeNode(this, 'view')"
+          >
+            <span class="icon">👁</span><span class="name">user_summary</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧编辑器区域 -->
+      <div class="editor-area">
+        <!-- 顶部 Tab 栏 -->
+        <div class="top-tabs">
+          <div class="top-tab active" onclick="showTopTab('properties')">Properties</div>
+          <div class="top-tab" onclick="showTopTab('data')">Data</div>
+        </div>
+
+        <!-- 面包屑（含 Scope 标签） -->
+        <div class="breadcrumb-bar" id="breadcrumb">
+          <span>🗄 local_postgres</span><span class="scope-badge global">全局</span>
+          <span class="sep">/</span>
+          <span>mydb</span>
+          <span class="sep">/</span>
+          <span>public</span>
+          <span class="sep">/</span>
+          <span class="current">users</span>
+          <span class="node-type-badge">TABLE</span>
+        </div>
+
+        <!-- 节点类型切换（演示 Dynamic Registry） -->
+        <div class="demo-tabs">
+          <span style="color: var(--text-muted); margin-right: 8px">切换节点类型：</span>
+          <div class="demo-tab active" onclick="switchNodeType('table', this)">表 (TABLE)</div>
+          <div class="demo-tab" onclick="switchNodeType('view', this)">视图 (VIEW)</div>
+          <div class="demo-tab" onclick="switchNodeType('connection', this)">连接 (CONNECTION)</div>
+          <div class="demo-tab" onclick="switchNodeType('schema', this)">Schema (SCHEMA)</div>
+          <div class="demo-tab" onclick="switchNodeType('catalog', this)">Catalog (CATALOG)</div>
+          <span style="flex: 1"></span>
+          <span style="color: var(--text-muted); font-size: 10px">
+            ← propertiesRegistry[objectKind]() 支持 5 种节点类型
+          </span>
+        </div>
+
+        <!-- 提示 -->
+        <div class="tip-bar" id="tipBar">
+          💡 <b>Dynamic Registry 模式</b>：DynamicObjectPropertiesPanel.vue 不关心节点类型，只遍历
+          propertiesRegistry[nodeType]() 返回的 SubEntity[] 渲染。
+        </div>
+
+        <!-- ====== Properties 内容区 ====== -->
+        <div class="properties-content" id="propsContent">
+          <!-- 上 pane：对象属性（动态 4 列网格） -->
+          <div class="top-pane" id="topPane">
+            <div class="prop-grid" id="propGrid">
+              <!-- 动态填充 by JS -->
+            </div>
+          </div>
+
+          <!-- 下 pane：左侧子实体 Tabs + 右侧内容 -->
+          <div class="bottom-pane">
+            <div class="sub-tabs" id="subTabs">
+              <!-- 动态填充 by JS -->
+            </div>
+            <div class="sub-content" id="subContent">
+              <!-- 动态填充 by JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- ====== Data Tab 内容（占位） ====== -->
+        <div class="properties-content" id="dataContent" style="display: none">
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              height: 100%;
+              color: var(--text-muted);
+              font-size: 14px;
+            "
+          >
+            数据编辑器 — 此处展示 SELECT * FROM public.users LIMIT 200
+          </div>
+        </div>
+
+        <!-- 底部状态栏 -->
+        <div class="statusbar">
+          <span id="statusText">双击导航树节点打开属性编辑器 | 当前节点类型：table</span>
+          <div>
+            <button class="revert-btn" disabled id="revertBtn" onclick="toast('已撤销未保存的更改')"
+              >Revert</button
+            >
+            <button class="save-btn" disabled id="saveBtn" onclick="toast('更改已持久化到数据库')"
+              >Save</button
+            >
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+      // ============================================================================
+      // 模拟 propertiesRegistry（对标 properties-registry.ts）
+      // ============================================================================
+
+      // 当前状态
+      let currentScope = 'global'
+      let currentNodeType = 'table'
+
+      // 节点类型 → 属性列表
+      const propertyTemplates = {
+        table: {
+          scope: 'global',
+          label: 'users',
+          type: 'TABLE',
+          breadcrumb: ['🗄 local_postgres', 'mydb', 'public', 'users'],
+          properties: [
+            ['Name', 'users', 'Type', 'BASE TABLE'],
+            ['Owner', 'postgres', 'Tablespace', 'pg_default'],
+            ['Schema', 'public', 'Catalog', 'mydb'],
+            ['Row Count (est.)', '1,234,567', 'Data Size', '256 MB'],
+            ['Index Size', '48 MB', 'Total Size', '304 MB'],
+            ['Comment', '用户主表', 'Created', '2024-01-15 10:30:00+08'],
+          ],
+          subEntities: [
+            'columns',
+            'constraints',
+            'indexes',
+            'foreign-keys',
+            'triggers',
+            'ddl',
+            'permissions',
+          ],
+        },
+        view: {
+          scope: 'global',
+          label: 'user_summary',
+          type: 'VIEW',
+          breadcrumb: ['🗄 local_postgres', 'mydb', 'public', 'user_summary'],
+          properties: [
+            ['Name', 'user_summary', 'Type', 'VIEW'],
+            ['Owner', 'postgres', 'Schema', 'public'],
+            ['Row Count (est.)', '45,230', 'Definition Length', '2,048 bytes'],
+            ['Is Updatable', 'YES', 'Check Option', 'NONE'],
+            ['Comment', '用户汇总视图', 'Created', '2024-03-20 14:00:00+08'],
+          ],
+          subEntities: ['columns', 'ddl'],
+        },
+        connection: {
+          scope: 'global',
+          label: 'local_postgres',
+          type: 'CONNECTION',
+          breadcrumb: ['🗄 local_postgres'],
+          properties: [
+            ['Name', 'local_postgres', 'Type', 'PostgreSQL 16'],
+            ['Host', 'localhost', 'Port', '5432'],
+            ['Database', 'mydb', 'User', 'postgres'],
+            ['Driver', 'PostgreSQL JDBC 42.7.3', 'SSL', 'disable'],
+            ['Status', 'CONNECTED', 'Ping', '2 ms'],
+            ['Scope', '全局', 'Project', '—'],
+          ],
+          subEntities: ['schemas', 'extensions', 'sessions'],
+        },
+        schema: {
+          scope: 'global',
+          label: 'public',
+          type: 'SCHEMA',
+          breadcrumb: ['🗄 local_postgres', 'mydb', 'public'],
+          properties: [
+            ['Name', 'public', 'Owner', 'postgres'],
+            ['Tables', '12', 'Views', '3'],
+            ['Functions', '8', 'Procedures', '2'],
+            ['Sequences', '4', 'Total Size', '512 MB'],
+            ['Comment', 'Default schema', '—', '—'],
+          ],
+          subEntities: ['tables', 'views', 'functions', 'procedures', 'sequences'],
+        },
+        catalog: {
+          scope: 'global',
+          label: 'mydb',
+          type: 'CATALOG',
+          breadcrumb: ['🗄 local_postgres', 'mydb'],
+          properties: [
+            ['Name', 'mydb', 'Schemas', '3'],
+            ['Tables', '17', 'Views', '5'],
+            ['Owner', 'postgres', 'Encoding', 'UTF8'],
+            ['Collation', 'en_US.UTF-8', 'Character Type', 'en_US.UTF-8'],
+            ['Size', '2.4 GB', 'Connections', '3'],
+          ],
+          subEntities: ['schemas'],
+        },
+      }
+
+      // ===== Sub-entity 内容模板（每种子实体渲染什么） =====
+      const subEntityTemplates = {
+        columns: {
+          icon: '📊',
+          toolbar: ['🔄', '＋', '🗑'],
+          search: '搜索列名...',
+          table: {
+            id: 'columns-table',
+            headers: ['#', 'Name', 'Data Type', 'Not Null', 'Default', 'Comment'],
+            rows: [
+              [
+                '<span class="pk">PK</span>',
+                '<span class="name">id</span>',
+                '<span class="type">int4</span>',
+                '✓',
+                '—',
+                '主键，自增',
+              ],
+              [
+                '',
+                '<span class="name">username</span>',
+                '<span class="type">varchar(50)</span>',
+                '✓',
+                '—',
+                '用户名',
+              ],
+              [
+                '',
+                '<span class="name">email</span>',
+                '<span class="type">varchar(255)</span>',
+                '✓',
+                '—',
+                '邮箱',
+              ],
+              [
+                '',
+                '<span class="name">password_hash</span>',
+                '<span class="type">varchar(255)</span>',
+                '✓',
+                '—',
+                'bcrypt 哈希',
+              ],
+              [
+                '',
+                '<span class="name">full_name</span>',
+                '<span class="type">varchar(100)</span>',
+                '',
+                '<span class="null">NULL</span>',
+                '全名',
+              ],
+              [
+                '',
+                '<span class="name">role</span>',
+                '<span class="type">varchar(20)</span>',
+                '✓',
+                "'user'",
+                '角色',
+              ],
+              [
+                '<span class="fk">FK</span>',
+                '<span class="name">department_id</span>',
+                '<span class="type">int4</span>',
+                '',
+                '<span class="null">NULL</span>',
+                '→ departments.id',
+              ],
+              [
+                '',
+                '<span class="name">is_active</span>',
+                '<span class="type">bool</span>',
+                '✓',
+                'true',
+                '激活状态',
+              ],
+              [
+                '',
+                '<span class="name">last_login</span>',
+                '<span class="type">timestamptz</span>',
+                '',
+                '<span class="null">NULL</span>',
+                '最后登录',
+              ],
+              [
+                '',
+                '<span class="name">created_at</span>',
+                '<span class="type">timestamptz</span>',
+                '✓',
+                'NOW()',
+                '创建时间',
+              ],
+              [
+                '',
+                '<span class="name">updated_at</span>',
+                '<span class="type">timestamptz</span>',
+                '✓',
+                'NOW()',
+                '更新时间',
+              ],
+              [
+                '',
+                '<span class="name">avatar_url</span>',
+                '<span class="type">text</span>',
+                '',
+                '<span class="null">NULL</span>',
+                '头像 URL',
+              ],
+            ],
+          },
+        },
+        constraints: {
+          icon: '🔗',
+          toolbar: ['🔄', '＋', '🗑'],
+          search: '搜索...',
+          table: {
+            id: 'constraints-table',
+            headers: ['#', 'Name', 'Type', 'Columns', 'Referenced', 'Rules'],
+            rows: [
+              [
+                '',
+                '<span class="name">pk_users</span>',
+                'PRIMARY KEY',
+                '<span class="name">id</span>',
+                '—',
+                '—',
+              ],
+              [
+                '',
+                '<span class="name">uq_users_username</span>',
+                'UNIQUE',
+                '<span class="name">username</span>',
+                '—',
+                '—',
+              ],
+              [
+                '',
+                '<span class="name">uq_users_email</span>',
+                'UNIQUE',
+                '<span class="name">email</span>',
+                '—',
+                '—',
+              ],
+              [
+                '<span class="fk">FK</span>',
+                '<span class="name">fk_users_department</span>',
+                'FOREIGN KEY',
+                '<span class="name">department_id</span>',
+                '<span class="name">departments.id</span>',
+                'ON DELETE SET NULL',
+              ],
+            ],
+          },
+        },
+        indexes: {
+          icon: '🔑',
+          toolbar: ['🔄', '＋', '🗑'],
+          search: '搜索...',
+          table: {
+            id: 'indexes-table',
+            headers: ['#', 'Name', 'Type', 'Unique', 'Columns', 'Comment'],
+            rows: [
+              [
+                '<span class="pk">PK</span>',
+                '<span class="name">pk_users</span>',
+                '<span class="type">BTREE</span>',
+                '✓',
+                '<span class="name">id</span>',
+                '主键索引',
+              ],
+              [
+                '',
+                '<span class="name">uq_users_username</span>',
+                '<span class="type">BTREE</span>',
+                '✓',
+                '<span class="name">username</span>',
+                '用户名唯一',
+              ],
+              [
+                '',
+                '<span class="name">idx_users_email</span>',
+                '<span class="type">BTREE</span>',
+                '',
+                '<span class="name">email</span>',
+                '邮箱查询加速',
+              ],
+            ],
+          },
+        },
+        'foreign-keys': {
+          icon: '🔀',
+          toolbar: ['🔄'],
+          search: '搜索...',
+          table: {
+            id: 'fk-table',
+            headers: ['#', 'Name', 'Column', 'Ref Table', 'Ref Column', 'On Delete', 'On Update'],
+            rows: [
+              [
+                '<span class="fk">FK</span>',
+                '<span class="name">fk_users_department</span>',
+                '<span class="name">department_id</span>',
+                '<span class="name">departments</span>',
+                '<span class="name">id</span>',
+                'SET NULL',
+                'NO ACTION',
+              ],
+            ],
+          },
+        },
+        triggers: {
+          icon: '⚡',
+          toolbar: ['🔄'],
+          search: null,
+          empty: '此表无触发器',
+        },
+        ddl: {
+          icon: '📝',
+          toolbar: null,
+          search: null,
+          isDdl: true,
+          ddl: `<span class="sql-kw">CREATE TABLE</span> <span class="sql-type">public</span>.<span class="sql-type">users</span> (
+    <span class="sql-type">id</span> <span class="sql-type">int4</span> <span class="sql-kw">NOT NULL</span> <span class="sql-kw">DEFAULT</span> <span class="sql-func">nextval</span>(<span class="sql-str">'users_id_seq'</span>),
+    <span class="sql-type">username</span> <span class="sql-type">varchar</span>(<span class="sql-num">50</span>) <span class="sql-kw">NOT NULL</span>,
+    <span class="sql-type">email</span> <span class="sql-type">varchar</span>(<span class="sql-num">255</span>) <span class="sql-kw">NOT NULL</span>,
+    <span class="sql-type">password_hash</span> <span class="sql-type">varchar</span>(<span class="sql-num">255</span>) <span class="sql-kw">NOT NULL</span>,
+    <span class="sql-type">full_name</span> <span class="sql-type">varchar</span>(<span class="sql-num">100</span>),
+    <span class="sql-type">role</span> <span class="sql-type">varchar</span>(<span class="sql-num">20</span>) <span class="sql-kw">NOT NULL</span> <span class="sql-kw">DEFAULT</span> <span class="sql-str">'user'</span>,
+    <span class="sql-type">department_id</span> <span class="sql-type">int4</span>,
+    <span class="sql-type">is_active</span> <span class="sql-type">bool</span> <span class="sql-kw">NOT NULL</span> <span class="sql-kw">DEFAULT</span> <span class="sql-num">true</span>,
+    <span class="sql-type">last_login</span> <span class="sql-type">timestamptz</span>,
+    <span class="sql-type">created_at</span> <span class="sql-type">timestamptz</span> <span class="sql-kw">NOT NULL</span> <span class="sql-kw">DEFAULT</span> <span class="sql-func">NOW</span>(),
+    <span class="sql-type">updated_at</span> <span class="sql-type">timestamptz</span> <span class="sql-kw">NOT NULL</span> <span class="sql-kw">DEFAULT</span> <span class="sql-func">NOW</span>(),
+    <span class="sql-type">avatar_url</span> <span class="sql-type">text</span>,
+    <span class="sql-kw">CONSTRAINT</span> pk_users <span class="sql-kw">PRIMARY KEY</span> (id),
+    <span class="sql-kw">CONSTRAINT</span> uq_users_username <span class="sql-kw">UNIQUE</span> (username),
+    <span class="sql-kw">CONSTRAINT</span> uq_users_email <span class="sql-kw">UNIQUE</span> (email),
+    <span class="sql-kw">CONSTRAINT</span> fk_users_department <span class="sql-kw">FOREIGN KEY</span> (department_id)
+        <span class="sql-kw">REFERENCES</span> departments(id) <span class="sql-kw">ON DELETE SET NULL</span>
+);`,
+        },
+        permissions: {
+          icon: '🔒',
+          toolbar: ['🔄'],
+          search: null,
+          table: {
+            id: 'permissions-table',
+            headers: ['Grantee', 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES'],
+            rows: [
+              ['postgres', '✓', '✓', '✓', '✓', '✓', '✓'],
+              ['app_user', '✓', '✓', '✓', '', '', ''],
+              ['readonly', '✓', '', '', '', '', ''],
+            ],
+          },
+        },
+        // ===== 连接特有子实体 =====
+        schemas: {
+          icon: '📂',
+          toolbar: ['🔄'],
+          search: '搜索 Schema...',
+          table: {
+            id: 'schemas-table',
+            headers: ['#', 'Name', 'Owner', 'Tables', 'Views', 'Size'],
+            rows: [
+              ['', '<span class="name">public</span>', 'postgres', '12', '3', '512 MB'],
+              ['', '<span class="name">analytics</span>', 'postgres', '5', '2', '128 MB'],
+              ['', '<span class="name">logging</span>', 'postgres', '2', '0', '8 MB'],
+            ],
+          },
+        },
+        extensions: {
+          icon: '🧩',
+          toolbar: ['🔄'],
+          search: null,
+          table: {
+            id: 'extensions-table',
+            headers: ['#', 'Name', 'Version', 'Schema', 'Comment'],
+            rows: [
+              ['', '<span class="name">pg_stat_statements</span>', '1.10', 'public', '查询统计'],
+              ['', '<span class="name">uuid-ossp</span>', '1.1', 'public', 'UUID 生成'],
+              ['', '<span class="name">postgis</span>', '3.4', 'public', '地理空间'],
+            ],
+          },
+        },
+        sessions: {
+          icon: '🔌',
+          toolbar: ['🔄'],
+          search: null,
+          table: {
+            id: 'sessions-table',
+            headers: ['#', 'PID', 'User', 'Application', 'State', 'Query'],
+            rows: [
+              ['', '2741', 'postgres', 'DBeaver 24.1', 'active', 'SELECT * FROM users'],
+              ['', '2742', 'app_user', 'RdataStation', 'idle', '—'],
+              ['', '2745', 'postgres', 'psql', 'active', 'VACUUM ANALYZE'],
+            ],
+          },
+        },
+        // ===== Schema 特有子实体 =====
+        tables: {
+          icon: '📋',
+          toolbar: ['🔄'],
+          search: '搜索表名...',
+          table: {
+            id: 'tables-table',
+            headers: ['#', 'Name', 'Type', 'Rows', 'Size', 'Comment'],
+            rows: [
+              ['', '<span class="name">users</span>', 'TABLE', '1,234,567', '304 MB', '用户主表'],
+              ['', '<span class="name">departments</span>', 'TABLE', '45', '64 KB', '部门表'],
+              ['', '<span class="name">orders</span>', 'TABLE', '8,920,000', '1.2 GB', '订单表'],
+              ['', '<span class="name">products</span>', 'TABLE', '3,210', '12 MB', '产品表'],
+              ['', '<span class="name">user_summary</span>', 'VIEW', '45,230', '—', '用户汇总'],
+            ],
+          },
+        },
+        views: {
+          icon: '👁',
+          toolbar: ['🔄'],
+          search: '搜索视图名...',
+          table: {
+            id: 'views-table',
+            headers: ['#', 'Name', 'Owner', 'Definition Length', 'Created'],
+            rows: [
+              [
+                '',
+                '<span class="name">user_summary</span>',
+                'postgres',
+                '2,048 bytes',
+                '2024-03-20',
+              ],
+              [
+                '',
+                '<span class="name">order_stats</span>',
+                'postgres',
+                '1,536 bytes',
+                '2024-04-05',
+              ],
+              [
+                '',
+                '<span class="name">product_inventory</span>',
+                'postgres',
+                '896 bytes',
+                '2024-05-12',
+              ],
+            ],
+          },
+        },
+        functions: {
+          icon: 'ƒ',
+          toolbar: ['🔄'],
+          search: null,
+          table: {
+            id: 'functions-table',
+            headers: ['#', 'Name', 'Returns', 'Language', 'Volatility'],
+            rows: [
+              ['', '<span class="name">get_user_stats</span>', 'TABLE', 'sql', 'STABLE'],
+              ['', '<span class="name">hash_password</span>', 'text', 'plpgsql', 'IMMUTABLE'],
+              ['', '<span class="name">update_timestamp</span>', 'trigger', 'plpgsql', 'VOLATILE'],
+            ],
+          },
+        },
+        procedures: {
+          icon: '⚙',
+          toolbar: ['🔄'],
+          search: null,
+          table: {
+            id: 'procedures-table',
+            headers: ['#', 'Name', 'Language', 'Arguments'],
+            rows: [
+              ['', '<span class="name">cleanup_old_logs</span>', 'plpgsql', 'days integer'],
+              [
+                '',
+                '<span class="name">batch_update_roles</span>',
+                'plpgsql',
+                'old_role varchar, new_role varchar',
+              ],
+            ],
+          },
+        },
+        sequences: {
+          icon: '🔢',
+          toolbar: ['🔄'],
+          search: null,
+          table: {
+            id: 'sequences-table',
+            headers: ['#', 'Name', 'Current', 'Min', 'Max', 'Increment'],
+            rows: [
+              [
+                '',
+                '<span class="name">users_id_seq</span>',
+                '1,234,567',
+                '1',
+                '9223372036854775807',
+                '1',
+              ],
+              [
+                '',
+                '<span class="name">orders_id_seq</span>',
+                '8,920,000',
+                '1',
+                '9223372036854775807',
+                '1',
+              ],
+            ],
+          },
+        },
+      }
+
+      // ============================================================================
+      // 渲染函数（模拟 PropertiesEditor.vue 通用渲染器）
+      // ============================================================================
+
+      function renderProperties(nodeType) {
+        const tmpl = propertyTemplates[nodeType]
+        if (!tmpl) return
+
+        currentNodeType = nodeType
+
+        // 上 pane：属性网格
+        const grid = document.getElementById('propGrid')
+        grid.innerHTML = tmpl.properties
+          .map(row => {
+            return row
+              .map((cell, i) => {
+                const cls = i % 2 === 0 ? 'key' : 'val'
+                const editable = cell === 'users' || cell === 'pg_default' || cell === '用户主表'
+                return `<div class="prop-cell ${cls}${editable ? ' editable' : ''}"${editable ? ' contenteditable="true"' : ''}>${cell}</div>`
+              })
+              .join('')
+          })
+          .join('')
+
+        // 下 pane：子实体 Tab
+        const subTabs = document.getElementById('subTabs')
+        const subContent = document.getElementById('subContent')
+
+        subTabs.innerHTML = tmpl.subEntities
+          .map((id, i) => {
+            const ent = subEntityTemplates[id]
+            const active = i === 0 ? ' active' : ''
+            const count = ent.table ? ent.table.rows.length : ent.isDdl ? '' : ent.empty ? '0' : ''
+            return `<div class="sub-tab${active}" onclick="showSubTab(this, '${id}')">
+      <span class="icon">${ent.icon}</span> ${capitalize(id)} <span style="font-size:10px;margin-left:auto;color:var(--text-muted)">${count}</span>
+    </div>`
+          })
+          .join('')
+
+        subContent.innerHTML = ''
+
+        // 面包屑
+        const breadcrumb = document.getElementById('breadcrumb')
+        const scopeClass = tmpl.scope === 'global' ? 'global' : 'project'
+        const scopeLabel = tmpl.scope === 'global' ? '全局' : '项目'
+        const parts = tmpl.breadcrumb
+        breadcrumb.innerHTML =
+          parts
+            .map((p, i) => {
+              if (i === parts.length - 1) {
+                return `<span class="current">${p.replace(/^[^\s]+\s/, '')}</span>`
+              }
+              return `<span>${p}</span><span class="sep">/</span>`
+            })
+            .join('') +
+          `<span class="scope-badge ${scopeClass}">${scopeLabel}</span><span class="node-type-badge">${tmpl.type}</span>`
+
+        // 状态栏
+        document.getElementById('statusText').textContent =
+          `双击导航树节点打开属性编辑器 | 当前节点类型：${nodeType} | Scope：${scopeLabel}`
+
+        // 渲染第一个子实体
+        showSubTab(subTabs.querySelector('.sub-tab'), tmpl.subEntities[0])
+
+        // 绑定编辑事件
+        document.querySelectorAll('.prop-cell.val.editable').forEach(el => {
+          el.addEventListener('input', () => {
+            document.getElementById('saveBtn').disabled = false
+            document.getElementById('revertBtn').disabled = false
+          })
+        })
+      }
+
+      function capitalize(s) {
+        return s.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+      }
+
+      function showSubTab(el, panelId) {
+        document.querySelectorAll('#subTabs .sub-tab').forEach(t => t.classList.remove('active'))
+        if (el) el.classList.add('active')
+
+        const subContent = document.getElementById('subContent')
+        const ent = subEntityTemplates[panelId]
+        if (!ent) return
+
+        let html = ''
+
+        // DDL 特殊处理
+        if (ent.isDdl) {
+          html = `<div class="ddl-toolbar">
+      <button class="tb-btn-text" onclick="toast('加载 DDL 文件')">📂 Load from file</button>
+      <button class="tb-btn-text" onclick="toast('保存 DDL 到文件')">💾 Save to file</button>
+      <span class="tb-spacer"></span>
+      <button class="tb-btn-text" onclick="toast('已在 SQL 控制台打开 DDL')">📝 Open in SQL console</button>
+    </div>
+    <div class="ddl-content"><pre>${ent.ddl}</pre></div>`
+        }
+        // 空状态
+        else if (ent.empty) {
+          html = `<div class="sub-toolbar">
+      <button class="tb-btn">🔄</button>
+      <span class="tb-spacer"></span>
+    </div>
+    <div class="empty-state">
+      <span class="icon">📭</span>
+      <span>${ent.empty}</span>
+    </div>`
+        }
+        // 表格
+        else if (ent.table) {
+          const searchHtml = ent.search
+            ? `<input class="tb-search" type="text" placeholder="${ent.search}" oninput="filterTable(this, '${ent.table.id}')">`
+            : ''
+          const toolbarButtons = (ent.toolbar || [])
+            .map(b => `<button class="tb-btn" title="${b}">${b}</button>`)
+            .join('')
+
+          html = `<div class="sub-toolbar">
+      ${toolbarButtons}
+      <span class="tb-spacer"></span>
+      ${searchHtml}
+      <button class="tb-btn" title="列配置">⚙</button>
+    </div>
+    <div class="sub-table-wrap">
+      <table class="sub-table" id="${ent.table.id}">
+        <thead><tr>${ent.table.headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
+        <tbody>${ent.table.rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>`
+        }
+
+        subContent.innerHTML = html
+      }
+
+      // ============================================================================
+      // 交互
+      // ============================================================================
+
+      function showTopTab(tab) {
+        document.querySelectorAll('.top-tab').forEach(t => t.classList.remove('active'))
+        document.querySelectorAll('.top-tab').forEach(t => {
+          if (t.textContent.trim().toLowerCase().includes(tab)) t.classList.add('active')
+        })
+        document.getElementById('propsContent').style.display =
+          tab === 'properties' ? 'flex' : 'none'
+        document.getElementById('dataContent').style.display = tab === 'data' ? 'flex' : 'none'
+      }
+
+      function filterTable(input, tableId) {
+        const q = input.value.toLowerCase()
+        const rows = document.querySelectorAll('#' + tableId + ' tbody tr')
+        rows.forEach(r => {
+          r.style.display = q === '' || r.textContent.toLowerCase().includes(q) ? '' : 'none'
+        })
+      }
+
+      function toast(msg) {
+        const t = document.getElementById('toast')
+        t.textContent = msg
+        t.classList.add('show')
+        clearTimeout(t._tid)
+        t._tid = setTimeout(() => t.classList.remove('show'), 2000)
+      }
+
+      function switchNodeType(type, el) {
+        document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'))
+        if (el) el.classList.add('active')
+        renderProperties(type)
+      }
+
+      function selectTreeNode(el, nodeType) {
+        document.querySelectorAll('.tree-item').forEach(t => t.classList.remove('selected'))
+        el.classList.add('selected')
+        switchNodeType(nodeType, document.querySelector(`.demo-tab[onclick*="${nodeType}"]`))
+
+        const name = el.querySelector('.name').textContent
+        const scopeTag = el.querySelector('.scope-tag')
+        const scope = scopeTag ? scopeTag.textContent.trim() : '全局'
+        toast(`双击 "${name}" [${scope}] → 打开属性编辑器`)
+      }
+
+      // ============================================================================
+      // 初始化
+      // ============================================================================
+      renderProperties('table')
+    </script>
+  </body>
+</html>

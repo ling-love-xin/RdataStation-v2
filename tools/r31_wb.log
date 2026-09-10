@@ -1,0 +1,140 @@
+﻿cargo :    Compiling semver v1.0.28
+所在位置 行:1 字符: 71
++ ... button.py"; cargo test -p rds-workbench -j 2 --manifest-path "D:\Rdat ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling semver v1.0.28:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling tokio-postgres v0.7.18
+   Compiling rustc_version v0.4.1
+   Compiling flatbuffers v25.12.19
+   Compiling curve25519-dalek v4.1.3
+   Compiling embed-resource v3.0.11
+   Compiling gpui-pre v0.3.4
+   Compiling arrow-ipc v58.4.0
+   Compiling ed25519-dalek v2.2.0
+   Compiling specta v2.0.0-rc.25
+   Compiling ssh-key v0.6.7
+   Compiling arrow v58.4.0
+   Compiling duckdb v1.10505.0
+   Compiling russh-keys v0.49.2
+   Compiling rds-shared v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\shared)
+   Compiling gpui-pre-windows v0.3.4
+   Compiling russh v0.49.2
+   Compiling mysql_common v0.32.4
+   Compiling mysql_async v0.34.2
+   Compiling rds-connection v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\connection)
+   Compiling gpui-pre-platform v0.3.4
+   Compiling postgres-native-tls v0.5.3
+   Compiling rds-engine v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\engine)
+   Compiling gpui-base v0.6.0
+   Compiling gpui-kit-assets v0.6.0
+   Compiling bigdecimal v0.4.10
+   Compiling fake v5.1.0
+   Compiling gpui-component v0.6.0
+   Compiling rds-mock v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\mock)
+   Compiling gpui-kit v0.6.0
+   Compiling rds-insight v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\insight)
+   Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\examples\seed_demo.lib 和对象 D:\RdataStati
+on\RDS\RdataStation-v2\target\debug\examples\seed_demo.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (example "seed_demo") generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-e479c56af6db683d.lib 
+和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-e479c56af6db683d.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (lib test) generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\query_history-4cff723e830ec1ba.lib 
+和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\query_history-4cff723e830ec1ba.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "query_history") generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-61da885b3bba9f6d.l
+ib 和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\real_connections-61da885b3bba9f6d.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "real_connections") generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\query_export-65a9394bb73b224d.lib 和
+对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\query_export-65a9394bb73b224d.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\db_navigator-2893d107d270c7b7.lib 和
+对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\db_navigator-2893d107d270c7b7.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "query_export") generated 1 warning
+warning: `rds-workbench` (test "db_navigator") generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\mock_generator-93bcddb2e150ffdc.lib
+ 和对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\mock_generator-93bcddb2e150ffdc.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "mock_generator") generated 1 warning
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\query_runner-5e24a99702d70449.lib 和
+对象 D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\query_runner-5e24a99702d70449.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (test "query_runner") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 56s
+     Running unittests src\lib.rs (D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\rds_workbench-e479c56af6db683d
+.exe)
+
+running 8 tests
+test services::secret_integration::tests::test_parse_without_creds ... ok
+test services::secret_integration::tests::test_parse_full_url ... ok
+test services::secret_integration::tests::test_parse_file_db ... ok
+test services::secret_integration::tests::test_db_type_mapping ... ok
+test services::secret_integration::tests::test_secret_name_sanitize ... ok
+test services::connection_service::tests::test_connect_empty_url ... ok
+test services::connection_service::tests::test_connect_invalid_db_type ... ok
+test services::secret_integration::tests::test_register_postgres_secret_roundtrip ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests\db_navigator.rs (D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\db_navigator-2893d107d270c7b7
+.exe)
+
+running 2 tests
+test navigator_empty_db_returns_empty ... ok
+test navigator_reads_tables_and_columns ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests\mock_generator.rs (D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\mock_generator-93bcddb2e150
+ffdc.exe)
+
+running 3 tests
+test parse_data_type_maps_common_types ... FAILED
+test generate_for_table_empty_columns_errors ... ok
+test generate_for_table_writes_rows_to_duckdb ... FAILED
+
+failures:
+
+---- parse_data_type_maps_common_types stdout ----
+
+thread 'parse_data_type_maps_common_types' (28100) panicked at crates\workbench\tests\mock_generator.rs:101:5:
+assertion failed: matches!(parse_data_type("DECIMAL(12,2)"), ColumnDataType::Decimal { .. })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- generate_for_table_writes_rows_to_duckdb stdout ----
+
+thread 'generate_for_table_writes_rows_to_duckdb' (27060) panicked at D:\Dev\Rust\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\duckdb-1.10505.0\src\raw_statement.rs:138:30:
+The statement was not executed yet
+
+
+failures:
+    generate_for_table_writes_rows_to_duckdb
+    parse_data_type_maps_common_types
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+error: test failed, to rerun pass `-p rds-workbench --test mock_generator`

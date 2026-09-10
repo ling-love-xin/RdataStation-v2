@@ -1,0 +1,50 @@
+[meta]
+id = "table-null-overview"
+name = "空值率总览"
+description = "计算表中每列的空值数和空值率"
+version = "1.0"
+category = "table"
+applies_to = ["Any"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    '{col}' AS column_name,
+    COUNT(*) AS total_count,
+    COUNT("{col}") AS non_null_count,
+    COUNT(*) - COUNT("{col}") AS null_count,
+    CASE WHEN COUNT(*) > 0 THEN ROUND((COUNT(*) - COUNT("{col}")) * 100.0 / COUNT(*), 2) ELSE 0 END AS null_rate_pct
+FROM "{table}"
+"""
+parameters = ["table", "col"]
+result_type = "list"
+
+[[output]]
+sql_name = "column_name"
+json_name = "column_name"
+value_type = "str"
+
+[[output]]
+sql_name = "total_count"
+json_name = "total_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "non_null_count"
+json_name = "non_null_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "null_count"
+json_name = "null_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "null_rate_pct"
+json_name = "null_rate_pct"
+value_type = "f64"
+
+[render]
+component = "NullRateBarChart"
+display_order = 3

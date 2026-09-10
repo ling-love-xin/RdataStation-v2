@@ -1,0 +1,25 @@
+{
+  "name": "workbench",
+  "publisher": "rdatastation",
+  "version": "1.0.0",
+  "displayName": "Workbench",
+  "description": "workbench module for RdataStation",
+  "categories": [
+    "Core"
+  ],
+  "keywords": [
+    "workbench"
+  ],
+  "engines": {
+    "rdatastation": "^0.1.0"
+  },
+  "activationEvents": [
+    "onProjectOpen"
+  ],
+  "contributes": {
+    "commands": [],
+    "menus": {},
+    "views": {}
+  },
+  "main": "./extension.ts"
+}

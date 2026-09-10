@@ -1,0 +1,39 @@
+[meta]
+id = "text-frequency"
+name = "文本频率分布"
+description = "计算文本列 Top10 高频值、长度范围"
+version = "1.0"
+category = "column"
+applies_to = ["Text", "VARCHAR", "STRING"]
+builtin = true
+
+[query]
+template = """
+SELECT "{col}"::VARCHAR AS value, COUNT(*) AS count, COUNT(*) * 1.0 / SUM(COUNT(*)) OVER() AS ratio
+FROM "{table}"
+WHERE "{col}" IS NOT NULL
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 10
+"""
+parameters = ["table", "col"]
+result_type = "list"
+
+[[output]]
+sql_name = "value"
+json_name = "value"
+value_type = "string"
+
+[[output]]
+sql_name = "count"
+json_name = "count"
+value_type = "usize"
+
+[[output]]
+sql_name = "ratio"
+json_name = "ratio"
+value_type = "f64"
+
+[render]
+component = "TextFrequencyTable"
+display_order = 3

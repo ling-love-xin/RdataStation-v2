@@ -1,0 +1,52 @@
+﻿cargo :    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+所在位置 行:1 字符: 130
++ ... ct -Last 2; cargo test -p rds-workbench -j 2 --manifest-path "D:\Rdat ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling rd...ates\workbench):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+warning: linker stdout: 正在创建库 D:\RdataStation\RDS\RdataStation-v2\target\debug\examples\seed_demo.lib 和对象 D:\RdataStati
+on\RDS\RdataStation-v2\target\debug\examples\seed_demo.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `rds-workbench` (example "seed_demo") generated 1 warning
+error: crate `libduckdb_sys` required to be available in rlib format, but was not found in this form
+
+error: failed to write file \\?\D:\RdataStation\RDS\RdataStation-v2\target\debug\incremental\rds_workbench-3abidpxeedxv
+l\s-hm4xkupp3o-0ubhof9-working\dep-graph.part.bin: 磁盘空间不足。 (os error 112)"
+
+error: could not compile `rds-workbench` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+rustc-LLVM ERROR: IO failure on output stream: no space on device
+error: could not compile `rds-workbench` (test "real_connections")
+
+Caused by:
+  process didn't exit successfully: `D:\Dev\Rust\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\rustc.exe --crate
+-name real_connections --edition=2021 crates\workbench\tests\real_connections.rs --error-format=json --json=diagnostic-
+rendered-ansi,artifacts,future-incompat --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 --test --check-cfg cfg(
+docsrs,test) --check-cfg "cfg(feature, values())" -C metadata=bd16f9db6b9f8e49 -C extra-filename=-2f7cb662bf0cd4ed --ou
+t-dir D:\RdataStation\RDS\RdataStation-v2\target\debug\deps -C incremental=D:\RdataStation\RDS\RdataStation-v2\target\d
+ebug\incremental -L dependency=D:\RdataStation\RDS\RdataStation-v2\target\debug\deps --extern duckdb=D:\RdataStation\RD
+S\RdataStation-v2\target\debug\deps\libduckdb-faab93ecca7a3ac4.rlib --extern gpui_kit=D:\RdataStation\RDS\RdataStation-
+v2\target\debug\deps\libgpui_kit-5f44e64f985a7346.rlib --extern percent_encoding=D:\RdataStation\RDS\RdataStation-v2\ta
+rget\debug\deps\libpercent_encoding-33dc516f615cccda.rlib --extern connection=D:\RdataStation\RDS\RdataStation-v2\targe
+t\debug\deps\librds_connection-db1fcab74e7d1dea.rlib --extern engine=D:\RdataStation\RDS\RdataStation-v2\target\debug\d
+eps\librds_engine-7ebdded8449f6ed6.rlib --extern insight=D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\librds_i
+nsight-f16c269f46888cd1.rlib --extern shared=D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\librds_shared-73b2b7
+77fdcccb89.rlib --extern rds_workbench=D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\librds_workbench-e578858cc
+96ebef6.rlib --extern rusqlite=D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\librusqlite-72f2fac0d701493c.rlib 
+--extern serde=D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\libserde-b94b664c9a8796d4.rlib --extern serde_json
+=D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\libserde_json-d03351ca72382d8c.rlib --extern sha2=D:\RdataStatio
+n\RDS\RdataStation-v2\target\debug\deps\libsha2-7032475b32feb9f5.rlib --extern specta=D:\RdataStation\RDS\RdataStation-
+v2\target\debug\deps\libspecta-bc052467b36397c4.rlib --extern tokio=D:\RdataStation\RDS\RdataStation-v2\target\debug\de
+ps\libtokio-5400eef50ba3e444.rlib --extern tracing=D:\RdataStation\RDS\RdataStation-v2\target\debug\deps\libtracing-705
+4d355a46e4fe5.rlib -L native=D:\RdataStation\RDS\RdataStation-v2\target\debug\build\libduckdb-sys-e3d969bda6341276\out 
+-L native=D:\RdataStation\RDS\RdataStation-v2\target\debug\build\gpui-pre-ae845b38e03581a2\out -L native=D:\RdataStatio
+n\RDS\RdataStation-v2\target\debug\build\aws-lc-sys-65ae161f3bcb1067\out -L native=D:\RdataStation\RDS\RdataStation-v2\
+target\debug\build\ring-183b0599cec1fdfd\out -L native=D:\RdataStation\RDS\RdataStation-v2\target\debug\build\libsqlite
+3-sys-bbbf98c94c199f7b\out -L native=D:\RdataStation\RDS\RdataStation-v2\target\debug\build\zstd-sys-8946674b715b6233\o
+ut -L native=D:\Dev\Rust\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\windows_x86_64_msvc-0.52.6\l
+ib -L native=D:\Dev\Rust\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\windows_x86_64_msvc-0.53.1\l
+ib -L native=D:\Dev\Rust\.cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\windows_x86_64_msvc-0.48.5\l
+ib` (exit code: 101)

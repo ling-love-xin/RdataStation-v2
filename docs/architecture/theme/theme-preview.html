@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation v2 明暗主题配色方案</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #141414; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; color: #d4d4d4; padding: 20px; }
+  h1 { font-size: 16px; color: #fff; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: #9a9a9a; margin-bottom: 18px; }
+  .cols { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+
+  /* 主题面板 */
+  .panel { flex: 1; min-width: 430px; border: 1px solid #3c3c3c; border-radius: 8px; overflow: hidden; background: #1e1e1e; }
+  .panel.light { background: #ffffff; border-color: #d4d4d4; }
+  .panel-head { padding: 10px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid; }
+  .panel.dark .panel-head { background: #1e1e1e; color: #fff; border-color: #3c3c3c; }
+  .panel.light .panel-head { background: #f3f3f3; color: #333; border-color: #e7e7e7; }
+  .panel-head .mode { font-size: 11px; font-weight: 400; opacity: .7; margin-left: 8px; }
+
+  /* 迷你窗口示意 */
+  .win { border-radius: 6px; overflow: hidden; margin: 12px 14px 0; border: 1px solid; }
+  .panel.dark .win { border-color: #3c3c3c; }
+  .panel.light .win { border-color: #d4d4d4; }
+  .win-title { display: flex; align-items: center; height: 28px; padding: 0 8px; font-size: 11px; }
+  .panel.dark .win-title { background: #323233; color: #9a9a9a; }
+  .panel.light .win-title { background: #dddddd; color: #616161; }
+  .win-logo { width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; }
+  .panel.dark .win-logo { background: linear-gradient(135deg, #E8735A, #F5A188); }
+  .panel.light .win-logo { background: linear-gradient(135deg, #C25B46, #E8735A); }
+  .win-cutout { font-size: 10px; padding: 2px 8px; border-radius: 4px; border: 1px dashed; }
+  .panel.dark .win-cutout { background: #252526; border-color: #E8846F; color: #9cdcfe; margin-left: 4px; }
+  .panel.light .win-cutout { background: #f3f3f3; border-color: #C25B46; color: #333; margin-left: 4px; }
+  .win-search { margin-left: auto; width: 120px; height: 18px; border-radius: 3px; font-size: 9px; display: flex; align-items: center; padding: 0 6px; }
+  .panel.dark .win-search { background: #3c3c3c; border: 1px solid #E8846F; color: #8a8a8a; }
+  .panel.light .win-search { background: #fff; border: 1px solid #C25B46; color: #8e8e8e; }
+  .win-ctrl { display: flex; margin-left: 8px; gap: 2px; }
+  .win-ctrl span { width: 22px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 9px; }
+  .win-body { display: flex; height: 140px; }
+  .win-act { width: 22px; display: flex; flex-direction: column; align-items: center; padding-top: 6px; font-size: 10px; gap: 6px; }
+  .panel.dark .win-act { background: #333333; color: #858585; }
+  .panel.light .win-act { background: #ececec; color: #616161; }
+  .win-act .on { color: #fff; border-left: 2px solid #fff; }
+  .panel.light .win-act .on { color: #333; border-left-color: #C25B46; }
+  .win-side { width: 70px; font-size: 9px; padding: 8px; line-height: 1.7; }
+  .panel.dark .win-side { background: #252526; color: #cccccc; border-right: 1px solid #3c3c3c; }
+  .panel.light .win-side { background: #f3f3f3; color: #616161; border-right: 1px solid #e7e7e7; }
+  .win-side .sel { display: inline-block; padding: 0 4px; border-radius: 2px; }
+  .panel.dark .win-side .sel { background: #37373d; color: #fff; }
+  .panel.light .win-side .sel { background: #e4e4e4; color: #333; }
+  .win-editor { flex: 1; font-family: Consolas, monospace; font-size: 9px; padding: 8px; line-height: 1.7; }
+  .panel.dark .win-editor { background: #1e1e1e; color: #d4d4d4; }
+  .panel.light .win-editor { background: #ffffff; color: #000; }
+  .win-status { display: flex; align-items: center; justify-content: space-between; height: 20px; font-size: 9px; color: #fff; padding: 0 8px; }
+  .panel.dark .win-status { background: #A84A38; }
+  .panel.light .win-status { background: #C25B46; }
+
+  /* token 色卡 */
+  .section { padding: 14px; }
+  .section h3 { font-size: 12px; margin-bottom: 10px; font-weight: 600; }
+  .panel.dark .section h3 { color: #fff; }
+  .panel.light .section h3 { color: #333; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .chip { display: flex; align-items: center; gap: 8px; font-size: 10px; }
+  .panel.dark .chip { color: #cccccc; }
+  .panel.light .chip { color: #616161; }
+  .sw { width: 26px; height: 18px; border-radius: 3px; border: 1px solid rgba(0,0,0,.15); flex: none; }
+  .chip .name { flex: 1; }
+  .chip .hex { opacity: .65; font-family: Consolas, monospace; }
+
+  /* 语法高亮 */
+  pre.sql { font-family: Consolas, monospace; font-size: 11px; line-height: 1.8; padding: 10px 12px; border-radius: 6px; margin-top: 8px; border: 1px solid; overflow-x: auto; }
+  .panel.dark pre.sql { background: #1e1e1e; border-color: #3c3c3c; }
+  .panel.light pre.sql { background: #ffffff; border-color: #e7e7e7; }
+  .panel.dark .kw { color: #569CD6; } .panel.light .kw { color: #0000FF; }
+  .panel.dark .st { color: #CE9178; } .panel.light .st { color: #A31515; }
+  .panel.dark .fn { color: #DCDCAA; } .panel.light .fn { color: #795E26; }
+  .panel.dark .cm { color: #6A9955; } .panel.light .cm { color: #008000; }
+  .panel.dark .nu { color: #B5CEA8; } .panel.light .nu { color: #098658; }
+  .panel.dark .ty { color: #4EC9B0; } .panel.light .ty { color: #267F99; }
+  .panel.dark .pr { color: #9CDCFE; } .panel.light .pr { color: #0451A5; }
+
+  .foot { margin-top: 16px; font-size: 11px; color: #8a8a8a; line-height: 1.8; }
+  .foot code { background: #252526; padding: 1px 6px; border-radius: 3px; color: #9cdcfe; }
+</style>
+</head>
+<body>
+<h1>RdataStation v2 明暗主题配色方案</h1>
+<div class="sub">VSCode 灰度骨架 + 品牌 coral（#E8735A 系）· 落地文件：assets/themes/rds-theme.json</div>
+
+<div class="cols">
+  <!-- 浅色 -->
+  <div class="panel light">
+    <div class="panel-head">RDS Light<span class="mode">mode: light</span></div>
+    <div class="win">
+      <div class="win-title">
+        <div class="win-logo"></div><span style="opacity:.7">项目</span>
+        <span class="win-cutout">营销分析</span>
+        <div class="win-search">搜索或输入命令…</div>
+        <div class="win-ctrl"><span>─</span><span>□</span><span>✕</span></div>
+      </div>
+      <div class="win-body">
+        <div class="win-act"><span>▤</span><span class="on">▣</span><span>▥</span><span>▦</span></div>
+        <div class="win-side">
+          项目：营销分析<br>
+          <span class="sel">▸ 本地 MySQL</span><br>
+          &nbsp;&nbsp;▸ analytics<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;orders
+        </div>
+        <div class="win-editor">
+          <span class="cm">-- 订单画像</span><br>
+          <span class="kw">SELECT</span> customer_id, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> cnt<br>
+          <span class="kw">FROM</span> analytics.orders<br>
+          <span class="kw">WHERE</span> created_at <span class="kw">&gt;=</span> <span class="st">'2026-01-01'</span>
+        </div>
+        <div class="win-act"><span>✦</span><span>⚗</span><span>◷</span></div>
+      </div>
+      <div class="win-status"><span>« 完全隐藏 | 数据库导航</span><span>本地 MySQL · DuckDB · UTF-8</span></div>
+    </div>
+
+    <div class="section">
+      <h3>布局灰度层</h3>
+      <div class="grid">
+        <div class="chip"><div class="sw" style="background:#FFFFFF"></div><span class="name">编辑器 background</span><span class="hex">#FFFFFF</span></div>
+        <div class="chip"><div class="sw" style="background:#F3F3F3"></div><span class="name">侧边栏 sidebar</span><span class="hex">#F3F3F3</span></div>
+        <div class="chip"><div class="sw" style="background:#ECECEC"></div><span class="name">活动栏 (常量)</span><span class="hex">#ECECEC</span></div>
+        <div class="chip"><div class="sw" style="background:#DDDDDD"></div><span class="name">标题栏 title_bar</span><span class="hex">#DDDDDD</span></div>
+        <div class="chip"><div class="sw" style="background:#C25B46"></div><span class="name">状态栏 (primary)</span><span class="hex">#C25B46</span></div>
+        <div class="chip"><div class="sw" style="background:#E4E4E4"></div><span class="name">选中项 accent</span><span class="hex">#E4E4E4</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>关键 token</h3>
+      <div class="grid">
+        <div class="chip"><div class="sw" style="background:#333333"></div><span class="name">foreground</span><span class="hex">#333333</span></div>
+        <div class="chip"><div class="sw" style="background:#616161"></div><span class="name">muted.foreground</span><span class="hex">#616161</span></div>
+        <div class="chip"><div class="sw" style="background:#D4D4D4"></div><span class="name">border</span><span class="hex">#D4D4D4</span></div>
+        <div class="chip"><div class="sw" style="background:#C25B46"></div><span class="name">primary / link</span><span class="hex">#C25B46</span></div>
+        <div class="chip"><div class="sw" style="background:#ADD6FF"></div><span class="name">selection</span><span class="hex">#ADD6FF</span></div>
+        <div class="chip"><div class="sw" style="background:#FFFFFF"></div><span class="name">popover / tab.active</span><span class="hex">#FFFFFF</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>语义色</h3>
+      <div class="grid">
+        <div class="chip"><div class="sw" style="background:#16A34A"></div><span class="name">success</span><span class="hex">#16A34A</span></div>
+        <div class="chip"><div class="sw" style="background:#DC2626"></div><span class="name">danger</span><span class="hex">#DC2626</span></div>
+        <div class="chip"><div class="sw" style="background:#B45309"></div><span class="name">warning</span><span class="hex">#B45309</span></div>
+        <div class="chip"><div class="sw" style="background:#2563EB"></div><span class="name">info</span><span class="hex">#2563EB</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 深色 -->
+  <div class="panel dark">
+    <div class="panel-head">RDS Dark<span class="mode">mode: dark</span></div>
+    <div class="win">
+      <div class="win-title">
+        <div class="win-logo"></div><span style="opacity:.7">项目</span>
+        <span class="win-cutout">营销分析</span>
+        <div class="win-search">搜索或输入命令…</div>
+        <div class="win-ctrl"><span>─</span><span>□</span><span>✕</span></div>
+      </div>
+      <div class="win-body">
+        <div class="win-act"><span>▤</span><span class="on">▣</span><span>▥</span><span>▦</span></div>
+        <div class="win-side">
+          项目：营销分析<br>
+          <span class="sel">▸ 本地 MySQL</span><br>
+          &nbsp;&nbsp;▸ analytics<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;orders
+        </div>
+        <div class="win-editor">
+          <span class="cm">-- 订单画像</span><br>
+          <span class="kw">SELECT</span> customer_id, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> cnt<br>
+          <span class="kw">FROM</span> analytics.orders<br>
+          <span class="kw">WHERE</span> created_at <span class="kw">&gt;=</span> <span class="st">'2026-01-01'</span>
+        </div>
+        <div class="win-act"><span>✦</span><span>⚗</span><span>◷</span></div>
+      </div>
+      <div class="win-status"><span>« 完全隐藏 | 数据库导航</span><span>本地 MySQL · DuckDB · UTF-8</span></div>
+    </div>
+
+    <div class="section">
+      <h3>布局灰度层</h3>
+      <div class="grid">
+        <div class="chip"><div class="sw" style="background:#1E1E1E"></div><span class="name">编辑器 background</span><span class="hex">#1E1E1E</span></div>
+        <div class="chip"><div class="sw" style="background:#252526"></div><span class="name">侧边栏 sidebar</span><span class="hex">#252526</span></div>
+        <div class="chip"><div class="sw" style="background:#333333"></div><span class="name">活动栏 (常量)</span><span class="hex">#333333</span></div>
+        <div class="chip"><div class="sw" style="background:#323233"></div><span class="name">标题栏 title_bar</span><span class="hex">#323233</span></div>
+        <div class="chip"><div class="sw" style="background:#A84A38"></div><span class="name">状态栏 (primary)</span><span class="hex">#A84A38</span></div>
+        <div class="chip"><div class="sw" style="background:#37373D"></div><span class="name">选中项 accent</span><span class="hex">#37373D</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>关键 token</h3>
+      <div class="grid">
+        <div class="chip"><div class="sw" style="background:#CCCCCC"></div><span class="name">foreground</span><span class="hex">#CCCCCC</span></div>
+        <div class="chip"><div class="sw" style="background:#8A8A8A"></div><span class="name">muted.foreground</span><span class="hex">#8A8A8A</span></div>
+        <div class="chip"><div class="sw" style="background:#3C3C3C"></div><span class="name">border</span><span class="hex">#3C3C3C</span></div>
+        <div class="chip"><div class="sw" style="background:#E8846F"></div><span class="name">primary / link</span><span class="hex">#E8846F</span></div>
+        <div class="chip"><div class="sw" style="background:#264F78"></div><span class="name">selection</span><span class="hex">#264F78</span></div>
+        <div class="chip"><div class="sw" style="background:#252526"></div><span class="name">popover / tab.active</span><span class="hex">#252526</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>语义色</h3>
+      <div class="grid">
+        <div class="chip"><div class="sw" style="background:#14532D"></div><span class="name">success</span><span class="hex">#14532D</span></div>
+        <div class="chip"><div class="sw" style="background:#5A1D1D"></div><span class="name">danger</span><span class="hex">#5A1D1D</span></div>
+        <div class="chip"><div class="sw" style="background:#5A4D08"></div><span class="name">warning</span><span class="hex">#5A4D08</span></div>
+        <div class="chip"><div class="sw" style="background:#1A3D5C"></div><span class="name">info</span><span class="hex">#1A3D5C</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="foot">
+  语法高亮采用 VSCode Dark+/Light+ 色板（见两面板 SQL 示例）。<br>
+  落地：<code>assets/themes/rds-theme.json</code> 通过 <code>ThemeRegistry::watch_dir</code> 加载，<code>Theme::change(mode)</code> 切换；活动栏背景为代码常量（dark #333333 / light #ECECEC），状态栏用 <code>theme.colors.primary</code>。
+</div>
+</body>
+</html>

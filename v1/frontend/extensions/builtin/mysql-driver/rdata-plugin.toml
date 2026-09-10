@@ -1,0 +1,18 @@
+[plugin]
+id = "rdatastation.mysql-driver"
+name = "MySQL Driver"
+version = "1.0.0"
+publisher = "rdatastation"
+description = "MySQL database driver for RdataStation"
+engines = { rdatastation = "^0.1.0" }
+
+[capabilities.frontend]
+entry = "./extension.ts"
+activation_events = ["onProjectOpen", "onDatabaseConnect:mysql"]
+
+[contributes.drivers]
+mysql = { name = "MySQL", icon = "Database", default_port = 3306 }
+
+[contributes.commands]
+"mysql.refreshSchema" = { title = "Refresh Schema", icon = "RefreshCw" }
+"mysql.showProcessList" = { title = "Show Process List", icon = "List" }

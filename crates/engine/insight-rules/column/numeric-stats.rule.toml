@@ -1,0 +1,80 @@
+[meta]
+id = "numeric-stats"
+name = "数值列基础统计"
+description = "计算 min/max/avg/median/p25/p75/sum/stddev/skewness/kurtosis"
+version = "1.0"
+category = "column"
+applies_to = ["Numeric"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    MIN("{col}")::DOUBLE AS min_val,
+    MAX("{col}")::DOUBLE AS max_val,
+    AVG("{col}")::DOUBLE AS avg_val,
+    MEDIAN("{col}")::DOUBLE AS median_val,
+    PERCENTILE_DISC(0.25) WITHIN GROUP (ORDER BY "{col}")::DOUBLE AS p25,
+    PERCENTILE_DISC(0.75) WITHIN GROUP (ORDER BY "{col}")::DOUBLE AS p75,
+    SUM("{col}")::DOUBLE AS sum_val,
+    STDDEV_SAMP("{col}")::DOUBLE AS stddev_val,
+    SKEWNESS("{col}")::DOUBLE AS skewness_val,
+    KURTOSIS("{col}")::DOUBLE AS kurtosis_val
+FROM "{table}"
+WHERE "{col}" IS NOT NULL
+"""
+parameters = ["table", "col"]
+
+[[output]]
+sql_name = "min_val"
+json_name = "min"
+value_type = "f64"
+
+[[output]]
+sql_name = "max_val"
+json_name = "max"
+value_type = "f64"
+
+[[output]]
+sql_name = "avg_val"
+json_name = "avg"
+value_type = "f64"
+
+[[output]]
+sql_name = "median_val"
+json_name = "median"
+value_type = "f64"
+
+[[output]]
+sql_name = "p25"
+json_name = "p25"
+value_type = "f64"
+
+[[output]]
+sql_name = "p75"
+json_name = "p75"
+value_type = "f64"
+
+[[output]]
+sql_name = "sum_val"
+json_name = "sum"
+value_type = "f64"
+
+[[output]]
+sql_name = "stddev_val"
+json_name = "stddev"
+value_type = "f64?"
+
+[[output]]
+sql_name = "skewness_val"
+json_name = "skewness"
+value_type = "f64?"
+
+[[output]]
+sql_name = "kurtosis_val"
+json_name = "kurtosis"
+value_type = "f64?"
+
+[render]
+component = "NumericStatsTable"
+display_order = 1

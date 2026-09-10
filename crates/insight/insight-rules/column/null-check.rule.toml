@@ -1,0 +1,43 @@
+[meta]
+id = "null-check"
+name = "空值率检查"
+description = "计算列的总行数、非空行数、空值率、去重数"
+version = "1.0"
+category = "column"
+applies_to = ["Any"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    COUNT(*) AS total,
+    COUNT("{col}") AS non_null,
+    COUNT(DISTINCT "{col}") AS unique_cnt
+FROM "{table}"
+"""
+parameters = ["table", "col"]
+
+[[output]]
+sql_name = "total"
+json_name = "total_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "non_null"
+json_name = "non_null_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "unique_cnt"
+json_name = "unique_count"
+value_type = "i64"
+
+[[quality]]
+field = "null_rate"
+max = 0.1
+severity = "warning"
+message = "空值率超过 10%"
+
+[render]
+component = "NullCheckInfo"
+display_order = 0

@@ -1,0 +1,42 @@
+[meta]
+id = "cross-tab"
+name = "交叉频次表"
+description = "计算两个分类列的二维频次矩阵"
+version = "1.0"
+category = "multi"
+applies_to = ["Text", "Text"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    "{col1}"::VARCHAR AS row_value,
+    "{col2}"::VARCHAR AS col_value,
+    COUNT(*) AS cnt
+FROM "{table}"
+WHERE "{col1}" IS NOT NULL AND "{col2}" IS NOT NULL
+GROUP BY 1, 2
+ORDER BY 3 DESC
+LIMIT 100
+"""
+parameters = ["table", "col1", "col2"]
+result_type = "list"
+
+[[output]]
+sql_name = "row_value"
+json_name = "row_value"
+value_type = "string"
+
+[[output]]
+sql_name = "col_value"
+json_name = "col_value"
+value_type = "string"
+
+[[output]]
+sql_name = "cnt"
+json_name = "count"
+value_type = "usize"
+
+[render]
+component = "CrossTabMatrix"
+display_order = 3

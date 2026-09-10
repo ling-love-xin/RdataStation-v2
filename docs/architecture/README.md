@@ -1,0 +1,27 @@
+# docs/architecture 导航
+
+> 架构设计决策统一存放于此层（**方案 A**：按主题细分目录），实现说明随代码（注释 + PR + 各文档尾部映射表），crate 目录不承担文档仓库职责。
+
+## 目录
+
+| 文档 | 主题 | 关键内容 |
+| --- | --- | --- |
+| `overview.md` | 架构总览 | 三层架构 / 双层数据 / 双引擎 / crate 依赖方向 |
+| `crate-ownership-proposal.html` | crate 归属 | app / workbench / settings / Feature / shared / 资产 归属示意 |
+| `layout/layout-proposal.html` | 布局示意（v5） | 五段布局最终共识的可视化示意 |
+| `layout/layout-design.md` | 布局方案 | 五段结构 / 三模式交互 / Quick Open / 改动清单 / 实施步骤 |
+| `theme/theme-preview.html` | 配色预览 | 明暗色卡对比 |
+| `theme/theme-design.md` | 主题方案 | 明暗 token / 产品语义角色 / 落地方式 |
+| `settings/settings-crate-design.md` | settings crate | 动机 / 结构 / model / 持久化 / 迁移清单 |
+| `connection/connection-prototype-design.md` | 连接模块原型 | 新增连接对话框布局（v5 对齐）/ 五 Tab / 交互 / 主题映射 |
+| `connection/connection-dialog-prototype.html` | 连接模块原型（交互稿） | RDS Light/Dark 双主题新增连接对话框示意（可交互） |
+| `connection/connection-dev-plan.md` | 连接模块开发方案 | Phase A/B/C 任务 / 文件落点 / 测试场景 / 风险 |
+
+## 关联目录
+
+- `../migration/`：v1 → v2 迁移记录与命令退役
+- `../architecture/` 之外：各 crate 内仅保留 README 级入口指针，不复制设计
+
+## 阅读顺序建议
+
+1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/`

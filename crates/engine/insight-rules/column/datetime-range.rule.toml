@@ -1,0 +1,38 @@
+[meta]
+id = "datetime-range"
+name = "日期时间范围"
+description = "计算日期列最早/最晚/时间跨度"
+version = "1.0"
+category = "column"
+applies_to = ["DateTime", "TIMESTAMP", "DATE"]
+builtin = true
+
+[query]
+template = """
+SELECT
+    MIN("{col}")::VARCHAR AS earliest,
+    MAX("{col}")::VARCHAR AS latest,
+    DATEDIFF('day', MIN("{col}"), MAX("{col}")) AS span_days
+FROM "{table}"
+WHERE "{col}" IS NOT NULL
+"""
+parameters = ["table", "col"]
+
+[[output]]
+sql_name = "earliest"
+json_name = "earliest"
+value_type = "string"
+
+[[output]]
+sql_name = "latest"
+json_name = "latest"
+value_type = "string"
+
+[[output]]
+sql_name = "span_days"
+json_name = "span_days"
+value_type = "i64"
+
+[render]
+component = "DateTimeRangeInfo"
+display_order = 5

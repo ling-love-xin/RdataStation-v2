@@ -1,0 +1,131 @@
+:root {
+  --brand-accent: #e17055;
+  --brand-accent-hover: #d35400;
+  --brand-success: #00b894;
+  --brand-danger: #d63031;
+  --brand-danger-soft: rgba(214, 48, 49, 0.1);
+  --brand-warning: #fdcb6e;
+
+  --primary-color: var(--brand-accent);
+  --primary-color-hover: var(--brand-accent-hover);
+  --primary-light: rgba(225, 112, 85, 0.1);
+  --primary-soft: rgba(225, 112, 85, 0.12);
+  --primary-lighter: rgba(225, 112, 85, 0.05);
+  --danger-color: var(--brand-danger);
+
+  --resource-type-connection: #165dff;
+  --resource-type-connection-soft: rgba(22, 93, 255, 0.1);
+  --resource-type-table: #00b42a;
+  --resource-type-table-soft: rgba(0, 180, 42, 0.1);
+  --resource-type-file: #ff7d00;
+  --resource-type-file-soft: rgba(255, 125, 0, 0.1);
+  --resource-scope-global: #722ed1;
+  --resource-scope-global-soft: rgba(114, 46, 209, 0.1);
+  --resource-scope-project: #165dff;
+  --resource-scope-project-soft: rgba(22, 93, 255, 0.1);
+  --resource-scope-session: #14c9c9;
+
+  /* 健康评分颜色 */
+  --health-excellent: #1a7a1a;
+  --health-good: #1a6db5;
+  --health-fair: #b57a1a;
+  --health-poor: #b54a1a;
+  --health-critical: #b51a1a;
+  --resource-scope-session-soft: rgba(20, 201, 201, 0.1);
+  --resource-tag-default: #165dff;
+  --resource-folder-default: #6366f1;
+
+  --height-input: 32px;
+  --text-secondary-hover: var(--color-text-primary);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --overlay-bg: rgba(0, 0, 0, 0.4);
+  --modal-overlay-bg: rgba(0, 0, 0, 0.55);
+  --modal-surface-bg: var(--color-bg-elevated, var(--color-bg-secondary));
+  --modal-border: var(--color-border);
+  --modal-header-divider: var(--color-border-subtle);
+  --modal-footer-bg: var(--color-bg-tertiary);
+  --dropdown-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  --focus-ring: 0 0 0 3px var(--primary-light);
+
+  /* 别名桥接 — 对齐全局主题 */
+  --bg-primary: var(--color-bg-primary);
+  --bg-secondary: var(--color-bg-secondary);
+  --bg-tertiary: var(--color-bg-tertiary);
+  --bg-hover: var(--color-hover);
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --text-tertiary: var(--color-text-muted);
+  --border-color: var(--color-border);
+  --border-color-subtle: var(--color-border-subtle);
+  --hover-color: var(--color-hover);
+  --size-sm: var(--spacing-sm);
+  --size-md: var(--spacing-md);
+  --size-lg: var(--spacing-lg);
+  --size-xl: var(--spacing-xl);
+  --radius-md: var(--border-radius-md);
+  --radius-lg: var(--border-radius-lg);
+  --radius-xl: var(--border-radius-xl);
+
+  /* 布局高度 */
+  --title-bar-height: 36px;
+  --status-bar-height: 22px;
+
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+
+  --setting-section-gap: var(--spacing-xl);
+  --setting-item-gap: var(--spacing-lg);
+
+  --border-radius-sm: 4px;
+  --border-radius-md: 6px;
+  --border-radius-lg: 8px;
+  --border-radius-xl: 12px;
+  --border-radius-pill: 999px;
+
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: var(--font-family);
+  --font-mono: 'JetBrains Mono', 'Consolas', 'Monaco', monospace;
+
+  --font-size-xxs: 9px;
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+  --font-size-xl: 16px;
+  --font-size-xxl: 18px;
+  --font-size-title: 20px;
+  --font-size-display: 48px;
+
+  /* 状态栏变量 */
+  --status-bar-bg: var(--bg-secondary);
+  --status-bar-text: var(--text-secondary);
+  --status-bar-connected-bg: rgba(0, 184, 148, 0.15);
+  --status-bar-connected-text: var(--brand-success);
+  --status-bar-disconnected-bg: rgba(107, 114, 128, 0.15);
+  --status-bar-disconnected-text: var(--text-muted);
+
+  /* 阴影变量 - 暗/亮双主题 */
+  --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-inset-subtle: inset 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --shadow-inset-hover: inset 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-inset-active: inset 0 2px 3px rgba(0, 0, 0, 0.15);
+  --shadow-dropdown: 0 4px 12px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.3);
+
+  /* 连接状态/驱动标签颜色 */
+  --status-locked: #f38ba8;
+  --driver-jdbc: #f46623;
+  --driver-python: #5d9fd3;
+  --driver-js: #f7df1e;
+}
+
+/* 亮色主题下的连接状态/驱动标签颜色 */
+body.theme-light {
+  --status-locked: #d4687e;
+  --driver-jdbc: #d4521e;
+  --driver-python: #4a7db5;
+  --driver-js: #c9a91b;
+}

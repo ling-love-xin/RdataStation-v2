@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation v2 建议 crate 归属示意</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1e1e1e; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; color: #d4d4d4; padding: 20px; }
+  h1 { font-size: 15px; color: #fff; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: #9a9a9a; margin-bottom: 18px; }
+  .note { font-size: 11px; color: #8a8a8a; margin-top: 12px; line-height: 1.8; }
+
+  .layer { display: flex; align-items: stretch; gap: 12px; margin-bottom: 10px; }
+  .label { width: 110px; flex: none; display: flex; align-items: center; font-size: 12px; color: #9cdcfe; }
+  .boxes { flex: 1; display: flex; gap: 10px; flex-wrap: wrap; }
+
+  .box { border: 1px solid #3c3c3c; border-radius: 6px; padding: 8px 12px; font-size: 12px; background: #252526; min-width: 120px; }
+  .box b { display: block; font-size: 12px; color: #e8e8e8; }
+  .box span { font-size: 10px; color: #8a8a8a; line-height: 1.6; display: block; margin-top: 2px; }
+  .box.shell { border-color: #0e639c; }
+  .box.new { border-color: #E8846F; border-style: dashed; background: #2a2220; }
+  .box.asset { border-color: #6a9955; border-style: dashed; background: #1f2a1f; }
+  .arrow { text-align: center; font-size: 11px; color: #6f6f6f; padding: 2px 0 8px; }
+  .legend { margin-top: 14px; font-size: 11px; color: #9a9a9a; display: flex; gap: 20px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 22px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  code { background: #2d2d30; padding: 1px 6px; border-radius: 3px; color: #9cdcfe; font-size: 11px; }
+</style>
+</head>
+<body>
+<h1>RdataStation v2 建议的 crate 归属（含主题 / 设置）</h1>
+<div class="sub">示意 · 依据 gpui-kit 编码指南「按业务能力组织 / ≥2 使用方才共享 / 资产与行为分离」</div>
+
+<div class="layer">
+  <div class="label">App Shell</div>
+  <div class="boxes">
+    <div class="box shell"><b>app</b><span>组合窗口与 Feature<br>启动时加载主题：watch_dir(assets/themes)</span></div>
+  </div>
+</div>
+<div class="arrow">▼ 依赖只向下（Feature 不反向依赖 app）</div>
+
+<div class="layer">
+  <div class="label">工作台</div>
+  <div class="boxes">
+    <div class="box"><b>workbench</b><span>布局 / 左右活动栏 / Dock /<br>Quick Open / 中央编辑区</span></div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="label">Feature crates</div>
+  <div class="boxes">
+    <div class="box new"><b>settings（新增）</b><span>设置 model / 持久化 / 设置视图<br>「外观」节管理主题切换<br>← 迁入 workbench 的 Settings 占位 + persistence_service<br>设计：docs/architecture/settings/settings-crate-design.md</span></div>
+    <div class="box"><b>project</b><span>双层数据架构</span></div>
+    <div class="box"><b>connection</b><span>数据源连接</span></div>
+    <div class="box"><b>database</b><span>数据库导航</span></div>
+    <div class="box"><b>scratchpad</b><span>草稿箱</span></div>
+    <div class="box"><b>analytics_resource</b><span>资源分析</span></div>
+    <div class="box"><b>mock</b><span>Mock 生成</span></div>
+    <div class="box"><b>insight</b><span>洞察</span></div>
+    <div class="box"><b>plugin</b><span>插件宿主</span></div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="label">共享层</div>
+  <div class="boxes">
+    <div class="box"><b>shared</b><span>稳定能力（≥2 使用方）</span></div>
+    <div class="box"><b>engine</b><span>SQLite + DuckDB 双引擎</span></div>
+  </div>
+</div>
+
+<div class="layer">
+  <div class="label">资源资产</div>
+  <div class="boxes">
+    <div class="box asset"><b>assets/themes/rds-theme.json</b><span>明暗两套主题（不建 crate）<br>由 app 启动时 watch_dir 加载</span></div>
+    <div class="box asset"><b>assets/icons</b><span>应用图标（明亮版；暗黑版待补）</span></div>
+  </div>
+</div>
+
+<div class="legend">
+  <span><i style="background:#E8846F;border:1px dashed #E8846F;"></i>建议新增 / 迁移</span>
+  <span><i style="background:#6a9955;border:1px dashed #6a9955;"></i>资产，不建 crate</span>
+  <span><i style="background:#0e639c;"></i>App Shell 职责</span>
+</div>
+
+<div class="note">
+  主题为什么不做 crate：无独立状态（状态在 gpui-kit 的 Theme global）、无业务生命周期，内容是 JSON 资产 + 少量加载代码（App Shell）+ 一个切换命令（settings 的「外观」节）。<br>
+  设置为什么做 crate：有独立状态（设置项 model）、生命周期（持久化）、稳定公开边界（设置服务 + 打开设置命令）、多使用方——符合 coding-guides 的 settings 示例结构（lib.rs / model.rs / settings_view.rs / commands.rs）。<br>
+  文档目录：设计决策（布局 / 主题配色 / settings）统一放 <code>docs/architecture/{layout, theme, settings}/</code>（方案 A，导航见 README.md），实现说明随代码（注释 + PR + 文档尾部映射表），crate 目录不承担文档仓库职责。
+</div>
+</body>
+</html>

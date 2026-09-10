@@ -1,0 +1,62 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="gradTop" cx="0.42" cy="0.32" r="0.75">
+      <stop offset="0%" stop-color="#4298ff"/>
+      <stop offset="100%" stop-color="#2684FF"/>
+    </radialGradient>
+    <linearGradient id="gradFaceLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1F69D0"/>
+      <stop offset="100%" stop-color="#123b7c"/>
+    </linearGradient>
+    <linearGradient id="gradFaceMid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#185bc2"/>
+      <stop offset="100%" stop-color="#0f336e"/>
+    </linearGradient>
+    <linearGradient id="gradFaceRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#144fb8"/>
+      <stop offset="100%" stop-color="#0c2d63"/>
+    </linearGradient>
+    <linearGradient id="gradSideDark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#103b78"/>
+      <stop offset="100%" stop-color="#092247"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 棱柱形体 -->
+  <!--顶面扁平六边形-->
+  <path d="M220 240 L360 180 L664 180 L804 240 L664 300 L360 300 Z" fill="url(#gradTop)"/>
+
+  <!--正面左 数据库面 -->
+  <path d="M220 240 L360 300 L360 740 L220 680 Z" fill="url(#gradFaceLeft)"/>
+  <!--正面中间 分析图表面 -->
+  <path d="M360 300 L664 300 L664 740 L360 740 Z" fill="url(#gradFaceMid)"/>
+  <!--正面右 无穷符号面 -->
+  <path d="M664 300 L804 240 L804 680 L664 740 Z" fill="url(#gradFaceRight)"/>
+
+  <!--左右背光侧面 -->
+  <path d="M804 240 L804 680 L744 704 L744 264 Z" fill="url(#gradSideDark)"/>
+  <path d="M220 240 L220 680 L280 704 L280 264 Z" fill="url(#gradSideDark)"/>
+
+  <!--顶面 R字母 纯路径 -->
+  <path d="M456 212 v76 h20 q11 0 17‑5 q7‑5 7‑18 q0‑12‑7‑17 q‑6‑6‑17‑6 h‑20 m‑14‑16 h36 q22 0 34 10 q13 10 13 30 q0 20‑13 31 q‑12 11‑34 11 h‑22 v40 h‑14 z" fill="#ffffff"/>
+
+  <!-- 左侧：数据库圆柱符号，全部path，Inkscape可正常渲染 -->
+  <g transform="translate(278,470)">
+    <path d="M0 -60 C 0 -72 72 -72 72 -60 L72 -52 C72 -40 0 -40 0 -52 Z" fill="#ffffff"/>
+    <path d="M0 -52 L0 20 L72 20 L72 -52 Z" fill="#ffffff"/>
+    <path d="M0 20 C0 32 72 32 72 20 L72 28 C72 40 0 40 0 28 Z" fill="#ffffff"/>
+  </g>
+
+  <!--中间：柱状分析图表，纯矩形path -->
+  <g transform="translate(464,484)">
+    <path d="M-32 20 L-14 20 L-14 -50 L-32 -50 Z" fill="#ffffff"/>
+    <path d="M-8 -10 L10 -10 L10 -50 L-8 -50 Z" fill="#ffffff"/>
+    <path d="M16 -30 L34 -30 L34 -50 L16 -50 Z" fill="#ffffff"/>
+    <path d="M40 0 L58 0 L58 -50 L40 -50 Z" fill="#ffffff"/>
+  </g>
+
+  <!--右侧：无穷 ∞ 纯路径，无椭圆简写 -->
+  <g transform="translate(722,482)">
+    <path d="M -42 0 C -42 -22 -24 -36 0 -18 C 24 0 42 -22 42 0 C42 22 24 36 0 18 C -24 0 -42 22 -42 0 Z" fill="#ffffff"/>
+  </g>
+</svg>
