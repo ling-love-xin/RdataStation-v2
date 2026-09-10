@@ -8,8 +8,9 @@
 //! - SOCKS5 Proxy: 基于 tokio-socks 的 SOCKS5 代理
 
 use async_trait::async_trait;
-use russh_keys::key::PrivateKeyWithHashAlg;
-use russh_keys::PublicKeyBase64;
+// russh 0.63 起 russh-keys 已并入 russh::keys，类型路径随之更新
+use russh::keys::PrivateKeyWithHashAlg;
+use russh::keys::PublicKeyBase64;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 
@@ -277,9 +278,7 @@ async fn establish_tls(
 }
 
 /// 映射 TlsVersion 枚举到 native_tls::Protocol
-fn map_tls_version(
-    version: crate::config::TlsVersion,
-) -> native_tls::Protocol {
+fn map_tls_version(version: crate::config::TlsVersion) -> native_tls::Protocol {
     use crate::config::TlsVersion;
     match version {
         TlsVersion::Tls1_0 => native_tls::Protocol::Tlsv10,
@@ -318,21 +317,22 @@ struct SshClientHandler {
     known_hosts: super::known_hosts::KnownHosts,
 }
 
-#[async_trait]
+// russh 0.63 起 Handler 改用原生 async trait（不再需要 #[async_trait]），
+// 且入参由 PublicKey 改为 PublicKeyOrCertificate（支持证书形式的服务器密钥）
 impl russh::client::Handler for SshClientHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let fingerprint = server_public_key.fingerprint(russh::keys::HashAlg::Sha256);
-        let key_b64 = server_public_key.public_key_base64();
+        // 证书形式统一取其公钥，后续按裸公钥校验，逻辑保持一致
+        let public_key = server_public_key.public_key();
+        let fingerprint = public_key.fingerprint(russh::keys::HashAlg::Sha256);
+        let key_b64 = public_key.public_key_base64();
         let key_type = key_b64.split_whitespace().next().unwrap_or("unknown");
 
-        let verified = self
-            .known_hosts
-            .verify(&self.host, self.port, server_public_key);
+        let verified = self.known_hosts.verify(&self.host, self.port, &public_key);
 
         if verified {
             tracing::info!(
@@ -606,16 +606,17 @@ pub async fn establish_ssh_tunnel(
 ///
 /// - Unix (Linux/macOS): 通过 `SSH_AUTH_SOCK` 环境变量连接 OpenSSH Agent
 /// - Windows: 暂不支持（后续版本将通过 Pageant 集成）
+// 注意：本函数为 #[cfg(unix)]，在 Windows 上不参与编译（改动后需在 Linux/macOS 侧再验证）
 #[cfg(unix)]
 async fn connect_ssh_agent(
     ssh_addr: &str,
 ) -> Result<
-    russh_keys::agent::client::AgentClient<
-        Box<dyn russh_keys::agent::client::AgentStream + Send + Unpin + 'static>,
+    russh::keys::agent::client::AgentClient<
+        Box<dyn russh::keys::agent::client::AgentStream + Send + Unpin + 'static>,
     >,
     CoreError,
 > {
-    russh_keys::agent::client::AgentClient::connect_env()
+    russh::keys::agent::client::AgentClient::connect_env()
         .await
         .map(|c| c.dynamic())
         .map_err(|e| {

@@ -36,6 +36,3 @@ chrono.workspace = true
 
 # ===== DuckDB（Secret 本地加速通道） =====
 duckdb.workspace = true
-
-[dev-dependencies]
-rand.workspace = true

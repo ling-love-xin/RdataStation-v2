@@ -10,7 +10,7 @@
 //! - @cert-authority / @revoked 标记
 
 use russh::keys::PublicKey;
-use russh_keys::PublicKeyBase64;
+use russh::keys::PublicKeyBase64;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -336,14 +336,7 @@ mod tests {
     fn test_key_mismatch_detected() -> Result<(), CoreError> {
         let test_key = create_test_key()?;
         let key_b64 = test_key.public_key_base64();
-
-        let different_key = russh::keys::PrivateKey::random(
-            &mut rand::thread_rng(),
-            russh::keys::Algorithm::Ed25519,
-        )
-        .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?
-        .public_key()
-        .clone();
+        let different_key = second_test_key()?;
 
         let content = format!("example.com {}\n", key_b64);
 
@@ -354,12 +347,23 @@ mod tests {
         Ok(())
     }
 
+    /// 测试用固定公钥 A（Ed25519，仅用于单测；只含公钥，无需 RNG 依赖）
+    const TEST_KEY_A: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBkzxbG3si6k3jEXkAdanRHjo/3yA/x4NCJdxXDDfjxd rdata-test-a";
+    /// 测试用固定公钥 B（与 A 不同，用于“密钥不匹配”场景）
+    const TEST_KEY_B: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO7v3HWgTuQy1N/bcegB1zYs0KE0r9Y8F/ZNteVKKh5c rdata-test-b";
+
+    fn parse_test_key(openssh: &str) -> Result<PublicKey, CoreError> {
+        PublicKey::from_openssh(openssh)
+            .map_err(|e| CoreError::common(CommonError::General(e.to_string())))
+    }
+
     fn create_test_key() -> Result<PublicKey, CoreError> {
-        let private = russh::keys::PrivateKey::random(
-            &mut rand::thread_rng(),
-            russh::keys::Algorithm::Ed25519,
-        )
-        .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
-        Ok(private.public_key().clone())
+        parse_test_key(TEST_KEY_A)
+    }
+
+    fn second_test_key() -> Result<PublicKey, CoreError> {
+        parse_test_key(TEST_KEY_B)
     }
 }

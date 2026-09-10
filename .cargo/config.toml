@@ -1,0 +1,18 @@
+# 项目级 Cargo 配置
+#
+# 边界说明（重要，避免把它当成"依赖管理"入口）：
+#   - 本文件**不管**「用哪个依赖版本」：版本由根 Cargo.toml 的 [workspace.dependencies]
+#     声明、由 Cargo.lock 锁定，见 docs/architecture/dependencies/dependency-strategy.md
+#   - 本文件**管**「怎么构建 / 从哪取包 / 命令别名」：[alias] / [build] / [net] / [env] /
+#     [source] / [target.*]
+#   - 不要写 [profile.*]：Cargo 1.57 起 profile 只认根 Cargo.toml，写在配置里会被忽略
+#     （v1/backend/.cargo/config.toml 里的 [profile.dev] 就是这样失效的）
+#   - 不要把 crates.io 镜像写进本文件：镜像属于机器级配置（本机在 CARGO_HOME 的
+#     config.toml 里指向 tuna），写进仓库会强制影响其他网络环境与 CI
+
+[alias]
+# 根 Cargo.toml 设了 default-members = ["crates/app"]，
+# 裸 `cargo check` / `cargo test` 只覆盖 app 依赖图（跳过 plugin → wasmtime）
+check-all = "check --workspace --all-targets"
+test-all = "test --workspace"
+clippy-all = "clippy --workspace --all-targets"

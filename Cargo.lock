@@ -8030,7 +8030,6 @@ dependencies = [
  "duckdb",
  "futures",
  "native-tls",
- "rand 0.8.8",
  "rds-shared",
  "russh",
  "serde",
