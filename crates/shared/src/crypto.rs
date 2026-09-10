@@ -1,7 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
@@ -39,8 +39,11 @@ fn get_or_create_salt() -> Vec<u8> {
             }
 
             // 生成 32 字节随机盐值
+            // rand 0.10：OsRng 已移除，SysRng 直连 getrandom；失败处理与原实现一致（终止）
             let mut salt = vec![0u8; 32];
-            OsRng.fill_bytes(&mut salt);
+            SysRng
+                .try_fill_bytes(&mut salt)
+                .expect("无法从系统获取随机数（生成加密盐值失败）");
 
             if let Some(parent) = sp.parent() {
                 let _ = fs::create_dir_all(parent);
@@ -130,7 +133,10 @@ pub fn encrypt_password(password: &str) -> Result<String, CoreError> {
         .map_err(|e| CoreError::common(CommonError::Internal(format!("AES init error: {}", e))))?;
 
     let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    // rand 0.10：OsRng 已移除，改用 SysRng（getrandom 直连）
+    SysRng
+        .try_fill_bytes(&mut nonce_bytes)
+        .map_err(|e| CoreError::common(CommonError::Internal(format!("Nonce 生成失败: {}", e))))?;
     // aes-gcm 0.11 起 Array::from_slice 已废弃，改用 TryFrom（长度固定 12 字节）
     let nonce = Nonce::try_from(&nonce_bytes[..]).map_err(|e| {
         CoreError::common(CommonError::Internal(format!("Nonce init error: {}", e)))

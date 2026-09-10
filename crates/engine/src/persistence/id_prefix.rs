@@ -131,9 +131,10 @@ fn sanitize_name(name: &str) -> String {
 
 /// 生成 8 位随机十六进制后缀
 fn short_rand() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    format!("{:08x}", rng.gen::<u32>())
+    // rand 0.10：扩展 trait 改名为 RngExt，thread_rng() 改 rng()，gen() 改 random()
+    use rand::RngExt;
+    let mut rng = rand::rng();
+    format!("{:08x}", rng.random::<u32>())
 }
 
 // ========== 测试 ==========

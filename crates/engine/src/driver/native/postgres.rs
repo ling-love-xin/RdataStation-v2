@@ -110,7 +110,7 @@ fn build_query_result(
 impl Database for PostgresDatabase {
     async fn query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let read_only = is_read_only_sql(sql);
-        let rows = sqlx::query(sql)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(&self.pool)
             .await
             .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
@@ -139,7 +139,7 @@ impl Database for PostgresDatabase {
     ) -> Result<QueryResult, CoreError> {
         let read_only = is_read_only_sql(sql);
 
-        let mut query_builder = sqlx::query(sql);
+        let mut query_builder = sqlx::query(sqlx::AssertSqlSafe(sql));
 
         for param in &params {
             query_builder = match param {
@@ -187,7 +187,7 @@ impl Database for PostgresDatabase {
             result = async move {
                 let read_only = is_read_only_sql(&sql_owned);
 
-                let rows = sqlx::query(&sql_owned)
+                let rows = sqlx::query(sqlx::AssertSqlSafe(sql_owned.as_str()))
                     .fetch_all(&pool)
                     .await
                     .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
@@ -435,7 +435,7 @@ impl Transaction for PostgresTransaction {
         if let Some(ref mut tx) = self.tx {
             let read_only = is_read_only_sql(sql);
 
-            let rows = sqlx::query(sql)
+            let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .fetch_all(&mut **tx)
                 .await
                 .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;

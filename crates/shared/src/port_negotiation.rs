@@ -50,9 +50,10 @@ impl PortRange {
 
     /// 获取范围内的随机端口
     pub fn random_port(&self) -> u16 {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        rng.gen_range(self.start..=self.end)
+        // rand 0.10：RngExt + rng()，gen_range 改 random_range
+        use rand::RngExt;
+        let mut rng = rand::rng();
+        rng.random_range(self.start..=self.end)
     }
 
     /// 获取范围迭代器
