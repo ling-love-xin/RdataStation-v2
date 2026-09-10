@@ -15,13 +15,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gpui_kit::*;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::form::{Field, Form};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectState};
 use gpui_kit::component::{ActiveTheme, IconName, WindowExt};
+use gpui_kit::*;
 
 use connection::model::{ConnectionScope, DataSourceSaveInput};
 use engine::persistence::auth_store::AuthConfig;
@@ -29,8 +29,8 @@ use engine::persistence::env_store::Environment;
 use engine::persistence::network_store::NetworkConfig;
 
 use crate::panels::Shared;
-use connection::model::DataSource;
 use crate::services::data_source_service::DataSourceService;
+use connection::model::DataSource;
 
 /// 内置驱动类型（Phase A 骨架；完整目录来自 DataSourceService::list_drivers）。
 const BUILTIN_DRIVERS: [&str; 4] = ["mysql", "postgres", "sqlite", "duckdb"];
@@ -38,7 +38,12 @@ const BUILTIN_DRIVERS: [&str; 4] = ["mysql", "postgres", "sqlite", "duckdb"];
 const AUTH_TYPES: [&str; 3] = ["password", "ssh_key", "proxy_pwd"];
 /// 环境策略项（对齐 v1 5 类策略 + 审计）。
 const POLICY_ITEMS: [&str; 6] = [
-    "只读连接", "禁止 DDL", "禁止导出", "查询超时 30s", "最大行数 1000", "审计日志",
+    "只读连接",
+    "禁止 DDL",
+    "禁止导出",
+    "查询超时 30s",
+    "最大行数 1000",
+    "审计日志",
 ];
 /// 能力矩阵（只读展示，驱动声明对齐）。
 const CAPABILITIES: [(&str, bool); 6] = [
@@ -57,7 +62,12 @@ const SCOPE_LABELS: [&str; 3] = ["仅全局", "仅项目", "全局+项目"];
 const SSL_MODES: [&str; 5] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
 /// 策略落库键（与 v1 策略类型对齐，UI 标签见 POLICY_ITEMS）。
 const POLICY_KEYS: [&str; 6] = [
-    "read_only", "no_ddl", "no_export", "query_timeout", "row_limit", "audit",
+    "read_only",
+    "no_ddl",
+    "no_export",
+    "query_timeout",
+    "row_limit",
+    "audit",
 ];
 
 /// 协议链跳（内联编辑态）。
@@ -70,10 +80,18 @@ pub struct Hop {
 
 impl Hop {
     fn ssh(label: impl Into<String>) -> Self {
-        Self { kind: "SSH".into(), label: label.into(), enabled: true }
+        Self {
+            kind: "SSH".into(),
+            label: label.into(),
+            enabled: true,
+        }
     }
     fn proxy(label: impl Into<String>) -> Self {
-        Self { kind: "Proxy".into(), label: label.into(), enabled: true }
+        Self {
+            kind: "Proxy".into(),
+            label: label.into(),
+            enabled: true,
+        }
     }
 }
 
@@ -82,7 +100,7 @@ pub struct ManagerWorkspace {
     pub kind: usize,
     pub items: Vec<String>,
     pub new_name: Entity<InputState>,
-    pub new_type: Entity<SelectState<SearchableVec<SharedString>>> ,
+    pub new_type: Entity<SelectState<SearchableVec<SharedString>>>,
     pub new_data: Entity<InputState>,
     /// 编辑中的条目名（Some = 更新既有条目，None = 新建）。
     pub editing: Option<String>,
@@ -143,7 +161,12 @@ pub struct ConnectionDialogState {
 fn state_inputs(
     window: &mut Window,
     cx: &mut App,
-) -> (Entity<InputState>, Entity<InputState>, Entity<InputState>, Entity<InputState>) {
+) -> (
+    Entity<InputState>,
+    Entity<InputState>,
+    Entity<InputState>,
+    Entity<InputState>,
+) {
     (
         cx.new(|cx| InputState::new(window, cx)),
         cx.new(|cx| InputState::new(window, cx)),
@@ -156,7 +179,10 @@ impl ConnectionDialogState {
     /// 懒创建全部受控状态（window 参与 InputState / SelectState 构造）。
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
         let drivers = SearchableVec::new(
-            BUILTIN_DRIVERS.iter().map(|d| SharedString::from(*d)).collect::<Vec<_>>(),
+            BUILTIN_DRIVERS
+                .iter()
+                .map(|d| SharedString::from(*d))
+                .collect::<Vec<_>>(),
         );
         let (name, url, user, pass) = state_inputs(window, cx);
         let (remark, cache_path, prop_key, prop_val) = state_inputs(window, cx);
@@ -164,7 +190,12 @@ impl ConnectionDialogState {
         let (project_path, ssl_ca, ssl_cert, ssl_key) = state_inputs(window, cx);
         let new_type = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(AUTH_TYPES.iter().map(|t| SharedString::from(*t)).collect::<Vec<_>>()),
+                SearchableVec::new(
+                    AUTH_TYPES
+                        .iter()
+                        .map(|t| SharedString::from(*t))
+                        .collect::<Vec<_>>(),
+                ),
                 None,
                 window,
                 cx,
@@ -172,7 +203,12 @@ impl ConnectionDialogState {
         });
         let policy_type = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(POLICY_ITEMS.iter().map(|t| SharedString::from(*t)).collect::<Vec<_>>()),
+                SearchableVec::new(
+                    POLICY_ITEMS
+                        .iter()
+                        .map(|t| SharedString::from(*t))
+                        .collect::<Vec<_>>(),
+                ),
                 None,
                 window,
                 cx,
@@ -194,14 +230,29 @@ impl ConnectionDialogState {
                 Hop::proxy("公司代理·http"),
             ])),
             env: cx.new(|cx| {
-                SelectState::new(SearchableVec::new(Vec::<SharedString>::new()), None, window, cx)
+                SelectState::new(
+                    SearchableVec::new(Vec::<SharedString>::new()),
+                    None,
+                    window,
+                    cx,
+                )
             }),
             env_list: Rc::new(RefCell::new(Vec::new())),
             auth_ref: cx.new(|cx| {
-                SelectState::new(SearchableVec::new(Vec::<SharedString>::new()), None, window, cx)
+                SelectState::new(
+                    SearchableVec::new(Vec::<SharedString>::new()),
+                    None,
+                    window,
+                    cx,
+                )
             }),
             network_ref: cx.new(|cx| {
-                SelectState::new(SearchableVec::new(Vec::<SharedString>::new()), None, window, cx)
+                SelectState::new(
+                    SearchableVec::new(Vec::<SharedString>::new()),
+                    None,
+                    window,
+                    cx,
+                )
             }),
             auth_list: Rc::new(RefCell::new(Vec::new())),
             network_list: Rc::new(RefCell::new(Vec::new())),
@@ -232,7 +283,10 @@ impl ConnectionDialogState {
             scope: cx.new(|cx| {
                 SelectState::new(
                     SearchableVec::new(
-                        SCOPE_LABELS.iter().map(|s| SharedString::from(*s)).collect::<Vec<_>>(),
+                        SCOPE_LABELS
+                            .iter()
+                            .map(|s| SharedString::from(*s))
+                            .collect::<Vec<_>>(),
                     ),
                     None,
                     window,
@@ -243,7 +297,10 @@ impl ConnectionDialogState {
             ssl_mode: cx.new(|cx| {
                 SelectState::new(
                     SearchableVec::new(
-                        SSL_MODES.iter().map(|s| SharedString::from(*s)).collect::<Vec<_>>(),
+                        SSL_MODES
+                            .iter()
+                            .map(|s| SharedString::from(*s))
+                            .collect::<Vec<_>>(),
                     ),
                     None,
                     window,
@@ -264,24 +321,32 @@ impl ConnectionDialogState {
         };
         if let Ok(service) = DataSourceService::global() {
             if let Ok(list) = rt.block_on(service.list_auth_configs()) {
-                let names: Vec<SharedString> =
-                    list.iter().filter_map(|a| a.name.clone()).map(SharedString::from).collect();
+                let names: Vec<SharedString> = list
+                    .iter()
+                    .filter_map(|a| a.name.clone())
+                    .map(SharedString::from)
+                    .collect();
                 *self.auth_list.borrow_mut() = list;
                 self.auth_ref.update(cx, |s, cx| {
                     s.set_items(SearchableVec::new(names), window, cx)
                 });
             }
             if let Ok(list) = rt.block_on(service.list_network_configs()) {
-                let names: Vec<SharedString> =
-                    list.iter().filter_map(|n| n.name.clone()).map(SharedString::from).collect();
+                let names: Vec<SharedString> = list
+                    .iter()
+                    .filter_map(|n| n.name.clone())
+                    .map(SharedString::from)
+                    .collect();
                 *self.network_list.borrow_mut() = list;
                 self.network_ref.update(cx, |s, cx| {
                     s.set_items(SearchableVec::new(names), window, cx)
                 });
             }
             if let Ok(list) = rt.block_on(service.list_environments()) {
-                let names: Vec<SharedString> =
-                    list.iter().map(|e| SharedString::from(e.name.clone())).collect();
+                let names: Vec<SharedString> = list
+                    .iter()
+                    .map(|e| SharedString::from(e.name.clone()))
+                    .collect();
                 *self.env_list.borrow_mut() = list;
                 self.env.update(cx, |s, cx| {
                     s.set_items(SearchableVec::new(names), window, cx)
@@ -296,11 +361,17 @@ impl ConnectionDialogState {
             Ok(rt) => rt,
             Err(_) => return,
         };
-        let Ok(service) = DataSourceService::global() else { return };
-        let Ok(Some(ds)) = rt.block_on(service.get(id)) else { return };
+        let Ok(service) = DataSourceService::global() else {
+            return;
+        };
+        let Ok(Some(ds)) = rt.block_on(service.get(id)) else {
+            return;
+        };
 
-        self.name.update(cx, |s, cx| s.set_value(ds.name.clone(), window, cx));
-        self.url.update(cx, |s, cx| s.set_value(reconstruct_url(&ds), window, cx));
+        self.name
+            .update(cx, |s, cx| s.set_value(ds.name.clone(), window, cx));
+        self.url
+            .update(cx, |s, cx| s.set_value(reconstruct_url(&ds), window, cx));
         self.user.update(cx, |s, cx| {
             s.set_value(ds.username.clone().unwrap_or_default(), window, cx)
         });
@@ -353,7 +424,8 @@ impl ConnectionDialogState {
 
         // 驱动属性（JSON → key-value 列表）。
         if let Some(props_json) = &ds.driver_properties {
-            if let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(props_json)
+            if let Ok(map) =
+                serde_json::from_str::<std::collections::BTreeMap<String, String>>(props_json)
             {
                 let mut list: Vec<(String, String)> = map.into_iter().collect();
                 if list.is_empty() {
@@ -370,10 +442,27 @@ impl ConnectionDialogState {
                     let hops: Vec<Hop> = chain
                         .iter()
                         .filter_map(|h| {
-                            let kind = h.get("kind").and_then(|k| k.as_str()).unwrap_or("SSH").to_string();
-                            let label = h.get("label").and_then(|k| k.as_str()).unwrap_or("").to_string();
-                            let enabled = h.get("enabled").and_then(|k| k.as_bool()).unwrap_or(true);
-                            if label.is_empty() { None } else { Some(Hop { kind, label, enabled }) }
+                            let kind = h
+                                .get("kind")
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("SSH")
+                                .to_string();
+                            let label = h
+                                .get("label")
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let enabled =
+                                h.get("enabled").and_then(|k| k.as_bool()).unwrap_or(true);
+                            if label.is_empty() {
+                                None
+                            } else {
+                                Some(Hop {
+                                    kind,
+                                    label,
+                                    enabled,
+                                })
+                            }
                         })
                         .collect();
                     if !hops.is_empty() {
@@ -393,21 +482,19 @@ impl ConnectionDialogState {
                     }
                     if let Some(cert) = ssl.get("cert").and_then(|m| m.as_str()) {
                         let cert = cert.to_string();
-                        self.ssl_cert.update(cx, |s, cx| s.set_value(cert, window, cx));
+                        self.ssl_cert
+                            .update(cx, |s, cx| s.set_value(cert, window, cx));
                     }
                     if let Some(key) = ssl.get("key").and_then(|m| m.as_str()) {
                         let key = key.to_string();
-                        self.ssl_key.update(cx, |s, cx| s.set_value(key, window, cx));
+                        self.ssl_key
+                            .update(cx, |s, cx| s.set_value(key, window, cx));
                     }
                 }
                 if let Some(overrides) = v.get("policy_overrides").and_then(|c| c.as_array()) {
                     let flags: Vec<bool> = POLICY_KEYS
                         .iter()
-                        .map(|k| {
-                            overrides
-                                .iter()
-                                .any(|o| o.as_str() == Some(*k))
-                        })
+                        .map(|k| overrides.iter().any(|o| o.as_str() == Some(*k)))
                         .collect();
                     if flags.len() == POLICY_ITEMS.len() {
                         *self.sec_overrides.borrow_mut() = flags;
@@ -428,7 +515,11 @@ impl ConnectionDialogState {
         pass: &Entity<InputState>,
         cx: &mut App,
     ) -> Option<DataSourceSaveInput> {
-        let db_type = driver.read(cx).selected_value().cloned().unwrap_or_default();
+        let db_type = driver
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
         if db_type.is_empty() {
             return None;
         }
@@ -439,22 +530,49 @@ impl ConnectionDialogState {
         }
         let username = {
             let v = user.read(cx).value().to_string();
-            if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
+            if v.trim().is_empty() {
+                None
+            } else {
+                Some(v.trim().to_string())
+            }
         };
         let password = {
             let v = pass.read(cx).value().to_string();
-            if v.is_empty() { None } else { Some(v) }
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
         };
-        let auth_config_id = self.auth_ref.read(cx).selected_value().cloned().and_then(|n| {
-            self.auth_list.borrow().iter().find(|a| a.name.as_deref() == Some(n.as_str()))
-                .map(|a| a.id.clone())
-        });
-        let network_config_id = self.network_ref.read(cx).selected_value().cloned().and_then(|n| {
-            self.network_list.borrow().iter().find(|c| c.name.as_deref() == Some(n.as_str()))
-                .map(|c| c.id.clone())
-        });
+        let auth_config_id = self
+            .auth_ref
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .and_then(|n| {
+                self.auth_list
+                    .borrow()
+                    .iter()
+                    .find(|a| a.name.as_deref() == Some(n.as_str()))
+                    .map(|a| a.id.clone())
+            });
+        let network_config_id = self
+            .network_ref
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .and_then(|n| {
+                self.network_list
+                    .borrow()
+                    .iter()
+                    .find(|c| c.name.as_deref() == Some(n.as_str()))
+                    .map(|c| c.id.clone())
+            });
         let environment_id = self.env.read(cx).selected_value().cloned().and_then(|n| {
-            self.env_list.borrow().iter().find(|e| e.name == n.as_str())
+            self.env_list
+                .borrow()
+                .iter()
+                .find(|e| e.name == n.as_str())
                 .map(|e| e.id.clone())
         });
         let driver_properties = if self.props.borrow().is_empty() {
@@ -473,7 +591,11 @@ impl ConnectionDialogState {
             scope: ConnectionScope::Global,
             description: {
                 let r = self.remark.read(cx).value().to_string();
-                if r.trim().is_empty() { None } else { Some(r.trim().to_string()) }
+                if r.trim().is_empty() {
+                    None
+                } else {
+                    Some(r.trim().to_string())
+                }
             },
             driver_id: None,
             environment_id,
@@ -488,7 +610,11 @@ impl ConnectionDialogState {
             schema_name: None,
             metadata_path: {
                 let v = self.cache_path.read(cx).value().to_string();
-                if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
+                if v.trim().is_empty() {
+                    None
+                } else {
+                    Some(v.trim().to_string())
+                }
             },
         })
     }
@@ -561,10 +687,18 @@ impl ConnectionDialogState {
         // 输入占位（InputState 构造后设置；Input 组件本身无 placeholder 方法）。
         prop_key.update(cx, |s, cx| s.set_placeholder("key", window, cx));
         prop_val.update(cx, |s, cx| s.set_placeholder("value", window, cx));
-        project_path.update(cx, |s, cx| s.set_placeholder("项目根目录（含 .RSMETA）", window, cx));
-        ssl_ca.update(cx, |s, cx| s.set_placeholder("CA 证书路径（可选）", window, cx));
-        ssl_cert.update(cx, |s, cx| s.set_placeholder("客户端证书路径（可选）", window, cx));
-        ssl_key.update(cx, |s, cx| s.set_placeholder("私钥路径（可选）", window, cx));
+        project_path.update(cx, |s, cx| {
+            s.set_placeholder("项目根目录（含 .RSMETA）", window, cx)
+        });
+        ssl_ca.update(cx, |s, cx| {
+            s.set_placeholder("CA 证书路径（可选）", window, cx)
+        });
+        ssl_cert.update(cx, |s, cx| {
+            s.set_placeholder("客户端证书路径（可选）", window, cx)
+        });
+        ssl_key.update(cx, |s, cx| {
+            s.set_placeholder("私钥路径（可选）", window, cx)
+        });
 
         // 测试连接（block_on，与 workbench 现有服务调用模式一致）。
         let run_test = move |input: DataSourceSaveInput| -> (bool, String) {
@@ -577,7 +711,12 @@ impl ConnectionDialogState {
                 Err(e) => return (false, format!("运行时错误: {e}")),
             };
             let t = rt.block_on(service.test(&input));
-            (t.success, t.message)
+            // 反馈拼上探测到的服务器版本（原型："成功（版本＋延迟）"）。
+            let detail = match t.version.as_deref() {
+                Some(v) => format!("{} · 版本 {}", t.message, v),
+                None => t.message,
+            };
+            (t.success, detail)
         };
 
         window.open_dialog(cx, move |dialog, _, cx| {
@@ -1499,7 +1638,11 @@ impl ClonedDialogState {
         pass: &Entity<InputState>,
         cx: &mut App,
     ) -> Option<DataSourceSaveInput> {
-        let db_type = driver.read(cx).selected_value().cloned().unwrap_or_default();
+        let db_type = driver
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
         if db_type.is_empty() {
             return None;
         }
@@ -1510,22 +1653,49 @@ impl ClonedDialogState {
         }
         let username = {
             let v = user.read(cx).value().to_string();
-            if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
+            if v.trim().is_empty() {
+                None
+            } else {
+                Some(v.trim().to_string())
+            }
         };
         let password = {
             let v = pass.read(cx).value().to_string();
-            if v.is_empty() { None } else { Some(v) }
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
         };
-        let auth_config_id = self.auth_ref.read(cx).selected_value().cloned().and_then(|n| {
-            self.auth_list.borrow().iter().find(|a| a.name.as_deref() == Some(n.as_str()))
-                .map(|a| a.id.clone())
-        });
-        let network_config_id = self.network_ref.read(cx).selected_value().cloned().and_then(|n| {
-            self.network_list.borrow().iter().find(|c| c.name.as_deref() == Some(n.as_str()))
-                .map(|c| c.id.clone())
-        });
+        let auth_config_id = self
+            .auth_ref
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .and_then(|n| {
+                self.auth_list
+                    .borrow()
+                    .iter()
+                    .find(|a| a.name.as_deref() == Some(n.as_str()))
+                    .map(|a| a.id.clone())
+            });
+        let network_config_id = self
+            .network_ref
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .and_then(|n| {
+                self.network_list
+                    .borrow()
+                    .iter()
+                    .find(|c| c.name.as_deref() == Some(n.as_str()))
+                    .map(|c| c.id.clone())
+            });
         let environment_id = self.env.read(cx).selected_value().cloned().and_then(|n| {
-            self.env_list.borrow().iter().find(|e| e.name == n.as_str())
+            self.env_list
+                .borrow()
+                .iter()
+                .find(|e| e.name == n.as_str())
                 .map(|e| e.id.clone())
         });
         let driver_properties = if self.props.borrow().is_empty() {
@@ -1538,11 +1708,20 @@ impl ClonedDialogState {
         // DuckDB 缓存路径 → metadata_path 落库（非空时）。
         let metadata_path = {
             let v = self.cache_path.read(cx).value().to_string();
-            if v.trim().is_empty() { None } else { Some(v.trim().to_string()) }
+            if v.trim().is_empty() {
+                None
+            } else {
+                Some(v.trim().to_string())
+            }
         };
         // 作用域（UI 标签 → ConnectionScope）。
         let scope = scope_from_label(
-            self.scope.read(cx).selected_value().cloned().unwrap_or_default().as_str(),
+            self.scope
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+                .as_str(),
         );
         // 高级选项组装：network_chain + ssl + policy_overrides 合并为一个 JSON。
         let mut adv = serde_json::Map::new();
@@ -1558,7 +1737,13 @@ impl ClonedDialogState {
                 adv.insert("network_chain".into(), serde_json::Value::Array(chain));
             }
         }
-        let ssl_mode = self.ssl_mode.read(cx).selected_value().cloned().unwrap_or_default().to_string();
+        let ssl_mode = self
+            .ssl_mode
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default()
+            .to_string();
         if !ssl_mode.is_empty() && ssl_mode != "disable" {
             let mut ssl = serde_json::Map::new();
             ssl.insert("mode".into(), serde_json::json!(ssl_mode));
@@ -1586,7 +1771,10 @@ impl ClonedDialogState {
             .map(|k| serde_json::json!(k))
             .collect();
         if !overrides.is_empty() {
-            adv.insert("policy_overrides".into(), serde_json::Value::Array(overrides));
+            adv.insert(
+                "policy_overrides".into(),
+                serde_json::Value::Array(overrides),
+            );
         }
         let advanced_options = if adv.is_empty() {
             None
@@ -1602,7 +1790,11 @@ impl ClonedDialogState {
             scope,
             description: {
                 let r = self.remark.read(cx).value().to_string();
-                if r.trim().is_empty() { None } else { Some(r.trim().to_string()) }
+                if r.trim().is_empty() {
+                    None
+                } else {
+                    Some(r.trim().to_string())
+                }
             },
             driver_id: None,
             environment_id,
@@ -2053,19 +2245,37 @@ fn refresh_manager_items(kind: usize, mgr: &Rc<RefCell<ManagerWorkspace>>, cx: &
         Err(_) => return,
     };
     let names: Vec<String> = match kind {
-        0 => rt.block_on(service.list_auth_configs()).unwrap_or_default()
-            .into_iter().filter_map(|a| a.name).collect(),
-        1 => rt.block_on(service.list_network_configs()).unwrap_or_default()
-            .into_iter().filter_map(|n| n.name).collect(),
-        _ => rt.block_on(service.list_environments()).unwrap_or_default()
-            .into_iter().map(|e| e.name).collect(),
+        0 => rt
+            .block_on(service.list_auth_configs())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|a| a.name)
+            .collect(),
+        1 => rt
+            .block_on(service.list_network_configs())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|n| n.name)
+            .collect(),
+        _ => rt
+            .block_on(service.list_environments())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| e.name)
+            .collect(),
     };
     mgr.borrow_mut().items = names;
     let _ = cx;
 }
 
 /// 新建/更新配置（block_on store CRUD；auth_data 密文由 store 内部处理）。
-fn upsert_manager_item(kind: usize, name: &str, tpe: &str, data: &str, editing: Option<&str>) -> String {
+fn upsert_manager_item(
+    kind: usize,
+    name: &str,
+    tpe: &str,
+    data: &str,
+    editing: Option<&str>,
+) -> String {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => return format!("运行时错误: {e}"),
@@ -2092,8 +2302,16 @@ fn upsert_manager_item(kind: usize, name: &str, tpe: &str, data: &str, editing: 
                 let config = AuthConfig {
                     id,
                     name: Some(name.to_string()),
-                    auth_type: if tpe.is_empty() { "password".into() } else { tpe.into() },
-                    auth_data: if data.is_empty() { "{}".into() } else { data.into() },
+                    auth_type: if tpe.is_empty() {
+                        "password".into()
+                    } else {
+                        tpe.into()
+                    },
+                    auth_data: if data.is_empty() {
+                        "{}".into()
+                    } else {
+                        data.into()
+                    },
                     origin: None,
                     source_id: None,
                     snapshot_at: None,
@@ -2110,8 +2328,16 @@ fn upsert_manager_item(kind: usize, name: &str, tpe: &str, data: &str, editing: 
                 let config = NetworkConfig {
                     id,
                     name: Some(name.to_string()),
-                    network_type: if tpe.is_empty() { "SSH".into() } else { tpe.into() },
-                    config: if data.is_empty() { "{}".into() } else { data.into() },
+                    network_type: if tpe.is_empty() {
+                        "SSH".into()
+                    } else {
+                        tpe.into()
+                    },
+                    config: if data.is_empty() {
+                        "{}".into()
+                    } else {
+                        data.into()
+                    },
                     auth_config_id: None,
                     origin: None,
                     source_id: None,
@@ -2129,7 +2355,11 @@ fn upsert_manager_item(kind: usize, name: &str, tpe: &str, data: &str, editing: 
                 let env = Environment {
                     id,
                     name: name.to_string(),
-                    description: Some(if data.is_empty() { "新建环境".into() } else { data.into() }),
+                    description: Some(if data.is_empty() {
+                        "新建环境".into()
+                    } else {
+                        data.into()
+                    }),
                     color: None,
                     sort_order: 0,
                     origin: None,
@@ -2172,7 +2402,10 @@ fn delete_manager_item(kind: usize, name: &str) -> String {
         match kind {
             0 => {
                 let items = db.list_auth_configs(None).await?;
-                let id = items.iter().find(|a| a.name.as_deref() == Some(name)).map(|a| a.id.clone());
+                let id = items
+                    .iter()
+                    .find(|a| a.name.as_deref() == Some(name))
+                    .map(|a| a.id.clone());
                 match id {
                     Some(id) => db.delete_auth_config(&id).await,
                     None => Ok(()), // 不存在视为已删除
@@ -2180,7 +2413,10 @@ fn delete_manager_item(kind: usize, name: &str) -> String {
             }
             1 => {
                 let items = db.list_network_configs(None).await?;
-                let id = items.iter().find(|n| n.name.as_deref() == Some(name)).map(|n| n.id.clone());
+                let id = items
+                    .iter()
+                    .find(|n| n.name.as_deref() == Some(name))
+                    .map(|n| n.id.clone());
                 match id {
                     Some(id) => db.delete_network_config(&id).await,
                     None => Ok(()),
@@ -2221,7 +2457,10 @@ fn refresh_policy_items(env_name: &str, mgr: &Rc<RefCell<ManagerWorkspace>>, cx:
             Ok::<_, shared::error::CoreError>(
                 ps.iter()
                     .map(|p| {
-                        let pos = POLICY_KEYS.iter().position(|k| k == &p.policy_type).unwrap_or(0);
+                        let pos = POLICY_KEYS
+                            .iter()
+                            .position(|k| k == &p.policy_type)
+                            .unwrap_or(0);
                         let label = POLICY_ITEMS
                             .get(pos)
                             .copied()
@@ -2248,7 +2487,11 @@ fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, editing: Optio
         return "全局库未初始化".into();
     };
     let pos = POLICY_ITEMS.iter().position(|p| *p == label).unwrap_or(0);
-    let ptype = POLICY_KEYS.get(pos).copied().unwrap_or("read_only").to_string();
+    let ptype = POLICY_KEYS
+        .get(pos)
+        .copied()
+        .unwrap_or("read_only")
+        .to_string();
 
     let outcome = rt.block_on(async {
         use shared::error::CommonError;
@@ -2257,12 +2500,17 @@ fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, editing: Optio
             .iter()
             .find(|e| e.name == env_name)
             .map(|e| e.id.clone())
-            .ok_or_else(|| shared::error::CoreError::common(CommonError::General(format!(
-                "环境「{env_name}」不存在"
-            ))))?;
+            .ok_or_else(|| {
+                shared::error::CoreError::common(CommonError::General(format!(
+                    "环境「{env_name}」不存在"
+                )))
+            })?;
         let id = match editing {
             Some(pid) => pid.to_string(),
-            None => engine::persistence::id_prefix::generate_gid("pol", &format!("{}_{}", env_name, ptype)),
+            None => engine::persistence::id_prefix::generate_gid(
+                "pol",
+                &format!("{}_{}", env_name, ptype),
+            ),
         };
         let policy = engine::persistence::env_store::EnvironmentPolicy {
             id,
@@ -2280,7 +2528,10 @@ fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, editing: Optio
     });
 
     match outcome {
-        Ok(()) => format!("保存成功：{label}（{}）", if enabled { "启用" } else { "停用" }),
+        Ok(()) => format!(
+            "保存成功：{label}（{}）",
+            if enabled { "启用" } else { "停用" }
+        ),
         Err(e) => format!("保存失败: {e}"),
     }
 }
@@ -2304,7 +2555,11 @@ fn delete_policy_item(id: &str) -> String {
 /// 重建编辑回读 URL（DataSource 无 url 字段，由 host/port/database 重拼）。
 fn reconstruct_url(ds: &DataSource) -> String {
     if matches!(ds.db_type.as_str(), "sqlite" | "duckdb") {
-        return format!("{}:///{}", ds.db_type, ds.database.clone().unwrap_or_default());
+        return format!(
+            "{}:///{}",
+            ds.db_type,
+            ds.database.clone().unwrap_or_default()
+        );
     }
     let auth = ds
         .username
@@ -2327,7 +2582,12 @@ fn reconstruct_url(ds: &DataSource) -> String {
             h,
             ds.database.clone().unwrap_or_default()
         ),
-        _ => format!("{}://{}{}", ds.db_type, ds.database.clone().unwrap_or_default(), ""),
+        _ => format!(
+            "{}://{}{}",
+            ds.db_type,
+            ds.database.clone().unwrap_or_default(),
+            ""
+        ),
     }
 }
 

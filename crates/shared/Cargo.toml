@@ -1,32 +1,32 @@
 [package]
 name = "rds-shared"
-version = "0.1.0"
+version.workspace = true
+edition.workspace = true
 description = "RdataStation v2 shared crate: 跨 Feature 稳定基础层（error/models/arrow/stream/utils/crypto 等）"
-edition = "2021"
 
 [dependencies]
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.135"
-# TS 类型生成（v1 沿用，纯 Rust 可用，不依赖 tauri）
-specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json", "chrono"] }
-thiserror = "1.0.69"
-async-trait = "0.1.88"
+serde.workspace = true
+serde_json.workspace = true
+# TS 类型生成（纯 Rust 可用，不依赖 tauri）
+specta.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
 # 驱动错误转换（error.rs 的 From 实现；后续 error 域拆分时再解耦）
-duckdb = { version = "1.10502.0", features = ["bundled"] }
-rusqlite = { version = "0.32.1", features = ["bundled", "chrono", "serde_json"] }
-chrono = { version = "0.4.41", features = ["serde"] }
-uuid = { version = "1.16.0", features = ["v4", "serde"] }
-arrow = "58.1.0"
-base64 = "0.22.1"
-aes-gcm = "0.10"
-sha2 = "0.10"
-hex = "0.4"
-percent-encoding = "2"
-dashmap = "6.1.0"
-once_cell = "1.20.0"
-lru = "0.12.3"
-dirs = "5.0.1"
-rand = "0.8"
-tokio = { version = "1.44.1", features = ["sync", "time"] }
-futures = "0.3.30"
-tracing = "0.1.41"
+duckdb.workspace = true
+rusqlite.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+arrow.workspace = true
+base64.workspace = true
+aes-gcm.workspace = true
+sha2.workspace = true
+hex.workspace = true
+percent-encoding.workspace = true
+dashmap.workspace = true
+once_cell.workspace = true
+lru.workspace = true
+dirs.workspace = true
+rand.workspace = true
+tokio.workspace = true
+futures.workspace = true
+tracing.workspace = true

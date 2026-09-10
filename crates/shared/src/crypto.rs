@@ -1,5 +1,6 @@
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
+use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -130,9 +131,12 @@ pub fn encrypt_password(password: &str) -> Result<String, CoreError> {
 
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    // aes-gcm 0.11 起 Array::from_slice 已废弃，改用 TryFrom（长度固定 12 字节）
+    let nonce = Nonce::try_from(&nonce_bytes[..]).map_err(|e| {
+        CoreError::common(CommonError::Internal(format!("Nonce init error: {}", e)))
+    })?;
 
-    let ciphertext = cipher.encrypt(nonce, password.as_bytes()).map_err(|e| {
+    let ciphertext = cipher.encrypt(&nonce, password.as_bytes()).map_err(|e| {
         CoreError::common(CommonError::Internal(format!("Encryption error: {}", e)))
     })?;
 
@@ -159,7 +163,9 @@ pub fn decrypt_password(encrypted: &str) -> Result<String, CoreError> {
     }
 
     let (nonce_bytes, ciphertext) = combined.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes).map_err(|e| {
+        CoreError::common(CommonError::Internal(format!("Nonce init error: {}", e)))
+    })?;
 
     // 先用新密钥（随机盐值）解密
     let keys = [derive_key(), derive_legacy_key()];
@@ -167,7 +173,7 @@ pub fn decrypt_password(encrypted: &str) -> Result<String, CoreError> {
         let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
             CoreError::common(CommonError::Internal(format!("AES init error: {}", e)))
         })?;
-        if let Ok(plaintext) = cipher.decrypt(nonce, ciphertext) {
+        if let Ok(plaintext) = cipher.decrypt(&nonce, ciphertext) {
             return String::from_utf8(plaintext).map_err(|e| {
                 CoreError::common(CommonError::Internal(format!("UTF-8 decode error: {}", e)))
             });

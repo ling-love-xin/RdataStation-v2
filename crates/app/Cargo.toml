@@ -11,5 +11,8 @@ path = "src/main.rs"
 [dependencies]
 gpui-kit.workspace = true
 # Round 19：工作台视图（首个可交互骨架）
-workbench = { path = "../workbench", package = "rds-workbench" }
-settings = { path = "../settings", package = "rds-settings" }
+workbench.workspace = true
+settings.workspace = true
+# 应用启动装配：全局系统库初始化（M3 连接 / M4 元数据的持久化根）
+engine.workspace = true
+tokio.workspace = true

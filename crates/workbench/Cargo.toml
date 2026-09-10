@@ -6,27 +6,27 @@ description = "M5 查询工作台：连接管理、结果集、SQL 执行编排"
 
 [dependencies]
 # 依赖键别名，使 v1 迁移代码中的 `engine::` / `connection::` / `insight::` / `shared::` 引用直接生效
-engine = { path = "../engine", package = "rds-engine" }
-connection = { path = "../connection", package = "rds-connection" }
-insight = { path = "../insight", package = "rds-insight" }
-shared = { path = "../shared", package = "rds-shared" }
-mock = { path = "../mock", package = "rds-mock" }
-settings = { path = "../settings", package = "rds-settings" }
-
-# ===== Async 运行时 =====
-tokio = { version = "1.44.1", features = ["full"] }
-
-# ===== 序列化 =====
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.135"
-specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json", "chrono"] }
-
-# ===== 其他 =====
-tracing = "0.1.41"
-duckdb = { version = "1.10502.0", features = ["bundled"] }
-rusqlite = { version = "0.32.1", features = ["bundled", "chrono", "serde_json"] }
-sha2 = "0.10"
-percent-encoding = "2"
+engine.workspace = true
+connection.workspace = true
+insight.workspace = true
+shared.workspace = true
+mock.workspace = true
+settings.workspace = true
 
 # ===== GPUI-kit 视图层（Round 19）=====
 gpui-kit.workspace = true
+
+# ===== Async 运行时 =====
+tokio.workspace = true
+
+# ===== 序列化 =====
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+
+# ===== 其他 =====
+tracing.workspace = true
+duckdb.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+percent-encoding.workspace = true

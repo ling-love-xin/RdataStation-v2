@@ -11,20 +11,20 @@
 
 use std::path::Path;
 
-use gpui_kit::*;
-use gpui_kit::base::StyledExt;
+use gpui_kit::base::{Selectable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{panel_handle, DockArea, DockLayout, DockPlacement, DockSkin};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Root};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, TitleBar};
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
 
-use settings::commands::OpenSettings;
-use settings::settings_view::SettingsView;
 use crate::commands::{HideSidebars, RestoreSidebars, ToggleQuickOpen};
 use crate::panels::{EditorPanel, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel};
+use settings::commands::OpenSettings;
+use settings::settings_view::SettingsView;
 
 /// 左侧活动栏面板。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,11 +89,7 @@ impl LeftPanel {
 }
 
 impl RightPanel {
-    pub const ALL: [RightPanel; 3] = [
-        RightPanel::Insight,
-        RightPanel::Mock,
-        RightPanel::History,
-    ];
+    pub const ALL: [RightPanel; 3] = [RightPanel::Insight, RightPanel::Mock, RightPanel::History];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -198,11 +194,7 @@ impl WorkbenchView {
         let editor_handle = panel_handle(editor.clone());
         area.update(cx, |area, cx| {
             // 中央编辑区单独占满（左右 dock 独立装配，不用 h_split）。
-            area.set_center(
-                DockLayout::tabs().panel_view(editor_handle, cx),
-                window,
-                cx,
-            );
+            area.set_center(DockLayout::tabs().panel_view(editor_handle, cx), window, cx);
         });
 
         self._subscription = Some(subscription);
@@ -229,6 +221,8 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
+                    // 起步宽度 240px（layout-design §2.3；用户拖拽可调，dock 重建时恢复）。
+                    area.set_dock_size(DockPlacement::Left, px(240.), window, cx);
                 } else if !area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
                 }
@@ -242,6 +236,7 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
+                    area.set_dock_size(DockPlacement::Left, px(240.), window, cx);
                 }
                 if area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
@@ -270,6 +265,8 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
+                    // 起步宽度 280px（layout-design §2.3）。
+                    area.set_dock_size(DockPlacement::Right, px(280.), window, cx);
                 } else if !area.is_dock_open(DockPlacement::Right) {
                     area.toggle_dock(DockPlacement::Right, window, cx);
                 }
@@ -283,6 +280,7 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
+                    area.set_dock_size(DockPlacement::Right, px(280.), window, cx);
                 }
                 if area.is_dock_open(DockPlacement::Right) {
                     area.toggle_dock(DockPlacement::Right, window, cx);
@@ -297,7 +295,9 @@ impl WorkbenchView {
     }
 
     // ===== 标题栏 =====
-
+    // 差异点：无窗口标题文本。承载 gpui-kit 官方 TitleBar（对应 layout-design.md §2.1）：
+    // - 窗口拖拽（Drag hitbox，Windows 系统级）、双击最大化、窗口控制按钮（─ □ ✕）由组件自带；
+    // - 高度覆盖为 36px、背景覆盖为主题 title_bar 纯色（对齐 layout-proposal.html v5）。
     fn render_title_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let shared = self.shared.clone();
@@ -307,13 +307,14 @@ impl WorkbenchView {
         let icon_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons/32x32.png");
         let logo = img(icon_path.as_path()).w(px(20.)).h(px(20.)).rounded_sm();
 
-        // 挖空项目槽（标题栏背景深一档，取主题 sidebar 角色，不写死色值）。
+        // 挖空项目槽：标题栏背景深一档。设计语义 token 为 `title_bar.slot.background`
+        // （dark #252526 / light #F3F3F3），语义 token 注册落地前以 sidebar 角色同值替代。
         let slot = div()
             .h_flex()
             .items_center()
             .gap_2()
             .h(px(26.))
-            .px(px(10.))
+            .px(px(14.))
             .rounded_md()
             .bg(theme.colors.sidebar)
             .child(
@@ -331,6 +332,7 @@ impl WorkbenchView {
             );
 
         // Quick Open 入口（点击唤起，Ctrl+P 见 commands.rs 绑定）。
+        // 320×26 居中；底色取 border 角色（dark #3C3C3C，与示意 v5 一致）。
         let qo_shared = shared.clone();
         let qo_entity = entity.clone();
         let quick_open = div()
@@ -339,12 +341,10 @@ impl WorkbenchView {
             .items_center()
             .gap_2()
             .w(px(320.))
-            .h(px(28.))
+            .h(px(26.))
             .px(px(10.))
-            .rounded_md()
-            .border_1()
-            .border_color(theme.colors.border)
-            .bg(theme.colors.background)
+            .rounded_sm()
+            .bg(theme.colors.border)
             .cursor_pointer()
             .child(Icon::new(IconName::Search).size(px(14.)))
             .child(
@@ -365,39 +365,23 @@ impl WorkbenchView {
                 qo_entity.update(app, |_, cx| cx.notify());
             });
 
-        // 窗口控制：Windows 上用官方 WindowControlArea 机制——
-        // 按钮只需声明 hitbox（Min/Max/Close），点击行为由系统触发，
-        // 无需 on_click 回调（与 gpui-component TitleBar 实现一致）。
-        // 注：此前遗留的 TitleBar 对照实验（未导入符号）已清理，标题栏恢复自绘布局。
-        div()
-            .id("title-bar")
-            .w_full()
-            .h(px(40.))
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .bg(theme.colors.danger) // DBG-titlebar-root
+        // 三栏布局：左右 flex_1 占位对称，Quick Open 严格居中；
+        // 右侧窗口控制按钮（─ □ ✕）由 TitleBar 自带渲染，无需自绘。
+        TitleBar::new()
+            .h(px(36.))
+            .pl(px(10.))
+            .bg(theme.colors.title_bar)
             .child(
                 div()
+                    .flex_1()
                     .h_flex()
                     .items_center()
                     .gap_2()
-                    .flex_shrink_0()
-                    .bg(theme.colors.success) // DBG-left
                     .child(logo)
                     .child(slot),
             )
-            .child(
-                div()
-                    .flex_grow(1.)
-                    .flex_shrink_0()
-                    .h_flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.colors.warning) // DBG-mid
-                    .child(quick_open),
-            )
+            .child(quick_open)
+            .child(div().flex_1())
     }
 
     // ===== 活动栏 =====
@@ -415,36 +399,59 @@ impl WorkbenchView {
             .gap_1()
             .border_r_1()
             .border_color(theme.colors.border)
-            .bg(theme.colors.sidebar);
+            // 活动栏背景（产品语义 token activity_bar.background，dark #333333；
+            // 语义 token 注册落地前以 secondary 角色同值替代，见 theme-design §5.4）。
+            .bg(theme.colors.secondary);
 
         for panel in LeftPanel::ALL {
             let entity = cx.entity();
             let shared = self.shared.clone();
+            let selected = active == panel;
+            // VSCode 行为：激活项左侧 2px 亮条 + 亮色图标（activity_bar.active_border，
+            // 取 sidebar_accent_foreground 同值替代；右侧活动栏镜像在右）。
             bar = bar.child(
-                Button::new(format!("left-activity-{}", panel.label()))
-                    .icon(panel.icon())
-                    .size(px(28.))
-                    .ghost()
-                    .toggled(active == panel)
-                    .on_click(move |_, _, app| {
-                        let mode = shared.left_mode.get();
-                        if mode == SidebarMode::Expanded && shared.active_left.get() == panel {
-                            // 再次点击当前激活项 → 收起。
-                            shared.left_mode.set(SidebarMode::Collapsed);
-                        } else {
-                            shared.active_left.set(panel);
-                            shared.left_mode.set(SidebarMode::Expanded);
-                        }
-                        entity.update(app, |_, cx| cx.notify());
-                    }),
+                div()
+                    .w(px(44.))
+                    .h(px(40.))
+                    .h_flex()
+                    .items_center()
+                    .justify_center()
+                    .border_l_2()
+                    .border_color(if selected {
+                        theme.colors.sidebar_accent_foreground
+                    } else {
+                        transparent_black()
+                    })
+                    .child(
+                        Button::new(format!("left-activity-{}", panel.label()))
+                            .icon(panel.icon())
+                            .size(px(28.))
+                            .ghost()
+                            .selected(selected)
+                            .toggled(selected)
+                            .on_click(move |_, _, app| {
+                                let mode = shared.left_mode.get();
+                                if mode == SidebarMode::Expanded
+                                    && shared.active_left.get() == panel
+                                {
+                                    // 再次点击当前激活项 → 收起。
+                                    shared.left_mode.set(SidebarMode::Collapsed);
+                                } else {
+                                    shared.active_left.set(panel);
+                                    shared.left_mode.set(SidebarMode::Expanded);
+                                }
+                                entity.update(app, |_, cx| cx.notify());
+                            }),
+                    ),
             );
         }
 
-        // 底部：弹性占位 + 设置入口（Step 5 接 crates/settings）。
+        // 底部：弹性占位 + 分隔线 + 设置入口（Step 5 接 crates/settings）。
         let entity = cx.entity();
         let shared = self.shared.clone();
         bar = bar
             .child(div().flex_1())
+            .child(div().w(px(28.)).h(px(1.)).bg(theme.colors.border))
             .child(
                 Button::new("left-settings")
                     .icon(IconName::Settings)
@@ -471,27 +478,46 @@ impl WorkbenchView {
             .gap_1()
             .border_l_1()
             .border_color(theme.colors.border)
-            .bg(theme.colors.sidebar);
+            .bg(theme.colors.secondary);
 
         for panel in RightPanel::ALL {
             let entity = cx.entity();
             let shared = self.shared.clone();
+            let selected = active == panel;
+            // 与左侧镜像：激活项 2px 亮条在右。
             bar = bar.child(
-                Button::new(format!("right-activity-{}", panel.label()))
-                    .icon(panel.icon())
-                    .size(px(28.))
-                    .ghost()
-                    .toggled(active == panel)
-                    .on_click(move |_, _, app| {
-                        let mode = shared.right_mode.get();
-                        if mode == SidebarMode::Expanded && shared.active_right.get() == panel {
-                            shared.right_mode.set(SidebarMode::Collapsed);
-                        } else {
-                            shared.active_right.set(panel);
-                            shared.right_mode.set(SidebarMode::Expanded);
-                        }
-                        entity.update(app, |_, cx| cx.notify());
-                    }),
+                div()
+                    .w(px(44.))
+                    .h(px(40.))
+                    .h_flex()
+                    .items_center()
+                    .justify_center()
+                    .border_r_2()
+                    .border_color(if selected {
+                        theme.colors.sidebar_accent_foreground
+                    } else {
+                        transparent_black()
+                    })
+                    .child(
+                        Button::new(format!("right-activity-{}", panel.label()))
+                            .icon(panel.icon())
+                            .size(px(28.))
+                            .ghost()
+                            .selected(selected)
+                            .toggled(selected)
+                            .on_click(move |_, _, app| {
+                                let mode = shared.right_mode.get();
+                                if mode == SidebarMode::Expanded
+                                    && shared.active_right.get() == panel
+                                {
+                                    shared.right_mode.set(SidebarMode::Collapsed);
+                                } else {
+                                    shared.active_right.set(panel);
+                                    shared.right_mode.set(SidebarMode::Expanded);
+                                }
+                                entity.update(app, |_, cx| cx.notify());
+                            }),
+                    ),
             );
         }
 
@@ -499,6 +525,7 @@ impl WorkbenchView {
         let shared = self.shared.clone();
         bar = bar
             .child(div().flex_1())
+            .child(div().w(px(28.)).h(px(1.)).bg(theme.colors.border))
             .child(
                 Button::new("right-settings")
                     .icon(IconName::Settings)
@@ -561,12 +588,13 @@ impl WorkbenchView {
             div()
                 .absolute()
                 .inset_0()
+                .flex()
+                .justify_center()
                 .bg(theme.colors.overlay)
                 .child(
                     div()
-                        .absolute()
-                        .top_1_4()
-                        .left_1_2()
+                        // 示意 v5：面板水平居中、顶部距标题栏 42px。
+                        .mt(px(42.))
                         .w(px(560.))
                         .max_h(px(420.))
                         .v_flex()
@@ -603,7 +631,10 @@ impl WorkbenchView {
         let all_hidden = self.shared.left_mode.get() == SidebarMode::Hidden
             && self.shared.right_mode.get() == SidebarMode::Hidden;
 
+        // 状态栏背景品牌珊瑚色（theme.colors.primary 派生，见 theme-design §5.4），文字取配对前景色。
         StatusBar::new()
+            .bg(theme.colors.primary)
+            .text_color(theme.colors.primary_foreground)
             .left(
                 div()
                     .h_flex()
@@ -615,7 +646,12 @@ impl WorkbenchView {
                             .icon(IconName::PanelLeftClose)
                             .size(px(18.))
                             .ghost()
-                            .label(if all_hidden { "« 恢复" } else { "« 完全隐藏" })
+                            .text_color(theme.colors.primary_foreground)
+                            .label(if all_hidden {
+                                "« 恢复"
+                            } else {
+                                "« 完全隐藏"
+                            })
                             .on_click(move |_, _, app| {
                                 if all_hidden {
                                     shared.left_mode.set(SidebarMode::Expanded);
@@ -627,11 +663,7 @@ impl WorkbenchView {
                                 entity.update(app, |_, cx| cx.notify());
                             }),
                     )
-                    .child(
-                        div()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(format!("左：{left_label} · 右：{right_label}")),
-                    ),
+                    .child(div().child(format!("左：{left_label} · 右：{right_label}"))),
             )
             .right(
                 div()
@@ -639,21 +671,9 @@ impl WorkbenchView {
                     .items_center()
                     .gap_2()
                     .text_xs()
-                    .child(
-                        div()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(format!("连接：{selected}")),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("DuckDB 就绪"),
-                    )
-                    .child(
-                        div()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("UTF-8"),
-                    ),
+                    .child(div().child(format!("连接：{selected}")))
+                    .child(div().child("DuckDB 就绪"))
+                    .child(div().child("UTF-8")),
             )
     }
 }
@@ -770,11 +790,7 @@ fn quick_open_results(
     };
     let matches = |s: &str| needle.is_empty() || s.to_lowercase().contains(&needle);
 
-    let mut list = div()
-        .v_flex()
-        .gap_1()
-        .mt(px(2.))
-        .max_h(px(340.));
+    let mut list = div().v_flex().gap_1().mt(px(2.)).max_h(px(340.));
 
     // ---- 命令组 ----
     let mut cmd_group = div().v_flex().gap_1();
@@ -808,7 +824,9 @@ fn quick_open_results(
         let cmd = *cmd;
         cmd_group = cmd_group.child(
             div()
-                .id(ElementId::Name(SharedString::from(format!("qo-cmd-{label}"))))
+                .id(ElementId::Name(SharedString::from(format!(
+                    "qo-cmd-{label}"
+                ))))
                 .h(px(28.))
                 .pl(px(10.))
                 .pr(px(10.))
@@ -854,7 +872,9 @@ fn quick_open_results(
             let driver = driver.clone();
             res_group = res_group.child(
                 div()
-                    .id(ElementId::Name(SharedString::from(format!("qo-conn-{idx}"))))
+                    .id(ElementId::Name(SharedString::from(format!(
+                        "qo-conn-{idx}"
+                    ))))
                     .h(px(28.))
                     .pl(px(10.))
                     .pr(px(10.))
@@ -936,7 +956,12 @@ enum QuickOpenCommand {
 }
 
 /// 执行 Quick Open 命令：更新 Shared 状态 + 关闭弹层 + notify（Dock 由 render 同步）。
-fn run_quick_command(cmd: QuickOpenCommand, shared: &Shared, entity: &Entity<WorkbenchView>, cx: &mut App) {
+fn run_quick_command(
+    cmd: QuickOpenCommand,
+    shared: &Shared,
+    entity: &Entity<WorkbenchView>,
+    cx: &mut App,
+) {
     match cmd {
         QuickOpenCommand::OpenDraft => {
             shared.active_left.set(LeftPanel::Draft);

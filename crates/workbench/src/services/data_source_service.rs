@@ -11,10 +11,14 @@
 //!
 //! ## 作用域（双轨制）
 //! - `ConnectionScope::Global`：仅全局（G_xxx）
-//! - `ConnectionScope::Project`：仅项目（P_xxx，Phase C 落库）
-//! - `ConnectionScope::GlobalAndProject`：保存全局定义（G_xxx）+ 项目快照（GP_xxx，Phase C）
+//! - `ConnectionScope::Project`：仅项目（P_xxx）
+//! - `ConnectionScope::GlobalAndProject`：保存全局定义（G_xxx）+ 项目快照（GP_xxx）
+//!
+//! 写入前做项目路径预检与同名检查（见 `save`），避免半成品落库与静默覆盖。
 
-use connection::model::{ConnectionScope, DataSource, DataSourceSaveInput, DeleteResult, TestResult};
+use connection::model::{
+    ConnectionScope, DataSource, DataSourceSaveInput, DeleteResult, TestResult,
+};
 use engine::persistence::auth_store::AuthConfig;
 use engine::persistence::driver_store::{DataSourceType, Driver};
 use engine::persistence::env_store::Environment;
@@ -97,11 +101,7 @@ impl DataSourceService {
 
     /// 按 ID 读取数据源。
     pub async fn get(&self, conn_id: &str) -> Result<Option<DataSource>, CoreError> {
-        Ok(self
-            .list()
-            .await?
-            .into_iter()
-            .find(|ds| ds.id == conn_id))
+        Ok(self.list().await?.into_iter().find(|ds| ds.id == conn_id))
     }
 
     /// 保存新连接（全局：G_ 前缀；凭据由 engine 侧 AES-256-GCM 加密落库）。
@@ -120,7 +120,21 @@ impl DataSourceService {
         let global_side = input.scope.includes_global();
         let project_side = input.scope.includes_project();
 
-        if global_side {
+        // 项目侧预检：路径无效时提前失败，避免“全局已写入、项目失败”的半成品。
+        let project_store = if project_side {
+            let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
+                return Err(CoreError::common(shared::error::CommonError::General(
+                    "未打开项目：项目/全局+项目作用域需要项目路径（.RSMETA）".to_string(),
+                )));
+            };
+            Some(open_project_store(path).await?)
+        } else {
+            None
+        };
+
+        // 全局侧：同名检查 + 落库（G_ 为确定性 ID，同名会静默覆盖）。
+        let global_id = if global_side {
+            self.ensure_name_available(&input.name, None).await?;
             let conn_id = id_prefix::generate_gid("conn", &input.name);
             self.global_db
                 .save_global_connection(GlobalConnectionSaveInput {
@@ -148,28 +162,31 @@ impl DataSourceService {
                 .await?;
             // Secret 联动（联邦加速；失败仅告警）。
             super::secret_integration::ensure_secret_registered(&conn_id, &input.db_type, &url);
-            if !project_side {
-                tracing::info!(target: "data_source_service", conn_id = %conn_id, name = %input.name, "数据源已保存（仅全局）");
-                return Ok(conn_id);
-            }
-        }
+            Some(conn_id)
+        } else {
+            None
+        };
 
         // 项目侧：P_ 本地连接 / GP_ 全局快照连接（引用共享；快照深度复制见 Phase C 深化）。
-        let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
-            return Err(CoreError::common(shared::error::CommonError::General(
-                "未打开项目：项目/全局+项目作用域需要项目路径（.RSMETA）".to_string(),
-            )));
-        };
-        let store = open_project_store(path).await?;
-        let pid = if input.scope == ConnectionScope::GlobalAndProject {
-            id_prefix::generate_gpid("conn", &input.name)
-        } else {
-            id_prefix::generate_pid("conn")
-        };
-        let proj = project_connection_from_input(&pid, input, &url)?;
-        store.create_connection(&proj).await?;
-        tracing::info!(target: "data_source_service", conn_id = %pid, name = %input.name, "数据源已保存（项目侧）");
-        Ok(pid)
+        if let Some(store) = project_store {
+            let pid = if input.scope == ConnectionScope::GlobalAndProject {
+                id_prefix::generate_gpid("conn", &input.name)
+            } else {
+                id_prefix::generate_pid("conn")
+            };
+            let proj = project_connection_from_input(&pid, input, &url)?;
+            store.create_connection(&proj).await?;
+            tracing::info!(target: "data_source_service", conn_id = %pid, name = %input.name, "数据源已保存（项目侧）");
+            return Ok(pid);
+        }
+
+        let conn_id = global_id.ok_or_else(|| {
+            CoreError::common(shared::error::CommonError::General(
+                "作用域未包含任何落库侧（内部错误）".to_string(),
+            ))
+        })?;
+        tracing::info!(target: "data_source_service", conn_id = %conn_id, name = %input.name, "数据源已保存（仅全局）");
+        Ok(conn_id)
     }
 
     /// 更新连接（密码为空时保留现有密文，见 engine update_global_connection）。
@@ -195,6 +212,10 @@ impl DataSourceService {
             store.update_connection(&proj).await?;
             return Ok(());
         }
+
+        // 同名检查（排除自身）。
+        self.ensure_name_available(&input.name, Some(conn_id))
+            .await?;
 
         self.global_db
             .update_global_connection(GlobalConnectionUpdateInput {
@@ -227,7 +248,7 @@ impl DataSourceService {
         Ok(())
     }
 
-    /// 删除连接（物理删除 + 尝试清理 DuckDB Secret）。
+    /// 删除连接（物理删除 + 清理分析库中的 DuckDB Secret）。
     pub async fn delete(
         &self,
         conn_id: &str,
@@ -250,10 +271,8 @@ impl DataSourceService {
 
         self.global_db.delete_global_connection(conn_id).await?;
 
-        let mut removed_secret = false;
-        if let Ok(mgr) = connection::secret::SecretManager::in_memory() {
-            removed_secret = mgr.remove(&sanitize_secret_name(conn_id)).is_ok();
-        }
+        // Secret 清理（分析库持久 Secret；未注册过不算失败）。
+        let removed_secret = super::secret_integration::remove_connection_secret(conn_id);
 
         tracing::info!(target: "data_source_service", conn_id, "数据源已删除");
         Ok(DeleteResult {
@@ -285,7 +304,8 @@ impl DataSourceService {
             config = config.with_password(pass);
         }
         if let Some(props) = &input.driver_properties {
-            if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(props)
+            if let Ok(map) =
+                serde_json::from_str::<std::collections::HashMap<String, String>>(props)
             {
                 for (k, v) in map {
                     config = config.with_driver_property(k, v);
@@ -294,6 +314,34 @@ impl DataSourceService {
         }
 
         engine::services::connection_probe::test_connection_result(config).await
+    }
+
+    // ==================== 私有校验 ====================
+
+    /// 同名连接检查（大小写不敏感）。
+    ///
+    /// `generate_gid("conn", name)` 是确定性 ID，同名新建会经 `INSERT OR REPLACE`
+    /// 静默覆盖已有连接；此处提前拦截。`exclude_id` 用于更新场景排除自身。
+    async fn ensure_name_available(
+        &self,
+        name: &str,
+        exclude_id: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let wanted = name.trim().to_lowercase();
+        let existing = self.global_db.get_global_connections(None, None).await?;
+        if let Some(dup) = existing
+            .iter()
+            .find(|c| c.name.trim().to_lowercase() == wanted && Some(c.id.as_str()) != exclude_id)
+        {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                format!(
+                    "连接名称「{}」已存在（{}），请更换名称",
+                    name.trim(),
+                    dup.id
+                ),
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -339,10 +387,7 @@ fn parse_url_host_port_db(
     }
     let rest = url.split("://").nth(1).unwrap_or(url);
     let (authority, database) = match rest.find('/') {
-        Some(i) => (
-            &rest[..i],
-            rest[i + 1..].trim_end_matches('/').to_string(),
-        ),
+        Some(i) => (&rest[..i], rest[i + 1..].trim_end_matches('/').to_string()),
         None => (rest, String::new()),
     };
     let hostport = authority.rsplit('@').next().unwrap_or(authority);
@@ -435,25 +480,6 @@ fn map_info_to_data_source(
         is_active: info.is_active,
         created_at: info.created_at,
         updated_at: info.updated_at,
-    }
-}
-
-/// Secret 名称净化（与 secret_integration 同规则）。
-fn sanitize_secret_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if cleaned.is_empty() {
-        "conn".to_string()
-    } else {
-        cleaned
     }
 }
 

@@ -8,7 +8,8 @@
 //! 5. 工作台视图由 `rds-workbench::WorkbenchView` 提供。
 //!
 //! 启动装配顺序（与 `docs/architecture/settings/settings-crate-design.md` 对齐）：
-//!   SettingsService::init → 主题目录 watch → 应用已保存主题模式 → 快捷键绑定。
+//!   全局系统库初始化 → SettingsService::init → 主题目录 watch →
+//!   应用已保存主题模式 → 快捷键绑定。
 
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
@@ -19,14 +20,18 @@ use workbench::WorkbenchView;
 
 fn main() {
     gpui_kit::application().run(move |cx| {
+        // 0. 全局系统库（global.db / analytics.duckdb）：M3 连接、M4 元数据
+        //    与工作台列表的共同持久化根，必须在任何 Feature 读取前完成初始化。
+        init_global_system();
+
         gpui_kit::init(cx);
 
         // 1. 设置：加载 %APPDATA%/RdataStation/settings.json 为 global。
         SettingsService::init(cx);
 
         // 2. 主题资产目录监听（assets/themes/rds-theme.json，热更新）。
-        let themes_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/themes");
+        let themes_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/themes");
         let _ = ThemeRegistry::watch_dir(themes_dir, cx, |_| {});
 
         // 3. 应用已保存的主题模式（明 / 暗），与 settings 外观节一致。
@@ -57,4 +62,23 @@ fn main() {
         })
         .detach();
     });
+}
+
+/// 初始化全局系统库（执行全局迁移 + 建立连接池单例）。
+///
+/// 运行时全部常驻：sqlx 连接池的后台维护任务依托其存活，不可随初始化结束而销毁。
+/// 失败不阻断启动：工作台会以降级模式显示空列表与错误提示。
+fn init_global_system() {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    let runtime = RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("rds-global-db")
+            .build()
+            .expect("failed to build global-db runtime")
+    });
+    if let Err(e) = runtime.block_on(engine::migration::initialize_global_system()) {
+        // 启动期一次性错误：stderr 供开发/诊断查看，UI 侧由工作台降级提示补充。
+        eprintln!("[startup] 全局系统库初始化失败: {e}");
+    }
 }

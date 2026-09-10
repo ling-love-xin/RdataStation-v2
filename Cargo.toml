@@ -15,16 +15,137 @@ members = [
     "crates/shared",
     "crates/settings",
 ]
+# 默认构建只覆盖 app 依赖图：plugin（extism → wasmtime）不在 app 图上，
+# 裸 `cargo build/check/run` 不必为它付出编译时间。
+# 注意：`cargo test` 默认只覆盖这些成员，需要全量时显式加 `--workspace`。
+default-members = ["crates/app"]
+
+# v1 为历史参考实现（自带 workspace 与 Cargo.lock，不参与 v2 构建），
+# 显式排除以免 cargo 在 v1/backend 下报 “believes it's in a workspace when it's not”。
+exclude = ["v1"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 
+# ============================================================================
+# 依赖唯一入口：所有版本（内部 crate 路径 + 第三方）只在本表声明。
+#   - crate 内一律写 `dep.workspace = true`，需要额外 feature 时写
+#     `dep = { workspace = true, features = [...] }`（feature 只可加、不可减）
+#   - 版本号写「当前构建实际使用的最低版本」，取值来自 Cargo.lock 的解析结果
+#   - 升级策略、约束与待办见 docs/architecture/dependencies/dependency-strategy.md
+# ============================================================================
 [workspace.dependencies]
-# 跨 crate 共享的依赖版本统一在此锁定。
-# 注意：engine 承载 v1 core，其驱动类依赖（rusqlite/duckdb/sqlx 等）与 v1 保持
-# 版本一致，单独声明于 crates/engine/Cargo.toml，避免 workspace 共享导致漂移。
-gpui-kit = "0.6"
+# ===== 内部 crate（依赖键沿用迁移代码里的模块名，路径只在本表出现）=====
+shared = { path = "crates/shared", package = "rds-shared" }
+engine = { path = "crates/engine", package = "rds-engine" }
+connection = { path = "crates/connection", package = "rds-connection" }
+insight = { path = "crates/insight", package = "rds-insight" }
+mock = { path = "crates/mock", package = "rds-mock" }
+settings = { path = "crates/settings", package = "rds-settings" }
+workbench = { path = "crates/workbench", package = "rds-workbench" }
+
+# ===== 表现层 =====
+# gpui-kit 与 gpui 版本强绑定：gpui-kit / gpui-base / gpui-component /
+# gpui-kit-assets 必须同版本（否则门面与内部错配），升级由 GPUI-kit 发布节奏统一决定。
+# 写法是 caret 约束（>=0.6.1, <0.7.0），实际使用的版本由 Cargo.lock 锁定。
+gpui-kit = "0.6.1"
+
+# ===== 分析引擎与数据库驱动 =====
+# arrow 主版本由 duckdb 决定（两端之间传 RecordBatch，必须是同一 arrow），
+# 因此 arrow 只在 duckdb 升级时跟着升。
+duckdb = { version = "1.10505.0", features = ["bundled"] }
+arrow = "58.4.0"
+rusqlite = { version = "0.32.1", features = ["bundled", "chrono", "serde_json"] }
+sqlx = { version = "0.8.6", features = [
+    "mysql",
+    "postgres",
+    "runtime-tokio",
+    "runtime-tokio-native-tls",
+] }
+mysql_async = { version = "0.34.2", default-features = false, features = ["native-tls-tls"] }
+tokio-postgres = { version = "0.7.18", features = ["with-chrono-0_4"] }
+postgres-native-tls = "0.5.3"
+
+# ===== Async 运行时 =====
+# 全 workspace 共用一套 feature（feature 在解析时取并集，逐 crate 裁剪无实际收益）
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-util = { version = "0.7.19", features = ["full"] }
+futures = "0.3.34"
+async-trait = "0.1.92"
+
+# ===== 序列化 =====
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+# 与 TS 类型生成链路绑定的 rc 版本，精确锁定；升级需同步核对 11 个使用方
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json", "chrono"] }
+
+# ===== 时间与标识 =====
+chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
+
+# ===== 日志追踪 =====
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "time", "local-time"] }
+tracing-appender = "0.2.5"
+
+# ===== 错误处理 =====
+thiserror = "2.0.20"
+
+# ===== 连接层（SSL / SSH / Proxy）=====
+native-tls = "0.2.18"
+tokio-native-tls = "0.3.1"
+# russh-keys 已并入 russh（russh::keys），不再单独声明。
+# 默认 feature 用 aws-lc-rs 后端，在 Windows 上需要 NASM（本机没有），
+# 故改为官方支持的 ring 后端；rsa/flate2 保持启用（RSA 密钥与压缩）。
+russh = { version = "0.63.3", default-features = false, features = ["ring", "rsa", "flate2"] }
+tokio-socks = "0.5.3"
+x509-parser = "0.18.1"
+
+# ===== 工具库 =====
+base64 = "0.22.1"
+sha2 = "0.10.9"
+hex = "0.4"
+percent-encoding = "2.3.2"
+dirs = "7.0.0"
+dashmap = "6.2.1"
+once_cell = "1.21.4"
+lru = "0.18.4"
+rand = "0.8.8"
+regex = "1.13.1"
+include_dir = "0.7.4"
+toml = "1.1.5"
+flate2 = "1.1.10"
+# v1 迁移遗留的精确锁定（0.9.x 内 SQL 转译行为有差异），升级需单独验证
+sqlglot-rust = "=0.9.25"
+
+# ===== 单使用方依赖（同样集中声明，避免各模块自行挑版本）=====
+aes-gcm = "0.11.1"
+similar = "3.2.0"
+opener = "0.8.5"
+fake = { version = "5.1.0", features = [
+    "derive",
+    "chrono",
+    "uuid",
+    "http",
+    "ferroid",
+    "ulid",
+    "semver",
+    "random_color",
+    "geo",
+    "url",
+    "serde_json",
+    "bigdecimal",
+    "rust_decimal",
+    "time",
+] }
+extism = "1.30.0"
+reqwest = { version = "0.13.5", features = ["json", "rustls"] }
 
 [profile.dev]
 debug = "line-tables-only"
+
+# 第三方依赖不产 debuginfo：明显降低链接耗时与 PDB/磁盘开销
+# （本仓 crate 仍是 line-tables-only；改动此项会触发一次依赖全量重建）
+[profile.dev.package."*"]
+debug = false

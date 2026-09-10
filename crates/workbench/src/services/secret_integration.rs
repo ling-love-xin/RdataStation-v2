@@ -5,7 +5,8 @@
 //!
 //! 依赖方向：workbench → connection（SecretManager）/ engine / shared。
 
-use connection::secret::{DatabaseCredential, SecretManager, SecretResult};
+use connection::secret::{DatabaseCredential, SecretError, SecretManager, SecretResult};
+use percent_encoding::percent_decode_str;
 use tracing::warn;
 
 /// URL 解析结果（`scheme://user:pass@host:port/database`）
@@ -17,6 +18,11 @@ pub struct UrlParts {
     pub host: String,
     pub port: u16,
     pub database: String,
+}
+
+/// URL 组件百分号解码（`%40` → `@`），避免把编码形式当字面量注册进 Secret。
+fn decode_component(s: &str) -> String {
+    percent_decode_str(s).decode_utf8_lossy().to_string()
 }
 
 /// 解析数据源连接 URL 为 Secret 注册所需字段
@@ -40,16 +46,19 @@ pub fn parse_connection_url(url: &str) -> Option<UrlParts> {
     };
 
     let (user, password) = match userinfo.find(':') {
-        Some(i) => (userinfo[..i].to_string(), userinfo[i + 1..].to_string()),
-        None => (userinfo.to_string(), String::new()),
+        Some(i) => (
+            decode_component(&userinfo[..i]),
+            decode_component(&userinfo[i + 1..]),
+        ),
+        None => (decode_component(userinfo), String::new()),
     };
 
     let (host, port) = match hostport.rfind(':') {
         Some(i) => (
-            hostport[..i].to_string(),
+            decode_component(&hostport[..i]),
             hostport[i + 1..].parse::<u16>().unwrap_or(0),
         ),
-        None => (hostport.to_string(), 0),
+        None => (decode_component(hostport), 0),
     };
 
     let scheme = url.split("://").next()?.to_lowercase();
@@ -61,7 +70,7 @@ pub fn parse_connection_url(url: &str) -> Option<UrlParts> {
         password,
         host,
         port,
-        database,
+        database: decode_component(&database),
     })
 }
 
@@ -128,19 +137,60 @@ fn sanitize_secret_name(name: &str) -> String {
     }
 }
 
-/// 会话级 Secret 注册（失败仅告警，不阻断连接——加速是增强而非依赖）
+/// 分析库（DuckDB）路径：Secret 注册/注销的统一目标（`analytics.duckdb`）。
+fn analysis_db_path() -> Option<std::path::PathBuf> {
+    match engine::migration::get_global_duckdb_path() {
+        Ok(path) => Some(path),
+        Err(e) => {
+            warn!("[secret] 无法定位分析库，跳过 Secret 联动: {e}");
+            None
+        }
+    }
+}
+
+/// 会话级 Secret 注册（失败仅告警，不阻断连接——加速是增强而非依赖）。
+///
+/// 注册目标为持久分析库（`analytics.duckdb`），跨会话可用；
+/// 临时内存库注册随连接句柄销毁而丢失，不具备联邦加速能力。
 pub fn ensure_secret_registered(conn_id: &str, db_type: &str, url: &str) {
     if db_type_to_secret_type(db_type).is_none() {
         return; // 非联邦目标类型不注册
     }
-    match SecretManager::in_memory()
+    let Some(path) = analysis_db_path() else {
+        return;
+    };
+    match SecretManager::open(&path)
         .and_then(|mgr| register_connection_secret(&mgr, conn_id, db_type, url))
     {
-        Ok(()) => warn!("[secret] 已为连接 {} 注册 DuckDB Secret（联邦加速可用）", conn_id),
+        Ok(()) => tracing::info!(
+            "[secret] 已为连接 {} 注册 DuckDB Secret（联邦加速可用）",
+            conn_id
+        ),
         Err(e) => warn!(
             "[secret] 连接 {} 的 Secret 注册跳过（不影响连接）: {}",
             conn_id, e
         ),
+    }
+}
+
+/// 删除连接时注销 Secret；返回是否确实移除了已有 Secret。
+///
+/// 未注册过（未开启联邦加速）返回 false，不视为失败。
+pub fn remove_connection_secret(conn_id: &str) -> bool {
+    let Some(path) = analysis_db_path() else {
+        return false;
+    };
+    let name = sanitize_secret_name(conn_id);
+    match SecretManager::open(&path).and_then(|mgr| mgr.remove(&name)) {
+        Ok(()) => {
+            tracing::info!("[secret] 已移除连接 {} 的 DuckDB Secret", conn_id);
+            true
+        }
+        Err(SecretError::NotFound(_)) => false,
+        Err(e) => {
+            warn!("[secret] 连接 {} 的 Secret 移除失败: {}", conn_id, e);
+            false
+        }
     }
 }
 
@@ -154,7 +204,7 @@ mod tests {
             .expect("parse ok");
         assert_eq!(p.scheme, "postgres");
         assert_eq!(p.user, "admin");
-        assert_eq!(p.password, "p%40ss");
+        assert_eq!(p.password, "p@ss", "百分号编码应解码后再注册");
         assert_eq!(p.host, "db.example.com");
         assert_eq!(p.port, 5432);
         assert_eq!(p.database, "market");
@@ -189,8 +239,13 @@ mod tests {
     #[test]
     fn test_register_postgres_secret_roundtrip() {
         let mgr = SecretManager::in_memory().unwrap();
-        register_connection_secret(&mgr, "conn-001", "postgres",
-            "postgres://admin:secret@localhost:5432/market").unwrap();
+        register_connection_secret(
+            &mgr,
+            "conn-001",
+            "postgres",
+            "postgres://admin:secret@localhost:5432/market",
+        )
+        .unwrap();
         let list = mgr.list().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].secret_type.to_uppercase(), "POSTGRES");
