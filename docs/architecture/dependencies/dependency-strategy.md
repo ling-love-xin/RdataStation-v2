@@ -71,22 +71,26 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 - `dirs` 5.0.1 → 7.0.0、`x509-parser` 0.17.0 → 0.18.1（未改代码）
 - `aes-gcm` 0.10.3 → 0.11.1（`crates/shared/src/crypto.rs`：`OsRng` 改用 `rand::rngs::OsRng`，`Nonce::from_slice` 改 `Nonce::try_from`，旧的 `aes_gcm::aead::OsRng` 已被移除）
 - `toml` 0.8.23 → 1.1.5、`reqwest` 0.12.28 → 0.13.5（未改代码；reqwest 0.13 把 `rustls-tls` feature 改名为 `rustls`）
+- `rusqlite` 0.32.1 → **0.40.2**（与 sqlx 联动，见 §5「native 库约束」）。代码改动集中在 `crates/engine/src/persistence/`：
+  - `log_store.rs`：3 处 `COUNT(*)` 先取 `i64` 再 `as usize`
+  - `sql_template_store.rs`：`created_at_ms` / `updated_at_ms` 写入用 `as i64`，读回用 `row.get::<_, i64>(..)? as u64`
+  - `workbench_context_store.rs`：`updated_at_ms` 同上；可空列 `selection_start` / `selection_end`（`Option<usize>`）用 `Option<i64>` + `map`，保持 NULL ↔ None 语义
+  - 根因：rusqlite 0.33+ **移除了 `u64` / `usize` 的 `ToSql` / `FromSql`**（SQLite 整数只有 i64，避免越界歧义）
 - `russh` 0.49.2 → 0.63.3（`russh-keys` 并入 `russh::keys`，依赖项已删除）。代码改动集中在 `crates/connection`：
   - `russh_keys::*` → `russh::keys::*`（含 `#[cfg(unix)]` 的 agent 路径；**Windows 上不参与编译，需在 Linux/macOS 侧补验**）
   - `Handler` 改为原生 async trait（去掉 `#[async_trait]`），`check_server_key` 入参改为 `PublicKeyOrCertificate`（证书形式统一 `.public_key()` 后按公钥校验）
   - `PrivateKeyWithHashAlg::new` 不再返回 `Result`，移除对应的 `map_err` 分支
   - 单测去掉 RNG 依赖：改用两把固定测试公钥（`PublicKey::from_openssh`）—— `rand_core 0.10` 已移除 `OsRng`，且 `PrivateKey::random` 要求的 trait 与 rand 0.8 不兼容；`connection` 的 `dev-dependencies.rand` 随之删除
 
-以上验证：`cargo check -p rds-connection`、`cargo test -p rds-connection`（**20 项全过**）`cargo check-all` 全量通过。
+以上验证：`cargo check-all` 全量通过；`cargo test-all`（全 workspace）**约 430 项全过**（engine 219 / insight 53 / mock 56 / connection 21 / shared 19 / workbench 12 / project 10 / plugin 11，加 workbench 集成测试 19 项）。
 
 待办：
 
 | 依赖 | 当前 | 最新可用 | 代码使用点 | 备注 |
 | --- | --- | --- | --- | --- |
-| `rusqlite` | 0.32.1 | 0.39.0（0.40.2 解析时被跳过，需确认） | 314 | 最重，`Params`/`Row`/错误类型均有变更 |
+| `sqlglot-rust` | `=0.9.25` | 0.10.29（0.9.x 内已有 0.9.37） | 25 | 需 SQL 转译回归 |
+| `sqlx` | 0.8.6 | 0.9.0 | 43 | 与 rusqlite 共享 `libsqlite3-sys`（`links`），升级需两者同步评估；见 §5「native 库约束」 |
 | `mysql_async` | 0.34.2 | 0.37.1 | 67 | 驱动 API 变更 |
-| `sqlx` | 0.8.6 | 0.9.0 | 43 | 驱动 API 变更 |
-| `sqlglot-rust` | `=0.9.25` | 0.10.29 | 25 | 需 SQL 转译回归 |
 | `rand` | 0.8.8 | 0.10.2 | 19 | `thread_rng`/`gen_range` 等改名；注意 `fake` 内部仍用 rand 0.8，升完也不去重 |
 | `arrow` | 58.4.0 | 59.3.0 | — | **不可单独升**，须与 `duckdb` 同步（见 R4） |
 
@@ -94,7 +98,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 
 ### 业务关键依赖
 
-- **`sqlglot-rust`｜SQL 编辑器的解析 / 格式化 / 转译**：`crates/engine/src/sql/`（`mod.rs` / `engine.rs` / `parser.rs` / `formatter.rs` / `transpiler.rs` / `builder.rs`）是它在全仓的**唯一接入点**，业务模块只 `use crate::sql::SqlEngine`，不直接依赖 sqlglot API。它直接支撑编辑页面的 SQL 能力，因此保持 `=0.9.25` 精确锁定；升到 0.10.x 属于业务相关变更，需先补齐「语句分类 / 格式化 / 跨方言转译」的回归用例，并单独提交。
+- **`sqlglot-rust`｜SQL 编辑器的解析 / 格式化 / 转译**：`crates/engine/src/sql/`（`mod.rs` / `engine.rs` / `parser.rs` / `formatter.rs` / `transpiler.rs` / `builder.rs`）是它在全仓的**唯一接入点**，业务模块只 `use crate::sql::SqlEngine`，不直接依赖 sqlglot API。它直接支撑编辑页面的 SQL 能力，因此保持 `=0.9.25` 精确锁定；升到 0.10.x 属于业务相关变更，需先补齐「语句分类 / 格式化 / 跨方言转译」的回归用例，并单独提交。（`cargo` 提示 0.9.x 内已有 0.9.37，若只想小步前进可在 0.9.x 内推进，但同样要跑 SQL 回归。）
 - **`gpui-kit` 家族**：`gpui-kit` / `gpui-base` / `gpui-component` / `gpui-kit-assets` 必须同版本，随 GPUI-kit 发布节奏整套升（见 R4）。
 - **`arrow` 跟随 `duckdb`**（见 R4）。
 
@@ -105,6 +109,13 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
   `ring` 与 `aws-lc-rs` 同属 BoringSSL 家族，SSH 算法集合基本一致；`rsa`（RSA 密钥）与 `flate2`（压缩）保持启用。
 - `aes-gcm` 只用于 `crates/shared/src/crypto.rs` 的密码加解密（12 字节 nonce + AES-256-GCM + base64），升级后密文格式不变，已有密文可继续解开。
 - 另：`reqwest` → `rustls` 链路也会带入 `aws-lc-sys`，本机实测未触发 NASM 报错（两处配置不同）；新机器首次构建若报 NASM 缺失，优先查这条链（装 NASM 或调整 rustls 的 crypto provider）。
+
+### native 库约束（links）
+
+- `sqlx` 与 `rusqlite` 都间接依赖 `libsqlite3-sys`，而它声明 `links = "sqlite3"`——**同一依赖图里只能存在一份**，否则 cargo 直接拒绝解析（报 links 冲突）。实测：sqlx 0.8.6 一旦启用 `macros` / `migrate` / `json`（经 `sqlx-macros-core`）就会把 `sqlx-sqlite` 拉进图，从而钉死 `libsqlite3-sys 0.30`，使 rusqlite 无法升到 0.40（需 0.38）。
+- 因此本仓 sqlx 用**最小 feature 集**：`default-features = false` + `["mysql", "postgres", "runtime-tokio", "runtime-tokio-native-tls"]`。我们只用运行时的 `sqlx::query` / `query_scalar`（不用 `query!` 宏、不用 sqlx 迁移、不用 JSON 列），所以去掉 `macros` / `migrate` / `json` 是安全的。
+- 动这条规则前先确认：一旦 sqlx 重新引入 `sqlx-sqlite`，必须保证它与 rusqlite 需要**同一个** `libsqlite3-sys` 版本（或干脆先升级 sqlx）。
+- 本次为拿到干净解析，`Cargo.lock` 整体重新生成过一次（各依赖仍在 caret 范围内取最新）。
 
 ### 存量评估
 

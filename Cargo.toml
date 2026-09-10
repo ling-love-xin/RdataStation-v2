@@ -67,7 +67,7 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "runtime-tokio",
     "runtime-tokio-native-tls",
 ] }
-mysql_async = { version = "0.34.2", default-features = false, features = ["native-tls-tls"] }
+mysql_async = { version = "0.37.1", default-features = false, features = ["native-tls-tls"] }
 tokio-postgres = { version = "0.7.18", features = ["with-chrono-0_4"] }
 postgres-native-tls = "0.5.3"
 
@@ -120,8 +120,9 @@ regex = "1.13.1"
 include_dir = "0.7.4"
 toml = "1.1.5"
 flate2 = "1.1.10"
-# v1 迁移遗留的精确锁定（0.9.x 内 SQL 转译行为有差异），升级需单独验证
-sqlglot-rust = "=0.9.25"
+# SQL 编辑器核心解析/转译：业务关键依赖，精确锁定
+# （接入点唯一，见 crates/engine/src/sql/；升大版本前先跑 SQL 回归）
+sqlglot-rust = "=0.10.29"
 
 # ===== 单使用方依赖（同样集中声明，避免各模块自行挑版本）=====
 aes-gcm = "0.11.1"

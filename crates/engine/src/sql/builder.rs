@@ -30,6 +30,8 @@ fn make_table_ref(name: &str) -> TableRef {
         name: name.to_string(),
         alias: None,
         name_quote_style: QuoteStyle::DoubleQuote,
+        // 0.10 新增：别名引号风格。此处无别名，取默认（不加引号）
+        alias_quote_style: QuoteStyle::None,
     }
 }
 
@@ -220,6 +222,40 @@ pub fn build_create_index(name: &str, table: &str, columns: &[String], unique: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 固化生成结果（含标识符加引号的方式）
+    ///
+    /// sqlglot-rust 升级会动到引号/风格处理（0.10 起 `TableRef` 新增 `alias_quote_style`），
+    /// 这里钉住当前输出，依赖行为一变更就会失败
+    #[test]
+    fn test_generated_sql_is_pinned() {
+        let cols = vec![ColumnDefInfo {
+            name: "id".to_string(),
+            data_type: "INT".to_string(),
+            unique: true,
+            nullable: false,
+        }];
+        assert_eq!(
+            build_create_table("users", &cols, false),
+            "CREATE TABLE \"users\" (id INT UNIQUE NOT NULL)"
+        );
+        assert_eq!(
+            build_drop_table("users", true),
+            "DROP TABLE IF EXISTS \"users\""
+        );
+        assert_eq!(
+            build_select_all("users", Some(10)),
+            "SELECT * FROM users LIMIT 10"
+        );
+        assert_eq!(
+            build_insert(
+                "users",
+                &["id".to_string(), "name".to_string()],
+                &[vec!["1".to_string(), "Alice".to_string()]]
+            ),
+            "INSERT INTO \"users\" (id, name) VALUES ('1', 'Alice')"
+        );
+    }
 
     #[test]
     fn test_build_create_table() {
