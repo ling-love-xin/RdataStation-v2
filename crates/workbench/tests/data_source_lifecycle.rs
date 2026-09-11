@@ -176,19 +176,22 @@ fn delete_removes_connection_and_cleans_secret() {
     i.use_duckdb_fed = Some(true);
     let id = rt.block_on(service.save(&i, None)).expect("save");
 
-    // 保存应联动注册 DuckDB Secret（目标库隔离在临时目录）。
-    let secret_path = dir.join("secret-target.duckdb");
-    let mgr = connection::secret::SecretManager::open(&secret_path).expect("open secret db");
+    // 保存应联动注册 DuckDB Secret（目标库与 Secret 目录均隔离在临时目录）。
+    let secret_db = dir.join("secret-target.duckdb");
+    let secret_dir = dir.join("secrets");
+    let mgr = connection::secret::SecretManager::open_with_dir(&secret_db, Some(&secret_dir))
+        .expect("open secret db");
     let secrets = mgr.list().expect("list secrets");
     assert_eq!(secrets.len(), 1, "保存后应注册联邦 Secret：{secrets:?}");
-    assert_eq!(secrets[0].name, id);
+    assert_eq!(secrets[0].name, id.to_lowercase(), "Secret 名为连接 ID 小写形式");
     drop(mgr);
 
     let result = rt.block_on(service.delete(&id, None)).expect("delete");
     assert!(result.removed_secret, "删除应清理 Secret：{result:?}");
     assert!(result.message.contains("Secret 已清理"));
 
-    let mgr = connection::secret::SecretManager::open(&secret_path).expect("reopen secret db");
+    let mgr = connection::secret::SecretManager::open_with_dir(&secret_db, Some(&secret_dir))
+        .expect("reopen secret db");
     assert!(mgr.list().expect("list").is_empty(), "Secret 应被移除");
     drop(mgr);
 
@@ -197,6 +200,31 @@ fn delete_removes_connection_and_cleans_secret() {
     // 再次删除 → 记录不存在（engine 删除不报错），Secret 清理为 false 不视为失败。
     let again = rt.block_on(service.delete(&id, None)).expect("delete again");
     assert!(!again.removed_secret);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn save_without_federation_does_not_register_secret() {
+    let dir = temp_dir("no-register");
+    let service = make_service(&dir);
+    let rt = runtime();
+
+    let mut i = input("plain_pg", "postgres", "postgres://u:p@127.0.0.1:5432/plain");
+    i.use_duckdb_fed = Some(false);
+    rt.block_on(service.save(&i, None)).expect("save");
+
+    let secret_dir = dir.join("secrets");
+    let mgr = connection::secret::SecretManager::open_with_dir(
+        dir.join("secret-target.duckdb"),
+        Some(&secret_dir),
+    )
+    .expect("open secret db");
+    assert!(
+        mgr.list().expect("list").is_empty(),
+        "未开启联邦加速不应注册 Secret"
+    );
+    drop(mgr);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

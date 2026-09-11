@@ -169,13 +169,15 @@ impl DataSourceService {
                     schema_name: input.schema_name.as_deref(),
                 })
                 .await?;
-            // Secret 联动（联邦加速；失败仅告警）。
-            super::secret_integration::ensure_secret_registered_at(
-                self.analysis_db.as_deref(),
-                &conn_id,
-                &input.db_type,
-                &url,
-            );
+            // Secret 联动：仅开启本地加速时注册（失败仅告警）。
+            if input.use_duckdb_fed.unwrap_or(false) {
+                super::secret_integration::ensure_secret_registered_at(
+                    self.analysis_db.as_deref(),
+                    &conn_id,
+                    &input.db_type,
+                    &url,
+                );
+            }
             Some(conn_id)
         } else {
             None
@@ -258,12 +260,20 @@ impl DataSourceService {
             })
             .await?;
 
-        super::secret_integration::ensure_secret_registered_at(
-            self.analysis_db.as_deref(),
-            conn_id,
-            &input.db_type,
-            &url,
-        );
+        // 联邦加速开关联动：开 → 注册；关 → 清理（避免残留旧凭据）。
+        if input.use_duckdb_fed.unwrap_or(false) {
+            super::secret_integration::ensure_secret_registered_at(
+                self.analysis_db.as_deref(),
+                conn_id,
+                &input.db_type,
+                &url,
+            );
+        } else {
+            let _ = super::secret_integration::remove_connection_secret_at(
+                self.analysis_db.as_deref(),
+                conn_id,
+            );
+        }
         Ok(())
     }
 

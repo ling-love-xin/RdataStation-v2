@@ -1,3 +1,4 @@
+pub mod duckdb;
 pub mod executor;
 pub mod global_init;
 /**

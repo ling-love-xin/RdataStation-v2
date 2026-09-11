@@ -441,23 +441,27 @@ impl ProjectDatabaseManager {
         Ok(())
     }
 
-    /// 初始化 DuckDB 表结构（使用迁移系统）
+    /// 初始化 DuckDB 表结构（复用已打开的 DuckDB 连接执行迁移）。
+    ///
+    /// 不使用 `MigrationManager`（rusqlite）：它无法打开 DuckDB 文件，且对同一文件
+    /// 二次 open 会因文件锁冲突失败（Windows 报 "unable to open database file"）。
     async fn init_duckdb_tables(&self) -> Result<(), CoreError> {
-        let duckdb_path = self.duckdb_conn.path().clone();
+        let conn_arc = self.duckdb_conn.acquire().await?;
+        let guard = conn_arc.lock().await;
+        let conn = guard.as_ref().ok_or_else(|| {
+            CoreError::common(CommonError::General(
+                "DuckDB connection is closed".to_string(),
+            ))
+        })?;
 
-        // 执行项目分析迁移
-        let migration_manager = MigrationManager::new();
-        migration_manager
-            .migrate(&duckdb_path, MigrationType::ProjectAnalysis)
-            .map_err(|e| {
-                CoreError::Storage(StorageError::Persistence {
-                    store: "duckdb".to_string(),
-                    operation: "migrate_project_analysis".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
+        let applied =
+            crate::migration::duckdb::apply_migrations(conn, MigrationType::ProjectAnalysis)?;
 
-        tracing::info!(db_path = %duckdb_path.display(), "Project DuckDB tables initialized via migrations");
+        tracing::info!(
+            db_path = %self.duckdb_conn.path().display(),
+            applied,
+            "Project DuckDB tables initialized via migrations"
+        );
 
         Ok(())
     }
@@ -886,7 +890,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "项目数据库初始化存在迁移系统问题，需单独修复"]
     async fn test_project_db_creation() {
         let project_path = test_temp_dir("creation");
 

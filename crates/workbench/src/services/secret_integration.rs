@@ -118,7 +118,8 @@ pub fn register_connection_secret(
     mgr.register(&cred)
 }
 
-/// Secret 名称净化（DuckDB 标识符：字母/数字/下划线，连字符等其他字符转下划线）
+/// Secret 名称净化：按 DuckDB 标识符规则（字母/数字/下划线）转换，
+/// 并统一转小写（未加引号的标识符会被 DuckDB 折叠为小写，避免注册名与回读名不一致）。
 fn sanitize_secret_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -133,7 +134,7 @@ fn sanitize_secret_name(name: &str) -> String {
     if cleaned.is_empty() {
         "conn".to_string()
     } else {
-        cleaned
+        cleaned.to_ascii_lowercase()
     }
 }
 
@@ -148,16 +149,39 @@ fn analysis_db_path() -> Option<std::path::PathBuf> {
     }
 }
 
-/// 会话级 Secret 注册（默认目标：全局分析库）。
+/// 解析 Secret 目标：`(数据库文件, Secret 落盘目录)`。
+///
+/// 默认（`None`）：全局分析库 + `{system}/secrets`（应用可控目录，不写用户主目录
+/// `~/.duckdb`）；`Some(db)`：以该库所在目录的 `secrets/` 子目录为 Secret 目录
+/// （测试/多环境隔离）。
+fn resolve_target(
+    target: Option<&std::path::Path>,
+) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    match target {
+        Some(db) => {
+            let dir = db
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("secrets");
+            Some((db.to_path_buf(), dir))
+        }
+        None => {
+            let db = analysis_db_path()?;
+            let dir = engine::migration::get_system_dir().ok()?.join("secrets");
+            Some((db, dir))
+        }
+    }
+}
+
+/// 会话级 Secret 注册（默认目标：全局分析库 + `{system}/secrets`）。
 pub fn ensure_secret_registered(conn_id: &str, db_type: &str, url: &str) {
     ensure_secret_registered_at(None, conn_id, db_type, url);
 }
 
 /// 会话级 Secret 注册（可指定目标库；`None` = 全局分析库）。
 ///
-/// 注册目标为持久分析库（`analytics.duckdb`），跨会话可用；
-/// 临时内存库注册随连接句柄销毁而丢失，不具备联邦加速能力。
-/// `target` 供测试/多环境注入，避免触碰用户真实分析库。
+/// Secret 以 `PERSISTENT` 方式落盘到 Secret 目录，跨会话可用；
+/// `target` 供测试/多环境注入，避免触碰用户真实分析库与默认 Secret 存储。
 pub fn ensure_secret_registered_at(
     target: Option<&std::path::Path>,
     conn_id: &str,
@@ -167,14 +191,10 @@ pub fn ensure_secret_registered_at(
     if db_type_to_secret_type(db_type).is_none() {
         return; // 非联邦目标类型不注册
     }
-    let path = match target {
-        Some(p) => p.to_path_buf(),
-        None => match analysis_db_path() {
-            Some(p) => p,
-            None => return,
-        },
+    let Some((db, dir)) = resolve_target(target) else {
+        return;
     };
-    match SecretManager::open(&path)
+    match SecretManager::open_with_dir(&db, Some(&dir))
         .and_then(|mgr| register_connection_secret(&mgr, conn_id, db_type, url))
     {
         Ok(()) => tracing::info!(
@@ -197,15 +217,11 @@ pub fn remove_connection_secret(conn_id: &str) -> bool {
 ///
 /// 未注册过（未开启联邦加速）返回 false，不视为失败。
 pub fn remove_connection_secret_at(target: Option<&std::path::Path>, conn_id: &str) -> bool {
-    let path = match target {
-        Some(p) => p.to_path_buf(),
-        None => match analysis_db_path() {
-            Some(p) => p,
-            None => return false,
-        },
+    let Some((db, dir)) = resolve_target(target) else {
+        return false;
     };
     let name = sanitize_secret_name(conn_id);
-    match SecretManager::open(&path).and_then(|mgr| mgr.remove(&name)) {
+    match SecretManager::open_with_dir(&db, Some(&dir)).and_then(|mgr| mgr.remove(&name)) {
         Ok(()) => {
             tracing::info!("[secret] 已移除连接 {} 的 DuckDB Secret", conn_id);
             true
@@ -262,7 +278,15 @@ mod tests {
 
     #[test]
     fn test_register_postgres_secret_roundtrip() {
-        let mgr = SecretManager::in_memory().unwrap();
+        // 隔离存储目录：不触碰 DuckDB 默认 Secret 存储（用户主目录）。
+        let dir = std::env::temp_dir().join(format!("rds_secret_rt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let mgr = SecretManager::open_with_dir(
+            dir.join("store.duckdb"),
+            Some(&dir.join("secrets")),
+        )
+        .expect("open isolated store");
         register_connection_secret(
             &mgr,
             "conn-001",
@@ -275,6 +299,8 @@ mod tests {
         assert_eq!(list[0].secret_type.to_uppercase(), "POSTGRES");
         // 名称净化：conn-001 → conn_001
         assert_eq!(list[0].name, "conn_001");
+        drop(mgr);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -282,5 +308,7 @@ mod tests {
         assert_eq!(sanitize_secret_name("conn-001"), "conn_001");
         assert_eq!(sanitize_secret_name("连接 01"), "___01");
         assert_eq!(sanitize_secret_name(""), "conn");
+        // DuckDB 未加引号的标识符折叠为小写，净化统一小写避免回读不一致。
+        assert_eq!(sanitize_secret_name("G_conn_Demo"), "g_conn_demo");
     }
 }

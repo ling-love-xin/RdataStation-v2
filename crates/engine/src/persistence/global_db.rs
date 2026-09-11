@@ -502,104 +502,18 @@ impl GlobalDatabaseManager {
         }
 
         // 使用 DuckDB 连接执行迁移
+        // （DuckDB 迁移器与 SQLite 版分离，见 `migration::duckdb`；复用连接避免二次 open）
         let conn = Self::open_duckdb_for_migration(&duckdb_path)?;
+        let applied = crate::migration::duckdb::apply_migrations(
+            &conn,
+            crate::migration::MigrationType::ProjectAnalysis,
+        )?;
 
-        // 确保迁移版本表存在
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version     INTEGER PRIMARY KEY,
-                name        TEXT NOT NULL,
-                applied_at  INTEGER NOT NULL
-            )",
-            [],
-        )
-        .map_err(|e| {
-            CoreError::Storage(StorageError::Persistence {
-                store: "duckdb".to_string(),
-                operation: "create_schema_version".to_string(),
-                reason: e.to_string(),
-            })
-        })?;
-
-        // 获取当前版本
-        let current_version: u32 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| {
-                CoreError::Storage(StorageError::Persistence {
-                    store: "duckdb".to_string(),
-                    operation: "get_current_version".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
-
-        // 加载并执行迁移
-        use include_dir::include_dir;
-        const MIGRATIONS_DIR: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/migrations");
-
-        if let Some(dir) = MIGRATIONS_DIR.get_dir("project_analysis") {
-            let mut migrations: Vec<_> = dir
-                .files()
-                .filter_map(|f| {
-                    let filename = f.path().file_name()?.to_str()?;
-                    if !filename.ends_with(".sql") {
-                        return None;
-                    }
-                    let stem = filename.strip_suffix(".sql")?;
-                    let parts: Vec<&str> = stem.splitn(2, '_').collect();
-                    if parts.len() != 2 {
-                        return None;
-                    }
-                    let version = parts[0].parse::<u32>().ok()?;
-                    if version <= current_version {
-                        return None;
-                    }
-                    let name = parts[1].to_string();
-                    let sql = f.contents_utf8()?.to_string();
-                    Some((version, name, sql))
-                })
-                .collect();
-
-            migrations.sort_by_key(|m| m.0);
-
-            for (version, name, sql) in migrations {
-                conn.execute_batch(&sql).map_err(|e| {
-                    CoreError::Storage(StorageError::Persistence {
-                        store: "duckdb".to_string(),
-                        operation: format!("migrate_{}", name),
-                        reason: e.to_string(),
-                    })
-                })?;
-
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-
-                conn.execute(
-                    "INSERT INTO schema_version (version, name, applied_at) VALUES (?1, ?2, ?3)",
-                    [
-                        &version as &dyn duckdb::ToSql,
-                        &name as &dyn duckdb::ToSql,
-                        &now as &dyn duckdb::ToSql,
-                    ],
-                )
-                .map_err(|e| {
-                    CoreError::Storage(StorageError::Persistence {
-                        store: "duckdb".to_string(),
-                        operation: "record_version".to_string(),
-                        reason: e.to_string(),
-                    })
-                })?;
-
-                tracing::info!("Applied DuckDB migration {} (version {})", name, version);
-            }
-        }
-
-        tracing::info!(db_path = %duckdb_path.display(), "Global DuckDB tables initialized via migrations");
+        tracing::info!(
+            db_path = %duckdb_path.display(),
+            applied,
+            "Global DuckDB tables initialized via migrations"
+        );
 
         Ok(())
     }

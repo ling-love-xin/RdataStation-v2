@@ -19,10 +19,6 @@ scratchpad.workspace = true
 # ===== GPUI-kit 视图层（Round 19）=====
 gpui-kit.workspace = true
 
-[dev-dependencies]
-# 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
-gpui-kit = { workspace = true, features = ["test-support"] }
-
 # ===== Async 运行时 =====
 tokio.workspace = true
 
@@ -43,3 +39,7 @@ duckdb.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 percent-encoding.workspace = true
+
+[dev-dependencies]
+# 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
+gpui-kit = { workspace = true, features = ["test-support"] }

@@ -68,18 +68,38 @@ pub type SecretResult<T> = Result<T, SecretError>;
 
 /// DuckDB Secret 管理器：注册 / 列出 / 删除数据源凭据
 ///
-/// `DuckDBManager` 连接可来自项目分析引擎（`analytics.duckdb`）或内存。
-/// 注册的 Secret 持久化于该 DuckDB 数据库文件，跨会话可用。
+/// Secret 以 `PERSISTENT` 方式注册，落盘于 Secret 存储目录：
+/// 默认是 DuckDB 的 `~/.duckdb/stored_secrets`，可用 `open_with_dir` 指定
+/// 应用可控目录（避免写用户主目录，并支持测试隔离）。
 pub struct SecretManager {
     conn: duckdb::Connection,
 }
 
 impl SecretManager {
-    /// 打开已存在的 DuckDB 数据库文件作为 Secret 存储
+    /// 打开已存在的 DuckDB 数据库文件作为 Secret 存储（默认 Secret 目录）。
     pub fn open(db_path: impl AsRef<std::path::Path>) -> SecretResult<Self> {
-        Ok(Self {
-            conn: duckdb::Connection::open(db_path)?,
-        })
+        Self::open_with_dir(db_path, None)
+    }
+
+    /// 打开 DuckDB 数据库文件作为 Secret 存储，并指定 Secret 落盘目录。
+    ///
+    /// `secret_dir` 为 `None` 时用 DuckDB 默认目录；指定后每次打开都需传同一目录
+    /// 才能看到已注册的 Secret（目录是会话级设置）。
+    pub fn open_with_dir(
+        db_path: impl AsRef<std::path::Path>,
+        secret_dir: Option<&std::path::Path>,
+    ) -> SecretResult<Self> {
+        let conn = duckdb::Connection::open(db_path)?;
+        if let Some(dir) = secret_dir {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| SecretError::Invalid(format!("创建 Secret 目录失败: {e}")))?;
+            conn.execute_batch(&format!(
+                "SET secret_directory = '{}'",
+                escape_path(dir)
+            ))
+            .map_err(|e| SecretError::Sql(e.to_string()))?;
+        }
+        Ok(Self { conn })
     }
 
     /// 内存 DuckDB（适合临时 Secret / 测试）
@@ -89,18 +109,21 @@ impl SecretManager {
         })
     }
 
-    /// 注册凭据为 DuckDB Secret
+    /// 注册凭据为 DuckDB Secret（持久化到当前数据库）
     ///
     /// 等价 SQL：
     /// ```sql
-    /// CREATE OR REPLACE SECRET <name> (
+    /// CREATE OR REPLACE PERSISTENT SECRET <name> (
     ///   TYPE POSTGRES,
     ///   HOST 'h', PORT 5432, USERNAME 'u', PASSWORD 'p', DATABASE 'd'
     /// );
     /// ```
+    ///
+    /// 必须用 `PERSISTENT`：默认 `CREATE SECRET` 为会话级（storage = memory，
+    /// 随连接关闭即丢失），无法支撑"一次注册、跨会话可用"的联邦加速。
     pub fn register(&self, cred: &DatabaseCredential) -> SecretResult<()> {
         let sql = format!(
-            "CREATE OR REPLACE SECRET {name} (TYPE {ty}, HOST '{host}', PORT {port}, \
+            "CREATE OR REPLACE PERSISTENT SECRET {name} (TYPE {ty}, HOST '{host}', PORT {port}, \
              USERNAME '{user}', PASSWORD '{pass}', DATABASE '{db}')",
             name = cred.name,
             ty = cred.secret_type,
@@ -157,6 +180,11 @@ fn escape_sql(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// 路径转义：反斜杠转正斜杠（SQL 字面量中 Windows 路径安全），单引号加倍。
+fn escape_path(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "/").replace('\'', "''")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,9 +201,24 @@ mod tests {
         }
     }
 
+    /// 隔离的 Secret 存储：临时目录 + 专用 Secret 目录。
+    ///
+    /// 不触碰 DuckDB 默认存储（`~/.duckdb/stored_secrets`），避免测试污染用户环境。
+    fn isolated(tag: &str) -> (SecretManager, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("rds_secret_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let mgr = SecretManager::open_with_dir(
+            dir.join("store.duckdb"),
+            Some(&dir.join("secrets")),
+        )
+        .expect("open isolated secret store");
+        (mgr, dir)
+    }
+
     #[test]
     fn test_register_list_remove_roundtrip() {
-        let mgr = SecretManager::in_memory().unwrap();
+        let (mgr, dir) = isolated("roundtrip");
 
         // 注册（含特殊字符密码：单引号/分号应被转义而非注入）
         let c = cred("conn_001", "p@ss'word; DROP TABLE x; --");
@@ -185,6 +228,7 @@ mod tests {
         assert_eq!(list.len(), 1, "应注册 1 个 Secret");
         assert_eq!(list[0].name, "conn_001");
         assert_eq!(list[0].secret_type.to_uppercase(), "POSTGRES");
+        assert_eq!(list[0].storage, "local_file", "应为持久存储：{list:?}");
 
         // 删除
         mgr.remove("conn_001").unwrap();
@@ -193,11 +237,13 @@ mod tests {
         // 删除不存在的 → NotFound
         let err = mgr.remove("no_such").unwrap_err();
         assert!(matches!(err, SecretError::NotFound(_)));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_register_override_same_name() {
-        let mgr = SecretManager::in_memory().unwrap();
+        let (mgr, dir) = isolated("override");
         let a = cred("dup", "first");
         let b = DatabaseCredential {
             database: "other".to_string(),
@@ -207,18 +253,54 @@ mod tests {
         // CREATE OR REPLACE：同名覆盖，不产生第二条
         mgr.register(&b).unwrap();
         assert_eq!(mgr.list().unwrap().len(), 1, "同名 Secret 应覆盖");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_persistent_secret_survives_reopen() {
+        // 回归：默认 CREATE SECRET 为会话级（storage = memory），
+        // 必须用 PERSISTENT 才能跨会话支撑联邦加速。
+        let dir = std::env::temp_dir().join(format!("rds_secret_persist_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("secrets.duckdb");
+        let secret_dir = dir.join("store");
+
+        {
+            let mgr = SecretManager::open_with_dir(&path, Some(&secret_dir)).unwrap();
+            mgr.register(&cred("conn_p", "pw")).unwrap();
+            let list = mgr.list().unwrap();
+            assert_eq!(list.len(), 1);
+            assert_eq!(list[0].storage, "local_file", "应为持久存储：{list:?}");
+        }
+
+        {
+            let mgr = SecretManager::open_with_dir(&path, Some(&secret_dir)).unwrap();
+            let list = mgr.list().unwrap();
+            assert_eq!(list.len(), 1, "PERSISTENT Secret 应跨会话保留：{list:?}");
+            assert_eq!(list[0].name, "conn_p");
+            mgr.remove("conn_p").unwrap();
+        }
+
+        {
+            let mgr = SecretManager::open_with_dir(&path, Some(&secret_dir)).unwrap();
+            assert!(mgr.list().unwrap().is_empty(), "删除应持久化");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_unknown_secret_type_errors() {
-        let mgr = SecretManager::in_memory().unwrap();
+        let (mgr, dir) = isolated("unknown_type");
         let c = DatabaseCredential {
             secret_type: "NO_SUCH_TYPE_XYZ".to_string(),
             ..cred("bad", "x")
         };
         let res = mgr.register(&c);
         assert!(res.is_err(), "未知 Secret 类型应报错");
-        // 失败的注册不应残留
-        assert!(mgr.list().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

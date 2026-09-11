@@ -646,6 +646,8 @@ impl ConnectionDialogState {
         window: &mut Window,
         cx: &mut App,
     ) {
+        // 重入保护：先关闭已有的本对话框层，避免连续 open 叠加（幂等打开）。
+        window.close_dialog(cx);
         *self.editing_id.borrow_mut() = editing_id.clone();
         if let Some(id) = &editing_id {
             self.load_for_edit(id, window, cx);
