@@ -148,6 +148,49 @@ fn staging_after_save_marks_saved_and_appends(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn draft_carries_tags_and_groups(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog.clone());
+
+    // 标签（逗号分隔）与分组勾选 → 快照应逐条携带。
+    cx.update(|window, cx| {
+        dialog
+            .tags_input
+            .update(cx, |s, cx| s.set_value("prod, core", window, cx));
+        *dialog.group_checks.borrow_mut() = vec![
+            ("g1".to_string(), "alpha".to_string(), true),
+            ("g2".to_string(), "beta".to_string(), false),
+        ];
+    });
+    cx.update(|window, cx| dialog.staging_add(window, cx));
+
+    let first = cx.update(|_, _cx| dialog.drafts.borrow()[0].clone());
+    assert_eq!(first.tags, "prod, core");
+    assert_eq!(first.groups, vec!["g1".to_string()], "仅勾选的分组进入快照");
+
+    // 切换条目：表单应恢复该条目的标签与勾选（当前草稿的输入已写回）。
+    cx.update(|window, cx| {
+        dialog
+            .tags_input
+            .update(cx, |s, cx| s.set_value("临时", window, cx));
+    });
+    cx.update(|window, cx| dialog.staging_select(0, window, cx));
+    let tags_now = cx.update(|_, cx| dialog.tags_input.read(cx).value().to_string());
+    assert_eq!(tags_now, "prod, core");
+    let checked = cx.update(|_, _cx| {
+        dialog
+            .group_checks
+            .borrow()
+            .iter()
+            .filter(|(_, _, c)| *c)
+            .map(|(id, _, _)| id.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(checked, vec!["g1".to_string()]);
+}
+
+#[gpui_kit::test]
 fn staging_remove_ignores_saved_entries(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);

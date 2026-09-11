@@ -20,6 +20,7 @@ use connection::model::{
     ConnectionScope, DataSource, DataSourceSaveInput, DeleteResult, TestResult,
 };
 use engine::persistence::auth_store::AuthConfig;
+use engine::persistence::connection_org_store::ConnectionGroup;
 use engine::persistence::driver_store::{DataSourceType, Driver};
 use engine::persistence::env_store::Environment;
 use engine::persistence::global_db::{
@@ -98,6 +99,49 @@ impl DataSourceService {
     /// 环境列表
     pub async fn list_environments(&self) -> Result<Vec<Environment>, CoreError> {
         self.global_db.list_environments().await
+    }
+
+    // ==================== 组织元数据（标签 / 分组） ====================
+
+    /// 项目可见分组（项目级能力；未打开项目返回空列表）。
+    pub fn list_groups(&self, project_path: Option<&str>) -> Vec<ConnectionGroup> {
+        open_org_store(self.global_db, project_path)
+            .map(|store| store.list_groups())
+            .unwrap_or_default()
+    }
+
+    /// 某连接所属分组 id（项目级；未打开项目返回空）。
+    pub fn groups_of(&self, conn_id: &str, project_path: Option<&str>) -> Vec<String> {
+        open_org_store(self.global_db, project_path)
+            .map(|store| store.list_groups_for_connection(conn_id))
+            .unwrap_or_default()
+    }
+
+    /// 同步连接分组（**替换语义**：以 UI 勾选为准；分组为项目级能力，未打开项目时忽略）。
+    ///
+    /// 与标签同步（`sync_connection_tags`）同策略：失败仅告警，不阻断连接保存。
+    pub fn set_connection_groups(
+        &self,
+        conn_id: &str,
+        group_ids: &[String],
+        project_path: Option<&str>,
+    ) {
+        match open_org_store(self.global_db, project_path)
+            .and_then(|store| store.set_connection_groups(conn_id, group_ids))
+        {
+            Ok(()) => tracing::debug!(
+                target: "data_source_service",
+                conn_id,
+                count = group_ids.len(),
+                "连接分组已同步"
+            ),
+            Err(e) => tracing::warn!(
+                target: "data_source_service",
+                conn_id,
+                error = %e,
+                "连接分组同步失败（不影响连接保存）"
+            ),
+        }
     }
 
     // ==================== 连接 CRUD ====================

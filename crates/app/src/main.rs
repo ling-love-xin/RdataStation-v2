@@ -16,7 +16,10 @@ use gpui_kit::*;
 use settings::SettingsService;
 use settings::commands::OpenSettings;
 use workbench::WorkbenchView;
-use workbench::commands::{CloseProject, SwitchProject, ToggleQuickOpen};
+use workbench::commands::{
+    CloseProject, DraftNext, DraftPrev, SaveConnection, SwitchProject, TestConnection,
+    ToggleQuickOpen,
+};
 
 fn main() {
     // Windows 主线程默认 1 MiB 栈，而 GPUI 的视图树构建 / 布局 / 事件派发在 debug
@@ -77,6 +80,13 @@ fn run_app() {
                 // M1 项目管理：切换项目（回选择器）/ 关闭项目。
                 KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),
                 KeyBinding::new("ctrl-shift-w", CloseProject, Some("workbench")),
+                // M3 连接对话框（独立于 workbench 的元素层）：
+                // 仅在对话框容器的 key_context("connection-dialog") 内生效；
+                // secondary-enter 在 Windows/Linux 即 Ctrl+Enter。
+                KeyBinding::new("secondary-enter", SaveConnection, Some("connection-dialog")),
+                KeyBinding::new("ctrl-t", TestConnection, Some("connection-dialog")),
+                KeyBinding::new("up", DraftPrev, Some("connection-dialog")),
+                KeyBinding::new("down", DraftNext, Some("connection-dialog")),
             ]);
 
             cx.spawn(async move |cx| {

@@ -16,6 +16,7 @@
 
 pub mod auth_store;
 pub mod cache_version_migration;
+pub mod connection_draft_store;
 pub mod connection_org_store;
 pub mod connection_store;
 pub mod driver_store;
@@ -39,6 +40,7 @@ pub mod workbench_context_store;
 
 pub use cache_version_migration::{CacheVersionManager, CURRENT_CACHE_VERSION};
 pub use connection_org_store::{ConnectionGroup, ConnectionOrgStore};
+pub use connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
 pub use global_db::{
     GlobalDatabaseManager, GlobalDuckdbConnection, GlobalPooledConnection, GlobalSqlitePool,
 };

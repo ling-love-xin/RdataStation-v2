@@ -333,6 +333,36 @@ impl ConnectionOrgStore {
         }
     }
 
+    /// 替换某连接的分组成员（先清空已有关系，再按传入顺序写入；空切片 = 移出全部分组）。
+    ///
+    /// 仅项目库有分组表；全局库调用为 no-op（分组是项目级能力）。
+    /// 供对话框保存 / 更新后同步使用，保证 UI 勾选与库内一致。
+    pub fn set_connection_groups(
+        &self,
+        conn_id: &str,
+        group_ids: &[String],
+    ) -> Result<(), CoreError> {
+        if !self.is_project {
+            return Ok(());
+        }
+        self.conn
+            .execute(
+                "DELETE FROM connection_group_members WHERE connection_id = ?1",
+                params![conn_id],
+            )
+            .map_err(|e| self.err("clear_connection_groups", e))?;
+        for (i, gid) in group_ids.iter().enumerate() {
+            self.conn
+                .execute(
+                    "INSERT OR IGNORE INTO connection_group_members (group_id, connection_id, sort_order)
+                     VALUES (?1, ?2, ?3)",
+                    params![gid, conn_id, i as i64],
+                )
+                .map_err(|e| self.err("insert_connection_group_member", e))?;
+        }
+        Ok(())
+    }
+
     // ==================== 一致性清理 ====================
 
     /// 删除连接时清理其组织关系（标签 + 分组成员）。
@@ -387,6 +417,36 @@ mod tests {
         // 覆盖式：清空后旧标签不再命中
         store.set_tags("P_b", &[]).expect("clear");
         assert_eq!(store.list_connections_by_tag("prod"), vec!["P_a".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_connection_groups_replaces_membership() {
+        let dir = temp_dir("set_groups");
+        let store = ConnectionOrgStore::open_at(dir.join("p.db"), true).expect("open");
+        store.create_group("g1", "alpha", None).expect("g1");
+        store.create_group("g2", "beta", None).expect("g2");
+
+        // 替换语义：先写两个组，再只留 g2，最后清空。
+        store
+            .set_connection_groups("P_a", &["g1".into(), "g2".into()])
+            .expect("set two");
+        let mut got = store.list_groups_for_connection("P_a");
+        got.sort();
+        assert_eq!(got, vec!["g1".to_string(), "g2".to_string()]);
+
+        store
+            .set_connection_groups("P_a", &["g2".into()])
+            .expect("set one");
+        assert_eq!(store.list_groups_for_connection("P_a"), vec!["g2".to_string()]);
+
+        store.set_connection_groups("P_a", &[]).expect("clear");
+        assert!(store.list_groups_for_connection("P_a").is_empty());
+
+        // 全局库无分组表：调用为 no-op（不报错、不写入）。
+        let global = ConnectionOrgStore::open_at(dir.join("g.db"), false).expect("open global");
+        assert!(global.set_connection_groups("G_a", &["g1".into()]).is_ok());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

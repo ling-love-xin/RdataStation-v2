@@ -1030,6 +1030,27 @@ impl SidebarPanel {
                 )
                 .child(div().text_xs().text_color(muted).child(source.code()))
                 .child(div().text_xs().text_color(muted).child(conn.driver.clone()))
+                // 「在对话框中编辑」入口（C7）：复用 shared.open_edit → 编辑区打开数据源对话框。
+                .child(
+                    div()
+                        .id(format!("nav-conn-edit-{}", conn.id))
+                        .px_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .cursor_pointer()
+                        .child("\u{270e}")
+                        .on_click({
+                            let entity = cx.entity();
+                            let shared = self.shared.clone();
+                            let cid = conn_id.clone();
+                            move |_, _, app: &mut App| {
+                                *shared.open_edit.borrow_mut() = Some(cid.clone());
+                                entity.update(app, |_, cx| {
+                                    cx.emit(SidebarEvent::EditConnection(cid.clone()));
+                                });
+                            }
+                        }),
+                )
                 .child(
                     div()
                         .id(format!("nav-conn-toggle-{}", conn.id))
@@ -2132,6 +2153,8 @@ impl EditorPanel {
             )));
         }
         if let Some(dialog) = self.dialog.as_ref() {
+            // 重新打开：重置元数据标记，强制下一次渲染重新拉取引用 / 类型 / 驱动目录。
+            dialog.meta_refreshed.set(false);
             dialog.open(cx.entity(), self.shared.clone(), None, window, cx);
         }
         self.shared.notify_host(cx);
@@ -2150,6 +2173,8 @@ impl EditorPanel {
             )));
         }
         if let Some(dialog) = self.dialog.as_ref() {
+            // 重新打开：重置元数据标记，强制下一次渲染重新拉取（引用 / 类型 / 驱动目录）。
+            dialog.meta_refreshed.set(false);
             dialog.open(cx.entity(), self.shared.clone(), Some(conn_id), window, cx);
         }
         self.shared.notify_host(cx);
