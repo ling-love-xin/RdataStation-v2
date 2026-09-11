@@ -148,16 +148,31 @@ fn analysis_db_path() -> Option<std::path::PathBuf> {
     }
 }
 
-/// 会话级 Secret 注册（失败仅告警，不阻断连接——加速是增强而非依赖）。
+/// 会话级 Secret 注册（默认目标：全局分析库）。
+pub fn ensure_secret_registered(conn_id: &str, db_type: &str, url: &str) {
+    ensure_secret_registered_at(None, conn_id, db_type, url);
+}
+
+/// 会话级 Secret 注册（可指定目标库；`None` = 全局分析库）。
 ///
 /// 注册目标为持久分析库（`analytics.duckdb`），跨会话可用；
 /// 临时内存库注册随连接句柄销毁而丢失，不具备联邦加速能力。
-pub fn ensure_secret_registered(conn_id: &str, db_type: &str, url: &str) {
+/// `target` 供测试/多环境注入，避免触碰用户真实分析库。
+pub fn ensure_secret_registered_at(
+    target: Option<&std::path::Path>,
+    conn_id: &str,
+    db_type: &str,
+    url: &str,
+) {
     if db_type_to_secret_type(db_type).is_none() {
         return; // 非联邦目标类型不注册
     }
-    let Some(path) = analysis_db_path() else {
-        return;
+    let path = match target {
+        Some(p) => p.to_path_buf(),
+        None => match analysis_db_path() {
+            Some(p) => p,
+            None => return,
+        },
     };
     match SecretManager::open(&path)
         .and_then(|mgr| register_connection_secret(&mgr, conn_id, db_type, url))
@@ -173,12 +188,21 @@ pub fn ensure_secret_registered(conn_id: &str, db_type: &str, url: &str) {
     }
 }
 
-/// 删除连接时注销 Secret；返回是否确实移除了已有 Secret。
+/// 删除连接时注销 Secret；返回是否确实移除了已有 Secret（默认目标：全局分析库）。
+pub fn remove_connection_secret(conn_id: &str) -> bool {
+    remove_connection_secret_at(None, conn_id)
+}
+
+/// 删除连接时注销 Secret（可指定目标库；`None` = 全局分析库）。
 ///
 /// 未注册过（未开启联邦加速）返回 false，不视为失败。
-pub fn remove_connection_secret(conn_id: &str) -> bool {
-    let Some(path) = analysis_db_path() else {
-        return false;
+pub fn remove_connection_secret_at(target: Option<&std::path::Path>, conn_id: &str) -> bool {
+    let path = match target {
+        Some(p) => p.to_path_buf(),
+        None => match analysis_db_path() {
+            Some(p) => p,
+            None => return false,
+        },
     };
     let name = sanitize_secret_name(conn_id);
     match SecretManager::open(&path).and_then(|mgr| mgr.remove(&name)) {

@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2）**（2026-09-11，`cargo check --workspace --all-targets` 零告警；engine 221 / project 14+3 / workbench 14 测试全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2）**（2026-09-11，`cargo check --workspace --all-targets` 零告警；engine 221 / project 23（含 9 项窗口测试）/ workbench 14 测试全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -20,6 +20,15 @@
 | 9 | 软删提供**「已移除项目」找回入口** |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-11 — A3：项目视图迁入 `project` crate（视图与 model/service 同 crate）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| A3 | 项目视图整体迁入 `crates/project/src/ui.rs`：`ProjectUiHost` 承载全部宿主依赖（状态句柄 / `ProjectUiNotifier` / `ProjectEditorBridge` / 排序偏好回调 / 打开后刷新）；`OpenProject` 取代 workbench 的 `ProjectSession`；示例项目落点改为 crate 内推导（`engine::migration::get_system_dir`）；清掉只写不读的 `PickerState::sort_initialized` | `crates/project/src/{ui.rs,lib.rs}`、`Cargo.toml`（+ `gpui-kit`） |
+| A3 | workbench 侧新增宿主桥（`ViewNotifier` / `EditorBridge` / `build_host`），`view.rs` / 标题栏 Popover 均通过 host 调用项目视图；`Shared.project` 类型改 `project::ui::OpenProject`；`WorkbenchView::new(cx)` 在构造期装配 host（无 render 内 I/O） | `crates/workbench/src/components/project_host.rs`、`panels.rs`、`view.rs`、`services/project_session.rs`、`app/src/main.rs` |
+| 窗口测试 | 新增 `crates/project/src/ui/tests.rs`（9 项 GPUI headless 窗口测试）：选择器 / 设置与菜单渲染、新建对话框空名校验、删除确认名称匹配、未保存拦截（关闭 / 打开）、排序持久化回调、锁占用逃生口、卡片三分支构造。宿主依赖用测试桥（记录重绘 / 排序 / 编辑区调用），不接 workbench | 同上 |
+| 验证 | `cargo check --workspace --all-targets` 零告警；`cargo test --workspace -j 2` 34 个目标全绿（**451 通过 / 0 失败**）；`cargo build -p rds-app -j 2` 通过 | — |
 
 ### 2026-09-11 — B5 收尾 + B8 + B1（语义对话框 / 卡片菜单 / 尺寸相对化）
 
@@ -79,7 +88,7 @@
 | render 内副作用 | ✅ 选择器列表加载 + 排序偏好初始化 → `WorkbenchView::new`（构造期）；EditorPanel 脏状态 → `InputEvent::Change` 订阅；清空编辑区 → 宿主命令回调（事件上下文） |
 | 本地化 label 作 ElementId | ✅ `picker-tab-{key}` / `menu-{key}`（domain 键，不用中文 label） |
 | 公开字段 struct 未 `#[non_exhaustive]` | ✅ `ProjectSummary` / `CreateProjectInput`（+ `new`/`with_*` builder）/ `OpenedProject`（+ `into_parts`）/ `ProjectVersionRow` / `PickerState` / `ProjectUiState` / `ProjectInputs` |
-| 视图 / 对话框仍在 workbench | ⏳ 待办（批次 A3）：`project_ui.rs` 拆入 `crates/project/src/`，需引入 `ProjectUiHost`（session/state/editor 句柄 + 宿主回调）与 `ProjectUiNotifier`，并断开 `settings` 直接依赖（排序偏好改走回调） |
+| 视图 / 对话框仍在 workbench | ✅ 已迁（批次 A3）：项目视图整体落入 `crates/project/src/ui.rs`，宿主依赖由 `ProjectUiHost`（状态句柄 / `ProjectUiNotifier` / `ProjectEditorBridge` / 排序偏好回调 / 打开后刷新）注入；`settings` 直接依赖已断开 |
 | 自绘 menu / dialog（无 focus trap / Escape / 方向键） | ✅ 项目菜单改 `Popover` + `Button` 触发；新建 / 打开目录 / 删除确认 / 重定位改 `Dialog`，锁占用 / 未保存拦截改 `AlertDialog`（焦点陷阱、Escape、遮罩关闭、footer 布局由组件负责） |
 | 直接 `px(...)` | ✅ 工作台视图层（`view.rs` / `panels.rs` / `project_ui.rs` / `connection_dialog.rs` / `settings_view.rs`）改 rem helper 或 `cx.theme().font_size * N`；仅 1px hairline 保留 `h_px()`（指南允许的 physical boundary 例外） |
 | （工程）edition 2024 | ✅ 全仓 `edition = "2024"`（`.cargo/config.toml` 加 `RUST_MIN_STACK`；`test-all` 别名固定 `-j 2`） |
@@ -175,6 +184,12 @@
 12. **迁移**：旧库升级到 019 后，既有项目默认未固定/未移除，名册显示不变（幂等）
 13. **主题**：明暗切换核对选择器卡片/徽标/对话框/菜单/危险区（`theme-preview.html` 为基准）
 
+**自动化覆盖（2026-09-11）**：上述场景中无需真实项目库即可验证的部分，已落为
+`crates/project/src/ui/tests.rs` 的 9 项 GPUI headless 窗口测试——场景 4（选择器 / 设置 / 菜单
+渲染、排序回调）、6（删除确认名称匹配）、10（未保存拦截：关闭与打开两向）、11（锁占用逃生口
+对话框）、13 的渲染面（卡片三种分支构造）。其余场景（真实建库、双实例、迁移）仍走
+`project_store.rs` 集成测试与 §7 手动清单。
+
 ## 5. 风险与对策
 
 | 风险 | 对策 |
@@ -196,15 +211,16 @@
 | 设计决策 | 代码文件 |
 | --- | --- |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs`（feature crate 内，符合 GPUI-kit 指南「model/service/view 同 crate」） |
-| 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（收敛） |
-| 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/workbench/src/components/project_ui.rs`（选择器与设置为主绘 overlay；菜单为 `Popover` + 卡片 `DropdownMenu`；对话框为 `Dialog` / `AlertDialog`） |
+| 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（返回 `project::ui::OpenProject`） |
+| 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（视图与 model / service 同 crate；选择器与设置由宿主渲染为受控 overlay，菜单为 `Popover` + 卡片 `DropdownMenu`，对话框为 `Dialog` / `AlertDialog`） |
+| 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs` |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册迁移（固定/软删字段） | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） |
 | 全局库项目 CRUD / 固定 / 已移除 | `crates/engine/src/persistence/global_db.rs` |
 | 排序方式偏好 | `crates/settings`（`projects.sort_mode`） |
 | 命令 / Action | `crates/project/src/commands.rs` + `crates/workbench/src/commands.rs` |
-| 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`） |
-| 会话共享与刷新信号 | `crates/workbench/src/panels.rs`（`Shared`） |
+| 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单内容由 `project::ui::render_menu_content` 提供） |
+| 会话共享与刷新信号 | `crates/workbench/src/panels.rs`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
 | 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs` / `models.rs` |
 | 示例项目 | 运行时生成到 `{data_dir}/RdataStation/samples/示例项目`（含 `welcome.sql`） |
 | 依赖接线 | 根 `Cargo.toml`、`crates/workbench/Cargo.toml` |
@@ -214,7 +230,8 @@
 
 ## 7. 验证方式
 
-- 每阶段：`cargo check -p rds-project -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试（`crates/workbench/tests/project_lifecycle.rs` 或 `crates/project/tests/`）
+- 每阶段：`cargo check -p rds-project -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试
+  （`crates/project/tests/` 集成测试 + `crates/project/src/ui/tests.rs` 窗口测试）
 - 迁移：`cargo test -p rds-engine`（迁移套件）+ 手工核对旧库升级
 - UI：`cargo run -p rds-app` 手动走通 §4 清单（先用 `RDS_PROJECT_PATH` 验证有项目态，再清空验证选择器）
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）

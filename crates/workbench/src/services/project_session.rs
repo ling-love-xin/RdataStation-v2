@@ -14,38 +14,19 @@
 use std::path::PathBuf;
 
 use engine::persistence::global_db::GlobalDatabaseManager;
-
-/// 当前项目会话。
-#[derive(Debug, Clone)]
-pub struct ProjectSession {
-    /// 项目根目录（本地路径，即草稿箱根）。
-    pub root: PathBuf,
-    /// 项目显示名（标题栏 / 面板头）。
-    pub name: String,
-}
-
-impl ProjectSession {
-    fn from_root(root: PathBuf) -> Self {
-        let name = root
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| "未命名项目".to_string());
-        Self { root, name }
-    }
-}
+use project::ui::OpenProject;
 
 /// 解析当前项目会话（见模块文档的顺序）。
-pub fn resolve() -> Option<ProjectSession> {
+pub fn resolve() -> Option<OpenProject> {
     from_env().or_else(from_recent_projects)
 }
 
 /// 1. 环境变量 `RDS_PROJECT_PATH`。
-fn from_env() -> Option<ProjectSession> {
+fn from_env() -> Option<OpenProject> {
     let raw = std::env::var_os("RDS_PROJECT_PATH")?;
     let path = PathBuf::from(raw);
     if path.is_dir() {
-        Some(ProjectSession::from_root(path))
+        Some(OpenProject::from_root(path))
     } else {
         tracing::warn!(
             "[ProjectSession] RDS_PROJECT_PATH 不是有效目录: {}",
@@ -58,18 +39,18 @@ fn from_env() -> Option<ProjectSession> {
 /// 2. 全局系统库最近打开项目（取前 5 条中路径仍存在的第一条）。
 ///
 /// 单例未初始化时返回 `None`（不在此处降级建库，避免与启动装配重复打开）。
-fn from_recent_projects() -> Option<ProjectSession> {
+fn from_recent_projects() -> Option<OpenProject> {
     let manager: &GlobalDatabaseManager = engine::migration::get_global_db_manager()?;
     let runtime = tokio::runtime::Runtime::new().ok()?;
     let records = runtime.block_on(manager.get_recent_projects(5)).ok()?;
     for record in records {
         let path = PathBuf::from(&record.path);
         if path.is_dir() {
-            let mut session = ProjectSession::from_root(path);
+            let mut project = OpenProject::from_root(path);
             if !record.name.trim().is_empty() {
-                session.name = record.name;
+                project.name = record.name;
             }
-            return Some(session);
+            return Some(project);
         }
     }
     None

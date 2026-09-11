@@ -504,6 +504,8 @@
 | 列表行命令入口 | 项目卡片改「可见主操作（打开）+ `DropdownMenu`」，破坏性命令分隔线隔离 |
 | 尺寸相对化 | 工作台视图层 `px(...)` → rem helper / `cx.theme().font_size * N`（仅 1px hairline 保留 `h_px()`） |
 | 其他 | ElementId 用 domain 键；公开结构体 `#[non_exhaustive]`；`feature → gpui-kit` 依赖方向放开并更新架构文档 |
+| A3 视图归属 | 项目视图整体落入 `crates/project/src/ui.rs`（与 model / service 同 crate）；宿主依赖由 `ProjectUiHost` 注入（重绘桥 / 编辑区桥 / 排序偏好回调 / 打开后刷新），workbench 侧只剩 `components/project_host.rs` 桥接 |
+| 验证 | `cargo check --workspace --all-targets` 零告警；`cargo test --workspace -j 2` **451 通过 / 0 失败**（含 9 项 GPUI headless 窗口测试）；`cargo build -p rds-app -j 2` 通过 |
 
 验证：`cargo check --workspace --all-targets` 零告警；`cargo test --workspace -j 2` 34 个目标全绿（442 通过 / 0 失败）；`cargo build -p rds-app -j 2` 通过。
 

@@ -21,6 +21,8 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, Theme, ThemeRegistr
 use gpui_kit::prelude::FluentBuilder as _;
 ```
 
+- 例外：**测试模块**里不要用 `use gpui_kit::*`（详见「窗口测试」一节，会与 `#[gpui_kit::test]` 自相残杀）
+
 ## 颜色（硬约束）
 
 - **禁止裸 hex/rgb**；一律 `cx.theme().colors.<字段>`（需 `use gpui_kit::component::ActiveTheme`）
@@ -49,6 +51,17 @@ use gpui_kit::prelude::FluentBuilder as _;
 - **Button**：`.icon(...).size(px(28.)).ghost().toggled(bool).label(...)`
 - **StatusBar**：`.left(...)` / `.right(...)`
 - **Input**：`Input::new(&InputState)`；InputState 用 `cx.new(|cx| InputState::new(window, cx))` 创建
+
+## 窗口测试（GPUI headless）
+
+写视图测试时按 `crates/project/src/ui/tests.rs` 的骨架来：
+
+- 标注 `#[gpui_kit::test]`，参数用 `cx: &mut gpui_kit::TestAppContext`；进入测试先 `cx.update(gpui_kit::init)`（主题/组件/输入）；依赖需在 crate 的 `[dev-dependencies]` 启用 `gpui-kit = { workspace = true, features = ["test-support"] }`
+- 需要窗口时 `cx.add_window_view(|window, cx| MyView::new(window, cx))` 拿到 `(Entity<V>, &mut VisualTestContext)`；渲染一帧用 `cx.update(|window, cx| window.draw(cx).clear(cx))`
+- **安全模式：不要通配导入**。`use gpui_kit::*` 或 `use super::*` 会把 gpui 的 `test` 属性宏带进作用域，而 `#[gpui_kit::test]` 展开出的裸 `#[test]` 会解析到它自己 → `recursion limit reached while expanding #[test]`（提高 `recursion_limit` 只会让需求跟着翻倍，不要加）。测试模块里显式列举依赖，别忘这些 trait：`AppContext as _`（`cx.new`）、`StyledExt as _`（`v_flex`）、`Styled as _`（`gap_2` / `size_full`）、`FluentBuilder as _`（`when_some`）、`ActiveTheme as _`、`WindowExt as _`（`has_active_dialog`）
+- **模态对话框**（`window.open_dialog` / `open_alert_dialog`）要求窗口根是 `gpui_kit::component::Root`：`cx.add_window_view(|window, cx| Root::new(view, window, cx))`；且宿主视图的 `render` 要自己挂 `Root::render_dialog_layer(window, cx)`，否则对话框不渲染。断言用 `window.has_active_dialog(cx)`
+- 图标资产未注册时静默渲染为空（不 panic），测试无需 `set_assets`
+- 测试里的其他依赖（存储 / 设置服务 / 后端口）用测试桥替身，只记录调用，不接真实宿主
 
 ## 查 API
 

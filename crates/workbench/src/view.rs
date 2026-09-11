@@ -148,13 +148,15 @@ pub struct WorkbenchView {
     /// 设置面板实体（首次打开时懒创建）。
     settings_view: Option<Entity<SettingsView>>,
     /// M1 项目管理输入实体（懒创建）。
-    project_inputs: Option<crate::components::project_ui::ProjectInputs>,
+    project_inputs: Option<project::ui::ProjectInputs>,
+    /// M1 项目视图宿主（构造期组装；项目视图位于 `project` crate）。
+    project_host: Option<project::ui::ProjectUiHost>,
     /// 订阅句柄（保持连接选中事件的订阅存活）。
     _subscription: Option<Subscription>,
 }
 
 impl WorkbenchView {
-    pub fn new() -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         // Round 21：从全局系统库加载真实连接（失败降级为空列表 + 提示）。
         let (connections, notice) = crate::services::workspace_loader::load_persisted_connections();
         let shared = Shared::with_connections(connections, notice);
@@ -163,15 +165,14 @@ impl WorkbenchView {
         // M1：排序偏好（直读 settings.json，无需 cx）与首屏项目列表（无项目时）都在构造期完成，
         // 避免在 `render` 里做 I/O（GPUI-kit 编码指南：副作用不得放在 render）。
         {
-            let sort = crate::components::project_ui::ProjectSort::from_key(
-                &settings::load_settings().projects.sort_mode,
-            );
-            let mut ui = shared.project_ui.borrow_mut();
-            ui.picker.sort = sort;
-            ui.picker.sort_initialized = true;
+            let sort =
+                project::ui::ProjectSort::from_key(&settings::load_settings().projects.sort_mode);
+            shared.project_ui.borrow_mut().picker.sort = sort;
         }
+        // 项目视图宿主：注入状态句柄 / 重绘 / 编辑区桥 / 排序偏好 / 打开后刷新。
+        let host = crate::components::project_host::build_host(&shared, cx.entity().downgrade());
         if shared.project.borrow().is_none() {
-            crate::components::project_ui::load_picker(&shared);
+            project::ui::load_picker(&host);
         }
         Self {
             shared,
@@ -182,14 +183,21 @@ impl WorkbenchView {
             quick_open_input: None,
             settings_view: None,
             project_inputs: None,
+            project_host: Some(host),
             _subscription: None,
         }
     }
 
+    /// 项目视图宿主（构造期已装配）。
+    fn project_host(&self) -> &project::ui::ProjectUiHost {
+        self.project_host
+            .as_ref()
+            .expect("project host initialized")
+    }
+
     /// 刷新项目选择器（项目菜单「切换项目」等外部触发）。
     pub fn refresh_project_picker(&mut self, cx: &mut Context<Self>) {
-        let entity = cx.entity();
-        crate::components::project_ui::refresh_picker(&self.shared, &entity, cx);
+        project::ui::refresh_picker(self.project_host(), cx);
     }
 
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
@@ -398,31 +406,25 @@ impl WorkbenchView {
             );
 
         // M1：有项目时用 `Popover` 承载项目菜单（焦点 / 键盘 / 点击外部关闭 / Escape 由组件负责，
-        // 不再自绘弹层）。
+        // 不再自绘弹层）。项目视图由 `project` crate 提供，宿主只提供状态与重绘。
         let slot: AnyElement = if has_project {
-            let menu_open = self.shared.project_ui.borrow().menu_open;
-            let pop_state = shared.clone();
-            let pop_notify = entity.clone();
-            let menu_state = shared.clone();
-            let menu_notify = entity.clone();
+            let host = self.project_host().clone();
+            let menu_open = host.state.borrow().menu_open;
             let menu_inputs = self
                 .project_inputs
                 .clone()
                 .expect("project inputs lazy init");
+            let menu_host = host.clone();
+            let open_host = host;
             Popover::new("project-menu")
                 .open(menu_open)
                 .on_open_change(move |open, _window, app| {
-                    pop_state.project_ui.borrow_mut().menu_open = *open;
-                    pop_notify.update(app, |_, cx| cx.notify());
+                    open_host.state.borrow_mut().menu_open = *open;
+                    open_host.notify(app);
                 })
                 .trigger(slot)
                 .content(move |_state, _window, cx| {
-                    crate::components::project_ui::render_menu_content(
-                        &menu_state,
-                        &menu_inputs,
-                        &menu_notify,
-                        cx,
-                    )
+                    project::ui::render_menu_content(&menu_host, &menu_inputs, cx)
                 })
                 .into_any_element()
         } else {
@@ -855,9 +857,7 @@ impl Render for WorkbenchView {
         }
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。
         if self.project_inputs.is_none() {
-            self.project_inputs = Some(crate::components::project_ui::ProjectInputs::new(
-                window, cx,
-            ));
+            self.project_inputs = Some(project::ui::ProjectInputs::new(window, cx));
         }
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
@@ -890,9 +890,8 @@ impl Render for WorkbenchView {
             middle = middle.child(bar);
         }
         if no_project {
-            let entity = cx.entity();
-            let picker =
-                crate::components::project_ui::render_picker(&self.shared, &inputs, &entity, cx);
+            let host = self.project_host().clone();
+            let picker = project::ui::render_picker(&host, &inputs, cx);
             middle = middle.child(picker);
         } else {
             middle = middle.child(area);
@@ -966,13 +965,8 @@ impl Render for WorkbenchView {
                 let entity = cx.entity();
                 move |_: &SwitchProject, window, cx| {
                     entity.update(cx, |this, cx| {
-                        let entity = cx.entity();
-                        crate::components::project_ui::request_close(
-                            &this.shared,
-                            &entity,
-                            window,
-                            cx,
-                        );
+                        let host = this.project_host().clone();
+                        project::ui::request_close(&host, window, cx);
                     });
                 }
             })
@@ -981,13 +975,8 @@ impl Render for WorkbenchView {
                 let entity = cx.entity();
                 move |_: &CloseProject, window, cx| {
                     entity.update(cx, |this, cx| {
-                        let entity = cx.entity();
-                        crate::components::project_ui::request_close(
-                            &this.shared,
-                            &entity,
-                            window,
-                            cx,
-                        );
+                        let host = this.project_host().clone();
+                        project::ui::request_close(&host, window, cx);
                     });
                 }
             })
@@ -1003,10 +992,8 @@ impl Render for WorkbenchView {
         }
         // M1：项目设置（菜单 / 对话框已改由 Popover 与语义 Dialog 承载，不在此渲染）。
         if !no_project {
-            let entity = cx.entity();
-            if let Some(settings) =
-                crate::components::project_ui::render_settings(&self.shared, &inputs, &entity, cx)
-            {
+            let host = self.project_host().clone();
+            if let Some(settings) = project::ui::render_settings(&host, &inputs, cx) {
                 root = root.child(settings);
             }
         }

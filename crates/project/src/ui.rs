@@ -105,8 +105,6 @@ pub struct PickerState {
     pub items: Vec<ProjectSummary>,
     pub loaded: bool,
     pub error: Option<String>,
-    /// 排序是否已从 settings 初始化（避免每次 render 重读）。
-    pub sort_initialized: bool,
 }
 
 impl Default for PickerState {
@@ -117,7 +115,6 @@ impl Default for PickerState {
             items: Vec::new(),
             loaded: false,
             error: None,
-            sort_initialized: false,
         }
     }
 }
@@ -160,7 +157,7 @@ impl OpenProject {
     }
 }
 
-/// 宿主重绘桥（工作台注入 `Entity<WorkbenchView>` 的 notify）。
+/// 宿主重绘桥（宿主把自身视图实体的 notify 注入）。
 pub trait ProjectUiNotifier: 'static {
     fn notify(&self, cx: &mut App);
 }
@@ -261,7 +258,7 @@ impl ProjectUiHost {
     }
 }
 
-/// 项目 UI 状态（挂在 `Shared` 上，避免散落多字段）。
+/// 项目 UI 状态（挂在宿主共享状态与 [`ProjectUiHost`] 上）。
 #[non_exhaustive]
 pub struct ProjectUiState {
     pub picker: PickerState,
@@ -270,7 +267,7 @@ pub struct ProjectUiState {
     /// 当前对话框的校验错误：对话框 builder 每帧读取，提交失败时写入并重绘。
     pub dialog_error: Option<String>,
     /// 当前持有的项目写锁（只读打开时为 `None`）。
-    pub lock: Option<project::ProjectLock>,
+    pub lock: Option<crate::ProjectLock>,
     pub read_only: bool,
     /// 项目世代：切换/关闭后自增，供各面板订阅重载。
     pub epoch: u64,
@@ -292,7 +289,7 @@ impl Default for ProjectUiState {
     }
 }
 
-/// 项目相关输入实体（由 `WorkbenchView` 懒创建并持有）。
+/// 项目相关输入实体（由宿主懒创建并持有）。
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct ProjectInputs {
@@ -755,7 +752,7 @@ pub fn open_lock_busy_dialog(
                 move |window, cx| {
                     window.close_dialog(cx);
                     // 「仍要打开」：清除陈旧锁文件后重新抢锁（对方已退出的场景）。
-                    let _ = std::fs::remove_file(project::ProjectLock::lock_path(&root_force));
+                    let _ = std::fs::remove_file(crate::ProjectLock::lock_path(&root_force));
                     open_path(&host_force, &root_force, window, cx);
                 },
                 move |window, cx| {
@@ -1168,12 +1165,7 @@ pub fn confirm_delete(
         return false;
     }
     // 若删除的是当前打开项目，先关闭以释放锁。
-    let is_current = host
-        .project
-        .borrow()
-        .as_ref()
-        .map(|s| s.root == root)
-        .unwrap_or(false);
+    let is_current = host.root().map(|r| r == root).unwrap_or(false);
     if is_current {
         do_close(host, cx);
     }
@@ -1704,7 +1696,7 @@ fn error_line(message: &str, theme: &gpui_kit::component::Theme) -> Div {
 
 // ==================== 标题栏项目菜单 ====================
 
-/// 项目菜单内容（由 `Popover` 承载表面 / 焦点 / 点击外部关闭，见 `WorkbenchView::render_title_bar`）。
+/// 项目菜单内容（由宿主用 `Popover` 承载表面 / 焦点 / 点击外部关闭）。
 ///
 /// 不再自绘弹层——编码指南要求 menu/popup 使用语义组件，不要用 generic `div` 重做
 /// focus keyboard 与 dismissal。
@@ -1752,7 +1744,7 @@ pub fn render_menu_content(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mu
                 ui.menu_open = false;
                 ui.settings_open = true;
                 drop(ui);
-                host.notify(app);
+                host_settings.notify(app);
             },
         ))
         .child(menu_item(
@@ -1767,7 +1759,7 @@ pub fn render_menu_content(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mu
                 ui.menu_open = false;
                 ui.settings_open = true;
                 drop(ui);
-                host.notify(app);
+                host_rename.notify(app);
             },
         ))
         .child(menu_item("reveal", "在资源管理器中显示", theme, {
@@ -1946,7 +1938,7 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                             .text_color(theme.colors.muted_foreground)
                             .on_click(move |_, _, app| {
                                 host_close.state.borrow_mut().settings_open = false;
-                                host.notify(app);
+                                host_close.notify(app);
                             })
                             .child("关闭"),
                     ),
@@ -2093,3 +2085,6 @@ fn kv(theme: &gpui_kit::component::Theme, key: &str, value: &str) -> Div {
                 .child(value.to_string()),
         )
 }
+
+#[cfg(test)]
+mod tests;

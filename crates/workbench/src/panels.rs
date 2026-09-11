@@ -12,6 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
@@ -19,7 +20,6 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::{ActiveTheme, IconName};
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::EventEmitter;
 use gpui_kit::*;
 
 use crate::components::connection_dialog;
@@ -63,9 +63,9 @@ pub struct Shared {
     /// 编辑请求（侧边栏「编辑」→ EditorPanel 渲染时消费并打开对话框）。
     pub open_edit: Rc<RefCell<Option<String>>>,
     /// P0：当前项目会话（草稿箱根 / 项目作用域连接 / 标题栏项目名共用）。
-    pub project: Rc<RefCell<Option<crate::services::project_session::ProjectSession>>>,
+    pub project: Rc<RefCell<Option<project::ui::OpenProject>>>,
     /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
-    pub project_ui: Rc<RefCell<crate::components::project_ui::ProjectUiState>>,
+    pub project_ui: Rc<RefCell<project::ui::ProjectUiState>>,
     /// 编辑区是否存在未保存草稿（切换 / 关闭项目拦截信号）。
     pub editor_dirty: Rc<Cell<bool>>,
     /// 编辑区当前 SQL 文本（未保存草稿保存时使用）。
@@ -247,9 +247,7 @@ fn scratchpad_icon_color(
     match ext.as_str() {
         "sql" => info,
         "py" => success,
-        "csv" | "tsv" | "parquet" | "xlsx" | "xls" | "json" | "ndjson" | "db" | "duckdb" => {
-            primary
-        }
+        "csv" | "tsv" | "parquet" | "xlsx" | "xls" | "json" | "ndjson" | "db" | "duckdb" => primary,
         _ => muted,
     }
 }
@@ -406,19 +404,25 @@ impl SidebarPanel {
             return;
         }
         let name_input = cx.new(|cx| InputState::new(window, cx));
-        let name_sub =
-            cx.subscribe_in(&name_input, window, |this, _e, ev: &InputEvent, window, cx| {
+        let name_sub = cx.subscribe_in(
+            &name_input,
+            window,
+            |this, _e, ev: &InputEvent, window, cx| {
                 if matches!(ev, InputEvent::PressEnter { .. }) {
                     this.commit_scratchpad_edit(window, cx);
                 }
-            });
+            },
+        );
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件…"));
-        let search_sub =
-            cx.subscribe_in(&search_input, window, |_this, _e, ev: &InputEvent, _w, cx| {
+        let search_sub = cx.subscribe_in(
+            &search_input,
+            window,
+            |_this, _e, ev: &InputEvent, _w, cx| {
                 if matches!(ev, InputEvent::Change) {
                     cx.notify();
                 }
-            });
+            },
+        );
         let mut view = self.scratchpad.borrow_mut();
         view.name_input = Some(name_input);
         view._name_sub = Some(name_sub);
@@ -693,13 +697,18 @@ impl SidebarPanel {
                     .on_click(move |_, _, app| {
                         entity.update(app, |_, cx| cx.emit(SidebarEvent::SelectConnection(idx)));
                     })
-                    .child(div().w_2().h_2().flex_none().rounded_full().bg(
-                        if item.connected {
-                            theme.colors.success
-                        } else {
-                            theme.colors.muted
-                        },
-                    ))
+                    .child(
+                        div()
+                            .w_2()
+                            .h_2()
+                            .flex_none()
+                            .rounded_full()
+                            .bg(if item.connected {
+                                theme.colors.success
+                            } else {
+                                theme.colors.muted
+                            }),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -779,8 +788,26 @@ impl SidebarPanel {
             .pl_2p5()
             .pr_2()
             .pb_1p5()
-            .child(self.nav_scope_tab("项目", NavScope::Project, scope, border, accent, fg, muted, cx))
-            .child(self.nav_scope_tab("全局", NavScope::Global, scope, border, accent, fg, muted, cx));
+            .child(self.nav_scope_tab(
+                "项目",
+                NavScope::Project,
+                scope,
+                border,
+                accent,
+                fg,
+                muted,
+                cx,
+            ))
+            .child(self.nav_scope_tab(
+                "全局",
+                NavScope::Global,
+                scope,
+                border,
+                accent,
+                fg,
+                muted,
+                cx,
+            ));
 
         let body = self.render_nav_tree(scope, cx);
 
@@ -848,7 +875,14 @@ impl SidebarPanel {
     fn render_nav_tree(&self, scope: NavScope, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let filter = self.database_nav.borrow().filter.to_lowercase();
-        let mut column = div().v_flex().w_full().min_h_0().gap_1().px_1().pt_0p5().pb_1();
+        let mut column = div()
+            .v_flex()
+            .w_full()
+            .min_h_0()
+            .gap_1()
+            .px_1()
+            .pt_0p5()
+            .pb_1();
         let conns: Vec<ConnectionItem> = self.shared.connections.borrow().iter().cloned().collect();
         let mut shown = 0usize;
         for conn in &conns {
@@ -1137,22 +1171,13 @@ impl SidebarPanel {
             .rounded_md()
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
-            .child(
-                div()
-                    .w_2p5()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(if node.has_children {
-                        if expanded_eff {
-                            "\u{25be}"
-                        } else {
-                            "\u{25b8}"
-                        }
-                    } else {
-                        ""
-                    }),
-            )
+            .child(div().w_2p5().flex_none().text_xs().text_color(muted).child(
+                if node.has_children {
+                    if expanded_eff { "\u{25be}" } else { "\u{25b8}" }
+                } else {
+                    ""
+                },
+            ))
             .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon))
             .child(
                 div()
@@ -1240,7 +1265,10 @@ impl SidebarPanel {
                 return;
             }
         }
-        self.database_nav.borrow_mut().attempted.insert(key.to_string());
+        self.database_nav
+            .borrow_mut()
+            .attempted
+            .insert(key.to_string());
         let result = load_nav_children(conn_id, &path);
         let mut view = self.database_nav.borrow_mut();
         match result {
@@ -1256,7 +1284,11 @@ impl SidebarPanel {
 
     /// 当前项目根（项目 / 共享连接的导航状态落项目库）。
     fn project_root(&self) -> Option<std::path::PathBuf> {
-        self.shared.project.borrow().as_ref().map(|p| p.root.clone())
+        self.shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|p| p.root.clone())
     }
 
     /// 首次渲染某连接时，从库中恢复其展开态。
@@ -1425,7 +1457,18 @@ impl SidebarPanel {
         let entity = cx.entity();
         let view_handle = self.scratchpad.clone();
 
-        let (rows, error, external_refs, trash, trash_expanded, selected, expanded, edit, undo, filter) = {
+        let (
+            rows,
+            error,
+            external_refs,
+            trash,
+            trash_expanded,
+            selected,
+            expanded,
+            edit,
+            undo,
+            filter,
+        ) = {
             let view = self.scratchpad.borrow();
             let filter = view
                 .search_input
@@ -1628,11 +1671,7 @@ impl SidebarPanel {
                 };
 
                 let chevron = if is_folder && has_children {
-                    if is_expanded {
-                        "▾"
-                    } else {
-                        "▸"
-                    }
+                    if is_expanded { "▾" } else { "▸" }
                 } else {
                     ""
                 };
@@ -1663,14 +1702,7 @@ impl SidebarPanel {
                             .text_color(muted)
                             .child(chevron),
                     )
-                    .child(
-                        div()
-                            .w_2()
-                            .h_2()
-                            .flex_none()
-                            .rounded_sm()
-                            .bg(icon_color),
-                    )
+                    .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon_color))
                     .child(
                         div()
                             .flex_1()
@@ -1685,7 +1717,9 @@ impl SidebarPanel {
                     let rename = {
                         let entity = entity.clone();
                         let key = key.clone();
-                        move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                        move |_: &gpui_kit::ClickEvent,
+                              window: &mut gpui_kit::Window,
+                              app: &mut App| {
                             entity.update(app, |this, cx| {
                                 this.start_scratchpad_edit(
                                     ScratchpadEdit::Rename { path: key.clone() },
@@ -1760,14 +1794,7 @@ impl SidebarPanel {
                         .w_full()
                         .h(rems(1.375))
                         .px_1p5()
-                        .child(
-                            div()
-                                .w_2()
-                                .h_2()
-                                .flex_none()
-                                .rounded_sm()
-                                .bg(ref_color),
-                        )
+                        .child(div().w_2().h_2().flex_none().rounded_sm().bg(ref_color))
                         .child(
                             div()
                                 .flex_1()
@@ -1868,33 +1895,31 @@ impl SidebarPanel {
                             });
                         }
                     };
-                    body = body.child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .w_full()
-                            .h(rems(1.375))
-                            .pl(rems(1.125))
-                            .pr_1p5()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(format!("{} · {}", t.manifest.name, t.manifest.origin)),
-                            )
-                            .child(
-                                div()
-                                    .id(format!("sp-trash-{}", t.manifest.id))
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(primary)
-                                    .child("还原")
-                                    .on_click(restore),
-                            ),
-                    );
+                    body =
+                        body.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .w_full()
+                                .h(rems(1.375))
+                                .pl(rems(1.125))
+                                .pr_1p5()
+                                .child(
+                                    div().flex_1().min_w_0().text_xs().text_color(muted).child(
+                                        format!("{} · {}", t.manifest.name, t.manifest.origin),
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .id(format!("sp-trash-{}", t.manifest.id))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(primary)
+                                        .child("还原")
+                                        .on_click(restore),
+                                ),
+                        );
                 }
             }
         }
@@ -2090,7 +2115,10 @@ impl EditorPanel {
 
         let key = format!(
             "{}|{:?}|{}|{:?}",
-            target.property.conn_id, target.property.kind, target.property.name, target.property.parent
+            target.property.conn_id,
+            target.property.kind,
+            target.property.name,
+            target.property.parent
         );
         let needs_load = {
             let mut st = self.property.borrow_mut();
@@ -2135,7 +2163,11 @@ impl EditorPanel {
             .as_ref()
             .map(|p| p.title.clone())
             .unwrap_or_else(|| target.property.name.clone());
-        let object_type = st.props.as_ref().map(|p| p.object_type.clone()).unwrap_or_default();
+        let object_type = st
+            .props
+            .as_ref()
+            .map(|p| p.object_type.clone())
+            .unwrap_or_default();
 
         let mut body = div().v_flex().w_full().gap_1();
         if let Some(err) = &st.error {
@@ -2150,8 +2182,20 @@ impl EditorPanel {
                         .w_full()
                         .gap_2()
                         .text_xs()
-                        .child(div().w(rems(4.5)).flex_none().text_color(muted).child(row.label.clone()))
-                        .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone())),
+                        .child(
+                            div()
+                                .w(rems(4.5))
+                                .flex_none()
+                                .text_color(muted)
+                                .child(row.label.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_color(fg)
+                                .child(row.value.clone()),
+                        ),
                 );
             }
             for section in &props.sections {
@@ -2189,7 +2233,9 @@ impl EditorPanel {
                             .text_xs()
                             .text_color(fg)
                             .children(
-                                data_row.iter().map(|c| div().flex_1().min_w_0().child(c.clone())),
+                                data_row
+                                    .iter()
+                                    .map(|c| div().flex_1().min_w_0().child(c.clone())),
                             ),
                     );
                 }
@@ -2215,7 +2261,13 @@ impl EditorPanel {
                     .border_1()
                     .border_color(border)
                     .bg(tabbar)
-                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(fg).child(title))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(fg)
+                            .child(title),
+                    )
                     .child(div().text_xs().text_color(muted).child(object_type))
                     .child(div().flex_1())
                     .child(

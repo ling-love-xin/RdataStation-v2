@@ -16,6 +16,7 @@
 | `project/project-prototype-design.md` | 项目管理原型 | 一实例一项目 / CRUD（增删改查）/ 选择器（最近·全部·已移除）/ 项目菜单 / 新建对话框 / 项目设置 / 未保存拦截与项目锁逃生口 / 固定排序持久化 |
 | `project/project-prototype.html` | 项目管理原型（交互稿） | RDS Light/Dark 双主题：选择器、项目菜单、新建/设置/CRUD/拦截与锁弹层（可切换、可切主题） |
 | `project/project-dev-plan.md` | 项目管理开发方案 | P0/A/B/C 任务（CRUD 主线 + 名册迁移 019）/ 文件落点 / 测试场景 / 风险 / 映射 |
+| `project/project-view-architecture.md` | 项目视图架构（A3） | 宿主桥 `ProjectUiHost` 契约与状态所有权 / 对话框栈语义 / 窗口测试方案（含 `#[test]` 宏遮蔽坑）/ 实现映射 |
 | `connection/connection-prototype-design.md` | 连接模块原型 | 新增连接对话框布局（v5 对齐）/ 五 Tab / 交互 / 主题映射 |
 | `connection/connection-dialog-prototype.html` | 连接模块原型（交互稿） | RDS Light/Dark 双主题新增连接对话框示意（可交互） |
 | `connection/connection-dev-plan.md` | 连接模块开发方案 | Phase A/B/C 任务 / 文件落点 / 测试场景 / 风险 |
@@ -34,4 +35,4 @@
 
 ## 阅读顺序建议
 
-1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `scratchpad/`
+1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `project/` / `scratchpad/`

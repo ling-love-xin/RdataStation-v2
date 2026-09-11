@@ -38,6 +38,8 @@ use super::driver_service::DriverService;
 pub struct DataSourceService {
     global_db: &'static GlobalDatabaseManager,
     drivers: DriverService,
+    /// DuckDB Secret 目标库；`None` = 全局分析库（测试/多环境可注入）。
+    analysis_db: Option<std::path::PathBuf>,
 }
 
 impl DataSourceService {
@@ -46,6 +48,7 @@ impl DataSourceService {
         Self {
             global_db,
             drivers: DriverService::new(global_db),
+            analysis_db: None,
         }
     }
 
@@ -57,6 +60,12 @@ impl DataSourceService {
             ))
         })?;
         Ok(Self::new(db))
+    }
+
+    /// 指定 DuckDB Secret 目标库（测试/多环境注入；不设则用全局分析库）。
+    pub fn with_analysis_db(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.analysis_db = Some(path.into());
+        self
     }
 
     // ==================== 元数据查询 ====================
@@ -161,7 +170,12 @@ impl DataSourceService {
                 })
                 .await?;
             // Secret 联动（联邦加速；失败仅告警）。
-            super::secret_integration::ensure_secret_registered(&conn_id, &input.db_type, &url);
+            super::secret_integration::ensure_secret_registered_at(
+                self.analysis_db.as_deref(),
+                &conn_id,
+                &input.db_type,
+                &url,
+            );
             Some(conn_id)
         } else {
             None
@@ -244,7 +258,12 @@ impl DataSourceService {
             })
             .await?;
 
-        super::secret_integration::ensure_secret_registered(conn_id, &input.db_type, &url);
+        super::secret_integration::ensure_secret_registered_at(
+            self.analysis_db.as_deref(),
+            conn_id,
+            &input.db_type,
+            &url,
+        );
         Ok(())
     }
 
@@ -272,7 +291,10 @@ impl DataSourceService {
         self.global_db.delete_global_connection(conn_id).await?;
 
         // Secret 清理（分析库持久 Secret；未注册过不算失败）。
-        let removed_secret = super::secret_integration::remove_connection_secret(conn_id);
+        let removed_secret = super::secret_integration::remove_connection_secret_at(
+            self.analysis_db.as_deref(),
+            conn_id,
+        );
 
         tracing::info!(target: "data_source_service", conn_id, "数据源已删除");
         Ok(DeleteResult {

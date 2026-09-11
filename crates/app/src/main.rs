@@ -13,10 +13,10 @@
 
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
-use settings::commands::OpenSettings;
 use settings::SettingsService;
-use workbench::commands::{CloseProject, SwitchProject, ToggleQuickOpen};
+use settings::commands::OpenSettings;
 use workbench::WorkbenchView;
+use workbench::commands::{CloseProject, SwitchProject, ToggleQuickOpen};
 
 fn main() {
     // 注册内置图标资产源：gpui-kit 组件与 IconName 的 SVG 均从 AssetSource 加载，
@@ -72,7 +72,7 @@ fn main() {
                     titlebar.title = Some("RdataStation".into());
                 }
                 cx.open_window(options, |window, cx| {
-                    let workspace = cx.new(|_| WorkbenchView::new());
+                    let workspace = cx.new(|cx| WorkbenchView::new(cx));
                     // 窗口第一层必须是 Root
                     cx.new(|cx| Root::new(workspace, window, cx))
                 })

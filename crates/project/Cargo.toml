@@ -29,3 +29,5 @@ rusqlite.workspace = true
 [dev-dependencies]
 # M1 双层架构装配验证（冒烟测试）
 duckdb.workspace = true
+# 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
+gpui-kit = { workspace = true, features = ["test-support"] }
