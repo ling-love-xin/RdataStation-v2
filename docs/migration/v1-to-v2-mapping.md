@@ -473,6 +473,27 @@
 
 **验证**：workbench 24/24 通过；**全仓 407 测试 0 失败**（服务层未动）；`cargo build -p rds-app` + 运行验证进程稳定。
 
+### ✅ Round 31（已完成，M1 项目管理：CRUD + 生命周期 + 项目锁）
+
+**目标**：落地 `docs/architecture/project/` 三件套（原型 / 开发方案），实现项目增删改查与一实例一项目生命周期。
+
+**改动**：
+
+| 文件 | 内容 |
+| --- | --- |
+| `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） | `project_info` 增 `is_pinned`/`pinned_at`/`removed_at` + 索引（固定置顶 / 软删过滤） |
+| `crates/engine/src/persistence/global_db.rs` | 查询改造（过滤已移除、固定置顶）+ `set_project_pinned`/`soft_delete_project`/`restore_project`/`list_removed_projects`；`save_project_info` 改 upsert 以保留固定/软删列 |
+| `crates/project/src/lock.rs`（新） | 项目锁：OS 文件锁（崩溃自动释放）+ `project.lock.owner` 展示占用者；`probe`/`release` |
+| `crates/workbench/src/services/project_service.rs`（新） | 项目 CRUD 编排：列表（最近/全部/已移除）、创建、打开 / 只读打开、关闭、重命名、固定、归档、软删 / 恢复 / 硬删 / 移出、目标探测 |
+| `crates/workbench/src/components/project_ui.rs`（新） | 项目管理 UI：选择器（三 Tab / 搜索 / 排序 / 卡片操作）、标题栏项目菜单、新建 / 打开 / 删除确认 / 锁逃生口 / 未保存拦截对话框、项目设置 |
+| `crates/workbench/src/{view,panels,commands,lib}.rs` | 标题栏项目槽可点、无项目时选择器覆盖中央区、`SwitchProject`/`CloseProject` Action、`Shared::project_ui`/`editor_dirty`、编辑区脏状态 |
+| `crates/app/src/main.rs` | 绑定 `Ctrl+Shift+P`（切换项目）/ `Ctrl+Shift+W`（关闭项目） |
+| `Cargo.toml`、`crates/workbench/Cargo.toml` | 新增 `project` 别名与依赖、`chrono` |
+
+**验证**：`cargo check --workspace --all-targets` 零告警；engine 221 / project 12 单元 + 3 集成 / workbench 16 测试全绿（含迁移 019、固定/软删/恢复、项目锁用例）。
+
+**二次迭代补全**：排序持久化（`settings.projects.sort_mode`）、未保存「保存并继续」、只读强制禁写、重新定位（U5）、版本链列表（新迁移 `project_meta/018_project_versions.sql`），并新增 `crates/project/tests/` 集成测试。
+
 ### ⏳ 下一轮候选
 
 - GPUI 视图层：workbench 主界面（数据库导航/连接管理/资源分析）首个可交互视图；

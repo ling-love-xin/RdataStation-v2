@@ -15,7 +15,7 @@ use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
 use settings::commands::OpenSettings;
 use settings::SettingsService;
-use workbench::commands::ToggleQuickOpen;
+use workbench::commands::{CloseProject, SwitchProject, ToggleQuickOpen};
 use workbench::WorkbenchView;
 
 fn main() {
@@ -58,6 +58,9 @@ fn main() {
             cx.bind_keys([
                 KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
                 KeyBinding::new("ctrl-,", OpenSettings, Some("workbench")),
+                // M1 项目管理：切换项目（回选择器）/ 关闭项目。
+                KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),
+                KeyBinding::new("ctrl-shift-w", CloseProject, Some("workbench")),
             ]);
 
             cx.spawn(async move |cx| {

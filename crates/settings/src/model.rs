@@ -24,6 +24,8 @@ pub struct Settings {
     pub engine: Engine,
     #[serde(default)]
     pub connection_defaults: ConnectionDefaults,
+    #[serde(default)]
+    pub projects: Projects,
 }
 
 /// 通用：语言、启动行为。
@@ -107,6 +109,22 @@ impl Default for ConnectionDefaults {
 
 impl gpui_kit::Global for Settings {}
 
+/// 项目：项目名册的展示偏好（排序方式）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Projects {
+    /// 项目列表排序方式（`last_opened` / `name` / `created`）。
+    #[serde(default = "default_project_sort")]
+    pub sort_mode: String,
+}
+
+impl Default for Projects {
+    fn default() -> Self {
+        Self {
+            sort_mode: default_project_sort(),
+        }
+    }
+}
+
 fn default_language() -> String {
     "zh-CN".to_string()
 }
@@ -121,4 +139,7 @@ fn default_driver() -> String {
 }
 fn default_timeout_ms() -> u64 {
     15_000
+}
+fn default_project_sort() -> String {
+    "last_opened".to_string()
 }

@@ -64,6 +64,14 @@ pub struct Shared {
     pub open_edit: Rc<RefCell<Option<String>>>,
     /// P0：当前项目会话（草稿箱根 / 项目作用域连接 / 标题栏项目名共用）。
     pub project: Rc<RefCell<Option<crate::services::project_session::ProjectSession>>>,
+    /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
+    pub project_ui: Rc<RefCell<crate::components::project_ui::ProjectUiState>>,
+    /// 编辑区是否存在未保存草稿（切换 / 关闭项目拦截信号）。
+    pub editor_dirty: Rc<Cell<bool>>,
+    /// 编辑区当前 SQL 文本（未保存草稿保存时使用）。
+    pub editor_sql: Rc<RefCell<String>>,
+    /// 请求清空编辑区（放弃更改 / 保存后由 EditorPanel 消费）。
+    pub editor_clear_requested: Rc<Cell<bool>>,
     /// Phase B：属性面板请求（数据源导航双击对象 → 编辑区右侧面板）。
     pub property_target: Rc<RefCell<Option<PropertyRequest>>>,
 }
@@ -92,6 +100,10 @@ impl Shared {
             sql_for: Rc::new(RefCell::new(None)),
             open_edit: Rc::new(RefCell::new(None)),
             project: Rc::new(RefCell::new(None)),
+            project_ui: Rc::new(RefCell::new(Default::default())),
+            editor_dirty: Rc::new(Cell::new(false)),
+            editor_sql: Rc::new(RefCell::new(String::new())),
+            editor_clear_requested: Rc::new(Cell::new(false)),
             property_target: Rc::new(RefCell::new(None)),
         }
     }
@@ -421,6 +433,12 @@ impl SidebarPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // M1：只读打开时禁止新建/重命名草稿。
+        if self.shared.project_ui.borrow().read_only {
+            *self.shared.notice.borrow_mut() = Some("只读模式：不允许修改草稿".to_string());
+            cx.notify();
+            return;
+        }
         self.ensure_scratchpad_inputs(window, cx);
         let initial = match &edit {
             ScratchpadEdit::Rename { path } => std::path::Path::new(path)
@@ -449,6 +467,12 @@ impl SidebarPanel {
         let Some(edit) = self.scratchpad.borrow_mut().edit.take() else {
             return;
         };
+        // M1：只读打开时禁止提交草稿修改。
+        if self.shared.project_ui.borrow().read_only {
+            *self.shared.notice.borrow_mut() = Some("只读模式：不允许修改草稿".to_string());
+            cx.notify();
+            return;
+        }
         let name = self
             .scratchpad
             .borrow()
@@ -490,6 +514,12 @@ impl SidebarPanel {
 
     /// 删除条目 → 项目级回收站，并记录撤销。
     fn delete_scratchpad_entry(&mut self, relative_path: String, cx: &mut Context<Self>) {
+        // M1：只读打开时禁止删除草稿。
+        if self.shared.project_ui.borrow().read_only {
+            *self.shared.notice.borrow_mut() = Some("只读模式：不允许删除草稿".to_string());
+            cx.notify();
+            return;
+        }
         let label = relative_path
             .rsplit(['/', '\\'])
             .next()
@@ -2018,6 +2048,8 @@ pub struct EditorPanel {
     query_result: Rc<RefCell<Option<QueryOutput>>>,
     // Round 29：SQL 历史（最新在前，跨会话持久化）。
     sql_history: Rc<RefCell<Vec<String>>>,
+    /// 最近一次成功执行的 SQL（用于判断编辑区是否有未保存草稿）。
+    last_executed: Rc<RefCell<String>>,
     // Phase B：右侧停靠属性面板状态。
     property: Rc<RefCell<PropertyState>>,
 }
@@ -2031,6 +2063,7 @@ impl EditorPanel {
             sql_textarea: None,
             query_result: Rc::new(RefCell::new(None)),
             sql_history: Rc::new(RefCell::new(crate::services::query_history::load_history())),
+            last_executed: Rc::new(RefCell::new(String::new())),
             property: Rc::new(RefCell::new(PropertyState::default())),
         }
     }
@@ -2216,6 +2249,23 @@ impl Render for EditorPanel {
         // 受控输入懒创建（render 首次初始化，需要 window）；SQL 查询区保留。
         if self.sql_textarea.is_none() {
             self.sql_textarea = Some(cx.new(|cx| TextareaState::new(window, cx)));
+        }
+        // M1：若上层请求清空编辑区（放弃更改 / 保存后），消费一次。
+        if self.shared.editor_clear_requested.get() {
+            if let Some(ta) = &self.sql_textarea {
+                ta.update(cx, |s, cx| s.set_value("", window, cx));
+            }
+            *self.last_executed.borrow_mut() = String::new();
+            self.shared.editor_clear_requested.set(false);
+            self.shared.editor_dirty.set(false);
+            *self.shared.editor_sql.borrow_mut() = String::new();
+        }
+        // M1：编辑区脏状态（存在与最近一次执行不同的非空 SQL）——供项目切换/关闭拦截。
+        if let Some(ta) = &self.sql_textarea {
+            let val = ta.read(cx).value().to_string();
+            let dirty = !val.trim().is_empty() && val != *self.last_executed.borrow();
+            self.shared.editor_dirty.set(dirty);
+            *self.shared.editor_sql.borrow_mut() = val;
         }
         if self.dialog.is_none() {
             self.dialog = Some(connection_dialog::ConnectionDialogState::new(window, cx));
@@ -2472,6 +2522,7 @@ impl Render for EditorPanel {
                 let entity_export = entity.clone();
                 let entity_hist = entity.clone();
                 let conn_id = item.id.clone();
+                let last_exec = self.last_executed.clone();
 
                 let mut sql_ui = div()
                     .v_flex()
@@ -2493,6 +2544,13 @@ impl Render for EditorPanel {
                             .child(div().h_flex().justify_end().w_full().child(
                                 Button::new("run-sql").secondary().label("执行").on_click(
                                     move |_, _, app| {
+                                        // M1：只读打开时禁止执行（禁止写分析库）。
+                                        if shared.project_ui.borrow().read_only {
+                                            *shared.notice.borrow_mut() =
+                                                Some("只读模式：不允许执行 SQL".to_string());
+                                            entity.update(app, |_, cx| cx.notify());
+                                            return;
+                                        }
                                         let sql = sql_state.read(app).value().to_string();
                                         let dir =
                                             crate::services::workspace_loader::default_global_dir();
@@ -2503,6 +2561,7 @@ impl Render for EditorPanel {
                                             Ok(out) => {
                                                 let n = out.row_count;
                                                 *qr_closure.borrow_mut() = Some(out);
+                                                *last_exec.borrow_mut() = sql.clone();
                                                 *shared.sql_for.borrow_mut() =
                                                     Some(conn_id.clone());
                                                 *shared.notice.borrow_mut() =

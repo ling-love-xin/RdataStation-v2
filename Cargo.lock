@@ -8028,6 +8028,7 @@ dependencies = [
 name = "rds-workbench"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "duckdb",
  "gpui-kit",
  "percent-encoding",
@@ -8036,6 +8037,7 @@ dependencies = [
  "rds-engine",
  "rds-insight",
  "rds-mock",
+ "rds-project",
  "rds-scratchpad",
  "rds-settings",
  "rds-shared",
@@ -8046,6 +8048,7 @@ dependencies = [
  "specta",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

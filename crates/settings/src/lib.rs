@@ -91,4 +91,19 @@ impl SettingsService {
         };
         Self::set_theme_mode(next, window, cx);
     }
+
+    /// 读取项目列表排序方式（`last_opened` / `name` / `created`）。
+    pub fn project_sort_mode(cx: &App) -> String {
+        cx.global::<Settings>().projects.sort_mode.clone()
+    }
+
+    /// 设置并持久化项目列表排序方式（更新 global → 写 settings.json）。
+    pub fn set_project_sort_mode(mode: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.projects.sort_mode = mode.to_string();
+        }
+        let settings = cx.global::<Settings>().clone();
+        save_settings(&settings);
+    }
 }

@@ -10,4 +10,13 @@
 
 use gpui_kit::*;
 
-actions!(workbench, [ToggleQuickOpen, HideSidebars, RestoreSidebars]);
+actions!(
+    workbench,
+    [
+        ToggleQuickOpen,
+        HideSidebars,
+        RestoreSidebars,
+        SwitchProject,
+        CloseProject
+    ]
+);

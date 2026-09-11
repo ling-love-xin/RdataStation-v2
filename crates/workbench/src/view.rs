@@ -21,7 +21,9 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, TitleBar};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::commands::{HideSidebars, RestoreSidebars, ToggleQuickOpen};
+use crate::commands::{
+    CloseProject, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
+};
 use crate::panels::{EditorPanel, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel};
 use settings::commands::OpenSettings;
 use settings::settings_view::SettingsView;
@@ -144,6 +146,10 @@ pub struct WorkbenchView {
     quick_open_input: Option<Entity<InputState>>,
     /// 设置面板实体（首次打开时懒创建）。
     settings_view: Option<Entity<SettingsView>>,
+    /// M1 项目管理输入实体（懒创建）。
+    project_inputs: Option<crate::components::project_ui::ProjectInputs>,
+    /// 选择器是否已加载（无项目首帧触发一次）。
+    project_picker_loaded: bool,
     /// 订阅句柄（保持连接选中事件的订阅存活）。
     _subscription: Option<Subscription>,
 }
@@ -163,8 +169,17 @@ impl WorkbenchView {
             right_sidebar: None,
             quick_open_input: None,
             settings_view: None,
+            project_inputs: None,
+            project_picker_loaded: false,
             _subscription: None,
         }
+    }
+
+    /// 刷新项目选择器（项目菜单「切换项目」等外部触发）。
+    pub fn refresh_project_picker(&mut self, cx: &mut Context<Self>) {
+        let entity = cx.entity();
+        crate::components::project_ui::refresh_picker(&self.shared, &entity, cx);
+        self.project_picker_loaded = true;
     }
 
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
@@ -318,6 +333,7 @@ impl WorkbenchView {
         // 挖空项目槽：标题栏背景深一档。设计语义 token 为 `title_bar.slot.background`
         // （dark #252526 / light #F3F3F3），语义 token 注册落地前以 sidebar 角色同值替代。
         // 项目名取自当前项目会话（P0）；未打开项目时显示占位。
+        let has_project = self.shared.project.borrow().is_some();
         let project_name = self
             .shared
             .project
@@ -325,7 +341,10 @@ impl WorkbenchView {
             .as_ref()
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "未打开项目".to_string());
+        let slot_shared = shared.clone();
+        let slot_entity = entity.clone();
         let slot = div()
+            .id("project-slot")
             .h_flex()
             .items_center()
             .gap_2()
@@ -345,7 +364,16 @@ impl WorkbenchView {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.colors.foreground)
                     .child(project_name),
-            );
+            )
+            // M1：有项目时点击弹出项目菜单（切换 / 设置 / 重命名 / 关闭）。
+            .when(has_project, move |d| {
+                d.cursor_pointer().on_click(move |_, _, app| {
+                    let mut ui = slot_shared.project_ui.borrow_mut();
+                    ui.menu_open = !ui.menu_open;
+                    drop(ui);
+                    slot_entity.update(app, |_, cx| cx.notify());
+                })
+            });
 
         // Quick Open 入口（点击唤起，Ctrl+P 见 commands.rs 绑定）。
         // 320×26 居中；底色取 border 角色（dark #3C3C3C，与示意 v5 一致）。
@@ -771,6 +799,17 @@ impl Render for WorkbenchView {
         if self.quick_open_input.is_none() {
             self.quick_open_input = Some(cx.new(|cx| InputState::new(window, cx)));
         }
+        // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。
+        if self.project_inputs.is_none() {
+            self.project_inputs = Some(crate::components::project_ui::ProjectInputs::new(window, cx));
+        }
+        // M1：项目排序偏好从 settings 初始化（首帧一次），随后加载列表。
+        crate::components::project_ui::init_sort_from_settings(&self.shared, cx);
+        // 无项目：首帧加载选择器列表（load_picker 不触发 notify，避免 render 循环）。
+        if self.shared.project.borrow().is_none() && !self.project_picker_loaded {
+            self.project_picker_loaded = true;
+            crate::components::project_ui::load_picker(&self.shared);
+        }
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
         self.apply_right_mode(window, cx);
@@ -782,6 +821,25 @@ impl Render for WorkbenchView {
             .then(|| self.render_right_activity_bar(cx));
         let quick_open = self.render_quick_open(cx);
         let settings_panel = self.render_settings_panel(cx);
+
+        // M1：无项目时以选择器覆盖中央区（保留五段外壳）。
+        let inputs = self.project_inputs.clone().expect("project inputs lazy init");
+        let no_project = { self.shared.project.borrow().is_none() };
+        let mut middle = div().h_flex().items_stretch().flex_1().min_h_0();
+        if let Some(bar) = left_bar {
+            middle = middle.child(bar);
+        }
+        if no_project {
+            let entity = cx.entity();
+            let picker =
+                crate::components::project_ui::render_picker(&self.shared, &inputs, &entity, cx);
+            middle = middle.child(picker);
+        } else {
+            middle = middle.child(area);
+        }
+        if let Some(bar) = right_bar {
+            middle = middle.child(bar);
+        }
 
         let mut root = div()
             .v_flex()
@@ -843,17 +901,28 @@ impl Render for WorkbenchView {
                     });
                 }
             })
+            // M1：切换项目（= 关闭当前 + 回选择器）。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &SwitchProject, _window, cx| {
+                    entity.update(cx, |this, cx| {
+                        let entity = cx.entity();
+                        crate::components::project_ui::request_close(&this.shared, &entity, cx);
+                    });
+                }
+            })
+            // M1：关闭项目。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &CloseProject, _window, cx| {
+                    entity.update(cx, |this, cx| {
+                        let entity = cx.entity();
+                        crate::components::project_ui::request_close(&this.shared, &entity, cx);
+                    });
+                }
+            })
             .child(self.render_title_bar(window, cx))
-            .child(
-                div()
-                    .h_flex()
-                    .items_stretch()
-                    .flex_1()
-                    .min_h_0()
-                    .when_some(left_bar, |this, bar| this.child(bar))
-                    .child(area)
-                    .when_some(right_bar, |this, bar| this.child(bar)),
-            )
+            .child(middle)
             .child(self.render_status_bar(cx));
 
         if let Some(qo) = quick_open {
@@ -861,6 +930,27 @@ impl Render for WorkbenchView {
         }
         if let Some(sp) = settings_panel {
             root = root.child(sp);
+        }
+        // M1：项目管理菜单 / 设置 / 覆盖对话框（有项目时才渲染菜单与设置）。
+        if !no_project {
+            let entity = cx.entity();
+            if let Some(menu) = crate::components::project_ui::render_menu(&self.shared, &inputs, &entity, cx) {
+                root = root.child(menu);
+            }
+            let entity = cx.entity();
+            if let Some(settings) =
+                crate::components::project_ui::render_settings(&self.shared, &inputs, &entity, cx)
+            {
+                root = root.child(settings);
+            }
+        }
+        {
+            let entity = cx.entity();
+            if let Some(overlay) =
+                crate::components::project_ui::render_overlays(&self.shared, &inputs, &entity, cx)
+            {
+                root = root.child(overlay);
+            }
         }
         // Phase A：对话框层（Root::render_dialog_layer）——"新建连接"模态框在此渲染。
         if let Some(dialog_layer) = Root::render_dialog_layer(window, cx) {

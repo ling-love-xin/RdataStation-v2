@@ -4,11 +4,11 @@
 //! 分节渲染 `外观 / 引擎 / 连接默认值`，外观节含明暗主题切换。
 //! 本视图只做展示与触发，所有写操作经 `SettingsService`（即时生效 + 持久化）。
 
-use gpui_kit::*;
+use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, ThemeMode};
-use gpui_kit::base::StyledExt;
+use gpui_kit::*;
 
 use crate::model::Settings;
 use crate::SettingsService;
@@ -51,13 +51,7 @@ impl SettingsView {
             .gap_2()
             .items_center()
             .text_xs()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_color(muted_fg())
-                    .child(label),
-            )
+            .child(div().flex_1().min_w_0().text_color(muted_fg()).child(label))
             .child(control)
     }
 
@@ -109,7 +103,10 @@ impl SettingsView {
             .child(div().h(px(6.)))
             .child(Self::section_title("外观"))
             .child(Self::row("主题模式", self.theme_switcher(cx)))
-            .child(Self::row("界面语言", self.value_text("中文（简体）".to_string())))
+            .child(Self::row(
+                "界面语言",
+                self.value_text("中文（简体）".to_string()),
+            ))
             .child(div().h(px(6.)))
             .child(Self::section_title("引擎"))
             .child(Self::row("工作区目录", self.value_text(engine_dir)))
@@ -121,7 +118,10 @@ impl SettingsView {
             ))
             .child(Self::row(
                 "查询超时",
-                self.value_text(format!("{} ms", self.settings.connection_defaults.query_timeout_ms)),
+                self.value_text(format!(
+                    "{} ms",
+                    self.settings.connection_defaults.query_timeout_ms
+                )),
             ))
     }
 }

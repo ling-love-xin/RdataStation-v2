@@ -1539,9 +1539,12 @@ impl GlobalDatabaseManager {
         let conn = self.sqlite_pool.acquire().await?;
 
         let projects = {
-            let mut stmt = conn.inner()?.prepare(Self::PROJECT_SELECT_REMOVED).map_err(|e| {
-                Self::sqlite_persistence_error("list_removed_projects", e.to_string())
-            })?;
+            let mut stmt =
+                conn.inner()?
+                    .prepare(Self::PROJECT_SELECT_REMOVED)
+                    .map_err(|e| {
+                        Self::sqlite_persistence_error("list_removed_projects", e.to_string())
+                    })?;
 
             let rows = stmt
                 .query_map([], Self::row_to_project_record)
@@ -2160,6 +2163,84 @@ mod tests {
             .unwrap();
         assert!(manager.sqlite_pool().acquire().await.is_ok());
         assert!(manager.duckdb_conn().acquire().await.is_ok());
+
+        manager.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_project_roster_pin_and_removed() {
+        let base = test_temp_dir("roster");
+        let sqlite_path = base.join("system.db");
+        let duckdb_path = base.join("analytics.duckdb");
+        let _ = std::fs::remove_file(&sqlite_path);
+        let _ = std::fs::remove_file(&duckdb_path);
+
+        let manager = GlobalDatabaseManager::new(sqlite_path, duckdb_path, 2)
+            .await
+            .unwrap();
+
+        manager
+            .save_project_info_smart(
+                "p1",
+                "Alpha",
+                None,
+                "D:/tmp/alpha",
+                "active",
+                Some("2026-09-11T00:00:00Z"),
+            )
+            .await
+            .unwrap();
+        manager
+            .save_project_info_smart(
+                "p2",
+                "Beta",
+                None,
+                "D:/tmp/beta",
+                "active",
+                Some("2026-09-10T00:00:00Z"),
+            )
+            .await
+            .unwrap();
+
+        // 初始：都在最近列表，未固定。
+        let recent = manager.get_recent_projects(10).await.unwrap();
+        assert_eq!(recent.len(), 2);
+        assert!(recent.iter().all(|p| !p.is_pinned));
+
+        // 固定较旧的 Beta → 置顶。
+        manager.set_project_pinned("p2", true).await.unwrap();
+        let recent = manager.get_recent_projects(10).await.unwrap();
+        assert_eq!(recent[0].id, "p2");
+        assert!(recent[0].is_pinned);
+
+        // upsert 保存不应清掉固定状态。
+        manager
+            .save_project_info(
+                "p2",
+                "Beta",
+                None,
+                "D:/tmp/beta",
+                "active",
+                Some("2026-09-10T00:00:00Z"),
+            )
+            .await
+            .unwrap();
+        let recent = manager.get_recent_projects(10).await.unwrap();
+        assert!(recent.iter().find(|p| p.id == "p2").unwrap().is_pinned);
+
+        // 软删 Alpha → 从最近/全部隐藏，进入已移除。
+        manager.soft_delete_project("p1").await.unwrap();
+        let recent = manager.get_recent_projects(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(manager.get_all_projects().await.unwrap().len(), 1);
+        let removed = manager.list_removed_projects().await.unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].id, "p1");
+
+        // 恢复 → 回到名册。
+        manager.restore_project("p1").await.unwrap();
+        assert_eq!(manager.get_all_projects().await.unwrap().len(), 2);
+        assert!(manager.list_removed_projects().await.unwrap().is_empty());
 
         manager.close().await.unwrap();
     }

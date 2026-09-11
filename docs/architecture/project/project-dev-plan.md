@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**方案（决策已确认，待开工）**（2026-09-11） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2）**（2026-09-11，`cargo check --workspace --all-targets` 零告警；engine 221 / project 12 / workbench 16 测试全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -20,6 +20,34 @@
 | 9 | 软删提供**「已移除项目」找回入口** |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-11 — Phase A/B 主体 + Phase C1/C2 实现
+
+**已完成**
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| B1 | 全局库迁移 `019_add_project_ui_state.sql`：`is_pinned`/`pinned_at`/`removed_at` + 索引；查询改造（过滤已移除、固定置顶）+ `set_project_pinned`/`soft_delete_project`/`restore_project`/`list_removed_projects`；`save_project_info` 改 upsert 以保留固定/软删列 | `crates/engine/migrations/global/019_*.sql`、`global_db.rs` |
+| C1 | 项目锁：OS 文件锁（进程退出自动释放）+ `project.lock.owner` 展示占用者；`probe`/`release`；单测 2 项 | `crates/project/src/lock.rs` |
+| A1/B* | `ProjectService`：最近/全部/已移除列表、创建、打开、只读打开、关闭、重命名、固定、归档、软删、恢复、硬删、移出、校验、目标探测；单测 2 项 | `crates/workbench/src/services/project_service.rs` |
+| A2–A4 | 选择器（最近/全部/已移除 Tab、搜索过滤、排序、固定、失效态、缺失驱动、锁徽标、空态/错误态）、标题栏项目槽可点、项目菜单 | `crates/workbench/src/components/project_ui.rs`、`view.rs` |
+| A3/B3 | 新建项目对话框、打开目录对话框、删除确认（输入项目名）、只读/仍要逃生口、未保存拦截；示例项目入口 | 同上 |
+| B2/B3/B4 | 项目设置（概览 / 重命名 / 存储 `.RSmeta` 大小 + 打开 `.RSmeta` / 依赖自检 / 刷新） | 同上 |
+| A7 | Action：`SwitchProject`（Ctrl+Shift+P）/ `CloseProject`（Ctrl+Shift+W） | `commands.rs`、`view.rs`、`app/src/main.rs` |
+| A6 | 编辑区脏状态（与最近一次执行不同）→ 切换/关闭拦截 | `panels.rs`（`EditorPanel`） |
+
+**二次迭代补全（2026-09-11）**
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 排序持久化 | 新增 `settings.projects.sort_mode`（`Projects` 节 + `SettingsService::project_sort_mode/set_project_sort_mode`）；选择器首帧从设置读取，切换即持久化 | `crates/settings/src/{model,lib}.rs`、`project_ui.rs` |
+| 未保存「保存」分支 | 拦截对话框新增「保存并继续」——把编辑区 SQL 另存为项目草稿 `未命名.sql`；`editor_clear_requested` 信号驱动 `EditorPanel` 清空 | `project_ui.rs`、`panels.rs`（`Shared` / `EditorPanel`） |
+| 只读强制禁写 | 只读打开时禁用：SQL 执行、草稿新建/重命名/删除、重命名、归档、创建版本 | `panels.rs`、`project_ui.rs` |
+| 重新定位（U5） | 失效卡片「重新定位」：校验新目录 `.RSmeta` → 改写名册 path 与 `project.json` | `project_service::relocate`、`project_ui` |
+| 版本链列表（B8） | 新迁移 `project_meta/018_project_versions.sql` + 项目设置「版本」分节（列表 + 创建快照） | `crates/engine/migrations/project_meta/018_*.sql`、`project_service::{list_versions,create_version}`、`project_ui` |
+| 集成测试目录 | 新增 `crates/project/tests/project_store.rs`（3 项，经公开 API） | `crates/project/tests/` |
+
+**剩余有意取舍**：「删除磁盘数据」只删 `.RSmeta`（保留用户文件），非整目录删除。
 
 ### 2026-09-11 — 方案定稿（含 schema 迁移）
 
@@ -133,19 +161,16 @@
 | --- | --- |
 | 项目服务编排（列表/创建/打开/切换/关闭/更新/删除/找回） | `crates/workbench/src/services/project_service.rs`（新） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（收敛） |
-| 项目选择器视图（最近/全部/已移除 + 搜索/排序/固定） | `crates/project/src/project_picker_view.rs`（新） |
-| 新建项目对话框 | `crates/project/src/create_project_dialog.rs`（新） |
-| 项目设置视图 | `crates/project/src/project_settings_view.rs`（新） |
-| 未保存拦截 / 删除确认 / 锁逃生口 | `crates/project/src/`（复用 `Dialogs`） |
-| 项目锁（含只读模式） | `crates/project/src/store.rs`（`.RSmeta/project.lock`） |
+| 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/workbench/src/components/project_ui.rs`（新；与 connection_dialog 同层的自绘 overlay） |
+| 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册迁移（固定/软删字段） | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） |
 | 全局库项目 CRUD / 固定 / 已移除 | `crates/engine/src/persistence/global_db.rs` |
-| 排序方式偏好 | `crates/settings`（通用设置 `projects.sort_mode`） |
+| 排序方式偏好 | `crates/settings`（`projects.sort_mode`） |
 | 命令 / Action | `crates/project/src/commands.rs` + `crates/workbench/src/commands.rs` |
 | 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`） |
 | 会话共享与刷新信号 | `crates/workbench/src/panels.rs`（`Shared`） |
 | 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs` / `models.rs` |
-| 示例项目内置资产 | `assets/`（新增示例项目资源）+ 选择器入口 |
+| 示例项目 | 运行时生成到 `{data_dir}/RdataStation/samples/示例项目`（含 `welcome.sql`） |
 | 依赖接线 | 根 `Cargo.toml`、`crates/workbench/Cargo.toml` |
 | 主题 token（如需补） | `assets/themes/rds-theme.json` |
 

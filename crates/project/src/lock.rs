@@ -81,7 +81,9 @@ impl ProjectLock {
             .write(true)
             .truncate(false)
             .open(&lock_path)
-            .map_err(|e| engine::persistence::io_to_core_error(e, &lock_path, "open project lock"))?;
+            .map_err(|e| {
+                engine::persistence::io_to_core_error(e, &lock_path, "open project lock")
+            })?;
 
         match file.try_lock() {
             Ok(()) => {
@@ -93,9 +95,11 @@ impl ProjectLock {
                 }))
             }
             Err(TryLockError::WouldBlock) => Ok(AcquireOutcome::Busy(read_owner(&owner_path))),
-            Err(TryLockError::Error(e)) => {
-                Err(engine::persistence::io_to_core_error(e, &lock_path, "lock project"))
-            }
+            Err(TryLockError::Error(e)) => Err(engine::persistence::io_to_core_error(
+                e,
+                &lock_path,
+                "lock project",
+            )),
         }
     }
 
@@ -113,7 +117,9 @@ impl ProjectLock {
             .write(true)
             .truncate(false)
             .open(&lock_path)
-            .map_err(|e| engine::persistence::io_to_core_error(e, &lock_path, "open project lock"))?;
+            .map_err(|e| {
+                engine::persistence::io_to_core_error(e, &lock_path, "open project lock")
+            })?;
 
         match file.try_lock() {
             Ok(()) => {
@@ -122,9 +128,11 @@ impl ProjectLock {
                 Ok(None)
             }
             Err(TryLockError::WouldBlock) => Ok(Some(read_owner(&Self::owner_path(root)))),
-            Err(TryLockError::Error(e)) => {
-                Err(engine::persistence::io_to_core_error(e, &lock_path, "probe project lock"))
-            }
+            Err(TryLockError::Error(e)) => Err(engine::persistence::io_to_core_error(
+                e,
+                &lock_path,
+                "probe project lock",
+            )),
         }
     }
 

@@ -1,6 +1,6 @@
 # 项目管理模块 · 原型设计（项目生命周期 · CRUD）
 
-> 状态：**原型设计（已确认 v2）**（2026-09-11） · 关联文件：`project-prototype.html`（可交互原型）、`project-dev-plan.md`（开发方案）
+> 状态：**已实现**（原型 v2；代码见 `project-dev-plan.md` §0） · 关联文件：`project-prototype.html`（可交互原型）、`project-dev-plan.md`（开发方案）
 > 技术栈：gpui-kit 0.6（五段布局见 `layout/layout-design.md`，Tauri 差异：标题栏挖空项目槽）
 > 前置：v1 蓝本 `v1/backend/src/commands/project_commands.rs`（创建/打开/校验/重命名/删除/最近项目）；v2 后端 `crates/project`（`ProjectStore` / `ProjectManager` / `models.rs`）与 P0 会话 `workbench/src/services/project_session.rs` 已就绪
 > 关联文档：`overview.md`（M1 双层数据架构）、`connection/connection-dev-plan.md`（作用域 `G_/P_/GP_`）、`scratchpad/scratchpad-prototype-design.md`（草稿箱根 = 项目目录）
@@ -263,19 +263,15 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 
 | 组成 | 类型/位置 |
 | --- | --- |
-| 项目选择器 | `crates/project/src/project_picker_view.rs`（`Entity`；最近/全部/已移除三视图） |
-| 新建项目对话框 | `crates/project/src/create_project_dialog.rs`（`Entity` + `Dialog`） |
-| 项目设置视图 | `crates/project/src/project_settings_view.rs`（`Entity`，分节导航） |
-| 未保存拦截 / 删除确认 / 锁逃生口 | `crates/project/src/`（复用 `Dialogs`） |
-| 项目服务编排 | `crates/workbench/src/services/project_service.rs` |
-| 会话解析（收敛） | `crates/workbench/src/services/project_session.rs` |
-| 标题栏槽 + 菜单 | `crates/workbench/src/view.rs`（`render_title_bar`） |
-| 会话与刷新信号 | `crates/workbench/src/panels.rs`（`Shared`） |
-| 项目锁 | `crates/project/src/store.rs`（`.RSmeta/project.lock` 读写 + 陈旧回收 + 只读模式） |
-| 名册持久化（固定/软删） | `crates/engine/src/persistence/global_db.rs` + 迁移 `crates/engine/migrations/global/019_add_project_ui_state.sql` |
-| 排序方式偏好 | `crates/settings`（通用设置 `projects.sort_mode`） |
-| 动作/快捷键 | `crates/project/src/commands.rs` |
-| 依赖接线 | 根 `Cargo.toml`（已有别名）+ `crates/workbench/Cargo.toml` |
+| 项目管理 UI（选择器 / 菜单 / 对话框 / 设置） | `crates/workbench/src/components/project_ui.rs`（自绘 overlay；状态存 `Shared::project_ui`） |
+| 项目服务编排（CRUD / 打开 / 关闭 / 锁） | `crates/workbench/src/services/project_service.rs` |
+| 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs` |
+| 标题栏项目槽（点击开关菜单） | `crates/workbench/src/view.rs`（`render_title_bar`） |
+| 会话与刷新信号 | `crates/workbench/src/panels.rs`（`Shared::project_ui` / `editor_dirty`） |
+| 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
+| 名册持久化（固定 / 软删） | `crates/engine/src/persistence/global_db.rs` + 迁移 `crates/engine/migrations/global/019_add_project_ui_state.sql` |
+| 动作 / 快捷键 | `crates/project/src/commands.rs` 占位未用；实际为 `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`） |
+| 依赖接线 | 根 `Cargo.toml`（`project` 别名）+ `crates/workbench/Cargo.toml` |
 
 > `project → engine, shared`（已符合硬约束）；视图为 `Entity`，由 `workbench`/`app` 组合，`project` 不反向依赖 `workbench`。
 > `promote_dialog.rs` / `snapshot_dialog.rs` 不再属于本模块（见 §12）。

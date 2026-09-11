@@ -9,6 +9,7 @@ description = "M5 查询工作台：连接管理、结果集、SQL 执行编排"
 engine.workspace = true
 connection.workspace = true
 database.workspace = true
+project.workspace = true
 insight.workspace = true
 shared.workspace = true
 mock.workspace = true
@@ -25,6 +26,12 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
+
+# ===== 时间 =====
+chrono.workspace = true
+
+# ===== 标识 =====
+uuid.workspace = true
 
 # ===== 其他 =====
 tracing.workspace = true

@@ -16,7 +16,9 @@ pub mod services;
 pub mod view;
 
 // 重新导出服务层（与 v1 core/mod.rs 顶层 re-export 对齐）
-pub use commands::{HideSidebars, RestoreSidebars, ToggleQuickOpen};
+pub use commands::{
+    CloseProject, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
+};
 pub use services::connection_service::{ConnectRequest, ConnectionService, SaveGlobalConnectionInput};
 pub use services::driver_service::DriverService;
 pub use services::result_service::ResultService;
