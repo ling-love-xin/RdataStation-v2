@@ -639,10 +639,10 @@ impl SidebarPanel {
             .w_full()
             .h_full()
             .min_h_0()
-            .pt(px(4.))
-            .pb(px(4.))
-            .pl(px(4.))
-            .pr(px(4.))
+            .pt_1()
+            .pb_1()
+            .pl_1()
+            .pr_1()
             .gap_1();
 
         if self.shared.connections.borrow().is_empty() {
@@ -652,9 +652,9 @@ impl SidebarPanel {
                 .w_full()
                 .h_full()
                 .items_center()
-                .pt(px(24.))
-                .pl(px(12.))
-                .pr(px(12.))
+                .pt_6()
+                .pl_3()
+                .pr_3()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
                 .child(
@@ -683,9 +683,9 @@ impl SidebarPanel {
                     .h_flex()
                     .items_center()
                     .w_full()
-                    .h(px(28.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_7()
+                    .pl_2()
+                    .pr_2()
                     .gap_2()
                     .rounded_md()
                     .cursor_pointer()
@@ -693,7 +693,7 @@ impl SidebarPanel {
                     .on_click(move |_, _, app| {
                         entity.update(app, |_, cx| cx.emit(SidebarEvent::SelectConnection(idx)));
                     })
-                    .child(div().w(px(8.)).h(px(8.)).flex_none().rounded_full().bg(
+                    .child(div().w_2().h_2().flex_none().rounded_full().bg(
                         if item.connected {
                             theme.colors.success
                         } else {
@@ -759,9 +759,9 @@ impl SidebarPanel {
             .h_flex()
             .items_center()
             .w_full()
-            .h(px(30.))
-            .pl(px(10.))
-            .pr(px(8.))
+            .h(rems(1.875))
+            .pl_2p5()
+            .pr_2()
             .child(
                 div()
                     .text_xs()
@@ -776,9 +776,9 @@ impl SidebarPanel {
             .items_center()
             .w_full()
             .gap_3()
-            .pl(px(10.))
-            .pr(px(8.))
-            .pb(px(6.))
+            .pl_2p5()
+            .pr_2()
+            .pb_1p5()
             .child(self.nav_scope_tab("项目", NavScope::Project, scope, border, accent, fg, muted, cx))
             .child(self.nav_scope_tab("全局", NavScope::Global, scope, border, accent, fg, muted, cx));
 
@@ -794,7 +794,7 @@ impl SidebarPanel {
             .w_full()
             .h_full()
             .min_h_0()
-            .pt(px(4.))
+            .pt_1()
             .child(header)
             .child(tabs)
             .child(search_row)
@@ -841,14 +841,14 @@ impl SidebarPanel {
                     .text_color(text)
                     .child(label.to_string()),
             )
-            .child(div().h(px(2.)).w_full().bg(underline))
+            .child(div().h_0p5().w_full().bg(underline))
     }
 
     /// 树主体：按当前标签页渲染连接节点（受搜索词过滤）。
     fn render_nav_tree(&self, scope: NavScope, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let filter = self.database_nav.borrow().filter.to_lowercase();
-        let mut column = div().v_flex().w_full().min_h_0().gap_1().px_1().pt(px(2.)).pb(px(4.));
+        let mut column = div().v_flex().w_full().min_h_0().gap_1().px_1().pt_0p5().pb_1();
         let conns: Vec<ConnectionItem> = self.shared.connections.borrow().iter().cloned().collect();
         let mut shown = 0usize;
         for conn in &conns {
@@ -866,7 +866,7 @@ impl SidebarPanel {
             column = column.child(
                 div()
                     .w_full()
-                    .pt(px(20.))
+                    .pt_5()
                     .px_3()
                     .text_xs()
                     .text_color(muted)
@@ -918,7 +918,7 @@ impl SidebarPanel {
                 .h_flex()
                 .items_center()
                 .w_full()
-                .h(px(26.))
+                .h(rems(1.625))
                 .px_1()
                 .gap_1()
                 .rounded_md()
@@ -959,7 +959,7 @@ impl SidebarPanel {
                 })
                 .child(
                     div()
-                        .w(px(10.))
+                        .w_2p5()
                         .flex_none()
                         .text_xs()
                         .text_color(muted)
@@ -967,8 +967,8 @@ impl SidebarPanel {
                 )
                 .child(
                     div()
-                        .w(px(8.))
-                        .h(px(8.))
+                        .w_2()
+                        .h_2()
                         .flex_none()
                         .rounded_full()
                         .bg(if connected { ok } else { off }),
@@ -1033,7 +1033,7 @@ impl SidebarPanel {
         );
 
         if let Some(err) = error {
-            block = block.child(div().pl(px(24.)).pb_1().text_xs().text_color(danger).child(err));
+            block = block.child(div().pl_6().pb_1().text_xs().text_color(danger).child(err));
         }
 
         if expanded {
@@ -1130,16 +1130,16 @@ impl SidebarPanel {
             .h_flex()
             .items_center()
             .w_full()
-            .h(px(22.))
+            .h(rems(1.375))
             .pr_1()
-            .pl(px(indent))
+            .pl(rems(indent / 4.))
             .gap_1()
             .rounded_md()
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
             .child(
                 div()
-                    .w(px(10.))
+                    .w_2p5()
                     .flex_none()
                     .text_xs()
                     .text_color(muted)
@@ -1153,7 +1153,7 @@ impl SidebarPanel {
                         ""
                     }),
             )
-            .child(div().w(px(8.)).h(px(8.)).flex_none().rounded_sm().bg(icon))
+            .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon))
             .child(
                 div()
                     .flex_1()
@@ -1199,7 +1199,7 @@ impl SidebarPanel {
         if let Some(err) = error {
             block = block.child(
                 div()
-                    .pl(px(indent + 18.0))
+                    .pl(rems((indent + 18.0) / 4.))
                     .pb_1()
                     .text_xs()
                     .text_color(danger)
@@ -1306,15 +1306,15 @@ impl SidebarPanel {
             .v_flex()
             .w_full()
             .gap_1()
-            .pl(px(8.))
-            .pr(px(8.))
-            .pt(px(8.))
-            .pb(px(8.))
+            .pl_2()
+            .pr_2()
+            .pt_2()
+            .pb_2()
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
@@ -1322,18 +1322,18 @@ impl SidebarPanel {
             )
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .text_color(fg)
                     .child("· 数据源连接引用"),
             )
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .text_color(fg)
                     .child("· DuckDB 分析表"),
@@ -1368,11 +1368,11 @@ impl SidebarPanel {
             .h_flex()
             .items_center()
             .w_full()
-            .h(px(26.))
+            .h(rems(1.625))
             .gap_1()
-            .px(px(4.))
-            .child(div().w(px(depth as f32 * 12.0)).flex_none())
-            .child(div().w(px(10.)).flex_none())
+            .px_1()
+            .child(div().w(rems(depth as f32 * 3.0)).flex_none())
+            .child(div().w_2p5().flex_none())
             .child(div().flex_1().min_w_0().child(Input::new(&input).w_full()))
             .child(
                 div()
@@ -1380,7 +1380,7 @@ impl SidebarPanel {
                     .h_flex()
                     .items_center()
                     .justify_center()
-                    .w(px(20.))
+                    .w_5()
                     .cursor_pointer()
                     .text_xs()
                     .text_color(primary)
@@ -1393,7 +1393,7 @@ impl SidebarPanel {
                     .h_flex()
                     .items_center()
                     .justify_center()
-                    .w(px(20.))
+                    .w_5()
                     .cursor_pointer()
                     .text_xs()
                     .text_color(muted)
@@ -1484,8 +1484,8 @@ impl SidebarPanel {
                 .h_flex()
                 .items_center()
                 .justify_center()
-                .w(px(24.))
-                .h(px(24.))
+                .w_6()
+                .h_6()
                 .rounded_sm()
                 .cursor_pointer()
                 .text_xs()
@@ -1500,15 +1500,15 @@ impl SidebarPanel {
             .items_center()
             .gap_1()
             .w_full()
-            .px(px(6.))
-            .py(px(4.))
+            .px_1p5()
+            .py_1()
             .child(tool_btn("sp-new-file", "＋", Box::new(start_new_file)))
             .child(tool_btn("sp-new-folder", "🗀", Box::new(start_new_folder)))
             .child(div().flex_1())
             .child(tool_btn("sp-refresh", "↻", Box::new(refresh)));
 
         // ── 搜索（文件名过滤）──
-        let mut search_row = div().w_full().px(px(6.)).pb(px(4.));
+        let mut search_row = div().w_full().px_1p5().pb_1();
         if let Some(input) = self.scratchpad.borrow().search_input.clone() {
             search_row = search_row.child(Input::new(&input).w_full());
         }
@@ -1519,8 +1519,8 @@ impl SidebarPanel {
                 .items_center()
                 .gap_1()
                 .w_full()
-                .h(px(22.))
-                .px(px(6.))
+                .h(rems(1.375))
+                .px_1p5()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(muted)
@@ -1542,8 +1542,8 @@ impl SidebarPanel {
                 div()
                     .flex_1()
                     .w_full()
-                    .px(px(10.))
-                    .py(px(12.))
+                    .px_2p5()
+                    .py_3()
                     .text_xs()
                     .text_color(muted)
                     .child(err.clone()),
@@ -1556,8 +1556,8 @@ impl SidebarPanel {
             .min_h_0()
             .w_full()
             .gap_1()
-            .px(px(4.))
-            .pb(px(4.));
+            .px_1()
+            .pb_1();
 
         // 顶部内联新建（新建文件/文件夹）。
         if matches!(
@@ -1578,8 +1578,8 @@ impl SidebarPanel {
                     .v_flex()
                     .items_center()
                     .w_full()
-                    .pt(px(24.))
-                    .px(px(8.))
+                    .pt_6()
+                    .px_2()
                     .text_xs()
                     .text_color(muted)
                     .child("草稿箱还没有文件")
@@ -1647,17 +1647,17 @@ impl SidebarPanel {
                     .h_flex()
                     .items_center()
                     .w_full()
-                    .h(px(24.))
+                    .h_6()
                     .gap_1()
                     .rounded_sm()
                     .cursor_pointer()
                     .when(is_selected, |this| this.bg(selected_bg))
                     .hover(move |s| s.bg(hover_bg))
                     .on_click(click)
-                    .child(div().w(px(*depth as f32 * 12.0)).flex_none())
+                    .child(div().w(rems(*depth as f32 * 3.0)).flex_none())
                     .child(
                         div()
-                            .w(px(10.))
+                            .w_2p5()
                             .flex_none()
                             .text_xs()
                             .text_color(muted)
@@ -1665,8 +1665,8 @@ impl SidebarPanel {
                     )
                     .child(
                         div()
-                            .w(px(8.))
-                            .h(px(8.))
+                            .w_2()
+                            .h_2()
                             .flex_none()
                             .rounded_sm()
                             .bg(icon_color),
@@ -1708,7 +1708,7 @@ impl SidebarPanel {
                         .child(
                             div()
                                 .id(format!("sp-ren-{key}"))
-                                .w(px(18.))
+                                .w(rems(1.125))
                                 .h_flex()
                                 .items_center()
                                 .justify_center()
@@ -1722,7 +1722,7 @@ impl SidebarPanel {
                         .child(
                             div()
                                 .id(format!("sp-del-{key}"))
-                                .w(px(18.))
+                                .w(rems(1.125))
                                 .h_flex()
                                 .items_center()
                                 .justify_center()
@@ -1758,12 +1758,12 @@ impl SidebarPanel {
                         .items_center()
                         .gap_2()
                         .w_full()
-                        .h(px(22.))
-                        .px(px(6.))
+                        .h(rems(1.375))
+                        .px_1p5()
                         .child(
                             div()
-                                .w(px(8.))
-                                .h(px(8.))
+                                .w_2()
+                                .h_2()
                                 .flex_none()
                                 .rounded_sm()
                                 .bg(ref_color),
@@ -1789,7 +1789,7 @@ impl SidebarPanel {
                         .child(
                             div()
                                 .id(format!("sp-ref-{}", r.alias))
-                                .w(px(18.))
+                                .w(rems(1.125))
                                 .h_flex()
                                 .items_center()
                                 .justify_center()
@@ -1824,8 +1824,8 @@ impl SidebarPanel {
                 .items_center()
                 .gap_1()
                 .w_full()
-                .h(px(22.))
-                .px(px(6.))
+                .h(rems(1.375))
+                .px_1p5()
                 .rounded_sm()
                 .cursor_pointer()
                 .text_xs()
@@ -1833,7 +1833,7 @@ impl SidebarPanel {
                 .text_color(muted)
                 .hover(move |s| s.bg(hover_bg))
                 .on_click(toggle_trash)
-                .child(div().w(px(10.)).flex_none().child(chevron))
+                .child(div().w_2p5().flex_none().child(chevron))
                 .child("回收站")
                 .child(div().flex_1())
                 .child(trash.len().to_string());
@@ -1874,9 +1874,9 @@ impl SidebarPanel {
                             .items_center()
                             .gap_2()
                             .w_full()
-                            .h(px(22.))
-                            .pl(px(18.))
-                            .pr(px(6.))
+                            .h(rems(1.375))
+                            .pl(rems(1.125))
+                            .pr_1p5()
                             .child(
                                 div()
                                     .flex_1()
@@ -1915,8 +1915,8 @@ impl SidebarPanel {
                     .items_center()
                     .gap_2()
                     .w_full()
-                    .px(px(8.))
-                    .py(px(5.))
+                    .px_2()
+                    .py(rems(1.25))
                     .bg(hover_bg)
                     .rounded_sm()
                     .child(
@@ -1948,8 +1948,8 @@ impl SidebarPanel {
         panel = panel.child(
             div()
                 .w_full()
-                .px(px(8.))
-                .py(px(4.))
+                .px_2()
+                .py_1()
                 .text_xs()
                 .text_color(muted)
                 .child(format!(
@@ -1967,15 +1967,15 @@ impl SidebarPanel {
             .v_flex()
             .w_full()
             .gap_1()
-            .pl(px(8.))
-            .pr(px(8.))
-            .pt(px(8.))
-            .pb(px(8.))
+            .pl_2()
+            .pr_2()
+            .pt_2()
+            .pb_2()
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
@@ -1983,9 +1983,9 @@ impl SidebarPanel {
             )
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .text_color(fg)
                     .child("· 插件市场（下一轮接入）"),
@@ -2150,7 +2150,7 @@ impl EditorPanel {
                         .w_full()
                         .gap_2()
                         .text_xs()
-                        .child(div().w(px(72.)).flex_none().text_color(muted).child(row.label.clone()))
+                        .child(div().w(rems(4.5)).flex_none().text_color(muted).child(row.label.clone()))
                         .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone())),
                 );
             }
@@ -2198,7 +2198,7 @@ impl EditorPanel {
 
         div()
             .v_flex()
-            .w(px(392.))
+            .w(rems(24.5))
             .h_full()
             .flex_none()
             .border_1()
@@ -2210,7 +2210,7 @@ impl EditorPanel {
                     .items_center()
                     .gap_2()
                     .w_full()
-                    .h(px(34.))
+                    .h(rems(2.125))
                     .px_3()
                     .border_1()
                     .border_color(border)
@@ -2301,9 +2301,9 @@ impl Render for EditorPanel {
         let mut content = div()
             .v_flex()
             .size_full()
-            .pt(px(16.))
-            .pl(px(16.))
-            .pr(px(16.))
+            .pt_4()
+            .pl_4()
+            .pr_4()
             .gap_3()
             .bg(theme.colors.background)
             .child(
@@ -2385,7 +2385,7 @@ impl Render for EditorPanel {
                         .gap_2()
                         .child(
                             div()
-                                .w(px(96.))
+                                .w_24()
                                 .flex_none()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
@@ -2402,20 +2402,20 @@ impl Render for EditorPanel {
                 );
             }
             content = content.child(
-                div().v_flex().gap_2().w_full().rounded_md().pl(px(12.)).pr(px(12.)).pt(px(10.)).pb(px(10.))
+                div().v_flex().gap_2().w_full().rounded_md().pl_3().pr_3().pt_2p5().pb_2p5()
                     .border_1().border_color(theme.colors.border)
                     .child(
                         div().h_flex().items_center().gap_2()
                             .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(item.name))
                             .child(
                                 div().h_flex().items_center().gap_1()
-                                    .child(div().w(px(8.)).h(px(8.)).rounded_full().bg(status_color))
+                                    .child(div().w_2().h_2().rounded_full().bg(status_color))
                                     .child(div().text_xs().text_color(theme.colors.muted_foreground).child(status)),
                             ),
                     )
                     .child(rows)
                     .child(
-                        div().h_flex().items_center().gap_2().mt(px(8.))
+                        div().h_flex().items_center().gap_2().mt_2()
                             .child(
                                 div()
                                     .id("delete-connection")
@@ -2446,7 +2446,7 @@ impl Render for EditorPanel {
                             ),
                     )
                     .child(
-                        div().v_flex().gap_1().mt(px(8.)).pt(px(8.))
+                        div().v_flex().gap_1().mt_2().pt_2()
                             .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("数据库导航（DuckDB 分析库）")),
                     ),
             );
@@ -2464,7 +2464,7 @@ impl Render for EditorPanel {
                     *self.shared.nav_for.borrow_mut() = Some(item.id.clone());
                 }
                 let nav = self.shared.nav_tables.borrow();
-                let mut nav_content = div().v_flex().gap_1().mt(px(6.));
+                let mut nav_content = div().v_flex().gap_1().mt_1p5();
                 if nav.is_empty() {
                     nav_content = nav_content.child(
                         div()
@@ -2484,7 +2484,7 @@ impl Render for EditorPanel {
                                             format!("{}（{} 列）", table.name, table.columns.len()),
                                         ),
                                     ))
-                                    .child(div().v_flex().gap_1().pl(px(12.)).children(
+                                    .child(div().v_flex().gap_1().pl_3().children(
                                         table.columns.iter().map(|col| {
                                             div()
                                                 .h_flex()
@@ -2492,7 +2492,7 @@ impl Render for EditorPanel {
                                                 .gap_2()
                                                 .child(
                                                     div()
-                                                        .w(px(130.))
+                                                        .w(rems(8.125))
                                                         .flex_none()
                                                         .text_xs()
                                                         .child(col.name.clone()),
@@ -2522,7 +2522,7 @@ impl Render for EditorPanel {
             }
         }
 
-        content = content.child(div().h(px(24.)));
+        content = content.child(div().h_6());
 
         // Round 26：SQL 查询区——选中联邦连接时可对分析库执行只读 SQL。
         if let Some(item) = self.shared.selected_connection() {
@@ -2543,8 +2543,8 @@ impl Render for EditorPanel {
                 let mut sql_ui = div()
                     .v_flex()
                     .gap_1()
-                    .mt(px(8.))
-                    .pt(px(8.))
+                    .mt_2()
+                    .pt_2()
                     .child(
                         div()
                             .text_sm()
@@ -2556,7 +2556,7 @@ impl Render for EditorPanel {
                             .v_flex()
                             .gap_2()
                             .w_full()
-                            .child(Textarea::new(&sql_state).h(px(96.)))
+                            .child(Textarea::new(&sql_state).h_24())
                             .child(div().h_flex().justify_end().w_full().child(
                                 Button::new("run-sql").secondary().label("执行").on_click(
                                     move |_, _, app| {
@@ -2615,7 +2615,7 @@ impl Render for EditorPanel {
                 {
                     let history = self.sql_history.borrow();
                     if !history.is_empty() {
-                        let mut hist_ui = div().v_flex().gap_1().mt(px(4.));
+                        let mut hist_ui = div().v_flex().gap_1().mt_1();
                         hist_ui = hist_ui.child(
                             div()
                                 .text_xs()
@@ -2675,7 +2675,7 @@ impl Render for EditorPanel {
                         for col in &out.columns {
                             head = head.child(
                                 div()
-                                    .w(px(150.))
+                                    .w(rems(9.375))
                                     .flex_none()
                                     .text_xs()
                                     .font_weight(FontWeight::MEDIUM)
@@ -2689,7 +2689,7 @@ impl Render for EditorPanel {
                             for v in row {
                                 row_div = row_div.child(
                                     div()
-                                        .w(px(150.))
+                                        .w(rems(9.375))
                                         .flex_none()
                                         .text_xs()
                                         .text_color(theme.colors.muted_foreground)
@@ -2829,15 +2829,15 @@ impl RightSidebarPanel {
             .v_flex()
             .w_full()
             .gap_1()
-            .pl(px(8.))
-            .pr(px(8.))
-            .pt(px(8.))
-            .pb(px(8.))
+            .pl_2()
+            .pr_2()
+            .pt_2()
+            .pb_2()
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
@@ -2845,18 +2845,18 @@ impl RightSidebarPanel {
             )
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .text_color(fg)
                     .child("· 库/表/列画像（占位）"),
             )
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .text_color(fg)
                     .child("· 数据质量建议（占位）"),
@@ -2868,15 +2868,15 @@ impl RightSidebarPanel {
             .v_flex()
             .w_full()
             .gap_1()
-            .pl(px(8.))
-            .pr(px(8.))
-            .pt(px(8.))
-            .pb(px(8.))
+            .pl_2()
+            .pr_2()
+            .pt_2()
+            .pb_2()
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
@@ -2884,18 +2884,18 @@ impl RightSidebarPanel {
             )
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .text_color(fg)
                     .child("· 表结构模板（占位）"),
             )
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .text_color(fg)
                     .child("· 生成任务（占位）"),
@@ -2907,15 +2907,15 @@ impl RightSidebarPanel {
             .v_flex()
             .w_full()
             .gap_1()
-            .pl(px(8.))
-            .pr(px(8.))
-            .pt(px(8.))
-            .pb(px(8.))
+            .pl_2()
+            .pr_2()
+            .pt_2()
+            .pb_2()
             .child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
@@ -2925,9 +2925,9 @@ impl RightSidebarPanel {
         if history.is_empty() {
             panel = panel.child(
                 div()
-                    .h(px(24.))
-                    .pl(px(8.))
-                    .pr(px(8.))
+                    .h_6()
+                    .pl_2()
+                    .pr_2()
                     .text_xs()
                     .text_color(fg)
                     .child("暂无历史记录"),
@@ -2946,9 +2946,9 @@ impl RightSidebarPanel {
                         .id(ElementId::Name(SharedString::from(format!(
                             "right-hist-{i}"
                         ))))
-                        .h(px(24.))
-                        .pl(px(8.))
-                        .pr(px(8.))
+                        .h_6()
+                        .pl_2()
+                        .pr_2()
                         .text_xs()
                         .text_color(fg)
                         .child(preview),

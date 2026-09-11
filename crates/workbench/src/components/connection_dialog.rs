@@ -1171,8 +1171,8 @@ impl ConnectionDialogState {
                                         div()
                                             .id(ElementId::Name(SharedString::from(format!("sec-{idx}"))))
                                             .cursor_pointer()
-                                            .w(px(32.))
-                                            .h(px(18.))
+                                            .w_8()
+                                            .h(rems(1.125))
                                             .rounded_full()
                                             .bg(if on { theme.colors.primary } else { theme.colors.border })
                                             .relative()
@@ -1187,9 +1187,9 @@ impl ConnectionDialogState {
                                                     .absolute()
                                                     .top_0()
                                                     .left_0()
-                                                    .m(px(2.))
-                                                    .w(px(14.))
-                                                    .h(px(14.))
+                                                    .m_0p5()
+                                                    .w_3p5()
+                                                    .h_3p5()
                                                     .rounded_full()
                                                     .bg(theme.colors.background)
                                                     .child(""),
@@ -1230,8 +1230,8 @@ impl ConnectionDialogState {
                                             div()
                                                 .id("duckdb-fed")
                                                 .cursor_pointer()
-                                                .w(px(32.))
-                                                .h(px(18.))
+                                                .w_8()
+                                                .h(rems(1.125))
                                                 .rounded_full()
                                                 .bg(if duckdb_fed.get() { theme.colors.primary } else { theme.colors.border })
                                                 .relative()
@@ -1248,9 +1248,9 @@ impl ConnectionDialogState {
                                                         .absolute()
                                                         .top_0()
                                                         .left_0()
-                                                        .m(px(2.))
-                                                        .w(px(14.))
-                                                        .h(px(14.))
+                                                        .m_0p5()
+                                                        .w_3p5()
+                                                        .h_3p5()
                                                         .rounded_full()
                                                         .bg(theme.colors.background)
                                                         .child(""),
@@ -1268,7 +1268,7 @@ impl ConnectionDialogState {
                                 .child(
                                     div().h_flex().items_center().gap_2()
                                         .child(div().text_xs().child("缓存路径"))
-                                        .child(Input::new(&cache_path).w(px(280.))),
+                                        .child(Input::new(&cache_path).w(rems(17.5))),
                                 ),
                         );
                     }
@@ -1286,7 +1286,7 @@ impl ConnectionDialogState {
                                 .child(div().text_sm().font_weight(FontWeight::BOLD).child("连接设置"))
                                 .child(
                                     Form::vertical()
-                                        .label_width(px(80.))
+                                        .label_width(cx.theme().font_size * 5.)
                                         .child(Field::new().label("名称").child(Input::new(&name)))
                                         .child(Field::new().label("驱动类型").child(Select::new(&driver).placeholder("选择驱动…")))
                                         .child(Field::new().label("连接 URL").child(Input::new(&url)))
@@ -1319,7 +1319,7 @@ impl ConnectionDialogState {
                                     div().v_flex().gap_1()
                                         .child(
                                             Form::vertical()
-                                                .label_width(px(80.))
+                                                .label_width(cx.theme().font_size * 5.)
                                                 .child(Field::new().label("用户名").child(Input::new(&user)))
                                                 .child(Field::new().label("密码").child(Input::new(&pass))),
                                         )
@@ -1344,17 +1344,17 @@ impl ConnectionDialogState {
                                             .child(
                                                 div().h_flex().items_center().gap_2()
                                                     .child(div().text_xs().child("CA 证书"))
-                                                    .child(Input::new(&ssl_ca).w(px(220.))),
+                                                    .child(Input::new(&ssl_ca).w(rems(13.75))),
                                             )
                                             .child(
                                                 div().h_flex().items_center().gap_2()
                                                     .child(div().text_xs().child("客户端证书"))
-                                                    .child(Input::new(&ssl_cert).w(px(220.))),
+                                                    .child(Input::new(&ssl_cert).w(rems(13.75))),
                                             )
                                             .child(
                                                 div().h_flex().items_center().gap_2()
                                                     .child(div().text_xs().child("私钥"))
-                                                    .child(Input::new(&ssl_key).w(px(220.))),
+                                                    .child(Input::new(&ssl_key).w(rems(13.75))),
                                             )
                                     },
                                 ),
@@ -1380,13 +1380,13 @@ impl ConnectionDialogState {
                     if scope_from_label(&scope_sel).includes_project() {
                         div().h_flex().items_center().gap_2()
                             .child(div().text_xs().child("项目路径"))
-                            .child(Input::new(&project_path).w(px(280.)))
+                            .child(Input::new(&project_path).w(rems(17.5)))
                             .child(
                                 div().text_xs().text_color(theme.colors.muted_foreground)
                                     .child("保存至当前项目 .RSMETA/project.db"),
                             )
                     } else {
-                        div().h(px(4.))
+                        div().h_1()
                     },
                 );
 
@@ -1396,7 +1396,7 @@ impl ConnectionDialogState {
                     let color = if result_ok.get() { theme.colors.success } else { theme.colors.danger };
                     div().text_xs().text_color(color).child(msg)
                 } else {
-                    div().h(px(18.))
+                    div().h(rems(1.125))
                 }
             };
 
@@ -1537,7 +1537,7 @@ impl ConnectionDialogState {
 
             dialog
                 .title(if editing_id.borrow().is_some() { "编辑数据源连接" } else { "新建数据源连接" })
-                .w(px(600.))
+                .w(cx.theme().font_size * 37.5)
                 .overlay(true)
                 .overlay_closable(true)
                 .keyboard(true)
@@ -1965,14 +1965,14 @@ fn open_manager(
                 .child(
                     div().h_flex().items_center().gap_2()
                         .child(div().text_xs().child("名称"))
-                        .child(Input::new(&new_name).w(px(180.))),
+                        .child(Input::new(&new_name).w(rems(11.25))),
                 )
                 .child(
                     div().h_flex().items_center().gap_2()
                         .child(div().text_xs().child("类型"))
                         .child(Select::new(&new_type).placeholder("选择类型…"))
                         .child(div().text_xs().child("数据(JSON)"))
-                        .child(Input::new(&new_data).w(px(200.))),
+                        .child(Input::new(&new_data).w(rems(12.5))),
                 )
                 .child(
                     div().h_flex().items_center().gap_2()
@@ -2034,7 +2034,7 @@ fn open_manager(
                     if let Some(msg) = msg {
                         div().text_xs().text_color(theme.colors.info).child(msg)
                     } else {
-                        div().h(px(18.))
+                        div().h(rems(1.125))
                     },
                 )
         };
@@ -2127,8 +2127,8 @@ fn open_manager(
                                             .id("pol-toggle")
                                             .cursor_pointer()
                                             .relative()
-                                            .w(px(30.))
-                                            .h(px(16.))
+                                            .w(rems(1.875))
+                                            .h_4()
                                             .rounded_full()
                                             .bg(if policy_enabled.get() { theme.colors.primary } else { theme.colors.border })
                                             .on_click({
@@ -2144,9 +2144,9 @@ fn open_manager(
                                                     .absolute()
                                                     .top_0()
                                                     .left_0()
-                                                    .m(px(2.))
-                                                    .w(px(12.))
-                                                    .h(px(12.))
+                                                    .m_0p5()
+                                                    .w_3()
+                                                    .h_3()
                                                     .rounded_full()
                                                     .bg(theme.colors.background)
                                                     .child(""),
@@ -2190,16 +2190,16 @@ fn open_manager(
                                     ),
                             )
                     }
-                    None => div().h(px(0.)),
+                    None => div().h_0(),
                 }
             } else {
-                div().h(px(0.))
+                div().h_0()
             }
         };
 
         dialog
             .title(title)
-            .w(px(560.))
+            .w(cx.theme().font_size * 35.)
             .overlay(true)
             .overlay_closable(true)
             .keyboard(true)

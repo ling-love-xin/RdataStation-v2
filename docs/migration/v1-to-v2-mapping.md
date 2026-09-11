@@ -484,7 +484,7 @@
 | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） | `project_info` 增 `is_pinned`/`pinned_at`/`removed_at` + 索引（固定置顶 / 软删过滤） |
 | `crates/engine/src/persistence/global_db.rs` | 查询改造（过滤已移除、固定置顶）+ `set_project_pinned`/`soft_delete_project`/`restore_project`/`list_removed_projects`；`save_project_info` 改 upsert 以保留固定/软删列 |
 | `crates/project/src/lock.rs`（新） | 项目锁：OS 文件锁（崩溃自动释放）+ `project.lock.owner` 展示占用者；`probe`/`release` |
-| `crates/workbench/src/services/project_service.rs`（新） | 项目 CRUD 编排：列表（最近/全部/已移除）、创建、打开 / 只读打开、关闭、重命名、固定、归档、软删 / 恢复 / 硬删 / 移出、目标探测 |
+| `crates/workbench/src/services/project_service.rs`（新，后迁至 `crates/project/src/service.rs`） | 项目 CRUD 编排：列表（最近/全部/已移除）、创建、打开 / 只读打开、关闭、重命名、固定、归档、软删 / 恢复 / 硬删 / 移出、目标探测 |
 | `crates/workbench/src/components/project_ui.rs`（新） | 项目管理 UI：选择器（三 Tab / 搜索 / 排序 / 卡片操作）、标题栏项目菜单、新建 / 打开 / 删除确认 / 锁逃生口 / 未保存拦截对话框、项目设置 |
 | `crates/workbench/src/{view,panels,commands,lib}.rs` | 标题栏项目槽可点、无项目时选择器覆盖中央区、`SwitchProject`/`CloseProject` Action、`Shared::project_ui`/`editor_dirty`、编辑区脏状态 |
 | `crates/app/src/main.rs` | 绑定 `Ctrl+Shift+P`（切换项目）/ `Ctrl+Shift+W`（关闭项目） |
@@ -493,6 +493,19 @@
 **验证**：`cargo check --workspace --all-targets` 零告警；engine 221 / project 12 单元 + 3 集成 / workbench 16 测试全绿（含迁移 019、固定/软删/恢复、项目锁用例）。
 
 **二次迭代补全**：排序持久化（`settings.projects.sort_mode`）、未保存「保存并继续」、只读强制禁写、重新定位（U5）、版本链列表（新迁移 `project_meta/018_project_versions.sql`），并新增 `crates/project/tests/` 集成测试。
+
+**GPUI-kit 符合性对齐**（对照官方编码 / 设计指南）：
+
+| 项 | 处置 |
+| --- | --- |
+| 服务与 model 同 crate | `project_service` 迁入 `crates/project/src/service.rs`；`.RSmeta` 常量统一到 `store::RS_META_DIR_NAME` |
+| render 内副作用 | 选择器加载 / 排序初始化 → `WorkbenchView::new`；脏状态 → `InputEvent::Change` 订阅；清空编辑区 → 宿主命令回调 |
+| 语义组件 | 项目菜单改 `Popover` + `Button` 触发；新建 / 打开 / 删除确认 / 重定位改 `Dialog`，锁占用 / 未保存拦截改 `AlertDialog`（删除自绘 `render_overlays` 系列） |
+| 列表行命令入口 | 项目卡片改「可见主操作（打开）+ `DropdownMenu`」，破坏性命令分隔线隔离 |
+| 尺寸相对化 | 工作台视图层 `px(...)` → rem helper / `cx.theme().font_size * N`（仅 1px hairline 保留 `h_px()`） |
+| 其他 | ElementId 用 domain 键；公开结构体 `#[non_exhaustive]`；`feature → gpui-kit` 依赖方向放开并更新架构文档 |
+
+验证：`cargo check --workspace --all-targets` 零告警；`cargo test --workspace -j 2` 34 个目标全绿（442 通过 / 0 失败）；`cargo build -p rds-app -j 2` 通过。
 
 ### ⏳ 下一轮候选
 

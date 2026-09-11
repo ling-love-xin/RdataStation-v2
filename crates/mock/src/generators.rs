@@ -1017,17 +1017,17 @@ mod tests {
 
     #[test]
     fn test_auto_increment() {
-        let gen = GeneratorConfig::AutoIncrement { start: 1, step: 1 };
-        assert_eq!(generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn), "1");
-        assert_eq!(generate_cell(&gen, &mut rng(), 5, &Locale::ZhCn), "6");
-        assert_eq!(generate_cell(&gen, &mut rng(), 9, &Locale::ZhCn), "10");
+        let generator = GeneratorConfig::AutoIncrement { start: 1, step: 1 };
+        assert_eq!(generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn), "1");
+        assert_eq!(generate_cell(&generator, &mut rng(), 5, &Locale::ZhCn), "6");
+        assert_eq!(generate_cell(&generator, &mut rng(), 9, &Locale::ZhCn), "10");
     }
 
     #[test]
     fn test_random_int_range() {
-        let gen = GeneratorConfig::RandomInt { min: 1, max: 10 };
+        let generator = GeneratorConfig::RandomInt { min: 1, max: 10 };
         for _ in 0..50 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             let n: i64 = val.parse().unwrap();
             assert!(n >= 1 && n <= 10, "value {} out of range", n);
         }
@@ -1035,12 +1035,12 @@ mod tests {
 
     #[test]
     fn test_constant_value() {
-        let gen = GeneratorConfig::Constant {
+        let generator = GeneratorConfig::Constant {
             value: "hello".to_string(),
         };
         for i in 0..10 {
             assert_eq!(
-                generate_cell(&gen, &mut rng(), i, &Locale::ZhCn),
+                generate_cell(&generator, &mut rng(), i, &Locale::ZhCn),
                 "hello"
             );
         }
@@ -1048,18 +1048,18 @@ mod tests {
 
     #[test]
     fn test_boolean_ratio() {
-        let gen = GeneratorConfig::Boolean { ratio: 0 };
+        let generator = GeneratorConfig::Boolean { ratio: 0 };
         for _ in 0..20 {
             assert_eq!(
-                generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn),
+                generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn),
                 "false"
             );
         }
 
-        let gen = GeneratorConfig::Boolean { ratio: 100 };
+        let generator = GeneratorConfig::Boolean { ratio: 100 };
         for _ in 0..20 {
             assert_eq!(
-                generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn),
+                generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn),
                 "true"
             );
         }
@@ -1067,9 +1067,9 @@ mod tests {
 
     #[test]
     fn test_digit_single_character() {
-        let gen = GeneratorConfig::Digit;
+        let generator = GeneratorConfig::Digit;
         for _ in 0..30 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert_eq!(val.len(), 1, "digit should be single char, got: {}", val);
             assert!(val.parse::<u8>().is_ok(), "digit should be numeric, got: {}", val);
         }
@@ -1077,9 +1077,9 @@ mod tests {
 
     #[test]
     fn test_words_range() {
-        let gen = GeneratorConfig::Words { min: 2, max: 5 };
+        let generator = GeneratorConfig::Words { min: 2, max: 5 };
         for _ in 0..10 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             let word_count = val.split_whitespace().count();
             assert!(
                 word_count >= 2 && word_count <= 5,
@@ -1092,18 +1092,18 @@ mod tests {
 
     #[test]
     fn test_sentence_non_empty() {
-        let gen = GeneratorConfig::Sentence { min: 3, max: 10 };
+        let generator = GeneratorConfig::Sentence { min: 3, max: 10 };
         for _ in 0..10 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert!(!val.is_empty(), "sentence should not be empty");
         }
     }
 
     #[test]
     fn test_uuid_format() {
-        let gen = GeneratorConfig::UuidV4;
+        let generator = GeneratorConfig::UuidV4;
         for _ in 0..10 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert_eq!(val.len(), 36, "UUID should be 36 chars, got: {}", val);
             assert_eq!(val.chars().nth(8), Some('-'), "missing dash at pos 8");
             assert_eq!(val.chars().nth(13), Some('-'), "missing dash at pos 13");
@@ -1112,9 +1112,9 @@ mod tests {
 
     #[test]
     fn test_email_format() {
-        let gen = GeneratorConfig::Email;
+        let generator = GeneratorConfig::Email;
         for _ in 0..10 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert!(val.contains('@'), "email should contain @: {}", val);
             assert!(val.contains('.'), "email should contain .: {}", val);
         }
@@ -1122,9 +1122,9 @@ mod tests {
 
     #[test]
     fn test_ipv4_format() {
-        let gen = GeneratorConfig::IPv4;
+        let generator = GeneratorConfig::IPv4;
         for _ in 0..10 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             let parts: Vec<&str> = val.split('.').collect();
             assert_eq!(parts.len(), 4, "IPv4 should have 4 parts: {}", val);
             for p in parts {
@@ -1136,13 +1136,13 @@ mod tests {
 
     #[test]
     fn test_random_float_precision() {
-        let gen = GeneratorConfig::RandomFloat {
+        let generator = GeneratorConfig::RandomFloat {
             min: 0.0,
             max: 1.0,
             precision: 2,
         };
         for _ in 0..10 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             let parts: Vec<&str> = val.split('.').collect();
             if parts.len() == 2 {
                 assert!(
@@ -1156,12 +1156,12 @@ mod tests {
 
     #[test]
     fn test_datetime_format() {
-        let gen = GeneratorConfig::DateTime {
+        let generator = GeneratorConfig::DateTime {
             min: "2020-01-01".to_string(),
             max: "2025-12-31".to_string(),
         };
         for _ in 0..10 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert!(
                 val.contains('T') || val.contains(' '),
                 "datetime should contain separator: {}",
@@ -1172,9 +1172,9 @@ mod tests {
 
     #[test]
     fn test_phone_number_format() {
-        let gen = GeneratorConfig::PhoneNumber;
+        let generator = GeneratorConfig::PhoneNumber;
         for _ in 0..10 {
-            let val = generate_cell(&gen, &mut rng(), 0, &Locale::ZhCn);
+            let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert!(!val.is_empty(), "phone number should not be empty");
         }
     }

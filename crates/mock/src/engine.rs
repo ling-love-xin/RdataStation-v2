@@ -707,7 +707,7 @@ impl MockEngine {
         // Kahn 拓扑排序
         let mut queue: Vec<String> = in_degree
             .iter()
-            .filter(|(_, &deg)| deg == 0)
+            .filter(|(_, deg)| **deg == 0)
             .map(|(name, _)| name.clone())
             .collect();
 
@@ -1057,19 +1057,19 @@ mod tests {
     #[test]
     fn test_generate_cell_auto_increment() {
         let mut rng = StdRng::seed_from_u64(42);
-        let gen = GeneratorConfig::AutoIncrement {
+        let generator = GeneratorConfig::AutoIncrement {
             start: 100,
             step: 5,
         };
-        let val = generate_cell(&gen, &mut rng, 3, &Locale::ZhCn);
+        let val = generate_cell(&generator, &mut rng, 3, &Locale::ZhCn);
         assert_eq!(val, "115");
     }
 
     #[test]
     fn test_generate_cell_random_int_range() -> Result<(), CoreError> {
         let mut rng = StdRng::seed_from_u64(42);
-        let gen = GeneratorConfig::RandomInt { min: 10, max: 20 };
-        let val: i64 = generate_cell(&gen, &mut rng, 0, &Locale::ZhCn)
+        let generator = GeneratorConfig::RandomInt { min: 10, max: 20 };
+        let val: i64 = generate_cell(&generator, &mut rng, 0, &Locale::ZhCn)
             .parse()
             .map_err(|e| CoreError::from(format!("parse int error: {}", e)))?;
         assert!((10..=20).contains(&val));
@@ -1079,18 +1079,18 @@ mod tests {
     #[test]
     fn test_generate_cell_constant() {
         let mut rng = StdRng::seed_from_u64(42);
-        let gen = GeneratorConfig::Constant {
+        let generator = GeneratorConfig::Constant {
             value: "hello".to_string(),
         };
-        let val = generate_cell(&gen, &mut rng, 0, &Locale::ZhCn);
+        let val = generate_cell(&generator, &mut rng, 0, &Locale::ZhCn);
         assert_eq!(val, "hello");
     }
 
     #[test]
     fn test_generate_cell_boolean() {
         let mut rng = StdRng::seed_from_u64(42);
-        let gen = GeneratorConfig::Boolean { ratio: 100 };
-        let val = generate_cell(&gen, &mut rng, 0, &Locale::ZhCn);
+        let generator = GeneratorConfig::Boolean { ratio: 100 };
+        let val = generate_cell(&generator, &mut rng, 0, &Locale::ZhCn);
         assert_eq!(val, "true");
     }
 

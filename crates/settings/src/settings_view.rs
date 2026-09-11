@@ -31,9 +31,9 @@ impl SettingsView {
     fn section_title(title: impl Into<SharedString>) -> Div {
         let title: SharedString = title.into();
         div()
-            .h(px(28.))
-            .pl(px(12.))
-            .pr(px(12.))
+            .h_7()
+            .pl_3()
+            .pr_3()
             .items_center()
             .text_xs()
             .font_weight(FontWeight::MEDIUM)
@@ -45,9 +45,9 @@ impl SettingsView {
         let label: SharedString = label.into();
         div()
             .h_flex()
-            .h(px(36.))
-            .pl(px(12.))
-            .pr(px(12.))
+            .h_9()
+            .pl_3()
+            .pr_3()
             .gap_2()
             .items_center()
             .text_xs()
@@ -70,7 +70,7 @@ impl SettingsView {
                 Button::new("theme-light")
                     .ghost()
                     .toggled(current == ThemeMode::Light)
-                    .size(px(26.))
+                    .size(rems(1.625))
                     .label("浅色")
                     .on_click(move |_, window, app| {
                         SettingsService::set_theme_mode(ThemeMode::Light, Some(window), app);
@@ -81,7 +81,7 @@ impl SettingsView {
                 Button::new("theme-dark")
                     .ghost()
                     .toggled(current == ThemeMode::Dark)
-                    .size(px(26.))
+                    .size(rems(1.625))
                     .label("深色")
                     .on_click(move |_, window, app| {
                         SettingsService::set_theme_mode(ThemeMode::Dark, Some(window), app);
@@ -100,17 +100,17 @@ impl SettingsView {
             .v_flex()
             .w_full()
             .gap_1()
-            .child(div().h(px(6.)))
+            .child(div().h_1p5())
             .child(Self::section_title("外观"))
             .child(Self::row("主题模式", self.theme_switcher(cx)))
             .child(Self::row(
                 "界面语言",
                 self.value_text("中文（简体）".to_string()),
             ))
-            .child(div().h(px(6.)))
+            .child(div().h_1p5())
             .child(Self::section_title("引擎"))
             .child(Self::row("工作区目录", self.value_text(engine_dir)))
-            .child(div().h(px(6.)))
+            .child(div().h_1p5())
             .child(Self::section_title("连接默认值"))
             .child(Self::row(
                 "默认数据源",
@@ -141,20 +141,20 @@ impl Render for SettingsView {
         let theme = cx.theme().clone();
         div()
             .v_flex()
-            .w(px(560.))
+            .w(rems(35.))
             .max_h_full()
             .rounded_lg()
             .bg(theme.colors.background)
             .border_1()
             .border_color(theme.colors.border)
-            .pt(px(8.))
-            .pb(px(10.))
+            .pt_2()
+            .pb_2p5()
             .child(
                 div()
                     .h_flex()
-                    .h(px(36.))
-                    .pl(px(14.))
-                    .pr(px(14.))
+                    .h_9()
+                    .pl_3p5()
+                    .pr_3p5()
                     .items_center()
                     .child(
                         div()
@@ -164,25 +164,25 @@ impl Render for SettingsView {
                             .text_color(theme.colors.foreground)
                             .child("设置"),
                     )
-                    .child(Icon::new(IconName::Settings).size(px(16.)))
+                    .child(Icon::new(IconName::Settings).size_4())
                     .child(
                         Button::new("settings-close")
                             .ghost()
                             .icon(IconName::CircleX)
-                            .size(px(24.))
+                            .size_6()
                             .on_click({
                                 let on_close = self.on_close.clone();
                                 move |_, _, app| (on_close)(app)
                             }),
                     ),
             )
-            .child(div().h(px(1.)).w_full().bg(theme.colors.border))
+            .child(div().h_px().w_full().bg(theme.colors.border))
             .child(self.content(cx))
-            .child(div().h(px(4.)))
+            .child(div().h_1())
             .child(
                 StatusBar::new().left(
                     div()
-                        .pl(px(12.))
+                        .pl_3()
                         .text_xs()
                         .text_color(theme.colors.muted_foreground)
                         .child("修改即时生效并持久化到 settings.json"),

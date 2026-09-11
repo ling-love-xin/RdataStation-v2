@@ -9,6 +9,9 @@ description = "M1 项目：双层数据架构（系统级共享 + 项目级物�
 engine.workspace = true
 shared.workspace = true
 
+# ===== UI（视图与 model/service 同 crate，见 GPUI-kit 编码指南）=====
+gpui-kit.workspace = true
+
 # ===== 时间 =====
 chrono.workspace = true
 

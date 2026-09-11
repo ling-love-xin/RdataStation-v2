@@ -951,7 +951,7 @@ impl ConnectionService {
                     }
 
                     let wrap_ssl = match next_hop {
-                        Some(ChainHop::Ssl(ref ssl_cfg)) => Some(ssl_cfg.clone()),
+                        Some(ChainHop::Ssl(ssl_cfg)) => Some(ssl_cfg.clone()),
                         _ => None,
                     };
                     let guard = create_proxy_tunnel_port(

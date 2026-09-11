@@ -25,10 +25,13 @@ pub mod lock;
 pub mod models;
 pub mod service;
 pub mod store;
+pub mod ui;
 
 pub use lock::{AcquireOutcome, LockInfo, ProjectLock};
 pub use models::{
     ConnectionRef, Project, ProjectConfig, ProjectInfo, ProjectPath, ProjectStatus, QueryRef,
     Version, VersionInfo, Versioned,
 };
+pub use service::{OpenOutcome, ProjectSummary};
 pub use store::{ProjectManager, ProjectStore};
+pub use ui::{OpenProject, ProjectUiHost};

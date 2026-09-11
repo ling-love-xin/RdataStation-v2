@@ -14,12 +14,12 @@ use std::rc::Rc;
 
 use gpui_kit::base::{Selectable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::dock::{panel_handle, DockArea, DockLayout, DockPlacement, DockSkin};
+use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, TitleBar};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::commands::{
@@ -262,8 +262,8 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
-                    // 起步宽度 240px（layout-design §2.3；用户拖拽可调，dock 重建时恢复）。
-                    area.set_dock_size(DockPlacement::Left, px(240.), window, cx);
+                    // 起步宽度 240px（= 15rem 基准，随界面缩放；layout-design §2.3，用户拖拽可调）。
+                    area.set_dock_size(DockPlacement::Left, cx.theme().font_size * 15., window, cx);
                 } else if !area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
                 }
@@ -277,7 +277,7 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
-                    area.set_dock_size(DockPlacement::Left, px(240.), window, cx);
+                    area.set_dock_size(DockPlacement::Left, cx.theme().font_size * 15., window, cx);
                 }
                 if area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
@@ -306,8 +306,13 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
-                    // 起步宽度 280px（layout-design §2.3）。
-                    area.set_dock_size(DockPlacement::Right, px(280.), window, cx);
+                    // 起步宽度 280px（= 17.5rem 基准）。
+                    area.set_dock_size(
+                        DockPlacement::Right,
+                        cx.theme().font_size * 17.5,
+                        window,
+                        cx,
+                    );
                 } else if !area.is_dock_open(DockPlacement::Right) {
                     area.toggle_dock(DockPlacement::Right, window, cx);
                 }
@@ -321,7 +326,12 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
-                    area.set_dock_size(DockPlacement::Right, px(280.), window, cx);
+                    area.set_dock_size(
+                        DockPlacement::Right,
+                        cx.theme().font_size * 17.5,
+                        window,
+                        cx,
+                    );
                 }
                 if area.is_dock_open(DockPlacement::Right) {
                     area.toggle_dock(DockPlacement::Right, window, cx);
@@ -346,7 +356,7 @@ impl WorkbenchView {
 
         // 软件图标（明亮版；暗黑版未设计，dark 主题先复用，见 theme-design.md）。
         let icon_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons/32x32.png");
-        let logo = img(icon_path.as_path()).w(px(20.)).h(px(20.)).rounded_sm();
+        let logo = img(icon_path.as_path()).w_5().h_5().rounded_sm();
 
         // 挖空项目槽：标题栏背景深一档。设计语义 token 为 `title_bar.slot.background`
         // （dark #252526 / light #F3F3F3），语义 token 注册落地前以 sidebar 角色同值替代。
@@ -359,39 +369,65 @@ impl WorkbenchView {
             .as_ref()
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "未打开项目".to_string());
-        let slot_shared = shared.clone();
-        let slot_entity = entity.clone();
-        let slot = div()
-            .id("project-slot")
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .h(px(26.))
-            .px(px(14.))
+        // 触发元素必须是语义控件（`Popover::trigger` 要求 `Selectable`），用 ghost Button
+        // 承载自定义外观，而非 clickable div。
+        let slot = Button::new("project-slot")
+            .ghost()
+            .h(rems(1.625))
+            .px_3p5()
             .rounded_md()
             .bg(theme.colors.sidebar)
             .child(
                 div()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("项目"),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.colors.foreground)
-                    .child(project_name),
-            )
-            // M1：有项目时点击弹出项目菜单（切换 / 设置 / 重命名 / 关闭）。
-            .when(has_project, move |d| {
-                d.cursor_pointer().on_click(move |_, _, app| {
-                    let mut ui = slot_shared.project_ui.borrow_mut();
-                    ui.menu_open = !ui.menu_open;
-                    drop(ui);
-                    slot_entity.update(app, |_, cx| cx.notify());
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("项目"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.colors.foreground)
+                            .child(project_name),
+                    ),
+            );
+
+        // M1：有项目时用 `Popover` 承载项目菜单（焦点 / 键盘 / 点击外部关闭 / Escape 由组件负责，
+        // 不再自绘弹层）。
+        let slot: AnyElement = if has_project {
+            let menu_open = self.shared.project_ui.borrow().menu_open;
+            let pop_state = shared.clone();
+            let pop_notify = entity.clone();
+            let menu_state = shared.clone();
+            let menu_notify = entity.clone();
+            let menu_inputs = self
+                .project_inputs
+                .clone()
+                .expect("project inputs lazy init");
+            Popover::new("project-menu")
+                .open(menu_open)
+                .on_open_change(move |open, _window, app| {
+                    pop_state.project_ui.borrow_mut().menu_open = *open;
+                    pop_notify.update(app, |_, cx| cx.notify());
                 })
-            });
+                .trigger(slot)
+                .content(move |_state, _window, cx| {
+                    crate::components::project_ui::render_menu_content(
+                        &menu_state,
+                        &menu_inputs,
+                        &menu_notify,
+                        cx,
+                    )
+                })
+                .into_any_element()
+        } else {
+            slot.into_any_element()
+        };
 
         // Quick Open 入口（点击唤起，Ctrl+P 见 commands.rs 绑定）。
         // 320×26 居中；底色取 border 角色（dark #3C3C3C，与示意 v5 一致）。
@@ -402,13 +438,13 @@ impl WorkbenchView {
             .h_flex()
             .items_center()
             .gap_2()
-            .w(px(320.))
-            .h(px(26.))
-            .px(px(10.))
+            .w_80()
+            .h(rems(1.625))
+            .px_2p5()
             .rounded_sm()
             .bg(theme.colors.border)
             .cursor_pointer()
-            .child(Icon::new(IconName::Search).size(px(14.)))
+            .child(Icon::new(IconName::Search).size_3p5())
             .child(
                 div()
                     .text_xs()
@@ -430,8 +466,8 @@ impl WorkbenchView {
         // 三栏布局：左右 flex_1 占位对称，Quick Open 严格居中；
         // 右侧窗口控制按钮（─ □ ✕）由 TitleBar 自带渲染，无需自绘。
         TitleBar::new()
-            .h(px(36.))
-            .pl(px(10.))
+            .h_9()
+            .pl_2p5()
             .bg(theme.colors.title_bar)
             .child(
                 div()
@@ -448,16 +484,16 @@ impl WorkbenchView {
 
     // ===== 活动栏 =====
 
-    fn render_left_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_left_activity_bar(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let active = self.shared.active_left.get();
         let mut bar = div()
             .v_flex()
             .items_center()
-            .w(px(48.))
+            .w_12()
             .h_full()
-            .pt(px(8.))
-            .pb(px(8.))
+            .pt_2()
+            .pb_2()
             .gap_1()
             .border_r_1()
             .border_color(theme.colors.border)
@@ -473,8 +509,8 @@ impl WorkbenchView {
             // 取 sidebar_accent_foreground 同值替代；右侧活动栏镜像在右）。
             bar = bar.child(
                 div()
-                    .w(px(44.))
-                    .h(px(40.))
+                    .w_11()
+                    .h_10()
                     .h_flex()
                     .items_center()
                     .justify_center()
@@ -487,7 +523,7 @@ impl WorkbenchView {
                     .child(
                         Button::new(format!("left-activity-{}", panel.label()))
                             .icon(panel.icon())
-                            .size(px(28.))
+                            .size_7()
                             .ghost()
                             .selected(selected)
                             .toggled(selected)
@@ -513,11 +549,11 @@ impl WorkbenchView {
         let shared = self.shared.clone();
         bar = bar
             .child(div().flex_1())
-            .child(div().w(px(28.)).h(px(1.)).bg(theme.colors.border))
+            .child(div().w_7().h_px().bg(theme.colors.border))
             .child(
                 Button::new("left-settings")
                     .icon(IconName::Settings)
-                    .size(px(28.))
+                    .size_7()
                     .ghost()
                     .on_click(move |_, _, app| {
                         shared.settings_open.set(true);
@@ -527,16 +563,16 @@ impl WorkbenchView {
         bar
     }
 
-    fn render_right_activity_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_right_activity_bar(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let active = self.shared.active_right.get();
         let mut bar = div()
             .v_flex()
             .items_center()
-            .w(px(48.))
+            .w_12()
             .h_full()
-            .pt(px(8.))
-            .pb(px(8.))
+            .pt_2()
+            .pb_2()
             .gap_1()
             .border_l_1()
             .border_color(theme.colors.border)
@@ -549,8 +585,8 @@ impl WorkbenchView {
             // 与左侧镜像：激活项 2px 亮条在右。
             bar = bar.child(
                 div()
-                    .w(px(44.))
-                    .h(px(40.))
+                    .w_11()
+                    .h_10()
                     .h_flex()
                     .items_center()
                     .justify_center()
@@ -563,7 +599,7 @@ impl WorkbenchView {
                     .child(
                         Button::new(format!("right-activity-{}", panel.label()))
                             .icon(panel.icon())
-                            .size(px(28.))
+                            .size_7()
                             .ghost()
                             .selected(selected)
                             .toggled(selected)
@@ -587,11 +623,11 @@ impl WorkbenchView {
         let shared = self.shared.clone();
         bar = bar
             .child(div().flex_1())
-            .child(div().w(px(28.)).h(px(1.)).bg(theme.colors.border))
+            .child(div().w_7().h_px().bg(theme.colors.border))
             .child(
                 Button::new("right-settings")
                     .icon(IconName::Settings)
-                    .size(px(28.))
+                    .size_7()
                     .ghost()
                     .on_click(move |_, _, app| {
                         shared.settings_open.set(true);
@@ -656,9 +692,9 @@ impl WorkbenchView {
                 .child(
                     div()
                         // 示意 v5：面板水平居中、顶部距标题栏 42px。
-                        .mt(px(42.))
-                        .w(px(560.))
-                        .max_h(px(420.))
+                        .mt(rems(2.625))
+                        .w(rems(35.))
+                        .max_h(rems(26.25))
                         .v_flex()
                         .gap_2()
                         .p_3()
@@ -771,7 +807,7 @@ fn sb_toggle(
         .cursor_pointer()
         .text_color(fg)
         .hover(move |s| s.bg(hover_bg))
-        .child(Icon::new(icon).size(px(14.)))
+        .child(Icon::new(icon).size_3p5())
         .child(div().child(label))
         .on_click(move |_, _, app| on_click(app))
 }
@@ -828,10 +864,18 @@ impl Render for WorkbenchView {
         self.apply_right_mode(window, cx);
 
         let area = self.area.clone().expect("workspace initialized");
-        let left_bar = (self.shared.left_mode.get() != SidebarMode::Hidden)
-            .then(|| self.render_left_activity_bar(cx));
-        let right_bar = (self.shared.right_mode.get() != SidebarMode::Hidden)
-            .then(|| self.render_right_activity_bar(cx));
+        // edition 2024：`.then(|| ...)` 闭包会同时独占 `cx`/`self`，改为显式 if（也更符合
+        // 编码指南「分支代表不同 interface 时用普通控制流」）。
+        let left_bar = if self.shared.left_mode.get() != SidebarMode::Hidden {
+            Some(self.render_left_activity_bar(cx))
+        } else {
+            None
+        };
+        let right_bar = if self.shared.right_mode.get() != SidebarMode::Hidden {
+            Some(self.render_right_activity_bar(cx))
+        } else {
+            None
+        };
         let quick_open = self.render_quick_open(cx);
         let settings_panel = self.render_settings_panel(cx);
 
@@ -920,20 +964,30 @@ impl Render for WorkbenchView {
             // M1：切换项目（= 关闭当前 + 回选择器）。
             .on_action({
                 let entity = cx.entity();
-                move |_: &SwitchProject, _window, cx| {
+                move |_: &SwitchProject, window, cx| {
                     entity.update(cx, |this, cx| {
                         let entity = cx.entity();
-                        crate::components::project_ui::request_close(&this.shared, &entity, cx);
+                        crate::components::project_ui::request_close(
+                            &this.shared,
+                            &entity,
+                            window,
+                            cx,
+                        );
                     });
                 }
             })
             // M1：关闭项目。
             .on_action({
                 let entity = cx.entity();
-                move |_: &CloseProject, _window, cx| {
+                move |_: &CloseProject, window, cx| {
                     entity.update(cx, |this, cx| {
                         let entity = cx.entity();
-                        crate::components::project_ui::request_close(&this.shared, &entity, cx);
+                        crate::components::project_ui::request_close(
+                            &this.shared,
+                            &entity,
+                            window,
+                            cx,
+                        );
                     });
                 }
             })
@@ -947,14 +1001,8 @@ impl Render for WorkbenchView {
         if let Some(sp) = settings_panel {
             root = root.child(sp);
         }
-        // M1：项目管理菜单 / 设置 / 覆盖对话框（有项目时才渲染菜单与设置）。
+        // M1：项目设置（菜单 / 对话框已改由 Popover 与语义 Dialog 承载，不在此渲染）。
         if !no_project {
-            let entity = cx.entity();
-            if let Some(menu) =
-                crate::components::project_ui::render_menu(&self.shared, &inputs, &entity, cx)
-            {
-                root = root.child(menu);
-            }
             let entity = cx.entity();
             if let Some(settings) =
                 crate::components::project_ui::render_settings(&self.shared, &inputs, &entity, cx)
@@ -962,15 +1010,7 @@ impl Render for WorkbenchView {
                 root = root.child(settings);
             }
         }
-        {
-            let entity = cx.entity();
-            if let Some(overlay) =
-                crate::components::project_ui::render_overlays(&self.shared, &inputs, &entity, cx)
-            {
-                root = root.child(overlay);
-            }
-        }
-        // Phase A：对话框层（Root::render_dialog_layer）——"新建连接"模态框在此渲染。
+        // 对话框层（Root::render_dialog_layer）——连接对话框与项目对话框均在此渲染。
         if let Some(dialog_layer) = Root::render_dialog_layer(window, cx) {
             root = root.child(dialog_layer);
         }
@@ -995,7 +1035,7 @@ fn quick_open_results(
     };
     let matches = |s: &str| needle.is_empty() || s.to_lowercase().contains(&needle);
 
-    let mut list = div().v_flex().gap_1().mt(px(2.)).max_h(px(340.));
+    let mut list = div().v_flex().gap_1().mt_0p5().max_h(rems(21.25));
 
     // ---- 命令组 ----
     let mut cmd_group = div().v_flex().gap_1();
@@ -1032,9 +1072,9 @@ fn quick_open_results(
                 .id(ElementId::Name(SharedString::from(format!(
                     "qo-cmd-{label}"
                 ))))
-                .h(px(28.))
-                .pl(px(10.))
-                .pr(px(10.))
+                .h_7()
+                .pl_2p5()
+                .pr_2p5()
                 .rounded_md()
                 .cursor_pointer()
                 .text_xs()
@@ -1080,9 +1120,9 @@ fn quick_open_results(
                     .id(ElementId::Name(SharedString::from(format!(
                         "qo-conn-{idx}"
                     ))))
-                    .h(px(28.))
-                    .pl(px(10.))
-                    .pr(px(10.))
+                    .h_7()
+                    .pl_2p5()
+                    .pr_2p5()
                     .rounded_md()
                     .cursor_pointer()
                     .text_xs()
@@ -1113,9 +1153,9 @@ fn quick_open_results(
             res_group = res_group.child(
                 div()
                     .id(ElementId::Name(SharedString::from(format!("qo-table-{t}"))))
-                    .h(px(28.))
-                    .pl(px(10.))
-                    .pr(px(10.))
+                    .h_7()
+                    .pl_2p5()
+                    .pr_2p5()
                     .rounded_md()
                     .cursor_pointer()
                     .text_xs()

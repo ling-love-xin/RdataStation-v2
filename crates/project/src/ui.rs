@@ -1,14 +1,18 @@
-//! 项目管理 UI（M1）：选择器 / 标题栏项目菜单 / 项目设置 / 语义对话框。
+//! 项目管理视图（M1）：选择器 / 标题栏项目菜单 / 项目设置 / 语义对话框。
 //!
-//! 选择器与项目设置为**受控自绘叠加层**（与 Quick Open、设置面板一致的模式）：状态存于
-//! `Shared::project_ui`，`WorkbenchView::render` 是权威同步点；项目菜单用 `Popover`，
-//! 创建 / 打开 / 删除 / 重定位 / 锁占用 / 未保存拦截一律用语义组件 `Dialog` /
-//! `AlertDialog`（焦点陷阱、Escape、点击遮罩关闭由组件负责，不自绘模态层）。
-//! 视图只消费 `services::project_service`，不直接读写数据库。
+//! 本模块随 `project` crate 一同发布（GPUI-kit 指南：model / service / view 同 crate），
+//! 不依赖 workbench 与 settings——宿主（工作台）通过 [`ProjectUiHost`] 注入状态句柄、
+//! 重绘桥、编辑区桥、排序偏好与打开后回调。
+//!
+//! 选择器与项目设置由宿主渲染为受控叠加层（宿主 render 是权威同步点）；项目菜单用
+//! `Popover`，创建 / 打开 / 删除 / 重定位 / 锁占用 / 未保存拦截一律用语义组件
+//! `Dialog` / `AlertDialog`（焦点陷阱、Escape、点击遮罩关闭由组件负责）。
 //!
 //! 语义见 `docs/architecture/project/project-prototype-design.md`。
 
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
@@ -21,10 +25,7 @@ use gpui_kit::component::{Icon, IconName, Sizable as _, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::panels::Shared;
-use crate::view::WorkbenchView;
-use project::service::{self as project_service, OpenOutcome, ProjectSummary, TargetDirState};
-use settings::SettingsService;
+use crate::service::{self as project_service, OpenOutcome, ProjectSummary, TargetDirState};
 
 /// 选择器视图 Tab。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +129,138 @@ pub enum PendingAction {
     Close,
 }
 
+// ==================== 宿主桥 ====================
+
+/// 当前打开的项目（根目录 + 显示名）。
+///
+/// 宿主（工作台）与项目视图共用；命名沿用产品语义「一个实例一个项目」。
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct OpenProject {
+    pub root: PathBuf,
+    pub name: String,
+}
+
+impl OpenProject {
+    pub fn new(root: PathBuf, name: impl Into<String>) -> Self {
+        Self {
+            root,
+            name: name.into(),
+        }
+    }
+
+    /// 由根目录推导显示名（取末级目录名，空则「未命名项目」）。
+    pub fn from_root(root: PathBuf) -> Self {
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "未命名项目".to_string());
+        Self { root, name }
+    }
+}
+
+/// 宿主重绘桥（工作台注入 `Entity<WorkbenchView>` 的 notify）。
+pub trait ProjectUiNotifier: 'static {
+    fn notify(&self, cx: &mut App);
+}
+
+/// 编辑区桥：未保存草稿判定 / 草稿内容 / 清空编辑区。
+pub trait ProjectEditorBridge: 'static {
+    fn is_dirty(&self) -> bool;
+    fn sql(&self) -> String;
+    fn clear(&self, window: &mut Window, cx: &mut App);
+    /// 清除脏标记（打开 / 关闭项目、草稿落盘后）。
+    fn mark_clean(&self);
+}
+
+/// 未接编辑区的空实现（测试 / 无编辑区宿主）。
+impl ProjectEditorBridge for () {
+    fn is_dirty(&self) -> bool {
+        false
+    }
+
+    fn sql(&self) -> String {
+        String::new()
+    }
+
+    fn clear(&self, _window: &mut Window, _cx: &mut App) {}
+
+    fn mark_clean(&self) {}
+}
+
+/// 宿主注入的能力集合：项目视图的全部外部依赖都从这里取，
+/// `project` crate 因而不依赖 workbench 与 settings。
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct ProjectUiHost {
+    /// 项目 UI 状态（选择器 / 菜单 / 设置 / 对话框错误 / 锁 / 只读 / 世代）。
+    pub state: Rc<RefCell<ProjectUiState>>,
+    /// 当前会话（根 + 名称）。
+    pub session: Rc<RefCell<Option<OpenProject>>>,
+    /// 重绘宿主视图。
+    pub notifier: Rc<dyn ProjectUiNotifier>,
+    /// 编辑区桥。
+    pub editor: Rc<dyn ProjectEditorBridge>,
+    /// 排序偏好持久化（宿主接设置服务）。
+    pub save_sort: Rc<dyn Fn(ProjectSort, &mut App)>,
+    /// 打开项目后的宿主刷新（连接列表 / 导航缓存 / 结果归属）。
+    pub on_opened: Rc<dyn Fn(&mut App)>,
+}
+
+impl ProjectUiHost {
+    /// 最小构造：宿主只需提供状态与重绘时使用；其余能力用 `with_*` 补。
+    pub fn new(
+        state: Rc<RefCell<ProjectUiState>>,
+        session: Rc<RefCell<Option<OpenProject>>>,
+        notifier: Rc<dyn ProjectUiNotifier>,
+    ) -> Self {
+        Self {
+            state,
+            session,
+            notifier,
+            editor: Rc::new(()),
+            save_sort: Rc::new(|_, _| {}),
+            on_opened: Rc::new(|_| {}),
+        }
+    }
+
+    pub fn with_editor(mut self, editor: Rc<dyn ProjectEditorBridge>) -> Self {
+        self.editor = editor;
+        self
+    }
+
+    pub fn with_sort_saver(mut self, save_sort: Rc<dyn Fn(ProjectSort, &mut App)>) -> Self {
+        self.save_sort = save_sort;
+        self
+    }
+
+    pub fn with_on_opened(mut self, on_opened: Rc<dyn Fn(&mut App)>) -> Self {
+        self.on_opened = on_opened;
+        self
+    }
+
+    /// 请求宿主重绘。
+    pub fn notify(&self, cx: &mut App) {
+        self.notifier.notify(cx);
+    }
+
+    /// 当前会话快照。
+    pub fn current(&self) -> Option<OpenProject> {
+        self.session.borrow().clone()
+    }
+
+    /// 记录当前会话。
+    pub fn set_current(&self, project: Option<OpenProject>) {
+        *self.session.borrow_mut() = project;
+    }
+
+    /// 当前项目根目录（未打开时为 `None`）。
+    pub fn root(&self) -> Option<PathBuf> {
+        self.session.borrow().as_ref().map(|s| s.root.clone())
+    }
+}
+
 /// 项目 UI 状态（挂在 `Shared` 上，避免散落多字段）。
 #[non_exhaustive]
 pub struct ProjectUiState {
@@ -198,15 +331,15 @@ fn default_location() -> String {
 // ==================== 加载 / 刷新 ====================
 
 /// 刷新选择器列表（切换 / 关闭后调用，会重绘）。
-pub fn refresh_picker(shared: &Shared, entity: &Entity<WorkbenchView>, cx: &mut App) {
-    load_picker(shared);
-    entity.update(cx, |_, cx| cx.notify());
+pub fn refresh_picker(host: &ProjectUiHost, cx: &mut App) {
+    load_picker(host);
+    host.notify(cx);
 }
 
 /// 加载列表（不 notify；供 render 首帧调用，避免 render 内 notify 循环）。
-pub fn load_picker(shared: &Shared) {
+pub fn load_picker(host: &ProjectUiHost) {
     let (tab, sort) = {
-        let ui = shared.project_ui.borrow();
+        let ui = host.state.borrow();
         (ui.picker.tab, ui.picker.sort)
     };
     let result = match tab {
@@ -215,7 +348,7 @@ pub fn load_picker(shared: &Shared) {
         PickerTab::Removed => project_service::list_removed(),
     };
 
-    let mut ui = shared.project_ui.borrow_mut();
+    let mut ui = host.state.borrow_mut();
     match result {
         Ok(mut items) => {
             sort_items(&mut items, sort);
@@ -243,17 +376,17 @@ fn sort_items(items: &mut [ProjectSummary], sort: ProjectSort) {
 // ==================== 动作 ====================
 
 /// 切换 Tab 并刷新。
-pub fn set_tab(shared: &Shared, tab: PickerTab, entity: &Entity<WorkbenchView>, cx: &mut App) {
-    shared.project_ui.borrow_mut().picker.tab = tab;
-    refresh_picker(shared, entity, cx);
+pub fn set_tab(host: &ProjectUiHost, tab: PickerTab, cx: &mut App) {
+    host.state.borrow_mut().picker.tab = tab;
+    refresh_picker(host, cx);
 }
 
-/// 循环切换排序（持久化到 settings）并刷新。
-pub fn cycle_sort(shared: &Shared, entity: &Entity<WorkbenchView>, cx: &mut App) {
-    let next = shared.project_ui.borrow().picker.sort.next();
-    shared.project_ui.borrow_mut().picker.sort = next;
-    SettingsService::set_project_sort_mode(next.key(), cx);
-    refresh_picker(shared, entity, cx);
+/// 循环切换排序（交宿主持久化）并刷新。
+pub fn cycle_sort(host: &ProjectUiHost, cx: &mut App) {
+    let next = host.state.borrow().picker.sort.next();
+    host.state.borrow_mut().picker.sort = next;
+    (host.save_sort)(next, cx);
+    refresh_picker(host, cx);
 }
 
 // ==================== 语义对话框 ====================
@@ -335,9 +468,8 @@ fn dialog_footer_three(
 
 /// 打开新建项目对话框（重置表单）。
 pub fn open_create_dialog(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -350,14 +482,13 @@ pub fn open_create_dialog(
     inputs
         .create_desc
         .update(cx, |s, cx| s.set_value("", window, cx));
-    shared.project_ui.borrow_mut().dialog_error = None;
+    host.state.borrow_mut().dialog_error = None;
 
-    let shared = shared.clone();
+    let host = host.clone();
     let inputs = inputs.clone();
-    let entity = entity.clone();
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
-        let error = shared.project_ui.borrow().dialog_error.clone();
+        let error = host.state.borrow().dialog_error.clone();
         dialog
             .title("新建项目")
             .child(
@@ -378,11 +509,10 @@ pub fn open_create_dialog(
                 "创建项目",
                 ButtonVariant::Primary,
                 {
-                    let shared = shared.clone();
+                    let host = host.clone();
                     let inputs = inputs.clone();
-                    let entity = entity.clone();
                     move |window, cx| {
-                        if submit_create(&shared, &inputs, &entity, window, cx) {
+                        if submit_create(&host, &inputs, window, cx) {
                             window.close_dialog(cx);
                         }
                     }
@@ -390,12 +520,11 @@ pub fn open_create_dialog(
                 |window, cx| window.close_dialog(cx),
             ))
             .on_ok({
-                let shared = shared.clone();
+                let host = host.clone();
                 let inputs = inputs.clone();
-                let entity = entity.clone();
                 move |_, window, cx| {
                     // Enter 与「创建项目」按钮同路径；关闭由提交成功分支显式执行。
-                    if submit_create(&shared, &inputs, &entity, window, cx) {
+                    if submit_create(&host, &inputs, window, cx) {
                         window.close_dialog(cx);
                     }
                     false
@@ -406,23 +535,21 @@ pub fn open_create_dialog(
 
 /// 打开「打开现有目录」对话框。
 pub fn open_folder_dialog(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) {
     inputs
         .create_location
         .update(cx, |s, cx| s.set_value(default_location(), window, cx));
-    shared.project_ui.borrow_mut().dialog_error = None;
+    host.state.borrow_mut().dialog_error = None;
 
-    let shared = shared.clone();
+    let host = host.clone();
     let inputs = inputs.clone();
-    let entity = entity.clone();
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
-        let error = shared.project_ui.borrow().dialog_error.clone();
+        let error = host.state.borrow().dialog_error.clone();
         dialog
             .title("打开现有项目")
             .child(
@@ -439,11 +566,10 @@ pub fn open_folder_dialog(
                 "打开",
                 ButtonVariant::Primary,
                 {
-                    let shared = shared.clone();
+                    let host = host.clone();
                     let inputs = inputs.clone();
-                    let entity = entity.clone();
                     move |window, cx| {
-                        if submit_open_folder(&shared, &inputs, &entity, window, cx) {
+                        if submit_open_folder(&host, &inputs, window, cx) {
                             window.close_dialog(cx);
                         }
                     }
@@ -451,11 +577,10 @@ pub fn open_folder_dialog(
                 |window, cx| window.close_dialog(cx),
             ))
             .on_ok({
-                let shared = shared.clone();
+                let host = host.clone();
                 let inputs = inputs.clone();
-                let entity = entity.clone();
                 move |_, window, cx| {
-                    if submit_open_folder(&shared, &inputs, &entity, window, cx) {
+                    if submit_open_folder(&host, &inputs, window, cx) {
                         window.close_dialog(cx);
                     }
                     false
@@ -466,9 +591,8 @@ pub fn open_folder_dialog(
 
 /// 从输入读取并创建项目；成功返回 `true`（由调用方关闭对话框）。
 pub fn submit_create(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
@@ -480,11 +604,11 @@ pub fn submit_create(
     };
 
     if let Err(e) = project_service::validate_project_name(&name) {
-        set_dialog_error(shared, e, entity, cx);
+        set_dialog_error(host, e, cx);
         return false;
     }
     if location.is_empty() {
-        set_dialog_error(shared, "请选择项目位置".to_string(), entity, cx);
+        set_dialog_error(host, "请选择项目位置".to_string(), cx);
         return false;
     }
     let path = PathBuf::from(&location).join(&name);
@@ -493,11 +617,11 @@ pub fn submit_create(
     match project_service::create(input) {
         Ok(summary) => {
             // 创建成功后直接打开（走统一打开路径，取得锁）。
-            open_path(shared, &summary.path, entity, window, cx);
+            open_path(host, &summary.path, window, cx);
             true
         }
         Err(e) => {
-            set_dialog_error(shared, e, entity, cx);
+            set_dialog_error(host, e, cx);
             false
         }
     }
@@ -505,67 +629,62 @@ pub fn submit_create(
 
 /// 从输入读取并打开目录；成功返回 `true`（由调用方关闭对话框）。
 pub fn submit_open_folder(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
     let path = PathBuf::from(inputs.create_location.read(cx).value().trim().to_string());
     if path.as_os_str().is_empty() {
-        set_dialog_error(shared, "请输入项目目录".to_string(), entity, cx);
+        set_dialog_error(host, "请输入项目目录".to_string(), cx);
         return false;
     }
     match project_service::inspect_target(&path) {
         TargetDirState::Missing => {
-            set_dialog_error(
-                shared,
-                format!("目录不存在：{}", path.display()),
-                entity,
-                cx,
-            );
+            set_dialog_error(host, format!("目录不存在：{}", path.display()), cx);
             false
         }
         TargetDirState::NonEmpty => {
             set_dialog_error(
-                shared,
+                host,
                 "目录不是项目（缺少 .RSmeta），且非空，无法作为项目打开".to_string(),
-                entity,
                 cx,
             );
             false
         }
         TargetDirState::Empty => {
             // 空目录不视为项目；提示改用「新建项目」。
-            set_dialog_error(shared, "空目录：请改用「新建项目」".to_string(), entity, cx);
+            set_dialog_error(host, "空目录：请改用「新建项目」".to_string(), cx);
             false
         }
         TargetDirState::ExistingProject => {
-            open_path(shared, &path, entity, window, cx);
+            open_path(host, &path, window, cx);
             true
         }
     }
 }
 
-/// 从示例项目开始（内置最小示例：示例 SQL 草稿）。
-pub fn create_sample(
-    shared: &Shared,
-    entity: &Entity<WorkbenchView>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let base = crate::services::workspace_loader::default_global_dir()
+/// 内置示例项目的落点：系统数据目录旁的 `samples/示例项目`。
+fn sample_project_dir() -> PathBuf {
+    let system = engine::migration::get_system_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("RdataStation").join("system"));
+    system
         .parent()
         .map(|p| p.join("samples"))
-        .unwrap_or_else(|| std::env::temp_dir().join("RdataStation").join("samples"));
-    let path = base.join("示例项目");
+        .unwrap_or_else(|| std::env::temp_dir().join("RdataStation").join("samples"))
+        .join("示例项目")
+}
+
+/// 从示例项目开始（内置最小示例：示例 SQL 草稿）。
+pub fn create_sample(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
+    let path = sample_project_dir();
     if !project_service::is_valid_project(&path) {
         let input = project_service::CreateProjectInput::new("示例项目", path.clone())
             .with_description(Some("RdataStation 内置示例".to_string()))
             .with_sample_drafts(true);
         if let Err(e) = project_service::create(input) {
-            shared.project_ui.borrow_mut().picker.error = Some(e);
-            entity.update(cx, |_, cx| cx.notify());
+            host.state.borrow_mut().picker.error = Some(e);
+            host.notify(cx);
             return;
         }
         // 写入示例草稿（失败不阻断打开）。
@@ -574,74 +693,52 @@ pub fn create_sample(
             "-- RdataStation 示例项目\n-- 在此编写并执行 SQL。\nSELECT 1 AS hello;\n",
         );
     }
-    open_path(shared, &path, entity, window, cx);
+    open_path(host, &path, window, cx);
 }
 
 /// 打开项目（含未保存拦截 + 锁占用分支）。
-pub fn request_open(
-    shared: &Shared,
-    path: &PathBuf,
-    entity: &Entity<WorkbenchView>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    if shared.editor_dirty.get() {
-        open_unsaved_dialog(
-            shared,
-            PendingAction::OpenPath(path.clone()),
-            entity,
-            window,
-            cx,
-        );
+pub fn request_open(host: &ProjectUiHost, path: &PathBuf, window: &mut Window, cx: &mut App) {
+    if host.editor.is_dirty() {
+        open_unsaved_dialog(host, PendingAction::OpenPath(path.clone()), window, cx);
         return;
     }
-    open_path(shared, path, entity, window, cx);
+    open_path(host, path, window, cx);
 }
 
 /// 直接打开（不再拦截）。
-pub fn open_path(
-    shared: &Shared,
-    path: &PathBuf,
-    entity: &Entity<WorkbenchView>,
-    window: &mut Window,
-    cx: &mut App,
-) {
+pub fn open_path(host: &ProjectUiHost, path: &PathBuf, window: &mut Window, cx: &mut App) {
     match project_service::open(path) {
-        Ok(OpenOutcome::Opened(opened)) => apply_opened(shared, opened, entity, cx),
+        Ok(OpenOutcome::Opened(opened)) => apply_opened(host, opened, cx),
         Ok(OpenOutcome::Busy(info)) => {
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "项目".to_string());
-            open_lock_busy_dialog(shared, name, path.clone(), info.pid, entity, window, cx);
+            open_lock_busy_dialog(host, name, path.clone(), info.pid, window, cx);
         }
         Err(e) => {
-            shared.project_ui.borrow_mut().picker.error = Some(e);
-            entity.update(cx, |_, cx| cx.notify());
+            host.state.borrow_mut().picker.error = Some(e);
+            host.notify(cx);
         }
     }
 }
 
 /// 锁占用逃生口：只读打开 / 仍要打开 / 取消。
 pub fn open_lock_busy_dialog(
-    shared: &Shared,
+    host: &ProjectUiHost,
     name: String,
     root: PathBuf,
     pid: u32,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    shared.project_ui.borrow_mut().dialog_error = None;
-    let shared = shared.clone();
-    let entity = entity.clone();
+    host.state.borrow_mut().dialog_error = None;
+    let host = host.clone();
     window.open_alert_dialog(cx, move |alert, _window, cx| {
         let theme = cx.theme();
-        let shared_ro = shared.clone();
-        let entity_ro = entity.clone();
+        let host_ro = host.clone();
         let root_ro = root.clone();
-        let shared_force = shared.clone();
-        let entity_force = entity.clone();
+        let host_force = host.clone();
         let root_force = root.clone();
         alert
             .icon(Icon::new(IconName::TriangleAlert).text_color(theme.colors.warning))
@@ -659,11 +756,11 @@ pub fn open_lock_busy_dialog(
                     window.close_dialog(cx);
                     // 「仍要打开」：清除陈旧锁文件后重新抢锁（对方已退出的场景）。
                     let _ = std::fs::remove_file(project::ProjectLock::lock_path(&root_force));
-                    open_path(&shared_force, &root_force, &entity_force, window, cx);
+                    open_path(&host_force, &root_force, window, cx);
                 },
                 move |window, cx| {
                     window.close_dialog(cx);
-                    open_read_only(&shared_ro, &root_ro, &entity_ro, cx);
+                    open_read_only(&host_ro, &root_ro, cx);
                 },
                 |window, cx| window.close_dialog(cx),
             ))
@@ -672,18 +769,16 @@ pub fn open_lock_busy_dialog(
 
 /// 未保存草稿拦截：放弃 / 保存并继续 / 取消。
 pub fn open_unsaved_dialog(
-    shared: &Shared,
+    host: &ProjectUiHost,
     pending: PendingAction,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    shared.project_ui.borrow_mut().dialog_error = None;
-    let shared = shared.clone();
-    let entity = entity.clone();
+    host.state.borrow_mut().dialog_error = None;
+    let host = host.clone();
     window.open_alert_dialog(cx, move |alert, _window, cx| {
         let theme = cx.theme();
-        let error = shared.project_ui.borrow().dialog_error.clone();
+        let error = host.state.borrow().dialog_error.clone();
         let pending_discard = pending.clone();
         let pending_save = pending.clone();
         alert
@@ -700,24 +795,22 @@ pub fn open_unsaved_dialog(
                 "unsaved-save",
                 "保存并继续",
                 {
-                    let shared = shared.clone();
-                    let entity = entity.clone();
+                    let host = host.clone();
                     move |window, cx| {
                         // 先关本对话框再推进动作：推进可能另开对话框（如锁占用），
                         // 否则栈顶变化会让 pop 关错对象。
-                        if prepare_unsaved(&shared, false, &entity, window, cx) {
+                        if prepare_unsaved(&host, false, window, cx) {
                             window.close_dialog(cx);
-                            advance_pending(&shared, &pending_discard, &entity, window, cx);
+                            advance_pending(&host, &pending_discard, window, cx);
                         }
                     }
                 },
                 {
-                    let shared = shared.clone();
-                    let entity = entity.clone();
+                    let host = host.clone();
                     move |window, cx| {
-                        if prepare_unsaved(&shared, true, &entity, window, cx) {
+                        if prepare_unsaved(&host, true, window, cx) {
                             window.close_dialog(cx);
-                            advance_pending(&shared, &pending_save, &entity, window, cx);
+                            advance_pending(&host, &pending_save, window, cx);
                         }
                     }
                 },
@@ -727,40 +820,29 @@ pub fn open_unsaved_dialog(
 }
 
 /// 只读打开（逃生口）。
-pub fn open_read_only(
-    shared: &Shared,
-    path: &PathBuf,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) {
+pub fn open_read_only(host: &ProjectUiHost, path: &PathBuf, cx: &mut App) {
     match project_service::open_read_only(path) {
-        Ok(opened) => apply_opened(shared, opened, entity, cx),
+        Ok(opened) => apply_opened(host, opened, cx),
         Err(e) => {
-            shared.project_ui.borrow_mut().picker.error = Some(e);
-            entity.update(cx, |_, cx| cx.notify());
+            host.state.borrow_mut().picker.error = Some(e);
+            host.notify(cx);
         }
     }
 }
 
-/// 应用打开结果：写会话 + 持锁 + 自增世代 + 刷新连接。
-fn apply_opened(
-    shared: &Shared,
-    opened: project_service::OpenedProject,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) {
+/// 应用打开结果：写会话 + 持锁 + 自增世代 + 交宿主刷新。
+fn apply_opened(host: &ProjectUiHost, opened: project_service::OpenedProject, cx: &mut App) {
     let (store, lock, read_only, summary) = opened.into_parts();
     // store 目前仅用于确认加载成功；会话只保留根与名（与既有 P0 会话一致）。
     drop(store);
 
-    let session = crate::services::project_session::ProjectSession {
-        root: summary.path.clone(),
-        name: summary.name.clone(),
-    };
-    *shared.project.borrow_mut() = Some(session);
+    host.set_current(Some(OpenProject::new(
+        summary.path.clone(),
+        summary.name.clone(),
+    )));
 
     {
-        let mut ui = shared.project_ui.borrow_mut();
+        let mut ui = host.state.borrow_mut();
         ui.lock = lock;
         ui.read_only = read_only;
         ui.epoch += 1;
@@ -771,43 +853,31 @@ fn apply_opened(
         ui.picker.error = None;
     }
 
-    // 切换项目 → 刷新连接列表与选中项（避免残留上一项目数据）。
-    let (conns, notice) = crate::services::workspace_loader::load_persisted_connections();
-    *shared.connections.borrow_mut() = conns;
-    *shared.notice.borrow_mut() = notice;
-    let has = !shared.connections.borrow().is_empty();
-    shared.selected.set(if has { Some(0) } else { None });
-    *shared.nav_for.borrow_mut() = None;
-    shared.nav_tables.borrow_mut().clear();
-    *shared.sql_for.borrow_mut() = None;
-    shared.editor_dirty.set(false);
+    // 切换项目 → 宿主刷新连接列表 / 导航缓存 / 结果归属，并清掉编辑区脏标记。
+    (host.on_opened)(cx);
+    host.editor.mark_clean();
 
-    entity.update(cx, |_, cx| cx.notify());
+    host.notify(cx);
 }
 
 /// 请求关闭项目（含未保存拦截）。
-pub fn request_close(
-    shared: &Shared,
-    entity: &Entity<WorkbenchView>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    if shared.editor_dirty.get() {
-        open_unsaved_dialog(shared, PendingAction::Close, entity, window, cx);
+pub fn request_close(host: &ProjectUiHost, window: &mut Window, cx: &mut App) {
+    if host.editor.is_dirty() {
+        open_unsaved_dialog(host, PendingAction::Close, window, cx);
         return;
     }
-    do_close(shared, entity, cx);
+    do_close(host, cx);
 }
 
 /// 执行关闭：释放锁 + 清会话 + 回选择器。
-pub fn do_close(shared: &Shared, entity: &Entity<WorkbenchView>, cx: &mut App) {
-    let lock = shared.project_ui.borrow_mut().lock.take();
+pub fn do_close(host: &ProjectUiHost, cx: &mut App) {
+    let lock = host.state.borrow_mut().lock.take();
     if let Some(lock) = lock {
         let _ = lock.release();
     }
-    *shared.project.borrow_mut() = None;
+    *host.session.borrow_mut() = None;
     {
-        let mut ui = shared.project_ui.borrow_mut();
+        let mut ui = host.state.borrow_mut();
         ui.read_only = false;
         ui.epoch += 1;
         ui.menu_open = false;
@@ -815,18 +885,13 @@ pub fn do_close(shared: &Shared, entity: &Entity<WorkbenchView>, cx: &mut App) {
         ui.dialog_error = None;
         ui.notice = None;
     }
-    refresh_picker(shared, entity, cx);
+    refresh_picker(host, cx);
 }
 
 /// 保存编辑区 SQL 草稿到项目根（唯一命名）。
-fn save_draft(shared: &Shared) -> Result<std::path::PathBuf, String> {
-    let root = shared
-        .project
-        .borrow()
-        .as_ref()
-        .map(|s| s.root.clone())
-        .ok_or_else(|| "未打开项目".to_string())?;
-    let sql = shared.editor_sql.borrow().clone();
+fn save_draft(host: &ProjectUiHost) -> Result<std::path::PathBuf, String> {
+    let root = host.root().ok_or_else(|| "未打开项目".to_string())?;
+    let sql = host.editor.sql();
     if sql.trim().is_empty() {
         return Err("没有可保存的内容".to_string());
     }
@@ -845,31 +910,21 @@ fn save_draft(shared: &Shared) -> Result<std::path::PathBuf, String> {
 ///
 /// 返回 `true` 表示可以推进后续动作（保存成功或选择放弃）；`false` 时已写入
 /// 对话框错误，拦截对话框保持打开。
-fn prepare_unsaved(
-    shared: &Shared,
-    save: bool,
-    entity: &Entity<WorkbenchView>,
-    window: &mut Window,
-    cx: &mut App,
-) -> bool {
+fn prepare_unsaved(host: &ProjectUiHost, save: bool, window: &mut Window, cx: &mut App) -> bool {
     if save {
-        match save_draft(shared) {
+        match save_draft(host) {
             Ok(path) => {
-                shared.project_ui.borrow_mut().notice =
-                    Some(format!("草稿已保存：{}", path.display()));
+                host.state.borrow_mut().notice = Some(format!("草稿已保存：{}", path.display()));
             }
             Err(e) => {
-                set_dialog_error(shared, e, entity, cx);
+                set_dialog_error(host, e, cx);
                 return false;
             }
         }
     }
     // 保存或放弃后都要清空编辑区（命令式，事件上下文；避免下一轮 render 再次判脏）。
-    let clear = shared.editor_clear.borrow().clone();
-    if let Some(clear) = clear {
-        clear(window, cx);
-    }
-    shared.editor_dirty.set(false);
+    host.editor.clear(window, cx);
+    host.editor.mark_clean();
     true
 }
 
@@ -877,88 +932,75 @@ fn prepare_unsaved(
 ///
 /// 必须在拦截对话框已关闭之后调用——推进可能另开对话框（如锁占用）。
 fn advance_pending(
-    shared: &Shared,
+    host: &ProjectUiHost,
     pending: &PendingAction,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) {
     match pending {
-        PendingAction::OpenPath(path) => open_path(shared, path, entity, window, cx),
-        PendingAction::Close => do_close(shared, entity, cx),
+        PendingAction::OpenPath(path) => open_path(host, path, window, cx),
+        PendingAction::Close => do_close(host, cx),
     }
 }
 
 /// 记录对话框校验错误并重绘（语义对话框 builder 每帧重读）。
-fn set_dialog_error(
-    shared: &Shared,
-    message: String,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) {
-    shared.project_ui.borrow_mut().dialog_error = Some(message);
-    entity.update(cx, |_, cx| cx.notify());
+fn set_dialog_error(host: &ProjectUiHost, message: String, cx: &mut App) {
+    host.state.borrow_mut().dialog_error = Some(message);
+    host.notify(cx);
 }
 
 /// 固定 / 取消固定。
-pub fn toggle_pin(
-    shared: &Shared,
-    item: &ProjectSummary,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) {
+pub fn toggle_pin(host: &ProjectUiHost, item: &ProjectSummary, cx: &mut App) {
     if let Err(e) = project_service::set_pinned(&item.id, !item.is_pinned) {
-        shared.project_ui.borrow_mut().picker.error = Some(e);
+        host.state.borrow_mut().picker.error = Some(e);
     }
-    refresh_picker(shared, entity, cx);
+    refresh_picker(host, cx);
 }
 
 /// 软删（移出名册）。
-pub fn soft_remove(shared: &Shared, id: &str, entity: &Entity<WorkbenchView>, cx: &mut App) {
+pub fn soft_remove(host: &ProjectUiHost, id: &str, cx: &mut App) {
     if let Err(e) = project_service::soft_remove(id) {
-        shared.project_ui.borrow_mut().picker.error = Some(e);
+        host.state.borrow_mut().picker.error = Some(e);
     }
-    refresh_picker(shared, entity, cx);
+    refresh_picker(host, cx);
 }
 
 /// 恢复已移除项目。
-pub fn restore(shared: &Shared, id: &str, entity: &Entity<WorkbenchView>, cx: &mut App) {
+pub fn restore(host: &ProjectUiHost, id: &str, cx: &mut App) {
     if let Err(e) = project_service::restore(id) {
-        shared.project_ui.borrow_mut().picker.error = Some(e);
+        host.state.borrow_mut().picker.error = Some(e);
     }
-    refresh_picker(shared, entity, cx);
+    refresh_picker(host, cx);
 }
 
 /// 失效路径项目：移出名册（不动磁盘）。
-pub fn forget(shared: &Shared, id: &str, entity: &Entity<WorkbenchView>, cx: &mut App) {
+pub fn forget(host: &ProjectUiHost, id: &str, cx: &mut App) {
     if let Err(e) = project_service::forget(id) {
-        shared.project_ui.borrow_mut().picker.error = Some(e);
+        host.state.borrow_mut().picker.error = Some(e);
     }
-    refresh_picker(shared, entity, cx);
+    refresh_picker(host, cx);
 }
 
 /// 打开「重新定位」对话框。
 pub fn open_relocate_dialog(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
     item: &ProjectSummary,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) {
     inputs
         .create_location
         .update(cx, |s, cx| s.set_value(String::new(), window, cx));
-    shared.project_ui.borrow_mut().dialog_error = None;
+    host.state.borrow_mut().dialog_error = None;
 
     let id = item.id.clone();
     let name = item.name.clone();
-    let shared = shared.clone();
+    let host = host.clone();
     let inputs = inputs.clone();
-    let entity = entity.clone();
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
-        let error = shared.project_ui.borrow().dialog_error.clone();
+        let error = host.state.borrow().dialog_error.clone();
         dialog
             .title("重新定位项目")
             .child(
@@ -981,12 +1023,11 @@ pub fn open_relocate_dialog(
                 "重新定位",
                 ButtonVariant::Primary,
                 {
-                    let shared = shared.clone();
+                    let host = host.clone();
                     let inputs = inputs.clone();
-                    let entity = entity.clone();
                     let id = id.clone();
                     move |window, cx| {
-                        if submit_relocate(&shared, &inputs, &entity, &id, cx) {
+                        if submit_relocate(&host, &inputs, &id, cx) {
                             window.close_dialog(cx);
                         }
                     }
@@ -994,12 +1035,11 @@ pub fn open_relocate_dialog(
                 |window, cx| window.close_dialog(cx),
             ))
             .on_ok({
-                let shared = shared.clone();
+                let host = host.clone();
                 let inputs = inputs.clone();
-                let entity = entity.clone();
                 let id = id.clone();
                 move |_, window, cx| {
-                    if submit_relocate(&shared, &inputs, &entity, &id, cx) {
+                    if submit_relocate(&host, &inputs, &id, cx) {
                         window.close_dialog(cx);
                     }
                     false
@@ -1010,24 +1050,23 @@ pub fn open_relocate_dialog(
 
 /// 提交重新定位：校验新目录后改写名册与项目路径；成功返回 `true`。
 pub fn submit_relocate(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
     id: &str,
     cx: &mut App,
 ) -> bool {
     let new_root = PathBuf::from(inputs.create_location.read(cx).value().trim().to_string());
     if new_root.as_os_str().is_empty() {
-        set_dialog_error(shared, "请输入新的项目目录".to_string(), entity, cx);
+        set_dialog_error(host, "请输入新的项目目录".to_string(), cx);
         return false;
     }
     match project_service::relocate(id, &new_root) {
         Ok(()) => {
-            refresh_picker(shared, entity, cx);
+            refresh_picker(host, cx);
             true
         }
         Err(e) => {
-            set_dialog_error(shared, e, entity, cx);
+            set_dialog_error(host, e, cx);
             false
         }
     }
@@ -1035,27 +1074,25 @@ pub fn submit_relocate(
 
 /// 打开删除确认（输入项目名）。
 pub fn open_delete_dialog(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
     item: &ProjectSummary,
-    entity: &Entity<WorkbenchView>,
     window: &mut Window,
     cx: &mut App,
 ) {
     inputs
         .delete_confirm
         .update(cx, |s, cx| s.set_value("", window, cx));
-    shared.project_ui.borrow_mut().dialog_error = None;
+    host.state.borrow_mut().dialog_error = None;
 
     let id = item.id.clone();
     let name = item.name.clone();
     let root = item.path.clone();
-    let shared = shared.clone();
+    let host = host.clone();
     let inputs = inputs.clone();
-    let entity = entity.clone();
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
-        let error = shared.project_ui.borrow().dialog_error.clone();
+        let error = host.state.borrow().dialog_error.clone();
         dialog
             .title("删除项目数据")
             .child(
@@ -1087,14 +1124,13 @@ pub fn open_delete_dialog(
                 "删除数据",
                 ButtonVariant::Danger,
                 {
-                    let shared = shared.clone();
+                    let host = host.clone();
                     let inputs = inputs.clone();
-                    let entity = entity.clone();
                     let id = id.clone();
                     let name = name.clone();
                     let root = root.clone();
                     move |window, cx| {
-                        if confirm_delete(&shared, &inputs, &entity, &id, &name, &root, cx) {
+                        if confirm_delete(&host, &inputs, &id, &name, &root, cx) {
                             window.close_dialog(cx);
                         }
                     }
@@ -1102,14 +1138,13 @@ pub fn open_delete_dialog(
                 |window, cx| window.close_dialog(cx),
             ))
             .on_ok({
-                let shared = shared.clone();
+                let host = host.clone();
                 let inputs = inputs.clone();
-                let entity = entity.clone();
                 let id = id.clone();
                 let name = name.clone();
                 let root = root.clone();
                 move |_, window, cx| {
-                    if confirm_delete(&shared, &inputs, &entity, &id, &name, &root, cx) {
+                    if confirm_delete(&host, &inputs, &id, &name, &root, cx) {
                         window.close_dialog(cx);
                     }
                     false
@@ -1120,9 +1155,8 @@ pub fn open_delete_dialog(
 
 /// 确认删除磁盘数据（需输入项目名匹配）；成功返回 `true`。
 pub fn confirm_delete(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
     id: &str,
     name: &str,
     root: &std::path::Path,
@@ -1130,41 +1164,36 @@ pub fn confirm_delete(
 ) -> bool {
     let typed = inputs.delete_confirm.read(cx).value().trim().to_string();
     if typed != name {
-        set_dialog_error(shared, "输入的项目名不匹配".to_string(), entity, cx);
+        set_dialog_error(host, "输入的项目名不匹配".to_string(), cx);
         return false;
     }
     // 若删除的是当前打开项目，先关闭以释放锁。
-    let is_current = shared
+    let is_current = host
         .project
         .borrow()
         .as_ref()
         .map(|s| s.root == root)
         .unwrap_or(false);
     if is_current {
-        do_close(shared, entity, cx);
+        do_close(host, cx);
     }
     match project_service::delete_disk(id, root) {
         Ok(()) => {
-            refresh_picker(shared, entity, cx);
+            refresh_picker(host, cx);
             true
         }
         Err(e) => {
-            set_dialog_error(shared, e, entity, cx);
+            set_dialog_error(host, e, cx);
             false
         }
     }
 }
 
 /// 只读模式守卫：被拦截时写入提示并返回 `true`。
-fn read_only_blocked(
-    shared: &Shared,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-    action: &str,
-) -> bool {
-    if shared.project_ui.borrow().read_only {
-        shared.project_ui.borrow_mut().notice = Some(format!("只读模式：不允许{action}"));
-        entity.update(cx, |_, cx| cx.notify());
+fn read_only_blocked(host: &ProjectUiHost, cx: &mut App, action: &str) -> bool {
+    if host.state.borrow().read_only {
+        host.state.borrow_mut().notice = Some(format!("只读模式：不允许{action}"));
+        host.notify(cx);
         true
     } else {
         false
@@ -1172,19 +1201,14 @@ fn read_only_blocked(
 }
 
 /// 保存项目设置中的重命名。
-pub fn save_rename(
-    shared: &Shared,
-    inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) {
-    if read_only_blocked(shared, entity, cx, "重命名") {
+pub fn save_rename(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) {
+    if read_only_blocked(host, cx, "重命名") {
         return;
     }
     let name = inputs.rename.read(cx).value().trim().to_string();
     let (id, root) = {
         // 通过名册查当前项目 id（会话只存根/名）。
-        let root = shared.project.borrow().as_ref().map(|s| s.root.clone());
+        let root = host.session.borrow().as_ref().map(|s| s.root.clone());
         let Some(root) = root else { return };
         let id = project_service::list_all()
             .ok()
@@ -1196,23 +1220,23 @@ pub fn save_rename(
     };
     match project_service::update_meta(&id, &root, &name, None) {
         Ok(()) => {
-            if let Some(session) = shared.project.borrow_mut().as_mut() {
+            if let Some(session) = host.session.borrow_mut().as_mut() {
                 session.name = name;
             }
         }
         Err(e) => {
-            shared.project_ui.borrow_mut().notice = Some(e);
+            host.state.borrow_mut().notice = Some(e);
         }
     }
-    entity.update(cx, |_, cx| cx.notify());
+    host.notify(cx);
 }
 
 /// 归档 / 取消归档当前项目。
-pub fn toggle_archive(shared: &Shared, entity: &Entity<WorkbenchView>, cx: &mut App) {
-    if read_only_blocked(shared, entity, cx, "归档") {
+pub fn toggle_archive(host: &ProjectUiHost, cx: &mut App) {
+    if read_only_blocked(host, cx, "归档") {
         return;
     }
-    let root = match shared.project.borrow().as_ref().map(|s| s.root.clone()) {
+    let root = match host.session.borrow().as_ref().map(|s| s.root.clone()) {
         Some(r) => r,
         None => return,
     };
@@ -1222,28 +1246,23 @@ pub fn toggle_archive(shared: &Shared, entity: &Entity<WorkbenchView>, cx: &mut 
     let Some(item) = current else { return };
     let archived = item.status == "archived";
     if let Err(e) = project_service::set_archived(&item.id, &root, !archived) {
-        shared.project_ui.borrow_mut().notice = Some(e);
+        host.state.borrow_mut().notice = Some(e);
     } else {
-        shared.project_ui.borrow_mut().menu_open = false;
-        shared.project_ui.borrow_mut().notice = Some(format!(
+        host.state.borrow_mut().menu_open = false;
+        host.state.borrow_mut().notice = Some(format!(
             "已{}项目",
             if archived { "取消归档" } else { "归档" }
         ));
     }
-    entity.update(cx, |_, cx| cx.notify());
+    host.notify(cx);
 }
 
 // ==================== 渲染 ====================
 
 /// 项目选择器（覆盖中央区）。
-pub fn render_picker(
-    shared: &Shared,
-    inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) -> Div {
+pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) -> Div {
     let theme = cx.theme();
-    let ui = shared.project_ui.borrow();
+    let ui = host.state.borrow();
     let picker = &ui.picker;
 
     // 搜索在渲染时过滤（避免每次输入都重查数据库）。
@@ -1264,8 +1283,7 @@ pub fn render_picker(
     let mut tabs = div().h_flex().items_center().gap_2();
     for tab in [PickerTab::Recent, PickerTab::All, PickerTab::Removed] {
         let on = picker.tab == tab;
-        let shared_t = shared.clone();
-        let entity_t = entity.clone();
+        let host_t = host.clone();
         tabs = tabs.child(
             div()
                 .id(ElementId::Name(SharedString::from(format!(
@@ -1286,14 +1304,13 @@ pub fn render_picker(
                 } else {
                     theme.colors.muted_foreground
                 })
-                .on_click(move |_, _, app| set_tab(&shared_t, tab, &entity_t, app))
+                .on_click(move |_, _, app| set_tab(&host_t, tab, app))
                 .child(tab.label()),
         );
     }
 
     // ---- 搜索 + 排序 ----
-    let shared_sort = shared.clone();
-    let entity_sort = entity.clone();
+    let host_sort = host.clone();
     let search_row = div()
         .h_flex()
         .items_center()
@@ -1310,7 +1327,7 @@ pub fn render_picker(
                 .cursor_pointer()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .on_click(move |_, _, app| cycle_sort(&shared_sort, &entity_sort, app))
+                .on_click(move |_, _, app| cycle_sort(&host_sort, app))
                 .child(format!("排序：{}", picker.sort.label())),
         );
 
@@ -1338,21 +1355,16 @@ pub fn render_picker(
         );
     } else {
         for item in &items {
-            list = list.child(project_card(
-                shared, inputs, item, picker.tab, entity, theme,
-            ));
+            list = list.child(project_card(host, inputs, item, picker.tab, theme));
         }
     }
 
     // ---- 右侧操作栏 ----
-    let shared_new = shared.clone();
-    let entity_new = entity.clone();
+    let host_new = host.clone();
     let inputs_new = inputs.clone();
-    let shared_open = shared.clone();
-    let entity_open = entity.clone();
+    let host_open = host.clone();
     let inputs_open = inputs.clone();
-    let shared_sample = shared.clone();
-    let entity_sample = entity.clone();
+    let host_sample = host.clone();
 
     let rail = div()
         .v_flex()
@@ -1369,7 +1381,7 @@ pub fn render_picker(
                 .primary()
                 .label("＋ 新建项目")
                 .on_click(move |_, window, app| {
-                    open_create_dialog(&shared_new, &inputs_new, &entity_new, window, app);
+                    open_create_dialog(&host_new, &inputs_new, window, app);
                 }),
         )
         .child(
@@ -1377,16 +1389,14 @@ pub fn render_picker(
                 .secondary()
                 .label("🗀 打开文件夹…")
                 .on_click(move |_, window, app| {
-                    open_folder_dialog(&shared_open, &inputs_open, &entity_open, window, app);
+                    open_folder_dialog(&host_open, &inputs_open, window, app);
                 }),
         )
         .child(
             Button::new("picker-sample")
                 .secondary()
                 .label("▦ 从示例项目开始")
-                .on_click(move |_, window, app| {
-                    create_sample(&shared_sample, &entity_sample, window, app)
-                }),
+                .on_click(move |_, window, app| create_sample(&host_sample, window, app)),
         )
         .child(
             div()
@@ -1449,15 +1459,13 @@ pub fn render_picker(
 /// 设计指南不允许列表行铺一排 hover 才可见的图标命令：主操作常显，其余命令由
 /// 带可见触发按钮的菜单承载（方向键、dismiss、焦点恢复由组件负责）。
 fn project_card(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
     item: &ProjectSummary,
     tab: PickerTab,
-    entity: &Entity<WorkbenchView>,
     theme: &gpui_kit::component::Theme,
 ) -> Div {
-    let shared_open = shared.clone();
-    let entity_open = entity.clone();
+    let host_open = host.clone();
     let path_open = item.path.clone();
 
     let status_color = match item.status.as_str() {
@@ -1474,11 +1482,9 @@ fn project_card(
     ))))
     .small()
     .label("打开")
-    .on_click(move |_, window, app| {
-        request_open(&shared_open, &path_open, &entity_open, window, app)
-    });
+    .on_click(move |_, window, app| request_open(&host_open, &path_open, window, app));
 
-    let more = more_menu(shared, inputs, item, tab, entity);
+    let more = more_menu(host, inputs, item, tab);
 
     let mut card = div()
         .v_flex()
@@ -1567,16 +1573,14 @@ fn project_card(
 ///
 /// 破坏性命令用分隔线与普通命令分开，名称带「…」表示会再开对话框。
 fn more_menu(
-    shared: &Shared,
+    host: &ProjectUiHost,
     inputs: &ProjectInputs,
     item: &ProjectSummary,
     tab: PickerTab,
-    entity: &Entity<WorkbenchView>,
 ) -> impl IntoElement {
     let item = item.clone();
     let inputs = inputs.clone();
-    let shared = shared.clone();
-    let entity = entity.clone();
+    let host = host.clone();
     let menu_id = SharedString::from(format!("more-{}", item.id));
 
     Button::new(ElementId::Name(menu_id))
@@ -1593,10 +1597,9 @@ fn more_menu(
                         IconName::Star
                     })
                     .on_click({
-                        let shared = shared.clone();
-                        let entity = entity.clone();
+                        let host = host.clone();
                         let item = item.clone();
-                        move |_, _, app| toggle_pin(&shared, &item, &entity, app)
+                        move |_, _, app| toggle_pin(&host, &item, app)
                     }),
             );
 
@@ -1606,9 +1609,8 @@ fn more_menu(
                     PopupMenuItem::new("恢复")
                         .icon(IconName::RotateCw)
                         .on_click({
-                            let shared = shared.clone();
-                            let entity = entity.clone();
-                            move |_, _, app| restore(&shared, &id, &entity, app)
+                            let host = host.clone();
+                            move |_, _, app| restore(&host, &id, app)
                         }),
                 );
             } else if item.path_exists {
@@ -1621,10 +1623,9 @@ fn more_menu(
                             .on_click(move |_, _, _| reveal_in_explorer(&path)),
                     )
                     .item(PopupMenuItem::new("移出列表").on_click({
-                        let shared = shared.clone();
-                        let entity = entity.clone();
+                        let host = host.clone();
                         let id = item.id.clone();
-                        move |_, _, app| soft_remove(&shared, &id, &entity, app)
+                        move |_, _, app| soft_remove(&host, &id, app)
                     }));
                 let item_del = item.clone();
                 let inputs_del = inputs.clone();
@@ -1632,17 +1633,9 @@ fn more_menu(
                     PopupMenuItem::new("删除数据…")
                         .icon(IconName::Delete)
                         .on_click({
-                            let shared = shared.clone();
-                            let entity = entity.clone();
+                            let host = host.clone();
                             move |_, window, app| {
-                                open_delete_dialog(
-                                    &shared,
-                                    &inputs_del,
-                                    &item_del,
-                                    &entity,
-                                    window,
-                                    app,
-                                )
+                                open_delete_dialog(&host, &inputs_del, &item_del, window, app)
                             }
                         }),
                 );
@@ -1653,20 +1646,16 @@ fn more_menu(
                     PopupMenuItem::new("重新定位…")
                         .icon(IconName::FolderOpen)
                         .on_click({
-                            let shared = shared.clone();
-                            let entity = entity.clone();
+                            let host = host.clone();
                             move |_, window, app| {
-                                open_relocate_dialog(
-                                    &shared, &inputs_rl, &item_rl, &entity, window, app,
-                                )
+                                open_relocate_dialog(&host, &inputs_rl, &item_rl, window, app)
                             }
                         }),
                 );
                 let id = item.id.clone();
                 menu = menu.item(PopupMenuItem::new("移出列表").on_click({
-                    let shared = shared.clone();
-                    let entity = entity.clone();
-                    move |_, _, app| forget(&shared, &id, &entity, app)
+                    let host = host.clone();
+                    move |_, _, app| forget(&host, &id, app)
                 }));
             }
             menu
@@ -1719,16 +1708,11 @@ fn error_line(message: &str, theme: &gpui_kit::component::Theme) -> Div {
 ///
 /// 不再自绘弹层——编码指南要求 menu/popup 使用语义组件，不要用 generic `div` 重做
 /// focus keyboard 与 dismissal。
-pub fn render_menu_content(
-    shared: &Shared,
-    inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) -> Div {
+pub fn render_menu_content(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) -> Div {
     let theme = cx.theme();
     let (name, root, read_only) = {
-        let ui = shared.project_ui.borrow();
-        let p = shared.project.borrow();
+        let ui = host.state.borrow();
+        let p = host.session.borrow();
         let name = p.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let root = p.as_ref().map(|s| s.root.clone()).unwrap_or_default();
         (name, root, ui.read_only)
@@ -1736,16 +1720,11 @@ pub fn render_menu_content(
 
     let inputs_settings = inputs.clone();
     let inputs_rename = inputs.clone();
-    let shared_close = shared.clone();
-    let entity_close = entity.clone();
-    let shared_settings = shared.clone();
-    let entity_settings = entity.clone();
-    let shared_rename = shared.clone();
-    let entity_rename = entity.clone();
-    let shared_switch = shared.clone();
-    let entity_switch = entity.clone();
-    let shared_archive = shared.clone();
-    let entity_archive = entity.clone();
+    let host_close = host.clone();
+    let host_settings = host.clone();
+    let host_rename = host.clone();
+    let host_switch = host.clone();
+    let host_archive = host.clone();
     let name_settings = name.clone();
     let name_rename = name.clone();
     let path = root.clone();
@@ -1758,7 +1737,7 @@ pub fn render_menu_content(
             theme,
             move |window, app| {
                 // 切换项目 = 关闭当前 + 回到选择器（一实例一项目）。
-                request_close(&shared_switch, &entity_switch, window, app);
+                request_close(&host_switch, window, app);
             },
         ))
         .child(menu_item(
@@ -1769,11 +1748,11 @@ pub fn render_menu_content(
                 inputs_settings
                     .rename
                     .update(app, |s, cx| s.set_value(name_settings.clone(), window, cx));
-                let mut ui = shared_settings.project_ui.borrow_mut();
+                let mut ui = host_settings.state.borrow_mut();
                 ui.menu_open = false;
                 ui.settings_open = true;
                 drop(ui);
-                entity_settings.update(app, |_, cx| cx.notify());
+                host.notify(app);
             },
         ))
         .child(menu_item(
@@ -1784,11 +1763,11 @@ pub fn render_menu_content(
                 inputs_rename
                     .rename
                     .update(app, |s, cx| s.set_value(name_rename.clone(), window, cx));
-                let mut ui = shared_rename.project_ui.borrow_mut();
+                let mut ui = host_rename.state.borrow_mut();
                 ui.menu_open = false;
                 ui.settings_open = true;
                 drop(ui);
-                entity_rename.update(app, |_, cx| cx.notify());
+                host.notify(app);
             },
         ))
         .child(menu_item("reveal", "在资源管理器中显示", theme, {
@@ -1801,7 +1780,7 @@ pub fn render_menu_content(
             "归档 / 取消归档",
             theme,
             move |_window, app| {
-                toggle_archive(&shared_archive, &entity_archive, app);
+                toggle_archive(&host_archive, app);
             },
         ))
         .child(div().h_px().my_1().bg(theme.colors.border))
@@ -1810,8 +1789,8 @@ pub fn render_menu_content(
             "关闭项目",
             theme,
             move |window, app| {
-                shared_close.project_ui.borrow_mut().menu_open = false;
-                request_close(&shared_close, &entity_close, window, app);
+                host_close.state.borrow_mut().menu_open = false;
+                request_close(&host_close, window, app);
             },
         ));
 
@@ -1857,24 +1836,19 @@ fn reveal_in_explorer(path: &std::path::Path) {
 // ==================== 项目设置 ====================
 
 /// 项目设置（覆盖中央区，Tab 式）。
-pub fn render_settings(
-    shared: &Shared,
-    inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) -> Option<Div> {
-    if !shared.project_ui.borrow().settings_open {
+pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) -> Option<Div> {
+    if !host.state.borrow().settings_open {
         return None;
     }
     let (name, root) = {
-        let p = shared.project.borrow();
+        let p = host.session.borrow();
         match p.as_ref() {
             Some(s) => (s.name.clone(), s.root.clone()),
             None => return None,
         }
     };
     let theme = cx.theme();
-    let read_only = shared.project_ui.borrow().read_only;
+    let read_only = host.state.borrow().read_only;
 
     // 元数据文件大小
     let meta = root.join(project_service::RS_META_DIR_NAME);
@@ -1907,17 +1881,13 @@ pub fn render_settings(
         );
     }
 
-    let shared_close = shared.clone();
-    let entity_close = entity.clone();
-    let shared_reveal = root.clone();
-    let shared_reload = shared.clone();
-    let entity_reload = entity.clone();
+    let host_close = host.clone();
+    let host_reveal = root.clone();
+    let host_reload = host.clone();
     let inputs_rename = inputs.clone();
-    let shared_rename = shared.clone();
-    let entity_rename = entity.clone();
+    let host_rename = host.clone();
     let inputs_version = inputs.clone();
-    let shared_version = shared.clone();
-    let entity_version = entity.clone();
+    let host_version = host.clone();
 
     let deps = {
         let missing = project_service::list_recent(12)
@@ -1975,8 +1945,8 @@ pub fn render_settings(
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
                             .on_click(move |_, _, app| {
-                                shared_close.project_ui.borrow_mut().settings_open = false;
-                                entity_close.update(app, |_, cx| cx.notify());
+                                host_close.state.borrow_mut().settings_open = false;
+                                host.notify(app);
                             })
                             .child("关闭"),
                     ),
@@ -2007,12 +1977,7 @@ pub fn render_settings(
                                     .secondary()
                                     .label("保存名称")
                                     .on_click(move |_, _, app| {
-                                        save_rename(
-                                            &shared_rename,
-                                            &inputs_rename,
-                                            &entity_rename,
-                                            app,
-                                        )
+                                        save_rename(&host_rename, &inputs_rename, app)
                                     }),
                             ),
                     )
@@ -2022,7 +1987,7 @@ pub fn render_settings(
                         Button::new("proj-open-meta")
                             .secondary()
                             .label("🗀 打开 .RSmeta")
-                            .on_click(move |_, _, _| reveal_in_explorer(&shared_reveal)),
+                            .on_click(move |_, _, _| reveal_in_explorer(&host_reveal)),
                     )
                     .child(section(theme, "依赖"))
                     .child(deps)
@@ -2038,12 +2003,7 @@ pub fn render_settings(
                                     .secondary()
                                     .label("创建版本快照")
                                     .on_click(move |_, _, app| {
-                                        create_version_action(
-                                            &shared_version,
-                                            &inputs_version,
-                                            &entity_version,
-                                            app,
-                                        )
+                                        create_version_action(&host_version, &inputs_version, app)
                                     }),
                             ),
                     )
@@ -2053,7 +2013,7 @@ pub fn render_settings(
                             .secondary()
                             .label("刷新列表")
                             .on_click(move |_, _, app| {
-                                refresh_picker(&shared_reload, &entity_reload, app);
+                                refresh_picker(&host_reload, app);
                             }),
                     ),
             ),
@@ -2102,25 +2062,20 @@ fn versions_view(root: &std::path::Path, theme: &gpui_kit::component::Theme) -> 
 }
 
 /// 创建版本快照（只读模式拦截）。
-pub fn create_version_action(
-    shared: &Shared,
-    inputs: &ProjectInputs,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) {
-    if read_only_blocked(shared, entity, cx, "创建版本") {
+pub fn create_version_action(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) {
+    if read_only_blocked(host, cx, "创建版本") {
         return;
     }
-    let root = match shared.project.borrow().as_ref().map(|s| s.root.clone()) {
+    let root = match host.session.borrow().as_ref().map(|s| s.root.clone()) {
         Some(r) => r,
         None => return,
     };
     let message = inputs.version_msg.read(cx).value().trim().to_string();
     match project_service::create_version(&root, &message) {
-        Ok(()) => shared.project_ui.borrow_mut().notice = Some("已创建版本快照".to_string()),
-        Err(e) => shared.project_ui.borrow_mut().notice = Some(e),
+        Ok(()) => host.state.borrow_mut().notice = Some("已创建版本快照".to_string()),
+        Err(e) => host.state.borrow_mut().notice = Some(e),
     }
-    entity.update(cx, |_, cx| cx.notify());
+    host.notify(cx);
 }
 
 fn kv(theme: &gpui_kit::component::Theme, key: &str, value: &str) -> Div {

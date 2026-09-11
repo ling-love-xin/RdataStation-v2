@@ -14,5 +14,14 @@
 # 根 Cargo.toml 设了 default-members = ["crates/app"]，
 # 裸 `cargo check` / `cargo test` 只覆盖 app 依赖图（跳过 plugin → wasmtime）
 check-all = "check --workspace --all-targets"
-test-all = "test --workspace"
+# -j 2：workspace 全量编译时多个 rustc 同时链接 DuckDB 静态库会耗尽内存，
+# 触发 rustc STATUS_STACK_BUFFER_OVERRUN / link.exe LNK1102（内存不足）
+test-all = "test --workspace -j 2"
 clippy-all = "clippy --workspace --all-targets"
+
+[env]
+# edition 2024 下，视图层深链式 builder（gpui-kit 元素树）在 codegen 阶段的
+# monomorphization 递归更深；rustc 工作线程默认 8 MiB 栈会以
+# STATUS_STACK_BUFFER_OVERRUN（0xc0000409）中断编译——表现为 `cargo check` 正常、
+# `cargo test` / `cargo build` 崩溃。抬高 cargo 派生的 rustc 线程栈即可稳定通过。
+RUST_MIN_STACK = "268435456"

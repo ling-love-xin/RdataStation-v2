@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2）**（2026-09-11，`cargo check --workspace --all-targets` 零告警；engine 221 / project 12 / workbench 16 测试全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2）**（2026-09-11，`cargo check --workspace --all-targets` 零告警；engine 221 / project 14+3 / workbench 14 测试全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -20,6 +20,16 @@
 | 9 | 软删提供**「已移除项目」找回入口** |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-11 — B5 收尾 + B8 + B1（语义对话框 / 卡片菜单 / 尺寸相对化）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| B5 | 6 个自绘模态层改为语义组件：新建 / 打开目录 / 删除确认（输入项目名）/ 重新定位用 `Dialog`，锁占用 / 未保存拦截用 `AlertDialog`；删除 `render_overlays` / `DialogKind` / `dialog_shell` 与 `view.rs` 调用点。校验错误改存 `ProjectUiState::dialog_error`（builder 每帧重读），提交失败保持打开，成功由回调 `window.close_dialog` 显式关闭（Enter 与按钮同路径；不用 `Dialog::on_ok` 返回值，以免被拦截动作另开对话框时 pop 错栈顶） | `project_ui.rs`、`view.rs` |
+| B5 | 未保存拦截拆为「准备」（另存草稿 + 清空编辑区）与「推进」（执行被拦截的打开 / 关闭）两段 | 同上 |
+| B8 | 项目卡片改「一个可见主操作（打开）+ 更多菜单」：固定/取消固定、恢复、在资源管理器中显示、移出列表、重新定位…、删除数据… 收进 `DropdownMenu`，破坏性命令用分隔线隔离；固定状态改用 `Star` 图标常显 | 同上 |
+| B1 | 工作台视图层尺寸改相对 scale：`px(...)` → gpui rem helper（`w_12()` / `h_px()` / `rems(n)` 等）；只能收 `Pixels` 的 API（Dock 起步宽度、`Dialog::w`、`Form::label_width`）改 `cx.theme().font_size * N`，随界面缩放 | `view.rs`、`panels.rs`、`connection_dialog.rs`、`project_ui.rs`、`settings_view.rs` |
+| 验证 | `cargo check --workspace --all-targets` 零告警；`cargo test --workspace -j 2` 34 个目标全绿（442 通过 / 0 失败）；`cargo build -p rds-app -j 2` 通过 | — |
 
 ### 2026-09-11 — Phase A/B 主体 + Phase C1/C2 实现
 
@@ -49,6 +59,15 @@
 
 **剩余有意取舍**：「删除磁盘数据」只删 `.RSmeta`（保留用户文件），非整目录删除。
 
+### 2026-09-11 — edition 2024 升级 + 项目菜单组件化
+
+| 项 | 内容 |
+| --- | --- |
+| edition 2024 | 根 `Cargo.toml` `edition = "2024"`；修复 2024 破坏性变更：`connector.rs` 隐式借用模式下的 `ref`/解引用模式（2 处）、`mock` crate 保留字 `gen` 标识符重命名、`view.rs` `.then(|| ...)` 闭包对 `cx` 的双重独占借用（改为显式 `if`）、`render_*_activity_bar` 返回 `Div` 以避开 RPIT 生命周期捕获 |
+| 工程配置 | `.cargo/config.toml`：`[env] RUST_MIN_STACK`（workspace 全量 codegen 需更大 rustc 线程栈）、`test-all` 别名固定 `-j 2`（并行链接 DuckDB 静态库会耗尽内存，导致 rustc `STATUS_STACK_BUFFER_OVERRUN` / `link.exe` LNK1102） |
+| B5（部分） | 项目菜单改用 `Popover` + ghost `Button` 触发（`render_menu_content` 只提供内容）；删除自绘绝对定位弹层 |
+| 验证 | `cargo test --workspace -j 2`：34 个测试目标全绿、**442 项通过 / 0 失败**；`cargo build -p rds-app -j 2` 通过 |
+
 ### 2026-09-11 — 符合性对齐（GPUI-kit coding-guides）
 
 对照官方《编码指南》/《设计指南》自查后启动整改：
@@ -61,9 +80,10 @@
 | 本地化 label 作 ElementId | ✅ `picker-tab-{key}` / `menu-{key}`（domain 键，不用中文 label） |
 | 公开字段 struct 未 `#[non_exhaustive]` | ✅ `ProjectSummary` / `CreateProjectInput`（+ `new`/`with_*` builder）/ `OpenedProject`（+ `into_parts`）/ `ProjectVersionRow` / `PickerState` / `ProjectUiState` / `ProjectInputs` |
 | 视图 / 对话框仍在 workbench | ⏳ 待办（批次 A3）：`project_ui.rs` 拆入 `crates/project/src/`，需引入 `ProjectUiHost`（session/state/editor 句柄 + 宿主回调）与 `ProjectUiNotifier`，并断开 `settings` 直接依赖（排序偏好改走回调） |
-| 直接 `px(...)` | ⏳ 待办（批次 B1），与 B5 同步（Dialog/Popover 自带尺寸语义） |
-| 自绘 menu / dialog（无 focus trap / Escape / 方向键） | ⏳ 待办（批次 B5）：改用 `Popover` / `DropdownMenu` / `ContextMenu` / `Dialog` / `AlertDialog` |
-| 卡片 hover-only 操作（design-guides） | ⏳ 待办（批次 B8）：一个可见主操作 + 次要命令进 `DropdownMenu` / `ContextMenu` |
+| 自绘 menu / dialog（无 focus trap / Escape / 方向键） | ✅ 项目菜单改 `Popover` + `Button` 触发；新建 / 打开目录 / 删除确认 / 重定位改 `Dialog`，锁占用 / 未保存拦截改 `AlertDialog`（焦点陷阱、Escape、遮罩关闭、footer 布局由组件负责） |
+| 直接 `px(...)` | ✅ 工作台视图层（`view.rs` / `panels.rs` / `project_ui.rs` / `connection_dialog.rs` / `settings_view.rs`）改 rem helper 或 `cx.theme().font_size * N`；仅 1px hairline 保留 `h_px()`（指南允许的 physical boundary 例外） |
+| （工程）edition 2024 | ✅ 全仓 `edition = "2024"`（`.cargo/config.toml` 加 `RUST_MIN_STACK`；`test-all` 别名固定 `-j 2`） |
+| 卡片 hover-only 操作（design-guides） | ✅ 一个可见主操作（打开）+ 次要命令进 `DropdownMenu`（破坏性命令分隔）；固定状态用图标常显 |
 
 ### 2026-09-11 — 方案定稿（含 schema 迁移）
 
@@ -177,7 +197,7 @@
 | --- | --- |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs`（feature crate 内，符合 GPUI-kit 指南「model/service/view 同 crate」） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（收敛） |
-| 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/workbench/src/components/project_ui.rs`（新；与 connection_dialog 同层的自绘 overlay） |
+| 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/workbench/src/components/project_ui.rs`（选择器与设置为主绘 overlay；菜单为 `Popover` + 卡片 `DropdownMenu`；对话框为 `Dialog` / `AlertDialog`） |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册迁移（固定/软删字段） | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） |
 | 全局库项目 CRUD / 固定 / 已移除 | `crates/engine/src/persistence/global_db.rs` |
