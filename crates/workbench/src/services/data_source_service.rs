@@ -22,7 +22,7 @@ use connection::model::{
 use engine::persistence::auth_store::AuthConfig;
 use engine::persistence::connection_org_store::ConnectionGroup;
 use engine::persistence::driver_store::{DataSourceType, Driver};
-use engine::persistence::env_store::Environment;
+use engine::persistence::env_store::{Environment, EnvironmentPolicy};
 use engine::persistence::global_db::{
     GlobalConnectionSaveInput, GlobalConnectionUpdateInput, GlobalDatabaseManager,
 };
@@ -101,6 +101,20 @@ impl DataSourceService {
         self.global_db.list_environments().await
     }
 
+    /// 按环境名列出其策略（数据源：`environment_policies`；环境不存在 → 空列表）。
+    ///
+    /// 供高级 Tab「策略覆盖」勾选与连接对话框的降级展示——**UI 不自造策略清单**。
+    pub async fn list_environment_policies_by_name(
+        &self,
+        env_name: &str,
+    ) -> Result<Vec<EnvironmentPolicy>, CoreError> {
+        let envs = self.global_db.list_environments().await?;
+        let Some(env) = envs.into_iter().find(|e| e.name == env_name) else {
+            return Ok(Vec::new());
+        };
+        self.global_db.list_environment_policies(&env.id).await
+    }
+
     // ==================== 组织元数据（标签 / 分组） ====================
 
     /// 项目可见分组（项目级能力；未打开项目返回空列表）。
@@ -152,10 +166,12 @@ impl DataSourceService {
         Ok(infos.into_iter().map(map_info_to_data_source).collect())
     }
 
-    /// 按 ID 读取数据源。
+    /// 按 ID 读取**全局侧**数据源（只查 `global_connections`）。
     ///
-    /// 只查全局库；项目侧连接（P_/GP_）请用 [`Self::get_with_project`]。
-    pub async fn get(&self, conn_id: &str) -> Result<Option<DataSource>, CoreError> {
+    /// 项目侧连接（`P_`/`GP_`）请用 [`Self::get_with_project`]；重命名为 `get_global` 是
+    /// 为了在调用点就能看出“只查全局库”这个前提（历史上有两处因此踩坑：对话框编辑回读、
+    /// 导航树「连接」入口）。
+    pub async fn get_global(&self, conn_id: &str) -> Result<Option<DataSource>, CoreError> {
         Ok(self.list().await?.into_iter().find(|ds| ds.id == conn_id))
     }
 
@@ -177,7 +193,7 @@ impl DataSourceService {
             let row = store.get_connection(conn_id).await?;
             return Ok(row.map(map_project_connection_to_data_source));
         }
-        self.get(conn_id).await
+        self.get_global(conn_id).await
     }
 
     /// 保存新连接（全局：G_ 前缀；凭据由 engine 侧 AES-256-GCM 加密落库）。
@@ -295,7 +311,7 @@ impl DataSourceService {
                 "仅「全局+项目」快照连接（GP_）支持从全局定义同步".to_string(),
             )));
         };
-        let Some(src) = self.get(&global_id).await? else {
+        let Some(src) = self.get_global(&global_id).await? else {
             return Err(CoreError::common(shared::error::CommonError::General(format!(
                 "全局定义 {global_id} 不存在（可能已被删除），无法同步"
             ))));

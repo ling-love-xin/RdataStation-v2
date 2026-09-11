@@ -25,12 +25,7 @@ impl ConnectionDialogState {
         });
         let policy_type = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(
-                    POLICY_ITEMS
-                        .iter()
-                        .map(|t| SharedString::from(*t))
-                        .collect::<Vec<_>>(),
-                ),
+                SearchableVec::new(Vec::<SharedString>::new()),
                 None,
                 window,
                 cx,
@@ -84,7 +79,9 @@ impl ConnectionDialogState {
             network_list: Rc::new(RefCell::new(Vec::new())),
             duckdb_fed: Rc::new(Cell::new(true)),
             cache_path,
-            sec_overrides: Rc::new(RefCell::new(vec![true, true, false, true, true, false])),
+            env_policies: Rc::new(RefCell::new(Vec::new())),
+            policy_override_keys: Rc::new(RefCell::new(Vec::new())),
+            env_policies_loaded_for: Rc::new(RefCell::new(None)),
             props: Rc::new(RefCell::new(vec![
                 ("connect_timeout".to_string(), "10".to_string()),
                 ("ssl_mode".to_string(), "prefer".to_string()),
@@ -243,7 +240,8 @@ impl ConnectionDialogState {
             .map(|(name, path)| ProjectItem::project(name.clone(), path.clone()))
             .collect();
         let mut items = items;
-        // 动作项顺序：先「打开现有目录…」，末项固定「＋ 新增项目」（按用户约定）。
+        // 动作项顺序：「不需要项目」→「打开现有目录…」→ 末项固定「＋ 新增项目」（按用户约定）。
+        items.push(ProjectItem::no_project());
         items.push(ProjectItem::open_folder());
         items.push(ProjectItem::new_project());
         *self.project_options.borrow_mut() = options;
@@ -280,6 +278,7 @@ impl ConnectionDialogState {
     ///
     /// - 「＋ 新增项目」→ 置位 `Shared::project_new_request`（宿主开新建入口）并清空选中；
     /// - 「打开现有目录…」→ 置位 `Shared::project_open_request`（宿主开目录选择）并清空选中；
+    /// - 「不需要项目（仅全局）」→ 作用域切为「仅全局」并清空项目路径；
     /// - 普通项目 → 写回 `project_path`（保存 / 作用域预检统一读路径输入）。
     ///
     /// 返回 `true` 表示本次确认是一个动作项（未写入项目路径）。
@@ -301,6 +300,14 @@ impl ConnectionDialogState {
         }
         if label == PROJECT_OPEN_LABEL {
             shared.project_open_request.set(true);
+            self.set_project_value("", window, cx);
+            return true;
+        }
+        if label == PROJECT_NONE_LABEL {
+            // 「不需要项目」＝ 切作用域为「仅全局」（项目作用域必须有项目，不应停在无效态）。
+            set_select_value(&self.scope, SCOPE_LABELS[0], window, cx);
+            self.project_path
+                .update(cx, |s, cx| s.set_value(String::new(), window, cx));
             self.set_project_value("", window, cx);
             return true;
         }
@@ -328,6 +335,49 @@ impl ConnectionDialogState {
         match self.project_label_for(path) {
             Some(label) => self.set_project_value(&label, window, cx),
             None => self.set_project_value("", window, cx),
+        }
+    }
+
+    /// 按当前选中的环境加载启用策略（数据源：`environment_policies`）。
+    ///
+    /// 环境为空 / 环境不存在 / 查库失败 → 清空清单（UI 显示「无策略可覆盖」）。
+    /// **不造默认值**：没选环境就不显示可覆盖项。
+    pub(crate) fn refresh_env_policies(&self, env_name: &str) {
+        let name = env_name.trim().to_string();
+        *self.env_policies_loaded_for.borrow_mut() = Some(name.clone());
+        if name.is_empty() {
+            self.env_policies.borrow_mut().clear();
+            return;
+        }
+        let rows: Vec<(String, String, String)> = (|| {
+            let service = DataSourceService::global().ok()?;
+            let rt = tokio::runtime::Runtime::new().ok()?;
+            let policies = rt.block_on(service.list_environment_policies_by_name(&name)).ok()?;
+            Some(
+                policies
+                    .into_iter()
+                    .filter(|p| p.enabled)
+                    .map(|p| {
+                        (
+                            p.policy_type.clone(),
+                            policy_type_label(&p.policy_type),
+                            policy_summary(p.policy_config.as_deref()),
+                        )
+                    })
+                    .collect(),
+            )
+        })()
+        .unwrap_or_default();
+        *self.env_policies.borrow_mut() = rows;
+    }
+
+    /// 切换策略覆盖勾选（按策略类型增删）。
+    pub(crate) fn toggle_policy_override(&self, policy_type: &str) {
+        let mut keys = self.policy_override_keys.borrow_mut();
+        if let Some(pos) = keys.iter().position(|k| k == policy_type) {
+            keys.remove(pos);
+        } else {
+            keys.push(policy_type.to_string());
         }
     }
 
@@ -620,13 +670,13 @@ impl ConnectionDialogState {
                     }
                 }
                 if let Some(overrides) = v.get("policy_overrides").and_then(|c| c.as_array()) {
-                    let flags: Vec<bool> = POLICY_KEYS
+                    // 存的是策略类型（environment_policies.policy_type）；旧版本存的 6 项布尔键
+                    // （read_only / no_ddl …）已不匹配现有策略清单，忽略即可（不报错）。
+                    let keys: Vec<String> = overrides
                         .iter()
-                        .map(|k| overrides.iter().any(|o| o.as_str() == Some(*k)))
+                        .filter_map(|o| o.as_str().map(|s| s.to_string()))
                         .collect();
-                    if flags.len() == POLICY_ITEMS.len() {
-                        *self.sec_overrides.borrow_mut() = flags;
-                    }
+                    *self.policy_override_keys.borrow_mut() = keys;
                 }
             }
         }
@@ -653,7 +703,7 @@ pub(crate) struct ClonedDialogState {
     ssl_ca: Entity<InputState>,
     ssl_cert: Entity<InputState>,
     ssl_key: Entity<InputState>,
-    sec_overrides: Rc<RefCell<Vec<bool>>>,
+    policy_override_keys: Rc<RefCell<Vec<String>>>,
     /// 驱动目录（drivers 表）：将下拉显示的驱动短名解析为驱动 id（db_type / driver_id 落库）。
     drivers: Rc<RefCell<Vec<Driver>>>,
     /// 当前选中的数据库类型（驱动反查先去该类型下匹配，避免跨类型短名歧义）。
@@ -685,7 +735,7 @@ impl ConnectionDialogState {
         ssl_ca: Entity<InputState>,
         ssl_cert: Entity<InputState>,
         ssl_key: Entity<InputState>,
-        sec_overrides: Rc<RefCell<Vec<bool>>>,
+        policy_override_keys: Rc<RefCell<Vec<String>>>,
         drivers: Rc<RefCell<Vec<Driver>>>,
         selected_type: Rc<RefCell<String>>,
         tags_input: Entity<InputState>,
@@ -707,7 +757,7 @@ impl ConnectionDialogState {
             ssl_ca,
             ssl_cert,
             ssl_key,
-            sec_overrides,
+            policy_override_keys,
             drivers,
             selected_type,
             tags_input,
@@ -866,13 +916,11 @@ impl ClonedDialogState {
             }
             adv.insert("ssl".into(), serde_json::Value::Object(ssl));
         }
+        // 策略覆盖：直接落已勾选的策略类型（environment_policies.policy_type）。
         let overrides: Vec<serde_json::Value> = self
-            .sec_overrides
+            .policy_override_keys
             .borrow()
             .iter()
-            .enumerate()
-            .filter(|(_, on)| **on)
-            .filter_map(|(i, _)| POLICY_KEYS.get(i))
             .map(|k| serde_json::json!(k))
             .collect();
         if !overrides.is_empty() {

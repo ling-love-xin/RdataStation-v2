@@ -41,26 +41,8 @@ use connection::model::DataSource;
 
 /// 认证类型（v1 AUTH_TYPE_DEFS 子集；数据为 JSON：{"username":..,"password":..} 等）。
 const AUTH_TYPES: [&str; 3] = ["password", "ssh_key", "proxy_pwd"];
-/// 环境策略项（对齐 v1 5 类策略 + 审计）。
-const POLICY_ITEMS: [&str; 6] = [
-    "只读连接",
-    "禁止 DDL",
-    "禁止导出",
-    "查询超时 30s",
-    "最大行数 1000",
-    "审计日志",
-];
-/// 能力矩阵（只读展示，驱动声明对齐）。
-const CAPABILITIES: [(&str, bool); 6] = [
-    ("数据库导航", true),
-    ("SQL 执行", true),
-    ("DuckDB 联邦", true),
-    ("数据导出", false),
-    ("Mock 生成", false),
-    ("资源分析", false),
-];
-/// 协议链最大跳数（B1 约束校验器）。
-const MAX_HOPS: usize = 4;
+/// SSL/TLS 模式（domain 枚举：与 `url_params` 的 SSL 参数注入对齐，非业务数据）。
+const SSL_MODES: [&str; 5] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
 /// 作用域选项（与 ConnectionScope 对齐；GP_ 快照引用共享）。
 const SCOPE_LABELS: [&str; 3] = ["仅全局", "仅项目", "全局+项目"];
 /// 作用域分段按钮显示文本（短版，节省 Header 宽度）→ 写库用上的全称标签。
@@ -69,17 +51,10 @@ const SCOPE_SEG_LABELS: [(&str, &str); 3] = [
     ("项目", SCOPE_LABELS[1]),
     ("全局+项目", SCOPE_LABELS[2]),
 ];
-/// SSL/TLS 模式（落库 advanced_options.ssl.mode；verify-ca/verify-full 需 CA）。
-const SSL_MODES: [&str; 5] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
-/// 策略落库键（与 v1 策略类型对齐，UI 标签见 POLICY_ITEMS）。
-const POLICY_KEYS: [&str; 6] = [
-    "read_only",
-    "no_ddl",
-    "no_export",
-    "query_timeout",
-    "row_limit",
-    "audit",
-];
+/// 协议链最大跳数（B1 约束校验器）。
+const MAX_HOPS: usize = 4;
+/// 能力矩阵为空时的提示（驱动未声明任何能力）。
+const CAP_EMPTY_HINT: &str = "该驱动未声明任何能力（drivers.capabilities 为空）";
 
 mod helpers;
 mod managers;
@@ -90,7 +65,9 @@ mod state;
 
 pub(crate) use helpers::*;
 pub(crate) use managers::*;
-pub use project_picker::{PROJECT_NEW_LABEL, PROJECT_OPEN_LABEL, ProjectItem, ProjectItemKind};
+pub use project_picker::{
+    PROJECT_NEW_LABEL, PROJECT_NONE_LABEL, PROJECT_OPEN_LABEL, ProjectItem, ProjectItemKind,
+};
 pub(crate) use staging::saved_scope_short;
 pub use staging::{ConnectionDraft, Hop};
 
@@ -146,7 +123,13 @@ pub struct ConnectionDialogState {
     pub network_list: Rc<RefCell<Vec<NetworkConfig>>>,
     pub duckdb_fed: Rc<Cell<bool>>,
     pub cache_path: Entity<InputState>,
-    pub sec_overrides: Rc<RefCell<Vec<bool>>>,
+    /// 当前选中环境下的启用策略（来自 `environment_policies`，供高级 Tab 覆盖勾选）。
+    /// 元素：(策略类型, 中文标签, 配置摘要)。
+    pub env_policies: Rc<RefCell<Vec<(String, String, String)>>>,
+    /// 已勾选的策略覆盖（存策略类型，与 `advanced_options.policy_overrides` 对应）。
+    pub policy_override_keys: Rc<RefCell<Vec<String>>>,
+    /// 策略清单已按哪个环境加载（环境切换时重查；None = 尚未加载）。
+    pub env_policies_loaded_for: Rc<RefCell<Option<String>>>,
     pub props: Rc<RefCell<Vec<(String, String)>>>,
     pub prop_key: Entity<InputState>,
     pub prop_val: Entity<InputState>,

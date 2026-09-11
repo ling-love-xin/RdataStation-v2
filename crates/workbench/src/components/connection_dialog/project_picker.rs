@@ -14,7 +14,10 @@ pub const PROJECT_NEW_LABEL: &str = "＋ 新增项目";
 /// 「打开现有目录…」选项的显示值（选中即请求宿主打开「打开现有目录」对话框）。
 pub const PROJECT_OPEN_LABEL: &str = "打开现有目录…";
 
-/// 下拉项类别：数据项与两个动作项（动作项不带路径，选中后置位一个宿主请求标记）。
+/// 「不需要项目（仅全局）」选项的显示值：选中即把作用域切为「仅全局」。
+pub const PROJECT_NONE_LABEL: &str = "不需要项目（仅全局）";
+
+/// 下拉项类别：数据项与三个动作项（动作项不带路径，选中后置位宿主请求标记或改作用域）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProjectItemKind {
     /// 普通项目（带项目根路径）。
@@ -23,6 +26,8 @@ pub enum ProjectItemKind {
     NewProject,
     /// 「打开现有目录…」。
     OpenFolder,
+    /// 「不需要项目（仅全局）」：把作用域切为「仅全局」。
+    NoProject,
 }
 
 /// 项目下拉项（`value` = 项目名；动作项 value 同显示值）。
@@ -61,6 +66,15 @@ impl ProjectItem {
             label: SharedString::from(PROJECT_OPEN_LABEL),
             path: SharedString::from(""),
             kind: ProjectItemKind::OpenFolder,
+        }
+    }
+
+    /// 「不需要项目（仅全局）」入口项。
+    pub fn no_project() -> Self {
+        Self {
+            label: SharedString::from(PROJECT_NONE_LABEL),
+            path: SharedString::from(""),
+            kind: ProjectItemKind::NoProject,
         }
     }
 

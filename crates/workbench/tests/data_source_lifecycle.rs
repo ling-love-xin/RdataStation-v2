@@ -138,7 +138,7 @@ fn update_changes_fields_and_guards_duplicate_name() {
     rt.block_on(service.update(&b_id, &upd, None)).expect("update");
 
     let b = rt
-        .block_on(service.get(&b_id))
+        .block_on(service.get_global(&b_id))
         .expect("get")
         .expect("exists");
     assert_eq!(b.name, "beta_v2");
@@ -328,7 +328,7 @@ fn global_and_project_scope_writes_both_sides() {
         .block_on(service.get_with_project(&pid, None))
         .unwrap()
         .is_none());
-    assert!(rt.block_on(service.get(&pid)).unwrap().is_none());
+    assert!(rt.block_on(service.get_global(&pid)).unwrap().is_none());
 
     // 项目侧删除：路由到项目库，不误删全局定义。
     rt.block_on(service.delete(&pid, Some(&path)))
@@ -376,7 +376,7 @@ fn project_scope_readback_requires_project_path() {
         .block_on(service.get_with_project(&id, None))
         .unwrap()
         .is_none());
-    assert!(rt.block_on(service.get(&id)).unwrap().is_none());
+    assert!(rt.block_on(service.get_global(&id)).unwrap().is_none());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -491,6 +491,34 @@ fn snapshot_sync_pulls_latest_global_definition() {
         .block_on(service.sync_snapshot_from_global(&pid, &path))
         .expect_err("全局定义不存在应报错");
     assert!(err.to_string().contains("不存在"), "{err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn environment_policies_come_from_db_by_env_name() {
+    let dir = temp_dir("env-policies");
+    let service = make_service(&dir);
+    let rt = runtime();
+
+    // 种子环境（G_env_prod）在迁移里带 5 类策略（security/schema/performance/audit/ui）。
+    let policies = rt
+        .block_on(service.list_environment_policies_by_name("生产环境"))
+        .expect("list policies");
+    assert_eq!(policies.len(), 5, "应读到库里的 5 类策略");
+    let types: Vec<&str> = policies.iter().map(|p| p.policy_type.as_str()).collect();
+    assert!(types.contains(&"security"), "{types:?}");
+    assert!(types.contains(&"performance"), "{types:?}");
+    assert!(
+        policies.iter().any(|p| p.policy_config.is_some()),
+        "策略配置应来自库（非空）"
+    );
+
+    // 不存在的环境 → 空列表（不报错、不造默认值）。
+    let none = rt
+        .block_on(service.list_environment_policies_by_name("不存在的环境"))
+        .expect("missing env");
+    assert!(none.is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

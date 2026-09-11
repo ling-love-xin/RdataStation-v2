@@ -24,7 +24,8 @@ use gpui_kit::{
 
 use project::ui::OpenProject;
 use rds_workbench::components::connection_dialog::{
-    ConnectionDialogState, PROJECT_NEW_LABEL, PROJECT_OPEN_LABEL, ProjectItem, ProjectItemKind,
+    ConnectionDialogState, PROJECT_NEW_LABEL, PROJECT_NONE_LABEL, PROJECT_OPEN_LABEL, ProjectItem,
+    ProjectItemKind,
 };
 use rds_workbench::panels::{EditorPanel, Shared};
 
@@ -149,6 +150,11 @@ fn dropdown_offers_session_project_and_new_entry(cx: &mut TestAppContext) {
         pick(PROJECT_OPEN_LABEL).as_deref(),
         Some(PROJECT_OPEN_LABEL),
         "「打开现有目录…」应在选项列表中"
+    );
+    assert_eq!(
+        pick(PROJECT_NONE_LABEL).as_deref(),
+        Some(PROJECT_NONE_LABEL),
+        "「不需要项目（仅全局）」应在选项列表中"
     );
     assert_eq!(pick("不存在的项目"), None, "不存在的项目不应可选中");
 
@@ -277,6 +283,52 @@ fn confirm_open_folder_requests_folder_dialog(cx: &mut TestAppContext) {
     assert!(selected.is_none(), "动作项确认后本下拉应恢复未选中");
 }
 
+#[gpui_kit::test]
+fn confirm_no_project_switches_scope_to_global(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = demo_root();
+    let (harness, cx) = open_harness(cx, root.clone());
+    cx.update(|window, cx| {
+        harness.update(cx, |h, cx| h.open(window, cx));
+    });
+
+    // 先切到「仅项目」（项目作用域下才需要项目）→ 再选「不需要项目」。
+    let scope_label = SharedString::from("仅项目");
+    let scope_entity = cx.update(|_, cx| harness.read(cx).dialog(cx).scope.clone());
+    cx.update(|window, cx| {
+        scope_entity.update(cx, |s, cx| s.set_selected_value(&scope_label, window, cx));
+    });
+
+    let label = SharedString::from(PROJECT_NONE_LABEL);
+    let requested = cx.update(|window, cx| {
+        let (dialog, shared) = {
+            let h = harness.read(cx);
+            (h.dialog(cx), h.shared.clone())
+        };
+        dialog.handle_project_confirm(Some(&label), &shared, window, cx)
+    });
+    assert!(requested, "应识别为动作项（不需要项目）");
+    // 作用域回到「仅全局」，项目路径清空、下拉选中清空。
+    let scope_now = cx.update(|_, cx| {
+        harness
+            .read(cx)
+            .dialog(cx)
+            .scope
+            .read(cx)
+            .selected_value()
+            .map(|v| v.to_string())
+    });
+    assert_eq!(scope_now.as_deref(), Some("仅全局"));
+    let path_now =
+        cx.update(|_, cx| harness.read(cx).dialog(cx).project_path.read(cx).value().to_string());
+    assert!(path_now.is_empty(), "项目路径应清空：{path_now}");
+    assert!(
+        !cx.update(|_, cx| harness.read(cx).shared.project_new_request.get())
+            && !cx.update(|_, cx| harness.read(cx).shared.project_open_request.get()),
+        "不应误置位新增 / 打开目录请求"
+    );
+}
+
 /// 下拉项数据契约（纯数据，无需窗口）：显示名 / 路径 / 动作项标记 / 搜索匹配。
 #[test]
 fn project_item_contract() {
@@ -300,4 +352,9 @@ fn project_item_contract() {
     assert_eq!(open_item.path().as_ref(), "", "动作项不带路径");
     assert_eq!(open_item.value().as_ref(), PROJECT_OPEN_LABEL);
     assert_eq!(open_item.kind(), ProjectItemKind::OpenFolder);
+
+    let none_item = ProjectItem::no_project();
+    assert!(none_item.is_action(), "「不需要项目」是动作项");
+    assert_eq!(none_item.path().as_ref(), "", "动作项不带路径");
+    assert_eq!(none_item.value().as_ref(), PROJECT_NONE_LABEL);
 }

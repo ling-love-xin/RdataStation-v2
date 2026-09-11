@@ -119,6 +119,106 @@ pub(crate) fn enabled_drivers_of_type(drivers: &[Driver], type_id: &str) -> Vec<
         .collect()
 }
 
+// ===== 驱动能力 / 环境策略（**清单与值来自数据库**，这里只放标签字典）=====
+//
+// 审计约定（见 connection-dialog-architecture §15）：UI 不自行编造业务数据——
+// 能力清单取 `drivers.capabilities`、环境策略取 `environment_policies`；
+// 本段只负责「键/类型 → 中文标签」的展示映射（字典），以及 JSON 解析工具。
+
+/// 驱动能力键 → 中文标签（未收录的键原样展示）。
+const CAPABILITY_LABELS: [(&str, &str); 12] = [
+    ("tree", "数据库导航"),
+    ("health_check", "健康检查"),
+    ("transactions", "事务"),
+    ("index_analysis", "索引分析"),
+    ("sql_autocomplete", "SQL 补全"),
+    ("schema_browser", "模式浏览"),
+    ("table_editor", "表编辑器"),
+    ("analytics", "分析查询"),
+    ("federation", "联邦查询"),
+    ("export", "数据导出"),
+    ("mock", "Mock 生成"),
+    ("resource", "资源分析"),
+];
+
+/// 解析驱动能力 JSON 数组（`drivers.capabilities`）；非法 / 为空 → 空列表。
+pub(crate) fn driver_capabilities(json: Option<&str>) -> Vec<String> {
+    json.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// 能力矩阵行：(显示标签, 是否由该驱动声明)。
+///
+/// 字典内每个键都出一行（声明与否均可视）；驱动声明了字典以外的键时追加在尾部，
+/// 保证「驱动新增能力但 UI 未收录标签」时也不丢信息。
+pub(crate) fn capability_rows(declared: &[String]) -> Vec<(String, bool)> {
+    let mut rows: Vec<(String, bool)> = CAPABILITY_LABELS
+        .iter()
+        .map(|(key, label)| ((*label).to_string(), declared.iter().any(|d| d == key)))
+        .collect();
+    for key in declared {
+        if !CAPABILITY_LABELS.iter().any(|(k, _)| k == key) {
+            rows.push((key.clone(), true));
+        }
+    }
+    rows
+}
+
+/// 环境策略类型 → 中文标签（未收录的类型原样展示）。
+pub(crate) fn policy_type_label(policy_type: &str) -> String {
+    match policy_type {
+        "security" => "安全策略".to_string(),
+        "schema" => "模式加载".to_string(),
+        "performance" => "性能策略".to_string(),
+        "audit" => "审计策略".to_string(),
+        "ui" => "界面策略".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 中文标签 → 策略类型（环境管理器落库用；未知标签原样返回）。
+pub(crate) fn policy_type_from_label(label: &str) -> String {
+    match label {
+        "安全策略" => "security".to_string(),
+        "模式加载" => "schema".to_string(),
+        "性能策略" => "performance".to_string(),
+        "审计策略" => "audit".to_string(),
+        "界面策略" => "ui".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 策略配置摘要（只展示库里的值，不造值）：取前 3 个标量项 → `k=v · k=v`。
+pub(crate) fn policy_summary(config: Option<&str>) -> String {
+    let Some(obj) = config.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()) else {
+        return "—".to_string();
+    };
+    let Some(map) = obj.as_object() else {
+        return "—".to_string();
+    };
+    let parts: Vec<String> = map
+        .iter()
+        .filter(|(_, v)| !v.is_object() && !v.is_array())
+        .take(3)
+        .map(|(k, v)| {
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            format!("{k}={val}")
+        })
+        .collect();
+    if parts.is_empty() {
+        "—".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
 /// 该数据库类型下是否有**可用驱动**（决定类型能否被选中）。
 ///
 /// 类型目录与驱动目录是两层：`data_source_types` 里有条目不代表能用——当前只内置
@@ -306,8 +406,9 @@ pub(crate) fn scope_from_label(l: &str) -> ConnectionScope {
 mod tests {
     // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::{
-        driver_short_name, enabled_drivers_of_type, find_driver_by_value, tags_from_json,
-        tags_to_json, type_badge, type_has_driver,
+        capability_rows, driver_capabilities, driver_short_name, enabled_drivers_of_type,
+        find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
+        tags_from_json, tags_to_json, type_badge, type_has_driver,
     };
     use engine::persistence::driver_store::{DataSourceType, Driver};
 
@@ -414,6 +515,47 @@ mod tests {
         assert!(!type_has_driver(&drivers, "oracle"));
         // 目录里完全没有驱动的类型同样不可用（与种子目录一致：只内置 4 个驱动）。
         assert!(!type_has_driver(&drivers, "clickhouse"));
+    }
+
+    #[test]
+    fn capabilities_come_from_driver_json_with_label_dictionary() {
+        // 解析：来自库里的 JSON 数组（非法 / 空 → 空列表，不造默认能力）。
+        assert_eq!(driver_capabilities(None).len(), 0);
+        assert_eq!(driver_capabilities(Some("not-json")).len(), 0);
+        assert_eq!(
+            driver_capabilities(Some(r#"["tree","health_check"]"#)),
+            vec!["tree".to_string(), "health_check".to_string()]
+        );
+        // 矩阵：字典内每种能力都出一行（声明与否），驱动自带的未知键追加在尾部。
+        let declared = vec!["tree".to_string(), "brand_new".to_string()];
+        let rows = capability_rows(&declared);
+        assert!(rows.iter().any(|(l, ok)| l == "数据库导航" && *ok), "声明项应命中");
+        assert!(
+            rows.iter().any(|(l, ok)| l == "Mock 生成" && !*ok),
+            "字典内未声明项应标记未声明"
+        );
+        assert_eq!(rows.last().map(|(l, _)| l.as_str()), Some("brand_new"));
+    }
+
+    #[test]
+    fn policy_type_label_and_summary_are_db_driven() {
+        // 标签字典与反向映射必须成对（管理器按库里的 policy_type 展示、按标签写回）。
+        for t in ["security", "schema", "performance", "audit", "ui"] {
+            let label = policy_type_label(t);
+            assert_eq!(policy_type_from_label(&label), t, "标签与类型应可往返：{t}");
+        }
+        // 未收录的类型原样展示（不丢失库里的信息）。
+        assert_eq!(policy_type_label("custom"), "custom");
+        // 摘要只取库里的标量值，最多 3 项；空/非法 → “—”。
+        assert_eq!(policy_summary(None), "—");
+        assert_eq!(policy_summary(Some("{}")), "—");
+        let s = policy_summary(Some(
+            r#"{"readonly":true,"rowLimit":1000,"queryTimeout":60,"nested":{"a":1}}"#,
+        ));
+        assert!(s.contains("readonly=true"), "{s}");
+        assert!(s.contains("rowLimit=1000"), "{s}");
+        assert!(!s.contains("nested"), "对象值不应进摘要：{s}");
+        assert_eq!(s.matches('=').count(), 3, "最多 3 项：{s}");
     }
 
     #[test]

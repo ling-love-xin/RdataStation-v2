@@ -103,7 +103,9 @@ impl ConnectionDialogState {
         let ssl_ca = self.ssl_ca.clone();
         let ssl_cert = self.ssl_cert.clone();
         let ssl_key = self.ssl_key.clone();
-        let sec_overrides = self.sec_overrides.clone();
+        let sec_overrides = self.policy_override_keys.clone();
+        let env_policies = self.env_policies.clone();
+        let env_policies_loaded_for = self.env_policies_loaded_for.clone();
 
         // 项目会话变更检测（每帧执行，开销仅一次借用比较）：对话框打开期间「＋ 新增项目」
         // 或外部切换项目后，项目下拉选项与选中项必须跟上新会话。
@@ -119,6 +121,19 @@ impl ConnectionDialogState {
                 Some((name, _)) => self.set_project_value(name, window, cx),
                 None => self.set_project_value("", window, cx),
             }
+        }
+
+        // 环境变更检测（每帧比较）：策略清单来自 `environment_policies`，切环境必须重查，
+        // 否则勾选项与所选环境的真实策略不一致（旧版是硬编码 6 项，无此问题也无此信息）。
+        let env_now = self
+            .env
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default()
+            .to_string();
+        if env_policies_loaded_for.borrow().as_deref() != Some(env_now.as_str()) {
+            self.refresh_env_policies(&env_now);
         }
 
         // 元数据与暂存恢复：dialog builder 每次渲染都会执行，用一次性标记避开
@@ -560,9 +575,13 @@ impl ConnectionDialogState {
                     content
                 }
                 2 => {
-                    // ===== 能力：只读矩阵 =====
+                    // ===== 能力：只读矩阵（清单与命中均来自 `drivers.capabilities`，UI 只做标签映射）=====
+                    let caps = driver_capabilities(
+                        current_driver.as_ref().and_then(|d| d.capabilities.as_deref()),
+                    );
+                    let declared_count = caps.len();
                     let mut chips = div().h_flex().gap_2().flex_wrap();
-                    for (label, ok) in CAPABILITIES {
+                    for (label, ok) in capability_rows(&caps) {
                         chips = chips.child(
                             div()
                                 .text_xs()
@@ -575,11 +594,18 @@ impl ConnectionDialogState {
                                 .child(label),
                         );
                     }
+                    let hint = match current_driver.as_ref() {
+                        None => "先在左侧选择数据库类型与驱动实现".to_string(),
+                        Some(d) if declared_count == 0 => {
+                            format!("{}：{CAP_EMPTY_HINT}", driver_short_name(&d.name))
+                        }
+                        Some(d) => format!(
+                            "{}：drivers.capabilities 声明 {declared_count} 项 · 只读展示",
+                            driver_short_name(&d.name)
+                        ),
+                    };
                     div().v_flex().gap_2()
-                        .child(
-                            div().text_xs().text_color(theme.colors.muted_foreground)
-                                .child("能力由驱动声明（driver.capabilities）· 只读展示"),
-                        )
+                        .child(div().text_xs().text_color(theme.colors.muted_foreground).child(hint))
                         .child(chips)
                 }
                 3 => {
@@ -702,21 +728,22 @@ impl ConnectionDialogState {
                             )
                             .child(div().text_xs().text_color(theme.colors.info).child(env_summary)),
                     );
-                    // 安全策略覆盖（自绘开关；覆盖环境默认后标记"已覆盖"）。
+                    // 安全策略覆盖：清单来自 `environment_policies`（当前选中环境），覆盖键存策略类型。
                     let sec_rows = {
-                        let sec_outer = sec_overrides.clone();
-                        let sec_ref = sec_overrides.borrow();
+                        let keys_outer = sec_overrides.clone();
+                        let policies = env_policies.borrow().clone();
+                        let keys = keys_outer.borrow().clone();
                         let mut rows = div().v_flex().gap_1();
-                        for (i, item) in POLICY_ITEMS.iter().enumerate() {
-                            let on = sec_ref.get(i).copied().unwrap_or(false);
-                            let idx = i;
-                            let sec_overrides = sec_outer.clone();
+                        for (p_type, label, summary) in policies.iter() {
+                            let on = keys.iter().any(|k| k == p_type);
+                            let p_type_click = p_type.clone();
+                            let state_click = state.clone();
                             let entity = entity.clone();
                             rows = rows.child(
                                 div().h_flex().items_center().gap_2()
                                     .child(
                                         div()
-                                            .id(ElementId::Name(SharedString::from(format!("sec-{idx}"))))
+                                            .id(ElementId::Name(SharedString::from(format!("sec-{p_type}"))))
                                             .cursor_pointer()
                                             .w_8()
                                             .h(rems(1.125))
@@ -724,9 +751,7 @@ impl ConnectionDialogState {
                                             .bg(if on { theme.colors.primary } else { theme.colors.border })
                                             .relative()
                                             .on_click(move |_, _, app| {
-                                                let mut s = sec_overrides.borrow_mut();
-                                                if let Some(v) = s.get_mut(idx) { *v = !*v; }
-                                                drop(s);
+                                                state_click.toggle_policy_override(&p_type_click);
                                                 entity.update(app, |_, cx| cx.notify());
                                             })
                                             .child(
@@ -742,7 +767,11 @@ impl ConnectionDialogState {
                                                     .child(""),
                                             ),
                                     )
-                                    .child(div().text_xs().child(*item))
+                                    .child(div().text_xs().child(label.clone()))
+                                    .child(
+                                        div().text_xs().text_color(theme.colors.muted_foreground)
+                                            .child(format!("（{summary}）")),
+                                    )
                                     .child(
                                         if on {
                                             div().text_xs().text_color(theme.colors.info).child("已覆盖")
@@ -750,6 +779,12 @@ impl ConnectionDialogState {
                                             div().text_xs().text_color(theme.colors.muted_foreground).child("默认")
                                         },
                                     ),
+                            );
+                        }
+                        if policies.is_empty() {
+                            rows = rows.child(
+                                div().text_xs().text_color(theme.colors.muted_foreground)
+                                    .child("无可覆盖策略：请先在上方选择环境（策略清单来自 environment_policies）"),
                             );
                         }
                         rows

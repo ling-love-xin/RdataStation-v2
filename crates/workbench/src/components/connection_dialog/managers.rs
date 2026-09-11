@@ -651,15 +651,9 @@ pub(crate) fn refresh_policy_items(env_name: &str, mgr: &Rc<RefCell<ManagerWorks
             Ok::<_, shared::error::CoreError>(
                 ps.iter()
                     .map(|p| {
-                        let pos = POLICY_KEYS
-                            .iter()
-                            .position(|k| k == &p.policy_type)
-                            .unwrap_or(0);
-                        let label = POLICY_ITEMS
-                            .get(pos)
-                            .copied()
-                            .unwrap_or(&p.policy_type)
-                            .to_string();
+                        // 直接按库里的 `policy_type` 取标签（旧实现把它当 POLICY_KEYS 下标 →
+                        // `position()` 永远 None，所有策略都被错标成「只读连接」）。
+                        let label = policy_type_label(&p.policy_type);
                         (label, p.id.clone(), p.enabled)
                     })
                     .collect::<Vec<_>>(),
@@ -670,7 +664,10 @@ pub(crate) fn refresh_policy_items(env_name: &str, mgr: &Rc<RefCell<ManagerWorks
     let _ = cx;
 }
 
-/// 新建/更新环境策略（按环境名定位 environment_id；类型标签 → POLICY_KEYS 落库）。
+/// 新建/更新环境策略（按环境名定位 environment_id；中文标签 → `policy_type` 落库）。
+///
+/// 注意：此处只能新建「策略类型的空模板」（`policy_config = NULL`）——具体配置项编辑待环境策略
+/// 编辑器实现；结果行会明确提示，**不替库编造配置值**。
 pub(crate) fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, editing: Option<&str>) -> String {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -680,12 +677,8 @@ pub(crate) fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, edi
     let Some(db) = db else {
         return "全局库未初始化".into();
     };
-    let pos = POLICY_ITEMS.iter().position(|p| *p == label).unwrap_or(0);
-    let ptype = POLICY_KEYS
-        .get(pos)
-        .copied()
-        .unwrap_or("read_only")
-        .to_string();
+    // 标签 → 策略类型（security / schema / performance / audit / ui；未知标签原样写回）。
+    let ptype = policy_type_from_label(label.trim());
 
     let outcome = rt.block_on(async {
         use shared::error::CommonError;
@@ -709,7 +702,7 @@ pub(crate) fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, edi
         let policy = engine::persistence::env_store::EnvironmentPolicy {
             id,
             environment_id: env_id,
-            policy_type: ptype,
+            policy_type: ptype.clone(),
             policy_config: None,
             enabled,
             created_at: String::new(),
@@ -722,10 +715,13 @@ pub(crate) fn upsert_policy_item(env_name: &str, label: &str, enabled: bool, edi
     });
 
     match outcome {
-        Ok(()) => format!(
-            "保存成功：{label}（{}）",
-            if enabled { "启用" } else { "停用" }
-        ),
+        Ok(()) => match editing {
+            Some(_) => format!(
+                "保存成功：{label}（{}）",
+                if enabled { "启用" } else { "停用" }
+            ),
+            None => format!("已创建「{label}」空策略模板（策略类型 {ptype}）：具体配置项待策略编辑器实现"),
+        },
         Err(e) => format!("保存失败: {e}"),
     }
 }

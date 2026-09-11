@@ -339,6 +339,7 @@ button{font-family:inherit;}
             <div class="proj-menu" id="projMenu">
               <div class="pm-row" data-proj="演示项目" data-path="D:\RDSProjects\演示项目"><span class="pm-name">演示项目</span><span class="pm-path">D:\RDSProjects\演示项目</span></div>
               <div class="pm-row" data-proj="数据仓库" data-path="D:\RDSProjects\数据仓库"><span class="pm-name">数据仓库</span><span class="pm-path">D:\RDSProjects\数据仓库</span></div>
+              <div class="pm-row pm-new" id="projNone">不需要项目（仅全局）</div>
               <div class="pm-row pm-new" id="projOpen">打开现有目录…</div>
               <div class="pm-row pm-new" id="projNew">＋ 新增项目</div>
             </div>
@@ -470,16 +471,17 @@ button{font-family:inherit;}
         </div>
       </div>
 
-      <!-- ===== 能力 ===== -->
+      <!-- ===== 能力（清单来自 drivers.capabilities，此处为 MySQL 驱动真实声明值） ===== -->
       <div class="tab-pane" id="tab-capabilities">
         <div class="info-banner">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          能力由驱动声明（driver.capabilities），只读展示
+          sqlx：drivers.capabilities 声明 6 项 · 只读展示
         </div>
         <div class="cap-grid">
-          <span class="cap-chip ok">数据库导航</span><span class="cap-chip ok">SQL 执行</span>
-          <span class="cap-chip ok">DuckDB 联邦</span><span class="cap-chip">数据导出</span>
-          <span class="cap-chip">Mock 生成</span><span class="cap-chip">资源分析</span>
+          <span class="cap-chip ok">数据库导航</span><span class="cap-chip ok">健康检查</span>
+          <span class="cap-chip ok">事务</span><span class="cap-chip ok">索引分析</span>
+          <span class="cap-chip ok">SQL 补全</span><span class="cap-chip ok">表编辑器</span>
+          <span class="cap-chip">分析查询</span><span class="cap-chip">联邦查询</span>
         </div>
       </div>
 
@@ -740,6 +742,14 @@ button{font-family:inherit;}
     e.stopPropagation();
     projMenu.classList.remove('on');
     demo('演示：选中「打开现有目录…」→ 打开项目目录选择（用于不在最近列表中的本机项目）');
+  });
+  document.getElementById('projNone').addEventListener('click',function(e){
+    e.stopPropagation();
+    projMenu.classList.remove('on');
+    // 与实现一致：切作用域到「仅全局」，项目栏随之禁用。
+    document.querySelectorAll('#scopeToggle button').forEach(function(x){x.classList.toggle('on', x.getAttribute('data-scope')==='global');});
+    syncProjectSel();
+    demo('演示：选中「不需要项目（仅全局）」→ 作用域切为仅全局（项目作用域必须有项目，不停在无效态）');
   });
   document.addEventListener('click',function(){projMenu.classList.remove('on');});
 

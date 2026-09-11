@@ -119,7 +119,9 @@ pub struct ConnectionDraft {
     pub active_tab: usize,
     pub hops: Vec<Hop>,
     pub props: Vec<(String, String)>,
-    pub sec_overrides: Vec<bool>,
+    /// 策略覆盖勾选（存 `environment_policies.policy_type`；旧草稿的布尔数组解析失败即忽略；
+    /// 数据库列名仍为 `sec_overrides_json`，保留以兼容既有迁移）。
+    pub sec_overrides: Vec<String>,
     pub auth_ref: Option<String>,
     pub network_ref: Option<String>,
     pub env: Option<String>,
@@ -130,7 +132,7 @@ impl ConnectionDraft {
     pub(crate) fn empty() -> Self {
         Self {
             duckdb_fed: true,
-            sec_overrides: vec![true, true, false, true, true, false],
+            sec_overrides: Vec::new(),
             ..Default::default()
         }
     }
@@ -291,7 +293,7 @@ impl ConnectionDialogState {
             active_tab: self.active_tab.get(),
             hops: self.hops.borrow().clone(),
             props: self.props.borrow().clone(),
-            sec_overrides: self.sec_overrides.borrow().clone(),
+            sec_overrides: self.policy_override_keys.borrow().clone(),
             auth_ref: self
                 .auth_ref
                 .read(cx)
@@ -408,7 +410,9 @@ impl ConnectionDialogState {
         self.active_tab.set(d.active_tab);
         *self.hops.borrow_mut() = d.hops;
         *self.props.borrow_mut() = d.props;
-        *self.sec_overrides.borrow_mut() = d.sec_overrides;
+        *self.policy_override_keys.borrow_mut() = d.sec_overrides;
+        // 切到新环境后策略清单需重查（否则勾选项与环境的真实策略不一致）。
+        *self.env_policies_loaded_for.borrow_mut() = None;
     }
 
     /// 暂存列表「+ 添加」：追加空草稿并选中（规则 2）。
