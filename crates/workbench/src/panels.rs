@@ -2473,7 +2473,16 @@ impl Render for EditorPanel {
                                     .id("delete-connection")
                                     .cursor_pointer()
                                     .on_click(move |_, _, app| {
-                                        match crate::services::workspace_loader::delete_connection(&selected_id) {
+                                        // 项目作用域删除需要当前项目根（未打开项目时传 None）。
+                                        let project_root = shared
+                                            .project
+                                            .borrow()
+                                            .as_ref()
+                                            .map(|p| p.root.to_string_lossy().to_string());
+                                        match crate::services::workspace_loader::delete_connection(
+                                            &selected_id,
+                                            project_root.as_deref(),
+                                        ) {
                                             Ok(()) => {
                                                 let (items, _) =
                                                     crate::services::workspace_loader::load_persisted_connections();
@@ -2508,8 +2517,7 @@ impl Render for EditorPanel {
         if let Some(item) = self.shared.selected_connection() {
             if item.use_duckdb_fed {
                 if self.shared.nav_for.borrow().as_deref() != Some(item.id.as_str()) {
-                    let dir = crate::services::workspace_loader::default_global_dir();
-                    let path = dir.join("global.duckdb");
+                    let path = crate::services::workspace_loader::global_analysis_db_path();
                     let tree = crate::services::db_navigator::load_navigator_tree(&path)
                         .unwrap_or_default();
                     *self.shared.nav_tables.borrow_mut() = tree;
@@ -2620,9 +2628,8 @@ impl Render for EditorPanel {
                                             return;
                                         }
                                         let sql = sql_state.read(app).value().to_string();
-                                        let dir =
-                                            crate::services::workspace_loader::default_global_dir();
-                                        let path = dir.join("global.duckdb");
+                                        let path =
+                                            crate::services::workspace_loader::global_analysis_db_path();
                                         let ok = match crate::services::query_runner::execute_sql(
                                             &path, &sql,
                                         ) {

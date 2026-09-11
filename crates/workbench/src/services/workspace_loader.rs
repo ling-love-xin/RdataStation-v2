@@ -58,12 +58,15 @@ pub fn load_persisted_connections_from(dir: &Path) -> (Vec<ConnectionItem>, Opti
 ///
 /// 服务未就绪时返回错误，不做"只删 global 表"的静默降级——
 /// 否则 P_/GP_ 项目连接会表现为删掉了、实则仍在项目库中。
-pub fn delete_connection(conn_id: &str) -> Result<(), String> {
+///
+/// `project_path` 为当前项目根（含 .RSMETA）；项目作用域连接必需，
+/// 未打开项目时传 `None`（仅全局连接可删）。
+pub fn delete_connection(conn_id: &str, project_path: Option<&str>) -> Result<(), String> {
     let service = crate::services::data_source_service::DataSourceService::global()
         .map_err(|e| format!("服务未就绪: {e}"))?;
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
     runtime
-        .block_on(service.delete(conn_id, None))
+        .block_on(service.delete(conn_id, project_path))
         .map(|_| ())
         .map_err(|e| e.to_string())
 }

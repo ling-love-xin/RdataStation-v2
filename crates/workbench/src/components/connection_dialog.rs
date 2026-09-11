@@ -652,6 +652,19 @@ impl ConnectionDialogState {
         if let Some(id) = &editing_id {
             self.load_for_edit(id, window, cx);
         }
+        // 当前项目会话接入（C2）：项目根自动预填，项目作用域无需手输；
+        // 已填值（如编辑回读）不覆盖。
+        let session_root = shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|p| p.root.to_string_lossy().to_string());
+        if let Some(root) = session_root {
+            if self.project_path.read(cx).value().trim().is_empty() {
+                self.project_path
+                    .update(cx, |s, cx| s.set_value(root, window, cx));
+            }
+        }
         let name = self.name.clone();
         let url = self.url.clone();
         let user = self.user.clone();

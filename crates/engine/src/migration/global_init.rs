@@ -132,15 +132,24 @@ pub async fn initialize_global_system() -> Result<(), CoreError> {
     .await?;
 
     // 存储到全局实例
-    GLOBAL_DB_MANAGER.set(manager).map_err(|_| {
-        CoreError::common(CommonError::General(
-            "Global database manager already initialized".to_string(),
-        ))
-    })?;
+    install_global_db_manager(manager)?;
 
     tracing::info!("Global database manager initialized successfully");
 
     Ok(())
+}
+
+/// 注入全局库管理器（测试 / 嵌入场景；只能设置一次）。
+///
+/// 与 `initialize_global_system` 互斥：后到者返回错误。
+/// 集成测试可用临时目录构造管理器后注入，从而覆盖
+/// `DataSourceService::global()` 等生产单例路径。
+pub fn install_global_db_manager(manager: GlobalDatabaseManager) -> Result<(), CoreError> {
+    GLOBAL_DB_MANAGER.set(manager).map_err(|_| {
+        CoreError::common(CommonError::General(
+            "Global database manager already initialized".to_string(),
+        ))
+    })
 }
 
 /// 获取全局系统数据库管理器实例
