@@ -15,7 +15,7 @@ use engine::driver::traits::{SchemaObject, SchemaObjectKind};
 use shared::error::CoreError;
 
 use crate::metadata_service::MetadataService;
-use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath};
+use crate::model::{NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, PropertyRef};
 
 /// 无 Catalog 层级时的退化容器名（SQLite / DuckDB 等）。
 const FALLBACK_CONTAINER: &str = "main";
@@ -72,6 +72,15 @@ impl NavigatorService {
                 let path = NavPath::Catalog {
                     catalog: name.clone(),
                 };
+                let prop = PropertyRef {
+                    conn_id: conn_id.to_string(),
+                    source: NavSource::from_conn_id(conn_id),
+                    catalog: Some(name.clone()),
+                    schema: None,
+                    parent: None,
+                    name: name.clone(),
+                    kind: PropertyKind::Catalog,
+                };
                 NavNode::new(
                     NavNode::child_key(conn_id, &[name.as_str()]),
                     name,
@@ -80,6 +89,7 @@ impl NavigatorService {
                     true,
                 )
                 .with_expand_path(path)
+                .with_property(prop)
             })
             .collect())
     }
@@ -105,6 +115,15 @@ impl NavigatorService {
                     catalog: catalog.to_string(),
                     schema: name.clone(),
                 };
+                let prop = PropertyRef {
+                    conn_id: conn_id.to_string(),
+                    source: NavSource::from_conn_id(conn_id),
+                    catalog: Some(catalog.to_string()),
+                    schema: Some(name.clone()),
+                    parent: None,
+                    name: name.clone(),
+                    kind: PropertyKind::Schema,
+                };
                 NavNode::new(
                     NavNode::child_key(conn_id, &[catalog, name.as_str()]),
                     name,
@@ -113,6 +132,7 @@ impl NavigatorService {
                     true,
                 )
                 .with_expand_path(path)
+                .with_property(prop)
             })
             .collect())
     }
@@ -179,8 +199,27 @@ impl NavigatorService {
                 };
                 let name = obj.name;
                 let key = NavNode::child_key(conn_id, &[catalog, schema, name.as_str()]);
-                let node = NavNode::new(key, name.clone(), conn_id, kind, has_children)
+                let kind_prop = if has_children {
+                    Some(PropertyRef {
+                        conn_id: conn_id.to_string(),
+                        source: NavSource::from_conn_id(conn_id),
+                        catalog: Some(catalog.to_string()),
+                        schema: Some(schema.to_string()),
+                        parent: None,
+                        name: name.clone(),
+                        kind: match folder {
+                            NavFolder::Views => PropertyKind::View,
+                            _ => PropertyKind::Table,
+                        },
+                    })
+                } else {
+                    None
+                };
+                let mut node = NavNode::new(key, name.clone(), conn_id, kind, has_children)
                     .with_comment(obj.comment);
+                if let Some(prop) = kind_prop {
+                    node = node.with_property(prop);
+                }
                 if has_children {
                     node.with_expand_path(NavPath::Table {
                         catalog: catalog.to_string(),
@@ -210,6 +249,15 @@ impl NavigatorService {
             .into_iter()
             .map(|col| {
                 let key = NavNode::child_key(conn_id, &[catalog, schema, table, col.name.as_str()]);
+                let prop = PropertyRef {
+                    conn_id: conn_id.to_string(),
+                    source: NavSource::from_conn_id(conn_id),
+                    catalog: Some(catalog.to_string()),
+                    schema: Some(schema.to_string()),
+                    parent: Some(table.to_string()),
+                    name: col.name.clone(),
+                    kind: PropertyKind::Column,
+                };
                 NavNode::new(
                     key,
                     col.name,
@@ -223,6 +271,7 @@ impl NavigatorService {
                     false,
                 )
                 .with_comment(col.comment)
+                .with_property(prop)
             })
             .collect())
     }
@@ -259,5 +308,15 @@ impl NavigatorService {
             NavFolder::Sequences => self.metadata.list_sequences(conn_id, catalog, schema).await,
             NavFolder::Triggers => self.metadata.list_triggers(conn_id, catalog, schema).await,
         }
+    }
+
+    /// 加载对象属性（属性面板用；连接 / Catalog / Schema 无需查询）。
+    pub async fn load_properties(
+        &self,
+        ref_: &PropertyRef,
+        conn_label: &str,
+        driver: &str,
+    ) -> Result<crate::property_panel::ObjectProperties, CoreError> {
+        crate::property_panel::load_properties(&self.metadata, ref_, conn_label, driver).await
     }
 }

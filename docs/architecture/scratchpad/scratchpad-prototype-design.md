@@ -1,6 +1,6 @@
 # 草稿箱模块 · 原型设计（项目工作区）
 
-> 状态：**模块根语义 + 项目级回收站 + 面板首切片已落地**（2026-09-11） · 关联文件：`scratchpad-prototype.html`（可交互原型）、`scratchpad-dev-plan.md`（开发方案与进度）
+> 状态：**模块根语义 + 项目级回收站 + 面板自身闭环（新建/重命名/删除→回收站+撤销/过滤/引用移除）已落地**（2026-09-11） · 关联文件：`scratchpad-prototype.html`（可交互原型）、`scratchpad-dev-plan.md`（开发方案与进度）
 > 参考基准：v1 实现（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）与设计（`v1/docs/backend/SCRATCHPAD_DESIGN.md`、`SCRATCHPAD_SCHEMA.md`、`v1/docs/frontend/SCRATCHPAD.md`）
 > 布局服从 `docs/architecture/layout/layout-design.md`（五段布局，左侧 Dock 240px，`LeftPanel::Draft`）；配色服从 `docs/architecture/theme/theme-design.md`（RDS Light/Dark，`assets/themes/rds-theme.json`）
 > 技术栈：GPUI（gpui-kit 0.6），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
@@ -231,7 +231,7 @@ v1 使用黄色 `<mark>`。若沿用标准字段，可用 `accent.background`（
 
 | 原型元素 | GPUI 落点 |
 | --- | --- |
-| 面板容器（草稿箱） | `crates/workbench/src/components/scratchpad_panel.rs`（`ScratchpadPanel: Entity<T>`） |
+| 面板容器（草稿箱） | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `ScratchpadView` / `render_scratchpad`） |
 | 左 Dock 内容装配 | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `LeftPanel::Draft` 分支改调草稿箱视图） |
 | 面板头 / 工具栏 | gpui-kit `Button`（`.icon().ghost()` 小尺寸） |
 | 搜索输入 | `Input` + `InputState`（`cx.new(InputState::new)`） |

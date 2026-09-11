@@ -16,7 +16,7 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::{ActiveTheme, IconName};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::EventEmitter;
@@ -24,9 +24,13 @@ use gpui_kit::*;
 
 use crate::components::connection_dialog;
 
-use scratchpad::{ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore};
+use scratchpad::{
+    ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore, TrashEntry,
+};
 
-use database::model::{NavNode, NavNodeKind, NavPath, NavScope, NavSource};
+use database::model::{
+    NavNode, NavNodeKind, NavPath, NavScope, NavSource, PropertyKind, PropertyRef,
+};
 use database::navigator_service::NavigatorService;
 
 use crate::services::db_navigator::NavTable;
@@ -60,6 +64,8 @@ pub struct Shared {
     pub open_edit: Rc<RefCell<Option<String>>>,
     /// P0：当前项目会话（草稿箱根 / 项目作用域连接 / 标题栏项目名共用）。
     pub project: Rc<RefCell<Option<crate::services::project_session::ProjectSession>>>,
+    /// Phase B：属性面板请求（数据源导航双击对象 → 编辑区右侧面板）。
+    pub property_target: Rc<RefCell<Option<PropertyRequest>>>,
 }
 
 impl Shared {
@@ -86,6 +92,7 @@ impl Shared {
             sql_for: Rc::new(RefCell::new(None)),
             open_edit: Rc::new(RefCell::new(None)),
             project: Rc::new(RefCell::new(None)),
+            property_target: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -117,78 +124,121 @@ pub struct SidebarPanel {
     scratchpad: Rc<RefCell<ScratchpadView>>,
     /// M4 数据源导航面板状态（懒加载对象树）。
     database_nav: Rc<RefCell<DatabaseNavView>>,
+    /// 数据源导航搜索框（懒创建）。
+    nav_search: Option<Entity<InputState>>,
+}
+
+/// 内联编辑（新建 / 重命名）。
+#[derive(Clone)]
+enum ScratchpadEdit {
+    NewFile,
+    NewFolder,
+    Rename { path: String },
+}
+
+/// 删除撤销（底部撤销栏）。
+#[derive(Clone)]
+struct ScratchpadUndo {
+    label: String,
+    trash_id: String,
 }
 
 /// 草稿箱面板视图状态。
 ///
-/// 数据来自 `rds-scratchpad` 存储，根目录 = 当前项目会话的根（`Shared::project`）。
-/// 首个切片为只读树（展开/折叠/选中/新建/刷新），重操作（重命名/删除/搜索/引用）后续补齐。
+/// 数据来自 `rds-scratchpad` 存储；根 = 当前项目会话下的模块目录 `{project}/scratchpad/`。
+/// 本次闭环：新建（内联）/重命名/删除→回收站+撤销/回收站恢复与清空/文件名过滤/外部引用移除。
 #[derive(Default)]
 struct ScratchpadView {
     /// 是否已尝试加载（首次渲染触发一次）。
     loaded: bool,
     /// 加载错误（未打开项目 / 运行时或存储错误）。
     error: Option<String>,
-    /// 项目根下的条目树（depth=4 全量；懒加载后续再做）。
+    /// 模块根下的条目树（depth=4 全量；懒加载后续再做）。
     entries: Vec<ScratchpadEntry>,
     /// 外部引用（来自草稿箱配置，含路径可用性）。
     external_refs: Vec<ExternalReferenceStatus>,
+    /// 项目级回收站条目。
+    trash: Vec<TrashEntry>,
+    /// 回收站分组是否展开。
+    trash_expanded: bool,
     /// 已展开的文件夹路径集合。
     expanded: HashSet<String>,
     /// 当前选中条目路径。
     selected: Option<String>,
-    /// 回收站条目数。
-    trash_count: usize,
+    /// 内联编辑状态（新建/重命名）。
+    edit: Option<ScratchpadEdit>,
+    /// 删除撤销栏。
+    undo: Option<ScratchpadUndo>,
+    /// 内联名称输入（懒创建）。
+    name_input: Option<Entity<InputState>>,
+    _name_sub: Option<Subscription>,
+    /// 文件名过滤输入（懒创建）。
+    search_input: Option<Entity<InputState>>,
+    _search_sub: Option<Subscription>,
 }
 
-/// 将条目树按展开状态压平成 `(缩进层级, 条目)` 行序列。
+/// 条目是否命中过滤（自身命中或子树命中）。
+fn scratchpad_entry_matches(entry: &ScratchpadEntry, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    if entry.name.to_lowercase().contains(filter) {
+        return true;
+    }
+    entry
+        .children
+        .as_ref()
+        .map(|kids| kids.iter().any(|c| scratchpad_entry_matches(c, filter)))
+        .unwrap_or(false)
+}
+
+/// 将条目树按展开状态压平成 `(缩进层级, 条目)` 行序列；有过滤时自动展开命中子树。
 fn flatten_scratchpad(
     entries: &[ScratchpadEntry],
     depth: usize,
     expanded: &HashSet<String>,
+    filter: &str,
     out: &mut Vec<(usize, ScratchpadEntry)>,
 ) {
     for entry in entries {
+        if !scratchpad_entry_matches(entry, filter) {
+            continue;
+        }
         let key = entry.path.to_string_lossy().to_string();
         let is_folder = matches!(entry.kind, ScratchpadEntryKind::Folder);
         out.push((depth, entry.clone()));
-        if is_folder && expanded.contains(&key) {
+        let open = !filter.is_empty() || expanded.contains(&key);
+        if is_folder && open {
             if let Some(children) = &entry.children {
-                flatten_scratchpad(children, depth + 1, expanded, out);
+                flatten_scratchpad(children, depth + 1, expanded, filter, out);
             }
         }
     }
 }
 
-/// 在项目根下生成一个不冲突的文件/文件夹名（`未命名.sql`、`未命名_1.sql` …）。
-fn unique_child_name(root: &std::path::Path, stem: &str, ext: &str) -> String {
-    for i in 0..1000 {
-        let name = if i == 0 {
-            format!("{stem}{ext}")
-        } else {
-            format!("{stem}_{i}{ext}")
-        };
-        if !root.join(&name).exists() {
-            return name;
-        }
-    }
-    format!("{stem}_999{ext}")
-}
-
 /// 扩展名 → 图标点色（复用主题标准色，代码零裸色）。
-fn scratchpad_icon_color(theme: &gpui_kit::component::Theme, name: &str) -> Hsla {
+///
+/// 颜色以参数传入（局部拷贝），避免在渲染函数里长期持有 `theme` 借用，
+/// 便于后续调用 `&mut cx` 方法。
+fn scratchpad_icon_color(
+    name: &str,
+    info: Hsla,
+    success: Hsla,
+    primary: Hsla,
+    muted: Hsla,
+) -> Hsla {
     let ext = std::path::Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
     match ext.as_str() {
-        "sql" => theme.colors.info,
-        "py" => theme.colors.success,
+        "sql" => info,
+        "py" => success,
         "csv" | "tsv" | "parquet" | "xlsx" | "xls" | "json" | "ndjson" | "db" | "duckdb" => {
-            theme.colors.primary
+            primary
         }
-        _ => theme.colors.muted_foreground,
+        _ => muted,
     }
 }
 
@@ -200,6 +250,8 @@ fn scratchpad_icon_color(theme: &gpui_kit::component::Theme, name: &str) -> Hsla
 struct DatabaseNavView {
     /// 当前来源标签页（项目 / 全局）。
     scope: NavScope,
+    /// 搜索过滤词（本地筛选）。
+    filter: String,
     /// 已展开节点 key。
     expanded: HashSet<String>,
     /// 父节点 key → 已加载子节点。
@@ -210,6 +262,8 @@ struct DatabaseNavView {
     errors: HashMap<String, String>,
     /// 本会话运行时已连接的连接 ID。
     connected: HashSet<String>,
+    /// 已从库中恢复过导航状态的连接 ID。
+    state_loaded: HashSet<String>,
 }
 
 /// 懒加载导航子节点（阻塞式，与现有服务调用模式一致；Phase C 迁后台任务 + 缓存编排）。
@@ -232,6 +286,37 @@ fn nav_kind_color(kind: &NavNodeKind, theme: &gpui_kit::component::Theme) -> Hsl
     }
 }
 
+/// 搜索过滤：节点名命中，或已加载子节点中任一命中。
+fn nav_node_matches(
+    children: &HashMap<String, Vec<NavNode>>,
+    node: &NavNode,
+    filter: &str,
+) -> bool {
+    if node.name.to_lowercase().contains(filter) {
+        return true;
+    }
+    match children.get(&node.key) {
+        Some(kids) => kids.iter().any(|c| nav_node_matches(children, c, filter)),
+        None => false,
+    }
+}
+
+/// 属性面板请求（导航双击对象时发出，由编辑区右侧面板渲染）。
+#[derive(Clone)]
+pub struct PropertyRequest {
+    pub property: PropertyRef,
+    pub conn_label: String,
+    pub driver: String,
+}
+
+/// 属性面板状态（懒加载一次，按请求 key 失效重载）。
+#[derive(Default)]
+struct PropertyState {
+    loaded_for: Option<String>,
+    props: Option<database::property_panel::ObjectProperties>,
+    error: Option<String>,
+}
+
 impl SidebarPanel {
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
         Self {
@@ -239,6 +324,7 @@ impl SidebarPanel {
             focus_handle: cx.focus_handle(),
             scratchpad: Rc::new(RefCell::new(ScratchpadView::default())),
             database_nav: Rc::new(RefCell::new(DatabaseNavView::default())),
+            nav_search: None,
         }
     }
 
@@ -256,7 +342,7 @@ impl SidebarPanel {
         view.error = None;
         view.entries.clear();
         view.external_refs.clear();
-        view.trash_count = 0;
+        view.trash.clear();
 
         let Some(root) = root else {
             view.error = Some("未打开项目：草稿箱根即项目目录，请先打开项目。".to_string());
@@ -283,10 +369,234 @@ impl SidebarPanel {
             Ok((entries, refs, trash)) => {
                 view.entries = entries;
                 view.external_refs = refs;
-                view.trash_count = trash.len();
+                view.trash = trash;
             }
             Err(e) => view.error = Some(format!("加载草稿箱失败: {e}")),
         }
+    }
+
+    /// 构建草稿箱存储 + 运行时（未打开项目时报错）。
+    fn scratchpad_store(&self) -> Result<(ScratchpadStore, tokio::runtime::Runtime), String> {
+        let root = self
+            .shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|s| s.root.clone())
+            .ok_or_else(|| "未打开项目".to_string())?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+        Ok((ScratchpadStore::new(root), rt))
+    }
+
+    /// 懒创建草稿箱输入框（名称内联编辑 + 文件名过滤）并订阅事件。
+    fn ensure_scratchpad_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scratchpad.borrow().name_input.is_some() {
+            return;
+        }
+        let name_input = cx.new(|cx| InputState::new(window, cx));
+        let name_sub =
+            cx.subscribe_in(&name_input, window, |this, _e, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::PressEnter { .. }) {
+                    this.commit_scratchpad_edit(window, cx);
+                }
+            });
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件…"));
+        let search_sub =
+            cx.subscribe_in(&search_input, window, |_this, _e, ev: &InputEvent, _w, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
+        let mut view = self.scratchpad.borrow_mut();
+        view.name_input = Some(name_input);
+        view._name_sub = Some(name_sub);
+        view.search_input = Some(search_input);
+        view._search_sub = Some(search_sub);
+    }
+
+    /// 开始内联编辑（新建 / 重命名）。
+    fn start_scratchpad_edit(
+        &mut self,
+        edit: ScratchpadEdit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ensure_scratchpad_inputs(window, cx);
+        let initial = match &edit {
+            ScratchpadEdit::Rename { path } => std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        self.scratchpad.borrow_mut().edit = Some(edit);
+        if let Some(input) = self.scratchpad.borrow().name_input.clone() {
+            input.update(cx, |s, cx| s.set_value(initial, window, cx));
+            let handle = input.read(cx).focus_handle(cx);
+            handle.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// 取消内联编辑。
+    fn cancel_scratchpad_edit(&mut self, cx: &mut Context<Self>) {
+        self.scratchpad.borrow_mut().edit = None;
+        cx.notify();
+    }
+
+    /// 提交内联编辑（新建 / 重命名）。
+    fn commit_scratchpad_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = self.scratchpad.borrow_mut().edit.take() else {
+            return;
+        };
+        let name = self
+            .scratchpad
+            .borrow()
+            .name_input
+            .as_ref()
+            .map(|i| i.read(cx).value().trim().to_string())
+            .unwrap_or_default();
+        if name.is_empty() {
+            cx.notify();
+            return;
+        }
+
+        let outcome = match self.scratchpad_store() {
+            Ok((store, rt)) => {
+                let result = match &edit {
+                    ScratchpadEdit::NewFile => rt.block_on(store.create_entry(&name, None, false)),
+                    ScratchpadEdit::NewFolder => rt.block_on(store.create_entry(&name, None, true)),
+                    ScratchpadEdit::Rename { path } => rt.block_on(store.rename_entry(path, &name)),
+                };
+                result.map(|_| ()).map_err(|e| e.to_string())
+            }
+            Err(e) => Err(e),
+        };
+
+        let mut view = self.scratchpad.borrow_mut();
+        if let Some(input) = view.name_input.clone() {
+            input.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        match outcome {
+            Ok(()) => {
+                view.loaded = false;
+                view.error = None;
+            }
+            Err(e) => view.error = Some(format!("操作失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
+    }
+
+    /// 删除条目 → 项目级回收站，并记录撤销。
+    fn delete_scratchpad_entry(&mut self, relative_path: String, cx: &mut Context<Self>) {
+        let label = relative_path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&relative_path)
+            .to_string();
+
+        let delete_result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.delete_entry(&relative_path))
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+
+        match delete_result {
+            Ok(()) => {
+                // 刚删除的条目应是回收站中删除时间最新的一条（用于撤销）。
+                let trash_id = match self.scratchpad_store() {
+                    Ok((store, rt)) => rt
+                        .block_on(store.list_trash())
+                        .ok()
+                        .and_then(|v| v.into_iter().next())
+                        .map(|e| e.manifest.id),
+                    Err(_) => None,
+                };
+                let mut view = self.scratchpad.borrow_mut();
+                view.undo = trash_id.map(|trash_id| ScratchpadUndo { label, trash_id });
+                view.loaded = false;
+                view.error = None;
+            }
+            Err(e) => self.scratchpad.borrow_mut().error = Some(format!("删除失败: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// 撤销上一次删除（从回收站还原）。
+    fn undo_scratchpad_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(undo) = self.scratchpad.borrow().undo.clone() else {
+            return;
+        };
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.restore_from_trash(&undo.trash_id))
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        let mut view = self.scratchpad.borrow_mut();
+        view.undo = None;
+        match result {
+            Ok(()) => view.loaded = false,
+            Err(e) => view.error = Some(format!("撤销失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
+    }
+
+    /// 从回收站还原指定条目。
+    fn restore_scratchpad_trash(&mut self, trash_id: String, cx: &mut Context<Self>) {
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.restore_from_trash(&trash_id))
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        let mut view = self.scratchpad.borrow_mut();
+        match result {
+            Ok(()) => view.loaded = false,
+            Err(e) => view.error = Some(format!("还原失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
+    }
+
+    /// 清空回收站。
+    fn empty_scratchpad_trash(&mut self, cx: &mut Context<Self>) {
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt.block_on(store.empty_trash()).map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        let mut view = self.scratchpad.borrow_mut();
+        match result {
+            Ok(()) => {
+                view.loaded = false;
+                view.trash_expanded = false;
+            }
+            Err(e) => view.error = Some(format!("清空回收站失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
+    }
+
+    /// 移除外部引用。
+    fn remove_scratchpad_reference(&mut self, alias: String, cx: &mut Context<Self>) {
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.remove_external_reference(&alias))
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        let mut view = self.scratchpad.borrow_mut();
+        match result {
+            Ok(()) => view.loaded = false,
+            Err(e) => view.error = Some(format!("移除引用失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
     }
 
     /// 旧连接列表（保留供后续参考；正式导航见 `render_database_nav`）。
@@ -393,8 +703,22 @@ impl SidebarPanel {
         list
     }
 
-    /// 数据源导航面板（M4）：面板头 + 来源标签页 + 对象树。
-    fn render_database_nav(&self, cx: &mut Context<Self>) -> Div {
+    /// 数据源导航面板（M4）：面板头 + 来源标签页 + 搜索 + 对象树。
+    fn render_database_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        if self.nav_search.is_none() {
+            let state = cx.new(|cx| InputState::new(window, cx));
+            state.update(cx, |s, cx| {
+                s.set_placeholder("筛选数据源 / 表 / 列…", window, cx)
+            });
+            self.nav_search = Some(state);
+        }
+        let filter = self
+            .nav_search
+            .as_ref()
+            .map(|s| s.read(cx).value().to_string())
+            .unwrap_or_default();
+        self.database_nav.borrow_mut().filter = filter;
+
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
@@ -430,6 +754,11 @@ impl SidebarPanel {
 
         let body = self.render_nav_tree(scope, cx);
 
+        let mut search_row = div().v_flex().w_full().px_2().pb_2();
+        if let Some(input) = &self.nav_search {
+            search_row = search_row.child(Input::new(input));
+        }
+
         div()
             .v_flex()
             .w_full()
@@ -438,6 +767,7 @@ impl SidebarPanel {
             .pt(px(4.))
             .child(header)
             .child(tabs)
+            .child(search_row)
             .child(body)
     }
 
@@ -484,9 +814,10 @@ impl SidebarPanel {
             .child(div().h(px(2.)).w_full().bg(underline))
     }
 
-    /// 树主体：按当前标签页渲染连接节点。
+    /// 树主体：按当前标签页渲染连接节点（受搜索词过滤）。
     fn render_nav_tree(&self, scope: NavScope, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
+        let filter = self.database_nav.borrow().filter.to_lowercase();
         let mut column = div().v_flex().w_full().min_h_0().gap_1().px_1().pt(px(2.)).pb(px(4.));
         let conns: Vec<ConnectionItem> = self.shared.connections.borrow().iter().cloned().collect();
         let mut shown = 0usize;
@@ -494,7 +825,11 @@ impl SidebarPanel {
             if !scope.contains(NavSource::from_conn_id(&conn.id)) {
                 continue;
             }
+            if !filter.is_empty() && !conn.name.to_lowercase().contains(&filter) {
+                continue;
+            }
             shown += 1;
+            self.ensure_nav_state_loaded(&conn.id);
             column = column.child(self.render_connection_row(conn, cx));
         }
         if shown == 0 {
@@ -521,10 +856,16 @@ impl SidebarPanel {
         let danger = cx.theme().colors.danger;
         let pri = cx.theme().colors.primary;
 
-        let (expanded, connected, error, children) = {
+        let expanded = {
+            let view = self.database_nav.borrow();
+            view.expanded.contains(&conn.id)
+        };
+        if expanded {
+            self.ensure_nav_loaded(&conn.id, &conn.id, NavPath::Connection);
+        }
+        let (connected, error, children) = {
             let view = self.database_nav.borrow();
             (
-                view.expanded.contains(&conn.id),
                 view.connected.contains(&conn.id) || conn.connected,
                 view.errors.get(&conn.id).cloned(),
                 view.children.get(&conn.id).cloned().unwrap_or_default(),
@@ -556,7 +897,29 @@ impl SidebarPanel {
                 .on_click({
                     let entity = cx.entity();
                     let conn_id = conn_id.clone();
-                    move |_, _, app: &mut App| {
+                    let conn_name = conn.name.clone();
+                    let conn_driver = conn.driver.clone();
+                    move |ev, _, app| {
+                        if ev.click_count() >= 2 {
+                            let req = PropertyRequest {
+                                property: PropertyRef {
+                                    conn_id: conn_id.clone(),
+                                    source,
+                                    catalog: None,
+                                    schema: None,
+                                    parent: None,
+                                    name: conn_name.clone(),
+                                    kind: PropertyKind::Connection,
+                                },
+                                conn_label: conn_name.clone(),
+                                driver: conn_driver.clone(),
+                            };
+                            entity.update(app, |this, cx| {
+                                *this.shared.property_target.borrow_mut() = Some(req);
+                                cx.notify();
+                            });
+                            return;
+                        }
                         let conn_id = conn_id.clone();
                         entity.update(app, |this, cx| {
                             this.toggle_nav_node(&conn_id, &conn_id, NavPath::Connection);
@@ -664,19 +1027,52 @@ impl SidebarPanel {
             nav_kind_color(&node.kind, theme)
         };
 
-        let (expanded, error, children) = {
+        let filter = self.database_nav.borrow().filter.to_lowercase();
+        let expanded = {
             let view = self.database_nav.borrow();
+            view.expanded.contains(&node.key)
+        };
+        if expanded && node.has_children {
+            if let Some(p) = node.expand_path.clone() {
+                self.ensure_nav_loaded(&node.connection_id, &node.key, p);
+            }
+        }
+        let (skip, expanded_eff, error, children) = {
+            let view = self.database_nav.borrow();
+            let skip = !filter.is_empty() && !nav_node_matches(&view.children, node, &filter);
+            let expanded_now = view.expanded.contains(&node.key);
             (
-                view.expanded.contains(&node.key),
+                skip,
+                expanded_now || !filter.is_empty(),
                 view.errors.get(&node.key).cloned(),
                 view.children.get(&node.key).cloned().unwrap_or_default(),
             )
         };
+        if skip {
+            return div();
+        }
 
         let entity = cx.entity();
         let n_conn_id = node.connection_id.clone();
         let n_key = node.key.clone();
         let n_path = node.expand_path.clone();
+        let n_property = node.property.clone();
+        let n_conn_label = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|c| c.id == node.connection_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| node.connection_id.clone());
+        let n_driver = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|c| c.id == node.connection_id)
+            .map(|c| c.driver.clone())
+            .unwrap_or_default();
 
         let right_meta: Option<(String, bool)> = match &node.kind {
             NavNodeKind::Column {
@@ -718,7 +1114,7 @@ impl SidebarPanel {
                     .text_xs()
                     .text_color(muted)
                     .child(if node.has_children {
-                        if expanded {
+                        if expanded_eff {
                             "\u{25be}"
                         } else {
                             "\u{25b8}"
@@ -744,19 +1140,30 @@ impl SidebarPanel {
                     .child(meta),
             );
         }
-        if node.has_children {
-            row = row.on_click(move |_, _, app: &mut App| {
+        row = row.on_click(move |ev, _, app| {
+            if ev.click_count() >= 2 {
+                if let Some(p) = n_property.clone() {
+                    let req = PropertyRequest {
+                        property: p,
+                        conn_label: n_conn_label.clone(),
+                        driver: n_driver.clone(),
+                    };
+                    entity.update(app, |this, cx| {
+                        *this.shared.property_target.borrow_mut() = Some(req);
+                        cx.notify();
+                    });
+                    return;
+                }
+            }
+            if let Some(p) = n_path.clone() {
                 let conn_id = n_conn_id.clone();
                 let key = n_key.clone();
-                let path = n_path.clone();
                 entity.update(app, |this, cx| {
-                    if let Some(p) = path {
-                        this.toggle_nav_node(&conn_id, &key, p);
-                    }
+                    this.toggle_nav_node(&conn_id, &key, p);
                     cx.notify();
                 });
-            });
-        }
+            }
+        });
         block = block.child(row);
 
         if let Some(err) = error {
@@ -769,7 +1176,7 @@ impl SidebarPanel {
                     .child(err),
             );
         }
-        if expanded {
+        if expanded_eff {
             for child in children {
                 block = block.child(self.render_nav_node(&child, depth + 1, cx));
             }
@@ -777,21 +1184,33 @@ impl SidebarPanel {
         block
     }
 
-    /// 展开 / 折叠节点；首次展开时懒加载子节点。
+    /// 展开 / 折叠节点；首次展开时懒加载子节点，并持久化展开态。
     fn toggle_nav_node(&self, conn_id: &str, key: &str, path: NavPath) {
-        {
+        let now_expanded = {
             let mut view = self.database_nav.borrow_mut();
             if view.expanded.contains(key) {
                 view.expanded.remove(key);
-                return;
+                false
+            } else {
+                view.expanded.insert(key.to_string());
+                true
             }
-            view.expanded.insert(key.to_string());
+        };
+        if now_expanded {
+            self.ensure_nav_loaded(conn_id, key, path);
+        }
+        self.save_nav_state_for(conn_id);
+    }
+
+    /// 懒加载子节点（已加载则跳过）。
+    fn ensure_nav_loaded(&self, conn_id: &str, key: &str, path: NavPath) {
+        {
+            let view = self.database_nav.borrow();
             if view.attempted.contains(key) {
                 return;
             }
-            view.attempted.insert(key.to_string());
         }
-
+        self.database_nav.borrow_mut().attempted.insert(key.to_string());
         let result = load_nav_children(conn_id, &path);
         let mut view = self.database_nav.borrow_mut();
         match result {
@@ -803,6 +1222,53 @@ impl SidebarPanel {
                 view.errors.insert(key.to_string(), e);
             }
         }
+    }
+
+    /// 当前项目根（项目 / 共享连接的导航状态落项目库）。
+    fn project_root(&self) -> Option<std::path::PathBuf> {
+        self.shared.project.borrow().as_ref().map(|p| p.root.clone())
+    }
+
+    /// 首次渲染某连接时，从库中恢复其展开态。
+    fn ensure_nav_state_loaded(&self, conn_id: &str) {
+        {
+            let view = self.database_nav.borrow();
+            if view.state_loaded.contains(conn_id) {
+                return;
+            }
+        }
+        let state =
+            crate::services::nav_runtime::load_nav_state(conn_id, self.project_root().as_deref());
+        let prefix = format!("{conn_id}/");
+        let mut view = self.database_nav.borrow_mut();
+        for key in state.expanded_keys {
+            if key == conn_id || key.starts_with(&prefix) {
+                view.expanded.insert(key);
+            }
+        }
+        view.state_loaded.insert(conn_id.to_string());
+    }
+
+    /// 持久化某连接的展开态。
+    fn save_nav_state_for(&self, conn_id: &str) {
+        let prefix = format!("{conn_id}/");
+        let keys: Vec<String> = {
+            let view = self.database_nav.borrow();
+            view.expanded
+                .iter()
+                .filter(|k| *k == conn_id || k.starts_with(&prefix))
+                .cloned()
+                .collect()
+        };
+        let state = database::model::NavState {
+            expanded_keys: keys,
+            ..Default::default()
+        };
+        let _ = crate::services::nav_runtime::save_nav_state(
+            conn_id,
+            self.project_root().as_deref(),
+            &state,
+        );
     }
 
     fn render_resources_placeholder(&self, fg: Hsla) -> Div {
@@ -844,14 +1310,76 @@ impl SidebarPanel {
             )
     }
 
-    /// 草稿箱面板（M5）：根 = 项目目录。
+    /// 内联编辑行（新建 / 重命名通用）。
+    fn render_scratchpad_edit_row(&self, depth: usize, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let muted = theme.colors.muted_foreground;
+        let primary = theme.colors.primary;
+
+        let Some(input) = self.scratchpad.borrow().name_input.clone() else {
+            return div();
+        };
+        let entity = cx.entity();
+
+        let commit = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.commit_scratchpad_edit(window, cx));
+            }
+        };
+        let cancel = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.cancel_scratchpad_edit(cx));
+            }
+        };
+
+        div()
+            .h_flex()
+            .items_center()
+            .w_full()
+            .h(px(26.))
+            .gap_1()
+            .px(px(4.))
+            .child(div().w(px(depth as f32 * 12.0)).flex_none())
+            .child(div().w(px(10.)).flex_none())
+            .child(div().flex_1().min_w_0().child(Input::new(&input).w_full()))
+            .child(
+                div()
+                    .id("sp-edit-ok")
+                    .h_flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(20.))
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(primary)
+                    .child("✓")
+                    .on_click(commit),
+            )
+            .child(
+                div()
+                    .id("sp-edit-cancel")
+                    .h_flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(20.))
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("✕")
+                    .on_click(cancel),
+            )
+    }
+
+    /// 草稿箱面板（M5）：根 = `{project}/scratchpad/`。
     ///
-    /// 首个切片：工具栏（新建文件/文件夹、刷新）+ 只读树（展开/折叠/选中）
-    /// + 外部引用/回收站分组 + 空态。重命名/删除/搜索/引用管理后续补齐。
-    fn render_scratchpad(&self, cx: &mut Context<Self>) -> Div {
+    /// 闭环：新建（内联）/重命名/删除→回收站+撤销栏/回收站恢复与清空/文件名过滤/外部引用移除。
+    fn render_scratchpad(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if !self.scratchpad.borrow().loaded {
             self.load_scratchpad();
         }
+        self.ensure_scratchpad_inputs(window, cx);
 
         let theme = cx.theme();
         let hover_bg = theme.colors.list_hover;
@@ -860,58 +1388,54 @@ impl SidebarPanel {
         let muted = theme.colors.muted_foreground;
         let folder_color = theme.colors.warning;
         let ref_color = theme.colors.info;
+        let primary = theme.colors.primary;
+        let info = theme.colors.info;
+        let success = theme.colors.success;
 
         let entity = cx.entity();
         let view_handle = self.scratchpad.clone();
 
-        let (rows, error, external_refs, trash_count, selected, expanded) = {
+        let (rows, error, external_refs, trash, trash_expanded, selected, expanded, edit, undo, filter) = {
             let view = self.scratchpad.borrow();
+            let filter = view
+                .search_input
+                .as_ref()
+                .map(|i| i.read(cx).value().to_lowercase().trim().to_string())
+                .unwrap_or_default();
             let mut flat = Vec::new();
-            flatten_scratchpad(&view.entries, 0, &view.expanded, &mut flat);
+            flatten_scratchpad(&view.entries, 0, &view.expanded, &filter, &mut flat);
             (
                 flat,
                 view.error.clone(),
                 view.external_refs.clone(),
-                view.trash_count,
+                view.trash.clone(),
+                view.trash_expanded,
                 view.selected.clone(),
                 view.expanded.clone(),
+                view.edit.clone(),
+                view.undo.clone(),
+                filter,
             )
         };
 
         // ── 工具栏（新建文件 / 新建文件夹 / 刷新）──
-        let new_file_click = {
-            let shared = self.shared.clone();
-            let view = view_handle.clone();
+        let start_new_file = {
             let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                if let Some(root) = shared.project.borrow().as_ref().map(|s| s.root.clone()) {
-                    let name = unique_child_name(&root, "未命名", ".sql");
-                    if let Ok(rt) = tokio::runtime::Runtime::new() {
-                        let store = ScratchpadStore::new(root);
-                        let _ = rt.block_on(store.create_entry(&name, None, false));
-                    }
-                    view.borrow_mut().loaded = false;
-                }
-                entity.update(app, |_, cx| cx.notify());
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.start_scratchpad_edit(ScratchpadEdit::NewFile, window, cx)
+                });
             }
         };
-        let new_folder_click = {
-            let shared = self.shared.clone();
-            let view = view_handle.clone();
+        let start_new_folder = {
             let entity = entity.clone();
-            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                if let Some(root) = shared.project.borrow().as_ref().map(|s| s.root.clone()) {
-                    let name = unique_child_name(&root, "新建文件夹", "");
-                    if let Ok(rt) = tokio::runtime::Runtime::new() {
-                        let store = ScratchpadStore::new(root);
-                        let _ = rt.block_on(store.create_entry(&name, None, true));
-                    }
-                    view.borrow_mut().loaded = false;
-                }
-                entity.update(app, |_, cx| cx.notify());
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.start_scratchpad_edit(ScratchpadEdit::NewFolder, window, cx)
+                });
             }
         };
-        let refresh_click = {
+        let refresh = {
             let view = view_handle.clone();
             let entity = entity.clone();
             move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
@@ -948,10 +1472,16 @@ impl SidebarPanel {
             .w_full()
             .px(px(6.))
             .py(px(4.))
-            .child(tool_btn("sp-new-file", "＋", Box::new(new_file_click)))
-            .child(tool_btn("sp-new-folder", "🗀", Box::new(new_folder_click)))
+            .child(tool_btn("sp-new-file", "＋", Box::new(start_new_file)))
+            .child(tool_btn("sp-new-folder", "🗀", Box::new(start_new_folder)))
             .child(div().flex_1())
-            .child(tool_btn("sp-refresh", "↻", Box::new(refresh_click)));
+            .child(tool_btn("sp-refresh", "↻", Box::new(refresh)));
+
+        // ── 搜索（文件名过滤）──
+        let mut search_row = div().w_full().px(px(6.)).pb(px(4.));
+        if let Some(input) = self.scratchpad.borrow().search_input.clone() {
+            search_row = search_row.child(Input::new(&input).w_full());
+        }
 
         let group_header = |label: &str, count: usize| {
             div()
@@ -969,7 +1499,13 @@ impl SidebarPanel {
                 .child(count.to_string())
         };
 
-        let mut panel = div().v_flex().w_full().h_full().min_h_0().child(toolbar);
+        let mut panel = div()
+            .v_flex()
+            .w_full()
+            .h_full()
+            .min_h_0()
+            .child(toolbar)
+            .child(search_row);
 
         if let Some(err) = &error {
             return panel.child(
@@ -993,7 +1529,20 @@ impl SidebarPanel {
             .px(px(4.))
             .pb(px(4.));
 
+        // 顶部内联新建（新建文件/文件夹）。
+        if matches!(
+            edit.as_ref(),
+            Some(ScratchpadEdit::NewFile) | Some(ScratchpadEdit::NewFolder)
+        ) {
+            body = body.child(self.render_scratchpad_edit_row(0, cx));
+        }
+
         if rows.is_empty() {
+            let hint = if filter.is_empty() {
+                "用上方「＋」新建草稿。"
+            } else {
+                "没有匹配的文件。"
+            };
             body = body.child(
                 div()
                     .v_flex()
@@ -1003,13 +1552,22 @@ impl SidebarPanel {
                     .px(px(8.))
                     .text_xs()
                     .text_color(muted)
-                    .child("项目工作区还没有文件")
-                    .child(div().mt_1().child("用上方「＋」新建，或导入现有文件。")),
+                    .child("草稿箱还没有文件")
+                    .child(div().mt_1().child(hint)),
             );
         } else {
-            body = body.child(group_header("项目文件", rows.len()));
+            body = body.child(group_header("草稿", rows.len()));
             for (depth, entry) in &rows {
                 let key = entry.path.to_string_lossy().to_string();
+
+                // 本行正在重命名 → 渲染内联输入。
+                if let Some(ScratchpadEdit::Rename { path }) = &edit {
+                    if path == &key {
+                        body = body.child(self.render_scratchpad_edit_row(*depth, cx));
+                        continue;
+                    }
+                }
+
                 let is_folder = entry.kind == ScratchpadEntryKind::Folder;
                 let has_children = entry
                     .children
@@ -1051,54 +1609,119 @@ impl SidebarPanel {
                 let icon_color = if is_folder {
                     folder_color
                 } else {
-                    scratchpad_icon_color(theme, &entry.name)
+                    scratchpad_icon_color(&entry.name, info, success, primary, muted)
                 };
 
-                body = body.child(
-                    div()
-                        .id(format!("sp-row-{key}"))
-                        .h_flex()
-                        .items_center()
-                        .w_full()
-                        .h(px(24.))
-                        .gap_1()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .when(is_selected, |this| this.bg(selected_bg))
-                        .hover(move |s| s.bg(hover_bg))
-                        .on_click(click)
-                        .child(div().w(px(*depth as f32 * 12.0)).flex_none())
+                let mut row = div()
+                    .id(format!("sp-row-{key}"))
+                    .h_flex()
+                    .items_center()
+                    .w_full()
+                    .h(px(24.))
+                    .gap_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .when(is_selected, |this| this.bg(selected_bg))
+                    .hover(move |s| s.bg(hover_bg))
+                    .on_click(click)
+                    .child(div().w(px(*depth as f32 * 12.0)).flex_none())
+                    .child(
+                        div()
+                            .w(px(10.))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(chevron),
+                    )
+                    .child(
+                        div()
+                            .w(px(8.))
+                            .h(px(8.))
+                            .flex_none()
+                            .rounded_sm()
+                            .bg(icon_color),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(fg)
+                            .child(entry.name.clone()),
+                    );
+
+                // 选中行才显示操作（重命名 / 删除）。
+                if is_selected {
+                    let rename = {
+                        let entity = entity.clone();
+                        let key = key.clone();
+                        move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                this.start_scratchpad_edit(
+                                    ScratchpadEdit::Rename { path: key.clone() },
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }
+                    };
+                    let delete = {
+                        let entity = entity.clone();
+                        let key = key.clone();
+                        move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                this.delete_scratchpad_entry(key.clone(), cx)
+                            });
+                        }
+                    };
+                    row = row
                         .child(
                             div()
-                                .w(px(10.))
-                                .flex_none()
+                                .id(format!("sp-ren-{key}"))
+                                .w(px(18.))
+                                .h_flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
                                 .text_xs()
                                 .text_color(muted)
-                                .child(chevron),
+                                .hover(move |s| s.bg(hover_bg))
+                                .child("✎")
+                                .on_click(rename),
                         )
                         .child(
                             div()
-                                .w(px(8.))
-                                .h(px(8.))
-                                .flex_none()
-                                .rounded_sm()
-                                .bg(icon_color),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
+                                .id(format!("sp-del-{key}"))
+                                .w(px(18.))
+                                .h_flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
                                 .text_xs()
-                                .text_color(fg)
-                                .child(entry.name.clone()),
-                        ),
-                );
+                                .text_color(muted)
+                                .hover(move |s| s.bg(hover_bg))
+                                .child("✕")
+                                .on_click(delete),
+                        );
+                }
+
+                body = body.child(row);
             }
         }
 
+        // ── 外部引用（移除）──
         if !external_refs.is_empty() {
             body = body.child(group_header("外部引用", external_refs.len()));
             for r in &external_refs {
+                let remove = {
+                    let entity = entity.clone();
+                    let alias = r.alias.clone();
+                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                        entity.update(app, |this, cx| {
+                            this.remove_scratchpad_reference(alias.clone(), cx)
+                        });
+                    }
+                };
                 body = body.child(
                     div()
                         .h_flex()
@@ -1132,17 +1755,161 @@ impl SidebarPanel {
                                 .text_xs()
                                 .text_color(muted)
                                 .child(r.path.to_string_lossy().to_string()),
+                        )
+                        .child(
+                            div()
+                                .id(format!("sp-ref-{}", r.alias))
+                                .w(px(18.))
+                                .h_flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(muted)
+                                .hover(move |s| s.bg(hover_bg))
+                                .child("✕")
+                                .on_click(remove),
                         ),
                 );
             }
         }
 
-        if trash_count > 0 {
-            body = body.child(group_header("回收站", trash_count));
+        // ── 回收站（展开 / 还原 / 清空）──
+        {
+            let toggle_trash = {
+                let view = view_handle.clone();
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    {
+                        let mut v = view.borrow_mut();
+                        v.trash_expanded = !v.trash_expanded;
+                    }
+                    entity.update(app, |_, cx| cx.notify());
+                }
+            };
+            let chevron = if trash_expanded { "▾" } else { "▸" };
+            let mut header = div()
+                .id("sp-trash-head")
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .w_full()
+                .h(px(22.))
+                .px(px(6.))
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(muted)
+                .hover(move |s| s.bg(hover_bg))
+                .on_click(toggle_trash)
+                .child(div().w(px(10.)).flex_none().child(chevron))
+                .child("回收站")
+                .child(div().flex_1())
+                .child(trash.len().to_string());
+
+            if !trash.is_empty() {
+                let empty = {
+                    let entity = entity.clone();
+                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                        entity.update(app, |this, cx| this.empty_scratchpad_trash(cx));
+                    }
+                };
+                header = header.child(
+                    div()
+                        .id("sp-trash-empty")
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(primary)
+                        .child("清空")
+                        .on_click(empty),
+                );
+            }
+            body = body.child(header);
+
+            if trash_expanded {
+                for t in &trash {
+                    let restore = {
+                        let entity = entity.clone();
+                        let id = t.manifest.id.clone();
+                        move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                this.restore_scratchpad_trash(id.clone(), cx)
+                            });
+                        }
+                    };
+                    body = body.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            .h(px(22.))
+                            .pl(px(18.))
+                            .pr(px(6.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(format!("{} · {}", t.manifest.name, t.manifest.origin)),
+                            )
+                            .child(
+                                div()
+                                    .id(format!("sp-trash-{}", t.manifest.id))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(primary)
+                                    .child("还原")
+                                    .on_click(restore),
+                            ),
+                    );
+                }
+            }
         }
 
         panel = panel.child(body);
 
+        // ── 撤销栏 ──
+        if let Some(undo) = &undo {
+            let undo_click = {
+                let entity = entity.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| this.undo_scratchpad_delete(cx));
+                }
+            };
+            panel = panel.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .px(px(8.))
+                    .py(px(5.))
+                    .bg(hover_bg)
+                    .rounded_sm()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(fg)
+                            .child(format!("已删除 {}", undo.label)),
+                    )
+                    .child(
+                        div()
+                            .id("sp-undo")
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(primary)
+                            .child("撤销")
+                            .on_click(undo_click),
+                    ),
+            );
+        }
+
+        // ── 底部状态 ──
         let file_count = rows
             .iter()
             .filter(|(_, e)| e.kind == ScratchpadEntryKind::File)
@@ -1156,8 +1923,9 @@ impl SidebarPanel {
                 .text_xs()
                 .text_color(muted)
                 .child(format!(
-                    "{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用",
-                    external_refs.len()
+                    "{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用 · {} 项回收站",
+                    external_refs.len(),
+                    trash.len()
                 )),
         );
 
@@ -1206,13 +1974,13 @@ impl Focusable for SidebarPanel {
 }
 
 impl Render for SidebarPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = cx.theme().colors.background;
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();
         let content: Div = match active {
-            LeftPanel::Draft => self.render_scratchpad(cx),
-            LeftPanel::Database => self.render_database_nav(cx),
+            LeftPanel::Draft => self.render_scratchpad(window, cx),
+            LeftPanel::Database => self.render_database_nav(window, cx),
             LeftPanel::Resources => self.render_resources_placeholder(fg),
             LeftPanel::Plugin => self.render_plugin_placeholder(fg),
         };
@@ -1250,6 +2018,8 @@ pub struct EditorPanel {
     query_result: Rc<RefCell<Option<QueryOutput>>>,
     // Round 29：SQL 历史（最新在前，跨会话持久化）。
     sql_history: Rc<RefCell<Vec<String>>>,
+    // Phase B：右侧停靠属性面板状态。
+    property: Rc<RefCell<PropertyState>>,
 }
 
 impl EditorPanel {
@@ -1261,7 +2031,175 @@ impl EditorPanel {
             sql_textarea: None,
             query_result: Rc::new(RefCell::new(None)),
             sql_history: Rc::new(RefCell::new(crate::services::query_history::load_history())),
+            property: Rc::new(RefCell::new(PropertyState::default())),
         }
+    }
+
+    /// 右侧停靠属性面板（DBeaver 式：属性网格 + 子实体表格）。
+    fn render_property_panel(&self, cx: &mut Context<Self>) -> Div {
+        let Some(target) = self.shared.property_target.borrow().clone() else {
+            return div();
+        };
+
+        let key = format!(
+            "{}|{:?}|{}|{:?}",
+            target.property.conn_id, target.property.kind, target.property.name, target.property.parent
+        );
+        let needs_load = {
+            let mut st = self.property.borrow_mut();
+            if st.loaded_for.as_deref() != Some(key.as_str()) {
+                st.loaded_for = Some(key.clone());
+                st.props = None;
+                st.error = None;
+                true
+            } else {
+                false
+            }
+        };
+        if needs_load {
+            let service = NavigatorService::new(engine::get_connection_manager().clone());
+            let loaded = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt.block_on(service.load_properties(
+                    &target.property,
+                    &target.conn_label,
+                    &target.driver,
+                )),
+                Err(e) => Err(shared::error::CoreError::common(
+                    shared::error::CommonError::General(format!("运行时错误: {e}")),
+                )),
+            };
+            let mut st = self.property.borrow_mut();
+            match loaded {
+                Ok(p) => st.props = Some(p),
+                Err(e) => st.error = Some(e.to_string()),
+            }
+        }
+
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let border = cx.theme().colors.border;
+        let bg = cx.theme().colors.background;
+        let tabbar = cx.theme().colors.tab_bar;
+        let danger = cx.theme().colors.danger;
+
+        let st = self.property.borrow();
+        let title = st
+            .props
+            .as_ref()
+            .map(|p| p.title.clone())
+            .unwrap_or_else(|| target.property.name.clone());
+        let object_type = st.props.as_ref().map(|p| p.object_type.clone()).unwrap_or_default();
+
+        let mut body = div().v_flex().w_full().gap_1();
+        if let Some(err) = &st.error {
+            body = body.child(div().text_xs().text_color(danger).child(err.clone()));
+        }
+        if let Some(props) = &st.props {
+            for row in &props.properties {
+                body = body.child(
+                    div()
+                        .h_flex()
+                        .items_start()
+                        .w_full()
+                        .gap_2()
+                        .text_xs()
+                        .child(div().w(px(72.)).flex_none().text_color(muted).child(row.label.clone()))
+                        .child(div().flex_1().min_w_0().text_color(fg).child(row.value.clone())),
+                );
+            }
+            for section in &props.sections {
+                body = body.child(
+                    div()
+                        .pt_2()
+                        .pb_1()
+                        .w_full()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(fg)
+                        .child(section.label.clone()),
+                );
+                body = body.child(
+                    div()
+                        .h_flex()
+                        .w_full()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(muted)
+                        .children(
+                            section
+                                .table
+                                .headers
+                                .iter()
+                                .map(|h| div().flex_1().min_w_0().child(h.clone())),
+                        ),
+                );
+                for data_row in &section.table.rows {
+                    body = body.child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(fg)
+                            .children(
+                                data_row.iter().map(|c| div().flex_1().min_w_0().child(c.clone())),
+                            ),
+                    );
+                }
+            }
+        }
+
+        div()
+            .v_flex()
+            .w(px(392.))
+            .h_full()
+            .flex_none()
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .h(px(34.))
+                    .px_3()
+                    .border_1()
+                    .border_color(border)
+                    .bg(tabbar)
+                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(fg).child(title))
+                    .child(div().text_xs().text_color(muted).child(object_type))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("property-close")
+                            .px_1()
+                            .text_xs()
+                            .text_color(muted)
+                            .cursor_pointer()
+                            .child("关闭")
+                            .on_click({
+                                let entity = cx.entity();
+                                let shared = self.shared.clone();
+                                move |_, _, app: &mut App| {
+                                    *shared.property_target.borrow_mut() = None;
+                                    entity.update(app, |_, cx| cx.notify());
+                                }
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("property-body")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .overflow_y_scroll()
+                    .child(body),
+            )
     }
 }
 
@@ -1769,7 +2707,12 @@ impl Render for EditorPanel {
             );
         }
 
-        content
+        let mut root = div().h_flex().size_full();
+        root = root.child(div().flex_1().min_w_0().child(content));
+        if self.shared.property_target.borrow().is_some() {
+            root = root.child(self.render_property_panel(cx));
+        }
+        root
     }
 }
 

@@ -205,6 +205,8 @@ pub struct NavNode {
     pub error: Option<String>,
     /// 展开该节点时要加载子节点的路径（连接根为 `Connection`；列节点为 None）
     pub expand_path: Option<NavPath>,
+    /// 属性面板定位信息（双击 / 右键「查看属性」时使用）
+    pub property: Option<PropertyRef>,
 }
 
 impl NavNode {
@@ -227,6 +229,7 @@ impl NavNode {
             loaded: false,
             error: None,
             expand_path: None,
+            property: None,
         }
     }
 
@@ -239,6 +242,12 @@ impl NavNode {
     /// 指定展开时的子节点加载路径。
     pub fn with_expand_path(mut self, path: NavPath) -> Self {
         self.expand_path = Some(path);
+        self
+    }
+
+    /// 指定属性面板定位信息。
+    pub fn with_property(mut self, property: PropertyRef) -> Self {
+        self.property = Some(property);
         self
     }
 
@@ -275,6 +284,30 @@ pub enum NavPath {
         schema: String,
         table: String,
     },
+}
+
+/// 属性面板可展示的对象类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PropertyKind {
+    Connection,
+    Catalog,
+    Schema,
+    Table,
+    View,
+    Column,
+}
+
+/// 属性面板定位信息（由导航服务在构建节点时填充）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PropertyRef {
+    pub conn_id: String,
+    pub source: NavSource,
+    pub catalog: Option<String>,
+    pub schema: Option<String>,
+    /// 列节点的所属表（其他类型为 None）
+    pub parent: Option<String>,
+    pub name: String,
+    pub kind: PropertyKind,
 }
 
 /// 导航状态（展开态 / 选中 / 过滤），持久化到 `navigator_state`。

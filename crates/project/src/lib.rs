@@ -21,12 +21,13 @@
 //! - 用户标识（created_by）
 //! - 数据校验（checksum）
 
+pub mod lock;
 pub mod models;
 pub mod store;
 
+pub use lock::{AcquireOutcome, LockInfo, ProjectLock};
 pub use models::{
     ConnectionRef, Project, ProjectConfig, ProjectInfo, ProjectPath, ProjectStatus, QueryRef,
     Version, VersionInfo, Versioned,
 };
 pub use store::{ProjectManager, ProjectStore};
-

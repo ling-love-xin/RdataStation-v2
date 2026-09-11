@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 项目管理 · 原型</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3; --tabactive-bg:#FFFFFF; --tabactive-fg:#333333;
+  --activity-bar:#ECECEC; --activity-fg:#616161; --activity-active:#333333;
+  --success:#16A34A; --success-bg:#F0FDF4; --warning:#B45309; --warning-bg:#FFFBEB;
+  --info:#2563EB; --info-bg:#EFF6FF; --danger:#DC2626; --danger-bg:#FEF2F2;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+  --popover-bg:#FFFFFF;
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526; --tabactive-bg:#1E1E1E; --tabactive-fg:#FFFFFF;
+  --activity-bar:#333333; --activity-fg:#858585; --activity-active:#FFFFFF;
+  --success:#89D185; --success-bg:#14532D; --warning:#CCA700; --warning-bg:#5A4D08;
+  --info:#3794FF; --info-bg:#1A3D5C; --danger:#F14C4C; --danger-bg:#5A1D1D;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+  --popover-bg:#252526;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);padding:30px 20px 24px;font-size:13px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;cursor:pointer;}
+.page-head{display:flex;align-items:center;justify-content:space-between;max-width:1180px;margin:0 auto 16px;padding:0 4px;}
+.brand{display:flex;align-items:center;gap:10px;}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(194,91,70,.35);color:#fff;font-weight:700;font-size:12px;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:2px;}
+.head-actions{display:flex;gap:8px;align-items:center;}
+.seg{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--bg);}
+.seg button{border:none;background:transparent;color:var(--muted);font-size:12px;padding:6px 12px;}
+.seg button.on{background:var(--primary);color:var(--primary-fg);font-weight:600;}
+.theme-toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:all .15s;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+
+/* ── 窗口 ── */
+.wrap{max-width:1180px;margin:0 auto;overflow-x:auto;padding-bottom:6px;}
+.app{min-width:1080px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.titlebar{position:relative;display:flex;align-items:center;height:36px;background:var(--titlebar);border-bottom:1px solid var(--border);}
+.tb-left{display:flex;align-items:center;flex:0 0 auto;padding-left:10px;gap:8px;}
+.app-logo{width:20px;height:20px;border-radius:5px;background:linear-gradient(135deg,#F5A188,#C25B46);}
+.cutout{display:flex;align-items:center;gap:7px;margin-left:6px;padding:3px 12px;background:var(--sidebar);border:1px dashed transparent;border-radius:6px;}
+.cutout.clickable{cursor:pointer;}
+.cutout.clickable:hover{border-color:var(--active-border);}
+.cutout .lbl{font-size:11px;color:var(--muted);}
+.cutout .nm{font-size:12.5px;font-weight:600;color:var(--fg);}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;}
+.dot.warn{background:var(--warning);}
+.dot.ok{background:var(--success);}
+.tb-center{flex:1;display:flex;justify-content:center;min-width:0;}
+.quick-open{display:flex;align-items:center;gap:8px;width:320px;max-width:46%;height:24px;background:var(--bg);border:1px solid var(--input-border);border-radius:5px;padding:0 9px;font-size:12px;color:var(--muted);}
+.quick-open kbd{margin-left:auto;font-size:10px;border:1px solid var(--border);border-radius:3px;padding:0 4px;color:var(--muted);}
+.tb-right{flex:0 0 auto;display:flex;height:100%;}
+.wc{width:44px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--fg);}
+.wc:hover{background:var(--hover);}
+.wc.close:hover{background:#e81123;color:#fff;}
+
+.main{display:flex;align-items:stretch;height:560px;}
+.activity{width:48px;flex:none;background:var(--activity-bar);display:flex;flex-direction:column;align-items:center;padding:4px 0;}
+.activity.l{border-right:1px solid var(--border);}
+.activity.r{border-left:1px solid var(--border);}
+.a-icon{width:44px;height:40px;display:flex;align-items:center;justify-content:center;color:var(--activity-fg);font-size:16px;border-left:2px solid transparent;}
+.activity.r .a-icon{border-left:none;border-right:2px solid transparent;}
+.a-icon.active{color:var(--activity-active);border-left-color:var(--activity-active);}
+.activity.r .a-icon.active{border-right-color:var(--activity-active);}
+.a-icon:not(.active):hover{color:var(--fg);}
+.a-spacer{flex:1;}
+.a-btn{width:40px;height:32px;display:flex;align-items:center;justify-content:center;color:var(--activity-fg);font-size:15px;}
+
+/* ── 侧边栏 ── */
+.sidebar-l{width:240px;flex:none;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;}
+.panel-head{display:flex;align-items:center;height:36px;padding:0 8px 0 12px;background:var(--tabbar);border-bottom:1px solid var(--sidebar-border);}
+.panel-head .ttl{font-size:12px;font-weight:600;color:var(--fg);}
+.panel-body{flex:1;overflow:hidden;padding:6px 8px;font-size:12px;color:var(--muted);}
+.trow{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;border-radius:5px;color:var(--fg);white-space:nowrap;}
+.trow:hover{background:var(--hover);}
+.trow .ind{width:14px;flex:none;}
+.trow .ic{color:var(--muted);}
+.sidebar-r{width:250px;flex:none;background:var(--sidebar);border-left:1px solid var(--sidebar-border);display:flex;flex-direction:column;padding:8px;}
+.card{border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:8px;background:var(--bg);}
+.card-head{height:28px;display:flex;align-items:center;padding:0 10px;font-size:11.5px;color:var(--muted);background:var(--tabbar);}
+.card-body{padding:8px 10px;font-size:11.5px;color:var(--muted);line-height:1.75;}
+
+/* ── 中央：选择器 ── */
+.center{flex:1;min-width:320px;background:var(--bg);display:flex;flex-direction:column;min-width:0;}
+.picker{flex:1;display:flex;min-height:0;}
+.pk-left{flex:1;min-width:0;padding:26px 30px;display:flex;flex-direction:column;border-right:1px solid var(--border);}
+.pk-right{width:320px;flex:none;padding:26px 24px;display:flex;flex-direction:column;gap:10px;background:var(--sidebar);}
+.pk-search{display:flex;gap:8px;margin-bottom:10px;}
+.pk-search .inp{flex:1;height:28px;}
+.pk-search .sort{flex:none;height:28px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--input-border);border-radius:6px;font-size:11.5px;color:var(--muted);background:var(--bg);}
+.pk-title{font-size:13px;font-weight:700;color:var(--fg);margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+.pk-tabs{display:flex;align-items:center;gap:6px;margin-bottom:12px;}
+.pk-tabs .pt{border:none;background:transparent;color:var(--muted);font-size:12px;font-weight:600;padding:4px 9px;border-radius:6px;}
+.pk-tabs .pt.on{background:var(--accent);color:var(--fg);}
+.pk-tabs .count{margin-left:auto;color:var(--muted);font-size:11.5px;font-weight:400;}
+.pk-title .count{color:var(--muted);font-weight:400;font-size:11.5px;}
+.recents{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;}
+.rcp{border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--bg);display:flex;flex-direction:column;gap:6px;position:relative;cursor:pointer;}
+.rcp:hover{background:var(--hover);}
+.rcp.sel{background:var(--accent);border-color:var(--active-border);}
+.rcp.sel::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--active-border);}
+.rcp .r1{display:flex;align-items:center;gap:8px;}
+.rcp .r1 .nm{font-size:12.5px;font-weight:600;color:var(--fg);}
+.rcp .r1 .acts{margin-left:auto;display:flex;gap:4px;color:var(--muted);font-size:12px;opacity:0;}
+.rcp:hover .acts{opacity:1;}
+.rcp .acts span{width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:4px;}
+.rcp .acts span:hover{background:var(--hover);color:var(--fg);}
+.rcp .path{font-family:Consolas,monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rcp .r3{display:flex;align-items:center;gap:10px;font-size:10.5px;color:var(--muted);}
+.rcp.warn{border-color:var(--warning);}
+.rcp.warn .warnline{font-size:10.5px;color:var(--warning);display:flex;align-items:center;gap:5px;}
+.rcp.dead{opacity:.6;}
+.rcp.dead .nm{text-decoration:line-through;}
+.badge{font-size:9.5px;font-weight:600;border-radius:9px;padding:1px 7px;line-height:15px;}
+.badge.ok{color:var(--success);background:var(--success-bg);}
+.badge.info{color:var(--info);background:var(--info-bg);}
+.badge.warn{color:var(--warning);background:var(--warning-bg);}
+.badge.mut{color:var(--muted);background:var(--sidebar);}
+.btn-p{background:var(--primary);color:var(--primary-fg);border:none;border-radius:7px;padding:8px 14px;font-size:12.5px;font-weight:600;text-align:center;}
+.btn-p:hover{background:var(--primary-hover);}
+.btn-s{background:var(--bg);color:var(--fg);border:1px solid var(--input-border);border-radius:7px;padding:8px 14px;font-size:12.5px;text-align:center;}
+.btn-s:hover{background:var(--hover);}
+.hint-title{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.6px;text-transform:uppercase;margin-top:8px;}
+.hint-list{font-size:11.5px;color:var(--muted);line-height:2;}
+.hint-list b{color:var(--fg);font-weight:600;}
+.empty-c{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--muted);gap:8px;}
+.empty-c .big{font-size:34px;color:var(--active-border);}
+.empty-c .t{font-size:13px;font-weight:600;color:var(--fg);}
+.empty-c .d{font-size:11.5px;line-height:1.7;}
+
+/* ── 中央：编辑器（有项目态） ── */
+.editor{flex:1;min-width:0;background:var(--bg);display:flex;flex-direction:column;}
+.editor-tabs{display:flex;height:34px;background:var(--tabbar);border-bottom:1px solid var(--border);}
+.etab{display:flex;align-items:center;gap:7px;padding:0 13px;font-size:12px;background:var(--tabactive-bg);color:var(--tabactive-fg);border-right:1px solid var(--border);border-top:2px solid var(--active-border);}
+.etab .x{color:var(--muted);margin-left:5px;}
+.editor-body{flex:1;padding:16px 20px;color:var(--muted);font-size:12px;line-height:1.9;}
+
+.statusbar{display:flex;align-items:center;justify-content:space-between;height:24px;background:var(--primary);color:var(--primary-fg);font-size:11.5px;padding:0 10px;}
+.statusbar .l,.statusbar .r{display:flex;align-items:center;gap:14px;}
+.statusbar .btn{padding:0 5px;border-radius:3px;}
+
+/* ── 项目菜单（标题栏弹层） ── */
+.menu{position:absolute;left:56px;top:40px;z-index:20;min-width:220px;border:1px solid var(--border);border-radius:8px;background:var(--popover-bg);box-shadow:var(--shadow);padding:5px;}
+.menu .mi{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:5px;font-size:12px;color:var(--fg);}
+.menu .mi:hover{background:var(--hover);}
+.menu .mi .shortcut{margin-left:auto;color:var(--muted);font-size:10.5px;}
+.menu .sep{height:1px;background:var(--border);margin:4px 6px;}
+.menu .alert{display:flex;align-items:center;gap:7px;margin:2px 4px 6px;padding:6px 9px;border-radius:5px;background:var(--warning-bg);color:var(--warning);font-size:11px;}
+
+/* ── 状态示意区 ── */
+.states{max-width:1180px;margin:18px auto 0;display:flex;gap:14px;flex-wrap:wrap;}
+.state{flex:1;min-width:340px;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:13px 15px;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+.state h4{font-size:12px;font-weight:700;margin-bottom:10px;color:var(--fg);display:flex;align-items:center;gap:7px;}
+.state h4 .tag{font-size:9.5px;font-weight:600;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 7px;}
+.state .hint{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.65;}
+
+/* 对话框示意 */
+.dlg{border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.dlg-title{height:36px;display:flex;align-items:center;padding:0 14px;font-size:12.5px;font-weight:600;background:var(--tabbar);border-bottom:1px solid var(--border);}
+.dlg-title .x{margin-left:auto;color:var(--muted);}
+.dlg-body{padding:14px;}
+.field{margin-bottom:11px;}
+.field label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:5px;}
+.field label .req{color:var(--danger);}
+.inp{width:100%;height:30px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);color:var(--fg);font-size:12px;padding:0 9px;display:flex;align-items:center;font-family:inherit;}
+.inp.mono{font-family:Consolas,monospace;font-size:11.5px;}
+.inp.focus{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 16%,transparent);}
+.inp.err{border-color:var(--danger);}
+.preview{font-family:Consolas,monospace;font-size:11px;color:var(--muted);margin-top:5px;}
+.row2{display:flex;gap:10px;}
+.row2 .field{flex:1;}
+.inline-err{font-size:10.5px;color:var(--danger);margin-top:4px;}
+.chk{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--fg);margin-bottom:8px;}
+.chk .box{width:14px;height:14px;border:1px solid var(--input-border);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--primary-fg);background:var(--primary);border-color:var(--primary);}
+.chk .box.off{background:transparent;border-color:var(--input-border);color:transparent;}
+.dlg-foot{display:flex;justify-content:flex-end;gap:9px;padding:11px 14px;border-top:1px solid var(--border);background:var(--sidebar);}
+.dlg-foot .btn-p,.dlg-foot .btn-s{padding:6px 14px;}
+.note{display:flex;gap:8px;align-items:flex-start;border-radius:6px;padding:8px 10px;font-size:11px;line-height:1.6;margin-top:8px;}
+.note.warn{background:var(--warning-bg);color:var(--warning);}
+.note.info{background:var(--info-bg);color:var(--info);}
+.note.danger{background:var(--danger-bg);color:var(--danger);}
+.crudrow{display:flex;gap:8px;font-size:11.5px;padding:6px 0;border-bottom:1px dashed var(--border);align-items:flex-start;}
+.crudrow:last-child{border-bottom:none;}
+.crudrow .op{width:58px;flex:none;font-weight:700;color:var(--fg);}
+.crudrow .say{color:var(--muted);line-height:1.6;}
+
+/* 设置视图 */
+.settings{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;min-height:280px;}
+.set-nav{width:150px;flex:none;background:var(--sidebar);border-right:1px solid var(--border);padding:8px 6px;}
+.set-nav .ni{display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border-radius:6px;font-size:12px;color:var(--fg);}
+.set-nav .ni.on{background:var(--accent);color:var(--fg);position:relative;}
+.set-nav .ni.on::before{content:"";position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:2px;background:var(--active-border);}
+.set-nav .ni.danger{color:var(--danger);}
+.set-body{flex:1;padding:16px 18px;min-width:0;}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:8px 12px;font-size:11.5px;margin-bottom:14px;}
+.kv .k{color:var(--muted);}
+.kv .v{color:var(--fg);}
+.tree{border:1px solid var(--border);border-radius:7px;padding:9px 11px;font-size:11.5px;font-family:Consolas,monospace;color:var(--muted);line-height:1.9;background:var(--bg);}
+.tree .f{color:var(--fg);}
+.tree .sz{margin-left:auto;float:right;}
+.sec-title{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin:14px 0 8px;}
+
+/* token 对照 */
+.tokens{max-width:1180px;margin:18px auto 0;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:14px 16px;}
+.tokens h3{font-size:13px;margin-bottom:10px;color:var(--fg);}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:7px;}
+.chip{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);}
+.sw{width:26px;height:18px;border-radius:4px;border:1px solid rgba(0,0,0,.16);flex:none;}
+.chip .name{flex:1;color:var(--fg);}
+.foot{max-width:1180px;margin:14px auto 0;color:var(--muted);font-size:11.5px;line-height:1.8;}
+.foot code{background:var(--sidebar);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-family:Consolas,monospace;}
+.hidden{display:none !important;}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <div class="brand">
+    <div class="logo">R</div>
+    <div>
+      <h1>项目管理 · 原型</h1>
+      <div class="sub">一实例一项目 · 增删改查（CRUD）· 未保存拦截 · 项目锁</div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <div class="seg">
+      <button id="seg-picker" class="on" onclick="screen('picker')">无项目 · 选择器</button>
+      <button id="seg-project" onclick="screen('project')">有项目 · 项目菜单</button>
+    </div>
+    <button class="theme-toggle" onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';">◐ 切换明暗</button>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="app">
+    <!-- 标题栏 -->
+    <div class="titlebar">
+      <div class="tb-left">
+        <div class="app-logo"></div>
+        <!-- 无项目态 -->
+        <div class="cutout" id="slot-empty">
+          <span class="lbl">项目</span><span class="nm" style="color:var(--muted)">未打开项目</span>
+        </div>
+        <!-- 有项目态 -->
+        <div class="cutout clickable hidden" id="slot-project">
+          <span class="lbl">项目</span><span class="nm">营销分析</span><span class="dot warn"></span>
+        </div>
+      </div>
+      <div class="tb-center">
+        <div class="quick-open"><span>⌕</span><span>搜索或输入命令…</span><kbd>Ctrl+P</kbd></div>
+      </div>
+      <div class="tb-right"><div class="wc">─</div><div class="wc">□</div><div class="wc close">✕</div></div>
+
+      <!-- 项目菜单（有项目态） -->
+      <div class="menu hidden" id="project-menu">
+        <div class="alert">⚠ 缺失 1 个驱动（sqlite）· 点此处理</div>
+        <div class="mi">切换项目…<span class="shortcut">Ctrl+⇧P</span></div>
+        <div class="mi">项目设置…</div>
+        <div class="mi">重命名…</div>
+        <div class="mi">在资源管理器中显示</div>
+        <div class="sep"></div>
+        <div class="mi">归档项目</div>
+        <div class="sep"></div>
+        <div class="mi">关闭项目</div>
+      </div>
+    </div>
+
+    <!-- 主体 -->
+    <div class="main">
+      <div class="activity l">
+        <div class="a-icon active">▤</div><div class="a-icon">▥</div>
+        <div class="a-icon">▦</div><div class="a-icon">◧</div>
+        <div class="a-spacer"></div><div class="a-btn">⚙</div>
+      </div>
+
+      <!-- 左侧边栏（有项目态） -->
+      <div class="sidebar-l hidden" id="sidebar-l">
+        <div class="panel-head"><span class="ttl">草稿箱</span></div>
+        <div class="panel-body">
+          <div class="trow"><span class="ind"></span><span class="ic">＋</span><span>新建 / 刷新</span></div>
+          <div class="trow"><span class="ind"></span><span class="ic">▾</span><span>sales_orders.sql</span></div>
+          <div class="trow"><span class="ind"></span><span class="ic">▸</span><span>data</span></div>
+          <div class="trow" style="padding-left:22px"><span class="ind"></span><span class="ic">▸</span><span>reports</span></div>
+        </div>
+      </div>
+
+      <!-- 中央：选择器（无项目态） -->
+      <div class="center" id="screen-picker">
+        <div class="picker">
+          <div class="pk-left">
+            <div class="pk-tabs">
+              <button class="pt on">最近</button><button class="pt">全部</button><button class="pt">已移除</button>
+              <span class="count">4 个项目</span>
+            </div>
+            <div class="pk-search">
+              <div class="inp" style="color:var(--muted)">⌕ 搜索项目名称或路径</div>
+              <div class="sort">最近打开 ▾</div>
+            </div>
+            <div class="recents">
+              <div class="rcp sel">
+                <div class="r1"><span style="color:var(--active-border)">📌</span><span class="nm">营销分析</span><span class="badge ok">Active</span>
+                  <span class="acts"><span>📂</span><span>✕</span></span></div>
+                <div class="path">D:\work\marketing</div>
+                <div class="r3"><span>2 小时前</span><span>·</span><span>12 连接</span><span>·</span><span>3 版本</span></div>
+              </div>
+              <div class="rcp warn">
+                <div class="r1"><span class="nm">风控看板</span><span class="badge warn">Active</span>
+                  <span class="acts"><span>📂</span><span>✕</span></span></div>
+                <div class="path">D:\work\risk-board</div>
+                <div class="r3"><span>昨天</span><span>·</span><span>5 连接</span></div>
+                <div class="warnline">⚠ 缺失驱动：sqlite</div>
+              </div>
+              <div class="rcp">
+                <div class="r1"><span class="nm">年度报表</span><span class="badge info">Syncing</span>
+                  <span class="acts"><span>📂</span><span>✕</span></span></div>
+                <div class="path">D:\work\annual-report</div>
+                <div class="r3"><span>3 天前</span><span>·</span><span>2 连接</span></div>
+              </div>
+              <div class="rcp dead">
+                <div class="r1"><span class="nm">旧实验</span><span class="badge mut">路径失效</span>
+                  <span class="acts"><span>✕</span></span></div>
+                <div class="path">E:\archived\exp-2019</div>
+                <div class="r3"><span>1 年前</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="pk-right">
+            <button class="btn-p">＋ 新建项目</button>
+            <button class="btn-s">🗀 打开文件夹…</button>
+            <button class="btn-s">▦ 从示例项目开始</button>
+            <div class="hint-title">快速开始</div>
+            <div class="hint-list">
+              <div>· <b>新建空项目</b></div>
+              <div>· 从<b>示例项目</b>开始</div>
+              <div>· 打开现有目录（含 <b>.RSmeta</b>）</div>
+            </div>
+            <div class="note info" style="margin-top:auto">每个实例同一时间只打开一个项目。切换项目会关闭当前项目并重置编辑区。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 中央：编辑器（有项目态） -->
+      <div class="center hidden" id="screen-project">
+        <div class="editor">
+          <div class="editor-tabs"><div class="etab">sales_orders.sql<span class="x">✕</span></div></div>
+          <div class="editor-body">-- 当前项目：营销分析（D:\work\marketing）<br>-- 草稿箱根 = 项目目录；.RSmeta 为内部元数据，不在此树显示。</div>
+        </div>
+      </div>
+
+      <div class="activity r">
+        <div class="a-icon active">◔</div><div class="a-icon">◈</div><div class="a-icon">◷</div>
+        <div class="a-spacer"></div><div class="a-btn">⚙</div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="l"><span class="btn">« 完全隐藏</span><span>数据库导航</span></div>
+      <div class="r"><span id="sb-project">未打开项目</span><span>DuckDB 就绪</span><span>UTF-8</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 状态示意 ── -->
+<div class="states">
+  <div class="state">
+    <h4>新建项目对话框 <span class="tag">模态</span></h4>
+    <div class="dlg">
+      <div class="dlg-title">新建项目<span class="x">✕</span></div>
+      <div class="dlg-body">
+        <div class="field"><label>项目名称 <span class="req">*</span></label><div class="inp focus">营销分析</div></div>
+        <div class="field"><label>位置</label><div class="inp mono">D:\work</div><div class="preview">将创建：D:\work\营销分析</div></div>
+        <div class="field"><label>描述（可选）</label><div class="inp" style="color:var(--muted)">季度营销数据分析…</div></div>
+        <div class="row2">
+          <div class="field"><label>默认连接</label><div class="inp" style="color:var(--muted)">本地 MySQL</div></div>
+        </div>
+        <div class="chk"><span class="box">✓</span>初始化分析库（analytics.duckdb）</div>
+        <div class="chk"><span class="box off">✓</span>创建示例草稿</div>
+      </div>
+      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-p">创建项目</button></div>
+    </div>
+    <div class="hint">校验：名称非空且无 <code>\ / : * ? " &lt; &gt; |</code>；目标目录非空且非项目 → 阻止；已是项目 → 提示打开现有项目。</div>
+  </div>
+
+  <div class="state">
+    <h4>项目设置 <span class="tag">中央 Tab</span></h4>
+    <div class="settings">
+      <div class="set-nav">
+        <div class="ni on">概览</div><div class="ni">存储</div><div class="ni">默认项</div>
+        <div class="ni">依赖自检</div><div class="ni danger">危险区</div>
+      </div>
+      <div class="set-body">
+        <div class="kv">
+          <div class="k">名称</div><div class="v">营销分析</div>
+          <div class="k">状态</div><div class="v"><span class="badge ok">Active</span></div>
+          <div class="k">创建时间</div><div class="v">2026-08-20 10:12</div>
+          <div class="k">最后打开</div><div class="v">2 小时前</div>
+        </div>
+        <div class="sec-title">存储</div>
+        <div class="tree">
+          <div><span class="f">.RSmeta/</span></div>
+          <div>&nbsp;&nbsp;├─ project.db <span class="sz">412 KB</span></div>
+          <div>&nbsp;&nbsp;├─ analytics.duckdb <span class="sz">18.2 MB</span></div>
+          <div>&nbsp;&nbsp;├─ project.json <span class="sz">1.4 KB</span></div>
+          <div>&nbsp;&nbsp;├─ project.lock <span class="sz">32 B</span></div>
+          <div>&nbsp;&nbsp;└─ project_metadata/ <span class="sz">6 文件</span></div>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:8px"><button class="btn-s" style="padding:5px 10px;font-size:11px">🗀 打开 .RSmeta</button><button class="btn-s" style="padding:5px 10px;font-size:11px">复制路径</button></div>
+        <div class="note warn">⚠ 依赖自检：缺失驱动 <b>sqlite</b>。相关数据源将不可用。</div>
+      </div>
+    </div>
+    <div class="hint">名称/描述改动即时反映到标题栏项目槽；存储结构树只读；删除磁盘数据需输入项目名二次确认。</div>
+  </div>
+
+  <div class="state">
+    <h4>项目增删改查 <span class="tag">CRUD</span></h4>
+    <div class="crudrow"><span class="op">Create</span><span class="say">新建空项目 / 打开现有目录（含 <b>.RSmeta</b>）/ 示例项目；目标非空非项目 → <b>阻止</b></span></div>
+    <div class="crudrow"><span class="op">Read</span><span class="say">最近 / 全部 / 已移除、搜索（名称/路径）、排序（<b>持久化</b>）、固定置顶、打开、缺失驱动与路径有效性</span></div>
+    <div class="crudrow"><span class="op">Update</span><span class="say">重命名（<b>仅显示名，不改磁盘目录</b>）、描述、默认连接、归档 / 取消归档、重新定位</span></div>
+    <div class="crudrow"><span class="op">Delete</span><span class="say">软删 = 移出名册（磁盘保留，可从<b>「已移除」找回</b>）；硬删 = <b>输入项目名</b>二次确认，先释放项目锁</span></div>
+    <div class="note info" style="margin-top:10px">提升 / 引用（promote / snapshot）属 M1 双层资产能力，<b>不在项目管理范围</b>。</div>
+  </div>
+
+  <div class="state">
+    <h4>未保存拦截 / 项目锁 <span class="tag">健壮性</span></h4>
+    <div class="dlg">
+      <div class="dlg-title">未保存的草稿<span class="x">✕</span></div>
+      <div class="dlg-body">
+        <div style="font-size:12px;line-height:1.8">切换 / 关闭项目前，以下草稿尚未保存：</div>
+        <div class="tree" style="margin-top:9px"><div>sales_orders.sql</div><div>temp_query.sql</div></div>
+      </div>
+      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-s">不保存</button><button class="btn-p">全部保存</button></div>
+    </div>
+    <div class="note warn">项目锁：打开时在 <code>.RSmeta/project.lock</code> 记 pid；同项目多实例被拒，陈旧锁按 pid 存活回收。</div>
+    <div class="dlg" style="margin-top:10px">
+      <div class="dlg-title">项目已在另一实例打开<span class="x">✕</span></div>
+      <div class="dlg-body"><div style="font-size:12px;line-height:1.7">D:\work\marketing 正被其他实例占用（pid 18244）。</div></div>
+      <div class="dlg-foot"><button class="btn-s">取消</button><button class="btn-s">只读打开</button><button class="btn-p">仍要打开</button></div>
+    </div>
+  </div>
+
+  <div class="state">
+    <h4>最近项目 · 空态 / 失效态 <span class="tag">边界</span></h4>
+    <div class="empty-c" style="padding:18px 8px">
+      <div class="big">◍</div>
+      <div class="t">还没有项目</div>
+      <div class="d">新建一个项目，或打开包含 .RSmeta 的现有目录。</div>
+      <div style="display:flex;gap:9px;margin-top:4px"><button class="btn-p">＋ 新建项目</button><button class="btn-s">🗀 打开文件夹</button></div>
+    </div>
+    <div class="note danger">全局库未初始化或路径失效时给出明确文案与「重试 / 移出列表」，不暴露裸错误串。</div>
+  </div>
+</div>
+
+<!-- token 对照 -->
+<div class="tokens">
+  <h3>主题 token 对照（明暗自动）</h3>
+  <div class="grid">
+    <div class="chip"><span class="sw" style="background:var(--bg)"></span><span class="name">background（选择器底）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--sidebar)"></span><span class="name">sidebar.background（卡片区）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--accent)"></span><span class="name">list.active.background（选中卡片）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--active-border)"></span><span class="name">list.active.border（选中条）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--primary)"></span><span class="name">primary（主按钮）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--success)"></span><span class="name">success（Active 徽标）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--info)"></span><span class="name">info（Syncing 徽标）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--warning)"></span><span class="name">warning（缺失驱动 / Offline）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--danger)"></span><span class="name">danger（危险区）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--popover-bg)"></span><span class="name">popover（项目菜单）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--titlebar)"></span><span class="name">title_bar（标题栏）</span></div>
+    <div class="chip"><span class="sw" style="background:var(--sidebar)"></span><span class="name">title_bar.slot.background（项目槽）</span></div>
+  </div>
+</div>
+
+<div class="foot">
+  窗口外壳沿用五段布局（<code>layout/layout-design.md</code>）；本页可切换「无项目 · 选择器 / 有项目 · 项目菜单」两屏。色值仅供示意，落地一律取主题语义 token（<code>theme/theme-design.md</code>）。
+</div>
+
+<script>
+function screen(id){
+  document.getElementById('screen-picker').classList.toggle('hidden', id!=='picker');
+  document.getElementById('screen-project').classList.toggle('hidden', id!=='project');
+  document.getElementById('sidebar-l').classList.toggle('hidden', id!=='project');
+  document.getElementById('slot-empty').classList.toggle('hidden', id!=='picker');
+  document.getElementById('slot-project').classList.toggle('hidden', id!=='project');
+  document.getElementById('project-menu').classList.toggle('hidden', id!=='project');
+  document.getElementById('seg-picker').classList.toggle('on', id==='picker');
+  document.getElementById('seg-project').classList.toggle('on', id==='project');
+  document.getElementById('sb-project').textContent = id==='project' ? '营销分析' : '未打开项目';
+}
+</script>
+</body>
+</html>

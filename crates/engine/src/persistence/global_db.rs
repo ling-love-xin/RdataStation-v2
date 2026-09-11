@@ -1181,9 +1181,12 @@ impl GlobalDatabaseManager {
     // ==================== 项目管理 ====================
 
     /// 项目相关 SQL 常量
+    ///
+    /// 019 迁移后新增 `is_pinned` / `removed_at`；所有 SELECT 列序保持一致
+    /// （… `last_opened_at, is_pinned, removed_at`），供 `row_to_project_record` 统一定位。
     #[allow(dead_code)]
     const PROJECT_SELECT_COLUMNS: &'static str =
-        "id, name, description, path, status, created_at, updated_at, last_opened_at";
+        "id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at";
 
     const PROJECT_CHECK_ID_EXISTS: &'static str = "SELECT COUNT(*) FROM project_info WHERE id = ?1";
 
@@ -1204,11 +1207,28 @@ impl GlobalDatabaseManager {
     const PROJECT_UPDATE_INFO: &'static str =
         "UPDATE project_info SET name = ?2, description = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
 
+    /// 保存（upsert）：只更新基础列，保留 `is_pinned`/`pinned_at`/`removed_at`，
+    /// 避免 `INSERT OR REPLACE` 整行替换导致固定 / 软删状态丢失。
     const PROJECT_INSERT_OR_REPLACE: &'static str =
-        "INSERT OR REPLACE INTO project_info (id, name, description, path, status, updated_at, last_opened_at) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, ?6)";
+        "INSERT INTO project_info (id, name, description, path, status, updated_at, last_opened_at) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, ?6) ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, path = excluded.path, status = excluded.status, updated_at = CURRENT_TIMESTAMP, last_opened_at = excluded.last_opened_at";
 
     const PROJECT_SELECT_ALL: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at FROM project_info ORDER BY last_opened_at DESC";
+        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NULL ORDER BY is_pinned DESC, last_opened_at DESC";
+
+    const PROJECT_SELECT_REMOVED: &'static str =
+        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NOT NULL ORDER BY removed_at DESC";
+
+    /// 固定 / 取消固定（`pinned_at` 仅在固定时记录）。
+    const PROJECT_SET_PINNED: &'static str =
+        "UPDATE project_info SET is_pinned = ?2, pinned_at = CASE WHEN ?2 = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
+
+    /// 软删：移出名册（磁盘保留），写入可恢复标记。
+    const PROJECT_SOFT_DELETE: &'static str =
+        "UPDATE project_info SET removed_at = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
+
+    /// 恢复：清除软删标记，回到名册。
+    const PROJECT_RESTORE: &'static str =
+        "UPDATE project_info SET removed_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?1";
 
     const PROJECT_UPDATE_LAST_OPENED: &'static str =
         "UPDATE project_info SET last_opened_at = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2";
@@ -1217,22 +1237,22 @@ impl GlobalDatabaseManager {
         "UPDATE project_info SET last_opened_at = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2";
 
     const PROJECT_OPEN_QUERY: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at FROM project_info WHERE id = ?1";
+        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE id = ?1";
 
     const PROJECT_OPEN_BY_PATH_UPDATE: &'static str =
         "UPDATE project_info SET last_opened_at = ?1, updated_at = CURRENT_TIMESTAMP WHERE path = ?2";
 
     const PROJECT_OPEN_BY_PATH_QUERY: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at FROM project_info WHERE path = ?1";
+        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE path = ?1";
 
     const PROJECT_GET_RECENT: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at FROM project_info WHERE last_opened_at IS NOT NULL AND last_opened_at != '' ORDER BY last_opened_at DESC LIMIT ?1";
+        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE removed_at IS NULL AND last_opened_at IS NOT NULL AND last_opened_at != '' ORDER BY is_pinned DESC, last_opened_at DESC LIMIT ?1";
 
     const PROJECT_GET_BY_ID: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at FROM project_info WHERE id = ?1";
+        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE id = ?1";
 
     const PROJECT_GET_BY_PATH: &'static str =
-        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at FROM project_info WHERE path = ?1";
+        "SELECT id, name, description, path, status, created_at, updated_at, last_opened_at, is_pinned, removed_at FROM project_info WHERE path = ?1";
 
     /// 辅助函数：将数据库行转换为 ProjectInfoRecord
     fn row_to_project_record(
@@ -1247,6 +1267,8 @@ impl GlobalDatabaseManager {
             created_at: row.get(5)?,
             updated_at: row.get(6)?,
             last_opened_at: row.get(7).ok(),
+            is_pinned: row.get::<_, i64>(8).map(|v| v != 0).unwrap_or(false),
+            removed_at: row.get(9).ok(),
         })
     }
 
@@ -1468,6 +1490,73 @@ impl GlobalDatabaseManager {
             .map_err(|e| Self::sqlite_persistence_error("delete_project_info", e.to_string()))?;
 
         Ok(())
+    }
+
+    /// 固定 / 取消固定项目（名册 UI 状态，跨会话保留）。
+    ///
+    /// 固定项在最近 / 全部列表中置顶（SQL 已按 `is_pinned DESC` 排序）。
+    pub async fn set_project_pinned(&self, id: &str, pinned: bool) -> Result<(), CoreError> {
+        let conn = self.sqlite_pool.acquire().await?;
+
+        conn.inner()?
+            .execute(
+                Self::PROJECT_SET_PINNED,
+                rusqlite::params![id, pinned as i64],
+            )
+            .map_err(|e| Self::sqlite_persistence_error("set_project_pinned", e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// 软删项目：置 `removed_at` 移出名册，**磁盘数据保留**，可经 [`Self::restore_project`] 恢复。
+    ///
+    /// 与 [`Self::delete_project_info`]（硬删登记）语义区分：软删用于「移除最近 / 全部」列表，
+    /// 硬删仅在删除磁盘数据后清理登记时使用。
+    pub async fn soft_delete_project(&self, id: &str) -> Result<(), CoreError> {
+        let conn = self.sqlite_pool.acquire().await?;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        conn.inner()?
+            .execute(Self::PROJECT_SOFT_DELETE, rusqlite::params![id, now])
+            .map_err(|e| Self::sqlite_persistence_error("soft_delete_project", e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// 恢复被软删的项目（清除 `removed_at`，回到名册）。
+    pub async fn restore_project(&self, id: &str) -> Result<(), CoreError> {
+        let conn = self.sqlite_pool.acquire().await?;
+
+        conn.inner()?
+            .execute(Self::PROJECT_RESTORE, [id])
+            .map_err(|e| Self::sqlite_persistence_error("restore_project", e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// 列出已软删（已移出名册）的项目。
+    pub async fn list_removed_projects(&self) -> Result<Vec<ProjectInfoRecord>, CoreError> {
+        let conn = self.sqlite_pool.acquire().await?;
+
+        let projects = {
+            let mut stmt = conn.inner()?.prepare(Self::PROJECT_SELECT_REMOVED).map_err(|e| {
+                Self::sqlite_persistence_error("list_removed_projects", e.to_string())
+            })?;
+
+            let rows = stmt
+                .query_map([], Self::row_to_project_record)
+                .map_err(|e| {
+                    Self::sqlite_persistence_error("query_removed_projects", e.to_string())
+                })?;
+
+            let mut result = Vec::new();
+            for record in rows.flatten() {
+                result.push(record);
+            }
+            result
+        };
+
+        Ok(projects)
     }
 
     /// 打开项目（更新最后打开时间并返回项目信息）
@@ -2014,6 +2103,10 @@ pub struct ProjectInfoRecord {
     pub created_at: String,
     pub updated_at: String,
     pub last_opened_at: Option<String>,
+    /// 是否固定（置顶，跨会话保留）。
+    pub is_pinned: bool,
+    /// 软删标记（非空 = 已移出名册，磁盘保留，可恢复）。
+    pub removed_at: Option<String>,
 }
 
 #[cfg(test)]

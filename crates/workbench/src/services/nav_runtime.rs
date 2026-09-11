@@ -5,11 +5,15 @@
 //! - 连接：从持久化记录组装 URL，建立运行时连接；
 //! - 断开：关闭运行时连接，**保留**元数据缓存（缓存只在显式「缓存管理」中清理）。
 
+use std::path::Path;
+
 use connection::model::DataSource;
+use database::model::{NavSource, NavState};
 use engine::connection_manager::ConnectionType;
 
 use crate::services::connection_service::{ConnectRequest, ConnectionService};
 use crate::services::data_source_service::DataSourceService;
+use crate::services::nav_store::NavStore;
 
 /// 连接一条已保存数据源（按记录字段组装 URL；`project_path` 项目连接需提供）。
 pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), String> {
@@ -74,6 +78,56 @@ pub fn is_connected(conn_id: &str) -> bool {
         Err(_) => return false,
     };
     rt.block_on(engine::get_connection_manager().has_connection(&conn_id.to_string()))
+}
+
+/// 打开导航持久化存储：全局连接 → 全局库；项目 / 共享连接 → 项目库。
+fn open_store(conn_id: &str, project_root: Option<&Path>) -> Result<NavStore, String> {
+    match NavSource::from_conn_id(conn_id) {
+        NavSource::Global => NavStore::open_global(),
+        _ => {
+            let root = project_root.ok_or_else(|| "未打开项目，无法读写项目导航状态".to_string())?;
+            NavStore::open_project(root)
+        }
+    }
+}
+
+/// 读取连接导航状态（失败返回默认）。
+pub fn load_nav_state(conn_id: &str, project_root: Option<&Path>) -> NavState {
+    match open_store(conn_id, project_root) {
+        Ok(store) => store.load_state(conn_id),
+        Err(_) => NavState::default(),
+    }
+}
+
+/// 保存连接导航状态。
+pub fn save_nav_state(
+    conn_id: &str,
+    project_root: Option<&Path>,
+    state: &NavState,
+) -> Result<(), String> {
+    let store = open_store(conn_id, project_root)?;
+    let scope = match NavSource::from_conn_id(conn_id) {
+        NavSource::Global => "global",
+        _ => "project",
+    };
+    store.save_state(conn_id, scope, state)
+}
+
+/// 读取连接标签（多值）。
+pub fn list_tags(conn_id: &str, project_root: Option<&Path>) -> Vec<String> {
+    open_store(conn_id, project_root)
+        .map(|s| s.list_tags(conn_id))
+        .unwrap_or_default()
+}
+
+/// 覆盖式设置连接标签。
+pub fn set_tags(
+    conn_id: &str,
+    project_root: Option<&Path>,
+    tags: &[String],
+) -> Result<(), String> {
+    let store = open_store(conn_id, project_root)?;
+    store.set_tags(conn_id, tags)
 }
 
 /// 由记录组装连接 URL：
