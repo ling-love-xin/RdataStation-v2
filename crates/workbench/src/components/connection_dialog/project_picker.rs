@@ -8,10 +8,24 @@
 use super::*;
 use gpui_kit::component::searchable_list::SearchableListItem;
 
-/// 「＋ 新增项目」选项的显示值（选中即请求打开项目新建入口）。
+/// 「＋ 新增项目」选项的显示值（选中即请求宿主打开项目新建入口）。
 pub const PROJECT_NEW_LABEL: &str = "＋ 新增项目";
 
-/// 项目下拉项（`value` = 项目名；「新增项目」项 value 同显示值）。
+/// 「打开现有目录…」选项的显示值（选中即请求宿主打开「打开现有目录」对话框）。
+pub const PROJECT_OPEN_LABEL: &str = "打开现有目录…";
+
+/// 下拉项类别：数据项与两个动作项（动作项不带路径，选中后置位一个宿主请求标记）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProjectItemKind {
+    /// 普通项目（带项目根路径）。
+    Project,
+    /// 「＋ 新增项目」（末项，固定位置）。
+    NewProject,
+    /// 「打开现有目录…」。
+    OpenFolder,
+}
+
+/// 项目下拉项（`value` = 项目名；动作项 value 同显示值）。
 ///
 /// `pub` 且经 `connection_dialog` 再导出：`ConnectionDialogState::project_sel` 是公开字段，
 /// 集成测试需要能命名本类型以驱动下拉。
@@ -19,8 +33,7 @@ pub const PROJECT_NEW_LABEL: &str = "＋ 新增项目";
 pub struct ProjectItem {
     label: SharedString,
     path: SharedString,
-    /// 是否为「＋ 新增项目」入口项（无路径）。
-    is_new: bool,
+    kind: ProjectItemKind,
 }
 
 impl ProjectItem {
@@ -29,7 +42,7 @@ impl ProjectItem {
         Self {
             label: SharedString::from(name.into()),
             path: SharedString::from(path.into()),
-            is_new: false,
+            kind: ProjectItemKind::Project,
         }
     }
 
@@ -38,7 +51,16 @@ impl ProjectItem {
         Self {
             label: SharedString::from(PROJECT_NEW_LABEL),
             path: SharedString::from(""),
-            is_new: true,
+            kind: ProjectItemKind::NewProject,
+        }
+    }
+
+    /// 「打开现有目录…」入口项。
+    pub fn open_folder() -> Self {
+        Self {
+            label: SharedString::from(PROJECT_OPEN_LABEL),
+            path: SharedString::from(""),
+            kind: ProjectItemKind::OpenFolder,
         }
     }
 
@@ -46,8 +68,18 @@ impl ProjectItem {
         &self.path
     }
 
+    /// 是否为「＋ 新增项目」动作项。
     pub fn is_new(&self) -> bool {
-        self.is_new
+        self.kind == ProjectItemKind::NewProject
+    }
+
+    /// 是否为动作项（不带路径，选中后置位宿主请求标记）。
+    pub fn is_action(&self) -> bool {
+        self.kind != ProjectItemKind::Project
+    }
+
+    pub fn kind(&self) -> ProjectItemKind {
+        self.kind
     }
 }
 
@@ -82,9 +114,14 @@ impl SearchableListItem for ProjectItem {
 }
 
 /// 行元素：左项目名 + 右路径（`flex_1` + 头部省略，长路径保留尾部目录名）。
+/// 动作项（新增项目 / 打开现有目录）只显示标签，用主色区分可点击行为。
 fn project_row(item: &ProjectItem) -> Div {
-    if item.is_new {
-        return div().h_flex().items_center().text_xs().child(item.label.clone());
+    if item.is_action() {
+        return div()
+            .h_flex()
+            .items_center()
+            .text_xs()
+            .child(item.label.clone());
     }
     div()
         .h_flex()

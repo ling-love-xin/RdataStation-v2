@@ -57,12 +57,15 @@ fn storage_err(op: &str, reason: String) -> CoreError {
     })
 }
 
-/// 获取所有已启用的数据源类型，按分类和名称排序
+/// 获取所有已启用的数据源类型，按分类和名称排序。
+///
+/// 只返回 `enabled = 1`：类型目录里存在但尚未开放的类型（如种子数据里的
+/// MongoDB / Redis，`enabled = 0`）不应出现在类型选择入口——否则用户选了也存不了。
 pub fn get_data_source_types(conn: &Connection) -> Result<Vec<DataSourceType>, CoreError> {
     let mut stmt = conn
         .prepare(
             "SELECT id, name, category, icon, enabled, created_at
-             FROM data_source_types ORDER BY category, name",
+             FROM data_source_types WHERE enabled = 1 ORDER BY category, name",
         )
         .map_err(|e| storage_err("prepare_get_data_source_types", e.to_string()))?;
 

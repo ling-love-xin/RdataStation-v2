@@ -243,6 +243,8 @@ impl ConnectionDialogState {
             .map(|(name, path)| ProjectItem::project(name.clone(), path.clone()))
             .collect();
         let mut items = items;
+        // 动作项顺序：先「打开现有目录…」，末项固定「＋ 新增项目」（按用户约定）。
+        items.push(ProjectItem::open_folder());
         items.push(ProjectItem::new_project());
         *self.project_options.borrow_mut() = options;
         self.project_sel
@@ -277,9 +279,10 @@ impl ConnectionDialogState {
     /// 项目下拉确认处理（`SelectEvent::Confirm` 的落点；独立成函数便于测试）：
     ///
     /// - 「＋ 新增项目」→ 置位 `Shared::project_new_request`（宿主开新建入口）并清空选中；
+    /// - 「打开现有目录…」→ 置位 `Shared::project_open_request`（宿主开目录选择）并清空选中；
     /// - 普通项目 → 写回 `project_path`（保存 / 作用域预检统一读路径输入）。
     ///
-    /// 返回 `true` 表示本次确认请求了「新增项目」。
+    /// 返回 `true` 表示本次确认是一个动作项（未写入项目路径）。
     pub fn handle_project_confirm(
         &self,
         value: Option<&SharedString>,
@@ -293,6 +296,11 @@ impl ConnectionDialogState {
         let label = value.to_string();
         if label == PROJECT_NEW_LABEL {
             shared.project_new_request.set(true);
+            self.set_project_value("", window, cx);
+            return true;
+        }
+        if label == PROJECT_OPEN_LABEL {
+            shared.project_open_request.set(true);
             self.set_project_value("", window, cx);
             return true;
         }
@@ -342,8 +350,25 @@ impl ConnectionDialogState {
     }
 
     /// 侧栏选择数据库类型：更新选中、刷新 Header 驱动选项（该类型启用驱动、短名显示）
-    /// 并默认选中第一个驱动；类型下无可用驱动时清空选择。
+    /// 并默认选中第一个驱动。
+    ///
+    /// 类型下**无可用驱动**时拒绝切换并在结果行给出原因：当前只内置四个驱动，
+    /// 其余类型选了也保存不了（驱动 id 解析不到 → `collect` 返回 None）。
     pub fn select_type(&self, type_id: &str, window: &mut Window, cx: &mut App) {
+        if !type_has_driver(&self.drivers.borrow(), type_id) {
+            let name = self
+                .types
+                .borrow()
+                .iter()
+                .find(|t| t.id == type_id)
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| type_id.to_string());
+            *self.result.borrow_mut() = Some(format!(
+                "「{name}」暂无可用驱动：当前版本只内置 MySQL / PostgreSQL / SQLite / DuckDB，其余类型待驱动插件能力开放"
+            ));
+            self.result_ok.set(false);
+            return;
+        }
         *self.selected_type.borrow_mut() = type_id.to_string();
         self.refresh_driver_items(window, cx);
         let first = enabled_drivers_of_type(&self.drivers.borrow(), type_id)
@@ -716,7 +741,12 @@ impl ClonedDialogState {
                 find_driver_by_value(&enabled_drivers_of_type(&drivers, &type_id), &driver_value)
                     .cloned()
             };
-            scoped.or_else(|| find_driver_by_value(&drivers, &driver_value).cloned())
+            scoped.or_else(|| {
+                // 回退全量目录（兼容完整名 / 手输值）时同样要求驱动启用——
+                // 否则可能拿一个被禁用的驱动落库，后续连接必然失败。
+                let enabled: Vec<Driver> = drivers.iter().filter(|d| d.enabled).cloned().collect();
+                find_driver_by_value(&enabled, &driver_value).cloned()
+            })
         };
         let db_type = selected_driver
             .as_ref()

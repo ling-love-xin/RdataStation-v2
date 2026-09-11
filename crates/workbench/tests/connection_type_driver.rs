@@ -179,6 +179,52 @@ fn selecting_type_scopes_driver_options_to_short_names(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn type_without_enabled_driver_is_refused(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    let dialog = cx.update(|window, cx| {
+        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        // 目录里有 Oracle 类型，但无对应驱动（与种子目录一致：只内置 4 个驱动）。
+        *dialog.types.borrow_mut() = vec![
+            ds_type("mysql", "MySQL", "🐬"),
+            ds_type("oracle", "Oracle", "🔴"),
+        ];
+        *dialog.drivers.borrow_mut() = vec![
+            driver("mysql", "mysql", "MySQL (sqlx)", true),
+            // 同类型下仅有的驱动被禁用 → 同样视为“无可用驱动”。
+            driver("oracle_legacy", "oracle", "Oracle (Legacy)", false),
+        ];
+        dialog
+    });
+
+    // 选无可用驱动的类型：拒绝切换（选中仍为空）+ 结果行给出原因。
+    cx.update(|window, cx| dialog.select_type("oracle", window, cx));
+    assert_eq!(
+        cx.update(|_, _cx| dialog.selected_type.borrow().clone()),
+        "",
+        "无可用驱动的类型不应被选中"
+    );
+    assert!(
+        cx.update(|_, cx| dialog.driver.read(cx).selected_value().is_none()),
+        "拒绝选中后驱动下拉仍为空"
+    );
+    let msg = cx
+        .update(|_, _cx| dialog.result.borrow().clone())
+        .unwrap_or_default();
+    assert!(msg.contains("暂无可用驱动"), "应给出原因：{msg}");
+    assert!(!cx.update(|_, _cx| dialog.result_ok.get()), "提示应为失败态");
+
+    // 有可用驱动的类型仍可正常选中。
+    cx.update(|window, cx| dialog.select_type("mysql", window, cx));
+    assert_eq!(
+        cx.update(|_, _cx| dialog.selected_type.borrow().clone()),
+        "mysql"
+    );
+
+    cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
+}
+
+#[gpui_kit::test]
 fn draft_snapshot_carries_type_and_driver_id(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);

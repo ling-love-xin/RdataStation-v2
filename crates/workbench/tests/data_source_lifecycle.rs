@@ -382,6 +382,33 @@ fn project_scope_readback_requires_project_path() {
 }
 
 #[test]
+fn nav_runtime_resolves_project_connection_with_project_path() {
+    let dir = temp_dir("nav-project");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let path = project_root.to_string_lossy().to_string();
+
+    let mut i = input("nav_proj", "sqlite", "sqlite:///tmp/nav.db");
+    i.scope = ConnectionScope::Project;
+    let id = rt
+        .block_on(service.save(&i, Some(&path)))
+        .expect("save project only");
+
+    // 导航树「连接」入口：项目侧连接必须带项目根才解析得到（旧实现只查全局库 → 报“数据源不存在”）。
+    let ds = rds_workbench::services::nav_runtime::load_entry_with(&service, &id, Some(&path))
+        .expect("项目侧连接应可解析");
+    assert_eq!(ds.name, "nav_proj");
+    assert_eq!(ds.scope, ConnectionScope::Project);
+    let err = rds_workbench::services::nav_runtime::load_entry_with(&service, &id, None)
+        .expect_err("无项目根应明确报错");
+    assert!(err.contains("数据源不存在"), "{err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn service_save_is_visible_to_workspace_loader() {
     let dir = temp_dir("linkage");
     let service = make_service(&dir);

@@ -64,6 +64,8 @@ pub struct Shared {
     pub open_edit: Rc<RefCell<Option<String>>>,
     /// 连接对话框的项目下拉选中「＋ 新增项目」→ 宿主打开项目新建入口（由 `WorkbenchView` 消费）。
     pub project_new_request: Rc<Cell<bool>>,
+    /// 连接对话框的项目下拉选中「打开现有目录…」→ 宿主打开目录选择（由 `WorkbenchView` 消费）。
+    pub project_open_request: Rc<Cell<bool>>,
     /// P0：当前项目会话（草稿箱根 / 项目作用域连接 / 标题栏项目名共用）。
     pub project: Rc<RefCell<Option<project::ui::OpenProject>>>,
     /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
@@ -105,6 +107,7 @@ impl Shared {
             sql_for: Rc::new(RefCell::new(None)),
             open_edit: Rc::new(RefCell::new(None)),
             project_new_request: Rc::new(Cell::new(false)),
+            project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_dirty: Rc::new(Cell::new(false)),

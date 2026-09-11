@@ -1197,6 +1197,8 @@ impl ConnectionDialogState {
                 );
                 for t in matched {
                     let on = selected_type_id == t.id;
+                    // 无可用驱动的类型：置灰 + 标注「暂无驱动」+ 点击不切换（见 `select_type` 守卫）。
+                    let has_driver = type_has_driver(&drivers_snapshot, &t.id);
                     let type_id = t.id.clone();
                     let type_icon = t
                         .icon
@@ -1204,6 +1206,13 @@ impl ConnectionDialogState {
                         .filter(|i| !i.trim().is_empty())
                         .unwrap_or_else(|| "🗄".to_string());
                     let type_name = t.name.clone();
+                    let name_color = if !has_driver {
+                        theme.colors.border
+                    } else if on {
+                        theme.colors.foreground
+                    } else {
+                        theme.colors.muted_foreground
+                    };
                     let mut row = div()
                         .id(ElementId::Name(SharedString::from(format!("type-{}", t.id))))
                         .h_flex()
@@ -1216,35 +1225,43 @@ impl ConnectionDialogState {
                     if on {
                         row = row.bg(theme.colors.sidebar_accent);
                     }
-                    db_tree = db_tree.child(
-                        row.child(
-                            div()
-                                .w(px(2.))
-                                .h(rems(1.))
-                                .rounded_full()
-                                .bg(if on { theme.colors.primary } else { theme.colors.border }),
-                        )
-                        .child(div().flex_shrink_0().text_color(theme.colors.muted_foreground).child(type_icon))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(if on {
-                                    theme.colors.foreground
-                                } else {
-                                    theme.colors.muted_foreground
-                                })
-                                .child(type_name),
-                        )
-                        .on_click({
-                            let state = state.clone();
-                            let entity = entity.clone();
-                            move |_, window, app| {
-                                // 侧栏选定类型 → Header 驱动下拉仅列该类型驱动（短名）。
-                                state.select_type(&type_id, window, app);
-                                entity.update(app, |_, cx| cx.notify());
-                            }
-                        }),
+                    // 固定行高内右对齐提示：不加宽行高，避免侧栏布局跳动。
+                    let hint: Option<Div> = (!has_driver).then(|| {
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_right()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("暂无驱动")
+                    });
+                    let mut row_el = row.child(
+                        div()
+                            .w(px(2.))
+                            .h(rems(1.))
+                            .rounded_full()
+                            .bg(if on { theme.colors.primary } else { theme.colors.border }),
+                    )
+                    .child(div().flex_shrink_0().text_color(theme.colors.muted_foreground).child(type_icon))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(name_color)
+                            .child(type_name),
                     );
+                    if let Some(h) = hint {
+                        row_el = row_el.child(h);
+                    }
+                    db_tree = db_tree.child(row_el.on_click({
+                        let state = state.clone();
+                        let entity = entity.clone();
+                        move |_, window, app| {
+                            // 侧栏选定类型 → Header 驱动下拉仅列该类型驱动（短名）；
+                            // 无可用驱动时 `select_type` 只写提示，不改选中。
+                            state.select_type(&type_id, window, app);
+                            entity.update(app, |_, cx| cx.notify());
+                        }
+                    }));
                 }
             }
             // ---- 暂存列表（多连接连续编辑；原型设计 §2.2）：草稿 + 已保存条目 ----
@@ -1612,9 +1629,17 @@ impl ConnectionDialogState {
                                 .w(rems(DRIVER_W))
                                 .flex_shrink_0()
                                 .child(if type_badge_now.is_some() {
-                                    Select::new(&driver)
-                                        .placeholder("选择驱动实现…")
-                                        .into_any_element()
+                                    if type_has_driver(&drivers_snapshot, &selected_type_id) {
+                                        Select::new(&driver)
+                                            .placeholder("选择驱动实现…")
+                                            .into_any_element()
+                                    } else {
+                                        // 类型已选但无可用驱动（旧草稿 / 目录缺驱动）：只读占位。
+                                        Select::new(&driver)
+                                            .placeholder("该类型暂无可用驱动")
+                                            .disabled(true)
+                                            .into_any_element()
+                                    }
                                 } else {
                                     // 未选类型：仍以禁用下拉占位（保持控件形态与行高一致）。
                                     Select::new(&driver)

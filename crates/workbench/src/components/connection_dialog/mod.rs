@@ -88,7 +88,7 @@ mod state;
 
 pub(crate) use helpers::*;
 pub(crate) use managers::*;
-pub use project_picker::{PROJECT_NEW_LABEL, ProjectItem};
+pub use project_picker::{PROJECT_NEW_LABEL, PROJECT_OPEN_LABEL, ProjectItem, ProjectItemKind};
 pub(crate) use staging::saved_scope_short;
 pub use staging::{ConnectionDraft, Hop};
 

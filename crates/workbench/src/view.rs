@@ -882,16 +882,20 @@ impl Render for WorkbenchView {
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
         self.apply_right_mode(window, cx);
-        // 连接对话框项目下拉选「＋ 新增项目」→ 复用项目管理的新建入口
-        // （创建成功后新项目成为当前会话，对话框的项目栏在下一次渲染自动跟随）。
-        if self.shared.project_new_request.replace(false) {
+        // 连接对话框项目下拉的动作项 → 复用项目管理的两个入口：
+        // 「＋ 新增项目」开新建对话框；「打开现有目录…」开目录选择对话框。
+        // 两者都会切换项目；有未保存草稿时先走既有未保存确认（不静默丢弃）。
+        let needs_project_new = self.shared.project_new_request.replace(false);
+        let needs_project_open = self.shared.project_open_request.replace(false);
+        if needs_project_new || needs_project_open {
             let host = self.project_host().clone();
             if let Some(inputs) = self.project_inputs.clone() {
-                // 有未保存草稿时先走既有未保存确认，不静默丢弃当前项目内容。
                 if host.editor.is_dirty() {
                     project::ui::request_close(&host, window, cx);
-                } else {
+                } else if needs_project_new {
                     project::ui::open_create_dialog(&host, &inputs, window, cx);
+                } else {
+                    project::ui::open_folder_dialog(&host, &inputs, window, cx);
                 }
             }
         }

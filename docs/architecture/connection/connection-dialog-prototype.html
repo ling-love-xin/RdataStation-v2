@@ -56,25 +56,27 @@ button{font-family:inherit;}
 .side-search input:focus{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent);}
 .side-search input::placeholder{color:var(--muted);}
 .side-section{padding:4px 12px 10px;}
+.side-section.grow{flex:1;min-height:0;display:flex;flex-direction:column;}
 .side-title{font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px;}
+.side-head{display:flex;align-items:center;justify-content:space-between;}
+.stage-box{height:120px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;}
+.type-box{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:4px;}
 .stage-item{display:flex;align-items:center;gap:7px;font-size:12px;padding:5px 9px;border-radius:6px;cursor:pointer;color:var(--fg);transition:background .12s;}
 .stage-item:hover{background:var(--hover);}
 .stage-item.active{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
-.stage-item .st-ic{width:14px;height:14px;color:var(--muted);flex-shrink:0;}
-.stage-item .st-tag{margin-left:auto;font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 6px;line-height:15px;}
-.stage-add{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);padding:4px 9px;border-radius:6px;cursor:pointer;transition:color .12s,background .12s;}
-.stage-add:hover{color:var(--fg);background:var(--hover);}
-.stage-add svg{width:12px;height:12px;}
+.stage-item .st-db{width:17px;height:17px;border-radius:5px;background:var(--accent);display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0;}
+.stage-item .st-code{margin-left:auto;font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 5px;line-height:14px;}
+.stage-item .st-dot{margin-left:auto;font-size:10px;color:var(--warning);}
+.stage-item .st-del{margin-left:6px;font-size:11px;color:var(--muted);}
+.stage-item .st-del:hover{color:var(--fg);}
+.stage-add{font-size:11.5px;color:var(--active-border);cursor:pointer;transition:color .12s;}
+.stage-add:hover{color:var(--primary-hover);}
 .side-divider{height:1px;background:var(--sidebar-border);margin:2px 0 6px;}
-.cat{display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 8px;cursor:pointer;color:var(--fg);border-radius:6px;transition:background .12s;}
-.cat:hover{background:var(--hover);}
-.cat .chev{width:12px;height:12px;color:var(--muted);flex-shrink:0;transition:transform .15s;}
-.cat.open .chev{transform:rotate(90deg);}
-.cat .cnt{margin-left:auto;font-size:10px;color:var(--muted);background:color-mix(in srgb,var(--muted) 12%,transparent);border-radius:8px;padding:0 7px;line-height:15px;}
-.db-item{display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 8px 4px 22px;cursor:pointer;color:var(--fg);border-radius:6px;transition:background .12s;}
+.cat-label{font-size:10.5px;font-weight:700;color:var(--muted);padding:6px 8px 0;}
+.db-item{display:flex;align-items:center;gap:7px;font-size:12px;padding:4px 8px;cursor:pointer;color:var(--fg);border-radius:6px;transition:background .12s;}
 .db-item:hover{background:var(--hover);}
 .db-item.active{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
-.db-badge{width:17px;height:17px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:8.5px;font-weight:700;color:#fff;flex-shrink:0;letter-spacing:.3px;}
+.db-ic{width:15px;text-align:center;flex-shrink:0;}
 .hidden{display:none;}
 
 .main-panel{flex:1;display:flex;flex-direction:column;min-width:0;}
@@ -85,22 +87,31 @@ button{font-family:inherit;}
 .inp{border:1px solid var(--input-border);border-radius:7px;background:var(--bg);color:var(--fg);padding:5px 10px;font-size:12.5px;outline:none;transition:border-color .15s,box-shadow .15s;font-family:inherit;}
 .inp:focus{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent);}
 .inp.name{width:158px;}
-.driver-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--active-border);border-radius:7px;background:color-mix(in srgb,var(--active-border) 6%,transparent);padding:4px 11px;font-size:12.5px;color:var(--active-border);font-weight:600;cursor:pointer;transition:background .12s;}
-.driver-pill:hover{background:color-mix(in srgb,var(--active-border) 12%,transparent);}
 .scope{display:inline-flex;border:1px solid var(--input-border);border-radius:7px;overflow:hidden;background:var(--bg);}
 .scope button{border:none;background:transparent;color:var(--muted);padding:5px 13px;font-size:12px;cursor:pointer;transition:all .15s;}
 .scope button + button{border-left:1px solid var(--input-border);}
 .scope button.on{background:var(--primary);color:var(--primary-fg);font-weight:600;}
 .scope button:not(.on):hover{background:var(--hover);color:var(--fg);}
-.uri-row{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-.uri-code{display:inline-flex;align-items:center;gap:8px;background:var(--sidebar);border:1px solid var(--input-border);border-radius:7px;padding:4px 10px;color:var(--fg);font-family:Consolas,'Courier New',monospace;font-size:11.5px;}
-.uri-code svg{width:12px;height:12px;color:var(--muted);cursor:pointer;transition:color .12s;}
-.uri-code svg:hover{color:var(--active-border);}
+.type-badge{width:22px;height:22px;border-radius:6px;border:1px solid var(--input-border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;}
+.type-badge.warn{border-color:var(--warning);color:var(--warning);}
 .link-btn{display:inline-flex;align-items:center;gap:5px;border:none;background:transparent;color:var(--active-border);font-size:11.5px;cursor:pointer;padding:2px 0;transition:color .12s;}
 .link-btn:hover{color:var(--primary-hover);text-decoration:underline;}
 .link-btn svg{width:12px;height:12px;}
-.scope-hint{font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;background:color-mix(in srgb,var(--active-border) 7%,transparent);border-radius:6px;padding:3px 9px;}
-.scope-hint b{color:var(--active-border);font-weight:600;}
+.driver-sel{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;width:118px;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);padding:5px 9px;font-size:12px;color:var(--fg);cursor:pointer;flex-shrink:0;}
+.driver-sel.disabled{opacity:.55;cursor:not-allowed;}
+.driver-sel .chev{width:11px;height:11px;color:var(--muted);flex-shrink:0;}
+.proj-sel{position:relative;width:250px;flex-shrink:0;display:flex;align-items:center;gap:8px;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);padding:5px 9px;font-size:12px;cursor:pointer;}
+.proj-sel.disabled{opacity:.55;cursor:not-allowed;}
+.proj-sel .pj-name{flex-shrink:0;}
+.proj-sel .pj-path{flex:1;min-width:0;color:var(--muted);opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;font-size:11px;}
+.proj-sel .chev{width:11px;height:11px;color:var(--muted);flex-shrink:0;}
+.proj-menu{position:absolute;z-index:40;top:calc(100% + 4px);right:0;width:330px;background:var(--bg);border:1px solid var(--input-border);border-radius:8px;box-shadow:var(--shadow);padding:4px;display:none;}
+.proj-menu.on{display:block;}
+.proj-menu .pm-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;font-size:12px;cursor:pointer;}
+.proj-menu .pm-row:hover{background:var(--hover);}
+.proj-menu .pm-name{flex-shrink:0;}
+.proj-menu .pm-path{flex:1;min-width:0;color:var(--muted);opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;font-size:11px;}
+.proj-menu .pm-new{color:var(--active-border);font-weight:600;}
 
 .tabs-bar{display:flex;gap:2px;background:var(--tabbar);border-bottom:1px solid var(--border);padding:0 10px;font-size:12.5px;}
 .tab{padding:8px 13px;cursor:pointer;color:var(--muted);border-top:2px solid transparent;border-radius:6px 6px 0 0;transition:color .12s,background .12s;}
@@ -125,6 +136,9 @@ button{font-family:inherit;}
 .val2{border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:4px 9px;color:var(--fg);font-size:12px;display:inline-block;min-width:0;transition:border-color .12s;}
 .val2:hover{border-color:var(--active-border);}
 .val2.lock{color:var(--muted);}
+.org-hint{font-size:11px;color:var(--muted);margin-top:6px;}
+.org-groups{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:8px;}
+.chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--fg);cursor:pointer;}
 .auth-saved{margin-top:9px;padding-top:8px;border-top:1px dashed var(--border);font-size:11px;color:var(--muted);line-height:1.7;}
 .sel{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--input-border);border-radius:6px;padding:2px 8px;color:var(--fg);cursor:pointer;background:var(--bg);transition:border-color .12s;}
 .sel:hover{border-color:var(--active-border);}
@@ -190,6 +204,8 @@ button{font-family:inherit;}
 .btn-cancel:hover{background:var(--hover);border-color:var(--input-border);}
 .btn-save{background:var(--primary);color:var(--primary-fg);font-weight:600;box-shadow:0 2px 6px color-mix(in srgb,var(--primary) 35%,transparent);}
 .btn-save:hover{background:var(--primary-hover);}
+.btn-close{border:1px solid var(--input-border);background:var(--bg);color:var(--fg);}
+.btn-close:hover{background:var(--hover);border-color:var(--active-border);}
 .test-result{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;border-radius:12px;padding:3px 11px;}
 .test-result svg{width:12px;height:12px;}
 .test-result.ok{color:var(--success);background:var(--success-bg);}
@@ -255,101 +271,87 @@ button{font-family:inherit;}
 
   <div class="dlg-body">
 
-    <!-- ===== 左侧栏 ===== -->
+    <!-- ===== 左侧栏（200px，高度恒定：暂存区固定 120px + 类型树占满剩余，均内部滚动） ===== -->
     <div class="sidebar">
       <div class="side-search">
         <svg class="s-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-        <input placeholder="搜索数据库…" id="searchInput">
+        <input placeholder="搜索类型…" id="searchInput">
       </div>
       <div class="side-section">
-        <div class="side-title">暂存列表</div>
-        <div class="stage-item active" data-stage="0">
-          <svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="3"/></svg>
-          MySQL 演示<span class="st-tag">未保存</span>
+        <div class="side-head">
+          <span class="side-title">暂存列表</span>
+          <span class="stage-add" id="stagingAdd">+ 添加</span>
         </div>
-        <div class="stage-item" data-stage="1">
-          <svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="3"/></svg>
-          DuckDB 本地<span class="st-tag">未保存</span>
-        </div>
-        <div class="stage-add">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-          新建配置
+        <div class="stage-box">
+          <div class="stage-item active" data-stage="0">
+            <span class="st-db">🐬</span>MySQL 演示<span class="st-dot">●</span>
+          </div>
+          <div class="stage-item" data-stage="1">
+            <span class="st-db">🐘</span>生产 PG<span class="st-code">G</span>
+          </div>
+          <div class="stage-item" data-stage="2">
+            <span class="st-db">🦆</span>DuckDB 本地<span class="st-del">✕</span>
+          </div>
         </div>
       </div>
       <div class="side-divider"></div>
-      <div class="side-section">
+      <div class="side-section grow">
         <div class="side-title">数据库类型</div>
-        <div class="cat open" data-cat="relational">
-          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-          关系型<span class="cnt">4</span>
-        </div>
-        <div id="items-relational">
-          <div class="db-item active" data-db="mysql"><span class="db-badge" style="background:#2F81F7;">My</span>MySQL</div>
-          <div class="db-item" data-db="postgres"><span class="db-badge" style="background:#3E7CB1;">Pg</span>PostgreSQL</div>
-          <div class="db-item" data-db="mariadb"><span class="db-badge" style="background:#B58234;">Ma</span>MariaDB</div>
-          <div class="db-item" data-db="oracle"><span class="db-badge" style="background:#C74634;">Or</span>Oracle</div>
-        </div>
-        <div class="cat" data-cat="file">
-          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-          文件型<span class="cnt">2</span>
-        </div>
-        <div id="items-file" class="hidden">
-          <div class="db-item" data-db="sqlite"><span class="db-badge" style="background:#41A9C9;">Sq</span>SQLite</div>
-          <div class="db-item" data-db="duckdb"><span class="db-badge" style="background:#DAD02A;color:#333;">Dk</span>DuckDB</div>
-        </div>
-        <div class="cat" data-cat="nosql">
-          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-          NoSQL<span class="cnt">2</span>
-        </div>
-        <div id="items-nosql" class="hidden">
-          <div class="db-item" data-db="mongodb"><span class="db-badge" style="background:#4DA24A;">Mo</span>MongoDB</div>
-          <div class="db-item" data-db="redis"><span class="db-badge" style="background:#D82C20;">Re</span>Redis</div>
-        </div>
-        <div class="cat" data-cat="analytics">
-          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-          分析型<span class="cnt">2</span>
-        </div>
-        <div id="items-analytics" class="hidden">
-          <div class="db-item" data-db="clickhouse"><span class="db-badge" style="background:#D4412E;">Ch</span>ClickHouse</div>
-          <div class="db-item" data-db="starrocks"><span class="db-badge" style="background:#7048B8;">Sr</span>StarRocks</div>
+        <div class="type-box">
+          <div class="cat-label">关系型（5）</div>
+          <div class="db-item active" data-db="mysql"><span class="db-ic">🐬</span>MySQL</div>
+          <div class="db-item" data-db="postgresql"><span class="db-ic">🐘</span>PostgreSQL</div>
+          <div class="db-item" data-db="mariadb"><span class="db-ic">🦭</span>MariaDB</div>
+          <div class="db-item" data-db="oracle"><span class="db-ic">🔴</span>Oracle</div>
+          <div class="db-item" data-db="mssql"><span class="db-ic">🟢</span>SQL Server</div>
+          <div class="cat-label">文件型（1）</div>
+          <div class="db-item" data-db="sqlite"><span class="db-ic">🪶</span>SQLite</div>
+          <div class="cat-label">分析型（2）</div>
+          <div class="db-item" data-db="duckdb"><span class="db-ic">🦆</span>DuckDB</div>
+          <div class="db-item" data-db="clickhouse"><span class="db-ic">⚡</span>ClickHouse</div>
+          <div class="cat-label">NoSQL（2）</div>
+          <div class="db-item" data-db="mongodb"><span class="db-ic">🍃</span>MongoDB</div>
+          <div class="db-item" data-db="redis"><span class="db-ic">🔶</span>Redis</div>
         </div>
       </div>
     </div>
 
     <!-- ===== 右侧主面板 ===== -->
     <div class="main-panel">
+      <!-- Header 3 行（与实现一致）：① 类型徽标 + 名称 + 作用域分段；② 备注 + 项目；③ 驱动 + URI -->
       <div class="panel-header">
         <div class="h-row">
+          <span class="type-badge" id="typeBadge">🐬</span>
           <span class="f-label">名称</span>
-          <input class="inp name" value="MySQL-演示">
-          <span class="f-label">驱动类型</span>
-          <span class="driver-pill" id="driverSel">MySQL (sqlx)
-            <svg style="width:11px;height:11px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-          </span>
-          <span class="spacer"></span>
-          <span class="f-label">作用域</span>
+          <input class="inp" value="MySQL-演示" style="flex:1;min-width:120px;">
           <span class="scope" id="scopeToggle">
             <button class="on" data-scope="global">全局</button>
             <button data-scope="project">项目</button>
+            <button data-scope="both">全局+项目</button>
           </span>
         </div>
         <div class="h-row">
           <span class="f-label">备注</span>
-          <input class="inp" value="团队共用分析库" style="flex:1;max-width:440px;">
-        </div>
-        <div class="h-row uri-row">
-          <span class="f-label">URI</span>
-          <span class="uri-code" id="uriCode">mysql://root:****@127.0.0.1:3306/demo
-            <svg id="copyUri" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          </span>
-          <button class="link-btn" id="uriEditBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
-            编辑
-          </button>
-          <button class="link-btn" id="uriDoneBtn" style="display:none;">完成</button>
+          <input class="inp" value="团队共用分析库" style="flex:1;min-width:160px;">
+          <div class="proj-sel disabled" id="projSel">
+            <span class="pj-name" id="projName">仅全局不需要</span>
+            <span class="pj-path" id="projPath"></span>
+            <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            <div class="proj-menu" id="projMenu">
+              <div class="pm-row" data-proj="演示项目" data-path="D:\RDSProjects\演示项目"><span class="pm-name">演示项目</span><span class="pm-path">D:\RDSProjects\演示项目</span></div>
+              <div class="pm-row" data-proj="数据仓库" data-path="D:\RDSProjects\数据仓库"><span class="pm-name">数据仓库</span><span class="pm-path">D:\RDSProjects\数据仓库</span></div>
+              <div class="pm-row pm-new" id="projNew">＋ 新增项目</div>
+            </div>
+          </div>
         </div>
         <div class="h-row">
-          <span class="scope-hint" id="scopeHint">作用域：<b>全局</b> → 保存至 global_connections（G_xxx）</span>
+          <span class="f-label">驱动</span>
+          <span class="driver-sel" id="driverSel">
+            <span id="driverName">sqlx</span>
+            <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </span>
+          <span class="f-label">URI</span>
+          <input class="inp" id="uriInput" value="mysql://root:****@127.0.0.1:3306/demo" style="flex:1;min-width:200px;font-family:Consolas,'Courier New',monospace;font-size:11.5px;">
         </div>
       </div>
 
@@ -365,7 +367,7 @@ button{font-family:inherit;}
       <div class="tab-pane on" id="tab-general">
         <div class="info-banner">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-          driver: mysql · 原生连接（sqlx）· 支持 password / ssh 认证
+          MySQL · sqlx · 原生连接 · 支持 password / ssh_key 认证
         </div>
         <div class="sec-row">
           <div class="sec-card">
@@ -409,6 +411,22 @@ button{font-family:inherit;}
               <label>模式</label><span class="val2">require ▾</span>
               <label>CA 证书</label><span class="val2">…/ca.pem</span>
               <label>客户端证书</label><span class="val2">（无）</span>
+            </div>
+          </div>
+          <div class="sec-card">
+            <div class="sec-title">
+              <svg class="st-ic green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/></svg>
+              组织（标签 / 分组）
+            </div>
+            <div class="form-grid">
+              <label>标签</label><input class="inp" value="prod, core">
+            </div>
+            <div class="org-hint">多个标签用逗号分隔（导航检索用）</div>
+            <div class="org-groups">
+              <span class="f-label">分组</span>
+              <label class="chk"><input type="checkbox" checked> 生产</label>
+              <label class="chk"><input type="checkbox"> 测试</label>
+              <label class="chk"><input type="checkbox"> 核心业务</label>
             </div>
           </div>
         </div>
@@ -529,6 +547,7 @@ button{font-family:inherit;}
         <span class="spacer"></span>
         <button class="btn btn-cancel" id="cancelBtn">取消</button>
         <button class="btn btn-save" id="saveBtn">保存</button>
+        <button class="btn btn-close" id="saveCloseBtn">保存并关闭</button>
       </div>
     </div>
   </div>
@@ -601,7 +620,7 @@ button{font-family:inherit;}
 
 <div class="note">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-  <span><b>说明：</b>本原型为<b>示意稿</b>，用于确认布局与视觉，非最终实现；配色取自 <code>assets/themes/rds-theme.json</code>（RDS Light/Dark）。可交互：测试连接→成功反馈、Tab 切换、作用域同选、暗色切换、暂存选择、分类折叠、三个管理覆盖层。真实实现走 GPUI + theme token。</span>
+  <span><b>说明：</b>本原型为<b>示意稿</b>，用于确认布局与视觉，非最终实现；配色取自 <code>assets/themes/rds-theme.json</code>（RDS Light/Dark）。可交互：Tab 切换、类型选择（联动类型徽标 / 驱动短名 / URI，文件型提示隐藏网络 Tab）、作用域三态分段（联动项目栏启用与占位）、项目下拉（项目名 + 路径，末项「＋ 新增项目」）、测试连接→成功反馈、保存 / 保存并关闭、暗色切换、暂存选择、三个管理覆盖层。真实实现走 GPUI + theme token。</span>
 </div>
 
 <script>
@@ -627,26 +646,30 @@ button{font-family:inherit;}
     });
   });
 
-  /* 分类折叠 */
-  document.querySelectorAll('.cat').forEach(function(c){
-    c.addEventListener('click',function(){
-      var id='items-'+c.getAttribute('data-cat'), box=document.getElementById(id);
-      box.classList.toggle('hidden');
-      c.classList.toggle('open');
-    });
-  });
-
-  /* 类型选择：更新 URI + 驱动 */
+  /* 类型选择：更新类型徽标 + 驱动短名 + URI（驱动下拉只列该类型启用驱动） */
+  var typeMeta={mysql:['🐬','sqlx','mysql://root:****@127.0.0.1:3306/demo'],
+                postgresql:['🐘','sqlx','postgres://root:****@127.0.0.1:5432/postgres'],
+                mariadb:['🦭','sqlx','mysql://root:****@127.0.0.1:3306/demo'],
+                oracle:['🔴','oracle','oracle://system:****@127.0.0.1:1521/ORCL'],
+                mssql:['🟢','tiberius','mssql://sa:****@127.0.0.1:1433/master'],
+                sqlite:['🪶','rusqlite','sqlite:///data/demo.db'],
+                duckdb:['🦆','duckdb-rs','duckdb:///data/demo.duckdb'],
+                clickhouse:['⚡','clickhouse','clickhouse://default:****@127.0.0.1:8123/default'],
+                mongodb:['🍃','mongodb','mongodb://127.0.0.1:27017/demo'],
+                redis:['🔶','redis','redis://127.0.0.1:6379/0']};
   document.querySelectorAll('.db-item').forEach(function(item){
     item.addEventListener('click',function(){
       document.querySelectorAll('.db-item').forEach(function(x){x.classList.remove('active');});
       item.classList.add('active');
-      var map={mysql:['MySQL (sqlx)','mysql://root:****@127.0.0.1:3306/demo'],
-               postgres:['PostgreSQL (sqlx)','postgres://root:****@127.0.0.1:5432/postgres'],
-               sqlite:['SQLite (rusqlite)','file:///data/demo.db'],
-               duckdb:['DuckDB (duckdb-rs)','file:///data/demo.duckdb']};
-      var db=item.getAttribute('data-db'), m=map[db];
-      if(m){document.getElementById('driverSel').childNodes[0].textContent=' '+m[0]+' ';document.getElementById('uriCode').childNodes[0].textContent=m[1];}
+      var db=item.getAttribute('data-db'), m=typeMeta[db];
+      if(m){
+        var badge=document.getElementById('typeBadge');
+        badge.textContent=m[0]; badge.classList.remove('warn');
+        document.getElementById('driverName').textContent=m[1];
+        document.getElementById('uriInput').value=m[2];
+        var fileDb=(db==='sqlite'||db==='duckdb');
+        demo(fileDb?'演示：文件型驱动隐藏「网络」Tab（示意）':'演示：驱动下拉只列该类型的启用驱动（短名）');
+      }
     });
   });
 
@@ -657,23 +680,54 @@ button{font-family:inherit;}
       s.classList.add('active');
     });
   });
+  document.getElementById('stagingAdd').addEventListener('click',function(){demo('演示：添加空草稿并选中（保存后自动补一条）');});
 
-  /* 作用域：可多选（全局 / 项目 / 同属），按 v1 双轨设计 */
-  var scopeHint=document.getElementById('scopeHint');
-  function updateScopeHint(){
-    var g=document.querySelector('#scopeToggle [data-scope="global"]').classList.contains('on');
-    var p=document.querySelector('#scopeToggle [data-scope="project"]').classList.contains('on');
-    if(g&&p){scopeHint.innerHTML='作用域：<b>全局＋项目</b> → 保存为全局（G_xxx）并共享至当前项目（GP_xxx）';}
-    else if(g){scopeHint.innerHTML='作用域：<b>全局</b> → 保存至 global_connections（G_xxx）';}
-    else if(p){scopeHint.innerHTML='作用域：<b>项目</b> → 保存至当前项目 project.db（P_xxx）';}
-    else{scopeHint.innerHTML='作用域：<b>未选择</b>（至少选择一项）';}
+  /* 作用域：三态单选（全局 / 项目 / 全局+项目），写库用全称标签 */
+  function syncProjectSel(){
+    var scope=document.querySelector('#scopeToggle button.on').getAttribute('data-scope');
+    var sel=document.getElementById('projSel');
+    var onlyGlobal=(scope==='global');
+    sel.classList.toggle('disabled',onlyGlobal);
+    if(onlyGlobal){
+      document.getElementById('projName').textContent='仅全局不需要';
+      document.getElementById('projPath').textContent='';
+    }else if(document.getElementById('projName').textContent==='仅全局不需要'){
+      document.getElementById('projName').textContent='选择项目…';
+    }
   }
   document.querySelectorAll('#scopeToggle button').forEach(function(b){
     b.addEventListener('click',function(){
-      b.classList.toggle('on');
-      updateScopeHint();
+      document.querySelectorAll('#scopeToggle button').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on');
+      syncProjectSel();
+      var s=b.getAttribute('data-scope');
+      demo(s==='global'?'作用域：全局 → global_connections（G_xxx）':s==='project'?'作用域：项目 → 项目库 project.db（P_xxx）':'作用域：全局+项目 → 全局定义 + 项目快照引用（GP_xxx）');
     });
   });
+  syncProjectSel();
+
+  /* 项目下拉：项目名（左）+ 路径（右，头部省略）；末项「＋ 新增项目」 */
+  var projSel=document.getElementById('projSel'), projMenu=document.getElementById('projMenu');
+  projSel.addEventListener('click',function(e){
+    e.stopPropagation();
+    if(projSel.classList.contains('disabled')){demo('演示：仅全局作用域不需要项目（禁用占位）');return;}
+    projMenu.classList.toggle('on');
+  });
+  document.querySelectorAll('#projMenu .pm-row[data-proj]').forEach(function(r){
+    r.addEventListener('click',function(e){
+      e.stopPropagation();
+      document.getElementById('projName').textContent=r.getAttribute('data-proj');
+      document.getElementById('projPath').textContent=r.getAttribute('data-path');
+      projMenu.classList.remove('on');
+      demo('演示：选中项目 → 项目根写回路径（保存与作用域预检均读该项）');
+    });
+  });
+  document.getElementById('projNew').addEventListener('click',function(e){
+    e.stopPropagation();
+    projMenu.classList.remove('on');
+    demo('演示：选中「＋ 新增项目」→ 打开「新建项目」对话框（有未保存草稿先走未保存确认）');
+  });
+  document.addEventListener('click',function(){projMenu.classList.remove('on');});
 
   /* 测试连接 */
   var testBtn=document.getElementById('testBtn'), testResult=document.getElementById('testResult');
@@ -699,7 +753,11 @@ button{font-family:inherit;}
 
   /* 保存 */
   document.getElementById('saveBtn').addEventListener('click',function(){
-    testResult.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 已保存到 全局 · G_xxx（示意）';
+    testResult.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 已保存到 全局 · G_xxx（示意）；对话框不关闭，草稿转正式并补空草稿';
+    testResult.className='test-result ok';
+  });
+  document.getElementById('saveCloseBtn').addEventListener('click',function(){
+    testResult.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 已保存并关闭（示意）';
     testResult.className='test-result ok';
   });
 
@@ -711,11 +769,9 @@ button{font-family:inherit;}
 
   /* 演示反馈 */
   var demo=function(msg){testResult.textContent=msg;testResult.className='test-result';};
-  document.getElementById('driverSel').addEventListener('click',function(){demo('演示：切换驱动（按类型过滤）');});
-  document.querySelector('.stage-add').addEventListener('click',function(){demo('演示：新建暂存配置（示意）');});
+  document.getElementById('driverSel').addEventListener('click',function(){demo('演示：切换驱动实现（短名，如 sqlx / Official），候选只含当前类型');});
   document.getElementById('pickAuth').addEventListener('click',function(){demo('演示：引用 MySQL-root-prod 认证（与来源共用凭据，字段转只读）');});
-  document.getElementById('cancelBtn').addEventListener('click',function(){demo('演示：取消关闭对话框（示意）');});
-  document.getElementById('copyUri').addEventListener('click',function(e){e.stopPropagation();demo('演示：URI 已复制（示意）');});
+  document.getElementById('cancelBtn').addEventListener('click',function(){demo('演示：取消关闭对话框（草稿写回暂存列表，不丢失）');});
 
   /* 管理覆盖层 */
   document.getElementById('manageAuthBtn').addEventListener('click',function(){document.getElementById('ovlAuth').classList.add('on');});
@@ -729,29 +785,6 @@ button{font-family:inherit;}
   });
   document.querySelectorAll('.demo-btn').forEach(function(b){
     b.addEventListener('click',function(){demo('演示：'+b.textContent.trim()+'（示意）');});
-  });
-
-  /* URI 编辑切换 */
-  var uriEditBtn=document.getElementById('uriEditBtn'), uriDoneBtn=document.getElementById('uriDoneBtn');
-  uriEditBtn.addEventListener('click',function(){
-    demo('演示：URI 进入手动编辑模式（示意）');
-    var input=document.createElement('input');
-    input.className='inp'; input.style.width='340px'; input.value=document.getElementById('uriCode').childNodes[0].textContent;
-    document.getElementById('uriCode').replaceWith(input);
-    uriEditBtn.style.display='none'; uriDoneBtn.style.display='';
-    uriDoneBtn.onclick=function(){
-      var code=document.createElement('span'); code.className='uri-code'; code.id='uriCode';
-      var t=document.createTextNode(input.value||'mysql://root:****@127.0.0.1:3306/demo');
-      code.appendChild(t);
-      var cp=document.createElementNS('http://www.w3.org/2000/svg','svg');
-      cp.setAttribute('viewBox','0 0 24 24'); cp.setAttribute('id','copyUri'); cp.setAttribute('style','width:12px;height:12px;cursor:pointer');
-      cp.innerHTML='<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M9 9h12v12H9zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>';
-      code.appendChild(cp);
-      input.replaceWith(code);
-      document.getElementById('copyUri').addEventListener('click',function(e){e.stopPropagation();demo('演示：URI 已复制（示意）');});
-      uriEditBtn.style.display=''; uriDoneBtn.style.display='none';
-      demo('URI 已更新（示意）');
-    };
   });
 })();
 </script>

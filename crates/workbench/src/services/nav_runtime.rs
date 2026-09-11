@@ -9,6 +9,7 @@
 
 use std::path::Path;
 
+use connection::model::DataSource;
 use database::model::{NavSource, NavState};
 use engine::connection_manager::ConnectionType;
 
@@ -16,15 +17,31 @@ use crate::services::connection_service::{ConnectRequest, ConnectionService};
 use crate::services::data_source_service::DataSourceService;
 use crate::services::nav_store::NavStore;
 
+/// 解析导航树入口的连接记录（项目侧 `P_`/`GP_` 只存项目库，必须带项目根）。
+pub fn load_entry(conn_id: &str, project_path: Option<&str>) -> Result<DataSource, String> {
+    let service = DataSourceService::global().map_err(|e| e.to_string())?;
+    load_entry_with(&service, conn_id, project_path)
+}
+
+/// 同 [`load_entry`]，但显式注入服务（测试用，避免依赖全局单例）。
+///
+/// 与对话框编辑回读同源：走 `get_with_project`，不走只查全局库的 `get`。
+pub fn load_entry_with(
+    service: &DataSourceService,
+    conn_id: &str,
+    project_path: Option<&str>,
+) -> Result<DataSource, String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+    rt.block_on(service.get_with_project(conn_id, project_path))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "数据源不存在".to_string())
+}
+
 /// 连接一条已保存数据源（按记录字段组装 URL；`project_path` 项目连接需提供）。
 pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), String> {
     let service = DataSourceService::global().map_err(|e| e.to_string())?;
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
 
-    let ds = rt
-        .block_on(service.get(conn_id))
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "数据源不存在".to_string())?;
+    let ds = load_entry_with(&service, conn_id, project_path)?;
 
     let url = connection::url::build_connection_url(&ds)?;
     let connection_type = if ds.id.starts_with("G_") {
@@ -59,6 +76,7 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
     };
 
     let conn_service = ConnectionService::new(engine::get_connection_manager().clone());
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
     rt.block_on(conn_service.connect_with_type(req))
         .map(|_| ())
         .map_err(|e| e.to_string())

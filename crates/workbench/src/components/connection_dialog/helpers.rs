@@ -119,6 +119,16 @@ pub(crate) fn enabled_drivers_of_type(drivers: &[Driver], type_id: &str) -> Vec<
         .collect()
 }
 
+/// 该数据库类型下是否有**可用驱动**（决定类型能否被选中）。
+///
+/// 类型目录与驱动目录是两层：`data_source_types` 里有条目不代表能用——当前只内置
+/// MySQL / PostgreSQL / SQLite / DuckDB 四个驱动，其余类型（MariaDB / Oracle /
+/// SQL Server / ClickHouse…）需等驱动插件能力开放。没有可用驱动的类型：
+/// 类型树置灰并标注「暂无驱动」，且 `select_type` 拒绝切换（避免“选了类型却存不了”）。
+pub(crate) fn type_has_driver(drivers: &[Driver], type_id: &str) -> bool {
+    drivers.iter().any(|d| d.enabled && d.type_id == type_id)
+}
+
 /// 按下拉显示值定位驱动：驱动 id → 完整名 → 短名（兼容回读、旧草稿与手输值）。
 pub(crate) fn find_driver_by_value<'a>(drivers: &'a [Driver], value: &str) -> Option<&'a Driver> {
     let v = value.trim();
@@ -297,7 +307,7 @@ mod tests {
     // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::{
         driver_short_name, enabled_drivers_of_type, find_driver_by_value, tags_from_json,
-        tags_to_json, type_badge,
+        tags_to_json, type_badge, type_has_driver,
     };
     use engine::persistence::driver_store::{DataSourceType, Driver};
 
@@ -391,6 +401,19 @@ mod tests {
         assert_eq!(mysql.len(), 1, "禁用驱动不应出现在下拉中");
         assert_eq!(mysql[0].id, "mysql");
         assert_eq!(enabled_drivers_of_type(&drivers, "oracle").len(), 0);
+    }
+
+    #[test]
+    fn type_has_driver_requires_enabled_driver() {
+        let drivers = vec![
+            driver("mysql", "mysql", "MySQL (sqlx)", true),
+            driver("oracle_legacy", "oracle", "Oracle (Legacy)", false),
+        ];
+        assert!(type_has_driver(&drivers, "mysql"));
+        // 只有禁用驱动的类型视为不可用（选型入口置灰 + 拒绝切换）。
+        assert!(!type_has_driver(&drivers, "oracle"));
+        // 目录里完全没有驱动的类型同样不可用（与种子目录一致：只内置 4 个驱动）。
+        assert!(!type_has_driver(&drivers, "clickhouse"));
     }
 
     #[test]

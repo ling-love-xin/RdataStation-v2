@@ -34,6 +34,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 
 - 可交互状态放 `Shared`（模型），渲染时从 Shared 读取
 - 副作用（Dock 装配/移除、模式切换）不在点击回调里直接做：回调只更新 Shared 状态 + `cx.notify()`；`render` 是模式同步的权威点（如 `WorkbenchView::render` 中的 `apply_left_mode` / `apply_right_mode`）
+- **不要在回调里重入 `update` 当前实体**：方法持有 `&mut Context<T>` 时直接用 `cx.subscribe_in` / `cx.notify()` / 修改 `self`，不要 `entity.update(cx, …)`（同一实体正在被更新 → panic `cannot update … while it is already being updated`）。订阅句柄存到字段（`_xx_sub: Option<Subscription>`，前缀下划线表明“仅持有”）；若订阅需要挂到别的实体上，就把建立动作放到那个实体的入口方法里，而不是被它调用的方法里（实例见 `docs/architecture/connection/connection-dialog-architecture.md` 决策 #30）
 
 ## 事件与 Action
 
@@ -62,6 +63,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 - **模态对话框**（`window.open_dialog` / `open_alert_dialog`）要求窗口根是 `gpui_kit::component::Root`：`cx.add_window_view(|window, cx| Root::new(view, window, cx))`；且宿主视图的 `render` 要自己挂 `Root::render_dialog_layer(window, cx)`，否则对话框不渲染。断言用 `window.has_active_dialog(cx)`
 - 图标资产未注册时静默渲染为空（不 panic），测试无需 `set_assets`
 - 测试里的其他依赖（存储 / 设置服务 / 后端口）用测试桥替身，只记录调用，不接真实宿主
+- **宿主交互测试走生产入口**：不要直接调 `state.open(...)` 或自建一份状态，而是通过宿主面板的方法（如 `EditorPanel::request_new_connection`）驱动——否则订阅、宿主通知等副作用不会被覆盖（曾因此漏掉一个必现的重入 panic，仅 `dialog_host_layer` 这类走入口的测试能拦住）；断言需要内部状态时由宿主提供只读访问器（如 `dialog_state()`）
 
 ## 查 API
 
