@@ -154,6 +154,8 @@ pub struct WorkbenchView {
     project_host: Option<project::ui::ProjectUiHost>,
     /// 订阅句柄（保持连接选中事件的订阅存活）。
     _subscription: Option<Subscription>,
+    /// 编辑面板观察句柄（其 notify 级联到宿主，保证对话框层内容同步）。
+    _editor_subscription: Option<Subscription>,
 }
 
 impl WorkbenchView {
@@ -172,6 +174,16 @@ impl WorkbenchView {
         }
         // 项目视图宿主：注入状态句柄 / 重绘 / 编辑区桥 / 排序偏好 / 打开后刷新。
         let host = crate::components::project_host::build_host(&shared, cx.entity().downgrade());
+        // 对话框层挂载点在 `WorkbenchView::render`；`Root` 的 notify 不会传到子视图，
+        // 因此把宿主重绘桥注入 `Shared`，供打开 / 关闭对话框的入口调用。
+        {
+            let weak = cx.entity().downgrade();
+            *shared.host_redraw.borrow_mut() = Some(Rc::new(move |cx: &mut App| {
+                if let Some(view) = weak.upgrade() {
+                    view.update(cx, |_, cx| cx.notify());
+                }
+            }));
+        }
         if shared.project.borrow().is_none() {
             project::ui::load_picker(&host);
         }
@@ -186,6 +198,7 @@ impl WorkbenchView {
             project_inputs: None,
             project_host: Some(host),
             _subscription: None,
+            _editor_subscription: None,
         }
     }
 
@@ -235,6 +248,8 @@ impl WorkbenchView {
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }
+                    // 宿主同步重绘：对话框层挂在宿主 render 上，否则打开后不显示。
+                    this.shared.notify_host(cx);
                 }
             }
             cx.notify();
@@ -248,6 +263,10 @@ impl WorkbenchView {
         });
 
         self._subscription = Some(subscription);
+        // 编辑面板通知级联到宿主：对话框层挂在宿主 render 中（`Root` 的 notify
+        // 不会传到子视图），而对话框内部的状态变化（切 Tab / 增删跳 / 测试结果等）
+        // 都以 EditorPanel 的 notify 驱动，需同步宿主重绘才能更新层内容。
+        self._editor_subscription = Some(cx.observe(&editor, |_, _, cx| cx.notify()));
         self.area = Some(area);
         self.sidebar = Some(sidebar);
         self.editor = Some(editor);

@@ -19,6 +19,22 @@ use workbench::WorkbenchView;
 use workbench::commands::{CloseProject, SwitchProject, ToggleQuickOpen};
 
 fn main() {
+    // Windows 主线程默认 1 MiB 栈，而 GPUI 的视图树构建 / 布局 / 事件派发在 debug
+    // 构建下递归较深，会在运行期以 `thread 'main' has overflowed its stack` 崩溃
+    // （窗口短暂出现后消失／点入口无反应）。把应用主循环放到专用大栈线程执行。
+    let handle = std::thread::Builder::new()
+        .name("rds-app-main".to_string())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(run_app)
+        .expect("failed to spawn app main thread");
+    if let Err(e) = handle.join() {
+        eprintln!("[startup] 应用主线程异常退出: {e:?}");
+        std::process::exit(1);
+    }
+}
+
+/// 应用主循环（运行于大栈线程，见 `main`）。
+fn run_app() {
     // 注册内置图标资产源：gpui-kit 组件与 IconName 的 SVG 均从 AssetSource 加载，
     // 未注册时所有图标静默渲染为空（元素在但看不到）。
     gpui_kit::application()

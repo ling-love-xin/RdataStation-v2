@@ -5,9 +5,10 @@
 > Phase C 推进记录（2026-09-11）：⑧ C2 当前项目会话接入——对话框打开时自动预填项目根（已填值不覆盖）、删除路由携带项目路径（`workspace_loader::delete_connection(conn_id, project_path)`），P_/GP_ 连接在项目打开时可正常删除；⑨ 全局库单例可注入（`engine::migration::install_global_db_manager`）+ 单例生产路径集成测试（`crates/workbench/tests/global_service_singleton.rs`：`DataSourceService::global()` 与 `load_persisted_connections()` 单例分支、重复注入拒绝）；⑩ 遗留路径收尾——编辑区「DuckDB 分析库」表树与 SQL 执行（非数据源导航栏）改走 `workspace_loader::global_analysis_db_path()`（不再拼旧文件名 `global.duckdb`）；⑪ **连接运行态**——`ConnectionItem.connected` 不再冒充记录有效性，由连接管理器运行态填充（`workspace_loader::fill_connected`），列表/详情状态点反映真实连接与断开；⑫ **项目连接可见性**——`load_connections_for_scope(project_root)` 合并全局 + 项目侧 P_/GP_（未打开项目仅全局可见），面板删除刷新 / 对话框保存刷新 / 项目切换刷新三处调用点统一；⑬ **C1 状态更正**——introspection → 导航树已由 database-nav Phase A 承接（`database::MetadataService` 实时内省 + `navigator_service` 懒加载），无需重复建设；⑭ **C3 第一批收敛**——URL 处理族下沉 `crates/connection/src/url.rs`（`build_connection_url` 含 userinfo 百分号编码、`mask_password_in_url`、`extract_credentials_from_url`、`url_has_plaintext_password`），workbench / engine 三处重复实现统一（顺带修复 engine 版脱敏丢失用户名）。
 > C3 第二批 + 组织元数据上提（2026-09-11）：⑮ **C3 第二批收敛**——URL 参数注入 / 改写 10 函数下沉 `crates/connection/src/url_params.rs`（`inject_auth_into_url` / `inject_username_password` / `inject_ssl_cert` / `inject_kerberos` / `inject_chain_ssl_params` / `rewrite_url_host_port` / `parse_host_port_from_url` / `append_ssl_params` / `append_url_params` / `matches_no_proxy`），workbench 侧删除本地实现并补 8 项单测；⑯ **分组/标签服务上提**（连接组织元数据归连接域）——`engine::persistence::ConnectionOrgStore` 统一分组（项目级多对多 + 排序）与标签（多值 + 检索 + 统计）读写，取代 `nav_store` 原标签实现（`nav_store` 仅保留导航视图状态）；`DataSourceService` 保存/更新时同步 tags 到权威检索表、删除时一致性清理标签与分组成员（避免孤儿），`nav_runtime` 标签读写改走新存储。
 > C3 第三批（2026-09-11）：⑰ **协议链执行 + 隧道生命周期下沉**——`crates/connection/src/chain.rs` 承接 `TunnelRegistry`（按连接 ID 持有隧道守卫，`insert` 覆盖释放旧隧道 / `take` / `count` / `clear`，Clone 共享同一张表）与协议链执行（`apply_network_method` 单跳分发 + `process_chain` 多跳迭代 + SSH/代理隧道端口工厂），URL 改写复用 `url_params` 族；workbench `connection_service.rs` 删除本地实现（`tunnels` 字段改为 `connection::chain::TunnelRegistry`，断开走 `take` 并在连接清理后释放，全关走 `clear`），新增 4 项单测（注册表生命周期 / Direct 原样 / SSL 仅注入参数 / 纯 SSL 链无隧道）。**传输/协议层至此全部下沉，C3 收敛完成**；剩余为依赖 engine 的会话生命周期编排（连接信息 / 持久化 / 元数据缓存 / 连接池），按依赖方向保留在 workbench。
+> 集成测试与缺陷修复（2026-09-11）：⑱ **隧道数据面集成测试**——新增 `crates/connection/tests/tunnel_roundtrip.rs`（4 项端到端：SOCKS5 隧道真实数据往返且守卫释放后本地端口关闭、HTTP CONNECT 隧道往返、两跳代理链嵌套转发、no_proxy 命中不建隧道）与 `crates/workbench/tests/connection_tunnel_cleanup.rs`（协议链隧道建立后数据库握手失败 → 断言不残留，`tunnel_count == 0`）；⑲ **集成测试暴露并修复真实缺陷**——`ConnectionService::connect_with_type` 在 `create_database` / `add_connection` 失败时未回收已登记的隧道守卫（本地端口 + 后台 accept 循环泄漏），现统一走 `release_tunnels`，并新增 `tunnel_count` 诊断方法（测试可断言）。
 > 运行时修复记录（2026-09-10）：① 应用启动补齐 `initialize_global_system()`（`crates/app/src/main.rs`，全局库单例 + 常驻运行时）；② 路径统一——`workspace_loader` 复用单例与 `RdataStation/system` 目录，消除“保存写 A 库、列表读 B 库”的分裂；③ DuckDB Secret 落地到持久分析库（`analytics.duckdb`）并补齐删除联动与 URL 百分号解码；④ 服务层新增同名连接拦截（`INSERT OR REPLACE` 静默覆盖防护）与项目路径预检（消除半成品落库）；⑤ 对话框测试连接回显服务器版本；⑥ connection crate 清理占位死文件（commands / connection_view / connection_dialog / mod.rs）。
 > 模块边界：**本模块只负责“新增/管理数据源连接”本身**（连接对话框、CRUD、作用域路由、测试连接、DuckDB Secret、运行态连接与列表），不包含数据源导航树；导航树、来源短码 P/G/GP 展示、分组/标签/缓存管理均属 database-nav 模块（见 `docs/architecture/database/database-nav-dev-plan.md`）。
-> 遗留（2026-09-11 更新）：C3 传输/协议层已全部下沉（`url.rs` / `url_params.rs` / `chain.rs`），剩余编排层（会话生命周期、连接池、连接信息登记、持久化与元数据缓存）因依赖 engine 按依赖方向保留在 workbench `connection_service.rs`；C4（模板导入导出 + 暂存）按决策暂缓；数据库导航侧 Phase B/C（分组/标签视图、缓存管理、预热增量）见 `docs/architecture/database/database-nav-dev-plan.md`。
+> 遗留（2026-09-11 更新）：C3 传输/协议层已全部下沉（`url.rs` / `url_params.rs` / `chain.rs`）且隧道数据面已有集成测试（含失败路径回滚），剩余编排层（会话生命周期、连接池、连接信息登记、持久化与元数据缓存）因依赖 engine 按依赖方向保留在 workbench `connection_service.rs`；C4（模板导入导出 + 暂存）按决策暂缓；数据库导航侧 Phase B/C（分组/标签视图、缓存管理、预热增量）见 `docs/architecture/database/database-nav-dev-plan.md`。
 > 缺口补齐记录（2026-09-10）：① 环境策略 CRUD（环境管理器内嵌策略面板）与高级 Tab 策略覆盖落库（`advanced_options.policy_overrides`）；② 连接编辑回读（侧边栏「编辑」→ 全 Tab 预填 → `update` 按 ID 前缀路由 G_/P_/GP_）；③ SSL/TLS 配置字段编辑与落库（`advanced_options.ssl`，常规→连接安全）；④ 双作用域 UI（仅全局/仅项目/全局+项目）与落库（P_ 走 `ProjectConnectionStore`、GP_ 走 `generate_gpid` 快照，项目路径来自对话框输入，未打开项目时提示）；⑤ DuckDB 缓存路径落库（`metadata_path`，模型/服务/对话框全链路打通）。
 > 前置：v1 后端/前端实现为行为蓝本（`v1/backend/src/core/{services,persistence}`、`v1/frontend/extensions/builtin/connection/ui/components/AddDataSourceDialog.vue`）；v2 engine 持久化层与 connection crate 传输层已完成迁移（见 §6 对齐表）
 
@@ -104,6 +105,9 @@
   - `cargo test -p rds-workbench --test real_connections`（加载器契约）
   - `cargo test -p rds-workbench --test global_service_singleton`（单例生产路径：`global()` / 列表单例分支 / 重复注入拒绝）
   - `cargo test -p rds-workbench --test connection_scope_and_state`（作用域可见性 P_/GP_ 合并 + 运行态 connected 填充）
+  - `cargo test -p rds-connection --test tunnel_roundtrip`（隧道数据面：SOCKS5 / HTTP CONNECT / 两跳链真实转发 + 守卫释放关闭）
+  - `cargo test -p rds-workbench --test connection_tunnel_cleanup`（连接失败路径隧道回收）
+- **编译/测试统一加 `-j 2`**（或用 alias `cargo test-all`）：并发链接 DuckDB 静态库会耗尽内存，触发 rustc `STATUS_STACK_BUFFER_OVERRUN` 崩溃并拖慢宿主（Zed 卡顿）；`.cargo/config.toml` 已含 `RUST_MIN_STACK` 补偿与 alias 说明
 - UI：`cargo run -p rds-app` 手动走通 §3 场景清单
 - 主题：明暗切换核对 token（theme-preview.html 色卡为基准）
 
@@ -121,6 +125,8 @@
 | URL 组装 / 脱敏 / 凭据提取（C3 收敛） | `crates/connection/src/url.rs` |
 | URL 参数注入 / 改写（认证 / SSL / Kerberos / host:port / no_proxy） | `crates/connection/src/url_params.rs` |
 | 协议链执行 / 隧道生命周期（`TunnelRegistry` / `apply_network_method` / `process_chain`） | `crates/connection/src/chain.rs` |
+| 隧道数据面集成测试（SOCKS5 / HTTP CONNECT / 两跳链） | `crates/connection/tests/tunnel_roundtrip.rs` |
+| 失败路径隧道回收测试（`tunnel_count` 断言） | `crates/workbench/tests/connection_tunnel_cleanup.rs` |
 | 连接组织元数据（标签 / 分组，M3 与 M4 共用） | `crates/engine/src/persistence/connection_org_store.rs` |
 | 作用域可见性 / 运行态状态填充 | `crates/workbench/src/services/workspace_loader.rs` |
 | 连接对话框（五 Tab / 作用域 / SSL / 编辑回读） | `crates/workbench/src/components/connection_dialog.rs` |

@@ -538,11 +538,7 @@ impl ConnectionDialogState {
         };
         let password = {
             let v = pass.read(cx).value().to_string();
-            if v.is_empty() {
-                None
-            } else {
-                Some(v)
-            }
+            if v.is_empty() { None } else { Some(v) }
         };
         let auth_config_id = self
             .auth_ref
@@ -1162,8 +1158,9 @@ impl ConnectionDialogState {
                                             .on_click({
                                                 let mgr = mgr.clone();
                                                 let entity = entity.clone();
+                                                let shared = shared.clone();
                                                 move |_, window, app| {
-                                                    open_manager(2, &mgr, entity.clone(), window, app);
+                                                    open_manager(2, &mgr, entity.clone(), shared.clone(), window, app);
                                                 }
                                             }),
                                     ),
@@ -1321,8 +1318,9 @@ impl ConnectionDialogState {
                                                 .on_click({
                                                     let mgr = mgr.clone();
                                                     let entity = entity.clone();
+                                                    let shared = shared.clone();
                                                     move |_, window, app| {
-                                                        open_manager(0, &mgr, entity.clone(), window, app);
+                                                        open_manager(0, &mgr, entity.clone(), shared.clone(), window, app);
                                                     }
                                                 }),
                                         ),
@@ -1469,8 +1467,13 @@ impl ConnectionDialogState {
                 .child(
                     Button::new("cancel-connection")
                         .label("取消")
-                        .on_click(move |_, window, app| {
-                            window.close_dialog(app);
+                        .on_click({
+                            let shared = shared.clone();
+                            move |_, window, app| {
+                                window.close_dialog(app);
+                                // 宿主重绘：层才会从元素树移除（Root 的 notify 到不了子视图）
+                                shared.notify_host(app);
+                            }
                         }),
                 )
                 .child(
@@ -1545,6 +1548,8 @@ impl ConnectionDialogState {
                                         *result.borrow_mut() = Some(format!("已保存：{conn_id}"));
                                         result_ok.set(true);
                                         window.close_dialog(app);
+                                        // 宿主重绘：移除层（Root 的 notify 到不了子视图）
+                                        shared.notify_host(app);
                                     }
                                     Err(e) => {
                                         *result.borrow_mut() = Some(format!("保存失败: {e}"));
@@ -1562,6 +1567,11 @@ impl ConnectionDialogState {
                 .overlay(true)
                 .overlay_closable(true)
                 .keyboard(true)
+                // Esc / 点遮罩等关闭路径：同样需宿主重绘才会移除层
+                .on_close({
+                    let shared = shared.clone();
+                    move |_, _, app| shared.notify_host(app)
+                })
                 .child(
                     div()
                         .v_flex()
@@ -1682,11 +1692,7 @@ impl ClonedDialogState {
         };
         let password = {
             let v = pass.read(cx).value().to_string();
-            if v.is_empty() {
-                None
-            } else {
-                Some(v)
-            }
+            if v.is_empty() { None } else { Some(v) }
         };
         let auth_config_id = self
             .auth_ref
@@ -1845,11 +1851,13 @@ fn open_manager(
     kind: usize,
     mgr: &Rc<RefCell<ManagerWorkspace>>,
     entity: Entity<crate::panels::EditorPanel>,
+    shared: Shared,
     window: &mut Window,
     cx: &mut App,
 ) {
     let mgr = mgr.clone();
     let entity = entity.clone();
+    let shared_for_layer = shared.clone();
 
     // 拉取列表（按 kind）。
     {
@@ -1866,6 +1874,7 @@ fn open_manager(
 
     window.open_dialog(cx, move |dialog, _, cx| {
         let theme = cx.theme();
+        let shared_layer = shared_for_layer.clone();
         let m = mgr.borrow();
         let title = match kind {
             0 => "认证配置管理（AuthConfigManager）",
@@ -2247,12 +2256,23 @@ fn open_manager(
                     .child(
                         Button::new("mgr-close")
                             .label("关闭")
-                            .on_click(move |_, window, app| {
-                                window.close_dialog(app);
+                            .on_click({
+                                let shared = shared_layer.clone();
+                                move |_, window, app| {
+                                    window.close_dialog(app);
+                                    // 宿主重绘：移除内层对话框
+                                    shared.notify_host(app);
+                                }
                             }),
                     ),
             )
+            .on_close({
+                let shared = shared_layer.clone();
+                move |_, _, app| shared.notify_host(app)
+            })
     });
+    // 宿主重绘：内层（管理器）对话框由宿主 render 渲染，打开后需重建元素树。
+    shared.notify_host(cx);
 }
 
 /// 刷新管理器列表（block_on stores）。

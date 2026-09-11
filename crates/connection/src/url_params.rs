@@ -1,0 +1,527 @@
+//! URL 参数注入与改写（C3 第二批收敛：自 workbench `connection_service` 下沉）。
+//!
+//! 纯字符串逻辑，不依赖 engine：认证凭据注入、SSL / Kerberos 参数追加、
+//! host:port 改写与解析、`no_proxy` 匹配、协议链 SSL 参数提取。
+//! 供 workbench 连接服务与传输层共用。
+
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use shared::error::{ConnectionError, CoreError};
+
+use crate::config::{ChainHop, SslConfig};
+
+/// 将认证凭据注入到 URL 中。
+///
+/// 支持的 `auth_method` 与 `auth_data_json` 字段：
+/// - `password` / `ldap`：`username` / `password`
+/// - `pg_class`：`certPath` / `certKeyPath`
+/// - `kerberos`：`principal` / `keytabPath`
+///
+/// 认证凭据优先级高于 URL 中已有的凭据。
+pub fn inject_auth_into_url(
+    url: &str,
+    auth_method: &str,
+    auth_data_json: &str,
+) -> Result<String, CoreError> {
+    let auth_data: serde_json::Value = serde_json::from_str(auth_data_json)
+        .map_err(|e| CoreError::from(format!("解析 auth_data 失败: {}", e)))?;
+
+    let obj = auth_data
+        .as_object()
+        .ok_or_else(|| CoreError::from("auth_data 不是 JSON 对象".to_string()))?;
+
+    match auth_method {
+        "password" | "ldap" => {
+            let username = obj
+                .get("username")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let password = obj
+                .get("password")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+
+            if username.is_empty() && password.is_empty() {
+                return Ok(url.to_string());
+            }
+
+            inject_username_password(url, username, password)
+        }
+        "pg_class" => {
+            let cert_path = obj
+                .get("certPath")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let cert_key_path = obj
+                .get("certKeyPath")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+
+            if cert_path.is_empty() {
+                return Ok(url.to_string());
+            }
+
+            inject_ssl_cert(url, cert_path, cert_key_path)
+        }
+        "kerberos" => {
+            let principal = obj
+                .get("principal")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let keytab_path = obj
+                .get("keytabPath")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+
+            if principal.is_empty() {
+                return Ok(url.to_string());
+            }
+
+            inject_kerberos(url, principal, keytab_path)
+        }
+        _ => {
+            tracing::warn!("未支持的 auth_method: {}，跳过凭据注入", auth_method);
+            Ok(url.to_string())
+        }
+    }
+}
+
+/// 向 URL 中注入用户名和密码（已有凭据则替换）。
+pub fn inject_username_password(
+    url: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, CoreError> {
+    if username.is_empty() {
+        return Ok(url.to_string());
+    }
+
+    if let Some(scheme_end) = url.find("://") {
+        let prefix = &url[..scheme_end + 3];
+        let rest = &url[scheme_end + 3..];
+
+        if let Some(at_pos) = rest.find('@') {
+            // 跳过 @ 符号，只取主机部分（否则 format 会再拼接一个 @ 导致双 @）
+            let host_part = &rest[at_pos + 1..];
+            return Ok(format!("{}{}:{}@{}", prefix, username, password, host_part));
+        } else if let Some(path_start) = rest.find('/') {
+            let host_port = &rest[..path_start];
+            let path = &rest[path_start..];
+            return Ok(format!(
+                "{}{}:{}@{}{}",
+                prefix, username, password, host_port, path
+            ));
+        } else {
+            return Ok(format!("{}{}:{}@{}", prefix, username, password, rest));
+        }
+    }
+
+    Ok(url.to_string())
+}
+
+/// 向 PostgreSQL URL 中注入 SSL 证书参数。
+pub fn inject_ssl_cert(
+    url: &str,
+    cert_path: &str,
+    cert_key_path: &str,
+) -> Result<String, CoreError> {
+    let mut result = url.to_string();
+
+    if !cert_path.is_empty() {
+        let encoded_cert = utf8_percent_encode(cert_path, NON_ALPHANUMERIC).to_string();
+        if result.contains('?') {
+            result.push_str(&format!("&sslmode=verify-ca&sslcert={}", encoded_cert));
+        } else {
+            result.push_str(&format!("?sslmode=verify-ca&sslcert={}", encoded_cert));
+        }
+    }
+
+    if !cert_key_path.is_empty() {
+        let encoded_key = utf8_percent_encode(cert_key_path, NON_ALPHANUMERIC).to_string();
+        result.push_str(&format!("&sslkey={}", encoded_key));
+    }
+
+    Ok(result)
+}
+
+/// 向 Kerberos URL 中注入认证参数。
+pub fn inject_kerberos(
+    url: &str,
+    principal: &str,
+    _keytab_path: &str,
+) -> Result<String, CoreError> {
+    let mut result = url.to_string();
+
+    if !principal.is_empty() {
+        let encoded_principal = utf8_percent_encode(principal, NON_ALPHANUMERIC).to_string();
+        if result.contains('?') {
+            result.push_str(&format!("&krbrprincipal={}", encoded_principal));
+        } else {
+            result.push_str(&format!("?krbrprincipal={}", encoded_principal));
+        }
+    }
+
+    Ok(result)
+}
+
+/// 从链路 hops 中提取 SSL 配置并注入 URL 参数。
+///
+/// 跳过已被 Proxy→SSL 嵌套层处理的 SSL hop（前一个 hop 是代理）。
+pub fn inject_chain_ssl_params(
+    url: &str,
+    hops: &[ChainHop],
+    db_type: &str,
+) -> Result<String, CoreError> {
+    for (i, hop) in hops.iter().enumerate() {
+        if let ChainHop::Ssl(ssl_config) = hop {
+            let previous_is_proxy = i > 0
+                && matches!(
+                    hops[i - 1],
+                    ChainHop::HttpProxy(_) | ChainHop::SocksProxy(_)
+                );
+            if previous_is_proxy {
+                tracing::info!(
+                    target: "chain",
+                    hop = i,
+                    "SSL 跳已由 Proxy→SSL 嵌套层处理，跳过 URL 参数注入"
+                );
+                continue;
+            }
+            return append_ssl_params(url, db_type, ssl_config);
+        }
+    }
+    Ok(url.to_string())
+}
+
+/// 将 URL 中的 host:port 改写为新的 host:port。
+///
+/// 支持 `mysql://`、`postgres://`（`sqlite://` / `duckdb://` 原样返回）。
+pub fn rewrite_url_host_port(
+    url: &str,
+    new_host: &str,
+    new_port: u16,
+) -> Result<String, CoreError> {
+    if url.starts_with("mysql://") || url.starts_with("postgres://") {
+        let (prefix, rest) = url
+            .split_once("://")
+            .ok_or_else(|| CoreError::from("Invalid connection URL format"))?;
+        let after_auth = if let Some(at_pos) = rest.find('@') {
+            let (auth, _host_part) = rest.split_at(at_pos + 1);
+            format!("{}{}:{}", auth, new_host, new_port)
+        } else {
+            format!("{}:{}", new_host, new_port)
+        };
+        let last_part = rest
+            .find('@')
+            .map(|p| {
+                let host_section = &rest[p + 1..];
+                host_section
+                    .find('/')
+                    .map(|s| &host_section[s..])
+                    .unwrap_or("")
+            })
+            .unwrap_or("");
+        Ok(format!("{}://{}{}", prefix, after_auth, last_part))
+    } else if url.starts_with("sqlite://") || url.starts_with("duckdb://") {
+        Ok(url.to_string())
+    } else {
+        Err(CoreError::connection(ConnectionError::InvalidConfig {
+            conn_id: url.to_string(),
+            reason: "无法改写 URL，不支持的协议".to_string(),
+        }))
+    }
+}
+
+/// 从数据库 URL 中解析目标主机和端口。
+///
+/// 支持 `mysql://user:pass@host:port/db` 与 `postgres://...`；
+/// 无端口时按协议给默认值（postgres 5432 / 其他 3306）。
+pub fn parse_host_port_from_url(url: &str) -> Result<(String, u16), CoreError> {
+    let after_scheme = if let Some(pos) = url.find("://") {
+        &url[pos + 3..]
+    } else {
+        return Err(CoreError::connection(ConnectionError::InvalidConfig {
+            conn_id: url.to_string(),
+            reason: "URL 中没有找到协议前缀".to_string(),
+        }));
+    };
+
+    let host_part = if let Some(at_pos) = after_scheme.find('@') {
+        &after_scheme[at_pos + 1..]
+    } else {
+        after_scheme
+    };
+
+    let host = if let Some(slash_pos) = host_part.find('/') {
+        &host_part[..slash_pos]
+    } else {
+        host_part
+    };
+
+    let (hostname, port) = if let Some(colon_pos) = host.rfind(':') {
+        let h = &host[..colon_pos];
+        let p_str = &host[colon_pos + 1..];
+        let p = p_str.parse::<u16>().map_err(|_| {
+            CoreError::connection(ConnectionError::InvalidConfig {
+                conn_id: url.to_string(),
+                reason: format!("无效端口号: {}", p_str),
+            })
+        })?;
+        (h.to_string(), p)
+    } else {
+        let default_port = if url.starts_with("postgres://") {
+            5432
+        } else {
+            3306
+        };
+        (host.to_string(), default_port)
+    };
+
+    Ok((hostname, port))
+}
+
+/// 根据 SslConfig 和数据库类型向 URL 追加 SSL 连接参数。
+///
+/// MySQL: `ssl-mode` / `ssl-ca` / `ssl-cert` / `ssl-key`；
+/// PostgreSQL: `sslmode` / `sslrootcert` / `sslcert` / `sslkey`。
+pub fn append_ssl_params(
+    url: &str,
+    db_type: &str,
+    ssl_config: &SslConfig,
+) -> Result<String, CoreError> {
+    let params = match db_type {
+        "mysql" | "mariadb" => {
+            let mode = if ssl_config.verify_server_cert {
+                if ssl_config.ca_cert_path.is_some() {
+                    "VERIFY_CA"
+                } else {
+                    "REQUIRED"
+                }
+            } else {
+                "REQUIRED"
+            };
+            let mut p = format!("ssl-mode={}", mode);
+            if let Some(ref ca) = ssl_config.ca_cert_path {
+                p.push_str(&format!("&ssl-ca={}", ca));
+            }
+            if let Some(ref cert) = ssl_config.client_cert_path {
+                p.push_str(&format!("&ssl-cert={}", cert));
+            }
+            if let Some(ref key) = ssl_config.client_key_path {
+                p.push_str(&format!("&ssl-key={}", key));
+            }
+            p
+        }
+        "postgres" | "postgresql" | "pgsql" => {
+            let mode = if ssl_config.verify_server_cert {
+                if ssl_config.ca_cert_path.is_some() {
+                    "verify-ca"
+                } else {
+                    "require"
+                }
+            } else {
+                "require"
+            };
+            let mut p = format!("sslmode={}", mode);
+            if let Some(ref ca) = ssl_config.ca_cert_path {
+                p.push_str(&format!("&sslrootcert={}", ca));
+            }
+            if let Some(ref cert) = ssl_config.client_cert_path {
+                p.push_str(&format!("&sslcert={}", cert));
+            }
+            if let Some(ref key) = ssl_config.client_key_path {
+                p.push_str(&format!("&sslkey={}", key));
+            }
+            p
+        }
+        _ => {
+            tracing::info!(db_type=%db_type, "非 SQL 数据库，跳过 SSL 参数注入");
+            return Ok(url.to_string());
+        }
+    };
+
+    Ok(append_url_params(url, &params))
+}
+
+/// 向 URL 追加 `&params` 或 `?params`。
+pub fn append_url_params(url: &str, params: &str) -> String {
+    if url.contains('?') {
+        format!("{}&{}", url, params)
+    } else {
+        format!("{}?{}", url, params)
+    }
+}
+
+/// 检查目标主机是否匹配 `no_proxy` 规则列表。
+///
+/// 支持格式：精确主机名、IP 地址、`.domain` 后缀通配（匹配 `*.domain`）；
+/// `localhost` 与 `127.0.0.1` 互相等价。
+pub fn matches_no_proxy(host: &str, rules: &[String]) -> bool {
+    if rules.is_empty() {
+        return false;
+    }
+    let host_lower = host.to_lowercase();
+    for rule in rules {
+        let rule = rule.trim().to_lowercase();
+        if rule.is_empty() {
+            continue;
+        }
+        if rule == host_lower {
+            return true;
+        }
+        if rule == "localhost" && (host_lower == "127.0.0.1" || host_lower == "::1") {
+            return true;
+        }
+        if rule == "127.0.0.1" && host_lower == "localhost" {
+            return true;
+        }
+        if let Some(suffix) = rule.strip_prefix('.') {
+            if host_lower == suffix || host_lower.ends_with(&format!(".{}", suffix)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SslConfig;
+
+    fn ssl(verify: bool, ca: Option<&str>, cert: Option<&str>, key: Option<&str>) -> SslConfig {
+        SslConfig {
+            verify_server_cert: verify,
+            ca_cert_path: ca.map(str::to_string),
+            client_cert_path: cert.map(str::to_string),
+            client_key_path: key.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn inject_credentials_replaces_existing() {
+        let url = inject_username_password("mysql://old:old@h:3306/db", "new", "pw").unwrap();
+        assert_eq!(url, "mysql://new:pw@h:3306/db");
+        // 无 @ 但有路径
+        let url = inject_username_password("postgres://h:5432/db", "u", "p").unwrap();
+        assert_eq!(url, "postgres://u:p@h:5432/db");
+        // 空用户名原样返回
+        assert_eq!(
+            inject_username_password("mysql://h/db", "", "p").unwrap(),
+            "mysql://h/db"
+        );
+    }
+
+    #[test]
+    fn inject_auth_from_json() {
+        let url = inject_auth_into_url(
+            "mysql://h:3306/db",
+            "password",
+            r#"{"username":"u","password":"p"}"#,
+        )
+        .unwrap();
+        assert_eq!(url, "mysql://u:p@h:3306/db");
+
+        // 未知 method：原样返回
+        let url = inject_auth_into_url("mysql://h/db", "unknown", "{}").unwrap();
+        assert_eq!(url, "mysql://h/db");
+
+        // 非 JSON 对象报错
+        assert!(inject_auth_into_url("mysql://h/db", "password", "[]").is_err());
+    }
+
+    #[test]
+    fn ssl_and_kerberos_params_appended() {
+        let url = inject_ssl_cert("postgres://h/db", "/etc/ca.pem", "/etc/key.pem").unwrap();
+        assert!(url.starts_with("postgres://h/db?sslmode=verify-ca&sslcert="));
+        assert!(url.contains("&sslkey="));
+
+        let url = inject_kerberos("postgres://h/db", "user@REALM", "").unwrap();
+        assert!(url.starts_with("postgres://h/db?krbrprincipal="));
+    }
+
+    #[test]
+    fn rewrite_host_port_keeps_credentials_and_path() {
+        let url = rewrite_url_host_port("postgres://u:p@db:5432/warehouse", "127.0.0.1", 45678)
+            .unwrap();
+        assert_eq!(url, "postgres://u:p@127.0.0.1:45678/warehouse");
+
+        // 文件库原样返回；不支持协议报错
+        assert_eq!(
+            rewrite_url_host_port("sqlite:///tmp/x.db", "h", 1).unwrap(),
+            "sqlite:///tmp/x.db"
+        );
+        assert!(rewrite_url_host_port("oracle://h/db", "h", 1).is_err());
+    }
+
+    #[test]
+    fn parse_host_port_with_defaults_and_errors() {
+        assert_eq!(
+            parse_host_port_from_url("postgres://u:p@h/db").unwrap(),
+            ("h".to_string(), 5432)
+        );
+        assert_eq!(
+            parse_host_port_from_url("mysql://h:3307/db").unwrap(),
+            ("h".to_string(), 3307)
+        );
+        assert!(parse_host_port_from_url("h:1/db").is_err());
+        assert!(parse_host_port_from_url("mysql://h:notaport/db").is_err());
+    }
+
+    #[test]
+    fn ssl_params_per_dialect() {
+        let cfg = ssl(true, Some("/ca"), Some("/cert"), Some("/key"));
+        let url = append_ssl_params("mysql://h/db", "mysql", &cfg).unwrap();
+        assert_eq!(
+            url,
+            "mysql://h/db?ssl-mode=VERIFY_CA&ssl-ca=/ca&ssl-cert=/cert&ssl-key=/key"
+        );
+
+        let url = append_ssl_params("postgres://h/db", "postgres", &cfg).unwrap();
+        assert_eq!(
+            url,
+            "postgres://h/db?sslmode=verify-ca&sslrootcert=/ca&sslcert=/cert&sslkey=/key"
+        );
+
+        // 非 SQL 库跳过；已有 query 时用 & 追加
+        assert_eq!(append_ssl_params("duckdb:///x", "duckdb", &cfg).unwrap(), "duckdb:///x");
+        assert_eq!(
+            append_url_params("mysql://h/db?x=1", "y=2"),
+            "mysql://h/db?x=1&y=2"
+        );
+    }
+
+    #[test]
+    fn chain_ssl_params_skip_after_proxy() {
+        let hops = vec![
+            ChainHop::SocksProxy(crate::config::ProxyConfig {
+                host: "127.0.0.1".into(),
+                port: 1080,
+                auth: None,
+                no_proxy: Vec::new(),
+                timeout_secs: 10,
+            }),
+            ChainHop::Ssl(ssl(true, None, None, None)),
+        ];
+        // 前一个 hop 是代理 → SSL 参数跳过
+        assert_eq!(
+            inject_chain_ssl_params("postgres://h/db", &hops, "postgres").unwrap(),
+            "postgres://h/db"
+        );
+
+        let hops = vec![ChainHop::Ssl(ssl(true, None, None, None))];
+        assert_eq!(
+            inject_chain_ssl_params("postgres://h/db", &hops, "postgres").unwrap(),
+            "postgres://h/db?sslmode=require"
+        );
+    }
+
+    #[test]
+    fn no_proxy_matching() {
+        let rules = vec!["localhost".to_string(), ".corp.example".to_string()];
+        assert!(matches_no_proxy("127.0.0.1", &rules));
+        assert!(matches_no_proxy("db.corp.example", &rules));
+        assert!(!matches_no_proxy("external.com", &rules));
+        assert!(!matches_no_proxy("external.com", &[]));
+    }
+}

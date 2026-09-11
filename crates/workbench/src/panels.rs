@@ -74,6 +74,9 @@ pub struct Shared {
     pub editor_clear: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// Phase B：属性面板请求（数据源导航双击对象 → 编辑区右侧面板）。
     pub property_target: Rc<RefCell<Option<PropertyRequest>>>,
+    /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
+    /// notify 不会让子视图重建元素树；打开 / 关闭对话框后必须显式通知宿主重渲染。
+    pub host_redraw: Rc<RefCell<Option<Rc<dyn Fn(&mut App)>>>>,
 }
 
 impl Shared {
@@ -105,6 +108,7 @@ impl Shared {
             editor_sql: Rc::new(RefCell::new(String::new())),
             editor_clear: Rc::new(RefCell::new(None)),
             property_target: Rc::new(RefCell::new(None)),
+            host_redraw: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -116,6 +120,15 @@ impl Shared {
     pub fn selected_connection(&self) -> Option<ConnectionItem> {
         let conns = self.connections.borrow();
         self.selected.get().and_then(|i| conns.get(i)).cloned()
+    }
+
+    /// 通知宿主（`WorkbenchView`）重绘：模态层的挂载点在宿主 render 中，
+    /// 仅靠 `Root` 的 notify 不会更新子视图元素树（`cx.notify` 只重渲染该视图子树）。
+    pub fn notify_host(&self, cx: &mut App) {
+        let bridge = self.host_redraw.borrow().clone();
+        if let Some(redraw) = bridge {
+            redraw(cx);
+        }
     }
 }
 
@@ -2107,6 +2120,36 @@ impl EditorPanel {
         cx.notify();
     }
 
+    /// 打开「新建数据源连接」对话框（编辑区按钮入口）。
+    ///
+    /// 打开后必须通知宿主重绘：对话框层挂在 `WorkbenchView::render` 上，
+    /// 而 `Root` 的 notify 不会让子视图重建元素树。
+    pub fn request_new_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog.is_none() {
+            self.dialog = Some(connection_dialog::ConnectionDialogState::new(window, cx));
+        }
+        if let Some(dialog) = self.dialog.as_ref() {
+            dialog.open(cx.entity(), self.shared.clone(), None, window, cx);
+        }
+        self.shared.notify_host(cx);
+    }
+
+    /// 打开「编辑数据源连接」对话框（侧边栏「编辑」入口）。
+    pub fn request_edit_connection(
+        &mut self,
+        conn_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog.is_none() {
+            self.dialog = Some(connection_dialog::ConnectionDialogState::new(window, cx));
+        }
+        if let Some(dialog) = self.dialog.as_ref() {
+            dialog.open(cx.entity(), self.shared.clone(), Some(conn_id), window, cx);
+        }
+        self.shared.notify_host(cx);
+    }
+
     /// 右侧停靠属性面板（DBeaver 式：属性网格 + 子实体表格）。
     fn render_property_panel(&self, cx: &mut Context<Self>) -> Div {
         let Some(target) = self.shared.property_target.borrow().clone() else {
@@ -2340,10 +2383,9 @@ impl Render for EditorPanel {
         }
 
         // 消费侧边栏「编辑」请求（open_edit 置位后在此打开对话框）。
-        if let Some(cid) = self.shared.open_edit.borrow_mut().take() {
-            if let Some(dialog) = self.dialog.as_ref() {
-                dialog.open(cx.entity(), self.shared.clone(), Some(cid), window, cx);
-            }
+        let edit_request = self.shared.open_edit.borrow_mut().take();
+        if let Some(cid) = edit_request {
+            self.request_edit_connection(cid, window, cx);
         }
 
         let theme = cx.theme();
@@ -2827,10 +2869,7 @@ impl Render for EditorPanel {
                     let entity = entity.clone();
                     move |_, window, app| {
                         entity.update(app, |editor, cx| {
-                            if let Some(dialog) = editor.dialog.as_ref() {
-                                dialog.open(cx.entity(), editor.shared.clone(), None, window, cx);
-                            }
-                            cx.notify();
+                            editor.request_new_connection(window, cx);
                         });
                     }
                 }),
