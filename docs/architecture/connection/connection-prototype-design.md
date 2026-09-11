@@ -46,6 +46,25 @@
 - 依据：v1 双轨制（`convert_to_global_connection` / `convert_to_project_connection`，v2 `workbench/services/connection_service.rs:1426/1516`）+ ID 前缀 `G_/P_/GP_`（engine `id_prefix.rs`）；规则：项目可引用全局（快照 GP_），全局不可引用项目私有配置
 - Header 第 ④ 行实时提示当前组合的保存目标
 
+### 2.2 暂存列表与多连接连续编辑（参考 v1 v5 §8）
+
+侧栏上半区为「暂存列表」（`saved-section`），用于在**同一个对话框内连续编辑多个连接**（DataGrip「数据源和驱动程序」式交互）：
+
+| 条目类型 | 来源 | 行为 |
+| --- | --- | --- |
+| **未保存草稿（Draft）** | 新建时自动生成（默认名「新建数据源」） | 可切换续编、删除；保存成功后转为已保存条目 |
+| **已保存连接（Saved）** | `DataSourceService::list()`（按当前作用域可见性合并） | 点击进入编辑模式（等价于现状侧边栏「编辑」入口） |
+
+- 条目结构（v1 v5 `saved-item`）：`type-dot`（accent 色点）+ `db-icon-mini`（驱动徽标）+ `item-name`（名称）+ `✕`；选中项高亮（`sidebar.accent` + coral 左边条）。
+- 交互规则：
+  1. 点击条目 → 先把当前表单状态写回该条目，再载入目标条目（各 Tab 字段 / 协议链 / SSL / 引用 / 作用域 / 驱动属性**全部按条目隔离**）；
+  2. 标题「暂存列表 [+ 添加]」→ 追加空草稿并选中；
+  3. 删除草稿；**删除到最后一条自动补一个空草稿**（v1 v5 行为，保证列表恒非空）；
+  4. 保存成功 → 该草稿转为已保存条目（刷新列表）并自动追加一个空草稿，保持可连续新建；
+  5. 关闭对话框不丢失草稿（进程内存保留，应用退出清除）；**草稿不落盘、不写明文凭据**（与模板导入导出同一约束）。
+- 与作用域的关系：草稿仅在保存时落库（G_/P_/GP_ 语义不变）；已保存条目在对话框内仅显示名称与驱动徽标（来源短码展示归 database-nav）。
+- 实现约束：草稿为**状态快照**（新增 / 编辑共用同一套字段；与 `load_for_edit` 的回读语义对齐），列表状态存 `ConnectionDialogState`（对话框层关闭不销毁，故草稿天然保留）。
+
 ## 3. 五 Tab 内容（对照 v5 原型）
 
 ### 3.1 常规（tab-general）—— 卡片式布局（本轮优化）
@@ -93,7 +112,7 @@
 | URI 预览 | 随字段实时拼装（url_template）；点击 ✎ 进入手动编辑模式，完成/恢复预览 |
 | 测试连接 | 独立会话（复用 ConnectionFactory，不污染正式连接），返回 `{success, message, latency_ms, version}`；成功 → 绿色 ✓ + 版本 + 延迟；失败 → 红色错误信息 |
 | 保存 | 校验 → 落库（ID 前缀 G_/P_）→ `use_duckdb_fed=1` 时注册 DuckDB Secret → 触发 introspection → 关闭并刷新列表 |
-| 暂存列表 | 未保存配置自动暂存、可切换续编；关闭对话框不丢失 |
+| 暂存列表 | **多连接连续编辑**（详见 §2.2）：草稿条目切换 / 新增 / 删除（删至最后一条自动补位）；保存后草稿转正式并自动补空草稿；关闭对话框不丢失（进程内存）；草稿不落盘、不写明文凭据 |
 | 认证配置选择 | 按 auth_type 过滤已保存配置；选中后动态字段只读；**管理**按钮打开 AuthConfigManager |
 | 网络/环境引用 | 网络 Tab「引用网络配置」+「管理网络配置」；高级 Tab「管理环境」——均打开对应覆盖层 |
 
@@ -122,7 +141,7 @@
 | --- | --- |
 | 对话框 | `crates/connection/src/connection_dialog.rs`（`ModalLayer`/`Dialog`） |
 | 标题栏/窗口点 | gpui-kit `TitleBar` 或自绘；窗口点由宿主窗口控制 |
-| 类型树/暂存列表 | `List` + 自绘行；分类折叠用 `Disclosure` |
+| 类型树/暂存列表 | `List` + 自绘行；分类折叠用 `Disclosure`；草稿为状态快照（见 §2.2），已保存条目来自 `DataSourceService::list()` |
 | 动态表单 | 按 config_schema 渲染 `Form`/`Input`/`Select`（driver_store 数据） |
 | 认证/网络/环境配置 | 对接 engine `auth_store` / `network_store` / `env_store` |
 | 测试连接 | `DataSourceService::test_connection`（独立会话） |

@@ -95,12 +95,8 @@ fn new_connection_request_renders_dialog_layer(cx: &mut TestAppContext) {
 
     // 关闭后宿主重绘，层应从元素树移除。
     cx.update(|window, cx| window.close_dialog(cx));
-    cx.update(|_, cx| {
-        host.update(cx, |host, cx| {
-            let shared = host.shared.clone();
-            shared.notify_host(cx);
-        });
-    });
+    let shared = cx.update(|_, cx| host.read(cx).shared.clone());
+    cx.update(|_, cx| shared.notify_host(cx));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
         !cx.update(|window, cx| window.has_active_dialog(cx)),
@@ -134,5 +130,34 @@ fn editor_notify_cascades_to_host_layer(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("dialog-layer").is_some(),
         "编辑面板 notify 后层应仍在并刷新"
+    );
+}
+
+#[gpui_kit::test]
+fn sidebar_edit_request_renders_dialog_layer(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (host, cx) = open_host(cx);
+    let (shared, editor) = cx.update(|_, cx| {
+        let host = host.read(cx);
+        (host.shared.clone(), host.editor.clone())
+    });
+
+    // 模拟侧边栏「编辑」入口：置位 open_edit 并通知编辑面板（宿主重绘由事件路径负责）。
+    *shared.open_edit.borrow_mut() = Some("G_conn_demo".to_string());
+    cx.update(|_, cx| {
+        editor.update(cx, |_, cx| cx.notify());
+    });
+
+    // 第一帧：编辑面板 render 消费请求并打开对话框（渲染期通知宿主）；
+    // 第二帧：宿主重绘，层进入元素树。
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "编辑入口应打开对话框"
+    );
+    assert!(
+        cx.debug_bounds("dialog-layer").is_some(),
+        "编辑入口的对话框层应渲染"
     );
 }

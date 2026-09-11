@@ -473,7 +473,10 @@ async fn open_project_store(project_path: &str) -> Result<ProjectConnectionStore
 }
 
 /// 从 URL 解析 host / port / database（文件型返回 None）。
-fn parse_url_host_port_db(
+/// 从连接 URL 解析（主机 / 端口 / 数据库）；文件型库返回全 None。
+///
+/// 供对话框（常规 Tab 只读摘要）与服务层共用，保证展示与落库同源。
+pub fn parse_url_host_port_db(
     db_type: &str,
     url: &str,
 ) -> (Option<String>, Option<i32>, Option<String>) {

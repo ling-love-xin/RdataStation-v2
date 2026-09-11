@@ -245,11 +245,11 @@ impl WorkbenchView {
                 }
                 SidebarEvent::EditConnection(_) => {
                     // 编辑请求已写入 shared.open_edit；通知编辑器渲染消费并打开对话框。
+                    // 注意：此处处于宿主自身的 update 上下文，不能回调 `notify_host`
+                    // （会重入借用宿主）；末尾的 `cx.notify()` 已足够让宿主重绘。
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }
-                    // 宿主同步重绘：对话框层挂在宿主 render 上，否则打开后不显示。
-                    this.shared.notify_host(cx);
                 }
             }
             cx.notify();

@@ -2080,7 +2080,8 @@ pub struct EditorPanel {
     shared: Shared,
     focus_handle: FocusHandle,
     // Phase A：新建连接对话框状态（懒创建，open_dialog 由"新建连接"按钮触发）。
-    dialog: Option<connection_dialog::ConnectionDialogState>,
+    // `Rc` 包装：对话框内部（暂存列表 / 管理器等）需把状态句柄 clone 进回调。
+    dialog: Option<Rc<connection_dialog::ConnectionDialogState>>,
     // Round 26：SQL 查询区（受控输入 + 结果集）。
     sql_textarea: Option<Entity<TextareaState>>,
     query_result: Rc<RefCell<Option<QueryOutput>>>,
@@ -2126,7 +2127,9 @@ impl EditorPanel {
     /// 而 `Root` 的 notify 不会让子视图重建元素树。
     pub fn request_new_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog.is_none() {
-            self.dialog = Some(connection_dialog::ConnectionDialogState::new(window, cx));
+            self.dialog = Some(Rc::new(connection_dialog::ConnectionDialogState::new(
+                window, cx,
+            )));
         }
         if let Some(dialog) = self.dialog.as_ref() {
             dialog.open(cx.entity(), self.shared.clone(), None, window, cx);
@@ -2142,7 +2145,9 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) {
         if self.dialog.is_none() {
-            self.dialog = Some(connection_dialog::ConnectionDialogState::new(window, cx));
+            self.dialog = Some(Rc::new(connection_dialog::ConnectionDialogState::new(
+                window, cx,
+            )));
         }
         if let Some(dialog) = self.dialog.as_ref() {
             dialog.open(cx.entity(), self.shared.clone(), Some(conn_id), window, cx);
@@ -2379,7 +2384,9 @@ impl Render for EditorPanel {
             self.sql_textarea = Some(ta);
         }
         if self.dialog.is_none() {
-            self.dialog = Some(connection_dialog::ConnectionDialogState::new(window, cx));
+            self.dialog = Some(Rc::new(connection_dialog::ConnectionDialogState::new(
+                window, cx,
+            )));
         }
 
         // 消费侧边栏「编辑」请求（open_edit 置位后在此打开对话框）。

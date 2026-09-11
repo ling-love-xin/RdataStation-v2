@@ -26,14 +26,14 @@ use rds_workbench::panels::{EditorPanel, Shared};
 struct DialogHarness {
     shared: Shared,
     editor: Entity<EditorPanel>,
-    dialog: ConnectionDialogState,
+    dialog: Rc<ConnectionDialogState>,
 }
 
 impl DialogHarness {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let shared = Shared::new();
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
-        let dialog = ConnectionDialogState::new(window, cx);
+        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
         Self {
             shared,
             editor,
