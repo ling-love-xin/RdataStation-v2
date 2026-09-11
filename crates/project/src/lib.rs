@@ -23,6 +23,7 @@
 
 pub mod lock;
 pub mod models;
+pub mod service;
 pub mod store;
 
 pub use lock::{AcquireOutcome, LockInfo, ProjectLock};

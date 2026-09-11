@@ -148,8 +148,6 @@ pub struct WorkbenchView {
     settings_view: Option<Entity<SettingsView>>,
     /// M1 项目管理输入实体（懒创建）。
     project_inputs: Option<crate::components::project_ui::ProjectInputs>,
-    /// 选择器是否已加载（无项目首帧触发一次）。
-    project_picker_loaded: bool,
     /// 订阅句柄（保持连接选中事件的订阅存活）。
     _subscription: Option<Subscription>,
 }
@@ -161,6 +159,19 @@ impl WorkbenchView {
         let shared = Shared::with_connections(connections, notice);
         // P0：解析当前项目会话（环境变量 → 最近项目 → 空态），供标题栏/草稿箱/连接共用。
         *shared.project.borrow_mut() = crate::services::project_session::resolve();
+        // M1：排序偏好（直读 settings.json，无需 cx）与首屏项目列表（无项目时）都在构造期完成，
+        // 避免在 `render` 里做 I/O（GPUI-kit 编码指南：副作用不得放在 render）。
+        {
+            let sort = crate::components::project_ui::ProjectSort::from_key(
+                &settings::load_settings().projects.sort_mode,
+            );
+            let mut ui = shared.project_ui.borrow_mut();
+            ui.picker.sort = sort;
+            ui.picker.sort_initialized = true;
+        }
+        if shared.project.borrow().is_none() {
+            crate::components::project_ui::load_picker(&shared);
+        }
         Self {
             shared,
             area: None,
@@ -170,7 +181,6 @@ impl WorkbenchView {
             quick_open_input: None,
             settings_view: None,
             project_inputs: None,
-            project_picker_loaded: false,
             _subscription: None,
         }
     }
@@ -179,7 +189,6 @@ impl WorkbenchView {
     pub fn refresh_project_picker(&mut self, cx: &mut Context<Self>) {
         let entity = cx.entity();
         crate::components::project_ui::refresh_picker(&self.shared, &entity, cx);
-        self.project_picker_loaded = true;
     }
 
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
@@ -802,13 +811,6 @@ impl Render for WorkbenchView {
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。
         if self.project_inputs.is_none() {
             self.project_inputs = Some(crate::components::project_ui::ProjectInputs::new(window, cx));
-        }
-        // M1：项目排序偏好从 settings 初始化（首帧一次），随后加载列表。
-        crate::components::project_ui::init_sort_from_settings(&self.shared, cx);
-        // 无项目：首帧加载选择器列表（load_picker 不触发 notify，避免 render 循环）。
-        if self.shared.project.borrow().is_none() && !self.project_picker_loaded {
-            self.project_picker_loaded = true;
-            crate::components::project_ui::load_picker(&self.shared);
         }
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);

@@ -60,13 +60,14 @@ SQLite 保存 DuckDB 表/视图的注册信息（名称/来源/版本/血缘）�
 
 ```
 app ───────────────► 所有 Feature crates
-Feature crates ────► engine, shared
+Feature crates ────► engine, shared, gpui-kit（UI 基础设施）
 engine ────────────► shared
 shared ────────────► (gpui-base / gpui-component / 第三方)
 ```
 
 - Feature 不得依赖 `app`；
 - Feature 间不得直接依赖对方 view；协作走 command / event / shared service；
+- Feature 可以直接依赖 `gpui-kit`：按 GPUI-kit 编码指南，同一业务能力的 model / service / view / command / dialog / workflow 应放在同一 feature crate（官方示例 `workspace/src/{workspace_view.rs, rename_dialog.rs, commands.rs}`），`workbench` 退化为工作台壳层组合；
 - 只有 ≥2 个真实使用方的稳定能力才进 `shared/`；
 - 依赖必须无环，并始终指向更小、更稳定的 crate。
 

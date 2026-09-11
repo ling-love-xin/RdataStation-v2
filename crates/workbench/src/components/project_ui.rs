@@ -17,8 +17,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::panels::Shared;
-use crate::services::project_service::{self, OpenOutcome, ProjectSummary, TargetDirState};
 use crate::view::WorkbenchView;
+use project::service::{self as project_service, OpenOutcome, ProjectSummary, TargetDirState};
 use settings::SettingsService;
 
 /// 选择器视图 Tab。
@@ -35,6 +35,15 @@ impl PickerTab {
             PickerTab::Recent => "最近",
             PickerTab::All => "全部",
             PickerTab::Removed => "已移除",
+        }
+    }
+
+    /// 稳定标识键（ElementId 用，不用本地化 label）。
+    pub fn key(self) -> &'static str {
+        match self {
+            PickerTab::Recent => "recent",
+            PickerTab::All => "all",
+            PickerTab::Removed => "removed",
         }
     }
 }
@@ -65,7 +74,7 @@ impl ProjectSort {
     }
 
     /// 持久化键（写入 settings.projects.sort_mode）。
-    fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             ProjectSort::LastOpened => "last_opened",
             ProjectSort::Name => "name",
@@ -73,7 +82,7 @@ impl ProjectSort {
         }
     }
 
-    fn from_key(key: &str) -> Self {
+    pub fn from_key(key: &str) -> Self {
         match key {
             "name" => ProjectSort::Name,
             "created" => ProjectSort::Created,
@@ -83,6 +92,7 @@ impl ProjectSort {
 }
 
 /// 选择器状态。
+#[non_exhaustive]
 pub struct PickerState {
     pub tab: PickerTab,
     pub sort: ProjectSort,
@@ -146,6 +156,7 @@ pub enum ProjectDialog {
 }
 
 /// 项目 UI 状态（挂在 `Shared` 上，避免散落多字段）。
+#[non_exhaustive]
 pub struct ProjectUiState {
     pub picker: PickerState,
     pub menu_open: bool,
@@ -176,6 +187,7 @@ impl Default for ProjectUiState {
 
 /// 项目相关输入实体（由 `WorkbenchView` 懒创建并持有）。
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ProjectInputs {
     pub search: Entity<InputState>,
     pub create_name: Entity<InputState>,
@@ -256,16 +268,6 @@ fn sort_items(items: &mut [ProjectSummary], sort: ProjectSort) {
 
 // ==================== 动作 ====================
 
-/// 从 settings 初始化排序偏好（首帧调用一次）。
-pub fn init_sort_from_settings(shared: &Shared, cx: &App) {
-    let mut ui = shared.project_ui.borrow_mut();
-    if ui.picker.sort_initialized {
-        return;
-    }
-    ui.picker.sort = ProjectSort::from_key(&SettingsService::project_sort_mode(cx));
-    ui.picker.sort_initialized = true;
-}
-
 /// 切换 Tab 并刷新。
 pub fn set_tab(shared: &Shared, tab: PickerTab, entity: &Entity<WorkbenchView>, cx: &mut App) {
     shared.project_ui.borrow_mut().picker.tab = tab;
@@ -343,13 +345,7 @@ pub fn submit_create(
     }
     let path = PathBuf::from(&location).join(&name);
 
-    let input = project_service::CreateProjectInput {
-        name,
-        path,
-        description,
-        init_analytics: true,
-        sample_drafts: false,
-    };
+    let input = project_service::CreateProjectInput::new(name, path).with_description(description);
     match project_service::create(input) {
         Ok(summary) => {
             // 创建成功后直接打开（走统一打开路径，取得锁）。
@@ -407,13 +403,9 @@ pub fn create_sample(shared: &Shared, entity: &Entity<WorkbenchView>, cx: &mut A
         .unwrap_or_else(|| std::env::temp_dir().join("RdataStation").join("samples"));
     let path = base.join("示例项目");
     if !project_service::is_valid_project(&path) {
-        let input = project_service::CreateProjectInput {
-            name: "示例项目".to_string(),
-            path: path.clone(),
-            description: Some("RdataStation 内置示例".to_string()),
-            init_analytics: true,
-            sample_drafts: true,
-        };
+        let input = project_service::CreateProjectInput::new("示例项目", path.clone())
+            .with_description(Some("RdataStation 内置示例".to_string()))
+            .with_sample_drafts(true);
         if let Err(e) = project_service::create(input) {
             shared.project_ui.borrow_mut().picker.error = Some(e);
             entity.update(cx, |_, cx| cx.notify());
@@ -486,12 +478,7 @@ fn apply_opened(
     entity: &Entity<WorkbenchView>,
     cx: &mut App,
 ) {
-    let project_service::OpenedProject {
-        store,
-        lock,
-        read_only,
-        summary,
-    } = opened;
+    let (store, lock, read_only, summary) = opened.into_parts();
     // store 目前仅用于确认加载成功；会话只保留根与名（与既有 P0 会话一致）。
     drop(store);
 
@@ -912,7 +899,7 @@ pub fn render_picker(
             div()
                 .id(ElementId::Name(SharedString::from(format!(
                     "picker-tab-{}",
-                    tab.label()
+                    tab.key()
                 ))))
                 .px_2()
                 .py_1()
@@ -1407,36 +1394,52 @@ pub fn render_menu(
         .border_color(theme.colors.border)
         .bg(theme.colors.popover)
         .shadow_lg()
-        .child(menu_item("切换项目…", theme, move |_window, app| {
-            // 切换项目 = 关闭当前 + 回到选择器（一实例一项目）。
-            request_close(&shared_switch, &entity_switch, app);
-        }))
-        .child(menu_item("项目设置…", theme, move |window, app| {
-            inputs_settings
-                .rename
-                .update(app, |s, cx| s.set_value(name_settings.clone(), window, cx));
-            let mut ui = shared_settings.project_ui.borrow_mut();
-            ui.menu_open = false;
-            ui.settings_open = true;
-            drop(ui);
-            entity_settings.update(app, |_, cx| cx.notify());
-        }))
-        .child(menu_item("重命名…", theme, move |window, app| {
-            inputs_rename
-                .rename
-                .update(app, |s, cx| s.set_value(name_rename.clone(), window, cx));
-            let mut ui = shared_rename.project_ui.borrow_mut();
-            ui.menu_open = false;
-            ui.settings_open = true;
-            drop(ui);
-            entity_rename.update(app, |_, cx| cx.notify());
-        }))
-        .child(menu_item("在资源管理器中显示", theme, {
+        .child(menu_item(
+            "switch",
+            "切换项目…",
+            theme,
+            move |_window, app| {
+                // 切换项目 = 关闭当前 + 回到选择器（一实例一项目）。
+                request_close(&shared_switch, &entity_switch, app);
+            },
+        ))
+        .child(menu_item(
+            "settings",
+            "项目设置…",
+            theme,
+            move |window, app| {
+                inputs_settings
+                    .rename
+                    .update(app, |s, cx| s.set_value(name_settings.clone(), window, cx));
+                let mut ui = shared_settings.project_ui.borrow_mut();
+                ui.menu_open = false;
+                ui.settings_open = true;
+                drop(ui);
+                entity_settings.update(app, |_, cx| cx.notify());
+            },
+        ))
+        .child(menu_item(
+            "rename",
+            "重命名…",
+            theme,
+            move |window, app| {
+                inputs_rename
+                    .rename
+                    .update(app, |s, cx| s.set_value(name_rename.clone(), window, cx));
+                let mut ui = shared_rename.project_ui.borrow_mut();
+                ui.menu_open = false;
+                ui.settings_open = true;
+                drop(ui);
+                entity_rename.update(app, |_, cx| cx.notify());
+            },
+        ))
+        .child(menu_item("reveal", "在资源管理器中显示", theme, {
             let path = path.clone();
             move |_window, _app| reveal_in_explorer(&path)
         }))
         .child(div().h(px(1.)).my_1().bg(theme.colors.border))
         .child(menu_item(
+            "archive",
             "归档 / 取消归档",
             theme,
             move |_window, app| {
@@ -1444,10 +1447,15 @@ pub fn render_menu(
             },
         ))
         .child(div().h(px(1.)).my_1().bg(theme.colors.border))
-        .child(menu_item("关闭项目", theme, move |_window, app| {
-            shared_close.project_ui.borrow_mut().menu_open = false;
-            request_close(&shared_close, &entity_close, app);
-        }));
+        .child(menu_item(
+            "close",
+            "关闭项目",
+            theme,
+            move |_window, app| {
+                shared_close.project_ui.borrow_mut().menu_open = false;
+                request_close(&shared_close, &entity_close, app);
+            },
+        ));
 
     if read_only {
         menu = menu.child(
@@ -1463,12 +1471,13 @@ pub fn render_menu(
 }
 
 fn menu_item(
+    key: &'static str,
     label: &'static str,
     theme: &gpui_kit::component::Theme,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     div()
-        .id(ElementId::Name(SharedString::from(format!("menu-{label}"))))
+        .id(ElementId::Name(SharedString::from(format!("menu-{key}"))))
         .px_2()
         .py_1()
         .rounded_md()

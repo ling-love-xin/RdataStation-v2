@@ -11,7 +11,6 @@ pub mod data_source_service;
 pub mod db_navigator;
 pub mod driver_service;
 pub mod persistence_service;
-pub mod project_service;
 pub mod project_session;
 pub mod query_export;
 pub mod query_history;

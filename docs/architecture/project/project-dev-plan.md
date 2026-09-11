@@ -49,6 +49,18 @@
 
 **剩余有意取舍**：「删除磁盘数据」只删 `.RSmeta`（保留用户文件），非整目录删除。
 
+### 2026-09-11 — 符合性对齐（GPUI-kit coding-guides）
+
+对照官方《编码指南》/《设计指南》自查后启动整改：
+
+| 项 | 处置 |
+| --- | --- |
+| 架构归属：service 未与 model 同 crate | ✅ `project_service.rs` 从 workbench 迁入 `crates/project/src/service.rs`；`.RSmeta` 常量统一到 `store::RS_META_DIR_NAME` |
+| 仓库硬约束未允许 `feature → gpui-kit` | ✅ 更新 `.agents/skills/rds-architecture` 与 `overview.md`（按指南：feature 可依赖 UI 基础设施） |
+| 视图 / 对话框仍在 workbench | ⏳ 待办：`project_ui.rs` 拆入 `crates/project/src/`（`ProjectView` 升级为 `Entity`，顺带消除 render 内查库） |
+| render 内副作用（`load_picker` 查库、写 `editor_dirty`） | ⏳ 待办（随视图迁移改造为生命周期入口） |
+| 直接 `px(...)`、自绘 menu/dialog、本地化 label 作 ElementId、公开字段未 `#[non_exhaustive]` | ⏳ 待办（批次 B） |
+
 ### 2026-09-11 — 方案定稿（含 schema 迁移）
 
 尚无代码改动。范围 = 项目 CRUD / 生命周期。相较初稿新增：**全局库迁移 `019_add_project_ui_state.sql`**（固定/软删字段）与名册查询改造。建议按 Phase A 起步。
@@ -159,7 +171,7 @@
 
 | 设计决策 | 代码文件 |
 | --- | --- |
-| 项目服务编排（列表/创建/打开/切换/关闭/更新/删除/找回） | `crates/workbench/src/services/project_service.rs`（新） |
+| 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs`（feature crate 内，符合 GPUI-kit 指南「model/service/view 同 crate」） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（收敛） |
 | 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/workbench/src/components/project_ui.rs`（新；与 connection_dialog 同层的自绘 overlay） |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |

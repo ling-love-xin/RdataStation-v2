@@ -4,20 +4,23 @@
 //! 供项目管理 UI（选择器 / 新建对话框 / 设置视图）调用。语义见
 //! `docs/architecture/project/project-prototype-design.md` §2。
 //!
-//! 与 workbench 现有服务一致，采用同步入口 + 内部自建 tokio 运行时的模式。
+//! 按 GPUI-kit 编码指南「feature crate 组织同一业务能力的 model/service/view/command/dialog」，
+//! 本模块与 `models` / `store` / `lock` 同属 `rds-project`；同步入口 + 内部自建 tokio 运行时。
 
 use std::path::{Path, PathBuf};
 
 use engine::migration::{MigrationManager, MigrationType};
 use engine::persistence::global_db::{GlobalDatabaseManager, ProjectInfoRecord};
-use project::store::check_project_missing_drivers;
-use project::{AcquireOutcome, LockInfo, ProjectLock, ProjectStatus, ProjectStore};
 
-/// 项目根下的内部元数据目录（与 `rds-project` 保持一致）。
-pub const RS_META_DIR_NAME: &str = ".RSmeta";
+use crate::store::check_project_missing_drivers;
+use crate::{AcquireOutcome, LockInfo, ProjectLock, ProjectStatus, ProjectStore};
+
+/// 项目根下的内部元数据目录（统一来源：`store::RS_META_DIR_NAME`）。
+pub use crate::store::RS_META_DIR_NAME;
 
 /// 项目名册条目（视图模型：名册记录 + 运行时探测结果）。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ProjectSummary {
     pub id: String,
     pub name: String,
@@ -46,6 +49,7 @@ impl ProjectSummary {
 
 /// 新建项目输入。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CreateProjectInput {
     pub name: String,
     /// 项目根目录（父目录 + 名称由对话框拼好）。
@@ -55,6 +59,29 @@ pub struct CreateProjectInput {
     pub init_analytics: bool,
     /// 是否创建示例草稿。
     pub sample_drafts: bool,
+}
+
+impl CreateProjectInput {
+    /// 以必填项构造（其余字段走 builder，保证后续新增字段不破坏调用方）。
+    pub fn new(name: impl Into<String>, path: PathBuf) -> Self {
+        Self {
+            name: name.into(),
+            path,
+            description: None,
+            init_analytics: true,
+            sample_drafts: false,
+        }
+    }
+
+    pub fn with_description(mut self, description: Option<String>) -> Self {
+        self.description = description;
+        self
+    }
+
+    pub fn with_sample_drafts(mut self, sample_drafts: bool) -> Self {
+        self.sample_drafts = sample_drafts;
+        self
+    }
 }
 
 /// 目标目录状态（新建项目时的冲突判定）。
@@ -71,12 +98,20 @@ pub enum TargetDirState {
 }
 
 /// 打开项目的结果。
+#[non_exhaustive]
 pub struct OpenedProject {
     pub store: ProjectStore,
     /// 写锁句柄（只读打开时为 `None`）；`Drop` 即释放。
     pub lock: Option<ProjectLock>,
     pub read_only: bool,
     pub summary: ProjectSummary,
+}
+
+impl OpenedProject {
+    /// 拆解为各部件（`#[non_exhaustive]` 下跨 crate 无法字面解构时的取用方式）。
+    pub fn into_parts(self) -> (ProjectStore, Option<ProjectLock>, bool, ProjectSummary) {
+        (self.store, self.lock, self.read_only, self.summary)
+    }
 }
 
 /// 打开项目的三种结果（供「只读打开 / 仍要打开 / 取消」逃生口使用）。
@@ -241,7 +276,7 @@ pub fn create(input: CreateProjectInput) -> Result<ProjectSummary, String> {
 }
 
 /// 登记名册（upsert）并返回视图模型。
-fn register_and_summarize(info: &project::ProjectInfo) -> Result<ProjectSummary, String> {
+fn register_and_summarize(info: &crate::ProjectInfo) -> Result<ProjectSummary, String> {
     let manager = manager()?;
     let runtime = runtime()?;
     let path_str = info
@@ -493,7 +528,7 @@ pub fn relocate(id: &str, new_root: &Path) -> Result<(), String> {
     // 同步项目本体路径（project.json / project.db）。
     let mut store = ProjectStore::load(new_root).map_err(|e| format!("加载项目失败: {e}"))?;
     store
-        .update_info(|info| info.path = project::ProjectPath::local(new_root))
+        .update_info(|info| info.path = crate::ProjectPath::local(new_root))
         .map_err(|e| format!("写入项目路径失败: {e}"))?;
     let info = store.info().clone();
     let status = status_key(info.status);
@@ -526,6 +561,7 @@ fn status_key(status: ProjectStatus) -> &'static str {
 
 /// 项目版本台账行（只读展示）。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ProjectVersionRow {
     pub id: String,
     pub parent_id: Option<String>,

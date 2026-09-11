@@ -23,7 +23,8 @@ use crate::models::{
 };
 
 /// 项目元数据目录名称
-const RS_META_DIR_NAME: &str = ".RSmeta";
+/// 项目元数据目录名称（**唯一来源**：`service` 与 `lock` 均复用本常量）。
+pub const RS_META_DIR_NAME: &str = ".RSmeta";
 
 /// 项目元数据数据库文件名
 const PROJECT_DB_NAME: &str = "project.db";

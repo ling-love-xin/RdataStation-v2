@@ -17,13 +17,14 @@ description: RdataStation v2 架构硬约束：crate 依赖方向、模块归属
 
 ```
 app ───────────────► 所有 Feature crates
-Feature crates ────► engine, shared
+Feature crates ────► engine, shared, gpui-kit（UI 基础设施）
 engine ────────────► shared
 shared ────────────► (gpui-kit / 第三方)
 ```
 
 - Feature 不得依赖 `app`
 - Feature 间不得直接依赖对方的 view；协作走 command / event / shared service
+- Feature **可以**直接依赖 `gpui-kit`（UI 基础设施），以便按 GPUI-kit 编码指南把同一业务能力的 model / service / view / command / dialog / workflow 放在同一 feature crate（官方示例：`workspace/src/{workspace_view.rs, rename_dialog.rs, commands.rs}`）
 - 只有 ≥2 个真实使用方的稳定能力才进 `shared/`
 - 依赖必须无环，始终指向更小、更稳定的 crate
 
