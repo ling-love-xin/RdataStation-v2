@@ -150,7 +150,9 @@ impl ConnectionDialogState {
             };
             if let Some(d) = &current_driver {
                 let mut st = selected_type.borrow_mut();
-                if *st != d.type_id {
+                // 仅在未选类型时用驱动反推补全；不覆盖用户显式选择的类型
+                // （否则“点了类型但驱动仍是旧值”时侧栏高亮会弹回旧类型）。
+                if st.is_empty() {
                     *st = d.type_id.clone();
                 }
             }
@@ -1301,6 +1303,8 @@ impl ConnectionDialogState {
             }
             let side_panel = div()
                 .w(rems(12.5))
+                .h_full()
+                .min_h_0()
                 .flex_shrink_0()
                 .v_flex()
                 .gap(rems(0.75))
@@ -1347,7 +1351,16 @@ impl ConnectionDialogState {
                                         }),
                                 ),
                         )
-                        .child(staging_list),
+                        // 暂存区固定高度 + 滚动：条目再多也只在区域内滚动，不拉长对话框。
+                        .child(
+                            div()
+                                .id("staging-scroll")
+                                .w_full()
+                                .h(rems(7.5))
+                                .min_h_0()
+                                .overflow_y_scrollbar()
+                                .child(staging_list),
+                        ),
                 )
                 .child(
                     div()
@@ -1356,11 +1369,89 @@ impl ConnectionDialogState {
                         .text_color(theme.colors.muted_foreground)
                         .child("数据库类型"),
                 )
-                .child(db_tree);
+                // 类型树占满侧栏剩余高度并内部滚动（与暂存区共同保证侧栏高度恒定）。
+                .child(
+                    div()
+                        .id("type-scroll")
+                        .w_full()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .child(db_tree),
+                );
 
             // ---- Header（对齐原型 §2）：名称 + 驱动类型 + 作用域 / 备注 / URI / 提示行 ----
             let scope_sel = scope.read(cx).selected_value().cloned().unwrap_or_default().to_string();
             let includes_project = scope_from_label(&scope_sel).includes_project();
+            // 项目栏：固定位置（备注行右侧）；作用域为「仅全局」时不参与落库 → 置灰不可编辑，
+            // 保证三态切换时布局不跳动。
+            let project_ui = {
+                let mut wrap = div()
+                    .relative()
+                    .h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(rems(0.5))
+                    .w(rems(17.))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("项目"),
+                    );
+                if !includes_project {
+                    wrap = wrap.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("仅全局不需要"),
+                    );
+                } else {
+                    match project_session.clone() {
+                        Some((pname, proot)) => {
+                            wrap = wrap.child(
+                                div()
+                                    .id("conn-project-name")
+                                    .text_xs()
+                                    .text_color(theme.colors.foreground)
+                                    .child(pname)
+                                    .on_hover({
+                                        let state = state.clone();
+                                        let entity = entity.clone();
+                                        move |hovered, _, app| {
+                                            if state.project_hover.get() != *hovered {
+                                                state.project_hover.set(*hovered);
+                                                entity.update(app, |_, cx| cx.notify());
+                                            }
+                                        }
+                                    }),
+                            );
+                            if state.project_hover.get() {
+                                wrap = wrap.child(
+                                    div()
+                                        .absolute()
+                                        .top(rems(1.125))
+                                        .left_0()
+                                        .px(rems(0.5))
+                                        .py(rems(0.25))
+                                        .rounded(rems(0.375))
+                                        .border_1()
+                                        .border_color(theme.colors.border)
+                                        .bg(theme.colors.popover)
+                                        .text_xs()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .child(proot),
+                                );
+                            }
+                        }
+                        None => {
+                            wrap = wrap.child(Input::new(&project_path).flex_1());
+                        }
+                    }
+                }
+                wrap
+            };
             let header_ui = div()
                 .v_flex()
                 .gap(rems(0.5))
@@ -1384,11 +1475,15 @@ impl ConnectionDialogState {
                         // 数据库类型徽标（缩小的类型 UI）：类型已在左侧栏选定，此处复述；
                         // 未选类型时以提示形式说明（驱动下拉选项为空，等待选类型）。
                         .child({
+                            // 固定宽度：类型名长短（MySQL / PostgreSQL / SQL Server）不改变驱动下拉的位置；
+                            // 文本超宽省略（固定布局优先）。
                             let mut badge = div()
                                 .flex_shrink_0()
                                 .h_flex()
                                 .items_center()
                                 .gap(rems(0.25))
+                                .w(rems(8.25))
+                                .overflow_hidden()
                                 .px(rems(0.375))
                                 .py(px(1.))
                                 .rounded(rems(0.375))
@@ -1400,13 +1495,27 @@ impl ConnectionDialogState {
                                         .border_color(theme.colors.border)
                                         .text_color(theme.colors.muted_foreground)
                                         .child(icon.clone())
-                                        .child(name.clone());
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.))
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .child(name.clone()),
+                                        );
                                 }
                                 None => {
                                     badge = badge
                                         .border_color(theme.colors.warning)
                                         .text_color(theme.colors.warning)
-                                        .child("请先在左侧选择数据库类型");
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.))
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .child("请选数据库类型"),
+                                        );
                                 }
                             }
                             badge
@@ -1438,14 +1547,40 @@ impl ConnectionDialogState {
                             } else {
                                 scope_sel.clone()
                             };
-                            let mut seg = div().h_flex().flex_shrink_0().gap(px(2.));
+                            // 自绘三态分段控件：颜色完全走主题 token，
+                            // 不依赖 Button 变体的默认 token（RDS 主题未覆盖 button_secondary_foreground，
+                            // 会造成“文字不可见但可点击”）。
+                            let mut seg = div()
+                                .h_flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap(px(1.))
+                                .p(px(1.))
+                                .rounded(rems(0.375))
+                                .border_1()
+                                .border_color(theme.colors.border)
+                                .bg(theme.colors.background);
                             for label in SCOPE_LABELS {
                                 let active = scope_now == label;
-                                let mut btn = Button::new(SharedString::from(format!("scope-{label}")))
-                                    .label(label)
-                                    .size(px(22.));
-                                btn = if active { btn.primary() } else { btn.secondary() };
-                                let btn = btn.toggled(active).on_click({
+                                let mut item = div()
+                                    .id(SharedString::from(format!("scope-{label}")))
+                                    .h_flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .h(rems(1.25))
+                                    .px(rems(0.5))
+                                    .rounded(rems(0.25))
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .child(label);
+                                item = if active {
+                                    item.bg(theme.colors.primary)
+                                        .text_color(theme.colors.primary_foreground)
+                                } else {
+                                    item.text_color(theme.colors.muted_foreground)
+                                        .hover(|s| s.bg(theme.colors.list_hover))
+                                };
+                                let item = item.on_click({
                                     let scope = scope.clone();
                                     let entity = entity.clone();
                                     move |_, window, app| {
@@ -1453,7 +1588,7 @@ impl ConnectionDialogState {
                                         entity.update(app, |_, cx| cx.notify());
                                     }
                                 });
-                                seg = seg.child(btn);
+                                seg = seg.child(item);
                             }
                             seg
                         }),
@@ -1470,7 +1605,8 @@ impl ConnectionDialogState {
                                 .text_color(theme.colors.muted_foreground)
                                 .child("备注"),
                         )
-                        .child(Input::new(&remark).flex_1().max_w(rems(27.5))),
+                        .child(Input::new(&remark).flex_1())
+                        .child(project_ui),
                 )
                 .child(
                     div()
@@ -1484,76 +1620,7 @@ impl ConnectionDialogState {
                                 .text_color(theme.colors.muted_foreground)
                                 .child("URI"),
                         )
-                        .child(Input::new(&url).flex_1())
-                        // 项目侧：已打开项目时显示项目名（悬停显示完整路径）；未打开时保留可编辑路径输入。
-                        .child(if includes_project {
-                            match project_session.clone() {
-                                Some((pname, proot)) => {
-                                    // 外层容器（Div）承载 relative 与气泡；内层（Stateful）挂 hover 监听。
-                                    let mut wrap = div()
-                                        .relative()
-                                        .h_flex()
-                                        .flex_shrink_0()
-                                        .items_center()
-                                        .gap(rems(0.5))
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.colors.muted_foreground)
-                                                .child("项目"),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("conn-project-name")
-                                                .text_xs()
-                                                .text_color(theme.colors.foreground)
-                                                .child(pname)
-                                                .on_hover({
-                                                    let state = state.clone();
-                                                    let entity = entity.clone();
-                                                    move |hovered, _, app| {
-                                                        if state.project_hover.get() != *hovered {
-                                                            state.project_hover.set(*hovered);
-                                                            entity.update(app, |_, cx| cx.notify());
-                                                        }
-                                                    }
-                                                }),
-                                        );
-                                    if state.project_hover.get() {
-                                        wrap = wrap.child(
-                                            div()
-                                                .absolute()
-                                                .top(rems(1.125))
-                                                .left_0()
-                                                .px(rems(0.5))
-                                                .py(rems(0.25))
-                                                .rounded(rems(0.375))
-                                                .border_1()
-                                                .border_color(theme.colors.border)
-                                                .bg(theme.colors.popover)
-                                                .text_xs()
-                                                .text_color(theme.colors.muted_foreground)
-                                                .child(proot),
-                                        );
-                                    }
-                                    wrap
-                                }
-                                None => div()
-                                    .h_flex()
-                                    .flex_shrink_0()
-                                    .items_center()
-                                    .gap(rems(0.5))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.muted_foreground)
-                                            .child("项目路径"),
-                                    )
-                                    .child(Input::new(&project_path).w(rems(18.))),
-                            }
-                        } else {
-                            div()
-                        }),
+                        .child(Input::new(&url).flex_1()),
                 )
                 .child(
                     // 作用域语义提示（原型 scope-hint 药丸）。

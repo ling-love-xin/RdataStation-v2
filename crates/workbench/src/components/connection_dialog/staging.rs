@@ -17,6 +17,47 @@ pub(crate) fn saved_scope_short(id: &str) -> Option<&'static str> {
     }
 }
 
+/// 模板格式标识（防误粘贴；导入时校验）。
+pub const TEMPLATE_KIND: &str = "rds.connection.template";
+/// 模板格式版本（字段演进时递增；导入拒绝高于当前版本）。
+pub const TEMPLATE_VERSION: u32 = 1;
+
+/// 连接模板（C4 导入导出；**不含密码**，与草稿快照同源）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConnectionTemplate {
+    /// 格式标识（固定 [`TEMPLATE_KIND`]）。
+    pub kind: String,
+    /// 格式版本。
+    pub version: u32,
+    /// 连接条目。
+    pub connections: Vec<TemplateItem>,
+}
+
+/// 模板中的单条连接（字段为创建连接所需的最小集；凭据一律不包含）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TemplateItem {
+    pub name: String,
+    #[serde(default)]
+    pub type_id: String,
+    #[serde(default)]
+    pub driver_id: String,
+    pub url: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub remark: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub project_path: String,
+    #[serde(default)]
+    pub ssl_mode: String,
+    #[serde(default)]
+    pub tags: String,
+    #[serde(default)]
+    pub duckdb_fed: bool,
+}
+
 /// 协议链跳（内联编辑态）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Hop {
@@ -105,6 +146,14 @@ impl ConnectionDraft {
         } else {
             self.name.clone()
         }
+    }
+
+    /// 是否为空草稿（未保存且无任何有效字段）：导出模板时跳过。
+    pub(crate) fn is_empty_draft(&self) -> bool {
+        self.saved_id.is_none()
+            && self.name.trim().is_empty()
+            && self.url.trim().is_empty()
+            && self.driver_id.trim().is_empty()
     }
 }
 
@@ -365,6 +414,8 @@ impl ConnectionDialogState {
         self.draft_cursor.set(idx);
         self.apply_draft(idx, window, cx);
         self.staging_persist();
+        *self.result.borrow_mut() = Some("已新建草稿（填好后保存）".to_string());
+        self.result_ok.set(true);
     }
 
     /// 暂存列表：切换条目（规则 1：先写回当前，再载入目标）。
@@ -376,6 +427,15 @@ impl ConnectionDialogState {
         if current != idx {
             self.capture_draft(current, cx);
         }
+        // 载入来源提示：让用户明白表单字段为何变化（本条目的快照 / 已保存连接回读）。
+        let label = self
+            .drafts
+            .borrow()
+            .get(idx)
+            .map(|d| d.display_name())
+            .unwrap_or_default();
+        *self.result.borrow_mut() = Some(format!("已载入条目「{label}」"));
+        self.result_ok.set(true);
         self.draft_cursor.set(idx);
         self.apply_draft(idx, window, cx);
         self.staging_persist();
@@ -434,6 +494,116 @@ impl ConnectionDialogState {
         self.staging_persist();
     }
 
+    // ===== 模板导入导出（C4；剪贴板 JSON，不含密码）=====
+    //
+    // 注：能力已实现并有测试覆盖（`tests/connection_template.rs`），但 **UI 入口按决策暂缓**
+    // （避免当前阶段界面变动）；后期只需在暂存列表标题行接上「导出 / 导入」两个按钮。
+
+    /// 导出未保存且非空的草稿为模板 JSON（已保存条目只有名称/驱动占位，故不导出）。
+    ///
+    /// 当前无 UI 入口（待启用）；供测试与后续接入使用。
+    pub fn templates_export(&self) -> String {
+        let connections: Vec<TemplateItem> = self
+            .drafts
+            .borrow()
+            .iter()
+            .filter(|d| d.saved_id.is_none() && !d.is_empty_draft())
+            .map(|d| TemplateItem {
+                name: d.name.clone(),
+                type_id: d.type_id.clone(),
+                driver_id: d.driver_id.clone(),
+                url: d.url.clone(),
+                username: d.user.clone(),
+                remark: d.remark.clone(),
+                scope: d.scope.clone(),
+                project_path: d.project_path.clone(),
+                ssl_mode: d.ssl_mode.clone(),
+                tags: d.tags.clone(),
+                duckdb_fed: d.duckdb_fed,
+            })
+            .collect();
+        serde_json::to_string_pretty(&ConnectionTemplate {
+            kind: TEMPLATE_KIND.to_string(),
+            version: TEMPLATE_VERSION,
+            connections,
+        })
+        .unwrap_or_default()
+    }
+
+    /// 可导出条目数（UI 提示用；与 [`Self::templates_export`] 的过滤规则一致）。
+    pub fn templates_export_count(&self) -> usize {
+        self.drafts
+            .borrow()
+            .iter()
+            .filter(|d| d.saved_id.is_none() && !d.is_empty_draft())
+            .count()
+    }
+
+    /// 从模板 JSON 导入到暂存列表（追加为新草稿，**密码留空**）；返回导入条数。
+    ///
+    /// 错误（非 JSON / 标识不符 / 版本过新 / 空列表）以中文消息返回，由调用方展示。
+    /// 当前无 UI 入口（待启用）。
+    pub fn templates_import(
+        &self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<usize, String> {
+        let tpl: ConnectionTemplate =
+            serde_json::from_str(text.trim()).map_err(|e| format!("模板解析失败：{e}"))?;
+        if tpl.kind != TEMPLATE_KIND {
+            return Err("不是 RDS 连接模板（kind 不匹配）".to_string());
+        }
+        if tpl.version > TEMPLATE_VERSION {
+            return Err(format!(
+                "模板版本过新（{} > {}），请升级应用",
+                tpl.version, TEMPLATE_VERSION
+            ));
+        }
+        if tpl.connections.is_empty() {
+            return Err("模板中没有连接".to_string());
+        }
+        let n = tpl.connections.len();
+        // 先把驱动 id 映射为实现短名（需读 drivers 目录），再写暂存列表，避免嵌套借用。
+        let drafts_new: Vec<ConnectionDraft> = {
+            let drivers = self.drivers.borrow();
+            tpl.connections
+                .into_iter()
+                .map(|item| {
+                    let driver_name = find_driver_by_value(&drivers, &item.driver_id)
+                        .map(|d| driver_short_name(&d.name))
+                        .unwrap_or_default();
+                    ConnectionDraft {
+                        name: item.name,
+                        type_id: item.type_id,
+                        driver_id: item.driver_id,
+                        driver_name,
+                        url: item.url,
+                        user: item.username,
+                        pass: String::new(),
+                        remark: item.remark,
+                        tags: item.tags,
+                        scope: item.scope,
+                        project_path: item.project_path,
+                        ssl_mode: item.ssl_mode,
+                        duckdb_fed: item.duckdb_fed,
+                        ..ConnectionDraft::empty()
+                    }
+                })
+                .collect()
+        };
+        let start = {
+            let mut drafts = self.drafts.borrow_mut();
+            let start = drafts.len();
+            drafts.extend(drafts_new);
+            start
+        };
+        self.draft_cursor.set(start);
+        self.apply_draft(start, window, cx);
+        self.staging_persist();
+        Ok(n)
+    }
+
     /// 保存到暂存表（关栏 / 各变更操作后调用；失败只记日志，不影响交互）。
     pub fn staging_persist(&self) {
         let rows: Vec<ConnectionDraftRow> = self
@@ -470,6 +640,9 @@ impl ConnectionDialogState {
             *drafts = rows.iter().map(Self::row_to_draft).collect();
         }
         self.draft_cursor.set(0);
+        // 恢复来源提示：说明字段为何是“上次会话”的值（区别于当前新建）。
+        *self.result.borrow_mut() = Some(format!("已恢复上次暂存的草稿（{} 条）", rows.len()));
+        self.result_ok.set(true);
         self.apply_draft(0, window, cx);
     }
 

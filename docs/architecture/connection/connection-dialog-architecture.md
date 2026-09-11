@@ -276,6 +276,28 @@ sequenceDiagram
     Note over K,C: 焦点不在输入框时：key binding 直接命中 SaveConnection
 ```
 
+### 5.6 模板导入导出（C4）
+
+走**剪贴板 JSON**（无文件对话框依赖），仅限**未保存且非空**草稿：
+
+```mermaid
+flowchart LR
+    A[暂存列表草稿] -->|templates_export| B[ConnectionTemplate JSON]
+    B -->|剪贴板| C[用户粘贴 / 存档]
+    C -->|剪贴板| D[templates_import]
+    D -->|kind/version/非空 校验| E[追加为新草稿]
+    E --> F[选中首条 + 解析驱动短名]
+    F --> G[apply_draft 载入表单 · 密码留空]
+```
+
+| 项 | 约定 |
+| --- | --- |
+| 格式标识 | `kind = "rds.connection.template"`（防误粘贴） |
+| 版本 | `version = 1`；导入拒绝高于当前版本 |
+| 字段 | 名称 / `type_id` / `driver_id` / URL / 用户名 / 备注 / 作用域与项目路径 / SSL 模式 / 标签 / 联邦开关 |
+| 不含 | **密码**、分组（项目级 id 无跨库意义）、协议链内联值与缓存路径 |
+| 失败 | 解析 / 校验失败返回中文消息且**不修改**暂存列表 |
+
 ---
 
 ## 6. 关键设计决策与取舍
@@ -298,6 +320,10 @@ sequenceDiagram
 | 14 | 草稿存储双入口：生产需全局单例，测试 `set_db_path_override` | 未初始化全局系统的进程（测试 / 降级启动）拒绝写库，避免误写用户真实 `global.db` |
 | 15 | 类型在左侧选、驱动只显示实现短名 | 消除重复噪音（每个驱动项不再携带类型名）；代价是驱动短名依赖 `name` 括号约定，靠 `driver_short_name` 纯函数 + 单测兜底（无括号时原值不丢信息） |
 | 16 | 暂存条目类型徽标用类型 `icon`（emoji） | 与左侧类型树同一套视觉语言，零图标资产成本；无类型/旧草稿时回退状态点，Header 同步提示（“请先在左侧选择数据库类型”） |
+| 17 | Tab 内容区固定高度 + 内部滚动 | 切换 Tab 不重排侧栏 / Header（布局稳定优先于“对话框自适应高度”） |
+| 18 | 模板导入导出走**剪贴板 JSON**（无文件对话框） | gpui 0.6 无跨平台文件选择开箱能力；剪贴板天然支持测试注入（`write_to_clipboard` / `read_from_clipboard`）；代价是需先复制到文件才能存档 |
+| 19 | 作用域分段按钮**自绘**（不用 `Button` 变体） | RDS 主题未覆盖 `button_secondary_foreground`，组件变体会出现“文字不可见仍可点击”；自绘完全走 `theme.colors` token |
+| 20 | 类型回推改为“仅未选类型时补全” | 避免“用户选了类型但驱动仍是旧值”时侧栏高亮弹回旧类型（真机反馈的“类型会变动”） |
 
 ---
 
@@ -344,6 +370,8 @@ sequenceDiagram
 | 13 | **Header 去拥挤**：作用域三态分段按钮 + 项目名（悬停气泡显示完整路径；未打开项目保留可编辑路径） | `render.rs`（`project_hover`） |
 | 14 | **标签 / 分组入口**：常规 Tab「组织」卡片（标签输入 + 项目分组勾选）；服务与存储同步（替换语义，迁移 `022`） | `render.rs`、`data_source_service.rs`、`connection_org_store.rs::set_connection_groups` |
 | 15 | 文档体系补全：用户指南（含 USIT 清单）+ 数据字典 / 降级矩阵 / 性能可观测安全 / 成熟度评估 | `connection-user-guide.md`、本文 §10–§13 |
+| 16 | **C4 模板导入导出**（剪贴板 JSON，无密码；导出仅未保存非空草稿；导入校验 kind/version） | `staging.rs::templates_{export,import}` + `render.rs` 标题行按钮 + `tests/connection_template.rs` |
+| 17 | **UI 缺陷修复**（真机反馈）：分段控件自绘 / 驱动选中校正 / 类型回推仅补空 / 备注宽度 / 来源提示 | `render.rs`、`state.rs`、`staging.rs` |
 
 后续可选（未做）：
 

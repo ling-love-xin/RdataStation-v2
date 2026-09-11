@@ -241,6 +241,9 @@ impl ConnectionDialogState {
     }
 
     /// 按当前选中类型刷新驱动下拉选项（短名）；未选类型时置空（提示先在左侧选类型）。
+    ///
+    /// 选项变更后校正选中：当前值不在新选项中则清空（`set_items` 不会自动清理 selection，
+    /// 会留下“下拉显示旧驱动但列表里没有”的不一致）。
     pub fn refresh_driver_items(&self, window: &mut Window, cx: &mut App) {
         let type_id = self.selected_type.borrow().clone();
         let names: Vec<SharedString> = if type_id.is_empty() {
@@ -251,8 +254,16 @@ impl ConnectionDialogState {
                 .map(|d| SharedString::from(driver_short_name(&d.name)))
                 .collect()
         };
+        let current = self.driver.read(cx).selected_value().cloned();
+        let still_valid = current
+            .as_ref()
+            .map(|v| names.iter().any(|n| n.as_ref() == v.as_ref()))
+            .unwrap_or(true);
         self.driver
             .update(cx, |s, cx| s.set_items(SearchableVec::new(names), window, cx));
+        if !still_valid {
+            set_select_value(&self.driver, "", window, cx);
+        }
     }
 
     /// 解析下拉当前值对应的驱动：优先当前类型的启用驱动，其次全量目录
