@@ -1,7 +1,7 @@
-use shared::error::CoreError;
 use engine::persistence::driver_store::{DataSourceType, Driver, DriverFile};
 use engine::persistence::global_db::GlobalDatabaseManager;
 use engine::persistence::project_connection_store::ProjectConnectionStore;
+use shared::error::CoreError;
 
 /// 驱动管理服务，提供驱动发现、安装验证、项目可用性检查
 pub struct DriverService {
@@ -25,8 +25,6 @@ pub enum DriverAvailability {
     #[serde(rename = "not_defined")]
     NotDefined,
 }
-
-
 
 impl DriverService {
     /// 创建驱动服务实例

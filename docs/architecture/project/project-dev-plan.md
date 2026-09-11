@@ -57,9 +57,13 @@
 | --- | --- |
 | 架构归属：service 未与 model 同 crate | ✅ `project_service.rs` 从 workbench 迁入 `crates/project/src/service.rs`；`.RSmeta` 常量统一到 `store::RS_META_DIR_NAME` |
 | 仓库硬约束未允许 `feature → gpui-kit` | ✅ 更新 `.agents/skills/rds-architecture` 与 `overview.md`（按指南：feature 可依赖 UI 基础设施） |
-| 视图 / 对话框仍在 workbench | ⏳ 待办：`project_ui.rs` 拆入 `crates/project/src/`（`ProjectView` 升级为 `Entity`，顺带消除 render 内查库） |
-| render 内副作用（`load_picker` 查库、写 `editor_dirty`） | ⏳ 待办（随视图迁移改造为生命周期入口） |
-| 直接 `px(...)`、自绘 menu/dialog、本地化 label 作 ElementId、公开字段未 `#[non_exhaustive]` | ⏳ 待办（批次 B） |
+| render 内副作用 | ✅ 选择器列表加载 + 排序偏好初始化 → `WorkbenchView::new`（构造期）；EditorPanel 脏状态 → `InputEvent::Change` 订阅；清空编辑区 → 宿主命令回调（事件上下文） |
+| 本地化 label 作 ElementId | ✅ `picker-tab-{key}` / `menu-{key}`（domain 键，不用中文 label） |
+| 公开字段 struct 未 `#[non_exhaustive]` | ✅ `ProjectSummary` / `CreateProjectInput`（+ `new`/`with_*` builder）/ `OpenedProject`（+ `into_parts`）/ `ProjectVersionRow` / `PickerState` / `ProjectUiState` / `ProjectInputs` |
+| 视图 / 对话框仍在 workbench | ⏳ 待办（批次 A3）：`project_ui.rs` 拆入 `crates/project/src/`，需引入 `ProjectUiHost`（session/state/editor 句柄 + 宿主回调）与 `ProjectUiNotifier`，并断开 `settings` 直接依赖（排序偏好改走回调） |
+| 直接 `px(...)` | ⏳ 待办（批次 B1），与 B5 同步（Dialog/Popover 自带尺寸语义） |
+| 自绘 menu / dialog（无 focus trap / Escape / 方向键） | ⏳ 待办（批次 B5）：改用 `Popover` / `DropdownMenu` / `ContextMenu` / `Dialog` / `AlertDialog` |
+| 卡片 hover-only 操作（design-guides） | ⏳ 待办（批次 B8）：一个可见主操作 + 次要命令进 `DropdownMenu` / `ContextMenu` |
 
 ### 2026-09-11 — 方案定稿（含 schema 迁移）
 

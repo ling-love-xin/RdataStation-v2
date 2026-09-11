@@ -155,7 +155,10 @@ impl NavStore {
     /// 覆盖式设置连接标签。
     pub fn set_tags(&self, conn_id: &str, tags: &[String]) -> Result<(), String> {
         self.conn
-            .execute("DELETE FROM connection_tags WHERE connection_id = ?1", params![conn_id])
+            .execute(
+                "DELETE FROM connection_tags WHERE connection_id = ?1",
+                params![conn_id],
+            )
             .map_err(|e| e.to_string())?;
         for tag in tags {
             let tag = tag.trim();

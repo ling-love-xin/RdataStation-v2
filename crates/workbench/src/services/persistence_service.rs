@@ -1,6 +1,6 @@
-use shared::error::{CommonError, CoreError};
-use insight::insight_engine;
 use engine::persistence::insight_types::ColumnInsightFull;
+use insight::insight_engine;
+use shared::error::{CommonError, CoreError};
 
 fn sha256_hex(input: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -179,9 +179,7 @@ pub(crate) async fn profile_column_from_table(
     }
 
     let temp_table =
-        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
-            &columns, &rows,
-        )?;
+        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(&columns, &rows)?;
 
     let stats = insight_engine::get_column_insight_full(&temp_table, column_name)?;
 
@@ -254,10 +252,9 @@ pub(crate) async fn batch_evaluate_columns(
         });
     }
 
-    let temp_table =
-        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
-            &col_names, &rows_data,
-        )?;
+    let temp_table = engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
+        &col_names, &rows_data,
+    )?;
 
     let mut stats_list: Vec<ColumnInsightFull> = Vec::new();
     for col_name in &col_names {
@@ -267,5 +264,8 @@ pub(crate) async fn batch_evaluate_columns(
         }
     }
 
-    Ok(insight::quality_scorer::compute_table_quality(table, &stats_list))
+    Ok(insight::quality_scorer::compute_table_quality(
+        table,
+        &stats_list,
+    ))
 }

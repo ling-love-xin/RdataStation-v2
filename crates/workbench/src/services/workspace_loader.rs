@@ -61,8 +61,7 @@ pub fn load_persisted_connections_from(dir: &Path) -> (Vec<ConnectionItem>, Opti
 pub fn delete_connection(conn_id: &str) -> Result<(), String> {
     let service = crate::services::data_source_service::DataSourceService::global()
         .map_err(|e| format!("服务未就绪: {e}"))?;
-    let runtime =
-        tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
     runtime
         .block_on(service.delete(conn_id, None))
         .map(|_| ())

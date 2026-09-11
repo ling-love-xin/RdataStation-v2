@@ -219,7 +219,7 @@ async fn establish_tls(
     }
 
     // 加载客户端证书和私钥（mTLS 双向认证）
-    if let (Some(ref cert_path), Some(ref key_path)) =
+    if let (Some(cert_path), Some(key_path)) =
         (&config.client_cert_path, &config.client_key_path)
     {
         let cert_pem = std::fs::read(cert_path).map_err(|e| {
@@ -781,7 +781,7 @@ pub async fn establish_socks_proxy(
 }
 
 mod base64 {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     pub fn encode(input: impl AsRef<[u8]>) -> String {
         STANDARD.encode(input.as_ref())

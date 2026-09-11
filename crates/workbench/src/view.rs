@@ -10,6 +10,7 @@
 //! - 颜色一律取自 `cx.theme().colors`（禁止 raw hex/rgb）。
 
 use std::path::Path;
+use std::rc::Rc;
 
 use gpui_kit::base::{Selectable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -198,6 +199,14 @@ impl WorkbenchView {
         let sidebar = cx.new(|cx| SidebarPanel::new(shared.clone(), cx));
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
         let right_sidebar = cx.new(|cx| RightSidebarPanel::new(shared.clone(), cx));
+        // M1：宿主命令——清空编辑区（项目保存 / 放弃未保存草稿后调用）。
+        {
+            let editor_for_clear = editor.clone();
+            *shared.editor_clear.borrow_mut() =
+                Some(Rc::new(move |window: &mut Window, cx: &mut App| {
+                    editor_for_clear.update(cx, |panel, cx| panel.clear_sql(window, cx));
+                }));
+        }
 
         // 订阅侧边栏事件：连接选中 -> 更新共享状态并重绘编辑器。
         let subscription = cx.subscribe(&sidebar, |this, _entity, event: &SidebarEvent, cx| {
@@ -810,7 +819,9 @@ impl Render for WorkbenchView {
         }
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。
         if self.project_inputs.is_none() {
-            self.project_inputs = Some(crate::components::project_ui::ProjectInputs::new(window, cx));
+            self.project_inputs = Some(crate::components::project_ui::ProjectInputs::new(
+                window, cx,
+            ));
         }
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
@@ -825,7 +836,10 @@ impl Render for WorkbenchView {
         let settings_panel = self.render_settings_panel(cx);
 
         // M1：无项目时以选择器覆盖中央区（保留五段外壳）。
-        let inputs = self.project_inputs.clone().expect("project inputs lazy init");
+        let inputs = self
+            .project_inputs
+            .clone()
+            .expect("project inputs lazy init");
         let no_project = { self.shared.project.borrow().is_none() };
         let mut middle = div().h_flex().items_stretch().flex_1().min_h_0();
         if let Some(bar) = left_bar {
@@ -936,7 +950,9 @@ impl Render for WorkbenchView {
         // M1：项目管理菜单 / 设置 / 覆盖对话框（有项目时才渲染菜单与设置）。
         if !no_project {
             let entity = cx.entity();
-            if let Some(menu) = crate::components::project_ui::render_menu(&self.shared, &inputs, &entity, cx) {
+            if let Some(menu) =
+                crate::components::project_ui::render_menu(&self.shared, &inputs, &entity, cx)
+            {
                 root = root.child(menu);
             }
             let entity = cx.entity();

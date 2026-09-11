@@ -107,8 +107,7 @@ pub fn generate_for_table(
 
     // 4) 读回并在分析库文件连接中执行（M7：仅落分析引擎，不回传源库）。
     let sql_text = std::fs::read_to_string(&tmp).map_err(|e| format!("读取 INSERT 失败: {e}"))?;
-    let conn =
-        duckdb::Connection::open(duckdb_path).map_err(|e| format!("打开分析库失败: {e}"))?;
+    let conn = duckdb::Connection::open(duckdb_path).map_err(|e| format!("打开分析库失败: {e}"))?;
     conn.execute_batch(&sql_text)
         .map_err(|e| format!("写入分析库失败: {e}"))?;
 

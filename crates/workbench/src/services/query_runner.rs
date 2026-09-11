@@ -35,9 +35,7 @@ pub fn execute_sql(duckdb_path: &Path, sql: &str) -> Result<QueryOutput, String>
     }
 
     let conn = duckdb::Connection::open(duckdb_path).map_err(|e| format!("打开分析库失败: {e}"))?;
-    let mut stmt = conn
-        .prepare(sql)
-        .map_err(|e| format!("执行失败: {e}"))?;
+    let mut stmt = conn.prepare(sql).map_err(|e| format!("执行失败: {e}"))?;
 
     // duckdb-rs：必须先在 stmt 上执行 query 才能访问列元数据；
     // 且 Rows 持有 stmt 的可变借用，需先收集完数据再读列名。
@@ -57,7 +55,11 @@ pub fn execute_sql(duckdb_path: &Path, sql: &str) -> Result<QueryOutput, String>
     }
 
     let columns: Vec<String> = (0..stmt.column_count())
-        .map(|i| stmt.column_name(i).map(|v| v.to_string()).unwrap_or_else(|_| "unknown".to_string()))
+        .map(|i| {
+            stmt.column_name(i)
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
         .collect();
 
     let row_count = data.len();

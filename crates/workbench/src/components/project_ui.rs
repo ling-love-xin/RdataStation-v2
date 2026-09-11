@@ -568,8 +568,14 @@ fn save_draft(shared: &Shared) -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
-/// 处理未保存拦截结果（保存 / 放弃 / 取消）。
-pub fn resolve_unsaved(shared: &Shared, save: bool, entity: &Entity<WorkbenchView>, cx: &mut App) {
+/// 处理未保存拦截结果（保存 / 放弃 / 取消）；`window` 用于命令式清空编辑区。
+pub fn resolve_unsaved(
+    shared: &Shared,
+    save: bool,
+    entity: &Entity<WorkbenchView>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let pending = match shared.project_ui.borrow_mut().dialog.take() {
         Some(ProjectDialog::Unsaved { pending }) => pending,
         other => {
@@ -592,8 +598,11 @@ pub fn resolve_unsaved(shared: &Shared, save: bool, entity: &Entity<WorkbenchVie
             }
         }
     }
-    // 保存或放弃后都要清空编辑区（避免下一轮 render 再次判脏）。
-    shared.editor_clear_requested.set(true);
+    // 保存或放弃后都要清空编辑区（命令式，事件上下文；避免下一轮 render 再次判脏）。
+    let clear = shared.editor_clear.borrow().clone();
+    if let Some(clear) = clear {
+        clear(window, cx);
+    }
     shared.editor_dirty.set(false);
     match pending {
         PendingAction::OpenPath(path) => open_path(shared, &path, entity, cx),
@@ -1892,15 +1901,17 @@ fn unsaved_body(
             Button::new("unsaved-discard")
                 .secondary()
                 .label("放弃更改并继续")
-                .on_click(move |_, _, app| {
-                    resolve_unsaved(&shared_discard, false, &entity_discard, app)
+                .on_click(move |_, window, app| {
+                    resolve_unsaved(&shared_discard, false, &entity_discard, window, app)
                 }),
         )
         .child(
             Button::new("unsaved-save")
                 .primary()
                 .label("保存并继续")
-                .on_click(move |_, _, app| resolve_unsaved(&shared_save, true, &entity_save, app)),
+                .on_click(move |_, window, app| {
+                    resolve_unsaved(&shared_save, true, &entity_save, window, app)
+                }),
         );
     dialog_shell(theme, "未保存的草稿", body, foot)
 }

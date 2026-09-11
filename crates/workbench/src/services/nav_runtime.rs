@@ -85,7 +85,8 @@ fn open_store(conn_id: &str, project_root: Option<&Path>) -> Result<NavStore, St
     match NavSource::from_conn_id(conn_id) {
         NavSource::Global => NavStore::open_global(),
         _ => {
-            let root = project_root.ok_or_else(|| "未打开项目，无法读写项目导航状态".to_string())?;
+            let root =
+                project_root.ok_or_else(|| "未打开项目，无法读写项目导航状态".to_string())?;
             NavStore::open_project(root)
         }
     }
@@ -121,11 +122,7 @@ pub fn list_tags(conn_id: &str, project_root: Option<&Path>) -> Vec<String> {
 }
 
 /// 覆盖式设置连接标签。
-pub fn set_tags(
-    conn_id: &str,
-    project_root: Option<&Path>,
-    tags: &[String],
-) -> Result<(), String> {
+pub fn set_tags(conn_id: &str, project_root: Option<&Path>, tags: &[String]) -> Result<(), String> {
     let store = open_store(conn_id, project_root)?;
     store.set_tags(conn_id, tags)
 }

@@ -70,8 +70,8 @@ pub struct Shared {
     pub editor_dirty: Rc<Cell<bool>>,
     /// 编辑区当前 SQL 文本（未保存草稿保存时使用）。
     pub editor_sql: Rc<RefCell<String>>,
-    /// 请求清空编辑区（放弃更改 / 保存后由 EditorPanel 消费）。
-    pub editor_clear_requested: Rc<Cell<bool>>,
+    /// 清空编辑区的宿主命令（保存 / 放弃未保存草稿后调用；事件上下文执行，非 render）。
+    pub editor_clear: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// Phase B：属性面板请求（数据源导航双击对象 → 编辑区右侧面板）。
     pub property_target: Rc<RefCell<Option<PropertyRequest>>>,
 }
@@ -103,7 +103,7 @@ impl Shared {
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_dirty: Rc::new(Cell::new(false)),
             editor_sql: Rc::new(RefCell::new(String::new())),
-            editor_clear_requested: Rc::new(Cell::new(false)),
+            editor_clear: Rc::new(RefCell::new(None)),
             property_target: Rc::new(RefCell::new(None)),
         }
     }
@@ -2050,6 +2050,8 @@ pub struct EditorPanel {
     sql_history: Rc<RefCell<Vec<String>>>,
     /// 最近一次成功执行的 SQL（用于判断编辑区是否有未保存草稿）。
     last_executed: Rc<RefCell<String>>,
+    /// SQL 输入订阅句柄（Change 事件 → 脏状态）。
+    _sql_sub: Option<Subscription>,
     // Phase B：右侧停靠属性面板状态。
     property: Rc<RefCell<PropertyState>>,
 }
@@ -2064,8 +2066,20 @@ impl EditorPanel {
             query_result: Rc::new(RefCell::new(None)),
             sql_history: Rc::new(RefCell::new(crate::services::query_history::load_history())),
             last_executed: Rc::new(RefCell::new(String::new())),
+            _sql_sub: None,
             property: Rc::new(RefCell::new(PropertyState::default())),
         }
+    }
+
+    /// 清空 SQL 编辑区（保存 / 放弃未保存草稿后由宿主命令调用；在事件上下文中执行，非 render）。
+    pub fn clear_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ta) = &self.sql_textarea {
+            ta.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        self.last_executed.borrow_mut().clear();
+        self.shared.editor_dirty.set(false);
+        self.shared.editor_sql.borrow_mut().clear();
+        cx.notify();
     }
 
     /// 右侧停靠属性面板（DBeaver 式：属性网格 + 子实体表格）。
@@ -2248,24 +2262,26 @@ impl Render for EditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 受控输入懒创建（render 首次初始化，需要 window）；SQL 查询区保留。
         if self.sql_textarea.is_none() {
-            self.sql_textarea = Some(cx.new(|cx| TextareaState::new(window, cx)));
-        }
-        // M1：若上层请求清空编辑区（放弃更改 / 保存后），消费一次。
-        if self.shared.editor_clear_requested.get() {
-            if let Some(ta) = &self.sql_textarea {
-                ta.update(cx, |s, cx| s.set_value("", window, cx));
-            }
-            *self.last_executed.borrow_mut() = String::new();
-            self.shared.editor_clear_requested.set(false);
-            self.shared.editor_dirty.set(false);
-            *self.shared.editor_sql.borrow_mut() = String::new();
-        }
-        // M1：编辑区脏状态（存在与最近一次执行不同的非空 SQL）——供项目切换/关闭拦截。
-        if let Some(ta) = &self.sql_textarea {
-            let val = ta.read(cx).value().to_string();
-            let dirty = !val.trim().is_empty() && val != *self.last_executed.borrow();
-            self.shared.editor_dirty.set(dirty);
-            *self.shared.editor_sql.borrow_mut() = val;
+            let ta = cx.new(|cx| TextareaState::new(window, cx));
+            // M1：脏状态由输入事件驱动（render 只读状态，不做写副作用——遵循编码指南）。
+            let shared = self.shared.clone();
+            let last_executed = self.last_executed.clone();
+            let ta_for_read = ta.clone();
+            let sub = cx.subscribe_in(
+                &ta,
+                window,
+                move |_this, _ta, ev: &InputEvent, _window, cx| {
+                    if !matches!(ev, InputEvent::Change) {
+                        return;
+                    }
+                    let val = ta_for_read.read(cx).value().to_string();
+                    let dirty = !val.trim().is_empty() && val != *last_executed.borrow();
+                    shared.editor_dirty.set(dirty);
+                    *shared.editor_sql.borrow_mut() = val;
+                },
+            );
+            self._sql_sub = Some(sub);
+            self.sql_textarea = Some(ta);
         }
         if self.dialog.is_none() {
             self.dialog = Some(connection_dialog::ConnectionDialogState::new(window, cx));

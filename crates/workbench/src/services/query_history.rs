@@ -48,7 +48,8 @@ pub fn append_history_at(dir: &Path, sql: &str) -> Result<Vec<String>, String> {
 
     std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败: {e}"))?;
     let json = serde_json::to_string_pretty(&hist).map_err(|e| format!("序列化失败: {e}"))?;
-    std::fs::write(dir.join("query_history.json"), json).map_err(|e| format!("写入历史失败: {e}"))?;
+    std::fs::write(dir.join("query_history.json"), json)
+        .map_err(|e| format!("写入历史失败: {e}"))?;
     Ok(hist)
 }
 

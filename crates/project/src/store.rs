@@ -15,12 +15,10 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use shared::error::CoreError;
+use crate::models::{ConnectionRef, Project, ProjectConfig, ProjectInfo, ProjectPath, QueryRef};
 use engine::migration::{MigrationManager, MigrationType};
 use engine::persistence;
-use crate::models::{
-    ConnectionRef, Project, ProjectConfig, ProjectInfo, ProjectPath, QueryRef,
-};
+use shared::error::CoreError;
 
 /// 项目元数据目录名称
 /// 项目元数据目录名称（**唯一来源**：`service` 与 `lock` 均复用本常量）。
@@ -774,8 +772,8 @@ impl Default for ProjectManager {
 pub async fn check_project_missing_drivers(
     project_path: &std::path::Path,
 ) -> Result<Vec<engine::driver::MissingDriver>, CoreError> {
-    use engine::migration::get_global_db_manager;
     use engine::driver::MissingDriver;
+    use engine::migration::get_global_db_manager;
 
     let global_db = get_global_db_manager()
         .ok_or_else(|| CoreError::from("Global database not initialized".to_string()))?;
@@ -938,11 +936,9 @@ mod tests {
         let dconn = duckdb::Connection::open(&analytics_path).map_err(|e| {
             persistence::persistence_to_core_error("analytics.duckdb", "open", &e.to_string())
         })?;
-        let v: i64 = dconn
-            .query_row("SELECT 1", [], |r| r.get(0))
-            .map_err(|e| {
-                persistence::persistence_to_core_error("analytics.duckdb", "query", &e.to_string())
-            })?;
+        let v: i64 = dconn.query_row("SELECT 1", [], |r| r.get(0)).map_err(|e| {
+            persistence::persistence_to_core_error("analytics.duckdb", "query", &e.to_string())
+        })?;
         assert_eq!(v, 1, "DuckDB 分析引擎可执行 SQL");
         // 分析引擎可写（mock 生成数据的落点）
         dconn

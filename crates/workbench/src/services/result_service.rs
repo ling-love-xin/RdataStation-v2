@@ -13,7 +13,6 @@ use engine::persistence::insight_types::{
 };
 use engine::services::result_types::ResultSet;
 
-
 // ==================== ResultService（外观 / Facade）====================
 
 pub struct ResultService;
@@ -40,9 +39,7 @@ impl ResultService {
         columns: Option<Vec<String>>,
         rows: Option<Vec<Vec<serde_json::Value>>>,
     ) -> Result<ResultSet, CoreError> {
-        engine::services::execution_service::execute_duckdb_analysis(
-            temp_table, sql, columns, rows,
-        )
+        engine::services::execution_service::execute_duckdb_analysis(temp_table, sql, columns, rows)
     }
 
     pub fn get_or_create_duckdb(
@@ -54,9 +51,7 @@ impl ResultService {
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
     ) -> Result<String, CoreError> {
-        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
-            columns, rows,
-        )
+        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(columns, rows)
     }
 
     pub fn get_column_insight_full(
@@ -130,11 +125,8 @@ impl ResultService {
         column_name: &str,
         insight_store: &engine::persistence::InsightStorage,
     ) -> Result<Vec<engine::persistence::InsightVersionEntry>, CoreError> {
-        crate::services::persistence_service::get_column_insight_history(
-            column_name,
-            insight_store,
-        )
-        .await
+        crate::services::persistence_service::get_column_insight_history(column_name, insight_store)
+            .await
     }
 
     pub async fn cleanup_old_insight_snapshots(
@@ -157,10 +149,8 @@ impl ResultService {
         schema: &str,
         table: &str,
     ) -> Result<TableProfile, CoreError> {
-        insight::table_profile_service::get_table_profile(
-            conn_id, db_type, database, schema, table,
-        )
-        .await
+        insight::table_profile_service::get_table_profile(conn_id, db_type, database, schema, table)
+            .await
     }
 
     pub async fn save_cell_update(
@@ -244,11 +234,8 @@ impl ResultService {
         version_id: &str,
         insight_store: &engine::persistence::InsightStorage,
     ) -> Result<Option<ColumnInsightFull>, CoreError> {
-        crate::services::persistence_service::get_insight_version_detail(
-            version_id,
-            insight_store,
-        )
-        .await
+        crate::services::persistence_service::get_insight_version_detail(version_id, insight_store)
+            .await
     }
 
     pub async fn profile_column_from_table(
