@@ -1811,6 +1811,48 @@ impl ConnectionDialogState {
                 })
             };
 
+            // GP_ 快照连接：提供「从全局定义同步」（快照是独立副本，需显式同步）。
+            let snapshot_id = editing_id
+                .borrow()
+                .clone()
+                .filter(|id| id_prefix::is_snapshot(id));
+            let sync_from_global: Option<Button> = snapshot_id.map(|gpid| {
+                Button::new("sync-from-global")
+                    .secondary()
+                    .label("从全局定义同步")
+                    .on_click({
+                        let state = state.clone();
+                        let shared = shared.clone();
+                        let project_path = project_path.clone();
+                        move |_, _window, app| {
+                            let root = project_path.read(app).value().trim().to_string();
+                            let outcome = (|| -> Result<(), String> {
+                                let service =
+                                    DataSourceService::global().map_err(|e| e.to_string())?;
+                                let rt = tokio::runtime::Runtime::new()
+                                    .map_err(|e| format!("运行时错误: {e}"))?;
+                                rt.block_on(service.sync_snapshot_from_global(&gpid, &root))
+                                    .map_err(|e| e.to_string())?;
+                                Ok(())
+                            })();
+                            match outcome {
+                                Ok(()) => {
+                                    // 同步后重载表单（让用户看到同步结果；此时已写项目库）。
+                                    state.load_for_edit(&gpid, Some(root.as_str()), _window, app);
+                                    *state.result.borrow_mut() = Some(format!(
+                                        "已从全局定义同步（{gpid}）：项目快照已更新"
+                                    ));
+                                    state.result_ok.set(true);
+                                }
+                                Err(e) => {
+                                    *state.result.borrow_mut() = Some(format!("同步失败: {e}"));
+                                    state.result_ok.set(false);
+                                }
+                            }
+                            shared.notify_host(app);
+                        }
+                    })
+            });
             // footer：0.6 中为 `impl IntoElement`，直接传按钮容器。
             let footer_ui = div()
                 .h_flex()
@@ -1828,6 +1870,7 @@ impl ConnectionDialogState {
                             }
                         }),
                 )
+                .when_some(sync_from_global, |d, b| d.child(b))
                 .child(
                     Button::new("cancel-connection")
                         .label("取消")

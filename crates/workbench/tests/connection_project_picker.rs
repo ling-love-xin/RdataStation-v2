@@ -24,7 +24,7 @@ use gpui_kit::{
 
 use project::ui::OpenProject;
 use rds_workbench::components::connection_dialog::{
-    ConnectionDialogState, PROJECT_NEW_LABEL, ProjectItem,
+    ConnectionDialogState, PROJECT_NEW_LABEL, PROJECT_OPEN_LABEL, ProjectItem, ProjectItemKind,
 };
 use rds_workbench::panels::{EditorPanel, Shared};
 
@@ -145,6 +145,11 @@ fn dropdown_offers_session_project_and_new_entry(cx: &mut TestAppContext) {
         Some(PROJECT_NEW_LABEL),
         "「＋ 新增项目」应在选项列表中"
     );
+    assert_eq!(
+        pick(PROJECT_OPEN_LABEL).as_deref(),
+        Some(PROJECT_OPEN_LABEL),
+        "「打开现有目录…」应在选项列表中"
+    );
     assert_eq!(pick("不存在的项目"), None, "不存在的项目不应可选中");
 
     let path_value =
@@ -234,7 +239,45 @@ fn confirm_project_writes_back_path(cx: &mut TestAppContext) {
     );
 }
 
-/// 下拉项数据契约（纯数据，无需窗口）：显示名 / 路径 / 新增入口标记 / 搜索匹配。
+#[gpui_kit::test]
+fn confirm_open_folder_requests_folder_dialog(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let root = demo_root();
+    let (harness, cx) = open_harness(cx, root);
+    cx.update(|window, cx| {
+        harness.update(cx, |h, cx| h.open(window, cx));
+    });
+
+    let label = SharedString::from(PROJECT_OPEN_LABEL);
+    let requested = cx.update(|window, cx| {
+        let (dialog, shared) = {
+            let h = harness.read(cx);
+            (h.dialog(cx), h.shared.clone())
+        };
+        dialog.handle_project_confirm(Some(&label), &shared, window, cx)
+    });
+    assert!(requested, "应识别为动作项（打开现有目录…）");
+    assert!(
+        cx.update(|_, cx| harness.read(cx).shared.project_open_request.get()),
+        "应置位宿主「打开现有目录」请求"
+    );
+    assert!(
+        !cx.update(|_, cx| harness.read(cx).shared.project_new_request.get()),
+        "不应误置位新增项目请求"
+    );
+    let selected = cx.update(|_, cx| {
+        harness
+            .read(cx)
+            .dialog(cx)
+            .project_sel
+            .read(cx)
+            .selected_value()
+            .cloned()
+    });
+    assert!(selected.is_none(), "动作项确认后本下拉应恢复未选中");
+}
+
+/// 下拉项数据契约（纯数据，无需窗口）：显示名 / 路径 / 动作项标记 / 搜索匹配。
 #[test]
 fn project_item_contract() {
     let item = ProjectItem::project("演示项目", "/tmp/rds_project_picker/演示项目");
@@ -247,6 +290,14 @@ fn project_item_contract() {
 
     let new_item = ProjectItem::new_project();
     assert!(new_item.is_new(), "「＋ 新增项目」应是新增入口项");
-    assert_eq!(new_item.path().as_ref(), "", "新增入口项不带路径");
+    assert!(new_item.is_action(), "新增项目是动作项（不带路径）");
+    assert_eq!(new_item.path().as_ref(), "", "动作项不带路径");
     assert_eq!(new_item.value().as_ref(), PROJECT_NEW_LABEL);
+
+    let open_item = ProjectItem::open_folder();
+    assert!(open_item.is_action(), "「打开现有目录…」是动作项");
+    assert!(!open_item.is_new(), "它不是「新增项目」项");
+    assert_eq!(open_item.path().as_ref(), "", "动作项不带路径");
+    assert_eq!(open_item.value().as_ref(), PROJECT_OPEN_LABEL);
+    assert_eq!(open_item.kind(), ProjectItemKind::OpenFolder);
 }

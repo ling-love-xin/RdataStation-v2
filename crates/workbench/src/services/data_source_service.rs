@@ -275,6 +275,72 @@ impl DataSourceService {
         Ok(conn_id)
     }
 
+    /// 用全局定义刷新「全局+项目」快照（`GP_`）——显式同步入口。
+    ///
+    /// 语义：把全局侧（`G_`）的配置字段与凭据（密文）复制到项目侧快照；项目侧的分组关系、
+    /// 记录 ID 与创建时间保持不变。快照是**独立副本**，全局定义后续修改不会自动跟随——
+    /// 需要同步时显式调用本方法。全局定义不存在时报错（不静默降级）。
+    pub async fn sync_snapshot_from_global(
+        &self,
+        snapshot_id: &str,
+        project_path: &str,
+    ) -> Result<(), CoreError> {
+        if project_path.trim().is_empty() {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                "未打开项目：同步快照需要项目路径（.RSMETA）".to_string(),
+            )));
+        }
+        let Some(global_id) = id_prefix::source_global_id(snapshot_id) else {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                "仅「全局+项目」快照连接（GP_）支持从全局定义同步".to_string(),
+            )));
+        };
+        let Some(src) = self.get(&global_id).await? else {
+            return Err(CoreError::common(shared::error::CommonError::General(format!(
+                "全局定义 {global_id} 不存在（可能已被删除），无法同步"
+            ))));
+        };
+        let store = open_project_store(project_path).await?;
+        let Some(mut row) = store.get_connection(snapshot_id).await? else {
+            return Err(CoreError::common(shared::error::CommonError::General(format!(
+                "项目侧快照 {snapshot_id} 不存在"
+            ))));
+        };
+        // 只覆盖配置字段与凭据密文；`id` / `created_at` / 分组关系保留项目侧现状。
+        row.name = src.name.clone();
+        row.driver = src.db_type.clone();
+        row.host = src.host.clone();
+        row.port = src.port.map(|p| p as i32);
+        row.database = src.database.clone();
+        row.schema_name = src.schema_name.clone();
+        row.username = src.username.clone();
+        row.password_encrypted = src.password_encrypted.clone();
+        row.options = src.options.clone();
+        row.tags = src.tags.clone();
+        row.use_duckdb_fed = src.use_duckdb_fed;
+        row.metadata_path = src.metadata_path.clone();
+        row.description = src.description.clone();
+        row.driver_id = src.driver_id.clone();
+        row.environment_id = src.environment_id.clone();
+        row.auth_config_id = src.auth_config_id.clone();
+        row.auth_method = src.auth_method.clone();
+        row.network_config_id = src.network_config_id.clone();
+        row.driver_properties = src.driver_properties.clone();
+        row.advanced_options = src.advanced_options.clone();
+        // 时间戳格式与全局库一致（SQLite CURRENT_TIMESTAMP）。
+        row.updated_at = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        store.update_connection(&row).await?;
+        tracing::info!(
+            target: "data_source_service",
+            snapshot_id = %snapshot_id,
+            global_id = %global_id,
+            "项目快照已从全局定义同步"
+        );
+        Ok(())
+    }
+
     /// 更新连接（密码为空时保留现有密文，见 engine update_global_connection）。
     ///
     /// host/port/database 从 `input.url` 解析；driver/认证/网络/环境/策略等字段直接透传。

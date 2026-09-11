@@ -235,10 +235,13 @@ impl ProjectConnectionStore {
     pub async fn update_connection(&self, conn: &ProjectConnection) -> Result<(), CoreError> {
         let sqlite = self.db_manager.sqlite_pool().acquire().await?;
 
+        // password_encrypted 用 COALESCE：未提供新密码（None）时**保留原密文**。
+        // 与全局库 `update_global_connection` 的语义一致；否则编辑一次（密码框留空）
+        // 就会把项目侧凭据清成 NULL（连接随即失败）。
         sqlite.inner()?.execute(
             "UPDATE connections SET
                 name = ?2, driver = ?3, host = ?4, port = ?5, database = ?6,
-                schema_name = ?7, username = ?8, password_encrypted = ?9, options = ?10,
+                schema_name = ?7, username = ?8, password_encrypted = COALESCE(?9, password_encrypted), options = ?10,
                 tags = ?11, use_duckdb_fed = ?12, metadata_path = ?13, is_active = ?14,
                 server_version = ?15, description = ?16, driver_id = ?17, environment_id = ?18,
                 auth_config_id = ?19, auth_method = ?20, network_config_id = ?21, driver_properties = ?22,

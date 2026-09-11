@@ -76,6 +76,8 @@ button{font-family:inherit;}
 .db-item{display:flex;align-items:center;gap:7px;font-size:12px;padding:4px 8px;cursor:pointer;color:var(--fg);border-radius:6px;transition:background .12s;}
 .db-item:hover{background:var(--hover);}
 .db-item.active{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
+.db-item.dim{color:var(--muted);opacity:.55;}
+.db-item .db-hint{margin-left:auto;font-size:10px;color:var(--muted);}
 .db-ic{width:15px;text-align:center;flex-shrink:0;}
 .hidden{display:none;}
 
@@ -301,17 +303,14 @@ button{font-family:inherit;}
           <div class="cat-label">关系型（5）</div>
           <div class="db-item active" data-db="mysql"><span class="db-ic">🐬</span>MySQL</div>
           <div class="db-item" data-db="postgresql"><span class="db-ic">🐘</span>PostgreSQL</div>
-          <div class="db-item" data-db="mariadb"><span class="db-ic">🦭</span>MariaDB</div>
-          <div class="db-item" data-db="oracle"><span class="db-ic">🔴</span>Oracle</div>
-          <div class="db-item" data-db="mssql"><span class="db-ic">🟢</span>SQL Server</div>
+          <div class="db-item dim" data-db="mariadb"><span class="db-ic">🦭</span>MariaDB<span class="db-hint">暂无驱动</span></div>
+          <div class="db-item dim" data-db="oracle"><span class="db-ic">🔴</span>Oracle<span class="db-hint">暂无驱动</span></div>
+          <div class="db-item dim" data-db="mssql"><span class="db-ic">🟢</span>SQL Server<span class="db-hint">暂无驱动</span></div>
           <div class="cat-label">文件型（1）</div>
           <div class="db-item" data-db="sqlite"><span class="db-ic">🪶</span>SQLite</div>
           <div class="cat-label">分析型（2）</div>
           <div class="db-item" data-db="duckdb"><span class="db-ic">🦆</span>DuckDB</div>
-          <div class="db-item" data-db="clickhouse"><span class="db-ic">⚡</span>ClickHouse</div>
-          <div class="cat-label">NoSQL（2）</div>
-          <div class="db-item" data-db="mongodb"><span class="db-ic">🍃</span>MongoDB</div>
-          <div class="db-item" data-db="redis"><span class="db-ic">🔶</span>Redis</div>
+          <div class="db-item dim" data-db="clickhouse"><span class="db-ic">⚡</span>ClickHouse<span class="db-hint">暂无驱动</span></div>
         </div>
       </div>
     </div>
@@ -340,6 +339,7 @@ button{font-family:inherit;}
             <div class="proj-menu" id="projMenu">
               <div class="pm-row" data-proj="演示项目" data-path="D:\RDSProjects\演示项目"><span class="pm-name">演示项目</span><span class="pm-path">D:\RDSProjects\演示项目</span></div>
               <div class="pm-row" data-proj="数据仓库" data-path="D:\RDSProjects\数据仓库"><span class="pm-name">数据仓库</span><span class="pm-path">D:\RDSProjects\数据仓库</span></div>
+              <div class="pm-row pm-new" id="projOpen">打开现有目录…</div>
               <div class="pm-row pm-new" id="projNew">＋ 新增项目</div>
             </div>
           </div>
@@ -543,6 +543,7 @@ button{font-family:inherit;}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
           测试连接
         </button>
+        <button class="btn btn-cancel" id="syncGlobalBtn" title="仅编辑「全局+项目」快照连接时显示">从全局定义同步</button>
         <span class="test-result" id="testResult"></span>
         <span class="spacer"></span>
         <button class="btn btn-cancel" id="cancelBtn">取消</button>
@@ -620,7 +621,7 @@ button{font-family:inherit;}
 
 <div class="note">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-  <span><b>说明：</b>本原型为<b>示意稿</b>，用于确认布局与视觉，非最终实现；配色取自 <code>assets/themes/rds-theme.json</code>（RDS Light/Dark）。可交互：Tab 切换、类型选择（联动类型徽标 / 驱动短名 / URI，文件型提示隐藏网络 Tab）、作用域三态分段（联动项目栏启用与占位）、项目下拉（项目名 + 路径，末项「＋ 新增项目」）、测试连接→成功反馈、保存 / 保存并关闭、暗色切换、暂存选择、三个管理覆盖层。真实实现走 GPUI + theme token。</span>
+  <span><b>说明：</b>本原型为<b>示意稿</b>，用于确认布局与视觉，非最终实现；配色取自 <code>assets/themes/rds-theme.json</code>（RDS Light/Dark）。可交互：Tab 切换、类型选择（无可用驱动的类型置灰不可选，与实现一致）、作用域三态分段（联动项目栏启用与占位）、项目下拉（项目名 + 路径，尾两项「打开现有目录…」/「＋ 新增项目」）、测试连接→成功反馈、从全局定义同步（仅 GP_ 快照）、保存 / 保存并关闭、暗色切换、暂存选择、三个管理覆盖层。真实实现走 GPUI + theme token。</span>
 </div>
 
 <script>
@@ -659,6 +660,11 @@ button{font-family:inherit;}
                 redis:['🔶','redis','redis://127.0.0.1:6379/0']};
   document.querySelectorAll('.db-item').forEach(function(item){
     item.addEventListener('click',function(){
+      // 无可用驱动的类型（原型里标了「暂无驱动」）：不切换，只给原因（与实现一致）。
+      if(item.classList.contains('dim')){
+        demo('演示：该类型暂无可用驱动（当前只内置 MySQL / PostgreSQL / SQLite / DuckDB 四个驱动）——点击不切换类型');
+        return;
+      }
       document.querySelectorAll('.db-item').forEach(function(x){x.classList.remove('active');});
       item.classList.add('active');
       var db=item.getAttribute('data-db'), m=typeMeta[db];
@@ -681,6 +687,9 @@ button{font-family:inherit;}
     });
   });
   document.getElementById('stagingAdd').addEventListener('click',function(){demo('演示：添加空草稿并选中（保存后自动补一条）');});
+  document.getElementById('syncGlobalBtn').addEventListener('click',function(){
+    demo('演示：仅编辑「全局+项目」快照连接（GP_）时显示——点击后拉取全局定义的最新配置与凭据到本项目快照（保留快照 ID / 创建时间 / 分组）');
+  });
 
   /* 作用域：三态单选（全局 / 项目 / 全局+项目），写库用全称标签 */
   function syncProjectSel(){
@@ -726,6 +735,11 @@ button{font-family:inherit;}
     e.stopPropagation();
     projMenu.classList.remove('on');
     demo('演示：选中「＋ 新增项目」→ 打开「新建项目」对话框（有未保存草稿先走未保存确认）');
+  });
+  document.getElementById('projOpen').addEventListener('click',function(e){
+    e.stopPropagation();
+    projMenu.classList.remove('on');
+    demo('演示：选中「打开现有目录…」→ 打开项目目录选择（用于不在最近列表中的本机项目）');
   });
   document.addEventListener('click',function(){projMenu.classList.remove('on');});
 

@@ -382,6 +382,120 @@ fn project_scope_readback_requires_project_path() {
 }
 
 #[test]
+fn project_update_keeps_password_when_blank() {
+    let dir = temp_dir("proj-pw");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let path = project_root.to_string_lossy().to_string();
+
+    let mut i = input("pw_keep", "postgres", "postgres://u:secret@127.0.0.1:5432/db");
+    i.scope = ConnectionScope::Project;
+    i.password = Some("secret".into());
+    let id = rt
+        .block_on(service.save(&i, Some(&path)))
+        .expect("save project");
+
+    let read = |rt: &tokio::runtime::Runtime| {
+        rt.block_on(async {
+            let store = open_project_store(&project_root).await;
+            store.get_connection(&id).await
+        })
+        .expect("get")
+        .expect("记录存在")
+    };
+    let before = read(&rt);
+    assert!(before.password_encrypted.is_some(), "首次保存应有密文");
+
+    // 编辑回读后密码框留空 → update 不带密码：项目库必须保留原密文
+    // （否则一次编辑就把凭据清空，后续连接必失败）。
+    let mut upd = input("pw_keep", "postgres", "postgres://u@127.0.0.1:5432/db2");
+    upd.scope = ConnectionScope::Project;
+    upd.password = None;
+    rt.block_on(service.update(&id, &upd, Some(&path)))
+        .expect("update without password");
+
+    let after = read(&rt);
+    assert_eq!(
+        after.password_encrypted, before.password_encrypted,
+        "空密码更新应保留原密文（与全局库 update 语义一致）"
+    );
+    assert_eq!(after.database.as_deref(), Some("db2"), "其他字段仍应更新");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn snapshot_sync_pulls_latest_global_definition() {
+    use engine::persistence::id_prefix;
+
+    let dir = temp_dir("snap-sync");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let path = project_root.to_string_lossy().to_string();
+
+    // 1) 建「全局+项目」连接 → 全局定义 G_ + 项目快照 GP_。
+    let mut i = input("sync_gp", "postgres", "postgres://carol:pw1@127.0.0.1:5432/db1");
+    i.scope = ConnectionScope::GlobalAndProject;
+    i.password = Some("pw1".into());
+    let pid = rt
+        .block_on(service.save(&i, Some(&path)))
+        .expect("save gp");
+    let gid = id_prefix::source_global_id(&pid).expect("GP_ 可反查全局源 ID");
+
+    // 2) 改全局定义（名称 / 端口 / 密码）——快照是独立副本，此时不同步。
+    let mut upd = input("sync_gp", "postgres", "postgres://carol:pw2@127.0.0.1:5433/db2");
+    upd.password = Some("pw2".into());
+    rt.block_on(service.update(&gid, &upd, None)).expect("update global");
+
+    let read = |rt: &tokio::runtime::Runtime| {
+        rt.block_on(async {
+            let store = open_project_store(&project_root).await;
+            store.get_connection(&pid).await
+        })
+        .expect("get")
+        .expect("快照存在")
+    };
+    let stale = read(&rt);
+    assert_eq!(stale.port, Some(5432), "同步前快照仍是旧配置");
+    assert_eq!(stale.database.as_deref(), Some("db1"));
+    let stale_pw = stale.password_encrypted.clone();
+
+    // 3) 显式同步 → 配置与凭据密文均来自全局定义；ID / 创建时间保留。
+    rt.block_on(service.sync_snapshot_from_global(&pid, &path))
+        .expect("sync snapshot");
+    let synced = read(&rt);
+    assert_eq!(synced.port, Some(5433), "同步后应使用全局定义的新端口");
+    assert_eq!(synced.database.as_deref(), Some("db2"));
+    assert_eq!(synced.id, pid, "快照 ID 不应变化");
+    assert!(
+        synced.password_encrypted.is_some() && synced.password_encrypted != stale_pw,
+        "凭据密文应随全局定义更新"
+    );
+    assert!(!synced.updated_at.is_empty(), "时间戳应写入");
+
+    // 4) 错误路径：非快照 ID / 缺项目路径 / 全局定义已删除。
+    let err = rt
+        .block_on(service.sync_snapshot_from_global(&gid, &path))
+        .expect_err("G_ 不是快照");
+    assert!(err.to_string().contains("快照连接"), "{err}");
+    let err = rt
+        .block_on(service.sync_snapshot_from_global(&pid, "  "))
+        .expect_err("缺项目路径应报错");
+    assert!(err.to_string().contains("项目路径"), "{err}");
+    rt.block_on(service.delete(&gid, None)).expect("删除全局定义");
+    let err = rt
+        .block_on(service.sync_snapshot_from_global(&pid, &path))
+        .expect_err("全局定义不存在应报错");
+    assert!(err.to_string().contains("不存在"), "{err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn nav_runtime_resolves_project_connection_with_project_path() {
     let dir = temp_dir("nav-project");
     let project_root = dir.join("proj");

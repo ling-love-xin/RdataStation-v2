@@ -23,6 +23,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Theme, WindowExt};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use connection::model::{ConnectionScope, DataSourceSaveInput};
@@ -30,6 +31,7 @@ use engine::persistence::auth_store::AuthConfig;
 use engine::persistence::connection_org_store::ConnectionGroup;
 use engine::persistence::driver_store::{DataSourceType, Driver};
 use engine::persistence::env_store::Environment;
+use engine::persistence::id_prefix;
 use engine::persistence::network_store::NetworkConfig;
 
 use crate::commands::{DraftNext, DraftPrev, SaveConnection, TestConnection};
