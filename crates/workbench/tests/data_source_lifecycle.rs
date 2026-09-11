@@ -354,6 +354,68 @@ fn service_save_is_visible_to_workspace_loader() {
 }
 
 #[test]
+fn tags_sync_and_delete_cleanup() {
+    let dir = temp_dir("org-tags");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(&project_root).expect("mkdir");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let root_str = project_root.to_string_lossy().to_string();
+
+    // 全局连接：保存时标签同步到连接组织存储（权威检索源）。
+    let mut g = input("tagged_global", "sqlite", "sqlite:///tmp/tg.db");
+    g.tags = Some(r#"["prod","core"]"#.to_string());
+    let gid = rt.block_on(service.save(&g, None)).expect("save global");
+
+    let global_org =
+        engine::persistence::ConnectionOrgStore::open_at(dir.join("global.db"), false)
+            .expect("open global org");
+    assert_eq!(
+        global_org.list_tags(&gid),
+        vec!["core".to_string(), "prod".to_string()]
+    );
+    assert_eq!(global_org.list_connections_by_tag("prod"), vec![gid.clone()]);
+
+    // 项目连接：标签落项目库；分组关系可加入。
+    let mut p = input("tagged_project", "sqlite", "sqlite:///tmp/tp.db");
+    p.scope = ConnectionScope::Project;
+    p.tags = Some(r#"["dev"]"#.to_string());
+    let pid = rt
+        .block_on(service.save(&p, Some(&root_str)))
+        .expect("save project");
+
+    let project_org = engine::persistence::ConnectionOrgStore::open_at(
+        project_root.join(".RSMETA").join("project.db"),
+        true,
+    )
+    .expect("open project org");
+    assert_eq!(project_org.list_tags(&pid), vec!["dev".to_string()]);
+    project_org.create_group("g1", "alpha", None).expect("group");
+    project_org.add_member("g1", &pid).expect("member");
+    assert_eq!(project_org.list_group_members("g1"), vec![pid.clone()]);
+
+    // 更新：标签改为新集合（覆盖式）。
+    let mut upd = input("tagged_global", "sqlite", "sqlite:///tmp/tg.db");
+    upd.tags = Some(r#"["archive"]"#.to_string());
+    rt.block_on(service.update(&gid, &upd, None)).expect("update");
+    assert_eq!(global_org.list_tags(&gid), vec!["archive".to_string()]);
+
+    // 删除全局连接 → 标签清理。
+    rt.block_on(service.delete(&gid, None)).expect("delete global");
+    assert!(global_org.list_tags(&gid).is_empty());
+    assert!(global_org.list_connections_by_tag("prod").is_empty());
+
+    // 删除项目连接 → 标签 + 分组成员清理，分组保留。
+    rt.block_on(service.delete(&pid, Some(&root_str)))
+        .expect("delete project");
+    assert!(project_org.list_tags(&pid).is_empty());
+    assert!(project_org.list_group_members("g1").is_empty());
+    assert_eq!(project_org.list_groups().len(), 1, "分组定义应保留");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_connection_reports_unknown_driver_without_io() {
     let dir = temp_dir("probe-err");
     let service = make_service(&dir);

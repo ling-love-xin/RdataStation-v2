@@ -2,12 +2,13 @@
 //!
 //! 复用 `ConnectionService` + 全局 `ConnectionManager`；依据设计
 //! `docs/architecture/database/database-navigator-prototype-design.md`：
-//! - 连接：从持久化记录组装 URL，建立运行时连接；
-//! - 断开：关闭运行时连接，**保留**元数据缓存（缓存只在显式「缓存管理」中清理）。
+//! - 连接：URL 组装走 `connection::url::build_connection_url`（C3 收敛：百分号编码已统一），
+//!   建立运行时连接；
+//! - 断开：关闭运行时连接，**保留**元数据缓存（缓存只在显式「缓存管理」中清理）；
+//! - 标签：读写连接组织存储 `engine::persistence::ConnectionOrgStore`（连接域数据，非视图状态）。
 
 use std::path::Path;
 
-use connection::model::DataSource;
 use database::model::{NavSource, NavState};
 use engine::connection_manager::ConnectionType;
 
@@ -25,7 +26,7 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "数据源不存在".to_string())?;
 
-    let url = build_entry_url(&ds)?;
+    let url = connection::url::build_connection_url(&ds)?;
     let connection_type = if ds.id.starts_with("G_") {
         ConnectionType::Global
     } else {
@@ -114,52 +115,33 @@ pub fn save_nav_state(
     store.save_state(conn_id, scope, state)
 }
 
-/// 读取连接标签（多值）。
+/// 打开连接组织元数据存储（标签 / 分组的权威源）：
+/// 全局连接 → 全局库；项目 / 共享连接 → 项目库。
+fn open_org_store(
+    conn_id: &str,
+    project_root: Option<&Path>,
+) -> Result<engine::persistence::ConnectionOrgStore, String> {
+    match NavSource::from_conn_id(conn_id) {
+        NavSource::Global => {
+            engine::persistence::ConnectionOrgStore::open_global().map_err(|e| e.to_string())
+        }
+        _ => {
+            let root = project_root.ok_or_else(|| "未打开项目，无法读写项目连接标签".to_string())?;
+            engine::persistence::ConnectionOrgStore::open_project(root)
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// 读取连接标签（多值）。权威源为连接组织存储（连接域数据），非导航视图状态。
 pub fn list_tags(conn_id: &str, project_root: Option<&Path>) -> Vec<String> {
-    open_store(conn_id, project_root)
+    open_org_store(conn_id, project_root)
         .map(|s| s.list_tags(conn_id))
         .unwrap_or_default()
 }
 
 /// 覆盖式设置连接标签。
 pub fn set_tags(conn_id: &str, project_root: Option<&Path>, tags: &[String]) -> Result<(), String> {
-    let store = open_store(conn_id, project_root)?;
-    store.set_tags(conn_id, tags)
-}
-
-/// 由记录组装连接 URL：
-/// - 网络库：`{driver}://{user:pass@}{host}:{port}/{database}`
-/// - 文件库（sqlite/duckdb）：`{driver}://{path}`
-///
-/// 说明：Phase A 未对密码做百分号编码（与现有 `build_effective_url` 行为一致），
-/// 含特殊字符的密码需后续统一处理。
-fn build_entry_url(ds: &DataSource) -> Result<String, String> {
-    let driver = ds.db_type.as_str();
-    if matches!(driver, "sqlite" | "duckdb") {
-        let path = ds
-            .database
-            .clone()
-            .or_else(|| ds.host.clone())
-            .filter(|p| !p.is_empty())
-            .ok_or_else(|| "文件型连接缺少数据库路径".to_string())?;
-        return Ok(format!("{driver}://{path}"));
-    }
-
-    let password = match ds.password_encrypted.as_deref() {
-        Some(enc) if !enc.is_empty() => {
-            Some(shared::crypto::decrypt_password(enc).map_err(|e| format!("解密密码失败: {e}"))?)
-        }
-        _ => None,
-    };
-
-    let host = ds.host.clone().unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = ds.port.map(|p| format!(":{p}")).unwrap_or_default();
-    let database = ds.database.clone().unwrap_or_default();
-    let cred = match (ds.username.as_deref(), password.as_deref()) {
-        (Some(u), Some(p)) if !u.is_empty() => format!("{u}:{p}@"),
-        (Some(u), None) if !u.is_empty() => format!("{u}@"),
-        _ => String::new(),
-    };
-
-    Ok(format!("{driver}://{cred}{host}{port}/{database}"))
+    let store = open_org_store(conn_id, project_root)?;
+    store.set_tags(conn_id, tags).map_err(|e| e.to_string())
 }

@@ -32,8 +32,17 @@
 - 未接 L2 每连接缓存（目前直连实时内省）——Phase C；
 - 展开态未持久化到 `navigator_state`（表已建）——Phase B；
 - 面板头按钮（新建连接 / 刷新）、搜索输入、右键菜单——Phase B；
-- 连接 URL 未做密码百分号编码——Phase C 统一处理；
+- 连接 URL 未做密码百分号编码——✅ 已修复（2026-09-11，随 M3 C3 第一批收敛：URL 组装下沉 `connection::url::build_connection_url`，userinfo 统一百分号编码）；
 - 只渲染数据源与其对象树，**不含分析资产**（符合范围边界）。
+
+**M3 连接侧协作能力（2026-09-11，已可供导航消费）**
+
+- 运行态连接状态：`workbench::services::workspace_loader::fill_connected`（列表项 `connected` 来自连接管理器）；
+- 作用域可见性：`load_connections_for_scope(project_root)` 合并全局 + P_/GP_（未打开项目仅全局）；
+- 运行时连接入口：`nav_runtime::{connect_entry, disconnect_entry, is_connected}`（缓存断开不删）；
+- 来源短码 `P/G/GP` 展示：归属本模块 B8（短码⇄文字开关），连接侧仅保证 ID 前缀语义稳定；
+- **标签 / 分组权威存储**（2026-09-11 上提，连接域数据）：`engine::persistence::ConnectionOrgStore`（`open_global` / `open_project` / `open_at`）；M3 `DataSourceService` 保存/更新时同步 tags、删除时一致性清理；导航侧 `nav_runtime::{list_tags,set_tags}` 已接线，分组视图待 B3。
+- **M3 C3 传输层收敛完成**（2026-09-11）：URL 处理族 / URL 参数注入改写 / 协议链执行与隧道生命周期已全部下沉 `crates/connection`（`url.rs` / `url_params.rs` / `chain.rs`），`ConnectionService` 仅剩依赖 engine 的会话生命周期编排（50KB），原「85KB 遗留」风险解除。
 
 **Phase B 实现进度**
 
@@ -43,9 +52,9 @@
 | B5 属性面板视图（编辑区右侧停靠，双击对象/连接打开） | ✅ | `crates/workbench/src/panels.rs`（`EditorPanel::render_property_panel`、`Shared::property_target`） |
 | B4 搜索（本地筛选：连接/对象名，命中自动展开） | ✅ | `crates/workbench/src/panels.rs`（`InputState` + `nav_node_matches`） |
 | B6 状态持久化（展开态，`navigator_state`） | ✅ | `crates/workbench/src/services/nav_store.rs`、`nav_runtime.rs`、`panels.rs` |
-| B1 分组服务（CRUD + 多对多 + 排序） | ⬜ | 表已建（迁移 017） |
-| B2 标签服务（多值 + 检索） | 🟡 存储层就绪 | `nav_store.rs`（`list_tags`/`set_tags`） |
-| B3 分组/标签视图（拖拽/右键/对话框） | ⬜ | — |
+| B1 分组服务（CRUD + 多对多 + 排序） | ✅ 服务层就绪（2026-09-11） | `engine::persistence::ConnectionOrgStore`：create/update/delete/list_groups、add/remove_member、set_member_order、list_group_members、list_groups_for_connection |
+| B2 标签服务（多值 + 检索） | ✅ 服务层就绪（2026-09-11） | `ConnectionOrgStore`：set_tags/list_tags/list_connections_by_tag/list_all_tags；`nav_runtime::{list_tags,set_tags}` 已接线；M3 保存/更新同步、删除清理 |
+| B3 分组/标签视图（拖拽/右键/对话框） | ⬜ | 服务已就绪，待面板接线 |
 | B7 上下文菜单动作（生成 SQL / 复制名 / 查看数据） | ⬜ | — |
 | B8 缓存管理入口 + 短码⇄文字开关 | ⬜ | — |
 
@@ -63,7 +72,7 @@
 | M3 数据源（`DataSourceService` list/get/save/update/delete/test、连接对话框、作用域 G_/P_/GP_） | ✅ 已实现 |
 | M4 实时内省（`database::MetadataService`：catalog/schema/table/column/index/constraint/routine/trigger/sequence） | ✅ 已实现 |
 | engine 元数据缓存（`MetadataCacheManager` / `MetadataCacheOps`：L1/L2、增量同步、FTS、分块、同步状态、`CacheVersionManager`） | ✅ 已实现 |
-| 运行时连接（`workbench::ConnectionService`：connect/close/switch/has/list） | ✅ 已实现（遗留 85KB，Phase C 收敛） |
+| 运行时连接（`workbench::ConnectionService`：connect/close/switch/has/list） | ✅ 已实现（C3 收敛后 50KB：传输/协议层已下沉 `crates/connection`，仅剩依赖 engine 的会话编排） |
 | M4 领域模型 / 视图 / 命令 / 属性面板 | ⬜ 占位（`crates/database/src/{model,commands,database_view,property_panel}.rs`） |
 | 分组 / 标签 / 导航状态表 | ⬜ 缺失（`connections.tags` 列存在，但需独立表） |
 | 导航视图与装配 | ⬜ 占位（`panels.rs::render_connection_list` + `render_navigation_placeholder`） |
@@ -88,8 +97,8 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| B1 | 分组服务：CRUD + 多对多成员 + 排序（手动优先，未排按名称）| `crates/database/src/group.rs`（新增） | 一连接可属多组；排序持久化 |
-| B2 | 标签服务：多值增删改 + 按标签检索 | 同上 + `connection_tags` | `tag:x` 检索命中 |
+| B1 | 分组服务：CRUD + 多对多成员 + 排序（手动优先，未排按名称）| ✅ `crates/engine/src/persistence/connection_org_store.rs`（连接域共用，2026-09-11 上提） | 一连接可属多组；排序持久化 |
+| B2 | 标签服务：多值增删改 + 按标签检索 | ✅ 同上 + `connection_tags`（权威检索表；M3 保存同步 / 删除清理） | `tag:x` 检索命中 |
 | B3 | 分组/标签视图：拖拽归组、右键「分组 ▸ / 标签 ▸」、分组对话框（名称/描述） | `database_nav_panel.rs` + `Dialog` | 拖拽与对话框走通；分组头统一配色 |
 | B4 | 搜索：本地筛选 + FTS（`search_fts`）+ 结果落编辑区 + 高亮 | `navigator_service.rs` + `database_nav_panel.rs` + `crates/workbench/panels.rs` | 300ms 防抖；命中高亮；Enter 打开 |
 | B5 | 属性面板：类型注册表（connection/table/view/column/index/constraint/routine/…）+ 右侧停靠面板（属性/数据 Tab） | `crates/database/src/property_panel.rs` + workbench 编辑区右侧面板 | 双击/右键打开；字段随类型变化；宽度记忆 |
@@ -134,9 +143,10 @@
 | M:N 分组 + 多标签查询性能 | `connection_group_members(group_id, connection_id)` 与 `connection_tags(connection_id, tag)` 建唯一索引 |
 | 大 schema（10 万+ 表）渲染卡顿 | `get_tables_chunk` 分页 + 虚拟列表；列内联仅在 ≤50 列时展开 |
 | 连接/内省阻塞 UI | 后台任务 + 进度/取消；复用 `get_sync_status`；L2 命中先渲染 |
-| 遗留 `ConnectionService`（85KB）职责重叠 | Phase A 只接线，Phase C6 按 connection-dev-plan C3 收敛 |
+| 遗留 `ConnectionService` 职责重叠 | 传输/协议层已按 connection-dev-plan C3 全部下沉 `crates/connection`（url / url_params / chain）；服务内仅剩依赖 engine 的会话编排（50KB），职责边界清晰 |
 | L2 缓存陈旧 | TTL 标记（非删除）+ 手动刷新 + 增量 diff |
 | 分组/标签越界到其他项目 | 分组存项目库；标签随连接所在库（project/global）分区 |
+| 标签双源（JSON 字段 vs `connection_tags`） | `connection_tags` 为权威检索表（M3 保存/更新同步、删除清理）；连接记录 `tags` JSON 仅作兼容投影 |
 
 ## 5. 与 v1 对齐表
 
@@ -164,7 +174,7 @@
 | --- | --- |
 | 导航领域模型（NavNode/NavSource/NavState） | `crates/database/src/model.rs` |
 | 导航编排服务（缓存/刷新/预热/搜索/分页） | `crates/database/src/navigator_service.rs` |
-| 分组与标签服务（M:N + 多值） | `crates/database/src/group.rs` |
+| 分组与标签服务（M:N + 多值；连接域共用） | ✅ `crates/engine/src/persistence/connection_org_store.rs`（2026-09-11 上提；原计划 `crates/database/src/group.rs` 取消） |
 | 实时内省 | `crates/database/src/metadata_service.rs`（已有） |
 | 属性面板注册表 | `crates/database/src/property_panel.rs` |
 | 导航视图面板（标签页/分组/树/搜索） | `crates/workbench/src/components/database_nav_panel.rs` |
@@ -172,8 +182,11 @@
 | 属性面板（编辑区右侧） | `crates/workbench`（编辑区分栏 + `crates/database` 数据） |
 | 连接 / 断开 | `crates/workbench/src/services/connection_service.rs` |
 | 数据源 CRUD + 标签读取 | `crates/workbench/src/services/data_source_service.rs` |
+| 标签读写入口（导航侧） | `crates/workbench/src/services/nav_runtime.rs`（`list_tags`/`set_tags`） |
 | 新增迁移（global 018 / project_meta 017） | `crates/engine/migrations/{global,project_meta}/` |
-| 新表访问（navigator_state / groups / members / tags） | `crates/engine/src/persistence/`（新增 store） |
+| 新表访问（navigator_state） | `crates/workbench/src/services/nav_store.rs`（导航视图状态私有） |
+| 新表访问（groups / members / tags） | `crates/engine/src/persistence/connection_org_store.rs`（连接组织元数据，M3/M4 共用） |
+| 协议链执行 / 隧道生命周期（`connection::chain::TunnelRegistry`，M3 C3） | `crates/connection/src/chain.rs` |
 | 缓存占用 / 清理 | engine `MetadataCacheManager::{size,delete}`（仅设置入口调用） |
 | 主题 token `search.match.background` | `assets/themes/rds-theme.json` |
 | 视图开关（短码⇄文字、面板宽度） | `crates/settings` |

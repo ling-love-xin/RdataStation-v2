@@ -72,7 +72,10 @@ pub fn build_host(
 /// 打开项目后的宿主刷新：连接列表、选中项、导航缓存与结果归属都归零，
 /// 避免残留上一项目的数据。
 fn refresh_after_open(shared: &Shared, _cx: &mut App) {
-    let (conns, notice) = crate::services::workspace_loader::load_persisted_connections();
+    // 项目打开/切换后：列表按作用域合一（全局 + 该项目 P_/GP_）。
+    let root = shared.project.borrow().as_ref().map(|p| p.root.clone());
+    let (conns, notice) =
+        crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
     *shared.connections.borrow_mut() = conns;
     *shared.notice.borrow_mut() = notice;
     let has = !shared.connections.borrow().is_empty();

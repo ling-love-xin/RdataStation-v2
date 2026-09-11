@@ -10,6 +10,7 @@
 //!
 //! 依赖方向：connection → rds-shared；Feature crates → connection。
 
+pub mod chain;
 pub mod config;
 pub mod connector;
 pub mod factory;
@@ -17,6 +18,8 @@ pub mod known_hosts;
 pub mod model;
 pub mod secret;
 pub mod stream;
+pub mod url;
+pub mod url_params;
 
 pub use config::ConnectionConfig;
 pub use connector::Connection;

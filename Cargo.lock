@@ -7897,6 +7897,7 @@ dependencies = [
  "duckdb",
  "futures",
  "native-tls",
+ "percent-encoding",
  "rds-shared",
  "russh",
  "serde",

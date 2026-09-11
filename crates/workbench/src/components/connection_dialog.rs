@@ -1532,7 +1532,13 @@ impl ConnectionDialogState {
                                 });
                                 match save {
                                     Ok(conn_id) => {
-                                        let (items, _) = crate::services::workspace_loader::load_persisted_connections();
+                                        // 刷新列表：带上当前项目根，项目侧 P_/GP_ 连接一并可见。
+                                        let root = shared
+                                            .project
+                                            .borrow()
+                                            .as_ref()
+                                            .map(|p| p.root.clone());
+                                        let (items, _) = crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
                                         *shared.connections.borrow_mut() = items;
                                         *shared.notice.borrow_mut() =
                                             Some(format!("连接「{}」已保存（{}）", input.name, conn_id));

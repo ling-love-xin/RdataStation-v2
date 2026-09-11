@@ -136,7 +136,7 @@ impl DataSourceService {
                     "未打开项目：项目/全局+项目作用域需要项目路径（.RSMETA）".to_string(),
                 )));
             };
-            Some(open_project_store(path).await?)
+            Some((path.to_string(), open_project_store(path).await?))
         } else {
             None
         };
@@ -178,13 +178,15 @@ impl DataSourceService {
                     &url,
                 );
             }
+            // 标签同步到连接组织存储（connection_tags 为权威检索源；JSON 字段保留兼容）。
+            sync_connection_tags(self.global_db, &conn_id, input.tags.as_deref(), None);
             Some(conn_id)
         } else {
             None
         };
 
         // 项目侧：P_ 本地连接 / GP_ 全局快照连接（引用共享；快照深度复制见 Phase C 深化）。
-        if let Some(store) = project_store {
+        if let Some((path, store)) = project_store {
             let pid = if input.scope == ConnectionScope::GlobalAndProject {
                 id_prefix::generate_gpid("conn", &input.name)
             } else {
@@ -192,6 +194,7 @@ impl DataSourceService {
             };
             let proj = project_connection_from_input(&pid, input, &url)?;
             store.create_connection(&proj).await?;
+            sync_connection_tags(self.global_db, &pid, input.tags.as_deref(), Some(&path));
             tracing::info!(target: "data_source_service", conn_id = %pid, name = %input.name, "数据源已保存（项目侧）");
             return Ok(pid);
         }
@@ -226,6 +229,7 @@ impl DataSourceService {
             let store = open_project_store(path).await?;
             let proj = project_connection_from_input(conn_id, input, &url)?;
             store.update_connection(&proj).await?;
+            sync_connection_tags(self.global_db, conn_id, input.tags.as_deref(), Some(path));
             return Ok(());
         }
 
@@ -274,6 +278,8 @@ impl DataSourceService {
                 conn_id,
             );
         }
+        // 标签同步（更新路径同样以连接组织存储为权威检索源）。
+        sync_connection_tags(self.global_db, conn_id, input.tags.as_deref(), None);
         Ok(())
     }
 
@@ -291,6 +297,8 @@ impl DataSourceService {
             };
             let store = open_project_store(path).await?;
             store.delete_connection(conn_id).await?;
+            // 一致性清理：标签 + 分组成员（避免孤儿数据）。
+            cleanup_connection_org(self.global_db, conn_id, Some(path));
             return Ok(DeleteResult {
                 conn_id: conn_id.to_string(),
                 removed_secret: false,
@@ -305,6 +313,8 @@ impl DataSourceService {
             self.analysis_db.as_deref(),
             conn_id,
         );
+        // 一致性清理：标签（全局库无分组）。
+        cleanup_connection_org(self.global_db, conn_id, None);
 
         tracing::info!(target: "data_source_service", conn_id, "数据源已删除");
         Ok(DeleteResult {
@@ -378,6 +388,59 @@ impl DataSourceService {
 }
 
 // ==================== 私有工具 ====================
+
+/// 解析 tags JSON 数组（非法 / None → 空集）。
+fn parse_tags_json(tags: Option<&str>) -> Vec<String> {
+    tags.and_then(|t| serde_json::from_str::<Vec<String>>(t).ok())
+        .unwrap_or_default()
+}
+
+/// 连接组织元数据存储（项目路径为空 → 全局库；路径取自单例自身，保证同库）。
+fn open_org_store(
+    global_db: &GlobalDatabaseManager,
+    project_path: Option<&str>,
+) -> Result<engine::persistence::ConnectionOrgStore, CoreError> {
+    match project_path.filter(|p| !p.trim().is_empty()) {
+        Some(path) => {
+            engine::persistence::ConnectionOrgStore::open_project(std::path::Path::new(path))
+        }
+        None => {
+            let db_path = global_db.sqlite_pool().path().clone();
+            engine::persistence::ConnectionOrgStore::open_at(db_path, false)
+        }
+    }
+}
+
+/// 同步连接标签到权威检索表（`connection_tags`）。
+///
+/// 连接的 `tags` JSON 字段保留作为兼容投影；检索（`tag:x`）与导航消费
+/// 统一读连接组织存储。同步失败仅告警，不阻断连接保存。
+fn sync_connection_tags(
+    global_db: &GlobalDatabaseManager,
+    conn_id: &str,
+    tags: Option<&str>,
+    project_path: Option<&str>,
+) {
+    let parsed = parse_tags_json(tags);
+    match open_org_store(global_db, project_path).and_then(|store| store.set_tags(conn_id, &parsed))
+    {
+        Ok(()) => tracing::debug!(target: "data_source_service", conn_id, count = parsed.len(), "连接标签已同步"),
+        Err(e) => tracing::warn!(target: "data_source_service", conn_id, error = %e, "连接标签同步失败（不影响连接保存）"),
+    }
+}
+
+/// 删除连接时清理其组织关系（标签 + 分组成员）。
+fn cleanup_connection_org(
+    global_db: &GlobalDatabaseManager,
+    conn_id: &str,
+    project_path: Option<&str>,
+) {
+    match open_org_store(global_db, project_path).and_then(|store| store.remove_connection(conn_id))
+    {
+        Ok(()) => tracing::debug!(target: "data_source_service", conn_id, "连接组织关系已清理"),
+        Err(e) => tracing::warn!(target: "data_source_service", conn_id, error = %e, "连接组织关系清理失败"),
+    }
+}
 
 /// 构建有效 URL：URL 无凭据但单独提供 username 时注入 `user[:pass]@`。
 fn build_effective_url(input: &DataSourceSaveInput) -> String {

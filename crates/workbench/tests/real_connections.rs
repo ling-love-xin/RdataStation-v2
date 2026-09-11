@@ -90,8 +90,8 @@ fn global_db_roundtrip_maps_to_connection_items() {
     assert_eq!(items[0].id, "G_conn_demo");
     assert_eq!(items[0].name, "测试 MySQL 库");
     assert_eq!(items[0].driver, "mysql");
-    // save 后连接记录默认有效（is_active=1），映射如实呈现。
-    assert!(items[0].connected);
+    // 映射不再把记录有效性（is_active）当作连接状态：无运行时连接时为 false。
+    assert!(!items[0].connected);
     // Round 22：真实元数据字段完整映射。
     assert_eq!(items[0].host.as_deref(), Some("127.0.0.1"));
     assert_eq!(items[0].port, Some(3306));

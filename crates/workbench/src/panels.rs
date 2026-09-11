@@ -2485,7 +2485,11 @@ impl Render for EditorPanel {
                                         ) {
                                             Ok(()) => {
                                                 let (items, _) =
-                                                    crate::services::workspace_loader::load_persisted_connections();
+                                                    crate::services::workspace_loader::load_connections_for_scope(
+                                                        project_root
+                                                            .as_deref()
+                                                            .map(std::path::Path::new),
+                                                    );
                                                 *shared.connections.borrow_mut() = items;
                                                 shared.selected.set(None);
                                                 *shared.notice.borrow_mut() =

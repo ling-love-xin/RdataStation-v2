@@ -717,34 +717,6 @@ pub fn save_recent_connection(input: RecentConnectionInput<'_>) -> Result<(), st
     store.save()
 }
 
-fn mask_password_in_url(url: &str) -> String {
-    if let Some(scheme_end) = url.find("://") {
-        let prefix = &url[..scheme_end + 3];
-        let rest = &url[scheme_end + 3..];
-        if let Some(at_pos) = rest.find('@') {
-            let auth = &rest[..at_pos];
-            let host_part = &rest[at_pos..];
-            if let Some(colon_pos) = auth.find(':') {
-                let username = &auth[..colon_pos];
-                return format!("{}{}:******{}", prefix, username, host_part);
-            }
-            return format!("{}******{}", prefix, host_part);
-        }
-    }
-    url.to_string()
-}
-
-fn url_has_plaintext_password(url: &str) -> bool {
-    if let Some(scheme_end) = url.find("://") {
-        let rest = &url[scheme_end + 3..];
-        if let Some(at_pos) = rest.find('@') {
-            let auth = &rest[..at_pos];
-            return auth.contains(':') && !auth.contains("******");
-        }
-    }
-    false
-}
-
 /// 获取最近连接列表（含旧数据迁移：明文密码 URL → 脱敏 URL）
 pub fn get_recent_connections() -> Result<Vec<ConnectionRecord>, std::io::Error> {
     let mut store = GLOBAL_STORE
@@ -756,8 +728,8 @@ pub fn get_recent_connections() -> Result<Vec<ConnectionRecord>, std::io::Error>
     let mut migrated = false;
 
     for conn_info in store.connections.iter_mut() {
-        if url_has_plaintext_password(&conn_info.url) {
-            conn_info.url = mask_password_in_url(&conn_info.url);
+        if connection::url::url_has_plaintext_password(&conn_info.url) {
+            conn_info.url = connection::url::mask_password_in_url(&conn_info.url);
             migrated = true;
         }
     }

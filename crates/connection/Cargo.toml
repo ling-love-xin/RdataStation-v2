@@ -30,6 +30,7 @@ tracing.workspace = true
 thiserror.workspace = true
 dirs.workspace = true
 base64.workspace = true
+percent-encoding.workspace = true
 
 # ===== 时间 =====
 chrono.workspace = true

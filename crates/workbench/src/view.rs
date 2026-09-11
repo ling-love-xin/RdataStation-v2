@@ -122,6 +122,7 @@ pub struct ConnectionItem {
     pub id: String,
     pub name: String,
     pub driver: String,
+    /// 运行时是否已连接（连接管理器维护，由加载器填充；记录有效性由持久化层过滤）。
     pub connected: bool,
     /// 真实元数据（Round 22）：主机 / 端口 / 数据库 / Schema。
     pub host: Option<String>,

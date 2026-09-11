@@ -1,9 +1,7 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use connection::config::ConnectionMethod;
-use connection::connector::TunnelGuard;
 use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
 use engine::driver::registry::DriverConnectionConfig;
 use engine::driver::router::DataSourceRouter;
@@ -76,7 +74,8 @@ pub struct ConnectRequest {
 #[derive(Clone)]
 pub struct ConnectionService {
     manager: Arc<ConnectionManager>,
-    tunnels: Arc<tokio::sync::Mutex<HashMap<String, Vec<TunnelGuard>>>>,
+    /// 隧道守卫（协议链执行产物；断开时统一释放）。
+    tunnels: connection::chain::TunnelRegistry,
 }
 
 impl ConnectionService {
@@ -84,7 +83,7 @@ impl ConnectionService {
     pub fn new(manager: Arc<ConnectionManager>) -> Self {
         Self {
             manager,
-            tunnels: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            tunnels: connection::chain::TunnelRegistry::new(),
         }
     }
 
@@ -264,7 +263,7 @@ impl ConnectionService {
                 .await
             {
                 Ok(Some(auth_data)) => {
-                    match Self::inject_auth_into_url(&url_with_auth, auth_meth, &auth_data) {
+                    match connection::url_params::inject_auth_into_url(&url_with_auth, auth_meth, &auth_data) {
                         Ok(injected_url) => {
                             url_with_auth = injected_url;
                             tracing::info!(conn_id = %conn_id, auth_id = %auth_id, "已将认证凭据注入到 URL");
@@ -283,21 +282,22 @@ impl ConnectionService {
             }
         }
 
-        // 应用网络连接方式（SSH 隧道 / SSL / 代理）
-        let (effective_url, tunnel_guards) = self
-            .apply_network_method(&url_with_auth, &network_method, &conn_id, &db_type)
-            .await?;
+        // 应用网络连接方式（SSH 隧道 / SSL / 代理；协议链执行在 connection::chain）
+        let (effective_url, tunnel_guards) = connection::chain::apply_network_method(
+            &url_with_auth,
+            &network_method,
+            &conn_id,
+            &db_type,
+        )
+        .await?;
 
         // 注册隧道守卫，确保隧道在连接生命周期内保持存活
         if !tunnel_guards.is_empty() {
-            self.tunnels
-                .lock()
-                .await
-                .insert(conn_id.clone(), tunnel_guards);
+            self.tunnels.insert(&conn_id, tunnel_guards).await;
             tracing::info!(
                 conn_id = %conn_id,
-                "已注册 {} 个隧道守卫",
-                self.tunnels.lock().await.get(&conn_id).map(|v| v.len()).unwrap_or(0)
+                count = self.tunnels.count(&conn_id).await,
+                "已注册隧道守卫"
             );
         }
 
@@ -307,11 +307,19 @@ impl ConnectionService {
             "即将创建数据库连接（URL凭据={}）",
             effective_url.contains('@')
         );
-        let db = self
+        let db = match self
             .create_database(&db_type, &effective_url, driver_properties.as_deref())
-            .await?;
+            .await
+        {
+            Ok(db) => db,
+            Err(e) => {
+                // 隧道已登记但连接未建立：不回收会泄漏本地端口与后台任务
+                self.release_tunnels(&conn_id, "连接建立失败").await;
+                return Err(e);
+            }
+        };
         let server_version = db.meta().server_version.clone();
-        let safe_url = Self::mask_password_in_url(&url_with_auth);
+        let safe_url = connection::url::mask_password_in_url(&url_with_auth);
 
         // 创建连接信息
         let info = ConnectionInfo {
@@ -347,9 +355,15 @@ impl ConnectionService {
         }
 
         // 添加到连接管理器
-        self.manager
+        if let Err(e) = self
+            .manager
             .add_connection(conn_id.clone(), Arc::clone(&db), info, driver_config)
-            .await?;
+            .await
+        {
+            // 同上：注册失败也要回收隧道
+            self.release_tunnels(&conn_id, "连接注册失败").await;
+            return Err(e);
+        }
 
         // M3 本地加速：连接建立成功后注册 DuckDB Secret（联邦查询直连源库）。
         // 失败仅告警，不影响连接本身（加速是增强而非依赖）。
@@ -361,7 +375,7 @@ impl ConnectionService {
         // 对于全局连接，保存到全局 SQLite 数据库（skip_persistence 时跳过）
         if !skip_persistence.unwrap_or(false) && connection_type == ConnectionType::Global {
             // 从 URL 中解析 username 和 password
-            let (url_username, url_password) = Self::extract_credentials_from_url(&url);
+            let (url_username, url_password) = connection::url::extract_credentials_from_url(&url);
             // 优先使用直接传入的 password，回退到 URL 解析
             let effective_password = password.or(url_password);
 
@@ -458,69 +472,9 @@ impl ConnectionService {
             .await
     }
 
-    /// 从 URL 中提取用户名和密码
-    ///
-    /// 支持的 URL 格式：
-    /// - mysql://user:pass@host:port/database
-    /// - postgresql://user:pass@host:port/database
-    /// - sqlite:///path/to/file.sqlite (无认证)
-    /// - duckdb:///path/to/file.duckdb (无认证)
-    fn extract_credentials_from_url(url: &str) -> (Option<String>, Option<String>) {
-        // 移除协议前缀
-        let clean_url = if let Some(pos) = url.find("://") {
-            &url[pos + 3..]
-        } else {
-            return (None, None);
-        };
-
-        // 查找 @ 符号
-        if let Some(at_pos) = clean_url.find('@') {
-            let auth_part = &clean_url[..at_pos];
-
-            // 解析 user:pass
-            if let Some(colon_pos) = auth_part.find(':') {
-                let username = auth_part[..colon_pos].to_string();
-                let password = auth_part[colon_pos + 1..].to_string();
-                (Some(username), Some(password))
-            } else {
-                // 只有用户名，没有密码
-                (Some(auth_part.to_string()), None)
-            }
-        } else {
-            // 没有认证信息
-            (None, None)
-        }
-    }
-
     /// 脱敏 URL 中的密码，替换为 ***
     pub fn mask_password_in_url(url: &str) -> String {
-        if let Some(scheme_end) = url.find("://") {
-            let prefix = &url[..scheme_end + 3];
-            let rest = &url[scheme_end + 3..];
-            if let Some(at_pos) = rest.find('@') {
-                let auth = &rest[..at_pos];
-                let host_part = &rest[at_pos..];
-                if let Some(colon_pos) = auth.find(':') {
-                    let username = &auth[..colon_pos];
-                    return format!("{}{}:******{}", prefix, username, host_part);
-                }
-                return format!("{}{}******{}", prefix, auth, host_part);
-            }
-        }
-        url.to_string()
-    }
-
-    /// 检查 URL 是否含明文密码，用于旧数据迁移检测
-    #[allow(dead_code)]
-    fn url_has_plaintext_password(url: &str) -> bool {
-        if let Some(scheme_end) = url.find("://") {
-            let rest = &url[scheme_end + 3..];
-            if let Some(at_pos) = rest.find('@') {
-                let auth = &rest[..at_pos];
-                return auth.contains(':') && !auth.contains("******");
-            }
-        }
-        false
+        connection::url::mask_password_in_url(url)
     }
 
     /// 从数据库中加载认证配置数据
@@ -565,164 +519,6 @@ impl ConnectionService {
         }
 
         Ok(None)
-    }
-
-    /// 将认证凭据注入到 URL 中
-    ///
-    /// 支持的 auth_data 字段：
-    /// - username / password: 基本认证
-    /// - certPath / certKeyPath: PostgreSQL 证书认证
-    /// - principal / keytabPath: Kerberos 认证
-    ///
-    /// 认证凭据优先级高于 URL 中已有的凭据。
-    pub fn inject_auth_into_url(
-        url: &str,
-        auth_method: &str,
-        auth_data_json: &str,
-    ) -> Result<String, CoreError> {
-        let auth_data: serde_json::Value = serde_json::from_str(auth_data_json)
-            .map_err(|e| CoreError::from(format!("解析 auth_data 失败: {}", e)))?;
-
-        let obj = auth_data
-            .as_object()
-            .ok_or_else(|| CoreError::from("auth_data 不是 JSON 对象".to_string()))?;
-
-        match auth_method {
-            "password" | "ldap" => {
-                let username = obj
-                    .get("username")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let password = obj
-                    .get("password")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                if username.is_empty() && password.is_empty() {
-                    return Ok(url.to_string());
-                }
-
-                Self::inject_username_password(url, username, password)
-            }
-            "pg_class" => {
-                let cert_path = obj
-                    .get("certPath")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let cert_key_path = obj
-                    .get("certKeyPath")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                if cert_path.is_empty() {
-                    return Ok(url.to_string());
-                }
-
-                Self::inject_ssl_cert(url, cert_path, cert_key_path)
-            }
-            "kerberos" => {
-                let principal = obj
-                    .get("principal")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                let keytab_path = obj
-                    .get("keytabPath")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-
-                if principal.is_empty() {
-                    return Ok(url.to_string());
-                }
-
-                Self::inject_kerberos(url, principal, keytab_path)
-            }
-            _ => {
-                tracing::warn!("未支持的 auth_method: {}，跳过凭据注入", auth_method);
-                Ok(url.to_string())
-            }
-        }
-    }
-
-    /// 向 URL 中注入用户名和密码
-    fn inject_username_password(
-        url: &str,
-        username: &str,
-        password: &str,
-    ) -> Result<String, CoreError> {
-        if username.is_empty() {
-            return Ok(url.to_string());
-        }
-
-        if let Some(scheme_end) = url.find("://") {
-            let prefix = &url[..scheme_end + 3];
-            let rest = &url[scheme_end + 3..];
-
-            if let Some(at_pos) = rest.find('@') {
-                // 跳过 @ 符号，只取主机部分（否则 format 会再拼接一个 @ 导致双 @）
-                let host_part = &rest[at_pos + 1..];
-                return Ok(format!("{}{}:{}@{}", prefix, username, password, host_part));
-            } else {
-                if let Some(path_start) = rest.find('/') {
-                    let host_port = &rest[..path_start];
-                    let path = &rest[path_start..];
-                    return Ok(format!(
-                        "{}{}:{}@{}{}",
-                        prefix, username, password, host_port, path
-                    ));
-                } else {
-                    return Ok(format!("{}{}:{}@{}", prefix, username, password, rest));
-                }
-            }
-        }
-
-        Ok(url.to_string())
-    }
-
-    /// 向 PostgreSQL URL 中注入 SSL 证书参数
-    fn inject_ssl_cert(
-        url: &str,
-        cert_path: &str,
-        cert_key_path: &str,
-    ) -> Result<String, CoreError> {
-        use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-        let mut result = url.to_string();
-
-        if !cert_path.is_empty() {
-            let encoded_cert = utf8_percent_encode(cert_path, NON_ALPHANUMERIC).to_string();
-            if result.contains('?') {
-                result.push_str(&format!("&sslmode=verify-ca&sslcert={}", encoded_cert));
-            } else {
-                result.push_str(&format!("?sslmode=verify-ca&sslcert={}", encoded_cert));
-            }
-        }
-
-        if !cert_key_path.is_empty() {
-            let encoded_key = utf8_percent_encode(cert_key_path, NON_ALPHANUMERIC).to_string();
-            result.push_str(&format!("&sslkey={}", encoded_key));
-        }
-
-        Ok(result)
-    }
-
-    /// 向 Kerberos URL 中注入认证参数
-    fn inject_kerberos(
-        url: &str,
-        principal: &str,
-        _keytab_path: &str,
-    ) -> Result<String, CoreError> {
-        use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-        let mut result = url.to_string();
-
-        if !principal.is_empty() {
-            let encoded_principal = utf8_percent_encode(principal, NON_ALPHANUMERIC).to_string();
-            if result.contains('?') {
-                result.push_str(&format!("&krbrprincipal={}", encoded_principal));
-            } else {
-                result.push_str(&format!("?krbrprincipal={}", encoded_principal));
-            }
-        }
-
-        Ok(result)
     }
 
     /// 解析 advanced_options JSON 并应用到 DriverConnectionConfig
@@ -809,420 +605,6 @@ impl ConnectionService {
         }
     }
 
-    /// 应用网络连接方式（SSH 隧道 / SSL / 代理）
-    ///
-    /// 根据 ConnectionMethod 对连接 URL 做改写：
-    /// - SSH: 建立本地端口转发隧道，将 URL 中 host:port 改写为 localhost:tunnel_port
-    /// - SSL: 将 SSL 参数注入 URL（如 ssl-ca、ssl-cert 等）
-    /// - Proxy: 暂不支持（sqlx 不原生支持代理，后续通过 wrapping stream 实现）
-    /// - Direct/None: 原样返回
-    async fn apply_network_method(
-        &self,
-        url: &str,
-        method: &Option<ConnectionMethod>,
-        conn_id: &str,
-        db_type: &str,
-    ) -> Result<(String, Vec<TunnelGuard>), CoreError> {
-        match method {
-            None | Some(ConnectionMethod::Direct) => Ok((url.to_string(), vec![])),
-            Some(ConnectionMethod::Chain(hops)) => {
-                self.process_chain(url, hops, conn_id, db_type).await
-            }
-            Some(ConnectionMethod::Ssh(ssh_config)) => {
-                let guard = create_ssh_tunnel_port(ssh_config, None).await?;
-                let local_port = guard.port();
-                let rewritten = Self::rewrite_url_host_port(url, "127.0.0.1", local_port)?;
-                tracing::info!(
-                    conn_id = %conn_id,
-                    original = %Self::mask_password_in_url(url),
-                    tunnel = %rewritten,
-                    "SSH 隧道已建立，URL 已改写为本地端口"
-                );
-                Ok((rewritten, vec![guard]))
-            }
-            Some(ConnectionMethod::Ssl(ssl_config)) => {
-                // SSL 参数由 sqlx 原生支持，通过 URL query 参数传递
-                // 根据数据库类型自动映射 ssl_mode/sslmode 与证书路径
-                let url_with_ssl = Self::append_ssl_params(url, db_type, ssl_config)?;
-                Ok((url_with_ssl, vec![]))
-            }
-            Some(ConnectionMethod::HttpProxy(_) | ConnectionMethod::SocksProxy(_)) => {
-                let (target_host, target_port) = Self::parse_host_port_from_url(url)?;
-                let proxy_config = match method {
-                    Some(ConnectionMethod::HttpProxy(c)) => c,
-                    Some(ConnectionMethod::SocksProxy(c)) => c,
-                    _ => unreachable!(),
-                };
-                let is_socks = matches!(method, Some(ConnectionMethod::SocksProxy(_)));
-
-                if Self::matches_no_proxy(&target_host, &proxy_config.no_proxy) {
-                    tracing::info!(
-                        conn_id = %conn_id,
-                        host = %target_host,
-                        rules = ?proxy_config.no_proxy,
-                        "目标主机匹配 no_proxy 规则，跳过代理"
-                    );
-                    return Ok((url.to_string(), vec![]));
-                }
-
-                let guard = create_proxy_tunnel_port(
-                    proxy_config,
-                    &target_host,
-                    target_port,
-                    is_socks,
-                    None,
-                    None,
-                )
-                .await?;
-                let local_port = guard.port();
-
-                let rewritten = Self::rewrite_url_host_port(url, "127.0.0.1", local_port)?;
-                tracing::info!(
-                    conn_id = %conn_id,
-                    original = %Self::mask_password_in_url(url),
-                    proxy = %rewritten,
-                    "代理隧道已建立，URL 已改写为本地端口"
-                );
-                Ok((rewritten, vec![guard]))
-            }
-        }
-    }
-
-    /// 处理协议链路（外层 → 内层迭代）
-    ///
-    /// 每跳建立本地端口转发，将目标地址作为下一跳的连接入口：
-    /// - Proxy 跳的目标 = 下一跳的 host:port
-    /// - SSH 跳的 connect_to = 上一跳的 localhost 端口
-    /// - SSL 跳由 sqlx 原生处理
-    async fn process_chain(
-        &self,
-        url: &str,
-        hops: &[connection::config::ChainHop],
-        conn_id: &str,
-        db_type: &str,
-    ) -> Result<(String, Vec<TunnelGuard>), CoreError> {
-        use connection::config::ChainHop;
-
-        let (final_db_host, final_db_port) = Self::parse_host_port_from_url(url)?;
-        let mut tunnel_port: Option<u16> = None;
-        let mut guards: Vec<TunnelGuard> = Vec::new();
-
-        for (i, hop) in hops.iter().enumerate() {
-            let next_hop = hops.get(i + 1);
-
-            match hop {
-                ChainHop::Ssh(ssh_config) => {
-                    let connect_override = tunnel_port.map(|p| ("127.0.0.1".to_string(), p));
-                    let guard = create_ssh_tunnel_port(ssh_config, connect_override).await?;
-                    let lp = guard.port();
-                    tunnel_port = Some(lp);
-                    tracing::info!(
-                        conn_id = %conn_id,
-                        hop = i,
-                        port = lp,
-                        "SSH 隧道跳已建立"
-                    );
-                    guards.push(guard);
-                }
-                ChainHop::HttpProxy(proxy) | ChainHop::SocksProxy(proxy) => {
-                    let (target_host, target_port) = if let Some(next) = next_hop {
-                        match next {
-                            ChainHop::Ssh(s) => (s.host.clone(), s.port),
-                            ChainHop::HttpProxy(p) | ChainHop::SocksProxy(p) => {
-                                (p.host.clone(), p.port)
-                            }
-                            ChainHop::Ssl(_) => (final_db_host.clone(), final_db_port),
-                        }
-                    } else {
-                        (final_db_host.clone(), final_db_port)
-                    };
-                    let is_socks = matches!(hop, ChainHop::SocksProxy(_));
-                    let connect_override = tunnel_port.map(|p| ("127.0.0.1".to_string(), p));
-
-                    if Self::matches_no_proxy(&target_host, &proxy.no_proxy) {
-                        tracing::info!(
-                            conn_id = %conn_id,
-                            hop = i,
-                            host = %target_host,
-                            rules = ?proxy.no_proxy,
-                            "链路中目标主机匹配 no_proxy 规则，跳过此代理跳"
-                        );
-                        continue;
-                    }
-
-                    let wrap_ssl = match next_hop {
-                        Some(ChainHop::Ssl(ssl_cfg)) => Some(ssl_cfg.clone()),
-                        _ => None,
-                    };
-                    let guard = create_proxy_tunnel_port(
-                        proxy,
-                        &target_host,
-                        target_port,
-                        is_socks,
-                        connect_override,
-                        wrap_ssl,
-                    )
-                    .await?;
-                    let lp = guard.port();
-                    tunnel_port = Some(lp);
-                    guards.push(guard);
-                    tracing::info!(
-                        conn_id = %conn_id,
-                        hop = i,
-                        port = lp,
-                        target = %format!("{}:{}", target_host, target_port),
-                        "代理跳已建立"
-                    );
-                }
-                ChainHop::Ssl(_) => {
-                    tracing::info!(
-                        conn_id = %conn_id,
-                        hop = i,
-                        "SSL 跳（由 sqlx 原生处理）"
-                    );
-                }
-            }
-        }
-
-        match tunnel_port {
-            Some(port) => {
-                let rewritten = Self::rewrite_url_host_port(url, "127.0.0.1", port)?;
-                tracing::info!(
-                    conn_id = %conn_id,
-                    original = %Self::mask_password_in_url(url),
-                    tunnel = %rewritten,
-                    hops = hops.len(),
-                    "协议链已建立"
-                );
-                let url_with_ssl = Self::inject_chain_ssl_params(&rewritten, hops, db_type)?;
-                Ok((url_with_ssl, guards))
-            }
-            None => {
-                let url_with_ssl = Self::inject_chain_ssl_params(url, hops, db_type)?;
-                Ok((url_with_ssl, guards))
-            }
-        }
-    }
-
-    /// 从链路 hops 中提取 SSL 配置并注入 URL 参数
-    ///
-    /// 跳过已被 Proxy→SSL 嵌套层处理的 SSL hop（前一个 hop 是代理）
-    fn inject_chain_ssl_params(
-        url: &str,
-        hops: &[connection::config::ChainHop],
-        db_type: &str,
-    ) -> Result<String, CoreError> {
-        use connection::config::ChainHop;
-        for (i, hop) in hops.iter().enumerate() {
-            if let ChainHop::Ssl(ssl_config) = hop {
-                let previous_is_proxy = i > 0
-                    && matches!(
-                        hops[i - 1],
-                        ChainHop::HttpProxy(_) | ChainHop::SocksProxy(_)
-                    );
-                if previous_is_proxy {
-                    tracing::info!(
-                        target: "chain",
-                        hop = i,
-                        "SSL 跳已由 Proxy→SSL 嵌套层处理，跳过 URL 参数注入"
-                    );
-                    continue;
-                }
-                return Self::append_ssl_params(url, db_type, ssl_config);
-            }
-        }
-        Ok(url.to_string())
-    }
-
-    /// 将 URL 中的 host:port 改写为新的 host:port
-    ///
-    /// 支持 mysql://, postgres://, sqlite://, duckdb:// 等常见 schema
-    fn rewrite_url_host_port(
-        url: &str,
-        new_host: &str,
-        new_port: u16,
-    ) -> Result<String, CoreError> {
-        if url.starts_with("mysql://") || url.starts_with("postgres://") {
-            let (prefix, rest) = url
-                .split_once("://")
-                .ok_or_else(|| CoreError::from("Invalid connection URL format"))?;
-            let after_auth = if let Some(at_pos) = rest.find('@') {
-                let (auth, _host_part) = rest.split_at(at_pos + 1);
-                format!("{}{}:{}", auth, new_host, new_port)
-            } else {
-                format!("{}:{}", new_host, new_port)
-            };
-            let last_part = rest
-                .find('@')
-                .map(|p| {
-                    let host_section = &rest[p + 1..];
-                    host_section
-                        .find('/')
-                        .map(|s| &host_section[s..])
-                        .unwrap_or("")
-                })
-                .unwrap_or("");
-            Ok(format!("{}://{}{}", prefix, after_auth, last_part))
-        } else if url.starts_with("sqlite://") || url.starts_with("duckdb://") {
-            Ok(url.to_string())
-        } else {
-            Err(CoreError::connection(ConnectionError::InvalidConfig {
-                conn_id: url.to_string(),
-                reason: "无法改写 URL，不支持的协议".to_string(),
-            }))
-        }
-    }
-
-    /// 从数据库 URL 中解析目标主机和端口
-    ///
-    /// 支持 mysql://user:pass@host:port/db 和 postgres://user:pass@host:port/db 格式
-    fn parse_host_port_from_url(url: &str) -> Result<(String, u16), CoreError> {
-        let after_scheme = if let Some(pos) = url.find("://") {
-            &url[pos + 3..]
-        } else {
-            return Err(CoreError::connection(ConnectionError::InvalidConfig {
-                conn_id: url.to_string(),
-                reason: "URL 中没有找到协议前缀".to_string(),
-            }));
-        };
-
-        let host_part = if let Some(at_pos) = after_scheme.find('@') {
-            &after_scheme[at_pos + 1..]
-        } else {
-            after_scheme
-        };
-
-        let host = if let Some(slash_pos) = host_part.find('/') {
-            &host_part[..slash_pos]
-        } else {
-            host_part
-        };
-
-        let (hostname, port) = if let Some(colon_pos) = host.rfind(':') {
-            let h = &host[..colon_pos];
-            let p_str = &host[colon_pos + 1..];
-            let p = p_str.parse::<u16>().map_err(|_| {
-                CoreError::connection(ConnectionError::InvalidConfig {
-                    conn_id: url.to_string(),
-                    reason: format!("无效端口号: {}", p_str),
-                })
-            })?;
-            (h.to_string(), p)
-        } else {
-            let default_port = if url.starts_with("postgres://") {
-                5432
-            } else {
-                3306
-            };
-            (host.to_string(), default_port)
-        };
-
-        Ok((hostname, port))
-    }
-
-    /// 根据 SslConfig 和数据库类型向 URL 追加 SSL 连接参数
-    ///
-    /// MySQL: ssl-mode, ssl-ca, ssl-cert, ssl-key
-    /// PostgreSQL: sslmode, sslrootcert, sslcert, sslkey
-    fn append_ssl_params(
-        url: &str,
-        db_type: &str,
-        ssl_config: &connection::config::SslConfig,
-    ) -> Result<String, CoreError> {
-        let params = match db_type {
-            "mysql" | "mariadb" => {
-                let mode = if ssl_config.verify_server_cert {
-                    if ssl_config.ca_cert_path.is_some() {
-                        "VERIFY_CA"
-                    } else {
-                        "REQUIRED"
-                    }
-                } else {
-                    "REQUIRED"
-                };
-                let mut p = format!("ssl-mode={}", mode);
-                if let Some(ref ca) = ssl_config.ca_cert_path {
-                    p.push_str(&format!("&ssl-ca={}", ca));
-                }
-                if let Some(ref cert) = ssl_config.client_cert_path {
-                    p.push_str(&format!("&ssl-cert={}", cert));
-                }
-                if let Some(ref key) = ssl_config.client_key_path {
-                    p.push_str(&format!("&ssl-key={}", key));
-                }
-                p
-            }
-            "postgres" | "postgresql" | "pgsql" => {
-                let mode = if ssl_config.verify_server_cert {
-                    if ssl_config.ca_cert_path.is_some() {
-                        "verify-ca"
-                    } else {
-                        "require"
-                    }
-                } else {
-                    "require"
-                };
-                let mut p = format!("sslmode={}", mode);
-                if let Some(ref ca) = ssl_config.ca_cert_path {
-                    p.push_str(&format!("&sslrootcert={}", ca));
-                }
-                if let Some(ref cert) = ssl_config.client_cert_path {
-                    p.push_str(&format!("&sslcert={}", cert));
-                }
-                if let Some(ref key) = ssl_config.client_key_path {
-                    p.push_str(&format!("&sslkey={}", key));
-                }
-                p
-            }
-            _ => {
-                tracing::info!(db_type=%db_type, "非 SQL 数据库，跳过 SSL 参数注入");
-                return Ok(url.to_string());
-            }
-        };
-
-        Ok(Self::append_url_params(url, &params))
-    }
-
-    /// 向 URL 追加 &params 或 ?params
-    fn append_url_params(url: &str, params: &str) -> String {
-        if url.contains('?') {
-            format!("{}&{}", url, params)
-        } else {
-            format!("{}?{}", url, params)
-        }
-    }
-
-    /// 检查目标主机是否匹配 no_proxy 规则列表
-    ///
-    /// 支持格式：精确主机名、IP 地址、`.domain` 后缀通配（匹配 `*.domain`）
-    fn matches_no_proxy(host: &str, rules: &[String]) -> bool {
-        if rules.is_empty() {
-            return false;
-        }
-        let host_lower = host.to_lowercase();
-        for rule in rules {
-            let rule = rule.trim().to_lowercase();
-            if rule.is_empty() {
-                continue;
-            }
-            if rule == host_lower {
-                return true;
-            }
-            if rule == "localhost" && (host_lower == "127.0.0.1" || host_lower == "::1") {
-                return true;
-            }
-            if rule == "127.0.0.1" && host_lower == "localhost" {
-                return true;
-            }
-            if let Some(suffix) = rule.strip_prefix('.') {
-                if host_lower == suffix || host_lower.ends_with(&format!(".{}", suffix)) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     /// 根据数据库类型创建对应的数据库实例
     /// 通过 DataSourceRouter 路由到 DriverRegistry 动态创建
     async fn create_database(
@@ -1288,21 +670,27 @@ impl ConnectionService {
         self.manager.get_active_conn_id().await
     }
 
+    /// 回收某连接的隧道守卫（守卫 drop 即关闭本地端口与后台 accept 循环）。
+    async fn release_tunnels(&self, conn_id: &str, reason: &str) {
+        let guards = self.tunnels.take(conn_id).await;
+        if !guards.is_empty() {
+            tracing::info!(conn_id = %conn_id, count = guards.len(), reason, "清理隧道守卫");
+            drop(guards);
+        }
+    }
+
+    /// 某连接当前登记的隧道数量（诊断 / 测试用）。
+    pub async fn tunnel_count(&self, conn_id: &str) -> usize {
+        self.tunnels.count(conn_id).await
+    }
+
     /// 关闭指定连接（**保留元数据缓存**）。
     ///
     /// 依据设计 `database-navigator-prototype-design.md` §5.2：断开只关闭运行时连接，
     /// 不删除 L2 元数据缓存（支持离线浏览 / 重连秒开）；清理仅经显式「缓存管理」入口。
     pub async fn close_connection(&self, conn_id: &str) -> Result<(), CoreError> {
         // 清理隧道守卫（释放本地端口 + 取消后台任务）
-        if let Some(guards) = self.tunnels.lock().await.remove(conn_id) {
-            tracing::info!(
-                conn_id = %conn_id,
-                count = guards.len(),
-                "正在清理 {} 个隧道守卫",
-                guards.len()
-            );
-            drop(guards);
-        }
+        self.release_tunnels(conn_id, "关闭连接").await;
 
         // 从连接管理器中移除连接（缓存文件保留）
         self.manager.remove_connection(&conn_id.to_string()).await;
@@ -1312,7 +700,7 @@ impl ConnectionService {
 
     /// 关闭所有连接
     pub async fn close_all_connections(&self) -> Result<(), CoreError> {
-        self.tunnels.lock().await.clear();
+        self.tunnels.clear().await;
         self.manager.close_all_connections().await;
         Ok(())
     }
@@ -1628,180 +1016,6 @@ impl ConnectionService {
 
         Ok(global_connections)
     }
-}
-
-/// 创建 SSH 隧道端口转发，返回隧道生命周期守卫
-///
-/// connect_override: 链式跳转时，覆盖 SSH 连接目标（通过上一跳的 localhost 端口间接连接）
-async fn create_ssh_tunnel_port(
-    ssh_config: &connection::config::SshConfig,
-    connect_override: Option<(String, u16)>,
-) -> Result<connection::connector::TunnelGuard, CoreError> {
-    use connection::config::ConnectionConfig;
-    use connection::connector;
-
-    let effective_config = if let Some((ref host, port)) = connect_override {
-        let mut modified = ssh_config.clone();
-        modified.host = host.clone();
-        modified.port = port;
-        modified
-    } else {
-        ssh_config.clone()
-    };
-
-    let dummy_config = ConnectionConfig::direct("127.0.0.1", 0);
-
-    connector::establish_ssh_tunnel(&dummy_config, &effective_config).await
-}
-
-/// 创建代理隧道端口转发，返回隧道生命周期守卫
-///
-/// 建立本地端口转发：绑定本地端口 → accept 循环 → 每个连接的桥接通过代理到目标
-///
-/// connect_override: 链式跳转时，覆盖代理连接目标（通过上一跳的 localhost 端口间接连接代理服务器）
-/// wrap_ssl: 代理 CONNECT 成功后对连接进行 TLS 封装（Proxy → SSL 嵌套）
-async fn create_proxy_tunnel_port(
-    proxy_config: &connection::config::ProxyConfig,
-    target_host: &str,
-    target_port: u16,
-    is_socks: bool,
-    connect_override: Option<(String, u16)>,
-    wrap_ssl: Option<connection::config::SslConfig>,
-) -> Result<connection::connector::TunnelGuard, CoreError> {
-    use connection::config::ConnectionConfig;
-    use connection::connector;
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| {
-            CoreError::connection(ConnectionError::Network {
-                conn_id: format!("{}:{}", target_host, target_port),
-                reason: format!("绑定代理转发本地端口失败: {}", e),
-            })
-        })?;
-
-    let local_port = listener
-        .local_addr()
-        .map_err(|e| {
-            CoreError::connection(ConnectionError::Network {
-                conn_id: format!("{}:{}", target_host, target_port),
-                reason: format!("获取代理转发本地端口失败: {}", e),
-            })
-        })?
-        .port();
-
-    let pc = proxy_config.clone();
-    let effective_pc = if let Some((ref host, port)) = connect_override {
-        let mut modified = pc.clone();
-        modified.host = host.clone();
-        modified.port = port;
-        modified
-    } else {
-        pc.clone()
-    };
-    let th = target_host.to_string();
-    let ssl_config = wrap_ssl.clone();
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-    let task = tokio::spawn(async move {
-        tracing::info!(
-            target: "proxy_tunnel",
-            target = %format!("{}:{}", th, target_port),
-            local_port,
-            is_socks,
-            has_tls = ssl_config.is_some(),
-            "代理隧道后台任务启动 (accept 循环)"
-        );
-        let th_outer = th.clone();
-        loop {
-            tokio::select! {
-                result = listener.accept() => {
-                    match result {
-                        Ok((local_stream, _)) => {
-                            let th2 = th_outer.clone();
-                            let dummy = ConnectionConfig::direct(&th2, target_port);
-                            let epc = effective_pc.clone();
-                            let ssl = ssl_config.clone();
-                            tokio::spawn(async move {
-                                let tunneled = if is_socks {
-                                    connector::establish_socks_proxy(&dummy, &epc).await
-                                } else {
-                                    connector::establish_http_proxy(&dummy, &epc).await
-                                };
-                                match tunneled {
-                                    Ok(proxy_stream) => {
-                                        if let Some(ref ssl_cfg) = ssl {
-                                            match connector::wrap_tls_stream(
-                                                proxy_stream,
-                                                ssl_cfg,
-                                                &th2,
-                                            )
-                                            .await
-                                            {
-                                                Ok(tls_stream) => {
-                                                    let (mut lr, mut lw) =
-                                                        tokio::io::split(local_stream);
-                                                    let (mut pr, mut pw) =
-                                                        tokio::io::split(tls_stream);
-                                                    let _ = tokio::join!(
-                                                        tokio::io::copy(&mut lr, &mut pw),
-                                                        tokio::io::copy(&mut pr, &mut lw),
-                                                    );
-                                                    tracing::debug!(target: "proxy_tunnel", "TLS 加密代理桥接结束");
-                                                }
-                                                Err(e) => {
-                                                    tracing::warn!(target: "proxy_tunnel", host = %th2, "TLS 封装失败: {}", e);
-                                                }
-                                            }
-                                        } else {
-                                            let (mut lr, mut lw) =
-                                                tokio::io::split(local_stream);
-                                            let (mut pr, mut pw) =
-                                                tokio::io::split(proxy_stream);
-                                            let _ = tokio::join!(
-                                                tokio::io::copy(&mut lr, &mut pw),
-                                                tokio::io::copy(&mut pr, &mut lw),
-                                            );
-                                            tracing::debug!(target: "proxy_tunnel", "代理桥接结束");
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(target: "proxy_tunnel", host = %th2, port = %target_port, "代理隧道连接失败: {}", e);
-                                    }
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            tracing::warn!(target: "proxy_tunnel", "接受本地代理连接失败: {}", e);
-                            break;
-                        }
-                    }
-                }
-                _ = &mut shutdown_rx => {
-                    tracing::info!(target: "proxy_tunnel", local_port, "代理隧道收到关闭信号，退出 accept 循环");
-                    break;
-                }
-            }
-        }
-        drop(listener);
-        drop(effective_pc);
-        tracing::info!(target: "proxy_tunnel", local_port, "代理隧道后台任务已退出");
-    });
-
-    tracing::info!(
-        target: "proxy_tunnel",
-        target = %format!("{}:{}", target_host, target_port),
-        local_port,
-        is_socks,
-        "代理隧道已建立"
-    );
-
-    Ok(connection::connector::TunnelGuard::new(
-        local_port,
-        shutdown_tx,
-        task,
-        format!("proxy:{}", target_host),
-    ))
 }
 
 /// 从全局 DB 解析 network_config_id → ConnectionMethod
