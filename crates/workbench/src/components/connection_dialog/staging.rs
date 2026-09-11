@@ -340,7 +340,14 @@ impl ConnectionDialogState {
         };
         if let Some(id) = d.saved_id.clone() {
             *self.editing_id.borrow_mut() = Some(id.clone());
-            self.load_for_edit(&id, window, cx);
+            // 项目侧（P_/GP_）连接只存项目库：优先用条目记录的项目路径，
+            // 旧条目无路径时回退当前会话项目根（否则回读取不到记录）。
+            let root = if d.project_path.trim().is_empty() {
+                self.session_project.borrow().as_ref().map(|(_, p)| p.clone())
+            } else {
+                Some(d.project_path.clone())
+            };
+            self.load_for_edit(&id, root.as_deref(), window, cx);
             return;
         }
         *self.editing_id.borrow_mut() = None;
@@ -365,6 +372,8 @@ impl ConnectionDialogState {
         }
         self.project_path
             .update(cx, |s, cx| s.set_value(d.project_path.clone(), window, cx));
+        // 项目栏显示同步（下拉命中 / 手动输入）。
+        self.sync_project_selection(&d.project_path, window, cx);
         self.ssl_ca
             .update(cx, |s, cx| s.set_value(d.ssl_ca.clone(), window, cx));
         self.ssl_cert

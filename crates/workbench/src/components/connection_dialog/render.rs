@@ -1,7 +1,37 @@
 use super::*;
 
 impl ConnectionDialogState {
+    /// 订阅项目下拉确认事件（返回的句柄必须由 `EditorPanel` 持有，释放即取消）。
+    ///
+    /// 选中「＋ 新增项目」→ 置位 `Shared::project_new_request`（宿主 render 消费并开新建入口）；
+    /// 选中普通项目 → 项目根写回路径输入。
+    ///
+    /// 建立时机：由面板的请求入口（`EditorPanel::request_*`）调用——**不能**放进 `open()`：
+    /// `open()` 处于面板的 `update` 上下文中，在那里再 `update` 面板会触发重入 panic。
+    pub fn subscribe_project_confirm(
+        self: &Rc<Self>,
+        shared: &Shared,
+        window: &mut Window,
+        cx: &mut Context<crate::panels::EditorPanel>,
+    ) -> Subscription {
+        let state = Rc::clone(self);
+        let shared_sel = shared.clone();
+        cx.subscribe_in(
+            &self.project_sel,
+            window,
+            move |_editor, _sel, event: &SelectEvent<SearchableVec<ProjectItem>>, window, cx| {
+                let SelectEvent::Confirm(value) = event;
+                state.handle_project_confirm(value.as_ref(), &shared_sel, window, cx);
+                shared_sel.notify_host(cx);
+            },
+        )
+    }
+
     /// 打开数据源连接对话框（状态由 EditorPanel 持有；open_dialog builder 每次渲染重建 UI）。
+    ///
+    /// 注：项目下拉的确认订阅**不**在此建立（本方法在面板的 `update` 上下文中被调用，
+    /// 再 `update` 面板会触发重入 panic）——由 [`Self::subscribe_project_confirm`] 在
+    /// 面板的请求入口（`EditorPanel::request_*`）建立。
     pub fn open(
         self: &Rc<Self>,
         entity: Entity<crate::panels::EditorPanel>,
@@ -15,22 +45,25 @@ impl ConnectionDialogState {
         // 重入保护：先关闭已有的本对话框层，避免连续 open 叠加（幂等打开）。
         window.close_dialog(cx);
         *self.editing_id.borrow_mut() = editing_id.clone();
-        if let Some(id) = &editing_id {
-            self.load_for_edit(id, window, cx);
-        }
-        // 当前项目会话接入（C2）：项目根自动预填，项目作用域无需手输；
-        // 已填值（如编辑回读）不覆盖。
+        // 当前项目会话接入（C2）：项目根先取会话快照，编辑回读（项目侧 P_/GP_ 只存项目库）
+        // 与项目栏预填共用它。
         let session_root = shared
             .project
             .borrow()
             .as_ref()
             .map(|p| p.root.to_string_lossy().to_string());
+        if let Some(id) = &editing_id {
+            self.load_for_edit(id, session_root.as_deref(), window, cx);
+        }
+        // 项目根自动预填，项目作用域无需手输；已填值（如编辑回读）不覆盖。
         if let Some(root) = session_root {
             if self.project_path.read(cx).value().trim().is_empty() {
                 self.project_path
                     .update(cx, |s, cx| s.set_value(root, window, cx));
             }
         }
+        // 项目下拉确认订阅（选中「＋ 新增项目」→ 请求宿主打开项目新建入口；选中项目 → 路径写回）。
+        // 订阅由 `EditorPanel` 持有（句柄释放即取消），建立入口见 `subscribe_project_confirm`。
         let name = self.name.clone();
         let url = self.url.clone();
         let user = self.user.clone();
@@ -62,6 +95,8 @@ impl ConnectionDialogState {
         let editing_id = self.editing_id.clone();
         let scope = self.scope.clone();
         let project_path = self.project_path.clone();
+        let project_sel = self.project_sel.clone();
+        let project_options = self.project_options.clone();
         let tags_input = self.tags_input.clone();
         let group_checks = self.group_checks.clone();
         let ssl_mode = self.ssl_mode.clone();
@@ -70,10 +105,29 @@ impl ConnectionDialogState {
         let ssl_key = self.ssl_key.clone();
         let sec_overrides = self.sec_overrides.clone();
 
+        // 项目会话变更检测（每帧执行，开销仅一次借用比较）：对话框打开期间「＋ 新增项目」
+        // 或外部切换项目后，项目下拉选项与选中项必须跟上新会话。
+        let session_now = shared.project.borrow().as_ref().map(|p| {
+            (p.name.clone(), p.root.to_string_lossy().to_string())
+        });
+        if *self.session_project.borrow() != session_now {
+            *self.session_project.borrow_mut() = session_now.clone();
+            self.refresh_project_options(window, cx);
+            match &session_now {
+                // 新会话项目直接成为项目栏选中项（「新增项目」的语义就是切换到它）；
+                // 路径由下方 render 同步块写回（单一数据源仍是路径输入）。
+                Some((name, _)) => self.set_project_value(name, window, cx),
+                None => self.set_project_value("", window, cx),
+            }
+        }
+
         // 元数据与暂存恢复：dialog builder 每次渲染都会执行，用一次性标记避开
         // 反复建 tokio runtime + 查库（hover / 切 Tab 引发的重渲染不应再查库）。
         // 每次「打开对话框」入口（`EditorPanel::request_*`）会重置标记以重新拉取。
         if !self.meta_refreshed.replace(true) {
+            // 项目根已预填时同步项目栏显示（编辑回读路径优先于会话默认值）。
+            let prefilled = self.project_path.read(cx).value().to_string();
+            self.sync_project_selection(&prefilled, window, cx);
             // 拉取一次元数据（认证/网络/环境引用选项 + 类型 / 驱动目录）。
             self.refresh_meta(window, cx);
             // 暂存列表：首次打开时恢复上次会话的草稿（关栏不丢失，跨会话延续）。
@@ -124,7 +178,24 @@ impl ConnectionDialogState {
             (t.success, detail)
         };
 
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let scope_sel = scope.read(cx).selected_value().cloned().unwrap_or_default().to_string();
+            let includes_project = scope_from_label(&scope_sel).includes_project();
+            // 项目下拉 → 路径输入同步（render 为权威同步点，兜底）：选中普通项目时写回路径，
+            // 保存与作用域预检统一读路径输入（单一数据源）；「＋ 新增项目」由确认订阅处理。
+            if includes_project {
+                if let Some(label) = project_sel.read(cx).selected_value().cloned() {
+                    let path = project_options
+                        .borrow()
+                        .iter()
+                        .find(|(l, _)| l.as_str() == label.as_ref())
+                        .map(|(_, p)| p.clone())
+                        .unwrap_or_default();
+                    if !path.is_empty() && project_path.read(cx).value().trim() != path {
+                        project_path.update(cx, |s, cx| s.set_value(path.clone(), window, cx));
+                    }
+                }
+            }
             let theme = cx.theme();
 
             // ---- 当前驱动 / 类型同步（render 为权威同步点）----
@@ -1087,7 +1158,7 @@ impl ConnectionDialogState {
             let tab_body = div()
                 .id("conn-tab-body")
                 .w_full()
-                .h(rems(20.5))
+                .h(rems(TAB_BODY_H))
                 .min_h_0()
                 .overflow_y_scrollbar()
                 .child(tab_content);
@@ -1189,7 +1260,7 @@ impl ConnectionDialogState {
                     .h_flex()
                     .items_center()
                     .gap(rems(0.375))
-                    .h(rems(1.75))
+                    .h(rems(ROW_H))
                     .px(rems(0.5))
                     .rounded(rems(0.375))
                     .cursor_pointer();
@@ -1356,7 +1427,7 @@ impl ConnectionDialogState {
                             div()
                                 .id("staging-scroll")
                                 .w_full()
-                                .h(rems(7.5))
+                                .h(rems(STAGING_H))
                                 .min_h_0()
                                 .overflow_y_scrollbar()
                                 .child(staging_list),
@@ -1381,18 +1452,17 @@ impl ConnectionDialogState {
                 );
 
             // ---- Header（对齐原型 §2）：名称 + 驱动类型 + 作用域 / 备注 / URI / 提示行 ----
-            let scope_sel = scope.read(cx).selected_value().cloned().unwrap_or_default().to_string();
-            let includes_project = scope_from_label(&scope_sel).includes_project();
             // 项目栏：固定位置（备注行右侧）；作用域为「仅全局」时不参与落库 → 置灰不可编辑，
             // 保证三态切换时布局不跳动。
+            // 项目栏（固定位置与宽度 17rem）：不参与项目作用域时置灰禁用；
+            // 参与时为一个下拉框（项目名 + 路径左右结构；末项「＋ 新增项目」）。
             let project_ui = {
                 let mut wrap = div()
-                    .relative()
                     .h_flex()
                     .flex_shrink_0()
                     .items_center()
-                    .gap(rems(0.5))
-                    .w(rems(17.))
+                    .gap(rems(GAP_MD))
+                    .w(rems(PROJECT_W))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -1401,210 +1471,132 @@ impl ConnectionDialogState {
                             .child("项目"),
                     );
                 if !includes_project {
+                    // 仅全局：项目不参与落库，仍以禁用下拉占位（保持控件形态与行高一致）。
                     wrap = wrap.child(
                         div()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child("仅全局不需要"),
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(
+                                Select::new(&project_sel)
+                                    .placeholder("仅全局不需要")
+                                    .disabled(true),
+                            ),
                     );
                 } else {
-                    match project_session.clone() {
-                        Some((pname, proot)) => {
-                            wrap = wrap.child(
-                                div()
-                                    .id("conn-project-name")
-                                    .text_xs()
-                                    .text_color(theme.colors.foreground)
-                                    .child(pname)
-                                    .on_hover({
-                                        let state = state.clone();
-                                        let entity = entity.clone();
-                                        move |hovered, _, app| {
-                                            if state.project_hover.get() != *hovered {
-                                                state.project_hover.set(*hovered);
-                                                entity.update(app, |_, cx| cx.notify());
-                                            }
-                                        }
-                                    }),
-                            );
-                            if state.project_hover.get() {
-                                wrap = wrap.child(
-                                    div()
-                                        .absolute()
-                                        .top(rems(1.125))
-                                        .left_0()
-                                        .px(rems(0.5))
-                                        .py(rems(0.25))
-                                        .rounded(rems(0.375))
-                                        .border_1()
-                                        .border_color(theme.colors.border)
-                                        .bg(theme.colors.popover)
-                                        .text_xs()
-                                        .text_color(theme.colors.muted_foreground)
-                                        .child(proot),
-                                );
-                            }
-                        }
-                        None => {
-                            wrap = wrap.child(Input::new(&project_path).flex_1());
-                        }
-                    }
+                    wrap = wrap.child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(Select::new(&project_sel).placeholder("选择项目…")),
+                    );
                 }
                 wrap
             };
+            // 作用域：三态分段控件（自绘，颜色走主题 token；底层仍写 scope Select）。
+            // 作用域：三态分段控件（自绘，颜色走主题 token；底层仍写 scope Select）。
+            let scope_seg = {
+                let scope_now = if scope_sel.is_empty() {
+                    SCOPE_LABELS[0]
+                } else {
+                    scope_sel.as_str()
+                };
+                // 分段按钮文本用短版（写库仍用全称标签）。
+                let mut seg = div()
+                    .h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(1.))
+                    .p(px(1.))
+                    .rounded(rems(GAP_SM))
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.background);
+                for (short, full) in SCOPE_SEG_LABELS {
+                    let active = scope_now == full;
+                    let mut item = div()
+                        .id(SharedString::from(format!("scope-{full}")))
+                        .h_flex()
+                        .items_center()
+                        .justify_center()
+                        .h(rems(SEG_ITEM_H))
+                        .px(rems(GAP_MD))
+                        .rounded(rems(GAP_XS))
+                        .text_xs()
+                        .cursor_pointer()
+                        .child(short);
+                    item = if active {
+                        item.bg(theme.colors.primary)
+                            .text_color(theme.colors.primary_foreground)
+                    } else {
+                        item.text_color(theme.colors.muted_foreground)
+                            .hover(|s| s.bg(theme.colors.list_hover))
+                    };
+                    let item = item.on_click({
+                        let scope = scope.clone();
+                        let entity = entity.clone();
+                        move |_, window, app| {
+                            set_select_value(&scope, full, window, app);
+                            entity.update(app, |_, cx| cx.notify());
+                        }
+                    });
+                    seg = seg.child(item);
+                }
+                seg
+            };
+            // 类型徽标（仅图标，定宽 1.75rem：类型名长短不移动后续元素；未辨识时显示 ?）。
+            let type_badge_ui = {
+                let mut badge = div()
+                    .flex_shrink_0()
+                    .h_flex()
+                    .items_center()
+                    .justify_center()
+                    .w(rems(BADGE_W))
+                    .h(rems(BADGE_H))
+                    .rounded(rems(GAP_SM))
+                    .border_1()
+                    .text_xs();
+                match &type_badge_now {
+                    Some((icon, _name)) => {
+                        badge = badge
+                            .border_color(theme.colors.border)
+                            .text_color(theme.colors.muted_foreground)
+                            .child(icon.clone());
+                    }
+                    None => {
+                        badge = badge
+                            .border_color(theme.colors.warning)
+                            .text_color(theme.colors.warning)
+                            .child("?");
+                    }
+                }
+                badge
+            };
+            // Header（3 行，按建议布局）：
+            // ① 类型徽标 + 名称 + 作用域分段；② 备注 + 项目；③ 驱动 + URI。
             let header_ui = div()
                 .v_flex()
-                .gap(rems(0.5))
-                .pb(rems(0.625))
+                .gap(rems(GAP_MD))
+                .pb(rems(GAP_MD))
                 .border_b_1()
                 .border_color(theme.colors.border)
                 .child(
                     div()
                         .h_flex()
                         .items_center()
-                        .gap(rems(0.75))
+                        .gap(rems(GAP_LG))
                         .min_w(px(0.))
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child("名称"),
-                        )
-                        .child(Input::new(&name).w(rems(9.875)))
-                        // 数据库类型徽标（缩小的类型 UI）：类型已在左侧栏选定，此处复述；
-                        // 未选类型时以提示形式说明（驱动下拉选项为空，等待选类型）。
-                        .child({
-                            // 固定宽度：类型名长短（MySQL / PostgreSQL / SQL Server）不改变驱动下拉的位置；
-                            // 文本超宽省略（固定布局优先）。
-                            let mut badge = div()
-                                .flex_shrink_0()
-                                .h_flex()
-                                .items_center()
-                                .gap(rems(0.25))
-                                .w(rems(8.25))
-                                .overflow_hidden()
-                                .px(rems(0.375))
-                                .py(px(1.))
-                                .rounded(rems(0.375))
-                                .border_1()
-                                .text_xs();
-                            match &type_badge_now {
-                                Some((icon, name)) => {
-                                    badge = badge
-                                        .border_color(theme.colors.border)
-                                        .text_color(theme.colors.muted_foreground)
-                                        .child(icon.clone())
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w(px(0.))
-                                                .overflow_hidden()
-                                                .text_ellipsis()
-                                                .child(name.clone()),
-                                        );
-                                }
-                                None => {
-                                    badge = badge
-                                        .border_color(theme.colors.warning)
-                                        .text_color(theme.colors.warning)
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w(px(0.))
-                                                .overflow_hidden()
-                                                .text_ellipsis()
-                                                .child("请选数据库类型"),
-                                        );
-                                }
-                            }
-                            badge
-                        })
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child("驱动"),
-                        )
-                        .child(
-                            div()
-                                .w(rems(11.))
-                                .flex_shrink_0()
-                                .child(Select::new(&driver).placeholder(
-                                    if type_badge_now.is_some() {
-                                        "选择驱动实现…"
-                                    } else {
-                                        "先选择类型"
-                                    },
-                                )),
-                        )
-                        .child(div().flex_1())
-                        // 作用域：三态分段按钮（比下拉更紧凑、状态一眼可见；底层仍写 scope Select）。
-                        .child({
-                            let scope_now = if scope_sel.is_empty() {
-                                SCOPE_LABELS[0].to_string()
-                            } else {
-                                scope_sel.clone()
-                            };
-                            // 自绘三态分段控件：颜色完全走主题 token，
-                            // 不依赖 Button 变体的默认 token（RDS 主题未覆盖 button_secondary_foreground，
-                            // 会造成“文字不可见但可点击”）。
-                            let mut seg = div()
-                                .h_flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .gap(px(1.))
-                                .p(px(1.))
-                                .rounded(rems(0.375))
-                                .border_1()
-                                .border_color(theme.colors.border)
-                                .bg(theme.colors.background);
-                            for label in SCOPE_LABELS {
-                                let active = scope_now == label;
-                                let mut item = div()
-                                    .id(SharedString::from(format!("scope-{label}")))
-                                    .h_flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .h(rems(1.25))
-                                    .px(rems(0.5))
-                                    .rounded(rems(0.25))
-                                    .text_xs()
-                                    .cursor_pointer()
-                                    .child(label);
-                                item = if active {
-                                    item.bg(theme.colors.primary)
-                                        .text_color(theme.colors.primary_foreground)
-                                } else {
-                                    item.text_color(theme.colors.muted_foreground)
-                                        .hover(|s| s.bg(theme.colors.list_hover))
-                                };
-                                let item = item.on_click({
-                                    let scope = scope.clone();
-                                    let entity = entity.clone();
-                                    move |_, window, app| {
-                                        set_select_value(&scope, label, window, app);
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                });
-                                seg = seg.child(item);
-                            }
-                            seg
-                        }),
+                        .child(type_badge_ui)
+                        .child(header_label(theme, "名称"))
+                        .child(Input::new(&name).flex_1())
+                        .child(scope_seg),
                 )
                 .child(
                     div()
                         .h_flex()
                         .items_center()
-                        .gap(rems(0.75))
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child("备注"),
-                        )
+                        .gap(rems(GAP_LG))
+                        .min_w(px(0.))
+                        .child(header_label(theme, "备注"))
                         .child(Input::new(&remark).flex_1())
                         .child(project_ui),
                 )
@@ -1612,32 +1604,27 @@ impl ConnectionDialogState {
                     div()
                         .h_flex()
                         .items_center()
-                        .gap(rems(0.75))
+                        .gap(rems(GAP_LG))
+                        .min_w(px(0.))
+                        .child(header_label(theme, "驱动"))
                         .child(
                             div()
+                                .w(rems(DRIVER_W))
                                 .flex_shrink_0()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child("URI"),
+                                .child(if type_badge_now.is_some() {
+                                    Select::new(&driver)
+                                        .placeholder("选择驱动实现…")
+                                        .into_any_element()
+                                } else {
+                                    // 未选类型：仍以禁用下拉占位（保持控件形态与行高一致）。
+                                    Select::new(&driver)
+                                        .placeholder("先选类型")
+                                        .disabled(true)
+                                        .into_any_element()
+                                }),
                         )
+                        .child(header_label(theme, "URI"))
                         .child(Input::new(&url).flex_1()),
-                )
-                .child(
-                    // 作用域语义提示（原型 scope-hint 药丸）。
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap(rems(0.375))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.colors.info)
-                                .bg(theme.colors.info.opacity(0.08))
-                                .rounded(rems(0.375))
-                                .px(rems(0.5625))
-                                .py(rems(0.1875))
-                                .child(scope_from_label(&scope_sel).hint()),
-                        ),
                 );
 
             let result_ui = {

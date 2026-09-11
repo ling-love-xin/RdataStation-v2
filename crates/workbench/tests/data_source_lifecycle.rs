@@ -307,6 +307,29 @@ fn global_and_project_scope_writes_both_sides() {
     assert_eq!(proj.database.as_deref(), Some("gpdb"));
     assert!(proj.password_encrypted.is_some(), "项目侧凭据应加密");
 
+    // 对话框编辑回读路径（`get_with_project`）：项目侧连接必须带项目根才取得到。
+    let ds = rt
+        .block_on(service.get_with_project(&pid, Some(&path)))
+        .expect("get_with_project")
+        .expect("项目侧连接应可读回");
+    assert_eq!(ds.name, "gp_pg");
+    assert_eq!(ds.db_type, "postgres");
+    assert_eq!(ds.host.as_deref(), Some("127.0.0.1"));
+    assert_eq!(ds.port, Some(5432));
+    assert_eq!(ds.database.as_deref(), Some("gpdb"));
+    assert_eq!(ds.username.as_deref(), Some("carol"));
+    assert_eq!(
+        ds.scope,
+        ConnectionScope::GlobalAndProject,
+        "GP_ 应回读为全局+项目"
+    );
+    // 不带项目根：项目侧取不到（不报错，由 UI 降级）；全局 `get` 也查不到 GP_ 行。
+    assert!(rt
+        .block_on(service.get_with_project(&pid, None))
+        .unwrap()
+        .is_none());
+    assert!(rt.block_on(service.get(&pid)).unwrap().is_none());
+
     // 项目侧删除：路由到项目库，不误删全局定义。
     rt.block_on(service.delete(&pid, Some(&path)))
         .expect("delete project side");
@@ -316,6 +339,44 @@ fn global_and_project_scope_writes_both_sides() {
         store.get_connection(&pid).await
     });
     assert!(gone.expect("query").is_none(), "项目连接应已删除");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn project_scope_readback_requires_project_path() {
+    let dir = temp_dir("proj-readback");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let path = project_root.to_string_lossy().to_string();
+
+    let mut i = input("proj_read", "sqlite", "sqlite:///tmp/p.db");
+    i.scope = ConnectionScope::Project;
+    i.username = Some("reader".into());
+    i.tags = Some(r#"["dev"]"#.to_string());
+    let id = rt
+        .block_on(service.save(&i, Some(&path)))
+        .expect("save project only");
+    assert!(id.starts_with("P_"), "仅项目应返回 P_ 前缀：{id}");
+
+    // 编辑器回读：带项目根可读回，作用域按 ID 前缀回推为“仅项目”。
+    let ds = rt
+        .block_on(service.get_with_project(&id, Some(&path)))
+        .expect("get_with_project")
+        .expect("项目侧连接应可读回");
+    assert_eq!(ds.name, "proj_read");
+    assert_eq!(ds.db_type, "sqlite");
+    assert_eq!(ds.scope, ConnectionScope::Project);
+    assert_eq!(ds.tags.as_deref(), Some(r#"["dev"]"#));
+
+    // 不带项目根 / 走全局 `get`：取不到（不报错，UI 降级为空表单）。
+    assert!(rt
+        .block_on(service.get_with_project(&id, None))
+        .unwrap()
+        .is_none());
+    assert!(rt.block_on(service.get(&id)).unwrap().is_none());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

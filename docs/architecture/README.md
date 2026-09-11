@@ -12,6 +12,7 @@
 | `layout/layout-design.md` | 布局方案 | 五段结构 / 三模式交互 / Quick Open / 改动清单 / 实施步骤 |
 | `theme/theme-preview.html` | 配色预览 | 明暗色卡对比 |
 | `theme/theme-design.md` | 主题方案 | 明暗 token / 产品语义角色 / 落地方式 |
+| `theme/ui-constraints.md` | UI 约束规范 | 字体阶梯 / 图标三档 / 间距阶梯 / 控件规格 / 区域固定尺寸 / 按钮与自绘控件 / 交互态 / 检查清单与迁移计划 |
 | `settings/settings-crate-design.md` | settings crate | 动机 / 结构 / model / 持久化 / 迁移清单 |
 | `project/project-prototype-design.md` | 项目管理原型 | 一实例一项目 / CRUD（增删改查）/ 选择器（最近·全部·已移除）/ 项目菜单 / 新建对话框 / 项目设置 / 未保存拦截与项目锁逃生口 / 固定排序持久化 |
 | `project/project-prototype.html` | 项目管理原型（交互稿） | RDS Light/Dark 双主题：选择器、项目菜单、新建/设置/CRUD/拦截与锁弹层（可切换、可切主题） |

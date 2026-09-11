@@ -153,8 +153,31 @@ impl DataSourceService {
     }
 
     /// 按 ID 读取数据源。
+    ///
+    /// 只查全局库；项目侧连接（P_/GP_）请用 [`Self::get_with_project`]。
     pub async fn get(&self, conn_id: &str) -> Result<Option<DataSource>, CoreError> {
         Ok(self.list().await?.into_iter().find(|ds| ds.id == conn_id))
+    }
+
+    /// 按 ID 读取数据源（按 ID 前缀路由到全局库 / 项目库）。
+    ///
+    /// 项目侧连接（`P_` / `GP_` 快照）只存在项目库里，`get` 查不到；编辑回读 / 详情
+    /// 必须走本方法并带项目根，否则表现为“点编辑后字段全空”。未打开项目（无项目根）
+    /// 时项目侧返回 `None`（不报错，由 UI 降级）。
+    pub async fn get_with_project(
+        &self,
+        conn_id: &str,
+        project_path: Option<&str>,
+    ) -> Result<Option<DataSource>, CoreError> {
+        if id_prefix::is_project(conn_id) || id_prefix::is_snapshot(conn_id) {
+            let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
+                return Ok(None);
+            };
+            let store = open_project_store(path).await?;
+            let row = store.get_connection(conn_id).await?;
+            return Ok(row.map(map_project_connection_to_data_source));
+        }
+        self.get(conn_id).await
     }
 
     /// 保存新连接（全局：G_ 前缀；凭据由 engine 侧 AES-256-GCM 加密落库）。
@@ -622,6 +645,45 @@ fn map_info_to_data_source(
         is_active: info.is_active,
         created_at: info.created_at,
         updated_at: info.updated_at,
+    }
+}
+
+/// ProjectConnection → DataSource（作用域按 ID 前缀推导：P_ = 仅项目，GP_ = 全局+项目快照）。
+///
+/// 项目库不存 URL（只有 host/port/database），回读时由对话框用 `reconstruct_url` 重拼。
+fn map_project_connection_to_data_source(row: ProjectConnection) -> DataSource {
+    let scope = if id_prefix::is_snapshot(&row.id) {
+        ConnectionScope::GlobalAndProject
+    } else {
+        ConnectionScope::Project
+    };
+    DataSource {
+        id: row.id,
+        name: row.name,
+        db_type: row.driver,
+        host: row.host,
+        port: row.port.map(|p| p as u16),
+        database: row.database,
+        schema_name: row.schema_name,
+        username: row.username,
+        password_encrypted: row.password_encrypted,
+        description: row.description,
+        driver_id: row.driver_id,
+        environment_id: row.environment_id,
+        auth_config_id: row.auth_config_id,
+        auth_method: row.auth_method,
+        network_config_id: row.network_config_id,
+        driver_properties: row.driver_properties,
+        advanced_options: row.advanced_options,
+        options: row.options,
+        tags: row.tags,
+        use_duckdb_fed: row.use_duckdb_fed,
+        metadata_path: row.metadata_path,
+        server_version: row.server_version,
+        scope,
+        is_active: row.is_active,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     }
 }
 

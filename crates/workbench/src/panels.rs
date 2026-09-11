@@ -62,6 +62,8 @@ pub struct Shared {
     pub sql_for: Rc<RefCell<Option<String>>>,
     /// 编辑请求（侧边栏「编辑」→ EditorPanel 渲染时消费并打开对话框）。
     pub open_edit: Rc<RefCell<Option<String>>>,
+    /// 连接对话框的项目下拉选中「＋ 新增项目」→ 宿主打开项目新建入口（由 `WorkbenchView` 消费）。
+    pub project_new_request: Rc<Cell<bool>>,
     /// P0：当前项目会话（草稿箱根 / 项目作用域连接 / 标题栏项目名共用）。
     pub project: Rc<RefCell<Option<project::ui::OpenProject>>>,
     /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
@@ -102,6 +104,7 @@ impl Shared {
             nav_tables: Rc::new(RefCell::new(Vec::new())),
             sql_for: Rc::new(RefCell::new(None)),
             open_edit: Rc::new(RefCell::new(None)),
+            project_new_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_dirty: Rc::new(Cell::new(false)),
@@ -2112,6 +2115,8 @@ pub struct EditorPanel {
     last_executed: Rc<RefCell<String>>,
     /// SQL 输入订阅句柄（Change 事件 → 脏状态）。
     _sql_sub: Option<Subscription>,
+    /// 连接对话框项目下拉确认订阅（由 `ensure_dialog_subscription` 持有；句柄释放即取消）。
+    _dialog_sub: Option<Subscription>,
     // Phase B：右侧停靠属性面板状态。
     property: Rc<RefCell<PropertyState>>,
 }
@@ -2127,6 +2132,7 @@ impl EditorPanel {
             sql_history: Rc::new(RefCell::new(crate::services::query_history::load_history())),
             last_executed: Rc::new(RefCell::new(String::new())),
             _sql_sub: None,
+            _dialog_sub: None,
             property: Rc::new(RefCell::new(PropertyState::default())),
         }
     }
@@ -2142,6 +2148,11 @@ impl EditorPanel {
         cx.notify();
     }
 
+    /// 连接对话框状态（懒创建：首次 `request_*` 时建立；宿主 / 测试只读访问）。
+    pub fn dialog_state(&self) -> Option<Rc<connection_dialog::ConnectionDialogState>> {
+        self.dialog.clone()
+    }
+
     /// 打开「新建数据源连接」对话框（编辑区按钮入口）。
     ///
     /// 打开后必须通知宿主重绘：对话框层挂在 `WorkbenchView::render` 上，
@@ -2151,12 +2162,14 @@ impl EditorPanel {
             self.dialog = Some(Rc::new(connection_dialog::ConnectionDialogState::new(
                 window, cx,
             )));
+            // 新状态 → 旧订阅（若有）失去意义，重建。
+            self._dialog_sub = None;
         }
-        if let Some(dialog) = self.dialog.as_ref() {
-            // 重新打开：重置元数据标记，强制下一次渲染重新拉取引用 / 类型 / 驱动目录。
-            dialog.meta_refreshed.set(false);
-            dialog.open(cx.entity(), self.shared.clone(), None, window, cx);
-        }
+        let dialog = self.dialog.clone().expect("dialog initialized");
+        // 重新打开：重置元数据标记，强制下一次渲染重新拉取引用 / 类型 / 驱动目录。
+        dialog.meta_refreshed.set(false);
+        self.ensure_dialog_subscription(&dialog, window, cx);
+        dialog.open(cx.entity(), self.shared.clone(), None, window, cx);
         self.shared.notify_host(cx);
     }
 
@@ -2171,13 +2184,29 @@ impl EditorPanel {
             self.dialog = Some(Rc::new(connection_dialog::ConnectionDialogState::new(
                 window, cx,
             )));
+            self._dialog_sub = None;
         }
-        if let Some(dialog) = self.dialog.as_ref() {
-            // 重新打开：重置元数据标记，强制下一次渲染重新拉取（引用 / 类型 / 驱动目录）。
-            dialog.meta_refreshed.set(false);
-            dialog.open(cx.entity(), self.shared.clone(), Some(conn_id), window, cx);
-        }
+        let dialog = self.dialog.clone().expect("dialog initialized");
+        // 重新打开：重置元数据标记，强制下一次渲染重新拉取（引用 / 类型 / 驱动目录）。
+        dialog.meta_refreshed.set(false);
+        self.ensure_dialog_subscription(&dialog, window, cx);
+        dialog.open(cx.entity(), self.shared.clone(), Some(conn_id), window, cx);
         self.shared.notify_host(cx);
+    }
+
+    /// 确保项目下拉确认订阅已建立（只建一次；订阅句柄由本面板持有）。
+    ///
+    /// 订阅建立放在面板入口而非 `ConnectionDialogState::open`：`open` 在面板 `update`
+    /// 上下文内被调用，在那里再 `update` 面板会触发重入 panic。
+    fn ensure_dialog_subscription(
+        &mut self,
+        dialog: &Rc<connection_dialog::ConnectionDialogState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self._dialog_sub.is_none() {
+            self._dialog_sub = Some(dialog.subscribe_project_confirm(&self.shared, window, cx));
+        }
     }
 
     /// 右侧停靠属性面板（DBeaver 式：属性网格 + 子实体表格）。

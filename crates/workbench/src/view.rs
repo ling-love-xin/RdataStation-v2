@@ -882,6 +882,19 @@ impl Render for WorkbenchView {
         // 三模式权威同步点：Shared 状态 → Dock。
         self.apply_left_mode(window, cx);
         self.apply_right_mode(window, cx);
+        // 连接对话框项目下拉选「＋ 新增项目」→ 复用项目管理的新建入口
+        // （创建成功后新项目成为当前会话，对话框的项目栏在下一次渲染自动跟随）。
+        if self.shared.project_new_request.replace(false) {
+            let host = self.project_host().clone();
+            if let Some(inputs) = self.project_inputs.clone() {
+                // 有未保存草稿时先走既有未保存确认，不静默丢弃当前项目内容。
+                if host.editor.is_dirty() {
+                    project::ui::request_close(&host, window, cx);
+                } else {
+                    project::ui::open_create_dialog(&host, &inputs, window, cx);
+                }
+            }
+        }
 
         let area = self.area.clone().expect("workspace initialized");
         // edition 2024：`.then(|| ...)` 闭包会同时独占 `cx`/`self`，改为显式 if（也更符合

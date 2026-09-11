@@ -24,26 +24,32 @@ use rds_workbench::panels::{EditorPanel, Shared};
 /// 测试宿主：持有对话框状态与 `Entity<EditorPanel>`（`open` 的宿主参数），
 /// 并在渲染时挂上对话框层（`open_dialog` 依赖窗口根是 `Root`）。
 struct DialogHarness {
-    shared: Shared,
+    /// 面板持有 `Shared` 与对话框状态（`open` 走生产入口 `request_*`）。
     editor: Entity<EditorPanel>,
-    dialog: Rc<ConnectionDialogState>,
 }
 
 impl DialogHarness {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let shared = Shared::new();
-        let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
-        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        let _ = window;
         Self {
-            shared,
-            editor,
-            dialog,
+            editor: cx.new(|cx| EditorPanel::new(Shared::new(), cx)),
         }
     }
 
     fn open(&self, editing_id: Option<String>, window: &mut Window, cx: &mut gpui_kit::App) {
-        self.dialog
-            .open(self.editor.clone(), self.shared.clone(), editing_id, window, cx);
+        // 走生产入口（面板 request_*）：订阅建立等副作用与真实路径一致。
+        self.editor.update(cx, |editor, cx| match editing_id {
+            Some(id) => editor.request_edit_connection(id, window, cx),
+            None => editor.request_new_connection(window, cx),
+        });
+    }
+
+    /// 面板持有的对话框状态（首次 `open` 后才有）。
+    fn dialog(&self, cx: &gpui_kit::App) -> Rc<ConnectionDialogState> {
+        self.editor
+            .read(cx)
+            .dialog_state()
+            .expect("对话框状态已创建")
     }
 }
 
@@ -103,11 +109,11 @@ fn dialog_renders_each_tab_and_keeps_state_across_reopen(cx: &mut TestAppContext
         harness.update(cx, |h, cx| h.open(Some("G_conn_demo".to_string()), window, cx));
     });
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
-    let editing_id = cx.update(|_, cx| harness.read(cx).dialog.editing_id.borrow().clone());
+    let editing_id = cx.update(|_, cx| harness.read(cx).dialog(cx).editing_id.borrow().clone());
     assert_eq!(editing_id.as_deref(), Some("G_conn_demo"));
 
     // 逐个 Tab 渲染：0 常规 / 1 网络 / 2 能力 / 3 驱动属性 / 4 高级。
-    let tab = cx.update(|_, cx| harness.read(cx).dialog.active_tab.clone());
+    let tab = cx.update(|_, cx| harness.read(cx).dialog(cx).active_tab.clone());
     for i in 0..5 {
         tab.set(i);
         cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -121,7 +127,7 @@ fn dialog_renders_each_tab_and_keeps_state_across_reopen(cx: &mut TestAppContext
     });
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
     assert_eq!(tab.get(), 3, "重开后 Tab 选择应保留");
-    let editing_after = cx.update(|_, cx| harness.read(cx).dialog.editing_id.borrow().clone());
+    let editing_after = cx.update(|_, cx| harness.read(cx).dialog(cx).editing_id.borrow().clone());
     assert!(editing_after.is_none(), "新建入口应清空编辑 ID");
 }
 

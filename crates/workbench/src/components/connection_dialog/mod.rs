@@ -21,7 +21,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::select::{SearchableVec, Select, SelectState};
+use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Theme, WindowExt};
 use gpui_kit::*;
 
@@ -61,6 +61,12 @@ const CAPABILITIES: [(&str, bool); 6] = [
 const MAX_HOPS: usize = 4;
 /// 作用域选项（与 ConnectionScope 对齐；GP_ 快照引用共享）。
 const SCOPE_LABELS: [&str; 3] = ["仅全局", "仅项目", "全局+项目"];
+/// 作用域分段按钮显示文本（短版，节省 Header 宽度）→ 写库用上的全称标签。
+const SCOPE_SEG_LABELS: [(&str, &str); 3] = [
+    ("全局", SCOPE_LABELS[0]),
+    ("项目", SCOPE_LABELS[1]),
+    ("全局+项目", SCOPE_LABELS[2]),
+];
 /// SSL/TLS 模式（落库 advanced_options.ssl.mode；verify-ca/verify-full 需 CA）。
 const SSL_MODES: [&str; 5] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
 /// 策略落库键（与 v1 策略类型对齐，UI 标签见 POLICY_ITEMS）。
@@ -75,12 +81,14 @@ const POLICY_KEYS: [&str; 6] = [
 
 mod helpers;
 mod managers;
+mod project_picker;
 mod render;
 mod staging;
 mod state;
 
 pub(crate) use helpers::*;
 pub(crate) use managers::*;
+pub use project_picker::{PROJECT_NEW_LABEL, ProjectItem};
 pub(crate) use staging::saved_scope_short;
 pub use staging::{ConnectionDraft, Hop};
 
@@ -169,8 +177,12 @@ pub struct ConnectionDialogState {
     /// dialog builder 每次渲染都会执行，不加标记会反复建 runtime + 查库（hover 即卡顿）。
     /// 每次「打开对话框」入口会重置为 false（见 `EditorPanel::request_*`）。
     pub meta_refreshed: Rc<Cell<bool>>,
-    /// 项目名悬停态（悬停时显示完整项目路径气泡；置真后仅触发宿主级重绘，不再查库）。
-    pub project_hover: Rc<Cell<bool>>,
+    /// 项目选择下拉（项目名 + 路径左右结构；末项为「＋ 新增项目」）。
+    pub project_sel: Entity<SelectState<SearchableVec<ProjectItem>>>,
+    /// 下拉选项 → 路径映射（项目名, 路径）；「新增项目」项路径为空。
+    pub project_options: Rc<RefCell<Vec<(String, String)>>>,
+    /// 当前项目会话快照（名称, 路径）；由 `open()` 从 `Shared::project` 写入，供项目下拉使用。
+    pub session_project: Rc<RefCell<Option<(String, String)>>>,
 }
 
 fn state_inputs(

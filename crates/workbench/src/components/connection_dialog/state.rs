@@ -143,7 +143,16 @@ impl ConnectionDialogState {
             draft_cursor: Rc::new(Cell::new(0)),
             drafts_restored: Rc::new(Cell::new(false)),
             meta_refreshed: Rc::new(Cell::new(false)),
-            project_hover: Rc::new(Cell::new(false)),
+            project_sel: cx.new(|cx| {
+                SelectState::new(
+                    SearchableVec::new(Vec::<ProjectItem>::new()),
+                    None,
+                    window,
+                    cx,
+                )
+            }),
+            project_options: Rc::new(RefCell::new(Vec::new())),
+            session_project: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -205,6 +214,112 @@ impl ConnectionDialogState {
             });
             *self.groups.borrow_mut() = groups;
             self.sync_group_checks();
+        }
+        // 项目下拉选项：当前项目（若打开）+ 最近项目（名册）+ 「手动输入路径…」。
+        self.refresh_project_options(window, cx);
+    }
+
+    /// 刷新项目下拉选项（当前项目置顶 + 最近项目去重 + 「＋ 新增项目」）。
+    ///
+    /// 保存落库只认路径，因此选项与路径的映射存在 `project_options`（项目名 → 路径）。
+    pub(crate) fn refresh_project_options(&self, window: &mut Window, cx: &mut App) {
+        let mut options: Vec<(String, String)> = Vec::new();
+        let mut current_path: Option<String> = None;
+        if let Some((name, path)) = self.session_project.borrow().clone() {
+            options.push((name, path.clone()));
+            current_path = Some(path);
+        }
+        if let Some(list) = project::service::list_recent(8).ok() {
+            for item in list {
+                let path = item.path.to_string_lossy().to_string();
+                if Some(path.clone()) == current_path || options.iter().any(|(_, v)| *v == path) {
+                    continue;
+                }
+                options.push((item.name.clone(), path));
+            }
+        }
+        let items: Vec<ProjectItem> = options
+            .iter()
+            .map(|(name, path)| ProjectItem::project(name.clone(), path.clone()))
+            .collect();
+        let mut items = items;
+        items.push(ProjectItem::new_project());
+        *self.project_options.borrow_mut() = options;
+        self.project_sel
+            .update(cx, |s, cx| s.set_items(SearchableVec::new(items), window, cx));
+    }
+
+    /// 项目根路径 → 下拉选项 label（命中则返回；否则 None，清空选中）。
+    pub(crate) fn project_label_for(&self, path: &str) -> Option<String> {
+        let p = path.trim();
+        if p.is_empty() {
+            return None;
+        }
+        self.project_options
+            .borrow()
+            .iter()
+            .find(|(_, value)| value == p)
+            .map(|(label, _)| label.clone())
+    }
+
+    /// 设置项目下拉选中值（空 → 清空）。
+    pub(crate) fn set_project_value(&self, label: &str, window: &mut Window, cx: &mut App) {
+        let v = SharedString::from(label.trim().to_string());
+        self.project_sel.update(cx, |s, cx| {
+            if v.is_empty() {
+                s.set_selected_index(None, window, cx);
+            } else {
+                s.set_selected_value(&v, window, cx);
+            }
+        });
+    }
+
+    /// 项目下拉确认处理（`SelectEvent::Confirm` 的落点；独立成函数便于测试）：
+    ///
+    /// - 「＋ 新增项目」→ 置位 `Shared::project_new_request`（宿主开新建入口）并清空选中；
+    /// - 普通项目 → 写回 `project_path`（保存 / 作用域预检统一读路径输入）。
+    ///
+    /// 返回 `true` 表示本次确认请求了「新增项目」。
+    pub fn handle_project_confirm(
+        &self,
+        value: Option<&SharedString>,
+        shared: &Shared,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let Some(value) = value else {
+            return false;
+        };
+        let label = value.to_string();
+        if label == PROJECT_NEW_LABEL {
+            shared.project_new_request.set(true);
+            self.set_project_value("", window, cx);
+            return true;
+        }
+        let path = self
+            .project_options
+            .borrow()
+            .iter()
+            .find(|(l, _)| l == &label)
+            .map(|(_, p)| p.clone())
+            .unwrap_or_default();
+        if !path.is_empty() {
+            self.project_path
+                .update(cx, |s, cx| s.set_value(path, window, cx));
+        }
+        false
+    }
+
+    /// 按项目路径同步项目下拉选中（命中 → 选中；未命中 → 清空）。
+    pub(crate) fn sync_project_selection(
+        &self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        match self.project_label_for(path) {
+            Some(label) => self.set_project_value(&label, window, cx),
+            None => self.set_project_value("", window, cx),
         }
     }
 
@@ -313,7 +428,15 @@ impl ConnectionDialogState {
     }
 
     /// 编辑回读：按连接 ID 预填全部 Tab 字段（协议链 / 驱动属性 / SSL / 策略覆盖 / 作用域 / 缓存路径）。
-    pub(crate) fn load_for_edit(&self, id: &str, window: &mut Window, cx: &mut App) {
+    ///
+    /// `project_root`：项目侧（P_/GP_）连接只存在项目库里，回读必须带上项目根。
+    pub(crate) fn load_for_edit(
+        &self,
+        id: &str,
+        project_root: Option<&str>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(_) => return,
@@ -321,7 +444,7 @@ impl ConnectionDialogState {
         let Ok(service) = DataSourceService::global() else {
             return;
         };
-        let Ok(Some(ds)) = rt.block_on(service.get(id)) else {
+        let Ok(Some(ds)) = rt.block_on(service.get_with_project(id, project_root)) else {
             return;
         };
 
@@ -364,15 +487,8 @@ impl ConnectionDialogState {
             s.set_value(tags_from_json(ds.tags.as_deref()), window, cx)
         });
         {
-            let root = self.project_path.read(cx).value().trim().to_string();
-            let ids = service.groups_of(
-                id,
-                if root.is_empty() {
-                    None
-                } else {
-                    Some(root.as_str())
-                },
-            );
+            // 分组是项目级数据：用回读时传入的项目根（而不是尚未预填的路径输入）。
+            let ids = service.groups_of(id, project_root.filter(|p| !p.trim().is_empty()));
             let mut checks = self.group_checks.borrow_mut();
             for (gid, _name, checked) in checks.iter_mut() {
                 *checked = ids.iter().any(|x| x == gid);

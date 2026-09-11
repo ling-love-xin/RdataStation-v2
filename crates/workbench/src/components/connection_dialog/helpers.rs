@@ -24,6 +24,44 @@ pub(crate) fn set_select_value(
     });
 }
 
+// ===== UI 尺寸约束（详见 docs/architecture/theme/ui-constraints.md）=====
+//
+// 颜色已有硬约束（一律 `theme.colors` token，禁裸色值）；尺寸此前靠原型约定，
+// 这里把对话框用到的一组尺度固化为常量：**新代码一律引用常量**，存量代码逐步迁移。
+
+/// 间距阶梯（rem）：xs < sm < md < lg（禁止随手值，如 0.625 / 0.4375）。
+pub(crate) const GAP_XS: f32 = 0.25;
+pub(crate) const GAP_SM: f32 = 0.375;
+pub(crate) const GAP_MD: f32 = 0.5;
+pub(crate) const GAP_LG: f32 = 0.75;
+
+/// 行高与控件尺寸（rem）。
+pub(crate) const ROW_H: f32 = 1.75;
+/// Header 标签列宽（rem）：刚好容纳两字标签（名称 / 备注 / 驱动 / URI），
+/// 不让标签与控件之间留下过大的空白（真机反馈：间距过大）。
+pub(crate) const LABEL_W: f32 = 1.75;
+/// 类型徽标（仅图标）。
+pub(crate) const BADGE_W: f32 = 1.75;
+pub(crate) const BADGE_H: f32 = 1.5;
+/// 作用域分段项高。
+pub(crate) const SEG_ITEM_H: f32 = 1.25;
+/// Header 定宽控件：驱动下拉 / 项目栏。
+pub(crate) const DRIVER_W: f32 = 11.0;
+pub(crate) const PROJECT_W: f32 = 17.0;
+/// 区域固定高度：Tab 内容 / 暂存列表（超出内部滚动）。
+pub(crate) const TAB_BODY_H: f32 = 20.5;
+pub(crate) const STAGING_H: f32 = 7.5;
+
+/// Header 统一标签列（固定宽度，保证各行标签左对齐，减少视觉磕绊）。
+pub(crate) fn header_label(theme: &Theme, text: &'static str) -> Div {
+    div()
+        .w(rems(LABEL_W))
+        .flex_shrink_0()
+        .text_xs()
+        .text_color(theme.colors.muted_foreground)
+        .child(text)
+}
+
 // ===== 标签文本 ↔ JSON（UI 逗号分隔 ⇄ 落库 / 回读）=====
 
 /// 标签文本 → JSON 数组（支持中英文逗号；空列表返回 None，避免写入空串）。
