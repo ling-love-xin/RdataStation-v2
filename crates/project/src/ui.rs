@@ -404,6 +404,62 @@ fn dialog_error_line(theme: &gpui_kit::component::Theme, message: &str) -> Div {
         .child(message.to_string())
 }
 
+/// 打开系统目录选择器，把选中的目录回填到输入框（取消则保持原值）。
+///
+/// `App::prompt_for_paths` 通过 oneshot 异步回传结果；这里用 `Window::spawn` 在窗口上下文
+/// 等待，再用 `AsyncWindowContext::update` 取得 `&mut Window` 回填（`set_value` 需要窗口）。
+fn pick_directory(target: Entity<InputState>, window: &mut Window, cx: &mut App) {
+    let receiver = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("选择目录".into()),
+    });
+    window
+        .spawn(cx, async move |cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let value = path.to_string_lossy().to_string();
+            let _ = cx.update(|window, cx| {
+                target.update(cx, |state, cx| state.set_value(value, window, cx));
+            });
+        })
+        .detach();
+}
+
+/// 目录输入行：文本框 + 「浏览…」按钮（系统目录选择器）。
+fn directory_row(target: &Entity<InputState>, browse_id: &'static str) -> Div {
+    let picker_target = target.clone();
+    div()
+        .h_flex()
+        .gap_2()
+        .child(div().flex_1().child(Input::new(target)))
+        .child(
+            Button::new(browse_id)
+                .secondary()
+                .label("浏览…")
+                .on_click(move |_, window, cx| pick_directory(picker_target.clone(), window, cx)),
+        )
+}
+
+/// 新建项目的目标路径预览（原型要求展示 `位置/名称`）。
+fn target_preview(theme: &gpui_kit::component::Theme, location: &str, name: &str) -> Div {
+    let (location, name) = (location.trim(), name.trim());
+    let text = if location.is_empty() || name.is_empty() {
+        "目标：填写位置与名称后在此预览".to_string()
+    } else {
+        format!("目标：{}", PathBuf::from(location).join(name).display())
+    };
+    div()
+        .text_xs()
+        .text_color(theme.colors.muted_foreground)
+        .child(text)
+}
+
 /// 对话框底部按钮组（右对齐）：取消 + 主操作。
 ///
 /// 关闭时机由回调自行决定（`window.close_dialog`），不使用 `Dialog::on_ok` 的返回值——
@@ -486,6 +542,8 @@ pub fn open_create_dialog(
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
         let error = host.state.borrow().dialog_error.clone();
+        let location = inputs.create_location.read(cx).value().to_string();
+        let name = inputs.create_name.read(cx).value().to_string();
         dialog
             .title("新建项目")
             .child(
@@ -495,9 +553,16 @@ pub fn open_create_dialog(
                     .child(label(theme, "项目名称 *"))
                     .child(Input::new(&inputs.create_name))
                     .child(label(theme, "位置 *"))
-                    .child(Input::new(&inputs.create_location))
+                    .child(directory_row(&inputs.create_location, "create-browse"))
+                    .child(target_preview(theme, &location, &name))
                     .child(label(theme, "描述（可选）"))
                     .child(Input::new(&inputs.create_desc))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child("当前版本仅支持本地目录；DuckLake 远程项目待后续版本。"),
+                    )
                     .when_some(error, |d, e| d.child(dialog_error_line(theme, &e))),
             )
             .footer(dialog_footer(
@@ -554,7 +619,7 @@ pub fn open_folder_dialog(
                     .v_flex()
                     .gap_2()
                     .child(label(theme, "项目目录（含 .RSmeta）"))
-                    .child(Input::new(&inputs.create_location))
+                    .child(directory_row(&inputs.create_location, "of-browse"))
                     .when_some(error, |d, e| d.child(dialog_error_line(theme, &e))),
             )
             .footer(dialog_footer(
@@ -1011,7 +1076,7 @@ pub fn open_relocate_dialog(
                             .child(format!("项目「{name}」原路径已失效，请指定新目录。")),
                     )
                     .child(label(theme, "新的项目目录（含 .RSmeta）"))
-                    .child(Input::new(&inputs.create_location))
+                    .child(directory_row(&inputs.create_location, "rl-browse"))
                     .when_some(error, |d, e| d.child(dialog_error_line(theme, &e))),
             )
             .footer(dialog_footer(

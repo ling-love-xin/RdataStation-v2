@@ -24,8 +24,8 @@ use gpui_kit::{
 use super::{
     OpenProject, PickerTab, ProjectEditorBridge, ProjectInputs, ProjectSort, ProjectUiHost,
     ProjectUiNotifier, ProjectUiState, confirm_delete, cycle_sort, more_menu, open_create_dialog,
-    open_delete_dialog, open_lock_busy_dialog, project_card, render_menu_content, render_picker,
-    render_settings, request_close, request_open, submit_create,
+    open_delete_dialog, open_lock_busy_dialog, pick_directory, project_card, render_menu_content,
+    render_picker, render_settings, request_close, request_open, submit_create,
 };
 use crate::service::ProjectSummary;
 
@@ -331,4 +331,44 @@ fn cards_and_menus_construct_for_all_states(cx: &mut TestAppContext) {
             let _ = (card, menu);
         }
     });
+}
+
+#[gpui_kit::test]
+fn browse_fills_location_from_system_picker(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let picked = temp_root("browse-pick");
+    let expected = picked.to_string_lossy().to_string();
+    // 模拟系统目录选择器：只允许选目录、单选，返回一个路径。
+    cx.simulate_path_prompt_response(move |options| {
+        assert!(options.directories && !options.files && !options.multiple);
+        Some(vec![picked.clone()])
+    });
+
+    let (host, inputs, cx) = open_harness(cx, host);
+    cx.update(|window, cx| open_create_dialog(&host, &inputs, window, cx));
+    cx.update(|window, cx| pick_directory(inputs.create_location.clone(), window, cx));
+    cx.run_until_parked();
+
+    let value = cx.update(|_, cx| inputs.create_location.read(cx).value().to_string());
+    assert_eq!(value, expected, "选中的目录应回填到位置输入框");
+}
+
+#[gpui_kit::test]
+fn browse_cancel_keeps_location(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    // 取消（返回 `None`）时不改输入框。
+    cx.simulate_path_prompt_response(|_| None);
+
+    let (host, inputs, cx) = open_harness(cx, host);
+    cx.update(|window, cx| open_create_dialog(&host, &inputs, window, cx));
+    let before = cx.update(|_, cx| inputs.create_location.read(cx).value().to_string());
+    cx.update(|window, cx| pick_directory(inputs.create_location.clone(), window, cx));
+    cx.run_until_parked();
+    let after = cx.update(|_, cx| inputs.create_location.read(cx).value().to_string());
+
+    assert_eq!(before, after);
 }

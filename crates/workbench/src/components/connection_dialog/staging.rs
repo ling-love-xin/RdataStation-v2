@@ -122,6 +122,8 @@ pub struct ConnectionDraft {
     /// 策略覆盖勾选（存 `environment_policies.policy_type`；旧草稿的布尔数组解析失败即忽略；
     /// 数据库列名仍为 `sec_overrides_json`，保留以兼容既有迁移）。
     pub sec_overrides: Vec<String>,
+    /// 认证方法（`drivers.supported_auth_types` 中的键；空 = 未选）。
+    pub auth_method: String,
     pub auth_ref: Option<String>,
     pub network_ref: Option<String>,
     pub env: Option<String>,
@@ -129,7 +131,7 @@ pub struct ConnectionDraft {
 
 impl ConnectionDraft {
     /// 新建空草稿（默认值与对话框初始状态一致）。
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             duckdb_fed: true,
             sec_overrides: Vec::new(),
@@ -188,6 +190,7 @@ impl ConnectionDialogState {
             active_tab: d.active_tab as i64,
             hops_json: serde_json::to_string(&d.hops).unwrap_or_else(|_| "[]".into()),
             props_json: serde_json::to_string(&d.props).unwrap_or_else(|_| "[]".into()),
+            auth_method: d.auth_method.clone(),
             sec_overrides_json: serde_json::to_string(&d.sec_overrides)
                 .unwrap_or_else(|_| "[]".into()),
             auth_ref: d.auth_ref.clone(),
@@ -221,6 +224,7 @@ impl ConnectionDialogState {
             active_tab: r.active_tab.max(0) as usize,
             hops: serde_json::from_str(&r.hops_json).unwrap_or_default(),
             props: serde_json::from_str(&r.props_json).unwrap_or_default(),
+            auth_method: r.auth_method.clone(),
             sec_overrides: serde_json::from_str(&r.sec_overrides_json).unwrap_or_default(),
             auth_ref: r.auth_ref.clone(),
             network_ref: r.network_ref.clone(),
@@ -294,6 +298,13 @@ impl ConnectionDialogState {
             hops: self.hops.borrow().clone(),
             props: self.props.borrow().clone(),
             sec_overrides: self.policy_override_keys.borrow().clone(),
+            auth_method: self
+                .auth_method
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
             auth_ref: self
                 .auth_ref
                 .read(cx)
@@ -411,6 +422,9 @@ impl ConnectionDialogState {
         *self.hops.borrow_mut() = d.hops;
         *self.props.borrow_mut() = d.props;
         *self.policy_override_keys.borrow_mut() = d.sec_overrides;
+        set_select_value(&self.auth_method, d.auth_method.as_str(), window, cx);
+        // 认证方法选项依赖驱动：切条目后重新按驱动解析（避免显示旧驱动的选项）。
+        *self.auth_method_loaded_for.borrow_mut() = None;
         // 切到新环境后策略清单需重查（否则勾选项与环境的真实策略不一致）。
         *self.env_policies_loaded_for.borrow_mut() = None;
     }
@@ -659,48 +673,72 @@ impl ConnectionDialogState {
         self.apply_draft(0, window, cx);
     }
 
-    /// 打开对话框时合并已保存连接为列表条目（仅全局列表；P_/GP_ 编辑入口在侧边栏）。
-    pub(crate) fn staging_merge_saved(&self) {
-        let Ok(service) = DataSourceService::global() else {
+    /// 打开对话框时合并**当前作用域可见**的已保存连接为列表条目（全局 + 项目侧 P_/GP_，
+    /// 与导航栏同一加载器），并清理指向已删除连接的**幻影条目**（`saved_id` 已不在可见集合内）。
+    ///
+    /// 未保存草稿永不被清理；清理后列表若为空则补一条空草稿（保持“列表恒非空”）。
+    /// 打开对话框时合并已保存连接（见实现注释）；集成测试直接调用以验证清理逻辑。
+    pub fn staging_merge_saved(&self) {
+        // 全局库未初始化（测试 / 降级启动）时不合并：`load_connections_for_scope` 在缺少
+        // 单例时回退到“默认数据目录”，会让测试碰到用户真实库——宁可少一个便利功能。
+        if engine::migration::get_global_db_manager().is_none() {
+            tracing::debug!(
+                target: "connection_dialog",
+                "全局库未初始化：暂存列表不合并已保存连接"
+            );
             return;
-        };
-        let Ok(rt) = tokio::runtime::Runtime::new() else {
-            return;
-        };
-        if let Ok(list) = rt.block_on(service.list()) {
-            let drivers = self.drivers.borrow().clone();
-            let mut drafts = self.drafts.borrow_mut();
-            for ds in list {
-                if !drafts
-                    .iter()
-                    .any(|d| d.saved_id.as_deref() == Some(ds.id.as_str()))
-                {
-                    // 记录的 db_type / driver_id 均为驱动 id：反查得到类型与实现短名，
-                    // 使条目能显示缩小的数据库类型 UI（且选中时下拉预填正确）。
-                    let did = if ds.db_type.is_empty() {
-                        ds.driver_id.clone().unwrap_or_default()
-                    } else {
-                        ds.db_type.clone()
-                    };
-                    let (type_id, driver_id, driver_name) = match find_driver_by_value(&drivers, &did)
-                    {
-                        Some(d) => (
-                            d.type_id.clone(),
-                            d.id.clone(),
-                            driver_short_name(&d.name),
-                        ),
-                        None => (String::new(), did.clone(), String::new()),
-                    };
-                    drafts.push(ConnectionDraft {
-                        name: ds.name.clone(),
-                        saved_id: Some(ds.id.clone()),
-                        type_id,
-                        driver_id,
-                        driver_name,
-                        ..ConnectionDraft::empty()
-                    });
-                }
-            }
         }
+        let drivers = self.drivers.borrow().clone();
+        let project_root = self
+            .session_project
+            .borrow()
+            .as_ref()
+            .map(|(_, p)| std::path::PathBuf::from(p));
+        let (items, notice) =
+            crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
+        if let Some(n) = &notice {
+            tracing::warn!(target: "connection_dialog", error = %n, "暂存列表加载已保存连接降级");
+        }
+
+        let mut drafts = self.drafts.borrow_mut();
+        // 幻影条目清理：只删「已保存」条目（未保存草稿是用户输入，不动）。
+        drafts.retain(|d| match d.saved_id.as_deref() {
+            None => true,
+            Some(id) => items.iter().any(|i| i.id == id),
+        });
+        for it in items {
+            if drafts
+                .iter()
+                .any(|d| d.saved_id.as_deref() == Some(it.id.as_str()))
+            {
+                continue;
+            }
+            // 记录的 driver 即驱动 id：反查得到类型与实现短名，使条目能显示缩小的
+            // 数据库类型 UI（且选中时下拉预填正确）。
+            let did = it.driver.clone();
+            let (type_id, driver_id, driver_name) = match find_driver_by_value(&drivers, &did) {
+                Some(d) => (
+                    d.type_id.clone(),
+                    d.id.clone(),
+                    driver_short_name(&d.name),
+                ),
+                None => (String::new(), did.clone(), String::new()),
+            };
+            drafts.push(ConnectionDraft {
+                name: it.name.clone(),
+                saved_id: Some(it.id.clone()),
+                type_id,
+                driver_id,
+                driver_name,
+                ..ConnectionDraft::empty()
+            });
+        }
+        if drafts.is_empty() {
+            drafts.push(ConnectionDraft::empty());
+        }
+        // 光标越界保护（清理后条目可能变少）。
+        let cursor = self.draft_cursor.get().min(drafts.len() - 1);
+        drop(drafts);
+        self.draft_cursor.set(cursor);
     }
 }

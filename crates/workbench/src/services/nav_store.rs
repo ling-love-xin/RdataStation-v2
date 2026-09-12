@@ -1,6 +1,6 @@
 //! 数据源导航视图状态持久化（Phase B）：展开 / 选中 / 过滤。
 //!
-//! - 项目级 → `{project}/.RSMETA/project.db`
+//! - 项目级 → `{project}/.RSmeta/project.db`
 //! - 全局级 → `{system}/global.db`
 //!
 //! 仅负责**视图状态**（`navigator_state`）；连接的组织元数据（标签 / 分组）
@@ -35,9 +35,9 @@ impl NavStore {
         Self::open(path, false)
     }
 
-    /// 项目库（`{project}/.RSMETA/project.db`）。
+    /// 项目库（`{project}/.RSmeta/project.db`）。
     pub fn open_project(root: &Path) -> Result<Self, String> {
-        Self::open(root.join(".RSMETA").join("project.db"), true)
+        Self::open(root.join(".RSmeta").join("project.db"), true)
     }
 
     fn ensure_tables(&self, _is_project: bool) -> Result<(), String> {

@@ -18,7 +18,7 @@ use engine::persistence::global_db::GlobalDatabaseManager;
 use gpui_kit::{
     IntoElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
-use rds_workbench::components::connection_dialog::ConnectionDialogState;
+use rds_workbench::components::connection_dialog::{ConnectionDialogState, ConnectionDraft};
 use rds_workbench::services::data_source_service::DataSourceService;
 
 static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -110,12 +110,57 @@ fn two_connections_saved_in_a_row(cx: &mut TestAppContext) {
     assert!(names.contains(&"conn_two"), "{names:?}");
 }
 
+/// 暂存列表合并：作用域可见的已保存连接入列 + 指向已删连接的幻影条目被清理。
+#[gpui_kit::test]
+fn staging_merge_prunes_phantom_and_keeps_drafts(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let _ = base_dir();
+    let (_, cx) = cx.add_window_view(|_, _cx| Host);
+    let cx: &mut VisualTestContext = cx;
+
+    let service = DataSourceService::global().expect("单例可用");
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
+
+    // 库里一条真实连接；列表中再塞一条“已删除连接的幻影条目”。
+    let keep = rt
+        .block_on(service.save(&sqlite_input("merge_keep", "/tmp/keep.db"), None))
+        .expect("save keep");
+    cx.update(|_, _cx| {
+        let mut drafts = dialog.drafts.borrow_mut();
+        drafts[0].name = "未保存草稿".to_string();
+        drafts.push(ConnectionDraft {
+            name: "已删连接".to_string(),
+            saved_id: Some("G_conn_gone".to_string()),
+            ..ConnectionDraft::empty()
+        });
+    });
+
+    cx.update(|_, _cx| dialog.staging_merge_saved());
+
+    let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
+    let names: Vec<&str> = drafts.iter().map(|d| d.name.as_str()).collect();
+    assert!(
+        names.contains(&"未保存草稿"),
+        "未保存草稿不得被清理：{names:?}"
+    );
+    assert!(!names.contains(&"已删连接"), "幻影条目应被清理：{names:?}");
+    assert!(
+        drafts
+            .iter()
+            .any(|d| d.saved_id.as_deref() == Some(keep.as_str())),
+        "可见的已保存连接应在列表中：{names:?}"
+    );
+    let cursor = cx.update(|_, _cx| dialog.draft_cursor.get());
+    assert!(cursor < drafts.len(), "光标不应越界：{cursor} / {}", drafts.len());
+}
+
 /// 分组同步（替换语义）经服务单例走进真实项目库。
 #[test]
 fn groups_sync_through_service() {
     let base = base_dir();
     let project_root = base.join("proj-groups");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
     let root_str = project_root.to_string_lossy().to_string();
 
     let service = DataSourceService::global().expect("单例可用");

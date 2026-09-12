@@ -87,6 +87,18 @@ fn driver(id: &str, type_id: &str, name: &str, enabled: bool) -> Driver {
     }
 }
 
+fn driver_with_auth(
+    id: &str,
+    type_id: &str,
+    name: &str,
+    supported_auth_types: Option<&str>,
+) -> Driver {
+    Driver {
+        supported_auth_types: supported_auth_types.map(|s| s.to_string()),
+        ..driver(id, type_id, name, true)
+    }
+}
+
 fn ds_type(id: &str, name: &str, icon: &str) -> DataSourceType {
     DataSourceType {
         id: id.into(),
@@ -220,6 +232,70 @@ fn type_without_enabled_driver_is_refused(cx: &mut TestAppContext) {
         cx.update(|_, _cx| dialog.selected_type.borrow().clone()),
         "mysql"
     );
+
+    cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
+}
+
+#[gpui_kit::test]
+fn auth_method_follows_driver_declaration(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    let dialog = cx.update(|window, cx| {
+        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        *dialog.types.borrow_mut() = vec![ds_type("mysql", "MySQL", "🐬")];
+        // 两个驱动声明不同的认证方法：sqlx 只有 password；Official 额外声明 ssl。
+        *dialog.drivers.borrow_mut() = vec![
+            driver_with_auth("mysql", "mysql", "MySQL (sqlx)", Some(r#"["password"]"#)),
+            driver_with_auth(
+                "mysql_native",
+                "mysql",
+                "MySQL (Official)",
+                Some(r#"["password","ssl"]"#),
+            ),
+        ];
+        dialog
+    });
+
+    // 选类型 → 默认驱动 sqlx → 认证方法默认选中声明的第一个。
+    cx.update(|window, cx| dialog.select_type("mysql", window, cx));
+    let method = cx.update(|_, cx| {
+        dialog
+            .auth_method
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+    });
+    assert_eq!(method, "password", "应默认选中驱动声明的第一个方法");
+
+    // 换驱动 → 选项与方法随驱动声明重建（Official 声明含 ssl，保持已选的 password）。
+    cx.update(|window, cx| {
+        dialog.set_driver_by_value("mysql", "mysql_native", window, cx);
+    });
+    let method = cx.update(|_, cx| {
+        dialog
+            .auth_method
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+    });
+    assert_eq!(method, "password", "已选方法仍在选项内时应保留");
+
+    // 草稿快照应携带认证方法（切条目 / 重启后不丢）。
+    cx.update(|window, cx| {
+        dialog
+            .name
+            .update(cx, |s, cx| s.set_value("认证方法", window, cx));
+        dialog
+            .url
+            .update(cx, |s, cx| s.set_value("mysql://h:3306/d", window, cx));
+    });
+    cx.update(|window, cx| dialog.staging_add(window, cx));
+    let draft = cx.update(|_, _cx| dialog.drafts.borrow()[0].clone());
+    assert_eq!(draft.auth_method, "password", "快照应带认证方法");
 
     cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
 }

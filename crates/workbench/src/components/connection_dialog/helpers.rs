@@ -168,6 +168,18 @@ pub(crate) fn capability_rows(declared: &[String]) -> Vec<(String, bool)> {
     rows
 }
 
+/// 解析驱动声明的认证方法（`drivers.supported_auth_types`，JSON 数组）。
+///
+/// UI 的「认证方法」下拉即以此为准（数据源：驱动表）；驱动未声明 → 空列表（下拉置灰）。
+pub(crate) fn driver_auth_types(json: Option<&str>) -> Vec<String> {
+    json.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// 环境策略类型 → 中文标签（未收录的类型原样展示）。
 pub(crate) fn policy_type_label(policy_type: &str) -> String {
     match policy_type {
@@ -406,9 +418,9 @@ pub(crate) fn scope_from_label(l: &str) -> ConnectionScope {
 mod tests {
     // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::{
-        capability_rows, driver_capabilities, driver_short_name, enabled_drivers_of_type,
-        find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
-        tags_from_json, tags_to_json, type_badge, type_has_driver,
+        capability_rows, driver_auth_types, driver_capabilities, driver_short_name,
+        enabled_drivers_of_type, find_driver_by_value, policy_summary, policy_type_from_label,
+        policy_type_label, tags_from_json, tags_to_json, type_badge, type_has_driver,
     };
     use engine::persistence::driver_store::{DataSourceType, Driver};
 
@@ -556,6 +568,18 @@ mod tests {
         assert!(s.contains("rowLimit=1000"), "{s}");
         assert!(!s.contains("nested"), "对象值不应进摘要：{s}");
         assert_eq!(s.matches('=').count(), 3, "最多 3 项：{s}");
+    }
+
+    #[test]
+    fn auth_types_come_from_driver_declaration() {
+        // 数据源：drivers.supported_auth_types（JSON 数组）；非法 / 空 → 空列表（UI 置灰）。
+        assert_eq!(driver_auth_types(None).len(), 0);
+        assert_eq!(driver_auth_types(Some("not-json")).len(), 0);
+        assert_eq!(driver_auth_types(Some("[]")).len(), 0);
+        assert_eq!(
+            driver_auth_types(Some(r#"["password","ssl"]"#)),
+            vec!["password".to_string(), "ssl".to_string()]
+        );
     }
 
     #[test]

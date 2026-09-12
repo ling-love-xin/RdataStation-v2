@@ -44,10 +44,32 @@ fn sqlite_input(name: &str, path: &str) -> DataSourceSaveInput {
 }
 
 #[test]
+fn loader_degrades_on_non_project_root_without_creating_dirs() {
+    let base = base_dir();
+    let bogus = base.join("not-a-project");
+    std::fs::create_dir_all(&bogus).expect("mkdir bogus");
+
+    // 非项目根：不给项目侧连接，也不能在磁盘上造出 `.RSmeta` 骨架（脏数据）。
+    let (items, notice) = load_connections_for_scope(Some(&bogus));
+    assert!(notice.is_some(), "非项目根应给出降级提示");
+    assert!(
+        !items.iter().any(|i| i.id.starts_with('P')),
+        "不应混入项目侧条目"
+    );
+    assert!(
+        !bogus.join(".RSmeta").exists(),
+        "加载器不得创建项目骨架：{}",
+        bogus.display()
+    );
+
+    let _ = std::fs::remove_dir_all(&bogus);
+}
+
+#[test]
 fn scope_visibility_and_runtime_state() {
     let base = base_dir();
     let project_root = base.join("proj");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
 
     let service = DataSourceService::global()
         .expect("单例可用")

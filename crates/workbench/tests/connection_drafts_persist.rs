@@ -95,6 +95,12 @@ fn drafts_survive_restart_and_drop_password(cx: &mut TestAppContext) {
         d1.remark
             .update(cx, |s, cx| s.set_value("备注B", window, cx));
     });
+    // 第 0 条带认证方法（选项来自驱动声明；验证新列随草稿持久化）。
+    cx.update(|window, cx| {
+        d1.drafts.borrow_mut()[0].auth_method = "password".to_string();
+        let _ = window;
+        let _ = cx;
+    });
     // 关闭对话框：写回当前表单 + 落库。
     cx.update(|_window, cx| d1.staging_flush(cx));
     cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
@@ -109,6 +115,10 @@ fn drafts_survive_restart_and_drop_password(cx: &mut TestAppContext) {
     assert_eq!(drafts[1].name, "草稿B");
     assert_eq!(drafts[0].url, "mysql://h:3306/a");
     assert_eq!(drafts[1].remark, "备注B");
+    assert_eq!(
+        drafts[0].auth_method, "password",
+        "认证方法应随草稿持久化（新列 auth_method）"
+    );
     assert!(
         drafts.iter().all(|d| d.pass.is_empty()),
         "密码不落库：恢复条目不应带密码"

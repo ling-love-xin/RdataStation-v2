@@ -389,10 +389,11 @@ button{font-family:inherit;}
               <button class="link-btn" id="manageAuthBtn">管理</button>
             </div>
             <div class="form-grid">
-              <label>认证方法</label><span class="val2">password ▾</span>
+              <label>认证方法</label><span class="val2" id="authMethodSel">password ▾</span>
               <label>用户名</label><span class="val2">root</span>
               <label>密码</label><span class="val2 lock">••••••</span>
             </div>
+            <div class="org-hint">认证方法来自驱动声明（drivers.supported_auth_types）</div>
             <div class="auth-saved">
               引用已保存配置 <span class="sel" id="pickAuth">MySQL-root-prod
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
@@ -650,14 +651,15 @@ button{font-family:inherit;}
   });
 
   /* 类型选择：更新类型徽标 + 驱动短名 + URI（驱动下拉只列该类型启用驱动） */
-  var typeMeta={mysql:['🐬','sqlx','mysql://root:****@127.0.0.1:3306/demo'],
-                postgresql:['🐘','sqlx','postgres://root:****@127.0.0.1:5432/postgres'],
-                mariadb:['🦭','sqlx','mysql://root:****@127.0.0.1:3306/demo'],
-                oracle:['🔴','oracle','oracle://system:****@127.0.0.1:1521/ORCL'],
-                mssql:['🟢','tiberius','mssql://sa:****@127.0.0.1:1433/master'],
-                sqlite:['🪶','rusqlite','sqlite:///data/demo.db'],
-                duckdb:['🦆','duckdb-rs','duckdb:///data/demo.duckdb'],
-                clickhouse:['⚡','clickhouse','clickhouse://default:****@127.0.0.1:8123/default'],
+  // 第 4 项 = 该驱动声明的认证方法（与 drivers.supported_auth_types 种子一致）。
+  var typeMeta={mysql:['🐬','sqlx','mysql://root:****@127.0.0.1:3306/demo','password'],
+                postgresql:['🐘','sqlx','postgres://root:****@127.0.0.1:5432/postgres','password / ssl / kerberos'],
+                mariadb:['🦭','sqlx','mysql://root:****@127.0.0.1:3306/demo','password'],
+                oracle:['🔴','oracle','oracle://system:****@127.0.0.1:1521/ORCL','password'],
+                mssql:['🟢','tiberius','mssql://sa:****@127.0.0.1:1433/master','password'],
+                sqlite:['🪶','rusqlite','sqlite:///data/demo.db','password'],
+                duckdb:['🦆','duckdb-rs','duckdb:///data/demo.duckdb','password'],
+                clickhouse:['⚡','clickhouse','clickhouse://default:****@127.0.0.1:8123/default','password'],
                 mongodb:['🍃','mongodb','mongodb://127.0.0.1:27017/demo'],
                 redis:['🔶','redis','redis://127.0.0.1:6379/0']};
   document.querySelectorAll('.db-item').forEach(function(item){
@@ -675,6 +677,8 @@ button{font-family:inherit;}
         badge.textContent=m[0]; badge.classList.remove('warn');
         document.getElementById('driverName').textContent=m[1];
         document.getElementById('uriInput').value=m[2];
+        var am=document.getElementById('authMethodSel');
+        if(am){am.textContent=(m[3]||'—')+' ▾';}
         var fileDb=(db==='sqlite'||db==='duckdb');
         demo(fileDb?'演示：文件型驱动隐藏「网络」Tab（示意）':'演示：驱动下拉只列该类型的启用驱动（短名）');
       }

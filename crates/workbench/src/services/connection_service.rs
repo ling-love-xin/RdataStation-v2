@@ -256,17 +256,21 @@ impl ConnectionService {
         // 创建新连接
         tracing::info!("Creating new connection with ID: {}", conn_id);
 
-        // 如果有 auth_config_id，从数据库中读取认证凭据并注入到 URL
+        // 如果有 auth_config_id，从数据库中读取认证凭据并注入到 URL。
+        // 认证方法优先取连接记录上的 `auth_method`；缺失时回退到认证配置自己声明的
+        // `auth_type`——否则“引用了认证配置但没选方法”的连接会静默跳过凭据注入（旧数据
+        // 与其它入口创建的连接都会踩到）。
         let mut url_with_auth = url.to_string();
-        if let (Some(auth_id), Some(auth_meth)) = (auth_config_id.as_ref(), auth_method.as_ref()) {
+        if let Some(auth_id) = auth_config_id.as_ref() {
             match Self::load_auth_data_from_db(auth_id, connection_type, project_path.as_deref())
                 .await
             {
-                Ok(Some(auth_data)) => {
-                    match connection::url_params::inject_auth_into_url(&url_with_auth, auth_meth, &auth_data) {
+                Ok(Some((config_auth_type, auth_data))) => {
+                    let method = auth_method.as_deref().unwrap_or(config_auth_type.as_str());
+                    match connection::url_params::inject_auth_into_url(&url_with_auth, method, &auth_data) {
                         Ok(injected_url) => {
                             url_with_auth = injected_url;
-                            tracing::info!(conn_id = %conn_id, auth_id = %auth_id, "已将认证凭据注入到 URL");
+                            tracing::info!(conn_id = %conn_id, auth_id = %auth_id, method, "已将认证凭据注入到 URL");
                         }
                         Err(e) => {
                             tracing::warn!(conn_id = %conn_id, auth_id = %auth_id, error = %e, "注入认证凭据失败，使用原始 URL");
@@ -489,14 +493,15 @@ impl ConnectionService {
         auth_id: &str,
         connection_type: ConnectionType,
         project_path: Option<&str>,
-    ) -> Result<Option<String>, CoreError> {
+    ) -> Result<Option<(String, String)>, CoreError> {
         use engine::persistence::auth_store;
 
-        // 优先尝试从全局数据库读取
+        // 优先尝试从全局数据库读取；返回 (auth_type, 解密后的 auth_data)，
+        // 供调用方在连接未记录认证方法时回退到配置声明的方法。
         if let Some(gdb) = engine::migration::get_global_db_manager() {
             if let Ok(Some(auth_config)) = gdb.get_auth_config(auth_id).await {
                 let auth_data = auth_store::decrypt_auth_data(&auth_config.auth_data)?;
-                return Ok(Some(auth_data));
+                return Ok(Some((auth_config.auth_type, auth_data)));
             }
         }
 
@@ -512,7 +517,7 @@ impl ConnectionService {
                         .map_err(|e| CoreError::from(format!("打开项目数据库失败: {}", e)))?;
                     if let Some(auth_config) = auth_store::get_auth_config(&conn, auth_id)? {
                         let auth_data = auth_store::decrypt_auth_data(&auth_config.auth_data)?;
-                        return Ok(Some(auth_data));
+                        return Ok(Some((auth_config.auth_type, auth_data)));
                     }
                 }
             }

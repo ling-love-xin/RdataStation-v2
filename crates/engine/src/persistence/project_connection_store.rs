@@ -192,7 +192,7 @@ impl ProjectConnectionStore {
                 options, tags, use_duckdb_fed, metadata_path, is_active,
                 server_version, description, driver_id, environment_id, auth_config_id,
                 auth_method, network_config_id, driver_properties, advanced_options, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, COALESCE(NULLIF(?24, ''), CURRENT_TIMESTAMP), COALESCE(NULLIF(?25, ''), CURRENT_TIMESTAMP))",
                 rusqlite::params![
                     conn.id,
                     conn.name,
@@ -245,7 +245,7 @@ impl ProjectConnectionStore {
                 tags = ?11, use_duckdb_fed = ?12, metadata_path = ?13, is_active = ?14,
                 server_version = ?15, description = ?16, driver_id = ?17, environment_id = ?18,
                 auth_config_id = ?19, auth_method = ?20, network_config_id = ?21, driver_properties = ?22,
-                advanced_options = ?23, updated_at = ?24
+                advanced_options = ?23, updated_at = COALESCE(NULLIF(?24, ''), CURRENT_TIMESTAMP)
             WHERE id = ?1",
             rusqlite::params![
                 conn.id, conn.name, conn.driver, conn.host, conn.port, conn.database,

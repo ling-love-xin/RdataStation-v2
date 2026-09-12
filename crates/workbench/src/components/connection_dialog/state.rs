@@ -59,6 +59,15 @@ impl ConnectionDialogState {
                 )
             }),
             env_list: Rc::new(RefCell::new(Vec::new())),
+            auth_method: cx.new(|cx| {
+                SelectState::new(
+                    SearchableVec::new(Vec::<SharedString>::new()),
+                    None,
+                    window,
+                    cx,
+                )
+            }),
+            auth_method_loaded_for: Rc::new(RefCell::new(None)),
             auth_ref: cx.new(|cx| {
                 SelectState::new(
                     SearchableVec::new(Vec::<SharedString>::new()),
@@ -381,6 +390,41 @@ impl ConnectionDialogState {
         }
     }
 
+    /// 按当前驱动刷新「认证方法」选项（数据源：`drivers.supported_auth_types`）。
+    ///
+    /// 驱动变化时调用（每帧检测驱动值）：选项变更后校正选中（值不在新选项 → 清空），
+    /// 首次加载驱动时默认选中第一个方法（与驱动下拉“默认选中第一个实现”一致）。
+    pub(crate) fn refresh_auth_method_items(
+        &self,
+        driver_value: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        *self.auth_method_loaded_for.borrow_mut() = Some(driver_value.to_string());
+        let methods = self
+            .resolve_driver(driver_value)
+            .map(|d| driver_auth_types(d.supported_auth_types.as_deref()))
+            .unwrap_or_default();
+        let current = self
+            .auth_method
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .map(|v| v.to_string());
+        let keep = current
+            .as_ref()
+            .map(|v| methods.iter().any(|m| m == v))
+            .unwrap_or(false);
+        let items: Vec<SharedString> = methods.iter().map(SharedString::from).collect();
+        self.auth_method
+            .update(cx, |s, cx| s.set_items(SearchableVec::new(items), window, cx));
+        if !keep {
+            // 未选 / 失效：默认第一个；驱动未声明则清空（UI 显示禁用占位）。
+            let next = methods.first().cloned().unwrap_or_default();
+            set_select_value(&self.auth_method, &next, window, cx);
+        }
+    }
+
     /// 用分组目录刷新勾选列表（保留已勾选；新出现的分组默认未勾选）。
     pub(crate) fn sync_group_checks(&self) {
         let groups = self.groups.borrow();
@@ -425,7 +469,10 @@ impl ConnectionDialogState {
             .first()
             .map(|d| driver_short_name(&d.name));
         match first {
-            Some(name) => set_select_value(&self.driver, &name, window, cx),
+            Some(name) => {
+                set_select_value(&self.driver, &name, window, cx);
+                self.refresh_auth_method_items(&name, window, cx);
+            }
             None => set_select_value(&self.driver, "", window, cx),
         }
     }
@@ -496,6 +543,8 @@ impl ConnectionDialogState {
             Some(d) => {
                 let short = driver_short_name(&d.name);
                 set_select_value(&self.driver, &short, window, cx);
+                // 驱动变了 → 认证方法选项跟着重建（与 render 的每帧检测互为兵兵）。
+                self.refresh_auth_method_items(&short, window, cx);
             }
             None => set_select_value(&self.driver, "", window, cx),
         }
@@ -556,6 +605,19 @@ impl ConnectionDialogState {
         self.scope.update(cx, |s, cx| {
             s.set_selected_value(&SharedString::from(scope_label(&ds.scope)), window, cx)
         });
+        // 认证方法：记录里为空但引用了认证配置时，用配置声明的方法（连接链路同样回退到它）。
+        let auth_method_value = ds.auth_method.clone().or_else(|| {
+            ds.auth_config_id.as_ref().and_then(|aid| {
+                self.auth_list
+                    .borrow()
+                    .iter()
+                    .find(|a| &a.id == aid)
+                    .map(|a| a.auth_type.clone())
+            })
+        });
+        if let Some(m) = auth_method_value {
+            set_select_value(&self.auth_method, &m, window, cx);
+        }
 
         // 标签：JSON 数组 → 逗号分隔文本（回显）；分组：读所属分组 id → 勾选。
         self.tags_input.update(cx, |s, cx| {
@@ -687,6 +749,7 @@ impl ConnectionDialogState {
 /// 由受控 Entity 重建轻量视图（测试/保存按钮复用 collect / hops_valid）。
 pub(crate) struct ClonedDialogState {
     remark: Entity<InputState>,
+    auth_method: Entity<SelectState<SearchableVec<SharedString>>>,
     auth_ref: Entity<SelectState<SearchableVec<SharedString>>>,
     network_ref: Entity<SelectState<SearchableVec<SharedString>>>,
     env: Entity<SelectState<SearchableVec<SharedString>>>,
@@ -720,6 +783,7 @@ impl ConnectionDialogState {
         _pass: Entity<InputState>,
         _driver: Entity<SelectState<SearchableVec<SharedString>>>,
         remark: Entity<InputState>,
+        auth_method: Entity<SelectState<SearchableVec<SharedString>>>,
         auth_ref: Entity<SelectState<SearchableVec<SharedString>>>,
         network_ref: Entity<SelectState<SearchableVec<SharedString>>>,
         env: Entity<SelectState<SearchableVec<SharedString>>>,
@@ -742,6 +806,7 @@ impl ConnectionDialogState {
     ) -> ClonedDialogState {
         ClonedDialogState {
             remark,
+            auth_method,
             auth_ref,
             network_ref,
             env,
@@ -953,7 +1018,20 @@ impl ClonedDialogState {
             driver_id: selected_driver.as_ref().map(|d| d.id.clone()),
             environment_id,
             auth_config_id,
-            auth_method: None,
+            auth_method: {
+                let v = self
+                    .auth_method
+                    .read(cx)
+                    .selected_value()
+                    .cloned()
+                    .unwrap_or_default()
+                    .to_string();
+                if v.trim().is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            },
             network_config_id,
             driver_properties,
             advanced_options,

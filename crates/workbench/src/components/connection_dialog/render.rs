@@ -80,6 +80,8 @@ impl ConnectionDialogState {
         let hops = self.hops.clone();
         let env = self.env.clone();
         let env_list = self.env_list.clone();
+        let auth_method = self.auth_method.clone();
+        let auth_method_loaded_for = self.auth_method_loaded_for.clone();
         let auth_ref = self.auth_ref.clone();
         let network_ref = self.network_ref.clone();
         let auth_list = self.auth_list.clone();
@@ -136,6 +138,19 @@ impl ConnectionDialogState {
             self.refresh_env_policies(&env_now);
         }
 
+        // 驱动变更检测（每帧比较）：认证方法选项来自 `drivers.supported_auth_types`，
+        // 换驱动必须重建（否则会显示上一个驱动的方法，落库值与驱动不符）。
+        let driver_now_for_auth = self
+            .driver
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default()
+            .to_string();
+        if auth_method_loaded_for.borrow().as_deref() != Some(driver_now_for_auth.as_str()) {
+            self.refresh_auth_method_items(&driver_now_for_auth, window, cx);
+        }
+
         // 元数据与暂存恢复：dialog builder 每次渲染都会执行，用一次性标记避开
         // 反复建 tokio runtime + 查库（hover / 切 Tab 引发的重渲染不应再查库）。
         // 每次「打开对话框」入口（`EditorPanel::request_*`）会重置标记以重新拉取。
@@ -162,7 +177,7 @@ impl ConnectionDialogState {
         prop_key.update(cx, |s, cx| s.set_placeholder("key", window, cx));
         prop_val.update(cx, |s, cx| s.set_placeholder("value", window, cx));
         project_path.update(cx, |s, cx| {
-            s.set_placeholder("项目根目录（含 .RSMETA）", window, cx)
+            s.set_placeholder("项目根目录（含 .RSmeta）", window, cx)
         });
         ssl_ca.update(cx, |s, cx| {
             s.set_placeholder("CA 证书路径（可选）", window, cx)
@@ -940,7 +955,18 @@ impl ConnectionDialogState {
                     } else if is_file_db {
                         format!("{type_label} · {driver_value} · 文件型数据库 · 无网络与 SSL 配置")
                     } else {
-                        format!("{type_label} · {driver_value} · 原生连接 · 支持 password / ssh_key 认证")
+                        // 支持的方法取自驱动声明（不写死 password / ssh_key）。
+                        let methods = driver_auth_types(
+                            current_driver
+                                .as_ref()
+                                .and_then(|d| d.supported_auth_types.as_deref()),
+                        );
+                        let methods_text = if methods.is_empty() {
+                            "驱动未声明认证方法".to_string()
+                        } else {
+                            format!("支持 {} 认证", methods.join(" / "))
+                        };
+                        format!("{type_label} · {driver_value} · 原生连接 · {methods_text}")
                     };
                     let info_banner = div()
                         .w_full()
@@ -999,9 +1025,56 @@ impl ConnectionDialogState {
                     };
 
                     // 卡片 2：数据库认证（引用已保存配置 + 管理入口）。
+                    // 认证方法下拉：选项来自当前驱动的 supported_auth_types；
+                    // 引用认证配置时以配置声明的类型为准（只读展示）。
+                    let auth_method_now = auth_method
+                        .read(cx)
+                        .selected_value()
+                        .cloned()
+                        .unwrap_or_default()
+                        .to_string();
+                    let driver_has_auth_types = !driver_auth_types(
+                        current_driver
+                            .as_ref()
+                            .and_then(|d| d.supported_auth_types.as_deref()),
+                    )
+                    .is_empty();
+                    let auth_method_row = {
+                        let mut row = div()
+                            .h_flex()
+                            .items_center()
+                            .gap(rems(0.5))
+                            .child(
+                                div()
+                                    .w(rems(5.75))
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child("认证方法"),
+                            );
+                        let cell = if is_auth_ref {
+                            // 引用档案：方法由档案声明，不可在此改。
+                            Select::new(&auth_method)
+                                .placeholder("由认证档案声明")
+                                .disabled(true)
+                                .into_any_element()
+                        } else if current_driver.is_none() || !driver_has_auth_types {
+                            Select::new(&auth_method)
+                                .placeholder("驱动未声明认证方法")
+                                .disabled(true)
+                                .into_any_element()
+                        } else {
+                            Select::new(&auth_method)
+                                .placeholder("选择认证方法…")
+                                .into_any_element()
+                        };
+                        row = row.child(div().flex_1().min_w(px(0.)).child(cell));
+                        row
+                    };
                     let auth_body = div()
                         .v_flex()
                         .gap(rems(0.375))
+                        .child(auth_method_row)
                         .child(
                             div()
                                 .h_flex()
@@ -1038,7 +1111,14 @@ impl ConnectionDialogState {
                         .child(if is_auth_ref {
                             reuse_note(
                                 theme,
-                                "已引用认证档案 · 用户名/密码只读（修改档案一处全量生效）",
+                                &format!(
+                                    "已引用认证档案 · 认证方法 {} · 用户名/密码只读（修改档案一处全量生效）",
+                                    if auth_method_now.is_empty() {
+                                        "（未声明）".to_string()
+                                    } else {
+                                        auth_method_now.clone()
+                                    }
+                                ),
                             )
                         } else {
                             div()
@@ -1708,7 +1788,7 @@ impl ConnectionDialogState {
                 let result_ok = result_ok.clone();
                 let state = ConnectionDialogState::cloned_state(
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
-                    remark.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
+                    remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
                     duckdb_fed.clone(), cache_path.clone(), props.clone(),
                     hops.clone(), scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
@@ -1754,7 +1834,7 @@ impl ConnectionDialogState {
                 let dialog = Rc::clone(&state);
                 let state = ConnectionDialogState::cloned_state(
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
-                    remark.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
+                    remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
                     duckdb_fed.clone(), cache_path.clone(), props.clone(),
                     hops.clone(), scope.clone(), ssl_mode.clone(), ssl_ca.clone(),

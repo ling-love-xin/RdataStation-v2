@@ -17,8 +17,9 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 use shared::error::{CoreError, StorageError};
 
-/// 项目元数据目录名（与 `project_db` 保持一致）。
-const RS_META_DIR_NAME: &str = ".RSMETA";
+/// 项目元数据目录名：与 `project::store::RS_META_DIR_NAME` 保持一致（历史误写为 `.RSMETA`，
+/// 在大小写敏感的文件系统上会与项目模块分叉到两个目录）。
+pub const RS_META_DIR_NAME: &str = ".RSmeta";
 /// 项目库文件名。
 const PROJECT_DB_NAME: &str = "project.db";
 
@@ -46,7 +47,7 @@ impl ConnectionOrgStore {
         Self::open_at(path, false)
     }
 
-    /// 打开项目库（`{project}/.RSMETA/project.db`）。
+    /// 打开项目库（`{project}/.RSmeta/project.db`）。
     pub fn open_project(root: &Path) -> Result<Self, CoreError> {
         Self::open_at(root.join(RS_META_DIR_NAME).join(PROJECT_DB_NAME), true)
     }

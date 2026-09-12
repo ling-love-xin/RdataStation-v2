@@ -271,7 +271,7 @@ fn project_scope_requires_project_path_and_writes_nothing() {
 fn global_and_project_scope_writes_both_sides() {
     let dir = temp_dir("gp-scope");
     let project_root = dir.join("proj");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
     let service = make_service(&dir);
     let rt = runtime();
 
@@ -347,7 +347,7 @@ fn global_and_project_scope_writes_both_sides() {
 fn project_scope_readback_requires_project_path() {
     let dir = temp_dir("proj-readback");
     let project_root = dir.join("proj");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
     let service = make_service(&dir);
     let rt = runtime();
     let path = project_root.to_string_lossy().to_string();
@@ -382,10 +382,45 @@ fn project_scope_readback_requires_project_path() {
 }
 
 #[test]
+fn project_scope_rejects_non_project_root() {
+    let dir = temp_dir("proj-bogus");
+    let bogus = dir.join("not-a-project");
+    std::fs::create_dir_all(&bogus).expect("mkdir bogus");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let path = bogus.to_string_lossy().to_string();
+
+    // 写路径：非项目根（缺 .RSmeta）→ 明确报错，且**不在磁盘上造骨架**。
+    let mut i = input("bogus_proj", "sqlite", "sqlite:///tmp/b.db");
+    i.scope = ConnectionScope::Project;
+    let err = rt
+        .block_on(service.save(&i, Some(&path)))
+        .expect_err("非项目根应被拒");
+    assert!(err.to_string().contains(".RSmeta"), "{err}");
+    assert!(!bogus.join(".RSmeta").exists(), "写路径不得创建项目骨架");
+
+    // 读路径：降级为空，同样不建目录。
+    assert!(rt
+        .block_on(service.get_with_project("P_conn_probe", Some(&path)))
+        .expect("读降级不报错")
+        .is_none());
+    assert!(!bogus.join(".RSmeta").exists(), "读路径不得创建项目骨架");
+
+    // 同步 / 删除（项目侧）同样被拦。
+    assert!(rt
+        .block_on(service.sync_snapshot_from_global("GP_conn_probe_20260912", &path))
+        .is_err());
+    assert!(rt.block_on(service.delete("P_conn_probe", Some(&path))).is_err());
+    assert!(!bogus.join(".RSmeta").exists(), "删除路径不得创建项目骨架");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn project_update_keeps_password_when_blank() {
     let dir = temp_dir("proj-pw");
     let project_root = dir.join("proj");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
     let service = make_service(&dir);
     let rt = runtime();
     let path = project_root.to_string_lossy().to_string();
@@ -422,6 +457,9 @@ fn project_update_keeps_password_when_blank() {
         "空密码更新应保留原密文（与全局库 update 语义一致）"
     );
     assert_eq!(after.database.as_deref(), Some("db2"), "其他字段仍应更新");
+    // 时间戳不得为空（旧实现会把项目侧 created_at / updated_at 写成空串 → 脏数据）。
+    assert!(!after.created_at.is_empty(), "created_at 不应为空");
+    assert!(!after.updated_at.is_empty(), "updated_at 不应为空");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -432,7 +470,7 @@ fn snapshot_sync_pulls_latest_global_definition() {
 
     let dir = temp_dir("snap-sync");
     let project_root = dir.join("proj");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
     let service = make_service(&dir);
     let rt = runtime();
     let path = project_root.to_string_lossy().to_string();
@@ -527,7 +565,7 @@ fn environment_policies_come_from_db_by_env_name() {
 fn nav_runtime_resolves_project_connection_with_project_path() {
     let dir = temp_dir("nav-project");
     let project_root = dir.join("proj");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
     let service = make_service(&dir);
     let rt = runtime();
     let path = project_root.to_string_lossy().to_string();
@@ -587,7 +625,7 @@ fn service_save_is_visible_to_workspace_loader() {
 fn tags_sync_and_delete_cleanup() {
     let dir = temp_dir("org-tags");
     let project_root = dir.join("proj");
-    std::fs::create_dir_all(&project_root).expect("mkdir");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
     let service = make_service(&dir);
     let rt = runtime();
     let root_str = project_root.to_string_lossy().to_string();
@@ -615,7 +653,7 @@ fn tags_sync_and_delete_cleanup() {
         .expect("save project");
 
     let project_org = engine::persistence::ConnectionOrgStore::open_at(
-        project_root.join(".RSMETA").join("project.db"),
+        project_root.join(".RSmeta").join("project.db"),
         true,
     )
     .expect("open project org");

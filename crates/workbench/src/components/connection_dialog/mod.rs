@@ -117,6 +117,10 @@ pub struct ConnectionDialogState {
     pub hops: Rc<RefCell<Vec<Hop>>>,
     pub env: Entity<SelectState<SearchableVec<SharedString>>>,
     pub env_list: Rc<RefCell<Vec<Environment>>>,
+    /// 认证方法（选项来自当前驱动的 `supported_auth_types`；连接时用于注入凭据）。
+    pub auth_method: Entity<SelectState<SearchableVec<SharedString>>>,
+    /// 认证方法选项已按哪个驱动值加载（驱动变化时重建；None = 尚未加载）。
+    pub auth_method_loaded_for: Rc<RefCell<Option<String>>>,
     pub auth_ref: Entity<SelectState<SearchableVec<SharedString>>>,
     pub network_ref: Entity<SelectState<SearchableVec<SharedString>>>,
     pub auth_list: Rc<RefCell<Vec<AuthConfig>>>,
@@ -139,7 +143,7 @@ pub struct ConnectionDialogState {
     pub editing_id: Rc<RefCell<Option<String>>>,
     /// 作用域（仅全局 / 仅项目 / 全局+项目）。
     pub scope: Entity<SelectState<SearchableVec<SharedString>>>,
-    /// 项目路径（作用域含项目侧时必需；.RSMETA 项目目录）。
+    /// 项目路径（作用域含项目侧时必需；.RSmeta 项目目录）。
     pub project_path: Entity<InputState>,
     /// 标签输入（逗号分隔；保存时解析为 JSON 数组写入 `tags` 并同步 `connection_tags`）。
     pub tags_input: Entity<InputState>,

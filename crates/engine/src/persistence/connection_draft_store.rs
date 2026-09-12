@@ -57,6 +57,8 @@ pub struct ConnectionDraftRow {
     pub props_json: String,
     /// 安全策略覆盖（JSON 布尔数组）。
     pub sec_overrides_json: String,
+    /// 认证方法（`drivers.supported_auth_types` 中的键，如 password / ssl；空 = 未选）。
+    pub auth_method: String,
     pub auth_ref: Option<String>,
     pub network_ref: Option<String>,
     pub env: Option<String>,
@@ -135,6 +137,7 @@ impl ConnectionDraftStore {
                     hops_json           TEXT NOT NULL DEFAULT '[]',
                     props_json          TEXT NOT NULL DEFAULT '[]',
                     sec_overrides_json  TEXT NOT NULL DEFAULT '[]',
+                    auth_method         TEXT NOT NULL DEFAULT '',
                     auth_ref            TEXT,
                     network_ref         TEXT,
                     env                 TEXT,
@@ -161,8 +164,8 @@ impl ConnectionDraftStore {
         let mut stmt = match self.conn.prepare(
             "SELECT name, saved_id, type_id, driver_id, driver_name, url, username, remark, scope,
                     project_path, ssl_mode, ssl_ca, ssl_cert, ssl_key, cache_path, duckdb_fed,
-                    active_tab, hops_json, props_json, sec_overrides_json, auth_ref, network_ref, env,
-                    tags, groups_json
+                    active_tab, hops_json, props_json, sec_overrides_json, auth_method, auth_ref,
+                    network_ref, env, tags, groups_json
              FROM connection_drafts ORDER BY position ASC",
         ) {
             Ok(stmt) => stmt,
@@ -190,11 +193,12 @@ impl ConnectionDraftStore {
                 hops_json: r.get(17)?,
                 props_json: r.get(18)?,
                 sec_overrides_json: r.get(19)?,
-                auth_ref: r.get(20)?,
-                network_ref: r.get(21)?,
-                env: r.get(22)?,
-                tags: r.get(23)?,
-                groups_json: r.get(24)?,
+                auth_method: r.get(20)?,
+                auth_ref: r.get(21)?,
+                network_ref: r.get(22)?,
+                env: r.get(23)?,
+                tags: r.get(24)?,
+                groups_json: r.get(25)?,
             })
         });
         match rows {
@@ -214,10 +218,10 @@ impl ConnectionDraftStore {
                 "INSERT INTO connection_drafts (
                     position, name, saved_id, type_id, driver_id, driver_name, url, username, remark,
                     scope, project_path, ssl_mode, ssl_ca, ssl_cert, ssl_key, cache_path, duckdb_fed,
-                    active_tab, hops_json, props_json, sec_overrides_json, auth_ref, network_ref, env,
-                    tags, groups_json
+                    active_tab, hops_json, props_json, sec_overrides_json, auth_method, auth_ref,
+                    network_ref, env, tags, groups_json
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                           ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+                           ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
             )
             .map_err(|e| self.err("prepare_connection_drafts", e))?;
         for (i, r) in rows.iter().enumerate() {
@@ -243,6 +247,7 @@ impl ConnectionDraftStore {
                 r.hops_json,
                 r.props_json,
                 r.sec_overrides_json,
+                r.auth_method,
                 r.auth_ref,
                 r.network_ref,
                 r.env,

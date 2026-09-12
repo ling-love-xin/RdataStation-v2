@@ -183,7 +183,7 @@ impl RuleRegistry {
 }
 
 pub fn get_project_rules_dir(project_path: &Path) -> PathBuf {
-    project_path.join(".RSMETA").join("insight-rules")
+    project_path.join(".RSmeta").join("insight-rules")
 }
 
 #[cfg(test)]

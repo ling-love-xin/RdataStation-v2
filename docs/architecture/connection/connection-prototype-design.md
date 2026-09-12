@@ -83,7 +83,9 @@
 - **四张 section 卡片并排**（`sec-card`，flex-wrap 自适应），每卡内部为对齐网格（label 固定列宽 + 输入框）：
   - **连接设置**：主机 / 端口 / 数据库（网络库），文件库则切换为文件选择
   - **数据库认证**（含**管理**入口，打开 AuthConfigManager 覆盖层）：
-    - 认证方法 select（按驱动 `supported_auth_types` 过滤）+ 动态字段（用户名/密码/证书/Keytab…）
+    - **认证方法** select：选项来自当前驱动的 `supported_auth_types`（数据源：`drivers` 表）；
+      驱动未声明 → 禁用占位「驱动未声明认证方法」；引用档案时只读并显示档案声明的方法
+    - 用户名 / 密码（未引用档案时可编辑）
     - **引用已保存认证配置**下拉（选中后字段只读 disabled + 降透明）
   - **连接安全（SSL/TLS）**：模式（disable/require/verify-ca/verify-full）、CA 证书、客户端证书/私钥（按驱动显示）
   - **组织（标签 / 分组）**（本轮新增）：

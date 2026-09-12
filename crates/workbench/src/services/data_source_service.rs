@@ -189,6 +189,16 @@ impl DataSourceService {
             let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
                 return Ok(None);
             };
+            // 读路径也预检：不合法（非项目根）时直接降级为空，**绝不建目录**。
+            if !is_project_root(path) {
+                tracing::warn!(
+                    target: "data_source_service",
+                    conn_id = %conn_id,
+                    project_path = %path,
+                    "项目路径不是项目根（缺 .RSmeta）：项目侧回读降级为空"
+                );
+                return Ok(None);
+            }
             let store = open_project_store(path).await?;
             let row = store.get_connection(conn_id).await?;
             return Ok(row.map(map_project_connection_to_data_source));
@@ -202,7 +212,7 @@ impl DataSourceService {
     ///
     /// 作用域落库：Global → global_connections（G_）；Project → 项目库（P_）；
     /// GlobalAndProject → 全局定义（G_）+ 项目快照（GP_）。
-    /// `project_path` 在作用域含项目侧时必需（项目根目录，内含 .RSMETA/project.db）。
+    /// `project_path` 在作用域含项目侧时必需（项目根目录，内含 .RSmeta/project.db）。
     pub async fn save(
         &self,
         input: &DataSourceSaveInput,
@@ -212,13 +222,15 @@ impl DataSourceService {
         let global_side = input.scope.includes_global();
         let project_side = input.scope.includes_project();
 
-        // 项目侧预检：路径无效时提前失败，避免“全局已写入、项目失败”的半成品。
+        // 项目侧预检：路径无效时提前失败，避免“全局已写入、项目失败”的半成品，
+        // 也避免 `open` 顺手 `create_dir_all(.RSmeta)` 造出假的“项目骨架”。
         let project_store = if project_side {
             let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
                 return Err(CoreError::common(shared::error::CommonError::General(
-                    "未打开项目：项目/全局+项目作用域需要项目路径（.RSMETA）".to_string(),
+                    "未打开项目：项目/全局+项目作用域需要项目路径（.RSmeta）".to_string(),
                 )));
             };
+            ensure_project_root(path)?;
             Some((path.to_string(), open_project_store(path).await?))
         } else {
             None
@@ -303,9 +315,10 @@ impl DataSourceService {
     ) -> Result<(), CoreError> {
         if project_path.trim().is_empty() {
             return Err(CoreError::common(shared::error::CommonError::General(
-                "未打开项目：同步快照需要项目路径（.RSMETA）".to_string(),
+                "未打开项目：同步快照需要项目路径（.RSmeta）".to_string(),
             )));
         }
+        ensure_project_root(project_path)?;
         let Some(global_id) = id_prefix::source_global_id(snapshot_id) else {
             return Err(CoreError::common(shared::error::CommonError::General(
                 "仅「全局+项目」快照连接（GP_）支持从全局定义同步".to_string(),
@@ -372,9 +385,10 @@ impl DataSourceService {
         if id_prefix::is_project(conn_id) || id_prefix::is_snapshot(conn_id) {
             let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
                 return Err(CoreError::common(shared::error::CommonError::General(
-                    "未打开项目：项目作用域连接更新需要项目路径（.RSMETA）".to_string(),
+                    "未打开项目：项目作用域连接更新需要项目路径（.RSmeta）".to_string(),
                 )));
             };
+            ensure_project_root(path)?;
             let store = open_project_store(path).await?;
             let proj = project_connection_from_input(conn_id, input, &url)?;
             store.update_connection(&proj).await?;
@@ -441,9 +455,10 @@ impl DataSourceService {
         if id_prefix::is_project(conn_id) || id_prefix::is_snapshot(conn_id) {
             let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
                 return Err(CoreError::common(shared::error::CommonError::General(
-                    "未打开项目：项目作用域连接删除需要项目路径（.RSMETA）".to_string(),
+                    "未打开项目：项目作用域连接删除需要项目路径（.RSmeta）".to_string(),
                 )));
             };
+            ensure_project_root(path)?;
             let store = open_project_store(path).await?;
             store.delete_connection(conn_id).await?;
             // 一致性清理：标签 + 分组成员（避免孤儿数据）。
@@ -545,11 +560,14 @@ fn parse_tags_json(tags: Option<&str>) -> Vec<String> {
 }
 
 /// 连接组织元数据存储（项目路径为空 → 全局库；路径取自单例自身，保证同库）。
+///
+/// 项目路径**不是项目根**时回退全局库：`open_project` 会 `create_dir_all(.RSmeta)`，
+/// 让一次读操作在磁盘上造出假的“项目骨架”（脏数据）。
 fn open_org_store(
     global_db: &GlobalDatabaseManager,
     project_path: Option<&str>,
 ) -> Result<engine::persistence::ConnectionOrgStore, CoreError> {
-    match project_path.filter(|p| !p.trim().is_empty()) {
+    match project_path.filter(|p| !p.trim().is_empty() && is_project_root(p)) {
         Some(path) => {
             engine::persistence::ConnectionOrgStore::open_project(std::path::Path::new(path))
         }
@@ -613,6 +631,26 @@ fn build_effective_url(input: &DataSourceSaveInput) -> String {
         url.insert_str(i + 3, &cred);
     }
     url
+}
+
+/// 项目根预检：必须是**已存在且含 `.RSmeta`** 的目录（比较忽略大小写）。
+///
+/// 为何必须：`ProjectDatabaseManager::open` / `ConnectionOrgStore::open_project` 都会
+/// `create_dir_all(.RSmeta)`——传入任意目录会静默创建一套项目骨架（磁盘脏数据）。
+/// 写路径调用它并报错；读路径调用它并降级为空（不建目录）。
+fn is_project_root(path: &str) -> bool {
+    crate::services::workspace_loader::is_project_root(std::path::Path::new(path.trim()))
+}
+
+/// 写路径的项目根预检（不合法 → 明确的用户可见错误）。
+fn ensure_project_root(project_path: &str) -> Result<(), CoreError> {
+    if is_project_root(project_path) {
+        return Ok(());
+    }
+    Err(CoreError::common(shared::error::CommonError::General(format!(
+        "项目路径无效：{} 不是项目根（缺少 .RSmeta，或目录不存在）",
+        project_path.trim()
+    ))))
 }
 
 /// 打开项目持久化存储（ProjectDatabaseManager::open → ProjectConnectionStore）。

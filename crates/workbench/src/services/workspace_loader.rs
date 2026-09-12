@@ -99,7 +99,7 @@ pub fn load_connections_for_scope(project_root: Option<&Path>) -> (Vec<Connectio
 
 /// 删除连接（委托 M3 服务：作用域路由 G_/P_/GP_ + DuckDB Secret 联动清理）。
 ///
-/// `project_path` 为当前项目根（含 .RSMETA）；项目作用域连接必需，
+/// `project_path` 为当前项目根（含 .RSmeta）；项目作用域连接必需，
 /// 未打开项目时传 `None`（仅全局连接可删）。
 /// 服务未就绪时返回错误，不做"只删 global 表"的静默降级——
 /// 否则 P_/GP_ 项目连接会表现为删掉了、实则仍在项目库中。
@@ -129,8 +129,36 @@ fn query_manager(manager: &GlobalDatabaseManager) -> (Vec<ConnectionItem>, Optio
     }
 }
 
+/// 项目根判定：目录存在且含项目元数据目录（`.RSmeta`）。
+///
+/// 比较时**忽略大小写**：历史代码里同时存在 `.RSmeta`（项目模块，权威）与 `.RSmeta`（早
+/// 期 engine/workbench 写法）两种拼写，Windows 下同目录而大小写敏感系统会分叉。
+/// 这里宽容读，写路径由 engine 统一用权威拼写创建。
+pub(crate) fn is_project_root(root: &std::path::Path) -> bool {
+    if !root.is_dir() {
+        return false;
+    }
+    match std::fs::read_dir(root) {
+        Ok(entries) => entries.flatten().any(|e| {
+            // 注意带前导点：`.RSmeta` / `.rsmeta` 都算命中（容错大小写差异）。
+            let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+            name == ".rsmeta" && e.file_type().map(|t| t.is_dir()).unwrap_or(false)
+        }),
+        Err(_) => false,
+    }
+}
+
 /// 读取项目库连接（P_ 本地 / GP_ 共享快照）。
+///
+/// 预检项目根（含 `.RSmeta`）：否则 `ProjectDatabaseManager::open` 会
+/// `create_dir_all(.RSmeta)`——一次列表刷新就能在磁盘上造出假项目骨架。
 fn load_project_connections(root: &Path) -> Result<Vec<ConnectionItem>, String> {
+    if !is_project_root(root) {
+        return Err(format!(
+            "{} 不是项目根（缺少 .RSmeta）",
+            root.to_string_lossy()
+        ));
+    }
     let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("无法启动异步运行时: {e}"))?;
     runtime.block_on(async {
         let db = ProjectDatabaseManager::open(root, 4)
@@ -148,6 +176,38 @@ fn load_project_connections(root: &Path) -> Result<Vec<ConnectionItem>, String> 
 /// 批量映射（持久化记录 → 视图模型）。
 pub fn map_infos(infos: Vec<GlobalConnectionInfo>) -> Vec<ConnectionItem> {
     infos.into_iter().map(connection_item_from_info).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
+    use super::is_project_root;
+
+    #[test]
+    fn project_root_detection_is_case_insensitive_and_strict() {
+        let base = std::env::temp_dir().join(format!("rds_proj_root_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("proj");
+        std::fs::create_dir_all(root.join(".RSmeta")).expect("mkdir .RSmeta");
+        assert!(is_project_root(&root), "含 .RSmeta 应为项目根");
+
+        // 大小写变体（历史写法）同样识别。
+        let upper = base.join("proj-upper");
+        std::fs::create_dir_all(upper.join(".rsmeta")).expect("mkdir .rsmeta");
+        assert!(is_project_root(&upper), "大小写变体应识别");
+
+        // 普通目录 / 不存在 / 同名文件（非目录）都不算项目根。
+        let plain = base.join("plain");
+        std::fs::create_dir_all(&plain).expect("mkdir plain");
+        assert!(!is_project_root(&plain), "普通目录不是项目根");
+        assert!(!is_project_root(&base.join("missing")), "不存在不是项目根");
+        let file_like = base.join("file-like");
+        std::fs::create_dir_all(&file_like).expect("mkdir file-like");
+        std::fs::write(file_like.join(".RSmeta"), b"not a dir").expect("write file");
+        assert!(!is_project_root(&file_like), ".RSmeta 为文件不算项目根");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// 单条映射：`connected` 初始为 false，由 `fill_connected` 填充运行时状态；

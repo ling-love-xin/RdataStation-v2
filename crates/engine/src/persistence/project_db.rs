@@ -379,7 +379,7 @@ impl ProjectDatabaseManager {
     /// * `project_path` - 项目根目录路径
     /// * `sqlite_pool_size` - SQLite 连接池大小
     pub async fn open(project_path: &Path, sqlite_pool_size: usize) -> Result<Self, CoreError> {
-        let rsmeta_path = project_path.join(".RSMETA");
+        let rsmeta_path = project_path.join(".RSmeta");
         let config_path = rsmeta_path.join("config");
         let project_metadata_path = rsmeta_path.join("project_metadata");
 
