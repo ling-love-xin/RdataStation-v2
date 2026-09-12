@@ -126,6 +126,31 @@ impl DataSourceService {
         self.global_db.list_auth_configs(None).await
     }
 
+    /// 按名称读取认证配置的**解密后** `auth_data`（管理器编辑回填用）。
+    ///
+    /// 列表接口（`list_auth_configs`）出于脱敏不返回明文，回填必须走这里：
+    /// 按名称查 ID → `get_auth_config` → `decrypt_auth_data`。
+    ///
+    /// 返回 `(auth_type, auth_data JSON)`；档案不存在 / 解密失败 → `Ok(None)` / `Err`。
+    pub async fn auth_config_detail_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<(String, String)>, CoreError> {
+        let items = self.global_db.list_auth_configs(None).await?;
+        let Some(id) = items
+            .iter()
+            .find(|a| a.name.as_deref() == Some(name))
+            .map(|a| a.id.clone())
+        else {
+            return Ok(None);
+        };
+        let Some(cfg) = self.global_db.get_auth_config(&id).await? else {
+            return Ok(None);
+        };
+        let data = engine::persistence::auth_store::decrypt_auth_data(&cfg.auth_data)?;
+        Ok(Some((cfg.auth_type, data)))
+    }
+
     /// 网络配置列表
     pub async fn list_network_configs(&self) -> Result<Vec<NetworkConfig>, CoreError> {
         self.global_db.list_network_configs(None).await

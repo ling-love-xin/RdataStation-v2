@@ -107,6 +107,7 @@
 | C1 预热方案 C（仅 catalogs/schemas）+ 进度 + 取消 | ✅ 已实现（2026-09-12） | `crates/database/src/navigator_service.rs::warm_schemas`；`crates/workbench/src/services/nav_jobs.rs`（后台任务）；面板头显示「预热 d/t + 取消」 |
 | C2 邻接节点预加载（列） | ✅ 已实现（2026-09-12） | `navigator_service::prefetch_columns` + `nav_jobs::prefetch_columns`；`panels.rs::ensure_nav_loaded` 在「表」文件夹首次加载后排队前 20 张表（`nav_jobs::PREFETCH_BATCH`） |
 | 导航后台任务基建（阻塞 → 工作线程） | ✅ 已实现（2026-09-12） | `services/nav_jobs.rs`：单工作线程 + tokio 运行时 + mpsc 串行队列；原子量进度/取消；面板用主线程 async 任务 300ms 轮询重绘 |
+| C-收尾 导航加载全部迁后台（消除 render 期 I/O） | ✅ 已实现（2026-09-12） | `nav_jobs::{enqueue_load, enqueue_properties, drain_load_results, drain_props_results}`；`panels.rs`：树加载/属性加载改为入队 + 主线程轮询回填（`apply_load_results` / `apply_props_results`），render 只读内存；本地 SQLite 一次性读取（分组/标签、展开态）改用 `cx.defer_in` 在渲染后执行 |
 | C3 增量刷新接入 | ✅ 已实现（首版，2026-09-12） | `crates/database/src/cache.rs`（新增 `NavCache` cache-aside）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；范围：schema / 表 / 视图 / 列；刷新（`fresh`）先 `prune_schema` 再重写；**修复 engine 既有缺陷** `list_columns_normalized` 引用了不存在的 `fkc.table_id` |
 | C5 `search.match.background` token | ⬜ 受阻 | gpui-kit 0.6.1 `ThemeColor` 无该字段，且仓库尚无产品语义 token 注册设施；命中高亮未实现，提前加 token 无消费方 |
 | C8 元数据缓存键切身份指纹 | ⚙️ engine 侧部分落地 | `engine::persistence::metadata_identity`（纯函数 + 测试，已提交 `fd1ffdb`）**尚未接线**（由连接侧任务推进） |
@@ -124,7 +125,13 @@
 - 可见序列由渲染顺序每帧重建（`nav_order`），避免与树的过滤 / 分组 / 分页逻辑重复实现；
 - 仅当焦点在导航面板内时生效（点击行会聚焦面板）；搜索框获得焦点时 `↑↓` 仍由输入框处理优先（未消费才冒泡）。
 
-**C1 / C2 说明（后台任务）**
+**导航加载迁后台（收尾）说明**
+
+- **render 现在的 I/O 为零**：树子节点、对象属性、预热、预取全部进工作线程；结果通过结果队列回传，面板用主线程 async 任务（60ms）轮询回填并 `notify`。
+- 本地 SQLite（分组 / 成员 / 标签、各连接展开态）的一次性读取改用 `cx.defer_in`，在渲染的效果周期后执行（不再在 render 内读盘）；未就绪时树区域显示「加载中…」。
+- 展开 / 刷新改为**先入队 + 显示占位**（`DatabaseNavView::loading`），不再阻塞首帧。
+- 已知限制：工作线程串行——大预取（`PREFETCH_BATCH`）可能延迟用户展开的响应；后续可做优先级队列或双队列。
+- 不在本模块范围、仍为同步的 render 期 I/O：`M5 草稿箱`（`load_scratchpad`）与 `M3 连接`（`connect_entry` 在事件路径 `block_on`，非 render）。
 
 - 内省驱动依赖 tokio，不能在 UI 线程上跑；`services/nav_jobs.rs` 用**单工作线程 + tokio 运行时 + mpsc 串行队列**执行，面板只提交任务；
 - 预热进度为原子量，面板用主线程 async 任务 300ms 轮询重绘（连续两次非活动才结束，避开入队→启动的竞态）；「取消」在 catalog 之间生效；

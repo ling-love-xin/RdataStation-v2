@@ -422,6 +422,7 @@ flowchart LR
 | 72 | **撤下内联协议链 UI**（`Hop` 占位模型 / 上移下移 / 拓扑预览 / `advanced_options.network_chain` 写入全部删除）；多跳统一走**类型 `chain` 的网络档案**（管理器中填 JSON 数组，连接入口解析为 `ConnectionMethod::Chain` 并逐跳执行）；网络 Tab 只留「引用下拉 + 管理入口 + 诚实提示 + 数据路径预览」 | 内联链的 `Hop` 只有 `kind/label/enabled`，**没有任何主机与凭据字段，根本无法执行**；它既造出“配了就该生效”的假象，又在初始状态里种了两条假数据（`跳板机·prod-gw` / `公司代理·http`，属于 §15 禁的 UI 造数据）。而同样能力已由档案路径完整提供（含多跳），所以是删除而非补齐；`connection_drafts.hops_json` 列保留（不迁移 schema），固定写 `[]`，旧草稿的占位链直接忽略 |
 | 73 | **暂存列表显示与脏比对不再构造整份 `ConnectionDraft`**：新增 `LiveEntryView`（名称 / 类型 / 脏标记）与 `form_matches_draft`（逐字段、无分配比较），`render` 里整表 `Vec<ConnectionDraft>` 克隆改为逐行短借用；`InputState::value()` 返回 `SharedString`（引用计数克隆）是「无分配比较」成立的前提 | 旧实现每帧要：克隆整张草稿表（N × ~40 字段）+ 构造一份完整快照做脏比对（~40 次 `to_string` + 两个 `Vec` 克隆）。现在每帧只剩：光标位 2 个短字符串 + 每行 3 个展示字段。代价是“表单字段集合”与 `snapshot_form` 出现两处定义，靠等价性测试（`connection_staging::form_matches_draft_agrees_with_snapshot`）锁定不漂移 |
 | 74 | **测试连接与真实连接同源**：`ConnectionService::{inject_auth_config_credentials, build_probe_config}` 成为**唯一**的“档案 → 建连参数”组装点（`connect` 与测试共用）；测试连接按同一规则注入认证档案凭据、**真实建立网络档案隧道**（探测结束即 drop 守卫）、应用驱动属性 / 高级选项；档案缺失 / 读取失败 / 注入失败必须产生**可见说明**（不允许静默）；`DataSourceService::test(input, project_path)` 增加项目根入参以解析 P_/GP_ 档案；`url_params::merge_credentials` 统一「字段凭据 → URL」的写法（userinfo 百分号转义） | 旧 `test` 只吃表单字段：引用认证档案时 UI 已把用户名 / 密码换成只读说明 → **测试必然缺凭据**（假失败；宽松库还会假成功）；引用 SSH / 代理档案也不走隧道 → 测试结论与真实连接相反。同源后「测试通过」与「连接能建立」共用同一条组装路径，差异只剩“不注册连接池 / 不落库”；userinfo 转义顺带修掉「密码含 `@` 把 host 截断」的隐患 |
+| 75 | **档案引用完整性与严格模式（A2）**：① 管理器列表显示**被引用计数**（`ReferenceCount{global,project}`，`count_references_batch` 一次取齐）、删除被引用的认证 / 网络 / 环境配置被拦下（`DataSourceService::ensure_no_references`，消息含引用数与范围）；② 引用的档案不存在 / 读不出 / 注入失败一律**报错**（`inject_auth_config_credentials` 返回 `Result`），不再回退“直连 + 无凭据”；③ 引用了网络档案但解析不出连接方式（被删 / 类型未知 / 内容非法）时，`connect` 与测试连接都拒绝静默直连 | 静默降级是安全缺陷：用户以为走跳板机 / 专用账号，实际走公网直连；引用计数与拦截把“删档案”的后果在执行前说清。计数范围 = 全局库 + 当前打开项目（未打开项目的引用不可见，已登记为 #33），所以拦截是“尽力而为”，连接时的显式报错是兼底 |
 
 
 ---
@@ -454,7 +455,9 @@ flowchart LR
 | 单测 | `connection_dialog/helpers.rs`（内嵌 +4） | 网络配置字段：类型→字段声明覆盖（含大写 / 别名；`chain` 走 JSON）/ 组装的 JSON **可被 `connection::config` 的 serde 模型直接反序列化**（proxy·ssh 密码·ssh 私钥·ssl）/ 必填与端口与布尔校验 + SSH 认证二选一 / 编辑回填往返（非法 JSON 不反填） |
 | 单测 | `connection/src/url_params.rs`（内嵌 +1） | `merge_credentials`：普通凭据与既有写法等价 / `p@ss:w/rd` 转义（`%40` `%3A` `%2F`）/ 仅密码（`:p%20wd@`）/ 已有 userinfo 原样 / 非 URL（文件路径）原样 |
 | 服务层 | `data_source_lifecycle.rs::probe_config_applies_referenced_auth_profile`（A1） | 测试配置与真实连接同源：引用存在的认证档案 → 凭据（解密后）注入 URL 并回填字段凭据（`config.username` / `password`）+ 说明含「已应用认证档案凭据」；引用不存在的档案 → URL 原样且说明含「未找到引用的认证档案」（不静默） |
-| 服务层 | `data_source_lifecycle.rs::probe_config_applies_referenced_network_profile`（A1） | 网络档案在测试连接时**真实建隧道**：不可达 SSH 跳板（`127.0.0.1:1`）→ `build_probe_config` 返回 Err（「网络档案应用失败」），证明不再静默直连 |
+| 服务层 | `data_source_lifecycle.rs::probe_config_applies_referenced_network_profile`（A1/A2） | 网络档案在测试连接时**真实建隧道**：不可达 SSH 跳板（`127.0.0.1:1`）→ `build_probe_config` 返回 Err（「网络档案应用失败」）；**类型未知的档案 → 同样失败**（不因解析不了而退回直连） |
+| 服务层 | `data_source_lifecycle.rs::manager_reference_count_and_delete_guard`（A2） | 引用计数：无引用为 0 / 空 id 不误报 / 全局 1 条与项目 1 条分别可见 / 未打开项目时项目侧为 0；删除守卫：被引用的认证与网络配置返回 Err 且消息含范围（「全局 1 条、当前项目 1 条」） |
+| 单测 | `connection_service::referenced_network_profile_without_method_is_rejected`（A2） | 引用了网络档案但未解析出连接方式 → `connect_with_type` 直接 Err（在 `apply_network_method` 之前拦下，不建隧道、不碰数据库） |
 
 约定：测试全部落临时目录、不触真实库；`#[gpui_kit::test]` 且**禁用通配导入**（避免 `#[test]` 宏遮蔽，见 gpui-kit-dev skill）。
 
@@ -510,6 +513,7 @@ flowchart LR
 | 42 | **撤下内联协议链（审计 #25 关闭）**：删除 `Hop` 模型 / 链列表 UI（上移下移启用删除）/ 添加入口 / 拓扑预览 / `advanced_options.network_chain` 写入 / `hops_valid`；网络 Tab 改为「引用下拉 + 管理入口 + 诚实提示 + 数据路径预览（本机 → 档案/直连 → 目标数据库）」；多跳走 `chain` 类型档案（JSON 数组）；同时移除初始状态里的两条假跳数据（§15 零 UI 造数据） | `connection_dialog/{render.rs,state.rs,staging.rs,mod.rs}`（决策 #72）；`connection_drafts.hops_json` 列保留固定写 `[]`；测试：工作台 33 lib + 各连接套件全绿 |
 | 43 | **暂存列表热路径收敛（§14 #16 后半关闭）**：`LiveEntryView` + `form_matches_draft`（逐字段无分配比较）；整表草稿克隆 → 逐行短借用；脏标记与显示名/类型徽标改为读「表单显示视图」 | `connection_dialog/{staging.rs,render.rs}`（决策 #73）；测试：`connection_staging::form_matches_draft_agrees_with_snapshot`（等价性 + 脏标记 + 越界 None） |
 | 44 | **测试连接与真实连接同源（审计 A1，§14 #26 关闭）**：`ConnectionService::{inject_auth_config_credentials, build_probe_config}`（认证档案凭据 + 真实隧道 + 高级选项 / 驱动属性，`connect` 与测试共用）；`DataSourceService::test(input, project_path)`；`url_params::merge_credentials`（userinfo 转义）；`load_auth_data_from_db` 增加库入参（测试可注入临时库） | `services/{connection_service.rs,data_source_service.rs}`、`connection/src/url_params.rs`、`connection_dialog/render.rs`（决策 #74）；测试：`data_source_lifecycle` +2、`url_params` +1；工作区 check 零警告 |
+| 45 | **档案引用完整性与严格模式（审计 A2，§14 #27 部分关闭）**：管理器列表显示被引用计数（批量查询）；删除被引用档案被拦下（`ensure_no_references`）；档案缺失 / 网络档案无法解析 → `connect` 与测试连接双双报错（不再静默无凭据直连） | `services/data_source_service.rs`（`ReferenceField`/`ReferenceCount`/`count_references*`/`ensure_no_references`）、`services/connection_service.rs`（`inject_auth_config_credentials` 返回 `Result` + 网络守卫）、`connection_dialog/{managers.rs,mod.rs,state.rs}`（决策 #75）；测试：`data_source_lifecycle` +1、`connection_service` 内嵌 +1 |
 
 
 后续可选（未做）：
@@ -677,6 +681,13 @@ flowchart LR
 > **2026-09-12 更新**：#1 / #2 / #3 / #5 / #6 / #8 已关闭（见下方“已关闭”段）；同时修复了 3 处**“UI 自造业务数据”**（能力矩阵 / 策略覆盖 / 环境管理器策略标签，见 §15）。剩余 #4、#7、#9–#13。
 > **USIT 第 1 轮（同日）**：又关闭 2 项——文件型连接地址丢失（🔴 数据链缺陷）与常规 Tab 不随驱动动态渲染（🟡），见「已关闭（USIT 第 1 轮）」段。
 > **A1 轮（同日）**：关闭 #26（测试连接与真实连接同源）；新增 #27–#32（档案引用完整性 / 结果行分级 / 首次使用引导 / auth_data 字段化 / 标签单源 / 连接 ID 命名待拍板）。
+> **A2 轮（同日）**：#27 部分关闭（引用计数 + 删除拦截 + 档案缺失显式报错）；残留（跨项目全量引用扫描）登记为 #33。
+
+**已关闭（A2 轮，2026-09-12：档案引用完整性与严格模式）**
+
+| # | 关闭方式 | 验证 |
+| --- | --- | --- |
+| 27（🟡，部分关闭） | **档案引用完整性**：① 管理器列表显示**被引用计数**（`count_references_batch`，全局 + 项目一次取齐）；② 删除被引用的认证 / 网络 / 环境配置被拦下，消息含引用数与范围（原型 §3.6「被引用的配置不可删除」）；③ 引用的认证 / 网络档案缺失或无法解析时，`connect` 与测试连接**双双报错**（不再静默回退「直连 + 无凭据」）。**残留**：计数只覆盖全局库 + 当前打开项目（未打开项目里的引用不可见），跨项目全量扫描与“引用方列表”UI 见新 #33 | `manager_reference_count_and_delete_guard`、`referenced_network_profile_without_method_is_rejected`、`probe_config_applies_referenced_{auth,network}_profile` |
 
 **已关闭（A1 轮，2026-09-12：测试连接与真实连接同源）**
 
@@ -749,12 +760,13 @@ flowchart LR
 | 24 | 🟡→✅ | ~~网络配置仍难以在 UI 里真正建成~~（**表单部分已关闭**：本轮改为结构化字段表单 + 组装的 JSON 经 serde 模型单测验证；编辑回填真实字段；`chain` 仍走 JSON） | — | 残留见 #25 |
 | 25 | ⚪→✅ | ~~内联协议链仍是占位（`Hop` 无主机 / 凭据字段，不参与执行）~~（**已关闭**：整块 UI 撤下，多跳改走 `chain` 档案；初始状态里的两条假跳数据一并移除，见决策 #72） | — | 后续如需“可视化多跳编辑器”，应在**档案侧**做（复用 `chain` 的 `ChainHop` 模型与 `network_field_specs` 思路），不在连接表单里做 |
 | 26 | 🔴→✅ | ~~测试连接与真实连接不同源（忽略认证 / 网络档案）~~（**已关闭**：抽唯一组装点 `build_probe_config`，`connect` 与测试共用；详见上方 A1 轮已关闭段） | — | — |
-| 27 | 🟡 | **档案引用完整性缺失**：删除 / 改名被引用的认证 / 网络档案时无引用计数与拦截（连接记录仍指向旧 ID）；档案缺失时 `connect` 与测试都只告警继续（A1 已让“说明可见”，但仍按直连/无凭据试） | 用户以为“配了跳板机”，实际直连（或反之）；库中积累悬空引用 | ① 删除前查引用（全局 + 各项目库）并拦截（或要求显式确认）；② 引用缺失从「告警继续」升级为**明确失败**（与 §15 零造数据同一取向：不拿可能错误的参数去试） |
+| 27 | 🟡→✅ | ~~档案引用完整性缺失~~（**部分关闭**：引用计数 + 删除拦截 + 档案缺失显式报错；残留「跨项目全量引用扫描」见 #33） | — | — |
 | 28 | 🟡 | **结果行只有成败不分级**：保存 / 测试 / 同步的反馈都是单行文本（成功与失败仅 `result_ok` 布尔），长消息被截断、无“复制详情” | 真机排障时拿不到完整原因（网络 / 认证 / SQL 错误混在一行） | 结果行分级（info / warning / error）+ 可展开详情 + 复制；可用 gpui-kit 的 `Alert` / `Notification` 组件 |
 | 29 | ⚪ | **首次使用引导缺失**：新用户打开对话框看到类型树 / 暂存 / 档案引用，但没有“从哪开始”的引导（原型 §4 流程未在 UI 内体现） | 学习成本高（需读用户指南） | 空态引导（无连接 / 首启）+ 类型树 hover 说明；不引外链 |
 | 30 | ⚪ | **`auth_configs.auth_data` 仍是裸 JSON 文本**：字段化组装只在网络档案侧做过（`build_network_config_json`），认证档案仍需手写 JSON | 认证档案缺少字段级校验与可视化编辑；写错只能在连接时暴露 | 与网络档案同款：`auth_field_specs` + 组装 / 回填纯函数 + serde 单测（对齐 `connection::url_params::inject_auth_into_url` 的键约定） |
 | 31 | ⚪ | **标签双源未收敛**：连接行 `tags` JSON 与权威检索表 `connection_tags` 并存（写入时同步，读取侧仍有两路） | 同步失败仅告警 → 长期存在漂移风险 | 明确单一权威（建议表），连接行 JSON 降级为兼容投影并标记后续移除 |
 | 32 | ⚪ | **连接 ID 命名方案待拍板**：`generate_gid("conn", name)` 是名字哈希（改名即换 ID），`G_`/`P_`/`GP_` 前缀同时承担作用域 / 存储路由 / 快照语义 / 可读性四种职责 | 用户看到 ID 里的名字片段会误以为是稳定主键；改名行为（新建 / 覆盖）需解释 | 方案 B：UI / 日志只出现 `name`，ID 内部化；方案 C：ULID 重做 + 迁移（代价大）；待用户决策后开工 |
+| 33 | 🟡 | **引用计数不覆盖未打开的项目**：删除守卫只统计全局库 + 当前项目；未打开项目里的 P_/GP_ 引用不可见（删除仍会创建悬空引用，靠连接时报错兼底） | 用户删档案后打开另一个项目 → 那边的连接都报「引用的认证配置不存在」，且无从得知是哪个项目在用 | ① 全局库维护「档案 → 引用方」投影表（写入时维护，读取 O(1)）；或 ② 删除前遍历已知项目库（全局库项目注册表 + project crate 最近列表）并在 UI 列出引用方（项目 + 连接名） |
 
 ---
 
@@ -782,6 +794,7 @@ flowchart LR
 | 能力矩阵 | **`drivers.capabilities`（本轮修复）** | ✅（旧为硬编码 6 项） |
 | 驱动属性初始行 | `drivers.driver_properties` / 连接记录 `driver_properties` | ✅ |
 | 认证/网络/环境引用下拉 | `auth_configs` / `network_configs` / `environments` | ✅ |
+| 管理器列表（认证 / 网络 / 环境）与「被引用 N」 | 列表来自 `auth_configs` / `network_configs` / `environments`（名称 / 类型 / 内容）；计数为真实统计（`global_connections` + 当前项目库 `connections`） | ✅（A2：计数不再由 UI 估算） |
 | 环境策略摘要（高级 Tab） | `environment_policies.policy_config` | ✅ |
 | 策略覆盖勾选项 | **`environment_policies`（选中环境的启用策略；本轮修复）** | ✅（旧为硬编码 6 项） |
 | 环境管理器策略列表 / 落库类型 | **`environment_policies.policy_type`（本轮修复错标与假类型写入）** | ✅ |
@@ -817,6 +830,8 @@ flowchart LR
 | 文件型地址规范化 | `data_source_service::normalize_file_db_path` | 用户输入的 `sqlite://…` / 三斜杠 / 裸路径写法不一 → `database` 列存法不一致，回读与连接 URL 还原都对不上 | `data_source_service` 内嵌单测（4 种写法）+ `data_source_lifecycle::file_db_path_survives_save_and_readback` |
 | 文件型输入清洗 | `connection_dialog::helpers::strip_file_db_noise` | 切类型后残留的凭据 / 网络链 / TLS 被写进文件型连接 | `helpers` 内嵌单测（凭据·网络·TLS 清空，策略覆盖保留，非法 JSON 不静默丢） |
 | userinfo 转义 | `connection::url_params::merge_credentials`（保存 / 更新 / 测试共用） | 密码 / 用户名含 `@` `:` `/` `?` `#` `%` 时 URL 结构被破坏（host 被截断 / 端口歧义）→ 落库 URL 与实际连接目标不一致 | `url_params` 内嵌单测（`p@ss:w/rd` → `%40 %3A %2F`，仅密码与已有 userinfo 分支）+ `probe_config_applies_referenced_auth_profile` |
+| 删除引用守卫 | `DataSourceService::ensure_no_references`（管理器删除路径） | 删除仍被连接引用的认证 / 网络 / 环境配置 → 悬空引用（用户以为已清理） | `manager_reference_count_and_delete_guard` |
+| 档案缺失不降级 | `connection_service::{inject_auth_config_credentials, build_probe_config}` + `connect` 网络守卫 | 档案被删 / 类型未知时静默直连（用户以为走的是隧道 / 专用账号）；测试与真实连接结论相反 | `probe_config_applies_referenced_auth_profile`（缺失报错）、`referenced_network_profile_without_method_is_rejected` |
 
 ### 15.3 约束与回归手段
 
@@ -846,3 +861,5 @@ flowchart LR
 | 项目会话切换 | `project_host::refresh_after_open`（打开 / 切换后刷新列表） | 面板读同一 `shared.connections` | ⚠️ 半通（启动 / 关闭两处不刷新 → #21） |
 
 **命名辨析（审计中确认无实际混用，但极易误读）**：`global_connections.metadata_path` / 对话框「缓存路径」是 **DuckDB 联邦加速**的缓存路径（自由文本），与 L2 元数据缓存 `conn_{id}.sqlite` 是两回事；前者随连接落库（`connection_service.rs:408` 一带）、后者由 `MetadataCacheManager` 管理。改 L2 键时**不要**动 `metadata_path` 列语义。
+
+> **2026-09-12 补充（A1/A2）**：`ConnectionService::connect` 现在对「引用的认证 / 网络档案缺失或无法解析」**直接报错**（不再静默直连 / 无凭据连接），且 `url_params::merge_credentials` 会对 userinfo 做百分号转义。M4 侧**无需改动**：`nav_runtime::connect_entry` 原本就透传 `Result`，导航面板把错误消息展示出来即可。若将来想在导航行上预检并标记“引用悬空”，属 M4 侧增强（可在 B 系列登记）。

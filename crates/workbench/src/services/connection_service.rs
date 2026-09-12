@@ -285,8 +285,8 @@ impl ConnectionService {
         tracing::info!("Creating new connection with ID: {}", conn_id);
 
         // 如果有 auth_config_id，从数据库中读取认证凭据并注入到 URL
-        // （规则与测试连接同源，见 `inject_auth_config_credentials`）。
-        let (url_with_auth, auth_note) = Self::inject_auth_config_credentials(
+        // （规则与测试连接同源；档案缺失 / 注入失败直接报错，不静默回退直连）。
+        let url_with_auth = Self::inject_auth_config_credentials(
             None,
             &url,
             auth_config_id.as_deref(),
@@ -294,19 +294,18 @@ impl ConnectionService {
             connection_type,
             project_path.as_deref(),
         )
-        .await;
-        match &auth_note {
-            Some(note) => tracing::warn!(
-                conn_id = %conn_id,
-                auth_id = ?auth_config_id,
-                note = %note,
-                "认证档案未生效，使用未含档案凭据的 URL"
-            ),
-            None => tracing::info!(
-                conn_id = %conn_id,
-                auth_id = ?auth_config_id,
-                "认证档案凭据已注入 URL"
-            ),
+        .await?;
+        if auth_config_id.is_some() {
+            tracing::info!(conn_id = %conn_id, auth_id = ?auth_config_id, "认证档案凭据已注入 URL");
+        }
+
+        // 引用了网络档案但入口没解析出连接方式（档案被删 / 类型未知 / 内容非法）：
+        // 拒绝静默直连（A2）——用户以为走隧道，实际会把数据库端暴露到公网链路上。
+        if network_config_id.is_some() && network_method.is_none() {
+            return Err(CoreError::from(format!(
+                "引用的网络配置无法解析（{}）：请在「网络」Tab 重新选择，或检查档案类型与内容",
+                network_config_id.as_deref().unwrap_or("")
+            )));
         }
 
         // 应用网络连接方式（SSH 隧道 / SSL / 代理；协议链执行在 connection::chain）
@@ -562,9 +561,9 @@ impl ConnectionService {
     /// 认证方法优先取连接记录上的 `auth_method`；缺失时回退到认证配置声明的
     /// `auth_type`——否则「引用了档案但没选方法」的连接会静默跳过凭据注入。
     ///
-    /// 返回 `(URL, 说明)`：说明为 `Some` 时表示凭据未完整注入（档案缺失 / 读取失败 /
-    /// 注入失败），调用方**必须让该说明可见**（连接侧记日志、测试连接侧拼进结果消息），
-    /// 不允许静默。
+    /// **严格模式（A2）**：档案不存在 / 读取失败 / 注入失败一律返回 `Err`，不再回退到
+    /// “无凭据直连”——静默降级会让用户以为在用专用账号 / 跳板机（安全风险），
+    /// 真实原因（档案被删 / 改名 / 数据损坏）却看不到。
     async fn inject_auth_config_credentials(
         global_db: Option<&GlobalDatabaseManager>,
         url: &str,
@@ -572,30 +571,21 @@ impl ConnectionService {
         auth_method: Option<&str>,
         connection_type: ConnectionType,
         project_path: Option<&str>,
-    ) -> (String, Option<String>) {
+    ) -> Result<String, CoreError> {
         let Some(auth_id) = auth_config_id else {
-            return (url.to_string(), None);
+            return Ok(url.to_string());
         };
-        match Self::load_auth_data_from_db(global_db, auth_id, connection_type, project_path).await {
-            Ok(Some((config_auth_type, auth_data))) => {
-                let method = auth_method.unwrap_or(config_auth_type.as_str());
-                match connection::url_params::inject_auth_into_url(url, method, &auth_data) {
-                    Ok(injected) => (injected, None),
-                    Err(e) => (
-                        url.to_string(),
-                        Some(format!("认证档案凭据注入失败（{e}），测试未包含档案凭据")),
-                    ),
-                }
-            }
-            Ok(None) => (
-                url.to_string(),
-                Some("未找到引用的认证档案，测试未包含档案凭据".to_string()),
-            ),
-            Err(e) => (
-                url.to_string(),
-                Some(format!("读取认证档案失败（{e}），测试未包含档案凭据")),
-            ),
-        }
+        let (config_auth_type, auth_data) =
+            Self::load_auth_data_from_db(global_db, auth_id, connection_type, project_path)
+                .await?
+                .ok_or_else(|| {
+                    CoreError::from(format!(
+                        "引用的认证配置不存在（{auth_id}）：请在「数据库认证」重新选择或新建"
+                    ))
+                })?;
+        let method = auth_method.unwrap_or(config_auth_type.as_str());
+        connection::url_params::inject_auth_into_url(url, method, &auth_data)
+            .map_err(|e| CoreError::from(format!("认证配置凭据注入失败（{auth_id}）：{e}")))
     }
 
     /// 解析 advanced_options JSON 并应用到 DriverConnectionConfig
@@ -693,7 +683,10 @@ impl ConnectionService {
     ///
     /// 返回 `(配置, 隧道守卫, 说明)`：
     /// - `隧道守卫` 必须在探测期间保持存活（drop 即关闭隧道），由调用方持有；
-    /// - `说明` 是 UI 可见的测试范围提示（档案生效 / 隧道已建立 / 档案缺失）。
+    /// - `说明` 是 UI 可见的测试范围提示（档案已生效 / 隧道已建立）。
+    ///
+    /// **严格模式（A2）**：引用的认证 / 网络档案不存在、读不出或无法注入时**返回错误**，
+    /// 而不是回退到“直连 + 无凭据”——测试结果必须与真实连接的可能结果一致。
     ///
     /// `global_db` 为 `None` 时回退进程全局单例；`DataSourceService` 传入自身库，
     /// 测试可注入临时库。
@@ -712,7 +705,7 @@ impl ConnectionService {
         } else {
             ConnectionType::Global
         };
-        let (url, auth_note) = Self::inject_auth_config_credentials(
+        let url = Self::inject_auth_config_credentials(
             global_db,
             input.url,
             input.auth_config_id,
@@ -720,13 +713,9 @@ impl ConnectionService {
             connection_type,
             input.project_path,
         )
-        .await;
-        match auth_note {
-            Some(note) => notes.push(note),
-            None if input.auth_config_id.is_some() => {
-                notes.push("已应用认证档案凭据".to_string())
-            }
-            None => {}
+        .await?;
+        if input.auth_config_id.is_some() {
+            notes.push("已应用认证档案凭据".to_string());
         }
 
         // —— 2) 网络档案：隧道在本函数调用方的作用域内建立与释放
@@ -757,8 +746,14 @@ impl ConnectionService {
                         }
                     }
                 }
-                Ok(None) => notes.push("网络档案未解析，测试按直连执行".to_string()),
-                Err(e) => notes.push(format!("读取网络档案失败（{e}），测试按直连执行")),
+                // 引用了档案但解析不出连接方式（已删 / 类型未知 / 内容非法）：
+                // 直接失败，不拿直连结果冒充“档案已生效”（A2 严格模式）
+                Ok(None) => {
+                    return Err(CoreError::from(format!(
+                        "引用的网络配置无法解析（{net_id}）：请检查档案类型与内容"
+                    )))
+                }
+                Err(e) => return Err(e),
             }
         }
 
@@ -1585,5 +1580,45 @@ mod tests {
             .connect(None, "invalid", "mysql://localhost", None)
             .await;
         assert!(result.is_err());
+    }
+
+    /// A2：引用了网络档案但入口未解析出连接方式（档案被删 / 类型未知）→ 拒绝静默直连。
+    ///
+    /// 不建隧道、不碰数据库：错误必须在进入 `apply_network_method` 之前就产生。
+    #[tokio::test]
+    async fn referenced_network_profile_without_method_is_rejected() {
+        let manager = Arc::new(ConnectionManager::new());
+        let service = ConnectionService::new(manager);
+        let req = ConnectRequest {
+            conn_id: None,
+            db_type: "mysql".into(),
+            url: "mysql://h:3306/db".into(),
+            name: Some("a2_guard".into()),
+            connection_type: ConnectionType::Global,
+            project_path: None,
+            description: None,
+            driver_id: None,
+            environment_id: None,
+            auth_config_id: None,
+            auth_method: None,
+            // 引用了档案，但 network_method 为 None（入口解析失败）
+            network_config_id: Some("G_net_missing".into()),
+            driver_properties: None,
+            advanced_options: None,
+            options: None,
+            tags: None,
+            metadata_path: None,
+            schema_name: None,
+            use_duckdb_fed: None,
+            password: None,
+            skip_persistence: Some(true),
+            network_method: None,
+        };
+        let err = service
+            .connect_with_type(req)
+            .await
+            .err()
+            .expect("引用了网络档案却没有连接方式时必须失败");
+        assert!(err.to_string().contains("网络配置无法解析"), "{err}");
     }
 }

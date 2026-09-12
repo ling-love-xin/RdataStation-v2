@@ -439,7 +439,7 @@ flowchart TD
 | 大 schema 分页（「加载更多」） | `panels.rs::{render_more_row, folder_limit}` + `ui.rs::NAV_FOLDER_PAGE_SIZE` |
 | 快捷键（Ctrl+F / ↑↓ / →← / Enter·F4） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}`；`panels.rs::{nav_move, nav_order, nav_open_properties}` |
 | 导航 L2 缓存（cache-aside） | `crates/database/src/cache.rs`（`NavCache`）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；底层 `engine::persistence::MetadataCacheOps` |
-| 后台任务（C1 预热 / C2 预取） | `crates/workbench/src/services/nav_jobs.rs`（工作线程 + 队列 + 进度/取消）+ `navigator_service::{warm_schemas, prefetch_columns}` |
+| 后台任务（C1 预热 / C2 预取 / 树加载 / 属性加载） | `crates/workbench/src/services/nav_jobs.rs`（工作线程 + 队列 + 结果队列 + 进度/取消）+ `navigator_service::{warm_schemas, prefetch_columns}`；render 不再做 I/O |
 | 导航领域模型 / 状态 | `crates/database/src/model.rs` |
 | 导航编排服务（缓存/刷新/预热/搜索/分页） | `crates/database/src/navigator_service.rs`（新增） |
 | 实时内省 | `crates/database/src/metadata_service.rs`（已有） |

@@ -219,12 +219,7 @@ pub fn enqueue_load(
 }
 
 /// 提交属性加载。
-pub fn enqueue_properties(
-    key: &str,
-    property: PropertyRef,
-    conn_label: &str,
-    driver: &str,
-) {
+pub fn enqueue_properties(key: &str, property: PropertyRef, conn_label: &str, driver: &str) {
     shared().pending_props.fetch_add(1, Ordering::SeqCst);
     let _ = shared().tx.send(Job::LoadProperties {
         key: key.to_string(),

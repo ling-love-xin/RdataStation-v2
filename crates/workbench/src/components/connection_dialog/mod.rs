@@ -44,15 +44,18 @@ use crate::panels::Shared;
 use crate::services::data_source_service::DataSourceService;
 use connection::model::DataSource;
 
-/// 认证类型（v1 AUTH_TYPE_DEFS 子集；数据为 JSON：{"username":..,"password":..} 等）。
-const AUTH_TYPES: [&str; 3] = ["password", "ssh_key", "proxy_pwd"];
+/// 认证类型（**规范键**：与 `url_params::inject_auth_into_url` 及
+/// `inject_{ssh,proxy}_auth_from_auth_data` 的分支一一对应；字段声明见
+/// `helpers::auth_field_specs`）。
+const AUTH_TYPES: [&str; 6] = ["password", "ldap", "pg_class", "kerberos", "ssh_key", "proxy_pwd"];
 /// 网络配置类型（`network_configs.network_type` 的**规范键**，与
 /// `parse_network_config_json` 的匹配键一一对应；不能写 UI 中文标签或大写变体）。
 const NETWORK_TYPES: [&str; 4] = ["ssh", "proxy", "ssl", "chain"];
 
-/// 网络配置字段输入的键（与 `helpers::network_field_specs` 一一对应）。
+/// 元数据表单字段输入的键（认证 / 网络共用同一批输入实体；
+/// 与 `helpers::{network_field_specs, auth_field_specs}` 的声明一一对应）。
 /// 一次性创建全部输入（渲染期不建实体），按类型只显示子集。
-const NET_FIELD_KEYS: [&str; 12] = [
+const NET_FIELD_KEYS: [&str; 17] = [
     "host",
     "port",
     "username",
@@ -65,6 +68,11 @@ const NET_FIELD_KEYS: [&str; 12] = [
     "ca",
     "cert",
     "key",
+    "passphrase",
+    "cert_path",
+    "cert_key_path",
+    "principal",
+    "keytab_path",
 ];
 /// SSL/TLS 模式（domain 枚举：与 `url_params` 的 SSL 参数注入对齐，非业务数据）。
 const SSL_MODES: [&str; 5] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -94,10 +102,20 @@ pub use project_picker::{
 pub(crate) use staging::saved_scope_short;
 pub use staging::ConnectionDraft;
 
+/// 管理器列表条目：名称 + 被引用计数（原型 §3.6 要求显示引用计数）。
+#[derive(Clone, Debug)]
+pub struct ManagerItem {
+    pub name: String,
+    /// 引用该配置的连接数（全局库 + 当前打开项目）。
+    pub refs: usize,
+}
+
 /// 管理器工作区（三个管理器共用；列表 + 新建/编辑表单，Entity 状态持久）。
 pub struct ManagerWorkspace {
     pub kind: usize,
-    pub items: Vec<String>,
+    pub items: Vec<ManagerItem>,
+    /// 当前项目根（引用计数与删除守卫用；打开管理器时由宿主会话写入）。
+    pub project_root: Option<String>,
     pub new_name: Entity<InputState>,
     pub new_type: Entity<SelectState<SearchableVec<SharedString>>>,
     pub new_data: Entity<InputState>,

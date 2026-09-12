@@ -757,10 +757,15 @@ pub(crate) fn build_network_config_json(
 
 /// config JSON → 字段值（编辑回填；缺失 / 非法 JSON → 全空，不报错）。
 pub(crate) fn network_config_values(network_type: &str, config_json: &str) -> Vec<(String, String)> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(config_json) else {
+    spec_field_values(network_field_specs(network_type), config_json)
+}
+
+/// 按字段声明从 JSON 回填文本值（网络 / 认证共用）。
+fn spec_field_values(specs: Vec<NetFieldSpec>, json: &str) -> Vec<(String, String)> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
         return Vec::new();
     };
-    network_field_specs(network_type)
+    specs
         .into_iter()
         .map(|spec| {
             let text = match read_json_path(&value, spec.path) {
@@ -777,6 +782,100 @@ pub(crate) fn network_config_values(network_type: &str, config_json: &str) -> Ve
             (spec.key.to_string(), text)
         })
         .collect()
+}
+
+// ===== 认证配置字段（`auth_configs.auth_data` 的结构化编辑）=====
+//
+// 背景（审计 A5）：认证管理器原先只有「数据(JSON)」文本框，用户必须手写
+// `inject_auth_into_url` / `inject_{ssh,proxy}_auth_from_auth_data` 认得的键（含
+// camelCase 的 `keyPath` / `certPath` / `keytabPath`）。与网络档案同款：字段声明 +
+// JSON 组装 / 校验 / 回填都是纯函数，渲染层只摆输入框。
+
+/// 某认证类型需要显示的字段（**空 = 走原始 JSON 文本框**）。
+///
+/// `path` 是**写进 `auth_data` 的键**，与后端读取端严格一致：
+/// - `password` / `ldap`：`username` / `password`（`inject_auth_into_url` 同一分支）；
+/// - `ssh_key`：`keyPath` / `passphrase` / `password`（`inject_ssh_auth_from_auth_data`）；
+/// - `proxy_pwd`：`username` / `password`（`inject_proxy_auth_from_auth_data`）；
+/// - `pg_class`：`certPath` / `certKeyPath`；`kerberos`：`principal` / `keytabPath`。
+pub(crate) fn auth_field_specs(auth_type: &str) -> Vec<NetFieldSpec> {
+    match auth_type.trim().to_ascii_lowercase().as_str() {
+        "password" | "ldap" => vec![
+            net_spec("username", "用户名", &["username"], NetFieldKind::Text, true, "数据库账号"),
+            net_spec("password", "密码", &["password"], NetFieldKind::Password, true, "登录密码"),
+        ],
+        "ssh_key" | "ssh" => vec![
+            net_spec("username", "SSH 用户名", &["username"], NetFieldKind::Text, false, "（可选）覆盖档案里的用户名"),
+            net_spec("key_path", "私钥路径", &["keyPath"], NetFieldKind::Text, false, "与密码二选一"),
+            net_spec("passphrase", "私钥口令", &["passphrase"], NetFieldKind::Password, false, "（可选）随私钥使用"),
+            net_spec("password", "SSH 密码", &["password"], NetFieldKind::Password, false, "与私钥二选一"),
+        ],
+        "proxy_pwd" | "proxy" => vec![
+            net_spec("username", "代理用户名", &["username"], NetFieldKind::Text, true, "代理账号"),
+            net_spec("password", "代理密码", &["password"], NetFieldKind::Password, true, "代理密码"),
+        ],
+        "pg_class" => vec![
+            net_spec("cert_path", "客户端证书", &["certPath"], NetFieldKind::Text, true, "/etc/ssl/client.crt"),
+            net_spec("cert_key_path", "客户端私钥", &["certKeyPath"], NetFieldKind::Text, false, "（可选）"),
+        ],
+        "kerberos" => vec![
+            net_spec("principal", "Principal", &["principal"], NetFieldKind::Text, true, "user@REALM"),
+            net_spec("keytab_path", "Keytab 路径", &["keytabPath"], NetFieldKind::Text, false, "（可选）"),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// 认证字段值 → `auth_data` JSON（校验必填 / SSH 凭据二选一 / 代理凭据成对）。
+pub(crate) fn build_auth_config_json(
+    auth_type: &str,
+    values: &[(String, String)],
+) -> Result<String, String> {
+    let key = auth_type.trim().to_ascii_lowercase();
+    let specs = auth_field_specs(&key);
+    if specs.is_empty() {
+        return Err(format!("认证类型「{}」不支持字段编辑", auth_type.trim()));
+    }
+    let get = |k: &str| -> String {
+        values
+            .iter()
+            .find(|(kk, _)| kk == k)
+            .map(|(_, v)| v.trim().to_string())
+            .unwrap_or_default()
+    };
+
+    for spec in &specs {
+        if spec.required && get(spec.key).is_empty() {
+            return Err(format!("「{}」为必填项", spec.label));
+        }
+    }
+    let is_ssh = matches!(key.as_str(), "ssh_key" | "ssh");
+    let is_proxy = matches!(key.as_str(), "proxy_pwd" | "proxy");
+    if is_ssh && get("key_path").is_empty() && get("password").is_empty() {
+        return Err("SSH 认证需要「私钥路径」或「密码」二者之一".into());
+    }
+    if is_proxy && (get("username").is_empty() || get("password").is_empty()) {
+        return Err("代理认证需要同时填写用户名与密码".into());
+    }
+
+    let mut root = serde_json::Map::new();
+    for spec in &specs {
+        let raw = get(spec.key);
+        if raw.is_empty() {
+            continue;
+        }
+        // 口令只在私钥路径存在时有意义（注入函数只在 keyPath 分支读它）。
+        if is_ssh && spec.key == "passphrase" && get("key_path").is_empty() {
+            continue;
+        }
+        insert_json_path(&mut root, spec.path, serde_json::Value::String(raw));
+    }
+    Ok(serde_json::Value::Object(root).to_string())
+}
+
+/// `auth_data` JSON → 字段值（编辑回填；缺失 / 非法 JSON → 全空，不报错）。
+pub(crate) fn auth_config_values(auth_type: &str, config_json: &str) -> Vec<(String, String)> {
+    spec_field_values(auth_field_specs(auth_type), config_json)
 }
 
 fn is_bool_text(raw: &str) -> bool {
@@ -924,7 +1023,8 @@ mod tests {
         driver_capabilities, driver_form_fields, driver_short_name, enabled_drivers_of_type,
         field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
         staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
-        type_has_driver, url_template_example, build_network_config_json, network_config_values,
+        type_has_driver, url_template_example, auth_config_values, auth_field_specs,
+        build_auth_config_json, build_network_config_json, network_config_values,
         network_field_specs, DriverDerived,
     };
     use connection::model::DataSourceSaveInput;
@@ -1134,6 +1234,154 @@ mod tests {
         // 非法 JSON：不 panic，字段全空（不把垃圾反填进表单）。
         let empty = network_config_values("proxy", "not-json");
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn auth_field_specs_cover_supported_types() {
+        for t in [
+            "password", "PASSWORD", "ldap", "pg_class", "kerberos", "ssh_key", "ssh",
+            "proxy_pwd", "proxy",
+        ] {
+            assert!(!auth_field_specs(t).is_empty(), "{t} 应有字段声明");
+        }
+        assert!(
+            auth_field_specs("unknown_new_auth").is_empty(),
+            "未知类型没有声明 → 回落到原始 JSON 文本框"
+        );
+    }
+
+    #[test]
+    fn auth_config_json_uses_backend_keys() {
+        // 键必须与后端读取端一致（`inject_auth_into_url` / `inject_{ssh,proxy}_auth_from_auth_data`）。
+        let v = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, s)| ((*k).to_string(), (*s).to_string()))
+                .collect()
+        };
+
+        let json = build_auth_config_json(
+            "password",
+            &v(&[("username", "alice"), ("password", "s3cret")]),
+        )
+        .expect("password 组装");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(parsed["username"], "alice");
+        assert_eq!(parsed["password"], "s3cret");
+
+        let json = build_auth_config_json(
+            "pg_class",
+            &v(&[("cert_path", "/c/c.pem"), ("cert_key_path", "/c/k.pem")]),
+        )
+        .expect("pg_class 组装");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(parsed["certPath"], "/c/c.pem", "后端读 certPath（驼峰）");
+        assert_eq!(parsed["certKeyPath"], "/c/k.pem");
+
+        let json = build_auth_config_json(
+            "kerberos",
+            &v(&[("principal", "u@REALM"), ("keytab_path", "/k.keytab")]),
+        )
+        .expect("kerberos 组装");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(parsed["principal"], "u@REALM");
+        assert_eq!(parsed["keytabPath"], "/k.keytab");
+
+        // SSH：私钥路径 + 口令；未填字段不写空值
+        let json = build_auth_config_json(
+            "ssh_key",
+            &v(&[("username", "deploy"), ("key_path", "~/.ssh/id"), ("passphrase", "pp")]),
+        )
+        .expect("ssh 组装");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(parsed["keyPath"], "~/.ssh/id");
+        assert_eq!(parsed["passphrase"], "pp");
+        assert_eq!(parsed["username"], "deploy");
+        assert!(parsed.get("password").is_none(), "未填字段不写空串");
+
+        // 只填口令不填私钥：口令被忽略（注入函数只在 keyPath 分支读它）
+        let json = build_auth_config_json(
+            "ssh_key",
+            &v(&[("password", "ssh-pwd"), ("passphrase", "pp")]),
+        )
+        .expect("ssh 密码组装");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert!(parsed.get("passphrase").is_none());
+        assert_eq!(parsed["password"], "ssh-pwd");
+    }
+
+    #[test]
+    fn auth_config_json_validation_and_roundtrip() {
+        let v = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(k, s)| ((*k).to_string(), (*s).to_string()))
+                .collect()
+        };
+
+        // 必填（password 类型需要用户名）
+        let err = build_auth_config_json("password", &v(&[("password", "p")]))
+            .expect_err("缺用户名应报错");
+        assert!(err.contains("用户名"), "{err}");
+        // 代理凭据成对
+        let err = build_auth_config_json("proxy_pwd", &v(&[("username", "u")]))
+            .expect_err("缺密码应报错");
+        assert!(err.contains("密码"), "{err}");
+        // SSH 凭据二选一
+        let err = build_auth_config_json("ssh_key", &v(&[("username", "u")]))
+            .expect_err("无凭据应报错");
+        assert!(err.contains("私钥") || err.contains("密码"), "{err}");
+        // 未声明字段的类型：明确提示走原始 JSON
+        let err = build_auth_config_json("oauth2", &[]).expect_err("未知类型应拒绝字段编辑");
+        assert!(err.contains("不支持字段编辑"), "{err}");
+
+        // 回填往返（proxy_pwd）
+        let json = build_auth_config_json(
+            "proxy_pwd",
+            &v(&[("username", "u"), ("password", "p")]),
+        )
+        .expect("build");
+        let values = auth_config_values("proxy_pwd", &json);
+        let get = |k: &str| {
+            values
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, x)| x.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(get("username"), "u");
+        assert_eq!(get("password"), "p");
+
+        // 非法 JSON：不 panic，字段全空
+        assert!(auth_config_values("password", "not-json").is_empty());
+    }
+
+    #[test]
+    fn auth_config_json_is_readable_by_backend_injector() {
+        // A5 核心闭环：UI 字段组装出的 `auth_data` 必须能被后端注入函数直接读懂。
+        let json = build_auth_config_json(
+            "password",
+            &[
+                ("username".to_string(), "alice".to_string()),
+                ("password".to_string(), "pwd".to_string()),
+            ],
+        )
+        .expect("build");
+        let url = connection::url_params::inject_auth_into_url(
+            "postgres://h:5432/db",
+            "password",
+            &json,
+        )
+        .expect("注入凭据");
+        assert_eq!(url, "postgres://alice:pwd@h:5432/db");
+
+        // SSH 私钥分支：键名必须是后端读的 `keyPath`（驼峰），否则等于没配。
+        let json = build_auth_config_json(
+            "ssh_key",
+            &[("key_path".to_string(), "~/.ssh/id_ed25519".to_string())],
+        )
+        .expect("build ssh");
+        assert!(json.contains("\"keyPath\""), "{json}");
     }
 
     #[test]

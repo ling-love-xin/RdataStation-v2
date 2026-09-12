@@ -102,6 +102,7 @@ impl ConnectionDialogState {
             mgr: Rc::new(RefCell::new(ManagerWorkspace {
                 kind: 0,
                 items: Vec::new(),
+                project_root: None,
                 new_name,
                 new_type,
                 new_data,

@@ -867,7 +867,8 @@ impl SidebarPanel {
         if need_org || !need_state.is_empty() {
             let conn_ids = need_state.clone();
             cx.defer_in(window, move |this, _window, cx| {
-                if need_org {
+                let org_pending = need_org && !this.database_nav.borrow().groups_loaded;
+                if org_pending {
                     this.reload_nav_org();
                 }
                 for cid in &conn_ids {
@@ -2415,9 +2416,7 @@ impl SidebarPanel {
         let executor = cx.background_executor().clone();
         let task = cx.spawn(async move |_this, cx| {
             loop {
-                executor
-                    .timer(std::time::Duration::from_millis(60))
-                    .await;
+                executor.timer(std::time::Duration::from_millis(60)).await;
                 let results = nav_jobs::drain_load_results();
                 let had = !results.is_empty();
                 if had
@@ -2429,9 +2428,7 @@ impl SidebarPanel {
                 }
                 if !nav_jobs::has_pending_loads() {
                     // 多等一拍确认没有新任务（render 可能刚入队）。
-                    executor
-                        .timer(std::time::Duration::from_millis(120))
-                        .await;
+                    executor.timer(std::time::Duration::from_millis(120)).await;
                     if !nav_jobs::has_pending_loads() {
                         break;
                     }
@@ -2453,7 +2450,9 @@ impl SidebarPanel {
                 }
             );
             let (catalog, schema) = match &r.path {
-                NavPath::Folder { catalog, schema, .. } => (catalog.clone(), schema.clone()),
+                NavPath::Folder {
+                    catalog, schema, ..
+                } => (catalog.clone(), schema.clone()),
                 _ => (String::new(), String::new()),
             };
             let conn_id = r.conn_id.clone();
@@ -3672,27 +3671,21 @@ impl EditorPanel {
         }
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| {
-            loop {
-                executor
-                    .timer(std::time::Duration::from_millis(60))
-                    .await;
-                let results = nav_jobs::drain_props_results();
-                let had = !results.is_empty();
-                if had
-                    && weak
-                        .update(cx, |this, cx| this.apply_props_results(results, cx))
-                        .is_err()
-                {
-                    return;
-                }
+        let task = cx.spawn(async move |_this, cx| loop {
+            executor.timer(std::time::Duration::from_millis(60)).await;
+            let results = nav_jobs::drain_props_results();
+            let had = !results.is_empty();
+            if had
+                && weak
+                    .update(cx, |this, cx| this.apply_props_results(results, cx))
+                    .is_err()
+            {
+                return;
+            }
+            if !nav_jobs::has_pending_props() {
+                executor.timer(std::time::Duration::from_millis(120)).await;
                 if !nav_jobs::has_pending_props() {
-                    executor
-                        .timer(std::time::Duration::from_millis(120))
-                        .await;
-                    if !nav_jobs::has_pending_props() {
-                        break;
-                    }
+                    break;
                 }
             }
         });
@@ -3700,11 +3693,7 @@ impl EditorPanel {
     }
 
     /// 回填属性加载结果（主线程；key 不匹配的过期结果丢弃）。
-    fn apply_props_results(
-        &mut self,
-        results: Vec<nav_jobs::PropsResult>,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_props_results(&mut self, results: Vec<nav_jobs::PropsResult>, cx: &mut Context<Self>) {
         for r in results {
             let mut st = self.property.borrow_mut();
             if st.loaded_for.as_deref() != Some(r.key.as_str()) {

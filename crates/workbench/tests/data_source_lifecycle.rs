@@ -987,22 +987,178 @@ fn probe_config_applies_referenced_auth_profile() {
         "说明应标明档案已生效：{notes:?}"
     );
 
-    // 2) 引用不存在的档案：不静默——URL 保持原样，说明里明确「未找到」。
-    let (config, _guards, notes) = rt
+    // 2) 引用不存在的档案：A2 严格模式——直接报错，不再静默回退到无凭据直连。
+    let err = rt
         .block_on(ConnectionService::build_probe_config(
             Some(global_db),
             probe_input("postgres", "postgres://db.internal:5432/app", Some("G_auth_missing")),
         ))
-        .expect("build probe config");
-    assert_eq!(
-        config.url_override.as_deref(),
-        Some("postgres://db.internal:5432/app"),
-        "档案缺失时不得凭空注入凭据"
-    );
+        .err()
+        .expect("档案缺失必须让配置构建失败");
     assert!(
-        notes.iter().any(|n| n.contains("未找到引用的认证档案")),
-        "档案缺失必须可见：{notes:?}"
+        err.to_string().contains("引用的认证配置不存在"),
+        "错误应指明档案缺失：{err}"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A2：引用计数与删除守卫（原型 §3.6「被引用的配置不可删除」）。
+#[test]
+fn manager_reference_count_and_delete_guard() {
+    use engine::persistence::auth_store::AuthConfig;
+    use rds_workbench::services::data_source_service::ReferenceField;
+
+    let dir = temp_dir("refcount");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+    let (global_db, service) = make_service_with_db(&dir);
+    let rt = runtime();
+    let root_str = project_root.to_string_lossy().to_string();
+
+    let auth_id = "G_auth_ref_demo";
+    let net_id = "G_net_ref_demo";
+    rt.block_on(global_db.create_auth_config(&AuthConfig {
+        id: auth_id.into(),
+        name: Some("演示认证".into()),
+        auth_type: "password".into(),
+        auth_data: r#"{"username":"u","password":"p"}"#.into(),
+        origin: None,
+        source_id: None,
+        snapshot_at: None,
+        created_at: "2026-09-12T00:00:00Z".into(),
+        updated_at: "2026-09-12T00:00:00Z".into(),
+    }))
+    .expect("create auth config");
+    rt.block_on(global_db.create_network_config(&engine::persistence::network_store::NetworkConfig {
+        id: net_id.into(),
+        name: Some("演示网络".into()),
+        network_type: "ssh".into(),
+        config: r#"{"host":"h","username":"u","auth_type":"password","password":"p","remote_host":"db","remote_port":5432}"#.into(),
+        auth_config_id: None,
+        origin: None,
+        source_id: None,
+        snapshot_at: None,
+        created_at: "2026-09-12T00:00:00Z".into(),
+        updated_at: "2026-09-12T00:00:00Z".into(),
+    }))
+    .expect("create network config");
+
+    // 1) 无引用：计数为 0，守卫放行（空 id 不误报）。
+    let count = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, None));
+    assert_eq!(count.total(), 0);
+    rt.block_on(service.ensure_no_references(
+        ReferenceField::AuthConfig,
+        auth_id,
+        "演示认证",
+        None,
+    ))
+    .expect("无引用应可删除");
+    let empty = rt.block_on(service.count_references(ReferenceField::AuthConfig, "", Some(&root_str)));
+    assert_eq!(empty.total(), 0, "空 id 不参与统计");
+
+    // 2) 全局连接引用二者 → 计数与拦截消息都要说清范围。
+    let mut g = input("ref_global", "postgres", "postgres://u:p@h:5432/db");
+    g.auth_config_id = Some(auth_id.into());
+    g.network_config_id = Some(net_id.into());
+    rt.block_on(service.save(&g, None)).expect("save global");
+
+    let auth = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, Some(&root_str)));
+    assert_eq!((auth.global, auth.project), (1, 0));
+    let err = rt
+        .block_on(service.ensure_no_references(
+            ReferenceField::AuthConfig,
+            auth_id,
+            "演示认证",
+            Some(&root_str),
+        ))
+        .expect_err("被引用的认证配置不可删除");
+    let msg = err.to_string();
+    assert!(msg.contains("认证配置") && msg.contains("全局 1 条"), "{msg}");
+
+    let net = rt.block_on(service.count_references(ReferenceField::NetworkConfig, net_id, None));
+    assert_eq!(net.total(), 1, "网络配置走同一套计数");
+    assert!(
+        rt.block_on(service.ensure_no_references(
+            ReferenceField::NetworkConfig,
+            net_id,
+            "演示网络",
+            None
+        ))
+        .is_err(),
+        "被引用的网络配置同样不可删除"
+    );
+
+    // 3) 项目连接引用（P_）→ 项目侧计数可见；未打开项目时项目侧不可见（已知局限）。
+    let mut p = input("ref_project", "postgres", "postgres://u:p@h:5432/db");
+    p.scope = ConnectionScope::Project;
+    p.auth_config_id = Some(auth_id.into());
+    rt.block_on(service.save(&p, Some(&root_str))).expect("save project");
+    let both = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, Some(&root_str)));
+    assert_eq!((both.global, both.project), (1, 1));
+    let msg = rt
+        .block_on(service.ensure_no_references(
+            ReferenceField::AuthConfig,
+            auth_id,
+            "演示认证",
+            Some(&root_str),
+        ))
+        .expect_err("项目引用同样拦截")
+        .to_string();
+    assert!(msg.contains("全局 1 条") && msg.contains("当前项目 1 条"), "{msg}");
+    let no_project = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, None));
+    assert_eq!((no_project.global, no_project.project), (1, 0), "未打开项目时项目侧不可见");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A5：认证档案的编辑回填必须拿到**解密后**的 auth_data（列表接口是脱敏的）。
+#[test]
+fn auth_config_detail_by_name_decrypts_for_edit() {
+    use engine::persistence::auth_store::AuthConfig;
+
+    let dir = temp_dir("auth-detail");
+    let (global_db, service) = make_service_with_db(&dir);
+    let rt = runtime();
+
+    let auth_id = "G_auth_detail_demo";
+    rt.block_on(global_db.create_auth_config(&AuthConfig {
+        id: auth_id.into(),
+        name: Some("回填用认证".into()),
+        auth_type: "password".into(),
+        auth_data: r#"{"username":"alice","password":"s3cret"}"#.into(),
+        origin: None,
+        source_id: None,
+        snapshot_at: None,
+        created_at: "2026-09-12T00:00:00Z".into(),
+        updated_at: "2026-09-12T00:00:00Z".into(),
+    }))
+    .expect("create auth config");
+
+    // 列表接口不返回明文（脱敏），否则管理器列表就是密码泄漏面。
+    let listed = rt.block_on(service.list_auth_configs()).expect("list");
+    let row = listed.iter().find(|a| a.id == auth_id).expect("listed");
+    assert!(
+        !row.auth_data.contains("s3cret"),
+        "列表不应出现明文密码：{}",
+        row.auth_data
+    );
+
+    // 编辑回填：解密后的 JSON（否则字段表单会把密文当成密码写回去）
+    let (ty, data) = rt
+        .block_on(service.auth_config_detail_by_name("回填用认证"))
+        .expect("detail")
+        .expect("档案存在");
+    assert_eq!(ty, "password");
+    let parsed: serde_json::Value = serde_json::from_str(&data).expect("auth_data 是 JSON");
+    assert_eq!(parsed["username"], "alice");
+    assert_eq!(parsed["password"], "s3cret", "回填必须是明文");
+
+    // 不存在 → Ok(None)（不是错误）
+    assert!(rt
+        .block_on(service.auth_config_detail_by_name("不存在的档案"))
+        .expect("detail")
+        .is_none());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1058,6 +1214,43 @@ fn probe_config_applies_referenced_network_profile() {
     assert!(
         err.to_string().contains("网络档案应用失败"),
         "错误应说明网络档案：{err}"
+    );
+
+    // 类型未知的档案（`parse_network_config_json` 返回 None）同样必须失败：
+    // 不能因为解析不了就退回直连（A2）。
+    let unknown_id = {
+        let pm = rt
+            .block_on(ProjectDatabaseManager::open(&project_root, 4))
+            .expect("open project db");
+        rt.block_on(pm.create_project_network_config(Some("未知类型"), "carrier_pigeon", "{}"))
+            .expect("create network config")
+            .id
+    };
+    let outcome = rt.block_on(ConnectionService::build_probe_config(
+        Some(global_db),
+        ProbeConfigInput {
+            db_type: "postgres",
+            url: "postgres://db.internal:5432/app",
+            name: "probe_net_unknown",
+            username: None,
+            password: None,
+            auth_config_id: None,
+            auth_method: None,
+            network_config_id: Some(&unknown_id),
+            project_path: Some(&root_str),
+            driver_properties: None,
+            advanced_options: None,
+        },
+    ));
+    let err = match outcome {
+        Ok((_, _, notes)) => {
+            panic!("无法解析的网络档案必须失败（不能退回直连）；notes={notes:?}")
+        }
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("无法解析"),
+        "错误应说明解析失败：{err}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

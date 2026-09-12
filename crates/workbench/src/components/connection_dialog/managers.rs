@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::data_source_service::ReferenceField;
 
 /// 网络配置字段行的标签列宽（容纳「校验服务器证书」这类长标签）。
 /// 结构尺寸最终应迁移到 `ui.rs` 登记（与对话框的 `DIALOG_*` 同路）。
@@ -13,11 +14,19 @@ fn net_input_entity(mgr: &ManagerWorkspace, key: &str) -> Option<Entity<InputSta
         .map(|(_, e)| e.clone())
 }
 
-/// 当前网络类型的字段声明（按类型缓存，只在类型变化时重算）。
-fn net_specs_now(mgr: &ManagerWorkspace, type_key: &str) -> Vec<NetFieldSpec> {
-    if mgr.net_specs_for.borrow().as_str() != type_key {
-        *mgr.net_specs.borrow_mut() = network_field_specs(type_key);
-        *mgr.net_specs_for.borrow_mut() = type_key.to_string();
+/// 当前元数据类型的字段声明（按 `(kind, 类型)` 缓存，只在变化时重算）。
+///
+/// 认证（kind 0）与网络（kind 1）共用同一批输入实体，所以缓存键必须带 kind 前缀，
+/// 避免两个管理器互相作废 / 错用对方的声明。
+fn meta_field_specs_now(mgr: &ManagerWorkspace, kind: usize, type_key: &str) -> Vec<NetFieldSpec> {
+    let cache_key = format!("{kind}:{}", type_key.trim().to_ascii_lowercase());
+    if mgr.net_specs_for.borrow().as_str() != cache_key {
+        *mgr.net_specs.borrow_mut() = match kind {
+            0 => auth_field_specs(type_key),
+            1 => network_field_specs(type_key),
+            _ => Vec::new(),
+        };
+        *mgr.net_specs_for.borrow_mut() = cache_key;
     }
     mgr.net_specs.borrow().clone()
 }
@@ -49,6 +58,18 @@ fn load_network_config_by_name(name: &str, cx: &mut App) -> Option<(String, Stri
         .map(|n| (n.network_type, n.config))
 }
 
+/// 按名称读取认证配置（类型, **解密后**的 auth_data JSON）；服务未就绪 / 不存在 / 解密失败 → None。
+///
+/// 走服务层专用接口：列表接口出于脱敏不返回 `auth_data` 明文。
+fn load_auth_config_by_name(name: &str, cx: &mut App) -> Option<(String, String)> {
+    let rt = tokio::runtime::Runtime::new().ok()?;
+    let service = DataSourceService::global().ok()?;
+    let _ = cx;
+    rt.block_on(service.auth_config_detail_by_name(name))
+        .ok()
+        .flatten()
+}
+
 pub(crate) fn open_manager(
     kind: usize,
     mgr: &Rc<RefCell<ManagerWorkspace>>,
@@ -61,6 +82,13 @@ pub(crate) fn open_manager(
     let entity = entity.clone();
     let shared_for_layer = shared.clone();
 
+    // 当前项目根：引用计数与删除守卫需要它才能看到 P_/GP_ 连接（未打开项目时仅全局）。
+    let project_root = shared
+        .project
+        .borrow()
+        .as_ref()
+        .map(|p| p.root.to_string_lossy().to_string());
+
     // 拉取列表（按 kind）。
     {
         let mut m = mgr.borrow_mut();
@@ -68,6 +96,7 @@ pub(crate) fn open_manager(
         m.editing = None;
         m.msg = None;
         m.items.clear();
+        m.project_root = project_root;
         m.policy_env = None;
         m.policy_editing = None;
         m.policies.borrow_mut().clear();
@@ -146,7 +175,16 @@ pub(crate) fn open_manager(
                 .border_color(theme.colors.border)
                 .px_2()
                 .py_1()
-                .child(div().text_sm().flex_1().child(item.clone()));
+                .child(div().text_sm().flex_1().child(item.name.clone()));
+            // 被引用计数（原型 §3.6）：被引用时删除会被拦下，先在这里告知数量。
+            if item.refs > 0 {
+                row = row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!("被引用 {}", item.refs)),
+                );
+            }
             if kind == 2 {
                 row = row.child(
                     Button::new(format!("mgr-policy-{idx}"))
@@ -157,15 +195,14 @@ pub(crate) fn open_manager(
                             let mgr = mgr.clone();
                             let entity = entity.clone();
                             move |_, _window, app| {
-                                {
-                                    let mut m = mgr.borrow_mut();
-                                    m.policy_env = Some(item.clone());
-                                    m.policy_editing = None;
-                                    m.policy_enabled.set(true);
-                                }
-                                refresh_policy_items(&item, &mgr, app);
                                 let mut m = mgr.borrow_mut();
-                                m.msg = Some(format!("环境「{item}」策略管理"));
+                                m.policy_env = Some(item.name.clone());
+                                m.policy_editing = None;
+                                m.policy_enabled.set(true);
+                                drop(m);
+                                refresh_policy_items(&item.name, &mgr, app);
+                                let mut m = mgr.borrow_mut();
+                                m.msg = Some(format!("环境「{}」策略管理", item.name));
                                 drop(m);
                                 entity.update(app, |_, cx| cx.notify());
                             }
@@ -181,16 +218,28 @@ pub(crate) fn open_manager(
                                 let mgr = mgr.clone();
                                 let entity = entity.clone();
                                 move |_, window, app| {
+                                    let item_name = item.name.clone();
                                     let mut m = mgr.borrow_mut();
-                                    m.editing = Some(item.clone());
-                                    m.msg = Some(format!("编辑中：{item}（保存后更新既有条目）"));
-                                    m.new_name.update(app, |s, cx| s.set_value(item.clone(), window, cx));
-                                    if kind == 1 {
-                                        // 回填真实字段（此前只回填名称 → 保存会把已有 config 覆盖成空）。
-                                        if let Some((ty, config)) = load_network_config_by_name(&item, app) {
+                                    m.editing = Some(item_name.clone());
+                                    m.msg = Some(format!("编辑中：{item_name}（保存后更新既有条目）"));
+                                    m.new_name.update(app, |s, cx| s.set_value(item_name.clone(), window, cx));
+                                    // 认证（0）与网络（1）：回填真实字段（此前只回填名称 →
+                                    // 保存会把已有 config / auth_data 覆盖成空）。
+                                    if kind <= 1 {
+                                        let loaded = if kind == 0 {
+                                            load_auth_config_by_name(&item_name, app)
+                                        } else {
+                                            load_network_config_by_name(&item_name, app)
+                                        };
+                                        if let Some((ty, config)) = loaded {
                                             m.new_data
                                                 .update(app, |s, cx| s.set_value(config.clone(), window, cx));
-                                            for (key, value) in network_config_values(&ty, &config) {
+                                            let values = if kind == 0 {
+                                                auth_config_values(&ty, &config)
+                                            } else {
+                                                network_config_values(&ty, &config)
+                                            };
+                                            for (key, value) in values {
                                                 if let Some(input) = net_input_entity(&m, &key) {
                                                     input.update(app, |s, cx| {
                                                         s.set_value(value.clone(), window, cx)
@@ -200,8 +249,8 @@ pub(crate) fn open_manager(
                                             m.new_type.update(app, |s, cx| {
                                                 s.set_selected_value(&SharedString::from(ty.clone()), window, cx)
                                             });
-                                            // 类型可能已变：让渲染重算字段声明与占位。
-                                            *m.net_specs_for.borrow_mut() = ty;
+                                            // 类型可能已变：立即按新类型重算字段声明（渲染期只读缓存）。
+                                            let _ = meta_field_specs_now(&m, kind, &ty);
                                         }
                                     }
                                     drop(m);
@@ -218,7 +267,8 @@ pub(crate) fn open_manager(
                                 let mgr = mgr.clone();
                                 let entity = entity.clone();
                                 move |_, _window, app| {
-                                    let deleted = delete_manager_item(kind, &item);
+                                    let project_root = mgr.borrow().project_root.clone();
+                                    let deleted = delete_manager_item(kind, &item.name, project_root.as_deref());
                                     let mut m = mgr.borrow_mut();
                                     m.msg = Some(deleted.clone());
                                     drop(m);
@@ -249,8 +299,9 @@ pub(crate) fn open_manager(
                 .cloned()
                 .unwrap_or_default()
                 .to_string();
-            let net_specs: Vec<NetFieldSpec> = if kind == 1 {
-                net_specs_now(&m, &net_type_now)
+            // 认证（kind 0）与网络（kind 1）都按类型声明展开字段；无声明（如 chain）回落原始 JSON。
+            let net_specs: Vec<NetFieldSpec> = if kind <= 1 {
+                meta_field_specs_now(&m, kind, &net_type_now)
             } else {
                 Vec::new()
             };
@@ -342,16 +393,20 @@ pub(crate) fn open_manager(
                                             entity.update(app, |_, cx| cx.notify());
                                             return;
                                         }
-                                        // 网络配置：有字段声明时由字段组装 JSON；校验失败只提示，不落库。
-                                        let data = if kind == 1 {
-                                            let specs = net_specs_now(&mgr.borrow(), &tpe);
+                                        // 认证 / 网络：有字段声明时由字段组装 JSON；校验失败只提示，不落库。
+                                        // 无声明（如 chain / 未知认证类型）→ 继续用原始 JSON 文本框。
+                                        let data = if kind <= 1 {
+                                            let specs = meta_field_specs_now(&mgr.borrow(), kind, &tpe);
                                             if specs.is_empty() {
                                                 raw_data
                                             } else {
-                                                match build_network_config_json(
-                                                    &tpe,
-                                                    &collect_net_values(&mgr.borrow(), app),
-                                                ) {
+                                                let values = collect_net_values(&mgr.borrow(), app);
+                                                let built = if kind == 0 {
+                                                    build_auth_config_json(&tpe, &values)
+                                                } else {
+                                                    build_network_config_json(&tpe, &values)
+                                                };
+                                                match built {
                                                     Ok(json) => json,
                                                     Err(e) => {
                                                         mgr.borrow_mut().msg = Some(e);
@@ -612,7 +667,10 @@ pub(crate) fn open_manager(
     shared.notify_host(cx);
 }
 
-/// 刷新管理器列表（block_on stores）。
+/// 刷新管理器列表（block_on stores + 引用计数）。
+///
+/// 引用范围：全局库全部连接 + 当前项目根（`mgr.project_root`；未打开项目时仅全局）。
+/// 逐条扫库会变成 N × (全局 + 项目) 两次查询，所以用 `count_references_batch` 一次取齐。
 pub(crate) fn refresh_manager_items(kind: usize, mgr: &Rc<RefCell<ManagerWorkspace>>, cx: &mut App) {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -622,27 +680,50 @@ pub(crate) fn refresh_manager_items(kind: usize, mgr: &Rc<RefCell<ManagerWorkspa
         Ok(s) => s,
         Err(_) => return,
     };
-    let names: Vec<String> = match kind {
-        0 => rt
-            .block_on(service.list_auth_configs())
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|a| a.name)
-            .collect(),
-        1 => rt
-            .block_on(service.list_network_configs())
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|n| n.name)
-            .collect(),
-        _ => rt
-            .block_on(service.list_environments())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| e.name)
-            .collect(),
+    let project_root = mgr.borrow().project_root.clone();
+    let field = match kind {
+        0 => ReferenceField::AuthConfig,
+        1 => ReferenceField::NetworkConfig,
+        _ => ReferenceField::Environment,
     };
-    mgr.borrow_mut().items = names;
+
+    let items: Vec<ManagerItem> = rt.block_on(async {
+        // (id, 显示名)：id 用于引用计数，显示名用于列表。
+        let rows: Vec<(String, String)> = match kind {
+            0 => service
+                .list_auth_configs()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|a| a.name.map(|n| (a.id, n)))
+                .collect(),
+            1 => service
+                .list_network_configs()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|n| n.name.map(|name| (n.id, name)))
+                .collect(),
+            _ => service
+                .list_environments()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| (e.id, e.name))
+                .collect(),
+        };
+        let ids: Vec<String> = rows.iter().map(|(id, _)| id.clone()).collect();
+        let counts = service
+            .count_references_batch(field, &ids, project_root.as_deref())
+            .await;
+        rows.into_iter()
+            .map(|(id, name)| ManagerItem {
+                refs: counts.get(&id).map(|c| c.total()).unwrap_or(0),
+                name,
+            })
+            .collect()
+    });
+    mgr.borrow_mut().items = items;
     let _ = cx;
 }
 
@@ -764,8 +845,11 @@ pub(crate) fn upsert_manager_item(
     }
 }
 
-/// 删除配置（按名称查 ID → store delete）。
-pub(crate) fn delete_manager_item(kind: usize, name: &str) -> String {
+/// 删除配置（按名称查 ID → **引用守卫** → store delete）。
+///
+/// 原型 §3.6：「被引用的配置不可删除」——守卫在服务层（`ensure_no_references`），
+/// 范围与列表计数一致（全局库 + 当前项目）。
+pub(crate) fn delete_manager_item(kind: usize, name: &str, project_root: Option<&str>) -> String {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => return format!("运行时错误: {e}"),
@@ -774,50 +858,54 @@ pub(crate) fn delete_manager_item(kind: usize, name: &str) -> String {
         Ok(s) => s,
         Err(e) => return format!("服务未就绪: {e}"),
     };
-    let _ = service;
     let db = engine::migration::global_init::get_global_db_manager();
     let Some(db) = db else {
         return "全局库未初始化".into();
     };
+    let field = match kind {
+        0 => ReferenceField::AuthConfig,
+        1 => ReferenceField::NetworkConfig,
+        _ => ReferenceField::Environment,
+    };
 
     let outcome = rt.block_on(async {
+        let id = match kind {
+            0 => db
+                .list_auth_configs(None)
+                .await?
+                .iter()
+                .find(|a| a.name.as_deref() == Some(name))
+                .map(|a| a.id.clone()),
+            1 => db
+                .list_network_configs(None)
+                .await?
+                .iter()
+                .find(|n| n.name.as_deref() == Some(name))
+                .map(|n| n.id.clone()),
+            _ => db
+                .list_environments()
+                .await?
+                .iter()
+                .find(|e| e.name == name)
+                .map(|e| e.id.clone()),
+        };
+        let Some(id) = id else {
+            return Ok(()); // 不存在视为已删除
+        };
+        // 引用守卫：被连接引用的档案不允许删除（消息含引用数与范围）。
+        service
+            .ensure_no_references(field, &id, name, project_root)
+            .await?;
         match kind {
-            0 => {
-                let items = db.list_auth_configs(None).await?;
-                let id = items
-                    .iter()
-                    .find(|a| a.name.as_deref() == Some(name))
-                    .map(|a| a.id.clone());
-                match id {
-                    Some(id) => db.delete_auth_config(&id).await,
-                    None => Ok(()), // 不存在视为已删除
-                }
-            }
-            1 => {
-                let items = db.list_network_configs(None).await?;
-                let id = items
-                    .iter()
-                    .find(|n| n.name.as_deref() == Some(name))
-                    .map(|n| n.id.clone());
-                match id {
-                    Some(id) => db.delete_network_config(&id).await,
-                    None => Ok(()),
-                }
-            }
-            _ => {
-                let items = db.list_environments().await?;
-                let id = items.iter().find(|e| e.name == name).map(|e| e.id.clone());
-                match id {
-                    Some(id) => db.delete_environment(&id).await,
-                    None => Ok(()),
-                }
-            }
+            0 => db.delete_auth_config(&id).await,
+            1 => db.delete_network_config(&id).await,
+            _ => db.delete_environment(&id).await,
         }
     });
 
     match outcome {
         Ok(()) => format!("已删除「{name}」"),
-        Err(e) => format!("删除失败: {e}"),
+        Err(e) => format!("删除失败：{e}"),
     }
 }
 
