@@ -13,7 +13,9 @@ use connection::model::DataSource;
 use database::model::NavState;
 use engine::connection_manager::ConnectionType;
 
-use crate::services::connection_service::{ConnectRequest, ConnectionService};
+use crate::services::connection_service::{
+    resolve_network_method_with_project, ConnectRequest, ConnectionService,
+};
 use crate::services::data_source_service::DataSourceService;
 use crate::services::nav_store::NavStore;
 
@@ -43,7 +45,30 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
 
     let ds = load_entry_with(&service, conn_id, project_path)?;
 
-    let url = connection::url::build_connection_url(&ds)?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+    // 引用的网络配置档案（协议链 / SSH / 代理 / SSL）→ `ConnectionMethod`。
+    // 此前恒为 None：对话框里配好的跳板机 / 代理在连接时被静默忽略（审计 #20）。
+    let network_method = rt
+        .block_on(resolve_network_method_with_project(
+            ds.network_config_id.as_deref(),
+            project_path,
+        ))
+        .map_err(|e| e.to_string())?;
+
+    let req = build_connect_request(&ds, project_path, network_method)?;
+    let conn_service = ConnectionService::new(engine::get_connection_manager().clone());
+    rt.block_on(conn_service.connect_with_type(req))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// 组装连接请求（**纯函数，可测**）：作用域路由 + 字段透传；网络方式由 [`connect_entry`] 解析后传入。
+pub fn build_connect_request(
+    ds: &DataSource,
+    project_path: Option<&str>,
+    network_method: Option<connection::config::ConnectionMethod>,
+) -> Result<ConnectRequest, String> {
+    let url = connection::url::build_connection_url(ds)?;
     // 存于项目库（P_/GP_）→ Project；其余（G_ 与遗留 conn-）→ Global。
     // 与 `DataSourceService` 同一判定（`id_prefix::uses_project_storage`），
     // 不再各自实现前缀推导（遗留 ID 曾在此被误归项目）。
@@ -53,7 +78,7 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
         ConnectionType::Global
     };
 
-    let req = ConnectRequest {
+    Ok(ConnectRequest {
         conn_id: Some(ds.id.clone()),
         db_type: ds.db_type.clone(),
         url,
@@ -75,14 +100,8 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
         use_duckdb_fed: Some(ds.use_duckdb_fed),
         password: None,
         skip_persistence: Some(true),
-        network_method: None,
-    };
-
-    let conn_service = ConnectionService::new(engine::get_connection_manager().clone());
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
-    rt.block_on(conn_service.connect_with_type(req))
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        network_method,
+    })
 }
 
 /// 断开运行时连接（保留元数据缓存）。

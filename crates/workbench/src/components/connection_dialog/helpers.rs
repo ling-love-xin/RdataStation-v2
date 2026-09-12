@@ -561,6 +561,266 @@ pub(crate) fn address_field(fields: &[FormField]) -> Option<&FormField> {
         .or_else(|| fields.iter().find(|f| matches!(f.key.as_str(), "file_path" | "path" | "file")))
 }
 
+// ===== 网络配置字段（`network_configs.config` 的结构化编辑）=====
+//
+// 背景（审计 #20 / #24）：管理器原先只有一个「数据(JSON)」文本框，用户必须手写
+// `SshConfig` / `ProxyConfig` 的 JSON 才能建出可用档案（写错就叫苦不迭）。
+// 这里把字段声明、JSON 组装、校验与回填都做成纯函数，渲染层只负责把输入框摆出来——
+// 与「驱动 schema → 表单」同一思路（架构 §15：UI 不造数据，只管形状）。
+
+/// 网络配置字段的输入形态（渲染层据此选 Input 与占位文案）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetFieldKind {
+    Text,
+    Port,
+    Password,
+    Bool,
+}
+
+/// 单个字段声明：`path` 是写入 config JSON 的路径（多段 → 嵌套对象）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NetFieldSpec {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub path: &'static [&'static str],
+    pub kind: NetFieldKind,
+    pub required: bool,
+    pub placeholder: &'static str,
+    /// true = 逗号分隔 → JSON 数组（如 `no_proxy`）。
+    pub array: bool,
+}
+
+fn net_spec(
+    key: &'static str,
+    label: &'static str,
+    path: &'static [&'static str],
+    kind: NetFieldKind,
+    required: bool,
+    placeholder: &'static str,
+) -> NetFieldSpec {
+    NetFieldSpec {
+        key,
+        label,
+        path,
+        kind,
+        required,
+        placeholder,
+        array: false,
+    }
+}
+
+/// 某类型需要显示的字段（**空 = 走原始 JSON 文本框**，如协议链）。
+///
+/// 字段与 `connection::config` 的 serde 模型一一对应：
+/// - `proxy` / `socks`：`ProxyConfig`（host / port / auth.username / auth.password / no_proxy）；
+/// - `ssh`：`SshConfig`（host / port / username / password 或 key_path / remote_host / remote_port）；
+/// - `ssl`：`SslConfig`（verify_server_cert / 三个证书路径）。
+pub(crate) fn network_field_specs(type_key: &str) -> Vec<NetFieldSpec> {
+    let port = NetFieldKind::Port;
+    match type_key.trim().to_ascii_lowercase().as_str() {
+        "ssh" | "ssh_tunnel" => vec![
+            net_spec("host", "SSH 主机", &["host"], NetFieldKind::Text, true, "jump.example.com"),
+            net_spec("port", "SSH 端口", &["port"], port, false, "22"),
+            net_spec("username", "SSH 用户名", &["username"], NetFieldKind::Text, true, "deploy"),
+            net_spec("password", "SSH 密码", &["password"], NetFieldKind::Password, false, "与私钥二选一"),
+            net_spec("key_path", "私钥路径", &["key_path"], NetFieldKind::Text, false, "~/.ssh/id_ed25519"),
+            net_spec("remote_host", "目标主机", &["remote_host"], NetFieldKind::Text, true, "数据库主机（隧道出口）"),
+            net_spec("remote_port", "目标端口", &["remote_port"], port, true, "5432"),
+        ],
+        "proxy" | "http" | "http_proxy" => {
+            let mut specs = proxy_field_specs("8080");
+            specs[1].placeholder = "8080";
+            specs
+        }
+        "socks" | "socks5" | "socks_proxy" => {
+            let mut specs = proxy_field_specs("1080");
+            specs[1].placeholder = "1080";
+            specs
+        }
+        "ssl" | "tls" => vec![
+            net_spec("verify", "校验服务器证书", &["verify_server_cert"], NetFieldKind::Bool, false, "true"),
+            net_spec("ca", "CA 证书路径", &["ca_cert_path"], NetFieldKind::Text, false, "/etc/ssl/ca.pem"),
+            net_spec("cert", "客户端证书", &["client_cert_path"], NetFieldKind::Text, false, "（可选）"),
+            net_spec("key", "客户端私钥", &["client_key_path"], NetFieldKind::Text, false, "（可选）"),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn proxy_field_specs(default_port: &'static str) -> Vec<NetFieldSpec> {
+    vec![
+        net_spec("host", "代理主机", &["host"], NetFieldKind::Text, true, "127.0.0.1"),
+        net_spec("port", "代理端口", &["port"], NetFieldKind::Port, true, default_port),
+        net_spec("username", "代理用户名", &["auth", "username"], NetFieldKind::Text, false, "（可选）"),
+        net_spec("password", "代理密码", &["auth", "password"], NetFieldKind::Password, false, "（可选）"),
+        NetFieldSpec {
+            key: "no_proxy",
+            label: "直连主机",
+            path: &["no_proxy"],
+            kind: NetFieldKind::Text,
+            required: false,
+            placeholder: "localhost,127.0.0.1",
+            array: true,
+        },
+    ]
+}
+
+/// 字段值（key → 原始文本）→ config JSON（校验必填 / 端口 / 布尔）。
+///
+/// SSH 认证方式：填了私钥路径→ `auth_type=private_key`，否则用密码；两者都空报错。
+pub(crate) fn build_network_config_json(
+    network_type: &str,
+    values: &[(String, String)],
+) -> Result<String, String> {
+    let specs = network_field_specs(network_type);
+    if specs.is_empty() {
+        return Err(format!(
+            "类型「{}」不支持字段编辑（协议链请选 chain 并直接填 JSON）",
+            network_type.trim()
+        ));
+    }
+    let get = |key: &str| -> String {
+        values
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.trim().to_string())
+            .unwrap_or_default()
+    };
+
+    for spec in &specs {
+        let raw = get(spec.key);
+        if spec.required && raw.is_empty() {
+            return Err(format!("「{}」为必填项", spec.label));
+        }
+        if spec.kind == NetFieldKind::Port
+            && !raw.is_empty()
+            && raw.parse::<u16>().is_err()
+        {
+            return Err(format!("「{}」需要 1-65535 的端口号", spec.label));
+        }
+        if spec.kind == NetFieldKind::Bool && !raw.is_empty() && !is_bool_text(&raw) {
+            return Err(format!("「{}」需要 true / false", spec.label));
+        }
+    }
+
+    let mut root = serde_json::Map::new();
+    for spec in &specs {
+        let raw = get(spec.key);
+        if raw.is_empty() {
+            continue;
+        }
+        let value = if spec.array {
+            serde_json::Value::Array(
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| serde_json::Value::String(s.to_string()))
+                    .collect(),
+            )
+        } else {
+            match spec.kind {
+                NetFieldKind::Port => serde_json::Value::Number(
+                    raw.parse::<u16>()
+                        .map_err(|_| format!("「{}」端口非法", spec.label))?
+                        .into(),
+                ),
+                NetFieldKind::Bool => serde_json::Value::Bool(parse_bool_text(&raw)),
+                _ => serde_json::Value::String(raw),
+            }
+        };
+        insert_json_path(&mut root, spec.path, value);
+    }
+
+    // SSH 的 `auth` 是内部标签枚举（`auth_type`），配置里必须显式给出。
+    if network_type.trim().eq_ignore_ascii_case("ssh")
+        || network_type.trim().eq_ignore_ascii_case("ssh_tunnel")
+    {
+        let key_path = get("key_path");
+        let password = get("password");
+        if !key_path.is_empty() {
+            root.insert(
+                "auth_type".into(),
+                serde_json::Value::String("private_key".into()),
+            );
+        } else if !password.is_empty() {
+            root.insert(
+                "auth_type".into(),
+                serde_json::Value::String("password".into()),
+            );
+        } else {
+            return Err("SSH 需要「密码」或「私钥路径」二者之一".into());
+        }
+    }
+
+    Ok(serde_json::Value::Object(root).to_string())
+}
+
+/// config JSON → 字段值（编辑回填；缺失 / 非法 JSON → 全空，不报错）。
+pub(crate) fn network_config_values(network_type: &str, config_json: &str) -> Vec<(String, String)> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(config_json) else {
+        return Vec::new();
+    };
+    network_field_specs(network_type)
+        .into_iter()
+        .map(|spec| {
+            let text = match read_json_path(&value, spec.path) {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Number(n)) => n.to_string(),
+                Some(serde_json::Value::Bool(b)) => b.to_string(),
+                Some(serde_json::Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|i| i.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                _ => String::new(),
+            };
+            (spec.key.to_string(), text)
+        })
+        .collect()
+}
+
+fn is_bool_text(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "true" | "false" | "1" | "0" | "yes" | "no"
+    )
+}
+
+fn parse_bool_text(raw: &str) -> bool {
+    matches!(raw.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes")
+}
+
+fn insert_json_path(
+    root: &mut serde_json::Map<String, serde_json::Value>,
+    path: &[&str],
+    value: serde_json::Value,
+) {
+    match path {
+        [] => {}
+        [only] => {
+            root.insert((*only).to_string(), value);
+        }
+        [head, rest @ ..] => {
+            let entry = root
+                .entry((*head).to_string())
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if let serde_json::Value::Object(map) = entry {
+                insert_json_path(map, rest, value);
+            }
+        }
+    }
+}
+
+fn read_json_path<'a>(
+    value: &'a serde_json::Value,
+    path: &[&str],
+) -> Option<&'a serde_json::Value> {
+    match path {
+        [] => Some(value),
+        [head, rest @ ..] => read_json_path(value.get(*head)?, rest),
+    }
+}
+
 /// 文件型（SQLite / DuckDB）连接的落库前清洗：清掉无意义的凭据 / 网络 / TLS 字段。
 ///
 /// 输入对象可能带着上个数据库类型的残留（如从 MySQL 切到 SQLite），这些字段落到库里
@@ -664,7 +924,8 @@ mod tests {
         driver_capabilities, driver_form_fields, driver_short_name, enabled_drivers_of_type,
         field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
         staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
-        type_has_driver, url_template_example, DriverDerived,
+        type_has_driver, url_template_example, build_network_config_json, network_config_values,
+        network_field_specs, DriverDerived,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -725,6 +986,154 @@ mod tests {
         assert!(empty.form_fields.is_empty());
         assert!(empty.capabilities.is_empty());
         assert!(empty.auth_types.is_empty());
+    }
+
+    #[test]
+    fn network_field_specs_cover_supported_types() {
+        for t in ["ssh", "SSH", "ssh_tunnel", "proxy", "http", "socks5", "TLS", "ssl"] {
+            assert!(!network_field_specs(t).is_empty(), "{t} 应有字段声明");
+        }
+        assert!(
+            network_field_specs("chain").is_empty(),
+            "协议链走原始 JSON 文本框（跳太多，不逐项展开）"
+        );
+    }
+
+    #[test]
+    fn network_config_json_matches_engine_models() {
+        // 关键回归：组装出的 JSON 必须能被 `connection::config` 的 serde 模型直接反序列化。
+        let proxy = build_network_config_json(
+            "proxy",
+            &[
+                ("host".into(), "127.0.0.1".into()),
+                ("port".into(), "3128".into()),
+                ("username".into(), "u".into()),
+                ("password".into(), "p".into()),
+                ("no_proxy".into(), "localhost, 127.0.0.1".into()),
+            ],
+        )
+        .expect("build proxy");
+        let parsed: connection::config::ProxyConfig =
+            serde_json::from_str(&proxy).expect("proxy JSON 可反序列化");
+        assert_eq!(parsed.host, "127.0.0.1");
+        assert_eq!(parsed.port, 3128);
+        assert_eq!(parsed.auth.as_ref().map(|a| a.username.as_str()), Some("u"));
+        assert_eq!(
+            parsed.no_proxy,
+            vec!["localhost".to_string(), "127.0.0.1".to_string()]
+        );
+
+        // SSH 密码认证（端口留空 → 模型默认 22）。
+        let ssh = build_network_config_json(
+            "SSH",
+            &[
+                ("host".into(), "jump".into()),
+                ("username".into(), "deploy".into()),
+                ("password".into(), "pw".into()),
+                ("remote_host".into(), "db".into()),
+                ("remote_port".into(), "5432".into()),
+            ],
+        )
+        .expect("build ssh");
+        let parsed: connection::config::SshConfig =
+            serde_json::from_str(&ssh).expect("ssh JSON 可反序列化");
+        assert_eq!(parsed.host, "jump");
+        assert_eq!(parsed.port, 22);
+        assert!(matches!(
+            parsed.auth,
+            connection::config::SshAuth::Password { .. }
+        ));
+
+        // SSH 私钥认证（填了私钥路径 → auth_type 切 private_key）。
+        let ssh_key = build_network_config_json(
+            "ssh",
+            &[
+                ("host".into(), "jump".into()),
+                ("username".into(), "deploy".into()),
+                ("key_path".into(), "/home/u/.ssh/id_ed25519".into()),
+                ("remote_host".into(), "db".into()),
+                ("remote_port".into(), "5432".into()),
+            ],
+        )
+        .expect("build ssh key");
+        let parsed: connection::config::SshConfig =
+            serde_json::from_str(&ssh_key).expect("ssh(私钥) JSON 可反序列化");
+        assert!(matches!(
+            parsed.auth,
+            connection::config::SshAuth::PrivateKey { .. }
+        ));
+
+        let ssl = build_network_config_json(
+            "ssl",
+            &[
+                ("verify".into(), "false".into()),
+                ("ca".into(), "/etc/ssl/ca.pem".into()),
+            ],
+        )
+        .expect("build ssl");
+        let parsed: connection::config::SslConfig =
+            serde_json::from_str(&ssl).expect("ssl JSON 可反序列化");
+        assert!(!parsed.verify_server_cert);
+        assert_eq!(parsed.ca_cert_path.as_deref(), Some("/etc/ssl/ca.pem"));
+    }
+
+    #[test]
+    fn network_config_json_validates_required_ports_and_auth() {
+        let err = build_network_config_json("proxy", &[("port".into(), "1080".into())])
+            .expect_err("缺主机应报错");
+        assert!(err.contains("必填"), "{err}");
+
+        let err = build_network_config_json(
+            "proxy",
+            &[("host".into(), "h".into()), ("port".into(), "abc".into())],
+        )
+        .expect_err("端口非法应报错");
+        assert!(err.contains("端口"), "{err}");
+
+        let err = build_network_config_json(
+            "ssh",
+            &[
+                ("host".into(), "h".into()),
+                ("username".into(), "u".into()),
+                ("remote_host".into(), "d".into()),
+                ("remote_port".into(), "1".into()),
+            ],
+        )
+        .expect_err("无凭据应报错");
+        assert!(err.contains("密码") && err.contains("私钥"), "{err}");
+
+        let err = build_network_config_json("chain", &[])
+            .expect_err("协议链不走字段编辑");
+        assert!(err.contains("chain"), "{err}");
+    }
+
+    #[test]
+    fn network_config_values_roundtrip_for_edit() {
+        let json = build_network_config_json(
+            "proxy",
+            &[
+                ("host".into(), "p".into()),
+                ("port".into(), "3128".into()),
+                ("no_proxy".into(), "localhost".into()),
+            ],
+        )
+        .expect("build");
+        let values = network_config_values("proxy", &json);
+        let get = |k: &str| {
+            values
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(get("host"), "p");
+        assert_eq!(get("port"), "3128");
+        assert_eq!(get("no_proxy"), "localhost");
+        assert_eq!(get("username"), "", "未填字段回填为空");
+
+        // 非法 JSON：不 panic，字段全空（不把垃圾反填进表单）。
+        let empty = network_config_values("proxy", "not-json");
+        assert!(empty.is_empty());
     }
 
     #[test]

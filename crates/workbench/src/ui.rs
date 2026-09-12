@@ -78,6 +78,8 @@ pub const ROW_HEIGHT: f32 = 1.5;
 pub const TREE_INDENT: f32 = 0.875;
 /// 树基础左内边距（0.5rem = 8px）
 pub const TREE_BASE_PADDING: f32 = 0.5;
+/// 导航树类别文件夹（表/视图等）首批渲染条数；超出时显示「加载更多」（非 rem 尺寸，是条目计数）。
+pub const NAV_FOLDER_PAGE_SIZE: usize = 200;
 /// 面板头部高度（2.25rem ≈ 36px）
 pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
 

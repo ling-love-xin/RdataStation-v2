@@ -46,6 +46,26 @@ use connection::model::DataSource;
 
 /// 认证类型（v1 AUTH_TYPE_DEFS 子集；数据为 JSON：{"username":..,"password":..} 等）。
 const AUTH_TYPES: [&str; 3] = ["password", "ssh_key", "proxy_pwd"];
+/// 网络配置类型（`network_configs.network_type` 的**规范键**，与
+/// `parse_network_config_json` 的匹配键一一对应；不能写 UI 中文标签或大写变体）。
+const NETWORK_TYPES: [&str; 4] = ["ssh", "proxy", "ssl", "chain"];
+
+/// 网络配置字段输入的键（与 `helpers::network_field_specs` 一一对应）。
+/// 一次性创建全部输入（渲染期不建实体），按类型只显示子集。
+const NET_FIELD_KEYS: [&str; 12] = [
+    "host",
+    "port",
+    "username",
+    "password",
+    "key_path",
+    "remote_host",
+    "remote_port",
+    "no_proxy",
+    "verify",
+    "ca",
+    "cert",
+    "key",
+];
 /// SSL/TLS 模式（domain 枚举：与 `url_params` 的 SSL 参数注入对齐，非业务数据）。
 const SSL_MODES: [&str; 5] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
 /// 作用域选项（与 ConnectionScope 对齐；GP_ 快照引用共享）。
@@ -56,8 +76,6 @@ const SCOPE_SEG_LABELS: [(&str, &str); 3] = [
     ("项目", SCOPE_LABELS[1]),
     ("全局+项目", SCOPE_LABELS[2]),
 ];
-/// 协议链最大跳数（B1 约束校验器）。
-const MAX_HOPS: usize = 4;
 /// 能力矩阵为空时的提示（驱动未声明任何能力）。
 const CAP_EMPTY_HINT: &str = "该驱动未声明任何能力（drivers.capabilities 为空）";
 
@@ -74,7 +92,7 @@ pub use project_picker::{
     PROJECT_NEW_LABEL, PROJECT_NONE_LABEL, PROJECT_OPEN_LABEL, ProjectItem, ProjectItemKind,
 };
 pub(crate) use staging::saved_scope_short;
-pub use staging::{ConnectionDraft, Hop};
+pub use staging::ConnectionDraft;
 
 /// 管理器工作区（三个管理器共用；列表 + 新建/编辑表单，Entity 状态持久）。
 pub struct ManagerWorkspace {
@@ -83,6 +101,12 @@ pub struct ManagerWorkspace {
     pub new_name: Entity<InputState>,
     pub new_type: Entity<SelectState<SearchableVec<SharedString>>>,
     pub new_data: Entity<InputState>,
+    /// 网络配置字段输入（键 → 实体；`kind=1` 按类型显示子集，`chain` 仍走 `new_data`）。
+    pub net_inputs: Rc<RefCell<Vec<(&'static str, Entity<InputState>)>>>,
+    /// 已缓存的字段声明所对应的网络类型（与 `net_specs` 配套，避免每帧重算）。
+    pub net_specs_for: Rc<RefCell<String>>,
+    /// 当前类型的网络配置字段声明（`helpers::network_field_specs` 的缓存）。
+    pub(crate) net_specs: Rc<RefCell<Vec<NetFieldSpec>>>,
     /// 编辑中的条目名（Some = 更新既有条目，None = 新建）。
     pub editing: Option<String>,
     pub msg: Option<String>,
@@ -119,7 +143,6 @@ pub struct ConnectionDialogState {
     pub remark: Entity<InputState>,
     /// 0 常规 / 1 网络 / 2 能力 / 3 驱动属性 / 4 高级。
     pub active_tab: Rc<Cell<usize>>,
-    pub hops: Rc<RefCell<Vec<Hop>>>,
     pub env: Entity<SelectState<SearchableVec<SharedString>>>,
     pub env_list: Rc<RefCell<Vec<Environment>>>,
     /// 认证方法（选项来自当前驱动的 `supported_auth_types`；连接时用于注入凭据）。

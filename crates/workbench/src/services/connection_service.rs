@@ -2,12 +2,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use connection::config::ConnectionMethod;
+use connection::connector::TunnelGuard;
 use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionType};
 use engine::driver::registry::DriverConnectionConfig;
 use engine::driver::router::DataSourceRouter;
 use engine::driver::traits::{DataSourceMeta, DynDatabase};
 use engine::persistence::connection_store::{self, RecentConnectionInput};
-use engine::persistence::global_db::GlobalConnectionSaveInput;
+use engine::persistence::global_db::{GlobalConnectionSaveInput, GlobalDatabaseManager};
 use engine::persistence::MetadataCacheManager;
 use shared::error::{ConnectionError, CoreError};
 
@@ -62,6 +63,26 @@ pub struct ConnectRequest {
     pub network_method: Option<ConnectionMethod>,
 }
 
+/// 测试连接的配置构建输入（`DataSourceSaveInput` 的建连相关字段子集）。
+///
+/// 不直接复用 `ConnectRequest`：测试连接不生成连接 ID、不落库、不写最近连接记录，
+/// 只关心「用什么参数建连」。
+pub struct ProbeConfigInput<'a> {
+    pub db_type: &'a str,
+    /// 已完成 UI 凭据合并的 URL（[`DataSourceService::test`](crate::services::data_source_service::DataSourceService::test) 负责）。
+    pub url: &'a str,
+    pub name: &'a str,
+    pub username: Option<&'a str>,
+    pub password: Option<&'a str>,
+    pub auth_config_id: Option<&'a str>,
+    pub auth_method: Option<&'a str>,
+    pub network_config_id: Option<&'a str>,
+    /// 项目根（含 `.RSmeta`）；用于解析 P_/GP_ 前缀的档案。
+    pub project_path: Option<&'a str>,
+    pub driver_properties: Option<&'a str>,
+    pub advanced_options: Option<&'a str>,
+}
+
 /// 连接服务
 ///
 /// 负责数据库连接的生命周期管理，包括：
@@ -80,11 +101,18 @@ pub struct ConnectionService {
 
 impl ConnectionService {
     /// 创建新的连接服务
+    ///
+    /// 隧道注册表**取自连接管理器**（而非本实例）：生产连接入口是短生命周期的（每次调用
+    /// `new` 一个服务），若守卫存在实例字段里，隧道会刚建好就随实例释放（审计 #20）。
+    /// 传独立管理器的测试仍天然隔离。
     pub fn new(manager: Arc<ConnectionManager>) -> Self {
-        Self {
-            manager,
-            tunnels: connection::chain::TunnelRegistry::new(),
-        }
+        let tunnels = manager.tunnels().clone();
+        Self { manager, tunnels }
+    }
+
+    /// 诊断：两个服务实例是否共用同一张隧道注册表（同一管理器 = 共用）。
+    pub fn shares_tunnels_with(&self, other: &ConnectionService) -> bool {
+        self.tunnels.shares_with(&other.tunnels)
     }
 
     /// 创建或获取数据库连接（默认全局连接）
@@ -256,34 +284,29 @@ impl ConnectionService {
         // 创建新连接
         tracing::info!("Creating new connection with ID: {}", conn_id);
 
-        // 如果有 auth_config_id，从数据库中读取认证凭据并注入到 URL。
-        // 认证方法优先取连接记录上的 `auth_method`；缺失时回退到认证配置自己声明的
-        // `auth_type`——否则“引用了认证配置但没选方法”的连接会静默跳过凭据注入（旧数据
-        // 与其它入口创建的连接都会踩到）。
-        let mut url_with_auth = url.to_string();
-        if let Some(auth_id) = auth_config_id.as_ref() {
-            match Self::load_auth_data_from_db(auth_id, connection_type, project_path.as_deref())
-                .await
-            {
-                Ok(Some((config_auth_type, auth_data))) => {
-                    let method = auth_method.as_deref().unwrap_or(config_auth_type.as_str());
-                    match connection::url_params::inject_auth_into_url(&url_with_auth, method, &auth_data) {
-                        Ok(injected_url) => {
-                            url_with_auth = injected_url;
-                            tracing::info!(conn_id = %conn_id, auth_id = %auth_id, method, "已将认证凭据注入到 URL");
-                        }
-                        Err(e) => {
-                            tracing::warn!(conn_id = %conn_id, auth_id = %auth_id, error = %e, "注入认证凭据失败，使用原始 URL");
-                        }
-                    }
-                }
-                Ok(None) => {
-                    tracing::warn!(conn_id = %conn_id, auth_id = %auth_id, "未找到认证配置，使用原始 URL");
-                }
-                Err(e) => {
-                    tracing::warn!(conn_id = %conn_id, auth_id = %auth_id, error = %e, "读取认证配置失败，使用原始 URL");
-                }
-            }
+        // 如果有 auth_config_id，从数据库中读取认证凭据并注入到 URL
+        // （规则与测试连接同源，见 `inject_auth_config_credentials`）。
+        let (url_with_auth, auth_note) = Self::inject_auth_config_credentials(
+            None,
+            &url,
+            auth_config_id.as_deref(),
+            auth_method.as_deref(),
+            connection_type,
+            project_path.as_deref(),
+        )
+        .await;
+        match &auth_note {
+            Some(note) => tracing::warn!(
+                conn_id = %conn_id,
+                auth_id = ?auth_config_id,
+                note = %note,
+                "认证档案未生效，使用未含档案凭据的 URL"
+            ),
+            None => tracing::info!(
+                conn_id = %conn_id,
+                auth_id = ?auth_config_id,
+                "认证档案凭据已注入 URL"
+            ),
         }
 
         // 应用网络连接方式（SSH 隧道 / SSL / 代理；协议链执行在 connection::chain）
@@ -489,7 +512,11 @@ impl ConnectionService {
     /// 查询优先级：全局 DB → 项目 DB（project_path 存在时，不依赖 connection_type，
     /// 与 load_auth_data_from_db_for_network 行为一致，确保 test_connection（Global 类型）
     /// 也能查询到项目级 P_/GP_ 认证配置）
+    ///
+    /// `global_db` 为 `None` 时回退进程全局单例（连接入口的既有行为）；
+    /// 持有库句柄的调用方（如 `DataSourceService`）可传入自己的库，测试可注入临时库。
     async fn load_auth_data_from_db(
+        global_db: Option<&GlobalDatabaseManager>,
         auth_id: &str,
         connection_type: ConnectionType,
         project_path: Option<&str>,
@@ -498,7 +525,11 @@ impl ConnectionService {
 
         // 优先尝试从全局数据库读取；返回 (auth_type, 解密后的 auth_data)，
         // 供调用方在连接未记录认证方法时回退到配置声明的方法。
-        if let Some(gdb) = engine::migration::get_global_db_manager() {
+        let global: Option<&GlobalDatabaseManager> = match global_db {
+            Some(g) => Some(g),
+            None => engine::migration::get_global_db_manager(),
+        };
+        if let Some(gdb) = global {
             if let Ok(Some(auth_config)) = gdb.get_auth_config(auth_id).await {
                 let auth_data = auth_store::decrypt_auth_data(&auth_config.auth_data)?;
                 return Ok(Some((auth_config.auth_type, auth_data)));
@@ -524,6 +555,47 @@ impl ConnectionService {
         }
 
         Ok(None)
+    }
+
+    /// 按认证档案注入凭据到 URL（`connect` 与测试连接共用，保证同源）。
+    ///
+    /// 认证方法优先取连接记录上的 `auth_method`；缺失时回退到认证配置声明的
+    /// `auth_type`——否则「引用了档案但没选方法」的连接会静默跳过凭据注入。
+    ///
+    /// 返回 `(URL, 说明)`：说明为 `Some` 时表示凭据未完整注入（档案缺失 / 读取失败 /
+    /// 注入失败），调用方**必须让该说明可见**（连接侧记日志、测试连接侧拼进结果消息），
+    /// 不允许静默。
+    async fn inject_auth_config_credentials(
+        global_db: Option<&GlobalDatabaseManager>,
+        url: &str,
+        auth_config_id: Option<&str>,
+        auth_method: Option<&str>,
+        connection_type: ConnectionType,
+        project_path: Option<&str>,
+    ) -> (String, Option<String>) {
+        let Some(auth_id) = auth_config_id else {
+            return (url.to_string(), None);
+        };
+        match Self::load_auth_data_from_db(global_db, auth_id, connection_type, project_path).await {
+            Ok(Some((config_auth_type, auth_data))) => {
+                let method = auth_method.unwrap_or(config_auth_type.as_str());
+                match connection::url_params::inject_auth_into_url(url, method, &auth_data) {
+                    Ok(injected) => (injected, None),
+                    Err(e) => (
+                        url.to_string(),
+                        Some(format!("认证档案凭据注入失败（{e}），测试未包含档案凭据")),
+                    ),
+                }
+            }
+            Ok(None) => (
+                url.to_string(),
+                Some("未找到引用的认证档案，测试未包含档案凭据".to_string()),
+            ),
+            Err(e) => (
+                url.to_string(),
+                Some(format!("读取认证档案失败（{e}），测试未包含档案凭据")),
+            ),
+        }
     }
 
     /// 解析 advanced_options JSON 并应用到 DriverConnectionConfig
@@ -608,6 +680,107 @@ impl ConnectionService {
                 config.driver_properties.insert(k.clone(), v.to_string());
             }
         }
+    }
+
+    /// 构建“测试连接”用的驱动配置（与 `connect` 同源）。
+    ///
+    /// 与 `connect` 共用同一套规则：
+    /// 1. 认证档案凭据按 `auth_method`（回退档案 `auth_type`）注入 URL；
+    /// 2. 网络档案解析为 `ConnectionMethod` 后**真实建立隧道**并改写 URL——
+    ///    测试连接必须验证「档案配好就能连」，不建隧道会给出与真实连接相反的结论；
+    /// 3. 驱动属性 / 高级选项照常应用；`username` / `password` 从最终 URL 回填
+    ///    （`url_override` 以外的字段路径也需要它们，如驱动校验与旧版 URL 构建）。
+    ///
+    /// 返回 `(配置, 隧道守卫, 说明)`：
+    /// - `隧道守卫` 必须在探测期间保持存活（drop 即关闭隧道），由调用方持有；
+    /// - `说明` 是 UI 可见的测试范围提示（档案生效 / 隧道已建立 / 档案缺失）。
+    ///
+    /// `global_db` 为 `None` 时回退进程全局单例；`DataSourceService` 传入自身库，
+    /// 测试可注入临时库。
+    ///
+    /// 公开为测试接缝（集成测试在同一进程内注入临时库，断言档案 → 配置的完整链路），
+    /// 生产调用方只有 `DataSourceService::test`。
+    pub async fn build_probe_config(
+        global_db: Option<&GlobalDatabaseManager>,
+        input: ProbeConfigInput<'_>,
+    ) -> Result<(DriverConnectionConfig, Vec<TunnelGuard>, Vec<String>), CoreError> {
+        let mut notes: Vec<String> = Vec::new();
+
+        // —— 1) 认证档案凭据（与 connect 同序：auth_method 优先，回退档案 auth_type）
+        let connection_type = if input.project_path.is_some() {
+            ConnectionType::Project
+        } else {
+            ConnectionType::Global
+        };
+        let (url, auth_note) = Self::inject_auth_config_credentials(
+            global_db,
+            input.url,
+            input.auth_config_id,
+            input.auth_method,
+            connection_type,
+            input.project_path,
+        )
+        .await;
+        match auth_note {
+            Some(note) => notes.push(note),
+            None if input.auth_config_id.is_some() => {
+                notes.push("已应用认证档案凭据".to_string())
+            }
+            None => {}
+        }
+
+        // —— 2) 网络档案：隧道在本函数调用方的作用域内建立与释放
+        let mut effective_url = url;
+        let mut guards: Vec<TunnelGuard> = Vec::new();
+        if let Some(net_id) = input.network_config_id {
+            match resolve_network_method_with_project(Some(net_id), input.project_path).await {
+                Ok(Some(method)) => {
+                    let probe_id = format!("probe-{}", input.name);
+                    match connection::chain::apply_network_method(
+                        &effective_url,
+                        &Some(method),
+                        &probe_id,
+                        input.db_type,
+                    )
+                    .await
+                    {
+                        Ok((rewritten, g)) => {
+                            if !g.is_empty() {
+                                notes.push("已建立网络档案隧道".to_string());
+                            }
+                            effective_url = rewritten;
+                            guards = g;
+                        }
+                        // 隧道建不起来 = 真实连接同样起不来：直接失败，不拿未改写的地址探测
+                        Err(e) => {
+                            return Err(CoreError::from(format!("网络档案应用失败：{e}")));
+                        }
+                    }
+                }
+                Ok(None) => notes.push("网络档案未解析，测试按直连执行".to_string()),
+                Err(e) => notes.push(format!("读取网络档案失败（{e}），测试按直连执行")),
+            }
+        }
+
+        // —— 3) 驱动配置：URL 为准（url_override），字段凭据从最终 URL 回填
+        let mut config = DriverConnectionConfig::new(input.db_type)
+            .with_url_override(&effective_url)
+            .with_name(input.name);
+        let (url_user, url_pass) = connection::url::extract_credentials_from_url(&effective_url);
+        if let Some(user) = input.username.map(str::to_string).or(url_user) {
+            config = config.with_username(user);
+        }
+        if let Some(pass) = input.password.map(str::to_string).or(url_pass) {
+            config = config.with_password(pass);
+        }
+        if let Some(opts) = input.advanced_options {
+            Self::apply_advanced_options(&mut config, opts);
+        }
+        if let Some(props) = input.driver_properties {
+            Self::apply_driver_properties(&mut config, props);
+        }
+
+        Ok((config, guards, notes))
     }
 
     /// 根据数据库类型创建对应的数据库实例
@@ -1163,7 +1336,10 @@ pub async fn parse_network_config_json(
     auth_config_id: Option<&str>,
     project_path: Option<&str>,
 ) -> Result<Option<ConnectionMethod>, CoreError> {
-    match network_type {
+    // 类型键归一化：写入侧可能是 UI 标签（`SSH` / `Proxy`）或别名，统一小写后匹配。
+    // 此前只匹配小写字面量，导致「档案存在、类型也写了，但整条链静默不生效」（审计 #20）。
+    let kind = network_type.trim().to_ascii_lowercase();
+    match kind.as_str() {
         "chain" => {
             let hops: Vec<connection::config::ChainHop> = serde_json::from_str(config_json)
                 .map_err(|e| CoreError::from(format!("解析协议链配置 JSON 失败: {}", e)))?;
@@ -1172,7 +1348,7 @@ pub async fn parse_network_config_json(
             }
             Ok(Some(ConnectionMethod::Chain(hops)))
         }
-        "ssh" => {
+        "ssh" | "ssh_tunnel" => {
             let mut ssh_config: connection::config::SshConfig =
                 serde_json::from_str(config_json)
                     .map_err(|e| CoreError::from(format!("解析 SSH 隧道配置 JSON 失败: {}", e)))?;
@@ -1188,12 +1364,12 @@ pub async fn parse_network_config_json(
 
             Ok(Some(ConnectionMethod::Ssh(ssh_config)))
         }
-        "ssl" => {
+        "ssl" | "tls" => {
             let ssl_config: connection::config::SslConfig = serde_json::from_str(config_json)
                 .map_err(|e| CoreError::from(format!("解析 SSL 配置 JSON 失败: {}", e)))?;
             Ok(Some(ConnectionMethod::Ssl(ssl_config)))
         }
-        "proxy" | "http_proxy" | "socks" | "socks5" => {
+        "proxy" | "http_proxy" | "http" | "socks" | "socks5" | "socks_proxy" => {
             let mut proxy_config: connection::config::ProxyConfig =
                 serde_json::from_str(config_json)
                     .map_err(|e| CoreError::from(format!("解析代理配置 JSON 失败: {}", e)))?;
@@ -1207,14 +1383,17 @@ pub async fn parse_network_config_json(
                 }
             }
 
-            if network_type == "socks" || network_type == "socks5" {
+            if kind.starts_with("socks") {
                 Ok(Some(ConnectionMethod::SocksProxy(proxy_config)))
             } else {
                 Ok(Some(ConnectionMethod::HttpProxy(proxy_config)))
             }
         }
-        _ => {
-            tracing::warn!("未知的网络配置类型: {}", network_type);
+        other => {
+            tracing::warn!(
+                network_type = other,
+                "未知的网络配置类型（档案已保存但不会生效）"
+            );
             Ok(None)
         }
     }
@@ -1341,6 +1520,52 @@ fn inject_proxy_auth_from_auth_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn services_sharing_a_manager_share_tunnel_registry() {
+        let manager = Arc::new(ConnectionManager::new());
+        let a = ConnectionService::new(manager.clone());
+        let b = ConnectionService::new(manager.clone());
+        assert!(
+            a.shares_tunnels_with(&b),
+            "同一管理器下的服务实例必须共用隧道注册表（生产 = 全局单例）——\
+             否则隧道会随建立它的临时实例释放（审计 #20）"
+        );
+
+        let isolated = ConnectionService::new(Arc::new(ConnectionManager::new()));
+        assert!(!a.shares_tunnels_with(&isolated), "独立管理器保持测试隔离");
+    }
+
+    #[tokio::test]
+    async fn network_config_type_keys_are_normalized() {
+        // UI / 历史数据写入的是 `SSH` / `Proxy` 这类大写标签；解析必须大小写无关，
+        // 否则「档案存在但整条链静默不生效」（审计 #20）。
+        let proxy = parse_network_config_json(
+            "Proxy",
+            r#"{"host":"127.0.0.1","port":1080}"#,
+            None,
+            None,
+        )
+        .await
+        .expect("parse proxy");
+        assert!(matches!(proxy, Some(ConnectionMethod::HttpProxy(_))));
+
+        let socks = parse_network_config_json(
+            "SOCKS5",
+            r#"{"host":"127.0.0.1","port":1080}"#,
+            None,
+            None,
+        )
+        .await
+        .expect("parse socks");
+        assert!(matches!(socks, Some(ConnectionMethod::SocksProxy(_))));
+
+        // 未知类型：不 panic，返回 None（并告警）。
+        let unknown = parse_network_config_json("proxy_pwd", "{}", None, None)
+            .await
+            .expect("parse unknown");
+        assert!(unknown.is_none());
+    }
 
     #[tokio::test]
     async fn test_connect_empty_url() {

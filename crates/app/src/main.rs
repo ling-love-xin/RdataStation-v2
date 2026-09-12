@@ -17,8 +17,8 @@ use settings::SettingsService;
 use settings::commands::OpenSettings;
 use workbench::WorkbenchView;
 use workbench::commands::{
-    CloseProject, DraftNext, DraftPrev, SaveConnection, SwitchProject, TestConnection,
-    ToggleQuickOpen,
+    CloseProject, DraftNext, DraftPrev, FocusNavSearch, NavCollapse, NavDown, NavExpand,
+    NavOpenProperties, NavUp, SaveConnection, SwitchProject, TestConnection, ToggleQuickOpen,
 };
 
 fn main() {
@@ -77,6 +77,15 @@ fn run_app() {
             cx.bind_keys([
                 KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
                 KeyBinding::new("ctrl-,", OpenSettings, Some("workbench")),
+                // M4 数据源导航：聚焦搜索框（先切到数据源面板并展开左侧 Dock）。
+                KeyBinding::new("ctrl-f", FocusNavSearch, Some("workbench")),
+                // M4 导航树键盘导航（仅当焦点在导航面板内时生效）。
+                KeyBinding::new("up", NavUp, Some("database-nav")),
+                KeyBinding::new("down", NavDown, Some("database-nav")),
+                KeyBinding::new("right", NavExpand, Some("database-nav")),
+                KeyBinding::new("left", NavCollapse, Some("database-nav")),
+                KeyBinding::new("f4", NavOpenProperties, Some("database-nav")),
+                KeyBinding::new("enter", NavOpenProperties, Some("database-nav")),
                 // M1 项目管理：切换项目（回选择器）/ 关闭项目。
                 KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),
                 KeyBinding::new("ctrl-shift-w", CloseProject, Some("workbench")),

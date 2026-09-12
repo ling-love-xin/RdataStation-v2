@@ -33,7 +33,42 @@ use engine::persistence::project_db::ProjectDatabaseManager;
 use shared::error::CoreError;
 use std::sync::Arc;
 
+use super::connection_service::{ConnectionService, ProbeConfigInput};
 use super::driver_service::DriverService;
+
+/// 可被连接引用的元数据种类（删除前的引用检查用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceField {
+    AuthConfig,
+    NetworkConfig,
+    Environment,
+}
+
+impl ReferenceField {
+    /// 中文名（错误消息用；与 UI 下拉标题一致）。
+    fn label(self) -> &'static str {
+        match self {
+            Self::AuthConfig => "认证配置",
+            Self::NetworkConfig => "网络配置",
+            Self::Environment => "环境",
+        }
+    }
+}
+
+/// 引用统计（按存储位置拆分，便于错误消息说清范围）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReferenceCount {
+    /// 全局库连接（G_ 定义与遗留 conn-）
+    pub global: usize,
+    /// 当前打开项目的 P_/GP_ 连接（未打开项目时为 0）
+    pub project: usize,
+}
+
+impl ReferenceCount {
+    pub fn total(self) -> usize {
+        self.global + self.project
+    }
+}
 
 /// 数据源连接服务（无状态组合，持全局库单例）。
 pub struct DataSourceService {
@@ -113,6 +148,110 @@ impl DataSourceService {
             return Ok(Vec::new());
         };
         self.global_db.list_environment_policies(&env.id).await
+    }
+
+    // ==================== 元数据引用计数（删除守卫） ====================
+
+    /// 统计引用某一元数据的连接数（批量；批量查询避免逐条扫库）。
+    ///
+    /// 范围：全局库全部连接 + **当前打开项目**的 P_/GP_ 连接。
+    /// 未打开项目的引用不在统计内（架构 §14 #27 已登记的局限）——因此删除拦截是
+    /// “尽力而为”，连接时的档案缺失报错（A2 严格模式）是兼底。
+    pub async fn count_references_batch(
+        &self,
+        field: ReferenceField,
+        ids: &[String],
+        project_path: Option<&str>,
+    ) -> std::collections::HashMap<String, ReferenceCount> {
+        let mut map: std::collections::HashMap<String, ReferenceCount> = ids
+            .iter()
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| (id.clone(), ReferenceCount::default()))
+            .collect();
+        if map.is_empty() {
+            return map;
+        }
+
+        if let Ok(list) = self.global_db.get_global_connections(None, None).await {
+            for c in &list {
+                let id = match field {
+                    ReferenceField::AuthConfig => c.auth_config_id.as_deref(),
+                    ReferenceField::NetworkConfig => c.network_config_id.as_deref(),
+                    ReferenceField::Environment => c.environment_id.as_deref(),
+                };
+                if let Some(id) = id {
+                    if let Some(entry) = map.get_mut(id) {
+                        entry.global += 1;
+                    }
+                }
+            }
+        }
+
+        // 项目侧：路径必须是**已存在的项目根**（读路径不建目录，与全库约定一致）
+        if let Some(path) = project_path.filter(|p| !p.trim().is_empty() && is_project_root(p)) {
+            if let Ok(store) = open_project_store(path).await {
+                if let Ok(rows) = store.get_all_connections().await {
+                    for c in &rows {
+                        let id = match field {
+                            ReferenceField::AuthConfig => c.auth_config_id.as_deref(),
+                            ReferenceField::NetworkConfig => c.network_config_id.as_deref(),
+                            ReferenceField::Environment => c.environment_id.as_deref(),
+                        };
+                        if let Some(id) = id {
+                            if let Some(entry) = map.get_mut(id) {
+                                entry.project += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        map
+    }
+
+    /// 单个元数据的引用计数（单条便捷入口）。
+    pub async fn count_references(
+        &self,
+        field: ReferenceField,
+        id: &str,
+        project_path: Option<&str>,
+    ) -> ReferenceCount {
+        self.count_references_batch(field, &[id.to_string()], project_path)
+            .await
+            .remove(id)
+            .unwrap_or_default()
+    }
+
+    /// 删除前的引用守卫（原型 §3.6：「被引用的配置不可删除」）。
+    ///
+    /// 返回 `Err` 时消息已包含「引用数 + 范围」，UI 直接展示即可。
+    pub async fn ensure_no_references(
+        &self,
+        field: ReferenceField,
+        id: &str,
+        display_name: &str,
+        project_path: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let count = self.count_references(field, id, project_path).await;
+        if count.total() == 0 {
+            return Ok(());
+        }
+        let scope = match (count.global, count.project) {
+            (g, p) if g > 0 && p > 0 => format!("全局 {g} 条、当前项目 {p} 条"),
+            (_, p) if p > 0 => format!("当前项目 {p} 条"),
+            (g, _) => format!("全局 {g} 条"),
+        };
+        Err(CoreError::common(shared::error::CommonError::General(format!(
+            "{}{}正被 {} 连接引用，不能删除；请先修改或删除这些连接（未打开项目中的引用不在统计内）",
+            field.label(),
+            if display_name.trim().is_empty() {
+                String::new()
+            } else {
+                format!("「{}」", display_name.trim())
+            },
+            scope
+        ))))
     }
 
     // ==================== 组织元数据（标签 / 分组） ====================
@@ -509,30 +648,43 @@ impl DataSourceService {
 
     /// 测试连接（独立会话：构建 DriverConnectionConfig → engine connection_probe）。
     ///
-    /// 不注册连接池/管理器，失败返回可读消息（不落库）。
-    pub async fn test(&self, input: &DataSourceSaveInput) -> TestResult {
+    /// 与真实连接**同源**：认证档案凭据、网络档案隧道（探测期间建立、结束即释放）、
+    /// 驱动属性与高级选项均走 `ConnectionService::build_probe_config`，与 `connect`
+    /// 同一套规则；不注册连接池 / 管理器，不写库。
+    ///
+    /// `project_path` 用于解析 P_/GP_ 前缀的档案（项目根，含 `.RSmeta`）。
+    pub async fn test(&self, input: &DataSourceSaveInput, project_path: Option<&str>) -> TestResult {
         let url = build_effective_url(input);
-        let mut config = engine::driver::registry::DriverConnectionConfig::new(&input.db_type)
-            .with_url_override(&url)
-            .with_name(&input.name);
+        let (config, guards, notes) = match ConnectionService::build_probe_config(
+            Some(self.global_db),
+            ProbeConfigInput {
+                db_type: &input.db_type,
+                url: &url,
+                name: &input.name,
+                username: input.username.as_deref(),
+                password: input.password.as_deref(),
+                auth_config_id: input.auth_config_id.as_deref(),
+                auth_method: input.auth_method.as_deref(),
+                network_config_id: input.network_config_id.as_deref(),
+                project_path,
+                driver_properties: input.driver_properties.as_deref(),
+                advanced_options: input.advanced_options.as_deref(),
+            },
+        )
+        .await
+        {
+            Ok(v) => v,
+            // 网络档案建不起隧道：真实连接同样会失败，直接把原因作为测试结果
+            Err(e) => return TestResult::err(e.to_string()),
+        };
 
-        if let Some(user) = &input.username {
-            config = config.with_username(user);
+        let mut result = engine::services::connection_probe::test_connection_result(config).await;
+        // 探测结束：立即释放隧道（守卫 drop 关闭本地端口与后台任务）
+        drop(guards);
+        if !notes.is_empty() {
+            result.message = format!("{} · {}", result.message, notes.join("；"));
         }
-        if let Some(pass) = &input.password {
-            config = config.with_password(pass);
-        }
-        if let Some(props) = &input.driver_properties {
-            if let Ok(map) =
-                serde_json::from_str::<std::collections::HashMap<String, String>>(props)
-            {
-                for (k, v) in map {
-                    config = config.with_driver_property(k, v);
-                }
-            }
-        }
-
-        engine::services::connection_probe::test_connection_result(config).await
+        result
     }
 
     // ==================== 私有校验 ====================
@@ -622,33 +774,19 @@ fn cleanup_connection_org(
     }
 }
 
-/// 构建有效 URL：URL 无凭据但单独提供 username 时注入 `user[:pass]@`。
+/// 构建有效 URL：URL 无凭据但单独提供 username / password 时注入 userinfo
+/// （经 RFC 3986 转义，密码含 `@` / `:` / `/` 不会破坏 URL 结构）。
 ///
 /// 文件型（SQLite/DuckDB）没有凭据语义：地址就是本地路径，原样返回（只规范化前缀）。
 fn build_effective_url(input: &DataSourceSaveInput) -> String {
     if is_file_db_driver(&input.db_type) {
         return normalize_file_db_path(&input.db_type, &input.url);
     }
-    let mut url = input.url.clone();
-    if url.contains('@') {
-        return url;
-    }
-    let Some(user) = &input.username else {
-        return url;
-    };
-    if user.is_empty() {
-        return url;
-    }
-    let pass = input.password.as_deref().unwrap_or("");
-    let cred = if pass.is_empty() {
-        format!("{}@", user)
-    } else {
-        format!("{}:{}@", user, pass)
-    };
-    if let Some(i) = url.find("://") {
-        url.insert_str(i + 3, &cred);
-    }
-    url
+    connection::url_params::merge_credentials(
+        &input.url,
+        input.username.as_deref().unwrap_or(""),
+        input.password.as_deref().unwrap_or(""),
+    )
 }
 
 /// 用「主机 / 端口 / 数据库」字段重建 URL（对话框字段 → URI 方向）。

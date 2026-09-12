@@ -11,6 +11,7 @@ pub mod data_source_service;
 pub mod db_navigator;
 pub mod driver_service;
 pub mod mock_generator;
+pub mod nav_jobs;
 pub mod nav_runtime;
 pub mod nav_store;
 pub mod persistence_service;

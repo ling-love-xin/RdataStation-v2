@@ -7,7 +7,7 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Theme, ThemeMode};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, Theme, ThemeMode};
 use gpui_kit::*;
 
 use crate::model::Settings;
@@ -18,13 +18,20 @@ pub struct SettingsView {
     settings: Settings,
     /// 关闭回调（由宿主 workbench 提供，关闭后宿主重渲染）。
     on_close: std::rc::Rc<dyn Fn(&mut App)>,
+    /// 打开「缓存管理」回调（缓存 UI 依赖 engine，故由宿主 workbench 提供）。
+    on_open_cache: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 impl SettingsView {
-    pub fn new(cx: &mut App, on_close: std::rc::Rc<dyn Fn(&mut App)>) -> Self {
+    pub fn new(
+        cx: &mut App,
+        on_close: std::rc::Rc<dyn Fn(&mut App)>,
+        on_open_cache: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
+    ) -> Self {
         Self {
             settings: SettingsService::get(cx),
             on_close,
+            on_open_cache,
         }
     }
 
@@ -119,6 +126,21 @@ impl SettingsView {
                 self.value_text(theme, "中文（简体）".to_string()),
             ))
             .child(div().h_1p5())
+            .child(Self::section_title(theme, "数据源导航"))
+            .child(Self::row(theme, "来源标识", self.source_code_switcher(cx)))
+            .child(Self::row(
+                theme,
+                "缓存",
+                Button::new("settings-open-cache")
+                    .ghost()
+                    .small()
+                    .label("缓存管理…")
+                    .on_click({
+                        let on_open_cache = self.on_open_cache.clone();
+                        move |_, window, app| (on_open_cache)(window, app)
+                    }),
+            ))
+            .child(div().h_1p5())
             .child(Self::section_title(theme, "引擎"))
             .child(Self::row(
                 theme,
@@ -143,6 +165,44 @@ impl SettingsView {
                     format!("{} ms", self.settings.connection_defaults.query_timeout_ms),
                 ),
             ))
+    }
+
+    /// 来源标识：短码 `P/G/GP` ⇄ 文字（项目 / 全局 / 共享）。
+    fn source_code_switcher(&self, cx: &Context<Self>) -> Div {
+        let short = self.settings.navigator.source_short_code;
+        let entity_short = cx.entity();
+        let entity_text = entity_short.clone();
+        div()
+            .h_flex()
+            .gap_1()
+            .child(
+                Button::new("source-code-short")
+                    .ghost()
+                    .toggled(short)
+                    .size(rems(1.625))
+                    .label("短码")
+                    .on_click(move |_, _, app| {
+                        SettingsService::set_source_short_code(true, app);
+                        entity_short.update(app, |this, cx| {
+                            this.settings = SettingsService::get(cx);
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("source-code-text")
+                    .ghost()
+                    .toggled(!short)
+                    .size(rems(1.625))
+                    .label("文字")
+                    .on_click(move |_, _, app| {
+                        SettingsService::set_source_short_code(false, app);
+                        entity_text.update(app, |this, cx| {
+                            this.settings = SettingsService::get(cx);
+                            cx.notify();
+                        });
+                    }),
+            )
     }
 }
 

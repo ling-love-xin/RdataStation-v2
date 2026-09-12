@@ -105,6 +105,12 @@ pub struct ConnectionManager {
     last_access: tokio::sync::RwLock<HashMap<ConnId, Instant>>,
     /// 当前活动连接 ID
     active_conn_id: tokio::sync::RwLock<Option<ConnId>>,
+    /// 隧道守卫注册表（协议链执行产物）：与连接管理器同生命周期。
+    ///
+    /// 必须挂在管理器上而不是 `ConnectionService` 实例字段上：生产连接入口是短生命周期的
+    /// （每次调用新建服务），守卫若随实例释放，隧道刚建好就会被关掉——真机表现为
+    /// 「配了跳板机 / 代理却直连或直接失败」。
+    tunnels: connection::chain::TunnelRegistry,
     /// 取消令牌映射（每个连接一个正在执行的查询令牌）
     cancel_tokens: tokio::sync::RwLock<HashMap<ConnId, tokio_util::sync::CancellationToken>>,
     /// 空闲超时时间（默认 30 分钟）
@@ -120,6 +126,7 @@ impl ConnectionManager {
             connection_configs: tokio::sync::RwLock::new(HashMap::new()),
             last_access: tokio::sync::RwLock::new(HashMap::new()),
             active_conn_id: tokio::sync::RwLock::new(None),
+            tunnels: connection::chain::TunnelRegistry::new(),
             cancel_tokens: tokio::sync::RwLock::new(HashMap::new()),
             idle_timeout: tokio::sync::RwLock::new(Duration::from_secs(30 * 60)),
         }
@@ -594,6 +601,14 @@ impl ConnectionManager {
     pub async fn get_idle_timeout(&self) -> Duration {
         let timeout = self.idle_timeout.read().await;
         *timeout
+    }
+
+    /// 隧道注册表（协议链执行产物；与连接管理器同生命周期）。
+    ///
+    /// 供 `ConnectionService` 取用：同一个管理器下的所有服务实例共用一张隧道表，
+    /// 保证「建隧道的实例」与「断开时释放隧道的实例」可以是不同实例。
+    pub fn tunnels(&self) -> &connection::chain::TunnelRegistry {
+        &self.tunnels
     }
 
     /// 回收空闲连接

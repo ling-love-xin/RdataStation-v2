@@ -3,6 +3,9 @@
 //! 工作台全局动作（GPUI Action）：
 //! - `ToggleQuickOpen`：唤起 / 关闭 Quick Open（搜索 + 命令融合，Ctrl+P 绑定于 app 层）；
 //! - `HideSidebars` / `RestoreSidebars`：三模式之"完全隐藏 / 恢复"；
+//! - `FocusNavSearch`：聚焦数据源导航搜索框（Ctrl+F，先切到数据源面板）；
+//! - `NavUp` / `NavDown` / `NavExpand` / `NavCollapse` / `NavOpenProperties`：
+//!   数据源导航树键盘导航（仅 `database-nav` key context 内生效）；
 //! - 各 panel 切换、打开设置等命令由 Quick Open 与活动栏直接驱动（见 `view.rs`）。
 //!
 //! 按编码规范「事件、Action 与焦点」：动作只更新共享状态并 notify，Dock 同步在
@@ -17,8 +20,15 @@ actions!(
         HideSidebars,
         RestoreSidebars,
         SwitchProject,
-        CloseProject
+        CloseProject,
+        FocusNavSearch
     ]
+);
+
+// 数据源导航（M4）局部动作：绑定在导航面板的 `key_context("database-nav")` 上。
+actions!(
+    database_nav,
+    [NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties]
 );
 
 // 连接对话框（M3）局部动作：仅绑定在为对话框容器声明的 key context 上。

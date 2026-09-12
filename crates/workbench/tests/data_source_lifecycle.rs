@@ -30,6 +30,11 @@ fn runtime() -> tokio::runtime::Runtime {
 /// 构造测试服务：全局库落临时目录；Secret 目标库隔离（不写用户分析库）；
 /// `&'static` 由 `Box::leak` 提供（测试进程生命周期内常驻，可接受）。
 fn make_service(dir: &Path) -> DataSourceService {
+    make_service_with_db(dir).1
+}
+
+/// 同 `make_service`，额外返回全局库句柄（需要直接写元数据表的用例用）。
+fn make_service_with_db(dir: &Path) -> (&'static GlobalDatabaseManager, DataSourceService) {
     let rt = runtime();
     let manager = rt
         .block_on(GlobalDatabaseManager::new(
@@ -39,7 +44,8 @@ fn make_service(dir: &Path) -> DataSourceService {
         ))
         .expect("init global db");
     let manager: &'static GlobalDatabaseManager = Box::leak(Box::new(manager));
-    DataSourceService::new(manager).with_analysis_db(dir.join("secret-target.duckdb"))
+    let service = DataSourceService::new(manager).with_analysis_db(dir.join("secret-target.duckdb"));
+    (manager, service)
 }
 
 fn input(name: &str, db_type: &str, url: &str) -> DataSourceSaveInput {
@@ -82,7 +88,7 @@ fn catalog_drivers_resolve_and_sqlite_probe_succeeds() {
     // 成功时引擎会创建空库文件并探测版本。
     let db_path = dir.join("probe.db");
     let url = db_path.to_string_lossy().to_string();
-    let result = rt.block_on(service.test(&input("probe_sqlite", "sqlite", &url)));
+    let result = rt.block_on(service.test(&input("probe_sqlite", "sqlite", &url), None));
     assert!(result.success, "SQLite 测试连接应成功：{}", result.message);
     assert!(db_path.exists(), "测试连接应创建数据库文件：{url}");
 
@@ -828,15 +834,231 @@ fn global_delete_cleans_project_group_membership() {
 }
 
 #[test]
+fn referenced_network_profile_reaches_connect_request() {
+    // 回归点（审计 #20）：网络配置档案存在、连接也引用了，但连接时被静默忽略——
+    // 根因有三层：① 入口恒传 `network_method: None`；② 解析器只认小写类型键，
+    // 而 UI 写入的是 `Proxy` / `SSH`；③ 隧道守卫随临时服务实例释放。
+    // 本用例覆盖 ①②（③ 由 `connection_service` 内嵌单测覆盖）。
+    use connection::config::ConnectionMethod;
+
+    let dir = temp_dir("net-profile");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let root_str = project_root.to_string_lossy().to_string();
+
+    // 1) 先让项目库走正常迁移建库，再写入网络配置档案（类型用 UI 实际会写的大写标签）。
+    //    直接手建表会与迁移流水线冲突（`add_id_prefix_snapshot` 加 `origin` 列报重）。
+    let net_id = {
+        let pm = rt
+            .block_on(ProjectDatabaseManager::open(&project_root, 4))
+            .expect("open project db");
+        rt.block_on(pm.create_project_network_config(
+            Some("公司代理"),
+            "Proxy",
+            r#"{"host":"127.0.0.1","port":1080}"#,
+        ))
+        .expect("create network config")
+        .id
+    };
+
+    // 2) 项目连接引用该档案（id 由引擎生成）。
+    let mut i = input("proxied", "mysql", "mysql://u:p@10.0.0.9:3306/app");
+    i.scope = ConnectionScope::Project;
+    i.network_config_id = Some(net_id.clone());
+    let pid = rt
+        .block_on(service.save(&i, Some(&root_str)))
+        .expect("save project");
+    let ds = rt
+        .block_on(service.get_with_project(&pid, Some(&root_str)))
+        .expect("get")
+        .expect("连接存在");
+
+    // 3) 档案 → ConnectionMethod（含大写类型键归一 + 项目库路由）。
+    let method = rt
+        .block_on(rds_workbench::services::connection_service::resolve_network_method_with_project(
+            ds.network_config_id.as_deref(),
+            Some(&root_str),
+        ))
+        .expect("resolve network method");
+    assert!(
+        matches!(method, Some(ConnectionMethod::HttpProxy(_))),
+        "大写类型键的档案应可解析：{method:?}"
+    );
+
+    // 4) 请求组装带出网络方式 + 作用域路由（此前 network_method 恒为 None）。
+    let req = rds_workbench::services::nav_runtime::build_connect_request(
+        &ds,
+        Some(&root_str),
+        method,
+    )
+    .expect("build connect request");
+    assert_eq!(
+        req.connection_type,
+        engine::connection_manager::ConnectionType::Project,
+        "P_ 连接应在项目库侧"
+    );
+    assert!(
+        matches!(req.network_method, Some(ConnectionMethod::HttpProxy(_))),
+        "网络方式必须随请求带出"
+    );
+    assert!(!req.url.is_empty(), "URL 应可还原");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_connection_reports_unknown_driver_without_io() {
     let dir = temp_dir("probe-err");
     let service = make_service(&dir);
     let rt = runtime();
 
-    let result = rt.block_on(service.test(&input("bad", "no_such_driver", "x://y")));
+    let result = rt.block_on(service.test(&input("bad", "no_such_driver", "x://y"), None));
     assert!(!result.success);
     assert!(result.message.contains("驱动") || result.message.contains("no_such_driver"), "{}", result.message);
     assert!(result.version.is_none(), "失败不应返回版本");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 探测配置输入（集成测试接缝；无档案引用时为纯字段透传）。
+fn probe_input<'a>(
+    db_type: &'a str,
+    url: &'a str,
+    auth_config_id: Option<&'a str>,
+) -> rds_workbench::services::connection_service::ProbeConfigInput<'a> {
+    rds_workbench::services::connection_service::ProbeConfigInput {
+        db_type,
+        url,
+        name: "probe_test",
+        username: None,
+        password: None,
+        auth_config_id,
+        auth_method: Some("password"),
+        network_config_id: None,
+        project_path: None,
+        driver_properties: None,
+        advanced_options: None,
+    }
+}
+
+/// A1：测试连接的配置构建必须与真实连接同源（审计 A1）。
+///
+/// 此前 `DataSourceService::test` 只看 UI 输入（url/username/password/driver_properties），
+/// 引用认证 / 网络档案时被静默忽略：测试结果与真实连接相反。
+#[test]
+fn probe_config_applies_referenced_auth_profile() {
+    use engine::persistence::auth_store::AuthConfig;
+    use rds_workbench::services::connection_service::ConnectionService;
+
+    let dir = temp_dir("probe-config");
+    let (global_db, _service) = make_service_with_db(&dir);
+    let rt = runtime();
+
+    let auth_id = "G_auth_probe_demo";
+    rt.block_on(global_db.create_auth_config(&AuthConfig {
+        id: auth_id.into(),
+        name: Some("探测用认证".into()),
+        auth_type: "password".into(),
+        auth_data: r#"{"username":"alice","password":"s3cret"}"#.into(),
+        origin: None,
+        source_id: None,
+        snapshot_at: None,
+        created_at: "2026-09-12T00:00:00Z".into(),
+        updated_at: "2026-09-12T00:00:00Z".into(),
+    }))
+    .expect("create auth config");
+
+    // 1) 引用存在的档案：凭据（解密后）注入 URL，并回填字段凭据（驱动校验 / 旧版 URL 构建需要）。
+    let (config, guards, notes) = rt
+        .block_on(ConnectionService::build_probe_config(
+            Some(global_db),
+            probe_input("postgres", "postgres://db.internal:5432/app", Some(auth_id)),
+        ))
+        .expect("build probe config");
+    assert!(guards.is_empty(), "无网络档案不应建隧道");
+    let url = config.url_override.as_deref().unwrap_or_default();
+    assert!(url.contains("alice:s3cret@"), "档案凭据必须注入 URL：{url}");
+    assert_eq!(config.username.as_deref(), Some("alice"));
+    assert_eq!(config.password.as_deref(), Some("s3cret"));
+    assert!(
+        notes.iter().any(|n| n.contains("已应用认证档案凭据")),
+        "说明应标明档案已生效：{notes:?}"
+    );
+
+    // 2) 引用不存在的档案：不静默——URL 保持原样，说明里明确「未找到」。
+    let (config, _guards, notes) = rt
+        .block_on(ConnectionService::build_probe_config(
+            Some(global_db),
+            probe_input("postgres", "postgres://db.internal:5432/app", Some("G_auth_missing")),
+        ))
+        .expect("build probe config");
+    assert_eq!(
+        config.url_override.as_deref(),
+        Some("postgres://db.internal:5432/app"),
+        "档案缺失时不得凭空注入凭据"
+    );
+    assert!(
+        notes.iter().any(|n| n.contains("未找到引用的认证档案")),
+        "档案缺失必须可见：{notes:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A1：网络档案在测试连接时**真实建隧道**；建不起来就是测试失败（而非静默直连）。
+#[test]
+fn probe_config_applies_referenced_network_profile() {
+    use rds_workbench::services::connection_service::{ConnectionService, ProbeConfigInput};
+
+    let dir = temp_dir("probe-net");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+    let (global_db, _service) = make_service_with_db(&dir);
+    let rt = runtime();
+    let root_str = project_root.to_string_lossy().to_string();
+
+    // 不可达的 SSH 跳板：端口 1（连接会被立即拒绝，不依赖外部服务）。
+    let net_id = {
+        let pm = rt
+            .block_on(ProjectDatabaseManager::open(&project_root, 4))
+            .expect("open project db");
+        rt.block_on(pm.create_project_network_config(
+            Some("不可达 SSH"),
+            "SSH",
+            r#"{"host":"127.0.0.1","port":1,"username":"u","auth_type":"password","password":"p","remote_host":"db.internal","remote_port":5432}"#,
+        ))
+        .expect("create network config")
+        .id
+    };
+
+    let outcome = rt.block_on(ConnectionService::build_probe_config(
+        Some(global_db),
+        ProbeConfigInput {
+            db_type: "postgres",
+            url: "postgres://db.internal:5432/app",
+            name: "probe_net",
+            username: None,
+            password: None,
+            auth_config_id: None,
+            auth_method: None,
+            network_config_id: Some(&net_id),
+            project_path: Some(&root_str),
+            driver_properties: None,
+            advanced_options: None,
+        },
+    ));
+    let err = match outcome {
+        Ok((_, _, notes)) => panic!(
+            "不可达的 SSH 档案必须让测试失败（证明真的建了隧道）；notes={notes:?}"
+        ),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("网络档案应用失败"),
+        "错误应说明网络档案：{err}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

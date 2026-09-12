@@ -204,3 +204,56 @@ fn staging_remove_ignores_saved_entries(cx: &mut TestAppContext) {
     assert_eq!(drafts.len(), 2);
     assert_eq!(drafts[0].saved_id.as_deref(), Some("G_def"));
 }
+
+/// 脏比对等价性（§6 决策 #73）：`form_matches_draft`（逐字段、无分配）必须与
+/// `snapshot_form() == draft`（整份构造）给出相同结论；字段集合漂移会在这里暴露。
+#[gpui_kit::test]
+fn form_matches_draft_agrees_with_snapshot(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog.clone());
+
+    // 基准：以初始表单快照当作「已写回的草稿」；两套比对结论必须始终一致。
+    let check = |cx: &mut VisualTestContext,
+                 baseline: &rds_workbench::components::connection_dialog::ConnectionDraft,
+                 expect_dirty: bool,
+                 why: &str| {
+        cx.update(|_, cx| {
+            let by_fields = dialog.form_matches_draft(baseline, cx);
+            let by_snapshot = dialog.snapshot_form(cx) == *baseline;
+            assert_eq!(by_fields, by_snapshot, "{why}：逐字段与快照比对必须等价");
+            assert_eq!(by_fields, !expect_dirty, "{why}：脏标记期望不符");
+        });
+    };
+
+    // ① 初始空表单 → 不脏。
+    let mut baseline = cx.update(|_, cx| dialog.snapshot_form(cx));
+    check(cx, &baseline, false, "初始状态");
+
+    // ② 改名称 → 脏。
+    cx.update(|window, cx| {
+        dialog
+            .name
+            .update(cx, |s, cx| s.set_value("改名", window, cx));
+    });
+    check(cx, &baseline, true, "改名称后");
+
+    // ③ 把当前表单写回草稿（并重置基准）→ 不脏。
+    baseline = cx.update(|_, cx| {
+        let d = dialog.snapshot_form(cx);
+        dialog.drafts.borrow_mut()[0] = d.clone();
+        d
+    });
+    check(cx, &baseline, false, "写回后");
+
+    // ④ 切 Tab（旧行为也把它算作表单修改）→ 脏；同时验证 live_entry_view 与之一致。
+    dialog.active_tab.set(1);
+    check(cx, &baseline, true, "切 Tab 后");
+    let view = cx.update(|_, cx| dialog.live_entry_view(0, cx));
+    let view = view.expect("光标位条目存在");
+    assert!(view.dirty, "live_entry_view 应报告脏标记");
+    assert_eq!(view.name, "改名");
+
+    // ⑤ 光标越界 → None（与旧行为一致）。
+    assert!(cx.update(|_, cx| dialog.live_entry_view(99, cx)).is_none());
+}

@@ -11,6 +11,11 @@ impl ConnectionDialogState {
         let (host_input, port_input, db_input, _) = state_inputs(window, cx);
         let (new_name, new_data, _, _) = state_inputs(window, cx);
         let (project_path, ssl_ca, ssl_cert, ssl_key) = state_inputs(window, cx);
+        // 网络配置字段输入（按类型显示子集；键固定，见 `NET_FIELD_KEYS`）。
+        let net_inputs: Vec<(&'static str, Entity<InputState>)> = NET_FIELD_KEYS
+            .iter()
+            .map(|key| (*key, cx.new(|cx| InputState::new(window, cx))))
+            .collect();
         let new_type = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(
@@ -47,10 +52,6 @@ impl ConnectionDialogState {
             result_ok: Rc::new(Cell::new(true)),
             remark,
             active_tab: Rc::new(Cell::new(0)),
-            hops: Rc::new(RefCell::new(vec![
-                Hop::ssh("跳板机·prod-gw"),
-                Hop::proxy("公司代理·http"),
-            ])),
             env: cx.new(|cx| {
                 SelectState::new(
                     SearchableVec::new(Vec::<SharedString>::new()),
@@ -104,6 +105,9 @@ impl ConnectionDialogState {
                 new_name,
                 new_type,
                 new_data,
+                net_inputs: Rc::new(RefCell::new(net_inputs)),
+                net_specs_for: Rc::new(RefCell::new(String::new())),
+                net_specs: Rc::new(RefCell::new(Vec::new())),
                 editing: None,
                 msg: None,
                 policy_env: None,
@@ -796,40 +800,9 @@ impl ConnectionDialogState {
             }
         }
 
-        // 高级选项：network_chain / ssl / policy_overrides。
+        // 高级选项：ssl / policy_overrides（`network_chain` 内联链已撤下，见架构 §14 #25）。
         if let Some(adv) = &ds.advanced_options {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(adv) {
-                if let Some(chain) = v.get("network_chain").and_then(|c| c.as_array()) {
-                    let hops: Vec<Hop> = chain
-                        .iter()
-                        .filter_map(|h| {
-                            let kind = h
-                                .get("kind")
-                                .and_then(|k| k.as_str())
-                                .unwrap_or("SSH")
-                                .to_string();
-                            let label = h
-                                .get("label")
-                                .and_then(|k| k.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let enabled =
-                                h.get("enabled").and_then(|k| k.as_bool()).unwrap_or(true);
-                            if label.is_empty() {
-                                None
-                            } else {
-                                Some(Hop {
-                                    kind,
-                                    label,
-                                    enabled,
-                                })
-                            }
-                        })
-                        .collect();
-                    if !hops.is_empty() {
-                        *self.hops.borrow_mut() = hops;
-                    }
-                }
                 if let Some(ssl) = v.get("ssl").and_then(|c| c.as_object()) {
                     if let Some(mode) = ssl.get("mode").and_then(|m| m.as_str()) {
                         let mode = mode.to_string();
@@ -867,7 +840,7 @@ impl ConnectionDialogState {
 
 }
 
-/// 由受控 Entity 重建轻量视图（测试/保存按钮复用 collect / hops_valid）。
+/// 由受控 Entity 重建轻量视图（测试/保存按钮复用 collect）。
 pub(crate) struct ClonedDialogState {
     remark: Entity<InputState>,
     auth_method: Entity<SelectState<SearchableVec<SharedString>>>,
@@ -880,7 +853,6 @@ pub(crate) struct ClonedDialogState {
     duckdb_fed: Rc<Cell<bool>>,
     cache_path: Entity<InputState>,
     props: Rc<RefCell<Vec<(String, String)>>>,
-    hops: Rc<RefCell<Vec<Hop>>>,
     // ---- Phase C ----
     scope: Entity<SelectState<SearchableVec<SharedString>>>,
     ssl_mode: Entity<SelectState<SearchableVec<SharedString>>>,
@@ -914,7 +886,6 @@ impl ConnectionDialogState {
         duckdb_fed: Rc<Cell<bool>>,
         cache_path: Entity<InputState>,
         props: Rc<RefCell<Vec<(String, String)>>>,
-        hops: Rc<RefCell<Vec<Hop>>>,
         scope: Entity<SelectState<SearchableVec<SharedString>>>,
         ssl_mode: Entity<SelectState<SearchableVec<SharedString>>>,
         ssl_ca: Entity<InputState>,
@@ -937,7 +908,6 @@ impl ConnectionDialogState {
             duckdb_fed,
             cache_path,
             props,
-            hops,
             scope,
             ssl_mode,
             ssl_ca,
@@ -1067,20 +1037,8 @@ impl ClonedDialogState {
                 .unwrap_or_default()
                 .as_str(),
         );
-        // 高级选项组装：network_chain + ssl + policy_overrides 合并为一个 JSON。
+        // 高级选项组装：ssl + policy_overrides 合并为一个 JSON。
         let mut adv = serde_json::Map::new();
-        if network_config_id.is_none() {
-            let hops = self.hops.borrow();
-            if !hops.is_empty() {
-                let chain: Vec<serde_json::Value> = hops
-                    .iter()
-                    .map(|h| {
-                        serde_json::json!({ "kind": h.kind, "label": h.label, "enabled": h.enabled })
-                    })
-                    .collect();
-                adv.insert("network_chain".into(), serde_json::Value::Array(chain));
-            }
-        }
         let ssl_mode = self
             .ssl_mode
             .read(cx)
@@ -1179,13 +1137,6 @@ impl ClonedDialogState {
             strip_file_db_noise(&mut out);
         }
         Some(out)
-    }
-
-    pub(crate) fn hops_valid(&self, cx: &mut App) -> Result<(), String> {
-        if self.network_ref.read(cx).selected_value().is_some() {
-            return Ok(());
-        }
-        Ok(())
     }
 }
 

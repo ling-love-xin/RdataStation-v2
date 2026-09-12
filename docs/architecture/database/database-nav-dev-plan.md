@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 开发方案（Phase A/B/C）
 
-> 状态：**Phase A 已实现；Phase B 的 B1–B6 已实现（2026-09-12）** · `cargo check --workspace --all-targets` 零错误；`cargo test -p rds-workbench --lib`（31）/ `-p rds-database`（3）/ `-p rds-engine connection_org_store`（4）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
+> 状态：**Phase A/B 完成；Phase C 进行中（C1/C2/C3/C4/C6/C7 已实现）· 2026-09-12** · `cargo check --workspace --all-targets` 零错误；`cargo test -p rds-workbench --lib`（37）/ `-p rds-database`（5）/ `-p rds-settings`（1）/ `-p rds-engine --lib`（242）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
 > 设计基线：作用域来源短码 `P/G/GP`、项目级自定义分组（多对多）+ 多值标签、三级缓存与增量刷新、缓存永不自动删除、属性面板填充编辑区右侧、预热方案 C。
 > 技术栈：GPUI（gpui-kit 0.6）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
 > 前置：M3 连接模块 Phase A/B 已实现；engine 元数据缓存（含增量/预热索引/FTS/分页/版本迁移）已迁移。
@@ -10,8 +10,8 @@
 | 阶段 | 状态 |
 | --- | --- |
 | Phase A（骨架与核心闭环） | ✅ 已实现 |
-| Phase B（分组/标签/搜索/属性面板/状态） | 🟡 进行中（B1–B6 已实现，B7/B8 待办） |
-| Phase C（预热/增量/收尾） | ⬜ 待办 |
+| Phase B（分组/标签/搜索/属性面板/状态/菜单/缓存） | ✅ 已实现（B1–B8） |
+| Phase C（预热/增量/收尾） | 🟡 进行中（C1/C2/C3/C4/C6/C7 已实现；C5 待条件；C8 由连接侧推进） |
 
 **Phase A 实现位置**
 
@@ -56,21 +56,84 @@
 | B2 标签服务（多值 + 检索） | ✅ 服务层就绪（2026-09-11） | `ConnectionOrgStore`：set_tags/list_tags/list_connections_by_tag/list_all_tags；`nav_runtime::{list_tags,set_tags}` 已接线；M3 保存/更新同步、删除清理 |
 | B3 分组/标签视图（拖拽/右键/对话框） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`render_nav_tree`（分组一级 + 「未分组」）、`render_group_header`（统一色条 + 计数 + 折叠）、`render_org_editor`（行内分组多选 + 标签输入 + 新建分组）、`nav_source_chip`（来源筛选 chips）、`ensure_nav_org` / `reload_nav_org` |
 | B1/B2 视图接线（分组多对多 + 标签多值） | ✅ 已实现 | `nav_runtime::{list_groups,create_group,list_group_members,add_to_group,remove_from_group,list_all_tags}`；`ConnectionOrgStore::list_tag_pairs`（一次性映射） |
-| B7 上下文菜单动作（生成 SQL / 复制名 / 查看数据） | ⬜ | — |
-| B8 缓存管理入口 + 短码⇄文字开关 | ⬜ | — |
+| B7 上下文菜单动作（查看数据 / 复制名 / 查看属性 / 刷新） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`ContextMenuExt::context_menu` 挂到连接行 / 对象节点 / 分组头；`Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（生成 SELECT → 编辑区）；`toggle_connection` / `refresh_node` / `delete_group` / `create_group_interactive`；分组删除带 `AlertDialog` 确认 |
+| B8 缓存管理入口 + 短码⇄文字开关 + 属性面板宽度记忆 | ✅ 已实现（2026-09-12） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`（数据源导航节）；`crates/workbench/src/components/cache_dialog.rs`（两处入口）；`panels.rs::{refresh_all, render_connection_row, render_property_panel}` + `EditorPanel::render`（`h_resizable`） |
 
 **Phase B 已知限制**
 
 - 属性面板为**堆叠分区**（列/索引/约束），暂未做子实体 Tab 切换；
-- 双击节点打开属性（gpui `click_count >= 2`）；右键菜单、复制/生成 SQL 待 B7；
+- 双击节点打开属性（gpui `click_count >= 2`）；右键菜单已实现（见下方 B7 范围）；复制 / 生成 SQL 已支持、INSERT/UPDATE/DELETE 待后续；
 - 属性加载为阻塞式（与 Phase A 同），后续随缓存编排迁后台；
-- 属性面板宽度固定 392px（拖拽与记忆待 B8）；
 - 归组尚未支持**拖拽**与组内外手动排序，目前通过行内 `🗂` 编辑器的多选切换（B3 视图首版）；排序服务 `set_member_order` 已就绪；
-- 新建分组用默认名「新建分组」（自动去重），重命名 / 描述表单待 B7；
+- 新建分组用默认名「新建分组」（自动去重）；重命名已支持（分组头右键 → 行内输入），描述表单待后续；
 - 「来源筛选 + 分组」状态尚未持久化到 `navigator_state`（仅展开态已持久化）；
 - 搜索目前为**连接名 + 标签**子串匹配；`source:global` / `tag:prod` 结构化语法、以及对象树层命中高亮待 B7。
 
+**Phase B7 上下文菜单已实现范围**
+
+| 节点 | 菜单项 |
+| --- | --- |
+| 连接 | 连接 / 断开 · 编辑连接… · 查看属性 · 分组 / 标签… · 复制名称 · 刷新元数据 |
+| 表 / 视图 | 查看属性 · 查看数据（`SELECT * … LIMIT 200` 注入编辑区） · 复制名称 · 复制限定名 · 刷新元数据 |
+| 其他对象（列 / schema / 文件夹 / 例程） | 查看属性 · 复制名称（*限定名仅在有 catalog/schema 时出现*） · 刷新元数据 |
+| 分组头 | 重命名分组（行内输入） · 新建分组 · 删除分组（`AlertDialog` 二次确认）；「未分组」仅「新建分组」 |
+
+**B7 待办（后续阶段）**
+
+- 生成 INSERT / UPDATE / DELETE、生成 Mock 数据、测试连接、复制连接（模板）、共享至项目 / 取消共享、删除连接；
+- 拖拽表到编辑器插入限定名（需 `on_drag`）；「查看数据」目前仅注入 SQL，未自动执行（自动执行需抽出 `EditorPanel` 的执行管线）。
+
+**Phase B8 已实现范围**
+
+| 能力 | 实现 |
+| --- | --- |
+| 缓存管理（占用 / 逐条与全部清理） | `crates/workbench/src/components/cache_dialog.rs`；入口：设置面板「数据源导航 → 缓存管理…」+ 导航面板头 `⋯` →「缓存管理…」；**仅此处**删除 `conn_{id}.sqlite` |
+| 来源短码 ⇄ 文字开关 | `settings::model::Navigator::source_short_code`；设置面板「数据源导航 → 来源标识（短码/文字）」；`render_connection_row` 消费；切换后 `refresh_windows()` 即时生效 |
+| 属性面板宽度记忆 | `settings::model::Navigator::property_panel_width`（默认 24.5 rem）；`EditorPanel::render` 用 `h_resizable` 包裹，拖拽实时更新，**关闭面板时**写 `settings.json` |
+| 刷新全部元数据 | 导航面板头 `⋯` →「刷新全部元数据」（`refresh_all`，不删磁盘缓存） |
+
+**B8 说明**
+
+- 属性面板宽度在关闭面板时持久化（拖拽过程不写盘，避免每帧 I/O）；窗口直接退出而未关闭面板时，保留上次持久值。
+- 缓存列表按当前可见连接采集；`P_`/`GP_` 缓存落项目 `meta/connection_metadata/`、`G_` 落系统 `global_metadata/`，与 `MetadataCacheManager` 路径规则一致。
+
+**Phase C 实现进度**
+
+| 任务 | 状态 | 落点 |
+| --- | --- | --- |
+| C4 大 schema 客户端分页（「加载更多」） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`（`render_more_row`、`folder_limit`、`page_limit`）+ `ui.rs::NAV_FOLDER_PAGE_SIZE`（200/页） |
+| C6 收敛遗留：移除死代码 | ✅ 部分（2026-09-12） | `panels.rs::render_connection_list` 已删（无调用点）；`db_navigator.rs` **保留**（仍被 Mock 面板与 `mock_generator` 消费，属 M5/M6 范围） |
+| C7 快捷键：Ctrl+F 聚焦搜索 + 导航树键盘操作 | ✅ 已实现（2026-09-12） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}` + `app/main.rs` 绑定（`database-nav` context）+ `panels.rs::{nav_move, nav_expand, nav_collapse, nav_open_properties, nav_order}`（选中高亮 + 行点击聚焦面板） |
+| C1 预热方案 C（仅 catalogs/schemas）+ 进度 + 取消 | ✅ 已实现（2026-09-12） | `crates/database/src/navigator_service.rs::warm_schemas`；`crates/workbench/src/services/nav_jobs.rs`（后台任务）；面板头显示「预热 d/t + 取消」 |
+| C2 邻接节点预加载（列） | ✅ 已实现（2026-09-12） | `navigator_service::prefetch_columns` + `nav_jobs::prefetch_columns`；`panels.rs::ensure_nav_loaded` 在「表」文件夹首次加载后排队前 20 张表（`nav_jobs::PREFETCH_BATCH`） |
+| 导航后台任务基建（阻塞 → 工作线程） | ✅ 已实现（2026-09-12） | `services/nav_jobs.rs`：单工作线程 + tokio 运行时 + mpsc 串行队列；原子量进度/取消；面板用主线程 async 任务 300ms 轮询重绘 |
+| C3 增量刷新接入 | ✅ 已实现（首版，2026-09-12） | `crates/database/src/cache.rs`（新增 `NavCache` cache-aside）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；范围：schema / 表 / 视图 / 列；刷新（`fresh`）先 `prune_schema` 再重写；**修复 engine 既有缺陷** `list_columns_normalized` 引用了不存在的 `fkc.table_id` |
+| C5 `search.match.background` token | ⬜ 受阻 | gpui-kit 0.6.1 `ThemeColor` 无该字段，且仓库尚无产品语义 token 注册设施；命中高亮未实现，提前加 token 无消费方 |
+| C8 元数据缓存键切身份指纹 | ⚙️ engine 侧部分落地 | `engine::persistence::metadata_identity`（纯函数 + 测试，已提交 `fd1ffdb`）**尚未接线**（由连接侧任务推进） |
+
+**C3 首版说明（已知限制）**
+
+- 缓存命中判据为「非空即有数据」，空对象列表（如某 schema 无视图）会回落实时内省；
+- 刷新（`fresh`）会先删该 schema 的缓存行再重写（外键级联删表 / 列），兄弟文件夹缓存随之失效 → 下次展开回落实时（可接受）；
+- **列级删除不会剪枝**（`save_column` 为 upsert，无 per-table 清空 API）；删除列后直到「缓存管理 → 清理」或整 schema 刷新才会消失；
+- 每次 `NavCache::open` 都新建一条缓存 SQLite 连接并跑幂等迁移；后续可改为每服务实例复用一份句柄。
+
+**C7 说明**
+
+- `Ctrl+F` 聚焦搜索（宿主 action）；`↑↓` 移动选中、`→` 展开、`←` 折叠、`Enter` / `F4` 打开属性；
+- 可见序列由渲染顺序每帧重建（`nav_order`），避免与树的过滤 / 分组 / 分页逻辑重复实现；
+- 仅当焦点在导航面板内时生效（点击行会聚焦面板）；搜索框获得焦点时 `↑↓` 仍由输入框处理优先（未消费才冒泡）。
+
+**C1 / C2 说明（后台任务）**
+
+- 内省驱动依赖 tokio，不能在 UI 线程上跑；`services/nav_jobs.rs` 用**单工作线程 + tokio 运行时 + mpsc 串行队列**执行，面板只提交任务；
+- 预热进度为原子量，面板用主线程 async 任务 300ms 轮询重绘（连续两次非活动才结束，避开入队→启动的竞态）；「取消」在 catalog 之间生效；
+- C2 仅在「表」文件夹首次加载后排队一次（每连接重新连接时重置），最多 20 张（`PREFETCH_BATCH`）；命中 L2 的表不再内省；
+- 已知限制：面板自身的展开加载仍是同步 `block_on`（仅预热/预取进了后台）；将全部加载迁后台属后续收尾。
+
 ## 1. 现状结论（盘点摘要）
+
+> 下表为 Phase A 前的盘点快照； M4 已于 Phase A–C 落地（进度见上方表格）。
 
 | 层 | 状态 |
 | --- | --- |

@@ -106,4 +106,36 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         save_settings(&settings);
     }
+
+    /// 来源标识是否用短码（`P` / `G` / `GP`）。
+    pub fn source_short_code(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.source_short_code
+    }
+
+    /// 设置并持久化来源标识形式（短码 ⇄ 文字）。
+    pub fn set_source_short_code(short_code: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.source_short_code = short_code;
+        }
+        let settings = cx.global::<Settings>().clone();
+        save_settings(&settings);
+        // 导航面板按需重渲染（设置与面板是不同实体，不通知不会即时刷新）。
+        cx.refresh_windows();
+    }
+
+    /// 属性面板宽度（rem 倍率）。
+    pub fn property_panel_width(cx: &App) -> f32 {
+        cx.global::<Settings>().navigator.property_panel_width
+    }
+
+    /// 设置并持久化属性面板宽度（rem 倍率）。
+    pub fn set_property_panel_width(width: f32, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.property_panel_width = width;
+        }
+        let settings = cx.global::<Settings>().clone();
+        save_settings(&settings);
+    }
 }

@@ -1,5 +1,54 @@
 use super::*;
 
+/// 网络配置字段行的标签列宽（容纳「校验服务器证书」这类长标签）。
+/// 结构尺寸最终应迁移到 `ui.rs` 登记（与对话框的 `DIALOG_*` 同路）。
+const NET_LABEL_W: f32 = 7.;
+
+/// 取字段输入实体（键不存在 → None）。
+fn net_input_entity(mgr: &ManagerWorkspace, key: &str) -> Option<Entity<InputState>> {
+    mgr.net_inputs
+        .borrow()
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, e)| e.clone())
+}
+
+/// 当前网络类型的字段声明（按类型缓存，只在类型变化时重算）。
+fn net_specs_now(mgr: &ManagerWorkspace, type_key: &str) -> Vec<NetFieldSpec> {
+    if mgr.net_specs_for.borrow().as_str() != type_key {
+        *mgr.net_specs.borrow_mut() = network_field_specs(type_key);
+        *mgr.net_specs_for.borrow_mut() = type_key.to_string();
+    }
+    mgr.net_specs.borrow().clone()
+}
+
+/// 读取全部字段值（key → 文本）。
+fn collect_net_values(mgr: &ManagerWorkspace, cx: &App) -> Vec<(String, String)> {
+    mgr.net_inputs
+        .borrow()
+        .iter()
+        .map(|(k, e)| ((*k).to_string(), e.read(cx).value().to_string()))
+        .collect()
+}
+
+/// 清空字段输入（保存成功 / 取消编辑）。
+fn clear_net_values(mgr: &ManagerWorkspace, window: &mut Window, cx: &mut App) {
+    for (_, input) in mgr.net_inputs.borrow().iter() {
+        input.update(cx, |s, cx| s.set_value("", window, cx));
+    }
+}
+
+/// 按名称读取网络配置（类型, config JSON）；服务未就绪 / 不存在 → None。
+fn load_network_config_by_name(name: &str, cx: &mut App) -> Option<(String, String)> {
+    let rt = tokio::runtime::Runtime::new().ok()?;
+    let service = DataSourceService::global().ok()?;
+    let list = rt.block_on(service.list_network_configs()).ok()?;
+    let _ = cx;
+    list.into_iter()
+        .find(|n| n.name.as_deref() == Some(name))
+        .map(|n| (n.network_type, n.config))
+}
+
 pub(crate) fn open_manager(
     kind: usize,
     mgr: &Rc<RefCell<ManagerWorkspace>>,
@@ -25,7 +74,50 @@ pub(crate) fn open_manager(
     }
     refresh_manager_items(kind, &mgr, cx);
 
-    window.open_dialog(cx, move |dialog, _, cx| {
+    // 类型下拉按管理器类别填充（认证 / 网络各自的**规范键**）；环境管理器不用类型列。
+    // 此前网络管理器沿用认证选项（同一个 SelectState 实体）→ 落库 `network_type` 是
+    // `proxy_pwd` 这类错值，解析器永远认不出（审计 #20 第三层根因）。
+    {
+        let type_items: Vec<SharedString> = match kind {
+            0 => AUTH_TYPES.iter().map(|t| SharedString::from(*t)).collect(),
+            1 => NETWORK_TYPES.iter().map(|t| SharedString::from(*t)).collect(),
+            _ => Vec::new(),
+        };
+        let type_sel = mgr.borrow().new_type.clone();
+        type_sel.update(cx, |s, cx| {
+            s.set_items(SearchableVec::new(type_items.clone()), window, cx);
+            // 旧选中值不在新选项里 → 改选首项（`set_items` 不会自动清理 selection）。
+            let cur = s.selected_value().cloned().unwrap_or_default().to_string();
+            if !type_items.iter().any(|t| t.as_ref() == cur) {
+                match type_items.first() {
+                    Some(first) => s.set_selected_value(first, window, cx),
+                    None => s.set_selected_index(None, window, cx),
+                }
+            }
+        });
+    }
+
+    window.open_dialog(cx, move |dialog, window, cx| {
+        // 网络字段占位随类型同步：必须在 `cx.theme()` 之前写（占位写入需要 `&mut cx`，
+        // 而 theme 持有 `cx` 的不可变借用）；只在类型变化时写，`set_placeholder` 会 notify。
+        if kind == 1 {
+            let m0 = mgr.borrow();
+            let ty = m0
+                .new_type
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+                .to_string();
+            if m0.net_specs_for.borrow().as_str() != ty {
+                for spec in network_field_specs(&ty) {
+                    if let Some(input) = net_input_entity(&m0, spec.key) {
+                        let ph = spec.placeholder;
+                        input.update(cx, |s, cx| s.set_placeholder(ph, window, cx));
+                    }
+                }
+            }
+        }
         let theme = cx.theme();
         let shared_layer = shared_for_layer.clone();
         let m = mgr.borrow();
@@ -93,6 +185,25 @@ pub(crate) fn open_manager(
                                     m.editing = Some(item.clone());
                                     m.msg = Some(format!("编辑中：{item}（保存后更新既有条目）"));
                                     m.new_name.update(app, |s, cx| s.set_value(item.clone(), window, cx));
+                                    if kind == 1 {
+                                        // 回填真实字段（此前只回填名称 → 保存会把已有 config 覆盖成空）。
+                                        if let Some((ty, config)) = load_network_config_by_name(&item, app) {
+                                            m.new_data
+                                                .update(app, |s, cx| s.set_value(config.clone(), window, cx));
+                                            for (key, value) in network_config_values(&ty, &config) {
+                                                if let Some(input) = net_input_entity(&m, &key) {
+                                                    input.update(app, |s, cx| {
+                                                        s.set_value(value.clone(), window, cx)
+                                                    });
+                                                }
+                                            }
+                                            m.new_type.update(app, |s, cx| {
+                                                s.set_selected_value(&SharedString::from(ty.clone()), window, cx)
+                                            });
+                                            // 类型可能已变：让渲染重算字段声明与占位。
+                                            *m.net_specs_for.borrow_mut() = ty;
+                                        }
+                                    }
                                     drop(m);
                                     entity.update(app, |_, cx| cx.notify());
                                 }
@@ -130,9 +241,64 @@ pub(crate) fn open_manager(
             let new_data = m.new_data.clone();
             let editing = m.editing.clone();
             let msg = m.msg.clone();
+            // 网络配置字段（kind=1）：按类型显示子集；`chain`（或未选类型）回落到原始 JSON 文本框。
+            let net_type_now = m
+                .new_type
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .unwrap_or_default()
+                .to_string();
+            let net_specs: Vec<NetFieldSpec> = if kind == 1 {
+                net_specs_now(&m, &net_type_now)
+            } else {
+                Vec::new()
+            };
+            let net_rows: Vec<(NetFieldSpec, Entity<InputState>)> = net_specs
+                .iter()
+                .cloned()
+                .filter_map(|spec| net_input_entity(&m, spec.key).map(|input| (spec, input)))
+                .collect();
             drop(m);
             let mgr = mgr.clone();
             let entity = entity.clone();
+            let mut type_row = div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_xs().child("类型"))
+                .child(Select::new(&new_type).placeholder("选择类型…"));
+            if net_rows.is_empty() {
+                type_row = type_row
+                    .child(div().text_xs().child("数据(JSON)"))
+                    .child(Input::new(&new_data).w(rems(12.5)));
+            }
+            let mut fields_block = div().v_flex().gap_1();
+            for (spec, input) in &net_rows {
+                let mut row = div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(rems(NET_LABEL_W))
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(spec.label),
+                    )
+                    .child(Input::new(input).w(rems(14.)));
+                if spec.required {
+                    row = row.child(div().text_xs().text_color(theme.colors.danger).child("*"));
+                }
+                fields_block = fields_block.child(row);
+            }
+            if !net_rows.is_empty() {
+                fields_block = fields_block.child(hint_line(
+                    theme,
+                    "字段按类型展开；协议链请选 chain 并直接填 JSON。",
+                ));
+            }
             div()
                 .v_flex()
                 .gap_2()
@@ -150,13 +316,8 @@ pub(crate) fn open_manager(
                         .child(div().text_xs().child("名称"))
                         .child(Input::new(&new_name).w(rems(11.25))),
                 )
-                .child(
-                    div().h_flex().items_center().gap_2()
-                        .child(div().text_xs().child("类型"))
-                        .child(Select::new(&new_type).placeholder("选择类型…"))
-                        .child(div().text_xs().child("数据(JSON)"))
-                        .child(Input::new(&new_data).w(rems(12.5))),
-                )
+                .child(type_row)
+                .child(fields_block)
                 .child(
                     div().h_flex().items_center().gap_2()
                         .child(
@@ -167,7 +328,7 @@ pub(crate) fn open_manager(
                                     let mgr = mgr.clone();
                                     let entity = entity.clone();
                                     move |_, window, app| {
-                                        let (name, tpe, data, editing) = {
+                                        let (name, tpe, raw_data, editing) = {
                                             let m = mgr.borrow();
                                             (
                                                 m.new_name.read(app).value().to_string(),
@@ -181,6 +342,27 @@ pub(crate) fn open_manager(
                                             entity.update(app, |_, cx| cx.notify());
                                             return;
                                         }
+                                        // 网络配置：有字段声明时由字段组装 JSON；校验失败只提示，不落库。
+                                        let data = if kind == 1 {
+                                            let specs = net_specs_now(&mgr.borrow(), &tpe);
+                                            if specs.is_empty() {
+                                                raw_data
+                                            } else {
+                                                match build_network_config_json(
+                                                    &tpe,
+                                                    &collect_net_values(&mgr.borrow(), app),
+                                                ) {
+                                                    Ok(json) => json,
+                                                    Err(e) => {
+                                                        mgr.borrow_mut().msg = Some(e);
+                                                        entity.update(app, |_, cx| cx.notify());
+                                                        return;
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            raw_data
+                                        };
                                         let outcome = upsert_manager_item(kind, &name, &tpe, &data, editing.as_deref());
                                         let mut m = mgr.borrow_mut();
                                         m.msg = Some(outcome.clone());
@@ -188,6 +370,7 @@ pub(crate) fn open_manager(
                                             m.editing = None;
                                             m.new_name.update(app, |s, cx| s.set_value("", window, cx));
                                             m.new_data.update(app, |s, cx| s.set_value("", window, cx));
+                                            clear_net_values(&m, window, app);
                                         }
                                         drop(m);
                                         refresh_manager_items(kind, &mgr, app);
@@ -207,6 +390,7 @@ pub(crate) fn open_manager(
                                         m.msg = None;
                                         m.new_name.update(app, |s, cx| s.set_value("", window, cx));
                                         m.new_data.update(app, |s, cx| s.set_value("", window, cx));
+                                        clear_net_values(&m, window, app);
                                         drop(m);
                                         entity.update(app, |_, cx| cx.notify());
                                     }
@@ -522,10 +706,14 @@ pub(crate) fn upsert_manager_item(
                 let config = NetworkConfig {
                     id,
                     name: Some(name.to_string()),
-                    network_type: if tpe.is_empty() {
-                        "SSH".into()
-                    } else {
-                        tpe.into()
+                    network_type: {
+                        // 只接受规范键（防「下拉残留认证值」写进库）；空 / 未知 → 默认 ssh。
+                        let t = tpe.trim().to_ascii_lowercase();
+                        if NETWORK_TYPES.contains(&t.as_str()) {
+                            t
+                        } else {
+                            "ssh".to_string()
+                        }
                     },
                     config: if data.is_empty() {
                         "{}".into()

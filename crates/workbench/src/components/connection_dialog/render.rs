@@ -77,7 +77,6 @@ impl ConnectionDialogState {
         let draft_cursor = self.draft_cursor.clone();
         let remark = self.remark.clone();
         let active_tab = self.active_tab.clone();
-        let hops = self.hops.clone();
         let env = self.env.clone();
         let env_list = self.env_list.clone();
         let auth_method = self.auth_method.clone();
@@ -199,7 +198,8 @@ impl ConnectionDialogState {
         db_input.update(cx, |s, cx| s.set_placeholder("可选，留空表示全部", window, cx));
 
         // 测试连接（block_on，与 workbench 现有服务调用模式一致）。
-        let run_test = move |input: DataSourceSaveInput| -> (bool, String) {
+        // `project_root` 由调用处从项目栏读取：P_/GP_ 前缀的认证 / 网络档案需要它才能解析。
+        let run_test = move |input: DataSourceSaveInput, project_root: Option<String>| -> (bool, String) {
             let service = match DataSourceService::global() {
                 Ok(s) => s,
                 Err(e) => return (false, format!("服务未就绪: {e}")),
@@ -208,7 +208,7 @@ impl ConnectionDialogState {
                 Ok(rt) => rt,
                 Err(e) => return (false, format!("运行时错误: {e}")),
             };
-            let t = rt.block_on(service.test(&input));
+            let t = rt.block_on(service.test(&input, project_root.as_deref()));
             // 反馈拼上探测到的服务器版本（原型："成功（版本＋延迟）"）。
             let detail = match t.version.as_deref() {
                 Some(v) => format!("{} · 版本 {}", t.message, v),
@@ -429,203 +429,70 @@ impl ConnectionDialogState {
             // ---- 各 Tab 内容 ----
             let tab_content = match active_tab.get() {
                 1 => {
-                    // ===== 网络：协议链 + 拓扑 =====
+                    // ===== 网络：引用「网络配置」档案（内联链已撤下，见架构 §14 #25）=====
                     let network_ref_selected = network_ref.read(cx).selected_value().cloned();
                     let is_ref = network_ref_selected.is_some();
-                    let hops_ui = {
-                        let hops_outer = hops.clone();
-                        let hops_ref = hops.borrow();
-                        let mut rows = div().v_flex().gap_1();
-                        if hops_ref.is_empty() {
-                            rows = rows.child(
+                    // 内联协议链已撤下（#25）：多跳改由「网络配置」档案承担（类型 `chain` 的 JSON 数组，
+                    // 连接时经 `parse_network_config_json` 解析为 `ConnectionMethod::Chain` 并逐跳执行）。
+                    // 此处只保留：引用下拉 + 管理入口 + 诚实提示 + 数据路径预览。
+                    let ref_label = network_ref_selected
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "直连（未引用档案）".to_string());
+                    let mut content = div().v_flex().gap_3();
+                    content = content.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_sm().font_weight(FontWeight::BOLD).child("网络配置"))
+                            .child(
                                 div().text_xs().text_color(theme.colors.muted_foreground)
-                                    .child("无协议链跳——直接连接目标数据库"),
-                            );
-                        }
-                        for (i, hop) in hops_ref.iter().enumerate() {
-                            let hop = hop.clone();
-                            let idx = i;
-                            let hops_outer = hops_outer.clone();
-                            let entity = entity.clone();
-                            let kind_color = if hop.kind == "SSH" {
-                                theme.colors.success
-                            } else {
-                                theme.colors.warning
-                            };
-                            rows = rows.child(
+                                    .child("引用网络档案："),
+                            )
+                            .child(Select::new(&network_ref).placeholder("（不引用：直连）"))
+                            .child(
+                                Button::new("mgr-network")
+                                    .ghost()
+                                    .label("管理")
+                                    .on_click({
+                                        let mgr = mgr.clone();
+                                        let entity = entity.clone();
+                                        let shared = shared.clone();
+                                        move |_, window, app| {
+                                            open_manager(1, &mgr, entity.clone(), shared.clone(), window, app);
+                                        }
+                                    }),
+                            ),
+                    );
+                    if is_ref {
+                        content = content.child(
+                            div().text_xs().text_color(theme.colors.info)
+                                .child("已引用网络档案 · 连接时生效（改档案一处全量生效）"),
+                        );
+                    } else {
+                        content = content.child(hint_line(
+                            theme,
+                            "未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用。",
+                        ));
+                    }
+                    // 数据路径预览（TLS 徽标；SSL 细节在常规 → 连接安全）。
+                    content = content.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
                                 div()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_2()
+                                    .text_xs()
                                     .rounded_md()
                                     .border_1()
                                     .border_color(theme.colors.border)
                                     .px_2()
                                     .py_1()
-                                    .child(div().text_xs().text_color(theme.colors.muted_foreground).child(format!("{}", idx + 1)))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(kind_color)
-                                            .child(hop.kind.clone()),
-                                    )
-                                    .child(div().text_sm().flex_1().child(hop.label.clone()))
-                                    .child(
-                                        div()
-                                            .id(ElementId::Name(SharedString::from(format!("hop-en-{idx}"))))
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(if hop.enabled { theme.colors.success } else { theme.colors.muted_foreground })
-                                            .child(if hop.enabled { "启用" } else { "停用" })
-                                            .on_click({
-                                                let hops = hops_outer.clone();
-                                                let entity = entity.clone();
-                                                move |_, _, app| {
-                                                    let mut h = hops.borrow_mut();
-                                                    if let Some(hop) = h.get_mut(idx) { hop.enabled = !hop.enabled; }
-                                                    drop(h);
-                                                    entity.update(app, |_, cx| cx.notify());
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        div().h_flex().gap_1()
-                                            .child(
-                                                div()
-                                                    .id(ElementId::Name(SharedString::from(format!("hop-up-{idx}"))))
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(theme.colors.muted_foreground)
-                                                    .child("↑")
-                                                    .on_click({
-                                                        let hops = hops_outer.clone();
-                                                        let entity = entity.clone();
-                                                        move |_, _, app| {
-                                                            let mut h = hops.borrow_mut();
-                                                            if idx > 0 { h.swap(idx - 1, idx); }
-                                                            drop(h);
-                                                            entity.update(app, |_, cx| cx.notify());
-                                                        }
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id(ElementId::Name(SharedString::from(format!("hop-dn-{idx}"))))
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(theme.colors.muted_foreground)
-                                                    .child("↓")
-                                                    .on_click({
-                                                        let hops = hops_outer.clone();
-                                                        let entity = entity.clone();
-                                                        move |_, _, app| {
-                                                            let mut h = hops.borrow_mut();
-                                                            if idx + 1 < h.len() { h.swap(idx, idx + 1); }
-                                                            drop(h);
-                                                            entity.update(app, |_, cx| cx.notify());
-                                                        }
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id(ElementId::Name(SharedString::from(format!("hop-del-{idx}"))))
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(theme.colors.danger)
-                                                    .child("删除")
-                                                    .on_click({
-                                                        let hops = hops_outer.clone();
-                                                        let entity = entity.clone();
-                                                        move |_, _, app| {
-                                                            hops.borrow_mut().remove(idx);
-                                                            entity.update(app, |_, cx| cx.notify());
-                                                        }
-                                                    }),
-                                            ),
-                                    ),
-                            );
-                        }
-                        rows
-                    };
-
-                    let add_hop = div().h_flex().items_center().gap_2()
-                        .child(
-                            Button::new("add-ssh")
-                                .secondary()
-                                .label("+ SSH 跳")
-                                .on_click({
-                                    let hops = hops.clone();
-                                    let entity = entity.clone();
-                                    let result = result.clone();
-                                    let result_ok = result_ok.clone();
-                                    move |_, _, app| {
-                                        let mut h = hops.borrow_mut();
-                                        if h.len() >= MAX_HOPS {
-                                            *result.borrow_mut() =
-                                                Some(format!("协议链最多 {} 跳", MAX_HOPS));
-                                            result_ok.set(false);
-                                            drop(h);
-                                            entity.update(app, |_, cx| cx.notify());
-                                            return;
-                                        }
-                                        let n = h.len() + 1;
-                                        h.push(Hop::ssh(format!("跳板机·ssh-{n}")));
-                                        drop(h);
-                                        *result.borrow_mut() = Some("已添加 SSH 跳".into());
-                                        result_ok.set(true);
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                }),
-                        )
-                        .child(
-                            Button::new("add-proxy")
-                                .secondary()
-                                .label("+ Proxy 跳")
-                                .on_click({
-                                    let hops = hops.clone();
-                                    let entity = entity.clone();
-                                    let result = result.clone();
-                                    let result_ok = result_ok.clone();
-                                    move |_, _, app| {
-                                        let mut h = hops.borrow_mut();
-                                        if h.len() >= MAX_HOPS {
-                                            *result.borrow_mut() =
-                                                Some(format!("协议链最多 {} 跳", MAX_HOPS));
-                                            result_ok.set(false);
-                                            drop(h);
-                                            entity.update(app, |_, cx| cx.notify());
-                                            return;
-                                        }
-                                        let n = h.len() + 1;
-                                        h.push(Hop::proxy(format!("代理·http-{n}")));
-                                        drop(h);
-                                        *result.borrow_mut() = Some("已添加 Proxy 跳".into());
-                                        result_ok.set(true);
-                                        entity.update(app, |_, cx| cx.notify());
-                                    }
-                                }),
-                        )
-                        .child(
-                            div().text_xs().text_color(theme.colors.muted_foreground)
-                                .child(format!("≤ {} 跳（SSH / HTTP(S) 代理）", MAX_HOPS)),
-                        );
-
-                    // 拓扑预览（DB 节点带 TLS 徽标，SSL 在常规→连接安全）。
-                    let hops = hops.borrow();
-                    let mut path = div().h_flex().items_center().gap_2().flex_wrap();
-                    path = path.child(
-                        div()
-                            .text_xs()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme.colors.border)
-                            .px_2()
-                            .py_1()
-                            .child("本机客户端"),
-                    );
-                    for hop in hops.iter() {
-                        path = path
+                                    .child("本机客户端"),
+                            )
                             .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
                             .child(
                                 div()
@@ -635,66 +502,22 @@ impl ConnectionDialogState {
                                     .border_color(theme.colors.border)
                                     .px_2()
                                     .py_1()
-                                    .child(format!("{} · {}", hop.kind, hop.label)),
-                            );
-                    }
-                    path = path
-                        .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
-                        .child(
-                            div()
-                                .text_xs()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(theme.colors.border)
-                                .px_2()
-                                .py_1()
-                                .child("目标数据库")
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.colors.info)
-                                        .child(" TLS"),
-                                ),
-                        );
-
-                    let mut content = div().v_flex().gap_3();
-                    content = content.child(
-                        div().v_flex().gap_2()
+                                    .child(ref_label),
+                            )
+                            .child(div().text_xs().text_color(theme.colors.muted_foreground).child("→"))
                             .child(
-                                div().h_flex().items_center().gap_2()
-                                    .child(div().text_sm().font_weight(FontWeight::BOLD).child("协议链"))
+                                div()
+                                    .text_xs()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .px_2()
+                                    .py_1()
+                                    .child("目标数据库")
                                     .child(
-                                        div().text_xs().text_color(theme.colors.muted_foreground)
-                                            .child("引用网络配置："),
-                                    )
-                                    .child(Select::new(&network_ref).placeholder("（内联编辑）"))
-                                    .child(
-                                        Button::new("mgr-network")
-                                            .ghost()
-                                            .label("管理")
-                                            .on_click({
-                                                let mgr = mgr.clone();
-                                                let entity = entity.clone();
-                                                let shared = shared.clone();
-                                                move |_, window, app| {
-                                                    open_manager(1, &mgr, entity.clone(), shared.clone(), window, app);
-                                                }
-                                            }),
+                                        div().text_xs().text_color(theme.colors.info).child(" TLS"),
                                     ),
                             ),
-                    );
-                    if is_ref {
-                        content = content.child(
-                            div().text_xs().text_color(theme.colors.info)
-                                .child("已引用网络档案 · 链字段只读（改档案一处全量生效）"),
-                        );
-                    } else {
-                        content = content.child(hops_ui).child(add_hop);
-                    }
-                    content = content.child(
-                        div().v_flex().gap_1()
-                            .child(div().text_sm().font_weight(FontWeight::BOLD).child("数据路径预览"))
-                            .child(path),
                     );
                     content
                 }
@@ -1534,21 +1357,27 @@ impl ConnectionDialogState {
             // ---- 暂存列表（多连接连续编辑；原型设计 §2.2）：草稿 + 已保存条目 ----
             // 当前条目（光标位）的徽标与名称取**正在编辑的表单**，而不是已写回的快照：
             // 否则“刚从 MySQL 切到 SQLite”时表单已变、条目还显示 mysql 图标（真机反馈）。
-            let drafts_snapshot: Vec<ConnectionDraft> = drafts_list.borrow().clone();
+            // 性能（§6 决策 #73）：不再每帧克隆整张草稿表与整份 `ConnectionDraft`——
+            // 光标位只取「表单显示视图 + 无分配脏比对」，其余行只短借用其展示字段。
             let cursor_now = draft_cursor.get();
-            let live_now: Option<ConnectionDraft> =
-                Some(state.snapshot_form(cx)).filter(|_| cursor_now < drafts_snapshot.len());
+            let drafts_len = drafts_list.borrow().len();
+            let live_now = state.live_entry_view(cursor_now, cx);
             let mut staging_list = div().v_flex().gap(rems(0.25));
-            for (i, d) in drafts_snapshot.iter().enumerate() {
+            for i in 0..drafts_len {
+                let (draft_type_id, draft_name, saved_id) = {
+                    let drafts = drafts_list.borrow();
+                    let Some(d) = drafts.get(i) else { continue };
+                    (d.type_id.clone(), d.display_name(), d.saved_id.clone())
+                };
                 let on = i == cursor_now;
                 let live = if on { live_now.as_ref() } else { None };
-                let is_saved = d.saved_id.is_some();
+                let is_saved = saved_id.is_some();
                 // 显示用字段：当前条目用 live（表单），其余用快照。
                 let display_type_id =
-                    staging_display_type_id(&d.type_id, live.map(|l| l.type_id.as_str()));
+                    staging_display_type_id(&draft_type_id, live.map(|l| l.type_id.as_str()));
                 let label = match live {
                     Some(l) if !l.name.trim().is_empty() => l.name.trim().to_string(),
-                    _ => d.display_name(),
+                    _ => draft_name,
                 };
                 let mut row = div()
                     .id(ElementId::Name(SharedString::from(format!("draft-{i}"))))
@@ -1599,15 +1428,9 @@ impl ConnectionDialogState {
                     })
                     .child({
                         // 脏标记（●）：当前条目有未写回快照的表单修改（仅未保存草稿）。
-                        let dirty = match live {
-                            Some(l) => d.saved_id.is_none() && l != d,
-                            None => false,
-                        };
+                        let dirty = live.map(|l| l.dirty).unwrap_or(false);
                         // 来源短码（P/G/GP）：已保存条目按 ID 前缀标示作用域来源（原型 §2.2）。
-                        let scope_code = d
-                            .saved_id
-                            .as_deref()
-                            .and_then(saved_scope_short);
+                        let scope_code = saved_id.as_deref().and_then(saved_scope_short);
                         let mut name_el = div()
                             .h_flex()
                             .items_center()
@@ -1980,12 +1803,13 @@ impl ConnectionDialogState {
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
                     duckdb_fed.clone(), cache_path.clone(), props.clone(),
-                    hops.clone(), scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
+                    scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
                     drivers_list.clone(), selected_type.clone(), tags_input.clone(),
                 );
                 let run_test = run_test.clone();
                 let entity = entity.clone();
+                let project_path = project_path.clone();
                 Rc::new(move |_window, app| {
                     let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
                         *result.borrow_mut() = Some("请填写名称、驱动与连接 URL".into());
@@ -1993,16 +1817,15 @@ impl ConnectionDialogState {
                         entity.update(app, |_, cx| cx.notify());
                         return false;
                     };
-                    if let Err(e) = state.hops_valid(app) {
-                        *result.borrow_mut() = Some(e);
-                        result_ok.set(false);
-                        entity.update(app, |_, cx| cx.notify());
-                        return false;
-                    }
                     *result.borrow_mut() = Some("测试中…".into());
                     result_ok.set(true);
                     entity.update(app, |_, cx| cx.notify());
-                    let (ok, msg) = run_test(input);
+                    let project_root = {
+                        let v = project_path.read(app).value().to_string();
+                        let v = v.trim();
+                        if v.is_empty() { None } else { Some(v.to_string()) }
+                    };
+                    let (ok, msg) = run_test(input, project_root);
                     *result.borrow_mut() = Some(msg);
                     result_ok.set(ok);
                     entity.update(app, |_, cx| cx.notify());
@@ -2026,7 +1849,7 @@ impl ConnectionDialogState {
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
                     auth_list.clone(), network_list.clone(), env_list.clone(),
                     duckdb_fed.clone(), cache_path.clone(), props.clone(),
-                    hops.clone(), scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
+                    scope.clone(), ssl_mode.clone(), ssl_ca.clone(),
                     ssl_cert.clone(), ssl_key.clone(), sec_overrides.clone(),
                     drivers_list.clone(), selected_type.clone(), tags_input.clone(),
                 );
@@ -2041,12 +1864,6 @@ impl ConnectionDialogState {
                         entity.update(app, |_, cx| cx.notify());
                         return false;
                     };
-                    if let Err(e) = state.hops_valid(app) {
-                        *result.borrow_mut() = Some(e);
-                        result_ok.set(false);
-                        entity.update(app, |_, cx| cx.notify());
-                        return false;
-                    }
                     // 编辑模式走 update（按 ID 前缀路由 G_/P_/GP_）；新建走 save（按作用域落库）。
                     let editing = editing_id.borrow().clone();
                     let project_path_val = {

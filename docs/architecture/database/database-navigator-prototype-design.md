@@ -434,12 +434,19 @@ flowchart TD
 | 分组 / 标签模型 | `crates/database/src/model.rs`（`ConnectionGroup` / `ConnectionTag` / `NavSource`） |
 | 分组 / 标签 / 状态持久化 | `crates/engine/src/persistence/connection_org_store.rs`（权威存储）+ `crates/workbench/src/services/nav_store.rs`（视图状态） |
 | 分组一级视图 / 行内归组 | `panels.rs::{render_nav_tree, render_group_header, render_org_editor}` |
+| 右键菜单（连接 / 对象 / 分组） | `panels.rs` 的 `ContextMenuExt::context_menu`（`gpui_kit::component::menu`） |
+| 生成 SELECT → 编辑区 | `Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（`panels.rs` / `view.rs` 消费） |
+| 大 schema 分页（「加载更多」） | `panels.rs::{render_more_row, folder_limit}` + `ui.rs::NAV_FOLDER_PAGE_SIZE` |
+| 快捷键（Ctrl+F / ↑↓ / →← / Enter·F4） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}`；`panels.rs::{nav_move, nav_order, nav_open_properties}` |
+| 导航 L2 缓存（cache-aside） | `crates/database/src/cache.rs`（`NavCache`）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；底层 `engine::persistence::MetadataCacheOps` |
+| 后台任务（C1 预热 / C2 预取） | `crates/workbench/src/services/nav_jobs.rs`（工作线程 + 队列 + 进度/取消）+ `navigator_service::{warm_schemas, prefetch_columns}` |
 | 导航领域模型 / 状态 | `crates/database/src/model.rs` |
 | 导航编排服务（缓存/刷新/预热/搜索/分页） | `crates/database/src/navigator_service.rs`（新增） |
 | 实时内省 | `crates/database/src/metadata_service.rs`（已有） |
 | 缓存与增量/预热/队列/版本 | engine `MetadataCacheManager` / `MetadataCacheOps` / `CacheVersionManager`（已有） |
 | 属性面板（注册表 + 视图） | `crates/database/src/property_panel.rs` + 编辑区右侧面板（`crates/workbench`） |
-| 缓存管理（占用 / 清理） | engine `MetadataCacheManager::size` / `delete`，仅由设置入口调用 |
+| 缓存管理（占用 / 清理） | `crates/workbench/src/components/cache_dialog.rs`；engine `MetadataCacheManager::size` / `delete`，仅由本对话框调用（设置面板与导航面板头两处入口） |
+| UI 偏好（短码开关 / 属性面板宽度） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`；属性面板拖拽 `h_resizable`（`EditorPanel::render`） |
 | 连接 / 断开 | `crates/workbench/src/services/connection_service.rs`（断开不再删缓存） |
 | 新建 / 编辑连接对话框 | `crates/workbench/src/components/connection_dialog.rs`（复用） |
 | 数据源列表 / CRUD / 标签 | `crates/workbench/src/services/data_source_service.rs`（已有，扩展 tags） |

@@ -50,7 +50,7 @@ flowchart TB
 | 视图 | `crates/workbench/src/components/connection_dialog/` | 对话框（五 Tab / Header / 侧栏暂存列表 / 三管理器覆盖层）——按职责拆分： |
 | 视图 | ├ `mod.rs` | 模块声明与 re-export、常量、`ConnectionDialogState` 字段、输入控件工厂 |
 | 视图 | ├ `state.rs` | 构造 / 元数据刷新 / 编辑回读 / `ClonedDialogState`（保存按钮的轻量视图） |
-| 视图 | ├ `staging.rs` | `ConnectionDraft` / `Hop`、暂存状态机、持久化映射（`draft_to_row` / `row_to_draft`）、来源短码 |
+| 视图 | ├ `staging.rs` | `ConnectionDraft`、暂存状态机、持久化映射（`draft_to_row` / `row_to_draft`）、来源短码 |
 | 视图 | ├ `render.rs` | `open()`：对话框元素树（Header / Tab / 侧栏 / footer / 快捷键 handler） |
 | 视图 | ├ `managers.rs` | 三管理器覆盖层（认证 / 网络 / 环境）CRUD |
 | 视图 | └ `helpers.rs` | 图标、Select 赋值、原型卡片/只读行、URL 重拼、作用域标签、尺寸常量（`GAP_*` / `LABEL_W` / `BADGE_*` / `PROJECT_W` / `DRIVER_W` / `TAB_BODY_H` / `STAGING_H` / `ROW_H`） |
@@ -117,7 +117,7 @@ flowchart TB
 | **草稿（Draft）** | `saved_id = None` | 全部字段为内存快照；`✕` 可删除；保存成功后转正式；当前条目有未写回修改时名称旁显示`●` |
 | **已保存（Saved）** | `saved_id = Some(id)` | 打开对话框时由 `DataSourceService::list()` 合并生成；点击走 `load_for_edit` 回读；**不在暂存列表删除**（删除入口归导航栏）；名称旁显示来源短码 `P/G/GP` |
 
-- 快照字段 = Header + 五 Tab 的全部可编辑状态（`type_id` 数据库类型、`driver_id` 驱动 id、`driver_name` 实现短名、URL、凭据、作用域与项目路径、SSL、协议链 `Vec<Hop>`、驱动属性、策略覆盖、三类引用）。
+- 快照字段 = Header + 五 Tab 的全部可编辑状态（`type_id` 数据库类型、`driver_id` 驱动 id、`driver_name` 实现短名、URL、凭据、作用域与项目路径、SSL、驱动属性、策略覆盖、三类引用）。
 - **内存 + 跨会话持久化**：关闭对话框不丢失（状态挂在 `EditorPanel` 的对话框句柄上）；变更与关闭时写入 global.db 的 `connection_drafts` 表（迁移 `020`），重启后首次打开自动恢复。
 - **凭据安全边界**：持久化表**不含密码列**（`ConnectionDraftRow` 无 password 字段，恢复后密码框为空），只随正式保存写入连接库（AES-256-GCM）。
 
@@ -186,7 +186,7 @@ flowchart TB
 ```
 
 - **打开 / 关闭**都必须通知宿主：打开漏通知 → 点了没反应；关闭漏通知 → 层残留。
-- 对话框**内部**状态刷新（切 Tab、增删协议链跳、暂存切换、测试结果）走 `EditorPanel` 的 notify，由 `WorkbenchView` 的 `cx.observe` 级联到宿主。
+- 对话框**内部**状态刷新（切 Tab、暂存切换、测试结果）走 `EditorPanel` 的 notify，由 `WorkbenchView` 的 `cx.observe` 级联到宿主。
 - `WorkbenchView` 的事件回调（如侧边栏「编辑」）本身处于宿主 update 上下文，**不能**回调 `notify_host`（借用重入），依赖该回调末尾既有的 `cx.notify()`。
 
 ### 4.3 对话框打开 / 关闭语义
@@ -230,7 +230,7 @@ sequenceDiagram
     participant K as DuckDB Secret
     participant L as 连接列表（Shared）
     U->>D: 点击「保存」
-    D->>D: collect：校验（名称 / URL / 协议链≤4跳）
+    D->>D: collect：校验（名称 / 驱动 / URL）
     D->>D: 驱动名反查 drivers 表 → 驱动 id（db_type / driver_id）
     alt 编辑模式（editing_id = Some）
         D->>S: update(id, input, project_path)
@@ -252,7 +252,7 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> 空草稿: 打开对话框（列表恒非空）
     空草稿 --> 编辑中: 输入 / 选择
-    编辑中 --> 编辑中: 切 Tab / 引用 / 协议链（面板 notify → 宿主级联）
+    编辑中 --> 编辑中: 切 Tab / 引用档案（面板 notify → 宿主级联）
     编辑中 --> 编辑中: 切换条目（capture 写回 → apply 载入）
     编辑中 --> 已保存: 保存成功（staging_after_save）
     已保存 --> 空草稿: 自动追加新草稿并选中
@@ -416,6 +416,12 @@ flowchart LR
 | 66 | 指纹切换时机 = **导航接入 L2 的那一轮**（本轮只落规则与纯函数） | 若先按连接 ID 铺开再换指纹，同一段编排要改两遍，并留下两套键并存的过渡期；同时索引表 / 引用计数 / 并发互斥都是 L2 编排的一部分 |
 | 67 | **驱动派生数据按（驱动 id + 声明原文）缓存**（`DriverDerived`：表单字段 / 能力 / 认证方法），渲染期只克隆已解析结果；**地址占位只在真正变化时写入** | 旧实现每帧 `driver_form_fields` / `driver_capabilities` / `driver_auth_types` 重新解析 `config_schema` / `capabilities` / `supported_auth_types`（对同一份字符串反复反序列化）；而 `InputState::set_placeholder` 在 gpui-base 里是**无条件赋值 + `cx.notify()`**（`input/base/state.rs`）→ 每帧写占位会让地址输入框每帧重绘。缓存键取声明原文而非“驱动 id”，所以驱动目录刷新 / 声明变化会自动失效重算；与 `fields_synced_for` 同一约定：刷新点仍在 `render`（权威同步点） |
 | 68 | **作用域判定单一来源**：`id_prefix::{is_global_connection, uses_project_storage}`（`G_` 与遗留 `conn-` → 全局库；`P_`/`GP_` → 项目库），服务层 3 处与 `nav_runtime` 4 处全部改调它，不再各自写前缀推导 | 历史隐患：服务层把遗留 `conn-` 视作全局，而 `nav_runtime` / `database::NavSource::from_conn_id` 把它归为项目 → 同一连接的标签 / 导航状态可能写错库；“同一事实两处实现”是这类缺陷的温床，谓词收归 engine 后 M4 也能直接复用 |
+| 69 | **隧道注册表挂在 `ConnectionManager`**（`ConnectionManager::tunnels()`）而不是 `ConnectionService` 实例字段；`ConnectionService::new` 从 manager 取，传独立管理器的测试仍天然隔离 | 生产连接入口是短生命周期的（每次调用 `new` 一个服务）。守卫存实例字段时，隧道会随建立它的临时实例释放——即使传了 `network_method`，也会“刚建好就关掉” |
+| 70 | **网络配置类型键归一化**：`parse_network_config_json` 先 `trim().to_ascii_lowercase()` 再匹配，并接受 `ssh_tunnel` / `tls` / `http` / `socks_proxy` 等别名；对话框新增 `NETWORK_TYPES = [ssh, proxy, ssl, chain]`（**规范键**）并在打开管理器时按类填充类型下拉、写库前白名单校验 | UI 写入的是 `SSH` / `Proxy` 这类大写标签，而解析器只匹配小写 → 档案存在、连接也引用了，但**整条链静默不生效**（审计 #20 第二层根因）；管理器类型下拉此前借用认证选项（`password`/`ssh_key`/`proxy_pwd`），会把错值写进 `network_type`（第三层） |
+| 71 | **网络配置改为结构化字段表单**（`ssh` / `proxy` / `socks` / `ssl`）：字段声明 + JSON 组装/校验/回填全部是纯函数（`helpers::{network_field_specs, build_network_config_json, network_config_values}`），渲染层只摆输入框；`chain` 仍走原始 JSON | 原先只有一个「数据(JSON)」文本框，用户要手写 `SshConfig` / `ProxyConfig` 的 JSON；且**编辑时只回填名称**，保存会把 config 覆盖成空。字段与 `connection::config` 的 serde 模型对齐（单测直接反序列化验证），校验必填 / 端口 / 布尔与 SSH 认证二选一，错误写结果行不落库 |
+| 72 | **撤下内联协议链 UI**（`Hop` 占位模型 / 上移下移 / 拓扑预览 / `advanced_options.network_chain` 写入全部删除）；多跳统一走**类型 `chain` 的网络档案**（管理器中填 JSON 数组，连接入口解析为 `ConnectionMethod::Chain` 并逐跳执行）；网络 Tab 只留「引用下拉 + 管理入口 + 诚实提示 + 数据路径预览」 | 内联链的 `Hop` 只有 `kind/label/enabled`，**没有任何主机与凭据字段，根本无法执行**；它既造出“配了就该生效”的假象，又在初始状态里种了两条假数据（`跳板机·prod-gw` / `公司代理·http`，属于 §15 禁的 UI 造数据）。而同样能力已由档案路径完整提供（含多跳），所以是删除而非补齐；`connection_drafts.hops_json` 列保留（不迁移 schema），固定写 `[]`，旧草稿的占位链直接忽略 |
+| 73 | **暂存列表显示与脏比对不再构造整份 `ConnectionDraft`**：新增 `LiveEntryView`（名称 / 类型 / 脏标记）与 `form_matches_draft`（逐字段、无分配比较），`render` 里整表 `Vec<ConnectionDraft>` 克隆改为逐行短借用；`InputState::value()` 返回 `SharedString`（引用计数克隆）是「无分配比较」成立的前提 | 旧实现每帧要：克隆整张草稿表（N × ~40 字段）+ 构造一份完整快照做脏比对（~40 次 `to_string` + 两个 `Vec` 克隆）。现在每帧只剩：光标位 2 个短字符串 + 每行 3 个展示字段。代价是“表单字段集合”与 `snapshot_form` 出现两处定义，靠等价性测试（`connection_staging::form_matches_draft_agrees_with_snapshot`）锁定不漂移 |
+| 74 | **测试连接与真实连接同源**：`ConnectionService::{inject_auth_config_credentials, build_probe_config}` 成为**唯一**的“档案 → 建连参数”组装点（`connect` 与测试共用）；测试连接按同一规则注入认证档案凭据、**真实建立网络档案隧道**（探测结束即 drop 守卫）、应用驱动属性 / 高级选项；档案缺失 / 读取失败 / 注入失败必须产生**可见说明**（不允许静默）；`DataSourceService::test(input, project_path)` 增加项目根入参以解析 P_/GP_ 档案；`url_params::merge_credentials` 统一「字段凭据 → URL」的写法（userinfo 百分号转义） | 旧 `test` 只吃表单字段：引用认证档案时 UI 已把用户名 / 密码换成只读说明 → **测试必然缺凭据**（假失败；宽松库还会假成功）；引用 SSH / 代理档案也不走隧道 → 测试结论与真实连接相反。同源后「测试通过」与「连接能建立」共用同一条组装路径，差异只剩“不注册连接池 / 不落库”；userinfo 转义顺带修掉「密码含 `@` 把 host 截断」的隐患 |
 
 
 ---
@@ -443,6 +449,12 @@ flowchart LR
 | 存储单测 | `engine::persistence::id_prefix`（新增 1 项） | 作用域判定单一来源：`G_` 与遗留 `conn-` → 全局库；`P_`/`GP_` → 项目库（`is_global_connection` / `uses_project_storage`） |
 | 服务层 | `data_source_lifecycle.rs::snapshot_sync_pulls_latest_global_definition`（扩展） | 快照同步除配置 / 凭据外，**标签权威表（`connection_tags`）同步更新**；同步前项目侧保持旧值（快照=独立副本） |
 | 服务层 | `data_source_lifecycle.rs::global_delete_cleans_project_group_membership` | 全局连接加入项目分组后删除 → 项目库成员关系清理、分组定义保留（防 B3 幻影成员） |
+| 服务层 | `data_source_lifecycle.rs::referenced_network_profile_reaches_connect_request` | 网络配置档案（类型用 UI 实际会写的 `Proxy` 大写）→ `resolve_network_method_with_project` 可解析 → `build_connect_request` 带出 `network_method` + `P_` 路由到项目侧（修「配了跳闸机却直连」） |
+| 服务单测 | `connection_service`（内嵌 +2） | 同一管理器下的服务实例共用隧道注册表（独立管理器保持隔离）；网络配置类型键大小写 / 别名归一（未知类型不 panic 返回 None） |
+| 单测 | `connection_dialog/helpers.rs`（内嵌 +4） | 网络配置字段：类型→字段声明覆盖（含大写 / 别名；`chain` 走 JSON）/ 组装的 JSON **可被 `connection::config` 的 serde 模型直接反序列化**（proxy·ssh 密码·ssh 私钥·ssl）/ 必填与端口与布尔校验 + SSH 认证二选一 / 编辑回填往返（非法 JSON 不反填） |
+| 单测 | `connection/src/url_params.rs`（内嵌 +1） | `merge_credentials`：普通凭据与既有写法等价 / `p@ss:w/rd` 转义（`%40` `%3A` `%2F`）/ 仅密码（`:p%20wd@`）/ 已有 userinfo 原样 / 非 URL（文件路径）原样 |
+| 服务层 | `data_source_lifecycle.rs::probe_config_applies_referenced_auth_profile`（A1） | 测试配置与真实连接同源：引用存在的认证档案 → 凭据（解密后）注入 URL 并回填字段凭据（`config.username` / `password`）+ 说明含「已应用认证档案凭据」；引用不存在的档案 → URL 原样且说明含「未找到引用的认证档案」（不静默） |
+| 服务层 | `data_source_lifecycle.rs::probe_config_applies_referenced_network_profile`（A1） | 网络档案在测试连接时**真实建隧道**：不可达 SSH 跳板（`127.0.0.1:1`）→ `build_probe_config` 返回 Err（「网络档案应用失败」），证明不再静默直连 |
 
 约定：测试全部落临时目录、不触真实库；`#[gpui_kit::test]` 且**禁用通配导入**（避免 `#[test]` 宏遮蔽，见 gpui-kit-dev skill）。
 
@@ -493,6 +505,11 @@ flowchart LR
 | 37 | **元数据缓存身份指纹（规则冻结，未接线）**：新增 `engine::persistence::metadata_identity`（纯函数 + 13 项单测）——身份 = 数据库族 + 规范化地址 + principal + 格式版本；驱动实现 / 密码 / 连接参数不进身份；`fingerprint()` = sha256 前 16 hex、`cache_file_name()` = `meta_{fp}.sqlite` | `crates/engine/src/persistence/metadata_identity.rs`（决策 #63–#66）、文档 §3.6；**路径未切换**（仍 `conn_{id}.sqlite`），索引表与并发互斥待导航接入 L2 时落地 |
 | 38 | **渲染热路径收敛（第一批，§14 #16）**：① 驱动派生数据（表单字段 / 能力 / 认证方法）改 `DriverDerived` 缓存（键 = 驱动 id + 三份声明原文），不再每帧解析声明 JSON；② 地址占位改「变化才写」（复用已有 `url_placeholder_for` 字段做守卫）—— `set_placeholder` 是无条件赋值 + notify | `connection_dialog/{helpers.rs（DriverDerived）,state.rs（driver_derived）,mod.rs,render.rs}`（决策 #67）；测试：`helpers::driver_derived_parses_declarations_and_keys_on_them`、`connection_type_driver::address_placeholder_is_cached_and_follows_driver`；**遗留**：类型 / 驱动目录每帧深拷贝与 `snapshot_form` 脏比对仍待收敛（#16 后半） |
 | 39 | **M3↔M4 契约审计修复（本轮）**：① 快照同步补标签权威表（`connection_tags`）；② 删除全局连接时清理项目侧分组成员（项目根合法时）；③ 作用域判定收归 `id_prefix::{is_global_connection, uses_project_storage}`（服务层 3 处 + `nav_runtime` 4 处，遗留 `conn-` 归全局库）；④ `nav_runtime::rename_group` 适配 engine `update_group` 新增的 `sort_order` 参数（保留库中现值） | `engine/persistence/id_prefix.rs`、`services/{data_source_service.rs,nav_runtime.rs}`（决策 #68）；测试见 §7；审计结论与 M4 侧待办见 **§16** |
+| 40 | **网络配置真正生效（审计 #20 收口）**：① `nav_runtime::connect_entry` 解析引用的网络档案 → `ConnectionMethod` 并随 `ConnectRequest` 传出（新增可测纯函数 `build_connect_request`）；② 隧道注册表改挂 `ConnectionManager`（决策 #69），修「守卫随临时服务实例释放」；③ 类型键归一化 + 对话框 `NETWORK_TYPES` 规范键 + 管理器类型下拉按类填充（决策 #70） | `engine/connection_manager.rs`、`connection/chain.rs`（`shares_with`）、`services/{nav_runtime.rs,connection_service.rs}`、`connection_dialog/{mod.rs,managers.rs}`；测试：`referenced_network_profile_reaches_connect_request` + `connection_service` 内嵌 2 项 |
+| 41 | **网络配置结构化字段表单（审计 #24 表单部分收口）**：新增字段声明 + 纯函数 JSON 组装 / 校验 / 回填（`helpers::{network_field_specs, build_network_config_json, network_config_values}`）；管理器按类型展开真实字段（`ssh`：主机/端口/用户名/密码或私钥/目标主机与端口；`proxy`/`socks`：主机/端口/认证/直连主机；`ssl`：校验证书 + 三个路径），`chain` 仍走原始 JSON；编辑时回填真实字段（此前只回填名称 → 保存会把 config 覆盖成空） | `connection_dialog/{helpers.rs,mod.rs,state.rs,managers.rs,render.rs}`（决策 #71）；测试：`helpers` 内嵌 +4 |
+| 42 | **撤下内联协议链（审计 #25 关闭）**：删除 `Hop` 模型 / 链列表 UI（上移下移启用删除）/ 添加入口 / 拓扑预览 / `advanced_options.network_chain` 写入 / `hops_valid`；网络 Tab 改为「引用下拉 + 管理入口 + 诚实提示 + 数据路径预览（本机 → 档案/直连 → 目标数据库）」；多跳走 `chain` 类型档案（JSON 数组）；同时移除初始状态里的两条假跳数据（§15 零 UI 造数据） | `connection_dialog/{render.rs,state.rs,staging.rs,mod.rs}`（决策 #72）；`connection_drafts.hops_json` 列保留固定写 `[]`；测试：工作台 33 lib + 各连接套件全绿 |
+| 43 | **暂存列表热路径收敛（§14 #16 后半关闭）**：`LiveEntryView` + `form_matches_draft`（逐字段无分配比较）；整表草稿克隆 → 逐行短借用；脏标记与显示名/类型徽标改为读「表单显示视图」 | `connection_dialog/{staging.rs,render.rs}`（决策 #73）；测试：`connection_staging::form_matches_draft_agrees_with_snapshot`（等价性 + 脏标记 + 越界 None） |
+| 44 | **测试连接与真实连接同源（审计 A1，§14 #26 关闭）**：`ConnectionService::{inject_auth_config_credentials, build_probe_config}`（认证档案凭据 + 真实隧道 + 高级选项 / 驱动属性，`connect` 与测试共用）；`DataSourceService::test(input, project_path)`；`url_params::merge_credentials`（userinfo 转义）；`load_auth_data_from_db` 增加库入参（测试可注入临时库） | `services/{connection_service.rs,data_source_service.rs}`、`connection/src/url_params.rs`、`connection_dialog/render.rs`（决策 #74）；测试：`data_source_lifecycle` +2、`url_params` +1；工作区 check 零警告 |
 
 
 后续可选（未做）：
@@ -659,6 +676,13 @@ flowchart LR
 > 按“是否阻断主链路”分三级：🔴 影响可用性 / 🟡 体验或语义不完整 / ⚪ 工程与文档债。
 > **2026-09-12 更新**：#1 / #2 / #3 / #5 / #6 / #8 已关闭（见下方“已关闭”段）；同时修复了 3 处**“UI 自造业务数据”**（能力矩阵 / 策略覆盖 / 环境管理器策略标签，见 §15）。剩余 #4、#7、#9–#13。
 > **USIT 第 1 轮（同日）**：又关闭 2 项——文件型连接地址丢失（🔴 数据链缺陷）与常规 Tab 不随驱动动态渲染（🟡），见「已关闭（USIT 第 1 轮）」段。
+> **A1 轮（同日）**：关闭 #26（测试连接与真实连接同源）；新增 #27–#32（档案引用完整性 / 结果行分级 / 首次使用引导 / auth_data 字段化 / 标签单源 / 连接 ID 命名待拍板）。
+
+**已关闭（A1 轮，2026-09-12：测试连接与真实连接同源）**
+
+| # | 关闭方式 | 验证 |
+| --- | --- | --- |
+| 26（🔴） | **测试连接忽略认证 / 网络档案**：`test` 只看表单字段，而引用档案时 UI 已把用户名 / 密码换成只读说明 → 缺凭据（假失败；宽松库假成功）、不走隧道（与真实连接结论相反）。现抽 `ConnectionService::{inject_auth_config_credentials, build_probe_config}`（`connect` 与测试共用）：按 `auth_method`（缺失回退档案 `auth_type`）注入凭据 → **真实建立隧道**（探测结束 drop 守卫）→ 应用驱动属性 / 高级选项；档案缺失 / 读取失败 / 注入失败全部产生**可见说明**（不再静默）；`test(input, project_path)` 增加项目根入参（P_/GP_ 档案才能解析）；`url_params::merge_credentials` 统一「字段凭据 → URL」写法（userinfo 转义，修「密码含 `@` 截断 host」） | `probe_config_applies_referenced_auth_profile`（凭据进 URL + 回填字段 + 档案缺失可见）、`probe_config_applies_referenced_network_profile`（不可达 SSH → 直接失败）、`url_params::merge_credentials` 单测 |
 
 **已关闭（本轮）**
 
@@ -695,6 +719,7 @@ flowchart LR
 | 新增（🟡） | **标签双源漏同步**：`sync_snapshot_from_global` 只复制 JSON `tags`，权威检索表 `connection_tags` 仍是旧值 → `tag:x` 检索与后续标签视图读到同步前标签；现补 `sync_connection_tags` | `data_source_lifecycle::snapshot_sync_pulls_latest_global_definition`（扩展标签断言） |
 | 新增（🟡） | **删除全局连接残留项目侧分组成员**：`delete` 的全局分支只清全局库（`cleanup_connection_org(..., None)`），而「全局连接加入项目分组」是合法配置 → 分组视图出现幻影成员；现带项目根时一并清理（非项目根跳过，避免误清全局库） | `data_source_lifecycle::global_delete_cleans_project_group_membership` |
 | 新增（⚪） | **遗留 `conn-` 作用域判定两侧不一致**（服务层视作全局、`nav_runtime` 视作项目 → 标签 / 导航状态可能写错库）；现统一由 `id_prefix::{is_global_connection, uses_project_storage}` 判定 | `engine::persistence::id_prefix` 新增单测；M4 侧 `NavSource::from_conn_id` 待另一会话改依赖 `id_prefix`（#23） |
+| 新增（🔴） | **协议链 / SSH 隧道保存后不生效（三层根因一次性收口）**：① 所有生产 connect 路径 `network_method: None` → 入口解析档案（`resolve_network_method_with_project`）并随请求传出；② 解析器只认小写类型键，而 UI 写入 `SSH`/`Proxy` → 大小写 / 别名归一；③ 隧道守卫存 `ConnectionService` 实例字段，而生产入口每次新建服务 → 注册表改挂 `ConnectionManager`（同一管理器共用，测试仍隔离）。另：对话框管理器类型下拉此前借用认证选项 → 按类填充规范键 + 写库白名单 | `referenced_network_profile_reaches_connect_request`（服务层）；`connection_service` 内嵌 2 项（注册表共享 / 类型键归一）；`connection_tunnel_cleanup` 回归通过 |
 
 | # | 级别 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
@@ -713,14 +738,23 @@ flowchart LR
 | 13 | ⚪ | 缺 UI 图像回归基线 / 大数据量性能基准 / fuzz | 回归靠断言而非视觉 | 平台级排期 |
 | 14 | ⚪ | 连接对话框**仍有存量裸 `px(...)`**（图标 / 圆角 / 描边等）未迁到 `ui.rs` 或 Tailwind 尺度 | 与用户侧新增的全局 UI 规范（`ui-design-spec.md` + `ui_contract` 契约测试）不一致（契约测试目前只扫 `view.rs` / `panels.rs`） | 按 `ui-design-spec.md` 迁移计划逐步扫一遍本模块 |
 | 15 | 🟡 | **Tab 条 / 分段控件 / 开关为自绘**（`render.rs:354-382`、`1786-1834`、`873-961`、`930-961`、`managers.rs:309-337`）；`mod.rs` 曾错误记录「库无 Tabs/Switch」（已更正） | 无 hover / 键盘 / a11y / disabled；三处开关尺寸互不一致，且未接 `form_disabled`（未选驱动时仍可点） | 迁到 `TabBar::underline()` / `TabBar::segmented()` / `Switch`（0.6.1 均已提供）；顺带统一 disabled 语义 |
-| 16 | ⚪ | **渲染热路径上的写状态与重计算**（**已收敛第一批**：驱动派生数据 `DriverDerived` 缓存（决策 #67）+ 地址占位「变化才写」——不再每帧解析声明 JSON、不再每帧 `set_placeholder`→`notify`；**仍遗留**：`247-248` 类型 / 驱动目录每帧深拷贝、`1596` 每帧构造整份 `ConnectionDraft` 比脏） | 第一批已消除每帧 JSON 反序列化与额外重绘；剩余项仅剩浅拷贝与结构体构造开销（量级小但可再降） | 继第一批后：目录改存 `Rc<[...]>` 快照（闭包克隆 Rc）；脏比对改字段逐个比较（`form_matches_draft`），不再构造完整草稿 |
+| 16 | ⚪→✅ | ~~**渲染热路径上的写状态与重计算**~~（**已关闭**）：第一批（决策 #67）驱动派生数据缓存 + 地址占位守卫；后半（决策 #73）暂存列表 `LiveEntryView` + `form_matches_draft` + 逐行短借用。**唯一保留项**：`render.rs` 里类型 / 驱动目录的每帧克隆（类型 ≤10、驱动 ≤6，各仅若干小字符串，量级远小于已收敛的两项）| 每帧 JSON 反序列化、额外 notify 循环与整表草稿克隆均已消除 | 若将来目录规模增长（驱动插件生态）再优化：把 `types` / `drivers` 改为 `Rc<Vec<…>>` 快照（会改动 `pub` 字段类型，需同步测试赋值写法），当前收益不抵改动面 |
 | 17 | ⚪ | **下标参与 ElementId**：`render.rs:464/484/502/520`（协议链 hop）、`742`（驱动属性）、`1548/1640`（暂存条目）、`managers.rs:60/84/102/263`；另有 `sec-` 前缀在分组与策略覆盖两处复用 | 增删/重排后 hover、滚动等按 id 记录的控件状态串行；`policy_type` 命中分组 id 时潜在冲突 | 改用业务键（hop 名 / `saved_id` / `gid`），策略覆盖换独立前缀 |
 | 18 | ⚪ | `project_path` 只有写入没有渲染点（`render.rs:185/233/2043`），与 `386-390` 注释承诺的「项目根可编辑」不符 | 无项目会话时用户无法输入/修正项目根 | 补 `Input::new(&project_path)` 或收敛注释与作用域分支 |
 | 19 | 🟡 | **元数据缓存身份指纹未接线**：规则与纯函数（`engine::persistence::metadata_identity`，§3.6）已就绪，但 L2 路径仍按连接 ID（`conn_{id}.sqlite`）；`metadata_cache_index`（引用计数 / 孤儿 / 可读描述）与同指纹并发预热互斥未建 | 同一物理库的多条连接仍各自重建缓存（重复预热）；改名 / 改密 / 换驱动后命中旧缓存的收益尚未兑现 | 与 database-nav 接入 L2 的 Phase C 同轮：路径切 `meta_{fp}.sqlite` + 索引表 + per-fingerprint 互斥 + 旧 `conn_*.sqlite` 按 legacy 保留（不删） |
-| 20 | 🔴 | **协议链 / SSH 隧道保存后不生效**：所有生产 connect 路径都传 `network_method: None`（`nav_runtime.rs:75`、`connection_service.rs:129`），`resolve_network_method_with_project` 无生产调用方；且 `nav_runtime` 每次 `ConnectionService::new`，隧道守卫存实例私有 `TunnelRegistry`（`connection_service.rs:78`），即便传入也会随实例释放 | 对话框里配好的 SSH 跳板 / 代理被静默忽略 —— 导航点「连接」时直连或失败（与 `connection-dialog-architecture.md` 的“网络 Tab 可配置”承诺不符） | M3 侧：连接入口解析网络配置（`resolve_network_method_with_project`，项目侧 `network_config_id` 需带项目根）+ 让生产连接复用同一 `ConnectionService` 实例（或把隧道守卫提升到全局注册表），并补隧道数据面用例 |
+| 20 | 🔴→✅ | ~~协议链 / SSH 隧道保存后不生效~~（**已关闭**：三层根因一次性收口，见上方已关闭段） | — | 残留见 #24 |
 | 21 | ⚪ | **启动即有项目会话时不加载 P_/GP_**（`view.rs:165` 用 `load_persisted_connections`，L168 才解析会话）；**关闭项目不清理残留**（`project/ui.rs::do_close` 不触发 `on_opened`） | 项目标签页看不到项目连接；关闭项目后残留行点“连接/编辑”必失败（`project_root=None`） | workbench 宿主侧：构造后按会话刷新一次；关闭后等价刷新（或给 `ProjectUiHost` 加 `on_closed`）；触碰 `view.rs` / `project` UI，需与布局会话协调 |
 | 22 | ⚪ | **M4 导航行无删除入口**：唯一入口在编辑区详情卡（`panels.rs:3165`）；导航行点击也不写 `shared.selected` | M4 用户路径上没有删除能力；删除目标不直观（默认只指第一条） | M4 侧（另一会话）：行内 / 右键删除调同一 `workspace_loader::delete_connection`，删除成功后清导航缓存与状态 |
 | 23 | ⚪ | **M4 标签 / 分组视图未接线**：`nav_runtime::{list_tags,set_tags,*group*}` 有 API、零调用；`database::model::ConnectionGroup` 是未消费的重复模型；`database::model::NavSource::from_conn_id` 自实现前缀推导（与 `id_prefix` 分裂） | 用户看不到 / 改不了标签与分组；遗留 `conn-` ID 在导航侧归错库 | M4 侧（另一会话）：B3 视图接线（消费 `nav_runtime` 组织 API）；`NavSource::from_conn_id` 改依赖 `engine::persistence::id_prefix`（M3 侧已收归单一来源，决策 #68） |
+| 24 | 🟡→✅ | ~~网络配置仍难以在 UI 里真正建成~~（**表单部分已关闭**：本轮改为结构化字段表单 + 组装的 JSON 经 serde 模型单测验证；编辑回填真实字段；`chain` 仍走 JSON） | — | 残留见 #25 |
+| 25 | ⚪→✅ | ~~内联协议链仍是占位（`Hop` 无主机 / 凭据字段，不参与执行）~~（**已关闭**：整块 UI 撤下，多跳改走 `chain` 档案；初始状态里的两条假跳数据一并移除，见决策 #72） | — | 后续如需“可视化多跳编辑器”，应在**档案侧**做（复用 `chain` 的 `ChainHop` 模型与 `network_field_specs` 思路），不在连接表单里做 |
+| 26 | 🔴→✅ | ~~测试连接与真实连接不同源（忽略认证 / 网络档案）~~（**已关闭**：抽唯一组装点 `build_probe_config`，`connect` 与测试共用；详见上方 A1 轮已关闭段） | — | — |
+| 27 | 🟡 | **档案引用完整性缺失**：删除 / 改名被引用的认证 / 网络档案时无引用计数与拦截（连接记录仍指向旧 ID）；档案缺失时 `connect` 与测试都只告警继续（A1 已让“说明可见”，但仍按直连/无凭据试） | 用户以为“配了跳板机”，实际直连（或反之）；库中积累悬空引用 | ① 删除前查引用（全局 + 各项目库）并拦截（或要求显式确认）；② 引用缺失从「告警继续」升级为**明确失败**（与 §15 零造数据同一取向：不拿可能错误的参数去试） |
+| 28 | 🟡 | **结果行只有成败不分级**：保存 / 测试 / 同步的反馈都是单行文本（成功与失败仅 `result_ok` 布尔），长消息被截断、无“复制详情” | 真机排障时拿不到完整原因（网络 / 认证 / SQL 错误混在一行） | 结果行分级（info / warning / error）+ 可展开详情 + 复制；可用 gpui-kit 的 `Alert` / `Notification` 组件 |
+| 29 | ⚪ | **首次使用引导缺失**：新用户打开对话框看到类型树 / 暂存 / 档案引用，但没有“从哪开始”的引导（原型 §4 流程未在 UI 内体现） | 学习成本高（需读用户指南） | 空态引导（无连接 / 首启）+ 类型树 hover 说明；不引外链 |
+| 30 | ⚪ | **`auth_configs.auth_data` 仍是裸 JSON 文本**：字段化组装只在网络档案侧做过（`build_network_config_json`），认证档案仍需手写 JSON | 认证档案缺少字段级校验与可视化编辑；写错只能在连接时暴露 | 与网络档案同款：`auth_field_specs` + 组装 / 回填纯函数 + serde 单测（对齐 `connection::url_params::inject_auth_into_url` 的键约定） |
+| 31 | ⚪ | **标签双源未收敛**：连接行 `tags` JSON 与权威检索表 `connection_tags` 并存（写入时同步，读取侧仍有两路） | 同步失败仅告警 → 长期存在漂移风险 | 明确单一权威（建议表），连接行 JSON 降级为兼容投影并标记后续移除 |
+| 32 | ⚪ | **连接 ID 命名方案待拍板**：`generate_gid("conn", name)` 是名字哈希（改名即换 ID），`G_`/`P_`/`GP_` 前缀同时承担作用域 / 存储路由 / 快照语义 / 可读性四种职责 | 用户看到 ID 里的名字片段会误以为是稳定主键；改名行为（新建 / 覆盖）需解释 | 方案 B：UI / 日志只出现 `name`，ID 内部化；方案 C：ULID 重做 + 迁移（代价大）；待用户决策后开工 |
 
 ---
 
@@ -760,7 +794,7 @@ flowchart LR
 | 连接设置卡（文件型：地址） | 用户选择/输入的文件路径；系统选择器返回真实路径（新建时才创建空文件） | ✅ |
 | 地址标签与输入占位 | 标签固定（文件型 = 地址 / 网络型 = URI，按用户要求不被 schema 覆盖）；网络型占位取 `drivers.url_template` + `default_port`（文件型走类型文案字典）；文件型地址行**占位**优先取 `config_schema` 的 `type=file` 字段 `placeholder` | ✅ |
 | 结果行提示（保存 / 测试 / 同步） | 服务层真实返回（`DataSourceService::{save,update,test}` 等） | ✅ |
-| 测试连接结果（版本 / 延迟） | 真实探测（`DataSourceService::test`） | ✅ |
+| 测试连接结果（版本 / 延迟 / 范围说明） | 真实探测（`DataSourceService::test`）：认证档案凭据**从库读取并解密**后注入、网络档案**真实建隧道**、驱动属性 / 高级选项来自连接字段与库；范围说明（「已应用认证档案凭据 / 已建立网络档案隧道 / 档案缺失」）由服务层返回，UI 只拼接展示 | ✅（A1：此前档案被静默忽略） |
 | 模板导入导出（能力就绪） | 草稿快照（库 + 会话状态），不含密码 | ✅（UI 入口待接） |
 | 驱动安装 `/install` | 占位错误（“待后续版本”） | ⚠️ 诚实地报不可用，**不造假数据** |
 
@@ -782,6 +816,7 @@ flowchart LR
 | 旧值不硬套新语义 | 策略覆盖（`policy_type`）/ 草稿布尔数组 | 旧数据被误读成新格式 | 解析失败即忽略（`load_for_edit` / `row_to_draft`） |
 | 文件型地址规范化 | `data_source_service::normalize_file_db_path` | 用户输入的 `sqlite://…` / 三斜杠 / 裸路径写法不一 → `database` 列存法不一致，回读与连接 URL 还原都对不上 | `data_source_service` 内嵌单测（4 种写法）+ `data_source_lifecycle::file_db_path_survives_save_and_readback` |
 | 文件型输入清洗 | `connection_dialog::helpers::strip_file_db_noise` | 切类型后残留的凭据 / 网络链 / TLS 被写进文件型连接 | `helpers` 内嵌单测（凭据·网络·TLS 清空，策略覆盖保留，非法 JSON 不静默丢） |
+| userinfo 转义 | `connection::url_params::merge_credentials`（保存 / 更新 / 测试共用） | 密码 / 用户名含 `@` `:` `/` `?` `#` `%` 时 URL 结构被破坏（host 被截断 / 端口歧义）→ 落库 URL 与实际连接目标不一致 | `url_params` 内嵌单测（`p@ss:w/rd` → `%40 %3A %2F`，仅密码与已有 userinfo 分支）+ `probe_config_applies_referenced_auth_profile` |
 
 ### 15.3 约束与回归手段
 
@@ -799,7 +834,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | 连接列表可见性 | `workspace_loader::load_connections_for_scope`（全局 + 项目侧 P_/GP_ 合并） | 面板读 `shared.connections`（`panels.rs`） | ✅ 打通（刷新时机见 #21） |
 | 来源短码 `P/G/GP` | `engine::persistence::id_prefix`（本轮收归单一来源）；对话框暂存条目 `saved_scope_short` | `database::model::NavSource::from_conn_id`（M4 自实现） | ⚠️ 半通（遗留 `conn-` 判定不一致；M3 侧已统一，M4 侧待改 → #23） |
-| 运行时连接 | `nav_runtime::connect_entry(_with)` → `get_with_project`（C19 修复） | 导航面板按钮 | ✅ 打通（但网络配置未传 → #20） |
+| 运行时连接 | `nav_runtime::connect_entry(_with)` → `get_with_project` + 解析网络档案（本轮） | 导航面板按钮 | ✅ 打通（网络方式随请求带出） |
 | 断开 | `nav_runtime::disconnect_entry` → `close_connection`（保留 L2 缓存） | 导航面板按钮 | ✅ 打通 |
 | 删除 | `workspace_loader::delete_connection(conn_id, project_root)` → `DataSourceService::delete`（作用域路由 + Secret / 组织清理） | 仅编辑区详情卡；**导航行无入口** | ⚠️ M4 侧缺 UI（#22） |
 | 编辑 | `EditorPanel::request_edit_connection`（生产入口：订阅 + 宿主重绘） | 导航行 ✎ | ✅ 打通 |

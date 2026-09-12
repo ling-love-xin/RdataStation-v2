@@ -23,7 +23,7 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, TitleBar};
 use gpui_kit::*;
 
 use crate::commands::{
-    CloseProject, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
+    CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
 use crate::panels::{EditorPanel, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel};
 use crate::ui;
@@ -248,6 +248,12 @@ impl WorkbenchView {
                     // 编辑请求已写入 shared.open_edit；通知编辑器渲染消费并打开对话框。
                     // 注意：此处处于宿主自身的 update 上下文，不能回调 `notify_host`
                     // （会重入借用宿主）；末尾的 `cx.notify()` 已足够让宿主重绘。
+                    if let Some(editor) = &this.editor {
+                        editor.update(cx, |_, cx| cx.notify());
+                    }
+                }
+                SidebarEvent::EditorSqlRequest => {
+                    // SQL 已写入 shared.editor_set；通知编辑区渲染消费。
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }
@@ -674,7 +680,13 @@ impl WorkbenchView {
                 entity.update(app, |_, cx| cx.notify());
             });
             let on_close = on_close.clone();
-            self.settings_view = Some(cx.new(move |cx| SettingsView::new(cx, on_close)));
+            let shared_cache = self.shared.clone();
+            let on_open_cache: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
+                std::rc::Rc::new(move |window, app| {
+                    crate::components::cache_dialog::open_cache_dialog(window, app, &shared_cache);
+                });
+            self.settings_view =
+                Some(cx.new(move |cx| SettingsView::new(cx, on_close, on_open_cache)));
         }
         let theme = cx.theme().clone();
         let view = self.settings_view.clone().expect("settings initialized");
@@ -961,6 +973,23 @@ impl Render for WorkbenchView {
                     entity.update(cx, |this, cx| {
                         let open = this.shared.quick_open.get();
                         this.shared.quick_open.set(!open);
+                        cx.notify();
+                    });
+                }
+            })
+            // M4：Ctrl+F 聚焦数据源导航搜索（先切到数据源面板并展开左侧 Dock）。
+            .on_action({
+                let sidebar = self.sidebar.clone();
+                let entity = cx.entity();
+                move |_: &FocusNavSearch, window, cx| {
+                    if let Some(sidebar) = &sidebar {
+                        sidebar.update(cx, |panel, cx| panel.focus_nav_search(window, cx));
+                    }
+                    entity.update(cx, |this, cx| {
+                        this.shared.active_left.set(LeftPanel::Database);
+                        if this.shared.left_mode.get() == SidebarMode::Hidden {
+                            this.shared.left_mode.set(SidebarMode::Expanded);
+                        }
                         cx.notify();
                     });
                 }

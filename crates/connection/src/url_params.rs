@@ -4,8 +4,29 @@
 //! host:port 改写与解析、`no_proxy` 匹配、协议链 SSL 参数提取。
 //! 供 workbench 连接服务与传输层共用。
 
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use shared::error::{ConnectionError, CoreError};
+
+/// userinfo 段需转义的字符集：从 `NON_ALPHANUMERIC` 去掉 RFC 3986 的
+/// unreserved（`- . _ ~`）与 sub-delims（`! $ & ' ( ) * + , ; =`），
+/// 保留 `: @ / ? # % [ ]` 与空白/控制字符被编码——这些字符一旦裸写会破坏 URL 结构
+/// （典型：密码含 `@` 时解析出的 host 被截断）。
+const USERINFO_ESCAPE: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~')
+    .remove(b'!')
+    .remove(b'$')
+    .remove(b'&')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')')
+    .remove(b'*')
+    .remove(b'+')
+    .remove(b',')
+    .remove(b';')
+    .remove(b'=');
 
 use crate::config::{ChainHop, SslConfig};
 
@@ -116,6 +137,45 @@ pub fn inject_username_password(
     }
 
     Ok(url.to_string())
+}
+
+/// 把用户名 / 密码合并进 URL 的 userinfo 段（**带百分号编码**）。
+///
+/// 与 [`inject_username_password`] 的差异：
+/// - 该函数只做「无凭据 → 注入」，URL 已含 userinfo（`@`）时**原样返回**（尊重 URL 作者意图，
+///   也避免重复注入）；
+/// - 凭据统一走 RFC 3986 userinfo 转义（`p@ss:w/rd` → `p%40ss%3Aw%2Frd`），
+///   含特殊字符的密码不会再截断 host；
+/// - 无 `://` 的裸串（文件路径）原样返回。
+///
+/// 供保存 / 更新 / 测试连接的有效 URL 构建共用，保证三处凭据写法一致。
+pub fn merge_credentials(url: &str, username: &str, password: &str) -> String {
+    if username.is_empty() && password.is_empty() {
+        return url.to_string();
+    }
+
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let prefix = &url[..scheme_end + 3];
+    let rest = &url[scheme_end + 3..];
+
+    if rest.contains('@') {
+        return url.to_string();
+    }
+
+    let user = utf8_percent_encode(username, USERINFO_ESCAPE);
+    let userinfo = if password.is_empty() {
+        user.to_string()
+    } else {
+        format!(
+            "{}:{}",
+            user,
+            utf8_percent_encode(password, USERINFO_ESCAPE)
+        )
+    };
+
+    format!("{}{}@{}", prefix, userinfo, rest)
 }
 
 /// 向 PostgreSQL URL 中注入 SSL 证书参数。
@@ -477,6 +537,32 @@ mod tests {
             inject_username_password("mysql://h/db", "", "p").unwrap(),
             "mysql://h/db"
         );
+    }
+
+    #[test]
+    fn merge_credentials_encodes_userinfo() {
+        // 普通凭据与既有写法等价
+        assert_eq!(
+            merge_credentials("mysql://h:3306/db", "root", "pwd"),
+            "mysql://root:pwd@h:3306/db"
+        );
+        // 特殊字符必须转义，否则 host 被 `@` 截断、`: ` 造成端口歧义
+        assert_eq!(
+            merge_credentials("mysql://h:3306/db", "u", "p@ss:w/rd"),
+            "mysql://u:p%40ss%3Aw%2Frd@h:3306/db"
+        );
+        // 仅密码也允许（用户名留空 → `:pass@`）
+        assert_eq!(
+            merge_credentials("postgres://h/db", "", "p wd"),
+            "postgres://:p%20wd@h/db"
+        );
+        // 已含 userinfo / 空凭据 / 非 URL：原样返回
+        assert_eq!(
+            merge_credentials("mysql://u:p@h/db", "new", "pw"),
+            "mysql://u:p@h/db"
+        );
+        assert_eq!(merge_credentials("mysql://h/db", "", ""), "mysql://h/db");
+        assert_eq!(merge_credentials("C:/data/a.db", "u", "p"), "C:/data/a.db");
     }
 
     #[test]

@@ -62,6 +62,14 @@ impl TunnelRegistry {
     pub async fn clear(&self) {
         self.tunnels.lock().await.clear();
     }
+
+    /// 是否与另一注册表共用同一张隧道表。
+    ///
+    /// 生产路径必须共用（否则「建隧道的实例」与「释放隧道的实例」不是一个，
+    /// 隧道会随建设它 的临时实例释放）；测试可用它断言隔离。
+    pub fn shares_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tunnels, &other.tunnels)
+    }
 }
 
 /// 应用单跳网络方式，返回（改写后的 URL, 隧道守卫）。

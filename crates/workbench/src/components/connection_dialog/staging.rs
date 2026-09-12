@@ -58,29 +58,16 @@ pub struct TemplateItem {
     pub duckdb_fed: bool,
 }
 
-/// 协议链跳（内联编辑态）。
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Hop {
-    pub kind: String,
-    pub label: String,
-    pub enabled: bool,
-}
-
-impl Hop {
-    pub(crate) fn ssh(label: impl Into<String>) -> Self {
-        Self {
-            kind: "SSH".into(),
-            label: label.into(),
-            enabled: true,
-        }
-    }
-    pub(crate) fn proxy(label: impl Into<String>) -> Self {
-        Self {
-            kind: "Proxy".into(),
-            label: label.into(),
-            enabled: true,
-        }
-    }
+/// 暂存列表光标位条目的显示视图（见 `live_entry_view`）。
+///
+/// 只保留展示需要的字段，避免为脏标记每帧构造整份 `ConnectionDraft`。
+pub struct LiveEntryView {
+    /// 表单当前名称（未回写快照）。
+    pub name: String,
+    /// 表单当前数据库类型（类型徽标来源；未选类型为空串）。
+    pub type_id: String,
+    /// 是否有未回写草稿的表单修改（仅未保存草稿会为 true）。
+    pub dirty: bool,
 }
 
 /// 暂存列表条目（多连接连续编辑；见原型设计 §2.2）。
@@ -117,7 +104,6 @@ pub struct ConnectionDraft {
     pub cache_path: String,
     pub duckdb_fed: bool,
     pub active_tab: usize,
-    pub hops: Vec<Hop>,
     pub props: Vec<(String, String)>,
     /// 策略覆盖勾选（存 `environment_policies.policy_type`；旧草稿的布尔数组解析失败即忽略；
     /// 数据库列名仍为 `sec_overrides_json`，保留以兼容既有迁移）。
@@ -188,7 +174,8 @@ impl ConnectionDialogState {
             cache_path: d.cache_path.clone(),
             duckdb_fed: d.duckdb_fed,
             active_tab: d.active_tab as i64,
-            hops_json: serde_json::to_string(&d.hops).unwrap_or_else(|_| "[]".into()),
+            // 内联协议链已撤下（#25）：列保留（不迁移 schema），固定写空数组。
+            hops_json: "[]".into(),
             props_json: serde_json::to_string(&d.props).unwrap_or_else(|_| "[]".into()),
             auth_method: d.auth_method.clone(),
             sec_overrides_json: serde_json::to_string(&d.sec_overrides)
@@ -222,7 +209,7 @@ impl ConnectionDialogState {
             cache_path: r.cache_path.clone(),
             duckdb_fed: r.duckdb_fed,
             active_tab: r.active_tab.max(0) as usize,
-            hops: serde_json::from_str(&r.hops_json).unwrap_or_default(),
+            // `r.hops_json` 列保留但不再回填（旧草稿里的占位链直接忽略）。
             props: serde_json::from_str(&r.props_json).unwrap_or_default(),
             auth_method: r.auth_method.clone(),
             sec_overrides: serde_json::from_str(&r.sec_overrides_json).unwrap_or_default(),
@@ -243,7 +230,9 @@ impl ConnectionDialogState {
     }
 
     /// 读取当前表单生成快照（不落暂存列表；脏标记与写回共用）。
-    pub(crate) fn snapshot_form(&self, cx: &App) -> ConnectionDraft {
+    ///
+    /// 公开给窗口测试做“两套比对等价性”基准（生产调用点都在本 crate）。
+    pub fn snapshot_form(&self, cx: &App) -> ConnectionDraft {
         // 驱动：下拉显示短名；同时记录驱动 id（落库/恢复更稳）。
         let driver_value = self
             .driver
@@ -295,7 +284,6 @@ impl ConnectionDialogState {
             cache_path: self.cache_path.read(cx).value().to_string(),
             duckdb_fed: self.duckdb_fed.get(),
             active_tab: self.active_tab.get(),
-            hops: self.hops.borrow().clone(),
             props: self.props.borrow().clone(),
             sec_overrides: self.policy_override_keys.borrow().clone(),
             auth_method: self
@@ -324,6 +312,85 @@ impl ConnectionDialogState {
                 .cloned()
                 .map(|v| v.to_string()),
         }
+    }
+
+    /// 暂存列表「光标位条目」的显示视图：显示名 / 类型徽标来源 / 脏标记。
+    ///
+    /// 只取需要展示的字段，**不构造整份 `ConnectionDraft`**（§6 决策 #73）；
+    /// 光标位不存在 → `None`（与旧行为一致）。
+    pub fn live_entry_view(&self, cursor: usize, cx: &App) -> Option<LiveEntryView> {
+        let drafts = self.drafts.borrow();
+        let d = drafts.get(cursor)?;
+        let name = self.name.read(cx).value().to_string();
+        let type_id = self.selected_type.borrow().clone();
+        // 脏标记仅对未保存草稿有意义（已保存条目不参与暂存编辑）。
+        let dirty = d.saved_id.is_none() && !self.form_matches_draft(d, cx);
+        Some(LiveEntryView {
+            name,
+            type_id,
+            dirty,
+        })
+    }
+
+    /// 当前表单是否与给定草稿一致（脏标记用；逐字段比较，**不分配**）。
+    ///
+    /// 关键：`InputState::value()` 返回 `SharedString`（引用计数克隆），因此逐字段比较
+    /// 只有引用计数开销，而 [`Self::snapshot_form`] 要分配 ~40 个字符串 + 克隆两个 `Vec`。
+    ///
+    /// 字段集合必须与 [`Self::snapshot_form`] 保持一致（等价性由
+    /// `connection_staging::form_matches_draft_agrees_with_snapshot` 锁定）；
+    /// `saved_id` 不参与比较——它是条目身份，不是表单字段。
+    pub fn form_matches_draft(&self, d: &ConnectionDraft, cx: &App) -> bool {
+        let driver_name = self
+            .driver
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default();
+        let driver_id = self
+            .resolve_driver(&driver_name)
+            .map(|x| x.id)
+            .unwrap_or_default();
+        // Select 选中值：少量短字符串（≤ 5 个），在此分配可接受。
+        let select_text = |sel: &Entity<SelectState<SearchableVec<SharedString>>>| -> Option<String> {
+            sel.read(cx).selected_value().cloned().map(|v| v.to_string())
+        };
+        let groups_match = {
+            let checks = self.group_checks.borrow();
+            let checked: Vec<&String> = checks
+                .iter()
+                .filter(|(_, _, on)| *on)
+                .map(|(gid, _, _)| gid)
+                .collect();
+            checked.len() == d.groups.len()
+                && checked.iter().zip(d.groups.iter()).all(|(a, b)| **a == *b)
+        };
+
+        d.name.as_str() == &*self.name.read(cx).value()
+            && d.type_id == *self.selected_type.borrow()
+            && d.driver_id == driver_id
+            && d.driver_name.as_str() == &*driver_name
+            && d.url.as_str() == &*self.url.read(cx).value()
+            && d.user.as_str() == &*self.user.read(cx).value()
+            && d.pass.as_str() == &*self.pass.read(cx).value()
+            && d.remark.as_str() == &*self.remark.read(cx).value()
+            && d.tags.as_str() == &*self.tags_input.read(cx).value()
+            && groups_match
+            && d.scope == select_text(&self.scope).unwrap_or_default()
+            && d.project_path.as_str() == &*self.project_path.read(cx).value()
+            && d.ssl_mode == select_text(&self.ssl_mode).unwrap_or_default()
+            && d.ssl_ca.as_str() == &*self.ssl_ca.read(cx).value()
+            && d.ssl_cert.as_str() == &*self.ssl_cert.read(cx).value()
+            && d.ssl_key.as_str() == &*self.ssl_key.read(cx).value()
+            && d.cache_path.as_str() == &*self.cache_path.read(cx).value()
+            && d.duckdb_fed == self.duckdb_fed.get()
+            && d.active_tab == self.active_tab.get()
+            && d.props.as_slice() == self.props.borrow().as_slice()
+            && d.sec_overrides.as_slice() == self.policy_override_keys.borrow().as_slice()
+            && d.auth_method == select_text(&self.auth_method).unwrap_or_default()
+            && d.auth_ref == select_text(&self.auth_ref)
+            && d.network_ref == select_text(&self.network_ref)
+            && d.env == select_text(&self.env)
     }
 
     /// 把当前表单快照写回第 `idx` 个条目（切换前调用；已保存条目跳过）。
@@ -410,7 +477,6 @@ impl ConnectionDialogState {
         set_select_value(&self.env, d.env.as_deref().unwrap_or(""), window, cx);
         self.duckdb_fed.set(d.duckdb_fed);
         self.active_tab.set(d.active_tab);
-        *self.hops.borrow_mut() = d.hops;
         *self.props.borrow_mut() = d.props;
         *self.policy_override_keys.borrow_mut() = d.sec_overrides;
         set_select_value(&self.auth_method, d.auth_method.as_str(), window, cx);

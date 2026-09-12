@@ -26,6 +26,8 @@ pub struct Settings {
     pub connection_defaults: ConnectionDefaults,
     #[serde(default)]
     pub projects: Projects,
+    #[serde(default)]
+    pub navigator: Navigator,
 }
 
 /// 通用：语言、启动行为。
@@ -125,6 +127,26 @@ impl Default for Projects {
     }
 }
 
+/// 数据源导航：来源标识展示形式与属性面板宽度（UI 偏好，跨项目）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Navigator {
+    /// 来源标识用短码（`P` / `G` / `GP`）；false 时用文字（项目 / 全局 / 共享）。
+    #[serde(default = "default_true")]
+    pub source_short_code: bool,
+    /// 属性面板宽度（rem 倍率，随界面缩放；默认 24.5 ≈ 392px）。
+    #[serde(default = "default_property_width")]
+    pub property_panel_width: f32,
+}
+
+impl Default for Navigator {
+    fn default() -> Self {
+        Self {
+            source_short_code: true,
+            property_panel_width: default_property_width(),
+        }
+    }
+}
+
 fn default_language() -> String {
     "zh-CN".to_string()
 }
@@ -142,4 +164,21 @@ fn default_timeout_ms() -> u64 {
 }
 fn default_project_sort() -> String {
     "last_opened".to_string()
+}
+fn default_property_width() -> f32 {
+    24.5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 旧配置（无 `navigator` 节）必须回退默认值，不因新增字段解析失败。
+    #[test]
+    fn legacy_config_without_navigator_uses_defaults() {
+        let legacy = r#"{"general":{"language":"zh-CN","restore_last_workspace":true}}"#;
+        let s: Settings = serde_json::from_str(legacy).expect("旧配置应可解析");
+        assert!(s.navigator.source_short_code);
+        assert_eq!(s.navigator.property_panel_width, 24.5);
+    }
 }

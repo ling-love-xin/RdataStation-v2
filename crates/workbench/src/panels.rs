@@ -13,23 +13,29 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui_kit::EventEmitter;
-use gpui_kit::base::StyledExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::base::{h_resizable, resizable_panel, StyledExt};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::{ActiveTheme, IconName};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme, IconName, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::commands::{NavCollapse, NavDown, NavExpand, NavOpenProperties, NavUp};
 use crate::components::connection_dialog;
 
 use scratchpad::{
     ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore, TrashEntry,
 };
 
-use database::model::{NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, PropertyRef};
-use database::navigator_service::NavigatorService;
+use database::model::{
+    NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, PropertyRef,
+};
+
+use crate::services::nav_jobs;
 
 use crate::services::db_navigator::NavTable;
 use crate::services::query_runner::QueryOutput;
@@ -75,8 +81,12 @@ pub struct Shared {
     pub editor_sql: Rc<RefCell<String>>,
     /// 清空编辑区的宿主命令（保存 / 放弃未保存草稿后调用；事件上下文执行，非 render）。
     pub editor_clear: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
+    /// 待注入编辑区的 SQL（导航右键「新建查询 / 查看数据」→ EditorPanel 渲染时消费）。
+    pub editor_set: Rc<RefCell<Option<String>>>,
     /// Phase B：属性面板请求（数据源导航双击对象 → 编辑区右侧面板）。
     pub property_target: Rc<RefCell<Option<PropertyRequest>>>,
+    /// Phase C：Ctrl+F 请求聚焦导航搜索框（宿主置位，导航面板渲染时消费）。
+    pub focus_nav_search: Rc<Cell<bool>>,
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
     /// notify 不会让子视图重建元素树；打开 / 关闭对话框后必须显式通知宿主重渲染。
     pub host_redraw: Rc<RefCell<Option<Rc<dyn Fn(&mut App)>>>>,
@@ -112,7 +122,9 @@ impl Shared {
             editor_dirty: Rc::new(Cell::new(false)),
             editor_sql: Rc::new(RefCell::new(String::new())),
             editor_clear: Rc::new(RefCell::new(None)),
+            editor_set: Rc::new(RefCell::new(None)),
             property_target: Rc::new(RefCell::new(None)),
+            focus_nav_search: Rc::new(Cell::new(false)),
             host_redraw: Rc::new(RefCell::new(None)),
         }
     }
@@ -144,6 +156,8 @@ pub enum SidebarEvent {
     SelectConnection(usize),
     /// 用户点击了连接「编辑」。
     EditConnection(String),
+    /// 导航右键「查看数据」已写入 `shared.editor_set`，请编辑区渲染时消费。
+    EditorSqlRequest,
 }
 
 /// 侧边栏面板：按活动工具渲染内容。
@@ -160,6 +174,15 @@ pub struct SidebarPanel {
     /// 连接行内联标签输入框（组织编辑器打开时创建，关闭时销毁）。
     nav_tag_input: Option<Entity<InputState>>,
     _nav_tag_sub: Option<Subscription>,
+    /// 分组名内联重命名输入框（重命名时创建，关闭时销毁）。
+    nav_group_input: Option<Entity<InputState>>,
+    _nav_group_sub: Option<Subscription>,
+    /// 渲染顺序重建的可见项（键盘 ↑↓ 移动 / 展开折叠 / 打开属性）。
+    nav_order: Rc<RefCell<Vec<NavOrderItem>>>,
+    /// 正在轮询预热进度的后台任务（避免重复启动）。
+    warm_poll: Option<Task<()>>,
+    /// 正在轮询导航加载结果的后台任务（避免重复启动；`&self` 路径也要访问）。
+    nav_pump: RefCell<Option<Task<()>>>,
 }
 
 /// 内联编辑（新建 / 重命名）。
@@ -290,6 +313,8 @@ struct DatabaseNavView {
     children: HashMap<String, Vec<NavNode>>,
     /// 已尝试加载的节点 key（避免重复请求）。
     attempted: HashSet<String>,
+    /// 正在后台加载的节点 key（渲染「加载中…」占位）。
+    loading: HashSet<String>,
     /// 节点 key → 加载失败原因。
     errors: HashMap<String, String>,
     /// 本会话运行时已连接的连接 ID。
@@ -302,6 +327,8 @@ struct DatabaseNavView {
     membership: HashMap<String, Vec<String>>,
     /// 分组 ID → 组内连接 ID（按手动排序优先，未排按连接 ID）。
     group_order: HashMap<String, Vec<String>>,
+    /// 类别文件夹节点 key → 已渲染条数上限（大 schema 客户端分页）。
+    page_limit: HashMap<String, usize>,
     /// 连接 ID → 标签列表（一次读库缓存，避免渲染期逐条查询）。
     tags: HashMap<String, Vec<String>>,
     /// 分组是否已加载。
@@ -310,18 +337,27 @@ struct DatabaseNavView {
     collapsed_groups: HashSet<String>,
     /// 正在内联编辑分组 / 标签的连接 ID（None = 未打开）。
     group_picker_for: Option<String>,
+    /// 正在内联重命名的分组 ID（None = 未打开）。
+    group_rename_for: Option<String>,
+    /// 已发起列预取（C2）的类别文件夹 key（避免重复排队）。
+    prefetched: HashSet<String>,
+    /// 当前选中的节点 key（键盘导航与选中高亮）。
+    selected_key: Option<String>,
+}
+
+/// 渲染顺序中的可见项（键盘导航用；每帧重建）。
+#[derive(Clone)]
+struct NavOrderItem {
+    key: String,
+    conn_id: String,
+    path: Option<NavPath>,
+    property: Option<PropertyRef>,
+    has_children: bool,
+    expanded: bool,
 }
 
 /// 「未分组」固定分组的伪 ID（收纳不属于任何自定义分组的连接）。
 const GROUP_UNGROUPED: &str = "__ungrouped__";
-
-/// 懒加载导航子节点（阻塞式，与现有服务调用模式一致；Phase C 迁后台任务 + 缓存编排）。
-fn load_nav_children(conn_id: &str, path: &NavPath) -> Result<Vec<NavNode>, String> {
-    let service = NavigatorService::new(engine::get_connection_manager().clone());
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
-    rt.block_on(service.load_children(conn_id, path))
-        .map_err(|e| e.to_string())
-}
 
 /// 节点图标色（复用主题标准色，代码零裸色）。
 fn nav_kind_color(kind: &NavNodeKind, theme: &gpui_kit::component::Theme) -> Hsla {
@@ -333,6 +369,23 @@ fn nav_kind_color(kind: &NavNodeKind, theme: &gpui_kit::component::Theme) -> Hsl
         NavNodeKind::Routine { .. } => theme.colors.primary,
         _ => theme.colors.muted_foreground,
     }
+}
+
+/// 限定名（`catalog.schema.name`，跳过空段）：用于复制与生成 SELECT。
+fn nav_qualified_name(prop: &PropertyRef) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(c) = prop.catalog.as_deref() {
+        if !c.is_empty() {
+            parts.push(c);
+        }
+    }
+    if let Some(s) = prop.schema.as_deref() {
+        if !s.is_empty() {
+            parts.push(s);
+        }
+    }
+    parts.push(prop.name.as_str());
+    parts.join(".")
 }
 
 /// 搜索过滤：节点名命中，或已加载子节点中任一命中。
@@ -364,6 +417,8 @@ struct PropertyState {
     loaded_for: Option<String>,
     props: Option<database::property_panel::ObjectProperties>,
     error: Option<String>,
+    /// 是否正在后台加载（渲染「加载中…」）。
+    loading: bool,
 }
 
 impl SidebarPanel {
@@ -377,7 +432,103 @@ impl SidebarPanel {
             _nav_search_sub: None,
             nav_tag_input: None,
             _nav_tag_sub: None,
+            nav_group_input: None,
+            _nav_group_sub: None,
+            nav_order: Rc::new(RefCell::new(Vec::new())),
+            warm_poll: None,
+            nav_pump: RefCell::new(None),
         }
+    }
+
+    /// 聚焦数据源导航搜索框（Ctrl+F，由宿主 action 调用）。
+    ///
+    /// 搜索框懒创建：已存在则立即聚焦，否则置位由 `render_database_nav` 消费。
+    pub fn focus_nav_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = self.nav_search.clone() {
+            let handle = input.read(cx).focus_handle(cx);
+            handle.focus(window, cx);
+        } else {
+            self.shared.focus_nav_search.set(true);
+        }
+        cx.notify();
+    }
+
+    /// 键盘导航：按渲染顺序移动选中项（`delta` 为 ±1）。
+    fn nav_move(&self, delta: isize, cx: &mut Context<Self>) {
+        let order = self.nav_order.borrow();
+        if order.is_empty() {
+            return;
+        }
+        let current = self.database_nav.borrow().selected_key.clone();
+        let idx = current.and_then(|k| order.iter().position(|i| i.key == k));
+        let next = match idx {
+            None => 0,
+            Some(i) => (i as isize + delta).clamp(0, order.len() as isize - 1) as usize,
+        };
+        let key = order[next].key.clone();
+        drop(order);
+        self.database_nav.borrow_mut().selected_key = Some(key);
+        cx.notify();
+    }
+
+    /// 当前选中项（克隆，避免跨借用）。
+    fn nav_selected(&self) -> Option<NavOrderItem> {
+        let key = self.database_nav.borrow().selected_key.clone()?;
+        self.nav_order
+            .borrow()
+            .iter()
+            .find(|i| i.key == key)
+            .cloned()
+    }
+
+    /// →：展开选中节点（有子节点且尚未展开）。
+    fn nav_expand(&self, cx: &mut Context<Self>) {
+        let Some(item) = self.nav_selected() else {
+            return;
+        };
+        if item.has_children && !item.expanded {
+            if let Some(path) = item.path {
+                self.toggle_nav_node(&item.conn_id, &item.key, path, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    /// ←：折叠选中节点（已展开）。
+    fn nav_collapse(&self, cx: &mut Context<Self>) {
+        let Some(item) = self.nav_selected() else {
+            return;
+        };
+        if item.has_children && item.expanded {
+            if let Some(path) = item.path {
+                self.toggle_nav_node(&item.conn_id, &item.key, path, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Enter / F4：打开选中节点的属性面板（无属性定位时为无操作）。
+    fn nav_open_properties(&self, cx: &mut Context<Self>) {
+        let Some(item) = self.nav_selected() else {
+            return;
+        };
+        let Some(property) = item.property else {
+            return;
+        };
+        let (conn_label, driver) = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|c| c.id == item.conn_id)
+            .map(|c| (c.name.clone(), c.driver.clone()))
+            .unwrap_or_else(|| (item.conn_id.clone(), String::new()));
+        *self.shared.property_target.borrow_mut() = Some(PropertyRequest {
+            property,
+            conn_label,
+            driver,
+        });
+        cx.notify();
     }
 
     /// 加载草稿箱数据（阻塞式，与 workbench 现有服务调用模式一致）。
@@ -675,116 +826,7 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// 旧连接列表（保留供后续参考；正式导航见 `render_database_nav`）。
-    #[allow(dead_code)]
-    fn render_connection_list(&self, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let selected = self.shared.selected.get();
-        let mut list = div()
-            .v_flex()
-            .w_full()
-            .h_full()
-            .min_h_0()
-            .pt_1()
-            .pb_1()
-            .pl_1()
-            .pr_1()
-            .gap_1();
-
-        if self.shared.connections.borrow().is_empty() {
-            let notice = self.shared.notice.borrow().clone();
-            return div()
-                .v_flex()
-                .w_full()
-                .h_full()
-                .items_center()
-                .pt_6()
-                .pl_3()
-                .pr_3()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child(
-                    notice.unwrap_or_else(|| "暂无连接，请先在「数据源连接」中创建。".to_string()),
-                );
-        }
-
-        for (idx, item) in self.shared.connections.borrow().iter().enumerate() {
-            let entity = cx.entity();
-            let item = item.clone();
-            let is_selected = selected == Some(idx);
-            let edit_conn = {
-                let shared = self.shared.clone();
-                let entity = entity.clone();
-                let cid = item.id.clone();
-                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                    *shared.open_edit.borrow_mut() = Some(cid.clone());
-                    entity.update(app, |_, cx| {
-                        cx.emit(SidebarEvent::EditConnection(cid.clone()));
-                    });
-                }
-            };
-            list = list.child(
-                div()
-                    .id(format!("conn-{}", idx))
-                    .h_flex()
-                    .items_center()
-                    .w_full()
-                    .h_7()
-                    .pl_2()
-                    .pr_2()
-                    .gap_2()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .when(is_selected, |this| this.bg(theme.colors.list_active))
-                    .on_click(move |_, _, app| {
-                        entity.update(app, |_, cx| cx.emit(SidebarEvent::SelectConnection(idx)));
-                    })
-                    .child(
-                        div()
-                            .w_2()
-                            .h_2()
-                            .flex_none()
-                            .rounded_full()
-                            .bg(if item.connected {
-                                theme.colors.success
-                            } else {
-                                theme.colors.muted
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(if is_selected {
-                                theme.colors.foreground
-                            } else {
-                                theme.colors.muted_foreground
-                            })
-                            .child(item.name),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .child(item.driver),
-                    )
-                    .child(
-                        div()
-                            .id(format!("conn-edit-{}", idx))
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .px_1()
-                            .child("编辑")
-                            .on_click(edit_conn),
-                    ),
-            );
-        }
-        list
-    }
-
-    /// 数据源导航面板（M4）：面板头 + 来源标签页 + 搜索 + 对象树。
+    /// 数据源导航面板（M4）：面板头 + 来源 chips + 搜索 + 分组树。
     fn render_database_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if self.nav_search.is_none() {
             let state = cx.new(|cx| InputState::new(window, cx));
@@ -799,6 +841,40 @@ impl SidebarPanel {
             });
             self.nav_search = Some(state);
             self._nav_search_sub = Some(sub);
+        }
+        // Ctrl+F 请求（搜索框可能上一帧才创建，故在此统一消费）。
+        if self.shared.focus_nav_search.get() {
+            self.shared.focus_nav_search.set(false);
+            if let Some(input) = self.nav_search.clone() {
+                let handle = input.read(cx).focus_handle(cx);
+                handle.focus(window, cx);
+            }
+        }
+
+        // 本地 SQLite 一次性读取（分组/标签、各连接展开态）不在 render 做，
+        // 推到本帧效果周期之后执行，完成后重绘。
+        let need_org = !self.database_nav.borrow().groups_loaded;
+        let need_state: Vec<String> = {
+            let view = self.database_nav.borrow();
+            self.shared
+                .connections
+                .borrow()
+                .iter()
+                .filter(|c| !view.state_loaded.contains(&c.id))
+                .map(|c| c.id.clone())
+                .collect()
+        };
+        if need_org || !need_state.is_empty() {
+            let conn_ids = need_state.clone();
+            cx.defer_in(window, move |this, _window, cx| {
+                if need_org {
+                    this.reload_nav_org();
+                }
+                for cid in &conn_ids {
+                    this.ensure_nav_state_loaded(cid);
+                }
+                cx.notify();
+            });
         }
         let filter = self
             .nav_search
@@ -840,6 +916,40 @@ impl SidebarPanel {
             }
         }
 
+        // 分组重命名输入框：打开时按名称预填，关闭时销毁。
+        let rename_for = self.database_nav.borrow().group_rename_for.clone();
+        match &rename_for {
+            Some(group_id) => {
+                if self.nav_group_input.is_none() {
+                    let name = self
+                        .database_nav
+                        .borrow()
+                        .groups
+                        .iter()
+                        .find(|g| &g.id == group_id)
+                        .map(|g| g.name.clone())
+                        .unwrap_or_default();
+                    let input = cx.new(|cx| InputState::new(window, cx).placeholder("分组名"));
+                    input.update(cx, |s, cx| s.set_value(name, window, cx));
+                    let sub = cx.subscribe_in(
+                        &input,
+                        window,
+                        |this, _e, ev: &InputEvent, _w, cx| match ev {
+                            InputEvent::Change => cx.notify(),
+                            InputEvent::PressEnter { .. } => this.commit_group_rename(cx),
+                            _ => {}
+                        },
+                    );
+                    self.nav_group_input = Some(input);
+                    self._nav_group_sub = Some(sub);
+                }
+            }
+            None => {
+                self.nav_group_input = None;
+                self._nav_group_sub = None;
+            }
+        }
+
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
@@ -862,6 +972,31 @@ impl SidebarPanel {
                     .child("数据源"),
             )
             .child(div().flex_1())
+            // C1 预热进度（后台任务进行中时显示，可取消）。
+            .when(nav_jobs::warm_active(), |h| {
+                let (done, total) = nav_jobs::warm_progress();
+                h.child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(format!("预热 {done}/{total}")),
+                )
+                .child(
+                    div()
+                        .id("nav-warm-cancel")
+                        .px_1()
+                        .rounded_md()
+                        .text_xs()
+                        .text_color(muted)
+                        .cursor_pointer()
+                        .hover({
+                            let h = cx.theme().colors.list_hover;
+                            move |s| s.bg(h)
+                        })
+                        .child("取消")
+                        .on_click(|_, _, _| nav_jobs::cancel_warm()),
+                )
+            })
             .child(
                 // 新建分组（🗂＋）：项目级自定义分组。
                 div()
@@ -878,23 +1013,37 @@ impl SidebarPanel {
                     .child("\u{1f5c2}\u{ff0b}")
                     .on_click({
                         let entity = cx.entity();
-                        let root = self.project_root();
                         move |_, _, app: &mut App| {
-                            let root = root.clone();
-                            entity.update(app, |this, cx| {
-                                let name = this.next_group_name();
-                                match crate::services::nav_runtime::create_group(
-                                    root.as_deref(),
-                                    &name,
-                                ) {
-                                    Ok(_) => this.reload_nav_org(),
-                                    Err(e) => {
-                                        *this.shared.notice.borrow_mut() =
-                                            Some(format!("新建分组失败: {e}"));
-                                    }
-                                }
-                                cx.notify();
-                            });
+                            entity.update(app, |this, cx| this.create_group_interactive(cx));
+                        }
+                    }),
+            )
+            .child(
+                // 更多（⋯）：刷新全部元数据 / 缓存管理。
+                Button::new("nav-more")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Ellipsis)
+                    .dropdown_menu({
+                        let entity = cx.entity();
+                        let shared = self.shared.clone();
+                        move |menu, _window, _cx| {
+                            let e_refresh = entity.clone();
+                            let shared_cache = shared.clone();
+                            menu.item(PopupMenuItem::new("刷新全部元数据").on_click(
+                                move |_, _, app| {
+                                    e_refresh.update(app, |this, cx| this.refresh_all(cx));
+                                },
+                            ))
+                            .item(
+                                PopupMenuItem::new("缓存管理…").on_click(move |_, window, app| {
+                                    crate::components::cache_dialog::open_cache_dialog(
+                                        window,
+                                        app,
+                                        &shared_cache,
+                                    );
+                                }),
+                            )
                         }
                     }),
             );
@@ -954,6 +1103,38 @@ impl SidebarPanel {
             .child(chips)
             .child(div().h_px().w_full().bg(border))
             .child(body)
+            .key_context("database-nav")
+            .track_focus(&self.focus_handle)
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavUp, _window, app| {
+                    entity.update(app, |this, cx| this.nav_move(-1, cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavDown, _window, app| {
+                    entity.update(app, |this, cx| this.nav_move(1, cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavExpand, _window, app| {
+                    entity.update(app, |this, cx| this.nav_expand(cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavCollapse, _window, app| {
+                    entity.update(app, |this, cx| this.nav_collapse(cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavOpenProperties, _window, app| {
+                    entity.update(app, |this, cx| this.nav_open_properties(cx));
+                }
+            })
     }
 
     /// 来源筛选 chip（全部 / 项目 / 全局 / 共享）；点击切换筛选，不占一级结构。
@@ -1015,8 +1196,19 @@ impl SidebarPanel {
     /// 连接可属于多个分组（多对多），因此在每个所属分组下各出现一次；
     /// 归属无任何分组的连接收进「未分组」。分组为空时隐藏。
     fn render_nav_tree(&self, source_filter: Option<NavSource>, cx: &mut Context<Self>) -> Div {
-        self.ensure_nav_org();
+        // 键盘导航的可见序列每帧重建（渲染是顺序权威来源）。
+        self.nav_order.borrow_mut().clear();
         let muted = cx.theme().colors.muted_foreground;
+        // 分组 / 成员 / 标签尚未就绪（首次渲染由 `render_database_nav` 的 defer 加载）。
+        if !self.database_nav.borrow().groups_loaded {
+            return div()
+                .v_flex()
+                .w_full()
+                .min_h_0()
+                .px_1()
+                .pt_1()
+                .child(div().text_xs().text_color(muted).child("加载中…"));
+        }
         let (filter, groups, membership, group_order, tags) = {
             let view = self.database_nav.borrow();
             (
@@ -1078,7 +1270,6 @@ impl SidebarPanel {
                 column.child(self.render_group_header(&group.id, &group.name, members.len(), cx));
             if !self.group_collapsed(&group.id) {
                 for conn in members {
-                    self.ensure_nav_state_loaded(&conn.id);
                     column = column.child(self.render_connection_row(conn, &group.id, cx));
                 }
             }
@@ -1107,7 +1298,6 @@ impl SidebarPanel {
             ));
             if !self.group_collapsed(GROUP_UNGROUPED) {
                 for conn in ungrouped {
-                    self.ensure_nav_state_loaded(&conn.id);
                     column = column.child(self.render_connection_row(conn, GROUP_UNGROUPED, cx));
                 }
             }
@@ -1132,7 +1322,7 @@ impl SidebarPanel {
         column
     }
 
-    /// 分组头：左侧统一色条 + 略深底 + 计数徽标，可折叠。
+    /// 分组头：左侧统一色条 + 略深底 + 计数徽标，可折叠；右键菜单（重命名 / 新建 / 删除）。
     fn render_group_header(
         &self,
         group_id: &str,
@@ -1148,7 +1338,10 @@ impl SidebarPanel {
         let collapsed = self.group_collapsed(group_id);
         let entity = cx.entity();
         let gid = group_id.to_string();
-        div()
+        let gname = name.to_string();
+        let is_ungrouped = group_id == GROUP_UNGROUPED;
+
+        let header = div()
             .id(format!("nav-group-{group_id}"))
             .h_flex()
             .items_center()
@@ -1160,19 +1353,23 @@ impl SidebarPanel {
             .bg(bg)
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
-            .on_click(move |_, _, app| {
+            .on_click({
+                let entity = entity.clone();
                 let gid = gid.clone();
-                entity.update(app, |this, cx| {
-                    {
-                        let mut view = this.database_nav.borrow_mut();
-                        if view.collapsed_groups.contains(&gid) {
-                            view.collapsed_groups.remove(&gid);
-                        } else {
-                            view.collapsed_groups.insert(gid.clone());
+                move |_, _, app| {
+                    let gid = gid.clone();
+                    entity.update(app, |this, cx| {
+                        {
+                            let mut view = this.database_nav.borrow_mut();
+                            if view.collapsed_groups.contains(&gid) {
+                                view.collapsed_groups.remove(&gid);
+                            } else {
+                                view.collapsed_groups.insert(gid.clone());
+                            }
                         }
-                    }
-                    cx.notify();
-                });
+                        cx.notify();
+                    });
+                }
             })
             .child(
                 div()
@@ -1200,6 +1397,76 @@ impl SidebarPanel {
                     .child(name.to_string()),
             )
             .child(div().text_xs().text_color(muted).child(count.to_string()))
+            // 「未分组」是固定分组，不提供重命名 / 删除。
+            .context_menu({
+                let entity = entity.clone();
+                let gid = gid.clone();
+                let gname = gname.clone();
+                move |menu, _window, _cx| {
+                    if is_ungrouped {
+                        return menu.item(PopupMenuItem::new("新建分组").on_click({
+                            let entity = entity.clone();
+                            move |_, _, app| {
+                                entity.update(app, |this, cx| this.create_group_interactive(cx));
+                            }
+                        }));
+                    }
+                    let e_rename = entity.clone();
+                    let gid_rename = gid.clone();
+                    let e_new = entity.clone();
+                    let e_del = entity.clone();
+                    let gid_del = gid.clone();
+                    let gname_del = gname.clone();
+                    menu.item(PopupMenuItem::new("重命名分组").on_click(move |_, _, app| {
+                        let gid = gid_rename.clone();
+                        e_rename.update(app, |this, cx| {
+                            this.database_nav.borrow_mut().group_rename_for = Some(gid.clone());
+                            cx.notify();
+                        });
+                    }))
+                    .item(PopupMenuItem::new("新建分组").on_click(move |_, _, app| {
+                        e_new.update(app, |this, cx| this.create_group_interactive(cx));
+                    }))
+                    .separator()
+                    .item(
+                        PopupMenuItem::new("删除分组").on_click(move |_, window, app| {
+                            let entity = e_del.clone();
+                            let gid = gid_del.clone();
+                            let gname = gname_del.clone();
+                            window.open_alert_dialog(app, move |alert, _window, _cx| {
+                                let entity = entity.clone();
+                                let gid = gid.clone();
+                                alert
+                                    .confirm()
+                                    .title("删除分组")
+                                    .description(format!(
+                                        "确定删除分组「{gname}」？成员连接与缓存不会被删除。"
+                                    ))
+                                    .button_props(
+                                        DialogButtonProps::default()
+                                            .ok_text("删除")
+                                            .ok_variant(ButtonVariant::Danger)
+                                            .show_cancel(true),
+                                    )
+                                    .on_ok(move |_, _window, app| {
+                                        entity.update(app, |this, cx| this.delete_group(&gid, cx));
+                                        true
+                                    })
+                            });
+                        }),
+                    )
+                }
+            });
+
+        let mut wrap = div().v_flex().w_full().gap_0p5();
+        wrap = wrap.child(header);
+        // 重命名内联输入（打开时创建，见 `render_database_nav`）。
+        if self.database_nav.borrow().group_rename_for.as_deref() == Some(group_id) {
+            if let Some(input) = &self.nav_group_input {
+                wrap = wrap.child(div().px_1().pb_0p5().child(Input::new(input)));
+            }
+        }
+        wrap
     }
 
     /// 连接节点行（状态点 + 名称 + 来源短码 + 驱动 + 归组/标签 + 连接/断开）。
@@ -1224,7 +1491,7 @@ impl SidebarPanel {
             view.expanded.contains(&conn.id)
         };
         if expanded {
-            self.ensure_nav_loaded(&conn.id, &conn.id, NavPath::Connection);
+            self.ensure_nav_loaded(&conn.id, &conn.id, NavPath::Connection, false, cx);
         }
         let (connected, error, children) = {
             let view = self.database_nav.borrow();
@@ -1236,6 +1503,12 @@ impl SidebarPanel {
         };
 
         let source = NavSource::from_conn_id(&conn.id);
+        // 来源标识：短码 `P/G/GP` 或文字（设置项，默认短码）。
+        let source_text = if settings::SettingsService::source_short_code(cx) {
+            source.code().to_string()
+        } else {
+            source.label().to_string()
+        };
         let project_root = self
             .shared
             .project
@@ -1244,6 +1517,25 @@ impl SidebarPanel {
             .map(|p| p.root.to_string_lossy().to_string());
         let conn_id = conn.id.clone();
         let scope_key = scope_key.to_string();
+        let selected = self.database_nav.borrow().selected_key.as_deref() == Some(conn.id.as_str());
+        let selected_bg = cx.theme().colors.list_active;
+        // 键盘导航序列（父在前，子随渲染加入）。
+        self.nav_order.borrow_mut().push(NavOrderItem {
+            key: conn.id.clone(),
+            conn_id: conn.id.clone(),
+            path: Some(NavPath::Connection),
+            property: Some(PropertyRef {
+                conn_id: conn.id.clone(),
+                source,
+                catalog: None,
+                schema: None,
+                parent: None,
+                name: conn.name.clone(),
+                kind: PropertyKind::Connection,
+            }),
+            has_children: true,
+            expanded,
+        });
 
         let mut block = div().v_flex().w_full();
         block = block.child(
@@ -1257,13 +1549,22 @@ impl SidebarPanel {
                 .gap_1()
                 .rounded_md()
                 .cursor_pointer()
+                .when(selected, |s| s.bg(selected_bg))
                 .hover(move |s| s.bg(hover))
                 .on_click({
                     let entity = cx.entity();
                     let conn_id = conn_id.clone();
                     let conn_name = conn.name.clone();
                     let conn_driver = conn.driver.clone();
-                    move |ev, _, app| {
+                    let focus = self.focus_handle.clone();
+                    move |ev, window, app| {
+                        focus.focus(window, app);
+                        // 单击选中（键盘导航基准）；双击打开属性；再次点击展开 / 折叠。
+                        let sel_key = conn_id.clone();
+                        entity.update(app, |this, cx| {
+                            this.database_nav.borrow_mut().selected_key = Some(sel_key.clone());
+                            cx.notify();
+                        });
                         if ev.click_count() >= 2 {
                             let req = PropertyRequest {
                                 property: PropertyRef {
@@ -1286,7 +1587,7 @@ impl SidebarPanel {
                         }
                         let conn_id = conn_id.clone();
                         entity.update(app, |this, cx| {
-                            this.toggle_nav_node(&conn_id, &conn_id, NavPath::Connection);
+                            this.toggle_nav_node(&conn_id, &conn_id, NavPath::Connection, cx);
                             cx.notify();
                         });
                     }
@@ -1315,7 +1616,7 @@ impl SidebarPanel {
                         .text_color(fg)
                         .child(conn.name.clone()),
                 )
-                .child(div().text_xs().text_color(muted).child(source.code()))
+                .child(div().text_xs().text_color(muted).child(source_text))
                 .child(div().text_xs().text_color(muted).child(conn.driver.clone()))
                 // 归组 / 标签入口：展开行内组织编辑器（方案 A 的内联多选，不弹模态）。
                 .child(
@@ -1381,38 +1682,117 @@ impl SidebarPanel {
                                 let conn_id = conn_id.clone();
                                 let root = root.clone();
                                 entity.update(app, |this, cx| {
-                                    let already =
-                                        this.database_nav.borrow().connected.contains(&conn_id);
-                                    let outcome = if already {
-                                        crate::services::nav_runtime::disconnect_entry(&conn_id)
-                                            .map(|_| false)
-                                    } else {
-                                        crate::services::nav_runtime::connect_entry(
-                                            &conn_id,
-                                            root.as_deref(),
-                                        )
-                                        .map(|_| true)
-                                    };
-                                    match outcome {
-                                        Ok(is_connected) => {
-                                            let mut view = this.database_nav.borrow_mut();
-                                            if is_connected {
-                                                view.connected.insert(conn_id.clone());
-                                            } else {
-                                                view.connected.remove(&conn_id);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            *this.shared.notice.borrow_mut() =
-                                                Some(format!("连接操作失败: {e}"));
-                                        }
-                                    }
-                                    cx.notify();
+                                    this.toggle_connection(&conn_id, root.as_deref(), cx);
                                 });
                             }
                         }),
-                ),
+                )
+                // 右键菜单（连接节点）：连接/断开、编辑、查看属性、分组/标签、复制、刷新。
+                .context_menu({
+                    let entity = cx.entity();
+                    let shared = self.shared.clone();
+                    let conn_id = conn.id.clone();
+                    let conn_name = conn.name.clone();
+                    let conn_driver = conn.driver.clone();
+                    let root = project_root.clone();
+                    let prop = PropertyRef {
+                        conn_id: conn_id.clone(),
+                        source,
+                        catalog: None,
+                        schema: None,
+                        parent: None,
+                        name: conn_name.clone(),
+                        kind: PropertyKind::Connection,
+                    };
+                    let is_connected = connected;
+                    move |menu, _window, _cx| {
+                        let e_connect = entity.clone();
+                        let cid_connect = conn_id.clone();
+                        let root_connect = root.clone();
+                        let e_edit = entity.clone();
+                        let cid_edit = conn_id.clone();
+                        let e_prop = entity.clone();
+                        let prop_own = prop.clone();
+                        let label_prop = conn_name.clone();
+                        let drv_prop = conn_driver.clone();
+                        let e_org = entity.clone();
+                        let cid_org = conn_id.clone();
+                        let e_copy = entity.clone();
+                        let shared_copy = shared.clone();
+                        let name_copy = conn_name.clone();
+                        let e_refresh = entity.clone();
+                        let cid_refresh = conn_id.clone();
+                        let name_refresh = conn_name.clone();
+                        menu.item(
+                            PopupMenuItem::new(if is_connected { "断开" } else { "连接" })
+                                .on_click(move |_, _, app| {
+                                    let cid = cid_connect.clone();
+                                    let root = root_connect.clone();
+                                    e_connect.update(app, |this, cx| {
+                                        this.toggle_connection(&cid, root.as_deref(), cx)
+                                    });
+                                }),
+                        )
+                        .item(PopupMenuItem::new("编辑连接…").on_click(move |_, _, app| {
+                            let cid = cid_edit.clone();
+                            e_edit.update(app, |this, cx| {
+                                *this.shared.open_edit.borrow_mut() = Some(cid.clone());
+                                cx.emit(SidebarEvent::EditConnection(cid.clone()));
+                            });
+                        }))
+                        .separator()
+                        .item(PopupMenuItem::new("查看属性").on_click(move |_, _, app| {
+                            let prop = prop_own.clone();
+                            let label = label_prop.clone();
+                            let drv = drv_prop.clone();
+                            e_prop.update(app, |this, cx| {
+                                *this.shared.property_target.borrow_mut() = Some(PropertyRequest {
+                                    property: prop.clone(),
+                                    conn_label: label.clone(),
+                                    driver: drv.clone(),
+                                });
+                                cx.notify();
+                            });
+                        }))
+                        .item(
+                            PopupMenuItem::new("分组 / 标签…").on_click(move |_, _, app| {
+                                let cid = cid_org.clone();
+                                e_org.update(app, |this, cx| {
+                                    this.database_nav.borrow_mut().group_picker_for =
+                                        Some(cid.clone());
+                                    cx.notify();
+                                });
+                            }),
+                        )
+                        .item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
+                            let name = name_copy.clone();
+                            app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
+                            *shared_copy.notice.borrow_mut() = Some(format!("已复制：{name}"));
+                            e_copy.update(app, |_, cx| cx.notify());
+                        }))
+                        .item(PopupMenuItem::new("刷新元数据").on_click(move |_, _, app| {
+                            let cid = cid_refresh.clone();
+                            let name = name_refresh.clone();
+                            e_refresh.update(app, |this, cx| {
+                                this.refresh_node(&cid, &cid, Some(NavPath::Connection), cx);
+                                *this.shared.notice.borrow_mut() = Some(format!("已刷新：{name}"));
+                            });
+                        }))
+                    }
+                }),
         );
+
+        // 后台加载占位（避免展开后空白，误导为已加载完）。
+        if self.database_nav.borrow().loading.contains(&conn.id) {
+            block = block.child(
+                div()
+                    .pl_6()
+                    .pb_0p5()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("加载中…"),
+            );
+        }
 
         // 标签（多值）：非空时在连接名下以 muted 小字展示，便于检索确认。
         let tags = self
@@ -1662,7 +2042,7 @@ impl SidebarPanel {
         };
         if expanded && node.has_children {
             if let Some(p) = node.expand_path.clone() {
-                self.ensure_nav_loaded(&node.connection_id, &node.key, p);
+                self.ensure_nav_loaded(&node.connection_id, &node.key, p, false, cx);
             }
         }
         let (skip, expanded_eff, error, children) = {
@@ -1701,6 +2081,9 @@ impl SidebarPanel {
             .find(|c| c.id == node.connection_id)
             .map(|c| c.driver.clone())
             .unwrap_or_default();
+        // 供右键菜单使用（双击处理器已消费 `n_conn_label` / `n_driver`）。
+        let m_conn_label = n_conn_label.clone();
+        let m_driver = n_driver.clone();
 
         let right_meta: Option<(String, bool)> = match &node.kind {
             NavNodeKind::Column {
@@ -1724,6 +2107,18 @@ impl SidebarPanel {
         // 缩进 = 基础内边距 + 层级 × 步长（设计 §2.1）。两者都是 rem 倍率，
         // 直接交给 `rems()` 换算（其基准是主题字号而非 4px，写 `/ 4.` 会放大 4 倍）。
         let indent = ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT;
+        let selected =
+            self.database_nav.borrow().selected_key.as_deref() == Some(node.key.as_str());
+        let selected_bg = cx.theme().colors.list_active;
+        // 键盘导航序列（父在前，子随递归渲染加入）。
+        self.nav_order.borrow_mut().push(NavOrderItem {
+            key: node.key.clone(),
+            conn_id: node.connection_id.clone(),
+            path: node.expand_path.clone(),
+            property: node.property.clone(),
+            has_children: node.has_children,
+            expanded: expanded_eff,
+        });
         let mut block = div().v_flex().w_full();
         let mut row = div()
             .id(format!("nav-node-{}::{}", scope_key, node.key))
@@ -1736,6 +2131,7 @@ impl SidebarPanel {
             .gap_1()
             .rounded_md()
             .cursor_pointer()
+            .when(selected, |s| s.bg(selected_bg))
             .hover(move |s| s.bg(hover))
             .child(div().w_2p5().flex_none().text_xs().text_color(muted).child(
                 if node.has_children {
@@ -1761,32 +2157,135 @@ impl SidebarPanel {
                     .child(meta),
             );
         }
-        row = row.on_click(move |ev, _, app| {
-            if ev.click_count() >= 2 {
-                if let Some(p) = n_property.clone() {
-                    let req = PropertyRequest {
-                        property: p,
-                        conn_label: n_conn_label.clone(),
-                        driver: n_driver.clone(),
-                    };
-                    entity.update(app, |this, cx| {
-                        *this.shared.property_target.borrow_mut() = Some(req);
-                        cx.notify();
-                    });
-                    return;
-                }
-            }
-            if let Some(p) = n_path.clone() {
-                let conn_id = n_conn_id.clone();
-                let key = n_key.clone();
+        row = row.on_click({
+            let focus = self.focus_handle.clone();
+            move |ev, window, app| {
+                focus.focus(window, app);
+                let sel_key = n_key.clone();
                 entity.update(app, |this, cx| {
-                    this.toggle_nav_node(&conn_id, &key, p);
+                    this.database_nav.borrow_mut().selected_key = Some(sel_key.clone());
                     cx.notify();
                 });
+                if ev.click_count() >= 2 {
+                    if let Some(p) = n_property.clone() {
+                        let req = PropertyRequest {
+                            property: p,
+                            conn_label: n_conn_label.clone(),
+                            driver: n_driver.clone(),
+                        };
+                        entity.update(app, |this, cx| {
+                            *this.shared.property_target.borrow_mut() = Some(req);
+                            cx.notify();
+                        });
+                        return;
+                    }
+                }
+                if let Some(p) = n_path.clone() {
+                    let conn_id = n_conn_id.clone();
+                    let key = n_key.clone();
+                    entity.update(app, |this, cx| {
+                        this.toggle_nav_node(&conn_id, &key, p, cx);
+                        cx.notify();
+                    });
+                }
             }
         });
-        block = block.child(row);
+        // 右键菜单（对象节点）：查看数据 / 属性 / 复制 / 刷新。
+        block = block.child(row.context_menu({
+            let entity = cx.entity();
+            let shared = self.shared.clone();
+            let conn_id = node.connection_id.clone();
+            let nkey = node.key.clone();
+            let dname = node.name.clone();
+            let menu_path = node.expand_path.clone();
+            let menu_prop = node.property.clone();
+            let qualified = node.property.as_ref().map(nav_qualified_name);
+            let conn_label = m_conn_label.clone();
+            let driver = m_driver.clone();
+            let data_like = matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View);
+            move |menu, _window, _cx| {
+                let mut menu = menu;
+                if let Some(prop0) = menu_prop.clone() {
+                    let e = entity.clone();
+                    let label0 = conn_label.clone();
+                    let drv0 = driver.clone();
+                    menu = menu.item(PopupMenuItem::new("查看属性").on_click(move |_, _, app| {
+                        let prop = prop0.clone();
+                        let label = label0.clone();
+                        let drv = drv0.clone();
+                        e.update(app, |this, cx| {
+                            *this.shared.property_target.borrow_mut() = Some(PropertyRequest {
+                                property: prop.clone(),
+                                conn_label: label.clone(),
+                                driver: drv.clone(),
+                            });
+                            cx.notify();
+                        });
+                    }));
+                }
+                if data_like {
+                    if let Some(q) = qualified.clone() {
+                        let sql = format!("SELECT * FROM {q} LIMIT 200;");
+                        let e = entity.clone();
+                        let shared_sql = shared.clone();
+                        menu = menu.item(PopupMenuItem::new("查看数据（LIMIT 200）").on_click(
+                            move |_, _, app| {
+                                *shared_sql.editor_set.borrow_mut() = Some(sql.clone());
+                                e.update(app, |_, cx| cx.emit(SidebarEvent::EditorSqlRequest));
+                            },
+                        ));
+                    }
+                }
+                {
+                    let e = entity.clone();
+                    let shared_copy = shared.clone();
+                    let name_copy = dname.clone();
+                    menu = menu.item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
+                        let name = name_copy.clone();
+                        app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
+                        *shared_copy.notice.borrow_mut() = Some(format!("已复制：{name}"));
+                        e.update(app, |_, cx| cx.notify());
+                    }));
+                }
+                if let Some(q) = qualified.clone() {
+                    let e = entity.clone();
+                    let shared_copy = shared.clone();
+                    menu =
+                        menu.item(PopupMenuItem::new("复制限定名").on_click(move |_, _, app| {
+                            let q = q.clone();
+                            app.write_to_clipboard(ClipboardItem::new_string(q.clone()));
+                            *shared_copy.notice.borrow_mut() = Some(format!("已复制：{q}"));
+                            e.update(app, |_, cx| cx.notify());
+                        }));
+                }
+                if let Some(p) = menu_path.clone() {
+                    let e = entity.clone();
+                    let cid = conn_id.clone();
+                    let key = nkey.clone();
+                    menu =
+                        menu.item(PopupMenuItem::new("刷新元数据").on_click(move |_, _, app| {
+                            let cid = cid.clone();
+                            let key = key.clone();
+                            let p = p.clone();
+                            e.update(app, |this, cx| {
+                                this.refresh_node(&cid, &key, Some(p.clone()), cx);
+                            });
+                        }));
+                }
+                menu
+            }
+        }));
 
+        if self.database_nav.borrow().loading.contains(&node.key) {
+            block = block.child(
+                div()
+                    .pl(rems(indent + ui::TREE_INDENT))
+                    .pb_0p5()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("加载中…"),
+            );
+        }
         if let Some(err) = error {
             block = block.child(
                 div()
@@ -1798,15 +2297,70 @@ impl SidebarPanel {
             );
         }
         if expanded_eff {
-            for child in children {
-                block = block.child(self.render_nav_node(&child, depth + 1, scope_key, cx));
+            // 类别文件夹客户端分页：万级对象时只渲染首批，其余用「加载更多」逐页展开。
+            let is_folder = matches!(&node.kind, NavNodeKind::Folder(_));
+            let total = children.len();
+            let limit = if is_folder {
+                self.folder_limit(&node.key)
+            } else {
+                usize::MAX
+            };
+            for child in children.iter().take(limit) {
+                block = block.child(self.render_nav_node(child, depth + 1, scope_key, cx));
+            }
+            if is_folder && total > limit {
+                block = block.child(self.render_more_row(&node.key, total - limit, depth, cx));
             }
         }
         block
     }
 
-    /// 展开 / 折叠节点；首次展开时懒加载子节点，并持久化展开态。
-    fn toggle_nav_node(&self, conn_id: &str, key: &str, path: NavPath) {
+    /// 「加载更多」行（大 schema 客户端分页；点击追加一页，不重查远端）。
+    fn render_more_row(
+        &self,
+        key: &str,
+        remaining: usize,
+        depth: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let pri = cx.theme().colors.primary;
+        let indent = ui::TREE_BASE_PADDING + (depth as f32 + 1.0) * ui::TREE_INDENT;
+        let entity = cx.entity();
+        let k = key.to_string();
+        div()
+            .id(format!("nav-more-{key}"))
+            .h_flex()
+            .items_center()
+            .w_full()
+            .h(rems(1.375))
+            .pl(rems(indent))
+            .pr_1()
+            .rounded_md()
+            .cursor_pointer()
+            .text_xs()
+            .text_color(pri)
+            .child(format!("加载更多（余 {remaining}）"))
+            .on_click(move |_, _, app| {
+                let k = k.clone();
+                entity.update(app, |this, cx| {
+                    let cur = {
+                        let view = this.database_nav.borrow();
+                        view.page_limit
+                            .get(&k)
+                            .copied()
+                            .unwrap_or(ui::NAV_FOLDER_PAGE_SIZE)
+                    };
+                    this.database_nav
+                        .borrow_mut()
+                        .page_limit
+                        .insert(k.clone(), cur + ui::NAV_FOLDER_PAGE_SIZE);
+                    cx.notify();
+                });
+            })
+    }
+
+    /// 展开 / 折叠节点；首次展开时排队后台懒加载，并持久化展开态。
+    fn toggle_nav_node(&self, conn_id: &str, key: &str, path: NavPath, cx: &mut Context<Self>) {
         let now_expanded = {
             let mut view = self.database_nav.borrow_mut();
             if view.expanded.contains(key) {
@@ -1818,34 +2372,148 @@ impl SidebarPanel {
             }
         };
         if now_expanded {
-            self.ensure_nav_loaded(conn_id, key, path);
+            self.ensure_nav_loaded(conn_id, key, path, false, cx);
         }
         self.save_nav_state_for(conn_id);
     }
 
-    /// 懒加载子节点（已加载则跳过）。
-    fn ensure_nav_loaded(&self, conn_id: &str, key: &str, path: NavPath) {
+    /// 排队后台懒加载子节点（已请求过则跳过；render 路径不做 I/O）。
+    ///
+    /// `fresh`（刷新模式）跳过 L2 读缓存并重写。结果由 [`Self::apply_load_results`] 回填。
+    fn ensure_nav_loaded(
+        &self,
+        conn_id: &str,
+        key: &str,
+        path: NavPath,
+        fresh: bool,
+        cx: &mut Context<Self>,
+    ) {
         {
             let view = self.database_nav.borrow();
             if view.attempted.contains(key) {
                 return;
             }
         }
-        self.database_nav
-            .borrow_mut()
-            .attempted
-            .insert(key.to_string());
-        let result = load_nav_children(conn_id, &path);
-        let mut view = self.database_nav.borrow_mut();
-        match result {
-            Ok(children) => {
-                view.errors.remove(key);
-                view.children.insert(key.to_string(), children);
-            }
-            Err(e) => {
-                view.errors.insert(key.to_string(), e);
+        {
+            let mut view = self.database_nav.borrow_mut();
+            view.attempted.insert(key.to_string());
+            view.loading.insert(key.to_string());
+        }
+        let project_root = self.project_root().map(|p| p.to_string_lossy().to_string());
+        nav_jobs::enqueue_load(conn_id, project_root.as_deref(), key, path, fresh);
+        self.ensure_nav_pump(cx);
+    }
+
+    /// 启动加载结果轮询（已有存活任务时不重复启动）。
+    fn ensure_nav_pump(&self, cx: &mut Context<Self>) {
+        if let Some(task) = self.nav_pump.borrow().as_ref() {
+            if !task.is_ready() {
+                return;
             }
         }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor
+                    .timer(std::time::Duration::from_millis(60))
+                    .await;
+                let results = nav_jobs::drain_load_results();
+                let had = !results.is_empty();
+                if had
+                    && weak
+                        .update(cx, |this, cx| this.apply_load_results(results, cx))
+                        .is_err()
+                {
+                    return;
+                }
+                if !nav_jobs::has_pending_loads() {
+                    // 多等一拍确认没有新任务（render 可能刚入队）。
+                    executor
+                        .timer(std::time::Duration::from_millis(120))
+                        .await;
+                    if !nav_jobs::has_pending_loads() {
+                        break;
+                    }
+                }
+            }
+        });
+        *self.nav_pump.borrow_mut() = Some(task);
+    }
+
+    /// 回填后台加载结果（主线程）。
+    fn apply_load_results(&mut self, results: Vec<nav_jobs::LoadResult>, cx: &mut Context<Self>) {
+        for r in results {
+            let key = r.key.clone();
+            let is_tables_folder = matches!(
+                &r.path,
+                NavPath::Folder {
+                    folder: NavFolder::Tables,
+                    ..
+                }
+            );
+            let (catalog, schema) = match &r.path {
+                NavPath::Folder { catalog, schema, .. } => (catalog.clone(), schema.clone()),
+                _ => (String::new(), String::new()),
+            };
+            let conn_id = r.conn_id.clone();
+            let project_root = r.project_root.clone();
+            {
+                let mut view = self.database_nav.borrow_mut();
+                view.loading.remove(&key);
+                match r.result {
+                    Ok(children) => {
+                        view.errors.remove(&key);
+                        view.children.insert(key.clone(), children);
+                    }
+                    Err(e) => {
+                        view.errors.insert(key.clone(), e);
+                    }
+                }
+            }
+            // C2：「表」文件夹首次加载成功后，排队预取前 N 张表的列。
+            if is_tables_folder {
+                self.maybe_prefetch(&conn_id, &key, &catalog, &schema, project_root.as_deref());
+            }
+        }
+        cx.notify();
+    }
+
+    /// C2：对刚加载完的「表」文件夹排队列预取（一次性）。
+    fn maybe_prefetch(
+        &self,
+        conn_id: &str,
+        key: &str,
+        catalog: &str,
+        schema: &str,
+        project_root: Option<&str>,
+    ) {
+        let first_time = self
+            .database_nav
+            .borrow_mut()
+            .prefetched
+            .insert(key.to_string());
+        if !first_time {
+            return;
+        }
+        let targets: Vec<nav_jobs::ColumnTarget> = {
+            let view = self.database_nav.borrow();
+            view.children
+                .get(key)
+                .map(|kids| {
+                    kids.iter()
+                        .filter(|n| matches!(n.kind, NavNodeKind::Table { .. }))
+                        .take(nav_jobs::PREFETCH_BATCH)
+                        .map(|n| nav_jobs::ColumnTarget {
+                            catalog: catalog.to_string(),
+                            schema: schema.to_string(),
+                            table: n.name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        nav_jobs::prefetch_columns(conn_id, project_root, targets);
     }
 
     /// 当前项目根（项目 / 共享连接的导航状态落项目库）。
@@ -1899,14 +2567,6 @@ impl SidebarPanel {
         );
     }
 
-    /// 首次渲染时确保分组 / 成员关系 / 标签映射已加载。
-    fn ensure_nav_org(&self) {
-        if self.database_nav.borrow().groups_loaded {
-            return;
-        }
-        self.reload_nav_org();
-    }
-
     /// 重载分组 / 成员关系 / 标签映射（组织变更后调用）。
     fn reload_nav_org(&self) {
         let root = self.project_root();
@@ -1916,7 +2576,10 @@ impl SidebarPanel {
         for group in &groups {
             let ids = crate::services::nav_runtime::list_group_members(root.as_deref(), &group.id);
             for cid in &ids {
-                membership.entry(cid.clone()).or_default().push(group.id.clone());
+                membership
+                    .entry(cid.clone())
+                    .or_default()
+                    .push(group.id.clone());
             }
             group_order.insert(group.id.clone(), ids);
         }
@@ -1935,6 +2598,16 @@ impl SidebarPanel {
             .borrow()
             .collapsed_groups
             .contains(group_id)
+    }
+
+    /// 类别文件夹当前渲染条数上限（缺省 `NAV_FOLDER_PAGE_SIZE`）。
+    fn folder_limit(&self, key: &str) -> usize {
+        self.database_nav
+            .borrow()
+            .page_limit
+            .get(key)
+            .copied()
+            .unwrap_or(ui::NAV_FOLDER_PAGE_SIZE)
     }
 
     /// 生成不与现有分组重名的默认分组名。
@@ -1972,6 +2645,174 @@ impl SidebarPanel {
             Ok(()) => self.reload_nav_org(),
             Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存标签失败: {e}")),
         }
+        cx.notify();
+    }
+
+    /// 新建分组（默认名自动去重）并重载组织数据。
+    fn create_group_interactive(&self, cx: &mut Context<Self>) {
+        let name = self.next_group_name();
+        let root = self.project_root();
+        match crate::services::nav_runtime::create_group(root.as_deref(), &name) {
+            Ok(_) => self.reload_nav_org(),
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("新建分组失败: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// 删除分组（仅解除关系，不删成员连接与缓存）。
+    fn delete_group(&mut self, group_id: &str, cx: &mut Context<Self>) {
+        let root = self.project_root();
+        match crate::services::nav_runtime::delete_group(root.as_deref(), group_id) {
+            Ok(()) => {
+                self.reload_nav_org();
+                *self.shared.notice.borrow_mut() = Some("分组已删除（成员连接保留）".to_string());
+            }
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("删除分组失败: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// 提交分组内联重命名。
+    fn commit_group_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(group_id) = self.database_nav.borrow().group_rename_for.clone() else {
+            return;
+        };
+        let Some(input) = self.nav_group_input.clone() else {
+            return;
+        };
+        let name = input.read(cx).value().trim().to_string();
+        if !name.is_empty() {
+            let root = self.project_root();
+            match crate::services::nav_runtime::rename_group(root.as_deref(), &group_id, &name) {
+                Ok(()) => self.reload_nav_org(),
+                Err(e) => *self.shared.notice.borrow_mut() = Some(format!("重命名失败: {e}")),
+            }
+        }
+        self.database_nav.borrow_mut().group_rename_for = None;
+        cx.notify();
+    }
+
+    /// 连接 / 断开运行时连接（保留缓存）。连接状态取运行时真值。
+    fn toggle_connection(
+        &mut self,
+        conn_id: &str,
+        project_root: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let already = crate::services::nav_runtime::is_connected(conn_id)
+            || self.database_nav.borrow().connected.contains(conn_id);
+        let outcome = if already {
+            crate::services::nav_runtime::disconnect_entry(conn_id).map(|_| false)
+        } else {
+            crate::services::nav_runtime::connect_entry(conn_id, project_root).map(|_| true)
+        };
+        match outcome {
+            Ok(is_connected) => {
+                {
+                    let mut view = self.database_nav.borrow_mut();
+                    if is_connected {
+                        view.connected.insert(conn_id.to_string());
+                        // 刷新模式下预取过的标记清空（重新连接后重新预取）。
+                        view.prefetched.clear();
+                    } else {
+                        view.connected.remove(conn_id);
+                    }
+                }
+                if is_connected {
+                    // C1：连接成功后提交后台预热（仅 catalogs/schemas），不阻塞 UI。
+                    nav_jobs::warm_after_connect(conn_id, project_root);
+                    self.ensure_warm_poll(cx);
+                }
+            }
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("连接操作失败: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// 启动预热进度轮询（已有存活任务时不重复启动）。
+    ///
+    /// 预热在工作线程上跑，进度是原子量；这里用主线程 async 任务每 300ms 轮询并重绘，
+    /// 结束后再重绘一次（让「预热中」指示消失）。
+    fn ensure_warm_poll(&mut self, cx: &mut Context<Self>) {
+        if let Some(task) = &self.warm_poll {
+            if !task.is_ready() {
+                return;
+            }
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            // 预热任务在队列里异步启动，`warm_active` 置位有延迟；
+            // 因此用「连续两次非活动才退出」的判据，同时覆盖启动与结束。
+            let mut idle = 0;
+            loop {
+                executor.timer(std::time::Duration::from_millis(300)).await;
+                if nav_jobs::warm_active() {
+                    idle = 0;
+                } else {
+                    idle += 1;
+                    if idle >= 2 {
+                        break;
+                    }
+                }
+                if weak.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            }
+            let _ = weak.update(cx, |_, cx| cx.notify());
+        });
+        self.warm_poll = Some(task);
+    }
+
+    /// 刷新某节点（含连接根）的元数据：清掉已缓存子节点后重新加载当前层级。
+    ///
+    /// 保留展开态：子节点重新渲染时会根据最新 `expand_path` 再次懒加载。缓存文件不删。
+    fn refresh_node(
+        &self,
+        conn_id: &str,
+        key: &str,
+        path: Option<NavPath>,
+        cx: &mut Context<Self>,
+    ) {
+        let prefix = format!("{key}/");
+        {
+            let mut view = self.database_nav.borrow_mut();
+            view.children
+                .retain(|k, _| k != key && !k.starts_with(&prefix));
+            view.attempted
+                .retain(|k| k != key && !k.starts_with(&prefix));
+            view.errors
+                .retain(|k, _| k != key && !k.starts_with(&prefix));
+        }
+        if let Some(p) = path {
+            self.ensure_nav_loaded(conn_id, key, p, true, cx);
+        }
+        *self.shared.notice.borrow_mut() = Some("已刷新元数据".to_string());
+        cx.notify();
+    }
+
+    /// 刷新全部连接的元数据（清掉已加载子节点后重载仍展开的连接根）。
+    fn refresh_all(&self, cx: &mut Context<Self>) {
+        let roots: Vec<String> = {
+            let view = self.database_nav.borrow();
+            self.shared
+                .connections
+                .borrow()
+                .iter()
+                .filter(|c| view.expanded.contains(&c.id))
+                .map(|c| c.id.clone())
+                .collect()
+        };
+        {
+            let mut view = self.database_nav.borrow_mut();
+            view.children.clear();
+            view.attempted.clear();
+            view.errors.clear();
+        }
+        for cid in roots {
+            self.ensure_nav_loaded(&cid, &cid, NavPath::Connection, true, cx);
+        }
+        *self.shared.notice.borrow_mut() = Some("已刷新全部元数据".to_string());
         cx.notify();
     }
 
@@ -2724,6 +3565,10 @@ pub struct EditorPanel {
     _dialog_sub: Option<Subscription>,
     // Phase B：右侧停靠属性面板状态。
     property: Rc<RefCell<PropertyState>>,
+    /// 属性面板宽度（rem 倍率；拖拽时更新，关闭时持久化到 settings.json）。
+    property_width: Rc<Cell<f32>>,
+    /// 正在轮询属性加载结果的后台任务。
+    props_pump: RefCell<Option<Task<()>>>,
 }
 
 impl EditorPanel {
@@ -2739,6 +3584,10 @@ impl EditorPanel {
             _sql_sub: None,
             _dialog_sub: None,
             property: Rc::new(RefCell::new(PropertyState::default())),
+            property_width: Rc::new(Cell::new(
+                settings::load_settings().navigator.property_panel_width,
+            )),
+            props_pump: RefCell::new(None),
         }
     }
 
@@ -2814,6 +3663,68 @@ impl EditorPanel {
         }
     }
 
+    /// 启动属性结果轮询（已有存活任务时不重复启动）。
+    fn ensure_props_pump(&self, cx: &mut Context<Self>) {
+        if let Some(task) = self.props_pump.borrow().as_ref() {
+            if !task.is_ready() {
+                return;
+            }
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor
+                    .timer(std::time::Duration::from_millis(60))
+                    .await;
+                let results = nav_jobs::drain_props_results();
+                let had = !results.is_empty();
+                if had
+                    && weak
+                        .update(cx, |this, cx| this.apply_props_results(results, cx))
+                        .is_err()
+                {
+                    return;
+                }
+                if !nav_jobs::has_pending_props() {
+                    executor
+                        .timer(std::time::Duration::from_millis(120))
+                        .await;
+                    if !nav_jobs::has_pending_props() {
+                        break;
+                    }
+                }
+            }
+        });
+        *self.props_pump.borrow_mut() = Some(task);
+    }
+
+    /// 回填属性加载结果（主线程；key 不匹配的过期结果丢弃）。
+    fn apply_props_results(
+        &mut self,
+        results: Vec<nav_jobs::PropsResult>,
+        cx: &mut Context<Self>,
+    ) {
+        for r in results {
+            let mut st = self.property.borrow_mut();
+            if st.loaded_for.as_deref() != Some(r.key.as_str()) {
+                continue;
+            }
+            st.loading = false;
+            match r.result {
+                Ok(p) => {
+                    st.props = Some(p);
+                    st.error = None;
+                }
+                Err(e) => {
+                    st.props = None;
+                    st.error = Some(e);
+                }
+            }
+        }
+        cx.notify();
+    }
+
     /// 右侧停靠属性面板（DBeaver 式：属性网格 + 子实体表格）。
     fn render_property_panel(&self, cx: &mut Context<Self>) -> Div {
         let Some(target) = self.shared.property_target.borrow().clone() else {
@@ -2833,28 +3744,21 @@ impl EditorPanel {
                 st.loaded_for = Some(key.clone());
                 st.props = None;
                 st.error = None;
+                st.loading = true;
                 true
             } else {
                 false
             }
         };
         if needs_load {
-            let service = NavigatorService::new(engine::get_connection_manager().clone());
-            let loaded = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt.block_on(service.load_properties(
-                    &target.property,
-                    &target.conn_label,
-                    &target.driver,
-                )),
-                Err(e) => Err(shared::error::CoreError::common(
-                    shared::error::CommonError::General(format!("运行时错误: {e}")),
-                )),
-            };
-            let mut st = self.property.borrow_mut();
-            match loaded {
-                Ok(p) => st.props = Some(p),
-                Err(e) => st.error = Some(e.to_string()),
-            }
+            // 后台加载：render 不做 I/O；结果由 `apply_props_results` 回填。
+            nav_jobs::enqueue_properties(
+                &key,
+                target.property.clone(),
+                &target.conn_label,
+                &target.driver,
+            );
+            self.ensure_props_pump(cx);
         }
 
         let fg = cx.theme().colors.foreground;
@@ -2877,6 +3781,9 @@ impl EditorPanel {
             .unwrap_or_default();
 
         let mut body = div().v_flex().w_full().gap_1();
+        if st.loading {
+            body = body.child(div().text_xs().text_color(muted).child("加载中…"));
+        }
         if let Some(err) = &st.error {
             body = body.child(div().text_xs().text_color(danger).child(err.clone()));
         }
@@ -2951,7 +3858,7 @@ impl EditorPanel {
 
         div()
             .v_flex()
-            .w(rems(24.5))
+            .w_full()
             .h_full()
             .flex_none()
             .border_1()
@@ -2988,8 +3895,14 @@ impl EditorPanel {
                             .on_click({
                                 let entity = cx.entity();
                                 let shared = self.shared.clone();
+                                let width = self.property_width.clone();
                                 move |_, _, app: &mut App| {
                                     *shared.property_target.borrow_mut() = None;
+                                    // 关闭时持久化拖拽宽度（拖拽过程不写盘）。
+                                    settings::SettingsService::set_property_panel_width(
+                                        width.get(),
+                                        app,
+                                    );
                                     entity.update(app, |_, cx| cx.notify());
                                 }
                             }),
@@ -3052,6 +3965,24 @@ impl Render for EditorPanel {
         let edit_request = self.shared.open_edit.borrow_mut().take();
         if let Some(cid) = edit_request {
             self.request_edit_connection(cid, window, cx);
+        }
+
+        // 消费导航右键「新建查询 / 查看数据」注入的 SQL：追加到当前草稿后。
+        // 用 `set_value`（不发事件）并手动同步 dirty / editor_sql，与 `clear_sql` 同策略，
+        // 避免在 render 内同步派发 InputEvent 引发重入。
+        let sql_request = self.shared.editor_set.borrow_mut().take();
+        if let Some(sql) = sql_request {
+            if let Some(ta) = &self.sql_textarea {
+                let current = ta.read(cx).value().to_string();
+                let combined = if current.trim().is_empty() {
+                    sql
+                } else {
+                    format!("{}\n{}", current.trim_end(), sql)
+                };
+                ta.update(cx, |s, cx| s.set_value(combined.clone(), window, cx));
+                self.shared.editor_dirty.set(true);
+                *self.shared.editor_sql.borrow_mut() = combined;
+            }
         }
 
         let theme = cx.theme();
@@ -3553,9 +4484,31 @@ impl Render for EditorPanel {
         // `h_flex()` 默认交叉轴居中：不写 items_stretch，内容列会按内容高度被竖直居中，
         // 高于面板的部分上下同时被裁。
         let mut root = div().h_flex().items_stretch().size_full();
-        root = root.child(div().flex_1().min_w_0().child(content));
         if self.shared.property_target.borrow().is_some() {
-            root = root.child(self.render_property_panel(cx));
+            // 属性面板停靠右侧，可拖拽调宽（宽度记忆到 settings.json）。
+            let font_size = theme.font_size;
+            let width = font_size * self.property_width.get();
+            let property = self.render_property_panel(cx);
+            let width_cell = self.property_width.clone();
+            root = root.child(
+                h_resizable("editor-property-split")
+                    .child(resizable_panel().child(div().flex_1().min_w_0().child(content)))
+                    .child(
+                        resizable_panel()
+                            .size(width)
+                            .size_range(px(220.)..px(760.))
+                            .flex_none()
+                            .child(property),
+                    )
+                    .on_resize(move |state, _window, app| {
+                        let sizes = state.read(app).sizes();
+                        if let Some(last) = sizes.last() {
+                            width_cell.set(last.as_f32() / app.theme().font_size.as_f32());
+                        }
+                    }),
+            );
+        } else {
+            root = root.child(div().flex_1().min_w_0().child(content));
         }
         root
     }

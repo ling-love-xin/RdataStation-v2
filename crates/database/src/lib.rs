@@ -5,6 +5,7 @@
 //! 迁移源与逐项映射见 `docs/migration/v1-to-v2-mapping.md`。
 #![allow(dead_code)]
 
+pub mod cache;
 pub mod metadata_service;
 
 pub mod commands;

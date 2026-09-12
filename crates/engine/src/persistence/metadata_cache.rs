@@ -898,7 +898,8 @@ impl MetadataCacheOps {
              c.character_set_name, c.collation_name, COALESCE(c.is_generated, 0) AS is_generated, \
              c.extra \
              FROM columns c \
-             LEFT JOIN foreign_key_columns fkc ON c.table_id = fkc.table_id AND c.column_name = fkc.column_name \
+             LEFT JOIN foreign_keys fk ON fk.table_id = c.table_id \
+             LEFT JOIN foreign_key_columns fkc ON fkc.foreign_key_id = fk.id AND fkc.column_name = c.column_name \
              WHERE c.table_id = ?1 ORDER BY c.ordinal_position"
         } else {
             "SELECT c.id, c.column_name, c.ordinal_position, c.data_type, c.is_nullable, c.is_identity, \
