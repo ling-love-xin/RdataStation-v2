@@ -13,6 +13,7 @@ pub mod commands;
 pub mod components;
 pub mod panels;
 pub mod services;
+pub mod ui;
 pub mod view;
 
 // 重新导出服务层（与 v1 core/mod.rs 顶层 re-export 对齐）

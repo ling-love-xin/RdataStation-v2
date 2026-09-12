@@ -1,0 +1,105 @@
+//! 工作台 UI 布局契约测试。
+//!
+//! 目的：把关键布局不变式固化成测试，防止后续改动**静默破坏**尺寸约束
+//! （参考 navop 的布局契约测试实践）。
+//!
+//! 覆盖三类契约：
+//! 1. **尺寸常量契约**：`ui.rs` 倍率与设计文档数值一致；
+//! 2. **源码契约**：视图层不出现裸 `px(N.)` 与裸色值构造；
+//! 3. **状态机契约**：边栏「完全隐藏 / 恢复」不丢失隐藏前模式。
+//!
+//! 数值来源：`docs/architecture/ui/ui-design-spec.md` §2.1。
+
+use rds_workbench::SidebarMode;
+use rds_workbench::view::toggle_hidden_mode;
+
+/// 默认正文字号（`ui.rs` 倍率换算基准）。
+const BASE_FONT_SIZE: f32 = 16.0;
+
+/// 契约 1：结构尺寸倍率 × 16 必须等于设计值。
+#[test]
+fn ui_size_constants_match_design() {
+    use rds_workbench::ui::*;
+
+    let cases: &[(f32, f32, &str)] = &[
+        (TITLE_BAR_HEIGHT, 36.0, "标题栏高度"),
+        (ACTIVITY_BAR_WIDTH, 48.0, "活动栏宽度"),
+        (ACTIVITY_ICON_SIZE, 28.0, "活动栏图标"),
+        (ACTIVITY_ITEM_WIDTH, 44.0, "活动栏单项宽"),
+        (ACTIVITY_ITEM_HEIGHT, 40.0, "活动栏单项高"),
+        (LEFT_DOCK_WIDTH, 240.0, "左侧边栏起步宽"),
+        (RIGHT_DOCK_WIDTH, 280.0, "右侧边栏起步宽"),
+        (TITLE_LOGO_SIZE, 20.0, "标题栏图标"),
+        (TITLE_SLOT_HEIGHT, 26.0, "挖空项目槽高"),
+        (TITLE_SLOT_PADDING_X, 14.0, "挖空项目槽内距"),
+        (QUICK_OPEN_ENTRY_WIDTH, 320.0, "Quick Open 入口宽"),
+        (QUICK_OPEN_ENTRY_HEIGHT, 26.0, "Quick Open 入口高"),
+        (QUICK_OPEN_PANEL_WIDTH, 560.0, "Quick Open 弹层宽"),
+        (ROW_HEIGHT, 24.0, "列表/树行高"),
+        (TREE_INDENT, 14.0, "树缩进步长"),
+        (PANEL_HEADER_HEIGHT, 36.0, "面板头高度"),
+        (CONTROL_HEIGHT_MD, 32.0, "标准控件高"),
+        (CONTROL_HEIGHT_SM, 26.0, "小控件高"),
+        (ICON_SIZE_SM, 14.0, "小图标"),
+        (ICON_SIZE_MD, 16.0, "标准图标"),
+    ];
+
+    for (ratio, expected_px, label) in cases {
+        assert_eq!(
+            ratio * BASE_FONT_SIZE,
+            *expected_px,
+            "{label} 常量 {ratio}rem 偏离设计值 {expected_px}px（见 ui-design-spec §2.1）"
+        );
+    }
+}
+
+/// 契约 2：视图层不得出现裸尺寸字面量与裸色值构造。
+///
+/// - 尺寸：结构尺寸走 `ui.rs` 常量（`rems(ui::…)` / `theme.font_size * ui::…`），
+///   局部间距走 Tailwind 尺度方法（`gap_1` / `px_2`）；裸 `px(N.)` 一律视为回归。
+/// - 颜色：一律 `cx.theme().colors.*`，禁止 `rgb(…)` / `hsla(…)` 直接构造。
+#[test]
+fn view_layer_has_no_raw_size_or_color_literals() {
+    let sources: &[(&str, &str)] = &[
+        ("view.rs", include_str!("../src/view.rs")),
+        ("panels.rs", include_str!("../src/panels.rs")),
+    ];
+
+    for (name, src) in sources {
+        assert!(
+            !src.contains("px("),
+            "{name} 出现裸 `px(...)` 尺寸字面量；结构尺寸请用 ui.rs 常量，局部间距用 Tailwind 尺度方法"
+        );
+        assert!(
+            !src.contains("rgb(") && !src.contains("hsla("),
+            "{name} 出现裸色值构造；请从 `cx.theme().colors` 取色"
+        );
+    }
+}
+
+/// 契约 3：完全隐藏 / 恢复往返必须还原隐藏前模式（不丢失「收起」）。
+#[test]
+fn hidden_toggle_preserves_prior_mode() {
+    // 收起 → 完全隐藏：记录快照为「收起」。
+    let (mode, snapshot) = toggle_hidden_mode(SidebarMode::Collapsed, SidebarMode::Expanded);
+    assert_eq!(mode, SidebarMode::Hidden, "首次切换应进入完全隐藏");
+    assert_eq!(snapshot, SidebarMode::Collapsed, "快照应记录隐藏前模式");
+
+    // 恢复：回到「收起」而非「展开」。
+    let (mode, snapshot) = toggle_hidden_mode(mode, snapshot);
+    assert_eq!(mode, SidebarMode::Collapsed, "恢复应还原隐藏前的收起状态");
+    assert_eq!(snapshot, SidebarMode::Collapsed, "恢复后快照保持不变");
+
+    // 展开 → 隐藏 → 恢复。
+    let (mode, snapshot) = toggle_hidden_mode(SidebarMode::Expanded, SidebarMode::Collapsed);
+    assert_eq!(mode, SidebarMode::Hidden);
+    let (mode, _) = toggle_hidden_mode(mode, snapshot);
+    assert_eq!(mode, SidebarMode::Expanded);
+}
+
+/// 契约 3（防御分支）：快照异常为 Hidden 时兜底展开，不把边栏再次藏起来。
+#[test]
+fn hidden_toggle_falls_back_to_expanded_on_bad_snapshot() {
+    let (mode, _) = toggle_hidden_mode(SidebarMode::Hidden, SidebarMode::Hidden);
+    assert_eq!(mode, SidebarMode::Expanded);
+}

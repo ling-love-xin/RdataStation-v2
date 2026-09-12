@@ -638,6 +638,39 @@ fn build_effective_url(input: &DataSourceSaveInput) -> String {
     url
 }
 
+/// 用「主机 / 端口 / 数据库」字段重建 URL（对话框字段 → URI 方向）。
+///
+/// 规则（与渲染层的双向同步对齐）：
+/// - 文件型驱动：地址就是路径，不由这三个字段重建（原样返回）；
+/// - 字段与 URL 解析结果一致 → 原样返回（幂等，避免无意义改写）；
+/// - 主机为空 → 原样返回（不因半成品输入产生非法 URL）；
+/// - 端口空 → 用驱动声明的默认端口，否则保持 URL 原端口；
+/// - 数据库空 → 去掉路径段。
+pub fn rebuild_url_from_fields(
+    driver_id: &str,
+    url: &str,
+    host: &str,
+    port: &str,
+    database: &str,
+    default_port: Option<i32>,
+) -> String {
+    if is_file_db_driver(driver_id) {
+        return url.to_string();
+    }
+    let (cur_host, cur_port, cur_db) = parse_url_host_port_db(driver_id, url);
+    let port_num: Option<u16> = port.trim().parse().ok();
+    let changed = host.trim() != cur_host.as_deref().unwrap_or("")
+        || port_num.map(|p| p as i32) != cur_port
+        || database.trim() != cur_db.as_deref().unwrap_or("");
+    if !changed || host.trim().is_empty() {
+        return url.to_string();
+    }
+    let port_final = port_num
+        .or_else(|| default_port.map(|p| p as u16))
+        .or_else(|| cur_port.map(|p| p as u16));
+    connection::url_params::rewrite_url_authority(url, Some(host.trim()), port_final, Some(database.trim()))
+}
+
 /// 项目根预检：必须是**已存在且含 `.RSmeta`** 的目录（比较忽略大小写）。
 ///
 /// 为何必须：`ProjectDatabaseManager::open` / `ConnectionOrgStore::open_project` 都会
@@ -886,6 +919,47 @@ mod tests {
     fn test_build_effective_url_keeps_existing() {
         let input = DataSourceSaveInput::new("a", "mysql", "mysql://u:p@h:3306/db");
         assert_eq!(build_effective_url(&input), "mysql://u:p@h:3306/db");
+    }
+
+    #[test]
+    fn test_rebuild_url_from_fields() {
+        // 改主机 + 端口 + 数据库（凭据保持）
+        assert_eq!(
+            rebuild_url_from_fields(
+                "mysql",
+                "mysql://root:pw@h:3306/old",
+                "127.0.0.1",
+                "3307",
+                "newdb",
+                Some(3306),
+            ),
+            "mysql://root:pw@127.0.0.1:3307/newdb"
+        );
+        // 幂等：字段与 URL 一致 → 不改写
+        assert_eq!(
+            rebuild_url_from_fields("mysql", "mysql://h:3306/db", "h", "3306", "db", Some(3306)),
+            "mysql://h:3306/db"
+        );
+        // 端口字段为空 → 用驱动默认端口
+        assert_eq!(
+            rebuild_url_from_fields("postgres", "postgres://u@h:5432/db", "h", "", "db", Some(5433)),
+            "postgres://u@h:5433/db"
+        );
+        // 主机为空 → 不重建（不产生非法 URL）
+        assert_eq!(
+            rebuild_url_from_fields("mysql", "mysql://h:3306/db", "", "3306", "db", None),
+            "mysql://h:3306/db"
+        );
+        // 数据库字段清空 → 去掉路径段
+        assert_eq!(
+            rebuild_url_from_fields("mysql", "mysql://h:3306/db", "h", "3306", "", None),
+            "mysql://h:3306"
+        );
+        // 文件型：不被三字段重建（地址就是路径）
+        assert_eq!(
+            rebuild_url_from_fields("sqlite", "C:/data/a.db", "h", "1", "x", None),
+            "C:/data/a.db"
+        );
     }
 
     #[test]

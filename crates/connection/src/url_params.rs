@@ -194,6 +194,73 @@ pub fn inject_chain_ssl_params(
 
 /// 将 URL 中的 host:port 改写为新的 host:port。
 ///
+/// 用「主机 / 端口 / 数据库」字段重建网络型 URL：**scheme 无关**（mysql / postgres / 任意插件协议），
+/// 保留用户名密码与查询串。
+///
+/// 语义（与对话框“字段 ⇄ URL”双向同步对齐）：
+/// - `host = None` 或空 → 不动主机；
+/// - `port = None` → 不动端口；
+/// - `database = Some("")` → 显式清空路径段（`None` = 保持原值）；
+/// - 非 `scheme://` 形式（文件型裸路径）原样返回。
+///
+/// 与 `rewrite_url_host_port` 的区别：后者只认 mysql / postgres 两个协议且总是重写端口，
+/// 供连接链路使用；本函数是 UI 字段回写 URL 的通用入口。
+pub fn rewrite_url_authority(
+    url: &str,
+    host: Option<&str>,
+    port: Option<u16>,
+    database: Option<&str>,
+) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let (scheme, rest) = url.split_at(scheme_end + 3);
+    let (authority, tail) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i + 1..]),
+        None => (rest, ""),
+    };
+    // 认证前缀（user[:pass]@）原样保留；host:port 部分拆分时只认最后一个 ':'（不处理 IPv6 字面量）。
+    let (cred, hostport) = match authority.rfind('@') {
+        Some(i) => (&authority[..i + 1], &authority[i + 1..]),
+        None => ("", authority),
+    };
+    let (host_part, port_part) = match hostport.rfind(':') {
+        Some(i) => (&hostport[..i], &hostport[i + 1..]),
+        None => (hostport, ""),
+    };
+    // 端口必须是纯数字；否则整个 hostport 当作主机（如 IPv6 字面量 / 异常输入），不丢信息。
+    let (current_host, current_port) = if !port_part.is_empty()
+        && port_part.chars().all(|c| c.is_ascii_digit())
+    {
+        (host_part, port_part)
+    } else {
+        (hostport, "")
+    };
+    let new_host = match host {
+        Some(h) if !h.trim().is_empty() => h.trim(),
+        _ => current_host,
+    };
+    let new_port = match port {
+        Some(p) => p.to_string(),
+        None => current_port.to_string(),
+    };
+    let authority_new = if new_port.is_empty() {
+        format!("{cred}{new_host}")
+    } else {
+        format!("{cred}{new_host}:{new_port}")
+    };
+    let query = tail.find('?').map(|i| &tail[i..]).unwrap_or("");
+    let path = match database {
+        Some(db) => db.trim().to_string(),
+        None => tail.split('?').next().unwrap_or("").to_string(),
+    };
+    if path.is_empty() {
+        format!("{scheme}{authority_new}{query}")
+    } else {
+        format!("{scheme}{authority_new}/{path}{query}")
+    }
+}
+
 /// 支持 `mysql://`、`postgres://`（`sqlite://` / `duckdb://` 原样返回）。
 pub fn rewrite_url_host_port(
     url: &str,
@@ -438,6 +505,42 @@ mod tests {
 
         let url = inject_kerberos("postgres://h/db", "user@REALM", "").unwrap();
         assert!(url.starts_with("postgres://h/db?krbrprincipal="));
+    }
+
+    #[test]
+    fn rewrite_url_authority_is_scheme_agnostic_and_keeps_credentials() {
+        // 改主机 + 端口：凭据与路径保持
+        assert_eq!(
+            rewrite_url_authority("postgres://u:p@db:5432/warehouse", Some("127.0.0.1"), Some(6543), None),
+            "postgres://u:p@127.0.0.1:6543/warehouse"
+        );
+        // 改数据库：主机 / 凭据保持，只换路径
+        assert_eq!(
+            rewrite_url_authority("mysql://root:pw@h:3306/old", None, None, Some("newdb")),
+            "mysql://root:pw@h:3306/newdb"
+        );
+        // 显式清空数据库 → 去掉路径段
+        assert_eq!(
+            rewrite_url_authority("mysql://h:3306/old", None, None, Some("")),
+            "mysql://h:3306"
+        );
+        // 保留查询串
+        assert_eq!(
+            rewrite_url_authority("mysql://h:3306/old?ssl-mode=REQUIRED", None, None, Some("d2")),
+            "mysql://h:3306/d2?ssl-mode=REQUIRED"
+        );
+        // 未提供主机且端口为 None：端口保持原值（不默默丢掉）
+        assert_eq!(
+            rewrite_url_authority("oracle://h:1521/orcl", None, None, Some("orcl")),
+            "oracle://h:1521/orcl"
+        );
+        // 无端口 URL + 给端口 → 补上
+        assert_eq!(
+            rewrite_url_authority("mysql://h/db", Some("h"), Some(3307), None),
+            "mysql://h:3307/db"
+        );
+        // 文件型裸路径原样返回（不参与字段重建）
+        assert_eq!(rewrite_url_authority("C:/data/a.db", Some("h"), Some(1), None), "C:/data/a.db");
     }
 
     #[test]

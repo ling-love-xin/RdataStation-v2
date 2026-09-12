@@ -301,6 +301,63 @@ fn auth_method_follows_driver_declaration(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn connection_fields_and_uri_stay_in_sync(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    // 走生产入口打开对话框：双向同步写在 render builder 里，不打开就不会执行。
+    let editor = cx.update(|_, cx| harness.read(cx).editor.clone());
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| e.request_new_connection(window, cx));
+    });
+    let dialog = cx.update(|_, cx| editor.read(cx).dialog_state().expect("对话框状态已创建"));
+    cx.update(|_, _cx| {
+        *dialog.types.borrow_mut() = vec![ds_type("mysql", "MySQL", "🐬")];
+        let mut mysql = driver("mysql", "mysql", "MySQL (sqlx)", true);
+        mysql.default_port = Some(3306);
+        *dialog.drivers.borrow_mut() = vec![mysql];
+    });
+    cx.update(|window, cx| dialog.select_type("mysql", window, cx));
+
+    // 方向 A（URI → 字段）：从 URI 解析出主机 / 端口 / 数据库。
+    cx.update(|window, cx| {
+        dialog
+            .url
+            .update(cx, |s, cx| s.set_value("mysql://root:pw@h:3306/old", window, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let (host, port, db) = cx.update(|_, cx| {
+        (
+            dialog.host_input.read(cx).value().to_string(),
+            dialog.port_input.read(cx).value().to_string(),
+            dialog.db_input.read(cx).value().to_string(),
+        )
+    });
+    assert_eq!(host, "h");
+    assert_eq!(port, "3306");
+    assert_eq!(db, "old");
+
+    // 方向 B（字段 → URI）：改字段回写 URI（凭据保留），因此“连接设置”可直接输入。
+    cx.update(|window, cx| {
+        dialog
+            .host_input
+            .update(cx, |s, cx| s.set_value("127.0.0.1", window, cx));
+        dialog
+            .db_input
+            .update(cx, |s, cx| s.set_value("newdb", window, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let url = cx.update(|_, cx| dialog.url.read(cx).value().to_string());
+    assert_eq!(url, "mysql://root:pw@127.0.0.1:3306/newdb");
+
+    // 幂等：再画一帧不得反复改动（两个方向已一致）。
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let url_again = cx.update(|_, cx| dialog.url.read(cx).value().to_string());
+    assert_eq!(url_again, url);
+
+    cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
+}
+
+#[gpui_kit::test]
 fn file_type_general_tab_renders_and_switches_back(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);

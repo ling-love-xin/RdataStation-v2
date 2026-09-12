@@ -155,6 +155,15 @@ pub struct ConnectionDialogState {
     pub group_checks: Rc<RefCell<Vec<(String, String, bool)>>>,
     /// SSL/TLS 模式。
     pub ssl_mode: Entity<SelectState<SearchableVec<SharedString>>>,
+    /// 连接设置字段（网络型可编辑；与 Header URI 双向同步，URI 仍是落库权威）。
+    pub host_input: Entity<InputState>,
+    pub port_input: Entity<InputState>,
+    pub db_input: Entity<InputState>,
+    /// 字段同步标记：上次完成同步的（驱动 id, URL）。
+    /// 两个方向靠它避免循环：URL 变了 → 反向填字段；字段变了 → 用 `rebuild_url_from_fields` 回写 URL。
+    pub fields_synced_for: Rc<RefCell<Option<(String, String)>>>,
+    /// 地址输入占位按驱动变化（每帧写入）。
+    pub url_placeholder_for: Rc<RefCell<String>>,
     pub ssl_ca: Entity<InputState>,
     pub ssl_cert: Entity<InputState>,
     ssl_key: Entity<InputState>,

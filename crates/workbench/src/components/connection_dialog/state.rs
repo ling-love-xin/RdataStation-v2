@@ -8,6 +8,7 @@ impl ConnectionDialogState {
         let (name, url, user, pass) = state_inputs(window, cx);
         let (remark, cache_path, prop_key, prop_val) = state_inputs(window, cx);
         let driver_filter = cx.new(|cx| InputState::new(window, cx));
+        let (host_input, port_input, db_input, _) = state_inputs(window, cx);
         let (new_name, new_data, _, _) = state_inputs(window, cx);
         let (project_path, ssl_ca, ssl_cert, ssl_key) = state_inputs(window, cx);
         let new_type = cx.new(|cx| {
@@ -160,6 +161,11 @@ impl ConnectionDialogState {
             project_options: Rc::new(RefCell::new(Vec::new())),
             session_project: Rc::new(RefCell::new(None)),
             collapsed_sections: Rc::new(RefCell::new(Vec::new())),
+            host_input,
+            port_input,
+            db_input,
+            fields_synced_for: Rc::new(RefCell::new(None)),
+            url_placeholder_for: Rc::new(RefCell::new(String::new())),
         }
     }
 

@@ -26,6 +26,7 @@ use crate::commands::{
     CloseProject, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
 use crate::panels::{EditorPanel, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel};
+use crate::ui;
 use settings::commands::OpenSettings;
 use settings::settings_view::SettingsView;
 
@@ -291,7 +292,7 @@ impl WorkbenchView {
                         cx,
                     );
                     // 起步宽度 240px（= 15rem 基准，随界面缩放；layout-design §2.3，用户拖拽可调）。
-                    area.set_dock_size(DockPlacement::Left, cx.theme().font_size * 15., window, cx);
+                    area.set_dock_size(DockPlacement::Left, cx.theme().font_size * ui::LEFT_DOCK_WIDTH, window, cx);
                 } else if !area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
                 }
@@ -305,7 +306,7 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
-                    area.set_dock_size(DockPlacement::Left, cx.theme().font_size * 15., window, cx);
+                    area.set_dock_size(DockPlacement::Left, cx.theme().font_size * ui::LEFT_DOCK_WIDTH, window, cx);
                 }
                 if area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
@@ -337,7 +338,7 @@ impl WorkbenchView {
                     // 起步宽度 280px（= 17.5rem 基准）。
                     area.set_dock_size(
                         DockPlacement::Right,
-                        cx.theme().font_size * 17.5,
+                        cx.theme().font_size * ui::RIGHT_DOCK_WIDTH,
                         window,
                         cx,
                     );
@@ -356,7 +357,7 @@ impl WorkbenchView {
                     );
                     area.set_dock_size(
                         DockPlacement::Right,
-                        cx.theme().font_size * 17.5,
+                        cx.theme().font_size * ui::RIGHT_DOCK_WIDTH,
                         window,
                         cx,
                     );
@@ -571,7 +572,7 @@ impl WorkbenchView {
         let shared = self.shared.clone();
         bar = bar
             .child(div().flex_1())
-            .child(div().w_7().h_px().bg(theme.colors.border))
+            .child(div().w(rems(ui::ACTIVITY_ICON_SIZE)).h(ui::HAIRLINE).bg(theme.colors.border))
             .child(
                 Button::new("left-settings")
                     .icon(IconName::Settings)
@@ -645,7 +646,7 @@ impl WorkbenchView {
         let shared = self.shared.clone();
         bar = bar
             .child(div().flex_1())
-            .child(div().w_7().h_px().bg(theme.colors.border))
+            .child(div().w(rems(ui::ACTIVITY_ICON_SIZE)).h(ui::HAIRLINE).bg(theme.colors.border))
             .child(
                 Button::new("right-settings")
                     .icon(IconName::Settings)
@@ -834,6 +835,20 @@ fn sb_toggle(
         .on_click(move |_, _, app| on_click(app))
 }
 
+/// 完全隐藏切换的纯状态转移：返回 `(新模式, 新快照)`。
+///
+/// - 非隐藏态 → 隐藏：记录当前模式到快照；
+/// - 隐藏态 → 恢复：按快照还原（快照异常为 Hidden 时兜底展开）。
+///
+/// 纯函数，供状态栏开关与契约测试共用。
+pub fn toggle_hidden_mode(mode: SidebarMode, snapshot: SidebarMode) -> (SidebarMode, SidebarMode) {
+    if mode == SidebarMode::Hidden {
+        (restore_snapshot(snapshot), snapshot)
+    } else {
+        (SidebarMode::Hidden, mode)
+    }
+}
+
 /// 切换单侧「完全隐藏」：隐藏前记录当前模式快照，恢复时按快照还原，
 /// 保证「收起」等状态在完全隐藏 / 恢复往返后不丢失。
 fn toggle_sidebar_hidden(
@@ -847,12 +862,9 @@ fn toggle_sidebar_hidden(
     } else {
         (&shared.right_mode, &shared.right_mode_before_hidden)
     };
-    if mode.get() == SidebarMode::Hidden {
-        mode.set(snapshot.get());
-    } else {
-        snapshot.set(mode.get());
-        mode.set(SidebarMode::Hidden);
-    }
+    let (next_mode, next_snapshot) = toggle_hidden_mode(mode.get(), snapshot.get());
+    mode.set(next_mode);
+    snapshot.set(next_snapshot);
     entity.update(app, |_, cx| cx.notify());
 }
 

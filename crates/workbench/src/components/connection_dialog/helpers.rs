@@ -7,6 +7,18 @@ pub(crate) fn lucide(path: &'static str) -> Icon {
     Icon::empty().path(path)
 }
 
+/// 设置输入框的值（仅在变化时写入，避免无谓的 notify / 渲染）。
+pub(crate) fn set_input_value(
+    target: &Entity<InputState>,
+    value: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if target.read(cx).value().as_ref() != value.as_str() {
+        target.update(cx, |s, cx| s.set_value(value, window, cx));
+    }
+}
+
 /// 设置字符串型 Select 的选中值（空字符串 → 清空选中；暂存列表载入用）。
 pub(crate) fn set_select_value(
     sel: &Entity<SelectState<SearchableVec<SharedString>>>,
@@ -24,35 +36,25 @@ pub(crate) fn set_select_value(
     });
 }
 
-// ===== UI 尺寸约束（详见 docs/architecture/theme/ui-constraints.md）=====
+// ===== UI 尺寸约束（数值登记在 `crate::ui`，见 docs/architecture/ui/ui-design-spec.md）=====
 //
-// 颜色已有硬约束（一律 `theme.colors` token，禁裸色值）；尺寸此前靠原型约定，
-// 这里把对话框用到的一组尺度固化为常量：**新代码一律引用常量**，存量代码逐步迁移。
+// 颜色一律 `theme.colors` token，尺寸一律引用 `ui.rs` 常量或 Tailwind 尺度方法；
+// 本模块只做别名（保持既有调用点可读），不再自己声明数值。
 
-/// 间距阶梯（rem）：xs < sm < md < lg（禁止随手值，如 0.625 / 0.4375）。
-pub(crate) const GAP_XS: f32 = 0.25;
-pub(crate) const GAP_SM: f32 = 0.375;
-pub(crate) const GAP_MD: f32 = 0.5;
-pub(crate) const GAP_LG: f32 = 0.75;
+pub(crate) use crate::ui::{
+    DIALOG_BADGE_HEIGHT as BADGE_H, DIALOG_BADGE_WIDTH as BADGE_W,
+    DIALOG_DRIVER_WIDTH as DRIVER_W, DIALOG_FORM_LABEL_WIDTH as LABEL_COL_W,
+    DIALOG_PROJECT_WIDTH as PROJECT_W, DIALOG_ROW_HEIGHT as ROW_H,
+    DIALOG_SEGMENT_ITEM_HEIGHT as SEG_ITEM_H, DIALOG_STAGING_HEIGHT as STAGING_H,
+    DIALOG_TAB_BODY_HEIGHT as TAB_BODY_H, GAP_LG, GAP_MD, GAP_SM,
+};
 
-/// 行高与控件尺寸（rem）。
-pub(crate) const ROW_H: f32 = 1.75;
-/// 表单行标签列宽（4.25rem = 68px，容纳 5 个中文字；再宽就会“标签离输入框太远”）。
-pub(crate) const LABEL_COL_W: f32 = 4.25;
-/// Header 标签列宽（rem）：刚好容纳两字标签（名称 / 备注 / 驱动 / URI），
+/// 紧凑间距（0.25rem）：与 `GAP_SM` 同值，语义上用于更紧的相邻元素。
+pub(crate) const GAP_XS: f32 = crate::ui::GAP_SM;
+
+/// Header 标签列宽（rem）：刚好容纳两字标签（名称 / 备注 / 驱动 / 地址），
 /// 不让标签与控件之间留下过大的空白（真机反馈：间距过大）。
 pub(crate) const LABEL_W: f32 = 1.75;
-/// 类型徽标（仅图标）。
-pub(crate) const BADGE_W: f32 = 1.75;
-pub(crate) const BADGE_H: f32 = 1.5;
-/// 作用域分段项高。
-pub(crate) const SEG_ITEM_H: f32 = 1.25;
-/// Header 定宽控件：驱动下拉 / 项目栏。
-pub(crate) const DRIVER_W: f32 = 11.0;
-pub(crate) const PROJECT_W: f32 = 17.0;
-/// 区域固定高度：Tab 内容 / 暂存列表（超出内部滚动）。
-pub(crate) const TAB_BODY_H: f32 = 20.5;
-pub(crate) const STAGING_H: f32 = 7.5;
 
 /// Header 统一标签列（固定宽度，保证各行标签左对齐，减少视觉磕绊）。
 pub(crate) fn header_label(theme: &Theme, text: &'static str) -> Div {
@@ -300,10 +302,10 @@ pub(crate) fn section_header(
             } else {
                 "icons/chevron-down.svg"
             })
-            .size(px(14.))
+            .size(rems(crate::ui::ICON_SIZE_SM))
             .text_color(theme.colors.muted_foreground),
         )
-        .child(icon.size(px(14.)).text_color(icon_color))
+        .child(icon.size(rems(crate::ui::ICON_SIZE_SM)).text_color(icon_color))
         .child(
             div()
                 .text_xs()
@@ -333,7 +335,7 @@ pub(crate) fn outline_section(
         .w_full()
         .v_flex()
         .gap(rems(GAP_SM))
-        .rounded(px(8.))
+        .rounded(theme.radius)
         .bg(theme.colors.group_box)
         .py(rems(GAP_SM))
         .px(rems(GAP_MD))
@@ -365,39 +367,6 @@ pub(crate) fn form_row(theme: &Theme, label: &str, value: impl IntoElement) -> D
         .child(div().flex_1().min_w(px(0.)).child(value))
 }
 
-/// 只读值框（数据框）：与可编辑输入同形（白底 + 输入框边），仅内容不可改。
-///
-/// 真机反馈两轮：① 白底白框“看不见”（见决策 #52）→ ② 去掉框后又“没有数据框”
-/// —— 所以保留可见的框，靠**面板浅底**（`group_box`）与白底形成对比。
-pub(crate) fn value_box(theme: &Theme, text: &str) -> Div {
-    let placeholder = text.trim().is_empty() || text == "-";
-    div()
-        .h_flex()
-        .items_center()
-        .w_full()
-        .min_w(px(0.))
-        .h(rems(ROW_H))
-        .border_1()
-        .border_color(theme.colors.input)
-        .rounded(rems(GAP_SM))
-        .bg(theme.colors.background)
-        .px(rems(GAP_SM))
-        .text_xs()
-        .overflow_hidden()
-        .child(
-            div()
-                .min_w(px(0.))
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_color(if placeholder {
-                    theme.colors.muted_foreground
-                } else {
-                    theme.colors.foreground
-                })
-                .child(text.to_string()),
-        )
-}
-
 /// 提示行（大纲内）：弱化小字，缩进对齐控件列。
 pub(crate) fn hint_line(theme: &Theme, text: &str) -> Div {
     div()
@@ -418,7 +387,7 @@ pub(crate) fn reuse_note(theme: &Theme, text: &str) -> Div {
         .text_color(theme.colors.muted_foreground)
         .child(
             lucide("icons/settings.svg")
-                .size(px(12.))
+                .size(rems(crate::ui::ICON_SIZE_SM))
                 .text_color(theme.colors.success),
         )
         .child(text.to_string())

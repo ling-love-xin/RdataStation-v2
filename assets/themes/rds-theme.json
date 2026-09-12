@@ -45,6 +45,12 @@
         "title_bar.background": "#DDDDDD",
         "title_bar.border": "#D4D4D4",
 
+        "ring": "#C25B46",
+        "window.border": "#D4D4D4",
+        "secondary.active.background": "#E0E0E0",
+        "sidebar.primary.background": "#E4E4E4",
+        "sidebar.primary.foreground": "#333333",
+
         "tab.background": "#ECECEC",
         "tab.active.background": "#FFFFFF",
         "tab.active.foreground": "#333333",
@@ -153,6 +159,12 @@
 
         "title_bar.background": "#323233",
         "title_bar.border": "#323233",
+
+        "ring": "#E8846F",
+        "window.border": "#3C3C3C",
+        "secondary.active.background": "#454545",
+        "sidebar.primary.background": "#37373D",
+        "sidebar.primary.foreground": "#FFFFFF",
 
         "tab.background": "#2D2D30",
         "tab.active.background": "#1E1E1E",

@@ -108,6 +108,11 @@ impl ConnectionDialogState {
         let sec_overrides = self.policy_override_keys.clone();
         let env_policies = self.env_policies.clone();
         let env_policies_loaded_for = self.env_policies_loaded_for.clone();
+        // 连接设置字段（主机 / 端口 / 数据库）与同步标记：与 Header URI 双向同步。
+        let host_input = self.host_input.clone();
+        let port_input = self.port_input.clone();
+        let db_input = self.db_input.clone();
+        let fields_synced_for = self.fields_synced_for.clone();
 
         // 项目会话变更检测（每帧执行，开销仅一次借用比较）：对话框打开期间「＋ 新增项目」
         // 或外部切换项目后，项目下拉选项与选中项必须跟上新会话。
@@ -189,6 +194,9 @@ impl ConnectionDialogState {
         ssl_key.update(cx, |s, cx| {
             s.set_placeholder("私钥路径（可选）", window, cx)
         });
+        host_input.update(cx, |s, cx| s.set_placeholder("127.0.0.1", window, cx));
+        port_input.update(cx, |s, cx| s.set_placeholder("3306", window, cx));
+        db_input.update(cx, |s, cx| s.set_placeholder("可选，留空表示全部", window, cx));
 
         // 测试连接（block_on，与 workbench 现有服务调用模式一致）。
         let run_test = move |input: DataSourceSaveInput| -> (bool, String) {
@@ -283,6 +291,50 @@ impl ConnectionDialogState {
                 address_placeholder(current_driver.as_ref(), &selected_type_id)
             };
             url.update(cx, |s, cx| s.set_placeholder(want_address_ph, window, cx));
+
+            // ---- 连接设置字段 ⇄ Header URI 双向同步（render 为权威同步点）----
+            // 方向 A（URI → 字段）：URI 或驱动变化时反向填字段（编辑回读 / 手改 URI / 切类型）；
+            // 方向 B（字段 → URI）：字段被编辑时用 `rebuild_url_from_fields` 回写 URI（保留凭据 / 查询串）。
+            // 标记 `fields_synced_for` 记录上次同步的（驱动 id, URI）—— 避免两个方向互相覆盖。
+            if !is_file_db {
+                let driver_id_fields = current_driver
+                    .as_ref()
+                    .map(|d| d.id.clone())
+                    .unwrap_or_default();
+                let url_now = url.read(cx).value().to_string();
+                let already_synced = matches!(
+                    fields_synced_for.borrow().as_ref(),
+                    Some((d, u)) if d == &driver_id_fields && u == &url_now
+                );
+                if !already_synced {
+                    let (h, p, d) = crate::services::data_source_service::parse_url_host_port_db(
+                        &driver_id_fields,
+                        &url_now,
+                    );
+                    set_input_value(&host_input, h.unwrap_or_default(), window, cx);
+                    set_input_value(
+                        &port_input,
+                        p.map(|v| v.to_string()).unwrap_or_default(),
+                        window,
+                        cx,
+                    );
+                    set_input_value(&db_input, d.unwrap_or_default(), window, cx);
+                    *fields_synced_for.borrow_mut() = Some((driver_id_fields, url_now));
+                } else {
+                    let rebuilt = crate::services::data_source_service::rebuild_url_from_fields(
+                        &driver_id_fields,
+                        &url_now,
+                        &host_input.read(cx).value(),
+                        &port_input.read(cx).value(),
+                        &db_input.read(cx).value(),
+                        current_driver.as_ref().and_then(|d| d.default_port),
+                    );
+                    if rebuilt != url_now {
+                        set_input_value(&url, rebuilt.clone(), window, cx);
+                        *fields_synced_for.borrow_mut() = Some((driver_id_fields, rebuilt));
+                    }
+                }
+            }
 
             let theme = cx.theme();
 
@@ -952,14 +1004,8 @@ impl ConnectionDialogState {
                     content
                 }
                 _ => {
-                    // ===== 常规（对齐原型 3.1）：driver 信息条 + 三张 section 卡片 =====
+                    // ===== 常规：单列分组大纲（按驱动动态渲染）=====
                     let driver_value = driver_now.clone();
-                    let url_value = url.read(cx).value().to_string();
-                    let (host_v, port_v, db_v) =
-                        crate::services::data_source_service::parse_url_host_port_db(
-                            &driver_value,
-                            &url_value,
-                        );
                     let auth_ref_selected = auth_ref.read(cx).selected_value().cloned();
                     let is_auth_ref = auth_ref_selected.is_some();
 
@@ -1063,17 +1109,13 @@ impl ConnectionDialogState {
                                 "本地文件路径；「新建文件…」在所选位置创建空库文件（首次连接自动初始化结构）",
                             ))
                     } else {
+                        // 网络型：主机 / 端口 / 数据库 = **可编辑字段**（与 Header URI 双向同步；
+                        // 编辑字段会重建 URI（保留凭据与查询串），保存仍以 URI 为权威）。
                         let mut body = div().w_full().v_flex().gap(rems(GAP_SM));
-                        // 摘要行只出驱动声明的键（schema 为空时回退内置三行，不让界面变空）；
-                        // 未选类型 / 驱动时同样正常渲染，只是整体置灰不可输入。
-                        for (key, fallback, value) in [
-                            ("host", "主机", host_v.clone().unwrap_or_default()),
-                            (
-                                "port",
-                                "端口",
-                                port_v.map(|p| p.to_string()).unwrap_or_default(),
-                            ),
-                            ("database", "数据库", db_v.clone().unwrap_or_default()),
+                        for (key, fallback, input) in [
+                            ("host", "主机", host_input.clone()),
+                            ("port", "端口", port_input.clone()),
+                            ("database", "数据库", db_input.clone()),
                         ] {
                             let spec = field_spec(&form_fields, key);
                             if !form_fields.is_empty() && spec.is_none() {
@@ -1082,17 +1124,19 @@ impl ConnectionDialogState {
                             let label = spec
                                 .map(|f| f.label.clone())
                                 .unwrap_or_else(|| fallback.to_string());
-                            let shown = if value.is_empty() {
-                                "-".to_string()
-                            } else {
-                                value
-                            };
-                            body = body.child(form_row(theme, &label, value_box(theme, &shown)));
+                            body = body.child(form_row(
+                                theme,
+                                &label,
+                                Input::new(&input).disabled(form_disabled),
+                            ));
                         }
                         if form_fields.is_empty() && !form_disabled {
                             body = body.child(hint_line(theme, "驱动未声明连接字段：按内置字段展示"));
                         }
-                        body.child(hint_line(theme, "地址（URI）在顶部编辑，此处为解析结果"))
+                        body.child(hint_line(
+                            theme,
+                            "字段与上方 URI 双向同步（凭据与查询串保留）；保存以 URI 为准",
+                        ))
                     };
 
                     // 卡片 2：数据库认证（引用已保存配置 + 管理入口）。
