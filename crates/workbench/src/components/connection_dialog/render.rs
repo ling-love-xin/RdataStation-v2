@@ -372,7 +372,7 @@ impl ConnectionDialogState {
                         .font_weight(if on { FontWeight::BOLD } else { FontWeight::NORMAL })
                         .text_color(if on { theme.colors.foreground } else { theme.colors.muted_foreground })
                         .border_b_2()
-                        .border_color(if on { theme.colors.primary } else { hsla(0., 0., 0., 0.) })
+                        .border_color(if on { theme.colors.primary } else { transparent_black() })
                         .child(label)
                         .on_click(move |_, _, app| {
                             active_tab.set(idx);
@@ -2227,6 +2227,8 @@ impl ConnectionDialogState {
                 .child(
                     div()
                         .h_flex()
+                        // 两列等高于行高，左侧「高度恒定 + 内部滚动」才成立（设计 §「布局恒定」）。
+                        .items_stretch()
                         .gap(rems(1.))
                         // 快捷键 context：绑定在 app 层（Ctrl+Enter 保存 / Ctrl+T 测试 / ↑↓ 切换条目）。
                         // 焦点在输入框内时，Input 处理键后 `Enter` 会 propagate 到此兜底。

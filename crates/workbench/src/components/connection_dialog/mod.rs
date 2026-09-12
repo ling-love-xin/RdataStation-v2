@@ -1,9 +1,12 @@
 //! 数据源连接对话框（Phase B：完整 Tab + 管理引用覆盖层）。
 //!
-//! 基于 gpui-kit 0.6 组件（能力按 0.6.0 源码核对，杜绝"无法实现的 UI"）：
+//! 基于 gpui-kit 0.6.1 组件（能力按 crates.io 0.6.1 源码核对，路径见
+//! `.agents/skills/gpui-kit-dev/SKILL.md`「查 API」；**不要**用本地 main 分支源码当签名参考）：
 //! - 模态层：`window.open_dialog`（WorkbenchView 挂载 `Root::render_dialog_layer`）；管理器用嵌套 Dialog；
 //! - 驱动/认证引用/网络引用/环境：`Select`（SearchableVec）；表单：`Form + Field + Input`；
-//! - Tab 条与开关为自绘（gpui-component 无 Tabs/Switch 组件，自绘 div 行为等价、零 API 猜测）。
+//! - Tab 条与开关目前是自绘：**这是待迁移的技术债，不是「库没有」**——0.6.1 已提供
+//!   `component::tab::TabBar`（`underline()` / `segmented()`）与 `component::switch::Switch`。
+//!   新增代码不要照抄本目录的自绘实现；迁移计划见 `docs/architecture/connection/connection-prototype-design.md`。
 //!
 //! Phase B 范围（dev-plan B1-B6）：
 //! - 网络 Tab：SSH/Proxy 协议链（添加/启用/上移/下移/删除，≤4 跳校验）+ 拓扑预览（DB 带 TLS 徽标）；

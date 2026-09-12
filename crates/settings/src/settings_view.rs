@@ -7,7 +7,7 @@
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, ThemeMode};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Theme, ThemeMode};
 use gpui_kit::*;
 
 use crate::model::Settings;
@@ -28,7 +28,7 @@ impl SettingsView {
         }
     }
 
-    fn section_title(title: impl Into<SharedString>) -> Div {
+    fn section_title(theme: &Theme, title: impl Into<SharedString>) -> Div {
         let title: SharedString = title.into();
         div()
             .h_7()
@@ -37,11 +37,11 @@ impl SettingsView {
             .items_center()
             .text_xs()
             .font_weight(FontWeight::MEDIUM)
-            .text_color(title_color())
+            .text_color(theme.colors.foreground)
             .child(title)
     }
 
-    fn row(label: impl Into<SharedString>, control: impl IntoElement) -> Div {
+    fn row(theme: &Theme, label: impl Into<SharedString>, control: impl IntoElement) -> Div {
         let label: SharedString = label.into();
         div()
             .h_flex()
@@ -51,12 +51,21 @@ impl SettingsView {
             .gap_2()
             .items_center()
             .text_xs()
-            .child(div().flex_1().min_w_0().text_color(muted_fg()).child(label))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(theme.colors.muted_foreground)
+                    .child(label),
+            )
             .child(control)
     }
 
-    fn value_text(&self, text: String) -> Div {
-        div().text_xs().text_color(secondary_fg()).child(text)
+    fn value_text(&self, theme: &Theme, text: String) -> Div {
+        div()
+            .text_xs()
+            .text_color(theme.colors.secondary_foreground)
+            .child(text)
     }
 
     fn theme_switcher(&self, cx: &Context<Self>) -> Div {
@@ -91,6 +100,7 @@ impl SettingsView {
     }
 
     fn content(&self, cx: &Context<Self>) -> Div {
+        let theme = cx.theme();
         let engine_dir = if self.settings.engine.workspace_dir.is_empty() {
             "默认位置".to_string()
         } else {
@@ -101,39 +111,39 @@ impl SettingsView {
             .w_full()
             .gap_1()
             .child(div().h_1p5())
-            .child(Self::section_title("外观"))
-            .child(Self::row("主题模式", self.theme_switcher(cx)))
+            .child(Self::section_title(theme, "外观"))
+            .child(Self::row(theme, "主题模式", self.theme_switcher(cx)))
             .child(Self::row(
+                theme,
                 "界面语言",
-                self.value_text("中文（简体）".to_string()),
+                self.value_text(theme, "中文（简体）".to_string()),
             ))
             .child(div().h_1p5())
-            .child(Self::section_title("引擎"))
-            .child(Self::row("工作区目录", self.value_text(engine_dir)))
-            .child(div().h_1p5())
-            .child(Self::section_title("连接默认值"))
+            .child(Self::section_title(theme, "引擎"))
             .child(Self::row(
+                theme,
+                "工作区目录",
+                self.value_text(theme, engine_dir),
+            ))
+            .child(div().h_1p5())
+            .child(Self::section_title(theme, "连接默认值"))
+            .child(Self::row(
+                theme,
                 "默认数据源",
-                self.value_text(self.settings.connection_defaults.default_driver.clone()),
+                self.value_text(
+                    theme,
+                    self.settings.connection_defaults.default_driver.clone(),
+                ),
             ))
             .child(Self::row(
+                theme,
                 "查询超时",
-                self.value_text(format!(
-                    "{} ms",
-                    self.settings.connection_defaults.query_timeout_ms
-                )),
+                self.value_text(
+                    theme,
+                    format!("{} ms", self.settings.connection_defaults.query_timeout_ms),
+                ),
             ))
     }
-}
-
-fn title_color() -> gpui_kit::Hsla {
-    gpui_kit::Hsla::from(gpui_kit::rgb(0x6E747E))
-}
-fn muted_fg() -> gpui_kit::Hsla {
-    gpui_kit::Hsla::from(gpui_kit::rgb(0x8A8F98))
-}
-fn secondary_fg() -> gpui_kit::Hsla {
-    gpui_kit::Hsla::from(gpui_kit::rgb(0xB8BDC6))
 }
 
 impl Render for SettingsView {

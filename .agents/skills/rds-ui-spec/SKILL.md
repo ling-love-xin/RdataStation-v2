@@ -34,6 +34,10 @@ div().border_b(ui::HAIRLINE)
 
 规则：**结构尺寸**先进 `ui.rs` 登记倍率；**局部间距**直接用 Tailwind 尺度，无需登记；不得出现裸 `px(N.)`。
 
+> 单位陷阱：`rems(x)` 的基准是**主题字号**（默认 16px，`rems(1.) = 16px`），与 Tailwind 方法名里的数字（`gap_1 = 4px`）是两套单位。不要把 px 值手写 `/ 4.` 后交给 `rems()`（会把尺寸放大 4 倍，项目内曾出现两处）。
+
+> 树/列表缩进统一用设计公式：`ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT`（= 0.5rem + 0.875rem × depth），不要各写各的倍率。
+
 常用常量（倍率 → @16px 实际值 / Tailwind 对照）：
 
 | 用途 | 常量 | 值 | Tailwind |
@@ -90,3 +94,5 @@ div().border_b(ui::HAIRLINE)
 
 改动尺寸后运行 `cargo test -p rds-workbench --test ui_contract`：它会校验
 `ui.rs` 常量与设计值一致、视图层无裸 `px(...)` / 裸色值、边栏隐藏/恢复状态机。
+
+> 范围：尺寸与色值契约目前只扫 `view.rs` / `panels.rs`；`components/connection_dialog/` 与 `project/ui.rs` 仍是存量欠债（见 `connection-dialog-architecture.md` §14 #14）。新增代码请按本 skill 写，不要以这两个目录的既有写法为样例。

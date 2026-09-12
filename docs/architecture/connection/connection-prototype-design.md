@@ -215,7 +215,7 @@ info-banner（类型 · 驱动短名 · 特性）        ← 常驻，不参与�
 | 认证/网络/环境配置 | 对接 engine `auth_store` / `network_store` / `env_store` |
 | 测试连接 | `DataSourceService::test_connection`（独立会话） |
 | 保存链路 | `DataSourceService::save` → global_db + Secret 联动 + introspection |
-| 五 Tab | **自绘 Tab 条**（gpui-kit 0.6 无 Tabs 组件）；Tab 内容区固定高度 20.5rem + 内部滚动；文件型驱动隐藏「网络」Tab（索引不变） |
+| 五 Tab | **自绘 Tab 条（待迁移）**：gpui-kit 0.6.1 已提供 `component::tab::TabBar`（`underline()` / `segmented()`），自绘属技术债；Tab 内容区固定高度 20.5rem + 内部滚动；文件型驱动隐藏「网络」Tab（索引不变） |
 | 项目栏 | `project_picker.rs`（`ProjectItem` = 项目名 + 路径双列，末项「＋ 新增项目」）；`state.rs::handle_project_confirm` 为确认落点；宿主（`view.rs`）消费 `Shared::project_new_request` → `project::ui::open_create_dialog` |
 
 ## 7. 开放问题

@@ -53,13 +53,13 @@ fn ui_size_constants_match_design() {
     }
 }
 
-/// 契约 2：视图层不得出现裸尺寸字面量与裸色值构造。
+/// 契约 2a：视图层不得出现裸尺寸字面量。
 ///
-/// - 尺寸：结构尺寸走 `ui.rs` 常量（`rems(ui::…)` / `theme.font_size * ui::…`），
-///   局部间距走 Tailwind 尺度方法（`gap_1` / `px_2`）；裸 `px(N.)` 一律视为回归。
-/// - 颜色：一律 `cx.theme().colors.*`，禁止 `rgb(…)` / `hsla(…)` 直接构造。
+/// 尺寸：结构尺寸走 `ui.rs` 常量（`rems(ui::…)` / `theme.font_size * ui::…`），
+/// 局部间距走 Tailwind 尺度方法（`gap_1` / `px_2`）；裸 `px(N.)` 一律视为回归。
+/// （`h_px()` / `w_px()` 这类 Tailwind 描边方法不含 `px(` 调用，不触发本项。）
 #[test]
-fn view_layer_has_no_raw_size_or_color_literals() {
+fn view_layer_has_no_raw_size_literals() {
     let sources: &[(&str, &str)] = &[
         ("view.rs", include_str!("../src/view.rs")),
         ("panels.rs", include_str!("../src/panels.rs")),
@@ -70,9 +70,53 @@ fn view_layer_has_no_raw_size_or_color_literals() {
             !src.contains("px("),
             "{name} 出现裸 `px(...)` 尺寸字面量；结构尺寸请用 ui.rs 常量，局部间距用 Tailwind 尺度方法"
         );
+    }
+}
+
+/// 契约 2b：UI 源码不得直接构造颜色，一律走主题 token（`cx.theme().colors.*`）。
+///
+/// 覆盖范围比尺寸契约宽（含对话框、项目视图、设置面板）：色值是硬约束，三者都已清零；
+/// 存量欠债只有尺寸字面量（见 `connection-dialog-architecture.md` §14 #14）。
+#[test]
+fn ui_sources_have_no_raw_color_literals() {
+    let sources: &[(&str, &str)] = &[
+        ("workbench/view.rs", include_str!("../src/view.rs")),
+        ("workbench/panels.rs", include_str!("../src/panels.rs")),
+        (
+            "connection_dialog/render.rs",
+            include_str!("../src/components/connection_dialog/render.rs"),
+        ),
+        (
+            "connection_dialog/helpers.rs",
+            include_str!("../src/components/connection_dialog/helpers.rs"),
+        ),
+        (
+            "connection_dialog/project_picker.rs",
+            include_str!("../src/components/connection_dialog/project_picker.rs"),
+        ),
+        (
+            "connection_dialog/managers.rs",
+            include_str!("../src/components/connection_dialog/managers.rs"),
+        ),
+        (
+            "connection_dialog/staging.rs",
+            include_str!("../src/components/connection_dialog/staging.rs"),
+        ),
+        (
+            "connection_dialog/mod.rs",
+            include_str!("../src/components/connection_dialog/mod.rs"),
+        ),
+        ("project/ui.rs", include_str!("../../project/src/ui.rs")),
+        (
+            "settings/settings_view.rs",
+            include_str!("../../settings/src/settings_view.rs"),
+        ),
+    ];
+
+    for (name, src) in sources {
         assert!(
-            !src.contains("rgb(") && !src.contains("hsla("),
-            "{name} 出现裸色值构造；请从 `cx.theme().colors` 取色"
+            !src.contains("rgb(") && !src.contains("hsla(") && !src.contains("Hsla::"),
+            "{name} 出现裸色值构造；请从 `cx.theme().colors` 取色（透明用 transparent_black()）"
         );
     }
 }

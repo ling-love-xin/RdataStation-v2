@@ -35,6 +35,7 @@ use database::navigator_service::NavigatorService;
 
 use crate::services::db_navigator::NavTable;
 use crate::services::query_runner::QueryOutput;
+use crate::ui;
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 
 /// 面板与工作台共享的状态。
@@ -1197,7 +1198,9 @@ impl SidebarPanel {
             _ => None,
         };
 
-        let indent = 10.0 + depth as f32 * 12.0;
+        // 缩进 = 基础内边距 + 层级 × 步长（设计 §2.1）。两者都是 rem 倍率，
+        // 直接交给 `rems()` 换算（其基准是主题字号而非 4px，写 `/ 4.` 会放大 4 倍）。
+        let indent = ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT;
         let mut block = div().v_flex().w_full();
         let mut row = div()
             .id(format!("nav-node-{}", node.key))
@@ -1206,7 +1209,7 @@ impl SidebarPanel {
             .w_full()
             .h(rems(1.375))
             .pr_1()
-            .pl(rems(indent / 4.))
+            .pl(rems(indent))
             .gap_1()
             .rounded_md()
             .cursor_pointer()
@@ -1264,7 +1267,7 @@ impl SidebarPanel {
         if let Some(err) = error {
             block = block.child(
                 div()
-                    .pl(rems((indent + 18.0) / 4.))
+                    .pl(rems(indent + ui::TREE_INDENT))
                     .pb_1()
                     .text_xs()
                     .text_color(danger)
@@ -1443,7 +1446,7 @@ impl SidebarPanel {
             .h(rems(1.625))
             .gap_1()
             .px_1()
-            .child(div().w(rems(depth as f32 * 3.0)).flex_none())
+            .child(div().w(rems(depth as f32 * ui::TREE_INDENT)).flex_none())
             .child(div().w_2p5().flex_none())
             .child(div().flex_1().min_w_0().child(Input::new(&input).w_full()))
             .child(
@@ -1733,7 +1736,7 @@ impl SidebarPanel {
                     .when(is_selected, |this| this.bg(selected_bg))
                     .hover(move |s| s.bg(hover_bg))
                     .on_click(click)
-                    .child(div().w(rems(*depth as f32 * 3.0)).flex_none())
+                    .child(div().w(rems(*depth as f32 * ui::TREE_INDENT)).flex_none())
                     .child(
                         div()
                             .w_2p5()
@@ -2948,7 +2951,9 @@ impl Render for EditorPanel {
             );
         }
 
-        let mut root = div().h_flex().size_full();
+        // `h_flex()` 默认交叉轴居中：不写 items_stretch，内容列会按内容高度被竖直居中，
+        // 高于面板的部分上下同时被裁。
+        let mut root = div().h_flex().items_stretch().size_full();
         root = root.child(div().flex_1().min_w_0().child(content));
         if self.shared.property_target.borrow().is_some() {
             root = root.child(self.render_property_panel(cx));

@@ -650,6 +650,10 @@ flowchart LR
 | 12 | ⚪ | UI 尺寸常量化**只覆盖本模块**（`ui-constraints.md` 三阶段迁移第一阶段） | 其他模块仍写字面量 | 按 `ui-constraints.md` §迁移计划推进 |
 | 13 | ⚪ | 缺 UI 图像回归基线 / 大数据量性能基准 / fuzz | 回归靠断言而非视觉 | 平台级排期 |
 | 14 | ⚪ | 连接对话框**仍有存量裸 `px(...)`**（图标 / 圆角 / 描边等）未迁到 `ui.rs` 或 Tailwind 尺度 | 与用户侧新增的全局 UI 规范（`ui-design-spec.md` + `ui_contract` 契约测试）不一致（契约测试目前只扫 `view.rs` / `panels.rs`） | 按 `ui-design-spec.md` 迁移计划逐步扫一遍本模块 |
+| 15 | 🟡 | **Tab 条 / 分段控件 / 开关为自绘**（`render.rs:354-382`、`1786-1834`、`873-961`、`930-961`、`managers.rs:309-337`）；`mod.rs` 曾错误记录「库无 Tabs/Switch」（已更正） | 无 hover / 键盘 / a11y / disabled；三处开关尺寸互不一致，且未接 `form_disabled`（未选驱动时仍可点） | 迁到 `TabBar::underline()` / `TabBar::segmented()` / `Switch`（0.6.1 均已提供）；顺带统一 disabled 语义 |
+| 16 | ⚪ | **渲染热路径上有写状态与重计算**：`render.rs:293`（每帧 `set_placeholder` → 无条件 `notify`）、`247-248`（每帧深拷贝驱动/类型目录）、`280-283` / `1025` / `1151` / `1264`（每帧 JSON 解析）、`1596`（每帧构造整份 `ConnectionDraft` 比脏） | 多余重绘与卡顿；重绘与状态写入耦合后难推理 | 打开时算一次存字段 / 缓存；`render` 只读快照，副作用回到事件路径 |
+| 17 | ⚪ | **下标参与 ElementId**：`render.rs:464/484/502/520`（协议链 hop）、`742`（驱动属性）、`1548/1640`（暂存条目）、`managers.rs:60/84/102/263`；另有 `sec-` 前缀在分组与策略覆盖两处复用 | 增删/重排后 hover、滚动等按 id 记录的控件状态串行；`policy_type` 命中分组 id 时潜在冲突 | 改用业务键（hop 名 / `saved_id` / `gid`），策略覆盖换独立前缀 |
+| 18 | ⚪ | `project_path` 只有写入没有渲染点（`render.rs:185/233/2043`），与 `386-390` 注释承诺的「项目根可编辑」不符 | 无项目会话时用户无法输入/修正项目根 | 补 `Input::new(&project_path)` 或收敛注释与作用域分支 |
 
 ---
 
