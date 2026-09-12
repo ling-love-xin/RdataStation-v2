@@ -364,7 +364,7 @@ pub(crate) fn form_row(theme: &Theme, label: &str, value: impl IntoElement) -> D
                 .text_color(theme.colors.muted_foreground)
                 .child(label.to_string()),
         )
-        .child(div().flex_1().min_w(px(0.)).child(value))
+        .child(div().flex_1().min_w_0().child(value))
 }
 
 /// 提示行（大纲内）：弱化小字，缩进对齐控件列。
@@ -587,6 +587,17 @@ pub(crate) fn reconstruct_url(ds: &DataSource) -> String {
     }
 }
 
+/// 暂存条目显示用的类型 id：**当前条目（光标位）取正在编辑的表单**，其余取快照。
+///
+/// 真机反馈：从 MySQL 切到 SQLite 后，表单已是 SQLite、条目还显示 mysql 图标——
+/// 因为草稿只在“切换条目 / 保存 / 关闭”时写回，显示不能等写回。
+pub(crate) fn staging_display_type_id(draft_type_id: &str, live_type_id: Option<&str>) -> String {
+    match live_type_id {
+        Some(live) if !live.trim().is_empty() => live.to_string(),
+        _ => draft_type_id.to_string(),
+    }
+}
+
 /// 作用域标签（UI ↔ ConnectionScope）。
 pub(crate) fn scope_label(s: &ConnectionScope) -> &'static str {
     match s {
@@ -611,8 +622,8 @@ mod tests {
         address_field, address_label, address_placeholder, capability_rows, driver_auth_types,
         driver_capabilities, driver_form_fields, driver_short_name, enabled_drivers_of_type,
         field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
-        strip_file_db_noise, tags_from_json, tags_to_json, type_badge, type_has_driver,
-        url_template_example,
+        staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
+        type_has_driver, url_template_example,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -877,6 +888,16 @@ mod tests {
         bad.advanced_options = Some("not-json".into());
         strip_file_db_noise(&mut bad);
         assert_eq!(bad.advanced_options.as_deref(), Some("not-json"));
+    }
+
+    #[test]
+    fn staging_type_badge_prefers_live_form_for_current_entry() {
+        // 当前条目：表单已切类型 → 显示表单类型（不等草稿写回）
+        assert_eq!(staging_display_type_id("mysql", Some("sqlite")), "sqlite");
+        // 表单未选类型 → 回退草稿快照
+        assert_eq!(staging_display_type_id("mysql", Some("  ")), "mysql");
+        // 非当前条目（无 live）→ 快照
+        assert_eq!(staging_display_type_id("mysql", None), "mysql");
     }
 
     #[test]

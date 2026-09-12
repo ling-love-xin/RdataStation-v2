@@ -107,6 +107,12 @@ pub fn get_global_metadata_dir() -> Result<PathBuf, CoreError> {
 /// 必须在应用启动时调用，且只能调用一次。
 /// 创建 SQLite 连接池和 DuckDB 长连接。
 pub async fn initialize_global_system() -> Result<(), CoreError> {
+    // 内置驱动注册（DriverRegistry）：测试连接 / 连接路由都从这里取工厂。
+    // 必须在任何连接尝试前完成——曾漏掉这一步，导致真机「测试连接」报
+    // `CONN_DRIVER_NOT_FOUND: Driver 'sqlite' not found in registry`（注册表为空）。
+    // `register_by_factory` 是幂等写入（HashMap insert），重复调用安全。
+    crate::driver::AutoDriverRegistrar::auto_register();
+
     let sqlite_path = get_global_db_path()?;
     let duckdb_path = get_global_duckdb_path()?;
 

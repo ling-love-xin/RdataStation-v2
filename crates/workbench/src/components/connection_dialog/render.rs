@@ -1537,13 +1537,24 @@ impl ConnectionDialogState {
                 }
             }
             // ---- 暂存列表（多连接连续编辑；原型设计 §2.2）：草稿 + 已保存条目 ----
+            // 当前条目（光标位）的徽标与名称取**正在编辑的表单**，而不是已写回的快照：
+            // 否则“刚从 MySQL 切到 SQLite”时表单已变、条目还显示 mysql 图标（真机反馈）。
             let drafts_snapshot: Vec<ConnectionDraft> = drafts_list.borrow().clone();
             let cursor_now = draft_cursor.get();
+            let live_now: Option<ConnectionDraft> =
+                Some(state.snapshot_form(cx)).filter(|_| cursor_now < drafts_snapshot.len());
             let mut staging_list = div().v_flex().gap(rems(0.25));
             for (i, d) in drafts_snapshot.iter().enumerate() {
                 let on = i == cursor_now;
+                let live = if on { live_now.as_ref() } else { None };
                 let is_saved = d.saved_id.is_some();
-                let label = d.display_name();
+                // 显示用字段：当前条目用 live（表单），其余用快照。
+                let display_type_id =
+                    staging_display_type_id(&d.type_id, live.map(|l| l.type_id.as_str()));
+                let label = match live {
+                    Some(l) if !l.name.trim().is_empty() => l.name.trim().to_string(),
+                    _ => d.display_name(),
+                };
                 let mut row = div()
                     .id(ElementId::Name(SharedString::from(format!("draft-{i}"))))
                     .h_flex()
@@ -1559,7 +1570,7 @@ impl ConnectionDialogState {
                 row = row
                     .child(
                         div()
-                            .w(px(2.))
+                            .w(crate::ui::TREE_ACTIVE_BAR)
                             .h(rems(1.))
                             .rounded_full()
                             .bg(if on { theme.colors.primary } else { theme.colors.border }),
@@ -1567,14 +1578,14 @@ impl ConnectionDialogState {
                     .child({
                         // 缩小的数据库类型 UI（条目类型徽标）：与左侧类型树同一套 emoji；
                         // 无类型信息（旧草稿 / 未选类型）时回退状态点（已保存 success / 草稿 primary）。
-                        match type_badge(&types_snapshot, &d.type_id) {
+                        match type_badge(&types_snapshot, &display_type_id) {
                             Some((icon, _name)) => div()
                                 .flex_shrink_0()
                                 .h_flex()
                                 .items_center()
                                 .justify_center()
-                                .w(px(16.))
-                                .h(px(16.))
+                                .w(rems(crate::ui::ICON_SIZE_MD))
+                                .h(rems(crate::ui::ICON_SIZE_MD))
                                 .rounded(rems(0.25))
                                 .bg(theme.colors.sidebar_accent)
                                 .text_xs()
@@ -1593,7 +1604,10 @@ impl ConnectionDialogState {
                     })
                     .child({
                         // 脏标记（●）：当前条目有未写回快照的表单修改（仅未保存草稿）。
-                        let dirty = i == cursor_now && state.draft_dirty(i, cx);
+                        let dirty = match live {
+                            Some(l) => d.saved_id.is_none() && l != d,
+                            None => false,
+                        };
                         // 来源短码（P/G/GP）：已保存条目按 ID 前缀标示作用域来源（原型 §2.2）。
                         let scope_code = d
                             .saved_id

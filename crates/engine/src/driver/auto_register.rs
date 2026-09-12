@@ -76,5 +76,20 @@ mod tests {
 
         let drivers = DriverRegistry::all_driver_ids();
         assert!(!drivers.is_empty());
+        // 必须覆盖种子 `drivers.id`（global/008 + 013）：驱动目录里的 id 要能在注册表解析，
+        // 否则测试连接 / 连接路由报 `CONN_DRIVER_NOT_FOUND`（真机踩过：启动漏调注册）。
+        for id in [
+            "mysql",
+            "mysql_native",
+            "postgres",
+            "postgres_native",
+            "sqlite",
+            "duckdb",
+        ] {
+            assert!(
+                drivers.iter().any(|d| d == id),
+                "内置驱动未注册：{id}（已注册：{drivers:?}）"
+            );
+        }
     }
 }

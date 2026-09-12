@@ -373,6 +373,9 @@ flowchart LR
 | 57 | **文件选择分两个系统对话框**：`打开文件…` = `prompt_for_paths`（Windows 带 `FOS_FILEMUSTEXIST`，只能选已存在文件）；`新建文件…` = **`prompt_for_new_path`**（真正的保存对话框，可输入新文件名；不存在则 `File::create`，已存在则直接引用且**不清空**）；取消 / 失败 / 无响应均写入结果行 | 旧实现用打开对话框当“新建”用 → 用户输入新文件名被 Windows 拒掉，表现为“新建功能没实现”；且三种结局都被静默吞掉，看着像按钮没反应 |
 | 58 | **连接设置字段可编辑 + 字段 ⇄ URI 双向同步**（网络型）：主机 / 端口 / 数据库为 `Input`，与 Header URI 双向同步（任一侧改动同步另一侧）；字段→URI 用 `connection::url_params::rewrite_url_authority`（scheme 无关，保留凭据 / 查询串；端口空→驱动默认端口；数据库空→去路径；主机空→不重建）；同步状态存 `fields_synced_for: (驱动 id, URI)`，渲染层每帧只执行一个方向（避免循环） | 真机反馈“连接设置无法输入”：上一版把三字段做成**只读摘要**（“编辑在 Header URI”）与用户预期不符——工业级连接管理器（DataGrip / TablePlus）都允许直接改主机/端口/库，URI 与字段互为体现。新增 `rewrite_url_authority` 是因为既有 `rewrite_url_host_port` 只认 mysql/postgres 两个协议且强制重写端口 |
 | 59 | **结构尺寸统一登记到 `crates/workbench/src/ui.rs`**（`DIALOG_*` 一组），对话框不再自带一套尺寸常量；间距改用工作台统一 `GAP_SM/MD/LG`（`GAP_SM` 由 0.375rem 对齐为全局的 0.25rem），圆角用 `theme.radius` | 用户侧新增全局 UI 规范（`rds-ui-spec` skill + `ui-design-spec.md` + `ui_contract` 契约测试）要求“结构尺寸先进 `ui.rs` 登记、局部间距用 Tailwind 尺度、视图不得写裸尺寸”——对话框不能继续做一个尺寸孤岛 |
+| 60 | **启动时注册内置驱动**：`engine::migration::initialize_global_system()` 首行调 `AutoDriverRegistrar::auto_register()`（幂等：`HashMap::insert`） | 🔴 真机「测试连接」报 `CONN_DRIVER_NOT_FOUND: Driver 'sqlite' not found in registry`——全仓搜下来 **只有测试里调过注册**，应用启动路径根本没注册过 `DriverRegistry`；这不只影响测试连接，**导航树连接、重连也都会失败**（同一个注册表） |
+| 61 | **文件型工厂改从 `to_url()` 取地址**：`SqliteDriverFactory` / `DuckDbDriverFactory` 先 `config.to_url()`（尊重 `url_override`：服务层 / 对话框传的就是它），再去 `sqlite://` 前缀与查询串；回退顺序 `url_override → database → file_path` | 网络型工厂一直用 `config.to_url()`，只有文件型工厂直接读 `config.database` → 服务层传了 `url_override` 也会报「Database path is required for SQLite」（修完 #60 后用户下一次点击就会撞上）；查询串（driver_properties 追加）不能拼进文件名 |
+| 62 | **暂存条目“当前项”显示正在编辑的表单**：`staging_display_type_id(草稿类型, live 类型)`——光标位条目用表单快照，其余用已存草稿；名称与脏标记同源（同一份 live 快照） | 真机反馈：选 SQLite 后条目仍显示 mysql 图标——草稿只在“切条目 / 保存 / 关闭”时写回，显示层不能等写回；同时删掉重复计算快照的 `draft_dirty`（脏标记改用同一份 live） |
 
 
 ---
@@ -383,7 +386,7 @@ flowchart LR
 | --- | --- | --- |
 | 传输单测 | `crates/connection/src/*`（含 `chain.rs`） | URL 处理族 / 参数注入 / 隧道注册表 / Secret（含 `rewrite_url_authority`：scheme 无关改写、凭据与查询串保留、端口/数据库边界） |
 | 传输集成 | `crates/connection/tests/tunnel_roundtrip.rs` | SOCKS5 / HTTP CONNECT / 两跳链真实数据往返 + 守卫释放关闭 |
-| 服务层 | `data_source_lifecycle.rs` | 保存 / 回读 / 更新 / 删除 / 同名拦截 / 作用域预检 / tags 同步 / **空密码更新保留原密文** / **项目侧回读（`get_with_project`）** / **GP_ 快照同步（含错误路径）** / **导航入口项目侧解析** / **环境策略按环境名读库** / **文件型路径落 `database`（全局 + 项目两侧；更新不清空；可还原连接 URL）** |
+| 服务层 | `data_source_lifecycle.rs` | 保存 / 回读 / 更新 / 删除 / 同名拦截 / 作用域预检 / tags 同步 / **空密码更新保留原密文** / **项目侧回读（`get_with_project`）** / **GP_ 快照同步（含错误路径）** / **导航入口项目侧解析** / **环境策略按环境名读库** / **文件型路径落 `database`（全局 + 项目两侧；更新不清空；可还原连接 URL）** / **驱动目录 id 能在 DriverRegistry 解析 + SQLite 真实文件测试连接（建库 + 版本探测）** |
 | 服务层 | `real_connections.rs` / `connection_scope_and_state.rs` / `global_service_singleton.rs` | 加载器契约 / 可见性与运行态 / 单例生产路径 |
 | 服务层 | `connection_tunnel_cleanup.rs` | 连接失败后隧道回滚（`tunnel_count == 0`） |
 | 窗口 | `connection_dialog_ui.rs` | 打开 / 渲染 / 关闭、五 Tab、编辑入口、状态保留、重入不叠加 |
@@ -442,6 +445,7 @@ flowchart LR
 | 33 | **常规 / 高级 Tab 改单列分组大纲（USIT 第 2 轮）**：`outline_section` / `form_row` / `value_box` / `hint_line`；分组折叠态（`collapsed_sections`，默认全展开）；字段集合改由 `drivers.config_schema` 推导（存在性 / 标签 / 占位，地址行取 `type=file`）；主题 `input.border` 提对比度（修“输入框几乎看不见”） | `connection_dialog/{helpers,state,render}.rs`、`assets/themes/rds-theme.json`（决策 #51–#54）；测试：`helpers` 内嵌 +1（schema 解析）、`connection_type_driver` 补折叠断言 |
 | 34 | **大纲视觉收敛 + 文件选择修复（USIT 第 3 轮）**：分组改「整幅面板（`group_box`）+ 标题栏分隔线」；只读值改回**数据框**（白底 + `input` 边框，放在浅底面板上）；标签列 92px→**68px**、间距 12px→**6px**；未选类型/驱动时表单**显示但禁用**（含 SSL 组以禁用形态出现）；`新建文件…` 改用系统**保存**对话框（`prompt_for_new_path`）+ 取消/失败写结果行 | `connection_dialog/{helpers,state,render,mod}.rs`（决策 #55–#57）；`check` 零警告 + 工作台 98 项测试全绿 |
 | 35 | **连接设置可编辑 + 字段⇄URI 双向同步（USIT 第 4 轮）**：主机/端口/数据库 改 `Input`；`connection::url_params::rewrite_url_authority`（scheme 无关，保留凭据/查询串）+ `data_source_service::rebuild_url_from_fields`（幂等、主机空不重建、端口空用默认端口）；渲染层每帧单方向同步（`fields_synced_for` 防循环）；结构尺寸登记到 `ui.rs`（`DIALOG_*`）并对齐全局间距/圆角方案 | `connection/src/url_params.rs`、`services/data_source_service.rs`、`connection_dialog/{helpers,state,render,mod}.rs`、`ui.rs`（决策 #58、#59）；测试：URL 改写 1 项 + 重建 1 项 + 窗口双向同步 1 项（104 项全绿） |
+| 36 | **驱动注册与文件型取址修复 + 暂存条目显示同步（USIT 第 5 轮）**：① `initialize_global_system` 首行注册内置驱动（修 `CONN_DRIVER_NOT_FOUND`，同时修好了导航连接 / 重连）；② sqlite / duckdb 工厂改从 `to_url()`（url_override）取地址（修「Database path is required」）、去前缀与查询串；③ 暂存条目当前项显示 live 表单类型/名称（修“表单已 SQLite、条目还显示 mysql 图标”），删掉重复算快照的 `draft_dirty` | `engine/{migration/global_init.rs, driver/factory.rs, driver/auto_register.rs}`、`connection_dialog/{helpers,render,staging}.rs`（决策 #60–#62）；测试：engine `auto_register` 内置 id 断言、`data_source_lifecycle::catalog_drivers_resolve_and_sqlite_probe_succeeds`（真实文件探测）、`helpers::staging_type_badge_prefers_live_form_for_current_entry` |
 
 
 后续可选（未做）：
@@ -633,6 +637,9 @@ flowchart LR
 | --- | --- | --- |
 | 新增（🔴） | **文件型连接地址丢失（USIT 发现）**：`parse_url_host_port_db` 对 `sqlite`/`duckdb` 改为返回 `Some(路径)`（去 scheme / 修 Windows 三斜杠前导 `/`）；`build_effective_url` 文件型不注入凭据。旧实现下项目侧（P_/GP_）文件连接路径写不进去 → `build_connection_url` 报“文件型连接缺少数据库路径”、编辑回读地址为空 | `data_source_lifecycle.rs::file_db_path_survives_save_and_readback`（含全局 / 项目两侧 + 更新 + URL 还原） |
 | 新增（🟡） | **常规 Tab 未随驱动动态渲染**：地址标签 / 占位随驱动推导（不再固定 `mysql://…`）；文件型只保留「连接设置（地址 + 打开/新建）+ 组织」；SSL 卡片按驱动声明；文件型落库前清洗凭据 / 网络 / TLS | `helpers.rs` 单测 2 项 + `connection_type_driver.rs::file_type_general_tab_renders_and_switches_back` |
+| 新增（🔴） | **内置驱动从未注册（USIT 发现）**：`initialize_global_system` 首行调 `AutoDriverRegistrar::auto_register()`（幂等）——此前只有测试调注册，应用启动路径没注册过 `DriverRegistry`，测试连接报 `CONN_DRIVER_NOT_FOUND`，导航连接 / 重连同样会失败 | `engine/driver/auto_register.rs` 单测（内置 id 断言）+ `data_source_lifecycle::catalog_drivers_resolve_and_sqlite_probe_succeeds` |
+| 新增（🔴） | **文件型工厂忽略 `url_override`（USIT 发现）**：sqlite / duckdb 工厂改从 `to_url()` 取地址（去前缀与查询串）——原先只读 `config.database`，服务层传 url_override 也会报「Database path is required for SQLite」 | 同上（真实文件探测：成功且磁盘出现空库文件） |
+| 新增（🟡） | **暂存条目与表单不一致（USIT 发现）**：当前条目的类型徽标 / 名称改取 live 表单快照（`staging_display_type_id`），不再等草稿写回 | `helpers::staging_type_badge_prefers_live_form_for_current_entry` |
 
 | # | 级别 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |

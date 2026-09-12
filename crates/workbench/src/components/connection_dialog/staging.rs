@@ -337,15 +337,6 @@ impl ConnectionDialogState {
         }
     }
 
-    /// 当前编辑条目是否有未写回的表单改动（侧栏脏标记 ●）。
-    pub(crate) fn draft_dirty(&self, idx: usize, cx: &App) -> bool {
-        let drafts = self.drafts.borrow();
-        match drafts.get(idx) {
-            Some(d) if d.saved_id.is_none() => self.snapshot_form(cx) != *d,
-            _ => false,
-        }
-    }
-
     /// 把第 `idx` 个条目载入表单（已保存条目走 `load_for_edit` 回读）。
     pub(crate) fn apply_draft(&self, idx: usize, window: &mut Window, cx: &mut App) {
         let Some(d) = self.drafts.borrow().get(idx).cloned() else {

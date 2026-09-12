@@ -167,16 +167,19 @@ impl DriverFactory for SqliteDriverFactory {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<DynDatabase, CoreError>> + Send>>
     {
         Box::pin(async move {
-            // SQLite 使用文件路径作为连接字符串
-            let path = config.database.as_deref().ok_or_else(|| {
-                CoreError::connection(ConnectionError::InvalidConfig {
+            // 地址来源与网络型驱动保持一致：优先 `url_override`（服务层 / 对话框传入的完整地址，
+            // 如 `C:/data/app.db` 或 `sqlite://C:/data/app.db`），否则回退 `database` / `file_path`。
+            // 旧版只读 `config.database`，于是“传了 url_override 也会报 Database path is required”。
+            let path = sqlite_path_from_config(&config);
+            if path.trim().is_empty() {
+                return Err(CoreError::connection(ConnectionError::InvalidConfig {
                     conn_id: config.name.clone().unwrap_or_else(|| "sqlite".to_string()),
                     reason: "Database path is required for SQLite".to_string(),
-                })
-            })?;
+                }));
+            }
 
             // 创建 SQLite 数据库连接
-            let db = SqliteDatabase::new(path).map_err(|e| {
+            let db = SqliteDatabase::new(&path).map_err(|e| {
                 CoreError::connection(ConnectionError::InvalidConfig {
                     conn_id: config.name.clone().unwrap_or_else(|| "sqlite".to_string()),
                     reason: e.to_string(),
@@ -187,6 +190,22 @@ impl DriverFactory for SqliteDriverFactory {
             Ok(db)
         })
     }
+}
+
+/// 从驱动配置取 SQLite 文件路径（去 `sqlite://` 前缀与查询串）。
+///
+/// 查询串来自 `to_url()` 追加的 driver_properties / options（如 `?journalMode=WAL`）；
+/// 本驱动当前不解析这些参数，去掉而不是拼进文件名（否则会造出怪文件名）。
+fn sqlite_path_from_config(config: &DriverConnectionConfig) -> String {
+    let raw = config
+        .to_url()
+        .ok()
+        .or_else(|| config.database.clone())
+        .or_else(|| config.file_path.clone())
+        .unwrap_or_default();
+    let path = raw.trim();
+    let path = path.strip_prefix("sqlite://").unwrap_or(path);
+    path.split('?').next().unwrap_or(path).to_string()
 }
 
 /// DuckDB 驱动工厂
@@ -205,9 +224,17 @@ impl DriverFactory for DuckDbDriverFactory {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<DynDatabase, CoreError>> + Send>>
     {
         Box::pin(async move {
-            // DuckDB 使用文件路径作为连接字符串
-            // 如果未指定路径，使用内存数据库
-            let path = config.database.as_deref().unwrap_or(":memory:");
+            // 同 SQLite：优先 `url_override`（完整地址），未给路径时才用 `:memory:`。
+            let raw = config
+                .to_url()
+                .ok()
+                .or_else(|| config.database.clone())
+                .or_else(|| config.file_path.clone())
+                .unwrap_or_default();
+            let trimmed = raw.trim();
+            let without_scheme = trimmed.strip_prefix("duckdb://").unwrap_or(trimmed);
+            let path = without_scheme.split('?').next().unwrap_or(without_scheme);
+            let path = if path.trim().is_empty() { ":memory:" } else { path };
 
             // 创建 DuckDB 数据库连接
             let db = DuckDbDatabase::new(path).map_err(|e| {

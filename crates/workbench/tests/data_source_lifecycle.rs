@@ -60,6 +60,36 @@ async fn open_project_store(project_root: &Path) -> ProjectConnectionStore {
 }
 
 #[test]
+fn catalog_drivers_resolve_and_sqlite_probe_succeeds() {
+    // 驱动目录（global.db `drivers` 种子）里的 id 必须能在 DriverRegistry 解析——
+    // 真机曾报 `CONN_DRIVER_NOT_FOUND: Driver 'sqlite' not found in registry`（应用启动漏注册）。
+    engine::driver::AutoDriverRegistrar::register_builtin_drivers();
+    let dir = temp_dir("probe");
+    let service = make_service(&dir);
+    let rt = runtime();
+
+    let drivers = rt.block_on(service.list_drivers()).expect("list drivers");
+    assert!(!drivers.is_empty(), "种子驱动目录不应为空");
+    for d in &drivers {
+        assert!(
+            engine::driver::DriverRegistry::get(&d.id).is_some(),
+            "驱动目录里的 id 必须能解析到注册表：{}",
+            d.id
+        );
+    }
+
+    // SQLite 测试连接（真实文件）：文件型工厂从 url_override 取地址（不再要求 config.database 非空），
+    // 成功时引擎会创建空库文件并探测版本。
+    let db_path = dir.join("probe.db");
+    let url = db_path.to_string_lossy().to_string();
+    let result = rt.block_on(service.test(&input("probe_sqlite", "sqlite", &url)));
+    assert!(result.success, "SQLite 测试连接应成功：{}", result.message);
+    assert!(db_path.exists(), "测试连接应创建数据库文件：{url}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn save_then_list_roundtrip_global_scope() {
     let dir = temp_dir("roundtrip");
     let service = make_service(&dir);
