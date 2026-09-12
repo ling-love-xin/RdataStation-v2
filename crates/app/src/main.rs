@@ -59,10 +59,14 @@ fn run_app() {
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/themes");
             load_theme_assets(&themes_dir, cx);
             attach_rds_theme(cx);
+            // 2b. 产品语义 token（gpui-kit 固定语义面之外的角色）。
+            attach_product_tokens(&themes_dir, cx);
 
             // 3. 主题目录监听（热更新）：文件变更后重新接入并刷新窗口。
-            let _ = ThemeRegistry::watch_dir(themes_dir, cx, |cx| {
+            let themes_dir_watch = themes_dir.clone();
+            let _ = ThemeRegistry::watch_dir(themes_dir, cx, move |cx| {
                 attach_rds_theme(cx);
+                attach_product_tokens(&themes_dir_watch, cx);
                 let mode = SettingsService::theme_mode(cx);
                 Theme::change(mode, None, cx);
                 cx.refresh_windows();
@@ -150,6 +154,10 @@ fn load_theme_assets(themes_dir: &std::path::Path, cx: &mut App) {
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
+        // 产品语义 token 不是主题文件（结构不同），由 `attach_product_tokens` 单独加载。
+        if path.file_name().and_then(|s| s.to_str()) == Some("product-tokens.json") {
+            continue;
+        }
         match std::fs::read_to_string(&path) {
             Ok(content) => {
                 if let Err(e) = registry.load_themes_from_str(&content) {
@@ -158,6 +166,14 @@ fn load_theme_assets(themes_dir: &std::path::Path, cx: &mut App) {
             }
             Err(e) => eprintln!("[startup] 主题文件读取失败 {}: {e}", path.display()),
         }
+    }
+}
+
+/// 加载产品语义 token（`assets/themes/product-tokens.json`）为 GPUI global。
+fn attach_product_tokens(themes_dir: &std::path::Path, cx: &mut App) {
+    let path = themes_dir.join("product-tokens.json");
+    if let Err(e) = settings::product_tokens::apply_from_path(&path, cx) {
+        eprintln!("[startup] {e}（回退标准字段）");
     }
 }
 

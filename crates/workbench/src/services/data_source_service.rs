@@ -121,17 +121,26 @@ impl DataSourceService {
         self.global_db.get_drivers_by_type(type_id).await
     }
 
-    /// 认证配置列表（脱敏：不返回 auth_data 明文）
+    /// 认证配置列表（**UI 列表专用**：`auth_data` 一律置空）。
+    ///
+    /// 存储层 `list_auth_configs` 会解密后返回明文（供内部凭据注入用），但列表
+    /// ——下拉选项 / 管理器行——只需要 id / name / auth_type；把明文带进 UI 内存
+    /// 属于无谓的凭据暴露面（原型 §3.6「列表脱敏」）。需回填字段时走
+    /// [`Self::auth_config_detail_by_name`]（单条、显式、仅在编辑时）。
     pub async fn list_auth_configs(&self) -> Result<Vec<AuthConfig>, CoreError> {
-        self.global_db.list_auth_configs(None).await
+        let mut list = self.global_db.list_auth_configs(None).await?;
+        for a in &mut list {
+            a.auth_data.clear();
+        }
+        Ok(list)
     }
 
     /// 按名称读取认证配置的**解密后** `auth_data`（管理器编辑回填用）。
     ///
-    /// 列表接口（`list_auth_configs`）出于脱敏不返回明文，回填必须走这里：
+    /// 列表接口在服务层已把凭据置空，回填必须走这里：
     /// 按名称查 ID → `get_auth_config` → `decrypt_auth_data`。
     ///
-    /// 返回 `(auth_type, auth_data JSON)`；档案不存在 / 解密失败 → `Ok(None)` / `Err`。
+    /// 返回 `(auth_type, auth_data JSON)`；档案不存在 → `Ok(None)`，解密失败 → `Err`。
     pub async fn auth_config_detail_by_name(
         &self,
         name: &str,

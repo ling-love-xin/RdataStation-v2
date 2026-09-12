@@ -386,6 +386,7 @@ impl WorkbenchView {
     // - 高度覆盖为 36px、背景覆盖为主题 title_bar 纯色（对齐 layout-proposal.html v5）。
     fn render_title_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let pt = settings::product_tokens::get(cx);
         let shared = self.shared.clone();
         let entity = cx.entity();
 
@@ -393,8 +394,7 @@ impl WorkbenchView {
         let icon_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons/32x32.png");
         let logo = img(icon_path.as_path()).w_5().h_5().rounded_sm();
 
-        // 挖空项目槽：标题栏背景深一档。设计语义 token 为 `title_bar.slot.background`
-        // （dark #252526 / light #F3F3F3），语义 token 注册落地前以 sidebar 角色同值替代。
+        // 挖空项目槽：产品语义 token `title_bar.slot.background`。
         // 项目名取自当前项目会话（P0）；未打开项目时显示占位。
         let has_project = self.shared.project.borrow().is_some();
         let project_name = self
@@ -411,7 +411,7 @@ impl WorkbenchView {
             .h(rems(1.625))
             .px_3p5()
             .rounded_md()
-            .bg(theme.colors.sidebar)
+            .bg(pt.title_bar_slot_background(theme))
             .child(
                 div()
                     .h_flex()
@@ -515,6 +515,7 @@ impl WorkbenchView {
 
     fn render_left_activity_bar(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
+        let pt = settings::product_tokens::get(cx);
         let active = self.shared.active_left.get();
         let mut bar = div()
             .v_flex()
@@ -526,16 +527,14 @@ impl WorkbenchView {
             .gap_1()
             .border_r_1()
             .border_color(theme.colors.border)
-            // 活动栏背景（产品语义 token activity_bar.background，dark #333333；
-            // 语义 token 注册落地前以 secondary 角色同值替代，见 theme-design §5.4）。
-            .bg(theme.colors.secondary);
+            // 活动栏背景（产品语义 token activity_bar.background）。
+            .bg(pt.activity_bar_background(theme));
 
         for panel in LeftPanel::ALL {
             let entity = cx.entity();
             let shared = self.shared.clone();
             let selected = active == panel;
-            // VSCode 行为：激活项左侧 2px 亮条 + 亮色图标（activity_bar.active_border，
-            // 取 sidebar_accent_foreground 同值替代；右侧活动栏镜像在右）。
+            // VSCode 行为：激活项左侧 2px 亮条（activity_bar.active_border）。
             bar = bar.child(
                 div()
                     .w_11()
@@ -545,7 +544,7 @@ impl WorkbenchView {
                     .justify_center()
                     .border_l_2()
                     .border_color(if selected {
-                        theme.colors.sidebar_accent_foreground
+                        pt.activity_bar_active_border(theme)
                     } else {
                         transparent_black()
                     })
@@ -594,6 +593,7 @@ impl WorkbenchView {
 
     fn render_right_activity_bar(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
+        let pt = settings::product_tokens::get(cx);
         let active = self.shared.active_right.get();
         let mut bar = div()
             .v_flex()
@@ -605,7 +605,7 @@ impl WorkbenchView {
             .gap_1()
             .border_l_1()
             .border_color(theme.colors.border)
-            .bg(theme.colors.secondary);
+            .bg(pt.activity_bar_background(theme));
 
         for panel in RightPanel::ALL {
             let entity = cx.entity();
@@ -621,7 +621,7 @@ impl WorkbenchView {
                     .justify_center()
                     .border_r_2()
                     .border_color(if selected {
-                        theme.colors.sidebar_accent_foreground
+                        pt.activity_bar_active_border(theme)
                     } else {
                         transparent_black()
                     })
@@ -1091,6 +1091,7 @@ fn quick_open_results(
     cx: &mut App,
 ) -> Div {
     let theme = cx.theme();
+    let pt = settings::product_tokens::get(cx);
     let query = input.read(cx).value().to_string();
     let commands_only = query.trim_start().starts_with('>');
     let needle = if commands_only {
@@ -1106,6 +1107,10 @@ fn quick_open_results(
     let mut cmd_group = div().v_flex().gap_1();
     cmd_group = cmd_group.child(
         div()
+            .px_1()
+            .py_0p5()
+            .rounded_sm()
+            .bg(pt.quick_open_group_header(theme))
             .text_xs()
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.colors.muted_foreground)
@@ -1159,6 +1164,10 @@ fn quick_open_results(
         let mut res_group = div().v_flex().gap_1();
         res_group = res_group.child(
             div()
+                .px_1()
+                .py_0p5()
+                .rounded_sm()
+                .bg(pt.quick_open_group_header(theme))
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.colors.muted_foreground)

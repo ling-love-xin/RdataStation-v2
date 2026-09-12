@@ -403,6 +403,35 @@ fn nav_node_matches(
     }
 }
 
+/// 搜索命中高亮：把 `name` 中与 `filter`（已小写）匹配的一段用命中底色标出。
+///
+/// 非 ASCII（如 CJK）大小写转换不改变字节长度，故按字节切片安全；
+/// 仅当两端都是 char 边界时才切，否则退化为整体文本。
+fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: Hsla) -> Div {
+    if !filter.is_empty() {
+        let lower = name.to_lowercase();
+        if lower.len() == name.len() {
+            if let Some(pos) = lower.find(filter) {
+                let end = pos + filter.len();
+                if name.is_char_boundary(pos) && name.is_char_boundary(end) {
+                    let before = name[..pos].to_string();
+                    let hit = name[pos..end].to_string();
+                    let after = name[end..].to_string();
+                    return div()
+                        .h_flex()
+                        .items_center()
+                        .min_w_0()
+                        .text_color(fg)
+                        .child(before)
+                        .child(div().rounded_sm().bg(match_bg).child(hit))
+                        .child(after);
+                }
+            }
+        }
+    }
+    div().min_w_0().text_color(fg).child(name.to_string())
+}
+
 /// 属性面板请求（导航双击对象时发出，由编辑区右侧面板渲染）。
 #[derive(Clone)]
 pub struct PropertyRequest {
@@ -1510,6 +1539,8 @@ impl SidebarPanel {
         } else {
             source.label().to_string()
         };
+        let filter = self.database_nav.borrow().filter.to_lowercase();
+        let match_bg = settings::product_tokens::get(cx).search_match_background(cx.theme());
         let project_root = self
             .shared
             .project
@@ -1615,7 +1646,7 @@ impl SidebarPanel {
                         .min_w_0()
                         .text_xs()
                         .text_color(fg)
-                        .child(conn.name.clone()),
+                        .child(nav_name_highlight(&conn.name, &filter, match_bg, fg)),
                 )
                 .child(div().text_xs().text_color(muted).child(source_text))
                 .child(div().text_xs().text_color(muted).child(conn.driver.clone()))
@@ -2148,7 +2179,12 @@ impl SidebarPanel {
                     .min_w_0()
                     .text_xs()
                     .text_color(fg)
-                    .child(node.name.clone()),
+                    .child(nav_name_highlight(
+                        &node.name,
+                        &filter,
+                        settings::product_tokens::get(cx).search_match_background(cx.theme()),
+                        fg,
+                    )),
             );
         if let Some((meta, is_pk)) = right_meta {
             row = row.child(

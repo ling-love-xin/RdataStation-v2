@@ -1135,12 +1135,12 @@ fn auth_config_detail_by_name_decrypts_for_edit() {
     }))
     .expect("create auth config");
 
-    // 列表接口不返回明文（脱敏），否则管理器列表就是密码泄漏面。
+    // 列表接口在服务层已脱敏（auth_data 置空），否则管理器列表就是密码泄漏面。
     let listed = rt.block_on(service.list_auth_configs()).expect("list");
     let row = listed.iter().find(|a| a.id == auth_id).expect("listed");
     assert!(
-        !row.auth_data.contains("s3cret"),
-        "列表不应出现明文密码：{}",
+        row.auth_data.is_empty(),
+        "列表接口应脱敏（auth_data 置空）：{}",
         row.auth_data
     );
 

@@ -1,0 +1,21 @@
+{
+  "$comment": "RdataStation 产品语义 token（gpui-kit 0.6 固定语义面无法承载的角色）。键名与 rds-theme skill / theme-design 一致；缺失角色由代码回退到语义最接近的标准字段。",
+  "light": {
+    "activity_bar.background": "#ECECEC",
+    "activity_bar.active_border": "#333333",
+    "activity_bar.icon.active": "#333333",
+    "activity_bar.icon.inactive": "#616161",
+    "title_bar.slot.background": "#F3F3F3",
+    "quick_open.group.header": "#ECECEC",
+    "search.match.background": "#FFF3C4"
+  },
+  "dark": {
+    "activity_bar.background": "#333333",
+    "activity_bar.active_border": "#FFFFFF",
+    "activity_bar.icon.active": "#FFFFFF",
+    "activity_bar.icon.inactive": "#858585",
+    "title_bar.slot.background": "#252526",
+    "quick_open.group.header": "#3A3D41",
+    "search.match.background": "#4A3F00"
+  }
+}
