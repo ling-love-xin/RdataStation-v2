@@ -878,6 +878,40 @@ pub(crate) fn auth_config_values(auth_type: &str, config_json: &str) -> Vec<(Str
     spec_field_values(auth_field_specs(auth_type), config_json)
 }
 
+// ===== 文件型「新建文件…」的确定性逻辑（纯函数，便于单测）=====
+
+/// 「新建文件…」的默认文件名（按**驱动 id** 判族，与 `is_file_db` 同一来源）。
+pub(crate) fn new_db_file_suggested_name(driver_id: &str) -> &'static str {
+    if driver_id.eq_ignore_ascii_case("duckdb") {
+        "new_database.duckdb"
+    } else {
+        "new_database.db"
+    }
+}
+
+/// 处理「新建文件…」选中的路径：返回 `(结果行文案, 是否成功, 写回地址的值)`。
+///
+/// **语义（与「打开文件…」严格分离）**：
+/// - 路径已存在 → 不创建、不引用、也不碰原文件（避免误损已有库），提示换名或用「打开文件…」；
+/// - 路径不存在 → 创建空库文件并写回地址（首次连接由驱动初始化结构）。
+///
+/// 为何不做“已存在则直接引用”：那会让「新建」看起来就是打开（真机反馈“duckdb 的新建
+/// 为什么还是打开功能”）；两个按钮职责必须互斥。
+pub(crate) fn create_new_db_file(path: &std::path::Path) -> (String, bool, Option<String>) {
+    let value = path.to_string_lossy().to_string();
+    if path.exists() {
+        return (
+            format!("该文件已存在，未创建：{value}；请换一个文件名，或用「打开文件…」引用它"),
+            false,
+            None,
+        );
+    }
+    match std::fs::File::create(path) {
+        Ok(_) => (format!("已新建数据库文件：{value}"), true, Some(value)),
+        Err(e) => (format!("新建数据库文件失败：{e}"), false, None),
+    }
+}
+
 fn is_bool_text(raw: &str) -> bool {
     matches!(
         raw.trim().to_ascii_lowercase().as_str(),
@@ -1024,8 +1058,8 @@ mod tests {
         field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
         staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
         type_has_driver, url_template_example, auth_config_values, auth_field_specs,
-        build_auth_config_json, build_network_config_json, network_config_values,
-        network_field_specs, DriverDerived,
+        build_auth_config_json, build_network_config_json, create_new_db_file,
+        network_config_values, network_field_specs, new_db_file_suggested_name, DriverDerived,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -1382,6 +1416,41 @@ mod tests {
         )
         .expect("build ssh");
         assert!(json.contains("\"keyPath\""), "{json}");
+    }
+
+    #[test]
+    fn new_db_file_suggested_name_follows_driver() {
+        // 建议文件名按驱动 id 判族（与 `is_file_db` 同一来源），否则类型 / 驱动两套事实会打架。
+        assert_eq!(new_db_file_suggested_name("duckdb"), "new_database.duckdb");
+        assert_eq!(new_db_file_suggested_name("DUCKDB"), "new_database.duckdb");
+        assert_eq!(new_db_file_suggested_name("sqlite"), "new_database.db");
+        assert_eq!(new_db_file_suggested_name(""), "new_database.db", "未知驱动回退 .db");
+    }
+
+    #[test]
+    fn create_new_db_file_rejects_existing_and_creates_missing() {
+        let dir = std::env::temp_dir().join(format!("rds_newfile_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        // 不存在：创建**空**文件并写回地址（首次连接由驱动初始化结构）
+        let path = dir.join("new.duckdb");
+        let (msg, ok, value) = create_new_db_file(&path);
+        assert!(ok, "{msg}");
+        assert_eq!(
+            value.as_deref(),
+            Some(path.to_string_lossy().to_string().as_str())
+        );
+        assert_eq!(std::fs::metadata(&path).expect("meta").len(), 0, "必须是空文件");
+
+        // 已存在：不采用、不覆盖（「新建」与「打开」职责互斥：真机反馈“新建为什么还是打开”）
+        std::fs::write(&path, b"keep-me").expect("write");
+        let (msg, ok, value) = create_new_db_file(&path);
+        assert!(!ok && value.is_none(), "{msg}");
+        assert!(msg.contains("已存在"), "{msg}");
+        assert_eq!(std::fs::read(&path).expect("read"), b"keep-me", "不得清空原文件");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

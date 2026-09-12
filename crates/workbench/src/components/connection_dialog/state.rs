@@ -498,7 +498,6 @@ impl ConnectionDialogState {
             .unwrap_or_else(|| {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             });
-        let type_id = self.selected_type.borrow().clone();
         // 建议文件名按**驱动 id** 给（与 `is_file_db` 同一来源，避免“类型 / 驱动两套事实”
         // 在文件型下打架：DuckDB → `.duckdb`，SQLite / 其余 → `.db`）。
         let driver_value = self
@@ -511,36 +510,13 @@ impl ConnectionDialogState {
         let driver_id = find_driver_by_value(&self.drivers.borrow(), &driver_value)
             .map(|d| d.id.clone())
             .unwrap_or_default();
-        let suggested = if driver_id.eq_ignore_ascii_case("duckdb") || type_id == "duckdb" {
-            "new_database.duckdb"
-        } else {
-            "new_database.db"
-        };
+        let suggested = new_db_file_suggested_name(&driver_id);
         if create_new {
             let receiver = cx.prompt_for_new_path(&start_dir, Some(suggested));
             window
                 .spawn(cx, async move |cx| {
                     let (message, ok, value) = match receiver.await {
-                        Ok(Ok(Some(path))) => {
-                            let value = path.to_string_lossy().to_string();
-                            if path.exists() {
-                                // 「新建」不接受已存在文件：两个入口语义必须分离，否则用户看到
-                                // “新建却引用了旧库”会以为是打开功能（真机反馈）。地址保持不变，
-                                // 也**不碰**原文件（避免误损）。
-                                (
-                                    format!(
-                                        "该文件已存在，未创建：{value}；请换一个文件名，或用「打开文件…」引用它"
-                                    ),
-                                    false,
-                                    None,
-                                )
-                            } else {
-                                match std::fs::File::create(&path) {
-                                    Ok(_) => (format!("已新建数据库文件：{value}"), true, Some(value)),
-                                    Err(e) => (format!("新建数据库文件失败：{e}"), false, None),
-                                }
-                            }
-                        }
+                        Ok(Ok(Some(path))) => create_new_db_file(&path),
                         Ok(Ok(None)) => ("已取消新建（地址保持原值）".to_string(), true, None),
                         Ok(Err(e)) => (format!("新建文件对话框失败：{e}"), false, None),
                         Err(_) => ("新建文件对话框无响应".to_string(), false, None),

@@ -67,6 +67,9 @@ fn ensure_table(conn: &Connection) -> Result<(), CoreError> {
 /// 创建网络配置（项目库，含快照溯源字段）
 pub fn create_network_config(conn: &Connection, nc: &NetworkConfig) -> Result<(), CoreError> {
     let _ = ensure_table(conn);
+    // 敏感键（password / passphrase）先加密再落库：网络档案里可以直接填 SSH / 代理密码，
+    // 与 `auth_data` 同等级别的凭据，不应明文留在磁盘上（§14 #34）。
+    let config = encrypt_network_config(&nc.config)?;
     conn.execute(
         "INSERT OR REPLACE INTO network_configs (id, name, network_type, config, auth_config_id, origin, source_id, snapshot_at, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -74,7 +77,7 @@ pub fn create_network_config(conn: &Connection, nc: &NetworkConfig) -> Result<()
             nc.id,
             nc.name,
             nc.network_type,
-            nc.config,
+            config,
             nc.auth_config_id,
             nc.origin,
             nc.source_id,
@@ -184,10 +187,11 @@ pub fn get_network_config(conn: &Connection, id: &str) -> Result<Option<NetworkC
 
 /// 更新网络配置，若配置不存在则返回错误
 pub fn update_network_config(conn: &Connection, nc: &NetworkConfig) -> Result<(), CoreError> {
+    let config = encrypt_network_config(&nc.config)?;
     let rows = conn
         .execute(
             "UPDATE network_configs SET name = ?1, network_type = ?2, config = ?3, auth_config_id = ?4, updated_at = ?5 WHERE id = ?6",
-            params![nc.name, nc.network_type, nc.config, nc.auth_config_id, nc.updated_at, nc.id],
+            params![nc.name, nc.network_type, config, nc.auth_config_id, nc.updated_at, nc.id],
         )
         .map_err(|e| storage_err("update_network_config", e.to_string()))?;
 

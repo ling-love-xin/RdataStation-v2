@@ -424,6 +424,8 @@ flowchart LR
 | 74 | **测试连接与真实连接同源**：`ConnectionService::{inject_auth_config_credentials, build_probe_config}` 成为**唯一**的“档案 → 建连参数”组装点（`connect` 与测试共用）；测试连接按同一规则注入认证档案凭据、**真实建立网络档案隧道**（探测结束即 drop 守卫）、应用驱动属性 / 高级选项；档案缺失 / 读取失败 / 注入失败必须产生**可见说明**（不允许静默）；`DataSourceService::test(input, project_path)` 增加项目根入参以解析 P_/GP_ 档案；`url_params::merge_credentials` 统一「字段凭据 → URL」的写法（userinfo 百分号转义） | 旧 `test` 只吃表单字段：引用认证档案时 UI 已把用户名 / 密码换成只读说明 → **测试必然缺凭据**（假失败；宽松库还会假成功）；引用 SSH / 代理档案也不走隧道 → 测试结论与真实连接相反。同源后「测试通过」与「连接能建立」共用同一条组装路径，差异只剩“不注册连接池 / 不落库”；userinfo 转义顺带修掉「密码含 `@` 把 host 截断」的隐患 |
 | 75 | **档案引用完整性与严格模式（A2）**：① 管理器列表显示**被引用计数**（`ReferenceCount{global,project}`，`count_references_batch` 一次取齐）、删除被引用的认证 / 网络 / 环境配置被拦下（`DataSourceService::ensure_no_references`，消息含引用数与范围）；② 引用的档案不存在 / 读不出 / 注入失败一律**报错**（`inject_auth_config_credentials` 返回 `Result`），不再回退“直连 + 无凭据”；③ 引用了网络档案但解析不出连接方式（被删 / 类型未知 / 内容非法）时，`connect` 与测试连接都拒绝静默直连 | 静默降级是安全缺陷：用户以为走跳板机 / 专用账号，实际走公网直连；引用计数与拦截把“删档案”的后果在执行前说清。计数范围 = 全局库 + 当前打开项目（未打开项目的引用不可见，已登记为 #33），所以拦截是“尽力而为”，连接时的显式报错是兼底 |
 | 76 | **认证档案 `auth_data` 字段化（A5）+ 列表真脱敏**：① `helpers::{auth_field_specs, build_auth_config_json, auth_config_values}`（与网络档案同款纯函数；**字段键严格对齐后端读取端**：`username`/`password`、`keyPath`/`passphrase`、`certPath`/`certKeyPath`、`principal`/`keytabPath`），认证管理器按类型展开真实字段（`password`/`ldap`/`pg_class`/`kerberos`/`ssh_key`/`proxy_pwd`，`AUTH_TYPES` 由 3 项扩到 6 项），校验必填 / SSH 凭据二选一 / 代理凭据成对；编辑回填走新增的 `DataSourceService::auth_config_detail_by_name`（单条解密）；② **列表真脱敏**：存储层 `list_auth_configs` 会解密后返回明文（内部凭据注入用），服务层列表接口现在把 `auth_data` 置空——列表只需要 id/name/type，明文不进 UI 内存 | 原实现只有一个「数据(JSON)」文本框，用户必须手写 camelCase 的 `keyPath` / `certPath` / `keytabPath`，写错就等于没配（静默）；同时「列表脱敏」一直只是注释里的承诺（实际返回解密明文），本模块是本地进程但也应遵守最小暴露面 |
+| 77 | **「新建文件…」与「打开文件…」职责互斥**：新建选到已存在文件时**不引用、不覆盖**（原文件一个字节不动），结果行提示「该文件已存在，未创建：…；请换一个文件名，或用「打开文件…」引用它」；建议文件名按**驱动 id** 给（`duckdb` → `new_database.duckdb`，其余文件型 → `new_database.db`），与 `is_file_db` 同一来源 | 上一版（决策 #57）为“避免误损数据”让新建选到已存在文件时直接引用——真机上的表现是「点新建却引用了旧库」，用户直接问「duckdb 的新建为什么还是打开功能」。新建就该产出新文件；要复用已有库请用打开。顺带消除“类型 id / 驱动 id”两套事实来源（建议名原先只看 `selected_type`） |
+| 78 | **暂存列表分区展示（草稿 / 已保存连接）**：在条目类别切换处插一行小标题（「草稿（未保存）」/「已保存连接（点条目可编辑）」） | 暂存区为了让“一个对话框里连续编辑多条已保存连接”成立，会把库中连接并入列表（决策 #26/#45）；不分区时用户会问「暂存的连接为什么可以读到数据库实际的连接」。分区**不改变数据来源**（草稿仍只存 `connection_drafts`），只把两类条目的来源说清楚 |
 
 
 ---
@@ -461,6 +463,7 @@ flowchart LR
 | 单测 | `connection_service::referenced_network_profile_without_method_is_rejected`（A2） | 引用了网络档案但未解析出连接方式 → `connect_with_type` 直接 Err（在 `apply_network_method` 之前拦下，不建隧道、不碰数据库） |
 | 单测 | `connection_dialog/helpers.rs`（内嵌 +4，A5） | 认证字段：类型覆盖（6 类规范键 + 别名）/ 组装键与后端读取端一致（驼峰 `keyPath` / `certPath` / `principal`）/ 校验（必填、SSH 二选一、代理成对、未知类型拒绝）/ 编辑回填往返 / **闭环：组装结果喂给 `inject_auth_into_url` 能真正注入 URL** |
 | 服务层 | `data_source_lifecycle.rs::auth_config_detail_by_name_decrypts_for_edit`（A5） | 列表接口脱敏（`auth_data` 置空，不出明文）；`auth_config_detail_by_name` 返回解密后 JSON（编辑回填）；不存在 → `Ok(None)` |
+| 单测 | `connection_dialog/helpers.rs`（内嵌 +2，文件选择语义） | `new_db_file_suggested_name`（按驱动 id 判族，大小写与未知驱动回退）/ `create_new_db_file`（不存在 → 创建**空**文件并采用地址；**已存在 → 不采用、不清空**原文件） |
 
 约定：测试全部落临时目录、不触真实库；`#[gpui_kit::test]` 且**禁用通配导入**（避免 `#[test]` 宏遮蔽，见 gpui-kit-dev skill）。
 
@@ -518,6 +521,8 @@ flowchart LR
 | 44 | **测试连接与真实连接同源（审计 A1，§14 #26 关闭）**：`ConnectionService::{inject_auth_config_credentials, build_probe_config}`（认证档案凭据 + 真实隧道 + 高级选项 / 驱动属性，`connect` 与测试共用）；`DataSourceService::test(input, project_path)`；`url_params::merge_credentials`（userinfo 转义）；`load_auth_data_from_db` 增加库入参（测试可注入临时库） | `services/{connection_service.rs,data_source_service.rs}`、`connection/src/url_params.rs`、`connection_dialog/render.rs`（决策 #74）；测试：`data_source_lifecycle` +2、`url_params` +1；工作区 check 零警告 |
 | 45 | **档案引用完整性与严格模式（审计 A2，§14 #27 部分关闭）**：管理器列表显示被引用计数（批量查询）；删除被引用档案被拦下（`ensure_no_references`）；档案缺失 / 网络档案无法解析 → `connect` 与测试连接双双报错（不再静默无凭据直连） | `services/data_source_service.rs`（`ReferenceField`/`ReferenceCount`/`count_references*`/`ensure_no_references`）、`services/connection_service.rs`（`inject_auth_config_credentials` 返回 `Result` + 网络守卫）、`connection_dialog/{managers.rs,mod.rs,state.rs}`（决策 #75）；测试：`data_source_lifecycle` +1、`connection_service` 内嵌 +1 |
 | 46 | **认证档案字段化与列表脱敏（审计 A5，§14 #30 关闭）**：`helpers` 新增认证字段声明 / 组装 / 回填纯函数（键对齐后端读取端）；认证管理器按 6 类认证类型展开字段（此前只有 JSON 文本框）；`AUTH_TYPES` 3→6；编辑回填走 `auth_config_detail_by_name`（单条解密）；服务层 `list_auth_configs` 真脱敏（`auth_data` 置空） | `connection_dialog/{helpers.rs,managers.rs,mod.rs}`、`services/data_source_service.rs`（决策 #76）；测试：`helpers` 内嵌 +4、`data_source_lifecycle` +1；新增待办 #34（网络档案 `config` 内密码未加密） |
+| 47 | **文件选择语义修正（真机反馈）**：「新建文件…」选到已存在文件不再“直接引用”，改为提示换名 / 用「打开文件…」（原文件不动）；建议文件名按驱动 id 给（`new_database.duckdb` / `.db`） | `connection_dialog/{state.rs,helpers.rs}`（决策 #77）；测试：`helpers` 内嵌 +2（`new_db_file_suggested_name` / `create_new_db_file`） |
+| 48 | **暂存列表分区**：条目按类别插小标题（草稿（未保存）/ 已保存连接（点条目可编辑）），来源一眼可分 | `connection_dialog/render.rs`（决策 #78）；回归：`connection_staging` / `connection_multi_save` / `dialog_host_layer` 全绿 |
 
 
 后续可选（未做）：
