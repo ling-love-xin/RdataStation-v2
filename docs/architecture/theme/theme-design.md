@@ -42,7 +42,7 @@
 | `background` | `#1E1E1E` | 编辑器/窗口底 |
 | `foreground` | `#CCCCCC` | 默认文字 |
 | `border` | `#3C3C3C` | 通用边框 |
-| `input.border` | `#3C3C3C` | 输入框边 |
+| `input.border` | `#4F4F4F` | 输入框边（2026-09-12 由 `#3C3C3C` 提亮：与原 `border` 同色时输入框在深底上不易辨） |
 | `caret` | `#E8846F` | 光标 |
 | `selection.background` | `#264F78` | 文本选区 |
 | `sidebar.background` | `#252526` | 侧边栏底 |
@@ -79,7 +79,7 @@
 | `background` | `#FFFFFF` | 编辑器/窗口底 |
 | `foreground` | `#333333` | 默认文字 |
 | `border` | `#D4D4D4` | 通用边框 |
-| `input.border` | `#D4D4D4` | 输入框边 |
+| `input.border` | `#B0B0B0` | 输入框边（2026-09-12 由 `#D4D4D4` 加深：输入框底 = `background` = 白，极浅边框会“看不见”） |
 | `caret` | `#C25B46` | 光标 |
 | `selection.background` | `#ADD6FF` | 文本选区 |
 | `sidebar.background` | `#F3F3F3` | 侧边栏底 |

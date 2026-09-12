@@ -345,6 +345,14 @@ fn file_type_general_tab_renders_and_switches_back(cx: &mut TestAppContext) {
     assert_eq!(sel, "sqlx");
     cx.update(|window, cx| window.draw(cx).clear(cx));
 
+    // 单列分组大纲：折叠态默认展开；切换折叠后重渲染（含文件型 / 网络型两种分组集合）。
+    assert!(!cx.update(|_, _cx| dialog.section_collapsed("conn")));
+    cx.update(|_, _cx| dialog.toggle_section("conn"));
+    assert!(cx.update(|_, _cx| dialog.section_collapsed("conn")));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|_, _cx| dialog.toggle_section("conn"));
+    assert!(!cx.update(|_, _cx| dialog.section_collapsed("conn")));
+
     cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
 }
 

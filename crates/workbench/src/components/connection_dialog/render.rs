@@ -266,8 +266,22 @@ impl ConnectionDialogState {
                 .as_ref()
                 .map(|d| d.is_file)
                 .unwrap_or_else(|| matches!(selected_type_id.as_str(), "sqlite" | "duckdb"));
-            // 地址占位随驱动推导（每帧写入；与上方其它输入占位同一约定）。
-            let want_address_ph = address_placeholder(current_driver.as_ref(), &selected_type_id);
+            // 未选类型 / 驱动：表单整体置灰不可输入（控件正常显示，只改可用性）。
+            let form_disabled = current_driver.is_none();
+            // 驱动声明的连接字段（`drivers.config_schema.fields[]`）：行的存在性 / 标签 / 占位均由它决定。
+            let form_fields: Vec<FormField> = current_driver
+                .as_ref()
+                .map(|d| driver_form_fields(&d.config_schema))
+                .unwrap_or_default();
+            // 地址占位随驱动推导（每帧写入；与上方其它输入占位同一约定）：
+            // 文件型优先用 schema 声明的字段占位（如「选择 .db 或 .sqlite 文件」），否则回退类型字典。
+            let want_address_ph = if is_file_db {
+                address_field(&form_fields)
+                    .and_then(|f| f.placeholder.clone())
+                    .unwrap_or_else(|| address_placeholder(current_driver.as_ref(), &selected_type_id))
+            } else {
+                address_placeholder(current_driver.as_ref(), &selected_type_id)
+            };
             url.update(cx, |s, cx| s.set_placeholder(want_address_ph, window, cx));
 
             let theme = cx.theme();
@@ -994,13 +1008,11 @@ impl ConnectionDialogState {
                         )
                         .child(info_text);
 
-                    // 驱动声明的连接字段（`drivers.config_schema`）：行的存在性 / 标签 / 占位均由它决定。
-                    let form_fields = current_driver
-                        .as_ref()
-                        .map(|d| driver_form_fields(&d.config_schema))
-                        .unwrap_or_default();
-                    let addr_label = address_row_label(&form_fields, is_file_db);
+                    // 驱动声明的连接字段（`drivers.config_schema`）已在入口计算（`form_fields`）。
+                    // 地址行标签固定为「地址 / URI」（用户明确要求），字段标签不覆盖它。
+                    let addr_label = address_label(is_file_db);
 
+                    // 未选类型 / 驱动：表单整体置灰不可输入（控件仍在，只改可用性）。
                     // 分组① 连接设置（**按驱动动态渲染**）：
                     // 文件型：地址输入 + 系统文件选择 / 新建（地址框唯一，Header 不再重复）；
                     // 网络型：主机 / 端口 / 数据库为解析摘要（纯文本行，编辑在 Header URI）。
@@ -1011,16 +1023,19 @@ impl ConnectionDialogState {
                             .gap(rems(GAP_SM))
                             .child(form_row(
                                 theme,
-                                &addr_label,
+                                addr_label,
                                 div()
                                     .h_flex()
                                     .items_center()
                                     .gap(rems(0.5))
-                                    .child(div().flex_1().min_w(px(0.)).child(Input::new(&url)))
+                                    .child(div().flex_1().min_w(px(0.)).child(
+                                        Input::new(&url).disabled(form_disabled),
+                                    ))
                                     .child(
                                         Button::new("pick-db-file")
                                             .secondary()
                                             .label("打开文件…")
+                                            .disabled(form_disabled)
                                             .on_click({
                                                 let state = state.clone();
                                                 let entity = entity.clone();
@@ -1033,6 +1048,7 @@ impl ConnectionDialogState {
                                         Button::new("new-db-file")
                                             .secondary()
                                             .label("新建文件…")
+                                            .disabled(form_disabled)
                                             .on_click({
                                                 let state = state.clone();
                                                 let entity = entity.clone();
@@ -1048,7 +1064,8 @@ impl ConnectionDialogState {
                             ))
                     } else {
                         let mut body = div().w_full().v_flex().gap(rems(GAP_SM));
-                        // 摘要行只出驱动声明的键（schema 为空时回退内置三行，不让界面变空）。
+                        // 摘要行只出驱动声明的键（schema 为空时回退内置三行，不让界面变空）；
+                        // 未选类型 / 驱动时同样正常渲染，只是整体置灰不可输入。
                         for (key, fallback, value) in [
                             ("host", "主机", host_v.clone().unwrap_or_default()),
                             (
@@ -1070,9 +1087,9 @@ impl ConnectionDialogState {
                             } else {
                                 value
                             };
-                            body = body.child(text_row(theme, &label, &shown));
+                            body = body.child(form_row(theme, &label, value_box(theme, &shown)));
                         }
-                        if form_fields.is_empty() {
+                        if form_fields.is_empty() && !form_disabled {
                             body = body.child(hint_line(theme, "驱动未声明连接字段：按内置字段展示"));
                         }
                         body.child(hint_line(theme, "地址（URI）在顶部编辑，此处为解析结果"))
@@ -1146,7 +1163,11 @@ impl ConnectionDialogState {
                                     div()
                                         .flex_1()
                                         .min_w(px(0.))
-                                        .child(Select::new(&auth_ref).placeholder("引用已保存配置…")),
+                                        .child(
+                                            Select::new(&auth_ref)
+                                                .placeholder("引用已保存配置…")
+                                                .disabled(form_disabled),
+                                        ),
                                 )
                                 .child(
                                     Button::new("mgr-auth")
@@ -1184,14 +1205,14 @@ impl ConnectionDialogState {
                                     field_spec(&form_fields, "username")
                                         .map(|f| f.label.as_str())
                                         .unwrap_or("用户名"),
-                                    Input::new(&user),
+                                    Input::new(&user).disabled(form_disabled),
                                 ))
                                 .child(form_row(
                                     theme,
                                     field_spec(&form_fields, "password")
                                         .map(|f| f.label.as_str())
                                         .unwrap_or("密码"),
-                                    Input::new(&pass),
+                                    Input::new(&pass).disabled(form_disabled),
                                 ))
                         });
 
@@ -1216,7 +1237,9 @@ impl ConnectionDialogState {
                         .child(form_row(
                             theme,
                             "模式",
-                            Select::new(&ssl_mode).placeholder("选择 SSL 模式…"),
+                            Select::new(&ssl_mode)
+                                .placeholder("选择 SSL 模式…")
+                                .disabled(form_disabled),
                         ))
                         .child(if ssl_selected == "disable" {
                             div()
@@ -1228,9 +1251,21 @@ impl ConnectionDialogState {
                                 .w_full()
                                 .v_flex()
                                 .gap(rems(GAP_SM))
-                                .child(form_row(theme, "CA 证书", Input::new(&ssl_ca)))
-                                .child(form_row(theme, "客户端证书", Input::new(&ssl_cert)))
-                                .child(form_row(theme, "私钥", Input::new(&ssl_key)))
+                                .child(form_row(
+                                    theme,
+                                    "CA 证书",
+                                    Input::new(&ssl_ca).disabled(form_disabled),
+                                ))
+                                .child(form_row(
+                                    theme,
+                                    "客户端证书",
+                                    Input::new(&ssl_cert).disabled(form_disabled),
+                                ))
+                                .child(form_row(
+                                    theme,
+                                    "私钥",
+                                    Input::new(&ssl_key).disabled(form_disabled),
+                                ))
                         });
 
                     // 卡片 4：组织（标签 + 项目分组勾选；分组为项目级能力）。
@@ -1238,7 +1273,11 @@ impl ConnectionDialogState {
                         .w_full()
                         .v_flex()
                         .gap(rems(GAP_SM))
-                        .child(form_row(theme, "标签", Input::new(&tags_input)))
+                        .child(form_row(
+                            theme,
+                            "标签",
+                            Input::new(&tags_input).disabled(form_disabled),
+                        ))
                         .child(
                             div()
                                 .text_xs()
@@ -1268,6 +1307,7 @@ impl ConnectionDialogState {
                                     Checkbox::new(SharedString::from(format!("grp-{gid}")))
                                         .label(gname.clone())
                                         .checked(*checked)
+                                        .disabled(form_disabled)
                                         .on_click({
                                             let state = state.clone();
                                             let entity = entity.clone();
@@ -1321,7 +1361,7 @@ impl ConnectionDialogState {
                             "数据库认证",
                             auth_body,
                         ));
-                        if driver_declares_ssl {
+                        if driver_declares_ssl || form_disabled {
                             outline = outline.child(make_section(
                                 "ssl",
                                 lucide("icons/shield-check.svg"),
@@ -1856,7 +1896,10 @@ impl ConnectionDialogState {
                                 .child(text)
                                 .into_any_element()
                         } else {
-                            Input::new(&url).flex_1().into_any_element()
+                            Input::new(&url)
+                                .disabled(form_disabled)
+                                .flex_1()
+                                .into_any_element()
                         }),
                 );
 

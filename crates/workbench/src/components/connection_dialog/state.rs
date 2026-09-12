@@ -392,12 +392,12 @@ impl ConnectionDialogState {
     }
 
     /// 单列大纲分组是否已折叠（缺省 = 展开；纯 UI 偏好，不落库）。
-    pub(crate) fn section_collapsed(&self, id: &str) -> bool {
+    pub fn section_collapsed(&self, id: &str) -> bool {
         self.collapsed_sections.borrow().iter().any(|s| s == id)
     }
 
     /// 折叠 / 展开大纲分组。
-    pub(crate) fn toggle_section(&self, id: &str) {
+    pub fn toggle_section(&self, id: &str) {
         let mut list = self.collapsed_sections.borrow_mut();
         match list.iter().position(|s| s == id) {
             Some(pos) => {
@@ -462,11 +462,12 @@ impl ConnectionDialogState {
 
     /// 文件型数据库：系统文件选择器（打开 / 新建）→ 写回地址输入。
     ///
-    /// - `create_new = false`：选择已有数据库文件；
-    /// - `create_new = true`：以文件对话框取目标路径，文件不存在则创建空库文件
-    ///   （SQLite / DuckDB 首次连接会自动初始化结构）；已存在则直接引用（不覆盖）。
+    /// - `create_new = false` → **打开**对话框（只能选已存在的文件）；
+    /// - `create_new = true` → **保存**对话框（`prompt_for_new_path`：可输入新文件名）；
+    ///   文件不存在则创建空库文件，已存在则直接引用（**不清空**，避免误损数据）。
     ///
-    /// 取消选择时保持原值（与项目模块的目录选择同一交互约定）；结果写对话框结果行。
+    /// 上一版的教训：用打开对话框（Windows 带 `FOS_FILEMUSTEXIST`）当“新建”用，输入新文件名会被系统拒掉，
+    /// 表现为“新建没实现”；且取消 / 失败都被静默吞掉，看起来像按钮没反应。现在三种结局都写结果行。
     pub(crate) fn pick_db_file(
         self: &Rc<Self>,
         create_new: bool,
@@ -477,46 +478,66 @@ impl ConnectionDialogState {
         let target = self.url.clone();
         let result = self.result.clone();
         let result_ok = self.result_ok.clone();
-        let receiver = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some(if create_new {
-                "新建数据库文件（输入文件名）".into()
-            } else {
-                "选择数据库文件".into()
-            }),
-        });
-        window
-            .spawn(cx, async move |cx| {
-                let Ok(Ok(Some(paths))) = receiver.await else {
-                    return;
-                };
-                let Some(path) = paths.into_iter().next() else {
-                    return;
-                };
-                let value = path.to_string_lossy().to_string();
-                let (message, ok) = if !create_new {
-                    (format!("已选择数据库文件：{value}"), true)
-                } else if path.exists() {
-                    (format!("文件已存在，直接引用：{value}"), true)
-                } else {
-                    match std::fs::File::create(&path) {
-                        Ok(_) => (format!("已新建数据库文件：{value}"), true),
-                        Err(e) => (format!("新建数据库文件失败：{e}"), false),
-                    }
-                };
-                let _ = cx.update(|window, cx| {
-                    if ok {
-                        target.update(cx, |s, cx| s.set_value(value, window, cx));
-                    }
-                    *result.borrow_mut() = Some(message);
-                    result_ok.set(ok);
-                    // 地址变更需要重渲染对话框（`cx.notify` 只重渲当前实体，对话框层由宿主重渲）。
-                    entity.update(cx, |_, cx| cx.notify());
-                });
-            })
-            .detach();
+        // 默认目录：当前地址的父目录（已有值时），否则工作目录。
+        let current = target.read(cx).value().to_string();
+        let start_dir = std::path::Path::new(current.trim())
+            .parent()
+            .filter(|p| p.is_dir())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+        let type_id = self.selected_type.borrow().clone();
+        let suggested = match type_id.as_str() {
+            "duckdb" => "new_database.duckdb",
+            _ => "new_database.db",
+        };
+        if create_new {
+            let receiver = cx.prompt_for_new_path(&start_dir, Some(suggested));
+            window
+                .spawn(cx, async move |cx| {
+                    let (message, ok, value) = match receiver.await {
+                        Ok(Ok(Some(path))) => {
+                            let value = path.to_string_lossy().to_string();
+                            if path.exists() {
+                                (format!("文件已存在，直接引用（未清空）：{value}"), true, Some(value))
+                            } else {
+                                match std::fs::File::create(&path) {
+                                    Ok(_) => (format!("已新建数据库文件：{value}"), true, Some(value)),
+                                    Err(e) => (format!("新建数据库文件失败：{e}"), false, None),
+                                }
+                            }
+                        }
+                        Ok(Ok(None)) => ("已取消新建（地址保持原值）".to_string(), true, None),
+                        Ok(Err(e)) => (format!("新建文件对话框失败：{e}"), false, None),
+                        Err(_) => ("新建文件对话框无响应".to_string(), false, None),
+                    };
+                    apply_file_pick(&target, &result, &result_ok, value, message, ok, &entity, cx);
+                })
+                .detach();
+        } else {
+            let receiver = cx.prompt_for_paths(PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: Some("选择数据库文件".into()),
+            });
+            window
+                .spawn(cx, async move |cx| {
+                    let (message, ok, value) = match receiver.await {
+                        Ok(Ok(Some(paths))) => match paths.into_iter().next() {
+                            Some(path) => {
+                                let value = path.to_string_lossy().to_string();
+                                (format!("已选择数据库文件：{value}"), true, Some(value))
+                            }
+                            None => ("已取消选择（地址保持原值）".to_string(), true, None),
+                        },
+                        Ok(Ok(None)) => ("已取消选择（地址保持原值）".to_string(), true, None),
+                        Ok(Err(e)) => (format!("打开文件对话框失败：{e}"), false, None),
+                        Err(_) => ("打开文件对话框无响应".to_string(), false, None),
+                    };
+                    apply_file_pick(&target, &result, &result_ok, value, message, ok, &entity, cx);
+                })
+                .detach();
+        }
     }
 
     /// 侧栏选择数据库类型：更新选中、刷新 Header 驱动选项（该类型启用驱动、短名显示）
@@ -1142,4 +1163,28 @@ impl ClonedDialogState {
         }
         Ok(())
     }
+}
+
+/// 写回文件选择结果（打开 / 新建共用）：有值时更新地址输入；所有结局都写结果行并通知宿主重渲。
+///
+/// `cx` 为窗口异步上下文（`App::prompt_for_paths` / `prompt_for_new_path` 的 oneshot 回传约定），
+/// `set_value` 需要窗口句柄，故统一在 `cx.update` 内完成。
+fn apply_file_pick(
+    target: &Entity<InputState>,
+    result: &Rc<RefCell<Option<String>>>,
+    result_ok: &Rc<Cell<bool>>,
+    value: Option<String>,
+    message: String,
+    ok: bool,
+    entity: &Entity<crate::panels::EditorPanel>,
+    cx: &mut gpui_kit::AsyncWindowContext,
+) {
+    let _ = cx.update(|window, cx| {
+        if let Some(value) = value {
+            target.update(cx, |s, cx| s.set_value(value, window, cx));
+        }
+        *result.borrow_mut() = Some(message);
+        result_ok.set(ok);
+        entity.update(cx, |_, cx| cx.notify());
+    });
 }

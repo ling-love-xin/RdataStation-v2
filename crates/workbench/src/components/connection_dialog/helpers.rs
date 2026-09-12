@@ -37,6 +37,8 @@ pub(crate) const GAP_LG: f32 = 0.75;
 
 /// 行高与控件尺寸（rem）。
 pub(crate) const ROW_H: f32 = 1.75;
+/// 表单行标签列宽（4.25rem = 68px，容纳 5 个中文字；再宽就会“标签离输入框太远”）。
+pub(crate) const LABEL_COL_W: f32 = 4.25;
 /// Header 标签列宽（rem）：刚好容纳两字标签（名称 / 备注 / 驱动 / URI），
 /// 不让标签与控件之间留下过大的空白（真机反馈：间距过大）。
 pub(crate) const LABEL_W: f32 = 1.75;
@@ -272,10 +274,10 @@ pub(crate) fn type_badge(types: &[DataSourceType], type_id: &str) -> Option<(Str
     })
 }
 
-/// 分组标题行（单列大纲，可折叠）：chevron + 图标 + 标题。
+/// 分组标题行（单列大纲，可折叠）：chevron + 图标 + 标题 + 底部分隔线。
 ///
 /// 与卡片（`sec-card`）的取舍：卡片并行会在宽度不足时换行、卡高不齐、长值被挤；
-/// 单列大纲只有一列宽度，标题行同时承担“分组”与“折叠手柄”（真机反馈：卡片式输入框几乎看不见）。
+/// 单列大纲只有一列宽度，分组用**整幅面板 + 标题栏分隔线**区分（真机反馈：分组分辨不清）。
 pub(crate) fn section_header(
     theme: &Theme,
     icon: Icon,
@@ -288,10 +290,10 @@ pub(crate) fn section_header(
         .items_center()
         .gap(rems(GAP_SM))
         .h(rems(ROW_H))
-        .px(rems(GAP_XS))
-        .rounded(rems(GAP_XS))
+        .border_b_1()
+        .border_color(theme.colors.border)
         .cursor_pointer()
-        .hover(|s| s.bg(theme.colors.list_hover))
+        .hover(|s| s.opacity(0.85))
         .child(
             lucide(if collapsed {
                 "icons/chevron-right.svg"
@@ -311,7 +313,7 @@ pub(crate) fn section_header(
         )
 }
 
-/// 大纲分组：标题行（点击折叠）+ 展开时的内容（左缩进与标题对齐）。
+/// 大纲分组：**整幅面板**（浅底 + 圆角，非并排卡片）+ 标题行（点击折叠）+ 内容。
 ///
 /// `on_toggle` 由调用方提供（需要对话框状态与宿主重绘桥），保持 helper 不依赖状态。
 pub(crate) fn outline_section(
@@ -327,23 +329,35 @@ pub(crate) fn outline_section(
     let header = section_header(theme, icon, icon_color, title, collapsed)
         .id(ElementId::Name(SharedString::from(format!("sec-{id}"))))
         .on_click(move |_, window, cx| on_toggle(window, cx));
-    let mut out = div().w_full().v_flex().gap(rems(GAP_SM)).child(header);
+    let mut panel = div()
+        .w_full()
+        .v_flex()
+        .gap(rems(GAP_SM))
+        .rounded(px(8.))
+        .bg(theme.colors.group_box)
+        .py(rems(GAP_SM))
+        .px(rems(GAP_MD))
+        .child(header);
     if !collapsed {
-        out = out.child(div().w_full().pl(rems(GAP_LG)).child(body));
+        panel = panel.child(div().w_full().pt(rems(GAP_SM)).child(body));
     }
-    out
+    panel
 }
 
-/// 表单行（大纲内）：固定标签列 + 弹性控件列（原 `form-grid`）。
+/// 表单行（大纲内）：标签列（贴紧控件）+ 弹性控件列（原 `form-grid`）。
+///
+/// 标签列 4.25rem + 间距 0.375rem（真机反馈：标签与输入框距离太远）。
 pub(crate) fn form_row(theme: &Theme, label: &str, value: impl IntoElement) -> Div {
     div()
         .h_flex()
         .items_center()
-        .gap(rems(0.75))
+        .gap(rems(GAP_SM))
         .child(
             div()
-                .w(rems(5.75))
+                .w(rems(LABEL_COL_W))
                 .flex_shrink_0()
+                .overflow_hidden()
+                .text_ellipsis()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
                 .child(label.to_string()),
@@ -351,34 +365,36 @@ pub(crate) fn form_row(theme: &Theme, label: &str, value: impl IntoElement) -> D
         .child(div().flex_1().min_w(px(0.)).child(value))
 }
 
-/// 只读值行：标签 + **纯文本**值（不用白底白框——底色与卡片同色时会“隐形”）。
-pub(crate) fn text_row(theme: &Theme, label: &str, value: &str) -> Div {
-    let placeholder = value.trim().is_empty() || value == "-";
+/// 只读值框（数据框）：与可编辑输入同形（白底 + 输入框边），仅内容不可改。
+///
+/// 真机反馈两轮：① 白底白框“看不见”（见决策 #52）→ ② 去掉框后又“没有数据框”
+/// —— 所以保留可见的框，靠**面板浅底**（`group_box`）与白底形成对比。
+pub(crate) fn value_box(theme: &Theme, text: &str) -> Div {
+    let placeholder = text.trim().is_empty() || text == "-";
     div()
         .h_flex()
         .items_center()
-        .gap(rems(0.75))
+        .w_full()
+        .min_w(px(0.))
+        .h(rems(ROW_H))
+        .border_1()
+        .border_color(theme.colors.input)
+        .rounded(rems(GAP_SM))
+        .bg(theme.colors.background)
+        .px(rems(GAP_SM))
+        .text_xs()
+        .overflow_hidden()
         .child(
             div()
-                .w(rems(5.75))
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .flex_1()
                 .min_w(px(0.))
                 .overflow_hidden()
-                .text_xs()
                 .text_ellipsis()
                 .text_color(if placeholder {
                     theme.colors.muted_foreground
                 } else {
                     theme.colors.foreground
                 })
-                .child(value.to_string()),
+                .child(text.to_string()),
         )
 }
 
@@ -386,7 +402,7 @@ pub(crate) fn text_row(theme: &Theme, label: &str, value: &str) -> Div {
 pub(crate) fn hint_line(theme: &Theme, text: &str) -> Div {
     div()
         .w_full()
-        .pl(rems(5.75 + 0.75))
+        .pl(rems(LABEL_COL_W + GAP_SM))
         .text_xs()
         .text_color(theme.colors.muted_foreground)
         .child(text.to_string())
@@ -535,13 +551,6 @@ pub(crate) fn address_field(fields: &[FormField]) -> Option<&FormField> {
         .or_else(|| fields.iter().find(|f| matches!(f.key.as_str(), "file_path" | "path" | "file")))
 }
 
-/// 地址行标签：取驱动声明字段的标签，未声明时退回内置（文件型 = 地址 / 网络型 = URI）。
-pub(crate) fn address_row_label(fields: &[FormField], is_file: bool) -> String {
-    address_field(fields)
-        .map(|f| f.label.clone())
-        .unwrap_or_else(|| address_label(is_file).to_string())
-}
-
 /// 文件型（SQLite / DuckDB）连接的落库前清洗：清掉无意义的凭据 / 网络 / TLS 字段。
 ///
 /// 输入对象可能带着上个数据库类型的残留（如从 MySQL 切到 SQLite），这些字段落到库里
@@ -630,11 +639,11 @@ pub(crate) fn scope_from_label(l: &str) -> ConnectionScope {
 mod tests {
     // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::{
-        address_field, address_label, address_placeholder, address_row_label, capability_rows,
-        driver_auth_types, driver_capabilities, driver_form_fields, driver_short_name,
-        enabled_drivers_of_type, field_spec, find_driver_by_value, policy_summary,
-        policy_type_from_label, policy_type_label, strip_file_db_noise, tags_from_json, tags_to_json,
-        type_badge, type_has_driver, url_template_example,
+        address_field, address_label, address_placeholder, capability_rows, driver_auth_types,
+        driver_capabilities, driver_form_fields, driver_short_name, enabled_drivers_of_type,
+        field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
+        strip_file_db_noise, tags_from_json, tags_to_json, type_badge, type_has_driver,
+        url_template_example,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -698,7 +707,6 @@ mod tests {
         assert_eq!(fields[0].kind, "file");
         assert!(fields[0].required);
         assert_eq!(address_field(&fields).map(|f| f.key.as_str()), Some("file_path"));
-        assert_eq!(address_row_label(&fields, true), "数据库文件");
         // 真实种子：MySQL 声明 host/port/database/username/password（顺序保留）。
         let mysql = r#"{"fields":[{"key":"host","label":"主机","type":"text","required":true},{"key":"port","label":"端口","type":"number","required":true},{"key":"database","label":"数据库","type":"text"},{"key":"username","label":"用户名","type":"text"},{"key":"password","label":"密码","type":"password"}]}"#;
         let fields = driver_form_fields(mysql);

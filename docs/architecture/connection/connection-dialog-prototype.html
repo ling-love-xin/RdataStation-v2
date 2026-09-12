@@ -6,7 +6,7 @@
 <title>RdataStation 新增连接对话框 · 原型</title>
 <style>
 :root{
-  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#B0B0B0; --group-box:#F5F5F5;
   --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
   --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
   --titlebar:#DDDDDD; --tabbar:#F3F3F3; --tabactive-bg:#FFFFFF; --tabactive-fg:#333333;
@@ -15,7 +15,7 @@
   --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
 }
 [data-theme="dark"]{
-  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4F4F4F; --group-box:#171717;
   --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
   --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
   --titlebar:#323233; --tabbar:#252526; --tabactive-bg:#1E1E1E; --tabactive-fg:#FFFFFF;
@@ -129,18 +129,28 @@ button{font-family:inherit;}
 .info-banner svg{width:14px;height:14px;flex-shrink:0;}
 .banner-note{width:100%;display:flex;align-items:center;gap:8px;background:var(--warning-bg);color:var(--warning);border-radius:8px;padding:7px 12px;font-size:12px;border:1px solid color-mix(in srgb,var(--warning) 28%,transparent);}
 .banner-note svg{width:14px;height:14px;flex-shrink:0;}
-.sec-row{width:100%;display:flex;flex-wrap:wrap;gap:12px;}
-.sec-card{flex:1 1 270px;min-width:236px;border:1px solid var(--border);border-radius:10px;background:var(--bg);padding:12px 14px;transition:border-color .15s,box-shadow .15s;}
-.sec-card:hover{border-color:color-mix(in srgb,var(--active-border) 40%,var(--border));}
-.sec-title{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;margin-bottom:10px;}
-.sec-title .st-ic{width:14px;height:14px;color:var(--active-border);}
-.sec-title .st-ic.blue{color:var(--info);}
-.sec-title .st-ic.green{color:var(--success);}
-.form-grid{display:grid;grid-template-columns:92px 1fr;gap:6px 12px;align-items:center;}
+/* 单列分组大纲：分组标题图标与状态色（原 .sec-card 卡片样式已弃用） */
+.st-ic{width:14px;height:14px;flex-shrink:0;color:var(--active-border);}
+.st-ic.blue{color:var(--info);}
+.st-ic.green{color:var(--success);}
+.st-ic.warn{color:var(--warning);}
+.form-grid{display:grid;grid-template-columns:68px 1fr;gap:6px 6px;align-items:center;}
 .form-grid label{font-size:12px;color:var(--muted);}
-.val2{border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:4px 9px;color:var(--fg);font-size:12px;display:inline-block;min-width:0;transition:border-color .12s;}
-.val2:hover{border-color:var(--active-border);}
-.val2.lock{color:var(--muted);}
+/* 单列分组大纲（常规 / 高级 Tab）：整幅面板 + 标题栏分隔线；只读值用数据框（白底 + input 边框） */
+.outline{display:flex;flex-direction:column;gap:10px;width:100%;}
+.sec{width:100%;background:var(--group-box);border-radius:8px;padding:8px 12px 10px;}
+.sec-head{display:flex;align-items:center;gap:6px;height:28px;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;}
+.sec-head:hover{opacity:.85;}
+.sec-head>span{font-size:11.5px;font-weight:700;color:var(--fg);}
+.sec-head .chev{width:14px;height:14px;color:var(--muted);flex-shrink:0;transition:transform .12s;}
+.sec.collapsed .sec-head .chev{transform:rotate(-90deg);}
+.sec.collapsed .sec-head{border-bottom-color:transparent;}
+.sec-body{display:flex;flex-direction:column;gap:6px;padding-top:8px;}
+.sec.collapsed .sec-body{display:none;}
+.form-grid .v-box{display:flex;align-items:center;height:26px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:0 6px;font-size:11.5px;color:var(--fg);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.hint-line{padding-left:74px;font-size:11px;color:var(--muted);line-height:1.5;display:flex;align-items:center;gap:6px;}
+.st-ic.warn{color:var(--warning);}
+/* 只读值用数据框（.v-box，见上方大纲样式），保留 input 样式用于可编辑控件 */
 .org-hint{font-size:11px;color:var(--muted);margin-top:6px;}
 .org-groups{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:8px;}
 .chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--fg);cursor:pointer;}
@@ -374,73 +384,86 @@ button{font-family:inherit;}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
           <span id="infoText">MySQL · sqlx · 原生连接 · 支持 password / ssl 认证</span>
         </div>
-        <div class="sec-row">
-          <div class="sec-card">
-            <div class="sec-title">
+        <div class="outline">
+          <div class="sec" data-sec="conn">
+            <div class="sec-head">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               <svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.66 3.13 3 7 3s7-1.34 7-3V6"/><path d="M5 12c0 1.66 3.13 3 7 3s7-1.34 7-3"/></svg>
-              连接设置
+              <span>连接设置</span>
             </div>
+            <div class="sec-body">
             <div class="form-grid" id="settingsNetwork">
-              <label>主机</label><span class="val2">127.0.0.1</span>
-              <label>端口</label><span class="val2">3306</span>
-              <label>数据库</label><span class="val2">demo</span>
+              <label>主机</label><span class="v-box">127.0.0.1</span>
+              <label>端口</label><span class="v-box">3306</span>
+              <label>数据库</label><span class="v-box">demo</span>
             </div>
             <div class="form-grid" id="settingsFile" style="display:none;">
               <label>地址</label><input class="inp" id="filePathInput" value="C:/data/demo.db" style="font-family:Consolas,'Courier New',monospace;font-size:11.5px;">
             </div>
-            <div class="org-hint" id="filePickRow" style="display:none;">
+            <div class="hint-line" id="filePickRow" style="display:none;">
               <button class="ghost-btn" id="pickFileBtn" type="button">打开文件…</button>
               <button class="ghost-btn" id="newFileBtn" type="button">新建文件…</button>
               本地文件路径；「新建文件…」在所选位置创建空库文件（首次连接自动初始化结构）
             </div>
+            <div class="hint-line" id="networkHint">地址（URI）在顶部编辑，此处为解析结果</div>
+            </div>
           </div>
-          <div class="sec-card" id="cardAuth">
-            <div class="sec-title">
+          <div class="sec" data-sec="auth" id="cardAuth">
+            <div class="sec-head">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               <svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              数据库认证
-              <button class="link-btn" id="manageAuthBtn">管理</button>
+              <span>数据库认证</span>
             </div>
+            <div class="sec-body">
             <div class="form-grid">
-              <label>认证方法</label><span class="val2" id="authMethodSel">password ▾</span>
-              <label>用户名</label><span class="val2">root</span>
-              <label>密码</label><span class="val2 lock">••••••</span>
+              <label>认证方法</label><span class="v-box" id="authMethodSel">password ▾</span>
+              <label>用户名</label><input class="inp" value="root">
+              <label>密码</label><input class="inp" type="password" value="secret">
             </div>
-            <div class="org-hint">认证方法来自驱动声明（drivers.supported_auth_types）</div>
+            <div class="hint-line">认证方法来自驱动声明（drivers.supported_auth_types）</div>
             <div class="auth-saved">
               引用已保存配置 <span class="sel" id="pickAuth">MySQL-root-prod
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               </span>
+              <span class="sel" id="manageAuthBtn">管理</span>
               <div class="reuse-note">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="3"/></svg>
                 与来源数据库共用凭据，修改一处全量生效
               </div>
             </div>
+            </div>
           </div>
-          <div class="sec-card" id="cardSsl">
-            <div class="sec-title">
+          <div class="sec" data-sec="ssl" id="cardSsl">
+            <div class="sec-head">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               <svg class="st-ic blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16" r="1.4" fill="currentColor"/></svg>
-              连接安全（SSL/TLS）
+              <span>连接安全（SSL/TLS）</span>
             </div>
+            <div class="sec-body">
             <div class="form-grid">
-              <label>模式</label><span class="val2">require ▾</span>
-              <label>CA 证书</label><span class="val2">…/ca.pem</span>
-              <label>客户端证书</label><span class="val2">（无）</span>
+              <label>模式</label><span class="v-box">require ▾</span>
+              <label>CA 证书</label><input class="inp" value="…/ca.pem">
+              <label>客户端证书</label><input class="inp" placeholder="（无）">
+            </div>
             </div>
           </div>
-          <div class="sec-card">
-            <div class="sec-title">
+          <div class="sec" data-sec="org">
+            <div class="sec-head">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
               <svg class="st-ic green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><path d="M7 7h.01"/></svg>
-              组织（标签 / 分组）
+              <span>组织（标签 / 分组）</span>
             </div>
+            <div class="sec-body">
             <div class="form-grid">
               <label>标签</label><input class="inp" value="prod, core">
             </div>
-            <div class="org-hint">多个标签用逗号分隔（导航检索用）</div>
+            <div class="hint-line">多个标签用逗号分隔（导航检索用）</div>
             <div class="org-groups">
               <span class="f-label">分组</span>
               <label class="chk"><input type="checkbox" checked> 生产</label>
               <label class="chk"><input type="checkbox"> 测试</label>
               <label class="chk"><input type="checkbox"> 核心业务</label>
+            </div>
             </div>
           </div>
         </div>
@@ -509,46 +532,59 @@ button{font-family:inherit;}
         <div class="add-hop"><button>＋ 添加属性</button></div>
       </div>
 
-      <!-- ===== 高级 ===== -->
+      <!-- ===== 高级（与常规同一套单列分组大纲） ===== -->
       <div class="tab-pane" id="tab-advanced">
-        <div class="env-row">
-          <span class="f-label">环境</span>
-          <span class="env-sel" id="envSel">生产环境
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-          </span>
-          <span class="sel" id="manageEnvBtn">管理环境</span>
-          <span class="policy-line">策略：<b>只读</b> · 导航过滤 · 超时 30s · 行数 1000 · DDL 禁止</span>
-        </div>
-        <div class="accel-card">
-          <div class="accel-head">
-            <div>
-              <div class="accel-title">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.66 3.13 3 7 3s7-1.34 7-3V6"/><path d="M5 12c0 1.66 3.13 3 7 3s7-1.34 7-3"/></svg>
-                DuckDB 本地加速（联邦查询直连源库）
-              </div>
-              <div class="accel-sub">仅网络数据库可用 · 凭据注册为 DuckDB Secret · 不落明文</div>
+        <div class="outline">
+          <div class="sec" data-sec="env">
+            <div class="sec-head">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              <svg class="st-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+              <span>环境</span>
             </div>
-            <button class="switch on" id="accelSwitch" title="开启/关闭"></button>
+            <div class="sec-body">
+              <div class="form-grid">
+                <label>环境</label>
+                <span style="display:flex;align-items:center;gap:8px;">
+                  <span class="env-sel" id="envSel">生产环境
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                  </span>
+                  <span class="sel" id="manageEnvBtn">管理环境</span>
+                </span>
+              </div>
+              <div class="hint-line">生产环境 · 策略生效中</div>
+            </div>
           </div>
-          <div class="accel-body" id="accelBody">
-            <div>缓存路径 <input class="inp" value="global_metadata/mysql-demo"></div>
-            <div>缓存上限 <input class="inp" value="512 MB"></div>
-            <div>自动刷新 <input class="inp" value="每次打开"></div>
-            <div>压缩 <input class="inp" value="zstd"></div>
+          <div class="sec" data-sec="policy">
+            <div class="sec-head">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              <svg class="st-ic blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>安全策略（覆盖环境默认）</span>
+            </div>
+            <div class="sec-body">
+              <label><input type="checkbox" checked> 只读连接 <span style="color:var(--muted)">（已覆盖）</span></label>
+              <label><input type="checkbox" checked> 禁止 DDL</label>
+              <label><input type="checkbox"> 禁止导出</label>
+              <label><input type="checkbox" checked> 超时 30s</label>
+              <label><input type="checkbox" checked> 最大行数 1000</label>
+            </div>
           </div>
-        </div>
-        <div style="width:100%;">
-          <div class="collapse-title open" id="secTitle">
-            <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-            安全策略（可折叠 · 覆盖环境默认后标记"已覆盖"）
-          </div>
-          <div class="collapse-body" id="secBody">
-            <label><input type="checkbox" checked> 只读连接</label>
-            <label><input type="checkbox" checked> 禁止 DDL</label>
-            <label><input type="checkbox"> 禁止导出</label>
-            <label><input type="checkbox" checked> 超时 30s</label>
-            <label><input type="checkbox" checked> 最大行数 1000</label>
-            <label><input type="checkbox"> 审计日志</label>
+          <div class="sec" data-sec="accel">
+            <div class="sec-head">
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              <svg class="st-ic warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.66 3.13 3 7 3s7-1.34 7-3V6"/><path d="M5 12c0 1.66 3.13 3 7 3s7-1.34 7-3"/></svg>
+              <span style="color:var(--warning)">DuckDB 本地加速（联邦查询直连源库）</span>
+            </div>
+            <div class="sec-body">
+              <div class="hint-line">仅网络数据库可用 · 凭据注册为 DuckDB Secret · 不落明文</div>
+              <div class="form-grid">
+                <label>启用</label>
+                <span style="display:flex;align-items:center;gap:8px;"><button class="switch on" id="accelSwitch" title="开启/关闭"></button><span style="font-size:11px;color:var(--muted)">已开启</span></span>
+              </div>
+              <div class="form-grid" id="accelBody">
+                <label>缓存路径</label><input class="inp" value="global_metadata/mysql-demo">
+              </div>
+              <div class="hint-line">已开启：凭据注册为 DuckDB Secret（不落明文），分析引擎可直接联邦查询</div>
+            </div>
           </div>
         </div>
       </div>
@@ -815,15 +851,15 @@ button{font-family:inherit;}
   var accelSwitch=document.getElementById('accelSwitch');
   accelSwitch.addEventListener('click',function(){
     accelSwitch.classList.toggle('on');
-    document.getElementById('accelBody').style.display=accelSwitch.classList.contains('on')?'grid':'none';
+    var body=document.getElementById('accelBody');
+    if(body){body.style.display=accelSwitch.classList.contains('on')?'grid':'none';}
   });
 
-  /* 安全策略折叠 */
-  var secTitle=document.getElementById('secTitle'), secBody=document.getElementById('secBody');
-  secTitle.addEventListener('click',function(){
-    var open=secBody.style.display!=='none';
-    secBody.style.display=open?'none':'grid';
-    secTitle.classList.toggle('open');
+  /* 单列分组大纲：标题行点击折叠 / 展开（默认全展开，不落库） */
+  document.querySelectorAll('.sec-head').forEach(function(head){
+    head.addEventListener('click',function(){
+      head.parentElement.classList.toggle('collapsed');
+    });
   });
 
   /* 保存 */

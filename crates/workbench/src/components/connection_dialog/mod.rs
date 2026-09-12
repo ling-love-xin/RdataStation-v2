@@ -16,6 +16,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt;
+// 按钮 / 复选框 / 下拉的 `.disabled(bool)` 来自该 trait（Input 是本体方法，不需导入）。
+use gpui_kit::base::Disableable as _;
 use gpui_kit::base::input::Enter as InputEnter;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
