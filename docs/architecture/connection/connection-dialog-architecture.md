@@ -121,6 +121,40 @@ flowchart TB
 - **内存 + 跨会话持久化**：关闭对话框不丢失（状态挂在 `EditorPanel` 的对话框句柄上）；变更与关闭时写入 global.db 的 `connection_drafts` 表（迁移 `020`），重启后首次打开自动恢复。
 - **凭据安全边界**：持久化表**不含密码列**（`ConnectionDraftRow` 无 password 字段，恢复后密码框为空），只随正式保存写入连接库（AES-256-GCM）。
 
+### 3.6 元数据缓存身份指纹（规则已冻结，未接线）
+
+**问题**：L2 元数据缓存按**连接 ID** 分文件（`conn_{id}.sqlite`），指向同一物理库的多条连接（改名 / 改密码 / 换驱动实现 / 加 SSL 参数）各自重建缓存、反复预热。
+
+**身份**（`engine::persistence::metadata_identity`，纯函数、无 I/O、无 FS 访问）：
+
+| 组成 | 取值 | 理由 |
+| --- | --- | --- |
+| 数据库**族** `type_id` | `data_source_types.id`（`mysql` / `postgres` / `sqlite` / `duckdb`） | 同库多驱动内省的是同一台库；驱动实现 id（`mysql_native`）**不进身份**，差异属“对象覆盖面”，由能力掩码在命中时校验 |
+| 规范化地址 | 网络型 `net:{host}:{port}/{database}/{schema}`：主机小写、IPv6 去括号后统一补 `[]`、端口空 → 驱动默认端口、库名与 schema **不折叠**（大小写敏感）；文件型 `file:{规范化路径}`：去 `file:`/`sqlite:`/`duckdb:` scheme、去查询串与片段、`\`→`/`、折叠重复分隔符、去 Windows 三斜杠残留、Windows 下折叠大小写 | `h/db` 与 `h:3306/db` 必须同身份；`?mode=ro` / `?sslmode=require` / 超时等只影响“怎么连”，不改变“是哪个库” |
+| 主体 `principal` | 用户名（优先）→ 认证档案 id → 认证类型 → `-` | 权限决定**可见对象集合**（`information_schema` 过滤 / schema 可见性 / 行级安全）：跨主体共享会让窄权限用户的缓存污染宽权限用户的树。密码与密钥**绝不进身份**（会进文件名与日志，且轮换即整份失效） |
+| 格式版本 `format_version` | 当前 `CACHE_FORMAT_VERSION = 1` | 缓存结构变更时 +1 → 指纹变化 → 旧缓存自然分池（按约定不删除） |
+
+- 规范化串（可读，供索引展示与排障）：`v1|mysql|net:db.internal:3306/orders/-|user:app_ro`。
+- 指纹 = `sha256(规范化串)` 前 16 位十六进制（64 bit）；文件名 `meta_{fp}.sqlite`。索引表同时保存规范化串，命中时校验，不一致按“不可复用”处理（防碰撞）。
+- **不可共享**（`fingerprint() == None`）：主机 / 路径为空、`:memory:` / `file::memory:` 等内存库。
+- 指纹只作**缓存键**，不作连接主键与唯一性约束（连接 ID 规则见 `id_prefix`，两者职责正交）。
+
+**适用边界（反例，满足不了就不能依赖共享）**：
+
+- 身份把 `schema` 静态写进键——仅适用于“schema 固定在连接配置里”的模型；将来支持会话级 `search_path` / `currentSchema` 时，schema 必须随查询携带（或切换身份），否则会命中其它命名空间的缓存。
+- 同一 `host:port` 背后是动态路由到不同后端（代理 / 负载均衡）时会误共享；兜底是在 `driver_properties` 提供显式 `identity_salt`（人工声明“这是独立目标”），或对该连接关闭共享。
+- 若缓存将来包含与权限强相关或敏感的结构（行级采样、DBA 专属对象），键需增加“可见性级别”维度，否则不能跨主体共享。
+- 两级共享（`target 级`（不含 principal）共享 catalog / schema 清单，`principal 级`单独存表 / 列等权限相关层）理论上能再省一半预热，但需要 L2 分层，**暂不做**：待出现“同库多账号”的真实用例再评估（观察项，不在 §14 计数内）。
+
+**落地状态**：规则与纯函数已就绪（13 项单测），**路径仍按连接 ID**——切换与导航接入 L2 同轮进行（避免两套键并存的过渡期）。切换时需一并落地：
+
+| 配套 | 内容 |
+| --- | --- |
+| 索引表 `metadata_cache_index` | `fingerprint`(PK) / `canonical_desc`(可读串) / `type_id` / `format_version` / `ref_conn_ids`(引用计数) / `last_used_at` / `size_bytes`：给「缓存管理」提供占用与孤儿视图，并让指纹**可读** |
+| 引用计数与孤儿 | 连接删除只减引用，引用为 0 标记孤儿、**不自动删**（与“缓存只增不删”一致，唯一删除入口仍是「缓存管理」） |
+| 并发预热 | 同一指纹被两条连接同时预热 → 进程内 per-fingerprint 互斥 + SQLite WAL / `busy_timeout`，避免写出半份缓存 |
+| 存量迁移 | 旧 `conn_*.sqlite` 全部按 legacy 保留；需要时按需复制（copy，不 move）到指纹路径 |
+
 ---
 
 ## 4. 状态所有权与生命周期
@@ -376,6 +410,12 @@ flowchart LR
 | 60 | **启动时注册内置驱动**：`engine::migration::initialize_global_system()` 首行调 `AutoDriverRegistrar::auto_register()`（幂等：`HashMap::insert`） | 🔴 真机「测试连接」报 `CONN_DRIVER_NOT_FOUND: Driver 'sqlite' not found in registry`——全仓搜下来 **只有测试里调过注册**，应用启动路径根本没注册过 `DriverRegistry`；这不只影响测试连接，**导航树连接、重连也都会失败**（同一个注册表） |
 | 61 | **文件型工厂改从 `to_url()` 取地址**：`SqliteDriverFactory` / `DuckDbDriverFactory` 先 `config.to_url()`（尊重 `url_override`：服务层 / 对话框传的就是它），再去 `sqlite://` 前缀与查询串；回退顺序 `url_override → database → file_path` | 网络型工厂一直用 `config.to_url()`，只有文件型工厂直接读 `config.database` → 服务层传了 `url_override` 也会报「Database path is required for SQLite」（修完 #60 后用户下一次点击就会撞上）；查询串（driver_properties 追加）不能拼进文件名 |
 | 62 | **暂存条目“当前项”显示正在编辑的表单**：`staging_display_type_id(草稿类型, live 类型)`——光标位条目用表单快照，其余用已存草稿；名称与脏标记同源（同一份 live 快照） | 真机反馈：选 SQLite 后条目仍显示 mysql 图标——草稿只在“切条目 / 保存 / 关闭”时写回，显示层不能等写回；同时删掉重复计算快照的 `draft_dirty`（脏标记改用同一份 live） |
+| 63 | **元数据缓存身份指纹** = 数据库族 + 规范化地址 + principal + 缓存格式版本；**驱动实现 id 不进身份** | 缓存按连接 ID 分文件时，改名 / 改密 / 换驱动 / 调连接参数都会整份重建；指纹让同一物理库共享 L2。驱动差异属“对象覆盖面”（能力掩码校验），不是身份差异。规则与单测先冻结（`metadata_identity`），路径切换另轮 |
+| 64 | **principal 进身份，密码与密钥绝不进** | 权限决定可见对象集合（`information_schema` 过滤 / schema 可见性 / 行级安全）：跨主体共享会让窄权限缓存污染宽权限视图；密码进身份则轮换即失效，且会进文件名与日志 |
+| 65 | 指纹只作**缓存键**，不作连接主键 / 唯一性约束 | 与连接 ID 职责正交：主键要长期稳定（不可变），缓存键要可再生、可丢失、可校验碰撞——混用会重演“一个字符串承担四种职责”的问题 |
+| 66 | 指纹切换时机 = **导航接入 L2 的那一轮**（本轮只落规则与纯函数） | 若先按连接 ID 铺开再换指纹，同一段编排要改两遍，并留下两套键并存的过渡期；同时索引表 / 引用计数 / 并发互斥都是 L2 编排的一部分 |
+| 67 | **驱动派生数据按（驱动 id + 声明原文）缓存**（`DriverDerived`：表单字段 / 能力 / 认证方法），渲染期只克隆已解析结果；**地址占位只在真正变化时写入** | 旧实现每帧 `driver_form_fields` / `driver_capabilities` / `driver_auth_types` 重新解析 `config_schema` / `capabilities` / `supported_auth_types`（对同一份字符串反复反序列化）；而 `InputState::set_placeholder` 在 gpui-base 里是**无条件赋值 + `cx.notify()`**（`input/base/state.rs`）→ 每帧写占位会让地址输入框每帧重绘。缓存键取声明原文而非“驱动 id”，所以驱动目录刷新 / 声明变化会自动失效重算；与 `fields_synced_for` 同一约定：刷新点仍在 `render`（权威同步点） |
+| 68 | **作用域判定单一来源**：`id_prefix::{is_global_connection, uses_project_storage}`（`G_` 与遗留 `conn-` → 全局库；`P_`/`GP_` → 项目库），服务层 3 处与 `nav_runtime` 4 处全部改调它，不再各自写前缀推导 | 历史隐患：服务层把遗留 `conn-` 视作全局，而 `nav_runtime` / `database::NavSource::from_conn_id` 把它归为项目 → 同一连接的标签 / 导航状态可能写错库；“同一事实两处实现”是这类缺陷的温床，谓词收归 engine 后 M4 也能直接复用 |
 
 
 ---
@@ -393,12 +433,16 @@ flowchart LR
 | 窗口 | `dialog_host_layer.rs` | 入口调起（`debug_bounds("dialog-layer")`）、关闭移除层、面板 notify 级联 |
 | 窗口 | `connection_staging.rs` | 暂存：切换保留字段 / 删至最后补位 / 保存后转正式补位 / 已保存不参与删除 |
 | 窗口 | `connection_drafts_persist.rs` | 跨会话恢复：变更落库 → 新状态恢复草稿与表单；**密码不落库**（恢复后为空） |
-| 窗口 | `connection_type_driver.rs` | 类型 × 驱动两层选择：选类型→下拉切到该类型启用驱动并默认选中（短名）；按驱动 id 回读（跨类型同名短名不歧义）；快照携带 `type_id` / `driver_id`；**无可用驱动的类型被拒绝并给出原因**；**文件型与网络型常规 Tab 互切渲染不 panic**（占位 / 分组集合随驱动重建）；**分组折叠态切换后重渲染**；**主机/端口/数据库 ↔ URI 双向同步（含幂等）** |
+| 窗口 | `connection_type_driver.rs` | 类型 × 驱动两层选择：选类型→下拉切到该类型启用驱动并默认选中（短名）；按驱动 id 回读（跨类型同名短名不歧义）；快照携带 `type_id` / `driver_id`；**无可用驱动的类型被拒绝并给出原因**；**文件型与网络型常规 Tab 互切渲染不 panic**（占位 / 分组集合随驱动重建）；**分组折叠态切换后重渲染**；**主机/端口/数据库 ↔ URI 双向同步（含幂等）**；**地址占位按驱动推导且只在变化时写入（`url_placeholder_for` 缓存与输入框实际占位一致）** |
 | 窗口 | `connection_project_picker.rs` | 项目下拉：会话项目置顶 + 选中（默认选当前项目、项目根写回路径）/ 末项 `＋ 新增项目` 在选项中 / 确认「新增项目」→ 置位 `project_new_request` 并清空选中 / 确认普通项目 → 路径写回 / 空确认无副作用 / 下拉项搜索与 `path`·`is_new` 契约（宿主走生产入口 `request_new_connection`） |
 | 服务层 | `data_source_lifecycle.rs::nav_runtime_resolves_project_connection_with_project_path` | 导航入口项目侧解析：带项目根可解析（作用域回推为“仅项目”）、无项目根报「数据源不存在」 |
 | 单测 | `connection_dialog/helpers.rs`（内嵌） | `driver_short_name` 括号提取与回退 / `find_driver_by_value` 三路匹配 / 类型过滤 / 类型徽标 emoji 回退 / `type_has_driver` / **能力 JSON 解析与矩阵（字典外键保留）** / **策略类型↔标签往返与配置摘要（不造值）** / **地址标签与占位随驱动推导（url_template 示例值 / 文件型提示）** / **文件型输入清洗（凭据·网络·TLS 不落库，策略覆盖保留）** / **`config_schema.fields` 解析（存在性·标签·type、缺失与非法输入不造字段）** |
 | 窗口+服务 | `connection_multi_save.rs` | 连续保存两条连接（单例临时库）：暂存列表转正式 + 补空草稿；库中两条可读回 |
 | 存储单测 | `engine::persistence::connection_draft_store`（内嵌） | 行序 roundtrip / 全量替换语义 / 表无 password 列（安全约定） |
+| 存储单测 | `engine::persistence::metadata_identity`（内嵌，13 项） | 身份指纹：默认端口归一（`h/db` ≡ `h:3306/db`）/ 主机小写折叠而库名与 principal 不折叠 / IPv6 括号归一 / 类型族与格式版本改变身份 / 空地址与内存库不共享 / 文件路径跨 scheme·分隔符·查询串归一 / UNC 保留前导 `//` / 指纹形状与 `meta_{fp}.sqlite` 约定 |
+| 存储单测 | `engine::persistence::id_prefix`（新增 1 项） | 作用域判定单一来源：`G_` 与遗留 `conn-` → 全局库；`P_`/`GP_` → 项目库（`is_global_connection` / `uses_project_storage`） |
+| 服务层 | `data_source_lifecycle.rs::snapshot_sync_pulls_latest_global_definition`（扩展） | 快照同步除配置 / 凭据外，**标签权威表（`connection_tags`）同步更新**；同步前项目侧保持旧值（快照=独立副本） |
+| 服务层 | `data_source_lifecycle.rs::global_delete_cleans_project_group_membership` | 全局连接加入项目分组后删除 → 项目库成员关系清理、分组定义保留（防 B3 幻影成员） |
 
 约定：测试全部落临时目录、不触真实库；`#[gpui_kit::test]` 且**禁用通配导入**（避免 `#[test]` 宏遮蔽，见 gpui-kit-dev skill）。
 
@@ -446,6 +490,9 @@ flowchart LR
 | 34 | **大纲视觉收敛 + 文件选择修复（USIT 第 3 轮）**：分组改「整幅面板（`group_box`）+ 标题栏分隔线」；只读值改回**数据框**（白底 + `input` 边框，放在浅底面板上）；标签列 92px→**68px**、间距 12px→**6px**；未选类型/驱动时表单**显示但禁用**（含 SSL 组以禁用形态出现）；`新建文件…` 改用系统**保存**对话框（`prompt_for_new_path`）+ 取消/失败写结果行 | `connection_dialog/{helpers,state,render,mod}.rs`（决策 #55–#57）；`check` 零警告 + 工作台 98 项测试全绿 |
 | 35 | **连接设置可编辑 + 字段⇄URI 双向同步（USIT 第 4 轮）**：主机/端口/数据库 改 `Input`；`connection::url_params::rewrite_url_authority`（scheme 无关，保留凭据/查询串）+ `data_source_service::rebuild_url_from_fields`（幂等、主机空不重建、端口空用默认端口）；渲染层每帧单方向同步（`fields_synced_for` 防循环）；结构尺寸登记到 `ui.rs`（`DIALOG_*`）并对齐全局间距/圆角方案 | `connection/src/url_params.rs`、`services/data_source_service.rs`、`connection_dialog/{helpers,state,render,mod}.rs`、`ui.rs`（决策 #58、#59）；测试：URL 改写 1 项 + 重建 1 项 + 窗口双向同步 1 项（104 项全绿） |
 | 36 | **驱动注册与文件型取址修复 + 暂存条目显示同步（USIT 第 5 轮）**：① `initialize_global_system` 首行注册内置驱动（修 `CONN_DRIVER_NOT_FOUND`，同时修好了导航连接 / 重连）；② sqlite / duckdb 工厂改从 `to_url()`（url_override）取地址（修「Database path is required」）、去前缀与查询串；③ 暂存条目当前项显示 live 表单类型/名称（修“表单已 SQLite、条目还显示 mysql 图标”），删掉重复算快照的 `draft_dirty` | `engine/{migration/global_init.rs, driver/factory.rs, driver/auto_register.rs}`、`connection_dialog/{helpers,render,staging}.rs`（决策 #60–#62）；测试：engine `auto_register` 内置 id 断言、`data_source_lifecycle::catalog_drivers_resolve_and_sqlite_probe_succeeds`（真实文件探测）、`helpers::staging_type_badge_prefers_live_form_for_current_entry` |
+| 37 | **元数据缓存身份指纹（规则冻结，未接线）**：新增 `engine::persistence::metadata_identity`（纯函数 + 13 项单测）——身份 = 数据库族 + 规范化地址 + principal + 格式版本；驱动实现 / 密码 / 连接参数不进身份；`fingerprint()` = sha256 前 16 hex、`cache_file_name()` = `meta_{fp}.sqlite` | `crates/engine/src/persistence/metadata_identity.rs`（决策 #63–#66）、文档 §3.6；**路径未切换**（仍 `conn_{id}.sqlite`），索引表与并发互斥待导航接入 L2 时落地 |
+| 38 | **渲染热路径收敛（第一批，§14 #16）**：① 驱动派生数据（表单字段 / 能力 / 认证方法）改 `DriverDerived` 缓存（键 = 驱动 id + 三份声明原文），不再每帧解析声明 JSON；② 地址占位改「变化才写」（复用已有 `url_placeholder_for` 字段做守卫）—— `set_placeholder` 是无条件赋值 + notify | `connection_dialog/{helpers.rs（DriverDerived）,state.rs（driver_derived）,mod.rs,render.rs}`（决策 #67）；测试：`helpers::driver_derived_parses_declarations_and_keys_on_them`、`connection_type_driver::address_placeholder_is_cached_and_follows_driver`；**遗留**：类型 / 驱动目录每帧深拷贝与 `snapshot_form` 脏比对仍待收敛（#16 后半） |
+| 39 | **M3↔M4 契约审计修复（本轮）**：① 快照同步补标签权威表（`connection_tags`）；② 删除全局连接时清理项目侧分组成员（项目根合法时）；③ 作用域判定收归 `id_prefix::{is_global_connection, uses_project_storage}`（服务层 3 处 + `nav_runtime` 4 处，遗留 `conn-` 归全局库）；④ `nav_runtime::rename_group` 适配 engine `update_group` 新增的 `sort_order` 参数（保留库中现值） | `engine/persistence/id_prefix.rs`、`services/{data_source_service.rs,nav_runtime.rs}`（决策 #68）；测试见 §7；审计结论与 M4 侧待办见 **§16** |
 
 
 后续可选（未做）：
@@ -641,6 +688,14 @@ flowchart LR
 | 新增（🔴） | **文件型工厂忽略 `url_override`（USIT 发现）**：sqlite / duckdb 工厂改从 `to_url()` 取地址（去前缀与查询串）——原先只读 `config.database`，服务层传 url_override 也会报「Database path is required for SQLite」 | 同上（真实文件探测：成功且磁盘出现空库文件） |
 | 新增（🟡） | **暂存条目与表单不一致（USIT 发现）**：当前条目的类型徽标 / 名称改取 live 表单快照（`staging_display_type_id`），不再等草稿写回 | `helpers::staging_type_badge_prefers_live_form_for_current_entry` |
 
+**已关闭（契约审计轮，2026-09-12，详见 §16）**
+
+| # | 关闭方式 | 验证 |
+| --- | --- | --- |
+| 新增（🟡） | **标签双源漏同步**：`sync_snapshot_from_global` 只复制 JSON `tags`，权威检索表 `connection_tags` 仍是旧值 → `tag:x` 检索与后续标签视图读到同步前标签；现补 `sync_connection_tags` | `data_source_lifecycle::snapshot_sync_pulls_latest_global_definition`（扩展标签断言） |
+| 新增（🟡） | **删除全局连接残留项目侧分组成员**：`delete` 的全局分支只清全局库（`cleanup_connection_org(..., None)`），而「全局连接加入项目分组」是合法配置 → 分组视图出现幻影成员；现带项目根时一并清理（非项目根跳过，避免误清全局库） | `data_source_lifecycle::global_delete_cleans_project_group_membership` |
+| 新增（⚪） | **遗留 `conn-` 作用域判定两侧不一致**（服务层视作全局、`nav_runtime` 视作项目 → 标签 / 导航状态可能写错库）；现统一由 `id_prefix::{is_global_connection, uses_project_storage}` 判定 | `engine::persistence::id_prefix` 新增单测；M4 侧 `NavSource::from_conn_id` 待另一会话改依赖 `id_prefix`（#23） |
+
 | # | 级别 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
 | 1 | 🔴 | ~~驱动目录只内置 4 个~~（**已关闭**：无驱动类型置灰不可选 + 结果行说明；驱动插件机制仍待平台排期） | 选中不可用类型会被拒绝；用户能在类型树直接看到「暂无驱动」 | 中期：接驱动安装（plugin）机制 |
@@ -658,9 +713,14 @@ flowchart LR
 | 13 | ⚪ | 缺 UI 图像回归基线 / 大数据量性能基准 / fuzz | 回归靠断言而非视觉 | 平台级排期 |
 | 14 | ⚪ | 连接对话框**仍有存量裸 `px(...)`**（图标 / 圆角 / 描边等）未迁到 `ui.rs` 或 Tailwind 尺度 | 与用户侧新增的全局 UI 规范（`ui-design-spec.md` + `ui_contract` 契约测试）不一致（契约测试目前只扫 `view.rs` / `panels.rs`） | 按 `ui-design-spec.md` 迁移计划逐步扫一遍本模块 |
 | 15 | 🟡 | **Tab 条 / 分段控件 / 开关为自绘**（`render.rs:354-382`、`1786-1834`、`873-961`、`930-961`、`managers.rs:309-337`）；`mod.rs` 曾错误记录「库无 Tabs/Switch」（已更正） | 无 hover / 键盘 / a11y / disabled；三处开关尺寸互不一致，且未接 `form_disabled`（未选驱动时仍可点） | 迁到 `TabBar::underline()` / `TabBar::segmented()` / `Switch`（0.6.1 均已提供）；顺带统一 disabled 语义 |
-| 16 | ⚪ | **渲染热路径上有写状态与重计算**：`render.rs:293`（每帧 `set_placeholder` → 无条件 `notify`）、`247-248`（每帧深拷贝驱动/类型目录）、`280-283` / `1025` / `1151` / `1264`（每帧 JSON 解析）、`1596`（每帧构造整份 `ConnectionDraft` 比脏） | 多余重绘与卡顿；重绘与状态写入耦合后难推理 | 打开时算一次存字段 / 缓存；`render` 只读快照，副作用回到事件路径 |
+| 16 | ⚪ | **渲染热路径上的写状态与重计算**（**已收敛第一批**：驱动派生数据 `DriverDerived` 缓存（决策 #67）+ 地址占位「变化才写」——不再每帧解析声明 JSON、不再每帧 `set_placeholder`→`notify`；**仍遗留**：`247-248` 类型 / 驱动目录每帧深拷贝、`1596` 每帧构造整份 `ConnectionDraft` 比脏） | 第一批已消除每帧 JSON 反序列化与额外重绘；剩余项仅剩浅拷贝与结构体构造开销（量级小但可再降） | 继第一批后：目录改存 `Rc<[...]>` 快照（闭包克隆 Rc）；脏比对改字段逐个比较（`form_matches_draft`），不再构造完整草稿 |
 | 17 | ⚪ | **下标参与 ElementId**：`render.rs:464/484/502/520`（协议链 hop）、`742`（驱动属性）、`1548/1640`（暂存条目）、`managers.rs:60/84/102/263`；另有 `sec-` 前缀在分组与策略覆盖两处复用 | 增删/重排后 hover、滚动等按 id 记录的控件状态串行；`policy_type` 命中分组 id 时潜在冲突 | 改用业务键（hop 名 / `saved_id` / `gid`），策略覆盖换独立前缀 |
 | 18 | ⚪ | `project_path` 只有写入没有渲染点（`render.rs:185/233/2043`），与 `386-390` 注释承诺的「项目根可编辑」不符 | 无项目会话时用户无法输入/修正项目根 | 补 `Input::new(&project_path)` 或收敛注释与作用域分支 |
+| 19 | 🟡 | **元数据缓存身份指纹未接线**：规则与纯函数（`engine::persistence::metadata_identity`，§3.6）已就绪，但 L2 路径仍按连接 ID（`conn_{id}.sqlite`）；`metadata_cache_index`（引用计数 / 孤儿 / 可读描述）与同指纹并发预热互斥未建 | 同一物理库的多条连接仍各自重建缓存（重复预热）；改名 / 改密 / 换驱动后命中旧缓存的收益尚未兑现 | 与 database-nav 接入 L2 的 Phase C 同轮：路径切 `meta_{fp}.sqlite` + 索引表 + per-fingerprint 互斥 + 旧 `conn_*.sqlite` 按 legacy 保留（不删） |
+| 20 | 🔴 | **协议链 / SSH 隧道保存后不生效**：所有生产 connect 路径都传 `network_method: None`（`nav_runtime.rs:75`、`connection_service.rs:129`），`resolve_network_method_with_project` 无生产调用方；且 `nav_runtime` 每次 `ConnectionService::new`，隧道守卫存实例私有 `TunnelRegistry`（`connection_service.rs:78`），即便传入也会随实例释放 | 对话框里配好的 SSH 跳板 / 代理被静默忽略 —— 导航点「连接」时直连或失败（与 `connection-dialog-architecture.md` 的“网络 Tab 可配置”承诺不符） | M3 侧：连接入口解析网络配置（`resolve_network_method_with_project`，项目侧 `network_config_id` 需带项目根）+ 让生产连接复用同一 `ConnectionService` 实例（或把隧道守卫提升到全局注册表），并补隧道数据面用例 |
+| 21 | ⚪ | **启动即有项目会话时不加载 P_/GP_**（`view.rs:165` 用 `load_persisted_connections`，L168 才解析会话）；**关闭项目不清理残留**（`project/ui.rs::do_close` 不触发 `on_opened`） | 项目标签页看不到项目连接；关闭项目后残留行点“连接/编辑”必失败（`project_root=None`） | workbench 宿主侧：构造后按会话刷新一次；关闭后等价刷新（或给 `ProjectUiHost` 加 `on_closed`）；触碰 `view.rs` / `project` UI，需与布局会话协调 |
+| 22 | ⚪ | **M4 导航行无删除入口**：唯一入口在编辑区详情卡（`panels.rs:3165`）；导航行点击也不写 `shared.selected` | M4 用户路径上没有删除能力；删除目标不直观（默认只指第一条） | M4 侧（另一会话）：行内 / 右键删除调同一 `workspace_loader::delete_connection`，删除成功后清导航缓存与状态 |
+| 23 | ⚪ | **M4 标签 / 分组视图未接线**：`nav_runtime::{list_tags,set_tags,*group*}` 有 API、零调用；`database::model::ConnectionGroup` 是未消费的重复模型；`database::model::NavSource::from_conn_id` 自实现前缀推导（与 `id_prefix` 分裂） | 用户看不到 / 改不了标签与分组；遗留 `conn-` ID 在导航侧归错库 | M4 侧（另一会话）：B3 视图接线（消费 `nav_runtime` 组织 API）；`NavSource::from_conn_id` 改依赖 `engine::persistence::id_prefix`（M3 侧已收归单一来源，决策 #68） |
 
 ---
 
@@ -728,3 +788,26 @@ flowchart LR
 - **新代码规则**：新增 UI 数据项前先回答“它来自哪张表 / 哪个服务方法”；只能从字典来的东西（标签）不得携带取值。
 - **回归手段**：字典与解析函数均有单测（`helpers.rs`）；按库读取的服务方法有集成测试（`data_source_lifecycle.rs`）；渲染层不产生业务值，因此不需要图像基线也能拦住“造数据”类回归。
 - **待办**：驱动安装能力（§14 #1 的中期项）落地后，`drivers` 目录会真实增长，类型树的可用性判定无需改动即生效。
+
+---
+
+## 16. M3 ↔ M4（数据库导航）契约面审计（2026-09-12）
+
+> 背景：用户要求核对“新增数据源模块与 db-nav 是否打通”。结论按**证据**给出（`file:line` 为核对时的位置）；跨模块（M4 侧）缺口归另一会话，本节只做登记。
+
+| 契约点 | 生产方（M3） | 消费方（M4） | 状态 |
+| --- | --- | --- | --- |
+| 连接列表可见性 | `workspace_loader::load_connections_for_scope`（全局 + 项目侧 P_/GP_ 合并） | 面板读 `shared.connections`（`panels.rs`） | ✅ 打通（刷新时机见 #21） |
+| 来源短码 `P/G/GP` | `engine::persistence::id_prefix`（本轮收归单一来源）；对话框暂存条目 `saved_scope_short` | `database::model::NavSource::from_conn_id`（M4 自实现） | ⚠️ 半通（遗留 `conn-` 判定不一致；M3 侧已统一，M4 侧待改 → #23） |
+| 运行时连接 | `nav_runtime::connect_entry(_with)` → `get_with_project`（C19 修复） | 导航面板按钮 | ✅ 打通（但网络配置未传 → #20） |
+| 断开 | `nav_runtime::disconnect_entry` → `close_connection`（保留 L2 缓存） | 导航面板按钮 | ✅ 打通 |
+| 删除 | `workspace_loader::delete_connection(conn_id, project_root)` → `DataSourceService::delete`（作用域路由 + Secret / 组织清理） | 仅编辑区详情卡；**导航行无入口** | ⚠️ M4 侧缺 UI（#22） |
+| 编辑 | `EditorPanel::request_edit_connection`（生产入口：订阅 + 宿主重绘） | 导航行 ✎ | ✅ 打通 |
+| 标签 | `DataSourceService::{save,update,delete}` + 本轮补齐的 `sync_snapshot_from_global` → `connection_tags`（权威检索表） | `nav_runtime::{list_tags,set_tags}` | ⚠️ M3 侧已闭环；**M4 视图未接线**（#23） |
+| 分组 | `ConnectionOrgStore`（项目库；多对多 + 组内排序）+ 对话框勾选（替换语义）+ 本轮补的全局连接删除清理 | `nav_runtime::{list_groups,create_group,rename_group,delete_group,*_member}` | ⚠️ 服务层打通；M4 视图未接线（B3，另一会话进行中） |
+| L2 元数据缓存 | `MetadataCacheManager::build_metadata_path`（按 `conn_id`）；`ConnectionService::ensure_metadata_cache` | **无调用方**（导航当前走实时内省） | ⛔ 未接（Phase C；路径切身份指纹见 §3.6 / C8） |
+| 连接状态点 | `workspace_loader::fill_connected`（来自 `ConnectionManager` 运行态） | 导航行状态点 | ✅ 打通 |
+| 类型 / 驱动目录 | `DataSourceService::{list_types,list_drivers}` | 导航不消费（无需） | — 非契约 |
+| 项目会话切换 | `project_host::refresh_after_open`（打开 / 切换后刷新列表） | 面板读同一 `shared.connections` | ⚠️ 半通（启动 / 关闭两处不刷新 → #21） |
+
+**命名辨析（审计中确认无实际混用，但极易误读）**：`global_connections.metadata_path` / 对话框「缓存路径」是 **DuckDB 联邦加速**的缓存路径（自由文本），与 L2 元数据缓存 `conn_{id}.sqlite` 是两回事；前者随连接落库（`connection_service.rs:408` 一带）、后者由 `MetadataCacheManager` 管理。改 L2 键时**不要**动 `metadata_path` 列语义。

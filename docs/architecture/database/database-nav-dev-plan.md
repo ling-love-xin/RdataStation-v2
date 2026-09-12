@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 开发方案（Phase A/B/C）
 
-> 状态：**Phase A 已实现（2026-09-11）** · `cargo check --workspace --all-targets` 零错误；`cargo test -p rds-database` 全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
+> 状态：**Phase A 已实现；Phase B 的 B1–B6 已实现（2026-09-12）** · `cargo check --workspace --all-targets` 零错误；`cargo test -p rds-workbench --lib`（31）/ `-p rds-database`（3）/ `-p rds-engine connection_org_store`（4）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
 > 设计基线：作用域来源短码 `P/G/GP`、项目级自定义分组（多对多）+ 多值标签、三级缓存与增量刷新、缓存永不自动删除、属性面板填充编辑区右侧、预热方案 C。
 > 技术栈：GPUI（gpui-kit 0.6）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
 > 前置：M3 连接模块 Phase A/B 已实现；engine 元数据缓存（含增量/预热索引/FTS/分页/版本迁移）已迁移。
@@ -10,14 +10,14 @@
 | 阶段 | 状态 |
 | --- | --- |
 | Phase A（骨架与核心闭环） | ✅ 已实现 |
-| Phase B（分组/标签/搜索/属性面板/状态） | 🟡 进行中（B5 属性面板已实现） |
+| Phase B（分组/标签/搜索/属性面板/状态） | 🟡 进行中（B1–B6 已实现，B7/B8 待办） |
 | Phase C（预热/增量/收尾） | ⬜ 待办 |
 
 **Phase A 实现位置**
 
 | 交付 | 文件 |
 | --- | --- |
-| 导航领域模型（NavNode/NavSource/NavScope/NavFolder/NavPath/NavState/ConnectionEntry/分组/标签） | `crates/database/src/model.rs` |
+| 导航领域模型（NavNode/NavSource/NavFolder/NavPath/NavState/ConnectionEntry/分组/标签） | `crates/database/src/model.rs` |
 | 导航编排服务（三级缓存预留、懒加载、来源过滤） | `crates/database/src/navigator_service.rs` |
 | 迁移：`navigator_state` / `connection_tags`（global） | `crates/engine/migrations/global/018_add_navigator_state.sql` |
 | 迁移：`navigator_state` / `connection_tags` / `connection_groups` / `connection_group_members`（project） | `crates/engine/migrations/project_meta/017_add_navigator_groups_tags_state.sql` |
@@ -54,7 +54,8 @@
 | B6 状态持久化（展开态，`navigator_state`） | ✅ | `crates/workbench/src/services/nav_store.rs`、`nav_runtime.rs`、`panels.rs` |
 | B1 分组服务（CRUD + 多对多 + 排序） | ✅ 服务层就绪（2026-09-11） | `engine::persistence::ConnectionOrgStore`：create/update/delete/list_groups、add/remove_member、set_member_order、list_group_members、list_groups_for_connection |
 | B2 标签服务（多值 + 检索） | ✅ 服务层就绪（2026-09-11） | `ConnectionOrgStore`：set_tags/list_tags/list_connections_by_tag/list_all_tags；`nav_runtime::{list_tags,set_tags}` 已接线；M3 保存/更新同步、删除清理 |
-| B3 分组/标签视图（拖拽/右键/对话框） | ⬜ | 服务已就绪，待面板接线 |
+| B3 分组/标签视图（拖拽/右键/对话框） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`render_nav_tree`（分组一级 + 「未分组」）、`render_group_header`（统一色条 + 计数 + 折叠）、`render_org_editor`（行内分组多选 + 标签输入 + 新建分组）、`nav_source_chip`（来源筛选 chips）、`ensure_nav_org` / `reload_nav_org` |
+| B1/B2 视图接线（分组多对多 + 标签多值） | ✅ 已实现 | `nav_runtime::{list_groups,create_group,list_group_members,add_to_group,remove_from_group,list_all_tags}`；`ConnectionOrgStore::list_tag_pairs`（一次性映射） |
 | B7 上下文菜单动作（生成 SQL / 复制名 / 查看数据） | ⬜ | — |
 | B8 缓存管理入口 + 短码⇄文字开关 | ⬜ | — |
 
@@ -63,7 +64,11 @@
 - 属性面板为**堆叠分区**（列/索引/约束），暂未做子实体 Tab 切换；
 - 双击节点打开属性（gpui `click_count >= 2`）；右键菜单、复制/生成 SQL 待 B7；
 - 属性加载为阻塞式（与 Phase A 同），后续随缓存编排迁后台；
-- 属性面板宽度固定 392px（拖拽与记忆待 B8）。
+- 属性面板宽度固定 392px（拖拽与记忆待 B8）；
+- 归组尚未支持**拖拽**与组内外手动排序，目前通过行内 `🗂` 编辑器的多选切换（B3 视图首版）；排序服务 `set_member_order` 已就绪；
+- 新建分组用默认名「新建分组」（自动去重），重命名 / 描述表单待 B7；
+- 「来源筛选 + 分组」状态尚未持久化到 `navigator_state`（仅展开态已持久化）；
+- 搜索目前为**连接名 + 标签**子串匹配；`source:global` / `tag:prod` 结构化语法、以及对象树层命中高亮待 B7。
 
 ## 1. 现状结论（盘点摘要）
 
@@ -105,6 +110,7 @@
 | B6 | 状态持久化：`navigator_state` 读写 + 800ms 防抖；分组展开态 | `navigator_service.rs` + engine `persistence` | 重启恢复展开/选中/过滤 |
 | B7 | 上下文菜单动作：查看数据、复制名/限定名、生成 SELECT/INSERT/UPDATE/DELETE → 编辑器 | `database_nav_panel.rs` + `crates/workbench/src/commands.rs` | 生成 SQL 落到编辑器 |
 | B8 | 缓存管理入口（设置 + 面板头「更多」）+ 短码⇄文字开关 | `crates/settings` + 导航面板 | 查看占用 / 显式清理；开关生效并持久化 |
+| B9 | **契约面补齐（M3↔M4 审计，2026-09-12）**：① 导航行 / 右键**删除入口**（调同一 `workspace_loader::delete_connection(conn_id, project_root)`，删除后清 `DatabaseNavView` 缓存与状态）；② **标签 / 分组视图接线**（消费 `nav_runtime::{list_tags,set_tags,list_groups,create_group,rename_group,delete_group,*_member}`，权威源为 `connection_tags` / `connection_group_members`）；③ `NavSource::from_conn_id` 改依赖 `engine::persistence::id_prefix`（废弃自实现前缀推导）；④ 行点击同步 `shared.selected` | `crates/workbench/src/panels.rs`、`crates/database/src/model.rs` | 导航行可删除（作用域路由正确）；标签 / 分组可读可改且与对话框一致；遗留 `conn-` ID 归库与 M3 一致（审计详表见 `connection-dialog-architecture.md` §16） |
 
 ### Phase C — 预热 / 增量 / 收尾
 
@@ -117,6 +123,7 @@
 | C5 | 主题 token：注册 `search.match.background`；明暗核对 | `assets/themes/rds-theme.json`、`app` | 两套主题对比度达标 |
 | C6 | 收敛遗留：移除 `panels.rs` 导航占位；`db_navigator.rs` 移出本模块 | `crates/workbench` | 无死代码残留 |
 | C7 | 快捷键与无障碍（↑↓/→←/Enter/F4/Ctrl+F） | `crates/workbench/src/commands.rs`、导航面板 | 键位走通 |
+| C8 | **元数据缓存键切身份指纹**（规则已冻结，见 `connection-dialog-architecture.md` §3.6）：L2 路径 `conn_{id}.sqlite` → `meta_{fp}.sqlite`（`engine::persistence::metadata_identity`）；新增 `metadata_cache_index`（`canonical_desc` 可读描述 / `ref_conn_ids` 引用计数 / `last_used_at` / `size_bytes`）；同指纹并发预热互斥（进程内 + WAL / `busy_timeout`）；旧 `conn_*.sqlite` 按 legacy 保留（copy 不 move） | `crates/engine/src/persistence/{metadata_identity.rs,metadata_cache.rs,metadata_cache_pool.rs}`、`crates/workbench/src/services/connection_service.rs` | 改名 / 改密 / 换驱动实现后命中同一份 L2；同库两条连接不重复预热；孤儿缓存（引用为 0）可见且不自动删 |
 
 ## 3. 测试场景清单
 

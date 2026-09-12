@@ -67,12 +67,6 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .workbench[data-state="empty"]   .st-empty,
 .workbench[data-state="loading"] .st-loading,
 .workbench[data-state="search"]  .st-search{display:flex;}
-.scope-tabs{display:flex;gap:2px;border-bottom:1px solid var(--sidebar-border);padding:0 8px;flex:none;}
-.scope-tab{display:flex;align-items:center;gap:6px;padding:7px 10px;font-size:12px;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;transition:color .12s,border-color .12s;}
-.scope-tab:hover{color:var(--fg);}
-.scope-tab.on{color:var(--fg);border-bottom-color:var(--active-border);font-weight:600;}
-.scope-tab .badge{font-size:9.5px;background:color-mix(in srgb,var(--muted) 16%,transparent);border-radius:8px;padding:0 6px;line-height:15px;color:var(--muted);font-weight:600;}
-.scope-tab.on .badge{background:color-mix(in srgb,var(--primary) 18%,transparent);color:var(--primary);}
 .searchbar{padding:8px 10px 6px;flex:none;display:flex;gap:6px;align-items:center;}
 .searchbar .box{flex:1;position:relative;}
 .searchbar input{width:100%;border:1px solid var(--input-border);border-radius:7px;background:var(--bg);color:var(--fg);padding:5px 10px 5px 28px;font-size:12px;outline:none;transition:border-color .15s,box-shadow .15s;}
@@ -81,11 +75,14 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .searchbar .s-ic{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none;}
 .tgl{border:1px solid var(--input-border);background:var(--bg);color:var(--muted);border-radius:6px;min-width:24px;height:26px;font-size:11px;cursor:pointer;transition:all .12s;}
 .tgl:hover{background:var(--hover);color:var(--fg);}
+/* 来源筛选 chips（方案 A） */
+.chips{display:flex;align-items:center;gap:5px;padding:0 10px 7px;flex:none;flex-wrap:wrap;}
+.chips .lbl{font-size:10.5px;color:var(--muted);margin-right:2px;}
+.chip{font-size:10.5px;border:1px solid var(--border);border-radius:11px;padding:2px 9px;color:var(--muted);cursor:pointer;transition:all .12s;}
+.chip:hover{color:var(--fg);border-color:var(--active-border);}
+.chip.on{background:var(--accent);color:var(--fg);border-color:var(--active-border);font-weight:600;}
 .tree-wrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;}
 .tree{flex:1;min-height:0;overflow:auto;padding:2px 6px 8px;}
-.pane{display:none;flex:1;min-height:0;flex-direction:column;}
-.workbench[data-scope="project"] .pane-project,
-.workbench[data-scope="global"]  .pane-global{display:flex;}
 .row{display:flex;align-items:center;gap:6px;height:24px;border-radius:6px;cursor:pointer;color:var(--fg);font-size:12px;white-space:nowrap;transition:background .1s;}
 .row:hover{background:var(--hover);}
 .row.sel{background:var(--accent);box-shadow:inset 2.5px 0 0 var(--active-border);}
@@ -227,7 +224,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     <span class="logo"><svg class="ico" style="width:15px;height:15px"><use href="#i-db"/></svg></span>
     <div>
       <h1>数据源管理 / 数据库导航 · 原型</h1>
-      <div class="sub">M4 · 来源标签页 + 多分组/多标签 + 对象树 + 右侧停靠属性面板（仅数据源，不含分析资产）</div>
+      <div class="sub">方案 A · 来源筛选 + 自定义分组一级结构 + 对象树 + 右侧停靠属性面板</div>
     </div>
   </div>
   <button class="theme-toggle" id="themeBtn">
@@ -237,7 +234,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
 
 <div class="statebar">
   <span class="lbl">状态：</span>
-  <button data-go="default" class="on">默认（项目标签）</button>
+  <button data-go="default" class="on">默认（分组）</button>
   <button data-go="loading">连接 / 预热中</button>
   <button data-go="menu">节点右键菜单</button>
   <button data-go="search">搜索（连接 / 表 / 列）</button>
@@ -245,7 +242,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
   <button data-go="empty">空态</button>
 </div>
 
-<div class="workbench" data-state="default" data-scope="project" id="wb">
+<div class="workbench" data-state="default" id="wb">
 
   <nav class="activitybar">
     <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-fn"/></svg><span class="tip">草稿箱</span></div>
@@ -268,10 +265,6 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     </div>
 
     <div class="st st-default">
-      <div class="scope-tabs">
-        <div class="scope-tab on" data-scope="project">项目<span class="badge">3</span></div>
-        <div class="scope-tab" data-scope="global">全局<span class="badge">3</span></div>
-      </div>
       <div class="searchbar">
         <div class="box">
           <svg class="ico-sm s-ic"><use href="#i-search"/></svg>
@@ -280,105 +273,74 @@ table.grid td.null{color:var(--muted);font-style:italic;}
         <button class="tgl" title="正则">.*</button>
         <button class="tgl" title="区分大小写">Aa</button>
       </div>
+      <div class="chips">
+        <span class="lbl">来源</span>
+        <span class="chip on" data-chip="all">全部</span>
+        <span class="chip" data-chip="p">项目</span>
+        <span class="chip" data-chip="g">全局</span>
+        <span class="chip" data-chip="gp">共享</span>
+      </div>
 
       <div class="tree-wrap">
-        <!-- 项目标签：来源 = P / GP；同一连接可出现在多个分组 -->
-        <div class="pane pane-project">
-          <div class="tree">
-            <div class="grp">
-              <span class="tw">&#9662;</span>核心库<span class="cnt">2</span>
-            </div>
-            <div class="row" style="padding-left:12px">
-              <span class="tw">&#9662;</span><span class="dot ok"></span>
-              <span class="nm">生产 PG</span>
-              <span class="sp"><span class="scope src-gp" title="项目共享（全局快照）">GP</span><span class="drv pg">PG</span></span>
-            </div>
-            <div class="row" style="padding-left:34px">
-              <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-folder"/></svg>
-              <span class="nm">analytics</span><span class="colmeta">schema</span>
-            </div>
-            <div class="row" style="padding-left:52px">
-              <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
-              <span class="nm">表</span><span class="colmeta">23</span>
-            </div>
-            <div class="row sel" style="padding-left:70px" id="rowOrders">
-              <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-table"/></svg>
-              <span class="nm">orders</span><span class="colmeta">1.2M 行</span>
-            </div>
-            <div class="row" style="padding-left:88px">
-              <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
-              <span class="nm mut">order_id</span><span class="pk">PK</span><span class="colmeta">bigint</span>
-            </div>
-            <div class="row" style="padding-left:88px">
-              <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
-              <span class="nm mut">customer_id</span><span class="colmeta">bigint &#183; FK</span>
-            </div>
-            <div class="row" style="padding-left:88px">
-              <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
-              <span class="nm mut">amount</span><span class="colmeta">numeric(12,2)</span>
-            </div>
-            <div class="row" style="padding-left:52px">
-              <span class="tw">&#9656;</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-view"/></svg>
-              <span class="nm">视图 / 过程 / 序列</span><span class="colmeta">14</span>
-            </div>
-            <div class="row" style="padding-left:12px">
-              <span class="tw">&#9656;</span><span class="dot off"></span>
-              <span class="nm">本地 MySQL</span>
-              <span class="sp"><span class="scope src-p" title="项目连接">P</span><span class="drv my">MY</span></span>
-            </div>
-
-            <div class="grp">
-              <span class="tw">&#9662;</span>报表<span class="cnt">2</span>
-            </div>
-            <div class="row" style="padding-left:12px">
-              <span class="tw">&#9656;</span><span class="dot ok"></span>
-              <span class="nm">生产 PG</span>
-              <span class="sp"><span class="scope src-gp" title="项目共享（全局快照）">GP</span><span class="drv pg">PG</span></span>
-            </div>
-            <div class="row" style="padding-left:12px">
-              <span class="tw">&#9656;</span><span class="dot off"></span>
-              <span class="nm">报表 SQLite</span>
-              <span class="sp"><span class="scope src-p" title="项目连接">P</span><span class="drv sq">SQ</span></span>
-            </div>
-
-            <div class="grp">
-              <span class="tw">&#9662;</span>未分组<span class="cnt">1</span>
-            </div>
-            <div class="row" style="padding-left:12px">
-              <span class="tw">&#9656;</span><span class="dot off"></span>
-              <span class="nm">临时 PG</span>
-              <span class="sp"><span class="scope src-p" title="项目连接">P</span><span class="drv pg">PG</span></span>
-            </div>
+        <div class="tree">
+          <div class="grp">
+            <span class="tw">&#9662;</span>核心库<span class="cnt">2</span>
           </div>
-        </div>
+          <div class="row" style="padding-left:12px">
+            <span class="tw">&#9662;</span><span class="dot ok"></span>
+            <span class="nm">生产 PG</span>
+            <span class="sp"><span class="scope src-gp" title="项目共享（全局快照）">GP</span><span class="drv pg">PG</span></span>
+          </div>
+          <div class="row" style="padding-left:34px">
+            <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-folder"/></svg>
+            <span class="nm">analytics</span><span class="colmeta">schema</span>
+          </div>
+          <div class="row" style="padding-left:52px">
+            <span class="tw">&#9662;</span><svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
+            <span class="nm">表</span><span class="colmeta">23</span>
+          </div>
+          <div class="row sel" style="padding-left:70px" id="rowOrders">
+            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-table"/></svg>
+            <span class="nm">orders</span><span class="colmeta">1.2M 行</span>
+          </div>
+          <div class="row" style="padding-left:88px">
+            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
+            <span class="nm mut">order_id</span><span class="pk">PK</span><span class="colmeta">bigint</span>
+          </div>
+          <div class="row" style="padding-left:88px">
+            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
+            <span class="nm mut">customer_id</span><span class="colmeta">bigint &#183; FK</span>
+          </div>
+          <div class="row" style="padding-left:88px">
+            <span class="tw"></span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-col"/></svg>
+            <span class="nm mut">amount</span><span class="colmeta">numeric(12,2)</span>
+          </div>
+          <div class="row" style="padding-left:52px">
+            <span class="tw">&#9656;</span><svg class="ico-sm" style="color:var(--muted)"><use href="#i-view"/></svg>
+            <span class="nm">视图 / 过程 / 序列</span><span class="colmeta">14</span>
+          </div>
+          <div class="row" style="padding-left:12px">
+            <span class="tw">&#9656;</span><span class="dot off"></span>
+            <span class="nm">本地 MySQL</span>
+            <span class="sp"><span class="scope src-p" title="项目连接">P</span><span class="drv my">MY</span></span>
+          </div>
 
-        <!-- 全局标签：来源 = G（分组名与项目标签同一套，体现跨标签） -->
-        <div class="pane pane-global">
-          <div class="tree">
-            <div class="grp">
-              <span class="tw">&#9662;</span>核心库<span class="cnt">1</span>
-            </div>
-            <div class="row" style="padding-left:12px">
-              <span class="tw">&#9656;</span><span class="dot load"></span>
-              <span class="nm">数仓 PG</span><span class="colmeta">连接中…</span>
-              <span class="sp"><span class="scope src-g" title="全局连接">G</span><span class="drv pg">PG</span></span>
-            </div>
-            <div class="grp">
-              <span class="tw">&#9662;</span>报表<span class="cnt">1</span>
-            </div>
-            <div class="row" style="padding-left:12px">
-              <span class="tw">&#9656;</span><span class="dot err"></span>
-              <span class="nm">报表 PG（离线）</span>
-              <span class="sp"><span class="scope src-g" title="全局连接">G</span><span class="drv pg">PG</span></span>
-            </div>
-            <div class="grp">
-              <span class="tw">&#9662;</span>未分组<span class="cnt">1</span>
-            </div>
-            <div class="row" style="padding-left:12px">
-              <span class="tw">&#9656;</span><span class="dot ok"></span>
-              <span class="nm">测试 SQLite</span>
-              <span class="sp"><span class="scope src-g" title="全局连接">G</span><span class="drv sq">SQ</span></span>
-            </div>
+          <div class="grp">
+            <span class="tw">&#9662;</span>报表<span class="cnt">1</span>
+          </div>
+          <div class="row" style="padding-left:12px">
+            <span class="tw">&#9656;</span><span class="dot off"></span>
+            <span class="nm">报表 PG</span>
+            <span class="sp"><span class="scope src-g" title="全局连接">G</span><span class="drv pg">PG</span></span>
+          </div>
+
+          <div class="grp">
+            <span class="tw">&#9662;</span>未分组<span class="cnt">1</span>
+          </div>
+          <div class="row" style="padding-left:12px">
+            <span class="tw">&#9656;</span><span class="dot ok"></span>
+            <span class="nm">测试 SQLite</span>
+            <span class="sp"><span class="scope src-g" title="全局连接">G</span><span class="drv sq">SQ</span></span>
           </div>
         </div>
 
@@ -401,9 +363,18 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     </div>
 
     <div class="st st-loading">
-      <div class="scope-tabs">
-        <div class="scope-tab on">项目<span class="badge">3</span></div>
-        <div class="scope-tab">全局<span class="badge">3</span></div>
+      <div class="searchbar">
+        <div class="box">
+          <svg class="ico-sm s-ic"><use href="#i-search"/></svg>
+          <input placeholder="筛选数据源 / 表 / 列 / 标签…">
+        </div>
+      </div>
+      <div class="chips">
+        <span class="lbl">来源</span>
+        <span class="chip on">全部</span>
+        <span class="chip">项目</span>
+        <span class="chip">全局</span>
+        <span class="chip">共享</span>
       </div>
       <div class="progress"><i></i></div>
       <div class="loadnote"><span>正在连接并预热 schema &#183; 生产 PG</span><span>4 / 10</span></div>
@@ -460,13 +431,6 @@ table.grid td.null{color:var(--muted);font-style:italic;}
           <div class="rp">order_id &#183; bigint &#183; <mark>order</mark> 主键</div>
         </div>
         <div class="res">
-          <div class="rt"><span class="drv pg">PG</span>
-            <b>analytics.customer_orders</b>
-            <span class="scope src-gp" style="margin-left:auto" title="项目共享（全局快照）">GP</span>
-          </div>
-          <div class="rp">客户订单汇总视图</div>
-        </div>
-        <div class="res">
           <div class="rt"><span class="drv my">MY</span>
             <b>shop.order_items</b>
             <span class="scope src-p" style="margin-left:auto" title="项目连接">P</span>
@@ -474,7 +438,7 @@ table.grid td.null{color:var(--muted);font-style:italic;}
           <div class="rp">order_id &#183; bigint &#183; 外键 &#8594; orders</div>
         </div>
       </div>
-      <div class="nav-status">12 条结果 &#183; FTS 缓存检索 &#183; <b>Enter</b> 在编辑区打开全部</div>
+      <div class="nav-status">12 条结果 &#183; 本地筛选 + 缓存检索 &#183; <b>Enter</b> 在编辑区打开全部</div>
     </div>
 
     <div class="st st-empty">
@@ -532,7 +496,6 @@ table.grid td.null{color:var(--muted);font-style:italic;}
               <tbody>
                 <tr><td>analytics.orders</td><td>GP</td><td><mark>order</mark>s</td></tr>
                 <tr><td>analytics.orders.order_id</td><td>GP</td><td><mark>order</mark>_id</td></tr>
-                <tr><td>analytics.customer_orders</td><td>GP</td><td>customer_<mark>order</mark>s</td></tr>
                 <tr><td>shop.order_items</td><td>P</td><td><mark>order</mark>_items</td></tr>
               </tbody>
             </table>
@@ -544,7 +507,6 @@ table.grid td.null{color:var(--muted);font-style:italic;}
         </div>
       </div>
 
-      <!-- 属性面板：靠右停靠，占用一个编辑面板位 -->
       <aside class="prop-panel">
         <div class="prop-head">
           <svg class="ico-sm" style="color:var(--info)"><use href="#i-table"/></svg>
@@ -563,14 +525,12 @@ table.grid td.null{color:var(--muted);font-style:italic;}
           <div class="prow"><span class="pl">引擎</span><span class="pv">InnoDB</span></div>
           <div class="prow"><span class="pl">列数</span><span class="pv">18</span></div>
           <div class="prow"><span class="pl">标签</span><span class="pv">prod, core</span></div>
-          <div class="prow"><span class="pl">注释</span><span class="pv">订单主表</span></div>
 
           <div class="sec-tabs">
             <span class="sec-tab on">列 18</span>
             <span class="sec-tab">约束 4</span>
             <span class="sec-tab">索引 5</span>
             <span class="sec-tab">外键 2</span>
-            <span class="sec-tab">触发器 0</span>
             <span class="sec-tab">DDL</span>
           </div>
           <table class="sub-table">
@@ -594,13 +554,12 @@ table.grid td.null{color:var(--muted);font-style:italic;}
 
 <section class="notes">
   <div class="card">
-    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-db"/></svg>三个正交概念 + 标签</h4>
+    <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-db"/></svg>方案 A：来源不再做一级分区</h4>
     <ul>
-      <li><b>来源短码</b>：<code>P</code> 项目 / <code>G</code> 全局 / <code>GP</code> 共享</li>
-      <li><b>标签页</b>：项目 / 全局，按来源过滤视图</li>
-      <li><b>分组</b>：项目级用户自定义，<b>多对多</b>（同一连接可出现在多个分组）</li>
-      <li><b>标签</b>：连接上的多值标记，用于检索/过滤</li>
-      <li>来源短码可切换为文字（设置内开关，偏好存 settings.json）</li>
+      <li>去掉「项目 / 全局」标签页；来源降级为<b>筛选 chips + 行内短码</b></li>
+      <li>理由：标签页与行内短码功能重复，且 GP 归属「项目」使分区语义不一致</li>
+      <li><b>一级结构位让给自定义分组</b>（用户意图），来源只作属性</li>
+      <li>搜索补充 <code>source:global</code> / <code>tag:prod</code> 语法</li>
     </ul>
     <div class="legend" style="margin-top:10px">
       <span class="li"><span class="scope src-p">P</span>项目连接</span>
@@ -612,18 +571,17 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-folderplus"/></svg>分组与标签</h4>
     <ul>
       <li>分组 = 名称 + 描述 + 成员；<b>多对多</b>，可拖拽归组、组内外排序、折叠计数</li>
-      <li>连接右键「分组 ▸」多选、「标签 ▸」多值</li>
-      <li>分组栏简单配色：统一左侧 2px 色条（不做 per-group 自定义色）</li>
-      <li>「未分组」支持手动排序</li>
-      <li>落库：<code>connection_groups</code> + <code>connection_group_members</code> + <code>connection_tags</code>（均为独立表）</li>
+      <li>「未分组」固定；支持手动排序</li>
+      <li>标签：连接上的多值标记，用于检索/过滤</li>
+      <li>落库：<code>connection_groups</code> + <code>connection_group_members</code> + <code>connection_tags</code></li>
     </ul>
   </div>
   <div class="card">
     <h4><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-info"/></svg>属性面板（靠右停靠）</h4>
     <ul>
       <li>占用编辑区右侧的编辑面板位（默认约 392px，可拖拽调宽，宽度会被记住）</li>
-      <li>顶部 Tab：属性 / 数据；属性网格 + 子实体 Tab（列/约束/索引/外键/触发器/DDL）</li>
-      <li>入口：双击对象 / 右键「查看属性」/ <span class="kbd">F4</span>；关闭后回到编辑区 tab</li>
+      <li>顶部 Tab：属性 / 数据；属性网格 + 子实体 Tab（列/约束/索引/外键/DDL）</li>
+      <li>入口：双击对象 / 右键「查看属性」/ <span class="kbd">F4</span></li>
     </ul>
   </div>
   <div class="card">
@@ -631,8 +589,8 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     <ul>
       <li>元数据缓存（L2 SQLite）与状态缓存（分组/展开态）<b>都不删除</b></li>
       <li>断开 / 刷新 / 删除连接均保留缓存，可离线浏览、重连秒开</li>
-      <li>唯一删除路径：设置内「缓存管理 → 清理」（可单连接/全量；设置 + 面板头「更多」两处入口）</li>
-      <li>预热采用方案 C（仅 databases/schemas），不预取表</li>
+      <li>唯一删除路径：设置内「缓存管理 → 清理」（设置 + 面板头两处入口）</li>
+      <li>预热采用方案 C（仅 databases/schemas）</li>
     </ul>
   </div>
   <div class="card">
@@ -672,13 +630,11 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     });
   });
 
-  document.querySelectorAll('.scope-tab').forEach(function (t) {
-    t.addEventListener('click', function () {
-      var scope = t.dataset.scope;
-      if (!scope) return;
-      document.querySelectorAll('.scope-tab').forEach(function (x) { x.classList.remove('on'); });
-      t.classList.add('on');
-      wb.dataset.scope = scope;
+  document.querySelectorAll('.chip').forEach(function (c) {
+    c.addEventListener('click', function () {
+      var group = c.parentNode;
+      group.querySelectorAll('.chip').forEach(function (x) { x.classList.remove('on'); });
+      c.classList.add('on');
     });
   });
 

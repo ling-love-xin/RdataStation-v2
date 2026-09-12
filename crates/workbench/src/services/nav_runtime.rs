@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use connection::model::DataSource;
-use database::model::{NavSource, NavState};
+use database::model::NavState;
 use engine::connection_manager::ConnectionType;
 
 use crate::services::connection_service::{ConnectRequest, ConnectionService};
@@ -44,10 +44,13 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
     let ds = load_entry_with(&service, conn_id, project_path)?;
 
     let url = connection::url::build_connection_url(&ds)?;
-    let connection_type = if ds.id.starts_with("G_") {
-        ConnectionType::Global
-    } else {
+    // 存于项目库（P_/GP_）→ Project；其余（G_ 与遗留 conn-）→ Global。
+    // 与 `DataSourceService` 同一判定（`id_prefix::uses_project_storage`），
+    // 不再各自实现前缀推导（遗留 ID 曾在此被误归项目）。
+    let connection_type = if engine::persistence::id_prefix::uses_project_storage(&ds.id) {
         ConnectionType::Project
+    } else {
+        ConnectionType::Global
     };
 
     let req = ConnectRequest {
@@ -99,15 +102,13 @@ pub fn is_connected(conn_id: &str) -> bool {
     rt.block_on(engine::get_connection_manager().has_connection(&conn_id.to_string()))
 }
 
-/// 打开导航持久化存储：全局连接 → 全局库；项目 / 共享连接 → 项目库。
+/// 打开导航持久化存储：全局连接（含遗留 `conn-`）→ 全局库；项目 / 共享连接 → 项目库。
 fn open_store(conn_id: &str, project_root: Option<&Path>) -> Result<NavStore, String> {
-    match NavSource::from_conn_id(conn_id) {
-        NavSource::Global => NavStore::open_global(),
-        _ => {
-            let root =
-                project_root.ok_or_else(|| "未打开项目，无法读写项目导航状态".to_string())?;
-            NavStore::open_project(root)
-        }
+    if engine::persistence::id_prefix::uses_project_storage(conn_id) {
+        let root = project_root.ok_or_else(|| "未打开项目，无法读写项目导航状态".to_string())?;
+        NavStore::open_project(root)
+    } else {
+        NavStore::open_global()
     }
 }
 
@@ -126,28 +127,25 @@ pub fn save_nav_state(
     state: &NavState,
 ) -> Result<(), String> {
     let store = open_store(conn_id, project_root)?;
-    let scope = match NavSource::from_conn_id(conn_id) {
-        NavSource::Global => "global",
-        _ => "project",
+    let scope = if engine::persistence::id_prefix::uses_project_storage(conn_id) {
+        "project"
+    } else {
+        "global"
     };
     store.save_state(conn_id, scope, state)
 }
 
 /// 打开连接组织元数据存储（标签 / 分组的权威源）：
-/// 全局连接 → 全局库；项目 / 共享连接 → 项目库。
+/// 全局连接（含遗留 `conn-`）→ 全局库；项目 / 共享连接 → 项目库。
 fn open_org_store(
     conn_id: &str,
     project_root: Option<&Path>,
 ) -> Result<engine::persistence::ConnectionOrgStore, String> {
-    match NavSource::from_conn_id(conn_id) {
-        NavSource::Global => {
-            engine::persistence::ConnectionOrgStore::open_global().map_err(|e| e.to_string())
-        }
-        _ => {
-            let root = project_root.ok_or_else(|| "未打开项目，无法读写项目连接标签".to_string())?;
-            engine::persistence::ConnectionOrgStore::open_project(root)
-                .map_err(|e| e.to_string())
-        }
+    if engine::persistence::id_prefix::uses_project_storage(conn_id) {
+        let root = project_root.ok_or_else(|| "未打开项目，无法读写项目连接标签".to_string())?;
+        engine::persistence::ConnectionOrgStore::open_project(root).map_err(|e| e.to_string())
+    } else {
+        engine::persistence::ConnectionOrgStore::open_global().map_err(|e| e.to_string())
     }
 }
 
@@ -162,4 +160,105 @@ pub fn list_tags(conn_id: &str, project_root: Option<&Path>) -> Vec<String> {
 pub fn set_tags(conn_id: &str, project_root: Option<&Path>, tags: &[String]) -> Result<(), String> {
     let store = open_org_store(conn_id, project_root)?;
     store.set_tags(conn_id, tags).map_err(|e| e.to_string())
+}
+
+/// 读取当前项目可见连接的全部标签映射（全局库 + 项目库合并）。
+///
+/// 一次性读取，供导航面板在渲染分组树前建立「连接 → 标签」映射。
+pub fn list_all_tags(
+    project_root: Option<&Path>,
+) -> std::collections::HashMap<String, Vec<String>> {
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut merge = |pairs: Vec<(String, String)>| {
+        for (conn_id, tag) in pairs {
+            map.entry(conn_id).or_default().push(tag);
+        }
+    };
+    if let Ok(store) = engine::persistence::ConnectionOrgStore::open_global() {
+        merge(store.list_tag_pairs());
+    }
+    if let Some(root) = project_root {
+        if let Ok(store) = engine::persistence::ConnectionOrgStore::open_project(root) {
+            merge(store.list_tag_pairs());
+        }
+    }
+    map
+}
+
+/// 打开项目级连接组织存储（分组仅项目级）。
+fn open_org_project(
+    project_root: Option<&Path>,
+) -> Result<engine::persistence::ConnectionOrgStore, String> {
+    let root = project_root.ok_or_else(|| "未打开项目，无法读写分组".to_string())?;
+    engine::persistence::ConnectionOrgStore::open_project(root).map_err(|e| e.to_string())
+}
+
+/// 列出全部分组（项目级，按 sort_order 排序）。
+pub fn list_groups(project_root: Option<&Path>) -> Vec<engine::persistence::ConnectionGroup> {
+    open_org_project(project_root)
+        .map(|s| s.list_groups())
+        .unwrap_or_default()
+}
+
+/// 新建分组，返回分组 ID。
+pub fn create_group(project_root: Option<&Path>, name: &str) -> Result<String, String> {
+    let store = open_org_project(project_root)?;
+    let id = engine::persistence::id_prefix::generate_pid("grp");
+    store
+        .create_group(&id, name, None)
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// 重命名分组。
+///
+/// `update_group` 要求完整的 `sort_order`（同步改排序），重命名时保留库中现值（缺省 0）。
+pub fn rename_group(
+    project_root: Option<&Path>,
+    group_id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    let sort_order = store
+        .list_groups()
+        .into_iter()
+        .find(|g| g.id == group_id)
+        .map(|g| g.sort_order)
+        .unwrap_or(0);
+    store
+        .update_group(group_id, name, None, sort_order)
+        .map_err(|e| e.to_string())
+}
+
+/// 删除分组（不删连接）。
+pub fn delete_group(project_root: Option<&Path>, group_id: &str) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    store.delete_group(group_id).map_err(|e| e.to_string())
+}
+
+/// 分组成员连接 ID（按组内顺序）。
+pub fn list_group_members(project_root: Option<&Path>, group_id: &str) -> Vec<String> {
+    open_org_project(project_root)
+        .map(|s| s.list_group_members(group_id))
+        .unwrap_or_default()
+}
+
+/// 加入分组。
+pub fn add_to_group(
+    project_root: Option<&Path>,
+    group_id: &str,
+    conn_id: &str,
+) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    store.add_member(group_id, conn_id).map_err(|e| e.to_string())
+}
+
+/// 移出分组。
+pub fn remove_from_group(
+    project_root: Option<&Path>,
+    group_id: &str,
+    conn_id: &str,
+) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    store.remove_member(group_id, conn_id).map_err(|e| e.to_string())
 }

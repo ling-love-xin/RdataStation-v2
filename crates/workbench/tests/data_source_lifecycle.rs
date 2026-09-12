@@ -568,14 +568,24 @@ fn snapshot_sync_pulls_latest_global_definition() {
     let mut i = input("sync_gp", "postgres", "postgres://carol:pw1@127.0.0.1:5432/db1");
     i.scope = ConnectionScope::GlobalAndProject;
     i.password = Some("pw1".into());
+    i.tags = Some(r#"["old"]"#.to_string());
     let pid = rt
         .block_on(service.save(&i, Some(&path)))
         .expect("save gp");
     let gid = id_prefix::source_global_id(&pid).expect("GP_ 可反查全局源 ID");
 
-    // 2) 改全局定义（名称 / 端口 / 密码）——快照是独立副本，此时不同步。
+    // 标签权威表（connection_tags）在项目库侧：保存时已同步为快照的标签。
+    let project_org = engine::persistence::ConnectionOrgStore::open_at(
+        project_root.join(".RSmeta").join("project.db"),
+        true,
+    )
+    .expect("open project org");
+    assert_eq!(project_org.list_tags(&pid), vec!["old".to_string()]);
+
+    // 2) 改全局定义（名称 / 端口 / 密码 / 标签）——快照是独立副本，此时不同步。
     let mut upd = input("sync_gp", "postgres", "postgres://carol:pw2@127.0.0.1:5433/db2");
     upd.password = Some("pw2".into());
+    upd.tags = Some(r#"["new"]"#.to_string());
     rt.block_on(service.update(&gid, &upd, None)).expect("update global");
 
     let read = |rt: &tokio::runtime::Runtime| {
@@ -591,9 +601,20 @@ fn snapshot_sync_pulls_latest_global_definition() {
     assert_eq!(stale.database.as_deref(), Some("db1"));
     let stale_pw = stale.password_encrypted.clone();
 
-    // 3) 显式同步 → 配置与凭据密文均来自全局定义；ID / 创建时间保留。
+    // 3) 显式同步 → 配置与凭据密文均来自全局定义；ID / 创建时间保留；
+    //    标签权威表（`connection_tags`）也必须跟着快照一起更新（否则 tag 检索读到旧值）。
+    assert_eq!(
+        project_org.list_tags(&pid),
+        vec!["old".to_string()],
+        "快照独立：同步前项目侧标签不变"
+    );
     rt.block_on(service.sync_snapshot_from_global(&pid, &path))
         .expect("sync snapshot");
+    assert_eq!(
+        project_org.list_tags(&pid),
+        vec!["new".to_string()],
+        "同步后项目侧标签权威表应更新"
+    );
     let synced = read(&rt);
     assert_eq!(synced.port, Some(5433), "同步后应使用全局定义的新端口");
     assert_eq!(synced.database.as_deref(), Some("db2"));
@@ -767,6 +788,40 @@ fn tags_sync_and_delete_cleanup() {
         .expect("delete project");
     assert!(project_org.list_tags(&pid).is_empty());
     assert!(project_org.list_group_members("g1").is_empty());
+    assert_eq!(project_org.list_groups().len(), 1, "分组定义应保留");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn global_delete_cleans_project_group_membership() {
+    // 回归点：全局连接加入「项目分组」后删除，项目库的成员关系不能残留（否则分组视图出现幻影成员）。
+    let dir = temp_dir("global-del-org");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let root_str = project_root.to_string_lossy().to_string();
+
+    // 仅全局作用域的连接，加入项目分组：成员关系存项目库（连接本身在全局库）。
+    let g = input("global_grouped", "sqlite", "sqlite:///tmp/gg.db");
+    let gid = rt.block_on(service.save(&g, None)).expect("save global");
+    let project_org = engine::persistence::ConnectionOrgStore::open_at(
+        project_root.join(".RSmeta").join("project.db"),
+        true,
+    )
+    .expect("open project org");
+    project_org.create_group("g1", "alpha", None).expect("group");
+    service.set_connection_groups(&gid, &["g1".to_string()], Some(&root_str));
+    assert_eq!(project_org.list_group_members("g1"), vec![gid.clone()]);
+
+    // 删除全局连接（带项目根）→ 项目侧成员关系一并清理；分组定义保留。
+    rt.block_on(service.delete(&gid, Some(&root_str)))
+        .expect("delete global");
+    assert!(
+        project_org.list_group_members("g1").is_empty(),
+        "项目侧不应残留幻影成员"
+    );
     assert_eq!(project_org.list_groups().len(), 1, "分组定义应保留");
 
     let _ = std::fs::remove_dir_all(&dir);

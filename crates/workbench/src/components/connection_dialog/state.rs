@@ -166,6 +166,7 @@ impl ConnectionDialogState {
             db_input,
             fields_synced_for: Rc::new(RefCell::new(None)),
             url_placeholder_for: Rc::new(RefCell::new(String::new())),
+            driver_derived: Rc::new(RefCell::new(DriverDerived::default())),
         }
     }
 
@@ -618,6 +619,23 @@ impl ConnectionDialogState {
             }
         }
         find_driver_by_value(&drivers, value).cloned()
+    }
+
+    /// 取当前驱动的派生数据（表单字段 / 能力 / 认证方法）。
+    ///
+    /// 渲染期每帧都要用这三份数据，而它们来自驱动行的三段 JSON 声明——直接解析会每帧重复
+    /// 反序列化（§14 #16）。这里按（驱动 id + 声明原文）缓存：声明不变就只克隆已解析结果，
+    /// 声明变了（含切驱动、驱动目录刷新）自动重算。
+    ///
+    /// 与 `fields_synced_for` 同一约定：**`render` 是权威同步点**，事件回调只改状态。
+    pub(crate) fn driver_derived(&self, driver: Option<&Driver>) -> DriverDerived {
+        let key = driver.map(DriverDerived::cache_key).unwrap_or_default();
+        if self.driver_derived.borrow().key == key {
+            return self.driver_derived.borrow().clone();
+        }
+        let fresh = DriverDerived::resolve(driver);
+        *self.driver_derived.borrow_mut() = fresh.clone();
+        fresh
     }
 
     /// 按驱动值（短名 / 完整名 / 驱动 id）选中驱动，并保证类型与下拉选项一致

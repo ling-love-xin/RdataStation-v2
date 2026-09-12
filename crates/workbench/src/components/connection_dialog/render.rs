@@ -276,13 +276,14 @@ impl ConnectionDialogState {
                 .unwrap_or_else(|| matches!(selected_type_id.as_str(), "sqlite" | "duckdb"));
             // 未选类型 / 驱动：表单整体置灰不可输入（控件正常显示，只改可用性）。
             let form_disabled = current_driver.is_none();
+            // 驱动派生数据（表单字段 / 能力 / 认证方法）：按（驱动 id + 声明原文）缓存读取，
+            // 不在渲染期重复解析声明 JSON（§6 决策 #67）。
+            let derived = state.driver_derived(current_driver.as_ref());
             // 驱动声明的连接字段（`drivers.config_schema.fields[]`）：行的存在性 / 标签 / 占位均由它决定。
-            let form_fields: Vec<FormField> = current_driver
-                .as_ref()
-                .map(|d| driver_form_fields(&d.config_schema))
-                .unwrap_or_default();
-            // 地址占位随驱动推导（每帧写入；与上方其它输入占位同一约定）：
-            // 文件型优先用 schema 声明的字段占位（如「选择 .db 或 .sqlite 文件」），否则回退类型字典。
+            let form_fields: Vec<FormField> = derived.form_fields.clone();
+            // 地址占位随驱动推导：文件型优先用 schema 声明的字段占位（如「选择 .db 或 .sqlite 文件」），
+            // 否则回退类型字典。`InputState::set_placeholder` 是无条件赋值 + `notify`
+            // （gpui-base `input/base/state.rs`），每帧写会造成多余重绘——只在占位真正变化时写入。
             let want_address_ph = if is_file_db {
                 address_field(&form_fields)
                     .and_then(|f| f.placeholder.clone())
@@ -290,7 +291,18 @@ impl ConnectionDialogState {
             } else {
                 address_placeholder(current_driver.as_ref(), &selected_type_id)
             };
-            url.update(cx, |s, cx| s.set_placeholder(want_address_ph, window, cx));
+            let address_ph_changed = {
+                let mut last = state.url_placeholder_for.borrow_mut();
+                if *last != want_address_ph {
+                    *last = want_address_ph.clone();
+                    true
+                } else {
+                    false
+                }
+            };
+            if address_ph_changed {
+                url.update(cx, |s, cx| s.set_placeholder(want_address_ph, window, cx));
+            }
 
             // ---- 连接设置字段 ⇄ Header URI 双向同步（render 为权威同步点）----
             // 方向 A（URI → 字段）：URI 或驱动变化时反向填字段（编辑回读 / 手改 URI / 切类型）；
@@ -688,9 +700,7 @@ impl ConnectionDialogState {
                 }
                 2 => {
                     // ===== 能力：只读矩阵（清单与命中均来自 `drivers.capabilities`，UI 只做标签映射）=====
-                    let caps = driver_capabilities(
-                        current_driver.as_ref().and_then(|d| d.capabilities.as_deref()),
-                    );
+                    let caps = derived.capabilities.clone();
                     let declared_count = caps.len();
                     let mut chips = div().h_flex().gap_2().flex_wrap();
                     for (label, ok) in capability_rows(&caps) {
@@ -1022,11 +1032,7 @@ impl ConnectionDialogState {
                         format!("{type_label} · {driver_value} · 文件型数据库 · 无网络与 SSL 配置")
                     } else {
                         // 支持的方法取自驱动声明（不写死 password / ssh_key）。
-                        let methods = driver_auth_types(
-                            current_driver
-                                .as_ref()
-                                .and_then(|d| d.supported_auth_types.as_deref()),
-                        );
+                        let methods = derived.auth_types.clone();
                         let methods_text = if methods.is_empty() {
                             "驱动未声明认证方法".to_string()
                         } else {
@@ -1148,12 +1154,7 @@ impl ConnectionDialogState {
                         .cloned()
                         .unwrap_or_default()
                         .to_string();
-                    let driver_has_auth_types = !driver_auth_types(
-                        current_driver
-                            .as_ref()
-                            .and_then(|d| d.supported_auth_types.as_deref()),
-                    )
-                    .is_empty();
+                    let driver_has_auth_types = !derived.auth_types.is_empty();
                     let auth_method_row = {
                         let mut row = div()
                             .h_flex()
@@ -1261,13 +1262,7 @@ impl ConnectionDialogState {
                         });
 
                     // 卡片 3：连接安全（SSL/TLS）——**按驱动声明显示**（supported_auth_types 含 ssl）。
-                    let driver_declares_ssl = driver_auth_types(
-                        current_driver
-                            .as_ref()
-                            .and_then(|d| d.supported_auth_types.as_deref()),
-                    )
-                    .iter()
-                    .any(|m| m == "ssl");
+                    let driver_declares_ssl = derived.auth_types.iter().any(|m| m == "ssl");
                     let ssl_selected = ssl_mode
                         .read(cx)
                         .selected_value()

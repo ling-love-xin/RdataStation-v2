@@ -512,6 +512,47 @@ pub(crate) fn field_spec<'a>(fields: &'a [FormField], key: &str) -> Option<&'a F
     fields.iter().find(|f| f.key == key)
 }
 
+/// 驱动派生数据：渲染期反复用到的三份声明解析结果（表单字段 / 能力 / 认证方法）。
+///
+/// 只做数据聚合；缓存与失效判别在 [`ConnectionDialogState::driver_derived`]。
+/// `key` 取驱动 id + 三段声明原文（声明变了即失效），避免为拿键而先解析 JSON。
+///
+/// [`ConnectionDialogState::driver_derived`]: crate::components::connection_dialog::ConnectionDialogState::driver_derived
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DriverDerived {
+    /// 缓存键：驱动 id + 三段声明原文；无驱动时为空串。
+    pub(crate) key: String,
+    pub(crate) form_fields: Vec<FormField>,
+    pub(crate) capabilities: Vec<String>,
+    pub(crate) auth_types: Vec<String>,
+}
+
+impl DriverDerived {
+    /// 缓存键（只拼接字符串，不解析 JSON）。
+    pub(crate) fn cache_key(driver: &Driver) -> String {
+        format!(
+            "{}|{}|{}|{}",
+            driver.id,
+            driver.config_schema,
+            driver.capabilities.as_deref().unwrap_or(""),
+            driver.supported_auth_types.as_deref().unwrap_or("")
+        )
+    }
+
+    /// 由驱动目录行解析（`None` → 全空，与“未选驱动”语义一致）。
+    pub(crate) fn resolve(driver: Option<&Driver>) -> Self {
+        let Some(d) = driver else {
+            return Self::default();
+        };
+        Self {
+            key: Self::cache_key(d),
+            form_fields: driver_form_fields(&d.config_schema),
+            capabilities: driver_capabilities(d.capabilities.as_deref()),
+            auth_types: driver_auth_types(d.supported_auth_types.as_deref()),
+        }
+    }
+}
+
 /// 地址字段：优先 `type = file`，否则按常见键名（`file_path` / `path` / `file`）。
 pub(crate) fn address_field(fields: &[FormField]) -> Option<&FormField> {
     fields
@@ -623,7 +664,7 @@ mod tests {
         driver_capabilities, driver_form_fields, driver_short_name, enabled_drivers_of_type,
         field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
         staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
-        type_has_driver, url_template_example,
+        type_has_driver, url_template_example, DriverDerived,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -657,6 +698,33 @@ mod tests {
             enabled: true,
             created_at: String::new(),
         }
+    }
+
+    #[test]
+    fn driver_derived_parses_declarations_and_keys_on_them() {
+        let mut d = driver("mysql_native", "mysql", "MySQL (Official)", true);
+        d.config_schema = r#"{"fields":[{"key":"host","label":"主机"}]}"#.to_string();
+        d.capabilities = Some(r#"["transactions","ssl"]"#.to_string());
+        d.supported_auth_types = Some(r#"["password","ssl"]"#.to_string());
+
+        let derived = DriverDerived::resolve(Some(&d));
+        assert_eq!(derived.form_fields.len(), 1);
+        assert_eq!(derived.form_fields[0].label, "主机");
+        assert_eq!(derived.capabilities, vec!["transactions", "ssl"]);
+        assert_eq!(derived.auth_types, vec!["password", "ssl"]);
+
+        // 键只看驱动 id + 三段声明原文：声明未改则键稳定（缓存命中），改了就换键（失效重算）。
+        assert_eq!(DriverDerived::cache_key(&d), derived.key);
+        let mut changed = d.clone();
+        changed.capabilities = Some(r#"["ssl"]"#.to_string());
+        assert_ne!(DriverDerived::cache_key(&changed), derived.key);
+
+        // 未选驱动 → 全空（不为“未选”造默认字段）。
+        let empty = DriverDerived::resolve(None);
+        assert!(empty.key.is_empty());
+        assert!(empty.form_fields.is_empty());
+        assert!(empty.capabilities.is_empty());
+        assert!(empty.auth_types.is_empty());
     }
 
     #[test]

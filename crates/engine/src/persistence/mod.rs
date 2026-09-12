@@ -30,6 +30,7 @@ pub mod insight_store;
 pub mod log_store;
 pub mod metadata_cache;
 pub mod metadata_cache_pool;
+pub mod metadata_identity;
 pub mod network_store;
 pub mod plugin_store;
 pub mod project_connection_store;

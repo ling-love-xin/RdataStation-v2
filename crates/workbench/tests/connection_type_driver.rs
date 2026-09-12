@@ -447,3 +447,50 @@ fn draft_snapshot_carries_type_and_driver_id(cx: &mut TestAppContext) {
 
     cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
 }
+
+/// 地址占位：随驱动推导，且只在真正变化时写入（避免每帧 `set_placeholder` 触发多余重绘）。
+///
+/// 回归点：`InputState::set_placeholder` 是无条件赋值 + `notify`（gpui-base
+/// `input/base/state.rs`），所以 render 侧必须有 `url_placeholder_for` 守卫。
+#[gpui_kit::test]
+fn address_placeholder_is_cached_and_follows_driver(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    // 走生产入口：占位写入在 render builder 里，不打开对话框不会执行。
+    let editor = cx.update(|_, cx| harness.read(cx).editor.clone());
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| e.request_new_connection(window, cx));
+    });
+    let dialog = cx.update(|_, cx| editor.read(cx).dialog_state().expect("对话框状态已创建"));
+    cx.update(|_, _cx| {
+        *dialog.types.borrow_mut() = vec![
+            ds_type("mysql", "MySQL", "🐬"),
+            ds_type("sqlite", "SQLite", "🪶"),
+        ];
+        *dialog.drivers.borrow_mut() = vec![
+            driver("mysql", "mysql", "MySQL (sqlx)", true),
+            driver("sqlite", "sqlite", "SQLite (rusqlite)", true),
+        ];
+    });
+
+    // 网络型：占位按驱动推导，缓存值与输入框实际占位一致。
+    cx.update(|window, cx| dialog.select_type("mysql", window, cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let ph_network = cx.update(|_, _cx| dialog.url_placeholder_for.borrow().clone());
+    assert!(ph_network.contains("主机"), "网络型占位应含示例地址：{ph_network}");
+    let input_ph = cx.update(|_, cx| dialog.url.read(cx).presentation().placeholder().to_string());
+    assert_eq!(input_ph, ph_network, "缓存值应与输入框占位一致");
+
+    // 再画一帧：占位未变 → 缓存不变（守卫拦下重复写入）。
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let ph_again = cx.update(|_, _cx| dialog.url_placeholder_for.borrow().clone());
+    assert_eq!(ph_again, ph_network, "占位未变化时不应重写");
+
+    // 切文件型：占位随驱动变化（缓存同步更新，输入框跟进）。
+    cx.update(|window, cx| dialog.select_type("sqlite", window, cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let ph_file = cx.update(|_, _cx| dialog.url_placeholder_for.borrow().clone());
+    assert_ne!(ph_file, ph_network, "文件型占位应与网络型不同");
+    let input_ph = cx.update(|_, cx| dialog.url.read(cx).presentation().placeholder().to_string());
+    assert_eq!(input_ph, ph_file, "切驱动后输入框占位应同步");
+}

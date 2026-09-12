@@ -191,6 +191,22 @@ impl ConnectionOrgStore {
         }
     }
 
+    /// 全部「连接 → 标签」对（按连接 ID、标签升序）。
+    ///
+    /// 供导航面板一次性建立完整映射，避免渲染期逐连接查询。
+    pub fn list_tag_pairs(&self) -> Vec<(String, String)> {
+        let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT connection_id, tag FROM connection_tags ORDER BY connection_id, tag")
+        else {
+            return Vec::new();
+        };
+        match stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+            Ok(iter) => iter.filter_map(Result::ok).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     // ==================== 分组（项目级） ====================
 
     /// 新建分组。
@@ -413,6 +429,15 @@ mod tests {
         assert_eq!(
             store.list_all_tags(),
             vec![("prod".to_string(), 2), ("core".to_string(), 1)]
+        );
+        // 一次性映射（按连接 ID、标签升序），供导航面板建立缓存。
+        assert_eq!(
+            store.list_tag_pairs(),
+            vec![
+                ("P_a".to_string(), "core".to_string()),
+                ("P_a".to_string(), "prod".to_string()),
+                ("P_b".to_string(), "prod".to_string()),
+            ]
         );
 
         // 覆盖式：清空后旧标签不再命中

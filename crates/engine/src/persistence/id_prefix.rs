@@ -61,6 +61,22 @@ pub fn is_snapshot(id: &str) -> bool {
     id.starts_with(SNAPSHOT_PREFIX)
 }
 
+/// 遗留全局连接前缀：v1 迁移数据用 `conn-xxx`，无 `G_` 前缀。
+pub const LEGACY_GLOBAL_PREFIX: &str = "conn-";
+
+/// 是否为**全局库**中的连接记录（`G_` 前缀，或遗留 `conn-` 前缀）。
+///
+/// 两侧必须用同一判定：服务层曾把遗留 ID 当全局，而导航侧自带的前缀推导把它当项目，
+/// 导致同一连接在两个库之间错位（标签 / 导航状态写错库）。
+pub fn is_global_connection(id: &str) -> bool {
+    is_global(id) || id.starts_with(LEGACY_GLOBAL_PREFIX)
+}
+
+/// 连接记录是否存于**项目库**（`P_` 本地连接 / `GP_` 快照；其余在全局库）。
+pub fn uses_project_storage(id: &str) -> bool {
+    is_project(id) || is_snapshot(id)
+}
+
 /// 从 ID 提取来源类型
 pub fn origin_from_id(id: &str) -> &'static str {
     if is_global(id) {
@@ -214,6 +230,20 @@ mod tests {
     fn test_to_snapshot_id_invalid() {
         assert_eq!(to_snapshot_id("P_env_001"), None);
         assert_eq!(to_snapshot_id("GP_env_dev_2026"), None);
+    }
+
+    #[test]
+    fn test_global_connection_and_project_storage() {
+        // G_ 与遗留 conn- 均在全局库；P_ / GP_ 在项目库（GP_ 不是 G_ 开头）。
+        assert!(is_global_connection("G_conn_prod"));
+        assert!(is_global_connection("conn-1699999999"));
+        assert!(!is_global_connection("P_conn_a1b2c3d4"));
+        assert!(!is_global_connection("GP_conn_prod_20260912"));
+
+        assert!(uses_project_storage("P_conn_a1b2c3d4"));
+        assert!(uses_project_storage("GP_conn_prod_20260912"));
+        assert!(!uses_project_storage("G_conn_prod"));
+        assert!(!uses_project_storage("conn-1699999999"));
     }
 
     #[test]

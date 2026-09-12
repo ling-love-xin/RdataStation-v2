@@ -1,8 +1,16 @@
 # 数据源管理 / 数据库导航模块 · 原型设计
 
-> 状态：**待确认（v4，依据反馈修订）** · 关联文件：`database-navigator-prototype.html`（可交互原型）、`database-nav-dev-plan.md`（确认后编写）
+> 状态：**方案 A 已实现（v5，2026-09-12）** · 关联文件：`database-navigator-prototype.html`（可交互原型）、`database-nav-dev-plan.md`（开发方案）
 > 参考基准：v1 导航器（`v1/docs/navigator/*`、`v1/frontend/extensions/builtin/database/**`、`v1/prototype/properties-panel-dbeaver.html`）、连接模块、布局、主题
 > 技术栈：GPUI（gpui-kit 0.6），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
+
+### v5 修订点（方案 A：消除「标签页 vs 来源徽标」重复）
+
+| # | 反馈 | 修订 |
+| --- | --- | --- |
+| 1 | 已显示来源短码，为何还有项目/全局标签页（重复） | **去掉按来源的标签页**；来源降级为**筛选 chips + 行内短码**（§2.1） |
+| 2 | 分组应是一级结构 | **自定义分组升为树的一级结构**（含「未分组」），不再被标签页挤到二级（§2.2） |
+| 3 | 来源是连接的属性 | 来源（`P`/`G`/`GP`）仅作**属性**呈现与筛选，不做一级分区（§2.3） |
 
 ### v4 修订点
 
@@ -20,7 +28,7 @@
 
 ## 0. 一句话定位
 
-左 Dock `LeftPanel::Database` 面板：顶部**来源标签页（项目 / 全局）**按来源过滤，下面是**数据源管理 + 对象树**；数据源可属于多个**分组**、可打多个**标签**；连接下展开对象树（schema → 表 / 视图 / 存储过程 → 列）；双击对象或右键打开**靠右停靠的 DBeaver 式属性面板**。**本模块只管理数据源，不涉及分析资产。**
+左 Dock `LeftPanel::Database` 面板：顶部**搜索 + 来源筛选（全部 / 项目 / 全局 / 共享）**，下面是**数据源管理 + 对象树**；数据源按**自定义分组**一级组织，可属于多个分组、可打多个标签；连接下展开对象树（schema → 表 / 视图 / 存储过程 → 列）；双击对象打开**靠右停靠的 DBeaver 式属性面板**。**本模块只管理数据源，不涉及分析资产。**
 
 ## 1. 设计基准与语义
 
@@ -39,12 +47,12 @@
 | 概念 | 定义 | 取值 | 存储 |
 | --- | --- | --- | --- |
 | **来源标识** | 连接的归属来源（决定可见性与生命周期） | 短码 `P` / `G` / `GP` | 连接记录字段 |
-| **标签页** | 面板顶部按来源过滤的视图 | 项目 / 全局 | 视图状态（记忆） |
+| **来源筛选** | 面板顶部筛选条（全部 / 项目 / 全局 / 共享） | 单选 | 视图状态（记忆） |
 | **分组** | **项目下**用户自定义的连接集合（树形组织） | 任意，**多对多** | 关联表（项目库） |
 | **标签** | 连接上的**多值**轻量标记（横切检索/过滤） | 任意多值 | 连接 `tags` 字段 |
 
-- 四者互不隶属：分组与标签都**不随来源/标签页改变定义**；一个连接可同时属于多个分组、带多个标签。
-- 「共享」`GP` = 全局定义 + 当前项目快照，在**项目标签**下可见。
+- 分组与标签都不随来源筛选改变定义；一个连接可同时属于多个分组、带多个标签。
+- 来源是连接的**属性**：`GP` 共享 = 全局定义 + 当前项目快照，仅以短码/筛选呈现，不再决定「进哪个标签页」。
 
 ### 1.2 为什么合并「管理」与「导航」
 
@@ -54,7 +62,7 @@
 
 | 层 | 现状 | 本设计 |
 | --- | --- | --- |
-| 视图 | `panels.rs::render_connection_list` + `render_navigation_placeholder` | 新面板 `DatabaseNavPanel`：标签页 + 分组 + 对象树 |
+| 视图 | `panels.rs::render_connection_list` + `render_navigation_placeholder` | 新面板 `DatabaseNavPanel`：来源筛选 + 分组 + 对象树 |
 | 导航数据 | `workbench/services/db_navigator.rs` 只读 DuckDB 分析库 | **移出本模块**；外部库走 `MetadataService` |
 | 缓存 | engine 已实现 L1/L2，导航未接入 | 导航服务编排（§4），**不删缓存** |
 | 连接状态 | `ConnectionItem.connected` 仅记录有效性 | 接入运行时连接服务（§5） |
@@ -65,36 +73,36 @@
 ```
 ┌ 左侧 Dock 240px（sidebar 底）────────────────┐
 │ 数据源              [＋][🗂＋][⟳][断开][⋯]   │  ← 面板头 36px
-├ 标签页（按来源过滤）──────────────────────────┤
-│ [ 项目 ●3 ]  [ 全局 ]                        │
 ├ 搜索（筛选 数据源/表/列/标签）─────────────────┤
 │ [🔍 筛选数据源 / 表 / 列 / 标签…]   [.*] [Aa] │
+│ 来源: [全部] 项目  全局  共享                 │  ← 来源筛选 chips
 ├ 树主体（滚动、虚拟化 >50）───────────────────┤
-│ ▾ 核心库                      2              │  ← 自定义分组（简单配色：左侧色条）
+│ ▾ 核心库                      2              │  ← 自定义分组（一级结构）
 │     ▾ ● 生产 PG          GP  PG              │  ← 连接（状态点 + 来源短码 + 驱动）
 │       ▾ 📁 analytics                         │
 │         ▾ ▦ 表                      23       │
 │           ▾ orders                 1.2M      │  ← 选中
 │               order_id        PK  bigint     │
 │               customer_id      bigint · FK   │
-│           ▸ customers               86K      │
 │         ▸ 👁 视图 / ƒ 过程 / ≡ 序列           │
 │     ▸ ○ 本地 MySQL       P   MY              │
 │ ▾ 报表                        1              │
-│     ▸ ● 报表 SQLite      P   SQ              │
+│     ▸ ● 报表 PG          G   PG              │
 │ ▾ 未分组                      1              │
-│     ▸ ○ 临时 PG          P   PG              │
+│     ▸ ○ 测试 SQLite      G   SQ              │
 ├ 底部状态（10.5px muted）─────────────────────┤
 │ 3 已连接 · 1 离线 · 缓存 12 分钟前           │
 └──────────────────────────────────────────────┘
 ```
 
-### 2.1 标签页（项目 / 全局）
+### 2.1 来源筛选（chips，方案 A）
 
-- 面板头下方标签栏：「项目」/「全局」，按来源过滤；激活下划线 `list.active.border`（coral）。
-- 「项目」= 来源为 `P` 与 `GP` 的连接；「全局」= 来源为 `G` 的连接。
-- **应用启动即绑定当前项目**（未打开项目无法启动），故「项目」标签恒可用，无「未打开项目」分支。
-- 各标签独立记忆：搜索词、展开态、滚动位置、选中项。
+- 面板头下方一行 chips：**全部 / 项目 / 全局 / 共享**，按来源过滤连接（默认「全部」）。
+- 来源是连接的**属性**（`P`/`G`/`GP`），以行内短码呈现；筛选只做过滤，不占一级结构。
+- **为什么去掉标签页**：标签页与行内来源短码表达同一件事（功能重复）；且 `GP` 归属「项目」使分区语义不一致。一级结构位让给**用户自定义分组**（§2.2）。
+- 搜索框补充 `source:global`、`tag:prod` 语法，与 chips 互补。
+- **应用启动即绑定当前项目**：无「未打开项目」分支。
+- 视图状态（来源筛选、展开态、滚动、选中）按连接持久化（§6.4）。
 
 ### 2.2 分组（多对多）与标签（多值）
 
@@ -104,7 +112,7 @@
 | 基数 | 连接 ↔ 分组 = **多对多** | 连接 → 标签 = **多值** |
 | 属性 | 名称、描述、（可选）排序 | 纯文本 |
 | 归属 | 项目级（项目库） | 连接字段 |
-| 与来源关系 | 正交，不随标签页变 | 正交 |
+| 与来源关系 | 正交，不随来源筛选变 | 正交 |
 
 **落库（新增后台表 / 字段）**
 
@@ -173,6 +181,17 @@ connection_tags                -- 标签（独立表）：连接↔标签 多值
 
 L2 路径（engine `build_metadata_path`）：全局 `{system}/global_metadata/conn_{id}.sqlite`；项目 `{project}/meta/connection_metadata/conn_{id}.sqlite`。
 
+**缓存键（身份指纹，规则已冻结 · 未接线）**：路径中的 `{id}` 将替换为**目标身份指纹**（`meta_{fp}.sqlite`），让指向同一物理库、同一访问主体的多条连接共享一份 L2（改名 / 改密码 / 换驱动实现 / 调连接参数都不重建缓存）。
+
+| 进身份 | 内容 |
+| --- | --- |
+| 数据库族 | `data_source_types.id`（`mysql` / `postgres` / …），**不是**驱动实现 id（`mysql_native`） |
+| 规范化地址 | 网络型：主机小写 + 端口（空→驱动默认端口）+ 库 / schema（大小写敏感，不折叠）；文件型：规范化路径（去 scheme 与查询串、`\`→`/`、Windows 折叠大小写） |
+| 访问主体 | 用户名（优先）/ 认证档案 id / 认证类型——权限决定可见对象集合，**不能跨主体共享** |
+| 格式版本 | `CACHE_FORMAT_VERSION`（当前 1）：缓存结构升级即分池（旧缓存不删） |
+
+**不进身份**：连接 ID / 显示名（改名即失配）、驱动实现 id、密码与密钥（安全 + 轮换即失效）、SSL / 代理 / 超时等连接参数（只影响“怎么连”）。指纹 = `sha256(规范化串)` 前 16 hex，纯函数在 `engine::persistence::metadata_identity`（13 项单测）。切换与本模块接入 L2 同轮进行，并配套 `metadata_cache_index`（`canonical_desc` 可读描述 / `ref_conn_ids` 引用计数 / `last_used_at` / `size_bytes`）供「缓存管理」展示占用与孤儿。详见 `docs/architecture/connection/connection-dialog-architecture.md` §3.6。
+
 ### 4.2 增量刷新（v1 V7）
 
 - `detect_all_changes`（对象 hash 快照比对）→ `ChangeDetectionResult` → `incremental_sync` 只落变更；快照 `save_snapshot` / `get_snapshot` / `has_snapshot`。
@@ -200,7 +219,7 @@ L2 路径（engine `build_metadata_path`）：全局 `{system}/global_metadata/c
 | --- | --- |
 | 手动刷新 | 清 L1；L2 标记 stale，展开时增量重载（**不删 L2**） |
 | 断开连接 | 只关运行时连接，**L2 保留**（离线可浏览 / 重连秒开） |
-| 删除连接 | **缓存文件保留**（避免误删后全量重拉）；提供显式「清理缓存」入口 |
+| 删除连接 | **缓存文件保留**（避免误删后全量重拉）；指纹键落地后按 `ref_conn_ids` 引用计数标记孤儿（不自动删）；提供显式「清理缓存」入口 |
 | 内省级别变更 | 标记 L2 过期（`set_level` / `from_object_count`） |
 | DDL 监听（未来） | 智能失效相关表（v1 设计，未落地） |
 | 版本不符 | `CacheVersionManager` 迁移 |
@@ -363,7 +382,7 @@ connection_groups / connection_group_members / connection_tags   -- 见 §2.2
 flowchart TD
     A[启动, 已绑定当前项目] --> B{当前项目有数据源?}
     B -- 否 --> C[空态: 新建连接]
-    B -- 是 --> D[默认标签: 项目]
+    B -- 是 --> D[默认来源筛选: 全部]
     D --> E[按分组渲染连接, 带来源短码/标签]
     E --> F[双击对象 → 右侧属性面板 / 双击连接 → 连接切换]
     F --> G[连接中 → 已连接]
@@ -387,7 +406,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | 面板底 | `sidebar.background` | `#F3F3F3` | `#252526` |
 | 面板头 / 分隔线 | `sidebar.border` | `#E7E7E7` | `#3C3C3C` |
-| 标签激活下划线 | `list.active.border`（coral） | `#C25B46` | `#E8846F` |
+| 来源筛选 chips（选中 / 未选中） | `list.active.background` + `list.active.border` / `sidebar.foreground` | — | — |
 | 正文 / 弱文字 | `sidebar.foreground` / `muted.foreground` | `#616161` / `#8E8E8E` | `#CCCCCC` / `#8A8A8A` |
 | 行悬停 / 选中 | `list.hover.background` / `list.active.background` | `#F0F0F0` / `#E4E4E4` | `#2A2D2E` / `#37373D` |
 | 分组头（统一色） | 左色条 `list.active.border` + 底 `sidebar.accent.background` | — | — |
@@ -409,12 +428,12 @@ flowchart TD
 
 | 原型元素 | GPUI 落点 |
 | --- | --- |
-| 面板容器 | `crates/workbench/src/components/database_nav_panel.rs`（`DatabaseNavPanel: Entity<T>`，新增） |
-| 左 Dock 装配 | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `LeftPanel::Database` 分支改调新面板） |
-| 标签页 | 面板内自绘（或 gpui-kit `Tabs`） |
-| 分组 / 标签模型与服务 | `crates/database/src/group.rs`（新增，`ConnectionGroup` + 多对多 + `tags`） |
-| 分组 / 成员 / 标签持久化 | 新增 `connection_groups` / `connection_group_members` + `connections.tags`（`migrations`） |
-| 展开态持久化 | 新增 `navigator_state`（engine `persistence`） |
+| 面板容器 | `crates/workbench/src/panels.rs`（`SidebarPanel::render_database_nav`，按现有面板归属实现，未独立拆文件） |
+| 左 Dock 装配 | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `LeftPanel::Database` 分支） |
+| 来源筛选 chips | `panels.rs::nav_source_chip`（全部 / 项目 / 全局 / 共享，默认全部） |
+| 分组 / 标签模型 | `crates/database/src/model.rs`（`ConnectionGroup` / `ConnectionTag` / `NavSource`） |
+| 分组 / 标签 / 状态持久化 | `crates/engine/src/persistence/connection_org_store.rs`（权威存储）+ `crates/workbench/src/services/nav_store.rs`（视图状态） |
+| 分组一级视图 / 行内归组 | `panels.rs::{render_nav_tree, render_group_header, render_org_editor}` |
 | 导航领域模型 / 状态 | `crates/database/src/model.rs` |
 | 导航编排服务（缓存/刷新/预热/搜索/分页） | `crates/database/src/navigator_service.rs`（新增） |
 | 实时内省 | `crates/database/src/metadata_service.rs`（已有） |
@@ -442,7 +461,7 @@ flowchart TD
 9. **连接排序**：分组内连接支持手动排序，且在「未分组」下按名称/最近使用排序，需明确默认规则。
 10. **大 schema 的列内联展开阈值**：列内联展开在 >50 列时可能卡顿，建议超过阈值改为「在属性面板查看列」而不内联渲染。
 
-## 12. 已确认决策（v4）
+## 12. 已确认决策（v5）
 
 | # | 事项 | 决策 |
 | --- | --- | --- |
@@ -455,6 +474,7 @@ flowchart TD
 | 7 | 未打开项目 | 不存在该状态；启动即绑定当前项目 |
 | 8 | 缓存删除 | 元数据/状态缓存**都不删**，仅显式「缓存管理 → 清理」 |
 | 9 | 范围 | 本面板只管理数据源；DuckDB 分析表 / 分析资源归 M6 |
+| 10 | 来源呈现（方案 A） | **去掉按来源标签页**；来源 = 筛选 chips + 行内短码；**分组升为一级结构** |
 | 10 | 状态存储 | 结构化状态 → **SQLite 新增表**；UI 偏好 → `settings.json`（§6.4） |
 
 ## 13. 已确认细节

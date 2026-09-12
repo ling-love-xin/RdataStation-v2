@@ -61,47 +61,6 @@ impl NavSource {
     }
 }
 
-/// 来源标签页（面板顶部分区，按来源过滤）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NavScope {
-    /// 项目：`P` + `GP`
-    Project,
-    /// 全局：`G`
-    Global,
-}
-
-impl Default for NavScope {
-    fn default() -> Self {
-        Self::Project
-    }
-}
-
-impl NavScope {
-    /// 该标签页是否展示指定来源的连接。
-    pub fn contains(self, source: NavSource) -> bool {
-        match self {
-            Self::Project => matches!(source, NavSource::Project | NavSource::Shared),
-            Self::Global => source == NavSource::Global,
-        }
-    }
-
-    /// 标签页文案。
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Project => "项目",
-            Self::Global => "全局",
-        }
-    }
-
-    /// 持久化用标识。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Project => "project",
-            Self::Global => "global",
-        }
-    }
-}
-
 /// 类别文件夹（schema 下的对象分组）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NavFolder {
@@ -383,15 +342,6 @@ mod tests {
         assert_eq!(NavSource::Global.code(), "G");
         assert_eq!(NavSource::Shared.code(), "GP");
         assert_eq!(NavSource::Shared.label(), "共享");
-    }
-
-    #[test]
-    fn scope_filters_source() {
-        assert!(NavScope::Project.contains(NavSource::Project));
-        assert!(NavScope::Project.contains(NavSource::Shared));
-        assert!(!NavScope::Project.contains(NavSource::Global));
-        assert!(NavScope::Global.contains(NavSource::Global));
-        assert!(!NavScope::Global.contains(NavSource::Project));
     }
 
     #[test]

@@ -167,6 +167,9 @@ pub struct ConnectionDialogState {
     pub fields_synced_for: Rc<RefCell<Option<(String, String)>>>,
     /// 地址输入占位按驱动变化（每帧写入）。
     pub url_placeholder_for: Rc<RefCell<String>>,
+    /// 驱动派生数据缓存（表单字段 / 能力 / 认证方法）；由 `driver_derived()` 按需刷新，
+    /// 避免渲染期每帧解析声明 JSON（§6 决策 #67）。
+    pub(crate) driver_derived: Rc<RefCell<DriverDerived>>,
     pub ssl_ca: Entity<InputState>,
     pub ssl_cert: Entity<InputState>,
     ssl_key: Entity<InputState>,

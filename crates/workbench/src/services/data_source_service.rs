@@ -185,7 +185,7 @@ impl DataSourceService {
         conn_id: &str,
         project_path: Option<&str>,
     ) -> Result<Option<DataSource>, CoreError> {
-        if id_prefix::is_project(conn_id) || id_prefix::is_snapshot(conn_id) {
+        if id_prefix::uses_project_storage(conn_id) {
             let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
                 return Ok(None);
             };
@@ -361,6 +361,14 @@ impl DataSourceService {
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
         store.update_connection(&row).await?;
+        // 标签双源一致：快照的 JSON 投影更新后，权威检索表（`connection_tags`）必须跟着变，
+        // 否则 `tag:x` 检索与导航标签视图会读到同步前的旧标签。
+        sync_connection_tags(
+            self.global_db,
+            snapshot_id,
+            row.tags.as_deref(),
+            Some(project_path),
+        );
         tracing::info!(
             target: "data_source_service",
             snapshot_id = %snapshot_id,
@@ -382,7 +390,7 @@ impl DataSourceService {
         let url = build_effective_url(input);
         let (host, port, database) = parse_url_host_port_db(&input.db_type, &url);
 
-        if id_prefix::is_project(conn_id) || id_prefix::is_snapshot(conn_id) {
+        if id_prefix::uses_project_storage(conn_id) {
             let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
                 return Err(CoreError::common(shared::error::CommonError::General(
                     "未打开项目：项目作用域连接更新需要项目路径（.RSmeta）".to_string(),
@@ -452,7 +460,7 @@ impl DataSourceService {
         conn_id: &str,
         project_path: Option<&str>,
     ) -> Result<DeleteResult, CoreError> {
-        if id_prefix::is_project(conn_id) || id_prefix::is_snapshot(conn_id) {
+        if id_prefix::uses_project_storage(conn_id) {
             let Some(path) = project_path.filter(|p| !p.trim().is_empty()) else {
                 return Err(CoreError::common(shared::error::CommonError::General(
                     "未打开项目：项目作用域连接删除需要项目路径（.RSmeta）".to_string(),
@@ -477,8 +485,13 @@ impl DataSourceService {
             self.analysis_db.as_deref(),
             conn_id,
         );
-        // 一致性清理：标签（全局库无分组）。
+        // 一致性清理：全局库侧（标签 + 会员）。
         cleanup_connection_org(self.global_db, conn_id, None);
+        // 「全局连接加入项目分组」是合法配置（成员关系存项目库），删除时一并清理项目侧，
+        // 否则 B3 分组视图会出现幻影成员；项目根不合法时跳过（避免误清全局库）。
+        if let Some(path) = project_path.filter(|p| !p.trim().is_empty() && is_project_root(p)) {
+            cleanup_connection_org(self.global_db, conn_id, Some(path));
+        }
 
         tracing::info!(target: "data_source_service", conn_id, "数据源已删除");
         Ok(DeleteResult {
@@ -798,13 +811,13 @@ fn project_connection_from_input(
     })
 }
 
-/// GlobalConnectionInfo → DataSource（作用域按 ID 前缀推导，兼容旧 conn- 前缀视为全局）。
+/// GlobalConnectionInfo → DataSource（作用域按 ID 前缀推导，遗留 `conn-` 视为全局）。
 fn map_info_to_data_source(
     info: engine::persistence::global_db::GlobalConnectionInfo,
 ) -> DataSource {
     let scope = if id_prefix::is_snapshot(&info.id) {
         ConnectionScope::GlobalAndProject
-    } else if id_prefix::is_global(&info.id) || info.id.starts_with("conn-") {
+    } else if id_prefix::is_global_connection(&info.id) {
         ConnectionScope::Global
     } else {
         ConnectionScope::Project
