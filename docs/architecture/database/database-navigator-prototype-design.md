@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 原型设计
 
-> 状态：**方案 A 已实现（v5，2026-09-12）；v6 降密与概念定位 + v7 徽标语义已冻结，待实现（2026-09-13）** · 关联文件：`database-navigator-prototype.html`（可交互原型）、`database-nav-dev-plan.md`（开发方案）
+> 状态：**方案 A 已实现（v5）；v6/v7 降密与徽标语义已实现（V2–V5、V8–V10；V6/V7 待做）· 2026-09-13** · 关联文件：`database-navigator-prototype.html`（可交互原型）、`database-nav-dev-plan.md`（开发方案）
 > 参考基准：v1 导航器（`v1/docs/navigator/*`、`v1/frontend/extensions/builtin/database/**`、`v1/prototype/properties-panel-dbeaver.html`）、连接模块、布局、主题
 > 技术栈：GPUI（gpui-kit 0.6），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
 
@@ -156,12 +156,12 @@
 - 名称 `flex_1 + min_w_0 + text_ellipsis`；徽标与域码均 `flex_none`（防长名挤压）。
 
 > 实现状态（v5，2026-09-12）：面板头 `[＋][🗂＋][⟳][断开][⋯]` 已全部落地——`＋` 新建数据源、`🗂＋` 新建分组、`⟳` 刷新当前选中连接（§4.2）、`断开` 断开当前选中连接（仅已连接时可用，缓存保留）、`⋯` 更多（刷新全部 / 缓存管理）。
-> 实现状态（v6/v7，待实现）：行内瘦身 + **双通道徽标**、**归属域右对齐固定列**、**标签行内可选显示 + 行尾 `+`**、分组头健康度 / 全折叠、引用样式、`筛选 ▾` facet 入口。
+> 实现状态（v6/v7，2026-09-13）：**已实现** —— 行内瘦身 + 双通道徽标、归属域右对齐固定列 + `⋯` 开关、标签行内可选显示（`⋯ → 显示标签`）+ 行尾 `+`、分组头健康度 / 全折叠、行操作悬停显示。**待实现** —— 多组引用样式 + 显式主组（V6）、`筛选 ▾` facet 弹层（V7）、徽标 hover tooltip（需接入 gpui-kit `Tooltip`；当时事实统一在属性面板展示）。
 
 ### 2.1 归属域筛选与 facet（原「来源筛选」）
 
 - 面板头下方常驻一行归属域 chips：**全部 / 项目 / 全局 / 共享**（默认「全部」）——这是**唯一常驻 facet**（基数 3、互斥，符合密度预算）。
-- 行尾「**筛选 ▾ N**」承载其余 facet：**类型 / 驱动 / 标签**（多选 chips，可叠加）；`N` = 已生效的附加筛选数。
+- 行尾「**筛选 ▾ N**」承载其余 facet：**类型 / 驱动 / 标签**（多选 chips，可叠加）；`N` = 已生效的附加筛选数。（**v7，待做**）
 - **归属域短码 = 行内右对齐固定列**（v7）：`P` / `G` / `GP` 常显，形成可扫视的对齐列；是否需要该列由 `⋯ → 显示归属域`（默认开）控制（§2.3）。
 - 归属域是连接的**事实属性**（`P`/`G`/`GP`），筛选只做过滤，不占一级结构。
 - **为什么去掉标签页**：标签页与行内短码表达同一件事（功能重复）；且 `GP` 归属「项目」使分区语义不一致。一级结构位让给**用户自定义分组**（§2.2）。
@@ -188,7 +188,9 @@
 - 健康度 = `已连接/总数`，有失败时附加 `danger` 计数点——把状态**聚合到结构层**，省去逐行扫状态。
 - `全折叠`：一键折叠全部同层分组（分组多时刚需）；分组右键菜单亦有「折叠其他」。
 
-**多组重复呈现（v6）**：同一连接属多个分组时，只在该连接的**主组**全亮呈现；其它组以**引用行**出现（`muted` 名称 + `∈ 主组名`，不可拖拽，点击跳转到主组）。主组默认取用户排序最前的分组，可在「分组 / 标签…」中指定。这样多对多不再线性撑高树。
+**多组重复呈现（v6，待做）**：同一连接属多个分组时，只在该连接的**主组**全亮呈现；其它组以**引用行**出现（`muted` 名称 + `∈ 主组名`，不可拖拽，点击跳转到主组）。主组默认取用户排序最前的分组，可在「分组 / 标签…」中指定。这样多对多不再线性撑高树。
+
+> 当前行为：会在每个所属分组各出现一次（见 `database-navigator-architecture.md` §11 #1）。
 
 **落库（新增后台表 / 字段）**
 
@@ -427,7 +429,7 @@ engine 已迁移 `CacheVersionManager` + `CURRENT_CACHE_VERSION`（V1→…→V8
 ### 6.3 搜索
 
 - 本地筛选：过滤已加载节点的名称与标签，命中自动展开祖先链。
-- **facet 语法（v6）**：`scope:global` / `type:postgres` / `driver:native` / `tag:prod`；与面板 facet 双向同步（改一侧另一侧跟随）。
+- **facet 语法（v7，待做）**：`scope:global` / `type:postgres` / `driver:native` / `tag:prod`；与面板 facet 双向同步（改一侧另一侧跟随）。当前搜索只做**名称 + 标签**子串匹配（`tag:prod` 式的 `source:` 为 `scope:` 历史别名，同样待做）。
 - **已保存视图（规划）**：可把 `scope:project tag:prod type:mysql` 存为命名视图，避免重复点 chips（存储与交互待定，见 §11）。
 - FTS 全量搜索（≥2 字符）：`MetadataCacheOps::search_fts`，snippet 高亮；结果落**中央编辑区**专用面板。
 - `↑↓` 选择、`Enter` 打开、`Esc` 清空；300ms 防抖、上限 500。
@@ -503,6 +505,8 @@ connection_groups / connection_group_members / connection_tags   -- 见 §2.2
 - **数据来源**：缓存明细优先（`load_node_detail` / `load_table_indexes` / `load_table_foreign_keys`），缺字段按需实时补齐；DDL 由内省拼装。
 - **事实的唯一权威展示位（v6）**：连接的 `数据库类型` / `驱动（显示名 + driver id + driver_kind）` / `归属域` / `地址（host:port/db）` / `运行时状态` 全部在此展示；行内与 tooltip 只是它的快捷摘要，避免同一事实在多处定义（§1.1 规则 2）。
 
+> **当前实现**：属性面板连接项显示 `名称` / `归属域` / `驱动`（**驱动目前为 driver id**，如 `mysql_native`）；补「数据库类型」行与驱动友好显示名为后续项（见 `database-navigator-architecture.md` §11 #4）。徽标 tooltip 待接入 `Tooltip` 组件（§11 #3）。
+
 落点：`crates/database/src/property_panel.rs`（注册表 + 字段组装）+ 编辑区右侧面板视图（`crates/workbench`）。
 
 ## 8. 关键帧与状态流
@@ -560,12 +564,12 @@ flowchart TD
 | 面板容器 | `crates/workbench/src/panels.rs`（`SidebarPanel::render_database_nav`，按现有面板归属实现，未独立拆文件） |
 | 左 Dock 装配 | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `LeftPanel::Database` 分支） |
 | 归属域 facet（原来源筛选 chips） | `panels.rs::nav_source_chip`（全部 / 项目 / 全局 / 共享，默认全部） |
-| 连接行瘦身 + **双通道徽标**（v6/v7，**待实现**） | `panels.rs::render_connection_row`（去掉行内 🗂 与驱动文本；**徽标颜色=状态 / 形状=类型**，类型→Lucide 路径 + 2 字母的映射表）；`DatabaseNavView` 增加**缓存驱动目录**（`id → type_id / name / 同类型驱动数`）；`ConnectionItem` 补 `type_id` / `driver_name` |
-| 归属域右对齐固定列 + 标签行内显示 + 行内 `+`（v7，**待实现**） | `panels.rs::render_connection_row`（域码固定列宽右对齐；`+` 复用 `render_org_editor` 的标签输入）；`⋯` 开关 `显示标签` / `显示归属域` → `settings::model::Navigator`；标签呈现「≤2 chip + `+N`」 |
-| 筛选 facet 入口（类型 / 驱动 / 标签）（v6，**待实现**） | `panels.rs::render_database_nav`（归属域 chips 常驻 + 「筛选 ▾」弹层）；`DatabaseNavView` 增加附加筛选状态 + 持久化 |
-| 分组头健康度 / 全折叠（v6，**待实现**） | `panels.rs::render_group_header`（`已连接/总数` + `danger` 点 + 全折叠）；聚合数据来自运行时连接态 |
-| 多组引用样式 / 主组（v6，**待实现**） | `panels.rs::{render_nav_tree, render_connection_row}`（主组全亮，其它组 `∈ 主组` 引用行）；主组存储待定（`connection_group_members.is_primary` 新列或 `navigator_state`） |
-| 行操作悬停显隐（v6/v7，**待实现**） | `panels.rs::render_connection_row`（`+` / 断开 / 刷新 / ⋯ 悬停或选中才显；右键 + 键盘仍为全量入口） |
+| 连接行瘦身 + 双通道徽标（v6/v7） | ✅ `panels.rs::{render_connection_row, nav_type_badge, NavBadgeStatus}`；驱动目录 `nav_runtime::driver_catalog()` → `DatabaseNavView::driver_catalog`（`defer_in` 一次性加载，render 无 I/O） |
+| 归属域右对齐固定列 + 标签行内显示 + 行内 `+`（v7） | ✅ `panels.rs::render_connection_row` + `settings::SettingsService::{show_scope, show_tags}`（`⋯` 开关，持久化） |
+| 筛选 facet 入口（类型 / 驱动 / 标签）（v7，**待做**） | `panels.rs::render_database_nav`（归属域 chips 常驻 + 「筛选 ▾」弹层）；`DatabaseNavView` 增加附加筛选状态 + 持久化 |
+| 分组头健康度 / 全折叠（v6） | ✅ `panels.rs::{render_group_header, render_nav_tree}`（`已连接/总数` + 失败计数 + 全折叠） |
+| 多组引用样式 / 主组（v6，**待做**） | `panels.rs::{render_nav_tree, render_connection_row}`（主组全亮，其它组 `∈ 主组` 引用行）；主组存储待定（`connection_group_members.is_primary` 新列或 `navigator_state`） |
+| 行操作悬停显隐（v6/v7） | ✅ `panels.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`；右键 + 键盘仍为全量入口） |
 | 分组 / 标签模型 | `crates/database/src/model.rs`（`ConnectionGroup` / `ConnectionTag` / `NavSource`） |
 | 分组 / 标签 / 状态持久化 | `crates/engine/src/persistence/connection_org_store.rs`（权威存储）+ `crates/workbench/src/services/nav_store.rs`（视图状态） |
 | 分组一级视图 / 行内归组 | `panels.rs::{render_nav_tree, render_group_header, render_org_editor}` |
@@ -611,7 +615,7 @@ flowchart TD
 | 11 | **已保存视图**（`scope:project tag:prod` → 命名视图） | ⬜ 待定（v6 新提，§6.3） |
 | 12 | **状态排序「最近连接」**（`recent_connections` 表已有） | ⬜ 待做（v6 新提） |
 | 13 | **标签不冗余事实**（`type:` / `driver:` / `scope:` 不写入标签表，仅作隐式 facet） | ✅ v6 定为原则（§1.1 规则 2） |
-| 14 | **标签行内显示开关**（`⋯ → 显示标签`，默认关） | ⬜ v7 定为默认待实现 |
+| 14 | **标签行内显示开关**（`⋯ → 显示标签`，默认关） | ✅ v7 已实现（2026-09-13） |
 
 ## 12. 已确认决策（v5 / v6 / v7）
 

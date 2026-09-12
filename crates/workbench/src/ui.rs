@@ -80,6 +80,14 @@ pub const TREE_INDENT: f32 = 0.875;
 pub const TREE_BASE_PADDING: f32 = 0.5;
 /// 导航树类别文件夹（表/视图等）首批渲染条数；超出时显示「加载更多」（非 rem 尺寸，是条目计数）。
 pub const NAV_FOLDER_PAGE_SIZE: usize = 200;
+/// 连接行徽标尺寸（1.125rem ≈ 18px；颜色=状态 / 形状=类型）。
+pub const NAV_BADGE_SIZE: f32 = 1.125;
+/// 连接行归属域列宽（短码模式；2.4rem ≈ 38px）。
+pub const NAV_SCOPE_COL_SHORT: f32 = 2.4;
+/// 连接行归属域列宽（文字模式；3.4rem ≈ 54px）。
+pub const NAV_SCOPE_COL_TEXT: f32 = 3.4;
+/// 连接行尾「加标签」按钮尺寸（1rem = 16px）。
+pub const NAV_ADD_TAG_SIZE: f32 = 1.0;
 /// 面板头部高度（2.25rem ≈ 36px）
 pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
 

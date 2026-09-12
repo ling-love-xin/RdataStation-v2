@@ -1163,6 +1163,94 @@ fn auth_config_detail_by_name_decrypts_for_edit() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #34：网络档案内的 SSH / 代理密码必须加密入库，且列表接口脱敏、编辑回填解密。
+#[test]
+fn network_profile_secrets_are_encrypted_and_masked_in_list() {
+    use connection::config::{ConnectionMethod, SshAuth};
+
+    let dir = temp_dir("net-secret");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+    let (global_db, service) = make_service_with_db(&dir);
+    let rt = runtime();
+    let root_str = project_root.to_string_lossy().to_string();
+
+    let ssh_json = r#"{"host":"jump.example.com","port":22,"username":"deploy","auth_type":"password","password":"jump-secret","remote_host":"db","remote_port":5432}"#;
+    let net_id = {
+        let nc = engine::persistence::network_store::NetworkConfig {
+            id: "G_net_secret".into(),
+            name: Some("加密网络".into()),
+            network_type: "ssh".into(),
+            config: ssh_json.into(),
+            auth_config_id: None,
+            origin: None,
+            source_id: None,
+            snapshot_at: None,
+            created_at: "2026-09-12T00:00:00Z".into(),
+            updated_at: "2026-09-12T00:00:00Z".into(),
+        };
+        rt.block_on(global_db.create_network_config(&nc))
+            .expect("create network config");
+        nc.id
+    };
+
+    // 1) 库里是密文（直接读原始列，绕过解密读路径）
+    let raw: String = rt.block_on(async {
+        let conn = global_db.sqlite_pool().acquire().await.expect("pool");
+        let inner = conn.inner().expect("conn");
+        inner
+            .query_row(
+                "SELECT config FROM network_configs WHERE id = ?1",
+                rusqlite::params![net_id],
+                |r| r.get(0),
+            )
+            .expect("row")
+    });
+    assert!(!raw.contains("jump-secret"), "落库不得为明文：{raw}");
+    assert!(raw.contains("AES:"), "应为加密形式：{raw}");
+
+    // 2) 服务层列表脱敏：config 置空（下拉 / 列表行不需要明文凭据）
+    let list = rt.block_on(service.list_network_configs()).expect("list");
+    let row = list.iter().find(|n| n.id == net_id).expect("listed");
+    assert!(row.config.is_empty(), "列表应脱敏：{}", row.config);
+
+    // 3) 编辑回填接口返回解密明文
+    let (ty, cfg) = rt
+        .block_on(service.network_config_detail_by_name("加密网络"))
+        .expect("detail")
+        .expect("档案存在");
+    assert_eq!(ty, "ssh");
+    let parsed: serde_json::Value = serde_json::from_str(&cfg).expect("json");
+    assert_eq!(parsed["password"], "jump-secret", "回填必须是明文");
+
+    // 4) 连接解析链路拿到明文（项目档案走项目库直读，不依赖全局单例）
+    let p_net_id = {
+        let pm = rt
+            .block_on(ProjectDatabaseManager::open(&project_root, 4))
+            .expect("open project db");
+        rt.block_on(pm.create_project_network_config(Some("加密SSH"), "SSH", ssh_json))
+            .expect("create project network config")
+            .id
+    };
+    let method = rt
+        .block_on(
+            rds_workbench::services::connection_service::resolve_network_method_with_project(
+                Some(&p_net_id),
+                Some(&root_str),
+            ),
+        )
+        .expect("resolve");
+    match method {
+        Some(ConnectionMethod::Ssh(ssh)) => match ssh.auth {
+            SshAuth::Password { password } => assert_eq!(password, "jump-secret", "解析需拿到明文"),
+            other => panic!("应为密码认证：{other:?}"),
+        },
+        other => panic!("应解析为 SSH：{other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A1：网络档案在测试连接时**真实建隧道**；建不起来就是测试失败（而非静默直连）。
 #[test]
 fn probe_config_applies_referenced_network_profile() {

@@ -120,13 +120,13 @@ pub async fn load_properties(
     match ref_.kind {
         PropertyKind::Connection => {
             properties.push(row("名称", conn_label));
-            properties.push(row("来源", source.clone()));
+            properties.push(row("归属域", source.clone()));
             properties.push(row("驱动", driver));
         }
         PropertyKind::Catalog | PropertyKind::Schema => {
             properties.push(row("名称", ref_.name.clone()));
             properties.push(row("类型", object_type.clone()));
-            properties.push(row("来源", source.clone()));
+            properties.push(row("归属域", source.clone()));
             let qualified = qualify(ref_);
             properties.push(row("限定名", qualified));
         }
@@ -140,7 +140,7 @@ pub async fn load_properties(
             properties.push(row("限定名", qualify(ref_)));
             properties.push(row("类型", object_type.clone()));
             properties.push(row("列数", columns.len().to_string()));
-            properties.push(row("来源", source.clone()));
+            properties.push(row("归属域", source.clone()));
 
             sections.push(PropertySection {
                 label: format!("列 ({})", columns.len()),

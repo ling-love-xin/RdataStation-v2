@@ -53,6 +53,10 @@
 | | `TREE_INDENT` | 0.875 | 14 | — |
 | | `TREE_BASE_PADDING` | 0.5 | 8 | `pl_2` |
 | | `PANEL_HEADER_HEIGHT` | 2.25 | 36 | `h_9` |
+| 数据源连接行（v7） | `NAV_BADGE_SIZE` | 1.125 | 18 | — |
+| | `NAV_SCOPE_COL_SHORT` | 2.4 | 38 | — |
+| | `NAV_SCOPE_COL_TEXT` | 3.4 | 54 | — |
+| | `NAV_ADD_TAG_SIZE` | 1.0 | 16 | `size_4` |
 | 控件 / 图标 | `CONTROL_HEIGHT_SM` | 1.625 | 26 | `rems(1.625)` |
 | | `CONTROL_HEIGHT_MD` | 2.0 | 32 | `h_8` |
 | | `ICON_SIZE_SM` | 0.875 | 14 | `size_3p5` |

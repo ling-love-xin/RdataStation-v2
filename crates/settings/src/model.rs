@@ -136,6 +136,12 @@ pub struct Navigator {
     /// 属性面板宽度（rem 倍率，随界面缩放；默认 24.5 ≈ 392px）。
     #[serde(default = "default_property_width")]
     pub property_panel_width: f32,
+    /// 连接行是否显示标签 chip（默认关；开启后「≤2 chip + `+N`」）。
+    #[serde(default)]
+    pub show_tags: bool,
+    /// 连接行是否显示归属域列（默认开）。
+    #[serde(default = "default_true")]
+    pub show_scope: bool,
 }
 
 impl Default for Navigator {
@@ -143,6 +149,8 @@ impl Default for Navigator {
         Self {
             source_short_code: true,
             property_panel_width: default_property_width(),
+            show_tags: false,
+            show_scope: true,
         }
     }
 }
@@ -180,5 +188,8 @@ mod tests {
         let s: Settings = serde_json::from_str(legacy).expect("旧配置应可解析");
         assert!(s.navigator.source_short_code);
         assert_eq!(s.navigator.property_panel_width, 24.5);
+        // v7 新增：标签默认不显、归属域列默认显。
+        assert!(!s.navigator.show_tags, "标签默认不显示");
+        assert!(s.navigator.show_scope, "归属域列默认显示");
     }
 }

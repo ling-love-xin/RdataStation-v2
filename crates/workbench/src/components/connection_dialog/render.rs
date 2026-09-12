@@ -168,8 +168,8 @@ impl ConnectionDialogState {
             self.refresh_meta(window, cx);
             // 暂存列表：首次打开时恢复上次会话的草稿（关栏不丢失，跨会话延续）。
             self.staging_restore(window, cx);
-            // 暂存列表：合并已保存连接条目（多连接连续编辑，原型设计 §2.2）。
-            self.staging_merge_saved();
+            // 暂存列表：清理历史遗留的已保存条目（暂存区只保留未保存草稿；用户决策）。
+            self.staging_prune_saved();
         }
 
         // 输入占位（InputState 构造后设置；Input 组件本身无 placeholder 方法）。
@@ -1361,13 +1361,7 @@ impl ConnectionDialogState {
                     }));
                 }
             }
-            // ---- 暂存列表（多连接连续编辑；原型设计 §2.2）：草稿 + 已保存条目 ----
-            // 两类条目**分区展示**（小标题分隔）：
-            // - 草稿（未保存）：本次会话新建 / 恢复自 `connection_drafts` 的未落库条目；
-            // - 已保存连接：打开对话框时由 `staging_merge_saved` 从库（全局 + 当前项目）
-            //   并入，目的是在一个对话框里连续编辑多条已保存连接（它们**不**写进草稿表）。
-            // 不分区时用户会误以为“暂存里怎么读到了库中的连接”——分区把来源说清楚。
-            //
+            // ---- 暂存列表（**只放未保存草稿**；用户决策：已保存连接从导航栏进入编辑）----
             // 当前条目（光标位）的徽标与名称取**正在编辑的表单**，而不是已写回的快照：
             // 否则“刚从 MySQL 切到 SQLite”时表单已变、条目还显示 mysql 图标（真机反馈）。
             // 性能（§6 决策 #73）：不再每帧克隆整张草稿表与整份 `ConnectionDraft`——
@@ -1376,7 +1370,6 @@ impl ConnectionDialogState {
             let drafts_len = drafts_list.borrow().len();
             let live_now = state.live_entry_view(cursor_now, cx);
             let mut staging_list = div().v_flex().gap(rems(0.25));
-            let mut prev_saved: Option<bool> = None;
             for i in 0..drafts_len {
                 let (draft_type_id, draft_name, saved_id) = {
                     let drafts = drafts_list.borrow();
@@ -1385,22 +1378,9 @@ impl ConnectionDialogState {
                 };
                 let on = i == cursor_now;
                 let live = if on { live_now.as_ref() } else { None };
+                // 历史数据守卫：清理入口（`staging_prune_saved`）后不应再有已保存条目，
+                // 此处仍按 `saved_id` 染色，以防迁移前写入的残余行。
                 let is_saved = saved_id.is_some();
-                // 分区标题：在类别切换处插一行小标题（草稿段 / 已保存段）。
-                if prev_saved != Some(is_saved) {
-                    prev_saved = Some(is_saved);
-                    staging_list = staging_list.child(
-                        div()
-                            .text_xs()
-                            .px(rems(0.5))
-                            .text_color(theme.colors.muted_foreground)
-                            .child(if is_saved {
-                                "已保存连接（点条目可编辑）"
-                            } else {
-                                "草稿（未保存）"
-                            }),
-                    );
-                }
                 // 显示用字段：当前条目用 live（表单），其余用快照。
                 let display_type_id =
                     staging_display_type_id(&draft_type_id, live.map(|l| l.type_id.as_str()));
@@ -1940,11 +1920,11 @@ impl ConnectionDialogState {
                                     project_path_val.as_deref(),
                                 );
                             }
-                            // 暂存列表（原型设计 §2.2 规则 4）：草稿转正式 + 自动补空草稿；
-                            // 保存后保持对话框打开，支持连续编辑多个连接。
-                            dialog.staging_after_save(&conn_id, &input.name, window, app);
+                            // 暂存列表（原型设计 §2.2 规则 4）：保存后将草稿移出暂存区 + 自动补空草稿；
+                            // 保存后保持对话框打开，支持连续新建多个连接。
+                            dialog.staging_after_save(window, app);
                             *result.borrow_mut() =
-                                Some(format!("已保存：{conn_id}（已加入暂存列表，可继续新建）"));
+                                Some(format!("已保存：{conn_id}（编辑请从导航栏进入；暂存区只保留未保存草稿）"));
                             result_ok.set(true);
                             // 宿主重绘：刷新层内容（暂存列表 + 连接列表）
                             shared.notify_host(app);

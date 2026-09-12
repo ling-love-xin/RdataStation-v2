@@ -1301,23 +1301,31 @@ pub async fn resolve_network_method_with_project(
     Ok(None)
 }
 
-/// 查询项目网络配置，同时返回 network_type、config 和 auth_config_id
+/// 查询项目网络配置，同时返回 network_type、config 和 auth_config_id。
+///
+/// 这是**直查 SQL**（绕过 `network_store` 的读路径），所以必须自己解密 `config`：
+/// 网络档案的 `password` / `passphrase` 落库时已加密（§14 #34），不解密会让隧道拿
+/// `AES:…` 当密码用。
 fn project_query_network_config_with_auth(
     db_path: &std::path::Path,
     net_id: &str,
 ) -> Result<(String, String, Option<String>), String> {
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    conn.query_row(
-        "SELECT network_type, config, auth_config_id FROM network_configs WHERE id = ?1",
-        rusqlite::params![net_id],
-        |row| {
-            let network_type: String = row.get(0)?;
-            let config: String = row.get(1)?;
-            let auth_config_id: Option<String> = row.get(2)?;
-            Ok((network_type, config, auth_config_id))
-        },
-    )
-    .map_err(|e| e.to_string())
+    let (network_type, config, auth_config_id) = conn
+        .query_row(
+            "SELECT network_type, config, auth_config_id FROM network_configs WHERE id = ?1",
+            rusqlite::params![net_id],
+            |row| {
+                let network_type: String = row.get(0)?;
+                let config: String = row.get(1)?;
+                let auth_config_id: Option<String> = row.get(2)?;
+                Ok((network_type, config, auth_config_id))
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    let config = engine::persistence::network_store::decrypt_network_config(&config)
+        .map_err(|e| e.to_string())?;
+    Ok((network_type, config, auth_config_id))
 }
 
 /// 根据 network_type 将 config JSON 解析为 ConnectionMethod

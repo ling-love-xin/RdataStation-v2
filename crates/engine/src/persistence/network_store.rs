@@ -116,7 +116,7 @@ pub fn list_network_configs(
         .prepare(&sql)
         .map_err(|e| storage_err("prepare_list_network_configs", e.to_string()))?;
 
-    let items = if let Some(ref p) = param {
+    let mut items: Vec<NetworkConfig> = if let Some(ref p) = param {
         stmt.query_map(params![p], |row| {
             Ok(NetworkConfig {
                 id: row.get(0)?,
@@ -154,6 +154,13 @@ pub fn list_network_configs(
         .collect()
     };
 
+    // 读路径统一解密：调用方（连接解析 / 管理器回填）拿到的是明文凭据。
+    for it in &mut items {
+        if let Ok(plain) = decrypt_network_config(&it.config) {
+            it.config = plain;
+        }
+    }
+
     Ok(items)
 }
 
@@ -183,6 +190,10 @@ pub fn get_network_config(conn: &Connection, id: &str) -> Result<Option<NetworkC
     })
     .optional()
     .map_err(|e| storage_err("get_network_config", e.to_string()))
+    .map(|found| found.map(|mut nc| {
+        nc.config = decrypt_network_config(&nc.config).unwrap_or(nc.config);
+        nc
+    }))
 }
 
 /// 更新网络配置，若配置不存在则返回错误
@@ -224,6 +235,7 @@ pub fn create_global_network_config(
     nc: &NetworkConfig,
 ) -> Result<(), CoreError> {
     let _ = ensure_table(conn);
+    let config = encrypt_network_config(&nc.config)?;
     conn.execute(
         "INSERT INTO network_configs (id, name, network_type, config, auth_config_id, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -231,7 +243,7 @@ pub fn create_global_network_config(
             nc.id,
             nc.name,
             nc.network_type,
-            nc.config,
+            config,
             nc.auth_config_id,
             nc.created_at,
             nc.updated_at
@@ -267,7 +279,7 @@ pub fn list_global_network_configs(
         .prepare(&sql)
         .map_err(|e| storage_err("prepare_list_global_network_configs", e.to_string()))?;
 
-    let items = if let Some(ref p) = param {
+    let mut items: Vec<NetworkConfig> = if let Some(ref p) = param {
         stmt.query_map(params![p], |row| {
             Ok(NetworkConfig {
                 id: row.get(0)?,
@@ -305,6 +317,13 @@ pub fn list_global_network_configs(
         .collect()
     };
 
+    // 读路径统一解密（与项目库同策略）。
+    for it in &mut items {
+        if let Ok(plain) = decrypt_network_config(&it.config) {
+            it.config = plain;
+        }
+    }
+
     Ok(items)
 }
 
@@ -337,4 +356,250 @@ pub fn get_global_network_config(
     })
     .optional()
     .map_err(|e| storage_err("get_global_network_config", e.to_string()))
+    .map(|found| found.map(|mut nc| {
+        nc.config = decrypt_network_config(&nc.config).unwrap_or(nc.config);
+        nc
+    }))
+}
+
+// ===== 敏感字段加密（§14 #34：网络档案 config 内的密码不再明文入库）=====
+//
+// 背景：`network_configs.config` 原本明文落库，而 SSH / 代理字段表单允许直接填密码 /
+// 口令——库文件被复制或备份即泄露跳板机与代理凭据。这里复用 `auth_data` 的同一套
+// 加密（`shared::crypto`：AES-256-GCM + 随机 nonce，`AES:` 前缀）。
+
+/// 需要加密的键名（任意层级；与 `connection::config` 的模型对应）：
+/// - SSH：`password`（密码认证）/ `passphrase`（私钥口令）；
+/// - 代理：`password`（`ProxyConfig.auth.password`，嵌套一层）；
+/// - 协议链：数组里每个 hop 的同类字段（递归覆盖）。
+const SECRET_KEYS: [&str; 2] = ["password", "passphrase"];
+
+/// 写入前加密 `config` 里的敏感键（**幂等**：已带 `AES:` 前缀的值原样保留）。
+///
+/// 非法 JSON / 非对象非数组 → 原样返回（存储层不因格式问题拒写）。
+pub fn encrypt_network_config(config: &str) -> Result<String, CoreError> {
+    rewrite_secrets(config, true)
+}
+
+/// 读取后解密 `config` 里的敏感键（与 [`encrypt_network_config`] 对称）。
+///
+/// 明文旧值（未带 `AES:`）原样返回，兼容升级前写入的档案。
+pub fn decrypt_network_config(config: &str) -> Result<String, CoreError> {
+    rewrite_secrets(config, false)
+}
+
+/// 把库中仍为明文的网络档案重新加密（一次性迁移，**幂等**；返回改动数）。
+///
+/// `encrypt_network_config` 不会重复加密已加密的值，所以可安全重复调用；
+/// 项目库由调用方按项目根自行调用。
+pub fn reencrypt_all_network_configs(conn: &Connection) -> Result<usize, CoreError> {
+    let _ = ensure_table(conn);
+    let rows: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT id, config FROM network_configs")
+            .map_err(|e| storage_err("prepare_reencrypt_network_configs", e.to_string()))?;
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| storage_err("query_reencrypt_network_configs", e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect()
+    };
+
+    let mut changed = 0usize;
+    for (id, raw) in rows {
+        let encrypted = encrypt_network_config(&raw)?;
+        if encrypted != raw {
+            conn.execute(
+                "UPDATE network_configs SET config = ?1 WHERE id = ?2",
+                params![encrypted, id],
+            )
+            .map_err(|e| storage_err("update_reencrypt_network_config", e.to_string()))?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
+fn rewrite_secrets(config: &str, encrypt: bool) -> Result<String, CoreError> {
+    if config.trim().is_empty() {
+        return Ok(config.to_string());
+    }
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(config) else {
+        return Ok(config.to_string());
+    };
+    if !value.is_object() && !value.is_array() {
+        return Ok(config.to_string());
+    }
+    rewrite_node(&mut value, encrypt)?;
+    Ok(value.to_string())
+}
+
+fn rewrite_node(node: &mut serde_json::Value, encrypt: bool) -> Result<(), CoreError> {
+    match node {
+        serde_json::Value::Object(map) => {
+            for key in SECRET_KEYS {
+                let Some(serde_json::Value::String(v)) = map.get_mut(key) else {
+                    continue;
+                };
+                if encrypt {
+                    if v.is_empty() || v.starts_with("AES:") {
+                        continue;
+                    }
+                    *v = format!("AES:{}", shared::crypto::encrypt_password(v)?);
+                } else if let Some(raw) = v.strip_prefix("AES:") {
+                    // 解密失败（数据损坏 / 密钥变更）保留原值：不因单条档案让读路径整体报错。
+                    if let Ok(plain) = shared::crypto::decrypt_password(raw) {
+                        *v = plain;
+                    }
+                }
+            }
+            for (_, child) in map.iter_mut() {
+                rewrite_node(child, encrypt)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                rewrite_node(item, encrypt)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_of(json: &str) -> NetworkConfig {
+        NetworkConfig {
+            id: "G_net_test".into(),
+            name: Some("t".into()),
+            network_type: "ssh".into(),
+            config: json.into(),
+            auth_config_id: None,
+            origin: None,
+            source_id: None,
+            snapshot_at: None,
+            created_at: "2026-09-12T00:00:00Z".into(),
+            updated_at: "2026-09-12T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn ssh_and_proxy_secrets_are_encrypted() {
+        // SSH：根级 `password` / `passphrase`
+        let ssh = r#"{"host":"jump","port":22,"username":"u","auth_type":"password","password":"p@ss","passphrase":"pp","remote_host":"db","remote_port":5432}"#;
+        let enc = encrypt_network_config(ssh).expect("encrypt");
+        assert!(!enc.contains("p@ss"), "明文密码不得留下：{enc}");
+        assert!(!enc.contains("\"pp\""), "明文口令不得留下：{enc}");
+        assert!(enc.contains("AES:"), "应带 AES 前缀：{enc}");
+        // 幂等：已加密不再重复加密
+        assert_eq!(encrypt_network_config(&enc).expect("idempotent"), enc);
+
+        let dec = decrypt_network_config(&enc).expect("decrypt");
+        let parsed: serde_json::Value = serde_json::from_str(&dec).expect("json");
+        assert_eq!(parsed["password"], "p@ss");
+        assert_eq!(parsed["passphrase"], "pp");
+        assert_eq!(parsed["host"], "jump", "非敏感字段不变");
+
+        // 代理：嵌套 `auth.password`
+        let proxy = r#"{"host":"127.0.0.1","port":1080,"auth":{"username":"u","password":"secret"}}"#;
+        let enc = encrypt_network_config(proxy).expect("encrypt proxy");
+        assert!(!enc.contains("secret"), "{enc}");
+        let dec = decrypt_network_config(&enc).expect("decrypt proxy");
+        let parsed: serde_json::Value = serde_json::from_str(&dec).expect("json");
+        assert_eq!(parsed["auth"]["password"], "secret");
+
+        // 协议链：数组内每跳都要覆盖
+        let chain = r#"[{"type":"ssh","host":"a","username":"u","auth_type":"password","password":"p1"},{"type":"proxy","host":"b","port":8080,"auth":{"password":"p2"}}]"#;
+        let enc = encrypt_network_config(chain).expect("encrypt chain");
+        assert!(!enc.contains("p1") && !enc.contains("p2"), "{enc}");
+        let dec = decrypt_network_config(&enc).expect("decrypt chain");
+        let parsed: serde_json::Value = serde_json::from_str(&dec).expect("json");
+        assert_eq!(parsed[0]["password"], "p1");
+        assert_eq!(parsed[1]["auth"]["password"], "p2");
+    }
+
+    #[test]
+    fn rewrite_tolerates_non_json_and_plaintext() {
+        assert_eq!(encrypt_network_config("").expect("empty"), "");
+        assert_eq!(encrypt_network_config("  ").expect("blank"), "  ");
+        assert_eq!(encrypt_network_config("not-json").expect("bad"), "not-json");
+        assert_eq!(decrypt_network_config("not-json").expect("bad"), "not-json");
+        assert_eq!(encrypt_network_config("42").expect("scalar"), "42");
+        // 明文旧值（未带 AES:）在读取时原样返回
+        let plain = r#"{"password":"plain"}"#;
+        assert_eq!(decrypt_network_config(plain).expect("plain"), plain);
+        // 无敏感键：内容不变（键序被 JSON 规范化，不含敏感键时不比较字符串）
+        let no_secret = r#"{"host":"h","port":22}"#;
+        let out = encrypt_network_config(no_secret).expect("no secret");
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(parsed["host"], "h");
+    }
+
+    #[test]
+    fn write_and_read_paths_encrypt_roundtrip() {
+        let conn = Connection::open_in_memory().expect("memory db");
+        let nc = config_of(
+            r#"{"host":"jump","username":"u","auth_type":"password","password":"plain"}"#,
+        );
+        create_network_config(&conn, &nc).expect("create");
+
+        // 库里必须是密文
+        let raw: String = conn
+            .query_row(
+                "SELECT config FROM network_configs WHERE id = ?1",
+                params![nc.id],
+                |r| r.get(0),
+            )
+            .expect("read raw");
+        assert!(!raw.contains("plain"), "落库不得为明文：{raw}");
+        assert!(raw.contains("AES:"));
+
+        // 读路径自动解密（连接解析与管理器回填都走它）
+        let got = get_network_config(&conn, &nc.id).expect("get").expect("exists");
+        let parsed: serde_json::Value = serde_json::from_str(&got.config).expect("json");
+        assert_eq!(parsed["password"], "plain");
+
+        // 一次性迁移：已是密文 → 改动数为 0（幂等）
+        assert_eq!(reencrypt_all_network_configs(&conn).expect("migrate"), 0);
+    }
+
+    #[test]
+    fn reencrypt_migrates_legacy_plaintext_rows() {
+        let conn = Connection::open_in_memory().expect("memory db");
+        let _ = ensure_table(&conn);
+        // 模拟升级前的存量：直接写明文（绕过写路径加密）
+        conn.execute(
+            "INSERT INTO network_configs (id, name, network_type, config, auth_config_id, origin, source_id, snapshot_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, NULL, ?5, ?6)",
+            params![
+                "G_net_legacy",
+                "legacy",
+                "ssh",
+                r#"{"host":"j","username":"u","auth_type":"password","password":"legacy-plain"}"#,
+                "2026-09-12T00:00:00Z",
+                "2026-09-12T00:00:00Z"
+            ],
+        )
+        .expect("insert legacy");
+
+        assert_eq!(
+            reencrypt_all_network_configs(&conn).expect("migrate"),
+            1,
+            "应迁移 1 条明文档案"
+        );
+        let raw: String = conn
+            .query_row(
+                "SELECT config FROM network_configs WHERE id = ?1",
+                params!["G_net_legacy"],
+                |r| r.get(0),
+            )
+            .expect("read raw");
+        assert!(!raw.contains("legacy-plain") && raw.contains("AES:"), "{raw}");
+
+        // 幂等：再跑一次无改动
+        assert_eq!(reencrypt_all_network_configs(&conn).expect("migrate again"), 0);
+    }
 }

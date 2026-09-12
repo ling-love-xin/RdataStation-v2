@@ -548,20 +548,17 @@ impl ConnectionDialogState {
         self.staging_persist();
     }
 
-    /// 保存成功后：当前条目转为已保存，并追加空草稿保持连续新建（规则 4）。
-    pub fn staging_after_save(
-        &self,
-        conn_id: &str,
-        name: &str,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    /// 保存成功后：该草稿**移出暂存区**（已落库，后续从导航栏进入编辑），
+    /// 并追加空草稿保持连续新建（规则 4）。
+    ///
+    /// 为何不再标记为“已保存条目”：用户决策——暂存区只放**未保存草稿**，
+    /// 已保存连接统一从导航栏编辑（避免“暂存里怎么读到了库里的连接”的困惑）。
+    pub fn staging_after_save(&self, window: &mut Window, cx: &mut App) {
         let cur = self.draft_cursor_idx();
         {
             let mut drafts = self.drafts.borrow_mut();
             if cur < drafts.len() {
-                drafts[cur].saved_id = Some(conn_id.to_string());
-                drafts[cur].name = name.to_string();
+                drafts.remove(cur);
             }
             drafts.push(ConnectionDraft::empty());
         }
@@ -689,11 +686,15 @@ impl ConnectionDialogState {
     }
 
     /// 保存到暂存表（关栏 / 各变更操作后调用；失败只记日志，不影响交互）。
+    ///
+    /// 只写**未保存草稿**（用户决策：暂存 = 草稿；已保存连接从导航栏进入编辑）：
+    /// 历史上误写入的 `saved_id` 条目也会在下次 replace_all 时被清掉。
     pub fn staging_persist(&self) {
         let rows: Vec<ConnectionDraftRow> = self
             .drafts
             .borrow()
             .iter()
+            .filter(|d| d.saved_id.is_none())
             .map(Self::draft_to_row)
             .collect();
         let Ok(store) = ConnectionDraftStore::open_global() else {
@@ -712,7 +713,11 @@ impl ConnectionDialogState {
         let Ok(store) = ConnectionDraftStore::open_global() else {
             return;
         };
-        let rows = store.list();
+        let rows: Vec<_> = store
+            .list()
+            .into_iter()
+            .filter(|r| r.saved_id.is_none())
+            .collect();
         if rows.is_empty() {
             return;
         }
@@ -730,65 +735,20 @@ impl ConnectionDialogState {
         self.apply_draft(0, window, cx);
     }
 
-    /// 打开对话框时合并**当前作用域可见**的已保存连接为列表条目（全局 + 项目侧 P_/GP_，
-    /// 与导航栏同一加载器），并清理指向已删除连接的**幻影条目**（`saved_id` 已不在可见集合内）。
+    /// 打开对话框时的暂存区清理：**已保存连接不再并入暂存列表**（用户决策：暂存 = 未保存草稿，
+    /// 已保存连接统一从导航栏进入编辑），只清掉历史草稿表 / 旧会话可能残留的已保存条目。
     ///
     /// 未保存草稿永不被清理；清理后列表若为空则补一条空草稿（保持“列表恒非空”）。
-    /// 打开对话框时合并已保存连接（见实现注释）；集成测试直接调用以验证清理逻辑。
-    pub fn staging_merge_saved(&self) {
-        // 全局库未初始化（测试 / 降级启动）时不合并：`load_connections_for_scope` 在缺少
-        // 单例时回退到“默认数据目录”，会让测试碰到用户真实库——宁可少一个便利功能。
-        if engine::migration::get_global_db_manager().is_none() {
+    pub fn staging_prune_saved(&self) {
+        let mut drafts = self.drafts.borrow_mut();
+        let before = drafts.len();
+        drafts.retain(|d| d.saved_id.is_none());
+        if drafts.len() != before {
             tracing::debug!(
                 target: "connection_dialog",
-                "全局库未初始化：暂存列表不合并已保存连接"
+                removed = before - drafts.len(),
+                "暂存列表清理历史遗留的已保存条目（暂存区只保留未保存草稿）"
             );
-            return;
-        }
-        let drivers = self.drivers.borrow().clone();
-        let project_root = self
-            .session_project
-            .borrow()
-            .as_ref()
-            .map(|(_, p)| std::path::PathBuf::from(p));
-        let (items, notice) =
-            crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
-        if let Some(n) = &notice {
-            tracing::warn!(target: "connection_dialog", error = %n, "暂存列表加载已保存连接降级");
-        }
-
-        let mut drafts = self.drafts.borrow_mut();
-        // 幻影条目清理：只删「已保存」条目（未保存草稿是用户输入，不动）。
-        drafts.retain(|d| match d.saved_id.as_deref() {
-            None => true,
-            Some(id) => items.iter().any(|i| i.id == id),
-        });
-        for it in items {
-            if drafts
-                .iter()
-                .any(|d| d.saved_id.as_deref() == Some(it.id.as_str()))
-            {
-                continue;
-            }
-            // 记录的 driver 即驱动 id：反查得到类型与实现短名，使条目能显示缩小的
-            // 数据库类型 UI（且选中时下拉预填正确）。
-            let did = it.driver.clone();
-            let (type_id, driver_id, driver_name) = match find_driver_by_value(&drivers, &did) {
-                Some(d) => (
-                    d.type_id.clone(),
-                    d.id.clone(),
-                    driver_short_name(&d.name),
-                ),
-                None => (String::new(), did.clone(), String::new()),
-            };
-            drafts.push(ConnectionDraft {
-                name: it.name.clone(),
-                saved_id: Some(it.id.clone()),
-                type_id,
-                driver_id,
-                driver_name,
-                ..ConnectionDraft::empty()
-            });
         }
         if drafts.is_empty() {
             drafts.push(ConnectionDraft::empty());

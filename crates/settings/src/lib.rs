@@ -130,6 +130,38 @@ impl SettingsService {
         cx.global::<Settings>().navigator.property_panel_width
     }
 
+    /// 连接行是否显示标签 chip。
+    pub fn show_tags(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.show_tags
+    }
+
+    /// 设置并持久化「显示标签」开关。
+    pub fn set_show_tags(show: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.show_tags = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        save_settings(&settings);
+        cx.refresh_windows();
+    }
+
+    /// 连接行是否显示归属域列。
+    pub fn show_scope(cx: &App) -> bool {
+        cx.global::<Settings>().navigator.show_scope
+    }
+
+    /// 设置并持久化「显示归属域」开关。
+    pub fn set_show_scope(show: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.show_scope = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        save_settings(&settings);
+        cx.refresh_windows();
+    }
+
     /// 设置并持久化属性面板宽度（rem 倍率）。
     pub fn set_property_panel_width(width: f32, cx: &mut App) {
         {

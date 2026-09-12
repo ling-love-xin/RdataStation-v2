@@ -1,7 +1,8 @@
 //! 暂存列表（多连接连续编辑）行为测试 —— 对应原型设计 §2.2 与开发计划 C5。
 //!
-//! 覆盖：切换条目保留各自字段、删除至最后一条自动补位、保存后草稿转正式并补空草稿、
-//! 已保存条目不参与删除。不接真实服务（`DataSourceService::global()` 不可用时安全降级）。
+//! 覆盖：切换条目保留各自字段、删除至最后一条自动补位、保存后草稿移出暂存区并补空草稿、
+//! 暂存区只保留未保存草稿（历史遗留的已保存条目会被清理）。不接真实服务
+//! （`DataSourceService::global()` 不可用时安全降级）。
 //!
 //! 注意：不使用 `use gpui_kit::*` / `use super::*` 通配导入（会把 gpui 的 `test`
 //! 宏带入作用域，与 `#[gpui_kit::test]` 冲突）。
@@ -16,7 +17,7 @@ use gpui_kit::{
     TestAppContext, VisualTestContext, Window, div,
 };
 
-use rds_workbench::components::connection_dialog::ConnectionDialogState;
+use rds_workbench::components::connection_dialog::{ConnectionDialogState, ConnectionDraft};
 use rds_workbench::panels::{EditorPanel, Shared};
 
 /// 简化宿主：与 `WorkbenchView` 同构（挂对话框层 + 注入宿主重绘桥）。
@@ -123,7 +124,7 @@ fn staging_remove_last_keeps_one_empty_draft(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn staging_after_save_marks_saved_and_appends(cx: &mut TestAppContext) {
+fn staging_after_save_removes_draft_and_appends(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|_, cx| harness.read(cx).dialog.clone());
@@ -133,16 +134,23 @@ fn staging_after_save_marks_saved_and_appends(cx: &mut TestAppContext) {
             .name
             .update(cx, |s, cx| s.set_value("生产PG", window, cx));
     });
-    cx.update(|window, cx| dialog.staging_after_save("G_abc", "生产PG", window, cx));
+    cx.update(|window, cx| dialog.staging_after_save(window, cx));
 
     let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
-    assert_eq!(drafts.len(), 2, "保存成功后应追加空草稿以保持连续新建");
-    assert_eq!(drafts[0].saved_id.as_deref(), Some("G_abc"));
-    assert_eq!(drafts[0].name, "生产PG");
-    assert!(drafts[1].saved_id.is_none(), "新草稿应为未保存状态");
+    assert_eq!(
+        drafts.len(),
+        1,
+        "保存成功后草稿移出暂存区（已落库，从导航栏编辑），只留一条新空草稿"
+    );
+    assert!(
+        drafts[0].saved_id.is_none(),
+        "暂存区不再保留已保存条目：{:?}",
+        drafts[0].saved_id
+    );
+    assert!(drafts[0].name.is_empty(), "新草稿应为空");
     assert_eq!(
         cx.update(|_, _cx| dialog.draft_cursor.get()),
-        1,
+        0,
         "保存后应选中新草稿"
     );
 }
@@ -191,18 +199,29 @@ fn draft_carries_tags_and_groups(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn staging_remove_ignores_saved_entries(cx: &mut TestAppContext) {
+fn staging_prune_saved_drops_legacy_saved_entries(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);
     let dialog = cx.update(|_, cx| harness.read(cx).dialog.clone());
 
-    cx.update(|window, cx| dialog.staging_after_save("G_def", "已保存连接", window, cx));
-    // 已保存条目不在暂存列表删除（删除入口归导航栏）
-    cx.update(|window, cx| dialog.staging_remove(0, window, cx));
+    // 历史草稿表可能残留已保存条目（旧版合并行为）：清理入口必须把它们移除。
+    cx.update(|_, _cx| {
+        let mut drafts = dialog.drafts.borrow_mut();
+        drafts.push(ConnectionDraft {
+            name: "历史残留".to_string(),
+            saved_id: Some("G_conn_legacy".to_string()),
+            ..ConnectionDraft::empty()
+        });
+    });
+    cx.update(|_, _cx| dialog.staging_prune_saved());
 
     let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
-    assert_eq!(drafts.len(), 2);
-    assert_eq!(drafts[0].saved_id.as_deref(), Some("G_def"));
+    assert!(
+        drafts.iter().all(|d| d.saved_id.is_none()),
+        "已保存条目必须被清理（暂存区只放未保存草稿）：{:?}",
+        drafts.iter().map(|d| d.saved_id.clone()).collect::<Vec<_>>()
+    );
+    assert!(!drafts.is_empty(), "列表恒非空（补空草稿）");
 }
 
 /// 脏比对等价性（§6 决策 #73）：`form_matches_draft`（逐字段、无分配）必须与

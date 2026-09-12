@@ -137,6 +137,27 @@ pub async fn initialize_global_system() -> Result<(), CoreError> {
     )
     .await?;
 
+    // 存量网络档案的凭据加密迁移（一次性、幂等）：升级前写入的明文 `config` 在这里转密文。
+    // 失败仅告警——迁移不应阻断启动（读路径对明文仍兼容，下次编辑保存也会自动加密）。
+    match manager.sqlite_pool().acquire().await {
+        Ok(sqlite) => match sqlite.inner() {
+            Ok(conn) => {
+                match crate::persistence::network_store::reencrypt_all_network_configs(conn) {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        tracing::info!(count = n, "网络档案明文凭据已加密（一次性迁移）")
+                    }
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "网络档案凭据加密迁移失败（读路径仍兼容明文）"
+                    ),
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "获取全局库连接失败，跳过网络档案加密迁移"),
+        },
+        Err(e) => tracing::warn!(error = %e, "获取全局库连接失败，跳过网络档案加密迁移"),
+    }
+
     // 存储到全局实例
     install_global_db_manager(manager)?;
 

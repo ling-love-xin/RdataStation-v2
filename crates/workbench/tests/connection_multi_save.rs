@@ -72,19 +72,23 @@ fn two_connections_saved_in_a_row(cx: &mut TestAppContext) {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
 
-    // 第 1 条：保存 → 条目转已保存 + 补空草稿（规则 4）。
+    // 第 1 条：保存 → 草稿移出暂存区 + 补空草稿（规则 4）。
     let id1 = rt
         .block_on(service.save(&sqlite_input("conn_one", "/tmp/one.db"), None))
         .expect("save first");
     assert!(id1.starts_with("G_conn_"), "{id1}");
-    cx.update(|window, cx| dialog.staging_after_save(&id1, "conn_one", window, cx));
+    cx.update(|window, cx| dialog.staging_after_save(window, cx));
 
     {
         let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
-        assert_eq!(drafts.len(), 2, "首条保存后应追加空草稿");
-        assert_eq!(drafts[0].saved_id.as_deref(), Some(id1.as_str()));
-        assert!(drafts[1].saved_id.is_none());
-        assert_eq!(cx.update(|_, _cx| dialog.draft_cursor.get()), 1);
+        assert_eq!(
+            drafts.len(),
+            1,
+            "首条保存后草稿移出暂存区（已落库），只留空草稿"
+        );
+        assert!(drafts[0].saved_id.is_none(), "暂存区不含已保存条目");
+        assert!(drafts[0].name.is_empty());
+        assert_eq!(cx.update(|_, _cx| dialog.draft_cursor.get()), 0);
     }
 
     // 第 2 条：在自动补位的空草稿上继续保存。
@@ -92,15 +96,13 @@ fn two_connections_saved_in_a_row(cx: &mut TestAppContext) {
         .block_on(service.save(&sqlite_input("conn_two", "/tmp/two.db"), None))
         .expect("save second");
     assert_ne!(id1, id2);
-    cx.update(|window, cx| dialog.staging_after_save(&id2, "conn_two", window, cx));
+    cx.update(|window, cx| dialog.staging_after_save(window, cx));
 
     {
         let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
-        assert_eq!(drafts.len(), 3, "连续保存两条后应为「已保存 ×2 + 空草稿」");
-        assert_eq!(drafts[0].saved_id.as_deref(), Some(id1.as_str()));
-        assert_eq!(drafts[1].saved_id.as_deref(), Some(id2.as_str()));
-        assert!(drafts[2].saved_id.is_none());
-        assert_eq!(cx.update(|_, _cx| dialog.draft_cursor.get()), 2);
+        assert_eq!(drafts.len(), 1, "连续保存两条后仍只剩空草稿");
+        assert!(drafts[0].saved_id.is_none());
+        assert_eq!(cx.update(|_, _cx| dialog.draft_cursor.get()), 0);
     }
 
     // 库中两条记录可读回（生产路径经服务单例）。
@@ -110,9 +112,9 @@ fn two_connections_saved_in_a_row(cx: &mut TestAppContext) {
     assert!(names.contains(&"conn_two"), "{names:?}");
 }
 
-/// 暂存列表合并：作用域可见的已保存连接入列 + 指向已删连接的幻影条目被清理。
+/// 暂存区只放未保存草稿：打开时不再并入库中已保存连接（用户决策，替代旧“合并已保存”）。
 #[gpui_kit::test]
-fn staging_merge_prunes_phantom_and_keeps_drafts(cx: &mut TestAppContext) {
+fn staging_lists_only_unsaved_drafts(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let _ = base_dir();
     let (_, cx) = cx.add_window_view(|_, _cx| Host);
@@ -122,21 +124,22 @@ fn staging_merge_prunes_phantom_and_keeps_drafts(cx: &mut TestAppContext) {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let dialog = cx.update(|window, cx| Rc::new(ConnectionDialogState::new(window, cx)));
 
-    // 库里一条真实连接；列表中再塞一条“已删除连接的幻影条目”。
-    let keep = rt
-        .block_on(service.save(&sqlite_input("merge_keep", "/tmp/keep.db"), None))
-        .expect("save keep");
+    // 库里先存一条真实连接（不得出现在暂存区），再塞一条历史残留的已保存条目（应被清理）。
+    let saved = rt
+        .block_on(service.save(&sqlite_input("only_drafts", "/tmp/only.db"), None))
+        .expect("save");
+    assert!(saved.starts_with("G_conn_"), "{saved}");
     cx.update(|_, _cx| {
         let mut drafts = dialog.drafts.borrow_mut();
         drafts[0].name = "未保存草稿".to_string();
         drafts.push(ConnectionDraft {
-            name: "已删连接".to_string(),
+            name: "历史残留".to_string(),
             saved_id: Some("G_conn_gone".to_string()),
             ..ConnectionDraft::empty()
         });
     });
 
-    cx.update(|_, _cx| dialog.staging_merge_saved());
+    cx.update(|_, _cx| dialog.staging_prune_saved());
 
     let drafts = cx.update(|_, _cx| dialog.drafts.borrow().clone());
     let names: Vec<&str> = drafts.iter().map(|d| d.name.as_str()).collect();
@@ -144,13 +147,12 @@ fn staging_merge_prunes_phantom_and_keeps_drafts(cx: &mut TestAppContext) {
         names.contains(&"未保存草稿"),
         "未保存草稿不得被清理：{names:?}"
     );
-    assert!(!names.contains(&"已删连接"), "幻影条目应被清理：{names:?}");
+    assert!(!names.contains(&"历史残留"), "已保存条目应被清理：{names:?}");
     assert!(
-        drafts
-            .iter()
-            .any(|d| d.saved_id.as_deref() == Some(keep.as_str())),
-        "可见的已保存连接应在列表中：{names:?}"
+        !names.contains(&"only_drafts"),
+        "库中连接不得被并入暂存区：{names:?}"
     );
+    assert!(drafts.iter().all(|d| d.saved_id.is_none()), "{names:?}");
     let cursor = cx.update(|_, _cx| dialog.draft_cursor.get());
     assert!(cursor < drafts.len(), "光标不应越界：{cursor} / {}", drafts.len());
 }

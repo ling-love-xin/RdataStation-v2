@@ -24,9 +24,11 @@
 | `ui/ui-design-spec.md` | UI 设计规范 | 三层约束（主题 token / 尺寸常量 / 组件规格）、rem 基准常量表 |
 | `connection/connection-dialog-architecture.md` | 连接模块架构与数据流 | 分层与依赖 / 概念模型（数据库类型 vs 驱动实现、作用域、三类引用、Secret、暂存草稿）/ 状态所有权与对话框层挂载 / 五条数据流（打开·保存·暂存状态机·运行时连接）/ 快捷键 / 决策取舍 / 测试策略 / 数据字典与迁移 / 降级矩阵 / 性能·可观测·安全 / 成熟度评估 / **已知问题与后续项（§14，权威待办清单）** / **数据来源审计（§15，零 UI 造数据）** |
 | `connection/connection-user-guide.md` | 连接模块使用指南 | 入口 / 界面导览 / 典型流程（新建·编辑·连续编辑·标签分组）/ Tab 速览 / 快捷键 / 草稿与安全 / FAQ 排查 / USIT 验收清单 |
-| `database/database-navigator-prototype-design.md` | 数据源管理 / 数据库导航原型 | 合并面板布局 / 树模型与作用域 / 三级元数据管线 / 交互 / 主题映射 / 落点 |
-| `database/database-navigator-prototype.html` | 数据源管理 / 数据库导航原型（交互稿） | RDS Light/Dark 双主题面板示意（树 / 加载 / 搜索 / 右键菜单 / 空态可切） |
-| `database/database-nav-dev-plan.md` | 数据库导航开发方案 | Phase A/B/C 任务 / 迁移与表 / 测试场景 / 风险 / 验证 / 映射 |
+| `database/database-navigator-architecture.md` | 数据源管理 / 数据库导航**架构与设计理念** | 定位与边界 / **设计理念（心智模型 + 三条边界规则 + 概念定位表 + 视觉通道预算）** / 分层与 render 零 I/O / 概念模型与数据 / 五条数据流 / 决策取舍 / 降级容错 / 性能可观测 / 测试策略 / 实现映射 / **已知问题与后续项** |
+| `database/database-navigator-prototype-design.md` | 数据源管理 / 数据库导航原型 | 面板布局与**连接行解剖（v6/v7 降密）** / 双通道徽标 / 归属域列 / 分组头 / 树模型 / 三级元数据管线 / 交互 / 主题映射 / 落点 |
+| `database/database-navigator-prototype.html` | 数据源管理 / 数据库导航原型（交互稿） | RDS Light/Dark 双主题面板示意（双通道徽标 / 加载 / 搜索 / 右键菜单 / 空态可切；含 **v5 → v7 密度对比**） |
+| `database/database-nav-dev-plan.md` | 数据库导航开发方案 | Phase A/B/C + **v6/v7 任务（V1–V10，逐项状态）** / 迁移与表 / 测试场景 / 风险 / 验证 / 映射 |
+| `database/database-navigator-user-guide.md` | 数据源管理 / 数据库导航**使用手册** | 入口 / 界面导览（**连接行怎么读 · 状态色 · 类型形状**）/ 典型流程 / 分组与标签分工 / 快捷键 / 显示开关 / FAQ 排查 / 验收清单 |
 | `scratchpad/scratchpad-prototype-design.md` | 草稿箱原型 | 根 = 项目目录 / 240px 左 Dock 面板 / 树与交互 / 主题映射 |
 | `scratchpad/scratchpad-prototype.html` | 草稿箱原型（交互稿） | RDS Light/Dark 项目工作区示意（可交互） |
 | `scratchpad/scratchpad-dev-plan.md` | 草稿箱开发方案 | P0 项目会话 + Phase A/B/C / 文件落点 / 测试场景 / 风险 |
@@ -39,4 +41,25 @@
 
 ## 阅读顺序建议
 
-1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `project/` / `scratchpad/`
+1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/`
+
+## 模块文档集约定（每模块应具备的类型）
+
+| 类型 | 作用 | 命名示例 |
+| --- | --- | --- |
+| 原型设计 | **长什么样**（视觉 / 布局 / 交互规格） | `*-prototype-design.md` |
+| 可交互原型 | 可切换的视觉稿 | `*-prototype.html` |
+| 架构与设计理念 | **为什么这样设计 / 怎么运转**（概念模型 / 数据流 / 决策 / 测试策略 / 实现映射） | `*-architecture.md` |
+| 开发方案 | **做什么、做到哪**（阶段任务 / 逐轮记录 / 风险） | `*-dev-plan.md` |
+| 使用手册 | **怎么用**（入口 / 导览 / 典型流程 / FAQ / 验收清单） | `*-user-guide.md` |
+
+### 各模块文档类型缺口（功能模块）
+
+| 模块 | 原型设计 | 交互稿 | 架构 / 设计理念 | 开发方案 | 使用手册 |
+| --- | --- | --- | --- | --- | --- |
+| `connection/` | ✅ | ✅ | ✅ `connection-dialog-architecture.md` | ✅ | ✅ |
+| `database/` | ✅ | ✅ | ✅ `database-navigator-architecture.md`（本轮新增） | ✅ | ✅ `database-navigator-user-guide.md`（本轮新增） |
+| `project/` | ✅ | ✅ | ✅ `project-view-architecture.md` | ✅ | ⬜ 缺使用手册 |
+| `scratchpad/` | ✅ | ✅ | ⬜ 缺架构 / 设计理念 | ✅ | ⬜ 缺使用手册 |
+
+> `layout/` / `theme/` / `ui/` / `settings/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。

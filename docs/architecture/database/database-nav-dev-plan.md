@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 开发方案（Phase A/B/C）
 
-> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现）；v6/v7 降密与徽标语义已冻结（待实现）· 2026-09-13** · `cargo check --workspace --all-targets` 零错误；`cargo test -p rds-workbench --lib`（42）/ `-p rds-database`（5）/ `-p rds-settings`（2）/ `-p rds-engine --lib`（242）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
+> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现）；v6/v7 降密与徽标语义已实现（V2–V5、V8–V10；V6/V7 待做）· 2026-09-13** · `cargo test -p rds-workbench --lib`（45）/ `-p rds-database`（5）/ `-p rds-settings`（2）/ `-p rds-engine --lib`（242）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
 > 设计基线：作用域来源短码 `P/G/GP`、项目级自定义分组（多对多）+ 多值标签、三级缓存与增量刷新、缓存永不自动删除、属性面板填充编辑区右侧、预热方案 C。
 > 技术栈：GPUI（gpui-kit 0.6）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
 > 前置：M3 连接模块 Phase A/B 已实现；engine 元数据缓存（含增量/预热索引/FTS/分页/版本迁移）已迁移。
@@ -12,26 +12,29 @@
 | Phase A（骨架与核心闭环） | ✅ 已实现 |
 | Phase B（分组/标签/搜索/属性面板/状态/菜单/缓存） | ✅ 已实现（B1–B8） |
 | Phase C（预热/增量/收尾） | 🟡 进行中（C1–C7 已实现；C8 由连接侧推进） |
-| **v6/v7 降密与徽标语义** | 📐 **设计已冻结（2026-09-13）· 待实现**（V1 文档即本轮，V2–V10 待开发） |
+| **v6/v7 降密与徽标语义** | ✅ **已实现（V2–V5、V8–V10，2026-09-13）；V6/V7 待做** |
 
-**v6/v7 降密与概念定位（2026-09-13，设计已冻结 · 待实现）**
+**v6/v7 降密与概念定位（2026-09-13）**
 
 设计依据：`database-navigator-prototype-design.md` §1.1（定位表 + 3 条边界规则）、§2（行内解剖 / 双通道徽标 / 归属域列 / 分组头）、§6.1。
 
-| # | 任务 | 落点 | 验收 |
+| # | 任务 | 落点 | 状态 |
 | --- | --- | --- | --- |
-| V1 | 概念定位与命名（文档） | `database-navigator-prototype-design.md` §1.1/§2/§6；「来源 / 作用域」→「归属域」 | 定位表与边界规则冻结（本轮已完成） |
-| V2 | 连接行瘦身：**移除行内 🗂 与驱动文本**；名称 `text_ellipsis` | `panels.rs::render_connection_row` | 长名 / 长驱动不互挤；归组只走右键 + 键盘 |
-| V3 | **双通道徽标**：颜色 = 状态（`success`/`info`/`muted`/`danger`），形状 = 类型（`type_id` → Lucide 路径 + 内叠 2 字母） | `panels.rs::render_connection_row` + `DatabaseNavView` **缓存驱动目录**（`id → type_id / name`）；`ConnectionItem` 补 `type_id` / `driver_name`；形状路径表落 `database::model` | 徽标 tooltip 含类型 + 状态 + 驱动；**render 无 I/O**；目录外类型回退 |
-| V4 | **归属域右对齐固定列**（原“条件显”作废）+ `⋯ → 显示归属域`（默认开） | `panels.rs::render_connection_row` + `settings::model::Navigator` | 跨行对齐；开关即时生效并持久化 |
-| V5 | 分组头**聚合健康度** + **全折叠** | `panels.rs::render_group_header`（`已连接/总数` + `danger` 计数点 + 折叠全部） | 健康度在结构层可见；一键折叠 |
-| V6 | **多组引用样式 + 主组** | `panels.rs::{render_nav_tree, render_connection_row}`；主组存储（`connection_group_members.is_primary` 新列或 `navigator_state`） | 多对多不再线性撑高树；主组可指定 |
-| V7 | **facet 入口**（归属域 chips 常驻 + 「筛选 ▾」承载类型 / 驱动 / 标签） | `panels.rs::render_database_nav` + `DatabaseNavView` 附加筛选状态（持久化）；搜索语法 `scope:/type:/driver:/tag:` | 筛选可组合；与搜索双向同步 |
-| V8 | 行操作**悬停 / 选中显隐**（断开、刷新、⋯） | `panels.rs::render_connection_row` | 常驻零 affordance；右键 + 键盘全量可达 |
-| V9 | 行尾 **`+` = 标签快捷入口** | `panels.rs::render_connection_row`（复用 `render_org_editor` 的标签输入；hover / 选中显） | 不弹模态即可加标签 |
-| V10 | **`⋯ → 显示标签`**（默认关）+ 标签行内「≤2 chip + `+N`」 | `panels.rs::render_connection_row` + `settings::model::Navigator` | 开关持久化；行高与对齐不变 |
+| V1 | 概念定位与命名（文档） | `database-navigator-prototype-design.md` §1.1/§2/§6；「来源 / 作用域」→「归属域」 | ✅ 2026-09-13 |
+| V2 | 连接行瘦身：**移除行内 🗂 与驱动文本**；名称 `text_ellipsis` | `panels.rs::render_connection_row` | ✅ 2026-09-13 |
+| V3 | **双通道徽标**：颜色 = 状态，形状 = 类型（内叠 2 字母） | `panels.rs::{nav_type_badge, NavBadgeStatus}` + `DatabaseNavView::driver_catalog`（`nav_runtime::driver_catalog()` 一次性加载） | ✅ 2026-09-13（**tooltip 待接**：0.6.1 无通用 `.tooltip()` 扩展，事实暂以属性面板为准） |
+| V4 | **归属域右对齐固定列** + `⋯ → 显示归属域` | `panels.rs::render_connection_row`（`.justify_end()` 定宽列）+ `settings::SettingsService::{show_scope,set_show_scope}` | ✅ 2026-09-13 |
+| V5 | 分组头**聚合健康度** + **全折叠** | `panels.rs::render_group_header`（`已连接/总数` + 失败计数 + 全折叠）+ `render_nav_tree` 预计算连接 / 错误集 | ✅ 2026-09-13 |
+| V6 | **多组引用样式 + 主组** | `panels.rs::{render_nav_tree, render_connection_row}`；主组存储（可先用 `membership[conn][0]` 推导，显式「设为主组」需新列或 `navigator_state`） | ⬜ 待做 |
+| V7 | **facet 入口**（归属域 chips + 「筛选 ▾」承载类型 / 驱动 / 标签） | `panels.rs::render_database_nav` + `DatabaseNavView` 附加筛选状态（持久化）；搜索语法 `scope:/type:/driver:/tag:` | ⬜ 待做 |
+| V8 | 行操作**悬停 / 选中显隐**（`+`、`✎`、连接/断开） | `panels.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`） | ✅ 2026-09-13（右键 + 键盘仍为全量入口） |
+| V9 | 行尾 **`+` = 标签快捷入口** | `panels.rs::render_connection_row`（复用行内组织编辑器） | ✅ 2026-09-13 |
+| V10 | **`⋯ → 显示标签`**（默认关）+ 标签行内「≤2 chip + `+N`」 | `panels.rs::render_connection_row` + `settings::SettingsService::{show_tags,set_show_tags}` | ✅ 2026-09-13 |
 
-> 实现顺序建议：V2 → V4（先瘦身与对齐，体感最强）→ V3 + V9（徽标与 `+`，需驱动目录缓存）→ V5/V6（分组头与引用样式）→ V7/V8/V10（facet / 悬停 / 标签显示）。
+> 新增常量：`ui.rs::{NAV_BADGE_SIZE, NAV_SCOPE_COL_SHORT, NAV_SCOPE_COL_TEXT, NAV_ADD_TAG_SIZE}`。
+> 单测：`panels::tests::type_badge_maps_known_types_and_falls_back`、`settings::model::tests::legacy_config_without_navigator_uses_defaults`（含新开关默认值）。
+> **驱动目录**：`nav_runtime::driver_catalog()`（同步读全局 `drivers` 表；随组织数据在 `defer_in` 一次性加载）→ 面板缓存，**render 期零 I/O**。
+> **待做**：V6（多组引用样式 + 显式主组）、V7（facet 弹层）、徽标 tooltip（需接入 gpui-kit `Tooltip`）。
 
 **Phase A 实现位置**
 

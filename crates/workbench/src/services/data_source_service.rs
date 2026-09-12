@@ -160,9 +160,40 @@ impl DataSourceService {
         Ok(Some((cfg.auth_type, data)))
     }
 
-    /// 网络配置列表
+    /// 网络配置列表（**UI 列表 / 下拉专用**：`config` 一律置空）。
+    ///
+    /// 存储层读路径会解密 `config`（连接解析需要明文），但列表消费方（下拉选项 /
+    /// 管理器行 / 名称匹配）只需要 id / name / type——明文凭据不进 UI 内存（原型 §3.6）。
+    /// 需回填字段时走 [`Self::network_config_detail_by_name`]。
     pub async fn list_network_configs(&self) -> Result<Vec<NetworkConfig>, CoreError> {
-        self.global_db.list_network_configs(None).await
+        let mut list = self.global_db.list_network_configs(None).await?;
+        for n in &mut list {
+            n.config.clear();
+        }
+        Ok(list)
+    }
+
+    /// 按名称读取网络档案的**解密后** `config`（管理器编辑回填用）。
+    ///
+    /// 与 `auth_config_detail_by_name` 同款：列表接口在服务层已脱敏（`config` 置空），
+    /// 回填必须走这里。返回 `(network_type, config JSON)`；不存在 → `Ok(None)`。
+    pub async fn network_config_detail_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<(String, String)>, CoreError> {
+        let items = self.global_db.list_network_configs(None).await?;
+        let Some(id) = items
+            .iter()
+            .find(|n| n.name.as_deref() == Some(name))
+            .map(|n| n.id.clone())
+        else {
+            return Ok(None);
+        };
+        // 单条读路径同样解密（存储层保证）
+        let Some(cfg) = self.global_db.get_network_config(&id).await? else {
+            return Ok(None);
+        };
+        Ok(Some((cfg.network_type, cfg.config)))
     }
 
     /// 环境列表

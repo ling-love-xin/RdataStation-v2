@@ -349,6 +349,8 @@ struct DatabaseNavView {
     prefetched: HashSet<String>,
     /// 当前选中的节点 key（键盘导航与选中高亮）。
     selected_key: Option<String>,
+    /// 驱动 id → 类型 / 显示名（徽标与 tooltip 用；随组织数据一次性加载）。
+    driver_catalog: HashMap<String, crate::services::nav_runtime::DriverMeta>,
 }
 
 /// 渲染顺序中的可见项（键盘导航用；每帧重建）。
@@ -364,6 +366,56 @@ struct NavOrderItem {
 
 /// 「未分组」固定分组的伪 ID（收纳不属于任何自定义分组的连接）。
 const GROUP_UNGROUPED: &str = "__ungrouped__";
+
+/// 连接行徽标状态（颜色通道；见原型设计 §2.3）。
+#[derive(Clone, Copy)]
+enum NavBadgeStatus {
+    /// 已连接（`success`）。
+    Connected,
+    /// 建连 / 预热中（`info`）。
+    Connecting,
+    /// 最近一次连接失败（`danger`）。
+    Failed,
+    /// 未连接（`muted`，灰）。
+    Idle,
+}
+
+impl NavBadgeStatus {
+    fn color(self, theme: &gpui_kit::component::Theme) -> Hsla {
+        match self {
+            Self::Connected => theme.colors.success,
+            Self::Connecting => theme.colors.info,
+            Self::Failed => theme.colors.danger,
+            Self::Idle => theme.colors.muted_foreground,
+        }
+    }
+}
+
+/// 类型徽标映射：数据库类型 id →（形状资产路径，2 字母缩写）。
+///
+/// 形状取自 `gpui-kit-assets` 全量 Lucide（`AllAssets` 已注册，无需新增资产）；
+/// **字母是权威识别，形状是冗余强化 + 扫视加速**（原型设计 §2.3）。
+/// 目录外类型回退通用形状 + 类型名首 2 字母。
+fn nav_type_badge(type_id: &str) -> (&'static str, String) {
+    let (path, letters): (&'static str, &'static str) = match type_id {
+        "postgresql" => ("icons/database.svg", "PG"),
+        "mysql" => ("icons/cylinder.svg", "MY"),
+        "mariadb" => ("icons/coins.svg", "MA"),
+        "sqlite" => ("icons/file.svg", "SQ"),
+        "duckdb" => ("icons/layers.svg", "DK"),
+        "mssql" => ("icons/server.svg", "MS"),
+        "oracle" => ("icons/hexagon.svg", "OR"),
+        "clickhouse" => ("icons/chart-column.svg", "CH"),
+        "mongodb" => ("icons/leaf.svg", "MG"),
+        "redis" => ("icons/braces.svg", "RD"),
+        _ => {
+            let upper = type_id.to_uppercase();
+            let short: String = upper.chars().take(2).collect();
+            return ("icons/database.svg", if short.is_empty() { "DB".into() } else { short });
+        }
+    };
+    (path, letters.to_string())
+}
 
 /// 节点图标色（复用主题标准色，代码零裸色）。
 fn nav_kind_color(kind: &NavNodeKind, theme: &gpui_kit::component::Theme) -> Hsla {
@@ -1145,6 +1197,8 @@ impl SidebarPanel {
                     .dropdown_menu({
                         let entity = cx.entity();
                         let shared = self.shared.clone();
+                        let show_tags = settings::SettingsService::show_tags(cx);
+                        let show_scope = settings::SettingsService::show_scope(cx);
                         move |menu, _window, _cx| {
                             let e_refresh = entity.clone();
                             let shared_cache = shared.clone();
@@ -1153,6 +1207,28 @@ impl SidebarPanel {
                                     e_refresh.update(app, |this, cx| this.refresh_all(cx));
                                 },
                             ))
+                            .separator()
+                            .item(
+                                PopupMenuItem::new(if show_tags {
+                                    "✓ 显示标签"
+                                } else {
+                                    "显示标签"
+                                })
+                                .on_click(move |_, _, app| {
+                                    settings::SettingsService::set_show_tags(!show_tags, app);
+                                }),
+                            )
+                            .item(
+                                PopupMenuItem::new(if show_scope {
+                                    "✓ 显示归属域"
+                                } else {
+                                    "显示归属域"
+                                })
+                                .on_click(move |_, _, app| {
+                                    settings::SettingsService::set_show_scope(!show_scope, app);
+                                }),
+                            )
+                            .separator()
                             .item(
                                 PopupMenuItem::new("缓存管理…").on_click(move |_, window, app| {
                                     crate::components::cache_dialog::open_cache_dialog(
@@ -1371,6 +1447,25 @@ impl SidebarPanel {
             .pb_1();
         let mut shown = 0usize;
 
+        // 运行时连接状态与错误集（分组头聚合健康度用；一次算完避免逐条查询）。
+        let connected_set: HashSet<String> = {
+            let mut set: HashSet<String> = self
+                .database_nav
+                .borrow()
+                .connected
+                .iter()
+                .cloned()
+                .collect();
+            for c in &conns {
+                if c.connected {
+                    set.insert(c.id.clone());
+                }
+            }
+            set
+        };
+        let error_set: HashSet<String> =
+            self.database_nav.borrow().errors.keys().cloned().collect();
+
         for group in &groups {
             // 组内顺序以存储的手动排序为准（缺省无成员）。
             let members: Vec<&ConnectionItem> = group_order
@@ -1386,8 +1481,19 @@ impl SidebarPanel {
                 continue;
             }
             shown += members.len();
-            column =
-                column.child(self.render_group_header(&group.id, &group.name, members.len(), cx));
+            let ok_count = members
+                .iter()
+                .filter(|c| connected_set.contains(&c.id))
+                .count();
+            let fail_count = members.iter().filter(|c| error_set.contains(&c.id)).count();
+            column = column.child(self.render_group_header(
+                &group.id,
+                &group.name,
+                members.len(),
+                ok_count,
+                fail_count,
+                cx,
+            ));
             if !self.group_collapsed(&group.id) {
                 for conn in members {
                     column = column.child(self.render_connection_row(conn, &group.id, cx));
@@ -1410,10 +1516,20 @@ impl SidebarPanel {
         ungrouped.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         if !ungrouped.is_empty() {
             shown += ungrouped.len();
+            let ok_count = ungrouped
+                .iter()
+                .filter(|c| connected_set.contains(&c.id))
+                .count();
+            let fail_count = ungrouped
+                .iter()
+                .filter(|c| error_set.contains(&c.id))
+                .count();
             column = column.child(self.render_group_header(
                 GROUP_UNGROUPED,
                 "未分组",
                 ungrouped.len(),
+                ok_count,
+                fail_count,
                 cx,
             ));
             if !self.group_collapsed(GROUP_UNGROUPED) {
@@ -1478,16 +1594,19 @@ impl SidebarPanel {
         column
     }
 
-    /// 分组头：左侧统一色条 + 略深底 + 计数徽标，可折叠；右键菜单（重命名 / 新建 / 删除）。
+    /// 分组头：左侧统一色条 + 略深底 + **健康度**（已连/总）+ 计数 + 全折叠；右键菜单（重命名 / 新建 / 删除）。
     fn render_group_header(
         &self,
         group_id: &str,
         name: &str,
         count: usize,
+        connected_count: usize,
+        failed_count: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
+        let danger = cx.theme().colors.danger;
         let bar = cx.theme().colors.primary;
         let bg = cx.theme().colors.sidebar_accent;
         let hover = cx.theme().colors.list_hover;
@@ -1496,6 +1615,7 @@ impl SidebarPanel {
         let gid = group_id.to_string();
         let gname = name.to_string();
         let is_ungrouped = group_id == GROUP_UNGROUPED;
+        let health_text = format!("{connected_count}/{count}");
 
         let header = div()
             .id(format!("nav-group-{group_id}"))
@@ -1547,12 +1667,69 @@ impl SidebarPanel {
                 div()
                     .flex_1()
                     .min_w_0()
+                    .overflow_hidden()
                     .text_xs()
+                    .text_ellipsis()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
                     .child(name.to_string()),
             )
+            // 聚合健康度（v5）：已连接/总数；有失败时附 danger 计数点。
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(if failed_count > 0 { danger } else { muted })
+                    .child(if failed_count > 0 {
+                        format!("{health_text} · {failed_count} 失败")
+                    } else {
+                        health_text
+                    }),
+            )
             .child(div().text_xs().text_color(muted).child(count.to_string()))
+            // 全折叠：一键折叠 / 展开全部同层分组（v5）。
+            .child(
+                div()
+                    .id(format!("nav-group-foldall-{group_id}"))
+                    .w_2p5()
+                    .h_2p5()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(muted)
+                    .hover(move |s| s.bg(hover))
+                    .child("\u{21c5}")
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                let ids: Vec<String> = this
+                                    .database_nav
+                                    .borrow()
+                                    .groups
+                                    .iter()
+                                    .map(|g| g.id.clone())
+                                    .collect();
+                                {
+                                    let mut view = this.database_nav.borrow_mut();
+                                    let all_collapsed = !ids.is_empty()
+                                        && ids.iter().all(|id| view.collapsed_groups.contains(id));
+                                    if all_collapsed {
+                                        view.collapsed_groups.clear();
+                                    } else {
+                                        for id in ids {
+                                            view.collapsed_groups.insert(id);
+                                        }
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
             // 「未分组」是固定分组，不提供重命名 / 删除。
             .context_menu({
                 let entity = entity.clone();
@@ -1637,8 +1814,6 @@ impl SidebarPanel {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
         let hover = cx.theme().colors.list_hover;
-        let ok = cx.theme().colors.success;
-        let off = cx.theme().colors.muted;
         let danger = cx.theme().colors.danger;
         let pri = cx.theme().colors.primary;
 
@@ -1694,6 +1869,198 @@ impl SidebarPanel {
             has_children: true,
             expanded,
         });
+
+        // ---- v7：行内只常驻「徽标 + 名称 + 归属域列」；`+` 与行操作仅 hover / 选中显 ----
+        let nav_view = self.database_nav.borrow();
+        let driver_meta = nav_view.driver_catalog.get(&conn.driver);
+        let type_id = driver_meta
+            .map(|m| m.type_id.clone())
+            .unwrap_or_else(|| conn.driver.clone());
+        let driver_name = driver_meta.map(|m| m.name.clone());
+        let badge_status = if nav_view.loading.contains(&conn.id) {
+            NavBadgeStatus::Connecting
+        } else if error.is_some() {
+            NavBadgeStatus::Failed
+        } else if connected {
+            NavBadgeStatus::Connected
+        } else {
+            NavBadgeStatus::Idle
+        };
+        let tag_list: Vec<String> = nav_view.tags.get(&conn.id).cloned().unwrap_or_default();
+        drop(nav_view);
+
+        let (badge_path, badge_letters) = nav_type_badge(&type_id);
+        let badge_color = badge_status.color(cx.theme());
+        // 双通道徽标：颜色 = 状态（能不能用），形状 = 类型（是什么库，内叠 2 字母）。
+        let badge = div()
+            .relative()
+            .w(rems(ui::NAV_BADGE_SIZE))
+            .h(rems(ui::NAV_BADGE_SIZE))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::empty()
+                            .path(badge_path)
+                            .size(rems(ui::NAV_BADGE_SIZE))
+                            .text_color(badge_color),
+                    ),
+            )
+            .child(
+                div()
+                    .relative()
+                    .text_size(rems(0.4))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(badge_color)
+                    .child(badge_letters),
+            );
+
+        // 标签 chip（可选显示，`⋯ → 显示标签`）：默认关；开启后「≤2 chip + `+N`」。
+        let tag_chips = if settings::SettingsService::show_tags(cx) && !tag_list.is_empty() {
+            let chip_bg = cx.theme().colors.list_hover;
+            let mut chips = div().h_flex().items_center().gap_0p5().flex_none();
+            for t in tag_list.iter().take(2) {
+                chips = chips.child(
+                    div()
+                        .px_1()
+                        .rounded_sm()
+                        .bg(chip_bg)
+                        .text_color(muted)
+                        .child(t.clone()),
+                );
+            }
+            if tag_list.len() > 2 {
+                chips = chips.child(
+                    div()
+                        .text_color(muted)
+                        .child(format!("+{}", tag_list.len() - 2)),
+                );
+            }
+            Some(chips)
+        } else {
+            None
+        };
+
+        // 归属域短码：右对齐固定列（可在 `⋯ → 显示归属域` 关闭）。
+        let scope_visible = settings::SettingsService::show_scope(cx);
+        let scope_col = if settings::SettingsService::source_short_code(cx) {
+            ui::NAV_SCOPE_COL_SHORT
+        } else {
+            ui::NAV_SCOPE_COL_TEXT
+        };
+        let scope_color = match source {
+            NavSource::Project => cx.theme().colors.info,
+            NavSource::Global => muted,
+            NavSource::Shared => cx.theme().colors.primary,
+        };
+
+        // 行尾操作（v8）：`+` 加标签 · `✎` 编辑 · 连接/断开；仅 hover / 选中显。
+        let ops = {
+            let entity = cx.entity();
+            let shared = self.shared.clone();
+            let cid = conn_id.clone();
+            let root = project_root.clone();
+            let hover_bg = cx.theme().colors.list_hover;
+            let mut ops = div()
+                .h_flex()
+                .items_center()
+                .gap_0p5()
+                .flex_none()
+                .opacity(if selected { 1.0 } else { 0.0 })
+                .group_hover("nav-conn-row", |s| s.opacity(1.0));
+            // `+`：行内标签 / 分组编辑（与右键「分组 / 标签…」同源）。
+            ops = ops.child(
+                div()
+                    .id(format!("nav-conn-addtag-{}::{}", scope_key, conn.id))
+                    .w(rems(ui::NAV_ADD_TAG_SIZE))
+                    .h(rems(ui::NAV_ADD_TAG_SIZE))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(muted)
+                    .hover(move |s| s.bg(hover_bg))
+                    .child(Icon::empty().path("icons/plus.svg").size(rems(0.75)))
+                    .on_click({
+                        let entity = entity.clone();
+                        let cid = cid.clone();
+                        move |_, _, app: &mut App| {
+                            let cid = cid.clone();
+                            entity.update(app, |this, cx| {
+                                let mut view = this.database_nav.borrow_mut();
+                                view.group_picker_for =
+                                    if view.group_picker_for.as_deref() == Some(cid.as_str()) {
+                                        None
+                                    } else {
+                                        Some(cid.clone())
+                                    };
+                                cx.notify();
+                            });
+                        }
+                    }),
+            );
+            // `✎`：在对话框中编辑连接。
+            ops = ops.child(
+                div()
+                    .id(format!("nav-conn-edit-{}::{}", scope_key, conn.id))
+                    .px_1()
+                    .text_xs()
+                    .text_color(muted)
+                    .cursor_pointer()
+                    .rounded_md()
+                    .hover(move |s| s.bg(hover_bg))
+                    .child("\u{270e}")
+                    .on_click({
+                        let entity = entity.clone();
+                        let shared = shared.clone();
+                        let cid = cid.clone();
+                        move |_, _, app: &mut App| {
+                            *shared.open_edit.borrow_mut() = Some(cid.clone());
+                            entity.update(app, |_, cx| {
+                                cx.emit(SidebarEvent::EditConnection(cid.clone()));
+                            });
+                        }
+                    }),
+            );
+            // 连接 / 断开。
+            ops = ops.child(
+                div()
+                    .id(format!("nav-conn-toggle-{}::{}", scope_key, conn.id))
+                    .px_1()
+                    .text_xs()
+                    .text_color(pri)
+                    .cursor_pointer()
+                    .rounded_md()
+                    .hover(move |s| s.bg(hover_bg))
+                    .child(if connected { "断开" } else { "连接" })
+                    .on_click({
+                        let entity = entity.clone();
+                        let cid = cid.clone();
+                        let root = root.clone();
+                        move |_, _, app: &mut App| {
+                            let cid = cid.clone();
+                            let root = root.clone();
+                            entity.update(app, |this, cx| {
+                                this.toggle_connection(&cid, root.as_deref(), cx);
+                            });
+                        }
+                    }),
+            );
+            ops
+        };
+
+        // 徽标 tooltip 材料（接入 `Tooltip` 组件前，事实统一在属性面板展示）。
+        let _ = (&driver_name, danger);
 
         let mut block = div().v_flex().w_full();
         block = block.child(
@@ -1758,93 +2125,33 @@ impl SidebarPanel {
                         .text_color(muted)
                         .child(if expanded { "\u{25be}" } else { "\u{25b8}" }),
                 )
-                .child(
-                    div()
-                        .w_2()
-                        .h_2()
-                        .flex_none()
-                        .rounded_full()
-                        .bg(if connected { ok } else { off }),
-                )
+                .group("nav-conn-row")
+                .child(badge)
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
+                        .overflow_hidden()
                         .text_xs()
                         .text_color(fg)
+                        .text_ellipsis()
                         .child(nav_name_highlight(&conn.name, &filter, match_bg, fg)),
                 )
-                .child(div().text_xs().text_color(muted).child(source_text))
-                .child(div().text_xs().text_color(muted).child(conn.driver.clone()))
-                // 归组 / 标签入口：展开行内组织编辑器（方案 A 的内联多选，不弹模态）。
-                .child(
-                    div()
-                        .id(format!("nav-conn-org-{}::{}", scope_key, conn.id))
-                        .px_1()
-                        .text_xs()
-                        .text_color(muted)
-                        .cursor_pointer()
-                        .child("\u{1f5c2}")
-                        .on_click({
-                            let entity = cx.entity();
-                            let cid = conn.id.clone();
-                            move |_, _, app: &mut App| {
-                                let cid = cid.clone();
-                                entity.update(app, |this, cx| {
-                                    let mut view = this.database_nav.borrow_mut();
-                                    view.group_picker_for =
-                                        if view.group_picker_for.as_deref() == Some(cid.as_str()) {
-                                            None
-                                        } else {
-                                            Some(cid.clone())
-                                        };
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                )
-                // 「在对话框中编辑」入口（C7）：复用 shared.open_edit → 编辑区打开数据源对话框。
-                .child(
-                    div()
-                        .id(format!("nav-conn-edit-{}::{}", scope_key, conn.id))
-                        .px_1()
-                        .text_xs()
-                        .text_color(muted)
-                        .cursor_pointer()
-                        .child("\u{270e}")
-                        .on_click({
-                            let entity = cx.entity();
-                            let shared = self.shared.clone();
-                            let cid = conn_id.clone();
-                            move |_, _, app: &mut App| {
-                                *shared.open_edit.borrow_mut() = Some(cid.clone());
-                                entity.update(app, |_, cx| {
-                                    cx.emit(SidebarEvent::EditConnection(cid.clone()));
-                                });
-                            }
-                        }),
-                )
-                .child(
-                    div()
-                        .id(format!("nav-conn-toggle-{}::{}", scope_key, conn.id))
-                        .px_1()
-                        .text_xs()
-                        .text_color(pri)
-                        .cursor_pointer()
-                        .child(if connected { "断开" } else { "连接" })
-                        .on_click({
-                            let entity = cx.entity();
-                            let conn_id = conn_id.clone();
-                            let root = project_root.clone();
-                            move |_, _, app: &mut App| {
-                                let conn_id = conn_id.clone();
-                                let root = root.clone();
-                                entity.update(app, |this, cx| {
-                                    this.toggle_connection(&conn_id, root.as_deref(), cx);
-                                });
-                            }
-                        }),
-                )
+                .when_some(tag_chips, |s, chips| s.child(chips))
+                .when(scope_visible, |s| {
+                    s.child(
+                        div()
+                            .w(rems(scope_col))
+                            .flex_none()
+                            .flex()
+                            .justify_end()
+                            .text_xs()
+                            .text_color(scope_color)
+                            .child(source_text.clone()),
+                    )
+                })
+                // 行尾操作组（`+` / `✎` / 连接·断开）：仅 hover / 选中显（v8）。
+                .child(ops)
                 // 右键菜单（连接节点）：连接/断开、编辑、查看属性、分组/标签、复制、刷新。
                 .context_menu({
                     let entity = cx.entity();
@@ -2741,11 +3048,13 @@ impl SidebarPanel {
             group_order.insert(group.id.clone(), ids);
         }
         let tags = crate::services::nav_runtime::list_all_tags(root.as_deref());
+        let driver_catalog = crate::services::nav_runtime::driver_catalog();
         let mut view = self.database_nav.borrow_mut();
         view.groups = groups;
         view.membership = membership;
         view.group_order = group_order;
         view.tags = tags;
+        view.driver_catalog = driver_catalog;
         view.groups_loaded = true;
     }
 
@@ -4877,5 +5186,28 @@ impl ComponentPanel for RightSidebarPanel {
             .text_sm()
             .font_weight(FontWeight::MEDIUM)
             .child(self.shared.active_right.get().label())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
+    use super::nav_type_badge;
+
+    #[test]
+    fn type_badge_maps_known_types_and_falls_back() {
+        // 已知类型：形状与 2 字母按映射表（原型设计 §2.3）。
+        assert_eq!(
+            nav_type_badge("postgresql"),
+            ("icons/database.svg", "PG".into())
+        );
+        assert_eq!(nav_type_badge("sqlite"), ("icons/file.svg", "SQ".into()));
+        assert_eq!(nav_type_badge("redis"), ("icons/braces.svg", "RD".into()));
+        // 目录外类型：回退通用形状 + 类型名首 2 字母（大写）。
+        let (path, letters) = nav_type_badge("snowflake");
+        assert_eq!(path, "icons/database.svg");
+        assert_eq!(letters, "SN");
+        // 空类型 id：不做空字母，回退 `DB`。
+        assert_eq!(nav_type_badge("").1, "DB");
     }
 }

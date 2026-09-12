@@ -47,15 +47,16 @@ fn clear_net_values(mgr: &ManagerWorkspace, window: &mut Window, cx: &mut App) {
     }
 }
 
-/// 按名称读取网络配置（类型, config JSON）；服务未就绪 / 不存在 → None。
+/// 按名称读取网络配置（类型, **解密后**的 config JSON）；服务未就绪 / 不存在 → None。
+///
+/// 走服务层专用接口：列表接口在服务层已脱敏（`config` 置空）。
 fn load_network_config_by_name(name: &str, cx: &mut App) -> Option<(String, String)> {
     let rt = tokio::runtime::Runtime::new().ok()?;
     let service = DataSourceService::global().ok()?;
-    let list = rt.block_on(service.list_network_configs()).ok()?;
     let _ = cx;
-    list.into_iter()
-        .find(|n| n.name.as_deref() == Some(name))
-        .map(|n| (n.network_type, n.config))
+    rt.block_on(service.network_config_detail_by_name(name))
+        .ok()
+        .flatten()
 }
 
 /// 按名称读取认证配置（类型, **解密后**的 auth_data JSON）；服务未就绪 / 不存在 / 解密失败 → None。
