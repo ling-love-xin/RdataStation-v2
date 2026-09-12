@@ -161,3 +161,31 @@ fn sidebar_edit_request_renders_dialog_layer(cx: &mut TestAppContext) {
         "编辑入口的对话框层应渲染"
     );
 }
+
+#[gpui_kit::test]
+fn sidebar_new_connection_request_renders_dialog_layer(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (host, cx) = open_host(cx);
+    let (shared, editor) = cx.update(|_, cx| {
+        let host = host.read(cx);
+        (host.shared.clone(), host.editor.clone())
+    });
+
+    // 模拟导航面板头「＋」/ 空态「新建连接」：置位请求并通知编辑面板
+    //（宿主重绘由 `SidebarEvent::NewConnectionRequest` 事件路径负责）。
+    shared.new_connection_request.set(true);
+    cx.update(|_, cx| {
+        editor.update(cx, |_, cx| cx.notify());
+    });
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "新建数据源入口应打开对话框"
+    );
+    assert!(
+        cx.debug_bounds("dialog-layer").is_some(),
+        "新建数据源入口的对话框层应渲染"
+    );
+}

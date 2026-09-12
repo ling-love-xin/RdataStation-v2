@@ -72,7 +72,8 @@ impl ProductTokens {
 
     /// 活动栏背景。
     pub fn activity_bar_background(&self, theme: &Theme) -> Hsla {
-        self.activity_bar_background.unwrap_or(theme.colors.secondary)
+        self.activity_bar_background
+            .unwrap_or(theme.colors.secondary)
     }
 
     /// 活动栏激活项侧条。
@@ -95,7 +96,8 @@ impl ProductTokens {
 
     /// 标题栏项目挖空槽背景。
     pub fn title_bar_slot_background(&self, theme: &Theme) -> Hsla {
-        self.title_bar_slot_background.unwrap_or(theme.colors.sidebar)
+        self.title_bar_slot_background
+            .unwrap_or(theme.colors.sidebar)
     }
 
     /// Quick Open 分组头背景。
@@ -106,7 +108,8 @@ impl ProductTokens {
 
     /// 搜索命中文本背景。
     pub fn search_match_background(&self, theme: &Theme) -> Hsla {
-        self.search_match_background.unwrap_or(theme.colors.list_active)
+        self.search_match_background
+            .unwrap_or(theme.colors.list_active)
     }
 }
 

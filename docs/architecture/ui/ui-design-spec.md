@@ -59,9 +59,12 @@
 | | `ICON_SIZE_MD` | 1.0 | 16 | `size_4` |
 | 间距 | `GAP_SM` / `GAP_MD` / `GAP_LG` | 0.25 / 0.5 / 0.75 | 4 / 8 / 12 | `gap_1` / `gap_2` / `gap_3` |
 | | `PANEL_PADDING` | 0.5 | 8 | `p_2` |
+| 属性面板（编辑区右侧） | `PROPERTY_PANEL_MIN_WIDTH` | 13.75 | 220 | — |
+| | `PROPERTY_PANEL_MAX_WIDTH` | 47.5 | 760 | — |
 | 固定描边 | `HAIRLINE` | — | 1px | `h_px` |
 | | `ACTIVITY_ACCENT_BAR` | — | 2px | `w_0p5` |
 | | `TREE_ACTIVE_BAR` | — | 2px | `w_0p5` |
+| | `NAV_GROUP_BAR_WIDTH` | — | 2px | `w_0p5` |
 
 ## 3. 颜色约束
 

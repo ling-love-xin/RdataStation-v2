@@ -31,6 +31,7 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 | `activity_bar.icon.inactive` | `#858585` | `#616161` | 未激活图标色 |
 | `title_bar.slot.background` | `#252526` | `#F3F3F3` | 标题栏项目挖空槽 |
 | `quick_open.group.header` | `#3A3D41` | `#ECECEC` | Quick Open 分组头 |
+| `search.match.background` | `#4A3F00` | `#FFF3C4` | 搜索命中文本底（导航连接行 / 对象行） |
 
 ## 主题资产与加载
 
@@ -38,11 +39,22 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 - 加载：app 启动 `ThemeRegistry::watch_dir(themes_dir, cx, on_load)`（热更新）
 - 切换：`Theme::change(mode, window, cx)`；命令 `ToggleThemeMode` 在 `crates/settings`，经 `SettingsService` 即时生效并持久化
 
-## 语义 token 注册与消费
+## 产品语义 token 消费（已落地）
 
-- 注册：app 加载主题后经 `Theme::semantic_tokens()` / `apply_semantic_tokens()`（或 `SemanticThemeTokens`）写入
-- 消费：组件从 `cx.theme()` 读取（如 `cx.theme().semantic_tokens().activity_bar_background`）
-- 若 0.6 schema 拒绝未知字段，落独立 `assets/themes/product-tokens.json`（实施时按 schema 确认）
+0.6 的语义面（`SemanticThemeTokens` / `ColorTokens`）是**固定 18 角色**，装不下上表产品角色；因此落到独立资产 + 独立加载设施：
+
+- **资产**：`assets/themes/product-tokens.json`（`light` / `dark` 各一映射，键名 = 上表角色名，值为 hex；缺失角色回退语义最接近的标准字段）
+- **注册**：`crates/settings/src/product_tokens.rs`——`ProductTokenSet: Global`（`apply_from_str` / `apply_from_path` / `get(cx)`）；app 启动与主题目录热更新时调用（`crates/app/src/main.rs::attach_product_tokens`）
+- **消费**（代码零 hex）：
+
+```rust
+settings::product_tokens::get(cx).activity_bar_background(cx.theme())
+settings::product_tokens::get(cx).search_match_background(cx.theme())
+```
+
+- 角色→访问器：`activity_bar_background` / `activity_bar_active_border` / `activity_bar_icon_active` / `activity_bar_icon_inactive` / `title_bar_slot_background` / `quick_open_group_header` / `search_match_background`
+- 消费方：`view.rs`（活动栏背景 / 激活条 / 标题栏挖空槽 / Quick Open 分组头）、`panels.rs::nav_name_highlight`（命中底色）
+- **新增产品角色时必须同步改**：`product-tokens.json`（明暗两套）→ `TokenMap` / `ProductTokens` 字段 + `from_map` + 访问器（含回退）→ 消费方
 
 ## 检查清单
 

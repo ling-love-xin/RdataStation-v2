@@ -13,14 +13,15 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui_kit::EventEmitter;
-use gpui_kit::base::{h_resizable, resizable_panel, StyledExt};
+use gpui_kit::base::Disableable as _;
+use gpui_kit::base::{StyledExt, h_resizable, resizable_panel};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, IconName, Sizable as _, WindowExt as _};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -67,6 +68,8 @@ pub struct Shared {
     pub sql_for: Rc<RefCell<Option<String>>>,
     /// 编辑请求（侧边栏「编辑」→ EditorPanel 渲染时消费并打开对话框）。
     pub open_edit: Rc<RefCell<Option<String>>>,
+    /// 新建数据源请求（导航面板头「＋」/ 空态按钮 → EditorPanel 渲染时消费并打开对话框）。
+    pub new_connection_request: Rc<Cell<bool>>,
     /// 连接对话框的项目下拉选中「＋ 新增项目」→ 宿主打开项目新建入口（由 `WorkbenchView` 消费）。
     pub project_new_request: Rc<Cell<bool>>,
     /// 连接对话框的项目下拉选中「打开现有目录…」→ 宿主打开目录选择（由 `WorkbenchView` 消费）。
@@ -115,6 +118,7 @@ impl Shared {
             nav_tables: Rc::new(RefCell::new(Vec::new())),
             sql_for: Rc::new(RefCell::new(None)),
             open_edit: Rc::new(RefCell::new(None)),
+            new_connection_request: Rc::new(Cell::new(false)),
             project_new_request: Rc::new(Cell::new(false)),
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
@@ -156,6 +160,8 @@ pub enum SidebarEvent {
     SelectConnection(usize),
     /// 用户点击了连接「编辑」。
     EditConnection(String),
+    /// 用户点击了导航面板头「＋」/ 空态「新建连接」（已置位 `shared.new_connection_request`）。
+    NewConnectionRequest,
     /// 导航右键「查看数据」已写入 `shared.editor_set`，请编辑区渲染时消费。
     EditorSqlRequest,
 }
@@ -508,6 +514,15 @@ impl SidebarPanel {
             .iter()
             .find(|i| i.key == key)
             .cloned()
+    }
+
+    /// 当前选中的连接 id（仅当选中节点是连接根时）。
+    ///
+    /// 面板头「⟳ 刷新元数据」「断开当前连接」的作用目标（设计 §2.1 / §4.2）。
+    fn nav_current_connection(&self) -> Option<String> {
+        self.nav_selected()
+            .filter(|item| matches!(item.path, Some(NavPath::Connection)))
+            .map(|item| item.conn_id)
     }
 
     /// →：展开选中节点（有子节点且尚未展开）。
@@ -986,6 +1001,17 @@ impl SidebarPanel {
         let accent = cx.theme().colors.primary;
         let source_filter = self.database_nav.borrow().source_filter;
 
+        // 面板头「⟳ 刷新元数据」「断开当前连接」的作用目标：当前选中的连接。
+        let current_conn = self.nav_current_connection();
+        let current_connected = current_conn
+            .as_deref()
+            .map(|id| {
+                crate::services::nav_runtime::is_connected(id)
+                    || self.database_nav.borrow().connected.contains(id)
+            })
+            .unwrap_or(false);
+        let project_root = self.project_root().map(|p| p.to_string_lossy().to_string());
+
         let header = div()
             .h_flex()
             .items_center()
@@ -1028,6 +1054,21 @@ impl SidebarPanel {
                 )
             })
             .child(
+                // 新建数据源（＋）：与编辑区「新建连接」同一条对话框入口。
+                Button::new("nav-new-connection")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Plus)
+                    .on_click({
+                        let entity = cx.entity();
+                        let shared = self.shared.clone();
+                        move |_, _, app: &mut App| {
+                            shared.new_connection_request.set(true);
+                            entity.update(app, |_, cx| cx.emit(SidebarEvent::NewConnectionRequest));
+                        }
+                    }),
+            )
+            .child(
                 // 新建分组（🗂＋）：项目级自定义分组。
                 div()
                     .id("nav-new-group")
@@ -1045,6 +1086,53 @@ impl SidebarPanel {
                         let entity = cx.entity();
                         move |_, _, app: &mut App| {
                             entity.update(app, |this, cx| this.create_group_interactive(cx));
+                        }
+                    }),
+            )
+            .child(
+                // 刷新元数据（⟳）：刷新当前选中连接（设计 §4.2「单连接 = 工具栏 ⟳」，
+                // 「全部」在「⋯」菜单）；未选中连接时禁用。
+                Button::new("nav-refresh")
+                    .ghost()
+                    .small()
+                    .icon(IconName::RotateCw)
+                    .disabled(current_conn.is_none())
+                    .on_click({
+                        let entity = cx.entity();
+                        let conn = current_conn.clone();
+                        move |_, _, app| {
+                            let Some(cid) = conn.clone() else {
+                                return;
+                            };
+                            entity.update(app, |this, cx| {
+                                this.refresh_node(&cid, &cid, Some(NavPath::Connection), cx);
+                            });
+                        }
+                    }),
+            )
+            .child(
+                // 断开当前连接（设计 §2.1 / 原型 title「断开当前连接」）：仅运行时已连接时
+                // 可用；断开只关运行时连接，元数据缓存保留（可离线浏览 / 重连秒开）。
+                Button::new("nav-disconnect")
+                    .ghost()
+                    .small()
+                    .icon(
+                        Icon::empty()
+                            .path("icons/plug.svg")
+                            .text_color(cx.theme().colors.danger),
+                    )
+                    .disabled(!current_connected)
+                    .on_click({
+                        let entity = cx.entity();
+                        let conn = current_conn.clone();
+                        let root = project_root.clone();
+                        move |_, _, app| {
+                            let Some(cid) = conn.clone() else {
+                                return;
+                            };
+                            entity.update(app, |this, cx| {
+                                this.toggle_connection(&cid, root.as_deref(), cx);
+                            });
                         }
                     }),
             )
@@ -1131,7 +1219,7 @@ impl SidebarPanel {
             .child(header)
             .child(search_row)
             .child(chips)
-            .child(div().h_px().w_full().bg(border))
+            .child(div().h(ui::HAIRLINE).w_full().bg(border))
             .child(body)
             .key_context("database-nav")
             .track_focus(&self.focus_handle)
@@ -1185,7 +1273,8 @@ impl SidebarPanel {
         let (bg, text) = if active {
             (accent, cx.theme().colors.primary_foreground)
         } else {
-            (Hsla::default(), muted)
+            // 未选中：无底色（透明），靠 hover 灰层给出可点反馈。
+            (transparent_black(), muted)
         };
         let weight = if active {
             FontWeight::SEMIBOLD
@@ -1229,6 +1318,7 @@ impl SidebarPanel {
         // 键盘导航的可见序列每帧重建（渲染是顺序权威来源）。
         self.nav_order.borrow_mut().clear();
         let muted = cx.theme().colors.muted_foreground;
+        let fg = cx.theme().colors.foreground;
         // 分组 / 成员 / 标签尚未就绪（首次渲染由 `render_database_nav` 的 defer 加载）。
         if !self.database_nav.borrow().groups_loaded {
             return div()
@@ -1334,20 +1424,56 @@ impl SidebarPanel {
         }
 
         if shown == 0 {
-            let msg = if conns.is_empty() {
-                "暂无数据源，请点击标题栏「新建连接」。"
+            if conns.is_empty() {
+                // 空态引导（设计 §2.4）：标题 + 说明 + 面板内「新建连接」按钮。
+                let entity = cx.entity();
+                let shared = self.shared.clone();
+                column = column.child(
+                    div()
+                        .w_full()
+                        .pt_5()
+                        .px_3()
+                        .v_flex()
+                        .items_start()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(fg)
+                                .child("还没有数据源"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child("当前项目与全局库均无连接。点击右上角「＋」新建。"),
+                        )
+                        .child(
+                            Button::new("nav-empty-new-connection")
+                                .primary()
+                                .small()
+                                .icon(IconName::Plus)
+                                .label("新建连接")
+                                .on_click(move |_, _, app: &mut App| {
+                                    shared.new_connection_request.set(true);
+                                    entity.update(app, |_, cx| {
+                                        cx.emit(SidebarEvent::NewConnectionRequest)
+                                    });
+                                }),
+                        ),
+                );
             } else {
-                "没有匹配的数据源。"
-            };
-            column = column.child(
-                div()
-                    .w_full()
-                    .pt_5()
-                    .px_3()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(msg),
-            );
+                column = column.child(
+                    div()
+                        .w_full()
+                        .pt_5()
+                        .px_3()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("没有匹配的数据源。"),
+                );
+            }
         }
         column
     }
@@ -1403,7 +1529,7 @@ impl SidebarPanel {
             })
             .child(
                 div()
-                    .w(px(2.))
+                    .w(ui::NAV_GROUP_BAR_WIDTH)
                     .h(rems(0.875))
                     .flex_none()
                     .rounded_full()
@@ -2152,40 +2278,36 @@ impl SidebarPanel {
             expanded: expanded_eff,
         });
         let mut block = div().v_flex().w_full();
-        let mut row = div()
-            .id(format!("nav-node-{}::{}", scope_key, node.key))
-            .h_flex()
-            .items_center()
-            .w_full()
-            .h(rems(1.375))
-            .pr_1()
-            .pl(rems(indent))
-            .gap_1()
-            .rounded_md()
-            .cursor_pointer()
-            .when(selected, |s| s.bg(selected_bg))
-            .hover(move |s| s.bg(hover))
-            .child(div().w_2p5().flex_none().text_xs().text_color(muted).child(
-                if node.has_children {
-                    if expanded_eff { "\u{25be}" } else { "\u{25b8}" }
-                } else {
-                    ""
-                },
-            ))
-            .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(fg)
-                    .child(nav_name_highlight(
+        let mut row =
+            div()
+                .id(format!("nav-node-{}::{}", scope_key, node.key))
+                .h_flex()
+                .items_center()
+                .w_full()
+                .h(rems(1.375))
+                .pr_1()
+                .pl(rems(indent))
+                .gap_1()
+                .rounded_md()
+                .cursor_pointer()
+                .when(selected, |s| s.bg(selected_bg))
+                .hover(move |s| s.bg(hover))
+                .child(div().w_2p5().flex_none().text_xs().text_color(muted).child(
+                    if node.has_children {
+                        if expanded_eff { "\u{25be}" } else { "\u{25b8}" }
+                    } else {
+                        ""
+                    },
+                ))
+                .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon))
+                .child(div().flex_1().min_w_0().text_xs().text_color(fg).child(
+                    nav_name_highlight(
                         &node.name,
                         &filter,
                         settings::product_tokens::get(cx).search_match_background(cx.theme()),
                         fg,
-                    )),
-            );
+                    ),
+                ));
         if let Some((meta, is_pk)) = right_meta {
             row = row.child(
                 div()
@@ -3707,21 +3829,23 @@ impl EditorPanel {
         }
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| loop {
-            executor.timer(std::time::Duration::from_millis(60)).await;
-            let results = nav_jobs::drain_props_results();
-            let had = !results.is_empty();
-            if had
-                && weak
-                    .update(cx, |this, cx| this.apply_props_results(results, cx))
-                    .is_err()
-            {
-                return;
-            }
-            if !nav_jobs::has_pending_props() {
-                executor.timer(std::time::Duration::from_millis(120)).await;
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(60)).await;
+                let results = nav_jobs::drain_props_results();
+                let had = !results.is_empty();
+                if had
+                    && weak
+                        .update(cx, |this, cx| this.apply_props_results(results, cx))
+                        .is_err()
+                {
+                    return;
+                }
                 if !nav_jobs::has_pending_props() {
-                    break;
+                    executor.timer(std::time::Duration::from_millis(120)).await;
+                    if !nav_jobs::has_pending_props() {
+                        break;
+                    }
                 }
             }
         });
@@ -3990,6 +4114,11 @@ impl Render for EditorPanel {
         let edit_request = self.shared.open_edit.borrow_mut().take();
         if let Some(cid) = edit_request {
             self.request_edit_connection(cid, window, cx);
+        }
+
+        // 消费导航面板头「＋」/ 空态「新建连接」请求。
+        if self.shared.new_connection_request.take() {
+            self.request_new_connection(window, cx);
         }
 
         // 消费导航右键「新建查询 / 查看数据」注入的 SQL：追加到当前草稿后。
@@ -4521,7 +4650,10 @@ impl Render for EditorPanel {
                     .child(
                         resizable_panel()
                             .size(width)
-                            .size_range(px(220.)..px(760.))
+                            .size_range(
+                                font_size * ui::PROPERTY_PANEL_MIN_WIDTH
+                                    ..font_size * ui::PROPERTY_PANEL_MAX_WIDTH,
+                            )
                             .flex_none()
                             .child(property),
                     )

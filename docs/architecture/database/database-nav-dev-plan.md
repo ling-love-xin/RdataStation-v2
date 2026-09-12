@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 开发方案（Phase A/B/C）
 
-> 状态：**Phase A/B 完成；Phase C 进行中（C1/C2/C3/C4/C6/C7 已实现）· 2026-09-12** · `cargo check --workspace --all-targets` 零错误；`cargo test -p rds-workbench --lib`（37）/ `-p rds-database`（5）/ `-p rds-settings`（1）/ `-p rds-engine --lib`（242）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
+> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现）· 2026-09-12** · `cargo check --workspace --all-targets` 零错误；`cargo test -p rds-workbench --lib`（42）/ `-p rds-database`（5）/ `-p rds-settings`（2）/ `-p rds-engine --lib`（242）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
 > 设计基线：作用域来源短码 `P/G/GP`、项目级自定义分组（多对多）+ 多值标签、三级缓存与增量刷新、缓存永不自动删除、属性面板填充编辑区右侧、预热方案 C。
 > 技术栈：GPUI（gpui-kit 0.6）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
 > 前置：M3 连接模块 Phase A/B 已实现；engine 元数据缓存（含增量/预热索引/FTS/分页/版本迁移）已迁移。
@@ -11,7 +11,7 @@
 | --- | --- |
 | Phase A（骨架与核心闭环） | ✅ 已实现 |
 | Phase B（分组/标签/搜索/属性面板/状态/菜单/缓存） | ✅ 已实现（B1–B8） |
-| Phase C（预热/增量/收尾） | 🟡 进行中（C1/C2/C3/C4/C6/C7 已实现；C5 待条件；C8 由连接侧推进） |
+| Phase C（预热/增量/收尾） | 🟡 进行中（C1–C7 已实现；C8 由连接侧推进） |
 
 **Phase A 实现位置**
 
@@ -31,7 +31,7 @@
 - 加载为阻塞式（点击时 `block_on`），Phase C 迁移到后台任务；
 - 未接 L2 每连接缓存（目前直连实时内省）——Phase C；
 - 展开态未持久化到 `navigator_state`（表已建）——Phase B；
-- 面板头按钮（新建连接 / 刷新）、搜索输入、右键菜单——Phase B；
+- 面板头按钮（新建连接 / 刷新 / 断开）与搜索输入、右键菜单——✅ 已实现（新建/刷新/断开/搜索/右键均落地，见 Phase B 表）；
 - 连接 URL 未做密码百分号编码——✅ 已修复（2026-09-11，随 M3 C3 第一批收敛：URL 组装下沉 `connection::url::build_connection_url`，userinfo 统一百分号编码）；
 - 只渲染数据源与其对象树，**不含分析资产**（符合范围边界）。
 
@@ -91,6 +91,8 @@
 | 来源短码 ⇄ 文字开关 | `settings::model::Navigator::source_short_code`；设置面板「数据源导航 → 来源标识（短码/文字）」；`render_connection_row` 消费；切换后 `refresh_windows()` 即时生效 |
 | 属性面板宽度记忆 | `settings::model::Navigator::property_panel_width`（默认 24.5 rem）；`EditorPanel::render` 用 `h_resizable` 包裹，拖拽实时更新，**关闭面板时**写 `settings.json` |
 | 刷新全部元数据 | 导航面板头 `⋯` →「刷新全部元数据」（`refresh_all`，不删磁盘缓存） |
+| 新建数据源入口（2026-09-12 补齐） | 导航面板头 `＋` + 空态「还没有数据源」引导按钮（对齐原型 §2.1 / §2.4）；`Shared::new_connection_request`（`panels.rs` 置位 + `SidebarEvent::NewConnectionRequest`，`view.rs` 级联通知，`EditorPanel::render` 消费并 `request_new_connection`） |
+| 面板头工具栏补齐（2026-09-12） | 对齐原型 §2.1 `[＋][🗂＋][⟳][断开][⋯]`：`⟳ 刷新元数据` = 刷新当前选中连接（§4.2「单连接 = 工具栏 ⟳」，全部在 `⋯`）；`断开当前连接` = 断开当前选中连接（仅运行时已连接时可用，缓存保留）；作用目标由 `SidebarPanel::nav_current_connection`（选中节点为连接根）推导，未选中 / 未连接时 `disabled` |
 
 **B8 说明**
 
@@ -109,7 +111,7 @@
 | 导航后台任务基建（阻塞 → 工作线程） | ✅ 已实现（2026-09-12） | `services/nav_jobs.rs`：单工作线程 + tokio 运行时 + mpsc 串行队列；原子量进度/取消；面板用主线程 async 任务 300ms 轮询重绘 |
 | C-收尾 导航加载全部迁后台（消除 render 期 I/O） | ✅ 已实现（2026-09-12） | `nav_jobs::{enqueue_load, enqueue_properties, drain_load_results, drain_props_results}`；`panels.rs`：树加载/属性加载改为入队 + 主线程轮询回填（`apply_load_results` / `apply_props_results`），render 只读内存；本地 SQLite 一次性读取（分组/标签、展开态）改用 `cx.defer_in` 在渲染后执行 |
 | C3 增量刷新接入 | ✅ 已实现（首版，2026-09-12） | `crates/database/src/cache.rs`（新增 `NavCache` cache-aside）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；范围：schema / 表 / 视图 / 列；刷新（`fresh`）先 `prune_schema` 再重写；**修复 engine 既有缺陷** `list_columns_normalized` 引用了不存在的 `fkc.table_id` |
-| C5 `search.match.background` token | ⬜ 受阻 | gpui-kit 0.6.1 `ThemeColor` 无该字段，且仓库尚无产品语义 token 注册设施；命中高亮未实现，提前加 token 无消费方 |
+| C5 产品语义 token（含 `search.match.background`）+ 命中高亮 | ✅ 已实现（2026-09-12） | `crates/settings/src/product_tokens.rs`（`ProductTokens: Global`、`get`、`apply_from_str` / `apply_from_path`；缺失角色回退最接近的标准字段）+ `assets/themes/product-tokens.json`（明暗各 7 角色：`activity_bar.*` / `title_bar.slot.background` / `quick_open.group.header` / `search.match.background`）；`crates/app/src/main.rs::attach_product_tokens`（启动 + `ThemeRegistry::watch_dir` 热更新）；消费方 `view.rs`（活动栏背景+激活条、标题栏挖空槽、Quick Open 分组头）、`panels.rs::nav_name_highlight`（命中底色：连接行 + 对象行）；单测 `product_tokens::tests::parses_roles_and_tolerates_missing` |
 | C8 元数据缓存键切身份指纹 | ⚙️ engine 侧部分落地 | `engine::persistence::metadata_identity`（纯函数 + 测试，已提交 `fd1ffdb`）**尚未接线**（由连接侧任务推进） |
 
 **C3 首版说明（已知限制）**

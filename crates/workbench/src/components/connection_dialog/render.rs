@@ -115,9 +115,11 @@ impl ConnectionDialogState {
 
         // 项目会话变更检测（每帧执行，开销仅一次借用比较）：对话框打开期间「＋ 新增项目」
         // 或外部切换项目后，项目下拉选项与选中项必须跟上新会话。
-        let session_now = shared.project.borrow().as_ref().map(|p| {
-            (p.name.clone(), p.root.to_string_lossy().to_string())
-        });
+        let session_now = shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|p| (p.name.clone(), p.root.to_string_lossy().to_string()));
         if *self.session_project.borrow() != session_now {
             *self.session_project.borrow_mut() = session_now.clone();
             self.refresh_project_options(window, cx);
@@ -173,7 +175,9 @@ impl ConnectionDialogState {
         // 输入占位（InputState 构造后设置；Input 组件本身无 placeholder 方法）。
         // 地址占位**不在这里固定**：它随当前驱动推导（见 builder 内的 `address_placeholder`），
         // 否则选了 SQLite 还会提示 mysql:// 示例（真机反馈）。
-        name.update(cx, |s, cx| s.set_placeholder("名称（如 生产 PG）", window, cx));
+        name.update(cx, |s, cx| {
+            s.set_placeholder("名称（如 生产 PG）", window, cx)
+        });
         remark.update(cx, |s, cx| s.set_placeholder("备注（可选）", window, cx));
         driver_filter.update(cx, |s, cx| s.set_placeholder("搜索类型…", window, cx));
         tags_input.update(cx, |s, cx| {
@@ -195,27 +199,30 @@ impl ConnectionDialogState {
         });
         host_input.update(cx, |s, cx| s.set_placeholder("127.0.0.1", window, cx));
         port_input.update(cx, |s, cx| s.set_placeholder("3306", window, cx));
-        db_input.update(cx, |s, cx| s.set_placeholder("可选，留空表示全部", window, cx));
+        db_input.update(cx, |s, cx| {
+            s.set_placeholder("可选，留空表示全部", window, cx)
+        });
 
         // 测试连接（block_on，与 workbench 现有服务调用模式一致）。
         // `project_root` 由调用处从项目栏读取：P_/GP_ 前缀的认证 / 网络档案需要它才能解析。
-        let run_test = move |input: DataSourceSaveInput, project_root: Option<String>| -> (bool, String) {
-            let service = match DataSourceService::global() {
-                Ok(s) => s,
-                Err(e) => return (false, format!("服务未就绪: {e}")),
+        let run_test =
+            move |input: DataSourceSaveInput, project_root: Option<String>| -> (bool, String) {
+                let service = match DataSourceService::global() {
+                    Ok(s) => s,
+                    Err(e) => return (false, format!("服务未就绪: {e}")),
+                };
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => return (false, format!("运行时错误: {e}")),
+                };
+                let t = rt.block_on(service.test(&input, project_root.as_deref()));
+                // 反馈拼上探测到的服务器版本（原型："成功（版本＋延迟）"）。
+                let detail = match t.version.as_deref() {
+                    Some(v) => format!("{} · 版本 {}", t.message, v),
+                    None => t.message,
+                };
+                (t.success, detail)
             };
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => return (false, format!("运行时错误: {e}")),
-            };
-            let t = rt.block_on(service.test(&input, project_root.as_deref()));
-            // 反馈拼上探测到的服务器版本（原型："成功（版本＋延迟）"）。
-            let detail = match t.version.as_deref() {
-                Some(v) => format!("{} · 版本 {}", t.message, v),
-                None => t.message,
-            };
-            (t.success, detail)
-        };
 
         window.open_dialog(cx, move |dialog, window, cx| {
             let scope_sel = scope.read(cx).selected_value().cloned().unwrap_or_default().to_string();
@@ -1355,6 +1362,12 @@ impl ConnectionDialogState {
                 }
             }
             // ---- 暂存列表（多连接连续编辑；原型设计 §2.2）：草稿 + 已保存条目 ----
+            // 两类条目**分区展示**（小标题分隔）：
+            // - 草稿（未保存）：本次会话新建 / 恢复自 `connection_drafts` 的未落库条目；
+            // - 已保存连接：打开对话框时由 `staging_merge_saved` 从库（全局 + 当前项目）
+            //   并入，目的是在一个对话框里连续编辑多条已保存连接（它们**不**写进草稿表）。
+            // 不分区时用户会误以为“暂存里怎么读到了库中的连接”——分区把来源说清楚。
+            //
             // 当前条目（光标位）的徽标与名称取**正在编辑的表单**，而不是已写回的快照：
             // 否则“刚从 MySQL 切到 SQLite”时表单已变、条目还显示 mysql 图标（真机反馈）。
             // 性能（§6 决策 #73）：不再每帧克隆整张草稿表与整份 `ConnectionDraft`——
@@ -1363,6 +1376,7 @@ impl ConnectionDialogState {
             let drafts_len = drafts_list.borrow().len();
             let live_now = state.live_entry_view(cursor_now, cx);
             let mut staging_list = div().v_flex().gap(rems(0.25));
+            let mut prev_saved: Option<bool> = None;
             for i in 0..drafts_len {
                 let (draft_type_id, draft_name, saved_id) = {
                     let drafts = drafts_list.borrow();
@@ -1372,6 +1386,21 @@ impl ConnectionDialogState {
                 let on = i == cursor_now;
                 let live = if on { live_now.as_ref() } else { None };
                 let is_saved = saved_id.is_some();
+                // 分区标题：在类别切换处插一行小标题（草稿段 / 已保存段）。
+                if prev_saved != Some(is_saved) {
+                    prev_saved = Some(is_saved);
+                    staging_list = staging_list.child(
+                        div()
+                            .text_xs()
+                            .px(rems(0.5))
+                            .text_color(theme.colors.muted_foreground)
+                            .child(if is_saved {
+                                "已保存连接（点条目可编辑）"
+                            } else {
+                                "草稿（未保存）"
+                            }),
+                    );
+                }
                 // 显示用字段：当前条目用 live（表单），其余用快照。
                 let display_type_id =
                     staging_display_type_id(&draft_type_id, live.map(|l| l.type_id.as_str()));

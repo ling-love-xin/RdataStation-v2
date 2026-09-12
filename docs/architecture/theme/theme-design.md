@@ -135,7 +135,7 @@
 ### 5.1 主题文件
 
 - `assets/themes/rds-theme.json`（ThemeSet 格式，含 `RDS Light` / `RDS Dark`），标准 token 对齐 0.6 `ThemeConfigColors`
-- 扩展产品语义角色（活动栏背景 / 挖空槽背景 / 活动栏激活条等）在主题 JSON 的**扩展节**定义（若 0.6 schema 拒绝未知字段，则落独立 `assets/themes/product-tokens.json`，实施时按 schema 确认，二者都保证色值只存在于 JSON 资产）
+- 扩展产品语义角色（活动栏背景 / 挖空槽背景 / 活动栏激活条等）**已定：落独立 `assets/themes/product-tokens.json`**（0.6 schema 不接受 `rds-theme.json` 里的未知字段，已实测）；色值仍只存在于 JSON 资产，代码零 hex
 
 ### 5.2 加载
 
@@ -157,9 +157,10 @@
 | `activity_bar.icon.inactive` | `#858585` | `#616161` | 未激活图标色 |
 | `title_bar.slot.background` | `#252526` | `#F3F3F3` | 标题栏项目挖空槽 |
 | `quick_open.group.header` | `#3A3D41` | `#ECECEC` | Quick Open 分组头 |
+| `search.match.background` | `#4A3F00` | `#FFF3C4` | 搜索命中文本底（数据源导航连接行 / 对象行） |
 
-- 注册：app 加载主题后通过 `Theme::semantic_tokens()` / `apply_semantic_tokens()`（或 `SemanticThemeTokens`）把上述角色写入主题系统
-- 消费：组件从 `cx.theme()` 读取（如 `cx.theme().semantic_tokens().activity_bar_background`），**代码零 hex**
+- **已落地**（2026-09-12）：资产 `assets/themes/product-tokens.json`（明暗各 7 角色）；加载设施 `crates/settings/src/product_tokens.rs`（`ProductTokens: Global`、`get(cx)`、`apply_from_str` / `apply_from_path`，缺角色回退语义最接近的标准字段）；app 启动 + `ThemeRegistry::watch_dir` 热更新（`crates/app/src/main.rs::attach_product_tokens`）
+- 消费：`settings::product_tokens::get(cx).<role>(cx.theme())`（如 `activity_bar_background`）——**代码零 hex**；消费方：`view.rs`（活动栏背景 / 激活条 / 标题栏挖空槽 / Quick Open 分组头）、`panels.rs::nav_name_highlight`（命中底色）
 - 状态栏背景：`theme.colors.primary` 派生（已有 token，无需新增）
 
 ### 5.5 软件图标
@@ -176,9 +177,9 @@
 
 | 设计决策 | 实现位置 |
 | --- | --- |
-| 主题资产（明暗 token + 产品语义角色） | `assets/themes/rds-theme.json`（+ product-tokens.json 视 schema 而定） |
-| 主题加载（watch_dir 热更新） | `crates/app/src/main.rs` |
+| 主题资产（明暗 token + 产品语义角色） | `assets/themes/rds-theme.json` + `assets/themes/product-tokens.json`（独立资产，已落地） |
+| 主题加载（watch_dir 热更新） | `crates/app/src/main.rs`（`load_theme_assets` + `attach_product_tokens`） |
 | 主题切换命令（外观节） | `crates/settings`（`commands.rs` / `model.rs` 外观节） |
-| 语义 token 注册与读取 | app 启动（注册）+ 各组件 `cx.theme().semantic_tokens()` 消费 |
+| 产品语义 token 加载与读取 | `crates/settings/src/product_tokens.rs`（`ProductTokens: Global`）+ 各组件 `settings::product_tokens::get(cx).<role>(theme)` 消费 |
 | 图标资产 | `assets/icons/32x32.png`（明亮版）/ 暗黑版待补 |
 | 色卡预览 | `docs/architecture/theme/theme-preview.html` |

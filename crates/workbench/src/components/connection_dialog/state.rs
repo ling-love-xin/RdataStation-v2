@@ -267,8 +267,9 @@ impl ConnectionDialogState {
         items.push(ProjectItem::open_folder());
         items.push(ProjectItem::new_project());
         *self.project_options.borrow_mut() = options;
-        self.project_sel
-            .update(cx, |s, cx| s.set_items(SearchableVec::new(items), window, cx));
+        self.project_sel.update(cx, |s, cx| {
+            s.set_items(SearchableVec::new(items), window, cx)
+        });
     }
 
     /// 项目根路径 → 下拉选项 label（命中则返回；否则 None，清空选中）。
@@ -348,12 +349,7 @@ impl ConnectionDialogState {
     }
 
     /// 按项目路径同步项目下拉选中（命中 → 选中；未命中 → 清空）。
-    pub(crate) fn sync_project_selection(
-        &self,
-        path: &str,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    pub(crate) fn sync_project_selection(&self, path: &str, window: &mut Window, cx: &mut App) {
         match self.project_label_for(path) {
             Some(label) => self.set_project_value(&label, window, cx),
             None => self.set_project_value("", window, cx),
@@ -374,7 +370,9 @@ impl ConnectionDialogState {
         let rows: Vec<(String, String, String)> = (|| {
             let service = DataSourceService::global().ok()?;
             let rt = tokio::runtime::Runtime::new().ok()?;
-            let policies = rt.block_on(service.list_environment_policies_by_name(&name)).ok()?;
+            let policies = rt
+                .block_on(service.list_environment_policies_by_name(&name))
+                .ok()?;
             Some(
                 policies
                     .into_iter()
@@ -445,8 +443,9 @@ impl ConnectionDialogState {
             .map(|v| methods.iter().any(|m| m == v))
             .unwrap_or(false);
         let items: Vec<SharedString> = methods.iter().map(SharedString::from).collect();
-        self.auth_method
-            .update(cx, |s, cx| s.set_items(SearchableVec::new(items), window, cx));
+        self.auth_method.update(cx, |s, cx| {
+            s.set_items(SearchableVec::new(items), window, cx)
+        });
         if !keep {
             // 未选 / 失效：默认第一个；驱动未声明则清空（UI 显示禁用占位）。
             let next = methods.first().cloned().unwrap_or_default();
@@ -496,11 +495,26 @@ impl ConnectionDialogState {
             .parent()
             .filter(|p| p.is_dir())
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
         let type_id = self.selected_type.borrow().clone();
-        let suggested = match type_id.as_str() {
-            "duckdb" => "new_database.duckdb",
-            _ => "new_database.db",
+        // 建议文件名按**驱动 id** 给（与 `is_file_db` 同一来源，避免“类型 / 驱动两套事实”
+        // 在文件型下打架：DuckDB → `.duckdb`，SQLite / 其余 → `.db`）。
+        let driver_value = self
+            .driver
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default()
+            .to_string();
+        let driver_id = find_driver_by_value(&self.drivers.borrow(), &driver_value)
+            .map(|d| d.id.clone())
+            .unwrap_or_default();
+        let suggested = if driver_id.eq_ignore_ascii_case("duckdb") || type_id == "duckdb" {
+            "new_database.duckdb"
+        } else {
+            "new_database.db"
         };
         if create_new {
             let receiver = cx.prompt_for_new_path(&start_dir, Some(suggested));
@@ -510,7 +524,16 @@ impl ConnectionDialogState {
                         Ok(Ok(Some(path))) => {
                             let value = path.to_string_lossy().to_string();
                             if path.exists() {
-                                (format!("文件已存在，直接引用（未清空）：{value}"), true, Some(value))
+                                // 「新建」不接受已存在文件：两个入口语义必须分离，否则用户看到
+                                // “新建却引用了旧库”会以为是打开功能（真机反馈）。地址保持不变，
+                                // 也**不碰**原文件（避免误损）。
+                                (
+                                    format!(
+                                        "该文件已存在，未创建：{value}；请换一个文件名，或用「打开文件…」引用它"
+                                    ),
+                                    false,
+                                    None,
+                                )
                             } else {
                                 match std::fs::File::create(&path) {
                                     Ok(_) => (format!("已新建数据库文件：{value}"), true, Some(value)),
@@ -546,7 +569,9 @@ impl ConnectionDialogState {
                         Ok(Err(e)) => (format!("打开文件对话框失败：{e}"), false, None),
                         Err(_) => ("打开文件对话框无响应".to_string(), false, None),
                     };
-                    apply_file_pick(&target, &result, &result_ok, value, message, ok, &entity, cx);
+                    apply_file_pick(
+                        &target, &result, &result_ok, value, message, ok, &entity, cx,
+                    );
                 })
                 .detach();
         }
@@ -605,8 +630,9 @@ impl ConnectionDialogState {
             .as_ref()
             .map(|v| names.iter().any(|n| n.as_ref() == v.as_ref()))
             .unwrap_or(true);
-        self.driver
-            .update(cx, |s, cx| s.set_items(SearchableVec::new(names), window, cx));
+        self.driver.update(cx, |s, cx| {
+            s.set_items(SearchableVec::new(names), window, cx)
+        });
         if !still_valid {
             set_select_value(&self.driver, "", window, cx);
         }
@@ -838,7 +864,6 @@ impl ConnectionDialogState {
             }
         }
     }
-
 }
 
 /// 由受控 Entity 重建轻量视图（测试/保存按钮复用 collect）。
@@ -1118,11 +1143,7 @@ impl ClonedDialogState {
                     .cloned()
                     .unwrap_or_default()
                     .to_string();
-                if v.trim().is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
+                if v.trim().is_empty() { None } else { Some(v) }
             },
             network_config_id,
             driver_properties,

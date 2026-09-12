@@ -114,8 +114,14 @@ pub const PANEL_PADDING: f32 = 0.5;
 pub const HAIRLINE: Pixels = px(1.);
 /// 激活项侧条宽度（2px，左栏在左、右栏在右）
 pub const ACTIVITY_ACCENT_BAR: Pixels = px(2.);
+/// 属性面板最小宽度（13.75rem = 220px，可拖拽下限）
+pub const PROPERTY_PANEL_MIN_WIDTH: f32 = 13.75;
+/// 属性面板最大宽度（47.5rem = 760px，可拖拽上限）
+pub const PROPERTY_PANEL_MAX_WIDTH: f32 = 47.5;
 /// 树 / 列表激活项侧条宽度
 pub const TREE_ACTIVE_BAR: Pixels = px(2.);
+/// 导航分组头左侧色条宽度（2px；与激活条同宽，语义独立）
+pub const NAV_GROUP_BAR_WIDTH: Pixels = px(2.);
 
 // ===== 连接对话框（M3）专用尺寸（rem 基准；登记在此，视图只引用） =====
 //

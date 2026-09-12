@@ -161,11 +161,15 @@ pub struct WorkbenchView {
 
 impl WorkbenchView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        // Round 21：从全局系统库加载真实连接（失败降级为空列表 + 提示）。
-        let (connections, notice) = crate::services::workspace_loader::load_persisted_connections();
+        // P0：先解析当前项目会话（环境变量 → 最近项目 → 空态），供列表作用域 / 标题栏 /
+        // 草稿箱共用；**连接列表必须按作用域加载**（全局 + 项目 P_/GP_），否则启动后
+        // 只看到全局连接，要等重新打开项目才出现项目侧连接。
+        let project = crate::services::project_session::resolve();
+        let project_root = project.as_ref().map(|p| p.root.clone());
+        let (connections, notice) =
+            crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
         let shared = Shared::with_connections(connections, notice);
-        // P0：解析当前项目会话（环境变量 → 最近项目 → 空态），供标题栏/草稿箱/连接共用。
-        *shared.project.borrow_mut() = crate::services::project_session::resolve();
+        *shared.project.borrow_mut() = project;
         // M1：排序偏好（直读 settings.json，无需 cx）与首屏项目列表（无项目时）都在构造期完成，
         // 避免在 `render` 里做 I/O（GPUI-kit 编码指南：副作用不得放在 render）。
         {
@@ -252,6 +256,12 @@ impl WorkbenchView {
                         editor.update(cx, |_, cx| cx.notify());
                     }
                 }
+                SidebarEvent::NewConnectionRequest => {
+                    // 请求已写入 shared.new_connection_request；通知编辑区渲染消费。
+                    if let Some(editor) = &this.editor {
+                        editor.update(cx, |_, cx| cx.notify());
+                    }
+                }
                 SidebarEvent::EditorSqlRequest => {
                     // SQL 已写入 shared.editor_set；通知编辑区渲染消费。
                     if let Some(editor) = &this.editor {
@@ -298,7 +308,12 @@ impl WorkbenchView {
                         cx,
                     );
                     // 起步宽度 240px（= 15rem 基准，随界面缩放；layout-design §2.3，用户拖拽可调）。
-                    area.set_dock_size(DockPlacement::Left, cx.theme().font_size * ui::LEFT_DOCK_WIDTH, window, cx);
+                    area.set_dock_size(
+                        DockPlacement::Left,
+                        cx.theme().font_size * ui::LEFT_DOCK_WIDTH,
+                        window,
+                        cx,
+                    );
                 } else if !area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
                 }
@@ -312,7 +327,12 @@ impl WorkbenchView {
                         window,
                         cx,
                     );
-                    area.set_dock_size(DockPlacement::Left, cx.theme().font_size * ui::LEFT_DOCK_WIDTH, window, cx);
+                    area.set_dock_size(
+                        DockPlacement::Left,
+                        cx.theme().font_size * ui::LEFT_DOCK_WIDTH,
+                        window,
+                        cx,
+                    );
                 }
                 if area.is_dock_open(DockPlacement::Left) {
                     area.toggle_dock(DockPlacement::Left, window, cx);
@@ -577,7 +597,12 @@ impl WorkbenchView {
         let shared = self.shared.clone();
         bar = bar
             .child(div().flex_1())
-            .child(div().w(rems(ui::ACTIVITY_ICON_SIZE)).h(ui::HAIRLINE).bg(theme.colors.border))
+            .child(
+                div()
+                    .w(rems(ui::ACTIVITY_ICON_SIZE))
+                    .h(ui::HAIRLINE)
+                    .bg(theme.colors.border),
+            )
             .child(
                 Button::new("left-settings")
                     .icon(IconName::Settings)
@@ -652,7 +677,12 @@ impl WorkbenchView {
         let shared = self.shared.clone();
         bar = bar
             .child(div().flex_1())
-            .child(div().w(rems(ui::ACTIVITY_ICON_SIZE)).h(ui::HAIRLINE).bg(theme.colors.border))
+            .child(
+                div()
+                    .w(rems(ui::ACTIVITY_ICON_SIZE))
+                    .h(ui::HAIRLINE)
+                    .bg(theme.colors.border),
+            )
             .child(
                 Button::new("right-settings")
                     .icon(IconName::Settings)

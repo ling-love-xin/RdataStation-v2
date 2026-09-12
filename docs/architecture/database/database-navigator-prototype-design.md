@@ -95,6 +95,8 @@
 └──────────────────────────────────────────────┘
 ```
 
+> 实现状态（2026-09-12）：面板头 `[＋][🗂＋][⟳][断开][⋯]` 已全部落地——`＋` 新建数据源、`🗂＋` 新建分组、`⟳` 刷新当前选中连接（§4.2「单连接 = 工具栏 ⟳」）、`断开` 断开当前选中连接（仅已连接时可用，缓存保留）、`⋯` 更多（刷新全部 / 缓存管理）。
+
 ### 2.1 来源筛选（chips，方案 A）
 
 - 面板头下方一行 chips：**全部 / 项目 / 全局 / 共享**，按来源过滤连接（默认「全部」）。
@@ -436,6 +438,8 @@ flowchart TD
 | 分组一级视图 / 行内归组 | `panels.rs::{render_nav_tree, render_group_header, render_org_editor}` |
 | 右键菜单（连接 / 对象 / 分组） | `panels.rs` 的 `ContextMenuExt::context_menu`（`gpui_kit::component::menu`） |
 | 生成 SELECT → 编辑区 | `Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（`panels.rs` / `view.rs` 消费） |
+| 新建数据源入口（面板头 `＋` / 空态按钮） | `panels.rs::render_database_nav` / `render_nav_tree`（置位 `Shared::new_connection_request` + `SidebarEvent::NewConnectionRequest`），`EditorPanel::render` 消费并 `request_new_connection` |
+| 面板头 `⟳ 刷新` / `断开当前连接` | `panels.rs::render_database_nav`（`Button::new("nav-refresh")` / `Button::new("nav-disconnect")`）+ `SidebarPanel::nav_current_connection`（选中节点为连接根）；动作走 `refresh_node` / `toggle_connection`，未选中 / 未连接时 `disabled` |
 | 大 schema 分页（「加载更多」） | `panels.rs::{render_more_row, folder_limit}` + `ui.rs::NAV_FOLDER_PAGE_SIZE` |
 | 快捷键（Ctrl+F / ↑↓ / →← / Enter·F4） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}`；`panels.rs::{nav_move, nav_order, nav_open_properties}` |
 | 导航 L2 缓存（cache-aside） | `crates/database/src/cache.rs`（`NavCache`）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；底层 `engine::persistence::MetadataCacheOps` |
