@@ -87,9 +87,25 @@ graph LR
 
 校验错误统一存 `ProjectUiState::dialog_error`：对话框 builder 每帧重读，提交失败时写入并 `notify`，无需重建 builder 闭包状态。
 
-## 5. 窗口测试方案
+### 位置字段：系统目录选择器
 
-位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），9 项 GPUI headless 窗口测试。
+原型的「位置 = 目录选择 + 预览 `位置/名称`」由三件组成：
+
+| 件 | 实现 |
+| --- | --- |
+| `浏览…` 按钮 | `pick_directory`：`App::prompt_for_paths(files:false, directories:true, multiple:false)` → `Window::spawn` 等 oneshot → `AsyncWindowContext::update` 拿 `&mut Window` 回填 `InputState::set_value`（取消则保持原值） |
+| 目录输入行 | `directory_row`：输入框（`flex_1`）+ 浏览按钮，新建 / 打开 / 重定位共用 |
+| 目标预览 | `target_preview`：新建对话框展示 `目标：位置/名称`，位置或名称为空时给占位提示 |
+
+要点：`set_value` 需要 `&mut Window`，而异步回调里只有 `AsyncApp`，因此必须走 `Window::spawn`（而非 `Context::spawn`）+ `AsyncWindowContext::update`。测试用 `TestAppContext::simulate_path_prompt_response` 模拟用户选择，注意它**应答已入队的请求**，所以要先用 `pick_directory` 发起、再模拟响应。
+
+## 5. 远程项目（范围说明）
+
+远程项目（`ProjectPath::Remote { url, project_id }`，DuckLake）**只在模型层预留**：`models.rs` 有类型与 `remote()` 构造器，v1 蓝本有对应命令分支；但 `CreateProjectInput` / `ProjectStore::create` / `inspect_target` 全部只处理本地路径，本期明确不做（`project-dev-plan.md`「不做」清单）。新建对话框因此用一行 muted 文案明示范围，避免用户把 URL 填进「位置」。
+
+## 6. 窗口测试方案
+
+位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），11 项 GPUI headless 窗口测试。
 
 ### 骨架
 
@@ -114,6 +130,8 @@ graph LR
 | `cycle_sort_persists_through_host_callback` | 4：排序循环 + 宿主持久化回调 + 重绘请求 |
 | `lock_busy_dialog_offers_escape_hatches` | 11：锁占用 `AlertDialog` 打开且不改会话 |
 | `cards_and_menus_construct_for_all_states` | 8 / 6：卡片三分支（活跃 / 失效重定位 / 已移除恢复 + 固定）与更多菜单 |
+| `browse_fills_location_from_system_picker` | 1：浏览目录 → 回填位置输入框（并断言选择器选项为「仅目录 / 单选」） |
+| `browse_cancel_keeps_location` | 1：取消选择器 → 位置输入框保持原值 |
 
 不覆盖：真实建库与迁移（`crates/project/tests/project_store.rs` 集成测试）、双实例并发（手动清单）、主题视觉（`theme-preview.html` 基准）。
 
@@ -122,7 +140,7 @@ graph LR
 1. **`#[test]` 自相残杀**：gpui 的 `test` 宏展开成裸 `#[test]`。测试模块若 `use gpui_kit::*`（或 `use super::*` 间接引入它），`#[test]` 会解析到 gpui 的宏自身，无限递归 —— 报错 `recursion limit reached while expanding #[test]`，且提高 `recursion_limit` 只会让需求跟着翻倍。解法：测试模块显式列举依赖（含 `AppContext as _` / `StyledExt as _` / `WindowExt as _` 等 trait）。
 2. **对话框要有 `Root`**：`window.open_dialog` 依赖窗口根为 `component::Root`；且宿主视图的 `render` 必须自己挂 `Root::render_dialog_layer(window, cx)`，否则对话框存在但不渲染。断言用 `window.has_active_dialog(cx)`。
 
-## 6. 实现位置映射
+## 7. 实现位置映射
 
 | 设计决策 | 代码文件 |
 | --- | --- |
@@ -134,8 +152,9 @@ graph LR
 | 标题栏项目槽 + 菜单 Popover | `crates/workbench/src/view.rs`（`render_title_bar`） |
 | 窗口测试 | `crates/project/src/ui/tests.rs` |
 | 视图测试规范 | `.agents/skills/gpui-kit-dev/SKILL.md`（「窗口测试」一节） |
+| 位置字段（系统目录选择器 / 目标预览） | `crates/project/src/ui.rs`（`pick_directory` / `directory_row` / `target_preview`） |
 
-## 7. 验证方式
+## 8. 验证方式
 
 ```bash
 cargo check --workspace --all-targets          # 零告警

@@ -340,15 +340,17 @@ fn browse_fills_location_from_system_picker(cx: &mut TestAppContext) {
     let host = test_host(&rec);
     let picked = temp_root("browse-pick");
     let expected = picked.to_string_lossy().to_string();
-    // 模拟系统目录选择器：只允许选目录、单选，返回一个路径。
+
+    let (host, inputs, cx) = open_harness(cx, host);
+    cx.update(|window, cx| open_create_dialog(&host, &inputs, window, cx));
+
+    // 「浏览」先向平台发起目录选择请求，再模拟用户响应（只允许选目录、单选）。
+    cx.update(|window, cx| pick_directory(inputs.create_location.clone(), window, cx));
+    assert!(cx.did_prompt_for_paths(), "应已打开系统目录选择器");
     cx.simulate_path_prompt_response(move |options| {
         assert!(options.directories && !options.files && !options.multiple);
         Some(vec![picked.clone()])
     });
-
-    let (host, inputs, cx) = open_harness(cx, host);
-    cx.update(|window, cx| open_create_dialog(&host, &inputs, window, cx));
-    cx.update(|window, cx| pick_directory(inputs.create_location.clone(), window, cx));
     cx.run_until_parked();
 
     let value = cx.update(|_, cx| inputs.create_location.read(cx).value().to_string());
@@ -360,13 +362,14 @@ fn browse_cancel_keeps_location(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = Rc::new(Recorder::default());
     let host = test_host(&rec);
-    // 取消（返回 `None`）时不改输入框。
-    cx.simulate_path_prompt_response(|_| None);
 
     let (host, inputs, cx) = open_harness(cx, host);
     cx.update(|window, cx| open_create_dialog(&host, &inputs, window, cx));
     let before = cx.update(|_, cx| inputs.create_location.read(cx).value().to_string());
+
+    // 取消（返回 `None`）时不改输入框。
     cx.update(|window, cx| pick_directory(inputs.create_location.clone(), window, cx));
+    cx.simulate_path_prompt_response(|_| None);
     cx.run_until_parked();
     let after = cx.update(|_, cx| inputs.create_location.read(cx).value().to_string());
 

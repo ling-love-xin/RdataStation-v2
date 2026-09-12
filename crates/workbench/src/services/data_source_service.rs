@@ -610,7 +610,12 @@ fn cleanup_connection_org(
 }
 
 /// 构建有效 URL：URL 无凭据但单独提供 username 时注入 `user[:pass]@`。
+///
+/// 文件型（SQLite/DuckDB）没有凭据语义：地址就是本地路径，原样返回（只规范化前缀）。
 fn build_effective_url(input: &DataSourceSaveInput) -> String {
+    if is_file_db_driver(&input.db_type) {
+        return normalize_file_db_path(&input.db_type, &input.url);
+    }
     let mut url = input.url.clone();
     if url.contains('@') {
         return url;
@@ -659,16 +664,50 @@ async fn open_project_store(project_path: &str) -> Result<ProjectConnectionStore
     Ok(ProjectConnectionStore::new(Arc::new(db)))
 }
 
-/// 从 URL 解析 host / port / database（文件型返回 None）。
-/// 从连接 URL 解析（主机 / 端口 / 数据库）；文件型库返回全 None。
+/// 内置文件型驱动 id（与种子目录的 `drivers.is_file = 1` 一致）。
 ///
-/// 供对话框（常规 Tab 只读摘要）与服务层共用，保证展示与落库同源。
+/// 插件驱动落地后此判定应改为读驱动目录（`drivers.is_file`）；当前只有内置四种驱动，
+/// 且服务层纯函数拿不到目录快照，故先用 id 字典（注释即约束，改动点只此一处）。
+pub fn is_file_db_driver(driver_id: &str) -> bool {
+    matches!(driver_id, "sqlite" | "duckdb")
+}
+
+/// 文件型地址规范化：用户输入可能是裸路径 / `sqlite://path` / `sqlite:///C:/x.db`，
+/// 库内 `database` 统一存**裸路径**（引擎按 `{driver}://{path}` 还原连接 URL）。
+///
+/// `sqlite:///C:/x.db` 会留下盘符前的多余前导斜杠（Windows 上会被当成相对/错误路径），
+/// 这里去掉它；Unix 绝对路径（`/data/x.db`）保持原样。
+pub fn normalize_file_db_path(driver_id: &str, url: &str) -> String {
+    let trimmed = url.trim();
+    let body = trimmed
+        .strip_prefix(&format!("{driver_id}://"))
+        .or_else(|| trimmed.split_once("://").map(|(_, rest)| rest))
+        .unwrap_or(trimmed);
+    let bytes = body.as_bytes();
+    if bytes.first() == Some(&b'/')
+        && bytes.len() > 2
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+    {
+        return body[1..].to_string();
+    }
+    body.to_string()
+}
+
+/// 从连接 URL 解析（主机 / 端口 / 数据库）。
+///
+/// `db_type` 传**驱动 id**（引擎 registry key）：文件型驱动（SQLite/DuckDB）返回
+/// `(None, None, Some(裸路径))`——路径必须落到 `database`，否则项目侧连接回读时地址丢失
+/// （引擎 `build_connection_url` 也只认 `database`/`host`）。
+///
+/// 供对话框（常规 Tab 摘要）与服务层共用，保证展示与落库同源。
 pub fn parse_url_host_port_db(
     db_type: &str,
     url: &str,
 ) -> (Option<String>, Option<i32>, Option<String>) {
-    if matches!(db_type, "sqlite" | "duckdb") {
-        return (None, None, None);
+    if is_file_db_driver(db_type) {
+        let path = normalize_file_db_path(db_type, url);
+        return (None, None, if path.is_empty() { None } else { Some(path) });
     }
     let rest = url.split("://").nth(1).unwrap_or(url);
     let (authority, database) = match rest.find('/') {
@@ -812,6 +851,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_build_effective_url_file_db_stays_bare_path() {
+        // 文件型：不注入凭据（用户名/密码对文件库无意义），只规范化前缀。
+        let mut input = DataSourceSaveInput::new("a", "sqlite", "sqlite:///C:/data/app.db");
+        input.username = Some("root".into());
+        input.password = Some("pwd".into());
+        assert_eq!(build_effective_url(&input), "C:/data/app.db");
+        let input = DataSourceSaveInput::new("a", "duckdb", ":memory:");
+        assert_eq!(build_effective_url(&input), ":memory:");
+    }
+
+    #[test]
+    fn test_normalize_file_db_path_variants() {
+        // 裸路径 / 带 scheme / 三斜杠（Windows 盘符）/ Unix 绝对路径。
+        for raw in ["C:/data/a.db", "sqlite://C:/data/a.db", "sqlite:///C:/data/a.db"] {
+            assert_eq!(normalize_file_db_path("sqlite", raw), "C:/data/a.db", "raw={raw}");
+        }
+        assert_eq!(normalize_file_db_path("sqlite", "sqlite:///tmp/a.db"), "/tmp/a.db");
+        assert_eq!(normalize_file_db_path("sqlite", "  "), "");
+    }
+
+    #[test]
     fn test_build_effective_url_inject() {
         let mut input = DataSourceSaveInput::new("a", "mysql", "mysql://10.0.0.1:3306/db");
         input.username = Some("root".into());
@@ -835,10 +895,17 @@ mod tests {
         assert_eq!(p, Some(5432));
         assert_eq!(d.as_deref(), Some("mydb"));
 
-        let (h, p, d) = parse_url_host_port_db("sqlite", "sqlite:///data/x.db");
+        // 文件型：路径必须落到 database（否则项目侧连接回读时地址丢失）。
+        let (h, p, d) = parse_url_host_port_db("sqlite", "C:/data/app.db");
         assert_eq!(h, None);
         assert_eq!(p, None);
-        assert_eq!(d, None);
+        assert_eq!(d.as_deref(), Some("C:/data/app.db"));
+        let (_, _, d) = parse_url_host_port_db("sqlite", "sqlite:///C:/data/app.db");
+        assert_eq!(d.as_deref(), Some("C:/data/app.db"), "盘符前的多余斜杠应去除");
+        let (_, _, d) = parse_url_host_port_db("duckdb", "duckdb:///data/a.duckdb");
+        assert_eq!(d.as_deref(), Some("/data/a.duckdb"), "Unix 绝对路径保持原样");
+        let (_, _, d) = parse_url_host_port_db("duckdb", "  ");
+        assert_eq!(d, None, "空地址不造空 database");
     }
 
     #[test]

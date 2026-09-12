@@ -100,7 +100,8 @@ pub(crate) fn driver_short_name(name: &str) -> String {
     for (open, close) in [('(', ')'), ('（', '）')] {
         if let Some(start) = trimmed.find(open) {
             if let Some(rel_end) = trimmed[start + open.len_utf8()..].find(close) {
-                let inner = trimmed[start + open.len_utf8()..start + open.len_utf8() + rel_end].trim();
+                let inner =
+                    trimmed[start + open.len_utf8()..start + open.len_utf8() + rel_end].trim();
                 if !inner.is_empty() {
                     return inner.to_string();
                 }
@@ -271,43 +272,70 @@ pub(crate) fn type_badge(types: &[DataSourceType], type_id: &str) -> Option<(Str
     })
 }
 
-/// 原型 `sec-card`：section 卡片（边框 + 圆角 + 图标标题 + 内容）。
-pub(crate) fn sec_card(
+/// 分组标题行（单列大纲，可折叠）：chevron + 图标 + 标题。
+///
+/// 与卡片（`sec-card`）的取舍：卡片并行会在宽度不足时换行、卡高不齐、长值被挤；
+/// 单列大纲只有一列宽度，标题行同时承担“分组”与“折叠手柄”（真机反馈：卡片式输入框几乎看不见）。
+pub(crate) fn section_header(
     theme: &Theme,
     icon: Icon,
     icon_color: Hsla,
-    title: &'static str,
-    body: impl IntoElement,
+    title: &str,
+    collapsed: bool,
 ) -> Div {
     div()
-        .flex_1()
-        .min_w(rems(14.75))
-        .border_1()
-        .border_color(theme.colors.border)
-        .rounded(px(10.))
-        .bg(theme.colors.background)
-        .py(rems(0.75))
-        .px(rems(0.875))
+        .h_flex()
+        .items_center()
+        .gap(rems(GAP_SM))
+        .h(rems(ROW_H))
+        .px(rems(GAP_XS))
+        .rounded(rems(GAP_XS))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.colors.list_hover))
+        .child(
+            lucide(if collapsed {
+                "icons/chevron-right.svg"
+            } else {
+                "icons/chevron-down.svg"
+            })
+            .size(px(14.))
+            .text_color(theme.colors.muted_foreground),
+        )
+        .child(icon.size(px(14.)).text_color(icon_color))
         .child(
             div()
-                .h_flex()
-                .items_center()
-                .gap(rems(0.4375))
-                .mb(rems(0.625))
-                .child(Icon::new(icon).size(px(14.)).text_color(icon_color))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.foreground)
-                        .child(title),
-                ),
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.colors.foreground)
+                .child(title.to_string()),
         )
-        .child(body)
 }
 
-/// 原型 `form-grid` 行：固定标签列（92px）+ 弹性值列。
-pub(crate) fn grid_row(theme: &Theme, label: &'static str, value: impl IntoElement) -> Div {
+/// 大纲分组：标题行（点击折叠）+ 展开时的内容（左缩进与标题对齐）。
+///
+/// `on_toggle` 由调用方提供（需要对话框状态与宿主重绘桥），保持 helper 不依赖状态。
+pub(crate) fn outline_section(
+    theme: &Theme,
+    id: &'static str,
+    icon: Icon,
+    icon_color: Hsla,
+    title: &str,
+    collapsed: bool,
+    on_toggle: impl Fn(&mut Window, &mut App) + 'static,
+    body: Div,
+) -> Div {
+    let header = section_header(theme, icon, icon_color, title, collapsed)
+        .id(ElementId::Name(SharedString::from(format!("sec-{id}"))))
+        .on_click(move |_, window, cx| on_toggle(window, cx));
+    let mut out = div().w_full().v_flex().gap(rems(GAP_SM)).child(header);
+    if !collapsed {
+        out = out.child(div().w_full().pl(rems(GAP_LG)).child(body));
+    }
+    out
+}
+
+/// 表单行（大纲内）：固定标签列 + 弹性控件列（原 `form-grid`）。
+pub(crate) fn form_row(theme: &Theme, label: &str, value: impl IntoElement) -> Div {
     div()
         .h_flex()
         .items_center()
@@ -318,27 +346,49 @@ pub(crate) fn grid_row(theme: &Theme, label: &'static str, value: impl IntoEleme
                 .flex_shrink_0()
                 .text_xs()
                 .text_color(theme.colors.muted_foreground)
-                .child(label),
+                .child(label.to_string()),
         )
         .child(div().flex_1().min_w(px(0.)).child(value))
 }
 
-/// 原型 `val2`：只读值框（常规 Tab 卡片内的摘要展示）。
-pub(crate) fn val_readonly(theme: &Theme, text: &str) -> Div {
-    let placeholder = text.is_empty() || text == "-";
+/// 只读值行：标签 + **纯文本**值（不用白底白框——底色与卡片同色时会“隐形”）。
+pub(crate) fn text_row(theme: &Theme, label: &str, value: &str) -> Div {
+    let placeholder = value.trim().is_empty() || value == "-";
     div()
-        .border_1()
-        .border_color(theme.colors.border)
-        .rounded(rems(0.375))
-        .bg(theme.colors.background)
-        .px(rems(0.5625))
-        .py(rems(0.25))
+        .h_flex()
+        .items_center()
+        .gap(rems(0.75))
+        .child(
+            div()
+                .w(rems(5.75))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .text_xs()
+                .text_ellipsis()
+                .text_color(if placeholder {
+                    theme.colors.muted_foreground
+                } else {
+                    theme.colors.foreground
+                })
+                .child(value.to_string()),
+        )
+}
+
+/// 提示行（大纲内）：弱化小字，缩进对齐控件列。
+pub(crate) fn hint_line(theme: &Theme, text: &str) -> Div {
+    div()
+        .w_full()
+        .pl(rems(5.75 + 0.75))
         .text_xs()
-        .text_color(if placeholder {
-            theme.colors.muted_foreground
-        } else {
-            theme.colors.foreground
-        })
+        .text_color(theme.colors.muted_foreground)
         .child(text.to_string())
 }
 
@@ -358,14 +408,176 @@ pub(crate) fn reuse_note(theme: &Theme, text: &str) -> Div {
         .child(text.to_string())
 }
 
-/// 重建编辑回读 URL（DataSource 无 url 字段，由 host/port/database 重拼）。
+/// 地址列标签：文件型 = 「地址」（本地文件路径），网络型 = 「URI」
+/// （真机反馈：SQLite 下仍显示 URI 与 mysql 示例，语义与噪声都不对）。
+pub(crate) fn address_label(is_file: bool) -> &'static str {
+    if is_file {
+        "地址"
+    } else {
+        "URI"
+    }
+}
+
+/// 地址输入占位：**随当前驱动推导**（占位是 UI 文案字典，不是业务数据；见架构 §15）。
+///
+/// - 网络型：优先驱动声明的 `url_template`（`{username}` → user 等示例值，端口取声明的默认端口）；
+///   无模板时才退回 `{type_id}://主机:端口/数据库`。
+/// - 文件型：按类型给文件提示（内置 sqlite / duckdb；插件驱动落地后走通用提示）。
+pub(crate) fn address_placeholder(driver: Option<&Driver>, type_id: &str) -> String {
+    if let Some(d) = driver {
+        if d.is_file {
+            return file_path_placeholder(&d.type_id);
+        }
+        return match d
+            .url_template
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            Some(t) => url_template_example(t, d.default_port),
+            None => format!("{}://主机:端口/数据库", d.type_id),
+        };
+    }
+    if matches!(type_id, "sqlite" | "duckdb") {
+        return file_path_placeholder(type_id);
+    }
+    "选择数据库类型与驱动后填写连接地址".to_string()
+}
+
+/// 文件型地址占位（按类型 id 的文案字典；未知文件型驱动用通用提示）。
+fn file_path_placeholder(type_id: &str) -> String {
+    match type_id {
+        "sqlite" => "选择或新建 .db / .sqlite 文件路径".to_string(),
+        "duckdb" => "选择或新建 .duckdb 文件路径（或输入 :memory:）".to_string(),
+        _ => "选择或新建数据库文件路径".to_string(),
+    }
+}
+
+/// `url_template` → 可读示例（占位符换成示例值；端口优先用驱动声明的默认端口）。
+pub(crate) fn url_template_example(template: &str, default_port: Option<i32>) -> String {
+    let port = default_port
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "端口".to_string());
+    template
+        .replace("{username}", "user")
+        .replace("{password}", "password")
+        .replace("{host}", "localhost")
+        .replace("{port}", &port)
+        .replace("{database}", "db")
+        .replace("{schema}", "public")
+        .replace("{file_path}", "路径")
+}
+
+// ===== 驱动声明的连接字段（`drivers.config_schema`）=====
+//
+// 常规 Tab 的字段集合是「驱动 schema × 连接方式」的函数：
+// - 行的**存在性**看 schema 是否声明了该键（如某驱动无 database 字段就不出该行）；
+// - 行的**标签 / 占位**取 schema 声明（不再写死「主机 / 端口 / 数据库」）；
+// - 未声明的字段不造默认行（见架构 §15）。
+
+/// 驱动声明的连接字段（`config_schema.fields[]` 子集）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FormField {
+    pub key: String,
+    pub label: String,
+    /// `text` / `number` / `password` / `file` / `select` / `textarea` / `bool`（未声明 → `text`）。
+    pub kind: String,
+    pub required: bool,
+    pub placeholder: Option<String>,
+}
+
+/// 解析 `drivers.config_schema` 的 `fields`（非法 / 缺字段 → 空列表；不造默认值）。
+pub(crate) fn driver_form_fields(config_schema: &str) -> Vec<FormField> {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(config_schema) else {
+        return Vec::new();
+    };
+    let Some(list) = json.get("fields").and_then(|f| f.as_array()) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|f| {
+            let key = f.get("key")?.as_str()?.trim();
+            if key.is_empty() {
+                return None;
+            }
+            Some(FormField {
+                key: key.to_string(),
+                label: f
+                    .get("label")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(key)
+                    .to_string(),
+                kind: f
+                    .get("type")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("text")
+                    .to_string(),
+                required: f.get("required").and_then(|x| x.as_bool()).unwrap_or(false),
+                placeholder: f
+                    .get("placeholder")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string()),
+            })
+        })
+        .collect()
+}
+
+/// 按键查驱动声明字段（未声明 → `None`）。
+pub(crate) fn field_spec<'a>(fields: &'a [FormField], key: &str) -> Option<&'a FormField> {
+    fields.iter().find(|f| f.key == key)
+}
+
+/// 地址字段：优先 `type = file`，否则按常见键名（`file_path` / `path` / `file`）。
+pub(crate) fn address_field(fields: &[FormField]) -> Option<&FormField> {
+    fields
+        .iter()
+        .find(|f| f.kind == "file")
+        .or_else(|| fields.iter().find(|f| matches!(f.key.as_str(), "file_path" | "path" | "file")))
+}
+
+/// 地址行标签：取驱动声明字段的标签，未声明时退回内置（文件型 = 地址 / 网络型 = URI）。
+pub(crate) fn address_row_label(fields: &[FormField], is_file: bool) -> String {
+    address_field(fields)
+        .map(|f| f.label.clone())
+        .unwrap_or_else(|| address_label(is_file).to_string())
+}
+
+/// 文件型（SQLite / DuckDB）连接的落库前清洗：清掉无意义的凭据 / 网络 / TLS 字段。
+///
+/// 输入对象可能带着上个数据库类型的残留（如从 MySQL 切到 SQLite），这些字段落到库里
+/// 就是脏数据（还会让“引用认证配置”在同一连接上产生歧义）；策略覆盖等文件型仍有效的
+/// 选项保留。
+pub(crate) fn strip_file_db_noise(input: &mut DataSourceSaveInput) {
+    input.username = None;
+    input.password = None;
+    input.auth_config_id = None;
+    input.auth_method = None;
+    input.network_config_id = None;
+    let Some(raw) = input.advanced_options.as_deref() else {
+        return;
+    };
+    let Ok(mut adv) = serde_json::from_str::<serde_json::Value>(raw) else {
+        // 非法 JSON 原样保留（解析失败不静默丢数据，上层已有其它校验）。
+        return;
+    };
+    if let Some(obj) = adv.as_object_mut() {
+        obj.remove("ssl");
+        obj.remove("network_chain");
+    }
+    input.advanced_options = Some(adv.to_string());
+}
+
+/// 重建编辑回读地址（DataSource 无 url 字段，由 host/port/database 重拼）。
+///
+/// 文件型返回**裸路径**（与地址输入框语义一致，见 `normalize_file_db_path`）。
 pub(crate) fn reconstruct_url(ds: &DataSource) -> String {
-    if matches!(ds.db_type.as_str(), "sqlite" | "duckdb") {
-        return format!(
-            "{}:///{}",
-            ds.db_type,
-            ds.database.clone().unwrap_or_default()
-        );
+    if crate::services::data_source_service::is_file_db_driver(&ds.db_type) {
+        let raw = ds
+            .database
+            .clone()
+            .or_else(|| ds.host.clone())
+            .unwrap_or_default();
+        return crate::services::data_source_service::normalize_file_db_path(&ds.db_type, &raw);
     }
     let auth = ds
         .username
@@ -418,10 +630,13 @@ pub(crate) fn scope_from_label(l: &str) -> ConnectionScope {
 mod tests {
     // 注意：不通配导入（`super::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::{
-        capability_rows, driver_auth_types, driver_capabilities, driver_short_name,
-        enabled_drivers_of_type, find_driver_by_value, policy_summary, policy_type_from_label,
-        policy_type_label, tags_from_json, tags_to_json, type_badge, type_has_driver,
+        address_field, address_label, address_placeholder, address_row_label, capability_rows,
+        driver_auth_types, driver_capabilities, driver_form_fields, driver_short_name,
+        enabled_drivers_of_type, field_spec, find_driver_by_value, policy_summary,
+        policy_type_from_label, policy_type_label, strip_file_db_noise, tags_from_json, tags_to_json,
+        type_badge, type_has_driver, url_template_example,
     };
+    use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
 
     fn driver(id: &str, type_id: &str, name: &str, enabled: bool) -> Driver {
@@ -466,6 +681,39 @@ mod tests {
         assert_eq!(tags_from_json(Some(r#"["prod","core"]"#)), "prod, core");
         assert_eq!(tags_from_json(Some("not-json")), "");
         assert_eq!(tags_from_json(None), "");
+    }
+
+    #[test]
+    fn driver_form_fields_come_from_config_schema() {
+        // 空 / 非法 / 缺 fields：不得造默认字段（调用方自行回退）。
+        assert!(driver_form_fields("").is_empty());
+        assert!(driver_form_fields("not-json").is_empty());
+        assert!(driver_form_fields(r#"{"options":[]}"#).is_empty());
+        // 真实种子：SQLite 只声明 file_path（type=file）。
+        let sqlite = r#"{"fields":[{"key":"file_path","label":"数据库文件","type":"file","required":true,"placeholder":"选择 .db 或 .sqlite 文件"}]}"#;
+        let fields = driver_form_fields(sqlite);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, "file_path");
+        assert_eq!(fields[0].label, "数据库文件");
+        assert_eq!(fields[0].kind, "file");
+        assert!(fields[0].required);
+        assert_eq!(address_field(&fields).map(|f| f.key.as_str()), Some("file_path"));
+        assert_eq!(address_row_label(&fields, true), "数据库文件");
+        // 真实种子：MySQL 声明 host/port/database/username/password（顺序保留）。
+        let mysql = r#"{"fields":[{"key":"host","label":"主机","type":"text","required":true},{"key":"port","label":"端口","type":"number","required":true},{"key":"database","label":"数据库","type":"text"},{"key":"username","label":"用户名","type":"text"},{"key":"password","label":"密码","type":"password"}]}"#;
+        let fields = driver_form_fields(mysql);
+        assert_eq!(fields.len(), 5);
+        assert_eq!(fields[1].kind, "number");
+        assert_eq!(fields[4].kind, "password");
+        assert_eq!(field_spec(&fields, "database").map(|f| f.label.as_str()), Some("数据库"));
+        // 未声明的键 → None（调用方据此不出该行，而不是造默认行）。
+        assert!(field_spec(&fields, "file_path").is_none());
+        // 缺 key / key 为空 → 丢弃该字段。
+        let broken = r#"{"fields":[{"label":"无键"},{"key":"  ","label":"空键"},{"key":"ok"}]}"#;
+        let fields = driver_form_fields(broken);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, "ok");
+        assert_eq!(fields[0].label, "ok", "未声明 label 时回退键名");
     }
 
     #[test]
@@ -580,6 +828,78 @@ mod tests {
             driver_auth_types(Some(r#"["password","ssl"]"#)),
             vec!["password".to_string(), "ssl".to_string()]
         );
+    }
+
+    #[test]
+    fn address_placeholder_and_label_follow_driver() {
+        // 标签：文件型 = 地址，网络型 = URI。
+        assert_eq!(address_label(true), "地址");
+        assert_eq!(address_label(false), "URI");
+
+        // 网络型：占位来自驱动声明的 url_template + 默认端口（不再固定 mysql 示例）。
+        let mut mysql = driver("mysql", "mysql", "MySQL (sqlx)", true);
+        mysql.url_template = Some(
+            "mysql://{username}:{password}@{host}:{port}/{database}".to_string(),
+        );
+        mysql.default_port = Some(3306);
+        assert_eq!(
+            address_placeholder(Some(&mysql), "mysql"),
+            "mysql://user:password@localhost:3306/db"
+        );
+        // 无模板/无驱动：退回类型前缀示例与引导文案（不造连接数据）。
+        let pg = driver("postgres", "postgresql", "PostgreSQL (sqlx)", true);
+        assert_eq!(address_placeholder(Some(&pg), "postgresql"), "postgresql://主机:端口/数据库");
+        assert_eq!(address_placeholder(None, "mysql"), "选择数据库类型与驱动后填写连接地址");
+
+        // 文件型：提示是文件路径（选了 SQLite 不会再出现 mysql:// 示例）。
+        let mut sqlite = driver("sqlite", "sqlite", "SQLite (rusqlite)", true);
+        sqlite.is_file = true;
+        assert!(
+            address_placeholder(Some(&sqlite), "sqlite").contains(".sqlite"),
+            "文件型提示应指向文件路径"
+        );
+        assert!(address_placeholder(None, "duckdb").contains(":memory:"));
+
+        // 模板示例：未声明默认端口时不做臆造（写「端口」而非具体值）。
+        assert_eq!(
+            url_template_example("postgres://{host}:{port}/{database}", None),
+            "postgres://localhost:端口/db"
+        );
+        assert_eq!(
+            url_template_example("sqlite://{file_path}", None),
+            "sqlite://路径"
+        );
+    }
+
+    #[test]
+    fn file_db_input_drops_credentials_and_tls() {
+        // 从 MySQL 切到 SQLite：表单残留的凭据 / 网络 / TLS 不落库，策略覆盖保留。
+        let mut i = DataSourceSaveInput::new("a", "sqlite", "C:/data/a.db");
+        i.username = Some("root".into());
+        i.password = Some("pw".into());
+        i.auth_method = Some("password".into());
+        i.auth_config_id = Some("auth_1".into());
+        i.network_config_id = Some("net_1".into());
+        i.advanced_options = Some(
+            r#"{"ssl":{"mode":"require"},"network_chain":[{"kind":"ssh"}],"policy_overrides":["security"]}"#
+                .into(),
+        );
+        strip_file_db_noise(&mut i);
+        assert!(i.username.is_none() && i.password.is_none());
+        assert!(i.auth_method.is_none() && i.auth_config_id.is_none());
+        assert!(i.network_config_id.is_none());
+        let adv: serde_json::Value =
+            serde_json::from_str(i.advanced_options.as_deref().expect("adv 保留")).expect("json");
+        assert!(adv.get("ssl").is_none() && adv.get("network_chain").is_none());
+        assert!(adv.get("policy_overrides").is_some(), "策略覆盖仍然有效");
+        // 无高级选项/非法 JSON：不 panic，不静默丢数据。
+        let mut empty = DataSourceSaveInput::new("b", "duckdb", ":memory:");
+        strip_file_db_noise(&mut empty);
+        assert!(empty.advanced_options.is_none());
+        let mut bad = DataSourceSaveInput::new("c", "duckdb", ":memory:");
+        bad.advanced_options = Some("not-json".into());
+        strip_file_db_noise(&mut bad);
+        assert_eq!(bad.advanced_options.as_deref(), Some("not-json"));
     }
 
     #[test]

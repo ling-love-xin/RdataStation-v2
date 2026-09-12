@@ -159,6 +159,7 @@ impl ConnectionDialogState {
             }),
             project_options: Rc::new(RefCell::new(Vec::new())),
             session_project: Rc::new(RefCell::new(None)),
+            collapsed_sections: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -390,6 +391,22 @@ impl ConnectionDialogState {
         }
     }
 
+    /// 单列大纲分组是否已折叠（缺省 = 展开；纯 UI 偏好，不落库）。
+    pub(crate) fn section_collapsed(&self, id: &str) -> bool {
+        self.collapsed_sections.borrow().iter().any(|s| s == id)
+    }
+
+    /// 折叠 / 展开大纲分组。
+    pub(crate) fn toggle_section(&self, id: &str) {
+        let mut list = self.collapsed_sections.borrow_mut();
+        match list.iter().position(|s| s == id) {
+            Some(pos) => {
+                list.remove(pos);
+            }
+            None => list.push(id.to_string()),
+        }
+    }
+
     /// 按当前驱动刷新「认证方法」选项（数据源：`drivers.supported_auth_types`）。
     ///
     /// 驱动变化时调用（每帧检测驱动值）：选项变更后校正选中（值不在新选项 → 清空），
@@ -441,6 +458,65 @@ impl ConnectionDialogState {
                 (g.id.clone(), g.name.clone(), checked)
             })
             .collect();
+    }
+
+    /// 文件型数据库：系统文件选择器（打开 / 新建）→ 写回地址输入。
+    ///
+    /// - `create_new = false`：选择已有数据库文件；
+    /// - `create_new = true`：以文件对话框取目标路径，文件不存在则创建空库文件
+    ///   （SQLite / DuckDB 首次连接会自动初始化结构）；已存在则直接引用（不覆盖）。
+    ///
+    /// 取消选择时保持原值（与项目模块的目录选择同一交互约定）；结果写对话框结果行。
+    pub(crate) fn pick_db_file(
+        self: &Rc<Self>,
+        create_new: bool,
+        entity: Entity<crate::panels::EditorPanel>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let target = self.url.clone();
+        let result = self.result.clone();
+        let result_ok = self.result_ok.clone();
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(if create_new {
+                "新建数据库文件（输入文件名）".into()
+            } else {
+                "选择数据库文件".into()
+            }),
+        });
+        window
+            .spawn(cx, async move |cx| {
+                let Ok(Ok(Some(paths))) = receiver.await else {
+                    return;
+                };
+                let Some(path) = paths.into_iter().next() else {
+                    return;
+                };
+                let value = path.to_string_lossy().to_string();
+                let (message, ok) = if !create_new {
+                    (format!("已选择数据库文件：{value}"), true)
+                } else if path.exists() {
+                    (format!("文件已存在，直接引用：{value}"), true)
+                } else {
+                    match std::fs::File::create(&path) {
+                        Ok(_) => (format!("已新建数据库文件：{value}"), true),
+                        Err(e) => (format!("新建数据库文件失败：{e}"), false),
+                    }
+                };
+                let _ = cx.update(|window, cx| {
+                    if ok {
+                        target.update(cx, |s, cx| s.set_value(value, window, cx));
+                    }
+                    *result.borrow_mut() = Some(message);
+                    result_ok.set(ok);
+                    // 地址变更需要重渲染对话框（`cx.notify` 只重渲当前实体，对话框层由宿主重渲）。
+                    entity.update(cx, |_, cx| cx.notify());
+                });
+            })
+            .detach();
     }
 
     /// 侧栏选择数据库类型：更新选中、刷新 Header 驱动选项（该类型启用驱动、短名显示）
@@ -870,6 +946,9 @@ impl ClonedDialogState {
         if db_type.is_empty() {
             return None;
         }
+        // 文件型（SQLite / DuckDB）没有凭据 / 网络 / TLS 语义：表单里从上个类型残留的用户名、
+        // 密码、认证引用、SSL 覆盖一律不落库（避免“文件库带着 mysql 凭据”这类脏数据）。
+        let is_file = crate::services::data_source_service::is_file_db_driver(&db_type);
         let name = name.read(cx).value().to_string();
         let url = url.read(cx).value().to_string();
         if name.trim().is_empty() || url.trim().is_empty() {
@@ -964,7 +1043,16 @@ impl ClonedDialogState {
             .cloned()
             .unwrap_or_default()
             .to_string();
-        if !ssl_mode.is_empty() && ssl_mode != "disable" {
+        // SSL 覆盖仅当驱动声明 ssl 时落库（卡片同规则显示；上个驱动残留的模式不写入）。
+        let driver_declares_ssl = selected_driver
+            .as_ref()
+            .map(|d| {
+                driver_auth_types(d.supported_auth_types.as_deref())
+                    .iter()
+                    .any(|m| m == "ssl")
+            })
+            .unwrap_or(false);
+        if driver_declares_ssl && !ssl_mode.is_empty() && ssl_mode != "disable" {
             let mut ssl = serde_json::Map::new();
             ssl.insert("mode".into(), serde_json::json!(ssl_mode));
             let ca = self.ssl_ca.read(cx).value().to_string();
@@ -999,7 +1087,7 @@ impl ClonedDialogState {
         } else {
             Some(serde_json::Value::Object(adv).to_string())
         };
-        Some(DataSourceSaveInput {
+        let mut out = DataSourceSaveInput {
             name: name.trim().to_string(),
             db_type: db_type.to_string(),
             url: url.trim().to_string(),
@@ -1039,7 +1127,13 @@ impl ClonedDialogState {
             use_duckdb_fed: Some(self.duckdb_fed.get()),
             schema_name: None,
             metadata_path,
-        })
+        };
+        // 文件型（SQLite / DuckDB）没有凭据 / 网络 / TLS 语义：表单里从上个类型残留的值
+        // 一律不落库（避免“文件库带着 mysql 凭据”这类脏数据）。
+        if is_file {
+            strip_file_db_noise(&mut out);
+        }
+        Some(out)
     }
 
     pub(crate) fn hops_valid(&self, cx: &mut App) -> Result<(), String> {

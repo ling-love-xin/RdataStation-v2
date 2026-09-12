@@ -172,6 +172,8 @@ pub struct ConnectionDialogState {
     pub project_options: Rc<RefCell<Vec<(String, String)>>>,
     /// 当前项目会话快照（名称, 路径）；由 `open()` 从 `Shared::project` 写入，供项目下拉使用。
     pub session_project: Rc<RefCell<Option<(String, String)>>>,
+    /// 单列大纲分组的折叠态（仅 UI 偏好，不落库）：在列 = 已折叠，缺省 = 展开。
+    pub collapsed_sections: Rc<RefCell<Vec<String>>>,
 }
 
 fn state_inputs(

@@ -167,8 +167,9 @@ impl ConnectionDialogState {
         }
 
         // 输入占位（InputState 构造后设置；Input 组件本身无 placeholder 方法）。
+        // 地址占位**不在这里固定**：它随当前驱动推导（见 builder 内的 `address_placeholder`），
+        // 否则选了 SQLite 还会提示 mysql:// 示例（真机反馈）。
         name.update(cx, |s, cx| s.set_placeholder("名称（如 生产 PG）", window, cx));
-        url.update(cx, |s, cx| s.set_placeholder("mysql://host:3306/db", window, cx));
         remark.update(cx, |s, cx| s.set_placeholder("备注（可选）", window, cx));
         driver_filter.update(cx, |s, cx| s.set_placeholder("搜索类型…", window, cx));
         tags_input.update(cx, |s, cx| {
@@ -226,9 +227,9 @@ impl ConnectionDialogState {
                     }
                 }
             }
-            let theme = cx.theme();
-
             // ---- 当前驱动 / 类型同步（render 为权威同步点）----
+            // 放在 `cx.theme()` 之前：地址占位需要 `url.update(cx, …)`（可变借用），
+            // 而 `theme` 持有 `cx` 的不可变借用（两者不能并存）。
             let driver_now = driver
                 .read(cx)
                 .selected_value()
@@ -265,6 +266,11 @@ impl ConnectionDialogState {
                 .as_ref()
                 .map(|d| d.is_file)
                 .unwrap_or_else(|| matches!(selected_type_id.as_str(), "sqlite" | "duckdb"));
+            // 地址占位随驱动推导（每帧写入；与上方其它输入占位同一约定）。
+            let want_address_ph = address_placeholder(current_driver.as_ref(), &selected_type_id);
+            url.update(cx, |s, cx| s.set_placeholder(want_address_ph, window, cx));
+
+            let theme = cx.theme();
 
             // ---- Tab 条（自绘；gpui-component 无 Tabs 组件）----
             // 文件型驱动（SQLite/DuckDB）按原型隐藏「网络」Tab（无协议链 / SSL 语义）。
@@ -316,6 +322,31 @@ impl ConnectionDialogState {
                 .borrow()
                 .as_ref()
                 .map(|p| (p.name.clone(), p.root.to_string_lossy().to_string()));
+
+            // ---- 单列分组大纲：共用的分组构造器（常规与高级 Tab 同一套排版）----
+            // 分组标题行 = 折叠手柄；折叠态存 `collapsed_sections`（纯 UI 偏好）。
+            let make_section = {
+                let state = state.clone();
+                let entity = entity.clone();
+                move |id: &'static str, icon: Icon, color: Hsla, title: &str, body: Div| -> Div {
+                    let collapsed = state.section_collapsed(id);
+                    let state_click = state.clone();
+                    let entity_click = entity.clone();
+                    outline_section(
+                        theme,
+                        id,
+                        icon,
+                        color,
+                        title,
+                        collapsed,
+                        move |_window, app| {
+                            state_click.toggle_section(id);
+                            entity_click.update(app, |_, cx| cx.notify());
+                        },
+                        body,
+                    )
+                }
+            };
 
             // ---- 各 Tab 内容 ----
             let tab_content = match active_tab.get() {
@@ -720,13 +751,30 @@ impl ConnectionDialogState {
                         }
                     };
 
-                    let mut content = div().v_flex().gap_3();
-                    content = content.child(
-                        div().v_flex().gap_2()
-                            .child(
-                                div().h_flex().items_center().gap_2()
-                                    .child(div().text_sm().font_weight(FontWeight::BOLD).child("环境"))
-                                    .child(Select::new(&env).placeholder("选择环境…"))
+                    let mut content = div().w_full().v_flex().gap(rems(GAP_MD));
+                    // 分组① 环境（引用 + 管理入口 + 策略生效摘要）
+                    content = content.child(make_section(
+                        "env",
+                        lucide("icons/sliders-horizontal.svg"),
+                        theme.colors.primary,
+                        "环境",
+                        div()
+                            .w_full()
+                            .v_flex()
+                            .gap(rems(GAP_SM))
+                            .child(form_row(
+                                theme,
+                                "环境",
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap(rems(GAP_SM))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.))
+                                            .child(Select::new(&env).placeholder("选择环境…")),
+                                    )
                                     .child(
                                         Button::new("mgr-env")
                                             .secondary()
@@ -740,9 +788,9 @@ impl ConnectionDialogState {
                                                 }
                                             }),
                                     ),
-                            )
-                            .child(div().text_xs().text_color(theme.colors.info).child(env_summary)),
-                    );
+                            ))
+                            .child(hint_line(theme, &env_summary)),
+                    ));
                     // 安全策略覆盖：清单来自 `environment_policies`（当前选中环境），覆盖键存策略类型。
                     let sec_rows = {
                         let keys_outer = sec_overrides.clone();
@@ -804,130 +852,88 @@ impl ConnectionDialogState {
                         }
                         rows
                     };
-                    content = content.child(
-                        div().v_flex().gap_1()
-                            .child(div().text_sm().font_weight(FontWeight::BOLD).child("安全策略（覆盖环境默认）"))
-                            .child(sec_rows),
-                    );
-                    // DuckDB 本地加速（仅网络型库可见；原型 accel-card：warning 卡片）。
+                    content = content.child(make_section(
+                        "policy",
+                        lucide("icons/shield.svg"),
+                        theme.colors.info,
+                        "安全策略（覆盖环境默认）",
+                        div().w_full().v_flex().gap(rems(GAP_SM)).child(sec_rows),
+                    ));
+                    // 分组③ DuckDB 本地加速（仅网络型库可见）：warning 色标题，开关 + 参数行均在分组内。
                     if is_network_db {
-                        let mut accel = div()
+                        let toggle = div()
+                            .id("duckdb-fed")
+                            .cursor_pointer()
+                            .w_8()
+                            .h(rems(1.125))
+                            .rounded_full()
+                            .bg(if duckdb_fed.get() {
+                                theme.colors.primary
+                            } else {
+                                theme.colors.border
+                            })
+                            .relative()
+                            .on_click({
+                                let duckdb_fed = duckdb_fed.clone();
+                                let entity = entity.clone();
+                                move |_, _, app| {
+                                    duckdb_fed.set(!duckdb_fed.get());
+                                    entity.update(app, |_, cx| cx.notify());
+                                }
+                            })
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .m_0p5()
+                                    .w_3p5()
+                                    .h_3p5()
+                                    .rounded_full()
+                                    .bg(theme.colors.background)
+                                    .child(""),
+                            );
+                        let mut accel_body = div()
                             .w_full()
                             .v_flex()
-                            .gap(rems(0.75))
-                            .rounded(px(10.))
-                            .border_1()
-                            .border_color(theme.colors.warning.opacity(0.45))
-                            .bg(theme.colors.warning.opacity(0.08))
-                            .py(rems(0.75))
-                            .px(rems(0.875))
-                            .child(
+                            .gap(rems(GAP_SM))
+                            .child(hint_line(
+                                theme,
+                                "仅网络数据库可用 · 凭据注册为 DuckDB Secret · 不落明文",
+                            ))
+                            .child(form_row(
+                                theme,
+                                "启用",
                                 div()
                                     .h_flex()
                                     .items_center()
-                                    .justify_between()
-                                    .gap(rems(0.625))
+                                    .gap(rems(GAP_SM))
+                                    .child(toggle)
                                     .child(
                                         div()
-                                            .v_flex()
-                                            .gap(rems(0.125))
-                                            .child(
-                                                div()
-                                                    .h_flex()
-                                                    .items_center()
-                                                    .gap(rems(0.5))
-                                                    .child(
-                                                        lucide("icons/database-zap.svg")
-                                                            .size(px(15.))
-                                                            .text_color(theme.colors.warning),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .font_weight(FontWeight::BOLD)
-                                                            .text_color(theme.colors.warning)
-                                                            .child("DuckDB 本地加速（联邦查询直连源库）"),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.colors.muted_foreground)
-                                                    .child("仅网络数据库可用 · 凭据注册为 DuckDB Secret · 不落明文"),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("duckdb-fed")
-                                            .cursor_pointer()
-                                            .w_8()
-                                            .h(rems(1.125))
-                                            .rounded_full()
-                                            .bg(if duckdb_fed.get() {
-                                                theme.colors.primary
-                                            } else {
-                                                theme.colors.border
-                                            })
-                                            .relative()
-                                            .on_click({
-                                                let duckdb_fed = duckdb_fed.clone();
-                                                let entity = entity.clone();
-                                                move |_, _, app| {
-                                                    duckdb_fed.set(!duckdb_fed.get());
-                                                    entity.update(app, |_, cx| cx.notify());
-                                                }
-                                            })
-                                            .child(
-                                                div()
-                                                    .absolute()
-                                                    .top_0()
-                                                    .left_0()
-                                                    .m_0p5()
-                                                    .w_3p5()
-                                                    .h_3p5()
-                                                    .rounded_full()
-                                                    .bg(theme.colors.background)
-                                                    .child(""),
-                                            ),
+                                            .text_xs()
+                                            .text_color(theme.colors.muted_foreground)
+                                            .child(if duckdb_fed.get() { "已开启" } else { "已关闭" }),
                                     ),
-                            );
+                            ));
                         if duckdb_fed.get() {
-                            accel = accel
-                                .child(
-                                    div()
-                                        .h_flex()
-                                        .items_center()
-                                        .gap(rems(0.5))
-                                        .child(
-                                            div()
-                                                .w(rems(5.75))
-                                                .flex_shrink_0()
-                                                .text_xs()
-                                                .text_color(theme.colors.muted_foreground)
-                                                .child("缓存路径"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w(px(0.))
-                                                .child(Input::new(&cache_path)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.colors.muted_foreground)
-                                        .child("已开启：凭据注册为 DuckDB Secret（不落明文），分析引擎可直接联邦查询；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理"),
-                                );
+                            accel_body = accel_body
+                                .child(form_row(theme, "缓存路径", Input::new(&cache_path)))
+                                .child(hint_line(
+                                    theme,
+                                    "已开启：凭据注册为 DuckDB Secret（不落明文），分析引擎可直接联邦查询；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理",
+                                ));
                         } else {
-                            accel = accel.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.muted_foreground)
-                                    .child("关闭：联邦查询不可用"),
-                            );
+                            accel_body =
+                                accel_body.child(hint_line(theme, "关闭：联邦查询不可用"));
                         }
-                        content = content.child(accel);
+                        content = content.child(make_section(
+                            "accel",
+                            lucide("icons/database-zap.svg"),
+                            theme.colors.warning,
+                            "DuckDB 本地加速（联邦查询直连源库）",
+                            accel_body,
+                        ));
                     }
                     content
                 }
@@ -988,40 +994,88 @@ impl ConnectionDialogState {
                         )
                         .child(info_text);
 
-                    // 卡片 1：连接设置（只读摘要；编辑在顶部 URI 行）。
+                    // 驱动声明的连接字段（`drivers.config_schema`）：行的存在性 / 标签 / 占位均由它决定。
+                    let form_fields = current_driver
+                        .as_ref()
+                        .map(|d| driver_form_fields(&d.config_schema))
+                        .unwrap_or_default();
+                    let addr_label = address_row_label(&form_fields, is_file_db);
+
+                    // 分组① 连接设置（**按驱动动态渲染**）：
+                    // 文件型：地址输入 + 系统文件选择 / 新建（地址框唯一，Header 不再重复）；
+                    // 网络型：主机 / 端口 / 数据库为解析摘要（纯文本行，编辑在 Header URI）。
                     let settings_body = if is_file_db {
-                        div().v_flex().gap(rems(0.375)).child(grid_row(
-                            theme,
-                            "数据库文件",
-                            val_readonly(
-                                theme,
-                                if url_value.is_empty() { "-" } else { url_value.as_str() },
-                            ),
-                        ))
-                    } else {
                         div()
+                            .w_full()
                             .v_flex()
-                            .gap(rems(0.375))
-                            .child(grid_row(
+                            .gap(rems(GAP_SM))
+                            .child(form_row(
                                 theme,
-                                "主机",
-                                val_readonly(theme, host_v.as_deref().unwrap_or("-")),
+                                &addr_label,
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap(rems(0.5))
+                                    .child(div().flex_1().min_w(px(0.)).child(Input::new(&url)))
+                                    .child(
+                                        Button::new("pick-db-file")
+                                            .secondary()
+                                            .label("打开文件…")
+                                            .on_click({
+                                                let state = state.clone();
+                                                let entity = entity.clone();
+                                                move |_, window, app| {
+                                                    state.pick_db_file(false, entity.clone(), window, app);
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("new-db-file")
+                                            .secondary()
+                                            .label("新建文件…")
+                                            .on_click({
+                                                let state = state.clone();
+                                                let entity = entity.clone();
+                                                move |_, window, app| {
+                                                    state.pick_db_file(true, entity.clone(), window, app);
+                                                }
+                                            }),
+                                    ),
                             ))
-                            .child(grid_row(
+                            .child(hint_line(
                                 theme,
+                                "本地文件路径；「新建文件…」在所选位置创建空库文件（首次连接自动初始化结构）",
+                            ))
+                    } else {
+                        let mut body = div().w_full().v_flex().gap(rems(GAP_SM));
+                        // 摘要行只出驱动声明的键（schema 为空时回退内置三行，不让界面变空）。
+                        for (key, fallback, value) in [
+                            ("host", "主机", host_v.clone().unwrap_or_default()),
+                            (
+                                "port",
                                 "端口",
-                                val_readonly(
-                                    theme,
-                                    &port_v
-                                        .map(|p| p.to_string())
-                                        .unwrap_or_else(|| "-".to_string()),
-                                ),
-                            ))
-                            .child(grid_row(
-                                theme,
-                                "数据库",
-                                val_readonly(theme, db_v.as_deref().unwrap_or("-")),
-                            ))
+                                port_v.map(|p| p.to_string()).unwrap_or_default(),
+                            ),
+                            ("database", "数据库", db_v.clone().unwrap_or_default()),
+                        ] {
+                            let spec = field_spec(&form_fields, key);
+                            if !form_fields.is_empty() && spec.is_none() {
+                                continue;
+                            }
+                            let label = spec
+                                .map(|f| f.label.clone())
+                                .unwrap_or_else(|| fallback.to_string());
+                            let shown = if value.is_empty() {
+                                "-".to_string()
+                            } else {
+                                value
+                            };
+                            body = body.child(text_row(theme, &label, &shown));
+                        }
+                        if form_fields.is_empty() {
+                            body = body.child(hint_line(theme, "驱动未声明连接字段：按内置字段展示"));
+                        }
+                        body.child(hint_line(theme, "地址（URI）在顶部编辑，此处为解析结果"))
                     };
 
                     // 卡片 2：数据库认证（引用已保存配置 + 管理入口）。
@@ -1122,13 +1176,33 @@ impl ConnectionDialogState {
                             )
                         } else {
                             div()
+                                .w_full()
                                 .v_flex()
-                                .gap(rems(0.375))
-                                .child(grid_row(theme, "用户名", Input::new(&user)))
-                                .child(grid_row(theme, "密码", Input::new(&pass)))
+                                .gap(rems(GAP_SM))
+                                .child(form_row(
+                                    theme,
+                                    field_spec(&form_fields, "username")
+                                        .map(|f| f.label.as_str())
+                                        .unwrap_or("用户名"),
+                                    Input::new(&user),
+                                ))
+                                .child(form_row(
+                                    theme,
+                                    field_spec(&form_fields, "password")
+                                        .map(|f| f.label.as_str())
+                                        .unwrap_or("密码"),
+                                    Input::new(&pass),
+                                ))
                         });
 
-                    // 卡片 3：连接安全（SSL/TLS）。
+                    // 卡片 3：连接安全（SSL/TLS）——**按驱动声明显示**（supported_auth_types 含 ssl）。
+                    let driver_declares_ssl = driver_auth_types(
+                        current_driver
+                            .as_ref()
+                            .and_then(|d| d.supported_auth_types.as_deref()),
+                    )
+                    .iter()
+                    .any(|m| m == "ssl");
                     let ssl_selected = ssl_mode
                         .read(cx)
                         .selected_value()
@@ -1136,9 +1210,10 @@ impl ConnectionDialogState {
                         .unwrap_or_default()
                         .to_string();
                     let ssl_body = div()
+                        .w_full()
                         .v_flex()
-                        .gap(rems(0.375))
-                        .child(grid_row(
+                        .gap(rems(GAP_SM))
+                        .child(form_row(
                             theme,
                             "模式",
                             Select::new(&ssl_mode).placeholder("选择 SSL 模式…"),
@@ -1150,18 +1225,20 @@ impl ConnectionDialogState {
                                 .child("未启用 TLS（disable / prefer / require / verify-ca / verify-full）")
                         } else {
                             div()
+                                .w_full()
                                 .v_flex()
-                                .gap(rems(0.375))
-                                .child(grid_row(theme, "CA 证书", Input::new(&ssl_ca)))
-                                .child(grid_row(theme, "客户端证书", Input::new(&ssl_cert)))
-                                .child(grid_row(theme, "私钥", Input::new(&ssl_key)))
+                                .gap(rems(GAP_SM))
+                                .child(form_row(theme, "CA 证书", Input::new(&ssl_ca)))
+                                .child(form_row(theme, "客户端证书", Input::new(&ssl_cert)))
+                                .child(form_row(theme, "私钥", Input::new(&ssl_key)))
                         });
 
                     // 卡片 4：组织（标签 + 项目分组勾选；分组为项目级能力）。
                     let mut org_body = div()
+                        .w_full()
                         .v_flex()
-                        .gap(rems(0.375))
-                        .child(grid_row(theme, "标签", Input::new(&tags_input)))
+                        .gap(rems(GAP_SM))
+                        .child(form_row(theme, "标签", Input::new(&tags_input)))
                         .child(
                             div()
                                 .text_xs()
@@ -1224,47 +1301,43 @@ impl ConnectionDialogState {
                         }
                     }
 
-                    div()
-                        .w_full()
-                        .v_flex()
-                        .gap(rems(0.75))
-                        .child(info_banner)
-                        .child(
-                            div()
-                                .w_full()
-                                .h_flex()
-                                .items_start()
-                                .flex_wrap()
-                                .gap(rems(0.75))
-                                .child(sec_card(
-                                    theme,
-                                    lucide("icons/database.svg"),
-                                    theme.colors.primary,
-                                    "连接设置",
-                                    settings_body,
-                                ))
-                                .child(sec_card(
-                                    theme,
-                                    lucide("icons/lock.svg"),
-                                    theme.colors.primary,
-                                    "数据库认证",
-                                    auth_body,
-                                ))
-                                .child(sec_card(
-                                    theme,
-                                    lucide("icons/shield-check.svg"),
-                                    theme.colors.info,
-                                    "连接安全（SSL/TLS）",
-                                    ssl_body,
-                                ))
-                                .child(sec_card(
-                                    theme,
-                                    lucide("icons/tag.svg"),
-                                    theme.colors.success,
-                                    "组织（标签 / 分组）",
-                                    org_body,
-                                )),
-                        )
+                    // 常规 Tab：**单列分组大纲**（info-banner 常驻 + 分组；分组可折叠，集合随驱动类型）。
+                    // 卡片式并排已弃用：窄宽下会换行、卡高不齐、白底白框的输入框几乎看不见。
+                    let mut outline = div().w_full().v_flex().gap(rems(GAP_MD)).child(info_banner);
+                    outline = outline.child(make_section(
+                        "conn",
+                        lucide("icons/database.svg"),
+                        theme.colors.primary,
+                        "连接设置",
+                        settings_body,
+                    ));
+                    // 认证 / SSL 仅网络型有意义：文件型只有「连接设置 + 组织」；
+                    // SSL 分组另按驱动声明（supported_auth_types 含 ssl）显示。
+                    if !is_file_db {
+                        outline = outline.child(make_section(
+                            "auth",
+                            lucide("icons/lock.svg"),
+                            theme.colors.primary,
+                            "数据库认证",
+                            auth_body,
+                        ));
+                        if driver_declares_ssl {
+                            outline = outline.child(make_section(
+                                "ssl",
+                                lucide("icons/shield-check.svg"),
+                                theme.colors.info,
+                                "连接安全（SSL/TLS）",
+                                ssl_body,
+                            ));
+                        }
+                    }
+                    outline.child(make_section(
+                        "org",
+                        lucide("icons/tag.svg"),
+                        theme.colors.success,
+                        "组织（标签 / 分组）",
+                        org_body,
+                    ))
                 }
             };
 
@@ -1763,8 +1836,28 @@ impl ConnectionDialogState {
                                         .into_any_element()
                                 }),
                         )
-                        .child(header_label(theme, "URI"))
-                        .child(Input::new(&url).flex_1()),
+                        .child(header_label(theme, address_label(is_file_db)))
+                        .child(if is_file_db {
+                            // 文件型：地址在「常规 → 连接设置」编辑（那里带「打开文件 / 新建文件」），
+                            // Header 只显示当前路径（截断）或引导文案，避免两个地址输入框。
+                            let path_now = url.read(cx).value().to_string();
+                            let text = if path_now.trim().is_empty() {
+                                "在「常规 → 连接设置」选择或新建数据库文件".to_string()
+                            } else {
+                                path_now
+                            };
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .overflow_hidden()
+                                .text_xs()
+                                .text_ellipsis()
+                                .text_color(theme.colors.muted_foreground)
+                                .child(text)
+                                .into_any_element()
+                        } else {
+                            Input::new(&url).flex_1().into_any_element()
+                        }),
                 );
 
             let result_ui = {

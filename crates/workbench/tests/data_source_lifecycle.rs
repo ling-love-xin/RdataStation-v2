@@ -46,6 +46,11 @@ fn input(name: &str, db_type: &str, url: &str) -> DataSourceSaveInput {
     DataSourceSaveInput::new(name, db_type, url)
 }
 
+/// 字段是否为空（存储层用空串代替 NULL，两者视为“未填写”）。
+fn blank(v: Option<&str>) -> bool {
+    v.map(|s| s.trim().is_empty()).unwrap_or(true)
+}
+
 /// 打开项目侧连接仓库（与 `DataSourceService` 内部 `open_project_store` 同构）。
 async fn open_project_store(project_root: &Path) -> ProjectConnectionStore {
     let db = ProjectDatabaseManager::open(project_root, 4)
@@ -377,6 +382,60 @@ fn project_scope_readback_requires_project_path() {
         .unwrap()
         .is_none());
     assert!(rt.block_on(service.get_global(&id)).unwrap().is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn file_db_path_survives_save_and_readback() {
+    let dir = temp_dir("file-path");
+    let project_root = dir.join("proj");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+    let service = make_service(&dir);
+    let rt = runtime();
+    let path = project_root.to_string_lossy().to_string();
+
+    // 文件型连接：地址（路径）必须落 `database`（引擎 `build_connection_url` 与编辑回读
+    // 都从这一列取路径），且要去掉 scheme / 多余前导斜杠。
+    let mut i = input("local_sqlite", "sqlite", "sqlite:///C:/data/app.db");
+    i.scope = ConnectionScope::GlobalAndProject;
+    let pid = rt.block_on(service.save(&i, Some(&path))).expect("save gp");
+    assert!(pid.starts_with("GP_conn_"), "{pid}");
+
+    let list = rt.block_on(service.list()).expect("list");
+    let g = list
+        .iter()
+        .find(|d| d.id.starts_with("G_conn_"))
+        .expect("全局定义应存在");
+    assert_eq!(
+        g.database.as_deref(),
+        Some("C:/data/app.db"),
+        "全局侧路径应落 database"
+    );
+    assert!(blank(g.host.as_deref()), "文件型不应写主机：{:?}", g.host);
+
+    let ds = rt
+        .block_on(service.get_with_project(&pid, Some(&path)))
+        .expect("get_with_project")
+        .expect("项目侧连接应可读回");
+    assert_eq!(ds.database.as_deref(), Some("C:/data/app.db"), "项目侧同样保留路径");
+    assert!(blank(ds.host.as_deref()), "文件型不应写主机：{:?}", ds.host);
+    // 连接 URL 只从 database 列还原：项目侧文件连接此前因缺路径会直接报“缺少数据库路径”。
+    assert_eq!(
+        connection::url::build_connection_url(&ds).expect("build url"),
+        "sqlite://C:/data/app.db"
+    );
+
+    // 更新路径：项目侧同样要按文件型解析（不能落成 host/空 database）。
+    let mut upd = i.clone();
+    upd.url = "sqlite:///D:/data/app2.db".to_string();
+    rt.block_on(service.update(&pid, &upd, Some(&path)))
+        .expect("update");
+    let ds2 = rt
+        .block_on(service.get_with_project(&pid, Some(&path)))
+        .expect("readback")
+        .expect("项目侧连接应可读回");
+    assert_eq!(ds2.database.as_deref(), Some("D:/data/app2.db"));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

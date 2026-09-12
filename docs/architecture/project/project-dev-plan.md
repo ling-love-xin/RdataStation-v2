@@ -18,8 +18,22 @@
 | 7 | 「从示例项目开始」（C3）**首版必需** |
 | 8 | 固定（pin）与排序方式**持久化**（`project_info.is_pinned` + `settings` 的 `projects.sort_mode`） |
 | 9 | 软删提供**「已移除项目」找回入口** |
+| 10 | 新建 / 打开 / 重定位的「位置」= **系统目录选择器**（`prompt_for_paths`，仅目录 / 单选）+ 目标路径预览（原型 §6「位置/名称」） |
+| 11 | **远程项目仅模型层预留**（`ProjectPath::Remote`，DuckLake），本期不做——对话框内明示范围 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-11 — 位置字段：系统目录选择器 + 目标预览 + 远程范围说明
+
+对齐原型 §6（「位置 = 目录选择 + 预览 `位置/名称`」）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 目录选择 | 新建 / 打开目录 / 重新定位三个对话框的路径行改为「输入框 + 浏览…」：`App::prompt_for_paths`（`files:false, directories:true, multiple:false`）→ `Window::spawn` 等待 oneshot → `AsyncWindowContext::update` 取 `&mut Window` 回填 `InputState::set_value`（取消保持原值） | `crates/project/src/ui.rs`（`pick_directory` / `directory_row`） |
+| 目标预览 | 新建对话框实时显示 `目标：位置/名称`（原型要求），并加一行范围说明「当前版本仅支持本地目录；DuckLake 远程项目待后续版本」 | 同上（`target_preview`） |
+| 窗口测试 | +2 项：选中目录回填（并断言选择器选项为「仅目录 / 单选」）、取消保持原值 | `crates/project/src/ui/tests.rs` |
+
+> 远程项目现状：`models.rs` 有 `ProjectPath::Remote { url, project_id }`（DuckLake 预留）且 `store.rs` 注释提及，但 `CreateProjectInput` / `ProjectStore::create` / `inspect_target` 均只有本地路径；v1 蓝本里有远程命令分支，v2 明确划在 M1 范围外（§8「不做」）。
 
 ### 2026-09-11 — A3：项目视图迁入 `project` crate（视图与 model/service 同 crate）
 
@@ -27,7 +41,8 @@
 | --- | --- | --- |
 | A3 | 项目视图整体迁入 `crates/project/src/ui.rs`：`ProjectUiHost` 承载全部宿主依赖（状态句柄 / `ProjectUiNotifier` / `ProjectEditorBridge` / 排序偏好回调 / 打开后刷新）；`OpenProject` 取代 workbench 的 `ProjectSession`；示例项目落点改为 crate 内推导（`engine::migration::get_system_dir`）；清掉只写不读的 `PickerState::sort_initialized` | `crates/project/src/{ui.rs,lib.rs}`、`Cargo.toml`（+ `gpui-kit`） |
 | A3 | workbench 侧新增宿主桥（`ViewNotifier` / `EditorBridge` / `build_host`），`view.rs` / 标题栏 Popover 均通过 host 调用项目视图；`Shared.project` 类型改 `project::ui::OpenProject`；`WorkbenchView::new(cx)` 在构造期装配 host（无 render 内 I/O） | `crates/workbench/src/components/project_host.rs`、`panels.rs`、`view.rs`、`services/project_session.rs`、`app/src/main.rs` |
-| 窗口测试 | 新增 `crates/project/src/ui/tests.rs`（9 项 GPUI headless 窗口测试）：选择器 / 设置与菜单渲染、新建对话框空名校验、删除确认名称匹配、未保存拦截（关闭 / 打开）、排序持久化回调、锁占用逃生口、卡片三分支构造。宿主依赖用测试桥（记录重绘 / 排序 / 编辑区调用），不接 workbench | 同上 |
+| 窗口测试 | 11 项（见 `project-view-architecture.md` §5）：选择器 / 设置 / 菜单渲染、新建对话框空名校验、浏览目录回填与取消、删除确认名称匹配、未保存拦截（关闭 / 打开）、排序持久化回调、锁占用逃生口、卡片三分支构造、删除确认对话框 | `crates/project/src/ui/tests.rs` |
+| 目录选择 | `pick_directory` / `directory_row` / `target_preview`：系统目录选择器 + 目标路径预览 + 远程范围说明 | `crates/project/src/ui.rs` |
 | 验证 | `cargo check --workspace --all-targets` 零告警；`cargo test --workspace -j 2` 34 个目标全绿（**451 通过 / 0 失败**）；`cargo build -p rds-app -j 2` 通过 | — |
 
 ### 2026-09-11 — B5 收尾 + B8 + B1（语义对话框 / 卡片菜单 / 尺寸相对化）
@@ -185,9 +200,10 @@
 13. **主题**：明暗切换核对选择器卡片/徽标/对话框/菜单/危险区（`theme-preview.html` 为基准）
 
 **自动化覆盖（2026-09-11）**：上述场景中无需真实项目库即可验证的部分，已落为
-`crates/project/src/ui/tests.rs` 的 9 项 GPUI headless 窗口测试——场景 4（选择器 / 设置 / 菜单
-渲染、排序回调）、6（删除确认名称匹配）、10（未保存拦截：关闭与打开两向）、11（锁占用逃生口
-对话框）、13 的渲染面（卡片三种分支构造）。其余场景（真实建库、双实例、迁移）仍走
+`crates/project/src/ui/tests.rs` 的 11 项 GPUI headless 窗口测试——场景 1/2（新建对话框开得起来、
+空名校验、浏览目录回填 / 取消保持、目标预览构造）、4（选择器 / 设置 / 菜单渲染、排序回调）、
+6（删除确认名称匹配）、10（未保存拦截：关闭与打开两向）、11（锁占用逃生口对话框）、
+13 的渲染面（卡片三种分支构造）。其余场景（真实建库、双实例、迁移）仍走
 `project_store.rs` 集成测试与 §7 手动清单。
 
 ## 5. 风险与对策

@@ -301,6 +301,54 @@ fn auth_method_follows_driver_declaration(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn file_type_general_tab_renders_and_switches_back(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    let dialog = cx.update(|window, cx| {
+        let dialog = Rc::new(ConnectionDialogState::new(window, cx));
+        *dialog.types.borrow_mut() = vec![
+            ds_type("sqlite", "SQLite", "🪶"),
+            ds_type("mysql", "MySQL", "🐬"),
+        ];
+        *dialog.drivers.borrow_mut() = vec![
+            driver("sqlite", "sqlite", "SQLite (rusqlite)", true),
+            driver("mysql", "mysql", "MySQL (sqlx)", true),
+        ];
+        dialog
+    });
+
+    // 选文件型：默认驱动 rusqlite；常规 Tab 走文件型分支（地址 + 打开/新建，无认证/SSL 卡片）。
+    cx.update(|window, cx| dialog.select_type("sqlite", window, cx));
+    let sel = cx.update(|_, cx| {
+        dialog
+            .driver
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default()
+            .to_string()
+    });
+    assert_eq!(sel, "rusqlite");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 切回网络型：占位、卡片与 Tab 条随之重建（渲染不得 panic，且回归到 URI 行）。
+    cx.update(|window, cx| dialog.select_type("mysql", window, cx));
+    let sel = cx.update(|_, cx| {
+        dialog
+            .driver
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .unwrap_or_default()
+            .to_string()
+    });
+    assert_eq!(sel, "sqlx");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    cx.update(|_, cx| harness.update(cx, |_, cx| cx.notify()));
+}
+
+#[gpui_kit::test]
 fn draft_snapshot_carries_type_and_driver_id(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (harness, cx) = open_harness(cx);

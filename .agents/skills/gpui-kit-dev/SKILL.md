@@ -34,6 +34,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 
 - 可交互状态放 `Shared`（模型），渲染时从 Shared 读取
 - 副作用（Dock 装配/移除、模式切换）不在点击回调里直接做：回调只更新 Shared 状态 + `cx.notify()`；`render` 是模式同步的权威点（如 `WorkbenchView::render` 中的 `apply_left_mode` / `apply_right_mode`）
+- **`cx.theme()` 借用了 `cx`**：同一个函数里既要拿 theme 又要 `entity.update(cx, …)` 时，把 update 放在 `let theme = cx.theme();` **之前**（否则 E0502：不可变借用尚未结束）
+- **控件集合与文案随数据语义动态渲染**：同一页面在不同类型下只渲染有意义的控件（如文件型库不显示认证/SSL 卡片）；标签与占位由当前数据推导（如驱动 `url_template`），不要写死某一种类型的示例
+- **单输入源**：同一个 `InputState` 只在一处渲染；两处同时可编辑会分不清权威值（需要“只读回显”时用文本，不要复制一个输入框）
 - **不要在回调里重入 `update` 当前实体**：方法持有 `&mut Context<T>` 时直接用 `cx.subscribe_in` / `cx.notify()` / 修改 `self`，不要 `entity.update(cx, …)`（同一实体正在被更新 → panic `cannot update … while it is already being updated`）。订阅句柄存到字段（`_xx_sub: Option<Subscription>`，前缀下划线表明“仅持有”）；若订阅需要挂到别的实体上，就把建立动作放到那个实体的入口方法里，而不是被它调用的方法里（实例见 `docs/architecture/connection/connection-dialog-architecture.md` 决策 #30）
 
 ## 事件与 Action
