@@ -202,6 +202,11 @@ flowchart TD
 > 它从全局 `ConnectionManager` 取运行时句柄；未建连时取不到，会冒泡为用户看到的
 > `[CONN_NOT_FOUND] Connection 'xxx' not found`。因此连接根展开前必须确保已建连
 >（行内不再提供连接 / 断开按钮，连接入口为右键菜单）。
+>
+> **展开态恢复的坑**：`expanded` 会随 `navigator_state` **跨重启恢复**，但运行时连接**不跨重启**。
+> 因此渲染期（`render_connection_row`）仅当**运行时已连接**（内存态 `connected`）时才排后台加载；
+> 否则不排队，改显一行提示「未连接 · 右键「连接」或再次展开」（避免启动即报 `CONN_NOT_FOUND`）。
+> 用户再次展开会走自动建连。
 
 **运行时生命周期硬约束（排障要点）**：`nav_runtime` 的同步入口（`connect_entry` /
 `disconnect_entry` / `is_connected` / `load_entry_with`）统一在其**进程级 `BRIDGE_RUNTIME`

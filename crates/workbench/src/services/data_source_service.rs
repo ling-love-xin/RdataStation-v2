@@ -423,7 +423,41 @@ impl DataSourceService {
     /// 列出全部数据源（global_connections 回读 → 领域模型）。
     pub async fn list(&self) -> Result<Vec<DataSource>, CoreError> {
         let infos = self.global_db.get_global_connections(None, None).await?;
-        Ok(infos.into_iter().map(map_info_to_data_source).collect())
+        let mut items: Vec<DataSource> = infos.into_iter().map(map_info_to_data_source).collect();
+        // #31：标签读取以权威表为准（行内 JSON 仅兼容回退）。
+        self.overlay_authoritative_tags(&mut items, None);
+        Ok(items)
+    }
+
+    /// 标签读取叠加（#31）：**`connection_tags`（权威检索表）为准**，连接行 `tags` JSON 仅作兼容回退。
+    ///
+    /// 语义：表里存在该连接的记录 → 用表（含“已清空”）；表里完全没有记录（旧数据 / 同步曾失败）
+    /// → 保留行内 JSON 投影，避免历史连接的标签凭空消失。权威表打不开时告警并原样返回（不阻断列表）。
+    fn overlay_authoritative_tags(&self, items: &mut [DataSource], project_path: Option<&str>) {
+        let store = match open_org_store(self.global_db, project_path) {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::warn!(
+                    target: "data_source_service",
+                    error = %e,
+                    "标签权威表不可用：本次读取使用连接行 JSON 投影"
+                );
+                return;
+            }
+        };
+        let mut by_conn: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for (conn_id, tag) in store.list_tag_pairs() {
+            by_conn.entry(conn_id).or_default().push(tag);
+        }
+        if by_conn.is_empty() {
+            return;
+        }
+        for ds in items.iter_mut() {
+            if let Some(tags) = by_conn.get(&ds.id) {
+                ds.tags = serde_json::to_string(tags).ok();
+            }
+        }
     }
 
     /// 按 ID 读取**全局侧**数据源（只查 `global_connections`）。
@@ -461,7 +495,13 @@ impl DataSourceService {
             }
             let store = open_project_store(path).await?;
             let row = store.get_connection(conn_id).await?;
-            return Ok(row.map(map_project_connection_to_data_source));
+            let mut items: Vec<DataSource> = row
+                .into_iter()
+                .map(map_project_connection_to_data_source)
+                .collect();
+            // #31：项目侧标签同样以项目库的 `connection_tags` 为准。
+            self.overlay_authoritative_tags(&mut items, Some(path));
+            return Ok(items.pop());
         }
         self.get_global(conn_id).await
     }
@@ -875,8 +915,9 @@ fn project_display_name(path: &str) -> String {
 
 /// 同步连接标签到权威检索表（`connection_tags`）。
 ///
-/// 连接的 `tags` JSON 字段保留作为兼容投影；检索（`tag:x`）与导航消费
-/// 统一读连接组织存储。同步失败仅告警，不阻断连接保存。
+/// 连接的 `tags` JSON 字段保留作为**兼容投影**（v1 数据形态 / 导出）；读取侧
+/// （`overlay_authoritative_tags`）以本表为准，JSON 只在表里没有该连接记录时回退。
+/// 检索（`tag:x`）与导航消费统一读连接组织存储。同步失败仅告警，不阻断连接保存。
 fn sync_connection_tags(
     global_db: &GlobalDatabaseManager,
     conn_id: &str,

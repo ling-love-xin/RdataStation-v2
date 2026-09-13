@@ -4,9 +4,8 @@
 //! `.agents/skills/gpui-kit-dev/SKILL.md`「查 API」；**不要**用本地 main 分支源码当签名参考）：
 //! - 模态层：`window.open_dialog`（WorkbenchView 挂载 `Root::render_dialog_layer`）；管理器用嵌套 Dialog；
 //! - 驱动/认证引用/网络引用/环境：`Select`（SearchableVec）；表单：`Form + Field + Input`；
-//! - Tab 条与开关目前是自绘：**这是待迁移的技术债，不是「库没有」**——0.6.1 已提供
-//!   `component::tab::TabBar`（`underline()` / `segmented()`）与 `component::switch::Switch`。
-//!   新增代码不要照抄本目录的自绘实现；迁移计划见 `docs/architecture/connection/connection-prototype-design.md`。
+//! - Tab 条与开关：`component::tab::TabBar`（`underline()` / `segmented()`）与
+//!   `component::switch::Switch`（决策 #84 已完成自绘迁移，不再手写。）
 //!
 //! Phase B 范围（dev-plan B1-B6）：
 //! - 网络 Tab：SSH/Proxy 协议链（添加/启用/上移/下移/删除，≤4 跳校验）+ 拓扑预览（DB 带 TLS 徽标）；
@@ -27,7 +26,10 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Theme, WindowExt};
+// Tab 条 / 分段控件 / 开关：gpui-kit 0.6.1 组件（`Sizable` 提供 `.with_size(Size::…)`）。
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -280,7 +282,11 @@ pub struct ConnectionDialogState {
     pub editing_id: Rc<RefCell<Option<String>>>,
     /// 作用域（仅全局 / 仅项目 / 全局+项目）。
     pub scope: Entity<SelectState<SearchableVec<SharedString>>>,
-    /// 项目路径（作用域含项目侧时必需；.RSmeta 项目目录）。
+    /// 项目根路径（作用域含项目侧时必需；.RSmeta 项目目录）。
+    ///
+    /// **数据载体，不渲染输入框**（#18）：项目根由「项目」下拉写入（选中项目 / 「打开现有目录…」
+    /// / 「＋ 新增项目」三条路径），保存 / 测试 / 快照同步 / 分组同步均读它。
+    /// 不再提供手输路径的入口（历史遗留的「手动输入路径…」选项已在决策 #26/#28 中移除）。
     pub project_path: Entity<InputState>,
     /// 标签输入（逗号分隔；保存时解析为 JSON 数组写入 `tags` 并同步 `connection_tags`）。
     pub tags_input: Entity<InputState>,

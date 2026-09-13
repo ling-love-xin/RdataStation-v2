@@ -2428,9 +2428,6 @@ impl SidebarPanel {
             let view = self.database_nav.borrow();
             view.expanded.contains(&conn.id)
         };
-        if expanded {
-            self.ensure_nav_loaded(&conn.id, &conn.id, NavPath::Connection, false, cx);
-        }
         let (connected, error, children) = {
             let view = self.database_nav.borrow();
             (
@@ -2439,6 +2436,13 @@ impl SidebarPanel {
                 view.children.get(&conn.id).cloned().unwrap_or_default(),
             )
         };
+        // 仅在**运行时已连接**时才在渲染期排后台加载。
+        // 为何加这道门：展开态会跨重启从 `navigator_state` 恢复，但运行时连接不跨重启；
+        // 若此时仍排队，`NavigatorService` → `MetadataService` 取不到句柄，
+        // 会冒泡为用户看到的 `[CONN_NOT_FOUND]`。
+        if expanded && connected {
+            self.ensure_nav_loaded(&conn.id, &conn.id, NavPath::Connection, false, cx);
+        }
 
         let source = NavSource::from_conn_id(&conn.id);
         // 来源标识：短码 `P/G/GP` 或文字（设置项，默认短码）。
@@ -2552,7 +2556,13 @@ impl SidebarPanel {
         // 标签 chip（可选显示，`⋯ → 显示标签`）：默认关；开启后「≤2 chip + `+N`」。
         let tag_chips = if settings::SettingsService::show_tags(cx) && !tag_list.is_empty() {
             let chip_bg = cx.theme().colors.list_hover;
-            let mut chips = div().h_flex().items_center().gap_0p5().flex_none();
+            // 标签字号用最初版小字 `text_xs`（与行内文字同尺寸，不因换行而变大）。
+            let mut chips = div()
+                .h_flex()
+                .items_center()
+                .gap_0p5()
+                .flex_none()
+                .text_xs();
             for t in tag_list.iter().take(2) {
                 chips = chips.child(
                     div()
@@ -2968,6 +2978,18 @@ impl SidebarPanel {
             block = block.child(self.render_org_editor(conn, &scope_key, cx));
         }
 
+        // 展开但未连接（如上次会话遗留的展开态）：不报错，给明下一步指引。
+        let loading_here = self.database_nav.borrow().loading.contains(&conn.id);
+        if expanded && !connected && children.is_empty() && error.is_none() && !loading_here {
+            block = block.child(
+                div()
+                    .pl_6()
+                    .pb_0p5()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("未连接 · 右键「连接」或再次展开"),
+            );
+        }
         if let Some(err) = error {
             block = block.child(div().pl_6().pb_1().text_xs().text_color(danger).child(err));
         }
@@ -3544,6 +3566,8 @@ impl SidebarPanel {
                     let mut view = self.database_nav.borrow_mut();
                     view.connected.insert(conn_id.to_string());
                     view.prefetched.clear();
+                    // 清掉上一次的负载错误（如 CONN_NOT_FOUND），以便重试加载。
+                    view.errors.remove(conn_id);
                 }
                 nav_jobs::warm_after_connect(conn_id, root.as_deref());
                 self.ensure_warm_poll(cx);

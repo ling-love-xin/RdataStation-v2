@@ -22,10 +22,11 @@ use gpui_kit::{
 };
 
 use super::{
-    OpenProject, PickerTab, ProjectEditorBridge, ProjectInputs, ProjectSort, ProjectUiHost,
-    ProjectUiNotifier, ProjectUiState, confirm_delete, cycle_sort, more_menu, open_create_dialog,
-    open_delete_dialog, open_lock_busy_dialog, pick_directory, project_card, render_menu_content,
-    render_picker, render_settings, request_close, request_open, submit_create,
+    OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs, ProjectSort,
+    ProjectUiHost, ProjectUiNotifier, ProjectUiState, advance_pending, confirm_delete, cycle_sort,
+    more_menu, open_create_dialog, open_delete_dialog, open_lock_busy_dialog, pick_directory,
+    prepare_unsaved, project_card, render_menu_content, render_picker, render_settings,
+    request_close, request_create_project, request_open, request_open_folder, submit_create,
 };
 use crate::service::ProjectSummary;
 
@@ -250,6 +251,66 @@ fn request_close_intercepts_dirty_editor(cx: &mut TestAppContext) {
     cx.update(|window, cx| request_close(&host, window, cx));
 
     assert!(host.current().is_some(), "有未保存草稿时不应直接关闭项目");
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+}
+
+#[gpui_kit::test]
+fn project_action_continues_after_unsaved_confirm(cx: &mut TestAppContext) {
+    // 回归点（#4）：脏草稿下从连接对话框项目栏选「＋ 新增项目 / 打开现有目录…」
+    // 以前只弹未保存确认，确认后请求就没了（用户得回选择器再点一次）。
+    // 现在确认后**直接推进**到目标对话框（`advance_pending` 的两个新分支）。
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    rec.dirty.set(true);
+    let host = test_host(&rec);
+    host.set_current(Some(OpenProject::new(temp_root("pa"), "有草稿的项目")));
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    // 哨兵值：用来证明“新建项目对话框真的开了”（它会把表单重置）。
+    cx.update(|window, cx| {
+        inputs
+            .create_name
+            .update(cx, |s, cx| s.set_value("sentinel", window, cx));
+    });
+
+    // 1) 脏草稿：请求「＋ 新增项目」→ 先出未保存确认，不动编辑区、不提前开表单。
+    cx.update(|window, cx| request_create_project(&host, &inputs, window, cx));
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "脏草稿应先出未保存确认"
+    );
+    assert_eq!(rec.cleared.get(), 0, "确认前不应清空编辑区");
+    assert_eq!(
+        cx.update(|_, cx| inputs.create_name.read(cx).value().to_string()),
+        "sentinel",
+        "确认前不应开新建对话框"
+    );
+
+    // 2) 复现「放弃更改并继续」按钮的调用序列：准备 → 关确认 → 推进。
+    cx.update(|window, cx| {
+        assert!(prepare_unsaved(&host, false, window, cx), "放弃分支应可推进");
+        window.close_dialog(cx);
+        advance_pending(
+            &host,
+            &PendingAction::CreateProject(inputs.clone()),
+            window,
+            cx,
+        );
+    });
+    assert_eq!(rec.cleared.get(), 1, "确认后应清空编辑区");
+    assert!(!rec.dirty.get(), "编辑区应标记为已保存");
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "确认后应直接打开目标对话框"
+    );
+    assert_eq!(
+        cx.update(|_, cx| inputs.create_name.read(cx).value().to_string()),
+        "",
+        "新建项目对话框已打开（表单被重置）"
+    );
+
+    // 3) 「打开现有目录…」：干净编辑器直接开目录对话框（不重置名称框）。
+    cx.update(|window, cx| request_open_folder(&host, &inputs, window, cx));
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
 }
 

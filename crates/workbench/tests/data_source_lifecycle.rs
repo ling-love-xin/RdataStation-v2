@@ -836,6 +836,76 @@ fn global_delete_cleans_project_group_membership() {
 }
 
 #[test]
+fn tag_reads_follow_the_authority_table() {
+    // 回归点（#31）：标签曾双源（连接行 `tags` JSON 与 `connection_tags` 表各读写一路）。
+    // 现约定：**权威表为准**，行内 JSON 仅作旧数据的兼容回退（表里没有该连接记录时）。
+    fn tags_of(
+        service: &DataSourceService,
+        rt: &tokio::runtime::Runtime,
+        conn_id: &str,
+    ) -> Vec<String> {
+        let list = rt.block_on(service.list()).expect("list");
+        let ds = list
+            .into_iter()
+            .find(|d| d.id == conn_id)
+            .expect("连接应存在");
+        ds.tags
+            .as_deref()
+            .and_then(|j| serde_json::from_str::<Vec<String>>(j).ok())
+            .unwrap_or_default()
+    }
+
+    let dir = temp_dir("tag-authority");
+    let service = make_service(&dir);
+    let rt = runtime();
+
+    // 1) 保存带标签的连接：JSON 投影 + 权威表同时写入，回读可见。
+    let mut tagged = input("tagged", "sqlite", "sqlite:///tmp/authority.db");
+    tagged.tags = Some(r#"["prod","core"]"#.to_string());
+    let gid = rt.block_on(service.save(&tagged, None)).expect("save");
+    assert_eq!(
+        tags_of(&service, &rt, &gid),
+        vec!["core".to_string(), "prod".to_string()],
+        "保存后应能读到标签（表排序）"
+    );
+
+    // 2) 直接改权威表（模拟导航侧 / 标签视图写入）→ 服务读取以它为准（行内 JSON 不动）。
+    let org = engine::persistence::ConnectionOrgStore::open_at(dir.join("global.db"), false)
+        .expect("open global org");
+    org.set_tags(&gid, &["archive".to_string()])
+        .expect("set tags");
+    assert_eq!(
+        tags_of(&service, &rt, &gid),
+        vec!["archive".to_string()],
+        "权威表优先于行内 JSON 投影"
+    );
+
+    // 3) 走服务清空标签：JSON 与表同时清空 → 不会“复活”旧标签。
+    let mut cleared = input("tagged", "sqlite", "sqlite:///tmp/authority.db");
+    cleared.tags = Some("[]".to_string());
+    rt.block_on(service.update(&gid, &cleared, None))
+        .expect("update");
+    assert!(
+        tags_of(&service, &rt, &gid).is_empty(),
+        "清空后不应回退到旧 JSON"
+    );
+
+    // 4) 旧数据兼容窗口：表里没有该连接的记录（升级前建的连接 / 历史同步失败）→ 回退行内 JSON。
+    let mut legacy = input("tagged", "sqlite", "sqlite:///tmp/authority.db");
+    legacy.tags = Some(r#"["legacy"]"#.to_string());
+    rt.block_on(service.update(&gid, &legacy, None))
+        .expect("update");
+    org.set_tags(&gid, &[]).expect("clear table only");
+    assert_eq!(
+        tags_of(&service, &rt, &gid),
+        vec!["legacy".to_string()],
+        "表无记录时回退行内 JSON（兼容旧库；后续可用回填迁移去掉该回退）"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn group_sync_failure_is_reported_to_caller() {
     // 回归点（#28）：分组写出失败以前只打日志（UI 看到的是“保存成功”，勾选静默丢失）；
     // 现返回 Err，对话框据此把结果行降为 warning 级并带出原因。

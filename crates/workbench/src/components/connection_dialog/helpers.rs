@@ -45,12 +45,9 @@ pub(crate) use crate::ui::{
     DIALOG_BADGE_HEIGHT as BADGE_H, DIALOG_BADGE_WIDTH as BADGE_W,
     DIALOG_DRIVER_WIDTH as DRIVER_W, DIALOG_FORM_LABEL_WIDTH as LABEL_COL_W,
     DIALOG_PROJECT_WIDTH as PROJECT_W, DIALOG_ROW_HEIGHT as ROW_H,
-    DIALOG_SEGMENT_ITEM_HEIGHT as SEG_ITEM_H, DIALOG_STAGING_HEIGHT as STAGING_H,
+    DIALOG_STAGING_HEIGHT as STAGING_H,
     DIALOG_TAB_BODY_HEIGHT as TAB_BODY_H, GAP_LG, GAP_MD, GAP_SM,
 };
-
-/// 紧凑间距（0.25rem）：与 `GAP_SM` 同值，语义上用于更紧的相邻元素。
-pub(crate) const GAP_XS: f32 = crate::ui::GAP_SM;
 
 /// Header 标签列宽（rem）：刚好容纳两字标签（名称 / 备注 / 驱动 / 地址），
 /// 不让标签与控件之间留下过大的空白（真机反馈：间距过大）。
@@ -89,6 +86,31 @@ pub(crate) fn tags_from_json(json: Option<&str>) -> String {
     json.and_then(|t| serde_json::from_str::<Vec<String>>(t).ok())
         .map(|list| list.join(", "))
         .unwrap_or_default()
+}
+
+// ===== 对话框 Tab 定义与可见下标映射（#15：TabBar 迁移后的可测接缝）=====
+
+/// Tab 定义（显示名, **内部 Tab 索引**）。
+///
+/// 文件型驱动（SQLite / DuckDB）按原型隐藏「网络」Tab——内部索引保持不变，
+/// 所以 `active_tab` 与内容分支（0 常规 / 1 网络 / 2 能力 / 3 驱动属性 / 4 高级）不受影响。
+pub(crate) fn dialog_tab_defs(is_file_db: bool) -> Vec<(&'static str, usize)> {
+    if is_file_db {
+        vec![("常规", 0), ("能力", 2), ("驱动属性", 3), ("高级", 4)]
+    } else {
+        vec![
+            ("常规", 0),
+            ("网络", 1),
+            ("能力", 2),
+            ("驱动属性", 3),
+            ("高级", 4),
+        ]
+    }
+}
+
+/// 内部 Tab 索引 → TabBar 的**可见下标**（隐藏「网络」后两者不相等，决策 #85）。
+pub(crate) fn visible_tab_index(defs: &[(&'static str, usize)], active: usize) -> usize {
+    defs.iter().position(|(_, ix)| *ix == active).unwrap_or(0)
 }
 
 // ===== 数据库类型 / 驱动展示（Header 去噪 + 条目类型徽标）=====
@@ -338,7 +360,7 @@ pub(crate) fn outline_section(
         .rounded(theme.radius)
         .bg(theme.colors.group_box)
         .py(rems(GAP_SM))
-        .px(rems(GAP_MD))
+        .px_2()
         .child(header);
     if !collapsed {
         panel = panel.child(div().w_full().pt(rems(GAP_SM)).child(body));
@@ -1068,9 +1090,9 @@ mod tests {
         field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
         staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
         type_has_driver, url_template_example, auth_config_values, auth_field_specs,
-        build_auth_config_json, build_network_config_json, create_new_db_file,
+        build_auth_config_json, build_network_config_json, create_new_db_file, dialog_tab_defs,
         network_config_values, network_field_specs, new_db_file_suggested_name,
-        result_needs_detail, DriverDerived,
+        result_needs_detail, visible_tab_index, DriverDerived,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -1427,6 +1449,33 @@ mod tests {
         )
         .expect("build ssh");
         assert!(json.contains("\"keyPath\""), "{json}");
+    }
+
+    #[test]
+    fn dialog_tabs_hide_network_for_file_db_and_map_visible_index() {
+        // #15 迁移到 `TabBar` 后的接缝：文件型隐藏「网络」→ 可见下标与内部索引错开一位，
+        // 错了就会“点能力却显示网络内容”。
+        let net = dialog_tab_defs(false);
+        assert_eq!(net.len(), 5);
+        assert_eq!(visible_tab_index(&net, 0), 0);
+        assert_eq!(visible_tab_index(&net, 4), 4);
+
+        let file = dialog_tab_defs(true);
+        assert_eq!(file.len(), 4, "文件型不显示网络 Tab");
+        assert!(!file.iter().any(|(label, _)| *label == "网络"));
+        assert_eq!(visible_tab_index(&file, 0), 0);
+        assert_eq!(visible_tab_index(&file, 2), 1, "能力在文件型里是第 2 个可见项");
+        assert_eq!(visible_tab_index(&file, 4), 3);
+        // 隐藏的「网络」被选中（旧草稿 / 切类型后）回退到第一个可见项，不越界。
+        assert_eq!(visible_tab_index(&file, 1), 0);
+
+        for (label, ix) in &file {
+            assert_eq!(
+                file.get(visible_tab_index(&file, *ix)).map(|(l, _)| *l),
+                Some(*label),
+                "可见下标应能反查回同一个 Tab"
+            );
+        }
     }
 
     #[test]

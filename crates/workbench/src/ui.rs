@@ -152,5 +152,10 @@ pub const DIALOG_PROJECT_WIDTH: f32 = 17.0;
 pub const DIALOG_BADGE_WIDTH: f32 = 1.75;
 /// Header 类型徽标高（1.5rem = 24px）
 pub const DIALOG_BADGE_HEIGHT: f32 = 1.5;
-/// 作用域分段项高（1.25rem = 20px）
+/// 作用域分段项高（1.25rem = 20px）——**已被 `TabBar::segmented` 组件尺寸档取代**（决策 #84）：
+/// 保留常量供原型文档 / 契约测试对照，视图不再引用。
 pub const DIALOG_SEGMENT_ITEM_HEIGHT: f32 = 1.25;
+/// 暂存条目状态点直径（0.4375rem = 7px；无类型信息的旧草稿回退显示）
+pub const DIALOG_STATUS_DOT_SIZE: f32 = 0.4375;
+/// 短码徽标圆角（0.125rem = 2px）；横向内距用 Tailwind 尺度 `px_1()`（契约禁止 `.px(...)` 字面量）
+pub const DIALOG_CHIP_RADIUS: f32 = 0.125;

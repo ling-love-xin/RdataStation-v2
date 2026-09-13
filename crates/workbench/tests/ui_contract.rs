@@ -58,12 +58,38 @@ fn ui_size_constants_match_design() {
 /// 尺寸：结构尺寸走 `ui.rs` 常量（`rems(ui::…)` / `theme.font_size * ui::…`），
 /// 局部间距走 Tailwind 尺度方法（`gap_1` / `px_2`）；裸 `px(N.)` 一律视为回归。
 /// 注意：`h_px()` / `w_px()` 也会命中 `contains("px(")`（含 `px(` 子串），
-/// 1px 细线请用 `ui::HAIRLINE`（本文件已不允许 `h_px()`）。
+/// 1px 细线请用 `ui::HAIRLINE`（本文件已不允许 `h_px()`）；同理 `.px(rems(…))` 也要改写成
+/// `px_1()` / `px_2()` / `px_3()`（尺寸契约 #14 已把连接对话框模块纳入扫描）。
 #[test]
 fn view_layer_has_no_raw_size_literals() {
     let sources: &[(&str, &str)] = &[
         ("view.rs", include_str!("../src/view.rs")),
         ("panels.rs", include_str!("../src/panels.rs")),
+        // 连接对话框模块（M3，#14 已清零；后续改动不得回退）
+        (
+            "connection_dialog/render.rs",
+            include_str!("../src/components/connection_dialog/render.rs"),
+        ),
+        (
+            "connection_dialog/helpers.rs",
+            include_str!("../src/components/connection_dialog/helpers.rs"),
+        ),
+        (
+            "connection_dialog/project_picker.rs",
+            include_str!("../src/components/connection_dialog/project_picker.rs"),
+        ),
+        (
+            "connection_dialog/managers.rs",
+            include_str!("../src/components/connection_dialog/managers.rs"),
+        ),
+        (
+            "connection_dialog/staging.rs",
+            include_str!("../src/components/connection_dialog/staging.rs"),
+        ),
+        (
+            "connection_dialog/mod.rs",
+            include_str!("../src/components/connection_dialog/mod.rs"),
+        ),
     ];
 
     for (name, src) in sources {

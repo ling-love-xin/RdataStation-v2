@@ -185,9 +185,8 @@ impl ConnectionDialogState {
         });
         prop_key.update(cx, |s, cx| s.set_placeholder("key", window, cx));
         prop_val.update(cx, |s, cx| s.set_placeholder("value", window, cx));
-        project_path.update(cx, |s, cx| {
-            s.set_placeholder("项目根目录（含 .RSmeta）", window, cx)
-        });
+        // `project_path` 不在这里写占位：它**不渲染输入框**（项目根由项目下拉写入，见
+        // `ConnectionDialogState::project_path` 的字段文档），写占位只会白 notify 一次。
         ssl_ca.update(cx, |s, cx| {
             s.set_placeholder("CA 证书路径（可选）", window, cx)
         });
@@ -357,48 +356,32 @@ impl ConnectionDialogState {
 
             let theme = cx.theme();
 
-            // ---- Tab 条（自绘；gpui-component 无 Tabs 组件）----
-            // 文件型驱动（SQLite/DuckDB）按原型隐藏「网络」Tab（无协议链 / SSL 语义）。
-            let tab_defs: Vec<(&'static str, usize)> = if is_file_db {
-                vec![("常规", 0), ("能力", 2), ("驱动属性", 3), ("高级", 4)]
-            } else {
-                vec![
-                    ("常规", 0),
-                    ("网络", 1),
-                    ("能力", 2),
-                    ("驱动属性", 3),
-                    ("高级", 4),
-                ]
-            };
-            let mut tab_bar = div()
-                .h_flex()
-                .items_center()
-                .gap_1()
+            // ---- Tab 条（gpui-component `TabBar::underline`，决策 #84）----
+            // 文件型驱动（SQLite/DuckDB）按原型隐藏「网络」Tab（无协议链 / SSL 语义）：
+            // 这里做「可见下标 ⇄ 内部 Tab 索引」映射，`active_tab` 仍是内部 0–4（内容分支不变）。
+            let tab_defs: Vec<(&'static str, usize)> = dialog_tab_defs(is_file_db);
+            let tab_selected = visible_tab_index(&tab_defs, active_tab.get());
+            let tab_bar = div()
                 .border_b_1()
-                .border_color(theme.colors.border);
-            for (label, tab_ix) in tab_defs {
-                let on = active_tab.get() == tab_ix;
-                let idx = tab_ix;
-                let active_tab = active_tab.clone();
-                let entity = entity.clone();
-                tab_bar = tab_bar.child(
-                    div()
-                        .id(ElementId::Name(SharedString::from(format!("tab-{label}"))))
-                        .cursor_pointer()
-                        .px_3()
-                        .py_1()
-                        .text_sm()
-                        .font_weight(if on { FontWeight::BOLD } else { FontWeight::NORMAL })
-                        .text_color(if on { theme.colors.foreground } else { theme.colors.muted_foreground })
-                        .border_b_2()
-                        .border_color(if on { theme.colors.primary } else { transparent_black() })
-                        .child(label)
-                        .on_click(move |_, _, app| {
-                            active_tab.set(idx);
-                            entity.update(app, |_, cx| cx.notify());
+                .border_color(theme.colors.border)
+                .child(
+                    TabBar::new("conn-tabs")
+                        .underline()
+                        .with_size(Size::Small)
+                        .selected_index(tab_selected)
+                        .children(tab_defs.iter().map(|(label, _)| Tab::new().label(*label)))
+                        .on_click({
+                            let defs = tab_defs.clone();
+                            let active_tab = active_tab.clone();
+                            let entity = entity.clone();
+                            move |ix, _window, app| {
+                                if let Some((_, tab_ix)) = defs.get(*ix) {
+                                    active_tab.set(*tab_ix);
+                                    entity.update(app, |_, cx| cx.notify());
+                                }
+                            }
                         }),
                 );
-            }
 
             // 项目会话（供常规 Tab 组织卡片与 Header 共用）：已打开项目时 Header 只显示项目名
             // （悬停气泡展示完整路径）；未打开项目则保留可编辑的项目根输入。
@@ -574,12 +557,14 @@ impl ConnectionDialogState {
                             let entity = entity.clone();
                             rows = rows.child(
                                 div().h_flex().items_center().gap_2()
-                                    .child(div().text_xs().child(k))
+                                    .child(div().text_xs().child(k.clone()))
                                     .child(div().text_xs().text_color(theme.colors.muted_foreground).child("="))
                                     .child(div().text_xs().flex_1().child(v))
                                     .child(
                                         div()
-                                            .id(ElementId::Name(SharedString::from(format!("prop-del-{idx}"))))
+                                            // ElementId 用业务键（属性 key）：增删行后 id 不位移，
+                                            // 也与“同 key 覆盖”的写入语义一致（#17）。
+                                            .id(ElementId::Name(SharedString::from(format!("prop-del-{k}"))))
                                             .cursor_pointer()
                                             .text_xs()
                                             .text_color(theme.colors.danger)
@@ -675,7 +660,7 @@ impl ConnectionDialogState {
                                     .child(
                                         div()
                                             .flex_1()
-                                            .min_w(px(0.))
+                                            .min_w(rems(0.))
                                             .child(Select::new(&env).placeholder("选择环境…")),
                                     )
                                     .child(
@@ -708,30 +693,24 @@ impl ConnectionDialogState {
                             rows = rows.child(
                                 div().h_flex().items_center().gap_2()
                                     .child(
-                                        div()
-                                            .id(ElementId::Name(SharedString::from(format!("sec-{p_type}"))))
-                                            .cursor_pointer()
-                                            .w_8()
-                                            .h(rems(1.125))
-                                            .rounded_full()
-                                            .bg(if on { theme.colors.primary } else { theme.colors.border })
-                                            .relative()
-                                            .on_click(move |_, _, app| {
-                                                state_click.toggle_policy_override(&p_type_click);
+                                        // 策略覆盖开关：gpui-component `Switch`（决策 #84）。
+                                        // 旧自绘版本尺寸与其他开关不一致，且未接 `form_disabled`。
+                                        Switch::new(ElementId::Name(SharedString::from(format!(
+                                            "policy-{p_type}"
+                                        ))))
+                                        .with_size(Size::Small)
+                                        .checked(on)
+                                        .disabled(form_disabled)
+                                        .on_click({
+                                            let state_click = state_click.clone();
+                                            let p_type_click = p_type_click.clone();
+                                            let entity = entity.clone();
+                                            move |want, _window, app| {
+                                                state_click
+                                                    .set_policy_override(&p_type_click, *want);
                                                 entity.update(app, |_, cx| cx.notify());
-                                            })
-                                            .child(
-                                                div()
-                                                    .absolute()
-                                                    .top_0()
-                                                    .left_0()
-                                                    .m_0p5()
-                                                    .w_3p5()
-                                                    .h_3p5()
-                                                    .rounded_full()
-                                                    .bg(theme.colors.background)
-                                                    .child(""),
-                                            ),
+                                            }
+                                        }),
                                     )
                                     .child(div().text_xs().child(label.clone()))
                                     .child(
@@ -764,38 +743,19 @@ impl ConnectionDialogState {
                     ));
                     // 分组③ DuckDB 本地加速（仅网络型库可见）：warning 色标题，开关 + 参数行均在分组内。
                     if is_network_db {
-                        let toggle = div()
-                            .id("duckdb-fed")
-                            .cursor_pointer()
-                            .w_8()
-                            .h(rems(1.125))
-                            .rounded_full()
-                            .bg(if duckdb_fed.get() {
-                                theme.colors.primary
-                            } else {
-                                theme.colors.border
-                            })
-                            .relative()
+                        // DuckDB 加速开关：gpui-component `Switch`（决策 #84；宽度/高度走组件尺寸档）。
+                        let toggle = Switch::new("duckdb-fed")
+                            .with_size(Size::Small)
+                            .checked(duckdb_fed.get())
+                            .disabled(form_disabled)
                             .on_click({
                                 let duckdb_fed = duckdb_fed.clone();
                                 let entity = entity.clone();
-                                move |_, _, app| {
-                                    duckdb_fed.set(!duckdb_fed.get());
+                                move |want, _window, app| {
+                                    duckdb_fed.set(*want);
                                     entity.update(app, |_, cx| cx.notify());
                                 }
-                            })
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .m_0p5()
-                                    .w_3p5()
-                                    .h_3p5()
-                                    .rounded_full()
-                                    .bg(theme.colors.background)
-                                    .child(""),
-                            );
+                            });
                         let mut accel_body = div()
                             .w_full()
                             .v_flex()
@@ -876,13 +836,13 @@ impl ConnectionDialogState {
                         .border_1()
                         .border_color(theme.colors.info.opacity(0.28))
                         .bg(theme.colors.info.opacity(0.08))
-                        .px(rems(0.75))
+                        .px_3()
                         .py(rems(0.4375))
                         .text_xs()
                         .text_color(theme.colors.info)
                         .child(
                             Icon::new(IconName::Info)
-                                .size(px(14.))
+                                .size(rems(crate::ui::ICON_SIZE_SM))
                                 .text_color(theme.colors.info),
                         )
                         .child(info_text);
@@ -907,7 +867,7 @@ impl ConnectionDialogState {
                                     .h_flex()
                                     .items_center()
                                     .gap(rems(0.5))
-                                    .child(div().flex_1().min_w(px(0.)).child(
+                                    .child(div().flex_1().min_w(rems(0.)).child(
                                         Input::new(&url).disabled(form_disabled),
                                     ))
                                     .child(
@@ -1011,7 +971,7 @@ impl ConnectionDialogState {
                                 .placeholder("选择认证方法…")
                                 .into_any_element()
                         };
-                        row = row.child(div().flex_1().min_w(px(0.)).child(cell));
+                        row = row.child(div().flex_1().min_w(rems(0.)).child(cell));
                         row
                     };
                     let auth_body = div()
@@ -1034,7 +994,7 @@ impl ConnectionDialogState {
                                 .child(
                                     div()
                                         .flex_1()
-                                        .min_w(px(0.))
+                                        .min_w(rems(0.))
                                         .child(
                                             Select::new(&auth_ref)
                                                 .placeholder("引用已保存配置…")
@@ -1167,7 +1127,7 @@ impl ConnectionDialogState {
                                     .child("分组：本项目暂无分组"),
                             );
                         } else {
-                            let mut list = div().v_flex().gap(px(2.));
+                            let mut list = div().v_flex().gap(rems(0.125));
                             for (gid, gname, checked) in checks.iter() {
                                 list = list.child(
                                     Checkbox::new(SharedString::from(format!("grp-{gid}")))
@@ -1195,7 +1155,7 @@ impl ConnectionDialogState {
                             org_body = org_body.child(
                                 div()
                                     .v_flex()
-                                    .gap(px(2.))
+                                    .gap(rems(0.125))
                                     .child(
                                         div()
                                             .text_xs()
@@ -1207,9 +1167,47 @@ impl ConnectionDialogState {
                         }
                     }
 
+                    // 首次使用引导（#29）：仅在“未选类型 + 名称/地址都还空”时出现，选完类型即自动消失
+                    // （不占老手版面）；文案只陈述可执行动作与快捷键，不引外链。
+                    let onboarding = {
+                        let untouched = name.read(cx).value().trim().is_empty()
+                            && url.read(cx).value().trim().is_empty();
+                        if type_badge_now.is_none() && untouched {
+                            Some(
+                                div()
+                                    .w_full()
+                                    .v_flex()
+                                    .gap(rems(GAP_SM))
+                                    .rounded(rems(0.5))
+                                    .border_1()
+                                    .border_color(theme.colors.primary.opacity(0.28))
+                                    .bg(theme.colors.primary.opacity(0.06))
+                                    .px_3()
+                                    .py(rems(0.4375))
+                                    .text_xs()
+                                    .text_color(theme.colors.foreground)
+                                    .child(
+                                        "第一次配置数据源？① 左侧选数据库类型 → ② 选驱动实现 → ③ 填连接信息（文件型用「打开文件…」/「新建文件…」）→ ④ Ctrl+T 测试 → ⑤ Ctrl+Enter 保存",
+                                    )
+                                    .child(
+                                        div().text_color(theme.colors.muted_foreground).child(
+                                            "未保存的填写会留在左侧「草稿」区（关闭对话框不丢）；已保存的连接从数据源导航栏进入编辑。",
+                                        ),
+                                    ),
+                            )
+                        } else {
+                            None
+                        }
+                    };
+
                     // 常规 Tab：**单列分组大纲**（info-banner 常驻 + 分组；分组可折叠，集合随驱动类型）。
                     // 卡片式并排已弃用：窄宽下会换行、卡高不齐、白底白框的输入框几乎看不见。
-                    let mut outline = div().w_full().v_flex().gap(rems(GAP_MD)).child(info_banner);
+                    let mut outline = div()
+                        .w_full()
+                        .v_flex()
+                        .gap(rems(GAP_MD))
+                        .when_some(onboarding, |d, o| d.child(o))
+                        .child(info_banner);
                     outline = outline.child(make_section(
                         "conn",
                         lucide("icons/database.svg"),
@@ -1313,7 +1311,7 @@ impl ConnectionDialogState {
                         .items_center()
                         .gap(rems(0.375))
                         .h(rems(1.75))
-                        .px(rems(0.5))
+                        .px_2()
                         .rounded(rems(0.375))
                         .cursor_pointer();
                     if on {
@@ -1323,7 +1321,7 @@ impl ConnectionDialogState {
                     let hint: Option<Div> = (!has_driver).then(|| {
                         div()
                             .flex_1()
-                            .min_w(px(0.))
+                            .min_w(rems(0.))
                             .text_right()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
@@ -1331,7 +1329,7 @@ impl ConnectionDialogState {
                     });
                     let mut row_el = row.child(
                         div()
-                            .w(px(2.))
+                            .w(crate::ui::TREE_ACTIVE_BAR)
                             .h(rems(1.))
                             .rounded_full()
                             .bg(if on { theme.colors.primary } else { theme.colors.border }),
@@ -1378,6 +1376,12 @@ impl ConnectionDialogState {
                 // 历史数据守卫：清理入口（`staging_prune_saved`）后不应再有已保存条目，
                 // 此处仍按 `saved_id` 染色，以防迁移前写入的残余行。
                 let is_saved = saved_id.is_some();
+                // ElementId 用业务键：已保存的残余条目取 `saved_id`（持久实体不用位置 id）；
+                // 未保存草稿的列表身份本就是下标（`staging_*` 全部以 index 为键），故保持 `new-{i}`（#17）。
+                let row_key = saved_id
+                    .as_deref()
+                    .map(|id| format!("saved-{id}"))
+                    .unwrap_or_else(|| format!("new-{i}"));
                 // 显示用字段：当前条目用 live（表单），其余用快照。
                 let display_type_id =
                     staging_display_type_id(&draft_type_id, live.map(|l| l.type_id.as_str()));
@@ -1386,12 +1390,12 @@ impl ConnectionDialogState {
                     _ => draft_name,
                 };
                 let mut row = div()
-                    .id(ElementId::Name(SharedString::from(format!("draft-{i}"))))
+                    .id(ElementId::Name(SharedString::from(format!("draft-{row_key}"))))
                     .h_flex()
                     .items_center()
                     .gap(rems(0.375))
                     .h(rems(ROW_H))
-                    .px(rems(0.5))
+                    .px_2()
                     .rounded(rems(0.375))
                     .cursor_pointer();
                 if on {
@@ -1421,8 +1425,8 @@ impl ConnectionDialogState {
                                 .text_xs()
                                 .child(icon),
                             None => div()
-                                .w(px(7.))
-                                .h(px(7.))
+                                .w(rems(crate::ui::DIALOG_STATUS_DOT_SIZE))
+                                .h(rems(crate::ui::DIALOG_STATUS_DOT_SIZE))
                                 .flex_shrink_0()
                                 .rounded_full()
                                 .bg(if is_saved {
@@ -1442,7 +1446,7 @@ impl ConnectionDialogState {
                             .items_center()
                             .gap(rems(0.25))
                             .flex_1()
-                            .min_w(px(0.))
+                            .min_w(rems(0.))
                             .text_xs()
                             .text_color(if on {
                                 theme.colors.foreground
@@ -1454,8 +1458,8 @@ impl ConnectionDialogState {
                             name_el = name_el.child(
                                 div()
                                     .flex_shrink_0()
-                                    .px(px(3.))
-                                    .rounded(px(2.))
+                                    .px_1()
+                                    .rounded(rems(crate::ui::DIALOG_CHIP_RADIUS))
                                     .border_1()
                                     .border_color(theme.colors.border)
                                     .text_color(theme.colors.muted_foreground)
@@ -1475,7 +1479,7 @@ impl ConnectionDialogState {
                 if !is_saved {
                     row = row.child(
                         div()
-                            .id(ElementId::Name(SharedString::from(format!("draft-del-{i}"))))
+                            .id(ElementId::Name(SharedString::from(format!("draft-del-{row_key}"))))
                             .cursor_pointer()
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
@@ -1512,7 +1516,7 @@ impl ConnectionDialogState {
                 .child(
                     Input::new(&driver_filter).prefix(
                         lucide("icons/search.svg")
-                            .size(px(13.))
+                            .size(rems(crate::ui::ICON_SIZE_SM))
                             .text_color(theme.colors.muted_foreground),
                     ),
                 )
@@ -1602,7 +1606,7 @@ impl ConnectionDialogState {
                     wrap = wrap.child(
                         div()
                             .flex_1()
-                            .min_w(px(0.))
+                            .min_w(rems(0.))
                             .child(
                                 Select::new(&project_sel)
                                     .placeholder("仅全局不需要")
@@ -1613,62 +1617,40 @@ impl ConnectionDialogState {
                     wrap = wrap.child(
                         div()
                             .flex_1()
-                            .min_w(px(0.))
+                            .min_w(rems(0.))
                             .child(Select::new(&project_sel).placeholder("选择项目…")),
                     );
                 }
                 wrap
             };
-            // 作用域：三态分段控件（自绘，颜色走主题 token；底层仍写 scope Select）。
-            // 作用域：三态分段控件（自绘，颜色走主题 token；底层仍写 scope Select）。
+            // 作用域：三态分段（gpui-component `TabBar::segmented`，决策 #84）——
+            // 短标签只用于显示，写库仍用全称标签（`SCOPE_SEG_LABELS` 的第二列）。
             let scope_seg = {
                 let scope_now = if scope_sel.is_empty() {
                     SCOPE_LABELS[0]
                 } else {
                     scope_sel.as_str()
                 };
-                // 分段按钮文本用短版（写库仍用全称标签）。
-                let mut seg = div()
-                    .h_flex()
+                let selected = SCOPE_SEG_LABELS
+                    .iter()
+                    .position(|(_, full)| *full == scope_now)
+                    .unwrap_or(0);
+                TabBar::new("scope-seg")
+                    .segmented()
+                    .with_size(Size::XSmall)
                     .flex_shrink_0()
-                    .items_center()
-                    .gap(px(1.))
-                    .p(px(1.))
-                    .rounded(rems(GAP_SM))
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .bg(theme.colors.background);
-                for (short, full) in SCOPE_SEG_LABELS {
-                    let active = scope_now == full;
-                    let mut item = div()
-                        .id(SharedString::from(format!("scope-{full}")))
-                        .h_flex()
-                        .items_center()
-                        .justify_center()
-                        .h(rems(SEG_ITEM_H))
-                        .px(rems(GAP_MD))
-                        .rounded(rems(GAP_XS))
-                        .text_xs()
-                        .cursor_pointer()
-                        .child(short);
-                    item = if active {
-                        item.bg(theme.colors.primary)
-                            .text_color(theme.colors.primary_foreground)
-                    } else {
-                        item.text_color(theme.colors.muted_foreground)
-                            .hover(|s| s.bg(theme.colors.list_hover))
-                    };
-                    let item = item.on_click({
+                    .selected_index(selected)
+                    .children(SCOPE_SEG_LABELS.iter().map(|(short, _)| Tab::new().label(*short)))
+                    .on_click({
                         let scope = scope.clone();
                         let entity = entity.clone();
-                        move |_, window, app| {
-                            set_select_value(&scope, full, window, app);
-                            entity.update(app, |_, cx| cx.notify());
+                        move |ix, window, app| {
+                            if let Some((_, full)) = SCOPE_SEG_LABELS.get(*ix) {
+                                set_select_value(&scope, full, window, app);
+                                entity.update(app, |_, cx| cx.notify());
+                            }
                         }
-                    });
-                    seg = seg.child(item);
-                }
-                seg
+                    })
             };
             // 类型徽标（仅图标，定宽 1.75rem：类型名长短不移动后续元素；未辨识时显示 ?）。
             let type_badge_ui = {
@@ -1711,7 +1693,7 @@ impl ConnectionDialogState {
                         .h_flex()
                         .items_center()
                         .gap(rems(GAP_LG))
-                        .min_w(px(0.))
+                        .min_w(rems(0.))
                         .child(type_badge_ui)
                         .child(header_label(theme, "名称"))
                         .child(Input::new(&name).flex_1())
@@ -1722,7 +1704,7 @@ impl ConnectionDialogState {
                         .h_flex()
                         .items_center()
                         .gap(rems(GAP_LG))
-                        .min_w(px(0.))
+                        .min_w(rems(0.))
                         .child(header_label(theme, "备注"))
                         .child(Input::new(&remark).flex_1())
                         .child(project_ui),
@@ -1732,7 +1714,7 @@ impl ConnectionDialogState {
                         .h_flex()
                         .items_center()
                         .gap(rems(GAP_LG))
-                        .min_w(px(0.))
+                        .min_w(rems(0.))
                         .child(header_label(theme, "驱动"))
                         .child(
                             div()
@@ -1770,7 +1752,7 @@ impl ConnectionDialogState {
                             };
                             div()
                                 .flex_1()
-                                .min_w(px(0.))
+                                .min_w(rems(0.))
                                 .overflow_hidden()
                                 .text_xs()
                                 .text_ellipsis()
@@ -1800,7 +1782,7 @@ impl ConnectionDialogState {
                             .v_flex()
                             .gap(rems(0.125))
                             .flex_1()
-                            .min_w(px(0.))
+                            .min_w(rems(0.))
                             .child(div().text_xs().text_color(color).child(line.summary.clone()));
                         if result_needs_detail(&line.summary) || line.detail.is_some() {
                             let expanded = result_expanded.get();
@@ -2188,7 +2170,7 @@ impl ConnectionDialogState {
                             div()
                                 .v_flex()
                                 .flex_1()
-                                .min_w(px(0.))
+                                .min_w(rems(0.))
                                 .gap_2()
                                 .child(header_ui)
                                 .child(tab_bar)

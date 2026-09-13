@@ -120,10 +120,15 @@ impl Default for PickerState {
 }
 
 /// 待处理的项目动作（未保存草稿拦截用）。
+///
+/// `CreateProject` / `OpenFolder` 携带输入实体：确认后**直接**打开目标对话框，
+/// 不用用户回选择器再点一次（#4）。
 #[derive(Debug, Clone)]
 pub enum PendingAction {
     OpenPath(PathBuf),
     Close,
+    CreateProject(ProjectInputs),
+    OpenFolder(ProjectInputs),
 }
 
 // ==================== 宿主桥 ====================
@@ -290,7 +295,7 @@ impl Default for ProjectUiState {
 }
 
 /// 项目相关输入实体（由宿主懒创建并持有）。
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ProjectInputs {
     pub search: Entity<InputState>,
@@ -847,7 +852,7 @@ pub fn open_unsaved_dialog(
             .icon(Icon::new(IconName::TriangleAlert).text_color(theme.colors.warning))
             .title("未保存的草稿")
             .description(
-                "编辑区存在未保存的 SQL 草稿。「保存并继续」会另存为项目草稿文件，「放弃更改」则直接执行切换 / 关闭。",
+                "编辑区存在未保存的 SQL 草稿。「保存并继续」会另存为项目草稿文件，「放弃更改」则直接执行切换 / 关闭 / 所选项目操作。",
             )
             .when_some(error, |a, e| a.child(dialog_error_line(theme, &e)))
             .footer(dialog_footer_three(
@@ -920,6 +925,42 @@ fn apply_opened(host: &ProjectUiHost, opened: project_service::OpenedProject, cx
     host.editor.mark_clean();
 
     host.notify(cx);
+}
+
+/// 请求「＋ 新增项目」（含未保存拦截）。
+///
+/// 有未保存草稿时先走确认对话框，**确认后直接打开新建项目对话框**（不再要求用户回选择器
+/// 重新点一次）——连接对话框项目栏的「＋ 新增项目」与标题栏项目菜单共用本入口。
+pub fn request_create_project(
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if host.editor.is_dirty() {
+        open_unsaved_dialog(
+            host,
+            PendingAction::CreateProject(inputs.clone()),
+            window,
+            cx,
+        );
+        return;
+    }
+    open_create_dialog(host, inputs, window, cx);
+}
+
+/// 请求「打开现有目录…」（含未保存拦截；确认后直接打开目录选择对话框）。
+pub fn request_open_folder(
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if host.editor.is_dirty() {
+        open_unsaved_dialog(host, PendingAction::OpenFolder(inputs.clone()), window, cx);
+        return;
+    }
+    open_folder_dialog(host, inputs, window, cx);
 }
 
 /// 请求关闭项目（含未保存拦截）。
@@ -1002,6 +1043,9 @@ fn advance_pending(
     match pending {
         PendingAction::OpenPath(path) => open_path(host, path, window, cx),
         PendingAction::Close => do_close(host, cx),
+        // 「＋ 新增项目」/「打开现有目录…」：确认后直接开目标对话框（#4）。
+        PendingAction::CreateProject(inputs) => open_create_dialog(host, inputs, window, cx),
+        PendingAction::OpenFolder(inputs) => open_folder_dialog(host, inputs, window, cx),
     }
 }
 

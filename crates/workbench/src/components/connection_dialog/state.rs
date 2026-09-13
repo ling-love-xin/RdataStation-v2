@@ -244,7 +244,7 @@ impl ConnectionDialogState {
             *self.groups.borrow_mut() = groups;
             self.sync_group_checks();
         }
-        // 项目下拉选项：当前项目（若打开）+ 最近项目（名册）+ 「手动输入路径…」。
+        // 项目下拉选项：当前项目（若打开）+ 最近项目（名册）+ 动作项（不用项目 / 打开目录 / 新增项目）。
         self.refresh_project_options(window, cx);
     }
 
@@ -402,12 +402,16 @@ impl ConnectionDialogState {
     }
 
     /// 切换策略覆盖勾选（按策略类型增删）。
-    pub(crate) fn toggle_policy_override(&self, policy_type: &str) {
+    /// 按**目标状态**设置策略覆盖（Switch 回调传的是“请求值”而非“取反”，决策 #84）。
+    pub(crate) fn set_policy_override(&self, policy_type: &str, on: bool) {
         let mut keys = self.policy_override_keys.borrow_mut();
-        if let Some(pos) = keys.iter().position(|k| k == policy_type) {
-            keys.remove(pos);
-        } else {
-            keys.push(policy_type.to_string());
+        let pos = keys.iter().position(|k| k == policy_type);
+        match (on, pos) {
+            (true, None) => keys.push(policy_type.to_string()),
+            (false, Some(pos)) => {
+                keys.remove(pos);
+            }
+            _ => {}
         }
     }
 
