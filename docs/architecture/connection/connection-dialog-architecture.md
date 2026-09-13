@@ -428,6 +428,7 @@ flowchart LR
 | 78 | **暂存列表分区展示（草稿 / 已保存连接）**：在条目类别切换处插一行小标题（「草稿（未保存）」/「已保存连接（点条目可编辑）」） | 暂存区为了让“一个对话框里连续编辑多条已保存连接”成立，会把库中连接并入列表（决策 #26/#45）；不分区时用户会问「暂存的连接为什么可以读到数据库实际的连接」。分区**不改变数据来源**（草稿仍只存 `connection_drafts`），只把两类条目的来源说清楚。**（已被决策 #80 取代：现在两类不再共存于暂存区）** |
 | 79 | **网络档案凭据加密入库（§14 #34 关闭）**：`network_store::{encrypt_network_config, decrypt_network_config}`——写路径加密 `config` 内任意层级的 `password` / `passphrase`（覆盖 SSH 扁平字段、代理 `auth.password`、`chain` 数组内每跳；`AES:` 前缀幂等），读路径解密；`reencrypt_all_network_configs` 一次性迁移存量明文（`initialize_global_system` 调用，幂等、失败仅告警）；服务层 `list_network_configs` 改真脱敏（`config` 置空）+ 新增 `network_config_detail_by_name`（编辑回填）；项目库直查 SQL 路径（`project_query_network_config_with_auth`）补解密 | 网络档案的 SSH / 代理密码此前明文落库（`auth_store` 只加密 `auth_data`），库文件被复制 / 备份即泄露跳板机与代理凭据，与「凭据必须加密」约束冲突。直查 SQL 那条路径是集成测试拖出来的真实缺陷：加密后若不解密，隧道会拿 `AES:…` 当密码用 |
 | 80 | **暂存区只放未保存草稿**（用户决策）：`staging_merge_saved` → `staging_prune_saved`（不再从库并入已保存连接，只清理历史残留的 `saved_id` 条目）；保存成功后草稿**移出**暂存区（不再标记为“已保存条目”）+ 补空草稿；`staging_persist` / `staging_restore` 都过滤 `saved_id`（表里不留已保存条目）；保存成功文案改为「编辑请从导航栏进入」 | 旧设计把库中连接并入暂存区（决策 #26/#45，为“一个对话框连续编辑多条连接”）；真机反馈用户直接问「暂存的连接为什么可以读到数据库实际的连接」——「暂存 = 草稿」的心智模型更强，已保存连接统一从导航栏进入编辑（那里本来就有 ✎ 入口，也有删除入口） |
+| 81 | **跨项目引用计数 + 项目库存量迁移（#33 关闭 / #34 残留消除）**：① `DataSourceService::count_references_batch` 除全局库与当前项目外，还遍历**项目名册**（`GlobalDatabaseManager::get_all_projects`）里的其它项目库，`ReferenceCount` 增加 `other: Vec<String>`（记项目名、去重），拦截消息改为「全局 N 条、当前项目 N 条、其它项目 N 条（项目名…）」；② engine 新增 `network_store::reencrypt_project_network_configs(root)`（`{root}/.RSmeta/project.db`，库/表不存在即跳过、**不建目录不建表**），`initialize_global_system` 在全局库迁移之后遍历名册逐库迁移 | 此前删除守卫只统计「全局 + 当前打开项目」：删档案后打开另一个项目 → 那边的连接全部报「引用的认证配置不存在」且无从得知谁在用（#33）；项目库存量明文也不在启动迁移范围内（#34 残留）。两件事共用同一份「已知项目」来源（名册），一趟做完。代价：每次管理器刷新 / 删除前会打开 N 个项目库（N = 名册项目数，通常个位数） |
 
 
 ---
@@ -468,6 +469,8 @@ flowchart LR
 | 单测 | `connection_dialog/helpers.rs`（内嵌 +2，文件选择语义） | `new_db_file_suggested_name`（按驱动 id 判族，大小写与未知驱动回退）/ `create_new_db_file`（不存在 → 创建**空**文件并采用地址；**已存在 → 不采用、不清空**原文件） |
 | 存储单测 | `engine::persistence::network_store`（内嵌 +4，§14 #34） | 敏感键加密（SSH 根级 / 代理嵌套 `auth.password` / `chain` 数组内每跳）/ 幂等（已 `AES:` 不重复加密）/ 非 JSON·标量·明文旧值容错 / 写读路径往返（库里密文、读回明文）/ 存量明文一次性迁移（改动数 1 → 再跑 0） |
 | 服务层 | `data_source_lifecycle.rs::network_profile_secrets_are_encrypted_and_masked_in_list`（#34） | 网络档案密码**密文落库**（直读原始列断言无明文 + 含 `AES:`）；服务层列表脱敏（`config` 置空）；`network_config_detail_by_name` 返回明文；**连接解析链路拿到明文**（覆盖项目库直查 SQL 路径的解密回归） |
+| 存储单测 | `engine::persistence::network_store`（内嵌 +1，项目库迁移） | `reencrypt_project_network_configs`：项目 / 库不存在 → 0 且**不建目录**；无 `network_configs` 表 → 0 且**不建表**；有明文 → 迁移 1 条且幂等 |
+| 服务层 | `data_source_lifecycle.rs::manager_reference_count_and_delete_guard`（扩展，#33） | 跨项目引用：登记第二个项目 + 其项目侧连接引用同一档案 → `other == ["另一项目"]`（每项目只计一次）；未打开任何项目时同样可见；拦截消息含「全局 1 条」与「其它项目 1 条（另一项目）」 |
 
 约定：测试全部落临时目录、不触真实库；`#[gpui_kit::test]` 且**禁用通配导入**（避免 `#[test]` 宏遮蔽，见 gpui-kit-dev skill）。
 
@@ -529,6 +532,7 @@ flowchart LR
 | 48 | **暂存列表分区**：条目按类别插小标题（草稿（未保存）/ 已保存连接（点条目可编辑）），来源一眼可分 | `connection_dialog/render.rs`（决策 #78）；**已被 #50 / 决策 #80 取代**（暂存区不再有已保存条目） |
 | 49 | **网络档案凭据加密（§14 #34 关闭）**：写路径加密 `config` 内 `password` / `passphrase`（任意层级 + `chain` 数组）、读路径解密、存量明文一次性迁移、服务层列表真脱敏 + `network_config_detail_by_name`、项目库直查 SQL 路径补解密 | `engine/persistence/network_store.rs`、`engine/migration/global_init.rs`、`services/{data_source_service.rs,connection_service.rs}`、`connection_dialog/managers.rs`（决策 #79）；测试：engine 内嵌 +4、`data_source_lifecycle` +1 |
 | 50 | **暂存区只放未保存草稿（用户决策）**：移除「并入已保存连接」；保存后草稿移出暂存区（不再有“已保存条目”）；持久化 / 恢复都过滤 `saved_id`；保存成功文案改为「编辑请从导航栏进入」 | `connection_dialog/{staging.rs,render.rs}`、`tests/{connection_staging,connection_multi_save}.rs`（决策 #80）；回归：`connection_staging` 6 项 / `connection_multi_save` 3 项 / `connection_drafts_persist` 全绿 |
+| 51 | **跨项目引用计数 + 项目库存量迁移（#33 关闭 / #34 残留消除）**：引用计数遍历项目名册（`other: Vec<项目名>`，每项目只计一次）；拦截消息列出范围与项目名；`reencrypt_project_network_configs` + 启动时逐库迁移（不建目录 / 不建表） | `services/data_source_service.rs`、`engine/persistence/network_store.rs`、`engine/migration/global_init.rs`（决策 #81）；测试：engine +1、`data_source_lifecycle` 扩展 1 项 |
 
 
 后续可选（未做）：
@@ -699,6 +703,14 @@ flowchart LR
 > **A2 轮（同日）**：#27 部分关闭（引用计数 + 删除拦截 + 档案缺失显式报错）；残留（跨项目全量引用扫描）登记为 #33。
 > **A5 轮（同日）**：#30 关闭（认证档案字段化 + 列表真脱敏）；新发现网络档案 `config` 内密码明文入库，登记为 #34。
 > **#34 轮（同日）**：#34 关闭（网络档案凭据加密 + 列表脱敏 + 存量迁移）；另按用户决策将暂存区改为**只放未保存草稿**（决策 #80）。
+> **#33 轮（同日）**：#33 关闭（引用计数覆盖项目名册）+ #34 残留消除（项目库存量明文启动时逐库迁移）；共用同一份「已知项目」来源，见决策 #81。
+
+**已关闭（#33 轮，2026-09-12：跨项目引用与存量迁移）**
+
+| # | 关闭方式 | 验证 |
+| --- | --- | --- |
+| 33（🟡） | **引用计数不覆盖未打开的项目**：`count_references_batch` 增加「项目名册」遍历（`get_all_projects` → 逐库读 `connections`，路径过 `is_project_root`），`ReferenceCount` 增 `other: Vec<项目名>`（每项目只计一次）；拦截消息从「未打开项目中的引用不在统计内」改为「统计范围：全局库 + 已登记项目库」并列出项目名 | `manager_reference_count_and_delete_guard`（新增跨项目段） |
+| 34 残留 | **项目库存量明文不在启动迁移范围**：新增 `network_store::reencrypt_project_network_configs`（库/表不存在即跳过，不建目录、不建表），`initialize_global_system` 在全局库迁移后遍历名册逐库迁移（失败仅告警） | `project_migration_skips_missing_db_and_table` |
 
 **已关闭（#34 轮，2026-09-12：网络档案凭据加密）**
 
@@ -795,8 +807,8 @@ flowchart LR
 | 30 | ⚪→✅ | ~~`auth_configs.auth_data` 仍是裸 JSON 文本~~（**已关闭**：字段化组装 / 校验 / 回填纯函数 + 管理器按类型展开字段 + 列表真脱敏，见 A5 已关闭段） | — | — |
 | 31 | ⚪ | **标签双源未收敛**：连接行 `tags` JSON 与权威检索表 `connection_tags` 并存（写入时同步，读取侧仍有两路） | 同步失败仅告警 → 长期存在漂移风险 | 明确单一权威（建议表），连接行 JSON 降级为兼容投影并标记后续移除 |
 | 32 | ⚪ | **连接 ID 命名方案待拍板**：`generate_gid("conn", name)` 是名字哈希（改名即换 ID），`G_`/`P_`/`GP_` 前缀同时承担作用域 / 存储路由 / 快照语义 / 可读性四种职责 | 用户看到 ID 里的名字片段会误以为是稳定主键；改名行为（新建 / 覆盖）需解释 | 方案 B：UI / 日志只出现 `name`，ID 内部化；方案 C：ULID 重做 + 迁移（代价大）；待用户决策后开工 |
-| 33 | 🟡 | **引用计数不覆盖未打开的项目**：删除守卫只统计全局库 + 当前项目；未打开项目里的 P_/GP_ 引用不可见（删除仍会创建悬空引用，靠连接时报错兼底） | 用户删档案后打开另一个项目 → 那边的连接都报「引用的认证配置不存在」，且无从得知是哪个项目在用 | ① 全局库维护「档案 → 引用方」投影表（写入时维护，读取 O(1)）；或 ② 删除前遍历已知项目库（全局库项目注册表 + project crate 最近列表）并在 UI 列出引用方（项目 + 连接名） |
-| 34 | 🔴→✅ | ~~网络档案 `config` 里的 SSH / 代理密码是明文入库~~（**已关闭**：写/读加解密 + 存量迁移 + 列表脱敏 + 直查 SQL 路径补解密，见 #34 已关闭段） | — | 残留：项目库的存量明文不在启动迁移范围（读路径兼容、下次编辑保存自动加密） |
+| 33 | 🟡→✅ | ~~引用计数不覆盖未打开的项目~~（**已关闭**：遍历项目名册 + `other` 记项目名，见 #33 已关闭段） | — | — |
+| 34 | 🔴→✅ | ~~网络档案 `config` 里的 SSH / 代理密码是明文入库~~（**已关闭**：写/读加解密 + 存量迁移（全局库 + 项目库）+ 列表脱敏 + 直查 SQL 路径补解密，见 #34 已关闭段） | — | — |
 
 ---
 
@@ -865,6 +877,8 @@ flowchart LR
 | 档案缺失不降级 | `connection_service::{inject_auth_config_credentials, build_probe_config}` + `connect` 网络守卫 | 档案被删 / 类型未知时静默直连（用户以为走的是隧道 / 专用账号）；测试与真实连接结论相反 | `probe_config_applies_referenced_auth_profile`（缺失报错）、`referenced_network_profile_without_method_is_rejected` |
 | 网络档案凭据加密 | `network_store::{encrypt_network_config, decrypt_network_config}`（写 / 读路径）+ `reencrypt_all_network_configs`（存量迁移） | SSH / 代理密码明文落库 → 库文件被复制 / 备份即泄露跳板机凭据 | `network_store` 内嵌 4 项 + `network_profile_secrets_are_encrypted_and_masked_in_list` |
 | 直查 SQL 不漏解密 | `connection_service::project_query_network_config_with_auth` | 绕过 `network_store` 读路径 → 隧道拿 `AES:…` 当密码（加密后才暴露） | 同上（第 4 步断言解析结果密码为明文） |
+| 项目库凭据迁移 | `network_store::reencrypt_project_network_configs` + 启动遍历项目名册 | 项目库里的历史明文密码长期不加密（只覆盖全局库） | `project_migration_skips_missing_db_and_table` |
+| 删除拦截覆盖面 | `count_references_batch` 遍历项目名册（`other`） | 删档案时漏掉未打开项目的引用 → 那边连接变悬空，且不知谁在用 | `manager_reference_count_and_delete_guard`（跨项目段） |
 
 ### 15.3 约束与回归手段
 

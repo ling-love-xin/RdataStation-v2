@@ -1107,7 +1107,61 @@ fn manager_reference_count_and_delete_guard() {
         .to_string();
     assert!(msg.contains("全局 1 条") && msg.contains("当前项目 1 条"), "{msg}");
     let no_project = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, None));
-    assert_eq!((no_project.global, no_project.project), (1, 0), "未打开项目时项目侧不可见");
+    assert_eq!(
+        (no_project.global, no_project.project),
+        (1, 0),
+        "未打开项目时“当前项目”为 0（引用记录仍在库中）"
+    );
+    assert!(no_project.other.is_empty(), "此时名册里只有当前项目");
+
+    // 4) #33：**跨项目引用**（已登记但未打开的项目）也必须计入，消息里列出项目名。
+    let other_root = dir.join("proj_other");
+    std::fs::create_dir_all(other_root.join(".RSmeta")).expect("mkdir other .RSmeta");
+    let other_str = other_root.to_string_lossy().to_string();
+    let mut other_conn = input("ref_other", "postgres", "postgres://u:p@h:5432/db");
+    other_conn.scope = ConnectionScope::Project;
+    other_conn.auth_config_id = Some(auth_id.into());
+    rt.block_on(service.save(&other_conn, Some(&other_str)))
+        .expect("save other project");
+    // 登记进项目名册（`get_all_projects` 的来源；生产上由项目模块写入）
+    rt.block_on(global_db.save_project_info(
+        "proj_other",
+        "另一项目",
+        None,
+        &other_str,
+        "active",
+        Some("2026-09-12T00:00:00Z"),
+    ))
+    .expect("register project");
+
+    // 在当前项目上下文里看：其它项目 1 条（记项目名，每个项目只计一次）
+    let cross = rt.block_on(service.count_references(
+        ReferenceField::AuthConfig,
+        auth_id,
+        Some(&root_str),
+    ));
+    assert_eq!(cross.other_projects(), 1, "{cross:?}");
+    assert_eq!(cross.other, vec!["另一项目".to_string()]);
+
+    // 未打开任何项目时同样能看到（旧实现会漏掉）
+    let cross_none = rt.block_on(service.count_references(ReferenceField::AuthConfig, auth_id, None));
+    assert_eq!(cross_none.other_projects(), 1, "{cross_none:?}");
+
+    // 拦截消息列出范围与项目名
+    let msg = rt
+        .block_on(service.ensure_no_references(
+            ReferenceField::AuthConfig,
+            auth_id,
+            "演示认证",
+            None,
+        ))
+        .expect_err("跨项目引用同样拦截")
+        .to_string();
+    assert!(msg.contains("全局 1 条"), "{msg}");
+    assert!(
+        msg.contains("其它项目 1 条") && msg.contains("另一项目"),
+        "{msg}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -127,6 +127,26 @@ impl Default for Projects {
     }
 }
 
+/// 数据源导航的 facet 筛选（UI 偏好，跨项目复用；`None` = 未启用）。
+///
+/// 归属域为唯一常驻 chips，其余为「筛选 ▾」弹层；`db_type` 存 `drivers.type_id`，
+/// `driver` 存驱动 id，`tag` 存标签文本，`source` 存 `project` / `global` / `shared`。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NavigatorFilters {
+    /// 归属域筛选（`project` / `global` / `shared`；`None` = 全部）。
+    #[serde(default)]
+    pub source: Option<String>,
+    /// 数据库类型筛选（`drivers.type_id`）。
+    #[serde(default)]
+    pub db_type: Option<String>,
+    /// 驱动 id 筛选。
+    #[serde(default)]
+    pub driver: Option<String>,
+    /// 标签筛选。
+    #[serde(default)]
+    pub tag: Option<String>,
+}
+
 /// 数据源导航：来源标识展示形式与属性面板宽度（UI 偏好，跨项目）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Navigator {
@@ -142,6 +162,9 @@ pub struct Navigator {
     /// 连接行是否显示归属域列（默认开）。
     #[serde(default = "default_true")]
     pub show_scope: bool,
+    /// facet 筛选（类型 / 驱动 / 标签 / 归属域）。
+    #[serde(default)]
+    pub filters: NavigatorFilters,
 }
 
 impl Default for Navigator {
@@ -151,6 +174,7 @@ impl Default for Navigator {
             property_panel_width: default_property_width(),
             show_tags: false,
             show_scope: true,
+            filters: NavigatorFilters::default(),
         }
     }
 }
@@ -191,5 +215,28 @@ mod tests {
         // v7 新增：标签默认不显、归属域列默认显。
         assert!(!s.navigator.show_tags, "标签默认不显示");
         assert!(s.navigator.show_scope, "归属域列默认显示");
+        // v7 facet 筛选默认全空。
+        assert!(s.navigator.filters.source.is_none());
+        assert!(s.navigator.filters.db_type.is_none());
+        assert!(s.navigator.filters.driver.is_none());
+        assert!(s.navigator.filters.tag.is_none());
+    }
+
+    /// facet 筛选可序列化往返（`None` 不被写成显式 null 之外的异常形态）。
+    #[test]
+    fn navigator_filters_roundtrip() {
+        let mut s = Settings::default();
+        s.navigator.filters = NavigatorFilters {
+            source: Some("global".into()),
+            db_type: Some("postgres".into()),
+            driver: None,
+            tag: Some("prod".into()),
+        };
+        let text = serde_json::to_string(&s).expect("序列化");
+        let back: Settings = serde_json::from_str(&text).expect("反序列化");
+        assert_eq!(back.navigator.filters.source.as_deref(), Some("global"));
+        assert_eq!(back.navigator.filters.db_type.as_deref(), Some("postgres"));
+        assert!(back.navigator.filters.driver.is_none());
+        assert_eq!(back.navigator.filters.tag.as_deref(), Some("prod"));
     }
 }

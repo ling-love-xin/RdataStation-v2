@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 设计理念与架构（M4）
 
-> 状态：方案 A（v5）+ v6/v7 降密与徽标语义 —— **V2–V5、V8–V10 已实现**；**V6/V7 待做** · 2026-09-13
+> 状态：方案 A（v5）+ v6/v7 降密与徽标语义 —— **V2–V10 已全部实现** · 2026-09-13
 > 关联：`database-navigator-prototype-design.md`（视觉与交互规格）、`database-navigator-prototype.html`（交互稿）、`database-nav-dev-plan.md`（任务与逐轮记录）、`database-navigator-user-guide.md`（使用手册）、`../ui/ui-design-spec.md`（尺寸常量）、`../theme/theme-design.md`（配色）
 > 读者：维护 / 扩展本模块的开发者；也用于排查「导航不刷新」「render 期卡顿」「同一连接在多个分组重复出现」这类跨层问题
 
@@ -41,7 +41,7 @@
 | **标签** | 横切**描述 / 检索键** | 「和什么相关的库」 | 连接 → 标签 **多值** | 用户（可半自动） | **筛选 + 搜索**；行内**可选显示** | 不进树、不排序 |
 | **归属域**（原「来源 / 作用域」） | 记录的**存储域 / 来源** | 「这条记录存在哪、谁能看到」 | 1 条记录 = 1 域 | **系统** | **行内右对齐固定列**（可隐藏）+ 筛选 | 不参与组织 |
 | **类型** | 数据库**身份 / 分类** | 「这是什么库」 | 类型 1 → N 驱动 | 系统（目录） | **徽标形状**（+ 内叠字母） | 不靠颜色、不常显全名 |
-| **驱动** | 连接的**实现契约** | 「用哪套代码连」 | 驱动 N → 1 类型 | 系统（目录） | **属性面板 + 徽标 tooltip** | 不做组织、不进常显行 |
+| **驱动** | 连接的**实现契约** | 「用哪套代码连」 | 驱动 N → 1 类型 | 系统（目录） | **属性面板 + 徽标 hover 卡** | 不做组织、不进常显行 |
 | **状态** | **运行时健康** | 「现在能不能用」 | 每连接 1 个 | 系统 | **徽标颜色**（与类型共用同一元素） | 不冒充记录有效性 |
 
 **命名约定**：原「来源 / 作用域」统一改称**「归属域」**（英文 `scope` / provenance 保留）。含义不变，仅避免与「分组」的中文语感混淆（两者都容易被读成"适用范围"）。代码里 `NavSource` / `source_filter` / `source_short_code` 为历史命名，语义即归属域。
@@ -104,7 +104,7 @@ GPUI 的 `render` 是纯读路径。本模块把一切 I/O 移出：
 | 树节点（schema / 表 / 列） | **后台工作线程**（串行队列 + 结果队列），主线程轮询回填 | `workbench/services/nav_jobs.rs` |
 | 属性面板数据 | 同上（`enqueue_properties` / `drain_props_results`） | 同上 |
 | 分组 / 标签 / 展开态（本地 SQLite 小读） | `cx.defer_in`（本帧之后执行，完成后重绘） | `panels.rs::reload_nav_org` / `ensure_nav_state_loaded` |
-| **驱动目录**（徽标形状 / 驱动显示名） | 与分组数据一起 `defer_in` 一次性加载 → `DatabaseNavView::driver_catalog` | `nav_runtime::driver_catalog()` |
+| **驱动目录**（徽标形状 / 驱动显示名） | 与分组数据一起 `defer_in` 一次性加载 → `Shared::driver_catalog` | `nav_runtime::driver_catalog()` |
 
 > 跨线程不传 `Rc` / GPUI `Entity`：后台只回结果，主线程应用。
 
@@ -165,7 +165,7 @@ connection_tags                -- 连接↔标签 多值（connection_id, tag）
 ### 4.5 导航状态（视图状态）
 
 `navigator_state`（全局库 / 项目库）：`conn_id, scope, expanded_keys, selected_key, filter_text, version`。
-展开态按连接持久化；**归属域筛选与附加 facet 的持久化待 V7 落地**。
+展开态按连接持久化；**归属域与附加 facet 筛选持久化在 `settings.json` 的 `Navigator::filters`**（UI 偏好，跨项目；V7 已落地）。
 
 ---
 
@@ -288,7 +288,7 @@ flowchart TD
 | 分组 / 标签权威存储 | `engine/src/persistence/connection_org_store.rs` |
 | 导航状态存储 | `workbench/src/services/nav_store.rs` |
 | 缓存管理对话框 | `workbench/src/components/cache_dialog.rs` |
-| UI 偏好（短码 / 属性面板宽度 / 显示标签 / 显示归属域） | `settings/src/model.rs::Navigator` + `settings/src/lib.rs` |
+| UI 偏好（短码 / 属性面板宽度 / 显示标签 / 显示归属域 / facet 筛选） | `settings/src/model.rs::{Navigator, NavigatorFilters}` + `settings/src/lib.rs` |
 | 尺寸常量 | `workbench/src/ui.rs`（`NAV_BADGE_SIZE` / `NAV_SCOPE_COL_SHORT|TEXT` / `NAV_ADD_TAG_SIZE` / `NAV_FOLDER_PAGE_SIZE` …） |
 
 ---
@@ -297,13 +297,14 @@ flowchart TD
 
 | # | 项 | 说明 |
 | --- | --- | --- |
-| 1 | **V6 多组引用样式 + 显式主组** | 同一连接属多组时目前在每个分组重复全亮呈现，多对多会线性撑高树；计划改为「主组全亮 + 其它组 `∈ 主组` 引用行」。主组默认可由 `membership[conn][0]`（按分组排序）推导；**显式「设为主组」需要存储**（`connection_group_members.is_primary` 新列或 `navigator_state`）。 |
-| 2 | **V7 `筛选 ▾` facet 弹层** | 类型 / 驱动 / 标签的组合筛选 + `scope:` / `type:` / `driver:` / `tag:` 搜索语法。当前搜索只做**名称 + 标签**子串匹配。 |
-| 3 | **徽标 hover tooltip 缺失** | gpui-kit 0.6.1 无通用 `.tooltip()` 扩展（仅 Button 等组件自带）。当前类型靠形状 + 字母、状态靠颜色、驱动靠属性面板；完整 tooltip 待接入 `Tooltip` 组件。 |
-| 4 | **属性面板的驱动显示名** | 属性面板「驱动」行目前显示 `driver id`（如 `mysql_native`）；接入驱动目录后可显示 `drivers.name`（如 `PostgreSQL (Official)`）并补「数据库类型」行。 |
+| 1 | **V6 多组引用样式 + 主组** | ✅ 已实现（2026-09-13）：主组全亮 + 其它组 `∈ 主组名` 引用行（`panels.rs::render_reference_row`），点击跳转主组；主组按 `membership[conn][0]`（分组排序）派生。**遗留**：显式「设为主组」需 `connection_group_members.is_primary` 新列或 `navigator_state`。 |
+| 2 | **V7 `筛选 ▾` facet 弹层** | ✅ 已实现（2026-09-13）：归属域 chips 常驻 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签单选子菜单 + 清除）；搜索 `scope:/source:/type:/driver:/tag:` 作额外约束。**遗留**：搜索 token 与 chips **单向叠加**（不回写 chips），未做双向同步。 |
+| 3 | **徽标 hover 卡** | ✅ 已实现（2026-09-13）：0.6.1 无通用 `.tooltip()` 扩展，改用 `gpui_kit::component::hover_card::HoverCard`（300ms 延迟）显类型 / 状态 / 驱动（`nav_badge_hover_card`）。 |
+| 4 | **属性面板的驱动显示名** | ✅ 已实现（2026-09-13）：「驱动」行显示 `drivers.name · driver_id`（如 `PostgreSQL (Official) · postgres_native`），并新增「数据库类型」行（`load_properties(..., db_type)`）。 |
 | 5 | 工作线程串行 | 大预取会延迟用户展开响应；可做优先级 / 双队列。 |
 | 6 | 大 schema 列内联阈值 | >50 列建议改为「在属性面板查看列」而不内联渲染。 |
 | 7 | 标签命名规范 | 建议约定 `key:value`（`env:prod`），便于 `tag:` 语法稳定解析。 |
+| 8 | facet 筛选无 SQLite 行 | facet 走 `settings.json`（UI 偏好）；若将来需**按连接**记忆筛选，再扩 `navigator_state`。 |
 
 ---
 

@@ -12,7 +12,7 @@
 | Phase A（骨架与核心闭环） | ✅ 已实现 |
 | Phase B（分组/标签/搜索/属性面板/状态/菜单/缓存） | ✅ 已实现（B1–B8） |
 | Phase C（预热/增量/收尾） | 🟡 进行中（C1–C7 已实现；C8 由连接侧推进） |
-| **v6/v7 降密与徽标语义** | ✅ **已实现（V2–V5、V8–V10，2026-09-13）；V6/V7 待做** |
+| **v6/v7 降密与徽标语义** | ✅ **已实现（V2–V10，2026-09-13）** |
 
 **v6/v7 降密与概念定位（2026-09-13）**
 
@@ -22,19 +22,20 @@
 | --- | --- | --- | --- |
 | V1 | 概念定位与命名（文档） | `database-navigator-prototype-design.md` §1.1/§2/§6；「来源 / 作用域」→「归属域」 | ✅ 2026-09-13 |
 | V2 | 连接行瘦身：**移除行内 🗂 与驱动文本**；名称 `text_ellipsis` | `panels.rs::render_connection_row` | ✅ 2026-09-13 |
-| V3 | **双通道徽标**：颜色 = 状态，形状 = 类型（内叠 2 字母） | `panels.rs::{nav_type_badge, NavBadgeStatus}` + `DatabaseNavView::driver_catalog`（`nav_runtime::driver_catalog()` 一次性加载） | ✅ 2026-09-13（**tooltip 待接**：0.6.1 无通用 `.tooltip()` 扩展，事实暂以属性面板为准） |
+| V3 | **双通道徽标**：颜色 = 状态，形状 = 类型（内叠 2 字母） | `panels.rs::{nav_type_badge, NavBadgeStatus}` + `Shared::driver_catalog`（`nav_runtime::driver_catalog()` 一次性加载） | ✅ 2026-09-13（hover 卡已接：`nav_badge_hover_card` 用 `HoverCard`，300ms 显类型 / 状态 / 驱动） |
 | V4 | **归属域右对齐固定列** + `⋯ → 显示归属域` | `panels.rs::render_connection_row`（`.justify_end()` 定宽列）+ `settings::SettingsService::{show_scope,set_show_scope}` | ✅ 2026-09-13 |
 | V5 | 分组头**聚合健康度** + **全折叠** | `panels.rs::render_group_header`（`已连接/总数` + 失败计数 + 全折叠）+ `render_nav_tree` 预计算连接 / 错误集 | ✅ 2026-09-13 |
-| V6 | **多组引用样式 + 主组** | `panels.rs::{render_nav_tree, render_connection_row}`；主组存储（可先用 `membership[conn][0]` 推导，显式「设为主组」需新列或 `navigator_state`） | ⬜ 待做 |
-| V7 | **facet 入口**（归属域 chips + 「筛选 ▾」承载类型 / 驱动 / 标签） | `panels.rs::render_database_nav` + `DatabaseNavView` 附加筛选状态（持久化）；搜索语法 `scope:/type:/driver:/tag:` | ⬜ 待做 |
+| V6 | **多组引用样式 + 主组** | `panels.rs::{render_nav_tree, render_connection_row, render_reference_row}`；主组由 `membership[conn][0]`（组排序最前）派生 | ✅ 2026-09-13（显式「设为主组」仍待做，需 `connection_group_members.is_primary` 新列或 `navigator_state`） |
+| V7 | **facet 入口**（归属域 chips + 「筛选 ▾」承载类型 / 驱动 / 标签） | `panels.rs::{render_database_nav, build_facet_items, nav_facet_candidates, apply_facet}` + `DatabaseNavView` facet 状态 + `settings::model::NavigatorFilters`（持久化）；搜索语法 `scope:/source:/type:/driver:/tag:` | ✅ 2026-09-13（搜索 token 作额外 AND 约束，与 chips 叠加，不互相回写） |
 | V8 | 行操作**悬停 / 选中显隐**（`+`、`✎`、连接/断开） | `panels.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`） | ✅ 2026-09-13（右键 + 键盘仍为全量入口） |
 | V9 | 行尾 **`+` = 标签快捷入口** | `panels.rs::render_connection_row`（复用行内组织编辑器） | ✅ 2026-09-13 |
 | V10 | **`⋯ → 显示标签`**（默认关）+ 标签行内「≤2 chip + `+N`」 | `panels.rs::render_connection_row` + `settings::SettingsService::{show_tags,set_show_tags}` | ✅ 2026-09-13 |
 
 > 新增常量：`ui.rs::{NAV_BADGE_SIZE, NAV_SCOPE_COL_SHORT, NAV_SCOPE_COL_TEXT, NAV_ADD_TAG_SIZE}`。
-> 单测：`panels::tests::type_badge_maps_known_types_and_falls_back`、`settings::model::tests::legacy_config_without_navigator_uses_defaults`（含新开关默认值）。
-> **驱动目录**：`nav_runtime::driver_catalog()`（同步读全局 `drivers` 表；随组织数据在 `defer_in` 一次性加载）→ 面板缓存，**render 期零 I/O**。
-> **待做**：V6（多组引用样式 + 显式主组）、V7（facet 弹层）、徽标 tooltip（需接入 gpui-kit `Tooltip`）。
+> 单测：`panels::tests::{type_badge_maps_known_types_and_falls_back, search_facets_parse_tokens_and_free_text, type_short_label_strips_category_suffix}`、`database::model::tests::source_key_roundtrip`、`settings::model::tests::{legacy_config_without_navigator_uses_defaults, navigator_filters_roundtrip}`。
+> **驱动目录**：`nav_runtime::driver_catalog()`（同步读全局 `drivers` 表；随组织数据在 `defer_in` 一次性加载）→ `Shared::driver_catalog` 跨面板共享，**render 期零 I/O**。
+> **属性面板**：连接项新增「数据库类型」行（`property_panel::load_properties` 接 `db_type`）、「驱动」行显示目录友好名（`PostgreSQL (Official) · postgres_native`）。
+> **仍待做**：显式「设为主组」；工作线程优先级队列；大 schema 列内联阈值；标签命名规范 `key:value`。
 
 **Phase A 实现位置**
 
@@ -89,8 +90,8 @@
 - 属性加载为阻塞式（与 Phase A 同），后续随缓存编排迁后台；
 - 归组尚未支持**拖拽**与组内外手动排序，目前通过行内 `🗂` 编辑器的多选切换（B3 视图首版）；排序服务 `set_member_order` 已就绪；
 - 新建分组用默认名「新建分组」（自动去重）；重命名已支持（分组头右键 → 行内输入），描述表单待后续；
-- 「来源筛选 + 分组」状态尚未持久化到 `navigator_state`（仅展开态已持久化）；
-- 搜索目前为**连接名 + 标签**子串匹配；`source:global` / `tag:prod` 结构化语法、以及对象树层命中高亮待 B7。
+- **facet 筛选**（归属域 + 类型 / 驱动 / 标签）持久化在 `settings.json` 的 `Navigator::filters`（UI 偏好）；**展开 / 选中**仍走 `navigator_state`；分组关系走组织存储；无单独的面板级 `navigator_state` 行。
+- 搜索支持**连接名 + 标签**子串匹配，并支持 `scope:` / `source:` / `type:` / `driver:` / `tag:` 结构化 token（作额外 AND 约束）；命中高亮已实现（C5）。
 
 **Phase B7 上下文菜单已实现范围**
 

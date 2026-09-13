@@ -83,6 +83,19 @@ svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke
 .chip.on{background:var(--accent);color:var(--fg);border-color:var(--active-border);font-weight:600;}
 .chip.more{border-style:dashed;margin-left:auto;}
 .chip.more .n{background:var(--accent);border-radius:8px;padding:0 5px;margin-left:4px;font-weight:700;}
+/* v7：筛选 ▾ 弹层（类型 / 驱动 / 标签，每节单选） */
+.facet-wrap{position:relative;margin-left:auto;display:inline-flex;}
+.facet-wrap .chip.more{margin-left:0;}
+.facet-pop{position:absolute;top:24px;right:0;z-index:30;min-width:196px;max-height:280px;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:5px 0;display:none;}
+.facet-wrap.open .facet-pop{display:block;}
+.facet-sec+.facet-sec{border-top:1px solid var(--sidebar-border);}
+.facet-sec .fh{font-size:10px;color:var(--muted);padding:4px 10px 2px;letter-spacing:.4px;}
+.facet-item{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--fg);padding:3px 10px;cursor:pointer;}
+.facet-item:hover{background:var(--accent);}
+.facet-item .tk{width:12px;color:var(--active-border);visibility:hidden;}
+.facet-item.on .tk{visibility:visible;}
+.facet-clear{font-size:11.5px;color:var(--muted);padding:4px 10px;cursor:pointer;border-bottom:1px solid var(--sidebar-border);}
+.facet-clear:hover{color:var(--fg);background:var(--accent);}
 .tree-wrap{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;}
 .tree{flex:1;min-height:0;overflow:auto;padding:2px 6px 8px;}
 .row{display:flex;align-items:center;gap:6px;height:24px;border-radius:6px;cursor:pointer;color:var(--fg);font-size:12px;white-space:nowrap;transition:background .1s;}
@@ -300,7 +313,31 @@ table.grid td.null{color:var(--muted);font-style:italic;}
         <span class="chip" data-chip="p">项目</span>
         <span class="chip" data-chip="g">全局</span>
         <span class="chip" data-chip="gp">共享</span>
-        <span class="chip more" title="类型 / 驱动 / 标签"><svg class="ico-sm" style="width:11px;height:11px;vertical-align:-1px"><use href="#i-more"/></svg> 筛选<span class="n">2</span></span>
+        <span class="facet-wrap" id="facetWrap">
+          <span class="chip more" title="类型 / 驱动 / 标签"><svg class="ico-sm" style="width:11px;height:11px;vertical-align:-1px"><use href="#i-more"/></svg> 筛选<span class="n" id="facetN">2</span></span>
+          <div class="facet-pop">
+            <div class="facet-clear" data-clear="1">清除筛选</div>
+            <div class="facet-sec">
+              <div class="fh">类型</div>
+              <div class="facet-item on" data-facet="type"><span class="tk">&#10003;</span>PostgreSQL</div>
+              <div class="facet-item" data-facet="type"><span class="tk">&#10003;</span>MySQL</div>
+              <div class="facet-item" data-facet="type"><span class="tk">&#10003;</span>SQLite</div>
+              <div class="facet-item" data-facet="type"><span class="tk">&#10003;</span>DuckDB</div>
+            </div>
+            <div class="facet-sec">
+              <div class="fh">驱动</div>
+              <div class="facet-item" data-facet="driver"><span class="tk">&#10003;</span>PostgreSQL (Official)</div>
+              <div class="facet-item" data-facet="driver"><span class="tk">&#10003;</span>MySQL (Native)</div>
+              <div class="facet-item" data-facet="driver"><span class="tk">&#10003;</span>SQLite</div>
+            </div>
+            <div class="facet-sec">
+              <div class="fh">标签</div>
+              <div class="facet-item on" data-facet="tag"><span class="tk">&#10003;</span>prod</div>
+              <div class="facet-item" data-facet="tag"><span class="tk">&#10003;</span>core</div>
+              <div class="facet-item" data-facet="tag"><span class="tk">&#10003;</span>archive</div>
+            </div>
+          </div>
+        </span>
       </div>
 
       <div class="tree-wrap">
@@ -608,7 +645,8 @@ table.grid td.null{color:var(--muted);font-style:italic;}
       <li>去掉「项目 / 全局」标签页；归属域降级为<b>筛选 facet + 条件行内短码</b></li>
       <li>命名：「来源 / 作用域」统一改称<b>归属域</b>（避免与「分组」中文语感混淆）</li>
       <li><b>一级结构位让给自定义分组</b>（用户意图），归属域只作事实属性</li>
-      <li>搜索补充 <code>scope:global</code> / <code>type:postgres</code> / <code>driver:native</code> / <code>tag:prod</code></li>
+      <li>搜索补充 <code>scope:global</code> / <code>source:p</code> / <code>type:postgres</code> / <code>driver:postgres_native</code> / <code>tag:prod</code>（与面板 facet <b>叠加 AND</b>）</li>
+      <li>「<b>筛选 ▾</b>」弹层：类型 / 驱动 / 标签每节单选，可叠加；<b>N</b> = 已生效附加项数，可「清除筛选」</li>
     </ul>
     <div class="legend" style="margin-top:10px">
       <span class="li"><span class="scope src-p">P</span>项目连接</span>
@@ -712,12 +750,43 @@ table.grid td.null{color:var(--muted);font-style:italic;}
     });
   });
 
-  document.querySelectorAll('.chip').forEach(function (c) {
+  document.querySelectorAll('.chip:not(.more)').forEach(function (c) {
     c.addEventListener('click', function () {
       var group = c.parentNode;
       group.querySelectorAll('.chip').forEach(function (x) { x.classList.remove('on'); });
       c.classList.add('on');
     });
+  });
+
+  // v7：筛选 ▾ 弹层（类型 / 驱动 / 标签每节单选；N = 已选节数）
+  document.querySelectorAll('.facet-wrap').forEach(function (w) {
+    var chip = w.querySelector('.chip.more');
+    var n = w.querySelector('.n');
+    function refresh() {
+      var cnt = w.querySelectorAll('.facet-item.on').length;
+      n.textContent = cnt > 0 ? cnt : '';
+      n.style.display = cnt > 0 ? '' : 'none';
+    }
+    chip.addEventListener('click', function (e) {
+      e.stopPropagation();
+      w.classList.toggle('open');
+    });
+    w.querySelectorAll('.facet-item').forEach(function (it) {
+      it.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var sec = it.parentNode;
+        sec.querySelectorAll('.facet-item').forEach(function (x) { x.classList.remove('on'); });
+        it.classList.add('on');
+        refresh();
+      });
+    });
+    var clear = w.querySelector('.facet-clear');
+    if (clear) clear.addEventListener('click', function (e) {
+      e.stopPropagation();
+      w.querySelectorAll('.facet-item').forEach(function (x) { x.classList.remove('on'); });
+      refresh();
+    });
+    document.addEventListener('click', function () { w.classList.remove('open'); });
   });
 
   document.querySelectorAll('.pt2').forEach(function (t) {

@@ -56,17 +56,24 @@ impl ReferenceField {
 }
 
 /// 引用统计（按存储位置拆分，便于错误消息说清范围）。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReferenceCount {
     /// 全局库连接（G_ 定义与遗留 conn-）
     pub global: usize,
-    /// 当前打开项目的 P_/GP_ 连接（未打开项目时为 0）
+    /// 当前打开项目的 P_/GP_ 连接
     pub project: usize,
+    /// 其它已登记项目里命中该元数据的**项目名**（去重；#33：不再漏掉未打开的项目）
+    pub other: Vec<String>,
 }
 
 impl ReferenceCount {
-    pub fn total(self) -> usize {
-        self.global + self.project
+    pub fn total(&self) -> usize {
+        self.global + self.project + self.other.len()
+    }
+
+    /// 其它项目数（便捷读法）。
+    pub fn other_projects(&self) -> usize {
+        self.other.len()
     }
 }
 
@@ -219,9 +226,10 @@ impl DataSourceService {
 
     /// 统计引用某一元数据的连接数（批量；批量查询避免逐条扫库）。
     ///
-    /// 范围：全局库全部连接 + **当前打开项目**的 P_/GP_ 连接。
-    /// 未打开项目的引用不在统计内（架构 §14 #27 已登记的局限）——因此删除拦截是
-    /// “尽力而为”，连接时的档案缺失报错（A2 严格模式）是兼底。
+    /// 范围：全局库全部连接 + 当前打开项目 + **名册里的其它项目**（#33：删除守卫不再漏掉
+    /// 已关闭的项目；每个项目库打开一次，项目数通常个位数）。每条档案只被计入
+    /// 「其它项目」一次（记项目名，不重复），便于错误消息直接列出项目。
+    /// 读路径全程 `is_project_root` 过滤，不会建目录。
     pub async fn count_references_batch(
         &self,
         field: ReferenceField,
@@ -252,21 +260,57 @@ impl DataSourceService {
             }
         }
 
-        // 项目侧：路径必须是**已存在的项目根**（读路径不建目录，与全库约定一致）
+        // 项目侧：当前打开项目 + **名册里的其它项目**（#33：删除守卫不再漏掉已关闭项目；
+        // 路径逐一 `is_project_root` 过，读路径不建目录）
+        let mut roots: Vec<(String, String, bool)> = Vec::new(); // (root, 显示名, 是否当前项目)
         if let Some(path) = project_path.filter(|p| !p.trim().is_empty() && is_project_root(p)) {
-            if let Ok(store) = open_project_store(path).await {
-                if let Ok(rows) = store.get_all_connections().await {
-                    for c in &rows {
-                        let id = match field {
-                            ReferenceField::AuthConfig => c.auth_config_id.as_deref(),
-                            ReferenceField::NetworkConfig => c.network_config_id.as_deref(),
-                            ReferenceField::Environment => c.environment_id.as_deref(),
-                        };
-                        if let Some(id) = id {
-                            if let Some(entry) = map.get_mut(id) {
-                                entry.project += 1;
-                            }
-                        }
+            roots.push((path.to_string(), project_display_name(path), true));
+        }
+        if let Ok(projects) = self.global_db.get_all_projects().await {
+            for p in projects {
+                let path = p.path.trim().to_string();
+                if path.is_empty() || roots.iter().any(|(r, _, _)| r == &path) {
+                    continue;
+                }
+                if !is_project_root(&path) {
+                    continue;
+                }
+                let name = if p.name.trim().is_empty() {
+                    project_display_name(&path)
+                } else {
+                    p.name.clone()
+                };
+                roots.push((path, name, false));
+            }
+        }
+
+        for (root, name, is_current) in roots {
+            let Ok(store) = open_project_store(&root).await else {
+                continue;
+            };
+            let Ok(rows) = store.get_all_connections().await else {
+                continue;
+            };
+            // 本库命中的元数据 id（先收集再改 map，避免借用冲突）
+            let mut hit_ids: Vec<String> = Vec::new();
+            for c in &rows {
+                let id = match field {
+                    ReferenceField::AuthConfig => c.auth_config_id.as_deref(),
+                    ReferenceField::NetworkConfig => c.network_config_id.as_deref(),
+                    ReferenceField::Environment => c.environment_id.as_deref(),
+                };
+                if let Some(id) = id {
+                    if map.contains_key(id) {
+                        hit_ids.push(id.to_string());
+                    }
+                }
+            }
+            for id in hit_ids {
+                if let Some(entry) = map.get_mut(&id) {
+                    if is_current {
+                        entry.project += 1;
+                    } else if !entry.other.iter().any(|n| n == &name) {
+                        entry.other.push(name.clone());
                     }
                 }
             }
@@ -290,7 +334,7 @@ impl DataSourceService {
 
     /// 删除前的引用守卫（原型 §3.6：「被引用的配置不可删除」）。
     ///
-    /// 返回 `Err` 时消息已包含「引用数 + 范围」，UI 直接展示即可。
+    /// 返回 `Err` 时消息已包含「引用数 + 范围（全局 / 当前项目 / 其它项目名）」，UI 直接展示即可。
     pub async fn ensure_no_references(
         &self,
         field: ReferenceField,
@@ -302,20 +346,30 @@ impl DataSourceService {
         if count.total() == 0 {
             return Ok(());
         }
-        let scope = match (count.global, count.project) {
-            (g, p) if g > 0 && p > 0 => format!("全局 {g} 条、当前项目 {p} 条"),
-            (_, p) if p > 0 => format!("当前项目 {p} 条"),
-            (g, _) => format!("全局 {g} 条"),
-        };
+        let mut parts: Vec<String> = Vec::new();
+        if count.global > 0 {
+            parts.push(format!("全局 {} 条", count.global));
+        }
+        if count.project > 0 {
+            parts.push(format!("当前项目 {} 条", count.project));
+        }
+        if !count.other.is_empty() {
+            let names = if count.other.len() > 3 {
+                format!("{} 等 {} 个项目", count.other[..3].join("、"), count.other.len())
+            } else {
+                count.other.join("、")
+            };
+            parts.push(format!("其它项目 {} 条（{}）", count.other.len(), names));
+        }
         Err(CoreError::common(shared::error::CommonError::General(format!(
-            "{}{}正被 {} 连接引用，不能删除；请先修改或删除这些连接（未打开项目中的引用不在统计内）",
+            "{}{}正被 {} 连接引用，不能删除；请先修改或删除这些连接（统计范围：全局库 + 已登记项目库）",
             field.label(),
             if display_name.trim().is_empty() {
                 String::new()
             } else {
                 format!("「{}」", display_name.trim())
             },
-            scope
+            parts.join("、")
         ))))
     }
 
@@ -806,6 +860,15 @@ fn open_org_store(
             engine::persistence::ConnectionOrgStore::open_at(db_path, false)
         }
     }
+}
+
+/// 项目显示名：路径最后一段（名册里取不到名字时的回退）。
+fn project_display_name(path: &str) -> String {
+    std::path::Path::new(path.trim())
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| path.trim().to_string())
 }
 
 /// 同步连接标签到权威检索表（`connection_tags`）。

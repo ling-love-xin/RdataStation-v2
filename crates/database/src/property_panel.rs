@@ -97,6 +97,7 @@ pub async fn load_properties(
     ref_: &PropertyRef,
     conn_label: &str,
     driver: &str,
+    db_type: Option<&str>,
 ) -> Result<ObjectProperties, CoreError> {
     let source = source_label(ref_.source);
     let mut properties = Vec::new();
@@ -120,6 +121,12 @@ pub async fn load_properties(
     match ref_.kind {
         PropertyKind::Connection => {
             properties.push(row("名称", conn_label));
+            // 数据库类型（`drivers.type_id`）与驱动显示名由调用方（workbench 驱动目录）传入。
+            if let Some(t) = db_type {
+                if !t.is_empty() {
+                    properties.push(row("数据库类型", t));
+                }
+            }
             properties.push(row("归属域", source.clone()));
             properties.push(row("驱动", driver));
         }

@@ -58,6 +58,8 @@ enum Job {
         property: PropertyRef,
         conn_label: String,
         driver: String,
+        /// 数据库类型（`drivers.type_id`）；属性面板「数据库类型」行用。
+        db_type: Option<String>,
     },
     Warm {
         conn_id: String,
@@ -158,10 +160,16 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 property,
                 conn_label,
                 driver,
+                db_type,
             } => {
                 let svc = service(None);
                 let result = rt
-                    .block_on(svc.load_properties(&property, &conn_label, &driver))
+                    .block_on(svc.load_properties(
+                        &property,
+                        &conn_label,
+                        &driver,
+                        db_type.as_deref(),
+                    ))
                     .map_err(|e| e.to_string());
                 lock(&shared().props_results).push(PropsResult { key, result });
                 shared().pending_props.fetch_sub(1, Ordering::SeqCst);
@@ -219,13 +227,20 @@ pub fn enqueue_load(
 }
 
 /// 提交属性加载。
-pub fn enqueue_properties(key: &str, property: PropertyRef, conn_label: &str, driver: &str) {
+pub fn enqueue_properties(
+    key: &str,
+    property: PropertyRef,
+    conn_label: &str,
+    driver: &str,
+    db_type: Option<&str>,
+) {
     shared().pending_props.fetch_add(1, Ordering::SeqCst);
     let _ = shared().tx.send(Job::LoadProperties {
         key: key.to_string(),
         property,
         conn_label: conn_label.to_string(),
         driver: driver.to_string(),
+        db_type: db_type.map(str::to_string),
     });
 }
 

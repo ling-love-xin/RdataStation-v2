@@ -59,6 +59,25 @@ impl NavSource {
             Self::Project
         }
     }
+
+    /// 持久化 / 搜索语法用的稳定小写键（`project` / `global` / `shared`）。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Global => "global",
+            Self::Shared => "shared",
+        }
+    }
+
+    /// 从键或短码解析来源（`project`/`p`、`global`/`g`、`shared`/`gp`）。
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.to_ascii_lowercase().as_str() {
+            "project" | "p" => Some(Self::Project),
+            "global" | "g" => Some(Self::Global),
+            "shared" | "gp" => Some(Self::Shared),
+            _ => None,
+        }
+    }
 }
 
 /// 类别文件夹（schema 下的对象分组）。
@@ -334,6 +353,17 @@ mod tests {
         assert_eq!(NavSource::from_conn_id("P_conn_1"), NavSource::Project);
         assert_eq!(NavSource::from_conn_id("G_conn_1"), NavSource::Global);
         assert_eq!(NavSource::from_conn_id("GP_conn_1"), NavSource::Shared);
+    }
+
+    #[test]
+    fn source_key_roundtrip() {
+        for src in [NavSource::Project, NavSource::Global, NavSource::Shared] {
+            assert_eq!(NavSource::from_key(src.key()), Some(src));
+        }
+        // 短码与大小写宽容。
+        assert_eq!(NavSource::from_key("GP"), Some(NavSource::Shared));
+        assert_eq!(NavSource::from_key("Global"), Some(NavSource::Global));
+        assert_eq!(NavSource::from_key("unknown"), None);
     }
 
     #[test]

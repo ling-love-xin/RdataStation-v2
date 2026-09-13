@@ -16,7 +16,7 @@ pub mod model;
 pub mod product_tokens;
 pub mod settings_view;
 
-use crate::model::Settings;
+use crate::model::{NavigatorFilters, Settings};
 
 /// 用户配置目录：`%APPDATA%/RdataStation`。
 pub fn config_dir() -> PathBuf {
@@ -156,6 +156,22 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.navigator.show_scope = show;
+        }
+        let settings = cx.global::<Settings>().clone();
+        save_settings(&settings);
+        cx.refresh_windows();
+    }
+
+    /// 导航 facet 筛选（类型 / 驱动 / 标签 / 归属域）。
+    pub fn nav_filters(cx: &App) -> NavigatorFilters {
+        cx.global::<Settings>().navigator.filters.clone()
+    }
+
+    /// 设置并持久化导航 facet 筛选。
+    pub fn set_nav_filters(filters: NavigatorFilters, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.navigator.filters = filters;
         }
         let settings = cx.global::<Settings>().clone();
         save_settings(&settings);

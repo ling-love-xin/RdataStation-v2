@@ -419,6 +419,41 @@ pub fn reencrypt_all_network_configs(conn: &Connection) -> Result<usize, CoreErr
     Ok(changed)
 }
 
+/// 对**项目库**执行网络档案加密迁移（`{root}/.RSmeta/project.db`）。
+///
+/// 与全局库迁移同款，但：
+/// - 项目库可能还不存在 / 没有 `network_configs` 表 → **直接跳过**（不建目录、不建表，
+///   读路径无副作用，与全库的写/读分离约定一致）；
+/// - 返回该库的改动数；调用方（启动迁移 / 项目打开）自行汇总。
+pub fn reencrypt_project_network_configs(
+    project_root: &std::path::Path,
+) -> Result<usize, CoreError> {
+    use rusqlite::OptionalExtension;
+
+    let db_path = project_root
+        .join(crate::persistence::connection_org_store::RS_META_DIR_NAME)
+        .join("project.db");
+    if !db_path.exists() {
+        return Ok(0);
+    }
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| storage_err("open_project_network_store", e.to_string()))?;
+    // 不建表：老项目库可能根本没有 network_configs（`reencrypt_all_*` 内部会 ensure_table，
+    // 所以必须先确认表存在再调）。
+    let has_table: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'network_configs'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| storage_err("probe_project_network_store", e.to_string()))?;
+    if has_table.is_none() {
+        return Ok(0);
+    }
+    reencrypt_all_network_configs(&conn)
+}
+
 fn rewrite_secrets(config: &str, encrypt: bool) -> Result<String, CoreError> {
     if config.trim().is_empty() {
         return Ok(config.to_string());
@@ -601,5 +636,68 @@ mod tests {
 
         // 幂等：再跑一次无改动
         assert_eq!(reencrypt_all_network_configs(&conn).expect("migrate again"), 0);
+    }
+
+    #[test]
+    fn project_migration_skips_missing_db_and_table() {
+        let base = std::env::temp_dir().join(format!("rds_netproj_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        // 1) 项目 / 库文件都不存在 → 0，且**不创建任何东西**（读路径无副作用）
+        assert_eq!(reencrypt_project_network_configs(&base).expect("missing db"), 0);
+        assert!(!base.exists(), "迁移不得创建项目目录");
+
+        // 2) 有库但没有 network_configs 表 → 0，且不建表
+        let meta = base.join(crate::persistence::connection_org_store::RS_META_DIR_NAME);
+        std::fs::create_dir_all(&meta).expect("mkdir .RSmeta");
+        let db_path = meta.join("project.db");
+        {
+            let conn = Connection::open(&db_path).expect("open db");
+            conn.execute_batch("CREATE TABLE connections (id TEXT PRIMARY KEY)")
+                .expect("create connections");
+        }
+        assert_eq!(reencrypt_project_network_configs(&base).expect("no table"), 0);
+        {
+            let conn = Connection::open(&db_path).expect("reopen");
+            let has: Option<i64> = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='network_configs'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()
+                .expect("probe");
+            assert!(has.is_none(), "不得凭空创建 network_configs 表");
+        }
+
+        // 3) 有表 + 明文行 → 迁移 1 条（幂等）
+        {
+            let conn = Connection::open(&db_path).expect("reopen");
+            conn.execute_batch(
+                "CREATE TABLE network_configs (id TEXT PRIMARY KEY, name TEXT, network_type TEXT, config TEXT, auth_config_id TEXT);\
+                 INSERT INTO network_configs (id, name, network_type, config, auth_config_id) \
+                 VALUES ('P_net_1','t','ssh','{\"host\":\"j\",\"password\":\"plain\"}',NULL);",
+            )
+            .expect("seed plaintext");
+        }
+        assert_eq!(reencrypt_project_network_configs(&base).expect("migrate"), 1);
+        assert_eq!(
+            reencrypt_project_network_configs(&base).expect("migrate again"),
+            0,
+            "幂等：已加密不再重复"
+        );
+        {
+            let conn = Connection::open(&db_path).expect("reopen");
+            let raw: String = conn
+                .query_row(
+                    "SELECT config FROM network_configs WHERE id = 'P_net_1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("read raw");
+            assert!(!raw.contains("plain") && raw.contains("AES:"), "{raw}");
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

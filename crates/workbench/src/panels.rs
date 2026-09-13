@@ -20,7 +20,7 @@ use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -90,6 +90,8 @@ pub struct Shared {
     pub property_target: Rc<RefCell<Option<PropertyRequest>>>,
     /// Phase C：Ctrl+F 请求聚焦导航搜索框（宿主置位，导航面板渲染时消费）。
     pub focus_nav_search: Rc<Cell<bool>>,
+    /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
+    pub driver_catalog: Rc<RefCell<HashMap<String, crate::services::nav_runtime::DriverMeta>>>,
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
     /// notify 不会让子视图重建元素树；打开 / 关闭对话框后必须显式通知宿主重渲染。
     pub host_redraw: Rc<RefCell<Option<Rc<dyn Fn(&mut App)>>>>,
@@ -129,6 +131,7 @@ impl Shared {
             editor_set: Rc::new(RefCell::new(None)),
             property_target: Rc::new(RefCell::new(None)),
             focus_nav_search: Rc::new(Cell::new(false)),
+            driver_catalog: Rc::new(RefCell::new(HashMap::new())),
             host_redraw: Rc::new(RefCell::new(None)),
         }
     }
@@ -349,8 +352,89 @@ struct DatabaseNavView {
     prefetched: HashSet<String>,
     /// 当前选中的节点 key（键盘导航与选中高亮）。
     selected_key: Option<String>,
-    /// 驱动 id → 类型 / 显示名（徽标与 tooltip 用；随组织数据一次性加载）。
-    driver_catalog: HashMap<String, crate::services::nav_runtime::DriverMeta>,
+    /// 附加 facet 筛选：类型（`drivers.type_id`）。
+    type_filter: Option<String>,
+    /// 附加 facet 筛选：驱动 id。
+    driver_filter: Option<String>,
+    /// 附加 facet 筛选：标签。
+    tag_filter: Option<String>,
+    /// 搜索框 facet 语法解析结果（每帧重算，不持久化）。
+    search_facets: NavSearchFacets,
+}
+
+/// 附加 facet 种类（facet 弹层与持久化共用）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NavFacet {
+    /// 数据库类型（`drivers.type_id`）。
+    Type,
+    /// 驱动 id。
+    Driver,
+    /// 标签。
+    Tag,
+}
+
+/// 搜索框 facet 语法解析结果（`scope:` / `type:` / `driver:` / `tag:`）。
+///
+/// 搜索中的 facet token 作为**额外约束**与面板 chips **叠加（AND）**，不写回 chips；
+/// 这样避免“输入框回写 → 重新解析”的反馈环与光标跳动。
+#[derive(Default, Clone)]
+struct NavSearchFacets {
+    /// 自由文本（去除 facet token 后的剩余）。
+    free: String,
+    /// 搜索是否包含 facet token（用于计数）。
+    active: usize,
+    /// `scope:` / `source:`（`source` 为历史别名）。
+    source: Option<NavSource>,
+    /// `type:`。
+    db_type: Option<String>,
+    /// `driver:`。
+    driver: Option<String>,
+    /// `tag:`。
+    tag: Option<String>,
+}
+
+/// 解析搜索框文本：拆出 `scope:` / `type:` / `driver:` / `tag:` token，其余为自由文本。
+///
+/// 值不引号包裹（含空格需自行避免）；`scope` / `source` 支持全名与短码。
+/// 无法识别的 token（如空值）原样保留在自由文本里，避免“输入中丢字”。
+fn parse_nav_search(raw: &str) -> NavSearchFacets {
+    let mut out = NavSearchFacets::default();
+    let mut free: Vec<&str> = Vec::new();
+    for tok in raw.split_whitespace() {
+        let Some((key, value)) = tok.split_once(':') else {
+            free.push(tok);
+            continue;
+        };
+        if value.is_empty() {
+            free.push(tok);
+            continue;
+        }
+        let lower = key.to_ascii_lowercase();
+        match lower.as_str() {
+            "scope" | "source" => match NavSource::from_key(value) {
+                Some(s) => {
+                    out.source = Some(s);
+                    out.active += 1;
+                }
+                None => free.push(tok),
+            },
+            "type" => {
+                out.db_type = Some(value.to_string());
+                out.active += 1;
+            }
+            "driver" => {
+                out.driver = Some(value.to_string());
+                out.active += 1;
+            }
+            "tag" => {
+                out.tag = Some(value.to_string());
+                out.active += 1;
+            }
+            _ => free.push(tok),
+        }
+    }
+    out.free = free.join(" ");
+    out
 }
 
 /// 渲染顺序中的可见项（键盘导航用；每帧重建）。
@@ -389,6 +473,84 @@ impl NavBadgeStatus {
             Self::Idle => theme.colors.muted_foreground,
         }
     }
+
+    /// 状态文案（徽标 hover 卡用）。
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connected => "已连接",
+            Self::Connecting => "连接中",
+            Self::Failed => "连接失败",
+            Self::Idle => "未连接",
+        }
+    }
+}
+
+/// 徽标 hover 卡：类型 / 状态 / 驱动（gpui-kit 0.6.1 无通用 `.tooltip` 扩展，故用 `HoverCard`）。
+fn nav_badge_hover_card(
+    id: SharedString,
+    trigger: impl IntoElement + 'static,
+    type_label: String,
+    status_label: &'static str,
+    driver_label: String,
+) -> impl IntoElement {
+    use gpui_kit::component::hover_card::HoverCard;
+    HoverCard::new(id)
+        .open_delay(std::time::Duration::from_millis(300))
+        .trigger(trigger)
+        .content(move |_, _window, cx| {
+            let fg = cx.theme().colors.foreground;
+            let muted = cx.theme().colors.muted_foreground;
+            let type_label = type_label.clone();
+            let driver_label = driver_label.clone();
+            div()
+                .v_flex()
+                .gap(rems(0.125))
+                .text_xs()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(fg)
+                        .child(type_label),
+                )
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(format!("状态：{status_label}")),
+                )
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(format!("驱动：{driver_label}")),
+                )
+        })
+}
+
+/// 类型文案（徽标 hover 卡用）：已知类型给出「名称（分类）」，否则回退类型 id。
+fn nav_type_label(type_id: &str) -> String {
+    let known = match type_id {
+        "postgresql" => "PostgreSQL（关系型）",
+        "mysql" => "MySQL（关系型）",
+        "mariadb" => "MariaDB（关系型）",
+        "mssql" => "SQL Server（关系型）",
+        "oracle" => "Oracle（关系型）",
+        "sqlite" => "SQLite（文件型）",
+        "duckdb" => "DuckDB（分析型）",
+        "clickhouse" => "ClickHouse（分析型）",
+        "mongodb" => "MongoDB（文档型）",
+        "redis" => "Redis（键值型）",
+        _ => "",
+    };
+    if known.is_empty() {
+        type_id.to_string()
+    } else {
+        known.to_string()
+    }
+}
+
+/// 类型短名（去掉「（关系型）」等分类后缀），facet 菜单用。
+fn nav_type_short_label(type_id: &str) -> String {
+    let full = nav_type_label(type_id);
+    full.split('（').next().unwrap_or(&full).to_string()
 }
 
 /// 类型徽标映射：数据库类型 id →（形状资产路径，2 字母缩写）。
@@ -411,7 +573,10 @@ fn nav_type_badge(type_id: &str) -> (&'static str, String) {
         _ => {
             let upper = type_id.to_uppercase();
             let short: String = upper.chars().take(2).collect();
-            return ("icons/database.svg", if short.is_empty() { "DB".into() } else { short });
+            return (
+                "icons/database.svg",
+                if short.is_empty() { "DB".into() } else { short },
+            );
         }
     };
     (path, letters.to_string())
@@ -510,11 +675,18 @@ struct PropertyState {
 
 impl SidebarPanel {
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
+        // 从 settings.json 恢复 facet 筛选（UI 偏好，跨项目）。
+        let saved = settings::SettingsService::nav_filters(cx);
+        let mut nav_view = DatabaseNavView::default();
+        nav_view.source_filter = saved.source.as_deref().and_then(NavSource::from_key);
+        nav_view.type_filter = saved.db_type.clone();
+        nav_view.driver_filter = saved.driver.clone();
+        nav_view.tag_filter = saved.tag.clone();
         Self {
             shared,
             focus_handle: cx.focus_handle(),
             scratchpad: Rc::new(RefCell::new(ScratchpadView::default())),
-            database_nav: Rc::new(RefCell::new(DatabaseNavView::default())),
+            database_nav: Rc::new(RefCell::new(nav_view)),
             nav_search: None,
             _nav_search_sub: None,
             nav_tag_input: None,
@@ -973,12 +1145,19 @@ impl SidebarPanel {
                 cx.notify();
             });
         }
-        let filter = self
+        let raw_search = self
             .nav_search
             .as_ref()
             .map(|s| s.read(cx).value().to_string())
             .unwrap_or_default();
-        self.database_nav.borrow_mut().filter = filter;
+        // 搜索框 facet 语法（`scope:` / `type:` / `driver:` / `tag:`）拆为额外约束，
+        // 其余为自由文本；与面板 chips 叠加（AND）而非写回，避免输入框反馈环。
+        {
+            let parsed = parse_nav_search(&raw_search);
+            let mut view = self.database_nav.borrow_mut();
+            view.filter = parsed.free.clone();
+            view.search_facets = parsed;
+        }
 
         // 连接行内联组织编辑器（分组多选 + 标签）打开时，按需创建标签输入框
         // 并用当前标签预填；关闭时销毁，保证下次打开重新回填。
@@ -1281,10 +1460,132 @@ impl SidebarPanel {
 
         let body = self.render_nav_tree(source_filter, cx);
 
-        let mut search_row = div().v_flex().w_full().px_2().pb_2();
+        // 搜索行：输入框 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签；归属域由上方 chips 承担）。
+        let active_facets = self.nav_active_facet_count();
+        let facet_label = if active_facets > 0 {
+            format!("筛选 ▾ {active_facets}")
+        } else {
+            "筛选 ▾".to_string()
+        };
+        let filters_active = self.nav_filters_active();
+        let free_text = self.database_nav.borrow().search_facets.free.clone();
+        let (cur_type, cur_driver, cur_tag) = {
+            let view = self.database_nav.borrow();
+            (
+                view.type_filter.clone(),
+                view.driver_filter.clone(),
+                view.tag_filter.clone(),
+            )
+        };
+        let (type_cands, driver_cands, tag_cands) = self.nav_facet_candidates();
+        let tag_pairs: Vec<(String, String)> =
+            tag_cands.iter().map(|t| (t.clone(), t.clone())).collect();
+        let type_menu_label = match &cur_type {
+            Some(t) => format!("类型：{}", nav_type_short_label(t)),
+            None => "类型".to_string(),
+        };
+        let driver_menu_label = match &cur_driver {
+            Some(d) => {
+                let name = self
+                    .shared
+                    .driver_catalog
+                    .borrow()
+                    .get(d)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| d.clone());
+                format!("驱动：{name}")
+            }
+            None => "驱动".to_string(),
+        };
+        let tag_menu_label = match &cur_tag {
+            Some(t) => format!("标签：{t}"),
+            None => "标签".to_string(),
+        };
+
+        let facet_button = Button::new("nav-facet-filter")
+            .ghost()
+            .small()
+            .label(facet_label)
+            .dropdown_menu({
+                let entity = cx.entity();
+                let input = self.nav_search.clone();
+                let free = free_text.clone();
+                let types = type_cands.clone();
+                let drivers = driver_cands.clone();
+                let tags = tag_pairs.clone();
+                let ct = cur_type.clone();
+                let cd = cur_driver.clone();
+                let ctg = cur_tag.clone();
+                let tl = type_menu_label.clone();
+                let dl = driver_menu_label.clone();
+                let gl = tag_menu_label.clone();
+                move |menu, window, cx| {
+                    let e_clear = entity.clone();
+                    let input_clear = input.clone();
+                    let free_clear = free.clone();
+                    let mut menu = menu.item(
+                        PopupMenuItem::new("清除筛选")
+                            .disabled(!filters_active)
+                            .on_click(move |_, window, app| {
+                                if let Some(input) = &input_clear {
+                                    let free = free_clear.clone();
+                                    input
+                                        .update(app, |s, cx| s.set_value(free.clone(), window, cx));
+                                }
+                                e_clear.update(app, |this, cx| this.clear_nav_filters(cx));
+                            }),
+                    );
+                    menu = menu.separator();
+                    menu = menu.submenu(tl.clone(), window, cx, {
+                        let e = entity.clone();
+                        let cur = ct.clone();
+                        let c = types.clone();
+                        move |m, _w, _c| {
+                            Self::build_facet_items(
+                                m,
+                                e.clone(),
+                                NavFacet::Type,
+                                cur.clone(),
+                                c.clone(),
+                            )
+                        }
+                    });
+                    menu = menu.submenu(dl.clone(), window, cx, {
+                        let e = entity.clone();
+                        let cur = cd.clone();
+                        let c = drivers.clone();
+                        move |m, _w, _c| {
+                            Self::build_facet_items(
+                                m,
+                                e.clone(),
+                                NavFacet::Driver,
+                                cur.clone(),
+                                c.clone(),
+                            )
+                        }
+                    });
+                    menu.submenu(gl.clone(), window, cx, {
+                        let e = entity.clone();
+                        let cur = ctg.clone();
+                        let c = tags.clone();
+                        move |m, _w, _c| {
+                            Self::build_facet_items(
+                                m,
+                                e.clone(),
+                                NavFacet::Tag,
+                                cur.clone(),
+                                c.clone(),
+                            )
+                        }
+                    })
+                }
+            });
+
+        let mut search_row = div().h_flex().items_center().w_full().gap_1().px_2().pb_2();
         if let Some(input) = &self.nav_search {
-            search_row = search_row.child(Input::new(input));
+            search_row = search_row.child(div().flex_1().min_w_0().child(Input::new(input)));
         }
+        search_row = search_row.child(facet_button);
 
         div()
             .v_flex()
@@ -1345,7 +1646,6 @@ impl SidebarPanel {
     ) -> impl IntoElement {
         let active = target == current;
         let entity = cx.entity();
-        let state = self.database_nav.clone();
         let (bg, text) = if active {
             (accent, cx.theme().colors.primary_foreground)
         } else {
@@ -1381,15 +1681,167 @@ impl SidebarPanel {
             .hover(move |s| s.bg(hover_bg))
             .child(label.to_string())
             .on_click(move |_, _, app| {
-                state.borrow_mut().source_filter = target;
-                entity.update(app, |_, cx| cx.notify());
+                entity.update(app, |this, cx| {
+                    this.database_nav.borrow_mut().source_filter = target;
+                    this.write_nav_filters(cx);
+                    cx.notify();
+                });
             })
+    }
+
+    /// 写回 facet 筛选到 `settings.json`（chips 状态为准；搜索 token 不持久化）。
+    fn write_nav_filters(&self, cx: &mut Context<Self>) {
+        let filters = {
+            let view = self.database_nav.borrow();
+            settings::model::NavigatorFilters {
+                source: view.source_filter.map(|s| s.key().to_string()),
+                db_type: view.type_filter.clone(),
+                driver: view.driver_filter.clone(),
+                tag: view.tag_filter.clone(),
+            }
+        };
+        settings::SettingsService::set_nav_filters(filters, cx);
+    }
+
+    /// 应用某个 facet 值（`None` = 清除该项），并持久化 + 重渲染。
+    fn apply_facet(&mut self, facet: NavFacet, value: Option<String>, cx: &mut Context<Self>) {
+        {
+            let mut view = self.database_nav.borrow_mut();
+            match facet {
+                NavFacet::Type => view.type_filter = value,
+                NavFacet::Driver => view.driver_filter = value,
+                NavFacet::Tag => view.tag_filter = value,
+            }
+        }
+        self.write_nav_filters(cx);
+        cx.notify();
+    }
+
+    /// 清除全部 facet 筛选（附加 facet + 归属域）。
+    fn clear_nav_filters(&mut self, cx: &mut Context<Self>) {
+        {
+            let mut view = self.database_nav.borrow_mut();
+            view.type_filter = None;
+            view.driver_filter = None;
+            view.tag_filter = None;
+            view.source_filter = None;
+        }
+        self.write_nav_filters(cx);
+        cx.notify();
+    }
+
+    /// 已生效的附加 facet 数（类型 / 驱动 / 标签；chips 与搜索 token 取并）。
+    fn nav_active_facet_count(&self) -> usize {
+        let view = self.database_nav.borrow();
+        let mut n = 0;
+        if view.type_filter.is_some() || view.search_facets.db_type.is_some() {
+            n += 1;
+        }
+        if view.driver_filter.is_some() || view.search_facets.driver.is_some() {
+            n += 1;
+        }
+        if view.tag_filter.is_some() || view.search_facets.tag.is_some() {
+            n += 1;
+        }
+        n
+    }
+
+    /// 是否存在任何生效筛选（含归属域与搜索 token）；用于「清除筛选」可用性。
+    fn nav_filters_active(&self) -> bool {
+        let view = self.database_nav.borrow();
+        view.source_filter.is_some()
+            || view.type_filter.is_some()
+            || view.driver_filter.is_some()
+            || view.tag_filter.is_some()
+            || view.search_facets.active > 0
+    }
+
+    /// 构建单个 facet 子菜单（「全部」+ 候选项，单选）。
+    fn build_facet_items(
+        menu: PopupMenu,
+        entity: Entity<Self>,
+        facet: NavFacet,
+        current: Option<String>,
+        candidates: Vec<(String, String)>,
+    ) -> PopupMenu {
+        let mut menu = menu.item(
+            PopupMenuItem::new("全部")
+                .checked(current.is_none())
+                .on_click({
+                    let entity = entity.clone();
+                    move |_, _, app| {
+                        entity.update(app, |this, cx| this.apply_facet(facet, None, cx));
+                    }
+                }),
+        );
+        for (value, label) in candidates {
+            let checked = current.as_deref() == Some(value.as_str());
+            let entity = entity.clone();
+            menu = menu.item(PopupMenuItem::new(label).checked(checked).on_click(
+                move |_, _, app| {
+                    let value = value.clone();
+                    entity.update(app, |this, cx| {
+                        this.apply_facet(facet, Some(value.clone()), cx);
+                    });
+                },
+            ));
+        }
+        menu
+    }
+
+    /// 计算 facet 候选清单（类型 / 驱动 / 标签），值 → 展示名，已排序去重。
+    ///
+    /// 类型 / 驱动以驱动目录为主、连接实际使用值为兜底（目录未就绪时不落空）；
+    /// 标签来自已缓存的组织数据。
+    fn nav_facet_candidates(&self) -> (Vec<(String, String)>, Vec<(String, String)>, Vec<String>) {
+        use std::collections::{BTreeMap, BTreeSet};
+        let mut types: BTreeMap<String, String> = BTreeMap::new();
+        let mut drivers: BTreeMap<String, String> = BTreeMap::new();
+        {
+            let catalog = self.shared.driver_catalog.borrow();
+            for (id, meta) in catalog.iter() {
+                drivers
+                    .entry(id.clone())
+                    .or_insert_with(|| meta.name.clone());
+                types
+                    .entry(meta.type_id.clone())
+                    .or_insert_with(|| nav_type_short_label(&meta.type_id));
+            }
+        }
+        let conns: Vec<ConnectionItem> = self.shared.connections.borrow().iter().cloned().collect();
+        {
+            let catalog = self.shared.driver_catalog.borrow();
+            for c in &conns {
+                let tid = catalog
+                    .get(&c.driver)
+                    .map(|m| m.type_id.clone())
+                    .unwrap_or_else(|| c.driver.clone());
+                types
+                    .entry(tid.clone())
+                    .or_insert_with(|| nav_type_short_label(&tid));
+                drivers
+                    .entry(c.driver.clone())
+                    .or_insert_with(|| c.driver.clone());
+            }
+        }
+        let tags: BTreeSet<String> = self
+            .database_nav
+            .borrow()
+            .tags
+            .values()
+            .flat_map(|v| v.iter().cloned())
+            .collect();
+        let mut types: Vec<(String, String)> = types.into_iter().collect();
+        types.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut drivers: Vec<(String, String)> = drivers.into_iter().collect();
+        drivers.sort_by(|a, b| a.1.cmp(&b.1));
+        (types, drivers, tags.into_iter().collect())
     }
 
     /// 树主体：一级为自定义分组（含「未分组」），下设连接节点。
     ///
-    /// 连接可属于多个分组（多对多），因此在每个所属分组下各出现一次；
-    /// 归属无任何分组的连接收进「未分组」。分组为空时隐藏。
+    /// 连接可属于多个分组（多对多）：只在**主组**全亮呈现，其余分组以**引用行**出现
+    /// （`∈ 主组名`），避免多对多线性撑高树；归属无任何分组的连接收进「未分组」。
     fn render_nav_tree(&self, source_filter: Option<NavSource>, cx: &mut Context<Self>) -> Div {
         // 键盘导航的可见序列每帧重建（渲染是顺序权威来源）。
         self.nav_order.borrow_mut().clear();
@@ -1405,7 +1857,7 @@ impl SidebarPanel {
                 .pt_1()
                 .child(div().text_xs().text_color(muted).child("加载中…"));
         }
-        let (filter, groups, membership, group_order, tags) = {
+        let (filter, groups, membership, group_order, tags, type_filter, driver_filter, tag_filter) = {
             let view = self.database_nav.borrow();
             (
                 view.filter.to_lowercase(),
@@ -1413,16 +1865,85 @@ impl SidebarPanel {
                 view.membership.clone(),
                 view.group_order.clone(),
                 view.tags.clone(),
+                view.type_filter.clone(),
+                view.driver_filter.clone(),
+                view.tag_filter.clone(),
             )
         };
         let conns: Vec<ConnectionItem> = self.shared.connections.borrow().iter().cloned().collect();
         let by_id: HashMap<&str, &ConnectionItem> =
             conns.iter().map(|c| (c.id.as_str(), c)).collect();
 
-        // 单条连接是否通过来源 chips 与搜索词（连接名 / 标签）。
+        // 搜索框 facet 语法（`scope:` / `type:` / `driver:` / `tag:`）作为额外约束叠加。
+        let search_facets = self.database_nav.borrow().search_facets.clone();
+
+        // 主组派生：连接在其所属分组中排序最靠前的一个（`membership` 按分组排序构建）。
+        // 主组用于「多组只全亮呈现一次，其余组以引用行出现」。
+        let primary_gid = |conn_id: &str| -> Option<String> {
+            membership.get(conn_id).and_then(|gs| gs.first().cloned())
+        };
+
+        // 单条连接是否通过归属域 chips、附加 facet（类型 / 驱动 / 标签）与搜索词（连接名 / 标签）。
         let passes = |conn: &ConnectionItem| -> bool {
             if let Some(src) = source_filter {
                 if NavSource::from_conn_id(&conn.id) != src {
+                    return false;
+                }
+            }
+            if let Some(src) = search_facets.source {
+                if NavSource::from_conn_id(&conn.id) != src {
+                    return false;
+                }
+            }
+            if let Some(want_type) = &type_filter {
+                let actual = self
+                    .shared
+                    .driver_catalog
+                    .borrow()
+                    .get(&conn.driver)
+                    .map(|m| m.type_id.clone())
+                    .unwrap_or_else(|| conn.driver.clone());
+                if &actual != want_type {
+                    return false;
+                }
+            }
+            if let Some(want_type) = &search_facets.db_type {
+                let actual = self
+                    .shared
+                    .driver_catalog
+                    .borrow()
+                    .get(&conn.driver)
+                    .map(|m| m.type_id.clone())
+                    .unwrap_or_else(|| conn.driver.clone());
+                if &actual != want_type {
+                    return false;
+                }
+            }
+            if let Some(want_driver) = &driver_filter {
+                if &conn.driver != want_driver {
+                    return false;
+                }
+            }
+            if let Some(want_driver) = &search_facets.driver {
+                if &conn.driver != want_driver {
+                    return false;
+                }
+            }
+            if let Some(want_tag) = &tag_filter {
+                let hit = tags
+                    .get(&conn.id)
+                    .map(|ts| ts.iter().any(|t| t == want_tag))
+                    .unwrap_or(false);
+                if !hit {
+                    return false;
+                }
+            }
+            if let Some(want_tag) = &search_facets.tag {
+                let hit = tags
+                    .get(&conn.id)
+                    .map(|ts| ts.iter().any(|t| t == want_tag))
+                    .unwrap_or(false);
+                if !hit {
                     return false;
                 }
             }
@@ -1496,7 +2017,22 @@ impl SidebarPanel {
             ));
             if !self.group_collapsed(&group.id) {
                 for conn in members {
-                    column = column.child(self.render_connection_row(conn, &group.id, cx));
+                    if primary_gid(&conn.id).as_deref() == Some(group.id.as_str()) {
+                        column = column.child(self.render_connection_row(conn, &group.id, cx));
+                    } else {
+                        // 引用行：全亮行在主组，这里只指路。
+                        let primary_name = primary_gid(&conn.id)
+                            .and_then(|gid| {
+                                groups.iter().find(|g| g.id == gid).map(|g| g.name.clone())
+                            })
+                            .unwrap_or_else(|| "未分组".to_string());
+                        column = column.child(self.render_reference_row(
+                            conn,
+                            &group.id,
+                            &primary_name,
+                            cx,
+                        ));
+                    }
                 }
             }
         }
@@ -1802,7 +2338,68 @@ impl SidebarPanel {
         wrap
     }
 
-    /// 连接节点行（状态点 + 名称 + 来源短码 + 驱动 + 归组/标签 + 连接/断开）。
+    /// 引用行（v6）：连接已在其**主组**全亮呈现，此分组下只做指路。
+    ///
+    /// 不重复状态 / 徽标 / 操作位（避免重复向）；点击展开主组并选中该连接。
+    /// `group_id` 为**当前包含它的分组**（用于唯一元素 ID），`primary_name` 为主组名。
+    fn render_reference_row(
+        &self,
+        conn: &ConnectionItem,
+        group_id: &str,
+        primary_name: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let muted = cx.theme().colors.muted_foreground;
+        let hover = cx.theme().colors.list_hover;
+        let entity = cx.entity();
+        let conn_id = conn.id.clone();
+        let primary_gid = self
+            .database_nav
+            .borrow()
+            .membership
+            .get(&conn.id)
+            .and_then(|gs| gs.first().cloned());
+        let label = format!("\u{2208} {primary_name}");
+        div()
+            .id(format!("nav-ref-{}::{}", group_id, conn.id))
+            .h_flex()
+            .items_center()
+            .w_full()
+            .h(rems(1.625))
+            .px_1()
+            .gap_1()
+            .rounded_md()
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover))
+            .child(div().w_2p5().flex_none())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_color(muted)
+                    .text_ellipsis()
+                    .child(conn.name.clone()),
+            )
+            .child(div().flex_none().text_xs().text_color(muted).child(label))
+            .on_click(move |_, _, app| {
+                let cid = conn_id.clone();
+                entity.update(app, |this, cx| {
+                    {
+                        let mut view = this.database_nav.borrow_mut();
+                        // 展开主组（若已折叠）并选中该连接，使全亮行可见。
+                        if let Some(gid) = &primary_gid {
+                            view.collapsed_groups.remove(gid);
+                        }
+                        view.selected_key = Some(cid.clone());
+                    }
+                    cx.notify();
+                });
+            })
+    }
+
+    /// 连接节点行（徽标（色=状态·形=类型） + 名称 + 归属域列 + 行尾操作）。
     ///
     /// `scope_key` 为其所属分组标识：同一连接可出现在多个分组，用于生成唯一元素 ID。
     fn render_connection_row(
@@ -1871,12 +2468,18 @@ impl SidebarPanel {
         });
 
         // ---- v7：行内只常驻「徽标 + 名称 + 归属域列」；`+` 与行操作仅 hover / 选中显 ----
-        let nav_view = self.database_nav.borrow();
-        let driver_meta = nav_view.driver_catalog.get(&conn.driver);
-        let type_id = driver_meta
-            .map(|m| m.type_id.clone())
+        let nav_view = self
+            .shared
+            .driver_catalog
+            .borrow()
+            .get(&conn.driver)
+            .map(|m| (m.type_id.clone(), m.name.clone()));
+        let type_id = nav_view
+            .as_ref()
+            .map(|(t, _)| t.clone())
             .unwrap_or_else(|| conn.driver.clone());
-        let driver_name = driver_meta.map(|m| m.name.clone());
+        let driver_name = nav_view.map(|(_, n)| n);
+        let nav_view = self.database_nav.borrow();
         let badge_status = if nav_view.loading.contains(&conn.id) {
             NavBadgeStatus::Connecting
         } else if error.is_some() {
@@ -1922,6 +2525,19 @@ impl SidebarPanel {
                     .text_color(badge_color)
                     .child(badge_letters),
             );
+
+        // 徽标 hover 卡：类型 / 状态 / 驱动的完整事实（gpui-kit 0.6.1 无通用 `.tooltip` 扩展，
+        // 故用 `HoverCard` 承载；行内仍只显颜色 + 形状）。
+        let badge = {
+            let type_label = nav_type_label(&type_id);
+            let status_label = badge_status.label();
+            let driver_label = driver_name
+                .clone()
+                .map(|n| format!("{n} · {}", conn.driver))
+                .unwrap_or_else(|| conn.driver.clone());
+            let hover_id = SharedString::from(format!("nav-badge-{}::{}", scope_key, conn.id));
+            nav_badge_hover_card(hover_id, badge, type_label, status_label, driver_label)
+        };
 
         // 标签 chip（可选显示，`⋯ → 显示标签`）：默认关；开启后「≤2 chip + `+N`」。
         let tag_chips = if settings::SettingsService::show_tags(cx) && !tag_list.is_empty() {
@@ -3049,12 +3665,12 @@ impl SidebarPanel {
         }
         let tags = crate::services::nav_runtime::list_all_tags(root.as_deref());
         let driver_catalog = crate::services::nav_runtime::driver_catalog();
+        *self.shared.driver_catalog.borrow_mut() = driver_catalog;
         let mut view = self.database_nav.borrow_mut();
         view.groups = groups;
         view.membership = membership;
         view.group_order = group_order;
         view.tags = tags;
-        view.driver_catalog = driver_catalog;
         view.groups_loaded = true;
     }
 
@@ -4210,11 +4826,23 @@ impl EditorPanel {
         };
         if needs_load {
             // 后台加载：render 不做 I/O；结果由 `apply_props_results` 回填。
+            // 驱动目录已缓存（随组织数据一次加载）：把「数据库类型 + 驱动友好名」一并传给属性面板。
+            let (driver_display, db_type) = {
+                let catalog = self.shared.driver_catalog.borrow();
+                match catalog.get(&target.driver) {
+                    Some(meta) => (
+                        format!("{} · {}", meta.name, target.driver),
+                        Some(meta.type_id.clone()),
+                    ),
+                    None => (target.driver.clone(), None),
+                }
+            };
             nav_jobs::enqueue_properties(
                 &key,
                 target.property.clone(),
                 &target.conn_label,
-                &target.driver,
+                &driver_display,
+                db_type.as_deref(),
             );
             self.ensure_props_pump(cx);
         }
@@ -5193,6 +5821,8 @@ impl ComponentPanel for RightSidebarPanel {
 mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
+    use super::{nav_type_short_label, parse_nav_search};
+    use database::model::NavSource;
 
     #[test]
     fn type_badge_maps_known_types_and_falls_back() {
@@ -5209,5 +5839,32 @@ mod tests {
         assert_eq!(letters, "SN");
         // 空类型 id：不做空字母，回退 `DB`。
         assert_eq!(nav_type_badge("").1, "DB");
+    }
+
+    #[test]
+    fn search_facets_parse_tokens_and_free_text() {
+        let p = parse_nav_search("prod scope:global type:mysql tag:核心");
+        assert_eq!(p.free, "prod");
+        assert_eq!(p.source, Some(NavSource::Global));
+        assert_eq!(p.db_type.as_deref(), Some("mysql"));
+        assert_eq!(p.tag.as_deref(), Some("核心"));
+        assert_eq!(p.active, 3);
+        // `source:` 为 `scope:` 历史别名，短码亦可。
+        let p = parse_nav_search("source:P driver:postgres_native");
+        assert_eq!(p.source, Some(NavSource::Project));
+        assert_eq!(p.driver.as_deref(), Some("postgres_native"));
+        assert!(p.free.is_empty());
+        // 空值 / 未识别前缀不吞字（保留在自由文本）。
+        let p = parse_nav_search("tag: foo:bar");
+        assert!(p.tag.is_none());
+        assert_eq!(p.free, "tag: foo:bar");
+        assert_eq!(p.active, 0);
+    }
+
+    #[test]
+    fn type_short_label_strips_category_suffix() {
+        assert_eq!(nav_type_short_label("postgresql"), "PostgreSQL");
+        // 未知类型回退原 id。
+        assert_eq!(nav_type_short_label("snowflake"), "snowflake");
     }
 }
