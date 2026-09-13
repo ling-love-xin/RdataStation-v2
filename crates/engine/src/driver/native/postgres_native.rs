@@ -735,8 +735,9 @@ impl Drop for PostgresNativeTransaction {
 #[async_trait::async_trait]
 impl MetadataBrowser for PostgresNativeDatabase {
     async fn get_catalogs(&self) -> Result<Vec<NodeInfo>, CoreError> {
+        // 同 sqlx 驱动：一条连接只绑定一个库，只返回当前库（避免假节点）。
         let result = self
-            .query("SELECT datname FROM pg_catalog.pg_database WHERE datistemplate = false ORDER BY datname")
+            .query("SELECT current_database()::text AS datname")
             .await?;
         Ok(rows_to_node_info(
             &result,

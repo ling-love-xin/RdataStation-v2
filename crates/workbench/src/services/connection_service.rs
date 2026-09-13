@@ -257,15 +257,82 @@ impl ConnectionService {
             return Ok((conn_id, db));
         }
 
-        // 对于文件型数据库，额外检查是否有相同 URL 的连接（避免文件锁冲突）
+        // 对于文件型数据库，额外检查是否有相同 URL 的连接（避免文件锁冲突）。
+        // 命中时**别名**复用同一物理连接：把同一 `Arc<dyn Database>` 再挂到请求的
+        // `conn_id` 下，使两个逻辑 id（`G_`/`P_`/`GP_`）都能查到。否则先连的那条会
+        // 抢占唯一注册，后连的按请求 id 加载恒报 `CONN_NOT_FOUND`。文件真正只打开一次；
+        // 断开只摘除该 id 的映射，最后一个引用释放时才真正关连接。
         if url.starts_with("sqlite://") || url.starts_with("duckdb://") {
             let all_connections = self.manager.get_all_connection_info().await;
             for conn_info in all_connections {
                 if conn_info.url == url {
                     tracing::info!(url = %url, conn_id = %conn_info.id, "Connection with URL already exists");
                     if let Some(db) = self.manager.get_connection(&conn_info.id).await {
-                        tracing::info!(conn_id = %conn_info.id, "Reusing existing connection");
-                        return Ok((conn_info.id, db));
+                        if conn_info.id == conn_id {
+                            tracing::info!(conn_id = %conn_id, "Reusing existing connection");
+                            return Ok((conn_id, db));
+                        }
+                        tracing::info!(
+                            from = %conn_info.id,
+                            to = %conn_id,
+                            "Aliasing existing file connection under requested id"
+                        );
+                        let alias_info = ConnectionInfo {
+                            id: conn_id.clone(),
+                            name: connection_name.clone(),
+                            db_type: conn_info.db_type.clone(),
+                            url: conn_info.url.clone(),
+                            server_version: conn_info.server_version.clone(),
+                            connection_type,
+                            project_id: project_path.clone(),
+                            driver_id: driver_id.clone().or_else(|| conn_info.driver_id.clone()),
+                            environment_id: environment_id.clone(),
+                            auth_config_id: auth_config_id.clone(),
+                            auth_method: auth_method.clone(),
+                            network_config_id: network_config_id.clone(),
+                            driver_properties: driver_properties.clone(),
+                            advanced_options: advanced_options.clone(),
+                            description: description.clone(),
+                            created_at: std::time::Instant::now(),
+                        };
+                        // 重连配置沿用权威连接（其 url_override 保留明文用于重连）。
+                        let alias_config = self
+                            .manager
+                            .get_connection_config(&conn_info.id)
+                            .await
+                            .unwrap_or_else(|| {
+                                engine::driver::registry::DriverConnectionConfig::new(
+                                    db_type.clone(),
+                                )
+                                .with_url_override(url.clone())
+                                .with_name(&connection_name)
+                            });
+                        match self
+                            .manager
+                            .add_connection(
+                                conn_id.clone(),
+                                Arc::clone(&db),
+                                alias_info,
+                                alias_config,
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                crate::services::secret_integration::ensure_secret_registered(
+                                    &conn_id, &db_type, &url,
+                                );
+                                return Ok((conn_id, db));
+                            }
+                            Err(e) => {
+                                // 别名注册失败不阻断：回退到权威 id（调用方仍能拿到可用连接）。
+                                tracing::warn!(
+                                    conn_id = %conn_id,
+                                    error = %e,
+                                    "文件型连接别名注册失败，回退权威 id"
+                                );
+                                return Ok((conn_info.id, db));
+                            }
+                        }
                     }
 
                     // 如果连接管理器中没有该连接（可能已被关闭），但连接信息仍存在

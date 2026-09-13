@@ -616,7 +616,12 @@ fn postgres_rows_to_arrow(
 #[async_trait::async_trait]
 impl crate::driver::MetadataBrowser for PostgresDatabase {
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        let result = self.query("SELECT datname FROM pg_catalog.pg_database WHERE datistemplate = false ORDER BY datname").await?;
+        // PostgreSQL 一条连接只绑定一个数据库：`information_schema` 仅暴露**当前库**的
+        // schema / 表，列出其它库只会得到无法展开的假节点。因此只返回当前库；
+        // 跨库浏览（DBeaver 式：展开时另开一条连接）留待后续。
+        let result = self
+            .query("SELECT current_database()::text AS datname")
+            .await?;
         Ok(rows_to_node_info(
             &result,
             crate::driver::SchemaObjectKind::Catalog,

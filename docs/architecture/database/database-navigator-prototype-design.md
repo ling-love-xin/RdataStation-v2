@@ -662,6 +662,8 @@ flowchart TD
 | 27 | **facet 持久化（v7）** | facet 筛选进 `settings.json` 的 `Navigator::filters`（UI 偏好）；展开 / 选中仍走 `navigator_state` | v7 |
 | 28 | **搜索 facet 语法（v7）** | `scope:/source:/type:/driver:/tag:` 作**额外 AND 约束**与 chips 叠加，**不回写 chips**（避免输入框反馈环）；未识别 token 留自由文本 | v7 |
 | 29 | **多组引用（v7 实现）** | 主组显式存储（`connection_group_members.is_primary`，右键 `设为主组 ▸` 单选 + 「自动」回退）；未指定回退分组排序 |v7 |
+| 30 | **同文件多连接（v8）** | **别名**：同一文件型库（SQLite / DuckDB）的多条逻辑连接共享一个物理连接，两个 id（`G_`/`P_`/`GP_`）均可查到；文件只打开一次，断开只摘该 id 映射 | v8 |
+| 31 | **PG 库列表（v8）** | PostgreSQL **只列当前数据库**（`current_database()`），不列无法展开的兄弟库；跨库浏览（展开时另开连接）后续再做 | v8 |
 
 ## 13. 已确认细节
 

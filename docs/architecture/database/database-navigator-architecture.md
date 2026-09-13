@@ -148,6 +148,9 @@ GPUI 的 `render` 是纯读路径。本模块把一切 I/O 移出：
   DuckDB `false`（当前内省按固定 `main` schema 取表）；PostgreSQL `true`
   （`catalog(库名) → schema(public 等)`）。无 Schema 层驱动的 `get_schemas` 返回空列表，
   **不再回退为 catalog 列表**（旧实现由此产生同名重复层）。未知驱动默认 `true`（保底保留）。
+- **PostgreSQL 只列当前库**：一条 PG 连接只绑定一个数据库，`information_schema` 仅暴露当前库；
+  `get_catalogs` 由 `pg_database` 全量改为 `current_database()`，避免出现无法展开的兄弟库假节点。
+  跨库浏览（展开时另开一条连接）留待后续。
 - **实测（2026-09-13，真实端点）**：MySQL `mall_business → 表 (7) → order → 16 列`；
   PG `postgres → public → 表 (12) → inventory_ledger → 7 列`；SQLite `main → 表 (25) → attachment → 8 列`；
   DuckDB `main → 表 (8) → cities → 列`。
