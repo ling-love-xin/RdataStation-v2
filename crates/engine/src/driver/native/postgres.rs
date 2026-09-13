@@ -629,10 +629,7 @@ impl crate::driver::MetadataBrowser for PostgresDatabase {
         ))
     }
 
-    async fn get_schemas(
-        &self,
-        catalog: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    async fn get_schemas(&self, catalog: &str) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let sql = "SELECT schema_name FROM information_schema.schemata \
                    WHERE catalog_name = $1 AND schema_name NOT IN ('pg_catalog', 'information_schema') \
                    ORDER BY schema_name";

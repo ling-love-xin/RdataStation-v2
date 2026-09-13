@@ -18,7 +18,8 @@ use settings::commands::OpenSettings;
 use workbench::WorkbenchView;
 use workbench::commands::{
     CloseProject, DraftNext, DraftPrev, FocusNavSearch, NavCollapse, NavDown, NavExpand,
-    NavOpenProperties, NavUp, SaveConnection, SwitchProject, TestConnection, ToggleQuickOpen,
+    NavOpenProperties, NavUp, SaveConnection, ScratchpadCancelEdit, ScratchpadDelete,
+    ScratchpadRename, ScratchpadSelectAll, SwitchProject, TestConnection, ToggleQuickOpen,
 };
 
 fn main() {
@@ -90,6 +91,11 @@ fn run_app() {
                 KeyBinding::new("left", NavCollapse, Some("database-nav")),
                 KeyBinding::new("f4", NavOpenProperties, Some("database-nav")),
                 KeyBinding::new("enter", NavOpenProperties, Some("database-nav")),
+                // M5 草稿箱：全选（仅当焦点在草稿箱面板内时生效）。
+                KeyBinding::new("ctrl-a", ScratchpadSelectAll, Some("scratchpad")),
+                KeyBinding::new("f2", ScratchpadRename, Some("scratchpad")),
+                KeyBinding::new("delete", ScratchpadDelete, Some("scratchpad")),
+                KeyBinding::new("escape", ScratchpadCancelEdit, Some("scratchpad")),
                 // M1 项目管理：切换项目（回选择器）/ 关闭项目。
                 KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),
                 KeyBinding::new("ctrl-shift-w", CloseProject, Some("workbench")),

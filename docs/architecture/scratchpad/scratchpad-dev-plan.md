@@ -1,12 +1,47 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**模块根语义 + 项目级回收站 + 元数据/引用 + 草稿箱面板自身闭环（增删改查/回收站/过滤）已落地**（2026-09-11，`cargo check --workspace --all-targets` 零告警；`rds-scratchpad` 7 项测试全绿） · Phase B 剩余（右键菜单/多选/导入/虚拟列表/懒加载）、Phase D（提升/存档/取回）与 Phase C 待续
+> 状态：**模块根 + 项目级回收站 + 面板自身闭环 + 导入/引用/打开位置/全选/撤销自动消失/行尾元信息 + 右键菜单/键盘 已落地**（2026-09-11，`cargo check --workspace --all-targets -j 2` 零告警） · Phase B 剩余（模板/文件夹复制/内容搜索/虚拟列表/空态细化）、Phase C 与 Phase D 待续
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-11（五次）— 右键菜单 + 键盘快捷键
+
+**已完成**（`crates/workbench/src/panels.rs`、`crates/workbench/src/commands.rs`、`crates/app/src/main.rs`）
+
+| 能力 | 实现 |
+| --- | --- |
+| 右键菜单 | 行 `.context_menu(...)`（gpui-kit `ContextMenuExt` + `PopupMenuItem`）：打开位置 / 重命名 / 剪切 / 复制 / 删除（带分隔线） |
+| F2 重命名 | `ScratchpadRename` action → 唯一选中项行内重命名 |
+| Delete 删除 | `ScratchpadDelete` action → 批量删除（含撤销栏） |
+| Esc 取消编辑 | `ScratchpadCancelEdit` action → 关闭内联编辑 |
+| 绑定与 context | `actions!(scratchpad, …)` + app 层 `scratchpad` context 绑定（Ctrl+A / F2 / Delete / Escape） |
+
+**验证**：`cargo check --workspace --all-targets -j 2` 与 `cargo check -p rds-app -j 2` 均零告警。
+
+**仍余**：新建模板；文件夹递归复制；内容搜索（正则/大小写）；虚拟列表（>50）；空态大图标+双按钮；脏点/双击打开（Phase C）；提升/存档/取回（Phase D）。
+
+### 2026-09-11（四次）— 导入/引用/打开位置/全选/撤销自动消失/行尾元信息
+
+**已完成**（`crates/workbench/src/panels.rs`、`commands.rs`、`crates/app/src/main.rs`）
+
+| 能力 | 实现 |
+| --- | --- |
+| 导入文件 | 工具栏 `⬇` → 系统文件对话框（多选）→ `import_external_file` |
+| 外部引用添加 | 工具栏 `🔗` → 选目录 → `add_external_reference`（别名默认取目录名） |
+| 打开所在位置 | 选中行 `↗` → `open_in_system_explorer` |
+| Ctrl+A 全选 | `actions!(scratchpad,[ScratchpadSelectAll])` + app 层绑定（`scratchpad` context）+ 面板 `key_context`/`track_focus` + 行点击聚焦 |
+| 撤销栏 5s 自动消失 | `background_executor` 定时器；仅当撤销栏仍指向同一次删除才清空 |
+| 行尾元信息 | 相对时间（刚刚/N分钟/N小时/N天/日期）+ 文件可读大小 |
+| 选中左侧珊瑚色条 | 行 `relative()` + 绝对定位 2px `list.active.border`（原型 §3） |
+| 工具栏两行 | 第一行新建/导入/引用/排序/刷新；第二行剪切/复制/粘贴/删除（选择非空或剪贴板非空时显示） |
+
+**验证**：`cargo check --workspace --all-targets -j 2` 零告警。本轮未改 `rds-scratchpad`，后端测试不受影响（上轮 7 项全绿）；`cargo test` 因并行构建占用构建目录锁未重跑。
+
+**仍余**：右键菜单；键盘（F2/Del/Esc/↑↓）；新建模板；文件夹递归复制；内容搜索（正则/大小写，结果落中央区）；虚拟列表（>50）；脏点/双击打开（Phase C）；提升/存档/取回（Phase D）。
 
 ### 2026-09-11（三次）— 草稿箱面板自身闭环
 
@@ -115,9 +150,9 @@
 | B1 | 依赖接线：`Cargo.toml` workspace 增 `scratchpad` 别名；workbench 依赖 `scratchpad` ✅ | `Cargo.toml`、`crates/workbench/Cargo.toml` | 编译通过，依赖方向向下 |
 | B2 | `ScratchpadPanel` 实体：面板头 / 工具栏 / 搜索 / 分组树 / 底部状态；`Shared` 增加草稿箱状态（选中、展开集合、排序、脏点集合）✅ 首切片（工具栏 + 只读树 + 分组 + 底部统计，状态存于 `ScratchpadView`） | `crates/workbench/src/components/scratchpad_panel.rs`、`panels.rs` | 面板渲染，切换活动栏可见 |
 | B3 | 树渲染：递归行、类型图标、选中/悬停/脏点、相对时间、懒加载（`depth=0` → 展开加载）✅ 部分（递归行/类型色点/选中/悬停/展开折叠/重命名/删除已做；相对时间、脏点、懒加载待补） | 同上 | 深目录展开正确 |
-| B4 | 工具栏与空态：新建文件/文件夹（内联输入 + 模板）、导入、引用、排序、刷新；空态引导 △ 部分（新建内联已做；模板/导入/引用添加/排序待补） | 同上 | 各按钮闭环 |
+| B4 | 工具栏与空态：新建文件/文件夹（内联输入 + 模板）、导入、引用、排序、刷新；空态引导 △ 部分（新建内联/导入/引用添加/排序/刷新已做；模板选择、空态大图标+双按钮待补） | 同上 | 各按钮闭环 |
 | B5 | 搜索：文件名实时过滤；内容模式调 `search_file_content`（正则/大小写），结果落中央编辑区 △ 部分（文件名过滤已做；内容模式待补） | 同上 + `panels.rs` `EditorPanel` | 结果带上下文、可跳行 |
-| B6 | 右键菜单 + 键盘：重命名/删除/剪切/复制/粘贴/打开位置/提升；F2/Delete/Ctrl+A/Ctrl+N △ 部分（重命名/删除已以行内操作提供；右键菜单、快捷键、剪切/复制/粘贴、提升待补） | `scratchpad_panel.rs`（绑定 Action/快捷键） | 全操作可用 |
+| B6 | 右键菜单 + 键盘：重命名/删除/剪切/复制/粘贴/打开位置/提升；F2/Delete/Ctrl+A/Ctrl+N ✅ 部分（右键菜单、F2/Delete/Esc/Ctrl+A 已做；Shift 多选/剪切复制粘贴已做；提升与 Ctrl+N 待补） | `panels.rs` + `commands.rs`（`scratchpad` context） | 全操作可用 |
 | B7 | 回收站与撤销栏：折叠区列表/恢复/清空；删除后 5s 撤销 ✅ 部分（列表/恢复/清空/撤销栏已做；5s 自动消失待补） | 同上 | 误删可恢复 |
 | B8 | 多选（Ctrl/Shift）与批量删除 | 同上 | 菜单按单/多选自适应 |
 | B9 | 虚拟列表（>50 条）与排序（名称/大小/时间） | 同上 | 大目录流畅 |

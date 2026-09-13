@@ -31,6 +31,17 @@ actions!(
     [NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties]
 );
 
+// 草稿箱（M5）局部动作：绑定在草稿箱面板的 `key_context("scratchpad")` 上。
+actions!(
+    scratchpad,
+    [
+        ScratchpadSelectAll,
+        ScratchpadRename,
+        ScratchpadDelete,
+        ScratchpadCancelEdit
+    ]
+);
+
 // 连接对话框（M3）局部动作：仅绑定在为对话框容器声明的 key context 上。
 //
 // - `SaveConnection`：Ctrl+Enter 保存（焦点在输入框内时由 Enter action 冒泡兜底）；

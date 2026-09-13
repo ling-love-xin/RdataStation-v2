@@ -25,7 +25,10 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, WindowExt a
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::commands::{NavCollapse, NavDown, NavExpand, NavOpenProperties, NavUp};
+use crate::commands::{
+    NavCollapse, NavDown, NavExpand, NavOpenProperties, NavUp, ScratchpadCancelEdit,
+    ScratchpadDelete, ScratchpadRename, ScratchpadSelectAll,
+};
 use crate::components::connection_dialog;
 
 use scratchpad::{
@@ -89,6 +92,8 @@ pub struct Shared {
     pub project_open_request: Rc<Cell<bool>>,
     /// P0：当前项目会话（草稿箱根 / 项目作用域连接 / 标题栏项目名共用）。
     pub project: Rc<RefCell<Option<project::ui::OpenProject>>>,
+    /// M5：草稿箱内容搜索结果（侧栏发起，结果落中央编辑区）。
+    pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
     /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
     pub project_ui: Rc<RefCell<project::ui::ProjectUiState>>,
     /// 编辑区是否存在未保存草稿（切换 / 关闭项目拦截信号）。
@@ -137,6 +142,7 @@ impl Shared {
             project_new_request: Rc::new(Cell::new(false)),
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
+            scratchpad_search: Rc::new(RefCell::new(None)),
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_dirty: Rc::new(Cell::new(false)),
             editor_sql: Rc::new(RefCell::new(String::new())),
@@ -236,25 +242,136 @@ enum ScratchpadEdit {
     Rename { path: String },
 }
 
-/// 删除撤销（底部撤销栏）。
+/// 删除撤销（底部撤销栏；批量删除时含多条回收站条目）。
 #[derive(Clone)]
 struct ScratchpadUndo {
     label: String,
-    trash_id: String,
+    trash_ids: Vec<String>,
+}
+
+/// 剪贴板模式。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScratchpadClipboardMode {
+    Cut,
+    Copy,
+}
+
+/// 文件剪贴板（路径相对模块根）。
+#[derive(Clone)]
+struct ScratchpadClipboard {
+    mode: ScratchpadClipboardMode,
+    paths: Vec<String>,
+}
+
+/// 搜索模式（文件名过滤 / 内容搜索）。
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ScratchpadSearchMode {
+    #[default]
+    Name,
+    Content,
+}
+
+/// 内容搜索命中项（视图模型）。
+#[derive(Clone)]
+struct ScratchpadSearchHit {
+    file: String,
+    line: usize,
+    content: String,
+    before: Vec<String>,
+    after: Vec<String>,
+}
+
+/// 内容搜索结果（落中央编辑区；侧栏发起写入，编辑区读取渲染）。
+#[derive(Clone)]
+pub struct ScratchpadSearchView {
+    query: String,
+    is_regex: bool,
+    case_sensitive: bool,
+    scanned: usize,
+    truncated: bool,
+    hits: Vec<ScratchpadSearchHit>,
+}
+
+/// 文件树排序键。
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ScratchpadSort {
+    #[default]
+    Name,
+    Size,
+    Modified,
+}
+
+/// 排序标签（底部状态展示）。
+fn scratchpad_sort_label(sort: ScratchpadSort, desc: bool) -> &'static str {
+    match (sort, desc) {
+        (ScratchpadSort::Name, false) => "名称 ↑",
+        (ScratchpadSort::Name, true) => "名称 ↓",
+        (ScratchpadSort::Size, false) => "大小 ↑",
+        (ScratchpadSort::Size, true) => "大小 ↓",
+        (ScratchpadSort::Modified, false) => "时间 ↑",
+        (ScratchpadSort::Modified, true) => "时间 ↓",
+    }
+}
+
+/// 循环切换排序：名称↑ → 名称↓ → 大小↑ → 大小↓ → 时间↑ → 时间↓ → 名称↑。
+fn scratchpad_cycle_sort(sort: &mut ScratchpadSort, desc: &mut bool) {
+    match (*sort, *desc) {
+        (ScratchpadSort::Name, false) => *desc = true,
+        (ScratchpadSort::Name, true) => {
+            *sort = ScratchpadSort::Size;
+            *desc = false;
+        }
+        (ScratchpadSort::Size, false) => *desc = true,
+        (ScratchpadSort::Size, true) => {
+            *sort = ScratchpadSort::Modified;
+            *desc = false;
+        }
+        (ScratchpadSort::Modified, false) => *desc = true,
+        (ScratchpadSort::Modified, true) => {
+            *sort = ScratchpadSort::Name;
+            *desc = false;
+        }
+    }
+}
+
+/// 目录内排序：文件夹恒在前；组内按所选键与方向。
+fn scratchpad_sort_entries(entries: &mut [ScratchpadEntry], sort: ScratchpadSort, desc: bool) {
+    entries.sort_by(|a, b| {
+        let a_folder = a.kind == ScratchpadEntryKind::Folder;
+        let b_folder = b.kind == ScratchpadEntryKind::Folder;
+        if a_folder != b_folder {
+            return if a_folder {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let ord = match sort {
+            ScratchpadSort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            ScratchpadSort::Size => a.size.cmp(&b.size),
+            ScratchpadSort::Modified => a.modified_at.cmp(&b.modified_at),
+        };
+        if desc { ord.reverse() } else { ord }
+    });
 }
 
 /// 草稿箱面板视图状态。
 ///
 /// 数据来自 `rds-scratchpad` 存储；根 = 当前项目会话下的模块目录 `{project}/scratchpad/`。
-/// 本次闭环：新建（内联）/重命名/删除→回收站+撤销/回收站恢复与清空/文件名过滤/外部引用移除。
+/// 闭环：新建/重命名/删除→回收站+撤销/回收站恢复与清空/文件名过滤/引用移除/懒加载/排序。
 #[derive(Default)]
 struct ScratchpadView {
     /// 是否已尝试加载（首次渲染触发一次）。
     loaded: bool,
     /// 加载错误（未打开项目 / 运行时或存储错误）。
     error: Option<String>,
-    /// 模块根下的条目树（depth=4 全量；懒加载后续再做）。
+    /// 模块根的直接子条目（懒加载：展开时按需拉取子目录）。
     entries: Vec<ScratchpadEntry>,
+    /// 已懒加载的子目录（父路径 → 直接子条目）。
+    children: HashMap<String, Vec<ScratchpadEntry>>,
+    /// 排序键与方向（`sort_desc = false` 为升序）。
+    sort: ScratchpadSort,
+    sort_desc: bool,
     /// 外部引用（来自草稿箱配置，含路径可用性）。
     external_refs: Vec<ExternalReferenceStatus>,
     /// 项目级回收站条目。
@@ -263,8 +380,12 @@ struct ScratchpadView {
     trash_expanded: bool,
     /// 已展开的文件夹路径集合。
     expanded: HashSet<String>,
-    /// 当前选中条目路径。
-    selected: Option<String>,
+    /// 当前选中条目路径集合（多选）。
+    selected: HashSet<String>,
+    /// Shift 范围选择的锚点。
+    anchor: Option<String>,
+    /// 剪切/复制剪贴板。
+    clipboard: Option<ScratchpadClipboard>,
     /// 内联编辑状态（新建/重命名）。
     edit: Option<ScratchpadEdit>,
     /// 删除撤销栏。
@@ -272,36 +393,55 @@ struct ScratchpadView {
     /// 内联名称输入（懒创建）。
     name_input: Option<Entity<InputState>>,
     _name_sub: Option<Subscription>,
-    /// 文件名过滤输入（懒创建）。
+    /// 搜索模式与开关（内容模式才有正则 / 大小写）。
+    search_mode: ScratchpadSearchMode,
+    search_regex: bool,
+    search_case: bool,
+    /// 搜索输入（懒创建）。
     search_input: Option<Entity<InputState>>,
     _search_sub: Option<Subscription>,
 }
 
-/// 条目是否命中过滤（自身命中或子树命中）。
-fn scratchpad_entry_matches(entry: &ScratchpadEntry, filter: &str) -> bool {
+/// 条目是否命中过滤（自身命中，或已加载子树命中）。
+fn scratchpad_entry_matches(
+    entry: &ScratchpadEntry,
+    filter: &str,
+    loaded: &HashMap<String, Vec<ScratchpadEntry>>,
+) -> bool {
     if filter.is_empty() {
         return true;
     }
     if entry.name.to_lowercase().contains(filter) {
         return true;
     }
-    entry
-        .children
-        .as_ref()
-        .map(|kids| kids.iter().any(|c| scratchpad_entry_matches(c, filter)))
-        .unwrap_or(false)
+    let key = entry.path.to_string_lossy().to_string();
+    let kids = loaded.get(&key).or(entry.children.as_ref());
+    kids.map(|kids| {
+        kids.iter()
+            .any(|c| scratchpad_entry_matches(c, filter, loaded))
+    })
+    .unwrap_or(false)
 }
 
-/// 将条目树按展开状态压平成 `(缩进层级, 条目)` 行序列；有过滤时自动展开命中子树。
+/// 将条目树按展开状态压平成 `(缩进层级, 条目)` 行序列。
+///
+/// 子目录优先取懒加载缓存 `loaded`，无缓存时用 `entry.children`；每层按排序设置排列。
+/// 有过滤时自动展开命中子树。
+#[allow(clippy::too_many_arguments)]
 fn flatten_scratchpad(
     entries: &[ScratchpadEntry],
     depth: usize,
     expanded: &HashSet<String>,
+    loaded: &HashMap<String, Vec<ScratchpadEntry>>,
+    sort: ScratchpadSort,
+    sort_desc: bool,
     filter: &str,
     out: &mut Vec<(usize, ScratchpadEntry)>,
 ) {
-    for entry in entries {
-        if !scratchpad_entry_matches(entry, filter) {
+    let mut sorted: Vec<ScratchpadEntry> = entries.to_vec();
+    scratchpad_sort_entries(&mut sorted, sort, sort_desc);
+    for entry in &sorted {
+        if !scratchpad_entry_matches(entry, filter, loaded) {
             continue;
         }
         let key = entry.path.to_string_lossy().to_string();
@@ -309,10 +449,271 @@ fn flatten_scratchpad(
         out.push((depth, entry.clone()));
         let open = !filter.is_empty() || expanded.contains(&key);
         if is_folder && open {
-            if let Some(children) = &entry.children {
-                flatten_scratchpad(children, depth + 1, expanded, filter, out);
+            let kids = loaded.get(&key).cloned().or_else(|| entry.children.clone());
+            if let Some(children) = kids {
+                flatten_scratchpad(
+                    &children,
+                    depth + 1,
+                    expanded,
+                    loaded,
+                    sort,
+                    sort_desc,
+                    filter,
+                    out,
+                );
             }
         }
+    }
+}
+
+/// 取路径末段文件名。
+fn scratchpad_basename(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
+}
+
+/// 行尾元信息：相对时间（< 7 天）或日期；文件附加可读大小。
+fn scratchpad_meta_label(entry: &ScratchpadEntry) -> String {
+    let time = entry
+        .modified_at
+        .as_deref()
+        .and_then(scratchpad_relative_time)
+        .unwrap_or_default();
+    if entry.kind == ScratchpadEntryKind::File {
+        let size = scratchpad_size_label(entry.size);
+        if time.is_empty() {
+            size
+        } else {
+            format!("{size} · {time}")
+        }
+    } else {
+        time
+    }
+}
+
+/// RFC3339 → 相对时间（刚刚 / N 分钟 / N 小时 / N 天 / 日期）。
+fn scratchpad_relative_time(rfc3339: &str) -> Option<String> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(rfc3339).ok()?;
+    let seconds = chrono::Utc::now()
+        .signed_duration_since(parsed.with_timezone(&chrono::Utc))
+        .num_seconds();
+    Some(if seconds < 60 {
+        "刚刚".to_string()
+    } else if seconds < 3600 {
+        format!("{} 分钟前", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{} 小时前", seconds / 3600)
+    } else if seconds < 86_400 * 7 {
+        format!("{} 天前", seconds / 86_400)
+    } else {
+        parsed.format("%Y-%m-%d").to_string()
+    })
+}
+
+/// 字节数 → 可读大小（B / KB / MB / GB）。
+fn scratchpad_size_label(size: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let s = size as f64;
+    if s < KB {
+        format!("{size} B")
+    } else if s < MB {
+        format!("{:.1} KB", s / KB)
+    } else if s < GB {
+        format!("{:.1} MB", s / MB)
+    } else {
+        format!("{:.1} GB", s / GB)
+    }
+}
+
+/// 内容搜索结果面板（中央编辑区）：头部（查询/命中数/开关标记）+ 命中列表（含上下文）。
+fn render_scratchpad_search_pane(
+    search: &ScratchpadSearchView,
+    theme: &gpui_kit::component::Theme,
+    on_clear: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
+) -> Div {
+    let fg = theme.colors.foreground;
+    let muted = theme.colors.muted_foreground;
+    let border = theme.colors.border;
+    let bg = theme.colors.background;
+    let primary = theme.colors.primary;
+
+    let flags = {
+        let mut f = Vec::new();
+        if search.is_regex {
+            f.push("正则");
+        }
+        if search.case_sensitive {
+            f.push("区分大小写");
+        }
+        if search.truncated {
+            f.push("已截断");
+        }
+        if f.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", f.join(" · "))
+        }
+    };
+
+    let header = div()
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(fg)
+                .child(format!("内容搜索：{}", search.query)),
+        )
+        .child(div().text_xs().text_color(muted).child(format!(
+            "{} 处匹配 · 扫描 {} 个文件{}",
+            search.hits.len(),
+            search.scanned,
+            flags
+        )))
+        .child(div().flex_1())
+        .child(
+            div()
+                .id("sp-search-close")
+                .cursor_pointer()
+                .text_xs()
+                .text_color(primary)
+                .child("关闭")
+                .on_click(on_clear),
+        );
+
+    let mut list = div().v_flex().w_full().gap_1();
+    if search.hits.is_empty() {
+        list = list.child(div().text_xs().text_color(muted).child("无匹配"));
+    }
+    for hit in &search.hits {
+        let mut group = div().v_flex().w_full().gap_0p5().child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(fg)
+                .child(format!("{} · 行 {}", hit.file, hit.line)),
+        );
+        for line in &hit.before {
+            group = group.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("    {line}")),
+            );
+        }
+        group = group.child(
+            div()
+                .text_xs()
+                .text_color(fg)
+                .child(format!("> {}", hit.content)),
+        );
+        for line in &hit.after {
+            group = group.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("    {line}")),
+            );
+        }
+        list = list.child(group);
+    }
+
+    div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .p_2()
+        .rounded_md()
+        .border_1()
+        .border_color(border)
+        .bg(bg)
+        .child(header)
+        .child(div().max_h(rems(16.)).overflow_hidden().child(list))
+}
+
+/// 拆分文件名与扩展名（`foo.sql` → (`foo`, `.sql`)）。
+fn scratchpad_split_name(name: &str) -> (String, String) {
+    match name.rfind('.') {
+        Some(i) if i > 0 => (name[..i].to_string(), name[i..].to_string()),
+        _ => (name.to_string(), String::new()),
+    }
+}
+
+/// 复制单个文件到目标目录（仅文件；文件夹递归复制待补）。
+///
+/// 新名依次尝试 `_copy`、`_copy_1`… 直到不重名。
+async fn copy_scratchpad_entry(
+    store: &ScratchpadStore,
+    rel_path: &str,
+    target_parent: &str,
+) -> Result<(), String> {
+    let name = scratchpad_basename(rel_path);
+    if name.is_empty() {
+        return Err("无效路径".to_string());
+    }
+    let content = store.read_file(rel_path).await.map_err(|e| e.to_string())?;
+    let (stem, ext) = scratchpad_split_name(&name);
+    let parent = if target_parent.is_empty() {
+        None
+    } else {
+        Some(target_parent)
+    };
+
+    for i in 0..1000 {
+        let candidate = if i == 0 {
+            format!("{stem}_copy{ext}")
+        } else {
+            format!("{stem}_copy_{i}{ext}")
+        };
+        if store.create_entry(&candidate, parent, false).await.is_ok() {
+            let new_rel = if target_parent.is_empty() {
+                candidate.clone()
+            } else {
+                format!(
+                    "{}/{}",
+                    target_parent.trim_end_matches(['/', '\\']),
+                    candidate
+                )
+            };
+            store
+                .save_file(&new_rel, &content)
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    }
+    Err("同名文件过多，复制失败".to_string())
+}
+
+impl ScratchpadView {
+    /// 在已加载数据（根 + 懒加载子目录）中查找条目类型。
+    fn kind_of(&self, key: &str) -> Option<ScratchpadEntryKind> {
+        fn walk(entries: &[ScratchpadEntry], key: &str) -> Option<ScratchpadEntryKind> {
+            for e in entries {
+                if e.path.to_string_lossy() == key {
+                    return Some(e.kind.clone());
+                }
+                if let Some(kids) = &e.children {
+                    if let Some(k) = walk(kids, key) {
+                        return Some(k);
+                    }
+                }
+            }
+            None
+        }
+        if let Some(k) = walk(&self.entries, key) {
+            return Some(k);
+        }
+        for kids in self.children.values() {
+            if let Some(k) = walk(kids, key) {
+                return Some(k);
+            }
+        }
+        None
     }
 }
 
@@ -851,6 +1252,7 @@ impl SidebarPanel {
         view.loaded = true;
         view.error = None;
         view.entries.clear();
+        view.children.clear();
         view.external_refs.clear();
         view.trash.clear();
 
@@ -869,7 +1271,8 @@ impl SidebarPanel {
         };
 
         let result = rt.block_on(async {
-            let entries = store.list_local_entries(4).await?;
+            // 懒加载：仅取模块根目录，子目录在展开时按需拉取。
+            let entries = store.list_local_entries(0).await?;
             let refs = store.external_reference_status().await?;
             let trash = store.list_trash().await?;
             Ok::<_, shared::error::CoreError>((entries, refs, trash))
@@ -913,14 +1316,22 @@ impl SidebarPanel {
                 }
             },
         );
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索文件…"));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索…"));
         let search_sub = cx.subscribe_in(
             &search_input,
             window,
-            |_this, _e, ev: &InputEvent, _w, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    cx.notify();
+            |this, _e, ev: &InputEvent, _w, cx| match ev {
+                InputEvent::Change => cx.notify(),
+                InputEvent::PressEnter { .. } => {
+                    let content_mode =
+                        this.scratchpad.borrow().search_mode == ScratchpadSearchMode::Content;
+                    if content_mode {
+                        this.run_scratchpad_content_search(cx);
+                    } else {
+                        cx.notify();
+                    }
                 }
+                _ => {}
             },
         );
         let mut view = self.scratchpad.borrow_mut();
@@ -964,6 +1375,21 @@ impl SidebarPanel {
     fn cancel_scratchpad_edit(&mut self, cx: &mut Context<Self>) {
         self.scratchpad.borrow_mut().edit = None;
         cx.notify();
+    }
+
+    /// 重命名当前唯一选中的条目（F2）。
+    fn rename_scratchpad_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = {
+            let view = self.scratchpad.borrow();
+            if view.selected.len() == 1 {
+                view.selected.iter().next().cloned()
+            } else {
+                None
+            }
+        };
+        if let Some(path) = path {
+            self.start_scratchpad_edit(ScratchpadEdit::Rename { path }, window, cx);
+        }
     }
 
     /// 提交内联编辑（新建 / 重命名）。
@@ -1016,58 +1442,94 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// 删除条目 → 项目级回收站，并记录撤销。
-    fn delete_scratchpad_entry(&mut self, relative_path: String, cx: &mut Context<Self>) {
+    /// 删除所选条目 → 项目级回收站，并记录撤销（批量）。
+    fn delete_scratchpad_selection(&mut self, cx: &mut Context<Self>) {
         // M1：只读打开时禁止删除草稿。
         if self.shared.project_ui.borrow().read_only {
             *self.shared.notice.borrow_mut() = Some("只读模式：不允许删除草稿".to_string());
             cx.notify();
             return;
         }
-        let label = relative_path
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(&relative_path)
-            .to_string();
-
-        let delete_result = match self.scratchpad_store() {
-            Ok((store, rt)) => rt
-                .block_on(store.delete_entry(&relative_path))
-                .map_err(|e| e.to_string()),
-            Err(e) => Err(e),
+        let mut paths: Vec<String> = self.scratchpad.borrow().selected.iter().cloned().collect();
+        if paths.is_empty() {
+            return;
+        }
+        paths.sort();
+        let label = if paths.len() == 1 {
+            scratchpad_basename(&paths[0])
+        } else {
+            format!("{} 项", paths.len())
         };
 
-        match delete_result {
-            Ok(()) => {
-                // 刚删除的条目应是回收站中删除时间最新的一条（用于撤销）。
-                let trash_id = match self.scratchpad_store() {
-                    Ok((store, rt)) => rt
-                        .block_on(store.list_trash())
-                        .ok()
-                        .and_then(|v| v.into_iter().next())
-                        .map(|e| e.manifest.id),
-                    Err(_) => None,
-                };
-                let mut view = self.scratchpad.borrow_mut();
-                view.undo = trash_id.map(|trash_id| ScratchpadUndo { label, trash_id });
+        let result = (|| -> Result<Vec<String>, String> {
+            let (store, rt) = self.scratchpad_store()?;
+            let before: HashSet<String> = rt
+                .block_on(store.list_trash())
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|e| e.manifest.id)
+                .collect();
+            for path in &paths {
+                rt.block_on(store.delete_entry(path))
+                    .map_err(|e| e.to_string())?;
+            }
+            let after = rt.block_on(store.list_trash()).map_err(|e| e.to_string())?;
+            Ok(after
+                .into_iter()
+                .map(|e| e.manifest.id)
+                .filter(|id| !before.contains(id))
+                .collect())
+        })();
+
+        let mut undo_ids: Option<Vec<String>> = None;
+        let mut view = self.scratchpad.borrow_mut();
+        match result {
+            Ok(trash_ids) => {
+                undo_ids = Some(trash_ids.clone());
+                view.undo = Some(ScratchpadUndo { label, trash_ids });
+                view.selected.clear();
+                view.anchor = None;
                 view.loaded = false;
                 view.error = None;
             }
-            Err(e) => self.scratchpad.borrow_mut().error = Some(format!("删除失败: {e}")),
+            Err(e) => view.error = Some(format!("删除失败: {e}")),
+        }
+        drop(view);
+        if let Some(ids) = undo_ids {
+            self.schedule_undo_expiry(ids, cx);
         }
         cx.notify();
     }
 
-    /// 撤销上一次删除（从回收站还原）。
+    /// 删除单条（行内 ✕）：先设为唯一选中，再走批量删除。
+    fn delete_scratchpad_entry(&mut self, relative_path: String, cx: &mut Context<Self>) {
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            view.selected.clear();
+            view.selected.insert(relative_path.clone());
+            view.anchor = Some(relative_path);
+        }
+        self.delete_scratchpad_selection(cx);
+    }
+
+    /// 撤销上一次删除（从回收站还原全部条目）。
     fn undo_scratchpad_delete(&mut self, cx: &mut Context<Self>) {
         let Some(undo) = self.scratchpad.borrow().undo.clone() else {
             return;
         };
         let result = match self.scratchpad_store() {
-            Ok((store, rt)) => rt
-                .block_on(store.restore_from_trash(&undo.trash_id))
-                .map(|_| ())
-                .map_err(|e| e.to_string()),
+            Ok((store, rt)) => {
+                let mut failure: Option<String> = None;
+                for id in &undo.trash_ids {
+                    if let Err(e) = rt.block_on(store.restore_from_trash(id)) {
+                        failure = Some(e.to_string());
+                    }
+                }
+                match failure {
+                    None => Ok(()),
+                    Some(e) => Err(e),
+                }
+            }
             Err(e) => Err(e),
         };
         let mut view = self.scratchpad.borrow_mut();
@@ -1078,6 +1540,80 @@ impl SidebarPanel {
         }
         drop(view);
         cx.notify();
+    }
+
+    /// 把当前选中项放入剪贴板（剪切 / 复制）。
+    fn set_scratchpad_clipboard(&mut self, mode: ScratchpadClipboardMode, cx: &mut Context<Self>) {
+        let mut paths: Vec<String> = self.scratchpad.borrow().selected.iter().cloned().collect();
+        if paths.is_empty() {
+            return;
+        }
+        paths.sort();
+        self.scratchpad.borrow_mut().clipboard = Some(ScratchpadClipboard { mode, paths });
+        cx.notify();
+    }
+
+    /// 粘贴剪贴板到当前选中的文件夹（未选中文件夹则粘到模块根）。
+    fn paste_scratchpad_clipboard(&mut self, cx: &mut Context<Self>) {
+        // M1：只读打开时禁止写入草稿。
+        if self.shared.project_ui.borrow().read_only {
+            *self.shared.notice.borrow_mut() = Some("只读模式：不允许粘贴草稿".to_string());
+            cx.notify();
+            return;
+        }
+        let Some(clipboard) = self.scratchpad.borrow().clipboard.clone() else {
+            return;
+        };
+        let target = self.scratchpad_paste_target();
+
+        let result = (|| -> Result<(), String> {
+            let (store, rt) = self.scratchpad_store()?;
+            for path in &clipboard.paths {
+                match clipboard.mode {
+                    ScratchpadClipboardMode::Cut => {
+                        rt.block_on(store.move_entry(path, &target))
+                            .map_err(|e| e.to_string())?;
+                    }
+                    ScratchpadClipboardMode::Copy => {
+                        rt.block_on(copy_scratchpad_entry(&store, path, &target))?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+
+        let mut view = self.scratchpad.borrow_mut();
+        match result {
+            Ok(()) => {
+                if clipboard.mode == ScratchpadClipboardMode::Cut {
+                    view.clipboard = None;
+                }
+                view.selected.clear();
+                view.anchor = None;
+                view.loaded = false;
+                view.error = None;
+            }
+            Err(e) => view.error = Some(format!("粘贴失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
+    }
+
+    /// 粘贴目标：唯一选中且为文件夹 → 该目录；否则模块根（空串）。
+    fn scratchpad_paste_target(&self) -> String {
+        let view = self.scratchpad.borrow();
+        if view.selected.len() == 1 {
+            if let Some(path) = view.selected.iter().next() {
+                if view
+                    .kind_of(path)
+                    .map(|k| k == ScratchpadEntryKind::Folder)
+                    .unwrap_or(false)
+                {
+                    return path.clone();
+                }
+            }
+        }
+        String::new()
     }
 
     /// 从回收站还原指定条目。
@@ -1131,6 +1667,198 @@ impl SidebarPanel {
         }
         drop(view);
         cx.notify();
+    }
+
+    /// 懒加载子目录（展开文件夹时调用）。
+    fn load_scratchpad_dir(&mut self, path: String, cx: &mut Context<Self>) {
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.list_directory_entries(&path))
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        let mut view = self.scratchpad.borrow_mut();
+        match result {
+            Ok(entries) => {
+                view.children.insert(path, entries);
+                view.error = None;
+            }
+            Err(e) => view.error = Some(format!("加载目录失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
+    }
+
+    /// 导入外部文件到草稿箱（复制进来）。
+    fn import_scratchpad_files(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => {
+                let mut failure: Option<String> = None;
+                for path in &paths {
+                    if let Err(e) = rt.block_on(store.import_external_file(path)) {
+                        failure = Some(e.to_string());
+                    }
+                }
+                match failure {
+                    None => Ok(()),
+                    Some(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        };
+        let mut view = self.scratchpad.borrow_mut();
+        match result {
+            Ok(()) => {
+                view.loaded = false;
+                view.error = None;
+            }
+            Err(e) => view.error = Some(format!("导入失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
+    }
+
+    /// 添加外部引用（不复制文件，仅记录路径；别名默认取目录/文件名）。
+    fn add_scratchpad_reference(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        let alias = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.add_external_reference(alias, path))
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        let mut view = self.scratchpad.borrow_mut();
+        match result {
+            Ok(()) => view.loaded = false,
+            Err(e) => view.error = Some(format!("添加引用失败: {e}")),
+        }
+        drop(view);
+        cx.notify();
+    }
+
+    /// 在系统文件管理器中打开条目（需绝对路径）。
+    fn open_scratchpad_location(&mut self, path: String, cx: &mut Context<Self>) {
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.open_in_system_explorer(std::path::Path::new(&path)))
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = result {
+            self.scratchpad.borrow_mut().error = Some(format!("打开位置失败: {e}"));
+            cx.notify();
+        }
+    }
+
+    /// 全选已加载条目（Ctrl+A）。
+    fn select_all_scratchpad(&mut self, cx: &mut Context<Self>) {
+        fn walk(entries: &[ScratchpadEntry], out: &mut Vec<String>) {
+            for e in entries {
+                out.push(e.path.to_string_lossy().to_string());
+                if let Some(kids) = &e.children {
+                    walk(kids, out);
+                }
+            }
+        }
+        let mut keys = Vec::new();
+        {
+            let view = self.scratchpad.borrow();
+            walk(&view.entries, &mut keys);
+            for kids in view.children.values() {
+                walk(kids, &mut keys);
+            }
+        }
+        let mut view = self.scratchpad.borrow_mut();
+        view.selected = keys.into_iter().collect();
+        view.anchor = None;
+        drop(view);
+        cx.notify();
+    }
+
+    /// 运行内容搜索（结果写入 `Shared::scratchpad_search`，由中央编辑区渲染）。
+    fn run_scratchpad_content_search(&mut self, cx: &mut Context<Self>) {
+        let query = self
+            .scratchpad
+            .borrow()
+            .search_input
+            .as_ref()
+            .map(|i| i.read(cx).value().trim().to_string())
+            .unwrap_or_default();
+        if query.is_empty() {
+            *self.shared.scratchpad_search.borrow_mut() = None;
+            self.shared.notify_host(cx);
+            cx.notify();
+            return;
+        }
+        let (is_regex, case_sensitive) = {
+            let v = self.scratchpad.borrow();
+            (v.search_regex, v.search_case)
+        };
+        let result = match self.scratchpad_store() {
+            Ok((store, rt)) => rt
+                .block_on(store.search_file_content(&query, case_sensitive, 2, is_regex))
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(res) => {
+                let view = ScratchpadSearchView {
+                    query,
+                    is_regex,
+                    case_sensitive,
+                    scanned: res.total_files_scanned,
+                    truncated: res.truncated,
+                    hits: res
+                        .matches
+                        .into_iter()
+                        .map(|m| ScratchpadSearchHit {
+                            file: m.file,
+                            line: m.line_number,
+                            content: m.line_content,
+                            before: m.before_context,
+                            after: m.after_context,
+                        })
+                        .collect(),
+                };
+                *self.shared.scratchpad_search.borrow_mut() = Some(view);
+                self.scratchpad.borrow_mut().error = None;
+            }
+            Err(e) => {
+                *self.shared.scratchpad_search.borrow_mut() = None;
+                self.scratchpad.borrow_mut().error = Some(format!("搜索失败: {e}"));
+            }
+        }
+        self.shared.notify_host(cx);
+        cx.notify();
+    }
+
+    /// 懒加载子目录（展开文件夹时调用）。
+    /// 安排撤销栏 5 秒后自动消失（仅当仍指向同一次删除）。
+    fn schedule_undo_expiry(&self, trash_ids: Vec<String>, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |_this, cx| {
+            executor.timer(std::time::Duration::from_secs(5)).await;
+            let _ = weak.update(cx, |this, cx| {
+                let matches = this
+                    .scratchpad
+                    .borrow()
+                    .undo
+                    .as_ref()
+                    .map(|u| u.trash_ids == trash_ids)
+                    .unwrap_or(false);
+                if matches {
+                    this.scratchpad.borrow_mut().undo = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// 数据源导航面板（M4）：面板头 + 来源 chips + 搜索 + 分组树。
@@ -4239,6 +4967,7 @@ impl SidebarPanel {
         let primary = theme.colors.primary;
         let info = theme.colors.info;
         let success = theme.colors.success;
+        let active_border = theme.colors.list_active_border;
 
         let entity = cx.entity();
         let view_handle = self.scratchpad.clone();
@@ -4251,9 +4980,13 @@ impl SidebarPanel {
             trash_expanded,
             selected,
             expanded,
+            loaded_children,
+            sort,
+            sort_desc,
             edit,
             undo,
             filter,
+            has_clipboard,
         ) = {
             let view = self.scratchpad.borrow();
             let filter = view
@@ -4262,7 +4995,16 @@ impl SidebarPanel {
                 .map(|i| i.read(cx).value().to_lowercase().trim().to_string())
                 .unwrap_or_default();
             let mut flat = Vec::new();
-            flatten_scratchpad(&view.entries, 0, &view.expanded, &filter, &mut flat);
+            flatten_scratchpad(
+                &view.entries,
+                0,
+                &view.expanded,
+                &view.children,
+                view.sort,
+                view.sort_desc,
+                &filter,
+                &mut flat,
+            );
             (
                 flat,
                 view.error.clone(),
@@ -4271,9 +5013,13 @@ impl SidebarPanel {
                 view.trash_expanded,
                 view.selected.clone(),
                 view.expanded.clone(),
+                view.children.clone(),
+                view.sort,
+                view.sort_desc,
                 view.edit.clone(),
                 view.undo.clone(),
                 filter,
+                view.clipboard.is_some(),
             )
         };
 
@@ -4302,6 +5048,95 @@ impl SidebarPanel {
                 entity.update(app, |_, cx| cx.notify());
             }
         };
+        let cycle_sort = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                {
+                    let mut v = view.borrow_mut();
+                    let (mut next_sort, mut next_desc) = (v.sort, v.sort_desc);
+                    scratchpad_cycle_sort(&mut next_sort, &mut next_desc);
+                    v.sort = next_sort;
+                    v.sort_desc = next_desc;
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let cut_selection = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.set_scratchpad_clipboard(ScratchpadClipboardMode::Cut, cx)
+                });
+            }
+        };
+        let copy_selection = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| {
+                    this.set_scratchpad_clipboard(ScratchpadClipboardMode::Copy, cx)
+                });
+            }
+        };
+        let paste_clipboard = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.paste_scratchpad_clipboard(cx));
+            }
+        };
+        let delete_selection = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.delete_scratchpad_selection(cx));
+            }
+        };
+        let import_files = {
+            let entity_template = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                let entity = entity_template.clone();
+                let receiver = app.prompt_for_paths(PathPromptOptions {
+                    files: true,
+                    directories: false,
+                    multiple: true,
+                    prompt: Some("选择要导入的文件".into()),
+                });
+                window
+                    .spawn(app, async move |cx| {
+                        if let Ok(Ok(Some(paths))) = receiver.await {
+                            let _ = cx.update(|_window, cx| {
+                                entity
+                                    .update(cx, |this, cx| this.import_scratchpad_files(paths, cx));
+                            });
+                        }
+                    })
+                    .detach();
+            }
+        };
+        let add_reference = {
+            let entity_template = entity.clone();
+            move |_: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
+                let entity = entity_template.clone();
+                let receiver = app.prompt_for_paths(PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("选择要引用的目录".into()),
+                });
+                window
+                    .spawn(app, async move |cx| {
+                        if let Ok(Ok(Some(paths))) = receiver.await {
+                            if let Some(path) = paths.into_iter().next() {
+                                let _ = cx.update(|_window, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.add_scratchpad_reference(path, cx)
+                                    });
+                                });
+                            }
+                        }
+                    })
+                    .detach();
+            }
+        };
 
         let tool_btn = |id: &'static str,
                         glyph: &'static str,
@@ -4324,22 +5159,180 @@ impl SidebarPanel {
                 .child(glyph)
         };
 
-        let toolbar = div()
+        let has_selection = !selected.is_empty();
+        let mut toolbar = div().v_flex().w_full().gap_1().px_1p5().py_1();
+        toolbar = toolbar.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .w_full()
+                .child(tool_btn("sp-new-file", "＋", Box::new(start_new_file)))
+                .child(tool_btn("sp-new-folder", "🗀", Box::new(start_new_folder)))
+                .child(tool_btn("sp-import", "⬇", Box::new(import_files)))
+                .child(tool_btn("sp-add-ref", "🔗", Box::new(add_reference)))
+                .child(div().flex_1())
+                .child(tool_btn("sp-sort", "⇅", Box::new(cycle_sort)))
+                .child(tool_btn("sp-refresh", "↻", Box::new(refresh))),
+        );
+        if has_selection || has_clipboard {
+            toolbar = toolbar.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .w_full()
+                    .child(tool_btn("sp-cut", "✂", Box::new(cut_selection)))
+                    .child(tool_btn("sp-copy", "⧉", Box::new(copy_selection)))
+                    .child(tool_btn("sp-paste", "📋", Box::new(paste_clipboard)))
+                    .child(tool_btn("sp-delete", "🗑", Box::new(delete_selection)))
+                    .child(div().flex_1())
+                    .child(div().id("sp-sel-count").text_xs().text_color(muted).child(
+                        if has_selection {
+                            format!("{} 项", selected.len())
+                        } else {
+                            "剪贴板".to_string()
+                        },
+                    )),
+            );
+        }
+
+        // ── 搜索（文件名过滤 / 内容搜索）──
+        let (search_mode, search_regex, search_case) = {
+            let v = self.scratchpad.borrow();
+            (v.search_mode, v.search_regex, v.search_case)
+        };
+        let toggle_mode = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                {
+                    let mut v = view.borrow_mut();
+                    v.search_mode = if v.search_mode == ScratchpadSearchMode::Content {
+                        ScratchpadSearchMode::Name
+                    } else {
+                        ScratchpadSearchMode::Content
+                    };
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let toggle_regex = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                {
+                    let mut v = view.borrow_mut();
+                    v.search_regex = !v.search_regex;
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let toggle_case = {
+            let view = view_handle.clone();
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                {
+                    let mut v = view.borrow_mut();
+                    v.search_case = !v.search_case;
+                }
+                entity.update(app, |_, cx| cx.notify());
+            }
+        };
+        let run_search = {
+            let entity = entity.clone();
+            move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                entity.update(app, |this, cx| this.run_scratchpad_content_search(cx));
+            }
+        };
+
+        let mode_label = if search_mode == ScratchpadSearchMode::Content {
+            "内容"
+        } else {
+            "文件名"
+        };
+        let mode_on = search_mode == ScratchpadSearchMode::Content;
+
+        let mut search_row = div()
             .h_flex()
             .items_center()
             .gap_1()
             .w_full()
             .px_1p5()
-            .py_1()
-            .child(tool_btn("sp-new-file", "＋", Box::new(start_new_file)))
-            .child(tool_btn("sp-new-folder", "🗀", Box::new(start_new_folder)))
-            .child(div().flex_1())
-            .child(tool_btn("sp-refresh", "↻", Box::new(refresh)));
-
-        // ── 搜索（文件名过滤）──
-        let mut search_row = div().w_full().px_1p5().pb_1();
+            .pb_1();
+        search_row = search_row.child(
+            div()
+                .id("sp-mode")
+                .h_flex()
+                .items_center()
+                .justify_center()
+                .px_1()
+                .h_5()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if mode_on { fg } else { muted })
+                .when(mode_on, |this| this.bg(selected_bg))
+                .hover(move |s| s.bg(hover_bg))
+                .child(mode_label)
+                .on_click(toggle_mode),
+        );
         if let Some(input) = self.scratchpad.borrow().search_input.clone() {
-            search_row = search_row.child(Input::new(&input).w_full());
+            search_row =
+                search_row.child(div().flex_1().min_w_0().child(Input::new(&input).w_full()));
+        }
+        if search_mode == ScratchpadSearchMode::Content {
+            search_row = search_row
+                .child(
+                    div()
+                        .id("sp-regex")
+                        .h_flex()
+                        .items_center()
+                        .justify_center()
+                        .px_1()
+                        .h_5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if search_regex { fg } else { muted })
+                        .when(search_regex, |this| this.bg(selected_bg))
+                        .hover(move |s| s.bg(hover_bg))
+                        .child(".*")
+                        .on_click(toggle_regex),
+                )
+                .child(
+                    div()
+                        .id("sp-case")
+                        .h_flex()
+                        .items_center()
+                        .justify_center()
+                        .px_1()
+                        .h_5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if search_case { fg } else { muted })
+                        .when(search_case, |this| this.bg(selected_bg))
+                        .hover(move |s| s.bg(hover_bg))
+                        .child("Aa")
+                        .on_click(toggle_case),
+                )
+                .child(
+                    div()
+                        .id("sp-run")
+                        .h_flex()
+                        .items_center()
+                        .justify_center()
+                        .px_1()
+                        .h_5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(muted)
+                        .hover(move |s| s.bg(hover_bg))
+                        .child("⏎")
+                        .on_click(run_search),
+                );
         }
 
         let group_header = |label: &str, count: usize| {
@@ -4416,7 +5409,12 @@ impl SidebarPanel {
             );
         } else {
             body = body.child(group_header("草稿", rows.len()));
-            for (depth, entry) in &rows {
+            let visible_keys: std::rc::Rc<Vec<String>> = std::rc::Rc::new(
+                rows.iter()
+                    .map(|(_, e)| e.path.to_string_lossy().to_string())
+                    .collect(),
+            );
+            for (index, (depth, entry)) in rows.iter().enumerate() {
                 let key = entry.path.to_string_lossy().to_string();
 
                 // 本行正在重命名 → 渲染内联输入。
@@ -4428,35 +5426,69 @@ impl SidebarPanel {
                 }
 
                 let is_folder = entry.kind == ScratchpadEntryKind::Folder;
-                let has_children = entry
-                    .children
-                    .as_ref()
-                    .map(|c| !c.is_empty())
-                    .unwrap_or(false);
-                let is_selected = selected.as_deref() == Some(key.as_str());
+                let is_selected = selected.contains(&key);
                 let is_expanded = expanded.contains(&key);
+                // 展开且尚未懒加载过子目录 → 触发加载。
+                let needs_load =
+                    is_folder && !loaded_children.contains_key(&key) && entry.children.is_none();
 
                 let click = {
                     let view = view_handle.clone();
                     let entity = entity.clone();
                     let key = key.clone();
-                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    let load_key = key.clone();
+                    let keys = visible_keys.clone();
+                    move |ev: &gpui_kit::ClickEvent,
+                          window: &mut gpui_kit::Window,
+                          app: &mut App| {
+                        let modifiers = ev.modifiers();
+                        let mut should_load = false;
                         {
                             let mut v = view.borrow_mut();
-                            v.selected = Some(key.clone());
-                            if is_folder {
-                                if v.expanded.contains(&key) {
-                                    v.expanded.remove(&key);
+                            if modifiers.shift {
+                                if let Some(anchor) = v.anchor.clone() {
+                                    if let Some(a) = keys.iter().position(|k| k == &anchor) {
+                                        let (lo, hi) =
+                                            if a <= index { (a, index) } else { (index, a) };
+                                        v.selected = keys[lo..=hi].iter().cloned().collect();
+                                    }
                                 } else {
-                                    v.expanded.insert(key.clone());
+                                    v.selected.clear();
+                                    v.selected.insert(key.clone());
+                                    v.anchor = Some(key.clone());
+                                }
+                            } else if modifiers.control {
+                                if !v.selected.remove(&key) {
+                                    v.selected.insert(key.clone());
+                                }
+                                v.anchor = Some(key.clone());
+                            } else {
+                                v.selected.clear();
+                                v.selected.insert(key.clone());
+                                v.anchor = Some(key.clone());
+                                if is_folder {
+                                    if v.expanded.contains(&key) {
+                                        v.expanded.remove(&key);
+                                    } else {
+                                        v.expanded.insert(key.clone());
+                                        should_load = needs_load;
+                                    }
                                 }
                             }
                         }
-                        entity.update(app, |_, cx| cx.notify());
+                        // 点击即聚焦面板，使 Ctrl+A 等面板快捷键生效。
+                        entity.update(app, |this, cx| {
+                            this.focus_handle.clone().focus(window, cx);
+                            if should_load {
+                                this.load_scratchpad_dir(load_key.clone(), cx);
+                            } else {
+                                cx.notify();
+                            }
+                        });
                     }
                 };
 
-                let chevron = if is_folder && has_children {
+                let chevron = if is_folder {
                     if is_expanded { "▾" } else { "▸" }
                 } else {
                     ""
@@ -4475,10 +5507,24 @@ impl SidebarPanel {
                     .h_6()
                     .gap_1()
                     .rounded_sm()
+                    .relative()
                     .cursor_pointer()
                     .when(is_selected, |this| this.bg(selected_bg))
                     .hover(move |s| s.bg(hover_bg))
                     .on_click(click)
+                    // 选中左侧 2px 品牌色条（原型 §3）。
+                    .when(is_selected, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .left(px(0.))
+                                .top(px(3.))
+                                .bottom(px(3.))
+                                .w(px(2.))
+                                .rounded_sm()
+                                .bg(active_border),
+                        )
+                    })
                     .child(div().w(rems(*depth as f32 * ui::TREE_INDENT)).flex_none())
                     .child(
                         div()
@@ -4496,10 +5542,26 @@ impl SidebarPanel {
                             .text_xs()
                             .text_color(fg)
                             .child(entry.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(scratchpad_meta_label(entry)),
                     );
 
-                // 选中行才显示操作（重命名 / 删除）。
+                // 选中行才显示操作（打开位置 / 重命名 / 删除）。
                 if is_selected {
+                    let open_location = {
+                        let entity = entity.clone();
+                        let key = key.clone();
+                        move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                            entity.update(app, |this, cx| {
+                                this.open_scratchpad_location(key.clone(), cx)
+                            });
+                        }
+                    };
                     let rename = {
                         let entity = entity.clone();
                         let key = key.clone();
@@ -4525,6 +5587,20 @@ impl SidebarPanel {
                         }
                     };
                     row = row
+                        .child(
+                            div()
+                                .id(format!("sp-open-{key}"))
+                                .w(rems(1.125))
+                                .h_flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(muted)
+                                .hover(move |s| s.bg(hover_bg))
+                                .child("↗")
+                                .on_click(open_location),
+                        )
                         .child(
                             div()
                                 .id(format!("sp-ren-{key}"))
@@ -4555,6 +5631,62 @@ impl SidebarPanel {
                         );
                 }
 
+                // 右键菜单（打开位置 / 重命名 / 剪切 / 复制 / 删除）。
+                let row = {
+                    let menu_entity = entity.clone();
+                    let menu_key = key.clone();
+                    row.context_menu(move |menu, _window, _cx| {
+                        let open_entity = menu_entity.clone();
+                        let open_key = menu_key.clone();
+                        let rename_entity = menu_entity.clone();
+                        let rename_key = menu_key.clone();
+                        let cut_entity = menu_entity.clone();
+                        let cut_key = menu_key.clone();
+                        let copy_entity = menu_entity.clone();
+                        let copy_key = menu_key.clone();
+                        let del_entity = menu_entity.clone();
+                        let del_key = menu_key.clone();
+                        menu.item(PopupMenuItem::new("打开位置").on_click(move |_, _, app| {
+                            open_entity.update(app, |this, cx| {
+                                this.open_scratchpad_location(open_key.clone(), cx)
+                            });
+                        }))
+                        .item(
+                            PopupMenuItem::new("重命名").on_click(move |_, window, app| {
+                                rename_entity.update(app, |this, cx| {
+                                    this.start_scratchpad_edit(
+                                        ScratchpadEdit::Rename {
+                                            path: rename_key.clone(),
+                                        },
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                        )
+                        .separator()
+                        .item(PopupMenuItem::new("剪切").on_click(move |_, _, app| {
+                            cut_entity.update(app, |this, cx| {
+                                this.scratchpad.borrow_mut().selected =
+                                    std::iter::once(cut_key.clone()).collect();
+                                this.set_scratchpad_clipboard(ScratchpadClipboardMode::Cut, cx);
+                            });
+                        }))
+                        .item(PopupMenuItem::new("复制").on_click(move |_, _, app| {
+                            copy_entity.update(app, |this, cx| {
+                                this.scratchpad.borrow_mut().selected =
+                                    std::iter::once(copy_key.clone()).collect();
+                                this.set_scratchpad_clipboard(ScratchpadClipboardMode::Copy, cx);
+                            });
+                        }))
+                        .separator()
+                        .item(PopupMenuItem::new("删除").on_click(move |_, _, app| {
+                            del_entity.update(app, |this, cx| {
+                                this.delete_scratchpad_entry(del_key.clone(), cx)
+                            });
+                        }))
+                    })
+                };
                 body = body.child(row);
             }
         }
@@ -4764,13 +5896,40 @@ impl SidebarPanel {
                 .text_xs()
                 .text_color(muted)
                 .child(format!(
-                    "{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用 · {} 项回收站",
+                    "{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用 · {} 项回收站 · 排序 {}",
                     external_refs.len(),
-                    trash.len()
+                    trash.len(),
+                    scratchpad_sort_label(sort, sort_desc)
                 )),
         );
 
         panel
+            .key_context("scratchpad")
+            .track_focus(&self.focus_handle)
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadSelectAll, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.select_all_scratchpad(cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadRename, window: &mut gpui_kit::Window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.rename_scratchpad_selection(window, cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadDelete, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.delete_scratchpad_selection(cx));
+                }
+            })
+            .on_action({
+                let entity = entity.clone();
+                move |_: &ScratchpadCancelEdit, _window, cx: &mut App| {
+                    entity.update(cx, |this, cx| this.cancel_scratchpad_edit(cx));
+                }
+            })
     }
 
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
@@ -5759,6 +6918,23 @@ impl Render for EditorPanel {
                 );
 
                 content = content.child(sql_ui);
+            }
+        }
+
+        // M5 草稿箱内容搜索结果（原型 §4.3：结果落中央编辑区）。
+        {
+            let search = self.shared.scratchpad_search.borrow();
+            if let Some(search) = search.as_ref() {
+                let shared = self.shared.clone();
+                let clear = {
+                    let entity = entity.clone();
+                    move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                        *shared.scratchpad_search.borrow_mut() = None;
+                        shared.notify_host(app);
+                        entity.update(app, |_, cx| cx.notify());
+                    }
+                };
+                content = content.child(render_scratchpad_search_pane(search, theme, clear));
             }
         }
 

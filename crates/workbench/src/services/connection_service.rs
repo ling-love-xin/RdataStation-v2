@@ -7,9 +7,9 @@ use engine::connection_manager::{ConnectionInfo, ConnectionManager, ConnectionTy
 use engine::driver::registry::DriverConnectionConfig;
 use engine::driver::router::DataSourceRouter;
 use engine::driver::traits::{DataSourceMeta, DynDatabase};
+use engine::persistence::MetadataCacheManager;
 use engine::persistence::connection_store::{self, RecentConnectionInput};
 use engine::persistence::global_db::{GlobalConnectionSaveInput, GlobalDatabaseManager};
-use engine::persistence::MetadataCacheManager;
 use shared::error::{ConnectionError, CoreError};
 
 /// 保存全局连接输入参数
@@ -853,7 +853,7 @@ impl ConnectionService {
                 Ok(None) => {
                     return Err(CoreError::from(format!(
                         "引用的网络配置无法解析（{net_id}）：请检查档案类型与内容"
-                    )))
+                    )));
                 }
                 Err(e) => return Err(e),
             }
@@ -1704,24 +1704,16 @@ mod tests {
     async fn network_config_type_keys_are_normalized() {
         // UI / 历史数据写入的是 `SSH` / `Proxy` 这类大写标签；解析必须大小写无关，
         // 否则「档案存在但整条链静默不生效」（审计 #20）。
-        let proxy = parse_network_config_json(
-            "Proxy",
-            r#"{"host":"127.0.0.1","port":1080}"#,
-            None,
-            None,
-        )
-        .await
-        .expect("parse proxy");
+        let proxy =
+            parse_network_config_json("Proxy", r#"{"host":"127.0.0.1","port":1080}"#, None, None)
+                .await
+                .expect("parse proxy");
         assert!(matches!(proxy, Some(ConnectionMethod::HttpProxy(_))));
 
-        let socks = parse_network_config_json(
-            "SOCKS5",
-            r#"{"host":"127.0.0.1","port":1080}"#,
-            None,
-            None,
-        )
-        .await
-        .expect("parse socks");
+        let socks =
+            parse_network_config_json("SOCKS5", r#"{"host":"127.0.0.1","port":1080}"#, None, None)
+                .await
+                .expect("parse socks");
         assert!(matches!(socks, Some(ConnectionMethod::SocksProxy(_))));
 
         // 未知类型：不 panic，返回 None（并告警）。

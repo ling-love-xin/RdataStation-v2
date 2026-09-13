@@ -4,7 +4,7 @@ use chrono::Utc;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 use crate::models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
@@ -846,11 +846,16 @@ impl ScratchpadStore {
         self.save_config(&config).await
     }
 
+    /// 全文内容搜索。
+    ///
+    /// `is_regex` 为 `true` 时按正则匹配（`case_sensitive=false` 走不区分大小写的编译）。
+    /// 每文件 30s 超时、结果总数 500 条截断。
     pub async fn search_file_content(
         &self,
         query: &str,
         case_sensitive: bool,
         context_lines: usize,
+        is_regex: bool,
     ) -> Result<SearchResult, CoreError> {
         let entries = self.list_local_entries(MAX_DEPTH).await?;
         let flat = Self::flatten_entries_from_ref(&entries);
@@ -859,6 +864,24 @@ impl ScratchpadStore {
         let mut truncated = false;
         let query_lower = query.to_lowercase();
         let query_owned = query.to_string();
+
+        // 正则模式在循环外编译一次。
+        let regex = if is_regex {
+            Some(
+                regex::RegexBuilder::new(query)
+                    .case_insensitive(!case_sensitive)
+                    .build()
+                    .map_err(|e| {
+                        CoreError::storage(StorageError::io(
+                            query.to_string(),
+                            "regex_compile",
+                            e.to_string(),
+                        ))
+                    })?,
+            )
+        } else {
+            None
+        };
 
         for entry in &flat {
             if entry.kind == ScratchpadEntryKind::Folder {
@@ -884,6 +907,7 @@ impl ScratchpadStore {
                 query_owned.clone(),
                 case_sensitive,
                 query_lower.clone(),
+                regex.as_ref(),
                 rel_path.clone(),
                 remaining,
                 context_lines,
@@ -1269,6 +1293,7 @@ async fn search_single_file(
     query: String,
     case_sensitive: bool,
     query_lower: String,
+    regex: Option<&regex::Regex>,
     rel_path: String,
     max_results: usize,
     context_lines: usize,
@@ -1296,10 +1321,10 @@ async fn search_single_file(
             break;
         }
         let line_number = i + 1;
-        let found = if case_sensitive {
-            line.contains(&query)
-        } else {
-            line.to_lowercase().contains(&query_lower)
+        let found = match regex {
+            Some(re) => re.is_match(line),
+            None if case_sensitive => line.contains(&query),
+            None => line.to_lowercase().contains(&query_lower),
         };
         if found {
             let before: Vec<String> = if context_lines > 0 {
@@ -1431,15 +1456,19 @@ mod tests {
         let store = ScratchpadStore::new(project.clone());
         store.ensure_dir().await.unwrap();
 
-        assert!(store
-            .read_file(".RSmeta/scratchpad/config.json")
-            .await
-            .is_err());
+        assert!(
+            store
+                .read_file(".RSmeta/scratchpad/config.json")
+                .await
+                .is_err()
+        );
         assert!(store.read_file("../outside.txt").await.is_err());
-        assert!(store
-            .create_entry("x.sql", Some(".RSmeta"), false)
-            .await
-            .is_err());
+        assert!(
+            store
+                .create_entry("x.sql", Some(".RSmeta"), false)
+                .await
+                .is_err()
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }
@@ -1461,12 +1490,14 @@ mod tests {
             .expect("回收站应含 doomed.sql");
         assert_eq!(entry.manifest.origin, ORIGIN_SCRATCHPAD);
         assert_eq!(entry.manifest.original_rel_path, "doomed.sql");
-        assert!(project
-            .join(META_DIR_NAME)
-            .join("trash")
-            .join(&entry.manifest.id)
-            .join("payload")
-            .exists());
+        assert!(
+            project
+                .join(META_DIR_NAME)
+                .join("trash")
+                .join(&entry.manifest.id)
+                .join("payload")
+                .exists()
+        );
 
         let id = entry.manifest.id.clone();
         store.restore_from_trash(&id).await.unwrap();
@@ -1514,11 +1545,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(project
-            .join(META_DIR_NAME)
-            .join(META_SUBDIR)
-            .join(CONFIG_FILE)
-            .is_file());
+        assert!(
+            project
+                .join(META_DIR_NAME)
+                .join(META_SUBDIR)
+                .join(CONFIG_FILE)
+                .is_file()
+        );
 
         let statuses = store.external_reference_status().await.unwrap();
         assert_eq!(statuses.len(), 2);
@@ -1582,6 +1615,42 @@ mod tests {
                 .any(|e| e.manifest.name == "gone.sql"),
             "旧回收站条目应并入项目级回收站"
         );
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn search_content_regex_and_case() {
+        let project = temp_project("search");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store.create_entry("a.sql", None, false).await.unwrap();
+        store
+            .save_file("a.sql", "select ID from t\nselect id from t\n")
+            .await
+            .unwrap();
+
+        // 子串 + 区分大小写：仅第 1 行命中。
+        let r = store
+            .search_file_content("ID", true, 1, false)
+            .await
+            .unwrap();
+        assert_eq!(r.matches.len(), 1);
+        assert_eq!(r.matches[0].line_number, 1);
+
+        // 子串 + 不区分大小写：两行都命中。
+        let r = store
+            .search_file_content("ID", false, 1, false)
+            .await
+            .unwrap();
+        assert_eq!(r.matches.len(), 2);
+
+        // 正则：`from.+t` 在每行命中一次。
+        let r = store
+            .search_file_content("from.+t", false, 1, true)
+            .await
+            .unwrap();
+        assert_eq!(r.matches.len(), 2);
 
         std::fs::remove_dir_all(&project).ok();
     }
