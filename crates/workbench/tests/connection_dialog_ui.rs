@@ -166,7 +166,7 @@ fn result_line_levels_and_detail_entry(cx: &mut TestAppContext) {
     cx.update(|_, _cx| {
         *dialog.result.borrow_mut() = Some(ResultLine::new(
             ResultLevel::Warning,
-            "已保存：G_conn_demo（分组未同步：项目库不可写）",
+            "已保存：生产 PG（分组未同步：项目库不可写）",
         ));
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));

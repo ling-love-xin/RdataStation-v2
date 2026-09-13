@@ -25,7 +25,7 @@ use gpui_kit::*;
 use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
-use crate::panels::{EditorPanel, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel};
+use crate::panels::{EditorPanel, ProjectActionRequest, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel};
 use crate::ui;
 use settings::commands::OpenSettings;
 use settings::settings_view::SettingsView;
@@ -938,17 +938,18 @@ impl Render for WorkbenchView {
         self.apply_right_mode(window, cx);
         // 连接对话框项目下拉的动作项 → 复用项目管理的入口：
         // 「＋ 新增项目」开新建对话框；「打开现有目录…」开目录选择对话框。
-        // 两者都会切换项目；有未保存草稿时先走确认，**确认后直接推进到目标对话框**（#4：
-        // 不再把请求丢掉让用户回选择器再点一次）。
-        let needs_project_new = self.shared.project_new_request.replace(false);
-        let needs_project_open = self.shared.project_open_request.replace(false);
-        if needs_project_new || needs_project_open {
+        // 两者都会切换项目；有未保存草稿时先走确认，**确认后直接推进到目标对话框**（#4）。
+        // 决策与“只消费一次”收在 `Shared::take_project_action_request`（可单测，#9）。
+        if let Some(request) = self.shared.take_project_action_request() {
             let host = self.project_host().clone();
             if let Some(inputs) = self.project_inputs.clone() {
-                if needs_project_new {
-                    project::ui::request_create_project(&host, &inputs, window, cx);
-                } else {
-                    project::ui::request_open_folder(&host, &inputs, window, cx);
+                match request {
+                    ProjectActionRequest::CreateProject => {
+                        project::ui::request_create_project(&host, &inputs, window, cx);
+                    }
+                    ProjectActionRequest::OpenFolder => {
+                        project::ui::request_open_folder(&host, &inputs, window, cx);
+                    }
                 }
             }
         }

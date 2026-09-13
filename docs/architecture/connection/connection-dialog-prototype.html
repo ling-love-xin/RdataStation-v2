@@ -89,11 +89,10 @@ button{font-family:inherit;}
 .inp{border:1px solid var(--input-border);border-radius:7px;background:var(--bg);color:var(--fg);padding:5px 10px;font-size:12.5px;outline:none;transition:border-color .15s,box-shadow .15s;font-family:inherit;}
 .inp:focus{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent);}
 .inp.name{width:158px;}
-.scope{display:inline-flex;border:1px solid var(--input-border);border-radius:7px;overflow:hidden;background:var(--bg);}
-.scope button{border:none;background:transparent;color:var(--muted);padding:5px 13px;font-size:12px;cursor:pointer;transition:all .15s;}
-.scope button + button{border-left:1px solid var(--input-border);}
-.scope button.on{background:var(--primary);color:var(--primary-fg);font-weight:600;}
-.scope button:not(.on):hover{background:var(--hover);color:var(--fg);}
+.scope{display:inline-flex;align-items:center;gap:2px;padding:3px;border-radius:8px;background:var(--tabbar);}
+.scope button{border:none;background:transparent;color:var(--muted);padding:2px 10px;line-height:16px;border-radius:6px;font-size:12px;cursor:pointer;transition:all .15s;}
+.scope button.on{background:var(--bg);color:var(--tabactive-fg);font-weight:600;box-shadow:0 1px 2px rgba(20,20,30,.12);}
+.scope button:not(.on):hover{color:var(--fg);}
 .type-badge{width:22px;height:22px;border-radius:6px;border:1px solid var(--input-border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;}
 .type-badge.warn{border-color:var(--warning);color:var(--warning);}
 .link-btn{display:inline-flex;align-items:center;gap:5px;border:none;background:transparent;color:var(--active-border);font-size:11.5px;cursor:pointer;padding:2px 0;transition:color .12s;}
@@ -118,10 +117,12 @@ button{font-family:inherit;}
 .proj-menu .pm-path{flex:1;min-width:0;color:var(--muted);opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;font-size:11px;}
 .proj-menu .pm-new{color:var(--active-border);font-weight:600;}
 
-.tabs-bar{display:flex;gap:2px;background:var(--tabbar);border-bottom:1px solid var(--border);padding:0 10px;font-size:12.5px;}
-.tab{padding:8px 13px;cursor:pointer;color:var(--muted);border-top:2px solid transparent;border-radius:6px 6px 0 0;transition:color .12s,background .12s;}
-.tab:hover{color:var(--fg);background:color-mix(in srgb,var(--muted) 8%,transparent);}
-.tab.on{background:var(--tabactive-bg);border-top-color:var(--active-border);color:var(--tabactive-fg);font-weight:600;}
+/* Tab 条：gpui-kit `TabBar::underline`（下划线指示条 2px primary；无底色、无圆角） */
+.tabs-bar{display:flex;gap:12px;border-bottom:1px solid var(--border);padding:0 10px;font-size:12.5px;}
+.tab{position:relative;padding:6px 0;cursor:pointer;color:var(--muted);transition:color .12s;}
+.tab:hover{color:var(--fg);}
+.tab.on{color:var(--tabactive-fg);font-weight:600;}
+.tab.on::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--primary);border-radius:1px;}
 
 .tab-pane{display:none;padding:14px 16px;flex:1;align-content:flex-start;gap:12px;min-height:272px;}
 .tab-pane.on{display:flex;flex-wrap:wrap;}
@@ -185,11 +186,7 @@ button{font-family:inherit;}
 .collapse-body label{display:flex;align-items:center;gap:6px;cursor:pointer;}
 .collapse-body input{accent-color:var(--active-border);}
 
-.chain-table{width:100%;font-size:12px;border:1px solid var(--border);border-radius:9px;overflow:hidden;}
-.chain-table .c-head{display:grid;grid-template-columns:24px 30px 76px 1fr 54px 52px;background:var(--sidebar);color:var(--muted);font-size:10.5px;padding:6px 10px;gap:4px;letter-spacing:.3px;text-transform:uppercase;}
-.chain-table .c-row{display:grid;grid-template-columns:24px 30px 76px 1fr 54px 52px;padding:7px 10px;border-top:1px solid var(--border);align-items:center;gap:4px;transition:background .12s;}
-.chain-table .c-row:hover{background:var(--hover);}
-.drag-handle{color:var(--muted);cursor:grab;text-align:center;letter-spacing:1px;}
+/* （原 .chain-table / .drag-handle / .chip.ssh 已随内联协议链撤下，决策 #72） */
 .chip{border-radius:5px;padding:2px 8px;font-size:10.5px;font-weight:700;color:#fff;text-align:center;display:inline-block;width:fit-content;}
 .chip.ssh{background:#2F9E6E;} .chip.proxy{background:#C0843C;}
 .topo{border:1px dashed color-mix(in srgb,var(--border) 60%,transparent);border-radius:9px;padding:10px 12px;width:100%;font-size:12px;color:var(--fg);background:var(--sidebar);}
@@ -221,10 +218,19 @@ button{font-family:inherit;}
 .btn-save:hover{background:var(--primary-hover);}
 .btn-close{border:1px solid var(--input-border);background:var(--bg);color:var(--fg);}
 .btn-close:hover{background:var(--hover);border-color:var(--active-border);}
-.test-result{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;border-radius:12px;padding:3px 11px;}
-.test-result svg{width:12px;height:12px;}
-.test-result.ok{color:var(--success);background:var(--success-bg);}
-.test-result.err{color:var(--danger);background:var(--danger-bg);}
+/* 结果行（#28）：分级文本 +（长消息）「详情 / 复制」；不再是胶囊徽标 */
+.result{display:flex;flex-direction:column;gap:4px;font-size:11.5px;min-width:0;}
+.result .line{display:flex;align-items:center;gap:8px;}
+.result .msg{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;}
+.result.ok .msg{color:var(--success);}
+.result.warn .msg{color:var(--warning);}
+.result.err .msg{color:var(--danger);}
+.result.info .msg{color:var(--muted);}
+.result .link{color:var(--primary);cursor:pointer;font-weight:600;user-select:none;}
+.result-detail{display:none;max-height:96px;overflow:auto;padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);color:var(--muted);white-space:pre-wrap;}
+/* 首次引导条（#29）：仅“未选类型 + 名称/地址都空”时出现 */
+.onboard{width:100%;display:flex;flex-direction:column;gap:4px;background:color-mix(in srgb,var(--primary) 6%,transparent);border:1px solid color-mix(in srgb,var(--primary) 28%,transparent);border-radius:8px;padding:7px 12px;font-size:11.5px;color:var(--fg);}
+.onboard .sub{color:var(--muted);}
 .spacer{flex:1;}
 
 .overlay{position:fixed;inset:0;background:rgba(15,15,25,.42);backdrop-filter:blur(2px);display:none;align-items:center;justify-content:center;z-index:50;}
@@ -267,7 +273,7 @@ button{font-family:inherit;}
     <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.66 3.13 3 7 3s7-1.34 7-3V6"/><path d="M5 12c0 1.66 3.13 3 7 3s7-1.34 7-3"/></svg></span>
     <div>
       <h1>新增连接对话框 · 交互原型</h1>
-      <div class="sub">布局对齐 v1 add-datasource-v5 · 配色取 rds-theme.json（RDS Light/Dark）· 示意，非最终实现</div>
+      <div class="sub">布局对齐 v1 add-datasource-v5 · 配色取 rds-theme.json（RDS Light/Dark）· <b>本文件是示意稿（非权威）</b>：视觉规格以 <code>connection-prototype-design.md</code> 为准，行为规格以 <code>connection-dialog-architecture.md</code> 为准。<br>同步戳：2026-09-13（决策 #84 组件化 Tab / 分段 / 开关 · #28 结果行分级 · #29 首次引导）</div>
     </div>
   </div>
   <button class="theme-toggle" id="themeBtn">
@@ -380,6 +386,11 @@ button{font-family:inherit;}
 
       <!-- ===== 常规 ===== -->
       <div class="tab-pane on" id="tab-general">
+        <!-- 首次使用引导（#29）：仅“未选类型 + 名称/地址都空”时显示；点左上类型徽标可切换演示该空态 -->
+        <div class="onboard" id="onboard" style="display:none;">
+          <span>第一次配置数据源？① 左侧选数据库类型 → ② 选驱动实现 → ③ 填连接信息（文件型用「打开文件…」/「新建文件…」）→ ④ Ctrl+T 测试 → ⑤ Ctrl+Enter 保存</span>
+          <span class="sub">未保存的填写会留在左侧「草稿」区（关闭对话框不丢）；已保存的连接从数据源导航栏进入编辑。</span>
+        </div>
         <div class="info-banner">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
           <span id="infoText">MySQL · sqlx · 原生连接 · 支持 password / ssl 认证</span>
@@ -469,30 +480,16 @@ button{font-family:inherit;}
         </div>
       </div>
 
-      <!-- ===== 网络 ===== -->
+      <!-- ===== 网络（决策 #72：内联协议链已撤下，多跳走类型 `chain` 的网络档案）===== -->
       <div class="tab-pane" id="tab-network">
-        <div class="banner-note">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
-          协议链：SSH / HTTP(S) 代理，最大 4 跳，可拖拽排序；SSL/TLS 在「常规 → 连接安全」配置
-        </div>
         <div class="env-row">
-          <span class="f-label">引用网络配置</span>
-          <span class="env-sel">（内联编辑）
+          <span class="f-label">引用网络档案</span>
+          <span class="env-sel" id="pickNetwork">（未引用 · 直连）
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
           </span>
           <span class="sel" id="manageNetworkBtn">管理网络配置</span>
         </div>
-        <div class="chain-table">
-          <div class="c-head"><span>拖拽</span><span>#</span><span>协议</span><span>配置</span><span>启用</span><span>操作</span></div>
-          <div class="c-row"><span class="drag-handle">⠿</span><span>1</span><span class="chip ssh">SSH</span><span>跳板机·prod-gw</span><span>✓</span><span style="color:var(--muted);cursor:pointer;">删除</span></div>
-          <div class="c-row"><span class="drag-handle">⠿</span><span>2</span><span class="chip proxy">Proxy</span><span>公司代理·http</span><span>✓</span><span style="color:var(--muted);cursor:pointer;">删除</span></div>
-        </div>
-        <div class="add-hop">
-          <button id="addHop">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-            添加跳（SSH / Proxy）
-          </button>
-        </div>
+        <div class="hint-line" id="networkHint">未引用档案时直连；SSH 跳板 / 代理 / 多跳（chain）请在「管理」里建档案后在此引用</div>
         <div class="topo">
           <div class="topo-title">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 20h20M4 20V8l6 4V6l10 8v6"/></svg>
@@ -500,8 +497,7 @@ button{font-family:inherit;}
           </div>
           <div class="topo-path">
             <span class="topo-node">本机客户端</span><span class="topo-arrow">→</span>
-            <span class="topo-node">SSH · prod-gw:22</span><span class="topo-arrow">→</span>
-            <span class="topo-node">HTTP 代理</span><span class="topo-arrow">→</span>
+            <span class="topo-node" id="topoHop">直连（未引用档案）</span><span class="topo-arrow">→</span>
             <span class="topo-node">MySQL · 127.0.0.1:3306<span class="tls">TLS</span></span>
           </div>
         </div>
@@ -595,7 +591,10 @@ button{font-family:inherit;}
           测试连接
         </button>
         <button class="btn btn-cancel" id="syncGlobalBtn" title="仅编辑「全局+项目」快照连接时显示">从全局定义同步</button>
-        <span class="test-result" id="testResult"></span>
+        <span class="result" id="testResult">
+          <span class="line"><span class="msg" id="resultMsg">待测试</span><span class="links" id="resultLinks" style="display:none;"><span class="link" id="detailLink">详情</span><span class="link" id="copyLink">复制</span></span></span>
+          <span class="result-detail" id="resultDetail"></span>
+        </span>
         <span class="spacer"></span>
         <button class="btn btn-cancel" id="cancelBtn">取消</button>
         <button class="btn btn-save" id="saveBtn">保存</button>
@@ -840,11 +839,37 @@ button{font-family:inherit;}
   });
   document.addEventListener('click',function(){projMenu.classList.remove('on');});
 
-  /* 测试连接 */
-  var testBtn=document.getElementById('testBtn'), testResult=document.getElementById('testResult');
+  /* 结果行（#28）：分级文本（成功 / 警告 / 错误 / 提示）+（长消息）详情 / 复制；不再用胶囊徽标 */
+  var setResult=function(level,msg,withLinks){
+    var box=document.getElementById('testResult');
+    box.className='result'+(level?' '+level:'');
+    document.getElementById('resultMsg').textContent=msg;
+    document.getElementById('resultLinks').style.display=withLinks?'inline-flex':'none';
+    if(!withLinks){
+      document.getElementById('resultDetail').style.display='none';
+      document.getElementById('detailLink').textContent='详情';
+    }
+  };
+  document.getElementById('detailLink').addEventListener('click',function(){
+    var d=document.getElementById('resultDetail');
+    var open=d.style.display==='block';
+    d.style.display=open?'none':'block';
+    this.textContent=open?'详情':'收起';
+  });
+  document.getElementById('copyLink').addEventListener('click',function(){
+    setResult('info','已复制完整原文到剪贴板（示意）',false);
+  });
+
+  /* 测试连接：点击在“成功”与“长错误（带 详情 / 复制）”之间切换演示 */
+  var testBtn=document.getElementById('testBtn'), testOkDemo=true;
   testBtn.addEventListener('click',function(){
-    testResult.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 成功 · MySQL 8.4 · 8 ms';
-    testResult.className='test-result ok';
+    if(testOkDemo){
+      setResult('ok','成功 · MySQL 8.4 · 8 ms',false);
+    }else{
+      setResult('err','保存失败: 驱动拒绝连接；',true);
+      document.getElementById('resultDetail').textContent='保存失败: 驱动拒绝连接；\n  连接被目标主机拒绝（ECONNREFUSED 127.0.0.1:3306）\n  提示：确认数据库已启动、端口与防火墙策略，或在「网络」页引用跳板机档案。';
+    }
+    testOkDemo=!testOkDemo;
   });
 
   /* DuckDB 加速开关 */
@@ -864,25 +889,38 @@ button{font-family:inherit;}
 
   /* 保存 */
   document.getElementById('saveBtn').addEventListener('click',function(){
-    testResult.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 已保存到 全局 · G_xxx（示意）；对话框不关闭，草稿转正式并补空草稿';
-    testResult.className='test-result ok';
+    setResult('ok','已保存：G_xxx（编辑请从导航栏进入；暂存区只保留未保存草稿）',false);
   });
   document.getElementById('saveCloseBtn').addEventListener('click',function(){
-    testResult.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg> 已保存并关闭（示意）';
-    testResult.className='test-result ok';
+    setResult('ok','已保存并关闭（示意）',false);
+  });
+  /* 分组同步失败的降级展示（#28 的 warning 级真实生产者） */
+  document.getElementById('syncGlobalBtn').addEventListener('click',function(){
+    setResult('warn','已保存：G_xxx（分组未同步：项目库不可写）',false);
   });
 
-  /* 添加跳 */
-  document.getElementById('addHop').addEventListener('click',function(){
-    testResult.textContent='演示：点击"添加跳"展开 SSH/Proxy 菜单（示意）';
-    testResult.className='test-result';
-  });
+  /* 首次引导（#29）：点左上类型徽标切换“未选类型”空态，引导条随显隐 */
+  (function(){
+    var badge=document.getElementById('typeBadge');
+    if(!badge){return;}
+    badge.setAttribute('title','演示：点击切换「未选类型」空态（此时显示首次引导条）');
+    badge.style.cursor='pointer';
+    badge.addEventListener('click',function(){
+      var strip=document.getElementById('onboard');
+      var empty=strip.style.display!=='block';
+      strip.style.display=empty?'flex':'none';
+      badge.textContent=empty?'?':'🐬';
+      document.getElementById('infoText').textContent=empty?'未选择数据库类型 · 请在左侧选择类型后选择驱动实现':'MySQL · sqlx · 原生连接 · 支持 password / ssl 认证';
+    });
+  })();
 
   /* 演示反馈 */
-  var demo=function(msg){testResult.textContent=msg;testResult.className='test-result';};
+  var demo=function(msg){setResult('',msg,false);};
   document.getElementById('driverSel').addEventListener('click',function(){demo('演示：切换驱动实现（短名，如 sqlx / Official），候选只含当前类型');});
   document.getElementById('pickAuth').addEventListener('click',function(){demo('演示：引用 MySQL-root-prod 认证（与来源共用凭据，字段转只读）');});
   document.getElementById('cancelBtn').addEventListener('click',function(){demo('演示：取消关闭对话框（草稿写回暂存列表，不丢失）');});
+  var pickNetwork=document.getElementById('pickNetwork');
+  if(pickNetwork){pickNetwork.addEventListener('click',function(){demo('演示：引用网络档案（SSH / 代理 / chain 多跳均在「管理」里建好后在此引用）');});}
 
   /* 管理覆盖层 */
   document.getElementById('manageAuthBtn').addEventListener('click',function(){document.getElementById('ovlAuth').classList.add('on');});

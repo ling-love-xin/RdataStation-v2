@@ -99,6 +99,19 @@ flowchart TB
 
 `update` 按 ID 前缀路由（`id_prefix::{is_project, is_snapshot}`）；`save` 按 UI 作用域选择落库；项目作用域必须提供项目根（未打开项目时由当前项目会话预填，可手改）。
 
+**连接 ID 规则与改名语义**（决策 #32 / #93）：
+
+| 场景 | ID 生成 | 改名行为 |
+| --- | --- | --- |
+| 新建（仅全局 / 全局+项目） | `G_conn_{名称}(_{日期})`——ID 由名称派生 | — |
+| 新建（仅项目） | `P_conn_{随机后缀}` | — |
+| **编辑**（任作用域） | **保留原 ID**（`update` 按 ID 定位，名称可改） | **改名不换 ID**（引用 / 缓存 / 审计关系不断） |
+| 新建重名 | — | 被同名检查拦下（`ensure_name_available`，不会静默覆盖） |
+
+- **界面与提示词不出现 ID（B 案，已落地）**：保存结果行、状态栏提示、快照同步提示、同名拦截消息全部只用**名称**；连接 ID 仅作为**内部标识**存在于库、日志与结果行的「详情」（需要报障时点开 / 复制）。
+- 前缀 `G_`/`P_`/`GP_` 仍承担**作用域语义 + 存储路由**（`id_prefix` 单测锁定），不因 B 案而变。
+- **后续版本（beta2）**：主键改为不可变 `ULID` + 存量迁移（原 **C 案**）：前缀只留作用域标记，`uid` 作真主键 / 外键锚点（缓存索引 / 审计 / 跨项目引用 / 导入导出都挂它）。不放在当前版本的理由：需迁全部表 + 改路由判定 + 保留兼容期，而当前并无阻塞性收益（B 案已消除“把 ID 当主键”的误读）。
+
 ### 3.3 复用引用（认证 / 网络 / 环境）
 
 三类「可复用配置」贯穿连接配置：`auth_configs`（凭据，AES-256-GCM）、`network_configs`（协议链档案）、`environments`（含 5 类策略）。对话框内为「下拉引用 + 管理入口（覆盖层 CRUD）」；选中引用后字段只读（改档案一处全量生效）。
@@ -243,7 +256,7 @@ sequenceDiagram
     D->>K: ensure_secret_registered（use_duckdb_fed 时）
     D->>L: load_connections_for_scope → 刷新列表
     D->>D: staging_after_save：草稿转正式 + 补空草稿
-    D-->>U: 结果区「已保存：G_xxx（已加入暂存列表，可继续新建）」
+    D-->>U: 结果区「已保存：<名称>（编辑请从导航栏进入；草稿移出暂存区）」；ID 只在「详情」
 ```
 
 ### 5.3 暂存列表状态机（多连接连续编辑）
@@ -429,15 +442,18 @@ flowchart LR
 | 79 | **网络档案凭据加密入库（§14 #34 关闭）**：`network_store::{encrypt_network_config, decrypt_network_config}`——写路径加密 `config` 内任意层级的 `password` / `passphrase`（覆盖 SSH 扁平字段、代理 `auth.password`、`chain` 数组内每跳；`AES:` 前缀幂等），读路径解密；`reencrypt_all_network_configs` 一次性迁移存量明文（`initialize_global_system` 调用，幂等、失败仅告警）；服务层 `list_network_configs` 改真脱敏（`config` 置空）+ 新增 `network_config_detail_by_name`（编辑回填）；项目库直查 SQL 路径（`project_query_network_config_with_auth`）补解密 | 网络档案的 SSH / 代理密码此前明文落库（`auth_store` 只加密 `auth_data`），库文件被复制 / 备份即泄露跳板机与代理凭据，与「凭据必须加密」约束冲突。直查 SQL 那条路径是集成测试拖出来的真实缺陷：加密后若不解密，隧道会拿 `AES:…` 当密码用 |
 | 80 | **暂存区只放未保存草稿**（用户决策）：`staging_merge_saved` → `staging_prune_saved`（不再从库并入已保存连接，只清理历史残留的 `saved_id` 条目）；保存成功后草稿**移出**暂存区（不再标记为“已保存条目”）+ 补空草稿；`staging_persist` / `staging_restore` 都过滤 `saved_id`（表里不留已保存条目）；保存成功文案改为「编辑请从导航栏进入」 | 旧设计把库中连接并入暂存区（决策 #26/#45，为“一个对话框连续编辑多条连接”）；真机反馈用户直接问「暂存的连接为什么可以读到数据库实际的连接」——「暂存 = 草稿」的心智模型更强，已保存连接统一从导航栏进入编辑（那里本来就有 ✎ 入口，也有删除入口） |
 | 81 | **跨项目引用计数 + 项目库存量迁移（#33 关闭 / #34 残留消除）**：① `DataSourceService::count_references_batch` 除全局库与当前项目外，还遍历**项目名册**（`GlobalDatabaseManager::get_all_projects`）里的其它项目库，`ReferenceCount` 增加 `other: Vec<String>`（记项目名、去重），拦截消息改为「全局 N 条、当前项目 N 条、其它项目 N 条（项目名…）」；② engine 新增 `network_store::reencrypt_project_network_configs(root)`（`{root}/.RSmeta/project.db`，库/表不存在即跳过、**不建目录不建表**），`initialize_global_system` 在全局库迁移之后遍历名册逐库迁移 | 此前删除守卫只统计「全局 + 当前打开项目」：删档案后打开另一个项目 → 那边的连接全部报「引用的认证配置不存在」且无从得知谁在用（#33）；项目库存量明文也不在启动迁移范围内（#34 残留）。两件事共用同一份「已知项目」来源（名册），一趟做完。代价：每次管理器刷新 / 删除前会打开 N 个项目库（N = 名册项目数，通常个位数） |
-| 82 | **结果行分级（`ResultLine` = 级别 + 摘要 + 可选详情）**：① 4 个级别 `ResultLevel::{Info, Success, Warning, Error}` 决定配色（`success` / `warning` / `danger` / `muted_foreground`）；② 唯一写入口 `set_result_ok(result, ok, summary)` / `set_result(result, level, summary)` 取代「写文本 + 设布尔」两步；③ 摘要 **> 80 字（按 `char` 计，非字节）或含换行** 时，行尾出现「详情 / 收起」+「复制」（复制走 `App::write_to_clipboard`，内容 = `detail_text()`），展开正文 `max_h(6rem)` + 纵向滚动；④ `result_ok: Cell<bool>` 字段删除（级别是单一事实来源），测试接缝改为 `result_level()` / `result_summary()`；⑤ **Warning 级有真实生产者**（否则分级就是装饰）：`DataSourceService::set_connection_groups` 由“只打日志”改为返回 `Result`，保存路径在分组未落库时把结果行降为 warning 级（「已保存：G_xxx（分组未同步：原因）」）；⑥ `detail: Option<String>` 是「短摘要 + 长诊断」的契约缝（当前生产路径无此形态：长诊断直接作为摘要、由长度阈值触发折叠，`detail_text()` 无详情时回退到摘要与复制内容） | 旧结果行只有「成功 / 失败」布尔 + 单行文本：真机排障时 SSH / 认证 / SQL 的长错误被压成一行，既看不到全文也复制不走。选“就地分级 + 详情”而不是 gpui-kit 的 `Alert` / `Notification`：后者需要重排 footer 层级并与对话框的遮罩 / 焦点栈对齐，收益不抵改动面（可后续叠在结果行之上） |
+| 82 | **结果行分级（`ResultLine` = 级别 + 摘要 + 可选详情）**：① 4 个级别 `ResultLevel::{Info, Success, Warning, Error}` 决定配色（`success` / `warning` / `danger` / `muted_foreground`）；② 唯一写入口 `set_result_ok(result, ok, summary)` / `set_result(result, level, summary)` 取代「写文本 + 设布尔」两步；③ 摘要 **> 80 字（按 `char` 计，非字节）或含换行** 时，行尾出现「详情 / 收起」+「复制」（复制走 `App::write_to_clipboard`，内容 = `detail_text()`），展开正文 `max_h(6rem)` + 纵向滚动；④ `result_ok: Cell<bool>` 字段删除（级别是单一事实来源），测试接缝改为 `result_level()` / `result_summary()`；⑤ **Warning 级有真实生产者**（否则分级就是装饰）：`DataSourceService::set_connection_groups` 由“只打日志”改为返回 `Result`，保存路径在分组未落库时把结果行降为 warning 级（「已保存：<名称>（分组未同步：原因）」）；⑥ `detail: Option<String>` 的**真实生产者**是保存成功结果行（#32 B 案）：摘要只有名称，连接 ID 与落点放详情——短摘要有详情时也会出现「详情 / 复制」入口（长摘要则由长度阈值触发，`detail_text()` 无详情时回退到摘要） | 旧结果行只有「成功 / 失败」布尔 + 单行文本：真机排障时 SSH / 认证 / SQL 的长错误被压成一行，既看不到全文也复制不走。选“就地分级 + 详情”而不是 gpui-kit 的 `Alert` / `Notification`：后者需要重排 footer 层级并与对话框的遮罩 / 焦点栈对齐，收益不抵改动面（可后续叠在结果行之上） |
 | 83 | **窗口测试「节点是否真的渲染」只认 `debug_selector`**：结果行三个测试锚点（`conn-result-toggle` / `conn-result-copy` / `conn-result-detail`）在 `.id(...)` 之外补 `.debug_selector(...)`（非测试构建自动降为 no-op） | gpui 的 `VisualTestContext::debug_bounds` 读的是每帧 `debug_bounds` 表，而**只有 `Interactivity::debug_selector` 会往表里写**（`gpui-0.2.2/src/elements/div.rs` 的 paint 分支）——`.id(...)` 只登记元素状态，不登记坐标。本模块同款先例是 gpui-component `Root::render_dialog_layer` 的 `dialog-layer`。用 `.id` 写断言会得到“永远 None 的假绿”（短消息断言恰好恒真，长消息断言恒假） |
-| 84 | **Tab 条 / 分段控件 / 开关全部改走 gpui-kit 组件（#15 关闭）**：`TabBar::new("conn-tabs").underline().with_size(Size::Small)`（Tab 条）、`TabBar::new("scope-seg").segmented().with_size(Size::XSmall)`（作用域三态）、`Switch`（DuckDB 加速 / 策略覆盖，`with_size(Size::Small)`）；策略开关回调改 `set_policy_override(policy_type, want: bool)`（组件传的是**请求值**而非取反）；两处开关接 `form_disabled` | 自绘版无 hover / 键盘 / a11y / disabled，三处开关尺寸互不一致，且未选驱动时仍可点（“能配但存不了”）。迁移后尺寸/颜色走组件与主题 token（未在主题里声明的 `switch.background` / `tab_bar.segmented.background` 回退组件默认值），视觉变化：Tab 为下划线指示条（2px `primary`，带 spring 动画）、作用域为浅底分段 + 白色胶囊（不再是主色填充） |
+| 84 | **Tab 条 / 分段控件 / 开关全部改走 gpui-kit 组件（#15 关闭）**：`TabBar::new("conn-tabs").underline().with_size(Size::Small)`（Tab 条）、`TabBar::new("scope-seg").segmented().with_size(Size::Small)`（作用域三态）、`Switch`（DuckDB 加速 / 策略覆盖，**默认尺寸 36×20**，与原型 HTML 的开关一致）；策略开关回调改 `set_policy_override(policy_type, want: bool)`（组件传的是**请求值**而非取反）；两处开关接 `form_disabled` | 自绘版无 hover / 键盘 / a11y / disabled，三处开关尺寸互不一致，且未选驱动时仍可点（“能配但存不了”）。迁移后尺寸/颜色走组件与主题 token（未在主题里声明的 `switch.background` / `tab_bar.segmented.background` 回退组件默认值），视觉变化：Tab 为下划线指示条（2px `primary`，带 spring 动画）、作用域为浅底分段 + 白色胶囊（不再是主色填充） |
 | 85 | **Tab 可见下标映射提为纯函数**（`helpers::{dialog_tab_defs, visible_tab_index}`） | `TabBar` 的选中/点击都用**可见下标**，而文件型驱动隐藏「网络」Tab 后可见下标与内部索引错开一位——写错了就是“点能力显示网络内容”。拍成纯函数 + 单测（含“隐藏项被选中 → 回退 0”的降级） |
 | 86 | **ElementId 用业务键（#17 关闭）**：驱动属性行 `prop-del-{key}`（与“同 key 覆盖”写入语义一致）、暂存行 `draft-{saved_id \| new-{i}}`（持久实体不用位置 id）、策略覆盖换 `policy-` 命名空间（原来与分组标题共用 `sec-`，`policy_type` 命中分组 id 时会串状态） | 位置 id 在增删 / 重排后会把按 id 记录的控件状态（hover / 滚动 / 按压）串到别的行；未保存草稿的列表身份本就是下标（`staging_*` 全部以 index 为键），因此保留 `new-{i}` 并在注释里说明理由 |
 | 87 | **`project_path` 收敛为数据载体（#18 关闭）**：它**不渲染输入框**，只由项目下拉写入（选中项目 / 「打开现有目录…」/「＋ 新增项目」）、被保存 / 测试 / 快照同步 / 分组同步读取；删除对它无意义的 `set_placeholder`，并修掉 `state.rs` 里残留的「手动输入路径…」注释 | 旧注释承诺“项目根可编辑”但没有任何渲染点，与「项目单下拉」的决策 #26/#28 矛盾；无项目时用户靠下拉的「打开现有目录…」修正路径，不需要手输入口 |
 | 88 | **连接对话框纳入尺寸契约（#14 关闭）**：模块内 `px(...)` 清零——`min_w(px(0.))` → `min_w(rems(0.))`、`.px(rems(…))` → `px_1()/px_2()/px_3()`（值相等，仅徽标内距 3px→4px）、图标 `px(14.)/px(13.)` → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`，新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract::view_layer_has_no_raw_size_literals` 扫描范围扩到对话框 6 个文件 | 契约用的是 `!src.contains("px(")` 这种粗糙判据，`.px(rems(1.))` 也会命中——所以局部横向内距统一走 Tailwind 尺度方法（与 view.rs / panels.rs 同一规则）；纳入扫描后该模块不会再回退 |
 | 89 | **标签单一权威 = `connection_tags`（#31 关闭）**：新增 `DataSourceService::overlay_authoritative_tags`（`list` / `get_with_project` 读取时叠加）——**表里有该连接的记录就用表**（含“已清空”），表里完全没有记录（旧数据 / 同步曾失败）则回退行内 `tags` JSON 投影；权威表不可用时告警并原样返回（不阻断列表） | 双源读取（行 JSON + 表）长期有漂移风险（“写进去了但检索不到 / 反之”）。选“每连接回退”而非“表为空才回退”：避免旧库（升级前建的连接，行内有标签但表里没记录）的标签凭空消失；代价是表外清理会让 JSON 复活——已登记为兼容窗口，将来可加回填迁移后去掉回退 |
 | 90 | **未保存确认后**直接推进**项目动作（#4 关闭）**：`PendingAction` 增 `CreateProject(ProjectInputs)` / `OpenFolder(ProjectInputs)`，新增 `request_create_project` / `request_open_folder` 两个入口（脏 → 弹确认并携带动作；干净 → 直接开），`advance_pending` 负责推进 | 以前脏草稿下点项目栏的两个动作项：确认后请求就被丢掉了（回到选择器得重新点一次）。`ProjectInputs` 是可克隆的实体把手，因此把目标动作作为待办携带到确认之后是最直接的实现（`open_unsaved_dialog` 已具备“先关确认再推进”的层栈纪律） |
+| 91 | **类型树不做折叠（§14 #11 判定：不做）**：分类头保持平铺，靠侧栏内部滚动容纳；触发重新评估的条件写进 §14 #11（类型目录 > 15 项或分类 > 6 时再上折叠） | 当前目录是 4 类共 ≤ 10 项（关系型 5 / 文件型 1 / 分析型 2 / NoSQL 2），一屏能看完；折叠会多一层点击与一份折叠状态（要考虑搜索命中时自动展开），收益不抵成本。驱动插件生态把目录撑大后再做，届时可照原型早期版本的可折叠分类实现 |
+| 92 | **项目栏动作请求的“决策 + 只消费一次”收归 `Shared::take_project_action_request`（#9 部分关闭）**：返回 `ProjectActionRequest::{CreateProject, OpenFolder}`（同帧两标记 → 新建优先且两个都清）；`WorkbenchView::render` 改为 `if let Some(request) = …` + `match` | 旧写法在 render 里直接 `replace(false)` 两个标记再 `if/else`：“标记 → 动作”的映射与“不会重复开窗”都只能在无窗口环境下验证 → 现抽出后可直接单测（`produce → consume → 二次 None`、同帧竞态）。**残留**：“真的把目标对话框开起来”仍需 `WorkbenchView` 可测试化（服务注入桥），见 §14 #9 |
+| 93 | **连接 ID 命名采用 B 案（`#32` 关闭）+ C 案记入 beta2**：① 生成规则与路由**不动**（`G_conn_{名}` / `P_conn_{随机}` / `GP_conn_{名}_{日期}`）；② **界面与提示词不再出现 ID**——新增 `saved_result`（保存结果行：摘要只有名称，ID + 落点进「详情」）、状态栏提示去 ID、快照同步提示改用重载后的名称、同名拦截消息去 ID；③ 改名语义成文：**编辑改名不换 ID**（`update` 按 ID 定位），新建重名被拦（不静默覆盖）；④ 主键改 ULID + 存量迁移（原 C 案）列为 **beta2** 条目，范围见 §3.2 | “用户看到 ID 里的名字片段会误以为是稳定主键”是**语义误导**（不是功能缺陷）：B 案用零迁移的方式消除误读，且「详情 / 复制」保留了报障所需的 ID；C 案收益（主键真正稳定）当前无阻塞性需求（缓存复用已由指纹负责，决策 #65），而需迁全部表 + 改路由判定 + 兼容期——所以放 beta2 而不是本版 |
 
 
 ---
@@ -485,6 +501,8 @@ flowchart LR
 | 契约 | `ui_contract.rs`（#14 扩展） | 尺寸契约扫描范围扩到连接对话框 6 文件（`!contains("px(")`）；颜色契约保持覆盖（含全部对话框文件） |
 | 服务层 | `data_source_lifecycle.rs::tag_reads_follow_the_authority_table`（#31） | 标签权威表：保存后表与 JSON 同步可见 / 直接改表 → 读取跟随（表为准）/ 服务清空 → 不复活旧 JSON / 表无记录 → 回退行内 JSON（兼容旧库） |
 | 窗口 | `project/src/ui/tests.rs::project_action_continues_after_unsaved_confirm`（#4） | 脏草稿下请求「＋ 新增项目」先出确认且不动编辑区 / 走「放弃并继续」同一调用序列 → 编辑区被清空且**新建对话框直接打开**（表单重置）/ 干净时「打开现有目录…」直接开窗 |
+| 单测 | `connection_dialog/mod.rs`（内嵌 +1，#32 B 案） | `saved_result`：摘要含名称且**不含连接 ID**（短摘要不触发折叠）；详情含 ID（“详情 / 复制”入口因此出现，供排障）；空名回退「未命名连接」；`conn_display_name` 去空白 |
+| 单测 | `connection_project_picker.rs::project_action_request_is_consumed_exactly_once`（#9） | 宿主消费分支：无请求 → `None`；新建 / 打开目录各自“取回一次即消”（二次取回为 `None`，不重复开窗）；同帧两标记 → 新建优先且两个标记均被清除（不会在下一帧补开一窗） |
 
 约定：测试全部落临时目录、不触真实库；`#[gpui_kit::test]` 且**禁用通配导入**（避免 `#[test]` 宏遮蔽，见 gpui-kit-dev skill）。窗口测试若要断言“节点真的进了元素树”，只能用 `cx.debug_bounds("<selector>")` + 目标节点上的 **`.debug_selector(...)`**：gpui 只登记 debug selector（`.id(...)` 不登记），非测试构建自动 no-op（决策 #83）。
 
@@ -552,6 +570,8 @@ flowchart LR
 | 54 | **Id 业务键 + `project_path` 收敛（§14 #17 / #18 关闭）**：`prop-del-{key}` / `draft-{saved_id \| new-i}` / `policy-` 独立命名空间；`project_path` 明确为数据载体（不渲染输入框）并去掉无意义占位写入 | `connection_dialog/{render,state,mod}.rs`（决策 #86/#87） |
 | 55 | **标签单一权威（§14 #31 关闭）**：`overlay_authoritative_tags`（表为准 + 行 JSON 兼容回退）接入 `list` / `get_with_project` | `services/data_source_service.rs`（决策 #89）；测试：`data_source_lifecycle::tag_reads_follow_the_authority_table`（`data_source_lifecycle` 28 项） |
 | 56 | **首次引导 + 未保存确认后推进项目动作（§14 #29 / #4 关闭）**：常规 Tab 顶部空态引导条（仅“未选类型 + 名称/地址为空”时出现）；`PendingAction::{CreateProject,OpenFolder}` + `request_create_project` / `request_open_folder`，确认后直接开目标对话框 | `connection_dialog/render.rs`、`project/src/ui.rs`、`view.rs`（决策 #90）；测试：`project/src/ui/tests.rs::project_action_continues_after_unsaved_confirm` |
+| 57 | **项目栏动作请求的消费收归 `Shared` 并单测（§14 #9 部分关闭）**：`ProjectActionRequest` + `take_project_action_request`（同帧两标记 → 新建优先且都清），`view.rs` 改 `if let Some + match` | `panels.rs`、`view.rs`（决策 #92）；测试：`connection_project_picker::project_action_request_is_consumed_exactly_once` |
+| 58 | **连接 ID 采用 B 案（§14 #32 关闭）**：`saved_result`（名称入摘要 / ID 入详情）+ `set_result_line`；状态栏提示、快照同步提示、同名拦截消息均去 ID；`conn_display_name` 统一空名回退 | `connection_dialog/{mod,render}.rs`、`services/data_source_service.rs`（决策 #93）；测试：`mod.rs` 内嵌 +1；C 案（ULID 主键 + 迁移）写入 **beta2**（见 §3.2） |
 
 
 后续可选（未做）：
@@ -564,6 +584,8 @@ flowchart LR
 | D | 分组 / 标签管理与视图（新建分组、按标签检索） | 组织能力的消费侧 | 导航模块（database-nav） |
 | E | 项目下拉支持**浏览目录打开其他项目**（复用 `project::ui::open_folder_dialog`） | 现在只能选“当前 + 最近项目”；未在最近列表的本机项目需先去标题栏切换项目 | 需在宿主消费 `project_new_request` 旁扩展一个 `project_open_request` 入口 |
 | F | 国际化 / 可访问性 / 指标（§13 缺口） | 平台级能力 | 全局排期 |
+| G | **连接主键改 ULID + 存量迁移**（原 C 案，**beta2**）：前缀只留作用域标记，`uid` 作真主键 / 外键锚点（缓存索引 / 审计 / 跨项目引用 / 导入导出） | 主键与名称彻底解耦（B 案只解决“误读”，ID 仍与名称同构） | 需迁全部表 + 改路由判定 + 兼容期；触发条件：出现名称变更频繁 / 需要外部稳定引用（集成 / API）的真实需求，或与「缓存索引表」同轮做 |
+| H | 标签权威表的**回填迁移**（把存量 `tags` JSON 灌进 `connection_tags`）→ 删掉兼容回退 | 彻底兑现 #31 的单一权威（当前保留回退仅为了旧库） | 写入 `initialize_global_system` 的一次性迁移（幂等），与项目库名册遍历同模式 |
 
 ---
 
@@ -725,13 +747,14 @@ flowchart LR
 > **#34 轮（同日）**：#34 关闭（网络档案凭据加密 + 列表脱敏 + 存量迁移）；另按用户决策将暂存区改为**只放未保存草稿**（决策 #80）。
 > **#33 轮（同日）**：#33 关闭（引用计数覆盖项目名册）+ #34 残留消除（项目库存量明文启动时逐库迁移）；共用同一份「已知项目」来源，见决策 #81。
 > **#28 轮（2026-09-13）**：#28 关闭（结果行分级 + 详情 / 复制，见下段）；顺带补上「窗口测试如何断言节点真的渲染」的机制说明（`debug_selector` 而非 `.id`，见 §7 约定与决策 #83）。
+> **#32 轮（2026-09-13）**：连接 ID 采用 **B 案**（界面与提示词不出现 ID；名称入摘要、ID 入「详情」；改名语义成文）；原 C 案（ULID 主键 + 迁移）列入 **beta2**，见 §3.2 / 决策 #93。
 > **#15/#14/#17/#18/#29/#31/#4 轮（2026-09-13）**：本模块可做的 7 项一次性关闭——组件化迁移（Tab 条 / 分段控件 / 开关）、尺寸契约纳入扫描、ElementId 业务键、`project_path` 收敛、首次引导、标签单一权威、未保存确认后直接推进项目动作。至此本模块只剩 **🟡 #7**（分组管理在导航侧）与 **⚪ #9 / #10 / #11 / #12 / #13**（宿主分支测试 / 原型 HTML / 类型树折叠 / 全局尺寸迁移 / 图像回归），以及 **#19 / #21 / #22 / #23**（M4 与宿主侧）与 **#32 / #1**（待拍板 / 平台）。
 
 **已关闭（#15/#14/#17/#18/#29/#31/#4 轮，2026-09-13：组件化 · 尺寸契约 · 标识 · 标签 · 引导 · 项目动作）**
 
 | # | 关闭方式 | 验证 |
 | --- | --- | --- |
-| 15（🟡） | **Tab 条 / 分段控件 / 开关为自绘**：迁到 `TabBar::underline()`（Tab 条，Small）/ `TabBar::segmented()`（作用域三态，XSmall）/ `Switch`（DuckDB 加速 + 策略覆盖，Small）；两处开关接 `form_disabled`；策略开关回调改 `set_policy_override(policy_type, want)`（组件传请求值）；可见下标映射提为纯函数 `dialog_tab_defs` / `visible_tab_index`（决策 #84/#85） | `helpers::dialog_tabs_hide_network_for_file_db_and_map_visible_index`；窗口回归：`connection_dialog_ui` 4 / `connection_type_driver` 7 / `connection_staging` 6 / `dialog_host_layer` 4 全绿（组件带 spring 动画，headless 渲染无异常） |
+| 15（🟡） | **Tab 条 / 分段控件 / 开关为自绘**：迁到 `TabBar::underline()`（Tab 条，Small）/ `TabBar::segmented()`（作用域三态，Small：与原型 HTML 的 24–26px 分段等高）/ `Switch`（DuckDB 加速 + 策略覆盖，默认 36×20）；两处开关接 `form_disabled`；策略开关回调改 `set_policy_override(policy_type, want)`（组件传请求值）；可见下标映射提为纯函数 `dialog_tab_defs` / `visible_tab_index`（决策 #84/#85） | `helpers::dialog_tabs_hide_network_for_file_db_and_map_visible_index`；窗口回归：`connection_dialog_ui` 4 / `connection_type_driver` 7 / `connection_staging` 6 / `dialog_host_layer` 4 全绿（组件带 spring 动画，headless 渲染无异常） |
 | 14（⚪） | **连接对话框存量裸 `px(...)`**：`min_w(px(0.))` → `min_w(rems(0.))`（16 处）、`.px(rems(…))` → `px_1/2/3()`（5 处，值相等）、图标 → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`、新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract` 尺寸契约扫描扩到对话框 6 文件（决策 #88） | `ui_contract` 5 项全绿（`view.rs` / `panels.rs` / 对话框模块一起扫描） |
 | 17（⚪） | **下标参与 ElementId**：驱动属性 `prop-del-{key}`、暂存行 `draft-{saved_id \| new-i}`、策略覆盖 `policy-{policy_type}`（不再与分组标题共用 `sec-`）（决策 #86） | 编译期 + 现有窗口回归（渲染路径全覆盖） |
 | 18（⚪） | **`project_path` 无渲染点**：明确为数据载体（下拉写入，保存 / 测试 / 快照 / 分组同步读取），删除无意义的 `set_placeholder` 与「手动输入路径…」残留注释（决策 #87） | 编译期 + `connection_project_picker` 6 项 / `connection_dialog_ui` 4 项回归 |
@@ -823,10 +846,10 @@ flowchart LR
 | 6 | 🟡 | ~~项目栏无「清除选择」~~（**已关闭**：改为「不需要项目（仅全局）」——切作用域而非留下无效空态） | — | — |
 | 7 | 🟡 | 分组的新建 / 管理在 **database-nav 侧**，本模块只能勾选 | 导航侧分组管理未落地前，用户无法在 UI 创建分组（对话框只显示「暂无分组」） | 随 database-nav Phase B/C 排期 |
 | 8 | ⚪ | ~~`DataSourceService::get`（只查全局库）仍是公开 API~~（**已关闭**：重命名为 `get_global`） | — | — |
-| 9 | ⚪ | `view.rs` 的「＋ 新增项目 → `open_create_dialog`」宿主消费分支**无自动化测试**（含脏草稿分支） | 该路径只能手动验证 | 待 `WorkbenchView` 可测试化（需服务注入桥）后补窗口测试 |
-| 10 | ⚪ | 原型 HTML 为手工维护的示意稿 | 与实现存在漂移风险（需人工同步）；**本轮又新增漂移**：Tab 条改下划线组件、作用域改浅底分段、开关改组件尺寸、常规 Tab 顶部的空态引导条（决策 #84 / #90） | 以 `connection-prototype-design.md` 为权威，HTML 仅作视觉参考；或后续从实现截图生成 |
-| 11 | ⚪ | 类型树**不可折叠**（四个分类平铺） | 类型多时占用侧栏高度（靠内部滚动缓解） | 需要时改为可折叠分类（原型早期版本曾如此） |
-| 12 | ⚪ | UI 尺寸常量化**只覆盖本模块**（`ui-constraints.md` 三阶段迁移第一阶段） | 其他模块仍写字面量 | 按 `ui-constraints.md` §迁移计划推进 |
+| 9 | ⚪ | **部分关闭（2026-09-13）**：宿主消费分支的“标记 → 动作”映射与“只消费一次”已由 `Shared::take_project_action_request` + 单测覆盖（含同帧竞态）。**残留**：“真的把目标对话框开起来”那一段（依赖窗口与宿主管线）仍需 `WorkbenchView` 可测试化 | 该路径的剩余局部只能手动验证 | 待 `WorkbenchView` 可测试化（需服务注入桥）后补窗口测试 |
+| 10 | ⚪ | 原型 HTML 为手工维护的示意稿 | 与实现存在漂移风险（需人工同步）。**2026-09-13 已同步一轮**：Tab 改下划线、作用域改浅底分段、开关改组件尺寸、新增结果行（分级 + 详情 / 复制）与首次引导条，**删掉早就撤下的内联协议链**（决策 #72 漏同步）；顶部加“非权威”声明 + 同步戳（决策号），漂移从此可被发现 | 以 `connection-prototype-design.md` 为权威，HTML 仅作视觉参考；根治（从实现截图 / 渲染基线生成）仍需平台工作 |
+| 11 | ⚪→🚫 | 类型树**不可折叠**（四个分类平铺） | — （**本轮判定：不做**，理由见决策 #91：4 类共 ≤10 项，侧栏已内部滚动，折叠的交互与状态成本不抵收益） | 重评触发：类型目录 > 15 项或分类 > 6（驱动插件生态） |
+| 12 | ⚪ | UI 尺寸常量化**只覆盖本模块**（`ui-constraints.md` 三阶段迁移第一阶段） | 其他模块仍写字面量；**注**：`view.rs` / `panels.rs` 已清零，尺寸契约已把连接对话框一并扫描（决策 #88），剩下的欠债在其他模块（设置 / 项目 / 导航） | 按 `ui-constraints.md` §迁移计划推进（属各模块自身工作，不在连接模块范围内） |
 | 13 | ⚪ | 缺 UI 图像回归基线 / 大数据量性能基准 / fuzz | 回归靠断言而非视觉 | 平台级排期 |
 | 14 | ⚪→✅ | ~~连接对话框仍有存量裸 `px(...)`~~（**已关闭**：模块内 `px(...)` 清零 + `ui_contract` 尺寸契约扫描扩到对话框 6 文件，见决策 #88） | — | — |
 | 15 | 🟡→✅ | ~~**Tab 条 / 分段控件 / 开关为自绘**~~（**已关闭**：迁到 `TabBar::underline()` / `TabBar::segmented()` / `Switch`，开关接 `form_disabled`，可见下标映射提为纯函数，见决策 #84/#85） | — | — |
@@ -846,7 +869,7 @@ flowchart LR
 | 29 | ⚪→✅ | ~~**首次使用引导缺失**~~（**已关闭**：常规 Tab 顶部空态引导条，仅“未选类型 + 名称/地址为空”时出现） | — | 后续可选：类型树 hover 说明（需接 Tooltip 覆盖层） |
 | 30 | ⚪→✅ | ~~`auth_configs.auth_data` 仍是裸 JSON 文本~~（**已关闭**：字段化组装 / 校验 / 回填纯函数 + 管理器按类型展开字段 + 列表真脱敏，见 A5 已关闭段） | — | — |
 | 31 | ⚪→✅ | ~~**标签双源未收敛**~~（**已关闭**：读取以权威表 `connection_tags` 为准，行内 JSON 降为兼容回退；将来可加回填迁移后去掉回退，见决策 #89） | — | — |
-| 32 | ⚪ | **连接 ID 命名方案待拍板**：`generate_gid("conn", name)` 是名字哈希（改名即换 ID），`G_`/`P_`/`GP_` 前缀同时承担作用域 / 存储路由 / 快照语义 / 可读性四种职责 | 用户看到 ID 里的名字片段会误以为是稳定主键；改名行为（新建 / 覆盖）需解释 | 方案 B：UI / 日志只出现 `name`，ID 内部化；方案 C：ULID 重做 + 迁移（代价大）；待用户决策后开工 |
+| 32 | ⚪→✅ | ~~**连接 ID 命名方案待拍板**~~（**已关闭**：采用 **B 案**——生成规则 / 路由不动，界面与提示词不再出现 ID（名称入摘要、ID 入「详情」），改名语义成文“编辑改名不换 ID / 新建重名被拦”；原 **C 案（ULID 主键 + 迁移）列为 beta2**，见 §3.2 与决策 #93） | — | — |
 | 33 | 🟡→✅ | ~~引用计数不覆盖未打开的项目~~（**已关闭**：遍历项目名册 + `other` 记项目名，见 #33 已关闭段） | — | — |
 | 34 | 🔴→✅ | ~~网络档案 `config` 里的 SSH / 代理密码是明文入库~~（**已关闭**：写/读加解密 + 存量迁移（全局库 + 项目库）+ 列表脱敏 + 直查 SQL 路径补解密，见 #34 已关闭段） | — | — |
 

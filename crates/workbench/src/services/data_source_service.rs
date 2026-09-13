@@ -861,16 +861,12 @@ impl DataSourceService {
     ) -> Result<(), CoreError> {
         let wanted = name.trim().to_lowercase();
         let existing = self.global_db.get_global_connections(None, None).await?;
-        if let Some(dup) = existing
-            .iter()
-            .find(|c| c.name.trim().to_lowercase() == wanted && Some(c.id.as_str()) != exclude_id)
-        {
+        if existing.iter().any(|c| {
+            c.name.trim().to_lowercase() == wanted && Some(c.id.as_str()) != exclude_id
+        }) {
             return Err(CoreError::common(shared::error::CommonError::General(
-                format!(
-                    "连接名称「{}」已存在（{}），请更换名称",
-                    name.trim(),
-                    dup.id
-                ),
+                // #32 B 案：提示词不出现连接 ID（内部标识），只给可操作的信息。
+                format!("连接名称「{}」已存在，请更换名称", name.trim()),
             )));
         }
         Ok(())

@@ -698,7 +698,7 @@ impl ConnectionDialogState {
                                         Switch::new(ElementId::Name(SharedString::from(format!(
                                             "policy-{p_type}"
                                         ))))
-                                        .with_size(Size::Small)
+                                        // 默认尺寸（36×20）与原型 HTML 的开关一致
                                         .checked(on)
                                         .disabled(form_disabled)
                                         .on_click({
@@ -743,9 +743,8 @@ impl ConnectionDialogState {
                     ));
                     // 分组③ DuckDB 本地加速（仅网络型库可见）：warning 色标题，开关 + 参数行均在分组内。
                     if is_network_db {
-                        // DuckDB 加速开关：gpui-component `Switch`（决策 #84；宽度/高度走组件尺寸档）。
+                        // DuckDB 加速开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，与原型 HTML 一致）。
                         let toggle = Switch::new("duckdb-fed")
-                            .with_size(Size::Small)
                             .checked(duckdb_fed.get())
                             .disabled(form_disabled)
                             .on_click({
@@ -1637,7 +1636,8 @@ impl ConnectionDialogState {
                     .unwrap_or(0);
                 TabBar::new("scope-seg")
                     .segmented()
-                    .with_size(Size::XSmall)
+                    // Small（24px 高）与原型 HTML 的分段控件等高；XSmall 在 28px 的 Header 行里显得偏小。
+                    .with_size(Size::Small)
                     .flex_shrink_0()
                     .selected_index(selected)
                     .children(SCOPE_SEG_LABELS.iter().map(|(short, _)| Tab::new().label(*short)))
@@ -1941,8 +1941,9 @@ impl ConnectionDialogState {
                                 .map(|p| p.root.clone());
                             let (items, _) = crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
                             *shared.connections.borrow_mut() = items;
+                            // #32 B 案：状态栏提示同样只出现名称（ID 不进界面文本）。
                             *shared.notice.borrow_mut() =
-                                Some(format!("连接「{}」已保存（{}）", input.name, conn_id));
+                                Some(format!("连接「{}」已保存", conn_display_name(&input.name)));
                             // 分组同步（替换语义；项目级，全局库 / 未打开项目时为 no-op）。
                             // 标签已在服务内部随保存 / 更新同步到 connection_tags。
                             let group_ids: Vec<String> = dialog
@@ -1971,13 +1972,15 @@ impl ConnectionDialogState {
                                 Some(reason) => set_result(
                                     &result,
                                     ResultLevel::Warning,
-                                    format!("已保存：{conn_id}（分组未同步：{reason}）"),
+                                    format!(
+                                        "已保存：{}（分组未同步：{reason}）",
+                                        conn_display_name(&input.name)
+                                    ),
                                 ),
-                                None => set_result_ok(
-                                    &result,
-                                    true,
-                                    format!("已保存：{conn_id}（编辑请从导航栏进入；暂存区只保留未保存草稿）"),
-                                ),
+                                None => {
+                                    // 成功：摘要只有名称，连接 ID 进「详情」（B 案）。
+                                    set_result_line(&result, saved_result(&input.name, &conn_id))
+                                }
                             }
                             // 宿主重绘：刷新层内容（暂存列表 + 连接列表）
                             shared.notify_host(app);
@@ -2021,10 +2024,18 @@ impl ConnectionDialogState {
                                 Ok(()) => {
                                     // 同步后重载表单（让用户看到同步结果；此时已写项目库）。
                                     state.load_for_edit(&gpid, Some(root.as_str()), _window, app);
-                                    set_result_ok(
+                                    // #32 B 案：提示用重载后的名称（与表单一致），不展示快照 ID。
+                                    let shown =
+                                        state.name.read(app).value().trim().to_string();
+                                    let shown = if shown.is_empty() {
+                                        "该连接".to_string()
+                                    } else {
+                                        shown
+                                    };
+                                    set_result(
                                         &state.result,
-                                        true,
-                                        format!("已从全局定义同步（{gpid}）：项目快照已更新"),
+                                        ResultLevel::Success,
+                                        format!("已从全局定义同步：{shown}（项目快照已更新）"),
                                     );
                                 }
                                 Err(e) => {

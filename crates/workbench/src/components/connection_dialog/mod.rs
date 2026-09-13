@@ -193,6 +193,36 @@ pub(crate) fn set_result(
     *result.borrow_mut() = Some(ResultLine::new(level, summary));
 }
 
+/// 写整行（已构造好的结果行；如保存结果需要「摘要 + 详情」两段）。
+pub(crate) fn set_result_line(result: &Rc<RefCell<Option<ResultLine>>>, line: ResultLine) {
+    *result.borrow_mut() = Some(line);
+}
+
+/// 连接显示名（空名回退占位，避免提示里出现空引号）。
+pub(crate) fn conn_display_name(name: &str) -> &str {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        "未命名连接"
+    } else {
+        trimmed
+    }
+}
+
+/// 保存成功的结果行（#32 B 案：**界面与提示词只出现名称**，连接 ID 内部化）。
+///
+/// 摘要只有名称（供一行展示）；连接 ID 与落点放进「详情」——排障 / 报障时点开或
+/// 「复制」即可拿到，不需要把 ID 塞进每一行的可见文本。
+pub(crate) fn saved_result(name: &str, conn_id: &str) -> ResultLine {
+    let shown = conn_display_name(name);
+    ResultLine::new(
+        ResultLevel::Success,
+        format!("已保存：{shown}（编辑请从导航栏进入；暂存区只保留未保存草稿）"),
+    )
+    .with_detail(format!(
+        "已保存：{shown}\n连接 ID（内部标识，界面不展示）：{conn_id}\n编辑请从导航栏进入；暂存区只保留未保存草稿。"
+    ))
+}
+
 /// 管理器列表条目：名称 + 被引用计数（原型 §3.6 要求显示引用计数）。
 #[derive(Clone, Debug)]
 pub struct ManagerItem {

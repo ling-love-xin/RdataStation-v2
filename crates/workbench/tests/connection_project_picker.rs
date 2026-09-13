@@ -27,7 +27,7 @@ use rds_workbench::components::connection_dialog::{
     ConnectionDialogState, PROJECT_NEW_LABEL, PROJECT_NONE_LABEL, PROJECT_OPEN_LABEL, ProjectItem,
     ProjectItemKind,
 };
-use rds_workbench::panels::{EditorPanel, Shared};
+use rds_workbench::panels::{EditorPanel, ProjectActionRequest, Shared};
 
 /// 测试宿主：持有对话框状态与 `Entity<EditorPanel>`（`open` 的宿主参数），
 /// 并在渲染时挂上对话框层（`open_dialog` 依赖窗口根是 `Root`）。
@@ -330,6 +330,49 @@ fn confirm_no_project_switches_scope_to_global(cx: &mut TestAppContext) {
 }
 
 /// 下拉项数据契约（纯数据，无需窗口）：显示名 / 路径 / 动作项标记 / 搜索匹配。
+#[test]
+fn project_action_request_is_consumed_exactly_once() {
+    // 回归点（#9）：宿主消费分支以前直接 `replace(false)` 两个标记 + if/else，
+    // 无法在无窗口环境下验证“标记 → 动作”的映射与“不会重复开窗”。
+    let shared = Shared::new();
+
+    // 无请求（绝大多数帧）：不产生动作。
+    assert_eq!(shared.take_project_action_request(), None);
+
+    // 「＋ 新增项目」→ 取回一次即消。
+    shared.project_new_request.set(true);
+    assert_eq!(
+        shared.take_project_action_request(),
+        Some(ProjectActionRequest::CreateProject)
+    );
+    assert!(
+        !shared.project_new_request.get(),
+        "取出后应清标记（否则后续帧会重复开窗）"
+    );
+    assert_eq!(shared.take_project_action_request(), None, "不得重复消费");
+
+    // 「打开现有目录…」→ 同理。
+    shared.project_open_request.set(true);
+    assert_eq!(
+        shared.take_project_action_request(),
+        Some(ProjectActionRequest::OpenFolder)
+    );
+    assert_eq!(shared.take_project_action_request(), None);
+
+    // 两个标记同帧置位（竞态）：「新建」优先，且两个标记都要清掉。
+    shared.project_new_request.set(true);
+    shared.project_open_request.set(true);
+    assert_eq!(
+        shared.take_project_action_request(),
+        Some(ProjectActionRequest::CreateProject)
+    );
+    assert!(
+        !shared.project_new_request.get() && !shared.project_open_request.get(),
+        "同帧两个请求都要清掉（否则被丢弃的那一个会在下一帧补开一个窗）"
+    );
+    assert_eq!(shared.take_project_action_request(), None);
+}
+
 #[test]
 fn project_item_contract() {
     let item = ProjectItem::project("演示项目", "/tmp/rds_project_picker/演示项目");

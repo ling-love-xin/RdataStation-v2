@@ -1090,9 +1090,9 @@ mod tests {
         field_spec, find_driver_by_value, policy_summary, policy_type_from_label, policy_type_label,
         staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
         type_has_driver, url_template_example, auth_config_values, auth_field_specs,
-        build_auth_config_json, build_network_config_json, create_new_db_file, dialog_tab_defs,
-        network_config_values, network_field_specs, new_db_file_suggested_name,
-        result_needs_detail, visible_tab_index, DriverDerived,
+        build_auth_config_json, build_network_config_json, conn_display_name, create_new_db_file,
+        dialog_tab_defs, network_config_values, network_field_specs, new_db_file_suggested_name,
+        result_needs_detail, saved_result, visible_tab_index, DriverDerived,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -1449,6 +1449,25 @@ mod tests {
         )
         .expect("build ssh");
         assert!(json.contains("\"keyPath\""), "{json}");
+    }
+
+    #[test]
+    fn saved_result_keeps_connection_id_out_of_the_summary() {
+        // #32 B 案：界面与提示词只出现名称；连接 ID 只在「详情」里（排障时点开/复制）。
+        let line = saved_result("生产 PG", "G_conn_prod");
+        assert!(line.summary.contains("生产 PG"), "摘要应带名称");
+        assert!(
+            !line.summary.contains("G_conn_prod"),
+            "摘要不得出现连接 ID（否则用户又把它当主键）"
+        );
+        assert!(!result_needs_detail(&line.summary), "短摘要本身不触发折叠");
+        let detail = line.detail_text().to_string();
+        assert!(detail.contains("G_conn_prod"), "详情带 ID，供排障/报障");
+        assert!(line.detail.is_some(), "有详情才会出现「详情 / 复制」入口");
+
+        // 空名回退占位，不出现空引号。
+        assert!(saved_result("  ", "P_conn_1").summary.contains("未命名连接"));
+        assert_eq!(conn_display_name(" x "), "x");
     }
 
     #[test]
