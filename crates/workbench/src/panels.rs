@@ -43,6 +43,19 @@ use crate::services::query_runner::QueryOutput;
 use crate::ui;
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 
+/// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
+///
+/// 生产方是 `connection_dialog::handle_project_confirm`（置位两个标记之一），
+/// 消费方是 `WorkbenchView::render`——`Shared::take_project_action_request` 把
+/// “标记 → 动作”的决策与“只消费一次”的语义收在一处，可直接单测（无需窗口）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectActionRequest {
+    /// 「＋ 新增项目」：走未保存拦截后直接打开新建项目对话框。
+    CreateProject,
+    /// 「打开现有目录…」：打开目录选择对话框。
+    OpenFolder,
+}
+
 /// 面板与工作台共享的状态。
 #[derive(Clone)]
 pub struct Shared {
@@ -140,6 +153,21 @@ impl Shared {
         Self::with_connections(Vec::new(), None)
     }
 
+    /// 取出（并清空）项目栏的动作请求：宿主 render 每帧调用一次。
+    ///
+    /// - 两个标记同时置位 → 以「＋ 新增项目」优先（同一帧内的竞态，无语义歧义）；
+    /// - 都未置位 → `None`（绝大多数帧，零开销）；
+    /// - 取出即清空 → 同一次请求不会在后续帧重复开窗。
+    pub fn take_project_action_request(&self) -> Option<ProjectActionRequest> {
+        let new = self.project_new_request.replace(false);
+        let open = self.project_open_request.replace(false);
+        match (new, open) {
+            (true, _) => Some(ProjectActionRequest::CreateProject),
+            (false, true) => Some(ProjectActionRequest::OpenFolder),
+            (false, false) => None,
+        }
+    }
+
     /// 当前选中连接（克隆，避免长时间持有 RefCell 借用）。
     pub fn selected_connection(&self) -> Option<ConnectionItem> {
         let conns = self.connections.borrow();
@@ -182,6 +210,8 @@ pub struct SidebarPanel {
     _nav_search_sub: Option<Subscription>,
     /// 连接行内联标签输入框（组织编辑器打开时创建，关闭时销毁）。
     nav_tag_input: Option<Entity<InputState>>,
+    /// 当前标签输入框对应的连接 ID（切换连接时重建并重新预填）。
+    nav_tag_input_for: Option<String>,
     _nav_tag_sub: Option<Subscription>,
     /// 分组名内联重命名输入框（重命名时创建，关闭时销毁）。
     nav_group_input: Option<Entity<InputState>>,
@@ -346,8 +376,10 @@ struct DatabaseNavView {
     groups_loaded: bool,
     /// 折叠的自定义分组 ID（缺省展开）。
     collapsed_groups: HashSet<String>,
-    /// 正在内联编辑分组 / 标签的连接 ID（None = 未打开）。
+    /// 正在内联编辑分组（归组）的连接 ID（None = 未打开）。
     group_picker_for: Option<String>,
+    /// 正在内联编辑**标签**的连接 ID（None = 未打开；`+` 专用）。
+    tag_editor_for: Option<String>,
     /// 正在内联重命名的分组 ID（None = 未打开）。
     group_rename_for: Option<String>,
     /// 已发起列预取（C2）的类别文件夹 key（避免重复排队）。
@@ -692,6 +724,7 @@ impl SidebarPanel {
             nav_search: None,
             _nav_search_sub: None,
             nav_tag_input: None,
+            nav_tag_input_for: None,
             _nav_tag_sub: None,
             nav_group_input: None,
             _nav_group_sub: None,
@@ -1161,12 +1194,16 @@ impl SidebarPanel {
             view.search_facets = parsed;
         }
 
-        // 连接行内联组织编辑器（分组多选 + 标签）打开时，按需创建标签输入框
+        // 连接行内联**标签**编辑器（`+` 打开）打开时，按需创建标签输入框
         // 并用当前标签预填；关闭时销毁，保证下次打开重新回填。
-        let org_editor_for = self.database_nav.borrow().group_picker_for.clone();
-        match &org_editor_for {
+        let tag_editor_for = self.database_nav.borrow().tag_editor_for.clone();
+        match &tag_editor_for {
             Some(conn_id) => {
-                if self.nav_tag_input.is_none() {
+                // 已为**本**连接建过则复用；否则重建并重新预填（曾在 A 开过再切 B 时
+                // 会沿用 A 的输入值 → 回车把 A 的标签写到 B）。
+                let stale = self.nav_tag_input.is_none()
+                    || self.nav_tag_input_for.as_deref() != Some(conn_id.as_str());
+                if stale {
                     let current = crate::services::nav_runtime::list_tags(
                         conn_id,
                         self.project_root().as_deref(),
@@ -1185,11 +1222,13 @@ impl SidebarPanel {
                         },
                     );
                     self.nav_tag_input = Some(input);
+                    self.nav_tag_input_for = Some(conn_id.clone());
                     self._nav_tag_sub = Some(sub);
                 }
             }
             None => {
                 self.nav_tag_input = None;
+                self.nav_tag_input_for = None;
                 self._nav_tag_sub = None;
             }
         }
@@ -2611,7 +2650,7 @@ impl SidebarPanel {
                 .flex_none()
                 .opacity(if selected { 1.0 } else { 0.0 })
                 .group_hover("nav-conn-row", |s| s.opacity(1.0));
-            // `+`：行内标签 / 分组编辑（与右键「分组 / 标签…」同源）。
+            // `+`：仅**标签**行内编辑（`+` 只处理标签；归组走右键「移动到分组…」）。
             ops = ops.child(
                 div()
                     .id(format!("nav-conn-addtag-{}::{}", scope_key, conn.id))
@@ -2633,8 +2672,8 @@ impl SidebarPanel {
                             let cid = cid.clone();
                             entity.update(app, |this, cx| {
                                 let mut view = this.database_nav.borrow_mut();
-                                view.group_picker_for =
-                                    if view.group_picker_for.as_deref() == Some(cid.as_str()) {
+                                view.tag_editor_for =
+                                    if view.tag_editor_for.as_deref() == Some(cid.as_str()) {
                                         None
                                     } else {
                                         Some(cid.clone())
@@ -2858,7 +2897,7 @@ impl SidebarPanel {
                                 });
                             }))
                             .item(
-                                PopupMenuItem::new("分组 / 标签…").on_click(move |_, _, app| {
+                                PopupMenuItem::new("移动到分组…").on_click(move |_, _, app| {
                                     let cid = cid_org.clone();
                                     e_org.update(app, |this, cx| {
                                         this.database_nav.borrow_mut().group_picker_for =
@@ -2971,11 +3010,16 @@ impl SidebarPanel {
             );
         }
 
-        // 行内组织编辑器（分组多选 + 标签）。
+        // 行内编辑器：归组（右键「移动到分组…」）与标签（行尾 `+`）分开，各司其职。
         let picker_open =
             self.database_nav.borrow().group_picker_for.as_deref() == Some(conn.id.as_str());
         if picker_open {
-            block = block.child(self.render_org_editor(conn, &scope_key, cx));
+            block = block.child(self.render_group_editor(conn, &scope_key, cx));
+        }
+        let tag_open =
+            self.database_nav.borrow().tag_editor_for.as_deref() == Some(conn.id.as_str());
+        if tag_open {
+            block = block.child(self.render_tag_editor(cx));
         }
 
         // 展开但未连接（如上次会话遗留的展开态）：不报错，给明下一步指引。
@@ -3004,7 +3048,10 @@ impl SidebarPanel {
     }
 
     /// 连接行内联组织编辑器：分组多选（多对多）+「新建分组」+ 标签输入。
-    fn render_org_editor(
+    /// 行内**归组**编辑器（右键「移动到分组…」打开）：多选切换 + 新建分组。
+    ///
+    /// 只处理分组；标签由 [`Self::render_tag_editor`]（行尾 `+`）单独负责。
+    fn render_group_editor(
         &self,
         conn: &ConnectionItem,
         scope_key: &str,
@@ -3167,13 +3214,32 @@ impl SidebarPanel {
                 }),
         );
 
-        panel = panel.child(
-            div()
-                .pt_1()
-                .text_xs()
-                .text_color(muted)
-                .child("标签（逗号分隔，回车保存）"),
-        );
+        panel
+    }
+
+    /// 行内**标签**编辑器（行尾 `+` 打开）：仅标签输入，回车保存。
+    fn render_tag_editor(&self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let border = cx.theme().colors.border;
+        let bg = cx.theme().colors.popover;
+        let mut panel = div()
+            .v_flex()
+            .w_full()
+            .ml_6()
+            .mr_1()
+            .mb_1()
+            .p_2()
+            .gap_1()
+            .rounded_md()
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("标签（逗号分隔，回车保存）"),
+            );
         if let Some(input) = &self.nav_tag_input {
             panel = panel.child(Input::new(input));
         }
@@ -3833,7 +3899,7 @@ impl SidebarPanel {
 
     /// 提交连接行内联标签输入（逗号分隔 → 覆盖式保存）。
     fn commit_nav_tags(&mut self, cx: &mut Context<Self>) {
-        let Some(conn_id) = self.database_nav.borrow().group_picker_for.clone() else {
+        let Some(conn_id) = self.database_nav.borrow().tag_editor_for.clone() else {
             return;
         };
         let Some(input) = self.nav_tag_input.clone() else {

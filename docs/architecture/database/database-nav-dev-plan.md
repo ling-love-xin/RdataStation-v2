@@ -78,7 +78,7 @@
 | B6 状态持久化（展开态，`navigator_state`） | ✅ | `crates/workbench/src/services/nav_store.rs`、`nav_runtime.rs`、`panels.rs` |
 | B1 分组服务（CRUD + 多对多 + 排序） | ✅ 服务层就绪（2026-09-11） | `engine::persistence::ConnectionOrgStore`：create/update/delete/list_groups、add/remove_member、set_member_order、list_group_members、list_groups_for_connection |
 | B2 标签服务（多值 + 检索） | ✅ 服务层就绪（2026-09-11） | `ConnectionOrgStore`：set_tags/list_tags/list_connections_by_tag/list_all_tags；`nav_runtime::{list_tags,set_tags}` 已接线；M3 保存/更新同步、删除清理 |
-| B3 分组/标签视图（拖拽/右键/对话框） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`render_nav_tree`（分组一级 + 「未分组」）、`render_group_header`（统一色条 + 计数 + 折叠）、`render_org_editor`（行内分组多选 + 标签输入 + 新建分组）、`nav_source_chip`（来源筛选 chips）、`ensure_nav_org` / `reload_nav_org` |
+| B3 分组/标签视图（拖拽/右键/对话框） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`render_nav_tree`（分组一级 + 「未分组」）、`render_group_header`（统一色条 + 计数 + 折叠）、`render_group_editor`（右键「移动到分组…」：行内分组多选 + 新建分组）、`render_tag_editor`（行尾 `+`：仅标签输入）、`nav_source_chip`（来源筛选 chips）、`ensure_nav_org` / `reload_nav_org` |
 | B1/B2 视图接线（分组多对多 + 标签多值） | ✅ 已实现 | `nav_runtime::{list_groups,create_group,list_group_members,add_to_group,remove_from_group,list_all_tags}`；`ConnectionOrgStore::list_tag_pairs`（一次性映射） |
 | B7 上下文菜单动作（查看数据 / 复制名 / 查看属性 / 刷新） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`ContextMenuExt::context_menu` 挂到连接行 / 对象节点 / 分组头；`Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（生成 SELECT → 编辑区）；`toggle_connection` / `refresh_node` / `delete_group` / `create_group_interactive`；分组删除带 `AlertDialog` 确认 |
 | B8 缓存管理入口 + 短码⇄文字开关 + 属性面板宽度记忆 | ✅ 已实现（2026-09-12） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`（数据源导航节）；`crates/workbench/src/components/cache_dialog.rs`（两处入口）；`panels.rs::{refresh_all, render_connection_row, render_property_panel}` + `EditorPanel::render`（`h_resizable`） |
@@ -97,7 +97,7 @@
 
 | 节点 | 菜单项 |
 | --- | --- |
-| 连接 | 连接 / 断开 · 编辑连接… · 查看属性 · 分组 / 标签… · 复制名称 · 刷新元数据 |
+| 连接 | 连接 / 断开 · 编辑连接… · 查看属性 · 移动到分组… · 设为主组 ▸ · 复制名称 · 刷新元数据 |
 | 表 / 视图 | 查看属性 · 查看数据（`SELECT * … LIMIT 200` 注入编辑区） · 复制名称 · 复制限定名 · 刷新元数据 |
 | 其他对象（列 / schema / 文件夹 / 例程） | 查看属性 · 复制名称（*限定名仅在有 catalog/schema 时出现*） · 刷新元数据 |
 | 分组头 | 重命名分组（行内输入） · 新建分组 · 删除分组（`AlertDialog` 二次确认）；「未分组」仅「新建分组」 |
@@ -161,6 +161,8 @@
 - 鲁棒性加固（2026-09-13）：`ConnectionService::connect_with_type` 增加「可配建连超时 + 失败重试一次」；未配置 SSL 档案且目标为 LAN / 本机时，对 sqlx 驱动（`mysql` / `postgres`）显式关 TLS。设置项：`connection_defaults.{connect_timeout_ms, lan_disable_tls}`（设置面板「连接默认值」可改）。单测：`connection_service::tests::{lan_host_detection_covers_private_and_loopback, lan_tls_default_only_touches_sqlx_direct_lan}`。
 - 展开即建连 + 行内操作收敛（2026-09-13）：连接根展开前先 `ensure_connected_for_browse`（未连则先建连），避免 `MetadataService` 取不到运行时句柄而冒泡 `CONN_NOT_FOUND`；行尾 hover 仅 `+` / `✎`，**连接 / 断开仅右键菜单**；标签改为显示在**名称下一行**（不在名称行内，字号取最初版 `text_xs`）。
 - 展开态恢复防护（2026-09-13）：`render_connection_row` 仅在**运行时已连接**时才排后台加载——展开态跨重启恢复但运行时连接不跨重启，否则启动即报 `CONN_NOT_FOUND`；未连接时改显提示「未连接 · 右键「连接」或再次展开」。实测复现：未连接直接 `load_children("G_real_mysql", Connection)` → `[CONN_NOT_FOUND]`；`connect_entry` 后再加载 → 正常返回 catalogs/schemas。
+- MySQL 内省空修复（2026-09-13）：`driver/native/mysql.rs::mysql_rows_to_arrow` 把 VARCHAR/TEXT 列误判为 Arrow `Binary`（`Vec<u8>` 探测先于 `String`），导致 `StringArray` 下转全失败、catalog/schema/table/column 全空。修复：先按声明类型名识别文本族；TEXT 与真 BLOB 在协议层同名 `BLOB`，改用「字节可否 UTF-8 解码」区分，并在 Utf8 建数组时回退 lossy 解码。实测全深度：MySQL `mall_business → 表 7 → order → 16 列`。
+- 入口职责拆分（2026-09-13）：行尾 `+` **只做标签**（`tag_editor_for` → `render_tag_editor`）；归组改为右键「**移动到分组…**」（`group_picker_for` → `render_group_editor`，仅多选组 + 新建分组）。切换连接时重建标签输入并重新预填（避免把 A 的标签写到 B）。
 
 **导航加载迁后台（收尾）说明**
 

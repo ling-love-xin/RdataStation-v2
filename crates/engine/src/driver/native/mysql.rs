@@ -1,4 +1,4 @@
-use sqlx::{Column, MySql, Pool, Row};
+use sqlx::{Column, MySql, Pool, Row, TypeInfo as _};
 
 fn names_to_schema_objects(
     result: &QueryResult,
@@ -529,6 +529,24 @@ fn build_query_result(
 }
 
 /// 将 MySQL 行转换为 Arrow 批处理
+/// MySQL 声明类型名是否属于文本族（含 `ENUM` / `SET` / `JSON`）。
+fn is_text_type_name(name: &str) -> bool {
+    let n = name.to_ascii_uppercase();
+    n.contains("CHAR")
+        || n.contains("TEXT")
+        || n.contains("ENUM")
+        || n.contains("SET")
+        || n.contains("JSON")
+}
+
+/// 字节可否视为文本。
+///
+/// MySQL 协议层把 TEXT 与 BLOB 都报成 `BLOB`（sqlx 名 = `BLOB`），无法只凭声明名区分，
+/// 故用「可否解码为 UTF-8」作为判据；真正二进制（不可解码）才落 `Binary`。
+fn bytes_are_text(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_ok()
+}
+
 fn mysql_rows_to_arrow(
     columns: &[String],
     rows: &[sqlx::mysql::MySqlRow],
@@ -545,30 +563,48 @@ fn mysql_rows_to_arrow(
         let mut bool_values: Vec<Option<bool>> = Vec::with_capacity(num_rows);
         let mut binary_values: Vec<Option<Vec<u8>>> = Vec::with_capacity(num_rows);
 
-        // 遍历所有行确定最宽类型（0=Null, 1=Bool, 2=Int64, 3=Float64, 4=Binary, 5=Utf8）
-        let mut detected_rank: u8 = 0;
+        // 先用**声明类型**判定字符串 / 二进制。
+        // 为何必须：sqlx 的 `Vec<u8>` 在 MySQL 上对 VARCHAR/TEXT 也会解码成功，若只靠
+        // `try_get` 探测会把字符串列误判为 `Binary`，导致下游 `StringArray` 下转型全部失败、
+        // 元数据内省（catalog / schema / table / column）一律返回空。
+        let declared = rows
+            .first()
+            .map(|r| r.column(col_idx).type_info().name().to_ascii_uppercase())
+            .unwrap_or_default();
+        let declared_text = is_text_type_name(&declared);
+        // 不在按声明名强制二进制：MySQL 把 TEXT 列也报成协议类型 BLOB（sqlx 名 = "BLOB"），
+        // 无法只凭声明名区分 TEXT 与真 BLOB；统一交给下面的**字节 UTF-8 判定**。
+        let mut detected_rank: u8 = if declared_text { 5 } else { 0 };
 
-        for row in rows {
-            use sqlx::Row;
+        if detected_rank == 0 {
+            for row in rows {
+                use sqlx::Row;
 
-            let row_rank = if let Ok(Some(_)) = row.try_get::<Option<bool>, _>(col_idx) {
-                1 // Boolean
-            } else if let Ok(Some(_)) = row.try_get::<Option<i64>, _>(col_idx) {
-                2 // Int64
-            } else if let Ok(Some(_)) = row.try_get::<Option<f64>, _>(col_idx) {
-                3 // Float64
-            } else if let Ok(Some(_)) = row.try_get::<Option<Vec<u8>>, _>(col_idx) {
-                4 // Binary
-            } else if let Ok(Some(_)) = row.try_get::<Option<String>, _>(col_idx) {
-                5 // Utf8
-            } else {
-                0 // NULL — 不影响类型推断
-            };
-            if row_rank > detected_rank {
-                detected_rank = row_rank;
-            }
-            if detected_rank == 5 {
-                break; // Utf8 为最宽类型，无需继续
+                let row_rank = if let Ok(Some(_)) = row.try_get::<Option<bool>, _>(col_idx) {
+                    1 // Boolean
+                } else if let Ok(Some(_)) = row.try_get::<Option<i64>, _>(col_idx) {
+                    2 // Int64
+                } else if let Ok(Some(_)) = row.try_get::<Option<f64>, _>(col_idx) {
+                    3 // Float64
+                } else if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(col_idx) {
+                    // 字节可解码为 UTF-8 → 文本（MySQL 会把部分文本列（如 information_schema
+                    // 的 `TABLE_TYPE`）报成 BINARY 字符集）；否则才是真正的二进制。
+                    if bytes_are_text(&bytes) {
+                        5 // Utf8
+                    } else {
+                        4 // Binary
+                    }
+                } else if let Ok(Some(_)) = row.try_get::<Option<String>, _>(col_idx) {
+                    5 // Utf8
+                } else {
+                    0 // NULL — 不影响类型推断
+                };
+                if row_rank > detected_rank {
+                    detected_rank = row_rank;
+                }
+                if detected_rank == 5 {
+                    break; // Utf8 为最宽类型，无需继续
+                }
             }
         }
 
@@ -597,7 +633,19 @@ fn mysql_rows_to_arrow(
                     binary_values.push(row.try_get::<Option<Vec<u8>>, _>(col_idx).ok().flatten());
                 }
                 _ => {
-                    string_values.push(row.try_get::<Option<String>, _>(col_idx).ok().flatten());
+                    // Utf8：优先 `String` 解码；失败则回退字节 lossy——MySQL 会把部分**文本**
+                    // 列报成 BINARY 字符集，sqlx 对它们拒绝 `String` 类型解码。
+                    let v = row
+                        .try_get::<Option<String>, _>(col_idx)
+                        .ok()
+                        .flatten()
+                        .or_else(|| {
+                            row.try_get::<Option<Vec<u8>>, _>(col_idx)
+                                .ok()
+                                .flatten()
+                                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        });
+                    string_values.push(v);
                 }
             }
         }
@@ -835,6 +883,20 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mysql_text_and_binary_classification() {
+        // 文本族声明名（大小写无关）。
+        for n in ["VARCHAR", "char", "TEXT", "LONGTEXT", "ENUM", "SET", "JSON"] {
+            assert!(is_text_type_name(n), "{n} 应视为文本");
+        }
+        for n in ["BIGINT", "BLOB", "BINARY", "DOUBLE", "DATETIME"] {
+            assert!(!is_text_type_name(n), "{n} 不应视为文本");
+        }
+        // MySQL 把 TEXT 与 BLOB 都报成 `BLOB`：靠字节可否解码为 UTF-8 区分。
+        assert!(bytes_are_text(b"BASE TABLE"));
+        assert!(!bytes_are_text(&[0xff, 0xfe, 0x00]));
+    }
     use crate::driver::Database;
 
     const MYSQL_URL: &str = "mysql://root:root@localhost:3306/";

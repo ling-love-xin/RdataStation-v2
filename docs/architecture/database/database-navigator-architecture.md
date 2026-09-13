@@ -134,6 +134,17 @@ GPUI 的 `render` 是纯读路径。本模块把一切 I/O 移出：
 | 表 / 视图 | `i-table` / `i-view` | `list_tables` |
 | 列 | `i-col` + 类型 + `PK`/`FK` | `list_columns` |
 
+**层级链（懒加载，逐级展开）**：`连接 → Catalog → Schema → 类别文件夹 → 表 / 视图 → 列`。
+
+- **后台已实现全部 6 级**：`database::navigator_service::load_children` 按 `NavPath` 分派到
+  `load_catalogs` / `load_schemas` / `load_folders` / `load_objects` / `load_columns`；
+  每级 cache-aside（命中 L2 直接返回，未命中实时内省并回写）。
+- **无 catalog / schema 的驱动**（SQLite/DuckDB）：`list_*` 返回空时用 `main` 兜底，保证仍可下钻。
+- **驱动差异**：MySQL 无 schema 概念（`catalog = database`，`get_schemas` 回退为 catalog 列表）；
+  PG 为 `catalog(库名)` → `schema(public 等)`。
+- **实测（2026-09-13，真实端点）**：MySQL `mall_business → 表 7 → order → 16 列`；
+  PG `postgres.public → 表 12 → inventory_ledger → 7 列`；SQLite `main.main → 表 25 → attachment → 8 列`。
+
 ### 4.3 分组 / 标签（`engine::persistence::ConnectionOrgStore`）
 
 ```
@@ -234,7 +245,7 @@ flowchart TD
 ### 5.3 分组 / 标签写入
 
 ```
-右键「分组 / 标签…」或行尾 `+` → 行内组织编辑器（多选组 + 标签输入）
+右键「移动到分组…」→ 行内归组编辑器（多选组 + 新建分组）；行尾 `+` → 行内标签编辑器（两入口职责互不重叠）
 提交 → nav_runtime::{add_to_group, remove_from_group, set_tags} → ConnectionOrgStore
 成功后 reload_nav_org() 重读分组/成员/标签并重绘
 ```
@@ -312,7 +323,7 @@ flowchart TD
 | 树（分组 + 连接 + 对象） | `panels.rs::{render_nav_tree, render_group_header, render_connection_row, render_nav_node}` |
 | 徽标（状态色 + 类型形状） | `panels.rs::{nav_type_badge, NavBadgeStatus, render_connection_row}` |
 | 驱动目录缓存 | `workbench/src/services/nav_runtime.rs::driver_catalog` → `DatabaseNavView::driver_catalog` |
-| 行内组织编辑器（分组多选 + 标签） | `panels.rs::render_org_editor`（入口：右键「分组 / 标签…」、行尾 `+`） |
+| 行内编辑器（归组 / 标签分离） | `panels.rs::{render_group_editor, render_tag_editor}`（入口：右键「移动到分组…」、行尾 `+`） |
 | 右键菜单 | `panels.rs` 的 `ContextMenuExt::context_menu` |
 | 键盘导航 | `workbench/src/commands.rs`（`FocusNavSearch` / `NavUp` / `NavDown` / `NavExpand` / `NavCollapse` / `NavOpenProperties`）+ `app/main.rs` 绑定 |
 | 后台任务（树 / 属性 / 预热 / 预取） | `workbench/src/services/nav_jobs.rs` |
@@ -340,6 +351,7 @@ flowchart TD
 | 6 | 大 schema 列内联阈值 | >50 列建议改为「在属性面板查看列」而不内联渲染。 |
 | 7 | 标签命名规范 | 建议约定 `key:value`（`env:prod`），便于 `tag:` 语法稳定解析。 |
 | 8 | facet 筛选无 SQLite 行 | facet 走 `settings.json`（UI 偏好）；若将来需**按连接**记忆筛选，再扩 `navigator_state`。 |
+| 9 | **MySQL 元数据内省为空** | ✅ 已修（2026-09-13）：sqlx MySQL 的 Arrow 转换把 VARCHAR/TEXT 列误判为 `Binary`（`Vec<u8>` 探测先于 `String`），令下游 `StringArray` 下转全失败 → catalog / schema / table / column 全空。修复：先按声明类型名判文本族；TEXT 与真 BLOB 在协议层同名 `BLOB`，改用**字节可否 UTF-8 解码**区分。单测 `driver::native::mysql::tests::mysql_text_and_binary_classification`。 |
 
 ---
 
