@@ -69,7 +69,15 @@ impl NavigatorService {
     ) -> Result<Vec<NavNode>, CoreError> {
         match path {
             NavPath::Connection => self.load_catalogs(conn_id).await,
-            NavPath::Catalog { catalog } => self.load_schemas(conn_id, catalog).await,
+            NavPath::Catalog { catalog } => {
+                // 层级按数据库类型动态决定：无独立 Schema 层的驱动（MySQL / SQLite /
+                // DuckDB）让 Catalog 直接承载类别文件夹，避免出现同名重复的 Schema 层。
+                if self.metadata.has_schema_level(conn_id).await? {
+                    self.load_schemas(conn_id, catalog).await
+                } else {
+                    self.load_folders(conn_id, catalog, catalog).await
+                }
+            }
             NavPath::Schema { catalog, schema } => {
                 self.load_folders(conn_id, catalog, schema).await
             }

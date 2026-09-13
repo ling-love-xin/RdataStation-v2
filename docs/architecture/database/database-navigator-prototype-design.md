@@ -276,13 +276,20 @@ PostgreSQL（关系型）· 已连接 · 驱动 PostgreSQL (Official) · postgre
 | 节点 | 图标角色 | 数据来源 | 可展开 |
 | --- | --- | --- | --- |
 | 分组 | 色条 + 计数 | `connection_groups` | ✅ |
-| 连接（数据源） | **徽标（色=状态·形=类型）+ 名称 + 归属域列**（+ 可选标签） | `DataSourceService::list()` | ✅ catalog/schema |
-| Catalog / Schema | 文件夹 | `MetadataService::list_catalogs/list_schemas` | ✅ |
+| 连接（数据源） | **徽标（色=状态·形=类型）+ 名称 + 归属域列**（+ 可选标签） | `DataSourceService::list()` | ✅ Catalog |
+| Catalog | 文件夹（= 数据库） | `MetadataService::list_catalogs` | ✅ Schema（有则）/ 类别文件夹 |
+| Schema | 文件夹（**仅支持独立 Schema 层的驱动**） | `MetadataService::list_schemas` | ✅ 类别文件夹 |
 | 类别文件夹 | 表 / 视图 / 存储过程·函数 / 序列·触发器 | 按对象 `kind` 分组 | ✅ |
 | 表 / 视图 | `i-table` / `i-view` | `list_tables` | ✅ 列 |
 | 列 | `i-col` + 类型 + `PK`/`FK` | `list_columns` | ❌ |
 | 存储过程 / 函数 | `i-fn` | `list_procedures` / `list_functions` | 源码预览 |
 | 序列 / 触发器 | `i-seq` / `i-bolt` | `list_sequences` / `list_triggers` | ❌ |
+
+> **层级按数据库类型动态决定**：驱动通过 `MetadataBrowser::has_schema_level()` 声明是否存在独立
+> Schema 层。MySQL `false`（`catalog = database`）→ `连接 → Catalog → 类别文件夹 → 表 → 列`；
+> PostgreSQL `true` → `连接 → Catalog(库) → Schema(public 等) → 类别文件夹 → 表 → 列`；
+> SQLite / DuckDB `false` → `连接 → main → 类别文件夹 → 表 → 列`。服务层（`navigator_service`）
+> 决定是否插入 Schema 节点，渲染层不因类型分叉。
 
 > **范围**：DuckDB 分析表 / 分析资源（M6）**不在本面板**；本模块只管理数据源与其元数据对象树。
 

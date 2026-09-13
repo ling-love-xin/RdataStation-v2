@@ -31,6 +31,17 @@ impl MetadataService {
         db.list_catalogs().await
     }
 
+    /// 该连接是否存在独立的 Schema 层级（供导航树决定是否跳过 Schema 层）。
+    ///
+    /// 未知驱动保底返回 `true`。
+    pub async fn has_schema_level(&self, conn_id: &str) -> Result<bool, CoreError> {
+        let db = self.get_database(conn_id).await?;
+        Ok(db
+            .as_metadata_browser()
+            .map(|b| b.has_schema_level())
+            .unwrap_or(true))
+    }
+
     pub async fn list_schemas(
         &self,
         conn_id: &str,

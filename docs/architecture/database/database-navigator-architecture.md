@@ -129,21 +129,28 @@ GPUI 的 `render` 是纯读路径。本模块把一切 I/O 移出：
 | --- | --- | --- |
 | 分组 | 色条 + 名称 + 健康度 + 计数 + 全折叠 | `connection_groups` |
 | 连接（数据源） | **徽标（色=状态·形=类型） + 名称 + 归属域列**（+ 可选标签） | `shared.connections`（加载器） |
-| Catalog / Schema | 文件夹 | `MetadataService::list_catalogs/list_schemas` |
+| Catalog | 文件夹 | `MetadataService::list_catalogs` |
+| Schema | 文件夹（仅支持独立 Schema 层的驱动） | `MetadataService::list_schemas` |
 | 类别文件夹 | 表 / 视图 / 过程·函数 / 序列·触发器 | 按对象 `kind` 分组 |
 | 表 / 视图 | `i-table` / `i-view` | `list_tables` |
 | 列 | `i-col` + 类型 + `PK`/`FK` | `list_columns` |
 
-**层级链（懒加载，逐级展开）**：`连接 → Catalog → Schema → 类别文件夹 → 表 / 视图 → 列`。
+**层级链（懒加载，逐级展开）**：`连接 → Catalog → [Schema] → 类别文件夹 → 表 / 视图 → 列`。
 
 - **后台已实现全部 6 级**：`database::navigator_service::load_children` 按 `NavPath` 分派到
   `load_catalogs` / `load_schemas` / `load_folders` / `load_objects` / `load_columns`；
   每级 cache-aside（命中 L2 直接返回，未命中实时内省并回写）。
-- **无 catalog / schema 的驱动**（SQLite/DuckDB）：`list_*` 返回空时用 `main` 兜底，保证仍可下钻。
-- **驱动差异**：MySQL 无 schema 概念（`catalog = database`，`get_schemas` 回退为 catalog 列表）；
-  PG 为 `catalog(库名)` → `schema(public 等)`。
-- **实测（2026-09-13，真实端点）**：MySQL `mall_business → 表 7 → order → 16 列`；
-  PG `postgres.public → 表 12 → inventory_ledger → 7 列`；SQLite `main.main → 表 25 → attachment → 8 列`。
+- **层级按数据库类型动态决定（Schema 层可选）**：驱动通过 `MetadataBrowser::has_schema_level()`
+  声明是否存在独立 Schema 层；`load_schemas` 仅在为 `true` 时保留，否则让 Catalog 直接承载
+  类别文件夹（`load_folders(conn_id, catalog, catalog)`，内省仍以 `catalog` 作 schema 参数）。
+  树形差异只在服务层决定，`NavPath` / `NavNode` / 渲染层不因类型分叉。
+- **各驱动约定**：MySQL `false`（`catalog = database`，无独立 Schema 层）；SQLite `false`；
+  DuckDB `false`（当前内省按固定 `main` schema 取表）；PostgreSQL `true`
+  （`catalog(库名) → schema(public 等)`）。无 Schema 层驱动的 `get_schemas` 返回空列表，
+  **不再回退为 catalog 列表**（旧实现由此产生同名重复层）。未知驱动默认 `true`（保底保留）。
+- **实测（2026-09-13，真实端点）**：MySQL `mall_business → 表 (7) → order → 16 列`；
+  PG `postgres → public → 表 (12) → inventory_ledger → 7 列`；SQLite `main → 表 (25) → attachment → 8 列`；
+  DuckDB `main → 表 (8) → cities → 列`。
 
 ### 4.3 分组 / 标签（`engine::persistence::ConnectionOrgStore`）
 

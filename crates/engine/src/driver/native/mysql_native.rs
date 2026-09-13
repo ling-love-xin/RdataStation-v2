@@ -737,6 +737,10 @@ impl Transaction for MySqlNativeTransaction {
 
 #[async_trait::async_trait]
 impl MetadataBrowser for MySqlNativeDatabase {
+    fn has_schema_level(&self) -> bool {
+        false
+    }
+
     async fn get_catalogs(&self) -> Result<Vec<NodeInfo>, CoreError> {
         let result = self
             .query("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")
@@ -749,7 +753,8 @@ impl MetadataBrowser for MySqlNativeDatabase {
     }
 
     async fn get_schemas(&self, _catalog: &str) -> Result<Vec<NodeInfo>, CoreError> {
-        self.get_catalogs().await
+        // MySQL 的 database 即 schema，无独立 Schema 层（见 `has_schema_level`）。
+        Ok(vec![])
     }
 
     async fn get_tables(&self, catalog: &str, _schema: &str) -> Result<Vec<NodeInfo>, CoreError> {

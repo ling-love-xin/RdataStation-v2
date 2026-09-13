@@ -749,6 +749,12 @@ impl Transaction for DuckDbTransaction {
 
 #[async_trait::async_trait]
 impl crate::driver::MetadataBrowser for DuckDbDatabase {
+    fn has_schema_level(&self) -> bool {
+        // 当前内省按固定 `main` schema 取表，未按传入 schema 区分；
+        // 单库场景下跳过 Schema 层，避免 `main → main` 重复层。
+        false
+    }
+
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         Ok(vec![crate::driver::NodeInfo {
             name: "main".to_string(),
@@ -762,12 +768,8 @@ impl crate::driver::MetadataBrowser for DuckDbDatabase {
         &self,
         _catalog: &str,
     ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        Ok(vec![crate::driver::NodeInfo {
-            name: "main".to_string(),
-            kind: crate::driver::SchemaObjectKind::Schema,
-            icon: Some("schema".to_string()),
-            comment: None,
-        }])
+        // DuckDB 不区分 catalog/schema 层级（见 `has_schema_level`）。
+        Ok(vec![])
     }
 
     async fn get_tables(

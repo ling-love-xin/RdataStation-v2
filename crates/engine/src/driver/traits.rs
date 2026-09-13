@@ -116,7 +116,19 @@ pub trait MetadataBrowser: Send + Sync {
     /// （MySQL 的 database = schema），SQLite/DuckDB 返回固定值。
     async fn get_catalogs(&self) -> Result<Vec<NodeInfo>, CoreError>;
 
+    /// 该数据源是否存在独立的 Schema 层级。
+    ///
+    /// 返回 `false` 时导航树跳过 Schema 层，Catalog 直接承载类别文件夹
+    /// （MySQL 的 database 即 schema；SQLite / DuckDB 单库场景）。
+    /// 默认 `true`，未知驱动保底保留 Schema 层。
+    fn has_schema_level(&self) -> bool {
+        true
+    }
+
     /// 获取 Schema 列表
+    ///
+    /// 仅当 [`Self::has_schema_level`] 为 `true` 时才有意义；无 Schema 层的
+    /// 驱动应返回空列表（而非回退为 Catalog 列表，否则导航树会出现同名重复层）。
     async fn get_schemas(&self, catalog: &str) -> Result<Vec<NodeInfo>, CoreError>;
 
     /// 获取表/视图/集合列表

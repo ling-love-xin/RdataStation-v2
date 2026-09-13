@@ -533,6 +533,11 @@ impl Database for SqliteDatabase {
 
 #[async_trait::async_trait]
 impl crate::driver::MetadataBrowser for SqliteDatabase {
+    fn has_schema_level(&self) -> bool {
+        // SQLite 为单库，database 内无独立 Schema 层。
+        false
+    }
+
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         Ok(vec![crate::driver::NodeInfo {
             name: "main".to_string(),

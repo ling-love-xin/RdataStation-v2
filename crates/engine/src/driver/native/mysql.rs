@@ -689,6 +689,10 @@ fn mysql_rows_to_arrow(
 
 #[async_trait::async_trait]
 impl crate::driver::MetadataBrowser for MySqlDatabase {
+    fn has_schema_level(&self) -> bool {
+        false
+    }
+
     async fn get_catalogs(&self) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         let result = self
             .query("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")
@@ -720,7 +724,9 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         &self,
         _catalog: &str,
     ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
-        self.get_catalogs().await
+        // MySQL 的 database 即 schema，没有独立的 Schema 层级（`has_schema_level` 为 false）。
+        // 返回空而非回退为 catalog 列表，避免导航树出现同名重复层。
+        Ok(vec![])
     }
 
     async fn get_tables(

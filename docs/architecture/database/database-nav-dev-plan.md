@@ -163,6 +163,8 @@
 - 展开态恢复防护（2026-09-13）：`render_connection_row` 仅在**运行时已连接**时才排后台加载——展开态跨重启恢复但运行时连接不跨重启，否则启动即报 `CONN_NOT_FOUND`；未连接时改显提示「未连接 · 右键「连接」或再次展开」。实测复现：未连接直接 `load_children("G_real_mysql", Connection)` → `[CONN_NOT_FOUND]`；`connect_entry` 后再加载 → 正常返回 catalogs/schemas。
 - MySQL 内省空修复（2026-09-13）：`driver/native/mysql.rs::mysql_rows_to_arrow` 把 VARCHAR/TEXT 列误判为 Arrow `Binary`（`Vec<u8>` 探测先于 `String`），导致 `StringArray` 下转全失败、catalog/schema/table/column 全空。修复：先按声明类型名识别文本族；TEXT 与真 BLOB 在协议层同名 `BLOB`，改用「字节可否 UTF-8 解码」区分，并在 Utf8 建数组时回退 lossy 解码。实测全深度：MySQL `mall_business → 表 7 → order → 16 列`。
 - 入口职责拆分（2026-09-13）：行尾 `+` **只做标签**（`tag_editor_for` → `render_tag_editor`）；归组改为右键「**移动到分组…**」（`group_picker_for` → `render_group_editor`，仅多选组 + 新建分组）。切换连接时重建标签输入并重新预填（避免把 A 的标签写到 B）。
+- **树层级按数据库类型动态渲染（2026-09-13）**：旧实现里 MySQL 的 `get_schemas` 回退为 catalog 列表，导致 `catalog(db) → schema(同名 db) → 表` 出现同名重复层。新增驱动能力位 `MetadataBrowser::has_schema_level()`（默认 `true`）；MySQL / SQLite / DuckDB 为 `false`，PostgreSQL 保留 `true`。`MetadataService::has_schema_level` 透出，`navigator_service::load_children` 在 `NavPath::Catalog` 分支判定：有 Schema 层走 `load_schemas`，否则直接 `load_folders(conn_id, catalog, catalog)`。`NavPath` / `NavNode` / 渲染层不分叉；无 Schema 层驱动的 `get_schemas` 改为返回空（**不再回退 catalog 列表**）。实测（真实端点）：MySQL `mall_business → 表 (7) → order → 16 列`；PG `postgres → public → 表 (12)`；SQLite `main → 表 (25)`；DuckDB `main → 表 (8)`。
+- **待处理（本轮实测发现，未修）**：文件型数据库（SQLite / DuckDB）按 URL 去重的逻辑使项目 / 共享连接无法注册——`ConnectionService::connect_with_type` 在发现同 URL 已有连接时**直接复用旧连接 id**（避免文件锁），导致 `connect_entry("P_real_sqlite")` 返回 Ok 但管理器里只有 `G_real_sqlite`，随后按请求 id 加载报 `[CONN_NOT_FOUND]`。受影响：与已连接的 `G_` 指向同一文件的 `P_` / `GP_` 连接。需在产品层确认「同一文件的多条逻辑连接是共享一个物理连接（别名）还是各建一个」。
 
 **导航加载迁后台（收尾）说明**
 
