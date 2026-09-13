@@ -192,10 +192,16 @@ flowchart TD
 
 ```
 单击连接行  → 选中（聚焦面板，供键盘导航）+ 展开/折叠
+展开连接根  → 未建连则**先自动建连**（`ensure_connected_for_browse`）再排后台加载
 双击连接行  → 属性面板（靠右停靠）
-右键 / 行尾「连接·断开」→ nav_runtime::{connect_entry, disconnect_entry}
+右键 / 面板头「连接·断开」→ nav_runtime::{connect_entry, disconnect_entry}
 断开        → 关闭运行时连接，**元数据缓存保留**（可离线浏览、重连秒开）
 ```
+
+> **为何展开要先建连**：对象树加载走 `NavigatorService` → `MetadataService::get_database`，
+> 它从全局 `ConnectionManager` 取运行时句柄；未建连时取不到，会冒泡为用户看到的
+> `[CONN_NOT_FOUND] Connection 'xxx' not found`。因此连接根展开前必须确保已建连
+>（行内不再提供连接 / 断开按钮，连接入口为右键菜单）。
 
 **运行时生命周期硬约束（排障要点）**：`nav_runtime` 的同步入口（`connect_entry` /
 `disconnect_entry` / `is_connected` / `load_entry_with`）统一在其**进程级 `BRIDGE_RUNTIME`

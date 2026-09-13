@@ -752,7 +752,7 @@ impl SidebarPanel {
     }
 
     /// →：展开选中节点（有子节点且尚未展开）。
-    fn nav_expand(&self, cx: &mut Context<Self>) {
+    fn nav_expand(&mut self, cx: &mut Context<Self>) {
         let Some(item) = self.nav_selected() else {
             return;
         };
@@ -765,7 +765,7 @@ impl SidebarPanel {
     }
 
     /// ←：折叠选中节点（已展开）。
-    fn nav_collapse(&self, cx: &mut Context<Self>) {
+    fn nav_collapse(&mut self, cx: &mut Context<Self>) {
         let Some(item) = self.nav_selected() else {
             return;
         };
@@ -2423,7 +2423,6 @@ impl SidebarPanel {
         let muted = cx.theme().colors.muted_foreground;
         let hover = cx.theme().colors.list_hover;
         let danger = cx.theme().colors.danger;
-        let pri = cx.theme().colors.primary;
 
         let expanded = {
             let view = self.database_nav.borrow();
@@ -2589,12 +2588,11 @@ impl SidebarPanel {
             NavSource::Shared => cx.theme().colors.primary,
         };
 
-        // 行尾操作（v8）：`+` 加标签 · `✎` 编辑 · 连接/断开；仅 hover / 选中显。
+        // 行尾操作（v8）：`+` 加标签 · `✎` 编辑；仅 hover / 选中显（连接 / 断开走右键菜单）。
         let ops = {
             let entity = cx.entity();
             let shared = self.shared.clone();
             let cid = conn_id.clone();
-            let root = project_root.clone();
             let hover_bg = cx.theme().colors.list_hover;
             let mut ops = div()
                 .h_flex()
@@ -2659,30 +2657,7 @@ impl SidebarPanel {
                         }
                     }),
             );
-            // 连接 / 断开。
-            ops = ops.child(
-                div()
-                    .id(format!("nav-conn-toggle-{}::{}", scope_key, conn.id))
-                    .px_1()
-                    .text_xs()
-                    .text_color(pri)
-                    .cursor_pointer()
-                    .rounded_md()
-                    .hover(move |s| s.bg(hover_bg))
-                    .child(if connected { "断开" } else { "连接" })
-                    .on_click({
-                        let entity = entity.clone();
-                        let cid = cid.clone();
-                        let root = root.clone();
-                        move |_, _, app: &mut App| {
-                            let cid = cid.clone();
-                            let root = root.clone();
-                            entity.update(app, |this, cx| {
-                                this.toggle_connection(&cid, root.as_deref(), cx);
-                            });
-                        }
-                    }),
-            );
+            // 连接 / 断开不进 hover 行操作：仅右键菜单提供（避免误触与视觉噪声）。
             ops
         };
 
@@ -2789,7 +2764,6 @@ impl SidebarPanel {
                         .text_ellipsis()
                         .child(nav_name_highlight(&conn.name, &filter, match_bg, fg)),
                 )
-                .when_some(tag_chips, |s, chips| s.child(chips))
                 .when(scope_visible, |s| {
                     s.child(
                         div()
@@ -2973,27 +2947,17 @@ impl SidebarPanel {
             );
         }
 
-        // 标签（多值）：非空时在连接名下以 muted 小字展示，便于检索确认。
-        let tags = self
-            .database_nav
-            .borrow()
-            .tags
-            .get(&conn.id)
-            .cloned()
-            .unwrap_or_default();
-        if !tags.is_empty() {
-            let text = tags
-                .iter()
-                .map(|t| format!("#{t}"))
-                .collect::<Vec<_>>()
-                .join(" ");
+        // 标签（v7 修订）：显示在连接名**下一行**（不在名称行内），仅 `⋯ → 显示标签`
+        // 开启时；以「≤2 chip + `+N`」呈现，避免撑爆名称行 / 挤掉归属域列。
+        if let Some(chips) = tag_chips {
             block = block.child(
                 div()
                     .pl_6()
                     .pb_0p5()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(text),
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(chips),
             );
         }
 
@@ -3540,7 +3504,7 @@ impl SidebarPanel {
     }
 
     /// 展开 / 折叠节点；首次展开时排队后台懒加载，并持久化展开态。
-    fn toggle_nav_node(&self, conn_id: &str, key: &str, path: NavPath, cx: &mut Context<Self>) {
+    fn toggle_nav_node(&mut self, conn_id: &str, key: &str, path: NavPath, cx: &mut Context<Self>) {
         let now_expanded = {
             let mut view = self.database_nav.borrow_mut();
             if view.expanded.contains(key) {
@@ -3552,9 +3516,44 @@ impl SidebarPanel {
             }
         };
         if now_expanded {
+            // 连接根展开：未建连则先建连。否则 `NavigatorService` → `MetadataService`
+            // 取不到运行时句柄，冒泡为 `[CONN_NOT_FOUND]`（用户看到的“连不上”）。
+            if matches!(path, NavPath::Connection) && !self.ensure_connected_for_browse(conn_id, cx)
+            {
+                self.save_nav_state_for(conn_id);
+                return;
+            }
             self.ensure_nav_loaded(conn_id, key, path, false, cx);
         }
         self.save_nav_state_for(conn_id);
+    }
+
+    /// 展开前的隐式建连：未连接时先建连；返回是否可用（已连接 或 建连成功）。
+    ///
+    /// 失败时写面板提示（与 `toggle_connection` 同文案），不阻后续可重试。
+    fn ensure_connected_for_browse(&mut self, conn_id: &str, cx: &mut Context<Self>) -> bool {
+        let already = crate::services::nav_runtime::is_connected(conn_id)
+            || self.database_nav.borrow().connected.contains(conn_id);
+        if already {
+            return true;
+        }
+        let root = self.project_root().map(|p| p.to_string_lossy().to_string());
+        match crate::services::nav_runtime::connect_entry(conn_id, root.as_deref()) {
+            Ok(()) => {
+                {
+                    let mut view = self.database_nav.borrow_mut();
+                    view.connected.insert(conn_id.to_string());
+                    view.prefetched.clear();
+                }
+                nav_jobs::warm_after_connect(conn_id, root.as_deref());
+                self.ensure_warm_poll(cx);
+                true
+            }
+            Err(e) => {
+                *self.shared.notice.borrow_mut() = Some(format!("连接失败: {e}"));
+                false
+            }
+        }
     }
 
     /// 排队后台懒加载子节点（已请求过则跳过；render 路径不做 I/O）。

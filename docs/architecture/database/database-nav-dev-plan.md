@@ -159,6 +159,7 @@
 - 实测证据：建池后 drop 运行时 → 新运行时上查询恒超时；改为进程级共享运行时 → 即时返回 `PostgreSQL 18.6`。
 - 排查提示：该问题是**环境无关的确定性 bug**；偶发的 LAN 建连慢（池 `acquire_timeout` 默认 30s）会与其症状叠加，勿混为一谈。
 - 鲁棒性加固（2026-09-13）：`ConnectionService::connect_with_type` 增加「可配建连超时 + 失败重试一次」；未配置 SSL 档案且目标为 LAN / 本机时，对 sqlx 驱动（`mysql` / `postgres`）显式关 TLS。设置项：`connection_defaults.{connect_timeout_ms, lan_disable_tls}`（设置面板「连接默认值」可改）。单测：`connection_service::tests::{lan_host_detection_covers_private_and_loopback, lan_tls_default_only_touches_sqlx_direct_lan}`。
+- 展开即建连 + 行内操作收敛（2026-09-13）：连接根展开前先 `ensure_connected_for_browse`（未连则先建连），避免 `MetadataService` 取不到运行时句柄而冒泡 `CONN_NOT_FOUND`；行尾 hover 仅 `+` / `✎`，**连接 / 断开仅右键菜单**；标签改为显示在**名称下一行**（不在名称行内）。
 
 **导航加载迁后台（收尾）说明**
 
