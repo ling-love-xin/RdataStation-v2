@@ -268,6 +268,29 @@ impl WorkbenchView {
                         editor.update(cx, |_, cx| cx.notify());
                     }
                 }
+                SidebarEvent::OpenSqlEditor(conn_id) => {
+                    // 连接右键「在 SQL 编辑器中打开」：选中该连接（与侧边栏点击一致，
+                    // 清空导航树 / SQL 结果残留），并通知编辑区重绘。
+                    let idx = this
+                        .shared
+                        .connections
+                        .borrow()
+                        .iter()
+                        .position(|c| c.id == *conn_id);
+                    this.shared.selected.set(idx);
+                    *this.shared.nav_for.borrow_mut() = None;
+                    this.shared.nav_tables.borrow_mut().clear();
+                    *this.shared.sql_for.borrow_mut() = None;
+                    if let Some(editor) = &this.editor {
+                        editor.update(cx, |_, cx| cx.notify());
+                    }
+                }
+                SidebarEvent::OpenRightPanel(panel) => {
+                    // 连接右键「生成 Mock 数据 / 查看洞察」：展开右 Dock 并切面板
+                    // （与 Quick Open 的 OpenInsight / OpenMock 同一处理口径）。
+                    this.shared.active_right.set(*panel);
+                    this.shared.right_mode.set(SidebarMode::Expanded);
+                }
             }
             cx.notify();
         });

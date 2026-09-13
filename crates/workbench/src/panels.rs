@@ -195,6 +195,10 @@ pub enum SidebarEvent {
     NewConnectionRequest,
     /// 导航右键「查看数据」已写入 `shared.editor_set`，请编辑区渲染时消费。
     EditorSqlRequest,
+    /// 连接右键「在 SQL 编辑器中打开」：选中该连接并聚焦中央编辑区。
+    OpenSqlEditor(String),
+    /// 连接右键「生成 Mock 数据 / 查看洞察」：展开右 Dock 并切到对应面板。
+    OpenRightPanel(RightPanel),
 }
 
 /// 侧边栏面板：按活动工具渲染内容。
@@ -2979,6 +2983,34 @@ impl SidebarPanel {
                                 this.refresh_node(&cid, &cid, Some(NavPath::Connection), cx);
                                 *this.shared.notice.borrow_mut() = Some(format!("已刷新：{name}"));
                             });
+                        }))
+                        // 常驻入口（与连接状态无关）：三个模块按连接上下文打开。
+                        .separator()
+                        .item(PopupMenuItem::new("在 SQL 编辑器中打开").on_click({
+                            let e = entity.clone();
+                            let cid = conn_id.clone();
+                            move |_, _, app| {
+                                let cid = cid.clone();
+                                e.update(app, |_, cx| {
+                                    cx.emit(SidebarEvent::OpenSqlEditor(cid));
+                                });
+                            }
+                        }))
+                        .item(PopupMenuItem::new("生成 Mock 数据").on_click({
+                            let e = entity.clone();
+                            move |_, _, app| {
+                                e.update(app, |_, cx| {
+                                    cx.emit(SidebarEvent::OpenRightPanel(RightPanel::Mock));
+                                });
+                            }
+                        }))
+                        .item(PopupMenuItem::new("查看洞察").on_click({
+                            let e = entity.clone();
+                            move |_, _, app| {
+                                e.update(app, |_, cx| {
+                                    cx.emit(SidebarEvent::OpenRightPanel(RightPanel::Insight));
+                                });
+                            }
                         }))
                     }
                 }),

@@ -425,6 +425,8 @@ engine 已迁移 `CacheVersionManager` + `CURRENT_CACHE_VERSION`（V1→…→V8
 
 **连接节点**：连接 / 断开 · 编辑连接… · 测试连接 · 查看属性 · 刷新元数据 · **移动到分组…**（多选组 + 新建分组）· **设为主组 ▸** · 复制连接（模板，无明文凭据）· 共享至项目 / 取消共享 · 删除连接（二次确认 + 清理 DuckDB Secret，**保留缓存**）。标签编辑走行尾 `+`。
 
+**连接节点 · 常驻模块入口（底部固定，与连接状态无关）**：**在 SQL 编辑器中打开**（选中该连接 + 清空导航/结果残留 + 聚焦中央编辑区）· **生成 Mock 数据**（右 Dock 展开到 `Mock`）· **查看洞察**（右 Dock 展开到 `Insight`）。三者经 `SidebarEvent::{OpenSqlEditor, OpenRightPanel}` 由宿主处理，面板不直接改布局状态。
+
 **表 / 视图**：查看数据（中央只读预览，`LIMIT 200`）· 查看属性 · 新建查询（SELECT）· 生成 INSERT/UPDATE/DELETE · 复制名称 / 限定名 · 生成 Mock 数据 · 刷新此表元数据。
 
 **分组节点**：新建分组 / 重命名 / 编辑描述 · 删除分组（**不删成员连接与缓存**）· 在此新建连接 · 折叠 · **折叠其他**（v6）。
@@ -581,6 +583,7 @@ flowchart TD
 | 分组 / 标签 / 状态持久化 | `crates/engine/src/persistence/connection_org_store.rs`（权威存储）+ `crates/workbench/src/services/nav_store.rs`（视图状态） |
 | 分组一级视图 / 行内归组 | `panels.rs::{render_nav_tree, render_group_header, render_org_editor}` |
 | 右键菜单（连接 / 对象 / 分组） | `panels.rs` 的 `ContextMenuExt::context_menu`（`gpui_kit::component::menu`） |
+| 连接右键常驻模块入口（SQL 编辑器 / Mock / 洞察） | ✅ `panels.rs::render_connection_row` 菜单底部三项 → `SidebarEvent::{OpenSqlEditor, OpenRightPanel}`；`view.rs::init_workspace` 订阅处理（选中连接 + 右 Dock 展开切面板） |
 | 生成 SELECT → 编辑区 | `Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（`panels.rs` / `view.rs` 消费） |
 | 新建数据源入口（面板头 `＋` / 空态按钮） | `panels.rs::render_database_nav` / `render_nav_tree`（置位 `Shared::new_connection_request` + `SidebarEvent::NewConnectionRequest`），`EditorPanel::render` 消费并 `request_new_connection` |
 | 面板头 `⟳ 刷新` / `断开当前连接` | `panels.rs::render_database_nav`（`Button::new("nav-refresh")` / `Button::new("nav-disconnect")`）+ `SidebarPanel::nav_current_connection`（选中节点为连接根）；动作走 `refresh_node` / `toggle_connection`，未选中 / 未连接时 `disabled` |
