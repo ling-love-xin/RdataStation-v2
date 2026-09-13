@@ -389,18 +389,19 @@ impl DataSourceService {
             .unwrap_or_default()
     }
 
-    /// 同步连接分组（**替换语义**：以 UI 勾选为准；分组为项目级能力，未打开项目时忽略）。
+    /// 同步连接分组（**替换语义**：以 UI 勾选为准；分组为项目级能力，全局库 / 未打开项目时为 no-op）。
     ///
-    /// 与标签同步（`sync_connection_tags`）同策略：失败仅告警，不阻断连接保存。
+    /// 与标签同步（`sync_connection_tags`）同策略：失败不阻断连接保存。区别是**不再静默**——
+    /// 返回 `Err` 让调用方把结果行降级为 warning 级说明（#28）：“已保存，但分组未同步”。
     pub fn set_connection_groups(
         &self,
         conn_id: &str,
         group_ids: &[String],
         project_path: Option<&str>,
-    ) {
-        match open_org_store(self.global_db, project_path)
-            .and_then(|store| store.set_connection_groups(conn_id, group_ids))
-        {
+    ) -> Result<(), CoreError> {
+        let result = open_org_store(self.global_db, project_path)
+            .and_then(|store| store.set_connection_groups(conn_id, group_ids));
+        match &result {
             Ok(()) => tracing::debug!(
                 target: "data_source_service",
                 conn_id,
@@ -411,9 +412,10 @@ impl DataSourceService {
                 target: "data_source_service",
                 conn_id,
                 error = %e,
-                "连接分组同步失败（不影响连接保存）"
+                "连接分组同步失败（不影响连接保存，已由调用方告知用户）"
             ),
         }
+        result
     }
 
     // ==================== 连接 CRUD ====================

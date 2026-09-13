@@ -176,25 +176,33 @@ fn groups_sync_through_service() {
 
     // 替换语义：先勾两个 → 只留一个 → 清空。
     let conn = "P_conn_groups_probe";
-    service.set_connection_groups(
-        conn,
-        &["grp_a".to_string(), "grp_b".to_string()],
-        Some(&root_str),
-    );
+    service
+        .set_connection_groups(
+            conn,
+            &["grp_a".to_string(), "grp_b".to_string()],
+            Some(&root_str),
+        )
+        .expect("分组同步");
     let mut got = service.groups_of(conn, Some(&root_str));
     got.sort();
     assert_eq!(got, vec!["grp_a".to_string(), "grp_b".to_string()]);
 
-    service.set_connection_groups(conn, &["grp_b".to_string()], Some(&root_str));
+    service
+        .set_connection_groups(conn, &["grp_b".to_string()], Some(&root_str))
+        .expect("分组同步（替换为单组）");
     assert_eq!(
         service.groups_of(conn, Some(&root_str)),
         vec!["grp_b".to_string()]
     );
 
-    service.set_connection_groups(conn, &[], Some(&root_str));
+    service
+        .set_connection_groups(conn, &[], Some(&root_str))
+        .expect("分组同步（清空）");
     assert!(service.groups_of(conn, Some(&root_str)).is_empty());
 
-    // 未打开项目：分组为项目级能力，读取为空、写入忽略（不报错）。
+    // 未打开项目：分组为项目级能力，读取为空、写入忽略（不报错，且不算降级）。
     assert!(service.list_groups(None).is_empty());
-    service.set_connection_groups(conn, &["grp_a".to_string()], None);
+    service
+        .set_connection_groups(conn, &["grp_a".to_string()], None)
+        .expect("未打开项目时不报错");
 }

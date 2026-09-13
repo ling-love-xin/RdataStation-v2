@@ -92,7 +92,7 @@ impl ConnectionDialogState {
         let prop_val = self.prop_val.clone();
         let mgr = self.mgr.clone();
         let result = self.result.clone();
-        let result_ok = self.result_ok.clone();
+        let result_expanded = self.result_expanded.clone();
         let editing_id = self.editing_id.clone();
         let scope = self.scope.clone();
         let project_path = self.project_path.clone();
@@ -606,13 +606,11 @@ impl ConnectionDialogState {
                                     let prop_key = prop_key.clone();
                                     let prop_val = prop_val.clone();
                                     let result = result.clone();
-                                    let result_ok = result_ok.clone();
                                     move |_, window, app| {
                                         let k = prop_key.read(app).value().to_string();
                                         let v = prop_val.read(app).value().to_string();
                                         if k.trim().is_empty() {
-                                            *result.borrow_mut() = Some("属性 key 不能为空".into());
-                                            result_ok.set(false);
+                                            set_result_ok(&result, false, "属性 key 不能为空");
                                             entity.update(app, |_, cx| cx.notify());
                                             return;
                                         }
@@ -625,8 +623,7 @@ impl ConnectionDialogState {
                                         drop(p);
                                         prop_key.update(app, |s, cx| s.set_value("", window, cx));
                                         prop_val.update(app, |s, cx| s.set_value("", window, cx));
-                                        *result.borrow_mut() = Some("驱动属性已更新".into());
-                                        result_ok.set(true);
+                                        set_result_ok(&result, true, "驱动属性已更新");
                                         entity.update(app, |_, cx| cx.notify());
                                     }
                                 }),
@@ -1788,13 +1785,79 @@ impl ConnectionDialogState {
                         }),
                 );
 
+            // 结果行（#28：分级 + 详情）：级别决定配色；摘要过长或带详情时提供「详情 / 复制」。
             let result_ui = {
-                let msg = result.borrow().clone();
-                if let Some(msg) = msg {
-                    let color = if result_ok.get() { theme.colors.success } else { theme.colors.danger };
-                    div().text_xs().text_color(color).child(msg)
-                } else {
-                    div().h(rems(1.125))
+                let line = result.borrow().clone();
+                match line {
+                    Some(line) => {
+                        let color = match line.level {
+                            ResultLevel::Success => theme.colors.success,
+                            ResultLevel::Warning => theme.colors.warning,
+                            ResultLevel::Error => theme.colors.danger,
+                            ResultLevel::Info => theme.colors.muted_foreground,
+                        };
+                        let mut col = div()
+                            .v_flex()
+                            .gap(rems(0.125))
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(div().text_xs().text_color(color).child(line.summary.clone()));
+                        if result_needs_detail(&line.summary) || line.detail.is_some() {
+                            let expanded = result_expanded.get();
+                            if expanded {
+                                col = col.child(
+                                    div()
+                                        .id("conn-result-detail")
+                                        // 测试锚点：`debug_bounds` 只认 debug_selector（非测试构建 no-op）。
+                                        .debug_selector(|| "conn-result-detail".to_string())
+                                        .text_xs()
+                                        .text_color(theme.colors.muted_foreground)
+                                        .max_h(rems(6.))
+                                        .overflow_y_scroll()
+                                        .child(line.detail_text().to_string()),
+                                );
+                            }
+                            let toggle_expanded = result_expanded.clone();
+                            let toggle_entity = entity.clone();
+                            let copy_text = line.detail_text().to_string();
+                            col = col.child(
+                                div()
+                                    .h_flex()
+                                    .gap(rems(0.5))
+                                    .child(
+                                        div()
+                                            .id("conn-result-toggle")
+                                            .debug_selector(|| "conn-result-toggle".to_string())
+                                            .text_xs()
+                                            .text_color(theme.colors.primary)
+                                            .cursor_pointer()
+                                            .child(if expanded { "收起" } else { "详情" })
+                                            .on_click(move |_, _, app| {
+                                                toggle_expanded.set(!toggle_expanded.get());
+                                                toggle_entity.update(app, |_, cx| cx.notify());
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("conn-result-copy")
+                                            .debug_selector(|| "conn-result-copy".to_string())
+                                            .text_xs()
+                                            .text_color(theme.colors.primary)
+                                            .cursor_pointer()
+                                            .child("复制")
+                                            .on_click(move |_, _, app| {
+                                                app.write_to_clipboard(
+                                                    gpui_kit::ClipboardItem::new_string(
+                                                        copy_text.clone(),
+                                                    ),
+                                                );
+                                            }),
+                                    ),
+                            );
+                        }
+                        col
+                    }
+                    None => div().h(rems(1.125)),
                 }
             };
 
@@ -1806,7 +1869,6 @@ impl ConnectionDialogState {
                 let pass = pass.clone();
                 let driver = driver.clone();
                 let result = result.clone();
-                let result_ok = result_ok.clone();
                 let state = ConnectionDialogState::cloned_state(
                     name.clone(), url.clone(), user.clone(), pass.clone(), driver.clone(),
                     remark.clone(), auth_method.clone(), auth_ref.clone(), network_ref.clone(), env.clone(),
@@ -1821,13 +1883,11 @@ impl ConnectionDialogState {
                 let project_path = project_path.clone();
                 Rc::new(move |_window, app| {
                     let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
-                        *result.borrow_mut() = Some("请填写名称、驱动与连接 URL".into());
-                        result_ok.set(false);
+                        set_result_ok(&result, false, "请填写名称、驱动与连接 URL");
                         entity.update(app, |_, cx| cx.notify());
                         return false;
                     };
-                    *result.borrow_mut() = Some("测试中…".into());
-                    result_ok.set(true);
+                    set_result(&result, ResultLevel::Info, "测试中…");
                     entity.update(app, |_, cx| cx.notify());
                     let project_root = {
                         let v = project_path.read(app).value().to_string();
@@ -1835,8 +1895,7 @@ impl ConnectionDialogState {
                         if v.is_empty() { None } else { Some(v.to_string()) }
                     };
                     let (ok, msg) = run_test(input, project_root);
-                    *result.borrow_mut() = Some(msg);
-                    result_ok.set(ok);
+                    set_result_ok(&result, ok, msg);
                     entity.update(app, |_, cx| cx.notify());
                     ok
                 })
@@ -1850,7 +1909,6 @@ impl ConnectionDialogState {
                 let pass = pass.clone();
                 let driver = driver.clone();
                 let result = result.clone();
-                let result_ok = result_ok.clone();
                 // 暂存列表需要对话框状态句柄（Rc）——在 `state`（ClonedDialogState）遮蔽前取出。
                 let dialog = Rc::clone(&state);
                 let state = ConnectionDialogState::cloned_state(
@@ -1868,8 +1926,7 @@ impl ConnectionDialogState {
                 let project_path = project_path.clone();
                 Rc::new(move |window, app| {
                     let Some(input) = state.collect(&name, &driver, &url, &user, &pass, app) else {
-                        *result.borrow_mut() = Some("请填写名称、驱动与连接 URL".into());
-                        result_ok.set(false);
+                        set_result_ok(&result, false, "请填写名称、驱动与连接 URL");
                         entity.update(app, |_, cx| cx.notify());
                         return false;
                     };
@@ -1904,7 +1961,7 @@ impl ConnectionDialogState {
                             *shared.connections.borrow_mut() = items;
                             *shared.notice.borrow_mut() =
                                 Some(format!("连接「{}」已保存（{}）", input.name, conn_id));
-                            // 分组同步（替换语义；项目级，未打开项目时服务侧自动忽略）。
+                            // 分组同步（替换语义；项目级，全局库 / 未打开项目时为 no-op）。
                             // 标签已在服务内部随保存 / 更新同步到 connection_tags。
                             let group_ids: Vec<String> = dialog
                                 .group_checks
@@ -1913,26 +1970,39 @@ impl ConnectionDialogState {
                                 .filter(|(_, _, checked)| *checked)
                                 .map(|(gid, _, _)| gid.clone())
                                 .collect();
-                            if let Ok(service) = DataSourceService::global() {
-                                service.set_connection_groups(
-                                    &conn_id,
-                                    &group_ids,
-                                    project_path_val.as_deref(),
-                                );
-                            }
+                            // #28：分组未落库不再静默——保存仍算成功，但结果行降为 warning 级并给出原因。
+                            let group_degrade: Option<String> = match DataSourceService::global() {
+                                Ok(service) => service
+                                    .set_connection_groups(
+                                        &conn_id,
+                                        &group_ids,
+                                        project_path_val.as_deref(),
+                                    )
+                                    .err()
+                                    .map(|e| e.to_string()),
+                                Err(e) => Some(e.to_string()),
+                            };
                             // 暂存列表（原型设计 §2.2 规则 4）：保存后将草稿移出暂存区 + 自动补空草稿；
                             // 保存后保持对话框打开，支持连续新建多个连接。
                             dialog.staging_after_save(window, app);
-                            *result.borrow_mut() =
-                                Some(format!("已保存：{conn_id}（编辑请从导航栏进入；暂存区只保留未保存草稿）"));
-                            result_ok.set(true);
+                            match group_degrade {
+                                Some(reason) => set_result(
+                                    &result,
+                                    ResultLevel::Warning,
+                                    format!("已保存：{conn_id}（分组未同步：{reason}）"),
+                                ),
+                                None => set_result_ok(
+                                    &result,
+                                    true,
+                                    format!("已保存：{conn_id}（编辑请从导航栏进入；暂存区只保留未保存草稿）"),
+                                ),
+                            }
                             // 宿主重绘：刷新层内容（暂存列表 + 连接列表）
                             shared.notify_host(app);
                             true
                         }
                         Err(e) => {
-                            *result.borrow_mut() = Some(format!("保存失败: {e}"));
-                            result_ok.set(false);
+                            set_result_ok(&result, false, format!("保存失败: {e}"));
                             false
                         }
                     };
@@ -1969,14 +2039,14 @@ impl ConnectionDialogState {
                                 Ok(()) => {
                                     // 同步后重载表单（让用户看到同步结果；此时已写项目库）。
                                     state.load_for_edit(&gpid, Some(root.as_str()), _window, app);
-                                    *state.result.borrow_mut() = Some(format!(
-                                        "已从全局定义同步（{gpid}）：项目快照已更新"
-                                    ));
-                                    state.result_ok.set(true);
+                                    set_result_ok(
+                                        &state.result,
+                                        true,
+                                        format!("已从全局定义同步（{gpid}）：项目快照已更新"),
+                                    );
                                 }
                                 Err(e) => {
-                                    *state.result.borrow_mut() = Some(format!("同步失败: {e}"));
-                                    state.result_ok.set(false);
+                                    set_result_ok(&state.result, false, format!("同步失败: {e}"));
                                 }
                             }
                             shared.notify_host(app);

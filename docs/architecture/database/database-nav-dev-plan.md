@@ -25,17 +25,17 @@
 | V3 | **双通道徽标**：颜色 = 状态，形状 = 类型（内叠 2 字母） | `panels.rs::{nav_type_badge, NavBadgeStatus}` + `Shared::driver_catalog`（`nav_runtime::driver_catalog()` 一次性加载） | ✅ 2026-09-13（hover 卡已接：`nav_badge_hover_card` 用 `HoverCard`，300ms 显类型 / 状态 / 驱动） |
 | V4 | **归属域右对齐固定列** + `⋯ → 显示归属域` | `panels.rs::render_connection_row`（`.justify_end()` 定宽列）+ `settings::SettingsService::{show_scope,set_show_scope}` | ✅ 2026-09-13 |
 | V5 | 分组头**聚合健康度** + **全折叠** | `panels.rs::render_group_header`（`已连接/总数` + 失败计数 + 全折叠）+ `render_nav_tree` 预计算连接 / 错误集 | ✅ 2026-09-13 |
-| V6 | **多组引用样式 + 主组** | `panels.rs::{render_nav_tree, render_connection_row, render_reference_row}`；主组由 `membership[conn][0]`（组排序最前）派生 | ✅ 2026-09-13（显式「设为主组」仍待做，需 `connection_group_members.is_primary` 新列或 `navigator_state`） |
+| V6 | **多组引用样式 + 主组** | `panels.rs::{render_nav_tree, render_connection_row, render_reference_row}`；主组显式存储 `connection_group_members.is_primary`（右键 `设为主组 ▸`），未指定回退 `membership[conn][0]`（组排序最前） | ✅ 2026-09-13 |
 | V7 | **facet 入口**（归属域 chips + 「筛选 ▾」承载类型 / 驱动 / 标签） | `panels.rs::{render_database_nav, build_facet_items, nav_facet_candidates, apply_facet}` + `DatabaseNavView` facet 状态 + `settings::model::NavigatorFilters`（持久化）；搜索语法 `scope:/source:/type:/driver:/tag:` | ✅ 2026-09-13（搜索 token 作额外 AND 约束，与 chips 叠加，不互相回写） |
 | V8 | 行操作**悬停 / 选中显隐**（`+`、`✎`、连接/断开） | `panels.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`） | ✅ 2026-09-13（右键 + 键盘仍为全量入口） |
 | V9 | 行尾 **`+` = 标签快捷入口** | `panels.rs::render_connection_row`（复用行内组织编辑器） | ✅ 2026-09-13 |
 | V10 | **`⋯ → 显示标签`**（默认关）+ 标签行内「≤2 chip + `+N`」 | `panels.rs::render_connection_row` + `settings::SettingsService::{show_tags,set_show_tags}` | ✅ 2026-09-13 |
 
 > 新增常量：`ui.rs::{NAV_BADGE_SIZE, NAV_SCOPE_COL_SHORT, NAV_SCOPE_COL_TEXT, NAV_ADD_TAG_SIZE}`。
-> 单测：`panels::tests::{type_badge_maps_known_types_and_falls_back, search_facets_parse_tokens_and_free_text, type_short_label_strips_category_suffix}`、`database::model::tests::source_key_roundtrip`、`settings::model::tests::{legacy_config_without_navigator_uses_defaults, navigator_filters_roundtrip}`。
+> 单测：`panels::tests::{type_badge_maps_known_types_and_falls_back, search_facets_parse_tokens_and_free_text, type_short_label_strips_category_suffix}`、`database::model::tests::source_key_roundtrip`、`engine::persistence::connection_org_store::tests::primary_group_is_exclusive_and_falls_back`、`settings::model::tests::{legacy_config_without_navigator_uses_defaults, navigator_filters_roundtrip}`。
 > **驱动目录**：`nav_runtime::driver_catalog()`（同步读全局 `drivers` 表；随组织数据在 `defer_in` 一次性加载）→ `Shared::driver_catalog` 跨面板共享，**render 期零 I/O**。
 > **属性面板**：连接项新增「数据库类型」行（`property_panel::load_properties` 接 `db_type`）、「驱动」行显示目录友好名（`PostgreSQL (Official) · postgres_native`）。
-> **仍待做**：显式「设为主组」；工作线程优先级队列；大 schema 列内联阈值；标签命名规范 `key:value`。
+> **仍待做**：工作线程优先级队列；大 schema 列内联阈值；标签命名规范 `key:value`。
 
 **Phase A 实现位置**
 
@@ -150,6 +150,15 @@
 - `Ctrl+F` 聚焦搜索（宿主 action）；`↑↓` 移动选中、`→` 展开、`←` 折叠、`Enter` / `F4` 打开属性；
 - 可见序列由渲染顺序每帧重建（`nav_order`），避免与树的过滤 / 分组 / 分页逻辑重复实现；
 - 仅当焦点在导航面板内时生效（点击行会聚焦面板）；搜索框获得焦点时 `↑↓` 仍由输入框处理优先（未消费才冒泡）。
+
+**连接池运行时生命周期（修复，2026-09-13）**
+
+- 现象：真实端点（MySQL/PostgreSQL）在导航里连不上 / 连了却加载不出对象树；SQLite/DuckDB 正常。
+- 根因：`nav_runtime::{connect_entry, disconnect_entry, is_connected, load_entry_with}` 每次调用都 `Runtime::new()` 再丢弃；sqlx / 原生驱动连接池建在该运行时上，运行时销毁后池的后台任务死亡，池**永久不可用**（取用挂起）。`app::init_global_system` 早已用 `OnceLock` 常驻运行时（并有注释），`nav_runtime` 是漏网特例。
+- 修复：`nav_runtime` 引入进程级 `BRIDGE_RUNTIME: OnceLock<Runtime>`，四个入口统一改用它。
+- 实测证据：建池后 drop 运行时 → 新运行时上查询恒超时；改为进程级共享运行时 → 即时返回 `PostgreSQL 18.6`。
+- 排查提示：该问题是**环境无关的确定性 bug**；偶发的 LAN 建连慢（池 `acquire_timeout` 默认 30s）会与其症状叠加，勿混为一谈。
+- 鲁棒性加固（2026-09-13）：`ConnectionService::connect_with_type` 增加「可配建连超时 + 失败重试一次」；未配置 SSL 档案且目标为 LAN / 本机时，对 sqlx 驱动（`mysql` / `postgres`）显式关 TLS。设置项：`connection_defaults.{connect_timeout_ms, lan_disable_tls}`（设置面板「连接默认值」可改）。单测：`connection_service::tests::{lan_host_detection_covers_private_and_loopback, lan_tls_default_only_touches_sqlx_direct_lan}`。
 
 **导航加载迁后台（收尾）说明**
 

@@ -889,6 +889,16 @@ pub(crate) fn new_db_file_suggested_name(driver_id: &str) -> &'static str {
     }
 }
 
+// ===== 结果行（#28 分级 + 详情）=====
+
+/// 摘要超过该字符数（或含换行）时，UI 提供「详情」展开（按字符数，避免多字节截断）。
+pub(crate) const RESULT_SUMMARY_MAX_CHARS: usize = 80;
+
+/// 摘要是否需要「详情」入口（过长或含换行）。
+pub(crate) fn result_needs_detail(summary: &str) -> bool {
+    summary.chars().count() > RESULT_SUMMARY_MAX_CHARS || summary.contains('\n')
+}
+
 /// 处理「新建文件…」选中的路径：返回 `(结果行文案, 是否成功, 写回地址的值)`。
 ///
 /// **语义（与「打开文件…」严格分离）**：
@@ -1059,7 +1069,8 @@ mod tests {
         staging_display_type_id, strip_file_db_noise, tags_from_json, tags_to_json, type_badge,
         type_has_driver, url_template_example, auth_config_values, auth_field_specs,
         build_auth_config_json, build_network_config_json, create_new_db_file,
-        network_config_values, network_field_specs, new_db_file_suggested_name, DriverDerived,
+        network_config_values, network_field_specs, new_db_file_suggested_name,
+        result_needs_detail, DriverDerived,
     };
     use connection::model::DataSourceSaveInput;
     use engine::persistence::driver_store::{DataSourceType, Driver};
@@ -1416,6 +1427,14 @@ mod tests {
         )
         .expect("build ssh");
         assert!(json.contains("\"keyPath\""), "{json}");
+    }
+
+    #[test]
+    fn result_detail_needed_only_for_long_or_multiline_summaries() {
+        assert!(!result_needs_detail("已保存：G_conn_x"));
+        assert!(!result_needs_detail(&"字".repeat(80)), "刚好 80 字不展开");
+        assert!(result_needs_detail(&"字".repeat(81)), "超 80 字提供详情");
+        assert!(result_needs_detail("第一行\n第二行"), "换行必须可展开");
     }
 
     #[test]

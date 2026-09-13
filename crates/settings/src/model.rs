@@ -98,6 +98,13 @@ pub struct ConnectionDefaults {
     /// 查询超时（毫秒）。
     #[serde(default = "default_timeout_ms")]
     pub query_timeout_ms: u64,
+    /// 建连超时（毫秒）：超过即判定本次尝试失败（会自动重试一次）。默认 15000。
+    #[serde(default = "default_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+    /// 未配置 SSL 档案且目标为 LAN / 本机时，显式关闭 TLS（规避 sqlx 默认 `prefer`
+    /// 握手卡顿）。默认开；公网 / 需要 TLS 的场景可关。
+    #[serde(default = "default_true")]
+    pub lan_disable_tls: bool,
 }
 
 impl Default for ConnectionDefaults {
@@ -105,6 +112,8 @@ impl Default for ConnectionDefaults {
         Self {
             default_driver: default_driver(),
             query_timeout_ms: default_timeout_ms(),
+            connect_timeout_ms: default_connect_timeout_ms(),
+            lan_disable_tls: true,
         }
     }
 }
@@ -194,6 +203,9 @@ fn default_driver() -> String {
 fn default_timeout_ms() -> u64 {
     15_000
 }
+fn default_connect_timeout_ms() -> u64 {
+    15_000
+}
 fn default_project_sort() -> String {
     "last_opened".to_string()
 }
@@ -220,6 +232,9 @@ mod tests {
         assert!(s.navigator.filters.db_type.is_none());
         assert!(s.navigator.filters.driver.is_none());
         assert!(s.navigator.filters.tag.is_none());
+        // 连接默认值：建连超时 15s、LAN 直连默认关 TLS。
+        assert_eq!(s.connection_defaults.connect_timeout_ms, 15_000);
+        assert!(s.connection_defaults.lan_disable_tls);
     }
 
     /// facet 筛选可序列化往返（`None` 不被写成显式 null 之外的异常形态）。

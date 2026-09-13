@@ -138,13 +138,14 @@ GPUI 的 `render` 是纯读路径。本模块把一切 I/O 移出：
 
 ```
 connection_groups              -- 项目库：分组定义（id, name, description, sort_order, …）
-connection_group_members       -- 项目库：分组↔连接 多对多（group_id, connection_id, sort_order）
+connection_group_members       -- 项目库：分组↔连接 多对多（group_id, connection_id, sort_order, is_primary）
 connection_tags                -- 连接↔标签 多值（connection_id, tag）；全局库与项目库各有
 ```
 
 - 分组是**项目级**；标签在全局库（全局连接）与项目库（P_/GP_）分别存放，读取时合并。
 - 连接记录的 `tags` JSON 字段仅作**兼容投影**，权威源是 `connection_tags`。
 - 服务读写入口在 `workbench/services/nav_runtime.rs`（按归属域路由到全局库 / 项目库）。
+- **主组**：`connection_group_members.is_primary` 标记同一连接唯一主组（`set_primary_group` / `clear_primary_group` / `list_primary_group_pairs`）；未指定时由树渲染回退到分组排序最前。列由 `ensure_tables` 幂等补齐（含 `PRAGMA` 检查后的 `ALTER TABLE`），不依赖迁移执行顺序。
 
 ### 4.4 驱动目录（徽标映射）
 
@@ -196,6 +197,29 @@ flowchart TD
 断开        → 关闭运行时连接，**元数据缓存保留**（可离线浏览、重连秒开）
 ```
 
+**运行时生命周期硬约束（排障要点）**：`nav_runtime` 的同步入口（`connect_entry` /
+`disconnect_entry` / `is_connected` / `load_entry_with`）统一在其**进程级 `BRIDGE_RUNTIME`
+（`OnceLock<Runtime>`）** 上执行，与 `app::init_global_system` 同一约定。
+
+> 为何必须常驻：sqlx / 原生驱动的连接池建立在首次 `connect` 的运行时上，池的后台任务
+> （连接 I/O、`min_connections` 维持、生命周期回收）随该运行时存活。若每次调用都
+> `Runtime::new()` 再丢弃，池会随运行时空转而**永久不可用**——表象是「点连接看似成功，
+> 但对象树 / 预热全部挂起（用户感知为无法连接）」。实测：建池后丢弃运行时，再在另一运行时
+> 上查询该池 → 恒定超时；改为进程级共享运行时 → 即时成功。
+
+**建连鲁棒性（2026-09-13）**：`ConnectionService::connect_with_type` 在建立连接时：
+
+1. **LAN 直连关 TLS**：未配置 SSL / SSH / 代理档案（`None` 或 `Direct`）、且主机为
+   LAN / 本机（IP 字面量私有段或 `localhost`）、且驱动为 sqlx 系（`mysql` / `postgres`）时，
+   向 URL 追加 `sslmode=disable` / `ssl-mode=DISABLED`，规避 sqlx 默认 `prefer` 的握手卡顿。
+   原生驱动（`*_native`）、公网地址、已有同名参数一律不动。由设置项 `connection_defaults.lan_disable_tls` 控制（默认开）。
+2. **可配建连超时 + 重试一次**：超时取 `settings.json` 的 `connection_defaults.connect_timeout_ms`
+   （默认 15s，设置面板可选 5/15/30/60s）。超时或失败自动重试一次（间隔 300ms），
+   仍失败则报 `ConnectionError::Timeout` / 原错误；重试均需回收网络隧道守卫。
+
+> 设置项经 `settings::connection_defaults()`（进程级快照）读取：async 上下文拿不到 GPUI global，
+> 由 `save_settings` / `SettingsService::init` 发布。
+
 ### 5.3 分组 / 标签写入
 
 ```
@@ -219,7 +243,7 @@ flowchart TD
 | # | 决策 | 理由 / 代价 |
 | --- | --- | --- |
 | 1 | 去掉按归属域的标签页，归属域降级为筛选 + 属性 | 标签页与行内短码功能重复；且 `GP` 归属「项目」使分区语义不一致（v5） |
-| 2 | **分组升为树一级**（含「未分组」），多对多 | 一级结构位交给用户意图；代价是同一连接多组时需处理重复呈现（V6） |
+| 2 | **分组升为树一级**（含「未分组」），多对多 | 一级结构位交给用户意图；代价是同一连接多组时需处理重复呈现（V6 已解：主组全亮 + 引用行） |
 | 3 | 标签用**独立表**而非 JSON 字段 | `tag:x` 检索与统计需要索引；连接记录 `tags` 仅作兼容投影 |
 | 4 | **归属域短码常显为右对齐固定列** | 稳定对齐列比"忽隐忽现"更好扫视；代价是单一域场景下信息冗余（用开关兜底） |
 | 5 | **徽标双通道**（色=状态 / 形=类型） | 颜色给可操作性、形状给身份；代价是类型需形状 + 字母双编码以保证可学性 |
@@ -297,7 +321,7 @@ flowchart TD
 
 | # | 项 | 说明 |
 | --- | --- | --- |
-| 1 | **V6 多组引用样式 + 主组** | ✅ 已实现（2026-09-13）：主组全亮 + 其它组 `∈ 主组名` 引用行（`panels.rs::render_reference_row`），点击跳转主组；主组按 `membership[conn][0]`（分组排序）派生。**遗留**：显式「设为主组」需 `connection_group_members.is_primary` 新列或 `navigator_state`。 |
+| 1 | **V6 多组引用样式 + 显式主组** | ✅ 已实现（2026-09-13）：主组全亮 + 其它组 `∈ 主组名` 引用行（`panels.rs::render_reference_row`），点击跳转主组；主组由 `connection_group_members.is_primary` 显式存储（右键 `设为主组 ▸`，仅归组的连接可见），未指定回退分组排序最前（`membership[conn][0]`）。 |
 | 2 | **V7 `筛选 ▾` facet 弹层** | ✅ 已实现（2026-09-13）：归属域 chips 常驻 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签单选子菜单 + 清除）；搜索 `scope:/source:/type:/driver:/tag:` 作额外约束。**遗留**：搜索 token 与 chips **单向叠加**（不回写 chips），未做双向同步。 |
 | 3 | **徽标 hover 卡** | ✅ 已实现（2026-09-13）：0.6.1 无通用 `.tooltip()` 扩展，改用 `gpui_kit::component::hover_card::HoverCard`（300ms 延迟）显类型 / 状态 / 驱动（`nav_badge_hover_card`）。 |
 | 4 | **属性面板的驱动显示名** | ✅ 已实现（2026-09-13）：「驱动」行显示 `drivers.name · driver_id`（如 `PostgreSQL (Official) · postgres_native`），并新增「数据库类型」行（`load_properties(..., db_type)`）。 |

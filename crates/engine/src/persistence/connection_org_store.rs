@@ -109,11 +109,40 @@ impl ConnectionOrgStore {
                         group_id      TEXT NOT NULL,
                         connection_id TEXT NOT NULL,
                         sort_order    INTEGER NOT NULL DEFAULT 0,
+                        is_primary    INTEGER NOT NULL DEFAULT 0,
                         PRIMARY KEY (group_id, connection_id)
                     )",
                     [],
                 )
                 .map_err(|e| self.err("create_connection_group_members", e))?;
+            // 旧库（无 `is_primary` 列）幂等补列：与迁移执行顺序无关。
+            // 不落迁移的原因：项目库可能先被 `ensure_tables` 建表、后跑迁移，
+            // 普通 `ALTER TABLE ADD COLUMN` 无法条件化，冲会触发重复列错误。
+            self.ensure_member_primary_column()?;
+        }
+        Ok(())
+    }
+
+    /// 幂等确保 `connection_group_members.is_primary` 存在（老库补齐）。
+    fn ensure_member_primary_column(&self) -> Result<(), CoreError> {
+        let has = {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA table_info(connection_group_members)")
+                .map_err(|e| self.err("pragma_cgm", e))?;
+            let names = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(|e| self.err("pragma_cgm_rows", e))?;
+            names.filter_map(Result::ok).any(|n| n == "is_primary")
+        };
+        if !has {
+            self.conn
+                .execute(
+                    "ALTER TABLE connection_group_members
+                     ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )
+                .map_err(|e| self.err("alter_cgm_is_primary", e))?;
         }
         Ok(())
     }
@@ -321,6 +350,64 @@ impl ConnectionOrgStore {
         Ok(())
     }
 
+    /// 设置连接的**主组**（同一连接同时只能有一个主组）。
+    ///
+    /// 要求 `group_id` 已包含该连接（否则无行被置主，保持原状）；
+    /// 与树渲染的「主组全亮 + 其它组引用行」配套，详见原型设计 §2.2。
+    pub fn set_primary_group(&self, conn_id: &str, group_id: &str) -> Result<(), CoreError> {
+        if !self.is_project {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| self.err("begin_set_primary", e))?;
+        tx.execute(
+            "UPDATE connection_group_members SET is_primary = 0 WHERE connection_id = ?1",
+            params![conn_id],
+        )
+        .map_err(|e| self.err("clear_primary", e))?;
+        tx.execute(
+            "UPDATE connection_group_members SET is_primary = 1
+             WHERE connection_id = ?1 AND group_id = ?2",
+            params![conn_id, group_id],
+        )
+        .map_err(|e| self.err("set_primary", e))?;
+        tx.commit().map_err(|e| self.err("commit_set_primary", e))?;
+        Ok(())
+    }
+
+    /// 清除连接的主组标记（回退到「按分组排序推导」）。
+    pub fn clear_primary_group(&self, conn_id: &str) -> Result<(), CoreError> {
+        if !self.is_project {
+            return Ok(());
+        }
+        self.conn
+            .execute(
+                "UPDATE connection_group_members SET is_primary = 0 WHERE connection_id = ?1",
+                params![conn_id],
+            )
+            .map_err(|e| self.err("clear_primary_group", e))?;
+        Ok(())
+    }
+
+    /// 全部显式主组（连接 ID → 主组 ID）；未显式指定的连接不在结果中。
+    pub fn list_primary_group_pairs(&self) -> Vec<(String, String)> {
+        if !self.is_project {
+            return Vec::new();
+        }
+        let Ok(mut stmt) = self.conn.prepare(
+            "SELECT connection_id, group_id FROM connection_group_members
+             WHERE is_primary = 1",
+        ) else {
+            return Vec::new();
+        };
+        match stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+            Ok(iter) => iter.filter_map(Result::ok).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// 分组内成员（手动排序优先，未排按连接 ID）。
     pub fn list_group_members(&self, group_id: &str) -> Vec<String> {
         let Ok(mut stmt) = self.conn.prepare(
@@ -472,6 +559,46 @@ mod tests {
         // 全局库无分组表：调用为 no-op（不报错、不写入）。
         let global = ConnectionOrgStore::open_at(dir.join("g.db"), false).expect("open global");
         assert!(global.set_connection_groups("G_a", &["g1".into()]).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn primary_group_is_exclusive_and_falls_back() {
+        let dir = temp_dir("primary");
+        let store = ConnectionOrgStore::open_at(dir.join("p.db"), true).expect("open");
+        store.create_group("g1", "alpha", None).expect("g1");
+        store.create_group("g2", "beta", None).expect("g2");
+        store.add_member("g1", "P_a").expect("add g1");
+        store.add_member("g2", "P_a").expect("add g2");
+
+        // 默认无显式主组。
+        assert!(store.list_primary_group_pairs().is_empty());
+
+        // 设 g2 为主组：同一连接仅一行被置主（独占）。
+        store.set_primary_group("P_a", "g2").expect("set g2");
+        assert_eq!(
+            store.list_primary_group_pairs(),
+            vec![("P_a".to_string(), "g2".to_string())]
+        );
+
+        // 切到 g1：g2 被清除。
+        store.set_primary_group("P_a", "g1").expect("set g1");
+        assert_eq!(
+            store.list_primary_group_pairs(),
+            vec![("P_a".to_string(), "g1".to_string())]
+        );
+
+        // 设为不属于该连接的分组：不影响已有主组。
+        store
+            .set_primary_group("P_a", "g_missing")
+            .expect("set missing");
+        assert!(store.list_primary_group_pairs().is_empty());
+
+        // 显式清除：回到无主组。
+        store.set_primary_group("P_a", "g1").expect("set g1 again");
+        store.clear_primary_group("P_a").expect("clear");
+        assert!(store.list_primary_group_pairs().is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

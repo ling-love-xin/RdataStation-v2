@@ -188,7 +188,7 @@
 - 健康度 = `已连接/总数`，有失败时附加 `danger` 计数点——把状态**聚合到结构层**，省去逐行扫状态。
 - `全折叠`：一键折叠全部同层分组（分组多时刚需）；分组右键菜单亦有「折叠其他」。
 
-**多组重复呈现（v6，✅ 已实现 2026-09-13）**：同一连接属多个分组时，只在该连接的**主组**全亮呈现；其它组以**引用行**出现（`muted` 名称 + `∈ 主组名`，点击跳转到主组）。主组当前取分组排序最前的分组（`membership[conn][0]`）；显式「设为主组」仍待做。这样多对多不再线性撑高树。
+**多组重复呈现（v6，✅ 已实现 2026-09-13）**：同一连接属多个分组时，只在该连接的**主组**全亮呈现；其它组以**引用行**出现（`muted` 名称 + `∈ 主组名`，点击跳转到主组）。主组取**用户显式指定**（右键 `设为主组 ▸`，单选 + 「自动（按分组排序）」回退）；未指定时回退到分组排序最前的一个（`membership[conn][0]`）。这样多对多不再线性撑高树。
 
 **落库（新增后台表 / 字段）**
 
@@ -567,7 +567,7 @@ flowchart TD
 | 归属域右对齐固定列 + 标签行内显示 + 行内 `+`（v7） | ✅ `panels.rs::render_connection_row` + `settings::SettingsService::{show_scope, show_tags}`（`⋯` 开关，持久化） |
 | 筛选 facet 入口（类型 / 驱动 / 标签）（v7） | ✅ `panels.rs::{render_database_nav, build_facet_items, nav_facet_candidates, apply_facet, clear_nav_filters}` + `settings::model::NavigatorFilters`（`settings.json` 持久化）；搜索 token 解析 `parse_nav_search` |
 | 分组头健康度 / 全折叠（v6） | ✅ `panels.rs::{render_group_header, render_nav_tree}`（`已连接/总数` + 失败计数 + 全折叠） |
-| 多组引用样式 / 主组（v6） | ✅ `panels.rs::{render_nav_tree, render_connection_row, render_reference_row}`（主组全亮，其它组 `∈ 主组名` 引用行，点击跳主组）；主组按分组排序派生，显式「设为主组」待做 |
+| 多组引用样式 / 主组（v6） | ✅ `panels.rs::{render_nav_tree, render_connection_row, render_reference_row}`（主组全亮，其它组 `∈ 主组名` 引用行，点击跳主组）；主组显式指定走右键 `设为主组 ▸`（`ConnectionOrgStore::{set_primary_group, clear_primary_group, list_primary_group_pairs}`），未指定回退分组排序 |
 | 行操作悬停显隐（v6/v7） | ✅ `panels.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`；右键 + 键盘仍为全量入口） |
 | 属性面板（连接项类型 / 驱动友好名） | ✅ `crates/database/src/property_panel.rs::load_properties`（`db_type` 行）+ `navigator_service::load_properties` + `panels.rs::EditorPanel::render_property_panel` |
 | 分组 / 标签模型 | `crates/database/src/model.rs`（`ConnectionGroup` / `ConnectionTag` / `NavSource`） |
@@ -617,7 +617,7 @@ flowchart TD
 | 13 | **标签不冗余事实**（`type:` / `driver:` / `scope:` 不写入标签表，仅作隐式 facet） | ✅ v6 定为原则（§1.1 规则 2） |
 | 14 | **标签行内显示开关**（`⋯ → 显示标签`，默认关） | ✅ v7 已实现（2026-09-13） |
 | 15 | **筛选 ▾ facet 弹层 + 搜索 facet 语法** | ✅ v7 已实现（2026-09-13；facet 持久化 `settings.json`；搜索 token 作 AND 叠加） |
-| 16 | **显式「设为主组」** | ⬜ 待做（当前按分组排序派生，需 `is_primary` 列或 `navigator_state`） |
+| 16 | **显式「设为主组」** | ✅ v7 已实现（2026-09-13；右键 `设为主组 ▸` 单选 + 「自动」回退，落 `connection_group_members.is_primary`） |
 
 ## 12. 已确认决策（v5 / v6 / v7）
 
@@ -651,7 +651,7 @@ flowchart TD
 | 26 | **筛选入口（v7）** | 归属域 chips 常驻（唯一 facet）；类型 / 驱动 / 标签进「**筛选 ▾ N**」弹层（单选子菜单 + 清除）；`N` = 已生效附加项数 | v7 |
 | 27 | **facet 持久化（v7）** | facet 筛选进 `settings.json` 的 `Navigator::filters`（UI 偏好）；展开 / 选中仍走 `navigator_state` | v7 |
 | 28 | **搜索 facet 语法（v7）** | `scope:/source:/type:/driver:/tag:` 作**额外 AND 约束**与 chips 叠加，**不回写 chips**（避免输入框反馈环）；未识别 token 留自由文本 | v7 |
-| 29 | **多组引用（v7 实现）** | 主组按分组排序派生（`membership[conn][0]`）；显式「设为主组」后续再加列 | v7 |
+| 29 | **多组引用（v7 实现）** | 主组显式存储（`connection_group_members.is_primary`，右键 `设为主组 ▸` 单选 + 「自动」回退）；未指定回退分组排序 |v7 |
 
 ## 13. 已确认细节
 

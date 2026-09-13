@@ -159,12 +159,86 @@ impl SettingsView {
             ))
             .child(Self::row(
                 theme,
+                "建连超时",
+                self.connect_timeout_switcher(cx),
+            ))
+            .child(Self::row(theme, "LAN 直连 TLS", self.lan_tls_switcher(cx)))
+            .child(Self::row(
+                theme,
                 "查询超时",
                 self.value_text(
                     theme,
                     format!("{} ms", self.settings.connection_defaults.query_timeout_ms),
                 ),
             ))
+    }
+
+    /// 建连超时预设（毫秒）；超时后会自动重试一次。
+    fn connect_timeout_switcher(&self, cx: &Context<Self>) -> Div {
+        let current = self.settings.connection_defaults.connect_timeout_ms;
+        let presets: [(u64, &'static str, &'static str); 4] = [
+            (5_000, "5s", "conn-timeout-5"),
+            (15_000, "15s", "conn-timeout-15"),
+            (30_000, "30s", "conn-timeout-30"),
+            (60_000, "60s", "conn-timeout-60"),
+        ];
+        let mut row = div().h_flex().gap_1();
+        for (ms, label, id) in presets {
+            let entity = cx.entity();
+            row = row.child(
+                Button::new(id)
+                    .ghost()
+                    .toggled(current == ms)
+                    .size(rems(1.625))
+                    .label(label)
+                    .on_click(move |_, _, app| {
+                        SettingsService::set_connect_timeout_ms(ms, app);
+                        entity.update(app, |this, cx| {
+                            this.settings = SettingsService::get(cx);
+                            cx.notify();
+                        });
+                    }),
+            );
+        }
+        row
+    }
+
+    /// LAN / 本机直连是否显式关闭 TLS（公网 / 需要 TLS 时选「保留 TLS」）。
+    fn lan_tls_switcher(&self, cx: &Context<Self>) -> Div {
+        let on = self.settings.connection_defaults.lan_disable_tls;
+        let entity_off = cx.entity();
+        let entity_keep = entity_off.clone();
+        div()
+            .h_flex()
+            .gap_1()
+            .child(
+                Button::new("lan-tls-off")
+                    .ghost()
+                    .toggled(on)
+                    .size(rems(1.625))
+                    .label("关 TLS")
+                    .on_click(move |_, _, app| {
+                        SettingsService::set_lan_disable_tls(true, app);
+                        entity_off.update(app, |this, cx| {
+                            this.settings = SettingsService::get(cx);
+                            cx.notify();
+                        });
+                    }),
+            )
+            .child(
+                Button::new("lan-tls-keep")
+                    .ghost()
+                    .toggled(!on)
+                    .size(rems(1.625))
+                    .label("保留 TLS")
+                    .on_click(move |_, _, app| {
+                        SettingsService::set_lan_disable_tls(false, app);
+                        entity_keep.update(app, |this, cx| {
+                            this.settings = SettingsService::get(cx);
+                            cx.notify();
+                        });
+                    }),
+            )
     }
 
     /// 来源标识：短码 `P/G/GP` ⇄ 文字（项目 / 全局 / 共享）。

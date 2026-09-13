@@ -149,3 +149,63 @@ fn dialog_reopen_does_not_duplicate_dialog_layer(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.close_dialog(cx));
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
 }
+
+/// #28：结果行分级与详情入口（短消息只着色，长消息额外提供「详情 / 复制」）。
+#[gpui_kit::test]
+fn result_line_levels_and_detail_entry(cx: &mut TestAppContext) {
+    use rds_workbench::components::connection_dialog::{ResultLevel, ResultLine};
+
+    cx.update(gpui_kit::init);
+    let (harness, cx) = open_harness(cx);
+    cx.update(|window, cx| {
+        harness.update(cx, |h, cx| h.open(None, window, cx));
+    });
+    let dialog = cx.update(|_, cx| harness.read(cx).dialog(cx));
+
+    // 1) 短消息（Warning 级）：级别可读，但不渲染详情入口。
+    cx.update(|_, _cx| {
+        *dialog.result.borrow_mut() = Some(ResultLine::new(
+            ResultLevel::Warning,
+            "已保存：G_conn_demo（分组未同步：项目库不可写）",
+        ));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        cx.update(|_, _cx| dialog.result_level()),
+        Some(ResultLevel::Warning),
+        "级别应可读（UI 用它着色）"
+    );
+    assert!(
+        cx.debug_bounds("conn-result-copy").is_none(),
+        "短消息不应出现详情入口"
+    );
+
+    // 2) 长错误：出现「详情 / 复制」入口（完整原文可展开 / 可复制）。
+    let long = format!("保存失败: {}", "驱动拒绝连接；".repeat(12));
+    cx.update(|_, _cx| {
+        *dialog.result.borrow_mut() = Some(
+            ResultLine::new(ResultLevel::Error, long.clone()).with_detail(long.clone()),
+        );
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("conn-result-toggle").is_some(),
+        "长错误应提供展开入口"
+    );
+    assert!(
+        cx.debug_bounds("conn-result-copy").is_some(),
+        "长错误应提供复制入口"
+    );
+    assert!(
+        cx.debug_bounds("conn-result-detail").is_none(),
+        "未展开时不渲染详情正文"
+    );
+
+    // 3) 展开态：详情正文节点出现。
+    cx.update(|_, _cx| dialog.result_expanded.set(true));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("conn-result-detail").is_some(),
+        "展开后应渲染详情正文"
+    );
+}

@@ -818,7 +818,9 @@ fn global_delete_cleans_project_group_membership() {
     )
     .expect("open project org");
     project_org.create_group("g1", "alpha", None).expect("group");
-    service.set_connection_groups(&gid, &["g1".to_string()], Some(&root_str));
+    service
+        .set_connection_groups(&gid, &["g1".to_string()], Some(&root_str))
+        .expect("分组同步");
     assert_eq!(project_org.list_group_members("g1"), vec![gid.clone()]);
 
     // 删除全局连接（带项目根）→ 项目侧成员关系一并清理；分组定义保留。
@@ -829,6 +831,30 @@ fn global_delete_cleans_project_group_membership() {
         "项目侧不应残留幻影成员"
     );
     assert_eq!(project_org.list_groups().len(), 1, "分组定义应保留");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn group_sync_failure_is_reported_to_caller() {
+    // 回归点（#28）：分组写出失败以前只打日志（UI 看到的是“保存成功”，勾选静默丢失）；
+    // 现返回 Err，对话框据此把结果行降为 warning 级并带出原因。
+    let dir = temp_dir("group-sync-err");
+    let project_root = dir.join("proj-broken");
+    std::fs::create_dir_all(project_root.join(".RSmeta")).expect("mkdir .RSmeta");
+    // 项目库文件写垃圾字节：`open_at` 的 ensure_tables 会报「file is not a database」。
+    std::fs::write(
+        project_root.join(".RSmeta").join("project.db"),
+        b"not a sqlite database",
+    )
+    .expect("write garbage db");
+    let service = make_service(&dir);
+    let root_str = project_root.to_string_lossy().to_string();
+
+    let err = service
+        .set_connection_groups("P_x", &["g1".to_string()], Some(&root_str))
+        .expect_err("项目库不可用时应返回 Err（不再静默吞掉）");
+    assert!(!err.to_string().is_empty(), "错误应带原因，供结果行展示");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

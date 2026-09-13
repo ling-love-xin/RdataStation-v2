@@ -316,6 +316,9 @@ impl ConnectionService {
             &db_type,
         )
         .await?;
+        // 未配置 SSL 档案 + LAN / 本机 + sqlx 驱动：显式关闭 TLS（规避默认 `prefer` 握手卡顿）。
+        let effective_url =
+            Self::apply_lan_tls_default(effective_url, &db_type, network_method.as_ref());
 
         // 注册隧道守卫，确保隧道在连接生命周期内保持存活
         if !tunnel_guards.is_empty() {
@@ -333,15 +336,47 @@ impl ConnectionService {
             "即将创建数据库连接（URL凭据={}）",
             effective_url.contains('@')
         );
-        let db = match self
-            .create_database(&db_type, &effective_url, driver_properties.as_deref())
-            .await
-        {
-            Ok(db) => db,
-            Err(e) => {
-                // 隧道已登记但连接未建立：不回收会泄漏本地端口与后台任务
-                self.release_tunnels(&conn_id, "连接建立失败").await;
-                return Err(e);
+        // 建连超时可配（settings）+ 失败自动重试一次。
+        let defaults = settings::connection_defaults();
+        let timeout = std::time::Duration::from_millis(defaults.connect_timeout_ms.max(1_000));
+        let max_attempts: u32 = 2;
+        let mut attempt = 0u32;
+        let db = loop {
+            attempt += 1;
+            let created = tokio::time::timeout(
+                timeout,
+                self.create_database(&db_type, &effective_url, driver_properties.as_deref()),
+            )
+            .await;
+            match created {
+                Ok(Ok(db)) => break db,
+                Ok(Err(e)) => {
+                    if attempt < max_attempts {
+                        tracing::warn!(
+                            conn_id = %conn_id,
+                            attempt,
+                            error = %e,
+                            "建连失败，重试一次"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        continue;
+                    }
+                    // 隧道已登记但连接未建立：不回收会泄漏本地端口与后台任务
+                    self.release_tunnels(&conn_id, "连接建立失败").await;
+                    return Err(e);
+                }
+                Err(_elapsed) => {
+                    if attempt < max_attempts {
+                        tracing::warn!(conn_id = %conn_id, attempt, "建连超时，重试一次");
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        continue;
+                    }
+                    self.release_tunnels(&conn_id, "建连超时").await;
+                    return Err(CoreError::connection(ConnectionError::Timeout {
+                        conn_id: conn_id.clone(),
+                        duration_ms: defaults.connect_timeout_ms,
+                    }));
+                }
             }
         };
         let server_version = db.meta().server_version.clone();
@@ -778,6 +813,39 @@ impl ConnectionService {
         Ok((config, guards, notes))
     }
 
+    /// 未配置 SSL 档案 + LAN / 本机 + sqlx 驱动（`mysql` / `postgres`）时，
+    /// 在 URL 上显式关闭 TLS——规避 sqlx 默认 `sslmode=prefer` 在这些目标上的握手卡顿。
+    ///
+    /// 仅在「无网络方式或 `Direct`」时生效；SSH / 代理 / SSL 档案一律不动。
+    fn apply_lan_tls_default(
+        mut url: String,
+        db_type: &str,
+        network_method: Option<&ConnectionMethod>,
+    ) -> String {
+        let is_sqlx = matches!(db_type, "mysql" | "postgres");
+        if !is_sqlx || !settings::connection_defaults().lan_disable_tls {
+            return url;
+        }
+        let direct = match network_method {
+            None | Some(ConnectionMethod::Direct) => true,
+            _ => false,
+        };
+        if !direct || !is_lan_url(&url) {
+            return url;
+        }
+        let (key, param) = if db_type == "postgres" {
+            ("sslmode=", "sslmode=disable")
+        } else {
+            ("ssl-mode=", "ssl-mode=DISABLED")
+        };
+        if url.to_ascii_lowercase().contains(key) {
+            return url;
+        }
+        url.push(if url.contains('?') { '&' } else { '?' });
+        url.push_str(param);
+        url
+    }
+
     /// 根据数据库类型创建对应的数据库实例
     /// 通过 DataSourceRouter 路由到 DriverRegistry 动态创建
     async fn create_database(
@@ -1195,6 +1263,32 @@ impl ConnectionService {
 ///
 /// 只查询全局 network_configs 表（测试连接场景）
 /// 根据 config 中的 network_type 字段进行 JSON 反序列化
+/// URL 主机是否为 LAN / 本机（仅按 `localhost` 与 IP 字面量判定，不做 DNS 解析）。
+fn is_lan_url(url: &str) -> bool {
+    let Some(rest) = url.split("://").nth(1) else {
+        return false;
+    };
+    // 去掉 userinfo：`user:pass@host:port/...` → `host:port/...`（密码可能含 `@`，取最后一个）。
+    let host_port = rest.rsplit('@').next().unwrap_or(rest);
+    let host = if let Some(inner) = host_port.strip_prefix('[') {
+        inner.split(']').next().unwrap_or("")
+    } else {
+        host_port.split([':', '/', '?']).next().unwrap_or("")
+    };
+    let host = host.trim();
+    if host.is_empty() {
+        return false;
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback(),
+        Err(_) => false,
+    }
+}
+
 pub async fn resolve_network_method(
     network_config_id: Option<&str>,
 ) -> Result<Option<ConnectionMethod>, CoreError> {
@@ -1628,5 +1722,59 @@ mod tests {
             .err()
             .expect("引用了网络档案却没有连接方式时必须失败");
         assert!(err.to_string().contains("网络配置无法解析"), "{err}");
+    }
+
+    #[test]
+    fn lan_host_detection_covers_private_and_loopback() {
+        assert!(is_lan_url("mysql://root:pw@192.168.3.138:3306/db"));
+        assert!(is_lan_url("postgres://u:p@10.0.0.5:5432/db"));
+        assert!(is_lan_url("postgres://u:p@172.16.0.9/db"));
+        assert!(is_lan_url("postgres://u:p@localhost:5432/db"));
+        assert!(is_lan_url("postgres://u:p@[::1]:5432/db"));
+        // 公网 / 域名 / 文件库路径不是 LAN。
+        assert!(!is_lan_url("mysql://u:p@8.8.8.8:3306/db"));
+        assert!(!is_lan_url("postgres://u:p@db.example.com:5432/db"));
+        assert!(!is_lan_url("sqlite://D:\\data\\x.db"));
+    }
+
+    #[test]
+    fn lan_tls_default_only_touches_sqlx_direct_lan() {
+        let apply = |url: &str, db: &str| {
+            ConnectionService::apply_lan_tls_default(url.to_string(), db, None)
+        };
+
+        // sqlx + LAN：追加关闭 TLS 参数。
+        assert_eq!(
+            apply("mysql://root:pw@192.168.3.138:3306/mysql", "mysql"),
+            "mysql://root:pw@192.168.3.138:3306/mysql?ssl-mode=DISABLED"
+        );
+        assert_eq!(
+            apply("postgres://u:p@10.0.0.5:5432/db", "postgres"),
+            "postgres://u:p@10.0.0.5:5432/db?sslmode=disable"
+        );
+        // 已带 `?param=` 时用 `&` 追加。
+        assert_eq!(
+            apply(
+                "postgres://u:p@10.0.0.5:5432/db?application_name=x",
+                "postgres"
+            ),
+            "postgres://u:p@10.0.0.5:5432/db?application_name=x&sslmode=disable"
+        );
+        // 原生驱动 / 公网 / 已有同名参数：不动。
+        assert_eq!(
+            apply("postgres://u:p@10.0.0.5:5432/db", "postgres_native"),
+            "postgres://u:p@10.0.0.5:5432/db"
+        );
+        assert_eq!(
+            apply("mysql://u:p@8.8.8.8:3306/db", "mysql"),
+            "mysql://u:p@8.8.8.8:3306/db"
+        );
+        assert_eq!(
+            apply(
+                "postgres://u:p@10.0.0.5:5432/db?sslmode=require",
+                "postgres"
+            ),
+            "postgres://u:p@10.0.0.5:5432/db?sslmode=require"
+        );
     }
 }

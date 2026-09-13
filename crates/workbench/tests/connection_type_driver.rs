@@ -221,10 +221,14 @@ fn type_without_enabled_driver_is_refused(cx: &mut TestAppContext) {
         "拒绝选中后驱动下拉仍为空"
     );
     let msg = cx
-        .update(|_, _cx| dialog.result.borrow().clone())
+        .update(|_, _cx| dialog.result_summary())
         .unwrap_or_default();
     assert!(msg.contains("暂无可用驱动"), "应给出原因：{msg}");
-    assert!(!cx.update(|_, _cx| dialog.result_ok.get()), "提示应为失败态");
+    assert_eq!(
+        cx.update(|_, _cx| dialog.result_level()),
+        Some(rds_workbench::components::connection_dialog::ResultLevel::Error),
+        "提示应为失败级（#28 分级）"
+    );
 
     // 有可用驱动的类型仍可正常选中。
     cx.update(|window, cx| dialog.select_type("mysql", window, cx));

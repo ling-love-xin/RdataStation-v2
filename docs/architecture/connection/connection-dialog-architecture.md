@@ -429,6 +429,8 @@ flowchart LR
 | 79 | **网络档案凭据加密入库（§14 #34 关闭）**：`network_store::{encrypt_network_config, decrypt_network_config}`——写路径加密 `config` 内任意层级的 `password` / `passphrase`（覆盖 SSH 扁平字段、代理 `auth.password`、`chain` 数组内每跳；`AES:` 前缀幂等），读路径解密；`reencrypt_all_network_configs` 一次性迁移存量明文（`initialize_global_system` 调用，幂等、失败仅告警）；服务层 `list_network_configs` 改真脱敏（`config` 置空）+ 新增 `network_config_detail_by_name`（编辑回填）；项目库直查 SQL 路径（`project_query_network_config_with_auth`）补解密 | 网络档案的 SSH / 代理密码此前明文落库（`auth_store` 只加密 `auth_data`），库文件被复制 / 备份即泄露跳板机与代理凭据，与「凭据必须加密」约束冲突。直查 SQL 那条路径是集成测试拖出来的真实缺陷：加密后若不解密，隧道会拿 `AES:…` 当密码用 |
 | 80 | **暂存区只放未保存草稿**（用户决策）：`staging_merge_saved` → `staging_prune_saved`（不再从库并入已保存连接，只清理历史残留的 `saved_id` 条目）；保存成功后草稿**移出**暂存区（不再标记为“已保存条目”）+ 补空草稿；`staging_persist` / `staging_restore` 都过滤 `saved_id`（表里不留已保存条目）；保存成功文案改为「编辑请从导航栏进入」 | 旧设计把库中连接并入暂存区（决策 #26/#45，为“一个对话框连续编辑多条连接”）；真机反馈用户直接问「暂存的连接为什么可以读到数据库实际的连接」——「暂存 = 草稿」的心智模型更强，已保存连接统一从导航栏进入编辑（那里本来就有 ✎ 入口，也有删除入口） |
 | 81 | **跨项目引用计数 + 项目库存量迁移（#33 关闭 / #34 残留消除）**：① `DataSourceService::count_references_batch` 除全局库与当前项目外，还遍历**项目名册**（`GlobalDatabaseManager::get_all_projects`）里的其它项目库，`ReferenceCount` 增加 `other: Vec<String>`（记项目名、去重），拦截消息改为「全局 N 条、当前项目 N 条、其它项目 N 条（项目名…）」；② engine 新增 `network_store::reencrypt_project_network_configs(root)`（`{root}/.RSmeta/project.db`，库/表不存在即跳过、**不建目录不建表**），`initialize_global_system` 在全局库迁移之后遍历名册逐库迁移 | 此前删除守卫只统计「全局 + 当前打开项目」：删档案后打开另一个项目 → 那边的连接全部报「引用的认证配置不存在」且无从得知谁在用（#33）；项目库存量明文也不在启动迁移范围内（#34 残留）。两件事共用同一份「已知项目」来源（名册），一趟做完。代价：每次管理器刷新 / 删除前会打开 N 个项目库（N = 名册项目数，通常个位数） |
+| 82 | **结果行分级（`ResultLine` = 级别 + 摘要 + 可选详情）**：① 4 个级别 `ResultLevel::{Info, Success, Warning, Error}` 决定配色（`success` / `warning` / `danger` / `muted_foreground`）；② 唯一写入口 `set_result_ok(result, ok, summary)` / `set_result(result, level, summary)` 取代「写文本 + 设布尔」两步；③ 摘要 **> 80 字（按 `char` 计，非字节）或含换行** 时，行尾出现「详情 / 收起」+「复制」（复制走 `App::write_to_clipboard`，内容 = `detail_text()`），展开正文 `max_h(6rem)` + 纵向滚动；④ `result_ok: Cell<bool>` 字段删除（级别是单一事实来源），测试接缝改为 `result_level()` / `result_summary()`；⑤ **Warning 级有真实生产者**（否则分级就是装饰）：`DataSourceService::set_connection_groups` 由“只打日志”改为返回 `Result`，保存路径在分组未落库时把结果行降为 warning 级（「已保存：G_xxx（分组未同步：原因）」）；⑥ `detail: Option<String>` 是「短摘要 + 长诊断」的契约缝（当前生产路径无此形态：长诊断直接作为摘要、由长度阈值触发折叠，`detail_text()` 无详情时回退到摘要与复制内容） | 旧结果行只有「成功 / 失败」布尔 + 单行文本：真机排障时 SSH / 认证 / SQL 的长错误被压成一行，既看不到全文也复制不走。选“就地分级 + 详情”而不是 gpui-kit 的 `Alert` / `Notification`：后者需要重排 footer 层级并与对话框的遮罩 / 焦点栈对齐，收益不抵改动面（可后续叠在结果行之上） |
+| 83 | **窗口测试「节点是否真的渲染」只认 `debug_selector`**：结果行三个测试锚点（`conn-result-toggle` / `conn-result-copy` / `conn-result-detail`）在 `.id(...)` 之外补 `.debug_selector(...)`（非测试构建自动降为 no-op） | gpui 的 `VisualTestContext::debug_bounds` 读的是每帧 `debug_bounds` 表，而**只有 `Interactivity::debug_selector` 会往表里写**（`gpui-0.2.2/src/elements/div.rs` 的 paint 分支）——`.id(...)` 只登记元素状态，不登记坐标。本模块同款先例是 gpui-component `Root::render_dialog_layer` 的 `dialog-layer`。用 `.id` 写断言会得到“永远 None 的假绿”（短消息断言恰好恒真，长消息断言恒假） |
 
 
 ---
@@ -471,8 +473,9 @@ flowchart LR
 | 服务层 | `data_source_lifecycle.rs::network_profile_secrets_are_encrypted_and_masked_in_list`（#34） | 网络档案密码**密文落库**（直读原始列断言无明文 + 含 `AES:`）；服务层列表脱敏（`config` 置空）；`network_config_detail_by_name` 返回明文；**连接解析链路拿到明文**（覆盖项目库直查 SQL 路径的解密回归） |
 | 存储单测 | `engine::persistence::network_store`（内嵌 +1，项目库迁移） | `reencrypt_project_network_configs`：项目 / 库不存在 → 0 且**不建目录**；无 `network_configs` 表 → 0 且**不建表**；有明文 → 迁移 1 条且幂等 |
 | 服务层 | `data_source_lifecycle.rs::manager_reference_count_and_delete_guard`（扩展，#33） | 跨项目引用：登记第二个项目 + 其项目侧连接引用同一档案 → `other == ["另一项目"]`（每项目只计一次）；未打开任何项目时同样可见；拦截消息含「全局 1 条」与「其它项目 1 条（另一项目）」 |
+| 窗口 + 单测 | `connection_dialog_ui.rs::result_line_levels_and_detail_entry` + `helpers.rs`（内嵌 +1，#28） | 结果行分级：级别可读（`result_level()` 供 UI 着色）/ 短消息不渲染详情入口 / 长错误渲染「详情」+「复制」且未展开时不渲染正文 / 展开后正文节点出现；`result_needs_detail` 阈值按 **char** 计（80 字不折叠、81 字折叠）与换行判定；服务层 `data_source_lifecycle::group_sync_failure_is_reported_to_caller`（项目库不可用 → 返回 Err 带原因，供结果行降级展示） |
 
-约定：测试全部落临时目录、不触真实库；`#[gpui_kit::test]` 且**禁用通配导入**（避免 `#[test]` 宏遮蔽，见 gpui-kit-dev skill）。
+约定：测试全部落临时目录、不触真实库；`#[gpui_kit::test]` 且**禁用通配导入**（避免 `#[test]` 宏遮蔽，见 gpui-kit-dev skill）。窗口测试若要断言“节点真的进了元素树”，只能用 `cx.debug_bounds("<selector>")` + 目标节点上的 **`.debug_selector(...)`**：gpui 只登记 debug selector（`.id(...)` 不登记），非测试构建自动 no-op（决策 #83）。
 
 ---
 
@@ -533,6 +536,7 @@ flowchart LR
 | 49 | **网络档案凭据加密（§14 #34 关闭）**：写路径加密 `config` 内 `password` / `passphrase`（任意层级 + `chain` 数组）、读路径解密、存量明文一次性迁移、服务层列表真脱敏 + `network_config_detail_by_name`、项目库直查 SQL 路径补解密 | `engine/persistence/network_store.rs`、`engine/migration/global_init.rs`、`services/{data_source_service.rs,connection_service.rs}`、`connection_dialog/managers.rs`（决策 #79）；测试：engine 内嵌 +4、`data_source_lifecycle` +1 |
 | 50 | **暂存区只放未保存草稿（用户决策）**：移除「并入已保存连接」；保存后草稿移出暂存区（不再有“已保存条目”）；持久化 / 恢复都过滤 `saved_id`；保存成功文案改为「编辑请从导航栏进入」 | `connection_dialog/{staging.rs,render.rs}`、`tests/{connection_staging,connection_multi_save}.rs`（决策 #80）；回归：`connection_staging` 6 项 / `connection_multi_save` 3 项 / `connection_drafts_persist` 全绿 |
 | 51 | **跨项目引用计数 + 项目库存量迁移（#33 关闭 / #34 残留消除）**：引用计数遍历项目名册（`other: Vec<项目名>`，每项目只计一次）；拦截消息列出范围与项目名；`reencrypt_project_network_configs` + 启动时逐库迁移（不建目录 / 不建表） | `services/data_source_service.rs`、`engine/persistence/network_store.rs`、`engine/migration/global_init.rs`（决策 #81）；测试：engine +1、`data_source_lifecycle` 扩展 1 项 |
+| 52 | **结果行分级（§14 #28 关闭）**：`ResultLevel` + `ResultLine`（摘要 / 详情）、统一写入口 `set_result_ok` / `set_result`、长消息「详情 / 收起」+「复制」、详情限高内滚动；`result_ok` 布尔删除，测试接缝改 `result_level()` / `result_summary()`；三个测试锚点补 `debug_selector`；分组同步失败改由 warning 级结果行告知（`set_connection_groups` 返回 `Result`） | `connection_dialog/{mod,state,staging,render}.rs`、`helpers.rs`（`result_needs_detail` / `RESULT_SUMMARY_MAX_CHARS`）、`services/data_source_service.rs`（决策 #82 / #83）；测试：`helpers` 内嵌 +1、`connection_dialog_ui::result_line_levels_and_detail_entry`、`data_source_lifecycle::group_sync_failure_is_reported_to_caller`、`connection_type_driver` 改用级别断言 |
 
 
 后续可选（未做）：
@@ -630,7 +634,7 @@ flowchart LR
 | 测试连接失败 | 结果行红色 + 原因 | 不写库；协议链隧道回滚 |
 | 隧道建立后握手失败 | 连接报错 | `release_tunnels` 回收（本地端口 + 后台 accept） |
 | DuckDB Secret 注册失败 | 无提示（日志告警） | 不影响连接本身（加速为增强能力） |
-| 标签 / 分组同步失败 | 无提示（日志告警） | 不阻断保存 |
+| 标签 / 分组同步失败 | 标签：无提示（日志告警）；分组：结果行 **warning 级**（「已保存：…（分组未同步：原因）」） | 不阻断保存；分组这一步不再静默（#28） |
 | 草稿持久化失败 | 无提示（日志告警） | 内存草稿仍可用 |
 | 元数据（引用 / 类型 / 驱动）拉取失败 | 对应下拉为空 | 不阻断其他字段；下次打开重试 |
 | 未打开项目 + 项目作用域 | 保存被拦截并提示 | 引导改「仅全局」或先打开项目 |
@@ -678,7 +682,7 @@ flowchart LR
 | 交互设计 | 原型文档 + 可交互 HTML + 主题 token 映射 | 良 | 缺多分辨率 / 高 DPI 截图基线 |
 | 使用文档 | 用户指南 + USIT 清单（`connection-user-guide.md`） | 良 | 缺录屏 / 动图 |
 | 测试 | 单测 / 窗口测试 / 服务集成 / 真机用例；临时库隔离 | 良 | 缺 UI 图像回归、缺 fuzz / 属性测试 |
-| 错误处理 | 降级矩阵（§11）+ 结果行内联提示 | 中良 | 缺统一错误码与用户可复制的诊断号 |
+| 错误处理 | 降级矩阵（§11）+ 结果行分级与可复制详情 | 中良 | 缺统一错误码（诊断文本已可复制） |
 | 性能 | 一次性元数据、固定布局、写入量小 | 中 | 缺基准数据与大数据量（数千连接）验证 |
 | 可观测性 | 结构化日志 + 诊断接口 | 中 | 缺指标（metric）与面板 / 追踪 |
 | 安全 | 凭据加密、草稿无密码、Secret 隔离、日志脱敏 | 良 | 缺审计日志与凭据轮换策略 |
@@ -704,6 +708,13 @@ flowchart LR
 > **A5 轮（同日）**：#30 关闭（认证档案字段化 + 列表真脱敏）；新发现网络档案 `config` 内密码明文入库，登记为 #34。
 > **#34 轮（同日）**：#34 关闭（网络档案凭据加密 + 列表脱敏 + 存量迁移）；另按用户决策将暂存区改为**只放未保存草稿**（决策 #80）。
 > **#33 轮（同日）**：#33 关闭（引用计数覆盖项目名册）+ #34 残留消除（项目库存量明文启动时逐库迁移）；共用同一份「已知项目」来源，见决策 #81。
+> **#28 轮（2026-09-13）**：#28 关闭（结果行分级 + 详情 / 复制，见下段）；顺带补上「窗口测试如何断言节点真的渲染」的机制说明（`debug_selector` 而非 `.id`，见 §7 约定与决策 #83）。
+
+**已关闭（#28 轮，2026-09-13：结果行分级）**
+
+| # | 关闭方式 | 验证 |
+| --- | --- | --- |
+| 28（🟡） | **结果行只有成败不分级**：新增 `ResultLine { level, summary, detail }`（`ResultLevel::{Info,Success,Warning,Error}`）+ 统一写入口 `set_result_ok` / `set_result`；渲染按级别着色（`success` / `warning` / `danger` / `muted_foreground`）；摘要 **> 80 字（按 char 计）或含换行** → 行尾出现「详情 / 收起」与「复制」（`App::write_to_clipboard`），展开正文 `max_h(6rem)` 内滚动；「测试中…」为 Info 级；`result_ok: bool` 字段删除（级别即单一事实来源），测试接缝为 `result_level()` / `result_summary()`；**Warning 级有真实生产者**：`set_connection_groups` 返回 `Result`，分组未落库时保存仍成功但结果行降为 warning（带原因） | `connection_dialog_ui::result_line_levels_and_detail_entry`（短消息无入口 / 长错误两入口 / 未展开无正文 / 展开有正文）、`helpers::result_detail_needed_only_for_long_or_multiline_summaries`、`data_source_lifecycle::group_sync_failure_is_reported_to_caller`、`connection_type_driver`（级别 + 摘要断言） |
 
 **已关闭（#33 轮，2026-09-12：跨项目引用与存量迁移）**
 
@@ -802,7 +813,7 @@ flowchart LR
 | 25 | ⚪→✅ | ~~内联协议链仍是占位（`Hop` 无主机 / 凭据字段，不参与执行）~~（**已关闭**：整块 UI 撤下，多跳改走 `chain` 档案；初始状态里的两条假跳数据一并移除，见决策 #72） | — | 后续如需“可视化多跳编辑器”，应在**档案侧**做（复用 `chain` 的 `ChainHop` 模型与 `network_field_specs` 思路），不在连接表单里做 |
 | 26 | 🔴→✅ | ~~测试连接与真实连接不同源（忽略认证 / 网络档案）~~（**已关闭**：抽唯一组装点 `build_probe_config`，`connect` 与测试共用；详见上方 A1 轮已关闭段） | — | — |
 | 27 | 🟡→✅ | ~~档案引用完整性缺失~~（**部分关闭**：引用计数 + 删除拦截 + 档案缺失显式报错；残留「跨项目全量引用扫描」见 #33） | — | — |
-| 28 | 🟡 | **结果行只有成败不分级**：保存 / 测试 / 同步的反馈都是单行文本（成功与失败仅 `result_ok` 布尔），长消息被截断、无“复制详情” | 真机排障时拿不到完整原因（网络 / 认证 / SQL 错误混在一行） | 结果行分级（info / warning / error）+ 可展开详情 + 复制；可用 gpui-kit 的 `Alert` / `Notification` 组件 |
+| 28 | 🟡→✅ | ~~结果行只有成败不分级~~（**已关闭**：`ResultLine` 分级 + 详情 / 复制，见上方「已关闭（#28 轮）」段与决策 #82） | — | — |
 | 29 | ⚪ | **首次使用引导缺失**：新用户打开对话框看到类型树 / 暂存 / 档案引用，但没有“从哪开始”的引导（原型 §4 流程未在 UI 内体现） | 学习成本高（需读用户指南） | 空态引导（无连接 / 首启）+ 类型树 hover 说明；不引外链 |
 | 30 | ⚪→✅ | ~~`auth_configs.auth_data` 仍是裸 JSON 文本~~（**已关闭**：字段化组装 / 校验 / 回填纯函数 + 管理器按类型展开字段 + 列表真脱敏，见 A5 已关闭段） | — | — |
 | 31 | ⚪ | **标签双源未收敛**：连接行 `tags` JSON 与权威检索表 `connection_tags` 并存（写入时同步，读取侧仍有两路） | 同步失败仅告警 → 长期存在漂移风险 | 明确单一权威（建议表），连接行 JSON 降级为兼容投影并标记后续移除 |
@@ -849,7 +860,7 @@ flowchart LR
 | 连接设置卡（网络型：主机/端口/数据库） | 从当前 URI 输入解析（用户输入派生）；**行的存在性与标签取 `drivers.config_schema.fields[]`**（未声明则不出该行；schema 为空才回退内置三行）；字段**可编辑**，改动经 `rebuild_url_from_fields` 回写 URI（反向：URI → 字段） | ✅ |
 | 连接设置卡（文件型：地址） | 用户选择/输入的文件路径；系统选择器返回真实路径（新建时才创建空文件） | ✅ |
 | 地址标签与输入占位 | 标签固定（文件型 = 地址 / 网络型 = URI，按用户要求不被 schema 覆盖）；网络型占位取 `drivers.url_template` + `default_port`（文件型走类型文案字典）；文件型地址行**占位**优先取 `config_schema` 的 `type=file` 字段 `placeholder` | ✅ |
-| 结果行提示（保存 / 测试 / 同步） | 服务层真实返回（`DataSourceService::{save,update,test}` 等） | ✅ |
+| 结果行提示（保存 / 测试 / 同步） | 服务层真实返回（`DataSourceService::{save,update,test}` 等）；UI 只做**级别归类与展示**（`ResultLine`），短消息原样一行，长消息 / 多行折叠为「详情」，**正文与复制内容都是服务层原文**（不截断、不改写、不补全） | ✅（#28：此前只有成败布尔 + 单行文本） |
 | 测试连接结果（版本 / 延迟 / 范围说明） | 真实探测（`DataSourceService::test`）：认证档案凭据**从库读取并解密**后注入、网络档案**真实建隧道**、驱动属性 / 高级选项来自连接字段与库；范围说明（「已应用认证档案凭据 / 已建立网络档案隧道 / 档案缺失」）由服务层返回，UI 只拼接展示 | ✅（A1：此前档案被静默忽略） |
 | 模板导入导出（能力就绪） | 草稿快照（库 + 会话状态），不含密码 | ✅（UI 入口待接） |
 | 驱动安装 `/install` | 占位错误（“待后续版本”） | ⚠️ 诚实地报不可用，**不造假数据** |

@@ -102,6 +102,95 @@ pub use project_picker::{
 pub(crate) use staging::saved_scope_short;
 pub use staging::ConnectionDraft;
 
+/// 结果行级别（决定配色与是否有详情入口）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultLevel {
+    /// 中性提示（进行中 / 状态说明）
+    Info,
+    /// 操作成功
+    Success,
+    /// 部分成功 / 需要注意（成功但有降级）
+    Warning,
+    /// 失败
+    Error,
+}
+
+impl ResultLevel {
+    /// 二元结果 → 级别（兼容旧式「成功 / 失败」调用）。
+    pub fn from_ok(ok: bool) -> Self {
+        if ok {
+            Self::Success
+        } else {
+            Self::Error
+        }
+    }
+
+    pub fn is_error(self) -> bool {
+        matches!(self, Self::Error)
+    }
+}
+
+/// 结果行内容：级别 + 摘要 + 可选详情。
+///
+/// 摘要用于一行展示；详情（如测试连接的完整错误原文）在点击「详情」时展开，可复制。
+/// `detail` 为空时展开回退到摘要本身（过长摘要也能完整查看）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultLine {
+    pub level: ResultLevel,
+    pub summary: String,
+    pub detail: Option<String>,
+}
+
+impl ResultLine {
+    pub fn new(level: ResultLevel, summary: impl Into<String>) -> Self {
+        Self {
+            level,
+            summary: summary.into(),
+            detail: None,
+        }
+    }
+
+    /// 附带详情（完整错误 / 服务端原文）。
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        if !detail.trim().is_empty() && detail != self.summary {
+            self.detail = Some(detail);
+        }
+        self
+    }
+
+    /// 展开时显示的文本（无详情时回退到摘要）。
+    pub fn detail_text(&self) -> &str {
+        self.detail.as_deref().unwrap_or(self.summary.as_str())
+    }
+}
+
+impl std::fmt::Display for ResultLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.summary)
+    }
+}
+
+/// 写结果行（成功 / 失败二元；级别由此推导）。
+///
+/// 统一入口：此前调用点是「写 `result` + 设 `result_ok`」两步，容易漏其中一个。
+pub(crate) fn set_result_ok(
+    result: &Rc<RefCell<Option<ResultLine>>>,
+    ok: bool,
+    summary: impl Into<String>,
+) {
+    *result.borrow_mut() = Some(ResultLine::new(ResultLevel::from_ok(ok), summary));
+}
+
+/// 写结果行（显式分级：`Info` 用于「进行中」提示，`Warning` 用于“成功但有降级”）。
+pub(crate) fn set_result(
+    result: &Rc<RefCell<Option<ResultLine>>>,
+    level: ResultLevel,
+    summary: impl Into<String>,
+) {
+    *result.borrow_mut() = Some(ResultLine::new(level, summary));
+}
+
 /// 管理器列表条目：名称 + 被引用计数（原型 §3.6 要求显示引用计数）。
 #[derive(Clone, Debug)]
 pub struct ManagerItem {
@@ -155,8 +244,10 @@ pub struct ConnectionDialogState {
     pub drivers: Rc<RefCell<Vec<Driver>>>,
     /// 当前选中的数据源类型（type_id；侧栏选中态 + 条目类型徽标 + 驱动过滤）。
     pub selected_type: Rc<RefCell<String>>,
-    pub result: Rc<RefCell<Option<String>>>,
-    pub result_ok: Rc<Cell<bool>>,
+    /// 结果行（分级 + 摘要 + 可选详情；`None` = 无提示）。
+    pub result: Rc<RefCell<Option<ResultLine>>>,
+    /// 结果行详情是否展开（过长摘要 / 有详情时才渲染入口）。
+    pub result_expanded: Rc<Cell<bool>>,
     // ---- Phase B ----
     pub remark: Entity<InputState>,
     /// 0 常规 / 1 网络 / 2 能力 / 3 驱动属性 / 4 高级。

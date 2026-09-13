@@ -7,6 +7,7 @@
 //! 主题切换即时生效：`Theme::change(mode, window, cx)` + 写回磁盘。
 
 use std::path::PathBuf;
+use std::sync::RwLock;
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::App;
@@ -16,7 +17,29 @@ pub mod model;
 pub mod product_tokens;
 pub mod settings_view;
 
-use crate::model::{NavigatorFilters, Settings};
+use crate::model::{ConnectionDefaults, NavigatorFilters, Settings};
+
+/// 进程级连接默认值快照：供**无 `App` 的异步连接路径**（`ConnectionService`）读取。
+///
+/// 由 `save_settings` / `SettingsService::init` 发布：async 上下文拿不到 GPUI global，
+/// 但又需要「建连超时 / LAN 关 TLS」这两个参数。
+static CONNECTION_DEFAULTS: RwLock<Option<ConnectionDefaults>> = RwLock::new(None);
+
+/// 读取连接默认值（未发布时回退模型默认）。
+pub fn connection_defaults() -> ConnectionDefaults {
+    CONNECTION_DEFAULTS
+        .read()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default()
+}
+
+/// 发布连接默认值快照（内部使用；`save_settings` / `init` 调用）。
+fn publish_connection_defaults(defaults: &ConnectionDefaults) {
+    if let Ok(mut guard) = CONNECTION_DEFAULTS.write() {
+        *guard = Some(defaults.clone());
+    }
+}
 
 /// 用户配置目录：`%APPDATA%/RdataStation`。
 pub fn config_dir() -> PathBuf {
@@ -50,6 +73,7 @@ pub fn save_settings(settings: &Settings) {
             let _ = std::fs::write(settings_path(), text);
         }
     }
+    publish_connection_defaults(&settings.connection_defaults);
 }
 
 /// 设置服务：加载、读取、修改（含主题即时切换）。
@@ -59,7 +83,9 @@ impl SettingsService {
     /// 启动时调用：加载磁盘配置并注册为 global。
     pub fn init(cx: &mut App) {
         if !cx.has_global::<Settings>() {
-            cx.set_global(load_settings());
+            let settings = load_settings();
+            publish_connection_defaults(&settings.connection_defaults);
+            cx.set_global(settings);
         }
     }
 
@@ -176,6 +202,38 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         save_settings(&settings);
         cx.refresh_windows();
+    }
+
+    /// 建连超时（毫秒）。
+    pub fn connect_timeout_ms(cx: &App) -> u64 {
+        cx.global::<Settings>()
+            .connection_defaults
+            .connect_timeout_ms
+    }
+
+    /// 设置并持久化建连超时（毫秒）。
+    pub fn set_connect_timeout_ms(ms: u64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.connection_defaults.connect_timeout_ms = ms;
+        }
+        let settings = cx.global::<Settings>().clone();
+        save_settings(&settings);
+    }
+
+    /// LAN / 本机直连是否显式关闭 TLS。
+    pub fn lan_disable_tls(cx: &App) -> bool {
+        cx.global::<Settings>().connection_defaults.lan_disable_tls
+    }
+
+    /// 设置并持久化「LAN 直连关闭 TLS」。
+    pub fn set_lan_disable_tls(on: bool, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.connection_defaults.lan_disable_tls = on;
+        }
+        let settings = cx.global::<Settings>().clone();
+        save_settings(&settings);
     }
 
     /// 设置并持久化属性面板宽度（rem 倍率）。

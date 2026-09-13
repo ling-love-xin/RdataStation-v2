@@ -1,6 +1,16 @@
 use super::*;
 
 impl ConnectionDialogState {
+    /// 当前结果行级别（无提示 → `None`；UI 与测试共用）。
+    pub fn result_level(&self) -> Option<ResultLevel> {
+        self.result.borrow().as_ref().map(|l| l.level)
+    }
+
+    /// 当前结果行摘要（无提示 → `None`）。
+    pub fn result_summary(&self) -> Option<String> {
+        self.result.borrow().as_ref().map(|l| l.summary.clone())
+    }
+
     /// 懒创建全部受控状态（window 参与 InputState / SelectState 构造）。
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
         // 驱动下拉初始为空：数据库类型在左侧栏选定后，选项才按类型填充（实现短名）。
@@ -49,7 +59,7 @@ impl ConnectionDialogState {
             drivers: Rc::new(RefCell::new(Vec::new())),
             selected_type: Rc::new(RefCell::new(String::new())),
             result: Rc::new(RefCell::new(None)),
-            result_ok: Rc::new(Cell::new(true)),
+            result_expanded: Rc::new(Cell::new(false)),
             remark,
             active_tab: Rc::new(Cell::new(0)),
             env: cx.new(|cx| {
@@ -488,7 +498,6 @@ impl ConnectionDialogState {
     ) {
         let target = self.url.clone();
         let result = self.result.clone();
-        let result_ok = self.result_ok.clone();
         // 默认目录：当前地址的父目录（已有值时），否则工作目录。
         let current = target.read(cx).value().to_string();
         let start_dir = std::path::Path::new(current.trim())
@@ -521,7 +530,7 @@ impl ConnectionDialogState {
                         Ok(Err(e)) => (format!("新建文件对话框失败：{e}"), false, None),
                         Err(_) => ("新建文件对话框无响应".to_string(), false, None),
                     };
-                    apply_file_pick(&target, &result, &result_ok, value, message, ok, &entity, cx);
+                    apply_file_pick(&target, &result, value, message, ok, &entity, cx);
                 })
                 .detach();
         } else {
@@ -546,7 +555,7 @@ impl ConnectionDialogState {
                         Err(_) => ("打开文件对话框无响应".to_string(), false, None),
                     };
                     apply_file_pick(
-                        &target, &result, &result_ok, value, message, ok, &entity, cx,
+                        &target, &result, value, message, ok, &entity, cx,
                     );
                 })
                 .detach();
@@ -567,10 +576,14 @@ impl ConnectionDialogState {
                 .find(|t| t.id == type_id)
                 .map(|t| t.name.clone())
                 .unwrap_or_else(|| type_id.to_string());
-            *self.result.borrow_mut() = Some(format!(
-                "「{name}」暂无可用驱动：当前版本只内置 MySQL / PostgreSQL / SQLite / DuckDB，其余类型待驱动插件能力开放"
-            ));
-            self.result_ok.set(false);
+            *self.result.borrow_mut() = Some(
+                ResultLine::new(
+                    ResultLevel::Error,
+                    format!(
+                        "「{name}」暂无可用驱动：当前版本只内置 MySQL / PostgreSQL / SQLite / DuckDB，其余类型待驱动插件能力开放"
+                    ),
+                ),
+            );
             return;
         }
         *self.selected_type.borrow_mut() = type_id.to_string();
@@ -1144,8 +1157,7 @@ impl ClonedDialogState {
 /// `set_value` 需要窗口句柄，故统一在 `cx.update` 内完成。
 fn apply_file_pick(
     target: &Entity<InputState>,
-    result: &Rc<RefCell<Option<String>>>,
-    result_ok: &Rc<Cell<bool>>,
+    result: &Rc<RefCell<Option<ResultLine>>>,
     value: Option<String>,
     message: String,
     ok: bool,
@@ -1156,8 +1168,7 @@ fn apply_file_pick(
         if let Some(value) = value {
             target.update(cx, |s, cx| s.set_value(value, window, cx));
         }
-        *result.borrow_mut() = Some(message);
-        result_ok.set(ok);
+        set_result_ok(result, ok, message);
         entity.update(cx, |_, cx| cx.notify());
     });
 }

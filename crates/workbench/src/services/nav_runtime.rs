@@ -8,6 +8,7 @@
 //! - 标签：读写连接组织存储 `engine::persistence::ConnectionOrgStore`（连接域数据，非视图状态）。
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use connection::model::DataSource;
 use database::model::NavState;
@@ -18,6 +19,26 @@ use crate::services::connection_service::{
 };
 use crate::services::data_source_service::DataSourceService;
 use crate::services::nav_store::NavStore;
+
+/// 进程级桥接运行时：`nav_runtime` 的同步入口用它把异步调用落地。
+///
+/// **必须进程级共享**：sqlx / 原生驱动的连接池建立在首次 `connect` 的那个运行时上，
+/// 池的后台任务（连接 I/O、`min_connections` 维持、生命周期回收）随该运行时存活。
+/// 若每次调用都 `Runtime::new()` 再丢弃，池会随运行时空转而**永久不可用**——
+/// 表现为「点连接看似成功，但对象树 / 预热全部挂起（无法连接）」。
+static BRIDGE_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+/// 取（或首次创建）进程级桥接运行时。
+fn bridge_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
+    if let Some(rt) = BRIDGE_RUNTIME.get() {
+        return Ok(rt);
+    }
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+    let _ = BRIDGE_RUNTIME.set(rt);
+    BRIDGE_RUNTIME
+        .get()
+        .ok_or_else(|| "运行时初始化失败".to_string())
+}
 
 /// 解析导航树入口的连接记录（项目侧 `P_`/`GP_` 只存项目库，必须带项目根）。
 pub fn load_entry(conn_id: &str, project_path: Option<&str>) -> Result<DataSource, String> {
@@ -33,7 +54,7 @@ pub fn load_entry_with(
     conn_id: &str,
     project_path: Option<&str>,
 ) -> Result<DataSource, String> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+    let rt = bridge_runtime()?;
     rt.block_on(service.get_with_project(conn_id, project_path))
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "数据源不存在".to_string())
@@ -45,7 +66,7 @@ pub fn connect_entry(conn_id: &str, project_path: Option<&str>) -> Result<(), St
 
     let ds = load_entry_with(&service, conn_id, project_path)?;
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+    let rt = bridge_runtime()?;
     // 引用的网络配置档案（协议链 / SSH / 代理 / SSL）→ `ConnectionMethod`。
     // 此前恒为 None：对话框里配好的跳板机 / 代理在连接时被静默忽略（审计 #20）。
     let network_method = rt
@@ -106,7 +127,7 @@ pub fn build_connect_request(
 
 /// 断开运行时连接（保留元数据缓存）。
 pub fn disconnect_entry(conn_id: &str) -> Result<(), String> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+    let rt = bridge_runtime()?;
     let conn_service = ConnectionService::new(engine::get_connection_manager().clone());
     rt.block_on(conn_service.close_connection(conn_id))
         .map_err(|e| e.to_string())
@@ -114,9 +135,8 @@ pub fn disconnect_entry(conn_id: &str) -> Result<(), String> {
 
 /// 运行时是否已连接。
 pub fn is_connected(conn_id: &str) -> bool {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(_) => return false,
+    let Ok(rt) = bridge_runtime() else {
+        return false;
     };
     rt.block_on(engine::get_connection_manager().has_connection(&conn_id.to_string()))
 }
@@ -319,4 +339,33 @@ pub fn remove_from_group(
 ) -> Result<(), String> {
     let store = open_org_project(project_root)?;
     store.remove_member(group_id, conn_id).map_err(|e| e.to_string())
+}
+
+/// 显式主组映射（连接 ID → 主组 ID；仅显式指定过的连接）。
+pub fn list_primary_groups(
+    project_root: Option<&Path>,
+) -> std::collections::HashMap<String, String> {
+    open_org_project(project_root)
+        .map(|s| s.list_primary_group_pairs().into_iter().collect())
+        .unwrap_or_default()
+}
+
+/// 设置连接的主组（同一连接同时只能有一个）。
+pub fn set_primary_group(
+    project_root: Option<&Path>,
+    conn_id: &str,
+    group_id: &str,
+) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    store
+        .set_primary_group(conn_id, group_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 清除主组标记（回退到按分组排序推导）。
+pub fn clear_primary_group(project_root: Option<&Path>, conn_id: &str) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    store
+        .clear_primary_group(conn_id)
+        .map_err(|e| e.to_string())
 }

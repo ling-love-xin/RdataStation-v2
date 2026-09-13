@@ -498,8 +498,8 @@ impl ConnectionDialogState {
         self.draft_cursor.set(idx);
         self.apply_draft(idx, window, cx);
         self.staging_persist();
-        *self.result.borrow_mut() = Some("已新建草稿（填好后保存）".to_string());
-        self.result_ok.set(true);
+        // 中性提示（非“成功”）：新建草稿是过程状态，着色用 Info（#28 分级）。
+        set_result(&self.result, ResultLevel::Info, "已新建草稿（填好后保存）");
     }
 
     /// 暂存列表：切换条目（规则 1：先写回当前，再载入目标）。
@@ -518,8 +518,7 @@ impl ConnectionDialogState {
             .get(idx)
             .map(|d| d.display_name())
             .unwrap_or_default();
-        *self.result.borrow_mut() = Some(format!("已载入条目「{label}」"));
-        self.result_ok.set(true);
+        set_result(&self.result, ResultLevel::Info, format!("已载入条目「{label}」"));
         self.draft_cursor.set(idx);
         self.apply_draft(idx, window, cx);
         self.staging_persist();
@@ -730,8 +729,11 @@ impl ConnectionDialogState {
         }
         self.draft_cursor.set(0);
         // 恢复来源提示：说明字段为何是“上次会话”的值（区别于当前新建）。
-        *self.result.borrow_mut() = Some(format!("已恢复上次暂存的草稿（{} 条）", rows.len()));
-        self.result_ok.set(true);
+        set_result(
+            &self.result,
+            ResultLevel::Info,
+            format!("已恢复上次暂存的草稿（{} 条）", rows.len()),
+        );
         self.apply_draft(0, window, cx);
     }
 

@@ -336,6 +336,8 @@ struct DatabaseNavView {
     membership: HashMap<String, Vec<String>>,
     /// 分组 ID → 组内连接 ID（按手动排序优先，未排按连接 ID）。
     group_order: HashMap<String, Vec<String>>,
+    /// 连接 ID → **显式主组** ID（仅用户显式指定过的连接；缺省回退到分组排序推导）。
+    primary_group: HashMap<String, String>,
     /// 类别文件夹节点 key → 已渲染条数上限（大 schema 客户端分页）。
     page_limit: HashMap<String, usize>,
     /// 连接 ID → 标签列表（一次读库缓存，避免渲染期逐条查询）。
@@ -1876,11 +1878,20 @@ impl SidebarPanel {
 
         // 搜索框 facet 语法（`scope:` / `type:` / `driver:` / `tag:`）作为额外约束叠加。
         let search_facets = self.database_nav.borrow().search_facets.clone();
+        // 显式主组（连接 ID → 分组 ID）。
+        let primary_explicit = self.database_nav.borrow().primary_group.clone();
 
-        // 主组派生：连接在其所属分组中排序最靠前的一个（`membership` 按分组排序构建）。
+        // 主组：用户**显式指定**优先；未指定时回退到分组排序最靠前的一个
+        // （`membership` 按分组排序构建）。显式值若已不在所属分组（被移出）则忽略。
         // 主组用于「多组只全亮呈现一次，其余组以引用行出现」。
         let primary_gid = |conn_id: &str| -> Option<String> {
-            membership.get(conn_id).and_then(|gs| gs.first().cloned())
+            let groups_of = membership.get(conn_id)?;
+            if let Some(p) = primary_explicit.get(conn_id) {
+                if groups_of.iter().any(|g| g == p) {
+                    return Some(p.clone());
+                }
+            }
+            groups_of.first().cloned()
         };
 
         // 单条连接是否通过归属域 chips、附加 facet（类型 / 驱动 / 标签）与搜索词（连接名 / 标签）。
@@ -2678,6 +2689,31 @@ impl SidebarPanel {
         // 徽标 tooltip 材料（接入 `Tooltip` 组件前，事实统一在属性面板展示）。
         let _ = (&driver_name, danger);
 
+        // 「设为主组」子菜单数据（仅归组的连接出现）：所属分组 + 当前主组 + 是否显式。
+        let (menu_groups, menu_primary, menu_primary_explicit) = {
+            let view = self.database_nav.borrow();
+            let gids = view.membership.get(&conn.id).cloned().unwrap_or_default();
+            let explicit = view
+                .primary_group
+                .get(&conn.id)
+                .filter(|p| gids.iter().any(|g| g == *p))
+                .cloned();
+            let primary = explicit.clone().or_else(|| gids.first().cloned());
+            let names: Vec<(String, String)> = gids
+                .iter()
+                .map(|gid| {
+                    let name = view
+                        .groups
+                        .iter()
+                        .find(|g| &g.id == gid)
+                        .map(|g| g.name.clone())
+                        .unwrap_or_else(|| gid.clone());
+                    (gid.clone(), name)
+                })
+                .collect();
+            (names, primary, explicit.is_some())
+        };
+
         let mut block = div().v_flex().w_full();
         block = block.child(
             div()
@@ -2786,7 +2822,7 @@ impl SidebarPanel {
                         kind: PropertyKind::Connection,
                     };
                     let is_connected = connected;
-                    move |menu, _window, _cx| {
+                    move |menu, window, cx| {
                         let e_connect = entity.clone();
                         let cid_connect = conn_id.clone();
                         let root_connect = root.clone();
@@ -2804,48 +2840,110 @@ impl SidebarPanel {
                         let e_refresh = entity.clone();
                         let cid_refresh = conn_id.clone();
                         let name_refresh = conn_name.clone();
-                        menu.item(
-                            PopupMenuItem::new(if is_connected { "断开" } else { "连接" })
-                                .on_click(move |_, _, app| {
-                                    let cid = cid_connect.clone();
-                                    let root = root_connect.clone();
-                                    e_connect.update(app, |this, cx| {
-                                        this.toggle_connection(&cid, root.as_deref(), cx)
-                                    });
-                                }),
-                        )
-                        .item(PopupMenuItem::new("编辑连接…").on_click(move |_, _, app| {
-                            let cid = cid_edit.clone();
-                            e_edit.update(app, |this, cx| {
-                                *this.shared.open_edit.borrow_mut() = Some(cid.clone());
-                                cx.emit(SidebarEvent::EditConnection(cid.clone()));
-                            });
-                        }))
-                        .separator()
-                        .item(PopupMenuItem::new("查看属性").on_click(move |_, _, app| {
-                            let prop = prop_own.clone();
-                            let label = label_prop.clone();
-                            let drv = drv_prop.clone();
-                            e_prop.update(app, |this, cx| {
-                                *this.shared.property_target.borrow_mut() = Some(PropertyRequest {
-                                    property: prop.clone(),
-                                    conn_label: label.clone(),
-                                    driver: drv.clone(),
+                        let mut menu = menu
+                            .item(
+                                PopupMenuItem::new(if is_connected { "断开" } else { "连接" })
+                                    .on_click(move |_, _, app| {
+                                        let cid = cid_connect.clone();
+                                        let root = root_connect.clone();
+                                        e_connect.update(app, |this, cx| {
+                                            this.toggle_connection(&cid, root.as_deref(), cx)
+                                        });
+                                    }),
+                            )
+                            .item(PopupMenuItem::new("编辑连接…").on_click(move |_, _, app| {
+                                let cid = cid_edit.clone();
+                                e_edit.update(app, |this, cx| {
+                                    *this.shared.open_edit.borrow_mut() = Some(cid.clone());
+                                    cx.emit(SidebarEvent::EditConnection(cid.clone()));
                                 });
-                                cx.notify();
-                            });
-                        }))
-                        .item(
-                            PopupMenuItem::new("分组 / 标签…").on_click(move |_, _, app| {
-                                let cid = cid_org.clone();
-                                e_org.update(app, |this, cx| {
-                                    this.database_nav.borrow_mut().group_picker_for =
-                                        Some(cid.clone());
+                            }))
+                            .separator()
+                            .item(PopupMenuItem::new("查看属性").on_click(move |_, _, app| {
+                                let prop = prop_own.clone();
+                                let label = label_prop.clone();
+                                let drv = drv_prop.clone();
+                                e_prop.update(app, |this, cx| {
+                                    *this.shared.property_target.borrow_mut() =
+                                        Some(PropertyRequest {
+                                            property: prop.clone(),
+                                            conn_label: label.clone(),
+                                            driver: drv.clone(),
+                                        });
                                     cx.notify();
                                 });
-                            }),
-                        )
-                        .item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
+                            }))
+                            .item(
+                                PopupMenuItem::new("分组 / 标签…").on_click(move |_, _, app| {
+                                    let cid = cid_org.clone();
+                                    e_org.update(app, |this, cx| {
+                                        this.database_nav.borrow_mut().group_picker_for =
+                                            Some(cid.clone());
+                                        cx.notify();
+                                    });
+                                }),
+                            );
+                        // 「设为主组 ▸」：仅在该连接已归组时出现（单选 + 「自动」回退）。
+                        if !menu_groups.is_empty() {
+                            let e_p = entity.clone();
+                            let root_p = root.clone();
+                            let cid_p = conn_id.clone();
+                            let groups_for = menu_groups.clone();
+                            let cur = menu_primary.clone();
+                            let explicit = menu_primary_explicit;
+                            menu = menu.submenu("设为主组", window, cx, move |m, _w, _c| {
+                                let mut m = m.item(
+                                    PopupMenuItem::new("自动（按分组排序）")
+                                        .checked(!explicit)
+                                        .on_click({
+                                            let e = e_p.clone();
+                                            let root = root_p.clone();
+                                            let cid = cid_p.clone();
+                                            move |_, _, app| {
+                                                let root = root.clone();
+                                                let cid = cid.clone();
+                                                let root = root.as_deref().map(std::path::Path::new);
+                                                e.update(app, |this, cx| {
+                                                    let _ = crate::services::nav_runtime::clear_primary_group(
+                                                        root,
+                                                        &cid,
+                                                    );
+                                                    this.reload_nav_org();
+                                                    cx.notify();
+                                                });
+                                            }
+                                        }),
+                                );
+                                for (gid, gname) in groups_for.clone() {
+                                    let checked = cur.as_deref() == Some(gid.as_str());
+                                    let e = e_p.clone();
+                                    let root = root_p.clone();
+                                    let cid = cid_p.clone();
+                                    m = m.item(
+                                        PopupMenuItem::new(gname).checked(checked).on_click(
+                                            move |_, _, app| {
+                                                let gid = gid.clone();
+                                                let root = root.clone();
+                                                let cid = cid.clone();
+                                                let root = root.as_deref().map(std::path::Path::new);
+                                                e.update(app, |this, cx| {
+                                                    let _ =
+                                                        crate::services::nav_runtime::set_primary_group(
+                                                            root,
+                                                            &cid,
+                                                            &gid,
+                                                        );
+                                                    this.reload_nav_org();
+                                                    cx.notify();
+                                                });
+                                            },
+                                        ),
+                                    );
+                                }
+                                m
+                            });
+                        }
+                        menu.item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
                             let name = name_copy.clone();
                             app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
                             *shared_copy.notice.borrow_mut() = Some(format!("已复制：{name}"));
@@ -3664,12 +3762,14 @@ impl SidebarPanel {
             group_order.insert(group.id.clone(), ids);
         }
         let tags = crate::services::nav_runtime::list_all_tags(root.as_deref());
+        let primary_group = crate::services::nav_runtime::list_primary_groups(root.as_deref());
         let driver_catalog = crate::services::nav_runtime::driver_catalog();
         *self.shared.driver_catalog.borrow_mut() = driver_catalog;
         let mut view = self.database_nav.borrow_mut();
         view.groups = groups;
         view.membership = membership;
         view.group_order = group_order;
+        view.primary_group = primary_group;
         view.tags = tags;
         view.groups_loaded = true;
     }
