@@ -224,6 +224,11 @@ pub struct SidebarPanel {
     /// 当前标签输入框对应的连接 ID（切换连接时重建并重新预填）。
     nav_tag_input_for: Option<String>,
     _nav_tag_sub: Option<Subscription>,
+    /// 行内「复制为模板」输入框（打开时创建，关闭时销毁）。
+    nav_copy_input: Option<Entity<InputState>>,
+    /// 当前复制输入框对应的连接 ID（切换连接时重建）。
+    nav_copy_input_for: Option<String>,
+    _nav_copy_sub: Option<Subscription>,
     /// 分组名内联重命名输入框（重命名时创建，关闭时销毁）。
     nav_group_input: Option<Entity<InputState>>,
     _nav_group_sub: Option<Subscription>,
@@ -786,6 +791,8 @@ struct DatabaseNavView {
     group_picker_for: Option<String>,
     /// 正在内联编辑**标签**的连接 ID（None = 未打开；`+` 专用）。
     tag_editor_for: Option<String>,
+    /// 正在内联「复制为模板」的连接 ID（None = 未打开）。
+    copy_for: Option<String>,
     /// 正在内联重命名的分组 ID（None = 未打开）。
     group_rename_for: Option<String>,
     /// 已发起列预取（C2）的类别文件夹 key（避免重复排队）。
@@ -1135,6 +1142,9 @@ impl SidebarPanel {
             nav_tag_input: None,
             nav_tag_input_for: None,
             _nav_tag_sub: None,
+            nav_copy_input: None,
+            nav_copy_input_for: None,
+            _nav_copy_sub: None,
             nav_group_input: None,
             _nav_group_sub: None,
             nav_order: Rc::new(RefCell::new(Vec::new())),
@@ -1966,6 +1976,45 @@ impl SidebarPanel {
                 self.nav_tag_input = None;
                 self.nav_tag_input_for = None;
                 self._nav_tag_sub = None;
+            }
+        }
+
+        // 连接行内「复制为模板」输入框：打开时创建并预填「原名 副本」，关闭时销毁。
+        let copy_for = self.database_nav.borrow().copy_for.clone();
+        match &copy_for {
+            Some(conn_id) => {
+                let stale = self.nav_copy_input.is_none()
+                    || self.nav_copy_input_for.as_deref() != Some(conn_id.as_str());
+                if stale {
+                    let base = self
+                        .shared
+                        .connections
+                        .borrow()
+                        .iter()
+                        .find(|c| c.id == *conn_id)
+                        .map(|c| c.name.clone())
+                        .unwrap_or_else(|| conn_id.clone());
+                    let input =
+                        cx.new(|cx| InputState::new(window, cx).placeholder("新连接名称"));
+                    input.update(cx, |s, cx| s.set_value(format!("{base} 副本"), window, cx));
+                    let sub = cx.subscribe_in(
+                        &input,
+                        window,
+                        |this, _e, ev: &InputEvent, _w, cx| match ev {
+                            InputEvent::Change => cx.notify(),
+                            InputEvent::PressEnter { .. } => this.commit_copy_connection(cx),
+                            _ => {}
+                        },
+                    );
+                    self.nav_copy_input = Some(input);
+                    self.nav_copy_input_for = Some(conn_id.clone());
+                    self._nav_copy_sub = Some(sub);
+                }
+            }
+            None => {
+                self.nav_copy_input = None;
+                self.nav_copy_input_for = None;
+                self._nav_copy_sub = None;
             }
         }
 
@@ -3717,6 +3766,91 @@ impl SidebarPanel {
                                 m
                             });
                         }
+                        // 复制（模板）/ 共享 / 删除：连接自身的管理动作。
+                        // 共享快照（GP_）本身即副本，不提供复制。
+                        if source != NavSource::Shared {
+                            let e = entity.clone();
+                            let cid = conn_id.clone();
+                            menu = menu.separator().item(
+                                PopupMenuItem::new("复制连接（模板）…").on_click(
+                                    move |_, _, app| {
+                                        let cid = cid.clone();
+                                        e.update(app, |this, cx| {
+                                            this.database_nav.borrow_mut().copy_for =
+                                                Some(cid.clone());
+                                            cx.notify();
+                                        });
+                                    },
+                                ),
+                            );
+                        }
+                        if source == NavSource::Global {
+                            let e = entity.clone();
+                            let cid = conn_id.clone();
+                            let name = conn_name.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new("共享至项目").on_click(move |_, _, app| {
+                                    let cid = cid.clone();
+                                    let name = name.clone();
+                                    e.update(app, |this, cx| {
+                                        this.share_connection_to_project(&cid, &name, cx)
+                                    });
+                                }),
+                            );
+                        }
+                        if source == NavSource::Shared {
+                            let e = entity.clone();
+                            let cid = conn_id.clone();
+                            let name = conn_name.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new("取消共享").on_click(move |_, _, app| {
+                                    let cid = cid.clone();
+                                    let name = name.clone();
+                                    e.update(app, |this, cx| {
+                                        this.unshare_connection_from_project(&cid, &name, cx)
+                                    });
+                                }),
+                            );
+                        }
+                        {
+                            let e = entity.clone();
+                            let cid = conn_id.clone();
+                            let name = conn_name.clone();
+                            menu = menu.separator().item(
+                                PopupMenuItem::new("删除连接").on_click(move |_, window, app| {
+                                    let e = e.clone();
+                                    let cid = cid.clone();
+                                    let name = name.clone();
+                                    window.open_alert_dialog(app, move |alert, _window, _cx| {
+                                        let e = e.clone();
+                                        let cid = cid.clone();
+                                        // 内层 `on_ok` 是 move 闭包：先在外层建一份新绑定，
+                                        // 否则会把外层闭包环境里的 `name` 移出（E0507）。
+                                        let name_for_ok = name.clone();
+                                        alert
+                                            .confirm()
+                                            .title("删除连接")
+                                            .description(format!(
+                                                "确定删除连接「{name}」？元数据缓存会保留（可在「缓存管理」清理）。"
+                                            ))
+                                            .button_props(
+                                                DialogButtonProps::default()
+                                                    .ok_text("删除")
+                                                    .ok_variant(ButtonVariant::Danger)
+                                                    .show_cancel(true),
+                                            )
+                                            .on_ok(move |_, _window, app| {
+                                                let cid = cid.clone();
+                                                let name = name_for_ok.clone();
+                                                e.update(app, |this, cx| {
+                                                    this.delete_connection(&cid, &name, cx)
+                                                });
+                                                true
+                                            })
+                                    });
+                                }),
+                            );
+                        }
                         menu.item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
                             let name = name_copy.clone();
                             app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
@@ -3792,6 +3926,10 @@ impl SidebarPanel {
             self.database_nav.borrow().tag_editor_for.as_deref() == Some(conn.id.as_str());
         if tag_open {
             block = block.child(self.render_tag_editor(cx));
+        }
+        let copy_open = self.database_nav.borrow().copy_for.as_deref() == Some(conn.id.as_str());
+        if copy_open {
+            block = block.child(self.render_copy_editor(cx));
         }
 
         // 展开但未连接（如上次会话遗留的展开态）：不报错，给明下一步指引。
@@ -4016,6 +4154,46 @@ impl SidebarPanel {
             panel = panel.child(Input::new(input));
         }
         panel
+    }
+
+    /// 行内「复制为模板」编辑器（右键「复制连接（模板）…」打开）：输入新名，回车提交。
+    fn render_copy_editor(&self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let border = cx.theme().colors.border;
+        let bg = cx.theme().colors.popover;
+        let entity = cx.entity();
+        let mut panel = div()
+            .v_flex()
+            .w_full()
+            .ml_6()
+            .mr_1()
+            .mb_1()
+            .p_2()
+            .gap_1()
+            .rounded_md()
+            .border_1()
+            .border_color(border)
+            .bg(bg)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("复制为模板（不带密码；回车提交）"),
+            );
+        if let Some(input) = &self.nav_copy_input {
+            panel = panel.child(Input::new(input));
+        }
+        panel.child(
+            div().h_flex().justify_end().w_full().child(
+                Button::new("nav-copy-cancel")
+                    .ghost()
+                    .small()
+                    .label("取消")
+                    .on_click(move |_, _, app| {
+                        entity.update(app, |this, cx| this.cancel_copy_connection(cx));
+                    }),
+            ),
+        )
     }
 
     /// 对象树节点行（懒加载；叶子不可展开）。
@@ -4849,6 +5027,140 @@ impl SidebarPanel {
                 *self.shared.notice.borrow_mut() = Some("分组已删除（成员连接保留）".to_string());
             }
             Err(e) => *self.shared.notice.borrow_mut() = Some(format!("删除分组失败: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// 提交行内「复制为模板」：成功后重载连接列表，并提示新名（不含密码）。
+    fn commit_copy_connection(&mut self, cx: &mut Context<Self>) {
+        let Some(from_id) = self.database_nav.borrow().copy_for.clone() else {
+            return;
+        };
+        let Some(input) = self.nav_copy_input.clone() else {
+            return;
+        };
+        let new_name = input.read(cx).value().trim().to_string();
+        if new_name.is_empty() {
+            return;
+        }
+        let root = self.project_root().map(|p| p.to_string_lossy().to_string());
+        let result = (|| -> Result<(), String> {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+            let service = crate::services::data_source_service::DataSourceService::global()
+                .map_err(|e| e.to_string())?;
+            rt.block_on(service.duplicate_as_template(&from_id, root.as_deref(), &new_name))
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })();
+        self.database_nav.borrow_mut().copy_for = None;
+        match result {
+            Ok(()) => {
+                self.reload_connections(cx);
+                *self.shared.notice.borrow_mut() =
+                    Some(format!("已复制为模板：「{new_name}」（不含密码）"));
+            }
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("复制失败：{e}")),
+        }
+        cx.notify();
+    }
+
+    /// 取消行内「复制为模板」。
+    fn cancel_copy_connection(&mut self, cx: &mut Context<Self>) {
+        self.database_nav.borrow_mut().copy_for = None;
+        cx.notify();
+    }
+
+    /// 共享至当前项目（`G_` → 项目侧 `GP_` 快照）。
+    fn share_connection_to_project(&mut self, conn_id: &str, name: &str, cx: &mut Context<Self>) {
+        let Some(root) = self.project_root().map(|p| p.to_string_lossy().to_string()) else {
+            *self.shared.notice.borrow_mut() = Some("未打开项目：无法共享".to_string());
+            cx.notify();
+            return;
+        };
+        let result = (|| -> Result<(), String> {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+            let service = crate::services::data_source_service::DataSourceService::global()
+                .map_err(|e| e.to_string())?;
+            rt.block_on(service.share_to_project(conn_id, &root))
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })();
+        match result {
+            Ok(()) => {
+                self.reload_connections(cx);
+                *self.shared.notice.borrow_mut() = Some(format!("「{name}」已共享至当前项目"));
+            }
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("共享失败：{e}")),
+        }
+        cx.notify();
+    }
+
+    /// 取消共享：删除项目侧 `GP_` 快照（全局定义保留）。
+    fn unshare_connection_from_project(
+        &mut self,
+        conn_id: &str,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let root = self.project_root().map(|p| p.to_string_lossy().to_string());
+        let result = (|| -> Result<(), String> {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+            let service = crate::services::data_source_service::DataSourceService::global()
+                .map_err(|e| e.to_string())?;
+            rt.block_on(service.delete(conn_id, root.as_deref()))
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })();
+        match result {
+            Ok(()) => {
+                crate::services::nav_runtime::disconnect_entry(conn_id).ok();
+                self.reload_connections(cx);
+                *self.shared.notice.borrow_mut() =
+                    Some(format!("已取消共享：「{name}」（全局定义保留）"));
+            }
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("取消共享失败：{e}")),
+        }
+        cx.notify();
+    }
+
+    /// 删除连接（物理删除；元数据缓存保留）。
+    fn delete_connection(&mut self, conn_id: &str, name: &str, cx: &mut Context<Self>) {
+        let root = self.project_root().map(|p| p.to_string_lossy().to_string());
+        let result = (|| -> Result<String, String> {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+            let service = crate::services::data_source_service::DataSourceService::global()
+                .map_err(|e| e.to_string())?;
+            let r = rt
+                .block_on(service.delete(conn_id, root.as_deref()))
+                .map_err(|e| e.to_string())?;
+            Ok(r.message)
+        })();
+        // 运行时连接一并断开（缓存保留，可在「缓存管理」清理）。
+        crate::services::nav_runtime::disconnect_entry(conn_id).ok();
+        match result {
+            Ok(msg) => {
+                self.reload_connections(cx);
+                *self.shared.notice.borrow_mut() = Some(format!("「{name}」：{msg}"));
+            }
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("删除连接失败：{e}")),
+        }
+        cx.notify();
+    }
+
+    /// 重载当前作用域可见连接（增 / 删 / 共享后调用）。
+    fn reload_connections(&mut self, cx: &mut Context<Self>) {
+        let root = self.project_root();
+        let (items, notice) =
+            crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
+        let len = items.len();
+        *self.shared.connections.borrow_mut() = items;
+        if len == 0 {
+            self.shared.selected.set(None);
+        } else if self.shared.selected.get().is_some_and(|i| i >= len) {
+            self.shared.selected.set(Some(0));
+        }
+        if let Some(n) = notice {
+            *self.shared.notice.borrow_mut() = Some(n);
         }
         cx.notify();
     }

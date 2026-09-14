@@ -805,6 +805,199 @@ impl DataSourceService {
         })
     }
 
+    // ==================== 复制模板 / 共享 ====================
+
+    /// 同名检查（**全局库 + 当前项目**可见集合，大小写不敏感）。
+    ///
+    /// `save` 只在全局侧做同名拦截；项目侧（`P_`）此前无拦截，复制/新建时会静默出现两条同名。
+    async fn ensure_name_available_scoped(
+        &self,
+        name: &str,
+        project_path: Option<&str>,
+        exclude_id: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let wanted = name.trim().to_lowercase();
+        let mut taken: Vec<String> = self
+            .global_db
+            .get_global_connections(None, None)
+            .await?
+            .into_iter()
+            .filter(|c| Some(c.id.as_str()) != exclude_id)
+            .map(|c| c.name)
+            .collect();
+        if let Some(path) = project_path.filter(|p| !p.trim().is_empty() && is_project_root(p)) {
+            let store = open_project_store(path).await?;
+            for c in store.get_all_connections().await? {
+                if Some(c.id.as_str()) != exclude_id {
+                    taken.push(c.name);
+                }
+            }
+        }
+        if taken.iter().any(|n| n.trim().to_lowercase() == wanted) {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                format!("连接名称「{}」已存在，请更换名称", name.trim()),
+            )));
+        }
+        Ok(())
+    }
+
+    /// 复制为「模板」连接：拷贝配置字段与**引用关系**，但**不带明文凭据**（密码丢弃）。
+    ///
+    /// - 全局源（`G_`）→ 新建全局连接；项目源（`P_`）→ 新建项目连接；
+    /// - 共享快照（`GP_`）不支持复制（先「取消共享」再复制源连接）；
+    /// - 新名与全局 / 当前项目任一可见连接同名直接报错。
+    pub async fn duplicate_as_template(
+        &self,
+        conn_id: &str,
+        project_path: Option<&str>,
+        new_name: &str,
+    ) -> Result<String, CoreError> {
+        let new_name = new_name.trim();
+        if new_name.is_empty() {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                "连接名称不能为空".to_string(),
+            )));
+        }
+        if id_prefix::is_snapshot(conn_id) {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                "共享连接不支持复制，请先「取消共享」后复制源连接".to_string(),
+            )));
+        }
+        let ds = self
+            .get_with_project(conn_id, project_path)
+            .await?
+            .ok_or_else(|| {
+                CoreError::common(shared::error::CommonError::General(format!(
+                    "连接不存在：{conn_id}"
+                )))
+            })?;
+        self.ensure_name_available_scoped(new_name, project_path, None)
+            .await?;
+
+        // `build_connection_url` 会**解密并内联密码**（供真实连接用）。模板必须去掉凭据：
+        // 先清空密文再组装 URL，否则保存时又会从 URL 里把密码解析回去（实测踩到）。
+        let mut ds_no_pwd = ds.clone();
+        ds_no_pwd.password_encrypted = None;
+        let url = connection::url::build_connection_url(&ds_no_pwd)
+            .map_err(|e| CoreError::common(shared::error::CommonError::General(e)))?;
+        let scope = if id_prefix::is_global(conn_id) {
+            ConnectionScope::Global
+        } else {
+            ConnectionScope::Project
+        };
+        let input = DataSourceSaveInput {
+            name: new_name.to_string(),
+            db_type: ds.db_type.clone(),
+            url,
+            // 保留登录名（非秘密、已在 URL 中可读），只丢弃密码：模板可安全外传。
+            username: ds.username.clone(),
+            password: None,
+            scope,
+            description: ds.description.clone(),
+            driver_id: ds.driver_id.clone(),
+            environment_id: ds.environment_id.clone(),
+            auth_config_id: ds.auth_config_id.clone(),
+            auth_method: ds.auth_method.clone(),
+            network_config_id: ds.network_config_id.clone(),
+            driver_properties: ds.driver_properties.clone(),
+            advanced_options: ds.advanced_options.clone(),
+            options: ds.options.clone(),
+            tags: ds.tags.clone(),
+            use_duckdb_fed: Some(ds.use_duckdb_fed),
+            schema_name: ds.schema_name.clone(),
+            metadata_path: ds.metadata_path.clone(),
+        };
+        let new_id = self.save(&input, project_path).await?;
+        tracing::info!(
+            target: "data_source_service",
+            from = %conn_id,
+            to = %new_id,
+            "已复制为模板连接"
+        );
+        Ok(new_id)
+    }
+
+    /// 共享至当前项目：为全局连接（`G_`）在项目侧创建 `GP_` 快照（独立副本，含凭据密文）。
+    ///
+    /// 快照 ID 由 `G_` 确定性推导（`id_prefix::to_snapshot_id`），因此重复共享会被识别；
+    /// 后续全局侧变更不会自动跟随，需显式 [`Self::sync_snapshot_from_global`]。
+    pub async fn share_to_project(
+        &self,
+        conn_id: &str,
+        project_path: &str,
+    ) -> Result<String, CoreError> {
+        if project_path.trim().is_empty() {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                "未打开项目：共享需要项目路径（.RSmeta）".to_string(),
+            )));
+        }
+        ensure_project_root(project_path)?;
+        if !id_prefix::is_global(conn_id) {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                "仅全局连接（G_）支持共享至项目".to_string(),
+            )));
+        }
+        let Some(pid) = id_prefix::to_snapshot_id(conn_id) else {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                "无法由当前连接 ID 推导共享快照 ID".to_string(),
+            )));
+        };
+        let Some(src) = self.get_global(conn_id).await? else {
+            return Err(CoreError::common(shared::error::CommonError::General(
+                format!("全局定义 {conn_id} 不存在（可能已被删除），无法共享"),
+            )));
+        };
+        let store = open_project_store(project_path).await?;
+        // 已共享判定：按项目侧快照的**来源全局 id** 匹配，而不是只比当天的快照 id——
+        // `to_snapshot_id` 带日期，跳天再共享会得到不同 id，仅按当天 id 判重会漏。
+        for existing in store.get_all_connections().await? {
+            if id_prefix::source_global_id(&existing.id).as_deref() == Some(conn_id) {
+                return Err(CoreError::common(shared::error::CommonError::General(
+                    format!("「{}」已共享至当前项目", src.name),
+                )));
+            }
+        }
+        let now = chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        let row = ProjectConnection {
+            id: pid.clone(),
+            name: src.name.clone(),
+            driver: src.db_type.clone(),
+            host: src.host.clone(),
+            port: src.port.map(|p| p as i32),
+            database: src.database.clone(),
+            schema_name: src.schema_name.clone(),
+            username: src.username.clone(),
+            password_encrypted: src.password_encrypted.clone(),
+            options: src.options.clone(),
+            tags: src.tags.clone(),
+            use_duckdb_fed: src.use_duckdb_fed,
+            metadata_path: src.metadata_path.clone(),
+            is_active: true,
+            server_version: src.server_version.clone(),
+            description: src.description.clone(),
+            driver_id: src.driver_id.clone(),
+            environment_id: src.environment_id.clone(),
+            auth_config_id: src.auth_config_id.clone(),
+            auth_method: src.auth_method.clone(),
+            network_config_id: src.network_config_id.clone(),
+            driver_properties: src.driver_properties.clone(),
+            advanced_options: src.advanced_options.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        store.create_connection(&row).await?;
+        sync_connection_tags(self.global_db, &pid, src.tags.as_deref(), Some(project_path));
+        tracing::info!(
+            target: "data_source_service",
+            global_id = %conn_id,
+            snapshot_id = %pid,
+            "已共享至当前项目"
+        );
+        Ok(pid)
+    }
+
     // ==================== 测试连接 ====================
 
     /// 测试连接（独立会话：构建 DriverConnectionConfig → engine connection_probe）。

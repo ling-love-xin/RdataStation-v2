@@ -97,7 +97,7 @@
 
 | 节点 | 菜单项 |
 | --- | --- |
-| 连接 | 连接 / 断开 · **测试连接** · 编辑连接… · 查看属性 · 移动到分组… · 设为主组 ▸ · 复制名称 · 刷新元数据 · **通用项** |
+| 连接 | 连接 / 断开 · **测试连接** · 编辑连接… · 查看属性 · 移动到分组… · 设为主组 ▸ · **复制连接（模板）…** · **共享至项目**（仅 `G_`）/ **取消共享**（仅 `GP_`） · **删除连接**（二次确认） · 复制名称 · 刷新元数据 · **通用项** |
 | 表 / 视图 | 查看属性 · 查看数据（`SELECT * … LIMIT 200` 注入编辑区） · **生成 SQL ▸**（INSERT / UPDATE / DELETE） · 复制名称 · 复制限定名 · 刷新元数据 · **通用项** · **生成 Mock 数据**（表 / 视图专属） |
 | 其他对象（列 / Catalog / Schema / 文件夹 / 例程 / 序列 / 触发器） | 查看属性 · 复制名称（*限定名仅在有 catalog/schema 时出现*） · 刷新元数据（*仅可展开节点*） · **通用项** |
 | 分组头 | 重命名分组（行内输入） · 新建分组 · 删除分组（`AlertDialog` 二次确认）；「未分组」仅「新建分组」 |
@@ -107,7 +107,6 @@
 
 **B7 待办（后续阶段）**
 
-- 复制连接（模板，无明文凭据）、共享至项目 / 取消共享、删除连接（导航侧入口 + 二次确认）；
 - 拖拽表到编辑器插入限定名（需 `on_drag`）。
 - 连接右键「查看洞察」与各节点右键「生成 Mock 数据」目前仅切换到右 Dock 占位面板（M7 / M8 待实现）；「在 SQL 编辑器中打开」仅选中连接 + 聚焦编辑区（SQL 可执行区目前受 `use_duckdb_fed` 限制）。
 
@@ -179,6 +178,11 @@
 - **导航侧「测试连接」与「生成 SQL ▸」（2026-09-14）**：
   - 测试连接：新增 `DataSourceService::test_saved`（回读记录 → 组装 `DataSourceSaveInput`（密文列解密）→ 走既有 `test`，与对话框同源）与 `nav_runtime::test_entry`；结果由导航后台任务回传，落面板提示（成功含版本 / 耗时）。
   - 生成 SQL：新增 `database::sql_gen`（纯函数 `dml_template` / `qualified_name` + 7 个单测）与 `nav_jobs::{enqueue_generate_dml, enqueue_test_connection}`；列由后台任务取（导航同一套 cache-aside，命中 L2 不发查询），生成后注入编辑区、**不自动执行**；`UPDATE` / `DELETE` 的 `WHERE` 取主键，无主键退化为 `WHERE 1 = 0` 并附注释。
+- **连接右键：复制模板 / 共享 / 取消共享 / 删除（2026-09-14）**：
+  - `DataSourceService::{duplicate_as_template, share_to_project}` + 作用域同名检查 `ensure_name_available_scoped`（全局 + 当前项目，大小写不敏感——`save` 原先只拦全局侧）；UI 侧新增行内「复制为模板」输入器（`nav_copy_input`）与导航侧删除二次确认（`AlertDialog`）。
+  - **踩坑**：`connection::url::build_connection_url` 会**解密并内联密码**（供真实连接用），模板直接用它会导致「无密码」失效（保存时又从 URL 解析回密码）——改为先清空 `password_encrypted` 再组装 URL。
+  - 「已共享」判定按**来源全局 id** 匹配（`id_prefix::source_global_id`）而非当天快照 id：`to_snapshot_id` 带日期，跳天再共享会得到不同 id → 会漏判。
+  - 实测（真实数据，跑完完全回滚）：复制 `G_real_pg` → `G_conn_zz_tmp_src_pg`（用户名保留、密码为空）、同名拦截 ✓；共享 → `GP_conn_zz_tmp_src_pg_20260914`（含凭据密文）、重复共享拦截 ✓；取消共享后 `G_` 保留且可再次共享 ✓；删除副本 ✓；全局连接数回到基线 4 条。
 
 **导航加载迁后台（收尾）说明**
 
