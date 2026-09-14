@@ -76,7 +76,8 @@ button{font-family:inherit;cursor:pointer;}
 .panel-head .actions span{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:4px;}
 .panel-head .actions span:hover{background:var(--hover);color:var(--fg);}
 
-.toolbar{display:flex;align-items:center;gap:2px;padding:5px 8px;border-bottom:1px solid var(--sidebar-border);}
+.toolbar{display:flex;flex-direction:column;gap:3px;padding:5px 8px;border-bottom:1px solid var(--sidebar-border);}
+.tb-row{display:flex;align-items:center;gap:2px;}
 .tb-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:5px;font-size:13px;}
 .tb-btn:hover{background:var(--hover);color:var(--fg);}
 .tb-sep{width:1px;height:16px;background:var(--border);margin:0 3px;}
@@ -109,6 +110,13 @@ button{font-family:inherit;cursor:pointer;}
 .row .tag{font-size:9.5px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 5px;flex:none;}
 .newrow{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;}
 .newrow input{flex:1;border:1px solid var(--active-border);border-radius:5px;background:var(--bg);color:var(--fg);font-size:12px;padding:3px 7px;outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent);}
+.tplrow{display:flex;align-items:center;gap:4px;padding:2px 6px 4px 26px;color:var(--muted);font-size:10px;}
+.tplrow .tpl{border:1px solid var(--input-border);background:var(--bg);border-radius:5px;padding:2px 6px;font-size:10px;color:var(--muted);}
+.tplrow .tpl.on{background:var(--accent);color:var(--fg);border-color:var(--active-border);font-weight:600;}
+.replrow{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-bottom:1px solid var(--border);font-size:11px;color:var(--muted);}
+.replrow .box{flex:1;display:flex;align-items:center;background:var(--bg);border:1px solid var(--input-border);border-radius:6px;padding:3px 8px;}
+.replrow .box input{flex:1;border:none;outline:none;background:transparent;color:var(--fg);font-size:11.5px;min-width:0;}
+.replrow .go{background:var(--primary);color:var(--primary-fg);border:none;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;}
 
 .ic{width:15px;height:15px;flex:none;stroke-width:1.5;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;}
 .ic.folder{color:var(--ic-folder);}
@@ -191,7 +199,7 @@ button{font-family:inherit;cursor:pointer;}
     <div class="logo">R</div>
     <div>
       <h1>草稿箱（项目工作区）· 原型</h1>
-      <div class="sub">根 = 模块目录 {project}/scratchpad · 左侧 Dock 240px · 回收站 .RSmeta/trash（草稿+资源）</div>
+      <div class="sub">根 = {project}/scratchpad · 导入=复制 / 引用=只记路径 · 回收站 .RSmeta/trash（草稿+资源）</div>
     </div>
   </div>
   <button class="theme-toggle" onclick="var r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';">◐ 切换明暗</button>
@@ -228,20 +236,31 @@ button{font-family:inherit;cursor:pointer;}
       </div>
 
       <div class="toolbar">
-        <button class="tb-btn" title="新建文件">＋</button>
-        <button class="tb-btn" title="新建文件夹">🗀</button>
-        <div class="tb-sep"></div>
-        <button class="tb-btn" title="导入文件">⬇</button>
-        <button class="tb-btn" title="添加外部引用">🔗</button>
-        <div class="tb-sep"></div>
-        <button class="tb-btn" title="排序：名称/大小/修改时间">⇅</button>
-        <button class="tb-btn" title="刷新">↻</button>
+        <div class="tb-row">
+          <button class="tb-btn" title="新建文件">＋</button>
+          <button class="tb-btn" title="新建文件夹">🗀</button>
+          <button class="tb-btn" title="导入（复制进草稿箱）">⬇</button>
+          <button class="tb-btn" title="引用（只记路径，不复制）">🔗</button>
+          <div style="flex:1"></div>
+          <button class="tb-btn" title="排序：名称/大小/修改时间">⇅</button>
+          <button class="tb-btn" title="刷新">↻</button>
+        </div>
+        <div class="tb-row">
+          <button class="tb-btn" title="剪切">✂</button>
+          <button class="tb-btn" title="复制">⧉</button>
+          <button class="tb-btn" title="粘贴">📋</button>
+          <button class="tb-btn" title="删除">🗑</button>
+          <div style="flex:1"></div>
+          <span class="meta" style="color:var(--muted);font-size:10px">3 项</span>
+        </div>
       </div>
 
       <div class="search">
-        <div class="box"><span class="mag">⌕</span><input placeholder="搜索文件…"></div>
-        <button class="chip-btn" title="正则">.*</button>
-        <button class="chip-btn" title="区分大小写">Aa</button>
+        <button class="chip-btn" title="搜索模式：文件名过滤">文件名</button>
+        <div class="box"><span class="mag">⌕</span><input placeholder="搜索…"></div>
+        <button class="chip-btn" title="正则（内容模式）">.*</button>
+        <button class="chip-btn" title="区分大小写（内容模式）">Aa</button>
+        <button class="chip-btn" title="运行内容搜索（结果落中央编辑区）">⏎</button>
       </div>
 
       <div class="panel-body">
@@ -255,32 +274,46 @@ button{font-family:inherit;cursor:pointer;}
 
           <div class="row sel"><span class="chev">▸</span>
             <svg class="ic sql" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
-            <span class="nm">临时订单分析.sql</span><span class="dirty">●</span><span class="meta">2 分钟</span></div>
+            <span class="nm">临时订单分析.sql</span><span class="dirty">●</span><span class="meta">1.2 MB · 2 分钟前</span></div>
 
           <div class="row"><span class="chev"></span>
             <svg class="ic py" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
-            <span class="nm">transform.py</span><span class="meta">1 小时</span></div>
+            <span class="nm">transform.py</span><span class="meta">1 小时前</span></div>
 
           <div class="row"><span class="chev"></span>
             <svg class="ic data" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
-            <span class="nm">sample.csv</span><span class="meta">1.2 MB</span></div>
+            <span class="nm">sample.csv</span><span class="meta">1.2 MB · 1 小时前</span></div>
 
           <div class="row"><span class="chev"></span>
             <svg class="ic file" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
             <span class="nm">README.md</span><span class="meta">昨天</span></div>
 
-          <!-- 内联新建（选中 data 文件夹后） -->
+          <!-- 内联新建（选中 data 文件夹后）+ 模板 chip（自动补后缀） -->
           <div class="newrow"><span class="indent"></span>
             <svg class="ic file" viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/></svg>
             <input value="新建查询.sql" autofocus></div>
+          <div class="tplrow">模板
+            <span class="tpl on">SQL</span><span class="tpl">Python</span><span class="tpl">Markdown</span><span class="tpl">JSON</span><span class="tpl">空白</span>
+          </div>
         </div>
 
         <!-- 外部引用 -->
         <div class="group">
-          <div class="group-head"><span class="chev">▼</span> 外部引用 <span class="badge">1</span></div>
+          <div class="group-head"><span class="chev">▼</span> 外部引用 <span class="badge">2</span></div>
           <div class="row"><span class="chev"></span>
             <svg class="ic ref" viewBox="0 0 16 16"><path d="M6.5 9.5l3-3"/><path d="M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1"/><path d="M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/></svg>
-            <span class="nm">下载数据</span><span class="meta">D:\data\</span></div>
+            <span class="nm">下载数据</span><span class="meta">D:\data\</span>
+            <span class="meta" title="在文件管理器中打开">↗</span>
+            <span class="meta" title="重命名别名">✎</span>
+            <span class="meta" title="移除引用">✕</span></div>
+          <!-- 失效引用：置灰 + 「（丢失）」+ 重新引用（选新路径，只改路径） -->
+          <div class="row dim"><span class="chev"></span>
+            <svg class="ic ref" viewBox="0 0 16 16"><path d="M6.5 9.5l3-3"/><path d="M7 4.5l1-1a2.5 2.5 0 013.5 3.5l-1 1"/><path d="M9 11.5l-1 1A2.5 2.5 0 014.5 9l1-1"/></svg>
+            <span class="nm">月度报表（丢失）</span><span class="meta">E:\moved\report.csv</span>
+            <span class="meta" title="在文件管理器中打开">↗</span>
+            <span class="meta" title="重命名别名">✎</span>
+            <span class="meta" style="color:var(--info)" title="重新引用（选择新路径）">⟲</span>
+            <span class="meta" title="移除引用">✕</span></div>
         </div>
 
         <!-- 回收站 -->
@@ -289,7 +322,7 @@ button{font-family:inherit;cursor:pointer;}
         </div>
       </div>
 
-      <div class="panel-foot">12 个文件 · 3 个文件夹 · 项目:营销分析</div>
+      <div class="panel-foot">12 个文件 · 3 个文件夹 · 1 项引用 · 3 项回收站 · 排序 名称 ↑</div>
     </div>
 
     <!-- 中央编辑区 -->
@@ -311,6 +344,11 @@ button{font-family:inherit;cursor:pointer;}
         </div>
         <div class="search-pane">
           <div class="sp-head">搜索：<b>created_at</b> · 4 个文件 · 12 处匹配 <span style="margin-left:auto">正则 ✕ · 大小写 ✕</span></div>
+          <div class="replrow">替换为
+            <span class="box"><input placeholder="替换为…"></span>
+            <span>将替换 12 处 · 4 个文件</span>
+            <button class="go">全部替换</button>
+          </div>
           <div class="sp-body">
             <div class="hit"><span class="file">临时订单分析.sql</span></div>
             <div class="hit ctx">  4: <span class="kw">SELECT</span> date_trunc('day', created_at) AS d,</div>
@@ -357,10 +395,10 @@ button{font-family:inherit;cursor:pointer;}
   <div class="state">
     <h4>空态（项目根无用户文件）</h4>
     <div class="empty">
-      <div class="big">🗀</div>
-      <div class="t">项目工作区还没有文件</div>
-      <div class="d">草稿箱根即项目目录，随手新建或导入 SQL、脚本、数据文件。</div>
-      <div class="btns"><button class="btn-p">新建文件</button><button class="btn-s">导入文件</button></div>
+      <div class="big">🗒</div>
+      <div class="t">草稿箱是空的</div>
+      <div class="d">随手写点东西，或从外部导入文件。<br>草稿箱根 = 项目下的 <code>scratchpad/</code>；导入 = 复制，引用 = 链接。</div>
+      <div class="btns"><button class="btn-p">＋ 新建</button><button class="btn-s">🗀 文件夹</button><button class="btn-s">⬇ 导入</button></div>
     </div>
     <div class="hint">项目未打开时显示提示，并禁用项目作用域操作。</div>
   </div>
@@ -403,14 +441,14 @@ button{font-family:inherit;cursor:pointer;}
     <div class="chip"><div class="sw" style="background:var(--ic-sql)"></div><span class="name">SQL 图标 info</span></div>
     <div class="chip"><div class="sw" style="background:var(--ic-py)"></div><span class="name">Python 图标 success</span></div>
     <div class="chip"><div class="sw" style="background:var(--ic-data)"></div><span class="name">数据文件 base.cyan</span></div>
-    <div class="chip"><div class="sw" style="background:var(--search-match)"></div><span class="name">搜索高亮（产品 token，待定）</span></div>
+    <div class="chip"><div class="sw" style="background:var(--search-match)"></div><span class="name">搜索高亮 search.match.background</span></div>
     <div class="chip"><div class="sw" style="background:var(--danger)"></div><span class="name">危险操作 danger</span></div>
   </div>
 </div>
 
 <div class="foot">
-  落地：面板视图 <code>crates/workbench/src/components/scratchpad_panel.rs</code>，域模型/存储 <code>crates/scratchpad</code>，根目录语义与 <code>.RSmeta/scratchpad/</code> 元数据迁移见 <code>scratchpad-dev-plan.md</code> Phase A。<br>
-  色值只存在于主题资产，组件经 <code>cx.theme()</code> 读取，代码零裸 hex。
+  落地：面板视图 <code>crates/workbench/src/panels.rs</code>（`SidebarPanel` 草稿箱 / `EditorPanel` 搜索结果与替换栏），域模型/存储 <code>crates/scratchpad</code>，根目录语义与 <code>.RSmeta/scratchpad/</code> 元数据迁移见 <code>scratchpad-dev-plan.md</code> Phase A。<br>
+  树行统一走 <code>v_virtual_list</code>（只渲染可视区行）；色值只存在于主题资产，组件经 <code>cx.theme()</code> 读取，代码零裸 hex。
 </div>
 </body>
 </html>

@@ -21,6 +21,10 @@ const CONFIG_FILE: &str = "config.json";
 const TRASH_DIR: &str = ".trash";
 const MAX_SEARCH_RESULTS: usize = 500;
 const SEARCH_PER_FILE_TIMEOUT_SECS: u64 = 30;
+/// 单行命中高亮区间上限（超长行/重复命中时限制前端渲染开销）。
+const MAX_SPANS_PER_LINE: usize = 16;
+/// 复制重名避让的最大尝试次数（`name_copy`、`name_copy_1` …）。
+const MAX_COPY_ATTEMPTS: usize = 1000;
 /// 项目元数据目录（与 `project` crate 的 `RS_META_DIR_NAME` 保持一致）。
 pub(crate) const META_DIR_NAME: &str = ".RSmeta";
 /// 草稿箱在项目元数据目录下的子目录名。
@@ -572,6 +576,15 @@ impl ScratchpadStore {
         })
     }
 
+    /// 判断相对路径是否为目录（不存在则报错）。
+    pub async fn is_directory(&self, relative_path: &str) -> Result<bool, CoreError> {
+        let path = self.resolve_path(relative_path)?;
+        let metadata = fs::metadata(&path)
+            .await
+            .map_err(|e| io_err(&path, "metadata", e.to_string()))?;
+        Ok(metadata.is_dir())
+    }
+
     pub async fn check_file_size(&self, relative_path: &str) -> Result<u64, CoreError> {
         let file_path = self.resolve_path(relative_path)?;
         let metadata = fs::metadata(&file_path).await.map_err(|e| {
@@ -795,6 +808,85 @@ impl ScratchpadStore {
         Ok(())
     }
 
+    /// 重命名外部引用别名（仅改别名，路径不变）。
+    pub async fn rename_external_reference(
+        &self,
+        old_alias: &str,
+        new_alias: &str,
+    ) -> Result<(), CoreError> {
+        let new_alias = new_alias.trim();
+        if new_alias.is_empty()
+            || new_alias.contains('/')
+            || new_alias.contains('\\')
+            || new_alias.contains("..")
+        {
+            return Err(CoreError::storage(StorageError::persistence(
+                "scratchpad_config",
+                "rename_reference",
+                format!("invalid alias: '{new_alias}'"),
+            )));
+        }
+
+        let mut config = self.load_config().await?;
+        if config
+            .external_references
+            .iter()
+            .any(|r| r.alias == new_alias)
+        {
+            return Err(CoreError::storage(StorageError::persistence(
+                "scratchpad_config",
+                "rename_reference",
+                format!("alias '{new_alias}' already exists"),
+            )));
+        }
+
+        let mut found = false;
+        for reference in config.external_references.iter_mut() {
+            if reference.alias == old_alias {
+                reference.alias = new_alias.to_string();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(CoreError::storage(StorageError::persistence(
+                "scratchpad_config",
+                "rename_reference",
+                format!("alias '{old_alias}' not found"),
+            )));
+        }
+
+        self.save_config(&config).await
+    }
+
+    /// 重新定位外部引用（仅改路径，别名与创建时间不变）。
+    ///
+    /// 源文件被移动/重命名后用它恢复链接（与新增引用一样不校验路径是否存在，
+    /// 可用性仍由 `external_reference_status` 探测）。
+    pub async fn update_external_reference_path(
+        &self,
+        alias: &str,
+        new_path: PathBuf,
+    ) -> Result<(), CoreError> {
+        let mut config = self.load_config().await?;
+        let mut found = false;
+        for reference in config.external_references.iter_mut() {
+            if reference.alias == alias {
+                reference.path = new_path.clone();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(CoreError::storage(StorageError::persistence(
+                "scratchpad_config",
+                "relink_reference",
+                format!("alias '{alias}' not found"),
+            )));
+        }
+        self.save_config(&config).await
+    }
+
     /// 外部引用可用性（加载时探测路径是否存在；失效项供 UI 置灰并允许重新定位）。
     pub async fn external_reference_status(
         &self,
@@ -805,6 +897,7 @@ impl ScratchpadStore {
             .into_iter()
             .map(|r| ExternalReferenceStatus {
                 exists: r.path.exists(),
+                is_dir: r.path.is_dir(),
                 alias: r.alias,
                 path: r.path,
             })
@@ -1193,12 +1286,139 @@ impl ScratchpadStore {
         })
     }
 
+    /// 复制条目（文件或文件夹，文件夹递归）到目标目录。
+    ///
+    /// - 命名：`name_copy` / `name_copy_1` … 直到不重名（最多尝试 1000 次）；
+    /// - `target_parent` 为空串表示模块根；
+    /// - 拒绝把文件夹复制到自身或其子树内（否则递归无界）。
+    pub async fn copy_entry(
+        &self,
+        relative_path: &str,
+        target_parent: &str,
+    ) -> Result<ScratchpadEntry, CoreError> {
+        let source_path = self.resolve_path(relative_path)?;
+        let source_name = source_path
+            .file_name()
+            .ok_or_else(|| {
+                CoreError::storage(StorageError::io(
+                    source_path.display().to_string(),
+                    "copy",
+                    "invalid source path: no file name",
+                ))
+            })?
+            .to_string_lossy()
+            .to_string();
+        let is_dir = fs::metadata(&source_path)
+            .await
+            .map_err(|e| {
+                CoreError::storage(StorageError::io(
+                    source_path.display().to_string(),
+                    "metadata",
+                    e.to_string(),
+                ))
+            })?
+            .is_dir();
+        let parent = if target_parent.is_empty() {
+            None
+        } else {
+            Some(target_parent)
+        };
+        if is_dir {
+            let dest_parent = match parent {
+                Some(p) => self.resolve_path(p)?,
+                None => self.scratchpad_dir.clone(),
+            };
+            if dest_parent == source_path || dest_parent.starts_with(&source_path) {
+                return Err(CoreError::storage(StorageError::io(
+                    relative_path.to_string(),
+                    "copy",
+                    "cannot copy a folder into itself",
+                )));
+            }
+        }
+
+        let (stem, ext) = split_name_ext(&source_name);
+        let mut last_error: Option<CoreError> = None;
+        for i in 0..MAX_COPY_ATTEMPTS {
+            let candidate = if i == 0 {
+                format!("{stem}_copy{ext}")
+            } else {
+                format!("{stem}_copy_{i}{ext}")
+            };
+            match self.create_entry(&candidate, parent, is_dir).await {
+                Ok(entry) => {
+                    let dest_rel = join_relative(target_parent, &candidate);
+                    if is_dir {
+                        Box::pin(self.copy_dir_contents(&source_path, &dest_rel, 0)).await?;
+                    } else {
+                        let dest_path = self.resolve_path(&dest_rel)?;
+                        // 二进制安全：直接拷字节，不做 UTF-8 解码。
+                        fs::copy(&source_path, &dest_path).await.map_err(|e| {
+                            CoreError::storage(StorageError::io(
+                                source_path.display().to_string(),
+                                "copy",
+                                e.to_string(),
+                            ))
+                        })?;
+                    }
+                    return Ok(entry);
+                }
+                Err(e) => last_error = Some(e),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            CoreError::storage(StorageError::io(
+                source_path.display().to_string(),
+                "copy",
+                "too many name collisions",
+            ))
+        }))
+    }
+
+    /// 递归复制目录内容（深度上限 [`MAX_DEPTH`]，防异常深层目录）。
+    async fn copy_dir_contents(
+        &self,
+        source_dir: &Path,
+        dest_relative: &str,
+        depth: u32,
+    ) -> Result<(), CoreError> {
+        if depth >= MAX_DEPTH {
+            return Ok(());
+        }
+        let children = self.scan_dir_tree(source_dir, 0, 0).await?;
+        for child in children {
+            let name = child.name.clone();
+            let is_dir = child.kind == ScratchpadEntryKind::Folder;
+            self.create_entry(&name, Some(dest_relative), is_dir)
+                .await?;
+            let child_dest = join_relative(dest_relative, &name);
+            if is_dir {
+                Box::pin(self.copy_dir_contents(&child.path, &child_dest, depth + 1)).await?;
+            } else {
+                let dest_path = self.resolve_path(&child_dest)?;
+                fs::copy(&child.path, &dest_path).await.map_err(|e| {
+                    CoreError::storage(StorageError::io(
+                        child.path.display().to_string(),
+                        "copy",
+                        e.to_string(),
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 正则 / 字面量替换（字面量模式转义后仍走 regex，以共享大小写开关）。
+    ///
+    /// - 正则模式的替换串支持 `$1` 分组引用；字面量模式不解析 `$`（用 `NoExpand`）；
+    /// - 无命中时不写盘。
     pub async fn replace_in_file(
         &self,
         relative_path: &str,
         pattern: &str,
         replacement: &str,
         is_regex: bool,
+        case_sensitive: bool,
     ) -> Result<ReplaceResult, CoreError> {
         let file_path = self.resolve_path(relative_path)?;
         let original = fs::read_to_string(&file_path).await.map_err(|e| {
@@ -1209,21 +1429,29 @@ impl ScratchpadStore {
             ))
         })?;
 
-        let (replaced, new_content) = if is_regex {
-            let re = regex::Regex::new(pattern).map_err(|e| {
+        let expression = if is_regex {
+            pattern.to_string()
+        } else {
+            regex::escape(pattern)
+        };
+        let re = regex::RegexBuilder::new(&expression)
+            .case_insensitive(!case_sensitive)
+            .build()
+            .map_err(|e| {
                 CoreError::storage(StorageError::io(
                     file_path.display().to_string(),
                     "regex_compile",
                     e.to_string(),
                 ))
             })?;
-            let count = re.find_iter(&original).count();
-            let result = re.replace_all(&original, replacement).to_string();
-            (count, result)
+        let replaced = re.find_iter(&original).count();
+        let new_content = if replaced == 0 {
+            original
+        } else if is_regex {
+            re.replace_all(&original, replacement).to_string()
         } else {
-            let count = original.matches(pattern).count();
-            let result = original.replace(pattern, replacement);
-            (count, result)
+            re.replace_all(&original, regex::NoExpand(replacement))
+                .to_string()
         };
 
         if replaced > 0 {
@@ -1339,16 +1567,89 @@ async fn search_single_file(
             } else {
                 Vec::new()
             };
+            let match_spans = match regex {
+                Some(re) => re
+                    .find_iter(line)
+                    .take(MAX_SPANS_PER_LINE)
+                    .map(|m| (m.start(), m.end()))
+                    .collect(),
+                None => literal_match_spans(line, &query, case_sensitive),
+            };
             matches.push(SearchMatch {
                 file: rel_path.clone(),
                 line_number,
                 line_content: line.clone(),
                 before_context: before,
                 after_context: after,
+                match_spans,
             });
         }
     }
     Ok(matches)
+}
+
+/// 拆分文件名与后缀（`foo.sql` → (`foo`, `.sql`)；无后缀时后缀为空串）。
+fn split_name_ext(name: &str) -> (String, String) {
+    match name.rfind('.') {
+        Some(i) if i > 0 => (name[..i].to_string(), name[i..].to_string()),
+        _ => (name.to_string(), String::new()),
+    }
+}
+
+/// 拼接模块内相对路径（父目录为空串时退化为子项名）。
+fn join_relative(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}/{}", parent.trim_end_matches(['/', '\\']), name)
+    }
+}
+
+/// 字面量命中的行内区间（非正则模式）。
+///
+/// 大小写不敏感时先小写化再查找；若小写化改变了字节长度（少数 Unicode 字符），
+/// 则直接放弃高亮（不影响命中判定）。
+fn literal_match_spans(line: &str, query: &str, case_sensitive: bool) -> Vec<(usize, usize)> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut spans = Vec::new();
+    if case_sensitive {
+        let mut from = 0usize;
+        while spans.len() < MAX_SPANS_PER_LINE {
+            let Some(pos) = line[from..].find(query) else {
+                break;
+            };
+            let start = from + pos;
+            let end = start + query.len();
+            spans.push((start, end));
+            from = end;
+        }
+        return spans;
+    }
+
+    let lower_line = line.to_lowercase();
+    let lower_query = query.to_lowercase();
+    if lower_query.is_empty()
+        || lower_line.len() != line.len()
+        || lower_query.len() != query.len()
+    {
+        return Vec::new();
+    }
+    let mut from = 0usize;
+    while spans.len() < MAX_SPANS_PER_LINE {
+        let Some(pos) = lower_line[from..].find(&lower_query) else {
+            break;
+        };
+        let start = from + pos;
+        let end = start + lower_query.len();
+        if !line.is_char_boundary(start) || !line.is_char_boundary(end) {
+            break;
+        }
+        spans.push((start, end));
+        from = end;
+    }
+    spans
 }
 
 fn duckdb_query_hint(ext: &str, name: &str) -> String {
@@ -1556,6 +1857,7 @@ mod tests {
         let statuses = store.external_reference_status().await.unwrap();
         assert_eq!(statuses.len(), 2);
         assert!(statuses.iter().any(|s| s.alias == "已存在" && s.exists));
+        assert!(statuses.iter().any(|s| s.alias == "已存在" && s.is_dir));
         assert!(statuses.iter().any(|s| s.alias == "已丢失" && !s.exists));
 
         std::fs::remove_dir_all(&project).ok();
@@ -1651,6 +1953,218 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.matches.len(), 2);
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn search_reports_match_spans() {
+        let project = temp_project("search_spans");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store.create_entry("a.sql", None, false).await.unwrap();
+        store
+            .save_file("a.sql", "select id, id2 from t\n")
+            .await
+            .unwrap();
+
+        // 字面量（不区分大小写）：两次命中 id / id2 的前两字节。
+        let r = store
+            .search_file_content("id", false, 0, false)
+            .await
+            .unwrap();
+        assert_eq!(r.matches.len(), 1);
+        assert_eq!(
+            r.matches[0].match_spans,
+            vec![(7, 9), (11, 13)],
+            "命中区间应按字节偏移给出"
+        );
+
+        // 正则：区间对应整个匹配。
+        let r = store
+            .search_file_content("id2?", false, 0, true)
+            .await
+            .unwrap();
+        assert_eq!(r.matches[0].match_spans, vec![(7, 9), (11, 14)]);
+
+        // 中文行：区间落在 char 边界上，可直接切片。
+        store.save_file("a.sql", "-- 中文注释 id\n").await.unwrap();
+        let r = store
+            .search_file_content("id", false, 0, false)
+            .await
+            .unwrap();
+        let line = &r.matches[0].line_content;
+        let (s, e) = r.matches[0].match_spans[0];
+        assert_eq!(&line[s..e], "id");
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn copy_entry_recurses_and_avoids_name_collisions() {
+        let project = temp_project("copy");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store.create_entry("dir", None, true).await.unwrap();
+        store.create_entry("a.sql", Some("dir"), false).await.unwrap();
+        store
+            .save_file("dir/a.sql", "select 1")
+            .await
+            .unwrap();
+        store.create_entry("sub", Some("dir"), true).await.unwrap();
+        store.create_entry("b.txt", Some("dir/sub"), false).await.unwrap();
+        store.save_file("dir/sub/b.txt", "hi").await.unwrap();
+
+        // 复制到模块根：同名再复制一次 → `dir_copy` → `dir_copy_1`。
+        store.copy_entry("dir", "").await.unwrap();
+        store.copy_entry("dir", "").await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(project.join(MODULE_DIR_NAME).join("dir_copy/a.sql")).unwrap(),
+            "select 1",
+            "文件夹递归复制应带上内容"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join(MODULE_DIR_NAME).join("dir_copy/sub/b.txt"))
+                .unwrap(),
+            "hi",
+            "子目录也应递归复制"
+        );
+        assert!(project.join(MODULE_DIR_NAME).join("dir_copy_1").is_dir());
+
+        // 复制到自身内部 → 拒绝（防递归无界）。
+        assert!(store.copy_entry("dir", "dir").await.is_err());
+        assert!(store.copy_entry("dir", "dir/sub").await.is_err());
+
+        // 单文件复制到指定目录（目标目录内已存在同名时自动避让）。
+        store.create_entry("root.sql", None, false).await.unwrap();
+        store.save_file("root.sql", "select 2").await.unwrap();
+        store.copy_entry("root.sql", "dir_copy").await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(project.join(MODULE_DIR_NAME).join("dir_copy/root_copy.sql"))
+                .unwrap(),
+            "select 2"
+        );
+        store.copy_entry("root.sql", "").await.unwrap();
+        assert!(project.join(MODULE_DIR_NAME).join("root_copy.sql").is_file());
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn replace_in_file_handles_case_regex_and_literal_dollar() {
+        let project = temp_project("replace");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store.create_entry("a.sql", None, false).await.unwrap();
+        store
+            .save_file("a.sql", "select ID from t\nselect id from t\n")
+            .await
+            .unwrap();
+
+        // 字面量 + 不区分大小写：两行都替掉，且替换串里的 `$` 不当作分组引用。
+        let r = store
+            .replace_in_file("a.sql", "id", "$key", false, false)
+            .await
+            .unwrap();
+        assert_eq!(r.replaced, 2);
+        let content = store.read_file("a.sql").await.unwrap();
+        assert!(content.contains("select $key"), "字面量替换不解析 `$`：{content}");
+
+        // 区分大小写：仅匹配大写。
+        let r = store
+            .replace_in_file("a.sql", "KEY", "id", false, true)
+            .await
+            .unwrap();
+        assert_eq!(r.replaced, 0, "区分大小写时不应命中 `$key`");
+
+        // 正则分组引用。
+        store.save_file("a.sql", "select a1, a2 from t\n").await.unwrap();
+        let r = store
+            .replace_in_file("a.sql", "a([0-9])", "col_$1", true, true)
+            .await
+            .unwrap();
+        assert_eq!(r.replaced, 2);
+        assert!(
+            store
+                .read_file("a.sql")
+                .await
+                .unwrap()
+                .contains("col_1, col_2")
+        );
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn literal_match_spans_handles_unicode_width_change() {
+        // `İ` 小写后为两个字节 → 放弃高亮（但不影响命中判定）。
+        assert!(literal_match_spans("İd", "id", false).is_empty());
+        assert_eq!(literal_match_spans("id id", "id", true), vec![(0, 2), (3, 5)]);
+        assert_eq!(literal_match_spans("ID id", "id", false), vec![(0, 2), (3, 5)]);
+    }
+
+    #[tokio::test]
+    async fn external_reference_relink_updates_path_only() {
+        let project = temp_project("ref_relink");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store
+            .add_external_reference("数据".into(), project.join("gone"))
+            .await
+            .unwrap();
+        assert!(
+            !store.external_reference_status().await.unwrap()[0].exists,
+            "路径不存在时应报告失效"
+        );
+
+        let new_path = project.join("moved");
+        store
+            .update_external_reference_path("数据", new_path.clone())
+            .await
+            .unwrap();
+        let status = &store.external_reference_status().await.unwrap()[0];
+        assert_eq!(status.alias, "数据", "重新引用只改路径，不改别名");
+        assert_eq!(status.path, new_path);
+        // 旧路径变成“已存在”（仅路径替换，未知足切换）
+        assert!(store.update_external_reference_path("不存在", new_path).await.is_err());
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn external_reference_rename_and_validation() {
+        let project = temp_project("ref_rename");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store
+            .add_external_reference("旧名".into(), project.join("linked"))
+            .await
+            .unwrap();
+
+        // 改名成功。
+        store
+            .rename_external_reference("旧名", "新名")
+            .await
+            .unwrap();
+        let statuses = store.external_reference_status().await.unwrap();
+        assert!(statuses.iter().any(|s| s.alias == "新名"));
+
+        // 空别名 / 含分隔符 → 拒绍。
+        assert!(store.rename_external_reference("新名", "  ").await.is_err());
+        assert!(
+            store
+                .rename_external_reference("新名", "a/b")
+                .await
+                .is_err()
+        );
+
+        // 目标别名不存在 → 拒绝。
+        assert!(
+            store
+                .rename_external_reference("不存在", "x")
+                .await
+                .is_err()
+        );
 
         std::fs::remove_dir_all(&project).ok();
     }

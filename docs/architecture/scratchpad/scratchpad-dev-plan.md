@@ -1,12 +1,51 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**模块根 + 项目级回收站 + 面板自身闭环 + 导入/引用/右键菜单/键盘 + 内容搜索（正则/大小写，结果落中央编辑区） 已落地**（2026-09-11，`cargo check --workspace --all-targets -j 2` 零告警） · Phase B 剩余（模板/文件夹复制/虚拟列表/空态细化/命中高亮/跳转）、Phase C 与 Phase D 待续
-> 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）
+> 状态：**Phase A/B 全部落地**——模块根 + 项目级回收站 + 面板闭环（新建含模板/重命名/删除撤销/移动/递归复制/多选/右键/键盘导航）+ 导入与引用（含失效重定位）+ 内容搜索（正则/大小写/命中高亮/全部替换）+ 虚拟列表与空态（2026-09-15，`cargo check --workspace --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad` 14 passed） · 待续：Phase C（双击打开/脏点/冲突 Diff/拖放，依赖编辑器）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
+> 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-15（八次）— Phase B 收尾：递归复制 / 命中高亮 / 模板 / 虚拟列表 / 键盘导航 / 替换
+
+**已完成**
+
+| 层 | 内容 | 落点 |
+| --- | --- | --- |
+| 后端 | `copy_entry`（文件夹递归、`_copy`/`_copy_N` 避让、二进制安全 `fs::copy`、拒绝复制到自身子树）+ `copy_dir_contents` | `crates/scratchpad/src/store.rs` |
+| 后端 | `SearchMatch::match_spans`（行内命中字节区间，单行最多 16 段）+ `literal_match_spans`（大小写不敏感时校验字节长度，Unicode 变宽则放弃高亮） | 同上 / `models.rs` |
+| 后端 | `replace_in_file` 新增 `case_sensitive`；字面量模式转义后仍走 regex（共享大小写开关），并用 `NoExpand` 保证替换串里的 `$` 不被当作分组引用 | `store.rs` |
+| 后端 | `update_external_reference_path`（失效引用重新定位：只改路径，别名/创建时间不变） | `store.rs` |
+| 侧栏 | 文件夹递归复制接入粘贴（`copy_entry`）；模板 chip 行（空白/SQL/Python/Markdown/JSON：自动补后缀 + 占位内容）；空态改为大图标 + 标题 + 说明 + 新建/文件夹/导入按钮；草稿树改为**唯一滚动区**（`v_virtual_list` + `track_scroll`，行高逐行给出）；引用/回收站底部限高可滚 | `crates/workbench/src/panels.rs` |
+| 侧栏 | 键盘：`↑↓` 移动选中并滚入视口、`Enter` 文件夹展开折叠（文件暂回落「打开所在位置」）、`Ctrl+N` 新建文件 | `panels.rs` / `commands.rs` / `crates/app/src/main.rs` |
+| 侧栏 | 失效引用行新增 `⟲` 重新引用（文件/目录选择器 → `update_external_reference_path`） | `panels.rs` |
+| 中央区 | 命中文本高亮（消费 `search.match.background` 产品 token，按 `match_spans` 切段）；替换栏（「替换为」输入 + 「全部替换」+ 预览计数），逐文件写回后自动刷新结果 | `panels.rs`（`EditorPanel`） |
+| 共享态 | `Shared::scratchpad_store()`（侧栏与编辑区共用）、`run_scratchpad_search(...)`（搜索构建结果视图单点） | `panels.rs` |
+| 清理 | 删掉占位文件 `crates/scratchpad/src/{model,commands,scratchpad_view}.rs` | `crates/scratchpad/src/` |
+| 原型 | `scratchpad-prototype.html` 补：模板 chip 行、替换栏、失效引用 `⟲`、空态文案/三按钮、token 文案；`scratchpad-prototype-design.md` §2.1/§2.3/§3/§4.3/§4.4/§4.5/§4.7/§6.4/§7 按实现重写 | `docs/architecture/scratchpad/*` |
+| 侧栏 | 新建落点对齐原型：选中文件夹时内联行插在该文件夹首行（并自动展开），未选中则建在模块根；重载时保留并**刷新**已展开子目录缓存（修掉“操作后展开态看起来空了”） | `crates/workbench/src/panels.rs` |
+
+**验证**：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad -j 2` **14 passed**（含新增 `copy_entry_recurses_and_avoids_name_collisions`、`search_reports_match_spans`、`replace_in_file_handles_case_regex_and_literal_dollar`、`external_reference_relink_updates_path_only`）。`cargo test` 的 doctest 阶段在 Windows 报 `os error 448`（rustdoc 无法执行，环境限制，与本模块无关）。
+
+**仍余（Phase C/D，依赖其它模块）**：双击打开 → 中央编辑器草稿模式（SQL 草稿 + `Ctrl+S` 回存 + `file_meta.last_connection_id` 恢复）、脏点、冲突 Diff（`diff_with_content` 尚未消费）、拖放导入/插入、多文件 Tab；Phase D 提升/存档只读/取回/版本（依赖 `analytics_resource`）。
+
+### 2026-09-11（七次）— 引用能力补齐（别名 / 文件或目录 / 改名 / 打开）+ 原型对齐
+
+> 澄清：文中的「引用」指草稿箱的**外部引用功能**（链接外部路径），不是代码引用。
+
+**导入 vs 引用**：导入 = 复制进 `{项目}/scratchpad/`（计体积、随项目迁移）；引用 = 只记路径 + 别名（不计体积、可能失效，需探测）。
+
+**已完成**
+
+| 层 | 内容 | 落点 |
+| --- | --- | --- |
+| 后端 | 新增 `rename_external_reference(old, new)`（别名校验：非空 / 无分隔符 / 无 `..` / 不重名）；新增单测 `external_reference_rename_and_validation` | `crates/scratchpad/src/store.rs` |
+| 侧栏 | 引用选择器改为**文件或目录**；选定后内联输入**别名**（默认取名称）再提交；引用行新增 `↗` 打开 / `✎` 改别名 / `✕` 移除；移除旧的自动别名路径 | `crates/workbench/src/panels.rs` |
+| 原型对齐 | 原型设计 §2 改为两行工具栏 + 模式 chip 搜索 + 行尾「大小 · 相对时间」+ 行操作、新增 §2.2「导入 vs 引用」；§3/§4.3/§4.4/§4.7 按实现重写；`scratchpad-prototype.html` 同步（两行工具栏、模式 chip、引用行操作、空态/底部文案） | `docs/architecture/scratchpad/*` |
+
+**未验证**：本轮改动（`store.rs` 新方法 + 单测、`panels.rs` 引用 UI）**尚未编译验证**——执行 `cargo check` 时环境报 `cargo: Permission denied`（`cargo` 为 `rustup.exe` 符号链接，疑似并行进程/杀软锁定），待环境恢复后用 `cargo check -p rds-scratchpad -p rds-workbench --all-targets -j 2` 补验。
 
 ### 2026-09-11（六次）— 内容搜索（正则/大小写）+ 结果落中央编辑区
 
@@ -165,7 +204,7 @@
 | B1 | 依赖接线：`Cargo.toml` workspace 增 `scratchpad` 别名；workbench 依赖 `scratchpad` ✅ | `Cargo.toml`、`crates/workbench/Cargo.toml` | 编译通过，依赖方向向下 |
 | B2 | `ScratchpadPanel` 实体：面板头 / 工具栏 / 搜索 / 分组树 / 底部状态；`Shared` 增加草稿箱状态（选中、展开集合、排序、脏点集合）✅ 首切片（工具栏 + 只读树 + 分组 + 底部统计，状态存于 `ScratchpadView`） | `crates/workbench/src/components/scratchpad_panel.rs`、`panels.rs` | 面板渲染，切换活动栏可见 |
 | B3 | 树渲染：递归行、类型图标、选中/悬停/脏点、相对时间、懒加载（`depth=0` → 展开加载）✅ 部分（递归行/类型色点/选中/悬停/展开折叠/重命名/删除已做；相对时间、脏点、懒加载待补） | 同上 | 深目录展开正确 |
-| B4 | 工具栏与空态：新建文件/文件夹（内联输入 + 模板）、导入、引用、排序、刷新；空态引导 △ 部分（新建内联/导入/引用添加/排序/刷新已做；模板选择、空态大图标+双按钮待补） | 同上 | 各按钮闭环 |
+| B4 | 工具栏与空态：新建文件/文件夹（内联输入 + 模板）、导入、引用、排序、刷新；空态引导 ✅ 大部分（新建内联/导入/引用（文件或目录 + 自定义别名 + 改名/打开）/排序/刷新已做；模板选择、空态大图标+双按钮待补） | 同上 | 各按钮闭环 |
 | B5 | 搜索：文件名实时过滤；内容模式调 `search_file_content`（正则/大小写），结果落中央编辑区 ✅ 部分（文件名过滤 + 内容搜索/正则/大小写/结果落中央已做；命中高亮与点击跳转待补） | 同上 + `panels.rs` `EditorPanel` | 结果带上下文、可跳行 |
 | B6 | 右键菜单 + 键盘：重命名/删除/剪切/复制/粘贴/打开位置/提升；F2/Delete/Ctrl+A/Ctrl+N ✅ 部分（右键菜单、F2/Delete/Esc/Ctrl+A 已做；Shift 多选/剪切复制粘贴已做；提升与 Ctrl+N 待补） | `panels.rs` + `commands.rs`（`scratchpad` context） | 全操作可用 |
 | B7 | 回收站与撤销栏：折叠区列表/恢复/清空；删除后 5s 撤销 ✅ 部分（列表/恢复/清空/撤销栏已做；5s 自动消失待补） | 同上 | 误删可恢复 |

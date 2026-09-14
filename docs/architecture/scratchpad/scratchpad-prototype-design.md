@@ -1,6 +1,6 @@
 # 草稿箱模块 · 原型设计（项目工作区）
 
-> 状态：**模块根语义 + 项目级回收站 + 面板自身闭环（新建/重命名/删除→回收站+撤销/过滤/引用移除）已落地**（2026-09-11） · 关联文件：`scratchpad-prototype.html`（可交互原型）、`scratchpad-dev-plan.md`（开发方案与进度）
+> 状态：**模块根 + 项目级回收站 + 面板自身闭环 + 导入/引用/右键菜单/键盘导航 + 内容搜索（高亮/替换）+ 新建模板 + 文件夹递归复制 + 虚拟列表/空态 已落地**（2026-09-15） · 关联文件：`scratchpad-prototype.html`（可交互原型）、`scratchpad-dev-plan.md`（开发方案与进度）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 参考基准：v1 实现（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）与设计（`v1/docs/backend/SCRATCHPAD_DESIGN.md`、`SCRATCHPAD_SCHEMA.md`、`v1/docs/frontend/SCRATCHPAD.md`）
 > 布局服从 `docs/architecture/layout/layout-design.md`（五段布局，左侧 Dock 240px，`LeftPanel::Draft`）；配色服从 `docs/architecture/theme/theme-design.md`（RDS Light/Dark，`assets/themes/rds-theme.json`）
 > 技术栈：GPUI（gpui-kit 0.6），组件消费 `cx.theme()` 语义 token，**代码零裸 hex**
@@ -43,63 +43,84 @@ v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 定�
 
 ## 2. 面板布局（240px 左 Dock）
 
-草稿箱面板嵌入左侧边栏，结构自上而下四段：面板头 / 工具栏 + 搜索 / 树主体 / 底部状态。宽度受限，工具栏压成单排小图标按钮。
+草稿箱面板嵌入左侧边栏，结构自上而下四段：面板头 / 工具栏 + 搜索 / 树主体 / 底部状态。宽 240px，工具栏分两行（第二行在选择/剪贴板非空时出现）。
 
 ```
 ┌ 左侧边栏 240px（sidebar 底）──────────┐
 │ 草稿箱                          [⋯]  │  ← 面板头（Dock tab，36px）
-├ 工具栏（icon 按钮，28px）─────────────┤
-│ [＋][📁＋][导入][引用][⤓][↻]        │
-├ 搜索框（可切换 文件名 / 内容）────────┤
-│ [🔍 搜索文件…]              [.*][Aa] │
-├ 树主体（滚动，虚拟列表 >50）─────────┤
-│ ▼ 📁 草稿 · 营销分析                   │
-│   ▸ 📁 data                          │
-│   📜 临时订单分析.sql          ●     │  ← ● 脏点（未保存）
-│   🐍 transform.py                    │
-│   📊 sample.csv                      │
-│   [新文件名…]                        │  ← 内联创建（选中文件夹后）
+├ 工具栏第 1 行（icon 按钮）───────────┤
+│ [＋][🗀][⬇导入][🔗引用]      [⇅][↻] │
+├ 工具栏第 2 行（选择/剪贴板非空）──────┤
+│ [✂][⧉][📋][🗑]           3 项      │
+├ 搜索行（模式 chip）──────────────────┤
+│ [文件名] [搜索…]         [.*][Aa][⏎]│  ← 内容模式才显示 .*/Aa/⏎
+├ 树主体（滚动，命中落中央编辑区）──────┤
+│ ▼ 草稿 (3)                          │
+│   ▸ 🟧 data                          │  ← 类型色点（非图标 glyph）
+│   🟦 临时订单分析.sql   2 分钟前 ●   │  ← 行尾：大小 · 相对时间
+│   🟩 transform.py       1 小时前     │
+│   ▸ 选中行显示 [↗][✎][✕]            │
+│   [别名/文件名…]  ✓ ✕                │  ← 内联创建（不选中文件夹则建在根）
 │ ▼ 🔗 外部引用 (1)                    │
-│   ⚡ 下载数据  D:\data\              │
-│ ▶ 🗑 回收站 (3)                      │
+│   🟦 下载数据  D:\data   [↗][✎][✕]  │  ← 引用：不复制，可改名/打开/移除
+│ ▶ 🗑 回收站 (3)  [清空]              │
 ├ 底部状态（11px，muted）──────────────┤
-│ 12 个文件 · 3 个文件夹 · 项目:营销分析 │
+│ N 个文件 · N 个文件夹 · N 项引用 · N 项回收站 · 排序 X │
 └──────────────────────────────────────┘
 ```
 
-### 2.1 工具栏（单排图标，悬浮出文字提示）
+> 与首版原型的差异（现已对齐产品）：工具栏拆两行；搜索为「模式 chip + 输入 + 内容模式开关」；行尾显示「大小 · 相对时间」；行操作选择时才显示（`↗` 打开位置 / `✎` 重命名 / `✕` 删除）；文件类型用**色点**而非图标 glyph；脏点（`●`）依赖编辑器宿主，Phase C 接入。
 
-| 按钮 | 行为 | 对应后端 |
+### 2.1 工具栏
+
+| 行 | 按钮 | 行为 | 对应后端 |
+| --- | --- | --- | --- |
+| 1 | `＋` 新建文件 | **内联输入文件名 + 模板 chip**（空白/SQL/Python/Markdown/JSON：自动补后缀并填充占位内容）；落点 = 选中的文件夹（未选中文件夹则模块根，与粘贴一致） | `create_entry` + `save_file` |
+| 1 | `🗀` 新建文件夹 | 同上，类型为目录（同样落在选中文件夹内） | `create_entry(is_folder)` |
+| 1 | `⬇` **导入** | 系统文件对话框（多选）→ **复制**进草稿箱 | `import_external_file` |
+| 1 | `🔗` **引用** | 选**文件或目录** → 内联输入**别名** → 只记路径（**不复制**） | `add_external_reference` |
+| 1 | `⇅` 排序 | 名称/大小/修改时间，点击循环并切换升降序 | 前端计算 |
+| 1 | `↻` 刷新 | 重新拉取根目录 | `list_local_entries(0)` |
+| 2 | `✂`/`⧉`/`📋`/`🗑` | 剪切/复制/粘贴/删除（作用于多选；行尾显示已选数） | `move_entry` / `create_entry`+`save_file` / `delete_entry` |
+
+### 2.2 导入 vs 引用（本质差异，务必区分）
+
+| | 导入 | 引用 |
 | --- | --- | --- |
-| `＋` 新建文件 | 选中文件夹下内联输入；可选模板（SQL/JSON/Markdown/Python） | `create_entry` |
-| `📁＋` 新建文件夹 | 选中文件夹下内联输入目录名 | `create_entry(is_folder)` |
-| `导入` | 系统文件对话框 → 复制进项目根（或选中目录） | `import_external_file` |
-| `引用` | 添加外部目录/文件别名引用（不复制） | `add_external_reference` |
-| `⤓` 排序 | 名称 / 大小 / 修改时间，点击切换升降序 | 前端计算（`list_directory_entries` 数据） |
-| `↻` 刷新 | 重新拉取树（文件监控之外的兜底） | `list_local_entries` |
+| 物理行为 | **复制**进 `{项目}/scratchpad/` | **只记路径 + 别名**，不复制 |
+| 归属 | 成为草稿本体 | 源文件仍在外部，草稿箱只是入口 |
+| 项目迁移 | 随项目带走 | 可能失效（需可用性探测） |
+| 体积 | 计入项目 | 不计入 |
+| 失效处理 | — | 置灰 + 「（丢失）」，可重新引用 |
+| 典型场景 | 随手写的 SQL / 测试数据 | 「下载目录的临时数据」「外部数据仓」 |
 
-### 2.2 空态
+- 引用可指向**文件或目录**；别名可自定义、可后续改名（`rename_external_reference`）；可「在文件管理器中打开」（`open_in_system_explorer`）。
+- 导入只导入文件（多选）；目录导入与文件夹递归复制待补。
 
-项目根无任何用户文件时显示引导（大图标 + 标题 + 说明 + 「新建」「导入」双按钮），避免 240px 版面显得空洞。
+### 2.3 空态
+
+项目根无任何用户文件时显示引导（大图标 + 标题 + 说明 + 「＋ 新建」「🗀 文件夹」「⬇ 导入」按钮），避免 240px 版面显得空洞；搜索无结果时只显示一行「没有匹配的文件」。
 
 ## 3. 树与分组
 
-- **项目文件**（根组）：`ScratchpadEntry` 递归树，文件夹最多 4 层（`MAX_DEPTH`）；初始 `depth=0` 懒加载，展开文件夹时按需 `list_directory_entries(parent)`。
-- **外部引用**：`ExternalReference{ alias, path }` 平铺列表，标题带计数；校验路径合法且不含 `..`（v1 `isRefValid`），非法项置灰并给出提示。
-- **回收站**：折叠区，标题带计数；展开后 `list_trash` → 每项「恢复」，头部「清空」。
+- **草稿**（根组）：`ScratchpadEntry` 树；初始 `depth=0` 懒加载，展开文件夹时按需 `list_directory_entries(parent)`（子目录缓存），后端 `MAX_DEPTH=4` 仅作内容搜索 / 递归复制的遍历上限。
+- **滚动与虚拟化**：草稿树是面板**唯一滚动区**（`v_virtual_list`，只渲染可视区行，`item_sizes` 按行高逐行给出，重命名行用控件高）；引用 / 回收站为底部固定区并限高（`SCRATCHPAD_GROUP_MAX_HEIGHT`），保证树始终有可用高度。
+- **外部引用**：`ExternalReference{ alias, path }` 平铺列表，标题带计数；`external_reference_status()` 探测路径存在性，失效项置灰 + 「（丢失）」；行内 `↗` 打开 / `✎` 改名 / `✕` 移除。
+- **回收站**：折叠区，标题带计数；展开后逐项「还原」，头部「清空」。
 - **行视觉**：
-  - 选中：`sidebar.accent.background` 底 + 左侧 2px `list.active.border`（品牌 coral）条
-  - 悬停：`list.hover.background`
-  - 文件夹展开箭头 `Disclosure`（▸/▼）；文件图标按后缀映射（§6.3）
-  - 修改时间：相对时间（<1 分钟 / N 分钟 / N 小时 / N 天，7 天内），置于行尾 muted
-  - 脏点 `●`：`dirtyFiles` 集合中的文件，颜色 `primary`；`Ctrl+S` 保存后消失
+  - 选中：`sidebar.accent` 底 + 左侧 2px `list.active.border`（品牌 coral）条
+  - 悬停：`list.hover`
+  - 文件夹展开箭头 `▸/▾`；文件/文件夹用**类型色点**（§6.3）
+  - 行尾：文件显示「大小 · 相对时间」，文件夹显示相对时间（< 7 天相对，否则日期）
+  - 行操作：仅在选中行显示（`↗` 打开位置 / `✎` 重命名 / `✕` 删除）
+  - 脏点 `●`：待编辑器宿主（Phase C）提供
 
 ## 4. 核心交互
 
 ### 4.1 新建 / 重命名（内联，非模态）
 
-- 新建：选中文件夹 → 工具按钮 → 树中该目录下插入输入框，Enter 提交、Escape 取消；**根目录新建**默认创建在项目根。
-- 模板：新建文件时可从 `SQL / JSON / Markdown / Python` 选模板，自动补后缀并填充占位内容。
+- 新建：选中文件夹 → 工具按钮（或 `Ctrl+N`）→ 树中该目录下插入输入框（并自动展开），Enter 提交、`✓`/`Escape` 取消；未选中文件夹则建在模块根。
+- 模板：新建文件时可从 `SQL / JSON / Markdown / Python` 选模板，自动补后缀并填充占位内容；切换模板会替换模板补的后缀，用户自写的其他后缀（如 `.txt`）不被改写。
 - 重命名：右键「重命名」或 `F2` → 行内输入框；提交时输入禁用 + 旋转指示，防重复提交；空值不提交。
 
 ### 4.2 打开文件（联动中央编辑区）
@@ -120,37 +141,52 @@ v1 的草稿箱是项目下的隐藏子目录 `{project}/.scratchpad/`。v2 定�
 
 ### 4.3 搜索（两种模式，重结果落中央区）
 
-- **文件名模式**（默认）：输入实时过滤树（匹配名称 + 引用别名/路径）。
-- **内容模式**：`.*` 切正则（前端 `Regex` 预校验）、`Aa` 切大小写敏感；调 `search_file_content` 流式扫描（大文件不跳过，`BufReader` 逐行，30s/文件超时，结果 500 条截断）。
-- 结果含**匹配行 + 前后 2 行上下文**，高亮匹配文本；点击行号 → 打开文件并跳转到该行。
-- 结果集较大，渲染在**中央编辑区**（专用「搜索」面板），侧栏只承载输入与摘要，避免 240px 拥挤。
+- **文件名模式**（默认）：输入实时过滤树（匹配名称；命中子树自动展开）。
+- **内容模式**：`.*` 切正则、`Aa` 切大小写敏感、`⏎`（或输入框 Enter）运行；调 `search_file_content(query, case, 2, is_regex)`（严格白名单正则循环外编译一次；`BufReader` 逐行 / 30s 单文件超时 / 500 条截断）。
+- 结果（匹配行 + 前后 2 行上下文）写入 `Shared::scratchpad_search`，由**中央编辑区**渲染（侧栏只承载输入与开关）。
+- **待补**：点击命中跳转到文件（依赖 Phase C 编辑器打开）。命中文本高亮由后端 `SearchMatch::match_spans`（每行最多 16 段字节区间）驱动，颜色取产品 token `search.match.background`。
+- **替换**：结果面板内嵌「替换为」输入 + 「全部替换」（预览计数：将替换 N 处 · M 个文件）；逐文件 `replace_in_file`（正则模式支持 `$1` 分组，字面量模式不解析 `$`）→ 原子写回 → 自动刷新结果；只读项目拒绝。
 
-### 4.4 文件操作
+### 4.4 文件与引用操作
 
 | 操作 | 行为 | 后端 |
 | --- | --- | --- |
-| 删除 | 软删除进 `.RSmeta/scratchpad/trash/`；底部弹出 5s 撤销栏 | `delete_entry` / `restore_from_trash` |
-| 批量删除 | 多选（Ctrl 点选 / Shift 范围 / Ctrl+A 全选）→ 右键或 Delete | `delete_entry` × N |
-| 剪切移动 | 右键「剪切」→ 粘贴到目标文件夹（`fs::rename`）→ 5s 撤销栏 | `move_entry` |
-| 复制 | 右键「复制」→ 粘贴生成 `_copy` 副本 | `create_entry` + `read/save_file` |
-| 导入 | 系统文件对话框复制进项目 | `import_external_file` |
-| 外部引用 | 添加别名 + 路径引用（不复制）；可移除 | `add/remove_external_reference` |
-| 打开所在位置 | 系统文件管理器定位 | `open_in_system_explorer` |
+| 新建 / 重命名 | 内联输入（✓/✕，Enter 提交）；不选中文件夹时建在模块根 | `create_entry` / `rename_entry` |
+| 删除 | 多选批量→**项目级**回收站 `.RSmeta/trash/`；底部撤销栏（5s 自动消失） | `delete_entry` / `restore_from_trash` |
+| 剪切移动 | ✂ 后 📋 → 移入选中文件夹（未选文件夹则根） | `move_entry` |
+| 复制 | ⧉ 后 📋 → 生成 `_copy` 副本（文件与**文件夹递归**均支持；复制到自身子树被拒） | `copy_entry` |
+| **导入** | 系统文件对话框（多选）→ **复制**进草稿箱 | `import_external_file` |
+| **引用** | 选文件或目录 → 自定义别名 → **只记路径**；可改名 / 打开 / 移除；失效项置灰 + 「（丢失）」+ `⟲` **重新引用**（只改路径） | `add` / `rename` / `remove` / `update_external_reference_path`、`external_reference_status` |
+| 打开所在位置 | 系统文件管理器定位（草稿项与引用项均可） | `open_in_system_explorer` |
+| 多选 | Ctrl 点选 / Shift 范围 / Ctrl+A 全选 | 前端 |
+
+> 导入与引用的区别见 §2.2（复制 vs 链接）。
 
 ### 4.5 编辑态与冲突
 
 - `Ctrl+S` 原子写回项目文件；文件监控（`notify`）发现外部修改 → 冲突对话框（重新加载 / 忽略），并置脏点。
 - 拖拽文件节点到中央编辑区 → 插入文件内容到光标处。
 - **Diff 对比**：冲突时「查看差异」→ `diff_with_content`（`similar` 行级）→ 弹窗红/绿标记 → 接受右侧。
-- **搜索替换**：结果区替换栏 → 预览计数 → 全部替换（`replace_in_file`，支持正则）→ 原子写回 → 刷新结果。
+- **搜索替换**：结果区替换栏 → 预览计数 → 全部替换（`replace_in_file`，支持正则与大小写）→ 原子写回 → 刷新结果。
+
+> 已落地部分是「结果区替换栏」；脏点 / 冲突 Diff 等仍待编辑器宿主（Phase C）。
 
 ### 4.6 提升为分析资源（存档）
 
 右键「提升为分析资源」→ **移动**到 `resources/` 并**归档锁定（只读）**；数据源绑定/来源随文件归档。想修改只能从资源管理处**取回**（检出）为草稿工作副本（§9.3）。跨模块协作走 **command / event**，草稿箱不直接依赖分析资源模块的视图。
 
-### 4.7 键盘导航
+### 4.7 键盘与右键
 
-`↑↓` 切换选中、`Enter` 打开、`F2` 重命名、`Delete` 删除、`Ctrl+N` 新建、`Ctrl+A` 全选、`Escape` 取消内联输入/关闭菜单。
+| 输入 | 行为 | 状态 |
+| --- | --- | --- |
+| `Ctrl+A` | 全选已加载条目（`scratchpad` key context） | ✅ |
+| `F2` | 重命名唯一选中项 | ✅ |
+| `Delete` | 删除选中（批量，含撤销栏） | ✅ |
+| `Escape` | 取消内联编辑 | ✅ |
+| 右键 | 行上下文菜单：打开位置 / 重命名 / 剪切 / 复制 / 删除 | ✅ |
+| `↑↓` / `Enter` / `Ctrl+N` | 树内键盘导航（选中项自动滚入视口）/ 文件夹展开折叠 / 新建文件 | ✅ |
+
+> 快捷键绑定在 `scratchpad` key context（`crates/workbench/src/commands.rs` + `crates/app/src/main.rs`）；点击行会聚焦面板，使快捷键生效。
 
 ## 5. 关键帧与状态流
 
@@ -217,15 +253,9 @@ flowchart TD
 
 > 以上均为设计映射，若实测对比度不足（尤其 `base.cyan` 在浅色下）再调整为产品语义 token；默认不新增 token。
 
-### 6.4 搜索高亮（待确认，可选新增产品语义 token）
+### 6.4 搜索高亮
 
-v1 使用黄色 `<mark>`。若沿用标准字段，可用 `accent.background`（coral 淡底，与选中态区分度偏低）。建议新增产品语义 token（与 `theme-design.md` §5.4 同类，注册/消费方式一致）：
-
-| 产品角色 | RDS Light | RDS Dark | 消费方 |
-| --- | --- | --- | --- |
-| `scratchpad.search.match.background` | `#FFF3C4` | `#4A3F00` | 搜索结果匹配文本底 |
-
-若 0.6 schema 拒绝扩展字段，按 `theme-design.md` §5.4 落 `assets/themes/product-tokens.json`；未落地前先用 `accent.background` 兜底。
+产品语义 token `search.match.background`（Light `#FFF3C4` / Dark `#4A3F00`，注册于 `crates/settings/src/product_tokens.rs` + `assets/themes/product-tokens.json`）已落地并消费于内容搜索结果面板（命中段底色）。
 
 ## 7. GPUI 落点映射
 
@@ -235,11 +265,13 @@ v1 使用黄色 `<mark>`。若沿用标准字段，可用 `accent.background`（
 | 左 Dock 内容装配 | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `LeftPanel::Draft` 分支改调草稿箱视图） |
 | 面板头 / 工具栏 | gpui-kit `Button`（`.icon().ghost()` 小尺寸） |
 | 搜索输入 | `Input` + `InputState`（`cx.new(InputState::new)`） |
-| 树 / 分组 / 折叠 | 自绘递归行 + `Disclosure`；>50 条用虚拟列表 |
+| 内容搜索结果 + 替换栏 | `crates/workbench/src/panels.rs`：`render_scratchpad_search_pane`（`EditorPanel` 渲染，替换输入 `scratchpad_replace`） |
+| 空态引导 | `SidebarPanel::render_scratchpad_empty_state`（大图标 + 分组 `Button`） |
+| 树 / 分组 / 折叠 | 草稿树用 `v_virtual_list`（`item_sizes` + 可视区渲染，`track_scroll` 支持键盘导航滚入）；分组头为自绘标签行 |
 | 右键菜单 | gpui-kit 弹层（`PopupMenu`/自绘 overlay），`popover` token 取色 |
 | 导入 / 引用 / 冲突 / Diff 弹窗 | `Dialog` / 模态覆盖层 |
 | 撤销栏 | 面板底部自绘条（`popover` + `primary`） |
-| 域模型与存储 | `crates/scratchpad`（`models` / `state` / `store`），workbench 通过 workspace 依赖 `scratchpad` |
+| 域模型与存储 | `crates/scratchpad`（`models` / `state` / `store` / `trash`），workbench 通过 workspace 依赖 `scratchpad` |
 | 文件监控 | `notify`（v2 尚未接入，见 `scratchpad-dev-plan.md` Phase A） |
 | SQL 草稿模式 | `crates/workbench/src/panels.rs` `EditorPanel`（新增 scratchpad-file 模式） |
 | 提升为分析资源 | `analytics_resource` 服务，经 command/event 协作 |

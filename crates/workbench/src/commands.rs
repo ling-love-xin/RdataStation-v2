@@ -38,7 +38,11 @@ actions!(
         ScratchpadSelectAll,
         ScratchpadRename,
         ScratchpadDelete,
-        ScratchpadCancelEdit
+        ScratchpadCancelEdit,
+        ScratchpadUp,
+        ScratchpadDown,
+        ScratchpadOpen,
+        ScratchpadNewFile
     ]
 );
 

@@ -131,6 +131,12 @@ pub const TREE_ACTIVE_BAR: Pixels = px(2.);
 /// 导航分组头左侧色条宽度（2px；与激活条同宽，语义独立）
 pub const NAV_GROUP_BAR_WIDTH: Pixels = px(2.);
 
+// ===== 草稿箱（M5）专用尺寸（rem 基准；登记在此，视图只引用） =====
+/// 外部引用 / 回收站区域最大高度（7.5rem = 120px；超出内部滚动，保证草稿树始终有可用高度）
+pub const SCRATCHPAD_GROUP_MAX_HEIGHT: f32 = 7.5;
+/// 空态大图标尺寸（2.25rem = 36px）
+pub const SCRATCHPAD_EMPTY_ICON_SIZE: f32 = 2.25;
+
 // ===== 连接对话框（M3）专用尺寸（rem 基准；登记在此，视图只引用） =====
 //
 // 对话框是一个独立模态层，尺寸自成一套（比主界面行高略大、控件更高），

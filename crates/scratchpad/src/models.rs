@@ -31,6 +31,11 @@ pub struct SearchMatch {
     pub before_context: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after_context: Vec<String>,
+    /// 行内命中区间（按字节偏移，作用于 `line_content` 的 `[start, end)`）。
+    ///
+    /// 供前端渲染命中高亮；每行最多保留 16 段，避免超长行渲染开销。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub match_spans: Vec<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -55,6 +60,8 @@ pub struct ExternalReferenceStatus {
     pub alias: String,
     pub path: PathBuf,
     pub exists: bool,
+    /// 是否为目录（路径不存在时为 `false`）。
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
