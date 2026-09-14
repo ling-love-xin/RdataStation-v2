@@ -109,6 +109,9 @@ cargo test -p rds-editor -p rds-engine --lib -j 2
 # 真机探针（事务会话亲和；需环境变量，见开发方案 §6）
 cargo test -p rds-engine --test transaction_affinity -j 2 -- --nocapture --test-threads=1
 
+# 能力探针（原型 §7.4 台账 ⚪ 候选的真实行为；离线、报告式输出）
+cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1
+
 # 契约（零裸色 / 零裸 px，扫描 editor + workbench）
 cargo test -p rds-workbench --test ui_contract -j 2
 

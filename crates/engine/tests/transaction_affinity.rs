@@ -30,9 +30,11 @@
 
 use std::sync::Arc;
 
-use engine::connection_manager::ConnectionManager;
-use engine::services::sql_service::{SqlExecuteOptions, SqlExecuteResult, SqlService};
-use engine::{AutoDriverRegistrar, DriverConnectionConfig};
+// 集成测试是**独立 crate**：本包库目标名是 `rds_engine`（包名 `rds-engine`）。
+// 其它 crate 里的 `engine::` 是它们 Cargo.toml 的依赖别名（`engine.workspace = true`），在本测试里不成立。
+use rds_engine::connection_manager::ConnectionManager;
+use rds_engine::services::sql_service::{SqlExecuteOptions, SqlExecuteResult, SqlService};
+use rds_engine::{AutoDriverRegistrar, DriverConnectionConfig};
 
 /// 执行选项：关缓存（避免缓存掩盖真实执行）、关历史（探针不污染用户历史）
 fn options() -> SqlExecuteOptions {

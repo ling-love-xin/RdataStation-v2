@@ -479,6 +479,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 服务层集成 | 打开→执行→结果入库→历史写入（**断言耗时/成功/行数真实**）· 结果上限淘汰 · 连接归属校验 · 模式切换矩阵（含确认分支）· 保存与脏状态 | `crates/editor/tests/`（临时目录注入模式，参考 `query_history.rs` 的 `*_at(dir)`） |
 | 契约测试 | 视图层零裸色/零裸 `px(`（扩展现有 `crates/workbench/tests/ui_contract.rs` 扫描范围到 `crates/editor/src`）· 尺寸常量引用 | 现有 `ui_contract` 扩展 |
 | 窗口（headless） | 三模式渲染不 panic · 执行按钮 → 结果区出现 · 模式切换确认流 · 关闭脏文档拦截 · **走生产入口**（参考 `dialog_host_layer.rs` 的教训） | `crates/editor/tests/`（`#[gpui_kit::test]`） |
+| 第三方能力探针（离线·报告式） | 对「台账 ⚪ 候选」用真实 SQL 跑一遍并**打印**行为，确认后才转成断言；断言仅限与语义无关的不变量（可再解析 / 不 panic / 文档化边界）。✅ `crates/engine/tests/sqlglot_capabilities.rs`（作用域 · 血缘 · 类型标注 · 差异 · 下推 · 限定 · 本地计划 · 转译单条限制 · 格式化注释保真）· ✅ `crates/engine/tests/transaction_affinity.rs`（事务会话亲和，需真实端点） | `crates/engine/tests/` |
 | 真机回归 | 4 类数据库（MySQL / PostgreSQL / SQLite / DuckDB）× 执行族 × 只读 × 大结果；明暗主题对照 | 手工清单（dev-plan §3） |
 
 ---
