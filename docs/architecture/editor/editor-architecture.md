@@ -428,7 +428,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | # | 问题 | 证据 | 影响 | 修法 |
 | --- | --- | --- | --- | --- |
 | 1 | ~~**格式化输出是 Rust Debug 打印**~~ **已修（2026-09-15，P0.3）** | `engine/src/sql/formatter.rs` 改用 sqlglot-rust 的 `generate_pretty`（多语句走 `parse_statements_with_comments` 逐条生成 + `;\n\n` 拼接），**无新增依赖**；回归测试从“非空”升级为“不是 Debug 打印 / 结果可再次解析 / 多语句不丢句 / 解析失败原样返回 / 前导注释不丢” | — | 残留：行内 / 尾随注释可能丢失（生成器能力边界，见 §12 #3） |
-| 2 | ~~**语句切分朴素 `;` 切分**~~ **已修（2026-09-15，P0.4）** | 词法级状态机落在 `engine/src/sql/split.rs`（24 项表驱动测试）；`sql_parser_service::split_sql` 改为委托 | — | — |
+| 2 | ~~**语句切分朴素 `;` 切分**~~ **已修（2026-09-15，P0.4）** | 词法级状态机落在 `engine/src/sql/split.rs`（26 项表驱动测试）；`sql_parser_service::split_sql` 改为委托 | — | — |
 | 3 | **事务状态是桩**：`get_transaction_status` 恒 `false`；`begin/commit/rollback` 无会话跟踪 | `engine/src/services/sql_service.rs` L485-501、L411-482 | 事务 UI 无从驱动；**且连接池下 `BEGIN` 与后续语句可能不在同一物理连接** | 先确认会话亲和（必要时 per-session 独占连接），再实现真实事务状态机 |
 | 4 | ~~**历史字段失真**~~ **已修（2026-09-15，P0.5）** | `SqlHistoryEntry` + `save_sql_history(_into)`：耗时/成功/失败原因/行数均真实，失败也留痕（4 项单测） | — | — |
 
@@ -518,7 +518,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | --- | --- | --- | --- | --- |
 | 1 | 🔴 | **Dock 标签条的关闭拦截钩子未查证**：`Panel` 提供 `closable` / `title_suffix`（脏点可行），但"关闭前询问"是否有钩子待确认 | 决定 D13 能否成立；不成立则需自绘标签条（约 300 行） | Phase 0 第一件事：写最小验证（脏点 + 关闭拦截）；结论写回本文 |
 | 2 | 🔴 | **事务会话亲和未验证**：连接池下 `BEGIN` 与后续语句是否同一物理连接未知 | 事务功能可能"看起来能用但实际无效" | 实现事务前用真实端点验证（MySQL/PG 各一）；必要时引入 per-session 独占连接 |
-| 3 | ✅→🟡 | ~~**格式化实现待定**~~（**已定，2026-09-15（P0.3）**：用 sqlglot-rust 自带 generator，不引新依赖）| 残留：**行内 / 尾随注释可能丢失**（生成器的能力边界）；大脚本格式化后需人工核对一次 | 1a 真机核对注释保留度；若不可接受，再评估自研缩进器（保留原文本的轻量重排） |
+| 3 | ✅→🟡 | ~~**格式化实现待定**~~（**已定，2026-09-15（P0.3）**：用 sqlglot-rust 自带 generator，不引新依赖）| 残留：**行内 / 尾随注释丢失**（**已源码核实**：`gen_statement` 只 emit 前导 `comments`，`sql_generator.rs:206-268`）；另注 `normalize_comment`（`:181-197`）会把非 MySQL 目标的 `#` 注释改写成 `--` | 1a 真机核对注释保留度；若不可接受，再评估自研缩进器（保留原文本的轻量重排） |
 | 4 | 🟡 | 现有 `EditorPanel` 的连接详情卡 / 导航树 / 属性面板宿主与编辑器耦在同一面板 | 收编时容易把 M3/M4 的职责带进 editor crate | 按 §3.3 表格逐项迁出，先迁"编辑器"部分，其余留 workbench |
 | 5 | 🟡 | 分析模式的语言集合（是否提前 Python） | 影响 Session 抽象与进程基建 | 用户拍板（§13 #5）；默认按 D18 只做 SQL + Markdown |
 | 6 | 🟡 | 尺寸常量落点：`editor` crate 自带 `ui.rs` 还是复用 workbench 的 | 影响依赖方向（editor 不应依赖 workbench） | editor 自带 `ui.rs`；跨模块共用常量上提到 `shared` 或由 gpui-kit 主题承担 |
@@ -534,6 +534,8 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 16 | ⚪ | 结果**血缘只到 UI 摘要级**，未落库 | 重启后无法回看“这个结果怎么来的” | 1b 时把 lineage 写入结果集元数据 |
 | 17 | 🟡 | **驱动层不返回真实 `affected_rows`**（全部驱动目录无该字段写入；`from_batches` 已不再把 `total_rows` 当影响行数，现为 `None`） | DML/DDL 的“影响 N 行”无法展示，历史里写语句的 `rows_affected` 也为空 | 1b：native 驱动（mysql/postgres/sqlite/duckdb）在写路径填充 `QueryResult.affected_rows` 并补测试 |
 | 18 | ⚪ | **Dock 无“关闭前否决”钩子**（已静态核实 2026-09-15）：`DockArea` 订阅 `TabGroupEvent::ClosePanel` 后直接 `remove_panel_id`；`Panel::closable(cx)` 是唯一闸门（静态许可，不能问用户）；`remove_panel` / `with_renderer` 均为 `pub` | 决定了“标签 ✕ 能否弹未保存确认”——需要自绘标签条才能做到 | 见 §13 #15：默认走“草稿兜底”（关闭即落草稿），需要弹窗时再上自定义标签条 |
+| 19 | 🟡 | **`transpile` 只吃单条语句**（已源码核实 2026-09-15：`transpile` / `transpile_with_comments` 内部走单条 `parse`，多语句直接报错，`lib.rs:201,237`） | “方言转移器”若直接接线，脚本会整篇失败 | B10 接线：先按 `sql/split.rs` 切分再逐条 `transpile` 拼回（或改用 `transpile_statements`，但它返回 `Vec<String>`）；结果**不就地改写**原文，走 diff 预览 |
+| 20 | ✅ | ~~**高亮区间偏移错误**~~（**已修 2026-09-15，读源码时发现**）：原实现按 `token.value` 回查原文，但 `read_string` / `read_quoted_identifier` 会解码转义（`'it''s'` → `it's`）→ 区间落空；字符串的 `quote_char` 恒为 `\0`（只对带引号标识符设置）→ 引号 / 注释标记取不到 | 已改为「**字符偏移 → 字节偏移**换算 + 取原文区间」（`highlight.rs::byte_offsets` / `raw_range`）：`Token::position` 是字符下标（`tokens/tokenizer.rs:69,83,137`），中文 SQL 下直接用会切坏 `&str` | 行为已固定：区间恒为 token 的**原文**（含引号、转义、`--` / `/* */` 标记），与 `value` 解码无关；回归 11 → 13 项（新增转义字符串 / 中文 SQL） |
 
 ---
 

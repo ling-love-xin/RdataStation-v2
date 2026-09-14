@@ -3,7 +3,7 @@
 > **一句话**：一个内核、三档能力——文本模式是"不与数据库通信的记事本"，SQL 模式是 DBeaver 一档的脚本窗口（连接 + 执行 + 结果 + 历史），分析模式把文档变成**单元 + 会话 + 输出**的可执行笔记；核心始终是 SQL。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**设计阶段（2026-09-15）**——文档与交互稿已完成，**代码尚未开始**（现行实现是 `workbench::EditorPanel` 里的一个 `Textarea` 占位，见架构 §7）。已知问题与排期的**唯一权威**是架构文档 §12。
+> 状态：**Phase 0 进行中（2026-09-15）**——五件文档已提交（`ac0d75f`）；**地基地基部分落地**：语句切分（`engine/src/sql/split.rs`）、SQL 高亮（`engine/src/sql/highlight.rs`，13 项回归）、格式化（sqlglot generator）、历史字段真实化、`crates/editor` 骨架；**尚无 UI**（现行可见实现仍是 `workbench::EditorPanel` 里的一个 `Textarea` 占位，见架构 §7）。已知问题与排期的**唯一权威**是架构文档 §12。
 >
 > **边界**：本模块拥有**编辑与执行**（编辑器内核 / 三模式 / 执行族 / 结果集 / 历史 / 单元与会话）。连接的新建与编辑属 M3；对象树与元数据内省属 M4；Mock 属 M7；洞察属 M8；DuckDB 分析资产属 M6。本模块只经服务/命令与它们协作（契约见架构 §3.4）。
 
@@ -40,7 +40,7 @@
 | --- | --- | --- |
 | **独立 crate** | 编辑器有独立状态与生命周期、稳定边界、使用方 ≥2 → `crates/editor`；`workbench` 退化为壳层装配 | 架构 §3.2、D17 |
 | **依赖只向下** | `workbench → editor → engine / database / shared / gpui-kit`；**editor 不依赖 workbench** | 架构 §3.1 |
-| **组件选型不手搓** | 代码编辑器用 `gpui_kit::component::input::Editor`；高亮自注册 SQL grammar；网格用 `table::DataTable`；标签条优先用 Dock 自带能力 | 原型 §10、架构 D12/D13 |
+| **组件选型不手搓** | 代码编辑器用 `gpui_kit::component::input::Editor`；SQL 高亮走 **sqlglot tokenizer**（不引 tree-sitter）；网格用 `table::DataTable`；标签条优先用 Dock 自带能力 | 原型 §10、架构 D12/D13 |
 | **不引入 Zed 编辑器代码** | Zed 的 `editor/text/rope/language` 为 GPL-3.0-or-later（且包身份与依赖闭包不兼容）——**只借鉴设计** | 架构 D17 |
 | **不引入 LSP 作为内部协议** | 单进程内 Rust，LSP 只作将来接外部语言服务的适配层 | 架构 D11 |
 | **零裸值** | 颜色取主题 token（含待新增的编辑器/笔记本产品语义角色）；尺寸取 `ui.rs` 常量 | 原型 §7 / §8 |
@@ -68,7 +68,8 @@
 | 执行通道与门控（源库 / 加速 / 联邦） | `crates/editor/src/channel.rs` + `crates/connection/src/secret.rs` + `crates/engine/src/duckdb/federation.rs` |
 | 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs` + `crates/engine/src/services/execution_service.rs` |
 | 网格渲染层（将来可提炼） | `crates/editor/src/view/widgets/grid/`（`GridDataSource` / `GridEditSink`，架构 §3.6） |
-| 语句切分 | `crates/editor/src/split.rs`（现状：`engine/src/services/sql_parser_service.rs::split_sql`，朴素 `;` 切分） |
+| 语句切分（词法级） | `crates/engine/src/sql/split.rs`（✅ 已落地；`SqlEngine::split_statements` + `sql_parser_service::split_sql` 委托） |
+| SQL 高亮区间 | `crates/engine/src/sql/highlight.rs`（✅ 已落地：tokenizer → 字节区间 + 类别，不上色） |
 | 结果集入库与淘汰 | `crates/editor/src/store.rs` |
 | 补全 | `crates/editor/src/completion.rs` + `crates/database/src/metadata_service.rs`（现状零消费） |
 | 会话 / 单元 / 输出 | `crates/editor/src/{session.rs, notebook.rs}` |
@@ -77,7 +78,7 @@
 | 中央区装配 | `crates/workbench/src/view.rs::init_workspace` |
 | SQL 执行 / 事务 / 取消 | `crates/engine/src/services/sql_service.rs` |
 | 历史存储 | `crates/engine/src/persistence/history_store.rs` |
-| 格式化 / 转译 | `crates/engine/src/sql/{formatter.rs, transpiler.rs}` |
+| 格式化 / 转译 | `crates/engine/src/sql/{formatter.rs, transpiler.rs}`（格式化 ✅ 走 sqlglot generator；转译未接线，注意 `transpile` 只吃单条） |
 | 编辑器上下文持久化 | `crates/engine/src/persistence/workbench_context_store.rs` |
 | 尺寸常量 | `crates/editor/src/ui.rs` |
 | 契约测试范围 | `crates/workbench/tests/ui_contract.rs` |
@@ -96,12 +97,17 @@
 8. **快捷键必须注册**：不在欢迎页/气泡里宣传未注册的键。
 9. 注释与文档用简体中文，说明意图与取舍（不复述代码）。
 10. `cargo` 命令固定 `-j 2`（DuckDB 静态库并发链接会 OOM）。
+11. **高亮区间取原文**：`Token::position` 是**字符**下标（tokenizer 内部 `chars()`），必须换算成字节偏移再切 `&str`；区间要覆盖**原文**（含引号 / 转义 / 注释标记），**不得**按解码后的 `value` 反查（理由与回归见架构 §12 #20）。
+12. **用 sqlglot 前先查台账**：原型 §7.4 已逐条记「签名 + 行为级事实 + 接线前置条件」（如 `transpile` 只吃单条、`plan` 只是本地计划、类型标注 / 血缘需 `MappingSchema`）；标 ⚪ 的候选先写验证用例再接线。
 
 ## 5. 测试与验证
 
 ```sh
-# 模块回归（编辑器服务层 + 引擎 SQL 层）
+# 模块回归（编辑器服务层 + 引擎 SQL 层；含 Phase 0 原语：切分 26 / 高亮 13 / 格式化 7 / 历史 4）
 cargo test -p rds-editor -p rds-engine --lib -j 2
+
+# 真机探针（事务会话亲和；需环境变量，见开发方案 §6）
+cargo test -p rds-engine --test transaction_affinity -j 2 -- --nocapture --test-threads=1
 
 # 契约（零裸色 / 零裸 px，扫描 editor + workbench）
 cargo test -p rds-workbench --test ui_contract -j 2
@@ -131,7 +137,7 @@ cargo check --workspace --all-targets -j 2
 | 类别 | 项 |
 | --- | --- |
 | 待你拍板（阻塞开工） | 架构 §13 十项；其中必须回答：多文档标签方案 · SQL→分析 转换粒度 · 批量执行语义 · 分析模式首期语言 · 是否独立 crate |
-| Phase 0（先做，无 UI） | Dock 标签能力验证 · 事务会话亲和验证 · 格式化选型验证 · 语句切分重做 · 历史字段贯通 · `affected_rows` 补齐 · crate 骨架 · SQL 高亮注册验证 |
+| Phase 0（先做，无 UI） | ✅ 已落地：语句切分 · 历史字段贯通 · crate 骨架 · SQL 高亮 · 格式化选型 · Dock 关闭语义（静态）／待你跑：事务探针（P0.2）与编译验证 · 编译基线 P0.9 ／余：驱动层真实 `affected_rows`（转 1b） |
 | Phase 1a | 内核 + 文本模式 + SQL 编辑体验 + 最小执行（"能用的编辑器"） |
 | Phase 1b | 执行闭环（"合格的 SQL 客户端"，并关闭 M4 遗留的"查看数据不自动执行"） |
 | Phase 1c | 分析模式骨架（Cell/Output/Session，仅 SQL + Markdown 单元） |

@@ -12,6 +12,12 @@
 //! `Vec<HighlightSpan>`（**字节区间 + 类别**）。颜色与主题由视图层决定——本模块不认识颜色、
 //! 不做渲染，与 `split` 一样是纯函数。
 //!
+//! 区间取**原文**（含引号与转义：`'it''s'` 整段着色，`--` / `/* */` 标记也在内），
+//! 不依赖 tokenizer 解码后的 `value`——`read_string` / `read_quoted_identifier` 会吃掉引号
+//! 与转义（`tokens/tokenizer.rs:758,1160`），按 `value` 反查原文在带转义时会落空。
+//! 另注：`Token::position` 是**字符**下标（tokenizer 内部 `input.chars().collect()`），
+//! 换字节偏移见 `byte_offsets`。
+//!
 //! ## 已知限制（均有测试固定行为）
 //!
 //! - **词法失败即返回空**（如未闭合字符串）：视图层退化为无高亮，不 panic、不截断内容。
@@ -112,53 +118,60 @@ pub fn highlight_spans(sql: &str) -> Vec<HighlightSpan> {
         Err(_) => return Vec::new(),
     };
 
-    let mut spans: Vec<HighlightSpan> = Vec::new();
-    let mut cursor = 0usize;
+    let starts = byte_offsets(sql, &tokens);
+    let mut spans: Vec<HighlightSpan> = Vec::with_capacity(tokens.len());
 
-    for token in &tokens {
-        let Some((start, end)) = locate(sql, cursor, token) else {
+    for (index, token) in tokens.iter().enumerate() {
+        let Some(class) = class_of(token) else {
             continue;
         };
-        cursor = end;
+        let Some((start, end)) = raw_range(sql, &starts, index) else {
+            continue;
+        };
 
-        if let Some(class) = class_of(token) {
-            if start < end && sql.is_char_boundary(start) && sql.is_char_boundary(end) {
-                spans.push(HighlightSpan { start, end, class });
-            }
-        }
+        spans.push(HighlightSpan { start, end, class });
     }
 
     mark_functions(sql, &mut spans);
     spans
 }
 
-/// 从 `cursor` 起定位 token 的字节区间
+/// 把 tokenizer 的**字符**偏移换算成**字节**偏移
 ///
-/// 不直接使用 `Token::position`：该字段的基准（字节 / 字符）未在文档中承诺，
-/// 而"从游标向后查找 token 原文"与基准无关，且能容忍 tokenizer 跳过空白。
-fn locate(sql: &str, cursor: usize, token: &Token) -> Option<(usize, usize)> {
-    if token.value.is_empty() {
-        return None;
-    }
-    let rest = sql.get(cursor..)?;
-    let idx = rest.find(token.value.as_str())?;
+/// `Tokenizer` 内部是 `input.chars().collect()`，`advance()` 每字符 `pos += 1`
+/// （`tokens/tokenizer.rs:69,83,137`），所以 `Token::position` 是字符下标而非字节偏移；
+/// 遇到非 ASCII 文本（中文注释 / 标识符）直接当字节偏移用会切坏 `&str`。
+/// token 位置单调不减，故一趟前进即可（O(n)，不重复扫描）。
+fn byte_offsets(sql: &str, tokens: &[Token]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(tokens.len());
+    let mut chars = sql.char_indices();
+    let mut byte = chars.next().map(|(byte, _)| byte);
+    let mut consumed = 0usize;
 
-    let mut start = cursor + idx;
-    let mut end = start + token.value.len();
-
-    // 带引号的 token：value 可能是"去引号后的内容"，把引号一起纳入着色范围
-    if token.quote_char != '\0' {
-        let quote = token.quote_char as u8;
-        let bytes = sql.as_bytes();
-        if start > 0 && bytes[start - 1] == quote {
-            start -= 1;
+    for token in tokens {
+        while consumed < token.position {
+            byte = chars.next().map(|(byte, _)| byte);
+            consumed += 1;
         }
-        if end < bytes.len() && bytes[end] == quote {
-            end += 1;
-        }
+        // `position` 在文末之后（Eof）时落到文末
+        offsets.push(byte.unwrap_or(sql.len()));
     }
 
-    Some((start, end))
+    offsets
+}
+
+/// token 在原文中的字节区间
+///
+/// 取「本 token 起点 → 下一个 token 起点」再裁掉尾部空白，得到的就是**原文**：
+/// 引号（`'…'` / `"…"` / `` `…` ``）与转义都原样保留，正是高亮该着的范围。
+/// tokenizer 只跳过空白（注释在 `with_comments` 下也是 token），故区间内不会夹带被丢弃的内容。
+fn raw_range(sql: &str, starts: &[usize], index: usize) -> Option<(usize, usize)> {
+    let start = *starts.get(index)?;
+    let raw_end = starts.get(index + 1).copied().unwrap_or(sql.len());
+    let text = sql.get(start..raw_end)?;
+    let end = start + text.trim_end().len();
+
+    (end > start).then_some((start, end))
 }
 
 /// 判定 token 的高亮类别
@@ -230,6 +243,13 @@ mod tests {
             .map(|(_, class)| class)
     }
 
+    fn span_of(sql: &str, class: TokenClass) -> HighlightSpan {
+        highlight_spans(sql)
+            .into_iter()
+            .find(|span| span.class == class)
+            .unwrap_or_else(|| panic!("缺少 {class:?} 区间：{sql}"))
+    }
+
     #[test]
     fn keywords_are_classified() {
         let sql = "SELECT a FROM t WHERE b = 1";
@@ -250,6 +270,23 @@ mod tests {
     }
 
     #[test]
+    fn escaped_quote_string_keeps_raw_text() {
+        // `read_string` 把 `''` 解码成一个 `'`（`tokens/tokenizer.rs:758`）：
+        // 若按 `value` 反查原文会落空，区间必须取原文
+        let sql = "SELECT 'it''s' AS s";
+        assert_eq!(span_of(sql, TokenClass::String).text(sql), "'it''s'");
+    }
+
+    #[test]
+    fn non_ascii_sql_uses_byte_ranges() {
+        // `Token::position` 是**字符**下标：不换算成字节则中文文本下会错位 / 切坏 `&str`
+        let sql = "SELECT '中文' AS 名称 -- 注释";
+        assert_eq!(span_of(sql, TokenClass::String).text(sql), "'中文'");
+        assert_eq!(span_of(sql, TokenClass::Identifier).text(sql), "名称");
+        assert_eq!(span_of(sql, TokenClass::Comment).text(sql), "-- 注释");
+    }
+
+    #[test]
     fn number_and_parameter_are_classified() {
         let sql = "SELECT * FROM t LIMIT 10";
         assert_eq!(class_of_text(sql, "10"), Some(TokenClass::Number));
@@ -261,14 +298,14 @@ mod tests {
 
     #[test]
     fn comments_are_classified() {
-        // 注释 token 的 value 可能包含/不包含行尾，断言用前缀而不写死全文
+        // 区间取原文：行注释含 `--` 标记（尾部空行已裁掉）
         let sql = "SELECT 1 -- 说明\n";
         let spans = highlight_spans(sql);
         let line = spans
             .iter()
             .find(|s| s.class == TokenClass::Comment)
             .expect("行注释应有高亮区间");
-        assert!(line.text(sql).starts_with("--"), "{}", line.text(sql));
+        assert_eq!(line.text(sql), "-- 说明");
 
         let sql = "SELECT /* 块注释 */ 1";
         let spans = highlight_spans(sql);
@@ -276,7 +313,7 @@ mod tests {
             .iter()
             .find(|s| s.class == TokenClass::Comment)
             .expect("块注释应有高亮区间");
-        assert!(block.text(sql).starts_with("/*"), "{}", block.text(sql));
+        assert_eq!(block.text(sql), "/* 块注释 */");
     }
 
     #[test]

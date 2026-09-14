@@ -468,28 +468,35 @@
 
 `core/sql` 是 sqlglot-rust 的**唯一接入点**（架构硬约束）。它的能力远不止“解析 + 格式化”。
 
-> **核实方式**（2026-09-15）：逐项 grep 解包源码（`~/.cargo/registry/…/sqlglot-rust-0.10.29/src/`）的**公开签名与定义位置**并记行号。
-> 锁定版本 `=0.10.29`，所以这些行号在本仓 Cargo.lock 下稳定可复现。
-> **证据强度**：签名 / 存在性 ✅ 已核；**语义与效果未实测**（未在真实 SQL 上跑）——标 ⚪ 的候选立项前应先写 20 条真实 SQL 的验证用例。
+> **核实方式**（2026-09-15，两轮）：逐项 grep 解包源码（`~/.cargo/registry/…/sqlglot-rust-0.10.29/src/`）。
+> 第一轮只核**公开签名与定义位置**并记行号；第二轮进一步读**实现**，补上“行为级”事实（哪一步会丢注释、
+> `position` 是字符还是字节、`transpile` 吃不吃多语句），并把与实现冲突的条目改正（已用 ✅ 标记修正点）。
+> 锁定版本 `=0.10.29`，行号稳定可复现。
+> **证据强度**：✅ 已核（签名 + 关键实现路径）；⚪ 仅核签名，**语义 / 效果未在真实 SQL 上实测**——接线前先写验证用例。
 
-| 能力 | 公开签名 / 类型（已核） | 状态 | 用途 | 证据（源码位置） |
+| 能力 | 公开签名 / 类型（已核） | 状态 | 用途 | 证据（源码位置）与行为级事实 |
 | --- | --- | --- | --- | --- |
-| 解析 | `parser::parse(sql, dialect) -> Result<Statement>`；多语句 `parse_statements` | ✅ 已用 | 执行路由（SELECT / DDL / DML 判定） | `parser/mod.rs:16`；`parser/mod.rs:67,71` |
+| 解析 | `parse(sql, dialect) -> Result<Statement>`；多语句 `parse_statements`；带注释 `parse_with_comments` / `parse_statements_with_comments` | ✅ 已用 | 执行路由（SELECT / DDL / DML 判定）；格式化前解析 | `parser/mod.rs:16,67,77`。**注意**：顶层只再导出 `parse_with_comments` / `parse_statements_with_comments`（`lib.rs:122`），`parse_statements` 要走模块全路径 |
 | 语法校验 | 以 `parse` 成功即合法（本项目 `SqlEngine::validate` 封装） | ✅ 已用 | “校验语法”动作、执行前置校验 | `parser/mod.rs:16` |
 | **语句切分** | **自研** `sql/split.rs`（词法级状态机） | ✅ 已用 | 当前语句 / 批量执行 / 语句数 | `crates/engine/src/sql/split.rs`。**不用 sqlglot**：切分要能在“文本未写完”时工作，解析式切分会直接失败 |
-| 词法 tokenizer | `tokens::Tokenizer::{new, with_comments, with_bracket_identifiers, tokenize}`；`Token{token_type,value,line,col,position,quote_char}`；`TokenType`（200+ 变体） | ✅ 已用（P0.8） | SQL 高亮区间（含注释与行列位） | `tokens/tokenizer.rs:67,81,97,105`；`tokens/mod.rs:11,279` |
-| 代码生成 | `generator::{generate, generate_pretty(statement, dialect)}` | ✅ 已用（P0.3） | 格式化（多语句脚本安全） | `generator/mod.rs:10,19`；AST 带 `comments` → `ast/types.rs:125`；生成器 `gen_comments` `generator/sql_generator.rs:171` |
-| 方言转译 | `transpile` / `transpile_statements` / `transpile_with_comments` | ✅ 已用 | “方言转译”动作 | `lib.rs:201,218,237` |
-| DDL / DML 构建 | `builder::{column,table,table_full,literal,string_literal,boolean,null,cast,and_all,or_all,not,func,func_distinct,star}`（均返回 `Expr`） | 🟡 未接线 | M4 的“生成 SELECT/INSERT/UPDATE/DELETE”入口 | `builder/mod.rs:77…369` |
-| 类型标注 | `annotate_types<S: Schema>(stmt: &Statement, schema: &S) -> TypeAnnotations` | ⚪ 未用 | 结果列类型推断（值查看器 / 图表轴 / 数字格式化） | `optimizer/annotate_types.rs:102`。**注意：需要实现 `Schema` trait** |
-| **列级血缘** | `lineage(column: &str, statement: &Statement, schema: &MappingSchema, config: &LineageConfig) -> LineageResult<LineageGraph>`；`lineage_sql(...)`；`LineageGraph/LineageNode/LineageConfig/LineageIterator` | ⚪ 未用（**强候选**） | 结果**血缘**从“UI 摘要”升级为真血缘；单元依赖图；表-列影响分析 | `optimizer/lineage.rs:501,543,327,129,78,303`。**注意：需要 `MappingSchema`** |
-| 作用域分析 | `build_scope(statement: &Statement) -> Scope`；`find_all_in_scope(scope, predicate) -> Vec<&ColumnRef>`；`Scope/ScopeType/Source/ColumnRef` | ⚪ 未用（候选） | “当前语句引用了哪些表”→ 补全排序 / 权限预检 / 重建 SELECT | `optimizer/scope_analysis.rs:188,202,85,33,55,68` |
-| 谓词下推 | `pushdown_predicates(statement: Statement) -> Statement` | ⚪ 未用（候选） | 本地加速通道的改写（过滤推给源库） | `optimizer/pushdown_predicates.rs:36` |
-| AST 差异 | `diff(source: &Statement, target: &Statement) -> Vec<ChangeAction>`；`diff_sql(source_sql, target_sql, dialect) -> Result<Vec<ChangeAction>>`（顶层再导出为 `diff_ast`） | ⚪ 未用（候选） | 结果集对比（V1 有 `ResultDiffViewer`）、笔记版本链 diff | `diff/mod.rs:75,1105,28,44`；`lib.rs:113` |
-| 查询计划 | `plan(statement: &Statement) -> Result<Plan>`；`Plan/Projection/StepId` | ⚪ 未用 | EXPLAIN 结果的结构化展示 | `planner/mod.rs:379,213,47,33` |
-| 执行器 / schema | `executor/{mod,engine,eval}.rs`、`schema/mod.rs` 存在 | ⚪ 未用 | 与自家执行/内省链重叠，暂无需求 | **仅核实文件存在，未逐项读其 API** |
+| 词法 tokenizer | `Tokenizer::{new, with_comments, with_bracket_identifiers, tokenize}`（`tokenize(&mut self)`）；`Token{token_type,value,line,col,position,quote_char}` | ✅ 已用（P0.8） | SQL 高亮区间 | `tokens/tokenizer.rs:67,81,105`；`tokens/mod.rs:279`。**行为级事实**：① `tokenize()` **丢弃空白**，注释仅在 `with_comments` 下保留（`:105-125`）；② 关键字是**每词一个枚举变体**（`Select`/`From`/…，`keyword_type` `:993`），不是通用 `Keyword`；③ **`position`/`line`/`col` 是字符下标**（内部 `input.chars().collect()` `:69,83`，`advance()` 每字符 `pos += 1` `:137`）——直接当字节偏移用会切坏非 ASCII 文本；④ `quote_char` **只对带引号标识符**设置（`with_quote` `tokens/mod.rs:323`），字符串恒为 `\0` |
+| 代码生成 | `generate(&Statement, Dialect) -> String`；`generate_pretty(&Statement, Dialect) -> String`（两者都走 `gen_statement`，`pretty` 只影响换行缩进） | ✅ 已用（P0.3） | 格式化（多语句脚本安全） | `generator/mod.rs:10,19`；`sql_generator.rs:57,65`；AST 带 `comments` → `ast/types.rs:125`。**行为级事实**：① 只有**前导注释**会被 emit（`gen_statement` 每个分支 `gen_comments(&s.comments)`，`sql_generator.rs:206-268`），行内 / 尾随注释丢失 → 架构 §12 #3 的精确来源；② 非 MySQL 目标会把 `#` 注释**改写**成 `--`（`normalize_comment` `:181-197`） |
+| 方言转译 | `transpile(sql, read, write) -> Result<String>`；`transpile_statements(sql, read, write) -> Result<Vec<String>>`；`transpile_with_comments(...)` | ✅ 已用 | “方言转移器”动作 | `lib.rs:201,218,237`。**行为级事实（修正）**：`transpile` / `transpile_with_comments` 内部走**单条** `parse`——**多语句直接报错**；脚本必须先切分（正好复用 `sql/split.rs`）或改用 `transpile_statements`（内部 `parse_statements`） |
+| DDL / DML 构建 | 自由函数构造器 `builder::{column,table,table_full,literal,string_literal,boolean,null,cast,and_all,or_all,not,func,func_distinct,star,…}`（返回 `Expr`，~50 个顶层再导出）+ 建造者 `SelectBuilder` / `ConditionBuilder` | 🟡 未接线 | M4 的“生成 SELECT/INSERT/UPDATE/DELETE”入口 | **证据修正**：`builder/mod.rs:77`（`column`）…`:369`（`star`）是**自由构造器**；真正的建造者出口是 `build()` `:792` / `:1199`（`Statement`）/ `:1205`（`build_select`），顶层再导出见 `lib.rs:49-103` |
+| **Schema 与类型** | `trait Schema{add_table, column_names, get_column_type, has_column, dialect, get_udf_type}`；**现成实现** `MappingSchema::new(dialect)` + `replace_table(&mut self, &[&str], Vec<(String, DataType)>)` | ⚪ 未用 | 类型标注 / 血缘 / 列限定的**共同前置** | `schema/mod.rs:76,97,104,110,176,185`。**接线成本**：① 从 `database::MetadataService` 组装表-列；② 一张**驱动类型 → `ast::DataType`** 映射表（`DataType` 在 `ast` 下，顶层未再导出） |
+| 类型标注 | `annotate_types<S: Schema>(stmt: &Statement, schema: &S) -> TypeAnnotations` | ⚪ 未用 | 结果列类型推断（值查看器 / 图表轴 / 数字格式化） | `optimizer/annotate_types.rs:102`；顶层再导出 `lib.rs:116` |
+| **列级血缘** | `lineage(column: &str, statement: &Statement, schema: &MappingSchema, config: &LineageConfig) -> LineageResult<LineageGraph>`；`lineage_sql(...)` | ⚪ 未用（**强候选**） | 结果**血缘**从“UI 摘要”升级为真血缘；单元依赖图；表-列影响分析 | `optimizer/lineage.rs:501,543`；顶层再导出 `lib.rs:117`。**前置**：`MappingSchema`（见上） |
+| 作用域分析 | `build_scope(&Statement) -> Scope`；`find_all_in_scope(scope, predicate)` | ⚪ 未用（候选） | “当前语句引用了哪些表”→ 补全排序 / 权限预检 / 重建 SELECT | `optimizer/scope_analysis.rs:188,202`；顶层再导出 `lib.rs:121`。**无需 schema**，接线最轻 |
+| 列限定 / 子查询展开 / 优化管线 | `qualify_columns<S: Schema>(Statement, &S) -> Statement`；`unnest_subqueries(Statement) -> Statement`；`optimize(Statement) -> Result<Statement>` | ⚪ 未用（候选） | 转表插入限定名 / 联邦查询改写 / 转译前规范化 | `optimizer/qualify_columns.rs:20`、`optimizer/unnest_subqueries.rs:29`、`optimizer/mod.rs:28` |
+| 谓词下推 | `pushdown_predicates(Statement) -> Statement` | ⚪ 未用（候选） | 本地加速通道的改写（过滤推给源库） | `optimizer/pushdown_predicates.rs:36`；顶层再导出 `lib.rs:120` |
+| AST 差异 | `diff(source: &Statement, target: &Statement) -> Vec<ChangeAction>`；`diff_sql(source_sql, target_sql, dialect) -> Result<Vec<ChangeAction>>` | ⚪ 未用（候选） | 结果集对比（V1 有 `ResultDiffViewer`）、笔记版本链 diff | `diff/mod.rs:75,1105`；顶层再导出 `lib.rs:113`（`diff_ast` / `diff_sql`） |
+| 查询计划（**本地**） | `plan(&Statement) -> Result<Plan>`；`Step::{Scan, Filter, Project,…}` | ⚪ 未用（**限定用途**） | **只能做离线预览 / 降级**：它是 sqlglot 自建的本地计划（`PlanBuilder`），**不等于源库 EXPLAIN**，且 DDL 不支持（文档注明） | `planner/mod.rs:379,60`；顶层再导出 `lib.rs:126`。见架构 §12 #20 |
+| 执行器（内存表） | `execute(sql, &Tables) -> Result<ResultSet>`；`Value/Table/ResultSet` | ⛔ **不采用** | 教学级：只在**内存表**上跑，不连库、无事务 / 并发 / 权限 | `executor/mod.rs:370,376`。本地分析一律走 DuckDB（真分析引擎），不用它 |
+| 方言扩展 / 时间格式 | `DialectPlugin`/`DialectRegistry`/`register_dialect`/`transpile_ext`；`format_time`/`format_time_dialect`/`TsqlStyleCode` | ⚪ 未用 | 方言注册与**时间格式串转换**（“方言转移器”的高价值子集） | `lib.rs:105-112` |
 
-> 结论：**后续做“结果血缘 / 补全排序 / 结果对比”时，先查本表**——这三件事 sqlglot 都已有现成模块（血缘 / 作用域 / 差异），不必自研；但**先写验证用例再接线**（本表只保证签名存在，不保证效果符合预期）。
+> 结论：**后续做“结果血缘 / 补全排序 / 结果对比 / 类型推断”时先查本表**——血缘、作用域、差异、类型标注都已有现成模块，不必自研；
+> 但**接线前置条件已逐条写清**（`Schema` / `MappingSchema` + 驱动类型映射表、`transpile` 只吃单条、`plan` 只是本地计划），
+> 标 ⚪ 的候选**先写验证用例再接线**（本表保证签名与关键实现路径，不保证效果符合预期）。
 
 ---
 

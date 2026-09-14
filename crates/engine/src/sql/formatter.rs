@@ -9,8 +9,9 @@
 //! - **多语句脚本**：`parse_statements_with_comments` 逐条生成，以 `;\n\n` 连接并补尾分号
 //!   （编辑器面向脚本，单条 `parse` 会把多语句判为解析失败）。
 //! - **解析失败原样返回**：编辑中的文本（未写完）不能因为格式化成坏内容，也不报错。
-//! - **注释**：AST 携带 comments 且生成器会输出前导注释；**行内 / 尾随注释可能丢失**，
-//!   这是 sqlglot-rust 生成器的能力边界（真机核对后若不可接受，再考虑自研缩进器）。
+//! - **注释**：AST 携带 comments，生成器**只输出前导注释**（`gen_statement` 每个分支 `gen_comments(&s.comments)`，
+//!   `generator/sql_generator.rs:206-268`）；**行内 / 尾随注释会丢**——这是 sqlglot-rust 生成器的能力边界。
+//!   另注：`normalize_comment`（`:181-197`）会把非 MySQL 目标的 `#` 注释改写成 `--`（方言差异，非排版差异）。
 //! - **不改变语义**：只做排版；方言相关的重写属 `transpiler`，不在这里做。
 
 use sqlglot_rust::{generate_pretty, parse_statements_with_comments, Dialect};
