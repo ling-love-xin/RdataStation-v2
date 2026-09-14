@@ -351,17 +351,32 @@ flowchart TD
 
 ## 11. 已知问题与后续项
 
-| # | 项 | 说明 |
-| --- | --- | --- |
-| 1 | **V6 多组引用样式 + 显式主组** | ✅ 已实现（2026-09-13）：主组全亮 + 其它组 `∈ 主组名` 引用行（`panels.rs::render_reference_row`），点击跳转主组；主组由 `connection_group_members.is_primary` 显式存储（右键 `设为主组 ▸`，仅归组的连接可见），未指定回退分组排序最前（`membership[conn][0]`）。 |
-| 2 | **V7 `筛选 ▾` facet 弹层** | ✅ 已实现（2026-09-13）：归属域 chips 常驻 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签单选子菜单 + 清除）；搜索 `scope:/source:/type:/driver:/tag:` 作额外约束。**遗留**：搜索 token 与 chips **单向叠加**（不回写 chips），未做双向同步。 |
-| 3 | **徽标 hover 卡** | ✅ 已实现（2026-09-13）：0.6.1 无通用 `.tooltip()` 扩展，改用 `gpui_kit::component::hover_card::HoverCard`（300ms 延迟）显类型 / 状态 / 驱动（`nav_badge_hover_card`）。 |
-| 4 | **属性面板的驱动显示名** | ✅ 已实现（2026-09-13）：「驱动」行显示 `drivers.name · driver_id`（如 `PostgreSQL (Official) · postgres_native`），并新增「数据库类型」行（`load_properties(..., db_type)`）。 |
-| 5 | 工作线程串行 | 大预取会延迟用户展开响应；可做优先级 / 双队列。 |
-| 6 | 大 schema 列内联阈值 | >50 列建议改为「在属性面板查看列」而不内联渲染。 |
-| 7 | 标签命名规范 | 建议约定 `key:value`（`env:prod`），便于 `tag:` 语法稳定解析。 |
-| 8 | facet 筛选无 SQLite 行 | facet 走 `settings.json`（UI 偏好）；若将来需**按连接**记忆筛选，再扩 `navigator_state`。 |
-| 9 | **MySQL 元数据内省为空** | ✅ 已修（2026-09-13）：sqlx MySQL 的 Arrow 转换把 VARCHAR/TEXT 列误判为 `Binary`（`Vec<u8>` 探测先于 `String`），令下游 `StringArray` 下转全失败 → catalog / schema / table / column 全空。修复：先按声明类型名判文本族；TEXT 与真 BLOB 在协议层同名 `BLOB`，改用**字节可否 UTF-8 解码**区分。单测 `driver::native::mysql::tests::mysql_text_and_binary_classification`。 |
+> 本表是本模块**唯一权威待办清单**（与 `dev-plan` / 手册表述不一致时以本表为准）。
+> 状态：✅ 已完成 · 🟡 部分完成 · ⬜ 未做。
+
+| # | 状态 | 项 | 说明 |
+| --- | --- | --- | --- |
+| 1 | ✅ | **V6 多组引用样式 + 显式主组** | 已实现（2026-09-13）：主组全亮 + 其它组 `∈ 主组名` 引用行（`panels.rs::render_reference_row`），点击跳转主组；主组由 `connection_group_members.is_primary` 显式存储（右键 `设为主组 ▸`，仅归组的连接可见），未指定回退分组排序最前（`membership[conn][0]`）。 |
+| 2 | 🟡 | **V7 `筛选 ▾` facet 弹层** | 已实现（2026-09-13）：归属域 chips 常驻 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签单选子菜单 + 清除）；搜索 `scope:/source:/type:/driver:/tag:` 作额外约束。**遗留**：搜索 token 与 chips **单向叠加**（不回写 chips），未做双向同步。 |
+| 3 | ✅ | **徽标 hover 卡** | 已实现（2026-09-13）：0.6.1 无通用 `.tooltip()` 扩展，改用 `gpui_kit::component::hover_card::HoverCard`（300ms 延迟）显类型 / 状态 / 驱动（`nav_badge_hover_card`）。 |
+| 4 | ✅ | **属性面板的驱动显示名** | 已实现（2026-09-13）：「驱动」行显示 `drivers.name · driver_id`（如 `PostgreSQL (Official) · postgres_native`），并新增「数据库类型」行（`load_properties(..., db_type)`）。 |
+| 5 | ⬜ | 工作线程串行 | 大预取会延迟用户展开响应；可做优先级 / 双队列。 |
+| 6 | ⬜ | 大 schema 列内联阈值 | >50 列建议改为「在属性面板查看列」而不内联渲染。 |
+| 7 | ⬜ | 标签命名规范 | 建议约定 `key:value`（`env:prod`），便于 `tag:` 语法稳定解析。 |
+| 8 | ⬜ | facet 筛选无 SQLite 行 | facet 走 `settings.json`（UI 偏好）；若将来需**按连接**记忆筛选，再扩 `navigator_state`。 |
+| 9 | ✅ | **MySQL 元数据内省为空** | 已修（2026-09-13）：sqlx MySQL 的 Arrow 转换把 VARCHAR/TEXT 列误判为 `Binary`（`Vec<u8>` 探测先于 `String`），令下游 `StringArray` 下转全失败 → catalog / schema / table / column 全空。修复：先按声明类型名判文本族；TEXT 与真 BLOB 在协议层同名 `BLOB`，改用**字节可否 UTF-8 解码**区分。单测 `driver::native::mysql::tests::mysql_text_and_binary_classification`。 |
+| 10 | ✅ | **序列 / 触发器被默认空实现遮蔽** | 已修（2026-09-14）：`MetadataService::{list_sequences,list_triggers}` 优先走 `MetadataBrowser::{get_sequences,get_triggers}`，而四个驱动都没实现这两个方法（trait 默认返回空），**遮蔽**了 PG 已实现的 `Database::list_sequences/list_triggers`——「序列」文件夹永不出现。修法：浏览器层返回空时回退 `Database::list_*`。实测 PG `public` 序列由 0 → 12 条。**仍缺**：MySQL / SQLite / DuckDB 未实现序列·触发器内省（本就是空）。 |
+| 11 | ✅ | **例程源码未接 + MySQL 取错列** | 已修（2026-09-14）：`get_routine_source` 在四个驱动与 `MetadataService` 都实现，但**无调用方**；现接入属性面板「源码」分区（`PropertyRef` 不带过程/函数种类，先按存储过程取、未命中再按函数取）。顺带修复 MySQL / MySQL(native) 的 `SHOW CREATE` **取列 1（sql_mode）而非 DDL**：改为按列名 `Create …` 定位。实测：PG `CREATE OR REPLACE FUNCTION public.fn_batch_insert_material(...)`；MySQL `CREATE DEFINER=... PROCEDURE \`batch_insert_order\`(...)`。 |
+| 12 | ✅ | **属性面板覆盖不足** | 已修（2026-09-14）：`PropertyKind` 新增 `Routine` / `Sequence` / `Trigger`；`load_objects` 对所有类别对象都挂 `property`（此前仅表 / 视图有，例程 / 序列 / 触发器既无「查看属性」也无「刷新元数据」）。 |
+| 13 | ✅ | **限定名重复段** | 已修（2026-09-14）：无独立 Schema 层的驱动（MySQL / SQLite / DuckDB）导航把 schema 传成 catalog，`qualify` 与 `nav_qualified_name` 会出现 `db.db.name`；两者相等时只留一份。 |
+| 14 | ⬜ | 系统库 / 系统 schema 不过滤 | MySQL `information_schema` / `mysql` / `sys` / `performance_schema`、PG `pg_toast` 等照常列出；待「自定义显示数据库 / Schema」架构统一处理。 |
+| 15 | ⬜ | PostgreSQL 跨库浏览 | 现只列当前库（避免假节点）；DBeaver 式「展开兄弟库时另开一条连接」未做。 |
+| 16 | ⬜ | Mock / 洞察占位 + SQL 区受限 | Mock（M7）/ 洞察（M8）面板仍为占位；中央编辑区的 SQL 可执行区目前仅 `use_duckdb_fed` 连接可见。 |
+| 17 | ⬜ | 导航侧菜单缺口 | 缺：测试连接 · 复制连接（模板）· 共享至项目/取消共享 · 删除连接（删除目前只在编辑区）；表 / 视图缺 生成 INSERT/UPDATE/DELETE。 |
+| 18 | ⬜ | 拖拽与手动排序 | 表拖到编辑器插入限定名（`on_drag`）未做；归组无拖拽、组内外手动排序未接线（`ConnectionOrgStore::set_member_order` 已就绪，缺 UI 入口）。 |
+| 19 | ⬜ | 新建分组无描述表单 | 仅名称（默认「新建分组」自动去重）；描述表单未做。 |
+| 20 | 🟡 | 缓存首版限制（C3–C6） | 命中判据「非空即有数据」（空列表会回落实时内省）；刷新 `prune_schema` 连带失效兄弟文件夹缓存；列级删除不剪枝；每次 `NavCache::open` 新建连接 + 跑幂等迁移。详见 `dev-plan` C3 说明。 |
+| 21 | ⬜ | C8 身份指纹未接线 | `engine::persistence::metadata_identity` 纯函数已就绪但未接线；因此同库 / 同文件的多条连接（包括别名后）仍各存一份 L2。 |
 
 ---
 

@@ -248,27 +248,26 @@ impl NavigatorService {
                 };
                 let name = obj.name;
                 let key = NavNode::child_key(conn_id, &[catalog, schema, name.as_str()]);
-                let kind_prop = if has_children {
-                    Some(PropertyRef {
-                        conn_id: conn_id.to_string(),
-                        source: NavSource::from_conn_id(conn_id),
-                        catalog: Some(catalog.to_string()),
-                        schema: Some(schema.to_string()),
-                        parent: None,
-                        name: name.clone(),
-                        kind: match folder {
-                            NavFolder::Views => PropertyKind::View,
-                            _ => PropertyKind::Table,
-                        },
-                    })
-                } else {
-                    None
+                // 所有类别对象都带属性定位信息：此前仅表 / 视图带，导致例程 / 序列 /
+                // 触发器节点既无「查看属性」也无「查看源码」。
+                let kind_prop = PropertyRef {
+                    conn_id: conn_id.to_string(),
+                    source: NavSource::from_conn_id(conn_id),
+                    catalog: Some(catalog.to_string()),
+                    schema: Some(schema.to_string()),
+                    parent: None,
+                    name: name.clone(),
+                    kind: match folder {
+                        NavFolder::Tables => PropertyKind::Table,
+                        NavFolder::Views => PropertyKind::View,
+                        NavFolder::Routines => PropertyKind::Routine,
+                        NavFolder::Sequences => PropertyKind::Sequence,
+                        NavFolder::Triggers => PropertyKind::Trigger,
+                    },
                 };
-                let mut node = NavNode::new(key, name.clone(), conn_id, kind, has_children)
-                    .with_comment(obj.comment);
-                if let Some(prop) = kind_prop {
-                    node = node.with_property(prop);
-                }
+                let node = NavNode::new(key, name.clone(), conn_id, kind, has_children)
+                    .with_comment(obj.comment)
+                    .with_property(kind_prop);
                 if has_children {
                     node.with_expand_path(NavPath::Table {
                         catalog: catalog.to_string(),

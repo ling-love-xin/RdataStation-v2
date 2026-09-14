@@ -273,6 +273,12 @@ pub enum PropertyKind {
     Table,
     View,
     Column,
+    /// 存储过程 / 函数
+    Routine,
+    /// 序列
+    Sequence,
+    /// 触发器
+    Trigger,
 }
 
 /// 属性面板定位信息（由导航服务在构建节点时填充）。

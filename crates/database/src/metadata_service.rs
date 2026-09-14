@@ -151,17 +151,22 @@ impl MetadataService {
         let db = self.get_database(conn_id).await?;
         if let Some(browser) = db.as_metadata_browser() {
             let nodes = browser.get_sequences(catalog, schema).await?;
-            return Ok(nodes
-                .into_iter()
-                .map(|n| SchemaObject {
-                    name: n.name,
-                    kind: n.kind,
-                    children: None,
-                    comment: n.comment,
-                    table_name: None,
-                    event: None,
-                })
-                .collect());
+            if !nodes.is_empty() {
+                return Ok(nodes
+                    .into_iter()
+                    .map(|n| SchemaObject {
+                        name: n.name,
+                        kind: n.kind,
+                        children: None,
+                        comment: n.comment,
+                        table_name: None,
+                        event: None,
+                    })
+                    .collect());
+            }
+            // 浏览器层返回空：可能是 trait 默认实现（未支持）而非真的没有序列。
+            // 回退 `Database::list_sequences`——否则驱动的真实实现会被默认空实现遮蔽
+            // （PostgreSQL 即如此，「序列」文件夹永不出现）。
         }
         db.list_sequences(catalog, Some(schema)).await
     }
@@ -175,17 +180,20 @@ impl MetadataService {
         let db = self.get_database(conn_id).await?;
         if let Some(browser) = db.as_metadata_browser() {
             let nodes = browser.get_triggers(catalog, schema).await?;
-            return Ok(nodes
-                .into_iter()
-                .map(|n| SchemaObject {
-                    name: n.name,
-                    kind: n.kind,
-                    children: None,
-                    comment: n.comment,
-                    table_name: None,
-                    event: None,
-                })
-                .collect());
+            if !nodes.is_empty() {
+                return Ok(nodes
+                    .into_iter()
+                    .map(|n| SchemaObject {
+                        name: n.name,
+                        kind: n.kind,
+                        children: None,
+                        comment: n.comment,
+                        table_name: None,
+                        event: None,
+                    })
+                    .collect());
+            }
+            // 同上：回退 `Database::list_triggers`（PostgreSQL 有真实实现，曾被遮蔽）。
         }
         db.list_triggers(catalog, Some(schema)).await
     }

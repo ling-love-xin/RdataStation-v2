@@ -1034,6 +1034,9 @@ fn nav_kind_color(kind: &NavNodeKind, theme: &gpui_kit::component::Theme) -> Hsl
 }
 
 /// 限定名（`catalog.schema.name`，跳过空段）：用于复制与生成 SELECT。
+///
+/// 无独立 Schema 层的驱动（MySQL / SQLite / DuckDB）导航把 schema 传成 catalog，
+/// 相等时只留一份，避免出现 `db.db.name`。
 fn nav_qualified_name(prop: &PropertyRef) -> String {
     let mut parts: Vec<&str> = Vec::new();
     if let Some(c) = prop.catalog.as_deref() {
@@ -1042,7 +1045,7 @@ fn nav_qualified_name(prop: &PropertyRef) -> String {
         }
     }
     if let Some(s) = prop.schema.as_deref() {
-        if !s.is_empty() {
+        if !s.is_empty() && Some(s) != prop.catalog.as_deref() {
             parts.push(s);
         }
     }

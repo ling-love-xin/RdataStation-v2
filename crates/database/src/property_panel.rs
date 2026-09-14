@@ -6,6 +6,7 @@
 
 use crate::metadata_service::MetadataService;
 use crate::model::{NavSource, PropertyKind, PropertyRef};
+use engine::driver::traits::SchemaObjectKind;
 use shared::error::CoreError;
 
 /// 属性网格中的一行（label / value）。
@@ -67,13 +68,14 @@ fn qualify(ref_: &PropertyRef) -> String {
         }
         _ => {
             let mut parts: Vec<String> = Vec::new();
-            if let Some(c) = &ref_.catalog {
-                if !c.is_empty() {
-                    parts.push(c.clone());
-                }
+            let catalog = ref_.catalog.clone().unwrap_or_default();
+            // 无独立 Schema 层的驱动（MySQL / SQLite / DuckDB）导航把 schema 传成 catalog，
+            // 直接拼接会出现 `db.db.name`，故两者相等时只留一份。
+            if !catalog.is_empty() {
+                parts.push(catalog.clone());
             }
             if let Some(s) = &ref_.schema {
-                if !s.is_empty() {
+                if !s.is_empty() && *s != catalog {
                     parts.push(s.clone());
                 }
             }
@@ -110,6 +112,9 @@ pub async fn load_properties(
         PropertyKind::Table => "BASE TABLE",
         PropertyKind::View => "VIEW",
         PropertyKind::Column => "COLUMN",
+        PropertyKind::Routine => "ROUTINE",
+        PropertyKind::Sequence => "SEQUENCE",
+        PropertyKind::Trigger => "TRIGGER",
     }
     .to_string();
 
@@ -201,6 +206,54 @@ pub async fn load_properties(
                 properties.push(row("提示", "列已不存在（结构可能已变更）"));
             }
         }
+        PropertyKind::Sequence | PropertyKind::Trigger => {
+            properties.push(row("名称", ref_.name.clone()));
+            properties.push(row("限定名", qualify(ref_)));
+            properties.push(row("类型", object_type.clone()));
+            properties.push(row("归属域", source.clone()));
+        }
+        PropertyKind::Routine => {
+            let catalog = ref_.catalog.clone().unwrap_or_default();
+            let schema = ref_.schema.clone().unwrap_or_default();
+            properties.push(row("名称", ref_.name.clone()));
+            properties.push(row("限定名", qualify(ref_)));
+            properties.push(row("类型", object_type.clone()));
+            properties.push(row("归属域", source.clone()));
+
+            // `PropertyRef` 不带例程种类（过程 / 函数），而驱动按种类走不同语句：
+            // 先按存储过程取，未命中（`None` 或语句报错）再按函数取。
+            let mut source_text = metadata
+                .get_routine_source(
+                    &ref_.conn_id,
+                    &catalog,
+                    &schema,
+                    &ref_.name,
+                    SchemaObjectKind::Procedure,
+                )
+                .await
+                .ok()
+                .flatten();
+            if source_text.is_none() {
+                source_text = metadata
+                    .get_routine_source(
+                        &ref_.conn_id,
+                        &catalog,
+                        &schema,
+                        &ref_.name,
+                        SchemaObjectKind::Function,
+                    )
+                    .await
+                    .ok()
+                    .flatten();
+            }
+            match source_text {
+                Some(text) => sections.push(PropertySection {
+                    label: "源码".to_string(),
+                    table: source_table(&text),
+                }),
+                None => properties.push(row("源码", "（未能获取）")),
+            }
+        }
     }
 
     Ok(ObjectProperties {
@@ -210,6 +263,22 @@ pub async fn load_properties(
         properties,
         sections,
     })
+}
+
+/// 源码 / DDL 段落：每行一条记录（单列），保留换行。
+fn source_table(text: &str) -> PropertyTable {
+    let headers = vec!["源码".to_string()];
+    let rows = text
+        .lines()
+        .map(|line| vec![line.to_string()])
+        .collect::<Vec<_>>();
+    // 空文本（或全空白）时给出占位，避免分区标题下无内容。
+    let rows = if rows.iter().all(|r| r.first().map(|s| s.trim().is_empty()).unwrap_or(true)) {
+        vec![vec!["（空）".to_string()]]
+    } else {
+        rows
+    };
+    PropertyTable { headers, rows }
 }
 
 fn columns_table(columns: &[engine::driver::traits::ColumnDetail]) -> PropertyTable {

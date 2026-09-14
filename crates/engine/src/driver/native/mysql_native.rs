@@ -640,10 +640,17 @@ impl Database for MySqlNativeDatabase {
         let esc_name = name.replace('`', "``");
         let sql = format!("SHOW CREATE {} `{}`.`{}`", stmt_type, esc_catalog, esc_name);
         let result = self.query(&sql).await?;
+        // 同 sqlx 驱动：`SHOW CREATE` 的 DDL 在名为 `Create …` 的列（位置 2），
+        // 列 1 是 sql_mode。
+        let col_idx = result
+            .columns
+            .iter()
+            .position(|c| c.starts_with("Create "))
+            .unwrap_or(2);
         if let Some(batch) = result.batches.first() {
-            if batch.num_rows() > 0 {
+            if batch.num_rows() > 0 && col_idx < batch.num_columns() {
                 if let Some(col) = batch
-                    .column(1)
+                    .column(col_idx)
                     .as_any()
                     .downcast_ref::<arrow::array::StringArray>()
                 {

@@ -1,6 +1,6 @@
 # 数据源管理 / 数据库导航模块 · 开发方案（Phase A/B/C）
 
-> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现）；v6/v7 降密与徽标语义已实现（V2–V5、V8–V10；V6/V7 待做）· 2026-09-13** · `cargo test -p rds-workbench --lib`（45）/ `-p rds-database`（5）/ `-p rds-settings`（2）/ `-p rds-engine --lib`（242）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
+> 状态：**Phase A/B 完成；Phase C 进行中（C1–C7 已实现；C8 由连接侧推进）；v6/v7 降密与徽标语义已实现（V1–V10）· 2026-09-14** · `cargo test -p rds-workbench --lib`（52）/ `-p rds-database`（6）/ `-p rds-engine --lib`（249）全绿 · 关联文件：`database-navigator-prototype-design.md`（原型设计）、`database-navigator-prototype.html`（可交互原型）
 > 设计基线：作用域来源短码 `P/G/GP`、项目级自定义分组（多对多）+ 多值标签、三级缓存与增量刷新、缓存永不自动删除、属性面板填充编辑区右侧、预热方案 C。
 > 技术栈：GPUI（gpui-kit 0.6）；M4 领域/服务在 `crates/database`（非 UI），视图在 `crates/workbench`。
 > 前置：M3 连接模块 Phase A/B 已实现；engine 元数据缓存（含增量/预热索引/FTS/分页/版本迁移）已迁移。
@@ -50,11 +50,11 @@
 | 断开不删缓存 | `crates/workbench/src/services/connection_service.rs`（`close_connection`） |
 | 依赖声明 workbench → database | `Cargo.toml` / `crates/workbench/Cargo.toml` |
 
-**Phase A 已知限制（后续阶段处理）**
+**Phase A 已知限制（已收敛，保留作历史记录）**
 
-- 加载为阻塞式（点击时 `block_on`），Phase C 迁移到后台任务；
-- 未接 L2 每连接缓存（目前直连实时内省）——Phase C；
-- 展开态未持久化到 `navigator_state`（表已建）——Phase B；
+- 加载为阻塞式 → ✅ 已迁后台（`nav_jobs` 工作线程 + 结果队列，见「导航加载迁后台（收尾）说明」）；
+- 未接 L2 每连接缓存 → ✅ 已接（`database::cache::NavCache`，C3）；
+- 展开态未持久化到 `navigator_state` → ✅ 已持久化（`nav_store`，B6）；
 - 面板头按钮（新建连接 / 刷新 / 断开）与搜索输入、右键菜单——✅ 已实现（新建/刷新/断开/搜索/右键均落地，见 Phase B 表）；
 - 连接 URL 未做密码百分号编码——✅ 已修复（2026-09-11，随 M3 C3 第一批收敛：URL 组装下沉 `connection::url::build_connection_url`，userinfo 统一百分号编码）；
 - 只渲染数据源与其对象树，**不含分析资产**（符合范围边界）。
@@ -87,8 +87,8 @@
 
 - 属性面板为**堆叠分区**（列/索引/约束），暂未做子实体 Tab 切换；
 - 双击节点打开属性（gpui `click_count >= 2`）；右键菜单已实现（见下方 B7 范围）；复制 / 生成 SQL 已支持、INSERT/UPDATE/DELETE 待后续；
-- 属性加载为阻塞式（与 Phase A 同），后续随缓存编排迁后台；
-- 归组尚未支持**拖拽**与组内外手动排序，目前通过行内 `🗂` 编辑器的多选切换（B3 视图首版）；排序服务 `set_member_order` 已就绪；
+- 属性加载已迁后台（`nav_jobs::enqueue_properties` + `apply_props_results`），与 Phase A 的阻塞式问题一并收敛；
+- 归组：入口为右键「**移动到分组…**」（v6 已移除行内 `🗂`）；**拖拽与组内外手动排序仍未接线**（排序服务 `ConnectionOrgStore::set_member_order` 已就绪，缺 UI 入口）；
 - 新建分组用默认名「新建分组」（自动去重）；重命名已支持（分组头右键 → 行内输入），描述表单待后续；
 - **facet 筛选**（归属域 + 类型 / 驱动 / 标签）持久化在 `settings.json` 的 `Navigator::filters`（UI 偏好）；**展开 / 选中**仍走 `navigator_state`；分组关系走组织存储；无单独的面板级 `navigator_state` 行。
 - 搜索支持**连接名 + 标签**子串匹配，并支持 `scope:` / `source:` / `type:` / `driver:` / `tag:` 结构化 token（作额外 AND 约束）；命中高亮已实现（C5）。
@@ -171,6 +171,11 @@
 - **文件型库同文件多 id 别名（2026-09-13）**：旧实现 `ConnectionService::connect_with_type` 发现同 URL 已有文件型连接时**直接返回旧连接 id**（避免文件锁重复打开），导致 `connect_entry("P_real_sqlite")` 返回 Ok 但管理器里只有 `G_real_sqlite`，随后按请求 id 加载报 `[CONN_NOT_FOUND]`。修复：命中同 URL 时把同一 `Arc<dyn Database>` **再挂到请求的 conn_id**（别名，改写 `ConnectionInfo` 的 id / 作用域 / 名称；重连配置沿用权威连接），返回请求 id；文件只打开一次，断开只摘该 id 映射，最后一个引用释放才真正关连。实测：先连 `G_real_sqlite` / `G_real_duckdb` 再连 `P_real_sqlite` / `P_real_duckdb`，四条 id 均可加载 `main → 表 (25) / 表 (8)`。
 - **PostgreSQL 只列当前库（2026-09-13）**：一条 PG 连接只绑定一个数据库，`information_schema` 仅暴露当前库；旧 `get_catalogs` 用 `pg_database` 列出服务器全部库，非当前库展开恒空（`get_schemas(catalog)` 0 行 → 回退 `main` → 表空）。修复：`get_catalogs` 改为 `SELECT current_database()::text`（sqlx 与 native 两驱动），消除兄弟库假节点。实测：`G_real_pg` / `P_real_pg` 均只列 `postgres → pg_toast, public`。跨库浏览（展开时另开一条连接）留待后续。
 - **右键模块入口：通用项 + 表 / 视图专属（2026-09-14）**：菜单底部固定**通用项**（分隔线之后、与节点类型 / 连接状态无关）——「在 SQL 编辑器中打开」（选中该节点所属连接 + 清空导航 / 结果残留 + 聚焦编辑区）、「查看洞察」（右 Dock `RightPanel::Insight` 展开）；**所有节点都有**（连接 / Catalog / Schema / 文件夹 / 表 / 视图 / 列 / 例程）。**「生成 Mock 数据」仅表 / 视图**（`RightPanel::Mock` 展开），夹在两个通用项之间；连接菜单不含该项。经 `SidebarEvent::{OpenSqlEditor, OpenRightPanel}` 由 `WorkbenchView` 订阅处理（宿主是布局状态的唯一权威）。
+- **序列 / 触发器解蔽 + 例程源码接入 + 属性面板覆盖扩展（2026-09-14）**：
+  - `MetadataService::{list_sequences,list_triggers}` 在浏览器层返回空时回退 `Database::list_*`——此前 `MetadataBrowser::{get_sequences,get_triggers}`（四驱动均未实现，trait 默认空）遮蔽了 PG 的真实实现，「序列」文件夹永不出现；实测 PG `public` 序列 0 → 12 条。
+  - `get_routine_source` 接入属性面板「源码」分区（先按存储过程取、未命中再按函数取）；顺带修复 MySQL / MySQL(native) `SHOW CREATE` **取列 1（sql_mode）而非 DDL**：改为按列名 `Create …` 定位。
+  - `PropertyKind` 新增 `Routine` / `Sequence` / `Trigger`，`load_objects` 对所有类别对象挂 `property`（此前仅表 / 视图有 → 例程 / 序列 / 触发器无「查看属性」）。
+  - 限定名去重：无独立 Schema 层的驱动把 schema 传成 catalog，`db.db.name` 折为 `db.name`（`property_panel::qualify` + `panels::nav_qualified_name`）。
 
 **导航加载迁后台（收尾）说明**
 
@@ -195,9 +200,9 @@
 | M4 实时内省（`database::MetadataService`：catalog/schema/table/column/index/constraint/routine/trigger/sequence） | ✅ 已实现 |
 | engine 元数据缓存（`MetadataCacheManager` / `MetadataCacheOps`：L1/L2、增量同步、FTS、分块、同步状态、`CacheVersionManager`） | ✅ 已实现 |
 | 运行时连接（`workbench::ConnectionService`：connect/close/switch/has/list） | ✅ 已实现（C3 收敛后 50KB：传输/协议层已下沉 `crates/connection`，仅剩依赖 engine 的会话编排） |
-| M4 领域模型 / 视图 / 命令 / 属性面板 | ⬜ 占位（`crates/database/src/{model,commands,database_view,property_panel}.rs`） |
-| 分组 / 标签 / 导航状态表 | ⬜ 缺失（`connections.tags` 列存在，但需独立表） |
-| 导航视图与装配 | ⬜ 占位（`panels.rs::render_connection_list` + `render_navigation_placeholder`） |
+| M4 领域模型 / 视图 / 命令 / 属性面板 | ✅ 已实现（`crates/database/src/{model,property_panel}.rs` + `panels.rs::EditorPanel::render_property_panel`） |
+| 分组 / 标签 / 导航状态表 | ✅ 已实现（`connection_groups` / `connection_group_members` / `connection_tags` / `navigator_state`） |
+| 导航视图与装配 | ✅ 已实现（`panels.rs::{render_database_nav, render_nav_tree, render_connection_row, render_nav_node}`；原 `render_connection_list` / `render_navigation_placeholder` 占位已删） |
 
 **核心缺口**：导航领域模型、导航编排服务、视图面板、分组/标签/状态表、运行时连接接入、属性面板注册表。
 
