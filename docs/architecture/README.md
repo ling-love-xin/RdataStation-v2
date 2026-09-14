@@ -30,9 +30,12 @@
 | `database/database-navigator-prototype.html` | 数据源管理 / 数据库导航原型（交互稿） | RDS Light/Dark 双主题面板示意（双通道徽标 / 加载 / 搜索 / **可点「筛选 ▾」弹层** / 右键菜单 / 空态可切；含 **v5 → v7 密度对比**） |
 | `database/database-nav-dev-plan.md` | 数据库导航开发方案 | Phase A/B/C + **v6/v7 任务（V1–V10，逐项状态）** / 迁移与表 / 测试场景 / 风险 / 验证 / 映射 |
 | `database/database-navigator-user-guide.md` | 数据源管理 / 数据库导航**使用手册** | 入口 / 界面导览（**连接行怎么读 · 状态色 · 类型形状**）/ 典型流程 / 分组与标签分工 / 快捷键 / 显示开关 / FAQ 排查 / 验收清单 |
+| `scratchpad/README.md` | 草稿箱**模块入口** | **先读这个**：一句话定位（项目私有的临时探索工作区）/ 特点提炼（产品行为 · 语义与数据 · 架构约束 · 工程与文档）/ 边界 / 代码地图 / 改前必守 10 条 / 测试与验证命令 / 文档地图 / 下一步 |
 | `scratchpad/scratchpad-prototype-design.md` | 草稿箱原型 | 根 = 项目目录 / 240px 左 Dock 面板 / 树与交互 / 主题映射 |
 | `scratchpad/scratchpad-prototype.html` | 草稿箱原型（交互稿） | RDS Light/Dark 项目工作区示意（可交互） |
-| `scratchpad/scratchpad-dev-plan.md` | 草稿箱开发方案 | P0 项目会话 + Phase A/B/C / 文件落点 / 测试场景 / 风险 |
+| `scratchpad/scratchpad-architecture.md` | 草稿箱**设计理念与架构** | 裁决摘要 9 条 / 定位与三段式（M4 看数据 · M5 干活 · M6 留证据）/ 概念模型与四条不变式 / 存储布局（内容与内部态分离 · 迁移）/ 项目级回收站 / 路径安全与只读 / 十条数据流（列表 · 虚拟化 · 新建落点 · 移动复制 · 删除撤销 · 导入 vs 引用 · 搜索 · 替换 · 缓存刷新 · 键盘）/ 分层与状态所有权 / D1–D13 决策表 / 降级矩阵 / 性能 / 测试策略 / 实现映射 / **§13 已知问题（权威）** |
+| `scratchpad/scratchpad-dev-plan.md` | 草稿箱开发方案 | P0 项目会话 + Phase A/B/C/D / 文件落点 / 测试场景 / 风险 / 逐轮进度记录 |
+| `scratchpad/scratchpad-user-guide.md` | 草稿箱**使用手册** | 能力与期次标注 / 入口 / 界面导览（**一行怎么读 · 分组分工**）/ 典型流程（新建模板 · 导入 · 引用与重定位 · 移动复制多选 · 删除与撤销 · 搜索 · 替换 · 键盘导航）/ 一次操作落到哪 / 快捷键 / 只读与数据安全 / FAQ 排查 / USIT 验收清单 |
 | `editor/README.md` | SQL 编辑器**模块入口** | **先读这个**：一句话定位 / 特点速览（一内核三档能力 · 模式判定与切换代价 · 只读两维度 · 执行入口唯一 · 结果单权威 · 单元与会话）/ 边界 / 代码地图 / 改前必守约束 / 测试命令 / 文档地图 / 待拍板项 |
 | `editor/editor-prototype-design.md` | SQL 编辑器原型 | 三模式对照与判定规则 / SQL 模式解剖（工具栏 · 编辑区 · 结果区 · 状态栏）/ 文本模式 / 分析模式（单元解剖 · 输出类型）/ 交互与快捷键 / 状态矩阵 / 主题映射与尺寸常量 / 与 V1 的逐项对照 |
 | `editor/editor-prototype.html` | SQL 编辑器原型（交互稿） | RDS Light/Dark 双主题 × 三模式；可执行（含执行中/中断、结果集上限淘汰、快速过滤、分隔条拖拽、单元运行与 stale、单元增删排序） |
@@ -66,7 +69,7 @@
 | `connection/` | ✅ | ✅ | ✅ `connection-dialog-architecture.md` | ✅ | ✅ |
 | `database/` | ✅ | ✅ | ✅ `database-navigator-architecture.md`（本轮新增） | ✅ | ✅ `database-navigator-user-guide.md`（本轮新增） |
 | `project/` | ✅ | ✅ | ✅ `project-view-architecture.md` | ✅ | ⬜ 缺使用手册 |
-| `scratchpad/` | ✅ | ✅ | ⬜ 缺架构 / 设计理念 | ✅ | ⬜ 缺使用手册 |
+| `scratchpad/` | ✅ | ✅ | ✅ `scratchpad-architecture.md`（本轮新增） | ✅ | ✅ `scratchpad-user-guide.md`（本轮新增） |
 | `editor/` | ✅ | ✅ | ✅ `editor-architecture.md` | ✅（方案待确认） | ⬜ 缺使用手册（实现后补） |
 
 > `layout/` / `theme/` / `ui/` / `settings/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。

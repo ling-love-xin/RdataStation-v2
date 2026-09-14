@@ -241,17 +241,17 @@ flowchart TD
 | 外部引用图标 | `info` | 路径引用语义 |
 | 回收站图标 | `muted.foreground` | 非危险常态 |
 
-### 6.3 文件类型图标色（复用标准字段，零 hex）
+### 6.3 文件类型色点（复用标准字段，零 hex）
 
-| 类型 | 后缀 | Token |
+| 类型 | 后缀 | Token（实现口径） |
 | --- | --- | --- |
 | 文件夹 | — | `warning`（琥珀） |
 | SQL / 脚本 | `.sql` | `info` |
 | Python | `.py` | `success` |
-| 数据文件 | `.csv .tsv .parquet .xlsx .db .duckdb` | `base.cyan` |
-| 文档 / 其他 | `.md .json .txt` … | `muted.foreground` |
+| 数据文件 / JSON | `.csv .tsv .parquet .xlsx .xls .json .ndjson .db .duckdb` | `primary`（品牌色） |
+| 文档 / 其他 | `.md .txt` 及无后缀 | `muted_foreground` |
 
-> 以上均为设计映射，若实测对比度不足（尤其 `base.cyan` 在浅色下）再调整为产品语义 token；默认不新增 token。
+> 以上为**实现口径**（`panels.rs::scratchpad_icon_color`）：早期设计曾写成 `base.cyan` 且把 `.json` 归入文档类，实测后者在同尺寸下对比度偏低、且 `.json` 多为数据，已归入数据文件并改用 `primary`。
 
 ### 6.4 搜索高亮
 

@@ -25,6 +25,7 @@
 | 共享态 | `Shared::scratchpad_store()`（侧栏与编辑区共用）、`run_scratchpad_search(...)`（搜索构建结果视图单点） | `panels.rs` |
 | 清理 | 删掉占位文件 `crates/scratchpad/src/{model,commands,scratchpad_view}.rs` | `crates/scratchpad/src/` |
 | 原型 | `scratchpad-prototype.html` 补：模板 chip 行、替换栏、失效引用 `⟲`、空态文案/三按钮、token 文案；`scratchpad-prototype-design.md` §2.1/§2.3/§3/§4.3/§4.4/§4.5/§4.7/§6.4/§7 按实现重写 | `docs/architecture/scratchpad/*` |
+| 文档 | 补齐模块五件套缺口：`README.md`（模块入口：特点/边界/代码地图/硬约束 10 条/测试命令）· `scratchpad-architecture.md`（设计理念与架构：不变式/概念模型/存储布局/回收站/路径安全/十条数据流/D1–D13/降级矩阵/测试策略/实现映射/**§13 已知问题 K1–K12**）· `scratchpad-user-guide.md`（使用手册：导览/典型流程/操作落到哪/快捷键/FAQ/验收清单），并在 `docs/architecture/README.md` 登记 | `docs/architecture/scratchpad/*` |
 | 侧栏 | 新建落点对齐原型：选中文件夹时内联行插在该文件夹首行（并自动展开），未选中则建在模块根；重载时保留并**刷新**已展开子目录缓存（修掉“操作后展开态看起来空了”） | `crates/workbench/src/panels.rs` |
 
 **验证**：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad -j 2` **14 passed**（含新增 `copy_entry_recurses_and_avoids_name_collisions`、`search_reports_match_spans`、`replace_in_file_handles_case_regex_and_literal_dollar`、`external_reference_relink_updates_path_only`）。`cargo test` 的 doctest 阶段在 Windows 报 `os error 448`（rustdoc 无法执行，环境限制，与本模块无关）。
@@ -166,12 +167,12 @@
 | 域模型（`crates/scratchpad/src/models.rs`：`ScratchpadEntry`/`SearchMatch`/`ExternalReference`/`AnalyzableFile`/`FileMeta`/`DiffResult`/`ReplaceResult`） | ✅ 已迁移 |
 | 存储（`crates/scratchpad/src/store.rs`：列表/CRUD/回收站/搜索/替换/Diff/引用/可分析文件/路径防护） | ✅ 已迁移（根目录仍为 `{project}/.scratchpad/`，需改造） |
 | 状态（`crates/scratchpad/src/state.rs`：`ScratchpadState` + `watcher_active` 标志） | ⚠️ 有骨架，**未接入任何调用方**；文件监控未真正启动 |
-| 占位文件（`model.rs` / `commands.rs` / `scratchpad_view.rs`） | ⚠️ 空占位，需清理或填充 |
-| 视图（GPUI） | ❌ 未实现（workbench `LeftPanel::Draft` 为两行占位） |
-| workbench 依赖 | ❌ 未依赖 `rds-scratchpad`（需补 workspace 依赖） |
-| 当前项目会话（项目根路径来源） | ❌ 缺失（连接模块同样缺口：对话框手填项目路径） |
+| 占位文件（`model.rs` / `commands.rs` / `scratchpad_view.rs`） | ✅ 已删除（2026-09-15；视图落在 `workbench/src/panels.rs`） |
+| 视图（GPUI） | ✅ 已实现（`SidebarPanel::render_scratchpad` + `EditorPanel` 搜索结果/替换栏） |
+| workbench 依赖 | ✅ 已依赖 `rds-scratchpad`（workspace 依赖） |
+| 当前项目会话（项目根路径来源） | ✅ 已接（P0：`Shared::project`（`OpenProject`），连接对话框与草稿箱共用） |
 
-**关键缺口**：① 根目录语义切换（A）；② 面板视图与交互（B）；③ 编辑器联动与生态（C）；前置依赖 P0 项目会话。
+**关键缺口**：① 根目录语义切换（A）✅；② 面板视图与交互（B）✅；③ 编辑器联动与生态（C）；④ 提升/存档/取回（D）。前置依赖 P0 项目会话 ✅。
 
 ## 2. 阶段划分
 
@@ -194,22 +195,24 @@
 | A3 | 隐藏与防护：`scan_dir_tree` 跳过所有点开头条目（已有）+ 显式跳过 `.RSmeta`；`resolve_path_impl` 拒绝首段为 `.RSmeta` 或点开头的相对路径（防越权读写内部目录） | 同上 | `.RSmeta` 不在列表、不可被 API 访问 |
 | A4 | 旧数据迁移：若 `{project}/.scratchpad/` 存在 → 迁移 `config.json`（原 `.scratchpad.json`）与用户文件到新语义（文件本就在根下则不移动），迁移后清理空目录（策略见原型 §8.2 待确认） | 同上（`migrate_legacy_layout`） | 迁移幂等；重复启动不报错 |
 | A5 | 文件监控接入：用 `notify` 监听项目根（忽略 `.RSmeta`），变更经事件推送刷新树；`ScratchpadState::set_watching` 落地 ⬜ 未做 | `crates/scratchpad/src/state.rs`（+ 依赖 `notify`） | 外部新建/修改文件，面板自动刷新 |
-| A6 | 清理占位死文件（`model.rs` / `commands.rs` / `scratchpad_view.rs` 按需合并进 `models/state/view`） | `crates/scratchpad/src/` | `cargo check -p rds-scratchpad` 零告警 |
+| A6 | 清理占位死文件（`model.rs` / `commands.rs` / `scratchpad_view.rs`）✅ 2026-09-15 已删 | `crates/scratchpad/src/` | `cargo check -p rds-scratchpad` 零告警 |
 | A7 | 单元/集成测试：根列表隐藏内部目录、路径穿越防护、回收站落位、引用/`file_meta` 读写、`get_analyzable_files` 相对路径 | `crates/scratchpad/tests/` | 测试全绿 |
 
-### Phase B — 面板视图接入（目标：替换 `LeftPanel::Draft` 占位）△ 首切片已落地（只读树）
+### Phase B — 面板视图接入（目标：替换 `LeftPanel::Draft` 占位）✅ 已全部落地
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | B1 | 依赖接线：`Cargo.toml` workspace 增 `scratchpad` 别名；workbench 依赖 `scratchpad` ✅ | `Cargo.toml`、`crates/workbench/Cargo.toml` | 编译通过，依赖方向向下 |
-| B2 | `ScratchpadPanel` 实体：面板头 / 工具栏 / 搜索 / 分组树 / 底部状态；`Shared` 增加草稿箱状态（选中、展开集合、排序、脏点集合）✅ 首切片（工具栏 + 只读树 + 分组 + 底部统计，状态存于 `ScratchpadView`） | `crates/workbench/src/components/scratchpad_panel.rs`、`panels.rs` | 面板渲染，切换活动栏可见 |
-| B3 | 树渲染：递归行、类型图标、选中/悬停/脏点、相对时间、懒加载（`depth=0` → 展开加载）✅ 部分（递归行/类型色点/选中/悬停/展开折叠/重命名/删除已做；相对时间、脏点、懒加载待补） | 同上 | 深目录展开正确 |
-| B4 | 工具栏与空态：新建文件/文件夹（内联输入 + 模板）、导入、引用、排序、刷新；空态引导 ✅ 大部分（新建内联/导入/引用（文件或目录 + 自定义别名 + 改名/打开）/排序/刷新已做；模板选择、空态大图标+双按钮待补） | 同上 | 各按钮闭环 |
-| B5 | 搜索：文件名实时过滤；内容模式调 `search_file_content`（正则/大小写），结果落中央编辑区 ✅ 部分（文件名过滤 + 内容搜索/正则/大小写/结果落中央已做；命中高亮与点击跳转待补） | 同上 + `panels.rs` `EditorPanel` | 结果带上下文、可跳行 |
-| B6 | 右键菜单 + 键盘：重命名/删除/剪切/复制/粘贴/打开位置/提升；F2/Delete/Ctrl+A/Ctrl+N ✅ 部分（右键菜单、F2/Delete/Esc/Ctrl+A 已做；Shift 多选/剪切复制粘贴已做；提升与 Ctrl+N 待补） | `panels.rs` + `commands.rs`（`scratchpad` context） | 全操作可用 |
-| B7 | 回收站与撤销栏：折叠区列表/恢复/清空；删除后 5s 撤销 ✅ 部分（列表/恢复/清空/撤销栏已做；5s 自动消失待补） | 同上 | 误删可恢复 |
-| B8 | 多选（Ctrl/Shift）与批量删除 | 同上 | 菜单按单/多选自适应 |
-| B9 | 虚拟列表（>50 条）与排序（名称/大小/时间） | 同上 | 大目录流畅 |
+| B2 | 面板实体：面板头 / 工具栏 / 搜索 / 分组树 / 底部状态；状态存于 `ScratchpadView` ✅ | `crates/workbench/src/panels.rs`（`SidebarPanel`） | 面板渲染，切换活动栏可见 |
+| B3 | 树渲染：递归行、类型色点、选中/悬停、相对时间、懒加载（`depth=0` → 展开加载）✅ | 同上 | 深目录展开正确 |
+| B4 | 工具栏与空态：新建文件/文件夹（内联 + 模板）、导入、引用、排序、刷新；空态大图标 + 三按钮 ✅ | 同上 | 各按钮闭环 |
+| B5 | 搜索：文件名实时过滤；内容模式（正则/大小写）→ 结果与**命中高亮**落中央编辑区 ✅（点击跳转待 Phase C） | 同上 + `EditorPanel` | 结果带上下文、高亮正确 |
+| B6 | 右键菜单 + 键盘：重命名/删除/剪切/复制/粘贴/打开位置；F2/Delete/Ctrl+A/↑↓/Enter/Ctrl+N/Esc ✅（提升属 Phase D） | `panels.rs` + `commands.rs`（`scratchpad` context） | 全操作可用 |
+| B7 | 回收站与撤销栏：折叠区列表/恢复/清空；删除后 5 s 撤销（自动消失 + 逐条还原）✅ | 同上 | 误删可恢复 |
+| B8 | 多选（Ctrl/Shift）与批量删除 ✅ | 同上 | 菜单按单/多选自适应 |
+| B9 | 草稿树虚拟列表（`v_virtual_list`，只渲染可视区）+ 排序（名称/大小/时间）；引用/回收站底部限高可滚 ✅ | 同上 | 大目录流畅、面板整体可达 |
+
+> 落点修正：`crates/workbench/src/components/scratchpad_panel.rs` 是早期方案中的文件，实际实现全部在 `panels.rs` 的 `SidebarPanel` / `EditorPanel` 内，未单独拆文件。
 
 ### Phase C — 编辑器联动与生态
 
@@ -219,7 +222,7 @@
 | C2 | `file_meta` 联动：执行后写 `last_connection_id`/`last_executed_at`；再次打开自动选连接 | `scratchpad` store + 编辑器 | 连接自动恢复 |
 | C3 | 拖拽文件到编辑区插入内容；拖放文件进树导入 | workbench | 拖放生效 |
 | C4 | 冲突处理：外部修改 → 冲突对话框 → `diff_with_content` Diff 弹窗 → 接受右侧 | `scratchpad` store + 弹窗 | 冲突可消解 |
-| C5 | 搜索替换：预览计数 → `replace_in_file`（正则）→ 原子写回 → 刷新 | 同上 | 替换历史可回看 |
+| C5 | 搜索替换：预览计数 → `replace_in_file`（正则/大小写）→ 原子写回 → 刷新 ✅ 已落地（结果栏内嵌替换栏；Diff 预览仍未接） | 同上 | 替换后结果自动刷新 |
 | C6 | 提升为分析资源：经 command/event 调 `analytics_resource`，**移动 + 归档锁定**（详见 Phase D） | `scratchpad` 命令 + 分析资源服务 | 提升后事件刷新 |
 | C7 | 迁移文档验收：`cargo check --workspace` 零告警；无 `unwrap/expect` 新增；架构红线复核 | 全仓 | 全绿 |
 
@@ -276,16 +279,23 @@
 | 旧 `.scratchpad/` 迁移（→ 模块根/元数据/项目回收站） | `crates/scratchpad/src/store.rs`（`migrate_legacy_layout` / `move_dir_contents` / `ingest_trash_dir`） |
 | 文件监控 | `crates/scratchpad/src/state.rs`（`notify`）+ 事件推送 |
 | 域模型 / 存储 API | `crates/scratchpad/src/{models,state,store}.rs` |
-| 面板视图（头/工具栏/树/分组/空态/撤销栏） | `crates/workbench/src/components/scratchpad_panel.rs` |
+| 递归复制 / 移动 / 替换 / 引用重定位 | `crates/scratchpad/src/store.rs`（`copy_entry` / `copy_dir_contents` / `move_entry` / `replace_in_file` / `update_external_reference_path`） |
+| 内容搜索（含命中区间） | `crates/scratchpad/src/store.rs`（`search_file_content` / `literal_match_spans`）+ `models.rs::SearchMatch::match_spans` |
+| 面板视图（工具栏/树/虚拟列表/空态/引用/回收站/撤销栏） | `crates/workbench/src/panels.rs`（`SidebarPanel`：`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move`） |
+| 内容搜索结果 + 替换栏 | `crates/workbench/src/panels.rs`（`EditorPanel`：`render_scratchpad_search_pane` / `replace_scratchpad_all`） |
+| 快捷键 / 尺寸常量 | `crates/workbench/src/commands.rs`、`crates/workbench/src/ui.rs`、`crates/app/src/main.rs` |
 | 左 Dock 装配（`LeftPanel::Draft`） | `crates/workbench/src/panels.rs`（`SidebarPanel`） |
 | 当前项目会话 | `crates/workbench/src/services/project_session.rs`、`crates/app/src/main.rs` |
-| 中央编辑区草稿文件模式 | `crates/workbench/src/panels.rs`（`EditorPanel`） |
+| 中央编辑区草稿文件模式（Phase C） | `crates/workbench/src/panels.rs`（`EditorPanel`） |
 | 依赖接线 | 根 `Cargo.toml`（`scratchpad` 别名）、`crates/workbench/Cargo.toml` |
-| 主题 token（含可选 `scratchpad.search.match.background`） | `assets/themes/rds-theme.json`（+ 必要时 `product-tokens.json`） |
+| 搜索高亮 token | `assets/themes/product-tokens.json` + `crates/settings/src/product_tokens.rs`（`search.match.background`） |
+
+> 早期方案中的 `crates/workbench/src/components/scratchpad_panel.rs` **未创建**；面板实现全在 `panels.rs`。
 
 ## 6. 验证方式
 
-- 每阶段：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试（`crates/scratchpad/tests/`）
-- UI：`cargo run -p rds-app` 手动走通 §3 场景清单
+- 每阶段：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2` 零告警 + 对应测试（`crypto` 之外的单测均在 `store.rs` 内联模块）
+- 后端单测基线：`cargo test -p rds-scratchpad -j 2`（14 项；含临时项目目录的端到端文件操作）
+- UI：`cargo run -p rds-app` 手动走通 §3 场景清单与 `scratchpad-user-guide.md` §9 验收清单
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
-- 阶段完成后回填本文件「状态」与原型文档同步
+- 阶段完成后回填本文件「进度记录」、`crates/scratchpad/README.md` 能力表与原型文档同步
