@@ -73,7 +73,10 @@ pub use logging::{
 
 // 重新导出 SQL 服务（查询执行链）
 pub use services::sql_service::{SqlExecuteOptions, SqlService};
-pub use sql::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
+pub use sql::{
+    highlight_spans, split_statements, AlterOperation, ColumnDefInfo, DdlInfo, HighlightSpan,
+    SqlDialect, SqlEngine, SqlStatement, SqlStatementType, TokenClass,
+};
 
 // 重新导出连接探测（测试连接）
 pub use services::connection_probe::{test_connection, test_connection_result};

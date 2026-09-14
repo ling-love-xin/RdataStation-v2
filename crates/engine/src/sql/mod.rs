@@ -8,6 +8,8 @@
 //!
 //! - `engine` — SqlEngine 结构体定义与公开方法
 //! - `parser` — SQL 解析与特征检测（parse_and_route）
+//! - `split` — 词法级语句切分（执行当前语句 / 批量执行 / 语句数的基础，不依赖解析器）
+//! - `highlight` — 词法高亮区间（tokenizer 驱动，视图层只负责上色）
 //! - `builder` — Expression Builder 封装（DDL/DML 生成）
 //! - `formatter` — SQL 格式化
 //! - `transpiler` — 方言转换
@@ -15,7 +17,11 @@
 mod builder;
 mod engine;
 mod formatter;
+mod highlight;
 mod parser;
+mod split;
 mod transpiler;
 
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
+pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
+pub use split::{split_statements, SqlStatement};

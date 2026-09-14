@@ -1,6 +1,7 @@
 use super::builder;
 use super::formatter;
 use super::parser;
+use super::split;
 use super::transpiler;
 
 /// SQL 方言枚举
@@ -78,6 +79,14 @@ impl SqlEngine {
     /// 返回 `Ok(())` 表示语法有效，`Err(msg)` 表示语法错误。
     pub fn validate(sql: &str, dialect: SqlDialect) -> Result<(), String> {
         parser::validate(sql, dialect)
+    }
+
+    /// 语句切分（词法级）
+    ///
+    /// 返回每条语句在原文中的区间与起始行号，供「执行当前语句 / 批量执行 / 状态栏语句数」使用。
+    /// 与解析无关：文本可以是未写完的状态（解析失败不能成为不能切分的理由）。
+    pub fn split_statements(sql: &str) -> Vec<split::SqlStatement> {
+        split::split_statements(sql)
     }
 
     /// 生成 CREATE TABLE DDL

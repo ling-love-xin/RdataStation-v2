@@ -7924,6 +7924,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rds-editor"
+version = "0.1.0"
+
+[[package]]
 name = "rds-engine"
 version = "0.1.0"
 dependencies = [

@@ -96,7 +96,10 @@ impl QueryResult {
             rows,
             total_rows,
             batches,
-            affected_rows: Some(total_rows),
+            // 行结果集不声明「影响行数」：v1 曾把 `total_rows` 当作 `affected_rows`，
+            // 使 SELECT 也带影响行数、DML 的真实影响行数反而不可信。
+            // 写语句的真实影响行数需由驱动层提供（待办见 docs/architecture/editor/editor-dev-plan.md）。
+            affected_rows: None,
             is_read_only: Some(true),
         }
     }

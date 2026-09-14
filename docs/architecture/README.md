@@ -33,6 +33,11 @@
 | `scratchpad/scratchpad-prototype-design.md` | 草稿箱原型 | 根 = 项目目录 / 240px 左 Dock 面板 / 树与交互 / 主题映射 |
 | `scratchpad/scratchpad-prototype.html` | 草稿箱原型（交互稿） | RDS Light/Dark 项目工作区示意（可交互） |
 | `scratchpad/scratchpad-dev-plan.md` | 草稿箱开发方案 | P0 项目会话 + Phase A/B/C / 文件落点 / 测试场景 / 风险 |
+| `editor/README.md` | SQL 编辑器**模块入口** | **先读这个**：一句话定位 / 特点速览（一内核三档能力 · 模式判定与切换代价 · 只读两维度 · 执行入口唯一 · 结果单权威 · 单元与会话）/ 边界 / 代码地图 / 改前必守约束 / 测试命令 / 文档地图 / 待拍板项 |
+| `editor/editor-prototype-design.md` | SQL 编辑器原型 | 三模式对照与判定规则 / SQL 模式解剖（工具栏 · 编辑区 · 结果区 · 状态栏）/ 文本模式 / 分析模式（单元解剖 · 输出类型）/ 交互与快捷键 / 状态矩阵 / 主题映射与尺寸常量 / 与 V1 的逐项对照 |
+| `editor/editor-prototype.html` | SQL 编辑器原型（交互稿） | RDS Light/Dark 双主题 × 三模式；可执行（含执行中/中断、结果集上限淘汰、快速过滤、分隔条拖拽、单元运行与 stale、单元增删排序） |
+| `editor/editor-architecture.md` | SQL 编辑器**设计理念与架构** | 概念模型与不变式 / 分层与 crate 归属 / 状态所有权 / 八条数据流 / D1–D20 决策表 / **§7 现状与四个假底座** / 降级矩阵 / 测试策略 / 实现映射 / **§12 已知问题（权威）** / §13 待确认 |
+| `editor/editor-dev-plan.md` | SQL 编辑器开发方案 | Phase 0（地基与技术验证）/ 1a（内核 + 文本/SQL 编辑体验 + 最小执行）/ 1b（执行闭环）/ 1c（分析模式骨架）/ 任务表与验收 / 测试场景 29 条 / 风险 / 验证命令 |
 | `dependencies/dependency-strategy.md` | 依赖治理 | 版本唯一入口 / 升级流程 / 编译时间手段 / 跨大版本待办 |
 
 ## 关联目录
@@ -42,7 +47,7 @@
 
 ## 阅读顺序建议
 
-1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/`
+1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/` / `editor/`
 
 ## 模块文档集约定（每模块应具备的类型）
 
@@ -62,5 +67,6 @@
 | `database/` | ✅ | ✅ | ✅ `database-navigator-architecture.md`（本轮新增） | ✅ | ✅ `database-navigator-user-guide.md`（本轮新增） |
 | `project/` | ✅ | ✅ | ✅ `project-view-architecture.md` | ✅ | ⬜ 缺使用手册 |
 | `scratchpad/` | ✅ | ✅ | ⬜ 缺架构 / 设计理念 | ✅ | ⬜ 缺使用手册 |
+| `editor/` | ✅ | ✅ | ✅ `editor-architecture.md` | ✅（方案待确认） | ⬜ 缺使用手册（实现后补） |
 
 > `layout/` / `theme/` / `ui/` / `settings/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。

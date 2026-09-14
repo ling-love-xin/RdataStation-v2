@@ -165,11 +165,15 @@ pub fn validate_sql(sql: &str, dialect: Option<SqlDialect>) -> ValidateResponse 
 }
 
 /// 分割 SQL 语句
+///
+/// 自 `sql::split` 的词法级切分（v1 的朴素 `;` 切分会把字符串 / 注释 / `$$` 块内的分号误切，
+/// 导致“当前语句”与“批量执行”语义错误）。
+///
+/// `dialect` 暂不参与切分：字面量与注释规则跳方言一致；若将来需要区分（如 MySQL 反斜杠转义），
+/// 再把方言传入 `sql::split`。
 pub fn split_sql(sql: &str, _dialect: Option<SqlDialect>) -> Vec<String> {
-    // sqlglot-rust 的 parse 返回单个 Statement，不支持多语句分割
-    // 使用简单的分号分割作为主要方案
-    sql.split(';')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    SqlEngine::split_statements(sql)
+        .into_iter()
+        .map(|stmt| stmt.text(sql).to_string())
         .collect()
 }

@@ -791,18 +791,73 @@ pub struct SqlHistoryRecord {
     pub rows_returned: Option<u64>,
 }
 
-/// 保存 SQL 历史
-pub fn save_sql_history(sql: &str, conn_id: Option<&str>) -> Result<(), std::io::Error> {
+/// SQL 历史写入参数
+///
+/// 成功与失败共用一条写入路径：**耗时 / 成功标志 / 失败原因 / 行数都必须来自真实执行**。
+/// v1 的写法是 `mark_success(0)` + `db_type = "unknown"`，且失败查询根本不写历史，
+/// 导致历史列表里耗时恒 0、成功恒真、失败不可见（无法用于排障）。
+#[derive(Debug, Clone, Default)]
+pub struct SqlHistoryEntry {
+    /// 连接 ID（无显式连接时为空 → 落库为 `unknown`）
+    pub conn_id: Option<String>,
+    /// 数据库类型（取运行时连接信息；未知时为空 → 落库为 `unknown`）
+    pub db_type: Option<String>,
+    /// 执行耗时（毫秒）
+    pub elapsed_ms: u64,
+    /// 是否成功
+    pub success: bool,
+    /// 失败原因（成功时为空）
+    pub error_message: Option<String>,
+    /// 返回行数（行结果集）
+    pub rows_returned: Option<u64>,
+    /// 影响行数（作用于源库的写语句）
+    pub rows_affected: Option<u64>,
+}
+
+/// 保存 SQL 历史（写入全局存储）
+pub fn save_sql_history(sql: &str, entry: &SqlHistoryEntry) -> Result<(), std::io::Error> {
     let mut store = GLOBAL_HISTORY_STORE
         .lock()
         .map_err(|_| std::io::Error::other("Failed to lock store"))?;
 
-    // 使用默认的数据库类型和连接 ID
-    let db_type = "unknown".to_string();
-    let connection_id = conn_id.unwrap_or("unknown").to_string();
+    save_sql_history_into(&mut store, sql, entry)
+}
+
+/// 把一条历史写入指定存储
+///
+/// 存储可注入（`*_into` 变体）：测试与将来的多作用域隔离都走这里，不碰用户真实历史文件。
+pub fn save_sql_history_into(
+    store: &mut HistoryStore,
+    sql: &str,
+    entry: &SqlHistoryEntry,
+) -> Result<(), std::io::Error> {
+    let connection_id = entry
+        .conn_id
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let db_type = entry
+        .db_type
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
 
     let mut record = HistoryRecord::new(sql.to_string(), db_type, connection_id);
-    record.mark_success(0); // 标记为成功，耗时未知
+    if entry.success {
+        record.mark_success(entry.elapsed_ms);
+    } else {
+        record.mark_failed(
+            entry
+                .error_message
+                .clone()
+                .unwrap_or_else(|| "unknown error".to_string()),
+            entry.elapsed_ms,
+        );
+    }
+    if let Some(n) = entry.rows_returned {
+        record.set_rows_returned(n);
+    }
+    if let Some(n) = entry.rows_affected {
+        record.set_rows_affected(n);
+    }
 
     store.add_record(record);
     store.save()
@@ -1088,5 +1143,114 @@ mod tests {
         assert!(json.contains("SELECT * FROM \\\"users\\\"")); // 转义的引号
         assert!(json.contains("\"success\": true"));
         assert!(json.contains("\"rows_returned\": 10"));
+    }
+}
+
+/// 历史写入参数（`SqlHistoryEntry`）的验收：字段必须真实、失败也留痕
+#[cfg(test)]
+mod sql_history_entry_tests {
+    use super::*;
+
+    fn temp_store(name: &str) -> (HistoryStore, PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "rds_sql_history_{}_{}.json",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        (HistoryStore::new(path.clone()), path)
+    }
+
+    #[test]
+    fn success_entry_records_real_fields() {
+        let (mut store, path) = temp_store("success");
+        let entry = SqlHistoryEntry {
+            conn_id: Some("conn-1".to_string()),
+            db_type: Some("mysql".to_string()),
+            elapsed_ms: 42,
+            success: true,
+            error_message: None,
+            rows_returned: Some(7),
+            rows_affected: None,
+        };
+
+        save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save history");
+
+        let record = &store.get_records(None)[0];
+        assert!(record.success);
+        assert_eq!(record.duration_ms, 42, "耗时必须是真实值，不得恒 0");
+        assert_eq!(record.rows_returned, Some(7));
+        assert_eq!(record.rows_affected, None);
+        assert_eq!(record.db_type, "mysql", "db_type 不得恒为 unknown");
+        assert_eq!(record.connection_id, "conn-1");
+        assert!(record.error_message.is_none());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn write_entry_records_rows_affected() {
+        let (mut store, path) = temp_store("write");
+        let entry = SqlHistoryEntry {
+            conn_id: Some("conn-1".to_string()),
+            db_type: Some("postgres".to_string()),
+            elapsed_ms: 5,
+            success: true,
+            error_message: None,
+            rows_returned: None,
+            rows_affected: Some(3),
+        };
+
+        save_sql_history_into(&mut store, "UPDATE t SET x = 1", &entry).expect("save history");
+
+        let record = &store.get_records(None)[0];
+        assert_eq!(record.rows_affected, Some(3));
+        assert_eq!(record.rows_returned, None);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn failure_entry_is_recorded_with_reason() {
+        let (mut store, path) = temp_store("failure");
+        let entry = SqlHistoryEntry {
+            conn_id: Some("conn-9".to_string()),
+            db_type: Some("sqlite".to_string()),
+            elapsed_ms: 12,
+            success: false,
+            error_message: Some("no such column: nope".to_string()),
+            rows_returned: None,
+            rows_affected: None,
+        };
+
+        save_sql_history_into(&mut store, "SELECT nope FROM t", &entry).expect("save history");
+
+        let record = &store.get_records(None)[0];
+        assert!(!record.success, "失败查询必须留痕（v1 不写失败）");
+        assert_eq!(record.duration_ms, 12);
+        assert_eq!(
+            record.error_message.as_deref(),
+            Some("no such column: nope")
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn missing_conn_and_db_type_fall_back_to_placeholder() {
+        let (mut store, path) = temp_store("fallback");
+        let entry = SqlHistoryEntry {
+            elapsed_ms: 1,
+            success: true,
+            ..Default::default()
+        };
+
+        save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save history");
+
+        let record = &store.get_records(None)[0];
+        assert_eq!(record.db_type, "unknown");
+        assert_eq!(record.connection_id, "unknown");
+
+        let _ = std::fs::remove_file(path);
     }
 }

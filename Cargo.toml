@@ -7,6 +7,7 @@ members = [
     "crates/engine",
     "crates/connection",
     "crates/database",
+    "crates/editor",
     "crates/scratchpad",
     "crates/analytics_resource",
     "crates/mock",
@@ -41,6 +42,7 @@ shared = { path = "crates/shared", package = "rds-shared" }
 engine = { path = "crates/engine", package = "rds-engine" }
 connection = { path = "crates/connection", package = "rds-connection" }
 database = { path = "crates/database", package = "rds-database" }
+editor = { path = "crates/editor", package = "rds-editor" }
 project = { path = "crates/project", package = "rds-project" }
 insight = { path = "crates/insight", package = "rds-insight" }
 mock = { path = "crates/mock", package = "rds-mock" }

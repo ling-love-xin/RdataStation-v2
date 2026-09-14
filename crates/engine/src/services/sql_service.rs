@@ -4,7 +4,7 @@ use crate::cache::get_query_cache;
 use crate::driver::traits::DynDatabase;
 use shared::error::{CoreError, DatabaseError};
 use shared::models::QueryResult;
-use crate::persistence::history_store;
+use crate::persistence::history_store::{self, SqlHistoryEntry};
 use crate::connection_manager::ConnectionManager;
 use crate::sql::SqlEngine;
 use crate::sql::{SqlDialect, SqlStatementType};
@@ -135,32 +135,51 @@ impl SqlService {
         let cancel_token = self.manager.create_cancel_token(&conn_key).await;
 
         // 执行查询（支持取消和超时）
-        let result = if let Some(timeout_ms) = options.timeout_ms {
+        //
+        // 这里不用 `?` 提前返回：失败也要写历史（v1 只在成功时记，失败查询在历史里不可见）。
+        let query_result = if let Some(timeout_ms) = options.timeout_ms {
             match tokio::time::timeout(
                 tokio::time::Duration::from_millis(timeout_ms),
                 db.query_with_cancel(sql, cancel_token.clone()),
             )
             .await
             {
-                Ok(inner_result) => inner_result?,
+                Ok(inner_result) => inner_result,
                 Err(_elapsed) => {
                     cancel_token.cancel();
-                    return Err(CoreError::database(DatabaseError::Query {
-                        sql: sql.to_string(),
-                        reason: format!("Query timed out after {}ms", timeout_ms),
-                        position: None,
-                    }));
+                    Err(query_timeout_error(sql, timeout_ms))
                 }
             }
         } else {
-            db.query_with_cancel(sql, cancel_token.clone()).await?
+            db.query_with_cancel(sql, cancel_token.clone()).await
         };
 
         // 清理取消令牌
         self.manager.remove_cancel_token(&conn_key).await;
 
+        // 失败留痕：v1 只在成功时写历史，失败查询在历史里不可见（排障时无法回溯）
+        let mut result = match query_result {
+            Ok(result) => result,
+            Err(err) => {
+                if options.record_history {
+                    let entry = SqlHistoryEntry {
+                        conn_id: conn_id.clone(),
+                        db_type: self.db_type_of(&conn_key).await,
+                        elapsed_ms: start_time.elapsed().as_millis() as u64,
+                        success: false,
+                        error_message: Some(err.to_string()),
+                        rows_returned: None,
+                        rows_affected: None,
+                    };
+                    if let Err(e) = history_store::save_sql_history(sql, &entry) {
+                        tracing::error!(error = %e, "Failed to save failed SQL to history");
+                    }
+                }
+                return Err(err);
+            }
+        };
+
         // 应用行数限制，防止内存溢出
-        let mut result = result;
         let truncated = result.truncate(MAX_QUERY_ROWS) > 0;
 
         // 将结果存入缓存（仅当启用缓存、非事务操作、且为 SELECT 查询时）
@@ -176,7 +195,8 @@ impl SqlService {
 
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
 
-        // 记录到历史
+        // 记录到历史：耗时 / 成功 / 行数均为真实值
+        // （行结果集只记 `rows_returned`，作用于源库的写语句只记 `rows_affected`）
         if options.record_history {
             tracing::info!(
                 sql = %sql,
@@ -184,7 +204,23 @@ impl SqlService {
                 stmt_type = ?stmt_type,
                 "SQL executed"
             );
-            if let Err(e) = history_store::save_sql_history(sql, conn_id.as_deref()) {
+            let entry = SqlHistoryEntry {
+                conn_id: conn_id.clone(),
+                db_type: self.db_type_of(&conn_key).await,
+                elapsed_ms,
+                success: true,
+                error_message: None,
+                rows_returned: if is_dql {
+                    Some(result.total_rows as u64)
+                } else {
+                    None
+                },
+                rows_affected: match result.is_read_only {
+                    Some(false) => result.affected_rows.map(u64::from),
+                    _ => None,
+                },
+            };
+            if let Err(e) = history_store::save_sql_history(sql, &entry) {
                 tracing::error!(error = %e, "Failed to save SQL history");
             }
         }
@@ -302,6 +338,14 @@ impl SqlService {
                 self.manager.get_or_reconnect(&conn_id).await
             }
         }
+    }
+
+    /// 运行时连接的数据库类型（历史记录用；连接信息缺失时返回 `None`）
+    async fn db_type_of(&self, conn_key: &str) -> Option<String> {
+        self.manager
+            .get_connection_info(&conn_key.to_string())
+            .await
+            .map(|info| info.db_type)
     }
 
     /// 获取 SQL 执行历史
@@ -513,6 +557,15 @@ impl SqlService {
         }
         Ok(self.manager.cancel_query(&conn_id_str).await)
     }
+}
+
+/// 查询超时错误（统一构造，执行与历史记录共用）
+fn query_timeout_error(sql: &str, timeout_ms: u64) -> CoreError {
+    CoreError::database(DatabaseError::Query {
+        sql: sql.to_string(),
+        reason: format!("Query timed out after {}ms", timeout_ms),
+        position: None,
+    })
 }
 
 pub fn value_to_sql(val: &serde_json::Value) -> String {
