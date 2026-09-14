@@ -133,6 +133,29 @@ pub fn disconnect_entry(conn_id: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// 测试一条已保存数据源（导航右键「测试连接」）。
+///
+/// 独立会话：建连探测后立即释放隧道，**不注册连接池、不写库**（与对话框「测试连接」同源）。
+/// 成功返回可直接展示的文案；失败以 `Err` 给出原因。
+///
+/// 注：走进程级 `BRIDGE_RUNTIME`（与 `connect_entry` 同一运行时），即便从导航工作线程
+/// 调用也能保证隧道后台任务落在稳定运行时上。
+pub fn test_entry(conn_id: &str, project_path: Option<&str>) -> Result<String, String> {
+    let service = DataSourceService::global().map_err(|e| e.to_string())?;
+    let rt = bridge_runtime()?;
+    let result = rt
+        .block_on(service.test_saved(conn_id, project_path))
+        .map_err(|e| e.to_string())?;
+    if !result.success {
+        return Err(format!("连接失败：{}", result.message));
+    }
+    // 成功：沿用服务层文案（含耗时与隧道 / TLS 备注），有版本时补在最前面。
+    Ok(match result.version.as_deref() {
+        Some(v) if !v.is_empty() => format!("{}（版本 {}）", result.message, v),
+        _ => result.message,
+    })
+}
+
 /// 运行时是否已连接。
 pub fn is_connected(conn_id: &str) -> bool {
     let Ok(rt) = bridge_runtime() else {

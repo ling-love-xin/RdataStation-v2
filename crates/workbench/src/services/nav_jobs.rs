@@ -7,6 +7,8 @@
 //! 任务类型：
 //! - `LoadChildren`：导航树懒加载（主线程 render 不再做 I/O）；
 //! - `LoadProperties`：属性面板对象加载；
+//! - `GenerateDml`：右键「生成 INSERT/UPDATE/DELETE」（先取列，再拼模板）；
+//! - `TestConnection`：右键「测试连接」（独立会话探测，不注册连接池）；
 //! - `Warm`（C1 预热，方案 C）：内省 catalogs / schemas 并写入 L2，可取消、有进度；
 //! - `PrefetchColumns`（C2 邻接预取）：预取指定表 / 视图的列写入 L2，失败静默。
 //!
@@ -16,8 +18,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
-use database::model::{NavNode, NavPath, PropertyRef};
+use database::model::{NavNode, NavNodeKind, NavPath, PropertyRef};
 use database::property_panel::ObjectProperties;
+use database::sql_gen::DmlKind;
 
 /// 预取目标（catalog / schema / 表或视图名）。
 #[derive(Clone, Debug)]
@@ -40,6 +43,19 @@ pub struct LoadResult {
 pub struct PropsResult {
     pub key: String,
     pub result: Result<ObjectProperties, String>,
+}
+
+/// 生成 SQL 结果（回传主线程）。
+pub struct SqlGenResult {
+    pub key: String,
+    pub result: Result<String, String>,
+}
+
+/// 连接测试结果（回传主线程）。
+pub struct TestConnResult {
+    pub conn_id: String,
+    pub name: String,
+    pub result: Result<String, String>,
 }
 
 /// 单个类别文件夹一次最多预取的表数量（避免大 schema 触发长时间后台 IO）。
@@ -70,6 +86,24 @@ enum Job {
         project_root: Option<String>,
         targets: Vec<ColumnTarget>,
     },
+    /// 右键「生成 INSERT/UPDATE/DELETE」：取列后拼模板。
+    GenerateDml {
+        key: String,
+        conn_id: String,
+        project_root: Option<String>,
+        catalog: String,
+        schema: String,
+        table: String,
+        /// 已去重的限定名（用于模板注释与语句）。
+        qualified: String,
+        kind: DmlKind,
+    },
+    /// 右键「测试连接」：独立会话探测，结果回传主线程。
+    TestConnection {
+        conn_id: String,
+        project_root: Option<String>,
+        name: String,
+    },
 }
 
 /// 共享状态：任务队列 + 进度 + 结果队列。
@@ -83,8 +117,12 @@ struct Shared {
     // 未完成的加载（含排队与执行中）
     pending_loads: AtomicUsize,
     pending_props: AtomicUsize,
+    pending_sql: AtomicUsize,
+    pending_test: AtomicUsize,
     load_results: Mutex<Vec<LoadResult>>,
     props_results: Mutex<Vec<PropsResult>>,
+    sql_results: Mutex<Vec<SqlGenResult>>,
+    test_results: Mutex<Vec<TestConnResult>>,
 }
 
 static JOBS: OnceLock<Shared> = OnceLock::new();
@@ -106,8 +144,12 @@ fn shared() -> &'static Shared {
             warm_cancel: AtomicBool::new(false),
             pending_loads: AtomicUsize::new(0),
             pending_props: AtomicUsize::new(0),
+            pending_sql: AtomicUsize::new(0),
+            pending_test: AtomicUsize::new(0),
             load_results: Mutex::new(Vec::new()),
             props_results: Mutex::new(Vec::new()),
+            sql_results: Mutex::new(Vec::new()),
+            test_results: Mutex::new(Vec::new()),
         }
     })
 }
@@ -204,6 +246,62 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     .collect();
                 let _ = rt.block_on(svc.prefetch_columns(&conn_id, &tuples));
             }
+            Job::GenerateDml {
+                key,
+                conn_id,
+                project_root,
+                catalog,
+                schema,
+                table,
+                qualified,
+                kind,
+            } => {
+                let svc = service(project_root);
+                let result = rt.block_on(async {
+                    // 列走导航同一套 cache-aside（命中 L2 不发查询）。
+                    let nodes = svc
+                        .load_children(
+                            &conn_id,
+                            &NavPath::Table {
+                                catalog,
+                                schema,
+                                table,
+                            },
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let columns: Vec<database::sql_gen::DmlColumn> = nodes
+                        .iter()
+                        .filter_map(|n| match &n.kind {
+                            NavNodeKind::Column { primary, .. } => {
+                                Some(database::sql_gen::DmlColumn {
+                                    name: n.name.clone(),
+                                    primary: *primary,
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    Ok(database::sql_gen::dml_template(&qualified, &columns, kind))
+                });
+                lock(&shared().sql_results).push(SqlGenResult { key, result });
+                shared().pending_sql.fetch_sub(1, Ordering::SeqCst);
+            }
+            Job::TestConnection {
+                conn_id,
+                project_root,
+                name,
+            } => {
+                // 走 `nav_runtime`，与右键「连接」同一套 URL / 网络档案规则。
+                let result =
+                    crate::services::nav_runtime::test_entry(&conn_id, project_root.as_deref());
+                lock(&shared().test_results).push(TestConnResult {
+                    conn_id,
+                    name,
+                    result,
+                });
+                shared().pending_test.fetch_sub(1, Ordering::SeqCst);
+            }
         }
     }
 }
@@ -264,6 +362,41 @@ pub fn prefetch_columns(conn_id: &str, project_root: Option<&str>, targets: Vec<
     });
 }
 
+/// 提交「生成 INSERT/UPDATE/DELETE」（右键，表 / 视图）。
+#[allow(clippy::too_many_arguments)]
+pub fn enqueue_generate_dml(
+    key: &str,
+    conn_id: &str,
+    project_root: Option<&str>,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    qualified: &str,
+    kind: DmlKind,
+) {
+    shared().pending_sql.fetch_add(1, Ordering::SeqCst);
+    let _ = shared().tx.send(Job::GenerateDml {
+        key: key.to_string(),
+        conn_id: conn_id.to_string(),
+        project_root: project_root.map(|s| s.to_string()),
+        catalog: catalog.to_string(),
+        schema: schema.to_string(),
+        table: table.to_string(),
+        qualified: qualified.to_string(),
+        kind,
+    });
+}
+
+/// 提交「测试连接」（右键）。
+pub fn enqueue_test_connection(conn_id: &str, project_root: Option<&str>, name: &str) {
+    shared().pending_test.fetch_add(1, Ordering::SeqCst);
+    let _ = shared().tx.send(Job::TestConnection {
+        conn_id: conn_id.to_string(),
+        project_root: project_root.map(|s| s.to_string()),
+        name: name.to_string(),
+    });
+}
+
 /// 是否仍有未完成的树加载（排队或执行中）。
 pub fn has_pending_loads() -> bool {
     shared().pending_loads.load(Ordering::SeqCst) > 0
@@ -274,6 +407,16 @@ pub fn has_pending_props() -> bool {
     shared().pending_props.load(Ordering::SeqCst) > 0
 }
 
+/// 是否仍有未完成的「生成 SQL」。
+pub fn has_pending_sql() -> bool {
+    shared().pending_sql.load(Ordering::SeqCst) > 0
+}
+
+/// 是否仍有未完成的「测试连接」。
+pub fn has_pending_test() -> bool {
+    shared().pending_test.load(Ordering::SeqCst) > 0
+}
+
 /// 取走已完成的树加载结果。
 pub fn drain_load_results() -> Vec<LoadResult> {
     std::mem::take(&mut *lock(&shared().load_results))
@@ -282,6 +425,16 @@ pub fn drain_load_results() -> Vec<LoadResult> {
 /// 取走已完成的属性加载结果。
 pub fn drain_props_results() -> Vec<PropsResult> {
     std::mem::take(&mut *lock(&shared().props_results))
+}
+
+/// 取走已完成的「生成 SQL」结果。
+pub fn drain_sql_results() -> Vec<SqlGenResult> {
+    std::mem::take(&mut *lock(&shared().sql_results))
+}
+
+/// 取走已完成的「测试连接」结果。
+pub fn drain_test_results() -> Vec<TestConnResult> {
+    std::mem::take(&mut *lock(&shared().test_results))
 }
 
 /// 当前是否有预热任务在跑。

@@ -97,9 +97,9 @@
 
 | 节点 | 菜单项 |
 | --- | --- |
-| 连接 | 连接 / 断开 · 编辑连接… · 查看属性 · 移动到分组… · 设为主组 ▸ · 复制名称 · 刷新元数据 · **通用项** |
-| 表 / 视图 | 查看属性 · 查看数据（`SELECT * … LIMIT 200` 注入编辑区） · 复制名称 · 复制限定名 · 刷新元数据 · **通用项** · **生成 Mock 数据**（表 / 视图专属） |
-| 其他对象（列 / Catalog / Schema / 文件夹 / 例程） | 查看属性 · 复制名称（*限定名仅在有 catalog/schema 时出现*） · 刷新元数据 · **通用项** |
+| 连接 | 连接 / 断开 · **测试连接** · 编辑连接… · 查看属性 · 移动到分组… · 设为主组 ▸ · 复制名称 · 刷新元数据 · **通用项** |
+| 表 / 视图 | 查看属性 · 查看数据（`SELECT * … LIMIT 200` 注入编辑区） · **生成 SQL ▸**（INSERT / UPDATE / DELETE） · 复制名称 · 复制限定名 · 刷新元数据 · **通用项** · **生成 Mock 数据**（表 / 视图专属） |
+| 其他对象（列 / Catalog / Schema / 文件夹 / 例程 / 序列 / 触发器） | 查看属性 · 复制名称（*限定名仅在有 catalog/schema 时出现*） · 刷新元数据（*仅可展开节点*） · **通用项** |
 | 分组头 | 重命名分组（行内输入） · 新建分组 · 删除分组（`AlertDialog` 二次确认）；「未分组」仅「新建分组」 |
 
 > **通用项**（所有节点都有，位于菜单底部、分隔线之后）：**在 SQL 编辑器中打开** · **查看洞察**；
@@ -107,9 +107,9 @@
 
 **B7 待办（后续阶段）**
 
-- 生成 INSERT / UPDATE / DELETE、测试连接、复制连接（模板）、共享至项目 / 取消共享、删除连接；
-- 拖拽表到编辑器插入限定名（需 `on_drag`）；「查看数据」目前仅注入 SQL，未自动执行（自动执行需抽出 `EditorPanel` 的执行管线）。
-- 连接右键的「查看洞察」与各节点右键的「生成 Mock 数据」目前仅切换到右 Dock 占位面板（M7 / M8 待实现）；「在 SQL 编辑器中打开」仅选中连接 + 聚焦编辑区（SQL 可执行区目前受 `use_duckdb_fed` 限制）。
+- 复制连接（模板，无明文凭据）、共享至项目 / 取消共享、删除连接（导航侧入口 + 二次确认）；
+- 拖拽表到编辑器插入限定名（需 `on_drag`）。
+- 连接右键「查看洞察」与各节点右键「生成 Mock 数据」目前仅切换到右 Dock 占位面板（M7 / M8 待实现）；「在 SQL 编辑器中打开」仅选中连接 + 聚焦编辑区（SQL 可执行区目前受 `use_duckdb_fed` 限制）。
 
 **Phase B8 已实现范围**
 
@@ -176,6 +176,9 @@
   - `get_routine_source` 接入属性面板「源码」分区（先按存储过程取、未命中再按函数取）；顺带修复 MySQL / MySQL(native) `SHOW CREATE` **取列 1（sql_mode）而非 DDL**：改为按列名 `Create …` 定位。
   - `PropertyKind` 新增 `Routine` / `Sequence` / `Trigger`，`load_objects` 对所有类别对象挂 `property`（此前仅表 / 视图有 → 例程 / 序列 / 触发器无「查看属性」）。
   - 限定名去重：无独立 Schema 层的驱动把 schema 传成 catalog，`db.db.name` 折为 `db.name`（`property_panel::qualify` + `panels::nav_qualified_name`）。
+- **导航侧「测试连接」与「生成 SQL ▸」（2026-09-14）**：
+  - 测试连接：新增 `DataSourceService::test_saved`（回读记录 → 组装 `DataSourceSaveInput`（密文列解密）→ 走既有 `test`，与对话框同源）与 `nav_runtime::test_entry`；结果由导航后台任务回传，落面板提示（成功含版本 / 耗时）。
+  - 生成 SQL：新增 `database::sql_gen`（纯函数 `dml_template` / `qualified_name` + 7 个单测）与 `nav_jobs::{enqueue_generate_dml, enqueue_test_connection}`；列由后台任务取（导航同一套 cache-aside，命中 L2 不发查询），生成后注入编辑区、**不自动执行**；`UPDATE` / `DELETE` 的 `WHERE` 取主键，无主键退化为 `WHERE 1 = 0` 并附注释。
 
 **导航加载迁后台（收尾）说明**
 

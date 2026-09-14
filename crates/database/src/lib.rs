@@ -13,3 +13,4 @@ pub mod database_view;
 pub mod model;
 pub mod navigator_service;
 pub mod property_panel;
+pub mod sql_gen;

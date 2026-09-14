@@ -848,6 +848,54 @@ impl DataSourceService {
         result
     }
 
+    /// 测试**已保存**连接（导航侧入口）：回读记录 → 组装 `DataSourceSaveInput` → 走
+    /// [`Self::test`]（同一套凭据注入 / 隧道 / 驱动属性规则，不注册连接池、不写库）。
+    ///
+    /// 密码从记录的密文列解密（仅测试用，不回显）；`project_path` 用于解析 P_/GP_ 档案。
+    pub async fn test_saved(
+        &self,
+        conn_id: &str,
+        project_path: Option<&str>,
+    ) -> Result<TestResult, CoreError> {
+        let ds = self
+            .get_with_project(conn_id, project_path)
+            .await?
+            .ok_or_else(|| {
+                CoreError::common(shared::error::CommonError::General(format!(
+                    "连接不存在：{conn_id}"
+                )))
+            })?;
+        let url = connection::url::build_connection_url(&ds).map_err(|e| {
+            CoreError::common(shared::error::CommonError::General(e))
+        })?;
+        let password = match ds.password_encrypted.as_deref() {
+            Some(enc) if !enc.is_empty() => Some(shared::crypto::decrypt_password(enc)?),
+            _ => None,
+        };
+        let input = DataSourceSaveInput {
+            name: ds.name.clone(),
+            db_type: ds.db_type.clone(),
+            url,
+            username: ds.username.clone(),
+            password,
+            scope: ds.scope,
+            description: ds.description.clone(),
+            driver_id: ds.driver_id.clone(),
+            environment_id: ds.environment_id.clone(),
+            auth_config_id: ds.auth_config_id.clone(),
+            auth_method: ds.auth_method.clone(),
+            network_config_id: ds.network_config_id.clone(),
+            driver_properties: ds.driver_properties.clone(),
+            advanced_options: ds.advanced_options.clone(),
+            options: ds.options.clone(),
+            tags: ds.tags.clone(),
+            use_duckdb_fed: Some(ds.use_duckdb_fed),
+            schema_name: ds.schema_name.clone(),
+            metadata_path: ds.metadata_path.clone(),
+        };
+        Ok(self.test(&input, project_path).await)
+    }
+
     // ==================== 私有校验 ====================
 
     /// 同名连接检查（大小写不敏感）。

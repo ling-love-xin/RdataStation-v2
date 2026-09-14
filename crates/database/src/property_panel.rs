@@ -66,22 +66,11 @@ fn qualify(ref_: &PropertyRef) -> String {
                 format!("{parent}.{}", ref_.name)
             }
         }
-        _ => {
-            let mut parts: Vec<String> = Vec::new();
-            let catalog = ref_.catalog.clone().unwrap_or_default();
-            // 无独立 Schema 层的驱动（MySQL / SQLite / DuckDB）导航把 schema 传成 catalog，
-            // 直接拼接会出现 `db.db.name`，故两者相等时只留一份。
-            if !catalog.is_empty() {
-                parts.push(catalog.clone());
-            }
-            if let Some(s) = &ref_.schema {
-                if !s.is_empty() && *s != catalog {
-                    parts.push(s.clone());
-                }
-            }
-            parts.push(ref_.name.clone());
-            parts.join(".")
-        }
+        _ => crate::sql_gen::qualified_name(
+            ref_.catalog.as_deref(),
+            ref_.schema.as_deref(),
+            &ref_.name,
+        ),
     }
 }
 
@@ -273,7 +262,10 @@ fn source_table(text: &str) -> PropertyTable {
         .map(|line| vec![line.to_string()])
         .collect::<Vec<_>>();
     // 空文本（或全空白）时给出占位，避免分区标题下无内容。
-    let rows = if rows.iter().all(|r| r.first().map(|s| s.trim().is_empty()).unwrap_or(true)) {
+    let rows = if rows
+        .iter()
+        .all(|r| r.first().map(|s| s.trim().is_empty()).unwrap_or(true))
+    {
         vec![vec!["（空）".to_string()]]
     } else {
         rows

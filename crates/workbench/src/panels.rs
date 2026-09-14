@@ -38,6 +38,7 @@ use scratchpad::{
 use database::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, PropertyRef,
 };
+use database::sql_gen::DmlKind;
 
 use crate::services::nav_jobs;
 
@@ -3609,6 +3610,21 @@ impl SidebarPanel {
                                         });
                                     }),
                             )
+                            .item(PopupMenuItem::new("测试连接").on_click({
+                                let e = entity.clone();
+                                let cid = conn_id.clone();
+                                let root = root.clone();
+                                let name = conn_name.clone();
+                                move |_, _, app| {
+                                    // 独立会话探测（不注册连接池 / 不写库）；结果落面板提示。
+                                    nav_jobs::enqueue_test_connection(
+                                        &cid,
+                                        root.as_deref(),
+                                        &name,
+                                    );
+                                    e.update(app, |this, cx| this.ensure_nav_pump(cx));
+                                }
+                            }))
                             .item(PopupMenuItem::new("编辑连接…").on_click(move |_, _, app| {
                                 let cid = cid_edit.clone();
                                 e_edit.update(app, |this, cx| {
@@ -4191,7 +4207,21 @@ impl SidebarPanel {
             let conn_label = m_conn_label.clone();
             let driver = m_driver.clone();
             let data_like = matches!(&node.kind, NavNodeKind::Table { .. } | NavNodeKind::View);
-            move |menu, _window, _cx| {
+            // 表 / 视图的「生成 SQL」需要列：由后台任务取（命中 L2 不发查询）。
+            let dml_target = match &menu_path {
+                Some(NavPath::Table {
+                    catalog,
+                    schema,
+                    table,
+                }) if data_like => Some((catalog.clone(), schema.clone(), table.clone())),
+                _ => None,
+            };
+            let dml_root = if dml_target.is_some() {
+                self.project_root().map(|p| p.to_string_lossy().to_string())
+            } else {
+                None
+            };
+            move |menu, window, cx| {
                 let mut menu = menu;
                 if let Some(prop0) = menu_prop.clone() {
                     let e = entity.clone();
@@ -4222,6 +4252,47 @@ impl SidebarPanel {
                                 e.update(app, |_, cx| cx.emit(SidebarEvent::EditorSqlRequest));
                             },
                         ));
+                    }
+                    // 「生成 SQL ▸」：由列信息生成 INSERT / UPDATE / DELETE 模板（只注入不执行）。
+                    if let Some((catalog, schema, table)) = dml_target.clone() {
+                        let q = database::sql_gen::qualified_name(
+                            Some(catalog.as_str()),
+                            Some(schema.as_str()),
+                            &table,
+                        );
+                        let e = entity.clone();
+                        let key = nkey.clone();
+                        let cid = conn_id.clone();
+                        let root = dml_root.clone();
+                        menu = menu.submenu("生成 SQL", window, cx, move |m, _w, _c| {
+                            let mut m = m;
+                            for kind in [DmlKind::Insert, DmlKind::Update, DmlKind::Delete] {
+                                let e = e.clone();
+                                let key = key.clone();
+                                let cid = cid.clone();
+                                let root = root.clone();
+                                let catalog = catalog.clone();
+                                let schema = schema.clone();
+                                let table = table.clone();
+                                let q = q.clone();
+                                m = m.item(PopupMenuItem::new(kind.label()).on_click(
+                                    move |_, _, app| {
+                                        nav_jobs::enqueue_generate_dml(
+                                            &key,
+                                            &cid,
+                                            root.as_deref(),
+                                            &catalog,
+                                            &schema,
+                                            &table,
+                                            &q,
+                                            kind,
+                                        );
+                                        e.update(app, |this, cx| this.ensure_nav_pump(cx));
+                                    },
+                                ));
+                            }
+                            m
+                        });
                     }
                 }
                 {
@@ -4478,10 +4549,33 @@ impl SidebarPanel {
                 {
                     return;
                 }
-                if !nav_jobs::has_pending_loads() {
+                // 生成 SQL / 测试连接：同一轮询泵回填（两者都可能在菜单触发）。
+                let sql_results = nav_jobs::drain_sql_results();
+                if !sql_results.is_empty()
+                    && weak
+                        .update(cx, |this, cx| this.apply_sql_results(sql_results, cx))
+                        .is_err()
+                {
+                    return;
+                }
+                let test_results = nav_jobs::drain_test_results();
+                if !test_results.is_empty()
+                    && weak
+                        .update(cx, |this, cx| this.apply_test_results(test_results, cx))
+                        .is_err()
+                {
+                    return;
+                }
+                let idle = !nav_jobs::has_pending_loads()
+                    && !nav_jobs::has_pending_sql()
+                    && !nav_jobs::has_pending_test();
+                if idle {
                     // 多等一拍确认没有新任务（render 可能刚入队）。
                     executor.timer(std::time::Duration::from_millis(120)).await;
-                    if !nav_jobs::has_pending_loads() {
+                    if !nav_jobs::has_pending_loads()
+                        && !nav_jobs::has_pending_sql()
+                        && !nav_jobs::has_pending_test()
+                    {
                         break;
                     }
                 }
@@ -4526,6 +4620,38 @@ impl SidebarPanel {
             if is_tables_folder {
                 self.maybe_prefetch(&conn_id, &key, &catalog, &schema, project_root.as_deref());
             }
+        }
+        cx.notify();
+    }
+
+    /// 回填「生成 SQL」结果：成功注入编辑区（追加在草稿后），失败落提示。
+    fn apply_sql_results(&mut self, results: Vec<nav_jobs::SqlGenResult>, cx: &mut Context<Self>) {
+        for r in results {
+            match r.result {
+                Ok(sql) => {
+                    *self.shared.editor_set.borrow_mut() = Some(sql);
+                    cx.emit(SidebarEvent::EditorSqlRequest);
+                }
+                Err(e) => {
+                    *self.shared.notice.borrow_mut() = Some(format!("生成 SQL 失败：{e}"));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// 回填「测试连接」结果（结果文案加连接名前缀，直接落面板提示）。
+    fn apply_test_results(
+        &mut self,
+        results: Vec<nav_jobs::TestConnResult>,
+        cx: &mut Context<Self>,
+    ) {
+        for r in results {
+            let msg = match r.result {
+                Ok(m) => format!("{}：{m}", r.name),
+                Err(e) => format!("{}：{e}", r.name),
+            };
+            *self.shared.notice.borrow_mut() = Some(msg);
         }
         cx.notify();
     }
