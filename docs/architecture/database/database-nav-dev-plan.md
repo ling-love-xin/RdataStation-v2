@@ -97,16 +97,19 @@
 
 | 节点 | 菜单项 |
 | --- | --- |
-| 连接 | 连接 / 断开 · 编辑连接… · 查看属性 · 移动到分组… · 设为主组 ▸ · 复制名称 · 刷新元数据 · **在 SQL 编辑器中打开** · **生成 Mock 数据** · **查看洞察**（后三项为常驻模块入口） |
-| 表 / 视图 | 查看属性 · 查看数据（`SELECT * … LIMIT 200` 注入编辑区） · 复制名称 · 复制限定名 · 刷新元数据 |
-| 其他对象（列 / schema / 文件夹 / 例程） | 查看属性 · 复制名称（*限定名仅在有 catalog/schema 时出现*） · 刷新元数据 |
+| 连接 | 连接 / 断开 · 编辑连接… · 查看属性 · 移动到分组… · 设为主组 ▸ · 复制名称 · 刷新元数据 · **通用项** |
+| 表 / 视图 | 查看属性 · 查看数据（`SELECT * … LIMIT 200` 注入编辑区） · 复制名称 · 复制限定名 · 刷新元数据 · **通用项** · **生成 Mock 数据**（表 / 视图专属） |
+| 其他对象（列 / Catalog / Schema / 文件夹 / 例程） | 查看属性 · 复制名称（*限定名仅在有 catalog/schema 时出现*） · 刷新元数据 · **通用项** |
 | 分组头 | 重命名分组（行内输入） · 新建分组 · 删除分组（`AlertDialog` 二次确认）；「未分组」仅「新建分组」 |
+
+> **通用项**（所有节点都有，位于菜单底部、分隔线之后）：**在 SQL 编辑器中打开** · **查看洞察**；
+> **生成 Mock 数据**仅**表 / 视图**有，夹在两者之间。
 
 **B7 待办（后续阶段）**
 
 - 生成 INSERT / UPDATE / DELETE、测试连接、复制连接（模板）、共享至项目 / 取消共享、删除连接；
 - 拖拽表到编辑器插入限定名（需 `on_drag`）；「查看数据」目前仅注入 SQL，未自动执行（自动执行需抽出 `EditorPanel` 的执行管线）。
-- 连接右键的「生成 Mock 数据 / 查看洞察」目前仅切换到右 Dock 占位面板（M7 / M8 待实现）；「在 SQL 编辑器中打开」仅选中连接 + 聚焦编辑区（SQL 可执行区目前受 `use_duckdb_fed` 限制）。
+- 连接右键的「查看洞察」与各节点右键的「生成 Mock 数据」目前仅切换到右 Dock 占位面板（M7 / M8 待实现）；「在 SQL 编辑器中打开」仅选中连接 + 聚焦编辑区（SQL 可执行区目前受 `use_duckdb_fed` 限制）。
 
 **Phase B8 已实现范围**
 
@@ -167,7 +170,7 @@
 - **树层级按数据库类型动态渲染（2026-09-13）**：旧实现里 MySQL 的 `get_schemas` 回退为 catalog 列表，导致 `catalog(db) → schema(同名 db) → 表` 出现同名重复层。新增驱动能力位 `MetadataBrowser::has_schema_level()`（默认 `true`）；MySQL / SQLite / DuckDB 为 `false`，PostgreSQL 保留 `true`。`MetadataService::has_schema_level` 透出，`navigator_service::load_children` 在 `NavPath::Catalog` 分支判定：有 Schema 层走 `load_schemas`，否则直接 `load_folders(conn_id, catalog, catalog)`。`NavPath` / `NavNode` / 渲染层不分叉；无 Schema 层驱动的 `get_schemas` 改为返回空（**不再回退 catalog 列表**）。实测（真实端点）：MySQL `mall_business → 表 (7) → order → 16 列`；PG `postgres → public → 表 (12)`；SQLite `main → 表 (25)`；DuckDB `main → 表 (8)`。
 - **文件型库同文件多 id 别名（2026-09-13）**：旧实现 `ConnectionService::connect_with_type` 发现同 URL 已有文件型连接时**直接返回旧连接 id**（避免文件锁重复打开），导致 `connect_entry("P_real_sqlite")` 返回 Ok 但管理器里只有 `G_real_sqlite`，随后按请求 id 加载报 `[CONN_NOT_FOUND]`。修复：命中同 URL 时把同一 `Arc<dyn Database>` **再挂到请求的 conn_id**（别名，改写 `ConnectionInfo` 的 id / 作用域 / 名称；重连配置沿用权威连接），返回请求 id；文件只打开一次，断开只摘该 id 映射，最后一个引用释放才真正关连。实测：先连 `G_real_sqlite` / `G_real_duckdb` 再连 `P_real_sqlite` / `P_real_duckdb`，四条 id 均可加载 `main → 表 (25) / 表 (8)`。
 - **PostgreSQL 只列当前库（2026-09-13）**：一条 PG 连接只绑定一个数据库，`information_schema` 仅暴露当前库；旧 `get_catalogs` 用 `pg_database` 列出服务器全部库，非当前库展开恒空（`get_schemas(catalog)` 0 行 → 回退 `main` → 表空）。修复：`get_catalogs` 改为 `SELECT current_database()::text`（sqlx 与 native 两驱动），消除兄弟库假节点。实测：`G_real_pg` / `P_real_pg` 均只列 `postgres → pg_toast, public`。跨库浏览（展开时另开一条连接）留待后续。
-- **连接右键常驻模块入口（2026-09-13）**：菜单底部固定三项（与连接状态无关）——「在 SQL 编辑器中打开」（选中该连接 + 清空导航/结果残留 + 聚焦编辑区）、「生成 Mock 数据」（右 Dock `RightPanel::Mock` 展开）、「查看洞察」（`RightPanel::Insight` 展开）。新增 `SidebarEvent::{OpenSqlEditor, OpenRightPanel}`，由 `WorkbenchView` 订阅处理（宿主是布局状态的唯一权威）。
+- **右键模块入口：通用项 + 表 / 视图专属（2026-09-14）**：菜单底部固定**通用项**（分隔线之后、与节点类型 / 连接状态无关）——「在 SQL 编辑器中打开」（选中该节点所属连接 + 清空导航 / 结果残留 + 聚焦编辑区）、「查看洞察」（右 Dock `RightPanel::Insight` 展开）；**所有节点都有**（连接 / Catalog / Schema / 文件夹 / 表 / 视图 / 列 / 例程）。**「生成 Mock 数据」仅表 / 视图**（`RightPanel::Mock` 展开），夹在两个通用项之间；连接菜单不含该项。经 `SidebarEvent::{OpenSqlEditor, OpenRightPanel}` 由 `WorkbenchView` 订阅处理（宿主是布局状态的唯一权威）。
 
 **导航加载迁后台（收尾）说明**
 

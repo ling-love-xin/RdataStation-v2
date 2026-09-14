@@ -201,9 +201,9 @@ pub enum SidebarEvent {
     NewConnectionRequest,
     /// 导航右键「查看数据」已写入 `shared.editor_set`，请编辑区渲染时消费。
     EditorSqlRequest,
-    /// 连接右键「在 SQL 编辑器中打开」：选中该连接并聚焦中央编辑区。
+    /// 通用入口：连接 / 对象右键「在 SQL 编辑器中打开」——选中该连接并聚焦中央编辑区。
     OpenSqlEditor(String),
-    /// 连接右键「生成 Mock 数据 / 查看洞察」：展开右 Dock 并切到对应面板。
+    /// 通用入口：右键「生成 Mock 数据」（仅表 / 视图）/「查看洞察」——展开右 Dock 并切面板。
     OpenRightPanel(RightPanel),
 }
 
@@ -3712,7 +3712,8 @@ impl SidebarPanel {
                                 *this.shared.notice.borrow_mut() = Some(format!("已刷新：{name}"));
                             });
                         }))
-                        // 常驻入口（与连接状态无关）：三个模块按连接上下文打开。
+                        // 通用模块入口（与连接状态无关）：SQL 编辑器 / 洞察。
+                        // Mock 只针对表 / 视图，见 `render_nav_node` 的对象菜单。
                         .separator()
                         .item(PopupMenuItem::new("在 SQL 编辑器中打开").on_click({
                             let e = entity.clone();
@@ -3721,14 +3722,6 @@ impl SidebarPanel {
                                 let cid = cid.clone();
                                 e.update(app, |_, cx| {
                                     cx.emit(SidebarEvent::OpenSqlEditor(cid));
-                                });
-                            }
-                        }))
-                        .item(PopupMenuItem::new("生成 Mock 数据").on_click({
-                            let e = entity.clone();
-                            move |_, _, app| {
-                                e.update(app, |_, cx| {
-                                    cx.emit(SidebarEvent::OpenRightPanel(RightPanel::Mock));
                                 });
                             }
                         }))
@@ -4264,6 +4257,34 @@ impl SidebarPanel {
                             });
                         }));
                 }
+                // 通用模块入口（所有对象节点都有，与节点类型 / 连接状态无关）：
+                // SQL 编辑器 / 洞察；Mock 只针对表 / 视图（`data_like`）。
+                menu = menu.separator().item({
+                    let e = entity.clone();
+                    let cid = conn_id.clone();
+                    PopupMenuItem::new("在 SQL 编辑器中打开").on_click(move |_, _, app| {
+                        let cid = cid.clone();
+                        e.update(app, |_, cx| cx.emit(SidebarEvent::OpenSqlEditor(cid)));
+                    })
+                });
+                if data_like {
+                    let e = entity.clone();
+                    menu = menu.item(PopupMenuItem::new("生成 Mock 数据").on_click(
+                        move |_, _, app| {
+                            e.update(app, |_, cx| {
+                                cx.emit(SidebarEvent::OpenRightPanel(RightPanel::Mock));
+                            });
+                        },
+                    ));
+                }
+                menu = menu.item({
+                    let e = entity.clone();
+                    PopupMenuItem::new("查看洞察").on_click(move |_, _, app| {
+                        e.update(app, |_, cx| {
+                            cx.emit(SidebarEvent::OpenRightPanel(RightPanel::Insight));
+                        });
+                    })
+                });
                 menu
             }
         }));
