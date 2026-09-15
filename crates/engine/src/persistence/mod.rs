@@ -24,9 +24,6 @@ pub mod env_store;
 pub mod global_db;
 pub mod history_store;
 pub mod id_prefix;
-pub mod insight_types;
-pub mod insight_meta_store;
-pub mod insight_store;
 pub mod log_store;
 pub mod metadata_cache;
 pub mod metadata_cache_pool;
@@ -44,11 +41,6 @@ pub use connection_org_store::{ConnectionGroup, ConnectionOrgStore};
 pub use connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
 pub use global_db::{
     GlobalDatabaseManager, GlobalDuckdbConnection, GlobalPooledConnection, GlobalSqlitePool,
-};
-pub use insight_meta_store::InsightMetaStore;
-pub use insight_store::{
-    InsightColumnStore, InsightSchemaReportStore, InsightStorage, InsightStorageStats,
-    InsightTableReportStore, InsightVersionEntry,
 };
 pub use metadata_cache::{ConnectionType, MetadataCacheManager, MetadataCacheOps};
 pub use metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};

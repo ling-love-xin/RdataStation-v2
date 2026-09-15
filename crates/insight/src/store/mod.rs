@@ -1,32 +1,52 @@
-//! 项目级洞察快照存储的**装配点**（M8 Phase 0 / 0.7）。
+//! 洞察快照的**领域存储**与装配点（M8）。
 //!
-//! # 为什么需要这个模块
+//! # 布局
+//!
+//! | 子模块 | 内容 | 物理位置 |
+//! | --- | --- | --- |
+//! | [`body`] | 正文仓库：列快照 / 表质量报告 / Schema 报告 + `InsightStorage` 门面 | 项目 `analytics.duckdb` |
+//! | [`meta`] | 元数据仓库：实体归属、行数、耗时、版本链 | 项目 `project.db` |
+//! | 本文件 | 装配点 [`ProjectInsightStores`]（把「项目库」翻译成「洞察存储」） | — |
+//!
+//! # 为什么需要装配点
 //!
 //! 「保存快照 / 历史版本 / 版本对比 / 清理 / 存储统计」这五条链路在 v2 一期虽然
 //! **全部编译通过**，却**一行都不可达**：`InsightStorage` 与 `InsightMetaStore`
 //! 只在函数签名里作为参数出现，全仓没有任何地方构造它们。
 //!
 //! 根因是这两个门面都要求「项目库连接」——连接由项目打开流程持有，而洞察侧没有
-//! 自己的项目句柄。本模块就是那个缺失的装配点：把「项目库」翻译成「洞察存储」。
+//! 自己的项目句柄。本模块就是那个缺失的装配点。
 //!
 //! # 与 engine 的分工
 //!
-//! engine 提供两个**参数化门面**（能力）：`InsightStorage`（DuckDB 正文 + 版本链）
-//! 与 `InsightMetaStore`（SQLite 元数据）。洞察侧提供**装配与编排**（谁在何时持有它们）。
-//! 表结构由 `ProjectDatabaseManager::open` 的迁移保证（`project_analysis/002_insight_storage.sql`
-//! 建正文表，`project_meta/008_insight_snapshots.sql` 建元数据表）。
+//! engine 提供**连接与迁移**（`ProjectDatabaseManager` 及其 SQLite/DuckDB 句柄），
+//! 洞察侧提供**领域存储与装配**。表结构由 `ProjectDatabaseManager::open` 的迁移保证
+//! （`project_analysis/002_insight_storage.sql` 建正文表，`project_meta/008_insight_snapshots.sql`
+//! 建元数据表）。
 //!
 //! # 用法
 //!
 //! 优先用 [`ProjectInsightStores::from_project_db`] 复用调用方**已打开**的项目库，
 //! 避免对同一个 `analytics.duckdb` 重复开连接；[`ProjectInsightStores::open`] 是
 //! 给「手头只有项目根」的调用方的便捷入口。
+//!
+//! 归属变更（M8 Phase 0 / 0.2）：`body` / `meta` 两个仓库自 `engine/src/persistence/` 迁入。
+
+pub mod body;
+pub mod meta;
+
+pub use body::{
+    snapshot_checksum, InsightColumnStore, InsightSchemaReportStore, InsightStorage,
+    InsightStorageStats, InsightTableReportStore, InsightVersionEntry,
+};
+pub use meta::{InsightMetaStore, InsightSnapshotMeta};
 
 use std::path::Path;
 
 use engine::persistence::project_db::ProjectDatabaseManager;
-use engine::persistence::{InsightMetaStore, InsightStorage};
 use shared::error::CoreError;
+
+use crate::model::types::ColumnInsightFull;
 
 /// 打开项目库时申请的 SQLite 连接池大小。
 ///
@@ -70,7 +90,7 @@ impl ProjectInsightStores {
     /// 供 `entity_source` 记录来源（连接 / 库 / schema / 表），便于「这份快照是哪来的」。
     pub async fn save_column_snapshot(
         &self,
-        insight: &engine::persistence::insight_types::ColumnInsightFull,
+        insight: &ColumnInsightFull,
         entity_source: Option<&str>,
         row_count: Option<i32>,
         elapsed_ms: Option<i32>,
@@ -112,17 +132,15 @@ impl ProjectInsightStores {
     }
 }
 
-/// 正文的 SHA256（复用 engine 侧的唯一算法实现，不在此另写一份）。
-fn checksum_of(
-    insight: &engine::persistence::insight_types::ColumnInsightFull,
-) -> Result<String, CoreError> {
-    engine::persistence::insight_store::snapshot_checksum(insight)
+/// 正文的 SHA256（复用 [`body::snapshot_checksum`] 的唯一算法实现，不在此另写一份）。
+fn checksum_of(insight: &ColumnInsightFull) -> Result<String, CoreError> {
+    snapshot_checksum(insight)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::persistence::insight_types::{
+    use crate::model::types::{
         ColumnInsightFull, ColumnStats, ColumnStatsDetail, DistributionBin, NumericStats,
     };
 

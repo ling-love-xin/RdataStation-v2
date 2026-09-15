@@ -385,21 +385,3 @@ pub fn is_array_type(dt_lower: &str) -> bool {
         || dt_lower.contains("list")
         || dt_lower.contains("array")
 }
-
-pub fn detect_extremes(
-    _min: f64,
-    _max: f64,
-    _stddev: f64,
-) -> Vec<crate::persistence::insight_types::ExtremeValue> {
-    let mut results = Vec::new();
-    if _stddev > 0.0 && _max > 0.0 {
-        let range = _max - _min;
-        if range > 10.0 * _stddev && range > 1000.0 {
-            results.push(crate::persistence::insight_types::ExtremeValue {
-                value: _max,
-                kind: "outlier_high".to_string(),
-            });
-        }
-    }
-    results
-}

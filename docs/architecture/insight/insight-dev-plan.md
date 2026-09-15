@@ -23,6 +23,26 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-15 — Phase 0 第四批：0.2 边界归位（**Phase 0 全部完成**）
+
+**已完成并验证**（`cargo check -p rds-insight -p rds-workbench --all-targets` 零告警；`rds-insight` **91 项测试全绿**）
+
+| 原位置 | 新位置 | 说明 |
+| --- | --- | --- |
+| `engine/persistence/insight_types.rs` | `insight/src/model/types.rs` | 16 个领域类型；`model.rs` 作为模块根声明 `pub mod types;` |
+| `engine/persistence/insight_store.rs`（562 行） | `insight/src/store/body.rs` | DuckDB 正文：列快照 + 表/Schema 报告（预留）+ `InsightStorage` 门面 |
+| `engine/persistence/insight_meta_store.rs`（317 行） | `insight/src/store/meta.rs` | SQLite 元数据 + 版本链 |
+| （原 `insight/src/store.rs`） | `insight/src/store/mod.rs` | 模块根：子模块声明 + 装配点 `ProjectInsightStores` |
+| `engine/services/duckdb_service.rs::detect_extremes` | `insight/src/insight_engine.rs::detect_extremes` | 曾是**方向倒置**（低层持有上层的业务启发式与词汇） |
+| `workbench/services/persistence_service.rs`（271 行） | `insight/src/service/persistence.rs` | 100% 洞察快照回写；`pub(crate)` → `pub` |
+| `workbench/services/result_service.rs` 的洞察半边 | `insight/src/service/mod.rs`（`InsightService`） | 结果集半边留在 workbench |
+
+**关键约束：必须原子搬迁**——`insight_store` / `insight_meta_store` 引用 `insight_types`，且 `detect_extremes` 返回其类型；若先搬类型会造成 `engine → insight` 环。因此**类型 + 两个仓库 + detect_extremes 在同一批内完成**。
+
+**顺带收敛**：`persistence.rs` 里那份重复的 `sha256_hex`（第三份）改为复用 `store::snapshot_checksum`；`workbench` 的 `sha2` 依赖随之成为零使用并移除。engine 侧只剩连接与迁移（`ProjectDatabaseManager` 及其实体），**不再认识「洞察」**。
+
+**未完成**：无。Phase 0 的 §2 / 0.3 / 0.4 / 0.5 / 0.6 / 0.7 / 0.8 / 0.2 均已落地。
+
 ### 2026-09-15 — Phase 0 第三批：目录监听热加载（0.6 完成）
 
 **已完成**（`cargo check -p rds-insight --all-targets` 零告警；`rds-insight` **91 项测试全绿**，连续 5 轮无波动）
@@ -131,8 +151,8 @@
 | 规则资产（`crates/insight/insight-rules/`，18 条 TOML） | ✅ 与 v1 字节级一致；`include_dir!` 编译期嵌入。**注：其中 1 条因字段位置写错被静默跳过（见 §0 F1，已修）** |
 | 规则引擎（`rule_types` / `rule_registry` / `rule_executor`） | ✅ 已迁移；`by_category` 覆盖缺陷**已修**（§0 0.1）；已升级为三层作用域 + 来源与失败记录（§0 0.4） |
 | 分析服务（`insight_engine` / `quality_scorer` / `table_profile_service` / `schema_analyzer`） | ✅ 已迁移；53 单测与 v1 **逐个对齐** |
-| 快照存储（`engine/persistence/insight_store.rs` / `insight_meta_store.rs`） | ✅ 已迁移，**但全仓无 `::new()` 构造点** → 链路悬空 |
-| 领域类型（`engine/persistence/insight_types.rs`，16 个） | ⚠️ 已迁移，**归属错位**（领域模型进了数据层） |
+| 快照存储 | ✅ 已迁移；**但全仓无 `::new()` 构造点** → 链路悬空（**已于 0.7 闭合**） |
+| 领域类型 | ✅ 已迁移（**归属已于 0.2 纠正**：现位于 `insight/src/model/types.rs`） |
 | SQL 迁移（`002_insight_storage` / `008_insight_snapshots`） | ✅ 已随迁移目录迁入（`insight_table_reports` / `insight_schema_reports` 为预留） |
 | 服务门面（`workbench/services/{result,persistence}_service.rs`） | ⚠️ 已迁移，**归属错位**（业务服务在壳层，待 0.2 处理）；16 个 v1 命令的对接口径**已全部备齐**（含本轮补上的 `reload_insight_rules`） |
 | `get_schema_insight` 等价物 | ❌ 缺：`SchemaAnalyzer::analyze` 是唯一入口且全仓零调用（Phase 4） |
@@ -177,23 +197,25 @@ v1 有 7 个 Vue 组件（约 2188 行）+ `insight-store.ts`（607 行，23 个
 | 0.4 | `insight_engine.rs` 各公开函数的 `try_acquire()` | 并发上限 4 且**快速失败**，错误文案 `"Too many concurrent insight operations, please retry"` 面向开发者 | 改 `acquire()`（排队）或保留 try 但错误文案改用户可读「正在分析中，请稍候」；原型按后者设计加载态（见原型 §3.4） |
 | 0.5 | `crates/insight/Cargo.toml` | `rusqlite`、`once_cell` **零使用**（`once_cell` 已被 `std::sync::OnceLock` 取代） | 删除两行依赖 |
 
-## 3. 目标 crate 边界（Phase 0 完成后）
+## 3. 目标 crate 边界（**Phase 0 / 0.2 已完成**）
 
 ```
 workbench ──► insight ──► engine ──► shared
    │              │           ▲
    └──────────────┴───────────┘
-（workbench 只保留 SQL 结果集服务；洞察服务与命令归 insight；**视图归属见 §3.1**）
+（workbench 只保留 SQL 结果集服务与监听接线；洞察服务/仓库/类型全归 insight）
 ```
 
-| 文件（现状） | 迁移目标 | 理由 |
+| 原位置 | 实际迁移目标 | 理由 |
 | --- | --- | --- |
 | `engine/persistence/insight_types.rs` | `insight/src/model/types.rs` | 16 个领域类型（`ColumnInsightFull` / `QualityScore` / `TableProfile` / `TableQuality` …）是洞察领域词汇，不属数据层 |
-| `engine/persistence/insight_store.rs` | `insight/src/store/column_store.rs`（+ `table_store` / `schema_store`） | 洞察快照的领域持久化；`ProjectDuckdbConnection` 仍来自 engine |
-| `engine/persistence/insight_meta_store.rs` | `insight/src/store/meta_store.rs` | 同上 |
-| `engine/services/duckdb_service.rs::detect_extremes` | `insight/src/engine/stats.rs`（或并入 `insight_engine`） | 唯一调用方是 insight（`insight_engine.rs:194`），且返回洞察类型——当前是**方向倒置** |
-| `workbench/services/persistence_service.rs`（271 行） | `insight/src/service/persistence.rs` | 该文件 100% 是洞察快照回写，借用「工作台持久化」之名属于名不副实 |
-| `workbench/services/result_service.rs` 的洞察转发（约 12 个方法） | `insight/src/service/mod.rs` | 结果集自身的方法（`re_execute_with_filter` / `execute_duckdb_analysis` / `save_cell_update` / `export_result`）留在 workbench |
+| `engine/persistence/insight_store.rs` | `insight/src/store/body.rs` | 洞察快照正文的领域持久化；`ProjectDuckdbConnection` 仍来自 engine |
+| `engine/persistence/insight_meta_store.rs` | `insight/src/store/meta.rs` | 同上（元数据 + 版本链） |
+| `engine/services/duckdb_service.rs::detect_extremes` | `insight/src/insight_engine.rs` | 唯一调用方是 insight，且返回洞察类型（进度偏差） |
+| `workbench/services/persistence_service.rs`（271 行） | `insight/src/service/persistence.rs` | 该文件 100% 是洞察快照回写，借用「工作台持久化」之名名不副实 |
+| `workbench/services/result_service.rs` 的洞察转发 | `insight/src/service/mod.rs`（`InsightService`） | 结果集自身的方法（`re_execute_with_filter` / `execute_duckdb_analysis` / `save_cell_update` / `export_result` / 临时表）留在 workbench |
+
+> 与初稿的差异：初稿拟将 `insight_store.rs` 拆为 `column_store` / `table_store` / `schema_store` 三个文件。实际**按原文件整体搬迁**（`body.rs`）——本轮目标是**边界归位**，拆分属内部重构，混在一起会让 diff 难审。
 
 > **过渡期口径**：其余 Feature crate 的 `*_view.rs` 目前多为占位或已删除，视图大多暂收在 `workbench/panels.rs`。本模块的视图归属见 §3.1——**该决策尚未拍板**。
 
@@ -263,7 +285,7 @@ CREATE INDEX IF NOT EXISTS idx_iri_status ON insight_rule_index(load_status);
 设计要点：
 
 1. **`enabled` 是这张表的最大价值**：内置规则不入库，但允许在**项目库**写一条 `rule_id` = 内置 id、`enabled = 0` 的**抑制记录**——用户终于能在 UI 里关掉一条内置规则，而 v1 只能伪造一个同名覆盖文件（且 `deny_unknown_fields` 要求逐字段照抄）。
-2. **`checksum` 驱动增量热加载**：与 `insight_store` 的快照 checksum 同一思路；文件未变则不重解析。
+2. **`checksum` 驱动增量热加载**：与 `store::body` 的快照 checksum 同一思路；文件未变则不重解析。
 3. **`load_error` 让严格 schema 变得可用**：`RuleFile` 全套 `#[serde(deny_unknown_fields)]`（早失败优于静默错，保留），但失败必须**有出口**——入库后 UI 可直接显示「第 3 行多了个 `outputs` 字段」。
 4. **物理落两库**：与 `id_prefix`（`G_`/`P_`/`GP_`）的双库约定一致；不采用 `analytics_resources` 那种「单表 + scope 判别列」的做法（那会让项目库里躺着全局数据）。`Builtin` 层不入库（编译期已知，由内存快照参与合并）。
 5. **预留**：`insight_table_reports` / `insight_schema_reports` 两张表在 Phase 4 前保持空闲，代码与文档均需标注 `// 预留（Phase 4）`。

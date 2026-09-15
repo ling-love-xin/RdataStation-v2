@@ -1,23 +1,29 @@
-//! 洞察持久化存储（DuckDB 侧）
+//! 洞察持久化存储（DuckDB 侧，正文）
 //!
-//! 管理洞察快照的 JSON 序列化存储。
-//! 数据存储在项目的 `analytics.duckdb` 中。
+//! 管理洞察快照的 JSON 正文。数据存储在项目的 `analytics.duckdb` 中。
 //!
 //! 版本化：每条记录包含 version_id / parent_version_id / checksum，
 //! 支持历史版本链和快照对比。
+//!
+//! 三类正文：**列快照**（已实现）、**表质量报告**与 **Schema 报告**（Phase 4 预留，
+//! 表已由迁移建好，当前无写入者）。
 //!
 //! 存储防护：
 //! - 每列最多保留 MAX_VERSIONS_PER_COLUMN (100) 个版本
 //! - 支持按天数清理过期快照 (cleanup_older_than)
 //! - 提供存储用量查询
+//!
+//! 归属变更（M8 Phase 0 / 0.2）：本文件自 `engine/src/persistence/insight_store.rs` 迁入。
+//! 它持有的是**洞察领域**的持久化，不是通用仓储；engine 只提供项目库连接与迁移。
 
 use std::sync::Arc;
+
 use uuid::Uuid;
 
 use shared::error::{CommonError, CoreError, StorageError};
-use crate::persistence::project_db::ProjectDuckdbConnection;
 
-use crate::persistence::insight_types::ColumnInsightFull;
+use crate::model::types::ColumnInsightFull;
+use engine::persistence::project_db::ProjectDuckdbConnection;
 
 const MAX_VERSIONS_PER_COLUMN: usize = 100;
 

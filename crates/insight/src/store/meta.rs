@@ -1,11 +1,12 @@
 //! 洞察元数据存储（SQLite 侧）
 //!
-//! 管理洞察快照的执行记录和版本追踪。
-//! 数据存储在项目的 `project.db` 中。
+//! 管理洞察快照的执行记录与版本追踪。数据存储在项目的 `project.db` 中。
 //!
-//! 与 DuckDB 侧的 `insight_store.rs` 配合使用：
-//! SQLite 存储轻量级元数据（执行时间、行数等），
-//! DuckDB 存储重量级 JSON 数据（完整的洞察快照）。
+//! 与 DuckDB 侧的 [`super::body`] 配合使用：
+//! SQLite 存轻量元数据（实体归属、行数、耗时、版本链），
+//! DuckDB 存重量级正文（完整画像 JSON）。两者由 `snapshot_id` / `version_id` 互指。
+//!
+//! 归属变更（M8 Phase 0 / 0.2）：本文件自 `engine/src/persistence/insight_meta_store.rs` 迁入。
 
 use std::sync::Arc;
 
@@ -14,7 +15,8 @@ use specta::Type;
 use uuid::Uuid;
 
 use shared::error::{CoreError, StorageError};
-use crate::persistence::project_db::ProjectSqlitePool;
+
+use engine::persistence::project_db::ProjectSqlitePool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct InsightSnapshotMeta {

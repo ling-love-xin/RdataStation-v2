@@ -17,6 +17,10 @@ serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
 
+# ===== 领域存储（store/）=====
+# 快照主键与版本号生成。
+uuid.workspace = true
+
 # ===== 规则引擎 =====
 include_dir.workspace = true
 duckdb.workspace = true

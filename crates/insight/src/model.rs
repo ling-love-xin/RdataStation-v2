@@ -1,11 +1,13 @@
-//! 洞察模块的**视图模型**（M8 Phase 1 落地）。
+//! 洞察模块的**领域模型**与视图模型。
 //!
-//! 规划内容（见 `docs/architecture/insight/insight-prototype-design.md` §3、§8）：
-//! - `InsightTarget`：当前分析目标（列 / 表 / 多列 / Schema），决定面板渲染哪一路内容
-//! - `PanelTab`：五 Tab（列 / 表 / 多列 / 结构 / 历史）
-//! - `InsightPanelState`：面板状态（目标、Tab、折叠态、加载与错误态）
+//! | 子模块 | 内容 |
+//! | --- | --- |
+//! | [`types`] | 领域类型：列画像（`ColumnInsightFull` / `ColumnStats` / 各类型统计 / `DistributionBin`）、表画像（`TableProfile` / `TableColumnMeta`）、质量（`QualityScore` / `QualityDimension` / `TableQuality` / `ColumnQualityEntry`） |
 //!
-//! 边界：本模块只放**视图模型**；算法 DTO（`ColumnInsightFull` / `QualityScore` /
-//! `TableQuality` / `SchemaInsightReport` 等）归 `model::types`，两者不混放。
+//! 视图模型（`InsightTarget` / `PanelTab` / `InsightPanelState`）规划在 Phase 1 落地，
+//! 与领域类型分开放：领域类型是分析链路的输入输出契约，视图模型是界面的状态。
 //!
-//! 本文件当前为空占位（Phase 1 随视图一并落地）。
+//! 归属变更（M8 Phase 0 / 0.2）：`types` 自 `engine/src/persistence/insight_types.rs` 迁入。
+//! 它们是**洞察领域词汇**，不属数据层；engine 只提供连接与迁移，不再认识「洞察」。
+
+pub mod types;

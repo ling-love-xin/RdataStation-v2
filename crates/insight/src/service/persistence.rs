@@ -1,16 +1,10 @@
-use engine::persistence::insight_types::ColumnInsightFull;
-use insight::insight_engine;
+use crate::model::types::ColumnInsightFull;
+use crate::store::{InsightMetaStore, InsightStorage};
+use crate::{insight_engine, quality_scorer, store};
 use shared::error::{CommonError, CoreError};
 
-fn sha256_hex(input: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn save_column_insight_snapshot(
+pub async fn save_column_insight_snapshot(
     insight: &ColumnInsightFull,
     conn_id: Option<&str>,
     db_name: Option<&str>,
@@ -18,8 +12,8 @@ pub(crate) async fn save_column_insight_snapshot(
     table_name: Option<&str>,
     row_count: Option<i32>,
     elapsed_ms: Option<i32>,
-    insight_store: &engine::persistence::InsightStorage,
-    meta_store: &engine::persistence::InsightMetaStore,
+    insight_store: &InsightStorage,
+    meta_store: &InsightMetaStore,
 ) -> Result<(String, String), CoreError> {
     let parent_version_id = meta_store
         .get_latest_meta("column", &insight.stats.column_name)
@@ -54,7 +48,7 @@ pub(crate) async fn save_column_insight_snapshot(
         }
     };
 
-    let checksum = sha256_hex(&serde_json::to_string(insight).unwrap_or_default());
+    let checksum = store::snapshot_checksum(insight)?;
 
     meta_store
         .save_meta(
@@ -73,20 +67,20 @@ pub(crate) async fn save_column_insight_snapshot(
     Ok((snapshot_id, version_id))
 }
 
-pub(crate) async fn get_column_insight_history(
+pub async fn get_column_insight_history(
     column_name: &str,
-    insight_store: &engine::persistence::InsightStorage,
-) -> Result<Vec<engine::persistence::InsightVersionEntry>, CoreError> {
+    insight_store: &InsightStorage,
+) -> Result<Vec<crate::store::InsightVersionEntry>, CoreError> {
     insight_store
         .columns
         .get_history(column_name, Some(10))
         .await
 }
 
-pub(crate) async fn cleanup_old_insight_snapshots(
+pub async fn cleanup_old_insight_snapshots(
     days: i32,
-    insight_store: &engine::persistence::InsightStorage,
-    meta_store: &engine::persistence::InsightMetaStore,
+    insight_store: &InsightStorage,
+    meta_store: &InsightMetaStore,
 ) -> Result<(i32, usize), CoreError> {
     let duckdb_deleted = insight_store
         .columns
@@ -96,15 +90,15 @@ pub(crate) async fn cleanup_old_insight_snapshots(
     Ok((duckdb_deleted, sqlite_deleted))
 }
 
-pub(crate) async fn get_insight_storage_stats(
-    insight_store: &engine::persistence::InsightStorage,
-) -> Result<engine::persistence::InsightStorageStats, CoreError> {
+pub async fn get_insight_storage_stats(
+    insight_store: &InsightStorage,
+) -> Result<crate::store::InsightStorageStats, CoreError> {
     insight_store.columns.get_storage_stats().await
 }
 
-pub(crate) async fn get_insight_version_detail(
+pub async fn get_insight_version_detail(
     version_id: &str,
-    insight_store: &engine::persistence::InsightStorage,
+    insight_store: &InsightStorage,
 ) -> Result<Option<ColumnInsightFull>, CoreError> {
     insight_store
         .columns
@@ -112,7 +106,7 @@ pub(crate) async fn get_insight_version_detail(
         .await
 }
 
-pub(crate) async fn profile_column_from_table(
+pub async fn profile_column_from_table(
     project_root: Option<&std::path::Path>,
     conn_id: String,
     database: &str,
@@ -183,18 +177,18 @@ pub(crate) async fn profile_column_from_table(
         engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(&columns, &rows)?;
 
     // 基础统计由 TOML 规则驱动，故需按项目取规则集。
-    insight::with_rules(project_root, |registry| {
+    crate::with_rules(project_root, |registry| {
         insight_engine::get_column_insight_full(registry, &temp_table, column_name)
     })
 }
 
-pub(crate) async fn batch_evaluate_columns(
+pub async fn batch_evaluate_columns(
     project_root: Option<&std::path::Path>,
     conn_id: String,
     database: &str,
     schema: &str,
     table: &str,
-) -> Result<engine::persistence::insight_types::TableQuality, CoreError> {
+) -> Result<crate::model::types::TableQuality, CoreError> {
     use engine::get_connection_manager;
     use engine::services::sql_service::SqlExecuteOptions;
     use engine::SqlService;
@@ -244,7 +238,7 @@ pub(crate) async fn batch_evaluate_columns(
     };
 
     if col_names.is_empty() {
-        return Ok(engine::persistence::insight_types::TableQuality {
+        return Ok(crate::model::types::TableQuality {
             table_name: table.into(),
             overall_score: 0.0,
             level: "无数据".into(),
@@ -262,7 +256,7 @@ pub(crate) async fn batch_evaluate_columns(
     // 整表评估：规则集只取一次（不在逐列循环里重复加读锁）。
     // 串行逐列是刻意的——洞察并发上限为 4 且快速失败，并行会把「部分列静默缺失」
     // 变成常态；串行起步虽慢，但「哪些列没评上」是确定的（单列失败仍跳过并继续）。
-    insight::with_rules(project_root, |registry| {
+    crate::with_rules(project_root, |registry| {
         let mut stats_list: Vec<ColumnInsightFull> = Vec::new();
         for col_name in &col_names {
             match insight_engine::get_column_insight_full(registry, &temp_table, col_name) {
@@ -274,7 +268,7 @@ pub(crate) async fn batch_evaluate_columns(
             }
         }
 
-        Ok(insight::quality_scorer::compute_table_quality(
+        Ok(quality_scorer::compute_table_quality(
             table,
             &stats_list,
         ))

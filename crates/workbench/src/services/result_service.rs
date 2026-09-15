@@ -1,28 +1,20 @@
-//! 结果集服务 + 洞察计算引擎
+//! 结果集服务（SQL 执行侧的外观）
 //!
 //! 提供：
 //! - SQL 过滤（拼接 WHERE 重新查询）
 //! - DuckDB 深度分析（针对临时表）
-//! - 列洞察全量统计（统计 + 样本 + 直方图）
-//! - 规则引擎 API（统一入口，SQL 模板与 Rust 代码分离）
+//! - 临时表创建与句柄获取
+//! - 单元格回写与结果导出
 //!
-//! # 规则分层与 project_root
+//! **洞察不属于本模块**。列画像 / 质量评分 / 规则 / 表探查 / Schema 洞察
+//! 归 `crates/insight`，统一从 `insight::InsightService` 进入
+//! （归属变更见 `docs/architecture/insight/insight-architecture.md` §3、开发方案 §3）。
 //!
-//! 基础统计本身由 TOML 规则驱动（`numeric-stats` / `histogram` 等），而规则分三层
-//! （内置 / 全局 / 项目）且**随项目变化**，所以涉及规则的方法都要求显式传入
-//! `project_root`（无项目传 `None`）。取注册表统一走 `insight::with_rules`，
-//! 锁与错误处理收在一处，不在本层散开。
-//!
-//! TODO(M8 Phase 1)：本门面目前无调用方；洞察专属方法将随视图落地迁入 `crates/insight`，
-//! 此处只保留结果集相关部分（见 `docs/architecture/insight/insight-dev-plan.md` §3）。
-
-use std::path::Path;
+//! 两者的交界：结果集为洞察提供 **DuckDB 临时表**（`create_duckdb_temp_table`）
+//! 与**连接句柄**（`get_or_create_duckdb`），洞察在其上做分析。
 
 use shared::error::CoreError;
 
-use engine::persistence::insight_types::{
-    ColumnInsightFull, ColumnStats, QualityScore, TableProfile, TableQuality,
-};
 use engine::services::result_types::ResultSet;
 
 // ==================== ResultService（外观 / Facade）====================
@@ -64,136 +56,6 @@ impl ResultService {
         rows: &[Vec<serde_json::Value>],
     ) -> Result<String, CoreError> {
         engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(columns, rows)
-    }
-
-    /// 列画像全量结果。`project_root` 决定使用哪一层规则。
-    pub fn get_column_insight_full(
-        project_root: Option<&Path>,
-        temp_table: &str,
-        column_name: &str,
-    ) -> Result<ColumnInsightFull, CoreError> {
-        insight::with_rules(project_root, |registry| {
-            insight::insight_engine::get_column_insight_full(registry, temp_table, column_name)
-        })
-    }
-
-    /// 列基础统计（不含样本与直方图），更轻。
-    pub fn get_column_insights(
-        project_root: Option<&Path>,
-        temp_table: &str,
-        column_name: &str,
-    ) -> Result<ColumnStats, CoreError> {
-        insight::with_rules(project_root, |registry| {
-            insight::insight_engine::get_column_insights(registry, temp_table, column_name)
-        })
-    }
-
-    /// 执行指定 id 的规则（含 QualityRule 质量门控）。调用方需已持有 DuckDB 锁。
-    pub fn execute_insight_rule(
-        project_root: Option<&Path>,
-        rule_id: &str,
-        conn: &duckdb::Connection,
-        params: &std::collections::HashMap<String, String>,
-    ) -> Result<insight::ExecutionResult, CoreError> {
-        insight::with_rules(project_root, |registry| {
-            insight::insight_engine::execute_insight_rule(registry, rule_id, conn, params)
-        })
-    }
-
-    /// 列出规则（可按分类过滤）。返回项含 `scope` / `scope_path`，供界面按作用域分组。
-    pub fn list_insight_rules(
-        project_root: Option<&Path>,
-        category: Option<&str>,
-    ) -> Result<Vec<serde_json::Value>, CoreError> {
-        insight::with_rules(project_root, |registry| {
-            insight::insight_engine::list_insight_rules(registry, category)
-        })
-    }
-
-    /// 列出适用于某列类型的规则。
-    pub fn list_rules_for_column(
-        project_root: Option<&Path>,
-        column_type: &str,
-    ) -> Result<Vec<serde_json::Value>, CoreError> {
-        insight::with_rules(project_root, |registry| {
-            insight::insight_engine::list_rules_for_column(registry, column_type)
-        })
-    }
-
-    /// 重新加载规则（丢弃缓存并按三层重建），返回生效规则总数。
-    ///
-    /// 规则目录已被目录监听（`insight::service::watcher`）；本方法用作兜底与排障入口。
-    pub fn reload_insight_rules(project_root: Option<&Path>) -> usize {
-        insight::reload_insight_rules(project_root)
-    }
-
-    pub fn compute_column_quality(stats: &ColumnInsightFull) -> QualityScore {
-        insight::quality_scorer::compute_column_quality(stats)
-    }
-
-    pub fn compute_table_quality(
-        table_name: &str,
-        stats_list: &[ColumnInsightFull],
-    ) -> TableQuality {
-        insight::quality_scorer::compute_table_quality(table_name, stats_list)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn save_column_insight_snapshot(
-        insight: &ColumnInsightFull,
-        conn_id: Option<&str>,
-        db_name: Option<&str>,
-        schema_name: Option<&str>,
-        table_name: Option<&str>,
-        row_count: Option<i32>,
-        elapsed_ms: Option<i32>,
-        insight_store: &engine::persistence::InsightStorage,
-        meta_store: &engine::persistence::InsightMetaStore,
-    ) -> Result<(String, String), CoreError> {
-        crate::services::persistence_service::save_column_insight_snapshot(
-            insight,
-            conn_id,
-            db_name,
-            schema_name,
-            table_name,
-            row_count,
-            elapsed_ms,
-            insight_store,
-            meta_store,
-        )
-        .await
-    }
-
-    pub async fn get_column_insight_history(
-        column_name: &str,
-        insight_store: &engine::persistence::InsightStorage,
-    ) -> Result<Vec<engine::persistence::InsightVersionEntry>, CoreError> {
-        crate::services::persistence_service::get_column_insight_history(column_name, insight_store)
-            .await
-    }
-
-    pub async fn cleanup_old_insight_snapshots(
-        days: i32,
-        insight_store: &engine::persistence::InsightStorage,
-        meta_store: &engine::persistence::InsightMetaStore,
-    ) -> Result<(i32, usize), CoreError> {
-        crate::services::persistence_service::cleanup_old_insight_snapshots(
-            days,
-            insight_store,
-            meta_store,
-        )
-        .await
-    }
-
-    pub async fn get_table_profile(
-        conn_id: String,
-        db_type: String,
-        database: &str,
-        schema: &str,
-        table: &str,
-    ) -> Result<TableProfile, CoreError> {
-        insight::table_profile_service::get_table_profile(conn_id, db_type, database, schema, table)
-            .await
     }
 
     pub async fn save_cell_update(
@@ -265,55 +127,5 @@ impl ResultService {
             }
         };
         DuckDbService::export_temp_table(temp_table, file_path, fmt)
-    }
-
-    pub async fn get_insight_storage_stats(
-        insight_store: &engine::persistence::InsightStorage,
-    ) -> Result<engine::persistence::InsightStorageStats, CoreError> {
-        crate::services::persistence_service::get_insight_storage_stats(insight_store).await
-    }
-
-    pub async fn get_insight_version_detail(
-        version_id: &str,
-        insight_store: &engine::persistence::InsightStorage,
-    ) -> Result<Option<ColumnInsightFull>, CoreError> {
-        crate::services::persistence_service::get_insight_version_detail(version_id, insight_store)
-            .await
-    }
-
-    pub async fn profile_column_from_table(
-        project_root: Option<&Path>,
-        conn_id: String,
-        database: &str,
-        schema: &str,
-        table: &str,
-        column_name: &str,
-    ) -> Result<ColumnInsightFull, CoreError> {
-        crate::services::persistence_service::profile_column_from_table(
-            project_root,
-            conn_id,
-            database,
-            schema,
-            table,
-            column_name,
-        )
-        .await
-    }
-
-    pub async fn batch_evaluate_columns(
-        project_root: Option<&Path>,
-        conn_id: String,
-        database: &str,
-        schema: &str,
-        table: &str,
-    ) -> Result<TableQuality, CoreError> {
-        crate::services::persistence_service::batch_evaluate_columns(
-            project_root,
-            conn_id,
-            database,
-            schema,
-            table,
-        )
-        .await
     }
 }

@@ -3,7 +3,7 @@
 > **一句话**：把数据变成**结论**——「这份数据长什么样」（库 / 表 / 列画像）与「它能不能用」（四维质量评分），并把「新增一种洞察」从改 Rust 降级为**加一个 TOML 规则文件**（内置 18 条，用户可扩展）。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**部分实现**（2026-09-15）——文档齐备（模块入口 / 原型 / 交互稿 / 架构 / 开发方案 / 使用手册）；**Phase 0 已落地**（规则作用域与索引、快照链路、五项地基缺陷修复；测试 **85 项**）；**视图层尚未开始**（Phase 1 起）。当前面板仍是 `workbench/src/panels.rs` 的 `RightSidebarPanel::render_insight_placeholder`（三行占位文字）。逐项进度见 `insight-dev-plan.md` §0。
+> 状态：**Phase 0 已完成**（2026-09-15）——文档齐备（模块入口 / 原型 / 交互稿 / 架构 / 开发方案 / 使用手册）；Phase 0 全项（§2 缺陷 · 0.2 边界归位 · 0.3 接缝 · 0.4 作用域 · 0.5 索引与同步器 · 0.6 目录监听 · 0.7 快照链路 · 0.8 占位治理）均已落地并验证；测试 **91 项**。**视图层尚未开始**（Phase 1 起）。当前面板仍是 `workbench/src/panels.rs` 的 `RightSidebarPanel::render_insight_placeholder`（三行占位文字）。逐项进度见 `insight-dev-plan.md` §0。
 >
 > **边界**：本模块拥有**画像 / 评分 / 规则 / 报告 / 快照历史**。SQL 执行与结果集属 M5 编辑器；对象树与元数据内省属 M4；连接与运行态属 M3；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接，只经服务/命令与它们协作。
 
@@ -65,12 +65,12 @@
 | 规则索引同步 / 目录监听 | `crates/insight/src/service/indexer.rs`、`service/watcher.rs`（现状：✅ 已实现） |
 | 列画像计算（统计 / 样本 / 直方图） | `crates/insight/src/insight_engine.rs`（现状：✅ 已迁移；内部接缝 `*_internal` 待提 `pub`） |
 | 质量评分（四维 + 等级） | `crates/insight/src/quality_scorer.rs`（现状：✅ 已迁移） |
-| 异常值检测 | `crates/insight/src/engine/stats.rs`（现状：⚠️ 在 `engine/services/duckdb_service.rs::detect_extremes`，待归位） |
+| 异常值检测 | `crates/insight/src/insight_engine.rs`（`detect_extremes`；现状：✅ 已归位，自 `engine/services/duckdb_service.rs`） |
 | 表探查 | `crates/insight/src/table_profile_service.rs`（现状：✅ 已迁移） |
 | Schema 洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（现状：✅ 已迁移，**无服务门面与调用点**） |
-| 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：⚠️ 在 `engine/persistence/insight_types.rs`，待归位） |
-| 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/`（现状：⚠️ 在 `engine/persistence/insight_{store,meta_store}.rs`，待归位） |
-| 服务门面（画像 / 评分 / 规则 / 快照编排） | `crates/insight/src/service/mod.rs`（现状：⚠️ 拆分在 `workbench/services/{result,persistence}_service.rs`） |
+| 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：✅ 已归位） |
+| 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位） |
+| 服务门面（画像 / 评分 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
 | 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（现状：占位） |
 | 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：未创建） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：未创建） |

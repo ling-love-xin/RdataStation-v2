@@ -60,16 +60,28 @@ workbench ──► insight ──► engine ──► shared
 
 **已知的归属偏差（Phase 0 / 0.2 待归位）**：
 
-| 现状位置 | 应归 | 理由 |
+> ✅ **已于 2026-09-15 完成归位**（Phase 0 / 0.2）。下表保留为「当时为何要搬」的记述：
+
+| 原位置 | 现位置 | 理由 |
 | --- | --- | --- |
-| `engine::persistence::insight_types`（16 个领域类型） | `insight` | 领域词汇不属数据层 |
-| `engine::persistence::insight_{store,meta_store}` | `insight` | 洞察快照的领域持久化 |
-| `engine::services::duckdb_service::detect_extremes` | `insight` | 唯一调用方是洞察且返回洞察类型（当前是**方向倒置**） |
-| `workbench::services::{result,persistence}_service` 的洞察部分 | `insight` | 业务服务在壳层 |
+| `engine::persistence::insight_types`（16 个领域类型） | `insight::model::types` | 领域词汇不属数据层 |
+| `engine::persistence::insight_{store,meta_store}`（正文 + 元数据仓库） | `insight::store::{body, meta}` | 洞察快照的领域持久化 |
+| `engine::services::duckdb_service::detect_extremes` | `insight::insight_engine::detect_extremes` | 唯一调用方是洞察且返回洞察类型（曾是**方向倒置**） |
+| `workbench::services::{result,persistence}_service` 的洞察部分 | `insight::service::{InsightService, persistence}` | 业务服务不复住在壳层 |
+
+engine 侧只剩**连接与迁移**（`ProjectDatabaseManager` 及其 SQLite/DuckDB 句柄），不再认识「洞察」。
 
 > **视图归属尚待拍板**（方案 A 入 `crates/insight`，方案 B 留 `workbench`），见开发方案 §3.1。
 
-**当前 workspace 内 Cargo 依赖（Phase 0 后）**：`insight → {engine, shared, tokio, serde, serde_json, specta, include_dir, duckdb, tracing, toml, rusqlite, sha2}`。视图落地后按拍板结果决定是否加 `gpui-kit`。
+**当前 workspace 内 Cargo 依赖（Phase 0 / 0.2 后）**：
+
+| crate | 依赖 |
+| --- | --- |
+| `rds-insight` | `engine`, `shared`, `tokio`, `serde`, `serde_json`, `specta`, `uuid`, `include_dir`, `duckdb`, `tracing`, `toml`, `rusqlite`, `sha2` |
+| `rds-engine` | 不再依赖洞察；`sha2` / `uuid` 仍自用于元数据身份与缓存 |
+| `rds-workbench` | 输出 `insight`（只用了监听与门面）；已移除仅 `persistence_service` 用过的 `sha2` |
+
+视图落地后按拍板结果决定是否给 insight 加 `gpui-kit`。
 
 ## 4. 状态所有权（单一写入者）
 
@@ -202,7 +214,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D14 | 内部接缝 `*_on` / `*_internal` **只吃显式连接** | `std::sync::Mutex` 非重入：已持锁的场景再调公开入口会自锁 | 调用方需选择入口 |
 | D15 | 采样行数**必须在 UI 明示** | 采样结论被当成全量结论是最常见的误读 | 需视图配合 |
 | D16 | 快照正文与元数据**成对写入**，失败即抛 | 只写一半会造成「历史列表有记录但读不出正文」 | 需补偿或重试策略（Phase 5 决定） |
-| D17 | 校验和算法**单一来源**（`insight_store::snapshot_checksum`） | 多处各写一份，一旦有一处改算法，版本比对静默失效 | — |
+| D17 | 校验和算法**单一来源**（`store::body::snapshot_checksum`） | 多处各写一份，一旦有一处改算法，版本比对静默失效（已收敛：原先 engine / workbench 各一份） | — |
 | D18 | 排序一律带**确定性兜底**（`, rowid DESC`） | `CURRENT_TIMESTAMP` 只有秒级精度，同一秒内两次写入时「最新」返回任意一条 → 版本链挂错父版本 | 依赖 `rowid` 伪列（DuckDB / SQLite 均支持） |
 | D19 | 行级读取错误**向上抛**，不用 `filter_map(r.ok())` 丢弃 | 静默少行比报错难查得多（曾表现为「历史列表恒为空」） | — |
 | D20 | 洞察**不自己取数** | 数据入口只有 `temp_table` 与 `conn_id`；自建连接会绕开 M3 的池化与只读策略 | — |
@@ -220,8 +232,8 @@ RulesWatcher（后台线程，drop 即停）：
 | 查询结果表 | 前缀 `tmp_q_`，无 TTL，项目关闭清理 | 同上 |
 | 样本行数 | `DEFAULT_SAMPLE_SIZE = 5` | `insight_engine` |
 | 直方图最小行数 | `HISTOGRAM_MIN_ROWS = 10` | 同上 |
-| 每列保留版本数 | `MAX_VERSIONS_PER_COLUMN`（超出淘汰最旧） | `insight_store` |
-| 表级评估 | **串行逐列**（不依赖并发上限兜底） | `persistence_service` |
+| 每列保留版本数 | `MAX_VERSIONS_PER_COLUMN`（超出淘汰最旧） | `store::body` |
+| 表级评估 | **串行逐列**（不依赖并发上限兜底） | `service::persistence` |
 | 规则目录监听 | 后台线程，默认轮询间隔 2s；**drop 即停**；每轮仅哈希几十个小文件 | `insight::service::watcher` |
 
 **为什么快速失败而非排队**：分析入口是同步函数（`get_column_insight_full`），语义上无法 await；若改为阻塞等待 `Mutex`/信号量，会把调用线程（可能是 UI 主线程）卡住。代价是超限时用户要重试，故错误文案面向用户（「洞察分析任务过多，请稍候重试」），由 UI 呈现为加载态。
@@ -277,7 +289,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D12 并发上限 | `insight_engine.rs`（`INSIGHT_MAX_CONCURRENT` / `ERR_TOO_MANY_CONCURRENT`） |
 | D13 DuckDB 单例 | `engine/src/duckdb/manager.rs`、`engine/src/services/duckdb_service.rs` |
 | D14 内部接缝 | `insight_engine.rs`（`get_column_insight_full_on` / `get_column_stats_internal` / `get_column_sample_internal` / `get_column_histogram_internal`） |
-| D16/D17/D18/D19 快照链路 | `crates/insight/src/store.rs`、`engine/src/persistence/insight_store.rs`、`insight_meta_store.rs` |
+| D16/D17/D18/D19 快照链路 | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（正文与元数据仓库 + 装配点 `ProjectInsightStores`） |
 | D1 目标分派 / D15 采样明示 | 待 Phase 1：`crates/insight/src/insight_view.rs` |
 | D22/D23 目录监听与索引解耦 | `crates/insight/src/service/watcher.rs`（`RulesWatcher` / `rules_fingerprint` / `watch_dirs` / `set_watched_project_root` / `index_is_stale`）；接线在 `workbench/src/view.rs`（构造期启动）与 `workbench/src/components/project_host.rs`（项目切换告知） |
 | D20 不自己取数 | `engine/src/services/{duckdb_service,sql_service}.rs` 为唯一数据入口 |
@@ -295,7 +307,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K1 | **无 SQL 沙箱**：v1 文档声称有 `ATTACH`/`INSTALL` 等黑名单，v2 代码里**不存在**；唯一防线是 `validate_identifiers`——只校验**参数值**字符（字母数字 / `_` / `-` / `.`），不校验规则 SQL 本身 | 安全：用户规则文件的 SQL 直接在该进程的 DuckDB 上执行，可 `ATTACH`/`COPY` 到任意路径 | 待决策（见 §12） |
 | K2 | `crates/engine/insight-rules/` 是 `crates/insight/insight-rules/` 的**逐字节重复副本**，全仓零代码引用 | 后来者可能改错副本 | 待删除确认 |
 | K3 | `table-quality-overview` 规则的 SQL 引用表 `insight_column_stats`，该表**不存在**（只有 `insight_column_snapshots`） | 该规则解析通过但执行必失败 | 待决策：建表 / 改 SQL / 下线 |
-| K4 | 归属偏差未归位（§3 表：`insight_types` / `insight_store` / `insight_meta_store` / `detect_extremes` / 门面） | `engine` 仍持有洞察领域词汇（含一处方向倒置） | Phase 0 / 0.2 |
+| K4 | ~~归属偏差未归位~~ | — | ✅ 已归位（Phase 0 / 0.2）：类型 → `model::types`、仓库 → `store::{body,meta}`、`detect_extremes` → `insight_engine`、门面 → `service::{InsightService,persistence}` |
 | K5 | ~~目录监听热加载未做~~ | — | ✅ 已实现（Phase 0 / 0.6，D22/D23） |
 | K6 | `insight_table_reports` / `insight_schema_reports` 两张表为**预留**，无写入者 | 完成度易被高估 | Phase 4 |
 | K7 | 用户全局规则目录（`{system}/insight-rules/`）**不自动创建** | 首次使用不知道该建在哪 | 建议：首次写入时创建（开发方案 Phase 2 / 2.4） |
@@ -304,7 +316,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K10 | 内置规则的**基础统计耦合**（覆盖 `numeric-stats` 会连带影响列画像） | 用户误以为只影响「那条规则」 | 文档说明（本文件 §5.3 + 使用手册） |
 | K11 | `null-check` 规则的 `[[quality]] field = "null_rate"` 指向**不存在的输出字段**（其 `[[output]]` 只有 `total_count` / `non_null_count` / `unique_count`）→ `actual == None`，而 `evaluate_quality` 在**只设 `max` 且 actual 为 None** 时不判定失败 → 该质量门控**永不触发**（静默通过） | 中：用户以为有门控，实际没有 | 待决策：补 `null_rate` 输出字段 / 改 `field` / 让「字段不存在」报错而不是静默通过（倾向后者） |
 | K12 | `quality-score` 规则用 `value_type = "str"`，该值**不在支持列表**中，靠 `match` 的兜底分支当成 `String` 处理而侥幸工作 | 中：`value_type` 写错时不会报「未知类型」，而是在读取时报出难以归因的错误（如把 DOUBLE 列当 String 读） | 待决策：解析期校验 `value_type` 白名单（与 `deny_unknown_fields` 同一立场：早失败优于静默错） |
-| K13 | **`workbench` 依赖 `mock`，而 `mock` 当前编译不过**（`mock_view.rs`：`IconName` 未引入 / `Locale` 缺 `PartialEq` / `Window::open_dialog`·`close_dialog` 不存在） | 高（流程）：涉及 workbench 的改动无法做类型检查 —— 0.6 的接线与 0.2 边界归位均受影响 | 阻塞项：需先修 `crates/mock/src/mock_view.rs` |
+| K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15，你修好了 mock）；当前全仓仅剩 `crates/engine/tests/transaction_affinity.rs`（在制品）编译不过 |
 
 ## 12. 待确认
 

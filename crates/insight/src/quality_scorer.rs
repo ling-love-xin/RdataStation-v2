@@ -1,4 +1,4 @@
-use engine::persistence::insight_types::{
+use crate::model::types::{
     ColumnInsightFull, ColumnQualityEntry, ColumnStatsDetail, QualityDimension, QualityScore,
     TableQuality,
 };
@@ -260,7 +260,7 @@ pub fn compute_table_quality(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine::persistence::insight_types::{
+    use crate::model::types::{
         BooleanStats, ColumnInsightFull, ColumnStats, ColumnStatsDetail, DistributionBin,
         NumericStats, TextStats,
     };

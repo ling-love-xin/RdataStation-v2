@@ -40,6 +40,14 @@ use std::sync::{Arc, OnceLock, RwLock};
 use include_dir::{include_dir, Dir};
 use shared::error::{CommonError, CoreError};
 
+pub use model::types::{
+    BooleanStats, ColumnInsightFull, ColumnQualityEntry, ColumnStats, ColumnStatsDetail,
+    DateTimeStats, DistributionBin, ExtremeValue, NumericStats, QualityDimension, QualityScore,
+    TableColumnMeta, TableProfile, TableQuality, TextFrequency, TextStats,
+};
+pub use store::{ProjectInsightStores, InsightMetaStore, InsightSnapshotMeta, InsightStorage};
+
+pub use insight_engine::detect_extremes;
 pub use rule::{RuleLoadFailure, RuleScope, RuleSource};
 pub use rule_executor::RuleExecutor;
 pub use rule_registry::{
@@ -53,7 +61,10 @@ pub use service::watcher::{
     clear_index_stale, index_is_stale, rules_fingerprint, set_watched_project_root, watch_dirs,
     watched_project_root, RulesWatcher, DEFAULT_POLL_INTERVAL,
 };
-pub use store::ProjectInsightStores;
+pub use store::{
+    snapshot_checksum, InsightColumnStore, InsightSchemaReportStore, InsightStorageStats,
+    InsightTableReportStore, InsightVersionEntry,
+};
 pub use rule_types::{
     ExecutionResult, OutputField, QualityCheck, QualityReport, QualityRule, RenderHint, RuleFile,
     RuleMeta, RuleQuery,

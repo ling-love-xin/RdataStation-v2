@@ -37,7 +37,6 @@ uuid.workspace = true
 tracing.workspace = true
 duckdb.workspace = true
 rusqlite.workspace = true
-sha2.workspace = true
 percent-encoding.workspace = true
 
 [dev-dependencies]

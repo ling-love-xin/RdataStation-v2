@@ -1,6 +1,6 @@
 use shared::error::{CommonError, CoreError};
 use engine::get_connection_manager;
-use engine::persistence::insight_types::{TableColumnMeta, TableProfile};
+use crate::model::types::{TableColumnMeta, TableProfile};
 use engine::services::sql_service::SqlExecuteOptions;
 use engine::SqlService;
 

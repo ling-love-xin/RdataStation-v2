@@ -10,8 +10,9 @@ use engine::services::duckdb_service::{
     duckdb_value_to_json, is_array_type, is_binary_type, is_datetime_type, is_numeric_type,
     DuckDbService,
 };
-use engine::persistence::insight_types::{
-    ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats, DistributionBin,
+
+use crate::model::types::{
+    ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats, DistributionBin, ExtremeValue,
     NumericStats, TextFrequency, TextStats,
 };
 
@@ -190,6 +191,29 @@ pub fn get_column_stats_internal(
     })
 }
 
+/// 数值列极端值检测（右上界启发式）。
+///
+/// 判定条件：标准差为正，且极差既大于 10 倍标准差、又大于 1000——
+/// 两者同时成立才算，避免小量级数据的轻微离群被报成异常。
+///
+/// 归属变更（M8 Phase 0 / 0.2）：本函数自 `engine/services/duckdb_service.rs` 迁入。
+/// 它实现的是**洞察的业务启发式**（阈值属领域知识），且返回洞察领域类型，
+/// 住在 engine 会造成方向倒置（低层持有上层的业务规则与词汇）。
+pub fn detect_extremes(min: f64, max: f64, stddev: f64) -> Vec<ExtremeValue> {
+    let mut results = Vec::new();
+    if stddev > 0.0 && max > 0.0 {
+        let range = max - min;
+        if range > 10.0 * stddev && range > 1000.0 {
+            results.push(ExtremeValue {
+                value: max,
+                kind: "outlier_high".to_string(),
+            });
+        }
+    }
+    results
+}
+
+/// 数值列统计的细节（平均值 / 中位数 / 百分位 / 标准差 / 偏度 / 极端值）。
 fn compute_numeric_stats(
     registry: &RuleRegistry,
     conn: &duckdb::Connection,
@@ -214,11 +238,7 @@ fn compute_numeric_stats(
             let min_v = extract("min");
             let max_v = extract("max");
             let stddev_v = extract_opt("stddev");
-            let is_extreme = engine::services::duckdb_service::detect_extremes(
-                min_v,
-                max_v,
-                stddev_v.unwrap_or(0.0),
-            );
+            let is_extreme = detect_extremes(min_v, max_v, stddev_v.unwrap_or(0.0));
 
             Ok(ColumnStatsDetail::Numeric(NumericStats {
                 min: min_v,
@@ -411,7 +431,7 @@ fn compute_boolean_stats(
                 0.0
             };
             Ok(ColumnStatsDetail::Boolean(
-                engine::persistence::insight_types::BooleanStats {
+                crate::model::types::BooleanStats {
                     true_count,
                     false_count,
                     true_ratio,
@@ -747,7 +767,7 @@ mod tests {
     #[test]
     fn test_quality_scorer_high_score() {
         let stats = ColumnInsightFull {
-            stats: engine::persistence::insight_types::ColumnStats {
+            stats: crate::model::types::ColumnStats {
                 column_name: "score".into(),
                 data_type: "DOUBLE".into(),
                 total_count: 100,
@@ -755,7 +775,7 @@ mod tests {
                 null_rate: 0.02,
                 unique_count: Some(95),
                 stats_detail: ColumnStatsDetail::Numeric(
-                    engine::persistence::insight_types::NumericStats {
+                    crate::model::types::NumericStats {
                         min: 1.0,
                         max: 100.0,
                         avg: 50.0,
@@ -812,7 +832,7 @@ mod tests {
     #[test]
     fn test_quality_scorer_low_score() {
         let stats = ColumnInsightFull {
-            stats: engine::persistence::insight_types::ColumnStats {
+            stats: crate::model::types::ColumnStats {
                 column_name: "bad".into(),
                 data_type: "VARCHAR".into(),
                 total_count: 100,
@@ -820,7 +840,7 @@ mod tests {
                 null_rate: 0.6,
                 unique_count: Some(1),
                 stats_detail: ColumnStatsDetail::Text(
-                    engine::persistence::insight_types::TextStats {
+                    crate::model::types::TextStats {
                         min_length: 3,
                         max_length: 3,
                         top_values: vec![],
@@ -841,7 +861,7 @@ mod tests {
     #[test]
     fn test_compute_table_quality() {
         let make_stats = |name: &str, score: f64| ColumnInsightFull {
-            stats: engine::persistence::insight_types::ColumnStats {
+            stats: crate::model::types::ColumnStats {
                 column_name: name.into(),
                 data_type: "INTEGER".into(),
                 total_count: 100,
@@ -849,7 +869,7 @@ mod tests {
                 null_rate: 1.0 - score / 100.0,
                 unique_count: Some((score * 0.9) as u32),
                 stats_detail: ColumnStatsDetail::Numeric(
-                    engine::persistence::insight_types::NumericStats {
+                    crate::model::types::NumericStats {
                         min: 0.0,
                         max: 100.0,
                         avg: 50.0,
