@@ -1,15 +1,17 @@
 //! Mock 后台任务集成测试（M7）：工作线程 + 进度 + 结果取回。
 //!
-//! 走 `services::mock_jobs`（生产入口）：生成 / 追加都应在**工作线程**上跑，
+//! 走 `services::mock_jobs`（生产入口）：生成 / 追加 / **三个出口**都应在**工作线程**上跑，
 //! UI 侧只提交任务、读进度、取结果。本文件不取消任务（取消在独立进程的
 //! `mock_job_cancel.rs` 里验证——`MockEngine::cancel` 是进程级全局标志）。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use mock::mock_view::{MockDraft, MockJobDone, MockJobKind, MockJobState, MockRunOptions};
-use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
+use mock::mock_view::{
+    MockDraft, MockJobDone, MockJobKind, MockJobState, MockRunOptions,
+};
+use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
 use rds_workbench::services::mock_generator;
 use rds_workbench::services::mock_jobs;
 
@@ -19,6 +21,14 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|e| e.into_inner())
+}
+
+/// 任务路径（除草稿箱用例外，项目根均为「未打开项目」）。
+fn paths(db: &Path) -> mock_jobs::JobPaths {
+    mock_jobs::JobPaths {
+        db_path: db.to_path_buf(),
+        project_root: None,
+    }
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -81,7 +91,7 @@ fn generate_job_reports_progress_then_done() {
     // 5 批（10k 行/批）：足以观察到中间进度
     let job = draft("t_job_gen", 50_000);
 
-    mock_jobs::start(&job, MockJobKind::Generate, &db).expect("提交任务");
+    mock_jobs::start(&job, MockJobKind::Generate, &paths(&db)).expect("提交任务");
     // 提交后立刻：进行中，且拿不到结果
     assert!(
         matches!(mock_jobs::state(), MockJobState::Running(_)),
@@ -121,12 +131,12 @@ fn start_while_running_is_rejected_then_recovers() {
     let db = dir.join("analytics.duckdb");
     let job = draft("t_job_busy", 50_000);
 
-    mock_jobs::start(&job, MockJobKind::Generate, &db).expect("首个任务应成功提交");
-    let err = mock_jobs::start(&job, MockJobKind::Generate, &db).expect_err("应拒绝并发任务");
-    assert!(err.contains("已有生成任务"), "err: {err}");
+    mock_jobs::start(&job, MockJobKind::Generate, &paths(&db)).expect("首个任务应成功提交");
+    let err = mock_jobs::start(&job, MockJobKind::Generate, &paths(&db)).expect_err("应拒绝并发任务");
+    assert!(err.contains("已有任务"), "err: {err}");
 
     wait_done(Duration::from_secs(180)).expect("首个任务应成功");
-    mock_jobs::start(&job, MockJobKind::Generate, &db).expect("结束后应可再次提交");
+    mock_jobs::start(&job, MockJobKind::Generate, &paths(&db)).expect("结束后应可再次提交");
     wait_done(Duration::from_secs(180)).expect("第二个任务应成功");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -146,8 +156,12 @@ fn append_job_reports_total_rows() {
     mock_generator::persist_table_at(&db, &seed_draft, &info).expect("建表");
 
     // 追加任务：生成 1000 行后写入，自增起点接续表内 30 行
-    mock_jobs::start(&job, MockJobKind::AppendTo("t_job_append".to_string()), &db)
-        .expect("提交追加任务");
+    mock_jobs::start(
+        &job,
+        MockJobKind::AppendTo("t_job_append".to_string()),
+        &paths(&db),
+    )
+    .expect("提交追加任务");
     let done = wait_done(Duration::from_secs(180)).expect("追加应成功");
     match done {
         MockJobDone::Appended { table, total_rows } => {
@@ -156,6 +170,160 @@ fn append_job_reports_total_rows() {
         }
         other => panic!("期望 Appended，实际 {other:?}"),
     }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 生成任务的便捷封装：提交 → 等结果 → 取出 `MockGenInfo`（出口任务要用它）。
+fn generate_and_take(draft: &MockDraft, db: &Path) -> mock::mock_view::MockGenInfo {
+    mock_jobs::start(draft, MockJobKind::Generate, &paths(db)).expect("提交生成任务");
+    match wait_done(Duration::from_secs(180)).expect("生成应成功") {
+        MockJobDone::Generated(info) => info,
+        other => panic!("期望 Generated，实际 {other:?}"),
+    }
+}
+
+/// 表内行数（直连分析库读）。
+fn count_rows(db: &Path, table: &str) -> i64 {
+    let conn = duckdb::Connection::open(db).expect("open analysis db");
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })
+    .expect("count rows")
+}
+
+/// 出口（落库）走后台任务：新建表 + 回传行数；生成与写入是**两个**任务，不是一次。
+#[test]
+fn persist_job_creates_table_and_reports_rows() {
+    let _guard = serial();
+    let dir = temp_dir("persist_job");
+    let db = dir.join("analytics.duckdb");
+    let draft = draft("t_job_persist", 1_000);
+
+    let info = generate_and_take(&draft, &db);
+    mock_jobs::start(&draft, MockJobKind::Persist(info), &paths(&db)).expect("提交落库任务");
+    let done = wait_done(Duration::from_secs(180)).expect("落库应成功");
+    match done {
+        MockJobDone::Persisted { table, rows } => {
+            assert_eq!(table, "t_job_persist");
+            assert_eq!(rows, 1_000);
+        }
+        other => panic!("期望 Persisted，实际 {other:?}"),
+    }
+    assert_eq!(count_rows(&db, "t_job_persist"), 1_000);
+    assert_eq!(
+        mock_generator::existing_tables_at(&db),
+        ["t_job_persist".to_string()],
+        "新表应出现在既有表清单里（面板据此刷新追加目标）"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 落库同名的既有表：任务以可读错误收尾（引导改用「追加」），不覆盖既有数据。
+#[test]
+fn persist_job_reports_existing_table_error() {
+    let _guard = serial();
+    let dir = temp_dir("persist_taken");
+    let db = dir.join("analytics.duckdb");
+    let draft = draft("t_job_taken", 30);
+
+    // 先建表（同步装配层入口，绕开任务）
+    let seed = mock_generator::generate_at(&db, &draft, None).expect("首次生成");
+    mock_generator::persist_table_at(&db, &draft, &seed).expect("建表");
+
+    let info = generate_and_take(&draft, &db);
+    mock_jobs::start(&draft, MockJobKind::Persist(info), &paths(&db)).expect("提交落库任务");
+    let err = wait_done(Duration::from_secs(180)).expect_err("同名表应报错");
+    assert!(err.contains("已存在"), "err: {err}");
+    assert_eq!(count_rows(&db, "t_job_taken"), 30, "既有数据不应被覆盖");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 出口（导出）：写文件也是后台任务，回传含落地路径的文案。
+#[test]
+fn export_job_writes_csv_file() {
+    let _guard = serial();
+    let dir = temp_dir("export_job");
+    let db = dir.join("analytics.duckdb");
+    let draft = draft("t_job_export", 20);
+
+    let info = generate_and_take(&draft, &db);
+    let csv = dir.join("out.csv");
+    mock_jobs::start(
+        &draft,
+        MockJobKind::Export {
+            info,
+            format: MockExportFormat::Csv,
+            path: csv.to_string_lossy().to_string(),
+        },
+        &paths(&db),
+    )
+    .expect("提交导出任务");
+
+    let done = wait_done(Duration::from_secs(180)).expect("导出应成功");
+    match done {
+        MockJobDone::Exported { message } => assert!(message.contains("已导出"), "{message}"),
+        other => panic!("期望 Exported，实际 {other:?}"),
+    }
+    let text = std::fs::read_to_string(&csv).expect("读取导出文件");
+    assert!(text.starts_with("id,amount"), "首行应为表头: {text}");
+    assert_eq!(text.lines().count(), 21, "表头 + 20 行");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 出口（草稿箱）：项目根由宿主在提交前解析（本处直接给 `JobPaths`）；未打开项目 → 可读错误。
+#[test]
+fn scratchpad_job_writes_under_project_root() {
+    let _guard = serial();
+    let dir = temp_dir("scratch_job");
+    let db = dir.join("analytics.duckdb");
+    let draft = draft("t_job_scratch", 5);
+
+    let info = generate_and_take(&draft, &db);
+
+    // 未打开项目：任务照样能跑完，以可读错误收尾
+    mock_jobs::start(
+        &draft,
+        MockJobKind::Scratchpad {
+            info: info.clone(),
+            format: MockExportFormat::Csv,
+        },
+        &paths(&db),
+    )
+    .expect("提交草稿箱任务");
+    let err = wait_done(Duration::from_secs(180)).expect_err("无项目应报错");
+    assert!(err.contains("未打开项目"), "err: {err}");
+
+    // 有项目根：写到 {项目根}/mock/
+    mock_jobs::start(
+        &draft,
+        MockJobKind::Scratchpad {
+            info,
+            format: MockExportFormat::Csv,
+        },
+        &mock_jobs::JobPaths {
+            db_path: db.clone(),
+            project_root: Some(dir.clone()),
+        },
+    )
+    .expect("提交草稿箱任务");
+    let done = wait_done(Duration::from_secs(180)).expect("保存草稿箱应成功");
+    match done {
+        MockJobDone::Exported { message } => {
+            assert!(message.contains("已保存到草稿箱"), "{message}")
+        }
+        other => panic!("期望 Exported，实际 {other:?}"),
+    }
+    let saved: Vec<String> = std::fs::read_dir(dir.join("mock"))
+        .expect("mock 目录")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    assert!(saved[0].starts_with("mock_t_job_scratch_"), "{saved:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

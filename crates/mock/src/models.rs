@@ -390,7 +390,7 @@ pub struct MockGenerateResult {
 
 // ==================== 导出格式 ====================
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum MockExportFormat {
     Csv,

@@ -5,25 +5,28 @@
 //!
 //! | 宿主能力 | 实现 |
 //! | --- | --- |
-//! | 后台任务（生成 / 追加） | `services::mock_jobs`（工作线程 + 进度槽 + 取消） |
-//! | 落库 / 导出 / 草稿箱 | `services::mock_generator`（装配层） |
+//! | 后台任务（生成 / 追加 / 三个出口） | `services::mock_jobs`（工作线程 + 进度槽 + 取消） |
+//! | 落库 / 导出 / 草稿箱的**实现体** | `services::mock_generator`（装配层；由任务层在工作线程上调用） |
 //! | 连接清单（导入结构来源） | `Shared::connections`（工作台当前连接列表） |
 //! | 既有分析库表 / 导入列结构 | `services::mock_generator` → `NavCache` / `MetadataService` |
 //! | 只读判定 | `Shared.project_ui.read_only`（与 SQL 执行入口同一护栏） |
 //! | 打开详情 tab | `Shared::open_mock_detail`（宿主命令，接中央 Dock） |
 //! | 重绘 | `Shared::notify_host`（宿主重绘桥，与连接对话框层同一口径） |
 //!
-//! 落库成功后让导航树失效（`Shared::nav_for` 置空）：下一次渲染会重新加载分析库对象，
-//! 否则新表要等下次切连接才出现。
+//! 出口统一走后台任务（没有同步入口）：出口用的两个路径——分析库与项目根——在这一层解析，
+//! 因为工作线程不能碰 `Shared`（`Rc<RefCell<…>>` 不跨线程）。
+//!
+//! 落库 / 追加成功后让导航树失效（`Shared::nav_for` 置空）：下一次渲染会重新加载分析库对象，
+//! 否则新表要等下次切连接才出现。写入发生在工作线程上，所以这个判定放在 [`MockHost::take_job_done`]
+//! （它由 UI 线程调用）。
 
 use std::rc::Rc;
 
 use gpui_kit::{App, Window};
 use mock::mock_view::{
-    MockColumnSpec, MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobState,
-    SchemaRequest, SchemaSource,
+    MockColumnSpec, MockDraft, MockHost, MockJobDone, MockJobKind, MockJobState, SchemaRequest,
+    SchemaSource,
 };
-use mock::models::MockExportFormat;
 
 use crate::panels::Shared;
 
@@ -50,11 +53,12 @@ impl WorkbenchMockHost {
 
 impl MockHost for WorkbenchMockHost {
     fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String> {
-        crate::services::mock_jobs::start(
-            draft,
-            kind,
-            &crate::services::mock_generator::analytics_db_path(),
-        )
+        // 出口类任务要用的路径在这里（UI 线程）解析：工作线程碰不了 `Shared`
+        let paths = crate::services::mock_jobs::JobPaths {
+            db_path: crate::services::mock_generator::analytics_db_path(),
+            project_root: self.project_root(),
+        };
+        crate::services::mock_jobs::start(draft, kind, &paths)
     }
 
     fn job_state(&self) -> MockJobState {
@@ -62,42 +66,20 @@ impl MockHost for WorkbenchMockHost {
     }
 
     fn take_job_done(&self) -> Option<Result<MockJobDone, String>> {
-        crate::services::mock_jobs::take_done()
+        let done = crate::services::mock_jobs::take_done();
+        // 写入分析库成功（新建 / 追加）→ 导航树失效：本方法在 UI 线程上被调用，
+        // 而写入本身在 worker 线程上，碰不了 `Shared`
+        if matches!(
+            &done,
+            Some(Ok(MockJobDone::Persisted { .. } | MockJobDone::Appended { .. }))
+        ) {
+            self.invalidate_analysis_nav();
+        }
+        done
     }
 
     fn cancel_job(&self) {
         crate::services::mock_jobs::cancel();
-    }
-
-    fn persist_table(&self, draft: &MockDraft, info: &MockGenInfo) -> Result<i64, String> {
-        let rows = crate::services::mock_generator::persist_table(draft, info)?;
-        self.invalidate_analysis_nav();
-        Ok(rows)
-    }
-
-    fn export_file(
-        &self,
-        draft: &MockDraft,
-        info: &MockGenInfo,
-        format: &MockExportFormat,
-        path: &str,
-    ) -> Result<String, String> {
-        crate::services::mock_generator::export_file(draft, info, format, path)
-    }
-
-    fn save_scratchpad(
-        &self,
-        draft: &MockDraft,
-        info: &MockGenInfo,
-        format: &MockExportFormat,
-    ) -> Result<String, String> {
-        let root = self.project_root();
-        crate::services::mock_generator::save_scratchpad(
-            draft,
-            info,
-            format,
-            root.as_deref(),
-        )
     }
 
     fn existing_tables(&self) -> Vec<String> {

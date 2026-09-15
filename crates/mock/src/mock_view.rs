@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable as _;
@@ -123,7 +124,7 @@ impl MockRunOptions {
 }
 
 /// 生成结果（内存临时表）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MockGenInfo {
     /// 内存临时表名（`temp_mock_*`）
     pub temp_table_name: String,
@@ -136,7 +137,7 @@ pub struct MockGenInfo {
 }
 
 /// 预览数据（已字符串化，视图不依赖 Arrow）。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MockPreview {
     /// 列名
     pub columns: Vec<String>,
@@ -144,13 +145,76 @@ pub struct MockPreview {
     pub rows: Vec<Vec<String>>,
 }
 
-/// 后台任务种类（决定完成后要做什么）。
+/// 后台任务种类（决定任务干什么、收尾时怎么归置结果）。
+///
+/// 分两组：**生成类**（`Generate` / `AppendTo`）自己产出 `MockGenInfo`；
+/// **出口类**（`Persist` / `Export` / `Scratchpad`）消费上一次生成的结果，
+///  поэтому把 `MockGenInfo` 带在身上——工作线程要靠它找到内存临时表，
+/// 而视图侧不能把「最近一次结果」另存一份隐式状态（两处状态必然漂移）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MockJobKind {
     /// 只生成到内存临时表（**不写库**）
     Generate,
     /// 生成后追加到既有分析表（自增起点按表内行数接续）
     AppendTo(String),
+    /// 出口：把已生成结果持久化为分析库**新表**（同名已存在 → `Err`）
+    Persist(MockGenInfo),
+    /// 出口：把已生成结果导出为文件（路径由调用方在系统对话框里选好）
+    Export {
+        /// 已生成结果
+        info: MockGenInfo,
+        /// 文件格式
+        format: MockExportFormat,
+        /// 目标路径
+        path: String,
+    },
+    /// 出口：把已生成结果保存到草稿箱（`{项目}/mock/`）
+    Scratchpad {
+        /// 已生成结果
+        info: MockGenInfo,
+        /// 文件格式
+        format: MockExportFormat,
+    },
+}
+
+impl MockJobKind {
+    /// 是否包含**生成阶段**。
+    ///
+    /// 两个后果：只有生成阶段能取消（引擎按批响应）；只有生成类收尾时要作废旧预览
+    /// （它把临时表重建了，而出口类只读不改，临时表与预览仍彼此一致）。
+    pub fn generates(&self) -> bool {
+        matches!(self, Self::Generate | Self::AppendTo(_))
+    }
+
+    /// 任务开始时的阶段（进度条形态与文案据此切换；进行中时以宿主上报的阶段为准）。
+    pub fn phase(&self) -> MockJobPhase {
+        match self {
+            Self::Generate | Self::AppendTo(_) => MockJobPhase::Generating,
+            Self::Persist(_) => MockJobPhase::Writing,
+            Self::Export { .. } | Self::Scratchpad { .. } => MockJobPhase::Exporting,
+        }
+    }
+
+    /// 本次任务处理的行数（文案用）：生成类按草稿设定，出口类按已生成结果。
+    pub fn rows_total(&self, draft: &MockDraft) -> u32 {
+        match self {
+            Self::Generate | Self::AppendTo(_) => draft.options.rows,
+            Self::Persist(info) | Self::Export { info, .. } | Self::Scratchpad { info, .. } => {
+                info.row_count
+            }
+        }
+    }
+
+    /// 进行中的一行文案（面板结果区）。
+    pub fn running_label(&self) -> String {
+        match self {
+            Self::Generate => "生成中…".to_string(),
+            Self::AppendTo(table) => format!("生成并追加到 {table} 中…"),
+            Self::Persist(info) => format!("写入分析库中…（{} 行）", info.row_count),
+            Self::Export { path, .. } => format!("导出中…（{path}）"),
+            Self::Scratchpad { .. } => "保存到草稿箱中…".to_string(),
+        }
+    }
 }
 
 /// 后台任务完成结果。
@@ -165,21 +229,66 @@ pub enum MockJobDone {
         /// 追加后表内总行数
         total_rows: i64,
     },
+    /// 持久化完成（新建表名 + 表内行数）
+    Persisted {
+        /// 新建的表名
+        table: String,
+        /// 新表行数
+        rows: i64,
+    },
+    /// 导出 / 草稿箱完成（可读文案由装配层给，含落地路径）
+    Exported {
+        /// 结果文案
+        message: String,
+    },
+}
+
+/// 后台任务阶段。
+///
+/// 生成阶段有批次粒度回调；写入与落盘跑在 DuckDB / 文件系统内部，
+/// 拿不到中间进度，所以进度条改走不定量形态（`Progress::loading`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MockJobPhase {
+    /// 生成行数据
+    #[default]
+    Generating,
+    /// 写入分析库
+    Writing,
+    /// 写出文件（导出 / 草稿箱）
+    Exporting,
+}
+
+impl MockJobPhase {
+    /// 能否给出定量百分比（只有生成阶段能）。
+    pub fn is_quantified(self) -> bool {
+        matches!(self, Self::Generating)
+    }
+
+    /// 阶段文案（进度行 / 详情摘要用）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Generating => "生成中",
+            Self::Writing => "写入分析库中",
+            Self::Exporting => "写出文件中",
+        }
+    }
 }
 
 /// 后台任务进度快照。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MockJobProgress {
-    /// 已完成批次
+    /// 当前阶段
+    pub phase: MockJobPhase,
+    /// 已完成批次（仅生成阶段有意义）
     pub batches_done: usize,
     /// 总批次（首次回调前为 0，表示「尚未开始」）
     pub batches_total: usize,
-    /// 目标行数（文案用）
+    /// 本次任务的行数（文案用）
     pub rows_total: u32,
 }
 
 impl MockJobProgress {
-    /// 完成百分比（0.0~100.0；总批次未知时为 0）。
+    /// 完成百分比（0.0~100.0；非生成阶段或总批次未知时为 0）。
     pub fn percent(&self) -> f32 {
         if self.batches_total == 0 {
             return 0.0;
@@ -234,37 +343,25 @@ pub struct SchemaRequest {
 
 /// 宿主注入的能力（workbench 实现，见 `components/mock_host.rs`）。
 ///
-/// 分四类：**后台任务**（生成 / 追加：启动 + 进度 + 结果 + 取消）、**出口**（落库 / 落盘）、
+/// 分三类：**后台任务**（生成 / 追加 / 三个出口：启动 + 进度 + 结果 + 取消）、
 /// **来源与目录**（连接清单 / 既有表 / 导入结构）；另有四个视图交互钩子
 /// （默认目录、只读判定、打开详情 tab、宿主重绘）。
+///
+/// 出口统一走 [`MockHost::start_job`]（不再有同步入口）：大行数落库 / 导出同样会阻塞，
+/// 与生成同一套「工作线程 + 进度 + 一次性结果」机制，避免两套书写路径漂移。
 pub trait MockHost: 'static {
-    /// 启动后台任务（生成 / 生成后追加），**立即返回**，不阻塞 UI。
+    /// 启动后台任务（生成 / 生成后追加 / 三个出口），**立即返回**，不阻塞 UI。
     ///
     /// 已有任务进行中时必须返回 `Err`（由视图拦住重复点击）。
+    /// 出口类任务用到的路径（分析库 / 项目根）由宿主在**调用前**解析好：
+    /// 工作线程不碰宿主状态（`Shared` 里的 `Rc<RefCell<…>>` 也不能跨线程）。
     fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String>;
     /// 当前任务状态（UI 轮询；实现需为轻量读）。
     fn job_state(&self) -> MockJobState;
     /// 取走已完成任务的结果（**一次性**：取走后归位 Idle）；`None` = 仍在进行。
     fn take_job_done(&self) -> Option<Result<MockJobDone, String>>;
-    /// 请求取消进行中的任务（引擎在批次边界响应，结果以 `Err` 回传）。
+    /// 请求取消进行中的任务（引擎在批次边界响应，结果以 `Err` 回传）
     fn cancel_job(&self);
-    /// 出口：在分析库新建表（已存在 → `Err`，由面板引导改用「追加」）
-    fn persist_table(&self, draft: &MockDraft, info: &MockGenInfo) -> Result<i64, String>;
-    /// 出口：导出文件（CSV / Parquet / Xlsx / SQL INSERT）
-    fn export_file(
-        &self,
-        draft: &MockDraft,
-        info: &MockGenInfo,
-        format: &MockExportFormat,
-        path: &str,
-    ) -> Result<String, String>;
-    /// 出口：保存到草稿箱项目目录（`{项目}/mock/`）
-    fn save_scratchpad(
-        &self,
-        draft: &MockDraft,
-        info: &MockGenInfo,
-        format: &MockExportFormat,
-    ) -> Result<String, String>;
     /// 分析库既有表（追加目标候选）
     fn existing_tables(&self) -> Vec<String>;
     /// 可导入结构的连接
@@ -687,9 +784,14 @@ impl MockPanel {
         &self.existing_tables
     }
 
-    /// 是否正在跑后台任务（生成 / 追加）
+    /// 是否正在跑后台任务（生成 / 追加 / 出口）
     pub fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// 进行中的任务是否**含生成阶段**（决定「生成中…」文案与取消按钮）
+    pub fn is_generating(&self) -> bool {
+        self.job.as_ref().is_some_and(|job| job.kind.generates())
     }
 
     /// 进行中任务的进度（无任务时为 `None`）
@@ -762,10 +864,10 @@ impl MockPanel {
         self.start_job(MockJobKind::AppendTo(table), cx);
     }
 
-    /// 启动后台任务（生成 / 追加）：校验输入 → 提交 → 起轮询泵。
+    /// 启动后台任务（生成 / 追加 / 出口）：校验输入 → 提交 → 起轮询泵。
     fn start_job(&mut self, kind: MockJobKind, cx: &mut Context<Self>) {
         if self.job.is_some() {
-            self.fail("已有生成任务在进行中", cx);
+            self.fail("已有任务在进行中（请等它结束或先取消）", cx);
             return;
         }
         if let Err(e) = self.sync_inputs(cx) {
@@ -780,18 +882,17 @@ impl MockPanel {
             self.fail(e, cx);
             return;
         }
+        let progress = MockJobProgress {
+            phase: kind.phase(),
+            batches_done: 0,
+            batches_total: 0,
+            rows_total: kind.rows_total(&self.draft),
+        };
         self.error = None;
-        self.outcome = Some(match &kind {
-            MockJobKind::Generate => "生成中…".to_string(),
-            MockJobKind::AppendTo(table) => format!("生成并追加到 {table} 中…"),
-        });
+        self.outcome = Some(kind.running_label());
         self.job = Some(MockJobWatch {
             kind,
-            progress: MockJobProgress {
-                batches_done: 0,
-                batches_total: 0,
-                rows_total: self.draft.options.rows,
-            },
+            progress,
             cancel_requested: false,
             _pump: self.spawn_job_pump(cx),
         });
@@ -852,15 +953,18 @@ impl MockPanel {
 
     /// 任务收尾：写回结果（成功文案 / 落库目标）或错误。
     ///
-    /// 不论成败都先作废旧结果：任务内部重建过临时表，旧预览与临时表内容已不一致，
-    /// 留着它会让出口拿新数据配旧预览。
+    /// **生成类**不论成败都先作废旧结果：任务内部重建过临时表，旧预览与临时表已不一致，
+    /// 留着它就会让出口拿新数据配旧预览。**出口类**只读临时表，预览仍然对得上，
+    /// 不能一并作废——否则「落库完想接着导出」就没得导了。
     fn finish_job(
         &mut self,
         kind: &MockJobKind,
         result: Result<MockJobDone, String>,
         cx: &mut Context<Self>,
     ) {
-        self.generated = None;
+        if kind.generates() {
+            self.generated = None;
+        }
         match result {
             Ok(MockJobDone::Generated(info)) => {
                 self.landed = None;
@@ -878,62 +982,63 @@ impl MockPanel {
                 self.outcome = Some(format!("已追加到 {table}（表内共 {total_rows} 行）"));
                 self.host.notify(cx);
             }
+            Ok(MockJobDone::Persisted { table, rows }) => {
+                self.landed = Some(table.clone());
+                // 新表要能立刻作为「追加到既有表」的目标
+                self.existing_tables = self.host.existing_tables();
+                self.succeed(format!("已在分析库新建表 {table}（{rows} 行）"), cx);
+            }
+            Ok(MockJobDone::Exported { message }) => self.succeed(message, cx),
             Err(e) => {
+                let cancelled = e.contains("取消");
+                // 同名表已存在是落库失败的常见情形：刷新清单，引导到「追加到既有表」
+                if !cancelled && matches!(kind, MockJobKind::Persist(_)) && e.contains("已存在") {
+                    self.existing_tables = self.host.existing_tables();
+                }
                 self.outcome = None;
-                self.error = Some(match (kind, e.contains("取消")) {
+                self.error = Some(match (kind, cancelled) {
                     // 用户主动取消：不当错误报，但要提醒临时表可能残留部分行
                     (_, true) => format!("{e}（临时表可能残留部分行，下次生成会重建）"),
                     // 追加失败与生成失败区分开：追加还多一层「写入既有表」的语义
                     (MockJobKind::AppendTo(_), false) => format!("追加失败：{e}"),
-                    (MockJobKind::Generate, false) => e,
+                    (_, false) => e,
                 });
             }
         }
         cx.notify();
     }
 
-    /// 请求取消进行中的任务（引擎在批次边界响应）。
+    /// 请求取消进行中的任务：只有**含生成阶段**的任务能取消（引擎按批响应）。
+    ///
+    /// 出口类跑在 DuckDB / 文件系统内部，探不到中断点，强杀会留下半张表或半个文件，
+    /// 所以不给取消：按钮也不渲染（见 `render_job_row`）。
     pub fn cancel_job(&mut self, cx: &mut Context<Self>) {
-        if let Some(job) = self.job.as_mut() {
-            if !job.cancel_requested {
-                job.cancel_requested = true;
-                self.host.cancel_job();
-                cx.notify();
-            }
+        let Some(job) = self.job.as_mut() else {
+            return;
+        };
+        if !job.kind.generates() || job.cancel_requested {
+            return;
         }
+        job.cancel_requested = true;
+        self.host.cancel_job();
+        cx.notify();
     }
 
-    /// 出口：持久化为分析库新表。
+    /// 出口：持久化为分析库新表（后台任务：大行数落库同样会阻塞界面）。
     pub fn persist_table(&mut self, cx: &mut Context<Self>) {
         let Some(info) = self.generated.clone() else {
             self.fail("请先生成（预览确认后再落库）", cx);
             return;
         };
-        if let Err(e) = self.sync_inputs(cx) {
-            self.fail(e, cx);
-            return;
-        }
         if self.host.read_only() {
             self.fail("只读模式：不允许写入分析库", cx);
             return;
         }
-        match self.host.persist_table(&self.draft, &info) {
-            Ok(rows) => {
-                let name = self.draft.table_name.clone();
-                self.landed = Some(name.clone());
-                self.succeed(format!("已在分析库新建表 {name}（{rows} 行）"), cx);
-            }
-            Err(e) => {
-                // 表已存在是常见情形：刷新既有表清单，引导到「追加到既有表」
-                if e.contains("已存在") {
-                    self.existing_tables = self.host.existing_tables();
-                }
-                self.fail(e, cx);
-            }
-        }
+        // 目标表名在 `start_job` 的 `sync_inputs` 里从输入框取（任务内部据此命名新表）
+        self.start_job(MockJobKind::Persist(info), cx);
     }
 
-    /// 出口：导出文件（调用方已选好路径）。
+    /// 出口：导出文件（调用方已选好路径；后台任务）。
     pub fn export_file(
         &mut self,
         format: &MockExportFormat,
@@ -948,13 +1053,17 @@ impl MockPanel {
             self.fail("只读模式：不允许写出文件", cx);
             return;
         }
-        match self.host.export_file(&self.draft, &info, format, &path) {
-            Ok(message) => self.succeed(message, cx),
-            Err(e) => self.fail(e, cx),
-        }
+        self.start_job(
+            MockJobKind::Export {
+                info,
+                format: format.clone(),
+                path,
+            },
+            cx,
+        );
     }
 
-    /// 出口：保存到草稿箱（`{项目}/mock/`）。
+    /// 出口：保存到草稿箱（`{项目}/mock/`；后台任务）。
     pub fn save_scratchpad(&mut self, format: &MockExportFormat, cx: &mut Context<Self>) {
         let Some(info) = self.generated.clone() else {
             self.fail("请先生成（预览确认后再保存）", cx);
@@ -964,10 +1073,13 @@ impl MockPanel {
             self.fail("只读模式：不允许写出文件", cx);
             return;
         }
-        match self.host.save_scratchpad(&self.draft, &info, format) {
-            Ok(message) => self.succeed(message, cx),
-            Err(e) => self.fail(e, cx),
-        }
+        self.start_job(
+            MockJobKind::Scratchpad {
+                info,
+                format: format.clone(),
+            },
+            cx,
+        );
     }
 
     /// 手工加列（按类型给默认生成器）。
@@ -1165,28 +1277,34 @@ impl MockPanel {
             .child(nums)
     }
 
-    /// 任务进行中的进度行：`Progress` 组件 + 批次 / 行数文案 + 取消按钮。
+    /// 任务进行中的进度行：`Progress` 组件 + 阶段文案 + 取消按钮。
+    ///
+    /// - 生成类有批次粒度回调 → 定量进度条 + 取消（引擎在批次边界响应）；
+    /// - 出口类（写入分析库 / 写文件）跑在 DuckDB 与文件系统内部，拿不到中间进度 →
+    ///   不定量动画；也不给取消（强中断会留下半张表 / 半个文件）。
     ///
     /// 空闲时返回一个空占位（保持后续元素的排列稳定）。
     fn render_job_row(&mut self, cx: &mut Context<Self>) -> Div {
-        let Some(progress) = self.job_progress() else {
+        let Some(job) = self.job.as_ref() else {
             return div();
         };
+        let progress = job.progress;
+        let cancellable = job.kind.generates();
+        let cancel_requested = job.cancel_requested;
+
         let muted = cx.theme().colors.muted_foreground;
-        let cancel_requested = self.cancel_requested();
-        let rows_done = progress.rows_done();
-        let detail = if progress.batches_total == 0 {
-            "准备中…".to_string()
-        } else {
-            format!(
+        let detail = match progress.phase {
+            MockJobPhase::Generating if progress.batches_total == 0 => "准备中…".to_string(),
+            MockJobPhase::Generating => format!(
                 "{} / {} 批（≈{} / {} 行）",
                 progress.batches_done,
                 progress.batches_total,
-                rows_done,
+                progress.rows_done(),
                 progress.rows_total
-            )
+            ),
+            phase => format!("{}…（{} 行）", phase.label(), progress.rows_total),
         };
-        let cancel = {
+        let cancel = cancellable.then(|| {
             let entity = cx.entity();
             let mut button = Button::new("mock-cancel-job")
                 .secondary()
@@ -1198,7 +1316,7 @@ impl MockPanel {
                 });
             }
             button
-        };
+        });
 
         div()
             .v_flex()
@@ -1207,6 +1325,7 @@ impl MockPanel {
             .child(
                 Progress::new("mock-job-progress")
                     .w_full()
+                    .loading(!progress.phase.is_quantified())
                     .value(progress.percent()),
             )
             .child(
@@ -1224,7 +1343,7 @@ impl MockPanel {
                             .text_ellipsis()
                             .child(detail),
                     )
-                    .child(cancel),
+                    .children(cancel),
             )
     }
 
@@ -1264,11 +1383,12 @@ impl MockPanel {
 
         // 生成（后台任务：进行中时禁用，进度与取消另起一行）
         let running = self.is_running();
+        let generating = self.is_generating();
         let generate = {
             let entity = cx.entity();
             let mut button = Button::new("mock-generate")
                 .primary()
-                .label(if running { "生成中…" } else { "生成" })
+                .label(if generating { "生成中…" } else { "生成" })
                 .w_full();
             if !running {
                 button = button.on_click(move |_, _, app| {
@@ -1281,7 +1401,7 @@ impl MockPanel {
         // 任务进行中：进度条（组件，不手搓）+ 批次文案 + 取消
         let job_row = self.render_job_row(cx);
 
-        // 出口：详情 tab + 落库 + 追加 + 草稿箱 + 另存为
+        // 出口：详情 tab + 落库 + 追加 + 草稿箱 + 另存为（任务进行中全部禁用：一次只能跑一个）
         let detail = {
             let entity = cx.entity();
             Button::new("mock-open-detail")
@@ -1298,6 +1418,7 @@ impl MockPanel {
                 .secondary()
                 .label("持久化为分析库表")
                 .w_full()
+                .disabled(running)
                 .on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| panel.persist_table(cx));
                 })
@@ -1309,6 +1430,7 @@ impl MockPanel {
                 .secondary()
                 .label("追加到既有表 ▾")
                 .w_full()
+                .disabled(running)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     if tables.is_empty() {
@@ -1333,6 +1455,7 @@ impl MockPanel {
                 .secondary()
                 .label("保存到草稿箱 ▾")
                 .w_full()
+                .disabled(running)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     for (label, format) in FILE_FORMATS {
@@ -1350,6 +1473,7 @@ impl MockPanel {
                 .secondary()
                 .label("另存为 ▾")
                 .w_full()
+                .disabled(running)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     for (label, format) in FILE_FORMATS {
@@ -2294,10 +2418,11 @@ impl Render for MockDetailView {
         let generate = {
             let entity = self.panel.clone();
             let running = self.panel.read(cx).is_running();
+            let generating = self.panel.read(cx).is_generating();
             let mut button = Button::new("mock-detail-generate")
                 .primary()
                 .xsmall()
-                .label(if running { "生成中…" } else { "生成" });
+                .label(if generating { "生成中…" } else { "生成" });
             if !running {
                 button = button.on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| panel.run_generate(cx));
@@ -2309,16 +2434,22 @@ impl Render for MockDetailView {
             Some(seed) => seed.to_string(),
             None => "随机".to_string(),
         };
-        // 生成中：摘要行尾追加进度（面板已有进度条与取消，这里只做一行文字同步）
+        // 任务进行中：摘要行尾追加阶段（面板已有进度条与取消，这里只做一行文字同步）
         let summary = match self.panel.read(cx).job_progress() {
-            Some(progress) => format!(
-                "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {} · 生成中 {:.0}%",
-                draft.columns.len(),
-                draft.table_name,
-                draft.options.rows,
-                locale_label(&draft.options.locale),
-                progress.percent()
-            ),
+            Some(progress) => {
+                let tail = if progress.phase.is_quantified() {
+                    format!("{} {:.0}%", progress.phase.label(), progress.percent())
+                } else {
+                    progress.phase.label().to_string()
+                };
+                format!(
+                    "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {} · {tail}",
+                    draft.columns.len(),
+                    draft.table_name,
+                    draft.options.rows,
+                    locale_label(&draft.options.locale)
+                )
+            }
             None => format!(
                 "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {}",
                 draft.columns.len(),

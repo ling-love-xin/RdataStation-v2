@@ -10,14 +10,15 @@
 //!
 //! | 动作 | 目标 | 语义 |
 //! | --- | --- | --- |
-//! | `generate` | 内存临时表（DuckDB `temp_mock_*`） | **不写库**：只产数据 + 预览 |
-//! | `persist_table` | 分析库 | **新建**表；已存在则 `Err`（引导改用「追加」） |
-//! | `append_table` | 分析库既有表 | 保留既有数据，新行接在后面；主键自增接续表内行数 |
+//! | `generate_at_with_progress` | 内存临时表（DuckDB `temp_mock_*`） | **不写库**：只产数据 + 预览（按批回调进度） |
+//! | `persist_table_at` | 分析库 | **新建**表；已存在则 `Err`（引导改用「追加」） |
+//! | `append_table_at` | 分析库既有表 | 保留既有数据，新行接在后面；主键自增接续表内行数 |
 //! | `export_file` | 调用方指定路径 | CSV / Parquet / Xlsx / SQL INSERT |
 //! | `save_scratchpad` | `{项目}/mock/` | 时间戳命名；无项目报错 |
 //!
-//! `*_at` 变体接受显式路径：集成测试用，也是「项目作用域分析库」将来的接入点
-//! （生产入口恒取 [`analytics_db_path`]）。
+//! 本层全是**同步**实现（阻塞当前线程）：生产入口是 `services::mock_jobs` 的任务种类，
+//! 由它在工作线程上调用；`*_at` 变体接受显式路径——集成测试用，也是「项目作用域分析库」
+//! 将来的接入点（生产路径恒取 [`analytics_db_path`]）。视图侧没有同步出口入口。
 //!
 //! # 已知取舍
 //!
@@ -110,14 +111,10 @@ fn table_columns(conn: &duckdb::Connection, table: &str) -> Result<Vec<String>, 
 
 // ==================== 生成 ====================
 
-/// 生成到内存临时表（面板 `MockHost::start_job` 的实现体，同步阻塞；UI 侧经 `services::mock_jobs` 放后台线程）。
+/// 生成到内存临时表（**不写库**）：`append_to` 给定时按目标表现有行数接续主键自增起点
+/// （「追加到既有表」用）。
 ///
-/// `append_to` 给定时按目标表现有行数接续主键自增起点（「追加到既有表」用）。
-pub fn generate(draft: &MockDraft, append_to: Option<&str>) -> Result<MockGenInfo, String> {
-    generate_at(&analytics_db_path(), draft, append_to)
-}
-
-/// [`generate`] 的显式路径版本（集成测试 / 未来项目作用域分析库）。
+/// 落库 / 落盘是出口的职责（[`persist_table_at`] / [`append_table_at`] / [`export_file`]）。
 pub fn generate_at(
     db_path: &Path,
     draft: &MockDraft,
@@ -197,11 +194,6 @@ fn create_table_ddl(table: &str, columns: &[MockColumnSpec]) -> String {
 /// 出口：在分析库**新建**表（已存在 → `Err`，面板据此引导改用「追加」）。
 ///
 /// 写入失败时回滚刚建的表：不留下半成品空表。
-pub fn persist_table(draft: &MockDraft, info: &MockGenInfo) -> Result<i64, String> {
-    persist_table_at(&analytics_db_path(), draft, info)
-}
-
-/// [`persist_table`] 的显式路径版本。
 pub fn persist_table_at(
     db_path: &Path,
     draft: &MockDraft,
@@ -232,11 +224,6 @@ pub fn persist_table_at(
 /// 出口：追加到分析库既有表（返回表内总行数）。
 ///
 /// 列结构必须一致：缺失列直接报错，不让 DuckDB 的原始错误冒到界面上。
-pub fn append_table(draft: &MockDraft, info: &MockGenInfo, table: &str) -> Result<i64, String> {
-    append_table_at(&analytics_db_path(), draft, info, table)
-}
-
-/// [`append_table`] 的显式路径版本。
 pub fn append_table_at(
     db_path: &Path,
     draft: &MockDraft,

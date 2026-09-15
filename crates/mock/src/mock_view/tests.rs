@@ -18,9 +18,9 @@ use gpui_kit::{
 
 use super::{
     MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind,
-    MockJobProgress, MockJobState, MockPanel, MockPreview, MockRunOptions, SchemaRequest,
-    SchemaSource, focus_detail_tab, param_text, parse_percent_ratio, parse_rows, parse_seed,
-    patch_param, summarize_params, validate_table_name,
+    MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview, MockRunOptions,
+    SchemaRequest, SchemaSource, focus_detail_tab, param_text, parse_percent_ratio, parse_rows,
+    parse_seed, patch_param, summarize_params, validate_table_name,
 };
 use crate::generator_catalog::ParamKind;
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
@@ -193,6 +193,8 @@ struct Recorder {
     appended: RefCell<Vec<String>>,
     exported: RefCell<Vec<(String, String)>>,
     scratchpads: RefCell<Vec<String>>,
+    /// 出口类任务拿到的临时表名（证明任务里带的是上一次生成的结果）
+    sink_temps: RefCell<Vec<String>>,
     imports: RefCell<Vec<SchemaRequest>>,
     read_only: Cell<bool>,
     tables: RefCell<Vec<String>>,
@@ -242,6 +244,25 @@ impl TestHost {
             },
         }
     }
+
+    /// 出口：新建表（同名已存在 → 报错，与真实装配层同一语义）。
+    fn persist(&self, draft: &MockDraft, info: &MockGenInfo) -> Result<MockJobDone, String> {
+        self.rec.persisted.borrow_mut().push(draft.table_name.clone());
+        self.rec
+            .sink_temps
+            .borrow_mut()
+            .push(info.temp_table_name.clone());
+        if self.rec.tables.borrow().iter().any(|t| t == &draft.table_name) {
+            return Err(format!(
+                "分析库已存在表 {}：请改用「追加到既有表」",
+                draft.table_name
+            ));
+        }
+        Ok(MockJobDone::Persisted {
+            table: draft.table_name.clone(),
+            rows: 5,
+        })
+    }
 }
 
 impl MockHost for TestHost {
@@ -250,7 +271,7 @@ impl MockHost for TestHost {
             return Err(err);
         }
         self.rec.started.borrow_mut().push(kind.clone());
-        match &kind {
+        let result = match &kind {
             MockJobKind::Generate => {
                 self.rec.generated.borrow_mut().push((
                     draft.table_name.clone(),
@@ -258,10 +279,7 @@ impl MockHost for TestHost {
                     draft.options.seed,
                     None,
                 ));
-                if !self.rec.hold_job.get() {
-                    *self.rec.job_result.borrow_mut() =
-                        Some(Ok(MockJobDone::Generated(self.gen_info(draft))));
-                }
+                Ok(MockJobDone::Generated(self.gen_info(draft)))
             }
             MockJobKind::AppendTo(table) => {
                 self.rec.generated.borrow_mut().push((
@@ -271,13 +289,32 @@ impl MockHost for TestHost {
                     Some(table.clone()),
                 ));
                 self.rec.appended.borrow_mut().push(table.clone());
-                if !self.rec.hold_job.get() {
-                    *self.rec.job_result.borrow_mut() = Some(Ok(MockJobDone::Appended {
-                        table: table.clone(),
-                        total_rows: 100 + draft.options.rows as i64,
-                    }));
-                }
+                Ok(MockJobDone::Appended {
+                    table: table.clone(),
+                    total_rows: 100 + draft.options.rows as i64,
+                })
             }
+            MockJobKind::Persist(info) => self.persist(draft, info),
+            MockJobKind::Export { info, format, path } => {
+                self.rec.sink_temps.borrow_mut().push(info.temp_table_name.clone());
+                self.rec
+                    .exported
+                    .borrow_mut()
+                    .push((format!("{format:?}"), path.clone()));
+                Ok(MockJobDone::Exported {
+                    message: format!("已导出：{path}"),
+                })
+            }
+            MockJobKind::Scratchpad { info, format } => {
+                self.rec.sink_temps.borrow_mut().push(info.temp_table_name.clone());
+                self.rec.scratchpads.borrow_mut().push(format!("{format:?}"));
+                Ok(MockJobDone::Exported {
+                    message: "已保存到草稿箱：/proj/mock/mock_x.csv".to_string(),
+                })
+            }
+        };
+        if !self.rec.hold_job.get() {
+            *self.rec.job_result.borrow_mut() = Some(result);
         }
         Ok(())
     }
@@ -297,44 +334,6 @@ impl MockHost for TestHost {
     fn cancel_job(&self) {
         self.rec.cancels.set(self.rec.cancels.get() + 1);
         *self.rec.job_result.borrow_mut() = Some(Err("生成已取消".to_string()));
-    }
-
-    fn persist_table(&self, draft: &MockDraft, _info: &MockGenInfo) -> Result<i64, String> {
-        self.rec.persisted.borrow_mut().push(draft.table_name.clone());
-        if self.rec.tables.borrow().iter().any(|t| t == &draft.table_name) {
-            return Err(format!(
-                "分析库已存在表 {}：请改用「追加到既有表」",
-                draft.table_name
-            ));
-        }
-        Ok(5)
-    }
-
-    fn export_file(
-        &self,
-        _draft: &MockDraft,
-        _info: &MockGenInfo,
-        format: &MockExportFormat,
-        path: &str,
-    ) -> Result<String, String> {
-        self.rec
-            .exported
-            .borrow_mut()
-            .push((format!("{format:?}"), path.to_string()));
-        Ok(format!("已导出：{path}"))
-    }
-
-    fn save_scratchpad(
-        &self,
-        _draft: &MockDraft,
-        _info: &MockGenInfo,
-        format: &MockExportFormat,
-    ) -> Result<String, String> {
-        self.rec
-            .scratchpads
-            .borrow_mut()
-            .push(format!("{format:?}"));
-        Ok("已保存到草稿箱：/proj/mock/mock_x.csv".to_string())
     }
 
     fn existing_tables(&self) -> Vec<String> {
@@ -593,10 +592,11 @@ fn persist_creates_table_then_reports_existing(cx: &mut TestAppContext) {
     });
     assert!(rec.persisted.borrow().is_empty());
 
-    // 生成后落库 → 新建表
+    // 生成后落库 → 新建表（任务制：等结果回填）
     panel.update(cx, |panel, cx| panel.run_generate(cx));
     poll_job(cx, &panel);
     panel.update(cx, |panel, cx| panel.persist_table(cx));
+    poll_job(cx, &panel);
     panel.update(cx, |panel, _cx| {
         assert!(
             panel.outcome().is_some_and(|o| o.contains("已在分析库新建表 mock_data")),
@@ -609,6 +609,7 @@ fn persist_creates_table_then_reports_existing(cx: &mut TestAppContext) {
     // 同名已存在 → 报错并引导「追加」
     *rec.tables.borrow_mut() = vec!["mock_data".to_string()];
     panel.update(cx, |panel, cx| panel.persist_table(cx));
+    poll_job(cx, &panel);
     panel.update(cx, |panel, _cx| {
         assert!(
             panel.error().is_some_and(|e| e.contains("已存在")),
@@ -688,6 +689,7 @@ fn read_only_blocks_sinks_but_allows_generate(cx: &mut TestAppContext) {
     assert!(rec.appended.borrow().is_empty(), "只读不应追加");
     assert!(rec.scratchpads.borrow().is_empty(), "只读不应写草稿箱");
     assert!(rec.exported.borrow().is_empty(), "只读不应写文件");
+    assert_eq!(rec.started.borrow().len(), 1, "只读只应提交生成任务");
 }
 
 #[gpui_kit::test]
@@ -935,6 +937,7 @@ fn job_progress_is_mirrored_while_running(cx: &mut TestAppContext) {
     // 任务停在「进行中」：不写结果，只报告 3/10 批
     rec.hold_job.set(true);
     rec.job_progress.set(MockJobProgress {
+        phase: MockJobPhase::Generating,
         batches_done: 3,
         batches_total: 10,
         rows_total: 1000,
@@ -1004,7 +1007,7 @@ fn cancel_requests_host_and_reports_cancel_outcome(cx: &mut TestAppContext) {
 fn start_errors_are_surfaced(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let rec = recorder();
-    *rec.start_error.borrow_mut() = Some("已有生成任务在进行中".to_string());
+    *rec.start_error.borrow_mut() = Some("已有任务在进行中".to_string());
     let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
 
     panel.update(cx, |panel, cx| {
@@ -1014,7 +1017,7 @@ fn start_errors_are_surfaced(cx: &mut TestAppContext) {
     panel.update(cx, |panel, cx| panel.run_generate(cx));
 
     panel.update(cx, |panel, _cx| {
-        assert_eq!(panel.error(), Some("已有生成任务在进行中"));
+        assert_eq!(panel.error(), Some("已有任务在进行中"));
         assert!(!panel.is_running(), "提交失败不应进入进行中");
     });
     assert!(rec.generated.borrow().is_empty(), "提交失败不应触生成");
@@ -1066,10 +1069,191 @@ fn second_start_while_running_is_rejected(cx: &mut TestAppContext) {
     });
 
     panel.update(cx, |panel, _cx| {
-        assert_eq!(panel.error(), Some("已有生成任务在进行中"));
+        assert_eq!(panel.error(), Some("已有任务在进行中（请等它结束或先取消）"));
         assert!(panel.is_running(), "首个任务仍在进行");
     });
     assert_eq!(rec.started.borrow().len(), 1, "只应提交一次");
+}
+
+/// 出口（落库）也是后台任务：提交即返回、进行中报「写入分析库」阶段，完成后预览仍可用。
+#[gpui_kit::test]
+fn persist_job_runs_in_background_and_keeps_preview(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+
+    // 落库：结果已就绪但还没轮询 → 仍在「进行中」（UI 不被写入阻塞）
+    panel.update(cx, |panel, cx| panel.persist_table(cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.is_running(), "落库应走后台任务");
+        assert_eq!(
+            panel.job_progress().map(|p| p.phase),
+            Some(MockJobPhase::Writing),
+            "应报写入阶段"
+        );
+        assert!(panel.gen_info().is_some(), "写入期间预览仍在");
+        assert!(
+            panel
+                .outcome()
+                .is_some_and(|o| o.contains("写入分析库中")),
+            "{:?}",
+            panel.outcome()
+        );
+    });
+
+    // 出口类不可取消：请求被忽略（不转发给宿主），按钮也不渲染
+    panel.update(cx, |panel, cx| panel.cancel_job(cx));
+    assert_eq!(rec.cancels.get(), 0, "出口类任务不应把取消转给宿主");
+    panel.update(cx, |panel, _cx| assert!(!panel.cancel_requested()));
+
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert!(!panel.is_running(), "结果回填后归位空闲");
+        assert!(
+            panel
+                .outcome()
+                .is_some_and(|o| o.contains("已在分析库新建表 mock_data（5 行）")),
+            "{:?}",
+            panel.outcome()
+        );
+        assert_eq!(panel.landed(), Some("mock_data"));
+        assert!(
+            panel.gen_info().is_some(),
+            "出口只读临时表，预览不能一并作废（否则没法接着导出）"
+        );
+        assert_eq!(panel.existing_tables(), rec.tables.borrow().as_slice());
+    });
+    assert_eq!(
+        rec.sink_temps.borrow().as_slice(),
+        ["temp_mock_mock_data".to_string()],
+        "出口任务要带上上一次生成的结果（临时表）"
+    );
+}
+
+/// 导出与草稿箱同走后台任务（阶段 = 写出文件），完成后预览仍保留。
+#[gpui_kit::test]
+fn export_jobs_run_in_background(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+
+    panel.update(cx, |panel, cx| {
+        panel.export_file(&MockExportFormat::Csv, "/tmp/mock_data.csv".to_string(), cx)
+    });
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(
+            panel.job_progress().map(|p| p.phase),
+            Some(MockJobPhase::Exporting)
+        );
+        assert!(
+            panel.outcome().is_some_and(|o| o.contains("导出中")),
+            "{:?}",
+            panel.outcome()
+        );
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.outcome(), Some("已导出：/tmp/mock_data.csv"));
+        assert!(panel.error().is_none());
+        assert!(panel.gen_info().is_some(), "导出后预览仍可用");
+    });
+
+    // 草稿箱：同一条链路（只换落地目录）
+    panel.update(cx, |panel, cx| {
+        panel.save_scratchpad(&MockExportFormat::Parquet, cx)
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel
+                .outcome()
+                .is_some_and(|o| o.contains("已保存到草稿箱")),
+            "{:?}",
+            panel.outcome()
+        );
+    });
+
+    assert_eq!(
+        rec.exported.borrow().as_slice(),
+        [("Csv".to_string(), "/tmp/mock_data.csv".to_string())]
+    );
+    assert_eq!(rec.scratchpads.borrow().as_slice(), ["Parquet".to_string()]);
+    assert_eq!(
+        rec.sink_temps.borrow().as_slice(),
+        ["temp_mock_mock_data".to_string(), "temp_mock_mock_data".to_string()]
+    );
+}
+
+/// 出口失败（同名表已存在）：错误原文直出、刷新既有表清单、且预览仍保留（可改用「追加」）。
+#[gpui_kit::test]
+fn sink_failure_keeps_preview(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+
+    *rec.tables.borrow_mut() = vec!["mock_data".to_string()];
+    panel.update(cx, |panel, cx| panel.persist_table(cx));
+    poll_job(cx, &panel);
+
+    panel.update(cx, |panel, _cx| {
+        assert!(!panel.is_running());
+        assert!(
+            panel.error().is_some_and(|e| e.contains("已存在")),
+            "{:?}",
+            panel.error()
+        );
+        assert!(panel.outcome().is_none());
+        assert!(panel.gen_info().is_some(), "失败后预览仍可用来重试 / 追加");
+        assert_eq!(panel.existing_tables(), ["mock_data".to_string()]);
+    });
+}
+
+/// 没有生成结果时点出口：拒绝提交任务（不占后台线程）。
+#[gpui_kit::test]
+fn sinks_require_a_generation_first(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.export_file(&MockExportFormat::Csv, "/tmp/x.csv".to_string(), cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.error(), Some("请先生成（预览确认后再导出）"));
+        assert!(!panel.is_running());
+    });
+
+    panel.update(cx, |panel, cx| {
+        panel.save_scratchpad(&MockExportFormat::Csv, cx)
+    });
+    panel.update(cx, |panel, cx| panel.persist_table(cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.error(), Some("请先生成（预览确认后再落库）"));
+        assert!(!panel.is_running());
+    });
+    assert!(rec.started.borrow().is_empty(), "不应提交任何任务");
 }
 
 /// `MockRunOptions::new` 是 `#[non_exhaustive]` 结构的唯一构造入口。

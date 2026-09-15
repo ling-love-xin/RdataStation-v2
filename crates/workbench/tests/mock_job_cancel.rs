@@ -43,7 +43,15 @@ fn draft(table: &str) -> MockDraft {
 fn cancel_interrupts_running_job_with_readable_error() {
     let dir = temp_dir("cancel");
     let db = dir.join("analytics.duckdb");
-    mock_jobs::start(&draft("t_job_cancel"), MockJobKind::Generate, &db).expect("提交任务");
+    mock_jobs::start(
+        &draft("t_job_cancel"),
+        MockJobKind::Generate,
+        &mock_jobs::JobPaths {
+            db_path: db.clone(),
+            project_root: None,
+        },
+    )
+    .expect("提交任务");
 
     // 等首批完成：此时 generate 已重置取消标志，取消一定作用在运行中的任务上
     let started = Instant::now();

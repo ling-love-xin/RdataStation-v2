@@ -136,9 +136,14 @@ button{font-family:inherit;cursor:pointer;}
 /* 进度条（Progress 组件示意）：填充色用品牌色，轨道用浅色 */
 .bar{height:6px;border-radius:3px;background:var(--track);overflow:hidden;width:100%;}
 .bar>i{display:block;height:100%;background:var(--primary);border-radius:3px;}
+/* 不定量进度（Progress::loading）：写入 / 导出 / 导出拿到不到中间进度，条带往复滑动 */
+.bar.loading>i{width:38%;animation:bar-slide 1.15s ease-in-out infinite;}
+@keyframes bar-slide{0%{transform:translateX(-105%);}50%{transform:translateX(165%);}100%{transform:translateX(-105%);}}
 [data-scn="running"] .exit-disabled{display:none;}
 .detail-running{display:none;}
 [data-scn="running"] .detail-running{display:flex;}
+.detail-writing{display:none;}
+[data-scn="writing"] .detail-writing{display:flex;}
 [data-scn="running"] .hint.only-generated,
 [data-scn="running"] .prev-wrap{display:none;}
 .exit-enabled{display:none;}
@@ -189,13 +194,17 @@ button{font-family:inherit;cursor:pointer;}
 .form-line .inp{width:150px;}
 
 /* ── 场景可见性 ── */
-.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running{display:none;}
+.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running,.only-writing{display:none;}
 [data-scn="empty"] .only-empty{display:flex;}
 [data-scn="imported"] .only-imported{display:flex;}
 [data-scn="generated"] .only-imported{display:flex;}
 [data-scn="generated"] .only-generated{display:flex;}
 [data-scn="running"] .only-imported{display:flex;}
 [data-scn="running"] .only-running{display:flex;}
+/* 写入 / 导出中：字段与预览保留（生成已结束，临时表未动），出口按钮保持禁用态 */
+[data-scn="writing"] .only-imported{display:flex;}
+[data-scn="writing"] .only-generated{display:flex;}
+[data-scn="writing"] .only-writing{display:flex;}
 [data-scn="persist"] .only-imported{display:flex;}
 [data-scn="persist"] .only-generated{display:flex;}
 [data-scn="persist"] .only-persist{display:flex;}
@@ -240,6 +249,7 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn" data-go="imported" onclick="setScene('imported')">导入源库结构</button>
   <button class="scn" data-go="generated" onclick="setScene('generated')">已生成 · 出口就绪</button>
   <button class="scn" data-go="running" onclick="setScene('running')">生成中（进度 + 取消）</button>
+  <button class="scn" data-go="writing" onclick="setScene('writing')">写入 / 导出中（不定量）</button>
   <button class="scn" data-go="persist" onclick="setScene('persist')">落库反馈（同名已存在）</button>
   <button class="scn" data-go="readonly" onclick="setScene('readonly')">只读项目</button>
   <button class="scn" data-go="menu" onclick="setScene('menu')">生成器分类子菜单</button>
@@ -301,6 +311,10 @@ button{font-family:inherit;cursor:pointer;}
         <!-- 中央 tab：生成中（摘要行尾带进度，预览保留旧结果或空态） -->
         <div class="detail-running">
           <div class="hint">字段（5）· 目标表 mock_orders · 100000 行 · 种子 随机 · 简体中文 · 生成中 40%</div>
+        </div>
+        <!-- 中央 tab：写入 / 导出中（摘要行尾带阶段，预览保留） -->
+        <div class="detail-writing">
+          <div class="hint">字段（5）· 目标表 mock_orders · 100000 行 · 种子 随机 · 简体中文 · 写入分析库中</div>
         </div>
         <div class="detail-empty hint">暂无列：在右 Dock「Mock 数据生成」面板点「导入结构」或「＋ 加列」。</div>
         <div class="only-imported detail-fields" style="flex-direction:column;gap:10px;">
@@ -399,6 +413,7 @@ button{font-family:inherit;cursor:pointer;}
 
           <!-- 生成（后台任务：进行中时禁用，进度与取消另起一行） -->
           <button class="btn primary wide only-running" disabled>生成中…</button>
+          <button class="btn primary wide only-writing" disabled>生成</button>
           <button class="btn primary wide only-empty" disabled>生成</button>
           <button class="btn primary wide only-imported" disabled>生成</button>
           <button class="btn primary wide only-generated">生成</button>
@@ -409,6 +424,14 @@ button{font-family:inherit;cursor:pointer;}
             <div class="line">
               <span class="hint grow">4 / 10 批（≈40000 / 100000 行）</span>
               <button class="btn sm">取消</button>
+            </div>
+          </div>
+
+          <!-- 出口进行中：不定量进度 + 阶段文案（无批次回调 → 也不给取消） -->
+          <div class="only-writing" style="flex-direction:column;gap:6px;">
+            <div class="bar loading"><i></i></div>
+            <div class="line">
+              <span class="hint grow">写入分析库中…（100000 行）</span>
             </div>
           </div>
 

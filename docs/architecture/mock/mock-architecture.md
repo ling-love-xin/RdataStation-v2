@@ -138,27 +138,34 @@ ImportSchemaInput{ conn_id, database, schema, tables, connection_type }
              └ MockGenInfo（表名 / 行数 / 耗时 / 预览字符串网格）
 ```
 
-**出口（全部在事件路径）**：
+**出口（与生成同一条后台任务链路）**：
 
-| 出口 | 步骤 |
+| 出口 | 步骤（均在工作线程上执行） |
 | --- | --- |
-| 持久化为分析库表 | 查既有表（同名 → `Err` 含「已存在」，引导追加）→ `CREATE TABLE`（列名走 `sanitize_identifier`，与临时表列名同一算法）→ `insert_statements` 文本 `execute_batch` → 失败回滚建表 → 返回表内行数（**当前同步阻塞**，见 §9-I10） |
-| 追加到既有表 | **后台任务** `AppendTo(表)`：生成 + 校验列 + `insert_statements` 在同一个任务里完成（见下） |
-| 保存到草稿箱 | `{项目}/mock/` → `save_to_scratchpad`（时间戳命名）→ 返回文件路径 |
-| 另存为 | 系统保存对话框（`prompt_for_new_path`，异步回传）→ `MockEngine::export` |
+| 持久化为分析库表 | 任务 `Persist`：查既有表（同名 → `Err` 含「已存在」，引导追加）→ `CREATE TABLE`（列名走 `sanitize_identifier`，与临时表列名同一算法）→ `insert_statements` 文本 `execute_batch` → 失败回滚建表 → 返回表内行数 |
+| 追加到既有表 | 任务 `AppendTo(表)`：生成 + 校验列 + `insert_statements` 在同一个任务里完成（阶段先 `Generating` 后 `Writing`） |
+| 保存到草稿箱 | 任务 `Scratchpad`：项目根由宿主在**提交前**解析（工作线程碰不了 `Shared`）→ `save_to_scratchpad`（时间戳命名）→ 返回文件路径 |
+| 另存为 | 系统保存对话框（`prompt_for_new_path`，异步回传）→ 任务 `Export`：`MockEngine::export` |
 
-**后台任务（生成 / 追加）**：
+**后台任务（生成 / 追加 / 三个出口）**：
 
 ```
 面板（UI 线程）                 services::mock_jobs（工作线程）
-  start_job(draft, kind)  ──►  槽：progress = Running{0,0,rows}
-  ┌ 120ms 定时泵（弱句柄）       │  MockEngine::generate_with_progress
-  ├ job_state()  ◄─────────   │   每批回写 progress{batches_done,total}
+  start_job(draft, kind)  ──►  槽：progress = Running{phase, 0, 0, rows}
+  ┌ 120ms 定时泵（弱句柄）       │  生成类：MockEngine::generate_with_progress
+  ├ job_state()  ◄─────────   │           每批回写 progress{batches_done,total}
   └ take_job_done() ◄──────   收尾：progress = None; done = Some(结果)
        │                        （**同一把锁下一次性收尾**，UI 看不到空洞）
-       └─► finish_job：写文案 / 置 landed / 作废旧结果；失败取错误行
-  cancel_job()  ──► MockEngine::cancel()（批次边界响应）
+       └─► finish_job：写文案 / 置 landed / 作废旧结果（**仅生成类**）；失败取错误行
+  cancel_job()  ──► MockEngine::cancel()（批次边界响应；只有生成类可取消）
 ```
+
+**阶段（`MockJobPhase`）**：生成类有批次粒度回调 → 定量进度条 + 取消按钮；出口类（`Writing` /
+`Exporting`）跑在 DuckDB 与文件系统内部，拿不到中间进度 → 不定量动画（`Progress::loading`），
+且**不渲染取消**（强中断会留下半张表 / 半个文件）。视图侧 `cancel_job` 对出口类直接忽略。
+
+**预览与临时表的一致性**：出口类只**读**内存临时表，完成后 `MockGenInfo` 仍有效（落库后可以接着导出）；
+只有生成类在收尾时作废旧结果（它重建了临时表）。
 
 为何不能直接在视图里 `spawn`：`MockHost` 是 `Rc<dyn>`（持 `Shared`，非 Send），无法把宿主搬进
 GPUI 的后台执行器；因此沿用 `nav_jobs` / `scratchpad_jobs` 的成熟模式——**宿主内部起工作线程**，
@@ -225,9 +232,10 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D17 | 追加必须**显式选表**，同名不自动追加 | 「持久化」与「追加」是两个语义不同的出口；静默追加会让用户以为新建了一张 | 表已存在时隐式走追加（v1 的 `CREATE TABLE AS SELECT` 会直接报错） |
 | D18 | 字段表与预览落**中央 tab**（方案①） | 右 Dock 280px 且不可拖拽调宽，宽表与字段卡片放不下；中央 tab 与编辑器同构（单一权威状态） | 全塞右 Dock（v1 是 380px 可拖拽宽栏，v2 不具备） |
 | D19 | 生成器切换走**分类子菜单**，参数在列编辑对话框 | 生成器身份与参数行必须一致；同一对话框内改生成器会让参数行失效（要么重建、要么错位） | 对话框内提供生成器下拉（参数行与生成器不同步） |
-| D20 | 生成 / 追加走**后台工作线程 + 进度 + 取消**（`services::mock_jobs`） | 生成是重活，UI 线程 `block_on` 会冻结界面且无法中断；`MockHost` 非 Send，不能在视图里直接 `spawn` | 视图内 `cx.background_spawn`（要求宿主 Send）；不做进度（大行数只能干等） |
+| D20 | 生成 / 追加 / **三个出口**走**后台工作线程 + 进度 + 取消**（`services::mock_jobs`） | 生成是重活，UI 线程 `block_on` 会冻结界面且无法中断；`MockHost` 非 Send，不能在视图里直接 `spawn` | 视图内 `cx.background_spawn`（要求宿主 Send）；不做进度（大行数只能干等） |
 | D21 | 进度用**定时泵（120ms）+ 宿主槽**，而非 render 轮询 | 任务进行中没有其他事件触发重绘，不主动唤醒就看不到进度；轮询频率低不抢主线程 | render 内轮询（永远不会被调到）；GPUI 后台执行器直接跑生成（阻塞后台池线程） |
 | D22 | 任务收尾「清进度 + 写结果」在**同一把锁下一次性**完成 | UI 侧不可能观察到「既无进度也无结果」的空洞，避免误报「工作线程已退出」 | 两个独立原子量（存在观测窗口） |
+| D23 | 出口类任务**不提供取消**，进度改**不定量**形态 | 写入分析库 / 写文件都在 DuckDB 与文件系统内部，探不到中断点；强中断会留下半张表或半个文件 | 假装可取消（点了没用，比没有更差）；干脆不给进度（大行数落库像卡死） |
 
 ## 7. 降级与容错矩阵
 
@@ -242,10 +250,12 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 追加目标缺列 | `目标表 {t} 缺少列：a、b（列结构需一致）` | 面板 danger 行（不把 DuckDB 原始错误冒到界面） |
 | 落库写失败 | `写入分析库失败（已回滚建表）: …` | 面板 danger 行；新表已被 DROP，不留半成品 |
 | 未打开项目 | `未打开项目：草稿箱不可用（请先打开或新建项目）` | 面板 danger 行 |
-| 任务已在跑 | `已有生成任务在进行中` | 面板 danger 行（按钮同时被禁用，双重护栏） |
+| 任务已在跑 | `已有任务在进行中（请等它结束或先取消）` | 面板 danger 行（按钮同时被禁用，双重护栏） |
 | 工作线程不可用 | `后台工作线程不可用` | 面板 danger 行；槽已回滚，不影响后续重试 |
 | 任务异常结束 | `后台生成任务异常结束（工作线程已退出）` | 面板 danger 行（既无进度也无结果时才判为异常） |
 | 用户取消 | 引擎在批次边界回 `生成已取消` | 面板 danger 行 + 「临时表可能残留部分行，下次生成会重建」；旧结果作废 |
+| 出口进行中 | 不渲染取消按钮，`cancel_job` 直接忽略 | 只有不定量进度（写入 / 导出会跑完） |
+| 出口失败（同名表 / 路径不可写） | 任务以可读错误收尾 | 面板 danger 行；**预览保留**（可改用「追加」或换路径重试） |
 | 源表列读不到 | `读不到/没有列信息（连接可能已断开，或表不存在）` | 面板 danger 行；不做假导入 |
 | 分析库打不开 | 服务层中文错误 | 面板 `error` 行（danger 色）；既有表候选为空清单 |
 | 预览不存在的临时表 | `MockError`（DuckDB 报错桥接） | 面板提示 |
@@ -284,8 +294,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 | I4 | 模板/用户模板与生成任务已落 `project.db`，但**无 UI 入口**且无真实 SQLite 往返测试（仅序列化测试） | 能力在代码里，用户在界面上看不到 | Phase C/D 接面板；补 `MockGenerationStore` 的 SQLite 往返测试 |
 | I5 | ~~`mock_view.rs` 为占位文件~~ | 已落地：面板与详情 tab 都在 `crates/mock/src/mock_view.rs`；`{commands,model,generator}.rs` 仍是脚手架占位 | 这三个占位文件按全项目统一政策处理（命令层已退役） |
 | I6 | 文档称「生成器按依赖表达式计算取值」，实际只做拓扑排序 | 用户可能误以为支持 `price * quantity` 计算 | Phase C 明确：要么实现表达式解释，要么把 `dependency` 降级为「顺序提示」 |
-| I7 | ~~生成与落库都是**同步阻塞**调用~~ | 已解决：生成 / 追加走后台工作线程（进度 + 取消，D20/D21）；**出口仍同步**——见 I10 | —— |
-| I10 | 出口（持久化为分析库表 / 另存为 / 草稿箱）仍是**同步阻塞**调用 | 大行数落库（INSERT 文本 + `execute_batch`）仍会卡界面；取消也够不到这一段 | 复用 `mock_jobs` 的任务机制：加 `Persist` / `Export` 任务种类（统一进度条 + 取消） |
+| I7 | ~~生成与落库都是**同步阻塞**调用~~ | 已解决：生成 / 追加 / 三个出口全部走后台工作线程（进度 + 取消，D20/D21/D23） | —— |
+| I10 | ~~出口（持久化为分析库表 / 另存为 / 草稿箱）仍是**同步阻塞**调用~~ | 已解决：出口并入 `mock_jobs` 的任务种类（`Persist` / `Export` / `Scratchpad`），阶段上报 + 不定量进度条 | —— |
 | I8 | 复杂参数（`ForeignKey.values` / `Sequence.values` / `Weighted.choices`）无编辑入口 | 约束类生成器实际不可配置（面板只显示一句说明） | 提供「集合编辑」弹层（多行文本 / 键值对）或改由模板与导入场景给出 |
 
 ## 10. 测试策略
@@ -293,16 +303,17 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 层 | 位置 | 数量 | 锁什么 |
 | --- | --- | --- | --- |
 | 单元 | `crates/mock/src/*.rs`（`#[cfg(test)]`） | 65 | 表名净化、DDL 生成、`generate_cell` 各变体、列名规则表、类型串解析、序列化往返、模板自检、生成器目录自检（3：137 覆盖 / 标签与默认 / 分类往返） |
-| 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 34（12 纯逻辑 + 22 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；两个对话框可开；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒 |
+| 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 38（12 纯逻辑 + 26 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；两个对话框可开；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒；**出口后台化**：落库 / 导出 / 草稿箱的阶段与结果、完成后预览保留、出口不可取消、无生成结果时拒绝提交 |
 | 集成（引擎） | `crates/mock/tests/mock_engine_tests.rs` | 26 | 公开 API 端到端：生成 / 预览 / 映射 / 依赖 / 取消标志 / 类型 / 五种导出 / 持久化 / 草稿目录 / 模板 / 场景 |
 | 集成（装配） | `crates/workbench/tests/mock_generator.rs` | 10 | 生成不写分析库；新建 → 同名拒绝（不覆盖）；追加接续主键（`MAX(id)=100` 且无重复）；追加目标不存在 / 缺列的中文错误；CSV 导出表头；草稿箱无项目拒绝 + 有项目落 `{项目}/mock/`；连接默认库 / schema 预填；类型串映射 |
-| 集成（后台任务） | `crates/workbench/tests/mock_jobs.rs` + `mock_job_cancel.rs` | 3 + 1 | 提交即返回 + 进度可读 + 结果一次性取回 + 生成不写库；并发提交被拒且结束后可恢复；追加任务回表内总行数；**取消**在批次边界中断并回可读错误（独立进程：`cancel` 是进程级标志） |
+| 集成（后台任务） | `crates/workbench/tests/mock_jobs.rs` + `mock_job_cancel.rs` | 7 + 1 | 提交即返回 + 进度可读 + 结果一次性取回 + 生成不写库；并发提交被拒且结束后可恢复；追加任务回表内总行数；**出口**：`Persist` 建表回行数 / 同名表回可读错误不覆盖 / `Export` 写出 CSV（表头 + 行数）/ `Scratchpad` 无项目报错 + 有项目落 `{项目}/mock/`；**取消**在批次边界中断并回可读错误（独立进程：`cancel` 是进程级标志） |
 
 回归价值示例：`export_table_creates_named_table_and_drops_temp` 锁 I0b 那个 v1 遗留缺陷；
 `export_sql_insert_writes_insert_statements` 锁 I0d 死锁；`generate_is_reproducible_with_same_seed` 锁可复现性；
 `parse_data_type_is_public_and_loose` + `map_column_resolves_parameterized_source_types` 锁 D7；
 `generate_produces_preview_without_touching_sinks` 锁 D15（生成不写库）；`persist_creates_table_then_reports_existing` 锁 D17；
-`read_only_blocks_sinks_but_allows_generate` 锁「只读止于视图」。
+`read_only_blocks_sinks_but_allows_generate` 锁「只读止于视图」；`persist_job_runs_in_background_and_keeps_preview`
++ `persist_job_creates_table_and_reports_rows` 锁 D23（出口后台化 + 预览不被作废）。
 
 ## 11. 实现位置映射
 
@@ -317,7 +328,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 模板与场景生成 | `crates/mock/src/templates.rs` + `engine.rs::generate_scenario` |
 | 任务/模板持久化 | `crates/mock/src/persistence.rs` + `crates/engine/migrations/project_meta/009_mock_generation.sql` |
 | D4/D5/D6/D17 装配与追加语义 | `crates/workbench/src/services/mock_generator.rs`（`generate_at_with_progress` / `persist_table_at` / `append_table_at` / `export_file` / `save_scratchpad` / `import_columns`） |
-| D20/D21/D22 后台任务 | `crates/workbench/src/services/mock_jobs.rs`（工作线程 + 槽 + `start`/`state`/`take_done`/`cancel`）+ `mock_view.rs`（`MockJobWatch` + 定时泵 + `poll_job`） |
+| D20/D21/D22/D23 后台任务 | `crates/workbench/src/services/mock_jobs.rs`（工作线程 + 槽 + `JobPaths` + `start`/`state`/`take_done`/`cancel`）+ `mock_view.rs`（`MockJobKind` / `MockJobPhase` / `MockJobWatch` + 定时泵 + `poll_job`） |
 | D11/D18 视图归属与两处排版 | `crates/mock/src/mock_view.rs`（`MockPanel` 右 Dock / `MockDetailView` 中央 tab / `MockDraft` / `MockHost`） |
 | D12/D14/D19 对话框与工作副本 | `mock_view.rs`（`open_import_dialog` / `open_column_dialog` / `ColumnDraft` / `generator_menu`） |
 | D13 生成器目录 | `tools/gen_mock_generator_catalog.py` → `crates/mock/src/generator_catalog.rs` |
