@@ -10,6 +10,7 @@
 
 | 日期 | 内容 | 状态 |
 | --- | --- | --- |
+| 2026-09-15（1a 开动：A1 完成） | **A1 `EditorService`**：`crates/editor/src/service.rs`——文档集合唯一权威（打开/关闭/激活/重命名/内容/保存/模式/只读），`DocumentId` 一经生成永不变（另存为只换路径标题），去重规则“同路径重复打开=激活”，脏判据 `content != baseline`；**13 项单测**全绿（含 Windows 大小写归一的平台分支、关闭当前落到邻居、只读拒写）；`editor` 单测 11 → **24 项** | ✅ 已完成 |
 | 2026-09-15（MySQL 事务修复 + 并发亲和结论） | **① MySQL `BEGIN` 修复**：`native/mysql.rs` 新增 `needs_text_protocol` / `execute_via_text_protocol`——事务控制与会话语句（`BEGIN`/`START TRANSACTION`/`COMMIT`/`ROLLBACK`/`SAVEPOINT`/`SET`/`USE`）改走 **文本协议**（`sqlx::raw_sql`），不再报 `1295`；探针实测：MySQL 事务内计数 = 1、`ROLLBACK` 生效 ✅ · **② P0.2c 并发亲和探针**（四库）：**SQLite / DuckDB 并发下仍同句柄；MySQL / PG 会另开物理连接**（另一侧报 `1146` / `relation does not exist`）→ **1b 的事务与会话必须 per-session 独占连接**（架构 §12 #2） · **③ DuckDB 扩展约定**写入依赖治理（外部预编译优先，扩展走指定目录 `INSTALL`，不为扩展重编内核） | ✅ 已完成（探针 12 项全绿） |
 | 2026-09-15（P0.9 基线 + Phase 0 收官） | **P0.9 完成**：本模块**依赖增量 = 0**（未引 tree-sitter，sqlglot-rust 早已在依赖里）；`cargo build -p rds-app -j 2` 增量编译 **2m37s**，debug 二进制 **≈137 MiB**（数据入 §6）· **Phase 0 地基已全部完成**（P0.1–P0.10：仅余 P0.6 的“驱动层真实 `affected_rows`”按计划转 1b）· 验证汇总：引擎 297 项 / editor 11 项 / shared 22 项 / 台账探针 10 项 / 事务探针 8 项 全绿；`cargo check --workspace --all-targets` 零告警 | ✅ 已完成 |
 | 2026-09-15（P0.2 实跑 + 三个结果保真度缺陷） | **P0.2 有结论**（真机四库）：PG / SQLite / DuckDB — **会话亲和成立**且 `ROLLBACK` 真实生效；驱动级事务（`execute_in_transaction`）四库中三库通过；**MySQL 的显式 `BEGIN` 被 prepared 协议拒绍**（1295，需改走驱动事务 API）→ 回写架构 §12 #2 / §7.3 #3 · **实跑又抓出三个真缺陷并修复**：① 各驱动只填 `batches`，而历史行数读的是恒空的 `total_rows` **字段**（已改用 `total_rows()`）；② `arrow_value_at` 漏了 Int32/UInt64/Float32 等位宽，兜底是 `format!("{:?}", array)`——**把整列 Debug 打印进每个单元格**（已修 + 3 项回归）；③ MySQL 列类型探测 `bool` 优先 → `COUNT(*)` 显示成 `true`（已按声明类型定排行）→ 架构 §12 #21 / #22 | ✅ 已完成（实跑验证：引擎 297 项 · shared 22 项 · 探针 10 项 · 事务探针 8 项全绿） |
@@ -95,7 +96,7 @@ Phase 0（地基，无 UI）
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| A1 | `EditorService`：打开/关闭/激活/重命名文档；`DocumentId` 稳定生成；文档集合状态 | `crates/editor/src/{service.rs, model.rs}` | 服务层单测：打开/关闭/激活/去重（同一路径重复打开=激活） |
+| A1 | `EditorService`：打开/关闭/激活/重命名文档；`DocumentId` 稳定生成；文档集合状态 | ✅ **已完成**：`crates/editor/src/service.rs`（纯逻辑、零 I/O、不碰 GPUI） | 服务层单测 **13 项**全绿（含：同路径重复打开=激活且不新开标签 · 大小写/分隔符归一的平台差异 · 重命名保身份不保路径 · 关闭当前落到邻居 · 脏判据只比内容（撤销回原值即干净）· 只读拒写） |
 | A2 | **多文档标签条**（依 P0.1 结论）：标签、脏点、关闭、`+` 新建、溢出处理 | `crates/editor/src/view/host.rs` | 窗口测试：3 个文档并存、脏点显示、关闭拦截触发 |
 | A3 | 内核视图接入：`input::editor::Editor` + `EditorState` 每文档一份 + 行号 + 只读态 | `crates/editor/src/view/{text_mode.rs, sql_mode.rs}` | 窗口测试：文本可输入、只读不可输入 |
 | A4 | **SQL 高亮**：注册 grammar + 方言选择 + 主题角色映射（缺角色复用最接近标准 token） | `crates/editor/src/view/` + 主题资产 | 真机核对明暗两套下 keyword/string/number/comment/function 可辨 |
