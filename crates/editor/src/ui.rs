@@ -7,6 +7,11 @@
 //! （`gap_1` / `px_2` …）；视图里不得出现裸 `px(N.)`。
 //! 注意 `rems(x)` 的基准是主题字号（默认 16px），与 `gap_1`（=4px）不是一套单位。
 
+use gpui_kit::{Pixels, px};
+
+/// 固定描边（1px，不随字号缩放）
+pub const HAIRLINE: Pixels = px(1.);
+
 /// 编辑器工具栏高（2.25rem = 36px，与面板头同档）
 pub const EDITOR_TOOLBAR_HEIGHT: f32 = 2.25;
 

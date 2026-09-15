@@ -5,6 +5,7 @@
 
 pub mod highlight;
 pub mod host;
+pub mod widgets;
 
 #[cfg(test)]
 mod tests;

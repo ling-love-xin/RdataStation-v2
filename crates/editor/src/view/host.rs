@@ -17,6 +17,7 @@ use crate::service::Document;
 use crate::shared::EditorShared;
 use crate::ui;
 use crate::view::highlight;
+use crate::view::widgets::status_bar::{self, StatusInputs};
 
 /// 一份文档的编辑面板
 pub struct EditorHostPanel {
@@ -25,6 +26,8 @@ pub struct EditorHostPanel {
     focus_handle: FocusHandle,
     /// 编辑内核状态（构造需要 `window`，故在 `new` 里一次建好）
     editor: Entity<EditorState>,
+    /// 语句数缓存（A7）：内容变化时算一次，**不在渲染期扫描**（render 是纯读路径）
+    statements: usize,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     _editor_sub: Option<Subscription>,
 }
@@ -72,6 +75,7 @@ impl EditorHostPanel {
                 if matches!(event, InputEvent::Change) {
                     // 内核 → 服务：内容只落到 `EditorService`，脏状态由它比较基线得出
                     let text = this.editor_text(cx);
+                    this.statements = count_statements(&text);
                     this.shared
                         .update(|service| service.set_content(&this.document, text));
                     // 重绘以刷新标签脏点与状态栏
@@ -80,11 +84,20 @@ impl EditorHostPanel {
             },
         );
 
+        let statements = count_statements(
+            &shared
+                .service()
+                .find(&document)
+                .map(|doc| doc.content().to_string())
+                .unwrap_or_default(),
+        );
+
         Self {
             shared,
             document,
             focus_handle,
             editor,
+            statements,
             _editor_sub: Some(sub),
         }
     }
@@ -145,6 +158,7 @@ impl EditorHostPanel {
         let Some(text) = self.with_document(|doc| doc.content().to_string()) else {
             return;
         };
+        self.statements = count_statements(&text);
         self.editor.update(cx, |state, cx| {
             if state.value().to_string() != text {
                 state.set_value(text, window, cx);
@@ -155,6 +169,13 @@ impl EditorHostPanel {
 }
 
 impl EventEmitter<BasePanelEvent> for EditorHostPanel {}
+
+/// 语句数：走 `engine::sql::split` 的**词法级**切分（不是 `split(';')`）
+///
+/// 只在内容变化时调一次（构造 / 输入回写 / 重新加载），渲染期只读缓存值。
+fn count_statements(text: &str) -> usize {
+    engine::sql::split_statements(text).len()
+}
 
 impl Focusable for EditorHostPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -200,22 +221,57 @@ impl ComponentPanel for EditorHostPanel {
 
 impl Render for EditorHostPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let bg = theme.colors.background;
+        let (bg, primary, muted) = {
+            let theme = cx.theme();
+            (
+                theme.colors.background,
+                theme.colors.primary,
+                theme.colors.muted_foreground,
+            )
+        };
+        let _ = (primary, muted);
         let read_only = self.editor_read_only();
 
-        div().v_flex().size_full().min_h_0().bg(bg).child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .px(rems(ui::EDITOR_BODY_PADDING_X))
-                .child(
-                    Editor::new(&self.editor)
-                        .appearance(false)
-                        .bordered(false)
-                        .readonly(read_only)
-                        .size_full(),
-                ),
-        )
+        // 光标 / 选区：从内核读真实值（行号列号按 1 基显示）
+        let (line, column, selected_chars) = {
+            let state = self.editor.read(cx);
+            let cursor = state.cursor_position();
+            (
+                cursor.line as usize + 1,
+                cursor.character as usize + 1,
+                state.selected_text().chars().count(),
+            )
+        };
+        let status = StatusInputs {
+            mode: self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text),
+            dirty: self.is_dirty(),
+            read_only: self
+                .with_document(|doc| doc.read_only())
+                .unwrap_or_default(),
+            statements: self.statements,
+            line,
+            column,
+            selected_chars,
+        };
+
+        div()
+            .v_flex()
+            .size_full()
+            .min_h_0()
+            .bg(bg)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .px(rems(ui::EDITOR_BODY_PADDING_X))
+                    .child(
+                        Editor::new(&self.editor)
+                            .appearance(false)
+                            .bordered(false)
+                            .readonly(read_only)
+                            .size_full(),
+                    ),
+            )
+            .child(status_bar::render(&status, cx))
     }
 }
