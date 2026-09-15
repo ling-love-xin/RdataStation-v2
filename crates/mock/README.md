@@ -84,7 +84,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | `src/generators.rs` | `generate_cell`：137 变体 → 值（`fake` crate，接入 `StdRng`） |
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
-| `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock）/ `MockDetailView`（中央 tab）/ `MockHost` 契约 / 导入结构 + 列编辑对话框 |
+| `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock）/ `MockDetailView`（中央 tab）/ `MockHost` 契约 / 导入结构 + 列编辑 + 生成器搜索对话框 |
 | `src/mock_view/tests.rs` | 视图测试（12 纯逻辑 + 16 项 GPUI headless 窗口测试；含测试宿主桥） |
 | `src/templates.rs` | 内置 6 套场景模板 |
 | `src/persistence.rs` | `MockGenerationStore`（SQLite 读写） |
@@ -108,9 +108,10 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | **后台任务**：五种任务（生成 / 追加 / 落库 / 导出 / 草稿箱）同走工作线程；生成类有批次进度 + 取消，出口类报阶段 + 不定量进度 | 出口不可取消（DuckDB / 文件系统内无中断点，见架构 D23） |
 | 4 种导出（CSV / Parquet / Xlsx / SQL INSERT）+ `insert_statements` 文本 | 导出大行数时的流式写出（现在是全量文本 + `execute_batch`） |
 | 列映射（≈91 条规则 + 类型兜底 + 置信度三态） | —— |
-| 生成器目录（137 变体分类 / 标签 / 参数规格，穷尽派生） | 复杂参数（`values` / `choices`）的外置编辑入口；按名称搜索 |
+| 生成器目录（137 变体分类 / 标签 / 参数规格，穷尽派生） | 复杂参数（`values` / `choices`）的外置编辑入口 |
+| **生成器搜索**：分类子菜单 + 搜索对话框（中文标签 / 名称 / 分类，多词 AND，`List` 自带搜索框与空态） | 生成器的「推荐」标记与最近使用 |
 | **面板：表名 / 行数·种子·语言 / 列来源 / 生成 / 出口按钮组 / 结果** | 生成器的「推荐」标记与最近使用 |
-| **详情 tab：字段卡片（生成器分类子菜单 + 编辑 / 智能 / 删除）+ 预览表格** | 预览列宽自适应与列头排序（目前固定 9rem） |
+| **详情 tab：字段卡片（生成器分类子菜单 / 搜索对话框 + 编辑 / 智能 / 删除）+ 预览表格** | 预览列宽自适应与列头排序（目前固定 9rem） |
 | **四个显式出口：新建表 / 追加（自增接续）/ 草稿箱 `{项目}/mock/` / 另存为** | 项目作用域分析库（装配层已留 `*_at` 路径入口） |
 | **列编辑对话框（列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认）** | 列依赖编辑（依赖表达式待拍板） |
 | **导入源库结构（连接 / 库 / schema / 表，cache-aside 取列）** | 表结构浏览选择器（现在是手填表名 + 连接默认库预填） |

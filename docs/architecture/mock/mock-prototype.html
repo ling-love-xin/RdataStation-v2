@@ -188,6 +188,14 @@ button{font-family:inherit;cursor:pointer;}
 .dialog .dh{height:42px;display:flex;align-items:center;padding:0 14px;font-weight:600;border-bottom:1px solid var(--border);}
 .dialog .db{padding:12px 14px;display:flex;flex-direction:column;gap:8px;max-height:420px;overflow:auto;}
 .dialog .df{height:52px;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 14px;border-top:1px solid var(--border);}
+/* ── 生成器搜索结果（List + ListItem 示意：搜索框 / 虚拟化 / 打勾 / 空态均由组件提供） ── */
+.slist{display:flex;flex-direction:column;gap:2px;max-height:196px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:4px;}
+.srow{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;font-size:12px;}
+.srow:hover{background:var(--hover);}
+.srow.on{background:var(--accent);}
+.srow .label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.srow .gname,.srow .gcat{flex:none;font-size:11px;color:var(--muted);}
+.srow .check{flex:none;width:12px;color:var(--success);font-size:11px;}
 .cat{font-size:11px;color:var(--muted);margin-top:4px;}
 .form-line{display:flex;align-items:center;gap:10px;}
 .form-line .lab{flex:1;min-width:0;color:var(--muted);font-size:12px;}
@@ -212,6 +220,8 @@ button{font-family:inherit;cursor:pointer;}
 [data-scn="readonly"] .only-readonly{display:flex;}
 [data-scn="menu"] .only-imported{display:flex;}
 [data-scn="column"] .only-imported{display:flex;}
+/* 生成器搜索：对话框后面是「已导入结构」的面板态（与列编辑场景同一口径） */
+[data-scn="generator"] .only-imported{display:flex;}
 .detail-empty{display:none;}
 [data-scn="empty"] .detail-empty{display:flex;}
 [data-scn="empty"] .detail-fields{display:none;}
@@ -253,6 +263,7 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn" data-go="persist" onclick="setScene('persist')">落库反馈（同名已存在）</button>
   <button class="scn" data-go="readonly" onclick="setScene('readonly')">只读项目</button>
   <button class="scn" data-go="menu" onclick="setScene('menu')">生成器分类子菜单</button>
+  <button class="scn" data-go="generator" onclick="setScene('generator')">生成器搜索</button>
   <button class="scn" data-go="column" onclick="setScene('column')">列编辑对话框</button>
 </div>
 <div class="scn-hint">场景切换只改变 Mock 面板 / 中央 tab / 对话框的呈现；窗口壳（标题栏 / 活动栏 / 左右边栏）为 v2 五段布局的简化示意。</div>
@@ -495,6 +506,24 @@ button{font-family:inherit;cursor:pointer;}
 
   </div>
 
+  <!-- 生成器搜索对话框（字段行菜单首项「搜索生成器…」开它） -->
+  <div class="overlay" id="ov-generator">
+    <div class="dialog">
+      <div class="dh">搜索生成器</div>
+      <div class="db">
+        <input class="inp search" value="邮箱" placeholder="按名称 / 中文标签 / 分类搜索（137 项）">
+        <div class="hint">命中 4 / 137 · 标签前缀命中排在前面（多词之间是「都要命中」）</div>
+        <div class="slist">
+          <div class="srow on"><span class="check">✓</span><span class="label">邮箱地址</span><span class="gname">email</span><span class="gcat">Person</span></div>
+          <div class="srow"><span class="check"></span><span class="label">安全邮箱</span><span class="gname">safe_email</span><span class="gcat">Person</span></div>
+          <div class="srow"><span class="check"></span><span class="label">免费邮箱服务商</span><span class="gname">free_email_provider</span><span class="gcat">Person</span></div>
+          <div class="srow"><span class="check"></span><span class="label">免费邮箱</span><span class="gname">free_email</span><span class="gcat">Person</span></div>
+        </div>
+      </div>
+      <div class="df"><button class="btn" onclick="setScene('imported')">关闭</button></div>
+    </div>
+  </div>
+
   <!-- 列编辑对话框 -->
   <div class="overlay" id="ov-column">
     <div class="dialog">
@@ -538,6 +567,7 @@ function setScene(name){
   app.dataset.scn = name;
   document.querySelectorAll('.scn').forEach(b => b.classList.toggle('on', b.dataset.go === name));
   document.getElementById('ov-column').classList.toggle('show', name === 'column');
+  document.getElementById('ov-generator').classList.toggle('show', name === 'generator');
 }
 setScene('empty');
 </script>

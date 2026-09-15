@@ -32,7 +32,8 @@
 //! 渲染期零 I/O：列来源、既有表、生成、出口全部在事件路径执行。
 //!
 //! 对话框走 `window.open_dialog`（语义层），builder 每帧重建：**只读**面板状态，
-//! 一切写入都在按钮 / 菜单回调（事件路径）里完成。
+//! 一切写入都在按钮 / 菜单回调（事件路径）里完成。三个对话框：导入结构 / 列编辑 / **生成器搜索**
+//! （最后一个用 `List` + `ListState`，搜索框与虚拟化都是组件能力，不手搓）。
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -42,19 +43,21 @@ use std::rc::Rc;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::*;
 
-use crate::generator_catalog::{self, GeneratorCategory, ParamField, ParamKind};
+use crate::generator_catalog::{self, GeneratorCategory, GeneratorSpec, ParamField, ParamKind};
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
 use crate::schema_map::ColumnMapper;
 
@@ -394,6 +397,8 @@ const PREVIEW_MIN_HEIGHT: f32 = 10.0;
 const MAX_ROWS: u32 = 1_000_000;
 /// 预览显示行数上限
 const PREVIEW_ROWS: usize = 10;
+/// 生成器搜索列表高度（16rem = 256px；137 项靠 `List` 虚拟化 + 自带滚动）
+const SEARCH_LIST_HEIGHT: f32 = 16.0;
 
 /// 13 种语言（面板下拉用）
 const LOCALES: [Locale; 13] = [
@@ -647,15 +652,28 @@ fn mock_file_name(table_name: &str, format: &MockExportFormat) -> String {
     format!("{table_name}.{ext}")
 }
 
-/// 生成器选择菜单（按分类分子菜单）——137 变体的唯一选择入口。
+/// 生成器选择菜单（按分类分子菜单）——菜单路径：知道「属于哪类」时最快。
 ///
-/// 详情 tab 的字段行与列编辑对话框共用；选中即写回**配置面板**（状态单一权威）。
+/// 详情 tab 的字段行专用（列编辑对话框里生成器是只读展示，见 D19）；
+/// 选中即写回**配置面板**（状态单一权威）。菜单第一项是「搜索生成器」，
+/// 给「只记得名字」的场景用（137 项靠分类翻找太慢）。
 fn generator_menu(
     panel: Entity<MockPanel>,
     id: u64,
 ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
     move |menu, window, cx| {
         let mut menu = menu;
+        let search = panel.clone();
+        menu = menu
+            .item(
+                PopupMenuItem::new(format!("搜索生成器…（{} 项）", generator_catalog::all_specs().len()))
+                    .on_click(move |_, window, app| {
+                        search.update(app, |panel, cx| {
+                            panel.open_generator_search(id, window, cx)
+                        });
+                    }),
+            )
+            .separator();
         for category in GeneratorCategory::ALL {
             let panel = panel.clone();
             menu = menu.submenu(category.label(), window, cx, move |sub, _window, _cx| {
@@ -675,6 +693,165 @@ fn generator_menu(
             });
         }
         menu
+    }
+}
+
+// ==================== 生成器搜索（第二条路径） ====================
+
+/// 搜索生成器目录：按**中文标签 / 名称 / 分类名**匹配（大小写不敏感，多词之间是 AND）。
+///
+/// 排序（越靠前越像用户要找的）：标签前缀 → 名称前缀 → 标签包含 → 名称包含 → 分类名包含；
+/// 同级保持目录顺序。空查询返回全部 137 项（对话框初态）。
+///
+/// 搜索是“知道大概叫什么”的路径；按分类翻菜单是“知道属于哪类”的路径，两者并存（D24）。
+pub fn search_generators(query: &str) -> Vec<&'static GeneratorSpec> {
+    let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut hits: Vec<(u8, usize, &'static GeneratorSpec)> = Vec::new();
+    for (index, spec) in generator_catalog::all_specs().iter().copied().enumerate() {
+        let label = spec.label.to_lowercase();
+        let name = spec.name.to_lowercase();
+        let category = spec.category.label().to_lowercase();
+        let mut rank = 0u8;
+        let mut matched = true;
+        for term in terms.iter() {
+            // 命中强弱：标签前缀 0 < 名称前缀 1 < 标签包含 2 < 名称包含 3 < 分类名 4
+            let hit = if label.starts_with(term.as_str()) {
+                0
+            } else if name.starts_with(term.as_str()) {
+                1
+            } else if label.contains(term.as_str()) {
+                2
+            } else if name.contains(term.as_str()) {
+                3
+            } else if category.contains(term.as_str()) {
+                4
+            } else {
+                matched = false;
+                break;
+            };
+            rank = rank.max(hit);
+        }
+        if matched {
+            hits.push((rank, index, spec));
+        }
+    }
+    hits.sort_by_key(|(rank, index, _)| (*rank, *index));
+    hits.into_iter().map(|(_, _, spec)| spec).collect()
+}
+
+/// 「搜索生成器」列表的委托：内层靠 `List` 组件（自带搜索框 / 虚拟化 / 回车与点击确认）。
+///
+/// 目录只有 137 项且全在内存：`perform_search` 同步过滤，不走异步搜索通道（无需 loading 占位）。
+struct GeneratorSearchDelegate {
+    /// 选中后写回的面板（草稿的单一权威）
+    panel: Entity<MockPanel>,
+    /// 目标列 id
+    column_id: u64,
+    /// 该列当前在用的生成器（列表里打勾；`None` = 列已被删）
+    current: Option<&'static str>,
+    /// 命中项（`search_generators` 的结果）
+    hits: Vec<&'static GeneratorSpec>,
+    /// 列表选中项（上下键 / 鼠标悬停）
+    selected: Option<IndexPath>,
+}
+
+impl GeneratorSearchDelegate {
+    /// 建委托：初态＝全量目录（137 项）+ 勾出该列当前的生成器。
+    ///
+    /// `current` 由调用方（面板自己的 `&mut self`）算好传入：本方法在面板的 update 里被调用，
+    /// 那时 `read` 面板会触发「already being updated」重入 panic。
+    fn new(panel: Entity<MockPanel>, column_id: u64, current: Option<&'static str>) -> Self {
+        Self {
+            panel,
+            column_id,
+            current,
+            hits: search_generators(""),
+            selected: None,
+        }
+    }
+
+    /// 命中项（仅测试观察：生产侧不需要读它）
+    #[cfg(test)]
+    fn hits(&self) -> &[&'static GeneratorSpec] {
+        &self.hits
+    }
+}
+
+impl ListDelegate for GeneratorSearchDelegate {
+    type Item = ListItem;
+
+    fn perform_search(
+        &mut self,
+        query: &str,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        self.hits = search_generators(query);
+        cx.notify();
+        Task::ready(())
+    }
+
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.hits.len()
+    }
+
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<ListItem> {
+        let spec = *self.hits.get(ix.row)?;
+        let muted = cx.theme().colors.muted_foreground;
+        // 一行三列：中文标签（主）/ 名称 / 分类（辅）；当前在用的那项打勾
+        Some(
+            ListItem::new(ix.row)
+                .confirmed(self.current == Some(spec.name))
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_3()
+                        .w_full()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_ellipsis()
+                                .child(spec.label),
+                        )
+                        .child(div().flex_none().text_xs().text_color(muted).child(spec.name))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(spec.category.label()),
+                        ),
+                ),
+        )
+    }
+
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        self.selected = ix;
+        cx.notify();
+    }
+
+    /// 点一行 / 回车：写回该列的生成器并关掉对话框。
+    fn confirm(&mut self, _secondary: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
+        let Some(spec) = self.selected.and_then(|ix| self.hits.get(ix.row).copied()) else {
+            return;
+        };
+        let name = spec.name;
+        self.panel
+            .update(cx, |panel, cx| panel.set_generator(self.column_id, name, cx));
+        window.close_dialog(cx);
     }
 }
 
@@ -1114,6 +1291,34 @@ impl MockPanel {
             self.landed = None;
         }
         cx.notify();
+    }
+
+    /// 打开「搜索生成器」对话框（137 项按名称 / 中文标签 / 分类过滤）。
+    ///
+    /// 用 `List` 组件而不是手搜：搜索框 / 虚拟化 / 上下键 / 回车与点击确认 / 空态全是组件的，
+    /// 且搜索是**同步**的（目录全在内存），不会闪 loading。
+    pub fn open_generator_search(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        // 当前生成器从自身状态取：此刻面板正在被更新，不能再 `read` 自己
+        let current = self
+            .draft
+            .columns
+            .iter()
+            .find(|column| column.id == id)
+            .map(|column| generator_catalog::spec_of(&column.def.generator).name);
+        let delegate = GeneratorSearchDelegate::new(cx.entity(), id, current);
+        // `searchable` 在 `ListState` 上（搜索框是状态的一部分），占位文案在元素上
+        let list = cx.new(|cx| ListState::new(delegate, window, cx).searchable(true));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            dialog.title("搜索生成器").child(
+                div()
+                    .w_full()
+                    .h(rems(SEARCH_LIST_HEIGHT))
+                    .child(
+                        List::new(&list)
+                            .search_placeholder("按名称 / 中文标签 / 分类搜索（137 项）"),
+                    ),
+            )
+        });
     }
 
     /// 应用列编辑（列名 / 类型 / 生成器 / 参数 / 空值率 / 唯一）——详情 tab 的「应用」。

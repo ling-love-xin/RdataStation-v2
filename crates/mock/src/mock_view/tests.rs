@@ -9,7 +9,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gpui_kit::component::IndexPath;
 use gpui_kit::component::dock::{DockArea, DockPlacement};
+use gpui_kit::component::list::{ListDelegate as _, ListState};
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::{
     App, AppContext as _, Entity, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
@@ -20,9 +22,9 @@ use super::{
     MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind,
     MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview, MockRunOptions,
     SchemaRequest, SchemaSource, focus_detail_tab, param_text, parse_percent_ratio, parse_rows,
-    parse_seed, patch_param, summarize_params, validate_table_name,
+    parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
 };
-use crate::generator_catalog::ParamKind;
+use crate::generator_catalog::{self, ParamKind};
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
 use crate::schema_map::ColumnMapper;
 
@@ -175,6 +177,80 @@ fn column_type_labels_are_complete() {
         super::column_type_label(&ColumnDataType::Integer),
         "INTEGER"
     );
+}
+
+// ==================== 生成器搜索（纯逻辑） ====================
+
+/// 空查询＝全量目录（对话框初态），顺序与目录一致。
+#[test]
+fn generator_search_empty_query_returns_whole_catalog() {
+    let hits = search_generators("");
+    assert_eq!(hits.len(), generator_catalog::all_specs().len());
+    assert_eq!(hits.len(), 137);
+    assert_eq!(hits[0].name, generator_catalog::all_specs()[0].name);
+}
+
+/// 标签前缀命中排在标签包含之前（「邮箱」→ 邮箱地址 先于 安全邮箱）。
+#[test]
+fn generator_search_ranks_label_prefix_first() {
+    let names: Vec<&str> = search_generators("邮箱").iter().map(|s| s.name).collect();
+    let email = names
+        .iter()
+        .position(|name| *name == "email")
+        .expect("邮箱地址应命中");
+    let safe = names
+        .iter()
+        .position(|name| *name == "safe_email")
+        .expect("安全邮箱应命中");
+    assert!(email < safe, "前缀命中应更靠前: {names:?}");
+}
+
+/// 多词是 AND：每个词都要命中（可分别落在标签 / 名称 / 分类上）。
+#[test]
+fn generator_search_requires_every_term() {
+    let names: Vec<&str> = search_generators("邮箱 地址")
+        .iter()
+        .map(|s| s.name)
+        .collect();
+    assert!(names.contains(&"email"), "{names:?}");
+    assert!(
+        !names.contains(&"safe_email"),
+        "缺一个词就不该命中: {names:?}"
+    );
+    assert!(
+        search_generators("邮箱 uuid").is_empty(),
+        "没有同时命中两个词的生成器"
+    );
+}
+
+/// 大小写不敏感；名称前缀也能命中（`uuid` → UUID v4）。
+#[test]
+fn generator_search_ignores_case() {
+    let lower: Vec<&str> = search_generators("uuid").iter().map(|s| s.name).collect();
+    let upper: Vec<&str> = search_generators("UUID").iter().map(|s| s.name).collect();
+    assert_eq!(lower, upper, "大小写不应改变结果");
+    assert!(
+        lower.first().is_some_and(|name| name.starts_with("uuid")),
+        "{lower:?}"
+    );
+}
+
+/// 分类名也能搜到（如「约束」）；无命中＝空清单（对话框显 `List` 自带空态）。
+#[test]
+fn generator_search_matches_category_and_handles_miss() {
+    assert!(search_generators("绝不存在的生成器").is_empty());
+
+    let by_category = search_generators("约束");
+    assert!(!by_category.is_empty(), "分类名应能搜到");
+    for spec in by_category.iter() {
+        assert!(
+            spec.label.contains("约束")
+                || spec.name.contains("约束")
+                || spec.category.label().contains("约束"),
+            "命中项必须在标签 / 名称 / 分类里含关键词: {}",
+            spec.name
+        );
+    }
 }
 
 // ==================== 测试宿主桥 ====================
@@ -838,6 +914,84 @@ fn column_dialog_opens_with_params(cx: &mut TestAppContext) {
     });
     cx.update(|window, cx| {
         assert!(window.has_active_dialog(cx), "列编辑对话框应打开");
+        window.draw(cx).clear(cx);
+    });
+}
+
+/// 搜索对话框的委托：`List` 的搜索入口过滤目录，确认（点行 / 回车）后写回那一列的生成器。
+#[gpui_kit::test]
+fn generator_search_filters_then_applies_to_column(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "email".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.draft().columns[0].id
+    });
+
+    let mut expected = String::new();
+    cx.update(|window, cx| {
+        let list = cx.new(|cx| {
+            ListState::new(
+                // `current` 传 `None`：这里只验证「过滤 → 确认 → 写回」这条主路径
+                super::GeneratorSearchDelegate::new(panel.clone(), id, None),
+                window,
+                cx,
+            )
+        });
+        // 初态：全量目录（不输入也能直接翻）
+        assert_eq!(list.read(cx).delegate().hits().len(), 137);
+
+        // 与 `List` 搜索框同一入口：改 query 触发 `perform_search`
+        list.update(cx, |state, cx| state.set_query("电话", window, cx));
+        let hits = list.read(cx).delegate().hits();
+        assert!(hits.len() < 137 && !hits.is_empty(), "应过滤到少数项");
+        expected = hits[0].name.to_string();
+
+        // 选中 + 确认（等价于点一行 / 回车）
+        list.update(cx, |state, cx| {
+            state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+        });
+        list.update(cx, |state, cx| {
+            state.delegate_mut().confirm(false, window, cx);
+        });
+    });
+
+    assert!(!expected.is_empty(), "应有命中项");
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(
+            generator_catalog::spec_of(&panel.draft().columns[0].def.generator).name,
+            expected,
+            "确认后应写回该列"
+        );
+        assert_eq!(panel.draft().columns[0].confidence, "manual");
+    });
+}
+
+/// 菜单里的「搜索生成器」入口能把对话框开出来（`List` 组件在对话框里正常挂载）。
+#[gpui_kit::test]
+fn generator_search_dialog_opens(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "email".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        panel.draft().columns[0].id
+    });
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.open_generator_search(id, window, cx));
+    });
+    cx.update(|window, cx| {
+        assert!(window.has_active_dialog(cx), "搜索生成器对话框应打开");
         window.draw(cx).clear(cx);
     });
 }
