@@ -109,7 +109,19 @@ Phase 0（地基，无 UI）
 | A6 | **只读两维度**：编辑器只读（文档属性）与连接只读（策略）分别表达 | ✅ **已完成**：`model::ReadOnly` 两字段 → 编辑内核 `.readonly()` + **状态栏分别显示**「只读」/「连接只读」（互不蕴含）；文档属性来自 `EditorService`，同一窗口四种组合并存不互相影响 | 单测：四种组合逐项断言（仅编辑器只读不等于连接只读，反之亦然）+ 窗口测试：切模式/渲染不 panic |
 | A7 | **编辑器状态栏**（真实值）：Ln/Col、选区字数、语句数（来自 `split.rs`）、方言、编码/换行/缩进、模式、脏 | ✅ **已完成**：`view/widgets/status_bar.rs`（用组件库 `StatusBar`，不手搓）——文案计算是**纯函数** `labels()`（可穷举断言）；左：模式短标签 + **语句数** + 未保存；右：两个只读维度 + Ln/Col + 已选字数 | 单测 6 项：语句数随内容变（1/3/9）+ 脏可见 + 文本模式不显示语句数 + 四种只读组合 + 光标/选区真实值。**方言 / 编码 / 换行 / 缩进暂无数据源（1b / A12）→ 不显示占位**（零 UI 造数据） |
 | A8 | **脏状态**：输入事件 → 与 baseline 比较 → 置脏/清脏；标签脏点与状态栏同步 | `service.rs` + `view/host.rs` | 单测：编辑→脏、撤销回原值→干净、保存→干净 |
-| A9 | 保存 / 另存为 / 外部修改检测 / 关闭三态确认（保存失败二次确认） | ✅ **持久化层已完成**：`crates/editor/src/persist.rs`（读 / 写 / **mtime 外部修改检测** / `open_file`（同路径不重读、不冲掉未保存编辑）/ `save_document`（**先写盘后清脏**）/ `save_as`（改名 + 写盘））+ 面板 `EditorHostPanel::save`。⬜ 待接：**另存为对话框 / 关闭三态确认 / 打开文件入口**（需对话框宿主）+ **workbench Dock 注册** | 单测 **8 项**（往返 · 缺失文件带路径报错 · 打开不脏 · 同路径再开只激活且不重读 · 保存写盘 + 清脏 · 未命名要求另存为 · 另存为换路径保身份 · 外部修改检测含文件消失） |
+| A9 | 保存 / 另存为 / 外部修改检测 / 关闭三态确认（保存失败二次确认） | ✅ **持久化层已完成**：`crates/editor/src/persist.rs`（读 / 写 / **mtime 外部修改检测** / `open_file`（同路径不重读、不冲掉未保存编辑）/ `save_document`（**先写盘后清脏**）/ `save_as`（改名 + 写盘））+ 面板 `EditorHostPanel::save`。⬜ 待接：**另存为对话框 / 关闭三态确认 / 打开文件入口** + **workbench Dock 注册**（配方见下） | 单测 **8 项**（往返 · 缺失文件带路径报错 · 打开不脏 · 同路径再开只激活且不重读 · 保存写盘 + 清脏 · 未命名要求另存为 · 另存为换路径保身份 · 外部修改检测含文件消失） |
+
+#### A9 收尾：workbench 接线配方（2026-09-15 **API 已逐条核实**，照此执行即可）
+
+1. **`crates/workbench/Cargo.toml`**：加 `editor.workspace = true`（依赖键已在根 `Cargo.toml` 登记为 `rds-editor`）。
+2. **`crates/workbench/src/view.rs`**：
+   - 导入：`editor::model::{DocumentId, EditorMode}` · `editor::service::OpenRequest` · `editor::shared::EditorShared` · `editor::view::host::EditorHostPanel`；
+   - `struct WorkbenchView` 加两字段：`editor_service: EditorShared`（跨面板共享的文档集合）与 `editor_hosts: Vec<Entity<EditorHostPanel>>`（已开面板，按 `DocumentId` 复用）；
+   - `WorkbenchView::new`：`editor_service: EditorShared::new()`，并初始打开一份未命名 SQL 文档（`open(OpenRequest::untitled("", EditorMode::Sql))`）；
+   - `init_workspace`：**先把 `EditorShared` clone 到局部变量**（否则 `cx.new(|cx| …)` 闭包里借 `self` 会冲突），再建 `EditorHostPanel`；中央 tab 组用**链式** `DockLayout::tabs().panel_view(legacy_handle, cx).panel_view(host_handle, cx)`（`panel_view(mut self, Arc<dyn PanelView>, &App) -> Self`，`gpui-base/src/dock/layout/builder.rs:112`，已核实可链式）。
+   - 新增 `pub fn open_in_editor(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>)`：走 `editor::persist::open_file(&self.editor_service, &path, editor::mode::resolve_mode(&path, None))`；已打开的就按 `DocumentId` 在 `editor_hosts` 里找面板复用（不新建），新开的 `cx.new(|cx| EditorHostPanel::new(service, id, window, cx))` 后用 **`area.add_panel(panel, DockPlacement::Center, None, window, cx)`**（`gpui-base/src/dock/dock_area.rs:402`，已核实）加入中央 tab 组。
+3. **命令与快捷键（A10）**：`Ctrl+S` → `EditorHostPanel::save`；`Ctrl+O` → 文件对话框 + `open_in_editor`；`Ctrl+W` → 关闭（草稿兜底语义）。按项目规矩在 `crates/app/src/main.rs` 绑定 keymap（**注册了才宣传**）。
+4. **对话框（A9 剩余）**：另存为 / 关闭三态 / 模式切换确认（`mode::ConfirmKind` 的四种文案分支已备好），挂 `Root::render_dialog_layer`。
 | A10 | Actions 与快捷键：`Ctrl+S` / `Ctrl+Enter`（最小执行=执行全部）/ `Ctrl+/` / `Ctrl+F` / `Ctrl+Shift+F` | `commands.rs` + `app/src/main.rs` | 真机：全部按键生效（**禁止"只宣传未注册"**） |
 | A11 | 查找 / 替换（优先用组件能力，缺则自建） | `view/widgets/` | 真机：查找高亮、替换、跳转 |
 | A12 | **工作区上下文持久化**：光标/选区/模式/连接绑定落 `workbench_context_store`（扩展表字段） | `crates/editor/src/persist.rs` + `engine` 迁移 | 集成测试：关闭重开恢复光标与模式 |
