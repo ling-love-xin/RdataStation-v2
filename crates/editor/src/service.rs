@@ -396,7 +396,7 @@ impl EditorService {
 /// Windows 的文件系统不区分大小写（`D:\a.sql` 与 `d:\A.SQL` 是同一个文件），Linux 区分。
 /// 因此按平台归一：Windows 转小写，其它平台原样；分隔符统一为 `/` 便于比较。
 /// **不做 canonicalize**（那是 I/O，且文件可能尚未存在）：调用方应传规范化后的绝对路径。
-fn path_key(path: &Path) -> String {
+pub(crate) fn path_key(path: &Path) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
     if cfg!(windows) {
         text.to_lowercase()

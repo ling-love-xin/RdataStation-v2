@@ -217,6 +217,72 @@ impl EditorHostPanel {
         cx.notify();
     }
 
+    /// 当前会话快照（关文档 / 退出时保存用）
+    ///
+    /// 未命名文档没有稳定标识，返回 `None`（不存——重启后无法把它认回来）。
+    pub fn session_snapshot(&self, cx: &App) -> Option<crate::session::SavedSession> {
+        let (path, mode) = self.with_document(|doc| {
+            let path = doc.path()?.to_string_lossy().into_owned();
+            Some((path, doc.mode()))
+        })??;
+        let id = crate::session::session_id_for_path(std::path::Path::new(&path));
+
+        let (cursor, selection) = {
+            let state = self.editor.read(cx);
+            let range = state.selected_range();
+            let selection = (range.end > range.start).then_some((range.start, range.end));
+            (range.start, selection)
+        };
+
+        Some(crate::session::SavedSession {
+            id,
+            path: Some(path),
+            mode,
+            content: self.editor_text(cx),
+            cursor,
+            selection,
+        })
+    }
+
+    /// 保存会话（关文档 / 退出时调用；未命名或空文档自动跳过）
+    pub fn save_session_now(&self, cx: &App) {
+        let Some(session) = self.session_snapshot(cx) else {
+            return;
+        };
+        if !crate::session::worth_saving(&session) {
+            return;
+        }
+        if let Err(error) = self.shared.save_session(&session) {
+            // 事件路径上不弹窗：落到 stderr 由日志承接，不静默吞掉
+            eprintln!("[editor] 会话保存失败（{}）：{error}", session.id);
+        }
+    }
+
+    /// 恢复会话：把光标/选区写回内核（模式与内容由宿主开文档时给出）
+    pub fn restore_session(
+        &mut self,
+        session: &crate::session::SavedSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // 会话可能比现在的文档长（内容被截断 / 外部修改）：光标钳到当前文本末尾
+        let len = self.editor_text(cx).len();
+        let clamp = |offset: usize| offset.min(len);
+        let start = clamp(session.selection.map(|(start, _)| start).unwrap_or(session.cursor));
+        let end = clamp(session.selection.map(|(_, end)| end).unwrap_or(session.cursor));
+
+        self.editor.update(cx, |state, cx| {
+            // `set_cursor_position` 是内核里唯一“滚到指定偏移”的公开入口（会顺带聚焦）
+            let position = {
+                use gpui_kit::component::input::RopeExt as _;
+                state.text().offset_to_position(start)
+            };
+            state.set_cursor_position(position, window, cx);
+            state.set_selected_range(start..end, cx);
+        });
+        cx.notify();
+    }
+
     /// 编辑器是否可输入（供窗口测试断言只读组合；生产代码读同一个判据）
     pub fn is_editable_for_test(&self) -> bool {
         !self.editor_read_only()
@@ -230,6 +296,11 @@ impl EditorHostPanel {
     /// 编辑内核的焦点句柄（供测试把焦点交给内核，模拟真实打字场景）
     pub fn editor_focus_handle_for_test(&self, cx: &App) -> FocusHandle {
         self.editor.read(cx).focus_handle(cx)
+    }
+
+    /// 当前选区（供测试断言光标 / 选区恢复：无选区时是 `cursor..cursor`）
+    pub fn selected_range_for_test(&self, cx: &App) -> std::ops::Range<usize> {
+        self.editor.read(cx).selected_range()
     }
 
     /// 只读访问当前文档（渲染路径用；不克隆整份文档）
@@ -301,7 +372,11 @@ impl EditorHostPanel {
     /// `Ctrl+S`：保存；未命名 / 写盘失败 → 状态栏给出原因
     pub(crate) fn on_save(&mut self, _: &SaveDocument, _window: &mut Window, cx: &mut Context<Self>) {
         match self.save(cx) {
-            Ok(_) => self.set_message(None, cx),
+            Ok(_) => {
+                // A12：保存时顺便把会话（光标/选区/模式）落库——用户按 Ctrl+S 是最自然的时机
+                self.save_session_now(cx);
+                self.set_message(None, cx);
+            }
             Err(error) => self.set_message(Some(error.to_string()), cx),
         }
     }
@@ -595,6 +670,8 @@ impl BasePanel for EditorHostPanel {
     /// 被 Dock 移除 = 这份文档的生命周期结面：**一个面板 = 一份文档**，
     /// 面板走人，文档随之从 `EditorService` 里关掉（宿主不必再维护对应关系）。
     fn on_removed(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // A12：走人之前把会话（光标 / 选区 / 模式 / 内容）落库——此刻文档与内核都还在
+        self.save_session_now(cx);
         self.closed = true;
         self.group = None;
         self.shared

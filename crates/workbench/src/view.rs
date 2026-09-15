@@ -234,6 +234,8 @@ impl WorkbenchView {
                 ));
                 // A14：把执行端口接上（当前活动连接）。未接时执行动作会明确报“未接入执行”。
                 crate::services::editor_exec::attach(&service);
+                // A12：把会话存储接上（光标 / 选区 / 模式跨重启保留；未接时不持久化但编辑可用）
+                crate::services::editor_session::attach(&service);
                 service
             },
             editor_hosts: Vec::new(),
@@ -254,8 +256,17 @@ impl WorkbenchView {
         let mode = editor::mode::resolve_mode(&path, None);
         let outcome = editor::persist::open_file(&self.editor_service, &path, mode)
             .map_err(|error| error.to_string())?;
-        let document = outcome.id().clone();
+        self.show_document(outcome.id().clone(), window, cx);
+        Ok(())
+    }
 
+    /// 把一份已存在于 `EditorService` 的文档接到界面上（建面板 / 复用已有面板）
+    pub fn show_document(
+        &mut self,
+        document: editor::model::DocumentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // 已关闭的面板不参与复用（面板被 Dock 移除 = 文档已关，两者一一对应）
         self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
 
@@ -268,7 +279,7 @@ impl WorkbenchView {
             .cloned();
         if let Some(panel) = existing {
             panel.update(cx, |panel, cx| panel.focus_self(window, cx));
-            return Ok(());
+            return;
         }
 
         // 走到这里有两种情形，做同一件事（建面板）：
@@ -286,8 +297,62 @@ impl WorkbenchView {
                 area.add_panel(panel, DockPlacement::Center, None, window, cx);
             });
         }
+    }
 
-        Ok(())
+    /// 恢复上次的编辑器会话（A12）
+    ///
+    /// 内容与模式取自会话（**不是从磁盘重读**：用户上次可能没保存），光标/选区交回面板。
+    /// 恢复成功后把启动时那份空的未命名文档收掉，免得每启动一次多一个空标签。
+    ///
+    /// 调用时机：`init_workspace` 的 `cx.defer_in`（读库是 I/O，不在构造与渲染里做）。
+    pub fn restore_last_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(Some(session)) = self.editor_service.load_latest_session() else {
+            return;
+        };
+        let Some(path) = session.path.clone() else {
+            return;
+        };
+
+        // 启动时那份空的未命名文档（在 `new` 里开的）——恢复成功后收掉
+        let blank = self
+            .editor_service
+            .service()
+            .documents()
+            .iter()
+            .find(|doc| doc.path().is_none() && doc.content().trim().is_empty())
+            .map(|doc| doc.id().clone());
+
+        let outcome = self.editor_service.open(editor::service::OpenRequest::file(
+            std::path::PathBuf::from(path),
+            session.content.clone(),
+            session.mode,
+        ));
+        let document = outcome.id().clone();
+        self.show_document(document.clone(), window, cx);
+
+        let restored = self
+            .editor_hosts
+            .iter()
+            .find(|panel| panel.read(cx).document() == &document)
+            .cloned();
+        if let Some(panel) = restored {
+            panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
+        }
+
+        // 收掉空标签（走标准关闭路径：面板移除 → `on_removed` → 文档从服务层关掉）
+        if let Some(blank) = blank
+            && blank != document
+            && let Some(area) = self.area.clone()
+        {
+            let blank_panel = self
+                .editor_hosts
+                .iter()
+                .find(|panel| panel.read(cx).document() == &blank)
+                .cloned();
+            if let Some(panel) = blank_panel {
+                editor::view::host::close_document_in_dock(&area, panel, window, cx);
+            }
+        }
     }
 
     /// 关闭当前编辑器文档（`Ctrl+W`）
@@ -484,6 +549,11 @@ impl WorkbenchView {
         self.sidebar = Some(sidebar);
         self.editor = Some(editor);
         self.right_sidebar = Some(right_sidebar);
+
+        // A12：恢复上次会话（读库是 I/O → 放到 `defer_in`，不在构造/渲染里做）
+        cx.defer_in(window, |this, window, cx| {
+            this.restore_last_session(window, cx);
+        });
     }
 
     // ===== 三模式：Shared 状态 → Dock 同步（render 权威） =====

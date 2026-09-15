@@ -5,12 +5,14 @@
 //! - `result_service`：结果集服务（SQL 过滤 / DuckDB 分析 / 临时表 / 导出；洞察已归 `crates/insight`）
 //! - `driver_service`：驱动管理（注册/文件/数据源类型）
 //! - `editor_exec`：编辑器执行端口的工作台实现（编辑器 A14 最小执行）
+//! - `editor_session`：编辑器会话存储的工作台实现（编辑器 A12 光标/模式持久化）
 
 pub mod connection_service;
 pub mod data_source_service;
 pub mod db_navigator;
 pub mod driver_service;
 pub mod editor_exec;
+pub mod editor_session;
 pub mod mock_generator;
 pub mod nav_jobs;
 pub mod nav_runtime;

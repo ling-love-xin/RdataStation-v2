@@ -59,6 +59,28 @@ impl EditorMode {
             Self::Analysis => "NOTE",
         }
     }
+
+    /// 持久化用的键（存库 / 存配置）
+    ///
+    /// 与展示名（`label()`）分开：展示名可以随时改文案，存库的值不能。
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Sql => "sql",
+            Self::Analysis => "analysis",
+        }
+    }
+
+    /// 从持久化键还原
+    ///
+    /// 认不出来的值当作 SQL（老库默认值就是 `sql`）：**不 panic，也不丢掉整份会话**。
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "text" => Self::Text,
+            "analysis" => Self::Analysis,
+            _ => Self::Sql,
+        }
+    }
 }
 
 /// 文档类型：文本与 SQL 模式共用 `Document`，分析模式是 `NoteBook`
@@ -201,6 +223,19 @@ impl Capabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_keys_round_trip_and_are_not_the_display_names() {
+        for mode in [EditorMode::Text, EditorMode::Sql, EditorMode::Analysis] {
+            assert_eq!(EditorMode::from_key(mode.as_key()), mode);
+        }
+        // 键是存库值：与展示文案解耦（展示文案改了不影响老库）
+        assert_eq!(EditorMode::Text.as_key(), "text");
+        assert_eq!(EditorMode::Text.label(), "文本");
+        // 认不出的值回到 SQL（老库默认值），不 panic
+        assert_eq!(EditorMode::from_key(""), EditorMode::Sql);
+        assert_eq!(EditorMode::from_key("notebook-v2"), EditorMode::Sql);
+    }
 
     #[test]
     fn text_mode_never_touches_the_database() {

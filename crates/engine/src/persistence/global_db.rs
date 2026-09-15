@@ -223,9 +223,41 @@ impl GlobalSqlitePool {
     }
 
     /// 同步获取连接（用于同步上下文）
+    ///
+    /// tokio 不允许在“正在驱动某个 runtime 的线程”上嵌套 `block_on`，所以这里：
+    /// - **已处于 tokio 运行时上下文** → 直接返回可读错误（旧实现走到这里是 panic）；
+    ///   这种位置应该用异步 API，或者把调用挪到工作线程上。
+    /// - **否则**（GPUI 主线程、普通 `#[test]`）→ 自建一个短命 runtime 驱动。
+    ///   `Semaphore` / `Mutex` 不绑 reactor，新 runtime 只当驱动器；代价是每次调用
+    ///   建销一个 runtime（微秒级），而这些调用都在事件路径上，不在渲染里。
     pub fn acquire_sync(&self) -> Result<GlobalPooledConnection, CoreError> {
-        let rt = tokio::runtime::Handle::current();
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(CoreError::common(CommonError::General(
+                "sync storage call inside a tokio runtime: use the async API or a worker thread"
+                    .to_string(),
+            )));
+        }
 
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "create sync runtime failed: {e}"
+                )))
+            })?;
+        let handle = rt.handle().clone();
+        let result = self.acquire_blocking(&handle);
+        // 先拿走结果再关 runtime：连接归还依赖 `_permit` 的 drop，不受影响
+        drop(rt);
+        result
+    }
+
+    /// 在给定的 handle 上阻塞取连接（`acquire_sync` 与异步路径共用）
+    fn acquire_blocking(
+        &self,
+        rt: &tokio::runtime::Handle,
+    ) -> Result<GlobalPooledConnection, CoreError> {
         let permit = rt
             .block_on(Arc::clone(&self.semaphore).acquire_owned())
             .map_err(|_| CoreError::common(CommonError::General("Semaphore closed".to_string())))?;

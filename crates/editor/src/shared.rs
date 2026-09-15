@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::execution::{ExecChannel, QueryRunner};
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
+use crate::session::{SavedSession, SessionStore};
 use crate::store::ResultStore;
 
 /// 共享句柄（`Clone` 即克隆 `Rc`，各面板指向同一份状态）
@@ -26,6 +27,8 @@ pub struct EditorShared {
     results: Rc<RefCell<ResultStore>>,
     /// 执行通道：宿主注入后才有（无宿主 = 无执行，这是真实的能力状态而非错误）
     exec: Rc<RefCell<Option<ExecChannel>>>,
+    /// 会话存储：宿主注入后才有（无宿主 = 不持久化光标/模式）
+    sessions: Rc<RefCell<Option<Rc<dyn SessionStore>>>>,
 }
 
 impl Default for EditorShared {
@@ -40,6 +43,7 @@ impl EditorShared {
             service: Rc::new(RefCell::new(EditorService::new())),
             results: Rc::new(RefCell::new(ResultStore::new())),
             exec: Rc::new(RefCell::new(None)),
+            sessions: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -104,5 +108,33 @@ impl EditorShared {
     pub fn is_executing(&self) -> bool {
         let guard = self.exec.borrow();
         guard.as_ref().is_some_and(|channel| channel.is_busy())
+    }
+
+    /// 注入会话存储（**宿主调用一次**；A12）
+    pub fn attach_session_store(&self, store: Rc<dyn SessionStore>) {
+        *self.sessions.borrow_mut() = Some(store);
+    }
+
+    /// 是否接了会话存储（未接时会话不落库，但不影响编辑）
+    pub fn has_session_store(&self) -> bool {
+        self.sessions.borrow().is_some()
+    }
+
+    /// 保存一份会话（事件路径调用；未注入存储时静默成功）
+    pub fn save_session(&self, session: &SavedSession) -> Result<(), String> {
+        let guard = self.sessions.borrow();
+        match guard.as_ref() {
+            Some(store) => store.save(session),
+            None => Ok(()),
+        }
+    }
+
+    /// 取最近更新的会话（启动恢复用；未注入存储时视为没有）
+    pub fn load_latest_session(&self) -> Result<Option<SavedSession>, String> {
+        let guard = self.sessions.borrow();
+        match guard.as_ref() {
+            Some(store) => store.load_latest(),
+            None => Ok(None),
+        }
     }
 }
