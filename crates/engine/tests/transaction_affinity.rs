@@ -47,10 +47,13 @@ fn options() -> SqlExecuteOptions {
 }
 
 /// 取结果集首行首列（COUNT 这类单值结果）
+///
+/// 走 `to_rows()`（由 Arrow `batches` 派生）而**不是 `rows` 字段**：native 驱动只填
+/// `batches`，`rows` / `total_rows` 字段保持默认空值（见架构 §12 #21）。
 fn first_cell(result: &SqlExecuteResult) -> Option<i64> {
     result
         .result
-        .rows
+        .to_rows()
         .first()
         .and_then(|row| row.first())
         .and_then(|value| value.as_int())
@@ -111,8 +114,9 @@ async fn probe(driver: &str, url_override: Option<String>, file_path: Option<Str
                             "   ❌ 计数 = {other} → 临时表不可见 → **会话不亲和**（事务需 per-session 独占连接）"
                         ),
                         None => eprintln!(
-                            "   ⚠️ 驱动未填充 rows（total_rows = {}）→ 无法自动判定，需改读 Arrow batches",
-                            result.result.total_rows
+                            "   ⚠️ 未取到计数行（batches = {} 个 / 行数 {}）→ 无法自动判定",
+                            result.result.batches.len(),
+                            result.result.to_rows().len()
                         ),
                     }
                 }
@@ -139,7 +143,9 @@ async fn probe(driver: &str, url_override: Option<String>, file_path: Option<Str
                 .await
             {
                 Ok(result) => match first_cell(&result) {
-                    Some(0) => eprintln!("   ✅ ROLLBACK 生效（回滚后计数 0）→ **事务语义真实可用**"),
+                    Some(0) => {
+                        eprintln!("   ✅ ROLLBACK 生效（回滚后计数 0）→ **事务语义真实可用**")
+                    }
                     Some(other) => {
                         eprintln!("   ❌ ROLLBACK 后计数 = {other}（期望 0）→ 事务语义不可信")
                     }
@@ -155,12 +161,74 @@ async fn probe(driver: &str, url_override: Option<String>, file_path: Option<Str
     eprintln!("—— {driver} 探针结束\n");
 }
 
+/// 驱动级事务路径：`execute_in_transaction` → 驱动的 `begin_transaction()`（池事务）
+///
+/// 与「显式 `BEGIN` SQL」是两条不同路径：后者走驱动的**语句执行**（MySQL 的 prepared 协议直接拒绝
+/// `BEGIN`，报 1295），前者走驱动的**池事务**。1b 的事务 / 会话实现取决于哪条可用。
+async fn probe_driver_transaction(
+    driver: &str,
+    url_override: Option<String>,
+    file_path: Option<String>,
+) {
+    let manager = Arc::new(ConnectionManager::new());
+
+    let mut config = DriverConnectionConfig::new(driver);
+    config.name = Some(format!("P0.2b 探针（{driver} 驱动事务）"));
+    config.url_override = url_override;
+    config.file_path = file_path;
+
+    let (conn_id, _db) = match manager.create_connection_with_registry(config).await {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("❌ {driver}：建连失败 —— {err}");
+            return;
+        }
+    };
+    eprintln!("➡️  {driver}（驱动事务）：已连接（conn_id = {conn_id}）");
+
+    let service = SqlService::new(manager.clone());
+    let sqls = vec![
+        "CREATE TEMPORARY TABLE rds_probe_tx (id INT)".to_string(),
+        "INSERT INTO rds_probe_tx (id) VALUES (1)".to_string(),
+        "SELECT COUNT(*) AS n FROM rds_probe_tx".to_string(),
+    ];
+
+    match service
+        .execute_in_transaction(Some(conn_id.clone()), sqls)
+        .await
+    {
+        Ok(results) => {
+            let count = results.last().and_then(|r| {
+                r.result
+                    .to_rows()
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(|value| value.as_int())
+            });
+            match count {
+                Some(1) => eprintln!("   ✅ 驱动事务可用（临时表可见且计数 = 1，已提交）"),
+                other => {
+                    eprintln!("   ⚠️ 驱动事务执行成功，但计数读到 {other:?}（期望 1）");
+                    eprintln!("      结果条目数 = {}", results.len());
+                    if let Some(last) = results.last() {
+                        eprintln!("      columns = {:?}", last.result.columns);
+                        eprintln!("      column_types = {:?}", last.result.column_types);
+                        eprintln!("      batches = {}", last.result.batches.len());
+                        eprintln!("      to_rows() = {:?}", last.result.to_rows());
+                    }
+                }
+            }
+        }
+        Err(err) => eprintln!("❌ {driver}：驱动事务失败 —— {err}"),
+    }
+
+    manager.remove_connection(&conn_id).await;
+    eprintln!("—— {driver} 驱动事务探针结束\n");
+}
+
 /// 文件型库（SQLite / DuckDB）走路径，网络型库走 URL
 fn run(driver: &str, env_var: &str) {
-    let Some(value) = std::env::var(env_var)
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-    else {
+    let Some(value) = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty()) else {
         eprintln!("⏭️  跳过 {driver}：未设置 {env_var}");
         return;
     };
@@ -177,6 +245,26 @@ fn run(driver: &str, env_var: &str) {
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(probe(driver, url_override, file_path));
+}
+
+/// 驱动级事务探针的入口（环境变量门控与 `run` 一致）
+fn run_driver_transaction(driver: &str, env_var: &str) {
+    let Some(value) = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty()) else {
+        eprintln!("⏭️  跳过 {driver}（驱动事务）：未设置 {env_var}");
+        return;
+    };
+
+    AutoDriverRegistrar::register_builtin_drivers();
+
+    let is_file_db = matches!(driver, "sqlite" | "duckdb");
+    let (url_override, file_path) = if is_file_db {
+        (None, Some(value))
+    } else {
+        (Some(value), None)
+    };
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    runtime.block_on(probe_driver_transaction(driver, url_override, file_path));
 }
 
 #[test]
@@ -197,4 +285,24 @@ fn sqlite_transaction_session_affinity() {
 #[test]
 fn duckdb_transaction_session_affinity() {
     run("duckdb", "RDS_TEST_DUCKDB_PATH");
+}
+
+#[test]
+fn mysql_driver_transaction() {
+    run_driver_transaction("mysql", "RDS_TEST_MYSQL_URL");
+}
+
+#[test]
+fn postgres_driver_transaction() {
+    run_driver_transaction("postgres", "RDS_TEST_PG_URL");
+}
+
+#[test]
+fn sqlite_driver_transaction() {
+    run_driver_transaction("sqlite", "RDS_TEST_SQLITE_PATH");
+}
+
+#[test]
+fn duckdb_driver_transaction() {
+    run_driver_transaction("duckdb", "RDS_TEST_DUCKDB_PATH");
 }

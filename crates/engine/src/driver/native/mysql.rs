@@ -555,6 +555,20 @@ fn bytes_are_text(bytes: &[u8]) -> bool {
     std::str::from_utf8(bytes).is_ok()
 }
 
+/// 由 MySQL 声明类型名直接判定**数值**排行（`None` = 不是数值族，交给原有探测）
+///
+/// 为什么需要：MySQL 的 `BOOL` / `BOOLEAN` 在协议层就是 `TINYINT(1)`，声明名往往只报
+/// `TINYINT`，无法据此区分布尔与 1/0 数值列；而 `try_get::<bool>` 对任何 1/0 列都会成功。
+/// 因此数值族**一律按数值处理**——宁可把布尔显示成 `1`/`0`，也不能把计数、标志位列
+/// （如 `COUNT(*)`）显示成 `true`/`false`。
+fn declared_numeric_rank(name: &str) -> Option<u8> {
+    Some(match name {
+        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" | "YEAR" => 2,
+        "FLOAT" | "DOUBLE" | "REAL" | "DECIMAL" | "NUMERIC" => 3,
+        _ => return None,
+    })
+}
+
 fn mysql_rows_to_arrow(
     columns: &[String],
     rows: &[sqlx::mysql::MySqlRow],
@@ -582,7 +596,15 @@ fn mysql_rows_to_arrow(
         let declared_text = is_text_type_name(&declared);
         // 不在按声明名强制二进制：MySQL 把 TEXT 列也报成协议类型 BLOB（sqlx 名 = "BLOB"），
         // 无法只凭声明名区分 TEXT 与真 BLOB；统一交给下面的**字节 UTF-8 判定**。
-        let mut detected_rank: u8 = if declared_text { 5 } else { 0 };
+        //
+        // 数值族则**直接按声明名定排行**：不能再靠 `try_get::<bool>` 盲探——MySQL 的
+        // `COUNT(*)` 报 BIGINT UNSIGNED，而 sqlx 会把 1/0 成功解成 `bool`，于是 bool 优先的
+        // 旧逻辑把计数列判成布尔（网格里 `COUNT(*)` 显示 true）。文本/二进制仍走原有路径。
+        let mut detected_rank: u8 = if declared_text {
+            5
+        } else {
+            declared_numeric_rank(&declared).unwrap_or(0)
+        };
 
         if detected_rank == 0 {
             for row in rows {
@@ -632,7 +654,19 @@ fn mysql_rows_to_arrow(
                     bool_values.push(row.try_get::<Option<bool>, _>(col_idx).ok().flatten());
                 }
                 DataType::Int64 => {
-                    int_values.push(row.try_get::<Option<i64>, _>(col_idx).ok().flatten());
+                    // 无符号列（如 `COUNT(*)` 的 BIGINT UNSIGNED）用 `i64` 解码会失败，
+                    // 旧写法把失败吞成 NULL → 结果集里“计数列全空”。回退按 `u64` 解码。
+                    let value = row
+                        .try_get::<Option<i64>, _>(col_idx)
+                        .ok()
+                        .flatten()
+                        .or_else(|| {
+                            row.try_get::<Option<u64>, _>(col_idx)
+                                .ok()
+                                .flatten()
+                                .map(|v| v.min(i64::MAX as u64) as i64)
+                        });
+                    int_values.push(value);
                 }
                 DataType::Float64 => {
                     float_values.push(row.try_get::<Option<f64>, _>(col_idx).ok().flatten());
@@ -728,10 +762,7 @@ impl crate::driver::MetadataBrowser for MySqlDatabase {
         Ok(nodes)
     }
 
-    async fn get_schemas(
-        &self,
-        _catalog: &str,
-    ) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
+    async fn get_schemas(&self, _catalog: &str) -> Result<Vec<crate::driver::NodeInfo>, CoreError> {
         // MySQL 的 database 即 schema，没有独立的 Schema 层级（`has_schema_level` 为 false）。
         // 返回空而非回退为 catalog 列表，避免导航树出现同名重复层。
         Ok(vec![])

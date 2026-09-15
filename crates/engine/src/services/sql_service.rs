@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use crate::cache::get_query_cache;
-use crate::driver::traits::DynDatabase;
-use shared::error::{CoreError, DatabaseError};
-use shared::models::QueryResult;
-use crate::persistence::history_store::{self, SqlHistoryEntry};
 use crate::connection_manager::ConnectionManager;
+use crate::driver::traits::DynDatabase;
+use crate::persistence::history_store::{self, SqlHistoryEntry};
 use crate::sql::SqlEngine;
 use crate::sql::{SqlDialect, SqlStatementType};
+use shared::error::{CoreError, DatabaseError};
+use shared::models::QueryResult;
 
 /// 事务状态结果
 #[derive(Debug)]
@@ -211,7 +211,9 @@ impl SqlService {
                 success: true,
                 error_message: None,
                 rows_returned: if is_dql {
-                    Some(result.total_rows as u64)
+                    // 用方法而**不是字段**：native 驱动只填 Arrow `batches`，
+                    // `QueryResult.total_rows` 字段恒为 0（见架构 §12 #21）
+                    Some(result.total_rows() as u64)
                 } else {
                     None
                 },
@@ -331,9 +333,7 @@ impl SqlService {
                     .get_active_connection_id()
                     .await
                     .ok_or_else(|| {
-                        CoreError::connection(
-                            shared::error::ConnectionError::NoActiveConnection,
-                        )
+                        CoreError::connection(shared::error::ConnectionError::NoActiveConnection)
                     })?;
                 self.manager.get_or_reconnect(&conn_id).await
             }

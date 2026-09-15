@@ -300,11 +300,42 @@ fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
     if let Some(arr) = array.as_any().downcast_ref::<StringArray>() {
         return Value::Text(arr.value(index).to_string());
     }
+    // 整数位宽不止 Int64：PG 的 `int4` → Int32、`smallint` → Int16、MySQL 无符号 → UInt64…。
+    // 漏掉就会被兜底当成文本（旧实现甚至打印整列 Debug），网格里直接看到垃圾值。
     if let Some(arr) = array.as_any().downcast_ref::<Int64Array>() {
         return Value::Int(arr.value(index));
     }
+    if let Some(arr) = array.as_any().downcast_ref::<Int32Array>() {
+        return Value::Int(i64::from(arr.value(index)));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<Int16Array>() {
+        return Value::Int(i64::from(arr.value(index)));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<Int8Array>() {
+        return Value::Int(i64::from(arr.value(index)));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<UInt64Array>() {
+        let value = arr.value(index);
+        // 超出 i64 的值以文本保留精度（不静默截断为负数）
+        return match i64::try_from(value) {
+            Ok(n) => Value::Int(n),
+            Err(_) => Value::Text(value.to_string()),
+        };
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<UInt32Array>() {
+        return Value::Int(i64::from(arr.value(index)));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<UInt16Array>() {
+        return Value::Int(i64::from(arr.value(index)));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<UInt8Array>() {
+        return Value::Int(i64::from(arr.value(index)));
+    }
     if let Some(arr) = array.as_any().downcast_ref::<Float64Array>() {
         return Value::Float(arr.value(index));
+    }
+    if let Some(arr) = array.as_any().downcast_ref::<Float32Array>() {
+        return Value::Float(f64::from(arr.value(index)));
     }
     if let Some(arr) = array.as_any().downcast_ref::<BooleanArray>() {
         return Value::Bool(arr.value(index));
@@ -312,7 +343,12 @@ fn arrow_value_at(array: &dyn Array, index: usize) -> Value {
     if let Some(arr) = array.as_any().downcast_ref::<BinaryArray>() {
         return Value::Bytes(arr.value(index).to_vec());
     }
-    Value::Text(format!("{:?}", array))
+    // 兜底：交给 Arrow 的单值格式化（Decimal / Date / Timestamp 等能正常显示成文本）。
+    // 旧实现是 `format!("{:?}", array)`——把**整列**打印进每个格子（既显示垃圾，又是 O(n²)）。
+    Value::Text(
+        arrow::util::display::array_value_to_string(array, index)
+            .unwrap_or_else(|_| format!("<{}>", array.data_type())),
+    )
 }
 
 /// 序列化支持
@@ -496,5 +532,81 @@ where
             Some(val) => val.into(),
             None => Value::Null,
         }
+    }
+}
+
+/// Arrow → Value 的映射回归
+///
+/// 背景（实测）：各驱动只填 `batches`，上层取值一律经 `arrow_value_at`。
+/// 这里固定两件事——**驱动实际产出的位宽都要认**（PG 的 `int4` 是 Int32、MySQL 无符号是 UInt64）、
+/// 以及**兜底不得是整列 Debug 文本**（旧实现把整列打印进每个单元格，既显示垃圾又是 O(n²)）。
+#[cfg(test)]
+mod value_mapping_tests {
+    use super::*;
+    use arrow::datatypes::{Field, Schema};
+    use std::sync::Arc;
+
+    fn from_arrays(names: &[&str], arrays: Vec<ArrayRef>) -> QueryResult {
+        let fields: Vec<Field> = names
+            .iter()
+            .zip(arrays.iter())
+            .map(|(name, array)| Field::new(*name, array.data_type().clone(), true))
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(schema, arrays).expect("构造 RecordBatch");
+
+        QueryResult::from_batches(
+            names.iter().map(|name| (*name).to_string()).collect(),
+            vec![batch],
+        )
+    }
+
+    #[test]
+    fn numeric_widths_are_mapped_to_values() {
+        let result = from_arrays(
+            &["i32", "u64", "f32"],
+            vec![
+                Arc::new(Int32Array::from(vec![Some(7), None])),
+                Arc::new(UInt64Array::from(vec![Some(9), Some(11)])),
+                Arc::new(Float32Array::from(vec![Some(1.5), None])),
+            ],
+        );
+
+        assert_eq!(result.rows[0][0], Value::Int(7));
+        assert_eq!(result.rows[1][0], Value::Null);
+        assert_eq!(result.rows[0][1], Value::Int(9), "UInt64 必须映射为整数");
+        assert_eq!(result.rows[1][1], Value::Int(11));
+        assert_eq!(result.rows[0][2], Value::Float(1.5));
+        assert_eq!(result.rows[1][2], Value::Null);
+    }
+
+    #[test]
+    fn unmapped_types_fall_back_to_single_value_text() {
+        let result = from_arrays(
+            &["d"],
+            vec![Arc::new(Date32Array::from(vec![Some(19_000)]))],
+        );
+
+        match &result.rows[0][0] {
+            Value::Text(text) => {
+                assert!(!text.contains("Array"), "兜底不应是数组 Debug 文本：{text}");
+                assert!(!text.is_empty(), "兜底应有可读内容");
+            }
+            other => panic!("Date32 应退化为文本，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn huge_unsigned_values_keep_precision() {
+        let result = from_arrays(
+            &["u64"],
+            vec![Arc::new(UInt64Array::from(vec![Some(u64::MAX)]))],
+        );
+
+        assert_eq!(
+            result.rows[0][0],
+            Value::Text(u64::MAX.to_string()),
+            "超出 i64 的无符号值必须保留精度，不得静默截断"
+        );
     }
 }
