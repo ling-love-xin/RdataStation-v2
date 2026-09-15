@@ -253,7 +253,7 @@
 | 名册迁移（固定/软删字段） | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） |
 | 全局库项目 CRUD / 固定 / 已移除 | `crates/engine/src/persistence/global_db.rs` |
 | 排序方式偏好 | `crates/settings`（`projects.sort_mode`） |
-| 命令 / Action | `crates/project/src/commands.rs` + `crates/workbench/src/commands.rs` |
+| 命令 / Action | `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`；project crate 不再有 commands 文件） |
 | 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单内容由 `project::ui::render_menu_content` 提供） |
 | 会话共享与刷新信号 | `crates/workbench/src/panels.rs`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
 | 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs` / `models.rs` |
@@ -261,7 +261,7 @@
 | 依赖接线 | 根 `Cargo.toml`、`crates/workbench/Cargo.toml` |
 | 主题 token（如需补） | `assets/themes/rds-theme.json` |
 
-> `crates/project/src/promote_dialog.rs` / `snapshot_dialog.rs`：**不在本期范围**，保持占位或移除（评审时定）。
+> `promote_dialog.rs` / `snapshot_dialog.rs` 等 5 个占位文件已于 2026-09-14 删除（promote / snapshot 不在本期范围，另立设计时新建）。
 
 ## 7. 验证方式
 
@@ -272,3 +272,51 @@
 - UI：`cargo run -p rds-app` 手动走通 §4 清单（先用 `RDS_PROJECT_PATH` 验证有项目态，再清空验证选择器）
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
 - 阶段完成后回填本文件「状态」与原型文档同步
+
+## 8. 未开发 / 未处理清单（2026-09-14 盘点）
+
+> 对照原型 §2 全表、§7 设置构成与 GPUI-kit 指南逐项核对后的**剩余项**；已完成项见 §0 进度记录。
+
+### A. 后端能力缺失（阻塞 UI）
+
+| # | 项 | 现状 | 需要做什么 |
+| --- | --- | --- | --- |
+| A1 | **默认连接（U3）** | 原型 §2.3/§7 列为设置项；`service` 层**没有** `ProjectConfig` 读写，`ProjectStore` 也无 config 存取 API | 先补 `store::update_config` + `service::{load_config, save_config}`，再做下拉（候选来源系统级连接）；空值 = 不设默认 |
+
+### B. 原型已列、实现缺失或入口不符
+
+| # | 项 | 原型要求 | 现状 |
+| --- | --- | --- | --- |
+| B1 | 设置·危险区三件套 | 归档（U4）、移出名册（D1）、删除磁盘数据（D2）**都在设置·危险区** | 设置里只有「刷新列表」；三者分散在项目菜单与卡片 `⋯`（功能可用、入口不符） |
+| B2 | `.RSmeta` 结构树 | 树形 + 大小 + 复制路径（原型 §7） | 平铺四个固定文件 + 大小；无树、无复制路径 |
+| B3 | 描述展示 | R7 元信息包含描述 | 仅可编辑；卡片与设置概览都不显示描述 |
+
+### C. 体验 / 规范（对照 GPUI-kit 指南）
+
+| # | 项 | 说明 |
+| --- | --- | --- |
+| C1 | **只读模式禁用态** | 现在靠 `read_only_blocked` 点击后拒绝 + notice；指南要求禁用态**可见**（按钮 `disabled` + 原因） |
+| C2 | 菜单快捷键展示 | 项目菜单项未显示 `Ctrl+Shift+P` / `Ctrl+Shift+W`（`PopupMenuItem` 支持 shortcut 位） |
+| C3 | 卡片右键菜单 | 指南建议作用于指针下对象的命令同时提供 `ContextMenu`；当前只有 `⋯` 下拉 |
+| C4 | **选择器键盘可达** | 卡片 / Tab 无 `tab_stop`/`focus_handle`，只能鼠标操作（无障碍检查表要求「所有 action 都可键盘到达」） |
+| C5 | 搜索语法 | 仅名称 / 路径子串；database 模块已有 facet 语法（`类型:` / `标签:`）可参照 |
+
+### D. 范围外（原型 §12，已确认不做）
+
+提升 / 引用（promote / snapshot）、移动或另存项目目录、DuckLake 远程项目（`ProjectPath::Remote` 仅模型层预留）、版本恢复与对比（原型未列）。
+
+### E. 测试与跨模块
+
+| # | 项 | 说明 |
+| --- | --- | --- |
+| E1 | 只读拒绝路径覆盖不足 | 仅 `save_project_info` 校验有测试；归档 / 创建版本 / SQL 执行的只读拦截无自动化用例 |
+| E2 | 键盘路径无测试 | C4 落地后需补窗口测试（`simulate_keystrokes`） |
+| E3 | 窗口退出路径的草稿兜底 | 点 ✕ / `Alt+F4` 退出时无拦截（`app` 未注册 `should_close` 钩子）；editor 侧有「关闭标签前确认」与草稿兜底，但**整个窗口**退出未定义行为——属 editor 模块，需与项目拦截语义对齐 |
+| E4 | 陈旧锁提示 | `project.lock.owner` 里的 pid 可能已退出（OS 锁已释放）；可在逃生口对话框补一句「若该进程已退出，选『仍要打开』」 |
+
+### 建议顺序
+
+1. **C1 + C4**（指南硬要求、成本低、无后端依赖）；
+2. **B1 + B3**（入口对齐与信息完整性，纯 UI）；
+3. **A1**（默认连接，需先补后端）；
+4. **C2 / C3 / B2 / E1 / E2**（体验与覆盖，可随其他任务带走）。

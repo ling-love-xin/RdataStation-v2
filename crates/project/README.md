@@ -48,7 +48,11 @@
 
 ### 明确的范围外
 
-提升 / 引用（promote / snapshot）、移动或另存项目目录、DuckLake 远程项目（`ProjectPath::Remote` 仅模型层预留，UI 已明示范围）、默认连接（U3，后端 `ProjectConfig` 读写未实现）。
+提升 / 引用（promote / snapshot）、移动或另存项目目录、DuckLake 远程项目（`ProjectPath::Remote` 仅模型层预留，UI 已明示范围）。
+
+### 尚未开发（待办）
+
+剩余项集中在 `docs/architecture/project/project-dev-plan.md` §8：默认连接（U3，需先补后端）、设置·危险区入口对齐、只读禁用态、选择器键盘可达、卡片右键菜单等。
 
 ## 代码落点
 
