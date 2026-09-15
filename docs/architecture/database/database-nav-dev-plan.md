@@ -82,13 +82,14 @@
 | B1/B2 视图接线（分组多对多 + 标签多值） | ✅ 已实现 | `nav_runtime::{list_groups,create_group,list_group_members,add_to_group,remove_from_group,list_all_tags}`；`ConnectionOrgStore::list_tag_pairs`（一次性映射） |
 | B7 上下文菜单动作（查看数据 / 复制名 / 查看属性 / 刷新） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`ContextMenuExt::context_menu` 挂到连接行 / 对象节点 / 分组头；`Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（生成 SELECT → 编辑区）；`toggle_connection` / `refresh_node` / `delete_group` / `create_group_interactive`；分组删除带 `AlertDialog` 确认 |
 | B8 缓存管理入口 + 短码⇄文字开关 + 属性面板宽度记忆 | ✅ 已实现（2026-09-12） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`（数据源导航节）；`crates/workbench/src/components/cache_dialog.rs`（两处入口）；`panels.rs::{refresh_all, render_connection_row, render_property_panel}` + `EditorPanel::render`（`h_resizable`） |
+| B7 拖拽（表 / 视图 → 编辑区插入限定名） | ✅ 已实现（2026-09-16） | `crates/workbench/src/panels.rs`：`NavDragPayload` + `NavDragGhost`（拖拽幽灵）、`render_nav_node` 挂 `on_drag`（仅表 / 视图）、SQL 区容器 `drag_over` + `on_drop`、编辑区 `content` 兜底 `on_drop`、`EditorPanel::apply_nav_drag`（`NavDropMode::{AtCursor, Append}`） |
 
 **Phase B 已知限制**
 
 - 属性面板为**堆叠分区**（列/索引/约束），暂未做子实体 Tab 切换；
 - 双击节点打开属性（gpui `click_count >= 2`）；右键菜单已实现（见下方 B7 范围）；复制 / 生成 SQL 已支持、INSERT/UPDATE/DELETE 待后续；
 - 属性加载已迁后台（`nav_jobs::enqueue_properties` + `apply_props_results`），与 Phase A 的阻塞式问题一并收敛；
-- 归组：入口为右键「**移动到分组…**」（v6 已移除行内 `🗂`）；**拖拽与组内外手动排序仍未接线**（排序服务 `ConnectionOrgStore::set_member_order` 已就绪，缺 UI 入口）；
+- 归组：入口为右键「**移动到分组…**」（v6 已移除行内 `🗂`）；**归组拖拽与组内外手动排序仍未接线**（排序服务 `ConnectionOrgStore::set_member_order` 已就绪，缺 UI 入口）；表 / 视图 → 编辑区的拖拽已实现（见下方「B7 拖拽实现说明」）；
 - 新建分组用默认名「新建分组」（自动去重）；重命名已支持（分组头右键 → 行内输入），描述表单待后续；
 - **facet 筛选**（归属域 + 类型 / 驱动 / 标签）持久化在 `settings.json` 的 `Navigator::filters`（UI 偏好）；**展开 / 选中**仍走 `navigator_state`；分组关系走组织存储；无单独的面板级 `navigator_state` 行。
 - 搜索支持**连接名 + 标签**子串匹配，并支持 `scope:` / `source:` / `type:` / `driver:` / `tag:` 结构化 token（作额外 AND 约束）；命中高亮已实现（C5）。
@@ -107,8 +108,18 @@
 
 **B7 待办（后续阶段）**
 
-- 拖拽表到编辑器插入限定名（需 `on_drag`）。
-- 连接右键「查看洞察」与各节点右键「生成 Mock 数据」目前仅切换到右 Dock 占位面板（M7 / M8 待实现）；「在 SQL 编辑器中打开」仅选中连接 + 聚焦编辑区（SQL 可执行区目前受 `use_duckdb_fed` 限制）。
+- 连接右键「查看洞察」与各节点右键「生成 Mock 数据」目前仅切换到右 Dock 占位面板（M7 / M8 待实现）；「在 SQL 编辑器中打开」仅选中连接 + 聚焦编辑区（SQL 可执行区目前受 `use_duckdb_fed` 限制，见架构 §11#16）。
+
+**B7 拖拽实现说明（2026-09-16）**
+
+- 只有**表 / 视图**行可拖；拖拽幽灵显示短名，插入的是**限定名**（`nav_qualified_name`，`db.db.name` 已去重）。
+- 载荷（`NavDragPayload`）只带两个字符串，**不带连接句柄与执行计划**：拖拽不承诺语义，落点决定动作。
+- 落点两条路径（gpui 的 drop 按 bubble 派发 + `stop_propagation`，**内层落点优先**，不会双插）：
+  - **SQL 区容器**（`use_duckdb_fed` 连接才渲染）：插到**光标处**（`TextareaState::insert`，尊重选区）；拖入时描边高亮（`drag_over::<NavDragPayload>`，颜色走主题 token）。
+  - **编辑区内容区**（兜底）：追加到草稿末尾；拖到编辑区任意位置都不会“没落点”。
+- 未聚焦的 SQL 输入光标停在 0，直接插入会把表名顶到用户语句前面 → 只有**SQL 区可见且已聚焦**时才走光标插入，其余一律追加（与右键「查看数据」同策略走 `set_value`，不发 `InputEvent`，手动同步 `editor_dirty` / `editor_sql`）。
+- 两种落点都**聚焦 SQL 区**；SQL 区不可见（非联邦连接）时额外给一条面板通知，说明名字已进草稿。
+- 未做：归组拖拽、组内外手动排序（`ConnectionOrgStore::set_member_order` 已就绪，缺 UI 入口）。
 
 **Phase B8 已实现范围**
 
@@ -233,11 +244,11 @@
 | --- | --- | --- | --- |
 | B1 | 分组服务：CRUD + 多对多成员 + 排序（手动优先，未排按名称）| ✅ `crates/engine/src/persistence/connection_org_store.rs`（连接域共用，2026-09-11 上提） | 一连接可属多组；排序持久化 |
 | B2 | 标签服务：多值增删改 + 按标签检索 | ✅ 同上 + `connection_tags`（权威检索表；M3 保存同步 / 删除清理） | `tag:x` 检索命中 |
-| B3 | 分组/标签视图：拖拽归组、右键「分组 ▸ / 标签 ▸」、分组对话框（名称/描述） | `database_nav_panel.rs` + `Dialog` | 拖拽与对话框走通；分组头统一配色 |
+| B3 | 分组/标签视图：拖拽归组、右键「分组 ▸ / 标签 ▸」、分组对话框（名称/描述） | `database_nav_panel.rs` + `Dialog` | 归组对话框走通；分组头统一配色（**归组拖拽仍未做**，入口为右键「移动到分组…」） |
 | B4 | 搜索：本地筛选 + FTS（`search_fts`）+ 结果落编辑区 + 高亮 | `navigator_service.rs` + `database_nav_panel.rs` + `crates/workbench/panels.rs` | 300ms 防抖；命中高亮；Enter 打开 |
 | B5 | 属性面板：类型注册表（connection/table/view/column/index/constraint/routine/…）+ 右侧停靠面板（属性/数据 Tab） | `crates/database/src/property_panel.rs` + workbench 编辑区右侧面板 | 双击/右键打开；字段随类型变化；宽度记忆 |
 | B6 | 状态持久化：`navigator_state` 读写 + 800ms 防抖；分组展开态 | `navigator_service.rs` + engine `persistence` | 重启恢复展开/选中/过滤 |
-| B7 | 上下文菜单动作：查看数据、复制名/限定名、生成 SELECT/INSERT/UPDATE/DELETE → 编辑器 | `database_nav_panel.rs` + `crates/workbench/src/commands.rs` | 生成 SQL 落到编辑器 |
+| B7 | 上下文菜单动作：查看数据、复制名/限定名、生成 SELECT/INSERT/UPDATE/DELETE → 编辑器；表 / 视图**拖拽**插入限定名 | `database_nav_panel.rs` + `crates/workbench/src/commands.rs` | 生成 SQL 落到编辑器；拖拽落 SQL 区插光标处、落其它位置追加 |
 | B8 | 缓存管理入口（设置 + 面板头「更多」）+ 短码⇄文字开关 | `crates/settings` + 导航面板 | 查看占用 / 显式清理；开关生效并持久化 |
 | B9 | **契约面补齐（M3↔M4 审计，2026-09-12）**：① 导航行 / 右键**删除入口**（调同一 `workspace_loader::delete_connection(conn_id, project_root)`，删除后清 `DatabaseNavView` 缓存与状态）；② **标签 / 分组视图接线**（消费 `nav_runtime::{list_tags,set_tags,list_groups,create_group,rename_group,delete_group,*_member}`，权威源为 `connection_tags` / `connection_group_members`）；③ `NavSource::from_conn_id` 改依赖 `engine::persistence::id_prefix`（废弃自实现前缀推导）；④ 行点击同步 `shared.selected` | `crates/workbench/src/panels.rs`、`crates/database/src/model.rs` | 导航行可删除（作用域路由正确）；标签 / 分组可读可改且与对话框一致；遗留 `conn-` ID 归库与 M3 一致（审计详表见 `connection-dialog-architecture.md` §16） |
 

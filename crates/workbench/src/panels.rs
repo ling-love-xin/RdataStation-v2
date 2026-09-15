@@ -1388,6 +1388,59 @@ fn nav_qualified_name(prop: &PropertyRef) -> String {
     parts.join(".")
 }
 
+/// 数据源导航 → 编辑区拖拽载荷（仅表 / 视图行携带）。
+///
+/// 载荷只带**限定名 + 展示文案**：拖拽本身不承诺语义，落点决定动作
+/// （SQL 区插到光标处 / 编辑区其它位置追加），因此不携带连接句柄或执行计划。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavDragPayload {
+    /// 已去重的限定名（`db.table` / `schema.table`）。
+    pub qualified: String,
+    /// 展示文案（拖拽幽灵 + 落点通知）。
+    pub label: String,
+}
+
+/// 拖拽幽灵：跟随光标的轻量预览（不参与命中测试）。
+struct NavDragGhost {
+    label: String,
+    /// 类型色点，与树内节点图标同色（`nav_kind_color`）。
+    tint: Hsla,
+}
+
+impl Render for NavDragGhost {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .h(rems(1.375))
+            .px_2()
+            .rounded_md()
+            .bg(cx.theme().colors.popover)
+            .border_1()
+            .border_color(cx.theme().colors.border)
+            .shadow_md()
+            .child(div().w_2().h_2().flex_none().rounded_sm().bg(self.tint))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().colors.foreground)
+                    .child(self.label.clone()),
+            )
+    }
+}
+
+/// 草稿追加：空草稿直接落片段，否则在末尾换行追加。
+///
+/// 纯函数（无 `Window` / 无 `Entity`），供 `EditorPanel::apply_nav_drag` 与单测共用。
+fn nav_draft_append(current: &str, snippet: &str) -> String {
+    if current.trim().is_empty() {
+        snippet.to_string()
+    } else {
+        format!("{}\n{}", current.trim_end(), snippet)
+    }
+}
+
 /// 搜索过滤：节点名命中，或已加载子节点中任一命中。
 fn nav_node_matches(
     children: &HashMap<String, Vec<NavNode>>,
@@ -4853,6 +4906,17 @@ impl SidebarPanel {
             _ => None,
         };
 
+        // 拖拽载荷：仅表 / 视图（原型 §6.1「拖拽表到编辑器」）。
+        let drag_payload = match &node.kind {
+            NavNodeKind::Table { .. } | NavNodeKind::View => {
+                node.property.as_ref().map(|p| NavDragPayload {
+                    qualified: nav_qualified_name(p),
+                    label: node.name.clone(),
+                })
+            }
+            _ => None,
+        };
+
         // 缩进 = 基础内边距 + 层级 × 步长（设计 §2.1）。两者都是 rem 倍率，
         // 直接交给 `rems()` 换算（其基准是主题字号而非 4px，写 `/ 4.` 会放大 4 倍）。
         let indent = ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT;
@@ -4906,6 +4970,15 @@ impl SidebarPanel {
                     .text_color(if is_pk { pri } else { muted })
                     .child(meta),
             );
+        }
+        if let Some(payload) = drag_payload {
+            // 类型色点沿用节点图标色；`Hsla` 是 `Copy`，可直接进闭包。
+            let tint = icon;
+            row = row.on_drag(payload, move |payload, _offset, _window, cx| {
+                // 幽灵显示短名（与用户抓住的东西一致），插入的是限定名。
+                let label = payload.label.clone();
+                cx.new(|_| NavDragGhost { label, tint })
+            });
         }
         row = row.on_click({
             let focus = self.focus_handle.clone();
@@ -7454,6 +7527,18 @@ impl ComponentPanel for SidebarPanel {
     }
 }
 
+/// 导航拖拽落点语义（`EditorPanel::apply_nav_drag`）。
+///
+/// SQL 区当前仅在 `use_duckdb_fed` 连接下可见（架构 §11#16），落到编辑区
+/// 其它位置时只能“盲写”草稿，因此两种落点各有一条路径并附带通知。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NavDropMode {
+    /// 落在 SQL 区：插入光标处（未聚焦时退化为追加）。
+    AtCursor,
+    /// 落在编辑区其它位置：追加到草稿末尾。
+    Append,
+}
+
 /// 中央内容区面板。
 pub struct EditorPanel {
     shared: Shared,
@@ -7484,6 +7569,55 @@ pub struct EditorPanel {
 }
 
 impl EditorPanel {
+    /// 消费导航拖拽（表 / 视图 → SQL 草稿）。
+    ///
+    /// 插入语义：
+    /// - SQL 区可见**且已聚焦**时插到光标处（尊重选区，由 `TextareaState::insert` 完成）；
+    /// - 其余情况一律追加到末尾——未聚焦的输入光标停在 0，直接插入会把表名顶到
+    ///   用户语句前面；与右键「查看数据」同策略走 `set_value`（不发事件，手动同步
+    ///   `editor_dirty` / `editor_sql`，避免在事件路径上重入 `InputEvent`）。
+    ///
+    /// 两种落点都聚焦 SQL 区，方便用户接着写。SQL 区不可见时给一条通知：
+    /// 拖拽已生效，只是没有可见的 SQL 区。
+    fn apply_nav_drag(
+        &mut self,
+        qualified: &str,
+        mode: NavDropMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ta) = self.sql_textarea.clone() else {
+            return;
+        };
+        let sql_visible = self
+            .shared
+            .selected_connection()
+            .is_some_and(|c| c.use_duckdb_fed);
+        let focused = ta.read(cx).focus_handle(cx).is_focused(window);
+        // 尾随空格：连续拖多个表时不会粘成一个标识符。
+        let snippet = format!("{qualified} ");
+
+        if sql_visible && mode == NavDropMode::AtCursor && focused {
+            ta.update(cx, |s, cx| s.insert(snippet.clone(), window, cx));
+        } else {
+            ta.update(cx, |s, cx| {
+                let combined = nav_draft_append(&s.value(), &snippet);
+                s.set_value(combined, window, cx);
+            });
+        }
+        ta.update(cx, |s, cx| s.focus(window, cx));
+
+        let value = ta.read(cx).value().to_string();
+        self.shared.editor_dirty.set(!value.trim().is_empty());
+        *self.shared.editor_sql.borrow_mut() = value;
+        if !sql_visible {
+            *self.shared.notice.borrow_mut() = Some(format!(
+                "已把 {qualified} 送入 SQL 草稿（当前连接未启用 DuckDB 联邦，SQL 区未显示）"
+            ));
+        }
+        cx.notify();
+    }
+
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
         Self {
             shared,
@@ -8273,7 +8407,36 @@ impl Render for EditorPanel {
                             .v_flex()
                             .gap_2()
                             .w_full()
-                            .child(Textarea::new(&sql_state).h_24())
+                            // 拖拽落点（表 / 视图 → 限定名）：包一层带描边的容器，
+                            // 拖入时高亮，作为「插到光标处」的可见 affordance。
+                            .child(
+                                div()
+                                    .w_full()
+                                    .p_1()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .drag_over::<NavDragPayload>(|style, _, _, cx| {
+                                        style
+                                            .bg(cx.theme().colors.list_hover)
+                                            .border_color(cx.theme().colors.primary)
+                                    })
+                                    .on_drop({
+                                        let entity = entity.clone();
+                                        move |payload: &NavDragPayload, window, app| {
+                                            let qualified = payload.qualified.clone();
+                                            entity.update(app, |this, cx| {
+                                                this.apply_nav_drag(
+                                                    &qualified,
+                                                    NavDropMode::AtCursor,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    })
+                                    .child(Textarea::new(&sql_state).h_24()),
+                            )
                             .child(div().h_flex().justify_end().w_full().child(
                                 Button::new("run-sql").secondary().label("执行").on_click(
                                     move |_, _, app| {
@@ -8539,6 +8702,18 @@ impl Render for EditorPanel {
             );
         }
 
+        // 兜底落点：拖到编辑区任意位置都送进 SQL 草稿（追加），避免「拖了但没落点」。
+        // SQL 区有自己的落点（插到光标处），其 `on_drop` 会 `stop_propagation`，不会重复触发。
+        content = content.on_drop({
+            let entity = entity.clone();
+            move |payload: &NavDragPayload, window, app| {
+                let qualified = payload.qualified.clone();
+                entity.update(app, |this, cx| {
+                    this.apply_nav_drag(&qualified, NavDropMode::Append, window, cx);
+                });
+            }
+        });
+
         // `h_flex()` 默认交叉轴居中：不写 items_stretch，内容列会按内容高度被竖直居中，
         // 高于面板的部分上下同时被裁。
         let mut root = div().h_flex().items_stretch().size_full();
@@ -8776,8 +8951,20 @@ impl ComponentPanel for RightSidebarPanel {
 mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
-    use super::{nav_type_short_label, parse_nav_search};
+    use super::{nav_draft_append, nav_type_short_label, parse_nav_search};
     use database::model::NavSource;
+
+    #[test]
+    fn nav_draft_append_keeps_existing_sql() {
+        // 空草稿（含仅空白）直接落片段，不留下前导换行。
+        assert_eq!(nav_draft_append("", "mall.order "), "mall.order ");
+        assert_eq!(nav_draft_append("   \n ", "mall.order "), "mall.order ");
+        // 非空草稿：末尾换行追加，并吃掉原有尾随空白。
+        assert_eq!(
+            nav_draft_append("SELECT * FROM x\n\n", "mall.order "),
+            "SELECT * FROM x\nmall.order "
+        );
+    }
 
     #[test]
     fn type_badge_maps_known_types_and_falls_back() {
