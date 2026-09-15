@@ -12,10 +12,11 @@ use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent a
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::*;
 
-use crate::model::DocumentId;
+use crate::model::{DocumentId, EditorMode};
 use crate::service::Document;
 use crate::shared::EditorShared;
 use crate::ui;
+use crate::view::highlight;
 
 /// 一份文档的编辑面板
 pub struct EditorHostPanel {
@@ -41,11 +42,15 @@ impl EditorHostPanel {
     ) -> Self {
         let focus_handle = cx.focus_handle();
 
-        let (content, editor_read_only) = {
+        let (content, editor_read_only, mode) = {
             let service = shared.service();
             match service.find(&document) {
-                Some(doc) => (doc.content().to_string(), !doc.read_only().can_edit()),
-                None => (String::new(), true),
+                Some(doc) => (
+                    doc.content().to_string(),
+                    !doc.read_only().can_edit(),
+                    doc.mode(),
+                ),
+                None => (String::new(), true, EditorMode::Text),
             }
         };
 
@@ -53,6 +58,10 @@ impl EditorHostPanel {
             let mut state = EditorState::new(window, cx);
             state.set_value(content, window, cx);
             state.set_readonly(editor_read_only, cx);
+            // A4：SQL 语义着色（文本模式是纯记事本，不解析不上色；分析模式留 1c 逐单元处理）
+            if highlight::is_enabled(mode) {
+                highlight::install(&mut state);
+            }
             state
         });
 

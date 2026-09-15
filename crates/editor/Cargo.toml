@@ -5,10 +5,13 @@ edition.workspace = true
 description = "SQL 编辑器：一个内核 + 三档能力（文本 / SQL / 分析）"
 
 # 依赖方向（硬约束）：workbench → editor → engine / database / shared / gpui-kit。
-# 目前只有视图层需要 gpui-kit；engine（SqlService / sql::split）与 shared 等首次使用的
-# 阶段再接，避免留下死依赖。
+# engine：SQL 文本原语（`sql::highlight` 词法区间 / `sql::split` 语句切分）。
 [dependencies]
 gpui-kit.workspace = true
+engine.workspace = true
+# 语义着色（A4）：trait 签名用到 lsp-types 与 anyhow（版本随 gpui-base，已在根 Cargo.toml 登记）
+lsp-types.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 # 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）

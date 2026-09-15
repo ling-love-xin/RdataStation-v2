@@ -73,7 +73,8 @@
 | 结果集入库与淘汰 | `crates/editor/src/store.rs` |
 | 补全 | `crates/editor/src/completion.rs` + `crates/database/src/metadata_service.rs`（现状零消费） |
 | 会话 / 单元 / 输出 | `crates/editor/src/{session.rs, notebook.rs}` |
-| 三模式视图 | `crates/editor/src/view/{host.rs,高亮}.rs`（✅ `host.rs`：一面板 = 一标签 = 一份文档） |
+| 三模式视图 | `crates/editor/src/view/{host.rs}`（✅ 一面板 = 一标签 = 一份文档） |
+| SQL 语义着色 | `crates/editor/src/view/highlight.rs`（✅ `TokenClass → 主题词汇`，颜色由主题解析） |
 | Action / 快捷键 | `crates/editor/src/commands.rs` + `crates/app/src/main.rs` |
 | 中央区装配 | `crates/workbench/src/view.rs::init_workspace` |
 | SQL 执行 / 事务 / 取消 | `crates/engine/src/services/sql_service.rs` |
@@ -141,7 +142,7 @@ cargo check --workspace --all-targets -j 2
 | --- | --- |
 | 待你拍板（阻塞开工） | 架构 §13 十项；其中必须回答：多文档标签方案 · SQL→分析 转换粒度 · 批量执行语义 · 分析模式首期语言 · 是否独立 crate |
 | Phase 0（先做，无 UI） | ✅ 已落地：语句切分 · 历史字段贯通 · crate 骨架 · SQL 高亮 · 格式化选型 · Dock 关闭语义（静态）· **P0.2 三组探针跑完（顺序亲和四库成立；并发下 MySQL/PG 会换连接 → 1b 需 per-session 独占连接；MySQL `BEGIN` 已改文本协议）** · P0.10 台账候选探针已实跑／待你跑：编译基线 P0.9 ／余：驱动层真实 `affected_rows`、驱动填 `column_types`（转 1b） |
-| Phase 1a | ✅ 已到：A1 服务层 · A2 面板（标签侧）· A3 内核视图 · A4 方案已定（待实现）／余：A4 高亮 · A5 判定接线 · A6 只读两维度 · A7 状态栏 · A8 脏状态（纯逻辑已就绪）· A9 保存与打开入口 + Dock 注册 · A10 Actions · A14 最小执行 |
+| Phase 1a | ✅ 已到：A1 服务层 · A2 面板（标签侧）· A3 内核视图 · **A4 SQL 高亮**／余：A5 判定接线 · A6 只读两维度 · A7 状态栏 · A8 脏状态（纯逻辑已就绪）· A9 保存与打开入口 + Dock 注册 · A10 Actions · A14 最小执行 |
 | Phase 1b | 执行闭环（"合格的 SQL 客户端"，并关闭 M4 遗留的"查看数据不自动执行"） |
 | Phase 1c | 分析模式骨架（Cell/Output/Session，仅 SQL + Markdown 单元） |
 | Phase 2 | Python / Rust 内核 · Arrow 变量桥 · 富输出 · `.ipynb` 互操作 |
