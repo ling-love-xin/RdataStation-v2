@@ -21,9 +21,10 @@
 //! - ✅ `edit` 文本操作纯函数（行注释开关）· ✅ `commands` 动作声明 + 面板 `key_context("editor")`（A10）
 //! - ✅ 已注册键位（`crates/app`）：`ctrl-s` 保存 · `ctrl-/` 行注释 · `ctrl-w` 关闭当前文档
 //!   （`ctrl-w` 的处理器在宿主 workbench：面板在自己的 `update` 里让 Dock 移除自己会重入）
+//!   · `ctrl-enter` 执行（选区 > 当前语句）· `ctrl-shift-enter` 执行全部
+//! - ✅ `execution` + `store` + `view/widgets/result_grid`：最小执行闭环（A14，真机四库实测通过）
 //! - ✅ `ui`：本 crate 的结构尺寸常量（不反向依赖 workbench）
-//! - ⬜ 1a 待做：`execution`（执行目标解析 + 后台任务 + 回填）· `store`（结果单权威）·
-//!   `completion` · `view/` 其余（查找 A11）· 另存为 / 关闭三态 / 模式切换确认对话框（A9 收尾）· 打开与另存为的系统文件对话框
+//! - ⬜ 1a 待做：`completion` · `view/` 其余（查找 A11）· 另存为 / 关闭三态 / 模式切换确认对话框（A9 收尾）· 打开与另存为的系统文件对话框 · 连接绑定与结果区可拖拽分栏（1b）
 //! - ⬜ 1c：`session` / `notebook`（Cell / Output / Session）
 //!
 //! 语句切分（「执行当前语句」与「批量执行」的基础）落在 `engine::sql::split`：它是不带编辑器
@@ -32,10 +33,12 @@
 
 pub mod commands;
 pub mod edit;
+pub mod execution;
 pub mod mode;
 pub mod model;
 pub mod persist;
 pub mod service;
 pub mod shared;
+pub mod store;
 pub mod ui;
 pub mod view;

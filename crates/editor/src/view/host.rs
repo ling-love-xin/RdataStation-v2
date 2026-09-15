@@ -6,22 +6,28 @@
 //!
 //! 多文档 = 同一个 tab 组里的多个面板：`DockLayout::tabs()` 里逐个 `panel_view` 即可。
 
+use std::cell::RefCell;
+
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::table::TableState;
 use gpui_kit::*;
 
-use crate::commands::{SaveDocument, ToggleComment};
+use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::edit;
+use crate::execution::{self, ExecTarget};
 use crate::model::{DocumentId, EditorMode};
 use crate::persist;
 use crate::service::Document;
 use crate::shared::EditorShared;
+use crate::store::ResultEntry;
 use crate::ui;
 use crate::view::highlight;
+use crate::view::widgets::result_grid::{self, ResultGridDelegate};
 use crate::view::widgets::status_bar::{self, StatusInputs};
 
 /// 一份文档的编辑面板
@@ -44,6 +50,16 @@ pub struct EditorHostPanel {
     pub(crate) message: Option<String>,
     /// 是否已被 Dock 移除（移除即关闭文档，见 `Panel::on_removed`）
     pub(crate) closed: bool,
+    /// 结果网格（A14）：数据由 `ResultStore` 拷入 delegate，网格不持有第二份真值
+    grid: Entity<TableState<ResultGridDelegate>>,
+    /// 本文档是否有执行正在跑（决定结果区是否显示“执行中”与是否显示结果区）
+    running: bool,
+    /// 结果区状态行文案（`Some` = 本文档有结果要显示）
+    ///
+    /// 缓存在这里而不是每帧 `format!`：`summary()` 要算，而 render 是纯读路径。
+    result_summary: Option<String>,
+    /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
+    exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     _editor_sub: Option<Subscription>,
 }
@@ -108,6 +124,13 @@ impl EditorHostPanel {
                 .unwrap_or_default(),
         );
 
+        // 结果网格：构造时一次建成，以后结果变化只 `refresh`（不重建，避免丢掉列宽 / 滚动位置）
+        let grid = result_grid::new_table_state(
+            ResultGridDelegate::empty("尚未执行——按 Ctrl+Enter 执行当前语句"),
+            window,
+            cx,
+        );
+
         Self {
             shared,
             document,
@@ -117,6 +140,10 @@ impl EditorHostPanel {
             group: None,
             message: None,
             closed: false,
+            grid,
+            running: false,
+            result_summary: None,
+            exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
         }
     }
@@ -208,6 +235,12 @@ impl EditorHostPanel {
 
     fn editor_text(&self, cx: &App) -> String {
         self.editor.read(cx).value().to_string()
+    }
+
+    /// 编辑内核快照（文本 + 选区）：执行目标解析的输入
+    fn editor_snapshot(&self, cx: &App) -> (String, std::ops::Range<usize>) {
+        let state = self.editor.read(cx);
+        (state.value().to_string(), state.selected_range())
     }
 
     fn title_text(&self) -> String {
@@ -310,6 +343,147 @@ impl EditorHostPanel {
         self.set_message(None, cx);
     }
 
+    // ===== 执行（A14）=====
+    //
+    // 三个入口（Ctrl+Enter / Ctrl+Shift+Enter / 后续工具栏按钮）共用 `execute`：
+    // 目标解析 → 提交 → 轮询回填。界面不等 I/O。
+
+    /// `Ctrl+Enter`：执行（选区优先 → 光标所在语句）
+    pub(crate) fn on_execute_sql(
+        &mut self,
+        _: &ExecuteSql,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (text, selection) = self.editor_snapshot(cx);
+        let target = execution::resolve_target(&text, selection);
+        self.execute(target, cx);
+    }
+
+    /// `Ctrl+Shift+Enter`：执行全部
+    pub(crate) fn on_execute_all(
+        &mut self,
+        _: &ExecuteAll,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (text, _selection) = self.editor_snapshot(cx);
+        let target = execution::all_target(&text);
+        self.execute(target, cx);
+    }
+
+    /// 提交一次执行
+    ///
+    /// 拒绝都要留痕迹：文本模式（能力表禁止通信）、未接入执行、忙、空目标。
+    pub(crate) fn execute(&mut self, target: ExecTarget, cx: &mut Context<Self>) {
+        if !self.execution_allowed() {
+            self.set_message(Some("文本模式不与数据库通信".to_string()), cx);
+            return;
+        }
+        match self.shared.submit(self.document.clone(), &target) {
+            Ok(()) => {
+                self.running = true;
+                self.set_message(None, cx);
+                self.ensure_exec_pump(cx);
+            }
+            Err(error) => self.set_message(Some(error.message().to_string()), cx),
+        }
+    }
+
+    /// 当前模式是否允许执行（**读能力表**，不在视图里另写一份模式判断）
+    ///
+    /// 文本模式恒为 `false`（“不与数据库通信”是能力表里的硬约束）。
+    fn execution_allowed(&self) -> bool {
+        self.with_document(|doc| doc.capabilities().execute)
+            .unwrap_or(false)
+    }
+
+    /// 本文档的执行状态与结果摘要（供测试断言；`None` = 尚未执行）
+    pub fn result_summary_for_test(&self) -> Option<&str> {
+        self.result_summary.as_deref()
+    }
+
+    /// 结果网格当前行数（供测试断言网格真的拿到了数据）
+    pub fn grid_row_count_for_test(&self, cx: &App) -> usize {
+        self.grid.read(cx).delegate().row_count_for_test()
+    }
+
+    /// 把光标放到指定位移（供测试断言“执行的是光标所在那句”；键位路径仍走真按键）
+    pub fn set_caret_for_test(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
+    }
+
+    /// 启动结果轮询（已有存活任务时不重复启动）
+    ///
+    /// 与 `workbench` 的导航任务同一模式：**后台等、主线程回填**，空闲即退出。
+    fn ensure_exec_pump(&self, cx: &mut Context<Self>) {
+        if let Some(task) = self.exec_pump.borrow().as_ref()
+            && !task.is_ready()
+        {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(60)).await;
+                // 还有执行在跑（含别的文档）就继续等；一个都没有了就退出，下次提交重新起
+                let keep_going = weak
+                    .update(cx, |this, cx| {
+                        this.drain_exec_results(cx);
+                        this.shared.is_executing()
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    return;
+                }
+            }
+        });
+        *self.exec_pump.borrow_mut() = Some(task);
+    }
+
+    /// 取回已完成的执行，填入结果存储与网格
+    pub(crate) fn drain_exec_results(&mut self, cx: &mut Context<Self>) {
+        let outcomes = self.shared.drain_exec();
+        for outcome in outcomes {
+            let entry = entry_from(outcome);
+            let is_mine = entry.document == self.document;
+            self.shared
+                .update_results(|store| store.push(entry.clone()));
+            if is_mine {
+                self.apply_result(&entry, cx);
+            }
+        }
+    }
+
+    /// 把一条结果落到本文档的界面上（网格数据 + 状态栏原因）
+    fn apply_result(&mut self, entry: &ResultEntry, cx: &mut Context<Self>) {
+        self.running = false;
+        self.result_summary = Some(entry.summary());
+
+        // 先拷贝再进闭包：`entry` 借的是 `self.shared`，不能跨 `self.grid.update` 存活
+        let grid_data = entry.has_grid().then(|| (entry.columns.clone(), entry.rows.clone()));
+        let failed_text = (!entry.has_grid()).then(|| entry.summary());
+        self.grid.update(cx, |state, cx| {
+            match grid_data {
+                Some((columns, rows)) => state.delegate_mut().set_data(columns, rows),
+                None => state
+                    .delegate_mut()
+                    .clear(failed_text.unwrap_or_default()),
+            }
+            state.refresh(cx);
+        });
+
+        // 失败原因同时进状态栏（结果区可能被滚出视野）
+        self.set_message(entry.error.clone(), cx);
+    }
+
+    /// 是否要显示结果区（本文档有结果或正在执行；且模式允许通信）
+    fn result_visible(&self) -> bool {
+        self.execution_allowed() && (self.running || self.result_summary.is_some())
+    }
+
     /// `Ctrl+W`：请求关闭当前文档
     ///
     /// **不由面板自己执行**：`DockArea` 移除面板会读面板本体（可见性 / 可关闭性），
@@ -327,6 +501,21 @@ impl EditorHostPanel {
 }
 
 impl EventEmitter<BasePanelEvent> for EditorHostPanel {}
+
+/// 执行结论 → 结果记录（视图模型转换，不在这做任何 I/O）
+fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
+    match outcome.result {
+        Ok(data) => ResultEntry::success(
+            outcome.document,
+            outcome.sql,
+            data.elapsed_ms,
+            data.truncated,
+            data.columns,
+            data.rows,
+        ),
+        Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0),
+    }
+}
 
 /// 关闭一份文档的面板（**宿主调用**，比如 `Ctrl+W`）
 ///
@@ -405,6 +594,9 @@ impl BasePanel for EditorHostPanel {
         self.group = None;
         self.shared
             .update(|service| service.close(&self.document));
+        // 文档关了，结果也不留（结果不跟着已关闭的文档挂着）
+        self.shared
+            .update_results(|store| store.clear(&self.document));
         cx.notify();
     }
 }
@@ -467,9 +659,17 @@ impl Render for EditorHostPanel {
             column,
             selected_chars,
             message: self.message.as_deref(),
+            executing: self.running,
         };
 
-        div()
+        // 结果区：有结果或正在执行时出现（否则不占位置——不显示空壳）
+        let result_summary = match (self.result_visible(), &self.result_summary) {
+            (true, Some(summary)) => Some(summary.clone()),
+            (true, None) => Some("执行中…".to_string()),
+            (false, _) => None,
+        };
+
+        let mut root = div()
             .v_flex()
             .size_full()
             .min_h_0()
@@ -481,6 +681,8 @@ impl Render for EditorHostPanel {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_toggle_comment))
+            .on_action(cx.listener(Self::on_execute_sql))
+            .on_action(cx.listener(Self::on_execute_all))
             .child(
                 div()
                     .flex_1()
@@ -493,7 +695,11 @@ impl Render for EditorHostPanel {
                             .readonly(read_only)
                             .size_full(),
                     ),
-            )
-            .child(status_bar::render(&status, cx))
+            );
+        // 结果区：有结果或正在执行时出现（否则不占位置——不显示空壳）
+        if let Some(summary) = result_summary {
+            root = root.child(result_grid::render(&self.grid, &summary, cx));
+        }
+        root.child(status_bar::render(&status, cx))
     }
 }

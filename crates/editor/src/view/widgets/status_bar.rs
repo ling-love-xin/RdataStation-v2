@@ -43,6 +43,8 @@ pub struct StatusInputs<'a> {
     pub selected_chars: usize,
     /// 动作失败的原因（未命名需另存为 / 有未保存改动 / 只读拒绝）；`None` = 无提示
     pub message: Option<&'a str>,
+    /// 是否有执行在跑（真实状态，不猜）
+    pub executing: bool,
 }
 
 /// 状态栏文案（左右两段）
@@ -61,6 +63,9 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     }
     if inputs.dirty {
         left.push_str(" · 未保存");
+    }
+    if inputs.executing {
+        left.push_str(" · 执行中…");
     }
     if let Some(message) = inputs.message {
         // 提示紧跟在左侧状态段之后：它是“刚才那个动作”的后果，不是文档属性
@@ -125,6 +130,7 @@ mod tests {
             column: 4,
             selected_chars: 0,
             message: None,
+            executing: false,
         }
     }
 

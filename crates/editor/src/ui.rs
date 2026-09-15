@@ -26,3 +26,24 @@ pub const DIRTY_DOT_SIZE: f32 = 0.375;
 
 /// 编辑区左右内距（0.5rem = 8px）
 pub const EDITOR_BODY_PADDING_X: f32 = 0.5;
+
+/// 结果区高度（18rem = 288px）
+///
+/// 1a 固定高度（可拖拽分栏属 1b）：结果区出现/消失时编辑区高度会跳一下，
+/// 但比“按比例分栏”在无结果时不占位更符合“只显示真实内容”。
+pub const RESULT_PANE_HEIGHT: f32 = 18.0;
+
+/// 结果区状态行高（1.5rem = 24px，与编辑器状态栏同档）
+pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
+
+/// 结果网格列宽（128px；`Column::width` 只收 `Pixels`，故这里不做 rem 换算）
+pub const RESULT_COLUMN_WIDTH: Pixels = px(128.);
+
+/// 结果网格列最小宽（64px）
+pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(64.);
+
+/// 结果网格列名行高（2rem = 32px）
+pub const RESULT_HEADER_HEIGHT: f32 = 2.0;
+
+/// 结果区最小高度（防止被压成 0）
+pub const RESULT_MIN_HEIGHT: f32 = 4.0;

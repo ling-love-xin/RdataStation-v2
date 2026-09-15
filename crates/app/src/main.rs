@@ -11,7 +11,7 @@
 //!   全局系统库初始化 → SettingsService::init → 主题目录 watch →
 //!   应用已保存主题模式 → 快捷键绑定。
 
-use editor::commands::{CloseDocument, SaveDocument, ToggleComment};
+use editor::commands::{CloseDocument, ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
 use settings::SettingsService;
@@ -92,6 +92,10 @@ fn run_app() {
                 KeyBinding::new("ctrl-s", SaveDocument, Some("editor")),
                 KeyBinding::new("ctrl-/", ToggleComment, Some("editor")),
                 KeyBinding::new("ctrl-w", CloseDocument, Some("editor")),
+                // A14 执行：`Ctrl+Enter` = 选区优先 / 否则当前语句；`Ctrl+Shift+Enter` = 全部。
+                // 这两个键内核没有占用（已核对 `input/base/state.rs` 的 `init`）。
+                KeyBinding::new("ctrl-enter", ExecuteSql, Some("editor")),
+                KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
                 // M4 数据源导航：聚焦搜索框（先切到数据源面板并展开左侧 Dock）。
                 KeyBinding::new("ctrl-f", FocusNavSearch, Some("workbench")),
                 // M4 导航树键盘导航（仅当焦点在导航面板内时生效）。

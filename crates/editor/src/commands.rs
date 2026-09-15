@@ -1,4 +1,4 @@
-//! 编辑器动作（A10）
+//! 编辑器动作（A10 / A14）
 //!
 //! **只在事件路径上**：动作由面板的 `on_action` 处理，改 `EditorService` 里的文档或向
 //! 编辑内核写文本；渲染路径不认识这些动作（对齐项目「事件 / Action 与焦点」规范）。
@@ -14,4 +14,13 @@
 
 use gpui_kit::*;
 
-actions!(editor, [SaveDocument, ToggleComment, CloseDocument]);
+actions!(
+    editor,
+    [
+        SaveDocument,
+        ToggleComment,
+        CloseDocument,
+        ExecuteSql,
+        ExecuteAll
+    ]
+);

@@ -14,10 +14,11 @@ use gpui_kit::component::dock::{
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, Focusable as _, IntoElement, KeyBinding, ParentElement as _,
-    Render, Styled as _, TestAppContext, Window, div,
+    Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
 };
 
-use crate::commands::{SaveDocument, ToggleComment};
+use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
+use crate::execution::{QueryData, QueryRunner};
 use crate::model::{DocumentId, EditorMode};
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
@@ -57,6 +58,8 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
         cx.bind_keys([
             KeyBinding::new("ctrl-s", SaveDocument, Some("editor")),
             KeyBinding::new("ctrl-/", ToggleComment, Some("editor")),
+            KeyBinding::new("ctrl-enter", ExecuteSql, Some("editor")),
+            KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
         ]);
     });
 }
@@ -530,4 +533,205 @@ fn focusing_a_tab_activates_its_document(cx: &mut TestAppContext) {
         Some(&first),
         "激活标签后当前文档要跟着回去"
     );
+}
+
+// ===== A14：执行（假执行器，真线程）=====
+
+/// 假执行器：记录收到的 SQL，按 SQL 内容决定成败
+struct ScriptRunner {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl QueryRunner for ScriptRunner {
+    fn run(&self, sql: &str) -> Result<QueryData, String> {
+        self.seen.lock().expect("锁").push(sql.to_string());
+        if sql.contains("boom") {
+            return Err("驱动报错：boom".to_string());
+        }
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            elapsed_ms: 5,
+            truncated: false,
+        })
+    }
+}
+
+/// 带假执行器的共享状态 + 一份文档
+fn shared_with_runner(
+    content: &str,
+    mode: EditorMode,
+) -> (
+    EditorShared,
+    DocumentId,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    let shared = EditorShared::new();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    shared.attach_runner(std::sync::Arc::new(ScriptRunner { seen: seen.clone() }));
+    let id = shared
+        .open(OpenRequest::untitled(content, mode))
+        .id()
+        .clone();
+    (shared, id, seen)
+}
+
+/// 在窗口里建面板（宿主建的窗口第一层视图**
+fn open_panel<'a>(
+    cx: &'a mut TestAppContext,
+    shared: &EditorShared,
+    id: &DocumentId,
+) -> (Entity<EditorHostPanel>, &'a mut VisualTestContext) {
+    let shared = shared.clone();
+    let id = id.clone();
+    cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+}
+
+/// 等结果回填（真后台线程；测试里手动跑轮询泵的那一步，带超时）
+fn wait_for_result(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let done = cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.drain_exec_results(cx);
+                panel.result_summary_for_test().is_some()
+            })
+        });
+        if done {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "执行结果迟迟没回来");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[gpui_kit::test]
+fn ctrl_enter_runs_the_statement_under_the_cursor(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id, seen) =
+        shared_with_runner("select 1;
+select 2;
+select boom;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 光标停在第二句里（键位路径仍走真按键）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_caret_for_test(11, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    assert_eq!(
+        seen.lock().expect("锁").as_slice(),
+        ["select 2".to_string()],
+        "执行的应当是光标所在的那一句"
+    );
+
+    // 结果进了权威存储（数字都是真实值）
+    let stored = shared
+        .results()
+        .latest(&id)
+        .map(|entry| (entry.row_count(), entry.columns.len(), entry.summary()));
+    assert_eq!(stored, Some((2, 1, "2 行 × 1 列 · 5 ms".to_string())));
+
+    // 界面：结果行 + 网格里的行 + 不 panic 的一帧
+    let summary = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .result_summary_for_test()
+            .map(|text| text.to_string())
+    });
+    assert_eq!(summary.as_deref(), Some("2 行 × 1 列 · 5 ms"));
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "网格要拿到行"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+#[gpui_kit::test]
+fn ctrl_shift_enter_runs_the_whole_script(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (_shared, id, seen) = shared_with_runner("select 1;
+select 2;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &_shared, &id);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+
+    cx.simulate_keystrokes("ctrl-shift-enter");
+    wait_for_result(cx, &panel);
+
+    assert_eq!(
+        seen.lock().expect("锁").as_slice(),
+        ["select 1;
+select 2;".to_string()],
+        "“执行全部”发的是整篇脚本"
+    );
+}
+
+#[gpui_kit::test]
+fn a_failing_execution_says_why_instead_of_showing_an_empty_grid(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (shared, id, _seen) = shared_with_runner("select boom;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    let summary = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .result_summary_for_test()
+            .map(|text| text.to_string())
+    });
+    let summary = summary.expect("失败也要有结果区文案");
+    assert!(summary.contains("boom"), "{summary}");
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        0,
+        "失败不该有网格行"
+    );
+    // 失败原因同时写进结果存储与状态栏
+    let stored = shared.results().latest(&id).and_then(|entry| entry.error.clone());
+    assert!(stored.is_some(), "错误要进 ResultStore");
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(message.expect("状态栏也要说原因").contains("boom"));
+}
+
+#[gpui_kit::test]
+fn text_mode_refuses_to_execute(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+
+    let (_shared, id, seen) = shared_with_runner("select 1;", EditorMode::Text);
+    let (panel, cx) = open_panel(cx, &_shared, &id);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-enter");
+
+    assert!(
+        seen.lock().expect("锁").is_empty(),
+        "文本模式不得把 SQL 发给驱动"
+    );
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(message.expect("拒绝要留原因").contains("文本模式"));
 }

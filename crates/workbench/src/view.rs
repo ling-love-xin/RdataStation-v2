@@ -232,6 +232,8 @@ impl WorkbenchView {
                     "",
                     editor::model::EditorMode::Sql,
                 ));
+                // A14：把执行端口接上（当前活动连接）。未接时执行动作会明确报“未接入执行”。
+                crate::services::editor_exec::attach(&service);
                 service
             },
             editor_hosts: Vec::new(),
