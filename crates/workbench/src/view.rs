@@ -78,7 +78,7 @@ impl LeftPanel {
         match self {
             LeftPanel::Draft => "草稿箱",
             LeftPanel::Database => "数据库导航",
-            LeftPanel::Resources => "资源分析",
+            LeftPanel::Resources => "资产库",
             LeftPanel::Plugin => "插件",
         }
     }
@@ -1501,7 +1501,7 @@ fn quick_open_results(
     let commands: &[(&str, QuickOpenCommand)] = &[
         ("打开草稿箱", QuickOpenCommand::OpenDraft),
         ("打开数据库导航", QuickOpenCommand::OpenDatabase),
-        ("打开资源分析", QuickOpenCommand::OpenResources),
+        ("打开资产库", QuickOpenCommand::OpenResources),
         ("打开插件", QuickOpenCommand::OpenPlugin),
         ("打开洞察", QuickOpenCommand::OpenInsight),
         ("打开 Mock 生成", QuickOpenCommand::OpenMock),
