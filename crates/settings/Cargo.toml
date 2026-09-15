@@ -10,3 +10,7 @@ gpui-kit.workspace = true
 # ===== 序列化 =====
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
+gpui-kit = { workspace = true, features = ["test-support"] }

@@ -30,6 +30,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::model::Settings;
+use crate::product_tokens;
 use crate::registry::{self, SettingKind, SettingSpec, SettingValue};
 use crate::ui;
 use crate::{SettingsService, value_by_key};
@@ -54,8 +55,10 @@ pub struct SettingsPage {
     nav: Entity<ListState<SectionNav>>,
     /// 搜索框。
     query: Entity<InputState>,
-    /// 当前搜索词（由 `InputEvent::Change` 维护；**不是**每帧去读输入框）。
-    filter: String,
+    /// 当前搜索词（小写、已 trim；由 `InputEvent::Change` 维护，**不是**每帧去读输入框）。
+    filter_lower: String,
+    /// 上一次落盘失败的原因（`Some` 时底栏上方出现危险色提示）。
+    save_error: Option<String>,
     /// 订阅句柄（仅持有；释放即取消）。
     _query_sub: Option<Subscription>,
 }
@@ -76,7 +79,7 @@ impl SettingsPage {
                 if !matches!(ev, InputEvent::Change) {
                     return;
                 }
-                this.filter = emitter.read(cx).value().to_string();
+                this.filter_lower = emitter.read(cx).value().trim().to_lowercase();
                 cx.notify();
             },
         );
@@ -85,7 +88,8 @@ impl SettingsPage {
             host,
             nav,
             query,
-            filter: String::new(),
+            filter_lower: String::new(),
+            save_error: crate::last_save_error(),
             _query_sub: Some(sub),
         }
     }
@@ -93,7 +97,33 @@ impl SettingsPage {
     /// 重读设置快照（写入之后调用；页面只有这一个数据来源）。
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.settings = SettingsService::get(cx);
+        // 落盘失败是"改了没存住"的唯一信号，每次写入后重新看一次（K2）。
+        self.save_error = crate::last_save_error();
         cx.notify();
+    }
+
+    /// 设置搜索词：输入框与生效条件**同一次改**。
+    ///
+    /// 注意：`InputState::set_value` **不会**发 `InputEvent::Change`（gpui-component 内部如此），
+    /// 所以程序性改词（宿主预填 / 测试）必须走这里——只 `set_value` 而指望订阅，
+    /// 会让"框里的字"与"实际生效的过滤条件"静默不一致（同 `resource_view.rs` 的结论）。
+    pub fn set_query(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter_lower = text.trim().to_lowercase();
+        self.query
+            .update(cx, |state, cx| state.set_value(text, window, cx));
+        cx.notify();
+    }
+
+    /// 测试用：当前节 id。
+    #[cfg(test)]
+    pub(crate) fn debug_active_section(&self, cx: &App) -> &'static str {
+        self.nav.read(cx).delegate().active_key()
+    }
+
+    /// 测试用：当前搜索词（小写、已 trim）。
+    #[cfg(test)]
+    pub(crate) fn debug_filter(&self) -> &str {
+        &self.filter_lower
     }
 
     /// 某项当前值是否偏离默认值（决定「恢复默认」按钮出不出现）。
@@ -328,6 +358,34 @@ impl SettingsPage {
             None => spec.label.to_string(),
         };
 
+        // 标签行：搜索中时把命中片段上底色（产品语义 token，明暗两套都有值）。
+        let label_row = {
+            let mut row = div().h_flex().items_center().min_w_0();
+            if self.filter_lower.is_empty() {
+                row = row.child(
+                    div()
+                        .text_sm()
+                        .text_ellipsis()
+                        .text_color(theme.colors.foreground)
+                        .child(label),
+                );
+            } else {
+                let match_bg = product_tokens::get(cx).search_match_background(&theme);
+                for (segment, hit) in highlight_segments(&label, &self.filter_lower) {
+                    let mut span = div()
+                        .flex_none()
+                        .text_sm()
+                        .text_color(theme.colors.foreground)
+                        .child(segment);
+                    if hit {
+                        span = span.bg(match_bg);
+                    }
+                    row = row.child(span);
+                }
+            }
+            row
+        };
+
         // 恢复默认（仅在偏离默认值时出现）；默认值直接取自登记表，不另存一份。
         let reset = (changed)
             .then(|| spec.default_value())
@@ -364,12 +422,7 @@ impl SettingsPage {
                     .w(rems(ui::LABEL_WIDTH))
                     .flex_none()
                     .gap_0p5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.colors.foreground)
-                            .child(label),
-                    )
+                    .child(label_row)
                     .child(
                         div()
                             .text_xs()
@@ -528,12 +581,26 @@ impl Render for SettingsPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let active = self.nav.read(cx).delegate().active_key();
-        let filter = self.filter.trim().to_lowercase();
+        let filter = self.filter_lower.clone();
         let body = if filter.is_empty() {
             self.render_section_body(active, cx)
         } else {
             self.render_search_body(&filter, cx)
         };
+        // 落盘失败：底栏上方给一条危险色提示（否则"改了没存住"是静默的，K2）。
+        let notice: Option<Div> = self.save_error.as_ref().map(|err| {
+            div()
+                .w_full()
+                .flex_none()
+                .px_3()
+                .py_1()
+                .bg(theme.colors.danger)
+                .text_xs()
+                .text_color(theme.colors.danger_foreground)
+                .child(format!(
+                    "未能写入 settings.json：{err}（本次改动只在本进程生效）"
+                ))
+        });
         div()
             .v_flex()
             .w(rems(ui::PAGE_WIDTH))
@@ -566,6 +633,7 @@ impl Render for SettingsPage {
                             .child(body),
                     ),
             )
+            .when_some(notice, |d, notice| d.child(notice))
             .child(self.render_footer(cx))
             .id(ElementId::Name("settings-page".into()))
             .debug_selector(|| "settings-page".to_string())
@@ -602,6 +670,35 @@ fn matches_query(spec: &SettingSpec, query_lower: &str) -> bool {
         spec.key, spec.label, spec.hint, spec.section_label
     );
     haystack.to_lowercase().contains(query_lower)
+}
+
+/// 把文本按查询词切成 `(片段, 是否命中)`，供标签行上底色。
+///
+/// 大小写折叠可能改变字节长度（少数语言）；一旦长度不等就整段不高亮，
+/// 宁可少一层视觉效果，也不切在非字符边界上 panic。
+fn highlight_segments(text: &str, query_lower: &str) -> Vec<(String, bool)> {
+    if query_lower.is_empty() {
+        return vec![(text.to_string(), false)];
+    }
+    let lower = text.to_lowercase();
+    if lower.len() != text.len() {
+        return vec![(text.to_string(), false)];
+    }
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(pos) = lower[cursor..].find(query_lower) {
+        let start = cursor + pos;
+        let end = start + query_lower.len();
+        if start > cursor {
+            out.push((text[cursor..start].to_string(), false));
+        }
+        out.push((text[start..end].to_string(), true));
+        cursor = end;
+    }
+    if cursor < text.len() {
+        out.push((text[cursor..].to_string(), false));
+    }
+    out
 }
 
 /// 分段控件（枚举 / 两态 / 数值预设档三种来源都汇到这里）。
@@ -739,6 +836,75 @@ mod tests {
     use super::{SettingSpec, matches_query, value_by_key};
     use crate::model::Settings;
     use crate::registry::{self, KindTag};
+
+    /// 窗口冒烟：页面能在真实（headless）窗口里渲染，且搜索框与生效条件同步。
+    ///
+    /// 只走**读**路径：不点控件（写会落盘；配置目录已指到临时目录，即便误写也碰不到用户配置）。
+    ///
+    /// **未覆盖**：真实键盘输入 → `InputEvent::Change` → 订阅。headless 下合成的 `cx.emit`
+    /// 不会投递给 `subscribe_in` 订阅者（本次实测）；本仓另两个同款订阅
+    /// （`resource_view.rs` / `mock_view.rs`）也只测程序性入口，原因相同。
+    #[gpui_kit::test]
+    fn page_renders_and_syncs_the_search_condition(cx: &mut gpui_kit::TestAppContext) {
+        // 安全模式：显式列举依赖，不通配导入（见 gpui-kit-dev skill「窗口测试」）
+        use crate::set_config_dir_for_tests;
+        use std::rc::Rc;
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            // 配置目录指到临时目录：即使后续某次写入发生，也碰不到用户真实配置。
+            set_config_dir_for_tests(std::env::temp_dir().join("rds_settings_page_window"));
+            crate::SettingsService::init(cx);
+        });
+
+        let host = super::SettingsHost {
+            on_close: Rc::new(|_| {}),
+            on_open_cache: Rc::new(|_, _| {}),
+        };
+        let (page, cx) = cx.add_window_view(|window, cx| super::SettingsPage::new(window, host, cx));
+
+        cx.update(|window, cx| {
+            // 1) 渲染一帧：结构 / 组件 / 订阅全部走一遍（重入或 ElementId 碰撞会在这里爆）
+            window.draw(cx).clear(cx);
+            assert_eq!(
+                page.read(cx).debug_active_section(cx),
+                "appearance",
+                "默认停在登记表的第一节"
+            );
+
+            // 2) 程序性改词：输入框与生效条件同一次改（`set_value` 不发 Change，见 `set_query` 注释），
+            //    再渲染一帧——走搜索结果分支（包含命中高亮那一支）
+            page.update(cx, |page, cx| page.set_query("标签", window, cx));
+            window.draw(cx).clear(cx);
+            assert_eq!(page.read(cx).debug_filter(), "标签");
+        });
+    }
+
+    /// 搜索命中高亮：切出的片段能拼回原文，命中片段带查询词（大小写不敏感）。
+    #[test]
+    fn highlight_segments_rebuild_the_text() {
+        let segments = super::highlight_segments("显示标签", "标签");
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0], ("显示".to_string(), false));
+        assert_eq!(segments[1], ("标签".to_string(), true));
+        let rebuilt: String = segments.into_iter().map(|(s, _)| s).collect();
+        assert_eq!(rebuilt, "显示标签", "拼接必须还原原文");
+
+        // 大小写不敏感，且保留原文大小写
+        let upper = super::highlight_segments("Show Tags", "show");
+        assert_eq!(upper[0], ("Show".to_string(), true));
+        assert_eq!(upper[1], (" Tags".to_string(), false));
+
+        // 空查询 / 无命中都不切片
+        assert_eq!(
+            super::highlight_segments("abc", ""),
+            vec![("abc".to_string(), false)]
+        );
+        assert_eq!(
+            super::highlight_segments("abc", "zz"),
+            vec![("abc".to_string(), false)]
+        );
+    }
 
     /// 搜索命中面：key / 标签 / 说明 / 节名任一命中；空词命中全部。
     #[test]

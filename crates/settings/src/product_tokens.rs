@@ -123,7 +123,14 @@ pub struct ProductTokenSet {
 impl Global for ProductTokenSet {}
 
 /// 读取当前模式的产品角色。
+///
+/// **未安装时返回空集**（消费方全部回退标准字段），不 panic——
+/// 资产缺失 / 宿主未接线 / 测试环境都属正常降级场景，
+/// 视图渲染到一半炸掉比配色差一档严重得多（对齐降级矩阵）。
 pub fn get(cx: &App) -> ProductTokens {
+    if !cx.has_global::<ProductTokenSet>() {
+        return ProductTokens::default();
+    }
     let set = cx.global::<ProductTokenSet>();
     match cx.theme().mode {
         ThemeMode::Dark => set.dark,

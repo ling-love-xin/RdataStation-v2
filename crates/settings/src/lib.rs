@@ -29,6 +29,24 @@ use crate::registry::{SettingValue, Slot};
 /// 但又需要「建连超时 / LAN 关 TLS」这两个参数。
 static CONNECTION_DEFAULTS: RwLock<Option<ConnectionDefaults>> = RwLock::new(None);
 
+/// 上一次落盘失败的原因（`None` = 上一次落盘成功 / 还没写过）。
+///
+/// 为什么要有这个槽：落盘失败**不影响本进程生效**（值已经进了 global），
+/// 但用户必须看得见——否则"改了没存住"是完全静默的（架构 §13 K2）。
+static LAST_SAVE_ERROR: RwLock<Option<String>> = RwLock::new(None);
+
+/// 测试用配置目录覆盖（**只在测试构建存在**；生产代码永远不会设置它）。
+#[cfg(test)]
+static CONFIG_DIR_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// 把配置目录指到临时目录（仅测试用）。
+#[cfg(test)]
+pub(crate) fn set_config_dir_for_tests(dir: PathBuf) {
+    if let Ok(mut guard) = CONFIG_DIR_OVERRIDE.write() {
+        *guard = Some(dir);
+    }
+}
+
 /// 读取连接默认值（未发布时回退模型默认）。
 pub fn connection_defaults() -> ConnectionDefaults {
     CONNECTION_DEFAULTS
@@ -47,10 +65,15 @@ fn publish_connection_defaults(defaults: &ConnectionDefaults) {
 
 /// 用户配置目录：`%APPDATA%/RdataStation`。
 pub fn config_dir() -> PathBuf {
+    // 测试路径注入（仅测试构建）：避免测试碰用户真实配置。
+    #[cfg(test)]
+    if let Some(dir) = CONFIG_DIR_OVERRIDE.read().ok().and_then(|g| g.clone()) {
+        return dir;
+    }
     if let Some(appdata) = std::env::var_os("APPDATA") {
         PathBuf::from(appdata).join("RdataStation")
     } else {
-        // 非 Windows：跟随现有约定放到主目录，保证可写。
+        // 非 Windows：跟随现有约定放到主目录，保证可写（见 K5：将来改走平台配置目录）。
         std::env::temp_dir().join("RdataStation")
     }
 }
@@ -60,24 +83,71 @@ pub fn settings_path() -> PathBuf {
     config_dir().join("settings.json")
 }
 
-/// 从磁盘加载设置；文件不存在或解析失败时回退默认值（不覆盖坏文件）。
-pub fn load_settings() -> Settings {
-    let path = settings_path();
-    match std::fs::read_to_string(&path) {
+/// 从指定路径加载设置；文件不存在或解析失败时回退默认值（**不覆盖**坏文件）。
+pub fn load_settings_from(path: &std::path::Path) -> Settings {
+    match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
         Err(_) => Settings::default(),
     }
 }
 
-/// 保存设置到磁盘（幂等，失败静默——设置仍在本进程生效）。
-pub fn save_settings(settings: &Settings) {
-    let dir = config_dir();
-    if std::fs::create_dir_all(&dir).is_ok() {
-        if let Ok(text) = serde_json::to_string_pretty(settings) {
-            let _ = std::fs::write(settings_path(), text);
+/// 从磁盘加载设置（用户配置目录）。
+pub fn load_settings() -> Settings {
+    load_settings_from(&settings_path())
+}
+
+/// 保存到指定路径：**原子写**（临时文件 + rename）。
+///
+/// 为什么不是直写：直写时进程在写一半退出，`settings.json` 就会是半截 JSON——
+/// 下次启动解析失败即回退默认，等于把用户配置全丢了。
+pub fn save_settings_to(path: &std::path::Path, settings: &Settings) -> Result<(), String> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| format!("配置路径没有父目录：{}", path.display()))?;
+    let text = serde_json::to_string_pretty(settings).map_err(|e| format!("序列化失败：{e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    let result = std::fs::create_dir_all(dir)
+        .and_then(|()| std::fs::write(&tmp, &text))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // 失败的临时文件不留在用户配置目录里。
+            let _ = std::fs::remove_file(&tmp);
+            Err(format!("未能写入 {}：{e}", path.display()))
         }
     }
+}
+
+/// 上一次落盘失败的原因（不清除；下一次成功后自动清空）。
+pub fn last_save_error() -> Option<String> {
+    LAST_SAVE_ERROR.read().ok().and_then(|g| g.clone())
+}
+
+/// 记录落盘结果。
+fn set_last_save_error(err: Option<String>) {
+    if let Ok(mut guard) = LAST_SAVE_ERROR.write() {
+        *guard = err;
+    }
+}
+
+/// 保存设置到磁盘（幂等）。
+///
+/// 失败时**不改本进程已生效的值**（已进 global），只记录原因供界面提示
+/// （[`last_save_error`]）。
+pub fn save_settings(settings: &Settings) -> Result<(), String> {
+    // 先发布快照：本进程内的消费方（异步连接路径等）不受落盘结果影响。
     publish_connection_defaults(&settings.connection_defaults);
+    let result = save_settings_to(&settings_path(), settings);
+    set_last_save_error(result.as_ref().err().cloned());
+    result
+}
+
+/// 落盘并忽略返回值（失败原因已记进 `LAST_SAVE_ERROR`，由设置页展示）。
+///
+/// 各 `set_*` 走这里：它们不因落盘失败而回滚内存值，也不向调用方改签名。
+fn persist(settings: &Settings) {
+    let _ = save_settings(settings);
 }
 
 /// 设置服务：加载、读取、修改（含主题即时切换）。
@@ -203,7 +273,7 @@ impl SettingsService {
             settings.appearance.theme_mode = mode;
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
         Theme::change(mode, window, cx);
     }
 
@@ -228,7 +298,7 @@ impl SettingsService {
             settings.projects.sort_mode = mode.to_string();
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
     }
 
     /// 来源标识是否用短码（`P` / `G` / `GP`）。
@@ -243,7 +313,7 @@ impl SettingsService {
             settings.navigator.source_short_code = short_code;
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
         // 导航面板按需重渲染（设置与面板是不同实体，不通知不会即时刷新）。
         cx.refresh_windows();
     }
@@ -265,7 +335,7 @@ impl SettingsService {
             settings.navigator.show_tags = show;
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
         cx.refresh_windows();
     }
 
@@ -281,7 +351,7 @@ impl SettingsService {
             settings.navigator.show_scope = show;
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
         cx.refresh_windows();
     }
 
@@ -297,7 +367,7 @@ impl SettingsService {
             settings.navigator.filters = filters;
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
         cx.refresh_windows();
     }
 
@@ -315,7 +385,7 @@ impl SettingsService {
             settings.connection_defaults.connect_timeout_ms = ms;
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
     }
 
     /// LAN / 本机直连是否显式关闭 TLS。
@@ -330,7 +400,7 @@ impl SettingsService {
             settings.connection_defaults.lan_disable_tls = on;
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
     }
 
     /// 设置并持久化属性面板宽度（rem 倍率）。
@@ -340,6 +410,72 @@ impl SettingsService {
             settings.navigator.property_panel_width = width;
         }
         let settings = cx.global::<Settings>().clone();
-        save_settings(&settings);
+        persist(&settings);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 临时目录（每个用例独立，避免并行测试互相干扰）。
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rds_settings_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// 往返：写进临时文件再读回来，值一致；**临时文件不留残影**（原子写的中间态）。
+    #[test]
+    fn round_trip_through_disk_leaves_no_temp_file() {
+        let dir = temp_dir("roundtrip");
+        let path = dir.join("settings.json");
+        let mut settings = Settings::default();
+        settings.navigator.show_tags = true;
+        settings.connection_defaults.connect_timeout_ms = 30_000;
+
+        save_settings_to(&path, &settings).expect("写盘");
+        let back = load_settings_from(&path);
+        assert!(back.navigator.show_tags);
+        assert_eq!(back.connection_defaults.connect_timeout_ms, 30_000);
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "临时文件必须被 rename 掉"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 写盘失败要**报出来**（不再静默）：父路径是个文件时必然失败。
+    #[test]
+    fn save_failure_is_reported() {
+        let dir = temp_dir("fail");
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let blocker = dir.join("blocked");
+        std::fs::write(&blocker, "not a directory").expect("放个文件挡住目录");
+
+        let result = save_settings_to(&blocker.join("settings.json"), &Settings::default());
+        let err = result.expect_err("父路径是文件时必须失败");
+        assert!(err.contains("未能写入"), "错误里要带落点：{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 错误槽：失败后留下原因（页面据此提示），下一次成功后清空（提示收起）。
+    ///
+    /// 走的是公开入口 `save_settings` + 配置目录注入，因此覆盖到真实路径拼装。
+    #[test]
+    fn last_save_error_tracks_failure_then_success() {
+        let dir = temp_dir("slot");
+        std::fs::create_dir_all(&dir).expect("建目录");
+        let blocker = dir.join("blocked");
+        std::fs::write(&blocker, "x").expect("挡住");
+
+        set_config_dir_for_tests(blocker.join("cfg"));
+        assert!(save_settings(&Settings::default()).is_err());
+        assert!(last_save_error().is_some(), "失败必须留下原因");
+
+        set_config_dir_for_tests(dir.join("cfg"));
+        assert!(save_settings(&Settings::default()).is_ok());
+        assert!(last_save_error().is_none(), "成功后必须清空错误槽");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

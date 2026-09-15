@@ -6,6 +6,22 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16（第三批）— 写盘失败可见 + 原子写 + 搜索高亮 + 窗口冒烟（P2 主体）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **原子写** | `save_settings_to`：临时文件 + rename；失败时清掉临时文件并返回原因 | `crates/settings/src/lib.rs` |
+| **失败可见（K2 关闭）** | 进程级错误槽 + `last_save_error()`；页面在底栏上方渲染危险色提示「未能写入 settings.json：…（本次改动只在本进程生效）」；下一次成功后自动清空 | 同上 + `settings_page.rs` |
+| **可注入路径** | `load_settings_from` / `save_settings_to` + 测试用配置目录覆盖（`#[cfg(test)]`）——测试不再碰用户真实配置 | 同上 |
+| **搜索命中高亮** | 命中片段上 `search.match.background` 底色（标签行分段渲染）；大小写折叠改变字节长度时整段不高亮（不切在非字符边界上） | `settings_page.rs` |
+| **降级修复** | `product_tokens::get` 未安装时返回空集（原先 **panic**）：资产缺失 / 宿主未接线 / 测试都不应炸 | `product_tokens.rs` |
+| **窗口测试（P1.7 冒烟）** | 真实 headless 窗口：渲染一帧 + 默认停在第一节 + 程序性改词→过滤条件同步 | `settings_page.rs` |
+| 测试 | **22 项全绿、零告警**（较上批 +5：原子写往返 / 失败上报 / 错误槽 / 高亮切片 / 窗口冒烟） | §5 |
+
+> 本批实测到两条**容易踩的事实**（已写进代码注释）：
+> 1. `InputState::set_value` 的值**下一帧才可读**，且它自己**不发** `InputEvent::Change`——程序性改词必须同时改“生效条件”（本页 `set_query`，与 `resource_view.rs` 同结论）；
+> 2. **headless 下合成的 `cx.emit` 不会投递给 `subscribe_in` 订阅者**——所以键盘输入路径没有自动化覆盖（本仓另两个同款订阅也只测程序性入口），登记为 K10。
+
 ### 2026-09-16（第二批）— 两栏页面实体 + 槽位分发表（P1b 主体）
 
 | 项 | 内容 | 落点 |
@@ -35,7 +51,7 @@
 
 | 能力 | 现状 | 缺口 |
 | --- | --- | --- |
-| 模型与持久化 | `Settings` 4 节 + `settings.json`（`%APPDATA%/RdataStation`）；缺失 / 坏文件回退默认 | 写盘非原子、失败静默（K2）；非 Windows 落临时目录（K5） |
+| 模型与持久化 | `Settings` 4 节 + `settings.json`（`%APPDATA%/RdataStation`）；缺失 / 坏文件回退默认；**原子写 + 失败可见**（错误槽 → 页面提示） | 非 Windows 落临时目录（K5） |
 | 服务与命令 | `SettingsService`（init / get / 9 个 `set_*` / 主题切换）、进程级连接默认值快照 | 构造期直读 2 处（K1）；`ToggleThemeMode` 未接线（K8） |
 | 登记表（准入） | ✅ `registry.rs`：`REGISTRY` 9 项 + `Slot` 分发表 + `presets` + **11 项契约测试** | 待接线项（M6 `keep_versions`）还未入表（按设计如此） |
 | 页面形态 | ✅ 两栏实体已落地（`settings_page.rs`：导航 / 内容区 / 搜索 / 恢复默认） | **宿主替换未做**（工作台仍挂旧视图，P1.6）；无窗口测试；`↺` 的 hover 卡未接 |
@@ -70,14 +86,14 @@
 | P1.6 | 替换宿主渲染（`settings_view` → `settings_page`），旧文件退役 | `workbench/src/view.rs::render_settings_panel`、`settings/src/lib.rs` | 入口 / `Ctrl+,` / Quick Open 三入口行为不变 | ⬜ 等 `view.rs` 并行改动落地 |
 | P1.7 | 窗口测试（切节 / 点击写入 / 恢复默认） | `settings_page.rs` 或 `tests/` | 需给 `settings` 加 `test-support` dev-dep（照 `project` 做法） | ⬜ |
 
-### P2 搜索与状态（待排）
+### P2 搜索与状态（✅ 主体已完成）
 
-| # | 任务 | 落点 | 验收 |
-| --- | --- | --- | --- |
-| P2.1 | 搜索行（`Input` + 命中高亮） | `settings_page.rs` | 搜节名 / 行标签 / 说明 / key 均可命中；无结果显示空态 |
-| P2.2 | 行级「恢复默认」（非默认值时出现）+ 节级「重置本节」 | 同上 | 恢复后与 `registry.default_json` 一致 |
-| P2.3 | 写盘失败可见 | `settings/src/lib.rs` + 页面底栏 | `save_settings` 返回 `Result`；只读目录下改值 → 底栏 danger 提示 |
-| P2.4 | 底栏提示文案（生效方式 / 路径） | `settings_page.rs` | 与原型 §4.4 一致 |
+| # | 任务 | 落点 | 验收 | 状态 |
+| --- | --- | --- | --- | --- |
+| P2.1 | 搜索行（`Input` + 命中高亮） | `settings_page.rs` | 搜节名 / 行标签 / 说明 / key 均可命中；无结果显示空态；命中片段上底色 | ✅ |
+| P2.2 | 行级「恢复默认」（非默认值时出现）+ 节级「重置本节」 | 同上 | 恢复后与 `registry.default_json` 一致 | ✅（P1b 已做） |
+| P2.3 | 写盘失败可见 | `settings/src/lib.rs` + 页面底栏上方提示 | `save_settings` 返回 `Result`；只读目录下改值 → 危险色提示；成功后提示自动收起 | ✅（含原子写） |
+| P2.4 | 底栏提示文案（生效方式 / 路径） | `settings_page.rs` | 各行 `hint` 已写明生效方式；底栏仍为单句路径提示（按节汇总未做） | 🟡 部分 |
 
 ### P3 宿主与契约（待排）
 
@@ -106,9 +122,9 @@
 | T2 | facet 筛选序列化往返 | 纯函数 | ✅ |
 | T3 | 未登记字段 → 契约测试变红 | 纯函数 | ✅ `registry::tests`（6 项） |
 | T4 | 默认值表 == 模型默认值 | 纯函数 | ✅ |
-| T5 | 每个 `set_*` 后 global 与磁盘一致（临时目录隔离） | 纯函数 + 文件 | ⬜ P2.3 |
-| T6 | 写盘失败（只读目录）→ 返回值 + 页面提示 | 纯函数 + 视图 | ⬜ P2.3 |
-| T7 | 切节 / 搜索过滤 / 无结果空态 | 窗口测试 | ⬜ P1b / P2.1 |
+| T5 | 每个 `set_*` 后 global 与磁盘一致（临时目录隔离） | 纯函数 + 文件 | ✅ 原子写往返 + 错误槽 |
+| T6 | 写盘失败（只读目录）→ 返回值 + 页面提示 | 纯函数 + 视图 | ✅ 返回原因 + 页面横幅（只读目录的 UI 断言待 P1.7 扩） |
+| T7 | 切节 / 搜索过滤 / 无结果空态 | 窗口测试 | 🟡 渲染 + 程序性改词已覆盖；键盘输入路径未覆盖（K10） |
 | T8 | 恢复默认（行级 / 节级）后取值回落 | 窗口测试 | ⬜ P2.2 |
 | T9 | 三入口（⚙ / `Ctrl+,` / Quick Open）开合并互斥 | 窗口测试 | ⬜ P3.1 |
 | T10 | 双入口一致性（显示标签：`⋯` 菜单与页面） | 窗口测试 | ⬜ P4.2 |
@@ -132,7 +148,7 @@
 
 ```bash
 # 5.1 本 crate（契约测试 + 模型兼容）
-cargo test -p rds-settings            # ✅ 17 项全绿（含 11 项登记表/槽位契约）
+cargo test -p rds-settings            # ✅ 22 项全绿（含 11 项登记表/槽位契约 + 1 项窗口冒烟）
 
 # 5.2 宿主与视图契约（尺寸 / 颜色扫描 + 边栏状态机）
 cargo test -p rds-workbench --test ui_contract
