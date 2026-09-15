@@ -83,14 +83,16 @@
 | B7 上下文菜单动作（查看数据 / 复制名 / 查看属性 / 刷新） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`ContextMenuExt::context_menu` 挂到连接行 / 对象节点 / 分组头；`Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（生成 SELECT → 编辑区）；`toggle_connection` / `refresh_node` / `delete_group` / `create_group_interactive`；分组删除带 `AlertDialog` 确认 |
 | B8 缓存管理入口 + 短码⇄文字开关 + 属性面板宽度记忆 | ✅ 已实现（2026-09-12） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`（数据源导航节）；`crates/workbench/src/components/cache_dialog.rs`（两处入口）；`panels.rs::{refresh_all, render_connection_row, render_property_panel}` + `EditorPanel::render`（`h_resizable`） |
 | B7 拖拽（表 / 视图 → 编辑区插入限定名） | ✅ 已实现（2026-09-16） | `crates/workbench/src/panels.rs`：`NavDragPayload` + `NavDragGhost`（拖拽幽灵）、`render_nav_node` 挂 `on_drag`（仅表 / 视图）、SQL 区容器 `drag_over` + `on_drop`、编辑区 `content` 兜底 `on_drop`、`EditorPanel::apply_nav_drag`（`NavDropMode::{AtCursor, Append}`） |
+| B3 归组拖拽 + 组内外手动排序 | ✅ 已实现（2026-09-16） | `panels.rs`：`NavConnDragPayload` / `ConnDropTarget` / `nav_reorder`（纯函数）、连接行与引用行挂 `on_drag`+`on_drop`、分组头挂 `on_drop`（归组 / 移出全部）、`SidebarPanel::{apply_conn_drop, container_order, container_label}`；落库 `ConnectionOrgStore::{set_member_order_all, list_ungrouped_order, set_ungrouped_order}` + `nav_runtime::set_container_order` |
+| B3 分组描述表单（名称 + 描述） | ✅ 已实现（2026-09-16） | `crates/workbench/src/components/group_form_dialog.rs`（新建 / 编辑共用；名称必填 + 内联提示）；入口：面板头 `🗂＋`、分组右键「新建分组 / 编辑分组…」、组内联编辑器「新建分组」；落库 `nav_runtime::{create_group_with, update_group}`（`rename_group` 不再洗掉描述） |
 
 **Phase B 已知限制**
 
 - 属性面板为**堆叠分区**（列/索引/约束），暂未做子实体 Tab 切换；
 - 双击节点打开属性（gpui `click_count >= 2`）；右键菜单已实现（见下方 B7 范围）；复制 / 生成 SQL 已支持、INSERT/UPDATE/DELETE 待后续；
 - 属性加载已迁后台（`nav_jobs::enqueue_properties` + `apply_props_results`），与 Phase A 的阻塞式问题一并收敛；
-- 归组：入口为右键「**移动到分组…**」（v6 已移除行内 `🗂`）；**归组拖拽与组内外手动排序仍未接线**（排序服务 `ConnectionOrgStore::set_member_order` 已就绪，缺 UI 入口）；表 / 视图 → 编辑区的拖拽已实现（见下方「B7 拖拽实现说明」）；
-- 新建分组用默认名「新建分组」（自动去重）；重命名已支持（分组头右键 → 行内输入），描述表单待后续；
+- 归组：入口=右键「**移动到分组…**」或**把连接行拖到分组头**（v6 已移除行内 `🗂`）；组内外手动排序已接线（见下方「B3 归组拖拽与排序实现说明」）；
+- 新建分组与编辑分组都走**表单**（名称 + 描述，`group_form_dialog.rs`）；行内重命名（分组头右键 → 行内输入）仍保留，只改名称；
 - **facet 筛选**（归属域 + 类型 / 驱动 / 标签）持久化在 `settings.json` 的 `Navigator::filters`（UI 偏好）；**展开 / 选中**仍走 `navigator_state`；分组关系走组织存储；无单独的面板级 `navigator_state` 行。
 - 搜索支持**连接名 + 标签**子串匹配，并支持 `scope:` / `source:` / `type:` / `driver:` / `tag:` 结构化 token（作额外 AND 约束）；命中高亮已实现（C5）。
 
@@ -101,7 +103,7 @@
 | 连接 | 连接 / 断开 · **测试连接** · 编辑连接… · 查看属性 · 移动到分组… · 设为主组 ▸ · **复制连接（模板）…** · **共享至项目**（仅 `G_`）/ **取消共享**（仅 `GP_`） · **删除连接**（二次确认） · 复制名称 · 刷新元数据 · **通用项** |
 | 表 / 视图 | 查看属性 · 查看数据（`SELECT * … LIMIT 200` 注入编辑区） · **生成 SQL ▸**（INSERT / UPDATE / DELETE） · 复制名称 · 复制限定名 · 刷新元数据 · **通用项** · **生成 Mock 数据**（表 / 视图专属） |
 | 其他对象（列 / Catalog / Schema / 文件夹 / 例程 / 序列 / 触发器） | 查看属性 · 复制名称（*限定名仅在有 catalog/schema 时出现*） · 刷新元数据（*仅可展开节点*） · **通用项** |
-| 分组头 | 重命名分组（行内输入） · 新建分组 · 删除分组（`AlertDialog` 二次确认）；「未分组」仅「新建分组」 |
+| 分组头 | 重命名分组（行内输入） · **编辑分组…**（表单：名称 + 描述） · 新建分组（表单） · 删除分组（`AlertDialog` 二次确认）；「未分组」仅「新建分组」 |
 
 > **通用项**（所有节点都有，位于菜单底部、分隔线之后）：**在 SQL 编辑器中打开** · **查看洞察**；
 > **生成 Mock 数据**仅**表 / 视图**有，夹在两者之间。
@@ -119,7 +121,19 @@
   - **编辑区内容区**（兜底）：追加到草稿末尾；拖到编辑区任意位置都不会“没落点”。
 - 未聚焦的 SQL 输入光标停在 0，直接插入会把表名顶到用户语句前面 → 只有**SQL 区可见且已聚焦**时才走光标插入，其余一律追加（与右键「查看数据」同策略走 `set_value`，不发 `InputEvent`，手动同步 `editor_dirty` / `editor_sql`）。
 - 两种落点都**聚焦 SQL 区**；SQL 区不可见（非联邦连接）时额外给一条面板通知，说明名字已进草稿。
-- 未做：归组拖拽、组内外手动排序（`ConnectionOrgStore::set_member_order` 已就绪，缺 UI 入口）。
+
+**B3 归组拖拽与排序实现说明（2026-09-16）**
+
+- 连换行（含引用行）可拖，载荷 `NavConnDragPayload { conn_id, name }`（与表 / 视图的载荷**不同类型**：落点只认自己的类型，拖到不相干的元素上自然什么都不发生）。
+- 落点语义（`ConnDropTarget`）：
+  - **分组头**（`Container`）：自定义组 = 加入并**保留**其它归属（多对多）；「未分组」头 = `remove_from_all_groups`（移出全部）；已在容器内且落组头→**不改位置**（避免“只是归组”把行拽到末尾）。
+  - **连接行 / 引用行**（`BeforeRow`）：先归组，再插到该行**之前**（跨组拖 = 归组 + 定位一步到位）。
+- 顺序计算是纯函数 `nav_reorder(ids, moving, before)`：拖到自己身上 / 已就位 → `None`（不写库）；目标行被筛选掉不在列表里 → 退化为追加。
+- 落库**每次写整个容器的 `0..n`**（`set_member_order_all` / `set_ungrouped_order`），不做相对插入：序号不会出现空洞，也不依赖拖拽前的快照。写库前先 `reload_nav_org()` 拿**变更后**的成员表（否则刚加入的成员会缺席）。
+- **「未分组」没有真实分组行**，成员是推导出来的（不属于任何分组），故顺序单开 `navigator_ungrouped_order`（迁移 021）；写库是**整体替换**（先清后写），避免连接重新回到未分组时“复活”旧位置。
+- 渲染顺序：手动排序在前，未排过的按名称升序（`container_order` / `render_nav_tree` 同源）；排序落库时用**未筛选**的全量成员，避免被搜索过滤掉的行丢位置。
+- 「未分组」头在**已有自定义分组时也渲染**（即使为空）：它是「拖拽移出分组」的常驻落点；右键菜单也能移出，两条路都在。
+- 未做：**分组本身**的拖拽排序（`connection_groups.sort_order` 已就绪，缺 UI 入口）；「未手动排序按名称」只在渲染侧生效，存储侧仍按 `sort_order, connection_id` 返回（见架构 §11#20）。
 
 **Phase B8 已实现范围**
 
@@ -242,9 +256,9 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| B1 | 分组服务：CRUD + 多对多成员 + 排序（手动优先，未排按名称）| ✅ `crates/engine/src/persistence/connection_org_store.rs`（连接域共用，2026-09-11 上提） | 一连接可属多组；排序持久化 |
+| B1 | 分组服务：CRUD + 多对多成员 + 排序（手动优先，未排按名称）| ✅ `crates/engine/src/persistence/connection_org_store.rs`（连接域共用，2026-09-11 上提；2026-09-16 补 `set_member_order_all` / `list_ungrouped_order` / `set_ungrouped_order`） | 一连接可属多组；排序持久化 |
 | B2 | 标签服务：多值增删改 + 按标签检索 | ✅ 同上 + `connection_tags`（权威检索表；M3 保存同步 / 删除清理） | `tag:x` 检索命中 |
-| B3 | 分组/标签视图：拖拽归组、右键「分组 ▸ / 标签 ▸」、分组对话框（名称/描述） | `database_nav_panel.rs` + `Dialog` | 归组对话框走通；分组头统一配色（**归组拖拽仍未做**，入口为右键「移动到分组…」） |
+| B3 | 分组/标签视图：拖拽归组、右键「分组 ▸ / 标签 ▸」、分组对话框（名称/描述） | `database_nav_panel.rs` + `Dialog` | ✅ 归组拖拽 + 组内排序 + 分组表单（名称/描述）均走通；分组头统一配色 |
 | B4 | 搜索：本地筛选 + FTS（`search_fts`）+ 结果落编辑区 + 高亮 | `navigator_service.rs` + `database_nav_panel.rs` + `crates/workbench/panels.rs` | 300ms 防抖；命中高亮；Enter 打开 |
 | B5 | 属性面板：类型注册表（connection/table/view/column/index/constraint/routine/…）+ 右侧停靠面板（属性/数据 Tab） | `crates/database/src/property_panel.rs` + workbench 编辑区右侧面板 | 双击/右键打开；字段随类型变化；宽度记忆 |
 | B6 | 状态持久化：`navigator_state` 读写 + 800ms 防抖；分组展开态 | `navigator_service.rs` + engine `persistence` | 重启恢复展开/选中/过滤 |

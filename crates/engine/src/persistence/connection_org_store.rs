@@ -1,9 +1,11 @@
 //! 连接组织元数据存储（分组 / 标签）——M3 连接模块与 M4 导航模块共用。
 //!
 //! 定位：**连接的组织元数据**（不是导航视图状态）。表与迁移
-//! `global/018_add_navigator_state.sql`、`project_meta/017_add_navigator_groups_tags_state.sql` 一致：
+//! `global/018_add_navigator_state.sql`、`project_meta/017_add_navigator_groups_tags_state.sql`、
+//! `project_meta/021_add_navigator_ungrouped_order.sql` 一致：
 //! - `connection_tags`：连接 ↔ 标签（多值），随连接所在库（全局 / 项目）；
-//! - `connection_groups` / `connection_group_members`：**项目级**分组（多对多 + 组内排序）。
+//! - `connection_groups` / `connection_group_members`：**项目级**分组（多对多 + 组内排序）；
+//! - `navigator_ungrouped_order`：**项目级**「未分组」容器的手动顺序（见 [`UNGROUPED_SCOPE`]）。
 //!
 //! 与导航视图状态（`navigator_state`：展开/选中/过滤）分离——后者归导航模块私有。
 //! 本存储同步（rusqlite），面向 UI 线程的轻量调用（单条 / 少量行）。
@@ -22,6 +24,13 @@ use shared::error::{CoreError, StorageError};
 pub const RS_META_DIR_NAME: &str = ".RSmeta";
 /// 项目库文件名。
 const PROJECT_DB_NAME: &str = "project.db";
+
+/// 「未分组」容器的作用域哨兵。
+///
+/// 它**不是** `connection_groups` 里的行（否则要处理一张不存在的分组）：成员由
+/// “不属于任何分组”推导，顺序单独落在 `navigator_ungrouped_order`。
+/// 导航视图（`workbench`）的分组伪 ID 必须与此保持同值。
+pub const UNGROUPED_SCOPE: &str = "__ungrouped__";
 
 /// 连接分组（项目级）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +128,16 @@ impl ConnectionOrgStore {
             // 不落迁移的原因：项目库可能先被 `ensure_tables` 建表、后跑迁移，
             // 普通 `ALTER TABLE ADD COLUMN` 无法条件化，冲会触发重复列错误。
             self.ensure_member_primary_column()?;
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS navigator_ungrouped_order (
+                        connection_id TEXT PRIMARY KEY,
+                        sort_order    INTEGER NOT NULL DEFAULT 0,
+                        updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )",
+                    [],
+                )
+                .map_err(|e| self.err("create_navigator_ungrouped_order", e))?;
         }
         Ok(())
     }
@@ -333,6 +352,78 @@ impl ConnectionOrgStore {
         Ok(())
     }
 
+    /// 重写某分组的成员顺序（一次事务；序号 = 下标）。
+    ///
+    /// 只更新**已是成员**的行（非成员 `UPDATE` 影响 0 行，不报错）：调用方需先
+    /// `add_member`。完整的 `0..n` 重写而非相对插入，避免序号空洞与并发对不上。
+    pub fn set_member_order_all(
+        &self,
+        group_id: &str,
+        conn_ids: &[String],
+    ) -> Result<(), CoreError> {
+        if !self.is_project {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| self.err("begin_member_order_all", e))?;
+        for (i, cid) in conn_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE connection_group_members SET sort_order = ?3
+                 WHERE group_id = ?1 AND connection_id = ?2",
+                params![group_id, cid, i as i64],
+            )
+            .map_err(|e| self.err("member_order_all", e))?;
+        }
+        tx.commit()
+            .map_err(|e| self.err("commit_member_order_all", e))?;
+        Ok(())
+    }
+
+    /// 「未分组」容器的显式顺序（未手动排序的连接不在结果中）。
+    pub fn list_ungrouped_order(&self) -> Vec<String> {
+        if !self.is_project {
+            return Vec::new();
+        }
+        let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT connection_id FROM navigator_ungrouped_order ORDER BY sort_order ASC")
+        else {
+            return Vec::new();
+        };
+        match stmt.query_map([], |r| r.get::<_, String>(0)) {
+            Ok(iter) => iter.filter_map(Result::ok).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// 重写「未分组」容器的顺序（整体替换：序号 = 下标）。
+    ///
+    /// 整体替换（先清后写）而非补写：容器的成员是**推导**出来的（“不属于任何分组”），
+    /// 表里只保留当前实际的未分组连接，避免旧行在连接重新回到未分组时“复活”旧位置。
+    pub fn set_ungrouped_order(&self, conn_ids: &[String]) -> Result<(), CoreError> {
+        if !self.is_project {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| self.err("begin_ungrouped_order", e))?;
+        tx.execute("DELETE FROM navigator_ungrouped_order", [])
+            .map_err(|e| self.err("clear_ungrouped_order", e))?;
+        for (i, cid) in conn_ids.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO navigator_ungrouped_order (connection_id, sort_order) VALUES (?1, ?2)",
+                params![cid, i as i64],
+            )
+            .map_err(|e| self.err("insert_ungrouped_order", e))?;
+        }
+        tx.commit()
+            .map_err(|e| self.err("commit_ungrouped_order", e))?;
+        Ok(())
+    }
+
     /// 设置成员在组内的排序。
     pub fn set_member_order(
         &self,
@@ -486,6 +577,12 @@ impl ConnectionOrgStore {
                     params![conn_id],
                 )
                 .map_err(|e| self.err("cleanup_group_members", e))?;
+            self.conn
+                .execute(
+                    "DELETE FROM navigator_ungrouped_order WHERE connection_id = ?1",
+                    params![conn_id],
+                )
+                .map_err(|e| self.err("cleanup_ungrouped_order", e))?;
         }
         Ok(())
     }
@@ -599,6 +696,57 @@ mod tests {
         store.set_primary_group("P_a", "g1").expect("set g1 again");
         store.clear_primary_group("P_a").expect("clear");
         assert!(store.list_primary_group_pairs().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn member_and_ungrouped_order_roundtrip() {
+        let dir = temp_dir("order");
+        let store = ConnectionOrgStore::open_at(dir.join("p.db"), true).expect("open");
+        store.create_group("g1", "alpha", None).expect("g1");
+        for c in ["P_a", "P_b", "P_c"] {
+            store.add_member("g1", c).expect("add");
+        }
+
+        // 组内排序：整体重写（序号 = 下标）。
+        store
+            .set_member_order_all("g1", &["P_c".into(), "P_a".into(), "P_b".into()])
+            .expect("order");
+        assert_eq!(
+            store.list_group_members("g1"),
+            vec!["P_c".to_string(), "P_a".to_string(), "P_b".to_string()]
+        );
+        // 非成员不报错（`UPDATE` 影响 0 行）：默认排序下位置不变。
+        store
+            .set_member_order_all("g1", &["P_b".into(), "P_c".into(), "P_a".into()])
+            .expect("order again");
+        assert_eq!(
+            store.list_group_members("g1"),
+            vec!["P_b".to_string(), "P_c".to_string(), "P_a".to_string()]
+        );
+
+        // 未分组容器：整体替换（不是补写），删掉的连接不会留下旧位置。
+        assert!(store.list_ungrouped_order().is_empty());
+        store
+            .set_ungrouped_order(&["P_x".into(), "P_y".into()])
+            .expect("ungrouped");
+        assert_eq!(
+            store.list_ungrouped_order(),
+            vec!["P_x".to_string(), "P_y".to_string()]
+        );
+        store.set_ungrouped_order(&["P_y".into()]).expect("replace");
+        assert_eq!(store.list_ungrouped_order(), vec!["P_y".to_string()]);
+
+        // 删除连接 → 未分组顺序一并清理。
+        store.remove_connection("P_y").expect("cleanup");
+        assert!(store.list_ungrouped_order().is_empty());
+
+        // 全局库无分组表：两者均为 no-op / 空。
+        let global = ConnectionOrgStore::open_at(dir.join("g.db"), false).expect("open global");
+        assert!(global.set_ungrouped_order(&["G_a".into()]).is_ok());
+        assert!(global.list_ungrouped_order().is_empty());
+        assert!(global.set_member_order_all("g1", &["G_a".into()]).is_ok());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

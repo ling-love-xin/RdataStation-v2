@@ -32,6 +32,7 @@ use crate::commands::{
     ScratchpadSelectAll, ScratchpadUp,
 };
 use crate::components::connection_dialog;
+use crate::components::group_form_dialog::{self, GroupFormSeed};
 
 use scratchpad::{
     ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore, TrashEntry,
@@ -2967,8 +2968,20 @@ impl SidebarPanel {
                     .child("\u{1f5c2}\u{ff0b}")
                     .on_click({
                         let entity = cx.entity();
-                        move |_, _, app: &mut App| {
-                            entity.update(app, |this, cx| this.create_group_interactive(cx));
+                        let seed = GroupFormSeed::for_new(self.next_group_name());
+                        move |_, window, app: &mut App| {
+                            let e = entity.clone();
+                            let seed = seed.clone();
+                            group_form_dialog::open_group_form_dialog(
+                                window,
+                                app,
+                                seed,
+                                move |gid, name, desc, app| {
+                                    e.update(app, |this, cx| {
+                                        this.save_group_form(gid, name, desc, cx);
+                                    });
+                                },
+                            );
                         }
                     }),
             )
@@ -3836,6 +3849,9 @@ impl SidebarPanel {
         let gname = name.to_string();
         let is_ungrouped = group_id == GROUP_UNGROUPED;
         let health_text = format!("{connected_count}/{count}");
+        // 分组表单初值：新建用自动去重默认名，编辑预填现有名称与描述。
+        let default_group_name = self.next_group_name();
+        let group_seed = self.group_form_seed(group_id);
 
         let header = div()
             .id(format!("nav-group-{group_id}"))
@@ -3973,14 +3989,29 @@ impl SidebarPanel {
                     if is_ungrouped {
                         return menu.item(PopupMenuItem::new("新建分组").on_click({
                             let entity = entity.clone();
-                            move |_, _, app| {
-                                entity.update(app, |this, cx| this.create_group_interactive(cx));
+                            let seed = GroupFormSeed::for_new(default_group_name.clone());
+                            move |_, window, app| {
+                                let e = entity.clone();
+                                let seed = seed.clone();
+                                group_form_dialog::open_group_form_dialog(
+                                    window,
+                                    app,
+                                    seed,
+                                    move |gid, name, desc, app| {
+                                        e.update(app, |this, cx| {
+                                            this.save_group_form(gid, name, desc, cx);
+                                        });
+                                    },
+                                );
                             }
                         }));
                     }
                     let e_rename = entity.clone();
                     let gid_rename = gid.clone();
                     let e_new = entity.clone();
+                    let seed_new = GroupFormSeed::for_new(default_group_name.clone());
+                    let e_desc = entity.clone();
+                    let seed_desc = group_seed.clone();
                     let e_del = entity.clone();
                     let gid_del = gid.clone();
                     let gname_del = gname.clone();
@@ -3991,9 +4022,39 @@ impl SidebarPanel {
                             cx.notify();
                         });
                     }))
-                    .item(PopupMenuItem::new("新建分组").on_click(move |_, _, app| {
-                        e_new.update(app, |this, cx| this.create_group_interactive(cx));
-                    }))
+                    // 名称 + 描述一次编辑（行内重命名只改名称，这里补上描述）。
+                    .item(
+                        PopupMenuItem::new("编辑分组…").on_click(move |_, window, app| {
+                            let e = e_desc.clone();
+                            let seed = seed_desc.clone();
+                            group_form_dialog::open_group_form_dialog(
+                                window,
+                                app,
+                                seed,
+                                move |gid, name, desc, app| {
+                                    e.update(app, |this, cx| {
+                                        this.save_group_form(gid, name, desc, cx);
+                                    });
+                                },
+                            );
+                        }),
+                    )
+                    .item(
+                        PopupMenuItem::new("新建分组").on_click(move |_, window, app| {
+                            let e = e_new.clone();
+                            let seed = seed_new.clone();
+                            group_form_dialog::open_group_form_dialog(
+                                window,
+                                app,
+                                seed,
+                                move |gid, name, desc, app| {
+                                    e.update(app, |this, cx| {
+                                        this.save_group_form(gid, name, desc, cx);
+                                    });
+                                },
+                            );
+                        }),
+                    )
                     .separator()
                     .item(
                         PopupMenuItem::new("删除分组").on_click(move |_, window, app| {
@@ -4105,12 +4166,7 @@ impl SidebarPanel {
                     let scope = scope.clone();
                     let before = before.clone();
                     entity.update(app, |this, cx| {
-                        this.apply_conn_drop(
-                            payload,
-                            &scope,
-                            ConnDropTarget::BeforeRow(before),
-                            cx,
-                        )
+                        this.apply_conn_drop(payload, &scope, ConnDropTarget::BeforeRow(before), cx)
                     });
                 }
             })
@@ -5004,7 +5060,6 @@ impl SidebarPanel {
         }
 
         // 新建分组并直接归入当前连接。
-        let root_new = root.clone();
         let cid_new = conn.id.clone();
         panel = panel.child(
             div()
@@ -5028,28 +5083,37 @@ impl SidebarPanel {
                 .child(div().text_xs().text_color(accent).child("新建分组"))
                 .on_click({
                     let entity = cx.entity();
-                    move |_, _, app: &mut App| {
-                        let root = root_new.clone();
+                    let seed = GroupFormSeed::for_new(self.next_group_name());
+                    move |_, window, app: &mut App| {
+                        let e = entity.clone();
+                        let seed = seed.clone();
                         let cid = cid_new.clone();
-                        entity.update(app, |this, cx| {
-                            let name = this.next_group_name();
-                            match crate::services::nav_runtime::create_group(root.as_deref(), &name)
-                            {
-                                Ok(gid) => {
-                                    let _ = crate::services::nav_runtime::add_to_group(
+                        group_form_dialog::open_group_form_dialog(
+                            window,
+                            app,
+                            seed,
+                            move |gid, name, desc, app| {
+                                // 组内联编辑器：新建后直接把当前连接归入该组。
+                                let cid = cid.clone();
+                                e.update(app, |this, cx| {
+                                    let Some(new_gid) = this.save_group_form(gid, name, desc, cx)
+                                    else {
+                                        return;
+                                    };
+                                    let root = this.project_root();
+                                    if let Err(err) = crate::services::nav_runtime::add_to_group(
                                         root.as_deref(),
-                                        &gid,
+                                        &new_gid,
                                         &cid,
-                                    );
+                                    ) {
+                                        *this.shared.notice.borrow_mut() =
+                                            Some(format!("归组失败: {err}"));
+                                    }
                                     this.reload_nav_org();
-                                }
-                                Err(e) => {
-                                    *this.shared.notice.borrow_mut() =
-                                        Some(format!("新建分组失败: {e}"));
-                                }
-                            }
-                            cx.notify();
-                        });
+                                    cx.notify();
+                                });
+                            },
+                        );
                     }
                 }),
         );
@@ -6104,15 +6168,67 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// 新建分组（默认名自动去重）并重载组织数据。
-    fn create_group_interactive(&self, cx: &mut Context<Self>) {
-        let name = self.next_group_name();
+    /// 分组表单初值（编辑时需带上描述；分组头渲染只拿到名称）。
+    fn group_form_seed(&self, group_id: &str) -> GroupFormSeed {
+        let view = self.database_nav.borrow();
+        view.groups
+            .iter()
+            .find(|g| g.id == group_id)
+            .map(GroupFormSeed::for_existing)
+            .unwrap_or_else(|| GroupFormSeed::for_new(self.next_group_name()))
+    }
+
+    /// 提交分组表单（新建 / 编辑），成功时返回分组 ID。
+    ///
+    /// 名称唯一性不在这里拦：同名分组允许存在（排序 / 描述已经能区分），
+    /// 但重名会让「移动到分组…」难以辨认，所以只在面板提示里点出来。
+    fn save_group_form(
+        &mut self,
+        group_id: Option<String>,
+        name: String,
+        description: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
         let root = self.project_root();
-        match crate::services::nav_runtime::create_group(root.as_deref(), &name) {
-            Ok(_) => self.reload_nav_org(),
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("新建分组失败: {e}")),
-        }
+        let result = match group_id {
+            Some(id) => crate::services::nav_runtime::update_group(
+                root.as_deref(),
+                &id,
+                &name,
+                description.as_deref(),
+            )
+            .map(|()| id),
+            None => crate::services::nav_runtime::create_group_with(
+                root.as_deref(),
+                &name,
+                description.as_deref(),
+            ),
+        };
+        let saved = match result {
+            Ok(id) => {
+                self.reload_nav_org();
+                let duplicated = self
+                    .database_nav
+                    .borrow()
+                    .groups
+                    .iter()
+                    .filter(|g| g.name == name)
+                    .count()
+                    > 1;
+                *self.shared.notice.borrow_mut() = Some(if duplicated {
+                    format!("已保存分组「{name}」（存在同名分组）")
+                } else {
+                    format!("已保存分组「{name}」")
+                });
+                Some(id)
+            }
+            Err(e) => {
+                *self.shared.notice.borrow_mut() = Some(format!("保存分组失败: {e}"));
+                None
+            }
+        };
         cx.notify();
+        saved
     }
 
     /// 删除分组（仅解除关系，不删成员连接与缓存）。
@@ -9406,7 +9522,10 @@ mod tests {
             nav_reorder(&base, "z", Some("b")),
             Some(ids(&["a", "z", "b", "c"]))
         );
-        assert_eq!(nav_reorder(&base, "z", None), Some(ids(&["a", "b", "c", "z"])));
+        assert_eq!(
+            nav_reorder(&base, "z", None),
+            Some(ids(&["a", "b", "c", "z"]))
+        );
         // 空容器：首个成员落在末尾。
         assert_eq!(nav_reorder(&[], "z", None), Some(ids(&["z"])));
     }

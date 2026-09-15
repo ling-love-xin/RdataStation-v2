@@ -304,23 +304,28 @@ pub fn list_groups(project_root: Option<&Path>) -> Vec<engine::persistence::Conn
         .unwrap_or_default()
 }
 
-/// 新建分组，返回分组 ID。
-pub fn create_group(project_root: Option<&Path>, name: &str) -> Result<String, String> {
+/// 新建分组（名称 + 描述），返回分组 ID。
+pub fn create_group_with(
+    project_root: Option<&Path>,
+    name: &str,
+    description: Option<&str>,
+) -> Result<String, String> {
     let store = open_org_project(project_root)?;
     let id = engine::persistence::id_prefix::generate_pid("grp");
     store
-        .create_group(&id, name, None)
+        .create_group(&id, name, description)
         .map_err(|e| e.to_string())?;
     Ok(id)
 }
 
-/// 重命名分组。
+/// 更新分组（名称 + 描述），**排序保留库中现值**。
 ///
-/// `update_group` 要求完整的 `sort_order`（同步改排序），重命名时保留库中现值（缺省 0）。
-pub fn rename_group(
+/// `update_group` 要求完整字段（名称 + 描述 + 排序），故先读回现值再写。
+pub fn update_group(
     project_root: Option<&Path>,
     group_id: &str,
     name: &str,
+    description: Option<&str>,
 ) -> Result<(), String> {
     let store = open_org_project(project_root)?;
     let sort_order = store
@@ -330,8 +335,65 @@ pub fn rename_group(
         .map(|g| g.sort_order)
         .unwrap_or(0);
     store
-        .update_group(group_id, name, None, sort_order)
+        .update_group(group_id, name, description, sort_order)
         .map_err(|e| e.to_string())
+}
+
+/// 重命名分组（保留描述与排序）。
+///
+/// 不再传 `None` 描述：那会把已有描述洗掉（曾经的缺陷），改名时描述必须保留。
+pub fn rename_group(
+    project_root: Option<&Path>,
+    group_id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    let current = store
+        .list_groups()
+        .into_iter()
+        .find(|g| g.id == group_id);
+    let (description, sort_order) = current
+        .map(|g| (g.description, g.sort_order))
+        .unwrap_or((None, 0));
+    store
+        .update_group(group_id, name, description.as_deref(), sort_order)
+        .map_err(|e| e.to_string())
+}
+
+/// 移出全部分组（连接回到「未分组」）。
+///
+/// 与分组内联编辑器的「全部取消勾选」同效果：先清关系，再写未分组顺序
+/// （`set_container_order` 会把该连接追加到未分组末尾）。
+pub fn remove_from_all_groups(project_root: Option<&Path>, conn_id: &str) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    store
+        .set_connection_groups(conn_id, &[])
+        .map_err(|e| e.to_string())
+}
+
+/// 「未分组」容器的显式顺序（连接 ID，未手动排序的不出现）。
+pub fn list_ungrouped_order(project_root: Option<&Path>) -> Vec<String> {
+    open_org_project(project_root)
+        .map(|s| s.list_ungrouped_order())
+        .unwrap_or_default()
+}
+
+/// 重写容器内成员顺序（`scope_id` = 分组 ID 或 [`engine::persistence::UNGROUPED_SCOPE`]）。
+///
+/// 一次性 `0..n` 重写（不是相对插入），保证序号完整、与屏上顺序一致。
+/// 未分组容器走单独的表（它不是真实分组，成员由推导得出）。
+pub fn set_container_order(
+    project_root: Option<&Path>,
+    scope_id: &str,
+    conn_ids: &[String],
+) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    let result = if scope_id == engine::persistence::UNGROUPED_SCOPE {
+        store.set_ungrouped_order(conn_ids)
+    } else {
+        store.set_member_order_all(scope_id, conn_ids)
+    };
+    result.map_err(|e| e.to_string())
 }
 
 /// 删除分组（不删连接）。
