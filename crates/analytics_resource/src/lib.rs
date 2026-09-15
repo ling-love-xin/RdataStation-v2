@@ -22,6 +22,7 @@ use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
 
 pub mod commands;
 pub mod detail_view;
+pub mod filter;
 pub mod helpers;
 pub mod indexer;
 pub mod model;
