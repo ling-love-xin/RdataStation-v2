@@ -478,6 +478,11 @@ impl EditorHostPanel {
             .unwrap_or(false)
     }
 
+    /// 本文档的文件档位提示（>50MB / ≥200MB；`None` = 不显示提示卡）
+    pub fn tier_notice(&self) -> Option<&'static str> {
+        self.with_document(|doc| doc.tier_notice()).flatten()
+    }
+
     /// 本文档的执行状态与结果摘要（供测试断言；`None` = 尚未执行）
     pub fn result_summary_for_test(&self) -> Option<&str> {
         self.result_summary.as_deref()
@@ -765,11 +770,32 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_toggle_comment))
             .on_action(cx.listener(Self::on_execute_sql))
             .on_action(cx.listener(Self::on_execute_all));
+        // 提示卡（A13）：档位带来的限制要在界面上说清，而不是让用户自己撞上（“能编辑却改不了”）
+        if let Some(notice) = self.tier_notice() {
+            let theme = cx.theme();
+            let warning = theme.colors.warning;
+            let warning_fill = warning.opacity(0.18);
+            root = root.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(warning)
+                    .bg(warning_fill)
+                    .border_b(ui::HAIRLINE)
+                    .border_color(warning)
+                    .child(SharedString::from(notice)),
+            );
+        }
         root = root.child(
                 div()
                     .flex_1()
                     .min_h_0()
-                    .px(rems(ui::EDITOR_BODY_PADDING_X))
+                    // 局部内距走 Tailwind 尺度（8px）；结构尺寸才进 ui.rs 常量表
+                    .px_2()
                     .child(
                         Editor::new(&self.editor)
                             .appearance(false)

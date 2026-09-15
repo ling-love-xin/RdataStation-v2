@@ -92,8 +92,18 @@ pub fn open_file(
         return Ok(OpenOutcome::Activated(id));
     }
 
-    let content = load(path)?;
-    Ok(shared.open(crate::service::OpenRequest::file(path, content, mode)))
+    // A13 文件档位：按**实际大小**定策略（>50MB 关重能力，≥200MB 不加载内容）
+    let tier = crate::limits::tier_for_path(path);
+    let content = if tier.opens_read_only() {
+        // 超大文件**不整份读进来**——那正是这个档位要避免的事：读进来就已经把内存吃掉了，
+        // 之后再置只读也救不回来。原型 §4 的语义是“不建编辑器会话，只给提示卡”。
+        String::new()
+    } else {
+        load(path)?
+    };
+    Ok(shared.open(
+        crate::service::OpenRequest::file(path, content, mode).with_tier(tier),
+    ))
 }
 
 /// 保存某文档：写盘成功后清脏（**先写盘、后清脏**，写失败不留"已保存"的假状态）

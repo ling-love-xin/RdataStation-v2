@@ -24,9 +24,6 @@ pub const EDITOR_MIN_HEIGHT: f32 = 6.0;
 /// 标签脏点直径（0.375rem = 6px）
 pub const DIRTY_DOT_SIZE: f32 = 0.375;
 
-/// 编辑区左右内距（0.5rem = 8px）
-pub const EDITOR_BODY_PADDING_X: f32 = 0.5;
-
 /// 结果区高度（18rem = 288px）
 ///
 /// 1a 固定高度（可拖拽分栏属 1b）：结果区出现/消失时编辑区高度会跳一下，

@@ -804,3 +804,122 @@ fn ctrl_h_opens_the_kernel_replace_panel(cx: &mut TestAppContext) {
         "Ctrl+H 之后焦点应当离开编辑内核（替换行出现并聚焦）"
     );
 }
+
+// ===== A13：文件档位 =====
+
+/// 造一个指定大小的稀疏文件（秒级，不真写满磁盘）
+fn sparse_file(dir: &std::path::Path, name: &str, bytes: u64) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let file = std::fs::File::create(&path).expect("建文件");
+    file.set_len(bytes).expect("扩到目标大小");
+    drop(file);
+    path
+}
+
+fn temp_dir_for(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rds_editor_tier_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("建临时目录");
+    dir
+}
+
+#[gpui_kit::test]
+fn a_huge_file_is_not_read_into_memory_and_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let dir = temp_dir_for("huge");
+    let path = sparse_file(&dir, "huge.sql", crate::limits::HUGE_FILE_BYTES + 4096);
+
+    let shared = EditorShared::new();
+    let id = crate::persist::open_file(&shared, &path, EditorMode::Sql)
+        .expect("打开")
+        .id()
+        .clone();
+
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    cx.update(|_window, cx| {
+        let panel = panel.read(cx);
+        assert!(
+            !panel.is_editable_for_test(),
+            "超大文件不做可编辑会话（只读）"
+        );
+        let notice = panel.tier_notice().expect("要有提示卡");
+        assert!(notice.contains("未加载"), "{notice}");
+    });
+
+    // 内容确实是空的：200MB 没被读进来
+    let content_len = cx.update(|_window, _cx| {
+        shared
+            .service()
+            .find(&id)
+            .map(|doc| doc.content().len())
+            .unwrap_or(usize::MAX)
+    });
+    assert_eq!(content_len, 0, "超大文件不该被整份读进内存");
+
+    // 提示卡在渲染路径上（画一帧不 panic）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_large_file_stays_editable_but_warns_about_heavy_features(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let dir = temp_dir_for("large");
+    // 真写 50MiB 太慢；用稀疏文件 + 写一行内容：档位只看大小，不读全文件也能判定
+    let path = sparse_file(&dir, "large.sql", crate::limits::LARGE_FILE_BYTES + 1024);
+
+    let shared = EditorShared::new();
+    let tier = crate::limits::tier_for_path(&path);
+    assert_eq!(tier, crate::limits::FileTier::Large);
+    assert!(tier.disables_completion(), "大文件关补全");
+
+    // 用带档位的请求打开（跳过真读 50MiB：这里只验面板对档位的表现）
+    let id = shared
+        .open(
+            OpenRequest::file(&path, "select 1;", EditorMode::Sql).with_tier(tier),
+        )
+        .id()
+        .clone();
+
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    cx.update(|_window, cx| {
+        let panel = panel.read(cx);
+        assert!(panel.is_editable_for_test(), "大文件仍可编辑");
+        assert!(
+            panel.tier_notice().expect("要有提示").contains("补全"),
+            "提示要说清关了什么"
+        );
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[gpui_kit::test]
+fn a_normal_file_has_no_notice_card(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let dir = temp_dir_for("normal");
+    let path = dir.join("small.sql");
+    std::fs::write(&path, "select 1;").expect("写盘");
+
+    let (shared, id) = shared_with_document(path.to_string_lossy().as_ref(), "select 1;");
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+    cx.update(|_window, cx| {
+        assert!(panel.read(cx).tier_notice().is_none(), "常规文件不显示提示卡");
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let _ = std::fs::remove_dir_all(dir);
+}

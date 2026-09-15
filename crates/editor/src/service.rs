@@ -17,13 +17,14 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::limits::FileTier;
 use crate::model::{Capabilities, DocumentId, EditorMode, OutputTarget, ReadOnly};
 
 // ═══════════════════════════════════════════════════════════════════════
 // 文档
 // ═══════════════════════════════════════════════════════════════════════
 
-/// 打开中的文档（编辑器侧最小状态：身份 + 内容 + 模式 + 只读）
+/// 打开中的文档（编辑器侧最小状态：身份 + 内容 + 模式 + 只读 + 档位）
 #[derive(Debug, Clone)]
 pub struct Document {
     id: DocumentId,
@@ -36,6 +37,8 @@ pub struct Document {
     baseline: String,
     mode: EditorMode,
     read_only: ReadOnly,
+    /// 文件档位（A13）：>50MB 关重能力，>200MB 只读打开 + 提示卡
+    tier: FileTier,
 }
 
 impl Document {
@@ -46,6 +49,7 @@ impl Document {
         content: String,
         mode: EditorMode,
         read_only: ReadOnly,
+        tier: FileTier,
     ) -> Self {
         Self {
             id,
@@ -55,6 +59,7 @@ impl Document {
             content,
             mode,
             read_only,
+            tier,
         }
     }
 
@@ -81,6 +86,16 @@ impl Document {
 
     pub fn read_only(&self) -> ReadOnly {
         self.read_only
+    }
+
+    /// 文件档位（>50MB / >200MB 的策略见 `limits` 模块）
+    pub fn tier(&self) -> FileTier {
+        self.tier
+    }
+
+    /// 提示卡文案（档位带来的操作限制；`None` = 不显示）
+    pub fn tier_notice(&self) -> Option<&'static str> {
+        self.tier.notice()
     }
 
     /// 该模式的能力集（chrome 与服务的唯一分叉点）
@@ -137,6 +152,8 @@ pub struct OpenRequest {
     pub content: String,
     pub mode: EditorMode,
     pub read_only: ReadOnly,
+    /// 文件档位（默认常规；`persist::open_file` 会按实际大小给）
+    pub tier: FileTier,
 }
 
 impl OpenRequest {
@@ -147,6 +164,7 @@ impl OpenRequest {
             content: content.into(),
             mode,
             read_only: ReadOnly::none(),
+            tier: FileTier::Normal,
         }
     }
 
@@ -157,11 +175,24 @@ impl OpenRequest {
             content: content.into(),
             mode,
             read_only: ReadOnly::none(),
+            tier: FileTier::Normal,
         }
     }
 
     pub fn with_read_only(mut self, read_only: ReadOnly) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    /// 带上文件档位（`persist::open_file` 用；超大文件同时置编辑器只读）
+    pub fn with_tier(mut self, tier: FileTier) -> Self {
+        self.tier = tier;
+        if tier.opens_read_only() {
+            self.read_only = ReadOnly {
+                editor: true,
+                connection: self.read_only.connection,
+            };
+        }
         self
     }
 }
@@ -281,6 +312,7 @@ impl EditorService {
             request.content,
             request.mode,
             request.read_only,
+            request.tier,
         ));
         self.active = Some(id.clone());
 

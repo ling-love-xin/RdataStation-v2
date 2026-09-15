@@ -26,6 +26,7 @@
 //! - ✅ 查找 / 替换（A11）：**内核能力 + 组件库面板**（`Ctrl+F` / `Ctrl+H`），本 crate 零自建；
 //!   内核在 `Input` context 里先拿到按键且已注册 listener，外层再绑收不到（架构 §12 #24）
 //! - ✅ `session`：会话端口（光标 / 选区 / 模式落库；A12，宿主注入实现）
+//! - ✅ `limits`：文件档位（>50MB 关重能力 / ≥200MB 不读进内存；A13）· ui_contract 已覆盖本 crate（A15）
 //! - ✅ `ui`：本 crate 的结构尺寸常量（不反向依赖 workbench）
 //! - ⬜ 1a 待做：`completion` · 另存为 / 关闭三态 / 模式切换确认对话框（A9 收尾）· 打开与另存为的系统文件对话框 · 连接绑定与结果区可拖拽分栏（1b）
 //! - ⬜ 1c：`session` / `notebook`（Cell / Output / Session）
@@ -37,6 +38,7 @@
 pub mod commands;
 pub mod edit;
 pub mod execution;
+pub mod limits;
 pub mod mode;
 pub mod model;
 pub mod persist;
