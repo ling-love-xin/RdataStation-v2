@@ -429,7 +429,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | --- | --- | --- | --- | --- |
 | 1 | ~~**格式化输出是 Rust Debug 打印**~~ **已修（2026-09-15，P0.3）** | `engine/src/sql/formatter.rs` 改用 sqlglot-rust 的 `generate_pretty`（多语句走 `parse_statements_with_comments` 逐条生成 + `;\n\n` 拼接），**无新增依赖**；回归测试从“非空”升级为“不是 Debug 打印 / 结果可再次解析 / 多语句不丢句 / 解析失败原样返回 / 前导注释不丢” | — | 残留：行内 / 尾随注释可能丢失（生成器能力边界，见 §12 #3） |
 | 2 | ~~**语句切分朴素 `;` 切分**~~ **已修（2026-09-15，P0.4）** | 词法级状态机落在 `engine/src/sql/split.rs`（26 项表驱动测试）；`sql_parser_service::split_sql` 改为委托 | — | — |
-| 3 | **事务状态是桩**：`get_transaction_status` 恒 `false`；`begin/commit/rollback` 无会话跟踪 | `engine/src/services/sql_service.rs` L485-501、L411-482 | 事务 UI 无从驱动；**且连接池下 `BEGIN` 与后续语句可能不在同一物理连接** | 先确认会话亲和（必要时 per-session 独占连接），再实现真实事务状态机 |
+| 3 | **事务状态是桩**：`get_transaction_status` 恒 `false`；`begin/commit/rollback` 无会话跟踪 | `engine/src/services/sql_service.rs` | 事务 UI 无从驱动。**P0.2 已实证（2026-09-15）**：会话亲和成立（PG/SQLite/DuckDB：临时表 + `ROLLBACK` 均真实生效，驱动级事务亦可用）；**MySQL 的显式 `BEGIN` 被 prepared 协议拒绝**（1295） | 状态机可按现有会话做；**MySQL 需先把 `begin/commit/rollback` 改走驱动事务 API（或文本协议）**——否则事务按钮在 MySQL 上直接报错 |
 | 4 | ~~**历史字段失真**~~ **已修（2026-09-15，P0.5）** | `SqlHistoryEntry` + `save_sql_history(_into)`：耗时/成功/失败原因/行数均真实，失败也留痕（4 项单测） | — | — |
 
 ### 7.4 顺带补齐
@@ -518,7 +518,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | # | 级别 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
 | 1 | 🔴 | **Dock 标签条的关闭拦截钩子未查证**：`Panel` 提供 `closable` / `title_suffix`（脏点可行），但"关闭前询问"是否有钩子待确认 | 决定 D13 能否成立；不成立则需自绘标签条（约 300 行） | Phase 0 第一件事：写最小验证（脏点 + 关闭拦截）；结论写回本文 |
-| 2 | 🔴 | **事务会话亲和未验证**：连接池下 `BEGIN` 与后续语句是否同一物理连接未知 | 事务功能可能"看起来能用但实际无效" | 实现事务前用真实端点验证（MySQL/PG 各一）；必要时引入 per-session 独占连接 |
+| 2 | ✅→🟡 | ~~**事务会话亲和未验证**~~（**已实证 2026-09-15，P0.2**）：PG / SQLite / DuckDB 上「临时表在事务内可见 + `ROLLBACK` 后计数归零」全部成立 → **会话亲和成立、事务语义真实可用**；驱动级事务（`execute_in_transaction` → `db.begin_transaction()`）四类库中三类通过 | MySQL：**显式 `BEGIN` 走语句执行会被拒**（`1295 (HY000): This command is not supported in the prepared statement protocol yet`）——与亲和无关，是协议路径问题 | 1b 的事务状态机沿 `SqlService` 现有会话即可；MySQL 的 `begin/commit/rollback` 必须改走驱动事务 API（已实证可用）或在驱动内改用文本协议 |
 | 3 | ✅→🟡 | ~~**格式化实现待定**~~（**已定，2026-09-15（P0.3）**：用 sqlglot-rust 自带 generator，不引新依赖）| 残留（**已实测，2026-09-15**）：**注释不会丢**——行内 / 尾随注记会让 sqlglot 解析失败，而解析失败即原样返回；代价是**含行内 / 尾随注释的语句不会被格式化**（用户看到原样文本）；另：非 MySQL 目标的 `#` 注记会被改写成 `--` | 1a 在状态栏/提示里明说“该语句含注释，已跳过格式化”（不让用户以为格式化失败了）；将来若真需要格式化这类语句，再评估自研缩进器 |
 | 4 | 🟡 | 现有 `EditorPanel` 的连接详情卡 / 导航树 / 属性面板宿主与编辑器耦在同一面板 | 收编时容易把 M3/M4 的职责带进 editor crate | 按 §3.3 表格逐项迁出，先迁"编辑器"部分，其余留 workbench |
 | 5 | 🟡 | 分析模式的语言集合（是否提前 Python） | 影响 Session 抽象与进程基建 | 用户拍板（§13 #5）；默认按 D18 只做 SQL + Markdown |
@@ -537,6 +537,8 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 18 | ⚪ | **Dock 无“关闭前否决”钩子**（已静态核实 2026-09-15）：`DockArea` 订阅 `TabGroupEvent::ClosePanel` 后直接 `remove_panel_id`；`Panel::closable(cx)` 是唯一闸门（静态许可，不能问用户）；`remove_panel` / `with_renderer` 均为 `pub` | 决定了“标签 ✕ 能否弹未保存确认”——需要自绘标签条才能做到 | 见 §13 #15：默认走“草稿兜底”（关闭即落草稿），需要弹窗时再上自定义标签条 |
 | 19 | 🔴 | **`transpile` 对脚本是「静默截断」**（**已实测，2026-09-15**）：`transpile("SELECT 1; SELECT 2;", MySQL, PG)` 返回 **`Ok("SELECT 1")`**——第二条语句**无声消失**；生产路径 `SqlEngine::transpile` 同样如此，而包装它的 `sql_parser_service::transpile_sql` 还会报 `success: true` | “方言转移器”若直连生产路径，用户点一下就会**丢掉后续语句且无任何提示**（数据丢失级） | B10 接线：**必须**先按 `sql/split.rs` 切分再逐条 `transpile` 拼回（或改用 `transpile_statements`，返回 `Vec<String>`）；结果**不就地改写**原文，走 diff 预览；接线前先写“脚本不得丢语句”的回归 |
 | 20 | ✅ | ~~**高亮区间偏移错误**~~（**已修 2026-09-15，读源码时发现**）：原实现按 `token.value` 回查原文，但 `read_string` / `read_quoted_identifier` 会解码转义（`'it''s'` → `it's`）→ 区间落空；字符串的 `quote_char` 恒为 `\0`（只对带引号标识符设置）→ 引号 / 注释标记取不到 | 已改为「**字符偏移 → 字节偏移**换算 + 取原文区间」（`highlight.rs::byte_offsets` / `raw_range`）：`Token::position` 是字符下标（`tokens/tokenizer.rs:69,83,137`），中文 SQL 下直接用会切坏 `&str` | 行为已固定：区间恒为 token 的**原文**（含引号、转义、`--` / `/* */` 标记），与 `value` 解码无关；回归 11 → 13 项（新增转义字符串 / 中文 SQL） |
+| 21 | ✅ | **`QueryResult` 字段约定**（**实测发现并已修 2026-09-15**）：各驱动**只填 Arrow `batches`**，`rows` / `total_rows` / `column_types` 字段是默认空值（`postgres_native.rs::build_query_result` 等直接构造结构体、绕过 `from_batches`）；仅 `truncate()` 之后才由 `recompute_computed_fields` 回填 | 读 `rows` / `total_rows` **字段**的代码会“大结果有数、小结果无数”——行为随行数变化；历史行数（`sql_service.rs` 里我写的那行）就踩了此坑 | 已修：历史改用 `total_rows()`（由 batches 求和）。**1b 网格一律走 `batches` / `to_rows()`**，不新增读 `rows` 字段的代码（M7 亦踩过同一坑，见 `mock_generator.rs:290` 注释） |
+| 22 | ✅ | **驱动结果保真度两处缺陷**（**实测发现并已修 2026-09-15**）：① `arrow_value_at` 只认 5 种 Arrow 数组，其余（PG 的 `int4` → Int32、MySQL 无符号 → UInt64、Float32、Decimal、Date…）落到 `format!("{:?}", array)`——**把整列 Debug 打印进每个单元格**（既显示垃圾，又是 O(n²)）；② MySQL 列类型探测 `bool` 优先，而 sqlx 能把 1/0 解成 `bool` → `COUNT(*)` 显示成 `true` | 结果网格与任何读值的功能都会显示错值——属“看着有、实际是垃圾” | 已修：值映射补 Int8/16/32/64 · UInt8/16/32/64 · Float32/64，兜底改 Arrow **单值**格式化（+3 项回归）；MySQL 数值族按**声明类型**定排行、无符号回退 `u64`（探针已实证计数可读）。**剩余**：驱动仍不填 `column_types`（网格列类型显示待办） |
 
 ---
 

@@ -10,6 +10,7 @@
 
 | 日期 | 内容 | 状态 |
 | --- | --- | --- |
+| 2026-09-15（P0.2 实跑 + 三个结果保真度缺陷） | **P0.2 有结论**（真机四库）：PG / SQLite / DuckDB — **会话亲和成立**且 `ROLLBACK` 真实生效；驱动级事务（`execute_in_transaction`）四库中三库通过；**MySQL 的显式 `BEGIN` 被 prepared 协议拒绍**（1295，需改走驱动事务 API）→ 回写架构 §12 #2 / §7.3 #3 · **实跑又抓出三个真缺陷并修复**：① 各驱动只填 `batches`，而历史行数读的是恒空的 `total_rows` **字段**（已改用 `total_rows()`）；② `arrow_value_at` 漏了 Int32/UInt64/Float32 等位宽，兜底是 `format!("{:?}", array)`——**把整列 Debug 打印进每个单元格**（已修 + 3 项回归）；③ MySQL 列类型探测 `bool` 优先 → `COUNT(*)` 显示成 `true`（已按声明类型定排行）→ 架构 §12 #21 / #22 | ✅ 已完成（实跑验证：引擎 297 项 · shared 22 项 · 探针 10 项 · 事务探针 8 项全绿） |
 | 2026-09-15（探针实跑：台账结论落地） | **P0.10 已实跑（10 项全绿）**，结论已回写原型 §7.4「行为级事实」：**类型标注 / 血缘 / 作用域 / 下推 / 差异** 均**实测可用**；差异粒度到 `SelectItem`/`Expr`/`OrderByItem`，**SELECT 列表 / WHERE / ORDER BY / LIMIT 改动都能检出**（原先担心的“漏条件改动”**已被实测推翻**）· **两处保留**：`qualify_columns` 只部分限定（`id` 仍裸列）、`unnest_subqueries` 改写为 `INNER JOIN + DISTINCT`（NULL 语义不等价）· **两处纠正**：① 格式化**不会丢注释**（行内/尾随注释→解析失败→原样返回，架构 §12 #3 改述）② `transpile` 对脚本是**静默截断**（`"SELECT 1; SELECT 2;"` → `Ok("SELECT 1")`，生产路径同样）→ 升级为 🔴（§12 #19）· 三条不变量已提升为断言（同句只 `Keep` / WHERE 改动有 `Update` / 换型 = `Remove+Insert`） | ✅ 已完成 |
 | 2026-09-15（台账候选探针 + 探针编译错误修正） | **P0.10 探针就绪**：`crates/engine/tests/sqlglot_capabilities.rs`（9 组真实 SQL：作用域 / 血缘 / 类型标注 / 差异 / 下推 / 限定与展开 / 本地计划 / 转译单条限制 / 格式化注释保真；**报告式** + 仅弱断言）· **修正一个上轮埋下的编译错误**：`crates/engine/tests/transaction_affinity.rs` 写的是 `use engine::…`——集成测试是**独立 crate**，本包库目标名是 `rds_engine`（`engine` 只是**其它** crate 的依赖别名）；证据：`crates/{connection,mock}/tests/*` 分别用 `rds_connection::` / `rds_mock::` | ✅ 已完成（编译验证待本机执行，见 §6） |
 | 2026-09-15（提交 + 台账二次核验） | **模块已提交**（`ac0d75f`，24 文件 / 5625 行：文档 5 件 + `crates/editor` 骨架 + engine SQL 原语 + 历史字段 + 事务探针；暂存时避开同工作区其它会话的在途改动，混文件 `Cargo.lock` / `sql/engine.rs` / `docs/architecture/README.md` 按 hunk 级分离）· **sqlglot 台账二次核验（读实现）**：修正 4 处（关键字是**逐词枚举变体** / `Token::position` 是**字符**下标 / `transpile` **只吃单条** / `builder` 证据行号），补 `Schema`+`MappingSchema`、`qualify_columns`、`optimize`、`plan`（仅本地计划）、`executor`（不采用）等条目（原型 §7.4） · **修正一个真缺陷**：高亮区间改为「字符偏移 → 字节偏移 + 取原文区间」（原实现按 `value` 回查，转义字符串落空、引号与注释标记取不到）→ 架构 §12 #20 | ✅ 已完成（编译验证待本机执行，见 §6） |
@@ -72,7 +73,7 @@ Phase 0（地基，无 UI）
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | P0.1 | **Dock 标签能力验证**：`Panel::{title, title_suffix, closable}` 能否承载脏点与“关闭前确认” | ✅ **静态结论已出（2026-09-15）**：脏点走 `title_suffix` 可行；**关闭无否决钩子**（`DockArea` :1257 收到 `TabGroupEvent::ClosePanel` 即 `remove_panel_id`；`closable(cx)` 只是静态许可）。可选路径：① 草稿兜底（默认）② 自绘标签条 + `with_renderer` + 确认后 `remove_panel` | 结论已写回架构 §12 #18 / §13 #15；运行期探针（脏点渲染 + 两个关闭路径）随 1a 的 A2 一并验证 |
-| P0.2 | **事务会话亲和验证**：连接池下 `BEGIN` 与后续语句是否同一物理连接（临时表作判据，四类库均可跑） | ✅ **探针已就绪**：`crates/engine/tests/transaction_affinity.rs`（环境变量注入，未设置则跳过） | 运行：`cargo test -p rds-engine --test transaction_affinity -j 2 -- --nocapture --test-threads=1`（环境变量见 §6）；输出 “会话亲和成立 / 不成立 / 驱动未填充 rows” 三种结论，回写架构 §12 #2 |
+| P0.2 | **事务会话亲和验证**：连接池下 `BEGIN` 与后续语句是否同一物理连接（临时表作判据，四类库均可跑） | ✅ **已实跑出结论（2026-09-15）**：`crates/engine/tests/transaction_affinity.rs`（含驱动级事务路径用例）—— PG / SQLite / DuckDB **亲和成立 + `ROLLBACK` 真实生效**；**MySQL 显式 `BEGIN` 被 prepared 协议拒绍（1295）**，驱动级事务可用 | 结论已回写架构 §12 #2 / §7.3 #3；1b 实现事务状态机时：**MySQL 的 begin/commit/rollback 必须改走驱动事务 API** |
 | P0.3 | **格式化实现选型** | ✅ **选定（2026-09-15）**：sqlglot-rust 自带 `generate_pretty` + `parse_statements_with_comments`（**无需新依赖**） | `engine/src/sql/formatter.rs` 重写；回归从“非空”升级为 7 项（非 Debug 打印 / 可再解析 / 多语句不丢 / 失败原样返回 / 空输入 / 前导注释 / 各方言参数）；残留：行内注释丢失（**已源码核实** `gen_statement` 只 emit 前导注释） |
 | P0.4 | **语句切分实现**：词法级扫描器（`'…'` `"…"` `` `…` `` `--` `/* */` `$$…$$`），返回 `Vec<SqlStatement{start,end,line}>` | **`crates/engine/src/sql/split.rs`**（✅ 已完成）+ `SqlEngine::split_statements` + `sql_parser_service::split_sql` 委托 | 表驱动单测 26 项（含各方言字面量/注释/嵌套/占位符/多字节/未闭合/行号）；`psql` 过程体 `$$` 块不被切开 |
 | P0.5 | **历史字段贯通**：`save_sql_history` 增参（`elapsed_ms / success / error / rows_affected / rows_returned / db_type`）+ 失败路径也写 | ✅ `engine/src/persistence/history_store.rs`（`SqlHistoryEntry` + `save_sql_history` / `save_sql_history_into`）、`engine/src/services/sql_service.rs`（成功/失败双路径写入 + `db_type_of` 助手） | 单测：成功/失败各写一条且字段真实（耗时 > 0、成功标志正确、失败含原因）；存储可注入（`*_into`）不碰用户真实历史 |
@@ -289,14 +290,26 @@ cargo test -p rds-workbench --test ui_contract -j 2
 # 全工作区编译守卫
 cargo check --workspace --all-targets -j 2
 
-# P0.2 真机探针（事务会话亲和；凭据只从环境变量读）
+# P0.2 / P0.2b 真机探针（事务会话亲和 + 驱动级事务；凭据只从环境变量读；共 8 例）
 # PowerShell：
 #   $env:RDS_TEST_MYSQL_URL="mysql://root:root@192.168.3.138:3306/mysql"
 #   $env:RDS_TEST_PG_URL="postgres://postgres:postgresql@192.168.3.138:5432/postgres"
-#   $env:RDS_TEST_SQLITE_PATH="D:\FossilT\T.fossil"
-#   $env:RDS_TEST_DUCKDB_PATH="D:\data\123"
+#   $env:RDS_TEST_SQLITE_PATH="<SQLite 文件的**副本**>"   # 原文件若是 Fossil 仓库（T.fossil）会被 Fossil 锁；探针也别直连用户仓库
+#   $env:RDS_TEST_DUCKDB_PATH="D:\data\123"               # 这里是**文件**不是目录
 cargo test -p rds-engine --test transaction_affinity -j 2 -- --nocapture --test-threads=1
+
+# P0.10 能力探针（离线；报告式 + 三条不变量断言；共 10 例）
+cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1
 ```
+
+**P0.2 / P0.2b 实跑结论（2026-09-15，四类库真实端点）**
+
+| 库 | 会话亲和（`BEGIN` + 临时表 + `ROLLBACK`） | 驱动级事务（`execute_in_transaction`） |
+| --- | --- | --- |
+| PostgreSQL | ✅ 亲和成立 + 回滚生效 | ✅ 可用 |
+| SQLite | ✅ 亲和成立 + 回滚生效 | ✅ 可用 |
+| DuckDB | ✅ 亲和成立 + 回滚生效 | ✅ 可用 |
+| MySQL | ❌ 显式 `BEGIN` 被 prepared 协议拒绍（1295） | ✅ 可用（走驱动事务 API） |
 
 - 每阶段结束：上列命令全绿 + §3 对应场景真机走通（`cargo run -p rds-app -j 2`）。
 - 真机回归矩阵（1b 起每轮至少一遍）：MySQL / PostgreSQL / SQLite / DuckDB × 执行族（当前语句 / 选区 / 全部 / 批量）× 只读 / 可写 × 明暗主题。
