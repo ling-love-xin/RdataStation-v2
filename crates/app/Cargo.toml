@@ -16,6 +16,8 @@ gpui-kit.workspace = true
 # Round 19：工作台视图（首个可交互骨架）
 workbench.workspace = true
 settings.workspace = true
+# A10：编辑器的动作（Ctrl+S / Ctrl+/ / Ctrl+W）在 app 层统一绑键，需要它的 Action 类型
+editor.workspace = true
 # 应用启动装配：全局系统库初始化（M3 连接 / M4 元数据的持久化根）
 engine.workspace = true
 tokio.workspace = true

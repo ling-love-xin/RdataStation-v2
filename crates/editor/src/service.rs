@@ -259,12 +259,12 @@ impl EditorService {
 
     /// 打开文档：同路径已打开则**激活**，否则新开并激活
     pub fn open(&mut self, request: OpenRequest) -> OpenOutcome {
-        if let Some(path) = request.path.as_deref() {
-            if let Some(existing) = self.find_by_path(path) {
-                let id = existing.clone();
-                self.active = Some(id.clone());
-                return OpenOutcome::Activated(id);
-            }
+        if let Some(path) = request.path.as_deref()
+            && let Some(existing) = self.find_by_path(path)
+        {
+            let id = existing.clone();
+            self.active = Some(id.clone());
+            return OpenOutcome::Activated(id);
         }
 
         self.serial += 1;

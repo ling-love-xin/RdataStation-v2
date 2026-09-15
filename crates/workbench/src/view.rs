@@ -254,16 +254,25 @@ impl WorkbenchView {
             .map_err(|error| error.to_string())?;
         let document = outcome.id().clone();
 
-        // 已有面板：不重复建（复用即可）。聚焦已存在标签需要 Dock 的激活 API，
-        // 那属 A10 的命令/快捷键一并处理；现在至少保证不出现两份同一文档。
+        // 已关闭的面板不参与复用（面板被 Dock 移除 = 文档已关，两者一一对应）
+        self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
+
+        // 已有面板：不重建——**切换到它**（`TabGroup::select_tab`），否则用户看到的
+        // 是“点了打开却没反应”：面板就在隔壁标签里，但不在前台。
         let existing = self
             .editor_hosts
             .iter()
-            .any(|panel| panel.read(cx).document() == &document);
-        if existing || outcome.is_activated() {
+            .find(|panel| panel.read(cx).document() == &document)
+            .cloned();
+        if let Some(panel) = existing {
+            panel.update(cx, |panel, cx| panel.focus_self(window, cx));
             return Ok(());
         }
 
+        // 走到这里有两种情形，做同一件事（建面板）：
+        // - 新文档（`Opened`）；
+        // - 文档已在服务层但没有面板（`Activated`，例如将来由 Quick Open 直接开的文档）：
+        //   补一个面板指向同一文档——内容只有一份（全在 `EditorService` 里），不会分身。
         let service = self.editor_service.clone();
         let panel = cx.new(|cx| {
             editor::view::host::EditorHostPanel::new(service, document, window, cx)
@@ -277,6 +286,31 @@ impl WorkbenchView {
         }
 
         Ok(())
+    }
+
+    /// 关闭当前编辑器文档（`Ctrl+W`）
+    ///
+    /// 键位绑在编辑器面板的 `editor` context 上（A10），但**由宿主执行**：
+    /// 面板移除时会回调它自己的 `on_removed`，而 `DockArea` 移除面板要读面板本体，
+    /// 从面板自己的 `update` 里发起就是重入。宿主不在那个 `update` 中，可以安全地做。
+    /// 脏文档由 `close_document_in_dock` 拦下并在面板状态栏标出原因。
+    pub fn close_active_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
+        let Some(id) = self.editor_service.service().active_id().cloned() else {
+            return;
+        };
+        let Some(panel) = self
+            .editor_hosts
+            .iter()
+            .find(|panel| panel.read(cx).document() == &id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        editor::view::host::close_document_in_dock(&area, panel, window, cx);
     }
 
     /// 项目视图宿主（构造期已装配）。
@@ -1246,6 +1280,14 @@ impl Render for WorkbenchView {
                         let host = this.project_host().clone();
                         project::ui::request_close(&host, window, cx);
                     });
+                }
+            })
+            // A10：关闭当前编辑器文档（键位绑在编辑器面板的 `editor` context 上，
+            // 但在这里执行：面板不在自己的 `update` 里，Dock 移除它时才不会重入）。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &editor::commands::CloseDocument, window, cx| {
+                    entity.update(cx, |this, cx| this.close_active_editor(window, cx));
                 }
             })
             .child(self.render_title_bar(window, cx))

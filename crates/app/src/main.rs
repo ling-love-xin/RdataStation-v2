@@ -11,6 +11,7 @@
 //!   全局系统库初始化 → SettingsService::init → 主题目录 watch →
 //!   应用已保存主题模式 → 快捷键绑定。
 
+use editor::commands::{CloseDocument, SaveDocument, ToggleComment};
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
 use settings::SettingsService;
@@ -80,9 +81,17 @@ fn run_app() {
 
             // 5. 快捷键：Quick Open（Ctrl+P）、设置（Ctrl+,）。
             //    Quick Open 触发后由 workbench 的 key_context("workbench") on_action 处理。
+            //    A10：编辑器键位绑在 key_context("editor")（面板根元素）上——
+            //    只有焦点在工作区编辑面板内才生效，不抢导航树/草稿箱的同名键。
             cx.bind_keys([
                 KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
                 KeyBinding::new("ctrl-,", OpenSettings, Some("workbench")),
+                // A10 编辑器：保存 / 行注释开关 / 关闭当前文档。
+                // `Ctrl+F` 不在其中：内核（Input context）已绑 `input::Search`，键位先由内核拿到；
+                // 编辑器查找（A11）落地后再定归属，**没实现就不宣传**。
+                KeyBinding::new("ctrl-s", SaveDocument, Some("editor")),
+                KeyBinding::new("ctrl-/", ToggleComment, Some("editor")),
+                KeyBinding::new("ctrl-w", CloseDocument, Some("editor")),
                 // M4 数据源导航：聚焦搜索框（先切到数据源面板并展开左侧 Dock）。
                 KeyBinding::new("ctrl-f", FocusNavSearch, Some("workbench")),
                 // M4 导航树键盘导航（仅当焦点在导航面板内时生效）。

@@ -325,6 +325,14 @@
 | | `Ctrl+Shift+Enter` | 运行全部 |
 | | `Esc` | 退出单元编辑态（进入单元选中态，可用 ↑↓ 移动） |
 
+**已实现 vs 计划（1a，2026-09-15）**：上表是目标态。当前**已注册并实测生效**的只有三条：`ctrl-s`（保存）· `ctrl-/`（行注释开关）· `ctrl-w`（关闭当前文档），context 均为 `editor`。其余键（`Ctrl+Enter` 执行 / `Ctrl+F` 查找 / `Ctrl+Shift+F` 格式化 / `Ctrl+Space` 补全）**尚未实现，因此不注册、不宣传**（“注册了才宣传”）。
+
+两条实现细节需按实例为准：
+
+- **`Ctrl+Z` / `Ctrl+Shift+Z` 等编辑键由内核 `Input` context 提供**（`gpui-base` 绑定，不在本 crate）；本 crate 只注册内核没绑的键。改键位前先看 `gpui-base/src/input/base/state.rs` 的 `init`，否则会被内核静默吃掉（架构 §12 #24）。
+- **`Ctrl+W` 的处理器在宿主（workbench）而不是面板**：面板在自己的 `update` 里让 Dock 移除自己会重入（架构 §12 #23）。键位仍只在该面板内生效。
+- 快捷键要能落到动作，面板根元素必须 `track_focus`（架构 §12 #25）；这类失效是**静默**的，靠 `simulate_keystrokes` 的窗口测试拦。
+
 ### 5.3 补全
 
 - 触发：输入即触发（`activateOnTyping` 语义）+ `Ctrl+Space` 显式。

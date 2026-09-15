@@ -7881,6 +7881,7 @@ name = "rds-app"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "rds-editor",
  "rds-engine",
  "rds-settings",
  "rds-workbench",

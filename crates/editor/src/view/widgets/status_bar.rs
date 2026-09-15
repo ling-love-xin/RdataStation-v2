@@ -27,8 +27,10 @@ use crate::model::{EditorMode, ReadOnly};
 use crate::ui;
 
 /// 状态栏的输入（全部来自真实状态；无数据源的字段不放进结构体）
+///
+/// `message` 借用面板字段而不克隆：状态栏每帧都画，渲染路径不做字符串分配。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StatusInputs {
+pub struct StatusInputs<'a> {
     pub mode: EditorMode,
     pub dirty: bool,
     pub read_only: ReadOnly,
@@ -39,6 +41,8 @@ pub struct StatusInputs {
     pub column: usize,
     /// 选中的字符数（0 = 无选区）
     pub selected_chars: usize,
+    /// 动作失败的原因（未命名需另存为 / 有未保存改动 / 只读拒绝）；`None` = 无提示
+    pub message: Option<&'a str>,
 }
 
 /// 状态栏文案（左右两段）
@@ -50,13 +54,17 @@ pub struct StatusLabels {
 
 /// 计算状态栏文案（纯函数）
 pub fn labels(inputs: &StatusInputs) -> StatusLabels {
-    // 左：模式 + 语句数（SQL 模式才有语句概念）
+    // 左：模式 + 语句数（SQL 模式才有语句概念）+ 未保存 + 动作提示
     let mut left = String::from(inputs.mode.short_label());
     if inputs.mode == EditorMode::Sql {
         left.push_str(&format!(" · {} 条语句", inputs.statements));
     }
     if inputs.dirty {
         left.push_str(" · 未保存");
+    }
+    if let Some(message) = inputs.message {
+        // 提示紧跟在左侧状态段之后：它是“刚才那个动作”的后果，不是文档属性
+        left.push_str(&format!(" · {message}"));
     }
 
     // 右：两个只读维度分别表达 + 光标 + 选区
@@ -107,7 +115,7 @@ mod tests {
     use super::{StatusInputs, labels};
     use crate::model::{EditorMode, ReadOnly};
 
-    fn inputs(read_only: ReadOnly) -> StatusInputs {
+    fn inputs(read_only: ReadOnly) -> StatusInputs<'static> {
         StatusInputs {
             mode: EditorMode::Sql,
             dirty: false,
@@ -116,6 +124,7 @@ mod tests {
             line: 12,
             column: 4,
             selected_chars: 0,
+            message: None,
         }
     }
 
@@ -195,5 +204,20 @@ mod tests {
         let mut selecting = inputs(ReadOnly::none());
         selecting.selected_chars = 7;
         assert!(labels(&selecting).right.contains("已选 7 字"));
+    }
+
+    #[test]
+    fn failed_actions_leave_a_visible_reason() {
+        // 动作失败必须在状态栏留痕迹（“按了没反应”不可接受）；提示属于**左段**
+        let mut failed = inputs(ReadOnly::none());
+        failed.dirty = true;
+        failed.message = Some("未命名文档，请先另存为");
+        let text = labels(&failed);
+        assert!(text.left.contains("未命名文档，请先另存为"), "{}", text.left);
+        assert!(text.left.contains("未保存"), "提示不挤掉文档状态：{}", text.left);
+        assert!(!text.right.contains("另存为"), "提示不进右段：{}", text.right);
+
+        // 无提示时不显示占位
+        assert!(!labels(&inputs(ReadOnly::none())).left.contains("另存为"));
     }
 }

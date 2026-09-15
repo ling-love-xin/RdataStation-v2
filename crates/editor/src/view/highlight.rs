@@ -198,8 +198,8 @@ fn split_by_line(text: &Rope, source: &str, span: &HighlightSpan) -> Vec<(usize,
         return parts;
     }
 
-    let first_row = text.offset_to_point(start).row as usize;
-    let last_row = text.offset_to_point(end - 1).row as usize;
+    let first_row = text.offset_to_point(start).row;
+    let last_row = text.offset_to_point(end - 1).row;
     for row in first_row..=last_row {
         let line_start = text.line_start_offset(row).min(source.len());
         let line_end = match source[line_start..].find('\n') {
