@@ -7,11 +7,13 @@
 //! - `editor_exec`：编辑器执行端口的工作台实现（编辑器 A14 最小执行）
 //! - `editor_session`：编辑器会话存储的工作台实现（编辑器 A12 光标/模式持久化）
 //! - `editor_files`：编辑器的系统文件对话框（A9 打开 / 另存为）
+//! - `editor_connections`：编辑器的连接端口（B1 连接列表 + 自动建连）
 
 pub mod connection_service;
 pub mod data_source_service;
 pub mod db_navigator;
 pub mod driver_service;
+pub mod editor_connections;
 pub mod editor_exec;
 pub mod editor_files;
 pub mod editor_session;

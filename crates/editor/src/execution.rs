@@ -207,15 +207,19 @@ pub struct QueryData {
 /// 实现会被**工作线程**调用，因此必须 `Send + Sync`，且**允许阻塞**（异步驱动在这里
 /// `block_on`）。取消（`cancel_query`）与超时属 1b，不在这条最小路径上。
 pub trait QueryRunner: Send + Sync + 'static {
-    fn run(&self, sql: &str) -> Result<QueryData, String>;
+    /// `connection` = 本文档绑定的连接 id（B1）；`None` = 未绑定，由实现决定回退口径
+    /// （workbench 的实现回退到“当前活动连接”，与 1a 一致）
+    fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String>;
 }
 
 // ===== 跑完放哪 =====
 
-/// 一次执行的请求（工作线程需要知道"这是哪份文档的哪句话"）
+/// 一次执行的请求（工作线程需要知道"这是哪份文档在哪个连接上的哪句话"）
 #[derive(Debug, Clone)]
 struct ExecRequest {
     document: DocumentId,
+    /// 文档绑定的连接（B1；`None` = 未绑定）
+    connection: Option<String>,
     sql: String,
 }
 
@@ -223,6 +227,8 @@ struct ExecRequest {
 #[derive(Debug, Clone)]
 pub struct ExecOutcome {
     pub document: DocumentId,
+    /// 实际使用的连接（B1）；`None` = 未绑定（跟随当前活动连接）
+    pub connection: Option<String>,
     /// 实际执行的 SQL（结果区标题与历史用）
     pub sql: String,
     pub result: Result<QueryData, String>,
@@ -274,10 +280,12 @@ impl ExecChannel {
             .spawn(move || {
                 while let Ok(request) = rx.recv() {
                     worker_busy.store(true, Ordering::SeqCst);
-                    let result = runner.run(&request.sql);
+                    // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
+                    let result = runner.run(request.connection.as_deref(), &request.sql);
                     if let Ok(mut queue) = worker_done.lock() {
                         queue.push_back(ExecOutcome {
                             document: request.document,
+                            connection: request.connection,
                             sql: request.sql,
                             result,
                         });
@@ -295,10 +303,13 @@ impl ExecChannel {
     }
 
     /// 提交一次执行（忙 / 空目标会被拒，**不排队**：排队会让"再按一次"变成隐藏的批量执行）
+    ///
+    /// `connection` 是**文档绑定的连接**（B1）；`None` = 未绑定，执行器回退到“当前活动连接”。
     pub fn submit(
         &self,
         document: DocumentId,
         target: &ExecTarget,
+        connection: Option<String>,
     ) -> Result<(), SubmitError> {
         let Some(sql) = target.sql() else {
             return Err(SubmitError::Empty);
@@ -313,6 +324,7 @@ impl ExecChannel {
         if tx
             .send(ExecRequest {
                 document,
+                connection,
                 sql: sql.to_string(),
             })
             .is_err()
@@ -513,14 +525,22 @@ mod tests {
 
     // ===== 执行通道 =====
 
-    /// 假执行器：记录调用次数，返回固定结果（按 SQL 决定成败）
+    /// 假执行器看到的连接序列（B1 断言用）
+    type SeenConnections = Arc<Mutex<Vec<Option<String>>>>;
+
+    /// 假执行器：记录调用次数与收到的连接，返回固定结果（按 SQL 决定成败）
     struct FakeRunner {
         calls: Arc<AtomicUsize>,
+        seen_connections: SeenConnections,
     }
 
     impl QueryRunner for FakeRunner {
-        fn run(&self, sql: &str) -> Result<QueryData, String> {
+        fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen_connections
+                .lock()
+                .expect("锁")
+                .push(connection.map(str::to_string));
             if sql.contains("boom") {
                 return Err("驱动报错：boom".to_string());
             }
@@ -533,12 +553,14 @@ mod tests {
         }
     }
 
-    fn channel() -> (ExecChannel, Arc<AtomicUsize>) {
+    fn channel() -> (ExecChannel, Arc<AtomicUsize>, SeenConnections) {
         let calls = Arc::new(AtomicUsize::new(0));
+        let seen_connections = Arc::new(Mutex::new(Vec::new()));
         let channel = ExecChannel::new(Arc::new(FakeRunner {
             calls: calls.clone(),
+            seen_connections: seen_connections.clone(),
         }));
-        (channel, calls)
+        (channel, calls, seen_connections)
     }
 
     /// 轮询等待结果（带超时：通道坏掉时测试要失败而不是挂住）
@@ -556,17 +578,26 @@ mod tests {
 
     #[test]
     fn submitted_sql_comes_back_with_its_outcome() {
-        let (channel, calls) = channel();
+        let (channel, calls, seen) = channel();
         let document = DocumentId::new("doc-test");
 
+        // 绑定连接（B1）：通道要把它原样交给执行器
         let target = ExecTarget::Statement("select 1".to_string());
-        channel.submit(document.clone(), &target).expect("提交");
+        channel
+            .submit(document.clone(), &target, Some("P_orders".to_string()))
+            .expect("提交");
 
         let done = wait(&channel);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "执行器应被调用一次");
         assert_eq!(done.len(), 1);
         assert_eq!(done[0].document, document, "结果要认领回原文档");
         assert_eq!(done[0].sql, "select 1");
+        assert_eq!(done[0].connection.as_deref(), Some("P_orders"));
+        assert_eq!(
+            seen.lock().expect("锁").as_slice(),
+            [Some("P_orders".to_string())],
+            "执行器必须收到文档绑定的连接（而不是“当前活动连接”）"
+        );
         let data = done[0].result.as_ref().expect("应当成功");
         assert_eq!(data.columns, vec!["n".to_string()]);
         assert_eq!(data.rows, vec![vec!["1".to_string()]]);
@@ -576,9 +607,11 @@ mod tests {
 
     #[test]
     fn driver_errors_come_back_as_errors_not_panics() {
-        let (channel, _calls) = channel();
+        let (channel, _calls, _seen) = channel();
         let target = ExecTarget::Statement("select boom".to_string());
-        channel.submit(DocumentId::new("doc-err"), &target).expect("提交");
+        channel
+            .submit(DocumentId::new("doc-err"), &target, None)
+            .expect("提交");
 
         let done = wait(&channel);
         let error = done[0].result.as_ref().expect_err("应当失败");
@@ -588,9 +621,9 @@ mod tests {
 
     #[test]
     fn empty_targets_are_rejected_before_touching_the_runner() {
-        let (channel, calls) = channel();
+        let (channel, calls, _seen) = channel();
         let error = channel
-            .submit(DocumentId::new("doc-empty"), &ExecTarget::Empty)
+            .submit(DocumentId::new("doc-empty"), &ExecTarget::Empty, None)
             .expect_err("空目标应被拒");
         assert_eq!(error, SubmitError::Empty);
         assert_eq!(calls.load(Ordering::SeqCst), 0, "不该打扰执行器");
@@ -604,7 +637,7 @@ mod tests {
             release: Arc<Mutex<bool>>,
         }
         impl QueryRunner for SlowRunner {
-            fn run(&self, _sql: &str) -> Result<QueryData, String> {
+            fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 loop {
                     if *self.release.lock().unwrap() {
@@ -623,7 +656,9 @@ mod tests {
         let document = DocumentId::new("doc-slow");
         let target = ExecTarget::Statement("select 1".to_string());
 
-        channel.submit(document.clone(), &target).expect("首次提交");
+        channel
+            .submit(document.clone(), &target, None)
+            .expect("首次提交");
         // 等它真的进到忙状态
         let deadline = Instant::now() + Duration::from_secs(5);
         while !channel.is_busy() {
@@ -632,7 +667,9 @@ mod tests {
         }
 
         assert_eq!(
-            channel.submit(document, &target).expect_err("忙时应被拒"),
+            channel
+                .submit(document, &target, None)
+                .expect_err("忙时应被拒"),
             SubmitError::Busy
         );
 
@@ -647,6 +684,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let channel = ExecChannel::new(Arc::new(FakeRunner {
             calls: calls.clone(),
+            seen_connections: Arc::new(Mutex::new(Vec::new())),
         }));
         drop(channel);
         // 线程退出是异步的：这里只要求不 panic、不阻塞进程退出

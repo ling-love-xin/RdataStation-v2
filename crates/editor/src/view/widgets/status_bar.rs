@@ -45,6 +45,8 @@ pub struct StatusInputs<'a> {
     pub message: Option<&'a str>,
     /// 是否有执行在跑（真实状态，不猜）
     pub executing: bool,
+    /// 连接段（已格式化的文案，如 `●P·orders`）；`None` = 不显示（文本模式没有连接概念）
+    pub connection: Option<&'a str>,
 }
 
 /// 状态栏文案（左右两段）
@@ -56,8 +58,13 @@ pub struct StatusLabels {
 
 /// 计算状态栏文案（纯函数）
 pub fn labels(inputs: &StatusInputs) -> StatusLabels {
-    // 左：模式 + 语句数（SQL 模式才有语句概念）+ 未保存 + 动作提示
-    let mut left = String::from(inputs.mode.short_label());
+    // 左：连接（会通信的模式才有）+ 模式 + 语句数（SQL 模式才有语句概念）+ 未保存 + 动作提示
+    let mut left = String::new();
+    if let Some(connection) = inputs.connection {
+        left.push_str(connection);
+        left.push_str(" · ");
+    }
+    left.push_str(inputs.mode.short_label());
     if inputs.mode == EditorMode::Sql {
         left.push_str(&format!(" · {} 条语句", inputs.statements));
     }
@@ -131,7 +138,26 @@ mod tests {
             selected_chars: 0,
             message: None,
             executing: false,
+            // 连接段默认不显示；连接相关的断言在下面的专用用例里给值
+            connection: None,
         }
+    }
+
+    /// 连接段（B1）放在最左：读状态栏第一眼要知道“这条 SQL 会发到哪”
+    #[test]
+    fn connection_leads_the_left_segment() {
+        let mut with_connection = inputs(ReadOnly::none());
+        with_connection.connection = Some("●P·orders");
+        let text = labels(&with_connection);
+        assert!(
+            text.left.starts_with("●P·orders · SQL"),
+            "连接在前、模式在后：{}",
+            text.left
+        );
+
+        // 文本模式没有连接概念：整段不出现
+        let plain = labels(&inputs(ReadOnly::none()));
+        assert!(!plain.left.contains('●') && !plain.left.contains("未绑定"));
     }
 
     #[test]

@@ -37,7 +37,11 @@
 //!   其余控件（格式化 / 历史 / 更多 / 执行位置 / 连接）**未实现就不放**（原型 §2.2 分层）
 //! - ✅ 关闭口径（B16）：脏文档 `closable == false`（Dock 的 ✕/关闭菜单按**当前标签**取该判据，
 //!   脏时入口直接消失），关闭脏文档的唯一入口是 `Ctrl+W` → 三态确认
-//! - ⬜ 1a 待做：`completion` · 结果区可拖拽分栏 · 连接绑定（1b）
+//! - ✅ `connection`（B1 切片一）：文档绑定连接（与 `mode` / `read_only` 同类）· 端口注入
+//!   （`shared.attach_connections`，宿主给列表 + 自动建连）· 工具栏「连接 ▾」（未完绑定→跟随当前连接）
+//!   · 状态栏最左的连接段（`●P·orders` / `○ 未绑定连接`）· 执行时绑定随目标走执行通道
+//! - ⬜ 1b 待做：`completion`（B9）· 格式化 / 转译 / 执行计划（B10）· 结果区分栏可拖拽与多结果集（B5）
+//!   · 中断与超时（B3）· 事务（B4）· 绑定随会话持久化（B1 余项）· 执行位置三通道（B13）
 //! - ⬜ 1c：`session` / `notebook`（Cell / Output / Session）
 //!
 //! 语句切分（「执行当前语句」与「批量执行」的基础）落在 `engine::sql::split`：它是不带编辑器
@@ -45,6 +49,7 @@
 //! 不在本 crate 重复实现。
 
 pub mod commands;
+pub mod connection;
 pub mod edit;
 pub mod execution;
 pub mod limits;

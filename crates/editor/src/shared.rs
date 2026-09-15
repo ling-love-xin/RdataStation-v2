@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_text};
 use crate::execution::{ExecChannel, QueryRunner};
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
 use crate::session::{SavedSession, SessionStore};
@@ -38,6 +39,8 @@ pub struct EditorShared {
     sessions: Rc<RefCell<Option<Rc<dyn SessionStore>>>>,
     /// 另存为路径选择器：宿主注入后才有（无宿主 = 另存为明确报“未接入”，不静默失败）
     save_path: Rc<RefCell<Option<SavePathPicker>>>,
+    /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
+    connections: Rc<RefCell<Option<ConnectionsHandle>>>,
 }
 
 impl Default for EditorShared {
@@ -54,6 +57,7 @@ impl EditorShared {
             exec: Rc::new(RefCell::new(None)),
             sessions: Rc::new(RefCell::new(None)),
             save_path: Rc::new(RefCell::new(None)),
+            connections: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -94,6 +98,9 @@ impl EditorShared {
 
     /// 提交一次执行（借用边界内完成：不在 `Ref` 存活期间回调调用方）
     ///
+    /// 文档绑定的连接（B1）在这里取出并随请求交给执行器：调用方（面板 / 菜单）不需要知道
+    /// 连接从哪来，只要知道“执行这份文档”。
+    ///
     /// 对 `Option<ExecChannel>` 的借用刻意收在这里：`ExecChannel` 内部是
     /// `Sender + Arc`，调 `submit` 期间不会回到调用方，因此不构成重入风险。
     pub fn submit(
@@ -101,11 +108,13 @@ impl EditorShared {
         document: crate::model::DocumentId,
         target: &crate::execution::ExecTarget,
     ) -> Result<(), crate::execution::SubmitError> {
+        // 先把绑定拷出来（不把服务层的 `Ref` 带到下面的借用里）
+        let connection = self.service.borrow().connection_for(&document);
         let guard = self.exec.borrow();
         let Some(channel) = guard.as_ref() else {
             return Err(crate::execution::SubmitError::NoRunner);
         };
-        channel.submit(document, target)
+        channel.submit(document, target, connection)
     }
 
     /// 结果队列里已完成但尚未取走的执行（轮询泵调用）
@@ -162,5 +171,43 @@ impl EditorShared {
     pub fn pick_save_path(&self, current: Option<PathBuf>, default_name: String) -> Option<PathBuf> {
         let guard = self.save_path.borrow();
         guard.as_ref().and_then(|picker| picker(current, default_name))
+    }
+
+    /// 注入连接端口（**宿主调用一次**：workbench 接 M3/M4 的连接列表与自动建连）
+    pub fn attach_connections(&self, port: ConnectionsHandle) {
+        *self.connections.borrow_mut() = Some(port);
+    }
+
+    /// 是否接了连接端口（未接时选择器要说“未接入”，而不是看起来有连接可选）
+    pub fn has_connections(&self) -> bool {
+        self.connections.borrow().is_some()
+    }
+
+    /// 当前可选项快照（**渲染路径可调**：实现必须是内存快照，不做 I/O）
+    pub fn connection_options(&self) -> Vec<ConnectionOption> {
+        let guard = self.connections.borrow();
+        guard.as_ref().map(|port| port.options()).unwrap_or_default()
+    }
+
+    /// 确保某个连接已建连（事件路径调用：可能真的去建连）
+    pub fn ensure_connected(&self, conn_id: &str) -> Result<(), String> {
+        let guard = self.connections.borrow();
+        match guard.as_ref() {
+            Some(port) => port.ensure_connected(conn_id),
+            None => Err("当前未接入连接列表".to_string()),
+        }
+    }
+
+    /// 某文档的绑定在状态栏 / 工具栏上的文案（纯函数：端口未接就是“未绑定”）
+    pub fn connection_status_text(&self, conn_id: Option<&str>) -> String {
+        status_text(conn_id, &self.connection_options())
+    }
+
+    /// 某文档的绑定的展示数据（工具栏用；`None` = 未绑定或认不出）
+    pub fn connection_chip(
+        &self,
+        conn_id: Option<&str>,
+    ) -> Option<crate::connection::ConnectionChip> {
+        chip_for(conn_id, &self.connection_options())
     }
 }

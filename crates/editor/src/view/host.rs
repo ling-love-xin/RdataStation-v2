@@ -412,8 +412,100 @@ impl EditorHostPanel {
             // 只有 SQL 模式的执行是“对当前文档执行”：文本模式按能力表不通信，
             // 分析模式的执行是**笔记级**动作（单元级按钮 + Shift+Enter，1c 落地）
             toolbar = toolbar.child(self.render_exec_group(cx));
+            // 连接选择器（通道级 / 连接，右对齐）：原型 §2.2 把它放工具栏右侧
+            toolbar = toolbar.child(div().ml_auto().child(self.render_connection_picker(cx)));
         }
         toolbar
+    }
+
+    /// 连接选择器（工具栏右侧）：本文档执行时用哪个连接（B1）
+    ///
+    /// - 已绑定 → 菜单里打勾；未绑定 → 菜单第一项「跟随当前连接」打勾（1a 口径，如实说明）
+    /// - 选中一个连接时**先自动建连**（同 M4）：建连失败就**不绑定**，并在状态栏给出原因
+    /// - 未接端口（宿主没给列表）时菜单直说“未接入连接列表”，不假装有可选项
+    fn render_connection_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let options = self.shared.connection_options();
+        let has_port = self.shared.has_connections();
+        let bound = self
+            .with_document(|doc| doc.connection().map(str::to_string))
+            .flatten();
+        let label = match self.shared.connection_chip(bound.as_deref()) {
+            Some(chip) => format!("{} ▾", chip.text()),
+            None => "未绑定连接 ▾".to_string(),
+        };
+        let current = bound.clone();
+
+        Button::new("editor-connection")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-connection".to_string())
+            .label(label)
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                if !has_port {
+                    return menu.item(PopupMenuItem::new("（未接入连接列表）").disabled(true));
+                }
+                // 不绑定也是合法选择：执行跟随当前活动连接（与 1a 一致）
+                let follow_entity = entity.clone();
+                menu = menu.item(
+                    PopupMenuItem::new("跟随当前连接")
+                        .checked(current.is_none())
+                        .on_click(move |_, _window, app| {
+                            follow_entity.update(app, |panel, cx| {
+                                panel.bind_connection(None, cx);
+                            });
+                        }),
+                );
+                menu = menu.separator();
+                for option in options.iter() {
+                    let is_current = current.as_deref() == Some(option.id.as_str());
+                    let entity = entity.clone();
+                    let label = format!("{} · {}", option.short, option.name);
+                    let id = option.id.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(label)
+                            .checked(is_current)
+                            .on_click(move |_, _window, app| {
+                                let id = id.clone();
+                                entity.update(app, |panel, cx| {
+                                    panel.bind_connection(Some(id), cx);
+                                });
+                            }),
+                    );
+                }
+                menu
+            })
+    }
+
+    /// 绑定连接（工具栏选择器调用）：先用端口确保已建连，失败就**不绑定**并留原因
+    ///
+    /// `None` = 解绑（跟随当前连接）。绑定是**文档属性**，同一窗口的多份文档互不影响。
+    pub(crate) fn bind_connection(
+        &mut self,
+        conn_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conn_id) = conn_id else {
+            self.shared
+                .update(|service| service.set_connection(&self.document, None));
+            self.set_message(None, cx);
+            return;
+        };
+
+        match self.shared.ensure_connected(&conn_id) {
+            Ok(()) => {
+                self.shared.update(|service| {
+                    service.set_connection(&self.document, Some(conn_id.clone()));
+                });
+                let chip = self.shared.connection_status_text(Some(&conn_id));
+                self.set_message(Some(format!("已绑定 {chip}")), cx);
+            }
+            Err(reason) => {
+                // 建连失败不绑定：半绑定状态比不绑定更难排查
+                self.set_message(Some(format!("连接不可用：{reason}")), cx);
+            }
+        }
     }
 
     /// 执行族（执行级）：主按钮 + 下拉菜单
@@ -1231,6 +1323,18 @@ impl Render for EditorHostPanel {
                 state.selected_text().chars().count(),
             )
         };
+        // 连接段只在会通信的模式出现（文本模式没有连接概念，不显示占位）
+        let communicating = self
+            .with_document(|doc| doc.capabilities().execute)
+            .unwrap_or(false);
+        let connection_text = if communicating {
+            let bound = self
+                .with_document(|doc| doc.connection().map(str::to_string))
+                .flatten();
+            Some(self.shared.connection_status_text(bound.as_deref()))
+        } else {
+            None
+        };
         let status = StatusInputs {
             mode: self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text),
             dirty: self.is_dirty(),
@@ -1243,6 +1347,7 @@ impl Render for EditorHostPanel {
             selected_chars,
             message: self.message.as_deref(),
             executing: self.running,
+            connection: connection_text.as_deref(),
         };
 
         // 结果区：有结果或正在执行时出现（否则不占位置——不显示空壳）

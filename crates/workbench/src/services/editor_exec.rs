@@ -44,15 +44,16 @@ impl EngineQueryRunner {
 }
 
 impl QueryRunner for EngineQueryRunner {
-    fn run(&self, sql: &str) -> Result<QueryData, String> {
+    fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
         let options = SqlExecuteOptions {
             // 历史由引擎侧统一记录（含耗时/行数，真实值）
             record_history: true,
             ..Default::default()
         };
+        // 连接：文档绑定了就用它（B1）；未绑定回退到“当前活动连接”（1a 口径）
         let executed = self
             .runtime
-            .block_on(self.service.execute(None, sql, options))
+            .block_on(self.service.execute(connection.map(str::to_string), sql, options))
             .map_err(|error| error.to_string())?;
         Ok(to_data(&executed.result, executed.elapsed_ms, executed.truncated))
     }

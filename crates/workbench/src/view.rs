@@ -184,6 +184,9 @@ impl WorkbenchView {
             crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
         let shared = Shared::with_connections(connections, notice);
         *shared.project.borrow_mut() = project;
+        // B1：编辑器的连接端口要用它（连接列表快照 + 项目根）——先 clone 出来，
+        // 因为下面构造 `editor_service` 时不能再借 `self`。
+        let editor_shared_for_conn = shared.clone();
         // M1：排序偏好（直读 settings.json，无需 cx）与首屏项目列表（无项目时）都在构造期完成，
         // 避免在 `render` 里做 I/O（GPUI-kit 编码指南：副作用不得放在 render）。
         {
@@ -238,6 +241,8 @@ impl WorkbenchView {
                 crate::services::editor_session::attach(&service);
                 // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）
                 crate::services::editor_files::attach(&service);
+                // B1：把连接端口接上（连接列表 + 自动建连；未接时选择器说“未接入连接列表”）
+                crate::services::editor_connections::attach(&service, &editor_shared_for_conn);
                 service
             },
             editor_hosts: Vec::new(),
@@ -428,17 +433,34 @@ impl WorkbenchView {
     ///
     /// 三档模式走**同一条路**：开文档 → 建面板（`show_document`）；标题由服务层的未命名
     /// 编号保证不重名（`未命名-1` / `未命名-2`…）。
-    /// 「新建查询」将来的“并绑定当前连接”属 B1（连接绑定）；现在新建文档还没有连接。
+    ///
+    /// **新建查询会带上当前选中的连接**（原型 §1.2 入口语义“SQL 模式并绑定该连接”）：
+    /// 导航里选了哪个库，新查询就默认发到那个库——绑不绑在状态栏与工具栏都看得见。
+    /// 没选连接时保持未绑定（执行跟随当前活动连接）。
     pub fn new_editor_document(
         &mut self,
         mode: editor::model::EditorMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let outcome = self
-            .editor_service
-            .open(editor::service::OpenRequest::untitled("", mode));
+        let mut request = editor::service::OpenRequest::untitled("", mode);
+        if mode == editor::model::EditorMode::Sql
+            && let Some(id) = self.selected_connection_id()
+        {
+            request = request.with_connection(id);
+        }
+        let outcome = self.editor_service.open(request);
         self.show_document(outcome.id().clone(), window, cx);
+    }
+
+    /// 导航里当前选中的连接 id（Quick Open 选中 / 导航树点击都会置位）
+    fn selected_connection_id(&self) -> Option<String> {
+        let index = self.shared.selected.get()?;
+        self.shared
+            .connections
+            .borrow()
+            .get(index)
+            .map(|item| item.id.clone())
     }
 
     /// 「打开文件」（`Ctrl+O`）：系统文件对话框 → 在编辑器中打开

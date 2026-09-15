@@ -21,6 +21,7 @@ use gpui_kit::{
 };
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
+use crate::connection::{ConnectionOption, ConnectionsPort};
 use crate::execution::{QueryData, QueryRunner};
 use crate::mode::CellGranularity;
 use crate::model::{DocumentId, EditorMode};
@@ -548,14 +549,26 @@ fn focusing_a_tab_activates_its_document(cx: &mut TestAppContext) {
 
 // ===== A14：执行（假执行器，真线程）=====
 
-/// 假执行器：记录收到的 SQL，按 SQL 内容决定成败
+/// 执行器看到的 SQL 序列（A14 断言用）
+type SeenSql = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// 执行器看到的连接序列（B1 断言用）
+type SeenConnections = std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>;
+
+/// 假执行器：记录收到的连接与 SQL，按 SQL 内容决定成败
 struct ScriptRunner {
-    seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    seen: SeenSql,
+    /// 收到的连接（B1）：绑定的连接必须原样传到这里
+    seen_connections: SeenConnections,
 }
 
 impl QueryRunner for ScriptRunner {
-    fn run(&self, sql: &str) -> Result<QueryData, String> {
+    fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
         self.seen.lock().expect("锁").push(sql.to_string());
+        self.seen_connections
+            .lock()
+            .expect("锁")
+            .push(connection.map(str::to_string));
         if sql.contains("boom") {
             return Err("驱动报错：boom".to_string());
         }
@@ -572,19 +585,19 @@ impl QueryRunner for ScriptRunner {
 fn shared_with_runner(
     content: &str,
     mode: EditorMode,
-) -> (
-    EditorShared,
-    DocumentId,
-    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-) {
+) -> (EditorShared, DocumentId, SeenSql, SeenConnections) {
     let shared = EditorShared::new();
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    shared.attach_runner(std::sync::Arc::new(ScriptRunner { seen: seen.clone() }));
+    let seen_connections = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    shared.attach_runner(std::sync::Arc::new(ScriptRunner {
+        seen: seen.clone(),
+        seen_connections: seen_connections.clone(),
+    }));
     let id = shared
         .open(OpenRequest::untitled(content, mode))
         .id()
         .clone();
-    (shared, id, seen)
+    (shared, id, seen, seen_connections)
 }
 
 /// 在窗口里建面板（宿主建的窗口第一层视图**
@@ -621,7 +634,7 @@ fn ctrl_enter_runs_the_statement_under_the_cursor(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
-    let (shared, id, seen) = shared_with_runner(
+    let (shared, id, seen, _seen_conn) = shared_with_runner(
         "select 1;
 select 2;
 select boom;",
@@ -674,7 +687,7 @@ fn ctrl_shift_enter_runs_the_whole_script(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
-    let (_shared, id, seen) = shared_with_runner(
+    let (_shared, id, seen, _seen_conn) = shared_with_runner(
         "select 1;
 select 2;",
         EditorMode::Sql,
@@ -702,7 +715,7 @@ fn a_failing_execution_says_why_instead_of_showing_an_empty_grid(cx: &mut TestAp
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
-    let (shared, id, _seen) = shared_with_runner("select boom;", EditorMode::Sql);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select boom;", EditorMode::Sql);
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -740,7 +753,7 @@ fn text_mode_refuses_to_execute(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
-    let (_shared, id, seen) = shared_with_runner("select 1;", EditorMode::Text);
+    let (_shared, id, seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Text);
     let (panel, cx) = open_panel(cx, &_shared, &id);
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -1417,6 +1430,193 @@ fn save_as_rewrites_the_path_and_keeps_the_document_open(cx: &mut TestAppContext
     assert!(!dirty, "另存为即已保存");
     assert!(shared.service().find(&id).is_some(), "另存为不关文档");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// B1：连接绑定
+// ══════════════════════════════════════════════════════════════════════
+
+/// 假连接端口：固定选项表 + 可注入的建连失败；建连成功后运行态变真
+struct FakeConnections {
+    options: Vec<ConnectionOption>,
+    fail_with: Option<String>,
+    connected: std::cell::RefCell<Vec<String>>,
+}
+
+impl FakeConnections {
+    fn new(options: Vec<ConnectionOption>) -> Self {
+        Self {
+            options,
+            fail_with: None,
+            connected: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl ConnectionsPort for FakeConnections {
+    fn options(&self) -> Vec<ConnectionOption> {
+        let connected = self.connected.borrow();
+        self.options
+            .iter()
+            .map(|option| ConnectionOption {
+                connected: option.connected || connected.contains(&option.id),
+                ..option.clone()
+            })
+            .collect()
+    }
+
+    fn ensure_connected(&self, conn_id: &str) -> Result<(), String> {
+        if let Some(reason) = &self.fail_with {
+            return Err(reason.clone());
+        }
+        self.connected.borrow_mut().push(conn_id.to_string());
+        Ok(())
+    }
+}
+
+fn option(id: &str, short: &str, name: &str) -> ConnectionOption {
+    ConnectionOption {
+        id: id.to_string(),
+        short: short.to_string(),
+        name: name.to_string(),
+        connected: false,
+    }
+}
+
+/// 绑定一个连接：状态栏跟着变，且**绑定是文档属性**（换文档不影响）
+#[gpui_kit::test]
+fn binding_a_connection_shows_up_in_the_status_bar(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\bound.sql", "select 1;");
+    let port = Rc::new(FakeConnections::new(vec![option("P_orders", "P", "orders")]));
+    shared.attach_connections(port);
+
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    // 初始：未绑定（会跟随当前连接，状态栏要如实说明）
+    assert_eq!(
+        shared.connection_status_text(None),
+        "○ 未绑定连接",
+        "未绑定要看得懂"
+    );
+
+    // 绑定：先自动建连（假端口成功）→ 写回文档 → 状态栏带运行态点
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.bind_connection(Some("P_orders".to_string()), cx)
+        });
+    });
+    assert_eq!(
+        shared.service().connection_for(&id).as_deref(),
+        Some("P_orders"),
+        "绑定要落到文档上"
+    );
+    assert_eq!(shared.connection_status_text(Some("P_orders")), "●P·orders");
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(
+        message.expect("绑定要有可见反馈").contains("已绑定"),
+        "成功也要留痕（否则用户不知道自自动建连了没）"
+    );
+
+    // 解绑：回到“跟随当前连接”
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.bind_connection(None, cx));
+    });
+    assert_eq!(shared.service().connection_for(&id), None);
+}
+
+/// 建连失败**不绑定**：半绑定比不绑定更难排查
+#[gpui_kit::test]
+fn a_failed_connection_leaves_the_document_unbound(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\unbound.sql", "select 1;");
+    let mut port = FakeConnections::new(vec![option("P_down", "P", "down")]);
+    port.fail_with = Some("端口不可达".to_string());
+    shared.attach_connections(Rc::new(port));
+
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.bind_connection(Some("P_down".to_string()), cx)
+        });
+    });
+
+    assert_eq!(shared.service().connection_for(&id), None, "建连失败不得绑定");
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    let message = message.expect("失败必须留原因");
+    assert!(message.contains("连接不可用"), "{message}");
+    assert!(message.contains("端口不可达"), "原因要原样带上来：{message}");
+}
+
+/// 绑定的连接要**真的**传到执行器（架构 §12 #26：以前只能走“当前活动连接”）
+#[gpui_kit::test]
+fn the_bound_connection_reaches_the_execution_port(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, _seen, seen_connections) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders",
+        "P",
+        "orders",
+    )])));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.bind_connection(Some("P_orders".to_string()), cx)
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+
+    cx.simulate_keystrokes("ctrl-enter");
+    wait_for_result(cx, &panel);
+
+    assert_eq!(
+        seen_connections.lock().expect("锁").as_slice(),
+        [Some("P_orders".to_string())],
+        "执行器必须收到文档绑定的连接"
+    );
+}
+
+/// 工具栏在 SQL 模式给出连接选择器（没有端口也说清楚，不假装有得选）
+#[gpui_kit::test]
+fn the_toolbar_shows_the_connection_picker_in_sql_mode(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\picker.sql", "select 1;");
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-connection").is_some(),
+        "SQL 模式应当有连接选择器"
+    );
+
+    // 未接端口：选项表为空（菜单会直说“未接入连接列表”）
+    assert!(shared.connection_options().is_empty());
+    assert!(!shared.has_connections());
+
+    // 文本模式：不与数据库通信 → 连不上问题都不该问，选择器不出现
+    shared.update(|service| {
+        service.set_mode(&id, EditorMode::Text);
+    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.debug_bounds("editor-connection").is_none());
 }
 
 // ══════════════════════════════════════════════════════════════════════

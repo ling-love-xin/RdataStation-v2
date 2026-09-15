@@ -39,9 +39,12 @@ pub struct Document {
     read_only: ReadOnly,
     /// 文件档位（A13）：>50MB 关重能力，>200MB 只读打开 + 提示卡
     tier: FileTier,
+    /// 绑定的连接 id（B1）；`None` = 未绑定 → 执行跟随**当前活动连接**（1a 口径）
+    connection: Option<String>,
 }
 
 impl Document {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         id: DocumentId,
         path: Option<PathBuf>,
@@ -50,6 +53,7 @@ impl Document {
         mode: EditorMode,
         read_only: ReadOnly,
         tier: FileTier,
+        connection: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -60,6 +64,7 @@ impl Document {
             mode,
             read_only,
             tier,
+            connection,
         }
     }
 
@@ -91,6 +96,11 @@ impl Document {
     /// 文件档位（>50MB / >200MB 的策略见 `limits` 模块）
     pub fn tier(&self) -> FileTier {
         self.tier
+    }
+
+    /// 绑定的连接 id（B1）；`None` = 未绑定，执行跟随当前活动连接
+    pub fn connection(&self) -> Option<&str> {
+        self.connection.as_deref()
     }
 
     /// 提示卡文案（档位带来的操作限制；`None` = 不显示）
@@ -154,6 +164,8 @@ pub struct OpenRequest {
     pub read_only: ReadOnly,
     /// 文件档位（默认常规；`persist::open_file` 会按实际大小给）
     pub tier: FileTier,
+    /// 绑定连接（B1）；`None` = 未绑定，执行跟随当前活动连接
+    pub connection: Option<String>,
 }
 
 impl OpenRequest {
@@ -165,6 +177,7 @@ impl OpenRequest {
             mode,
             read_only: ReadOnly::none(),
             tier: FileTier::Normal,
+            connection: None,
         }
     }
 
@@ -176,7 +189,14 @@ impl OpenRequest {
             mode,
             read_only: ReadOnly::none(),
             tier: FileTier::Normal,
+            connection: None,
         }
+    }
+
+    /// 绑定连接（B1；新建查询 / 导航“在 SQL 编辑器中打开”时给）
+    pub fn with_connection(mut self, conn_id: impl Into<String>) -> Self {
+        self.connection = Some(conn_id.into());
+        self
     }
 
     pub fn with_read_only(mut self, read_only: ReadOnly) -> Self {
@@ -313,6 +333,7 @@ impl EditorService {
             request.mode,
             request.read_only,
             request.tier,
+            request.connection,
         ));
         self.active = Some(id.clone());
 
@@ -405,6 +426,27 @@ impl EditorService {
             }
             None => false,
         }
+    }
+
+    /// 绑定 / 解绑连接（B1；`None` = 未绑定，执行跟随当前活动连接）
+    ///
+    /// 合法性由调用方保证（连接得先在宿主的列表里、且已建连）——服务层不做 I/O。
+    pub fn set_connection(&mut self, id: &DocumentId, connection: Option<String>) -> bool {
+        match self.documents.iter_mut().find(|doc| doc.id() == id) {
+            Some(doc) => {
+                doc.connection = connection;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 某文档绑定的连接（执行时用；`None` = 未绑定或文档不存在）
+    pub fn connection_for(&self, id: &DocumentId) -> Option<String> {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .and_then(|doc| doc.connection().map(str::to_string))
     }
 
     /// 更新只读两维度（连接只读随连接策略变化）
