@@ -8,6 +8,22 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-15 — Phase 0 第三批：索引修复（`indexer.rs`）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P0.11 ✅ | `IndexRepair`：`scan`（只读，**不改任何状态**）报告三类差异——有文件无记录 / 有记录无本体 / 指纹不匹配；三类修复动作均需人工确认：`adopt_file`（补登，指纹现算、不搬文件、来源留空）、`accept_current_content`（指纹换实际值 + 版本 +1 + **重新加回只读**）、`remove_orphan_record`（本体都没了，直接删行、不进回收站） | `src/indexer.rs`（新） |
+| 零件 | `PayloadStore::list_files`（递归遍历本体目录、跳过隐藏项、`/` 分隔排序）、`AnalyticsResourceStore::{list_file_archives, remove_orphan_record}` | `src/{payload,resource}.rs` |
+| 测试 | +8 项（7 索引修复 + 1 本体遍历）：三类差异各一、补登后转干净、重复补登被拒、接受当前内容后版本/指纹/只读三态正确且写前快照保留、本体不存在时拒绕 `accept_current_content` | `src/indexer.rs`、`src/payload.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **45 项全绿**；`cargo check` 零告警 | — |
+
+**两条诚实语义**（写进实现与注释，不做表面修复）：
+
+1. `accept_current_content` 产生的历史版本**只有元数据、没有内容副本**——旧内容在外部被覆盖时已经没了，界面按"副本缺失"呈现，而不是假装能还原；
+2. "有记录无本体"的另一个动作**从回收站还原**依赖 `ProjectTrash`（P0.8），本期只提供"删除记录"，还原动作待 P0.8 接入。
+
+**仍余**：`recycle.rs` 废弃（P0.8，跨 crate）、版本保留策略接设置项、`kind` 过滤/列表展示（Phase 1/2）、视图四处占位（Phase 1）。
+
 ### 2026-09-15 — Phase 0 第二批：归档 / 取回闭环
 
 | 项 | 内容 | 落点 |

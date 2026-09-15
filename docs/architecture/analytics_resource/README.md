@@ -3,8 +3,8 @@
 > **一句话**：把「值得留存、需被引用、要能复现」的分析产物，从工作区转成**只读、有版本、带来源**的正式存档——回答的不是"我能看到什么数据"（M4），也不是"我正在做什么"（M5），而是**"我留下了什么，它当时长什么样"**。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**设计定稿（2026-09-15）；Phase 0 两批已落地（仅 crate 内）**——除领域类型 / 本体层 / 迁移 020 外，**归档 → 取回 → 再归档（指纹版本）闭环与变更事件已可用**（`ArchiveService`，37 项测试全绿）。逐项证据见 `analytics-resource-dev-plan.md` §0 进度记录。
-> 仍待：索引修复 `indexer.rs`、废弃 `recycle.rs`→`ProjectTrash`（跨 crate）、视图四处占位（Phase 1）。视图仍是 `workbench/src/panels.rs::render_resources_placeholder`（文案仍是 v1 语义）。
+> 状态：**设计定稿（2026-09-15）；Phase 0 三批已落地（仅 crate 内）**——除领域类型 / 本体层 / 迁移 020 外，**归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件 + 索引修复（三类孤儿）已可用**（`ArchiveService` / `IndexRepair`，45 项测试全绿）。逐项证据见 `analytics-resource-dev-plan.md` §0 进度记录。
+> 仍待：废弃 `recycle.rs`→`ProjectTrash`（跨 crate）、版本保留策略接设置项、视图四处占位（Phase 1）。视图仍是 `workbench/src/panels.rs::render_resources_placeholder`（文案仍是 v1 语义）。
 >
 > **边界**：本模块拥有**归档与取回 / 存档登记 / 版本与内容指纹 / 标签与分组 / 检索 / 资源侧回收站 / 索引修复**。连接与内省属 M3/M4；工作区文件读写属 M5；DuckDB 计算属 M2；Mock 生成属 M7；洞察计算属 M8；**项目级 → 系统级提升属 M1**（另立设计）。本模块**不自己取数、不自己计算、不改工作区文件**——只做搬运 + 登记 + 冻结 + 检索。
 
@@ -70,7 +70,7 @@
 | 领域类型（`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / 归档与取回请求） | `crates/analytics_resource/src/model.rs`（现状：✅ Phase 0 已实现） |
 | 本体层（`resources/` 定位、越界拒绝、move、只读、指纹、历史副本与裁剪） | `crates/analytics_resource/src/payload.rs`（现状：✅ Phase 0 已实现，`PayloadStore`） |
 | 归档服务（归档 / 取回 / 再归档编排 + 变更事件） | `crates/analytics_resource/src/service.rs`（现状：✅ Phase 0 已实现 `ArchiveService`） |
-| 索引修复（三类孤儿检测与修复） | `crates/analytics_resource/src/indexer.rs`（现状：未创建，Phase 0 余项） |
+| 索引修复（三类孤儿检测与修复） | `crates/analytics_resource/src/indexer.rs`（现状：✅ Phase 0 已实现 `IndexRepair`） |
 | 登记 CRUD / 分页 / 搜索 / 排序 | `crates/analytics_resource/src/resource.rs`（现状：✅ 搬运 + 边界修复：统一行映射、分页夹紧、`LIKE` 转义、事务化更新；新列接入待做） |
 | 分组（单层） | `crates/analytics_resource/src/folder.rs`（现状：✅ 搬运，含树字段待去掉） |
 | 标签与双向查询 | `crates/analytics_resource/src/tag.rs`（现状：✅ 搬运，补改名/删除） |
@@ -145,7 +145,7 @@ cargo check --workspace --all-targets -j 2
 | 类别 | 项 |
 | --- | --- |
 | 已拍板（不阻塞） | 语义 C 模型 · 命名（资产库 / 分析存档 / 归档 / 取回）· 三种 kind 与第一期范围 · 指纹版本 · 项目级回收站 · `scope` 派生 · 标签为主 + 单层分组 · 只读常态（开发方案 §0） |
-| Phase 0（先做，无 UI） | ✅ 已落地（crate 内）：crate 入口文档 · workspace 别名 · 迁移 020 + 新列接入 · 领域类型 · 本体层 · **归档/取回/再归档闭环 + 变更事件** · 行映射 4 份→1 份 · 9 项继承缺陷修复 · `mod tests` 接线（此前未编译）｜⬜ 待续（需跨 crate 或后续阶段）：engine 连接池修复（`busy_timeout` / `acquire` 超时）· `.RSmeta` 常量去重 · `ProjectTrash` 上提中性化与 `recycle.rs` 废弃 · `indexer.rs` 索引修复 · 版本保留策略接入设置项 · 测试改走 `engine::migration`（详单见开发方案 §0） |
+| Phase 0（先做，无 UI） | ✅ 已落地（crate 内）：crate 入口文档 · workspace 别名 · 迁移 020 + 新列接入 · 领域类型 · 本体层 · **归档/取回/再归档闭环 + 变更事件** · **索引修复（三类孤儿）** · 行映射 4 份→1 份 · 9 项继承缺陷修复 · `mod tests` 接线（此前未编译）｜⬜ 待续（需跨 crate 或后续阶段）：engine 连接池修复（`busy_timeout` / `acquire` 超时）· `.RSmeta` 常量去重 · `ProjectTrash` 上提中性化与 `recycle.rs` 废弃 · 版本保留策略接入设置项 · 测试改走 `engine::migration`（详单见开发方案 §0） |
 | Phase 1 | 面板 + 行渲染 + 详情面板 + **归档/取回闭环** + 只读三重守卫 + 术语收尾（`资源分析` → 资产库）+ Action |
 | Phase 2 | 标签（补改名/删除）+ 单层分组 + 搜索筛选排序 + 设置项 + 多选批量 |
 | Phase 3 | 版本历史 + 历史内容保留 + 回收站对话框 + 索引修复对话框 + 异常态呈现 |

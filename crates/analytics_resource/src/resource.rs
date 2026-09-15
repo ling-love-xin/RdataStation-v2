@@ -352,6 +352,43 @@ impl AnalyticsResourceStore {
         }
     }
 
+    /// 列出全部"有本体路径"的存活存档（索引修复的比对基准；按本体路径升序）。
+    pub async fn list_file_archives(&self) -> Result<Vec<AnalyticsResource>, CoreError> {
+        let conn = self.get_conn().await?;
+        let sql = format!(
+            "SELECT {RESOURCE_COLUMNS} FROM analytics_resources \
+             WHERE file_rel_path IS NOT NULL AND deleted_at IS NULL ORDER BY file_rel_path ASC"
+        );
+        let mut stmt = conn
+            .inner()?
+            .prepare(&sql)
+            .map_err(|e| persistence_err("select", e))?;
+        let rows = stmt
+            .query_map([], map_resource_row)
+            .map_err(|e| persistence_err("select", e))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| persistence_err("select", e))
+    }
+
+    /// 直接删除一行登记。**仅限索引修复**（调用方已确认本体不存在、且不进回收站）。
+    ///
+    /// 与 v1 回收站的差别：本体都没了，"回收站"已无意义；"删本体进回收站"由 P0.8 的
+    /// `ProjectTrash` 承接，不走这里。
+    pub async fn remove_orphan_record(&self, id: &str) -> Result<(), CoreError> {
+        let conn = self.get_conn().await?;
+        let affected = conn
+            .inner()?
+            .execute(
+                "DELETE FROM analytics_resources WHERE id = ? AND deleted_at IS NULL",
+                rusqlite::params![id],
+            )
+            .map_err(|e| persistence_err("delete", e))?;
+        if affected == 0 {
+            return Err(persistence_err("delete", "记录不存在或已删除"));
+        }
+        Ok(())
+    }
+
     pub async fn list_resources(
         &self,
         scope: Option<&str>,

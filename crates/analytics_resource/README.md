@@ -75,6 +75,7 @@
 | `src/payload.rs` | 本体层：`resolve` 守卫、归档搬运（跨设备兜底）、只读标记、sha256 指纹、历史副本与裁剪、`replace_payload` / `move_payload_out` | ✅ Phase 0 |
 | `src/models.rs` | 持久层行模型（v1 搬运 + 迁移 020 的 9 个新列） | ✅ |
 | `src/service.rs` | 归档服务：归档（首次）/ 再归档（指纹未变即幂等、变了才增版本）/ 取回（检出）编排 + `ResourcesChanged` 广播 | ✅ Phase 0 |
+| `src/indexer.rs` | 索引修复：`IndexRepair::{scan, adopt_file, accept_current_content, remove_orphan_record}`（扫描只报告、修复靠人工确认） | ✅ Phase 0 |
 | `src/resource.rs` | 登记 CRUD / 分页 / 搜索 / 排序（统一行映射 `map_resource_row` + 事务化 `update_resource`）+ 归档专用写入（`insert_archive` / `update_archive_content` / `find_archive_by_rel_path`） | ✅ 搬运 + 边界修复 + 新列接入 |
 | `src/folder.rs` | 分组（v1 为自引用文件夹，按设计**降级为单层分组**） | ✅ 搬运（改名/删除待补） |
 | `src/tag.rs` | 标签 CRUD + 双向查询 | ✅ 搬运（改名/删除待补） |
@@ -84,7 +85,7 @@
 | `src/helpers.rs` | 时间双格式解析（RFC3339 / SQLite `CURRENT_TIMESTAMP`） | ✅ |
 | `src/tests.rs` | 存储层回归（t001–t016，测试库跑齐 007 + 020） | ✅ 16 项 |
 | `src/commands.rs` / `resource_view.rs` / `recycle_bin_dialog.rs` | Action / 左 Dock 面板 / 回收站对话框 | ⬜ 占位（Phase 1） |
-| `detail_view.rs` / `indexer.rs` | 详情面板 / 索引修复 | ⬜ 未创建（Phase 0 余项） |
+| `detail_view.rs` | 详情面板 | ⬜ 未创建（Phase 1） |
 
 依赖方向：`analytics_resource → engine, shared`。视图层按 Phase 1 落地（届时依赖 `gpui-kit`；视图归属以 `docs/architecture/analytics_resource/analytics-resource-architecture.md` §8.2 为准）。
 
@@ -102,14 +103,14 @@
 | 已实现 | 待补 |
 | --- | --- |
 | **归档 / 取回 / 再归档闭环**【Phase 0】`ArchiveService`：本体 move + 登记 + 指纹版本 + 事件；索引失败回滚本体；取回产出可写工作副本 | 面板与对话框（Phase 1） |
-| 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / 只读 / 指纹 / 历史副本与裁剪） | 索引修复（`indexer.rs`：三类孤儿） |
-| 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | 版本语义重写：指纹触发已就位，保留策略落库（设置项）待接 |
-| 存储层回归接线并扩到 007 + 020（此前 `mod tests` 未声明，560 行用例**从未编译**） | 废弃 `recycle.rs` → `ProjectTrash`（P0.8，跨 crate） |
-| 行映射从 v1 的 4 份收敛为 1 份（新增一列不再需改 4 处） | `kind` 过滤 / 列表按存档展示（等 Phase 1/2） |
+| **索引修复**【Phase 0】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；"从回收站还原"待 P0.8 | 版本保留策略接入设置项 |
+| 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / 只读 / 指纹 / 历史副本与裁剪 / 遍历） | 废弃 `recycle.rs` → `ProjectTrash`（P0.8，跨 crate） |
+| 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤 / 列表按存档展示（Phase 1/2） |
+| 行映射从 v1 的 4 份收敛为 1 份；测试库跑齐 007 + 020 | — |
 | 继承缺陷修复：分页除零与负数、`LIKE` 转义、连接嵌套、更新无事务、影响 0 行不报错、`parent_version_id` 语义、JSON 解析双策略、乱码副本名 | — |
 
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
-- 验证：`cargo test -p rds-analytics-resource -j 2`（当前 **37 项**：16 存储 + 4 领域 + 10 本体 + 7 归档服务）；`cargo check -p rds-analytics-resource -j 2`。
+- 验证：`cargo test -p rds-analytics-resource -j 2`（当前 **45 项**：16 存储 + 4 领域 + 11 本体 + 7 归档服务 + 7 索引修复）；`cargo check -p rds-analytics-resource -j 2`。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接 DuckDB 静态库会耗尽内存。

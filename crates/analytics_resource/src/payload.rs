@@ -198,6 +198,49 @@ impl PayloadStore {
         self.archive_in(source, rel).await
     }
 
+    /// 递归列出本体目录下的全部文件（相对路径，`/` 分隔，已排序）。
+    ///
+    /// 供索引修复扫描"有文件、无记录"。隐藏项与目录不入结果（与 `resolve` 的守卫口径一致）。
+    pub async fn list_files(&self) -> Result<Vec<String>, CoreError> {
+        let root = self.resources_dir();
+        let mut files = Vec::new();
+        if !root.is_dir() {
+            return Ok(files);
+        }
+
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let mut entries = fs::read_dir(&dir)
+                .await
+                .map_err(|e| io_err(&dir, "list_files_read", e))?;
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if entry.file_name().to_string_lossy().starts_with('.') {
+                    continue;
+                }
+                let path = entry.path();
+                let file_type = entry
+                    .file_type()
+                    .await
+                    .map_err(|e| io_err(&path, "list_files_type", e))?;
+                if file_type.is_dir() {
+                    stack.push(path);
+                } else if file_type.is_file() {
+                    if let Ok(rel) = path.strip_prefix(&root) {
+                        let normalized = rel
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy().to_string())
+                            .collect::<Vec<_>>()
+                            .join("/");
+                        files.push(normalized);
+                    }
+                }
+            }
+        }
+
+        files.sort();
+        Ok(files)
+    }
+
     /// 取回（检出）：把本体**复制**到 `dest`（原件不动、仍只读）。
     pub async fn copy_out(&self, rel: &str, dest: &Path) -> Result<(), CoreError> {
         let source = self.resolve(rel)?;
@@ -582,6 +625,39 @@ mod tests {
         assert!(source.is_file());
         assert!(!store.is_readonly(&source), "移出的文件必须可写");
         assert!(!store.resources_dir().join("dau.sql").exists());
+
+        cleanup(&project);
+    }
+
+    #[tokio::test]
+    async fn list_files_walks_recursively_and_skips_hidden() {
+        let project = temp_project("list");
+        let store = PayloadStore::new(&project);
+        store.ensure_dir().await.expect("ensure");
+
+        for rel in ["a.sql", "reports/dau.sql", "reports/sub/x.sql"] {
+            let src = project.join(format!("src_{}", rel.replace('/', "_")));
+            tokio::fs::write(&src, b"select 1;").await.expect("write");
+            store.archive_in(&src, rel).await.expect("archive");
+        }
+        // 隐藏目录不入结果（内部态不得被当成"未登记本体"）。
+        tokio::fs::create_dir_all(store.resources_dir().join(".cache"))
+            .await
+            .expect("mkdir hidden");
+        tokio::fs::write(store.resources_dir().join(".cache").join("x"), b"x")
+            .await
+            .expect("write hidden");
+
+        let files = store.list_files().await.expect("list");
+        assert_eq!(
+            files,
+            vec![
+                "a.sql".to_string(),
+                "reports/dau.sql".to_string(),
+                "reports/sub/x.sql".to_string()
+            ],
+            "应递归、排序、跳过隐藏项"
+        );
 
         cleanup(&project);
     }

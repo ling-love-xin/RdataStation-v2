@@ -5,6 +5,7 @@
 //! - `model`：领域语义类型（存档种类 / 复现强度 / 本体状态 / 归档凭证）
 //! - `payload`：本体层（`resources/` 受管文件、只读守卫、内容指纹、历史副本）
 //! - `service`：归档服务（归档 / 取回 / 再归档编排 + 变更事件）
+//! - `indexer`：索引修复（本体与登记表的三类差异：扫描只报告，修复要人工确认）
 //! - `models`：持久层行模型（v1 搬运，逐步并入 `model`）
 //! - `resource` / `folder` / `tag` / `version`：索引层（`project.db`）
 //! - `recycle`：v1 回收站实现（**待废弃**：改走项目级 `ProjectTrash`，见开发方案 P0.8）
@@ -20,6 +21,7 @@ use shared::error::CoreError;
 use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
 
 pub mod helpers;
+pub mod indexer;
 pub mod model;
 pub mod models;
 pub mod payload;
@@ -31,6 +33,7 @@ pub mod resource;
 pub mod tag;
 pub mod version;
 
+pub use indexer::{IndexIssue, IndexRepair, IndexScanReport};
 pub use model::*;
 pub use models::*;
 pub use service::ArchiveService;
