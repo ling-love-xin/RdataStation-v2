@@ -44,27 +44,21 @@ use rds_engine::{SqlDialect, SqlEngine};
 // 探针 SQL（结构化、贴近真实报表写法）
 // ═══════════════════════════════════════════════════════════════════════
 
-const SCOPE_SQL: &str =
-    "SELECT o.id, c.name FROM orders o JOIN customers c ON o.customer_id = c.id WHERE o.total > 100";
+const SCOPE_SQL: &str = "SELECT o.id, c.name FROM orders o JOIN customers c ON o.customer_id = c.id WHERE o.total > 100";
 
-const LINEAGE_SQL: &str =
-    "SELECT c.name AS customer_name, o.total * 2 AS doubled FROM orders o JOIN customers c ON o.customer_id = c.id";
+const LINEAGE_SQL: &str = "SELECT c.name AS customer_name, o.total * 2 AS doubled FROM orders o JOIN customers c ON o.customer_id = c.id";
 
 const DIFF_BEFORE: &str = "SELECT id, name, total FROM orders WHERE status = 'paid'";
 const DIFF_AFTER: &str =
     "SELECT id, name, total, created_at FROM orders WHERE status = 'shipped' AND total > 100";
 
-const PUSHDOWN_SQL: &str =
-    "SELECT * FROM (SELECT id, status, total FROM orders WHERE total > 100) t WHERE t.status = 'paid'";
+const PUSHDOWN_SQL: &str = "SELECT * FROM (SELECT id, status, total FROM orders WHERE total > 100) t WHERE t.status = 'paid'";
 
-const QUALIFY_SQL: &str =
-    "SELECT id, name FROM orders JOIN customers ON orders.customer_id = customers.id WHERE total > 100";
+const QUALIFY_SQL: &str = "SELECT id, name FROM orders JOIN customers ON orders.customer_id = customers.id WHERE total > 100";
 
-const UNNEST_SQL: &str =
-    "SELECT id, (SELECT MAX(total) FROM orders) AS peak FROM orders WHERE id IN (SELECT id FROM orders WHERE status = 'paid')";
+const UNNEST_SQL: &str = "SELECT id, (SELECT MAX(total) FROM orders) AS peak FROM orders WHERE id IN (SELECT id FROM orders WHERE status = 'paid')";
 
-const PLAN_SQL: &str =
-    "SELECT c.name, COUNT(*) AS n FROM orders o JOIN customers c ON o.customer_id = c.id GROUP BY c.name";
+const PLAN_SQL: &str = "SELECT c.name, COUNT(*) AS n FROM orders o JOIN customers c ON o.customer_id = c.id GROUP BY c.name";
 
 // ═══════════════════════════════════════════════════════════════════════
 // 辅助
@@ -231,7 +225,10 @@ fn probe_column_lineage() {
     for column in ["customer_name", "doubled"] {
         match lineage_sql(column, LINEAGE_SQL, &schema, &config) {
             Ok(graph) => {
-                println!("列 `{column}` 血缘树（保留原 SQL：{}）:", graph.sql.is_some());
+                println!(
+                    "列 `{column}` 血缘树（保留原 SQL：{}）:",
+                    graph.sql.is_some()
+                );
                 print_lineage(&graph.node, 1);
             }
             Err(err) => println!("列 `{column}` 血缘失败：{err}"),
@@ -284,7 +281,65 @@ fn probe_ast_diff() {
     banner("4. AST 差异 diff_sql（用途：结果集对比 / 笔记版本链）");
     print_diff("改列 + 改条件", DIFF_BEFORE, DIFF_AFTER);
     print_diff("同一份 SQL", DIFF_BEFORE, DIFF_BEFORE);
+    print_diff(
+        "仅改 WHERE 条件",
+        "SELECT a FROM t WHERE x = 1",
+        "SELECT a FROM t WHERE x = 2",
+    );
+    print_diff(
+        "仅改 ORDER BY / LIMIT",
+        "SELECT a FROM t ORDER BY a LIMIT 10",
+        "SELECT a FROM t ORDER BY a DESC LIMIT 20",
+    );
     print_diff("整条语句换型", "SELECT 1", "UPDATE t SET x = 1");
+}
+
+/// 差异行为的**不变量**（已实测确认，故从“打印报告”提升为断言）
+///
+/// 这三条直接决定了「结果集对比 / 笔记版本链」能不能用：无改动不得报改动、WHERE 改不得漏、
+/// 换语句类型不得当成“改了内容”。
+#[test]
+fn probe_diff_invariants() {
+    banner("4b. 差异不变量（实测确认后固定为断言）");
+
+    let same = diff_sql(DIFF_BEFORE, DIFF_BEFORE, Dialect::Ansi).expect("diff_sql(同一份)");
+    for change in &same {
+        assert!(
+            matches!(change, ChangeAction::Keep(..)),
+            "同一份 SQL 不应产生非 Keep 条目，实际：{}",
+            change_label(change)
+        );
+    }
+
+    let where_only = diff_sql(
+        "SELECT a FROM t WHERE x = 1",
+        "SELECT a FROM t WHERE x = 2",
+        Dialect::Ansi,
+    )
+    .expect("diff_sql(仅改 WHERE)");
+    assert!(
+        where_only
+            .iter()
+            .any(|change| matches!(change, ChangeAction::Update(..))),
+        "仅改 WHERE 条件必须产生 Update 条目（否则对比会漏掉条件变化）"
+    );
+
+    let retyped =
+        diff_sql("SELECT 1", "UPDATE t SET x = 1", Dialect::Ansi).expect("diff_sql(换型)");
+    assert!(
+        retyped
+            .iter()
+            .any(|change| matches!(change, ChangeAction::Remove(_))),
+        "换语句类型应产生 Remove"
+    );
+    assert!(
+        retyped
+            .iter()
+            .any(|change| matches!(change, ChangeAction::Insert(_))),
+        "换语句类型应产生 Insert"
+    );
+
+    println!("三条不变量成立：同句只 Keep · WHERE 改动有 Update · 换型 = Remove + Insert");
 }
 
 fn print_diff(label: &str, before: &str, after: &str) {
@@ -327,7 +382,10 @@ fn probe_pushdown_predicates() {
     let pushed = pushdown_predicates(parse_ansi(PUSHDOWN_SQL));
     let out = generate(&pushed, Dialect::Ansi);
     println!("输出（紧凑）：{out}");
-    println!("输出（美化）：\n{}", generate_pretty(&pushed, Dialect::Ansi));
+    println!(
+        "输出（美化）：\n{}",
+        generate_pretty(&pushed, Dialect::Ansi)
+    );
     assert_reparseable("pushdown_predicates", &out);
 
     println!(
@@ -422,7 +480,10 @@ fn probe_transpile_multi_statement() {
 
     match transpile_statements(script, Dialect::Mysql, Dialect::Postgres) {
         Ok(list) => {
-            println!("③ transpile_statements（脚本）：{} 条 → {list:?}", list.len());
+            println!(
+                "③ transpile_statements（脚本）：{} 条 → {list:?}",
+                list.len()
+            );
             assert!(!list.is_empty(), "多语句版至少应产出 1 条");
         }
         Err(err) => panic!("transpile_statements 是多语句的文档化入口，不应失败：{err}"),
@@ -446,7 +507,11 @@ fn probe_format_comment_fidelity() {
     // （用例, 期望格式化后仍可解析）——解析失败的用例断言的是“原样返回”。
     // 已知库边界：sqlglot 只容忍「语句前」的注释，行内 / 尾随注释一律解析失败（见下方位置实证）。
     let cases = [
-        ("前导注释", "-- 报表口径说明\nselect a, b from t where x = 1", true),
+        (
+            "前导注释",
+            "-- 报表口径说明\nselect a, b from t where x = 1",
+            true,
+        ),
         // 表达式中间的块注释 sqlglot 解析不了（见下方「块注释位置与可解析性」实证）：
         // 该输入自身即不可解析，故此处断言的是「原样返回」，不是「可再解析」。
         (
@@ -513,8 +578,14 @@ fn probe_format_comment_fidelity() {
     let hash = "# 口径\nselect a from t";
     println!("\n--- `#` 注释的方言改写 ---");
     println!("  输入：{hash}");
-    println!("  目标 MySQL   ：{}", SqlEngine::format(hash, SqlDialect::Mysql));
-    println!("  目标 Postgres：{}", SqlEngine::format(hash, SqlDialect::Postgres));
+    println!(
+        "  目标 MySQL   ：{}",
+        SqlEngine::format(hash, SqlDialect::Mysql)
+    );
+    println!(
+        "  目标 Postgres：{}",
+        SqlEngine::format(hash, SqlDialect::Postgres)
+    );
 }
 
 /// 注释标记计数（行注释 / 块注释 / MySQL `#`）

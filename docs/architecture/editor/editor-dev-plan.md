@@ -10,6 +10,7 @@
 
 | 日期 | 内容 | 状态 |
 | --- | --- | --- |
+| 2026-09-15（探针实跑：台账结论落地） | **P0.10 已实跑（10 项全绿）**，结论已回写原型 §7.4「行为级事实」：**类型标注 / 血缘 / 作用域 / 下推 / 差异** 均**实测可用**；差异粒度到 `SelectItem`/`Expr`/`OrderByItem`，**SELECT 列表 / WHERE / ORDER BY / LIMIT 改动都能检出**（原先担心的“漏条件改动”**已被实测推翻**）· **两处保留**：`qualify_columns` 只部分限定（`id` 仍裸列）、`unnest_subqueries` 改写为 `INNER JOIN + DISTINCT`（NULL 语义不等价）· **两处纠正**：① 格式化**不会丢注释**（行内/尾随注释→解析失败→原样返回，架构 §12 #3 改述）② `transpile` 对脚本是**静默截断**（`"SELECT 1; SELECT 2;"` → `Ok("SELECT 1")`，生产路径同样）→ 升级为 🔴（§12 #19）· 三条不变量已提升为断言（同句只 `Keep` / WHERE 改动有 `Update` / 换型 = `Remove+Insert`） | ✅ 已完成 |
 | 2026-09-15（台账候选探针 + 探针编译错误修正） | **P0.10 探针就绪**：`crates/engine/tests/sqlglot_capabilities.rs`（9 组真实 SQL：作用域 / 血缘 / 类型标注 / 差异 / 下推 / 限定与展开 / 本地计划 / 转译单条限制 / 格式化注释保真；**报告式** + 仅弱断言）· **修正一个上轮埋下的编译错误**：`crates/engine/tests/transaction_affinity.rs` 写的是 `use engine::…`——集成测试是**独立 crate**，本包库目标名是 `rds_engine`（`engine` 只是**其它** crate 的依赖别名）；证据：`crates/{connection,mock}/tests/*` 分别用 `rds_connection::` / `rds_mock::` | ✅ 已完成（编译验证待本机执行，见 §6） |
 | 2026-09-15（提交 + 台账二次核验） | **模块已提交**（`ac0d75f`，24 文件 / 5625 行：文档 5 件 + `crates/editor` 骨架 + engine SQL 原语 + 历史字段 + 事务探针；暂存时避开同工作区其它会话的在途改动，混文件 `Cargo.lock` / `sql/engine.rs` / `docs/architecture/README.md` 按 hunk 级分离）· **sqlglot 台账二次核验（读实现）**：修正 4 处（关键字是**逐词枚举变体** / `Token::position` 是**字符**下标 / `transpile` **只吃单条** / `builder` 证据行号），补 `Schema`+`MappingSchema`、`qualify_columns`、`optimize`、`plan`（仅本地计划）、`executor`（不采用）等条目（原型 §7.4） · **修正一个真缺陷**：高亮区间改为「字符偏移 → 字节偏移 + 取原文区间」（原实现按 `value` 回查，转义字符串落空、引号与注释标记取不到）→ 架构 §12 #20 | ✅ 已完成（编译验证待本机执行，见 §6） |
 | 2026-09-15 | 文档阶段：模块入口 + 原型设计 + 架构（含现状盘点与四个假底座）+ 本方案 + 交互稿（`editor-prototype.html`，1554 行，24 条交互断言） | ✅ 已完成 |
@@ -79,7 +80,7 @@ Phase 0（地基，无 UI）
 | P0.7 | **crate 骨架与依赖接线**：`crates/editor`（lib + `model` 能力表 + `mode` 判定表 + README）、workspace 依赖唯一入口登记 | ✅ `Cargo.toml`（members + 依赖别名）、`crates/editor/{Cargo.toml,README.md,src/*}` | `cargo check --workspace --all-targets -j 2` 零告警；`cargo test -p rds-editor --lib` 全绿（workbench → editor 的依赖线等到 1a 首次使用再连，避免死依赖） |
 | P0.8 | **SQL 高亮注册验证** | ✅ **方案已变且已落地（2026-09-15）**：改用 **sqlglot tokenizer**（`sqlglot_rust::tokens`，带注释与行列位）→ `engine/src/sql/highlight.rs` 产出「字节区间 + 类别」，**不需要 tree-sitter、不需要联网取包** | 单测 **13 项**（关键字/类型/函数/字符串含引号/**转义字符串**/数字/占位符/注释/标点运算符/升序不重叠/**中文 SQL 字节区间**/未闭合降级/区间助手）；视图层只负责“类别 → 主题色”。行为级事实已记原型 §7.4（空白被丢弃、关键字逐词变体、`position` 是字符下标、`quote_char` 只给带引号标识符） |
 | P0.9 | **平台与性能基线**：记录编译时间增量（新增依赖后 `cargo build -p rds-app`）与二进制体积变化 | — | 数据写回本文件 §6 |
-| P0.10 | **台账候选验证用例**（原型 §7.4 标 ⚪ 的项：作用域 / 血缘 / 类型标注 / 差异 / 下推 / 限定与展开 / 本地计划 / 转译单条限制 / 格式化注释保真） | ✅ **探针已就绪**：`crates/engine/tests/sqlglot_capabilities.rs`（离线、不连库；只断言“可再解析 / 不 panic / 文档化边界”，其余**打印报告**——避免拿猜测当断言） | 运行：`cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1`；输出回写原型 §7.4 的「行为级事实」；确认可用的能力再提升为 `engine::sql::*` 公开 API + 断言式单测 |
+| P0.10 | **台账候选验证用例**（原型 §7.4 标 ⚪ 的项：作用域 / 血缘 / 类型标注 / 差异 / 下推 / 限定与展开 / 本地计划 / 转译单条限制 / 格式化注释保真） | ✅ **探针已就绪并已实跑**：`crates/engine/tests/sqlglot_capabilities.rs`（离线、不连库；报告式 + 三条已确认的不变量断言）；**结论已回写原型 §7.4**（可用 / 保留 / 纠正逐条列明） | 重跑：`cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1`（10 项）；可用项提升为 `engine::sql::*` 公开 API 时随 1b/1c 一并补断言式单测 |
 
 > Phase 0 结束时：后端"假底座"全部转真 + 结构就位 + 三个技术未知消除。
 
@@ -127,7 +128,7 @@ Phase 0（地基，无 UI）
 | B7 | **导出**：CSV / JSON / INSERT / Parquet / XLSX（后者经 DuckDB 临时表） | `execution.rs` / `persist.rs` | 集成：5 种格式落盘可回读（CSV/JSON 断言内容） |
 | B8 | **历史面板**：右 Dock `History` 实装（列表 / 搜索 / 重放 / 删除 / 清空），字段真实 | `view/history.rs` + `engine::history_store` | 集成：执行 3 次 → 历史 3 条且耗时>0；失败也留痕 |
 | B9 | **补全**：上下文判定 + 排序 + 元数据缓存（TTL 30s）+ 降级（关键字/函数 + 说明） | `completion.rs` + `database::MetadataService` | 单测：上下文判定与排序；真机：`FROM` 后出表、`t.` 后出列 |
-| B10 | 格式化 / 转译 / 执行计划接线（用 P0.3 的格式化实现；EXPLAIN 按方言生成） | `commands.rs` + `engine::sql::SqlEngine` | 真机：格式化结果可往返解析；EXPLAIN 在 4 类库均返回 |
+| B10 | 格式化 / 转译 / 执行计划接线（用 P0.3 的格式化实现；EXPLAIN 按方言生成） | `commands.rs` + `engine::sql::SqlEngine` | 真机：格式化结果可往返解析；EXPLAIN 在 4 类库均返回。**硬约束（已实测，§12 #19）**：转译**必须**先按 `sql/split.rs` 切分再逐条转译——`transpile` 对脚本会**静默丢弃**第二条及以后的语句；并先写“脚本不得丢语句”的回归；执行计划的**权威来源是源库 EXPLAIN**（本地 `plan` 仅作降级，DDL 不支持） |
 | B11 | 对外接口：`open_sql(conn_id, sql)` / `execute_all(...)`（供 M4「在 SQL 编辑器中打开 / 查看数据」自动执行） | `service.rs` + `crates/workbench/src/panels.rs` 调用点 | 集成：M4 右键 → 编辑器打开并（可选）自动执行 |
 | B12 | 移除遗留：删除 `EditorPanel` 的 SQL 区块与内联执行闭包；连接详情卡/导航树按架构 §3.3 迁出 | `crates/workbench/src/panels.rs` | `cargo check --workspace` 零告警；无 render 期 I/O（人工复核 + 契约测试） |
 | B13 | **执行通道**：工具栏「执行位置」指示器（源库 / 本地加速 / 联邦）+ `channel_status(conn_id) -> Result<(), Reason>` 可用性判定 + 不可用原因 + 通道随文档持久化 + 切通道失效提示 | `crates/editor/src/channel.rs`（新）+ `view/sql_mode.rs` + `connection::secret` / `engine::duckdb::federation` | 集成：三通道各跑一次；未开加速的连接下拉置灰并给原因；写语句在加速通道被拒；切通道后旧结果标灰 |

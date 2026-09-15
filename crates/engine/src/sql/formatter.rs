@@ -9,12 +9,15 @@
 //! - **多语句脚本**：`parse_statements_with_comments` 逐条生成，以 `;\n\n` 连接并补尾分号
 //!   （编辑器面向脚本，单条 `parse` 会把多语句判为解析失败）。
 //! - **解析失败原样返回**：编辑中的文本（未写完）不能因为格式化成坏内容，也不报错。
-//! - **注释**：AST 携带 comments，生成器**只输出前导注释**（`gen_statement` 每个分支 `gen_comments(&s.comments)`，
-//!   `generator/sql_generator.rs:206-268`）；**行内 / 尾随注释会丢**——这是 sqlglot-rust 生成器的能力边界。
-//!   另注：`normalize_comment`（`:181-197`）会把非 MySQL 目标的 `#` 注释改写成 `--`（方言差异，非排版差异）。
+//! - **注释**：只有**语句前**的注释能通过解析——实测（`crates/engine/tests/sqlglot_capabilities.rs` 的
+//!   「块注释位置与可解析性」）行内 / 尾随注释会让整条语句解析失败，而解析失败即**原样返回**，
+//!   所以注释**不会丢**，代价是这类语句不被格式化（用户看到的是原样文本，不是被改写过的内容）。
+//!   能解析时生成器只 emit 前导注释（`gen_statement` 每个分支 `gen_comments(&s.comments)`，
+//!   `generator/sql_generator.rs:206-268`）。
+//!   另注：`normalize_comment`（`:181-197`）会把非 MySQL 目标的 `#` 注释改写成 `--`（已实测；方言差异，非排版差异）。
 //! - **不改变语义**：只做排版；方言相关的重写属 `transpiler`，不在这里做。
 
-use sqlglot_rust::{generate_pretty, parse_statements_with_comments, Dialect};
+use sqlglot_rust::{Dialect, generate_pretty, parse_statements_with_comments};
 
 use super::engine::SqlDialect;
 

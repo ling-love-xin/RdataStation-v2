@@ -468,15 +468,14 @@
 
 `core/sql` 是 sqlglot-rust 的**唯一接入点**（架构硬约束）。它的能力远不止“解析 + 格式化”。
 
-> **核实方式**（2026-09-15，两轮）：逐项 grep 解包源码（`~/.cargo/registry/…/sqlglot-rust-0.10.29/src/`）。
-> 第一轮只核**公开签名与定义位置**并记行号；第二轮进一步读**实现**，补上“行为级”事实（哪一步会丢注释、
-> `position` 是字符还是字节、`transpile` 吃不吃多语句），并把与实现冲突的条目改正（已用 ✅ 标记修正点）。
-> 锁定版本 `=0.10.29`，行号稳定可复现。
-> **行为实测入口**（2026-09-15）：`crates/engine/tests/sqlglot_capabilities.rs` 用真实 SQL 跑一遍本表 ⚪ 项并**打印**行为
-> （`cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1`）。
-> 结论回填本表「行为级事实」；确认可用的能力再提升为 `engine::sql::*` 的公开 API 并补断言式单测。
+> **核实方式**（2026-09-15，三轮）：
+> ① 逐项 grep 解包源码（`~/.cargo/registry/…/sqlglot-rust-0.10.29/src/`）核**公开签名与定义位置**，记行号；
+> ② 读**实现**补“行为级”事实（哪一步会丢注释、`position` 是字符还是字节、`transpile` 吃不吃多语句）；
+> ③ 用真实 SQL **实跑**（`crates/engine/tests/sqlglot_capabilities.rs`，离线）——本表 ⚪ 项已逐条落地为实测结论（标为 ✅ 已实测）。
+> 锁定版本 `=0.10.29`，行号稳定可复现。重跑命令：
+> `cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1`
 >
-> **证据强度**：✅ 已核（签名 + 关键实现路径）；⚪ 仅核签名，**语义 / 效果未在真实 SQL 上实测**——接线前先写验证用例。
+> **证据强度**：✅ 已核（签名 + 关键实现路径 + **真实 SQL 实测**）；⚪ 仅核签名，未实测——接线前先补验证用例。
 
 | 能力 | 公开签名 / 类型（已核） | 状态 | 用途 | 证据（源码位置）与行为级事实 |
 | --- | --- | --- | --- | --- |
@@ -484,23 +483,24 @@
 | 语法校验 | 以 `parse` 成功即合法（本项目 `SqlEngine::validate` 封装） | ✅ 已用 | “校验语法”动作、执行前置校验 | `parser/mod.rs:16` |
 | **语句切分** | **自研** `sql/split.rs`（词法级状态机） | ✅ 已用 | 当前语句 / 批量执行 / 语句数 | `crates/engine/src/sql/split.rs`。**不用 sqlglot**：切分要能在“文本未写完”时工作，解析式切分会直接失败 |
 | 词法 tokenizer | `Tokenizer::{new, with_comments, with_bracket_identifiers, tokenize}`（`tokenize(&mut self)`）；`Token{token_type,value,line,col,position,quote_char}` | ✅ 已用（P0.8） | SQL 高亮区间 | `tokens/tokenizer.rs:67,81,105`；`tokens/mod.rs:279`。**行为级事实**：① `tokenize()` **丢弃空白**，注释仅在 `with_comments` 下保留（`:105-125`）；② 关键字是**每词一个枚举变体**（`Select`/`From`/…，`keyword_type` `:993`），不是通用 `Keyword`；③ **`position`/`line`/`col` 是字符下标**（内部 `input.chars().collect()` `:69,83`，`advance()` 每字符 `pos += 1` `:137`）——直接当字节偏移用会切坏非 ASCII 文本；④ `quote_char` **只对带引号标识符**设置（`with_quote` `tokens/mod.rs:323`），字符串恒为 `\0` |
-| 代码生成 | `generate(&Statement, Dialect) -> String`；`generate_pretty(&Statement, Dialect) -> String`（两者都走 `gen_statement`，`pretty` 只影响换行缩进） | ✅ 已用（P0.3） | 格式化（多语句脚本安全） | `generator/mod.rs:10,19`；`sql_generator.rs:57,65`；AST 带 `comments` → `ast/types.rs:125`。**行为级事实**：① 只有**前导注释**会被 emit（`gen_statement` 每个分支 `gen_comments(&s.comments)`，`sql_generator.rs:206-268`），行内 / 尾随注释丢失 → 架构 §12 #3 的精确来源；② 非 MySQL 目标会把 `#` 注释**改写**成 `--`（`normalize_comment` `:181-197`） |
-| 方言转译 | `transpile(sql, read, write) -> Result<String>`；`transpile_statements(sql, read, write) -> Result<Vec<String>>`；`transpile_with_comments(...)` | ✅ 已用 | “方言转移器”动作 | `lib.rs:201,218,237`。**行为级事实（修正）**：`transpile` / `transpile_with_comments` 内部走**单条** `parse`——**多语句直接报错**；脚本必须先切分（正好复用 `sql/split.rs`）或改用 `transpile_statements`（内部 `parse_statements`） |
+| 代码生成 | `generate(&Statement, Dialect) -> String`；`generate_pretty(&Statement, Dialect) -> String`（两者都走 `gen_statement`，`pretty` 只影响换行缩进） | ✅ 已用（P0.3） | 格式化（多语句脚本安全） | `generator/mod.rs:10,19`；`sql_generator.rs:57,65`；AST 带 `comments` → `ast/types.rs:125`。**行为级事实（实测纠正）**：① **注释不会丢**——行内 / 尾随注释会让 sqlglot **解析失败**，而解析失败即原样返回；能解析时生成器只 emit 前导注释（`gen_statement`，`sql_generator.rs:206-268`），代价是含行内 / 尾随注释的语句**不被格式化**；② 非 MySQL 目标会把 `#` 注释**改写**成 `--`（`normalize_comment` `:181-197`，已实测） |
+| 方言转译 | `transpile(sql, read, write) -> Result<String>`；`transpile_statements(sql, read, write) -> Result<Vec<String>>`；`transpile_with_comments(...)` | ✅ 已用 | “方言转移器”动作 | `lib.rs:201,218,237`。**行为级事实（实测纠正）**：`transpile` **对脚本是「静默截断」**：`"SELECT 1; SELECT 2;"` → `Ok("SELECT 1")`，**第二条无声消失**（生产路径 `SqlEngine::transpile` 同样，`sql_parser_service::transpile_sql` 还会报 `success: true`）→ 架构 §12 #19（🔴）；只有 `transpile_statements` 正确返回 2 条 |
 | DDL / DML 构建 | 自由函数构造器 `builder::{column,table,table_full,literal,string_literal,boolean,null,cast,and_all,or_all,not,func,func_distinct,star,…}`（返回 `Expr`，~50 个顶层再导出）+ 建造者 `SelectBuilder` / `ConditionBuilder` | 🟡 未接线 | M4 的“生成 SELECT/INSERT/UPDATE/DELETE”入口 | **证据修正**：`builder/mod.rs:77`（`column`）…`:369`（`star`）是**自由构造器**；真正的建造者出口是 `build()` `:792` / `:1199`（`Statement`）/ `:1205`（`build_select`），顶层再导出见 `lib.rs:49-103` |
 | **Schema 与类型** | `trait Schema{add_table, column_names, get_column_type, has_column, dialect, get_udf_type}`；**现成实现** `MappingSchema::new(dialect)` + `replace_table(&mut self, &[&str], Vec<(String, DataType)>)` | ⚪ 未用 | 类型标注 / 血缘 / 列限定的**共同前置** | `schema/mod.rs:76,97,104,110,176,185`。**接线成本**：① 从 `database::MetadataService` 组装表-列；② 一张**驱动类型 → `ast::DataType`** 映射表（`DataType` 在 `ast` 下，顶层未再导出） |
-| 类型标注 | `annotate_types<S: Schema>(stmt: &Statement, schema: &S) -> TypeAnnotations` | ⚪ 未用 | 结果列类型推断（值查看器 / 图表轴 / 数字格式化） | `optimizer/annotate_types.rs:102`；顶层再导出 `lib.rs:116` |
-| **列级血缘** | `lineage(column: &str, statement: &Statement, schema: &MappingSchema, config: &LineageConfig) -> LineageResult<LineageGraph>`；`lineage_sql(...)` | ⚪ 未用（**强候选**） | 结果**血缘**从“UI 摘要”升级为真血缘；单元依赖图；表-列影响分析 | `optimizer/lineage.rs:501,543`；顶层再导出 `lib.rs:117`。**前置**：`MappingSchema`（见上） |
-| 作用域分析 | `build_scope(&Statement) -> Scope`；`find_all_in_scope(scope, predicate)` | ⚪ 未用（候选） | “当前语句引用了哪些表”→ 补全排序 / 权限预检 / 重建 SELECT | `optimizer/scope_analysis.rs:188,202`；顶层再导出 `lib.rs:121`。**无需 schema**，接线最轻 |
-| 列限定 / 子查询展开 / 优化管线 | `qualify_columns<S: Schema>(Statement, &S) -> Statement`；`unnest_subqueries(Statement) -> Statement`；`optimize(Statement) -> Result<Statement>` | ⚪ 未用（候选） | 转表插入限定名 / 联邦查询改写 / 转译前规范化 | `optimizer/qualify_columns.rs:20`、`optimizer/unnest_subqueries.rs:29`、`optimizer/mod.rs:28` |
-| 谓词下推 | `pushdown_predicates(Statement) -> Statement` | ⚪ 未用（候选） | 本地加速通道的改写（过滤推给源库） | `optimizer/pushdown_predicates.rs:36`；顶层再导出 `lib.rs:120` |
-| AST 差异 | `diff(source: &Statement, target: &Statement) -> Vec<ChangeAction>`；`diff_sql(source_sql, target_sql, dialect) -> Result<Vec<ChangeAction>>` | ⚪ 未用（候选） | 结果集对比（V1 有 `ResultDiffViewer`）、笔记版本链 diff | `diff/mod.rs:75,1105`；顶层再导出 `lib.rs:113`（`diff_ast` / `diff_sql`） |
-| 查询计划（**本地**） | `plan(&Statement) -> Result<Plan>`；`Step::{Scan, Filter, Project,…}` | ⚪ 未用（**限定用途**） | **只能做离线预览 / 降级**：它是 sqlglot 自建的本地计划（`PlanBuilder`），**不等于源库 EXPLAIN**，且 DDL 不支持（文档注明） | `planner/mod.rs:379,60`；顶层再导出 `lib.rs:126`。见架构 §12 #20 |
+| 类型标注 | `annotate_types<S: Schema>(stmt: &Statement, schema: &S) -> TypeAnnotations`；`get_type(&Expr) -> Option<&DataType>` | ✅ **已实测可用** | 结果列类型推断（值查看器 / 图表轴 / 数字格式化） | `optimizer/annotate_types.rs:102`；顶层再导出 `lib.rs:116`。**实测**（6 列 SELECT，13 个节点）：`id → Int`、`name → Varchar(255)`（取自 schema）、`total * 2 → Decimal{12,2}`（**运算后仍保持类型**）、`COUNT(*) → BigInt`、字面量 `'x' → Varchar(None)`（无长度） |
+| **列级血缘** | `lineage(column: &str, statement: &Statement, schema: &MappingSchema, config: &LineageConfig) -> LineageResult<LineageGraph>`；`lineage_sql(...)` | ✅ **已实测可用（强候选）** | 结果**血缘**从“UI 摘要”升级为真血缘；单元依赖图；表-列影响分析 | `optimizer/lineage.rs:501,543`；顶层再导出 `lib.rs:117`。**实测**：按**输出别名**可查到基列（`customer_name → c.name`、`doubled → o.total * 2` 追到 `o.total`，**表达式也能追**）；不存在的列报 `Column not found in output: nope`（可转为人性化提示）。**前置**：`MappingSchema` |
+| 作用域分析 | `build_scope(&Statement) -> Scope`；`find_all_in_scope(scope, predicate)`；`Scope::{source_names, selected_sources, child_scopes}` | ✅ **已实测可用** | “当前语句引用了哪些表”→ 补全排序 / 权限预检 / 重建 SELECT | `optimizer/scope_analysis.rs:188,202`；顶层再导出 `lib.rs:121`。**实测**（双表 JOIN）：`source_names = ["c","o"]`（**键是别名**）、真实表名走 `Source::Table{name,schema}`、`columns` 5 条**全部带表限定**、`selected_sources` 只含真被引用的源。**无需 schema**，接线最轻 |
+| 列限定 / 子查询展开 / 优化管线 | `qualify_columns<S: Schema>(Statement, &S) -> Statement`；`unnest_subqueries(Statement) -> Statement`；`optimize(Statement) -> Result<Statement>` | ✅ **已实测（有保留）** | 转表插入限定名 / 联邦查询改写 / 转译前规范化 | `optimizer/qualify_columns.rs:20`、`optimizer/unnest_subqueries.rs:29`、`optimizer/mod.rs:28`。**实测**：`qualify_columns` **只部分限定**——`orders.customer_id` / `customers.name` / `orders.total` 加了限定符，但 `id` 仍是裸列（**不能靠它消歧 / 判权**）；`unnest_subqueries` 把 `IN (SELECT)` 改写成 `INNER JOIN + SELECT DISTINCT`（**NULL 语义与原写法不等价**，用于加速通道前需确认）；`optimize` 输出与 `qualify_columns` 同 |
+| 谓词下推 | `pushdown_predicates(Statement) -> Statement` | ✅ **已实测可用** | 本地加速通道的改写（过滤推给源库） | `optimizer/pushdown_predicates.rs:36`；顶层再导出 `lib.rs:120`。**实测**：`SELECT * FROM (SELECT … WHERE total > 100) t WHERE t.status = 'paid'` → 谓词**推入派生表**：`… WHERE total > 100 AND status = 'paid'`，并补上 `AS t`；输出可再解析 |
+| AST 差异 | `diff(source: &Statement, target: &Statement) -> Vec<ChangeAction>`；`diff_sql(source_sql, target_sql, dialect) -> Result<Vec<ChangeAction>>` | ✅ **已实测可用（候选）** | 结果集对比（V1 有 `ResultDiffViewer`）、笔记版本链 diff | `diff/mod.rs:75,1105`；顶层再导出 `lib.rs:113`（`diff_ast` / `diff_sql`）。**实测粒度**：到 `AstNode::{SelectItem, Expr, OrderByItem, …}` 量级；**SELECT 列表 / WHERE / ORDER BY / LIMIT 的改动都能检出**（仅改 WHERE → 1 条 `Update(Expr…)`；改 ORDER BY+LIMIT → 2 条 `Update(OrderByItem…)`；换语句类型 → `Remove`+`Insert`）；**同一份 SQL 只产 `Keep`**。注意：它只说“结构变了”，**不区分语义变更与排版变更**（那是我们的层） |
+| 查询计划（**本地**） | `plan(&Statement) -> Result<Plan>`；`Plan::{steps, root}`；`Step::{Scan, Join, Aggregate, Project, Filter,…}` | ✅ **已实测（限定用途）** | **只能做离线预览 / 降级**：它是 sqlglot 自建的本地计划（`PlanBuilder`），**不等于源库 EXPLAIN** | `planner/mod.rs:379,60`；顶层再导出 `lib.rs:126`。**实测**：JOIN+GROUP BY 的 SELECT → 5 步（Scan / Scan / Join / Aggregate / Project，含表名与别名）可用；**DDL 报 `Internal error: Planner does not support Discriminant(4) statements`**（信息不可直出）。见架构 §12 #20 |
 | 执行器（内存表） | `execute(sql, &Tables) -> Result<ResultSet>`；`Value/Table/ResultSet` | ⛔ **不采用** | 教学级：只在**内存表**上跑，不连库、无事务 / 并发 / 权限 | `executor/mod.rs:370,376`。本地分析一律走 DuckDB（真分析引擎），不用它 |
 | 方言扩展 / 时间格式 | `DialectPlugin`/`DialectRegistry`/`register_dialect`/`transpile_ext`；`format_time`/`format_time_dialect`/`TsqlStyleCode` | ⚪ 未用 | 方言注册与**时间格式串转换**（“方言转移器”的高价值子集） | `lib.rs:105-112` |
 
-> 结论：**后续做“结果血缘 / 补全排序 / 结果对比 / 类型推断”时先查本表**——血缘、作用域、差异、类型标注都已有现成模块，不必自研；
-> 但**接线前置条件已逐条写清**（`Schema` / `MappingSchema` + 驱动类型映射表、`transpile` 只吃单条、`plan` 只是本地计划），
-> 标 ⚪ 的候选**先写验证用例再接线**（本表保证签名与关键实现路径，不保证效果符合预期）。
+> 结论：**后续做“结果血缘 / 补全排序 / 结果对比 / 类型推断”时先查本表**——血缘、作用域、差异、类型标注都已有现成模块，
+> **且已用真实 SQL 实测可用**（两处保留：`qualify_columns` 只部分限定、`unnest_subqueries` 改写与原语义不等价）。
+> 接线前置条件已逐条写清（`Schema` / `MappingSchema` + 驱动类型映射表、`transpile` 对脚本**静默截断**、`plan` 只是本地计划）。
+> 已实测的项可提升为 `engine::sql::*` 公开 API + 断言式单测（探针里已固定三条不变量：生成结果可再解析、同句 diff 只产 `Keep`、WHERE 改动必产生 `Update`）。
 
 ---
 
