@@ -13,7 +13,11 @@
 | `theme/theme-preview.html` | 配色预览 | 明暗色卡对比 |
 | `theme/theme-design.md` | 主题方案 | 明暗 token / 产品语义角色 / 落地方式 |
 | `theme/ui-constraints.md` | UI 约束规范 | 字体阶梯 / 图标三档 / 间距阶梯 / 控件规格 / 区域固定尺寸 / 按钮与自绘控件 / 交互态 / 检查清单与迁移计划 |
-| `settings/settings-crate-design.md` | settings crate | 动机 / 结构 / model / 持久化 / 迁移清单 |
+| `settings/settings-prototype-design.md` | 设置页**原型设计** | 形态选型（两栏弹层 vs 单列 / 独立窗口 / 侧栏）/ 页面解剖 / 行规格（四形态 · 生效方式标注）/ 搜索行 / **第一版内容清单（只收有生产者的项）与不设节的理由** / 主题映射 / 5 个新增尺寸常量 / GPUI 落点 / 状态矩阵 / 与 V1 对照 / 落地项 8 条 |
+| `settings/settings-architecture.md` | 设置**准入裁决书**（设计理念与架构） | 裁决摘要 D1–D12 / 定位与边界 / **三分法作用域（应用级·项目级·会话态）** / 概念模型（设置项解剖 · 登记≠上页）/ 分层与归属（其他 Feature 不直接依赖 settings）/ 单一权威与读写路径 / 六条数据流 / **设置项登记表（权威）** / **准入五条 + 退役清单（7 项无生产者字段）** / 持久化与迁移 / 降级矩阵 / **插件 beta3 预留** / 测试策略（含登记表一致性契约测试）/ 实现位置映射 / K1–K9 / Q1–Q6 |
+| `settings/settings-crate-design.md` | settings crate（**沿革**） | 动机 / 结构 / model / 持久化 / 迁移清单；§2–§3 已由 `settings-architecture.md` 取代 |
+| `settings/settings-prototype.html` | 设置页**交互稿** | RDS Light/Dark 双主题；5 场景可切（默认 / 搜索有结果 / 搜索无结果 / 已修改 / 深色）；分段·开关·搜索·恢复默认可交互（**示意稿，非权威**） |
+| `settings/settings-dev-plan.md` | 设置**开发方案** | 进度记录（文档 + 代码侧登记表 + 僵尸项裁撤已落地）/ 现状盘点 / P0–P4 任务表 / T1–T12 测试场景 / R1–R6 风险 / 验证命令 / 实现位置映射 / 明确不做 |
 | `project/README.md` | 项目管理**模块入口** | **先读这个**：一句话定位 / 文档索引 / 特点速览（一实例一项目 · 名册与元数据分离 · 两道护栏 · 视图归属）/ 代码落点 / 状态与范围外 |
 | `project/project-prototype-design.md` | 项目管理原型 | 一实例一项目 / CRUD（增删改查）/ 选择器（最近·全部·已移除）/ 项目菜单 / 新建对话框 / 项目设置 / 未保存拦截与项目锁逃生口 / 固定排序持久化 |
 | `project/project-prototype.html` | 项目管理原型（交互稿） | RDS Light/Dark 双主题：选择器、项目菜单、新建/设置/CRUD/拦截与锁弹层（可切换、可切主题） |
@@ -97,4 +101,18 @@
 | `analytics_resource/` | ✅ | ✅ | ✅ `analytics-resource-architecture.md`（本轮新增，兼语义裁决书） | ✅ | ✅ `analytics-resource-user-guide.md`（本轮新增） |
 | `mock/` | ✅（本轮新增） | ✅（自 v1 迁入） | ✅ `mock-architecture.md`（本轮新增） | ✅ `mock-dev-plan.md`（本轮新增） | ⬜ 缺使用手册（实现后补） |
 
-> `layout/` / `theme/` / `ui/` / `settings/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。
+> `layout/` / `theme/` / `ui/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。
+
+### `settings/` 的定位（跨行）
+
+设置同时有**规格性**（尺寸与组件约束已归 `ui/`、配色已归 `theme/`）与**页面性**（有入口、有交互、有内容清单），因此按“页面”补文档：
+
+| 文档 | 状态 |
+| --- | --- |
+| `settings-prototype-design.md`（原型设计） | ✅ 首版（待迭代） |
+| `settings-architecture.md`（架构 / 准入裁决） | ✅ 首版（待迭代） |
+| `settings-dev-plan.md`（开发方案） | ✅ 首版（P0 + P1a 已落地，见其 §0） |
+| `settings-user-guide.md`（使用手册） | ⬜ 实现后补（与 `editor/` 同例） |
+| `settings-prototype.html`（可交互原型） | ✅ 首版（示意稿，非权威；规格仍以 `ui/` + 原型设计文档为准） |
+
+> 插件（M9）不在本表：v2 尚未为其建立文档集，等 beta3 立项时补（见 `settings-architecture.md` §10）。

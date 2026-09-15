@@ -1,0 +1,160 @@
+# 设置（应用级）· 开发方案
+
+> 状态：**P0/P1a 已完成（2026-09-16），P1b 起待排**
+> 关联：`settings-architecture.md`（准入与作用域裁决）、`settings-prototype-design.md`（页面形态）、`settings-crate-design.md`（crate 沿革）
+> 基线：`cargo test -p rds-settings` → **10 项全绿、零告警**；`cargo check -p rds-workbench --all-targets` → 见 §5
+
+## 0. 进度记录（最近在前）
+
+### 2026-09-16 — 文档 + 登记表 + 僵尸项裁撤（P0 + P1a）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 两份权威文档 | 原型设计（形态 / 行规格 / 清单）与架构裁决书（D1–D12 / 登记表 / 准入五条 / 退役清单 / 降级矩阵 / K1–K9 / Q1–Q6） | `docs/architecture/settings/settings-prototype-design.md`、`settings-architecture.md`；导航已登记（`docs/architecture/README.md`） |
+| **代码侧登记表** | `SettingSpec`（key / 节 / 标签 / 说明 / 形态 / 默认值 / 生效方式 / 入口 / 消费方）+ `REGISTRY` 9 项 + `sections()` / `page_rows()` 供页面直接消费 | `crates/settings/src/registry.rs`（新增） |
+| **契约测试 6 项**（准入护栏） | 登记项必须存在于模型 · **模型叶子必须登记** · 默认值一致 · 枚举默认值在候选内 · 两态文案完整 · 登记表卫生 + 节相邻 + page_rows 分类一致 | 同文件 `#[cfg(test)]` |
+| **裁撤 7 个无生产者字段** | 删 `general`（language / restore_last_workspace）、`engine`（workspace_dir / cache_dir）两整节、`appearance.font_size`、`connection_defaults.{default_driver, query_timeout_ms}` | `crates/settings/src/model.rs` |
+| 视图同步 | 删对应界面行（界面语言 / 工作区目录 / 默认数据源 / 查询超时）与死掉的 `value_text`；现有形态收敛为三节（外观 / 数据源导航 / 连接默认值） | `crates/settings/src/settings_view.rs` |
+| 兼容性 | 旧 `settings.json` 带着被删节仍可解析（未开 `deny_unknown_fields`），新增测试 `legacy_config_with_removed_sections_still_loads` 锁住该保证 | 同上（model 测试） |
+| 交互稿 HTML | 单文件、零外链、明暗两套、5 场景可切（默认 / 搜索有结果 / 搜索无结果 / 已修改 / 深色）；分段·开关·搜索·恢复默认可交互 | `docs/architecture/settings/settings-prototype.html`（*示意稿，非权威*） |
+
+> 本轮**没有**改：持久化路径、写盘时机、消费方（workbench 侧一行未动）——裁撤字段的引用面全在 `settings` crate 内（已核对）。
+
+## 1. 现状盘点
+
+| 能力 | 现状 | 缺口 |
+| --- | --- | --- |
+| 模型与持久化 | `Settings` 4 节 + `settings.json`（`%APPDATA%/RdataStation`）；缺失 / 坏文件回退默认 | 写盘非原子、失败静默（K2）；非 Windows 落临时目录（K5） |
+| 服务与命令 | `SettingsService`（init / get / 9 个 `set_*` / 主题切换）、进程级连接默认值快照 | 构造期直读 2 处（K1）；`ToggleThemeMode` 未接线（K8） |
+| 登记表（准入） | ✅ `registry.rs` + 6 项契约测试 | 页面尚未消费 `sections()` / `page_rows()`（P1b） |
+| 页面形态 | 单列三节（临时形态），分段控件用 `Button` 拼 | 两栏 + 分节导航 + 搜索 + 恢复默认（P1b/P2） |
+| 宿主接线 | workbench overlay 懒创建 + `on_close` / `on_open_cache` 回调 | 与 Quick Open 未互斥；`Esc` / `Ctrl+F` 未绑（P3） |
+| 契约扫描 | 颜色扫描已含 `settings_view.rs` | **尺寸扫描未含**（K7，P3） |
+| 主题设施 | `rds-theme.json` 明暗 + `product-tokens.json` 产品角色（暂住本 crate，K6） | 无需改动（页面用既有角色） |
+| 待接线项 | — | M6 `resources.keep_versions`（P4） |
+
+## 2. 阶段与任务
+
+### P0 地基（已完成）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P0.1 | 两份文档定稿（首版） | `docs/architecture/settings/` | 导航已登记；缺口表 / 阅读顺序同步 |
+| P0.2 | 裁撤 7 个无生产者字段 + 视图同步 | `model.rs`、`settings_view.rs` | `cargo test -p rds-settings` 全绿；旧配置兼容测试通过 |
+| P0.3 | 登记表 + 6 项契约测试 | `registry.rs` | 故意加一个未登记字段 → `every_model_leaf_is_registered` 变红（人工验证一次） |
+
+### P1a 页面骨架 · 前置（已完成）
+
+同 P0.2/P0.3。
+
+### P1b 页面骨架 · 两栏（待排）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P1.1 | 新增 5 个尺寸常量 | `crates/workbench/src/ui.rs` | 契约测试（§5.1）通过；数值与原型 §7 一致 |
+| P1.2 | 新页面实体 `SettingsPage`（两栏壳：标题行 / 搜索行 / 分节导航 / 内容区 / 底栏） | `crates/settings/src/settings_page.rs`（新） | 打开设置见两栏；切节不改变弹层尺寸 |
+| P1.3 | 分节导航由 `registry::sections()` 驱动、行由 `registry::page_rows()` 驱动 | 同上 | 页面上出现的行 == 登记表 `entry != Module` 的行（逐项对照） |
+| P1.4 | 三种行控件接组件库：`TabBar::segmented`（枚举 / 两态）、`Switch`（布尔）、`Input`（数值） | 同上 | 无手搓分段控件；`Switch` 为默认尺寸 |
+| P1.5 | 行规格：标签列 15rem、说明行、行分隔、hover、禁用带原因 | 同上 | 原型 §4.2 逐条对照 |
+| P1.6 | 替换宿主渲染（`settings_view` → `settings_page`），旧文件退役 | `workbench/src/view.rs::render_settings_panel`、`settings/src/lib.rs` | 入口 / `Ctrl+,` / Quick Open 三入口行为不变 |
+
+### P2 搜索与状态（待排）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P2.1 | 搜索行（`Input` + 命中高亮） | `settings_page.rs` | 搜节名 / 行标签 / 说明 / key 均可命中；无结果显示空态 |
+| P2.2 | 行级「恢复默认」（非默认值时出现）+ 节级「重置本节」 | 同上 | 恢复后与 `registry.default_json` 一致 |
+| P2.3 | 写盘失败可见 | `settings/src/lib.rs` + 页面底栏 | `save_settings` 返回 `Result`；只读目录下改值 → 底栏 danger 提示 |
+| P2.4 | 底栏提示文案（生效方式 / 路径） | `settings_page.rs` | 与原型 §4.4 一致 |
+
+### P3 宿主与契约（待排）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P3.1 | Quick Open 与设置页互斥 | `workbench/src/view.rs` | 两 overlay 不同时为真（打开其一并关闭另一个） |
+| P3.2 | `Esc` 关闭 + `Ctrl+F` 聚焦搜索 | `app/src/main.rs`（`key_context("settings")`）+ 页面 | 键位生效且不影响编辑器 `Ctrl+F` |
+| P3.3 | 尺寸契约扫描纳入设置页视图文件 | `workbench/tests/ui_contract.rs` | 契约测试通过；故意写裸 `px(...)` 能让它变红 |
+| P3.4 | 宿主桥收口（`SettingsHost`：on_close / on_open_cache / 预留 on_restart） | `settings/src/settings_page.rs`、`workbench/src/view.rs` | 页面不再直接持有 `Rc<dyn Fn>` 散字段 |
+| P3.5 | `ToggleThemeMode` 决断（接线或删除） | `settings/src/commands.rs`（+ app 绑键） | 二者之一，且文档同步（K8 关闭） |
+| P3.6 | `K1` 两处构造期直读改走服务 | `workbench/src/{view.rs, panels.rs}` | 全仓无 `settings::load_settings()` 调用（除 settings 自身） |
+
+### P4 接线延伸（待排，依赖上游模块）
+
+| # | 任务 | 依赖 | 验收 |
+| --- | --- | --- | --- |
+| P4.1 | `resources.keep_versions` 落地（模型 + 登记 + 页面 `Input` 行 + 归档调用接线） | M6 dev-plan P2.4 | 改值后归档保留份数随之变化 |
+| P4.2 | 项目列表排序行（页面） | P1b | 与选择器循环按钮同值（双入口一致性用例） |
+| P4.3 | 界面缩放（若选"复活字号倍率"路线） | 架构 §14 Q4 拍板 | 按拍板结论另立任务 |
+
+## 3. 测试场景
+
+| # | 场景 | 层 | 现状 |
+| --- | --- | --- | --- |
+| T1 | 旧配置（缺节 / 带已裁撤节）解析回退默认 | 纯函数 | ✅ `model::tests` |
+| T2 | facet 筛选序列化往返 | 纯函数 | ✅ |
+| T3 | 未登记字段 → 契约测试变红 | 纯函数 | ✅ `registry::tests`（6 项） |
+| T4 | 默认值表 == 模型默认值 | 纯函数 | ✅ |
+| T5 | 每个 `set_*` 后 global 与磁盘一致（临时目录隔离） | 纯函数 + 文件 | ⬜ P2.3 |
+| T6 | 写盘失败（只读目录）→ 返回值 + 页面提示 | 纯函数 + 视图 | ⬜ P2.3 |
+| T7 | 切节 / 搜索过滤 / 无结果空态 | 窗口测试 | ⬜ P1b / P2.1 |
+| T8 | 恢复默认（行级 / 节级）后取值回落 | 窗口测试 | ⬜ P2.2 |
+| T9 | 三入口（⚙ / `Ctrl+,` / Quick Open）开合并互斥 | 窗口测试 | ⬜ P3.1 |
+| T10 | 双入口一致性（显示标签：`⋯` 菜单与页面） | 窗口测试 | ⬜ P4.2 |
+| T11 | 尺寸 / 颜色契约扫描含设置页 | 契约测试 | ⬜ P3.3 |
+| T12 | `Esc` / `Ctrl+F` 键位只在本页生效 | 窗口测试 | ⬜ P3.2 |
+
+> 窗口测试按 `crates/project/src/ui/tests.rs` 骨架写；注意 `#[gpui_kit::test]` 与"测试模块不通配导入"的坑（见 gpui-kit-dev skill）。
+
+## 4. 风险
+
+| # | 风险 | 影响 | 对策 |
+| --- | --- | --- | --- |
+| R1 | 工作区在途改动与页面文件重叠（`workbench/src/view.rs` / `panels.rs`） | 合并冲突、误覆盖 | P0 收尾先提交；页面改动尽量集中在 `settings` crate，宿主只留一行替换 |
+| R2 | 页面按登记表渲染后，行文案与原型文档漂移 | 文档失真 | 原型 §5 与登记表同轮修改（写进 §7.1 补充纪律） |
+| R3 | `TabBar::segmented` 的交互相对于现有 `Button::toggled` 有差异（键盘 / 焦点） | 体感回退 | P1.4 先在单行验证，再铺开 |
+| R4 | 写盘改 `Result` 触及所有 `set_*` 签名 | 大面积改动 | 保留旧签名（内部记状态）+ 新增 `try_set_*`，页面用后者（P2.3） |
+| R5 | 搜索要求"只搜登记项"，而模块内入口的项不在页面 | 用户找不到（如属性面板宽度） | 无结果文案里说明"这里只列已登记的设置项"；入口在模块内的项由模块文档负责 |
+| R6 | 插件（M9）在 beta3 落地时要求新增"插件"节 | 页面结构变化 | 架构 §10 已写规则：先过准入五条，且优先判定是否项目级 |
+
+## 5. 验证命令
+
+```bash
+# 5.1 本 crate（契约测试 + 模型兼容）
+cargo test -p rds-settings
+
+# 5.2 宿主与视图契约（尺寸 / 颜色扫描 + 边栏状态机）
+cargo test -p rds-workbench --test ui_contract
+
+# 5.3 全目标编译（含测试目标；plugin 不在默认图上，不必为它付编译成本）
+cargo check -p rds-workbench --all-targets
+cargo check -p rds-app
+
+# 5.4 真机验收（改值后重启）
+cargo run -p rds-app     # 设置页改主题 / 显示标签 / 建连超时 → 重启后仍生效
+```
+
+> 验证记录（2026-09-16）：`cargo test -p rds-settings` → **10 项全绿、零告警**；`cargo test -p rds-workbench --test ui_contract` → **5 项通过**；`cargo check -p rds-workbench --all-targets` → **通过、零告警**。
+> 同轮 `cargo check -p rds-app` 曾失败于**在途改动**（`app/src/main.rs` 的 `NavReorderUp` / `NavReorderDown` 键位漏导入，属数据库导航条目重排那条线），已由后续在途改动补齐导入；设置模块的字段裁撤引用面只在 `settings` crate 内，与该失败无关。
+
+## 6. 实现位置映射
+
+| 设计决策 | 落点 |
+| --- | --- |
+| 准入五条 / 登记表（代码侧权威） | `crates/settings/src/registry.rs`（+ 架构 §6/§7） |
+| 设置项字段与默认值 | `crates/settings/src/model.rs` |
+| 服务与持久化（唯一写入者） | `crates/settings/src/lib.rs` |
+| 页面（目标形态） | `crates/settings/src/settings_page.rs`（P1b 新增；`settings_view.rs` 退役） |
+| 尺寸常量 | `crates/workbench/src/ui.rs`（P1.1） |
+| 宿主 overlay / 互斥 / 桥 | `crates/workbench/src/view.rs::render_settings_panel`（P1.6 / P3.1 / P3.4） |
+| 命令与键位 | `crates/settings/src/commands.rs`、`crates/app/src/main.rs`（P3.2 / P3.5） |
+| 契约扫描 | `crates/workbench/tests/ui_contract.rs`（P3.3） |
+| 文档同步 | `settings-prototype-design.md` §5、`settings-architecture.md` §6/§7 |
+
+## 7. 明确不做
+
+| 项 | 理由 |
+| --- | --- |
+| 设置页搜索语法（`@modified` 等） | 触发条件：设置项 > 40 条（原型 §4.3） |
+| 「导出 / 导入设置」 | 与连接模块 C4 同源能力，等排期（原型 §12 Q3） |
+| 插件节 / 插件设置项 | beta3 立项后再过准入（架构 §10） |
+| 设置变更审计 | 无多用户场景（架构 §14 Q6） |

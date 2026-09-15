@@ -15,6 +15,7 @@ use gpui_kit::App;
 pub mod commands;
 pub mod model;
 pub mod product_tokens;
+pub mod registry;
 pub mod settings_view;
 
 use crate::model::{ConnectionDefaults, NavigatorFilters, Settings};

@@ -1,8 +1,15 @@
 //! rds-settings — 设置面板视图。
 //!
 //! 以居中面板呈现（overlay 由宿主 workbench 提供）：
-//! 分节渲染 `外观 / 引擎 / 连接默认值`，外观节含明暗主题切换。
+//! 分节渲染 `外观 / 数据源导航 / 连接默认值`，外观节含明暗主题切换。
 //! 本视图只做展示与触发，所有写操作经 `SettingsService`（即时生效 + 持久化）。
+//!
+//! ## 现状与目标形态
+//!
+//! 本文件是**临时形态**（单列三节）；目标形态为两栏（分节导航 + 内容区 + 搜索），
+//! 见 `docs/architecture/settings/settings-prototype-design.md`。
+//! 无论哪种形态，行都只能来自 `crate::registry`（登记表）里 `entry != Module` 的项：
+//! 登记表是权威，视图不得自己“补一行”。
 
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -68,13 +75,6 @@ impl SettingsView {
             .child(control)
     }
 
-    fn value_text(&self, theme: &Theme, text: String) -> Div {
-        div()
-            .text_xs()
-            .text_color(theme.colors.secondary_foreground)
-            .child(text)
-    }
-
     fn theme_switcher(&self, cx: &Context<Self>) -> Div {
         let current = self.settings.appearance.theme_mode;
         let entity_light = cx.entity();
@@ -108,11 +108,6 @@ impl SettingsView {
 
     fn content(&self, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
-        let engine_dir = if self.settings.engine.workspace_dir.is_empty() {
-            "默认位置".to_string()
-        } else {
-            self.settings.engine.workspace_dir.clone()
-        };
         div()
             .v_flex()
             .w_full()
@@ -120,11 +115,6 @@ impl SettingsView {
             .child(div().h_1p5())
             .child(Self::section_title(theme, "外观"))
             .child(Self::row(theme, "主题模式", self.theme_switcher(cx)))
-            .child(Self::row(
-                theme,
-                "界面语言",
-                self.value_text(theme, "中文（简体）".to_string()),
-            ))
             .child(div().h_1p5())
             .child(Self::section_title(theme, "数据源导航"))
             .child(Self::row(theme, "来源标识", self.source_code_switcher(cx)))
@@ -141,36 +131,13 @@ impl SettingsView {
                     }),
             ))
             .child(div().h_1p5())
-            .child(Self::section_title(theme, "引擎"))
-            .child(Self::row(
-                theme,
-                "工作区目录",
-                self.value_text(theme, engine_dir),
-            ))
-            .child(div().h_1p5())
             .child(Self::section_title(theme, "连接默认值"))
-            .child(Self::row(
-                theme,
-                "默认数据源",
-                self.value_text(
-                    theme,
-                    self.settings.connection_defaults.default_driver.clone(),
-                ),
-            ))
             .child(Self::row(
                 theme,
                 "建连超时",
                 self.connect_timeout_switcher(cx),
             ))
             .child(Self::row(theme, "LAN 直连 TLS", self.lan_tls_switcher(cx)))
-            .child(Self::row(
-                theme,
-                "查询超时",
-                self.value_text(
-                    theme,
-                    format!("{} ms", self.settings.connection_defaults.query_timeout_ms),
-                ),
-            ))
     }
 
     /// 建连超时预设（毫秒）；超时后会自动重试一次。

@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 设置页（应用级）· 交互原型</title>
+<style>
+/* ===== 色值：只取 assets/themes/rds-theme.json 的 RDS Light / Dark 两套，不自创颜色 =====
+   --popover=popover.background --fg=popover.foreground --border=border --secondary=sidebar.background（次级底）
+   --group=group_box.background --hover=list.hover.background --active=list.active.background
+   --muted=muted.foreground --primary=primary.background（coral） --scrim=overlay（此处用于弹层落影） */
+:root{
+  --pagebg:#ECECEC; --popover:#FFFFFF; --fg:#333333; --border:#D4D4D4;
+  --secondary:#F3F3F3; --group:#F5F5F5; --hover:#F0F0F0; --active:#E4E4E4;
+  --muted:#8E8E8E; --primary:#C25B46; --scrim:#00000033; --on-primary:#FFFFFF;
+}
+[data-theme="dark"]{
+  --pagebg:#1E1E1E; --popover:#252526; --fg:#CCCCCC; --border:#3C3C3C;
+  --secondary:#333333; --group:#171717; --hover:#2A2D2E; --active:#37373D;
+  --muted:#8A8A8A; --primary:#E8846F; --scrim:#00000080; --on-primary:#1E1E1E;
+}
+/* 字号：示意稿用固定 px（真实实现取 text_sm 标签 / text_xs 说明，见原型文档 §4.2） */
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);font-size:13px;padding:24px 20px 36px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;cursor:pointer;}
+code{font-family:Consolas,'SFMono-Regular',monospace;font-size:11.5px;background:var(--secondary);border:1px solid var(--border);border-radius:4px;padding:0 4px;}
+
+/* ── 页头说明条 ── */
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;max-width:1180px;margin:0 auto 12px;}
+.brand{display:flex;gap:10px;}
+.logo{width:26px;height:26px;border-radius:7px;background:var(--primary);color:var(--on-primary);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.sub{color:var(--muted);font-size:12px;line-height:1.7;margin-top:2px;}
+.sub a{color:var(--primary);}
+.theme-toggle{flex:none;display:flex;align-items:center;gap:6px;height:30px;padding:0 14px;border:1px solid var(--border);border-radius:8px;background:var(--popover);color:var(--fg);font-size:12px;}
+.theme-toggle:hover{background:var(--hover);}
+
+/* ── 场景切换 ── */
+.scenes{display:flex;flex-wrap:wrap;align-items:center;gap:6px;max-width:1180px;margin:0 auto 14px;}
+.scenes-label{font-size:11.5px;color:var(--muted);margin-right:2px;}
+.s-btn{height:26px;padding:0 12px;border:1px solid var(--border);border-radius:6px;background:var(--popover);color:var(--fg);font-size:12px;}
+.s-btn:hover{background:var(--hover);}
+.s-btn.on{background:var(--primary);border-color:var(--primary);color:var(--on-primary);font-weight:600;}
+
+/* ── 画布：弹层居中浮在灰色页面底上 ── */
+.canvas{display:flex;justify-content:center;padding:12px 16px 4px;overflow-x:auto;}
+.dlg{flex:none;width:980px;height:560px;display:flex;flex-direction:column;background:var(--popover);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 18px 50px var(--scrim),0 2px 8px var(--scrim);}
+
+/* 标题行 36px */
+.dlg-title{display:flex;align-items:center;height:36px;padding:0 8px 0 14px;flex:none;}
+.dlg-name{font-size:13px;font-weight:600;}
+.dlg-acts{margin-left:auto;display:flex;gap:2px;}
+.icon-btn{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:none;border-radius:5px;background:transparent;color:var(--muted);}
+.icon-btn:hover{background:var(--hover);color:var(--fg);}
+.ic{width:14px;height:14px;}
+.hairline{height:1px;background:var(--border);flex:none;}
+
+/* 搜索行（py 内距 + 26px 输入框；下缘分隔线是内容区两栏的顶边） */
+.search-row{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;border-bottom:1px solid var(--border);flex:none;color:var(--muted);}
+.search-row input{flex:1;height:26px;border:none;background:transparent;color:var(--fg);font-size:13px;outline:none;}
+.search-row input::placeholder{color:var(--muted);}
+
+.dlg-body{flex:1;min-height:0;display:flex;}
+/* 分节导航 200px + 右侧 1px 分隔线 */
+.nav{width:200px;flex:none;border-right:1px solid var(--border);overflow-y:auto;padding:6px 0;}
+.nav-row{position:relative;display:flex;align-items:center;height:24px;padding:0 10px;font-size:12.5px;color:var(--muted);cursor:pointer;}
+.nav-row:hover{background:var(--hover);}
+.nav-row.on{background:var(--active);color:var(--fg);font-weight:600;}
+.nav-row.on::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--primary);}
+.nav-dot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--muted);}
+
+/* 内容区（弹性宽，内部纵向滚动；切节 / 加行不改变弹层尺寸） */
+.content{flex:1;min-width:0;overflow-y:auto;padding:12px 14px 16px;}
+.sec-head{display:flex;align-items:center;height:28px;margin-bottom:6px;}
+.sec-title{font-size:13px;font-weight:600;}
+.ghost{margin-left:auto;height:24px;padding:0 9px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--fg);font-size:11.5px;}
+.ghost:hover{background:var(--hover);}
+
+/* 分组卡 + 设置行：标签列 240px，说明行独立一行（带说明行自动增高，最小高 40px） */
+.card{background:var(--group);border-radius:6px;overflow:hidden;}
+.row{min-height:40px;padding:7px 12px;display:flex;flex-direction:column;justify-content:center;}
+.row + .row{border-top:1px solid var(--border);}
+.row:hover{background:var(--hover);}
+.row-top{display:flex;align-items:center;min-height:26px;}
+.row-label{width:240px;flex:none;font-size:13px;color:var(--fg);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.row-ctrl{margin-left:auto;display:flex;align-items:center;gap:6px;}
+.row-hint{margin-top:3px;font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* 搜索结果：标签列放「节 › 行」面包屑（原型文档 §4.3） */
+.bc-sec{color:var(--muted);}
+.bc-sep{color:var(--muted);margin:0 5px;}
+.bc-row{font-weight:600;}
+
+/* 分段控件：控件高 26px；选中用 list_active（对话框内不用 sidebar_accent） */
+.seg{display:flex;height:26px;border:1px solid var(--border);border-radius:6px;background:var(--secondary);overflow:hidden;}
+.seg-i{height:24px;padding:0 10px;border:none;border-left:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;white-space:nowrap;}
+.seg-i:first-child{border-left:none;}
+.seg-i:hover{background:var(--hover);}
+.seg-i.on{background:var(--active);color:var(--fg);font-weight:600;}
+/* 开关 36×20；关态轨道用 border、滑块用 muted（两套主题下都可辨） */
+.sw{width:36px;height:20px;border-radius:10px;border:none;background:var(--primary);position:relative;flex:none;}
+.sw::after{content:"";position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;background:var(--on-primary);}
+.sw.off{background:var(--border);}
+.sw.off::after{right:auto;left:2px;background:var(--muted);}
+/* 动作行按钮（不是设置项，是跳转） */
+.act-btn{height:26px;padding:0 12px;border:1px solid var(--border);border-radius:6px;background:var(--popover);color:var(--fg);font-size:12px;}
+.act-btn:hover{background:var(--hover);}
+/* 恢复默认（仅当前值 ≠ 默认值时出现） */
+.reset{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:none;border-radius:5px;background:transparent;color:var(--muted);}
+.reset:hover{background:var(--hover);color:var(--primary);}
+
+/* 搜索空态 */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:96px 0;color:var(--muted);}
+.empty-t{font-size:13px;color:var(--fg);}
+.empty-s{font-size:11.5px;}
+
+/* 底栏状态条：coral 底 + 白字 */
+.status{flex:none;height:28px;display:flex;align-items:center;padding:0 12px;background:var(--primary);color:var(--on-primary);font-size:12px;}
+
+.foot{max-width:1180px;margin:16px auto 0;font-size:11.5px;color:var(--muted);line-height:1.9;}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <div class="brand">
+    <div class="logo">RDS</div>
+    <div>
+      <h1>设置页（应用级）· 交互原型</h1>
+      <div class="sub"><b>示意稿（非权威）</b>· 权威：<a href="settings-prototype-design.md">settings-prototype-design.md</a>（同步 2026-09-16）</div>
+      <div class="sub">项清单只来自 <code>settings-architecture.md</code> §6 登记表（<code>entry ≠ Module</code>）· 配色取 <code>assets/themes/rds-theme.json</code>（RDS Light / Dark）</div>
+    </div>
+  </div>
+  <button class="theme-toggle" id="themeBtn"><span id="themeBtnText">切换为深色</span></button>
+</div>
+
+<div class="scenes">
+  <span class="scenes-label">场景</span>
+  <button class="s-btn on" data-scene="default">默认</button>
+  <button class="s-btn" data-scene="hit">搜索：有结果</button>
+  <button class="s-btn" data-scene="miss">搜索：无结果</button>
+  <button class="s-btn" data-scene="modified">已修改（非默认）</button>
+  <button class="s-btn" data-scene="dark">深色</button>
+</div>
+
+<div class="canvas">
+  <div class="dlg">
+    <!-- 标题行 36px：左「设置」，右上 ⚙ 与 ✕ -->
+    <div class="dlg-title">
+      <span class="dlg-name">设置</span>
+      <span class="dlg-acts">
+        <button class="icon-btn" id="gearBtn" title="入口：⚙ / Ctrl+, / Quick Open（属 workbench overlay）">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+        </button>
+        <button class="icon-btn" id="closeBtn" title="Esc 关闭（示意稿不模拟关闭）">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </span>
+    </div>
+    <div class="hairline"></div>
+
+    <!-- 搜索行 -->
+    <div class="search-row">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="searchInput" type="text" placeholder="搜索设置…" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="dlg-body">
+      <div class="nav" id="nav"></div>
+      <div class="content" id="content"></div>
+    </div>
+
+    <!-- 底栏状态条 -->
+    <div class="status" id="status">修改即时生效并持久化到 settings.json</div>
+  </div>
+</div>
+
+<div class="foot">
+  <b>说明：</b>本文件是<b>示意稿（非权威）</b>，用于确认设置页的目标形态与明暗观感，非最终实现；视觉规格以 <code>settings-prototype-design.md</code> 为准，项清单以 <code>settings-architecture.md</code> §6 登记表为准。<br>
+  可交互：明暗切换（顶部按钮 / 外观 · 主题模式，同值同源）、分节导航切换、分段与开关点击、搜索即时过滤（有结果 → 面包屑结果列表；无结果 → 空态）、<code>↺</code> 恢复默认、节级「重置本节」。<br>
+  未画：<code>navigator.property_panel_width</code>（拖拽）、<code>navigator.filters</code>（模块内 chips）——登记 ≠ 上页；真实实现走 GPUI + <code>cx.theme()</code> token + <code>ui.rs</code> 尺寸常量。
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ===== 数据：与 crates/settings/src/registry.rs 的 REGISTRY 一致，只保留 entry ≠ Module 的行 =====
+  // hint 取自登记表同一行（行说明也承载"生效方式"这类边界说明，见原型文档 §4.4）
+  var SECTIONS = [
+    {id:'appearance', label:'外观'},
+    {id:'navigator',  label:'数据源导航'},
+    {id:'connection', label:'连接默认值'},
+    {id:'projects',   label:'项目'}
+  ];
+  var ROWS = [
+    {key:'appearance.theme_mode', sec:'appearance', kind:'seg', def:'light',
+     label:'主题模式', hint:'立即切换明暗配色并持久化',
+     opts:[{v:'light',t:'浅色'},{v:'dark',t:'深色'}]},
+    {key:'navigator.source_short_code', sec:'navigator', kind:'seg', def:'true',
+     label:'来源标识', hint:'连接行右端显示短码或文字（同一列，宽度随模式切换）',
+     opts:[{v:'true',t:'短码 P/G/GP'},{v:'false',t:'文字（项目 / 全局 / 共享）'}]},
+    {key:'navigator.show_tags', sec:'navigator', kind:'sw', def:'false',
+     label:'显示标签', hint:'连接行名称下方最多 2 个标签 chip，其余折叠为 +N'},
+    {key:'navigator.show_scope', sec:'navigator', kind:'sw', def:'true',
+     label:'显示归属域', hint:'行尾右对齐的归属域列（便于扫视的一端对齐列）'},
+    // 无 key：动作行不是设置项，按原型文档 §4.3「只搜已登记的设置项」不进搜索
+    {key:'', sec:'navigator', kind:'act', label:'缓存管理…',
+     hint:'动作行（不是设置项）：打开缓存对话框清理元数据缓存'}, // 文案：登记表无此行，说明行由本稿拟写
+    {key:'connection_defaults.connect_timeout_ms', sec:'connection', kind:'seg', def:'15000',
+     label:'建连超时', hint:'超时判定本次尝试失败并自动重试一次；对之后新建的连接生效',
+     opts:[{v:'5000',t:'5s'},{v:'15000',t:'15s'},{v:'30000',t:'30s'},{v:'60000',t:'60s'}]},
+    {key:'connection_defaults.lan_disable_tls', sec:'connection', kind:'seg', def:'true',
+     label:'LAN 直连 TLS', hint:'LAN / 本机直连时显式关闭 TLS（规避 sqlx 默认 prefer 的握手卡顿）；公网不受影响',
+     opts:[{v:'true',t:'关 TLS'},{v:'false',t:'保留 TLS'}]},
+    {key:'projects.sort_mode', sec:'projects', kind:'seg', def:'last_opened',
+     label:'列表排序', hint:'项目选择器的排序方式（选择器内也有循环按钮）',
+     opts:[{v:'last_opened',t:'最近打开'},{v:'name',t:'名称'},{v:'created',t:'创建时间'}]}
+  ];
+
+  var defaults = {}, values = {};
+  ROWS.forEach(function(r){ if(r.key){ defaults[r.key] = r.def; values[r.key] = r.def; } });
+
+  var STATUS_TEXT = '修改即时生效并持久化到 settings.json';
+  var state = {sec:'appearance', q:''};
+  var navEl = document.getElementById('nav');
+  var contentEl = document.getElementById('content');
+  var inputEl = document.getElementById('searchInput');
+  var statusEl = document.getElementById('status');
+  var themeBtnText = document.getElementById('themeBtnText');
+  var RESET_ICON = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 1 2.6 6.1"/><path d="M3 5v5h5"/></svg>';
+
+  function secLabel(id){
+    for(var i=0;i<SECTIONS.length;i++) if(SECTIONS[i].id===id) return SECTIONS[i].label;
+    return id;
+  }
+  function isModified(r){ return !!r.key && values[r.key] !== r.def; }
+  function modifiedCount(secId){
+    return ROWS.filter(function(r){ return r.sec===secId && isModified(r); }).length;
+  }
+  // 默认值的可读文案（恢复默认按钮的 hover 提示）
+  function defText(r){
+    if(r.kind==='sw') return r.def==='true' ? '开' : '关';
+    for(var i=0;i<r.opts.length;i++) if(r.opts[i].v===r.def) return r.opts[i].t;
+    return r.def;
+  }
+
+  // ===== 渲染 =====
+  function renderNav(){
+    navEl.innerHTML = SECTIONS.map(function(s){
+      var n = modifiedCount(s.id); // 非默认项小点：原型文档 §3（v1 为 P2 可选项）
+      return '<div class="nav-row'+(state.sec===s.id?' on':'')+'" data-sec="'+s.id+'">'+
+        '<span>'+s.label+'</span>'+
+        (n ? '<span class="nav-dot" title="本节有 '+n+' 项非默认值"></span>' : '')+
+        '</div>';
+    }).join('');
+  }
+
+  function rowHtml(r, breadcrumb){
+    var label = breadcrumb
+      ? '<span class="bc-sec">'+secLabel(r.sec)+'</span><span class="bc-sep">›</span><span class="bc-row">'+r.label+'</span>'
+      : r.label;
+    var ctrl;
+    if(r.kind==='seg'){
+      ctrl = '<div class="seg" data-key="'+r.key+'">' + r.opts.map(function(o){
+        return '<button class="seg-i'+(values[r.key]===o.v?' on':'')+'" data-v="'+o.v+'">'+o.t+'</button>';
+      }).join('') + '</div>';
+    } else if(r.kind==='sw'){
+      var on = values[r.key]==='true';
+      ctrl = '<button class="sw'+(on?'':' off')+'" data-key="'+r.key+'" role="switch" aria-checked="'+on+'" title="'+(on?'开':'关')+'"></button>';
+    } else {
+      // 动作行：文案由宿主按钮决定，此处只表达"跳转"意图
+      ctrl = '<button class="act-btn" data-act="cache">打开…</button>';
+    }
+    var reset = isModified(r)
+      ? '<button class="reset" data-reset="'+r.key+'" title="恢复默认：'+defText(r)+'">'+RESET_ICON+'</button>' : '';
+    return '<div class="row"><div class="row-top"><div class="row-label">'+label+'</div>'+
+      '<div class="row-ctrl">'+ctrl+reset+'</div></div>'+
+      '<div class="row-hint">'+r.hint+'</div></div>';
+  }
+
+  function renderContent(){
+    if(state.q){ renderSearch(); return; }
+    var rows = ROWS.filter(function(r){ return r.sec===state.sec; });
+    var html = '<div class="sec-head"><span class="sec-title">'+secLabel(state.sec)+'</span>';
+    // 节级重置：仅本节含非默认值时出现，不二次确认（原型文档 §4.2）
+    if(modifiedCount(state.sec)) html += '<button class="ghost" data-reset-sec="'+state.sec+'">重置本节</button>';
+    html += '</div><div class="card">' + rows.map(function(r){ return rowHtml(r,false); }).join('') + '</div>';
+    contentEl.innerHTML = html;
+  }
+
+  // 搜索索引 = 节名 / 行标签 / key（原型文档 §4.3，不含说明行文字）
+  function renderSearch(){
+    var q = state.q.toLowerCase();
+    var hits = ROWS.filter(function(r){
+      return !!r.key && (r.label.toLowerCase().indexOf(q)>=0 ||
+        r.key.toLowerCase().indexOf(q)>=0 || secLabel(r.sec).toLowerCase().indexOf(q)>=0);
+    });
+    if(!hits.length){
+      contentEl.innerHTML = '<div class="empty">'+
+        '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>'+
+        '<div class="empty-t">没有匹配的设置项</div><div class="empty-s">这里只列已登记的设置项</div></div>';
+      return;
+    }
+    contentEl.innerHTML = '<div class="card">' + hits.map(function(r){ return rowHtml(r,true); }).join('') + '</div>';
+  }
+
+  function render(){ renderNav(); renderContent(); }
+
+  // ===== 写入：唯一入口（对齐"同值同源"与写时序） =====
+  function setValue(key, raw){
+    values[key] = (raw===null || raw===undefined) ? defaults[key] : raw;
+    if(key === 'appearance.theme_mode'){ // 即时档：写值即换肤
+      document.documentElement.setAttribute('data-theme', values[key]);
+      themeBtnText.textContent = values[key]==='light' ? '切换为深色' : '切换为浅色';
+    }
+    markCustom();
+    render();
+  }
+  function resetSection(secId){
+    ROWS.forEach(function(r){ if(r.sec===secId && r.key) values[r.key] = r.def; });
+    markCustom();
+    render();
+  }
+
+  var flashTimer = null;
+  function flash(text){
+    statusEl.textContent = text;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(function(){ statusEl.textContent = STATUS_TEXT; }, 2600);
+  }
+
+  // 手动改动即脱离场景（清掉场景按钮高亮），避免"场景"与"当前态"不一致
+  function markCustom(){
+    document.querySelectorAll('.s-btn').forEach(function(b){ b.classList.remove('on'); });
+  }
+
+  // ===== 事件 =====
+  contentEl.addEventListener('click', function(e){
+    var t = e.target.closest('button');
+    if(!t) return;
+    if(t.classList.contains('seg-i')){ setValue(t.parentNode.getAttribute('data-key'), t.getAttribute('data-v')); }
+    else if(t.classList.contains('sw')){
+      var k = t.getAttribute('data-key');
+      setValue(k, values[k]==='true' ? 'false' : 'true');
+    }
+    else if(t.classList.contains('reset')){ setValue(t.getAttribute('data-reset'), null); }
+    else if(t.hasAttribute('data-reset-sec')){ resetSection(t.getAttribute('data-reset-sec')); }
+    else if(t.hasAttribute('data-act')){ flash('动作行：缓存对话框归宿主（workbench/components/cache_dialog.rs），原型不展开'); }
+  });
+
+  navEl.addEventListener('click', function(e){
+    var row = e.target.closest('.nav-row');
+    if(!row) return;
+    state.sec = row.getAttribute('data-sec');
+    state.q = ''; inputEl.value = ''; // 切节即退出搜索（清空搜索回到进入前的节）
+    markCustom(); render();
+  });
+
+  inputEl.addEventListener('input', function(){
+    state.q = inputEl.value.trim();
+    markCustom(); render();
+  });
+
+  document.getElementById('themeBtn').addEventListener('click', function(){
+    setValue('appearance.theme_mode', values['appearance.theme_mode']==='light' ? 'dark' : 'light');
+  });
+  document.getElementById('gearBtn').addEventListener('click', function(){
+    flash('入口 ⚙ / Ctrl+, 由 app 层快捷键与 workbench overlay 承接（原型不模拟）');
+  });
+  document.getElementById('closeBtn').addEventListener('click', function(){
+    flash('Esc / ✕ 关闭由宿主 overlay 处理（原型不模拟关闭）');
+  });
+
+  // ===== 场景 =====
+  function applyScene(name){
+    if(name==='default'){
+      ROWS.forEach(function(r){ if(r.key) values[r.key] = r.def; });
+      state.sec = 'appearance'; state.q = ''; inputEl.value = '';
+      document.documentElement.setAttribute('data-theme','light'); themeBtnText.textContent = '切换为深色';
+    }
+    if(name==='hit'){ state.q = '连'; inputEl.value = '连'; }          // 命中「连接默认值」节 2 行（节名 + 行标签同时命中）
+    if(name==='miss'){ state.q = '字体'; inputEl.value = '字体'; }      // 未登记的项（字体属模块内）→ 空态
+    if(name==='modified'){
+      values['navigator.source_short_code'] = 'false';
+      values['navigator.show_tags'] = 'true';
+      values['navigator.show_scope'] = 'false';
+      values['connection_defaults.connect_timeout_ms'] = '30000';
+      values['connection_defaults.lan_disable_tls'] = 'false';
+      values['projects.sort_mode'] = 'name';
+      state.sec = 'navigator'; state.q = ''; inputEl.value = '';        // 落位到改动最多的节，便于对照
+    }
+    if(name==='dark'){
+      values['appearance.theme_mode'] = 'dark';
+      document.documentElement.setAttribute('data-theme','dark'); themeBtnText.textContent = '切换为浅色';
+    }
+    document.querySelectorAll('.s-btn').forEach(function(b){
+      b.classList.toggle('on', b.getAttribute('data-scene')===name);
+    });
+    render();
+  }
+  document.querySelectorAll('.s-btn').forEach(function(b){
+    b.addEventListener('click', function(){ applyScene(b.getAttribute('data-scene')); });
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
+</title></h1></b></code></code></code></b></b></code></code></code></code></code></code></code>

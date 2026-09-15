@@ -1,6 +1,8 @@
 # crates/settings 设计文档（新增 crate）
 
-> 状态：方案已确认 · 关联：`docs/architecture/crate-ownership-proposal.html`（归属总览）
+> 状态：**沿革文档**（crate 建立期的方案）· 现行权威：`settings-architecture.md`（准入与作用域裁决）与 `settings-prototype-design.md`（页面形态）
+> **本文 §2「crate 结构」与 §7「迁移清单」的历史实现说明保留**；「设置项有哪些、能不能进设置页」一律以架构文档 §6 登记表 + §7 准入五条为准。
+> 关联：`docs/architecture/crate-ownership-proposal.html`（归属总览）
 > 依据：gpui-kit 编码指南示例结构（settings feature：`lib.rs / model.rs / settings_view.rs / commands.rs`）
 
 ## 1. 动机与边界

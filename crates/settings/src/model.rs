@@ -1,14 +1,22 @@
 //! rds-settings — 设置 model。
 //!
 //! 分节设置项（serde 序列化，缺失字段回退默认值，向前兼容）：
-//! - `general`：通用（语言、启动行为）
-//! - `appearance`：外观（主题模式 Light/Dark、字号）
-//! - `engine`：引擎（SQLite/DuckDB 路径、缓存目录）
-//! - `connection_defaults`：连接默认值（默认数据源、超时）
+//! - `appearance`：外观（主题模式）
+//! - `connection_defaults`：连接默认值（建连超时、LAN 直连 TLS）
+//! - `projects`：项目列表偏好（排序方式）
+//! - `navigator`：数据源导航（来源标识、显示开关、属性面板宽度、facet 筛选）
 //!
 //! 主题模式直接复用 `gpui_kit::component::ThemeMode`（已派生
 //! `Serialize/Deserialize/Default`，serde snake_case），与 gpui-kit 0.6
 //! 主题系统天然对齐，避免重复枚举。
+//!
+//! ## 准入（2026-09-16 起）
+//!
+//! **字段不是"想加就加"**：每个字段都必须在 `registry.rs` 的登记表里有对应条目
+//! （消费方 / 默认值 / 生效方式 / 入口 / 是否上页），否则
+//! `registry::tests::every_model_leaf_is_registered` 直接失败。被裁掉的 7 个
+//! "有字段、有界面行，但没有消费方"的字段见
+//! `docs/architecture/settings/settings-architecture.md` §7.2；新增字段的判定标准见 §7.1。
 
 use gpui_kit::component::ThemeMode;
 use serde::{Deserialize, Serialize};
@@ -17,11 +25,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     #[serde(default)]
-    pub general: General,
-    #[serde(default)]
     pub appearance: Appearance,
-    #[serde(default)]
-    pub engine: Engine,
     #[serde(default)]
     pub connection_defaults: ConnectionDefaults,
     #[serde(default)]
@@ -30,74 +34,26 @@ pub struct Settings {
     pub navigator: Navigator,
 }
 
-/// 通用：语言、启动行为。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct General {
-    /// 界面语言，默认 `zh-CN`。
-    #[serde(default = "default_language")]
-    pub language: String,
-    /// 启动时恢复上次工作区。
-    #[serde(default = "default_true")]
-    pub restore_last_workspace: bool,
-}
-
-impl Default for General {
-    fn default() -> Self {
-        Self {
-            language: default_language(),
-            restore_last_workspace: default_true(),
-        }
-    }
-}
-
-/// 外观：主题模式、字号。
+/// 外观：主题模式。
+///
+/// 界面字号不在这里：字号的权威是主题资产（`theme.font_size`），设置只记"选哪套模式"。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Appearance {
     #[serde(default)]
     pub theme_mode: ThemeMode,
-    /// 界面基础字号（px），默认 13。
-    #[serde(default = "default_font_size")]
-    pub font_size: f32,
 }
 
 impl Default for Appearance {
     fn default() -> Self {
         Self {
             theme_mode: ThemeMode::Light,
-            font_size: default_font_size(),
         }
     }
 }
 
-/// 引擎：查询引擎路径与缓存目录。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Engine {
-    /// 分析引擎目录（DuckDB 工作区等）。
-    #[serde(default)]
-    pub workspace_dir: String,
-    /// 缓存目录。
-    #[serde(default)]
-    pub cache_dir: String,
-}
-
-impl Default for Engine {
-    fn default() -> Self {
-        Self {
-            workspace_dir: String::new(),
-            cache_dir: String::new(),
-        }
-    }
-}
-
-/// 连接默认值：新建连接时的默认数据源与超时。
+/// 连接默认值：新建连接时的超时与直连 TLS 策略。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionDefaults {
-    /// 默认数据源类型（duckdb / mysql / postgres / sqlite）。
-    #[serde(default = "default_driver")]
-    pub default_driver: String,
-    /// 查询超时（毫秒）。
-    #[serde(default = "default_timeout_ms")]
-    pub query_timeout_ms: u64,
     /// 建连超时（毫秒）：超过即判定本次尝试失败（会自动重试一次）。默认 15000。
     #[serde(default = "default_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
@@ -110,8 +66,6 @@ pub struct ConnectionDefaults {
 impl Default for ConnectionDefaults {
     fn default() -> Self {
         Self {
-            default_driver: default_driver(),
-            query_timeout_ms: default_timeout_ms(),
             connect_timeout_ms: default_connect_timeout_ms(),
             lan_disable_tls: true,
         }
@@ -136,8 +90,9 @@ impl Default for Projects {
     }
 }
 
-/// 数据源导航的 facet 筛选（UI 偏好，跨项目复用；`None` = 未启用）。
+/// 数据源导航的 facet 筛选（UI 偏好；`None` = 未启用）。
 ///
+/// 这是**复合值**：在登记表里作为一项（`navigator.filters`）登记，子键不单独登记。
 /// 归属域为唯一常驻 chips，其余为「筛选 ▾」弹层；`db_type` 存 `drivers.type_id`，
 /// `driver` 存驱动 id，`tag` 存标签文本，`source` 存 `project` / `global` / `shared`。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -156,7 +111,7 @@ pub struct NavigatorFilters {
     pub tag: Option<String>,
 }
 
-/// 数据源导航：来源标识展示形式与属性面板宽度（UI 偏好，跨项目）。
+/// 数据源导航：来源标识展示形式、显示开关与属性面板宽度（UI 偏好，跨项目）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Navigator {
     /// 来源标识用短码（`P` / `G` / `GP`）；false 时用文字（项目 / 全局 / 共享）。
@@ -188,20 +143,8 @@ impl Default for Navigator {
     }
 }
 
-fn default_language() -> String {
-    "zh-CN".to_string()
-}
 fn default_true() -> bool {
     true
-}
-fn default_font_size() -> f32 {
-    13.0
-}
-fn default_driver() -> String {
-    "duckdb".to_string()
-}
-fn default_timeout_ms() -> u64 {
-    15_000
 }
 fn default_connect_timeout_ms() -> u64 {
     15_000
@@ -217,11 +160,25 @@ fn default_property_width() -> f32 {
 mod tests {
     use super::*;
 
-    /// 旧配置（无 `navigator` 节）必须回退默认值，不因新增字段解析失败。
+    /// 旧配置必须能解析：既缺新节（`navigator`），又带着已裁撤的节与字段
+    /// （`general` / `engine` / `appearance.font_size` / `connection_defaults.default_driver`）。
+    ///
+    /// 裁撤是向后兼容安全的：`Settings` 未开 `deny_unknown_fields`，未知内容被忽略。
     #[test]
-    fn legacy_config_without_navigator_uses_defaults() {
-        let legacy = r#"{"general":{"language":"zh-CN","restore_last_workspace":true}}"#;
+    fn legacy_config_with_removed_sections_still_loads() {
+        let legacy = r#"{
+            "general":{"language":"zh-CN","restore_last_workspace":true},
+            "appearance":{"theme_mode":"dark","font_size":13.0},
+            "engine":{"workspace_dir":"D:/ws","cache_dir":"D:/cache"},
+            "connection_defaults":{"default_driver":"duckdb","query_timeout_ms":15000}
+        }"#;
         let s: Settings = serde_json::from_str(legacy).expect("旧配置应可解析");
+
+        // 仍在用的字段按文件里的值生效
+        assert_eq!(s.appearance.theme_mode, ThemeMode::Dark);
+        // 裁撤的节 / 字段回退默认，不留残影
+        assert_eq!(s.connection_defaults.connect_timeout_ms, 15_000);
+        assert!(s.connection_defaults.lan_disable_tls);
         assert!(s.navigator.source_short_code);
         assert_eq!(s.navigator.property_panel_width, 24.5);
         // v7 新增：标签默认不显、归属域列默认显。
@@ -232,9 +189,6 @@ mod tests {
         assert!(s.navigator.filters.db_type.is_none());
         assert!(s.navigator.filters.driver.is_none());
         assert!(s.navigator.filters.tag.is_none());
-        // 连接默认值：建连超时 15s、LAN 直连默认关 TLS。
-        assert_eq!(s.connection_defaults.connect_timeout_ms, 15_000);
-        assert!(s.connection_defaults.lan_disable_tls);
     }
 
     /// facet 筛选可序列化往返（`None` 不被写成显式 null 之外的异常形态）。
