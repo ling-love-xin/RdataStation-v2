@@ -1,3 +1,175 @@
-//! rds-analytics-resource — model。
+//! 领域语义类型（Phase 0）：存档种类 / 复现强度 / 本体状态 / 归档凭证三件套。
 //!
-//! 领域模型（占位）。TODO(migration): 从 v1 对应模块迁入后填充。
+//! 与 `models.rs` 的分工：`models.rs` 是 v1 搬运的**持久层行模型**（表结构镜像，字段一一对应），
+//! 本文件是**领域语义**（"这个存档能不能复现""本体还在不在"）。
+//! 两者最终合并为一份（见 `docs/architecture/analytics_resource/analytics-resource-architecture.md` §8.1），
+//! 迁移期并存、且**不要**在两个文件里重复定义同一概念。
+
+use serde::{Deserialize, Serialize};
+use specta::Type;
+use std::path::PathBuf;
+
+/// 存档种类：决定**本体存在哪**，进而决定复现强度（架构 §2.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveKind {
+    /// 受管文件：本体在 `{项目}/resources/`，归档后只读（第一期唯一落地的种类）。
+    #[default]
+    File,
+    /// 分析表：本体在 `{项目}/.RSmeta/analytics.duckdb`，靠定义重建（第二期）。
+    Analysis,
+    /// 远端表引用：本体不在本机，失效风险最高（不承诺，见架构 §2.2）。
+    TableRef,
+}
+
+impl ArchiveKind {
+    /// 落库值（迁移 020 的 `kind` 列，带 `CHECK`）。
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Analysis => "analysis",
+            Self::TableRef => "table_ref",
+        }
+    }
+
+    /// 从库值解析：**未知值回退 `File`**。
+    ///
+    /// 回退而非报错是刻意的：将来新增种类时，旧版本读到新行不应整表失败；
+    /// 旧行（007 时代、迁移时默认 `file`）也必须能读。
+    pub fn from_db_str(value: &str) -> Self {
+        match value {
+            "analysis" => Self::Analysis,
+            "table_ref" => Self::TableRef,
+            _ => Self::File,
+        }
+    }
+
+    /// 复现强度：由种类派生，**不落库**（架构 §2.2）。
+    pub fn strength(self) -> ReproductionStrength {
+        match self {
+            Self::File => ReproductionStrength::Strong,
+            Self::Analysis => ReproductionStrength::Medium,
+            Self::TableRef => ReproductionStrength::Weak,
+        }
+    }
+}
+
+impl std::fmt::Display for ArchiveKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_db_str())
+    }
+}
+
+/// 复现强度：界面必须常显（"这东西半年后还打不打得开"）——原型 §1 原则 1。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReproductionStrength {
+    /// 内容冻结，重跑得同解（`File`）。
+    Strong,
+    /// 定义冻结，数据可重建（`Analysis`）。
+    Medium,
+    /// 只记"当时指向哪"（`TableRef`）。
+    Weak,
+}
+
+/// 本体健康状态：由**索引 ↔ 文件系统**比对得出，**不落库**（架构 §7.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveStatus {
+    /// 索引有记录、本体在位；`content_hash` 与记录一致。
+    Normal,
+    /// 索引有记录、本体不在（被手工删除 / 移动）。
+    Missing,
+    /// 本体在位，但与记录的内容指纹不一致（只读属性被绕过 / 外部工具改过）。
+    ContentChanged,
+}
+
+/// 归档凭证里的"出处"（架构 §2.3）：回答"这结论是用什么数据得出的"。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArchiveBinding {
+    /// 来源草稿的相对路径（`scratchpad/` 下，归档时定）。
+    pub promoted_from: Option<String>,
+    /// 来源连接 id（可空；值取自草稿 `file_meta.last_connection_id`）。
+    pub source_connection_id: Option<String>,
+    /// 来源表 `schema.table`（可空）。
+    pub source_table: Option<String>,
+}
+
+/// 归档请求：上游（草稿箱 / 本地文件选择）发起，M6 只收**路径 + 元数据**。
+///
+/// 刻意不接收 `ScratchpadStore` 之类的上游类型——依赖方向是 `scratchpad → analytics_resource`，
+/// M6 不认识草稿箱的内部结构（架构 §6.1）。
+#[derive(Debug, Clone)]
+pub struct ArchiveRequest {
+    /// 源文件绝对路径（草稿箱内或系统任意位置）。
+    pub source_path: PathBuf,
+    /// 目标相对路径（`resources/` 下，通常保留来源目录结构）。
+    pub rel_path: String,
+    /// 显示名（可与文件名不同；重命名只改它，不动物理路径）。
+    pub name: String,
+    /// 别名（可空）。
+    pub alias: Option<String>,
+    /// 存档种类。
+    pub kind: ArchiveKind,
+    /// 来源绑定。
+    pub binding: ArchiveBinding,
+    /// 初始标签（可空）。
+    pub tags: Vec<String>,
+    /// 归入分组（可空）。
+    pub group_id: Option<String>,
+    /// 历史内容保留份数；`None` = 跟随设置默认（架构 §5.2）。
+    pub keep_versions: Option<u32>,
+}
+
+/// 取回（检出）请求：把存档**复制**成草稿箱里的工作副本，本体不动（架构 §6.4）。
+#[derive(Debug, Clone)]
+pub struct CheckoutRequest {
+    /// 目标存档 id。
+    pub resource_id: String,
+    /// 草稿箱内的目标相对路径（含文件名）。
+    pub target_rel_path: String,
+}
+
+/// 取回结果。
+#[derive(Debug, Clone)]
+pub struct CheckoutOutcome {
+    /// 存档 id（再次归档时保持不变）。
+    pub resource_id: String,
+    /// 取回时的存档版本（用于提示"修改后再归档将生成 vN+1"）。
+    pub version: i32,
+    /// 落地的草稿绝对路径。
+    pub dest_path: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kind_db_roundtrip() {
+        for kind in [ArchiveKind::File, ArchiveKind::Analysis, ArchiveKind::TableRef] {
+            assert_eq!(ArchiveKind::from_db_str(kind.as_db_str()), kind);
+        }
+        assert_eq!(ArchiveKind::default(), ArchiveKind::File);
+    }
+
+    #[test]
+    fn kind_unknown_value_falls_back_to_file() {
+        // 新种类由旧版本读到、或 007 时代旧行，都不应整表失败。
+        assert_eq!(ArchiveKind::from_db_str("future_kind"), ArchiveKind::File);
+        assert_eq!(ArchiveKind::from_db_str(""), ArchiveKind::File);
+    }
+
+    #[test]
+    fn strength_is_derived_from_kind() {
+        assert_eq!(ArchiveKind::File.strength(), ReproductionStrength::Strong);
+        assert_eq!(ArchiveKind::Analysis.strength(), ReproductionStrength::Medium);
+        assert_eq!(ArchiveKind::TableRef.strength(), ReproductionStrength::Weak);
+    }
+
+    #[test]
+    fn binding_default_is_all_empty() {
+        let binding = ArchiveBinding::default();
+        assert!(binding.promoted_from.is_none());
+        assert!(binding.source_connection_id.is_none());
+        assert!(binding.source_table.is_none());
+    }
+}

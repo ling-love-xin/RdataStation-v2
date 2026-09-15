@@ -2,7 +2,7 @@
 name = "rds-analytics-resource"
 version.workspace = true
 edition.workspace = true
-description = "M6 资源分析：分析资源（数据源连接/DuckDB 表）管理"
+description = "M6 资产库 / 分析存档：归档 / 取回 / 版本（内容指纹）"
 
 [dependencies]
 engine.workspace = true
@@ -18,6 +18,10 @@ specta.workspace = true
 
 # ===== Async 运行时 =====
 tokio.workspace = true
+
+# ===== 内容指纹（本体 sha256）=====
+sha2.workspace = true
+hex.workspace = true
 
 # ===== 其他 =====
 tracing.workspace = true

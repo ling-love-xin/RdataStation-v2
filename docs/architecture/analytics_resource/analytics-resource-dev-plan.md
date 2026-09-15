@@ -1,0 +1,237 @@
+# 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
+
+> 状态：**设计定稿（2026-09-15）**，代码尚未开始 · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
+> 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
+> 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
+> **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
+
+## 0. 进度记录（最近在前）
+
+### 2026-09-15 — Phase 0 首切片（仅 crate 内）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P0.1（部分） | 接线三件：crate 入口文档 ✅、workspace 别名 ✅（`analytics_resource = { path = …, package = "rds-analytics-resource" }`，惰性条目）；workbench 依赖 ⬜（属 Phase 1） | `crates/analytics_resource/README.md`、`Cargo.toml` |
+| P0.4 ✅ | 迁移 `project_meta/020_analytics_resource_archive.sql`：9 个语义列（`kind`/`content_hash`/`file_rel_path`/`readonly`/`promoted_from`/`source_connection_id`/`source_table`/`definition_sql`/`archived_at`）+ `file_rel_path` 部分唯一索引（软删行不参与）+ kind/指纹索引；**不改 007** | `crates/engine/migrations/project_meta/` |
+| P0.5 ✅ | 领域类型：`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / `ArchiveRequest` / `CheckoutRequest` / `CheckoutOutcome`（含 4 项单测） | `src/model.rs` |
+| P0.6 ✅ | 本体层 `PayloadStore`：`resolve` 越界守卫（拒绝对/根相对路径、`..`、点前缀）、归档搬运（`rename` → 跨设备复制兜底、目标存在即拒绝）、只读标记、sha256 指纹、历史副本与裁剪（含 8 项单测） | `src/payload.rs` |
+| P0.7（部分） | 已修：分页除零与负数、`LIKE` 转义、连接嵌套（新增 `get_resource_by_id_on`）、更新无事务（`BEGIN IMMEDIATE`）、影响 0 行不报错、`parent_version_id` 语义（指向快照行）、JSON 解析双策略（统一宽容 + warn）、乱码副本名；**待做**：新列接入（kind 过滤 / 指纹回填 / `file_rel_path` 唯一性） | `src/resource.rs`、`src/version.rs` |
+| P0.9（部分） | `save_resource_version_on`：在调用方事务内写快照、返回快照行 id；并发冲突不再被静默吞（裸 `INSERT` 替代 `INSERT OR IGNORE`）。**待做**：指纹触发版本 + `keepVersions` 保留策略落库 | `src/version.rs` |
+| P0.12（部分） | `mod tests` 补声明（**此前 560 行用例在 v2 从未编译**，`cargo test` 报 0 项）；新增 t016 库层契约测试（列 / 默认值 / `CHECK` 生效）。**待做**：测试改走 `engine::migration` 公共入口（现仍 `include_str!` 直执两段 SQL） | `src/lib.rs`、`src/tests.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **28 项全绿**（16 存储 + 4 领域 + 8 本体）；`cargo check -p rds-analytics-resource -j 2` 零告警 | — |
+
+**本轮修正的两处「搬运期遗漏」**（属实修，不只是改文档）：
+
+1. `crates/analytics_resource/src/tests.rs`（560 行）在 Round 11 搬运时**未在 `lib.rs` 声明 `mod tests`**，因此在 v2 从未被编译——文档里"15 项基线"实际是"0 项"。
+2. v1 的 `t015_concurrent_update_same_resource` 断言"3 条版本（original + 2 updates）"，在写前快照 + `UNIQUE(resource_id, version)` 语义下**任何并发交错都不可满足**（两次更新最多落两条写前快照，当前版本不进表）。已按真实不变式重写：两次更新各留一条快照（v1/v2）、资源行版本号单调递增到 3。
+
+**未做（需跨 crate 或属后续阶段，均已留档）**：engine 连接池 `busy_timeout` / `acquire` 超时（P0.2）、`.RSmeta` 常量去重（P0.3，现 5 处各自声明 + 1 处字面量）、`ProjectTrash` 上提中性化与 `recycle.rs` 废弃（P0.8）、`service.rs` / `indexer.rs`（P0.10/P0.11）、视图四处占位（Phase 1）。
+
+### 已确认决策（2026-09-15）
+
+| # | 决策 | 出处 |
+| --- | --- | --- |
+| 1 | **语义取 C（混合模型）**：按 kind 分本体，统一对外"归档凭证"语义 | 架构 §0 D1/D2 |
+| 2 | **命名**：模块 = 资产库；实体 = 分析存档；动作 = 归档 / 取回；"提升"一词只给 M1 | 架构 §2.4 |
+| 3 | 三种 kind（`file` / `analysis` / `table_ref`）；**第一期只做 `file`** | 架构 §2.2 |
+| 4 | 版本以 `content_hash` 触发，默认保留最近 5 份历史内容 | 架构 §5 |
+| 5 | 回收站统一项目级 `ProjectTrash`，`origin = "resources"` | 架构 §7.1 |
+| 6 | `scope` 改派生只读；`config` 降级为扩展位 | 架构 §4.2/§4.3 |
+| 7 | 标签为主 + 单层分组；不做多级文件夹树 | 原型 §11 |
+| 8 | 归档后只读，修改走取回；面板不提供"编辑资源" | 原型 §1 |
+| 9 | 视图入本 crate（对齐 `overview.md`），若后续拍板"留 workbench"，§12 文件落点平移 | 架构 §8.2 |
+
+## 1. 现状盘点
+
+### 1.1 后端：持久层逐字搬运（可用，但带 12 项缺陷）
+
+| 项 | 结论 |
+| --- | --- |
+| 可用资产 | `store` 层约 1300 行（`resource` 462 / `folder` 207 / `tag` 314 / `version` 83 / `models` 110 / `helpers` 30 / `tests` 560），**约 55% 可直接留用** |
+| 逐字搬运的证据（Round 11 当时） | `diff --strip-trailing-cr` 对比 v1：**只差 `use` 路径一行**；`007_analytics_resources.sql` 与 v1 **完全相同**。注：Phase 0 首切片后就地修了 `resource.rs` / `version.rs`，这两个文件已不再逐字一致 |
+| 必须作废 | `recycle.rs`（419 行）整体让位给 `ProjectTrash`；`version.rs` 重写为内容指纹版本 |
+| 继承缺陷 | 12 项，逐条见架构 §13.1（`permanent_delete` 不彻底 / `total_pages` 除零 / 无事务 / 连接嵌套 / `parent_version_id` 恒等自身 id / 恢复丢归属 / 乱码 `(鍓湰)` 等） |
+
+### 1.2 视图与命令：四处占位
+
+| 文件 | 行数 | 状态 |
+| --- | --- | --- |
+| `src/model.rs` | 3 | 占位 |
+| `src/commands.rs` | 3 | 占位 |
+| `src/resource_view.rs` | 3 | 占位 |
+| `src/recycle_bin_dialog.rs` | 3 | 占位 |
+| `workbench/src/panels.rs` | `render_resources_placeholder`（当前 5846 起）| 占位文案仍是 v1 语义（"数据源连接引用 / DuckDB 分析表"）|
+
+### 1.3 接线缺口（不补则视图永远落不了地）
+
+| 缺口 | 落点 |
+| --- | --- |
+| workspace 未声明别名 | `Cargo.toml` `[workspace.dependencies]`（当前 41–52 行，行号会漂移） |
+| workbench 未依赖 | `crates/workbench/Cargo.toml` |
+| crate 无入口文档 | `crates/analytics_resource/README.md`（`project` / `scratchpad` 均有） |
+
+### 1.4 底座缺陷（属 `engine`，但 M6 会被它卡死）
+
+连接池 `Drop` 丢连接 + `acquire` 无限自旋 + 无 `busy_timeout`（架构 §13.2 #13/#14）——M6 的 `update_resource` 一次操作占 2 条连接而池只有 3 条，**Phase 0 必须先在 engine 层修掉**。
+
+## 2. Phase 0 — 地基（无 UI，可独立验收）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P0.1 | 接线三件：workspace 别名 + workbench 依赖 + crate README | `Cargo.toml`、`crates/workbench/Cargo.toml`、`crates/analytics_resource/README.md` | `cargo check --workspace --all-targets -j 2` 零告警 |
+| P0.2 | **engine 连接池修复**：`busy_timeout`、`acquire` 超时返回 `Err`（不再无限自旋）、归还语义不再静默丢连接 | `crates/engine/src/persistence/project_db.rs` | 单测：池压满后 `acquire` 在超时后报错而非挂起；并发写不再 `database is locked` |
+| P0.3 | 项目元数据目录常量**收敛为单点定义**（拼写已在连接模块 C22 ③ 统一为 `.RSmeta`，残的是去重：现 5 处各自声明——`project::store::RS_META_DIR_NAME`、`project::lock::META_DIR`、`engine::connection_org_store::RS_META_DIR_NAME`、`scratchpad::store::META_DIR_NAME` + `engine::project_db` 字面量）；单一来源放 `engine`（`project → engine` 方向已定） | `crates/engine/src/…` + 各消费方 | 全仓 grep 无重复字面量/常量声明；Linux 大小写敏感场景有回归测试（参 `insight::rule_registry` 的 `test_project_rules_dir_uses_canonical_meta_dir` 写法） |
+| P0.4 | 迁移 `project_meta/020_analytics_resource_archive.sql`（**建文件前重新核对编号**：编号先到先得，019 已被 insight 规则索引占用）：加 `kind` / `content_hash` / `file_rel_path` / `readonly` / `promoted_from` / `source_connection_id` / `source_table` / `definition_sql` / `archived_at`；**不改 007** | `crates/engine/migrations/project_meta/` | 迁移幂等；老库升级后旧行 `kind` 默认 `file`、`content_hash` 为空（首次打开标 `待指纹`） |
+| P0.5 | 领域类型：`ArchiveKind` / `ArchiveSource` / `ArchiveStatus`（正常/缺失/内容已变）/ 请求响应结构 | `crates/analytics_resource/src/model.rs` | 单测：kind 与状态序列化稳定 |
+| P0.6 | 本体层 `payload.rs`：`resources/` 定位与越界拒绝（含 `.RSmeta` 与点前缀）、move 与跨设备 copy 兜底、只读设置、`sha256` 指纹、历史副本读写 | `crates/analytics_resource/src/payload.rs` | 单测：越界路径全部被拒；只读设置失败只警告；指纹对同一内容稳定 |
+| P0.7 | store 改造：加列读写、kind 过滤、**修 12 项继承缺陷**（尤其 `total_pages` 除零、`page_size ≤ 0`、`LIKE` 转义、事务化、连接不再嵌套、`created_by`/乱码） | `src/{resource,folder,tag}.rs` | v1 的 15 个用例全绿（改为走迁移系统）；新增边界用例 |
+| P0.8 | **`ProjectTrash` 上提 + 中性化**：类型去 M5 化（`TrashEntryKind`）、`restore` 按 `origin` 分派目标根、归属移到 `engine`（第二个使用方已成立） | `crates/scratchpad/src/trash.rs` → `crates/engine/src/…` | M5 现有回收站测试全绿；M6 可删除→还原往返 |
+| P0.9 | 版本重写：`content_hash` 触发、`parent_version_id` 语义修正（或删列）、历史内容按 `keepVersions` 保留/裁剪 | `src/version.rs` | 单测：**hash 未变不产生新版本**；hash 变则 +1 且旧内容仍在 |
+| P0.10 | 服务门面 `service.rs`：归档/取回/检索/修复编排 + `ResourcesChanged` 事件（含 `reason`） | `src/service.rs` | 单测：归档全链路含回滚；事件载荷正确 |
+| P0.11 | 索引修复 `indexer.rs`：三类孤儿检测与**人工确认**后的修复动作 | `src/indexer.rs` | 单测：有文件无记录 / 有记录无文件 / 指纹不匹配 三态各一用例 |
+| P0.12 | 测试改道：`tests.rs` 的 `include_str!("…007…")` 改为走 `engine::migration` 公共入口 | `src/tests.rs` | 新增 020 后测试自动带出新列 |
+
+## 3. Phase 1 — 能用的资产库（面板 + 归档/取回闭环）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P1.1 | 面板骨架：面板头（标题 + `＋▾` + `⋯`）、工具栏（搜索 / 筛选 / 排序）、行列表（虚拟化）、底部状态行 | `src/resource_view.rs`、`workbench/src/panels.rs` | 切换活动栏可见；`>100` 项流畅；状态行计数正确 |
+| P1.2 | 行渲染：kind 图标（`muted`）+ 显示名 + 版本徽标（v1 不显示）+ **强度徽标** + 尾部字段（按字段优先级规则） | `src/resource_view.rs` | 三类 kind 行可区分；240px 无异常折行（溢出省略 + tooltip） |
+| P1.3 | 详情属性面板（右侧，默认 20rem，宽度记忆）：基本信息 / 来源 / 版本摘要 / 标签与分组 / 内容预览 / 危险区；`file` 型首版 | `src/detail_view.rs`、`workbench/src/panels.rs` | 选中行切换联动；只读锁标记与"需取回编辑"提示常显 |
+| P1.4 | **归档入口**：草稿箱右键「归档为存档…」+ 面板头「从草稿箱归档…」；确认对话框（显示名 / 目标位置只读 / 分组 / 标签 / 来源连接自动带出 / 保留历史 / 冲突处理） | `src/dialogs/archive.rs`、`crates/scratchpad/src/…`（发起） | 归档后草稿消失、资源只读、两侧面板同步刷新（事件链路通） |
+| P1.5 | **取回（检出）**：右键 → 对话框（目标名 / 目标目录 / 是否打开）→ 复制到草稿箱 + 草稿侧记 `derived_from_resource_id` | `src/dialogs/checkout.rs`、`scratchpad` | 本体不动；重复取回自动改名避让 |
+| P1.6 | 只读三重守卫：写入 API 拒绝（应用守卫）+ 编辑器只读打开 + 文件系统属性（辅助） | `payload.rs`、`workbench` EditorPanel | 任何写入路径返回明确错误文案；编辑器以只读态打开 |
+| P1.7 | 术语与入口收尾：活动栏标签 `资源分析`→**资产库**；Quick Open 文案同步；删占位渲染；`LeftPanel::Resources` 图标复核 | `workbench/src/view.rs`、`panels.rs` | 全仓无"资源分析"作为模块名出现；无占位文案残留 |
+| P1.8 | Action 与快捷键：`Ctrl+F` / `↑↓` / `Enter` / `F2` / `Delete` / `Ctrl+A` / `Esc`；`Ctrl+Shift+A`（草稿箱上下文） | `src/commands.rs`、`crates/app/src/main.rs` | 窗口测试：漫游与打开/删除分支 |
+
+## 4. Phase 2 — 组织与检索
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P2.1 | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 | `src/tag.rs`、`src/tag_view.rs` | 同名（未删）拒绝；删除标签清关联 |
+| P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头） | `src/folder.rs`（语义为分组）、`src/folder_view.rs` | 折叠状态持久化；空分组可见 |
+| P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本） | `src/resource.rs`、`src/resource_view.rs` | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
+| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1） | `crates/settings`、`src/service.rs` | 重启后保持 |
+| P2.5 | 多选与批量：批量打标签 / 批量移动 / 批量删除（含数量提示） | `src/resource_view.rs`、`src/commands.rs` | 多选态菜单按数量自适应（v1 的缺陷） |
+
+## 5. Phase 3 — 版本与恢复
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P3.1 | 版本历史对话框：版本表 + 相邻差异摘要 + **选中版本动作栏**（还原为当前版本 / 取回该版本为草稿 / 删除该版本内容副本） | `src/version_view.rs` | 不提供行级 diff；还原生成新版本而非覆盖 |
+| P3.2 | 历史内容保留策略落地：`keepVersions`（默认 5，`0` = 只留元数据）+ 副本缺失标记 | `src/payload.rs`、`src/version.rs` | 裁剪只删副本，版本行保留；副本缺失有徽标 |
+| P3.3 | 回收站对话框（仅 `origin = "resources"`）+ 跨模块条目禁用提示 + 撤销条 | `src/recycle_view.rs` | 永久删除真删 payload；跨模块还原被拒 |
+| P3.4 | 索引修复对话框：三分组 + 动作；状态行异常段可点 | `src/dialogs/index_repair.rs` | 三类问题各可修复；**无自动修复路径** |
+| P3.5 | 异常态呈现：本体缺失（灰显 + `danger` 点 + 横幅）、内容已变（`warning` 徽标） | `src/resource_view.rs`、`src/detail_view.rs` | 缺失项不隐藏、仍可删除/还原 |
+
+## 6. Phase 4 — `Analysis` 档（DuckDB 表）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| P4.1 | `analysis` 型本体层：表/视图存在性、`definition_sql` 采集（`SHOW`/`duckdb_tables`）、行数×列数、结构摘要指纹 | `src/payload.rs`（analysis 分支） | 指纹对结构变化敏感、对行数变化策略明确（见风险 R4） |
+| P4.2 | 上游接入：**M7 Mock 产物**归档（对齐 `mock_persist_as_asset` 的文档/实现落差，二选一并同步文档） | `crates/mock`、`src/service.rs` | Mock 生成后可一键归档，指纹与定义可查 |
+| P4.3 | 上游接入：**M5 编辑器结果落库后归档** | `workbench` EditorPanel、`src/service.rs` | 归档后可"重新执行定义"复算 |
+| P4.4 | 打开路径：`analysis` 型双击 → 结果表格（复用编辑器结果区组件） | `workbench` | 只读呈现 |
+
+## 7. Phase 5 — 待定（不承诺）
+
+| 项 | 前置条件 |
+| --- | --- |
+| `TableRef` 档（远端表引用） | 先回答"用户真的需要这个书签吗"；若做，必须带失效警告条与"立即校验" |
+| M1 系统级提升（项目→系统级） | 等 M1 设计落地；本模块已把 `scope` 改为派生只读，届时只需按库位置派生 |
+| 依赖追踪（v1 设计文档的 `resource_references`） | 先有真实消费方（"删除前检查被谁引用"），否则不建表 |
+| FTS5 全文检索 | 先量：条目 > 1000 且 `LIKE` 实测不可用再做 |
+
+## 8. 明确不做
+
+| 项 | 原因 |
+| --- | --- |
+| 多级文件夹树 / 面包屑 / 手动排序号 | v1 是残的（无改名/删除/移动/排序），投入产出比差；标签 + 单层分组已够 |
+| 页码分页（v1 的 10/20/50/100） | 桌面应用语义：滚动 + 虚拟列表，不做翻页 |
+| 前端 LRU + TTL 缓存 | 本地 SQLite 无 IPC 成本；v1 该实现本身有缺陷 |
+| 拖拽到 SQL 编辑器 | 有"取回→打开"路径，复杂度不值 |
+| `config` JSON 手工编辑 | 字段进表单、扩展进详情面板 |
+| 版本行级 diff | 文本 diff 归编辑器 |
+| 自动索引修复（静默导入/删除） | 会让"存档"变成用户没同意过的东西 |
+| 归档本体的原地编辑 | 一旦允许，`content_hash` 与版本失去意义 |
+| v1 设计文档中从未实现的 17 条命令（`extract_table` / `generate_sql_reference` / `check_delete_safe` / `cleanup_expired` …） | 无消费方、无真实需求；**不承诺** |
+
+## 9. 测试场景
+
+| # | 场景 | 期望 |
+| --- | --- | --- |
+| T1 | 归档普通 `.sql` 草稿 | 文件移至 `resources/`、只读、登记行 `kind=file`、`content_hash` 非空、v1、事件发出 |
+| T2 | 归档目标已存在 | 询问改名/取消，**不静默覆盖**；取消后源文件仍在草稿箱 |
+| T3 | 归档第 4 步成功、第 6 步失败（模拟索引写失败） | 本体 move 回滚，草稿箱恢复原状 |
+| T4 | 取回 | 草稿出现副本、本体未变、再次归档版本 +1 |
+| T5 | 归档内容未变（取回后原样再归档） | **不产生新版本** |
+| T6 | `keepVersions = 5` 且已 7 个版本 | 只保留最近 5 份**内容副本**，7 个版本行全在 |
+| T7 | 删除 → 回收站 | 本体进 `.RSmeta/trash/`、`origin = "resources"`、登记行移除；还原可回原路径 |
+| T8 | 永久删除 | payload 真删（对照 v1 的"只删回收站行"缺陷） |
+| T9 | 跨模块还原 | 草稿箱条目在资产库还原被拒，提示"请在草稿箱还原" |
+| T10 | 本体缺失（手工删文件） | 行灰显 + `danger` 点；详情横幅；可"删除记录"/"从回收站还原" |
+| T11 | 指纹不匹配（手工改文件） | `warning` 徽标"内容已变"；可"接受当前内容（生成新版本）" |
+| T12 | 有文件无记录（手工放文件进 `resources/`） | 重建索引**列出**候选，用户确认后才补登 |
+| T13 | 越界写入 | 经 API 写 `resources/` 或 `.RSmeta/**` 一律被拒，错误文案指向"先取回" |
+| T14 | 搜索边界 | 输入 `%` 不命中全表；`page_size = 0` / `page = -1` 不 panic；非法排序字段回退 |
+| T15 | 跨设备归档（`rename` 失败） | 退回复制 + 删除，结果一致（可用不同卷的临时目录模拟） |
+| T16 | 非 ASCII 名 / 超长名 / 含空格名 | 归档、取回、还原全链路正常；分组头与列表显示正确 |
+
+**基线**：v1 的 15 个存储用例全绿（改造后不得减少），新增用例随 Phase 落地。
+
+## 10. 风险
+
+| # | 风险 | 对策 |
+| --- | --- | --- |
+| R1 | 双真相源（文件系统 + 索引）不一致 | 明确"文件系统权威"；三类孤儿都有检测与人工修复入口；归档按"先本体、后索引、失败回滚"顺序（架构 §6.3） |
+| R2 | 归档是对用户不可逆的动作（草稿从工作区消失） | 底部撤销条（复用 M5）+ 归档确认对话框明示"文件将移动到 resources/ 并变为只读" |
+| R3 | 只读属性在 Windows/网络盘不可靠 | 应用层守卫为主，属性为辅；设置失败只警告（不阻塞归档） |
+| R4 | `Analysis` 型指纹语义含混（表数据会变，结构不变） | 第一期不做；第二期先定"指纹覆盖定义+结构，行数只作元信息"并写进 UI 文案 |
+| R5 | 面板塞不下（240px）信息 | 字段优先级规则 + tooltip；必要时放宽 Dock 起步宽（需同步 `ui.rs` 与契约测试） |
+| R6 | 与 M5 归档发起方的耦合 | M6 只接受 `PathBuf` + 元数据入参，不依赖 `ScratchpadStore` 类型；依赖方向 `scratchpad → analytics_resource` |
+| R7 | 事件链路再次"发了没人听"（v1 教训） | 事件必须带 `reason`，且**发/收两端同批落地**；验收含"两侧面板同步刷新" |
+| R8 | 历史内容副本导致磁盘膨胀 | 默认只留 5 份；裁剪只删副本；详情面板显示"历史内容占用" |
+| R9 | engine 池缺陷未修完就做 M6 | P0.2 是 Phase 1 的硬前置（否则 UI 会卡死，且难定位） |
+
+## 11. 验证命令
+
+```sh
+# 模块回归
+cargo test -p rds-analytics-resource --lib -j 2
+cargo test -p rds-scratchpad --lib -j 2     # 回收站上提后的回归
+cargo test -p rds-engine --lib -j 2         # 池修复与目录常量
+
+# 契约（零裸色 / 零裸 px）
+cargo test -p rds-workbench --test ui_contract -j 2
+
+# 全工作区守卫
+cargo check --workspace --all-targets -j 2
+
+# 真机
+cargo run -p rds-app -j 2
+```
+
+- 真机矩阵：明暗主题 × 三类 kind × 异常三态（缺失 / 内容已变 / 引用未校验）。
+- 平台矩阵：Windows（只读属性最弱）/ macOS / Linux（大小写敏感 + 无只读属性语义差异）。
+
+## 12. 实现位置映射（决策 → 文件）
+
+| 决策 / 能力 | 文件 |
+| --- | --- |
+| 语义裁决、kind 模型、数据流 | `analytics-resource-architecture.md` §0/§2/§6 |
+| 面板 / 列表 / 状态行 | `crates/analytics_resource/src/resource_view.rs` |
+| 详情属性面板 | `crates/analytics_resource/src/detail_view.rs` |
+| 版本历史 / 回收站 / 分组 / 标签对话框 | `src/{version_view,recycle_view,folder_view,tag_view}.rs` |
+| 归档 / 取回 / 索引修复对话框 | `src/dialogs/{archive,checkout,index_repair}.rs` |
+| 领域类型 | `src/model.rs` |
+| 本体层（fs + 只读 + 指纹 + 历史副本） | `src/payload.rs` |
+| 索引层（登记 / 分组 / 标签 / 版本） | `src/{resource,folder,tag,version}.rs` |
+| 服务门面 + 事件 | `src/service.rs` |
+| 索引修复 | `src/indexer.rs` |
+| Action / 快捷键 | `src/commands.rs` + `crates/app/src/main.rs`（`analytics-resource` context） |
+| 左 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels.rs}` |
+| 迁移 | `crates/engine/migrations/project_meta/020_analytics_resource_archive.sql` |
+| 项目级回收站（上提后） | `crates/engine/src/…`（现 `crates/scratchpad/src/trash.rs`） |
+| 尺寸常量 | `crates/workbench/src/ui.rs`（新增「资产库（M6）专用尺寸」4 项，见原型 §7） |
+| 契约测试范围 | `crates/workbench/tests/ui_contract.rs` |

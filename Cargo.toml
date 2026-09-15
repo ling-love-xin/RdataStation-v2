@@ -48,6 +48,7 @@ insight = { path = "crates/insight", package = "rds-insight" }
 mock = { path = "crates/mock", package = "rds-mock" }
 settings = { path = "crates/settings", package = "rds-settings" }
 scratchpad = { path = "crates/scratchpad", package = "rds-scratchpad" }
+analytics_resource = { path = "crates/analytics_resource", package = "rds-analytics-resource" }
 workbench = { path = "crates/workbench", package = "rds-workbench" }
 
 # ===== 表现层 =====

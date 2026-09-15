@@ -1,0 +1,1510 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 资产库 / 分析存档（M6）· 原型</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3; --tabactive-bg:#FFFFFF; --tabactive-fg:#333333;
+  --activity-bar:#ECECEC; --activity-fg:#616161; --activity-active:#333333;
+  --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
+  --overlay:#00000033;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526; --tabactive-bg:#1E1E1E; --tabactive-fg:#FFFFFF;
+  --activity-bar:#333333; --activity-fg:#858585; --activity-active:#FFFFFF;
+  --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
+  --overlay:#00000080;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);padding:30px 20px 40px;font-size:13px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;}
+svg.ico{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;}
+svg.ico-sm{width:12px;height:12px;flex:none;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;}
+.mono{font-family:Consolas,'SFMono-Regular',monospace;}
+.page-head{display:flex;align-items:center;justify-content:space-between;max-width:1180px;margin:0 auto 14px;padding:0 4px;gap:16px;flex-wrap:wrap;}
+.brand{display:flex;align-items:center;gap:10px;}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(194,91,70,.35);color:#fff;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:2px;}
+.theme-toggle{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);transition:all .15s;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+.statebar{max-width:1180px;margin:0 auto 14px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 4px;}
+.statebar .lbl{font-size:11px;color:var(--muted);margin-right:2px;}
+.statebar button{border:1px solid var(--border);background:var(--bg);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:12px;transition:all .15s;}
+.statebar button:hover{background:var(--hover);color:var(--fg);}
+.statebar button.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:600;}
+
+/* ── 窗口（五段布局：标题栏 / 主区 / 状态栏） ── */
+.workbench{position:relative;max-width:1180px;margin:0 auto;height:720px;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.titlebar{height:36px;flex:none;display:flex;align-items:center;background:var(--titlebar);border-bottom:1px solid var(--border);}
+.tb-left{display:flex;align-items:center;flex:0 0 auto;padding-left:10px;gap:8px;}
+.app-logo{width:20px;height:20px;border-radius:5px;background:linear-gradient(135deg,#F5A188,#C25B46);}
+.cutout{display:flex;align-items:center;gap:7px;margin-left:6px;padding:3px 12px;background:var(--sidebar);border:1px dashed var(--active-border);border-radius:6px;}
+.cutout-label{font-size:11px;color:var(--muted);}
+.cutout-name{font-size:12.5px;font-weight:600;color:var(--fg);}
+.tb-center{flex:1;display:flex;justify-content:center;min-width:0;}
+.quick-open{display:flex;align-items:center;gap:8px;width:320px;max-width:46%;height:24px;background:var(--bg);border:1px solid var(--input-border);border-radius:5px;padding:0 9px;font-size:12px;color:var(--muted);}
+.quick-open .kbd{margin-left:auto;font-size:10px;border:1px solid var(--border);border-radius:3px;padding:0 4px;color:var(--muted);}
+.tb-right{flex:0 0 auto;display:flex;height:100%;}
+.wc{width:44px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--fg);}
+.wc:hover{background:var(--hover);}
+.wc.close:hover{background:#e81123;color:#fff;}
+
+.main{flex:1;min-height:0;display:flex;align-items:stretch;}
+
+/* ── 活动栏（48px） ── */
+.activitybar{width:48px;flex:none;background:var(--activity-bar);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:4px 0;gap:2px;}
+.act{position:relative;width:48px;height:40px;display:flex;align-items:center;justify-content:center;color:var(--activity-fg);transition:color .12s;}
+.act:hover{color:var(--activity-active);}
+.act.on{color:var(--activity-active);}
+.act.on::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--activity-active);border-radius:0 2px 2px 0;}
+.act .tip{position:absolute;left:52px;top:50%;transform:translateY(-50%);background:var(--activity-active);color:var(--bg);font-size:11px;padding:3px 8px;border-radius:5px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:45;}
+.act:hover .tip{opacity:1;}
+.act.spacer{margin-top:auto;}
+
+/* ── 左 Dock 面板（240px） ── */
+.sidebar-l{width:240px;flex:none;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;min-width:0;position:relative;}
+.panel-head{height:36px;flex:none;display:flex;align-items:center;gap:7px;padding:0 6px 0 10px;background:var(--tabbar);border-bottom:1px solid var(--sidebar-border);position:relative;}
+.panel-head .ttl{font-size:12px;font-weight:600;color:var(--fg);}
+.panel-head .acts{margin-left:auto;display:flex;gap:2px;}
+.pact{height:24px;min-width:24px;padding:0 4px;display:inline-flex;align-items:center;justify-content:center;gap:2px;border-radius:5px;color:var(--muted);font-size:12px;line-height:1;transition:all .12s;}
+.pact:hover{background:var(--hover);color:var(--fg);}
+.pact.on{background:var(--accent);color:var(--fg);}
+.caret{font-size:8px;margin-left:1px;}
+.headmenu{display:none;position:absolute;top:32px;right:6px;z-index:36;min-width:186px;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:5px;}
+.headmenu.open{display:block;}
+.hmi{display:flex;align-items:center;gap:8px;height:26px;padding:0 9px;border-radius:6px;font-size:12px;color:var(--fg);cursor:pointer;}
+.hmi:hover{background:var(--hover);}
+.hmi .k{margin-left:auto;font-size:10px;color:var(--muted);}
+.hsep{height:1px;background:var(--sidebar-border);margin:4px 6px;}
+
+.toolbar{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--sidebar-border);position:relative;}
+.sbox{flex:1;min-width:0;display:flex;align-items:center;gap:5px;height:26px;background:var(--bg);border:1px solid var(--input-border);border-radius:6px;padding:0 7px;transition:border-color .15s,box-shadow .15s;}
+.sbox:focus-within{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent);}
+.sbox .mag{color:var(--muted);}
+.sbox input{flex:1;min-width:0;border:none;outline:none;background:transparent;color:var(--fg);font-size:11px;}
+.sbox input::placeholder{color:var(--muted);}
+.tbtn{height:26px;flex:none;display:inline-flex;align-items:center;gap:3px;border:1px solid var(--input-border);background:var(--bg);border-radius:6px;padding:0 6px;font-size:10px;color:var(--muted);white-space:nowrap;transition:all .12s;}
+.tbtn:hover{color:var(--fg);border-color:var(--active-border);}
+.tbtn.on{background:var(--accent);color:var(--fg);border-color:var(--active-border);font-weight:600;}
+
+.pop{display:none;position:absolute;top:30px;z-index:34;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:5px 0;min-width:184px;}
+.pop.open{display:block;}
+.pop-filter{left:8px;}
+.pop-sort{right:8px;min-width:136px;top:34px;}
+.workbench[data-state="filter"] .pop-sort{top:250px;}
+.pop-clear{font-size:11px;color:var(--muted);padding:4px 10px;cursor:pointer;border-bottom:1px solid var(--sidebar-border);}
+.pop-clear:hover{color:var(--fg);background:var(--hover);}
+.psec+.psec{border-top:1px solid var(--sidebar-border);}
+.psec .ph{font-size:9.5px;color:var(--muted);padding:4px 10px 2px;letter-spacing:.4px;}
+.pitem{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--fg);padding:3px 10px;cursor:pointer;}
+.pitem:hover{background:var(--hover);}
+.pitem .tk{width:11px;color:var(--active-border);visibility:hidden;font-size:10px;}
+.pitem.on .tk{visibility:visible;}
+.pitem .n{margin-left:auto;font-size:9.5px;color:var(--muted);}
+.pitem .ar{color:var(--active-border);font-size:9px;}
+
+/* ── 面板主体：分组折叠区 + 行（24px） ── */
+.panel-body{flex:1;min-height:0;overflow:hidden;position:relative;}
+.st{display:none;height:100%;overflow:auto;padding:2px 0 6px;}
+.ghead{position:relative;display:flex;align-items:center;gap:5px;height:24px;padding:0 6px 0 9px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.5px;cursor:pointer;}
+.ghead .chev{font-size:8px;width:9px;text-align:center;flex:none;}
+.ghead .cnt{margin-left:auto;background:color-mix(in srgb,var(--muted) 16%,transparent);color:var(--muted);border-radius:8px;padding:0 5px;font-size:9px;font-weight:600;line-height:14px;letter-spacing:0;}
+.ghead.sub{padding-left:15px;color:var(--fg);letter-spacing:0;font-size:11px;font-weight:600;}
+.ghead.sub::before{content:"";position:absolute;left:5px;top:5px;bottom:5px;width:2px;border-radius:2px;background:var(--active-border);}
+.gbody.off{display:none;}
+
+.row{position:relative;display:flex;align-items:center;gap:4px;height:24px;padding:0 5px 0 13px;border-radius:5px;font-size:12px;color:var(--fg);white-space:nowrap;cursor:pointer;transition:background .1s;}
+.row:hover{background:var(--hover);}
+.row.sel{background:var(--accent);}
+.row.sel::before{content:"";position:absolute;left:2px;top:4px;bottom:4px;width:2px;border-radius:2px;background:var(--active-border);}
+.row .ic{margin-right:1px;color:var(--muted);}
+.row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.row .ver{flex:none;height:18px;display:inline-flex;align-items:center;font-size:9px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 4px;font-variant-numeric:tabular-nums;}
+.row .meta{flex:none;font-size:9px;color:var(--muted);font-variant-numeric:tabular-nums;}
+.row.miss{color:var(--muted);}
+.row.miss .nm{text-decoration:line-through;}
+.mdot{width:6px;height:6px;border-radius:50%;background:var(--danger);flex:none;}
+.sb{flex:none;display:inline-flex;align-items:center;gap:3px;height:18px;padding:0 4px;border-radius:9px;font-size:9.5px;font-weight:600;border:1px solid currentColor;}
+.sb .d{width:4px;height:4px;border-radius:50%;background:currentColor;flex:none;}
+.sb.b-ok{color:var(--success);background:color-mix(in srgb,var(--success) 14%,transparent);}
+.sb.b-info{color:var(--info);background:color-mix(in srgb,var(--info) 14%,transparent);}
+.sb.b-warn{color:var(--warning);background:color-mix(in srgb,var(--warning) 14%,transparent);}
+.sb.b-dang{color:var(--danger);background:color-mix(in srgb,var(--danger) 14%,transparent);}
+
+/* 空库态 / 搜索无结果（图标 48px） */
+.empty-state{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:10px 14px;color:var(--muted);}
+.empty-state .big{width:48px;height:48px;color:var(--muted);margin-bottom:8px;}
+.empty-state .big svg{width:48px;height:48px;fill:none;stroke:currentColor;stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round;}
+.empty-state .t{font-size:12px;font-weight:600;color:var(--fg);margin-bottom:4px;}
+.empty-state .d{font-size:10.5px;line-height:1.65;margin-bottom:10px;}
+.empty-state .btns{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-bottom:10px;}
+.sug{width:100%;display:flex;align-items:flex-start;gap:6px;text-align:left;border:1px dashed var(--border);border-radius:7px;padding:6px 8px;font-size:10.5px;line-height:1.55;color:var(--muted);}
+.sug .ic{color:var(--info);margin-top:1px;}
+.sug b{color:var(--fg);font-weight:600;}
+
+/* ── 面板底部状态行（24px） ── */
+.pstatus{display:none;height:24px;flex:none;align-items:center;padding:0 7px;border-top:1px solid var(--sidebar-border);font-size:9px;color:var(--muted);white-space:nowrap;overflow:hidden;}
+.pstatus .sep{margin:0 2px;opacity:.55;}
+.seg.warn{color:var(--warning);font-weight:700;cursor:pointer;}
+.seg.dang{color:var(--danger);font-weight:700;cursor:pointer;}
+.seg.warn:hover,.seg.dang:hover{text-decoration:underline;}
+.undo{display:none;flex:none;align-items:center;gap:8px;height:28px;padding:0 8px;border-top:1px solid var(--border);background:var(--sidebar);font-size:10px;color:var(--fg);}
+.undo.on{display:flex;}
+.undo .grow{flex:1;}
+.undo .link{color:var(--primary);font-weight:700;cursor:pointer;}
+
+/* ── 中央编辑区（只读打开） ── */
+.center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);}
+.ctabs{height:34px;flex:none;display:flex;align-items:flex-end;gap:2px;background:var(--tabbar);border-bottom:1px solid var(--border);padding:0 8px;}
+.ctab{display:none;align-items:center;gap:6px;height:29px;padding:0 10px;font-size:12px;color:var(--tabactive-fg);background:var(--tabactive-bg);border-top:2px solid var(--active-border);border-radius:6px 6px 0 0;}
+.ctab .ro{font-size:9px;color:var(--warning);border:1px solid var(--warning);border-radius:4px;padding:0 4px;line-height:14px;font-weight:600;}
+.ctab .x2{color:var(--muted);margin-left:4px;}
+.strip{display:none;align-items:center;gap:8px;padding:7px 12px;font-size:11px;line-height:1.5;flex:none;border-bottom:1px solid transparent;}
+.s-ro{border-bottom-color:var(--warning);background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--warning);}
+.s-ref{border-bottom-color:var(--warning);background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--warning);}
+.s-reject{border-bottom-color:var(--danger);background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--danger);}
+.strip .grow{flex:1;}
+.cbody{display:none;flex:1;min-height:0;overflow:auto;}
+.cb-none{display:none;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:12px;line-height:2;padding:24px;}
+.cb-none .ph{padding:0 16px;}
+.code{padding:12px 16px;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.85;color:var(--fg);white-space:pre;}
+.code .kw{color:#569cd6;} .code .fn{color:#dcdcaa;} .code .str{color:#ce9178;} .code .cmt{color:var(--muted);}
+[data-theme="light"] .code .kw{color:#0000ff;} [data-theme="light"] .code .fn{color:#795e26;} [data-theme="light"] .code .str{color:#a31515;}
+.refbody{padding:12px 16px;}
+.refnote{font-size:10.5px;color:var(--muted);margin-top:8px;line-height:1.6;}
+
+/* ── 右侧详情属性面板（320px） ── */
+.detail{width:320px;flex:none;border-left:1px solid var(--border);background:var(--bg);display:flex;flex-direction:column;min-width:0;}
+.dstate{display:none;flex:1;min-height:0;flex-direction:column;}
+.dhead{height:36px;flex:none;display:flex;align-items:center;gap:7px;padding:0 6px 0 12px;border-bottom:1px solid var(--border);}
+.dhead .dnm{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dhead .ic{color:var(--muted);}
+.dhead .x{margin-left:auto;width:24px;height:24px;flex:none;display:inline-flex;align-items:center;justify-content:center;border-radius:5px;color:var(--muted);}
+.dhead .x:hover{background:var(--hover);color:var(--fg);}
+.dver{flex:none;height:18px;display:inline-flex;align-items:center;font-size:9px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 4px;}
+.dsub{flex:none;padding:5px 12px 0;font-size:10.5px;color:var(--muted);}
+.dbody{flex:1;min-height:0;overflow:auto;padding:6px 12px 14px;}
+.sect{margin-top:9px;}
+.sect-h{display:flex;align-items:center;gap:6px;height:22px;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.4px;border-bottom:1px solid var(--sidebar-border);}
+.sect-h .lock{margin-left:auto;color:var(--warning);font-size:10px;font-weight:600;letter-spacing:0;}
+.kv{display:flex;gap:8px;font-size:11px;padding:2px 0;line-height:1.5;}
+.kv .k{flex:none;width:62px;color:var(--muted);}
+.kv .v{flex:1;min-width:0;text-align:right;word-break:break-all;}
+.kv .v.mono{font-family:Consolas,monospace;font-size:10.5px;}
+.kv.blk{display:block;}
+.kv.blk .v{text-align:left;margin-top:1px;}
+.kv .cp{color:var(--muted);cursor:pointer;border:1px solid var(--border);border-radius:4px;padding:0 4px;font-size:9px;margin-left:4px;}
+.kv .cp:hover{color:var(--fg);background:var(--hover);}
+.locknote{display:flex;align-items:flex-start;gap:6px;margin-top:6px;padding:6px 8px;border:1px solid var(--warning);border-radius:6px;background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--warning);font-size:10.5px;line-height:1.55;}
+.warnstrip{flex:none;display:flex;align-items:flex-start;gap:7px;padding:8px 12px;border-bottom:1px solid var(--warning);background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--warning);font-size:10.5px;line-height:1.55;}
+.warnstrip .grow{flex:1;}
+.tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;}
+.tagc{display:inline-flex;align-items:center;gap:4px;font-size:10px;border:1px solid var(--border);border-radius:10px;padding:0 6px;line-height:16px;color:var(--fg);}
+.tagc .x{color:var(--muted);cursor:pointer;}
+.tagc .x:hover{color:var(--danger);}
+.tagc.add{border-style:dashed;color:var(--muted);cursor:pointer;}
+.vrow{display:flex;align-items:center;gap:6px;height:21px;font-size:10.5px;color:var(--fg);}
+.vrow .dt{color:var(--muted);font-family:Consolas,monospace;font-size:10px;}
+.vrow .cur{margin-left:auto;color:var(--primary);font-size:9px;border:1px solid var(--active-border);border-radius:4px;padding:0 4px;}
+.dlink{display:inline-block;margin-top:5px;color:var(--primary);font-size:10.5px;font-weight:600;cursor:pointer;}
+.dlink:hover{text-decoration:underline;}
+.prev{margin-top:5px;border:1px solid var(--border);border-radius:7px;overflow:hidden;}
+.prev-h{display:flex;align-items:center;gap:5px;height:22px;padding:0 8px;background:var(--sidebar);color:var(--muted);font-size:9.5px;border-bottom:1px solid var(--border);}
+.prev-b{padding:6px 8px;font-family:Consolas,monospace;font-size:10px;line-height:1.6;color:var(--fg);max-height:104px;overflow:hidden;white-space:pre;}
+.danger-zone{margin-top:10px;padding-top:8px;border-top:1px solid var(--sidebar-border);}
+
+/* ── 应用级状态栏（24px） ── */
+.statusbar{height:24px;flex:none;display:flex;align-items:center;background:var(--activity-bar);border-top:1px solid var(--border);font-size:11px;color:var(--muted);}
+.statusbar .l,.statusbar .r{display:flex;align-items:center;gap:14px;padding:0 10px;}
+.statusbar .r{margin-left:auto;}
+.statusbar .btn{cursor:pointer;padding:0 4px;border-radius:3px;}
+.statusbar .btn:hover{background:var(--hover);color:var(--fg);}
+
+/* ── 右键菜单 ── */
+.ctx{display:none;position:absolute;left:88px;top:194px;z-index:38;min-width:198px;background:var(--bg);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);padding:5px;}
+.workbench[data-state="menu"] .ctx{display:block;}
+.ctx .mi{display:flex;align-items:center;gap:9px;height:26px;padding:0 9px;border-radius:6px;font-size:12px;color:var(--fg);cursor:pointer;}
+.ctx .mi:hover{background:var(--hover);}
+.ctx .mi.dim{color:var(--muted);}
+.ctx .mi.danger{color:var(--danger);}
+.ctx .mi .k{margin-left:auto;font-size:10.5px;color:var(--muted);}
+.ctx .sep{height:1px;background:var(--sidebar-border);margin:4px 6px;}
+.ctx .cap{height:auto;color:var(--muted);font-size:10px;padding:3px 9px 5px;border-bottom:1px solid var(--sidebar-border);border-radius:0;cursor:default;}
+.ctx .cap:hover{background:transparent;}
+
+/* ── 对话框层 ── */
+.dlg-mask{display:none;position:absolute;inset:0;background:var(--overlay);z-index:40;}
+.workbench:not([data-dialog="none"]) .dlg-mask{display:block;}
+.dlg{display:none;flex-direction:column;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:50;background:var(--bg);border:1px solid var(--border);border-radius:11px;box-shadow:var(--shadow);overflow:hidden;max-height:660px;}
+.dlg-head{height:38px;flex:none;display:flex;align-items:center;gap:8px;padding:0 6px 0 14px;background:var(--tabbar);border-bottom:1px solid var(--border);font-size:12.5px;font-weight:600;}
+.dlg-head .sub2{font-size:10.5px;color:var(--muted);font-weight:400;}
+.dlg-head .x{margin-left:auto;width:24px;height:24px;flex:none;display:inline-flex;align-items:center;justify-content:center;border-radius:5px;color:var(--muted);}
+.dlg-head .x:hover{background:var(--hover);color:var(--fg);}
+.dlg-body{flex:1;min-height:0;overflow:auto;padding:12px 14px;}
+.dlg-foot{flex:none;display:flex;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);background:var(--sidebar);font-size:10.5px;color:var(--muted);}
+.dlg-foot .grow{flex:1;}
+.fgrid{display:grid;grid-template-columns:92px 1fr;gap:8px 10px;align-items:center;font-size:11.5px;}
+.fgrid .fl{color:var(--muted);}
+.fgrid .fw{min-width:0;}
+.fhint{grid-column:2;font-size:10.5px;color:var(--muted);line-height:1.6;margin-top:-3px;}
+.srcbar{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--sidebar-border);border-radius:7px;background:var(--sidebar);font-size:10.5px;color:var(--muted);margin-bottom:12px;}
+.srcbar .mono{color:var(--fg);}
+.srcbar .tagn{margin-left:auto;color:var(--info);border:1px solid var(--info);border-radius:4px;padding:0 5px;line-height:15px;font-size:9.5px;}
+.inp{width:100%;height:26px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);color:var(--fg);font-size:11.5px;padding:0 8px;outline:none;font-family:inherit;}
+.inp:focus{border-color:var(--active-border);box-shadow:0 0 0 3px color-mix(in srgb,var(--active-border) 14%,transparent);}
+.inp.ro{background:var(--sidebar);color:var(--muted);}
+.selw{height:26px;display:inline-flex;align-items:center;gap:8px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:0 8px;font-size:11.5px;color:var(--fg);min-width:150px;}
+.selw .ar{margin-left:auto;color:var(--muted);font-size:9px;}
+.radios{display:flex;gap:14px;align-items:center;font-size:11.5px;flex-wrap:wrap;}
+.radios label{display:inline-flex;align-items:center;gap:5px;cursor:pointer;}
+.rdot{width:12px;height:12px;border-radius:50%;border:1px solid var(--input-border);position:relative;flex:none;}
+.rdot.on{border-color:var(--primary);}
+.rdot.on::after{content:"";position:absolute;inset:2px;border-radius:50%;background:var(--primary);}
+.ckbox{width:12px;height:12px;border:1px solid var(--input-border);border-radius:3px;flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:9px;color:transparent;}
+.ckbox.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);}
+.note{display:flex;align-items:flex-start;gap:7px;margin-top:10px;padding:7px 9px;border:1px solid var(--info);border-radius:7px;background:color-mix(in srgb,var(--info) 10%,transparent);color:var(--info);font-size:10.5px;line-height:1.6;}
+.note.warn{border-color:var(--warning);background:color-mix(in srgb,var(--warning) 12%,transparent);color:var(--warning);}
+.note.danger{border-color:var(--danger);background:color-mix(in srgb,var(--danger) 12%,transparent);color:var(--danger);}
+
+.btn-s{border:1px solid var(--input-border);background:var(--bg);color:var(--fg);border-radius:6px;font-size:11px;padding:4px 10px;white-space:nowrap;}
+.btn-s:hover{background:var(--hover);}
+.btn-s.warn{border-color:currentColor;color:var(--warning);background:transparent;}
+.btn-s.warn:hover{background:color-mix(in srgb,var(--warning) 14%,transparent);}
+.btn-p{border:1px solid var(--primary);background:var(--primary);color:var(--primary-fg);border-radius:6px;font-size:11px;padding:4px 12px;font-weight:600;white-space:nowrap;}
+.btn-p:hover{background:var(--primary-hover);border-color:var(--primary-hover);}
+.btn-d{border:1px solid var(--danger);background:transparent;color:var(--danger);border-radius:6px;font-size:11px;padding:4px 10px;font-weight:600;white-space:nowrap;}
+.btn-d:hover{background:color-mix(in srgb,var(--danger) 12%,transparent);}
+.btn-xs{font-size:10px;padding:2px 7px;border-radius:5px;}
+
+table.dt{width:100%;border-collapse:collapse;font-size:11px;}
+table.dt th{position:sticky;top:0;background:var(--tabbar);color:var(--muted);text-align:left;font-weight:600;font-size:10px;padding:5px 8px;border-bottom:1px solid var(--border);white-space:nowrap;}
+table.dt td{padding:5px 8px;border-bottom:1px solid color-mix(in srgb,var(--sidebar-border) 70%,transparent);white-space:nowrap;color:var(--fg);}
+table.dt tr:hover td{background:var(--hover);}
+table.dt td.mono{font-family:Consolas,monospace;color:var(--muted);font-size:10.5px;}
+table.dt td.num{font-variant-numeric:tabular-nums;}
+table.dt tr.dis td{color:var(--muted);}
+table.dt tr.dis:hover td{background:transparent;}
+table.dt tr.on td{background:var(--accent);}
+.actbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;}
+.actbar .al{font-size:10.5px;color:var(--muted);}
+.trow-act{display:flex;gap:6px;}
+.tcur{color:var(--primary);font-size:9px;border:1px solid var(--active-border);border-radius:4px;padding:0 4px;margin-left:5px;}
+.diffd{color:var(--muted);font-size:10.5px;}
+.diffd .up{color:var(--success);}
+.diffd .dn{color:var(--danger);}
+.rgroup{margin-bottom:12px;}
+.rgroup-h{display:flex;align-items:center;gap:7px;height:24px;font-size:11.5px;font-weight:700;color:var(--fg);}
+.rgroup-h .sym{color:var(--muted);font-size:10px;}
+.rgroup-h .n{margin-left:auto;font-size:10px;color:var(--muted);font-weight:600;}
+.rrow{display:flex;align-items:center;gap:9px;padding:6px 9px;border:1px solid var(--sidebar-border);border-radius:7px;margin-bottom:4px;font-size:11px;}
+.rrow .rp{flex:1;min-width:0;font-family:Consolas,monospace;font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);}
+.rrow .rsub{flex:none;font-size:10px;color:var(--muted);}
+.rrow .acts{display:flex;gap:6px;flex:none;}
+.rrow.err{border-color:color-mix(in srgb,var(--danger) 45%,var(--sidebar-border));}
+.alertbox{margin-top:10px;border:1px solid var(--danger);border-radius:8px;background:color-mix(in srgb,var(--danger) 10%,transparent);padding:10px 12px;display:none;}
+.alertbox.on{display:block;}
+.alertbox .at{font-size:11.5px;font-weight:700;color:var(--danger);display:flex;align-items:center;gap:6px;}
+.alertbox .ad{font-size:10.5px;color:var(--danger);line-height:1.6;margin-top:5px;}
+.alertbox .aa{display:flex;gap:8px;margin-top:9px;}
+
+.toast{position:absolute;left:50%;bottom:34px;transform:translateX(-50%) translateY(8px);z-index:60;background:var(--tabbar);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);padding:8px 14px;font-size:11.5px;color:var(--fg);opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;max-width:78%;}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0);}
+
+/* ── 状态可见性（场景 → 视图） ── */
+[data-panel="list"] .st-list,[data-panel="anomaly"] .st-anomaly,[data-panel="empty"] .st-empty,[data-panel="noresult"] .st-noresult{display:block;}
+[data-status="normal"] .pst-normal,[data-status="anomaly"] .pst-anomaly,[data-status="zero"] .pst-zero{display:flex;}
+[data-detail="file"] .dp-file,[data-detail="ref"] .dp-ref{display:flex;}
+[data-detail="none"] .detail{display:none;}
+[data-tabs="file"] .ct-file,[data-tabs="ref"] .ct-ref,[data-tabs="none"] .ct-none{display:flex;}
+[data-tabs="file"] .cb-file,[data-tabs="ref"] .cb-ref{display:block;}
+[data-tabs="none"] .cb-none{display:flex;}
+[data-strip="ro"] .s-ro,[data-strip="ref"] .s-ref,[data-strip="reject"] .s-reject{display:flex;}
+[data-dialog="archive"] .dlg-archive,[data-dialog="checkout"] .dlg-checkout,[data-dialog="versions"] .dlg-versions,[data-dialog="trash"] .dlg-trash,[data-dialog="repair"] .dlg-repair{display:flex;}
+.dlg-archive{width:544px;}
+.dlg-checkout{width:480px;}
+.dlg-versions{width:768px;}
+.dlg-trash{width:640px;}
+.dlg-repair{width:864px;}
+
+/* ── 说明卡片 / 尺寸校验 / token 对照 ── */
+.notes{max-width:1180px;margin:18px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
+.card{border:1px solid var(--border);background:var(--bg);border-radius:11px;padding:14px 16px;}
+.card h4{font-size:12.5px;font-weight:700;margin-bottom:9px;display:flex;align-items:center;gap:7px;color:var(--fg);}
+.card h4 .ico-sm{color:var(--active-border);}
+.card ul{list-style:none;font-size:11.5px;color:var(--muted);line-height:1.85;}
+.card li::before{content:"\203A";color:var(--active-border);font-weight:700;margin-right:7px;}
+.card li b{color:var(--fg);}
+.card code{font-family:Consolas,monospace;font-size:10.5px;background:var(--sidebar);border:1px solid var(--border);border-radius:4px;padding:0 4px;color:var(--fg);}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:11.5px;color:var(--muted);align-items:center;margin-bottom:8px;}
+.legend .li{display:flex;align-items:center;gap:6px;}
+.dimgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;}
+.dimitem{display:flex;align-items:baseline;gap:7px;font-size:11px;color:var(--muted);border-bottom:1px dashed var(--sidebar-border);padding:3px 0;}
+.dimitem b{font-family:Consolas,monospace;font-size:11.5px;color:var(--fg);min-width:44px;text-align:right;}
+.tokens{max-width:1180px;margin:18px auto 0;}
+.tokens h3{font-size:13px;font-weight:700;margin-bottom:10px;}
+.tokens .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;}
+.tchip{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:7px;padding:6px 9px;background:var(--bg);font-size:11px;color:var(--muted);}
+.tchip .sw{width:16px;height:16px;border-radius:4px;border:1px solid var(--border);flex:none;}
+.tchip .name{color:var(--muted);}
+.foot{max-width:1180px;margin:16px auto 0;font-size:11.5px;color:var(--muted);line-height:1.85;}
+.foot code{font-family:Consolas,monospace;background:var(--sidebar);border:1px solid var(--border);border-radius:4px;padding:0 4px;color:var(--fg);}
+</style>
+</head>
+<body>
+
+<svg style="display:none" aria-hidden="true">
+  <!-- 面板标题：chart-column -->
+  <symbol id="i-chart" viewBox="0 0 16 16"><path d="M2.4 13.4h11.2"/><rect x="3.4" y="8.6" width="2.4" height="4"/><rect x="6.8" y="5.2" width="2.4" height="7.4"/><rect x="10.2" y="2.6" width="2.4" height="10"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 16 16"><path d="M3.6 1.9h5.3l3.5 3.4v8.8H3.6z"/><path d="M8.9 1.9v3.4h3.5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 16 16"><rect x="2.2" y="3" width="11.6" height="10" rx="1.4"/><path d="M2.2 6.4h11.6M6.1 6.4V13M9.9 6.4V13"/></symbol>
+  <symbol id="i-link" viewBox="0 0 16 16"><path d="M6.6 9.4l2.8-2.8"/><path d="M7 4.6l1-1a2.3 2.3 0 013.3 3.3l-1 1"/><path d="M9 11.4l-1 1A2.3 2.3 0 014.7 9.1l1-1"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="M10.1 10.1 13.5 13.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3.2v9.6M3.2 8h9.6"/></symbol>
+  <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r=".9" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 16 16"><rect x="3.6" y="7.2" width="8.8" height="6.4" rx="1.4"/><path d="M5.8 7.2V5.4a2.2 2.2 0 014.4 0v1.8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.2 1.4"/></symbol>
+  <symbol id="i-history" viewBox="0 0 16 16"><path d="M2.6 8a5.4 5.4 0 1 0 1.7-3.9"/><path d="M2.4 3.2v3.2h3.2"/><path d="M8 5.4V8l2 1.2"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16"><path d="M3.2 4.6h9.6M5.2 4.6V3.2h5.6v1.4M4.4 4.6l.6 8.2h6l.6-8.2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.7"/><path d="M13.4 2.8v3.4H10"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2.6 14.2 13H1.8z"/><path d="M8 6.4v3.2M8 11.4h.01"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6"/><path d="M8 7.4v3.2M8 5.4h.01"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.2" y="5.2" width="7.6" height="7.6" rx="1.4"/><path d="M3.2 10.4V4.4a1.2 1.2 0 0 1 1.2-1.2h6"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 6.4 11.8l-2.4.8.8-2.4z"/></symbol>
+  <symbol id="i-reveal" viewBox="0 0 16 16"><path d="M6.2 3.4H3.4v9.2h9.2v-2.8"/><path d="M9.4 3.4h3.2v3.2M12.6 3.4 7.6 8.4"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 16 16"><path d="M6 2.4v2.8M10 2.4v2.8M3.8 5.2h8.4v2.6a4.2 4.2 0 0 1-8.4 0zM8 12.2v1.4"/></symbol>
+  <symbol id="i-seq" viewBox="0 0 16 16"><path d="M2.6 4.4h10.8M2.6 8h10.8M2.6 11.6h6.8"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.6h5.4A1.6 1.6 0 0 1 14 6.2v5.2A1.6 1.6 0 0 1 12.4 13H3.6A1.6 1.6 0 0 1 2 11.4z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3.4 8.4 6.4 11.4 12.6 5"/></symbol>
+</svg>
+
+<header class="page-head">
+  <div class="brand">
+    <span class="logo"><svg class="ico" style="width:15px;height:15px"><use href="#i-chart"/></svg></span>
+    <div>
+      <h1>资产库 / 分析存档（M6）· 原型</h1>
+      <div class="sub">左 Dock 面板 240px + 右侧详情属性面板 320px · 复现强度常显（已归档 / 分析表 / 引用）· 只读是常态，修改走「取回（检出）」</div>
+    </div>
+  </div>
+  <button class="theme-toggle" id="themeBtn"><svg class="ico-sm"><use href="#i-refresh"/></svg><span id="themeTxt">切换暗色</span></button>
+</header>
+
+<div class="statebar" id="statebar">
+  <span class="lbl">场景：</span>
+  <button data-go="default" class="on">默认（列表 + 详情）</button>
+  <button data-go="archive">归档确认对话框</button>
+  <button data-go="checkout">取回（检出）对话框</button>
+  <button data-go="versions">版本历史对话框</button>
+  <button data-go="trash">回收站对话框</button>
+  <button data-go="repair">索引修复对话框</button>
+  <button data-go="empty">空库态</button>
+  <button data-go="noresult">搜索无结果</button>
+  <button data-go="anomaly">异常态（缺失 / 内容已变 / 引用失效）</button>
+  <button data-go="filter">筛选 / 排序弹层</button>
+  <button data-go="menu">右键菜单</button>
+  <button data-go="readonly">只读：直接编辑被拒</button>
+</div>
+
+<div class="workbench" id="wb" data-state="default" data-panel="list" data-status="normal" data-detail="file" data-tabs="file" data-strip="ro" data-dialog="none">
+
+  <!-- 标题栏 36px -->
+  <div class="titlebar">
+    <div class="tb-left">
+      <div class="app-logo"></div>
+      <div class="cutout"><span class="cutout-label">项目</span><span class="cutout-name">营销分析</span></div>
+    </div>
+    <div class="tb-center"><div class="quick-open"><span>&#8981;</span> 搜索或输入命令… <span class="kbd">Ctrl+P</span></div></div>
+    <div class="tb-right"><div class="wc">─</div><div class="wc">□</div><div class="wc close">✕</div></div>
+  </div>
+
+  <div class="main">
+
+    <!-- 活动栏 48px（资产库 = 第 3 项） -->
+    <nav class="activitybar">
+      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-seq"/></svg><span class="tip">草稿箱</span></div>
+      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-plug"/></svg><span class="tip">数据库导航</span></div>
+      <div class="act on"><svg class="ico" style="width:20px;height:20px"><use href="#i-chart"/></svg><span class="tip">资产库</span></div>
+      <div class="act"><svg class="ico" style="width:20px;height:20px"><use href="#i-grid"/></svg><span class="tip">本地数据</span></div>
+      <div class="act spacer"><svg class="ico" style="width:20px;height:20px"><use href="#i-more"/></svg><span class="tip">设置</span></div>
+    </nav>
+
+    <!-- 左 Dock：资产库面板 240px -->
+    <aside class="sidebar-l">
+      <div class="panel-head">
+        <svg class="ico-sm"><use href="#i-chart"/></svg>
+        <span class="ttl">资产库</span>
+        <div class="acts">
+          <button class="pact" id="addBtn" title="归档到资产库">＋<span class="caret">▾</span></button>
+          <button class="pact" id="moreBtn" title="更多">⋯</button>
+        </div>
+        <div class="headmenu" id="addMenu">
+          <div class="hmi" data-go="archive">从草稿箱归档…<span class="k">Ctrl+Shift+A</span></div>
+          <div class="hmi">从本地文件归档…</div>
+        </div>
+        <div class="headmenu" id="moreMenu">
+          <div class="hmi" data-go="repair">重建索引…</div>
+          <div class="hmi">打开资源目录</div>
+          <div class="hsep"></div>
+          <div class="hmi" data-go="trash">回收站…</div>
+          <div class="hmi"><svg class="ico-sm"><use href="#i-refresh"/></svg>刷新</div>
+        </div>
+      </div>
+
+      <!-- 工具栏 32px（输入框 26px） -->
+      <div class="toolbar">
+        <div class="sbox">
+          <svg class="ico-sm mag"><use href="#i-search"/></svg>
+          <input id="q" placeholder="搜索存档（显示名 / 别名 / 标签 / 来源表）">
+        </div>
+        <button class="tbtn" id="filterBtn" title="筛选：kind / 强度 / 标签">筛选 ▾</button>
+        <button class="tbtn" id="sortBtn" title="排序：名称 / 归档时间 / 更新时间 / 大小 / 版本号">排序 ▾</button>
+
+        <div class="pop pop-filter" id="filterPop">
+          <div class="pop-clear" id="filterClear">清除筛选</div>
+          <div class="psec">
+            <div class="ph">kind</div>
+            <div class="pitem on"><span class="tk">&#10003;</span>文件<span class="n">5</span></div>
+            <div class="pitem on"><span class="tk">&#10003;</span>分析表<span class="n">2</span></div>
+            <div class="pitem"><span class="tk">&#10003;</span>引用<span class="n">1</span></div>
+          </div>
+          <div class="psec">
+            <div class="ph">强度</div>
+            <div class="pitem on"><span class="tk">&#10003;</span>已归档<span class="n">5</span></div>
+            <div class="pitem on"><span class="tk">&#10003;</span>分析表<span class="n">2</span></div>
+            <div class="pitem on"><span class="tk">&#10003;</span>引用<span class="n">1</span></div>
+            <div class="pitem"><span class="tk">&#10003;</span>仅显示可能失效</div>
+          </div>
+          <div class="psec">
+            <div class="ph">标签</div>
+            <div class="pitem on"><span class="tk">&#10003;</span>月报</div>
+            <div class="pitem"><span class="tk">&#10003;</span>订单</div>
+            <div class="pitem"><span class="tk">&#10003;</span>临时</div>
+            <div class="pitem"><span class="tk">&#10003;</span>外部</div>
+          </div>
+        </div>
+
+        <div class="pop pop-sort" id="sortPop">
+          <div class="ph">排序</div>
+          <div class="pitem on"><span class="tk">&#10003;</span>名称<span class="ar">↑</span></div>
+          <div class="pitem"><span class="tk">&#10003;</span>归档时间</div>
+          <div class="pitem"><span class="tk">&#10003;</span>更新时间</div>
+          <div class="pitem"><span class="tk">&#10003;</span>大小</div>
+          <div class="pitem"><span class="tk">&#10003;</span>版本号</div>
+          <div class="pop-clear" style="border-bottom:none;border-top:1px solid var(--sidebar-border)">箭头上再点一次翻转</div>
+        </div>
+      </div>
+
+      <div class="panel-body">
+
+        <!-- 列表（默认 / 菜单 / 筛选 / 只读被拒 / 对话框） -->
+        <div class="st st-list">
+          <div class="ghead" data-fold="root"><span class="chev">▼</span>全部分组<span class="cnt">8 项</span></div>
+          <div class="gbody" id="fold-root">
+            <div class="ghead sub" data-fold="g1"><span class="chev">▼</span>未分组<span class="cnt">3</span></div>
+            <div class="gbody" id="fold-g1">
+              <div class="row sel" title="dau_report.sql · 文件 · v3 · 已归档（强）· 1.2 KB · 归档 2026-09-15 09:12">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">dau_report.sql</span>
+                <span class="ver">v3</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="meta">1.2 KB · 3 天前</span>
+              </div>
+              <div class="row" title="渠道对比.py · 文件 · v2 · 已归档（强）· 4.6 KB · 归档 2026-09-10 15:40">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">渠道对比.py</span>
+                <span class="ver">v2</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="meta">4.6 KB · 5 天前</span>
+              </div>
+              <div class="row" title="临时订单分析.sql · 文件 · v1（省略版本徽标）· 已归档（强）· 12.4 KB · 归档 2026-09-14 20:05">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">临时订单分析.sql</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="meta">12.4 KB · 昨天</span>
+              </div>
+            </div>
+            <div class="ghead sub" data-fold="g2"><span class="chev">▼</span>报表<span class="cnt">3</span></div>
+            <div class="gbody" id="fold-g2">
+              <div class="row" title="monthly.md · 文件 · v2 · 已归档（强）· 3.1 KB · 归档 2026-09-01 09:30">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">monthly.md</span>
+                <span class="ver">v2</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="meta">3.1 KB · 2 周前</span>
+              </div>
+              <div class="row" title="mock_orders · 分析表（DuckDB）· v1（省略版本徽标）· 分析表（中）· 12,480 行 × 18 列 · 归档 2026-09-11 10:02">
+                <svg class="ico ic"><use href="#i-grid"/></svg>
+                <span class="nm">mock_orders</span>
+                <span class="sb b-info"><span class="d"></span>分析表</span>
+                <span class="meta">12,480 行 × 18 列</span>
+              </div>
+              <div class="row" title="dwd_orders_view · 分析表（DuckDB 视图）· v2 · 分析表（中）· 1,204,388 行 × 26 列 · 归档 2026-09-08 17:20">
+                <svg class="ico ic"><use href="#i-grid"/></svg>
+                <span class="nm">dwd_orders_view</span>
+                <span class="ver">v2</span>
+                <span class="sb b-info"><span class="d"></span>分析表</span>
+                <span class="meta">1.2M 行 × 26 列</span>
+              </div>
+            </div>
+            <div class="ghead sub" data-fold="g3"><span class="chev">▼</span>外部数据<span class="cnt">2</span></div>
+            <div class="gbody" id="fold-g3">
+              <div class="row" title="ods.orders · 引用（TableRef）· 引用（弱）· 无内容指纹（引用不可指纹）· 归档 2026-09-09 16:40">
+                <svg class="ico ic"><use href="#i-link"/></svg>
+                <span class="nm">ods.orders</span>
+                <span class="sb b-warn"><span class="d"></span>引用</span>
+                <span class="meta">无指纹 · 6 天前</span>
+              </div>
+              <div class="row" title="sales_daily.csv · 文件 · v2 · 已归档（强）· 8.7 KB · 归档 2026-08-18 11:02">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">sales_daily.csv</span>
+                <span class="ver">v2</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="meta">8.7 KB · 1 个月前</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 异常态列表 -->
+        <div class="st st-anomaly">
+          <div class="ghead"><span class="chev">▼</span>全部分组<span class="cnt">8 项</span></div>
+          <div class="gbody">
+            <div class="ghead sub"><span class="chev">▼</span>未分组<span class="cnt">3</span></div>
+            <div class="gbody">
+              <div class="row" title="dau_report.sql · 文件 · v3 · 已归档（强）· 指纹不匹配：期望 3f9a2c7b1e04 / 实际 7d20b9c4f1a8 · 行内已省略大小与相对时间（优先级最低）">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">dau_report.sql</span>
+                <span class="ver">v3</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="sb b-warn">内容已变</span>
+              </div>
+              <div class="row" title="渠道对比.py · 文件 · v2 · 已归档（强）· 指纹不匹配：期望 8c41d7e9b2aa / 实际 b90f42d6cc17 · 行内已省略大小与相对时间">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">渠道对比.py</span>
+                <span class="ver">v2</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="sb b-warn">内容已变</span>
+              </div>
+              <div class="row" title="临时订单分析.sql · 文件 · v1（省略版本徽标）· 已归档（强）· 12.4 KB · 归档 2026-09-14 20:05">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">临时订单分析.sql</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="meta">12.4 KB · 昨天</span>
+              </div>
+            </div>
+            <div class="ghead sub"><span class="chev">▼</span>报表<span class="cnt">3</span></div>
+            <div class="gbody">
+              <div class="row" title="monthly.md · 文件 · v2 · 已归档（强）· 3.1 KB · 归档 2026-09-01 09:30">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">monthly.md</span>
+                <span class="ver">v2</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+                <span class="meta">3.1 KB · 2 周前</span>
+              </div>
+              <div class="row" title="mock_orders · 分析表（DuckDB）· v1（省略版本徽标）· 分析表（中）· 12,480 行 × 18 列">
+                <svg class="ico ic"><use href="#i-grid"/></svg>
+                <span class="nm">mock_orders</span>
+                <span class="sb b-info"><span class="d"></span>分析表</span>
+                <span class="meta">12,480 行 × 18 列</span>
+              </div>
+              <div class="row" title="dwd_orders_view · 分析表（DuckDB 视图）· v2 · 分析表（中）· 1,204,388 行 × 26 列">
+                <svg class="ico ic"><use href="#i-grid"/></svg>
+                <span class="nm">dwd_orders_view</span>
+                <span class="ver">v2</span>
+                <span class="sb b-info"><span class="d"></span>分析表</span>
+                <span class="meta">1.2M 行 × 26 列</span>
+              </div>
+            </div>
+            <div class="ghead sub"><span class="chev">▼</span>外部数据<span class="cnt">2</span></div>
+            <div class="gbody">
+              <div class="row sel" title="ods.orders · 引用（TableRef）· 引用（弱）· 无内容指纹 · 末次校验 2026-09-15 09:02 · 本次未校验">
+                <svg class="ico ic"><use href="#i-link"/></svg>
+                <span class="nm">ods.orders</span>
+                <span class="sb b-warn"><span class="d"></span>引用</span>
+                <span class="meta">无指纹 · 未校验</span>
+              </div>
+              <div class="row miss" title="sales_daily.csv · 文件 · v2 · 已归档（强）· 本体缺失：期望 resources/data/sales_daily.csv（记录仍在，文件不在），行内已省略大小与相对时间">
+                <svg class="ico ic"><use href="#i-doc"/></svg>
+                <span class="nm">sales_daily.csv</span>
+                <span class="mdot"></span>
+                <span class="ver">v2</span>
+                <span class="sb b-ok"><span class="d"></span>已归档</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 空库态 -->
+        <div class="st st-empty">
+          <div class="empty-state">
+            <div class="big"><svg><use href="#i-chart"/></svg></div>
+            <div class="t">还没有任何存档</div>
+            <div class="d">把值得留存的草稿归档进来，<br>它就有了版本、来源与内容指纹。</div>
+            <div class="btns">
+              <button class="btn-p" data-go="archive">从草稿箱归档…</button>
+              <button class="btn-s">了解资产库能做什么</button>
+            </div>
+            <div class="sug">
+              <svg class="ico-sm ic"><use href="#i-info"/></svg>
+              <span>草稿箱里有 <b>3</b> 个文件看起来值得归档（dau_report.sql · monthly.md · 渠道对比.py）<br><span class="dlink" data-go="archive" style="margin-top:2px">去归档…</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 搜索无结果 -->
+        <div class="st st-noresult">
+          <div class="empty-state">
+            <div class="big"><svg><use href="#i-search"/></svg></div>
+            <div class="t">没有匹配的存档</div>
+            <div class="d">当前条件：关键词「渠道」+ 标签 月报 + kind 引用（3 个条件叠加）<br>换个关键词，或放宽筛选条件。</div>
+            <div class="btns">
+              <button class="btn-s" id="clearSearch">清空搜索与筛选</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 面板底部状态行 24px -->
+      <div class="pstatus pst-normal" title="8 项 · 已归档 5 · 分析表 2 · 引用 1 · 缺失 0 · 索引异常 0">
+        8 项<span class="sep">·</span>已归档 5<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span>缺失 0<span class="sep">·</span>索引异常 0
+      </div>
+      <div class="pstatus pst-anomaly" title="8 项 · 已归档 5 · 分析表 2 · 引用 1 · 缺失 1 · 索引异常 3">
+        8 项<span class="sep">·</span>已归档 5<span class="sep">·</span>分析表 2<span class="sep">·</span>引用 1<span class="sep">·</span><span class="seg warn" data-go="repair">缺失 1</span><span class="sep">·</span><span class="seg dang" data-go="repair">索引异常 3</span>
+      </div>
+      <div class="pstatus pst-zero" title="0 项 · 没有存档">
+        0 项<span class="sep">·</span>已归档 0<span class="sep">·</span>分析表 0<span class="sep">·</span>引用 0<span class="sep">·</span>缺失 0<span class="sep">·</span>索引异常 0
+      </div>
+
+      <!-- 移入回收站后的撤销条 -->
+      <div class="undo" id="undoBar">
+        <span id="undoTxt">已移入回收站 dau_report.sql</span>
+        <span class="grow"></span>
+        <span class="link" id="undoLink">撤销</span>
+      </div>
+    </aside>
+
+    <!-- 中央编辑区（只读打开） -->
+    <section class="center">
+      <div class="ctabs">
+        <div class="ctab ct-file"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-doc"/></svg>dau_report.sql <span class="ro">只读</span><span class="x2">✕</span></div>
+        <div class="ctab ct-ref"><svg class="ico-sm" style="color:var(--muted)"><use href="#i-link"/></svg>ods.orders <span class="ro">引用</span><span class="x2">✕</span></div>
+        <div class="ctab ct-none" style="color:var(--muted)"><svg class="ico-sm"><use href="#i-chart"/></svg>资产库</div>
+      </div>
+
+      <div class="strip s-ro">
+        <svg class="ico-sm"><use href="#i-lock"/></svg>
+        <span>已归档（只读）· 归档后不可写，需取回编辑</span>
+        <span class="grow"></span>
+        <button class="btn-s warn" data-go="versions">版本历史…</button>
+        <button class="btn-s warn" data-go="checkout">取回（检出）…</button>
+      </div>
+
+      <div class="strip s-ref">
+        <svg class="ico-sm"><use href="#i-warn"/></svg>
+        <span>引用型存档：内容不在本机，下面显示的是远端当前内容（可能已变更）</span>
+        <span class="grow"></span>
+        <button class="btn-s warn" id="revalidateBtn2">立即校验</button>
+      </div>
+
+      <div class="strip s-reject">
+        <svg class="ico-sm"><use href="#i-warn"/></svg>
+        <span><b>保存被拒：这是归档本体，请先取回</b> · 路径落在 <span class="mono">{project}/resources/</span> 的写入由应用守卫直接拒绝</span>
+        <span class="grow"></span>
+        <button class="btn-s" data-go="checkout">取回（检出）…</button>
+        <button class="btn-s" data-go="default">关闭</button>
+      </div>
+
+      <div class="cbody cb-file">
+        <div class="code"><span class="cmt">-- 渠道日报 · 归档于 2026-09-15 09:12（v3）· 来源连接 本地 MySQL / analytics</span>
+<span class="kw">SELECT</span> channel,
+       <span class="fn">count</span>(*) <span class="kw">AS</span> orders,
+       <span class="fn">sum</span>(amount) <span class="kw">AS</span> gmv
+<span class="kw">FROM</span> warehouse.orders
+<span class="kw">WHERE</span> created_at &gt;= <span class="str">date '2026-09-01'</span>
+<span class="kw">GROUP BY</span> channel
+<span class="kw">ORDER BY</span> gmv <span class="kw">DESC</span>;
+
+<span class="cmt">-- 内容指纹 3f9a2c7b1e04 · 本文件在资产库内不可写</span>
+<span class="cmt">-- 需要修改：右键「取回（检出）…」复制为草稿工作副本</span></div>
+      </div>
+
+      <div class="cbody cb-ref">
+        <div class="refbody">
+          <table class="dt">
+            <thead><tr><th>channel</th><th>orders</th><th>gmv</th><th>updated_at</th></tr></thead>
+            <tbody>
+              <tr><td>自然流量</td><td class="num">4,281</td><td class="num">182,904.00</td><td class="mono">2026-09-15 08:40</td></tr>
+              <tr><td>搜索广告</td><td class="num">2,660</td><td class="num">143,115.50</td><td class="mono">2026-09-15 08:40</td></tr>
+              <tr><td>私域复购</td><td class="num">1,204</td><td class="num">96,340.20</td><td class="mono">2026-09-15 08:40</td></tr>
+              <tr><td>线下门店</td><td class="num">318</td><td class="num">21,004.80</td><td class="mono">2026-09-15 08:40</td></tr>
+            </tbody>
+          </table>
+          <div class="refnote">引用不复现内容：这张表随时可能被 drop、改结构或换权限。要留证据，请把结果另存为文件再归档（强复现）。</div>
+        </div>
+      </div>
+
+      <div class="cbody cb-none">
+        <div class="ph">打开一个存档后，这里显示只读预览<br>（文件 = 只读文本；分析表 = 结果表格；引用 = 先校验存在性）</div>
+      </div>
+    </section>
+
+    <!-- 右侧详情属性面板 320px -->
+    <aside class="detail">
+
+      <!-- File 型详情 -->
+      <div class="dstate dp-file">
+        <div class="dhead">
+          <svg class="ico-sm ic"><use href="#i-doc"/></svg>
+          <span class="dnm">dau_report.sql</span>
+          <span class="dver">v3</span>
+          <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit"/></svg></button>
+        </div>
+        <div class="dsub">别名 渠道日报 · kind 文件（复现强度 强）</div>
+        <div class="dbody">
+
+          <div class="sect">
+            <div class="sect-h">基本信息<span class="lock">只读</span></div>
+            <div class="kv"><span class="k">大小</span><span class="v">1.2 KB</span></div>
+            <div class="kv"><span class="k">修改时间</span><span class="v">2026-09-12 10:24</span></div>
+            <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-15 09:12</span></div>
+            <div class="kv blk"><span class="k">物理路径</span><span class="v mono">resources/reports/dau_report.sql</span></div>
+            <div class="locknote"><svg class="ico-sm"><use href="#i-lock"/></svg><span>归档后不可写，需取回编辑</span></div>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">来源</div>
+            <div class="kv blk"><span class="k">来源草稿</span><span class="v mono">scratchpad/reports/dau_report.sql</span></div>
+            <div class="kv"><span class="k">来源连接</span><span class="v"><span class="dlink" style="margin:0">本地 MySQL · analytics</span></span></div>
+            <div class="kv"><span class="k">来源表</span><span class="v mono">warehouse.orders</span></div>
+            <div class="kv"><span class="k">内容指纹</span><span class="v mono">3f9a2c7b1e04<span class="cp" id="copyHash">复制</span></span></div>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">版本</div>
+            <div class="vrow"><span>v3</span><span class="dt">今天 09:12</span><span class="cur">当前</span></div>
+            <div class="vrow"><span>v2</span><span class="dt">3 天前</span></div>
+            <div class="vrow"><span>v1</span><span class="dt">1 周前</span></div>
+            <span class="dlink" data-go="versions">查看全部…</span>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">标签与分组</div>
+            <div class="tags">
+              <span class="tagc">渠道<span class="x">✕</span></span>
+              <span class="tagc">月报<span class="x">✕</span></span>
+              <span class="tagc add">＋ 添加标签</span>
+            </div>
+            <div class="kv" style="margin-top:6px"><span class="k">分组</span><span class="v">报表 ▾</span></div>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">内容预览<span class="lock" style="color:var(--muted)">只读</span></div>
+            <div class="prev">
+              <div class="prev-h"><svg class="ico-sm"><use href="#i-lock"/></svg>前 20 行 · 不可编辑</div>
+              <div class="prev-b">SELECT channel,
+  count(*) AS orders,
+  sum(amount) AS gmv
+FROM warehouse.orders
+WHERE created_at &gt;= date '2026-09-01'
+GROUP BY channel...</div>
+            </div>
+          </div>
+
+          <div class="danger-zone">
+            <button class="btn-d" id="toTrashBtn">移入回收站</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TableRef 型详情（顶部失效警告条） -->
+      <div class="dstate dp-ref">
+        <div class="warnstrip">
+          <svg class="ico-sm" style="margin-top:1px"><use href="#i-warn"/></svg>
+          <span class="grow">这是引用，源表可能已变更或被删除<br><span style="opacity:.85">最后校验：2026-09-15 09:02 · 存在</span></span>
+          <button class="btn-s warn" id="revalidateBtn">立即校验</button>
+        </div>
+        <div class="dhead">
+          <svg class="ico-sm ic"><use href="#i-link"/></svg>
+          <span class="dnm">ods.orders</span>
+          <button class="x" title="重命名显示名（F2，不改物理路径）"><svg class="ico-sm"><use href="#i-edit"/></svg></button>
+        </div>
+        <div class="dsub">kind 引用（复现强度 弱）· 本体在远端，不在本机</div>
+        <div class="dbody">
+
+          <div class="sect">
+            <div class="sect-h">基本信息<span class="lock">只读</span></div>
+            <div class="kv"><span class="k">复现强度</span><span class="v"><span class="sb b-warn"><span class="d"></span>引用</span></span></div>
+            <div class="kv"><span class="k">归档时间</span><span class="v">2026-09-14 16:40</span></div>
+            <div class="kv"><span class="k">内容指纹</span><span class="v">无（引用型不可指纹）</span></div>
+            <div class="kv blk"><span class="k">本体位置</span><span class="v mono">远端 analytics.orders</span></div>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">来源</div>
+            <div class="kv"><span class="k">来源连接</span><span class="v"><span class="dlink" style="margin:0">本地 MySQL · analytics</span></span></div>
+            <div class="kv"><span class="k">来源表</span><span class="v mono">analytics.orders</span></div>
+            <div class="kv"><span class="k">登记入口</span><span class="v">数据库导航 · 登记为存档</span></div>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">版本</div>
+            <div class="kv blk"><span class="k">不适用</span><span class="v">无内容指纹 → 版本不递增（引用只记「当时指向哪」）</span></div>
+          </div>
+
+          <div class="sect">
+            <div class="sect-h">标签与分组</div>
+            <div class="tags">
+              <span class="tagc">订单<span class="x">✕</span></span>
+              <span class="tagc">外部<span class="x">✕</span></span>
+              <span class="tagc add">＋ 添加标签</span>
+            </div>
+            <div class="kv" style="margin-top:6px"><span class="k">分组</span><span class="v">外部数据 ▾</span></div>
+          </div>
+
+          <div class="danger-zone">
+            <button class="btn-d" data-go="trash">移入回收站</button>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+  </div>
+
+  <!-- 应用级状态栏 24px -->
+  <div class="statusbar">
+    <div class="l"><span class="btn">« 完全隐藏</span><span>资产库</span></div>
+    <div class="r"><span>资源目录 {project}/resources</span><span>本地 MySQL · DuckDB · UTF-8</span></div>
+  </div>
+
+  <!-- 右键菜单（§3.2）：单选态 + 多选态对照 -->
+  <div class="ctx">
+    <div class="mi">打开（只读）<span class="k">Enter</span></div>
+    <div class="mi" data-go="checkout">取回（检出）…</div>
+    <div class="mi" data-go="versions">版本历史…</div>
+    <div class="sep"></div>
+    <div class="mi">重命名显示名<span class="k">F2</span></div>
+    <div class="mi">打标签…</div>
+    <div class="mi">移动到分组 ▾</div>
+    <div class="sep"></div>
+    <div class="mi" data-toast="已在系统中显示 resources/reports/dau_report.sql">在系统中显示</div>
+    <div class="mi" data-toast="已复制路径 resources/reports/dau_report.sql">复制路径</div>
+    <div class="sep"></div>
+    <div class="mi danger">移入回收站<span class="k">Del</span></div>
+  </div>
+
+  <div class="ctx" style="left:302px;top:194px;min-width:216px">
+    <div class="mi cap">多选 3 项时的同一菜单（对照）</div>
+    <div class="mi dim">打开（只读）</div>
+    <div class="mi dim">取回（检出）…（多选不可用）</div>
+    <div class="mi dim">版本历史…（多选不可用）</div>
+    <div class="sep"></div>
+    <div class="mi">批量打标签…<span class="k">3 项</span></div>
+    <div class="mi">批量移动到分组 ▾<span class="k">3 项</span></div>
+    <div class="sep"></div>
+    <div class="mi danger">移入回收站（3 项）<span class="k">Del</span></div>
+  </div>
+
+  <!-- 对话框层 -->
+  <div class="dlg-mask" id="mask"></div>
+
+  <!-- 归档确认对话框（§4.1） -->
+  <div class="dlg dlg-archive">
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-chart"/></svg>归档为存档<span class="sub2">来源：草稿箱</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="srcbar">
+        <svg class="ico-sm"><use href="#i-doc"/></svg>
+        <span class="mono">scratchpad/reports/dau_report.sql</span>
+        <span class="tagn">来自草稿箱</span>
+      </div>
+      <div class="fgrid">
+        <div class="fl">显示名</div>
+        <div class="fw"><input class="inp" value="dau_report"></div>
+        <div class="fl">目标位置</div>
+        <div class="fw"><input class="inp ro" value="resources/reports/dau_report.sql" readonly></div>
+        <div class="fhint">不可编辑：保留草稿目录结构，避免同名冲突</div>
+
+        <div class="fl">分组</div>
+        <div class="fw"><span class="selw">报表<span class="ar">▾</span></span></div>
+
+        <div class="fl">标签</div>
+        <div class="fw"><div class="tags" style="margin:0">
+          <span class="tagc">渠道<span class="x">✕</span></span>
+          <span class="tagc">月报<span class="x">✕</span></span>
+          <span class="tagc add">＋ 添加标签</span>
+        </div></div>
+
+        <div class="fl">来源连接</div>
+        <div class="fw"><input class="inp ro" value="本地 MySQL · analytics" readonly></div>
+        <div class="fhint">自动带出草稿的 file_meta.last_connection_id —— 归档凭证的关键一环</div>
+
+        <div class="fl">保留历史内容</div>
+        <div class="fw"><span class="selw">跟随设置（最近 5 份）<span class="ar">▾</span></span></div>
+        <div class="fhint">默认 5 份，对话框里可单次覆盖；选 0 则只留元数据</div>
+
+        <div class="fl">冲突处理</div>
+        <div class="fw"><div class="radios">
+          <label><span class="rdot on"></span>询问（默认）</label>
+          <label><span class="rdot"></span>自动改名</label>
+          <label><span class="rdot"></span>取消</label>
+        </div></div>
+        <div class="fhint">目标已存在 → 改名 / 取消，不静默覆盖</div>
+      </div>
+      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info"/></svg><span>归档 = 移动 + 只读锁定：本体进入 <span class="mono">resources/</span>，草稿侧消失，同时生成 v1 与内容指纹。不存在「凭空创建存档」。</span></div>
+    </div>
+    <div class="dlg-foot">
+      <span>Ctrl+Shift+A 在草稿箱侧发起</span>
+      <span class="grow"></span>
+      <button class="btn-s" data-go="default">取消</button>
+      <button class="btn-p" data-toast="已归档 dau_report.sql → resources/reports/（v1）· 草稿侧已移出" data-go="default">归档</button>
+    </div>
+  </div>
+
+  <!-- 取回（检出）对话框（§4.2） -->
+  <div class="dlg dlg-checkout">
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-copy"/></svg>取回（检出）<span class="sub2">存档 → 草稿工作副本</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="srcbar">
+        <svg class="ico-sm"><use href="#i-lock"/></svg>
+        <span class="mono">dau_report.sql</span>
+        <span>v3 · 1.2 KB</span>
+        <span class="tagn">归档本体不动</span>
+      </div>
+      <div class="fgrid">
+        <div class="fl">目标名</div>
+        <div class="fw"><input class="inp" value="dau_report（工作副本）.sql"></div>
+        <div class="fhint">默认 &lt;显示名&gt;（工作副本）&lt;扩展名&gt;</div>
+
+        <div class="fl">目标目录</div>
+        <div class="fw"><span class="selw">scratchpad（草稿箱根）<span class="ar">▾</span></span></div>
+
+        <div class="fl">打开方式</div>
+        <div class="fw"><div class="radios">
+          <label><span class="ckbox on">&#10003;</span>取回后同时打开</label>
+          <label><span class="ckbox"></span>只取回，不打开</label>
+        </div></div>
+      </div>
+      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info"/></svg><span>结果是草稿箱里出现一份副本，本体不动；草稿侧记录 <span class="mono">derived_from_resource_id</span>。<b>修改后再次归档将生成 v4</b>。</span></div>
+    </div>
+    <div class="dlg-foot">
+      <span>取回不会解锁本体</span>
+      <span class="grow"></span>
+      <button class="btn-s" data-go="default">取消</button>
+      <button class="btn-p" data-toast="已取回为草稿 scratchpad/dau_report（工作副本）.sql · 修改后再次归档将生成 v4" data-go="default">取回</button>
+    </div>
+  </div>
+
+  <!-- 版本历史对话框（§4.3） -->
+  <div class="dlg dlg-versions">
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-history"/></svg>版本历史<span class="sub2">dau_report.sql · 只追加，不覆盖历史</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <table class="dt">
+        <thead><tr><th>版本</th><th>归档时间</th><th>大小</th><th>相邻版本差异</th><th>指纹前 12 位</th><th>内容副本</th></tr></thead>
+        <tbody>
+          <tr data-ver="v3">
+            <td>v3<span class="tcur">当前</span></td>
+            <td class="mono">2026-09-15 09:12</td>
+            <td class="num">1.2 KB</td>
+            <td class="diffd">大小 <span class="up">+0.4 KB</span> · 指纹变化</td>
+            <td class="mono">3f9a2c7b1e04</td>
+            <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+          </tr>
+          <tr data-ver="v2" class="on">
+            <td>v2</td>
+            <td class="mono">2026-09-12 20:11</td>
+            <td class="num">820 B</td>
+            <td class="diffd">大小 <span class="dn">−1.1 KB</span> · 指纹变化</td>
+            <td class="mono">8c41d7e9b2aa</td>
+            <td><span class="sb b-ok"><span class="d"></span>存在</span></td>
+          </tr>
+          <tr data-ver="v1">
+            <td>v1</td>
+            <td class="mono">2026-09-08 14:03</td>
+            <td class="num">1.9 KB</td>
+            <td class="diffd">—（初始版本）</td>
+            <td class="mono">21f0ab6c5d73</td>
+            <td><span class="sb b-warn">缺失</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="actbar" id="verActs">
+        <span class="al" id="verLabel">对选中版本 v2 的动作：</span>
+        <button class="btn-s" data-vact="restore">还原为当前版本</button>
+        <button class="btn-s" data-vact="checkout">取回该版本为草稿</button>
+        <button class="btn-s" data-vact="drop">删除该版本的内容副本</button>
+      </div>
+      <div class="note warn"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn"/></svg><span>不做原地回滚：还原 = 用旧内容生成新版本（与 git <span class="mono">revert</span> 同构）；也不做行级 diff（文本 diff 归编辑器）。内容副本按「最近 5 份」保留，超出只留元数据。</span></div>
+    </div>
+    <div class="dlg-foot">
+      <span>共 3 个版本 · 2 份内容副本 · 保留策略「最近 5 份」</span>
+      <span class="grow"></span>
+      <button class="btn-p" data-go="default">关闭</button>
+    </div>
+  </div>
+
+  <!-- 回收站对话框（§4.4） -->
+  <div class="dlg dlg-trash">
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-trash"/></svg>回收站<span class="sub2">只显示 origin = "resources" 的条目</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <table class="dt">
+        <thead><tr><th>名称</th><th>原路径</th><th>删除时间</th><th>大小</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>monthly.md</td>
+            <td class="mono">resources/reports/monthly.md</td>
+            <td class="mono">昨天 18:20</td>
+            <td class="num">3.1 KB</td>
+            <td><div class="trow-act"><button class="btn-s btn-xs" data-toast="已还原 monthly.md 到 resources/reports/ · 索引已更新">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
+          </tr>
+          <tr>
+            <td>sales_daily.csv</td>
+            <td class="mono">resources/data/sales_daily.csv</td>
+            <td class="mono">3 天前</td>
+            <td class="num">8.7 KB</td>
+            <td><div class="trow-act"><button class="btn-s btn-xs" data-toast="已还原 sales_daily.csv 到 resources/data/ · 索引已更新">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
+          </tr>
+          <tr>
+            <td>临时订单分析.sql</td>
+            <td class="mono">resources/临时订单分析.sql</td>
+            <td class="mono">2 周前</td>
+            <td class="num">12.4 KB</td>
+            <td><div class="trow-act"><button class="btn-s btn-xs" data-toast="已还原 临时订单分析.sql 到 resources/ · 索引已更新">还原</button><button class="btn-s btn-xs">永久删除…</button></div></td>
+          </tr>
+          <tr class="dis">
+            <td>README.md</td>
+            <td class="mono">scratchpad/README.md</td>
+            <td class="mono">1 小时前</td>
+            <td class="num">2.0 KB</td>
+            <td><span style="font-size:10.5px;color:var(--muted)">属于草稿箱，请在草稿箱还原</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="alertbox" id="alertTrash">
+        <div class="at"><svg class="ico-sm"><use href="#i-warn"/></svg>清空回收站</div>
+        <div class="ad">将永久删除 3 项存档条目及其内容副本，并删除登记行。此操作不可撤销。</div>
+        <div class="aa">
+          <button class="btn-d" id="confirmEmpty">确认清空</button>
+          <button class="btn-s" id="cancelEmpty">取消</button>
+        </div>
+      </div>
+
+      <div class="note"><svg class="ico-sm" style="margin-top:1px"><use href="#i-info"/></svg><span>跨模块条目（草稿箱 / 编辑器）只做呈现，不在这里还原 —— 语义由项目级 <span class="mono">ProjectTrash</span> 保证；永久删除与清空一律走 AlertDialog 二次确认。</span></div>
+    </div>
+    <div class="dlg-foot">
+      <span>共 3 项存档条目 · 1 项属于草稿箱</span>
+      <span class="grow"></span>
+      <button class="btn-s" data-toast="已还原选中条目到各自的 resources/ 路径">还原选中</button>
+      <button class="btn-d" id="emptyBtn">清空回收站</button>
+      <button class="btn-p" data-go="default">关闭</button>
+    </div>
+  </div>
+
+  <!-- 索引修复对话框（§4.5） -->
+  <div class="dlg dlg-repair">
+    <div class="dlg-head"><svg class="ico-sm" style="color:var(--active-border)"><use href="#i-warn"/></svg>索引修复<span class="sub2">孤儿检测 · 文件系统是本体权威，登记表是索引</span><button class="x" data-go="default"><svg class="ico-sm"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <div class="note warn" style="margin-top:0"><svg class="ico-sm" style="margin-top:1px"><use href="#i-warn"/></svg><span>不做自动修复：三类问题全部需要用户逐条确认（静默导入会让存档变成用户没同意过的东西）。</span></div>
+
+      <div class="rgroup" style="margin-top:12px">
+        <div class="rgroup-h"><span class="sym">1</span>有文件、无记录<span class="n">1 项</span></div>
+        <div class="rrow">
+          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc"/></svg>
+          <span class="rp">resources/reports/adhoc_orders.sql</span>
+          <span class="rsub">2.3 KB · 修改于 3 天前</span>
+          <div class="acts"><button class="btn-s" data-toast="已补登 adhoc_orders.sql 为存档（kind 文件 · 来源留空）">补登为存档（选择 kind / 来源留空）</button></div>
+        </div>
+      </div>
+
+      <div class="rgroup">
+        <div class="rgroup-h"><span class="sym">2</span>有记录、无文件<span class="n">1 项</span></div>
+        <div class="rrow err">
+          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc"/></svg>
+          <span class="rp">sales_daily.csv <span style="color:var(--muted)">期望 resources/data/sales_daily.csv</span></span>
+          <span class="rsub" style="color:var(--danger)">文件不存在</span>
+          <div class="acts">
+            <button class="btn-s" data-toast="已从回收站还原 sales_daily.csv · 记录与文件重新对上">从回收站还原</button>
+            <button class="btn-d" data-toast="已删除 sales_daily.csv 的记录（文件不在磁盘，登记行已清理）">删除记录</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="rgroup">
+        <div class="rgroup-h"><span class="sym">3</span>指纹不匹配<span class="n">2 项</span></div>
+        <div class="rrow err">
+          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc"/></svg>
+          <span class="rp">dau_report.sql <span style="color:var(--muted)">期望 3f9a2c7b1e04 / 实际 7d20b9c4f1a8</span></span>
+          <span class="rsub" style="color:var(--warning)">内容已变</span>
+          <div class="acts">
+            <button class="btn-s" data-toast="已接受当前内容并生成新版本（指纹 7d20b9c4f1a8）">接受当前内容（生成新版本）</button>
+            <button class="btn-s" data-toast="已从历史还原 v2 的内容并生成新版本">从历史还原</button>
+          </div>
+        </div>
+        <div class="rrow err">
+          <svg class="ico-sm ic" style="color:var(--muted)"><use href="#i-doc"/></svg>
+          <span class="rp">渠道对比.py <span style="color:var(--muted)">期望 8c41d7e9b2aa / 实际 b90f42d6cc17</span></span>
+          <span class="rsub" style="color:var(--warning)">内容已变</span>
+          <div class="acts">
+            <button class="btn-s" data-toast="已接受当前内容并生成新版本（指纹 b90f42d6cc17）">接受当前内容（生成新版本）</button>
+            <button class="btn-s" data-toast="已从历史还原 v1 的内容并生成新版本">从历史还原</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <span>共 4 项待处理 · 上次扫描 今天 09:02</span>
+      <span class="grow"></span>
+      <button class="btn-s" id="rescanBtn">重新扫描</button>
+      <button class="btn-p" data-go="default">关闭</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<!-- 说明卡片 -->
+<div class="notes">
+  <div class="card">
+    <h4><svg class="ico-sm"><use href="#i-chart"/></svg>三种 kind：本体在哪，决定复现强度</h4>
+    <div class="legend">
+      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-doc"/></svg>文档形 = 文件</span>
+      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-grid"/></svg>表格形 = 分析表</span>
+      <span class="li"><svg class="ico" style="color:var(--muted)"><use href="#i-link"/></svg>链接形 = 引用</span>
+    </div>
+    <div class="legend">
+      <span class="li"><span class="sb b-ok"><span class="d"></span>已归档</span>强（内容冻结，重跑同解）</span>
+      <span class="li"><span class="sb b-info"><span class="d"></span>分析表</span>中（定义冻结，数据可重建）</span>
+    </div>
+    <div class="legend">
+      <span class="li"><span class="sb b-warn"><span class="d"></span>引用</span>弱（只记当时指向哪）</span>
+      <span class="li"><span class="sb b-warn">内容已变</span>指纹不匹配</span>
+    </div>
+    <ul>
+      <li>强度徽标是行内<b>唯一色块</b>；kind 图标只靠形状区分（三者同色，避免与强度语义撞色）</li>
+      <li>版本徽标 <code>v3</code> 在 <code>v1</code> 时省略（减少噪声）；<code>TableRef</code> 无指纹 → 不显示版本</li>
+      <li>行内字段优先级：<b>显示名 &gt; 复现强度徽标 &gt; 版本徽标 &gt; 相对时间 &gt; 大小</b>；放不下的一律省略号 + 悬浮 tooltip（行 tooltip 带全字段）</li>
+      <li>文件型行尾 = 大小与相对时间<b>合并为一个 muted 字段</b>；分析表型 =「行数 × 列数」；引用型 =「无指纹」</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4><svg class="ico-sm"><use href="#i-lock"/></svg>只读是常态（三重强制）</h4>
+    <ul>
+      <li>应用守卫：写入路径落在 <code>resources/</code> 直接拒绝 → 提示「这是归档本体，请先取回」</li>
+      <li>编辑器：以只读模式打开（专门的「分析资源锁定」只读来源），内容预览区也带锁标记</li>
+      <li>文件系统：只读属性（辅助手段，Windows / 网络盘不可靠，失败只警告）</li>
+      <li>面板上<b>不提供</b>「编辑存档」入口：有入口就一定有用户点了才发现不能存</li>
+      <li>要改 → 右键「取回（检出）…」→ 草稿工作副本 → 再次归档生成新版本</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4><svg class="ico-sm"><use href="#i-more"/></svg>右键菜单项与条件（§3.2）</h4>
+    <ul>
+      <li>打开（只读）<code>Enter</code> · 等效双击：文件 → 编辑器只读；分析表 → 结果表格；引用 → 先校验存在性</li>
+      <li>取回（检出）… / 版本历史… ：<b>仅单选可用</b>（多选时灰显）</li>
+      <li>重命名显示名 <code>F2</code> · 打标签… · 移动到分组：多选时变成「批量打标签 / 批量移动」</li>
+      <li>在系统中显示 · 复制路径：单选，调 <code>opener</code></li>
+      <li>分隔线以下为破坏性项：移入回收站（多选可用，二次确认并显示数量，底部出现撤销条）</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h4><svg class="ico-sm"><use href="#i-warn"/></svg>异常入口与索引修复</h4>
+    <ul>
+      <li>状态行 <code>缺失 W</code> / <code>索引异常 V</code> 非 0 时该段高亮可点 → 打开「索引修复」对话框</li>
+      <li>本体缺失：行灰显 + 删除线 + <code>danger</code> 点；详情面板出横幅与修复入口</li>
+      <li>指纹不匹配：行内 <code>warning</code> 徽标「内容已变」；<code>TableRef</code> 未校验：详情面板顶部警告条 + 「立即校验」</li>
+      <li>三分组处置：有文件无记录 → 补登为存档；有记录无文件 → 从回收站还原 / 删除记录；指纹不匹配 → 接受当前内容 / 从历史还原</li>
+    </ul>
+  </div>
+</div>
+
+<!-- 尺寸校验 -->
+<div class="tokens">
+  <h3>尺寸校验（1:1 像素，基准 16px · 设计稿 §7 常量 + §7.1 对话框宽度）</h3>
+  <div class="dimgrid">
+    <div class="dimitem"><b>240px</b>左 Dock 面板宽</div>
+    <div class="dimitem"><b>36px</b>面板头高</div>
+    <div class="dimitem"><b>26px</b>工具栏输入框高</div>
+    <div class="dimitem"><b>32px</b>工具栏行高（2rem）</div>
+    <div class="dimitem"><b>24px</b>列表行高</div>
+    <div class="dimitem"><b>24px</b>分组头高</div>
+    <div class="dimitem"><b>24px</b>底部状态行高</div>
+    <div class="dimitem"><b>18px</b>版本 / 强度徽标高</div>
+    <div class="dimitem"><b>320px</b>右侧详情面板宽</div>
+    <div class="dimitem"><b>48px</b>空态图标</div>
+    <div class="dimitem"><b>48px</b>活动栏宽</div>
+    <div class="dimitem"><b>36px</b>标题栏高</div>
+    <div class="dimitem"><b>544px</b>归档确认对话框宽</div>
+    <div class="dimitem"><b>480px</b>取回（检出）对话框宽</div>
+    <div class="dimitem"><b>768px</b>版本历史对话框宽</div>
+    <div class="dimitem"><b>640px</b>回收站对话框宽</div>
+    <div class="dimitem"><b>864px</b>索引修复对话框宽</div>
+  </div>
+</div>
+
+<!-- token 对照 -->
+<div class="tokens">
+  <h3>资产库主题映射（当前主题实时取色，不新增产品语义 token）</h3>
+  <div class="grid">
+    <div class="tchip"><div class="sw" style="background:var(--sidebar)"></div><span class="name">面板底 sidebar.background</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--tabbar)"></div><span class="name">面板头 tab_bar.background</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--hover)"></div><span class="name">列表行 hover list.hover</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--accent)"></div><span class="name">列表行选中 list.active</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--active-border)"></div><span class="name">选中边条 / 分组头色条 list.active.border</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--bg)"></div><span class="name">搜索框 / 弹层 background</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--success)"></div><span class="name">强度「已归档」success</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--info)"></div><span class="name">强度「分析表」info</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--warning)"></div><span class="name">强度「引用」/ 只读条 / 内容已变 warning</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--danger)"></div><span class="name">缺失点 / 错误 / 危险按钮 danger</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--muted)"></div><span class="name">状态行 / 空态图标 muted.foreground</span></div>
+    <div class="tchip"><div class="sw" style="background:var(--titlebar)"></div><span class="name">标题栏 title_bar.background</span></div>
+  </div>
+</div>
+
+<div class="foot">
+  落地：面板 <code>crates/workbench/src/panels.rs</code>（<code>LeftPanel::Resources</code>，活动栏第 3 项）+ 域模型与存储 <code>crates/analytics_resource</code>；详情属性面板沿用 <code>h_resizable</code>（宽度记忆写 <code>settings.json</code>）。<br>
+  尺寸新增仅 4 项：<code>ARCHIVE_BADGE_HEIGHT</code> 18 / <code>DETAIL_PANEL_DEFAULT_WIDTH</code> 320 / <code>ARCHIVE_EMPTY_ICON_SIZE</code> 48 / <code>ARCHIVE_STATUS_BAR_HEIGHT</code> 24，其余复用既有常量（面板头 36 / 行高 24 / 控制件 26 / 左 Dock 240 / 活动栏 48）。<br>
+  色值只存在于主题资产（<code>assets/themes/</code>），组件经 <code>cx.theme()</code> 读取，代码零裸 hex；规格见 <code>analytics-resource-prototype-design.md</code>，语义裁决见 <code>analytics-resource-architecture.md</code>。
+</div>
+
+<script>
+var SCENES = {
+  'default':  {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'none'},
+  'menu':     {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'none'},
+  'filter':   {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'none'},
+  'readonly': {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'reject', dialog:'none'},
+  'anomaly':  {panel:'anomaly', status:'anomaly', detail:'ref',  tabs:'ref',  strip:'ref',    dialog:'none'},
+  'empty':    {panel:'empty',   status:'zero',    detail:'none', tabs:'none', strip:'none',   dialog:'none'},
+  'noresult': {panel:'noresult',status:'zero',    detail:'none', tabs:'none', strip:'none',   dialog:'none'},
+  'archive':  {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'archive'},
+  'checkout': {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'checkout'},
+  'versions': {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'versions'},
+  'trash':    {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'trash'},
+  'repair':   {panel:'list',    status:'normal',  detail:'file', tabs:'file', strip:'ro',     dialog:'repair'}
+};
+
+var root = document.documentElement;
+var wb = document.getElementById('wb');
+var toastEl = document.getElementById('toast');
+var toastTimer = null;
+
+function showToast(text){
+  toastEl.textContent = text;
+  toastEl.classList.add('on');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ toastEl.classList.remove('on'); }, 3800);
+}
+
+function closePops(){
+  document.querySelectorAll('.pop').forEach(function(p){ p.classList.remove('open'); });
+  document.querySelectorAll('.headmenu').forEach(function(m){ m.classList.remove('open'); });
+  document.getElementById('filterBtn').classList.remove('on');
+  document.getElementById('sortBtn').classList.remove('on');
+  document.getElementById('addBtn').classList.remove('on');
+  document.getElementById('moreBtn').classList.remove('on');
+}
+
+function applyState(name){
+  var s = SCENES[name] || SCENES['default'];
+  wb.dataset.state = name;
+  wb.dataset.panel = s.panel;
+  wb.dataset.status = s.status;
+  wb.dataset.detail = s.detail;
+  wb.dataset.tabs = s.tabs;
+  wb.dataset.strip = s.strip;
+  wb.dataset.dialog = s.dialog;
+  closePops();
+  document.getElementById('alertTrash').classList.remove('on');
+  document.querySelectorAll('#statebar button').forEach(function(b){
+    b.classList.toggle('on', b.dataset.go === name);
+  });
+  if (name === 'filter'){
+    document.getElementById('filterPop').classList.add('open');
+    document.getElementById('sortPop').classList.add('open');
+    document.getElementById('filterBtn').classList.add('on');
+    document.getElementById('sortBtn').classList.add('on');
+  }
+  document.getElementById('q').value = (name === 'noresult') ? '渠道' : '';
+}
+
+document.getElementById('statebar').addEventListener('click', function(e){
+  var b = e.target.closest('button[data-go]');
+  if (b) applyState(b.dataset.go);
+});
+
+/* 场景内任意 data-go 元素（按钮 / 菜单项 / 状态行异常段 / 链接）都切换场景 */
+wb.addEventListener('click', function(e){
+  var t = e.target.closest('[data-go]');
+  if (t){
+    var tm = e.target.closest('[data-toast]');
+    if (tm) showToast(tm.dataset.toast);
+    applyState(t.dataset.go);
+    return;
+  }
+  var m = e.target.closest('[data-toast]');
+  if (m){ showToast(m.dataset.toast); return; }
+});
+
+/* 明暗切换 */
+var themeBtn = document.getElementById('themeBtn');
+var themeTxt = document.getElementById('themeTxt');
+themeBtn.addEventListener('click', function(){
+  var dark = root.getAttribute('data-theme') === 'dark';
+  root.setAttribute('data-theme', dark ? 'light' : 'dark');
+  themeTxt.textContent = dark ? '切换暗色' : '切换亮色';
+});
+
+/* 面板头下拉 */
+document.getElementById('addBtn').addEventListener('click', function(e){
+  e.stopPropagation();
+  var menu = document.getElementById('addMenu');
+  var open = menu.classList.contains('open');
+  closePops();
+  if (!open){ menu.classList.add('open'); this.classList.add('on'); }
+});
+document.getElementById('moreBtn').addEventListener('click', function(e){
+  e.stopPropagation();
+  var menu = document.getElementById('moreMenu');
+  var open = menu.classList.contains('open');
+  closePops();
+  if (!open){ menu.classList.add('open'); this.classList.add('on'); }
+});
+
+/* 筛选 / 排序弹层（点击切换；排序节单选，其余多选） */
+document.getElementById('filterBtn').addEventListener('click', function(e){
+  e.stopPropagation();
+  var pop = document.getElementById('filterPop');
+  var open = pop.classList.contains('open');
+  closePops();
+  if (!open){ pop.classList.add('open'); this.classList.add('on'); }
+});
+document.getElementById('sortBtn').addEventListener('click', function(e){
+  e.stopPropagation();
+  var pop = document.getElementById('sortPop');
+  var open = pop.classList.contains('open');
+  closePops();
+  if (!open){ pop.classList.add('open'); this.classList.add('on'); }
+});
+document.querySelectorAll('.pop').forEach(function(pop){
+  pop.addEventListener('click', function(e){
+    e.stopPropagation();
+    var it = e.target.closest('.pitem');
+    if (!it) return;
+    var sec = it.closest('.psec');
+    if (!sec) return;
+    if (sec.querySelector('.ph').textContent === '排序'){
+      sec.querySelectorAll('.pitem').forEach(function(x){ x.classList.remove('on'); });
+      it.classList.add('on');
+    } else {
+      it.classList.toggle('on');
+    }
+  });
+});
+document.getElementById('filterClear').addEventListener('click', function(e){
+  e.stopPropagation();
+  document.querySelectorAll('#filterPop .pitem').forEach(function(x){ x.classList.remove('on'); });
+});
+document.addEventListener('click', closePops);
+
+/* 行选中 / 分组折叠 */
+document.querySelectorAll('.st .row').forEach(function(r){
+  r.addEventListener('click', function(){
+    var list = r.closest('.st');
+    list.querySelectorAll('.row').forEach(function(x){ x.classList.remove('sel'); });
+    r.classList.add('sel');
+  });
+});
+document.querySelectorAll('.ghead[data-fold]').forEach(function(h){
+  h.addEventListener('click', function(){
+    var body = document.getElementById('fold-' + h.dataset.fold);
+    if (!body) return;
+    body.classList.toggle('off');
+    h.querySelector('.chev').textContent = body.classList.contains('off') ? '▶' : '▼';
+  });
+});
+
+/* 立即校验 / 复制指纹 / 重新扫描 */
+function revalidate(){
+  showToast('校验完成：远端 analytics.orders 仍存在 · 引用不复现内容，只记录当时指向');
+}
+document.getElementById('revalidateBtn').addEventListener('click', revalidate);
+document.getElementById('revalidateBtn2').addEventListener('click', revalidate);
+document.getElementById('copyHash').addEventListener('click', function(){
+  showToast('已复制内容指纹 3f9a2c7b1e04（前 12 位）');
+});
+document.getElementById('rescanBtn').addEventListener('click', function(){
+  showToast('已重新扫描 {project}/resources 与登记表 · 仍有 4 项待处理');
+});
+
+/* 移入回收站 → 撤销条（沿用 M5） */
+function moveToTrash(name){
+  document.getElementById('undoTxt').textContent = '已移入回收站 ' + name;
+  document.getElementById('undoBar').classList.add('on');
+  showToast('已移入回收站 ' + name + '（可在项目级回收站还原）');
+}
+document.getElementById('toTrashBtn').addEventListener('click', function(){ moveToTrash('dau_report.sql'); });
+document.getElementById('undoLink').addEventListener('click', function(){
+  document.getElementById('undoBar').classList.remove('on');
+  showToast('已撤销：dau_report.sql 仍在资产库');
+});
+document.querySelector('.ctx .mi.danger').addEventListener('click', function(){ moveToTrash('dau_report.sql'); });
+
+/* 回收站：清空二次确认（AlertDialog 形态） */
+document.getElementById('emptyBtn').addEventListener('click', function(){
+  document.getElementById('alertTrash').classList.add('on');
+});
+document.getElementById('cancelEmpty').addEventListener('click', function(){
+  document.getElementById('alertTrash').classList.remove('on');
+});
+document.getElementById('confirmEmpty').addEventListener('click', function(){
+  document.getElementById('alertTrash').classList.remove('on');
+  showToast('已永久删除 3 项存档条目及其内容副本 · 不可撤销');
+});
+
+/* 搜索无结果 → 清空 */
+document.getElementById('clearSearch').addEventListener('click', function(){
+  document.getElementById('q').value = '';
+  document.querySelectorAll('#filterPop .pitem').forEach(function(x){ x.classList.remove('on'); });
+  showToast('已清空搜索与筛选 · 恢复 8 项存档');
+});
+
+document.getElementById('mask').addEventListener('click', function(){ applyState('default'); });
+
+/* 版本历史：选中版本 → 动作栏按选中版本生效 */
+var verSel = 'v2';
+document.querySelectorAll('.dlg-versions tbody tr').forEach(function(r){
+  r.addEventListener('click', function(){
+    document.querySelectorAll('.dlg-versions tbody tr').forEach(function(x){ x.classList.remove('on'); });
+    r.classList.add('on');
+    verSel = r.dataset.ver;
+    document.getElementById('verLabel').textContent = '对选中版本 ' + verSel + ' 的动作：';
+  });
+});
+document.getElementById('verActs').addEventListener('click', function(e){
+  var b = e.target.closest('button[data-vact]');
+  if (!b) return;
+  var msgs = {
+    restore: '已用 ' + verSel + ' 的内容生成新版本 · 历史未被覆盖',
+    checkout: '已取回 ' + verSel + ' 为草稿：scratchpad/dau_report ' + verSel + '（工作副本）.sql',
+    drop: '已删除 ' + verSel + ' 的内容副本 · 元数据行保留'
+  };
+  showToast(msgs[b.dataset.vact]);
+});
+
+applyState('default');
+</script>
+</body>
+</html>

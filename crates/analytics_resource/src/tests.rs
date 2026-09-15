@@ -9,6 +9,9 @@ mod tests {
     const MIGRATION_SQL: &str =
         include_str!("../../engine/migrations/project_meta/007_analytics_resources.sql");
 
+    const ARCHIVE_MIGRATION_SQL: &str =
+        include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
+
     async fn create_test_store() -> (AnalyticsResourceStore, PathBuf) {
         let dir = std::env::temp_dir().join(format!("rds_test_{}", Uuid::new_v4().simple()));
         fs::create_dir_all(&dir).expect("create temp dir");
@@ -548,13 +551,109 @@ mod tests {
             .get_resource_versions(&created.id)
             .await
             .expect("versions");
-        assert_eq!(
-            versions.len(),
-            3,
-            "should have 3 versions (original + 2 updates)"
-        );
+
+        // 写前快照语义 + `UNIQUE(resource_id, version)`：两次更新各留下**一条写前快照**
+        // （v1、v2），当前版本（v3）只在资源行上、不进版本表。
+        // v1 原断言是 3 条（"original + 2 updates"），这在任何并发交错下都不可满足；
+        // 要守住的不变式是"两次更新都留下快照、版本号单调递增到 3（不丢版本）"。
+        assert_eq!(versions.len(), 2, "两次更新应留下两条写前快照");
+        assert_eq!(versions[0].version, 2, "版本表按版本号倒序");
+        assert_eq!(versions[1].version, 1);
+
+        let latest = store
+            .get_resource_by_id(&created.id)
+            .await
+            .expect("reload");
+        assert_eq!(latest.version, 3, "版本号必须单调递增到 3（无丢失）");
 
         drop(store);
         drop(dir);
+    }
+
+    /// 020 增量迁移：新列存在、旧行默认值正确、`CHECK` 生效。
+    ///
+    /// 这是**库层契约**的守门用例：SQL 语法（`ALTER TABLE ... CHECK`）、默认值
+    /// （`kind = 'file'` / `readonly = 1` / `content_hash` 为空）一旦被改坏，这里先红。
+    #[tokio::test]
+    async fn t016_archive_migration_adds_columns_and_defaults() {
+        let (store, dir) = create_test_store().await;
+
+        store
+            .pool
+            .acquire()
+            .await
+            .expect("acquire")
+            .inner()
+            .expect("inner")
+            .execute_batch(ARCHIVE_MIGRATION_SQL)
+            .expect("run 020 migration");
+
+        // 旧行（v1 时代写入、不带 kind）应靠默认值满足新约束。
+        let created = store
+            .create_resource(CreateResourceRequest {
+                resource_type: "file".to_string(),
+                name: "old_style_row".to_string(),
+                config: serde_json::json!({}),
+                scope: "project".to_string(),
+                alias: None,
+                source_query: None,
+                column_count: None,
+                file_size: None,
+                row_count: None,
+                parent_resource_id: None,
+            })
+            .await
+            .expect("create");
+
+        let conn = store.pool.acquire().await.expect("acquire 2");
+        let inner = conn.inner().expect("inner 2");
+
+        let columns: Vec<String> = {
+            let mut stmt = inner
+                .prepare("PRAGMA table_info(analytics_resources)")
+                .expect("pragma");
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .expect("query columns");
+            rows.collect::<Result<Vec<_>, _>>().expect("collect")
+        };
+        for expected in [
+            "kind",
+            "content_hash",
+            "file_rel_path",
+            "readonly",
+            "promoted_from",
+            "source_connection_id",
+            "source_table",
+            "definition_sql",
+            "archived_at",
+        ] {
+            assert!(columns.iter().any(|c| c == expected), "缺列：{expected}");
+        }
+
+        let (kind, readonly, hash): (String, i64, Option<String>) = inner
+            .query_row(
+                "SELECT kind, readonly, content_hash FROM analytics_resources WHERE id = ?",
+                rusqlite::params![&created.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("select defaults");
+        assert_eq!(kind, "file", "旧行默认 kind = file");
+        assert_eq!(readonly, 1, "默认只读");
+        assert_eq!(hash, None, "指纹待回填（不是错误）");
+
+        assert!(
+            inner
+                .execute(
+                    "UPDATE analytics_resources SET kind = 'nope' WHERE id = ?",
+                    rusqlite::params![&created.id],
+                )
+                .is_err(),
+            "kind 的 CHECK 约束应拒绝非法值"
+        );
+
+        drop(conn);
+        drop(store);
+        cleanup(dir);
     }
 }

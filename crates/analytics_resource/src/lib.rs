@@ -1,15 +1,15 @@
-//! RdataStation v2 资源分析 crate（analytics_resource，M6）
+//! RdataStation v2 资产库 / 分析存档 crate（analytics_resource，M6）
 //!
-//! 管理分析资源（数据源连接、DuckDB 表等）：
-//! - `models`：数据模型定义
-//! - `helpers`：辅助函数（时间解析等）
-//! - `resource`：资源 CRUD + 分页列表 + 克隆
-//! - `folder`：文件夹 CRUD + 资源关联
-//! - `tag`：标签 CRUD + 双向关联查询
-//! - `recycle`：回收站操作（软删除/恢复/永久删除）
-//! - `version`：版本历史管理
+//! 把"值得留存、需被引用、要能复现"的分析产物，从工作区转成**只读、有版本、带来源**的正式存档：
+//!
+//! - `model`：领域语义类型（存档种类 / 复现强度 / 本体状态 / 归档凭证）
+//! - `payload`：本体层（`resources/` 受管文件、只读守卫、内容指纹、历史副本）
+//! - `models`：持久层行模型（v1 搬运，逐步并入 `model`）
+//! - `resource` / `folder` / `tag` / `version`：索引层（`project.db`）
+//! - `recycle`：v1 回收站实现（**待废弃**：改走项目级 `ProjectTrash`，见开发方案 P0.8）
 //!
 //! 依赖方向：analytics_resource → engine（persistence::project_db）→ shared。
+//! 设计权威：`docs/architecture/analytics_resource/`。
 
 use std::sync::Arc;
 
@@ -19,7 +19,9 @@ use shared::error::CoreError;
 use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
 
 pub mod helpers;
+pub mod model;
 pub mod models;
+pub mod payload;
 
 pub mod folder;
 pub mod recycle;
@@ -27,6 +29,7 @@ pub mod resource;
 pub mod tag;
 pub mod version;
 
+pub use model::*;
 pub use models::*;
 
 /// 分析资源存储（SQLite 持久化层）
@@ -53,3 +56,6 @@ impl AnalyticsResourceStore {
     }
 }
 
+// 持久层回归用例（v1 蓝本搬运，Round 11 时漏声明 mod——导致 560 行用例在 v2 从未被编译）。
+#[cfg(test)]
+mod tests;

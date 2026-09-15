@@ -80,7 +80,7 @@ shared ────────────► (gpui-base / gpui-component / 第
 | M3 数据源连接 | 原生连接 + DuckDB Secret 本地加速 | `connection` |
 | M4 数据库导航 | 对象树 + 属性面板 | `database` |
 | M5 草稿箱 | VSCode 式文件管理 | `scratchpad` |
-| M6 资源分析 | 分析资源目录管理 | `analytics_resource` |
+| M6 资产库 | 分析存档：归档 / 取回 / 版本（内容指纹） | `analytics_resource` |
 | M7 Mock | 元数据驱动测试数据（只进分析引擎） | `mock` |
 | M8 洞察 | 库/表/列画像 | `insight` |
 | M9 插件 | Sidecar / JDBC / Python / WASM | `plugin` |

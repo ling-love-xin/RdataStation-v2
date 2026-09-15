@@ -4,7 +4,7 @@ use chrono::Utc;
 use serde_json::Value;
 
 impl AnalyticsResourceStore {
-    // ==================== 鐗堟湰鍘嗗彶 ====================
+    // ==================== 版本历史 ====================
 
     pub async fn get_resource_versions(
         &self,
@@ -57,18 +57,23 @@ impl AnalyticsResourceStore {
         })
     }
 
-    pub async fn save_resource_version(
-        &self,
+    /// 在**已有连接**上写入一条版本快照，返回快照行 id。
+    ///
+    /// 与 v1 的两点差别：
+    /// 1. 用裸 `INSERT` 而非 `INSERT OR IGNORE`：`UNIQUE(resource_id, version)` 冲突意味着
+    ///    "同一版本被写了两次"，那是必须暴露的缺陷，不是可以静默吞掉的情况（v1 因此丢版本）。
+    /// 2. 返回行 id，供资源行的 `parent_version_id` 指向本次快照（v1 该列写的是资源自身 id，无信息量）。
+    pub(crate) fn save_resource_version_on(
+        conn: &rusqlite::Connection,
         resource_id: &str,
         version: i32,
         snapshot: &str,
-    ) -> Result<(), CoreError> {
-        let conn = self.get_conn().await?;
+    ) -> Result<String, CoreError> {
         let id = format!("arv_{}", uuid::Uuid::new_v4().simple());
 
-        conn.inner()?.execute(
+        conn.execute(
             r#"
-            INSERT OR IGNORE INTO analytics_resource_versions (id, resource_id, version, snapshot, created_at)
+            INSERT INTO analytics_resource_versions (id, resource_id, version, snapshot, created_at)
             VALUES (?, ?, ?, ?, ?)
             "#,
             rusqlite::params![&id, resource_id, version, snapshot, Utc::now().to_rfc3339()],
@@ -78,6 +83,18 @@ impl AnalyticsResourceStore {
             reason: e.to_string(),
         }))?;
 
+        Ok(id)
+    }
+
+    /// 自取连接的便捷版（保留 v1 签名，供不经事务的调用方使用）。
+    pub async fn save_resource_version(
+        &self,
+        resource_id: &str,
+        version: i32,
+        snapshot: &str,
+    ) -> Result<(), CoreError> {
+        let conn = self.get_conn().await?;
+        Self::save_resource_version_on(conn.inner()?, resource_id, version, snapshot)?;
         Ok(())
     }
 }
