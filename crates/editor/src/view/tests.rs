@@ -735,3 +735,72 @@ fn text_mode_refuses_to_execute(cx: &mut TestAppContext) {
     let message = cx.update(|_window, cx| panel.read(cx).message.clone());
     assert!(message.expect("拒绝要留原因").contains("文本模式"));
 }
+
+// ===== A11：查找 / 替换（内核能力，本 crate 不自建）=====
+
+/// 建一份带内容的文档与面板（查找不需要执行器）
+fn panel_with_text<'a>(
+    cx: &'a mut TestAppContext,
+    content: &str,
+) -> (Entity<EditorHostPanel>, &'a mut VisualTestContext) {
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+    (panel, cx)
+}
+
+
+#[gpui_kit::test]
+fn the_kernel_find_panel_takes_over_on_ctrl_f(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (panel, cx) = panel_with_text(cx, "select 1;\nselect 2;");
+    // 焦点给编辑内核（真机上用户就在这儿打字）
+    let editor_handle = cx.update(|_window, cx| panel.read(cx).editor_focus_handle_for_test(cx));
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        window.focus(&editor_handle, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // Ctrl+F 由内核处理（`input::Search` → 组件库的查找面板）。
+    // 可观察信号：焦点被面板的查找框拿走 —— 这正是“查找栏打开了”的真实表现。
+    cx.simulate_keystrokes("ctrl-f");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert!(
+        focused.as_ref() != Some(&editor_handle),
+        "Ctrl+F 之后焦点应当离开编辑内核（内核把焦点交给查找框）"
+    );
+
+    // 再画一帧、再切走再回来都不该 panic（查找面板是组件库的浮层）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+#[gpui_kit::test]
+fn ctrl_h_opens_the_kernel_replace_panel(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (panel, cx) = panel_with_text(cx, "select 1;");
+    let editor_handle = cx.update(|_window, cx| panel.read(cx).editor_focus_handle_for_test(cx));
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        window.focus(&editor_handle, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    cx.simulate_keystrokes("ctrl-h");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert!(
+        focused.as_ref() != Some(&editor_handle),
+        "Ctrl+H 之后焦点应当离开编辑内核（替换行出现并聚焦）"
+    );
+}

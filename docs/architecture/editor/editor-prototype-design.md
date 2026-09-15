@@ -325,13 +325,17 @@
 | | `Ctrl+Shift+Enter` | 运行全部 |
 | | `Esc` | 退出单元编辑态（进入单元选中态，可用 ↑↓ 移动） |
 
-**已实现 vs 计划（1a，2026-09-15）**：上表是目标态。当前**已注册并实测生效**的有五条：`ctrl-s`（保存）· `ctrl-/`（行注释开关）· `ctrl-w`（关闭当前文档）· `ctrl-enter`（执行：选区优先 → 光标所在语句）· `ctrl-shift-enter`（执行全部），context 均为 `editor`。其余键（`Ctrl+F` 查找 / `Ctrl+H` 替换 / `Ctrl+Shift+F` 格式化 / `Ctrl+Space` 补全）**尚未实现，因此不注册、不宣传**（“注册了才宣传”）。
+**已实现 vs 计划（1a，2026-09-15）**：上表是目标态。当前**已注册并实测生效**的有五条（均由 `crates/app` 注册，context `editor`）：`ctrl-s`（保存）· `ctrl-/`（行注释开关）· `ctrl-w`（关闭当前文档）· `ctrl-enter`（执行：选区优先 → 光标所在语句）· `ctrl-shift-enter`（执行全部）。
+
+**`Ctrl+F` / `Ctrl+H`（查找 / 替换）不由本模块注册**：内核已把它们绑在 `Input` context 上**并有 listener**，界面由组件库的 `SearchPanel` 渲染；应用层再绑只会重复且收不到按键（架构 §12 #24）。`Ctrl+Z`/`Ctrl+Shift+Z`、`Ctrl+A`、`Ctrl+C/V` 等同理——**内核绑定表就是这几条的权威**。
+
+尚未实现、因此**不注册不宣传**的：`Ctrl+Shift+F`（格式化，待 B10）· `Ctrl+Space`（补全，待 B7）。
 
 执行结果落在编辑器下方的结果区（有结果或执行中才占位），状态行显示**真实值**（`N 行 × M 列 · 耗时` / `已截断` / 失败原因）；文本模式按能力表拒绝执行并在状态栏说明。
 
 两条实现细节需按实例为准：
 
-- **`Ctrl+Z` / `Ctrl+Shift+Z` 等编辑键由内核 `Input` context 提供**（`gpui-base` 绑定，不在本 crate）；本 crate 只注册内核没绑的键。改键位前先看 `gpui-base/src/input/base/state.rs` 的 `init`，否则会被内核静默吃掉（架构 §12 #24）。
+- **`Ctrl+F` / `Ctrl+H` 不由本 crate 注册**：内核在 `Input` context 里绑了它们并且有 listener（打开查找 / 替换会话），组件库的 `SearchPanel` 负责界面——**按键被内核消费，外层绑定收不到**（实测，见架构 §12 #24）。请勿在应用层重绑这两个键。
 - **`Ctrl+W` 的处理器在宿主（workbench）而不是面板**：面板在自己的 `update` 里让 Dock 移除自己会重入（架构 §12 #23）。键位仍只在该面板内生效。
 - 快捷键要能落到动作，面板根元素必须 `track_focus`（架构 §12 #25）；这类失效是**静默**的，靠 `simulate_keystrokes` 的窗口测试拦。
 

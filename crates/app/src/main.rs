@@ -96,6 +96,10 @@ fn run_app() {
                 // 这两个键内核没有占用（已核对 `input/base/state.rs` 的 `init`）。
                 KeyBinding::new("ctrl-enter", ExecuteSql, Some("editor")),
                 KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
+                // A11 查找 / 替换**不注册键位**：`Ctrl+F` / `Ctrl+H` 是编辑器内核自己的能力
+                // （`input::Search` / `input::Replace` → 组件库的查找面板），内核在 `Input`
+                // context 里先拿到按键，应用层再绑只会重复。焦点不在编辑器内时，
+                // `Ctrl+F` 仍落到工作台的“聚焦数据源导航搜索”（另一个 context）。
                 // M4 数据源导航：聚焦搜索框（先切到数据源面板并展开左侧 Dock）。
                 KeyBinding::new("ctrl-f", FocusNavSearch, Some("workbench")),
                 // M4 导航树键盘导航（仅当焦点在导航面板内时生效）。

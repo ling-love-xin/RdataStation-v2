@@ -227,6 +227,11 @@ impl EditorHostPanel {
         self.editor_text(cx)
     }
 
+    /// 编辑内核的焦点句柄（供测试把焦点交给内核，模拟真实打字场景）
+    pub fn editor_focus_handle_for_test(&self, cx: &App) -> FocusHandle {
+        self.editor.read(cx).focus_handle(cx)
+    }
+
     /// 只读访问当前文档（渲染路径用；不克隆整份文档）
     fn with_document<R>(&self, read: impl FnOnce(&Document) -> R) -> Option<R> {
         let service = self.shared.service();
@@ -682,8 +687,8 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_toggle_comment))
             .on_action(cx.listener(Self::on_execute_sql))
-            .on_action(cx.listener(Self::on_execute_all))
-            .child(
+            .on_action(cx.listener(Self::on_execute_all));
+        root = root.child(
                 div()
                     .flex_1()
                     .min_h_0()
