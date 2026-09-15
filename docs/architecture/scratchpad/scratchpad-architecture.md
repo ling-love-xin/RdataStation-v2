@@ -176,17 +176,27 @@ v1/早期 v2 用过 `{项目}/.scratchpad/` + `.scratchpad.json`，迁移规则�
 
 ## 6. 数据流
 
-### 6.1 列表（首次进入 + 刷新）
+### 6.1 列表（首次进入 + 刷新）——**全异步**
 
 ```
 render_scratchpad（首次 or loaded=false）
-  → load_scratchpad()：list_local_entries(0)（仅模块根）
-                       + external_reference_status()（探测存在性）
-                       + list_trash()
-                       + 重新拉取已展开过的子目录（见 §6.9）
-  → 写入 ScratchpadView（条目 / 引用 / 回收站 / children 缓存）
-  → 渲染：flatten_scratchpad（按展开态 + 排序 + 过滤压平）
+  → request_scratchpad_load(cx)：只入队 + 起轮询，**不做 I/O**
+      · 无项目 → 直接置错误态并 invalidate 在途序号
+      · 有项目 → scratchpad_jobs::enqueue_root_load(root, 已展开子目录)
+                 并把返回的 seq 记入 view.load_seq（丢弃过期结果）
+  → 工作线程（scratchpad_jobs::worker）在 tokio 运行时内完成：
+      ensure_dir（含旧布局迁移，幂等）
+      list_local_entries(0)（仅模块根）
+      external_reference_status()（探测引用路径存在性）
+      list_trash()
+      对每个已展开子目录 list_directory_entries（失败忽略 = 已删）
+  → 结果入队；轮询印（`ensure_scratchpad_pump`，60 ms）取回并 apply_scratchpad_loads：
+      seq < view.load_seq 的旧结果直接丢弃；否则写入条目/引用/回收站/子目录缓存
+  → cx.notify() 重绘；状态行在在途期间显示「加载中…」
 ```
+
+- 展开文件夹的懒加载同样走队列（`enqueue_dir_load` → `apply_scratchpad_dirs`）。
+- 渲染期只做「读状态 + 压平 + 算行高」，不再有任何 `Runtime::new` / `block_on` / 文件系统调用。
 
 ### 6.2 树渲染与虚拟化
 
@@ -305,7 +315,11 @@ app ──► workbench ──► scratchpad ──► shared
 | `ScratchpadStore` | 按窗口按需构造（`Shared::scratchpad_store()`） | 每次调用新建，无进程级缓存 |
 | `ScratchpadView` | `SidebarPanel` 实体的 `Rc<RefCell<…>>` | 面板生命周期 |
 | `Shared::scratchpad_search` | `Shared`（面板与编辑区**共用**） | 窗口生命周期 |
+| `scratchpad_pump`（轮询任务） | `SidebarPanel` 的 `RefCell<Option<Task<()>>>` | 任务空闲自退；面板销毁后 `weak.update` 失败即结束 |
+| `scratchpad_jobs` 工作线程 / 结果队列 | 进程级单例（OnceLock） | **无项目态**：只装「任务 + 结果」，不装当前项目；项目根作为参数传入 |
 | `ScratchpadState` | crate 提供，**当前无生产调用方** | 将来 watcher 用，接入时按窗口持有 |
+
+> 为何工作线程可以是单例而项目态不行：线程与队列是无状态基础设施（等同连接池），每个任务自带 `project_root`，不会串项目。项目态（当前面板看到的条目/选中/展开）始终在窗口的 `Shared` 与视图实体里。
 
 ### 7.3 只读与锁（两道护栏）
 
@@ -354,12 +368,14 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 
 | 措施 | 数值 / 位置 |
 | --- | --- |
+| 全异步加载 | 模块根 / 子目录加载都在 `scratchpad_jobs` 工作线程；渲染期零 I/O；在途期间状态行显示「加载中…」，且不用空态占位闪现 |
 | 懒加载 | 首次只取模块根 `depth=0`；展开时 `list_directory_entries` |
 | 虚拟化 | `v_virtual_list` 只渲染可视区行；行高逐行给出（重命名行更高） |
 | 搜索预算 | `MAX_DEPTH=4`、单文件 30 s、总数 500、每行命中区间 ≤16 |
 | 配置缓存 | `config_cache` + `Mutex`，避免每帧解析 JSON |
 | 复制预算 | 名称避让 ≤1000 次尝试；递归深度 ≤`MAX_DEPTH` |
-| 可观测 | 面板底部状态行：文件数 / 文件夹数 / 引用数 / 回收站数 / 排序；搜索结果头部：命中数 / 扫描文件数 / 开关标记 |
+| 过期结果防护 | 模块根加载带自增 `seq`；项目关闭/切换时 `invalidate_loads()` 推进序号，旧结果一律丢弃 |
+| 可观测 | 面板底部状态行：加载中 / 文件数 / 文件夹数 / 引用数 / 回收站数 / 排序；搜索结果头部：命中数 / 扫描文件数 / 开关标记 |
 
 ## 11. 测试策略
 
@@ -385,15 +401,17 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 搜索结果与替换栏 | `workbench/src/panels.rs::{render_scratchpad_search_pane, run_scratchpad_search, replace_scratchpad_all}` |
 | 快捷键与尺寸 | `workbench/src/commands.rs`、`workbench/src/ui.rs`、`app/src/main.rs` |
 | 文件类型色点 | `workbench/src/panels.rs::scratchpad_icon_color` |
+| 后台加载（K1） | `workbench/src/services/scratchpad_jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `panels.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
 
 ## 13. 已知问题（权威清单）
 
-### 13.1 必须修（违反本模块自定约束）
+### 13.1 已修（保留条目与结论，供回归对照）
 
-| # | 问题 | 现状 | 影响 / 方向 |
-| --- | --- | --- | --- |
-| K1 | **`render` 期做 I/O** | `render_scratchpad` 首次进入调 `load_scratchpad()`（同步 `block_on` 读盘）；`ensure_scratchpad_inputs` 也建实体 | 违反"render 是纯读路径"：大目录会卡首帧。方向：后台任务 + 结果回填（沿用 M4 `nav_jobs` 模式） |
-| K2 | **同一文件两处状态** | 搜索视图在 `Shared`，替换输入在 `EditorPanel`，查询词在侧栏输入框 | 目前靠约定同步；若将来支持多搜索会话需要收敛 |
+| # | 问题 | 处理 |
+| --- | --- | --- |
+| K1 | ~~`render` 期做 I/O~~ ✅ **已修（2026-09-16）** | `render_scratchpad` 首次进入不再同步读盘，改为 `request_scratchpad_load`（只入队）+ `ensure_scratchpad_pump`（60 ms 轮询回填）；新增 `workbench/src/services/scratchpad_jobs.rs`（单工作线程 + tokio 运行时 + 结果队列 + 请求序号防过期）。展开文件夹同理走 `enqueue_dir_load`。渲染期只剩「读状态 + 压平 + 算行高」 |
+| K1b | **事件路径仍是同步 `block_on`** | 删除 / 粘贴 / 导入 / 提交编辑 / 搜索 / 替换 / 引用增删改仍在 UI 线程 `scratchpad_store()` + `block_on`。小目录无感，大目录/网络盘会短暂冻结。方向：按 `scratchpad_jobs` 同一模式逐个迁成任务（需要每类操作各自的结果类型与回填方法） |
+| K2 | **同一文件两处状态** | 搜索视图在 `Shared`，替换输入在 `EditorPanel`，查询词在侧栏输入框——目前靠约定同步；若将来支持多搜索会话需要收敛 |
 
 ### 13.2 一致性风险
 

@@ -34,7 +34,8 @@
 
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
-| **依赖只向下** | `scratchpad → shared`；**crate 内不含 gpui**，视图全部在 `workbench` | 架构 §7 |
+| **依赖只向下** | `scratchpad → shared`；**crate 内不含 gpui**，视图全部在 `workbench` | 架构 §7.1 |
+| **render 是纯读路径** | 渲染期不做 I/O：加载走 `services/scratchpad_jobs.rs` 工作线程 + 轮询回填（事件路径的少数同步操作见架构 K1b） | 架构 §6.1、§13.1 |
 | **窗口 = 项目** | 项目态**不得放进程单例**：workbench 由窗口的 `Shared::project` 按需构造 `ScratchpadStore`；`ScratchpadState`（长生命周期 watcher 场景）接入时**必须按窗口持有** | 架构 §7.2 |
 | **两道护栏** | 同项目二次打开由 `project` crate 的 `ProjectLock` 拦截（只读/仍要打开/取消）；只读打开时草稿箱全面禁写并给状态栏提示 | 架构 §7.3 |
 | **不做 multi-root** | 多根会把会话 / 监控 / 文件元数据的复杂度抬高一个量级，与本模块「应用实例即项目」的定位不符 | 架构 §7.4 |
@@ -67,7 +68,8 @@
 | `crates/scratchpad/src/trash.rs` | `ProjectTrash` / `TrashManifest` / `TrashEntry`：项目级回收站（来源 + 原相对路径 + 还原/清除） |
 | `crates/scratchpad/src/models.rs` | 域模型：`ScratchpadEntry` / `SearchMatch`（含 `match_spans`）/ `ExternalReference(Status)` / `FileMeta` / `AnalyzableFile` / `ReplaceResult` / `DiffResult` 等 |
 | `crates/scratchpad/src/state.rs` | `ScratchpadState`：按项目初始化 store + watcher 标志（**当前无生产调用方**，接入时必须按窗口持有） |
-| `crates/workbench/src/panels.rs`（`SidebarPanel`） | 草稿箱面板：`render_scratchpad`（工具栏 / 搜索 / 树 / 引用 / 回收站 / 撤销栏 / 状态行）、`scratchpad_row`、`render_scratchpad_edit_row`、`render_scratchpad_empty_state`、剪贴板与多选、键盘导航 |
+| `crates/workbench/src/services/scratchpad_jobs.rs` | 草稿箱后台任务：单工作线程 + tokio 运行时执行模块根 / 子目录加载，结果队列 + 请求序号防过期 |
+| `crates/workbench/src/panels.rs`（`SidebarPanel`） | 草稿箱面板：`render_scratchpad`（工具栏 / 搜索 / 树 / 引用 / 回收站 / 撤销栏 / 状态行）、`scratchpad_row`、`render_scratchpad_edit_row`、`render_scratchpad_empty_state`、`request_scratchpad_load` / `ensure_scratchpad_pump`、剪贴板与多选、键盘导航 |
 | `crates/workbench/src/panels.rs`（`EditorPanel`） | 内容搜索结果面板与替换栏：`render_scratchpad_search_pane`、`replace_scratchpad_all` |
 | `crates/workbench/src/{commands,ui}.rs` | `scratchpad` key context 动作；`SCRATCHPAD_GROUP_MAX_HEIGHT` / `SCRATCHPAD_EMPTY_ICON_SIZE` 等尺寸常量 |
 | `crates/app/src/main.rs` | 快捷键绑定（`ctrl-a` / `f2` / `delete` / `escape` / `↑↓` / `enter` / `ctrl-n`，context = `scratchpad`） |
@@ -78,7 +80,7 @@
 1. **依赖方向**：`scratchpad` 不得依赖 gpui / workbench；workbench 通过 workspace 依赖使用它。
 2. **零裸 hex / 零裸 px**：颜色走 `cx.theme()`（含产品 token）；尺寸先进 `ui.rs` 再引用。
 3. **业务逻辑不进视图**：可单测的语义（复制、搜索、替换、路径防护）放 crate；视图只编排与渲染。
-4. **`render` 是纯读路径**（目标状态，现状有例外）：I/O 与 `Shared` 写入应在事件路径完成。
+4. **`render` 是纯读路径**（已落实于加载路径）：I/O 与 `Shared` 写入放事件路径或后台任务（`services/scratchpad_jobs.rs` 模式），不要在 render 里 `block_on` / 读盘。
 5. **`cx.theme()` 借用**：同一函数里既要 theme 又要 `cx` 可变借用时，把可变操作放在 `let theme = cx.theme();` **之前**。
 6. **重复元素的 `ElementId` 用业务键**（条目相对路径），不要用下标。
 7. **只读项目**（`Shared.project_ui.read_only`）下所有写操作必须拒绝并给出提示。

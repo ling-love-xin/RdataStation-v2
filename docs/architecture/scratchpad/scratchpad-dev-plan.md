@@ -1,12 +1,29 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**Phase A/B 全部落地**——模块根 + 项目级回收站 + 面板闭环（新建含模板/重命名/删除撤销/移动/递归复制/多选/右键/键盘导航）+ 导入与引用（含失效重定位）+ 内容搜索（正则/大小写/命中高亮/全部替换）+ 虚拟列表与空态（2026-09-15，`cargo check --workspace --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad` 14 passed） · 待续：Phase C（双击打开/脏点/冲突 Diff/拖放，依赖编辑器）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
+> 状态：**Phase A/B 全部落地 + K1（草稿箱加载全面后台化，render 零 I/O）已修**——模块根 + 项目级回收站 + 面板闭环（新建含模板/重命名/删除撤销/移动/递归复制/多选/右键/键盘导航）+ 导入与引用（含失效重定位）+ 内容搜索（正则/大小写/命中高亮/全部替换）+ 虚拟列表与空态（2026-09-16，`cargo check -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad` 14 passed） · 待续：K1b（事件路径写操作异步化）、Phase C（双击打开/脏点/冲突 Diff/拖放，依赖编辑器）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-16（九次）— K1：草稿箱加载全面后台化（render 零 I/O）
+
+**背景**：`render_scratchpad` 首次进入、操作后重载、展开文件夹都同步 `block_on` 读盘（大目录/网络盘会冻结界面），违反自定约束「render 是纯读路径」。
+
+**已完成**
+
+| 层 | 内容 | 落点 |
+| --- | --- | --- |
+| 新增 | `scratchpad_jobs`：单工作线程 + tokio 运行时，任务（`LoadRoot` / `LoadDir`）→ 结果队列；`enqueue_*` / `drain_*` / `has_pending` / `invalidate_loads`；模块根加载带自增 `seq` 防过期（沿用 `nav_jobs` 模式） | `crates/workbench/src/services/scratchpad_jobs.rs`（新）+ `services/mod.rs` |
+| 面板 | `load_scratchpad`（同步）→ `request_scratchpad_load`（只入队 + 起轮询）；新增 `ensure_scratchpad_pump`（60 ms 轮询）/ `apply_scratchpad_loads` / `apply_scratchpad_dirs`；`load_scratchpad_dir` → `request_scratchpad_dir` | `crates/workbench/src/panels.rs` |
+| 视图 | `ScratchpadView` 新增 `loading` / `load_seq`；在途期间状态行显示「加载中…」，且**不再用空态占位闪现**（保留旧条目到新结果到达） | 同上 |
+| 防护 | 项目已关闭/切换时 `invalidate_loads()` 推进序号，在途的旧项目结果一律丢弃；轮询印空闲自退，面板销毁后 `weak.update` 失败即结束 | 同上 |
+
+**验证**：`cargo check -p rds-workbench -p rds-app --all-targets -j 2` 零告警。**未验证**：GUI 实际手感（首帧不再卡顿、加载中文案）需人工过一遍《使用手册》§9 验收清单的「基础与空态」。
+
+**仍余（K1b）**：事件路径的写操作（删除/粘贴/导入/提交编辑/搜索/替换/引用增删改）仍是同步 `block_on`；方向是按同一模式逐类迁为任务（每类需自己的结果类型与回填方法）。
 
 ### 2026-09-15（八次）— Phase B 收尾：递归复制 / 命中高亮 / 模板 / 虚拟列表 / 键盘导航 / 替换
 

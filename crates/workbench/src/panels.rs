@@ -43,6 +43,7 @@ use database::model::{
 use database::sql_gen::DmlKind;
 
 use crate::services::nav_jobs;
+use crate::services::scratchpad_jobs;
 
 use crate::services::db_navigator::NavTable;
 use crate::services::query_runner::QueryOutput;
@@ -292,6 +293,8 @@ pub struct SidebarPanel {
     warm_poll: Option<Task<()>>,
     /// 正在轮询导航加载结果的后台任务（避免重复启动；`&self` 路径也要访问）。
     nav_pump: RefCell<Option<Task<()>>>,
+    /// 正在轮询草稿箱加载结果的后台任务（同上）。
+    scratchpad_pump: RefCell<Option<Task<()>>>,
 }
 
 /// 内联编辑（新建 / 重命名 / 新建引用 / 引用改名）。
@@ -506,6 +509,10 @@ fn scratchpad_sort_entries(entries: &mut [ScratchpadEntry], sort: ScratchpadSort
 struct ScratchpadView {
     /// 是否已尝试加载（首次渲染触发一次）。
     loaded: bool,
+    /// 是否正在后台加载（状态行显示「加载中…」，并抑制「草稿箱是空的」闪现）。
+    loading: bool,
+    /// 最近一次模块根加载的请求序号（丢弃过期结果）。
+    load_seq: u64,
     /// 加载错误（未打开项目 / 运行时或存储错误）。
     error: Option<String>,
     /// 模块根的直接子条目（懒加载：展开时按需拉取子目录）。
@@ -1470,6 +1477,7 @@ impl SidebarPanel {
             nav_order: Rc::new(RefCell::new(Vec::new())),
             warm_poll: None,
             nav_pump: RefCell::new(None),
+            scratchpad_pump: RefCell::new(None),
         }
     }
 
@@ -1573,63 +1581,140 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// 加载草稿箱数据（阻塞式，与 workbench 现有服务调用模式一致）。
-    fn load_scratchpad(&self) {
-        let root = self
+    /// 请求重载草稿箱（渲染与事件路径共用）：**只入队 + 起轮询，不做 I/O**。
+    ///
+    /// 实际读盘在 `scratchpad_jobs` 的工作线程；结果由 [`Self::apply_scratchpad_loads`] 回填。
+    /// 重载时保留已展开子目录（在后台重新拉取），避免「操作后展开态看起来空了」。
+    fn request_scratchpad_load(&self, cx: &mut Context<Self>) {
+        let Some(root) = self
             .shared
             .project
             .borrow()
             .as_ref()
-            .map(|s| s.root.clone());
-
-        let mut view = self.scratchpad.borrow_mut();
-        view.loaded = true;
-        view.error = None;
-        view.entries.clear();
-        // 已展开过的子目录缓存刷新（而不是丢弃）：否则增删后展开态看起来“空了”。
-        let cached_parents: Vec<String> = view.children.keys().cloned().collect();
-        view.children.clear();
-        view.external_refs.clear();
-        view.trash.clear();
-
-        let Some(root) = root else {
+            .map(|s| s.root.clone())
+        else {
+            let mut view = self.scratchpad.borrow_mut();
+            view.loaded = true;
+            view.loading = false;
+            // 失效在途结果：项目已关闭，旧项目的加载结果不得回填。
+            view.load_seq = scratchpad_jobs::invalidate_loads();
             view.error = Some("未打开项目：草稿箱根即项目目录，请先打开项目。".to_string());
+            view.entries.clear();
+            view.children.clear();
+            view.external_refs.clear();
+            view.trash.clear();
             return;
         };
+        let parents: Vec<String> = self.scratchpad.borrow().children.keys().cloned().collect();
+        let seq = scratchpad_jobs::enqueue_root_load(&root, parents);
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            // `loaded` = 已受理本次请求（防渲染帧重复入队）；加载中状态另行标记。
+            view.loaded = true;
+            view.loading = true;
+            view.load_seq = seq;
+            view.error = None;
+        }
+        self.ensure_scratchpad_pump(cx);
+    }
 
-        let store = ScratchpadStore::new(root);
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                view.error = Some(format!("运行时错误: {e}"));
+    /// 启动草稿箱加载结果轮询（已有存活任务时不重复启动）。
+    fn ensure_scratchpad_pump(&self, cx: &mut Context<Self>) {
+        if let Some(task) = self.scratchpad_pump.borrow().as_ref() {
+            if !task.is_ready() {
                 return;
             }
-        };
-
-        let result = rt.block_on(async {
-            // 懒加载：仅取模块根目录，子目录在展开时按需拉取。
-            let entries = store.list_local_entries(0).await?;
-            let refs = store.external_reference_status().await?;
-            let trash = store.list_trash().await?;
-            let mut children: Vec<(String, Vec<ScratchpadEntry>)> = Vec::new();
-            for parent in cached_parents {
-                // 已被删除的目录忽略（下次展开时自然不可用）。
-                if let Ok(kids) = store.list_directory_entries(&parent).await {
-                    children.push((parent, kids));
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(60)).await;
+                let loads = scratchpad_jobs::drain_loads();
+                if !loads.is_empty()
+                    && weak
+                        .update(cx, |this, cx| this.apply_scratchpad_loads(loads, cx))
+                        .is_err()
+                {
+                    return;
+                }
+                let dirs = scratchpad_jobs::drain_dirs();
+                if !dirs.is_empty()
+                    && weak
+                        .update(cx, |this, cx| this.apply_scratchpad_dirs(dirs, cx))
+                        .is_err()
+                {
+                    return;
+                }
+                if !scratchpad_jobs::has_pending() {
+                    // 多等一拍确认没有新任务（render 可能刚入队）。
+                    executor.timer(std::time::Duration::from_millis(120)).await;
+                    if !scratchpad_jobs::has_pending() {
+                        break;
+                    }
                 }
             }
-            Ok::<_, shared::error::CoreError>((entries, refs, trash, children))
         });
+        *self.scratchpad_pump.borrow_mut() = Some(task);
+    }
 
-        match result {
-            Ok((entries, refs, trash, children)) => {
-                view.entries = entries;
-                view.external_refs = refs;
-                view.trash = trash;
-                view.children = children.into_iter().collect();
+    /// 回填模块根加载结果（主线程）：丢弃过期序号，写入条目/引用/回收站/子目录缓存。
+    fn apply_scratchpad_loads(
+        &mut self,
+        results: Vec<scratchpad_jobs::LoadResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            // 同一帧可能收到多份（连续重载）：只应用最新序号。
+            let newest = results.iter().map(|r| r.seq).max().unwrap_or(0);
+            if newest < view.load_seq {
+                return;
             }
-            Err(e) => view.error = Some(format!("加载草稿箱失败: {e}")),
+            for r in results.into_iter().filter(|r| r.seq == newest) {
+                match r.entries {
+                    Ok(entries) => {
+                        view.entries = entries;
+                        view.external_refs = r.refs;
+                        view.trash = r.trash;
+                        view.children = r.children.into_iter().collect();
+                        view.error = None;
+                    }
+                    Err(e) => {
+                        view.error = Some(format!("加载草稿箱失败: {e}"));
+                    }
+                }
+                changed = true;
+            }
+            if changed {
+                // 已应用最新序号（更晚的请求会走上面的 early return），加载态结束。
+                view.loading = false;
+            }
         }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// 回填子目录懒加载结果（主线程）。
+    fn apply_scratchpad_dirs(
+        &mut self,
+        results: Vec<scratchpad_jobs::DirResult>,
+        cx: &mut Context<Self>,
+    ) {
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            for r in results {
+                match r.result {
+                    Ok(kids) => {
+                        view.children.insert(r.parent, kids);
+                    }
+                    Err(e) => view.error = Some(format!("展开失败: {e}")),
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// 构建草稿箱存储 + 运行时（未打开项目时报错）。
@@ -2107,24 +2192,22 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// 懒加载子目录（展开文件夹时调用）。
-    fn load_scratchpad_dir(&mut self, path: String, cx: &mut Context<Self>) {
-        let result = match self.scratchpad_store() {
-            Ok((store, rt)) => rt
-                .block_on(store.list_directory_entries(&path))
-                .map_err(|e| e.to_string()),
-            Err(e) => Err(e),
+    /// 懒加载子目录（展开文件夹时调用）：只入队 + 起轮询，结果由 `apply_scratchpad_dirs` 回填。
+    fn request_scratchpad_dir(&mut self, path: String, cx: &mut Context<Self>) {
+        let Some(root) = self
+            .shared
+            .project
+            .borrow()
+            .as_ref()
+            .map(|s| s.root.clone())
+        else {
+            self.scratchpad.borrow_mut().error =
+                Some("未打开项目：草稿箱根即项目目录，请先打开项目。".to_string());
+            cx.notify();
+            return;
         };
-        let mut view = self.scratchpad.borrow_mut();
-        match result {
-            Ok(entries) => {
-                view.children.insert(path, entries);
-                view.error = None;
-            }
-            Err(e) => view.error = Some(format!("加载目录失败: {e}")),
-        }
-        drop(view);
-        cx.notify();
+        scratchpad_jobs::enqueue_dir_load(&root, &path);
+        self.ensure_scratchpad_pump(cx);
     }
 
     /// 导入外部文件到草稿箱（复制进来）。
@@ -2268,7 +2351,7 @@ impl SidebarPanel {
             }
         };
         if needs_load {
-            self.load_scratchpad_dir(path, cx);
+            self.request_scratchpad_dir(path, cx);
         } else {
             cx.notify();
         }
@@ -5938,7 +6021,7 @@ impl SidebarPanel {
                 entity.update(app, |this, cx| {
                     this.focus_handle.clone().focus(window, cx);
                     if should_load {
-                        this.load_scratchpad_dir(load_key.clone(), cx);
+                        this.request_scratchpad_dir(load_key.clone(), cx);
                     } else {
                         cx.notify();
                     }
@@ -6425,7 +6508,7 @@ impl SidebarPanel {
     /// 闭环：新建（内联）/重命名/删除→回收站+撤销栏/回收站恢复与清空/文件名过滤/外部引用移除。
     fn render_scratchpad(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if !self.scratchpad.borrow().loaded {
-            self.load_scratchpad();
+            self.request_scratchpad_load(cx);
         }
         self.ensure_scratchpad_inputs(window, cx);
 
@@ -6459,6 +6542,7 @@ impl SidebarPanel {
             undo,
             filter,
             has_clipboard,
+            loading,
         ) = {
             let view = self.scratchpad.borrow();
             let filter = view
@@ -6492,6 +6576,7 @@ impl SidebarPanel {
                 view.undo.clone(),
                 filter,
                 view.clipboard.is_some(),
+                view.loading,
             )
         };
 
@@ -6888,7 +6973,22 @@ impl SidebarPanel {
 
         let mut drafts = div().v_flex().flex_1().min_h_0().w_full().gap_1().px_1();
         if display_count == 0 {
-            drafts = drafts.child(self.render_scratchpad_empty_state(&entity, &filter, cx));
+            // 加载中不显示空态引导，避免「草稿箱是空的」闪现。
+            if loading {
+                drafts = drafts.child(
+                    div()
+                        .v_flex()
+                        .items_center()
+                        .w_full()
+                        .pt_6()
+                        .px_2()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("加载中…"),
+                );
+            } else {
+                drafts = drafts.child(self.render_scratchpad_empty_state(&entity, &filter, cx));
+            }
         } else {
             if row_count > 0 {
                 drafts = drafts.child(group_header("草稿", row_count));
@@ -7216,7 +7316,8 @@ impl SidebarPanel {
                 .text_xs()
                 .text_color(muted)
                 .child(format!(
-                    "{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用 · {} 项回收站 · 排序 {}",
+                    "{}{file_count} 个文件 · {folder_count} 个文件夹 · {} 项引用 · {} 项回收站 · 排序 {}",
+                    if loading { "加载中… · " } else { "" },
                     external_refs.len(),
                     trash.len(),
                     scratchpad_sort_label(sort, sort_desc)
