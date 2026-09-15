@@ -85,7 +85,8 @@
 | `src/helpers.rs` | 时间双格式解析（RFC3339 / SQLite `CURRENT_TIMESTAMP`） | ✅ |
 | `src/tests.rs` | 存储层回归（t001–t016，测试库跑齐 007 + 020） | ✅ 16 项 |
 | `src/commands.rs` / `resource_view.rs` / `recycle_bin_dialog.rs` | Action / 左 Dock 面板 / 回收站对话框 | ⬜ 占位（Phase 1） |
-| `detail_view.rs` | 详情面板 | ⬜ 未创建（Phase 1） |
+| `src/resource_view.rs` | 左 Dock 面板：面板头 / 提示行 / 行列表（强度徽标 + 尾部字段 + 选中）/ 状态行 / 空态；宿主动作经 `ResourcesHost` | ✅ Phase 1 第一刀（搜索·筛选·虚拟列表·右键菜单待下一批） |
+| `src/ui.rs` | 视图尺寸常量（与 `workbench/ui.rs` 同源同值，但**在本 crate 声明**：依赖方向不允许反向读 workbench） | ✅ |
 
 依赖方向：`analytics_resource → engine, shared`。视图层按 Phase 1 落地（届时依赖 `gpui-kit`；视图归属以 `docs/architecture/analytics_resource/analytics-resource-architecture.md` §8.2 为准）。
 
@@ -112,5 +113,5 @@
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
-- 验证：`cargo test -p rds-analytics-resource -j 2`（当前 **45 项**：16 存储 + 4 领域 + 11 本体 + 7 归档服务 + 7 索引修复）；`cargo check -p rds-analytics-resource -j 2`。
+- 验证：`cargo test -p rds-analytics-resource -j 2`（当前 **49 项**：16 存储 + 4 领域 + 11 本体 + 7 归档服务 + 7 索引修复 + 4 面板）；`cargo check -p rds-analytics-resource -j 2`。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接 DuckDB 静态库会耗尽内存。

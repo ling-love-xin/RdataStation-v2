@@ -20,12 +20,15 @@ use chrono::{DateTime, Utc};
 use shared::error::CoreError;
 use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
 
+pub mod commands;
 pub mod helpers;
 pub mod indexer;
 pub mod model;
 pub mod models;
 pub mod payload;
+pub mod resource_view;
 pub mod service;
+pub mod ui;
 
 pub mod folder;
 pub mod recycle;

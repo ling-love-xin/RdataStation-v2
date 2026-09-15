@@ -8,6 +8,22 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-15 — Phase 1 第一刀：面板骨架（crate 内）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P1.1/P1.2（部分）✅ | `ResourcesPanel`（`BasePanel` + `Panel` + `Focusable`）：面板头（标题 + 归档入口）、提示行（只读/通知分色）、行列表（显示名 / 版本徽标（v1 不显）/ **复现强度徽标** / 尾部字段 / 选中态）、状态行（异常时给"修复…"）、空态；宿主动作经 `ResourcesHost` 注入（5 个请求方法），面板**不自己取数** | `src/resource_view.rs`、`src/ui.rs` |
+| 纯函数与单测 | `strength_badge` / `badge_tone`（`引用`=warning：复现最弱必须显眼）/ `row_tail`（字段优先级）/ `ArchiveCounts::line`（零桶不显示）+ 4 项单测 | 同上 |
+| 接线 | `Cargo.toml` 加 `gpui-kit` 依赖 + dev-dependencies `test-support`（窗口测试待下一批） | `crates/analytics_resource/Cargo.toml` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **49 项全绿**；`cargo check` 零告警 | — |
+
+**实现期踩到的两个坑**（已写进代码注释，供后续视图参考）：
+
+1. **edition 2024 的 RPIT 会捕获入参生命周期**——区域渲染函数写 `-> impl IntoElement` 会借住 `cx`，连续调两个区域函数即"重复可变借用"。返回类型改具体（`Div` / `AnyElement`）后消失；
+2. `overflow_y_scrollbar` 返回的不是 `Div`（滚动包装类型），带滚动的区域必须返回 `AnyElement`。
+
+**未落地（下一批）**：搜索框与筛选/排序菜单、虚拟化列表（`list::List`，当前行用 `Button`）、右键菜单、详情面板、五个对话框、Action 与快捷键、行图标（`IconName` 子集未核实，先不引入）、`workbench` 侧接线（依赖 + 渲染入口，属跨 crate）。
+
 ### 2026-09-15 — Phase 0 第三批：索引修复（`indexer.rs`）
 
 | 项 | 内容 | 落点 |

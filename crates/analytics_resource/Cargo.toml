@@ -19,6 +19,9 @@ specta.workspace = true
 # ===== Async 运行时 =====
 tokio.workspace = true
 
+# ===== 视图（Feature 自持视图：资产库面板随能力同 crate，见 src/resource_view.rs）=====
+gpui-kit.workspace = true
+
 # ===== 内容指纹（本体 sha256）=====
 sha2.workspace = true
 hex.workspace = true
@@ -27,3 +30,7 @@ hex.workspace = true
 tracing.workspace = true
 rusqlite.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+# 面板窗口测试（headless）需要 gpui 的 test-support 能力（下一批接窗口测试时启用）。
+gpui-kit = { workspace = true, features = ["test-support"] }
