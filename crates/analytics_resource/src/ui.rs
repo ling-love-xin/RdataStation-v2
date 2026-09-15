@@ -16,3 +16,5 @@ pub const ICON_SIZE_SM: f32 = 0.875;
 pub const ARCHIVE_EMPTY_ICON_SIZE: f32 = 3.0;
 /// 徽标高（1.125rem = 18px；小字号 + 上下留白，不撑破行高）。
 pub const ARCHIVE_BADGE_HEIGHT: f32 = 1.125;
+/// 详情面板的标签列宽（5.5rem = 88px；固定宽 + 值列弹性，避免长短标签抖动布局）。
+pub const DETAIL_LABEL_WIDTH: f32 = 5.5;
