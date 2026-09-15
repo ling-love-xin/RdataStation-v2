@@ -8,6 +8,19 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16（十一次）— Phase A5：草稿箱文件监控（外部改动自动刷新）
+
+**已完成**
+
+| 层 | 内容 | 落点 |
+| --- | --- | --- |
+| crate | `watch` 模块：`ScratchpadWatcher`（`notify` 递归监听模块根，OS 事件只置位 `ChangeFlag`）+ `ChangeFlag`（`mark` / `take`）；drop 即停止监听（事件收敛线程自然退出）；新增 2 项单测 | `crates/scratchpad/src/watch.rs`（新）、`lib.rs`、`Cargo.toml`、根 `Cargo.toml`（workspace 加 `notify`） |
+| 面板 | `ensure_scratchpad_watch`（项目根变化时换监控点；失败降级为手动 `↻`）+ `ensure_scratchpad_watch_poll`（常驻 1.2 s 去抖轮询：有变更且未在内联编辑/无加载在途 → 置 `loaded = false` 触发常规重载）；项目关闭时停掉监控；发起重载时先清一次标记，避免自己写文件后多刷一次 | `crates/workbench/src/panels.rs` |
+
+**设计取舍**：只做「变更标记 + 去抖重拉」，不做增量同步（避免复刻 `scan_dir_tree` 的排序/过滤/懒加载/行号语义）；只监听内容目录不监听 `.RSmeta`，因此配置写入不会自激刷新。
+
+**验证**：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad -j 2 --lib` **16 passed**（新增 `watch::tests::{change_flag_marks_and_clears, external_write_is_observed}`）。**未验证**：GUI 实机（在外部编辑器改文件后面板 ~1.2 s 内自动刷新）。
+
 ### 2026-09-16（十次）— K1b：重操作全部后台化（导入 / 粘贴 / 清空回收站 / 搜索 / 替换）
 
 **背景**：K1 只把「加载」搬离了 render；真正会长时间卡 UI 的是搬运字节与遍历全树的操作（导入 GB 级文件、复制大目录、清空大回收站、全树搜索、批量替换）。
@@ -228,7 +241,7 @@
 | A2 | `ensure_dir` 只创建 meta 目录（config 父目录 + trash），**不创建**项目根 | 同上 | 空项目首次调用后出现 `.RSmeta/scratchpad/` |
 | A3 | 隐藏与防护：`scan_dir_tree` 跳过所有点开头条目（已有）+ 显式跳过 `.RSmeta`；`resolve_path_impl` 拒绝首段为 `.RSmeta` 或点开头的相对路径（防越权读写内部目录） | 同上 | `.RSmeta` 不在列表、不可被 API 访问 |
 | A4 | 旧数据迁移：若 `{project}/.scratchpad/` 存在 → 迁移 `config.json`（原 `.scratchpad.json`）与用户文件到新语义（文件本就在根下则不移动），迁移后清理空目录（策略见原型 §8.2 待确认） | 同上（`migrate_legacy_layout`） | 迁移幂等；重复启动不报错 |
-| A5 | 文件监控接入：用 `notify` 监听项目根（忽略 `.RSmeta`），变更经事件推送刷新树；`ScratchpadState::set_watching` 落地 ⬜ 未做 | `crates/scratchpad/src/state.rs`（+ 依赖 `notify`） | 外部新建/修改文件，面板自动刷新 |
+| A5 | 文件监控接入：用 `notify` 监听项目根（忽略 `.RSmeta`），变更经事件推送刷新树；`ScratchpadState::set_watching` 落地 ✅ 2026-09-16（改为监听模块目录 `scratchpad/`，变更标记 + 1.2 s 去抖重拉；`ScratchpadState::set_watching` 仍未接，监控器自持生命周期） | `crates/scratchpad/src/watch.rs`（+ 依赖 `notify`） | 外部新建/修改文件，面板自动刷新 |
 | A6 | 清理占位死文件（`model.rs` / `commands.rs` / `scratchpad_view.rs`）✅ 2026-09-15 已删 | `crates/scratchpad/src/` | `cargo check -p rds-scratchpad` 零告警 |
 | A7 | 单元/集成测试：根列表隐藏内部目录、路径穿越防护、回收站落位、引用/`file_meta` 读写、`get_analyzable_files` 相对路径 | `crates/scratchpad/tests/` | 测试全绿 |
 

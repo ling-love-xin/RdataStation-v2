@@ -22,4 +22,6 @@ tokio.workspace = true
 tracing.workspace = true
 regex.workspace = true
 similar.workspace = true
+# 文件监控（外部改动 → 变更标记；见 src/watch.rs）
+notify.workspace = true
 opener.workspace = true

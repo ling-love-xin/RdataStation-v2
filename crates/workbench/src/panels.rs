@@ -307,6 +307,10 @@ pub struct SidebarPanel {
     nav_pump: RefCell<Option<Task<()>>>,
     /// 正在轮询草稿箱加载结果的后台任务（同上）。
     scratchpad_pump: RefCell<Option<Task<()>>>,
+    /// 草稿箱目录监控器（外部改动 → 去抖重拉；每个项目根一个）。
+    scratchpad_watch: Option<scratchpad::ScratchpadWatcher>,
+    /// 监控轮询任务（常驻，每 ~1.2 s 探查一次变更标记）。
+    scratchpad_watch_poll: RefCell<Option<Task<()>>>,
 }
 
 /// 内联编辑（新建 / 重命名 / 新建引用 / 引用改名）。
@@ -1097,6 +1101,8 @@ struct DatabaseNavView {
     membership: HashMap<String, Vec<String>>,
     /// 分组 ID → 组内连接 ID（按手动排序优先，未排按连接 ID）。
     group_order: HashMap<String, Vec<String>>,
+    /// 「未分组」容器里**已手动排序**的连接 ID（顺序）。未列出的回退到名称升序。
+    ungrouped_order: Vec<String>,
     /// 连接 ID → **显式主组** ID（仅用户显式指定过的连接；缺省回退到分组排序推导）。
     primary_group: HashMap<String, String>,
     /// 类别文件夹节点 key → 已渲染条数上限（大 schema 客户端分页）。
@@ -1216,7 +1222,9 @@ struct NavOrderItem {
 }
 
 /// 「未分组」固定分组的伪 ID（收纳不属于任何自定义分组的连接）。
-const GROUP_UNGROUPED: &str = "__ungrouped__";
+///
+/// 与引擎侧哨兵同值：`navigator_ungrouped_order` 用它标识「未分组容器」的顺序。
+const GROUP_UNGROUPED: &str = engine::persistence::UNGROUPED_SCOPE;
 
 /// 连接行徽标状态（颜色通道；见原型设计 §2.3）。
 #[derive(Clone, Copy)]
@@ -1423,6 +1431,50 @@ impl Render for NavDragGhost {
     }
 }
 
+/// 连接行拖拽载荷（归组与组内排序共用）。
+///
+/// 与表 / 视图的拖拽载荷是**不同类型**：两类落点的 `on_drop` 只认自己的类型，
+/// 拖到不相干的落点上自然什么都不发生（回调里无需再判类型）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavConnDragPayload {
+    /// 被拖动的连接 ID。
+    pub conn_id: String,
+    /// 展示名（拖拽幽灵 + 落点通知）。
+    pub name: String,
+}
+
+/// 连接拖拽的落点语义。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ConnDropTarget {
+    /// 落到分组头 / 未分组头：只处理归属（已在组内时不改位置）。
+    Container,
+    /// 落到某一行：归组 + 插到该行之前（落到自己身上 = 位置不变）。
+    BeforeRow(String),
+}
+
+/// 计算「把 `moving` 放到 `before` 之前」后的容器顺序；无需变更时返回 `None`。
+///
+/// - `moving` 不在 `ids` 里 → 视为新加入，插到 `before` 之前（`None` 则追加到末尾）；
+/// - `moving` 已在 `ids` 里 → 先摘除再插入，因此「拖到自己身上」与「已经就位」都返回 `None`；
+/// - `before` 不在 `ids` 里（目标行被过滤掉）→ 追加到末尾。
+///
+/// 纯函数：不碰存储；落库顺序由调用方一次写 `0..n`（见 `nav_runtime::set_container_order`）。
+fn nav_reorder(ids: &[String], moving: &str, before: Option<&str>) -> Option<Vec<String>> {
+    if before == Some(moving) {
+        return None;
+    }
+    let mut next: Vec<String> = ids
+        .iter()
+        .filter(|id| id.as_str() != moving)
+        .cloned()
+        .collect();
+    let at = before
+        .and_then(|b| next.iter().position(|id| id == b))
+        .unwrap_or(next.len());
+    next.insert(at, moving.to_string());
+    (next != ids).then_some(next)
+}
+
 /// 草稿追加：空草稿直接落片段，否则在末尾换行追加。
 ///
 /// 纯函数（无 `Window` / 无 `Entity`），供 `EditorPanel::apply_nav_drag` 与单测共用。
@@ -1524,6 +1576,8 @@ impl SidebarPanel {
             warm_poll: None,
             nav_pump: RefCell::new(None),
             scratchpad_pump: RefCell::new(None),
+            scratchpad_watch: None,
+            scratchpad_watch_poll: RefCell::new(None),
         }
     }
 
@@ -1631,7 +1685,7 @@ impl SidebarPanel {
     ///
     /// 实际读盘在 `scratchpad_jobs` 的工作线程；结果由 [`Self::apply_scratchpad_loads`] 回填。
     /// 重载时保留已展开子目录（在后台重新拉取），避免「操作后展开态看起来空了」。
-    fn request_scratchpad_load(&self, cx: &mut Context<Self>) {
+    fn request_scratchpad_load(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self
             .shared
             .project
@@ -1639,6 +1693,8 @@ impl SidebarPanel {
             .as_ref()
             .map(|s| s.root.clone())
         else {
+            // 项目关闭：停掉监控（不再关心旧项目的目录事件）。
+            self.scratchpad_watch = None;
             let mut view = self.scratchpad.borrow_mut();
             view.loaded = true;
             view.loading = false;
@@ -1651,8 +1707,14 @@ impl SidebarPanel {
             view.trash.clear();
             return;
         };
+        self.ensure_scratchpad_watch(&root, cx);
         let parents: Vec<String> = self.scratchpad.borrow().children.keys().cloned().collect();
         let seq = scratchpad_jobs::enqueue_root_load(&root, parents);
+        // 本次重拉已覆盖“此刻之前的全部改动”（含我们自己刚写的文件），
+        // 清掉标记避免紧接着再来一次多余的重拉。
+        if let Some(watcher) = &self.scratchpad_watch {
+            let _ = watcher.take_changed();
+        }
         {
             let mut view = self.scratchpad.borrow_mut();
             // `loaded` = 已受理本次请求（防渲染帧重复入队）；加载中状态另行标记。
@@ -1662,6 +1724,77 @@ impl SidebarPanel {
             view.error = None;
         }
         self.ensure_scratchpad_pump(cx);
+    }
+
+    /// 确保草稿箱目录监控在跑（项目根变化时换监控点）。
+    ///
+    /// 注册监控是一次轻量 OS 调用（不读盘），且只在「项目根首次出现或变化」时发生，
+    /// 因此放在请求加载路径（不在渲染循环里反复执行）。
+    fn ensure_scratchpad_watch(&mut self, root: &std::path::Path, cx: &mut Context<Self>) {
+        let dir = root.join(scratchpad::MODULE_DIR_NAME);
+        if self
+            .scratchpad_watch
+            .as_ref()
+            .map(|w| w.dir() == dir.as_path())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        match scratchpad::ScratchpadWatcher::start(dir) {
+            Ok(watcher) => self.scratchpad_watch = Some(watcher),
+            Err(e) => {
+                // 监控失败不影响使用（只是不能自动刷新）：降级为手动 `↻`。
+                tracing::warn!("[Scratchpad] 目录监控启动失败，将退化为手动刷新: {e}");
+                self.scratchpad_watch = None;
+                return;
+            }
+        }
+        self.ensure_scratchpad_watch_poll(cx);
+    }
+
+    /// 启动监控轮询（常驻任务：每 ~1.2 s 看一次变更标记，有变化就重拉一次）。
+    ///
+    /// 轮询而非“事件驱动立即重拉”，是为了**去抖**：编辑器保存一次常触发多条 OS 事件，
+    /// 立即刷新会把 UI 打成刷新循环。
+    fn ensure_scratchpad_watch_poll(&self, cx: &mut Context<Self>) {
+        if let Some(task) = self.scratchpad_watch_poll.borrow().as_ref() {
+            if !task.is_ready() {
+                return;
+            }
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| loop {
+            executor.timer(std::time::Duration::from_millis(1200)).await;
+            let action = weak.update(cx, |this, _cx| {
+                let changed = this
+                    .scratchpad_watch
+                    .as_ref()
+                    .map(|w| w.take_changed())
+                    .unwrap_or(false);
+                if !changed {
+                    return false;
+                }
+                // 正在内联编辑（新建/重命名）或已有加载在途：本次不打断，留给下一拍。
+                let view = this.scratchpad.borrow();
+                if view.edit.is_some() || view.loading {
+                    return false;
+                }
+                drop(view);
+                this.scratchpad.borrow_mut().loaded = false;
+                true
+            });
+            match action {
+                Ok(true) => {
+                    if weak.update(cx, |_, cx| cx.notify()).is_err() {
+                        return;
+                    }
+                }
+                Ok(false) => {}
+                Err(_) => return,
+            }
+        });
+        *self.scratchpad_watch_poll.borrow_mut() = Some(task);
     }
 
     /// 启动草稿箱加载结果轮询（已有存活任务时不重复启动）。
@@ -3360,13 +3493,24 @@ impl SidebarPanel {
                 .pt_1()
                 .child(div().text_xs().text_color(muted).child("加载中…"));
         }
-        let (filter, groups, membership, group_order, tags, type_filter, driver_filter, tag_filter) = {
+        let (
+            filter,
+            groups,
+            membership,
+            group_order,
+            ungrouped_order,
+            tags,
+            type_filter,
+            driver_filter,
+            tag_filter,
+        ) = {
             let view = self.database_nav.borrow();
             (
                 view.filter.to_lowercase(),
                 view.groups.clone(),
                 view.membership.clone(),
                 view.group_order.clone(),
+                view.ungrouped_order.clone(),
                 view.tags.clone(),
                 view.type_filter.clone(),
                 view.driver_filter.clone(),
@@ -3549,8 +3693,8 @@ impl SidebarPanel {
             }
         }
 
-        // 「未分组」固定分组：收纳不属于任何自定义分组的连接（空则隐藏）。
-        // 无存储顺序，按名称升序。
+        // 「未分组」固定分组：收纳不属于任何自定义分组的连接。
+        // 顺序：先按手动排序（`ungrouped_order`），未排过的按名称升序排在后面。
         let mut ungrouped: Vec<&ConnectionItem> = conns
             .iter()
             .filter(|c| {
@@ -3561,8 +3705,20 @@ impl SidebarPanel {
                     && passes(c)
             })
             .collect();
-        ungrouped.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        if !ungrouped.is_empty() {
+        let ranked: HashMap<&str, usize> = ungrouped_order
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i))
+            .collect();
+        ungrouped.sort_by(|a, b| match (ranked.get(a.id.as_str()), ranked.get(b.id.as_str())) {
+            (Some(x), Some(y)) => x.cmp(y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
+        // 已有自定义分组时也渲染（空）未分组头：它是「拖拽移出分组」的唯一常驻落点。
+        let groups_shown = shown > 0;
+        if !ungrouped.is_empty() || (!groups.is_empty() && groups_shown) {
             shown += ungrouped.len();
             let ok_count = ungrouped
                 .iter()
@@ -3779,6 +3935,20 @@ impl SidebarPanel {
                     }),
             )
             // 「未分组」是固定分组，不提供重命名 / 删除。
+            // 落点（组归拖拽）：拖到分组头 = 归组；拖到「未分组」头 = 移出全部分组。
+            .drag_over::<NavConnDragPayload>(|style, _, _, cx| {
+                style.bg(cx.theme().colors.list_active)
+            })
+            .on_drop({
+                let entity = entity.clone();
+                let gid = gid.clone();
+                move |payload: &NavConnDragPayload, _, app| {
+                    let gid = gid.clone();
+                    entity.update(app, |this, cx| {
+                        this.apply_conn_drop(payload, &gid, ConnDropTarget::Container, cx)
+                    });
+                }
+            })
             .context_menu({
                 let entity = entity.clone();
                 let gid = gid.clone();
@@ -3865,6 +4035,13 @@ impl SidebarPanel {
         let hover = cx.theme().colors.list_hover;
         let entity = cx.entity();
         let conn_id = conn.id.clone();
+        let tint = muted;
+        let drag_payload = NavConnDragPayload {
+            conn_id: conn.id.clone(),
+            name: conn.name.clone(),
+        };
+        let drop_scope = group_id.to_string();
+        let drop_before = conn.id.clone();
         let primary_gid = self
             .database_nav
             .borrow()
@@ -3895,6 +4072,32 @@ impl SidebarPanel {
                     .child(conn.name.clone()),
             )
             .child(div().flex_none().text_xs().text_color(muted).child(label))
+            // 引用行同样可拖（否则“全组成员都是引用行”的分组无法重排）
+            // 与可落：落到引用行 = 加入该分组并插到它之前。
+            .on_drag(drag_payload, move |payload, _, _, cx| {
+                let label = payload.name.clone();
+                cx.new(|_| NavDragGhost { label, tint })
+            })
+            .drag_over::<NavConnDragPayload>(|style, _, _, cx| {
+                style.bg(cx.theme().colors.list_active)
+            })
+            .on_drop({
+                let entity = entity.clone();
+                let scope = drop_scope.clone();
+                let before = drop_before.clone();
+                move |payload: &NavConnDragPayload, _, app| {
+                    let scope = scope.clone();
+                    let before = before.clone();
+                    entity.update(app, |this, cx| {
+                        this.apply_conn_drop(
+                            payload,
+                            &scope,
+                            ConnDropTarget::BeforeRow(before),
+                            cx,
+                        )
+                    });
+                }
+            })
             .on_click(move |_, _, app| {
                 let cid = conn_id.clone();
                 entity.update(app, |this, cx| {
@@ -4289,6 +4492,40 @@ impl SidebarPanel {
                 })
                 // 行尾操作组（`+` / `✎` / 连接·断开）：仅 hover / 选中显（v8）。
                 .child(ops)
+                // 拖拽（归组 + 组内排序）：拖起本行；落点 = 行（插到该行之前）/ 分组头（见 `render_group_header`）。
+                .on_drag(
+                    NavConnDragPayload {
+                        conn_id: conn.id.clone(),
+                        name: conn.name.clone(),
+                    },
+                    {
+                        let tint = badge_color;
+                        move |payload, _, _, cx| {
+                            let label = payload.name.clone();
+                            cx.new(|_| NavDragGhost { label, tint })
+                        }
+                    },
+                )
+                .drag_over::<NavConnDragPayload>(|style, _, _, cx| {
+                    style.bg(cx.theme().colors.list_active)
+                })
+                .on_drop({
+                    let entity = cx.entity();
+                    let scope = scope_key.clone();
+                    let before = conn.id.clone();
+                    move |payload: &NavConnDragPayload, _, app| {
+                        let scope = scope.clone();
+                        let before = before.clone();
+                        entity.update(app, |this, cx| {
+                            this.apply_conn_drop(
+                                payload,
+                                &scope,
+                                ConnDropTarget::BeforeRow(before),
+                                cx,
+                            )
+                        });
+                    }
+                })
                 // 右键菜单（连接节点）：连接/断开、编辑、查看属性、分组/标签、复制、刷新。
                 .context_menu({
                     let entity = cx.entity();
@@ -5624,6 +5861,146 @@ impl SidebarPanel {
         );
     }
 
+    /// 容器展示名（分组名；`GROUP_UNGROUPED` → 「未分组」）：拖拽通知文案用。
+    fn container_label(&self, scope_id: &str) -> String {
+        if scope_id == GROUP_UNGROUPED {
+            return "未分组".to_string();
+        }
+        self.database_nav
+            .borrow()
+            .groups
+            .iter()
+            .find(|g| g.id == scope_id)
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| scope_id.to_string())
+    }
+
+    /// 容器当前的**全部成员**顺序（不做搜索 / facet 筛选）。
+    ///
+    /// 排序落库要覆盖容器的全部成员：用渲染过的（已筛选）列表写库，会把被过滤掉的
+    /// 行在下次写库时丢掉位置。
+    fn container_order(&self, scope_id: &str) -> Vec<String> {
+        if scope_id != GROUP_UNGROUPED {
+            return self
+                .database_nav
+                .borrow()
+                .group_order
+                .get(scope_id)
+                .cloned()
+                .unwrap_or_default();
+        }
+        // 未分组：成员由“不属于任何分组”推导，顺序 = 手动排序在前 + 未排过的名称升序。
+        let view = self.database_nav.borrow();
+        let conns = self.shared.connections.borrow();
+        let ranked: HashMap<&str, usize> = view
+            .ungrouped_order
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i))
+            .collect();
+        let mut rows: Vec<(Option<usize>, String, String)> = conns
+            .iter()
+            .filter(|c| {
+                view.membership
+                    .get(&c.id)
+                    .map(|gs| gs.is_empty())
+                    .unwrap_or(true)
+            })
+            .map(|c| {
+                (
+                    ranked.get(c.id.as_str()).copied(),
+                    c.name.to_lowercase(),
+                    c.id.clone(),
+                )
+            })
+            .collect();
+        rows.sort_by(|a, b| match (a.0, b.0) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.1.cmp(&b.1),
+        });
+        rows.into_iter().map(|(_, _, id)| id).collect()
+    }
+
+    /// 拖拽落点动作：把连接移到 `scope_id` 容器的指定位置。
+    ///
+    /// 归属与顺序分两步：先改归属（未分组 = 移出全部分组；分组 = 加入并**保留**其它归属，
+    /// 多对多），再以**变更后**的真实成员算新顺序——拿拖拽前的快照会漏掉刚加入的成员。
+    /// 已在目标容器且落点未造成位移时不写库（`nav_reorder` 返回 `None`）。
+    fn apply_conn_drop(
+        &mut self,
+        payload: &NavConnDragPayload,
+        scope_id: &str,
+        target: ConnDropTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let root = self.project_root();
+        let conn_id = payload.conn_id.clone();
+        let name = payload.name.clone();
+        let label = self.container_label(scope_id);
+        let groups_of: Vec<String> = self
+            .database_nav
+            .borrow()
+            .membership
+            .get(&conn_id)
+            .cloned()
+            .unwrap_or_default();
+        let was_member = if scope_id == GROUP_UNGROUPED {
+            groups_of.is_empty()
+        } else {
+            groups_of.iter().any(|g| g == scope_id)
+        };
+
+        // 1) 归属。
+        let membership = if scope_id == GROUP_UNGROUPED {
+            crate::services::nav_runtime::remove_from_all_groups(root.as_deref(), &conn_id)
+        } else {
+            crate::services::nav_runtime::add_to_group(root.as_deref(), scope_id, &conn_id)
+        };
+        if let Err(e) = membership {
+            *self.shared.notice.borrow_mut() = Some(format!("移动失败: {e}"));
+            cx.notify();
+            return;
+        }
+
+        // 2) 顺序。落到容器头且已是成员时不改位置，避免“只是归组”把行拽到末尾。
+        self.reload_nav_org();
+        let next = match &target {
+            ConnDropTarget::Container if was_member => None,
+            ConnDropTarget::Container => {
+                let current = self.container_order(scope_id);
+                nav_reorder(&current, &conn_id, None)
+            }
+            ConnDropTarget::BeforeRow(before) => {
+                let current = self.container_order(scope_id);
+                nav_reorder(&current, &conn_id, Some(before.as_str()))
+            }
+        };
+        if let Some(next) = next {
+            if let Err(e) =
+                crate::services::nav_runtime::set_container_order(root.as_deref(), scope_id, &next)
+            {
+                *self.shared.notice.borrow_mut() = Some(format!("保存排序失败: {e}"));
+                cx.notify();
+                return;
+            }
+            self.reload_nav_org();
+        }
+
+        // 3) 通知：先说归属变化（更重的动作），再说位置。
+        *self.shared.notice.borrow_mut() = Some(if !was_member {
+            if scope_id == GROUP_UNGROUPED {
+                format!("已把「{name}」移出分组")
+            } else {
+                format!("已把「{name}」加入「{label}」")
+            }
+        } else {
+            format!("已调整「{name}」在「{label}」中的位置")
+        });
+        cx.notify();
+    }
+
     /// 重载分组 / 成员关系 / 标签映射（组织变更后调用）。
     fn reload_nav_org(&self) {
         let root = self.project_root();
@@ -5642,12 +6019,14 @@ impl SidebarPanel {
         }
         let tags = crate::services::nav_runtime::list_all_tags(root.as_deref());
         let primary_group = crate::services::nav_runtime::list_primary_groups(root.as_deref());
+        let ungrouped_order = crate::services::nav_runtime::list_ungrouped_order(root.as_deref());
         let driver_catalog = crate::services::nav_runtime::driver_catalog();
         *self.shared.driver_catalog.borrow_mut() = driver_catalog;
         let mut view = self.database_nav.borrow_mut();
         view.groups = groups;
         view.membership = membership;
         view.group_order = group_order;
+        view.ungrouped_order = ungrouped_order;
         view.primary_group = primary_group;
         view.tags = tags;
         view.groups_loaded = true;
@@ -8987,8 +9366,51 @@ impl ComponentPanel for RightSidebarPanel {
 mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
-    use super::{nav_draft_append, nav_type_short_label, parse_nav_search};
+    use super::{nav_draft_append, nav_reorder, nav_type_short_label, parse_nav_search};
     use database::model::NavSource;
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn nav_reorder_moves_and_appends() {
+        let base = ids(&["a", "b", "c"]);
+        // 已在列表里：摘除后插到目标之前。
+        assert_eq!(
+            nav_reorder(&base, "c", Some("a")),
+            Some(ids(&["c", "a", "b"]))
+        );
+        assert_eq!(
+            nav_reorder(&base, "a", Some("c")),
+            Some(ids(&["b", "a", "c"]))
+        );
+        // 不在列表里（新归组）：插到目标之前；无目标则追加。
+        assert_eq!(
+            nav_reorder(&base, "z", Some("b")),
+            Some(ids(&["a", "z", "b", "c"]))
+        );
+        assert_eq!(nav_reorder(&base, "z", None), Some(ids(&["a", "b", "c", "z"])));
+        // 空容器：首个成员落在末尾。
+        assert_eq!(nav_reorder(&[], "z", None), Some(ids(&["z"])));
+    }
+
+    #[test]
+    fn nav_reorder_skips_no_op_moves() {
+        let base = ids(&["a", "b", "c"]);
+        // 落到自己身上。
+        assert_eq!(nav_reorder(&base, "b", Some("b")), None);
+        // 已经正好在目标之前。
+        assert_eq!(nav_reorder(&base, "a", Some("b")), None);
+        // 已在末尾且要追加到末尾。
+        assert_eq!(nav_reorder(&base, "c", None), None);
+        // 目标不在列表里（被并发删除）：退化为追加；已在末尾则不写库。
+        assert_eq!(
+            nav_reorder(&base, "a", Some("gone")),
+            Some(ids(&["b", "c", "a"]))
+        );
+        assert_eq!(nav_reorder(&base, "c", Some("gone")), None);
+    }
 
     #[test]
     fn nav_draft_append_keeps_existing_sql() {

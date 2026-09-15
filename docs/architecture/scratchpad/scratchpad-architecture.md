@@ -289,7 +289,26 @@ render_scratchpad（首次 or loaded=false）
 - 若保留缓存：会显示过期内容。
 - 因此取"记住父目录 → 重新 `list_directory_entries` → 失败的（如已删除）忽略"的策略。
 
-### 6.10 键盘导航
+### 6.11 外部改动 → 去抖重拉
+
+```
+面板首次加载时（或项目根变化时）：ensure_scratchpad_watch
+  → ScratchpadWatcher::start({项目}/scratchpad)（递归监听；.RSmeta 不监听）
+       · OS 事件（含 Err）只置位 ChangeFlag，不做增量同步
+  → ensure_scratchpad_watch_poll：常驻任务，每 ~1.2 s 看一次标记
+       标记为真且「未在内联编辑 且 无加载在途」→ view.loaded = false + cx.notify()
+       → 下一帧走 §6.1 正常重载（含已展开子目录）
+```
+
+- **为何是标记 + 轮询而不是事件驱动立即刷新**：编辑器保存一次常触发多条 OS 事件，
+  立即刷新会把 UI 打成刷新循环；标记法天然合并事件风暴。
+- **为何不做增量同步**：要复刻 `scan_dir_tree` 的排序/过滤/懒加载/行号语义，必然两处真相；
+  草稿箱是临时区，一次重拉可控。
+- **不回激自己**：只监听内容目录（配置写入在 `.RSmeta/`，不在监听范围）；
+  且每次发起重载时会先清一次标记（本次重拉已包含此刻之前的所有改动）。
+- **降级**：监控启动失败（权限/网络盘）只记 `tracing::warn`，退化为手动 `↻`，不影响功能。
+
+### 6.12 键盘导航
 
 | 输入 | 路径 |
 | --- | --- |
@@ -326,6 +345,8 @@ app ──► workbench ──► scratchpad ──► shared
 | `scratchpad_pump`（轮询任务） | `SidebarPanel` 的 `RefCell<Option<Task<()>>>` | 任务空闲自退；面板销毁后 `weak.update` 失败即结束 |
 | `Shared::scratchpad_pump_request` | `Shared`（`Cell<bool>`） | 编辑区发起的替换需复用侧栏轮询印；置位后由 `SidebarPanel::render` 消费（**任何左侧面板模式下都消费**，仅“完全隐藏”时留到恢复侧栏的那一帧） |
 | `scratchpad_jobs` 工作线程 / 结果队列 | 进程级单例（OnceLock） | **无项目态**：只装「任务 + 结果」，不装当前项目；项目根作为参数传入 |
+| `ScratchpadWatcher`（目录监控） | `SidebarPanel` 的 `Option<…>` | 随窗口/面板存活；项目根变化时换监控点；drop 即停止监听 |
+| 监控轮询任务 | `SidebarPanel` 的 `RefCell<Option<Task<()>>>` | 常驻（1.2 s 一拍）；面板销毁后自动结束 |
 | `ScratchpadState` | crate 提供，**当前无生产调用方** | 将来 watcher 用，接入时按窗口持有 |
 
 > 为何工作线程可以是单例而项目态不行：线程与队列是无状态基础设施（等同连接池），每个任务自带 `project_root`，不会串项目。项目态（当前面板看到的条目/选中/展开）始终在窗口的 `Shared` 与视图实体里。
@@ -385,6 +406,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 配置缓存 | `config_cache` + `Mutex`，避免每帧解析 JSON |
 | 复制预算 | 名称避让 ≤1000 次尝试；递归深度 ≤`MAX_DEPTH` |
 | 过期结果防护 | 模块根加载带自增 `seq`；项目关闭/切换时 `invalidate_loads()` 推进序号，旧结果一律丢弃 |
+| 外部改动去抰 | 只监听内容目录（不含 `.RSmeta`）；1.2 s 轮询标记合并事件风暴；重拉时保留已展开子目录 |
 | 可观测 | 面板底部状态行：加载中 / 文件数 / 文件夹数 / 引用数 / 回收站数 / 排序；搜索结果头部：命中数 / 扫描文件数 / 开关标记 |
 
 ## 11. 测试策略
@@ -412,6 +434,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 快捷键与尺寸 | `workbench/src/commands.rs`、`workbench/src/ui.rs`、`app/src/main.rs` |
 | 文件类型色点 | `workbench/src/panels.rs::scratchpad_icon_color` |
 | 后台加载（K1） | `workbench/src/services/scratchpad_jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `panels.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
+| 文件监控（Phase A5） | `scratchpad/src/watch.rs`（`ScratchpadWatcher` / `ChangeFlag`）+ `panels.rs::{ensure_scratchpad_watch, ensure_scratchpad_watch_poll}` |
 | 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `panels.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
 
 ## 13. 已知问题（权威清单）
@@ -429,8 +452,8 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 
 | # | 问题 | 说明 |
 | --- | --- | --- |
-| K3 | 文件监控缺失（Phase A 余项） | 外部程序改了 `scratchpad/` 里的文件，面板不会自动刷新；`state.rs::watcher_active` 已预留但无实现 |
-| K4 | 搜索结果可能过期 | 结果面板是快照；替换后会自动刷新，但外部改动不会（同 K3） |
+| K3 | ~~文件监控缺失~~ ✅ **已修（2026-09-16）** | `scratchpad::ScratchpadWatcher`（`notify` 递归监听模块根）+ 面板侧 1.2 s 去抖轮询重拉；监控失败降级为手动 `↻`；`.RSmeta` 不在监听范围内，不会自激 |
+| K4 | 搜索结果可能过期 | 结果面板是快照；替换后会自刷新（同一次任务内重搜），外部改动现在会触发**面板**重拉，但**已打开的搜索结果不会自动重搜**（需要再按 `⏎`） |
 | K5 | 大小写不敏感高亮的回退 | 小写化改变字节长度（如 `İ`）时**不高亮**但**仍命中**——行为正确但不完美（有单测锚定） |
 
 ### 13.3 待拍板（产品决定）

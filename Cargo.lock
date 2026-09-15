@@ -8064,6 +8064,7 @@ name = "rds-scratchpad"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "notify",
  "opener",
  "rds-shared",
  "regex",
