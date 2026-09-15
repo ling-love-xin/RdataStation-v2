@@ -424,6 +424,23 @@ impl WorkbenchView {
         editor::view::host::request_save_as(&panel, cx);
     }
 
+    /// 新建一份未命名文档（Quick Open 的「新建查询 / 新建笔记 / 新建文件」）
+    ///
+    /// 三档模式走**同一条路**：开文档 → 建面板（`show_document`）；标题由服务层的未命名
+    /// 编号保证不重名（`未命名-1` / `未命名-2`…）。
+    /// 「新建查询」将来的“并绑定当前连接”属 B1（连接绑定）；现在新建文档还没有连接。
+    pub fn new_editor_document(
+        &mut self,
+        mode: editor::model::EditorMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let outcome = self
+            .editor_service
+            .open(editor::service::OpenRequest::untitled("", mode));
+        self.show_document(outcome.id().clone(), window, cx);
+    }
+
     /// 「打开文件」（`Ctrl+O`）：系统文件对话框 → 在编辑器中打开
     ///
     /// 已在编辑器里打开过的路径**只激活、不重读**（去重规则在 `editor::persist::open_file`）。
@@ -1499,6 +1516,10 @@ fn quick_open_results(
             .child("命令"),
     );
     let commands: &[(&str, QuickOpenCommand)] = &[
+        // 新建入口放最前：Quick Open 是工作台的命令面（Ctrl+P），“新建”是最常敲的一条
+        ("新建查询", QuickOpenCommand::NewQuery),
+        ("新建笔记", QuickOpenCommand::NewNote),
+        ("新建文件", QuickOpenCommand::NewFile),
         ("打开草稿箱", QuickOpenCommand::OpenDraft),
         ("打开数据库导航", QuickOpenCommand::OpenDatabase),
         ("打开资产库", QuickOpenCommand::OpenResources),
@@ -1531,8 +1552,8 @@ fn quick_open_results(
                 .cursor_pointer()
                 .text_xs()
                 .text_color(theme.colors.foreground)
-                .on_mouse_down(MouseButton::Left, move |_, _, app| {
-                    run_quick_command(cmd, &shared, &entity, app);
+                .on_mouse_down(MouseButton::Left, move |_, window, app| {
+                    run_quick_command(cmd, &shared, &entity, window, app);
                 })
                 .child(*label),
         );
@@ -1644,6 +1665,9 @@ fn quick_open_results(
 /// Quick Open 命令集合。
 #[derive(Debug, Clone, Copy)]
 enum QuickOpenCommand {
+    NewQuery,
+    NewNote,
+    NewFile,
     OpenDraft,
     OpenDatabase,
     OpenResources,
@@ -1661,9 +1685,23 @@ fn run_quick_command(
     cmd: QuickOpenCommand,
     shared: &Shared,
     entity: &Entity<WorkbenchView>,
+    window: &mut Window,
     cx: &mut App,
 ) {
     match cmd {
+        // 新建文档要 `window`（建面板），因此在命令这里直接落到宿主方法上
+        QuickOpenCommand::NewQuery => {
+            let mode = editor::model::EditorMode::Sql;
+            entity.update(cx, |this, cx| this.new_editor_document(mode, window, cx));
+        }
+        QuickOpenCommand::NewNote => {
+            let mode = editor::model::EditorMode::Analysis;
+            entity.update(cx, |this, cx| this.new_editor_document(mode, window, cx));
+        }
+        QuickOpenCommand::NewFile => {
+            let mode = editor::model::EditorMode::Text;
+            entity.update(cx, |this, cx| this.new_editor_document(mode, window, cx));
+        }
         QuickOpenCommand::OpenDraft => {
             shared.active_left.set(LeftPanel::Draft);
             shared.left_mode.set(SidebarMode::Expanded);

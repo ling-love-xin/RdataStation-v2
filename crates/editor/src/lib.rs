@@ -32,8 +32,11 @@
 //!   `request_close_document` / `resolve_close_choice` / `request_save_as` · 另存为的路径选择是
 //!   **注入端口**（`shared.attach_save_path_picker`，宿主用 `rfd` 实现——本 crate 不依赖 `rfd`）
 //! - ✅ `ui`：本 crate 的结构尺寸常量（不反向依赖 workbench）
-//! - ✅ `view/host` 的工具栏：只有最左的**模式指示器**（`[SQL] ▾` → 三档菜单）——其余控件
-//!   （执行族 / 格式化 / 历史 / 更多 / 执行位置 / 连接）服从原型 §2.2 的分层，未实现就不放按钮
+//! - ✅ `view/host` 的工具栏：最左**模式指示器**（`[SQL] ▾` → 三档菜单）+ SQL 模式的**执行 ▾**
+//!   （主按钮 = 执行「选区优先 → 当前语句」；菜单 = 当前语句 / 选区 / 全部，后两项各自独立）。
+//!   其余控件（格式化 / 历史 / 更多 / 执行位置 / 连接）**未实现就不放**（原型 §2.2 分层）
+//! - ✅ 关闭口径（B16）：脏文档 `closable == false`（Dock 的 ✕/关闭菜单按**当前标签**取该判据，
+//!   脏时入口直接消失），关闭脏文档的唯一入口是 `Ctrl+W` → 三态确认
 //! - ⬜ 1a 待做：`completion` · 结果区可拖拽分栏 · 连接绑定（1b）
 //! - ⬜ 1c：`session` / `notebook`（Cell / Output / Session）
 //!

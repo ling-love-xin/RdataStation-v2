@@ -10,7 +10,7 @@ use std::cell::RefCell;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
@@ -22,7 +22,7 @@ use gpui_kit::*;
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::edit;
-use crate::execution::{self, ExecTarget};
+use crate::execution::{self, ExecMenuKind, ExecTarget};
 use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode};
 use crate::persist;
@@ -361,16 +361,19 @@ impl EditorHostPanel {
         (state.value().to_string(), state.selected_range())
     }
 
-    /// 工具栏（原型 §2.2）：目前只有最左的**模式指示器**
+    /// 工具栏（原型 §2.2）：按其分层只放**今天真有动作**的控件
     ///
-    /// 1a 只做“模式可见且可切”这一件事：执行族 / 格式化 / 历史 / 更多 / 执行位置 / 连接
-    /// 都还没实现，**不放只有宣传作用的按钮**（原型 §2.2 明确排除项）。文本模式下它就是
-    /// 极简工具栏的全部（模式指示 + 后续的查找入口）。
+    /// - 最左：**模式指示器**（文本 / SQL / 分析，点击切换）
+    /// - 执行级：**执行 ▾**——主按钮 = 执行（选区优先 → 当前语句），下拉 = 执行族里已经能跑的
+    ///   三项（当前语句 / 选区 / 全部）。**只在 SQL 模式出现**：文本模式按能力表不通信，
+    ///   分析模式的执行属笔记级动作（1c 随单元落地）。
+    /// - 还没实现的（格式化 / 历史 / ⋯更多 / 执行位置 / 连接）**不放按钮**——
+    ///   “只宣传不实现”是原型 §2.2 的明确排除项。
     fn render_toolbar(&self, mode: EditorMode, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().colors.border;
         let entity = cx.entity();
 
-        div()
+        let mut toolbar = div()
             .h_flex()
             .items_center()
             .gap_1()
@@ -382,6 +385,8 @@ impl EditorHostPanel {
                 Button::new("editor-mode-indicator")
                     .ghost()
                     .small()
+                    // 测试按选择器断言“这个模式该有哪些控件”：模式与工具栏分层不是装饰
+                    .debug_selector(|| "editor-mode-indicator".to_string())
                     .label(format!("{} ▾", mode.label()))
                     .dropdown_menu(move |menu, _window, _cx| {
                         let mut menu = menu;
@@ -401,7 +406,66 @@ impl EditorHostPanel {
                         }
                         menu
                     }),
+            );
+
+        if mode == EditorMode::Sql {
+            // 只有 SQL 模式的执行是“对当前文档执行”：文本模式按能力表不通信，
+            // 分析模式的执行是**笔记级**动作（单元级按钮 + Shift+Enter，1c 落地）
+            toolbar = toolbar.child(self.render_exec_group(cx));
+        }
+        toolbar
+    }
+
+    /// 执行族（执行级）：主按钮 + 下拉菜单
+    ///
+    /// 主按钮与 `Ctrl+Enter` 走**同一条路**（`resolve_target`：选区优先）；下拉里的三项是
+    /// **显式目标**（`target_for_menu`）——“执行选区”没选区时置灰，比“点了没反应”明确。
+    fn render_exec_group(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let run_entity = cx.entity();
+        let (_, selection) = self.editor_snapshot(cx);
+        let has_selection = ExecMenuKind::Selection.is_available(&selection);
+
+        DropdownButton::new("editor-exec")
+            .small()
+            .button(
+                Button::new("editor-exec-run")
+                    .primary()
+                    .small()
+                    .debug_selector(|| "editor-exec-run".to_string())
+                    .label("执行")
+                    .on_click(move |_, _window, app| {
+                        run_entity.update(app, |panel, cx| {
+                            panel.execute_preferring_selection(cx);
+                        });
+                    }),
             )
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for kind in [
+                    ExecMenuKind::CurrentStatement,
+                    ExecMenuKind::Selection,
+                    ExecMenuKind::All,
+                ] {
+                    let entity = entity.clone();
+                    let available = match kind {
+                        ExecMenuKind::Selection => has_selection,
+                        ExecMenuKind::CurrentStatement | ExecMenuKind::All => true,
+                    };
+                    menu = menu.item(
+                        PopupMenuItem::new(kind.label()).disabled(!available).on_click(
+                            move |_, _window, app| {
+                                entity.update(app, |panel, cx| {
+                                    let (text, selection) = panel.editor_snapshot(cx);
+                                    let target = execution::target_for_menu(kind, &text, selection);
+                                    panel.execute(target, cx);
+                                });
+                            },
+                        ),
+                    );
+                }
+                menu
+            })
     }
 
     fn editor_read_only(&self) -> bool {
@@ -621,6 +685,11 @@ impl EditorHostPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.execute_preferring_selection(cx);
+    }
+
+    /// 执行（选区优先 → 当前语句）：快捷键与工具栏主按钮共用同一条路
+    pub(crate) fn execute_preferring_selection(&mut self, cx: &mut Context<Self>) {
         let (text, selection) = self.editor_snapshot(cx);
         let target = execution::resolve_target(&text, selection);
         self.execute(target, cx);
@@ -1066,10 +1135,14 @@ impl BasePanel for EditorHostPanel {
         "editor"
     }
 
-    /// 可关闭；关闭语义是**草稿兜底**（Dock 没有"关闭前否决"钩子，架构 §12 #18）：
-    /// 关闭即落草稿，需要弹窗确认时再上自定义标签条。
+    /// 可关闭：**脏文档不给 ✕**（Dock 无“关闭前否决”钩子，架构 §12 #18）
+    ///
+    /// 标签 ✕ 由 Dock 自己处理：`DockArea` 收到 `TabGroupEvent::ClosePanel` 就直接移除面板，
+    /// 没有地方能插一句“先问用户”。因此脏文档的关闭入口只留**显式的那一个**：
+    /// `Ctrl+W` → [`request_close_document`]（保存 / 不保存 / 取消）。
+    /// 保存后脏点消失，✕ 自然回来。
     fn closable(&self, _cx: &App) -> bool {
-        true
+        !self.is_dirty()
     }
 
     /// 记下所在标签组的弱句柄：

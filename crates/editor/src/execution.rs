@@ -78,7 +78,15 @@ pub fn resolve_target(text: &str, selection: Range<usize>) -> ExecTarget {
         return ExecTarget::Selection(sql.to_string());
     }
 
-    let cursor = selection.start.min(text.len());
+    statement_target(text, selection.start.min(text.len()))
+}
+
+/// 只看光标所在语句（**忽略选区**）：执行族的「执行当前语句」项用它
+///
+/// 与 [`resolve_target`] 的差别只在“有选区时”：菜单里选“执行当前语句”是明确意图，
+/// 不该被顺手选中的一段文字改掉（那是“执行选区”的语义）。
+pub fn statement_target(text: &str, cursor: usize) -> ExecTarget {
+    let cursor = cursor.min(text.len());
     let statements = engine::sql::split_statements(text);
     let statement = statements
         .iter()
@@ -106,6 +114,54 @@ pub fn all_target(text: &str) -> ExecTarget {
     match trimmed(text) {
         Some(sql) => ExecTarget::All(sql.to_string()),
         None => ExecTarget::Empty,
+    }
+}
+
+/// 执行族菜单项（原型 §5.1 里**今天真有动作**的三项）
+///
+/// 批量执行（逐条独立）与“在新结果标签中执行”属 1b（需要多结果集）；执行计划属 B10——
+/// 没实现就不放进菜单（“只宣传不实现”是明确排除项）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecMenuKind {
+    /// 光标所在语句（忽略选区）
+    CurrentStatement,
+    /// 只执行选区（没选区时置灰）
+    Selection,
+    /// 整篇脚本
+    All,
+}
+
+impl ExecMenuKind {
+    /// 菜单文案（与原型 §5.1 用词一致）
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CurrentStatement => "执行当前语句",
+            Self::Selection => "执行选区",
+            Self::All => "执行全部",
+        }
+    }
+
+    /// 当前光标 / 选区下这个菜单项能不能用（置灰比“点了没反应”好）
+    pub fn is_available(self, selection: &Range<usize>) -> bool {
+        match self {
+            Self::Selection => selection.end > selection.start,
+            Self::CurrentStatement | Self::All => true,
+        }
+    }
+}
+
+/// 按菜单项解析目标（**显式目标**：不做“选区优先”推断）
+///
+/// 与 [`resolve_target`] 的分工：快捷键路径按“选区优先”猜用户意图，菜单路径是用户
+/// 已经说清楚了要执行什么——两者都收敛到 [`ExecTarget`]，执行通道只有一条。
+pub fn target_for_menu(kind: ExecMenuKind, text: &str, selection: Range<usize>) -> ExecTarget {
+    match kind {
+        ExecMenuKind::CurrentStatement => statement_target(text, selection.start),
+        ExecMenuKind::Selection => match trimmed(slice(text, &selection)) {
+            Some(sql) => ExecTarget::Selection(sql.to_string()),
+            None => ExecTarget::Empty,
+        },
+        ExecMenuKind::All => all_target(text),
     }
 }
 
@@ -293,7 +349,8 @@ impl Drop for ExecChannel {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ExecChannel, ExecTarget, QueryData, QueryRunner, SubmitError, all_target, resolve_target,
+        ExecChannel, ExecMenuKind, ExecTarget, QueryData, QueryRunner, SubmitError, all_target,
+        resolve_target, statement_target, target_for_menu,
     };
     use crate::model::DocumentId;
     use std::sync::Arc;
@@ -319,6 +376,27 @@ mod tests {
         let target = resolve_target(text, 12..12);
         assert_eq!(target, ExecTarget::Statement("select 2".to_string()));
         assert_eq!(target.label(), "当前语句");
+    }
+
+    /// 菜单里选“执行当前语句”是明确意图：**有选区也不改目标**（那是“执行选区”的语义）
+    #[test]
+    fn statement_target_ignores_an_active_selection() {
+        let text = "select 1;\nselect 2;";
+        // 光标在第一句里，但同时有选区（第二句）——两条路径必须给出不同目标
+        assert_eq!(
+            resolve_target(text, 10..18),
+            ExecTarget::Selection("select 2".to_string())
+        );
+        assert_eq!(
+            statement_target(text, 3),
+            ExecTarget::Statement("select 1".to_string())
+        );
+        // 越界光标不 panic，收敛到末句（与 resolve_target 同一口径）
+        assert_eq!(
+            statement_target(text, 9999),
+            ExecTarget::Statement("select 2".to_string())
+        );
+        assert_eq!(statement_target("-- 只有注释\n", 3), ExecTarget::Empty);
     }
 
     #[test]
@@ -348,6 +426,59 @@ mod tests {
         let text = "select ';' as a;\nselect 2";
         let target = resolve_target(text, 5..5);
         assert_eq!(target, ExecTarget::Statement("select ';' as a".to_string()));
+    }
+
+    /// 菜单是**显式目标**：三项各自独立，不互相推断；“执行选区”没选区就置灰
+    #[test]
+    fn menu_items_resolve_their_own_targets() {
+        let text = "select 1;\nselect 2;";
+        // 只选中第二句的一部分：菜单里的“当前语句”应当给**整句**，
+        // “执行选区”才给那段片段（后者会报语法错，但那正是用户当下选的东西）
+        let partial = 12..18;
+
+        assert_eq!(
+            target_for_menu(ExecMenuKind::CurrentStatement, text, partial.clone()),
+            ExecTarget::Statement("select 2".to_string()),
+            "菜单选“当前语句”时不得去执行半截选区"
+        );
+        assert_eq!(
+            target_for_menu(ExecMenuKind::Selection, text, partial.clone()),
+            ExecTarget::Selection("lect 2".to_string())
+        );
+        assert_eq!(
+            target_for_menu(ExecMenuKind::All, text, partial.clone()),
+            ExecTarget::All(text.to_string())
+        );
+
+        assert!(ExecMenuKind::Selection.is_available(&partial));
+        assert!(!ExecMenuKind::Selection.is_available(&(4..4)));
+        assert!(ExecMenuKind::CurrentStatement.is_available(&(4..4)));
+        assert!(ExecMenuKind::All.is_available(&(4..4)));
+
+        // 三项文案彼此不同（菜单上看不出区别就是没实现）
+        let labels = [
+            ExecMenuKind::CurrentStatement.label(),
+            ExecMenuKind::Selection.label(),
+            ExecMenuKind::All.label(),
+        ];
+        assert_eq!(labels.len(), 3);
+        assert!(labels.iter().all(|label| !label.is_empty()));
+        assert_ne!(labels[0], labels[1]);
+        assert_ne!(labels[1], labels[2]);
+
+        // 空文档 / 只有注释：三项都得是 Empty，不得拿注释去 prepare
+        let comments = "-- 只是注释\n";
+        for kind in [
+            ExecMenuKind::CurrentStatement,
+            ExecMenuKind::Selection,
+            ExecMenuKind::All,
+        ] {
+            assert_eq!(
+                target_for_menu(kind, comments, 3..3),
+                ExecTarget::Empty,
+                "{kind:?} 对纯注释文档应无可执行内容"
+            );
+        }
     }
 
     #[test]

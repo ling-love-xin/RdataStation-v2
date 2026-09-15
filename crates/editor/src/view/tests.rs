@@ -10,7 +10,9 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui_kit::component::dock::{BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _};
+use gpui_kit::component::dock::{
+    BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _,
+};
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -1414,5 +1416,84 @@ fn save_as_rewrites_the_path_and_keeps_the_document_open(cx: &mut TestAppContext
     assert_eq!(title, "renamed.sql", "标签标题跟随文件名");
     assert!(!dirty, "另存为即已保存");
     assert!(shared.service().find(&id).is_some(), "另存为不关文档");
-    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// B16：关闭口径 + 工具栏分层
+// ══════════════════════════════════════════════════════════════════════
+
+/// 脏文档不给标签 ✕：Dock 没有“关闭前否决”钩子，能问用户的入口只留 `Ctrl+W`
+#[gpui_kit::test]
+fn a_dirty_document_has_no_close_glyph(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\glyph.sql", "select 1;");
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    // 刚打开：干净 → 有 ✕（`closable` 是 Dock 显示 ✕ 的判据）
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).closable(cx)),
+        "干净文档应当可关（标签上有 ✕）"
+    );
+
+    // 改动 → 脏 → 收起 ✕（否则 Dock 会直接移除面板，静默丢掉改动）
+    shared.update(|service| service.set_content(&id, "select 2;".to_string()));
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).closable(cx)),
+        "脏文档不得给 ✕（Dock 无否决钩子，只能靠收起入口）"
+    );
+    // 标签脏点仍然在（用户看得出“有未保存改动”）
+    assert!(cx.update(|_window, cx| panel.read(cx).is_dirty()));
+
+    // 保存（清脏）→ ✕ 回来
+    shared.update(|service| {
+        service.mark_saved(&id);
+    });
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).closable(cx)),
+        "保存后 ✕ 应当回来"
+    );
+}
+
+/// 工具栏按模式分层：文本 / 分析模式不放“执行”（那是 SQL 模式的能力，不在 UI 上假装）
+#[gpui_kit::test]
+fn the_toolbar_only_offers_execution_in_sql_mode(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\layers.sql", "select 1;");
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    let exec_present = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.debug_bounds("editor-exec-run").is_some()
+    };
+
+    // SQL 模式：模式指示器 + 执行
+    assert!(exec_present(cx), "SQL 模式应当有执行按钮");
+    assert!(
+        cx.debug_bounds("editor-mode-indicator").is_some(),
+        "模式指示器在所有模式下都在"
+    );
+
+    // 文本模式：只剩模式指示器（不与数据库通信）
+    shared.update(|service| {
+        service.set_mode(&id, EditorMode::Text);
+    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    assert!(!exec_present(cx), "文本模式不得出现执行按钮");
+    assert!(cx.debug_bounds("editor-mode-indicator").is_some());
+
+    // 分析模式：执行属笔记级动作（1c），现在也不放
+    shared.update(|service| {
+        service.set_mode(&id, EditorMode::Analysis);
+    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    assert!(!exec_present(cx), "分析模式的执行随单元落地（1c）");
 }
