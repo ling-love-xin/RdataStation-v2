@@ -1,12 +1,29 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**Phase A/B 全部落地 + K1（草稿箱加载全面后台化，render 零 I/O）已修**——模块根 + 项目级回收站 + 面板闭环（新建含模板/重命名/删除撤销/移动/递归复制/多选/右键/键盘导航）+ 导入与引用（含失效重定位）+ 内容搜索（正则/大小写/命中高亮/全部替换）+ 虚拟列表与空态（2026-09-16，`cargo check -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad` 14 passed） · 待续：K1b（事件路径写操作异步化）、Phase C（双击打开/脏点/冲突 Diff/拖放，依赖编辑器）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
+> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修**——模块根 + 项目级回收站 + 面板闭环（新建含模板/重命名/删除撤销/移动/递归复制/多选/右键/键盘导航）+ 导入与引用（含失效重定位）+ 内容搜索（正则/大小写/命中高亮/全部替换）+ 虚拟列表与空态（2026-09-16，`cargo check -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad` 14 passed） · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase C（双击打开/脏点/冲突 Diff/拖放，依赖编辑器）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
 > 复用 `connection-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-16（十次）— K1b：重操作全部后台化（导入 / 粘贴 / 清空回收站 / 搜索 / 替换）
+
+**背景**：K1 只把「加载」搬离了 render；真正会长时间卡 UI 的是搬运字节与遍历全树的操作（导入 GB 级文件、复制大目录、清空大回收站、全树搜索、批量替换）。
+
+**已完成**
+
+| 层 | 内容 | 落点 |
+| --- | --- | --- |
+| 任务层 | `scratchpad_jobs` 新增 `Import` / `Paste` / `EmptyTrash` / `Search` / `ReplaceAll` 任务与 `OpResult`（含 `SearchPayload`、替换汇总）；新增 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` | `crates/workbench/src/services/scratchpad_jobs.rs` |
+| 侧栏 | 四个重操作改为「只入队 + 起轮询」；新增 `apply_scratchpad_ops` 统一处理文案 / 刷新 / 通知（含剪切成功后收起剪贴板、清空后收起回收站分组） | `crates/workbench/src/panels.rs` |
+| 编辑区 | 「全部替换」只入队（任务内部：先搜→去重文件→逐文件写回→重搜）；新增 `Shared::scratchpad_pump_request`，由 `SidebarPanel::render` 在**所有左侧面板模式下**消费（仅“完全隐藏”时留到恢复那一帧） | 同上 |
+| 清理 | 删除已无调用方的 `copy_scratchpad_entry`（复制已走 `store.copy_entry`） | 同上 |
+
+**有意保留同步**（判定标准：是否可能搬运字节或遍历全树）：新建 / 重命名 / 删除入回收站 / 回收站还原 / 引用增删改 / 打开所在位置——均为单次系统调用（微秒~毫秒级），迁后台反而增加状态同步成本。已记入架构 §13.1 K1c。
+
+**验证**：`cargo check -p rds-workbench -p rds-app --all-targets -j 2` 零告警（仅 `rds-mock` 有一条并行任务的 warning）。**未验证**：GUI 实机（大文件导入/大目录复制/替换进行时的界面响应、通知文案）。
 
 ### 2026-09-16（九次）— K1：草稿箱加载全面后台化（render 零 I/O）
 

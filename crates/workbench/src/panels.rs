@@ -100,6 +100,8 @@ pub struct Shared {
     pub project: Rc<RefCell<Option<project::ui::OpenProject>>>,
     /// M5：草稿箱内容搜索结果（侧栏发起，结果落中央编辑区）。
     pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
+    /// M5：请求侧栏确保草稿箱轮询印在跑（编辑区发起替换后置位，侧栏 render 消费）。
+    pub scratchpad_pump_request: Rc<Cell<bool>>,
     /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
     pub project_ui: Rc<RefCell<project::ui::ProjectUiState>>,
     /// 编辑区是否存在未保存草稿（切换 / 关闭项目拦截信号）。
@@ -157,6 +159,7 @@ impl Shared {
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
             scratchpad_search: Rc::new(RefCell::new(None)),
+            scratchpad_pump_request: Rc::new(Cell::new(false)),
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_dirty: Rc::new(Cell::new(false)),
             editor_sql: Rc::new(RefCell::new(String::new())),
@@ -176,9 +179,18 @@ impl Shared {
         Self::with_connections(Vec::new(), None)
     }
 
+    /// 当前项目根（未打开项目时为 `None`）。
+    ///
+    /// 草稿箱的全部后台任务都要带项目根入队；导航面板与编辑区同样从这里取。
+    pub fn project_root(&self) -> Option<std::path::PathBuf> {
+        self.project.borrow().as_ref().map(|p| p.root.clone())
+    }
+
     /// 构建草稿箱存储 + 运行时（未打开项目时报错）。
     ///
     /// 侧栏（草稿箱面板）与中央编辑区（内容搜索结果 / 替换）共用。
+    /// 仅用于**事件路径的元数据级操作**（新建/重命名/删除入回收站/引用增删改）；
+    /// 搬运字节或遍历全树的操作走 `services::scratchpad_jobs`。
     pub fn scratchpad_store(&self) -> Result<(ScratchpadStore, tokio::runtime::Runtime), String> {
         let root = self
             .project
@@ -755,26 +767,22 @@ fn scratchpad_size_label(size: u64) -> String {
     }
 }
 
-/// 运行草稿箱内容搜索并构建结果视图。
+/// 把后台搜索任务的载荷转成结果视图。
 ///
-/// 侧栏（发起搜索）与中央编辑区（替换后刷新结果）共用，保证两侧开关语义一致。
-fn run_scratchpad_search(
-    store: &ScratchpadStore,
-    rt: &tokio::runtime::Runtime,
-    query: &str,
-    case_sensitive: bool,
+/// 搜索/替换任务的开关与查询词由任务回传，避免再从侧栏输入框反向读状态。
+fn search_view_from_payload(
+    query: String,
     is_regex: bool,
-) -> Result<ScratchpadSearchView, String> {
-    let res = rt
-        .block_on(store.search_file_content(query, case_sensitive, 2, is_regex))
-        .map_err(|e| e.to_string())?;
-    Ok(ScratchpadSearchView {
-        query: query.to_string(),
+    case_sensitive: bool,
+    payload: scratchpad_jobs::SearchPayload,
+) -> ScratchpadSearchView {
+    ScratchpadSearchView {
+        query,
         is_regex,
         case_sensitive,
-        scanned: res.total_files_scanned,
-        truncated: res.truncated,
-        hits: res
+        scanned: payload.scanned,
+        truncated: payload.truncated,
+        hits: payload
             .matches
             .into_iter()
             .map(|m| ScratchpadSearchHit {
@@ -786,7 +794,7 @@ fn run_scratchpad_search(
                 after: m.after_context,
             })
             .collect(),
-    })
+    }
 }
 
 /// 内容搜索结果面板（中央编辑区）：头部（查询/命中数/开关标记）+ 命中列表（含上下文）。
@@ -1005,21 +1013,6 @@ fn join_scratchpad_rel(parent: &str, name: &str) -> String {
     } else {
         format!("{}/{}", parent.trim_end_matches(['/', '\\']), name)
     }
-}
-
-/// 复制条目（文件或文件夹，递归）到目标目录。
-///
-/// 实现在 `rds-scratchpad::ScratchpadStore::copy_entry`（重名避让 / 二进制安全 / 拒绝复制到自身内部）。
-async fn copy_scratchpad_entry(
-    store: &ScratchpadStore,
-    rel_path: &str,
-    target_parent: &str,
-) -> Result<(), String> {
-    store
-        .copy_entry(rel_path, target_parent)
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
 }
 
 impl ScratchpadView {
@@ -1699,6 +1692,14 @@ impl SidebarPanel {
                 {
                     return;
                 }
+                let ops = scratchpad_jobs::drain_ops();
+                if !ops.is_empty()
+                    && weak
+                        .update(cx, |this, cx| this.apply_scratchpad_ops(ops, cx))
+                        .is_err()
+                {
+                    return;
+                }
                 if !scratchpad_jobs::has_pending() {
                     // 多等一拍确认没有新任务（render 可能刚入队）。
                     executor.timer(std::time::Duration::from_millis(120)).await;
@@ -1766,6 +1767,103 @@ impl SidebarPanel {
                     Err(e) => view.error = Some(format!("展开失败: {e}")),
                 }
             }
+        }
+        cx.notify();
+    }
+
+    /// 回填写操作 / 搜索替换结果（主线程）。
+    ///
+    /// 文案、刷新与通知都在这里统一处理：任务层只回传「做了什么 + 成功/失败」。
+    fn apply_scratchpad_ops(&mut self, results: Vec<scratchpad_jobs::OpResult>, cx: &mut Context<Self>) {
+        let mut reload = false;
+        let mut notice: Option<String> = None;
+        let mut error: Option<String> = None;
+        let mut search_view: Option<Option<ScratchpadSearchView>> = None;
+
+        for result in results {
+            match result {
+                scratchpad_jobs::OpResult::Import { outcome } => match outcome {
+                    Ok(()) => {
+                        reload = true;
+                        notice = Some("已导入所选文件".to_string());
+                    }
+                    Err(e) => {
+                        // 部分成功是可能的（逐个导入遇错即停），仍要刷新一次。
+                        reload = true;
+                        error = Some(format!("导入失败: {e}"));
+                    }
+                },
+                scratchpad_jobs::OpResult::Paste { cut, outcome } => match outcome {
+                    Ok(()) => {
+                        reload = true;
+                        if cut {
+                            // 剪切粘贴成功才收起剪贴板（与同步版语义一致）。
+                            self.scratchpad.borrow_mut().clipboard = None;
+                        }
+                        notice = Some("已粘贴".to_string());
+                    }
+                    Err(e) => {
+                        reload = true;
+                        error = Some(format!("粘贴失败: {e}"));
+                    }
+                },
+                scratchpad_jobs::OpResult::EmptyTrash { outcome } => match outcome {
+                    Ok(()) => {
+                        reload = true;
+                        self.scratchpad.borrow_mut().trash_expanded = false;
+                        notice = Some("回收站已清空".to_string());
+                    }
+                    Err(e) => error = Some(format!("清空回收站失败: {e}")),
+                },
+                scratchpad_jobs::OpResult::Search {
+                    query,
+                    is_regex,
+                    case_sensitive,
+                    replaced,
+                    outcome,
+                } => match outcome {
+                    Ok(payload) => {
+                        if let Some((total, files)) = replaced {
+                            notice = Some(format!("已替换 {total} 处（{files} 个文件）"));
+                        }
+                        search_view = Some(Some(search_view_from_payload(
+                            query,
+                            is_regex,
+                            case_sensitive,
+                            payload,
+                        )));
+                        error = None;
+                    }
+                    Err(e) => match replaced {
+                        // 替换任务失败：提示走通知栏（结果栏保持旧内容）。
+                        Some(_) => notice = Some(format!("替换失败: {e}")),
+                        None => {
+                            search_view = Some(None);
+                            error = Some(format!("搜索失败: {e}"));
+                        }
+                    },
+                },
+            }
+        }
+
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            if reload {
+                view.loaded = false;
+                if error.is_none() {
+                    view.error = None;
+                }
+            }
+            if let Some(e) = error {
+                view.error = Some(e);
+            }
+        }
+        if let Some(view) = search_view {
+            *self.shared.scratchpad_search.borrow_mut() = view;
+            self.shared.notify_host(cx);
+        }
+        if let Some(text) = notice {
+            *self.shared.notice.borrow_mut() = Some(text);
         }
         cx.notify();
     }
@@ -2074,6 +2172,8 @@ impl SidebarPanel {
     }
 
     /// 粘贴剪贴板到当前选中的文件夹（未选中文件夹则粘到模块根）。
+    ///
+    /// 复制可能搬运大量字节（递归复制），故入队到后台；结果由 `apply_scratchpad_ops` 回填。
     fn paste_scratchpad_clipboard(&mut self, cx: &mut Context<Self>) {
         // M1：只读打开时禁止写入草稿。
         if self.shared.project_ui.borrow().read_only {
@@ -2084,38 +2184,20 @@ impl SidebarPanel {
         let Some(clipboard) = self.scratchpad.borrow().clipboard.clone() else {
             return;
         };
+        let Some(root) = self.shared.project_root() else {
+            self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
+            cx.notify();
+            return;
+        };
         let target = self.scratchpad_paste_target();
-
-        let result = (|| -> Result<(), String> {
-            let (store, rt) = self.scratchpad_store()?;
-            for path in &clipboard.paths {
-                match clipboard.mode {
-                    ScratchpadClipboardMode::Cut => {
-                        rt.block_on(store.move_entry(path, &target))
-                            .map_err(|e| e.to_string())?;
-                    }
-                    ScratchpadClipboardMode::Copy => {
-                        rt.block_on(copy_scratchpad_entry(&store, path, &target))?;
-                    }
-                }
-            }
-            Ok(())
-        })();
-
-        let mut view = self.scratchpad.borrow_mut();
-        match result {
-            Ok(()) => {
-                if clipboard.mode == ScratchpadClipboardMode::Cut {
-                    view.clipboard = None;
-                }
-                view.selected.clear();
-                view.anchor = None;
-                view.loaded = false;
-                view.error = None;
-            }
-            Err(e) => view.error = Some(format!("粘贴失败: {e}")),
+        let cut = clipboard.mode == ScratchpadClipboardMode::Cut;
+        scratchpad_jobs::enqueue_paste(&root, cut, clipboard.paths.clone(), &target);
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            view.selected.clear();
+            view.anchor = None;
         }
-        drop(view);
+        self.ensure_scratchpad_pump(cx);
         cx.notify();
     }
 
@@ -2154,21 +2236,15 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// 清空回收站。
+    /// 清空回收站（删的是可能很大的 payload，故入队后台）。
     fn empty_scratchpad_trash(&mut self, cx: &mut Context<Self>) {
-        let result = match self.scratchpad_store() {
-            Ok((store, rt)) => rt.block_on(store.empty_trash()).map_err(|e| e.to_string()),
-            Err(e) => Err(e),
+        let Some(root) = self.shared.project_root() else {
+            self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
+            cx.notify();
+            return;
         };
-        let mut view = self.scratchpad.borrow_mut();
-        match result {
-            Ok(()) => {
-                view.loaded = false;
-                view.trash_expanded = false;
-            }
-            Err(e) => view.error = Some(format!("清空回收站失败: {e}")),
-        }
-        drop(view);
+        scratchpad_jobs::enqueue_empty_trash(&root);
+        self.ensure_scratchpad_pump(cx);
         cx.notify();
     }
 
@@ -2263,32 +2339,18 @@ impl SidebarPanel {
         self.ensure_scratchpad_pump(cx);
     }
 
-    /// 导入外部文件到草稿箱（复制进来）。
+    /// 导入外部文件到草稿箱（复制进来；可能拷 GB 级文件，故入队后台）。
     fn import_scratchpad_files(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
-        let result = match self.scratchpad_store() {
-            Ok((store, rt)) => {
-                let mut failure: Option<String> = None;
-                for path in &paths {
-                    if let Err(e) = rt.block_on(store.import_external_file(path)) {
-                        failure = Some(e.to_string());
-                    }
-                }
-                match failure {
-                    None => Ok(()),
-                    Some(e) => Err(e),
-                }
-            }
-            Err(e) => Err(e),
-        };
-        let mut view = self.scratchpad.borrow_mut();
-        match result {
-            Ok(()) => {
-                view.loaded = false;
-                view.error = None;
-            }
-            Err(e) => view.error = Some(format!("导入失败: {e}")),
+        if paths.is_empty() {
+            return;
         }
-        drop(view);
+        let Some(root) = self.shared.project_root() else {
+            self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
+            cx.notify();
+            return;
+        };
+        scratchpad_jobs::enqueue_import(&root, paths);
+        self.ensure_scratchpad_pump(cx);
         cx.notify();
     }
 
@@ -2436,6 +2498,8 @@ impl SidebarPanel {
     }
 
     /// 运行内容搜索（结果写入 `Shared::scratchpad_search`，由中央编辑区渲染）。
+    ///
+    /// 搜索要遍历全树，故入队后台；结果由 `apply_scratchpad_ops` 回填。
     fn run_scratchpad_content_search(&mut self, cx: &mut Context<Self>) {
         let query = self
             .scratchpad
@@ -2454,21 +2518,13 @@ impl SidebarPanel {
             let v = self.scratchpad.borrow();
             (v.search_regex, v.search_case)
         };
-        let result = match self.scratchpad_store() {
-            Ok((store, rt)) => run_scratchpad_search(&store, &rt, &query, case_sensitive, is_regex),
-            Err(e) => Err(e),
+        let Some(root) = self.shared.project_root() else {
+            self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
+            cx.notify();
+            return;
         };
-        match result {
-            Ok(view) => {
-                *self.shared.scratchpad_search.borrow_mut() = Some(view);
-                self.scratchpad.borrow_mut().error = None;
-            }
-            Err(e) => {
-                *self.shared.scratchpad_search.borrow_mut() = None;
-                self.scratchpad.borrow_mut().error = Some(format!("搜索失败: {e}"));
-            }
-        }
-        self.shared.notify_host(cx);
+        scratchpad_jobs::enqueue_search(&root, &query, case_sensitive, is_regex);
+        self.ensure_scratchpad_pump(cx);
         cx.notify();
     }
 
@@ -5523,11 +5579,7 @@ impl SidebarPanel {
 
     /// 当前项目根（项目 / 共享连接的导航状态落项目库）。
     fn project_root(&self) -> Option<std::path::PathBuf> {
-        self.shared
-            .project
-            .borrow()
-            .as_ref()
-            .map(|p| p.root.clone())
+        self.shared.project_root()
     }
 
     /// 首次渲染某连接时，从库中恢复其展开态。
@@ -7495,6 +7547,13 @@ impl Focusable for SidebarPanel {
 
 impl Render for SidebarPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 草稿箱后台任务的结果回填：必须在**所有**面板模式下都消费，
+        // 因为编辑区的「全部替换」也复用这个轮询印（此时左侧可能停在数据源面板）。
+        // （仅剩一种例外：“完全隐藏”时侧栏整体不渲染，请求会留在标记里，
+        //  恢复侧栏后当帧补上——任务本身已在后台完成，不会丢结果。）
+        if self.shared.scratchpad_pump_request.take() {
+            self.ensure_scratchpad_pump(cx);
+        }
         let bg = cx.theme().colors.background;
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();
@@ -7658,9 +7717,10 @@ impl EditorPanel {
         self._scratchpad_replace_sub = Some(sub);
     }
 
-    /// 在草稿箱内容搜索结果上「全部替换」：逐文件原子写回 → 刷新结果。
+    /// 在草稿箱内容搜索结果上「全部替换」：入队后台（替写 + 重搜一次任务完成）。
     ///
-    /// 若文件夹路径覆盖多个文件，按去重后的命中文件列表逐个替换（与侧栏搜索开关一致）。
+    /// 命中文件列表由任务内部从「先搜一遍」得出，与侧栏搜索开关语义完全一致；
+    /// 结果（替换汇总 + 刷新后的结果视图）由侧栏轮询印回填到 `Shared`。
     fn replace_scratchpad_all(&mut self, cx: &mut Context<Self>) {
         if self.shared.project_ui.borrow().read_only {
             *self.shared.notice.borrow_mut() = Some("只读模式：不允许替换草稿内容".to_string());
@@ -7672,57 +7732,33 @@ impl EditorPanel {
             .as_ref()
             .map(|i| i.read(cx).value().to_string())
             .unwrap_or_default();
-        if replacement.is_empty() {
+        if replacement.trim().is_empty() {
             *self.shared.notice.borrow_mut() = Some("请先输入替换内容".to_string());
             cx.notify();
             return;
         }
-        let (query, is_regex, case_sensitive, files) = {
+        let (query, is_regex, case_sensitive) = {
             let search = self.shared.scratchpad_search.borrow();
             match search.as_ref() {
-                Some(s) => {
-                    let mut files: Vec<String> =
-                        s.hits.iter().map(|h| h.file.clone()).collect();
-                    files.sort();
-                    files.dedup();
-                    (s.query.clone(), s.is_regex, s.case_sensitive, files)
-                }
+                Some(s) => (s.query.clone(), s.is_regex, s.case_sensitive),
                 None => return,
             }
         };
-
-        let outcome = (|| -> Result<(usize, usize), String> {
-            let (store, rt) = self.shared.scratchpad_store()?;
-            let mut total = 0usize;
-            let mut changed_files = 0usize;
-            for file in &files {
-                let r = rt
-                    .block_on(store.replace_in_file(
-                        file,
-                        &query,
-                        &replacement,
-                        is_regex,
-                        case_sensitive,
-                    ))
-                    .map_err(|e| format!("{file}: {e}"))?;
-                if r.replaced > 0 {
-                    changed_files += 1;
-                    total += r.replaced;
-                }
-            }
-            // 写回后刷新结果，避免“已替换但仍显示旧命中”。
-            let view = run_scratchpad_search(&store, &rt, &query, case_sensitive, is_regex)?;
-            *self.shared.scratchpad_search.borrow_mut() = Some(view);
-            Ok((total, changed_files))
-        })();
-
-        match outcome {
-            Ok((total, changed_files)) => {
-                *self.shared.notice.borrow_mut() =
-                    Some(format!("已替换 {total} 处（{changed_files} 个文件）"));
-            }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("替换失败: {e}")),
-        }
+        let Some(root) = self.shared.project_root() else {
+            *self.shared.notice.borrow_mut() = Some("未打开项目".to_string());
+            cx.notify();
+            return;
+        };
+        scratchpad_jobs::enqueue_replace_all(
+            &root,
+            &query,
+            &replacement,
+            case_sensitive,
+            is_regex,
+        );
+        *self.shared.notice.borrow_mut() = Some("替换中…".to_string());
+        // 结果由侧栏的轮询印回填：请求它确保还在跑。
+        self.shared.scratchpad_pump_request.set(true);
         self.shared.notify_host(cx);
         cx.notify();
     }

@@ -240,9 +240,12 @@ render_scratchpad（首次 or loaded=false）
 
 ```
 导入（⬇，系统文件对话框多选）
-  → import_external_file(source)：复制进模块根（命名避让），计体积、随项目迁移
+  → import_scratchpad_files 只入队（scratchpad_jobs::Import）
+  → 工作线程 import_external_file × N：复制进模块根（命名避让）
+  → 回填：通知「已导入所选文件」+ 重载（部分失败也重载：已成功的会显现）
 引用（🔗，文件或目录）
   → 选路径 → 内联输入别名（默认取名称）→ add_external_reference(alias, abs_path)
+      · 引用只改 config.json（元数据级）→ 保持事件路径同步，不入队
   → 加载时 external_reference_status() 探测：不存在 → 置灰 +「（丢失）」
   → 行操作：↗ 打开位置 / ✎ 改别名 / ⟲ 重新引用（update_external_reference_path）/ ✕ 移除
 ```
@@ -251,26 +254,31 @@ render_scratchpad（首次 or loaded=false）
 
 ```
 侧栏（内容模式）：查询 + `.*`（正则）+ `Aa`（大小写）+ ⏎
-  → search_file_content(query, case, context=2, is_regex)
+  → 只入队（scratchpad_jobs::Search）+ 确保轮询印在跑
+  → 工作线程 search_file_content(query, case, context=2, is_regex)
        · 遍历 ≤ MAX_DEPTH(4) 的树；单文件 30 s 超时；命中总数 500 截断
        · 正则循环外编译一次（RegexBuilder::case_insensitive）
        · 每行附 match_spans（字节区间，≤16 段/行；字面量模式在大小写不敏感时
          先校验小写化是否改变字节长度，改变则放弃高亮）
-  → ScratchpadSearchView 写入 Shared::scratchpad_search
-  → 中央编辑区渲染：文件 · 行号 + 前后 2 行上下文，命中段用产品 token 高亮
+  → 回填（OpResult::Search）：ScratchpadSearchView 写入 Shared::scratchpad_search → 编辑区渲染
+       · 命中文本高亮用产品 token `search.match.background`
+       · 失败：清空结果视图 + 侧栏错误行显示原因
 ```
 
 ### 6.8 替换
 
 ```
 结果面板：「替换为」输入 + 「全部替换」（禁用条件：输入为空）
-  → replace_scratchpad_all：按命中项**去重文件列表**
-      逐文件 replace_in_file(file, pattern, replacement, is_regex, case_sensitive)
-        · 统一走 regex：字面量模式先 regex::escape（共享大小写开关）
-        · 字面量模式替换串用 NoExpand（`$` 不当分组引用）；正则模式支持 `$1`
-        · 无命中不写盘
-  → 重新执行搜索刷新结果（避免"已替换但显示旧命中"）
-  → 状态栏汇总「已替换 N 处（M 个文件）」；只读项目拒绝
+  → replace_scratchpad_all 只入队（scratchpad_jobs::ReplaceAll）+ 置 Shared::scratchpad_pump_request
+       并先在通知栏显示「替换中…」
+  → 工作线程一次任务完成三步（避免中间态）：
+      ① 先搜一遍得到**去重文件列表**（与侧栏搜索开关语义完全一致）
+      ② 逐文件 replace_in_file(file, pattern, replacement, is_regex, case_sensitive)
+           · 统一走 regex：字面量模式先 regex::escape（共享大小写开关）
+           · 字面量模式替换串用 NoExpand（`$` 不当分组引用）；正则模式支持 `$1`
+           · 无命中不写盘
+      ③ 重搜一遍，随结果一起回传（新增命中也一并呈现）
+  → 回填：通知「已替换 N 处（M 个文件）」+ 刷新结果视图；只读项目在动作入口拒绝
 ```
 
 ### 6.9 懒加载缓存的刷新（易错点）
@@ -316,6 +324,7 @@ app ──► workbench ──► scratchpad ──► shared
 | `ScratchpadView` | `SidebarPanel` 实体的 `Rc<RefCell<…>>` | 面板生命周期 |
 | `Shared::scratchpad_search` | `Shared`（面板与编辑区**共用**） | 窗口生命周期 |
 | `scratchpad_pump`（轮询任务） | `SidebarPanel` 的 `RefCell<Option<Task<()>>>` | 任务空闲自退；面板销毁后 `weak.update` 失败即结束 |
+| `Shared::scratchpad_pump_request` | `Shared`（`Cell<bool>`） | 编辑区发起的替换需复用侧栏轮询印；置位后由 `SidebarPanel::render` 消费（**任何左侧面板模式下都消费**，仅“完全隐藏”时留到恢复侧栏的那一帧） |
 | `scratchpad_jobs` 工作线程 / 结果队列 | 进程级单例（OnceLock） | **无项目态**：只装「任务 + 结果」，不装当前项目；项目根作为参数传入 |
 | `ScratchpadState` | crate 提供，**当前无生产调用方** | 将来 watcher 用，接入时按窗口持有 |
 
@@ -369,6 +378,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 措施 | 数值 / 位置 |
 | --- | --- |
 | 全异步加载 | 模块根 / 子目录加载都在 `scratchpad_jobs` 工作线程；渲染期零 I/O；在途期间状态行显示「加载中…」，且不用空态占位闪现 |
+| 重操作后台化 | 导入 / 粘贴 / 清空回收站 / 搜索 / 替换都在工作线程执行，UI 线程只做入队与回填；长任务期间界面可继续交互（可切换面板、浏览其他内容） |
 | 懒加载 | 首次只取模块根 `depth=0`；展开时 `list_directory_entries` |
 | 虚拟化 | `v_virtual_list` 只渲染可视区行；行高逐行给出（重命名行更高） |
 | 搜索预算 | `MAX_DEPTH=4`、单文件 30 s、总数 500、每行命中区间 ≤16 |
@@ -402,6 +412,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 快捷键与尺寸 | `workbench/src/commands.rs`、`workbench/src/ui.rs`、`app/src/main.rs` |
 | 文件类型色点 | `workbench/src/panels.rs::scratchpad_icon_color` |
 | 后台加载（K1） | `workbench/src/services/scratchpad_jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `panels.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
+| 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `panels.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
 
 ## 13. 已知问题（权威清单）
 
@@ -410,7 +421,8 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | # | 问题 | 处理 |
 | --- | --- | --- |
 | K1 | ~~`render` 期做 I/O~~ ✅ **已修（2026-09-16）** | `render_scratchpad` 首次进入不再同步读盘，改为 `request_scratchpad_load`（只入队）+ `ensure_scratchpad_pump`（60 ms 轮询回填）；新增 `workbench/src/services/scratchpad_jobs.rs`（单工作线程 + tokio 运行时 + 结果队列 + 请求序号防过期）。展开文件夹同理走 `enqueue_dir_load`。渲染期只剩「读状态 + 压平 + 算行高」 |
-| K1b | **事件路径仍是同步 `block_on`** | 删除 / 粘贴 / 导入 / 提交编辑 / 搜索 / 替换 / 引用增删改仍在 UI 线程 `scratchpad_store()` + `block_on`。小目录无感，大目录/网络盘会短暂冻结。方向：按 `scratchpad_jobs` 同一模式逐个迁成任务（需要每类操作各自的结果类型与回填方法） |
+| K1b | **搬运字节 / 遍历全树的操作已后台化** ✅ **已修（2026-09-16）** | 导入、粘贴（剪切与复制）、清空回收站、内容搜索、批量替换均入队 `scratchpad_jobs` 并与回填：新增 `Import` / `Paste` / `EmptyTrash` / `Search` / `ReplaceAll` 任务与 `OpResult` 回填，统一由 `apply_scratchpad_ops` 处理文案/刷新/通知 |
+| K1c | **仅改元数据的操作保持同步**（有意保留） | 新建 / 重命名 / 删除入回收站 / 回收站还原 / 引用增删改 / 打开所在位置仍是事件路径同步 `block_on`：它们是单次系统调用（微秒~毫秒级，即 rename/write 小 JSON），迁到后台反而增加状态同步成本。**判定标准：看操作是否可能搬运字节或遍历全树** |
 | K2 | **同一文件两处状态** | 搜索视图在 `Shared`，替换输入在 `EditorPanel`，查询词在侧栏输入框——目前靠约定同步；若将来支持多搜索会话需要收敛 |
 
 ### 13.2 一致性风险
