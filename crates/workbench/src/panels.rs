@@ -1756,6 +1756,8 @@ impl SidebarPanel {
     ///
     /// 轮询而非“事件驱动立即重拉”，是为了**去抖**：编辑器保存一次常触发多条 OS 事件，
     /// 立即刷新会把 UI 打成刷新循环。
+    ///
+    /// 同一拍里若结果面板还开着，还会用同一套查询/开关重跑一次搜索（K4）。
     fn ensure_scratchpad_watch_poll(&self, cx: &mut Context<Self>) {
         if let Some(task) = self.scratchpad_watch_poll.borrow().as_ref() {
             if !task.is_ready() {
@@ -1766,7 +1768,7 @@ impl SidebarPanel {
         let executor = cx.background_executor().clone();
         let task = cx.spawn(async move |_this, cx| loop {
             executor.timer(std::time::Duration::from_millis(1200)).await;
-            let action = weak.update(cx, |this, _cx| {
+            let action = weak.update(cx, |this, cx| {
                 let changed = this
                     .scratchpad_watch
                     .as_ref()
@@ -1776,12 +1778,26 @@ impl SidebarPanel {
                     return false;
                 }
                 // 正在内联编辑（新建/重命名）或已有加载在途：本次不打断，留给下一拍。
-                let view = this.scratchpad.borrow();
-                if view.edit.is_some() || view.loading {
-                    return false;
+                {
+                    let view = this.scratchpad.borrow();
+                    if view.edit.is_some() || view.loading {
+                        return false;
+                    }
                 }
-                drop(view);
                 this.scratchpad.borrow_mut().loaded = false;
+                // 结果面板若还开着，顺带重跑一次搜索：外部改动后旧的命中列表已是快照。
+                let pending_search = this
+                    .shared
+                    .scratchpad_search
+                    .borrow()
+                    .as_ref()
+                    .map(|s| (s.query.clone(), s.is_regex, s.case_sensitive));
+                if let Some((query, is_regex, case_sensitive)) = pending_search {
+                    if let Some(root) = this.shared.project_root() {
+                        scratchpad_jobs::enqueue_search(&root, &query, case_sensitive, is_regex);
+                        this.ensure_scratchpad_pump(cx);
+                    }
+                }
                 true
             });
             match action {

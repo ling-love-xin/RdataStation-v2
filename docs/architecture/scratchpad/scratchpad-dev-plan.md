@@ -21,6 +21,8 @@
 
 **验证**：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad -j 2 --lib` **16 passed**（新增 `watch::tests::{change_flag_marks_and_clears, external_write_is_observed}`）。**未验证**：GUI 实机（在外部编辑器改文件后面板 ~1.2 s 内自动刷新）。
 
+**收尾（同日）**：监控拍发现外部改动时，若内容搜索结果面板还开着，用同一套查询/开关**重跑一次搜索**（K4 余项）——否则替换与外部改动都会让结果成为快照。
+
 ### 2026-09-16（十次）— K1b：重操作全部后台化（导入 / 粘贴 / 清空回收站 / 搜索 / 替换）
 
 **背景**：K1 只把「加载」搬离了 render；真正会长时间卡 UI 的是搬运字节与遍历全树的操作（导入 GB 级文件、复制大目录、清空大回收站、全树搜索、批量替换）。
