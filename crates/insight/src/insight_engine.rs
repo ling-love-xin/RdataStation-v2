@@ -6,10 +6,7 @@ use tokio::sync::Semaphore;
 use shared::error::{CommonError, CoreError};
 use crate as insight;
 use crate::{RuleExecutor, RuleRegistry};
-use engine::services::duckdb_service::{
-    duckdb_value_to_json, is_array_type, is_binary_type, is_datetime_type, is_numeric_type,
-    DuckDbService,
-};
+use engine::services::duckdb_service::{duckdb_value_to_json, DuckDbService};
 
 use crate::model::types::{
     ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats, DistributionBin, ExtremeValue,
@@ -446,6 +443,59 @@ fn compute_boolean_stats(
             e
         )))),
     }
+}
+
+/// 列类型族判定（决定走哪套规则）。
+///
+/// **归属**：四个判定函数原本在 `engine/services/duckdb_service.rs`，但唯一使用方是本文件，
+/// 且它们编码的是「哪种类型该用哪些统计量」——画像的业务语义，不是数据层的通用能力。
+/// 故于 Phase 1 第二批移入（与 `detect_extremes` 同理，避免低层持有上层词汇）。
+///
+/// `typeof()` 会带参数或后缀（`DECIMAL(12,2)` / `VARCHAR(255)` / `TIMESTAMP WITH TIME ZONE` /
+/// `TIMESTAMP_NS`），所以先取基名再比较：精确比较曾把 **DECIMAL 列当文本列**统计。
+fn type_base(dt_lower: &str) -> &str {
+    dt_lower.split(['(', ' ']).next().unwrap_or(dt_lower).trim()
+}
+
+/// 数值族（含无符号整型：自 Parquet / 外部源读入的列可能是 `UBIGINT` 等）
+fn is_numeric_type(dt_lower: &str) -> bool {
+    matches!(
+        type_base(dt_lower),
+        "bigint"
+            | "integer"
+            | "int"
+            | "smallint"
+            | "tinyint"
+            | "double"
+            | "float"
+            | "hugeint"
+            | "decimal"
+            | "numeric"
+            | "real"
+            | "utinyint"
+            | "usmallint"
+            | "uinteger"
+            | "ubigint"
+    )
+}
+
+/// 时间族。按**前缀**判而不是基名：`timestamp_ns` / `timestamp_us` 的基名仍是它自己，
+/// 但它们都是月时间戳。
+fn is_datetime_type(dt_lower: &str) -> bool {
+    let base = type_base(dt_lower);
+    base == "date" || base == "datetime" || base.starts_with("timestamp") || base.starts_with("time")
+}
+
+fn is_binary_type(dt_lower: &str) -> bool {
+    matches!(type_base(dt_lower), "blob" | "bytea" | "binary" | "varbinary")
+}
+
+/// 数组族：DuckDB 的 `INTEGER[]`，以及外部源的 `ARRAY` / `LIST` 写法
+fn is_array_type(dt_lower: &str) -> bool {
+    dt_lower.starts_with('[')
+        || dt_lower.ends_with(']')
+        || dt_lower.contains("list")
+        || dt_lower.contains("array")
 }
 
 /// 列样本值（条数取 [`DEFAULT_SAMPLE_SIZE`]）。
@@ -972,5 +1022,40 @@ mod tests {
             "should contain numeric-stats"
         );
         Ok(())
+    }
+
+    /// DuckDB 的 `typeof()` 会带参数或后缀，精确比较会把列判错族
+    /// （曾把 `DECIMAL(12,2)` 当文本列做统计）
+    #[test]
+    fn parameterised_types_keep_their_family() {
+        assert!(is_numeric_type("decimal(12,2)"));
+        assert!(is_numeric_type("numeric(18,4)"));
+        assert!(is_numeric_type("bigint"));
+        // 无符号整型：自 Parquet / 外部源读入的列可能是这些
+        assert!(is_numeric_type("ubigint"));
+        assert!(is_numeric_type("utinyint"));
+
+        assert!(is_datetime_type("timestamp with time zone"));
+        assert!(is_datetime_type("timestamptz"));
+        assert!(is_datetime_type("timestamp_ns"));
+        assert!(is_datetime_type("time with time zone"));
+        assert!(is_datetime_type("date"));
+
+        assert!(is_binary_type("blob"));
+        assert!(is_array_type("integer[]"));
+        assert!(is_array_type("list"));
+    }
+
+    /// 文本族不得漏进其它族（否则会去做不可能的统计）
+    #[test]
+    fn text_like_types_stay_out_of_other_families() {
+        assert!(!is_numeric_type("varchar"));
+        assert!(!is_numeric_type("varchar(255)"));
+        assert!(!is_datetime_type("varchar"));
+        assert!(!is_binary_type("varchar"));
+        assert!(!is_array_type("varchar"));
+        // `timestamp` 开头但不是时间类型的反例不存在；保留一条边界：空串
+        assert!(!is_numeric_type(""));
+        assert!(!is_datetime_type(""));
     }
 }

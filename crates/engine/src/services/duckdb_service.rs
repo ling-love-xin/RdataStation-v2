@@ -280,23 +280,13 @@ pub fn duckdb_value_to_json(v: &duckdb::types::Value) -> serde_json::Value {
     }
 }
 
-pub fn is_numeric_type(dt_lower: &str) -> bool {
-    matches!(
-        dt_lower,
-        "bigint"
-            | "integer"
-            | "int"
-            | "smallint"
-            | "tinyint"
-            | "double"
-            | "float"
-            | "hugeint"
-            | "decimal"
-            | "numeric"
-            | "real"
-    )
-}
+// 列类型族判定（`is_numeric_type` / `is_datetime_type` / …）已移入 `crates/insight`：
+// 它们唯一的调用方是洞察的类型分派，且编码的是「哪种类型用哪些统计量」的业务语义。
 
+#[allow(dead_code)]
+pub fn is_json_type(dt_lower: &str) -> bool {
+    matches!(dt_lower, "json" | "jsonb")
+}
 // ─── 数据导出 ────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
@@ -361,27 +351,4 @@ impl DuckDbService {
 
         Ok(file_path.to_string())
     }
-}
-
-pub fn is_datetime_type(dt_lower: &str) -> bool {
-    matches!(
-        dt_lower,
-        "date" | "timestamp" | "datetime" | "time" | "timestamp with time zone" | "timestamptz"
-    )
-}
-
-pub fn is_binary_type(dt_lower: &str) -> bool {
-    matches!(dt_lower, "blob" | "bytea" | "binary" | "varbinary")
-}
-
-#[allow(dead_code)]
-pub fn is_json_type(dt_lower: &str) -> bool {
-    matches!(dt_lower, "json" | "jsonb")
-}
-
-pub fn is_array_type(dt_lower: &str) -> bool {
-    dt_lower.starts_with('[')
-        || dt_lower.ends_with(']')
-        || dt_lower.contains("list")
-        || dt_lower.contains("array")
 }

@@ -35,6 +35,14 @@
 
 **文档随之收敛**：原型 §4「并发受限」与架构 §8 原本写着两份不同文案（「正在分析中，请稍候」vs 引擎那份），已统一为引擎那一份并注明单一来源；架构 §5.3 补上「面板侧编排 + 阻塞语义（宿主放后台线程）」；0.4 记录里的旧文案说明也已改正。
 
+**顺带发现（已修，真缺陷）**：类型族判定原本在 `engine/services/duckdb_service.rs`，用**精确**字符串比较，而 DuckDB 的 `typeof()` 会带参数 / 后缀——`DECIMAL(12,2)` 判不进数值族而落入文本分支（**金额列必中**：没有均值 / 中位 / 直方图，反而多出一行「长度范围」）；`TIMESTAMP_NS` / `TIMESTAMP WITH TIME ZONE` 同理。修法：取基名后比较（时间族按前缀判），并补上 `UBIGINT` 等无符号整型。
+
+同时把四个判定函数（`is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type`）**移入 `insight_engine.rs`**：唯一使用方是洞察的类型分派，且它们编码的是「哪种类型该用哪些统计量」——与 Phase 0 的 `detect_extremes` 同理，不该由低层持有。engine 侧只留通用的值转换（`duckdb_value_to_json`）与 `is_json_type`。
+
+**新增端到端测试**（本模块首次覆盖「取数 → 映射」全链路）：`crates/insight/tests/column_profile_e2e.rs`（4 项）——真实内存 DuckDB 临时表 → 规则驱动统计 → 视图模型。它建在**独立进程**里（不会与 lib 单测共享 DuckDB 单例与规则缓存），不需要任何全局初始化。价值在两处：① 建表后当场拓出上述 DECIMAL 缺陷；② 用**真实 DuckDB 报错文案**验证 `describe_error` 的字符串匹配确实对得上（不靠猜）。
+
+**验证**：`cargo test -p rds-insight` **120 项 lib + 4 项集成全绿**；`cargo check -p rds-engine --all-targets` 零告警。
+
 **未完成（下一批）**：1.5 入口接线（结果表列头右键「洞察此列」/ 导航树右键「查看统计」）、右 Dock 装配（`workbench/src/panels.rs` 去掉三行占位）、`InsightHost` 宿主桥（订阅 `InsightEvent` + 提供项目根）、键位注册；以及**无项目态的降级呈现**（原型 §4：⚙ 与历史禁用 + 「打开项目后可保存快照」引导）——它需要宿主告知「项目是否已打开」，故随装配一起落，不先写一个无人调用的开关。上述落点均在 `workbench`，与并行会话正在改的 `panels.rs` / `view.rs` / `components/` 相交，故本批仍不动。
 
 ### 2026-09-16 — Phase 1 第一批：视图层开工（D21 定案 = 方案 A）
