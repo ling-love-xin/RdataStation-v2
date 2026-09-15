@@ -89,7 +89,7 @@ graph TD
 | 为什么缓存管理不在本 crate | 缓存对话框要 engine（`rusqlite` / 元数据缓存清理）→ 引入 engine 会把数据库依赖拖进视图 crate；继续由宿主的 `on_open_cache` 回调承接 |
 | 宿主桥 | `SettingsHost { on_close, on_open_cache, (将来) on_restart }`——宿主提供副作用，crate 只表达意图 |
 
-**crate 现状**：`lib.rs`（服务 + 持久化）/ `model.rs`（分节 model）/ `settings_view.rs`（页面，目标形态见原型文档）/ `commands.rs`（Action）/ `product_tokens.rs`（产品语义 token 加载，属主题设施暂住此处，见 §13 K6）。
+**crate 现状**：`lib.rs`（服务 + 持久化 + `apply_by_key` / `value_by_key` 唯一读写路径）/ `model.rs`（分节 model）/ `registry.rs`（登记表 + `Slot` 分发表 + `presets` + 契约测试）/ `settings_page.rs`（两栏页面，目标形态；待宿主替换）/ `settings_view.rs`（旧单列视图，待退役）/ `ui.rs`（页面尺寸常量，页面自持）/ `commands.rs`（Action）/ `product_tokens.rs`（产品语义 token 加载，属主题设施暂住此处，见 §13 K6）。
 
 ## 4. 状态所有权与读写路径
 
@@ -138,7 +138,8 @@ graph TD
 
 > 命名约定：JSON 字段一律 **snake_case**（与现有 `theme_mode` / `source_short_code` / `sort_mode` 一致）。M6 文档里写的 `resources.keepVersions` 是同一项的早期命名，落地时以本表为准并同步 M6 文档。
 > `navigator.filters` 是**复合值**（4 个可选筛选项打包），登记为一项；若将来拆成多个独立开关，需重新过准入五条。
-> **代码侧权威是 `crates/settings/src/registry.rs`**（`SettingSpec` / `REGISTRY` / `sections()` / `page_rows()` + 6 项契约测试）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
+> **代码侧权威是 `crates/settings/src/registry.rs`**（`SettingSpec` / `REGISTRY` / `sections()` / `page_rows()` + **`Slot` 分发表**（`slot_for` / `slot_kind` / `slot_is_scalar`）+ `presets` + 11 项契约测试）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
+> **唯一读写路径**：页面对某项的"读当前值 / 写新值 / 判是否偏离默认"全部走 `lib.rs::{value_by_key, apply_by_key}`（按 `Slot` 分发）；页面不直接碰 model 字段，也不落盘。新增项的接入首续：登记 → 模型 → 槽位 → 消费方 → 文档表。
 
 ## 7. 准入与退役
 
@@ -211,7 +212,8 @@ graph TD
 | 层 | 用例 | 现状 |
 | --- | --- | --- |
 | 纯函数 | 旧配置兼容（缺节 / 缺字段回退默认）、序列化往返、默认值表 | ✅ 2 项（`model.rs`），扩大覆盖到全部登记项 |
-| **登记表一致性（新增契约测试）** | 扫描 `model.rs` 字段 ↔ 登记表 ↔ 页面行：**不允许"有字段无消费方"或"有行无字段"** | ✅ 已落地（`registry.rs` 内嵌 6 项：存在性 / 叶子登记 / 默认值一致 / 枚举候选 / 两态文案 / 表卫生） |
+| **登记表一致性（新增契约测试）** | 扫描 `model.rs` 字段 ↔ 登记表 ↔ 页面行：**不允许"有字段无消费方"或"有行无字段"**；槽位形态与登记形态一致；上页的数值行必须有预设档 | ✅ 已落地（共 **17 项**：registry 11 / 页面 3 / model 2 / product_tokens 1，全绿零告警） |
+| 视图窗口测试 | 切节、搜索过滤、恢复默认、禁用态带原因（按 `project/src/ui/tests.rs` 骨架，注意 `#[gpui_kit::test]` 与通配导入的坑） | ⬜ 新增（需给本 crate 加 `test-support` dev-dep，见 dev-plan P1.7） |
 | 写入路径 | 每个 `set_*` 之后 global 与磁盘一致（临时目录隔离） | ⬜ 新增 |
 | 视图窗口测试 | 切节、搜索过滤、恢复默认、禁用态带原因（按 `project/src/ui/tests.rs` 骨架，注意 `#[gpui_kit::test]` 与通配导入的坑） | ⬜ 新增 |
 | 尺寸 / 颜色契约 | 把设置页视图加入 `ui_contract` 的**尺寸**扫描（颜色扫描已含） | ⬜ 待落地（K7） |
@@ -229,7 +231,7 @@ graph TD
 | 登记表落地 | 表格在本文 §6；实现侧以 `model.rs` 字段 + `lib.rs` 方法为准，契约测试负责两者一致 |
 | 僵尸项裁撤 | `crates/settings/src/model.rs` + `settings_view.rs`（同轮删字段与行） |
 
-**落地顺序（P0 与 P1a 已完成）**：0 工作区收尾（在途改动先提交，避免与 `view.rs` / `panels.rs` 冲突）→ 1 model 裁撤 + 登记表与契约测试 ✅ → 2 页面骨架（两栏 + 分节导航 + 行规格）→ 3 搜索 → 4 互斥 / Esc / 契约扫描 → 5 M6 `keep_versions` 接线。逐项任务、验收与风险见 `settings-dev-plan.md` §2–§4。
+**落地顺序（P0、P1a、P1b 已完成；P1.6 宿主替换与 P2 起待排）**：0 工作区收尾（在途改动先提交，避免与 `view.rs` / `panels.rs` 冲突）→ 1 model 裁撤 + 登记表与契约测试 ✅ → 1b 两栏页面实体 + 槽位分发表 ✅（宿主替换待 `view.rs` 落地，P1.6）→ 2 搜索 + 写盘失败可见 + 窗口测试 → 3 互斥 / Esc / 契约扫描 → 4 接线延伸（M6 `keep_versions` / 项目排序行 / `ToggleThemeMode` 决断）。逐项任务、验收与风险见 `settings-dev-plan.md` §2–§4。
 
 ## 13. 已知问题（K1–K9，权威）
 
@@ -243,7 +245,7 @@ graph TD
 | K6 | 🟡 | `product_tokens` 住在 settings | 它是主题设施（资产加载 + global），逻辑归主题层；暂住此处，迁出需同时改 `app` 与 `panels.rs` 消费方 |
 | K7 | ⬜ | 尺寸契约扫描缺口 | `ui_contract` 的尺寸扫描未含 `settings` 视图文件 |
 | K8 | 🟡 | `ToggleThemeMode` 未接线 | Action 已定义，无键位、无 `on_action`；按"没实现就不宣传"应**接线或删除**（§14 Q2） |
-| K9 | ⬜ | 无搜索 / 无互斥 / 分段控件手搓 | 均属页面实现缺口，见原型 §11 |
+| K9 | 🟡 | 页面宿主替换未做 | 两栏页面（`settings_page.rs`）已实现，但工作台仍渲染旧的单列 `settings_view`（P1.6 等 `view.rs` 并行改动落地）；页面同时缺窗口测试与 `↺` 的 hover 卡 |
 
 ## 14. 待确认（Q1–Q6）
 

@@ -2,7 +2,7 @@
 
 > 状态：**首版（2026-09-16，待迭代）** · 本文回答"设置页长什么样"，"什么能进设置页"归 `settings-architecture.md`
 > 关联：`settings-architecture.md`（准入与作用域裁决）、`settings-prototype.html`（交互稿，**示意稿非权威**）、`settings-dev-plan.md`（开发方案）、`settings-crate-design.md`（crate 沿革）、`../layout/layout-design.md`（入口与五段布局）、`../ui/ui-design-spec.md`（三层约束）、`../theme/theme-design.md`（配色）
-> 落地进度：僵尸项裁撤 + 代码侧登记表已落地（2026-09-16）；页面骨架（两栏 / 搜索 / 契约扫描）待做，见 `settings-dev-plan.md` §0/§2。
+> 落地进度（2026-09-16）：僵尸项裁撤 + 代码侧登记表 + **两栏页面实体**（`crates/settings/src/settings_page.rs`）已落地；**宿主替换未做**（工作台仍渲染旧的单列 `settings_view`），见 `settings-dev-plan.md` §0/§2。
 > 技术栈：gpui-kit 0.6.1，组件只从组件库取（禁止手搓），取色零裸 hex，尺寸只引用 `crates/workbench/src/ui.rs` 常量
 
 ## 1. 设计基准
@@ -66,7 +66,7 @@
 | --- | --- | --- | --- |
 | 开关行 | 布尔 | `Switch`（默认尺寸） | 显示标签 / 显示归属域 |
 | 选择行 | 枚举 | ≤ 4 项用 `TabBar::segmented`；> 4 项用 `Select` | 主题模式（浅色/深色）、来源标识（短码/文字）、建连超时（5/15/30/60s）、LAN 直连 TLS、项目列表排序 |
-| 数值 / 文本行 | 自由值 | `Input` + 校验 + 单位后缀 | 保留版本份数（M6 接线后加入，见 §5） |
+| 数值行 | **预设档（分段）** | `TabBar::segmented`（档位来自登记表 `presets`） | 建连超时（5/15/30/60s） |
 | 动作行 | 不是设置项，是跳转 | `Button` | 缓存管理… |
 
 ### 4.2 规格
@@ -81,7 +81,7 @@
 | 圆角 | 弹层用 `theme.radius`（当前 8px）；分组卡与控件用 0.375rem（6px）局部圆角；**不新造 token** |
 | hover | 行底 `list_hover`（提示"整行是一件事"） |
 | 禁用 | `.disabled(true)`（`Disableable`）**且**说明行给出原因——禁止"只变灰不说为什么" |
-| 恢复默认 | ghost 图标按钮（↺），**仅在当前值 ≠ 默认值时出现**；hover 卡显示默认值文本 |
+| 恢复默认 | 图标按钮（`IconName::RotateCw`），**仅在当前值 ≠ 默认值时出现**；hover 卡显示默认值文本（待接 `HoverCard`，见 §11） |
 | 节级重置 | 节标题行右侧 `Button`（ghost，文案「重置本节」），仅在**本节**含非默认值项时出现；**不二次确认**（重置只写回默认值，且逐行仍可单独改回） |
 | 键盘 | `Tab` 在控件间移动；`↑/↓` 在分节导航内移动；`Esc` 关闭；搜索聚焦 `Ctrl+F`（`Ctrl+,` 开/关已有） |
 
@@ -104,6 +104,9 @@
 | 需重启 | 需重载进程 | v1 无 | 行尾 `warning` 文案「重启后生效」+ 底栏右侧「重启」按钮 |
 
 > 规则：**一项设置如果在界面上看不出生效方式，就必须在说明行写出来**（对齐"没实现就不宣传"）。
+
+> **数值行一律用预设档，不做自由输入**：自由输入要成套的校验与单位处理，而目前没有这种需求（`navigator.property_panel_width` 由拖拽设置、不上页）。
+> 触发重评：出现无法穷举的数值项（如保留份数要支持任意值）时，补校验与单位后缀再上。契约测试 `page_rows_are_scalar_and_writable` 会拦住"数值行没给预设档"。
 
 ## 5. 第一版内容清单
 
@@ -158,28 +161,43 @@
 
 > 对话框内**不用** `sidebar_accent`（rds-ui-spec：对话框内用 `list*` / `popover`）。
 
-## 7. 尺寸常量（本页新增 5 项，登记在 `crates/workbench/src/ui.rs`）
+## 7. 尺寸常量（页面自持，登记在 `crates/settings/src/ui.rs`）
 
 | 常量 | 倍率 | @16px | 依据 |
 | --- | --- | --- | --- |
-| `SETTINGS_PAGE_WIDTH` | 61.25 | 980 | 与「新建数据源连接」同档宽度；两栏（12.5 导航 + 弹性内容）后仍容得下 15rem 标签列 |
-| `SETTINGS_PAGE_HEIGHT` | 35.0 | 560 | 固定高：切节 / 加行不跳高（沿用连接对话框 Tab 区的教训） |
-| `SETTINGS_NAV_WIDTH` | 12.5 | 200 | 与连接对话框侧栏同宽，避免第二套"侧栏宽度" |
-| `SETTINGS_LABEL_WIDTH` | 15.0 | 240 | 行标签列；再窄则中长标签（如"建连超时"）要换行 |
-| `SETTINGS_ROW_MIN_HEIGHT` | 2.5 | 40 | 设置行最小高（比列表行高 1.5rem 高一档，因控件更高） |
+| `PAGE_WIDTH` | 61.25 | 980 | 与「新建数据源连接」同档宽度；两栏（12.5 导航 + 弹性内容）后仍容得下 15rem 标签列 |
+| `PAGE_HEIGHT` | 35.0 | 560 | 固定高：切节 / 加行不跳高（沿用连接对话框 Tab 区的教训） |
+| `NAV_WIDTH` | 12.5 | 200 | 与连接对话框侧栏同宽，避免第二套"侧栏宽度" |
+| `LABEL_WIDTH` | 15.0 | 240 | 行标签列；再窄则中长标签（如"建连超时"）要换行 |
+| `ROW_MIN_HEIGHT` | 2.5 | 40 | 设置行最小高（比列表行高一档，因控件更高） |
+| `ROW_HEIGHT` | 1.5 | 24 | 分节导航行高（与 workbench `ROW_HEIGHT` 同值） |
+| `SECTION_HEAD_HEIGHT` | 1.75 | 28 | 节标题行 |
+| `HEADER_HEIGHT` | 2.25 | 36 | 标题行（与 workbench `PANEL_HEADER_HEIGHT` 同值） |
+| `CARD_RADIUS` / `CARD_PADDING` | 0.375 / 0.75 | 6 / 12 | 分组卡圆角与内边距 |
+| `HAIRLINE` / `ACTIVE_BAR` | 1px / 2px | — | 固定描边：分隔线 / 导航激活条 |
 
-复用既有常量：`PANEL_HEADER_HEIGHT`（标题行 2.25rem）、`CONTROL_HEIGHT_SM`（1.625rem）、`CONTROL_HEIGHT_MD`（2rem）、`ICON_SIZE_SM` / `ICON_SIZE_MD`、`ROW_HEIGHT`、`HAIRLINE`、`TREE_ACTIVE_BAR`、`GAP_SM` / `GAP_MD` / `GAP_LG`、`PANEL_PADDING`。
+**为什么不在 `crates/workbench/src/ui.rs`**（初版设计曾这样写）：依赖方向是 `workbench → settings`，
+页面在 `settings` 里**不能反向引用**工作台的常量；因此页面自持一份。与 workbench 同名常量
+（`ROW_HEIGHT` / `HAIRLINE` / `PANEL_HEADER_HEIGHT`）**保持同值**，调整需两边同步；
+尺寸契约扫描覆盖本文件（见 §11 落地项 5）。
+
+局部间距与图标尺寸仍用 gpui 的 Tailwind 尺度方法（`gap_2` / `px_3` / `size_4`）与组件默认尺寸（`Switch` 36×20、`TabBar::segmented` Small 档）。
 
 ## 8. GPUI 落点映射
 
 | 元素 | 落点 | 备注 |
 | --- | --- | --- |
-| 设置页实体 | `crates/settings/src/settings_page.rs`（新，替换 `settings_view.rs` 的单列实现） | `Entity<SettingsPage>`；`render_section_*` / `render_row_*` 拆分 |
+| 页面尺寸常量 | `crates/settings/src/ui.rs` | 页面自持（依赖方向所限，§7） |
+| 条目清单与分节 | `crates/settings/src/registry.rs` | 页面不得自排、自加 |
+| 设置项字段与默认值 | `crates/settings/src/model.rs` | 新增字段必先登记 |
+| 唯一写入路径 | `crates/settings/src/lib.rs::{apply_by_key, value_by_key}` | 页面不直接改 model |
+| 宿主桥 | `SettingsHost { on_close, on_open_cache }`（`settings_page.rs`） | 副作用由宿主实现 |
+| 设置页实体 | `crates/settings/src/settings_page.rs`（✅ 已实现；`settings_view.rs` 待退役） | `Entity<SettingsPage>`；分节 / 行 / 下拉全部由 `registry` 驱动 |
 | 分节导航 | 同上 | `List` + `ListDelegate`（hover / 选中 / 键盘由组件给）；稳定 id 用**节的 key**，不用下标 |
 | 分节与行清单 | `crates/settings/src/registry.rs`（`sections()` / `page_rows()`） | 页面**不得自排顺序、不得自加行**（登记表是权威） |
 | 行与控件 | 同上 | 只读 `SettingsService::get_*`；写只经 `SettingsService::set_*` |
 | 搜索框 | 同上 | `Input` + `InputState`（`cx.new(|cx| InputState::new(window, cx))`） |
-| 宿主 overlay | `crates/workbench/src/view.rs::render_settings_panel`（保持现状：懒创建实体 + 居中 overlay） | 互斥规则在宿主实现（§2.1） |
+| 宿主 overlay | `crates/workbench/src/view.rs::render_settings_panel`（⬜ 待替换为 `SettingsPage::new(window, host, cx)`） | 互斥规则在宿主实现（§2.1） |
 | 缓存管理 | 宿主回调（现状 `on_open_cache`）→ `workbench/src/components/cache_dialog.rs` | 缓存 UI 依赖 engine，不进 `settings`（依赖只向下） |
 | 命令 | `settings/src/commands.rs`（`OpenSettings` 已有） | `ToggleThemeMode` 未接线，见 §11 |
 | 契约扫描 | `crates/workbench/tests/ui_contract.rs`：把本页视图文件加入**尺寸**扫描（颜色扫描已含） | 见 §11 落地项 5 |
@@ -209,14 +227,16 @@
 
 | # | 状态 | 项 | 说明 |
 | --- | --- | --- | --- |
-| 1 | ⬜ | 两栏页面未实现 | 现为单列四节（`settings_view.rs`），本页是其目标形态 |
-| 2 | ⬜ | 分段控件为手搓 `Button` 组 | 现状：主题 / 超时 / 短码 / TLS 四处用 `Button` 拼分段；应换 `TabBar::segmented`（rds-ui-spec 组件表） |
+| 1 | ✅ | 两栏页面 | 已在 `settings_page.rs` 实现（分节导航 + 内容区 + 搜索 + 恢复默认）；**宿主替换未做**（工作台仍挂旧视图） |
+| 2 | ✅ | 分段控件改用组件 | 枚举 / 两态 / 数值预设档统一走 `TabBar::segmented`（`segmented()` 辅助函数）；旧视图里的手搓按钮组随旧视图退役 |
 | 3 | ⬜ | Quick Open 与设置页未互斥 | 两个 overlay 可同时为真（`view.rs::render` 分别 append） |
-| 4 | ⬜ | `Esc` 关闭 / `Ctrl+F` 聚焦搜索未绑 | app 层 `bind_keys` 中无这两条（`key_context("settings")` 待立） |
-| 5 | ⬜ | 尺寸契约扫描未覆盖 | `ui_contract` 的尺寸扫描不含 `settings` 视图文件（颜色扫描已含） |
+| 4 | ⬜ | `Esc` 关闭 / `Ctrl+F` 聚焦搜索未绑 | 需在页面挂 `key_context("settings")` + app 层 `bind_keys` |
+| 5 | ⬜ | 尺寸契约扫描未覆盖 | `ui_contract` 的尺寸扫描要加入 `settings/src/{ui.rs, settings_page.rs}` |
 | 6 | 🟡 | `ToggleThemeMode` 未接线 | Action 已定义但无键位、无 `on_action` 处理；**要么接线、要么删除**（见架构 §14 Q2） |
 | 7 | ⬜ | 写盘失败静默 | `save_settings` 忽略 I/O 错误，页面无从提示 |
-| 8 | ⬜ | 无搜索结果 / 无搜索 | 现实现无搜索行 |
+| 8 | ✅ | 搜索 | 搜索行 + 结果列表（节 › 行 面包屑）+ 无结果空态；只搜登记项、动作行不参与 |
+| 9 | ⬜ | 「恢复默认」的 hover 卡未接 | 现用 `IconName::RotateCw` 图标按钮 + `tooltip` 缺位；默认值文本无处看（接 `HoverCard` 后补） |
+| 10 | ⬜ | 页面无窗口测试 | 目前只有 3 项纯函数测试（搜索命中 / 行集一致 / 默认快照无改动）；切节与点击写入待补 |
 
 > 进度：僵尸行已随 `model.rs` 裁撤删除（2026-09-16）；其余项见 `settings-dev-plan.md` §2 的阶段任务。
 

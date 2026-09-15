@@ -6,6 +6,17 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16（第二批）— 两栏页面实体 + 槽位分发表（P1b 主体）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **两栏页面** | 标题行 / 搜索行 / 分节导航（`List` 组件，键盘与 hover 由组件给）/ 内容区（内部滚动）/ 底栏；分节与行**全部由登记表驱动**；`↺` 恢复默认 + 节级「重置本节」；搜索（节名·标签·说明·key）与无结果空态 | `crates/settings/src/settings_page.rs`（新增） |
+| **页面尺寸常量** | `PAGE_WIDTH/HEIGHT` · `NAV_WIDTH` · `LABEL_WIDTH` · `ROW_MIN_HEIGHT` · `ROW_HEIGHT` · `SECTION_HEAD_HEIGHT` · `HEADER_HEIGHT` · `CARD_RADIUS/PADDING` · `HAIRLINE/ACTIVE_BAR` | `crates/settings/src/ui.rs`（新增；**不能**放 workbench，依赖方向所限，见原型 §7） |
+| **槽位分发表** | `Slot` + `slot_for` / `slot_kind` / `slot_is_scalar`：把"键 → 类型化读写"收敛成一张表；`apply_by_key` / `value_by_key` 是唯一读写路径 | `crates/settings/src/registry.rs`、`lib.rs` |
+| **数值预设档** | `SettingSpec::presets`（值 + 显示名）＋"上页的数值行必须有预设档"的契约约定（自由输入不做） | 同上 |
+| 测试 | **17 项全绿、零告警**（registry 11 + 页面 3 + model 2 + product_tokens 1） | §5 |
+| 宿主替换 | ⬜ **未做**：`workbench/src/view.rs` 正被并行改动，P1.6 等其落地后再接 | §2 P1.6 |
+
 ### 2026-09-16 — 文档 + 登记表 + 僵尸项裁撤（P0 + P1a）
 
 | 项 | 内容 | 落点 |
@@ -26,8 +37,8 @@
 | --- | --- | --- |
 | 模型与持久化 | `Settings` 4 节 + `settings.json`（`%APPDATA%/RdataStation`）；缺失 / 坏文件回退默认 | 写盘非原子、失败静默（K2）；非 Windows 落临时目录（K5） |
 | 服务与命令 | `SettingsService`（init / get / 9 个 `set_*` / 主题切换）、进程级连接默认值快照 | 构造期直读 2 处（K1）；`ToggleThemeMode` 未接线（K8） |
-| 登记表（准入） | ✅ `registry.rs` + 6 项契约测试 | 页面尚未消费 `sections()` / `page_rows()`（P1b） |
-| 页面形态 | 单列三节（临时形态），分段控件用 `Button` 拼 | 两栏 + 分节导航 + 搜索 + 恢复默认（P1b/P2） |
+| 登记表（准入） | ✅ `registry.rs`：`REGISTRY` 9 项 + `Slot` 分发表 + `presets` + **11 项契约测试** | 待接线项（M6 `keep_versions`）还未入表（按设计如此） |
+| 页面形态 | ✅ 两栏实体已落地（`settings_page.rs`：导航 / 内容区 / 搜索 / 恢复默认） | **宿主替换未做**（工作台仍挂旧视图，P1.6）；无窗口测试；`↺` 的 hover 卡未接 |
 | 宿主接线 | workbench overlay 懒创建 + `on_close` / `on_open_cache` 回调 | 与 Quick Open 未互斥；`Esc` / `Ctrl+F` 未绑（P3） |
 | 契约扫描 | 颜色扫描已含 `settings_view.rs` | **尺寸扫描未含**（K7，P3） |
 | 主题设施 | `rds-theme.json` 明暗 + `product-tokens.json` 产品角色（暂住本 crate，K6） | 无需改动（页面用既有角色） |
@@ -47,16 +58,17 @@
 
 同 P0.2/P0.3。
 
-### P1b 页面骨架 · 两栏（待排）
+### P1b 页面骨架 · 两栏（crate 内已完成；宿主替换待做）
 
-| # | 任务 | 落点 | 验收 |
-| --- | --- | --- | --- |
-| P1.1 | 新增 5 个尺寸常量 | `crates/workbench/src/ui.rs` | 契约测试（§5.1）通过；数值与原型 §7 一致 |
-| P1.2 | 新页面实体 `SettingsPage`（两栏壳：标题行 / 搜索行 / 分节导航 / 内容区 / 底栏） | `crates/settings/src/settings_page.rs`（新） | 打开设置见两栏；切节不改变弹层尺寸 |
-| P1.3 | 分节导航由 `registry::sections()` 驱动、行由 `registry::page_rows()` 驱动 | 同上 | 页面上出现的行 == 登记表 `entry != Module` 的行（逐项对照） |
-| P1.4 | 三种行控件接组件库：`TabBar::segmented`（枚举 / 两态）、`Switch`（布尔）、`Input`（数值） | 同上 | 无手搓分段控件；`Switch` 为默认尺寸 |
-| P1.5 | 行规格：标签列 15rem、说明行、行分隔、hover、禁用带原因 | 同上 | 原型 §4.2 逐条对照 |
-| P1.6 | 替换宿主渲染（`settings_view` → `settings_page`），旧文件退役 | `workbench/src/view.rs::render_settings_panel`、`settings/src/lib.rs` | 入口 / `Ctrl+,` / Quick Open 三入口行为不变 |
+| # | 任务 | 落点 | 验收 | 状态 |
+| --- | --- | --- | --- | --- |
+| P1.1 | 页面尺寸常量 | `crates/settings/src/ui.rs` | 数值与原型 §7 一致；契约扫描加入本文件（P3.3） | ✅ |
+| P1.2 | `SettingsPage` 两栏壳（标题行 / 搜索行 / 分节导航 / 内容区 / 底栏） | `crates/settings/src/settings_page.rs`（新） | 切节不改弹层尺寸；内容区内部滚动 | ✅ |
+| P1.3 | 分节由 `registry::sections()`、行由 `registry::page_rows()` 驱动 | 同上 | 页面行集 == 登记表 `entry != Module`（测试 `page_rows_match_the_registry`） | ✅ |
+| P1.4 | 三种控件接组件库（`TabBar::segmented` / `Switch` / 预设档分段） | 同上 | 无手搓分段控件 | ✅ |
+| P1.5 | 行规格：标签列 / 说明行 / 行分隔 / 恢复默认 / 节级重置 | 同上 | 原型 §4.2 逐条对照；说明行（登记表 `hint`）已渲染 | ✅ |
+| P1.6 | 替换宿主渲染（`settings_view` → `settings_page`），旧文件退役 | `workbench/src/view.rs::render_settings_panel`、`settings/src/lib.rs` | 入口 / `Ctrl+,` / Quick Open 三入口行为不变 | ⬜ 等 `view.rs` 并行改动落地 |
+| P1.7 | 窗口测试（切节 / 点击写入 / 恢复默认） | `settings_page.rs` 或 `tests/` | 需给 `settings` 加 `test-support` dev-dep（照 `project` 做法） | ⬜ |
 
 ### P2 搜索与状态（待排）
 
@@ -120,12 +132,13 @@
 
 ```bash
 # 5.1 本 crate（契约测试 + 模型兼容）
-cargo test -p rds-settings
+cargo test -p rds-settings            # ✅ 17 项全绿（含 11 项登记表/槽位契约）
 
 # 5.2 宿主与视图契约（尺寸 / 颜色扫描 + 边栏状态机）
 cargo test -p rds-workbench --test ui_contract
 
 # 5.3 全目标编译（含测试目标；plugin 不在默认图上，不必为它付编译成本）
+cargo check -p rds-workbench --lib    # ✅ 通过（43s，零告警）
 cargo check -p rds-workbench --all-targets
 cargo check -p rds-app
 

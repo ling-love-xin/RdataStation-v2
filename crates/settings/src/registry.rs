@@ -37,6 +37,115 @@ pub enum SettingKind {
     Composite,
 }
 
+/// 形态标签：`SettingKind` 带数据（枚举选项、两态文案），**跨表比较只用标签**。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindTag {
+    Bool,
+    BoolPair,
+    Enum,
+    Number,
+    Composite,
+}
+
+impl SettingKind {
+    /// 取形态标签。
+    pub fn tag(self) -> KindTag {
+        match self {
+            Self::Bool => KindTag::Bool,
+            Self::BoolPair { .. } => KindTag::BoolPair,
+            Self::Enum(_) => KindTag::Enum,
+            Self::Number => KindTag::Number,
+            Self::Composite => KindTag::Composite,
+        }
+    }
+}
+
+/// 设置项的取值（读、写共用的最小标量类型）。
+///
+/// 枚举以**落盘值**的文本表达（显示名在 `SettingKind::Enum` / `BoolPair` 里）；
+/// 复合值（`SettingKind::Composite`）无法用本类型表达——它也没有页面写入路径。
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingValue {
+    Bool(bool),
+    Number(f64),
+    Text(String),
+}
+
+impl SettingValue {
+    /// 取布尔（形态不符返回 `None`）。
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// 取数值。
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            Self::Number(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// 取文本（枚举的落盘值）。
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(v) => Some(v.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// 写入槽位：`slot_for` / `slot_kind` / `slot_is_scalar` 三张表一起构成
+/// "键 → 类型化读写"的**唯一分发表**（`SettingsService::apply_by_key` / `value_by_key` 用它）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    AppearanceThemeMode,
+    NavigatorSourceShortCode,
+    NavigatorShowTags,
+    NavigatorShowScope,
+    NavigatorPropertyWidth,
+    NavigatorFilters,
+    ConnectTimeoutMs,
+    LanDisableTls,
+    ProjectSortMode,
+}
+
+/// key → 槽位（登记项都必须有槽位；由契约测试保证）。
+pub fn slot_for(key: &str) -> Option<Slot> {
+    Some(match key {
+        "appearance.theme_mode" => Slot::AppearanceThemeMode,
+        "navigator.source_short_code" => Slot::NavigatorSourceShortCode,
+        "navigator.show_tags" => Slot::NavigatorShowTags,
+        "navigator.show_scope" => Slot::NavigatorShowScope,
+        "navigator.property_panel_width" => Slot::NavigatorPropertyWidth,
+        "navigator.filters" => Slot::NavigatorFilters,
+        "connection_defaults.connect_timeout_ms" => Slot::ConnectTimeoutMs,
+        "connection_defaults.lan_disable_tls" => Slot::LanDisableTls,
+        "projects.sort_mode" => Slot::ProjectSortMode,
+        _ => return None,
+    })
+}
+
+/// 槽位的值形态（必须与登记表的 `kind.tag()` 一致；由契约测试保证）。
+pub fn slot_kind(slot: Slot) -> KindTag {
+    match slot {
+        Slot::AppearanceThemeMode => KindTag::Enum,
+        Slot::NavigatorSourceShortCode => KindTag::BoolPair,
+        Slot::NavigatorShowTags | Slot::NavigatorShowScope => KindTag::Bool,
+        Slot::NavigatorPropertyWidth | Slot::ConnectTimeoutMs => KindTag::Number,
+        Slot::NavigatorFilters => KindTag::Composite,
+        Slot::LanDisableTls => KindTag::BoolPair,
+        Slot::ProjectSortMode => KindTag::Enum,
+    }
+}
+
+/// 槽位是否可表达为标量值（复合值不可：它没有页面写入路径）。
+pub fn slot_is_scalar(slot: Slot) -> bool {
+    slot != Slot::NavigatorFilters
+}
+
 /// 生效方式（页面的说明行必须讲清楚，禁止"改了不知道生效没"）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingEffect {
@@ -73,6 +182,11 @@ pub struct SettingSpec {
     /// 行说明（弱化小字；也承载"生效方式"这类边界说明）。
     pub hint: &'static str,
     pub kind: SettingKind,
+    /// 数值项的预设档（`(落盘值, 显示名)`；空 = 无预设档）。
+    ///
+    /// 页面上的数值行**必须**有预设档：自由输入要成套的校验与单位处理，
+    /// 在真需要之前不做（契约测试强制该约定）；预设档必须含默认值。
+    pub presets: &'static [(i64, &'static str)],
     /// 默认值（JSON 字面量）；与 `model.rs` 的 `Default` 逐项比对。
     pub default_json: &'static str,
     pub effect: SettingEffect,
@@ -81,6 +195,25 @@ pub struct SettingSpec {
     pub consumer: &'static str,
     /// 复合值：契约测试不展开它的子键。
     pub composite: bool,
+}
+
+impl SettingSpec {
+    /// 默认值（页面「恢复默认」写入的目标）。
+    ///
+    /// 从 `default_json` 解析——单一来源，不另存一份常量（另存一份就会漂）。
+    /// 复合值返回 `None`（没有标量默认值）。
+    pub fn default_value(&self) -> Option<SettingValue> {
+        match self.kind.tag() {
+            KindTag::Bool | KindTag::BoolPair => Some(SettingValue::Bool(self.default_json == "true")),
+            KindTag::Number => serde_json::from_str::<f64>(self.default_json)
+                .ok()
+                .map(SettingValue::Number),
+            KindTag::Enum => serde_json::from_str::<String>(self.default_json)
+                .ok()
+                .map(SettingValue::Text),
+            KindTag::Composite => None,
+        }
+    }
 }
 
 /// 设置项登记表（已落地项；顺序 = 页面上的顺序）。
@@ -94,6 +227,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "主题模式",
         hint: "立即切换明暗配色并持久化",
         kind: SettingKind::Enum(&[("light", "浅色"), ("dark", "深色")]),
+        presets: &[],
         default_json: "\"light\"",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Both,
@@ -110,6 +244,7 @@ pub const REGISTRY: &[SettingSpec] = &[
             on: "短码 P/G/GP",
             off: "文字（项目 / 全局 / 共享）",
         },
+        presets: &[],
         default_json: "true",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,
@@ -123,6 +258,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "显示标签",
         hint: "连接行名称下方最多 2 个标签 chip，其余折叠为 +N",
         kind: SettingKind::Bool,
+        presets: &[],
         default_json: "false",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Both,
@@ -136,6 +272,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "显示归属域",
         hint: "行尾右对齐的归属域列（便于扫视的一端对齐列）",
         kind: SettingKind::Bool,
+        presets: &[],
         default_json: "true",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Both,
@@ -149,6 +286,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "属性面板宽度",
         hint: "拖拽右侧属性面板分隔条时记忆（关闭面板时落盘）",
         kind: SettingKind::Number,
+        presets: &[],
         default_json: "24.5",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Module,
@@ -162,6 +300,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "facet 筛选",
         hint: "归属域 / 类型 / 驱动 / 标签筛选（导航面板内 chips 与「筛选 ▾」）",
         kind: SettingKind::Composite,
+        presets: &[],
         default_json: "{\"source\":null,\"db_type\":null,\"driver\":null,\"tag\":null}",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Module,
@@ -175,6 +314,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         label: "建连超时",
         hint: "超时判定本次尝试失败并自动重试一次；对之后新建的连接生效",
         kind: SettingKind::Number,
+        presets: &[(5_000, "5s"), (15_000, "15s"), (30_000, "30s"), (60_000, "60s")],
         default_json: "15000",
         effect: SettingEffect::NextUse,
         entry: SettingEntry::Page,
@@ -191,6 +331,7 @@ pub const REGISTRY: &[SettingSpec] = &[
             on: "关 TLS",
             off: "保留 TLS",
         },
+        presets: &[],
         default_json: "true",
         effect: SettingEffect::NextUse,
         entry: SettingEntry::Page,
@@ -208,6 +349,7 @@ pub const REGISTRY: &[SettingSpec] = &[
             ("name", "名称"),
             ("created", "创建时间"),
         ]),
+        presets: &[],
         default_json: "\"last_opened\"",
         effect: SettingEffect::NextUse,
         entry: SettingEntry::Both,
@@ -230,6 +372,14 @@ pub fn sections() -> Vec<(&'static str, &'static str)> {
         }
     }
     out
+}
+
+/// 节的显示名（页面渲染节标题与搜索结果面包屑用）。
+pub fn section_label(id: &str) -> Option<&'static str> {
+    REGISTRY
+        .iter()
+        .find(|s| s.section == id)
+        .map(|s| s.section_label)
 }
 
 /// 上设置页的行（`entry` 非 `Module`）；页面只渲染这些。
@@ -441,6 +591,14 @@ mod tests {
             }
         }
         assert_eq!(sections().len(), seen.len(), "节清单与登记表不一致");
+        for (id, label) in sections() {
+            assert_eq!(
+                section_label(id),
+                Some(label),
+                "节 `{}` 的显示名查不回来（页面标题与面包屑会空）",
+                id
+            );
+        }
         let module_only = REGISTRY
             .iter()
             .filter(|s| s.entry == SettingEntry::Module)
@@ -451,5 +609,84 @@ mod tests {
             "page_rows 与 entry 分类不一致（页面会多渲染或少渲染行）"
         );
         assert!(page_rows().next().is_some(), "页面至少要有一行");
+    }
+
+    /// 每个登记项都要有槽位，且**槽位形态与登记形态一致**——不一致就是
+    /// "页面按一种控件渲染、写入路径按另一种解释"，要到运行期才炸。
+    #[test]
+    fn every_registered_key_has_a_matching_slot() {
+        for s in REGISTRY {
+            let slot = slot_for(s.key).unwrap_or_else(|| panic!("登记项 `{}` 没有写入槽位", s.key));
+            assert_eq!(
+                slot_kind(slot),
+                s.kind.tag(),
+                "`{}` 的槽位形态与登记形态不一致",
+                s.key
+            );
+        }
+    }
+
+    /// 上页的行必须是标量 + 可写；数值行必须有预设档。
+    #[test]
+    fn page_rows_are_scalar_and_writable() {
+        for s in REGISTRY.iter().filter(|s| s.entry != SettingEntry::Module) {
+            let slot = slot_for(s.key).expect("上页的项必须有槽位");
+            assert!(slot_is_scalar(slot), "`{}` 是复合值，不能上页", s.key);
+            assert_ne!(s.kind.tag(), KindTag::Composite, "`{}` 是复合值，不能上页", s.key);
+            if s.kind.tag() == KindTag::Number {
+                assert!(
+                    !s.presets.is_empty(),
+                    "数值行 `{}` 必须有预设档（自由输入要成套校验，真需要再做）",
+                    s.key
+                );
+            }
+        }
+    }
+
+    /// 预设档只能给数值行、显示名非空、**必须包含默认值**
+    /// （否则「恢复默认」会落到档位之外）。
+    #[test]
+    fn number_presets_are_consistent() {
+        let default = default_value();
+        for s in REGISTRY {
+            if s.presets.is_empty() {
+                continue;
+            }
+            assert_eq!(
+                s.kind.tag(),
+                KindTag::Number,
+                "`{}` 不是数值行却给了预设档",
+                s.key
+            );
+            for (_, label) in s.presets {
+                assert!(!label.is_empty(), "`{}` 的预设档缺显示名", s.key);
+            }
+            let actual = lookup(&default, s.key)
+                .and_then(|v| v.as_f64())
+                .expect("数值默认值");
+            assert!(
+                s.presets.iter().any(|(v, _)| *v as f64 == actual),
+                "`{}` 的默认值 {} 不在预设档 {:?} 里",
+                s.key,
+                actual,
+                s.presets.iter().map(|(v, _)| *v).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// `default_value()` 与 `default_json` 同源：三种标量形状各自可解析，复合值给 `None`。
+    #[test]
+    fn default_value_follows_the_declared_kind() {
+        for s in REGISTRY {
+            let ok = match s.kind.tag() {
+                KindTag::Bool | KindTag::BoolPair => {
+                    matches!(s.default_value(), Some(SettingValue::Bool(_)))
+                }
+                KindTag::Number => matches!(s.default_value(), Some(SettingValue::Number(_))),
+                KindTag::Enum => matches!(s.default_value(), Some(SettingValue::Text(_))),
+                KindTag::Composite => s.default_value().is_none(),
+            };
+            assert!(ok, "`{}` 的默认值形态与登记形态不符", s.key);
+        }
     }
 }

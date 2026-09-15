@@ -16,9 +16,12 @@ pub mod commands;
 pub mod model;
 pub mod product_tokens;
 pub mod registry;
+pub mod settings_page;
 pub mod settings_view;
+pub mod ui;
 
 use crate::model::{ConnectionDefaults, NavigatorFilters, Settings};
+use crate::registry::{SettingValue, Slot};
 
 /// 进程级连接默认值快照：供**无 `App` 的异步连接路径**（`ConnectionService`）读取。
 ///
@@ -80,6 +83,44 @@ pub fn save_settings(settings: &Settings) {
 /// 设置服务：加载、读取、修改（含主题即时切换）。
 pub struct SettingsService;
 
+/// 主题模式的文本形态（落盘值，与 `registry` 的枚举选项同源）。
+fn theme_mode_text(mode: ThemeMode) -> String {
+    serde_json::to_value(mode)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// 文本 → 主题模式；未知文本返回 `None`（**不猜**，由调用方拒绝并提示）。
+fn theme_mode_from_text(text: &str) -> Option<ThemeMode> {
+    serde_json::from_value(serde_json::Value::String(text.to_string())).ok()
+}
+
+/// 按 key 读当前值（页面渲染、「非默认值」判定与契约测试共用）。
+///
+/// 返回 `None`：key 未登记，或该项是复合值（标量类型表达不了）。
+pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
+    let slot = registry::slot_for(key)?;
+    Some(match slot {
+        Slot::AppearanceThemeMode => {
+            SettingValue::Text(theme_mode_text(settings.appearance.theme_mode))
+        }
+        Slot::NavigatorSourceShortCode => SettingValue::Bool(settings.navigator.source_short_code),
+        Slot::NavigatorShowTags => SettingValue::Bool(settings.navigator.show_tags),
+        Slot::NavigatorShowScope => SettingValue::Bool(settings.navigator.show_scope),
+        Slot::NavigatorPropertyWidth => {
+            SettingValue::Number(settings.navigator.property_panel_width as f64)
+        }
+        // 复合值（facet 筛选）没有标量形态：它的读写走导航面板自己的入口。
+        Slot::NavigatorFilters => return None,
+        Slot::ConnectTimeoutMs => {
+            SettingValue::Number(settings.connection_defaults.connect_timeout_ms as f64)
+        }
+        Slot::LanDisableTls => SettingValue::Bool(settings.connection_defaults.lan_disable_tls),
+        Slot::ProjectSortMode => SettingValue::Text(settings.projects.sort_mode.clone()),
+    })
+}
+
 impl SettingsService {
     /// 启动时调用：加载磁盘配置并注册为 global。
     pub fn init(cx: &mut App) {
@@ -93,6 +134,61 @@ impl SettingsService {
     /// 读取当前设置。
     pub fn get(cx: &App) -> Settings {
         cx.global::<Settings>().clone()
+    }
+
+    /// 按 key 写值（**唯一写入路径**）：改 global → 落盘 → 按生效方式通知。
+    ///
+    /// 分发靠 `registry::{slot_for, slot_kind}`（形态不符由契约测试提前拦住）。
+    /// 返回 `false` 表示拒绝（key 未登记 / 值形态不符 / 复合值 / 文本无法解析）——
+    /// 调用方（页面）据此提示，**不静默吞掉**。
+    pub fn apply_by_key(
+        key: &str,
+        value: SettingValue,
+        window: Option<&mut gpui_kit::Window>,
+        cx: &mut App,
+    ) -> bool {
+        let Some(slot) = registry::slot_for(key) else {
+            return false;
+        };
+        match slot {
+            Slot::AppearanceThemeMode => {
+                let Some(mode) = value.as_text().and_then(theme_mode_from_text) else {
+                    return false;
+                };
+                Self::set_theme_mode(mode, window, cx);
+            }
+            Slot::NavigatorSourceShortCode => {
+                let Some(on) = value.as_bool() else { return false };
+                Self::set_source_short_code(on, cx);
+            }
+            Slot::NavigatorShowTags => {
+                let Some(on) = value.as_bool() else { return false };
+                Self::set_show_tags(on, cx);
+            }
+            Slot::NavigatorShowScope => {
+                let Some(on) = value.as_bool() else { return false };
+                Self::set_show_scope(on, cx);
+            }
+            Slot::NavigatorPropertyWidth => {
+                let Some(rem) = value.as_number() else { return false };
+                Self::set_property_panel_width(rem as f32, cx);
+            }
+            // 复合值没有标量写入路径：拒绝而不是"猜一半"。
+            Slot::NavigatorFilters => return false,
+            Slot::ConnectTimeoutMs => {
+                let Some(ms) = value.as_number() else { return false };
+                Self::set_connect_timeout_ms(ms.max(0.) as u64, cx);
+            }
+            Slot::LanDisableTls => {
+                let Some(on) = value.as_bool() else { return false };
+                Self::set_lan_disable_tls(on, cx);
+            }
+            Slot::ProjectSortMode => {
+                let Some(text) = value.as_text() else { return false };
+                Self::set_project_sort_mode(text, cx);
+            }
+        }
+        true
     }
 
     /// 读取当前主题模式。
