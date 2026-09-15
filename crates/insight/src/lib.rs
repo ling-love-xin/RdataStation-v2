@@ -58,6 +58,7 @@ pub use service::indexer::{
     plan_index, scan_scope_dir, sync_project_rules, RuleIndexEntry, RuleIndexStore, RuleLoadStatus,
     SyncOutcome,
 };
+pub use service::{InsightErrorInfo, InsightService};
 pub use service::watcher::{
     clear_index_stale, index_is_stale, rules_fingerprint, set_watched_project_root, watch_dirs,
     watched_project_root, RulesWatcher, DEFAULT_POLL_INTERVAL,

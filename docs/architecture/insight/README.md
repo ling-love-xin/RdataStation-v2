@@ -3,7 +3,7 @@
 > **一句话**：把数据变成**结论**——「这份数据长什么样」（库 / 表 / 列画像）与「它能不能用」（四维质量评分），并把「新增一种洞察」从改 Rust 降级为**加一个 TOML 规则文件**（内置 18 条，用户可扩展）。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**Phase 1 进行中**（2026-09-16 起）——Phase 0 全部完成；Phase 1 第一批已落地：视图层开工（**视图归属定案 = 方案 A**，视图随本 crate），面板骨架（面板头 + 目标头 + 五 Tab + 四态 + 列画像四区 + 类型分派）与视图模型完成；测试 **113 项**全绿。下一批：`InsightService::profile_column` 编排 + 入口接线 + 右 Dock 装配（后者落点均在 `workbench`）。逐项进度见 `insight-dev-plan.md` §0。
+> 状态：**Phase 1 进行中**（2026-09-16 起）——Phase 0 全部完成；Phase 1 已落地两批：① 视图层开工（**视图归属定案 = 方案 A**，视图随本 crate）——面板骨架（面板头 + 目标头 + 五 Tab + 四态 + 列画像四区 + 类型分派）与视图模型；② 面板侧编排（`InsightService::profile_column_view`）与错误语义（`describe_error`）。测试 **118 项**全绿。下一批（落点均在 `workbench`）：入口接线 + 右 Dock 装配 + 宿主桥 + 键位。逐项进度见 `insight-dev-plan.md` §0。
 >
 > **边界**：本模块拥有**画像 / 评分 / 规则 / 报告 / 快照历史**。SQL 执行与结果集属 M5 编辑器；对象树与元数据内省属 M4；连接与运行态属 M3；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接，只经服务/命令与它们协作。
 
@@ -117,7 +117,7 @@ cargo check --workspace --all-targets -j 2
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **113 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38，涵盖作用域、索引同步、启停生效、快照链路、目录监听；Phase 1 第一批新增 22，涵盖视图模型（类型分派 / 阈值 / 文案）与面板状态机（四态 / 五 Tab / 折叠偏好）），**新增功能不得减少**。
+- **基线**：`cargo test -p rds-insight` 当前 **118 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38，涵盖作用域、索引同步、启停生效、快照链路、目录监听；Phase 1 第一批新增 22（视图模型与面板状态机），第二批新增 5（错误→文案+可重试的映射）），**新增功能不得减少**。
 
 ## 6. 文档地图
 

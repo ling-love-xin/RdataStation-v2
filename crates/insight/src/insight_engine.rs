@@ -32,7 +32,7 @@ pub const HISTOGRAM_MIN_ROWS: i64 = 10;
 const INSIGHT_MAX_CONCURRENT: usize = 4;
 
 /// 并发受限时的统一错误文案（面向用户，UI 直接展示）。
-const ERR_TOO_MANY_CONCURRENT: &str = "洞察分析任务过多，请稍候重试";
+pub const ERR_TOO_MANY_CONCURRENT: &str = "洞察分析任务过多，请稍候重试";
 
 static INSIGHT_SEM: OnceLock<Semaphore> = OnceLock::new();
 

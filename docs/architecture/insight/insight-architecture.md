@@ -154,6 +154,16 @@ get_column_insight_full(registry, temp_table, column)
 
 > **关键含义**：**基础统计也是规则驱动的**。所以「规则分层随项目变化」这件事会一直影响到列画像的最内层——这正是规则集必须**显式传入**、不能取进程级全局的原因（D10）。
 
+**面板侧的编排**（Phase 1 第二批落地）：宿主把目标交给
+`InsightService::profile_column_view(project_root, temp_table, column)`，它一次完成
+「取当前项目的规则集 → 上面的计算链 → 映射为视图模型 `ColumnProfileView`」；
+失败时用 `InsightService::describe_error(&err)` 得到「给人看的文案 + 是否可重试」——
+**不把 `CoreError` 的 `Display` 直接展示给用户**（它带 `[code]` 内部错误码前缀）。
+
+> 阻塞语义：整条链要抢 DuckDB 全局锁与并发配额（D12 / D13），因此**宿主负责把它放到
+> 后台线程**，算完再用 `InsightView::set_profile` / `set_error` 回填（渲染路径零 I/O）。
+> 识别失败原因是按**消息内容**匹配的权宜——引擎侧还没有 typed error。
+
 ### 5.4 快照保存与版本链
 
 ```

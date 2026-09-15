@@ -23,6 +23,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 1 第二批：面板侧编排（1.1）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **118 项全绿**，上一批 113 → +5；零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 1.1 | `InsightService::profile_column_view(project_root, temp_table, column)`：一次拿齐「取当前项目规则集 → 计算链 → 视图模型」。直方图在 `ColumnInsightFull::histogram` 上而不在 `NumericStats` 里，所以由视图模型构造器一并消费，面板不必分两次取数 | `crates/insight/src/service/mod.rs` |
+| 1.1 | `InsightService::describe_error(&CoreError) -> InsightErrorInfo`：错误 → 「文案 + 是否可重试」。**不展示 `CoreError` 的 `Display`**（带 `[code]` 内部错误码）；并发 → 复用引擎那份文案且可重试；结果集失效/过期 → 不给重试（要重新执行查询）；连接抖动 → 可重试；其余原文照给 | 同上 |
+| — | `ERR_TOO_MANY_CONCURRENT` 由 `const` 改 `pub`，成为并发文案的**单一来源**（面板原样展示，不再各写一版） | `crates/insight/src/insight_engine.rs` |
+
+**文档随之收敛**：原型 §4「并发受限」与架构 §8 原本写着两份不同文案（「正在分析中，请稍候」vs 引擎那份），已统一为引擎那一份并注明单一来源；架构 §5.3 补上「面板侧编排 + 阻塞语义（宿主放后台线程）」；0.4 记录里的旧文案说明也已改正。
+
+**未完成（下一批）**：1.5 入口接线（结果表列头右键「洞察此列」/ 导航树右键「查看统计」）、右 Dock 装配（`workbench/src/panels.rs` 去掉三行占位）、`InsightHost` 宿主桥（订阅 `InsightEvent` + 提供项目根）、键位注册；以及**无项目态的降级呈现**（原型 §4：⚙ 与历史禁用 + 「打开项目后可保存快照」引导）——它需要宿主告知「项目是否已打开」，故随装配一起落，不先写一个无人调用的开关。上述落点均在 `workbench`，与并行会话正在改的 `panels.rs` / `view.rs` / `components/` 相交，故本批仍不动。
+
 ### 2026-09-16 — Phase 1 第一批：视图层开工（D21 定案 = 方案 A）
 
 **已完成并验证**（`cargo check -p rds-insight --all-targets` 零告警；`cargo test -p rds-insight --lib` **113 项全绿**，基线 91 → +22）
@@ -212,7 +226,7 @@ v1 有 7 个 Vue 组件（约 2188 行）+ `insight-store.ts`（607 行，23 个
 | 0.1 | `insight/src/rule_registry.rs:72-77` | `by_category` **只增不减**：同名规则覆盖时（a）同分类 → 列表返回**重复项**；（b）换分类 → 规则**同时出现在两个分类**。`seen_ids` 只在单次扫描内去重，跨「内置 → 用户」无效 | 改 `by_category` 为**从 `rules` 实时派生**（消除整类不一致；18–30 条规模无性能问题）；或 `insert` 前按旧 category `retain` 掉本 id |
 | 0.2 | `insight/src/rule_registry.rs:185` | `get_project_rules_dir` 硬编码 `.RSmeta`，未复用权威常量 | 改为 `project::store::RS_META_DIR_NAME`（或 `engine::persistence::connection_org_store::RS_META_DIR_NAME`，取现有单一来源） |
 | 0.3 | `insight/src/insight_engine.rs:39-43` | 文档注释描述 **round-robin 连接池**，实现是 `DuckDBManager` **单例** `Arc<Mutex<Connection>>`（`duckdb/manager.rs:80-87`）——注释为 v1 连接池时代遗留、被 1:1 迁移带入 | 改写注释为真实语义（单例 + 全局串行化），删「跨连接临时表不可见」的误导段落 |
-| 0.4 | `insight_engine.rs` 各公开函数的 `try_acquire()` | 并发上限 4 且**快速失败**，错误文案 `"Too many concurrent insight operations, please retry"` 面向开发者 | 改 `acquire()`（排队）或保留 try 但错误文案改用户可读「正在分析中，请稍候」；原型按后者设计加载态（见原型 §3.4） |
+| 0.4 | `insight_engine.rs` 各公开函数的 `try_acquire()` | 并发上限 4 且**快速失败**；v1 的错误文案 `"Too many concurrent insight operations, please retry"` 面向开发者，已改为用户可读的 `ERR_TOO_MANY_CONCURRENT`（「洞察分析任务过多，请稍候重试」，已 `pub` 供面板原样展示）；保留 try 不改成排队，面板按「并发受限」设计加载态（见原型 §4） |
 | 0.5 | `crates/insight/Cargo.toml` | `rusqlite`、`once_cell` **零使用**（`once_cell` 已被 `std::sync::OnceLock` 取代） | 删除两行依赖 |
 
 ## 3. 目标 crate 边界（**Phase 0 / 0.2 已完成**）
