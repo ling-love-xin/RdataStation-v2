@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 description = "SQL 编辑器：一个内核 + 三档能力（文本 / SQL / 分析）"
 
-# 依赖方向（硬约束）：workbench → editor → engine / database / shared。
-# Phase 0（地基）只有纯模型与规则表，暂无外部依赖；
-# 1a 起按需加入：engine（SqlService / sql::split）、shared（错误类型 / Arrow）、gpui-kit（视图层）。
+# 依赖方向（硬约束）：workbench → editor → engine / database / shared / gpui-kit。
+# 目前只有视图层需要 gpui-kit；engine（SqlService / sql::split）与 shared 等首次使用的
+# 阶段再接，避免留下死依赖。
+[dependencies]
+gpui-kit.workspace = true
+
+[dev-dependencies]
+# 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
+gpui-kit = { workspace = true, features = ["test-support"] }
