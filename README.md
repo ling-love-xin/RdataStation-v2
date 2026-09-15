@@ -16,7 +16,7 @@ RdataStation-v2/
 ├── crates/                 # v2 代码（按业务能力组织）
 │   ├── app/                # App Shell：组合窗口与 Feature，不承载业务逻辑
 │   ├── workbench/          # 工作台：Dock 布局、活动栏、命令面板、编辑器工作台
-│   ├── project/            # M1 双层数据架构：项目、系统级/项目级、promote、版本快照
+│   ├── project/            # M1 双层数据架构：项目、系统级/项目级、promote、版本快照（模块特点见该 crate 的 README.md）
 │   ├── engine/             # M2 双引擎基础设施：SQLite 元数据 + DuckDB 分析 + 驱动/缓存/迁移/日志
 │   ├── connection/         # M3 数据源连接：原生连接 + DuckDB Secret 加速通道
 │   ├── database/           # M4 数据库导航：元数据浏览器、对象属性面板

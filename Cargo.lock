@@ -7863,11 +7863,13 @@ name = "rds-analytics-resource"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "hex",
  "rds-engine",
  "rds-shared",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "specta",
  "tokio",
  "tracing",
@@ -7979,12 +7981,12 @@ version = "0.1.0"
 dependencies = [
  "duckdb",
  "include_dir",
- "once_cell",
  "rds-engine",
  "rds-shared",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "specta",
  "tokio",
  "toml 1.1.5+spec-1.1.0",
@@ -8009,7 +8011,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
