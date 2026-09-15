@@ -10,6 +10,7 @@
 
 | 日期 | 内容 | 状态 |
 | --- | --- | --- |
+| 2026-09-15（MySQL 事务修复 + 并发亲和结论） | **① MySQL `BEGIN` 修复**：`native/mysql.rs` 新增 `needs_text_protocol` / `execute_via_text_protocol`——事务控制与会话语句（`BEGIN`/`START TRANSACTION`/`COMMIT`/`ROLLBACK`/`SAVEPOINT`/`SET`/`USE`）改走 **文本协议**（`sqlx::raw_sql`），不再报 `1295`；探针实测：MySQL 事务内计数 = 1、`ROLLBACK` 生效 ✅ · **② P0.2c 并发亲和探针**（四库）：**SQLite / DuckDB 并发下仍同句柄；MySQL / PG 会另开物理连接**（另一侧报 `1146` / `relation does not exist`）→ **1b 的事务与会话必须 per-session 独占连接**（架构 §12 #2） · **③ DuckDB 扩展约定**写入依赖治理（外部预编译优先，扩展走指定目录 `INSTALL`，不为扩展重编内核） | ✅ 已完成（探针 12 项全绿） |
 | 2026-09-15（P0.9 基线 + Phase 0 收官） | **P0.9 完成**：本模块**依赖增量 = 0**（未引 tree-sitter，sqlglot-rust 早已在依赖里）；`cargo build -p rds-app -j 2` 增量编译 **2m37s**，debug 二进制 **≈137 MiB**（数据入 §6）· **Phase 0 地基已全部完成**（P0.1–P0.10：仅余 P0.6 的“驱动层真实 `affected_rows`”按计划转 1b）· 验证汇总：引擎 297 项 / editor 11 项 / shared 22 项 / 台账探针 10 项 / 事务探针 8 项 全绿；`cargo check --workspace --all-targets` 零告警 | ✅ 已完成 |
 | 2026-09-15（P0.2 实跑 + 三个结果保真度缺陷） | **P0.2 有结论**（真机四库）：PG / SQLite / DuckDB — **会话亲和成立**且 `ROLLBACK` 真实生效；驱动级事务（`execute_in_transaction`）四库中三库通过；**MySQL 的显式 `BEGIN` 被 prepared 协议拒绍**（1295，需改走驱动事务 API）→ 回写架构 §12 #2 / §7.3 #3 · **实跑又抓出三个真缺陷并修复**：① 各驱动只填 `batches`，而历史行数读的是恒空的 `total_rows` **字段**（已改用 `total_rows()`）；② `arrow_value_at` 漏了 Int32/UInt64/Float32 等位宽，兜底是 `format!("{:?}", array)`——**把整列 Debug 打印进每个单元格**（已修 + 3 项回归）；③ MySQL 列类型探测 `bool` 优先 → `COUNT(*)` 显示成 `true`（已按声明类型定排行）→ 架构 §12 #21 / #22 | ✅ 已完成（实跑验证：引擎 297 项 · shared 22 项 · 探针 10 项 · 事务探针 8 项全绿） |
 | 2026-09-15（探针实跑：台账结论落地） | **P0.10 已实跑（10 项全绿）**，结论已回写原型 §7.4「行为级事实」：**类型标注 / 血缘 / 作用域 / 下推 / 差异** 均**实测可用**；差异粒度到 `SelectItem`/`Expr`/`OrderByItem`，**SELECT 列表 / WHERE / ORDER BY / LIMIT 改动都能检出**（原先担心的“漏条件改动”**已被实测推翻**）· **两处保留**：`qualify_columns` 只部分限定（`id` 仍裸列）、`unnest_subqueries` 改写为 `INNER JOIN + DISTINCT`（NULL 语义不等价）· **两处纠正**：① 格式化**不会丢注释**（行内/尾随注释→解析失败→原样返回，架构 §12 #3 改述）② `transpile` 对脚本是**静默截断**（`"SELECT 1; SELECT 2;"` → `Ok("SELECT 1")`，生产路径同样）→ 升级为 🔴（§12 #19）· 三条不变量已提升为断言（同句只 `Keep` / WHERE 改动有 `Update` / 换型 = `Remove+Insert`） | ✅ 已完成 |
@@ -303,14 +304,19 @@ cargo test -p rds-engine --test transaction_affinity -j 2 -- --nocapture --test-
 cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1
 ```
 
-**P0.2 / P0.2b 实跑结论（2026-09-15，四类库真实端点）**
+**P0.2 / P0.2b / P0.2c 实跑结论（2026-09-15，四类库真实端点）**
 
-| 库 | 会话亲和（`BEGIN` + 临时表 + `ROLLBACK`） | 驱动级事务（`execute_in_transaction`） |
-| --- | --- | --- |
-| PostgreSQL | ✅ 亲和成立 + 回滚生效 | ✅ 可用 |
-| SQLite | ✅ 亲和成立 + 回滚生效 | ✅ 可用 |
-| DuckDB | ✅ 亲和成立 + 回滚生效 | ✅ 可用 |
-| MySQL | ❌ 显式 `BEGIN` 被 prepared 协议拒绍（1295） | ✅ 可用（走驱动事务 API） |
+| 库 | 顺序亲和（`BEGIN` + 临时表 + `ROLLBACK`） | 并发亲和（两条并发语句） | 驱动级事务（`execute_in_transaction`） |
+| --- | --- | --- | --- |
+| PostgreSQL | ✅ 成立 + 回滚生效 | ❌ 池另开物理连接（另一侧 `relation does not exist`） | ✅ 可用 |
+| SQLite | ✅ 成立 + 回滚生效 | ✅ 两侧均可见 | ✅ 可用 |
+| DuckDB | ✅ 成立 + 回滚生效 | ✅ 两侧均可见 | ✅ 可用 |
+| MySQL | ✅ 成立 + 回滚生效（`BEGIN` 已改走文本协议） | ❌ 池另开物理连接（另一侧 `1146 Table doesn't exist`） | ✅ 可用 |
+
+> 结论：**顺序执行可以靠池碰运气，并发不行**——MySQL/PG 的池在忙时会另开物理连接，
+> 因此 1b 的事务 / 会话**必须 per-session 独占连接**（不能依赖池的顺序巧合）。
+> SQLite / DuckDB 是单句柄语义，不受影响。MySQL 的显式 `BEGIN` 已改走**文本协议**
+> （`sqlx::raw_sql`，`native/mysql.rs::needs_text_protocol`），不再报 `1295`。
 
 - 每阶段结束：上列命令全绿 + §3 对应场景真机走通（`cargo run -p rds-app -j 2`）。
 - 真机回归矩阵（1b 起每轮至少一遍）：MySQL / PostgreSQL / SQLite / DuckDB × 执行族（当前语句 / 选区 / 全部 / 批量）× 只读 / 可写 × 明暗主题。

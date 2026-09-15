@@ -106,7 +106,7 @@
 # 模块回归（编辑器服务层 + 引擎 SQL 层；含 Phase 0 原语：切分 26 / 高亮 13 / 格式化 7 / 历史 4）
 cargo test -p rds-editor -p rds-engine --lib -j 2
 
-# 真机探针（事务会话亲和 + 驱动级事务；需环境变量，见开发方案 §6；共 8 例，未设变量则跳过）
+# P0.2 / P0.2b / P0.2c 真机探针（顺序亲和 + 驱动级事务 + **并发亲和**；凭据只从环境变量读；共 12 例）
 cargo test -p rds-engine --test transaction_affinity -j 2 -- --nocapture --test-threads=1
 
 # 能力探针（原型 §7.4 台账 ⚪ 候选的真实行为；离线、报告式输出）
@@ -140,7 +140,7 @@ cargo check --workspace --all-targets -j 2
 | 类别 | 项 |
 | --- | --- |
 | 待你拍板（阻塞开工） | 架构 §13 十项；其中必须回答：多文档标签方案 · SQL→分析 转换粒度 · 批量执行语义 · 分析模式首期语言 · 是否独立 crate |
-| Phase 0（先做，无 UI） | ✅ 已落地：语句切分 · 历史字段贯通 · crate 骨架 · SQL 高亮 · 格式化选型 · Dock 关闭语义（静态）· **P0.2 真机跑完（PG/SQLite/DuckDB 亲和成立；MySQL 显式 `BEGIN` 需改走驱动事务 API）** · P0.10 台账候选探针已实跑／待你跑：编译基线 P0.9 ／余：驱动层真实 `affected_rows`、驱动填 `column_types`（转 1b） |
+| Phase 0（先做，无 UI） | ✅ 已落地：语句切分 · 历史字段贯通 · crate 骨架 · SQL 高亮 · 格式化选型 · Dock 关闭语义（静态）· **P0.2 三组探针跑完（顺序亲和四库成立；并发下 MySQL/PG 会换连接 → 1b 需 per-session 独占连接；MySQL `BEGIN` 已改文本协议）** · P0.10 台账候选探针已实跑／待你跑：编译基线 P0.9 ／余：驱动层真实 `affected_rows`、驱动填 `column_types`（转 1b） |
 | Phase 1a | 内核 + 文本模式 + SQL 编辑体验 + 最小执行（"能用的编辑器"） |
 | Phase 1b | 执行闭环（"合格的 SQL 客户端"，并关闭 M4 遗留的"查看数据不自动执行"） |
 | Phase 1c | 分析模式骨架（Cell/Output/Session，仅 SQL + Markdown 单元） |
