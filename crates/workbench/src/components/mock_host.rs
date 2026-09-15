@@ -5,7 +5,8 @@
 //!
 //! | 宿主能力 | 实现 |
 //! | --- | --- |
-//! | 生成 / 落库 / 追加 / 导出 / 草稿箱 | `services::mock_generator`（装配层） |
+//! | 后台任务（生成 / 追加） | `services::mock_jobs`（工作线程 + 进度槽 + 取消） |
+//! | 落库 / 导出 / 草稿箱 | `services::mock_generator`（装配层） |
 //! | 连接清单（导入结构来源） | `Shared::connections`（工作台当前连接列表） |
 //! | 既有分析库表 / 导入列结构 | `services::mock_generator` → `NavCache` / `MetadataService` |
 //! | 只读判定 | `Shared.project_ui.read_only`（与 SQL 执行入口同一护栏） |
@@ -19,7 +20,8 @@ use std::rc::Rc;
 
 use gpui_kit::{App, Window};
 use mock::mock_view::{
-    MockColumnSpec, MockDraft, MockGenInfo, MockHost, SchemaRequest, SchemaSource,
+    MockColumnSpec, MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobState,
+    SchemaRequest, SchemaSource,
 };
 use mock::models::MockExportFormat;
 
@@ -47,23 +49,28 @@ impl WorkbenchMockHost {
 }
 
 impl MockHost for WorkbenchMockHost {
-    fn generate(&self, draft: &MockDraft, append_to: Option<&str>) -> Result<MockGenInfo, String> {
-        crate::services::mock_generator::generate(draft, append_to)
+    fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String> {
+        crate::services::mock_jobs::start(
+            draft,
+            kind,
+            &crate::services::mock_generator::analytics_db_path(),
+        )
+    }
+
+    fn job_state(&self) -> MockJobState {
+        crate::services::mock_jobs::state()
+    }
+
+    fn take_job_done(&self) -> Option<Result<MockJobDone, String>> {
+        crate::services::mock_jobs::take_done()
+    }
+
+    fn cancel_job(&self) {
+        crate::services::mock_jobs::cancel();
     }
 
     fn persist_table(&self, draft: &MockDraft, info: &MockGenInfo) -> Result<i64, String> {
         let rows = crate::services::mock_generator::persist_table(draft, info)?;
-        self.invalidate_analysis_nav();
-        Ok(rows)
-    }
-
-    fn append_table(
-        &self,
-        draft: &MockDraft,
-        info: &MockGenInfo,
-        table: &str,
-    ) -> Result<i64, String> {
-        let rows = crate::services::mock_generator::append_table(draft, info, table)?;
         self.invalidate_analysis_nav();
         Ok(rows)
     }

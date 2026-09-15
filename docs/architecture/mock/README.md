@@ -11,13 +11,14 @@
 
 ## 特点速览
 
-| 特点 | 含义 |
+| 特性 | 含义 |
 | --- | --- |
-| 生成 ≠ 写入 | 「生成」只产内存临时表 `temp_mock_*` + 预览；一切落库 / 落盘由出口按钮触发 |
+| 生成与写入分离 | 「生成」只产内存临时表 `temp_mock_*` + 预览；落库 / 落盘只能由出口按钮触发 |
 | 元数据驱动 | 输入只有「列名 + 类型 + 可空/主键」三件事，不需要真实数据样本；未知类型一律退到可读默认值 |
 | 只进不出 | 目标只有分析引擎（内存临时表 / `analytics.duckdb`）与项目文件；没有任何写入源库的代码路径 |
 | 确定性可复现 | `seed` 固定即同序列（`StdRng`），同配置两次生成结果逐值相同（已测） |
 | 列名智能映射 | 四级优先：精确名 → 前后缀 → 模糊子串 → 类型兜底；置信度写回 `high` / `low` / `manual` |
+| 后台生成（进度 + 取消） | 生成 / 追加在工作线程上跑：面板显进度条与批次文案，可随时取消（批次边界响应） |
 | 四个显式出口 | 持久化为分析库表（新建，同名报错）/ 追加到既有表（显式选表，主键自增接续）/ 保存到草稿箱 `{项目}/mock/` / 另存为（CSV·Parquet·Xlsx·SQL INSERT） |
 | 两处排版（方案①） | 右 Dock 280px = 配置 + 出口；中央「Mock 数据」tab = 字段表 + 预览表（同源：详情持面板实体） |
 | 视图随 crate | 面板 + 详情 tab + 两个语义对话框同 crate；宿主能力经 `MockHost` 注入 |
@@ -60,14 +61,15 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | `crates/mock/src/generators.rs` | `generate_cell`：137 变体 → 值（fake crate，确定性接入 `StdRng`） |
 | `crates/mock/src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `crates/mock/src/schema_map.rs` | `ColumnMapper`（列名规则表）+ **`parse_data_type`（类型串唯一入口）** |
-| `crates/mock/src/mock_view.rs` | **视图**：`MockPanel`（右 Dock 配置 + 出口）/ `MockDetailView`（中央字段 + 预览）/ `MockHost` 契约 / 导入结构 + 列编辑对话框 |
+| `crates/mock/src/mock_view.rs` | **视图**：`MockPanel`（右 Dock 配置 + 出口 + 进度与取消）/ `MockDetailView`（中央字段 + 预览）/ `MockHost` 契约 / 导入结构 + 列编辑对话框 |
 | `crates/mock/src/mock_view/tests.rs` | 视图测试（12 纯逻辑 + 16 项 headless 窗口测试 + 测试宿主桥） |
 | `crates/mock/src/templates.rs` | 内置 6 套场景模板（电商 / HR / 博客 / 金融 / 社交 / 企业通讯录） |
 | `crates/mock/src/persistence.rs` | `MockGenerationStore`：任务历史与用户模板的 SQLite 读写（8 个方法） |
 | `crates/mock/src/error.rs` | `MockError` / `MockResult`（含 DuckDB 错误桥接） |
 | `crates/mock/src/{commands,model,generator}.rs` | **占位**（全项目统一脚手架；命令层按 Round 14 政策退役） |
 | `crates/mock/tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（26 项） |
-| `crates/workbench/src/components/mock_host.rs` | **宿主桥**：`MockHost` 实现（装配层转发 + 连接清单 + 只读 + 打开详情 + 重绘 + 导航缓存失效） |
+| `crates/workbench/src/components/mock_host.rs` | **宿主桥**：`MockHost` 实现（后台任务转发 + 出口转发 + 连接清单 + 只读 + 打开详情 + 重绘 + 导航缓存失效） |
+| `crates/workbench/src/services/mock_jobs.rs` | **后台任务**：单一工作线程 + 进度槽 + 结果一次性取回 + 取消（生成与追加） |
 | `crates/workbench/src/services/mock_generator.rs` | **装配层**：生成（不写库）/ 落库新建 / 追加 / 导出 / 草稿箱 / 结构导入（cache-aside 取列） |
 | `crates/workbench/src/panels.rs` | 右 Dock 面板构造期创建 + 句柄登记；`Shared::open_mock_panel`（入口统一） |
 | `crates/workbench/src/view.rs` | 中央「Mock 数据」tab 的宿主命令（`Shared::open_mock_detail`） |
@@ -90,8 +92,10 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（DuckDB 静态库链接耗内存），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                              # 93 单元（含 16 窗口）+ 26 集成
-cargo test  -p rds-workbench --test mock_generator -j 2    # 装配层 10 项
+cargo test  -p rds-mock -j 2                                   # 99 单元（含 34 视图）+ 26 集成
+cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 10 项
+cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 3 项
+cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
 ```
 
 实测基线（本轮）：
@@ -99,9 +103,9 @@ cargo test  -p rds-workbench --test mock_generator -j 2    # 装配层 10 项
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 93 单元（12 纯逻辑 + 16 窗口 + 65 其他）+ 26 集成全过 |
-| `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
-| `cargo test -p rds-workbench` | 全绿（仅 `ui_contract` 的 `px(` 扫描失败为**存量欠债**，见下） |
+| `cargo test -p rds-mock` | 99 单元（12 纯逻辑 + 22 窗口 + 65 其他）+ 26 集成全过 |
+| `cargo check -p rds-workbench --all-targets` | 通过（零告警；`editor_session_real.rs` 的告警属并行会话 WIP） |
+| `cargo test -p rds-workbench` | 全绿（含 10 装配 + 4 任务测试），仅 `ui_contract` 的 `px(` 扫描失败为**存量欠债** |
 
 > 存量欠债（非本模块）：`crates/workbench/src/panels.rs` 在 HEAD 状态就有 4 处裸 `px(...)`（草稿箱行 / 虚拟列表），
 > 使 `ui_contract::view_layer_has_no_raw_size_literals` 失败；同理 `crates/engine/tests/transaction_affinity.rs`
@@ -124,11 +128,11 @@ v1 素材（暂存区，删除前请先提炼）：`v1/docs/frontend/mock/mock-d
 
 | # | 建议 | 收益 | 现状 |
 | --- | --- | --- | --- |
-| 1 | 生成走**后台任务 + 进度 + 取消** | 十万行不再卡界面；引擎 `cancel()` / `generate_with_progress` 已就绪 | 同步调用（架构 §9-I7） |
-| 2 | 落库**去文本中转**（`ATTACH` 直写或「生成 → 写指定连接」接口） | 省一次全量序列化；错误定位收在一处 | 现在是 INSERT 文本（§9-I3） |
-| 3 | **生成器搜索** | 137 项下按名称 / 标签定位更快 | 分类子菜单已可用，搜索待补 |
-| 4 | **复杂参数编辑入口**（集合 / 加权） | 约束类生成器从「不可用」变可用 | 面板只读提示（§9-I8） |
-| 5 | **临时表清理** | 前缀与 `TempTableManager` 约定不一致，TTL/清理实际未生效 | §9-I1 / I2 |
-| 6 | 生成任务 / 模板**落库接线** | `MockGenerationStore` 8 方法 + 迁移 009 已就位但无 UI | §9-I4 |
-| 7 | **项目作用域分析库** | 与「窗口 = 项目」隔离原则一致 | 装配层已留 `*_at(path, ..)` 入口 |
-| 8 | **生成历史**（可重放：表名 / 行数 / 种子 / 列快照） | 复现一次生成不用重新配 | 同 #6 |
+| 1 | ~~生成走后台任务 + 进度 + 取消~~ | 十万行不再卡界面 | ✅ 本轮完成（`services::mock_jobs`；取消在批次边界） |
+| 2 | **出口也纳入后台任务**（Persist / Export） | 落库与导出同样可看进度、可取消（现在只有生成/追加是异步） | 同步（架构 §9-I10） |
+| 3 | 落库**去文本中转**（`ATTACH` 直写或「生成 → 写指定连接」接口） | 省一次全量序列化；错误定位收在一处 | 现在是 INSERT 文本（§9-I3） |
+| 4 | **生成器搜索** | 137 项下按名称 / 标签定位更快 | 分类子菜单已可用，搜索待补 |
+| 5 | **复杂参数编辑入口**（集合 / 加权） | 约束类生成器从「不可用」变可用 | 面板只读提示（§9-I8） |
+| 6 | **临时表清理** | 前缀与 `TempTableManager` 约定不一致，TTL/清理实际未生效 | §9-I1 / I2 |
+| 7 | 生成任务 / 模板**落库接线** | `MockGenerationStore` 8 方法 + 迁移 009 已就位但无 UI | §9-I4 |
+| 8 | **项目作用域分析库** | 与「窗口 = 项目」隔离原则一致 | 装配层已留 `*_at(path, ..)` 入口 |

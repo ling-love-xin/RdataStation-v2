@@ -133,6 +133,14 @@ button{font-family:inherit;cursor:pointer;}
 .inf{font-size:11px;color:var(--info);}
 .mono-line{font-family:Consolas,'SFMono-Regular',monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .stack{display:flex;flex-direction:column;gap:6px;width:100%;}
+/* 进度条（Progress 组件示意）：填充色用品牌色，轨道用浅色 */
+.bar{height:6px;border-radius:3px;background:var(--track);overflow:hidden;width:100%;}
+.bar>i{display:block;height:100%;background:var(--primary);border-radius:3px;}
+[data-scn="running"] .exit-disabled{display:none;}
+.detail-running{display:none;}
+[data-scn="running"] .detail-running{display:flex;}
+[data-scn="running"] .hint.only-generated,
+[data-scn="running"] .prev-wrap{display:none;}
 .exit-enabled{display:none;}
 [data-scn="generated"] .exit-enabled,[data-scn="persist"] .exit-enabled{display:flex;}
 [data-scn="generated"] .exit-disabled,[data-scn="persist"] .exit-disabled{display:none;}
@@ -181,11 +189,13 @@ button{font-family:inherit;cursor:pointer;}
 .form-line .inp{width:150px;}
 
 /* ── 场景可见性 ── */
-.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column{display:none;}
+.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running{display:none;}
 [data-scn="empty"] .only-empty{display:flex;}
 [data-scn="imported"] .only-imported{display:flex;}
 [data-scn="generated"] .only-imported{display:flex;}
 [data-scn="generated"] .only-generated{display:flex;}
+[data-scn="running"] .only-imported{display:flex;}
+[data-scn="running"] .only-running{display:flex;}
 [data-scn="persist"] .only-imported{display:flex;}
 [data-scn="persist"] .only-generated{display:flex;}
 [data-scn="persist"] .only-persist{display:flex;}
@@ -229,6 +239,7 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn on" data-go="empty" onclick="setScene('empty')">空态（未加列）</button>
   <button class="scn" data-go="imported" onclick="setScene('imported')">导入源库结构</button>
   <button class="scn" data-go="generated" onclick="setScene('generated')">已生成 · 出口就绪</button>
+  <button class="scn" data-go="running" onclick="setScene('running')">生成中（进度 + 取消）</button>
   <button class="scn" data-go="persist" onclick="setScene('persist')">落库反馈（同名已存在）</button>
   <button class="scn" data-go="readonly" onclick="setScene('readonly')">只读项目</button>
   <button class="scn" data-go="menu" onclick="setScene('menu')">生成器分类子菜单</button>
@@ -287,7 +298,10 @@ button{font-family:inherit;cursor:pointer;}
           <button class="btn primary sm">生成</button>
         </div>
 
-        <!-- 字段清单（空态 / 非空态） -->
+        <!-- 中央 tab：生成中（摘要行尾带进度，预览保留旧结果或空态） -->
+        <div class="detail-running">
+          <div class="hint">字段（5）· 目标表 mock_orders · 100000 行 · 种子 随机 · 简体中文 · 生成中 40%</div>
+        </div>
         <div class="detail-empty hint">暂无列：在右 Dock「Mock 数据生成」面板点「导入结构」或「＋ 加列」。</div>
         <div class="only-imported detail-fields" style="flex-direction:column;gap:10px;">
           <div class="field-grid">
@@ -383,11 +397,24 @@ button{font-family:inherit;cursor:pointer;}
             <button class="btn sm">＋ 加列</button>
           </div>
 
-          <!-- 生成 -->
-          <button class="btn primary wide">生成</button>
+          <!-- 生成（后台任务：进行中时禁用，进度与取消另起一行） -->
+          <button class="btn primary wide only-running" disabled>生成中…</button>
+          <button class="btn primary wide only-empty" disabled>生成</button>
+          <button class="btn primary wide only-imported" disabled>生成</button>
+          <button class="btn primary wide only-generated">生成</button>
 
-          <!-- 结果摘要 / 只读 / 落库反馈 -->
-          <div class="mono-line only-generated" style="display:none">临时表 temp_mock_mock_orders · 1000 行 · 12 ms</div>
+          <!-- 任务进行中：进度条 + 批次文案 + 取消 -->
+          <div class="only-running" style="flex-direction:column;gap:6px;">
+            <div class="bar"><i style="width:40%"></i></div>
+            <div class="line">
+              <span class="hint grow">4 / 10 批（≈40000 / 100000 行）</span>
+              <button class="btn sm">取消</button>
+            </div>
+          </div>
+
+          <!-- 结果摘要 / 只读 / 落库反馈 / 生成中 -->
+          <div class="mono-line only-generated">临时表 temp_mock_mock_orders · 1000 行 · 12 ms</div>
+          <div class="ok only-running">生成中…</div>
           <div class="inf only-readonly">只读模式：不允许落库与写文件（仍可生成预览）</div>
           <div class="ok only-persist">已在分析库新建表 mock_orders（1000 行）</div>
           <div class="err only-persist">分析库已存在表 mock_orders：请改用「追加到既有表」</div>

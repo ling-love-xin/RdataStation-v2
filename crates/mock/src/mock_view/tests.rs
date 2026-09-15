@@ -17,9 +17,10 @@ use gpui_kit::{
 };
 
 use super::{
-    MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockPanel, MockPreview,
-    MockRunOptions, SchemaRequest, SchemaSource, focus_detail_tab, param_text, parse_percent_ratio,
-    parse_rows, parse_seed, patch_param, summarize_params, validate_table_name,
+    MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind,
+    MockJobProgress, MockJobState, MockPanel, MockPreview, MockRunOptions, SchemaRequest,
+    SchemaSource, focus_detail_tab, param_text, parse_percent_ratio, parse_rows, parse_seed,
+    patch_param, summarize_params, validate_table_name,
 };
 use crate::generator_catalog::ParamKind;
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
@@ -182,6 +183,10 @@ fn column_type_labels_are_complete() {
 struct Recorder {
     notifies: Cell<usize>,
     opened_detail: Cell<usize>,
+    /// 提交的后台任务（种类）
+    started: RefCell<Vec<MockJobKind>>,
+    /// 取消请求次数
+    cancels: Cell<usize>,
     /// (目标表, 行数, 种子, 追加目标)
     generated: RefCell<Vec<(String, u32, Option<u32>, Option<String>)>>,
     persisted: RefCell<Vec<String>>,
@@ -192,6 +197,16 @@ struct Recorder {
     read_only: Cell<bool>,
     tables: RefCell<Vec<String>>,
     sources: RefCell<Vec<SchemaSource>>,
+    /// 任务启动后是否立即失败（校验失败 / 已在跑）
+    start_error: RefCell<Option<String>>,
+    /// 提交后停在「进行中」：不写完成结果（供进度 / 取消 / 异常用例观察）
+    hold_job: Cell<bool>,
+    /// 已完成未被取走的结果
+    job_result: RefCell<Option<Result<MockJobDone, String>>>,
+    /// 进行中时报告的进度快照
+    job_progress: Cell<MockJobProgress>,
+    /// 下一次 `job_state` 谎报 Idle（模拟工作线程异常退出）
+    pretend_idle: Cell<bool>,
 }
 
 fn test_column(name: &str, generator: GeneratorConfig) -> MockColumnSpec {
@@ -214,19 +229,10 @@ struct TestHost {
     rec: Rc<Recorder>,
 }
 
-impl MockHost for TestHost {
-    fn generate(
-        &self,
-        draft: &MockDraft,
-        append_to: Option<&str>,
-    ) -> Result<MockGenInfo, String> {
-        self.rec.generated.borrow_mut().push((
-            draft.table_name.clone(),
-            draft.options.rows,
-            draft.options.seed,
-            append_to.map(|s| s.to_string()),
-        ));
-        Ok(MockGenInfo {
+impl TestHost {
+    /// 造一份生成结果（预览两行，与旧测试的预期一致）。
+    fn gen_info(&self, draft: &MockDraft) -> MockGenInfo {
+        MockGenInfo {
             temp_table_name: format!("temp_mock_{}", draft.table_name),
             row_count: draft.options.rows,
             elapsed_ms: 7,
@@ -234,7 +240,63 @@ impl MockHost for TestHost {
                 columns: draft.columns.iter().map(|c| c.def.name.clone()).collect(),
                 rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
             },
-        })
+        }
+    }
+}
+
+impl MockHost for TestHost {
+    fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String> {
+        if let Some(err) = self.rec.start_error.borrow().clone() {
+            return Err(err);
+        }
+        self.rec.started.borrow_mut().push(kind.clone());
+        match &kind {
+            MockJobKind::Generate => {
+                self.rec.generated.borrow_mut().push((
+                    draft.table_name.clone(),
+                    draft.options.rows,
+                    draft.options.seed,
+                    None,
+                ));
+                if !self.rec.hold_job.get() {
+                    *self.rec.job_result.borrow_mut() =
+                        Some(Ok(MockJobDone::Generated(self.gen_info(draft))));
+                }
+            }
+            MockJobKind::AppendTo(table) => {
+                self.rec.generated.borrow_mut().push((
+                    draft.table_name.clone(),
+                    draft.options.rows,
+                    draft.options.seed,
+                    Some(table.clone()),
+                ));
+                self.rec.appended.borrow_mut().push(table.clone());
+                if !self.rec.hold_job.get() {
+                    *self.rec.job_result.borrow_mut() = Some(Ok(MockJobDone::Appended {
+                        table: table.clone(),
+                        total_rows: 100 + draft.options.rows as i64,
+                    }));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn job_state(&self) -> MockJobState {
+        // 与真实实现同一语义：结果一旦写入，进度即清零（避免「既无进度也无结果」的空洞）
+        if self.rec.pretend_idle.get() || self.rec.job_result.borrow().is_some() {
+            return MockJobState::Idle;
+        }
+        MockJobState::Running(self.rec.job_progress.get())
+    }
+
+    fn take_job_done(&self) -> Option<Result<MockJobDone, String>> {
+        self.rec.job_result.borrow_mut().take()
+    }
+
+    fn cancel_job(&self) {
+        self.rec.cancels.set(self.rec.cancels.get() + 1);
+        *self.rec.job_result.borrow_mut() = Some(Err("生成已取消".to_string()));
     }
 
     fn persist_table(&self, draft: &MockDraft, _info: &MockGenInfo) -> Result<i64, String> {
@@ -246,16 +308,6 @@ impl MockHost for TestHost {
             ));
         }
         Ok(5)
-    }
-
-    fn append_table(
-        &self,
-        _draft: &MockDraft,
-        info: &MockGenInfo,
-        table: &str,
-    ) -> Result<i64, String> {
-        self.rec.appended.borrow_mut().push(table.to_string());
-        Ok(100 + info.row_count as i64)
     }
 
     fn export_file(
@@ -395,6 +447,13 @@ fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
+/// 手动驱动一次任务轮询（生产环境由 120ms 定时泵驱动）。
+fn poll_job(cx: &mut VisualTestContext, panel: &Entity<MockPanel>) {
+    panel.update(cx, |panel, cx| {
+        let _ = panel.poll_job(cx);
+    });
+}
+
 #[gpui_kit::test]
 fn panel_renders_empty_state_and_exposes_defaults(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -439,9 +498,16 @@ fn generate_produces_preview_without_touching_sinks(cx: &mut TestAppContext) {
     });
     draw(cx);
     panel.update(cx, |panel, cx| panel.run_generate(cx));
+    // 后台任务：提交后立即返回（UI 不阻塞），结果由轮询回填
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.is_running(), "提交后应处于进行中");
+        assert!(panel.gen_info().is_none(), "结果尚未回填");
+    });
+    poll_job(cx, &panel);
     draw(cx);
 
     panel.update(cx, |panel, _cx| {
+        assert!(!panel.is_running(), "回填后应归位空闲");
         let outcome = panel.outcome().expect("应有成功文案");
         assert!(outcome.contains("已生成 1000 行"), "{outcome}");
         assert!(outcome.contains("temp_mock_mock_data"), "{outcome}");
@@ -458,6 +524,7 @@ fn generate_produces_preview_without_touching_sinks(cx: &mut TestAppContext) {
     assert_eq!(generated[0].1, 1000, "默认行数");
     assert_eq!(generated[0].2, None, "默认随机种子");
     assert_eq!(generated[0].3, None, "生成不带追加目标");
+    assert_eq!(rec.started.borrow().len(), 1, "只应提交一个后台任务");
     // 关键语义：生成不落库、不落盘
     assert!(rec.persisted.borrow().is_empty(), "生成不应建表");
     assert!(rec.appended.borrow().is_empty(), "生成不应追加");
@@ -528,6 +595,7 @@ fn persist_creates_table_then_reports_existing(cx: &mut TestAppContext) {
 
     // 生成后落库 → 新建表
     panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
     panel.update(cx, |panel, cx| panel.persist_table(cx));
     panel.update(cx, |panel, _cx| {
         assert!(
@@ -561,6 +629,11 @@ fn append_regenerates_with_target_and_reports_totals(cx: &mut TestAppContext) {
         panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
         panel.append_table("orders".to_string(), cx);
     });
+    // 追加是「生成 + 写入」一次任务：提交后同样不阻塞 UI
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.is_running(), "追加也走后台任务");
+    });
+    poll_job(cx, &panel);
 
     panel.update(cx, |panel, _cx| {
         assert!(
@@ -579,6 +652,7 @@ fn append_regenerates_with_target_and_reports_totals(cx: &mut TestAppContext) {
         Some("orders"),
         "追加必须先按目标表重算自增起点"
     );
+    assert_eq!(rec.appended.borrow().as_slice(), ["orders".to_string()]);
 }
 
 #[gpui_kit::test]
@@ -593,6 +667,7 @@ fn read_only_blocks_sinks_but_allows_generate(cx: &mut TestAppContext) {
     });
     draw(cx);
     panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
     panel.update(cx, |panel, _cx| {
         assert!(panel.gen_info().is_some(), "只读项目仍可生成预览");
     });
@@ -637,6 +712,7 @@ fn column_edits_track_draft_and_invalidate_result(cx: &mut TestAppContext) {
 
     // 生成 → 改列 → 结果失效（不让出口拿旧结果落库）
     panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
     let id = panel.read_with(cx, |panel, _cx| panel.draft().columns[0].id);
     panel.update(cx, |panel, cx| {
         panel.set_generator(id, "uuid_v4", cx);
@@ -778,6 +854,7 @@ fn detail_view_renders_fields_and_preview(cx: &mut TestAppContext) {
         panel.add_column("email".to_string(), ColumnDataType::Varchar { length: None }, cx);
     });
     panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
     draw(cx);
 
     detail.update(cx, |view, _cx| {
@@ -846,6 +923,153 @@ fn focus_tab_in_dock_selects_self(cx: &mut TestAppContext) {
             "聚焦后应切回详情 tab（不是静默 no-op）"
         );
     });
+}
+
+// ==================== 后台任务（进度 / 取消） ====================
+
+/// 任务进行中：进度由宿主报告，面板镜像给 UI（含百分比与行数估算）。
+#[gpui_kit::test]
+fn job_progress_is_mirrored_while_running(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    // 任务停在「进行中」：不写结果，只报告 3/10 批
+    rec.hold_job.set(true);
+    rec.job_progress.set(MockJobProgress {
+        batches_done: 3,
+        batches_total: 10,
+        rows_total: 1000,
+    });
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.is_running(), "结果未到，应继续轮询");
+        let progress = panel.job_progress().expect("应有进度");
+        assert_eq!(progress.batches_done, 3);
+        assert_eq!(progress.batches_total, 10);
+        assert!(
+            (progress.percent() - 30.0).abs() < 0.01,
+            "应报 30%（实际 {}）",
+            progress.percent()
+        );
+        assert_eq!(progress.rows_done(), 300, "按批次粒度估算已生成行数");
+        assert!(panel.outcome().is_some_and(|o| o.contains("生成中")), "{:?}", panel.outcome());
+        assert!(panel.gen_info().is_none(), "未完成不应有结果");
+    });
+}
+
+/// 取消：置位取消请求（按钮转「正在取消…」），结果以可读文案回传。
+#[gpui_kit::test]
+fn cancel_requests_host_and_reports_cancel_outcome(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    rec.hold_job.set(true);
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    panel.update(cx, |panel, cx| panel.cancel_job(cx));
+
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.cancel_requested(), "应置位取消请求");
+    });
+    assert_eq!(rec.cancels.get(), 1, "应把取消请求转给宿主");
+
+    // 重复点取消不重复下发
+    panel.update(cx, |panel, cx| panel.cancel_job(cx));
+    assert_eq!(rec.cancels.get(), 1);
+
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert!(!panel.is_running(), "取消后任务应结束");
+        let error = panel.error().expect("应有取消文案");
+        assert!(error.contains("已取消"), "{error}");
+        assert!(error.contains("残留"), "应提醒临时表可能残留部分行: {error}");
+        assert!(panel.gen_info().is_none(), "取消后旧结果作废");
+    });
+}
+
+/// 提交失败（宿主拦住重复任务 / 工作线程不可用）直接落到错误行。
+#[gpui_kit::test]
+fn start_errors_are_surfaced(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    *rec.start_error.borrow_mut() = Some("已有生成任务在进行中".to_string());
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.error(), Some("已有生成任务在进行中"));
+        assert!(!panel.is_running(), "提交失败不应进入进行中");
+    });
+    assert!(rec.generated.borrow().is_empty(), "提交失败不应触生成");
+}
+
+/// 后台线程异常退出（既无进度也无结果）：不静默挂死，给可读错误。
+#[gpui_kit::test]
+fn vanished_job_reports_readable_error(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    rec.hold_job.set(true);
+    rec.pretend_idle.set(true);
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+
+    panel.update(cx, |panel, _cx| {
+        assert!(!panel.is_running());
+        assert!(
+            panel
+                .error()
+                .is_some_and(|e| e.contains("异常结束")),
+            "{:?}",
+            panel.error()
+        );
+    });
+}
+
+/// 任务进行中重复点「生成」：不重复提交（宿主侧也会拦，这里是视图第一道）。
+#[gpui_kit::test]
+fn second_start_while_running_is_rejected(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    rec.hold_job.set(true);
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| {
+        panel.run_generate(cx);
+        panel.run_generate(cx);
+    });
+
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.error(), Some("已有生成任务在进行中"));
+        assert!(panel.is_running(), "首个任务仍在进行");
+    });
+    assert_eq!(rec.started.borrow().len(), 1, "只应提交一次");
 }
 
 /// `MockRunOptions::new` 是 `#[non_exhaustive]` 结构的唯一构造入口。

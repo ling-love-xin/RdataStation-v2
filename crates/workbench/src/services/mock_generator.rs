@@ -110,7 +110,7 @@ fn table_columns(conn: &duckdb::Connection, table: &str) -> Result<Vec<String>, 
 
 // ==================== 生成 ====================
 
-/// 生成到内存临时表（面板 `MockHost::generate` 的实现体）。
+/// 生成到内存临时表（面板 `MockHost::start_job` 的实现体，同步阻塞；UI 侧经 `services::mock_jobs` 放后台线程）。
 ///
 /// `append_to` 给定时按目标表现有行数接续主键自增起点（「追加到既有表」用）。
 pub fn generate(draft: &MockDraft, append_to: Option<&str>) -> Result<MockGenInfo, String> {
@@ -123,6 +123,22 @@ pub fn generate_at(
     draft: &MockDraft,
     append_to: Option<&str>,
 ) -> Result<MockGenInfo, String> {
+    generate_at_with_progress(db_path, draft, append_to, |_, _| {})
+}
+
+/// [`generate_at`] 的带进度版本：`on_progress(已完成批次, 总批次)` 由引擎按批回调。
+///
+/// 回调在工作线程上执行（`Fn + Send + 'static`），只能写共享原子量 / 锁保护的状态，
+/// 不得回到 UI 线程。
+pub fn generate_at_with_progress<F>(
+    db_path: &Path,
+    draft: &MockDraft,
+    append_to: Option<&str>,
+    on_progress: F,
+) -> Result<MockGenInfo, String>
+where
+    F: Fn(usize, usize) + Send + 'static,
+{
     if draft.columns.is_empty() {
         return Err("没有可用的列定义：请先导入源库结构或手工加列".to_string());
     }
@@ -151,7 +167,7 @@ pub fn generate_at(
 
     let rt = nav_runtime::bridge_runtime()?;
     let result = rt
-        .block_on(MockEngine::generate(config))
+        .block_on(MockEngine::generate_with_progress(config, on_progress))
         .map_err(|e| format!("Mock 生成失败: {e}"))?;
 
     Ok(MockGenInfo {

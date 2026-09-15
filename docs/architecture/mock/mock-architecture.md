@@ -17,6 +17,7 @@
 | I4 临时表可识别 | 生成产物一律 `temp_mock_*` 前缀并注册到 engine 的临时表管理器 | `TEMP_MOCK_PREFIX` 常量 + `register_temp_table` |
 | I5 生成不写库 | 「生成」只产内存临时表 + 预览；落库只能由显式出口触发 | 视图测试 `generate_produces_preview_without_touching_sinks` + 装配测试 `generate_does_not_write_analysis_db` |
 | I6 出口不覆盖 | 「持久化」遇同名表报错；「追加」只追加；两者都不 DROP / 不重写既有数据 | 装配测试 `persist_creates_table_and_rejects_second_run`（断言既有 50 行未变） |
+| I7 任务可中断 | 生成 / 追加在后台线程执行，可在批次边界取消，且进度可观测 | 任务测试 `cancel_interrupts_running_job_with_readable_error` + 视图测试 `job_progress_is_mirrored_while_running` |
 
 ## 2. 概念模型
 
@@ -141,10 +142,28 @@ ImportSchemaInput{ conn_id, database, schema, tables, connection_type }
 
 | 出口 | 步骤 |
 | --- | --- |
-| 持久化为分析库表 | 查既有表（同名 → `Err` 含「已存在」，引导追加）→ `CREATE TABLE`（列名走 `sanitize_identifier`，与临时表列名同一算法）→ `insert_statements` 文本 `execute_batch` → 失败回滚建表 → 返回表内行数 |
-| 追加到既有表 | 校验目标表存在且列名覆盖草稿列（缺列直接报）→ `insert_statements` → 返回表内总行数 |
+| 持久化为分析库表 | 查既有表（同名 → `Err` 含「已存在」，引导追加）→ `CREATE TABLE`（列名走 `sanitize_identifier`，与临时表列名同一算法）→ `insert_statements` 文本 `execute_batch` → 失败回滚建表 → 返回表内行数（**当前同步阻塞**，见 §9-I10） |
+| 追加到既有表 | **后台任务** `AppendTo(表)`：生成 + 校验列 + `insert_statements` 在同一个任务里完成（见下） |
 | 保存到草稿箱 | `{项目}/mock/` → `save_to_scratchpad`（时间戳命名）→ 返回文件路径 |
 | 另存为 | 系统保存对话框（`prompt_for_new_path`，异步回传）→ `MockEngine::export` |
+
+**后台任务（生成 / 追加）**：
+
+```
+面板（UI 线程）                 services::mock_jobs（工作线程）
+  start_job(draft, kind)  ──►  槽：progress = Running{0,0,rows}
+  ┌ 120ms 定时泵（弱句柄）       │  MockEngine::generate_with_progress
+  ├ job_state()  ◄─────────   │   每批回写 progress{batches_done,total}
+  └ take_job_done() ◄──────   收尾：progress = None; done = Some(结果)
+       │                        （**同一把锁下一次性收尾**，UI 看不到空洞）
+       └─► finish_job：写文案 / 置 landed / 作废旧结果；失败取错误行
+  cancel_job()  ──► MockEngine::cancel()（批次边界响应）
+```
+
+为何不能直接在视图里 `spawn`：`MockHost` 是 `Rc<dyn>`（持 `Shared`，非 Send），无法把宿主搬进
+GPUI 的后台执行器；因此沿用 `nav_jobs` / `scratchpad_jobs` 的成熟模式——**宿主内部起工作线程**，
+只把 owned 数据（草稿 / 路径）跨线程移动。进度用定时泵而非 render 轮询：任务进行中没有任何
+其他事件会让面板重绘，不主动唤醒就看不到进度。
 
 **列结构导入（cache-aside）**：
 
@@ -164,6 +183,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 状态 | 所有者 | 读写时机 |
 | --- | --- | --- |
 | 草稿（表名 / 列 / 行数·种子·语言 / 最近结果 / 出口状态） | `mock::mock_view::MockPanel`（实体，crate 内） | 面板自己的事件路径写；渲染只读 |
+| 后台任务槽（进度 + 已完成结果） | `workbench::services::mock_jobs`（进程级单例 + 工作线程） | worker 写、UI 轮询读；`start` / `take_done` 都过同一把锁 |
+| 任务进度镜像（含取消请求标志） | `MockPanel.job: Option<MockJobWatch>` | 由定时泵更新；`cx.notify()` 驱动重绘 |
 | 字段编辑工作副本 | `mock::mock_view::MockDetailView::draft: Option<ColumnDraft>` | 列编辑对话框打开时建、应用 / 取消时丢弃 |
 | 面板实体句柄 | `Shared.mock_panel`（`WeakEntity<MockPanel>`） | 面板**构造期**登记；导航右键用它定向导入结构（懒创建会让「先右键、后面板未渲染」丢目标） |
 | 详情 tab 句柄 | `Shared.mock_detail`（`WeakEntity<MockDetailView>`） | 首次「查看详情」时建并入中央 tab 组；tab 被关闭后实体释放 → 下次重新创建 |
@@ -204,6 +225,9 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D17 | 追加必须**显式选表**，同名不自动追加 | 「持久化」与「追加」是两个语义不同的出口；静默追加会让用户以为新建了一张 | 表已存在时隐式走追加（v1 的 `CREATE TABLE AS SELECT` 会直接报错） |
 | D18 | 字段表与预览落**中央 tab**（方案①） | 右 Dock 280px 且不可拖拽调宽，宽表与字段卡片放不下；中央 tab 与编辑器同构（单一权威状态） | 全塞右 Dock（v1 是 380px 可拖拽宽栏，v2 不具备） |
 | D19 | 生成器切换走**分类子菜单**，参数在列编辑对话框 | 生成器身份与参数行必须一致；同一对话框内改生成器会让参数行失效（要么重建、要么错位） | 对话框内提供生成器下拉（参数行与生成器不同步） |
+| D20 | 生成 / 追加走**后台工作线程 + 进度 + 取消**（`services::mock_jobs`） | 生成是重活，UI 线程 `block_on` 会冻结界面且无法中断；`MockHost` 非 Send，不能在视图里直接 `spawn` | 视图内 `cx.background_spawn`（要求宿主 Send）；不做进度（大行数只能干等） |
+| D21 | 进度用**定时泵（120ms）+ 宿主槽**，而非 render 轮询 | 任务进行中没有其他事件触发重绘，不主动唤醒就看不到进度；轮询频率低不抢主线程 | render 内轮询（永远不会被调到）；GPUI 后台执行器直接跑生成（阻塞后台池线程） |
+| D22 | 任务收尾「清进度 + 写结果」在**同一把锁下一次性**完成 | UI 侧不可能观察到「既无进度也无结果」的空洞，避免误报「工作线程已退出」 | 两个独立原子量（存在观测窗口） |
 
 ## 7. 降级与容错矩阵
 
@@ -218,6 +242,10 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 追加目标缺列 | `目标表 {t} 缺少列：a、b（列结构需一致）` | 面板 danger 行（不把 DuckDB 原始错误冒到界面） |
 | 落库写失败 | `写入分析库失败（已回滚建表）: …` | 面板 danger 行；新表已被 DROP，不留半成品 |
 | 未打开项目 | `未打开项目：草稿箱不可用（请先打开或新建项目）` | 面板 danger 行 |
+| 任务已在跑 | `已有生成任务在进行中` | 面板 danger 行（按钮同时被禁用，双重护栏） |
+| 工作线程不可用 | `后台工作线程不可用` | 面板 danger 行；槽已回滚，不影响后续重试 |
+| 任务异常结束 | `后台生成任务异常结束（工作线程已退出）` | 面板 danger 行（既无进度也无结果时才判为异常） |
+| 用户取消 | 引擎在批次边界回 `生成已取消` | 面板 danger 行 + 「临时表可能残留部分行，下次生成会重建」；旧结果作废 |
 | 源表列读不到 | `读不到/没有列信息（连接可能已断开，或表不存在）` | 面板 danger 行；不做假导入 |
 | 分析库打不开 | 服务层中文错误 | 面板 `error` 行（danger 色）；既有表候选为空清单 |
 | 预览不存在的临时表 | `MockError`（DuckDB 报错桥接） | 面板提示 |
@@ -229,6 +257,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 
 - **批量**：10k 行 / 批，批内先拼值再一次性 `INSERT`（避免逐行往返）。
 - **行数上限**：面板侧 `MAX_ROWS = 1_000_000`（误输入护栏）；引擎侧不设上限，由 row_count 决定。
+- **进度粒度**：按生成批次（`BATCH_SIZE = 10_000` 行/批）回调；面板每 120ms 拉一次，越接近尾声越密。
+  提交到首批完成之间显示「准备中…」（总量随首批回调返回）。
 - **可观测**：`MockGenerateResult.elapsed_ms`（生成耗时，不含写库）；`tracing::warn!` 用于生成器内的可恢复异常（非法日期回退、语料缺失）。
 - **预览成本**：固定前 10 行（`PREVIEW_ROWS`）；`preview()` 支持自定义 limit。
 
@@ -254,7 +284,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 | I4 | 模板/用户模板与生成任务已落 `project.db`，但**无 UI 入口**且无真实 SQLite 往返测试（仅序列化测试） | 能力在代码里，用户在界面上看不到 | Phase C/D 接面板；补 `MockGenerationStore` 的 SQLite 往返测试 |
 | I5 | ~~`mock_view.rs` 为占位文件~~ | 已落地：面板与详情 tab 都在 `crates/mock/src/mock_view.rs`；`{commands,model,generator}.rs` 仍是脚手架占位 | 这三个占位文件按全项目统一政策处理（命令层已退役） |
 | I6 | 文档称「生成器按依赖表达式计算取值」，实际只做拓扑排序 | 用户可能误以为支持 `price * quantity` 计算 | Phase C 明确：要么实现表达式解释，要么把 `dependency` 降级为「顺序提示」 |
-| I7 | 生成与落库都是**同步阻塞**调用（UI 线程） | 大行数（十万级）会卡界面；没有进度与取消入口（引擎两个能力都已就绪） | Phase B：后台任务 + 进度行 + 取消按钮 |
+| I7 | ~~生成与落库都是**同步阻塞**调用~~ | 已解决：生成 / 追加走后台工作线程（进度 + 取消，D20/D21）；**出口仍同步**——见 I10 | —— |
+| I10 | 出口（持久化为分析库表 / 另存为 / 草稿箱）仍是**同步阻塞**调用 | 大行数落库（INSERT 文本 + `execute_batch`）仍会卡界面；取消也够不到这一段 | 复用 `mock_jobs` 的任务机制：加 `Persist` / `Export` 任务种类（统一进度条 + 取消） |
 | I8 | 复杂参数（`ForeignKey.values` / `Sequence.values` / `Weighted.choices`）无编辑入口 | 约束类生成器实际不可配置（面板只显示一句说明） | 提供「集合编辑」弹层（多行文本 / 键值对）或改由模板与导入场景给出 |
 
 ## 10. 测试策略
@@ -262,9 +293,10 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 层 | 位置 | 数量 | 锁什么 |
 | --- | --- | --- | --- |
 | 单元 | `crates/mock/src/*.rs`（`#[cfg(test)]`） | 65 | 表名净化、DDL 生成、`generate_cell` 各变体、列名规则表、类型串解析、序列化往返、模板自检、生成器目录自检（3：137 覆盖 / 标签与默认 / 分类往返） |
-| 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 28（12 纯逻辑 + 16 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构（导航右键路径）；两个对话框可开；详情 tab 渲染与 `focus_tab` 幂等 |
-| 集成 | `crates/mock/tests/mock_engine_tests.rs` | 26 | 公开 API 端到端：生成 / 预览 / 映射 / 依赖 / 取消 / 类型 / 五种导出 / 持久化 / 草稿目录 / 模板 / 场景 |
-| 装配 | `crates/workbench/tests/mock_generator.rs` | 10 | 生成不写分析库；新建 → 同名拒绝（不覆盖）；追加接续主键（`MAX(id)=100` 且无重复）；追加目标不存在 / 缺列的中文错误；CSV 导出表头；草稿箱无项目拒绝 + 有项目落 `{项目}/mock/`；连接默认库 / schema 预填；类型串映射 |
+| 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 34（12 纯逻辑 + 22 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；两个对话框可开；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒 |
+| 集成（引擎） | `crates/mock/tests/mock_engine_tests.rs` | 26 | 公开 API 端到端：生成 / 预览 / 映射 / 依赖 / 取消标志 / 类型 / 五种导出 / 持久化 / 草稿目录 / 模板 / 场景 |
+| 集成（装配） | `crates/workbench/tests/mock_generator.rs` | 10 | 生成不写分析库；新建 → 同名拒绝（不覆盖）；追加接续主键（`MAX(id)=100` 且无重复）；追加目标不存在 / 缺列的中文错误；CSV 导出表头；草稿箱无项目拒绝 + 有项目落 `{项目}/mock/`；连接默认库 / schema 预填；类型串映射 |
+| 集成（后台任务） | `crates/workbench/tests/mock_jobs.rs` + `mock_job_cancel.rs` | 3 + 1 | 提交即返回 + 进度可读 + 结果一次性取回 + 生成不写库；并发提交被拒且结束后可恢复；追加任务回表内总行数；**取消**在批次边界中断并回可读错误（独立进程：`cancel` 是进程级标志） |
 
 回归价值示例：`export_table_creates_named_table_and_drops_temp` 锁 I0b 那个 v1 遗留缺陷；
 `export_sql_insert_writes_insert_statements` 锁 I0d 死锁；`generate_is_reproducible_with_same_seed` 锁可复现性；
@@ -284,7 +316,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 列名规则与置信度 | `crates/mock/src/schema_map.rs`（`ColumnMapper::exact_rules/suffix/fuzzy/fallback_by_type`） |
 | 模板与场景生成 | `crates/mock/src/templates.rs` + `engine.rs::generate_scenario` |
 | 任务/模板持久化 | `crates/mock/src/persistence.rs` + `crates/engine/migrations/project_meta/009_mock_generation.sql` |
-| D4/D5/D6/D17 装配与追加语义 | `crates/workbench/src/services/mock_generator.rs`（`generate` / `persist_table` / `append_table` / `export_file` / `save_scratchpad` / `import_columns`；`*_at` 为显式路径入口） |
+| D4/D5/D6/D17 装配与追加语义 | `crates/workbench/src/services/mock_generator.rs`（`generate_at_with_progress` / `persist_table_at` / `append_table_at` / `export_file` / `save_scratchpad` / `import_columns`） |
+| D20/D21/D22 后台任务 | `crates/workbench/src/services/mock_jobs.rs`（工作线程 + 槽 + `start`/`state`/`take_done`/`cancel`）+ `mock_view.rs`（`MockJobWatch` + 定时泵 + `poll_job`） |
 | D11/D18 视图归属与两处排版 | `crates/mock/src/mock_view.rs`（`MockPanel` 右 Dock / `MockDetailView` 中央 tab / `MockDraft` / `MockHost`） |
 | D12/D14/D19 对话框与工作副本 | `mock_view.rs`（`open_import_dialog` / `open_column_dialog` / `ColumnDraft` / `generator_menu`） |
 | D13 生成器目录 | `tools/gen_mock_generator_catalog.py` → `crates/mock/src/generator_catalog.rs` |

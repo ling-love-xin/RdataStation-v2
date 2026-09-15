@@ -22,7 +22,7 @@
 | A1 | 公开 API 集成测试重建（26 项，覆盖生成/预览/映射/依赖/取消/类型/五种导出/持久化/草稿目录/模板/场景） | `crates/mock/tests/mock_engine_tests.rs`（新增目录） | `cargo test -p rds-mock` → 26/26 通过 |
 | A2 | 修复 `persist_as_asset` / `export(Table)` 的非法 SQL（`CREATE TABLE t AS SELECT * FROM SELECT * FROM …`） | `crates/mock/src/engine.rs`（两处调用改传源表名）+ `crates/engine/src/sql/{builder,engine}.rs`（参数正名 `source_table` + 文档） | 新增回归 `export_table_creates_named_table_and_drops_temp`；A1 实测先红后绿 |
 | A3 | 类型串收敛为唯一入口 `mock::parse_data_type` | `crates/mock/src/schema_map.rs`（公开）+ `lib.rs`（re-export）+ `crates/workbench/src/services/mock_generator.rs`（删副本） | `parse_data_type_is_public_and_loose`、`map_column_resolves_parameterized_source_types`、`crates/workbench/tests/mock_generator.rs::parse_data_type_maps_common_types` |
-| A4 | 装配层写入语义明确化：**追加** + 主键自增起点接续表内行数 + 返回总行数 | `crates/workbench/src/services/mock_generator.rs` | `generate_for_table_writes_rows_to_duckdb`（二次生成累计 100 行、`order_id` 无重复） |
+| A4 | 装配层写入语义明确化：**持久化（新建）** + **追加**（主键自增起点接续表内行数）+ 返回总行数 | `crates/workbench/src/services/mock_generator.rs` | `persist_creates_table_and_rejects_second_run`、`append_continues_primary_key_sequence`（累计 100 行、`id` 无重复、`MAX(id)=100`） |
 | A5 | Mock 面板最小可用闭环（目标选择 / 行数 / 生成 / 结果与错误 / 只读护栏） | `crates/mock/src/mock_view.rs`（视图随 crate）+ `crates/workbench/src/components/mock_host.rs`（宿主桥）+ `crates/workbench/src/panels.rs`（实体懒创建 + 句柄登记） | `cargo check -p rds-workbench --all-targets` 通过；8 项窗口测试覆盖面板与对话框 |
 | A6 | 接线「生成 Mock」按钮（原空实现）→ 展开右 Dock Mock 面板；导航右键入口按表名定向选表（`Shared::open_mock_panel`） | 同上 | 同上 |
 | A7 | 清理与卫生：删除死代码 `_generator_of`；`crates/mock/Cargo.toml` 移除未使用 `uuid`、`tokio` 移入 `[dev-dependencies]`；新文件 rustfmt 干净 | `crates/workbench/src/services/mock_generator.rs`、`crates/mock/Cargo.toml` | `cargo check -p rds-mock --all-targets` 通过 |
@@ -51,7 +51,7 @@
 | B2 | 生成器选择（137 变体，按 15 分类分组） | ✅ 已完成（字段行的**分类子菜单**） | 选到的变体与 `GeneratorConfig` 一一对应（目录自检测试） |
 | B3 | 参数编辑（标量：数值 / 文本 / 布尔；列名 / 类型 / 空值率 / 唯一） | ✅ 已完成（列编辑对话框）；复杂参数待外置入口 | 非法值保留原值；取消不污染目标列 |
 | B4 | 行数预设与种子开关（可复现） | ✅ 已完成（行数 / 种子输入 + 校验） | 同 seed 两次生成结果一致（引擎测试兜底） |
-| B5 | 生成中态与取消（`generate_with_progress` + `cancel()`） | ⬜ 待做：后台任务 + 进度 + 取消 | 大行数生成时按钮转 loading，可中断 |
+| B5 | 生成中态与取消（`generate_with_progress` + `cancel()`） | ✅ 已完成（`services::mock_jobs` 工作线程 + 面板进度条 / 取消 + 定时泵；追加同走后台） | 大行数生成时进度可见、可中断；取消后有可读文案 |
 | B6 | 预览（前 10 行） | ✅ 已完成（中央 tab 预览表，`#` 行号 + 横向滚动） | 列名与值来自真实生成结果 |
 | B7 | 生成器「推荐」标记与最近使用 | ⬜ 待做（目录已有分类与默认构造） | 常用生成器一眼可选 |
 | B8 | 生成器**搜索**（137 项按名称 / 标签） | ⬜ 待做（当前只有分类子菜单） | 输入关键词即过滤 |
@@ -98,7 +98,7 @@
 | T4 | 行数输入 `0` / `-5` / `abc` | 面板报「行数需为正整数」；不触宿主 | ✅ 视图测试 |
 | T5 | 只读项目点四个出口 | 视图层拒绝 + 面板 info/danger 提示；分析库零写入 | ✅ 视图测试 |
 | T6 | 追加到同一表（自增主键） | 累计行数翻倍、主键无重复（`MAX(id)=100`） | ✅ 装配测试 |
-| T7 | 大行数（≥ 100k）生成与取消 | 可取消；取消后提示「生成已取消」 | ⬜ 待 Phase B5 |
+| T7 | 大行数（≥ 100k）生成与取消 | 可取消；取消后提示「生成已取消」 | ✅ 任务测试（200k 行，批次边界中断） |
 | T8 | 应用电商模板 | 4 张临时表生成成功；总行数 = 模板行数之和 | ✅ 引擎测试 |
 | T9 | 从源库导入结构（含 `DECIMAL(12,2)` / `TINYINT`） | 类型与生成器映射正确；无回退为文本 | ✅ 类型映射测试 + 导入路径 |
 | T10 | 导出 CSV / SQL INSERT | CSV 首行列头、行数 = 生成行数；INSERT 条数 = 行数 | ✅ 集成 + 装配测试 |
@@ -108,6 +108,8 @@
 | T14 | 源表不存在 / 分析库无表 / 追加缺列 | 给出可读中文错误，不 panic，不半途写库 | ✅ 装配测试 |
 | T15 | **生成不写库** | 生成后分析库仍未出现目标表 | ✅ 装配测试 `generate_does_not_write_analysis_db` |
 | T16 | 改列后旧结果作废 | 改生成器 / 增删列 → `gen_info` 置空，出口不可再落旧数据 | ✅ 视图测试 |
+| T17 | 后台任务进度可观测 | 进行中报批次进度（3/10 → 30%）；无结果时不显旧预览 | ✅ 视图测试 |
+| T18 | 并发提交与异常退出 | 进行中重复提交被拒；工作线程异常退出给可读错误 | ✅ 视图测试 + 任务测试 |
 
 ## 5. 风险
 
@@ -116,7 +118,7 @@
 | R1 | 面板继续长胖 | `panels.rs` 已近 9k 行，`mock_view.rs` 近 2k 行 | 视图随 crate 已定；新能力优先放 mock crate，不在 `panels.rs` 长 |
 | R2 | 生成器参数表单与 137 变体手工对齐 | 新增变体漏配表单，用户看到空参数区 | 参数表单由 `GeneratorConfig` 派生（编译期穷尽匹配），禁止手写清单 |
 | R3 | 分析库并发写入（面板写 + SQL 执行区写） | Windows 同文件多连接受限，可能出现「文件被占用」 | 统一经 engine 的单连接纪律；必要时串行化写入入口（架构 §9-I3） |
-| R4 | 大行数同步生成阻塞 UI | 界面卡顿（`block_on` 在点击回调内） | Phase B5 引入后台任务 + 进度 + 取消 |
+| R4 | ~~大行数同步生成阻塞 UI~~ | 已缓解：生成/追加走后台工作线程（进度 + 取消）；**出口仍同步**（架构 §9-I10） | 大行数落库仍会短暂卡界面 | 把出口也纳入 `mock_jobs` 的任务种类（Persist / Export） |
 | R5 | 临时表前缀与 engine 管理器约定不一致（架构 §9-I1） | 临时表不随项目关闭清理，长会话内存增长 | 推动 engine 提供按来源枚举的清理入口（Phase E5） |
 | R6 | 「追加」语义被误用为「替换」 | 用户期望覆盖却得到翻倍数据 | 出口命名与确认文案已区分「持久化（新建）」/「追加」；`landed` 行显示当前落库目标 |
 | R7 | v1 文档与实现继续漂移（本文档以代码为准） | 新人按 v1 文档实现已不存在的命令 | 本目录文档为权威；v1 素材删除前先提炼 |
@@ -141,3 +143,4 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-15 | Phase A（第二段） | A9–A11（视图随 crate + 语义对话框 + 生成器目录穷尽派生 + 参数 JSON 补丁） | 74 单元 + 8 窗口 + 26 集成全过 |
 | 2026-09-15 | Phase A（第三段 · 本轮） | A12–A17：**语义回归**（造新表 / 生成不写库）+ 四个显式出口 + **方案①排版**（中央详情 tab）+ 列模型解放 + 导入源库结构 + 装配层去中转（并修掉自身引入的锁重入死锁） | 93 单元（含 16 窗口）+ 26 集成 + 10 装配全过；两个 crate `check` 零告警 |
 | 2026-09-15 | 文档 | 五件套 + crate README 按新语义重写（交互稿重画为 7 场景：空态 / 导入 / 已生成 / 落库反馈 / 只读 / 生成器子菜单 / 列编辑） | 本目录 |
+| 2026-09-15 | Phase B5（本轮） | **生成 / 追加转后台任务**：`services::mock_jobs`（工作线程 + 进度槽 + 取消）+ 面板进度条 / 取消按钮 + 120ms 定时泵；`generate_at_with_progress` 接引擎批次回调 | 99 单元（含 34 视图）+ 26 引擎集成 + 10 装配 + 4 任务集成全过 |

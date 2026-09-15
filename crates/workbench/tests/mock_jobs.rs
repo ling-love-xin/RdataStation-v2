@@ -1,0 +1,161 @@
+//! Mock 后台任务集成测试（M7）：工作线程 + 进度 + 结果取回。
+//!
+//! 走 `services::mock_jobs`（生产入口）：生成 / 追加都应在**工作线程**上跑，
+//! UI 侧只提交任务、读进度、取结果。本文件不取消任务（取消在独立进程的
+//! `mock_job_cancel.rs` 里验证——`MockEngine::cancel` 是进程级全局标志）。
+
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use mock::mock_view::{MockDraft, MockJobDone, MockJobKind, MockJobState, MockRunOptions};
+use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
+use rds_workbench::services::mock_generator;
+use rds_workbench::services::mock_jobs;
+
+/// 任务单例是**进程级**的：同二进制内的用例必须串行，否则会互相看到对方的「进行中」。
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+fn temp_dir(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("rds_mockjob_{tag}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).expect("create temp dir");
+    d
+}
+
+fn column(name: &str, generator: GeneratorConfig) -> mock::mock_view::MockColumnSpec {
+    mock::mock_view::MockColumnSpec {
+        id: 0,
+        def: ColumnDef {
+            name: name.to_string(),
+            data_type: ColumnDataType::Integer,
+            generator,
+            nullable_ratio: 0.0,
+            unique: false,
+            dependency: None,
+        },
+        confidence: "high".to_string(),
+        sample_value: String::new(),
+    }
+}
+
+/// 两列草稿：自增主键 + 随机整数。
+fn draft(table: &str, rows: u32) -> MockDraft {
+    MockDraft {
+        table_name: table.to_string(),
+        columns: vec![
+            column("id", GeneratorConfig::AutoIncrement { start: 1, step: 1 }),
+            column("amount", GeneratorConfig::RandomInt { min: 1, max: 100 }),
+        ],
+        options: MockRunOptions::new(rows, Some(42), Locale::ZhCn),
+    }
+}
+
+/// 轮询到任务结束（带超时，避免测试挂死）。
+fn wait_done(timeout: Duration) -> Result<MockJobDone, String> {
+    let started = Instant::now();
+    loop {
+        if let Some(result) = mock_jobs::take_done() {
+            return result;
+        }
+        assert!(
+            started.elapsed() < timeout,
+            "后台任务超时（{:?} 未结束）",
+            timeout
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// 生成任务：提交即返回（UI 不阻塞）→ 进度可读 → 结果一次性取回。
+#[test]
+fn generate_job_reports_progress_then_done() {
+    let _guard = serial();
+    let dir = temp_dir("gen");
+    let db = dir.join("analytics.duckdb");
+    // 5 批（10k 行/批）：足以观察到中间进度
+    let job = draft("t_job_gen", 50_000);
+
+    mock_jobs::start(&job, MockJobKind::Generate, &db).expect("提交任务");
+    // 提交后立刻：进行中，且拿不到结果
+    assert!(
+        matches!(mock_jobs::state(), MockJobState::Running(_)),
+        "提交后应处于进行中"
+    );
+    assert!(mock_jobs::take_done().is_none(), "结果未就绪");
+
+    let done = wait_done(Duration::from_secs(180)).expect("生成应成功");
+    match done {
+        MockJobDone::Generated(info) => {
+            assert_eq!(info.row_count, 50_000);
+            assert_eq!(info.temp_table_name, "temp_mock_t_job_gen");
+            assert!(!info.preview.rows.is_empty(), "应带预览");
+            assert_eq!(info.preview.columns, ["id", "amount"]);
+        }
+        other => panic!("期望 Generated，实际 {other:?}"),
+    }
+    assert!(
+        matches!(mock_jobs::state(), MockJobState::Idle),
+        "取走结果后应归位空闲"
+    );
+    // 关键语义：生成不写库
+    assert!(
+        mock_generator::existing_tables_at(&db).is_empty(),
+        "生成不应在分析库建表: {:?}",
+        mock_generator::existing_tables_at(&db)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 进行中重复提交 → 拒绝；结束后可再次提交（证明串行语义不是「永久占用」）。
+#[test]
+fn start_while_running_is_rejected_then_recovers() {
+    let _guard = serial();
+    let dir = temp_dir("busy");
+    let db = dir.join("analytics.duckdb");
+    let job = draft("t_job_busy", 50_000);
+
+    mock_jobs::start(&job, MockJobKind::Generate, &db).expect("首个任务应成功提交");
+    let err = mock_jobs::start(&job, MockJobKind::Generate, &db).expect_err("应拒绝并发任务");
+    assert!(err.contains("已有生成任务"), "err: {err}");
+
+    wait_done(Duration::from_secs(180)).expect("首个任务应成功");
+    mock_jobs::start(&job, MockJobKind::Generate, &db).expect("结束后应可再次提交");
+    wait_done(Duration::from_secs(180)).expect("第二个任务应成功");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 追加任务：一次任务里完成「生成 + 写入既有表」，回传表内总行数。
+#[test]
+fn append_job_reports_total_rows() {
+    let _guard = serial();
+    let dir = temp_dir("append");
+    let db = dir.join("analytics.duckdb");
+    let job = draft("t_job_append", 1_000);
+
+    // 先建表（30 行）
+    let seed_draft = draft("t_job_append", 30);
+    let info = mock_generator::generate_at(&db, &seed_draft, None).expect("首次生成");
+    mock_generator::persist_table_at(&db, &seed_draft, &info).expect("建表");
+
+    // 追加任务：生成 1000 行后写入，自增起点接续表内 30 行
+    mock_jobs::start(&job, MockJobKind::AppendTo("t_job_append".to_string()), &db)
+        .expect("提交追加任务");
+    let done = wait_done(Duration::from_secs(180)).expect("追加应成功");
+    match done {
+        MockJobDone::Appended { table, total_rows } => {
+            assert_eq!(table, "t_job_append");
+            assert_eq!(total_rows, 1030, "表内应为 30 + 1000 行");
+        }
+        other => panic!("期望 Appended，实际 {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

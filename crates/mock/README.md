@@ -23,30 +23,40 @@
 
 未知类型回退 `Text`（DDL 同为 `VARCHAR`），配 Sentence 生成器——永远「有话可说」，不阻断用户。
 
-### 2. 生成≠写入，只进分析引擎（M7 硬约束）
+### 2. 生成在后台线程（进度 + 取消）
+
+生成与「追加」都提交给 `services::mock_jobs` 的**工作线程**执行（`MockHost::start_job`），
+面板只做三件事：读进度（`job_state`）、取一次性结果（`take_job_done`）、请求取消（`cancel_job`）；
+进度由 120ms 定时泵拉取（任务进行中没有其他事件会触发重绘）。取消置引擎的进程级标志，
+引擎在**批次边界**（10k 行/批）响应，回传可读的「生成已取消」。
+
+为何不在视图里直接 `spawn`：`MockHost` 是 `Rc<dyn>`（持 `Shared`，非 Send），无法搬进 GPUI
+的后台执行器；因此沿用 `nav_jobs` / `scratchpad_jobs` 的成熟模式——宿主内部起工作线程。
+
+### 3. 生成≠写入，只进分析引擎（M7 硬约束）
 
 - **生成**（`MockEngine::generate`）只落 `temp_mock_{表名}` **内存临时表**（engine 的进程级内存 DuckDB），
   并注册到 engine 的临时表管理器；预览随结果返回；
 - **写入**只能由显式出口触发：落盘文件（CSV·Parquet·Xlsx·SQL INSERT）/ 分析库新建表 / 追加到既有表；
 - crate 内**没有**任何写源数据库的代码路径；`insert_statements` 只产 SQL 文本，执行方是装配层（宿主）。
 
-### 3. SQL 全量走构造器
+### 4. SQL 全量走构造器
 
 DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table` / `build_insert` / `build_select*`），
 消除字符串拼接与转义缺陷面；唯一例外是 DuckDB 专有的 `COPY`（导出用），已在代码中注明理由。
 
-### 4. 确定性可复现
+### 5. 确定性可复现
 
 `seed: Some(s)` 时同配置逐值可复现（`StdRng`）；`seed: None` 走随机。
 集成测试 `generate_is_reproducible_with_same_seed` 锁定该契约。
 
-### 5. 场景模板与列依赖
+### 6. 场景模板与列依赖
 
 - 内置 6 套多表模板（电商 / HR / 博客 / 金融 / 社交 / 企业通讯录），`generate_scenario` 逐表生成并按**表**回调进度；
 - 列依赖 `resolve_dependencies` 用 Kahn 拓扑排序给出**生成顺序**与依赖映射；
   注意：生成器本身按列顺序取值，**不解释依赖表达式**（属待办，见架构文档 §9-I6）。
 
-### 6. 视图随 crate（Feature 自持视图，方案①两处排版）
+### 7. 视图随 crate（Feature 自持视图，方案①两处排版）
 
 Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 
@@ -58,7 +68,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
   workbench 侧实现见 `crates/workbench/src/components/mock_host.rs`；
 - 137 个生成器的分类 / 中文标签 / 参数规格由 `generator_catalog.rs` **穷尽派生**（脚本生成，见下）。
 
-### 7. 生成任务与用户模板的持久化
+### 8. 生成任务与用户模板的持久化
 
 `MockGenerationStore` 把「生成任务 / 列配置 / 用户模板 / 模板列」写入 `{项目}/.RSmeta/project.db`
 （迁移 `engine/migrations/project_meta/009_mock_generation.sql`，4 表 + 3 索引），方法 8 个：
@@ -70,7 +80,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | --- | --- |
 | `src/lib.rs` | crate 入口与 re-export（含依赖方向声明） |
 | `src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`(13) / `GeneratorConfig`(137) / `Locale`(13) / 导出与持久化模型 / 依赖模型 |
-| `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 取消）/ 预览 / 5 种导出 / `insert_statements`（INSERT 文本，与导出共用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / 场景生成 / `sanitize_identifier` |
+| `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 进度回调 + 取消）/ 预览 / 5 种导出 / `insert_statements`（INSERT 文本，与导出共用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / 场景生成 / `sanitize_identifier` |
 | `src/generators.rs` | `generate_cell`：137 变体 → 值（`fake` crate，接入 `StdRng`） |
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
@@ -82,13 +92,20 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | `src/{commands,model,generator}.rs` | 占位（全项目统一脚手架；命令层按 Round 14 退役） |
 | `tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（26 项） |
 
+宿主侧（workbench）：
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/services/mock_jobs.rs` | **后台任务**：工作线程 + 进度槽 + 一次性结果 + 取消（生成 / 追加） |
+
 依赖方向：`mock → engine → shared`；视图另依赖 `gpui-kit`（不得依赖 workbench / database）。
 
 ## 能力状态
 
 | 已实现 | 待补 |
 | --- | --- |
-| 生成（分批 + 唯一列 + 空值率 + 取消）、预览（Arrow 前 10 行） | 生成中进度与 UI 取消（引擎已支持 `cancel()`；当前同步调用） |
+| 生成（分批 + 唯一列 + 空值率 + 进度回调 + 取消）、预览（Arrow 前 10 行） | —— |
+| **后台生成**：面板进度条 + 批次文案 + 取消（生成与追加同走工作线程） | 出口（落库 / 导出）仍是同步阻塞（架构 §9-I10） |
 | 4 种导出（CSV / Parquet / Xlsx / SQL INSERT）+ `insert_statements` 文本 | 导出大行数时的流式写出（现在是全量文本 + `execute_batch`） |
 | 列映射（≈91 条规则 + 类型兜底 + 置信度三态） | —— |
 | 生成器目录（137 变体分类 / 标签 / 参数规格，穷尽派生） | 复杂参数（`values` / `choices`）的外置编辑入口；按名称搜索 |
@@ -101,17 +118,18 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | 草稿目录落盘（调用方给目录） | 草稿箱面板对 `mock/` 分组的展示（Phase D） |
 | 持久化为正式表（`persist_as_asset` / 装配层新建与追加） | 分析资源注册（M6）、生成历史面板（Phase D） |
 | 生成任务 / 用户模板的 SQLite 读写 | 真实 SQLite 往返测试（当前只有序列化测试） |
-| 公开 API 集成测试 26 项 + 视图测试 28 项 + 装配测试 10 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
+| 公开 API 集成 26 项 + 视图测试 34 项 + 装配测试 10 项 + 后台任务 4 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
 
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/mock/README.md`（入口）、`mock-architecture.md`（理念与数据流）、
   `mock-prototype-design.md`（两处排版与对话框）、`mock-dev-plan.md`（阶段任务）、`mock-prototype.html`（交互稿）。
 - 装配与宿主桥：`crates/workbench/src/services/mock_generator.rs`（生成 / 落库 / 追加 / 导出 / 结构导入）、
+  `crates/workbench/src/services/mock_jobs.rs`（后台任务：进度 + 取消）、
   `crates/workbench/src/components/mock_host.rs`（`MockHost` 的宿主实现）、
   `crates/workbench/src/panels.rs`（面板构造期创建 + 句柄登记）、`crates/workbench/src/view.rs`（详情 tab 加入中央 tab 组）。
-- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`
-  （99 单元（含 16 窗口）+ 26 集成）；`cargo test -p rds-workbench --test mock_generator -j 2`（装配层 10 项）。
+- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`（99 单元（12 纯逻辑 + 22 窗口 + 65 其他）+ 26 集成）；
+  `cargo test -p rds-workbench --test mock_generator --test mock_jobs --test mock_job_cancel -j 2`（装配 10 + 后台任务 3 + 取消 1）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。
 - 生成器目录改动流程：改 `models.rs` 的 `GeneratorConfig` → 跑 `python tools/gen_mock_generator_catalog.py`
   → `rustfmt` 生成文件 → 补 `LABELS` / 默认值字典。
