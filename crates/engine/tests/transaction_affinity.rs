@@ -226,6 +226,98 @@ async fn probe_driver_transaction(
     eprintln!("—— {driver} 驱动事务探针结束\n");
 }
 
+/// 并发下的会话亲和：**两个并发语句**是否仍落在同一物理连接
+///
+/// 为何必须单独探：顺序执行时 sqlx 池会用同一条空闲连接，看起来“亲和成立”；
+/// 但池在忙时会另开物理连接（MySQL/PG 默认 max_connections = 10）。
+/// 临时表 / 事务只属于创建它们的连接，所以在并发下会“看不见”——那意味着 1b 的事务
+/// 必须引入 per-session 独占连接，不能依赖池的巧合。
+async fn probe_concurrent_affinity(
+    driver: &str,
+    url_override: Option<String>,
+    file_path: Option<String>,
+) {
+    let manager = Arc::new(ConnectionManager::new());
+
+    let mut config = DriverConnectionConfig::new(driver);
+    config.name = Some(format!("P0.2c 探针（{driver} 并发）"));
+    config.url_override = url_override;
+    config.file_path = file_path;
+
+    let (conn_id, _db) = match manager.create_connection_with_registry(config).await {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("❌ {driver}：建连失败 —— {err}");
+            return;
+        }
+    };
+    eprintln!("➡️  {driver}（并发）：已连接（conn_id = {conn_id}）");
+
+    let service = SqlService::new(manager.clone());
+    if let Err(err) = service
+        .execute(
+            Some(conn_id.clone()),
+            "CREATE TEMPORARY TABLE rds_probe_cc (id INT)",
+            options(),
+        )
+        .await
+    {
+        eprintln!("❌ {driver}：建临时表失败 —— {err}");
+        manager.remove_connection(&conn_id).await;
+        return;
+    }
+    if let Err(err) = service
+        .execute(
+            Some(conn_id.clone()),
+            "INSERT INTO rds_probe_cc (id) VALUES (1)",
+            options(),
+        )
+        .await
+    {
+        eprintln!("❌ {driver}：插入失败 —— {err}");
+        manager.remove_connection(&conn_id).await;
+        return;
+    }
+
+    let count_sql = "SELECT COUNT(*) AS n FROM rds_probe_cc";
+    let (left, right) = tokio::join!(
+        service.execute(Some(conn_id.clone()), count_sql, options()),
+        service.execute(Some(conn_id.clone()), count_sql, options()),
+    );
+
+    let describe = |result: &Result<SqlExecuteResult, shared::error::CoreError>| match result {
+        Ok(result) => match result
+            .result
+            .to_rows()
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|value| value.as_int())
+        {
+            Some(n) => format!("计数 {n}"),
+            None => "无行".to_string(),
+        },
+        Err(err) => format!(
+            "报错（{}）",
+            err.to_string().chars().take(60).collect::<String>()
+        ),
+    };
+
+    eprintln!(
+        "   并发两侧：A = {}，B = {}",
+        describe(&left),
+        describe(&right)
+    );
+    match (&left, &right) {
+        (Ok(_), Ok(_)) => eprintln!("   ✅ 并发下临时表两侧可见 → 池复用同一物理连接"),
+        _ => eprintln!(
+            "   ⚠️ 并发下至少一侧不可见/报错 → **池会另开物理连接**，事务需 per-session 独占连接"
+        ),
+    }
+
+    manager.remove_connection(&conn_id).await;
+    eprintln!("—— {driver} 并发探针结束\n");
+}
+
 /// 文件型库（SQLite / DuckDB）走路径，网络型库走 URL
 fn run(driver: &str, env_var: &str) {
     let Some(value) = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty()) else {
@@ -267,6 +359,26 @@ fn run_driver_transaction(driver: &str, env_var: &str) {
     runtime.block_on(probe_driver_transaction(driver, url_override, file_path));
 }
 
+/// 并发亲和探针的入口（门控同上）
+fn run_concurrent_affinity(driver: &str, env_var: &str) {
+    let Some(value) = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty()) else {
+        eprintln!("⏭️  跳过 {driver}（并发）：未设置 {env_var}");
+        return;
+    };
+
+    AutoDriverRegistrar::register_builtin_drivers();
+
+    let is_file_db = matches!(driver, "sqlite" | "duckdb");
+    let (url_override, file_path) = if is_file_db {
+        (None, Some(value))
+    } else {
+        (Some(value), None)
+    };
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    runtime.block_on(probe_concurrent_affinity(driver, url_override, file_path));
+}
+
 #[test]
 fn mysql_transaction_session_affinity() {
     run("mysql", "RDS_TEST_MYSQL_URL");
@@ -305,4 +417,24 @@ fn sqlite_driver_transaction() {
 #[test]
 fn duckdb_driver_transaction() {
     run_driver_transaction("duckdb", "RDS_TEST_DUCKDB_PATH");
+}
+
+#[test]
+fn mysql_concurrent_affinity() {
+    run_concurrent_affinity("mysql", "RDS_TEST_MYSQL_URL");
+}
+
+#[test]
+fn postgres_concurrent_affinity() {
+    run_concurrent_affinity("postgres", "RDS_TEST_PG_URL");
+}
+
+#[test]
+fn sqlite_concurrent_affinity() {
+    run_concurrent_affinity("sqlite", "RDS_TEST_SQLITE_PATH");
+}
+
+#[test]
+fn duckdb_concurrent_affinity() {
+    run_concurrent_affinity("duckdb", "RDS_TEST_DUCKDB_PATH");
 }

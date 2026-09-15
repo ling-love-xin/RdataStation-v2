@@ -135,6 +135,11 @@ fn is_read_only_sql(sql: &str) -> bool {
 #[async_trait::async_trait]
 impl Database for MySqlDatabase {
     async fn query(&self, sql: &str) -> Result<QueryResult, CoreError> {
+        // 事务控制 / 会话类语句必须走文本协议（prepared 协议下 MySQL 报 1295）
+        if needs_text_protocol(sql) {
+            return execute_via_text_protocol(&self.pool, sql).await;
+        }
+
         let is_read_only = is_read_only_sql(sql);
 
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
@@ -204,6 +209,11 @@ impl Database for MySqlDatabase {
 
         tokio::select! {
             result = async move {
+                // 取消路径也不能绕过文本协议：`BEGIN` 走 prepared 会被 MySQL 直接拒绝
+                if needs_text_protocol(&sql_owned) {
+                    return execute_via_text_protocol(&pool, &sql_owned).await;
+                }
+
                 let is_read_only = is_read_only_sql(&sql_owned);
 
                 let rows = sqlx::query(sqlx::AssertSqlSafe(sql_owned.as_str()))
@@ -514,6 +524,76 @@ impl Transaction for MySqlTransaction {
         }
         Ok(())
     }
+}
+
+/// 必须走**文本协议**（`COM_QUERY`）的语句
+///
+/// MySQL 在 prepared 协议下拒绝执行事务控制与部分会话语句：
+/// `1295 (HY000): This command is not supported in the prepared statement protocol yet`。
+/// 而产品必须能在同一会话里发 `BEGIN` / `COMMIT` / `ROLLBACK`（事务 UI 与批量执行），
+/// 因此这几类改走 `sqlx::raw_sql`（文本协议）。
+///
+/// 判定只看首关键字：宁可多走文本协议（代价仅是不复用 prepared 语句），也不能漏
+/// —— 漏了就是事务按钮在 MySQL 上直接报错。
+fn needs_text_protocol(sql: &str) -> bool {
+    matches!(
+        first_keywords(sql, 2).as_str(),
+        "BEGIN"
+            | "START TRANSACTION"
+            | "COMMIT"
+            | "ROLLBACK"
+            | "SAVEPOINT"
+            | "RELEASE SAVEPOINT"
+            | "SET"
+            | "USE"
+            | "LOCK TABLES"
+            | "UNLOCK TABLES"
+    )
+}
+
+/// 取前 N 个关键字（大写），跳过前导空白与三种注释（`--` / `#` / `/* */`）
+fn first_keywords(sql: &str, count: usize) -> String {
+    let mut rest = sql;
+    loop {
+        rest = rest.trim_start();
+        let skipped = if let Some(tail) = rest.strip_prefix("--") {
+            tail.split_once('\n').map(|(_, after)| after).unwrap_or("")
+        } else if let Some(tail) = rest.strip_prefix('#') {
+            tail.split_once('\n').map(|(_, after)| after).unwrap_or("")
+        } else if let Some(tail) = rest.strip_prefix("/*") {
+            tail.split_once("*/").map(|(_, after)| after).unwrap_or("")
+        } else {
+            break;
+        };
+        rest = skipped;
+    }
+
+    rest.split_whitespace()
+        .take(count)
+        .map(|token| token.trim_end_matches([';', '(', ',']).to_ascii_uppercase())
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+/// 用文本协议执行并返回「无结果集」的结果
+///
+/// 事务控制 / 会话语句都没有结果集；`affected_rows` 取驱动的真实值（写语句才有意义）。
+async fn execute_via_text_protocol(
+    pool: &Pool<MySql>,
+    sql: &str,
+) -> Result<QueryResult, CoreError> {
+    let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+        .execute(pool)
+        .await
+        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+
+    Ok(QueryResult {
+        columns: vec![],
+        batches: vec![],
+        affected_rows: Some(result.rows_affected().min(u64::from(u32::MAX)) as u32),
+        is_read_only: Some(false),
+        ..Default::default()
+    })
 }
 
 fn build_query_result(
