@@ -74,6 +74,11 @@ pub fn build_host(
 fn refresh_after_open(shared: &Shared, _cx: &mut App) {
     // 项目打开/切换后：列表按作用域合一（全局 + 该项目 P_/GP_）。
     let root = shared.project.borrow().as_ref().map(|p| p.root.clone());
+
+    // M8：告知洞察规则监听器当前项目——监听器每轮读这个值现算目录，
+    // 从而自动跟随项目切换（否则会一直看着启动时那个项目）。
+    insight::set_watched_project_root(root.clone());
+
     let (conns, notice) =
         crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
     *shared.connections.borrow_mut() = conns;

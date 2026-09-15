@@ -3,11 +3,15 @@ id = "table-quality-overview"
 name = "表质量总览"
 category = "table"
 applies_to = ["Any"]
-result_type = "list"
 version = "1.0"
 description = "聚合表中所有列的质量评分，输出表级质量总览"
+builtin = true
 
 [query]
+# 注意：`result_type` 属于 [query]，不是 [meta]。
+# [meta] 采用 deny_unknown_fields 严格解析，字段位置写错会导致**整条规则被静默跳过**
+# （历史上本文件因此在 18 条内置规则里一直缺席，`BUILTIN_RULE_COUNT` 却写着 18）。
+result_type = "list"
 template = """
 SELECT
     column_name,

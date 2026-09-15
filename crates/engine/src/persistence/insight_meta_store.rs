@@ -91,7 +91,7 @@ impl InsightMetaStore {
 
         let result = conn.inner()?.query_row(
             "SELECT id, entity_type, entity_name, entity_source, snapshot_id, row_count, elapsed_ms, version_id, parent_version_id, checksum, created_at
-             FROM insight_snapshots WHERE entity_type = ?1 AND entity_name = ?2 ORDER BY created_at DESC LIMIT 1",
+             FROM insight_snapshots WHERE entity_type = ?1 AND entity_name = ?2 ORDER BY created_at DESC, rowid DESC LIMIT 1",
             rusqlite::params![entity_type, entity_name],
             |row| {
                 Ok(InsightSnapshotMeta {
@@ -133,7 +133,7 @@ impl InsightMetaStore {
 
         let mut stmt = conn.inner()?.prepare(
             "SELECT id, entity_type, entity_name, entity_source, snapshot_id, row_count, elapsed_ms, version_id, parent_version_id, checksum, created_at
-             FROM insight_snapshots WHERE entity_type = ?1 AND entity_name = ?2 ORDER BY created_at DESC LIMIT ?3"
+             FROM insight_snapshots WHERE entity_type = ?1 AND entity_name = ?2 ORDER BY created_at DESC, rowid DESC LIMIT ?3"
         ).map_err(|e| CoreError::storage(StorageError::Persistence {
             store: "sqlite".to_string(),
             operation: "prepare_history_meta".to_string(),
@@ -166,8 +166,15 @@ impl InsightMetaStore {
                     reason: e.to_string(),
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            // 逐行错误**向上抛**，不用 filter_map 丢弃（历史列表静默少行比报错难查得多）。
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "read_history_meta_row".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
 
         Ok(entries)
     }

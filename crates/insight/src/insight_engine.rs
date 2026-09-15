@@ -5,7 +5,7 @@ use tokio::sync::Semaphore;
 
 use shared::error::{CommonError, CoreError};
 use crate as insight;
-use crate::RuleExecutor;
+use crate::{RuleExecutor, RuleRegistry};
 use engine::services::duckdb_service::{
     duckdb_value_to_json, is_array_type, is_binary_type, is_datetime_type, is_numeric_type,
     DuckDbService,
@@ -21,10 +21,17 @@ pub const DEFAULT_SAMPLE_SIZE: usize = 5;
 /// Minimum rows required to generate a histogram
 pub const HISTOGRAM_MIN_ROWS: i64 = 10;
 
-/// Maximum concurrent insight operations to prevent resource exhaustion.
-/// DuckDB Mutex serialises all queries; this semaphore provides back-pressure
-/// so that callers receive an immediate error instead of queuing indefinitely.
+/// 洞察分析的并发上限，用于防止资源耗尽。
+///
+/// DuckDB 单例连接由 `std::sync::Mutex` 全局串行化，本信号量额外提供背压。
+/// **刻意采用快速失败**（`try_acquire`）而非排队：同步函数内无法 await，
+/// 阻塞等待会把调用线程（可能是 UI 主线程）卡住。超限时调用方收到错误、
+/// 由 UI 呈现「正在分析中，请稍候」并允许重试。
+/// 批量场景（如「评估全表」）应由调用方串行化，不依赖本上限兜底。
 const INSIGHT_MAX_CONCURRENT: usize = 4;
+
+/// 并发受限时的统一错误文案（面向用户，UI 直接展示）。
+const ERR_TOO_MANY_CONCURRENT: &str = "洞察分析任务过多，请稍候重试";
 
 static INSIGHT_SEM: OnceLock<Semaphore> = OnceLock::new();
 
@@ -32,45 +39,60 @@ fn insight_semaphore() -> &'static Semaphore {
     INSIGHT_SEM.get_or_init(|| Semaphore::new(INSIGHT_MAX_CONCURRENT))
 }
 
-/// Acquires a DuckDB connection from the connection pool (round-robin).
+/// 获取全局内存 DuckDB 连接。
 ///
-/// Note: DuckDB in-memory connections are isolated — temp tables created on
-/// one connection are invisible to others. The pool distributes connections
-/// via round-robin, so concurrent operations may access different connections.
-/// Access to each connection is serialised via `std::sync::Mutex` (not async).
-/// For multi-table analytics, consider using a persistent database.
+/// 实现为 `DuckDBManager` 的**进程级单例**（`Arc<Mutex<Connection>>`），
+/// 不是连接池：所有调用方共享同一条内存连接，访问由 `std::sync::Mutex` 串行化。
+/// 因此临时表在同一进程内全局可见——在一条调用链上创建的表，后续调用能直接读到。
 pub fn get_or_create_duckdb(
 ) -> Result<std::sync::Arc<std::sync::Mutex<duckdb::Connection>>, CoreError> {
     DuckDbService::get_or_create_duckdb()
 }
 
-/// Computes comprehensive column insights including statistics (type-specific
-/// detail), a sample of raw values, and a histogram for numeric columns.
+/// 列画像全量结果：类型专属统计 + 样本值 + （数值列的）直方图。
 ///
-/// This is the heavyweight entry point for column analysis, performing multiple
-/// DuckDB queries under a concurrency semaphore. Returns [ColumnInsightFull]
-/// which is suitable for quality scoring and detailed UI rendering.
+/// 重量级入口：内部申请并发令牌、取全局 DuckDB 单例连接并持锁，
+/// 依次执行多次查询。适合「从零开始分析一列」的调用方。
+/// 若调用方**已持有连接**（例：与建临时表同一把锁内），改用
+/// [`get_column_insight_full_on`]——两者结果一致，但后者不会重复加锁（`Mutex` 非重入）。
+///
+/// `registry` 由调用方给出（`crate::registry_for(project_root)` / `crate::with_rules`）：
+/// 基础统计本身也是由 TOML 规则（`numeric-stats` / `histogram` 等）驱动的，
+/// 而规则分层随项目变化，不能取进程级全局。
 pub fn get_column_insight_full(
+    registry: &RuleRegistry,
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnInsightFull, CoreError> {
-    let _permit = insight_semaphore().try_acquire().map_err(|_| {
-        CoreError::common(CommonError::General(
-            "Too many concurrent insight operations, please retry".to_string(),
-        ))
-    })?;
+    let _permit = insight_semaphore()
+        .try_acquire()
+        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
 
     let duckdb = get_or_create_duckdb()?;
     let conn = duckdb.lock().map_err(|e| {
         CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
     })?;
 
-    let stats = get_column_stats_internal(&conn, temp_table, column_name)?;
-    let sample = get_column_sample_internal(&conn, temp_table, column_name)?;
+    get_column_insight_full_on(registry, &conn, temp_table, column_name)
+}
+
+/// 在**调用方已持有的连接**上计算列画像全量结果。
+///
+/// 与 [`get_column_insight_full`] 的唯一区别：不走全局单例、不申请并发令牌、不持锁。
+/// 适用于调用方已经持有连接（如与建临时表同一把锁内）的场景——
+/// 既避免 `std::sync::Mutex` 重复加锁导致自锁，也避免为同一份工作两次争抢并发额度。
+pub fn get_column_insight_full_on(
+    registry: &RuleRegistry,
+    conn: &duckdb::Connection,
+    temp_table: &str,
+    column_name: &str,
+) -> Result<ColumnInsightFull, CoreError> {
+    let stats = get_column_stats_internal(registry, conn, temp_table, column_name)?;
+    let sample = get_column_sample_internal(conn, temp_table, column_name)?;
 
     let histogram = match &stats.stats_detail {
         ColumnStatsDetail::Numeric(_) => {
-            get_column_histogram_internal(&conn, temp_table, column_name).ok()
+            get_column_histogram_internal(registry, conn, temp_table, column_name).ok()
         }
         _ => None,
     };
@@ -82,28 +104,31 @@ pub fn get_column_insight_full(
     })
 }
 
-/// Computes basic statistical profile for a column: count, null-rate,
-/// uniqueness, and type-specific detail (numeric/text/datetime/boolean).
+/// 列基础统计（行数 / 空值 / 唯一值 + 类型专属详情），不含样本与直方图。
 ///
-/// Lighter than [get_column_insight_full] — no sample or histogram.
+/// 比 [`get_column_insight_full`] 轻：适合只需概览的调用方（如导航树「查看统计」）。
 pub fn get_column_insights(
+    registry: &RuleRegistry,
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnStats, CoreError> {
-    let _permit = insight_semaphore().try_acquire().map_err(|_| {
-        CoreError::common(CommonError::General(
-            "Too many concurrent insight operations, please retry".to_string(),
-        ))
-    })?;
+    let _permit = insight_semaphore()
+        .try_acquire()
+        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
 
     let duckdb = get_or_create_duckdb()?;
     let conn = duckdb.lock().map_err(|e| {
         CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
     })?;
-    get_column_stats_internal(&conn, temp_table, column_name)
+    get_column_stats_internal(registry, &conn, temp_table, column_name)
 }
 
-fn get_column_stats_internal(
+/// 列基础统计（行数 / 空值 / 唯一值 + 类型专属详情）。
+///
+/// **内部接缝**：只吃显式连接与注册表，不做并发控制与全局取连接。
+/// 公开以便调用方在已持锁的场景（及单测）直接使用，不绕全局单例。
+pub fn get_column_stats_internal(
+    registry: &RuleRegistry,
     conn: &duckdb::Connection,
     temp_table: &str,
     column_name: &str,
@@ -143,15 +168,15 @@ fn get_column_stats_internal(
     let stats_detail = if non_null == 0 {
         ColumnStatsDetail::Unknown
     } else if is_numeric_type(&dt_lower) {
-        compute_numeric_stats(conn, temp_table, column_name)?
+        compute_numeric_stats(registry, conn, temp_table, column_name)?
     } else if is_datetime_type(&dt_lower) {
-        compute_datetime_stats(conn, temp_table, column_name)?
+        compute_datetime_stats(registry, conn, temp_table, column_name)?
     } else if dt_lower == "boolean" || dt_lower == "bool" {
-        compute_boolean_stats(conn, temp_table, column_name)?
+        compute_boolean_stats(registry, conn, temp_table, column_name)?
     } else if is_binary_type(&dt_lower) || is_array_type(&dt_lower) {
         ColumnStatsDetail::Unknown
     } else {
-        compute_text_stats(conn, temp_table, column_name)?
+        compute_text_stats(registry, conn, temp_table, column_name)?
     };
 
     Ok(ColumnStats {
@@ -166,13 +191,11 @@ fn get_column_stats_internal(
 }
 
 fn compute_numeric_stats(
+    registry: &RuleRegistry,
     conn: &duckdb::Connection,
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnStatsDetail, CoreError> {
-    let registry = insight::global_registry().read().map_err(|e| {
-        CoreError::common(CommonError::General(format!("Registry lock error: {}", e)))
-    })?;
     let mut params = HashMap::new();
     params.insert("table".to_string(), temp_table.to_string());
     params.insert("col".to_string(), column_name.to_string());
@@ -251,13 +274,11 @@ fn compute_numeric_stats(
 }
 
 fn compute_text_stats(
+    registry: &RuleRegistry,
     conn: &duckdb::Connection,
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnStatsDetail, CoreError> {
-    let registry = insight::global_registry().read().map_err(|e| {
-        CoreError::common(CommonError::General(format!("Registry lock error: {}", e)))
-    })?;
     let mut params = HashMap::new();
     params.insert("table".to_string(), temp_table.to_string());
     params.insert("col".to_string(), column_name.to_string());
@@ -304,13 +325,11 @@ fn compute_text_stats(
 }
 
 fn compute_datetime_stats(
+    registry: &RuleRegistry,
     conn: &duckdb::Connection,
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnStatsDetail, CoreError> {
-    let registry = insight::global_registry().read().map_err(|e| {
-        CoreError::common(CommonError::General(format!("Registry lock error: {}", e)))
-    })?;
     let mut params = HashMap::new();
     params.insert("table".to_string(), temp_table.to_string());
     params.insert("col".to_string(), column_name.to_string());
@@ -366,13 +385,11 @@ fn compute_datetime_stats(
 }
 
 fn compute_boolean_stats(
+    registry: &RuleRegistry,
     conn: &duckdb::Connection,
     temp_table: &str,
     column_name: &str,
 ) -> Result<ColumnStatsDetail, CoreError> {
-    let registry = insight::global_registry().read().map_err(|e| {
-        CoreError::common(CommonError::General(format!("Registry lock error: {}", e)))
-    })?;
     let mut params = HashMap::new();
     params.insert("table".to_string(), temp_table.to_string());
     params.insert("col".to_string(), column_name.to_string());
@@ -411,7 +428,10 @@ fn compute_boolean_stats(
     }
 }
 
-fn get_column_sample_internal(
+/// 列样本值（条数取 [`DEFAULT_SAMPLE_SIZE`]）。
+///
+/// **内部接缝**：只吃显式连接（同 [`get_column_stats_internal`]）。
+pub fn get_column_sample_internal(
     conn: &duckdb::Connection,
     temp_table: &str,
     column_name: &str,
@@ -443,7 +463,11 @@ fn get_column_sample_internal(
     Ok(samples)
 }
 
-fn get_column_histogram_internal(
+/// 数值列直方图分桶（行数低于 [`HISTOGRAM_MIN_ROWS`] 时返回空）。
+///
+/// **内部接缝**：只吃显式连接（同 [`get_column_stats_internal`]）。
+pub fn get_column_histogram_internal(
+    registry: &RuleRegistry,
     conn: &duckdb::Connection,
     temp_table: &str,
     column_name: &str,
@@ -460,9 +484,6 @@ fn get_column_histogram_internal(
         return Ok(vec![]);
     }
 
-    let registry = insight::global_registry().read().map_err(|e| {
-        CoreError::common(CommonError::General(format!("Registry lock error: {}", e)))
-    })?;
     let mut params = HashMap::new();
     params.insert("table".to_string(), temp_table.to_string());
     params.insert("col".to_string(), column_name.to_string());
@@ -492,26 +513,21 @@ fn get_column_histogram_internal(
     }
 }
 
-/// Executes a named insight rule (e.g. "numeric-stats", "histogram") against
-/// an existing DuckDB connection using the provided parameter map.
+/// 执行指定 id 的规则（如 `numeric-stats` / `histogram`），返回带列元数据的
+/// [`insight::ExecutionResult`]（含 QualityRule 质量门控结果）。
 ///
-/// The caller must already hold the DuckDB lock. The rule SQL template is
-/// substituted with parameters and executed, returning a qualified
-/// [insight::ExecutionResult] with column metadata.
+/// 调用方需已持有 DuckDB 锁；规则由调用方传入（规则分层随项目变化，见
+/// [`crate::registry_for`]）。
 pub fn execute_insight_rule(
+    registry: &RuleRegistry,
     rule_id: &str,
     conn: &duckdb::Connection,
     params: &HashMap<String, String>,
 ) -> Result<insight::ExecutionResult, CoreError> {
-    let _permit = insight_semaphore().try_acquire().map_err(|_| {
-        CoreError::common(CommonError::General(
-            "Too many concurrent insight operations, please retry".to_string(),
-        ))
-    })?;
+    let _permit = insight_semaphore()
+        .try_acquire()
+        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
 
-    let registry = insight::global_registry().read().map_err(|e| {
-        CoreError::common(CommonError::General(format!("Registry lock error: {}", e)))
-    })?;
     let rule = registry.get(rule_id).ok_or_else(|| {
         CoreError::common(CommonError::General(format!(
             "Rule '{}' not found",
@@ -521,20 +537,13 @@ pub fn execute_insight_rule(
     RuleExecutor::execute_qualified(rule, conn, params)
 }
 
-/// Lists all registered insight rules, optionally filtered by category
-/// (e.g. "statistics", "quality", "distribution").
+/// 列出注册的规则（可按分类过滤，如 `column` / `multi` / `table` / `quality`）。
 ///
-/// Returns JSON objects containing rule metadata (id, name, description,
-/// category, parameters, etc.) suitable for UI rendering.
+/// 返回面向前端的 JSON（含 `scope` 与 `source_path`，便于界面按作用域分组展示）。
 pub fn list_insight_rules(
+    registry: &RuleRegistry,
     category: Option<&str>,
 ) -> Result<Vec<serde_json::Value>, CoreError> {
-    let registry = insight::global_registry().read().map_err(|e| {
-        CoreError::common(CommonError::General(format!(
-            "Failed to lock insight registry: {}",
-            e
-        )))
-    })?;
     let rules: Vec<&crate::RuleFile> = match category {
         Some(cat) => registry.list_by_category(cat),
         None => registry.all_rules(),
@@ -542,6 +551,7 @@ pub fn list_insight_rules(
     let result: Vec<serde_json::Value> = rules
         .iter()
         .map(|r| {
+            let source = registry.source_of(&r.meta.id);
             serde_json::json!({
                 "id": r.meta.id,
                 "name": r.meta.name,
@@ -552,23 +562,20 @@ pub fn list_insight_rules(
                 "builtin": r.meta.builtin,
                 "parameters": r.query.parameters,
                 "result_type": r.query.result_type,
+                // 实际生效的来源与文件路径（被覆盖后指向胜出的那一层）
+                "scope": source.map(|s| s.scope.label()).unwrap_or("未知"),
+                "scope_path": source.map(|s| s.path.as_str()).unwrap_or(""),
             })
         })
         .collect();
     Ok(result)
 }
 
-/// Lists rules applicable to a given column type (e.g. "numeric", "text",
-/// "Any"). Uses the registry's column-type index for fast filtering.
+/// 列出适用于指定列类型的规则（如 `Numeric` / `Text` / `Any`）。
 pub fn list_rules_for_column(
+    registry: &RuleRegistry,
     column_type: &str,
 ) -> Result<Vec<serde_json::Value>, CoreError> {
-    let registry = insight::global_registry().read().map_err(|e| {
-        CoreError::common(CommonError::General(format!(
-            "Failed to lock insight registry: {}",
-            e
-        )))
-    })?;
     let result: Vec<serde_json::Value> = registry
         .rules_for_column_type(column_type)
         .iter()
@@ -592,6 +599,14 @@ mod tests {
 
     fn duckdb_err(e: duckdb::Error) -> CoreError {
         CoreError::common(CommonError::General(e.to_string()))
+    }
+
+    /// 测试用规则集：只加载内置层，结果与机器上的用户目录无关，因此可断言。
+    ///
+    /// 基础统计本身由 TOML 规则驱动（如 `numeric-stats` / `histogram`），
+    /// 所以这些单测必须显式给注册表——不能再依赖进程级全局单例。
+    fn test_registry() -> RuleRegistry {
+        crate::builtin_registry()
     }
 
     fn setup_test_table(
@@ -620,16 +635,16 @@ mod tests {
         ))
         .map_err(duckdb_err)?;
 
-        let _ = crate::global_registry();
         Ok((table, col))
     }
 
     #[test]
     fn test_get_column_stats_numeric() -> Result<(), CoreError> {
+        let registry = test_registry();
         let conn = duckdb::Connection::open_in_memory().map_err(duckdb_err)?;
         let (table, col) = setup_test_table(&conn)?;
 
-        let stats = get_column_stats_internal(&conn, table, col)?;
+        let stats = get_column_stats_internal(&registry, &conn, table, col)?;
 
         assert_eq!(stats.column_name, col);
         assert_eq!(stats.total_count, 10);
@@ -659,7 +674,7 @@ mod tests {
         conn.execute_batch("INSERT INTO \"rs_null\" VALUES (null), (null)")
             .map_err(duckdb_err)?;
 
-        let stats = get_column_stats_internal(&conn, "rs_null", "col")?;
+        let stats = get_column_stats_internal(&test_registry(), &conn, "rs_null", "col")?;
         assert_eq!(stats.total_count, 2);
         assert_eq!(stats.null_count, 2);
         assert_eq!(stats.null_rate, 1.0);
@@ -676,7 +691,7 @@ mod tests {
         )
         .map_err(duckdb_err)?;
 
-        let stats = get_column_stats_internal(&conn, "rs_text", "name")?;
+        let stats = get_column_stats_internal(&test_registry(), &conn, "rs_text", "name")?;
 
         assert_eq!(stats.total_count, 5);
         assert_eq!(stats.null_count, 0);
@@ -703,7 +718,7 @@ mod tests {
         )
         .map_err(duckdb_err)?;
 
-        let stats = get_column_stats_internal(&conn, "rs_bool", "active")?;
+        let stats = get_column_stats_internal(&test_registry(), &conn, "rs_bool", "active")?;
 
         assert_eq!(stats.total_count, 5);
         assert_eq!(stats.null_count, 1);
@@ -889,18 +904,47 @@ mod tests {
 
     #[test]
     fn test_list_insight_rules_all() -> Result<(), CoreError> {
-        let rules = list_insight_rules(None)?;
+        let registry = test_registry();
+        let rules = list_insight_rules(&registry, None)?;
         assert!(!rules.is_empty(), "built-in rules should exist");
         for rule in &rules {
             assert!(rule["id"].is_string(), "every rule should have an id");
             assert!(rule["name"].is_string(), "every rule should have a name");
+            // 来源信息必须随规则一并返回，供界面按作用域分组展示。
+            assert_eq!(
+                rule["scope"].as_str(),
+                Some("内置"),
+                "仅加载内置层时，来源应为内置"
+            );
+            assert!(
+                rule["scope_path"]
+                    .as_str()
+                    .is_some_and(|p| p.starts_with("<builtin>/")),
+                "内置规则应带 <builtin>/ 虚拟路径"
+            );
         }
         Ok(())
     }
 
     #[test]
+    fn test_list_insight_rules_filtered_by_category() -> Result<(), CoreError> {
+        let registry = test_registry();
+        let column_rules = list_insight_rules(&registry, Some("column"))?;
+        assert!(!column_rules.is_empty(), "column 分类应有规则");
+        for rule in &column_rules {
+            assert_eq!(rule["category"].as_str(), Some("column"));
+        }
+        assert!(
+            list_insight_rules(&registry, Some("nonexistent-category"))?
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_list_rules_for_numeric_column() -> Result<(), CoreError> {
-        let rules = list_rules_for_column("numeric")?;
+        let registry = test_registry();
+        let rules = list_rules_for_column(&registry, "numeric")?;
         assert!(!rules.is_empty(), "should have numeric rules");
         let ids: Vec<&str> = rules.iter().filter_map(|r| r["id"].as_str()).collect();
         assert!(

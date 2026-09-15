@@ -98,7 +98,7 @@ impl InsightColumnStore {
         })?;
 
         let result: Option<String> = conn.query_row(
-            "SELECT stats_json FROM insight_column_snapshots WHERE column_name = ? ORDER BY created_at DESC LIMIT 1",
+            "SELECT stats_json FROM insight_column_snapshots WHERE column_name = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
             duckdb::params![column_name],
             |row| row.get(0),
         ).ok().flatten();
@@ -132,8 +132,11 @@ impl InsightColumnStore {
 
         let limit_val = limit.unwrap_or(20) as i64;
         let mut stmt = conn.prepare(
-            "SELECT snapshot_id, column_name, data_type, stats_json, version_id, parent_version_id, checksum, created_at
-             FROM insight_column_snapshots WHERE column_name = ? ORDER BY created_at DESC LIMIT ?"
+            // `created_at` 是 TIMESTAMP：duckdb-rs 不能把 Timestamp 列直接读成 String，
+            // 故在 SQL 侧显式 CAST。不这样做的话行级读取会报错，而错误一旦被
+            // 下游 `filter_map(|r| r.ok())` 吞掉，历史列表会**静默返回空**。
+            "SELECT snapshot_id, column_name, data_type, stats_json, version_id, parent_version_id, checksum, CAST(created_at AS VARCHAR)
+             FROM insight_column_snapshots WHERE column_name = ? ORDER BY created_at DESC, rowid DESC LIMIT ?"
         ).map_err(|e| CoreError::storage(StorageError::Persistence {
             store: "duckdb".to_string(),
             operation: "get_insight_history".to_string(),
@@ -160,8 +163,16 @@ impl InsightColumnStore {
                     reason: e.to_string(),
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            // 逐行错误**向上抛**，不用 filter_map 丢弃：历史列表静默少行
+            // 比报错难查得多（同一个错误会表现为「历史一直是空的」）。
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "duckdb".to_string(),
+                    operation: "read_insight_history_row".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
 
         Ok(entries)
     }
@@ -541,6 +552,20 @@ impl InsightStorage {
 }
 
 // ==================== 工具函数 ====================
+
+/// 画像正文的 SHA256（「内容是否变化」的判据）。
+///
+/// 公开给洞察侧的装配层与索引复用：同一算法若在多处各写一份，
+/// 一旦有一处改了算法（如加盐 / 换编码），版本比对就会静默失效。
+pub fn snapshot_checksum(insight: &ColumnInsightFull) -> Result<String, CoreError> {
+    let json = serde_json::to_string(insight).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "Serialize insight for checksum failed: {}",
+            e
+        )))
+    })?;
+    Ok(sha256_hex(&json))
+}
 
 fn sha256_hex(input: &str) -> String {
     use sha2::{Digest, Sha256};

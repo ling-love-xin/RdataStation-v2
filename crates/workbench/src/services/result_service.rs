@@ -5,6 +5,18 @@
 //! - DuckDB 深度分析（针对临时表）
 //! - 列洞察全量统计（统计 + 样本 + 直方图）
 //! - 规则引擎 API（统一入口，SQL 模板与 Rust 代码分离）
+//!
+//! # 规则分层与 project_root
+//!
+//! 基础统计本身由 TOML 规则驱动（`numeric-stats` / `histogram` 等），而规则分三层
+//! （内置 / 全局 / 项目）且**随项目变化**，所以涉及规则的方法都要求显式传入
+//! `project_root`（无项目传 `None`）。取注册表统一走 `insight::with_rules`，
+//! 锁与错误处理收在一处，不在本层散开。
+//!
+//! TODO(M8 Phase 1)：本门面目前无调用方；洞察专属方法将随视图落地迁入 `crates/insight`，
+//! 此处只保留结果集相关部分（见 `docs/architecture/insight/insight-dev-plan.md` §3）。
+
+use std::path::Path;
 
 use shared::error::CoreError;
 
@@ -54,34 +66,65 @@ impl ResultService {
         engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(columns, rows)
     }
 
+    /// 列画像全量结果。`project_root` 决定使用哪一层规则。
     pub fn get_column_insight_full(
+        project_root: Option<&Path>,
         temp_table: &str,
         column_name: &str,
     ) -> Result<ColumnInsightFull, CoreError> {
-        insight::insight_engine::get_column_insight_full(temp_table, column_name)
+        insight::with_rules(project_root, |registry| {
+            insight::insight_engine::get_column_insight_full(registry, temp_table, column_name)
+        })
     }
 
+    /// 列基础统计（不含样本与直方图），更轻。
     pub fn get_column_insights(
+        project_root: Option<&Path>,
         temp_table: &str,
         column_name: &str,
     ) -> Result<ColumnStats, CoreError> {
-        insight::insight_engine::get_column_insights(temp_table, column_name)
+        insight::with_rules(project_root, |registry| {
+            insight::insight_engine::get_column_insights(registry, temp_table, column_name)
+        })
     }
 
+    /// 执行指定 id 的规则（含 QualityRule 质量门控）。调用方需已持有 DuckDB 锁。
     pub fn execute_insight_rule(
+        project_root: Option<&Path>,
         rule_id: &str,
         conn: &duckdb::Connection,
         params: &std::collections::HashMap<String, String>,
     ) -> Result<insight::ExecutionResult, CoreError> {
-        insight::insight_engine::execute_insight_rule(rule_id, conn, params)
+        insight::with_rules(project_root, |registry| {
+            insight::insight_engine::execute_insight_rule(registry, rule_id, conn, params)
+        })
     }
 
-    pub fn list_insight_rules(category: Option<&str>) -> Result<Vec<serde_json::Value>, CoreError> {
-        insight::insight_engine::list_insight_rules(category)
+    /// 列出规则（可按分类过滤）。返回项含 `scope` / `scope_path`，供界面按作用域分组。
+    pub fn list_insight_rules(
+        project_root: Option<&Path>,
+        category: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>, CoreError> {
+        insight::with_rules(project_root, |registry| {
+            insight::insight_engine::list_insight_rules(registry, category)
+        })
     }
 
-    pub fn list_rules_for_column(column_type: &str) -> Result<Vec<serde_json::Value>, CoreError> {
-        insight::insight_engine::list_rules_for_column(column_type)
+    /// 列出适用于某列类型的规则。
+    pub fn list_rules_for_column(
+        project_root: Option<&Path>,
+        column_type: &str,
+    ) -> Result<Vec<serde_json::Value>, CoreError> {
+        insight::with_rules(project_root, |registry| {
+            insight::insight_engine::list_rules_for_column(registry, column_type)
+        })
+    }
+
+    /// 重新加载规则（丢弃缓存并按三层重建），返回生效规则总数。
+    ///
+    /// 规则目录已被目录监听（`insight::service::watcher`）；本方法用作兜底与排障入口。
+    pub fn reload_insight_rules(project_root: Option<&Path>) -> usize {
+        insight::reload_insight_rules(project_root)
     }
 
     pub fn compute_column_quality(stats: &ColumnInsightFull) -> QualityScore {
@@ -239,6 +282,7 @@ impl ResultService {
     }
 
     pub async fn profile_column_from_table(
+        project_root: Option<&Path>,
         conn_id: String,
         database: &str,
         schema: &str,
@@ -246,6 +290,7 @@ impl ResultService {
         column_name: &str,
     ) -> Result<ColumnInsightFull, CoreError> {
         crate::services::persistence_service::profile_column_from_table(
+            project_root,
             conn_id,
             database,
             schema,
@@ -256,13 +301,18 @@ impl ResultService {
     }
 
     pub async fn batch_evaluate_columns(
+        project_root: Option<&Path>,
         conn_id: String,
         database: &str,
         schema: &str,
         table: &str,
     ) -> Result<TableQuality, CoreError> {
         crate::services::persistence_service::batch_evaluate_columns(
-            conn_id, database, schema, table,
+            project_root,
+            conn_id,
+            database,
+            schema,
+            table,
         )
         .await
     }

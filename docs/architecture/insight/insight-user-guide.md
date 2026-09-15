@@ -1,0 +1,379 @@
+# 洞察模块（M8）· 使用手册
+
+> 状态：**规则编写部分为现行契约**（2026-09-15，与代码逐字段核对）；**界面部分按原型规格书写，视图尚未实现**（Phase 1 起，见 `insight-dev-plan.md` §5）
+> 关联文件：`README.md`（模块入口）、`insight-prototype-design.md`（原型）、`insight-architecture.md`（设计理念与不变式）、`insight-dev-plan.md`（开发方案与进度）
+>
+> **给写规则的人**：直接跳到 §4。规则格式是**带 `deny_unknown_fields` 的严格 schema**——字段名或位置写错，整条规则会被拒绝加载（不会“部分生效”）。§4.6 有完整可照抄的示例。
+
+## 1. 入口
+
+洞察从四个地方进入，都落到同一个右 Dock 面板：
+
+| 入口 | 位置 | 分析目标 |
+| --- | --- | --- |
+| 结果表列头右键 → **洞察此列** | 中央查询结果区 | 该列 |
+| 导航树表右键 → **查看统计** | 左侧数据库导航 | 该表 |
+| 导航树表右键 → **结构洞察** | 同上 | 该表所在 Schema |
+| Quick Open（`Ctrl+P`）→ **打开洞察** | 命令面板 | 保持上次目标 |
+
+面板打开但不选目标时显示空态引导，**不会**给出任何没有目标的数字。
+
+## 2. 界面导览
+
+### 2.1 面板结构（右 Dock，17.5rem）
+
+```
+┌─────────────────────────────────────┐
+│ 洞察                          ⚙  ⟳ │  ⚙ 规则管理   ⟳ 重算
+├─────────────────────────────────────┤
+│  列 │ 表 │ 多列 │ 结构 │ 历史       │  五个 Tab
+├─────────────────────────────────────┤
+│  amount  [DOUBLE]          空 5.0%  │  目标头：永远显示「现在在看什么」
+│                                     │
+│  ▼ 基础统计                          │  折叠区
+│    总行数 / 非空 / 空值 / 唯一值     │
+│    按类型追加：平均值 / 中位数 / …   │
+│  ▼ 数据分布                          │
+│  ▶ 数据质量                          │
+│  ▶ 样本数据                          │
+├─────────────────────────────────────┤
+│ 质量评分 72 良好                     │  评分卡
+│ 完整性 / 唯一性 / 类型一致 / 分布均匀 │
+└─────────────────────────────────────┘
+```
+
+### 2.2 五个 Tab 各自回答什么
+
+| Tab | 回答的问题 | 目标 |
+| --- | --- | --- |
+| **列** | 这一列长什么样、能不能用 | 单列 |
+| **表** | 这张表有哪几列、每列质量如何 | 表 |
+| **多列** | 这几列之间有什么关系（相关性 / 交叉表 / 分组） | 多列 + 一条 multi 规则 |
+| **结构** | 这个 Schema 整体健康吗（外键 / 类型一致 / 孤立表 / 冗余列） | Schema |
+| **历史** | 和上次分析相比变化了什么 | 当前列的快照 |
+
+### 2.3 怎么读这些数字
+
+- **类型徽标**：`DOUBLE` / `VARCHAR` / `DATETIME` / `BOOLEAN` 是**真实类型名**；颜色只区分类型族（信息 / 成功 / 警告 / 主色），不单独承载信息。显示 `UNKNOWN` 表示该列全为空或类型未识别（BLOB / ARRAY）——此时**不会**出分布与类型专属统计。
+- **质量等级色阶**（列质量、表质量、Schema 健康分共用一套）：
+  | 分数 | 等级 | 颜色 |
+  | --- | --- | --- |
+  | ≥ 85 | 优 | 成功色 |
+  | ≥ 70 | 良 | 主色 |
+  | ≥ 50 | 一般 | 警告色 |
+  | < 50 | 差 | 危险色 |
+- **四维权重**：完整性 0.35 · 唯一性 0.25 · 类型一致 0.20 · 分布均匀 0.20。
+- **采样口径**：表探查与「评估全表」基于 **500 行采样**，面板底部会常驻「基于 N 行采样」。采样结论不代表全量。
+- **临时表有效期**：分析的是查询结果在内存中的临时表，**TTL 30 分钟**。过期后提示「结果已过期，请重新执行查询」。
+
+## 3. 典型流程
+
+### 3.1 看一列（最常用）
+
+1. 执行查询，结果表出现。
+2. 右键想看的**列头** → **洞察此列**（也可在导航树里右键表 → 查看统计 → 点列名）。
+3. 面板切到「列」Tab：基础统计 → 数据分布 → 数据质量 → 样本，底部是质量评分卡。
+4. 想留档：切「历史」Tab → **保存**。
+
+### 3.2 摸一张表的底
+
+1. 导航树右键表 → **查看统计**。
+2. 面板「表」Tab 显示列清单（主键带 `PK` 角标、可空性、行数）。
+3. 点 **评估全表**：逐列串行评分（避免撞并发上限），完成后每列显示分数与等级。
+4. 点任一列名 → 下钻到该列的画像。
+
+### 3.3 看两列的关系
+
+1. 「多列」Tab。
+2. 勾选列（列清单来自**当前结果集的真实列**）；选规则（如**相关性分析**）。
+3. **执行分析** → 结果按规则的结果类型渲染（单值 → 键值行；列表 → 表格）。
+
+> 多列规则要求勾选**至少 2 列**，且列的顺序要与规则参数顺序对应（如 `相关性分析` 的参数是 `col1, col2`）。
+
+### 3.4 看 Schema 健康
+
+「结构」Tab：健康分 + 四个折叠区（外键候选 / 类型不一致 / 孤立表 / 冗余列）。可导出 JSON 或 Markdown；点类型不一致里的表名可下钻到表探查。
+
+### 3.5 对比两次分析
+
+「历史」Tab 列出该列的历次快照（最新在上）与当前标记；点任一版本进入对比面板，逐字段显示 `旧 → 新 (±差值)`，并用三色标注**增 / 减 / 不变**。底部是存储用量（取后端真实统计）与按天数清理。
+
+### 3.6 管理规则
+
+面板头的 **⚙** 打开规则管理对话框：三层分组（项目 / 全局 / 内置）、每条规则的启停开关、校验失败行的错误原文、在系统编辑器中打开规则文件、新建项目规则。
+
+## 4. 规则编写指南
+
+这是本模块的**对外契约**。规则是声明式分析单元，放在 `.rule.toml` 文件里。
+
+### 4.1 放在哪：三层作用域
+
+| 层 | 目录 | 可见范围 | 可写 | 覆盖优先级 |
+| --- | --- | --- | --- | --- |
+| 内置 | 应用内嵌（随二进制分发，18 条） | 所有项目 | ❌ | 最低 |
+| **全局** | `{系统目录}/insight-rules/` | 所有项目 | ✅ | 中 |
+| **项目** | `{项目}/.RSmeta/insight-rules/` | 当前项目 | ✅ | 最高 |
+
+`{系统目录}` = 应用数据目录下的 `RdataStation/system/`（与 `global.db` 同级）。子目录任意嵌套（内置规则按 `column/` `multi/` `table/` `quality/` 分类，用户规则不强制）。
+
+**同名（`meta.id` 相同）整体覆盖**：上层规则完整替换下层，**不做字段级合并**。所以想改内置规则的行为，需要把整份规则抄到用户目录再改。
+
+**在系统编辑器中打开任一内置规则**可以当作模板起点（规则管理对话框里的 ⧉）。
+
+**禁用而非删除**：不想用某条内置规则时，用规则管理对话框的开关关掉即可（不需要写覆盖文件）。
+
+### 4.2 字段全表
+
+```toml
+[meta]
+id          = "my-rule"          # 必填，唯一标识（snake_case），用于覆盖与 API 引用
+name        = "我的规则"          # 必填，展示名
+category    = "column"           # 必填，column | multi | table | quality
+applies_to  = ["Numeric"]        # 必填，适用列类型数组（见 4.3）
+description = "..."              # 可选，默认空
+version     = "1.0"              # 可选，默认 "1.0"
+builtin     = false              # 可选，默认 false（用户规则写 false 或不写）
+
+[query]
+template    = """SELECT COUNT("{col}") FROM "{table}" """   # 必填，注意字段名是 template 不是 sql
+parameters  = ["table", "col"]   # 可选（默认空数组），会被替换的参数名
+result_type = "single"           # 可选，single（默认，单行对象）| list（多行数组）
+
+[[output]]                       # 可选（默认空），一条规则可有多段
+sql_name    = "cnt"              # 必填，SQL SELECT 里的列名/别名
+json_name   = "count"            # 必填，输出 JSON 的键名
+value_type  = "i64"              # 必填，见 4.4
+
+[[quality]]                      # 可选，质量门控（见 4.5）
+field       = "count"            # 必填，检查哪个输出字段（json_name）
+min         = 1                  # 可选，下界
+max         = 100000             # 可选，上界
+severity    = "warning"          # 可选，默认 warning
+message     = "计数偏低"          # 可选，默认 "Quality check for {field}"
+
+[render]                         # 可选，渲染提示
+component     = "NullCheckInfo"  # 可选，推荐组件名
+display_order = 0                # 可选，展示排序
+```
+
+> **严格 schema**：所有表都拒绝未知字段。多写一个字段（哪怕拼错）都会导致**整条规则加载失败**。字段放错表也一样（例如把 `result_type` 写进 `[meta]`——内置规则里就有一条因此长期缺席，见 `insight-architecture.md` K 区）。
+
+### 4.3 `applies_to` 取值
+
+数组，元素为列类型名，**大小写不敏感**（匹配时用 `eq_ignore_ascii_case`）。内置规则实际使用的取值：
+
+| 取值 | 含义 |
+| --- | --- |
+| `Any` | 任意列 |
+| `Numeric` | 数值列 |
+| `Text` / `VARCHAR` / `STRING` | 文本列 |
+| `DateTime` / `TIMESTAMP` / `DATE` | 日期时间列 |
+| `Boolean` / `BOOLEAN` / `BOOL` | 布尔列 |
+
+多列规则用**多个元素表示多个参数位**（如 `applies_to = ["Numeric", "Numeric"]` 对应两个数值列）。
+
+### 4.4 `value_type` 取值（**只能用这几个**）
+
+| `value_type` | 读出的 Rust 类型 | 说明 |
+| --- | --- | --- |
+| `f64` | `f64` | 浮点，非空 |
+| `f64?` | `Option<f64>` | 浮点，可空（SQL 返回 NULL 时输出 JSON `null`） |
+| `i64` | `i64` | 整数，非空 |
+| `i64?` | `Option<i64>` | 整数，可空 |
+| `String` / `string` | `String` | 字符串，非空 |
+| `String?` / `string?` | `Option<String>` | 字符串，可空 |
+| `bool` | `bool` | 布尔，非空 |
+| `bool?` | `Option<bool>` | 布尔，可空 |
+| `usize` | 经 `i64` 中转的 `usize` | 计数类 |
+
+> ⚠️ **写错 `value_type` 不会报「未知类型」，而是走兜底分支按 `String` 读**——数值列会被报成「Failed to get String value」这类难以归因的错误。请严格从上表取值。（内置规则 `quality-score` 用了 `"str"` 靠兜底侥幸工作，属历史遗留，不要照抄。）
+
+### 4.5 质量门控怎么判
+
+`[[quality]]` 的每条会对指定 `field` 取值并判界：
+
+| 情况 | 结果 |
+| --- | --- |
+| 只设 `min`，实际值 < min | **不通过** |
+| 只设 `min`，实际值为 `null` | **不通过**（记为 `actual=null`） |
+| 只设 `max`，实际值 > max | 不通过 |
+| **只设 `max`，实际值为 `null`** | **通过**（当前实现不判失败） |
+| 所有 `[[quality]]` 均通过 | `QualityReport.passed = true` |
+
+> ⚠️ 两个已知坑（见 `insight-architecture.md` K11 / Q6）：
+> 1. `field` 必须是本规则 `[[output]]` 里真实存在的 `json_name`，否则取值为 `null`——**若只设了 `max`，门控会静默通过**（内置 `null-check` 就是这种情况：它检查 `null_rate`，但输出里没有这个字段）。
+> 2. 建议显式设 `min`，或在必要时把 `field` 与输出对齐后再依赖门控。
+
+### 4.6 完整可照抄的示例
+
+**示例 A：单值结果 + 参数 + 质量门控**（照抄即是一条合法规则）
+
+```toml
+[meta]
+id = "my-null-rate"
+name = "我的空值率检查"
+description = "统计总行数与空值率"
+version = "1.0"
+category = "column"
+applies_to = ["Any"]
+builtin = false
+
+[query]
+template = """
+SELECT
+    COUNT(*) AS total,
+    COUNT("{col}") AS non_null,
+    ROUND(CAST(COUNT(*) - COUNT("{col}") AS FLOAT) / NULLIF(COUNT(*), 0), 4) AS null_rate
+FROM "{table}"
+"""
+parameters = ["table", "col"]
+result_type = "single"
+
+[[output]]
+sql_name = "total"
+json_name = "total_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "non_null"
+json_name = "non_null_count"
+value_type = "i64"
+
+[[output]]
+sql_name = "null_rate"
+json_name = "null_rate"      # ← 与下一条 quality 的 field 对齐，门控才会生效
+value_type = "f64?"
+
+[[quality]]
+field = "null_rate"
+max = 0.1
+severity = "warning"
+message = "空值率超过 10%"
+
+[render]
+component = "NullCheckInfo"
+display_order = 0
+```
+
+**示例 B：列表结果**（`result_type = "list"`，输出为数组）
+
+```toml
+[meta]
+id = "my-top-values"
+name = "我的 Top 值"
+category = "column"
+applies_to = ["Text", "VARCHAR"]
+version = "1.0"
+builtin = false
+
+[query]
+template = """
+SELECT
+    "{col}" AS value,
+    COUNT(*) AS cnt
+FROM "{table}"
+WHERE "{col}" IS NOT NULL
+GROUP BY "{col}"
+ORDER BY cnt DESC
+LIMIT 10
+"""
+parameters = ["table", "col"]
+result_type = "list"
+
+[[output]]
+sql_name = "value"
+json_name = "value"
+value_type = "String"
+
+[[output]]
+sql_name = "cnt"
+json_name = "count"
+value_type = "i64"
+```
+
+### 4.7 参数替换与安全边界
+
+**替换语法**：`parameters` 里声明的名字，在 `template` 中用 `{名字}` 引用。执行时把 `{name}` 替换为传入值。
+
+- 替换采用两步法（先 `{name}` → 临时标记 `@name@`，再标记 → 实际值），避免 `{col}` 与 `{col_name}` 互相误匹配。
+- **表名 / 列名建议用双引号包裹**：`"{table}"`、`"{col}"`（DuckDB 标识符规范；名字含特殊字符时必须加）。
+
+**安全边界（请如实理解）**：
+
+| 存在的防线 | 内容 |
+| --- | --- |
+| 参数值字符白名单 | 传入值只允许字母数字与 `_` `-` `.`，含其他字符即报错 |
+| 输出字段校验 | `[[output]].sql_name` 必须在结果集中存在，否则报错 |
+
+| **不存在的防线** | 说明 |
+| --- | --- |
+| **SQL 语句黑名单 / 沙箱** | ⚠️ 规则模板里的 SQL **原样交给 DuckDB 执行**——可以 `ATTACH` / `COPY` 到本地路径等。规则文件被视为**可信的本地文件**，与执行任意脚本同级别。这是当前的设计现状（`insight-architecture.md` K1 / Q1 正在待决策） |
+| 只读连接 | 未实现 |
+
+> 实务建议：只运行你理解或信任来源的规则文件；把项目规则目录纳入代码评审，与对待源码同样严格。
+
+### 4.8 内置规则一览（18 条）
+
+| id | 分类 | applies_to | result_type | 参数 |
+| --- | --- | --- | --- | --- |
+| `null-check` | column | Any | single | table, col |
+| `numeric-stats` | column | Numeric | single | table, col |
+| `numeric-basic` | column | Numeric | single | table, col |
+| `histogram` | column | Numeric | list | table, col |
+| `text-length` | column | Text, VARCHAR, STRING | single | table, col |
+| `text-frequency` | column | Text, VARCHAR, STRING | list | table, col |
+| `datetime-range` | column | DateTime, TIMESTAMP, DATE | single | table, col |
+| `datetime-monthly` | column | DateTime, TIMESTAMP, DATE | list | table, col |
+| `boolean-ratio` | column | Boolean, BOOLEAN, BOOL | single | table, col |
+| `pearson-correlation` | multi | Numeric, Numeric | single | table, col1, col2 |
+| `cross-tab` | multi | Text, Text | list | table, col1, col2 |
+| `grouped-stats` | multi | Numeric, Text | list | table, num_col, cat_col |
+| `scatter-sample` | multi | Numeric, Numeric | list | table, col1, col2 |
+| `quality-score` | quality | Any | single | table, col |
+| `table-row-count` | table | Any | single | table |
+| `table-column-overview` | table | Any | list | table |
+| `table-null-overview` | table | Any | list | table, col |
+| `table-quality-overview` | table | Any | list | table |
+
+> 其中 `numeric-stats` / `histogram` / `text-*` / `datetime-*` / `boolean-ratio` 同时是**列画像基础统计的实现**——覆盖或禁用它们会连带影响列画像本身（`insight-architecture.md` K10）。
+> `table-quality-overview` 的 SQL 引用了当前**不存在的表**，执行会失败（K3，待决策）。
+
+## 5. FAQ 与排查
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 写好的规则在列表里找不到 | 字段名/位置写错（严格 schema，整条被拒）；或 `meta.id` 与内置规则重名而自己那份解析失败 → 仍是内置规则在生效 | 打开规则管理对话框看**校验失败行**的原文，按提示改；文件不在索引里说明读取都失败 |
+| 规则列表里出现「文件不见了」 | 索引记录在、磁盘文件已删 | 恢复文件或从列表移除 |
+| 面板提示「结果已过期」 | 临时表 TTL 30 分钟 | 重新执行查询 |
+| 面板提示「洞察分析任务过多，请稍候重试」 | 并发操作超过 4 | 稍候重试；避免同时触发「评估全表」与多个单列分析 |
+| 分布区是空的 | 数值列行数 < 10（不生成直方图）；或列类型为 UNKNOWN | 正常行为，非故障 |
+| 质量分是 0 或「无数据」 | 表为空或采样不到数据 | 检查数据源 |
+| 点「评估全表」后部分列为 `—` | 那些列评估失败（如全空/类型未识别），失败会记日志并继续 | 查看日志；单列可单独重试 |
+| 改了规则文件但不生效 | 目录监听尚未落地（Phase 0 / 0.6） | 用规则管理对话框的「重新加载」 |
+| 改规则后列画像数字变了 | 基础统计由规则驱动（如 `numeric-stats`） | 属预期；见 §4.8 提示 |
+
+## 6. 验收清单（USIT）
+
+**画像与评分**
+- [ ] 结果表列头右键「洞察此列」→ 面板切「列」并显示该列画像
+- [ ] 数值 / 文本 / 日期 / 布尔 / 全空 五类列的画像内容正确分派
+- [ ] 空值率 > 5% 时数字转警告色，质量区出现对应提示
+- [ ] 质量评分卡四个维度分值与等级色阶与阈值（85/70/50/30）一致
+- [ ] 导航树表右键「查看统计」→ 表探查显示列清单、`PK` 角标、可空性、基于 500 行采样的提示
+- [ ] 「评估全表」串行完成，各列出现分数；点列名下钻到列画像
+
+**多列与结构**
+- [ ] 多列分析可选列（≥2）与规则，执行后按 `result_type` 渲染单值/表格
+- [ ] 结构 Tab 显示健康分与四个折叠区；类型不一致点表名可下钻
+
+**历史**
+- [ ] 「保存」写入快照，历史列表出现新条目并标「当前」
+- [ ] 选任一历史版本进入对比，逐字段显示差值，增/减/不变三色正确
+- [ ] 存储用量为后端真实统计（不是前端估算）
+
+**规则**
+- [ ] ⚙ 打开的规则管理对话框显示三层分组，内置规则可禁用
+- [ ] 禁用一条内置规则后，该规则不再出现在适用规则列表
+- [ ] 故意写坏一个 TOML：对话框出现红色行并显示**错误原文**，且其他规则照常可用
+- [ ] 「新建项目规则」在 `.RSmeta/insight-rules/` 建目录与模板并打开
+- [ ] 新建的规则（照抄 §4.6 示例 A）能出现在列表中并被成功执行

@@ -20,7 +20,12 @@ specta.workspace = true
 # ===== 规则引擎 =====
 include_dir.workspace = true
 duckdb.workspace = true
-rusqlite.workspace = true
 tracing.workspace = true
-once_cell.workspace = true
 toml.workspace = true
+
+# ===== 规则索引存储（service/indexer）=====
+# 索引写 SQLite（全局库 / 项目库），并对规则文件正文取 SHA256 做增量判据。
+# 注：这两个依赖在迁移初期被带入时并无使用点，曾一度移除；现在索引存储真的用到，
+# 故重新引入（sha2 同时用于「文件内容是否变化」的判据）。
+rusqlite.workspace = true
+sha2.workspace = true

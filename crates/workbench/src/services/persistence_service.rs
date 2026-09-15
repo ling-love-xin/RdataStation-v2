@@ -113,6 +113,7 @@ pub(crate) async fn get_insight_version_detail(
 }
 
 pub(crate) async fn profile_column_from_table(
+    project_root: Option<&std::path::Path>,
     conn_id: String,
     database: &str,
     schema: &str,
@@ -181,12 +182,14 @@ pub(crate) async fn profile_column_from_table(
     let temp_table =
         engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(&columns, &rows)?;
 
-    let stats = insight_engine::get_column_insight_full(&temp_table, column_name)?;
-
-    Ok(stats)
+    // 基础统计由 TOML 规则驱动，故需按项目取规则集。
+    insight::with_rules(project_root, |registry| {
+        insight_engine::get_column_insight_full(registry, &temp_table, column_name)
+    })
 }
 
 pub(crate) async fn batch_evaluate_columns(
+    project_root: Option<&std::path::Path>,
     conn_id: String,
     database: &str,
     schema: &str,
@@ -256,16 +259,24 @@ pub(crate) async fn batch_evaluate_columns(
         &col_names, &rows_data,
     )?;
 
-    let mut stats_list: Vec<ColumnInsightFull> = Vec::new();
-    for col_name in &col_names {
-        match insight_engine::get_column_insight_full(&temp_table, col_name) {
-            Ok(stats) => stats_list.push(stats),
-            Err(_) => continue,
+    // 整表评估：规则集只取一次（不在逐列循环里重复加读锁）。
+    // 串行逐列是刻意的——洞察并发上限为 4 且快速失败，并行会把「部分列静默缺失」
+    // 变成常态；串行起步虽慢，但「哪些列没评上」是确定的（单列失败仍跳过并继续）。
+    insight::with_rules(project_root, |registry| {
+        let mut stats_list: Vec<ColumnInsightFull> = Vec::new();
+        for col_name in &col_names {
+            match insight_engine::get_column_insight_full(registry, &temp_table, col_name) {
+                Ok(stats) => stats_list.push(stats),
+                Err(e) => {
+                    tracing::warn!("Skipping column '{}' during batch evaluation: {}", col_name, e);
+                    continue;
+                }
+            }
         }
-    }
 
-    Ok(insight::quality_scorer::compute_table_quality(
-        table,
-        &stats_list,
-    ))
+        Ok(insight::quality_scorer::compute_table_quality(
+            table,
+            &stats_list,
+        ))
+    })
 }

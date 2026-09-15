@@ -158,6 +158,12 @@ pub struct WorkbenchView {
     _subscription: Option<Subscription>,
     /// 编辑面板观察句柄（其 notify 级联到宿主，保证对话框层内容同步）。
     _editor_subscription: Option<Subscription>,
+    /// M8 洞察规则目录监听句柄（改动 `.rule.toml` 后自动重载规则集）。
+    ///
+    /// 句柄必须**被持有**：它是 RAII 语义——drop 即停后台线程，
+    /// 因此不能建成临时值（否则会在行尾被回收，监听静默失效）。
+    /// 前缀下划线表示「仅为持有，不读取」，与 `_subscription` 同一约定。
+    _insight_rules_watcher: Option<insight::RulesWatcher>,
 }
 
 impl WorkbenchView {
@@ -193,6 +199,11 @@ impl WorkbenchView {
         if shared.project.borrow().is_none() {
             project::ui::load_picker(&host);
         }
+        // M8：启动规则目录监听。放在构造期（而非 render）——沿用 GPUI-kit 编码指南
+        // 「副作用不得放在 render」，也保证窗口首帧前监听已就位。
+        // 目录由「当前项目根」现算，故先告知监听器当前项目（切换时在 refresh_after_open 再告知）。
+        insight::set_watched_project_root(project_root.clone());
+        let insight_rules_watcher = Some(insight::RulesWatcher::spawn());
         Self {
             shared,
             area: None,
@@ -205,6 +216,7 @@ impl WorkbenchView {
             project_host: Some(host),
             _subscription: None,
             _editor_subscription: None,
+            _insight_rules_watcher: insight_rules_watcher,
         }
     }
 
