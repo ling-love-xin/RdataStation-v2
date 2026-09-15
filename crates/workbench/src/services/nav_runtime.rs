@@ -396,6 +396,12 @@ pub fn set_container_order(
     result.map_err(|e| e.to_string())
 }
 
+/// 重写分组之间的顺序（序号 = 下标）。
+pub fn set_group_order(project_root: Option<&Path>, group_ids: &[String]) -> Result<(), String> {
+    let store = open_org_project(project_root)?;
+    store.set_group_order(group_ids).map_err(|e| e.to_string())
+}
+
 /// 删除分组（不删连接）。
 pub fn delete_group(project_root: Option<&Path>, group_id: &str) -> Result<(), String> {
     let store = open_org_project(project_root)?;

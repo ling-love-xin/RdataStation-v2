@@ -85,6 +85,7 @@
 | B7 拖拽（表 / 视图 → 编辑区插入限定名） | ✅ 已实现（2026-09-16） | `crates/workbench/src/panels.rs`：`NavDragPayload` + `NavDragGhost`（拖拽幽灵）、`render_nav_node` 挂 `on_drag`（仅表 / 视图）、SQL 区容器 `drag_over` + `on_drop`、编辑区 `content` 兜底 `on_drop`、`EditorPanel::apply_nav_drag`（`NavDropMode::{AtCursor, Append}`） |
 | B3 归组拖拽 + 组内外手动排序 | ✅ 已实现（2026-09-16） | `panels.rs`：`NavConnDragPayload` / `ConnDropTarget` / `nav_reorder`（纯函数）、连接行与引用行挂 `on_drag`+`on_drop`、分组头挂 `on_drop`（归组 / 移出全部）、`SidebarPanel::{apply_conn_drop, container_order, container_label}`；落库 `ConnectionOrgStore::{set_member_order_all, list_ungrouped_order, set_ungrouped_order}` + `nav_runtime::set_container_order` |
 | B3 分组描述表单（名称 + 描述） | ✅ 已实现（2026-09-16） | `crates/workbench/src/components/group_form_dialog.rs`（新建 / 编辑共用；名称必填 + 内联提示）；入口：面板头 `🗂＋`、分组右键「新建分组 / 编辑分组…」、组内联编辑器「新建分组」；落库 `nav_runtime::{create_group_with, update_group}`（`rename_group` 不再洗掉描述） |
+| B3 分组本身排序 + 连接重排快捷键 | ✅ 已实现（2026-09-16） | `panels.rs`：`NavGroupDragPayload` / `group_ids` / `apply_group_drop` / `step_group`（分组排序）、`nav_step`（纯函数）+ `nav_step_selected`（`Alt+↑/↓`）；落库 `ConnectionOrgStore::set_group_order` + `nav_runtime::set_group_order`；命令 `NavReorderUp/Down` 绑在 `database-nav` context |
 
 **Phase B 已知限制**
 
@@ -133,7 +134,7 @@
 - **「未分组」没有真实分组行**，成员是推导出来的（不属于任何分组），故顺序单开 `navigator_ungrouped_order`（迁移 021）；写库是**整体替换**（先清后写），避免连接重新回到未分组时“复活”旧位置。
 - 渲染顺序：手动排序在前，未排过的按名称升序（`container_order` / `render_nav_tree` 同源）；排序落库时用**未筛选**的全量成员，避免被搜索过滤掉的行丢位置。
 - 「未分组」头在**已有自定义分组时也渲染**（即使为空）：它是「拖拽移出分组」的常驻落点；右键菜单也能移出，两条路都在。
-- 未做：**分组本身**的拖拽排序（`connection_groups.sort_order` 已就绪，缺 UI 入口）；「未手动排序按名称」只在渲染侧生效，存储侧仍按 `sort_order, connection_id` 返回（见架构 §11#20）。
+- 未做：**分组本身**的拖拽排序见上方已完成项；「未手动排序按名称」只在渲染侧生效，存储侧仍按 `sort_order, connection_id` 返回（见架构 §11#20）。
 
 **Phase B8 已实现范围**
 
@@ -258,7 +259,7 @@
 | --- | --- | --- | --- |
 | B1 | 分组服务：CRUD + 多对多成员 + 排序（手动优先，未排按名称）| ✅ `crates/engine/src/persistence/connection_org_store.rs`（连接域共用，2026-09-11 上提；2026-09-16 补 `set_member_order_all` / `list_ungrouped_order` / `set_ungrouped_order`） | 一连接可属多组；排序持久化 |
 | B2 | 标签服务：多值增删改 + 按标签检索 | ✅ 同上 + `connection_tags`（权威检索表；M3 保存同步 / 删除清理） | `tag:x` 检索命中 |
-| B3 | 分组/标签视图：拖拽归组、右键「分组 ▸ / 标签 ▸」、分组对话框（名称/描述） | `database_nav_panel.rs` + `Dialog` | ✅ 归组拖拽 + 组内排序 + 分组表单（名称/描述）均走通；分组头统一配色 |
+| B3 | 分组/标签视图：拖拽归组、右键「分组 ▸ / 标签 ▸」、分组对话框（名称/描述） | `database_nav_panel.rs` + `Dialog` | ✅ 归组拖拽 + 连接排序 + 分组排序（拖拽 / 右键）+ 分组表单（名称/描述）均走通；分组头统一配色 |
 | B4 | 搜索：本地筛选 + FTS（`search_fts`）+ 结果落编辑区 + 高亮 | `navigator_service.rs` + `database_nav_panel.rs` + `crates/workbench/panels.rs` | 300ms 防抖；命中高亮；Enter 打开 |
 | B5 | 属性面板：类型注册表（connection/table/view/column/index/constraint/routine/…）+ 右侧停靠面板（属性/数据 Tab） | `crates/database/src/property_panel.rs` + workbench 编辑区右侧面板 | 双击/右键打开；字段随类型变化；宽度记忆 |
 | B6 | 状态持久化：`navigator_state` 读写 + 800ms 防抖；分组展开态 | `navigator_service.rs` + engine `persistence` | 重启恢复展开/选中/过滤 |

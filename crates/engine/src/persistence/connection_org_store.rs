@@ -273,6 +273,30 @@ impl ConnectionOrgStore {
         Ok(())
     }
 
+    /// 重写分组之间的顺序（序号 = 下标；一次事务）。
+    ///
+    /// 只改 `sort_order`（名称 / 描述不动）：分组排序是纯重排，不应顺带覆盖正文。
+    pub fn set_group_order(&self, group_ids: &[String]) -> Result<(), CoreError> {
+        if !self.is_project {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| self.err("begin_group_order", e))?;
+        for (i, gid) in group_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE connection_groups SET sort_order = ?2, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                params![gid, i as i64],
+            )
+            .map_err(|e| self.err("group_order", e))?;
+        }
+        tx.commit()
+            .map_err(|e| self.err("commit_group_order", e))?;
+        Ok(())
+    }
+
     /// 更新分组（名称 / 描述 / 排序）。
     pub fn update_group(
         &self,
@@ -778,6 +802,45 @@ mod tests {
         store.delete_group("g1").expect("delete group");
         assert!(store.list_group_members("g1").is_empty());
         assert_eq!(store.list_groups_for_connection("P_b").len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_order_rewrite_keeps_names_and_descriptions() {
+        let dir = temp_dir("group_order");
+        let store = ConnectionOrgStore::open_at(dir.join("p.db"), true).expect("open");
+        store
+            .create_group("g1", "alpha", Some("第一组"))
+            .expect("g1");
+        store.create_group("g2", "beta", None).expect("g2");
+        store.create_group("g3", "gamma", None).expect("g3");
+        // 新建分组同 sort_order（缺省 0）→ 回退到名称升序：alpha / beta / gamma。
+        assert_eq!(
+            store.list_groups().iter().map(|g| g.id.clone()).collect::<Vec<_>>(),
+            vec!["g1".to_string(), "g2".to_string(), "g3".to_string()]
+        );
+
+        store
+            .set_group_order(&["g2".into(), "g3".into(), "g1".into()])
+            .expect("order");
+        assert_eq!(
+            store
+                .list_groups()
+                .iter()
+                .map(|g| g.id.clone())
+                .collect::<Vec<_>>(),
+            vec!["g2".to_string(), "g3".to_string(), "g1".to_string()]
+        );
+        // 重排不改正文：名称与描述原样保留。
+        let g1 = store.list_groups().into_iter().find(|g| g.id == "g1").expect("g1");
+        assert_eq!(g1.name, "alpha");
+        assert_eq!(g1.description.as_deref(), Some("第一组"));
+        assert_eq!(g1.sort_order, 2);
+
+        // 全局库无分组表：no-op。
+        let global = ConnectionOrgStore::open_at(dir.join("g.db"), false).expect("open global");
+        assert!(global.set_group_order(&["g1".into()]).is_ok());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

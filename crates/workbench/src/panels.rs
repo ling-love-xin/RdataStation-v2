@@ -27,9 +27,9 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::commands::{
-    NavCollapse, NavDown, NavExpand, NavOpenProperties, NavUp, ScratchpadCancelEdit,
-    ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen, ScratchpadRename,
-    ScratchpadSelectAll, ScratchpadUp,
+    NavCollapse, NavDown, NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp,
+    ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen,
+    ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
 };
 use crate::components::connection_dialog;
 use crate::components::group_form_dialog::{self, GroupFormSeed};
@@ -1486,6 +1486,55 @@ fn nav_reorder(ids: &[String], moving: &str, before: Option<&str>) -> Option<Vec
         .unwrap_or(next.len());
     next.insert(at, moving.to_string());
     (next != ids).then_some(next)
+}
+
+/// 分组头拖拽载荷（分组之间的排序）。
+///
+/// 与连接载荷分开：拖**分组**到分组头 = 给分组排序，拖**连接**到分组头 = 归组，
+/// 两者落在同一个元素上但语义不同，用载荷类型区分最省事。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavGroupDragPayload {
+    /// 被拖动的分组 ID。
+    pub group_id: String,
+    /// 展示名（拖拽幽灵 + 通知）。
+    pub name: String,
+}
+
+/// 主组解析：**显式指定**优先（且仍在所属分组内，被移出则忽略），
+/// 否则取排序最前的分组；无任何分组 → `None`（即「未分组」）。
+///
+/// 渲染（多组只全亮呈现一次）与键盘重排（改哪个容器的顺序）共用同一条规则。
+fn nav_primary_scope(
+    membership: &HashMap<String, Vec<String>>,
+    primary_explicit: &HashMap<String, String>,
+    conn_id: &str,
+) -> Option<String> {
+    let groups_of = membership.get(conn_id)?;
+    if let Some(p) = primary_explicit.get(conn_id) {
+        if groups_of.iter().any(|g| g == p) {
+            return Some(p.clone());
+        }
+    }
+    groups_of.first().cloned()
+}
+
+/// 容器内移动一步（`delta` = -1 上移 / +1 下移）；已在边界或不在列表里 → `None`。
+///
+/// 用“摘除后插到目标下标处元素之前”表达（复用 [`nav_reorder`]），
+/// 越过末尾则退化为追加；因为 `nav_reorder` 对“已就位”返回 `None`，末位下移自然为 no-op。
+fn nav_step(ids: &[String], moving: &str, delta: i32) -> Option<Vec<String>> {
+    let i = ids.iter().position(|id| id == moving)? as i32;
+    let target = i + delta;
+    if target < 0 {
+        return None;
+    }
+    let others: Vec<&String> = ids.iter().filter(|id| id.as_str() != moving).collect();
+    match others.get(target as usize) {
+        Some(anchor) => nav_reorder(ids, moving, Some(anchor.as_str())),
+        // 目标下标刚好等于剩余长度 = 落到末尾；超出则无效。
+        None if target as usize == others.len() => nav_reorder(ids, moving, None),
+        None => None,
+    }
 }
 
 /// 草稿追加：空草稿直接落片段，否则在末尾换行追加。
@@ -3312,6 +3361,18 @@ impl SidebarPanel {
                     entity.update(app, |this, cx| this.nav_open_properties(cx));
                 }
             })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavReorderUp, _window, app| {
+                    entity.update(app, |this, cx| this.nav_step_selected(-1, cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &NavReorderDown, _window, app| {
+                    entity.update(app, |this, cx| this.nav_step_selected(1, cx));
+                }
+            })
     }
 
     /// 来源筛选 chip（全部 / 项目 / 全局 / 共享）；点击切换筛选，不占一级结构。
@@ -3575,15 +3636,8 @@ impl SidebarPanel {
         // 主组：用户**显式指定**优先；未指定时回退到分组排序最靠前的一个
         // （`membership` 按分组排序构建）。显式值若已不在所属分组（被移出）则忽略。
         // 主组用于「多组只全亮呈现一次，其余组以引用行出现」。
-        let primary_gid = |conn_id: &str| -> Option<String> {
-            let groups_of = membership.get(conn_id)?;
-            if let Some(p) = primary_explicit.get(conn_id) {
-                if groups_of.iter().any(|g| g == p) {
-                    return Some(p.clone());
-                }
-            }
-            groups_of.first().cloned()
-        };
+        let primary_gid =
+            |conn_id: &str| nav_primary_scope(&membership, &primary_explicit, conn_id);
 
         // 单条连接是否通过归属域 chips、附加 facet（类型 / 驱动 / 标签）与搜索词（连接名 / 标签）。
         let passes = |conn: &ConnectionItem| -> bool {
@@ -3869,8 +3923,13 @@ impl SidebarPanel {
         // 分组表单初值：新建用自动去重默认名，编辑预填现有名称与描述。
         let default_group_name = self.next_group_name();
         let group_seed = self.group_form_seed(group_id);
+        // 上移 / 下移分组：边界项禁用（拖拽是主路径，菜单项是键盘 / 无鼠标的替代）。
+        let group_ids_now = self.group_ids();
+        let group_ix = group_ids_now.iter().position(|id| id == group_id);
+        let can_up = group_ix.is_some_and(|i| i > 0);
+        let can_down = group_ix.is_some_and(|i| i + 1 < group_ids_now.len());
 
-        let header = div()
+        let mut header = div()
             .id(format!("nav-group-{group_id}"))
             .h_flex()
             .items_center()
@@ -3982,9 +4041,46 @@ impl SidebarPanel {
                             });
                         }
                     }),
-            )
-            // 「未分组」是固定分组，不提供重命名 / 删除。
-            // 落点（组归拖拽）：拖到分组头 = 归组；拖到「未分组」头 = 移出全部分组。
+            );
+
+        // 分组之间可拖排序（「未分组」是伪分组，不可拖）。
+        if !is_ungrouped {
+            header = header.on_drag(
+                NavGroupDragPayload {
+                    group_id: gid.clone(),
+                    name: gname.clone(),
+                },
+                {
+                    let tint = bar;
+                    move |payload, _, _, cx| {
+                        let label = payload.name.clone();
+                        cx.new(|_| NavDragGhost { label, tint })
+                    }
+                },
+            );
+        }
+
+        // 后续链接返回的是 `ContextMenu<..>`（不再与 `Stateful<Div>` 同型），故遮罩重绑。
+        let header = header
+            // 落点①（分组拖拽）：排到该分组之前；「未分组」头 = 排到最后。
+            .drag_over::<NavGroupDragPayload>(|style, _, _, cx| {
+                style.bg(cx.theme().colors.list_active)
+            })
+            .on_drop({
+                let entity = entity.clone();
+                let before = if is_ungrouped {
+                    None
+                } else {
+                    Some(gid.clone())
+                };
+                move |payload: &NavGroupDragPayload, _, app| {
+                    let before = before.clone();
+                    entity.update(app, |this, cx| {
+                        this.apply_group_drop(payload, before.as_deref(), cx)
+                    });
+                }
+            })
+            // 落点②（组归拖拽）：拖到分组头 = 归组；拖到「未分组」头 = 移出全部分组。
             .drag_over::<NavConnDragPayload>(|style, _, _, cx| {
                 style.bg(cx.theme().colors.list_active)
             })
@@ -4071,6 +4167,28 @@ impl SidebarPanel {
                                 },
                             );
                         }),
+                    )
+                    .separator()
+                    // 分组排序：拖拽是主路径，这两项是键盘 / 无鼠标时的替代（边界置灰）。
+                    .item(PopupMenuItem::new("上移分组").disabled(!can_up).on_click({
+                        let e = entity.clone();
+                        let gid = gid.clone();
+                        move |_, _, app| {
+                            let gid = gid.clone();
+                            e.update(app, |this, cx| this.step_group(&gid, -1, cx));
+                        }
+                    }))
+                    .item(
+                        PopupMenuItem::new("下移分组")
+                            .disabled(!can_down)
+                            .on_click({
+                                let e = entity.clone();
+                                let gid = gid.clone();
+                                move |_, _, app| {
+                                    let gid = gid.clone();
+                                    e.update(app, |this, cx| this.step_group(&gid, 1, cx));
+                                }
+                            }),
                     )
                     .separator()
                     .item(
@@ -6095,6 +6213,91 @@ impl SidebarPanel {
         } else {
             format!("已调整「{name}」在「{label}」中的位置")
         });
+        cx.notify();
+    }
+
+    /// 当前分组顺序（ID 列表，按 `sort_order` → 名称）。
+    fn group_ids(&self) -> Vec<String> {
+        self.database_nav
+            .borrow()
+            .groups
+            .iter()
+            .map(|g| g.id.clone())
+            .collect()
+    }
+
+    /// 分组拖拽落点：把分组排到 `before` 之前（`None` = 排到最后）。
+    fn apply_group_drop(
+        &mut self,
+        payload: &NavGroupDragPayload,
+        before: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let ids = self.group_ids();
+        let Some(next) = nav_reorder(&ids, &payload.group_id, before) else {
+            return;
+        };
+        let root = self.project_root();
+        match crate::services::nav_runtime::set_group_order(root.as_deref(), &next) {
+            Ok(()) => {
+                self.reload_nav_org();
+                *self.shared.notice.borrow_mut() = Some(format!("已移动分组「{}」", payload.name));
+            }
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存分组顺序失败: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// 分组上移 / 下移一位（`delta` = -1 / +1）；边界为 no-op。
+    fn step_group(&mut self, group_id: &str, delta: i32, cx: &mut Context<Self>) {
+        let ids = self.group_ids();
+        let Some(next) = nav_step(&ids, group_id, delta) else {
+            return;
+        };
+        let root = self.project_root();
+        match crate::services::nav_runtime::set_group_order(root.as_deref(), &next) {
+            Ok(()) => self.reload_nav_org(),
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存分组顺序失败: {e}")),
+        }
+        cx.notify();
+    }
+
+    /// 键盘重排：把选中连接在它的**主容器**内上移 / 下移一位（`delta` = -1 / +1）。
+    ///
+    /// 只作用于连接行——对象节点（库 / 表 / 列…）的顺序由后端内省给出，不能重排。
+    /// 容器取「主组解析」（与渲染同一套规则），无任何分组时就是「未分组」。
+    fn nav_step_selected(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let Some(conn_id) = self.database_nav.borrow().selected_key.clone() else {
+            return;
+        };
+        let Some(name) = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|c| c.id == conn_id)
+            .map(|c| c.name.clone())
+        else {
+            return;
+        };
+        let scope = {
+            let view = self.database_nav.borrow();
+            nav_primary_scope(&view.membership, &view.primary_group, &conn_id)
+                .unwrap_or_else(|| GROUP_UNGROUPED.to_string())
+        };
+        let current = self.container_order(&scope);
+        let Some(next) = nav_step(&current, &conn_id, delta) else {
+            return;
+        };
+        let root = self.project_root();
+        match crate::services::nav_runtime::set_container_order(root.as_deref(), &scope, &next) {
+            Ok(()) => {
+                self.reload_nav_org();
+                let how = if delta < 0 { "上移" } else { "下移" };
+                *self.shared.notice.borrow_mut() = Some(format!("已{how}「{name}」"));
+            }
+            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存排序失败: {e}")),
+        }
         cx.notify();
     }
 
@@ -9533,7 +9736,7 @@ impl ComponentPanel for RightSidebarPanel {
 mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
-    use super::{nav_draft_append, nav_reorder, nav_type_short_label, parse_nav_search};
+    use super::{nav_draft_append, nav_reorder, nav_step, nav_type_short_label, parse_nav_search};
     use database::model::NavSource;
 
     fn ids(v: &[&str]) -> Vec<String> {
@@ -9563,6 +9766,23 @@ mod tests {
         );
         // 空容器：首个成员落在末尾。
         assert_eq!(nav_reorder(&[], "z", None), Some(ids(&["z"])));
+    }
+
+    #[test]
+    fn nav_step_swaps_neighbours_and_stops_at_bounds() {
+        let base = ids(&["a", "b", "c"]);
+        // 中间项上下各一步。
+        assert_eq!(nav_step(&base, "b", -1), Some(ids(&["b", "a", "c"])));
+        assert_eq!(nav_step(&base, "b", 1), Some(ids(&["a", "c", "b"])));
+        // 末项上移 / 首项下移。
+        assert_eq!(nav_step(&base, "c", -1), Some(ids(&["a", "c", "b"])));
+        assert_eq!(nav_step(&base, "a", 1), Some(ids(&["b", "a", "c"])));
+        // 边界：首项上移 / 末项下移 → 无变化。
+        assert_eq!(nav_step(&base, "a", -1), None);
+        assert_eq!(nav_step(&base, "c", 1), None);
+        // 不在容器里（例如对象节点被过滤掉）→ 无变化。
+        assert_eq!(nav_step(&base, "z", 1), None);
+        assert_eq!(nav_step(&[], "z", 1), None);
     }
 
     #[test]

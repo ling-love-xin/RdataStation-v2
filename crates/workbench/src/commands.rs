@@ -6,6 +6,7 @@
 //! - `FocusNavSearch`：聚焦数据源导航搜索框（Ctrl+F，先切到数据源面板）；
 //! - `NavUp` / `NavDown` / `NavExpand` / `NavCollapse` / `NavOpenProperties`：
 //!   数据源导航树键盘导航（仅 `database-nav` key context 内生效）；
+//! - `NavReorderUp` / `NavReorderDown`：把选中连接在所属容器内上移 / 下移一位（`Alt+↑/↓`）。
 //! - 各 panel 切换、打开设置等命令由 Quick Open 与活动栏直接驱动（见 `view.rs`）。
 //!
 //! 按编码规范「事件、Action 与焦点」：动作只更新共享状态并 notify，Dock 同步在
@@ -26,9 +27,18 @@ actions!(
 );
 
 // 数据源导航（M4）局部动作：绑定在导航面板的 `key_context("database-nav")` 上。
+// `NavUp`/`NavDown` 移动**光标**，`NavReorderUp`/`NavReorderDown` 移动**条目**（换顺序）。
 actions!(
     database_nav,
-    [NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties]
+    [
+        NavUp,
+        NavDown,
+        NavExpand,
+        NavCollapse,
+        NavOpenProperties,
+        NavReorderUp,
+        NavReorderDown
+    ]
 );
 
 // 草稿箱（M5）局部动作：绑定在草稿箱面板的 `key_context("scratchpad")` 上。

@@ -662,7 +662,8 @@ table.grid td.null{color:var(--muted);font-style:italic;}
       <li>分组头 = 色条 + 名称 + <b>健康度（已连接/总数）</b> + 计数 + 全折叠</li>
       <li>「未分组」固定；支持手动排序（顺序落 <code>navigator_ungrouped_order</code>）</li>
       <li>归组入口：右键「移动到分组…」<b>或把连接行拖到分组头</b>；<b>标签</b>另可用行尾 <code>+</code> 快捷编辑（v7，hover 显）</li>
-      <li>排序：把连接行拖到同容器内另一行 = 插到该行之前（整容器重写 <code>0..n</code>）</li>
+      <li>排序：把连接行拖到同容器内另一行 = 插到该行之前（整容器重写 <code>0..n</code>）；<code>Alt+&#8593;/&#8595;</code> 同样移一位</li>
+      <li>分组排序：拖分组头到分组头 = 插到它之前（拖到「未分组」头 = 排到最后）；右键「上移 / 下移分组」</li>
       <li>名称 / 描述：右键「编辑分组…」，新建分组同样走表单（避免默认名再改名）</li>
       <li>落库：<code>connection_groups</code> + <code>connection_group_members</code>（含 <code>is_primary</code> 主组标记）+ <code>connection_tags</code> + <code>navigator_ungrouped_order</code></li>
     </ul>

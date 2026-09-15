@@ -109,6 +109,9 @@ fn run_app() {
                 KeyBinding::new("left", NavCollapse, Some("database-nav")),
                 KeyBinding::new("f4", NavOpenProperties, Some("database-nav")),
                 KeyBinding::new("enter", NavOpenProperties, Some("database-nav")),
+                // 条目重排（对齐 VS Code 的 Alt+↑/↓）：只改顺序，不改光标位置。
+                KeyBinding::new("alt-up", NavReorderUp, Some("database-nav")),
+                KeyBinding::new("alt-down", NavReorderDown, Some("database-nav")),
                 // M5 草稿箱：全选 / 重命名 / 删除 / 取消编辑 / 树内导航（仅当焦点在草稿箱面板内时生效）。
                 KeyBinding::new("ctrl-a", ScratchpadSelectAll, Some("scratchpad")),
                 KeyBinding::new("f2", ScratchpadRename, Some("scratchpad")),
