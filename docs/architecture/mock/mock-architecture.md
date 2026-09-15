@@ -118,11 +118,12 @@ ImportSchemaInput{ conn_id, database, schema, tables, connection_type }
 | 出口 | 目标 | 语义 | 生命周期 |
 | --- | --- | --- | --- |
 | `export(Csv/Parquet/Xlsx)` | 调用方指定路径 | DuckDB `COPY`（Xlsx 经 JSON 中转） | 文件 |
-| `export(SqlInsert)` | 调用方指定路径 | 逐行 `INSERT INTO "<目标表>" ...` 文本（`insert_statements` 同一份实现） | 文件（供外部执行） |
+| `export(SqlInsert)` | 调用方指定路径 | 逐行 `INSERT INTO "<目标表>" ...` 文本（`insert_statements`） | 文件（供外部执行） |
 | `export(Table)` | 内存库 | `CREATE TABLE AS SELECT`，并 DROP 临时表（**仅限内存库**，不用于分析库） | 表 |
 | `save_to_scratchpad` | `{目录}/mock_{base}_{时间戳}.{ext}` | 目录由调用方给（v2 = `{项目}/mock/`）；返回落盘路径 | 项目文件 |
 | `persist_as_asset` | 内存库 | CTAS + DROP 临时表，返回 `(表名, 行数, 列数)`（资源注册用，不经分析库） | 表（资源注册用） |
-| `insert_statements`（装配层用） | 返回 INSERT 文本 | 与 `export(SqlInsert)` **同一份实现**，但不落地文件；装配层拿去在分析库连接上 `execute_batch` | 内存字符串 |
+| `insert_statements`（仅导出脚本用） | 返回 INSERT 文本 | **落库已不再用它**（见 `write_temp_table_to_database`）；保留给「导出 SQL 脚本」那个出口 | 内存字符串 |
+| `write_temp_table_to_database`（落库路径） | 目标 DuckDB 文件库 | `ATTACH` 目标库 → （建表）→ `INSERT ... SELECT` → `DETACH`；数据全程在 DuckDB 内部流动 | 表 |
 
 > `insert_statements` 要求**调用方不持有内存库连接锁**：内存库是 `Mutex<Connection>`，同线程重入加锁会死锁
 > （本轮真实撞到过一次：`export(SqlInsert)` 先取 `conn` 再调它）。因此 `export` 的 SqlInsert 分支提前返回、不取锁。
@@ -142,8 +143,8 @@ ImportSchemaInput{ conn_id, database, schema, tables, connection_type }
 
 | 出口 | 步骤（均在工作线程上执行） |
 | --- | --- |
-| 持久化为分析库表 | 任务 `Persist`：查既有表（同名 → `Err` 含「已存在」，引导追加）→ `CREATE TABLE`（列名走 `sanitize_identifier`，与临时表列名同一算法）→ `insert_statements` 文本 `execute_batch` → 失败回滚建表 → 返回表内行数 |
-| 追加到既有表 | 任务 `AppendTo(表)`：生成 + 校验列 + `insert_statements` 在同一个任务里完成（阶段先 `Generating` 后 `Writing`） |
+| 持久化为分析库表 | 任务 `Persist`：查既有表（同名 → `Err` 含「已存在」，引导追加）→ 直写建表 + 写行（`ATTACH` → `CREATE TABLE`（列名走 `sanitize_identifier`，与临时表列名同一算法）→ `INSERT ... SELECT` → `DETACH`；插入失败只回滚**本次刚建的表**）→ 返回表内行数 |
+| 追加到既有表 | 任务 `AppendTo(表)`：生成 + 校验列 + 直写追加在同一次任务里完成（阶段先 `Generating` 后 `Writing`） |
 | 保存到草稿箱 | 任务 `Scratchpad`：项目根由宿主在**提交前**解析（工作线程碰不了 `Shared`）→ `save_to_scratchpad`（时间戳命名）→ 返回文件路径 |
 | 另存为 | 系统保存对话框（`prompt_for_new_path`，异步回传）→ 任务 `Export`：`MockEngine::export` |
 
@@ -234,6 +235,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D18 | 字段表与预览落**中央 tab**（方案①） | 右 Dock 280px 且不可拖拽调宽，宽表与字段卡片放不下；中央 tab 与编辑器同构（单一权威状态） | 全塞右 Dock（v1 是 380px 可拖拽宽栏，v2 不具备） |
 | D19 | 生成器切换走**分类子菜单**，参数在列编辑对话框 | 生成器身份与参数行必须一致；同一对话框内改生成器会让参数行失效（要么重建、要么错位） | 对话框内提供生成器下拉（参数行与生成器不同步） |
 | D24 | 分类子菜单**保留**，另加「搜索生成器」对话框（`List` + `ListState`） | 两条路径对应两种心智：知道「属于哪类」→ 翻菜单；只记得名字 → 搜索。搜索同步过滤（137 项全在内存）无 loading 闪烁；搜索框 / 虚拟化 / 上下键 / 空态全是组件的 | 只留子菜单（137 项翻找慢）；把搜索框塞进弹出菜单（菜单只有 item，无输入控件）；自搓输入框 + 滚动列表 |
+| D25 | 落库改**跨库直写**（`ATTACH` + `INSERT SELECT`），不再用 INSERT 文本 | 数据全程在 DuckDB 内部流动；大行数下没有「读全量 → 拼文本 → 再解析」两跳与对应的内存峰值 | 继续文本中转；把临时表改成文件表（与「生成是试算」语义冲突） |
+| D26 | 回滚**只删本次 `Create` 刚建的表**；追加失败不回滚 | 同名表已存在时建表会失败，此时删表就是删别人的数据（本项目实际存在这个误删风险，已在实现里绕开并加测试锁住） | 「失败就 DROP 目标表」（会把既有数据删掉）；不回滚（留下半成品空表） |
 | D20 | 生成 / 追加 / **三个出口**走**后台工作线程 + 进度 + 取消**（`services::mock_jobs`） | 生成是重活，UI 线程 `block_on` 会冻结界面且无法中断；`MockHost` 非 Send，不能在视图里直接 `spawn` | 视图内 `cx.background_spawn`（要求宿主 Send）；不做进度（大行数只能干等） |
 | D21 | 进度用**定时泵（120ms）+ 宿主槽**，而非 render 轮询 | 任务进行中没有其他事件触发重绘，不主动唤醒就看不到进度；轮询频率低不抢主线程 | render 内轮询（永远不会被调到）；GPUI 后台执行器直接跑生成（阻塞后台池线程） |
 | D22 | 任务收尾「清进度 + 写结果」在**同一把锁下一次性**完成 | UI 侧不可能观察到「既无进度也无结果」的空洞，避免误报「工作线程已退出」 | 两个独立原子量（存在观测窗口） |
@@ -292,7 +295,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | --- | --- | --- | --- |
 | I1 | 临时表命名前缀与 engine 的 `TempTableManager` 约定不一致：注册的是 `temp_mock_*`，而管理器按 `tmp_m_*` 前缀识别（TTL/计数只处理 `tmp_i_`） | 「无 TTL / 项目关闭清理」目前**只在注释里**，没有实际执行路径 | engine 侧提供按来源枚举的清理入口（`drop_by_source(Mock)`），mock 侧保持注册 |
 | I2 | 临时表建在 engine 的**进程级内存单例**（`GLOBAL_DUCKDB`） | 切换项目不会清掉 `temp_mock_*`，与「窗口 = 项目」隔离原则存在张力 | 由 project 会话切换时调用 I1 的清理入口，或把生成目标改为项目分析库 |
-| I3 | 分析库写入仍是「INSERT 文本 → `execute_batch`」 | 大行数时多一次全量序列化与解析（已去除临时文件中转）；错误定位跨两层（mock 的文本生成 / 分析库的执行） | mock crate 增加「生成 → 写指定连接」接口（或改 `ATTACH` 直写） |
+| I3 | ~~分析库写入是「INSERT 文本 → `execute_batch`」~~ | 已解决：改 **`ATTACH` 跨库直写**（`MockEngine::write_temp_table_to_database`），数据不经 Rust 字符串；回滚只删本次刚建的表（同名既有表不受影响） | —— |
 | I4 | 模板/用户模板与生成任务已落 `project.db`，但**无 UI 入口**且无真实 SQLite 往返测试（仅序列化测试） | 能力在代码里，用户在界面上看不到 | Phase C/D 接面板；补 `MockGenerationStore` 的 SQLite 往返测试 |
 | I5 | ~~`mock_view.rs` 为占位文件~~ | 已落地：面板与详情 tab 都在 `crates/mock/src/mock_view.rs`；`{commands,model,generator}.rs` 仍是脚手架占位 | 这三个占位文件按全项目统一政策处理（命令层已退役） |
 | I6 | 文档称「生成器按依赖表达式计算取值」，实际只做拓扑排序 | 用户可能误以为支持 `price * quantity` 计算 | Phase C 明确：要么实现表达式解释，要么把 `dependency` 降级为「顺序提示」 |
@@ -306,8 +309,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 | --- | --- | --- | --- |
 | 单元 | `crates/mock/src/*.rs`（`#[cfg(test)]`） | 65 | 表名净化、DDL 生成、`generate_cell` 各变体、列名规则表、类型串解析、序列化往返、模板自检、生成器目录自检（3：137 覆盖 / 标签与默认 / 分类往返） |
 | 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 45（17 纯逻辑 + 28 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；**生成器搜索**（空查=全量 / 标签前缀优先 / 多词 AND / 大小写不敏感 / 分类名可搜 / 无命中为空）；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；三个对话框可开（导入 / 列编辑 / 生成器搜索）；生成器搜索过滤→确认写回；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒；**出口后台化**：落库 / 导出 / 草稿箱的阶段与结果、完成后预览保留、出口不可取消、无生成结果时拒绝提交 |
-| 集成（引擎） | `crates/mock/tests/mock_engine_tests.rs` | 26 | 公开 API 端到端：生成 / 预览 / 映射 / 依赖 / 取消标志 / 类型 / 五种导出 / 持久化 / 草稿目录 / 模板 / 场景 |
-| 集成（装配） | `crates/workbench/tests/mock_generator.rs` | 10 | 生成不写分析库；新建 → 同名拒绝（不覆盖）；追加接续主键（`MAX(id)=100` 且无重复）；追加目标不存在 / 缺列的中文错误；CSV 导出表头；草稿箱无项目拒绝 + 有项目落 `{项目}/mock/`；连接默认库 / schema 预填；类型串映射 |
+| 集成（引擎） | `crates/mock/tests/mock_engine_tests.rs` | 30 | 公开 API 端到端：生成 / 预览 / 映射 / 依赖 / 取消标志 / 类型 / 五种导出 / 持久化 / 草稿目录 / 模板 / 场景；**跨库直写**：建表（含中文列名）/ 追加 / 同名建表不删既有数据 / 失败回滚 + 解挂 |
+| 集成（装配） | `crates/workbench/tests/mock_generator.rs` | 12 | 生成不写分析库；新建 → 同名拒绝（不覆盖）；追加接续主键（`MAX(id)=100` 且无重复）；追加目标不存在 / 缺列的中文错误；**大行数一次落库（20k）**；**目标表多出的列走默认值**；CSV 导出表头；草稿箱无项目拒绝 + 有项目落 `{项目}/mock/`；连接默认库 / schema 预填；类型串映射 |
 | 集成（后台任务） | `crates/workbench/tests/mock_jobs.rs` + `mock_job_cancel.rs` | 7 + 1 | 提交即返回 + 进度可读 + 结果一次性取回 + 生成不写库；并发提交被拒且结束后可恢复；追加任务回表内总行数；**出口**：`Persist` 建表回行数 / 同名表回可读错误不覆盖 / `Export` 写出 CSV（表头 + 行数）/ `Scratchpad` 无项目报错 + 有项目落 `{项目}/mock/`；**取消**在批次边界中断并回可读错误（独立进程：`cancel` 是进程级标志） |
 
 回归价值示例：`export_table_creates_named_table_and_drops_temp` 锁 I0b 那个 v1 遗留缺陷；
@@ -322,6 +325,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 设计决策 / 概念 | 代码位置 |
 | --- | --- |
 | I3 SQL 构造器纪律 | `crates/mock/src/engine.rs`（模块头注释 + 全部 DDL/DML/DQL 调用点） |
+| D25/D26 跨库直写与回滚 | `crates/mock/src/engine.rs`（`write_temp_table_to_database` / `TempTableWriteMode`）+ `crates/engine/src/sql/builder.rs`（`build_attach_database` / `build_detach_database` / `build_create_table_in` / `build_drop_table_in` / `build_insert_select`） |
 | D1/D2 内存临时表与命名 | `crates/mock/src/engine.rs`（`TEMP_MOCK_PREFIX` / `get_db` / `sanitize_table_name`） |
 | 生成批次与取消 | `crates/mock/src/engine.rs`（`BATCH_SIZE` / `CANCEL_FLAG` / `generate_with_progress`） |
 | 生成器实现（137 变体） | `crates/mock/src/generators.rs`（`generate_cell`） |

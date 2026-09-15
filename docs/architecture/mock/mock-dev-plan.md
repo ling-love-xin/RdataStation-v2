@@ -114,6 +114,7 @@
 | T20 | 出口完成后预览仍可用 | 落库 / 导出只读临时表 → `MockGenInfo` 不作废（可接着导另一个格式） | ✅ 视图测试 + 任务测试 |
 | T21 | 出口不可取消 | 出口任务进行中点取消：不转发给宿主、按钮不渲染 | ✅ 视图测试（`rec.cancels == 0`） |
 | T22 | 生成器搜索 | 空查＝全量 137；标签前缀优先于标签包含；多词是 AND；大小写不敏感；确认写回该列且置信度转 `manual`；无命中为空 | ✅ 视图测试（5 纯逻辑 + 2 窗口） |
+| T23 | 落库跨库直写 | 建表 + 写行一次 `ATTACH` 完成；中文列名、20k 行、目标表多列均正确；**同名建表不删既有数据**；插入失败回滚刚建的表且已解挂 | ✅ 引擎测试 4 项 + 装配测试 2 项 |
 
 ## 5. 风险
 
@@ -150,3 +151,4 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-15 | Phase B5（本轮） | **生成 / 追加转后台任务**：`services::mock_jobs`（工作线程 + 进度槽 + 取消）+ 面板进度条 / 取消按钮 + 120ms 定时泵；`generate_at_with_progress` 接引擎批次回调 | 99 单元（含 34 视图）+ 26 引擎集成 + 10 装配 + 4 任务集成全过 |
 | 2026-09-16 | Phase B5（第二段 · 本轮） | **三个出口也转后台任务**：`MockJobKind` 加 `Persist` / `Export` / `Scratchpad`（把 `MockGenInfo` 带进任务）+ `MockJobPhase`（阶段：生成 / 写入 / 导出）+ `JobPaths`（分析库与项目根在 UI 线程解析）；视图侧出口改走 `start_job`、出口任务不渲染取消、完成后**不作废旧预览**；装配层删掉三个已无人调用的同步包装 | 103 单元（含 38 视图）+ 26 引擎集成 + 10 装配 + 8 任务集成全过 |
 | 2026-09-16 | Phase B8（本轮） | **生成器搜索**：`search_generators`（标签 / 名称 / 分类，多词 AND，前缀优先排序）+ `GeneratorSearchDelegate`（`ListDelegate`）+ `MockPanel::open_generator_search`（`List` 自带搜索框 / 虚拟化 / 空态）；字段行菜单首项作入口，选择后写回该列；固定「不在 update 里 read 自己」的重入问题（`current` 由 `&mut self` 算出传入） | 110 单元（含 45 视图）+ 26 引擎集成 + 10 装配 + 8 任务集成全过 |
+| 2026-09-16 | Phase E（本轮 · 落库直写） | **去文本中转**：engine 新增 `build_attach_database` / `build_detach_database` / `build_create_table_in` / `build_drop_table_in` / `build_insert_select` + `QualifiedTable`；mock 新增 `write_temp_table_to_database`（`ATTACH` → 建表 → `INSERT SELECT` → `DETACH`，失败只回滚本次刚建的表）；装配层 `persist_table_at` / `append_table_at` 改走直写；**并修掉一个潜在的误删风险**（回滚分支原本会把同名既有表 DROP 掉，现已加测试锁住） | 110 单元 + **30 引擎集成** + **12 装配** + 8 任务集成全过；engine 库测试 305 项全过 |

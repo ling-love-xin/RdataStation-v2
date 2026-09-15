@@ -150,6 +150,57 @@ fn append_continues_primary_key_sequence() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 大行数一次落库（直写路径：数据不经 INSERT 文本中转）。
+#[test]
+fn persist_writes_many_rows_in_one_go() {
+    let dir = temp_dir("persist_many");
+    let db = dir.join("analytics.duckdb");
+    let draft = draft("t_many", 20_000);
+
+    let info = generate_at(&db, &draft, None).expect("generate");
+    let rows = persist_table_at(&db, &draft, &info).expect("persist");
+    assert_eq!(rows, 20_000);
+    assert_eq!(count_rows(&db, "t_many"), 20_000);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 目标表多出草稿里没有的列时：只写草稿的列，多出的列走默认值（旧文本路径同一语义）。
+#[test]
+fn append_leaves_extra_target_columns_at_default() {
+    let dir = temp_dir("append_extra");
+    let db = dir.join("analytics.duckdb");
+    let draft = draft("t_extra", 20);
+
+    // 先建一张「多一列」的目标表（note 不在草稿里）
+    {
+        let conn = duckdb::Connection::open(&db).expect("open duckdb");
+        conn.execute_batch(
+            "CREATE TABLE t_extra (id INTEGER, amount INTEGER, status VARCHAR, note VARCHAR);",
+        )
+        .expect("create target table");
+        conn.execute_batch(
+            "INSERT INTO t_extra (id, amount, status, note) VALUES (0, 0, 'seed', 'x');",
+        )
+        .expect("seed row");
+    }
+
+    let info = generate_at(&db, &draft, Some("t_extra")).expect("regenerate for append");
+    let total = append_table_at(&db, &draft, &info, "t_extra").expect("append");
+    assert_eq!(total, 21, "种子行 1 + 追加 20");
+
+    let conn = duckdb::Connection::open(&db).expect("open duckdb");
+    let nulls: i64 = conn
+        .query_row("SELECT COUNT(*) FROM t_extra WHERE note IS NULL", [], |r| {
+            r.get(0)
+        })
+        .expect("count null notes");
+    assert_eq!(nulls, 20, "多出的列应走默认值（NULL）");
+    drop(conn);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn append_to_unknown_table_errors() {
     let dir = temp_dir("append_missing");

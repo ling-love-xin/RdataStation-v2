@@ -24,6 +24,7 @@ pub mod schema_map;
 pub mod templates;
 
 pub use engine::MockEngine;
+pub use engine::TempTableWriteMode;
 pub use engine::sanitize_identifier;
 pub use error::{MockError, MockResult};
 pub use generator_catalog::{

@@ -16,6 +16,7 @@
 | 生成与写入分离 | 「生成」只产内存临时表 `temp_mock_*` + 预览；落库 / 落盘只能由出口按钮触发 |
 | 元数据驱动 | 输入只有「列名 + 类型 + 可空/主键」三件事，不需要真实数据样本；未知类型一律退到可读默认值 |
 | 只进不出 | 目标只有分析引擎（内存临时表 / `analytics.duckdb`）与项目文件；没有任何写入源库的代码路径 |
+| 落库一次直写 | 落库/追加走 `ATTACH` 跨库直写（`INSERT ... SELECT`），数据不经 Rust 字符串；建表失败只回滚本次刚建的表 |
 | 确定性可复现 | `seed` 固定即同序列（`StdRng`），同配置两次生成结果逐值相同（已测） |
 | 列名智能映射 | 四级优先：精确名 → 前后缀 → 模糊子串 → 类型兜底；置信度写回 `high` / `low` / `manual` |
 | 后台任务（生成 / 出口） | 五种任务都在工作线程上跑：生成 / 追加 / 落库 / 导出 / 草稿箱；面板显进度条与阶段文案（生成可取消，出口为不定量进度） |
@@ -93,7 +94,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（DuckDB 静态库链接耗内存），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 110 单元（含 45 视图）+ 26 集成
+cargo test  -p rds-mock -j 2                                   # 110 单元（含 45 视图）+ 30 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 10 项
 cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 7 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
@@ -104,9 +105,9 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 110 单元（17 纯逻辑 + 28 窗口 + 65 其他）+ 26 集成全过 |
+| `cargo test -p rds-mock` | 110 单元（17 纯逻辑 + 28 窗口 + 65 其他）+ 30 集成全过 |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
-| `cargo test -p rds-workbench` | 全绿（含 10 装配 + 8 任务测试） |
+| `cargo test -p rds-workbench` | 全绿（含 12 装配 + 8 任务测试） |
 
 > 存量欠债（非本模块）：`crates/engine/tests/transaction_affinity.rs` 调用了不存在的 `Value::as_i64()`
 > （实际是 `as_int()`），使 `cargo check --workspace --all-targets` 在该 target 报错。
@@ -130,7 +131,7 @@ v1 素材（暂存区，删除前请先提炼）：`v1/docs/frontend/mock/mock-d
 | --- | --- | --- | --- |
 | 1 | ~~生成走后台任务 + 进度 + 取消~~ | 十万行不再卡界面 | ✅ 已完成（`services::mock_jobs`；取消在批次边界） |
 | 2 | ~~出口也纳入后台任务（Persist / Export）~~ | 落库与导出不再阻塞界面；完成后预览仍可用 | ✅ 本轮完成（架构 D23；出口不可取消：DuckDB / 文件系统无中断点） |
-| 3 | 落库**去文本中转**（`ATTACH` 直写或「生成 → 写指定连接」接口） | 省一次全量序列化；错误定位收在一处 | 现在是 INSERT 文本（§9-I3） |
+| 3 | ~~落库去文本中转（`ATTACH` 直写）~~ | 省一次全量序列化与解析；错误定位收在一处 | ✅ 本轮完成（`MockEngine::write_temp_table_to_database` + engine 的 `build_attach_database` / `build_insert_select`；架构 D25/D26） |
 | 4 | ~~生成器搜索~~ | 137 项下按名称 / 标签定位 | ✅ 本轮完成（`search_generators` + `List`/`ListState` 搜索对话框，架构 D24） |
 | 5 | **复杂参数编辑入口**（集合 / 加权） | 约束类生成器从「不可用」变可用 | 面板只读提示（§9-I8） |
 | 6 | **临时表清理** | 前缀与 `TempTableManager` 约定不一致，TTL/清理实际未生效 | §9-I1 / I2 |

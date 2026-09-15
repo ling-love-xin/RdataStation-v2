@@ -24,15 +24,44 @@ fn to_inner_dialect(dialect: SqlDialect) -> Dialect {
 }
 
 fn make_table_ref(name: &str) -> TableRef {
+    qualified_table_ref(None, None, name)
+}
+
+/// 三段式表名（catalog / schema / table）。
+///
+/// 跨库写入用：把目标 DuckDB 文件库 `ATTACH ... AS <catalog>` 后，
+/// 表以 `<catalog>.<schema>.<table>` 定位（见 [`build_insert_select`]）。
+/// 限定名必须是**三段都写**的形式，不要用字符串拼 `a.b.c` 当单名（会被当成一个标识符）。
+#[derive(Debug, Clone, Copy)]
+pub struct QualifiedTable<'a> {
+    /// `ATTACH ... AS <catalog>` 里的别名
+    pub catalog: &'a str,
+    /// 目标库内的 schema（DuckDB 文件库是 `main`）
+    pub schema: &'a str,
+    /// 表名
+    pub table: &'a str,
+}
+
+fn qualified_table_ref(catalog: Option<&str>, schema: Option<&str>, name: &str) -> TableRef {
+    // 注意：sqlglot 只给**表名**加引号，catalog / schema 原样输出，
+    // 所以这两个只能传安全标识符（本项目固定用 `rds_mock_sink` + `main`）。
     TableRef {
-        catalog: None,
-        schema: None,
+        catalog: catalog.map(str::to_string),
+        schema: schema.map(str::to_string),
         name: name.to_string(),
         alias: None,
         name_quote_style: QuoteStyle::DoubleQuote,
         // 0.10 新增：别名引号风格。此处无别名，取默认（不加引号）
         alias_quote_style: QuoteStyle::None,
     }
+}
+
+/// 标识符加双引号（内部的 `"` 翻倍）。
+///
+/// 列名走 `mock::sanitize_identifier`，允许非 ASCII（中文列名）与数字开头，
+/// 这类名字**不加引号在 SQL 里解析不过**（临时表建表时也是带引号的）。
+fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 fn parse_data_type(dt: &str) -> DataType {
@@ -84,8 +113,9 @@ fn extract_two_params(s: &str) -> (Option<u32>, Option<u32>) {
     (precision, scale)
 }
 
-pub fn build_create_table(table: &str, columns: &[ColumnDefInfo], if_not_exists: bool) -> String {
-    let col_defs: Vec<SqlglotColumnDef> = columns
+/// 列定义转换（`build_create_table` 与跨库版本共用同一份）。
+fn column_defs(columns: &[ColumnDefInfo]) -> Vec<SqlglotColumnDef> {
+    columns
         .iter()
         .map(|c| SqlglotColumnDef {
             name: c.name.clone(),
@@ -98,27 +128,104 @@ pub fn build_create_table(table: &str, columns: &[ColumnDefInfo], if_not_exists:
             collation: None,
             comment: None,
         })
-        .collect();
+        .collect()
+}
 
+fn create_table_sql(
+    table: TableRef,
+    columns: Vec<SqlglotColumnDef>,
+    if_not_exists: bool,
+) -> String {
     let stmt = Statement::CreateTable(CreateTableStatement {
         comments: vec![],
         if_not_exists,
         temporary: false,
-        table: make_table_ref(table),
-        columns: col_defs,
+        table,
+        columns,
         constraints: vec![],
         as_select: None,
     });
+    generate(&stmt, Dialect::DuckDb)
+}
 
+pub fn build_create_table(table: &str, columns: &[ColumnDefInfo], if_not_exists: bool) -> String {
+    create_table_sql(make_table_ref(table), column_defs(columns), if_not_exists)
+}
+
+/// 跨库版本：`CREATE TABLE "<catalog>"."<schema>"."<table>" (...)`（建的是 `ATTACH` 进来的文件库）。
+pub fn build_create_table_in(
+    target: &QualifiedTable,
+    columns: &[ColumnDefInfo],
+    if_not_exists: bool,
+) -> String {
+    create_table_sql(
+        qualified_table_ref(Some(target.catalog), Some(target.schema), target.table),
+        column_defs(columns),
+        if_not_exists,
+    )
+}
+
+fn drop_table_sql(table: TableRef, if_exists: bool) -> String {
+    let stmt = Statement::DropTable(DropTableStatement {
+        comments: vec![],
+        if_exists,
+        table,
+        cascade: false,
+    });
     generate(&stmt, Dialect::DuckDb)
 }
 
 pub fn build_drop_table(table: &str, if_exists: bool) -> String {
-    let stmt = Statement::DropTable(DropTableStatement {
-        comments: vec![],
+    drop_table_sql(make_table_ref(table), if_exists)
+}
+
+/// 跨库版本：删 `ATTACH` 进来的文件库里的表（写入失败时回滚刚建的表，见 `mock::write_temp_table_to_database`）。
+pub fn build_drop_table_in(target: &QualifiedTable, if_exists: bool) -> String {
+    drop_table_sql(
+        qualified_table_ref(Some(target.catalog), Some(target.schema), target.table),
         if_exists,
-        table: make_table_ref(table),
-        cascade: false,
+    )
+}
+
+/// 生成 `ATTACH '<path>' AS "<alias>"`（DuckDB 专有）。
+///
+/// sqlglot 的 AST 里没有 `ATTACH`（与 `COPY` 同例），所以这里手拼：
+/// 路径按 SQL 字面量规则转义单引号（Windows 反斜杠在 DuckDB 单引号串里是字面量，不需转义）。
+pub fn build_attach_database(path: &str, alias: &str) -> String {
+    format!(
+        "ATTACH '{}' AS {}",
+        path.replace('\'', "''"),
+        quote_identifier(alias)
+    )
+}
+
+/// 生成 `DETACH "<alias>"`（与 [`build_attach_database`] 成对）。
+pub fn build_detach_database(alias: &str) -> String {
+    format!("DETACH {}", quote_identifier(alias))
+}
+
+/// 生成 `INSERT INTO "<catalog>"."<schema>"."<table>" (<cols>) SELECT <cols> FROM <source>`。
+///
+/// 用于**跨库直写**：数据全程在 DuckDB 内部流动，不经过 Rust 字符串（对比 `INSERT ... VALUES` 文本中转）。
+/// 列清单同时出现在插入列与选择列上：目标表多出的列走默认值，与旧文本路径语义一致。
+pub fn build_insert_select(
+    target: &QualifiedTable,
+    source_table: &str,
+    columns: &[String],
+) -> String {
+    let quoted: Vec<String> = columns.iter().map(|c| quote_identifier(c)).collect();
+    // 先建 SELECT（它借用 `quoted`），再把 `quoted` 移进插入列清单
+    let query = {
+        let refs: Vec<&str> = quoted.iter().map(String::as_str).collect();
+        select(&refs).from(source_table).build()
+    };
+    let stmt = Statement::Insert(InsertStatement {
+        comments: vec![],
+        table: qualified_table_ref(Some(target.catalog), Some(target.schema), target.table),
+        columns: quoted,
+        source: InsertSource::Query(Box::new(query)),
+        on_conflict: None,
+        returning: vec![],
     });
     generate(&stmt, Dialect::DuckDb)
 }
@@ -258,6 +365,58 @@ mod tests {
                 &[vec!["1".to_string(), "Alice".to_string()]]
             ),
             "INSERT INTO \"users\" (id, name) VALUES ('1', 'Alice')"
+        );
+    }
+
+    /// 跳库直写的四个构造器（ATTACH / DETACH / 限定名建表与删表 / INSERT SELECT）。
+    ///
+    /// 列名与表名一律带引号：`sanitize_identifier` 允许中文列名与数字开头，
+    /// 不加引号在 SQL 里解析不过。
+    #[test]
+    fn test_cross_database_sql_is_pinned() {
+        let target = QualifiedTable {
+            catalog: "rds_mock_sink",
+            schema: "main",
+            table: "orders",
+        };
+        assert_eq!(
+            build_attach_database("D:\\data\\analytics.duckdb", "rds_mock_sink"),
+            "ATTACH 'D:\\data\\analytics.duckdb' AS \"rds_mock_sink\""
+        );
+        assert_eq!(
+            build_detach_database("rds_mock_sink"),
+            "DETACH \"rds_mock_sink\""
+        );
+        let cols = vec![ColumnDefInfo {
+            name: "id".to_string(),
+            data_type: "INT".to_string(),
+            unique: false,
+            nullable: true,
+        }];
+        assert_eq!(
+            build_create_table_in(&target, &cols, false),
+            "CREATE TABLE rds_mock_sink.main.\"orders\" (id INT)"
+        );
+        assert_eq!(
+            build_drop_table_in(&target, true),
+            "DROP TABLE IF EXISTS rds_mock_sink.main.\"orders\""
+        );
+        assert_eq!(
+            build_insert_select(
+                &target,
+                "temp_mock_orders",
+                &["id".to_string(), "金额".to_string()]
+            ),
+            "INSERT INTO rds_mock_sink.main.\"orders\" (\"id\", \"金额\") SELECT \"id\", \"金额\" FROM temp_mock_orders"
+        );
+    }
+
+    /// 路径里的单引号按 SQL 字面量规则翻倍（否则会拼出语法错的语句）。
+    #[test]
+    fn test_attach_escapes_single_quote_in_path() {
+        assert_eq!(
+            build_attach_database("/tmp/o'brien/analytics.duckdb", "sink"),
+            "ATTACH '/tmp/o''brien/analytics.duckdb' AS \"sink\""
         );
     }
 

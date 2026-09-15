@@ -108,6 +108,49 @@ impl SqlEngine {
         builder::build_drop_table(table, if_exists)
     }
 
+    /// 生成跨库版本的 `CREATE TABLE`（目标为 `ATTACH` 进来的文件库，见 [`QualifiedTable`]）
+    ///
+    /// 参数：
+    /// - `target`: 三段式表名（`catalog` = `ATTACH ... AS` 的别名）
+    /// - `columns`: 列定义列表
+    /// - `if_not_exists`: 是否添加 IF NOT EXISTS
+    pub fn build_create_table_in(
+        target: &builder::QualifiedTable<'_>,
+        columns: &[ColumnDefInfo],
+        if_not_exists: bool,
+    ) -> String {
+        builder::build_create_table_in(target, columns, if_not_exists)
+    }
+
+    /// 生成跨库版本的 `DROP TABLE`（写入失败时回滚刚建的表）
+    pub fn build_drop_table_in(target: &builder::QualifiedTable<'_>, if_exists: bool) -> String {
+        builder::build_drop_table_in(target, if_exists)
+    }
+
+    /// 生成 `ATTACH '<path>' AS "<alias>"`（DuckDB 专有，sqlglot AST 无此语句）
+    pub fn build_attach_database(path: &str, alias: &str) -> String {
+        builder::build_attach_database(path, alias)
+    }
+
+    /// 生成 `DETACH "<alias>"`
+    pub fn build_detach_database(alias: &str) -> String {
+        builder::build_detach_database(alias)
+    }
+
+    /// 生成 `INSERT INTO <target> (<cols>) SELECT <cols> FROM <source>`（跨库直写，不走 VALUES 文本）
+    ///
+    /// 参数：
+    /// - `target`: 三段式表名（`catalog` = `ATTACH ... AS` 的别名）
+    /// - `source_table`: 源**表名**（与 [`Self::build_create_table_as_select`] 同一约定）
+    /// - `columns`: 列清单（插入列与选择列共用；目标表多出的列走默认值）
+    pub fn build_insert_select(
+        target: &builder::QualifiedTable<'_>,
+        source_table: &str,
+        columns: &[String],
+    ) -> String {
+        builder::build_insert_select(target, source_table, columns)
+    }
+
     /// 生成 CREATE TABLE AS SELECT DDL
     ///
     /// 参数：

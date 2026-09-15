@@ -38,7 +38,7 @@
 - **生成**（`MockEngine::generate`）只落 `temp_mock_{表名}` **内存临时表**（engine 的进程级内存 DuckDB），
   并注册到 engine 的临时表管理器；预览随结果返回；
 - **写入**只能由显式出口触发：落盘文件（CSV·Parquet·Xlsx·SQL INSERT）/ 分析库新建表 / 追加到既有表；
-- crate 内**没有**任何写源数据库的代码路径；`insert_statements` 只产 SQL 文本，执行方是装配层（宿主）。
+- crate 内**没有**任何写源数据库的代码路径；落库只写「分析引擎 / 项目文件」，且跨库直写（`write_temp_table_to_database`：`ATTACH` 目标库 → `INSERT SELECT`）；`insert_statements` 只产 SQL 文本，供导出脚本用。
 
 ### 4. SQL 全量走构造器
 
@@ -80,7 +80,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | --- | --- |
 | `src/lib.rs` | crate 入口与 re-export（含依赖方向声明） |
 | `src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`(13) / `GeneratorConfig`(137) / `Locale`(13) / 导出与持久化模型 / 依赖模型 |
-| `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 进度回调 + 取消）/ 预览 / 5 种导出 / `insert_statements`（INSERT 文本，与导出共用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / 场景生成 / `sanitize_identifier` |
+| `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 进度回调 + 取消）/ 预览 / 5 种导出 / **`write_temp_table_to_database`（跨库直写落库：ATTACH → INSERT SELECT）** / `insert_statements`（INSERT 文本，仅导出脚本用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / 场景生成 / `sanitize_identifier` |
 | `src/generators.rs` | `generate_cell`：137 变体 → 值（`fake` crate，接入 `StdRng`） |
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
@@ -106,7 +106,8 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | --- | --- |
 | 生成（分批 + 唯一列 + 空值率 + 进度回调 + 取消）、预览（Arrow 前 10 行） | —— |
 | **后台任务**：五种任务（生成 / 追加 / 落库 / 导出 / 草稿箱）同走工作线程；生成类有批次进度 + 取消，出口类报阶段 + 不定量进度 | 出口不可取消（DuckDB / 文件系统内无中断点，见架构 D23） |
-| 4 种导出（CSV / Parquet / Xlsx / SQL INSERT）+ `insert_statements` 文本 | 导出大行数时的流式写出（现在是全量文本 + `execute_batch`） |
+| 4 种导出（CSV / Parquet / Xlsx / SQL INSERT）+ `insert_statements` 文本 | 导出大行数时的流式写出（现在是全量文本） |
+| **落库跨库直写**（`ATTACH` + `INSERT SELECT`，数据不经 Rust 字符串） | 写入期间内存库连接持有目标文件锁（导出类任务不可取消，见架构 D23） |
 | 列映射（≈91 条规则 + 类型兜底 + 置信度三态） | —— |
 | 生成器目录（137 变体分类 / 标签 / 参数规格，穷尽派生） | 复杂参数（`values` / `choices`）的外置编辑入口 |
 | **生成器搜索**：分类子菜单 + 搜索对话框（中文标签 / 名称 / 分类，多词 AND，`List` 自带搜索框与空态） | 生成器的「推荐」标记与最近使用 |

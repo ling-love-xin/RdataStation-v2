@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -11,7 +12,7 @@ use super::generators::generate_cell;
 use engine::duckdb::row_to_arrow::duckdb_rows_to_arrow;
 use engine::duckdb::DuckDBManager;
 use shared::models::QueryResult;
-use engine::sql::{ColumnDefInfo, SqlEngine};
+use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
 use crate::error::{MockError, MockResult};
 use crate::models::{
     ColumnDataType, ColumnDef, ColumnDependency, ColumnMappingResponse, DependencyConfig,
@@ -37,6 +38,26 @@ use crate::templates;
 pub struct MockEngine;
 
 const TEMP_MOCK_PREFIX: &str = "temp_mock_";
+
+/// 跨库直写时的 `ATTACH` 别名（固定值：内存库里只有 mock 会挂载目标库，不会撞名）。
+const ATTACH_ALIAS: &str = "rds_mock_sink";
+
+/// 跨库直写的模式。
+#[derive(Debug, Clone)]
+pub enum TempTableWriteMode {
+    /// 新建表：用给定列定义建表（列类型 / 唯一 / 非空是产品语义，由调用方给）
+    Create(Vec<ColumnDefInfo>),
+    /// 追加到既有表：调用方负责先校验「目标表存在且含临时表全部列」（报错更早、更好懂）
+    Append,
+}
+
+/// 临时表的列名（与 `insert_statements` 同一取法：`query` 之后再读 `column_names`）。
+fn temp_table_columns(conn: &duckdb::Connection, temp_table: &str) -> MockResult<Vec<String>> {
+    let select_sql = SqlEngine::build_select_all(temp_table, Some(0));
+    let mut stmt = conn.prepare(&select_sql)?;
+    let _rows = stmt.query([])?;
+    Ok(stmt.column_names().iter().map(|c| c.to_string()).collect())
+}
 const BATCH_SIZE: usize = 10_000;
 const PREVIEW_ROWS: usize = 10;
 
@@ -309,9 +330,8 @@ impl MockEngine {
 
     /// 生成全量 `INSERT` 语句文本（每行一条，目标表名为 `table_name` 去临时前缀）。
     ///
-    /// 「导出 SQL 文件」与「落库到分析库」共用这一份生成逻辑：
-    /// - 导出只需把结果写文件；
-    /// - 落库直接 `execute_batch` 执行，不必先写临时文件再读回。
+    /// 专给「导出 SQL 文件」用（产出一份可在别处执行的脚本）。**落库不走它**：
+    /// 落库用 [`MockEngine::write_temp_table_to_database`]（ATTACH 直写，省掉文本中转）。
     ///
     /// 目标表须已存在（本函数只产 `INSERT`，不产 `CREATE TABLE`）。
     ///
@@ -361,6 +381,65 @@ impl MockEngine {
             ));
         }
         Ok(statements.join("\n"))
+    }
+
+    // ==================== 跨库直写（落库新路径） ====================
+
+    /// 把内存临时表**直写**到 DuckDB 文件库的表（`ATTACH` → [建表] → `INSERT SELECT` → `DETACH`）。
+    ///
+    /// 与 [`MockEngine::insert_statements`]（文本中转）的区别：数据全程在 DuckDB 内部流动，
+    /// 不经过 Rust 字符串，省掉「读全量 → 拼 INSERT 文本 → 目标库再解析」两跳（架构 §9-I3）。
+    ///
+    /// 约束与细节：
+    /// - 会话开在**内存库连接**上（临时表在那边，跨库才看得见）；写入期间该连接持有目标文件锁；
+    /// - 列清单取自**临时表自身**的列元数据，目标表多出的列走默认值（与旧文本路径语义一致）；
+    /// - `Create` 模式插入失败时删掉刚建的表（不留半成品空表），然后无论成败都 `DETACH`；
+    /// - 目标表名可以是用户给的任意名字（写 SQL 时带引号）；临时表列名留 `sanitize_identifier` 口径。
+    ///
+    /// **调用方不得持有内存库连接锁**后再调本函数（同 `insert_statements` 的死锁教训）。
+    pub fn write_temp_table_to_database(
+        db_path: &Path,
+        temp_table: &str,
+        target_table: &str,
+        mode: TempTableWriteMode,
+    ) -> MockResult<()> {
+        let db = Self::get_db()?;
+        let conn = Self::get_conn(&db)?;
+        let target = QualifiedTable {
+            catalog: ATTACH_ALIAS,
+            schema: "main",
+            table: target_table,
+        };
+        let columns = temp_table_columns(&conn, temp_table)?;
+
+        // 上一次异常退出可能留下同名挂载：先尽力解挂（失败忽略，ATTACH 会报真错）
+        let _ = conn.execute_batch(&SqlEngine::build_detach_database(ATTACH_ALIAS));
+        let path_text = db_path.to_string_lossy().to_string();
+        conn.execute_batch(&SqlEngine::build_attach_database(&path_text, ATTACH_ALIAS))
+            .map_err(|e| MockError::Generation(format!("挂载分析库失败: {e}")))?;
+
+        let written = (|| -> MockResult<()> {
+            if let TempTableWriteMode::Create(defs) = &mode {
+                // 建表失败（含同名已存在）→ 直接返回：**不能**走回滚删表分支，
+                // 那时表可能是别人的（同名表已在），删掉就是数据丢失
+                conn.execute_batch(&SqlEngine::build_create_table_in(&target, defs, false))?;
+            }
+            if let Err(e) =
+                conn.execute_batch(&SqlEngine::build_insert_select(&target, temp_table, &columns))
+            {
+                if matches!(mode, TempTableWriteMode::Create(_)) {
+                    // 建表成功但写入失败 → 回滚刚建的**空表**（不留半成品）
+                    let _ = conn.execute_batch(&SqlEngine::build_drop_table_in(&target, true));
+                }
+                return Err(e.into());
+            }
+            Ok(())
+        })();
+
+        let detached = conn.execute_batch(&SqlEngine::build_detach_database(ATTACH_ALIAS));
+        written?; // 写入失败优先报写入（解挂失败不拖淡根因）
+        detached.map_err(|e| MockError::Generation(format!("解挂分析库失败: {e}")))?;
+        Ok(())
     }
 
     // ==================== 列名智能映射 ====================

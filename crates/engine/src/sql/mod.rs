@@ -22,6 +22,7 @@ mod parser;
 mod split;
 mod transpiler;
 
+pub use builder::QualifiedTable;
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
 pub use split::{split_statements, SqlStatement};

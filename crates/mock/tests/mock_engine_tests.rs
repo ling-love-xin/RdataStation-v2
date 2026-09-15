@@ -18,8 +18,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rds_mock::{
     ColumnDataType, ColumnDef, ColumnDependency, DependencyType, GeneratorConfig, Locale,
-    MockConfig, MockEngine, MockExportFormat, ScenarioTemplate, TemplateTable, parse_data_type,
+    MockConfig, MockEngine, MockExportFormat, ScenarioTemplate, TemplateTable, TempTableWriteMode,
+    parse_data_type,
 };
+use engine::sql::{ColumnDefInfo, SqlEngine};
 use shared::models::QueryResult;
 
 // ==================== 配置构造 ====================
@@ -82,6 +84,228 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("创建临时目录");
     dir
+}
+
+// ==================== 跨库直写（落库新路径） ====================
+
+/// 目标库里的行数（用**新连接**读文件：数据真的落盘才算数）。
+fn file_row_count(db: &std::path::Path, table: &str) -> i64 {
+    let conn = duckdb::Connection::open(db).expect("打开目标库");
+    let sql = SqlEngine::build_select(table, &["COUNT(*)"], None);
+    conn.query_row(&sql, [], |row| row.get(0)).expect("计数")
+}
+
+/// 目标库里的列名（表不存在时报错）。
+fn file_columns(db: &std::path::Path, table: &str) -> Vec<String> {
+    let conn = duckdb::Connection::open(db).expect("打开目标库");
+    let sql = SqlEngine::build_select_all(table, Some(0));
+    let mut stmt = conn.prepare(&sql).expect("prepare");
+    let _rows = stmt.query([]).expect("query");
+    stmt.column_names().iter().map(|c| c.to_string()).collect()
+}
+
+/// 目标库里的表名（排序）。
+fn file_tables(db: &std::path::Path) -> Vec<String> {
+    let conn = duckdb::Connection::open(db).expect("打开目标库");
+    let sql = SqlEngine::build_select(
+        "information_schema.tables",
+        &["table_name", "table_schema"],
+        None,
+    );
+    let mut stmt = conn.prepare(&sql).expect("prepare");
+    let mut names: Vec<String> = Vec::new();
+    let mut rows = stmt.query([]).expect("query");
+    while let Some(row) = rows.next().expect("next") {
+        let schema: String = row.get(1).unwrap_or_default();
+        if schema == "main" {
+            names.push(row.get::<usize, String>(0).unwrap_or_default());
+        }
+    }
+    names.sort();
+    names
+}
+
+fn int_column(name: &str, unique: bool, nullable: bool) -> ColumnDefInfo {
+    ColumnDefInfo {
+        name: name.to_string(),
+        data_type: "INTEGER".to_string(),
+        unique,
+        nullable,
+    }
+}
+
+/// 直写建表：数据用新连接读回来（含中文列名，锁住标识符加引号）。
+#[tokio::test]
+async fn write_temp_table_creates_table_in_file_database() {
+    let dir = temp_dir("sink_create");
+    let db = dir.join("analytics.duckdb");
+    let result = MockEngine::generate(MockConfig {
+        table_name: "t_sink_create".to_string(),
+        row_count: 30,
+        seed: Some(7),
+        locale: Locale::ZhCn,
+        columns: vec![
+            auto_increment("id"),
+            col(
+                "金额",
+                ColumnDataType::Integer,
+                GeneratorConfig::RandomInt { min: 1, max: 9 },
+            ),
+        ],
+    })
+    .await
+    .expect("生成应当成功");
+
+    MockEngine::write_temp_table_to_database(
+        &db,
+        &result.temp_table_name,
+        "t_sink_create",
+        TempTableWriteMode::Create(vec![int_column("id", true, false), int_column("金额", false, true)]),
+    )
+    .expect("直写建表应当成功");
+
+    assert_eq!(file_row_count(&db, "t_sink_create"), 30);
+    assert_eq!(file_columns(&db, "t_sink_create"), ["id", "金额"]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 直写追加：既有行保留，新行接在后面。
+///
+/// 用非唯一列：自增主键的接续（重算起点）是**装配层**的语义，
+/// 已在 `crates/workbench/tests/mock_generator.rs::append_continues_primary_key_sequence` 覆盖。
+#[tokio::test]
+async fn write_temp_table_appends_to_existing_table() {
+    let dir = temp_dir("sink_append");
+    let db = dir.join("analytics.duckdb");
+    let config = || MockConfig {
+        table_name: "t_sink_append".to_string(),
+        row_count: 10,
+        seed: Some(3),
+        locale: Locale::ZhCn,
+        columns: vec![col(
+            "amount",
+            ColumnDataType::Integer,
+            GeneratorConfig::RandomInt { min: 1, max: 100 },
+        )],
+    };
+
+    let first = MockEngine::generate(config()).await.expect("首先生成");
+    MockEngine::write_temp_table_to_database(
+        &db,
+        &first.temp_table_name,
+        "t_sink_append",
+        TempTableWriteMode::Create(vec![int_column("amount", false, true)]),
+    )
+    .expect("建表应当成功");
+    assert_eq!(file_row_count(&db, "t_sink_append"), 10);
+
+    // 同名目标表再生成一次（临时表被重建为新内容）→ 追加
+    let second = MockEngine::generate(config()).await.expect("再次生成");
+    MockEngine::write_temp_table_to_database(
+        &db,
+        &second.temp_table_name,
+        "t_sink_append",
+        TempTableWriteMode::Append,
+    )
+    .expect("追加应当成功");
+    assert_eq!(file_row_count(&db, "t_sink_append"), 20, "既有 10 行不应被覆盖");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 同名表已存在时用 `Create` 模式：报错，且**既有表与数据都留着**（回滚分支只删自己刚建的表）。
+#[tokio::test]
+async fn write_temp_table_create_on_existing_table_keeps_data() {
+    let dir = temp_dir("sink_taken");
+    let db = dir.join("analytics.duckdb");
+    let config = || MockConfig {
+        table_name: "t_sink_taken".to_string(),
+        row_count: 12,
+        seed: Some(5),
+        locale: Locale::ZhCn,
+        columns: vec![auto_increment("id")],
+    };
+
+    let first = MockEngine::generate(config()).await.expect("首先生成");
+    MockEngine::write_temp_table_to_database(
+        &db,
+        &first.temp_table_name,
+        "t_sink_taken",
+        TempTableWriteMode::Create(vec![int_column("id", true, false)]),
+    )
+    .expect("建表应当成功");
+
+    let again = MockEngine::generate(config()).await.expect("再次生成");
+    let err = MockEngine::write_temp_table_to_database(
+        &db,
+        &again.temp_table_name,
+        "t_sink_taken",
+        TempTableWriteMode::Create(vec![int_column("id", true, false)]),
+    )
+    .expect_err("同名建表应当失败");
+    assert!(!err.to_string().is_empty(), "应有可读错误");
+    assert_eq!(
+        file_row_count(&db, "t_sink_taken"),
+        12,
+        "既有表的数据不应被回滚分支删掉"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 写入失败（建表成功但插入失败）→ 回滚刚建的空表，且**失败后仍能继续写同一个库**（证明已解挂）。
+#[tokio::test]
+async fn write_temp_table_rolls_back_and_detaches_after_failure() {
+    let dir = temp_dir("sink_rollback");
+    let db = dir.join("analytics.duckdb");
+    let result = MockEngine::generate(MockConfig {
+        table_name: "t_sink_rollback".to_string(),
+        row_count: 8,
+        seed: Some(11),
+        locale: Locale::ZhCn,
+        columns: vec![
+            auto_increment("id"),
+            col("note", ColumnDataType::Varchar { length: Some(16) }, GeneratorConfig::Word),
+        ],
+    })
+    .await
+    .expect("生成应当成功");
+
+    // 列定义故意少一列：建表能过，INSERT SELECT 会在「列不存在」上失败
+    let err = MockEngine::write_temp_table_to_database(
+        &db,
+        &result.temp_table_name,
+        "t_sink_rollback",
+        TempTableWriteMode::Create(vec![int_column("id", false, true)]),
+    )
+    .expect_err("插入列对不上应当失败");
+    assert!(!err.to_string().is_empty(), "应有可读错误");
+    assert!(
+        !file_tables(&db).contains(&"t_sink_rollback".to_string()),
+        "半成品空表应被回滚: {:?}",
+        file_tables(&db)
+    );
+
+    // 失败后同一文件仍可用（说明失败路径也 DETACH 了）
+    MockEngine::write_temp_table_to_database(
+        &db,
+        &result.temp_table_name,
+        "t_sink_rollback",
+        TempTableWriteMode::Create(vec![
+            int_column("id", false, true),
+            ColumnDefInfo {
+                name: "note".to_string(),
+                data_type: "VARCHAR".to_string(),
+                unique: false,
+                nullable: true,
+            },
+        ]),
+    )
+    .expect("失败后应能重新挂载并写入");
+    assert_eq!(file_row_count(&db, "t_sink_rollback"), 8);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ==================== 生成 ====================

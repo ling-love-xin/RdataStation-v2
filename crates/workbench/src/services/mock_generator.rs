@@ -22,9 +22,10 @@
 //!
 //! # 已知取舍
 //!
-//! 落库走「临时表 → INSERT 文本 → 分析库连接 `execute_batch`」：mock 的临时表在**进程级内存库**
-//! 里，分析库是文件库，跨库不能直接 `CTAS`。`MockEngine::insert_statements` 已把「读全量 + 拼 INSERT」
-//! 收在 mock crate 内（不再落地临时文件），后续可换成 DuckDB `ATTACH` 直写（见架构 §9-I3）。
+//! 落库走**跨库直写**（`MockEngine::write_temp_table_to_database`：`ATTACH` 分析库 →
+//! （建表）→ `INSERT ... SELECT` → `DETACH`）：数据全程在 DuckDB 内部流动，不经 Rust 字符串。
+//! 旧路径是「读全量 → 拼 INSERT 文本 → 目标库再解析」两跳，大行数下内存与耗时都不划算（架构 §9-I3）。
+//! `insert_statements`（文本）保留给「导出 SQL 脚本」那个出口。
 
 use std::path::{Path, PathBuf};
 
@@ -33,7 +34,7 @@ use mock::mock_view::{
     MockColumnSpec, MockDraft, MockGenInfo, MockPreview, SchemaRequest, SchemaSource,
 };
 use mock::models::{ColumnDef, GeneratorConfig, MockConfig, MockExportFormat};
-use mock::{MockEngine, parse_data_type, sanitize_identifier};
+use mock::{MockEngine, TempTableWriteMode, parse_data_type, sanitize_identifier};
 
 use crate::services::nav_runtime;
 
@@ -177,9 +178,9 @@ where
 
 // ==================== 出口：落库 ====================
 
-/// 建表 DDL（列名走 [`sanitize_identifier`]：与临时表列名同一算法）。
-fn create_table_ddl(table: &str, columns: &[MockColumnSpec]) -> String {
-    let infos: Vec<ColumnDefInfo> = columns
+/// 目标表的列定义（列名走 `sanitize_identifier`：与临时表列名同一算法，否则 `INSERT` 列清单对不上）。
+fn column_def_infos(columns: &[MockColumnSpec]) -> Vec<ColumnDefInfo> {
+    columns
         .iter()
         .map(|c| ColumnDefInfo {
             name: sanitize_identifier(&c.def.name),
@@ -187,13 +188,12 @@ fn create_table_ddl(table: &str, columns: &[MockColumnSpec]) -> String {
             unique: c.def.unique,
             nullable: c.def.nullable_ratio > 0.0,
         })
-        .collect();
-    SqlEngine::build_create_table(table, &infos, false)
+        .collect()
 }
 
 /// 出口：在分析库**新建**表（已存在 → `Err`，面板据此引导改用「追加」）。
 ///
-/// 写入失败时回滚刚建的表：不留下半成品空表。
+/// 写入失败时不留下半成品空表：建表与写行都在**同一个 ATTACH 会话**里（引擎侧失败即回滚建表）。
 pub fn persist_table_at(
     db_path: &Path,
     draft: &MockDraft,
@@ -203,21 +203,23 @@ pub fn persist_table_at(
     if name.is_empty() {
         return Err("目标表名不能为空".to_string());
     }
+    // 同名表检查用一条短连接（读一眼就关）：报错要早、要好懂；文件不存在时顺带建好
+    {
+        let conn = open_analysis_db(db_path)?;
+        if analysis_tables(&conn)?.iter().any(|t| t == &name) {
+            return Err(format!("分析库已存在表 {name}：请改用「追加到既有表」"));
+        }
+    }
+
+    MockEngine::write_temp_table_to_database(
+        db_path,
+        &info.temp_table_name,
+        &name,
+        TempTableWriteMode::Create(column_def_infos(&draft.columns)),
+    )
+    .map_err(|e| format!("写入分析库失败: {e}"))?;
+
     let conn = open_analysis_db(db_path)?;
-    if analysis_tables(&conn)?.iter().any(|t| t == &name) {
-        return Err(format!("分析库已存在表 {name}：请改用「追加到既有表」"));
-    }
-
-    let ddl = create_table_ddl(&name, &draft.columns);
-    conn.execute_batch(&ddl)
-        .map_err(|e| format!("在分析库建表失败: {e}"))?;
-
-    let insert_text = MockEngine::insert_statements(&info.temp_table_name, Some(&name))
-        .map_err(|e| format!("读取生成结果失败: {e}"))?;
-    if let Err(e) = conn.execute_batch(&insert_text) {
-        let _ = conn.execute_batch(&SqlEngine::build_drop_table(&name, true));
-        return Err(format!("写入分析库失败（已回滚建表）: {e}"));
-    }
     table_row_count(&conn, &name)
 }
 
@@ -230,25 +232,32 @@ pub fn append_table_at(
     info: &MockGenInfo,
     table: &str,
 ) -> Result<i64, String> {
-    let conn = open_analysis_db(db_path)?;
-    let target_columns = table_columns(&conn, table)?;
-    let missing: Vec<String> = draft
-        .columns
-        .iter()
-        .map(|c| sanitize_identifier(&c.def.name))
-        .filter(|name| !target_columns.iter().any(|t| t == name))
-        .collect();
-    if !missing.is_empty() {
-        return Err(format!(
-            "目标表 {table} 缺少列：{}（列结构需一致）",
-            missing.join("、")
-        ));
+    {
+        let conn = open_analysis_db(db_path)?;
+        let target_columns = table_columns(&conn, table)?;
+        let missing: Vec<String> = draft
+            .columns
+            .iter()
+            .map(|c| sanitize_identifier(&c.def.name))
+            .filter(|name| !target_columns.iter().any(|t| t == name))
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "目标表 {table} 缺少列：{}（列结构需一致）",
+                missing.join("、")
+            ));
+        }
     }
 
-    let insert_text = MockEngine::insert_statements(&info.temp_table_name, Some(table))
-        .map_err(|e| format!("读取生成结果失败: {e}"))?;
-    conn.execute_batch(&insert_text)
-        .map_err(|e| format!("追加到 {table} 失败: {e}"))?;
+    MockEngine::write_temp_table_to_database(
+        db_path,
+        &info.temp_table_name,
+        table,
+        TempTableWriteMode::Append,
+    )
+    .map_err(|e| format!("追加到 {table} 失败: {e}"))?;
+
+    let conn = open_analysis_db(db_path)?;
     table_row_count(&conn, table)
 }
 
