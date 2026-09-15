@@ -549,7 +549,20 @@ mod tests {
         // 协议链：数组内每跳都要覆盖
         let chain = r#"[{"type":"ssh","host":"a","username":"u","auth_type":"password","password":"p1"},{"type":"proxy","host":"b","port":8080,"auth":{"password":"p2"}}]"#;
         let enc = encrypt_network_config(chain).expect("encrypt chain");
-        assert!(!enc.contains("p1") && !enc.contains("p2"), "{enc}");
+        // 逐字段断言，而不是在整串密文上做子串匹配：密文是 base64，随机密文可能恰好含
+        // "p1" 这样的短明文（约 1~2% 概率），整串 contains 会变成随机失败的假阳性。
+        let fields: serde_json::Value = serde_json::from_str(&enc).expect("json");
+        let ssh_password = fields[0]["password"].as_str().expect("ssh password");
+        let proxy_password = fields[1]["auth"]["password"].as_str().expect("proxy password");
+        assert!(
+            ssh_password.starts_with("AES:") && ssh_password != "p1",
+            "SSH 密码不得以明文留下：{ssh_password}"
+        );
+        assert!(
+            proxy_password.starts_with("AES:") && proxy_password != "p2",
+            "代理密码不得以明文留下：{proxy_password}"
+        );
+        assert_eq!(fields[1]["host"], "b", "非敏感字段不变");
         let dec = decrypt_network_config(&enc).expect("decrypt chain");
         let parsed: serde_json::Value = serde_json::from_str(&dec).expect("json");
         assert_eq!(parsed[0]["password"], "p1");

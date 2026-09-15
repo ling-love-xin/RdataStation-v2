@@ -27,7 +27,7 @@ use crate::commands::{
 };
 use crate::panels::{EditorPanel, ProjectActionRequest, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel};
 use crate::ui;
-use mock::mock_view::MockDetailView;
+use mock::mock_view::{MockDetailView, focus_detail_tab};
 use settings::commands::OpenSettings;
 use settings::settings_view::SettingsView;
 
@@ -337,8 +337,9 @@ impl WorkbenchView {
                         .clone()
                         .and_then(|weak| weak.upgrade());
                     if let Some(detail) = alive {
-                        // 已在 Dock 中（tab 被切走也只是失焦）：聚焦即可，不重复加入
-                        detail.update(cx, |view, cx| view.focus_tab(window, cx));
+                        // 已在 Dock 中（tab 被切走也只是失焦）：聚焦即可，不重复加入。
+                        // 必须在实体更新之外调用：闭包里调会因 TabGroup 回读本实体而 double lease panic。
+                        focus_detail_tab(&detail, window, cx);
                         return;
                     }
                     let detail = cx.new(|cx| MockDetailView::new(panel.clone(), cx));
@@ -346,7 +347,7 @@ impl WorkbenchView {
                     area_for_detail.update(cx, |area, cx| {
                         area.add_panel(detail.clone(), DockPlacement::Center, None, window, cx);
                     });
-                    detail.update(cx, |view, cx| view.focus_tab(window, cx));
+                    focus_detail_tab(&detail, window, cx);
                 }));
         }
 

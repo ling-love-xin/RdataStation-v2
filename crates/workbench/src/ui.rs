@@ -128,6 +128,8 @@ pub const PROPERTY_PANEL_MIN_WIDTH: f32 = 13.75;
 pub const PROPERTY_PANEL_MAX_WIDTH: f32 = 47.5;
 /// 树 / 列表激活项侧条宽度
 pub const TREE_ACTIVE_BAR: Pixels = px(2.);
+/// 树 / 列表激活项侧条的上下内缩（3px；避免色条贴满整行高）
+pub const TREE_ACTIVE_BAR_INSET: Pixels = px(3.);
 /// 导航分组头左侧色条宽度（2px；与激活条同宽，语义独立）
 pub const NAV_GROUP_BAR_WIDTH: Pixels = px(2.);
 

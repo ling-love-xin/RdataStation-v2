@@ -9,6 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gpui_kit::component::dock::{DockArea, DockPlacement};
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::{
     App, AppContext as _, Entity, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
@@ -17,8 +18,8 @@ use gpui_kit::{
 
 use super::{
     MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockPanel, MockPreview,
-    MockRunOptions, SchemaRequest, SchemaSource, param_text, parse_percent_ratio, parse_rows,
-    parse_seed, patch_param, summarize_params, validate_table_name,
+    MockRunOptions, SchemaRequest, SchemaSource, focus_detail_tab, param_text, parse_percent_ratio,
+    parse_rows, parse_seed, patch_param, summarize_params, validate_table_name,
 };
 use crate::generator_catalog::ParamKind;
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
@@ -792,7 +793,7 @@ fn detail_view_renders_fields_and_preview(cx: &mut TestAppContext) {
     });
 }
 
-/// `focus_tab` 未加入 Dock 时应静默返回（不 panic）。
+/// `focus_detail_tab` 未加入 Dock 时应静默返回（不 panic）。
 #[gpui_kit::test]
 fn focus_tab_without_group_is_noop(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -800,7 +801,50 @@ fn focus_tab_without_group_is_noop(cx: &mut TestAppContext) {
     let (_panel, detail, cx) = open_harness(cx, test_host(&rec));
 
     cx.update(|window, cx| {
-        detail.update(cx, |view, cx| view.focus_tab(window, cx));
+        focus_detail_tab(&detail, window, cx);
+    });
+}
+
+/// 已进 Dock 时聚焦必须**真的切到详情 tab**，且不得 panic。
+///
+/// `focus_detail_tab` 要在 TabGroup 里找自身 tab，而找/选的过程会触碰面板实体。
+/// 旧实现把它放在 `update_entity(MockDetailView)` 闭包里调用（宿主接线如此），
+/// 一旦详情视图已进 Dock 就会以 “cannot read … while it is already being updated” 崩溃——
+/// 这正是「查看详情」按钮在真机上的崩溃路径；单测当时只覆盖了无 group 分支。
+#[gpui_kit::test]
+fn focus_tab_in_dock_selects_self(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    cx.update(|window, cx| {
+        let area = cx.new(|cx| DockArea::new("mock-focus-area", None, window, cx));
+        // 再建一个同类面板压在详情之上，再把组切到它：这样详情 tab **不是**当前激活项，
+        // `select_tab` 不会走「已激活即返回」的捷径，切换才是真被验证。
+        let other = cx.new(|cx| MockDetailView::new(panel.clone(), cx));
+        area.update(cx, |area, cx| {
+            area.add_panel(detail.clone(), DockPlacement::Center, None, window, cx);
+            area.add_panel(other, DockPlacement::Center, None, window, cx);
+        });
+
+        // group 由 `Panel::on_added_to` 注入；tests 是 mock_view 的子模块，可直接读私有字段
+        let group = detail
+            .read(cx)
+            .group
+            .clone()
+            .expect("进 Dock 后应注入 group")
+            .upgrade()
+            .expect("tab 组应存活");
+        group.update(cx, |group, cx| group.select_tab(1, window, cx));
+        assert_ne!(group.read(cx).active_ix(), 0, "前置条件：详情 tab 不在前台");
+
+        focus_detail_tab(&detail, window, cx);
+
+        assert_eq!(
+            group.read(cx).active_ix(),
+            0,
+            "聚焦后应切回详情 tab（不是静默 no-op）"
+        );
     });
 }
 

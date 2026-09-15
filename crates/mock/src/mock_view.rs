@@ -1488,6 +1488,38 @@ pub struct MockDetailView {
     group: Option<WeakEntity<TabGroup>>,
 }
 
+/// 把详情 tab 切到前台（窗口聚焦 + 在所在 Dock 组里选中自身）。
+///
+/// **必须在实体更新之外调用**：`TabGroup` 切 tab 时会回读面板实体（`panel_name` /
+/// `focus_handle`），若在 `update_entity(MockDetailView)` 的闭包里调用，gpui 会以
+/// `cannot read … while it is already being updated` panic（double lease）。
+/// 签名故意只收 `&Entity<Self>` + `&mut App`，从类型上就排除了「在自身 update 里调用」。
+pub fn focus_detail_tab(detail: &Entity<MockDetailView>, window: &mut Window, cx: &mut App) {
+    let (focus_handle, group) = {
+        let view = detail.read(cx);
+        (view.focus_handle.clone(), view.group.clone())
+    };
+    window.focus(&focus_handle, cx);
+    let Some(group) = group else {
+        // 未加入 Dock（宿主未装配 / 单测直接构造）：静默返回
+        return;
+    };
+    let me = detail.entity_id();
+    group
+        .update(cx, |group, cx| {
+            // 用 `view().entity_id()` 而不是 `panel_name(cx)` 找自己：后者在遍历中会读取
+            // 组内每个面板实体（含自身），既多余又容易再踩租借冲突。
+            let ix = group
+                .panels()
+                .iter()
+                .position(|p| p.view().entity_id() == me);
+            if let Some(ix) = ix {
+                group.select_tab(ix, window, cx);
+            }
+        })
+        .ok();
+}
+
 impl MockDetailView {
     /// 创建详情视图（持有配置面板实体，状态单一权威）。
     pub fn new(panel: Entity<MockPanel>, cx: &mut Context<Self>) -> Self {
@@ -1504,25 +1536,6 @@ impl MockDetailView {
     /// 配置面板实体（宿主登记 / 测试用）。
     pub fn panel(&self) -> &Entity<MockPanel> {
         &self.panel
-    }
-
-    /// 聚焦自身 tab（已在 Dock 中时「查看详情」应把它切到前台）。
-    pub fn focus_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus_handle, cx);
-        let Some(group) = self.group.clone() else {
-            return;
-        };
-        group
-            .update(cx, |group, cx| {
-                let ix = group
-                    .panels()
-                    .iter()
-                    .position(|p| p.panel_name(cx) == "mock_detail");
-                if let Some(ix) = ix {
-                    group.select_tab(ix, window, cx);
-                }
-            })
-            .ok();
     }
 
     /// 列编辑对话框的「应用」：把工作副本合成为列规格（读全部输入框现值）。

@@ -5975,9 +5975,9 @@ impl SidebarPanel {
                 this.child(
                     div()
                         .absolute()
-                        .left(px(0.))
-                        .top(px(3.))
-                        .bottom(px(3.))
+                        .left(rems(0.))
+                        .top(ui::TREE_ACTIVE_BAR_INSET)
+                        .bottom(ui::TREE_ACTIVE_BAR_INSET)
                         .w(ui::TREE_ACTIVE_BAR)
                         .rounded_sm()
                         .bg(active_border),
@@ -6897,7 +6897,7 @@ impl SidebarPanel {
                 (0..display_count)
                     .map(|i| {
                         Size::new(
-                            px(0.),
+                            Pixels::ZERO,
                             Self::scratchpad_row_height(&row_ctx, i, window.rem_size()),
                         )
                     })

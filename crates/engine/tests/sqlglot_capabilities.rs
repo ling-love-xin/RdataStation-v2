@@ -443,11 +443,23 @@ fn probe_transpile_multi_statement() {
 fn probe_format_comment_fidelity() {
     banner("9. 格式化注释保真度（生产路径 SqlEngine::format；架构 §12 #3 实证）");
 
-    // （用例, 期望格式化后仍可解析）——解析失败的用例故意不可解析：它断言的是“原样返回”
+    // （用例, 期望格式化后仍可解析）——解析失败的用例断言的是“原样返回”。
+    // 已知库边界：sqlglot 只容忍「语句前」的注释，行内 / 尾随注释一律解析失败（见下方位置实证）。
     let cases = [
         ("前导注释", "-- 报表口径说明\nselect a, b from t where x = 1", true),
-        ("行内注释", "select a, /* 保留? */ b from t", true),
-        ("尾随注释", "select a from t -- 尾注释", true),
+        // 表达式中间的块注释 sqlglot 解析不了（见下方「块注释位置与可解析性」实证）：
+        // 该输入自身即不可解析，故此处断言的是「原样返回」，不是「可再解析」。
+        (
+            "行内注释（库不支持，原样返回）",
+            "select a, /* 保留? */ b from t",
+            false,
+        ),
+        // 尾随行注释同样解析失败（UnexpectedToken Eof）：见下方位置实证。
+        (
+            "尾随注释（库不支持，原样返回）",
+            "select a from t -- 尾注释",
+            false,
+        ),
         ("多语句", "select 1; select 2;", true),
         ("解析失败", "select from where", false),
     ];
@@ -462,13 +474,39 @@ fn probe_format_comment_fidelity() {
         println!("  注释标记数：{marks_in} → {marks_out}");
 
         if expect_parseable {
+            let reparsed = parse_statements_with_comments(&out, Dialect::Mysql);
             assert!(
-                parse_statements_with_comments(&out, Dialect::Mysql).is_ok(),
-                "格式化输出必须可再次解析：{out}"
+                reparsed.is_ok(),
+                "格式化输出必须可再次解析：{out}\n  再解析错误：{:?}\n  输入自身可解析：{}",
+                reparsed.as_ref().err(),
+                parse_statements_with_comments(sql, Dialect::Mysql).is_ok()
             );
         } else {
             assert_eq!(out, sql, "解析失败时应**原样返回**，不得改写用户内容");
         }
+    }
+
+    // 边界实证：块注释出现在哪些位置会被解析器拒绍？
+    // 决定编辑器侧「格式化/分析失败」的提示范围，以及案例表里 expect_parseable 该取何值。
+    println!("\n--- 块注释位置与可解析性 ---");
+    for (label, sql) in [
+        ("语句开头", "/* c */ select a from t"),
+        ("选择列表中间", "select a, /* c */ b from t"),
+        ("关键字之间", "select /* c */ a from t"),
+        ("语句末尾", "select a from t /* c */"),
+        ("行注释在中间", "select a, -- c\n b from t"),
+        ("非 ASCII 块注释（开头）", "/* 中文 */ select a from t"),
+        ("非 ASCII 行注释（开头）", "-- 中文\nselect a from t"),
+    ] {
+        let parsed = parse_statements_with_comments(sql, Dialect::Mysql);
+        println!(
+            "  {label}：解析{}（{}）",
+            if parsed.is_ok() { "通过" } else { "失败" },
+            match parsed.as_ref().err() {
+                Some(err) => format!("{err:?}"),
+                None => "—".to_string(),
+            }
+        );
     }
 
     // `#` 注释的方言改写：MySQL 目标 vs 非 MySQL 目标

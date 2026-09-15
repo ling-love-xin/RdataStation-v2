@@ -53,7 +53,7 @@ fn first_cell(result: &SqlExecuteResult) -> Option<i64> {
         .rows
         .first()
         .and_then(|row| row.first())
-        .and_then(|value| value.as_i64())
+        .and_then(|value| value.as_int())
 }
 
 async fn probe(driver: &str, url_override: Option<String>, file_path: Option<String>) {

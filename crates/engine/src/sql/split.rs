@@ -426,7 +426,10 @@ mod tests {
         let out = texts(sql);
         assert_eq!(out.len(), 2);
         assert!(out[0].contains("中文；分号不是分隔符"));
-        assert!(out[1].starts_with("SELECT 2"));
+        // 语句前的注释按设计归属该语句（见模块文档「注释归属」），故第 2 条以注释行开头，
+        // 起始行号也落在注释所在的第 1 行，而不是 SELECT 所在的第 2 行。
+        assert_eq!(out[1], "-- 注释；\nSELECT 2");
+        assert_eq!(lines(sql), vec![1, 1]);
     }
 
     #[test]
