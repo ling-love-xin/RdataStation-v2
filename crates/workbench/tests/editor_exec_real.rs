@@ -86,8 +86,8 @@ fn run_through_editor(shared: &EditorShared, document: DocumentId) -> Option<edi
     // 手动轮询（生产由面板的轮询泵做）
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let outcomes = shared.drain_exec();
-        for outcome in outcomes {
+        // 一次执行只会有一个结论：取到就收工（剩下的等下一轮或下一份文档）
+        if let Some(outcome) = shared.drain_exec().into_iter().next() {
             let entry = match outcome.result {
                 Ok(data) => editor::store::ResultEntry::success(
                     outcome.document,

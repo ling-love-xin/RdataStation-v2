@@ -22,13 +22,19 @@
 //! - ✅ 已注册键位（`crates/app`）：`ctrl-s` 保存 · `ctrl-/` 行注释 · `ctrl-w` 关闭当前文档
 //!   （`ctrl-w` 的处理器在宿主 workbench：面板在自己的 `update` 里让 Dock 移除自己会重入）
 //!   · `ctrl-enter` 执行（选区 > 当前语句）· `ctrl-shift-enter` 执行全部
+//!   · `ctrl-o` 打开文件 · `ctrl-shift-s` 另存为（两者都弹系统文件对话框，宿主实现）
 //! - ✅ `execution` + `store` + `view/widgets/result_grid`：最小执行闭环（A14，真机四库实测通过）
 //! - ✅ 查找 / 替换（A11）：**内核能力 + 组件库面板**（`Ctrl+F` / `Ctrl+H`），本 crate 零自建；
 //!   内核在 `Input` context 里先拿到按键且已注册 listener，外层再绑收不到（架构 §12 #24）
 //! - ✅ `session`：会话端口（光标 / 选区 / 模式落库；A12，宿主注入实现）
 //! - ✅ `limits`：文件档位（>50MB 关重能力 / ≥200MB 不读进内存；A13）· ui_contract 已覆盖本 crate（A15）
+//! - ✅ `view/dialogs` + 关闭三态（A9）：三个对话框（关三态 / 保存失败 / 模式切换确认）· 落地入口
+//!   `request_close_document` / `resolve_close_choice` / `request_save_as` · 另存为的路径选择是
+//!   **注入端口**（`shared.attach_save_path_picker`，宿主用 `rfd` 实现——本 crate 不依赖 `rfd`）
 //! - ✅ `ui`：本 crate 的结构尺寸常量（不反向依赖 workbench）
-//! - ⬜ 1a 待做：`completion` · 另存为 / 关闭三态 / 模式切换确认对话框（A9 收尾）· 打开与另存为的系统文件对话框 · 连接绑定与结果区可拖拽分栏（1b）
+//! - ✅ `view/host` 的工具栏：只有最左的**模式指示器**（`[SQL] ▾` → 三档菜单）——其余控件
+//!   （执行族 / 格式化 / 历史 / 更多 / 执行位置 / 连接）服从原型 §2.2 的分层，未实现就不放按钮
+//! - ⬜ 1a 待做：`completion` · 结果区可拖拽分栏 · 连接绑定（1b）
 //! - ⬜ 1c：`session` / `notebook`（Cell / Output / Session）
 //!
 //! 语句切分（「执行当前语句」与「批量执行」的基础）落在 `engine::sql::split`：它是不带编辑器

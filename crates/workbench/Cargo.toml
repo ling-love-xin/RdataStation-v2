@@ -23,6 +23,9 @@ gpui-kit.workspace = true
 # 依赖方向：workbench → editor → engine / database / shared；editor 不反向依赖本 crate。
 editor.workspace = true
 
+# 系统文件对话框（编辑器打开 / 另存为，A9 收尾）
+rfd.workspace = true
+
 # ===== Async 运行时 =====
 tokio.workspace = true
 

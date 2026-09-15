@@ -11,7 +11,9 @@
 //!   全局系统库初始化 → SettingsService::init → 主题目录 watch →
 //!   应用已保存主题模式 → 快捷键绑定。
 
-use editor::commands::{CloseDocument, ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
+use editor::commands::{
+    CloseDocument, ExecuteAll, ExecuteSql, OpenDocument, SaveDocument, SaveDocumentAs, ToggleComment,
+};
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
 use settings::SettingsService;
@@ -19,9 +21,9 @@ use settings::commands::OpenSettings;
 use workbench::WorkbenchView;
 use workbench::commands::{
     CloseProject, DraftNext, DraftPrev, FocusNavSearch, NavCollapse, NavDown, NavExpand,
-    NavOpenProperties, NavUp, SaveConnection, ScratchpadCancelEdit, ScratchpadDelete,
-    ScratchpadDown, ScratchpadNewFile, ScratchpadOpen, ScratchpadRename, ScratchpadSelectAll,
-    ScratchpadUp, SwitchProject, TestConnection, ToggleQuickOpen,
+    NavOpenProperties, NavReorderDown, NavReorderUp, NavUp, SaveConnection, ScratchpadCancelEdit,
+    ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen, ScratchpadRename,
+    ScratchpadSelectAll, ScratchpadUp, SwitchProject, TestConnection, ToggleQuickOpen,
 };
 
 fn main() {
@@ -92,6 +94,11 @@ fn run_app() {
                 KeyBinding::new("ctrl-s", SaveDocument, Some("editor")),
                 KeyBinding::new("ctrl-/", ToggleComment, Some("editor")),
                 KeyBinding::new("ctrl-w", CloseDocument, Some("editor")),
+                // A9 文档级：`Ctrl+O` 打开文件 / `Ctrl+Shift+S` 另存为（都弹系统文件对话框，
+                // 由 `WorkbenchView` 处理）。两键内核都没占用（已核对 `input/base/state.rs`；
+                // `Ctrl+O` 只被组件库的命令面板绑在 `Command` context 上，与本 context 不冲突）。
+                KeyBinding::new("ctrl-o", OpenDocument, Some("editor")),
+                KeyBinding::new("ctrl-shift-s", SaveDocumentAs, Some("editor")),
                 // A14 执行：`Ctrl+Enter` = 选区优先 / 否则当前语句；`Ctrl+Shift+Enter` = 全部。
                 // 这两个键内核没有占用（已核对 `input/base/state.rs` 的 `init`）。
                 KeyBinding::new("ctrl-enter", ExecuteSql, Some("editor")),

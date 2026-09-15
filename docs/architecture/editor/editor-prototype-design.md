@@ -318,6 +318,9 @@
 | `editor-sql` | `Ctrl+Enter` | 执行（选区优先 / 否则当前语句） |
 | | `Ctrl+Shift+Enter` | 执行全部 |
 | | `Ctrl+S` | 保存（脏点清除） |
+| | `Ctrl+O` | 打开文件（系统文件对话框） |
+| | `Ctrl+Shift+S` | 另存为（系统文件对话框） |
+| | `Ctrl+W` | 关闭当前文档（脏则先问：保存 / 不保存 / 取消） |
 | | `Ctrl+Shift+F` | 格式化（**V1 宣称但未注册的键，本期真注册**） |
 | `editor-notebook` | `Shift+Enter` | 执行本单元并聚焦下一单元（无下一单元则新建） |
 | | `Ctrl+Enter` | 执行本单元（焦点留在单元内） |
@@ -325,7 +328,7 @@
 | | `Ctrl+Shift+Enter` | 运行全部 |
 | | `Esc` | 退出单元编辑态（进入单元选中态，可用 ↑↓ 移动） |
 
-**已实现 vs 计划（1a，2026-09-15）**：上表是目标态。当前**已注册并实测生效**的有五条（均由 `crates/app` 注册，context `editor`）：`ctrl-s`（保存）· `ctrl-/`（行注释开关）· `ctrl-w`（关闭当前文档）· `ctrl-enter`（执行：选区优先 → 光标所在语句）· `ctrl-shift-enter`（执行全部）。
+**已实现 vs 计划（1a，2026-09-15）**：上表是目标态。当前**已注册并实测生效**的七条（均由 `crates/app` 注册，context `editor`）：`ctrl-s`（保存）· `ctrl-/`（行注释开关）· `ctrl-w`（关闭当前文档，脏则弹三态确认）· `ctrl-o`（打开文件）· `ctrl-shift-s`（另存为）· `ctrl-enter`（执行：选区优先 → 光标所在语句）· `ctrl-shift-enter`（执行全部）。
 
 **`Ctrl+F` / `Ctrl+H`（查找 / 替换）不由本模块注册**：内核已把它们绑在 `Input` context 上**并有 listener**，界面由组件库的 `SearchPanel` 渲染；应用层再绑只会重复且收不到按键（架构 §12 #24）。`Ctrl+Z`/`Ctrl+Shift+Z`、`Ctrl+A`、`Ctrl+C/V` 等同理——**内核绑定表就是这几条的权威**。
 

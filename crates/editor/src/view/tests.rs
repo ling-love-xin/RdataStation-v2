@@ -8,21 +8,26 @@
 //! （recursion limit reached）。所有依赖显式列举。
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
-use gpui_kit::component::dock::{
-    BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _,
-};
+use gpui_kit::component::dock::{BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _};
+use gpui_kit::component::{Root, WindowExt as _};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, Focusable as _, IntoElement, KeyBinding, ParentElement as _,
-    Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    div, AppContext as _, Context, Entity, Focusable as _, IntoElement, KeyBinding, ParentElement as _,
+    Render, Styled as _, TestAppContext, VisualTestContext, Window,
 };
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::execution::{QueryData, QueryRunner};
+use crate::mode::CellGranularity;
 use crate::model::{DocumentId, EditorMode};
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
-use crate::view::host::{EditorHostPanel, close_document_in_dock};
+use crate::view::host::{
+    EditorHostPanel, close_document_in_dock, request_close_document, request_save_as,
+    resolve_close_choice,
+};
 
 /// 测试用最小宿主：一个真 `DockArea` + 挂在里面的编辑面板
 ///
@@ -41,7 +46,8 @@ impl Render for Harness {
 
 /// 临时目录（每个用例一个，互不干扰；用完尽力清理）
 fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rds_editor_actions_{name}_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("rds_editor_actions_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("建临时目录");
     dir
@@ -435,7 +441,10 @@ fn closing_a_clean_document_on_request_removes_the_panel_and_closes_it(cx: &mut 
 
     assert_eq!(shared.service().len(), 1, "只关掉指定的那份文档");
     assert!(shared.service().find(&ids[0]).is_none(), "被关的是指定文档");
-    assert!(shared.service().find(&ids[1]).is_some(), "另一个文档不受影响");
+    assert!(
+        shared.service().find(&ids[1]).is_some(),
+        "另一个文档不受影响"
+    );
     assert!(
         cx.update(|_window, cx| harness.read(cx).panels[0].read(cx).is_closed()),
         "面板要被标为已移除（宿主据此清理面板列表）"
@@ -610,10 +619,12 @@ fn ctrl_enter_runs_the_statement_under_the_cursor(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
-    let (shared, id, seen) =
-        shared_with_runner("select 1;
+    let (shared, id, seen) = shared_with_runner(
+        "select 1;
 select 2;
-select boom;", EditorMode::Sql);
+select boom;",
+        EditorMode::Sql,
+    );
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     // 光标停在第二句里（键位路径仍走真按键）
@@ -661,8 +672,11 @@ fn ctrl_shift_enter_runs_the_whole_script(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
-    let (_shared, id, seen) = shared_with_runner("select 1;
-select 2;", EditorMode::Sql);
+    let (_shared, id, seen) = shared_with_runner(
+        "select 1;
+select 2;",
+        EditorMode::Sql,
+    );
     let (panel, cx) = open_panel(cx, &_shared, &id);
 
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -675,7 +689,8 @@ select 2;", EditorMode::Sql);
     assert_eq!(
         seen.lock().expect("锁").as_slice(),
         ["select 1;
-select 2;".to_string()],
+select 2;"
+            .to_string()],
         "“执行全部”发的是整篇脚本"
     );
 }
@@ -709,7 +724,10 @@ fn a_failing_execution_says_why_instead_of_showing_an_empty_grid(cx: &mut TestAp
         "失败不该有网格行"
     );
     // 失败原因同时写进结果存储与状态栏
-    let stored = shared.results().latest(&id).and_then(|entry| entry.error.clone());
+    let stored = shared
+        .results()
+        .latest(&id)
+        .and_then(|entry| entry.error.clone());
     assert!(stored.is_some(), "错误要进 ResultStore");
     let message = cx.update(|_window, cx| panel.read(cx).message.clone());
     assert!(message.expect("状态栏也要说原因").contains("boom"));
@@ -755,7 +773,6 @@ fn panel_with_text<'a>(
     };
     (panel, cx)
 }
-
 
 #[gpui_kit::test]
 fn the_kernel_find_panel_takes_over_on_ctrl_f(cx: &mut TestAppContext) {
@@ -880,9 +897,7 @@ fn a_large_file_stays_editable_but_warns_about_heavy_features(cx: &mut TestAppCo
 
     // 用带档位的请求打开（跳过真读 50MiB：这里只验面板对档位的表现）
     let id = shared
-        .open(
-            OpenRequest::file(&path, "select 1;", EditorMode::Sql).with_tier(tier),
-        )
+        .open(OpenRequest::file(&path, "select 1;", EditorMode::Sql).with_tier(tier))
         .id()
         .clone();
 
@@ -918,8 +933,486 @@ fn a_normal_file_has_no_notice_card(cx: &mut TestAppContext) {
         cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
     };
     cx.update(|_window, cx| {
-        assert!(panel.read(cx).tier_notice().is_none(), "常规文件不显示提示卡");
+        assert!(
+            panel.read(cx).tier_notice().is_none(),
+            "常规文件不显示提示卡"
+        );
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 对话框流程（A9）：模式切换确认
+// ═══════════════════════════════════════════════════════════════════════
+//
+// 对话框要真弹得出来，窗口的根视图必须是组件库的 `Root`（`Root::update` 找不到 Root 会
+// 直接 panic），且宿主 render 里要挂 `Root::render_dialog_layer`——与生产同构。
+// 下面这组测试因此不复用上面那个 Harness，而是把 `Root` 包在外面（“走生产入口”）。
+
+/// 带对话框层的宿主（与 `WorkbenchView` 同构：DockArea + 对话框层）
+struct DialogHarness {
+    area: Entity<DockArea>,
+    panels: Vec<Entity<EditorHostPanel>>,
+}
+
+impl Render for DialogHarness {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .child(self.area.clone())
+            .when_some(Root::render_dialog_layer(window, cx), |this, layer| {
+                this.child(layer)
+            })
+    }
+}
+
+/// 起一个带对话框层的窗口，里面装一个文档的面板
+fn dialog_harness<'a>(
+    cx: &'a mut TestAppContext,
+    shared: &EditorShared,
+    id: &DocumentId,
+    tag: &'static str,
+) -> (Entity<DialogHarness>, &'a mut VisualTestContext) {
+    let shared = shared.clone();
+    let id = id.clone();
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None::<Entity<DialogHarness>>));
+    let slot_in = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let (area, _skin) = DockSkin::dock_area(tag, Some(1), window, cx);
+        let panel = cx.new(|cx| EditorHostPanel::new(shared.clone(), id, window, cx));
+        area.update(cx, |area, cx| {
+            area.add_panel(panel.clone(), DockPlacement::Center, None, window, cx);
+        });
+        let harness = cx.new(|_cx| DialogHarness {
+            area,
+            panels: vec![panel],
+        });
+        *slot_in.borrow_mut() = Some(harness.clone());
+        Root::new(harness, window, cx)
+    });
+    let harness = slot.borrow().clone().expect("harness 已创建");
+    (harness, cx)
+}
+
+/// 真点对话框上的某个按钮：headless 下 `debug_bounds` 的坐标与鼠标命中测试对不上
+/// （试过 `simulate_click` + `run_until_parked`：单跑能中、全套跑就中不了），
+/// 因此对话框只断言“层真渲染 + 按钮真在”，点击分发不在这里赌。
+fn dialog_button_rendered(cx: &mut VisualTestContext, selector: &'static str) -> bool {
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.debug_bounds(selector).is_some()
+}
+
+/// 需要付出代价的切换：先问，不问就不切（禁止静默切换，原型 §1.3）
+#[gpui_kit::test]
+fn switching_to_text_asks_before_hiding_results(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\ask.sql", "select 1;");
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-ask");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.request_mode_switch(EditorMode::Text, window, cx)
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "SQL → 文本要先确认"
+    );
+    assert!(
+        cx.debug_bounds("dialog-layer").is_some(),
+        "对话框层要真渲染（不是只有状态）"
+    );
+    assert_eq!(
+        cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
+        Some(EditorMode::Sql),
+        "未确认前模式不得变（静默切换是禁止项）"
+    );
+
+    // 取消（Esc / 点遮罩 / 取消按钮走的是同一条路：对话框关掉、状态不变）
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-switch-cancel"),
+        "取消按钮要在对话框里"
+    );
+    cx.update(|window, cx| window.close_dialog(cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert_eq!(
+        cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
+        Some(EditorMode::Sql),
+        "取消就是什么都不做"
+    );
+}
+
+/// 确认后真切：SQL → 分析要带粒度，按钮上的粒度直接决定单元怎么分
+#[gpui_kit::test]
+fn confirming_the_switch_applies_the_chosen_granularity(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\cells.sql", "select 1; select 2;");
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-confirm");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.request_mode_switch(EditorMode::Analysis, window, cx)
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    // 粒度二选一：两个动作按钮就是选择本身（不是单选 + 确定）
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-switch-per-statement")
+            && dialog_button_rendered(cx, "editor-dialog-editor-switch-single"),
+        "粒度两个选项都该在对话框里"
+    );
+    assert_eq!(
+        cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
+        Some(EditorMode::Sql),
+        "未确认前模式不得变"
+    );
+
+    // 确认（真路径是按钮回调，这里直接走同一个入口）
+    cx.update(|window, cx| window.close_dialog(cx));
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.confirm_mode_switch(
+                EditorMode::Analysis,
+                CellGranularity::PerStatement,
+                window,
+                cx,
+            )
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert_eq!(
+        cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
+        Some(EditorMode::Analysis),
+        "模式落到文档上"
+    );
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert!(
+        text.contains("-- %%"),
+        "按语句拆分后文本层要有单元分隔标记：{text}"
+    );
+}
+
+/// 免确认的切换（文本 → SQL）不弹窗：不是所有切换都要打断用户
+#[gpui_kit::test]
+fn switching_from_text_to_sql_needs_no_dialog(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::file(
+            r"D:\sql\notes.txt",
+            "select 1;",
+            EditorMode::Text,
+        ))
+        .id()
+        .clone();
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-free-switch");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.request_mode_switch(EditorMode::Sql, window, cx)
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        !cx.update(|window, cx| window.has_active_dialog(cx)),
+        "文本 → SQL 没有代价，不必打断用户"
+    );
+    assert_eq!(
+        cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
+        Some(EditorMode::Sql)
+    );
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert_eq!(text, "select 1;", "免确认的切换不动内容");
+}
+
+/// 确认回调与粒度要能独立驱动（宿主也能走这条路；粒度不参与内容变换时不该改内容）
+#[gpui_kit::test]
+fn confirmed_switch_recomputes_the_plan_with_the_chosen_granularity(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\single.sql", "select 1; select 2;");
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-single-cell");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.confirm_mode_switch(
+                EditorMode::Analysis,
+                CellGranularity::Single,
+                window,
+                cx,
+            )
+        });
+    });
+
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert!(
+        !text.contains("-- %%"),
+        "整篇一个单元不该出现分隔标记：{text}"
+    );
+    assert_eq!(
+        cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
+        Some(EditorMode::Analysis)
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 对话框流程（A9）：关闭三态 / 另存为
+// ═══════════════════════════════════════════════════════════════════════
+
+/// 假“系统文件对话框”：把用户选的路径固定下来（真写盘，不碰宿主与 rfd）
+fn attach_picker(shared: &EditorShared, picked: Option<PathBuf>) {
+    shared.attach_save_path_picker(Rc::new(move |_current, _default_name| picked.clone()));
+}
+
+/// 脏文档关闭：先弹三态确认，**确认之前一张纸也不动**
+#[gpui_kit::test]
+fn closing_a_dirty_document_asks_before_touching_anything(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\dirty.sql", "select 1;");
+    shared.update(|service| service.set_content(&id, "select 2;".to_string()));
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-close-ask");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let (area, panel) = cx.update(|_window, cx| {
+        (
+            harness.read(cx).area.clone(),
+            harness.read(cx).panels[0].clone(),
+        )
+    });
+    cx.update(|window, cx| request_close_document(&area, panel.clone(), window, cx));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "脏文档关闭要先问"
+    );
+    assert!(shared.service().find(&id).is_some(), "未确认前文档不能关");
+    assert!(!cx.update(|_window, cx| panel.read(cx).is_closed()));
+
+    // 取消：文档与面板都留着
+    let (area, panel) = (area.clone(), panel.clone());
+    cx.update(|window, cx| {
+        window.close_dialog(cx);
+        resolve_close_choice(&area, panel.clone(), crate::view::dialogs::CloseChoice::Cancel, window, cx);
+    });
+    assert!(shared.service().find(&id).is_some(), "取消后文档还在");
+    assert!(!cx.update(|_window, cx| panel.read(cx).is_closed()));
+}
+
+/// “不保存”分支：直接丢改动关掉（用户明确选了不保存）
+#[gpui_kit::test]
+fn discarding_unsaved_changes_closes_without_writing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let dir = temp_dir("discard");
+    let path = dir.join("keep.sql");
+    std::fs::write(&path, "select 1;").expect("写盘");
+
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::file(&path, "select 1;", EditorMode::Sql))
+        .id()
+        .clone();
+    shared.update(|service| service.set_content(&id, "select 999;".to_string()));
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-discard");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let (area, panel) = cx.update(|_window, cx| {
+        (
+            harness.read(cx).area.clone(),
+            harness.read(cx).panels[0].clone(),
+        )
+    });
+
+    cx.update(|window, cx| {
+        resolve_close_choice(
+            &area,
+            panel.clone(),
+            crate::view::dialogs::CloseChoice::Discard,
+            window,
+            cx,
+        )
+    });
+
+    assert!(shared.service().find(&id).is_none(), "不保存 = 文档关掉");
+    assert!(cx.update(|_window, cx| panel.read(cx).is_closed()));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("读盘"),
+        "select 1;",
+        "磁盘上的内容不得被未保存的改动覆盖"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// “保存”分支 + 未命名文档：走另存为（路径选择端口）→ 写盘成功才关
+#[gpui_kit::test]
+fn saving_an_untitled_document_writes_it_before_closing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let dir = temp_dir("save-then-close");
+    let target = dir.join("new.sql");
+
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("select 7;", EditorMode::Sql))
+        .id()
+        .clone();
+    shared.update(|service| service.set_content(&id, "select 7;".to_string()));
+    attach_picker(&shared, Some(target.clone()));
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-save-close");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let (area, panel) = cx.update(|_window, cx| {
+        (
+            harness.read(cx).area.clone(),
+            harness.read(cx).panels[0].clone(),
+        )
+    });
+
+    cx.update(|window, cx| {
+        resolve_close_choice(
+            &area,
+            panel.clone(),
+            crate::view::dialogs::CloseChoice::Save,
+            window,
+            cx,
+        )
+    });
+
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("另存为应真的写盘"),
+        "select 7;"
+    );
+    assert!(shared.service().find(&id).is_none(), "写完才能关");
+    assert!(cx.update(|_window, cx| panel.read(cx).is_closed()));
+    assert!(
+        !cx.update(|window, cx| window.has_active_dialog(cx)),
+        "顺利写盘不该弹二次确认"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// 用户在另存为里取消：文档**不关**，而且不能当已经存过
+#[gpui_kit::test]
+fn cancelling_save_as_keeps_the_document_open(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("select 7;", EditorMode::Sql))
+        .id()
+        .clone();
+    shared.update(|service| service.set_content(&id, "select 8;".to_string()));
+    attach_picker(&shared, None);
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-save-cancel");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let (area, panel) = cx.update(|_window, cx| {
+        (
+            harness.read(cx).area.clone(),
+            harness.read(cx).panels[0].clone(),
+        )
+    });
+
+    cx.update(|window, cx| {
+        resolve_close_choice(
+            &area,
+            panel.clone(),
+            crate::view::dialogs::CloseChoice::Save,
+            window,
+            cx,
+        )
+    });
+
+    assert!(shared.service().find(&id).is_some(), "取消另存为就不能关");
+    assert!(!cx.update(|_window, cx| panel.read(cx).is_closed()));
+    assert!(
+        shared.service().find(&id).expect("文档").is_dirty(),
+        "没写盘就仍是脏的"
+    );
+}
+
+/// 未接入系统文件对话框时，“保存”分支不能静默吞掉：状态栏要说原因
+#[gpui_kit::test]
+fn saving_without_a_path_picker_reports_why(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(OpenRequest::untitled("select 7;", EditorMode::Sql))
+        .id()
+        .clone();
+    // 不注入 picker：模拟宿主未接系统文件对话框
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-no-picker");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let (area, panel) = cx.update(|_window, cx| {
+        (
+            harness.read(cx).area.clone(),
+            harness.read(cx).panels[0].clone(),
+        )
+    });
+
+    cx.update(|window, cx| {
+        resolve_close_choice(
+            &area,
+            panel.clone(),
+            crate::view::dialogs::CloseChoice::Save,
+            window,
+            cx,
+        )
+    });
+
+    assert!(shared.service().find(&id).is_some(), "没存成就不许关");
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(
+        message.expect("要留原因").contains("系统文件对话框"),
+        "原因要说清是宿主未接入"
+    );
+}
+
+/// `Ctrl+Shift+S`（另存为，不关文档）：写盘、标题跟随、清脏；取消则什么都不变
+#[gpui_kit::test]
+fn save_as_rewrites_the_path_and_keeps_the_document_open(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let dir = temp_dir("save-as");
+    let target = dir.join("renamed.sql");
+
+    let (shared, id) = shared_with_document(r"D:\sql\original.sql", "select 1;");
+    shared.update(|service| service.set_content(&id, "select 2;".to_string()));
+    attach_picker(&shared, Some(target.clone()));
+
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-save-as");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+
+    let saved = cx.update(|_window, cx| request_save_as(&panel, cx));
+    assert!(saved, "另存为应当写盘成功");
+
+    assert_eq!(std::fs::read_to_string(&target).expect("读盘"), "select 2;");
+    let (path, title, dirty) = {
+        let service = shared.service();
+        let doc = service.find(&id).expect("文档");
+        (
+            doc.path().map(|path| path.to_path_buf()),
+            doc.title().to_string(),
+            doc.is_dirty(),
+        )
+    };
+    assert_eq!(path.as_deref(), Some(target.as_path()), "路径改为另存目标");
+    assert_eq!(title, "renamed.sql", "标签标题跟随文件名");
+    assert!(!dirty, "另存为即已保存");
+    assert!(shared.service().find(&id).is_some(), "另存为不关文档");
     let _ = std::fs::remove_dir_all(dir);
 }

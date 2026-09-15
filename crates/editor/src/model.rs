@@ -42,6 +42,9 @@ pub enum EditorMode {
 }
 
 impl EditorMode {
+    /// 三个模式的声明顺序（= 模式指示器菜单顺序：能力递进 文本 → SQL → 分析）
+    pub const ALL: [EditorMode; 3] = [Self::Text, Self::Sql, Self::Analysis];
+
     /// 界面展示名（与原型文档用词一致）
     pub fn label(self) -> &'static str {
         match self {
@@ -68,6 +71,15 @@ impl EditorMode {
             Self::Text => "text",
             Self::Sql => "sql",
             Self::Analysis => "analysis",
+        }
+    }
+
+    /// 未命名文档的另存为默认文件名（扩展名与模式一致，另存后判定规则不会跟模式打架）
+    pub fn default_file_name(self) -> &'static str {
+        match self {
+            Self::Text => "未命名.txt",
+            Self::Sql => "未命名.sql",
+            Self::Analysis => "未命名.rdsnote",
         }
     }
 

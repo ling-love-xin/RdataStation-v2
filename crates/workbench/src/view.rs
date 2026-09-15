@@ -236,6 +236,8 @@ impl WorkbenchView {
                 crate::services::editor_exec::attach(&service);
                 // A12：把会话存储接上（光标 / 选区 / 模式跨重启保留；未接时不持久化但编辑可用）
                 crate::services::editor_session::attach(&service);
+                // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）
+                crate::services::editor_files::attach(&service);
                 service
             },
             editor_hosts: Vec::new(),
@@ -360,7 +362,7 @@ impl WorkbenchView {
     /// 键位绑在编辑器面板的 `editor` context 上（A10），但**由宿主执行**：
     /// 面板移除时会回调它自己的 `on_removed`，而 `DockArea` 移除面板要读面板本体，
     /// 从面板自己的 `update` 里发起就是重入。宿主不在那个 `update` 中，可以安全地做。
-    /// 脏文档由 `close_document_in_dock` 拦下并在面板状态栏标出原因。
+    /// 脏文档由 [`Self::close_editor_document`] 弹三态确认（保存 / 不保存 / 取消）。
     pub fn close_active_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
         let Some(id) = self.editor_service.service().active_id().cloned() else {
@@ -374,10 +376,65 @@ impl WorkbenchView {
         else {
             return;
         };
+        self.close_editor_document(panel, window, cx);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // 编辑器文档的宿主级动作（A9）：关闭三态 / 另存为 / 打开文件
+    //
+    // 这几件事只能宿主做：① 让 Dock 移除面板（面板自己发起是重入）；② 弹对话框（要
+    // `Root` 与对话框层，宿主 render 已挂）；③ 弹系统文件对话框（`rfd` 是宿主依赖）。
+    // 编辑器侧只提供纯判定（`mode::plan_switch`）、文案（`mode::ConfirmKind`）与
+    // 对话框渲染（`editor::view::dialogs`）。
+    // ══════════════════════════════════════════════════════════════════
+
+    /// 关闭一份编辑器文档：干净的直接关，脏的先问（保存 / 不保存 / 取消）
+    ///
+    /// 流程本身在编辑器侧（`editor::view::host::request_close_document`）——“先保存再关”、
+    /// “未命名先另存为”、“写盘失败二次确认”都是编辑器语义；宿主只提供两样东西：
+    /// 能让 Dock 移除面板的入口、以及系统文件对话框（以路径选择端口注入）。
+    pub fn close_editor_document(
+        &mut self,
+        panel: Entity<editor::view::host::EditorHostPanel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(area) = self.area.clone() else {
             return;
         };
-        editor::view::host::close_document_in_dock(&area, panel, window, cx);
+        editor::view::host::request_close_document(&area, panel, window, cx);
+    }
+
+    /// 另存为当前文档（`Ctrl+Shift+S`）：系统文件对话框 → 写盘 → 标题跟随
+    ///
+    /// 未接入面板时在状态栏留原因，不静默。
+    pub fn save_active_editor_as(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
+        let Some(id) = self.editor_service.service().active_id().cloned() else {
+            return;
+        };
+        let Some(panel) = self
+            .editor_hosts
+            .iter()
+            .find(|panel| panel.read(cx).document() == &id)
+            .cloned()
+        else {
+            return;
+        };
+        editor::view::host::request_save_as(&panel, cx);
+    }
+
+    /// 「打开文件」（`Ctrl+O`）：系统文件对话框 → 在编辑器中打开
+    ///
+    /// 已在编辑器里打开过的路径**只激活、不重读**（去重规则在 `editor::persist::open_file`）。
+    /// 这条入口在宿主侧：它要开**新文档**（建面板），不是某份文档上的动作。
+    pub fn open_file_via_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = crate::services::editor_files::pick_open_path() else {
+            return;
+        };
+        if let Err(error) = self.open_in_editor(path, window, cx) {
+            *self.shared.notice.borrow_mut() = Some(format!("打开文件失败：{error}"));
+        }
     }
 
     /// 项目视图宿主（构造期已装配）。
@@ -1367,6 +1424,20 @@ impl Render for WorkbenchView {
                 let entity = cx.entity();
                 move |_: &editor::commands::CloseDocument, window, cx| {
                     entity.update(cx, |this, cx| this.close_active_editor(window, cx));
+                }
+            })
+            // A9：另存为 / 打开文件——同样在这里执行（系统文件对话框是宿主依赖，
+            // 且另存为要落到“当前是哪份文档”上）。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &editor::commands::SaveDocumentAs, window, cx| {
+                    entity.update(cx, |this, cx| this.save_active_editor_as(window, cx));
+                }
+            })
+            .on_action({
+                let entity = cx.entity();
+                move |_: &editor::commands::OpenDocument, window, cx| {
+                    entity.update(cx, |this, cx| this.open_file_via_dialog(window, cx));
                 }
             })
             .child(self.render_title_bar(window, cx))

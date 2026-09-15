@@ -107,6 +107,64 @@ impl SwitchPlan {
     }
 }
 
+impl CellGranularity {
+    /// 粒度选择器的选项文案
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Single => "整篇作为一个单元",
+            Self::PerStatement => "按语句拆分（一条语句一个单元）",
+        }
+    }
+}
+
+impl Default for CellGranularity {
+    /// SQL → 分析的默认粒度：按语句拆分（多数脚本是多条语句的集合）
+    fn default() -> Self {
+        Self::PerStatement
+    }
+}
+
+/// 对话框文案（**纯函数**：四种确认分支的措辞在这里可穷举断言，不埋在视图里）
+///
+/// 措辞口径：标题说“要发生什么”，正文说“代价是什么”，按钮说“确认后做什么”——
+/// 不用“确定 / 取消”这种看不出后果的通用词。
+impl ConfirmKind {
+    /// 对话框标题
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::HideResults => "切换到文本模式",
+            Self::ConvertToCells => "切换到分析模式",
+            Self::ExportToScript => "离开分析模式",
+            Self::SwitchSession => "切换会话",
+        }
+    }
+
+    /// 对话框正文（说明代价；`None` 表示正文由调用方补充）
+    pub fn body(self) -> &'static str {
+        match self {
+            Self::HideResults => "结果仍保留在结果面板，但不再可交互；切回 SQL 模式可继续使用。",
+            Self::ConvertToCells => "当前内容将按所选粒度拆分为可执行单元；连接绑定提升为会话默认连接。",
+            Self::ExportToScript => "单元结构会被展开为纯脚本，单元输出与过期状态不会保留。",
+            Self::SwitchSession => "会话切换意味着变量空间变化：所有单元的输出将标记为过期。",
+        }
+    }
+
+    /// 确认按钮文案（动宾结构：按下去会发生什么）
+    pub fn confirm_label(self) -> &'static str {
+        match self {
+            Self::HideResults => "切换并隐藏结果",
+            Self::ConvertToCells => "拆分并切换",
+            Self::ExportToScript => "导出为脚本",
+            Self::SwitchSession => "切换会话",
+        }
+    }
+
+    /// 是否需要用户先选单元粒度（只有“转单元”这一类切换需要）
+    pub fn picks_granularity(self) -> bool {
+        matches!(self, Self::ConvertToCells)
+    }
+}
+
 /// 规划一次模式切换（纯函数：不改状态、不弹窗、不做 I/O）
 ///
 /// 对应原型 §1.3 的切换矩阵；矩阵未直接列出的一对（文本 ↔ 分析）按“先到 SQL 再转”
@@ -293,6 +351,67 @@ mod switch_tests {
 
     fn plan(from: EditorMode, to: EditorMode, content: &str, has_results: bool) -> SwitchPlan {
         plan_switch(from, to, content, has_results, CellGranularity::PerStatement)
+    }
+
+    /// 四种确认分支逐一断言文案：标题 / 正文 / 按钮都必须有内容，且**不出现“确定 / 取消”**
+    /// 这种看不出后果的通用词（措辞口径见 `ConfirmKind` 文档）。
+    #[test]
+    fn every_confirmation_has_its_own_wording() {
+        let kinds = [
+            ConfirmKind::HideResults,
+            ConfirmKind::ConvertToCells,
+            ConfirmKind::ExportToScript,
+            ConfirmKind::SwitchSession,
+        ];
+        let mut titles = Vec::new();
+        for kind in kinds {
+            let title = kind.title();
+            assert!(!title.is_empty(), "{kind:?} 缺标题");
+            assert!(!kind.body().is_empty(), "{kind:?} 缺正文");
+            assert!(!kind.confirm_label().is_empty(), "{kind:?} 缺按钮文案");
+            for text in [title, kind.body(), kind.confirm_label()] {
+                assert!(!text.contains("确定"), "{kind:?} 不许用笼统的“确定”：{text}");
+                assert!(!text.contains("取消"), "{kind:?} 的取消由对话框统一提供：{text}");
+            }
+            assert!(!titles.contains(&title), "标题彼此重复：{title}");
+            titles.push(title);
+        }
+    }
+
+    /// 粒度选择器只在“转单元”那一类出现：别的切换没有粒度可选，不该多问一句
+    #[test]
+    fn only_conversion_asks_for_granularity() {
+        assert!(ConfirmKind::ConvertToCells.picks_granularity());
+        assert!(!ConfirmKind::HideResults.picks_granularity());
+        assert!(!ConfirmKind::ExportToScript.picks_granularity());
+        assert!(!ConfirmKind::SwitchSession.picks_granularity());
+
+        // 默认粒度是按语句拆分（多数脚本多条语句），与两个选项文案都有区分度
+        assert_eq!(CellGranularity::default(), CellGranularity::PerStatement);
+        assert_ne!(
+            CellGranularity::Single.label(),
+            CellGranularity::PerStatement.label()
+        );
+    }
+
+    /// 计划里的确认类型与文案表对得上：免确认的切换不该有文案可言
+    #[test]
+    fn plan_confirmation_kinds_are_covered_by_wording() {
+        // 文本 → SQL 免确认
+        assert!(plan(EditorMode::Text, EditorMode::Sql, "select 1", false).confirm.is_none());
+
+        // 需要确认的四个方向都能取到各自文案
+        for (from, to) in [
+            (EditorMode::Sql, EditorMode::Text),
+            (EditorMode::Sql, EditorMode::Analysis),
+            (EditorMode::Analysis, EditorMode::Sql),
+            (EditorMode::Text, EditorMode::Analysis),
+        ] {
+            let plan = plan(from, to, "select 1", false);
+            let kind = plan.confirm.expect("{from:?} → {to:?} 需要确认");
+            assert!(!kind.title().is_empty());
+        }
+        assert!(plan_session_switch().confirm == Some(ConfirmKind::SwitchSession));
     }
 
     #[test]

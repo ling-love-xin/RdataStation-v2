@@ -11,6 +11,9 @@
 //! 到这里的动作。若某键内核已经绑了（如 `Ctrl+F` → `input::Search`），
 //! 冒泡仍会继续到本命名空间——因此**改键位前先看 `gpui-base/src/input/base/state.rs`
 //! 的 `init`**，否则会出现"看着注册了、实际被内核吃掉"的静默失效。
+//!
+//! 需要宿主（Dock / 对话框 / 系统文件对话框）的动作也在这里声明，由 `WorkbenchView`
+//! 处理：`CloseDocument` · `SaveDocumentAs` · `OpenDocument`（面板自己发起 Dock 移除是重入）。
 
 use gpui_kit::*;
 
@@ -18,6 +21,8 @@ actions!(
     editor,
     [
         SaveDocument,
+        SaveDocumentAs,
+        OpenDocument,
         ToggleComment,
         CloseDocument,
         ExecuteSql,

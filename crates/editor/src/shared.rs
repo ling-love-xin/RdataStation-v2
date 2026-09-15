@@ -12,6 +12,7 @@
 //! 而不是静默什么都不做。
 
 use std::cell::{Ref, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -19,6 +20,12 @@ use crate::execution::{ExecChannel, QueryRunner};
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
 use crate::session::{SavedSession, SessionStore};
 use crate::store::ResultStore;
+
+/// 另存为路径选择端口（由宿主注入：编辑器不依赖 `rfd`）
+///
+/// 入参 = （当前路径，默认文件名）；返回 = 用户选的路径（`None` = 用户取消，**不是错误**）。
+pub type SavePathPicker =
+    Rc<dyn Fn(Option<PathBuf>, String) -> Option<PathBuf>>;
 
 /// 共享句柄（`Clone` 即克隆 `Rc`，各面板指向同一份状态）
 #[derive(Clone)]
@@ -29,6 +36,8 @@ pub struct EditorShared {
     exec: Rc<RefCell<Option<ExecChannel>>>,
     /// 会话存储：宿主注入后才有（无宿主 = 不持久化光标/模式）
     sessions: Rc<RefCell<Option<Rc<dyn SessionStore>>>>,
+    /// 另存为路径选择器：宿主注入后才有（无宿主 = 另存为明确报“未接入”，不静默失败）
+    save_path: Rc<RefCell<Option<SavePathPicker>>>,
 }
 
 impl Default for EditorShared {
@@ -44,6 +53,7 @@ impl EditorShared {
             results: Rc::new(RefCell::new(ResultStore::new())),
             exec: Rc::new(RefCell::new(None)),
             sessions: Rc::new(RefCell::new(None)),
+            save_path: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -136,5 +146,21 @@ impl EditorShared {
             Some(store) => store.load_latest(),
             None => Ok(None),
         }
+    }
+
+    /// 注入另存为路径选择器（**宿主调用一次**：workbench 接 `rfd`）
+    pub fn attach_save_path_picker(&self, picker: SavePathPicker) {
+        *self.save_path.borrow_mut() = Some(picker);
+    }
+
+    /// 是否接了路径选择器（未接时“另存为”要明确报原因）
+    pub fn has_save_path_picker(&self) -> bool {
+        self.save_path.borrow().is_some()
+    }
+
+    /// 弹一次路径选择（未注入时返回 `None`，调用方必须先看 [`Self::has_save_path_picker`]）
+    pub fn pick_save_path(&self, current: Option<PathBuf>, default_name: String) -> Option<PathBuf> {
+        let guard = self.save_path.borrow();
+        guard.as_ref().and_then(|picker| picker(current, default_name))
     }
 }

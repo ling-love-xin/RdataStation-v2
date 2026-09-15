@@ -10,22 +10,27 @@ use std::cell::RefCell;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::table::TableState;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::*;
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::edit;
 use crate::execution::{self, ExecTarget};
+use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode};
 use crate::persist;
 use crate::service::Document;
 use crate::shared::EditorShared;
 use crate::store::ResultEntry;
 use crate::ui;
+use crate::view::dialogs;
 use crate::view::highlight;
 use crate::view::widgets::result_grid::{self, ResultGridDelegate};
 use crate::view::widgets::status_bar::{self, StatusInputs};
@@ -180,6 +185,38 @@ impl EditorHostPanel {
         result
     }
 
+    /// 另存为：写盘 → 换路径与标题（文档**身份不变**，只换路径）
+    ///
+    /// 路径由宿主给出（系统文件对话框在 workbench 侧，本 crate 不依赖 `rfd`）。
+    pub fn save_as(
+        &mut self,
+        path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> Result<std::path::PathBuf, persist::PersistError> {
+        let result = persist::save_as(&self.shared, &self.document, path);
+        if result.is_ok() {
+            cx.notify();
+        }
+        result
+    }
+
+    /// 文档标题（宿主拼确认文案用；文档不存在时给“（已关闭）”）
+    pub fn title_text(&self) -> String {
+        self.with_document(|doc| doc.title().to_string())
+            .unwrap_or_else(|| "（已关闭）".to_string())
+    }
+
+    /// 文档落盘路径（另存为对话框的默认目录 / 默认文件名用它）
+    pub fn document_path(&self) -> Option<std::path::PathBuf> {
+        self.with_document(|doc| doc.path().map(std::path::Path::to_path_buf))
+            .flatten()
+    }
+
+    /// 文档当前模式（宿主取另存为的默认文件名后缀用它）
+    pub fn document_mode(&self) -> Option<EditorMode> {
+        self.with_document(|doc| doc.mode())
+    }
+
     /// 把自己所在的标签激活（宿主打开已存在文档时调用）
     ///
     /// `TabGroup::select_tab` 是 Dock 公开的激活入口；面板从 `on_added_to` 拿到组句柄，
@@ -215,6 +252,11 @@ impl EditorHostPanel {
     pub fn set_message(&mut self, text: Option<String>, cx: &mut Context<Self>) {
         self.message = text;
         cx.notify();
+    }
+
+    /// 清掉状态栏提示（动作成功 / 用户取消时调：旧提示不该继续挂着）
+    pub fn clear_message(&mut self, cx: &mut Context<Self>) {
+        self.set_message(None, cx);
     }
 
     /// 当前会话快照（关文档 / 退出时保存用）
@@ -319,9 +361,47 @@ impl EditorHostPanel {
         (state.value().to_string(), state.selected_range())
     }
 
-    fn title_text(&self) -> String {
-        self.with_document(|doc| doc.title().to_string())
-            .unwrap_or_else(|| "（已关闭）".to_string())
+    /// 工具栏（原型 §2.2）：目前只有最左的**模式指示器**
+    ///
+    /// 1a 只做“模式可见且可切”这一件事：执行族 / 格式化 / 历史 / 更多 / 执行位置 / 连接
+    /// 都还没实现，**不放只有宣传作用的按钮**（原型 §2.2 明确排除项）。文本模式下它就是
+    /// 极简工具栏的全部（模式指示 + 后续的查找入口）。
+    fn render_toolbar(&self, mode: EditorMode, cx: &mut Context<Self>) -> impl IntoElement {
+        let border = cx.theme().colors.border;
+        let entity = cx.entity();
+
+        div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .h(rems(ui::EDITOR_TOOLBAR_HEIGHT))
+            .border_b(ui::HAIRLINE)
+            .border_color(border)
+            .child(
+                Button::new("editor-mode-indicator")
+                    .ghost()
+                    .small()
+                    .label(format!("{} ▾", mode.label()))
+                    .dropdown_menu(move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        for candidate in EditorMode::ALL {
+                            let is_current = candidate == mode;
+                            let entity = entity.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(candidate.label())
+                                    // 当前模式打勾而不是隐藏：三个模式总在同一处可切
+                                    .checked(is_current)
+                                    .on_click(move |_, window, app| {
+                                        entity.update(app, |panel, cx| {
+                                            panel.request_mode_switch(candidate, window, cx);
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
     }
 
     fn editor_read_only(&self) -> bool {
@@ -421,6 +501,112 @@ impl EditorHostPanel {
         self.shared
             .update(|service| service.set_content(&self.document, new_text));
         self.set_message(None, cx);
+    }
+
+    // ===== 模式切换（A5 的矩阵 + A9 的确认对话框）=====
+    //
+    // 入口是工具栏最左的**模式指示器**（原型 §2.2）：点击选目标模式，代价由 `mode::plan_switch`
+    // 判定，需确认的先弹对话框；确认后本面板落地（写内容 + 改模式 + 刷新着色/只读）。
+    // **禁止静默切换**：任何需要付出代价的切换都不过状态（原型 §1.3）。
+
+    /// 请求切换到目标模式（工具栏模式指示器调用）
+    pub(crate) fn request_mode_switch(
+        &mut self,
+        to: EditorMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(from) = self.with_document(|doc| doc.mode()) else {
+            return;
+        };
+        if from == to {
+            return;
+        }
+
+        let plan = self.switch_plan(from, to, CellGranularity::default(), cx);
+        let Some(kind) = plan.confirm else {
+            // 免确认（文本 → SQL）：直接切
+            self.apply_mode_switch(plan, window, cx);
+            return;
+        };
+
+        let entity = cx.entity();
+        dialogs::open_switch_confirm(
+            window,
+            cx,
+            kind,
+            from,
+            to,
+            plan.note,
+            move |granularity, window, cx| {
+                entity.update(cx, |panel, cx| {
+                    panel.confirm_mode_switch(to, granularity, window, cx);
+                });
+            },
+        );
+    }
+
+    /// 确认后的落地（对话框回调调用）
+    ///
+    /// “从哪个模式切过来”在这里**重新读**而不是用弹窗前的快照：粒度是确认时才拿到的输入，
+    /// 计划必须带着它重算（拿弹窗前那份就等于丢掉用户的选择）。
+    pub fn confirm_mode_switch(
+        &mut self,
+        to: EditorMode,
+        granularity: CellGranularity,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(from) = self.with_document(|doc| doc.mode()) else {
+            return;
+        };
+        let plan = self.switch_plan(from, to, granularity, cx);
+        self.apply_mode_switch(plan, window, cx);
+    }
+
+    /// 算一份切换计划（读取当前文本与“有没有结果”，交给纯函数判定）
+    fn switch_plan(
+        &self,
+        from: EditorMode,
+        to: EditorMode,
+        granularity: CellGranularity,
+        cx: &App,
+    ) -> mode::SwitchPlan {
+        mode::plan_switch(
+            from,
+            to,
+            &self.editor_text(cx),
+            self.result_summary.is_some(),
+            granularity,
+        )
+    }
+
+    /// 落地一次模式切换（**已确认**）：内容变换 → 模式变更 → 视图刷新
+    ///
+    /// 内容先写回 `EditorService`，再让面板从文档重载（`reload_from_document`）——
+    /// 内容只有一条真值路径，不直接把变换结果塞进内核（否则服务层与内核就分家了）。
+    fn apply_mode_switch(
+        &mut self,
+        plan: mode::SwitchPlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rewritten = match plan.content {
+            mode::SwitchContent::Unchanged => None,
+            mode::SwitchContent::Sql(text) => Some(text),
+            mode::SwitchContent::Cells(cells) => Some(mode::cells_to_text(&cells)),
+        };
+        if let Some(text) = rewritten {
+            let statements = count_statements(&text);
+            self.shared
+                .update(|service| service.set_content(&self.document, text));
+            self.statements = statements;
+        }
+        self.shared
+            .update(|service| service.set_mode(&self.document, plan.to));
+        self.sync_mode(window, cx);
+        self.reload_from_document(window, cx);
+        self.set_message(plan.note.map(str::to_string), cx);
     }
 
     // ===== 执行（A14）=====
@@ -575,7 +761,7 @@ impl EditorHostPanel {
     /// 从面板自己的 `update`（动作处理器就在其中）里发起就是重入，GPUI 直接 panic。
     /// 所以关闭由宿主调用 [`close_document_in_dock`]，面板只负责回答“能不能关”。
     /// 脏文档在这里拦下并说明原因（Dock 没有“关闭前否决”钩子，架构 §12 #18）；
-    /// 三态确认（保存 / 不保存 / 取消）属对话框批次。
+    /// 三态确认（保存 / 不保存 / 取消）由宿主弹 [`dialogs::open_close_confirm`]。
     pub(crate) fn refuse_close_when_dirty(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.is_dirty() {
             return false;
@@ -608,8 +794,11 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
 /// 而动作处理器本身就在面板的 `update` 里——从那里发起关闭是重入，GPUI 会直接 panic。
 /// 宿主不在面板的 `update` 中，所以只有它能安全地让容器移除面板。
 ///
-/// 返回是否真的发起关闭：脏文档会被拦下，并在面板状态栏说明原因（不静默）。
-/// 文档本身由 `EditorHostPanel::on_removed` 从 `EditorService` 里关闭——
+/// **脏文档在这里被拦下**（返回 `false`，并在面板状态栏留原因）：Dock 没有“关闭前否决”
+/// 钩子（架构 §12 #18），这个判据就是安全网。要真正关掉脏文档，调用方必须先走三态确认
+/// （[`dialogs::open_close_confirm`]）再调 [`close_document_now`]。
+///
+/// 文档本身由 [`EditorHostPanel::on_removed`] 从 `EditorService` 里关闭——
 /// “一个面板 = 一份文档”的对应关系只有一处。
 pub fn close_document_in_dock(
     area: &Entity<DockArea>,
@@ -621,9 +810,243 @@ pub fn close_document_in_dock(
         panel.update(cx, |panel, cx| panel.refuse_close_when_dirty(cx));
         return false;
     }
+    close_document_now(area, panel, window, cx)
+}
+
+/// 直接关闭（**不做脏检查**）：调用方已就未保存改动拿到用户选择
+///
+/// 只应有两条调用路径：文档本来就干净（走 [`close_document_in_dock`]）、
+/// 用户在关闭确认里选了“不保存”（走 [`request_close_document`]）。
+pub fn close_document_now(
+    area: &Entity<DockArea>,
+    panel: Entity<EditorHostPanel>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
     area.update(cx, |area, cx| area.remove_panel(panel, window, cx));
     true
 }
+
+/// 关闭请求的完整流程（宿主键位 / 标签关闭都走它）
+///
+/// 干净 → 直接关；脏 → 三态确认（保存 / 不保存 / 取消）。流程放在这里而不是宿主，
+/// 是因为它是**编辑器语义**（写盘、二次确认、失败分支）——宿主只负责“把面板从 Dock 上摘掉”
+/// 与“弹系统文件对话框”（路径选择端口注入）。
+pub fn request_close_document(
+    area: &Entity<DockArea>,
+    panel: Entity<EditorHostPanel>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if !panel.read(cx).is_dirty() {
+        close_document_in_dock(area, panel, window, cx);
+        return;
+    }
+
+    let title = panel.read(cx).title_text();
+    let dialog_panel = panel.clone();
+    let dialog_area = area.clone();
+    dialogs::open_close_confirm(window, cx, title, move |choice, window, cx| {
+        resolve_close_choice(&dialog_area, dialog_panel.clone(), choice, window, cx);
+    });
+}
+
+/// 用户在“关闭前确认”上的选择落地（对话框回调与测试都走这里）
+///
+/// 与模式切换的 `confirm_mode_switch` 同一口径：弹窗只负责收集选择，
+/// 落地只有一个入口——否则“对话框里点了保存”与“测试里走保存分支”会变成两段代码。
+pub fn resolve_close_choice(
+    area: &Entity<DockArea>,
+    panel: Entity<EditorHostPanel>,
+    choice: dialogs::CloseChoice,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    match choice {
+        // 取消：什么都不做（小改动常来自误触关闭，不该顺手丢掉）
+        dialogs::CloseChoice::Cancel => {}
+        dialogs::CloseChoice::Discard => {
+            close_document_now(area, panel, window, cx);
+        }
+        dialogs::CloseChoice::Save => {
+            save_then_close(area.clone(), panel, window, cx);
+        }
+    }
+}
+
+/// 保存当前文档（`Ctrl+Shift+S`，**不关文档**）：选路径 → 写盘；返回是否真写盘
+///
+/// 失败只落到状态栏（这里没在关闭流程上，不该用弹框拦住用户的手）。
+pub fn request_save_as(panel: &Entity<EditorHostPanel>, cx: &mut App) -> bool {
+    match pick_and_save_as(panel, cx) {
+        Ok(()) => {
+            panel.update(cx, |panel, cx| panel.clear_message(cx));
+            true
+        }
+        Err(SaveAsFailure::Cancelled) => {
+            // 用户取消：不是错误，但也不留上一次的提示
+            panel.update(cx, |panel, cx| panel.clear_message(cx));
+            false
+        }
+        Err(failure) => {
+            let message = failure.message();
+            panel.update(cx, |panel, cx| panel.set_message(Some(message), cx));
+            false
+        }
+    }
+}
+
+/// 另存为的四种结局（调用方据此决定“关不关 / 弹不弹二次确认”）
+///
+/// “取消”单独成一类而不是 `None`：**用户取消不是失败**，不该弹二次确认、也不该报“未接入”。
+enum SaveAsFailure {
+    /// 宿主没接系统文件对话框（端口未注入）
+    NoPicker,
+    /// 用户取消
+    Cancelled,
+    /// 写盘失败（占用 / 权限 / 磁盘）
+    Io(persist::PersistError),
+    /// 文档已关闭（面板可能多活一帧）
+    Gone,
+}
+
+impl SaveAsFailure {
+    /// 状态栏文案（取消不产生文案，由调用方单独处理）
+    fn message(&self) -> String {
+        match self {
+            Self::NoPicker => "未接入系统文件对话框，无法另存为".to_string(),
+            Self::Cancelled => String::new(),
+            Self::Io(error) => format!("另存为失败：{error}"),
+            Self::Gone => "文档已关闭".to_string(),
+        }
+    }
+}
+
+impl From<persist::PersistError> for SaveAsFailure {
+    fn from(error: persist::PersistError) -> Self {
+        Self::Io(error)
+    }
+}
+
+/// 另存为的“选路径 + 写盘”核心（不含失败后的交互）
+///
+/// 路径选择走宿主注入的端口（[`EditorShared::pick_save_path`]）：编辑器**不依赖** `rfd`。
+fn pick_and_save_as(
+    panel: &Entity<EditorHostPanel>,
+    cx: &mut App,
+) -> Result<(), SaveAsFailure> {
+    let (current, mode) = {
+        let read = panel.read(cx);
+        (read.document_path(), read.document_mode())
+    };
+    let Some(mode) = mode else {
+        return Err(SaveAsFailure::Gone);
+    };
+    if !panel.read(cx).shared.has_save_path_picker() {
+        return Err(SaveAsFailure::NoPicker);
+    }
+
+    let default_name = mode.default_file_name().to_string();
+    let picked = panel
+        .read(cx)
+        .shared
+        .pick_save_path(current, default_name);
+    let Some(path) = picked else {
+        return Err(SaveAsFailure::Cancelled);
+    };
+
+    panel.update(cx, |panel, cx| panel.save_as(&path, cx)).map(|_| ())?;
+    Ok(())
+}
+
+/// 保存后关闭（关闭三态的“保存”分支）
+///
+/// 三种结果分别处理：写盘成功 → 关；未命名 → 先另存为（用户取消就不关）；
+/// 写盘失败（占用 / 权限 / 磁盘）→ 二次确认（重试 / 另存为 / 取消），
+/// **绝不把脏文档当干净关掉**。
+fn save_then_close(
+    area: Entity<DockArea>,
+    panel: Entity<EditorHostPanel>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    match panel.update(cx, |panel, cx| panel.save(cx)) {
+        Ok(_) => {
+            close_document_now(&area, panel, window, cx);
+        }
+        Err(persist::PersistError::Untitled(_)) => {
+            // 未命名：没有路径可写，先选一个（取消就不关）
+            pick_save_as_then_close(area, panel, window, cx);
+        }
+        Err(error) => {
+            let title = panel.read(cx).title_text();
+            let reason = error.to_string();
+            open_save_failure(&area, &panel, title, reason, window, cx);
+        }
+    }
+}
+
+/// 另存为后关闭（“保存”分支里未命名文档 / 用户选“另存为”的路径）
+fn pick_save_as_then_close(
+    area: Entity<DockArea>,
+    panel: Entity<EditorHostPanel>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    match pick_and_save_as(&panel, cx) {
+        Ok(()) => {
+            close_document_now(&area, panel, window, cx);
+        }
+        Err(SaveAsFailure::Cancelled) => {}
+        Err(SaveAsFailure::Io(error)) => {
+            let title = panel.read(cx).title_text();
+            let reason = error.to_string();
+            open_save_failure(&area, &panel, title, reason, window, cx);
+        }
+        Err(failure) => {
+            let message = failure.message();
+            panel.update(cx, |panel, cx| panel.set_message(Some(message), cx));
+        }
+    }
+}
+
+/// 写盘失败后的二次确认（重试 / 另存为 / 取消）
+///
+/// 三条路都保留：文件被占用 / 短暂无权限时“重试”最省事；目标路径本身不行时“另存为”能绕开；
+/// “取消”后文档仍是脏的（真实状态不粉饰）。
+fn open_save_failure(
+    area: &Entity<DockArea>,
+    panel: &Entity<EditorHostPanel>,
+    title: String,
+    reason: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let retry_area = area.clone();
+    let retry_panel = panel.clone();
+    let as_area = area.clone();
+    let as_panel = panel.clone();
+    let cancel_panel = panel.clone();
+    dialogs::open_save_failure_confirm(
+        window,
+        cx,
+        title,
+        reason,
+        move |choice, window, cx| match choice {
+            dialogs::SaveFailureChoice::Cancel => {
+                // 取消保存：文档仍是脏的（未保存状态是真实状态，不该粉饰）
+                cancel_panel.update(cx, |panel, cx| panel.clear_message(cx));
+            }
+            dialogs::SaveFailureChoice::Retry => {
+                save_then_close(retry_area.clone(), retry_panel.clone(), window, cx);
+            }
+            dialogs::SaveFailureChoice::SaveAs => {
+                pick_save_as_then_close(as_area.clone(), as_panel.clone(), window, cx);
+            }
+        },
+    );
+}
+
 
 /// 语句数：走 `engine::sql::split` 的**词法级**切分（不是 `split(';')`）
 ///
@@ -770,6 +1193,9 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_toggle_comment))
             .on_action(cx.listener(Self::on_execute_sql))
             .on_action(cx.listener(Self::on_execute_all));
+        // 工具栏（②）：模式指示器在这里，模式不再是只能从状态栏读到的短标签
+        let mode = self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text);
+        root = root.child(self.render_toolbar(mode, cx));
         // 提示卡（A13）：档位带来的限制要在界面上说清，而不是让用户自己撞上（“能编辑却改不了”）
         if let Some(notice) = self.tier_notice() {
             let theme = cx.theme();
