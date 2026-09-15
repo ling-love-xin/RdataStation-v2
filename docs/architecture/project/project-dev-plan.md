@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2）**（2026-09-11，`cargo check --workspace --all-targets` 零告警；engine 221 / project 23（含 9 项窗口测试）/ workbench 14 测试全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2）**（2026-09-14，`cargo check --workspace --all-targets` 零告警；project 29 lib（含 14 项窗口测试 + 1 项纯函数）+ 1 名册集成 + 3 存储集成全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -20,8 +20,25 @@
 | 9 | 软删提供**「已移除项目」找回入口** |
 | 10 | 新建 / 打开 / 重定位的「位置」= **系统目录选择器**（`prompt_for_paths`，仅目录 / 单选）+ 目标路径预览（原型 §6「位置/名称」） |
 | 11 | **远程项目仅模型层预留**（`ProjectPath::Remote`，DuckLake），本期不做——对话框内明示范围 |
+| 12 | 空目录**询问式创建**（原型 C2）：确认后以目录名为项目名在其中创建并打开 |
+| 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-14 — 补齐模块缺口：描述编辑 / 状态筛选 / 空目录询问 / 清理 / 使用手册
+
+对照原型 §2 清单逐项核对后补齐：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| U2 描述编辑 | `ProjectInputs` 新增 `description` 输入；`save_rename` 升级为 `save_project_info`（名称 + 描述，空描述写 `None`；名称走同一套校验）；项目设置「基本信息」段；菜单「项目设置…/重命名…」预填当前值（名册反查） | `crates/project/src/ui.rs` |
+| R4 状态筛选 | 新增 `StatusFilter`（All/Active/Archived/Offline/Syncing）+ `cycle_status_filter`；过滤抽成纯函数 `visible_items`（搜索子串 ∩ 状态）；选择器搜索行加「状态：」按钮（非「全部」时描边高亮），不持久化 | 同上 |
+| C2 空目录询问 | `submit_open_folder` 的 Empty 分支由「直接拒绝」改为**弹确认框**（`open_empty_dir_dialog`）→ 确认后以目录末级名为项目名创建并打开；先关本对话框再弹新框，避免关错栈顶 | 同上 |
+| 清理 | 删除 5 个未被 `mod` 声明的孤儿占位文件（`commands` / `model` / `project_view` / `promote_dialog` / `snapshot_dialog`）；删除恒返回 `false` 的 `ProjectSummary::is_removed`；`toggle_archive` / `save_project_info` 复用新的 `current_summary` | `crates/project/src/{ui.rs,service.rs}` |
+| 测试 | 窗口测试 +3（`empty_dir_prompts_create_in_place` / `save_project_info_rejects_invalid_name` / `visible_items_filters_by_status_and_needle`）；新增集成测试 `tests/project_registry.rs`：注入临时全局库，覆盖创建登记 → 固定置顶 → 软删隐藏（磁盘保留）→ 已移除找回 → 恢复 | `crates/project/src/ui/tests.rs`、`crates/project/tests/project_registry.rs` |
+| 文档 | 新增 `project-user-guide.md`（使用手册）；导航表与缺口矩阵同步 | `docs/architecture/` |
+
+> 仍未做（有意）：**U3 默认连接**——`service` 层无 `ProjectConfig` 读写（原型 §2.3 列为 Update 项），需先补后端能力再上 UI，记入待办。
 
 ### 2026-09-11 — 位置字段：系统目录选择器 + 目标预览 + 远程范围说明
 
@@ -199,12 +216,14 @@
 12. **迁移**：旧库升级到 019 后，既有项目默认未固定/未移除，名册显示不变（幂等）
 13. **主题**：明暗切换核对选择器卡片/徽标/对话框/菜单/危险区（`theme-preview.html` 为基准）
 
-**自动化覆盖（2026-09-11）**：上述场景中无需真实项目库即可验证的部分，已落为
-`crates/project/src/ui/tests.rs` 的 11 项 GPUI headless 窗口测试——场景 1/2（新建对话框开得起来、
-空名校验、浏览目录回填 / 取消保持、目标预览构造）、4（选择器 / 设置 / 菜单渲染、排序回调）、
-6（删除确认名称匹配）、10（未保存拦截：关闭与打开两向）、11（锁占用逃生口对话框）、
-13 的渲染面（卡片三种分支构造）。其余场景（真实建库、双实例、迁移）仍走
-`project_store.rs` 集成测试与 §7 手动清单。
+**自动化覆盖（2026-09-14）**：上述场景中无需真实项目库即可验证的部分，已落为
+`crates/project/src/ui/tests.rs` 的 15 项测试（14 项 GPUI headless 窗口测试 + 1 项纯函数）——
+场景 1/2（新建对话框开得起来、空名校验、浏览目录回填 / 取消保持、目标预览构造）、
+4（选择器 / 设置 / 菜单渲染、排序回调、搜索 ∩ 状态筛选）、6（删除确认名称匹配）、
+10（未保存拦截：关闭与打开两向、确认后直达目标对话框）、11（锁占用逃生口对话框）、
+13 的渲染面（卡片三种分支构造）；空目录询问（场景 3）亦有窗口测试。
+名册往返（场景 5/6/9）由 `tests/project_registry.rs` 注入临时全局库覆盖；
+存储 / 锁 / 迁移仍走 `project_store.rs` 集成测试与 §7 手动清单。
 
 ## 5. 风险与对策
 
@@ -248,6 +267,7 @@
 
 - 每阶段：`cargo check -p rds-project -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试
   （`crates/project/tests/` 集成测试 + `crates/project/src/ui/tests.rs` 窗口测试）
+- 常用：`cargo test -p rds-project -j 2`（lib 29 + 名册集成 1 + 存储集成 3）
 - 迁移：`cargo test -p rds-engine`（迁移套件）+ 手工核对旧库升级
 - UI：`cargo run -p rds-app` 手动走通 §4 清单（先用 `RDS_PROJECT_PATH` 验证有项目态，再清空验证选择器）
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）

@@ -97,11 +97,93 @@ impl ProjectSort {
     }
 }
 
+/// 选择器状态筛选（原型 R4；不持久化，属临时视图状态）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatusFilter {
+    #[default]
+    All,
+    Active,
+    Archived,
+    Offline,
+    Syncing,
+}
+
+impl StatusFilter {
+    /// 循环顺序（按钮点击轮转）。
+    pub const CYCLE: [StatusFilter; 5] = [
+        StatusFilter::All,
+        StatusFilter::Active,
+        StatusFilter::Archived,
+        StatusFilter::Offline,
+        StatusFilter::Syncing,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StatusFilter::All => "全部",
+            StatusFilter::Active => "Active",
+            StatusFilter::Archived => "Archived",
+            StatusFilter::Offline => "Offline",
+            StatusFilter::Syncing => "Syncing",
+        }
+    }
+
+    /// 稳定标识键（ElementId 用，不用本地化 label）。
+    pub fn key(self) -> &'static str {
+        match self {
+            StatusFilter::All => "all",
+            StatusFilter::Active => "active",
+            StatusFilter::Archived => "archived",
+            StatusFilter::Offline => "offline",
+            StatusFilter::Syncing => "syncing",
+        }
+    }
+
+    fn next(self) -> Self {
+        let ix = Self::CYCLE.iter().position(|f| *f == self).unwrap_or(0);
+        Self::CYCLE[(ix + 1) % Self::CYCLE.len()]
+    }
+
+    /// 名册条目是否命中（`All` 命中任意状态）。
+    fn matches(self, status: &str) -> bool {
+        match self {
+            StatusFilter::All => true,
+            StatusFilter::Active => status == "active",
+            StatusFilter::Archived => status == "archived",
+            StatusFilter::Offline => status == "offline",
+            StatusFilter::Syncing => status == "syncing",
+        }
+    }
+}
+
+/// 选择器可见条目：搜索子串（名称 / 路径，大小写不敏感）+ 状态筛选。
+///
+/// 抽成纯函数以便单测；渲染时直接调用（避免每次输入都重查数据库）。
+fn visible_items(
+    items: &[ProjectSummary],
+    needle: &str,
+    status: StatusFilter,
+) -> Vec<ProjectSummary> {
+    let needle = needle.trim().to_lowercase();
+    items
+        .iter()
+        .filter(|p| {
+            status.matches(&p.status)
+                && (needle.is_empty()
+                    || p.name.to_lowercase().contains(&needle)
+                    || p.path.to_string_lossy().to_lowercase().contains(&needle))
+        })
+        .cloned()
+        .collect()
+}
+
 /// 选择器状态。
 #[non_exhaustive]
 pub struct PickerState {
     pub tab: PickerTab,
     pub sort: ProjectSort,
+    /// 状态筛选（原型 R4）；不持久化。
+    pub status_filter: StatusFilter,
     pub items: Vec<ProjectSummary>,
     pub loaded: bool,
     pub error: Option<String>,
@@ -112,6 +194,7 @@ impl Default for PickerState {
         Self {
             tab: PickerTab::Recent,
             sort: ProjectSort::LastOpened,
+            status_filter: StatusFilter::All,
             items: Vec::new(),
             loaded: false,
             error: None,
@@ -305,6 +388,8 @@ pub struct ProjectInputs {
     pub delete_confirm: Entity<InputState>,
     /// 项目设置中的名称编辑（重命名）。
     pub rename: Entity<InputState>,
+    /// 项目设置中的描述编辑（U2）。
+    pub description: Entity<InputState>,
     /// 项目设置中的版本说明输入。
     pub version_msg: Entity<InputState>,
 }
@@ -318,6 +403,7 @@ impl ProjectInputs {
             create_desc: cx.new(|cx| InputState::new(window, cx)),
             delete_confirm: cx.new(|cx| InputState::new(window, cx)),
             rename: cx.new(|cx| InputState::new(window, cx)),
+            description: cx.new(|cx| InputState::new(window, cx)),
             version_msg: cx.new(|cx| InputState::new(window, cx)),
         }
     }
@@ -389,6 +475,13 @@ pub fn cycle_sort(host: &ProjectUiHost, cx: &mut App) {
     host.state.borrow_mut().picker.sort = next;
     (host.save_sort)(next, cx);
     refresh_picker(host, cx);
+}
+
+/// 循环切换状态筛选（不持久化：临时视图状态，不影响查询）。
+pub fn cycle_status_filter(host: &ProjectUiHost, cx: &mut App) {
+    let next = host.state.borrow().picker.status_filter.next();
+    host.state.borrow_mut().picker.status_filter = next;
+    host.notify(cx);
 }
 
 // ==================== 语义对话框 ====================
@@ -720,13 +813,64 @@ pub fn submit_open_folder(
             false
         }
         TargetDirState::Empty => {
-            // 空目录不视为项目；提示改用「新建项目」。
-            set_dialog_error(host, "空目录：请改用「新建项目」".to_string(), cx);
+            // 原型 C2：空目录不是项目，但应**询问**是否在此创建，而不是直接拒绝。
+            // 先关掉本对话框（此刻栈顶即它自己），再弹确认框——避开「后开的框被 pop 掉」。
+            // 返回 `false` 以免调用方重复关一次。
+            window.close_dialog(cx);
+            open_empty_dir_dialog(host, path, window, cx);
             false
         }
         TargetDirState::ExistingProject => {
             open_path(host, &path, window, cx);
             true
+        }
+    }
+}
+
+/// 空目录确认（原型 C2）：确认后在该目录创建项目并打开（项目名取目录末级名）。
+pub fn open_empty_dir_dialog(
+    host: &ProjectUiHost,
+    path: PathBuf,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    host.state.borrow_mut().dialog_error = None;
+    let host = host.clone();
+    window.open_alert_dialog(cx, move |alert, _window, cx| {
+        let theme = cx.theme();
+        let name = OpenProject::from_root(path.clone()).name;
+        let host_create = host.clone();
+        let path_create = path.clone();
+        let name_create = name.clone();
+        alert
+            .icon(Icon::new(IconName::FolderOpen).text_color(theme.colors.info))
+            .title("在空目录创建项目？")
+            .description(format!(
+                "目录 {} 为空。确认后将在其中创建名为「{name}」的项目（建 .RSmeta 并打开）。",
+                path.display()
+            ))
+            .on_ok(move |_, window, cx| {
+                window.close_dialog(cx);
+                create_in_dir(&host_create, &path_create, &name_create, window, cx);
+                false
+            })
+    });
+}
+
+/// 在指定目录创建项目并打开（C2 的「在此创建项目」分支）。
+fn create_in_dir(
+    host: &ProjectUiHost,
+    path: &std::path::Path,
+    name: &str,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let input = project_service::CreateProjectInput::new(name, path.to_path_buf());
+    match project_service::create(input) {
+        Ok(summary) => open_path(host, &summary.path, window, cx),
+        Err(e) => {
+            host.state.borrow_mut().notice = Some(e);
+            host.notify(cx);
         }
     }
 }
@@ -1301,35 +1445,46 @@ fn read_only_blocked(host: &ProjectUiHost, cx: &mut App, action: &str) -> bool {
     }
 }
 
-/// 保存项目设置中的重命名。
-pub fn save_rename(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) {
-    if read_only_blocked(host, cx, "重命名") {
+/// 当前项目在名册中的条目（会话只存根 / 名，其余信息按根反查）。
+fn current_summary(host: &ProjectUiHost) -> Option<ProjectSummary> {
+    let root = host.root()?;
+    project_service::list_all()
+        .ok()?
+        .into_iter()
+        .find(|p| p.path == root)
+}
+
+/// 保存项目设置中的名称与描述（U1 + U2）。
+///
+/// 会话只存根 / 名，描述与 id 经名册反查；空描述写入 `None`（与创建语义一致）。
+pub fn save_project_info(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) {
+    if read_only_blocked(host, cx, "修改项目信息") {
         return;
     }
     let name = inputs.rename.read(cx).value().trim().to_string();
-    let (id, root) = {
-        // 通过名册查当前项目 id（会话只存根/名）。
-        let root = host.session.borrow().as_ref().map(|s| s.root.clone());
-        let Some(root) = root else { return };
-        let id = project_service::list_all()
-            .ok()
-            .and_then(|v| v.into_iter().find(|p| p.path == root).map(|p| p.id));
-        match id {
-            Some(id) => (id, root),
-            None => return,
-        }
+    let raw_desc = inputs.description.read(cx).value().trim().to_string();
+    let description = (!raw_desc.is_empty()).then_some(raw_desc);
+    if let Err(e) = project_service::validate_project_name(&name) {
+        host.state.borrow_mut().notice = Some(e);
+        host.notify(cx);
+        return;
+    }
+    // 通过名册查当前项目（会话只存根 / 名）。
+    let Some(root) = host.root() else { return };
+    let Some(id) = current_summary(host).map(|p| p.id) else {
+        return;
     };
-    match project_service::update_meta(&id, &root, &name, None) {
+    match project_service::update_meta(&id, &root, &name, description.as_deref()) {
         Ok(()) => {
             if let Some(session) = host.session.borrow_mut().as_mut() {
                 session.name = name;
             }
+            host.state.borrow_mut().notice = Some("已保存项目信息".to_string());
         }
-        Err(e) => {
-            host.state.borrow_mut().notice = Some(e);
-        }
+        Err(e) => host.state.borrow_mut().notice = Some(e),
     }
-    host.notify(cx);
+    // 名册改名 / 描述变更后刷新列表与卡片（内含重绘）。
+    refresh_picker(host, cx);
 }
 
 /// 归档 / 取消归档当前项目。
@@ -1337,16 +1492,11 @@ pub fn toggle_archive(host: &ProjectUiHost, cx: &mut App) {
     if read_only_blocked(host, cx, "归档") {
         return;
     }
-    let root = match host.session.borrow().as_ref().map(|s| s.root.clone()) {
-        Some(r) => r,
-        None => return,
+    let Some(item) = current_summary(host) else {
+        return;
     };
-    let current = project_service::list_all()
-        .ok()
-        .and_then(|v| v.into_iter().find(|p| p.path == root));
-    let Some(item) = current else { return };
     let archived = item.status == "archived";
-    if let Err(e) = project_service::set_archived(&item.id, &root, !archived) {
+    if let Err(e) = project_service::set_archived(&item.id, &item.path, !archived) {
         host.state.borrow_mut().notice = Some(e);
     } else {
         host.state.borrow_mut().menu_open = false;
@@ -1366,18 +1516,9 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
     let ui = host.state.borrow();
     let picker = &ui.picker;
 
-    // 搜索在渲染时过滤（避免每次输入都重查数据库）。
-    let needle = inputs.search.read(cx).value().trim().to_lowercase();
-    let items: Vec<ProjectSummary> = picker
-        .items
-        .iter()
-        .filter(|p| {
-            needle.is_empty()
-                || p.name.to_lowercase().contains(&needle)
-                || p.path.to_string_lossy().to_lowercase().contains(&needle)
-        })
-        .cloned()
-        .collect();
+    // 搜索与状态筛选在渲染时过滤（避免每次输入都重查数据库）。
+    let needle = inputs.search.read(cx).value().to_string();
+    let items = visible_items(&picker.items, &needle, picker.status_filter);
     let count = items.len();
 
     // ---- 顶部：标题 + Tab ----
@@ -1410,13 +1551,39 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
         );
     }
 
-    // ---- 搜索 + 排序 ----
+    // ---- 搜索 + 状态筛选 + 排序 ----
     let host_sort = host.clone();
+    let host_status = host.clone();
     let search_row = div()
         .h_flex()
         .items_center()
         .gap_2()
         .child(div().flex_1().child(Input::new(&inputs.search)))
+        .child(
+            div()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "picker-status-{}",
+                    picker.status_filter.key()
+                ))))
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(if picker.status_filter == StatusFilter::All {
+                    theme.colors.border
+                } else {
+                    theme.colors.primary
+                })
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if picker.status_filter == StatusFilter::All {
+                    theme.colors.muted_foreground
+                } else {
+                    theme.colors.foreground
+                })
+                .on_click(move |_, _, app| cycle_status_filter(&host_status, app))
+                .child(format!("状态：{}", picker.status_filter.label())),
+        )
         .child(
             div()
                 .id("picker-sort")
@@ -1846,9 +2013,16 @@ pub fn render_menu_content(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mu
             "项目设置…",
             theme,
             move |window, app| {
+                // 预填当前名称与描述（名册反查；事件上下文允许 I/O）。
+                let description = current_summary(&host_settings)
+                    .and_then(|s| s.description)
+                    .unwrap_or_default();
                 inputs_settings
                     .rename
                     .update(app, |s, cx| s.set_value(name_settings.clone(), window, cx));
+                inputs_settings
+                    .description
+                    .update(app, |s, cx| s.set_value(description, window, cx));
                 let mut ui = host_settings.state.borrow_mut();
                 ui.menu_open = false;
                 ui.settings_open = true;
@@ -1861,9 +2035,15 @@ pub fn render_menu_content(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mu
             "重命名…",
             theme,
             move |window, app| {
+                let description = current_summary(&host_rename)
+                    .and_then(|s| s.description)
+                    .unwrap_or_default();
                 inputs_rename
                     .rename
                     .update(app, |s, cx| s.set_value(name_rename.clone(), window, cx));
+                inputs_rename
+                    .description
+                    .update(app, |s, cx| s.set_value(description, window, cx));
                 let mut ui = host_rename.state.borrow_mut();
                 ui.menu_open = false;
                 ui.settings_open = true;
@@ -2067,20 +2247,18 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                             .child(kv(theme, "路径", &root.to_string_lossy()))
                             .child(kv(theme, "状态", if read_only { "只读" } else { "可写" })),
                     )
-                    .child(label(theme, "名称（重命名）"))
+                    .child(section(theme, "基本信息"))
+                    .child(label(theme, "名称（重命名，仅改显示名）"))
+                    .child(Input::new(&inputs.rename))
+                    .child(label(theme, "描述"))
+                    .child(Input::new(&inputs.description))
                     .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(div().flex_1().child(Input::new(&inputs.rename)))
-                            .child(
-                                Button::new("proj-rename-save")
-                                    .secondary()
-                                    .label("保存名称")
-                                    .on_click(move |_, _, app| {
-                                        save_rename(&host_rename, &inputs_rename, app)
-                                    }),
-                            ),
+                        Button::new("proj-info-save")
+                            .secondary()
+                            .label("保存项目信息")
+                            .on_click(move |_, _, app| {
+                                save_project_info(&host_rename, &inputs_rename, app)
+                            }),
                     )
                     .child(section(theme, "存储（.RSmeta）"))
                     .child(files)

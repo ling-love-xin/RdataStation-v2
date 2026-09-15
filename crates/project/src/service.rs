@@ -39,14 +39,6 @@ pub struct ProjectSummary {
     pub missing_drivers: Vec<String>,
 }
 
-impl ProjectSummary {
-    pub fn is_removed(&self) -> bool {
-        // 名册查询已按 removed_at 过滤，视图侧仅需区分来源；
-        // 保留此辅助以便未来直接在卡片上标注。
-        false
-    }
-}
-
 /// 新建项目输入。
 #[derive(Debug, Clone)]
 #[non_exhaustive]

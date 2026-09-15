@@ -42,12 +42,13 @@
 ### 状态可恢复、偏好可持久
 
 - 软删（`removed_at`）+「已移除」Tab + 恢复入口；失效路径可「重新定位」，也可只移出列表。
-- 固定置顶（`project_info.is_pinned`）与排序方式（`settings.projects.sort_mode`）跨会话保留。
+- 名称与描述就地编辑（名册 + 项目本体双写，磁盘目录名不变）；空目录打开时**询问式创建**。
+- 固定置顶（`project_info.is_pinned`）与排序方式（`settings.projects.sort_mode`）跨会话保留；状态筛选（R4）为临时视图状态不落库。
 - 内置「从示例项目开始」：无网络即可得到一个可用项目。
 
 ### 明确的范围外
 
-提升 / 引用（promote / snapshot）、移动或另存项目目录、DuckLake 远程项目（`ProjectPath::Remote` 仅模型层预留，UI 已明示范围）。
+提升 / 引用（promote / snapshot）、移动或另存项目目录、DuckLake 远程项目（`ProjectPath::Remote` 仅模型层预留，UI 已明示范围）、默认连接（U3，后端 `ProjectConfig` 读写未实现）。
 
 ## 代码落点
 
@@ -58,23 +59,25 @@
 | `src/lock.rs` | 实例锁：OS 文件锁 + `project.lock.owner` 占用者信息 |
 | `src/service.rs` | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 版本台账 |
 | `src/ui.rs` | 视图：选择器、标题栏菜单内容、项目设置、语义对话框、`ProjectUiHost` 宿主桥 |
-| `src/ui/tests.rs` | 12 项 GPUI headless 窗口测试（选择器 / 设置 / 对话框 / 拦截 / 排序 / 浏览目录 / 卡片） |
-| `src/{commands,model,project_view,promote_dialog,snapshot_dialog}.rs` | 3 行占位；promote / snapshot 不在本期范围，评审时清理或另立设计 |
+| `src/ui/tests.rs` | 14 项 GPUI headless 窗口测试 + 1 项纯函数测试（选择器 / 状态筛选 / 设置 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片） |
+| `tests/project_registry.rs` | 名册端到端集成：创建登记 → 固定置顶 → 软删隐藏（磁盘保留）→ 已移除找回（注入临时全局库） |
+| `tests/project_store.rs` | 磁盘 `.RSmeta` 与实例锁集成 |
 
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
+| `docs/architecture/project/README.md` | 模块入口（一句话定位 / 文档索引 / 特点速览） |
 | `docs/architecture/project/project-prototype-design.md` | 交互语义与原型（决策表、场景清单、主题映射） |
 | `docs/architecture/project/project-prototype.html` | 可交互原型（明暗双主题） |
 | `docs/architecture/project/project-dev-plan.md` | 任务划分 / 进度记录 / 测试场景 / 风险 / 映射表 |
 | `docs/architecture/project/project-view-architecture.md` | 宿主桥契约、对话框栈语义、窗口测试方案与坑 |
+| `docs/architecture/project/project-user-guide.md` | 使用手册（入口 / 导览 / 流程 / FAQ / 验收清单） |
 
 ## 约定
 
 ```bash
-cargo test -p rds-project --lib -j 2    # 单元 + 窗口测试（26 项）
-cargo test -p rds-project -j 2          # 含 tests/ 集成测试（存储与锁）
+cargo test -p rds-project -j 2          # lib（29）+ 集成（1 名册 + 3 存储）
 ```
 
 - 全量测试**必须** `cargo test --workspace -j 2`：并行链接 DuckDB 静态库会耗尽内存。

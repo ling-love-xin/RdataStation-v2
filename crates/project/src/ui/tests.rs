@@ -23,10 +23,12 @@ use gpui_kit::{
 
 use super::{
     OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs, ProjectSort,
-    ProjectUiHost, ProjectUiNotifier, ProjectUiState, advance_pending, confirm_delete, cycle_sort,
-    more_menu, open_create_dialog, open_delete_dialog, open_lock_busy_dialog, pick_directory,
-    prepare_unsaved, project_card, render_menu_content, render_picker, render_settings,
-    request_close, request_create_project, request_open, request_open_folder, submit_create,
+    ProjectUiHost, ProjectUiNotifier, ProjectUiState, StatusFilter, advance_pending,
+    confirm_delete, cycle_sort, more_menu, open_create_dialog, open_delete_dialog,
+    open_folder_dialog, open_lock_busy_dialog, pick_directory, prepare_unsaved, project_card,
+    render_menu_content, render_picker, render_settings, request_close, request_create_project,
+    request_open, request_open_folder, save_project_info, submit_create, submit_open_folder,
+    visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -288,7 +290,10 @@ fn project_action_continues_after_unsaved_confirm(cx: &mut TestAppContext) {
 
     // 2) 复现「放弃更改并继续」按钮的调用序列：准备 → 关确认 → 推进。
     cx.update(|window, cx| {
-        assert!(prepare_unsaved(&host, false, window, cx), "放弃分支应可推进");
+        assert!(
+            prepare_unsaved(&host, false, window, cx),
+            "放弃分支应可推进"
+        );
         window.close_dialog(cx);
         advance_pending(
             &host,
@@ -392,6 +397,106 @@ fn cards_and_menus_construct_for_all_states(cx: &mut TestAppContext) {
             let _ = (card, menu);
         }
     });
+}
+
+#[test]
+fn visible_items_filters_by_status_and_needle() {
+    let mut offline = summary("b", "离线项目", "offline");
+    offline.path_exists = false;
+    let items = vec![
+        summary("a", "风控看板", "active"),
+        offline,
+        summary("c", "归档项目", "archived"),
+    ];
+
+    // 状态筛选：All 命中全部，具体状态只命中对应项，无匹配返回空。
+    assert_eq!(visible_items(&items, "", StatusFilter::All).len(), 3);
+    assert_eq!(visible_items(&items, "", StatusFilter::Offline).len(), 1);
+    assert_eq!(visible_items(&items, "", StatusFilter::Syncing).len(), 0);
+
+    // 搜索：名称子串 + 路径子串（大小写不敏感）。
+    assert_eq!(visible_items(&items, "风控", StatusFilter::All).len(), 1);
+    assert_eq!(
+        visible_items(&items, "RDS-DEMO", StatusFilter::All).len(),
+        3
+    );
+    assert_eq!(
+        visible_items(&items, "不存在的名字", StatusFilter::All).len(),
+        0
+    );
+
+    // 组合：搜索与状态取交集。
+    assert_eq!(
+        visible_items(&items, "项目", StatusFilter::Offline).len(),
+        1
+    );
+    assert_eq!(visible_items(&items, "项目", StatusFilter::Active).len(), 0);
+}
+
+#[gpui_kit::test]
+fn empty_dir_prompts_create_in_place(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    // 准备一个真正的空目录（原型 C2：空目录应询问「是否在此创建项目」）。
+    let empty = temp_root("empty-dir");
+    let _ = std::fs::remove_dir_all(&empty);
+    std::fs::create_dir_all(&empty).expect("重建空目录");
+    let value = empty.to_string_lossy().to_string();
+
+    cx.update(|window, cx| open_folder_dialog(&host, &inputs, window, cx));
+    cx.update(|window, cx| {
+        inputs
+            .create_location
+            .update(cx, |s, cx| s.set_value(value.clone(), window, cx));
+    });
+
+    let ok = cx.update(|window, cx| submit_open_folder(&host, &inputs, window, cx));
+    assert!(!ok, "空目录不应当作项目直接打开");
+    assert!(host.current().is_none(), "确认前不应改动会话");
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "应弹出「在空目录创建项目？」确认对话框"
+    );
+}
+
+#[gpui_kit::test]
+fn save_project_info_rejects_invalid_name(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    host.set_current(Some(OpenProject::new(
+        temp_root("rename-guard"),
+        "校验项目",
+    )));
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    // 名称非法（含分隔符）→ 写入提示、不触碰名册。
+    cx.update(|window, cx| {
+        inputs
+            .rename
+            .update(cx, |s, cx| s.set_value("非法/名称", window, cx));
+    });
+    cx.update(|_, cx| save_project_info(&host, &inputs, cx));
+    let notice = host.state.borrow().notice.clone();
+    assert!(
+        notice.as_deref().is_some_and(|n| n.contains("不能包含")),
+        "非法名称应给出校验提示，实际：{notice:?}"
+    );
+
+    // 空名同样被拦。
+    cx.update(|window, cx| {
+        inputs
+            .rename
+            .update(cx, |s, cx| s.set_value("", window, cx));
+    });
+    cx.update(|_, cx| save_project_info(&host, &inputs, cx));
+    assert_eq!(
+        host.state.borrow().notice.as_deref(),
+        Some("项目名称不能为空")
+    );
 }
 
 #[gpui_kit::test]
