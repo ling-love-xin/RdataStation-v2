@@ -7928,6 +7928,9 @@ dependencies = [
 [[package]]
 name = "rds-editor"
 version = "0.1.0"
+dependencies = [
+ "gpui-kit",
+]
 
 [[package]]
 name = "rds-engine"
