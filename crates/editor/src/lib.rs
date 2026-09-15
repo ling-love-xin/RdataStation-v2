@@ -16,10 +16,11 @@
 //! - ✅ `model`：文档 / 模式 / 只读 / 能力表
 //! - ✅ `mode`：模式判定规则表（纯函数 + 表驱动测试）
 //! - ✅ `service`：文档集合与生命周期（打开/关闭/激活/重命名/脏状态，A1）
-//! - ✅ `shared` + `view/host`：宿主面板（一面板 = 一标签 = 一份文档；标题 / 脏点 / 编辑内核，A2+A3）
+//! - ✅ `shared` + `view/host`：宿主面板（一面板 = 一标签 = 一份文档；标题 / 脏点 / 编辑内核 / 状态栏，A2+A3+A6+A7）
+//! - ✅ `view/highlight`：SQL 语义着色（A4）· ✅ `mode` 切换矩阵（A5）· ✅ `persist` 打开/保存与外部修改检测（A9）
 //! - ✅ `ui`：本 crate 的结构尺寸常量（不反向依赖 workbench）
 //! - ⬜ 1a 待做：`execution`（执行目标解析 + 后台任务 + 回填）· `store`（结果单权威）·
-//!   `completion` · `persist` · `view/` 其余（高亮 A4 / 状态栏 A7 / 查找 A11）· 标签条接入 workbench Dock
+//!   `completion` · `view/` 其余（查找 A11）· workbench 侧 Dock 注册与命令/快捷键（A10）· 切模式确认对话框
 //! - ⬜ 1c：`session` / `notebook`（Cell / Output / Session）
 //!
 //! 语句切分（「执行当前语句」与「批量执行」的基础）落在 `engine::sql::split`：它是不带编辑器
@@ -28,6 +29,7 @@
 
 pub mod mode;
 pub mod model;
+pub mod persist;
 pub mod service;
 pub mod shared;
 pub mod ui;

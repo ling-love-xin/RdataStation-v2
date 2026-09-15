@@ -13,6 +13,7 @@ use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::*;
 
 use crate::model::{DocumentId, EditorMode};
+use crate::persist;
 use crate::service::Document;
 use crate::shared::EditorShared;
 use crate::ui;
@@ -109,6 +110,23 @@ impl EditorHostPanel {
     /// 当前文档是否脏（与基线不同）
     pub fn is_dirty(&self) -> bool {
         self.with_document(Document::is_dirty).unwrap_or(false)
+    }
+
+    /// 保存当前文档（**只从事件路径调用**：`Ctrl+S` / 保存命令）
+    ///
+    /// 先写盘、后清脏（见 `persist::save_document`）：写失败不会留下“已保存”的假状态。
+    /// 未命名文档返回 `Untitled`，调用方应改走“另存为”。
+    pub fn save(&mut self, cx: &mut Context<Self>) -> Result<std::path::PathBuf, persist::PersistError> {
+        let result = persist::save_document(&self.shared, &self.document);
+        if result.is_ok() {
+            cx.notify();
+        }
+        result
+    }
+
+    /// 编辑器是否可输入（供窗口测试断言只读组合；生产代码读同一个判据）
+    pub fn is_editable_for_test(&self) -> bool {
+        !self.editor_read_only()
     }
 
     /// 只读访问当前文档（渲染路径用；不克隆整份文档）

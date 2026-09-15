@@ -10,6 +10,7 @@
 
 | 日期 | 内容 | 状态 |
 | --- | --- | --- |
+| 2026-09-15（1a：A9 持久化层） | **A9 持久化层完成**：`persist.rs` —— 唯一的 I/O 入口（只从事件路径调用，服务层与渲染路径保持零 I/O）；`open_file` 对已打开路径只激活（**不重读，避免冲掉未保存编辑**）；`save_document` **先写盘后清脏**（写失败不留假状态）；`save_as` 换路径保身份；`external_modified` 用 mtime 检测外部修改（含文件消失）；面板新增 `save()`。**editor 单测 55 → 63**（新增 8 项持久化测试，含真临时目录 I/O）· **测试逮到一个真 bug**：`if let Some(x) = shared.service().find…` 的只读借用活到分支体内 → 分支里 `update()` 撞 `RefCell already borrowed`（已修）· ⬜ 剩余：对话框与 workbench Dock 注册 | ✅ 已完成（零告警） |
 | 2026-09-15（1a：A6 + A7） | **A6 只读两维度**：编辑内核 `.readonly()` 跟文档 `ReadOnly.editor`；**状态栏把两个维度分开写**（「只读」/「连接只读」，互不蕴含）。**A7 状态栏**：`view/widgets/status_bar.rs`（组件库 `StatusBar`），文案计算 `labels()` 为纯函数；左＝模式 + **语句数（`engine::sql::split_statements` 词法切分）** + 未保存，右＝两个只读维度 + Ln/Col + 已选字数；**语句数缓存**（仅内容变化时算一次，渲染期不扫描）；无数据源的字段（方言/编码/换行/缩进）**不显示占位**。**editor 单测 49 → 55** | ✅ 已完成（零告警） |
 | 2026-09-15（1a：A5 模式切换） | **A5 逻辑完成**：`mode.rs` 新增切换矩阵（`SwitchPlan` / `ConfirmKind` / `SwitchContent` / `CellGranularity`）——**五个方向逐项对照原型 §1.3**（文本→SQL 免确认；SQL→文本/分析、分析→SQL、文本↔分析均需确认且给内容变换与提示语），另含**换会话**确认；内容变换为纯函数：`sql_to_cells`（粒度二选一，按**词法级**切分）、`cells_to_sql`（`;\n\n` + 尾分号）、`cells_from_text`/`cells_to_text`（文本层标记 `-- %%`，1c 落盘格式待定）。视图侧 `sync_mode` 按模式刷新着色与只读。**editor 单测 37 → 49**（新增 11 项矩阵测试 + 1 项窗口测试）· ⬜ 对话框待 A9 一并接 | ✅ 已完成（零告警） |
 | 2026-09-15（1a：A4 高亮） | **A4 完成**：`view/highlight.rs` 实现 `DocumentRangeSemanticTokensProvider`——把 `engine::sql::highlight` 的词法区间编码成 LSP 语义 token（delta 编码、跨行按行切分、列按字符计），**颜色交给主题按 token 名解析**（keyword/type/function/string/number/comment/operator/punctuation/variable；**Identifier 不上色**）；文本模式不上色，分析模式留 1c 逐单元处理；大文件（>1MB）降级不上色。依赖新增：`engine` / `lsp-types`（0.97 随 gpui-base）/ `anyhow`（后两者已登记进根 Cargo.toml 唯一入口）。**editor 单测 28 → 37** | ✅ 已完成（工作区 check 零告警） |
@@ -108,7 +109,7 @@ Phase 0（地基，无 UI）
 | A6 | **只读两维度**：编辑器只读（文档属性）与连接只读（策略）分别表达 | ✅ **已完成**：`model::ReadOnly` 两字段 → 编辑内核 `.readonly()` + **状态栏分别显示**「只读」/「连接只读」（互不蕴含）；文档属性来自 `EditorService`，同一窗口四种组合并存不互相影响 | 单测：四种组合逐项断言（仅编辑器只读不等于连接只读，反之亦然）+ 窗口测试：切模式/渲染不 panic |
 | A7 | **编辑器状态栏**（真实值）：Ln/Col、选区字数、语句数（来自 `split.rs`）、方言、编码/换行/缩进、模式、脏 | ✅ **已完成**：`view/widgets/status_bar.rs`（用组件库 `StatusBar`，不手搓）——文案计算是**纯函数** `labels()`（可穷举断言）；左：模式短标签 + **语句数** + 未保存；右：两个只读维度 + Ln/Col + 已选字数 | 单测 6 项：语句数随内容变（1/3/9）+ 脏可见 + 文本模式不显示语句数 + 四种只读组合 + 光标/选区真实值。**方言 / 编码 / 换行 / 缩进暂无数据源（1b / A12）→ 不显示占位**（零 UI 造数据） |
 | A8 | **脏状态**：输入事件 → 与 baseline 比较 → 置脏/清脏；标签脏点与状态栏同步 | `service.rs` + `view/host.rs` | 单测：编辑→脏、撤销回原值→干净、保存→干净 |
-| A9 | 保存 / 另存为 / 外部修改检测 / 关闭三态确认（保存失败二次确认） | `service.rs` + `persist.rs` + 对话框 | 单测 + 窗口测试：三态分支、外部修改分支 |
+| A9 | 保存 / 另存为 / 外部修改检测 / 关闭三态确认（保存失败二次确认） | ✅ **持久化层已完成**：`crates/editor/src/persist.rs`（读 / 写 / **mtime 外部修改检测** / `open_file`（同路径不重读、不冲掉未保存编辑）/ `save_document`（**先写盘后清脏**）/ `save_as`（改名 + 写盘））+ 面板 `EditorHostPanel::save`。⬜ 待接：**另存为对话框 / 关闭三态确认 / 打开文件入口**（需对话框宿主）+ **workbench Dock 注册** | 单测 **8 项**（往返 · 缺失文件带路径报错 · 打开不脏 · 同路径再开只激活且不重读 · 保存写盘 + 清脏 · 未命名要求另存为 · 另存为换路径保身份 · 外部修改检测含文件消失） |
 | A10 | Actions 与快捷键：`Ctrl+S` / `Ctrl+Enter`（最小执行=执行全部）/ `Ctrl+/` / `Ctrl+F` / `Ctrl+Shift+F` | `commands.rs` + `app/src/main.rs` | 真机：全部按键生效（**禁止"只宣传未注册"**） |
 | A11 | 查找 / 替换（优先用组件能力，缺则自建） | `view/widgets/` | 真机：查找高亮、替换、跳转 |
 | A12 | **工作区上下文持久化**：光标/选区/模式/连接绑定落 `workbench_context_store`（扩展表字段） | `crates/editor/src/persist.rs` + `engine` 迁移 | 集成测试：关闭重开恢复光标与模式 |
