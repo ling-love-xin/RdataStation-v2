@@ -48,6 +48,8 @@ use crate::services::db_navigator::NavTable;
 use crate::services::query_runner::QueryOutput;
 use crate::ui;
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
+use mock::mock_view::{MockDetailView, MockPanel};
+use mock::mock_view::SchemaRequest;
 
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
 ///
@@ -109,6 +111,14 @@ pub struct Shared {
     pub editor_set: Rc<RefCell<Option<String>>>,
     /// Phase B：属性面板请求（数据源导航双击对象 → 编辑区右侧面板）。
     pub property_target: Rc<RefCell<Option<PropertyRequest>>>,
+    /// M7：Mock 面板实体句柄（弱引用；用于导航右键定向导入源库结构）。
+    ///
+    /// 面板自带状态与对话框（`mock::mock_view::MockPanel`），工作台只持句柄。
+    pub mock_panel: Rc<RefCell<Option<WeakEntity<MockPanel>>>>,
+    /// M7：中央「Mock 数据」详情 tab 实体句柄（弱引用；已关闭则重新创建）。
+    pub mock_detail: Rc<RefCell<Option<WeakEntity<MockDetailView>>>>,
+    /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
+    pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// Phase C：Ctrl+F 请求聚焦导航搜索框（宿主置位，导航面板渲染时消费）。
     pub focus_nav_search: Rc<Cell<bool>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
@@ -152,6 +162,9 @@ impl Shared {
             editor_clear: Rc::new(RefCell::new(None)),
             editor_set: Rc::new(RefCell::new(None)),
             property_target: Rc::new(RefCell::new(None)),
+            mock_panel: Rc::new(RefCell::new(None)),
+            mock_detail: Rc::new(RefCell::new(None)),
+            open_mock_detail: Rc::new(RefCell::new(None)),
             focus_nav_search: Rc::new(Cell::new(false)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),
             host_redraw: Rc::new(RefCell::new(None)),
@@ -203,6 +216,31 @@ impl Shared {
         let bridge = self.host_redraw.borrow().clone();
         if let Some(redraw) = bridge {
             redraw(cx);
+        }
+    }
+
+    /// 展开右 Dock 并切到指定面板。
+    ///
+    /// 与 `SidebarEvent::OpenRightPanel` 同一口径：只改状态，布局同步由宿主 render
+    /// （`apply_right_mode`）完成，因此还需要 `notify_host` 让宿主重渲染。
+    pub fn open_right_panel(&self, panel: RightPanel, cx: &mut App) {
+        self.active_right.set(panel);
+        self.right_mode.set(SidebarMode::Expanded);
+        self.notify_host(cx);
+    }
+
+    /// 打开 Mock 面板；`source` 给定时按**源库表**定向（导航右键「生成 Mock 数据」）。
+    ///
+    /// 定向动作（读源库结构 + 预填目标表名）在事件路径执行：面板实体随右栏面板
+    /// **构造期创建**（`RightSidebarPanel::new`），因此这里总能拿到句柄。
+    pub fn open_mock_panel(&self, source: Option<SchemaRequest>, cx: &mut App) {
+        self.open_right_panel(RightPanel::Mock, cx);
+        let Some(source) = source else {
+            return;
+        };
+        let panel = self.mock_panel.borrow().clone();
+        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
+            panel.update(cx, |panel, cx| panel.preset_from_source(source, cx));
         }
     }
 }
@@ -4968,10 +5006,19 @@ impl SidebarPanel {
                 });
                 if data_like {
                     let e = entity.clone();
+                    // 定向请求：连接 + 源库表（catalog / schema / 表名）——Mock 面板据此
+                    // 读源库结构并预填目标表名（v1 主路径：源库结构 → 造新数据）。
+                    let request = dml_target.clone().map(|(catalog, schema, table)| SchemaRequest {
+                        conn_id: conn_id.clone(),
+                        catalog,
+                        schema,
+                        table,
+                    });
                     menu = menu.item(PopupMenuItem::new("生成 Mock 数据").on_click(
                         move |_, _, app| {
-                            e.update(app, |_, cx| {
-                                cx.emit(SidebarEvent::OpenRightPanel(RightPanel::Mock));
+                            let request = request.clone();
+                            e.update(app, |this, cx| {
+                                this.shared.open_mock_panel(request, cx);
                             });
                         },
                     ));
@@ -8358,7 +8405,13 @@ impl Render for EditorPanel {
             Button::new("mock-generate-btn")
                 .primary()
                 .label("生成 Mock")
-                .on_click(|_, _, _| {}),
+                .on_click({
+                    let shared = self.shared.clone();
+                    move |_, _, app| {
+                        // 单一入口：目标表 / 行数 / 列配置都在右 Dock 的 Mock 面板里确定。
+                        shared.open_mock_panel(None, app);
+                    }
+                }),
         );
 
         content = content.child(
@@ -8440,17 +8493,29 @@ impl ComponentPanel for EditorPanel {
     }
 }
 
-/// 右侧边栏面板：洞察 / Mock 生成 / 历史（占位视图，业务下一轮接入）。
+/// 右侧边栏面板：洞察 / Mock 生成 / 历史。
+///
+/// Mock 面板视图由 mock crate 自持（`mock::mock_view::MockPanel`，与 project / settings 同例）；
+/// 本面板只负责：**构造期**创建实体、注入宿主桥（`components::mock_host`）、登记句柄。
+/// 洞察与历史仍为占位视图（各自模块轮次接入）。
 pub struct RightSidebarPanel {
     shared: Shared,
     focus_handle: FocusHandle,
+    /// Mock 面板实体（随面板构造期创建，无 I/O；视图与状态均在 mock crate）
+    mock_panel: Entity<MockPanel>,
 }
 
 impl RightSidebarPanel {
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
+        // 构造期创建 Mock 面板实体（不触 I/O）：导航右键定向导入结构需要在事件路径
+        // 拿到句柄，懒创建（首帧 render）会让「先右键、后面板尚未渲染」的路径丢目标。
+        let host = crate::components::mock_host::build_host(&shared);
+        let mock_panel = cx.new(|cx| MockPanel::new(host, cx));
+        *shared.mock_panel.borrow_mut() = Some(mock_panel.downgrade());
         Self {
             shared,
             focus_handle: cx.focus_handle(),
+            mock_panel,
         }
     }
 
@@ -8493,43 +8558,12 @@ impl RightSidebarPanel {
             )
     }
 
-    fn render_mock_placeholder(&self, fg: Hsla) -> Div {
-        div()
-            .v_flex()
-            .w_full()
-            .gap_1()
-            .pl_2()
-            .pr_2()
-            .pt_2()
-            .pb_2()
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .child("Mock 生成"),
-            )
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .text_color(fg)
-                    .child("· 表结构模板（占位）"),
-            )
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .text_color(fg)
-                    .child("· 生成任务（占位）"),
-            )
+    /// M7：Mock 生成面板——视图与状态在 mock crate（`mock::mock_view::MockPanel`），
+    /// 本面板只做「转发渲染」。
+    fn render_mock_panel(&mut self, cx: &mut Context<Self>) -> Div {
+        let panel = self.mock_panel.clone();
+        let _ = cx;
+        div().v_flex().size_full().min_h_0().child(panel)
     }
 
     fn render_history_placeholder(&self, fg: Hsla) -> Div {
@@ -8600,12 +8634,19 @@ impl Focusable for RightSidebarPanel {
 impl Render for RightSidebarPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bg = cx.theme().colors.background;
-        let fg = cx.theme().colors.foreground;
         let active = self.shared.active_right.get();
+        // 各分支自己取色：Mock 分支要 `&mut cx`（创建输入框 / 取实体句柄），
+        // 不能先 `let fg = cx.theme()…` 把 `cx` 借出去。
         let content: Div = match active {
-            RightPanel::Insight => self.render_insight_placeholder(fg),
-            RightPanel::Mock => self.render_mock_placeholder(fg),
-            RightPanel::History => self.render_history_placeholder(fg),
+            RightPanel::Insight => {
+                let fg = cx.theme().colors.foreground;
+                self.render_insight_placeholder(fg)
+            }
+            RightPanel::Mock => self.render_mock_panel(cx),
+            RightPanel::History => {
+                let fg = cx.theme().colors.foreground;
+                self.render_history_placeholder(fg)
+            }
         };
         div().v_flex().size_full().min_h_0().bg(bg).child(content)
     }

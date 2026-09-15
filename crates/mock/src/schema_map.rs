@@ -8,6 +8,48 @@ pub struct ColumnMappingRule {
     pub sample_value: &'static str,
 }
 
+/// 源库列类型字符串 → mock 列数据类型（宽松匹配，未知类型回退 `Text`）。
+///
+/// 这是**唯一**的类型字符串入口，服务于两类调用方：
+/// - 源库元数据（`INFORMATION_SCHEMA` / 导航树）给出的原始类型串，含长度精度，
+///   如 `VARCHAR(64)` / `DECIMAL(12,2)` / `TIMESTAMP`；
+/// - 内部规范名（模板与 `import_schema` 使用的小写名：`integer` / `decimal` / `datetime` …）。
+///
+/// 两类输入都按大写前缀/全等匹配，因此同一张表不会因为「谁调用的」而得到不同列类型。
+/// 未知类型回退 `Text`（DDL 渲染同为 `VARCHAR`，见 `ColumnDataType::to_duckdb_type`）。
+pub fn parse_data_type(data_type: &str) -> ColumnDataType {
+    let up = data_type.trim().to_uppercase();
+    // 带长度/精度修饰的类型先按前缀匹配：VARCHAR(64) / DECIMAL(12,2) / NUMERIC(10,3)
+    if up.contains("VARCHAR") || up.contains("CHAR") {
+        ColumnDataType::Varchar { length: None }
+    } else if up == "INTEGER" || up == "INT" || up == "TINYINT" || up == "SMALLINT" {
+        ColumnDataType::Integer
+    } else if up == "BIGINT" {
+        ColumnDataType::BigInt
+    } else if up.starts_with("DECIMAL") || up == "NUMERIC" {
+        ColumnDataType::Decimal {
+            precision: 18,
+            scale: 2,
+        }
+    } else if up == "BOOLEAN" || up == "BOOL" {
+        ColumnDataType::Boolean
+    } else if up == "DOUBLE" {
+        ColumnDataType::Double
+    } else if up == "FLOAT" || up == "REAL" {
+        ColumnDataType::Float
+    } else if up == "DATE" {
+        ColumnDataType::Date
+    } else if up == "TIMESTAMP" || up == "DATETIME" {
+        ColumnDataType::Timestamp
+    } else if up == "UUID" {
+        ColumnDataType::Uuid
+    } else if up == "BLOB" {
+        ColumnDataType::Blob
+    } else {
+        ColumnDataType::Text
+    }
+}
+
 pub struct ColumnMapper;
 
 impl ColumnMapper {
@@ -804,5 +846,115 @@ mod tests {
         let resp = ColumnMapper::infer("ts", &ColumnDataType::Timestamp);
         assert_eq!(resp.confidence, "low");
         assert!(matches!(resp.generator, GeneratorConfig::DateTime { .. }));
+    }
+
+    // ==================== 类型字符串解析 ====================
+
+    #[test]
+    fn test_parse_data_type_integer_family() {
+        assert!(matches!(
+            parse_data_type("INTEGER"),
+            ColumnDataType::Integer
+        ));
+        assert!(matches!(parse_data_type("int"), ColumnDataType::Integer));
+        assert!(matches!(
+            parse_data_type("TINYINT"),
+            ColumnDataType::Integer
+        ));
+        assert!(matches!(
+            parse_data_type("SMALLINT"),
+            ColumnDataType::Integer
+        ));
+        assert!(matches!(parse_data_type("BIGINT"), ColumnDataType::BigInt));
+    }
+
+    #[test]
+    fn test_parse_data_type_parameterized_types() {
+        // 源库元数据带长度/精度：仍应识别到真实类型，而不是回退到 VARCHAR。
+        assert!(matches!(
+            parse_data_type("VARCHAR(64)"),
+            ColumnDataType::Varchar { .. }
+        ));
+        assert!(matches!(
+            parse_data_type("DECIMAL(12,2)"),
+            ColumnDataType::Decimal {
+                precision: 18,
+                scale: 2
+            }
+        ));
+        assert!(matches!(
+            parse_data_type("NUMERIC"),
+            ColumnDataType::Decimal { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_data_type_numeric_and_boolean() {
+        assert!(matches!(parse_data_type("DOUBLE"), ColumnDataType::Double));
+        assert!(matches!(parse_data_type("FLOAT"), ColumnDataType::Float));
+        assert!(matches!(parse_data_type("REAL"), ColumnDataType::Float));
+        assert!(matches!(
+            parse_data_type("BOOLEAN"),
+            ColumnDataType::Boolean
+        ));
+        assert!(matches!(parse_data_type("bool"), ColumnDataType::Boolean));
+    }
+
+    #[test]
+    fn test_parse_data_type_time_and_misc() {
+        assert!(matches!(parse_data_type("DATE"), ColumnDataType::Date));
+        assert!(matches!(
+            parse_data_type("TIMESTAMP"),
+            ColumnDataType::Timestamp
+        ));
+        assert!(matches!(
+            parse_data_type("DATETIME"),
+            ColumnDataType::Timestamp
+        ));
+        assert!(matches!(parse_data_type("UUID"), ColumnDataType::Uuid));
+        assert!(matches!(parse_data_type("BLOB"), ColumnDataType::Blob));
+        assert!(matches!(parse_data_type("  text  "), ColumnDataType::Text));
+    }
+
+    #[test]
+    fn test_parse_data_type_unknown_falls_back_to_text() {
+        assert!(matches!(parse_data_type("WEIRD"), ColumnDataType::Text));
+        assert!(matches!(parse_data_type(""), ColumnDataType::Text));
+    }
+
+    /// 内部规范名（模板 / import_schema 使用）必须与源库类型串走同一套判定。
+    #[test]
+    fn test_parse_data_type_canonical_names() {
+        assert!(matches!(
+            parse_data_type("integer"),
+            ColumnDataType::Integer
+        ));
+        assert!(matches!(parse_data_type("bigint"), ColumnDataType::BigInt));
+        assert!(matches!(parse_data_type("float"), ColumnDataType::Float));
+        assert!(matches!(parse_data_type("double"), ColumnDataType::Double));
+        assert!(matches!(
+            parse_data_type("decimal"),
+            ColumnDataType::Decimal { .. }
+        ));
+        assert!(matches!(
+            parse_data_type("boolean"),
+            ColumnDataType::Boolean
+        ));
+        assert!(matches!(
+            parse_data_type("varchar"),
+            ColumnDataType::Varchar { .. }
+        ));
+        assert!(matches!(parse_data_type("text"), ColumnDataType::Text));
+        assert!(matches!(parse_data_type("date"), ColumnDataType::Date));
+        assert!(matches!(
+            parse_data_type("datetime"),
+            ColumnDataType::Timestamp
+        ));
+        assert!(matches!(
+            parse_data_type("timestamp"),
+            ColumnDataType::Timestamp
+        ));
+        assert!(matches!(parse_data_type("uuid"), ColumnDataType::Uuid));
+        assert!(matches!(parse_data_type("blob"), ColumnDataType::Blob));
     }
 }

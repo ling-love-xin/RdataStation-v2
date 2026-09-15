@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation Mock 数据生成（M7）· 原型</title>
+<!--
+  本文件是 v2 原生交互稿（RDS Light/Dark 双主题 + 可切场景），**不是** v1 文件的搬运：
+  设计参考 v1 `prototype/mock-data-generator.html`（表名输入 / 行数·种子·语言 / 可增删列 / 生成器选择 /
+  ⚙ 高级抽屉 / 预览表 / 四个导出 / 保存草稿 / 持久化），按 v2 口径重画：
+  右 Dock 280px 只放「配置 + 出口」，字段表与预览表格落**中央「Mock 数据」tab**（280px 放不下宽表）。
+  语义与状态矩阵见 mock-prototype-design.md，尺寸与取色见 theme / ui 规范。
+-->
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3; --tabactive-bg:#FFFFFF; --tabactive-fg:#333333;
+  --activity-bar:#ECECEC; --activity-fg:#616161; --activity-active:#333333;
+  --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
+  --track:#E7E7E7; --overlay:rgba(20,20,30,.28); --popover:#FFFFFF;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526; --tabactive-bg:#1E1E1E; --tabactive-fg:#FFFFFF;
+  --activity-bar:#333333; --activity-fg:#858585; --activity-active:#FFFFFF;
+  --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
+  --track:#3C3C3C; --overlay:rgba(0,0,0,.5); --popover:#252526;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);padding:28px 20px 24px;font-size:13px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;cursor:pointer;}
+.mono{font-family:Consolas,'SFMono-Regular',monospace;}
+
+.page-head{display:flex;align-items:center;justify-content:space-between;max-width:1180px;margin:0 auto 14px;padding:0 4px;gap:16px;flex-wrap:wrap;}
+.brand{display:flex;align-items:center;gap:10px;}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(194,91,70,.35);color:#fff;font-weight:700;font-size:12px;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:2px;}
+.head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.theme-toggle,.scn{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 12px;font-size:12px;transition:all .15s;}
+.scn.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);}
+.theme-toggle:hover,.scn:hover{border-color:var(--active-border);}
+
+/* ── 场景切换条 ── */
+.scn-bar{max-width:1180px;margin:0 auto 12px;display:flex;gap:6px;flex-wrap:wrap;padding:0 4px;}
+.scn-hint{color:var(--muted);font-size:11px;margin:0 auto 14px;max-width:1180px;padding:0 4px;}
+
+/* ── 窗口壳 ── */
+.wrap{max-width:1180px;margin:0 auto;overflow-x:auto;padding-bottom:6px;}
+.app{min-width:1060px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);position:relative;}
+.titlebar{display:flex;align-items:center;height:36px;background:var(--titlebar);border-bottom:1px solid var(--border);}
+.tb-left{display:flex;align-items:center;flex:0 0 auto;padding-left:10px;gap:8px;}
+.app-logo{width:20px;height:20px;border-radius:5px;background:linear-gradient(135deg,#F5A188,#C25B46);}
+.cutout{display:flex;align-items:center;gap:7px;margin-left:6px;padding:3px 12px;background:var(--sidebar);border:1px dashed var(--active-border);border-radius:6px;}
+.cutout-label{font-size:11px;color:var(--muted);}
+.cutout-name{font-size:12.5px;font-weight:600;}
+.tb-center{flex:1;display:flex;justify-content:center;min-width:0;}
+.quick-open{display:flex;align-items:center;gap:8px;width:320px;max-width:46%;height:24px;background:var(--bg);border:1px solid var(--input-border);border-radius:5px;padding:0 9px;font-size:12px;color:var(--muted);}
+.quick-open kbd{margin-left:auto;font-size:10px;border:1px solid var(--border);border-radius:3px;padding:0 4px;color:var(--muted);}
+.tb-right{flex:0 0 auto;display:flex;height:100%;}
+.wc{width:44px;display:flex;align-items:center;justify-content:center;font-size:12px;}
+.wc:hover{background:var(--hover);}
+.wc.close:hover{background:#e81123;color:#fff;}
+
+.main{display:flex;align-items:stretch;height:620px;}
+.activity{width:48px;flex:none;background:var(--activity-bar);display:flex;flex-direction:column;align-items:center;padding:4px 0;}
+.activity.l{border-right:1px solid var(--border);}
+.activity.r{border-left:1px solid var(--border);}
+.a-icon{width:44px;height:40px;display:flex;align-items:center;justify-content:center;color:var(--activity-fg);font-size:16px;border-left:2px solid transparent;}
+.activity.r .a-icon{border-left:none;border-right:2px solid transparent;cursor:pointer;}
+.a-icon.active{color:var(--activity-active);border-left-color:var(--activity-active);}
+.activity.r .a-icon.active{border-right-color:var(--activity-active);}
+.a-spacer{flex:1;}
+
+/* ── 左右边栏 ── */
+.sidebar-l{width:240px;flex:none;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column;}
+.sidebar-r{width:280px;flex:none;background:var(--sidebar);border-left:1px solid var(--sidebar-border);display:flex;flex-direction:column;}
+.panel-head{display:flex;align-items:center;height:36px;padding:0 8px 0 12px;background:var(--tabbar);border-bottom:1px solid var(--sidebar-border);}
+.panel-head .ttl{font-size:12px;font-weight:600;}
+.panel-head .actions{margin-left:auto;display:flex;gap:2px;color:var(--muted);font-size:13px;}
+.panel-head .actions span{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:4px;}
+.panel-head .actions span:hover{background:var(--hover);color:var(--fg);}
+.panel-body{flex:1;overflow:auto;padding:6px;font-size:12px;}
+.row{display:flex;align-items:center;gap:6px;height:26px;padding:0 6px;border-radius:5px;white-space:nowrap;}
+.row:hover{background:var(--hover);}
+.row.sel{background:var(--accent);position:relative;}
+.row.sel::before{content:"";position:absolute;left:0;top:3px;bottom:3px;width:2px;border-radius:2px;background:var(--active-border);}
+.row .chev{width:10px;color:var(--muted);font-size:9px;flex:none;text-align:center;}
+.row .ind{color:var(--muted);}
+
+/* ── 中央区：编辑区 tab 组 ── */
+.center{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg);}
+.tabs{display:flex;align-items:stretch;height:36px;background:var(--tabbar);border-bottom:1px solid var(--sidebar-border);}
+.tab{display:flex;align-items:center;gap:8px;padding:0 12px;font-size:12px;color:var(--muted);border-right:1px solid var(--sidebar-border);}
+.tab.on{background:var(--tabactive-bg);color:var(--tabactive-fg);font-weight:600;}
+.tab .x{color:var(--muted);font-size:11px;}
+.center-body{flex:1;overflow:hidden;padding:12px 14px;display:flex;flex-direction:column;gap:10px;}
+.center h2{font-size:13px;font-weight:600;}
+.mut{color:var(--muted);}
+.xs{font-size:11px;}
+.card{border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--sidebar);}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:12px}
+.kv .k{color:var(--muted);}
+
+/* ── Mock 面板（右 Dock，280px） ── */
+.mock{display:flex;flex-direction:column;gap:8px;padding:8px;}
+.mock .title{font-size:13px;font-weight:600;}
+.btn{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:6px;padding:5px 10px;font-size:12px;display:inline-flex;align-items:center;gap:6px;transition:all .12s;}
+.btn:hover{background:var(--hover);}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);}
+.btn.primary:hover{background:var(--primary-hover);}
+.btn.ghost{background:transparent;border-color:transparent;}
+.btn.ghost:hover{background:var(--hover);}
+.btn.wide{width:100%;justify-content:center;}
+.btn.sm{padding:3px 8px;font-size:11px;}
+.btn.toggled{background:var(--accent);border-color:var(--active-border);}
+.btn[disabled]{opacity:.5;cursor:not-allowed;}
+.inp{background:var(--bg);border:1px solid var(--input-border);border-radius:5px;color:var(--fg);padding:4px 8px;font-size:12px;font-family:inherit;outline:none;height:26px;}
+.inp:focus{border-color:var(--active-border);}
+.inp.num{width:80px;}
+.inp.search{width:100%;}
+.line{display:flex;align-items:center;gap:6px;width:100%;}
+.line .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hint{font-size:11px;color:var(--muted);}
+.ok{font-size:11px;color:var(--success);}
+.err{font-size:11px;color:var(--danger);}
+.inf{font-size:11px;color:var(--info);}
+.mono-line{font-family:Consolas,'SFMono-Regular',monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.stack{display:flex;flex-direction:column;gap:6px;width:100%;}
+.exit-enabled{display:none;}
+[data-scn="generated"] .exit-enabled,[data-scn="persist"] .exit-enabled{display:flex;}
+[data-scn="generated"] .exit-disabled,[data-scn="persist"] .exit-disabled{display:none;}
+
+/* ── 中央字段卡片 + 预览表 ── */
+.detail-head{display:flex;align-items:center;gap:8px;width:100%;}
+.detail-head .grow{flex:1;min-width:0;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.field-grid{display:flex;flex-direction:column;gap:8px;max-height:236px;overflow:auto;padding-right:2px;}
+.fcard{border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;}
+.fcard .head{display:flex;align-items:center;gap:8px;font-size:12px;}
+.fcard .name{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fcard .type{color:var(--muted);flex:none;font-size:11px;}
+.badge{flex:none;font-size:11px;}
+.badge.high{color:var(--success);}
+.badge.low{color:var(--muted);}
+.badge.manual{color:var(--info);}
+.fcard .ops{display:flex;align-items:center;gap:6px;}
+.fcard .summary{flex:1;min-width:0;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.prev-wrap{flex:1;min-height:0;border:1px solid var(--border);border-radius:8px;overflow:auto;}
+.prev-table{border-collapse:collapse;font-size:11.5px;font-family:Consolas,'SFMono-Regular',monospace;}
+.prev-table th,.prev-table td{border-bottom:1px solid var(--border);border-right:1px solid var(--border);padding:5px 12px;white-space:nowrap;text-align:left;min-width:112px;}
+.prev-table th{color:var(--muted);font-weight:600;background:var(--sidebar);}
+.prev-table td.idx{color:var(--muted);min-width:40px;}
+
+/* ── 生成器分类子菜单（附在字段行的按钮下方） ── */
+.popover{position:absolute;z-index:6;background:var(--popover);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);padding:4px;display:none;min-width:150px;}
+[data-scn="menu"] .popover.gen{display:flex;gap:4px;}
+.menu{display:flex;flex-direction:column;gap:2px;min-width:136px;max-height:260px;overflow:auto;}
+.menu-item{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:5px;font-size:12px;white-space:nowrap;}
+.menu-item:hover{background:var(--hover);}
+.menu-item.on{background:var(--accent);}
+.menu-item .arrow{margin-left:auto;color:var(--muted);font-size:10px;}
+.menu-item .tag{margin-left:auto;color:var(--muted);font-size:10.5px;}
+.menu-sep{height:1px;background:var(--border);margin:3px 4px;}
+
+/* ── 对话框（应用内叠加层） ── */
+.overlay{position:absolute;inset:0;background:var(--overlay);display:none;align-items:center;justify-content:center;padding:24px;z-index:9;}
+.overlay.show{display:flex;}
+.dialog{width:520px;max-width:92%;background:var(--bg);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden;}
+.dialog .dh{height:42px;display:flex;align-items:center;padding:0 14px;font-weight:600;border-bottom:1px solid var(--border);}
+.dialog .db{padding:12px 14px;display:flex;flex-direction:column;gap:8px;max-height:420px;overflow:auto;}
+.dialog .df{height:52px;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 14px;border-top:1px solid var(--border);}
+.cat{font-size:11px;color:var(--muted);margin-top:4px;}
+.form-line{display:flex;align-items:center;gap:10px;}
+.form-line .lab{flex:1;min-width:0;color:var(--muted);font-size:12px;}
+.form-line .inp{width:150px;}
+
+/* ── 场景可见性 ── */
+.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column{display:none;}
+[data-scn="empty"] .only-empty{display:flex;}
+[data-scn="imported"] .only-imported{display:flex;}
+[data-scn="generated"] .only-imported{display:flex;}
+[data-scn="generated"] .only-generated{display:flex;}
+[data-scn="persist"] .only-imported{display:flex;}
+[data-scn="persist"] .only-generated{display:flex;}
+[data-scn="persist"] .only-persist{display:flex;}
+[data-scn="readonly"] .only-imported{display:flex;}
+[data-scn="readonly"] .only-readonly{display:flex;}
+[data-scn="menu"] .only-imported{display:flex;}
+[data-scn="column"] .only-imported{display:flex;}
+.detail-empty{display:none;}
+[data-scn="empty"] .detail-empty{display:flex;}
+[data-scn="empty"] .detail-fields{display:none;}
+.preview-empty{display:none;}
+[data-scn="imported"] .preview-empty,
+[data-scn="readonly"] .preview-empty,
+[data-scn="menu"] .preview-empty,
+[data-scn="column"] .preview-empty{display:flex;}
+.inline{display:inline;}
+[data-scn="empty"] .count-zero{display:inline;}
+.count-zero{display:none;}
+[data-scn="empty"] .count-five{display:none;}
+.count-five{display:inline;}
+.note{max-width:1180px;margin:14px auto 0;padding:0 4px;color:var(--muted);font-size:11.5px;line-height:1.7;}
+.note b{color:var(--fg);}
+.note code{background:var(--sidebar);border:1px solid var(--border);border-radius:4px;padding:0 4px;}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <div class="brand">
+    <div class="logo">R</div>
+    <div>
+      <h1>Mock 数据生成（M7）· 原型</h1>
+      <div class="sub">右 Dock 280px（配置 + 出口）+ 中央「Mock 数据」tab（字段表 + 预览）</div>
+    </div>
+  </div>
+  <div class="head-actions">
+    <button class="theme-toggle" onclick="toggleTheme()">切换明暗</button>
+  </div>
+</div>
+
+<div class="scn-bar">
+  <button class="scn on" data-go="empty" onclick="setScene('empty')">空态（未加列）</button>
+  <button class="scn" data-go="imported" onclick="setScene('imported')">导入源库结构</button>
+  <button class="scn" data-go="generated" onclick="setScene('generated')">已生成 · 出口就绪</button>
+  <button class="scn" data-go="persist" onclick="setScene('persist')">落库反馈（同名已存在）</button>
+  <button class="scn" data-go="readonly" onclick="setScene('readonly')">只读项目</button>
+  <button class="scn" data-go="menu" onclick="setScene('menu')">生成器分类子菜单</button>
+  <button class="scn" data-go="column" onclick="setScene('column')">列编辑对话框</button>
+</div>
+<div class="scn-hint">场景切换只改变 Mock 面板 / 中央 tab / 对话框的呈现；窗口壳（标题栏 / 活动栏 / 左右边栏）为 v2 五段布局的简化示意。</div>
+
+<div class="wrap">
+<div class="app" id="app" data-scn="empty">
+
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <div class="tb-left">
+      <div class="app-logo"></div>
+      <div class="cutout"><span class="cutout-label">项目</span><span class="cutout-name">演示项目</span></div>
+    </div>
+    <div class="tb-center">
+      <div class="quick-open"><span>搜索…</span><kbd>Ctrl+P</kbd></div>
+    </div>
+    <div class="tb-right">
+      <div class="wc">–</div><div class="wc">▢</div><div class="wc close">✕</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <!-- 左活动栏 -->
+    <div class="activity l">
+      <div class="a-icon active">🗄</div>
+      <div class="a-icon">📝</div>
+      <div class="a-icon">📦</div>
+      <div class="a-spacer"></div>
+      <div class="a-icon">⚙</div>
+    </div>
+
+    <!-- 左 Dock：数据库导航（简化） -->
+    <div class="sidebar-l">
+      <div class="panel-head"><span class="ttl">数据库导航</span><span class="actions"><span>⟳</span><span>▾</span></span></div>
+      <div class="panel-body">
+        <div class="row sel"><span class="chev">▾</span><span>演示项目</span><span class="ind">项目 (P)</span></div>
+        <div class="row"><span class="chev">▾</span><span>生产库（PostgreSQL）</span></div>
+        <div class="row"><span class="chev">▾</span><span>public</span></div>
+        <div class="row"><span class="chev"></span><span>orders</span><span class="ind">表</span></div>
+        <div class="row"><span class="chev"></span><span>customers</span><span class="ind">表</span></div>
+      </div>
+    </div>
+
+    <!-- 中央区：编辑区 tab 组（工作台 | Mock 数据） -->
+    <div class="center">
+      <div class="tabs">
+        <div class="tab">工作台</div>
+        <div class="tab on">Mock · mock_orders <span class="x">✕</span></div>
+      </div>
+      <div class="center-body">
+        <div class="detail-head">
+          <span class="grow">字段（5）· 目标表 mock_orders · 1000 行 · 种子 随机 · 简体中文</span>
+          <button class="btn primary sm">生成</button>
+        </div>
+
+        <!-- 字段清单（空态 / 非空态） -->
+        <div class="detail-empty hint">暂无列：在右 Dock「Mock 数据生成」面板点「导入结构」或「＋ 加列」。</div>
+        <div class="only-imported detail-fields" style="flex-direction:column;gap:10px;">
+          <div class="field-grid">
+            <div class="fcard">
+              <div class="head"><span class="name">id</span><span class="type">INTEGER</span><span class="badge high">high</span></div>
+              <div class="ops">
+                <button class="btn ghost sm">自增序列 ▾</button>
+                <button class="btn ghost sm">编辑</button>
+                <button class="btn ghost sm">智能</button>
+                <button class="btn ghost sm">删除</button>
+                <span class="summary">空值 0% · 起始值 1 · 步长 1</span>
+              </div>
+            </div>
+            <div class="fcard">
+              <div class="head"><span class="name">customer_email</span><span class="type">VARCHAR</span><span class="badge high">high</span></div>
+              <div class="ops">
+                <button class="btn ghost sm" onclick="setScene('menu')">安全邮箱 ▾</button>
+                <button class="btn ghost sm" onclick="setScene('column')">编辑</button>
+                <button class="btn ghost sm">智能</button>
+                <button class="btn ghost sm">删除</button>
+                <span class="summary">空值 0% · zhangsan@example.com</span>
+              </div>
+            </div>
+            <div class="fcard">
+              <div class="head"><span class="name">amount</span><span class="type">DECIMAL(12, 2)</span><span class="badge high">high</span></div>
+              <div class="ops">
+                <button class="btn ghost sm">随机定点数 ▾</button>
+                <button class="btn ghost sm">编辑</button>
+                <button class="btn ghost sm">智能</button>
+                <button class="btn ghost sm">删除</button>
+                <span class="summary">空值 0% · 最小值 0.01 · 最大值 99999.99 · 小数位 2</span>
+              </div>
+            </div>
+            <div class="fcard">
+              <div class="head"><span class="name">status</span><span class="type">VARCHAR</span><span class="badge manual">manual</span></div>
+              <div class="ops">
+                <button class="btn ghost sm">加权取值 ▾</button>
+                <button class="btn ghost sm">编辑</button>
+                <button class="btn ghost sm">智能</button>
+                <button class="btn ghost sm">删除</button>
+                <span class="summary">空值 5% · 加权选项（复杂参数暂不内联编辑）</span>
+              </div>
+            </div>
+            <div class="fcard">
+              <div class="head"><span class="name">created_at</span><span class="type">TIMESTAMP</span><span class="badge high">high</span></div>
+              <div class="ops">
+                <button class="btn ghost sm">日期时间（区间） ▾</button>
+                <button class="btn ghost sm">编辑</button>
+                <button class="btn ghost sm">智能</button>
+                <button class="btn ghost sm">删除</button>
+                <span class="summary">空值 0% · 最小值 2020-01-01 · 最大值 2025-12-31</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 预览表（生成后就绪） -->
+          <div class="hint only-generated">预览（前 3 行）· 临时表 <span class="mono">temp_mock_mock_orders</span> · 本次 1000 行 · 12 ms</div>
+          <div class="hint preview-empty">预览（前 10 行）· 尚无结果——点右上「生成」</div>
+          <div class="prev-wrap only-generated" style="flex-direction:column;">
+            <table class="prev-table">
+              <tr>
+                <th class="idx">#</th><th>id</th><th>customer_email</th><th>amount</th><th>status</th><th>created_at</th>
+              </tr>
+              <tr><td class="idx">1</td><td>1</td><td>zhangsan@example.com</td><td>1234.56</td><td>paid</td><td>2024-01-15 08:30:00</td></tr>
+              <tr><td class="idx">2</td><td>2</td><td>li.si@example.org</td><td>88.00</td><td>pending</td><td>2023-11-02 19:04:11</td></tr>
+              <tr><td class="idx">3</td><td>3</td><td>wang@example.net</td><td>10500.75</td><td>paid</td><td>2022-06-30 07:12:45</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右 Dock：Mock 生成面板（配置 + 出口） -->
+    <div class="sidebar-r">
+      <div class="panel-head"><span class="ttl">Mock 生成</span><span class="actions"><span>⟳</span><span>▾</span></span></div>
+      <div class="panel-body">
+        <div class="mock">
+          <div class="title">Mock 数据生成</div>
+
+          <!-- 目标表名（新表） -->
+          <div class="hint">目标表名（新表；落库与文件名取此名）</div>
+          <input class="inp" value="mock_orders" aria-label="目标表名">
+          <div class="line">
+            <input class="inp num" value="1000" aria-label="行数">
+            <input class="inp num" placeholder="随机种子" aria-label="种子">
+            <button class="btn sm">简体中文 ▾</button>
+          </div>
+
+          <!-- 列来源 -->
+          <div class="line">
+            <span class="hint grow">列（<span class="count-zero">0</span><span class="count-five">5</span>）</span>
+            <button class="btn sm">导入结构</button>
+            <button class="btn sm">＋ 加列</button>
+          </div>
+
+          <!-- 生成 -->
+          <button class="btn primary wide">生成</button>
+
+          <!-- 结果摘要 / 只读 / 落库反馈 -->
+          <div class="mono-line only-generated" style="display:none">临时表 temp_mock_mock_orders · 1000 行 · 12 ms</div>
+          <div class="inf only-readonly">只读模式：不允许落库与写文件（仍可生成预览）</div>
+          <div class="ok only-persist">已在分析库新建表 mock_orders（1000 行）</div>
+          <div class="err only-persist">分析库已存在表 mock_orders：请改用「追加到既有表」</div>
+
+          <!-- 出口：生成前禁用 / 生成后可用（同一组按钮两种状态） -->
+          <div class="hint">出口（生成后可用）</div>
+          <div class="stack exit-disabled">
+            <button class="btn wide" disabled>查看详情（字段与预览）</button>
+            <button class="btn wide" disabled>持久化为分析库表</button>
+            <button class="btn wide" disabled>追加到既有表 ▾</button>
+            <button class="btn wide" disabled>保存到草稿箱 ▾</button>
+            <button class="btn wide" disabled>另存为 ▾</button>
+          </div>
+          <div class="stack exit-enabled">
+            <button class="btn wide">查看详情（字段与预览）</button>
+            <button class="btn wide">持久化为分析库表</button>
+            <button class="btn wide">追加到既有表 ▾</button>
+            <button class="btn wide">保存到草稿箱 ▾</button>
+            <button class="btn wide">另存为 ▾</button>
+          </div>
+          <div class="hint">数据只写入分析库与文件，不回传源库（M7）</div>
+
+          <!-- 空态 -->
+          <div class="hint only-empty">尚未添加列：点「导入结构」从源库表读结构，或「＋ 加列」手工起一列。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 生成器分类子菜单（挂在 customer_email 字段行的按钮下方） -->
+    <div class="popover gen" style="left:300px;top:212px;">
+      <div class="menu">
+        <div class="menu-item">数值<span class="arrow">›</span></div>
+        <div class="menu-item">文本<span class="arrow">›</span></div>
+        <div class="menu-item">个人信息<span class="arrow">›</span></div>
+        <div class="menu-item">地址与网络标识<span class="arrow">›</span></div>
+        <div class="menu-item">日期时间<span class="arrow">›</span></div>
+        <div class="menu-item">商业<span class="arrow">›</span></div>
+        <div class="menu-item">金融<span class="arrow">›</span></div>
+        <div class="menu-item">网络与技术<span class="arrow">›</span></div>
+        <div class="menu-item">图片<span class="arrow">›</span></div>
+        <div class="menu-item">颜色<span class="arrow">›</span></div>
+        <div class="menu-item">标准编码<span class="arrow">›</span></div>
+        <div class="menu-item">汽车与行政<span class="arrow">›</span></div>
+        <div class="menu-item">约束<span class="arrow">›</span></div>
+      </div>
+      <div class="menu">
+        <div class="menu-item on">安全邮箱<span class="tag">safe_email</span></div>
+        <div class="menu-item">邮箱地址<span class="tag">email</span></div>
+        <div class="menu-item">免费邮箱<span class="tag">free_email</span></div>
+        <div class="menu-item">用户名<span class="tag">username</span></div>
+        <div class="menu-item">姓名<span class="tag">name</span></div>
+        <div class="menu-item">手机号<span class="tag">phone</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 列编辑对话框 -->
+  <div class="overlay" id="ov-column">
+    <div class="dialog">
+      <div class="dh">列编辑</div>
+      <div class="db">
+        <div class="form-line"><span class="lab">列名</span><input class="inp" value="customer_email"></div>
+        <div class="form-line"><span class="lab">类型</span><button class="btn sm">VARCHAR ▾</button></div>
+        <div class="form-line"><span class="lab">生成器</span><span class="xs">安全邮箱（在字段行的菜单里切换）</span></div>
+        <div class="form-line"><span class="lab"></span><span class="hint">该生成器没有可调参数</span></div>
+        <div class="form-line"><span class="lab">空值率（%）</span><input class="inp" value="0"></div>
+        <div class="form-line"><span class="lab">唯一值</span><button class="btn sm">允许重复</button></div>
+        <div class="line"><button class="btn sm">恢复智能默认</button></div>
+      </div>
+      <div class="df">
+        <button class="btn" onclick="setScene('imported')">取消</button>
+        <button class="btn primary" onclick="setScene('imported')">应用</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div class="note">
+  <div><b>与 v1 原型的对应关系</b>（v1 文件：<code>v1/prototype/mock-data-generator.html</code>，本稿为参考重画而非搬运）：</div>
+  <div>· v1 右面板「配置区（表名输入 / 行数 / 种子 / 语言 / 重置）」→ 本稿同样以<b>目标表名输入框</b>为起点（造新表），保留行数 / 种子 / 语言三项；v1 的「重置」并入字段行的「智能」与列编辑的「恢复智能默认」。</div>
+  <div>· v1 的字段表（可增删列、列名与类型可改、生成器下拉、空值率、唯一、⚙ 高级抽屉）→ 本稿因右 Dock 只有 280px，整体移到<b>中央「Mock 数据」tab</b>：字段卡片两行（名称 / 类型 / 置信度 + 生成器 ▾ / 编辑 / 智能 / 删除 + 参数摘要）。</div>
+  <div>· v1 的「生成器下拉（137 项平铺）」→ 本稿按<b>分类子菜单</b>收口；v1 的「⚙ 高级抽屉」→ <b>列编辑对话框</b>（列名 / 类型 / 生成器只读 / 参数 / 空值率 / 唯一 / 恢复智能默认）。</div>
+  <div>· v1 的「生成 → 预览表 → 导出 CSV·XLSX·Parquet·SQL / 保存草稿 / 持久化」→ 本稿：生成仍只产<b>内存临时表 + 预览</b>（不写库），四个出口收在右 Dock「出口」按钮组，预览表在中央 tab。</div>
+  <div>· v1 的「导入结构弹窗」→ 本稿「导入结构」对话框（连接 / 库 / schema / 表名，读源库结构）；v1 <b>没有</b>的「追加到既有表」是 v2 的<b>显式</b>出口（选表后主键自增接续表内行数），不与「持久化」混为一路。</div>
+  <div>· v1 的「场景模板 / 保存模板 / 历史段」→ 待办（见 mock-dev-plan.md Phase C/D），本稿不画。</div>
+</div>
+
+<script>
+function toggleTheme(){
+  const html = document.documentElement;
+  html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
+}
+function setScene(name){
+  const app = document.getElementById('app');
+  app.dataset.scn = name;
+  document.querySelectorAll('.scn').forEach(b => b.classList.toggle('on', b.dataset.go === name));
+  document.getElementById('ov-column').classList.toggle('show', name === 'column');
+}
+setScene('empty');
+</script>
+</body>
+</html>

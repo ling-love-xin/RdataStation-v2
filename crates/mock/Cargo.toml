@@ -8,6 +8,9 @@ description = "M7 测试数据生成：基于元数据的 mock 数据（仅落 D
 engine.workspace = true
 shared.workspace = true
 
+# ===== 视图（Feature 自持视图：Mock 面板随能力同 crate，见 src/mock_view.rs） =====
+gpui-kit.workspace = true
+
 # ===== 数据生成 =====
 fake.workspace = true
 rand.workspace = true
@@ -20,9 +23,6 @@ serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
 
-# ===== Async 运行时 =====
-tokio.workspace = true
-
 # ===== DuckDB（分析引擎，mock 落临时表） =====
 duckdb.workspace = true
 
@@ -30,4 +30,9 @@ duckdb.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true
-uuid.workspace = true
+
+[dev-dependencies]
+# 集成测试（tests/）：`MockEngine` 公开 API 的异步端到端验证需要属性宏与多线程运行时
+tokio.workspace = true
+# 面板窗口测试（headless）需要 gpui 的 test-support 能力
+gpui-kit = { workspace = true, features = ["test-support"] }

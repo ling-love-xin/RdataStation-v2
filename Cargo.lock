@@ -7998,6 +7998,7 @@ dependencies = [
  "chrono",
  "duckdb",
  "fake",
+ "gpui-kit",
  "rand 0.10.2",
  "rds-engine",
  "rds-shared",

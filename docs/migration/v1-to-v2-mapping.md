@@ -142,6 +142,13 @@
 - `duckdb_rows_to_arrow` 引用路径修正：v1 `crate::core::driver::native::duckdb::` → v2 `engine::duckdb::row_to_arrow::`（Round 1 抽取位置）；
 - 其余路径改写：`crate::core::error/models/persistence/sql` → `shared::error/models` / `engine::persistence/sql` 等（REPL 表见脚本）。
 
+**本轮补记（迁移核查发现，2026-09-15）**：
+
+- v1 的集成测试文件 `v1/backend/tests/mock_engine_tests.rs`（359 行 / 16 项）**自始无法编译、从未通过**——引用了已不存在的 `GeneratorConfig::type_name()`、把 `String` 型 `confidence` 当数值比较、断言恒为空的 `preview.rows`（`read_preview` 只填 Arrow `batches`）。因此它不属于「未迁的测试」，Round 13 的「56 单测全过」与「无集成测试」并不矛盾。
+- 该文件已按 v2 真实契约重写为 26 项集成测试（`crates/mock/tests/mock_engine_tests.rs`），并借此实测出两个 v1 遗留缺陷：
+  `persist_as_asset` / `export(Table)` 生成非法 SQL（已修，engine 参数正名）；v1 文档声称的 `history.rs` 与三个历史命令在 v1 源码中并不存在。
+- 详见 `docs/architecture/mock/mock-architecture.md` §9 与 `mock-dev-plan.md` §1。
+
 **📦 图标资源迁移（本轮要求）**：v1 `src-tauri/icons`（53 文件 7.1MB：128/32/64 px PNG、android mipmap 系列、app-icon-coral-clean.png 等）→ `v2/assets/icons/`；v1 `public`（7 文件 5.7MB：brand 3D 主视觉、rds-icon-dark/light、popout.html 等）→ `v2/assets/public/`。新建 `assets/` 目录，命名与 v1 一致便于追溯（v2 为 GPUI 桌面应用，资源由 assets 统一承载）。
 
 **v1 保留策略**：同前——复制式迁移，v1 对应文件全部保留，待 Feature 完整迁移后统一清理。
@@ -512,7 +519,7 @@
 ### ⏳ 下一轮候选
 
 - GPUI 视图层：workbench 主界面（数据库导航/连接管理/资源分析）首个可交互视图；
-- mock 命令装配（mock_commands → GPUI 或 CLI 入口）；
+- ~~mock 命令装配（mock_commands → GPUI 或 CLI 入口）~~ ✅ 已完成（Mock 面板最小可用闭环 + 装配层追加语义；见 `docs/architecture/mock/mock-dev-plan.md` Phase A）；
 - v1 源文件清理决策（v1/ 暂存区保留 vs 按 Feature 删除）。
 ### ✅ Round 19（已完成，GPUI 视图层：首个可交互工作台骨架，`cargo check --workspace` 零告警）
 

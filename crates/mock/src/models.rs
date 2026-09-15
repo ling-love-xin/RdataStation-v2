@@ -357,7 +357,7 @@ pub enum GeneratorConfig {
 
 // ==================== 语言/地区 ====================
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Locale {
     ZhCn,

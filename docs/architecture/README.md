@@ -41,6 +41,11 @@
 | `editor/editor-prototype.html` | SQL 编辑器原型（交互稿） | RDS Light/Dark 双主题 × 三模式；可执行（含执行中/中断、结果集上限淘汰、快速过滤、分隔条拖拽、单元运行与 stale、单元增删排序） |
 | `editor/editor-architecture.md` | SQL 编辑器**设计理念与架构** | 概念模型与不变式 / 分层与 crate 归属 / 状态所有权 / 八条数据流 / D1–D20 决策表 / **§7 现状与四个假底座** / 降级矩阵 / 测试策略 / 实现映射 / **§12 已知问题（权威）** / §13 待确认 |
 | `editor/editor-dev-plan.md` | SQL 编辑器开发方案 | Phase 0（地基与技术验证）/ 1a（内核 + 文本/SQL 编辑体验 + 最小执行）/ 1b（执行闭环）/ 1c（分析模式骨架）/ 任务表与验收 / 测试场景 29 条 / 风险 / 验证命令 |
+| `mock/README.md` | Mock 数据生成（M7）**入口** | **先读这个**：一句话定位（把**表结构**变成可用的测试数据：命名新表 + 组织列 → 生成到临时表 → 显式出口）/ 特点速览（生成≠写入 · 元数据驱动 · 只进分析引擎 · 确定性可复现 · 列名智能映射 · 四出口 · 方案①两处排版 · 视图随 crate）/ 边界与相邻模块关系 / 代码地图（含自持视图与宿主桥）/ 改前必守 10 条 / 测试命令与 93+26+10 项基线 / 文档地图 / 优化建议清单 |
+| `mock/mock-prototype-design.md` | Mock 数据生成原型 | 落位与尺寸（右 Dock 280px + 中央「Mock 数据」tab）/ **为什么拆两处（方案①）** / 两处解剖图 / 导入结构与列编辑对话框 / 生成器目录（137 变体 · 15 分类 · 分类子菜单）/ 智能映射置信度呈现 / 状态与空态矩阵 / 主题映射与尺寸常量 / GPUI 落点与组件选型 / **§9 与 V1 的逐项对照（已迁 / 重设计 / 待办 / 不迁）** / 待拍板项 |
+| `mock/mock-prototype.html` | Mock 数据生成原型（交互稿） | v2 原生（RDS Light/Dark 双主题 · 7 场景可切：空态 / 导入结构 / 已生成·出口就绪 / 落库反馈 / 只读 / 生成器分类子菜单 / 列编辑）；由 v1 原型（`v1/prototype/mock-data-generator.html`）**参考重画**，非搬运 |
+| `mock/mock-architecture.md` | Mock 数据生成**设计理念与架构** | **六条不变式**（含生成不写库 · 出口不覆盖）/ 概念模型（配置 · 列 · 临时表 · 出口）/ 分层与 crate 归属（**视图随 crate，宿主经 `MockHost` 注入**）/ 状态所有权与副作用边界 / 数据流（含生成不写库与 cache-aside 取列）/ D1–D19 决策表 / 降级矩阵 / 性能与可观测 / **§9 已知问题（含 v1 迁移五项实证 + 锁重入死锁教训）** / 测试策略 / 实现位置映射 |
+| `mock/mock-dev-plan.md` | Mock 数据生成开发方案 | 现状盘点（迁移完整度对照）/ **Phase A 完成项 A1–A17（含语义回归 · 方案①排版 · 四出口 · 导入结构）与验收证据** / Phase B–E 任务与落点（已标完成态）/ 测试场景 T1–T16 / 风险 R1–R8 / 验证命令 / 进度记录 |
 | `dependencies/dependency-strategy.md` | 依赖治理 | 版本唯一入口 / 升级流程 / 编译时间手段 / 跨大版本待办 |
 
 ## 关联目录
@@ -50,7 +55,7 @@
 
 ## 阅读顺序建议
 
-1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/` / `editor/`
+1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/` / `editor/` / `insight/` / `analytics_resource/` / `mock/`
 
 ## 模块文档集约定（每模块应具备的类型）
 
@@ -71,5 +76,6 @@
 | `project/` | ✅ | ✅ | ✅ `project-view-architecture.md` | ✅ | ⬜ 缺使用手册 |
 | `scratchpad/` | ✅ | ✅ | ✅ `scratchpad-architecture.md`（本轮新增） | ✅ | ✅ `scratchpad-user-guide.md`（本轮新增） |
 | `editor/` | ✅ | ✅ | ✅ `editor-architecture.md` | ✅（方案待确认） | ⬜ 缺使用手册（实现后补） |
+| `mock/` | ✅（本轮新增） | ✅（自 v1 迁入） | ✅ `mock-architecture.md`（本轮新增） | ✅ `mock-dev-plan.md`（本轮新增） | ⬜ 缺使用手册（实现后补） |
 
 > `layout/` / `theme/` / `ui/` / `settings/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。

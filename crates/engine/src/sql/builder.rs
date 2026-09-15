@@ -123,7 +123,11 @@ pub fn build_drop_table(table: &str, if_exists: bool) -> String {
     generate(&stmt, Dialect::DuckDb)
 }
 
-pub fn build_create_table_as_select(table: &str, select_sql: &str) -> String {
+/// 生成 `CREATE TABLE {table} AS SELECT * FROM {source_table}`。
+///
+/// `source_table` 是源**表名**，不是 SELECT 语句（历史参数名 `select_sql` 有误导性，
+/// 曾导致调用方传入整条 SELECT 而生成非法 SQL）。
+pub fn build_create_table_as_select(table: &str, source_table: &str) -> String {
     let stmt = Statement::CreateTable(CreateTableStatement {
         comments: vec![],
         if_not_exists: false,
@@ -131,7 +135,7 @@ pub fn build_create_table_as_select(table: &str, select_sql: &str) -> String {
         table: make_table_ref(table),
         columns: vec![],
         constraints: vec![],
-        as_select: Some(Box::new(select_all().from(select_sql).build())),
+        as_select: Some(Box::new(select_all().from(source_table).build())),
     });
     generate(&stmt, Dialect::DuckDb)
 }

@@ -29,7 +29,10 @@ use crate::services::nav_store::NavStore;
 static BRIDGE_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 /// 取（或首次创建）进程级桥接运行时。
-fn bridge_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
+///
+/// 公开给同 crate 的其他装配层（`services::mock_generator` 的内省 / 生成同样需要
+/// 一个稳定运行时；各自 `Runtime::new()` 会让连接池的后台任务失去存活宿主）。
+pub(crate) fn bridge_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
     if let Some(rt) = BRIDGE_RUNTIME.get() {
         return Ok(rt);
     }

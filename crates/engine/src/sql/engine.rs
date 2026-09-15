@@ -109,8 +109,12 @@ impl SqlEngine {
     }
 
     /// 生成 CREATE TABLE AS SELECT DDL
-    pub fn build_create_table_as_select(table: &str, select_sql: &str) -> String {
-        builder::build_create_table_as_select(table, select_sql)
+    ///
+    /// 参数：
+    /// - `table`: 新建表名
+    /// - `source_table`: 源**表名**（不是 SELECT 语句）
+    pub fn build_create_table_as_select(table: &str, source_table: &str) -> String {
+        builder::build_create_table_as_select(table, source_table)
     }
 
     /// 生成 INSERT INTO DML

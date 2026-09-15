@@ -19,7 +19,7 @@ use crate::models::{
     MockExportFormat, MockGenerateResult, MockScenarioResult,
     MockScenarioTableResult, ScenarioTemplate,
 };
-use crate::schema_map::ColumnMapper;
+use crate::schema_map::{ColumnMapper, parse_data_type};
 use crate::templates;
 
 /// Mock 数据引擎 —— 在 DuckDB 内存表中生成模拟数据集
@@ -134,19 +134,7 @@ impl MockEngine {
             .columns
             .iter()
             .map(|c| {
-                let safe: String = c
-                    .name
-                    .chars()
-                    .map(|ch| {
-                        if ch.is_alphanumeric() || ch == '_' {
-                            ch
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect::<String>()
-                    .trim_matches('_')
-                    .to_string();
+                let safe = sanitize_identifier(&c.name);
                 if safe.is_empty() {
                     return Err(MockError::Generation(format!(
                         "column name '{}' resolves to empty after sanitization",
@@ -266,6 +254,20 @@ impl MockEngine {
         output_path: Option<&str>,
         table_name: Option<&str>,
     ) -> MockResult<String> {
+        // SQL INSERT 分支走 `insert_statements`（它自己取连接）：不能在持锁期间调用它——
+        // 内存库连接是 `Mutex<Connection>`，同线程重复加锁会直接死锁。
+        if matches!(format, MockExportFormat::SqlInsert) {
+            let path = output_path.ok_or_else(|| {
+                MockError::Config("SQL INSERT export requires output_path".to_string())
+            })?;
+            let text = Self::insert_statements(temp_table_name, table_name)?;
+            std::fs::write(path, text).map_err(|e| MockError::Export {
+                format: "SQL INSERT".to_string(),
+                reason: format!("Write file failed: {}", e),
+            })?;
+            return Ok(format!("Exported to SQL INSERT: {}", path));
+        }
+
         let db = Self::get_db()?;
         let conn = Self::get_conn(&db)?;
 
@@ -292,66 +294,73 @@ impl MockEngine {
             MockExportFormat::Table => {
                 let name = table_name.unwrap_or(temp_table_name);
                 let new_name = name.trim_start_matches(TEMP_MOCK_PREFIX);
-                let create_sql = SqlEngine::build_create_table_as_select(
-                    new_name,
-                    &SqlEngine::build_select_all(temp_table_name, None),
-                );
+                // `build_create_table_as_select` 的第二个参数是**源表名**（内部拼 `SELECT * FROM …`），
+                // 传整条 SELECT 会生成 `CREATE TABLE t AS SELECT * FROM SELECT * FROM …`（v1 遗留缺陷）。
+                let create_sql = SqlEngine::build_create_table_as_select(new_name, temp_table_name);
                 conn.execute_batch(&create_sql)?;
                 let drop_sql = SqlEngine::build_drop_table(temp_table_name, true);
                 conn.execute_batch(&drop_sql)?;
                 Ok(format!("Persisted as table: {}", new_name))
             }
-            MockExportFormat::SqlInsert => {
-                let path = output_path.ok_or_else(|| {
-                    MockError::Config("SQL INSERT export requires output_path".to_string())
-                })?;
-                let select_sql = SqlEngine::build_select_all(temp_table_name, None);
-                let mut stmt = conn.prepare(&select_sql)?;
-                // 列元数据必须在 query 之后读取（duckdb-rs 时序要求）。
-                let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
-                {
-                    let mut rows = stmt.query([])?;
-                    while let Some(row) = rows.next()? {
-                        let mut vals = Vec::new();
-                        for i in 0.. {
-                            match row.get::<usize, duckdb::types::Value>(i) {
-                                Ok(v) => vals.push(v),
-                                Err(_) => break,
-                            }
-                        }
-                        data.push(vals);
-                    }
-                }
-                let columns: Vec<String> = stmt
-                    .column_names()
-                    .iter()
-                    .map(|c| format!("\"{}\"", c))
-                    .collect();
-                let col_list = columns.join(", ");
+            // 上面已提前返回
+            MockExportFormat::SqlInsert => unreachable!(),
+        }
+    }
 
-                let mut insert_statements = Vec::new();
-                for vals in &data {
-                    let values: Vec<String> =
-                        vals.iter().map(value_to_sql_literal).collect();
-                    let target_name = table_name
-                        .unwrap_or(temp_table_name)
-                        .trim_start_matches(TEMP_MOCK_PREFIX);
-                    insert_statements.push(format!(
-                        "INSERT INTO \"{}\" ({}) VALUES ({});",
-                        target_name,
-                        col_list,
-                        values.join(", ")
-                    ));
-                }
-                std::fs::write(path, insert_statements.join("\n")).map_err(|e| {
-                    MockError::Export {
-                        format: "SQL INSERT".to_string(),
-                        reason: format!("Write file failed: {}", e),
+    /// 生成全量 `INSERT` 语句文本（每行一条，目标表名为 `table_name` 去临时前缀）。
+    ///
+    /// 「导出 SQL 文件」与「落库到分析库」共用这一份生成逻辑：
+    /// - 导出只需把结果写文件；
+    /// - 落库直接 `execute_batch` 执行，不必先写临时文件再读回。
+    ///
+    /// 目标表须已存在（本函数只产 `INSERT`，不产 `CREATE TABLE`）。
+    ///
+    /// **调用方不得持有内存库连接锁**（`get_conn`）后再调本函数：内存库是
+    /// `Mutex<Connection>`，同线程重入加锁会死锁。
+    pub fn insert_statements(
+        temp_table_name: &str,
+        table_name: Option<&str>,
+    ) -> MockResult<String> {
+        let db = Self::get_db()?;
+        let conn = Self::get_conn(&db)?;
+        let select_sql = SqlEngine::build_select_all(temp_table_name, None);
+        let mut stmt = conn.prepare(&select_sql)?;
+        // 列元数据必须在 query 之后读取（duckdb-rs 时序要求）。
+        let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
+        {
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let mut vals = Vec::new();
+                for i in 0.. {
+                    match row.get::<usize, duckdb::types::Value>(i) {
+                        Ok(v) => vals.push(v),
+                        Err(_) => break,
                     }
-                })?;
-                Ok(format!("Exported to SQL INSERT: {}", path))
+                }
+                data.push(vals);
             }
         }
+        let columns: Vec<String> = stmt
+            .column_names()
+            .iter()
+            .map(|c| format!("\"{}\"", c))
+            .collect();
+        let col_list = columns.join(", ");
+        let target_name = table_name
+            .unwrap_or(temp_table_name)
+            .trim_start_matches(TEMP_MOCK_PREFIX);
+
+        let mut statements = Vec::with_capacity(data.len());
+        for vals in &data {
+            let values: Vec<String> = vals.iter().map(value_to_sql_literal).collect();
+            statements.push(format!(
+                "INSERT INTO \"{}\" ({}) VALUES ({});",
+                target_name,
+                col_list,
+                values.join(", ")
+            ));
+        }
+        Ok(statements.join("\n"))
     }
 
     // ==================== 列名智能映射 ====================
@@ -463,9 +472,13 @@ impl MockEngine {
 
 // ==================== 辅助函数 ====================
 
-fn sanitize_table_name(name: &str) -> String {
-    let safe = name
-        .chars()
+/// 标识符规范化（列名 / 表名共用）：非字母数字与下划线 → `_`，两侧去 `_`。
+///
+/// 生成期临时表的列名由本函数得出，**建表 / 追加写回时也必须复用同一算法**：
+/// 临时表列名与目标表列名不一致时，`INSERT` 的列清单会直接报「列不存在」。
+/// 列名规范化后为空（如全为符号）由调用方报错；表名则退到 `auto_table_*`（见 `sanitize_table_name`）。
+pub fn sanitize_identifier(name: &str) -> String {
+    name.chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '_' {
                 c
@@ -475,7 +488,11 @@ fn sanitize_table_name(name: &str) -> String {
         })
         .collect::<String>()
         .trim_matches('_')
-        .to_lowercase();
+        .to_string()
+}
+
+fn sanitize_table_name(name: &str) -> String {
+    let safe = sanitize_identifier(name).to_lowercase();
     if safe.is_empty() {
         format!(
             "auto_table_{}",
@@ -486,28 +503,6 @@ fn sanitize_table_name(name: &str) -> String {
         )
     } else {
         safe
-    }
-}
-
-fn parse_data_type(data_type: &str) -> crate::models::ColumnDataType {
-    match data_type.to_lowercase().as_str() {
-        "integer" | "int" => crate::models::ColumnDataType::Integer,
-        "bigint" => crate::models::ColumnDataType::BigInt,
-        "float" => crate::models::ColumnDataType::Float,
-        "double" => crate::models::ColumnDataType::Double,
-        "decimal" => crate::models::ColumnDataType::Decimal {
-            precision: 18,
-            scale: 2,
-        },
-        "boolean" | "bool" => crate::models::ColumnDataType::Boolean,
-        "varchar" => crate::models::ColumnDataType::Varchar { length: None },
-        "text" => crate::models::ColumnDataType::Text,
-        "date" => crate::models::ColumnDataType::Date,
-        "datetime" => crate::models::ColumnDataType::DateTime,
-        "timestamp" => crate::models::ColumnDataType::Timestamp,
-        "uuid" => crate::models::ColumnDataType::Uuid,
-        "blob" => crate::models::ColumnDataType::Blob,
-        _ => crate::models::ColumnDataType::Varchar { length: None },
     }
 }
 
@@ -597,8 +592,8 @@ impl MockEngine {
 impl MockEngine {
     /// 将临时表保存到用户草稿本
     ///
-    /// 创建 DuckDB 持久化表（或追加到同名表），从临时表复制全部数据。
-    /// 返回新表名或更新后的行数。
+    /// 按 `mock_{表名}_{时间戳}.{ext}` 写入给定目录，返回**落盘文件路径**
+    /// （供面板显示具体位置）。
     pub fn save_to_scratchpad(
         temp_table_name: &str,
         format: &MockExportFormat,
@@ -616,7 +611,8 @@ impl MockEngine {
         let file_name = format!("mock_{}_{}.{}", base_name, timestamp, ext);
         let output_path = format!("{}/{}", scratchpad_dir, file_name);
 
-        Self::export(temp_table_name, format, Some(&output_path), None)
+        Self::export(temp_table_name, format, Some(&output_path), None)?;
+        Ok(output_path)
     }
 
     /// 将临时表持久化为项目资产
@@ -632,10 +628,8 @@ impl MockEngine {
 
         let safe_name = sanitize_table_name(new_name);
 
-        let create_sql = SqlEngine::build_create_table_as_select(
-            &safe_name,
-            &SqlEngine::build_select_all(temp_table_name, None),
-        );
+        // 第二个参数是源**表名**（不是 SELECT 语句），见 `SqlEngine::build_create_table_as_select`。
+        let create_sql = SqlEngine::build_create_table_as_select(&safe_name, temp_table_name);
         conn.execute_batch(&create_sql)?;
 
         let count_sql = SqlEngine::build_select(&safe_name, &["COUNT(*)"], None);
