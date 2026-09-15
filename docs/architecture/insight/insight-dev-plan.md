@@ -14,7 +14,7 @@
 | 3 | **规则正文不入库，只入索引**：库表只存 scope / checksum / enabled / 校验状态，正文归文件 | §4.2 |
 | 4 | 规则**可禁用**（含内置规则），经索引表抑制记录实现，不改文件 | §4.2 |
 | 5 | 规则热加载走**目录监听**（复用 `ThemeRegistry::watch_dir` 同款机制），不设「重新加载」按钮作为唯一入口 | §4.3 |
-| 6 | ~~洞察 UI 归属 `crates/insight`~~ **⚠️ 降级为待拍板**：仓库内存在两套相反的在用先例（见 §3.1），本方案默认按 `project` 先例（视图入 crate），但**开工前需你确认** | §3.1 |
+| 6 | 洞察 UI 归属 `crates/insight`——**2026-09-16 定案为方案 A**（依据：架构硬约束允许 Feature 直接依赖 gpui-kit 并把同一能力的 model / service / view 放同一 crate；`project` 先例已跑通；`panels.rs` 已 8600+ 行不宜再增） | §3.1 |
 | 7 | 多列分析**重新设计**，不照搬 v1（v1 该功能从未跑通） | §5 Phase 3 |
 | 8 | 快照持久化链路在 Phase 0 闭合（`InsightStorage` 构造点接线），不留到最后 | §5 Phase 0 |
 | 9 | 保留 v1 「项目 → 全局」手动 reload 语义**不采纳**：注册表按项目根缓存，消除调用方义务 | §4.3 |
@@ -22,6 +22,24 @@
 ---
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-16 — Phase 1 第一批：视图层开工（D21 定案 = 方案 A）
+
+**已完成并验证**（`cargo check -p rds-insight --all-targets` 零告警；`cargo test -p rds-insight --lib` **113 项全绿**，基线 91 → +22）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| D21 | 视图归属定案为**方案 A**（视图随 crate）；`insight` 依赖 gpui-kit（测试启用 `test-support`） | `crates/insight/Cargo.toml` |
+| 1.2 | 视图模型：`PanelTab`（五 Tab × 2 字）/ `InsightTarget`（四类目标 + 默认 Tab）/ `InsightPanelState`（四态）/ `ColumnProfileView`（四区内容 + 类型分派 + 阈值与文案，**纯函数可单测**） | `crates/insight/src/model.rs` |
+| 1.3 | 面板骨架：面板头（⚙ / ⟳）+ 目标头（列名 + 类型徽标 + 空值率）+ Tab 条（`TabBar::underline`）+ 四态（空 / 骨架 / 错误 + 重试 / 数据） | `crates/insight/src/insight_view.rs` |
+| 1.4 | 列画像四区 + 类型分派（Numeric / Text / DateTime / Boolean / Unknown）用 `Accordion` 折叠；折叠偏好跨「重算」保留 | 同上 |
+| — | 面板与宿主解耦：点 ⚙ / ⟳ 只发 `InsightEvent`，面板不自己取数、不开对话框（D20） | 同上 |
+| — | M8 尺寸常量集中登记（其中 4 个与 workbench 外壳必须一致的值是镜像，已注明待上收） | `crates/insight/src/ui.rs` |
+| 1.6 | 三个动作定义：`OpenInsight` / `InsightRefresh` / `ReloadInsightRules`（键位待入口批次注册） | `crates/insight/src/commands.rs` |
+
+**顺带发现（已修）**：视图模型的数值分布一开始写成自相矛盾的空占位（数值列的直方图挂在 `ColumnInsightFull::histogram` 而非 `NumericStats` 上，漏接会让数值列**永远看不到分布**），已改为在分派时传入并加两条断言固定。
+
+**未完成（下一批）**：1.1 `InsightService::profile_column` 编排、1.5 入口接线（结果表列头右键 / 导航树右键）、右 Dock 装配（`workbench/src/panels.rs` 去掉三行占位）、键位注册。三项落点都在 `workbench`，与并行会话正在改的 `panels.rs` / `view.rs` 相交，故本批不动。
 
 ### 2026-09-15 — Phase 0 第四批：0.2 边界归位（**Phase 0 全部完成**）
 
@@ -219,7 +237,7 @@ workbench ──► insight ──► engine ──► shared
 
 > **过渡期口径**：其余 Feature crate 的 `*_view.rs` 目前多为占位或已删除，视图大多暂收在 `workbench/panels.rs`。本模块的视图归属见 §3.1——**该决策尚未拍板**。
 
-### 3.1 视图归属：两套相反的在用先例（待拍板）
+### 3.1 视图归属：两套相反的在用先例（**2026-09-16 定案：方案 A**）
 
 | 先例 | 做法 | 证据 |
 | --- | --- | --- |
@@ -416,7 +434,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | R4 | 并发上限 4 导致「评估全表」批量失败 | 体验差 | 批量走串行 + 进度；`acquire()` 排队而非 try 失败（§2-0.4） |
 | R5 | 大表探查耗时（`LIMIT 500` 采样）导致评分失真 | 误判质量 | 原型与 UI 明示「基于 N 行采样」；不做静默全表扫描 |
 | R6 | v1 三个可用面板（TableProfile / SchemaInsight / InsightStats）体量不小 | 工期 | 分 Phase 落地，Phase 1 先出「列画像」主干，其余按序 |
-| R7 | 视图归属拍板后的分叉：若选方案 A（视图入 insight），将与 7 个仍在 workbench 的 Feature 面板分叉；若选方案 B，`panels.rs` 继续膨胀 | 一致性 / 可维护性 | 拍板前不动视图代码（Phase 0 无 UI）；若选 A，先落地一个面板作为样板并参照 `ProjectUiHost` 写宿主桥（`crates/workbench/src/components/project_host.rs`）；若选 B，把洞察状态收进独立子模块而非平铺进 `panels.rs`（见 §3.1） |
+| R7 | 视图归属已定案（方案 A）：与 7 个仍在 workbench 的 Feature 面板分叉 | 一致性 / 可维护性 | 已按 A 落地第一支面板作样板（`crates/insight/src/insight_view.rs`）；宿主桥在装配批次落地（参照 `ProjectUiHost`）。分叉以「面板随 crate」为长期口径逐步收敛 |
 
 ## 8. 实现位置映射（设计决策 → 代码文件）
 

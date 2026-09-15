@@ -3,7 +3,7 @@
 > **一句话**：把数据变成**结论**——「这份数据长什么样」（库 / 表 / 列画像）与「它能不能用」（四维质量评分），并把「新增一种洞察」从改 Rust 降级为**加一个 TOML 规则文件**（内置 18 条，用户可扩展）。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**Phase 0 已完成**（2026-09-15）——文档齐备（模块入口 / 原型 / 交互稿 / 架构 / 开发方案 / 使用手册）；Phase 0 全项（§2 缺陷 · 0.2 边界归位 · 0.3 接缝 · 0.4 作用域 · 0.5 索引与同步器 · 0.6 目录监听 · 0.7 快照链路 · 0.8 占位治理）均已落地并验证；测试 **91 项**。**视图层尚未开始**（Phase 1 起）。当前面板仍是 `workbench/src/panels.rs` 的 `RightSidebarPanel::render_insight_placeholder`（三行占位文字）。逐项进度见 `insight-dev-plan.md` §0。
+> 状态：**Phase 1 进行中**（2026-09-16 起）——Phase 0 全部完成；Phase 1 第一批已落地：视图层开工（**视图归属定案 = 方案 A**，视图随本 crate），面板骨架（面板头 + 目标头 + 五 Tab + 四态 + 列画像四区 + 类型分派）与视图模型完成；测试 **113 项**全绿。下一批：`InsightService::profile_column` 编排 + 入口接线 + 右 Dock 装配（后者落点均在 `workbench`）。逐项进度见 `insight-dev-plan.md` §0。
 >
 > **边界**：本模块拥有**画像 / 评分 / 规则 / 报告 / 快照历史**。SQL 执行与结果集属 M5 编辑器；对象树与元数据内省属 M4；连接与运行态属 M3；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接，只经服务/命令与它们协作。
 
@@ -34,7 +34,7 @@
 
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
-| **视图归属待拍板** | 方案 A（入 `crates/insight`，对齐 `overview.md` 与 `project` 先例）或方案 B（留 `workbench`，对齐 `scratchpad` 新口径）；两套先例均在实际使用中 | 开发方案 §3.1 |
+| **视图归属 = 方案 A**（2026-09-16 定案） | 视图与本 crate 的 model / service 同 crate，依赖 `gpui-kit`（架构约束允许并鼓励）；`workbench` 侧只装配与订阅事件；面板自己不做 I/O | 开发方案 §3.1、架构 D21/K8 |
 | **依赖只向下** | `workbench → insight → engine → shared`；洞察不依赖任何业务 Feature crate | 开发方案 §3 |
 | **不自己取数** | 数据入口是 `temp_table`（DuckDB 临时表）或 `conn_id`；洞察不建连接、不执行用户 SQL | 原型 §1.1 |
 | **快照双写** | 正文进项目 DuckDB（`insight_column_snapshots`），元数据 + 版本链进项目 SQLite（`insight_snapshots`） | 开发方案 §1.1 |
@@ -71,15 +71,16 @@
 | 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：✅ 已归位） |
 | 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位） |
 | 服务门面（画像 / 评分 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
-| 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（现状：占位） |
-| 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：未创建） |
+| 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（现状：✅ 骨架已落地——面板头 + 目标头 + 五 Tab + 四态 + 列画像四区；表 / 多列 / 结构 / 历史给期次提示，不显示假数据） |
+| 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：未创建；面板头 ⚙ 已发 `InsightEvent::RulesRequested`） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：未创建） |
-| 视图模型 | `crates/insight/src/model.rs`（现状：占位） |
-| Action 与快捷键 | `crates/insight/src/commands.rs` + `crates/app/src/main.rs` |
+| 视图模型 | `crates/insight/src/model.rs`（现状：✅ 已落地 `PanelTab` / `InsightTarget` / `InsightPanelState` / `ColumnProfileView`；阈值与文案是纯函数） |
+| M8 尺寸常量 | `crates/insight/src/ui.rs`（现状：✅ 已落地；其中 4 个与 workbench 外壳必须一致的值是**镜像**，已注明待上收） |
+| Action 与快捷键 | `crates/insight/src/commands.rs`（现状：✅ 动作已定义，键位待入口批次）+ `crates/app/src/main.rs` |
 | 右 Dock 装配（仅协议） | `crates/workbench/src/panels.rs`（`RightSidebarPanel`）、`view.rs`（`RightPanel::Insight`） |
 | 规则监听启动 / 项目切换跟随 | `crates/workbench/src/view.rs`（`WorkbenchView::new`）、`components/project_host.rs`（`refresh_after_open`） |
 | 规则资产（18 条 TOML） | `crates/insight/insight-rules/` |
-| 规则索引表迁移 | `crates/engine/migrations/global/024_*.sql`、`project_meta/019_*.sql`（现状：待新增） |
+| 规则索引表迁移 | `crates/engine/migrations/global/024_*.sql`、`project_meta/019_*.sql`（现状：✅ 已落地） |
 | 快照表迁移 | `crates/engine/migrations/project_analysis/002_insight_storage.sql`、`project_meta/008_insight_snapshots.sql`（✅ 已迁入） |
 | 尺寸常量 | `crates/workbench/src/ui.rs` |
 | 契约测试范围 | `crates/workbench/tests/ui_contract.rs` |
@@ -116,7 +117,7 @@ cargo check --workspace --all-targets -j 2
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **91 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38，涵盖作用域、索引同步、启停生效、快照链路、目录监听），**新增功能不得减少**。
+- **基线**：`cargo test -p rds-insight` 当前 **113 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38，涵盖作用域、索引同步、启停生效、快照链路、目录监听；Phase 1 第一批新增 22，涵盖视图模型（类型分派 / 阈值 / 文案）与面板状态机（四态 / 五 Tab / 折叠偏好）），**新增功能不得减少**。
 
 ## 6. 文档地图
 

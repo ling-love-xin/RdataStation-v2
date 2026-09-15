@@ -27,9 +27,17 @@ duckdb.workspace = true
 tracing.workspace = true
 toml.workspace = true
 
+# ===== UI（视图与 model / service 同 crate，见 GPUI-kit 编码指南）=====
+# M8 Phase 1 起：右 Dock 洞察面板的视图在本 crate（归属决策 D21 = 方案 A）
+gpui-kit.workspace = true
+
 # ===== 规则索引存储（service/indexer）=====
 # 索引写 SQLite（全局库 / 项目库），并对规则文件正文取 SHA256 做增量判据。
 # 注：这两个依赖在迁移初期被带入时并无使用点，曾一度移除；现在索引存储真的用到，
 # 故重新引入（sha2 同时用于「文件内容是否变化」的判据）。
 rusqlite.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+# 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
+gpui-kit = { workspace = true, features = ["test-support"] }

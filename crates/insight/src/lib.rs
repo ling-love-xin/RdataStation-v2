@@ -32,6 +32,7 @@ pub mod schema_analyzer;
 pub mod service;
 pub mod store;
 pub mod table_profile_service;
+pub mod ui;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -64,6 +65,15 @@ pub use service::watcher::{
 pub use store::{
     snapshot_checksum, InsightColumnStore, InsightSchemaReportStore, InsightStorageStats,
     InsightTableReportStore, InsightVersionEntry,
+};
+
+// ===== 视图层（M8 Phase 1；归属决策 D21 = 方案 A：视图随 crate）=====
+//
+// 宿主（workbench）经这些类型装配右 Dock 面板：面板自身不做 I/O，取数由宿主发起。
+pub use insight_view::{InsightEvent, InsightView};
+pub use model::{
+    ColumnKind, ColumnProfileView, DistributionBar, Emphasis, InsightPanelState, InsightTarget,
+    NoteLevel, PanelTab, QualityNote, SampleCell, StatRow,
 };
 pub use rule_types::{
     ExecutionResult, OutputField, QualityCheck, QualityReport, QualityRule, RenderHint, RuleFile,
