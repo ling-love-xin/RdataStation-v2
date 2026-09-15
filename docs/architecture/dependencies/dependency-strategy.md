@@ -58,6 +58,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | `default-members = ["crates/app"]` | 已启用（根 `Cargo.toml`） | 裸 `cargo build/check/run` 只构建 app 依赖图，跳过 `plugin`（extism → wasmtime，图上最重且不在 app 图上）。代价：`cargo test` 默认不覆盖全部 crate，需显式 `--workspace`；编辑器侧 rust-analyzer 默认仍按整个 workspace 检查，如需一致要在编辑器侧关掉 `check.workspace` |
 | `[profile.dev.package."*"] debug = false` | 已启用（根 `Cargo.toml`） | 第三方依赖不产 debuginfo（本仓 crate 保留 `line-tables-only`），降低链接与磁盘开销。代价：依赖内部帧无行号；改动后需一次依赖全量重建 |
 | `tokio` feature 收敛（`full` → 按需） | 已评估：不做 | 实测代码用到 `rt` / `rt-multi-thread` / `macros` / `sync` / `time` / `io-util` / `fs` / `net`（未用 `process` / `signal` / `test-util`）。收敛只能省下 tokio 少许可选依赖，却会因 feature 变更让 tokio 及其全部依赖方重新编译一次，收益低于成本 |
+| `duckdb` 关掉 `bundled`，改用**外部预编译库** | 待评估（下一步） | `bundled` 把 DuckDB 的 C++ 内核一起编（单次重建数分钟，并发链接 OOM → 全仓固定 `-j 2`）。改用外部构建产物 / 系统库后，内核重编不再进入日常循环；**扩展仍走 `INSTALL` 到指定目录**（见 §5，与内核编译解耦） |
 | 日常只跑 `cargo check` / `cargo check -p <crate>` | 约定 | 不生成代码、不链接、不产 PDB |
 | Windows 启用 `rust-lld` | 待评估 | 链接耗时下降；需 `.cargo/config.toml`，与 MSVC 工具链兼容性需实测 |
 
@@ -104,6 +105,15 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 （驱动层（`rusqlite` / `sqlx` / `mysql_async`）、SQL 引擎（`sqlglot-rust`）、连接层（`russh`）已全部升到可用的最新版。）
 
 ## 5. 关键依赖与约束
+
+### DuckDB 内核与扩展（**不要为了拿扩展而重编内核**）
+
+原则：**扩展的获取与内核的编译解耦**。DuckDB 是图上最重的原生依赖（`features = ["bundled"]` 会把 C++ 内核一起编，单次重建数分钟，并发链接尚会 OOM——全仓固定 `-j 2` 即是此因），因此：
+
+1. **扩展一律 `INSTALL` 到指定目录**（已实现：`dbi/engine/duckdb_engine.rs::init_extensions` 执行 `SET extension_directory = '{data_dir}/duckdb/extensions'` 后再 `LOAD`）。目录随数据目录走，可备份 / 离线分发，不随编译产物漂移。
+2. **需要新扩展时先试 `INSTALL` / `LOAD`**；只有当扩展与内核 **ABI 不匹配**时才谈内核升级，且升级走**外部预编译库**（关掉 `bundled`，指向外部构建产物 / 系统库，如 `DUCKDB_LIB_DIR` 指向外部 `libduckdb`），**不要让扩展变更触发内核重编**。
+3. **扩展仓库与版本固定**（可复现 + 可离线）：`INSTALL` 只在升级扩展时联网，日常构建不取包。
+4. 本地加速 / 分析模式依赖的 `mysql` / `postgres_scanner` 等扩展属第 1 条范畴：装到扩展目录、随会话 `LOAD`，**不是**通过给内核加 feature 获得。
 
 ### 业务关键依赖
 
