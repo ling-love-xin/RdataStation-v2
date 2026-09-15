@@ -1219,6 +1219,13 @@ impl Render for WorkbenchView {
                 }
             }
         }
+        // M5 草稿箱：双击 / Enter / 右键「打开」→ 中央编辑器（同路径已打开只激活，不重读）。
+        // 消费点在宿主 render（文档与 Dock 面板属宿主状态）；失败走通知栏。
+        if let Some(path) = self.shared.take_open_file_request() {
+            if let Err(e) = self.open_in_editor(path, window, cx) {
+                *self.shared.notice.borrow_mut() = Some(format!("打开文件失败: {e}"));
+            }
+        }
 
         let area = self.area.clone().expect("workspace initialized");
         // edition 2024：`.then(|| ...)` 闭包会同时独占 `cx`/`self`，改为显式 if（也更符合

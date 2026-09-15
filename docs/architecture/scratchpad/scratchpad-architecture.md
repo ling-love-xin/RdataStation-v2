@@ -308,7 +308,25 @@ render_scratchpad（首次 or loaded=false）
   且每次发起重载时会先清一次标记（本次重拉已包含此刻之前的所有改动）。
 - **降级**：监控启动失败（权限/网络盘）只记 `tracing::warn`，退化为手动 `↻`，不影响功能。
 
-### 6.12 键盘导航
+### 6.12 打开文件（Phase C-1，已接）
+
+```
+双击行 / Enter / 右键「打开」（仅文件）
+  → request_open_scratchpad_file：只置位 Shared::open_file_request = 绝对路径 + notify
+  → 宿主 WorkbenchView::render 消费（take_open_file_request，取出即清空）：
+      open_in_editor(path) → editor::persist::open_file（同路径已打开只激活，不重读）
+                            → show_document（建/复用 Dock 面板，加中央 tab 组）
+      失败 → 通知栏「打开文件失败: …」
+```
+
+- **为何不在草稿箱面板里直接开**：文档与 Dock 面板属宿主（`WorkbenchView`）状态，
+  且编辑器**无根**（只认绝对路径）——侧栏只发“要打开这个路径”的意图。
+- 模式与只读等级由编辑器按路径自行判定（`editor::mode::resolve_mode`）；
+  草稿箱不做后缀分支。
+- **待接**（Phase C 余项）：SQL 草稿模式绑定连接（`file_meta.last_connection_id` 回填）、
+  脏点回显、冲突 Diff、拖放导入/拖入编辑区。
+
+### 6.13 键盘导航
 
 | 输入 | 路径 |
 | --- | --- |
@@ -461,7 +479,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | # | 事项 | 影响 |
 | --- | --- | --- |
 | K6 | 引用目录是否可在树内展开浏览 | 现在只作入口（`↗` 打开位置）；展开需要"跨根路径树"的读写策略 |
-| K7 | 多文件 Tab 与草稿箱的关系 | 属编辑器（Phase C）；草稿箱只承诺"同一文件不重复开 Tab"的语义 |
+| K7 | 多文件 Tab 与草稿箱的关系 | 已接首片（双击/Enter/右键「打开」→ 编辑器；同路径只激活不重读）；Tab 体系 / 脏点 / 冲突 Diff 仍属编辑器侧 |
 | K8 | 提升（Phase D）时引用与 `file_meta` 的处置 | 归档是"连引用一起冻结"还是"只冻结内容"，需与 M6 语义裁决书对齐 |
 
 ### 13.4 工程债

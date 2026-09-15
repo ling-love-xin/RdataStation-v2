@@ -8,6 +8,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16（十二次）— Phase C-1：双击 / Enter / 右键「打开」→ 中央编辑器
+
+**已完成**
+
+| 层 | 内容 | 落点 |
+| --- | --- | --- |
+| 共享态 | `Shared::open_file_request`（只传**绝对路径**）+ `take_open_file_request()`（取出即清空，与 `take_project_action_request` 同口径） | `crates/workbench/src/panels.rs` |
+| 侧栏 | 行双击（`click_count >= 2`，仅文件）/ `Enter` / 右键菜单新增「打开」→ 置位请求；`request_open_scratchpad_file` 统一入口；不再回落到「打开所在位置」（`↗` 仍保留该能力） | 同上 |
+| 宿主 | `WorkbenchView::render` 消费请求 → `open_in_editor(path)`（复用已有 `editor::persist::open_file` + `show_document`：同路径只激活不重读）；失败写通知栏 | `crates/workbench/src/view.rs` |
+
+**边界**：草稿箱只发「要打开这个路径」的意图；模式与只读等级由编辑器按路径判定（`editor::mode::resolve_mode`）。**仍余**：SQL 草稿模式的连接回填（`file_meta.last_connection_id`）、脏点回显、冲突 Diff、拖放。
+
+**验证**：`cargo check -p rds-workbench -p rds-app --all-targets -j 2` 零告警。**未验证**：GUI 实机（双击打开/同路径激活/打开失败提示）。
+
 ### 2026-09-16（十一次）— Phase A5：草稿箱文件监控（外部改动自动刷新）
 
 **已完成**
@@ -267,7 +281,7 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| C1 | 中央编辑区「草稿箱文件模式」：`.sql` 打开 → 执行引擎 + 连接选择 + `Ctrl+S` 回存；`.py`/`.json`/`.md` 代码编辑器；防重复 Tab | `crates/workbench/src/panels.rs` `EditorPanel` | 双击打开、编辑回存正确 |
+| C1 | 中央编辑区「草稿箱文件模式」：`.sql` 打开 → 执行引擎 + 连接选择 + `Ctrl+S` 回存；`.py`/`.json`/`.md` 代码编辑器；防重复 Tab ✅ **首片已接（2026-09-16）**：双击/Enter/右键「打开」→ 编辑器（同路径只激活）；回存与连接回填待续 | `crates/workbench/src/panels.rs` `EditorPanel` | 双击打开、编辑回存正确 |
 | C2 | `file_meta` 联动：执行后写 `last_connection_id`/`last_executed_at`；再次打开自动选连接 | `scratchpad` store + 编辑器 | 连接自动恢复 |
 | C3 | 拖拽文件到编辑区插入内容；拖放文件进树导入 | workbench | 拖放生效 |
 | C4 | 冲突处理：外部修改 → 冲突对话框 → `diff_with_content` Diff 弹窗 → 接受右侧 | `scratchpad` store + 弹窗 | 冲突可消解 |

@@ -103,6 +103,10 @@ pub struct Shared {
     pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
     /// M5：请求侧栏确保草稿箱轮询印在跑（编辑区发起替换后置位，侧栏 render 消费）。
     pub scratchpad_pump_request: Rc<Cell<bool>>,
+    /// M5：请求在中央编辑器中打开某个文件（草稿箱双击 / Enter 置位，宿主 render 消费）。
+    ///
+    /// 只传**绝对路径**：编辑器无根，按路径自己判定模式 / 只读等级（Phase C 契约）。
+    pub open_file_request: Rc<RefCell<Option<std::path::PathBuf>>>,
     /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
     pub project_ui: Rc<RefCell<project::ui::ProjectUiState>>,
     /// 编辑区是否存在未保存草稿（切换 / 关闭项目拦截信号）。
@@ -161,6 +165,7 @@ impl Shared {
             project: Rc::new(RefCell::new(None)),
             scratchpad_search: Rc::new(RefCell::new(None)),
             scratchpad_pump_request: Rc::new(Cell::new(false)),
+            open_file_request: Rc::new(RefCell::new(None)),
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_dirty: Rc::new(Cell::new(false)),
             editor_sql: Rc::new(RefCell::new(String::new())),
@@ -201,6 +206,13 @@ impl Shared {
             .ok_or_else(|| "未打开项目".to_string())?;
         let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
         Ok((ScratchpadStore::new(root), rt))
+    }
+
+    /// 取出（并清空）草稿箱的「在编辑器中打开」请求：宿主 render 每帧调用一次。
+    ///
+    /// 与 `take_project_action_request` 同口径：取出即清空，同一次请求不会重复打开。
+    pub fn take_open_file_request(&self) -> Option<std::path::PathBuf> {
+        self.open_file_request.borrow_mut().take()
     }
 
     /// 取出（并清空）项目栏的动作请求：宿主 render 每帧调用一次。
@@ -2471,6 +2483,16 @@ impl SidebarPanel {
         cx.notify();
     }
 
+    /// 请求在中央编辑器中打开草稿文件（双击 / Enter / 右键「打开」共用）。
+    ///
+    /// 只置位 `Shared::open_file_request`（绝对路径）；真正打开在宿主 `render` 里做，
+    /// 因为文档与 Dock 面板属宿主状态（编辑器无根的 Phase C 契约）。
+    fn request_open_scratchpad_file(&mut self, path: String, cx: &mut Context<Self>) {
+        *self.shared.open_file_request.borrow_mut() = Some(std::path::PathBuf::from(path));
+        self.shared.notify_host(cx);
+        cx.notify();
+    }
+
     /// 懒加载子目录（展开文件夹时调用）：只入队 + 起轮询，结果由 `apply_scratchpad_dirs` 回填。
     fn request_scratchpad_dir(&mut self, path: String, cx: &mut Context<Self>) {
         let Some(root) = self
@@ -2576,7 +2598,7 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// Enter / →：文件夹展开折叠（展开时顺带懒加载）；文件在编辑器接入前先定位到文件。
+    /// Enter / →：文件夹展开折叠（展开时顺带懒加载）；文件在中央编辑器中打开。
     fn scratchpad_open_selection(&mut self, cx: &mut Context<Self>) {
         let path = {
             let view = self.scratchpad.borrow();
@@ -2596,13 +2618,8 @@ impl SidebarPanel {
             .map(|k| k == ScratchpadEntryKind::Folder)
             .unwrap_or(false);
         if !is_folder {
-            // Phase C 前：草稿双击打开需要中央编辑器草稿模式，暂回落到「打开所在位置」。
-            self.open_scratchpad_location(path.clone(), cx);
-            *self.shared.notice.borrow_mut() = Some(format!(
-                "{}：编辑器接入后可直接打开（已定位到文件）",
-                scratchpad_basename(&path)
-            ));
-            cx.notify();
+            // 文件：交给中央编辑器（同路径已打开只激活，不重读）。
+            self.request_open_scratchpad_file(path.clone(), cx);
             return;
         }
         let needs_load = {
@@ -6614,8 +6631,13 @@ impl SidebarPanel {
             let load_key = key.clone();
             let keys = ctx.keys.clone();
             let position = real;
+            // 双击文件 = 在编辑器中打开（与 Enter 同一语义）。
+            let open_flag = self.shared.open_file_request.clone();
             move |ev: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
                 let modifiers = ev.modifiers();
+                if ev.click_count() >= 2 && !is_folder {
+                    *open_flag.borrow_mut() = Some(std::path::PathBuf::from(&key));
+                }
                 let mut should_load = false;
                 {
                     let mut v = view.borrow_mut();
@@ -6813,7 +6835,12 @@ impl SidebarPanel {
         {
             let menu_entity = entity.clone();
             let menu_key = key.clone();
+            // 文件夹没有「打开」（双击/Enter 的语义是展开）。
+            let menu_open = entity.clone();
+            let menu_open_key = key.clone();
             row.context_menu(move |menu, _window, _cx| {
+                let open_doc_entity = menu_open.clone();
+                let open_doc_key = menu_open_key.clone();
                 let open_entity = menu_entity.clone();
                 let open_key = menu_key.clone();
                 let rename_entity = menu_entity.clone();
@@ -6824,6 +6851,14 @@ impl SidebarPanel {
                 let copy_key = menu_key.clone();
                 let del_entity = menu_entity.clone();
                 let del_key = menu_key.clone();
+                let mut menu = menu;
+                if !is_folder {
+                    menu = menu.item(PopupMenuItem::new("打开").on_click(move |_, _, app| {
+                        open_doc_entity.update(app, |this, cx| {
+                            this.request_open_scratchpad_file(open_doc_key.clone(), cx)
+                        });
+                    }));
+                }
                 menu.item(PopupMenuItem::new("打开位置").on_click(move |_, _, app| {
                     open_entity.update(app, |this, cx| {
                         this.open_scratchpad_location(open_key.clone(), cx)
