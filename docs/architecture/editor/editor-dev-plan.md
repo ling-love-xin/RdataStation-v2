@@ -10,6 +10,7 @@
 
 | 日期 | 内容 | 状态 |
 | --- | --- | --- |
+| 2026-09-15（P0.9 基线 + Phase 0 收官） | **P0.9 完成**：本模块**依赖增量 = 0**（未引 tree-sitter，sqlglot-rust 早已在依赖里）；`cargo build -p rds-app -j 2` 增量编译 **2m37s**，debug 二进制 **≈137 MiB**（数据入 §6）· **Phase 0 地基已全部完成**（P0.1–P0.10：仅余 P0.6 的“驱动层真实 `affected_rows`”按计划转 1b）· 验证汇总：引擎 297 项 / editor 11 项 / shared 22 项 / 台账探针 10 项 / 事务探针 8 项 全绿；`cargo check --workspace --all-targets` 零告警 | ✅ 已完成 |
 | 2026-09-15（P0.2 实跑 + 三个结果保真度缺陷） | **P0.2 有结论**（真机四库）：PG / SQLite / DuckDB — **会话亲和成立**且 `ROLLBACK` 真实生效；驱动级事务（`execute_in_transaction`）四库中三库通过；**MySQL 的显式 `BEGIN` 被 prepared 协议拒绍**（1295，需改走驱动事务 API）→ 回写架构 §12 #2 / §7.3 #3 · **实跑又抓出三个真缺陷并修复**：① 各驱动只填 `batches`，而历史行数读的是恒空的 `total_rows` **字段**（已改用 `total_rows()`）；② `arrow_value_at` 漏了 Int32/UInt64/Float32 等位宽，兜底是 `format!("{:?}", array)`——**把整列 Debug 打印进每个单元格**（已修 + 3 项回归）；③ MySQL 列类型探测 `bool` 优先 → `COUNT(*)` 显示成 `true`（已按声明类型定排行）→ 架构 §12 #21 / #22 | ✅ 已完成（实跑验证：引擎 297 项 · shared 22 项 · 探针 10 项 · 事务探针 8 项全绿） |
 | 2026-09-15（探针实跑：台账结论落地） | **P0.10 已实跑（10 项全绿）**，结论已回写原型 §7.4「行为级事实」：**类型标注 / 血缘 / 作用域 / 下推 / 差异** 均**实测可用**；差异粒度到 `SelectItem`/`Expr`/`OrderByItem`，**SELECT 列表 / WHERE / ORDER BY / LIMIT 改动都能检出**（原先担心的“漏条件改动”**已被实测推翻**）· **两处保留**：`qualify_columns` 只部分限定（`id` 仍裸列）、`unnest_subqueries` 改写为 `INNER JOIN + DISTINCT`（NULL 语义不等价）· **两处纠正**：① 格式化**不会丢注释**（行内/尾随注释→解析失败→原样返回，架构 §12 #3 改述）② `transpile` 对脚本是**静默截断**（`"SELECT 1; SELECT 2;"` → `Ok("SELECT 1")`，生产路径同样）→ 升级为 🔴（§12 #19）· 三条不变量已提升为断言（同句只 `Keep` / WHERE 改动有 `Update` / 换型 = `Remove+Insert`） | ✅ 已完成 |
 | 2026-09-15（台账候选探针 + 探针编译错误修正） | **P0.10 探针就绪**：`crates/engine/tests/sqlglot_capabilities.rs`（9 组真实 SQL：作用域 / 血缘 / 类型标注 / 差异 / 下推 / 限定与展开 / 本地计划 / 转译单条限制 / 格式化注释保真；**报告式** + 仅弱断言）· **修正一个上轮埋下的编译错误**：`crates/engine/tests/transaction_affinity.rs` 写的是 `use engine::…`——集成测试是**独立 crate**，本包库目标名是 `rds_engine`（`engine` 只是**其它** crate 的依赖别名）；证据：`crates/{connection,mock}/tests/*` 分别用 `rds_connection::` / `rds_mock::` | ✅ 已完成（编译验证待本机执行，见 §6） |
@@ -80,7 +81,7 @@ Phase 0（地基，无 UI）
 | P0.6 | **影响行数**：`QueryResult::from_batches` 不再把 `total_rows` 当作 `affected_rows`（✅）；历史在写语句上记 `rows_affected`（已接线） | `crates/shared/src/models.rs`、`engine/src/services/sql_service.rs` | 遗留（转 1b）：**驱动层返回真实 affected_rows**（见架构 §12 #17） |
 | P0.7 | **crate 骨架与依赖接线**：`crates/editor`（lib + `model` 能力表 + `mode` 判定表 + README）、workspace 依赖唯一入口登记 | ✅ `Cargo.toml`（members + 依赖别名）、`crates/editor/{Cargo.toml,README.md,src/*}` | `cargo check --workspace --all-targets -j 2` 零告警；`cargo test -p rds-editor --lib` 全绿（workbench → editor 的依赖线等到 1a 首次使用再连，避免死依赖） |
 | P0.8 | **SQL 高亮注册验证** | ✅ **方案已变且已落地（2026-09-15）**：改用 **sqlglot tokenizer**（`sqlglot_rust::tokens`，带注释与行列位）→ `engine/src/sql/highlight.rs` 产出「字节区间 + 类别」，**不需要 tree-sitter、不需要联网取包** | 单测 **13 项**（关键字/类型/函数/字符串含引号/**转义字符串**/数字/占位符/注释/标点运算符/升序不重叠/**中文 SQL 字节区间**/未闭合降级/区间助手）；视图层只负责“类别 → 主题色”。行为级事实已记原型 §7.4（空白被丢弃、关键字逐词变体、`position` 是字符下标、`quote_char` 只给带引号标识符） |
-| P0.9 | **平台与性能基线**：记录编译时间增量（新增依赖后 `cargo build -p rds-app`）与二进制体积变化 | — | 数据写回本文件 §6 |
+| P0.9 | **平台与性能基线**：记录编译时间增量（新增依赖后 `cargo build -p rds-app`）与二进制体积变化 | ✅ **已记录（2026-09-15）** | 数据已写入本文件 §6：**依赖增量 = 0**（未引 tree-sitter）；增量编译 2m37s；debug 二进制 ≈137 MiB |
 | P0.10 | **台账候选验证用例**（原型 §7.4 标 ⚪ 的项：作用域 / 血缘 / 类型标注 / 差异 / 下推 / 限定与展开 / 本地计划 / 转译单条限制 / 格式化注释保真） | ✅ **探针已就绪并已实跑**：`crates/engine/tests/sqlglot_capabilities.rs`（离线、不连库；报告式 + 三条已确认的不变量断言）；**结论已回写原型 §7.4**（可用 / 保留 / 纠正逐条列明） | 重跑：`cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-threads=1`（10 项）；可用项提升为 `engine::sql::*` 公开 API 时随 1b/1c 一并补断言式单测 |
 
 > Phase 0 结束时：后端"假底座"全部转真 + 结构就位 + 三个技术未知消除。
@@ -313,7 +314,7 @@ cargo test -p rds-engine --test sqlglot_capabilities -j 2 -- --nocapture --test-
 
 - 每阶段结束：上列命令全绿 + §3 对应场景真机走通（`cargo run -p rds-app -j 2`）。
 - 真机回归矩阵（1b 起每轮至少一遍）：MySQL / PostgreSQL / SQLite / DuckDB × 执行族（当前语句 / 选区 / 全部 / 批量）× 只读 / 可写 × 明暗主题。
-- P0.9 基线记录：新增依赖后的 `cargo build -p rds-app -j 2` 耗时与 `target/debug/rds-app` 体积（写入本文件，用于后续判断依赖收益）。
+- **P0.9 基线（2026-09-15）**：本模块**未新增任何依赖**（sqlglot-rust 已在依赖里，**不引 tree-sitter**）→ 依赖增量 = 0（D12 / P0.3 / P0.8 的选型目标已达成）。参考值：`cargo build -p rds-app -j 2` 增量编译（insight + workbench + app）**2m37s**；`target/debug/rds-app.exe` = **143,705,088 字节（≈137 MiB，debug + DuckDB 静态链接）**。
 - 阶段完成后回填 §0 进度表，并同步 `editor-architecture.md` §12 与 `editor-prototype-design.md`（若交互有调整）。
 
 ---
