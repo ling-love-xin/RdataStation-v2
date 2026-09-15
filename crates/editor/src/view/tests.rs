@@ -132,6 +132,36 @@ fn three_documents_coexist_as_three_panels(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn mode_switch_syncs_editor_and_still_renders(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\report.sql", "select 1");
+
+    let (panel, cx) = {
+        let shared = shared.clone();
+        let id = id.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(shared, id, window, cx))
+    };
+
+    // 切到文本模式：不再上色（判定的“计划”在 `mode::plan_switch`，视图只跟随）
+    shared.update(|service| {
+        service.set_mode(&id, EditorMode::Text);
+    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    assert_eq!(
+        cx.update(|_window, _cx| shared.service().find(&id).map(|doc| doc.mode())),
+        Some(EditorMode::Text)
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 切回 SQL：恢复着色
+    shared.update(|service| {
+        service.set_mode(&id, EditorMode::Sql);
+    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+#[gpui_kit::test]
 fn panel_reports_name_closable_and_renders(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (shared, id) = shared_with_document(r"D:\sql\report.sql", "select 1");

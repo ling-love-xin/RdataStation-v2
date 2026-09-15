@@ -15,6 +15,8 @@
 
 use std::path::Path;
 
+use engine::sql::split_statements;
+
 use crate::model::EditorMode;
 
 /// 分析笔记的扩展名（自有格式；`.sqlnote` 为兼容别名）
@@ -45,6 +47,372 @@ pub fn mode_for_extension(path: &Path) -> EditorMode {
 /// 打开文档时的模式判定：**显式记忆 > 扩展名 > 文本**
 pub fn resolve_mode(path: &Path, remembered: Option<EditorMode>) -> EditorMode {
     remembered.unwrap_or_else(|| mode_for_extension(path))
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 切换矩阵（原型设计 §1.3）
+// ═══════════════════════════════════════════════════════════════════════
+
+/// SQL → 分析 的单元粒度（由确认对话框二选一）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellGranularity {
+    /// 整篇作为一个单元
+    Single,
+    /// 按语句拆分（一条语句一个单元）
+    PerStatement,
+}
+
+/// 需要确认的切换类型（视图据此选文案）
+///
+/// **禁止静默切换**：v1 的 `changeFileType` 直接改字段，三处状态不同步，是本原型要规避的反面案例。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmKind {
+    /// SQL → 文本：隐藏结果（可切回查看）
+    HideResults,
+    /// SQL（或文本）→ 分析：内容进入单元
+    ConvertToCells,
+    /// 分析 → SQL / 文本：导出为脚本（输出丢弃）
+    ExportToScript,
+    /// 分析 → 分析（换会话）：输出全部标 stale
+    SwitchSession,
+}
+
+/// 切换后内容如何变化
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwitchContent {
+    /// 内容不变（文本 ↔ SQL）
+    Unchanged,
+    /// 重写为 SQL / 纯脚本文本
+    Sql(String),
+    /// 拆分为单元（分析模式）
+    Cells(Vec<String>),
+}
+
+/// 一次模式切换的计划（**纯值**：调用方拿它去弹确认、落内容、记状态栏）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchPlan {
+    pub from: EditorMode,
+    pub to: EditorMode,
+    /// `None` = 可直接切；`Some` = 必须先确认
+    pub confirm: Option<ConfirmKind>,
+    pub content: SwitchContent,
+    /// 状态栏 / 提示用的说明
+    pub note: Option<&'static str>,
+}
+
+impl SwitchPlan {
+    /// 是否需要用户确认
+    pub fn needs_confirmation(&self) -> bool {
+        self.confirm.is_some()
+    }
+}
+
+/// 规划一次模式切换（纯函数：不改状态、不弹窗、不做 I/O）
+///
+/// 对应原型 §1.3 的切换矩阵；矩阵未直接列出的一对（文本 ↔ 分析）按“先到 SQL 再转”
+/// 的口径处理，并复用同一套确认与内容变换。
+pub fn plan_switch(
+    from: EditorMode,
+    to: EditorMode,
+    content: &str,
+    has_results: bool,
+    granularity: CellGranularity,
+) -> SwitchPlan {
+    if from == to {
+        return SwitchPlan {
+            from,
+            to,
+            confirm: None,
+            content: SwitchContent::Unchanged,
+            note: None,
+        };
+    }
+
+    match (from, to) {
+        // 文本 → SQL：无内容影响；连接可以晚点再绑（执行时才要求）
+        (EditorMode::Text, EditorMode::Sql) => SwitchPlan {
+            from,
+            to,
+            confirm: None,
+            content: SwitchContent::Unchanged,
+            note: Some("已启用 SQL 语言服务；执行前需绑定连接"),
+        },
+        // SQL → 文本：结果不丢，但不再可交互
+        (EditorMode::Sql, EditorMode::Text) => SwitchPlan {
+            from,
+            to,
+            confirm: Some(ConfirmKind::HideResults),
+            content: SwitchContent::Unchanged,
+            note: Some(if has_results {
+                "结果仍保留在结果面板，但置灰不可交互"
+            } else {
+                "当前没有结果需要隐藏"
+            }),
+        },
+        // SQL → 分析：内容进入单元，连接绑定提升为会话默认连接
+        (EditorMode::Sql, EditorMode::Analysis) => SwitchPlan {
+            from,
+            to,
+            confirm: Some(ConfirmKind::ConvertToCells),
+            content: SwitchContent::Cells(sql_to_cells(content, granularity)),
+            note: Some("连接绑定提升为会话的默认连接"),
+        },
+        // 分析 → SQL：取 SQL 单元拼接为脚本；输出与 stale 不跟随
+        (EditorMode::Analysis, EditorMode::Sql) => SwitchPlan {
+            from,
+            to,
+            confirm: Some(ConfirmKind::ExportToScript),
+            content: SwitchContent::Sql(cells_to_sql(&cells_from_text(content))),
+            note: Some("输出与 stale 状态不会被带过来"),
+        },
+        // 文本 → 分析：等价于先转 SQL 再转分析（同样需要确认单元粒度）
+        (EditorMode::Text, EditorMode::Analysis) => SwitchPlan {
+            from,
+            to,
+            confirm: Some(ConfirmKind::ConvertToCells),
+            content: SwitchContent::Cells(sql_to_cells(content, granularity)),
+            note: Some("文本将按所选粒度拆为单元（等价于先切 SQL 再切分析）"),
+        },
+        // 分析 → 文本：单元结构展开为纯脚本，输出丢弃
+        (EditorMode::Analysis, EditorMode::Text) => SwitchPlan {
+            from,
+            to,
+            confirm: Some(ConfirmKind::ExportToScript),
+            content: SwitchContent::Sql(cells_to_sql(&cells_from_text(content))),
+            note: Some("单元结构会被展开为纯脚本，输出丢弃"),
+        },
+        // 同一模式本应在上面的提前返回里处理：这里只为穷尽性兵底（行为与“不变”一致）
+        _ => SwitchPlan {
+            from,
+            to,
+            confirm: None,
+            content: SwitchContent::Unchanged,
+            note: None,
+        },
+    }
+}
+
+/// 换会话（分析模式内部动作）也要确认：变量空间变化，输出全部 stale
+pub fn plan_session_switch() -> SwitchPlan {
+    SwitchPlan {
+        from: EditorMode::Analysis,
+        to: EditorMode::Analysis,
+        confirm: Some(ConfirmKind::SwitchSession),
+        content: SwitchContent::Unchanged,
+        note: Some("切换会话后所有单元输出标记为过期"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 内容变换（纯函数）
+// ═══════════════════════════════════════════════════════════════════════
+
+/// 单元在文本层的分隔标记（jupytext 风格）
+///
+/// `.rdsnote` 的最终落盘格式属 1c（可能是 JSON）：这里只定义**文本层**的等价表示，
+/// 供模式切换与“导出为脚本”复用；1c 落地时即便改成 JSON，这两个互转函数仍是导出的实现。
+pub const CELL_SEPARATOR: &str = "-- %%";
+
+/// SQL 脚本 → 单元：整篇一个单元，或按**词法级语句切分**（`engine::sql::split`）
+pub fn sql_to_cells(sql: &str, granularity: CellGranularity) -> Vec<String> {
+    match granularity {
+        CellGranularity::Single => {
+            let whole = sql.trim();
+            if whole.is_empty() {
+                Vec::new()
+            } else {
+                vec![whole.to_string()]
+            }
+        }
+        CellGranularity::PerStatement => split_statements(sql)
+            .into_iter()
+            .map(|statement| statement.text(sql).trim().to_string())
+            .filter(|text| !text.is_empty())
+            .collect(),
+    }
+}
+
+/// 单元 → SQL 脚本：以 `;` 结尾、空行分隔（与格式化器同一口径）
+pub fn cells_to_sql(cells: &[String]) -> String {
+    let mut bodies: Vec<String> = Vec::with_capacity(cells.len());
+    for cell in cells {
+        let body = cell.trim().trim_end_matches(';').trim();
+        if !body.is_empty() {
+            bodies.push(body.to_string());
+        }
+    }
+    if bodies.is_empty() {
+        return String::new();
+    }
+
+    let mut out = bodies.join(";\n\n");
+    out.push(';');
+    out
+}
+
+/// 文本层 → 单元：按 [`CELL_SEPARATOR`] 切分（无分隔标记时整篇作为一个单元）
+pub fn cells_from_text(text: &str) -> Vec<String> {
+    let mut cells: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for line in text.lines() {
+        if line.trim() == CELL_SEPARATOR {
+            cells.push(std::mem::take(&mut current));
+            continue;
+        }
+        if !current.is_empty() {
+            current.push('\n');
+        }
+        current.push_str(line);
+    }
+    cells.push(current);
+
+    cells
+        .into_iter()
+        .map(|cell| cell.trim().to_string())
+        .filter(|cell| !cell.is_empty())
+        .collect()
+}
+
+/// 单元 → 文本层（与 [`cells_from_text`] 互逆）
+pub fn cells_to_text(cells: &[String]) -> String {
+    cells
+        .iter()
+        .map(|cell| cell.trim().to_string())
+        .collect::<Vec<String>>()
+        .join(&format!("\n\n{CELL_SEPARATOR}\n"))
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 切换矩阵测试（A5 验收：矩阵逐项 + 内容变换）
+// ═══════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    fn plan(from: EditorMode, to: EditorMode, content: &str, has_results: bool) -> SwitchPlan {
+        plan_switch(from, to, content, has_results, CellGranularity::PerStatement)
+    }
+
+    #[test]
+    fn same_mode_needs_no_confirmation() {
+        let plan = plan(EditorMode::Sql, EditorMode::Sql, "select 1", true);
+        assert!(!plan.needs_confirmation());
+        assert_eq!(plan.content, SwitchContent::Unchanged);
+    }
+
+    #[test]
+    fn text_to_sql_is_free_and_keeps_content() {
+        let plan = plan(EditorMode::Text, EditorMode::Sql, "select 1", false);
+        assert!(!plan.needs_confirmation(), "文本 → SQL 不需要确认");
+        assert_eq!(plan.content, SwitchContent::Unchanged);
+        // 连接可以晚点绑：只是执行前需要
+        assert!(plan.note.is_some_and(|n| n.contains("连接")));
+    }
+
+    #[test]
+    fn sql_to_text_warns_only_about_results() {
+        let with_results = plan(EditorMode::Sql, EditorMode::Text, "select 1", true);
+        assert_eq!(with_results.confirm, Some(ConfirmKind::HideResults));
+        assert!(with_results.note.is_some_and(|n| n.contains("置灰")));
+
+        let without = plan(EditorMode::Sql, EditorMode::Text, "select 1", false);
+        assert_eq!(without.confirm, Some(ConfirmKind::HideResults));
+        assert!(without.note.is_some_and(|n| n.contains("没有结果")));
+    }
+
+    #[test]
+    fn sql_to_analysis_converts_cells_by_chosen_granularity() {
+        let sql = "select 1; select 2;";
+
+        let per_statement = plan_switch(
+            EditorMode::Sql,
+            EditorMode::Analysis,
+            sql,
+            false,
+            CellGranularity::PerStatement,
+        );
+        assert_eq!(per_statement.confirm, Some(ConfirmKind::ConvertToCells));
+        assert_eq!(
+            per_statement.content,
+            SwitchContent::Cells(vec!["select 1".to_string(), "select 2".to_string()])
+        );
+
+        let single = plan_switch(
+            EditorMode::Sql,
+            EditorMode::Analysis,
+            sql,
+            false,
+            CellGranularity::Single,
+        );
+        assert_eq!(
+            single.content,
+            SwitchContent::Cells(vec![sql.trim().to_string()])
+        );
+    }
+
+    #[test]
+    fn analysis_to_sql_exports_a_script() {
+        let cells = vec!["select 1".to_string(), "select 2".to_string()];
+        let text = cells_to_text(&cells);
+        let plan = plan(EditorMode::Analysis, EditorMode::Sql, &text, false);
+
+        assert_eq!(plan.confirm, Some(ConfirmKind::ExportToScript));
+        assert_eq!(plan.content, SwitchContent::Sql("select 1;\n\nselect 2;".to_string()));
+        assert!(plan.note.is_some_and(|n| n.contains("stale")));
+    }
+
+    #[test]
+    fn text_and_analysis_pairs_ask_for_confirmation_too() {
+        let up = plan(EditorMode::Text, EditorMode::Analysis, "select 1", false);
+        assert_eq!(up.confirm, Some(ConfirmKind::ConvertToCells));
+        assert!(matches!(up.content, SwitchContent::Cells(_)));
+
+        let down = plan(EditorMode::Analysis, EditorMode::Text, "select 1", false);
+        assert_eq!(down.confirm, Some(ConfirmKind::ExportToScript));
+        assert_eq!(down.content, SwitchContent::Sql("select 1;".to_string()));
+    }
+
+    #[test]
+    fn session_switch_is_confirmed_and_marks_outputs_stale() {
+        let plan = plan_session_switch();
+        assert_eq!(plan.confirm, Some(ConfirmKind::SwitchSession));
+        assert!(plan.note.is_some_and(|n| n.contains("过期")));
+    }
+
+    #[test]
+    fn statement_split_does_not_break_inside_literals() {
+        // 词法级切分（engine::sql::split）：字符串里的分号不是语句边界
+        let cells = sql_to_cells("select ';' as x; select 2", CellGranularity::PerStatement);
+        assert_eq!(cells, vec!["select ';' as x".to_string(), "select 2".to_string()]);
+    }
+
+    #[test]
+    fn empty_input_produces_no_cells() {
+        assert!(sql_to_cells("   \n", CellGranularity::PerStatement).is_empty());
+        assert!(sql_to_cells("   \n", CellGranularity::Single).is_empty());
+        assert!(cells_to_sql(&[]).is_empty());
+    }
+
+    #[test]
+    fn cell_text_round_trips() {
+        let cells = vec![
+            "-- 口径说明\nselect 1".to_string(),
+            "select 2".to_string(),
+        ];
+        let text = cells_to_text(&cells);
+        assert!(text.contains(CELL_SEPARATOR));
+        assert_eq!(cells_from_text(&text), cells, "文本层与单元序列应可互转");
+    }
+
+    #[test]
+    fn text_without_separator_is_one_cell() {
+        assert_eq!(
+            cells_from_text("select 1\nselect 2"),
+            vec!["select 1\nselect 2".to_string()]
+        );
+    }
 }
 
 #[cfg(test)]

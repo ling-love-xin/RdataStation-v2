@@ -118,6 +118,28 @@ impl EditorHostPanel {
             .unwrap_or(true)
     }
 
+    /// 模式切换后同步视图侧状态（高亮是否启用、只读）
+    ///
+    /// 模式是**文档属性**：判定与确认在 `mode::plan_switch` 与对话框层，这里只负责
+    /// “按当前模式刷新视图”，由切换流程在确认之后调用（**视图不自己改模式**）。
+    pub fn sync_mode(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mode) = self.with_document(|doc| doc.mode()) else {
+            return;
+        };
+        let read_only = self.editor_read_only();
+
+        self.editor.update(cx, |state, cx| {
+            state.set_readonly(read_only, cx);
+            if highlight::is_enabled(mode) {
+                highlight::install(state);
+            } else {
+                // 非 SQL 模式去掉着色（已缓存的 token 会随内容变化失效）
+                state.lsp_mut().semantic_tokens_provider = None;
+            }
+        });
+        cx.notify();
+    }
+
     /// 把文档内容推回内核（另存为 / 外部修改后重新加载时调用）
     pub fn reload_from_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(text) = self.with_document(|doc| doc.content().to_string()) else {
