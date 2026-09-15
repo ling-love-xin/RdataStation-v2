@@ -19,6 +19,10 @@ scratchpad.workspace = true
 # ===== GPUI-kit 视图层（Round 19）=====
 gpui-kit.workspace = true
 
+# ===== SQL 编辑器（A9 接线：中央编辑区面板 + 打开/保存）=====
+# 依赖方向：workbench → editor → engine / database / shared；editor 不反向依赖本 crate。
+editor.workspace = true
+
 # ===== Async 运行时 =====
 tokio.workspace = true
 

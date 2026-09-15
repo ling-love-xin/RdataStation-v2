@@ -164,6 +164,13 @@ pub struct WorkbenchView {
     /// 因此不能建成临时值（否则会在行尾被回收，监听静默失效）。
     /// 前缀下划线表示「仅为持有，不读取」，与 `_subscription` 同一约定。
     _insight_rules_watcher: Option<insight::RulesWatcher>,
+    /// SQL 编辑器的文档集合（跨面板共享；一个面板 = 一个标签 = 一份文档）。
+    ///
+    /// 放在 workbench 是因为它是**装配宿主**：`crates/editor` 不依赖本 crate，
+    /// 由宿主把服务句柄交给各面板，并把它接进中央 Dock 的 tab 组。
+    editor_service: editor::shared::EditorShared,
+    /// 已开的编辑面板（按 `DocumentId` 复用：同文档不重复建面板）。
+    editor_hosts: Vec<Entity<editor::view::host::EditorHostPanel>>,
 }
 
 impl WorkbenchView {
@@ -217,7 +224,59 @@ impl WorkbenchView {
             _subscription: None,
             _editor_subscription: None,
             _insight_rules_watcher: insight_rules_watcher,
+            editor_service: {
+                // 初始一份未命名 SQL 文档：打开 app 就有可写的编辑区，
+                // 而不是空白（后续可由 A12 的会话恢复替换为上次的文档）。
+                let service = editor::shared::EditorShared::new();
+                service.open(editor::service::OpenRequest::untitled(
+                    "",
+                    editor::model::EditorMode::Sql,
+                ));
+                service
+            },
+            editor_hosts: Vec::new(),
         }
+    }
+
+    /// 在编辑器中打开一个文件（打开菜单 / 数据库导航“在 SQL 编辑器中打开”调用）
+    ///
+    /// 走 `editor::persist::open_file`：
+    /// - **同路径已打开只激活、不重读**（重读会冲掉未保存的编辑）；
+    /// - 新文档则建面板并加入中央 tab 组（`DockArea::add_panel`）。
+    pub fn open_in_editor(
+        &mut self,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let mode = editor::mode::resolve_mode(&path, None);
+        let outcome = editor::persist::open_file(&self.editor_service, &path, mode)
+            .map_err(|error| error.to_string())?;
+        let document = outcome.id().clone();
+
+        // 已有面板：不重复建（复用即可）。聚焦已存在标签需要 Dock 的激活 API，
+        // 那属 A10 的命令/快捷键一并处理；现在至少保证不出现两份同一文档。
+        let existing = self
+            .editor_hosts
+            .iter()
+            .any(|panel| panel.read(cx).document() == &document);
+        if existing || outcome.is_activated() {
+            return Ok(());
+        }
+
+        let service = self.editor_service.clone();
+        let panel = cx.new(|cx| {
+            editor::view::host::EditorHostPanel::new(service, document, window, cx)
+        });
+        self.editor_hosts.push(panel.clone());
+
+        if let Some(area) = self.area.clone() {
+            area.update(cx, |area, cx| {
+                area.add_panel(panel, DockPlacement::Center, None, window, cx);
+            });
+        }
+
+        Ok(())
     }
 
     /// 项目视图宿主（构造期已装配）。
@@ -309,10 +368,39 @@ impl WorkbenchView {
         });
 
         let (area, _skin) = DockSkin::dock_area("workspace", Some(1), window, cx);
+
+        // 编辑器宿主面板（A9 接线）：把 `editor_service` 的当前文档接进中央 tab 组。
+        // 先 clone 到局部再 `cx.new`：闭包里不能再借 `self`。
+        let editor_service = self.editor_service.clone();
+        let active = editor_service.service().active_id().cloned();
+        let document = match active {
+            Some(id) => id,
+            None => editor_service
+                .open(editor::service::OpenRequest::untitled(
+                    "",
+                    editor::model::EditorMode::Sql,
+                ))
+                .id()
+                .clone(),
+        };
+        let host_service = editor_service.clone();
+        let editor_host = cx.new(|cx| {
+            editor::view::host::EditorHostPanel::new(host_service, document, window, cx)
+        });
+        self.editor_hosts.push(editor_host.clone());
+
         let editor_handle = panel_handle(editor.clone());
+        let host_handle = panel_handle(editor_host);
         area.update(cx, |area, cx| {
             // 中央编辑区单独占满（左右 dock 独立装配，不用 h_split）。
-            area.set_center(DockLayout::tabs().panel_view(editor_handle, cx), window, cx);
+            // A9：标签条交给 Dock——同一个 tab 组里两个面板 = 两个标签。
+            area.set_center(
+                DockLayout::tabs()
+                    .panel_view(editor_handle, cx)
+                    .panel_view(host_handle, cx),
+                window,
+                cx,
+            );
         });
 
         // M7：宿主命令——打开 Mock 详情 tab（面板「查看详情」调用）。

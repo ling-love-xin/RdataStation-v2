@@ -8122,6 +8122,7 @@ dependencies = [
  "percent-encoding",
  "rds-connection",
  "rds-database",
+ "rds-editor",
  "rds-engine",
  "rds-insight",
  "rds-mock",
