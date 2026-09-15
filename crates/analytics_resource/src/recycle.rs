@@ -104,51 +104,26 @@ impl AnalyticsResourceStore {
         let result = (|| -> Result<(), CoreError> {
             for id in ids {
                 let resource = {
-                    let mut stmt = conn.inner()?.prepare(
-                        r#"
-                        SELECT id, resource_type, name, alias, config, scope, row_count, column_count, file_size,
-                               version, parent_version_id, parent_resource_id, source_query, created_at, updated_at,
-                               created_by, deleted_at
-                        FROM analytics_resources
-                        WHERE id = ?
-                        "#,
-                    ).map_err(|e| CoreError::storage(StorageError::Persistence {
-                        store: "analytics_resources".to_string(),
-                        operation: "select".to_string(),
-                        reason: e.to_string(),
-                    }))?;
+                    // 复用权威列列表与行映射：v1 在这里抄了第三份（加一列要改多处，且 JSON 策略不一致）。
+                    let sql = format!(
+                        "SELECT {} FROM analytics_resources WHERE id = ?",
+                        crate::resource::RESOURCE_COLUMNS
+                    );
+                    let mut stmt = conn
+                        .inner()?
+                        .prepare(&sql)
+                        .map_err(|e| CoreError::storage(StorageError::Persistence {
+                            store: "analytics_resources".to_string(),
+                            operation: "select".to_string(),
+                            reason: e.to_string(),
+                        }))?;
 
-                    stmt.query_row(rusqlite::params![id], |row| {
-                        let config_str: String = row.get(4)?;
-                        let config: Value = serde_json::from_str(&config_str).unwrap_or_else(|e| {
-                            tracing::warn!(error = %e, config_str = %config_str, "Failed to parse resource config JSON, using null");
-                            Value::Null
-                        });
-
-                        Ok(AnalyticsResource {
-                            id: row.get(0)?,
-                            resource_type: row.get(1)?,
-                            name: row.get(2)?,
-                            alias: row.get(3)?,
-                            config,
-                            scope: row.get(5)?,
-                            row_count: row.get(6)?,
-                            column_count: row.get(7)?,
-                            file_size: row.get(8)?,
-                            version: row.get(9)?,
-                            parent_version_id: row.get(10)?,
-                            parent_resource_id: row.get(11)?,
-                            source_query: row.get(12)?,
-                            created_at: Self::parse_datetime_sqlite(row.get(13)?)?,
-                            updated_at: Self::parse_datetime_sqlite(row.get(14)?)?,
-                            created_by: row.get(15)?,
-                            deleted_at: row.get(16).ok().and_then(|s| Self::parse_datetime(s).ok()),
-                        })
-                    }).map_err(|e| CoreError::storage(StorageError::Persistence {
-                        store: "analytics_resources".to_string(),
-                        operation: "select".to_string(),
-                        reason: e.to_string(),
-                    }))?
+                    stmt.query_row(rusqlite::params![id], crate::resource::map_resource_row)
+                        .map_err(|e| CoreError::storage(StorageError::Persistence {
+                            store: "analytics_resources".to_string(),
+                            operation: "select".to_string(),
+                            reason: e.to_string(),
+                        }))?
                 };
 
                 conn.inner()?

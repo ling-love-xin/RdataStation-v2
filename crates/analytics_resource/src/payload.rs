@@ -157,6 +157,47 @@ impl PayloadStore {
         Ok(dest)
     }
 
+    /// 把本体**移出** `resources/`（回滚归档、或为"再归档"腾位）：先清只读再 rename。
+    ///
+    /// 回滚场景下目标回到用户工作区，必须可写，故这里会清除只读属性。
+    pub async fn move_payload_out(&self, rel: &str, dest: &Path) -> Result<(), CoreError> {
+        let source = self.resolve(rel)?;
+        if !source.is_file() {
+            return Err(io_err(&source, "move_payload_out", "本体不存在"));
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| io_err(parent, "move_out_create_parent", e))?;
+        }
+        if let Err(e) = self.set_readonly(&source, false).await {
+            tracing::warn!(error = %e, path = %source.display(), "清除本体只读属性失败");
+        }
+        if fs::rename(&source, dest).await.is_err() {
+            fs::copy(&source, dest)
+                .await
+                .map_err(|e| io_err(&source, "move_out_copy", e))?;
+            fs::remove_file(&source)
+                .await
+                .map_err(|e| io_err(&source, "move_out_remove_source", e))?;
+        }
+        Ok(())
+    }
+
+    /// 覆盖本体（"再归档"路径）：旧内容的内容副本由调用方先行保存，这里只做替换并恢复只读。
+    pub async fn replace_payload(&self, source: &Path, rel: &str) -> Result<PathBuf, CoreError> {
+        let dest = self.resolve(rel)?;
+        if dest.exists() {
+            if let Err(e) = self.set_readonly(&dest, false).await {
+                tracing::warn!(error = %e, path = %dest.display(), "清除旧本体只读属性失败");
+            }
+            fs::remove_file(&dest)
+                .await
+                .map_err(|e| io_err(&dest, "replace_remove_old", e))?;
+        }
+        self.archive_in(source, rel).await
+    }
+
     /// 取回（检出）：把本体**复制**到 `dest`（原件不动、仍只读）。
     pub async fn copy_out(&self, rel: &str, dest: &Path) -> Result<(), CoreError> {
         let source = self.resolve(rel)?;
@@ -494,6 +535,53 @@ mod tests {
         assert!(dest.is_file(), "取回应产生草稿副本");
         assert!(payload.is_file(), "取回不得移动本体");
         assert!(!store.is_readonly(&dest), "工作副本不应只读");
+
+        cleanup(&project);
+    }
+
+    #[tokio::test]
+    async fn replace_payload_overwrites_readonly_payload() {
+        let project = temp_project("replace");
+        let store = PayloadStore::new(&project);
+
+        let first = project.join("v1.sql");
+        tokio::fs::write(&first, b"select 1;").await.expect("write v1");
+        let payload = store.archive_in(&first, "dau.sql").await.expect("archive v1");
+        assert!(store.is_readonly(&payload));
+        let hash_v1 = store.content_hash(&payload).await.expect("hash v1");
+
+        let second = project.join("v2.sql");
+        tokio::fs::write(&second, b"select 2;").await.expect("write v2");
+        let replaced = store.replace_payload(&second, "dau.sql").await.expect("replace");
+
+        assert_eq!(replaced, payload, "路径不变（引用不断）");
+        assert!(store.is_readonly(&replaced), "替换后仍只读");
+        assert_ne!(
+            store.content_hash(&replaced).await.expect("hash v2"),
+            hash_v1,
+            "内容应为新版本"
+        );
+
+        cleanup(&project);
+    }
+
+    #[tokio::test]
+    async fn move_payload_out_returns_writable_file() {
+        let project = temp_project("moveout");
+        let store = PayloadStore::new(&project);
+
+        let source = project.join("draft.sql");
+        tokio::fs::write(&source, b"select 1;").await.expect("write");
+        store.archive_in(&source, "dau.sql").await.expect("archive");
+
+        // 回滚 / 腾位：移出后应回到工作区且可写。
+        store
+            .move_payload_out("dau.sql", &source)
+            .await
+            .expect("move out");
+        assert!(source.is_file());
+        assert!(!store.is_readonly(&source), "移出的文件必须可写");
+        assert!(!store.resources_dir().join("dau.sql").exists());
 
         cleanup(&project);
     }

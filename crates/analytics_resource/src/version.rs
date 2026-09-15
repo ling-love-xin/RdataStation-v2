@@ -86,15 +86,15 @@ impl AnalyticsResourceStore {
         Ok(id)
     }
 
-    /// 自取连接的便捷版（保留 v1 签名，供不经事务的调用方使用）。
+    /// 自取连接的便捷版（不经事务的调用方用，如归档服务）；**返回快照行 id**，
+    /// 便于调用方把资源的 `parent_version_id` 指过去。
     pub async fn save_resource_version(
         &self,
         resource_id: &str,
         version: i32,
         snapshot: &str,
-    ) -> Result<(), CoreError> {
+    ) -> Result<String, CoreError> {
         let conn = self.get_conn().await?;
-        Self::save_resource_version_on(conn.inner()?, resource_id, version, snapshot)?;
-        Ok(())
+        Self::save_resource_version_on(conn.inner()?, resource_id, version, snapshot)
     }
 }

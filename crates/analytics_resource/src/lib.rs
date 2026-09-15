@@ -4,6 +4,7 @@
 //!
 //! - `model`：领域语义类型（存档种类 / 复现强度 / 本体状态 / 归档凭证）
 //! - `payload`：本体层（`resources/` 受管文件、只读守卫、内容指纹、历史副本）
+//! - `service`：归档服务（归档 / 取回 / 再归档编排 + 变更事件）
 //! - `models`：持久层行模型（v1 搬运，逐步并入 `model`）
 //! - `resource` / `folder` / `tag` / `version`：索引层（`project.db`）
 //! - `recycle`：v1 回收站实现（**待废弃**：改走项目级 `ProjectTrash`，见开发方案 P0.8）
@@ -22,6 +23,7 @@ pub mod helpers;
 pub mod model;
 pub mod models;
 pub mod payload;
+pub mod service;
 
 pub mod folder;
 pub mod recycle;
@@ -31,6 +33,7 @@ pub mod version;
 
 pub use model::*;
 pub use models::*;
+pub use service::ArchiveService;
 
 /// 分析资源存储（SQLite 持久化层）
 #[derive(Clone)]
@@ -53,6 +56,12 @@ impl AnalyticsResourceStore {
 
     pub(crate) fn parse_datetime_sqlite(s: String) -> Result<DateTime<Utc>, rusqlite::Error> {
         helpers::parse_datetime_sqlite(s)
+    }
+
+    /// 连接池句柄：仅供 crate 内**测试**使用（故障注入与迁移辅助），故不进生产接口。
+    #[cfg(test)]
+    pub(crate) fn pool(&self) -> &Arc<ProjectSqlitePool> {
+        &self.pool
     }
 }
 

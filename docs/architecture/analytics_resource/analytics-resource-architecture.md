@@ -1,6 +1,7 @@
 # 资产库 / 分析存档模块（M6）· 设计理念与架构
 
-> 状态：**设计定稿（2026-09-15）**，代码尚未开始。现行实现是 v1 持久层的逐字搬运（`crates/analytics_resource/src/{resource,folder,tag,recycle,version}.rs`）+ 四个 3 行占位文件（`model.rs` / `commands.rs` / `resource_view.rs` / `recycle_bin_dialog.rs`）；视图落点是 `crates/workbench/src/panels.rs::render_resources_placeholder`。
+> 状态：**设计定稿（2026-09-15）；Phase 0 两批已落地（仅 crate 内）**。已可用：领域类型（`model.rs`）、本体层（`payload.rs`）、迁移 020 + 新列接入、**归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件**（`service.rs`，37 项测试全绿）；逐项证据见 `analytics-resource-dev-plan.md` §0。
+> 仍为占位：`commands.rs` / `resource_view.rs` / `recycle_bin_dialog.rs`（视图与 Action，Phase 1）；`indexer.rs`（索引修复）未创建；`recycle.rs` 待废弃（P0.8）；视图落点仍是 `crates/workbench/src/panels.rs::render_resources_placeholder`。
 > 前置：v1 蓝本 `v1/backend/src/core/persistence/analytics_resource_store/` + `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v2 现状见 `analytics-resource-dev-plan.md` §1。
 > 关联：`analytics-resource-prototype-design.md`（长什么样）、`analytics-resource-prototype.html`（交互稿）、`analytics-resource-dev-plan.md`（做什么）、`../overview.md`（M6 定位）、`../scratchpad/scratchpad-dev-plan.md` Phase D（上游）。
 >

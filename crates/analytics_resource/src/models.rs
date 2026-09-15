@@ -22,6 +22,26 @@ pub struct AnalyticsResource {
     pub updated_at: DateTime<Utc>,
     pub created_by: Option<String>,
     pub deleted_at: Option<DateTime<Utc>>,
+
+    // ===== 迁移 020 新增：分析存档语义（表结构镜像，领域态见 `model.rs`）=====
+    /// 存档种类：`file` / `analysis` / `table_ref`（用 `ArchiveKind::from_db_str` 解析）。
+    pub kind: String,
+    /// 内容指纹（sha256）；旧行或 `table_ref` 为空。
+    pub content_hash: Option<String>,
+    /// 本体在 `resources/` 下的相对路径（`kind = file`）。
+    pub file_rel_path: Option<String>,
+    /// 归档后只读标记（应用层守卫为主）。
+    pub readonly: i32,
+    /// 来源草稿相对路径。
+    pub promoted_from: Option<String>,
+    /// 来源连接 id。
+    pub source_connection_id: Option<String>,
+    /// 来源表 `schema.table`。
+    pub source_table: Option<String>,
+    /// `kind = analysis` 的重建定义。
+    pub definition_sql: Option<String>,
+    /// 归档时刻（与 `updated_at` 区分）。
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

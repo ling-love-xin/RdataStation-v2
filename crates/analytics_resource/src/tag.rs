@@ -1,7 +1,6 @@
 use super::*;
 use shared::error::{CoreError, StorageError};
 use chrono::Utc;
-use serde_json::Value;
 
 impl AnalyticsResourceStore {
     pub async fn create_tag(&self, req: CreateTagRequest) -> Result<AnalyticsTag, CoreError> {
@@ -249,20 +248,16 @@ impl AnalyticsResourceStore {
     ) -> Result<Vec<AnalyticsResource>, CoreError> {
         let conn = self.get_conn().await?;
 
+        // 列顺序与行映射复用权威定义（`RESOURCE_COLUMNS` + `map_resource_row`）。
+        let sql = format!(
+            "SELECT {} FROM analytics_resources r \
+             INNER JOIN analytics_resource_tags rt ON r.id = rt.resource_id \
+             WHERE rt.tag_id = ? AND r.deleted_at IS NULL ORDER BY r.created_at DESC",
+            crate::resource::qualified_resource_columns("r")
+        );
         let mut stmt = conn
             .inner()?
-            .prepare(
-                r#"
-            SELECT r.id, r.resource_type, r.name, r.alias, r.config, r.scope,
-                   r.row_count, r.column_count, r.file_size, r.version,
-                   r.parent_version_id, r.parent_resource_id, r.source_query,
-                   r.created_at, r.updated_at, r.created_by, r.deleted_at
-            FROM analytics_resources r
-            INNER JOIN analytics_resource_tags rt ON r.id = rt.resource_id
-            WHERE rt.tag_id = ? AND r.deleted_at IS NULL
-            ORDER BY r.created_at DESC
-            "#,
-            )
+            .prepare(&sql)
             .map_err(|e| {
                 CoreError::storage(StorageError::Persistence {
                     store: "analytics_resource_tags".to_string(),
@@ -271,37 +266,13 @@ impl AnalyticsResourceStore {
                 })
             })?;
 
-        let resources = stmt.query_map(rusqlite::params![tag_id], |row| {
-            let config_str: String = row.get(4)?;
-            let config: Value = serde_json::from_str(&config_str).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, config_str = %config_str, "Failed to parse resource config JSON, using null");
-                Value::Null
-            });
-
-            Ok(AnalyticsResource {
-                id: row.get(0)?,
-                resource_type: row.get(1)?,
-                name: row.get(2)?,
-                alias: row.get(3)?,
-                config,
-                scope: row.get(5)?,
-                row_count: row.get(6)?,
-                column_count: row.get(7)?,
-                file_size: row.get(8)?,
-                version: row.get(9)?,
-                parent_version_id: row.get(10)?,
-                parent_resource_id: row.get(11)?,
-                source_query: row.get(12)?,
-                created_at: Self::parse_datetime_sqlite(row.get(13)?)?,
-                updated_at: Self::parse_datetime_sqlite(row.get(14)?)?,
-                created_by: row.get(15)?,
-                deleted_at: row.get(16).ok().and_then(|s| Self::parse_datetime(s).ok()),
-            })
-        }).map_err(|e| CoreError::storage(StorageError::Persistence {
-            store: "analytics_resource_tags".to_string(),
-            operation: "select".to_string(),
-            reason: e.to_string(),
-        }))?;
+        let resources = stmt
+            .query_map(rusqlite::params![tag_id], crate::resource::map_resource_row)
+            .map_err(|e| CoreError::storage(StorageError::Persistence {
+                store: "analytics_resource_tags".to_string(),
+                operation: "select".to_string(),
+                reason: e.to_string(),
+            }))?;
 
         resources.collect::<Result<Vec<_>, _>>().map_err(|e| {
             CoreError::storage(StorageError::Persistence {

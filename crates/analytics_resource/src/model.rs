@@ -117,6 +117,25 @@ pub struct ArchiveRequest {
     pub group_id: Option<String>,
     /// 历史内容保留份数；`None` = 跟随设置默认（架构 §5.2）。
     pub keep_versions: Option<u32>,
+    /// 再归档时由上游带回的来源存档 id（取回后改完再归档，见架构 §6.4）。
+    ///
+    /// `None` = 首次归档（新存档）；`Some` 时命中已有存档：内容指纹未变则不产生新版本。
+    pub existing_resource_id: Option<String>,
+}
+
+/// 归档结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveOutcome {
+    /// 存档 id（再归档时保持不变）。
+    pub resource_id: String,
+    /// 归档后的版本号。
+    pub version: i32,
+    /// 本次内容的指纹。
+    pub content_hash: String,
+    /// 本体在 `resources/` 下的相对路径。
+    pub file_rel_path: String,
+    /// `false` = 内容与当前版本相同，**未产生新版本**（幂等，见架构 §5.1）。
+    pub created_new_version: bool,
 }
 
 /// 取回（检出）请求：把存档**复制**成草稿箱里的工作副本，本体不动（架构 §6.4）。
@@ -124,8 +143,11 @@ pub struct ArchiveRequest {
 pub struct CheckoutRequest {
     /// 目标存档 id。
     pub resource_id: String,
-    /// 草稿箱内的目标相对路径（含文件名）。
-    pub target_rel_path: String,
+    /// 工作副本的**绝对**目标路径。
+    ///
+    /// 由调用方（草稿箱）给出，而不是 M6 拼 `scratchpad/`：M6 不认识上游模块的目录结构，
+    /// 只知道自己的 `resources/`（依赖方向 `scratchpad → analytics_resource`）。
+    pub dest_path: PathBuf,
 }
 
 /// 取回结果。
@@ -137,6 +159,52 @@ pub struct CheckoutOutcome {
     pub version: i32,
     /// 落地的草稿绝对路径。
     pub dest_path: PathBuf,
+}
+
+/// 变更原因：事件必须带原因，面板据此决定局部更新还是整表刷新（架构 §6.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeReason {
+    /// 归档（草稿/本地文件 → 存档）。
+    Archived,
+    /// 再归档产生新版本。
+    Updated,
+    /// 取回（检出）出工作副本。
+    CheckedOut,
+}
+
+/// 资产库变更事件。
+///
+/// v1 的 `analytics-resource-changed` 是"后端发了、前端没人听"的死事件；v2 用
+/// 服务上的广播通道，**发/收两端必须同批落地**才有意义。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourcesChanged {
+    pub reason: ChangeReason,
+    /// 相关存档 id；批量/结构变更时为 `None`。
+    pub resource_id: Option<String>,
+}
+
+/// 新归档行：写入索引层的最小输入，字段与迁移 020 的新列一一对应。
+///
+/// 刻意不扩 `CreateResourceRequest`：那是 v1 的通用创建入口（无 kind / 指纹概念），
+/// 混在一起会让两条语义互相污染。
+#[derive(Debug, Clone)]
+pub struct NewArchiveInput {
+    /// 资源类型词表（待统一到 shared 枚举，见开发方案 P0.7）。
+    pub resource_type: String,
+    /// 显示名。
+    pub name: String,
+    /// 别名（可空）。
+    pub alias: Option<String>,
+    /// 存档种类。
+    pub kind: ArchiveKind,
+    /// 内容指纹。
+    pub content_hash: String,
+    /// 本体相对路径。
+    pub file_rel_path: String,
+    /// 来源绑定（归档凭证的"出处"）。
+    pub binding: ArchiveBinding,
+    /// 作用域（派生只读量，当前只产 `project`；架构 §4.3）。
+    pub scope: String,
 }
 
 #[cfg(test)]

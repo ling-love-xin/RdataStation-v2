@@ -1,12 +1,28 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）**，代码尚未开始 · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0 两批已落地（仅 crate 内）**——归档/取回/再归档闭环 + 变更事件已可用，37 项测试全绿（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-15 — Phase 0 第二批：归档 / 取回闭环
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P0.10（部分）✅ | `ArchiveService`：`archive`（首次归档：指纹 → 本体 move → 写登记，**索引失败回滚本体**）、`archive_into_existing`（再归档：指纹未变即**幂等**返回；变了才"旧内容留副本 → 写前快照 → 覆盖本体 → 版本 +1 → 按 keepVersions 裁剪"）、`checkout`（取回复制；拒绝落在 `resources/` 内的目标）+ `ResourcesChanged { reason, resource_id }` 广播（无订阅者不报错） | `src/service.rs`（新） |
+| P0.7（续）✅ | 新列接入：`AnalyticsResource` 增 9 字段 + `RESOURCE_COLUMNS` / `map_resource_row` 同步；新增 `insert_archive`（归档专用写入，不走 v1 通用入口）、`update_archive_content`、`find_archive_by_rel_path`（归档前占用检测）；**行映射从 4 份收敛为 1 份**（`recycle.rs` / `tag.rs` 改调 `map_resource_row`，JOIN 用新助手 `qualified_resource_columns`） | `src/{models,resource,recycle,tag}.rs` |
+| 测试 | 测试库改跑齐 007 + 020（此前只跑 007 → 测试库与生产库表结构不一致）；新增 7 项归档服务用例（含**故障注入**：用 SQLite 触发器让写索引必失败，断言本体回滚） | `src/tests.rs`、`src/service.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **37 项全绿**（16 存储 + 4 领域 + 10 本体 + 7 归档服务） | — |
+
+**本轮定下的两条接口约定**（原型与手册已如此描述，此处落到代码）：
+
+1. `save_resource_version` 现**返回快照行 id**，供资源行的 `parent_version_id` 指向本次写前快照；
+2. `CheckoutRequest.dest_path` 由调用方给**绝对路径**——M6 不认识上游 `scratchpad/` 的目录结构（依赖方向 `scratchpad → analytics_resource`），只把自己的 `resources/` 管住。
+
+**仍余**：`indexer.rs`（三类孤儿）、废弃 `recycle.rs`（P0.8，跨 crate）、版本保留策略接入设置项、`kind` 过滤/列表展示（Phase 1/2）。
 
 ### 2026-09-15 — Phase 0 首切片（仅 crate 内）
 

@@ -8,10 +8,12 @@ use serde_json::Value;
 /// v1 三处各写一遍，且 JSON 解析策略不同（列表宽容 / 单行硬报错）——同一份坏数据会
 /// "列表里看得到、点进去报错"。现统一走 [`map_resource_row`]：降级为 `null` 并记 warn，
 /// 一行坏数据不应该毁掉整个列表。
-const RESOURCE_COLUMNS: &str = "\
+pub(crate) const RESOURCE_COLUMNS: &str = "\
     id, resource_type, name, alias, config, scope, row_count, column_count, file_size, \
     version, parent_version_id, parent_resource_id, source_query, created_at, updated_at, \
-    created_by, deleted_at";
+    created_by, deleted_at, \
+    kind, content_hash, file_rel_path, readonly, promoted_from, source_connection_id, \
+    source_table, definition_sql, archived_at";
 
 /// 每页上限：`page_size` 夹紧到 [1, MAX]。
 ///
@@ -19,8 +21,22 @@ const RESOURCE_COLUMNS: &str = "\
 /// `LIMIT -N` 变成"无上限"（整表返回）。服务层直连调用没有 IPC 兜底，必须自己夹紧。
 const MAX_PAGE_SIZE: i32 = 500;
 
+/// 给固定列名加上表别名前缀（`r.id, r.resource_type, …`）。
+///
+/// JOIN 查询（如按标签反查资源）复用同一份列顺序，避免又抄一遍。
+pub(crate) fn qualified_resource_columns(alias: &str) -> String {
+    RESOURCE_COLUMNS
+        .split(',')
+        .map(|column| format!("{alias}.{}", column.trim()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// 行 → 领域对象（列顺序与 [`RESOURCE_COLUMNS`] 严格一致）。
-fn map_resource_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnalyticsResource> {
+///
+/// `pub(crate)`：回收站与标签查询同样需要读整行，**不得各自再抄一份映射**
+/// （v1 抄了 4 份，加一列就得改 4 处，且 JSON 策略各不相同）。
+pub(crate) fn map_resource_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnalyticsResource> {
     let config_str: String = row.get(4)?;
     let config: Value = serde_json::from_str(&config_str).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "资源 config JSON 解析失败，降级为 null");
@@ -47,6 +63,19 @@ fn map_resource_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnalyticsResour
         deleted_at: row
             .get(16)
             .ok()
+            .and_then(|s| AnalyticsResourceStore::parse_datetime(s).ok()),
+        kind: row.get(17)?,
+        content_hash: row.get(18)?,
+        file_rel_path: row.get(19)?,
+        readonly: row.get(20)?,
+        promoted_from: row.get(21)?,
+        source_connection_id: row.get(22)?,
+        source_table: row.get(23)?,
+        definition_sql: row.get(24)?,
+        archived_at: row
+            .get::<_, Option<String>>(25)
+            .ok()
+            .flatten()
             .and_then(|s| AnalyticsResourceStore::parse_datetime(s).ok()),
     })
 }
@@ -221,6 +250,106 @@ impl AnalyticsResourceStore {
             .query_row(rusqlite::params![id], map_resource_row)
             .map_err(|e| persistence_err("select", e))?;
         Ok(resource)
+    }
+
+    /// 写入一条**归档行**（迁移 020 的新列在此落地）。
+    ///
+    /// 与 `create_resource`（v1 通用入口）刻意分开：归档行的 `kind` / 指纹 / 本体路径 / 只读
+    /// 是语义必填，走通用入口会得到"看起来像存档、实际没有任何凭证"的行。
+    pub async fn insert_archive(
+        &self,
+        input: NewArchiveInput,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let conn = self.get_conn().await?;
+        let id = format!("ar_{}", uuid::Uuid::new_v4().simple());
+        let now = Utc::now().to_rfc3339();
+
+        conn.inner()?
+            .execute(
+                r#"
+            INSERT INTO analytics_resources (
+                id, resource_type, name, alias, config, scope,
+                version, parent_version_id, parent_resource_id, source_query,
+                created_at, updated_at,
+                kind, content_hash, file_rel_path, readonly,
+                promoted_from, source_connection_id, source_table, archived_at
+            ) VALUES (?, ?, ?, ?, '{}', ?, 1, NULL, NULL, NULL, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+            "#,
+                rusqlite::params![
+                    &id,
+                    &input.resource_type,
+                    &input.name,
+                    &input.alias,
+                    &input.scope,
+                    &now,
+                    &now,
+                    input.kind.as_db_str(),
+                    &input.content_hash,
+                    &input.file_rel_path,
+                    &input.binding.promoted_from,
+                    &input.binding.source_connection_id,
+                    &input.binding.source_table,
+                    &now,
+                ],
+            )
+            .map_err(|e| persistence_err("insert", e))?;
+
+        self.get_resource_by_id(&id).await
+    }
+
+    /// 再归档：把新内容指纹写入已有存档行（版本 +1），`parent_version_id` 指向写前快照行。
+    ///
+    /// 只动索引行，**不碰文件系统**：旧内容的版本副本与本体覆盖由调用方（归档服务）负责。
+    pub async fn update_archive_content(
+        &self,
+        id: &str,
+        content_hash: &str,
+        snapshot_id: &str,
+    ) -> Result<AnalyticsResource, CoreError> {
+        let conn = self.get_conn().await?;
+        let inner = conn.inner()?;
+        let now = Utc::now().to_rfc3339();
+
+        let affected = inner
+            .execute(
+                r#"
+            UPDATE analytics_resources
+            SET content_hash = ?, version = version + 1, parent_version_id = ?, updated_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+            "#,
+                rusqlite::params![content_hash, snapshot_id, &now, id],
+            )
+            .map_err(|e| persistence_err("update", e))?;
+
+        if affected == 0 {
+            return Err(persistence_err("update", "存档不存在或已删除"));
+        }
+
+        self.get_resource_by_id(id).await
+    }
+
+    /// 按本体路径查存档（索引 020 的局部唯一索引保证至多一条）。
+    ///
+    /// 两个用途：归档前的目标占用检测；索引修复里的"有记录无本体"检测。
+    pub async fn find_archive_by_rel_path(
+        &self,
+        rel_path: &str,
+    ) -> Result<Option<AnalyticsResource>, CoreError> {
+        let conn = self.get_conn().await?;
+        let sql = format!(
+            "SELECT {RESOURCE_COLUMNS} FROM analytics_resources \
+             WHERE file_rel_path = ? AND deleted_at IS NULL LIMIT 1"
+        );
+        let mut stmt = conn
+            .inner()?
+            .prepare(&sql)
+            .map_err(|e| persistence_err("select", e))?;
+
+        match stmt.query_row(rusqlite::params![rel_path], map_resource_row) {
+            Ok(resource) => Ok(Some(resource)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(persistence_err("select", e)),
+        }
     }
 
     pub async fn list_resources(

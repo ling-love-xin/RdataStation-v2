@@ -12,6 +12,10 @@ mod tests {
     const ARCHIVE_MIGRATION_SQL: &str =
         include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
 
+    /// 测试库跑**两段**迁移：007（表结构）+ 020（分析存档新列）。
+    ///
+    /// 跑齐是刻意的：只跑 007 的话，测试库的表结构与生产库不一致，行映射一旦引用新列
+    /// 就会在测试里报 "no such column"（是缺陷，不是噪声）。
     async fn create_test_store() -> (AnalyticsResourceStore, PathBuf) {
         let dir = std::env::temp_dir().join(format!("rds_test_{}", Uuid::new_v4().simple()));
         fs::create_dir_all(&dir).expect("create temp dir");
@@ -23,10 +27,11 @@ mod tests {
         );
         {
             let conn = pool.acquire().await.expect("acquire connection");
-            conn.inner()
-                .expect("get connection")
-                .execute_batch(MIGRATION_SQL)
-                .expect("run migration");
+            let inner = conn.inner().expect("get connection");
+            inner.execute_batch(MIGRATION_SQL).expect("run migration 007");
+            inner
+                .execute_batch(ARCHIVE_MIGRATION_SQL)
+                .expect("run migration 020");
         }
         let store = AnalyticsResourceStore::new(pool);
         (store, dir)
@@ -577,16 +582,6 @@ mod tests {
     #[tokio::test]
     async fn t016_archive_migration_adds_columns_and_defaults() {
         let (store, dir) = create_test_store().await;
-
-        store
-            .pool
-            .acquire()
-            .await
-            .expect("acquire")
-            .inner()
-            .expect("inner")
-            .execute_batch(ARCHIVE_MIGRATION_SQL)
-            .expect("run 020 migration");
 
         // 旧行（v1 时代写入、不带 kind）应靠默认值满足新约束。
         let created = store

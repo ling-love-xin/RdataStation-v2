@@ -1,0 +1,603 @@
+//! 归档服务：本体层（`payload`）与索引层（`AnalyticsResourceStore`）的编排（架构 §6）。
+//!
+//! 三条不变式：
+//! 1. **先本体、后索引，索引失败回滚本体**——本体是权威，索引可重建（架构 §6.3）；
+//! 2. **内容指纹是版本的唯一触发条件**——指纹未变则不动本体、不增版本（架构 §5.1）；
+//! 3. **事件发/收两端同批落地**——v1 那个"发了没人听"的无载荷事件是反例（架构 §6.2）。
+//!
+//! 本服务**不依赖任何上游模块**：归档入参是 `PathBuf` + 元数据，取回出参是
+//! 调用方给的绝对路径（依赖方向 `scratchpad → analytics_resource`）。
+
+use std::path::PathBuf;
+
+use tokio::sync::broadcast;
+
+use shared::error::{CoreError, StorageError};
+
+use crate::model::{
+    ArchiveKind, ArchiveOutcome, ArchiveRequest, ChangeReason, CheckoutOutcome, CheckoutRequest,
+    NewArchiveInput, ResourcesChanged,
+};
+use crate::payload::PayloadStore;
+use crate::AnalyticsResourceStore;
+
+/// 历史内容副本默认保留份数（设置项 `keepVersions`，架构 §5.2）。
+pub const DEFAULT_KEEP_VERSIONS: u32 = 5;
+
+/// 事件广播容量：够覆盖面板重绘窗口即可，溢出由订阅方收到 `Lagged` 并整表刷新。
+const EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// 归档服务（按项目实例化；项目态不得放进程单例）。
+pub struct ArchiveService {
+    payload: PayloadStore,
+    store: AnalyticsResourceStore,
+    events: broadcast::Sender<ResourcesChanged>,
+    keep_versions: u32,
+}
+
+impl ArchiveService {
+    pub fn new(project_root: impl Into<PathBuf>, store: AnalyticsResourceStore) -> Self {
+        let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        Self {
+            payload: PayloadStore::new(project_root),
+            store,
+            events,
+            keep_versions: DEFAULT_KEEP_VERSIONS,
+        }
+    }
+
+    /// 覆盖历史内容保留份数（`0` = 只留版本元数据，不留内容副本）。
+    pub fn with_keep_versions(mut self, keep_versions: u32) -> Self {
+        self.keep_versions = keep_versions;
+        self
+    }
+
+    /// 订阅变更事件（面板挂载时订阅一次）。
+    pub fn subscribe(&self) -> broadcast::Receiver<ResourcesChanged> {
+        self.events.subscribe()
+    }
+
+    pub fn payload(&self) -> &PayloadStore {
+        &self.payload
+    }
+
+    pub fn store(&self) -> &AnalyticsResourceStore {
+        &self.store
+    }
+
+    /// 归档：首次归档（`existing_resource_id = None`）或再归档（取回后改完再归档）。
+    pub async fn archive(&self, req: ArchiveRequest) -> Result<ArchiveOutcome, CoreError> {
+        // 指纹在搬运前算：失败即中止，不动任何状态（架构 §6.3 第 1/3 步）。
+        if !req.source_path.is_file() {
+            return Err(service_err("archive", "源文件不存在或不是普通文件"));
+        }
+        let content_hash = self.payload.content_hash(&req.source_path).await?;
+
+        match req.existing_resource_id.clone() {
+            None => self.archive_new(req, content_hash).await,
+            Some(resource_id) => self.archive_into_existing(&resource_id, req, content_hash).await,
+        }
+    }
+
+    /// 首次归档：本体 move + 写索引行；索引失败把本体移回原处。
+    async fn archive_new(
+        &self,
+        req: ArchiveRequest,
+        content_hash: String,
+    ) -> Result<ArchiveOutcome, CoreError> {
+        if let Some(existing) = self.store.find_archive_by_rel_path(&req.rel_path).await? {
+            return Err(service_err(
+                "archive",
+                &format!(
+                    "目标路径已被存档「{}」（id={}）占用；请改名或先移除旧存档",
+                    existing.name, existing.id
+                ),
+            ));
+        }
+
+        let payload_path = self
+            .payload
+            .archive_in(&req.source_path, &req.rel_path)
+            .await?;
+
+        let input = NewArchiveInput {
+            resource_type: default_resource_type(req.kind),
+            name: req.name.clone(),
+            alias: req.alias.clone(),
+            kind: req.kind,
+            content_hash: content_hash.clone(),
+            file_rel_path: req.rel_path.clone(),
+            binding: req.binding.clone(),
+            // 作用域为派生只读量：数据住项目库 → project（架构 §4.3）。
+            scope: "project".to_string(),
+        };
+
+        let resource = match self.store.insert_archive(input).await {
+            Ok(resource) => resource,
+            Err(error) => {
+                // 回滚本体：宁可回到"文件还在草稿箱"，也不要"文件没了、列表里也没有"。
+                if let Err(rollback) = self
+                    .payload
+                    .move_payload_out(&req.rel_path, &req.source_path)
+                    .await
+                {
+                    tracing::error!(
+                        error = %rollback,
+                        rel = %req.rel_path,
+                        path = %payload_path.display(),
+                        "归档回滚失败：本体留在 resources/，需经索引修复处理"
+                    );
+                }
+                return Err(error);
+            }
+        };
+
+        self.emit(ChangeReason::Archived, Some(resource.id.clone()));
+
+        Ok(ArchiveOutcome {
+            resource_id: resource.id,
+            version: resource.version,
+            content_hash,
+            file_rel_path: req.rel_path,
+            created_new_version: true,
+        })
+    }
+
+    /// 再归档：指纹未变即幂等返回；变了才"旧内容留副本 → 写前快照 → 覆盖本体 → 索引 +1"。
+    ///
+    /// 顺序取舍：版本副本与快照行先落，再覆盖本体。任一步失败都不会丢旧内容
+    /// （最坏是留下一份多余的副本/快照行，不产生错误的历史结论）。
+    async fn archive_into_existing(
+        &self,
+        resource_id: &str,
+        req: ArchiveRequest,
+        content_hash: String,
+    ) -> Result<ArchiveOutcome, CoreError> {
+        let current = self.store.get_resource_by_id(resource_id).await?;
+        if current.deleted_at.is_some() {
+            return Err(service_err("re_archive", "存档已删除，无法再归档"));
+        }
+        let rel_path = current
+            .file_rel_path
+            .clone()
+            .ok_or_else(|| service_err("re_archive", "该存档没有本体路径（非文件型或旧行）"))?;
+
+        let current_hash = current.content_hash.clone().unwrap_or_default();
+        if current_hash == content_hash {
+            // 幂等：内容与当前版本相同 → 不覆盖本体、不增版本，保留调用方的工作副本。
+            return Ok(ArchiveOutcome {
+                resource_id: current.id,
+                version: current.version,
+                content_hash,
+                file_rel_path: rel_path,
+                created_new_version: false,
+            });
+        }
+
+        self.payload
+            .store_version_copy(resource_id, current.version, &rel_path)
+            .await?;
+
+        let snapshot = serde_json::to_string(&current).map_err(|e| {
+            CoreError::storage(StorageError::Serialization {
+                format: "JSON".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+        let snapshot_id = self
+            .store
+            .save_resource_version(resource_id, current.version, &snapshot)
+            .await?;
+
+        self.payload
+            .replace_payload(&req.source_path, &rel_path)
+            .await?;
+
+        let updated = self
+            .store
+            .update_archive_content(resource_id, &content_hash, &snapshot_id)
+            .await?;
+
+        if let Err(e) = self
+            .payload
+            .prune_version_copies(resource_id, req.keep_versions.unwrap_or(self.keep_versions))
+            .await
+        {
+            // 裁剪失败只记日志：历史副本多留几份不影响正确性。
+            tracing::warn!(error = %e, resource_id, "裁剪历史内容副本失败");
+        }
+
+        self.emit(ChangeReason::Updated, Some(resource_id.to_string()));
+
+        Ok(ArchiveOutcome {
+            resource_id: updated.id,
+            version: updated.version,
+            content_hash,
+            file_rel_path: rel_path,
+            created_new_version: true,
+        })
+    }
+
+    /// 取回（检出）：把本体复制成可写工作副本，本体不动。
+    pub async fn checkout(&self, req: CheckoutRequest) -> Result<CheckoutOutcome, CoreError> {
+        // 目标不得落在 resources/ 内：那等于绕开只读守卫写本体。
+        if req.dest_path.starts_with(self.payload.resources_dir()) {
+            return Err(service_err(
+                "checkout",
+                "取回目标不能位于 resources/ 内（那是归档本体目录）",
+            ));
+        }
+
+        let resource = self.store.get_resource_by_id(&req.resource_id).await?;
+        let rel_path = resource
+            .file_rel_path
+            .clone()
+            .ok_or_else(|| service_err("checkout", "该存档没有本体（非文件型或旧行）"))?;
+
+        self.payload.copy_out(&rel_path, &req.dest_path).await?;
+        self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
+
+        Ok(CheckoutOutcome {
+            resource_id: resource.id,
+            version: resource.version,
+            dest_path: req.dest_path,
+        })
+    }
+
+    /// 发事件：无订阅者时 `send` 返回 `Err`，那不是错误（面板可能未打开）。
+    fn emit(&self, reason: ChangeReason, resource_id: Option<String>) {
+        let _ = self.events.send(ResourcesChanged {
+            reason,
+            resource_id,
+        });
+    }
+}
+
+/// `kind` → `resource_type` 的默认词表（完整收敛待 P0.7：词表应上提到 `shared` 枚举）。
+fn default_resource_type(kind: ArchiveKind) -> String {
+    match kind {
+        ArchiveKind::File => "file",
+        ArchiveKind::Analysis => "analysis",
+        ArchiveKind::TableRef => "table_ref",
+    }
+    .to_string()
+}
+
+fn service_err(operation: &str, reason: &str) -> CoreError {
+    CoreError::storage(StorageError::Persistence {
+        store: "analytics_resources".to_string(),
+        operation: operation.to_string(),
+        reason: reason.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ArchiveBinding, ArchiveKind};
+    use engine::persistence::ProjectSqlitePool;
+    use std::sync::Arc;
+    use tokio::fs;
+
+    const MIGRATION_SQL: &str =
+        include_str!("../../engine/migrations/project_meta/007_analytics_resources.sql");
+    const ARCHIVE_MIGRATION_SQL: &str =
+        include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
+
+    async fn test_service(keep_versions: u32) -> (ArchiveService, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "rds_archive_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&dir).await.expect("create temp project");
+        let pool = Arc::new(
+            ProjectSqlitePool::new(dir.join("project.db"), 2)
+                .await
+                .expect("create pool"),
+        );
+        {
+            let conn = pool.acquire().await.expect("acquire");
+            let inner = conn.inner().expect("inner");
+            inner.execute_batch(MIGRATION_SQL).expect("migration 007");
+            inner
+                .execute_batch(ARCHIVE_MIGRATION_SQL)
+                .expect("migration 020");
+        }
+        let store = AnalyticsResourceStore::new(pool);
+        (
+            ArchiveService::new(&dir, store).with_keep_versions(keep_versions),
+            dir,
+        )
+    }
+
+    fn archive_req(source: &std::path::Path, rel: &str, existing: Option<&str>) -> ArchiveRequest {
+        ArchiveRequest {
+            source_path: source.to_path_buf(),
+            rel_path: rel.to_string(),
+            name: "dau_report".to_string(),
+            alias: None,
+            kind: ArchiveKind::File,
+            binding: ArchiveBinding {
+                promoted_from: Some("scratchpad/dau.sql".to_string()),
+                source_connection_id: Some("conn_1".to_string()),
+                source_table: None,
+            },
+            tags: Vec::new(),
+            group_id: None,
+            keep_versions: None,
+            existing_resource_id: existing.map(str::to_string),
+        }
+    }
+
+    async fn write_draft(dir: &std::path::Path, name: &str, content: &[u8]) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, content).await.expect("write draft");
+        path
+    }
+
+    #[tokio::test]
+    async fn t101_archive_first_time_moves_payload_and_writes_registry() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let mut events = service.subscribe();
+        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+
+        let outcome = service
+            .archive(archive_req(&draft, "reports/dau.sql", None))
+            .await
+            .expect("archive");
+
+        assert!(outcome.created_new_version);
+        assert_eq!(outcome.version, 1);
+        assert!(!draft.exists(), "归档是移动");
+
+        let payload = service.payload().resources_dir().join("reports").join("dau.sql");
+        assert!(payload.is_file());
+        assert!(service.payload().is_readonly(&payload), "本体应只读");
+
+        let row = service
+            .store()
+            .get_resource_by_id(&outcome.resource_id)
+            .await
+            .expect("row");
+        assert_eq!(row.kind, "file");
+        assert_eq!(row.content_hash.as_deref(), Some(outcome.content_hash.as_str()));
+        assert_eq!(row.file_rel_path.as_deref(), Some("reports/dau.sql"));
+        assert_eq!(row.readonly, 1);
+        assert!(row.archived_at.is_some(), "归档时刻应记录");
+        assert_eq!(row.promoted_from.as_deref(), Some("scratchpad/dau.sql"));
+        assert_eq!(row.source_connection_id.as_deref(), Some("conn_1"));
+
+        let event = events.recv().await.expect("event");
+        assert_eq!(event.reason, ChangeReason::Archived);
+        assert_eq!(event.resource_id.as_deref(), Some(outcome.resource_id.as_str()));
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t102_archive_refuses_occupied_target_and_keeps_source() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let first = write_draft(&dir, "a.sql", b"select 1;").await;
+        service
+            .archive(archive_req(&first, "same.sql", None))
+            .await
+            .expect("first archive");
+
+        let second = write_draft(&dir, "b.sql", b"select 2;").await;
+        let error = service
+            .archive(archive_req(&second, "same.sql", None))
+            .await
+            .expect_err("conflict must fail");
+
+        assert!(error.to_string().contains("已被存档"), "错误应指明占用者：{error}");
+        assert!(second.is_file(), "失败时源文件必须保留");
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t103_archive_rolls_back_payload_when_index_write_fails() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+
+        // 故障注入：用触发器让"写索引"必然失败（比构造数据冲突更贴近真实失败路径）。
+        {
+            let conn = service.store().pool().acquire().await.expect("acquire");
+            conn.inner()
+                .expect("inner")
+                .execute_batch(
+                    "CREATE TRIGGER test_block_archive BEFORE INSERT ON analytics_resources \
+                     BEGIN SELECT RAISE(ABORT, 'blocked for test'); END;",
+                )
+                .expect("create trigger");
+        }
+
+        let draft = write_draft(&dir, "draft.sql", b"select 1;").await;
+        let error = service
+            .archive(archive_req(&draft, "taken.sql", None))
+            .await
+            .expect_err("index write must fail");
+
+        assert!(error.to_string().contains("blocked for test"));
+        assert!(
+            draft.is_file(),
+            "索引失败必须把本体移回原处（错误：{error}）"
+        );
+        assert!(
+            !service.payload().resources_dir().join("taken.sql").exists(),
+            "回滚后本体不应留在 resources/"
+        );
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t104_checkout_copies_payload_out_writable() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let mut events = service.subscribe();
+        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+        let outcome = service
+            .archive(archive_req(&draft, "dau.sql", None))
+            .await
+            .expect("archive");
+        let _ = events.recv().await;
+
+        let dest = dir.join("scratchpad").join("dau（工作副本）.sql");
+        let checkout = service
+            .checkout(CheckoutRequest {
+                resource_id: outcome.resource_id.clone(),
+                dest_path: dest.clone(),
+            })
+            .await
+            .expect("checkout");
+
+        assert_eq!(checkout.version, 1);
+        assert!(dest.is_file());
+        assert!(!service.payload().is_readonly(&dest), "工作副本必须可写");
+        assert!(
+            service
+                .payload()
+                .resources_dir()
+                .join("dau.sql")
+                .is_file(),
+            "取回不得移动本体"
+        );
+        let event = events.recv().await.expect("event");
+        assert_eq!(event.reason, ChangeReason::CheckedOut);
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t105_rearchive_with_same_content_is_idempotent() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+        let first = service
+            .archive(archive_req(&draft, "dau.sql", None))
+            .await
+            .expect("archive");
+
+        // 取回原样副本 → 内容未变 → 不应产生新版本。
+        let copy = dir.join("dau（工作副本）.sql");
+        service
+            .checkout(CheckoutRequest {
+                resource_id: first.resource_id.clone(),
+                dest_path: copy.clone(),
+            })
+            .await
+            .expect("checkout");
+
+        let again = service
+            .archive(archive_req(&copy, "dau.sql", Some(&first.resource_id)))
+            .await
+            .expect("re-archive");
+
+        assert!(!again.created_new_version, "内容未变不应产生新版本");
+        assert_eq!(again.version, 1);
+        assert!(copy.is_file(), "幂等路径不删用户的工作副本");
+
+        let versions = service
+            .store()
+            .get_resource_versions(&first.resource_id)
+            .await
+            .expect("versions");
+        assert!(versions.is_empty(), "不应有历史版本行");
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t106_rearchive_changed_content_bumps_version_and_keeps_copy() {
+        let (service, dir) = test_service(1).await;
+        let mut events = service.subscribe();
+        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+        let first = service
+            .archive(archive_req(&draft, "dau.sql", None))
+            .await
+            .expect("archive");
+        assert_eq!(
+            events.recv().await.expect("archived event").reason,
+            ChangeReason::Archived
+        );
+
+        // 取回 → 改动 → 再归档。
+        let copy = dir.join("dau（工作副本）.sql");
+        service
+            .checkout(CheckoutRequest {
+                resource_id: first.resource_id.clone(),
+                dest_path: copy.clone(),
+            })
+            .await
+            .expect("checkout");
+        assert_eq!(
+            events.recv().await.expect("checked out event").reason,
+            ChangeReason::CheckedOut
+        );
+        fs::write(&copy, b"select 2;").await.expect("edit copy");
+
+        let second = service
+            .archive(archive_req(&copy, "dau.sql", Some(&first.resource_id)))
+            .await
+            .expect("re-archive");
+
+        assert!(second.created_new_version);
+        assert_eq!(second.version, 2, "内容变了版本 +1");
+        assert!(!copy.exists(), "再归档同样是移动");
+
+        let payload = service.payload().resources_dir().join("dau.sql");
+        assert_eq!(
+            service.payload().content_hash(&payload).await.expect("hash"),
+            second.content_hash,
+            "本体应已被新内容覆盖"
+        );
+        assert!(service.payload().is_readonly(&payload), "替换后仍只读");
+
+        let versions = service
+            .store()
+            .get_resource_versions(&first.resource_id)
+            .await
+            .expect("versions");
+        assert_eq!(versions.len(), 1, "写前快照：只保留历史版本 v1");
+        assert_eq!(versions[0].version, 1);
+
+        let row = service
+            .store()
+            .get_resource_by_id(&first.resource_id)
+            .await
+            .expect("row");
+        assert_eq!(row.version, 2);
+        assert_eq!(
+            row.parent_version_id.as_deref(),
+            Some(versions[0].id.as_str()),
+            "parent_version_id 应指向写前快照行"
+        );
+
+        let event = events.recv().await.expect("event");
+        assert_eq!(event.reason, ChangeReason::Updated);
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t107_checkout_rejects_target_inside_resources() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+        let outcome = service
+            .archive(archive_req(&draft, "dau.sql", None))
+            .await
+            .expect("archive");
+
+        let inside = service.payload().resources_dir().join("escape.sql");
+        assert!(
+            service
+                .checkout(CheckoutRequest {
+                    resource_id: outcome.resource_id,
+                    dest_path: inside,
+                })
+                .await
+                .is_err(),
+            "取回目标落在 resources/ 内必须被拒（那等于绕开只读守卫）"
+        );
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+}
