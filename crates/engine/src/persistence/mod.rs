@@ -37,7 +37,9 @@ pub mod sql_template_store;
 pub mod workbench_context_store;
 
 pub use cache_version_migration::{CacheVersionManager, CURRENT_CACHE_VERSION};
-pub use connection_org_store::{ConnectionGroup, ConnectionOrgStore, UNGROUPED_SCOPE};
+pub use connection_org_store::{
+    ConnectionGroup, ConnectionOrgStore, MEMBER_ORDER_UNSET, UNGROUPED_SCOPE,
+};
 pub use connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
 pub use global_db::{
     GlobalDatabaseManager, GlobalDuckdbConnection, GlobalPooledConnection, GlobalSqlitePool,

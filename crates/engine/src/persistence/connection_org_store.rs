@@ -32,6 +32,13 @@ const PROJECT_DB_NAME: &str = "project.db";
 /// 导航视图（`workbench`）的分组伪 ID 必须与此保持同值。
 pub const UNGROUPED_SCOPE: &str = "__ungrouped__";
 
+/// 组内成员「**未手动排序**」的序号哨兵。
+///
+/// 必须为负：手动排序写的是 `0..n`（见 [`ConnectionOrgStore::set_member_order_all`]），
+/// 所以负数不会与真实下标撞。用哨兵而不是 `NULL`，是为了免去 SQLite 重建表
+/// （`NOT NULL` 列改可空必须重建），代价是这个魔数需要在读写两侧保持一致。
+pub const MEMBER_ORDER_UNSET: i64 = -1;
+
 /// 连接分组（项目级）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionGroup {
@@ -114,6 +121,8 @@ impl ConnectionOrgStore {
                 .map_err(|e| self.err("create_connection_groups", e))?;
             self.conn
                 .execute(
+                    // `sort_order` 的列缺省保留 `0`（改缺省同样要重建表）；读写两侧**始终显式**
+                    // 传值：新关系写 [`MEMBER_ORDER_UNSET`]，手动排序写 `0..n`。
                     "CREATE TABLE IF NOT EXISTS connection_group_members (
                         group_id      TEXT NOT NULL,
                         connection_id TEXT NOT NULL,
@@ -355,11 +364,15 @@ impl ConnectionOrgStore {
     }
 
     /// 把连接加入分组（多对多；已存在则忽略）。
+    ///
+    /// 新成员一律标为**未手动排序**（[`MEMBER_ORDER_UNSET`]）；列缺省 `0` 在自动排序下
+    /// 会与「手动排在第 0 位」不可分，所以不用缺省值。
     pub fn add_member(&self, group_id: &str, conn_id: &str) -> Result<(), CoreError> {
         self.conn
             .execute(
-                "INSERT OR IGNORE INTO connection_group_members (group_id, connection_id) VALUES (?1, ?2)",
-                params![group_id, conn_id],
+                "INSERT OR IGNORE INTO connection_group_members (group_id, connection_id, sort_order)
+                 VALUES (?1, ?2, ?3)",
+                params![group_id, conn_id, MEMBER_ORDER_UNSET],
             )
             .map_err(|e| self.err("add_group_member", e))?;
         Ok(())
@@ -524,14 +537,33 @@ impl ConnectionOrgStore {
     }
 
     /// 分组内成员（手动排序优先，未排按连接 ID）。
+    ///
+    /// 未手动排序的成员排在同组**最后**；它们之间的**名称升序**由视图负责
+    /// （名称不在本存储，见 [`ConnectionOrgStore::list_group_members_detailed`]）。
     pub fn list_group_members(&self, group_id: &str) -> Vec<String> {
+        self.list_group_members_detailed(group_id)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// 分组内成员 + **是否手动排序过**（`None` = 未排）。
+    ///
+    /// 顺序：[`MEMBER_ORDER_UNSET`] 的排最后，其余按序号；同段内按连接 ID 保证确定性。
+    /// 视图拿这个「排 / 未排」分区去把未排段按名称重排，然后才落库。
+    pub fn list_group_members_detailed(&self, group_id: &str) -> Vec<(String, Option<i64>)> {
         let Ok(mut stmt) = self.conn.prepare(
-            "SELECT connection_id FROM connection_group_members
-             WHERE group_id = ?1 ORDER BY sort_order ASC, connection_id ASC",
+            "SELECT connection_id, sort_order FROM connection_group_members
+             WHERE group_id = ?1 ORDER BY (sort_order < 0) ASC, sort_order ASC, connection_id ASC",
         ) else {
             return Vec::new();
         };
-        match stmt.query_map(params![group_id], |r| r.get::<_, String>(0)) {
+        let rows = stmt.query_map(params![group_id], |r| {
+            let id: String = r.get(0)?;
+            let order: i64 = r.get(1)?;
+            Ok((id, (order >= 0).then_some(order)))
+        });
+        match rows {
             Ok(iter) => iter.filter_map(Result::ok).collect(),
             Err(_) => Vec::new(),
         }
@@ -570,12 +602,13 @@ impl ConnectionOrgStore {
                 params![conn_id],
             )
             .map_err(|e| self.err("clear_connection_groups", e))?;
-        for (i, gid) in group_ids.iter().enumerate() {
+        for gid in group_ids.iter() {
             self.conn
                 .execute(
+                    // 对话框只决定「属于哪些组」，不决定组内位置：新关系一律标未手动排序。
                     "INSERT OR IGNORE INTO connection_group_members (group_id, connection_id, sort_order)
                      VALUES (?1, ?2, ?3)",
-                    params![gid, conn_id, i as i64],
+                    params![gid, conn_id, MEMBER_ORDER_UNSET],
                 )
                 .map_err(|e| self.err("insert_connection_group_member", e))?;
         }
@@ -748,6 +781,36 @@ mod tests {
         assert_eq!(
             store.list_group_members("g1"),
             vec!["P_b".to_string(), "P_c".to_string(), "P_a".to_string()]
+        );
+
+        // 新成员标为「未手动排序」（负哨兵），且排在同组**最后**（不占真实下标）。
+        store.add_member("g1", "P_d").expect("add d");
+        let detailed = store.list_group_members_detailed("g1");
+        assert_eq!(detailed.len(), 4);
+        assert_eq!(detailed[3].0, "P_d");
+        assert_eq!(detailed[3].1, None);
+        assert!(detailed[..3].iter().all(|(_, o)| o.is_some()));
+        assert_eq!(
+            store.list_group_members("g1"),
+            vec![
+                "P_b".to_string(),
+                "P_c".to_string(),
+                "P_a".to_string(),
+                "P_d".to_string()
+            ]
+        );
+        // 一旦整体重写，未排的也获得真实序号（视图把当前屏上顺序冻结下来）。
+        store
+            .set_member_order_all(
+                "g1",
+                &["P_d".into(), "P_b".into(), "P_c".into(), "P_a".into()],
+            )
+            .expect("order three");
+        assert!(
+            store
+                .list_group_members_detailed("g1")
+                .iter()
+                .all(|(_, o)| o.is_some())
         );
 
         // 未分组容器：整体替换（不是补写），删掉的连接不会留下旧位置。

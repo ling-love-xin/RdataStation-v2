@@ -80,6 +80,7 @@
 | B2 标签服务（多值 + 检索） | ✅ 服务层就绪（2026-09-11） | `ConnectionOrgStore`：set_tags/list_tags/list_connections_by_tag/list_all_tags；`nav_runtime::{list_tags,set_tags}` 已接线；M3 保存/更新同步、删除清理 |
 | B3 分组/标签视图（拖拽/右键/对话框） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`render_nav_tree`（分组一级 + 「未分组」）、`render_group_header`（统一色条 + 计数 + 折叠）、`render_group_editor`（右键「移动到分组…」：行内分组多选 + 新建分组）、`render_tag_editor`（行尾 `+`：仅标签输入）、`nav_source_chip`（来源筛选 chips）、`ensure_nav_org` / `reload_nav_org` |
 | B1/B2 视图接线（分组多对多 + 标签多值） | ✅ 已实现 | `nav_runtime::{list_groups,create_group,list_group_members,add_to_group,remove_from_group,list_all_tags}`；`ConnectionOrgStore::list_tag_pairs`（一次性映射） |
+| B1 组内排序口径落地（未排按名称） | ✅ 已实现（2026-09-16） | `ConnectionOrgStore::{MEMBER_ORDER_UNSET, list_group_members_detailed}` + 迁移 `022_normalize_group_member_order.sql`；视图 `panels.rs::nav_order_members`（纯函数，分组内与「未分组」共用） |
 | B7 上下文菜单动作（查看数据 / 复制名 / 查看属性 / 刷新） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels.rs`：`ContextMenuExt::context_menu` 挂到连接行 / 对象节点 / 分组头；`Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（生成 SELECT → 编辑区）；`toggle_connection` / `refresh_node` / `delete_group` / `create_group_interactive`；分组删除带 `AlertDialog` 确认 |
 | B8 缓存管理入口 + 短码⇄文字开关 + 属性面板宽度记忆 | ✅ 已实现（2026-09-12） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`（数据源导航节）；`crates/workbench/src/components/cache_dialog.rs`（两处入口）；`panels.rs::{refresh_all, render_connection_row, render_property_panel}` + `EditorPanel::render`（`h_resizable`） |
 | B7 拖拽（表 / 视图 → 编辑区插入限定名） | ✅ 已实现（2026-09-16） | `crates/workbench/src/panels.rs`：`NavDragPayload` + `NavDragGhost`（拖拽幽灵）、`render_nav_node` 挂 `on_drag`（仅表 / 视图）、SQL 区容器 `drag_over` + `on_drop`、编辑区 `content` 兜底 `on_drop`、`EditorPanel::apply_nav_drag`（`NavDropMode::{AtCursor, Append}`） |
@@ -134,7 +135,7 @@
 - **「未分组」没有真实分组行**，成员是推导出来的（不属于任何分组），故顺序单开 `navigator_ungrouped_order`（迁移 021）；写库是**整体替换**（先清后写），避免连接重新回到未分组时“复活”旧位置。
 - 渲染顺序：手动排序在前，未排过的按名称升序（`container_order` / `render_nav_tree` 同源）；排序落库时用**未筛选**的全量成员，避免被搜索过滤掉的行丢位置。
 - 「未分组」头在**已有自定义分组时也渲染**（即使为空）：它是「拖拽移出分组」的常驻落点；右键菜单也能移出，两条路都在。
-- 未做：**分组本身**的拖拽排序见上方已完成项；「未手动排序按名称」只在渲染侧生效，存储侧仍按 `sort_order, connection_id` 返回（见架构 §11#20）。
+- 未做：见架构 §11#20（缓存首版限制）与 §11#21（C8 接线）；组内「未排按名称」已落到存储侧（§11#22）。
 
 **Phase B8 已实现范围**
 

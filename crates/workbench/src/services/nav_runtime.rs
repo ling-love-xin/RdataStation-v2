@@ -409,9 +409,22 @@ pub fn delete_group(project_root: Option<&Path>, group_id: &str) -> Result<(), S
 }
 
 /// 分组成员连接 ID（按组内顺序）。
+///
+/// 未手动排序的成员排在最后，且**未按名称排**——名称不在组织存储里，
+/// 要靠视图侧 [`list_group_members_detailed`] + `nav_order_members` 补齐。
 pub fn list_group_members(project_root: Option<&Path>, group_id: &str) -> Vec<String> {
     open_org_project(project_root)
         .map(|s| s.list_group_members(group_id))
+        .unwrap_or_default()
+}
+
+/// 分组成员 + 是否手动排序过（`None` = 未排；`Some(idx)` = 手动序号）。
+pub fn list_group_members_detailed(
+    project_root: Option<&Path>,
+    group_id: &str,
+) -> Vec<(String, Option<i64>)> {
+    open_org_project(project_root)
+        .map(|s| s.list_group_members_detailed(group_id))
         .unwrap_or_default()
 }
 

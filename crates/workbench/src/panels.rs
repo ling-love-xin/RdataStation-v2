@@ -1537,6 +1537,36 @@ fn nav_step(ids: &[String], moving: &str, delta: i32) -> Option<Vec<String>> {
     }
 }
 
+/// 容器成员顺序：手动排序过的按存储序号在前，**未排过的按名称升序在后**。
+///
+/// `stored` 来自引擎的「成员 + 是否手动排序过」列表。显式段在这里再排一次序号
+/// （不依赖引擎的返回顺序），未排段按名称排——名称不在组织存储里，只能在这一层做。
+/// 排序均稳定，同键保持传入顺序。纯函数，便于单测。
+fn nav_order_members(
+    stored: &[(String, Option<i64>)],
+    name_of: impl Fn(&str) -> String,
+) -> Vec<String> {
+    let mut ordered: Vec<(i64, String)> = Vec::with_capacity(stored.len());
+    let mut unset: Vec<String> = Vec::new();
+    for (id, order) in stored {
+        match order {
+            Some(o) => ordered.push((*o, id.clone())),
+            None => unset.push(id.clone()),
+        }
+    }
+    ordered.sort_by_key(|(o, _)| *o);
+    // 名称大小写不敏感；同名再按 ID 定序，保证结果稳定。
+    unset.sort_by(|a, b| {
+        name_of(a)
+            .to_lowercase()
+            .cmp(&name_of(b).to_lowercase())
+            .then_with(|| a.cmp(b))
+    });
+    let mut out: Vec<String> = ordered.into_iter().map(|(_, id)| id).collect();
+    out.extend(unset);
+    out
+}
+
 /// 草稿追加：空草稿直接落片段，否则在末尾换行追加。
 ///
 /// 纯函数（无 `Window` / 无 `Entity`），供 `EditorPanel::apply_nav_drag` 与单测共用。
@@ -3794,8 +3824,8 @@ impl SidebarPanel {
         }
 
         // 「未分组」固定分组：收纳不属于任何自定义分组的连接。
-        // 顺序：先按手动排序（`ungrouped_order`），未排过的按名称升序排在后面。
-        let mut ungrouped: Vec<&ConnectionItem> = conns
+        // 顺序与分组内同一条规则（`nav_order_members`）：手动排序在前，未排过的按名称升序。
+        let candidates: Vec<&ConnectionItem> = conns
             .iter()
             .filter(|c| {
                 membership
@@ -3805,18 +3835,25 @@ impl SidebarPanel {
                     && passes(c)
             })
             .collect();
-        let ranked: HashMap<&str, usize> = ungrouped_order
+        let ranked: HashMap<&str, i64> = ungrouped_order
             .iter()
             .enumerate()
-            .map(|(i, id)| (id.as_str(), i))
+            .map(|(i, id)| (id.as_str(), i as i64))
             .collect();
-        ungrouped.sort_by(|a, b| match (ranked.get(a.id.as_str()), ranked.get(b.id.as_str())) {
-            (Some(x), Some(y)) => x.cmp(y),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        });
-        // 已有自定义分组时也渲染（空）未分组头：它是「拖拽移出分组」的唯一常驻落点。
+        let stored: Vec<(String, Option<i64>)> = candidates
+            .iter()
+            .map(|c| (c.id.clone(), ranked.get(c.id.as_str()).copied()))
+            .collect();
+        let ungrouped: Vec<&ConnectionItem> = nav_order_members(&stored, |id| {
+            by_id
+                .get(id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| id.to_string())
+        })
+        .iter()
+        .filter_map(|id| by_id.get(id.as_str()).copied())
+        .collect();
+        // 已有自定义分组时也渲染（空）未分组头：它是「拖拽移出分组」的常驻落点。
         let groups_shown = shown > 0;
         if !ungrouped.is_empty() || (!groups.is_empty() && groups_shown) {
             shown += ungrouped.len();
@@ -6104,16 +6141,16 @@ impl SidebarPanel {
                 .cloned()
                 .unwrap_or_default();
         }
-        // 未分组：成员由“不属于任何分组”推导，顺序 = 手动排序在前 + 未排过的名称升序。
+        // 未分组：成员由“不属于任何分组”推导；顺序与分组内同一条规则。
         let view = self.database_nav.borrow();
         let conns = self.shared.connections.borrow();
-        let ranked: HashMap<&str, usize> = view
+        let ranked: HashMap<&str, i64> = view
             .ungrouped_order
             .iter()
             .enumerate()
-            .map(|(i, id)| (id.as_str(), i))
+            .map(|(i, id)| (id.as_str(), i as i64))
             .collect();
-        let mut rows: Vec<(Option<usize>, String, String)> = conns
+        let stored: Vec<(String, Option<i64>)> = conns
             .iter()
             .filter(|c| {
                 view.membership
@@ -6121,21 +6158,15 @@ impl SidebarPanel {
                     .map(|gs| gs.is_empty())
                     .unwrap_or(true)
             })
-            .map(|c| {
-                (
-                    ranked.get(c.id.as_str()).copied(),
-                    c.name.to_lowercase(),
-                    c.id.clone(),
-                )
-            })
+            .map(|c| (c.id.clone(), ranked.get(c.id.as_str()).copied()))
             .collect();
-        rows.sort_by(|a, b| match (a.0, b.0) {
-            (Some(x), Some(y)) => x.cmp(&y),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.1.cmp(&b.1),
-        });
-        rows.into_iter().map(|(_, _, id)| id).collect()
+        nav_order_members(&stored, |id| {
+            conns
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| id.to_string())
+        })
     }
 
     /// 拖拽落点动作：把连接移到 `scope_id` 容器的指定位置。
@@ -6307,8 +6338,22 @@ impl SidebarPanel {
         let groups = crate::services::nav_runtime::list_groups(root.as_deref());
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
         let mut group_order: HashMap<String, Vec<String>> = HashMap::new();
+        // 名称表：未手动排序的成员要按名称升序，而名称不在组织存储里。
+        let names: HashMap<String, String> = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .map(|c| (c.id.clone(), c.name.clone()))
+            .collect();
         for group in &groups {
-            let ids = crate::services::nav_runtime::list_group_members(root.as_deref(), &group.id);
+            let stored = crate::services::nav_runtime::list_group_members_detailed(
+                root.as_deref(),
+                &group.id,
+            );
+            let ids = nav_order_members(&stored, |id| {
+                names.get(id).cloned().unwrap_or_else(|| id.to_string())
+            });
             for cid in &ids {
                 membership
                     .entry(cid.clone())
@@ -9736,7 +9781,10 @@ impl ComponentPanel for RightSidebarPanel {
 mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
-    use super::{nav_draft_append, nav_reorder, nav_step, nav_type_short_label, parse_nav_search};
+    use super::{
+        nav_draft_append, nav_order_members, nav_reorder, nav_step, nav_type_short_label,
+        parse_nav_search,
+    };
     use database::model::NavSource;
 
     fn ids(v: &[&str]) -> Vec<String> {
@@ -9783,6 +9831,35 @@ mod tests {
         // 不在容器里（例如对象节点被过滤掉）→ 无变化。
         assert_eq!(nav_step(&base, "z", 1), None);
         assert_eq!(nav_step(&[], "z", 1), None);
+    }
+
+    #[test]
+    fn nav_order_members_puts_manual_first_then_names() {
+        let name = |id: &str| match id {
+            "P_b" => "zeta".to_string(),
+            "P_c" => "Alpha".to_string(),
+            "P_d" => "beta".to_string(),
+            other => other.to_string(),
+        };
+        // 手动排序的两个按序号在前；未排的三个按名称（大小写不敏感）升序在后。
+        let stored = vec![
+            ("P_a".to_string(), Some(1)),
+            ("P_b".to_string(), None),
+            ("P_d".to_string(), Some(0)),
+            ("P_c".to_string(), None),
+            ("P_e".to_string(), None),
+        ];
+        assert_eq!(
+            nav_order_members(&stored, name),
+            ids(&["P_d", "P_a", "P_c", "P_e", "P_b"])
+        );
+        // 全未排：纯名称序。
+        let stored = vec![("P_b".to_string(), None), ("P_c".to_string(), None)];
+        assert_eq!(nav_order_members(&stored, name), ids(&["P_c", "P_b"]));
+        // 全已排：按序号（与本传入顺序无关）。
+        let stored = vec![("P_b".to_string(), Some(1)), ("P_a".to_string(), Some(0))];
+        assert_eq!(nav_order_members(&stored, name), ids(&["P_a", "P_b"]));
+        assert!(nav_order_members(&[], name).is_empty());
     }
 
     #[test]
