@@ -111,7 +111,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
   `crates/workbench/src/components/mock_host.rs`（`MockHost` 的宿主实现）、
   `crates/workbench/src/panels.rs`（面板构造期创建 + 句柄登记）、`crates/workbench/src/view.rs`（详情 tab 加入中央 tab 组）。
 - 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`
-  （93 单元（含 16 窗口）+ 26 集成）；`cargo test -p rds-workbench --test mock_generator -j 2`（装配层 10 项）。
+  （99 单元（含 16 窗口）+ 26 集成）；`cargo test -p rds-workbench --test mock_generator -j 2`（装配层 10 项）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。
 - 生成器目录改动流程：改 `models.rs` 的 `GeneratorConfig` → 跑 `python tools/gen_mock_generator_catalog.py`
   → `rustfmt` 生成文件 → 补 `LABELS` / 默认值字典。
