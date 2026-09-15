@@ -327,7 +327,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K10 | 内置规则的**基础统计耦合**（覆盖 `numeric-stats` 会连带影响列画像） | 用户误以为只影响「那条规则」 | 文档说明（本文件 §5.3 + 使用手册） |
 | K11 | `null-check` 规则的 `[[quality]] field = "null_rate"` 指向**不存在的输出字段**（其 `[[output]]` 只有 `total_count` / `non_null_count` / `unique_count`）→ `actual == None`，而 `evaluate_quality` 在**只设 `max` 且 actual 为 None** 时不判定失败 → 该质量门控**永不触发**（静默通过） | 中：用户以为有门控，实际没有 | 待决策：补 `null_rate` 输出字段 / 改 `field` / 让「字段不存在」报错而不是静默通过（倾向后者） |
 | K12 | `quality-score` 规则用 `value_type = "str"`，该值**不在支持列表**中，靠 `match` 的兜底分支当成 `String` 处理而侥幸工作 | 中：`value_type` 写错时不会报「未知类型」，而是在读取时报出难以归因的错误（如把 DOUBLE 列当 String 读） | 待决策：解析期校验 `value_type` 白名单（与 `deny_unknown_fields` 同一立场：早失败优于静默错） |
-| K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15，你修好了 mock）；当前全仓仅剩 `crates/engine/tests/transaction_affinity.rs`（在制品）编译不过 |
+| K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15）；`engine/tests/transaction_affinity.rs` 的 `as_i64` 编译错误也已修（`Value` 只有 `as_int`，随 `b838ea0` 提交） |
 
 ## 12. 待确认
 
