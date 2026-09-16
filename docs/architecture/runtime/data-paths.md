@@ -122,3 +122,49 @@ paths::extensions_dir()  // home/extensions
 | 日志目录 | `crates/engine/src/logging/config.rs` |
 | 系统库 / 分析库 | `crates/project/src/ui.rs`、`crates/workbench/src/services/workspace_loader.rs` |
 | 忽略规则与"不提交" | `/.gitignore`（`/.rds/`、`/rds-*.log`）+ 已跟踪日志的 `git rm --cached` 清单（§6）；`*.fossil` 是测试库，不忽略 |
+| 插件目录 / 插件数据 | `crates/engine/src/driver/loader.rs`（`WasmDriverDiscovery::plugin_dirs`）、`crates/plugin/src/{manager,manifest,permission}.rs`、`crates/plugin/src/wasm/plugin_manager.rs`、`crates/plugin/src/sidecar/{manager,driver}.rs`（见 §8） |
+
+## 8. 插件系统对路径设计的影响（全面分析）
+
+插件不是单一形态：`crates/plugin` 共 7488 行，含 **wasm（extism 1.30 → wasmtime）**、**sidecar（独立进程）**、
+manifest、permission 四个子系统；驱动侧还有 `engine/src/driver/wasm/`。路径约束必须覆盖它们，
+否则“生成物都在安装目录下”会被插件绕过。
+
+### 8.1 现状（实测）
+
+| 项 | 现状 | 问题 |
+| --- | --- | --- |
+| 插件发现目录 | `./plugins`（**相对当前工作目录**）+ `~/.rdatastation/plugins` | `engine/src/driver/loader.rs:135`；前者随启动目录漂移，后者写 C 盘；且 `~/.rdatastation` 小写风格与现有 `RdataStation` 不一致 |
+| 插件注册表 | `global.sqlite` 的 `plugin_store`（`manifest_json` 等） | ✅ 随 `RDS_HOME` 自动迁移 |
+| WASM 运行时 | extism 1.30（wasmtime）；`wasm/plugin_manager.rs` **未见** cache/data 目录配置 | wasmtime 编译缓存可能落 C 盘（如 `~/.cache`）；需显式指向插件缓存目录 |
+| Sidecar 插件 | `sidecar/manager.rs`：`Command::new` 起独立进程，**从 stdout 读端口号** | ① **真实占用本地端口**（需保留段 + 冲突重试 + 退出回收）；② 未设子进程 `current_dir`、日志与临时目录；③ 子进程崩溃/残留需清理 |
+| 权限模型 | `permission.rs`（373 行） | 插件可申请的**路径权限**必须与“只能写自己目录”的约束一致，否则插件能绕开本设计写 C 盘 |
+| 文档 | `docs/` 下**无插件架构文档** | 7488 行、4 个子系统，无设计文档（见 §8.3） |
+
+### 8.2 目标形态（并入 §2 的同一根）
+
+```
+<RDS_HOME>/
+├── plugins/                   ← 已安装插件（wasm 或 sidecar 二进制 + manifest）
+│   └── <plugin-id>/{plugin.wasm | sidecar.exe, manifest.json}
+├── plugin-data/<plugin-id>/   ← 插件私有数据（沙箱内唯一可写区，卸载后可保留）
+├── plugin-cache/<plugin-id>/  ← wasmtime/extism 编译缓存、sidecar 日志与临时文件
+└── tmp/sidecar/<plugin-id>/   ← sidecar 进程的 current_dir 与工作文件
+```
+
+规则：
+
+1. 插件**只允许**写 `plugin-data/<id>/` 与 `plugin-cache/<id>/`（由 `permission.rs` 的路径白名单强制）；
+   一律不得写 CWD、用户主目录、C 盘（插件若声明更多路径，安装时明确提示用户）。
+2. `plugin_dirs` 改为 `paths::plugins_dir()`：去掉 `./plugins` 的 CWD 依赖，去掉 `~/.rdatastation`；
+   如需支持“随身插件目录”（绿色版），另给 `RDS_PLUGIN_DIRS` 覆盖。
+3. extism/wasmtime 显式配置 cache 目录 → `plugin-cache/<id>/`（避免写 `~/.cache`）。
+4. sidecar：`Command::current_dir(paths::sidecar_work_dir(id))`、stdout/stderr 落
+   `plugin-cache/<id>/sidecar.log`、端口从**保留段**（建议 41000–41999）分配并在超时/子进程退出时回收。
+5. 卸载插件 = 删除 `plugins/<id>`；`plugin-data/<id>` 是否保留由 manifest 声明（默认保留）。
+
+### 8.3 待补文档
+
+插件系统（manifest / permission / wasm / sidecar）**缺自己的架构文档**。建议新增
+`docs/architecture/plugin/plugin-architecture.md`，至少覆盖：清单与版本/依赖解析、权限模型、
+wasm 与 sidecar 两种运行形态的生命周期、路径与进程约束（引用本文档 §8）。
