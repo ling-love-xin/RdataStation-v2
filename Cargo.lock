@@ -8088,10 +8088,12 @@ name = "rds-scratchpad"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "gpui-kit",
  "notify",
  "opener",
  "rds-paths",
  "rds-shared",
+ "rds-workbench-shell",
  "regex",
  "serde",
  "serde_json",
