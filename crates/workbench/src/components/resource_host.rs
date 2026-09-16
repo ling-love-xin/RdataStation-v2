@@ -29,7 +29,9 @@ use analytics_resource::dialogs::archive::{
 use analytics_resource::dialogs::checkout::{
     CheckoutDialogSeed, open_checkout_dialog, suggest_work_copy_name,
 };
-use analytics_resource::model::{ArchiveBinding, ArchiveKind, ArchiveRequest, CheckoutRequest};
+use analytics_resource::model::{
+    ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest,
+};
 use analytics_resource::payload::{PayloadStore, RESOURCES_DIR_NAME};
 use analytics_resource::resource_view::ResourcesHost;
 
@@ -190,6 +192,20 @@ impl ResourcesHost for WorkbenchResourceHost {
             "（等项目级回收站上提，P0.8；不做两套回收站）",
             cx,
         );
+    }
+
+    fn request_undo_archive(&self, undo: &ArchiveUndo, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法撤销", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能撤销", cx);
+            return;
+        }
+        // 凭据原样交给工作线程（面板只持有它，不认识服务层）。
+        resource_jobs::enqueue_undo(root, self.read_only(), undo.clone());
+        self.shared.refresh_resources(cx);
+        self.notice("资产库：正在撤销…", cx);
     }
 
     fn request_index_repair(&self, _window: &mut Window, cx: &mut App) {

@@ -374,7 +374,11 @@ impl AnalyticsResourceStore {
     ///
     /// 与 v1 回收站的差别：本体都没了，"回收站"已无意义；"删本体进回收站"由 P0.8 的
     /// `ProjectTrash` 承接，不走这里。
-    pub async fn remove_orphan_record(&self, id: &str) -> Result<(), CoreError> {
+    /// 硬删除一行（不写回收站、不留痕）。
+    ///
+    /// 两个调用方语义不同但动作相同：**撤销归档**（刚发生的那次，本体已移回）与
+    /// **索引修复**（删掉"有记录无本体"的孤儿记录）。软删的行（`deleted_at` 非空）都不归这里管。
+    pub async fn hard_delete_row(&self, id: &str) -> Result<(), CoreError> {
         let conn = self.get_conn().await?;
         let affected = conn
             .inner()?
@@ -387,6 +391,10 @@ impl AnalyticsResourceStore {
             return Err(persistence_err("delete", "记录不存在或已删除"));
         }
         Ok(())
+    }
+
+    pub async fn remove_orphan_record(&self, id: &str) -> Result<(), CoreError> {
+        self.hard_delete_row(id).await
     }
 
     pub async fn list_resources(

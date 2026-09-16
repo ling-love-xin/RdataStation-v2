@@ -43,7 +43,7 @@ use gpui_kit::assets::IconName as CatalogIcon;
 use crate::commands;
 use crate::detail_view::ArchiveDetail;
 use crate::filter::{self, ResourcesFilter, SortField, SortOrder};
-use crate::model::{ArchiveKind, ArchiveStatus};
+use crate::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use crate::ui;
 
 // ==================== 视图模型（纯数据，便于单测） ====================
@@ -181,6 +181,10 @@ pub trait ResourcesHost: 'static {
     /// 参数给的是**面板已有的那条详情**（而不是一个 id）：宿主据此命工作副本名与
     /// 版本提示，不必回头读面板的选中态——那是渲染期正在被借用的对象（已踩过）。
     fn request_checkout(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 撤销上一次归档（底部撤销栏的「撤销」按钮）。
+    ///
+    /// 凭据里的原路径只在内存里活一会儿（见 [`ArchiveUndo`]）：失效了就调不到这里。
+    fn request_undo_archive(&self, undo: &ArchiveUndo, window: &mut Window, cx: &mut App);
     /// 移入回收站。
     fn request_delete(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 索引修复入口（状态行异常段）。
@@ -439,6 +443,10 @@ pub struct ResourcesPanel {
     list: Option<Entity<ListState<ArchiveListDelegate>>>,
     selected: Option<String>,
     notice: Option<String>,
+    /// 上一次归档的撤销凭据（**只在内存里活几秒**，见 [`ArchiveUndo`]）。
+    ///
+    /// 由宿主在归档成功后推进来（面板不自己造），过期或下一次动作时清掉。
+    undo: Option<ArchiveUndo>,
     focus_handle: FocusHandle,
     group: Option<WeakEntity<TabGroup>>,
 }
@@ -459,6 +467,7 @@ impl ResourcesPanel {
             list: None,
             selected: None,
             notice: None,
+            undo: None,
             focus_handle: cx.focus_handle(),
             group: None,
         }
@@ -636,6 +645,37 @@ impl ResourcesPanel {
     pub fn set_notice(&mut self, notice: Option<String>, cx: &mut Context<Self>) {
         self.notice = notice;
         cx.notify();
+    }
+
+    /// 推进（或清掉）撤销凭据（**事件路径调用**：宿主归档成功后 / 撤销完成后）。
+    ///
+    /// 带凭据时同时安排 5 秒后自动消失（与 M5 撤销栏同一时长）：撤销窗口是"立即反悔"，
+    /// 不是一条待办事项；过期就收，免得一个小时后点下去才发现已失效。
+    pub fn set_undo(&mut self, undo: Option<ArchiveUndo>, cx: &mut Context<Self>) {
+        let schedule = undo.clone();
+        self.undo = undo;
+        cx.notify();
+        if let Some(token) = schedule {
+            self.schedule_undo_expiry(token, cx);
+        }
+    }
+
+    /// 安排撤销凭据 5 秒后自动消失（**仅当仍指向同一次归档**）。
+    ///
+    /// 守卫不能省：这 5 秒里可能又归档了一次，新凭据不该被旧计时器清掉（M5 同例）。
+    fn schedule_undo_expiry(&self, token: ArchiveUndo, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |_this, cx| {
+            executor.timer(std::time::Duration::from_secs(5)).await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.undo.as_ref() == Some(&token) {
+                    this.undo = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn selected_id(&self) -> Option<&str> {
@@ -858,6 +898,47 @@ impl ResourcesPanel {
             .into_any_element()
     }
 
+    /// 归档撤销栏（原型 §4.1）：给"把文件从工作区搬走"一个立即反悔的窗口。
+    ///
+    /// 固定在状态行**上方**（与 M5 撤销栏同位）：它是刚发生那次动作的出口，不能随列表滚走；
+    /// 文案直接引用显示名，用户不用回想刚搬的是哪一条。
+    fn render_undo_bar(&self, undo: &ArchiveUndo, cx: &mut Context<Self>) -> Div {
+        let (foreground, primary, hover_bg) = {
+            let colors = cx.theme().colors;
+            (colors.foreground, colors.primary, colors.list_hover)
+        };
+        let host = self.host.clone();
+        let token = undo.clone();
+        div()
+            .flex_none()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .px_2()
+            .py_1()
+            .bg(hover_bg)
+            .text_xs()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_ellipsis()
+                    .text_color(foreground)
+                    .child(format!("已归档「{}」", undo.name)),
+            )
+            .child(
+                div()
+                    // 稳定 id + 调试选择器：这栏只存在一条（且 5 秒后自走），窗口测试按它定位。
+                    .id("archive-undo")
+                    .debug_selector(|| "archive-undo".to_string())
+                    .cursor_pointer()
+                    .text_color(primary)
+                    .child("撤销")
+                    .on_click(move |_, window, cx| host.request_undo_archive(&token, window, cx)),
+            )
+    }
+
     fn render_status_bar(&self, cx: &mut Context<Self>) -> Div {
         let (border, warning, muted) = {
             let colors = cx.theme().colors;
@@ -1017,6 +1098,11 @@ impl Render for ResourcesPanel {
             self.render_rows(cx)
         };
         let status = self.render_status_bar(cx);
+        // 撤销栏固定在上方（与 M5 撤销栏同位）：它是刚发生那次动作的出口，不能随列表滚走。
+        let undo_bar = self
+            .undo
+            .as_ref()
+            .map(|undo| self.render_undo_bar(undo, cx));
         let host = self.host.clone();
 
         div()
@@ -1083,6 +1169,7 @@ impl Render for ResourcesPanel {
             .child(toolbar)
             .when_some(notice, |panel, notice| panel.child(notice))
             .child(body)
+            .when_some(undo_bar, |panel, bar| panel.child(bar))
             .child(status)
     }
 }

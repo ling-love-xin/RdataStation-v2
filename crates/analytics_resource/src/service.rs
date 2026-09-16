@@ -15,8 +15,8 @@ use tokio::sync::broadcast;
 use shared::error::{CoreError, StorageError};
 
 use crate::model::{
-    ArchiveKind, ArchiveOutcome, ArchiveRequest, ChangeReason, CheckoutOutcome, CheckoutRequest,
-    NewArchiveInput, ResourcesChanged,
+    ArchiveKind, ArchiveOutcome, ArchiveRequest, ArchiveUndo, ChangeReason, CheckoutOutcome,
+    CheckoutRequest, NewArchiveInput, ResourcesChanged,
 };
 use crate::payload::PayloadStore;
 use crate::AnalyticsResourceStore;
@@ -242,6 +242,61 @@ impl ArchiveService {
             version: resource.version,
             dest_path: req.dest_path,
         })
+    }
+
+    /// 撤销一次归档（原型 §4.1：归档是"把文件从工作区搬走"的不可逆动作，必须给一个立即反悔的窗口）。
+    ///
+    /// **只管刚发生的那一次**，三条都不静默降级：
+    ///
+    /// - 版本 > 1（即已经再归档过）→ 拒绝：撤销会连带丢掉新内容；
+    /// - 原位置已被占用 → 拒绝：撤销必须**精确**还原，覆盖别人不叫撤销；
+    /// - 顺序与归档同构（本体先行、索引后动、失败回滚）：掉索引失败就把本体搬回去，
+    ///   宁可回到"文件还在 resources/ 且记录还在"，也不要"文件没了、记录也没了"。
+    pub async fn undo_archive(&self, undo: &ArchiveUndo) -> Result<(), CoreError> {
+        let resource = self.store.get_resource_by_id(&undo.resource_id).await?;
+        if ArchiveKind::from_db_str(&resource.kind) != ArchiveKind::File {
+            return Err(service_err("undo", "只有文件型存档支持撤销"));
+        }
+        let rel_path = resource
+            .file_rel_path
+            .clone()
+            .ok_or_else(|| service_err("undo", "该存档没有登记本体路径，无法撤销"))?;
+        if resource.version > 1 {
+            return Err(service_err(
+                "undo",
+                &format!(
+                    "已有新版本（v{}），撤销窗口已过；如需回退请走版本历史",
+                    resource.version
+                ),
+            ));
+        }
+        if undo.source_path.exists() {
+            return Err(service_err(
+                "undo",
+                &format!(
+                    "原位置已有文件（{}）：撤销要精确还原，请先移走它",
+                    undo.source_path.display()
+                ),
+            ));
+        }
+
+        self.payload
+            .move_payload_out(&rel_path, &undo.source_path)
+            .await?;
+        if let Err(error) = self.store.hard_delete_row(&undo.resource_id).await {
+            // 回滚本体：与 `archive_new` 的"索引失败把本体移回去"同一条纪律。
+            if let Err(rollback) = self.payload.archive_in(&undo.source_path, &rel_path).await {
+                tracing::error!(
+                    error = %rollback,
+                    rel = %rel_path,
+                    "撤销回滚失败：本体留在原位置且记录仍在，需经索引修复处理"
+                );
+            }
+            return Err(error);
+        }
+
+        self.emit(ChangeReason::Undone, Some(undo.resource_id.clone()));
+        Ok(())
     }
 
     /// 发事件：无订阅者时 `send` 返回 `Err`，那不是错误（面板可能未打开）。
@@ -596,6 +651,93 @@ mod tests {
                 .await
                 .is_err(),
             "取回目标落在 resources/ 内必须被拒（那等于绕开只读守卫）"
+        );
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t120_undo_moves_payload_back_and_drops_the_row() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let mut events = service.subscribe();
+        let draft = write_draft(&dir, "undo.sql", b"select 1;").await;
+        let outcome = service
+            .archive(archive_req(&draft, "reports/undo.sql", None))
+            .await
+            .expect("archive");
+        assert!(!draft.exists(), "归档后本体离开原位");
+
+        let undo = ArchiveUndo {
+            resource_id: outcome.resource_id.clone(),
+            name: "dau_report".to_string(),
+            source_path: draft.clone(),
+        };
+        service.undo_archive(&undo).await.expect("undo");
+
+        assert!(draft.is_file(), "撤销后本体回到原位");
+        assert!(
+            !service
+                .payload()
+                .resolve("reports/undo.sql")
+                .expect("resolve")
+                .exists(),
+            "本体不再留在 resources/"
+        );
+        assert!(
+            service
+                .store()
+                .get_resource_by_id(&outcome.resource_id)
+                .await
+                .is_err(),
+            "登记行已硬删除"
+        );
+        // 发/收两端同批：先 Archived，再 Undone。
+        let first = events.recv().await.expect("archived 事件");
+        assert_eq!(first.reason, ChangeReason::Archived);
+        let second = events.recv().await.expect("undone 事件");
+        assert_eq!(second.reason, ChangeReason::Undone);
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t121_undo_refuses_on_occupied_origin_or_newer_version() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let draft = write_draft(&dir, "occupied.sql", b"select 1;").await;
+        let outcome = service
+            .archive(archive_req(&draft, "occupied.sql", None))
+            .await
+            .expect("archive");
+        let undo = ArchiveUndo {
+            resource_id: outcome.resource_id.clone(),
+            name: "dau_report".to_string(),
+            source_path: draft.clone(),
+        };
+
+        // ① 原位置又被占：拒绝，且**两边都不动**（撤销不覆盖别人）。
+        fs::write(&draft, b"other").await.expect("write again");
+        assert!(
+            service.undo_archive(&undo).await.is_err(),
+            "原位置已有文件要拒绝"
+        );
+        assert!(
+            service
+                .payload()
+                .resolve("occupied.sql")
+                .expect("resolve")
+                .is_file(),
+            "被拒后本体仍在 resources/"
+        );
+
+        // ② 已经再归档过（v2）：撤销窗口已过（否则会连带丢掉新内容）。
+        fs::write(&draft, b"select 2;").await.expect("rewrite");
+        service
+            .archive(archive_req(&draft, "occupied.sql", Some(&outcome.resource_id)))
+            .await
+            .expect("re-archive");
+        assert!(
+            service.undo_archive(&undo).await.is_err(),
+            "已有新版本不给撤销"
         );
 
         let _ = fs::remove_dir_all(&dir).await;

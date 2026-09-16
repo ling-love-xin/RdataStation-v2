@@ -3,8 +3,8 @@
 > **一句话**：把「值得留存、需被引用、要能复现」的分析产物，从工作区转成**只读、有版本、带来源**的正式存档——回答的不是"我能看到什么数据"（M4），也不是"我正在做什么"（M5），而是**"我留下了什么，它当时长什么样"**。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**设计定稿（2026-09-15）；Phase 0 三批 + Phase 1 八刀已落地**——归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件 + 索引修复（三类孤儿）已可用（`ArchiveService` / `IndexRepair`）；面板（面板头 / **工具栏搜索·筛选·排序** / **`List` 虚拟化行 + kind 图标 + 右键菜单** / 状态行 / 两种空态）、**Action 与快捷键（`Ctrl+F` / `Esc` / `Delete`）**、**存档详情接入右栏（`RightPanel::Archive`，选中联动 + 取回动作）**、**归档 / 取回对话框与真执行（含重名避让、回执与顺手打开）**、呈现层（索引行 → 面板快照，含逐行详情）与 **workbench 接线（面板挂载 + 后台取数 + 端口回执）** 均已落地。逐项证据见 `analytics-resource-dev-plan.md` §0 进度记录。
-> 仍待：草稿箱发起侧归档入口 · 归档撤销条 · 版本历史 / 回收站 / 索引修复三个对话框（Phase 3；回收站需先上提 `ProjectTrash`，P0.8）· 编辑器只读打开（P1.6）· 批量多选（含 `F2` / `Ctrl+A`）· 废弃 `recycle.rs` → `ProjectTrash` · 版本保留策略接设置项。
+> 状态：**设计定稿（2026-09-15）；Phase 0 三批 + Phase 1 九刀已落地**——归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件 + 索引修复（三类孤儿）已可用（`ArchiveService` / `IndexRepair`）；面板（面板头 / **工具栏搜索·筛选·排序** / **`List` 虚拟化行 + kind 图标 + 右键菜单** / 状态行 / **归档撤销栏** / 两种空态）、**Action 与快捷键（`Ctrl+F` / `Esc` / `Delete`）**、**存档详情接入右栏（`RightPanel::Archive`，选中联动 + 取回动作）**、**归档 / 取回对话框与真执行（含重名避让、回执与顺手打开）**、**归档撤销（`undo_archive`，5 秒窗口）**、呈现层（索引行 → 面板快照，含逐行详情）与 **workbench 接线（面板挂载 + 后台取数 + 端口回执）** 均已落地。逐项证据见 `analytics-resource-dev-plan.md` §0 进度记录。
+> 仍待：草稿箱发起侧归档入口 · 版本历史 / 回收站 / 索引修复三个对话框（Phase 3；回收站需先上提 `ProjectTrash`，P0.8）· 编辑器只读打开（P1.6）· 批量多选（含 `F2` / `Ctrl+A`）· 废弃 `recycle.rs` → `ProjectTrash` · 版本保留策略接设置项。
 >
 > **边界**：本模块拥有**归档与取回 / 存档登记 / 版本与内容指纹 / 标签与分组 / 检索 / 资源侧回收站 / 索引修复**。连接与内省属 M3/M4；工作区文件读写属 M5；DuckDB 计算属 M2；Mock 生成属 M7；洞察计算属 M8；**项目级 → 系统级提升属 M1**（另立设计）。本模块**不自己取数、不自己计算、不改工作区文件**——只做搬运 + 登记 + 冻结 + 检索。
 
@@ -69,9 +69,9 @@
 | --- | --- |
 | 领域类型（`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / 归档与取回请求） | `crates/analytics_resource/src/model.rs`（现状：✅ Phase 0 已实现） |
 | 本体层（`resources/` 定位、越界拒绝、move、只读、指纹、历史副本与裁剪） | `crates/analytics_resource/src/payload.rs`（现状：✅ Phase 0 已实现，`PayloadStore`；`rel_path_taken` / `free_rel_path` 提供重名避让） |
-| 归档服务（归档 / 取回 / 再归档编排 + 变更事件） | `crates/analytics_resource/src/service.rs`（现状：✅ Phase 0 已实现 `ArchiveService`） |
+| 归档服务（归档 / 取回 / 再归档 / 撤销 + 变更事件） | `crates/analytics_resource/src/service.rs`（现状：✅ Phase 0 已实现 `ArchiveService`；`undo_archive` 提供 5 秒反悔窗口） |
 | 索引修复（三类孤儿检测与修复） | `crates/analytics_resource/src/indexer.rs`（现状：✅ Phase 0 已实现 `IndexRepair`） |
-| 登记 CRUD / 分页 / 搜索 / 排序 | `crates/analytics_resource/src/resource.rs`（现状：✅ 搬运 + 边界修复：统一行映射、分页夹紧、`LIKE` 转义、事务化更新；新列接入待做） |
+| 登记 CRUD / 分页 / 搜索 / 排序 | `crates/analytics_resource/src/resource.rs`（现状：✅ 搬运 + 边界修复：统一行映射、分页夹紧、`LIKE` 转义、事务化更新；`hard_delete_row` 供撤销与索引修复） |
 | 分组（单层） | `crates/analytics_resource/src/folder.rs`（现状：✅ 搬运，含树字段待去掉） |
 | 标签与双向查询 | `crates/analytics_resource/src/tag.rs`（现状：✅ 搬运，补改名/删除） |
 | 版本（内容指纹版本） | `crates/analytics_resource/src/version.rs`（现状：⚠️ 仍写前快照，但已支持在调用方事务内写快照 + 返回快照行 id；`version_counts()` 批量给详情用） |
@@ -124,7 +124,7 @@ cargo test -p rds-workbench --test ui_contract -j 2
 cargo check --workspace --all-targets -j 2
 ```
 
-- **当前基线（2026-09-17）**：`75 单测 + 3 对话框窗口测试 + 7 面板窗口测试`全绿（`cargo check --all-targets` 零告警）。
+- **当前基线（2026-09-17）**：`77 单测 + 3 对话框窗口测试 + 8 面板窗口测试`全绿（`cargo check --all-targets` 零告警）。
 - 测试场景 T1–T16 见 `analytics-resource-dev-plan.md` §9（归档回滚 / 指纹未变不增版本 / 历史裁剪 / 跨模块还原被拒 / 三类孤儿 / 越界写入 / 跨设备 move 等）。
 - **基线**：v1 的 15 个存储用例改造后全绿且不得减少。
 - 真机矩阵：明暗主题 × 三类 kind × 异常三态；平台矩阵：Windows（只读属性最弱）/ macOS / Linux（大小写敏感）。
@@ -152,7 +152,7 @@ cargo check --workspace --all-targets -j 2
 | --- | --- |
 | 已拍板（不阻塞） | 语义 C 模型 · 命名（资产库 / 分析存档 / 归档 / 取回）· 三种 kind 与第一期范围 · 指纹版本 · 项目级回收站 · `scope` 派生 · 标签为主 + 单层分组 · 只读常态（开发方案 §0） |
 | Phase 0（先做，无 UI） | ✅ 已落地（crate 内）：crate 入口文档 · workspace 别名 · 迁移 020 + 新列接入 · 领域类型 · 本体层 · **归档/取回/再归档闭环 + 变更事件** · **索引修复（三类孤儿）** · 行映射 4 份→1 份 · 9 项继承缺陷修复 · `mod tests` 接线（此前未编译）｜⬜ 待续（需跨 crate 或后续阶段）：engine 连接池修复（`busy_timeout` / `acquire` 超时）· `.RSmeta` 常量去重 · `ProjectTrash` 上提中性化与 `recycle.rs` 废弃 · 版本保留策略接入设置项 · 测试改走 `engine::migration`（详单见开发方案 §0） |
-| Phase 1 | ✅ 面板骨架 · ✅ 行渲染（含 **kind 图标**）· ✅ 工具栏（搜索 / 筛选 / 排序）· ✅ 两种空态 · ✅ **列表虚拟化（`list::List`）+ 行右键菜单** · ✅ 详情面板内容层 · ✅ 呈现层 · ✅ 术语收尾（`f93d560`）· ✅ **workbench 接线（面板挂载 + 快照桥）** · ✅ **Action 与快捷键（`Ctrl+F` / `Esc` / `Delete`）** · ✅ **存档详情接入右栏（`RightPanel::Archive` + 选中联动）** · ✅ **归档 / 取回对话框与真执行（含重名避让与回执）**；⬜ 草稿箱发起侧归档入口 · ⬜ 归档撤销条 · ⬜ 只读三重守卫（编辑器侧）· ⬜ 批量多选（含 `F2` / `Ctrl+A`） |
+| Phase 1 | ✅ 面板骨架 · ✅ 行渲染（含 **kind 图标**）· ✅ 工具栏（搜索 / 筛选 / 排序）· ✅ 两种空态 · ✅ **列表虚拟化（`list::List`）+ 行右键菜单** · ✅ 详情面板内容层 · ✅ 呈现层 · ✅ 术语收尾（`f93d560`）· ✅ **workbench 接线（面板挂载 + 快照桥）** · ✅ **Action 与快捷键（`Ctrl+F` / `Esc` / `Delete`）** · ✅ **存档详情接入右栏（`RightPanel::Archive` + 选中联动）** · ✅ **归档 / 取回对话框与真执行（含重名避让与回执）** · ✅ **归档撤销栏（`undo_archive`，5 秒窗口）**；⬜ 草稿箱发起侧归档入口 · ⬜ 只读三重守卫（编辑器侧）· ⬜ 批量多选（含 `F2` / `Ctrl+A`） |
 | Phase 2 | 标签（补改名/删除）+ 单层分组 + 搜索筛选排序 + 设置项 + 多选批量 |
 | Phase 3 | 版本历史 + 历史内容保留 + 回收站对话框 + 索引修复对话框 + 异常态呈现 |
 | Phase 4 | `analysis` 档（DuckDB 表）+ M7 Mock 产物 / M5 编辑器结果两处上游接入 |

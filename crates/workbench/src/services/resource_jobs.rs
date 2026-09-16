@@ -29,8 +29,8 @@ use analytics_resource::payload::PayloadStore;
 use analytics_resource::present::{ArchiveStatuses, build_snapshot};
 use analytics_resource::resource_view::ResourcesSnapshot;
 use analytics_resource::{
-    AnalyticsResourceStore, ArchiveRequest, ArchiveService, ArchiveStatus, CheckoutRequest,
-    IndexIssue, IndexRepair,
+    AnalyticsResourceStore, ArchiveRequest, ArchiveService, ArchiveStatus, ArchiveUndo,
+    CheckoutRequest, IndexIssue, IndexRepair,
 };
 
 /// 连接池大小：与其它项目库访问点一致（`data_source_service` / `workspace_loader` 同为 4）。
@@ -58,11 +58,19 @@ struct CheckoutJob {
     open_after: bool,
 }
 
+/// 一次撤销归档任务。
+struct UndoJob {
+    project_root: PathBuf,
+    read_only: bool,
+    undo: ArchiveUndo,
+}
+
 /// 队列里的作业。
 enum Job {
     Refresh(RefreshJob),
     Archive(ArchiveJob),
     Checkout(CheckoutJob),
+    Undo(UndoJob),
 }
 
 /// 动作回执（工作线程 → 事件路径）。
@@ -76,6 +84,8 @@ pub enum OpOutcome {
         name: String,
         version: i32,
         rel_path: String,
+        /// 撤销凭据（**只有首次归档才给**：再归档的"撤销"是版本回退，不在这条路上）。
+        undo: Option<ArchiveUndo>,
     },
     /// 已取回：落地路径 / 存档版本 / 是否要顺手打开。
     CheckedOut {
@@ -83,6 +93,8 @@ pub enum OpOutcome {
         version: i32,
         open_after: bool,
     },
+    /// 已撤销归档：显示名（本体已回原位）。
+    Undone { name: String },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed { action: &'static str, reason: String },
 }
@@ -134,24 +146,30 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 let outcome = rt.block_on(run_archive(&job));
                 *lock(&jobs().op_result) = Some(outcome);
                 // 动作之后立刻补一次取数（见模块头注释）。
-                let result = rt.block_on(refresh(&RefreshJob {
-                    project_root: job.project_root,
-                    read_only: job.read_only,
-                }));
-                *lock(&jobs().result) = Some(result);
+                refresh_after_op(&rt, job.project_root, job.read_only);
             }
             Job::Checkout(job) => {
                 let outcome = rt.block_on(run_checkout(&job));
                 *lock(&jobs().op_result) = Some(outcome);
-                let result = rt.block_on(refresh(&RefreshJob {
-                    project_root: job.project_root,
-                    read_only: job.read_only,
-                }));
-                *lock(&jobs().result) = Some(result);
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
+            Job::Undo(job) => {
+                let outcome = rt.block_on(run_undo(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                refresh_after_op(&rt, job.project_root, job.read_only);
             }
         }
         jobs().pending.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// 动作之后补一次取数（同一个 worker 里，见模块头注释）。
+fn refresh_after_op(rt: &tokio::runtime::Runtime, project_root: PathBuf, read_only: bool) {
+    let result = rt.block_on(refresh(&RefreshJob {
+        project_root,
+        read_only,
+    }));
+    *lock(&jobs().result) = Some(result);
 }
 
 /// 开一条项目库连接并组装归档服务（工作线程上执行）。
@@ -176,11 +194,20 @@ async fn run_archive(job: &ArchiveJob) -> OpOutcome {
         }
     };
     match service.archive(job.request.clone()).await {
-        Ok(outcome) => OpOutcome::Archived {
-            name,
-            version: outcome.version,
-            rel_path: outcome.file_rel_path,
-        },
+        Ok(outcome) => {
+            // 首次归档才给撤销凭据：再归档的"撤销"是版本回退（服务层也会挡），不在这条路上。
+            let undo = job.request.existing_resource_id.is_none().then(|| ArchiveUndo {
+                resource_id: outcome.resource_id.clone(),
+                name: name.clone(),
+                source_path: job.request.source_path.clone(),
+            });
+            OpOutcome::Archived {
+                name,
+                version: outcome.version,
+                rel_path: outcome.file_rel_path,
+                undo,
+            }
+        }
         Err(error) => OpOutcome::Failed {
             action: "归档",
             reason: error.to_string(),
@@ -215,6 +242,28 @@ async fn run_checkout(job: &CheckoutJob) -> OpOutcome {
         },
         Err(error) => OpOutcome::Failed {
             action: "取回",
+            reason: error.to_string(),
+        },
+    }
+}
+
+/// 执行一次撤销归档。
+async fn run_undo(job: &UndoJob) -> OpOutcome {
+    let service = match open_service(job.project_root.clone()).await {
+        Ok(service) => service,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "撤销归档",
+                reason,
+            };
+        }
+    };
+    match service.undo_archive(&job.undo).await {
+        Ok(()) => OpOutcome::Undone {
+            name: job.undo.name.clone(),
+        },
+        Err(error) => OpOutcome::Failed {
+            action: "撤销归档",
             reason: error.to_string(),
         },
     }
@@ -334,6 +383,16 @@ pub fn enqueue_checkout(
         read_only,
         request,
         open_after,
+    }));
+}
+
+/// 提交一次撤销归档（**事件路径**调用：撤销栏的「撤销」）。
+pub fn enqueue_undo(project_root: PathBuf, read_only: bool, undo: ArchiveUndo) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::Undo(UndoJob {
+        project_root,
+        read_only,
+        undo,
     }));
 }
 

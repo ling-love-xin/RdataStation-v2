@@ -139,6 +139,22 @@ pub struct ArchiveRequest {
     pub existing_resource_id: Option<String>,
 }
 
+/// 一次归档的**撤销凭据**（原型 §4.1 的"立即反悔窗口"）。
+///
+/// 为什么原路径跟着凭据走、而不入库：归档**不往库里记"本体原来在哪"**
+/// （`ArchiveBinding.promoted_from` 记的是来源草稿的**相对**路径，本地文件归档时它还是空的），
+/// 而撤销窗口只有几秒——在内存里传比给所有存档加一列更诚实：过期就没了，
+/// 不会在库里留一个"看起来能撤销"的字段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveUndo {
+    /// 存档 id（撤销要删掉它的登记行）。
+    pub resource_id: String,
+    /// 显示名（撤销栏文案用）。
+    pub name: String,
+    /// 本体被搬走前的绝对路径（撤销时移回去；**不覆盖**已有文件，见 `undo_archive`）。
+    pub source_path: std::path::PathBuf,
+}
+
 /// 归档结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveOutcome {
@@ -186,6 +202,8 @@ pub enum ChangeReason {
     Updated,
     /// 取回（检出）出工作副本。
     CheckedOut,
+    /// 撤销归档（本体移回原位 + 删登记行）。
+    Undone,
 }
 
 /// 资产库变更事件。

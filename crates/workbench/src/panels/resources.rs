@@ -110,11 +110,21 @@ impl SidebarPanel {
     /// 文案在**这里**组装（不在工作线程）：换算相对路径要项目根，写状态栏要 `Shared`——
     /// 两者都只在这个线程上。
     fn apply_resource_op(&mut self, outcome: resource_jobs::OpOutcome, cx: &mut Context<Self>) {
+        // 撤销凭据随动作更新：**只有刚归档成功的那一次**留下窗口（5 秒后自走），
+        // 其余动作（含失败与再次归档）都把上一个窗口收掉——两个并存的"反悔"只会让人选错。
+        let undo = match &outcome {
+            resource_jobs::OpOutcome::Archived { undo, .. } => undo.clone(),
+            _ => None,
+        };
+        let panel = self.resources_panel.clone();
+        panel.update(cx, |panel, cx| panel.set_undo(undo, cx));
+
         let message = match outcome {
             resource_jobs::OpOutcome::Archived {
                 name,
                 version,
                 rel_path,
+                undo: _,
             } => format!("资产库：已归档「{name}」v{version} → {rel_path}"),
             resource_jobs::OpOutcome::CheckedOut {
                 dest,
@@ -135,6 +145,9 @@ impl SidebarPanel {
                     "资产库：已取回 {shown}（v{version} 的工作副本）；改完再归档将生成 v{}",
                     version + 1
                 )
+            }
+            resource_jobs::OpOutcome::Undone { name } => {
+                format!("资产库：已撤销归档「{name}」（本体已回到原位置）")
             }
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")

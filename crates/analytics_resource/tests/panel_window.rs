@@ -18,7 +18,7 @@ use gpui_kit::{App, Focusable as _, TestAppContext, Window};
 use rds_analytics_resource::commands::ClearSearch;
 use rds_analytics_resource::detail_view::ArchiveDetail;
 use rds_analytics_resource::filter::{SortField, SortOrder};
-use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus};
+use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use rds_analytics_resource::resource_view::{
     ArchiveCounts, ArchiveRow, ResourcesHost, ResourcesPanel, ResourcesSnapshot,
 };
@@ -49,6 +49,11 @@ impl ResourcesHost for RecordingHost {
     }
     fn request_delete(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("delete:{resource_id}"));
+    }
+    fn request_undo_archive(&self, undo: &ArchiveUndo, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("undo:{}", undo.resource_id));
     }
     fn request_index_repair(&self, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push("repair".to_string());
@@ -115,6 +120,53 @@ fn renders_empty_state_and_read_only_notice(cx: &mut TestAppContext) {
     let rows = cx.update(|_window, cx| panel.read(cx).snapshot().rows.len());
     assert_eq!(rows, 0);
     assert!(host.calls().is_empty(), "仅渲染不应触发任何宿主动作");
+}
+
+#[gpui_kit::test]
+fn undo_bar_appears_with_the_token_and_leaves_when_cleared(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    // 没凭据：撤销栏不存在（不给一个点不动的入口占地方）。
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("archive-undo").is_none());
+
+    // 宿主推送凭据（生产入口：归档成功之后）→ 栏出现（含"撤销"入口）。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_undo(
+                Some(ArchiveUndo {
+                    resource_id: "ar_1".to_string(),
+                    name: "dau_report".to_string(),
+                    source_path: std::path::PathBuf::from("D:\\work\\dau.sql"),
+                }),
+                cx,
+            );
+        });
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-undo").is_some(),
+        "有凭据时撤销栏要在（固定在状态行上方）"
+    );
+    assert!(host.calls().is_empty(), "仅是渲染栏子不该发起任何动作");
+
+    // 撤销完成后宿主清掉凭据 → 栏退场。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_undo(None, cx));
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("archive-undo").is_none());
 }
 
 #[gpui_kit::test]
