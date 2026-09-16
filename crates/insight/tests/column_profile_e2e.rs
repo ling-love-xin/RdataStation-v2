@@ -14,6 +14,18 @@
 use rds_insight::insight_engine::get_or_create_duckdb;
 use rds_insight::{ColumnKind, InsightService};
 
+/// 串行锁：本文件的用例共享**进程级 DuckDB 单例**与**进程级并发配额**（上限 4）。
+///
+/// 并行跑时会出现「用例 A 占着 4 个令牌中的几个、用例 B 又同时申请」而随机撞上限
+/// （表现为 `洞察分析任务过多`）——那不是被测代码的问题，而是测试之间在抢同一份
+/// 进程级资源，所以这里显式串行（与 `crates/insight/src/lib.rs` 的
+/// `rule_state_guard` 同一手法；单个用例都在毫秒量级，串行不影响反馈速度）。
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 建临时表并插数据。
 ///
 /// 表名每个用例唯一：DuckDB 连接是进程级单例，同一测试进程内的用例共享它。
@@ -31,6 +43,7 @@ fn seed(table: &str, ddl: &str, values: &str) {
 /// 数值列：统计量来自 `numeric-stats` 规则，直方图受样本行数下限约束
 #[test]
 fn numeric_column_reaches_the_view_model() {
+    let _serial = serial();
     let table = "t_insight_e2e_numeric";
     // 12 个非空值（达到 HISTOGRAM_MIN_ROWS = 10）+ 2 个空值（空值率 14% > 10% 阈值）
     let mut rows: Vec<String> = (1..=12).map(|i| format!("({i})")).collect();
@@ -75,6 +88,7 @@ fn numeric_column_reaches_the_view_model() {
 /// 文本 / 布尔列按**真实 DuckDB 类型**分派（不是按目标里用户声明的类型字符串）
 #[test]
 fn text_and_boolean_columns_dispatch_by_real_types() {
+    let _serial = serial();
     let table = "t_insight_e2e_dispatch";
     seed(
         table,
@@ -102,6 +116,7 @@ fn text_and_boolean_columns_dispatch_by_real_types() {
 /// 二进制列与全空列都归「类型未识别」——两条不同的路径
 #[test]
 fn binary_and_all_null_columns_stay_unknown() {
+    let _serial = serial();
     let table = "t_insight_e2e_unknown";
     seed(
         table,
@@ -126,6 +141,7 @@ fn binary_and_all_null_columns_stay_unknown() {
 /// 这条用例的价值就在这里——它是唯一能让「按消息内容识别」这套权宜拿到真实反馈的地方。
 #[test]
 fn missing_result_set_is_reported_with_a_friendly_message() {
+    let _serial = serial();
     let err = InsightService::profile_column_view(None, "t_insight_e2e_absent", "amount")
         .expect_err("表不存在应当报错");
     let info = InsightService::describe_error(&err);
@@ -147,6 +163,7 @@ fn missing_result_set_is_reported_with_a_friendly_message() {
 /// 表探查：列元数据与行数来自 DuckDB，类型族按真实类型名判定，且**不产假分数**
 #[test]
 fn table_profile_lists_columns_without_fake_scores() {
+    let _serial = serial();
     let table = "t_insight_e2e_table";
     seed(
         table,
@@ -172,6 +189,7 @@ fn table_profile_lists_columns_without_fake_scores() {
 /// 多列分析：列清单来自**真实列元数据**（v1 恒空的 `availableColumns` 是该项从未跑通的根因）
 #[test]
 fn multi_column_view_lists_real_columns_and_multi_rules() {
+    let _serial = serial();
     let table = "t_insight_e2e_multi";
     seed(
         table,
@@ -207,6 +225,7 @@ fn multi_column_view_lists_real_columns_and_multi_rules() {
 /// 单值结果：两列完全线性相关时 Pearson 系数 ≈ 1，样本量逐行计数
 #[test]
 fn multi_rule_single_result_reaches_the_view_model() {
+    let _serial = serial();
     let table = "t_insight_e2e_pearson";
     let rows: Vec<String> = (1..=10).map(|i| format!("({i}, {})", i * 3)).collect();
     seed(
@@ -232,18 +251,19 @@ fn multi_rule_single_result_reaches_the_view_model() {
             .map(|r| r.value.clone())
             .unwrap_or_else(|| panic!("应有字段 {key}：{rows:?}"))
     };
-    let corr: f64 = value("correlation").parse().expect("相关系数应是数字");
+    let corr: f64 = value("相关系数").parse().expect("相关系数应是数字");
     assert!(
         (corr - 1.0).abs() < 1e-9,
         "完全线性相关应给出 1.0，实际 {corr}"
     );
-    assert_eq!(value("sample_size"), "10");
+    assert_eq!(value("样本量"), "10", "已知字段名展示为中文标签");
     assert!(notes.is_empty(), "该规则没有门控项，不该有提示");
 }
 
 /// 列表结果：交叉频次表按**数据形态**渲染成表格（表头来自规则输出字段）
 #[test]
 fn multi_rule_list_result_becomes_a_table() {
+    let _serial = serial();
     let table = "t_insight_e2e_cross_tab";
     seed(
         table,
@@ -265,8 +285,8 @@ fn multi_rule_list_result_becomes_a_table() {
     assert!(!headers.is_empty(), "表头不得为空：{result:?}");
     assert!(!rows.is_empty(), "至少应有频次不为零的格子");
     assert!(
-        headers.iter().any(|h| h.contains("count")),
-        "频次列应在表头里：{headers:?}"
+        headers.iter().any(|h| h == "计数"),
+        "频次列应在表头里（展示为「计数」）：{headers:?}"
     );
     assert!(
         rows.iter().any(|row| row.iter().any(|cell| cell == "2")),
@@ -280,6 +300,7 @@ fn multi_rule_list_result_becomes_a_table() {
 /// 同一个 `compute_column_quality`，所以列上的分数必须与摘要里的聚合对得上。
 #[test]
 fn table_evaluation_scores_every_column() {
+    let _serial = serial();
     let table = "t_insight_e2e_table_eval";
     let rows: Vec<String> = (1..=12)
         .map(|i| format!("({i}, {i}.5, 'v{i}')"))

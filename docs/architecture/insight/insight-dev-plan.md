@@ -23,6 +23,25 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 3 三批：多列分析的界面与接线（3.2 / 3.3 收尾）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **174 项** + 集成 **9 项**全绿（连跑 3 次稳定）；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 数据态改形状 | `InsightPanelState::Data` 不再带载荷：**载荷按 Tab 分开存**（`PanelData { column, table, multi }`）。Tab 条是「同一目标的多个视角」，切 Tab 不该丢掉别的视角已取到的数据（单格子设计下切「表」再切回「多列」会把表单与结果丢掉）（**D35**） | `model.rs` + `insight_view.rs` |
+| 渲染以载荷为准 | `render_body` 先看载荷、再看状态：错误态整页接管，没载荷时才分骨架 / 入口提示。于是「切到另一个 Tab 时后台还在取数」不会把已取到的那个 Tab 盖成骨架 | `insight_view.rs` |
+| 切 Tab 即取数 | `set_tab` 在**事件路径**补一次取数（载荷缺失才发）：多列 → 表单、列 / 表 → 对应画像。判定只看载荷在不在，不拿 `Loading` 当挡板（表目标先到的是表载荷，拿它挡就会把「切到多列」的第一次请求吃掉） | `insight_view.rs` |
+| 多列界面 | 列多选（带**序号**：顺序即参数顺序，相关性是有方向的）+ 规则单选（类型不匹配置灰并写明“需 N 列：…”）+ 执行 + 结果区（键值 / 表格）+ 门控提示 + 失败只挂一行提示（表单与已有结果照旧可见） | `insight_view.rs` |
+| 接缝 | 两个新事件：`MultiColumnRequested`（取表单）与 `MultiRunRequested`（执行）；执行失败不推整页错误态 | `jobs.rs` |
+| 测试辅助 | 新增 `test_support`（记录型宿主 `EventSink`）：订阅必须被持有这类细节只该错一次 | `test_support.rs`（新） |
+| 测试 | 实体 3（切 Tab 取数 / 选择顺序与执行门槛 / 结果与失败不动表单）+ 窗口 1（表单·单值·表格·提示逐帧）+ 接缝 1（真实接线：切 Tab → 表单 → 跑规则 → 结果回填） | 各文件测试模块 |
+
+**发现并修的真问题**：集成测试并行跑时抢**进程级并发配额**（上限 4）而随机报 `洞察分析任务过多`——加串行锁（与 `rule_state_guard` 同一手法），非并发引入。
+
+**Phase 3 收尾**：3.2 / 3.3 / 3.4 均已落地；剩下的是宿主侧入口（`Shared::open_insight_table` 与导航右键「查看统计」）。
+
+
 ### 2026-09-17 — Phase 3 二批：多列分析的数据层（3.2 一半 + 3.3 一半）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **169 项** + 集成 **9 项**全绿；本批文件 `cargo clippy --all-targets` 零告警）
@@ -541,8 +560,8 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | # | 任务 | 落点 | 状态 |
 | --- | --- | --- | --- |
 | 3.1 | 表探查视图：列元数据表（序号 / 列名 + PK 角标 / 类型 / 可空 / 质量分）+ 行数 + 评估入口 | `insight/src/insight_view.rs` | ✅ Phase 3 一批 |
-| 3.2 | 多列分析**重新设计**：列清单来源改为「当前结果集 / DuckDB 临时表的真实列元数据」（v1 的 `availableColumns` 恒空是该项从未跑通的根因） | `insight/src/service/mod.rs` | 🟡 数据层（Phase 3 二批）；UI 待接 |
-| 3.3 | 规则选择与结果渲染：单值 KV / `result_type = "list"` 表格 | `insight/src/insight_view.rs` | 🟡 渲染数据层完成（Phase 3 二批）；界面待接 |
+| 3.2 | 多列分析**重新设计**：列清单来源改为「当前结果集 / DuckDB 临时表的真实列元数据」（v1 的 `availableColumns` 恒空是该项从未跑通的根因） | `insight/src/service/mod.rs` | ✅ Phase 3 二/三批 |
+| 3.3 | 规则选择与结果渲染：单值 KV / `result_type = "list"` 表格 | `insight/src/insight_view.rs` | ✅ Phase 3 三批 |
 | 3.4 | 表探查 → 列画像下钻（点列名） | 同上 | ✅ Phase 3 一批 |
 
 ### Phase 4 — Schema 洞察报告

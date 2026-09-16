@@ -110,6 +110,28 @@ pub fn handle_event(
             table_name.clone(),
             cx,
         ),
+        InsightEvent::MultiColumnRequested {
+            temp_table,
+            table_name,
+        } => request_multi_view(
+            view,
+            project_root,
+            temp_table.clone(),
+            table_name.clone(),
+            cx,
+        ),
+        InsightEvent::MultiRunRequested {
+            temp_table,
+            rule_id,
+            columns,
+        } => request_multi_run(
+            view,
+            project_root,
+            temp_table.clone(),
+            rule_id.clone(),
+            columns.clone(),
+            cx,
+        ),
     }
 }
 
@@ -388,6 +410,59 @@ pub fn request_table_evaluation(
     .detach();
 }
 
+/// 多列表单：取真实列清单 + `category = multi` 的规则清单。
+///
+/// 与表探查共用同一次临时表内省（D32）；失败推整页错误态——表单本身就没东西可选。
+pub fn request_multi_view(
+    view: &Entity<InsightView>,
+    project_root: Option<PathBuf>,
+    temp_table: String,
+    table_name: String,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        InsightService::multi_column_view(project_root.as_deref(), &temp_table, &table_name)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(view) => panel.set_multi_view(view, cx),
+            Err(err) => {
+                let info = InsightService::describe_error(&err);
+                panel.set_error(info.message, info.retryable, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// 跑一条多列规则。
+///
+/// 失败**不推整页错误态**：表单与已选好的列还在，只把原因挂在结果区
+/// （整页转错误会让用户以为选项坏了，而实际只是这一条 SQL 没跑过）。
+pub fn request_multi_run(
+    view: &Entity<InsightView>,
+    project_root: Option<PathBuf>,
+    temp_table: String,
+    rule_id: String,
+    columns: Vec<String>,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        InsightService::run_multi_rule(project_root.as_deref(), &temp_table, &rule_id, &columns)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok((result, notes)) => panel.set_multi_result(result, notes, cx),
+            Err(err) => panel.set_multi_notice(InsightService::describe_error(&err).message, cx),
+        });
+    })
+    .detach();
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -502,8 +577,12 @@ mod tests {
         cx.run_until_parked();
 
         cx.update(|cx| {
-            let state = panel.read(cx).state();
-            let table = state.table().expect("表目标应回填表探查，而不是列画像");
+            let table = panel
+                .read(cx)
+                .data()
+                .table
+                .as_ref()
+                .expect("表目标应回填表探查，而不是列画像");
             assert_eq!(table.table_name, "orders");
             assert_eq!(table.row_count, 3);
             assert_eq!(table.columns.len(), 3);
@@ -540,7 +619,7 @@ mod tests {
             // 评估还没开始观察就没了（本仓踩过的同一个坑）
             let obs = host.update(cx, |_host, host_cx| {
                 host_cx.observe(&panel_for_obs, move |_this, panel, cx| {
-                    let progress = panel.read(cx).state().table().and_then(|t| t.progress);
+                    let progress = panel.read(cx).data().table.as_ref().and_then(|t| t.progress);
                     seen.lock().unwrap().push(progress);
                 })
             });
@@ -569,8 +648,9 @@ mod tests {
         cx.update(|cx| {
             let table = panel
                 .read(cx)
-                .state()
-                .table()
+                .data()
+                .table
+                .as_ref()
                 .expect("评估后仍是表探查数据")
                 .clone();
             assert!(table.progress.is_none(), "跑完进度行必须消失");
@@ -599,6 +679,85 @@ mod tests {
             Some(&None),
             "最后一帧应是「无进度」的完成态：{traces:?}"
         );
+    }
+
+    /// 多列分析：切到「多列」Tab → 表单取数 → 跑规则 → 结果回填（全程真实接线）
+    #[gpui_kit::test]
+    fn multi_column_flow_loads_the_form_and_runs_a_rule(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let table = "t_insight_jobs_multi";
+        let rows: Vec<String> = (1..=8).map(|i| format!("({i}, {})", i * 2)).collect();
+        seed_probe_table(
+            table,
+            "x INTEGER, y INTEGER",
+            &format!("VALUES {}", rows.join(",")),
+        );
+
+        let (host, panel, _sub) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let sub = host.update(cx, |_host, host_cx| attach(&panel, host_cx, || None));
+            (host, panel, sub)
+        });
+        let _host = host;
+
+        // 1) 目标 + 切到「多列」：这一下会发 MultiColumnRequested（切 Tab 即取数）
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::Table {
+                        temp_table: table.into(),
+                        table_name: "pairs".into(),
+                    },
+                    cx,
+                );
+                panel.set_tab(crate::model::PanelTab::MultiColumn, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let view = panel
+                .read(cx)
+                .data()
+                .multi
+                .as_ref()
+                .expect("多列表单应已回填");
+            assert_eq!(view.table_name, "pairs");
+            let names: Vec<&str> = view.columns.iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(names, vec!["x", "y"]);
+            assert!(
+                view.rules.iter().any(|r| r.id == "pearson-correlation"),
+                "内置多列规则应在候选里：{:?}",
+                view.rules.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
+            );
+        });
+
+        // 2) 选两列 + 一条规则 → 执行 → 结果回填
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_multi_column("x", cx);
+                panel.toggle_multi_column("y", cx);
+                panel.set_multi_rule("pearson-correlation", cx);
+                panel.run_multi(cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let view = panel.read(cx).data().multi.as_ref().unwrap().clone();
+            assert!(!panel.read(cx).multi_running(), "跑完要解除「分析中」");
+            let Some(crate::model::MultiResultView::Single(rows)) = view.result else {
+                panic!("Pearson 应给出单值结果：{:?}", view.result);
+            };
+            let corr = rows
+                .iter()
+                .find(|r| r.label == "相关系数")
+                .map(|r| r.value.clone())
+                .expect("应有 correlation 字段（展示为「相关系数」）");
+            assert_eq!(corr, "1", "y = 2x 是完全线性相关：{rows:?}");
+            assert!(view.notes.is_empty());
+        });
     }
 
     /// 宿主只写一行（`attach`），所以这一行的契约必须在本 crate 内验住：

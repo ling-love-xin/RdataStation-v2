@@ -21,6 +21,8 @@
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::radio::Radio;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme};
@@ -29,8 +31,8 @@ use gpui_kit::*;
 use crate::commands::InsightRefresh;
 use crate::model::{
     ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, InsightPanelState,
-    InsightTarget, NoteLevel, PanelData, PanelTab, QualityNote, SampleCell, StatRow,
-    TableColumnView, TableProfileView,
+    InsightTarget, MultiColumnView, MultiResultView, MultiRuleView, NoteLevel, PanelData, PanelTab,
+    QualityNote, SampleCell, StatRow, TableColumnView, TableProfileView,
 };
 use crate::quality_scorer::Grade;
 use crate::rule_view::RulesView;
@@ -54,6 +56,17 @@ pub enum InsightEvent {
     TableEvaluateRequested {
         temp_table: String,
         table_name: String,
+    },
+    /// 请宿主加载多列分析的表单（真实列清单 + `category = multi` 的规则）
+    MultiColumnRequested {
+        temp_table: String,
+        table_name: String,
+    },
+    /// 请宿主执行一条多列规则（列按选择顺序对位到 `col1` / `col2` …）
+    MultiRunRequested {
+        temp_table: String,
+        rule_id: String,
+        columns: Vec<String>,
     },
 }
 
@@ -93,6 +106,8 @@ impl ColumnSection {
 pub struct InsightView {
     target: Option<InsightTarget>,
     state: InsightPanelState,
+    /// 各 Tab 的载荷（按 Tab 分开存：切 Tab 不丢别的视角已取到的数据）
+    data: PanelData,
     tab: PanelTab,
     /// 四区折叠态：属用户偏好，⟳ 重算与切换 Tab 都不得清空
     open_sections: [bool; 4],
@@ -106,6 +121,15 @@ pub struct InsightView {
     /// 随面板在构造期创建：对话框数据靠 `jobs::attach_rules` 后台取，
     /// 而「开关一条规则」与面板数据同属一个会话，实体提前存在才接得上订阅。
     rules: Entity<RulesView>,
+    /// 「多列」Tab 的选择状态（数据在 `PanelData::Multi` 里，这里只放“用户选了什么”）
+    ///
+    /// 选中的**列顺序就是参数顺序**（`col1` / `col2` …），所以用 `Vec` 而不是集合。
+    multi_selected: Vec<String>,
+    multi_rule: Option<String>,
+    /// 多列规则执行中（按钮置灰；结果区显示提示）
+    multi_running: bool,
+    /// 多列执行的失败提示（列表照旧可见：整页转错误态会让用户以为表单坏了）
+    multi_notice: Option<String>,
 }
 
 impl EventEmitter<InsightEvent> for InsightView {}
@@ -115,6 +139,7 @@ impl InsightView {
         Self {
             target: None,
             state: InsightPanelState::Empty,
+            data: PanelData::default(),
             tab: PanelTab::Column,
             open_sections: ColumnSection::default_open(),
             // 保守初值：宿主装配时会立刻告知真实项目状态（`set_project_open`）。
@@ -122,6 +147,10 @@ impl InsightView {
             project_open: false,
             // 无 I/O：真正的取数与写库在 `jobs::attach_rules` 接到事件之后
             rules: cx.new(RulesView::new),
+            multi_selected: Vec::new(),
+            multi_rule: None,
+            multi_running: false,
+            multi_notice: None,
         }
     }
 
@@ -169,16 +198,126 @@ impl InsightView {
         cx.notify();
     }
 
+    /// 数据态载荷（宿主与测试读；三个 Tab 各自的最近一次结果）
+    pub fn data(&self) -> &PanelData {
+        &self.data
+    }
+
     /// 出数（列画像）
     pub fn set_profile(&mut self, profile: ColumnProfileView, cx: &mut Context<Self>) {
-        self.state = InsightPanelState::Data(PanelData::Column(profile));
+        self.data = std::mem::take(&mut self.data).with_column(profile);
+        self.state = InsightPanelState::Data;
         cx.notify();
     }
 
     /// 出数（表探查）
     pub fn set_table_profile(&mut self, profile: TableProfileView, cx: &mut Context<Self>) {
-        self.state = InsightPanelState::Data(PanelData::Table(profile));
+        self.data = std::mem::take(&mut self.data).with_table(profile);
+        self.state = InsightPanelState::Data;
         cx.notify();
+    }
+
+    /// 出数（多列表单）：列清单与规则清单换了，选中项要跟着修剪
+    ///
+    /// 修剪而不是清空：临时表重建后列可能没变，把用户的选择无差别抹掉是坏体验。
+    pub fn set_multi_view(&mut self, view: MultiColumnView, cx: &mut Context<Self>) {
+        self.multi_selected.retain(|name| view.column(name).is_some());
+        if let Some(rule) = self.multi_rule.clone() {
+            if !view.rules.iter().any(|r| r.id == rule) {
+                self.multi_rule = None;
+            }
+        }
+        self.multi_selected.dedup();
+        self.data = std::mem::take(&mut self.data).with_multi(view);
+        self.state = InsightPanelState::Data;
+        cx.notify();
+    }
+
+    /// 多列规则执行结果（保留表单：用户可以换个规则再跑）
+    pub fn set_multi_result(
+        &mut self,
+        result: MultiResultView,
+        notes: Vec<QualityNote>,
+        cx: &mut Context<Self>,
+    ) {
+        self.multi_running = false;
+        self.multi_notice = None;
+        if let Some(view) = self.data.multi.clone() {
+            self.data.multi = Some(view.with_result(result, notes));
+        }
+        cx.notify();
+    }
+
+    /// 多列执行失败：只挂一条提示（表单与已有结果照旧可见）
+    pub fn set_multi_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.multi_running = false;
+        self.multi_notice = Some(message.into());
+        cx.notify();
+    }
+
+    /// 多列选择：勾上就排在**末尾**（顺序即参数顺序），再点取消
+    pub fn toggle_multi_column(&mut self, column: &str, cx: &mut Context<Self>) {
+        if let Some(ix) = self.multi_selected.iter().position(|name| name == column) {
+            self.multi_selected.remove(ix);
+        } else {
+            self.multi_selected.push(column.to_string());
+        }
+        self.multi_notice = None;
+        cx.notify();
+    }
+
+    pub fn set_multi_rule(&mut self, rule_id: impl Into<String>, cx: &mut Context<Self>) {
+        self.multi_rule = Some(rule_id.into());
+        self.multi_notice = None;
+        cx.notify();
+    }
+
+    /// 「执行分析」：校验通过才发请求（校验不过按钮本身就是置灰的，这里兵底）
+    pub fn run_multi(&mut self, cx: &mut Context<Self>) {
+        let Some(rule_id) = self.multi_rule.clone() else {
+            return;
+        };
+        let Some(temp_table) = self.target.as_ref().map(|t| t.temp_table().to_string()) else {
+            return;
+        };
+        if !self.multi_ready() {
+            return;
+        }
+        self.multi_running = true;
+        self.multi_notice = None;
+        cx.emit(InsightEvent::MultiRunRequested {
+            temp_table,
+            rule_id,
+            columns: self.multi_selected.clone(),
+        });
+        cx.notify();
+    }
+
+    /// 当前选法能不能跑（列数 + 类型族都满足选中的规则）
+    fn multi_ready(&self) -> bool {
+        let Some(view) = self.data.multi.as_ref() else {
+            return false;
+        };
+        let Some(rule_id) = self.multi_rule.as_deref() else {
+            return false;
+        };
+        view.rules
+            .iter()
+            .find(|rule| rule.id == rule_id)
+            .is_some_and(|rule| rule.accepts(&view.kinds_of(&self.multi_selected)))
+    }
+
+    /// 选中列（供宿主与测试读）
+    pub fn multi_selection(&self) -> &[String] {
+        &self.multi_selected
+    }
+
+    pub fn multi_rule_id(&self) -> Option<&str> {
+        self.multi_rule.as_deref()
+    }
+
+    pub fn multi_running(&self) -> bool {
+        self.multi_running
     }
 
     /// 「评估全表」：发请求并进入评估中（按钮变灰、进度行出现）。
@@ -192,10 +331,10 @@ impl InsightView {
         else {
             return;
         };
-        if let InsightPanelState::Data(PanelData::Table(profile)) = &self.state {
+        if let Some(profile) = &self.data.table {
             let total = profile.columns.len();
             let next = profile.evaluating(0, total);
-            self.state = InsightPanelState::Data(PanelData::Table(next));
+            self.data.table = Some(next);
         }
         cx.emit(InsightEvent::TableEvaluateRequested {
             temp_table,
@@ -230,11 +369,70 @@ impl InsightView {
     }
 
     /// 切 Tab（保留折叠偏好与已有数据：切回来仍看得到上次结果）
+    ///
+    /// **切到某个 Tab 就是“看这份数据”的意图**，因此这里会在事件路径上补一次取数
+    /// （数据态只有一个格子，切到没有数据的 Tab 就会只剩期次提示）：
+    /// - 「多列」：该临时表还没取过 → 发 `MultiColumnRequested`
+    /// - 「列」：目标是列且当前不是列画像 → 重发 `ProfileRequested`
+    /// - 「表」：目标带临时表且当前不是表探查 → 重发 `ProfileRequested`
+    ///
+    /// 不能放在 render 里做：那会造成「渲染一次发一次请求」。
     pub fn set_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) {
         if self.tab != tab {
             self.tab = tab;
             cx.notify();
         }
+        self.ensure_data_for_tab(tab, cx);
+    }
+
+    /// 补齐当前 Tab 需要的数据（事件路径调用）。
+    ///
+    /// 判定只看**该 Tab 的载荷在不在**：不在就取。不拿 `Loading` 当“正在取数”的挡板——
+    /// 目标是表时先到的是表载荷，此时切到「多列」拉不到东西（载荷按 Tab 分开存，
+    /// 所以“正在加载”并不代表“这个 Tab 正在加载”）。重复点同一 Tab 最多多发一次
+    /// 幂等的内省，而 `is_error()` 不抢跑（错误态的入口是「重试」）。
+    fn ensure_data_for_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) {
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        if self.state.is_error() {
+            return;
+        }
+        let missing = match tab {
+            PanelTab::Column => self.data.column.is_none(),
+            PanelTab::Table => self.data.table.is_none(),
+            PanelTab::MultiColumn => !self
+                .data
+                .multi
+                .as_ref()
+                .is_some_and(|view| view.is_for(target.temp_table())),
+            PanelTab::Schema | PanelTab::History => false,
+        };
+        if !missing {
+            return;
+        }
+
+        // 列目标才需要列名：表 / 多列目标没有「哪一列」这回事，取整表
+        let request = match tab {
+            PanelTab::Column => match &target {
+                InsightTarget::Column { .. } => InsightEvent::ProfileRequested { target },
+                _ => return,
+            },
+            PanelTab::Table => InsightEvent::ProfileRequested {
+                target: InsightTarget::Table {
+                    temp_table: target.temp_table().to_string(),
+                    table_name: target.table_name(),
+                },
+            },
+            PanelTab::MultiColumn => InsightEvent::MultiColumnRequested {
+                temp_table: target.temp_table().to_string(),
+                table_name: target.table_name(),
+            },
+            PanelTab::Schema | PanelTab::History => return,
+        };
+        self.state = InsightPanelState::Loading;
+        cx.emit(request);
+        cx.notify();
     }
 
     fn set_tab_from_index(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -364,7 +562,7 @@ impl InsightView {
                     .child(detail),
             );
         }
-        if let Some(profile) = self.state.column() {
+        if let Some(profile) = &self.data.column {
             head = head.child(
                 div()
                     .text_xs()
@@ -379,7 +577,7 @@ impl InsightView {
                     )),
             );
         }
-        if let Some(profile) = self.state.table() {
+        if let Some(profile) = &self.data.table {
             head = head.child(
                 div()
                     .text_xs()
@@ -392,8 +590,9 @@ impl InsightView {
 
     /// 当前数据的类型族（无数据时退回目标声明的类型字符串）
     fn data_kind(&self) -> ColumnKind {
-        self.state
-            .column()
+        self.data
+            .column
+            .as_ref()
             .map(|profile| profile.kind)
             .unwrap_or(ColumnKind::Unknown)
     }
@@ -419,7 +618,11 @@ impl InsightView {
             )
     }
 
-    /// 内容主体（四态）。图标尺寸由 `render` 从 `rem_size()` 换算后传入（视图不写裸 px）。
+    /// 内容主体。图标尺寸由 `render` 从 `rem_size()` 换算后传入（视图不写裸 px）。
+    ///
+    /// 渲染以**载荷**为准，状态只管两种例外：错误态整页接管；没载荷时才看
+    /// 加载中（骨架）还是空态（入口提示）。这样「切到另一个 Tab 时后台还在取数」
+    /// 不会把已取到的那个 Tab 的内容盖成骨架。
     fn render_body(
         &self,
         entity: &Entity<Self>,
@@ -427,39 +630,36 @@ impl InsightView {
         empty_icon: Pixels,
         inline_icon: Pixels,
     ) -> Vec<AnyElement> {
-        match (&self.state, self.tab) {
-            (InsightPanelState::Empty, _) => vec![
-                empty_state(IconName::Info, self.empty_hint(), theme, empty_icon).into_any_element(),
-            ],
-            (InsightPanelState::Loading, _) => vec![skeleton(theme).into_any_element()],
-            (InsightPanelState::Error { message, retryable }, _) => vec![
+        if let InsightPanelState::Error { message, retryable } = &self.state {
+            return vec![
                 error_block(message, *retryable, entity.clone(), theme, inline_icon)
                     .into_any_element(),
-            ],
-            (InsightPanelState::Data(data), PanelTab::Column) => match data.as_column() {
-                Some(profile) => vec![self
-                    .render_column_profile(profile, entity, theme, inline_icon)
-                    .into_any_element()],
-                // 数据态里装的不是列表：按「本 Tab 尚无内容」处理，不硬塞
-                None => vec![
-                    empty_state(IconName::Info, tab_hint(self.tab), theme, empty_icon)
-                        .into_any_element(),
-                ],
-            },
-            (InsightPanelState::Data(data), PanelTab::Table) => match data.as_table() {
-                Some(profile) => vec![self
-                    .render_table_profile(profile, entity, theme, inline_icon)
-                    .into_any_element()],
-                None => vec![
-                    empty_state(IconName::Info, tab_hint(self.tab), theme, empty_icon)
-                        .into_any_element(),
-                ],
-            },
-            // 其余 Tab 在后续期次落地：给期次提示，不显示假数据
-            (InsightPanelState::Data(_), tab) => vec![
-                empty_state(IconName::Info, tab_hint(tab), theme, empty_icon).into_any_element(),
-            ],
+            ];
         }
+
+        let payload: Option<AnyElement> = match self.tab {
+            PanelTab::Column => self.data.as_column().map(|profile| {
+                self.render_column_profile(profile, entity, theme, inline_icon)
+                    .into_any_element()
+            }),
+            PanelTab::Table => self.data.as_table().map(|profile| {
+                self.render_table_profile(profile, entity, theme, inline_icon)
+                    .into_any_element()
+            }),
+            PanelTab::MultiColumn => self.data.as_multi().map(|view| {
+                self.render_multi_view(view, entity, theme, inline_icon)
+                    .into_any_element()
+            }),
+            // 后续期次落地：没有载荷也没有骨架，直接给期次提示
+            PanelTab::Schema | PanelTab::History => None,
+        };
+        if let Some(element) = payload {
+            return vec![element];
+        }
+        if self.state.is_loading() {
+            return vec![skeleton(theme).into_any_element()];
+        }
+        vec![empty_state(IconName::Info, self.empty_hint(), theme, empty_icon).into_any_element()]
     }
 
     fn empty_hint(&self) -> &'static str {
@@ -477,7 +677,7 @@ impl InsightView {
         if self.tab != PanelTab::Column {
             return None;
         }
-        let score = self.state.column()?.score.as_ref()?;
+        let score = self.data.column.as_ref()?.score.as_ref()?;
         let colors = theme.colors;
         let color = grade_color(score.grade, theme);
 
@@ -645,6 +845,154 @@ impl InsightView {
         )
     }
 
+    /// 多列分析（Tab「多列」，Phase 3.3）：列多选 + 规则 + 执行 + 结果。
+    ///
+    /// 选择顺序就是参数顺序（`col1` / `col2` …），所以选中的列带序号——
+    /// 没有序号的话「哪列进 col1」全靠猜，而方向性规则（相关系数）是不对称的。
+    fn render_multi_view(
+        &self,
+        view: &MultiColumnView,
+        entity: &Entity<Self>,
+        theme: &Theme,
+        inline_icon: Pixels,
+    ) -> Div {
+        let colors = theme.colors;
+        let mut body = div().v_flex().w_full().gap_2();
+
+        // 1) 列多选
+        body = body.child(section_title("选择列（顺序即参数顺序）", theme));
+        if view.columns.is_empty() {
+            body = body.child(muted_line("该结果集没有可分析的列", theme));
+        }
+        for column in &view.columns {
+            let picked = self
+                .multi_selected
+                .iter()
+                .position(|name| name.as_str() == column.name.as_str())
+                .map(|ix| ix + 1);
+            body = body.child(multi_column_row(
+                column,
+                picked,
+                entity,
+                theme,
+                inline_icon,
+            ));
+        }
+
+        // 2) 规则单选
+        body = body.child(section_title("选择规则", theme));
+        if view.rules.is_empty() {
+            body = body.child(muted_line(
+                "没有可用的多列规则——可在面板头 ⚙ 里检查规则是否被禁用",
+                theme,
+            ));
+        }
+        let kinds = view.kinds_of(&self.multi_selected);
+        for rule in &view.rules {
+            let usable = rule.accepts(&kinds);
+            body = body.child(multi_rule_row(
+                rule,
+                self.multi_rule.as_deref() == Some(rule.id.as_str()),
+                usable,
+                entity,
+                theme,
+            ));
+        }
+
+        // 3) 执行（不可用时置灰；原因由规则行的类型提示给出）
+        body = body.child(
+            div().h_flex().w_full().gap_2().child(div().flex_1()).child(
+                Button::new("insight-multi-run")
+                    .small()
+                    .label(if self.multi_running { "分析中…" } else { "执行分析" })
+                    .disabled(!self.multi_ready() || self.multi_running)
+                    .tooltip("按选中顺序把列对位到规则的 col1 / col2 …")
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| entity.update(app, |view, cx| view.run_multi(cx))
+                    }),
+            ),
+        );
+
+        // 4) 失败提示（表单照旧可见）
+        if let Some(notice) = &self.multi_notice {
+            body = body.child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(colors.danger)
+                    .child(Icon::new(IconName::TriangleAlert).size(inline_icon))
+                    .child(div().flex_1().min_w_0().child(notice.clone())),
+            );
+        }
+
+        // 5) 结果
+        match &view.result {
+            None => {
+                body = body.child(div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child("选好列与规则后点「执行分析」"));
+            }
+            Some(result) if result.is_empty() => {
+                body = body.child(muted_line("规则没有返回数据", theme));
+            }
+            Some(MultiResultView::Single(rows)) => {
+                body = body.child(section_title("结果", theme));
+                for row in rows {
+                    body = body.child(
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .gap_2()
+                            .py_0p5()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(colors.muted_foreground)
+                                    .text_ellipsis()
+                                    .child(row.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_sm()
+                                    .text_color(colors.foreground)
+                                    .child(row.value.clone()),
+                            ),
+                    );
+                }
+            }
+            Some(MultiResultView::Table { headers, rows }) => {
+                body = body.child(section_title("结果", theme));
+                body = body.child(multi_table_header(headers, theme));
+                for row in rows {
+                    body = body.child(multi_table_row(row, theme));
+                }
+            }
+        }
+
+        // 6) 质量门控提示（只有未过的项）
+        for note in &view.notes {
+            body = body.child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(colors.warning)
+                    .child(Icon::new(IconName::TriangleAlert).size(inline_icon))
+                    .child(div().flex_1().min_w_0().child(note.text.clone())),
+            );
+        }
+
+        body
+    }
+
     /// 列画像四区
     fn render_column_profile(
         &self,
@@ -806,6 +1154,190 @@ fn ratio_bar(ratio: f32, height: f32, fill: Hsla, theme: &Theme) -> Div {
                 .rounded_sm()
                 .bg(fill),
         )
+}
+
+// ==================== 多列分析的片段（Phase 3.3） ====================
+
+fn section_title(text: &str, theme: &Theme) -> Div {
+    div()
+        .text_xs()
+        .text_color(theme.colors.muted_foreground)
+        .child(text.to_string())
+}
+
+/// 多列 Tab 的一列：勾选 + 序号 + 列名 + 类型徐标
+fn multi_column_row(
+    column: &TableColumnView,
+    picked: Option<usize>,
+    entity: &Entity<InsightView>,
+    theme: &Theme,
+    inline_icon: Pixels,
+) -> Div {
+    let colors = theme.colors;
+    let name = column.name.clone();
+    let row = div()
+        .h_flex()
+        .w_full()
+        .gap_2()
+        .h(rems(ui::ROW_HEIGHT))
+        .px_1()
+        .child(
+            Checkbox::new(ElementId::Name(
+                format!("insight-multi-col-{}", column.name).into(),
+            ))
+            .checked(picked.is_some())
+            .on_click({
+                let entity = entity.clone();
+                let name = name.clone();
+                move |_, _, app| {
+                    entity.update(app, |view, cx| view.toggle_multi_column(&name, cx))
+                }
+            }),
+        )
+        .child(
+            // 序号：顺序即参数顺序（col1 / col2 …）
+            div()
+                .flex_none()
+                .w(rems(ui::INSIGHT_TABLE_INDEX_WIDTH))
+                .text_xs()
+                .text_color(if picked.is_some() {
+                    colors.primary
+                } else {
+                    colors.muted_foreground
+                })
+                .child(match picked {
+                    Some(ix) => format!("{ix}."),
+                    None => "·".to_string(),
+                }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .text_color(colors.foreground)
+                .text_ellipsis()
+                .child(column.name.clone()),
+        )
+        .child(kind_badge(column.kind, theme));
+    if column.kind == ColumnKind::Unknown {
+        return row.child(
+            Icon::new(IconName::Info)
+                .size(inline_icon)
+                .text_color(colors.muted_foreground),
+        );
+    }
+    row
+}
+
+/// 多列 Tab 的规则行：单选框 + 名称 + 类型提示（不可用时压暗并说明原因）
+fn multi_rule_row(
+    rule: &MultiRuleView,
+    selected: bool,
+    usable: bool,
+    entity: &Entity<InsightView>,
+    theme: &Theme,
+) -> Div {
+    let colors = theme.colors;
+    let mut row = div()
+        .h_flex()
+        .w_full()
+        .gap_2()
+        .h(rems(ui::ROW_HEIGHT))
+        .px_1()
+        .child(
+            Radio::new(ElementId::Name(
+                format!("insight-multi-rule-{}", rule.id).into(),
+            ))
+            .checked(selected)
+            .disabled(!usable)
+            .on_click({
+                let entity = entity.clone();
+                let id = rule.id.clone();
+                move |_, _, app| entity.update(app, |view, cx| view.set_multi_rule(id.clone(), cx))
+            }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .text_color(if usable {
+                    colors.foreground
+                } else {
+                    colors.muted_foreground
+                })
+                .text_ellipsis()
+                .child(rule.name.clone()),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(rule.types_hint()),
+        );
+    if !usable {
+        // 不可用不是因为坏了，而是“这几列不对”：把原因写出来，别让点不动成为谜
+        let need = if rule.arity() == 0 {
+            "无需列".to_string()
+        } else {
+            format!("需 {} 列：{}", rule.arity(), rule.types_hint())
+        };
+        row = row.child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(need),
+        );
+    }
+    row
+}
+
+/// 列表结果的表头（列数动态：每列等宽，长文本省略尾）
+fn multi_table_header(headers: &[String], theme: &Theme) -> Div {
+    let colors = theme.colors;
+    let mut row = div()
+        .h_flex()
+        .w_full()
+        .gap_2()
+        .px_1()
+        .py_0p5()
+        .bg(colors.list_hover)
+        .text_xs()
+        .text_color(colors.muted_foreground);
+    for header in headers {
+        row = row.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                .child(header.clone()),
+        );
+    }
+    row
+}
+
+fn multi_table_row(cells: &[String], theme: &Theme) -> Div {
+    let colors = theme.colors;
+    let mut row = div().h_flex().w_full().gap_2().px_1().py_0p5().text_xs();
+    for (ix, cell) in cells.iter().enumerate() {
+        row = row.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                // 第一列是行标签（如交叉频次表的行值）：给正常前景色，其余列压一级
+                .text_color(if ix == 0 {
+                    colors.foreground
+                } else {
+                    colors.muted_foreground
+                })
+                .child(cell.clone()),
+        );
+    }
+    row
 }
 
 /// 表探查的表头行
@@ -1255,16 +1787,65 @@ fn truncate(text: &str, max_chars: usize) -> String {
 mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
-    use super::{truncate, InsightView};
+    use super::{truncate, InsightEvent, InsightView};
     use crate::model::{
-        ColumnProfileView, InsightPanelState, InsightTarget, PanelTab, TableProfileView,
+        ColumnProfileView, InsightPanelState, InsightTarget, MultiColumnView, MultiResultView,
+        MultiRuleView, PanelTab, TableProfileView,
     };
     // 领域类型从 crate 根再导出引用（`model.rs` 里对 `types` 的 `use` 是私有的）
     use crate::{
         BooleanStats, ColumnInsightFull, ColumnQualityEntry, ColumnStats, ColumnStatsDetail,
-        DateTimeStats, DistributionBin, NumericStats, TableColumnMeta, TableProfile, TableQuality,
-        TextFrequency, TextStats,
+        DateTimeStats, DistributionBin, KeyValueRow, NoteLevel, NumericStats, QualityNote,
+        TableColumnMeta, TableProfile, TableQuality, TextFrequency, TextStats,
     };
+
+    /// 多列分析的典型形态：三列（数值 / 数值 / 文本）+ 两条规则（一条吃两数值、一条吃两文本）
+    fn multi_view() -> MultiColumnView {
+        let rule = |id: &str, name: &str, family: &str| MultiRuleView {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            applies_to: vec![family.into(), family.into()],
+            column_params: vec!["col1".into(), "col2".into()],
+            result_type: None,
+        };
+        MultiColumnView::from_profile(
+            &TableProfile {
+                table_name: "t_multi_tab".into(),
+                db_type: "DuckDB".into(),
+                columns: vec![
+                    TableColumnMeta {
+                        column_name: "id".into(),
+                        data_type: "BIGINT".into(),
+                        is_nullable: false,
+                        is_primary_key: false,
+                        ordinal_position: 1,
+                    },
+                    TableColumnMeta {
+                        column_name: "amount".into(),
+                        data_type: "DECIMAL(12,2)".into(),
+                        is_nullable: true,
+                        is_primary_key: false,
+                        ordinal_position: 2,
+                    },
+                    TableColumnMeta {
+                        column_name: "note".into(),
+                        data_type: "VARCHAR".into(),
+                        is_nullable: true,
+                        is_primary_key: false,
+                        ordinal_position: 3,
+                    },
+                ],
+                row_count: Some(4),
+                schema_name: None,
+            },
+            "orders",
+            vec![
+                rule("pair-numeric", "数值对相关系数", "Numeric"),
+                rule("pair-text", "文本交叉频次", "Text"),
+            ],
+        )
+    }
 
     /// 三列表（数值 / 数值 / 未识别）——表探查的典型形态
     fn table_view() -> TableProfileView {
@@ -1596,7 +2177,7 @@ mod tests {
         draw(cx);
         view.update(cx, |view, _| {
             assert_eq!(view.tab(), PanelTab::Table, "表目标应落到「表」Tab");
-            let table = view.state().table().expect("表探查数据）；");
+            let table = view.data().table.as_ref().expect("表探查数据）；");
             assert!(table.columns.iter().all(|c| c.score.is_none()));
         });
 
@@ -1630,7 +2211,7 @@ mod tests {
         });
         draw(cx);
         view.update(cx, |view, _| {
-            let table = view.state().table().unwrap();
+            let table = view.data().table.as_ref().unwrap();
             assert!(table.quality.is_some());
             assert!(table.progress.is_none());
         });
@@ -1652,6 +2233,307 @@ mod tests {
             });
         });
         draw(cx);
+    }
+
+    /// 多列 Tab：切过去才取数（事件路径），同一临时表不重复取
+    #[gpui_kit::test]
+    fn switching_to_the_multi_tab_loads_the_form(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let events = crate::test_support::event_sink(&view, cx);
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_multi_tab".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+            });
+        });
+        // 先到达表探查数据（真实接线会在稍后回填）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_table_profile(table_view(), cx))
+        });
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_tab(PanelTab::MultiColumn, cx))
+        });
+        assert!(
+            view.read_with(cx, |view, _| view.state().is_loading()),
+            "切到还没数据的 Tab 应先进加载态"
+        );
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                InsightEvent::MultiColumnRequested { temp_table, .. } if temp_table == "t_multi_tab"
+            )),
+            "切 Tab 应发一次取数请求：{:?}",
+            events.borrow()
+        );
+
+        // 数据回填后再切回来：不再重复请求（这份数据就是这个临时表的）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_multi_view(multi_view(), cx))
+        });
+        events.take();
+        cx.update(|_window, cx| view.update(cx, |view, cx| view.set_tab(PanelTab::Table, cx)));
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_tab(PanelTab::MultiColumn, cx))
+        });
+        assert!(
+            !events
+                .borrow()
+                .iter()
+                .any(|e| matches!(e, InsightEvent::MultiColumnRequested { .. })),
+            "同一临时表的数据已就位就不该再请求多列表单（切回「表」Tab 重取表探查是另一回事）：{:?}",
+            events.borrow()
+        );
+        assert!(!view.read_with(cx, |view, _| view.state().is_loading()));
+    }
+
+    /// 多列选择：顺序即参数顺序；执行要过“列数 + 类型族”两道判定
+    #[gpui_kit::test]
+    fn multi_selection_order_drives_the_run_request(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let events = crate::test_support::event_sink(&view, cx);
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_multi_run".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+                view.set_multi_view(multi_view(), cx);
+            });
+        });
+        // `set_target` 自己会发一次画像请求：断言“不发请求”之前先把它清掉
+        events.take();
+
+        // 先选后发的顺序：amount → id（相关性是有方向的，顺序不能乱）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.toggle_multi_column("amount", cx);
+                view.toggle_multi_column("id", cx);
+            });
+        });
+        assert_eq!(
+            view.read_with(cx, |view, _| view.multi_selection().to_vec()),
+            vec!["amount".to_string(), "id".to_string()]
+        );
+
+        // 规则没选时不能跑
+        cx.update(|_window, cx| view.update(cx, |view, cx| view.run_multi(cx)));
+        assert!(events.borrow().is_empty(), "没选规则不该发请求");
+
+        // 选一条数值规则 → 可跑
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_multi_rule("pair-numeric", cx))
+        });
+        cx.update(|_window, cx| view.update(cx, |view, cx| view.run_multi(cx)));
+        assert!(view.read_with(cx, |view, _| view.multi_running()));
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                InsightEvent::MultiRunRequested { rule_id, columns, .. }
+                    if rule_id == "pair-numeric" && columns.as_slice() == ["amount".to_string(), "id".to_string()]
+            )),
+            "应带选中顺序的列：{:?}",
+            events.borrow()
+        );
+
+        // 换成一条只吃文本的规则：列不匹配 → 置灰且发不出请求
+        events.take();
+        // 先把上一次跑到一半的请求收尾（真实接线里由接缝回填，这里手动完成），
+        // 否则 multi_running 会一直是 true，下面的断言就测不到东西
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_multi_result(
+                    MultiResultView::Single(vec![KeyValueRow {
+                        label: "correlation".into(),
+                        value: "1".into(),
+                    }]),
+                    Vec::new(),
+                    cx,
+                )
+            });
+        });
+        assert!(!view.read_with(cx, |view, _| view.multi_running()));
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_multi_rule("pair-text", cx);
+                view.run_multi(cx);
+            });
+        });
+        assert!(events.borrow().is_empty(), "类型不匹配不该发请求");
+        assert!(!view.read_with(cx, |view, _| view.multi_running()));
+    }
+
+    /// 结果与失败：写结果不动表单；失败只挂提示（表单与已有结果照旧可见）
+    #[gpui_kit::test]
+    fn multi_result_keeps_the_form_and_failures_only_notify(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_multi_result".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+                view.set_multi_view(multi_view(), cx);
+                view.toggle_multi_column("amount", cx);
+                view.set_multi_rule("pair-numeric", cx);
+            });
+        });
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_multi_result(
+                    MultiResultView::Single(vec![KeyValueRow {
+                        label: "correlation".into(),
+                        value: "0.98".into(),
+                    }]),
+                    vec![QualityNote {
+                        level: NoteLevel::Warning,
+                        text: "样本量偏少".into(),
+                    }],
+                    cx,
+                )
+            });
+        });
+        view.update(cx, |view, _| {
+            let multi = view.data().multi.as_ref().expect("应仍是多列数据");
+            assert!(multi.result.is_some());
+            assert_eq!(multi.notes.len(), 1);
+            assert_eq!(multi.columns.len(), 3, "写结果不动列清单");
+            assert_eq!(view.multi_selection().len(), 1, "写结果不动选择");
+            assert!(!view.multi_running());
+        });
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_multi_notice("列 [qty] 不存在", cx))
+        });
+        view.update(cx, |view, _| {
+            let multi = view.data().multi.as_ref().expect("失败不该清掉表单");
+            assert!(multi.result.is_some(), "已有结果也不该被清");
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // 数据刷新会修剪选择：消失的列不再被选中，消失的规则不再被选
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                let mut next = multi_view();
+                next.columns.retain(|c| c.name != "amount");
+                next.rules.retain(|r| r.id != "pair-numeric");
+                view.set_multi_view(next, cx);
+            });
+        });
+        view.update(cx, |view, _| {
+            assert!(view.multi_selection().is_empty(), "消失的列要从选择里摘掉");
+            assert_eq!(view.multi_rule_id(), None, "消失的规则也要摘掉");
+        });
+    }
+
+    /// 多列 Tab：表单、单值结果、表格结果、失败提示都要能渲染一帧
+    #[gpui_kit::test]
+    fn multi_tab_renders_form_results_and_notice(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let draw = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        };
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_multi_tab".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+                view.set_tab(PanelTab::MultiColumn, cx);
+                // 1) 空表单（没有列、没有规则）：不能渲染出半截控件
+                view.set_multi_view(MultiColumnView::empty(), cx);
+            });
+        });
+        draw(cx);
+
+        // 2) 正常表单：未选任何列 / 规则
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_multi_view(multi_view(), cx))
+        });
+        draw(cx);
+
+        // 3) 选中两列 + 一条规则（序号与单选框都要画出来）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.toggle_multi_column("amount", cx);
+                view.toggle_multi_column("note", cx);
+                view.set_multi_rule("pair-numeric", cx);
+            });
+        });
+        draw(cx);
+
+        // 4) 单值结果 + 门控提示
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_multi_result(
+                    MultiResultView::Single(vec![
+                        KeyValueRow {
+                            label: "correlation".into(),
+                            value: "0.98".into(),
+                        },
+                        KeyValueRow {
+                            label: "sample_size".into(),
+                            value: "120".into(),
+                        },
+                    ]),
+                    vec![QualityNote {
+                        level: NoteLevel::Warning,
+                        text: "样本量偏少".into(),
+                    }],
+                    cx,
+                )
+            });
+        });
+        draw(cx);
+
+        // 5) 表格结果（列数动态）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_multi_result(
+                    MultiResultView::Table {
+                        headers: vec!["row_label".into(), "cn".into(), "us".into()],
+                        rows: vec![
+                            vec!["paid".into(), "2".into(), "1".into()],
+                            vec!["free".into(), "—".into(), "1".into()],
+                        ],
+                    },
+                    Vec::new(),
+                    cx,
+                )
+            });
+        });
+        draw(cx);
+
+        // 6) 失败提示：表单与已有结果都还在
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_multi_notice("列 [qty] 不存在", cx))
+        });
+        draw(cx);
+        view.update(cx, |view, _| {
+            assert!(view.data().multi.as_ref().unwrap().result.is_some());
+            assert_eq!(view.multi_selection().len(), 2);
+        });
     }
 
     #[test]

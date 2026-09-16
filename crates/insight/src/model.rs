@@ -147,9 +147,33 @@ impl InsightTarget {
             InsightTarget::Schema { conn_id, .. } => Some(conn_id.clone()),
         }
     }
+
+    /// 数据来源的临时表名（结构目标没有临时表 → 空串）。
+    ///
+    /// 取数请求只认它：三个目标种类都指向临时表，视图因此不必逐个 `match`。
+    pub fn temp_table(&self) -> &str {
+        match self {
+            InsightTarget::Column { temp_table, .. }
+            | InsightTarget::Table { temp_table, .. }
+            | InsightTarget::MultiColumn { temp_table, .. } => temp_table,
+            InsightTarget::Schema { .. } => "",
+        }
+    }
+
+    /// 展示用的表名（列 / 多列目标没有独立表名，退回临时表名）
+    pub fn table_name(&self) -> String {
+        match self {
+            InsightTarget::Table { table_name, .. } => table_name.clone(),
+            _ => self.temp_table().to_string(),
+        }
+    }
 }
 
 /// 面板内容状态（四态：空 / 加载 / 错误 / 数据）
+///
+/// `Data` 不带载荷：**载荷在 [`PanelData`] 里按 Tab 分开存**。
+/// 两者分开的理由：Tab 条是「同一个目标的多个视角」，切 Tab 不该把别的视角取到的
+/// 数据丢掉（单格子设计下，切到「表」再切回「多列」就会丢表单与结果）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum InsightPanelState {
     /// 无目标，或目标当前 Tab 尚无内容（后者由视图补期次提示）
@@ -161,32 +185,52 @@ pub enum InsightPanelState {
         /// 是否值得让用户重试（临时表失效 / 连接断开可重试；语法类错误不可）
         retryable: bool,
     },
-    Data(PanelData),
+    /// 至少有一份可取的内容（具体是哪个 Tab 的，看 [`PanelData`]）
+    Data,
 }
 
-/// 数据态里装的是什么：目标种类决定渲染哪一支。
+/// 数据态里装的是什么：按 Tab 分开存（各 Tab 的取数时机不同，互不覆盖）。
 ///
-/// 四种目标（列 / 表 / 多列 / 结构）各有自己的视图模型，因此 `Data` 必须是和类型——
-/// 「数据态只装列画像」在 Phase 3 起就不够用了。
-#[derive(Debug, Clone, PartialEq)]
-pub enum PanelData {
-    Column(ColumnProfileView),
-    Table(TableProfileView),
+/// 四种目标（列 / 表 / 多列 / 结构）各有自己的视图模型；`None` = 这个 Tab 还没取过数。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PanelData {
+    pub column: Option<ColumnProfileView>,
+    pub table: Option<TableProfileView>,
+    pub multi: Option<MultiColumnView>,
 }
 
 impl PanelData {
     pub fn as_column(&self) -> Option<&ColumnProfileView> {
-        match self {
-            PanelData::Column(profile) => Some(profile),
-            PanelData::Table(_) => None,
-        }
+        self.column.as_ref()
     }
 
     pub fn as_table(&self) -> Option<&TableProfileView> {
-        match self {
-            PanelData::Table(profile) => Some(profile),
-            PanelData::Column(_) => None,
-        }
+        self.table.as_ref()
+    }
+
+    pub fn as_multi(&self) -> Option<&MultiColumnView> {
+        self.multi.as_ref()
+    }
+
+    /// 三个 Tab 都还没取过数
+    pub fn is_empty(&self) -> bool {
+        self.column.is_none() && self.table.is_none() && self.multi.is_none()
+    }
+
+    // 写入用链式构造：新数据只换它自己那一格，别的 Tab 的载荷不动
+    pub fn with_column(mut self, profile: ColumnProfileView) -> Self {
+        self.column = Some(profile);
+        self
+    }
+
+    pub fn with_table(mut self, profile: TableProfileView) -> Self {
+        self.table = Some(profile);
+        self
+    }
+
+    pub fn with_multi(mut self, view: MultiColumnView) -> Self {
+        self.multi = Some(view);
+        self
     }
 }
 
@@ -203,23 +247,7 @@ impl InsightPanelState {
 
     /// 已出数
     pub fn is_data(&self) -> bool {
-        matches!(self, InsightPanelState::Data(_))
-    }
-
-    /// 数据态里的列画像（不是列画像则为 `None`）
-    pub fn column(&self) -> Option<&ColumnProfileView> {
-        match self {
-            InsightPanelState::Data(data) => data.as_column(),
-            _ => None,
-        }
-    }
-
-    /// 数据态里的表探查（不是表探查则为 `None`）
-    pub fn table(&self) -> Option<&TableProfileView> {
-        match self {
-            InsightPanelState::Data(data) => data.as_table(),
-            _ => None,
-        }
+        matches!(self, InsightPanelState::Data)
     }
 }
 
@@ -681,7 +709,7 @@ impl MultiResultView {
             serde_json::Value::Object(map) => Self::Single(
                 map.iter()
                     .map(|(key, value)| KeyValueRow {
-                        label: key.clone(),
+                        label: field_label(key).to_string(),
                         value: json_cell(value),
                     })
                     .collect(),
@@ -725,7 +753,10 @@ impl MultiResultView {
                     .collect()
             })
             .collect();
-        Self::Table { headers, rows }
+        Self::Table {
+            headers: headers.iter().map(|h| field_label(h).to_string()).collect(),
+            rows,
+        }
     }
 
     /// 空结果（没跑过 / 规则未返回行）
@@ -734,6 +765,25 @@ impl MultiResultView {
             MultiResultView::Single(rows) => rows.is_empty(),
             MultiResultView::Table { rows, .. } => rows.is_empty(),
         }
+    }
+}
+
+/// 输出字段名 → 中文标签（内置规则用到的那些）。
+///
+/// 只映射**已知的**字段名：规则的 `json_name` 是对外契约，认不出来的就原样展示——
+/// 猜一个中文名比露个英文名更坏（用户对着不确定的词更没法搜）。
+/// 将来若把中文名写进规则 schema（`[[output]] label`），这里就该退休。
+pub fn field_label(json_name: &str) -> &str {
+    match json_name {
+        "correlation" => "相关系数",
+        "covariance" => "协方差",
+        "regression_slope" => "回归斜率",
+        "regression_intercept" => "回归截距",
+        "sample_size" => "样本量",
+        "row_value" => "行",
+        "col_value" => "列",
+        "count" => "计数",
+        other => other,
     }
 }
 
@@ -778,7 +828,9 @@ pub fn quality_notes(report: Option<&QualityReport>) -> Vec<QualityNote> {
 /// 「多列」Tab 的数据：列清单 + 候选规则 + 最近一次结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultiColumnView {
-    /// 逻辑表名（结果集名），用于展示
+    /// 临时表名（**数据来源**：面板据此判断这份数据是否属于当前目标）
+    pub temp_table: String,
+    /// 逻辑表名（展示用）
     pub table_name: String,
     /// 临时表的**真实**列元数据（v1 的 `availableColumns` 恒空是该项从未跑通的根因）
     pub columns: Vec<TableColumnView>,
@@ -791,9 +843,27 @@ pub struct MultiColumnView {
 }
 
 impl MultiColumnView {
+    /// 空视图（面板初始态：没取过数）
+    pub fn empty() -> Self {
+        Self {
+            temp_table: String::new(),
+            table_name: String::new(),
+            columns: Vec::new(),
+            rules: Vec::new(),
+            result: None,
+            notes: Vec::new(),
+        }
+    }
+
+    /// 这份数据是不是当前这个临时表的（是就不必重新取数）
+    pub fn is_for(&self, temp_table: &str) -> bool {
+        !self.temp_table.is_empty() && self.temp_table == temp_table
+    }
+
     pub fn from_profile(profile: &TableProfile, table_name: &str, rules: Vec<MultiRuleView>) -> Self {
         let table = TableProfileView::from_profile(profile, table_name);
         Self {
+            temp_table: profile.table_name.clone(),
             table_name: table.table_name,
             columns: table.columns,
             rules,
@@ -1698,9 +1768,12 @@ mod tests {
             panic!("对象形态应转成键值行");
         };
         let map: Vec<(&str, &str)> = rows.iter().map(|r| (r.label.as_str(), r.value.as_str())).collect();
-        assert!(map.contains(&("correlation", "0.8765")));
-        assert!(map.contains(&("sample_size", "120")), "整数不带小数点：{map:?}");
-        assert!(map.contains(&("note", "—")), "NULL 显式显示，不留空");
+        assert!(map.contains(&("相关系数", "0.8765")), "已知字段名给中文标签：{map:?}");
+        assert!(map.contains(&("样本量", "120")), "整数不带小数点：{map:?}");
+        assert!(
+            map.contains(&("note", "—")),
+            "认不出的字段名原样展示（不猜中文），NULL 显式显示"
+        );
     }
 
     #[test]
@@ -1713,7 +1786,11 @@ mod tests {
         let MultiResultView::Table { headers, rows } = view else {
             panic!("数组形态应转成表格");
         };
-        assert_eq!(headers, vec!["row_label", "col_label", "count"]);
+        assert_eq!(
+            headers,
+            vec!["row_label", "col_label", "计数"],
+            "认不出的字段名原样保留（这里是构造的假名）：{headers:?}"
+        );
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1][1], "—", "缺键的格子补「—」，不得错位");
         assert_eq!(rows[1][2], "3");

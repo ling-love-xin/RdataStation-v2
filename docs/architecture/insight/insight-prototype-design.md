@@ -176,6 +176,16 @@ v1 把洞察拆成「右栏轻量统计 + 底部四 Tab 容器」两处（`Colum
 - 结果渲染按 `RuleQuery.result_type` 分派：`single` → KV 行；`list` → 表格。
 - 字段名中文化映射沿用 v1（corr / covar / regression_slope / sample_size / …）。
 
+> **实现期修正（Phase 3 三批）**：
+> ① 结果按**数据形态**分派（`Object` → 键值行，`Array` → 表格），不看声明的 `result_type`——
+> 两者不一致时按事实渲染，不会出现「声明 list 却只拿到一个数」的空白表（D34）。
+> ② 中文化只做**已知字段名**的映射（`correlation` / `covariance` / `regression_slope` /
+> `regression_intercept` / `sample_size` / `row_value` / `col_value` / `count`），认不出的原样展示：
+> `json_name` 是规则的对外契约，猜一个中文名比露个英文名更坏。把中文名写进规则 schema（`[[output]] label`）
+> 是更彻底的解法，待诸后续。
+> ③ 原型里的「已选 3/8」与「清除结果」本期未做：选中列带序号（顺序即参数顺序）已能看出选了几列；
+> 结果会被下一次执行覆盖，不需要单独的清空入口。
+
 ### 3.4 结构（Schema 报告，Tab「结构」）
 
 ```

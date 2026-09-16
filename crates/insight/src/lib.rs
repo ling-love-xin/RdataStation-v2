@@ -34,6 +34,8 @@ pub mod schema_analyzer;
 pub mod service;
 pub mod store;
 pub mod table_profile_service;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod ui;
 
 use std::collections::HashMap;
