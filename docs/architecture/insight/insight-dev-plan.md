@@ -48,19 +48,10 @@
 
 **测试坑（已写进注释）**：宿主实体必须被持有——只留 `Subscription` 不足以让订阅者存活，实体一旦释放，订阅就被剪掉。
 
+**不变式**：项目根在**提交前**解析成 `PathBuf`（所有权数据）才进后台任务——`Shared` 的 `Rc<RefCell<…>>` 不出线程；弱句柄升级失败即丢结果（面板已关）。
+
 **验证边界**：workbench 侧当前因在途重构（`Shared` 字段搬迁、`NavDropMode` 等符号调整）整体编译不过，因此本步的可验证面收在特性 crate 内（`jobs.rs` 自己验了宿主那一行的契约）。
 
-
-### 2026-09-16 — Phase 1 第五批：取数链搬进 crate（耦合治理）
-
-**动机**：`layout/panels-coupling-plan.md` §5 定的目标形态是「**特性 crate 内的 jobs** + 面板 drain」——Phase 2 的「评估全表 + 进度」与 Phase 5 的快照保存要用同一套后台形态，先把位置摆对，省得写两遍。
-
-| 项 | 内容 | 落点 |
-| --- | --- | --- |
-| 搬迁 | 原 `crates/workbench/src/services/insight_jobs.rs` 整体搬入 insight crate（`ProfileRequest` / `handle_event` / `request_profile` 行为一字未改，只把 `insight::` 前缀改成 `crate::`）；workbench 侧删文件、`services/mod.rs` 去掉声明与文档行 | `crates/insight/src/jobs.rs` |
-| 宿主胶水 | 新增 `jobs::attach(&panel, cx, 项目根闭包)`：**事件形状不再外泄**，宿主只回答「项目根在哪」；闭包在提交时才解析（项目可能已切换），`Subscription` 由本模块返回 | 同上 |
-| 不变式 | 项目根在**提交前**解析成 `PathBuf`（所有权数据）才进后台任务——`Shared` 的 `Rc<RefCell<…>>` 不出线程；弱句柄升级失败即丢结果（面板已关） | 同上 |
-| 测试 | `ProfileRequest` 两项纯函数单测随代码搬入（`rds-insight` lib **121 → 123 项**）；workbench `tests/insight_entry.rs` 改 import 后仍走真实接线 | `crates/insight/src/jobs.rs`、`crates/workbench/tests/insight_entry.rs` |
 
 ### 2026-09-16 — Phase 1 第四批：列入口命令 + 重算键位
 
