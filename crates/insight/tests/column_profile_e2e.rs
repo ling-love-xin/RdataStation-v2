@@ -158,6 +158,104 @@ fn missing_result_set_is_reported_with_a_friendly_message() {
     );
 }
 
+// ==================== 快照历史（Phase 5.1） ====================
+
+/// 本次调用专属的临时项目目录。
+///
+/// 不能复用别的用例的目录：`ProjectDatabaseManager::open` 会跑迁移并独占
+/// DuckDB 文件锁，两个用例同时开同一个 `analytics.duckdb` 会互相失败。
+fn temp_project_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "rds_insight_e2e_{}_{}",
+        std::process::id(),
+        tag
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("建临时项目目录");
+    dir
+}
+
+/// 保存 → 读历史 → 版本链：面板「历史」Tab 背后的整条链路。
+///
+/// 钉三件事：
+/// 1. 保存是**重取一次领域画像**再存（面板手里只有视图模型，反拼不回去）；
+/// 2. 历史按「最新在前」返回，视图模型据此打「当前」/「首版」标记；
+/// 3. 存储用量取**真实统计**（不是 v1 那种「条数 × 2KB」估算）。
+#[test]
+fn snapshot_history_round_trip_over_a_real_project() {
+    let _serial = serial();
+    let table = "t_insight_e2e_history";
+    let root = temp_project_dir("history");
+    seed(
+        table,
+        "amount DECIMAL(12,2)",
+        "VALUES (1.5), (2.5), (NULL)",
+    );
+
+    // 首版：库里空空，保存后列表只此一条
+    let first =
+        InsightService::save_column_snapshot(Some(&root), table, "amount").expect("保存首版");
+    assert_eq!(first.entity, "amount");
+    assert_eq!(first.entries.len(), 1, "首版应只有一条记录");
+    assert!(first.entries[0].is_latest);
+    assert!(!first.entries[0].has_parent, "首版没有父版本");
+    assert_eq!(first.entries[0].short_version.len(), 8, "短版本号取前 8 位");
+    assert!(
+        first.entries[0]
+            .data_type
+            .to_lowercase()
+            .contains("decimal"),
+        "类型取当初那份快照的真实类型：{}",
+        first.entries[0].data_type
+    );
+    assert!(!first.truncated, "一条不需要截断提示");
+
+    // 第二次保存：新的一版挂到首版之后，且非空值统计确实来自本次重算
+    let second =
+        InsightService::save_column_snapshot(Some(&root), table, "amount").expect("保存第二版");
+    assert_eq!(second.entries.len(), 2);
+    assert!(second.entries[0].is_latest, "最新一版在最前");
+    assert!(second.entries[0].has_parent, "第二版应有父版本");
+    assert_ne!(
+        second.entries[0].version_id, second.entries[1].version_id,
+        "两次保存应是不同版本"
+    );
+    assert!(!second.entries[1].is_latest);
+    assert!(!second.entries[1].has_parent, "最早那版没有父版本");
+
+    // 独立读一遍历史：写与读走的是同一条链路（面板切 Tab 就是这个调用）
+    let read = InsightService::column_history_view(Some(&root), "amount").expect("读历史");
+    assert_eq!(read.entries.len(), 2);
+    assert_eq!(
+        read.entries[0].version_id, second.entries[0].version_id,
+        "读到的首行就是刚存的那一版"
+    );
+    let line = read.stats_line().expect("应能取到存储统计");
+    assert!(line.contains('2'), "用量行应带上快照数：{line}");
+
+    // 没存过的列：空历史不是错误（面板显示「还没有快照」）
+    let other = InsightService::column_history_view(Some(&root), "note")
+        .expect("别的列也应可读");
+    assert!(other.is_empty());
+    assert!(other.stats.is_some(), "统计是整个库的，与列无关");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 无项目时快照不可用，但错误要说人话（而不是把 `[code]` 摆给用户看）
+#[test]
+fn snapshot_without_a_project_explains_itself() {
+    let _serial = serial();
+    let err = InsightService::column_history_view(None, "amount").expect_err("无项目应报错");
+    let info = InsightService::describe_error(&err);
+    assert!(
+        info.message.contains("打开项目"),
+        "要告诉用户怎么办：{}",
+        info.message
+    );
+    assert!(!info.message.contains('['), "不展示内部错误码：{}", info.message);
+}
+
 // ==================== 表探查（Phase 3.1 / 2.2） ====================
 
 /// 表探查：列元数据与行数来自 DuckDB，类型族按真实类型名判定，且**不产假分数**

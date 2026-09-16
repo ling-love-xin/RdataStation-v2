@@ -30,9 +30,10 @@ use gpui_kit::*;
 
 use crate::commands::InsightRefresh;
 use crate::model::{
-    ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, InsightPanelState,
-    InsightTarget, MultiColumnView, MultiResultView, MultiRuleView, NoteLevel, PanelData, PanelTab,
-    QualityNote, SampleCell, StatRow, TableColumnView, TableProfileView,
+    ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, HistoryEntryView,
+    HistoryView, InsightPanelState, InsightTarget, MultiColumnView, MultiResultView, MultiRuleView,
+    NoteLevel, PanelData, PanelTab, QualityNote, SampleCell, StatRow, TableColumnView,
+    TableProfileView, HISTORY_PAGE_SIZE,
 };
 use crate::quality_scorer::Grade;
 use crate::rule_view::RulesView;
@@ -85,6 +86,13 @@ pub enum InsightEvent {
         schema: String,
         table: String,
     },
+    /// 请宿主保存当前列的一次快照（重取领域画像 + 双写 + 回填历史）
+    SnapshotSaveRequested {
+        temp_table: String,
+        column: String,
+    },
+    /// 请宿主读取某列的历次快照
+    HistoryRequested { column: String },
 }
 
 /// 列画像四区（顺序即渲染顺序）
@@ -147,6 +155,13 @@ pub struct InsightView {
     multi_running: bool,
     /// 多列执行的失败提示（列表照旧可见：整页转错误态会让用户以为表单坏了）
     multi_notice: Option<String>,
+    /// 快照保存中（按钮置灰；历史列表照旧可见）
+    history_saving: bool,
+    /// 快照保存 / 读取的失败提示。
+    ///
+    /// 存成**行内提示**而不是错误态：保存失败时最要紧的是「已有的历史还在」，
+    /// 整页转错误态反而会让人以为快照丢了。
+    history_notice: Option<String>,
     /// 结构四区的展开态（顺序同 `SchemaSection::ALL`；默认全展开）
     open_schema_sections: [bool; SchemaSection::ALL.len()],
 }
@@ -170,6 +185,8 @@ impl InsightView {
             multi_rule: None,
             multi_running: false,
             multi_notice: None,
+            history_saving: false,
+            history_notice: None,
             open_schema_sections: [true; SchemaSection::ALL.len()],
         }
     }
@@ -256,6 +273,47 @@ impl InsightView {
             schema: schema.unwrap_or_default(),
             table: table.into(),
         });
+    }
+
+    /// 出数（快照历史）。
+    ///
+    /// 保存中标记在出数时落回：它挂在「保存动作」上，不挂在面板状态上
+    /// （面板状态只有四态，多一个 `Saving` 会让渲染分派多出一条不可能的分支）。
+    pub fn set_history(&mut self, history: HistoryView, cx: &mut Context<Self>) {
+        self.data = std::mem::take(&mut self.data).with_history(history);
+        self.history_saving = false;
+        self.history_notice = None;
+        self.state = InsightPanelState::Data;
+        cx.notify();
+    }
+
+    /// 历史 Tab 的「保存」：发请求（重取领域画像 + 双写都归接缝）
+    pub fn request_snapshot_save(&mut self, cx: &mut Context<Self>) {
+        let Some(InsightTarget::Column {
+            temp_table, column, ..
+        }) = self.target.clone()
+        else {
+            return;
+        };
+        self.history_saving = true;
+        self.history_notice = None;
+        cx.emit(InsightEvent::SnapshotSaveRequested {
+            temp_table,
+            column,
+        });
+        cx.notify();
+    }
+
+    /// 保存 / 读取历史失败：只挂一条行内提示（列表与目标头照旧可见）
+    pub fn set_history_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.history_saving = false;
+        self.history_notice = Some(message.into());
+        cx.notify();
+    }
+
+    /// 快照是否正在保存（按钮置灰的依据；也供测试断言）
+    pub fn history_saving(&self) -> bool {
+        self.history_saving
     }
 
     /// 出数（列画像）
@@ -423,7 +481,6 @@ impl InsightView {
         if self.target.is_none() {
             return;
         }
-        self.state = InsightPanelState::Loading;
         if self.emit_request_for_tab(self.tab, cx) {
             cx.notify();
         }
@@ -431,42 +488,63 @@ impl InsightView {
 
     /// 按 Tab 发对应的取数请求（**不管载荷在不在**：要不要发由调用方判）。
     ///
-    /// 返回是否真的发了（目标种类与 Tab 不匹配时不发——比如拿列目标去要结构报告）。
+    /// 发了请求就进加载态；**发不出去也要落一个状态**：调用方是为了「点了有反应」
+    /// 才先摆骨架的，这里若只是沉默返回，骨架就会一直转下去（最典型的是无项目时
+    /// 切到「历史」：那是「没得看」，不是「在加载」）。
+    ///
+    /// 返回值 = 状态是否变过（调用方据此决定要不要重绘）。
     fn emit_request_for_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) -> bool {
         let Some(target) = self.target.clone() else {
             return false;
         };
-        // 列目标才需要列名：表 / 多列目标没有「哪一列」这回事，取整表
+        // 列目标才需要列名：表 / 多列目标没有「哪一列」这回事，取整表；
+        // 快照落项目目录，所以「历史」还要项目已打开（无项目看不了，不是错误）
         let request = match tab {
             PanelTab::Column => match &target {
-                InsightTarget::Column { .. } => InsightEvent::ProfileRequested { target },
-                _ => return false,
+                InsightTarget::Column { .. } => Some(InsightEvent::ProfileRequested { target }),
+                _ => None,
             },
-            PanelTab::Table => InsightEvent::ProfileRequested {
+            PanelTab::Table => Some(InsightEvent::ProfileRequested {
                 target: InsightTarget::Table {
                     temp_table: target.temp_table().to_string(),
                     table_name: target.table_name(),
                 },
-            },
-            PanelTab::MultiColumn => InsightEvent::MultiColumnRequested {
+            }),
+            PanelTab::MultiColumn => Some(InsightEvent::MultiColumnRequested {
                 temp_table: target.temp_table().to_string(),
                 table_name: target.table_name(),
-            },
+            }),
             PanelTab::Schema => match &target {
                 InsightTarget::Schema {
                     conn_id,
                     database,
                     schema,
-                } => InsightEvent::SchemaReportRequested {
+                } => Some(InsightEvent::SchemaReportRequested {
                     conn_id: conn_id.clone(),
                     database: database.clone(),
                     schema: schema.clone().unwrap_or_default(),
-                },
-                _ => return false,
+                }),
+                _ => None,
             },
-            PanelTab::History => return false,
+            PanelTab::History => match &target {
+                // 历史是「某列的历次快照」：只有列目标说得清“看谁的历史”
+                InsightTarget::Column { column, .. } if self.project_open => {
+                    Some(InsightEvent::HistoryRequested {
+                        column: column.clone(),
+                    })
+                }
+                _ => None,
+            },
         };
-        cx.emit(request);
+        match request {
+            Some(event) => {
+                self.state = InsightPanelState::Loading;
+                cx.emit(event);
+            }
+            // 这个 Tab 在当前目标 / 项目状态下取不了数：落空态（引导文案由
+            // `empty_hint()` 按 Tab 给），别留着骨架一直转
+            None => self.state = InsightPanelState::Empty,
+        }
         true
     }
 
@@ -506,12 +584,11 @@ impl InsightView {
                 .as_ref()
                 .is_some_and(|view| view.is_for(target.temp_table())),
             PanelTab::Schema => self.data.schema.is_none(),
-            PanelTab::History => false,
+            PanelTab::History => self.data.history.is_none(),
         };
         if !missing {
             return;
         }
-        self.state = InsightPanelState::Loading;
         if self.emit_request_for_tab(tab, cx) {
             cx.notify();
         }
@@ -736,8 +813,10 @@ impl InsightView {
                 self.render_schema_report(report, entity, theme, inline_icon)
                     .into_any_element()
             }),
-            // 后续期次落地：没有载荷也没有骨架，直接给期次提示
-            PanelTab::History => None,
+            PanelTab::History => self.data.as_history().map(|history| {
+                self.render_history(history, entity, theme, inline_icon)
+                    .into_any_element()
+            }),
         };
         if let Some(element) = payload {
             return vec![element];
@@ -757,11 +836,15 @@ impl InsightView {
     }
 
     fn empty_hint(&self) -> &'static str {
-        if self.target.is_some() {
-            tab_hint(self.tab)
-        } else {
-            "在结果表列头或导航树上右键，选择洞察"
+        if self.target.is_none() {
+            return "在结果表列头或导航树上右键，选择洞察";
         }
+        // 同一个「历史」Tab，无项目与有项目是两句不同的话：
+        // 前者要的是「先打开项目」，后者要的是「选一列」
+        if self.tab == PanelTab::History && !self.project_open {
+            return "打开项目后可保存与查看快照";
+        }
+        tab_hint(self.tab)
     }
 
     /// 评分卡（Phase 2）：**钉在滚动区之外**——分数是这列的头号结论，不该滚走。
@@ -1172,6 +1255,94 @@ impl InsightView {
         }
 
         body.child(accordion)
+    }
+
+    /// 快照历史（Tab「历史」，Phase 5.1）：保存入口 + 版本列表 + 存储用量。
+    ///
+    /// 列表**不另设内层滚动**：面板主体已经是滚动区（`#insight-body`），再来一层
+    /// 就是嵌套滚动（滚轮到底后停住、外层接不上）。高度上限靠分页
+    /// （[`HISTORY_PAGE_SIZE`]）而不是靠固定高度——Phase 5.2 的对比面板要接在列表下方。
+    fn render_history(
+        &self,
+        history: &HistoryView,
+        entity: &Entity<Self>,
+        theme: &Theme,
+        inline_icon: Pixels,
+    ) -> Div {
+        let colors = theme.colors;
+
+        // 头行：标题 + 保存（保存入口必须有：v1 的保存函数前端不可达，原型 §3.5）
+        let mut body = div().v_flex().w_full().gap_2().child(
+            div()
+                .h_flex()
+                .w_full()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(section_title("快照历史", theme)),
+                )
+                .child(
+                    Button::new("insight-history-save")
+                        .small()
+                        .label(if self.history_saving {
+                            "保存中…"
+                        } else {
+                            "保存"
+                        })
+                        // 快照落项目目录：无项目时不给入口，而不是给一个点了没用的按钮
+                        .disabled(!self.project_open || self.history_saving)
+                        .tooltip(if self.project_open {
+                            "把当前列的画像存一份（正文进项目 DuckDB，版本链进项目 SQLite）"
+                        } else {
+                            "保存快照（需先打开项目）"
+                        })
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, _, app| {
+                                entity.update(app, |view, cx| view.request_snapshot_save(cx))
+                            }
+                        }),
+                ),
+        );
+
+        if let Some(notice) = &self.history_notice {
+            body = body.child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(colors.danger)
+                    .child(Icon::new(IconName::TriangleAlert).size(inline_icon))
+                    .child(div().flex_1().min_w_0().child(notice.clone())),
+            );
+        }
+
+        // 版本列表：顺序由视图模型给（存储层 `ORDER BY` 是唯一权威），渲染不再排
+        if history.is_empty() {
+            body = body.child(muted_line("还没有快照，点「保存」留一份", theme));
+        } else {
+            let mut list = div().v_flex().w_full();
+            for entry in &history.entries {
+                list = list.child(history_entry_row(entry, theme));
+            }
+            body = body.child(list);
+            if history.truncated {
+                body = body.child(muted_line(
+                    &format!("只列出最近 {HISTORY_PAGE_SIZE} 条"),
+                    theme,
+                ));
+            }
+        }
+
+        // 存储用量：拿不到就整行不显示（编一个 0 会让人以为历史被清了）
+        if let Some(line) = history.stats_line() {
+            body = body.child(muted_line(&line, theme));
+        }
+
+        body
     }
 
     /// 列画像四区
@@ -1745,6 +1916,65 @@ fn schema_row(
     body.into_any_element()
 }
 
+// ==================== 快照历史的片段（Phase 5.1） ====================
+
+/// 历史列表的一行：时间 + 短版本号 + 类型 + 首版/当前标记。
+///
+/// 短版本号必须露出来：`created_at` 只有秒级精度（D18），同一秒存两次快照时
+/// 时间戳会重复，到那时告状/比对的靠的只能是这个 id。
+fn history_entry_row(entry: &HistoryEntryView, theme: &Theme) -> Div {
+    let colors = theme.colors;
+    let mut row = div()
+        .h_flex()
+        .w_full()
+        .gap_2()
+        .px_1()
+        .py_0p5()
+        .rounded_sm()
+        .text_xs()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                .text_color(colors.foreground)
+                .child(entry.created_at.clone()),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_color(colors.muted_foreground)
+                .child(entry.short_version.clone()),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_color(colors.muted_foreground)
+                .child(entry.data_type.clone()),
+        );
+
+    // 标记只给「值得一眼看出」的两行：最新一版与首版。
+    // 其余行都挂在链上（有父版本），逐行打标只是噪声。
+    if entry.is_latest {
+        row = row.child(history_chip("当前", colors.primary, theme));
+    } else if !entry.has_parent {
+        row = row.child(history_chip("首版", colors.muted_foreground, theme));
+    }
+
+    row
+}
+
+/// 版本行上的小标记（文案色 + 淡底；不写裸 hex）
+fn history_chip(text: &str, color: Hsla, theme: &Theme) -> Div {
+    div()
+        .flex_none()
+        .px_1()
+        .rounded_sm()
+        .bg(theme.colors.list_hover)
+        .text_color(color)
+        .child(text.to_string())
+}
+
 fn zone_title(title: &str, theme: &Theme) -> Div {
     div()
         .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
@@ -1758,8 +1988,8 @@ fn tab_hint(tab: PanelTab) -> &'static str {
         PanelTab::Column => "右键结果表中的列，查看列画像",
         PanelTab::Table => "右键表（或结果集）选择「查看统计」",
         PanelTab::MultiColumn => "多列分析将在 Phase 3 落地",
-        PanelTab::Schema => "结构洞察将在 Phase 4 落地",
-        PanelTab::History => "快照历史将在 Phase 5 落地",
+        PanelTab::Schema => "结构洞察随连接库打开：请在导航树选择库",
+        PanelTab::History => "历史按列记录：请先打开某一列的洞察",
     }
 }
 
@@ -2053,8 +2283,8 @@ mod tests {
 
     use super::{truncate, InsightEvent, InsightView};
     use crate::model::{
-        ColumnProfileView, InsightPanelState, InsightTarget, MultiColumnView, MultiResultView,
-        MultiRuleView, PanelTab, TableProfileView,
+        ColumnProfileView, HistoryView, InsightPanelState, InsightTarget, MultiColumnView,
+        MultiResultView, MultiRuleView, PanelTab, TableProfileView,
     };
     // 领域类型从 crate 根再导出引用（`model.rs` 里对 `types` 的 `use` 是私有的）
     use crate::{
@@ -2913,6 +3143,175 @@ mod tests {
                 Some(4)
             );
         });
+    }
+
+    /// 历史 Tab：保存入口发事件、切过去才取数、无项目时既不取数也不摆骨架
+    #[gpui_kit::test]
+    fn history_tab_saves_and_loads_only_with_a_project(cx: &mut TestAppContext) {
+        use crate::store::{InsightStorageStats, InsightVersionEntry};
+
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let events = crate::test_support::event_sink(&view, cx);
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_target(column_target(), cx))
+        });
+        events.take();
+
+        // 尚未告知项目状态（`project_open` 初值为 false）：切到历史**不请求、不转圈**，
+        // 只给「打开项目后可保存与查看快照」的引导
+        cx.update(|_window, cx| view.update(cx, |view, cx| view.set_tab(PanelTab::History, cx)));
+        assert!(
+            !events
+                .borrow()
+                .iter()
+                .any(|e| matches!(e, InsightEvent::HistoryRequested { .. })),
+            "无项目时历史读不到，不该发请求：{:?}",
+            events.borrow()
+        );
+        view.update(cx, |view, _| {
+            assert_eq!(view.state(), &InsightPanelState::Empty);
+            assert_eq!(view.empty_hint(), "打开项目后可保存与查看快照");
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // 告知项目已打开：再切回历史就补一次取数
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_project_open(true, cx);
+                view.set_tab(PanelTab::Column, cx);
+            });
+        });
+        events.take();
+        cx.update(|_window, cx| view.update(cx, |view, cx| view.set_tab(PanelTab::History, cx)));
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                InsightEvent::HistoryRequested { column } if column == "amount"
+            )),
+            "历史只问列名（别的定位由面板目标给）：{:?}",
+            events.borrow()
+        );
+        events.take();
+
+        // 保存：先置「保存中」（按钮置灰），发事件
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.request_snapshot_save(cx))
+        });
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                InsightEvent::SnapshotSaveRequested { temp_table, column }
+                    if temp_table == "t_result_1" && column == "amount"
+            )),
+            "保存要带齐临时表与列：{:?}",
+            events.borrow()
+        );
+        view.update(cx, |view, _| assert!(view.history_saving()));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // 出数：保存中标记落回，列表渲染一帧
+        let entries = vec![
+            InsightVersionEntry {
+                snapshot_id: "snap-2".into(),
+                column_name: "amount".into(),
+                data_type: Some("DECIMAL(12,2)".into()),
+                stats_json: "{}".into(),
+                version_id: "aaaaaaaa-1111".into(),
+                parent_version_id: Some("bbbbbbbb-2222".into()),
+                checksum: "sum-2".into(),
+                created_at: "2026-09-15 14:22".into(),
+            },
+            InsightVersionEntry {
+                snapshot_id: "snap-1".into(),
+                column_name: "amount".into(),
+                data_type: None,
+                stats_json: "{}".into(),
+                version_id: "bbbbbbbb-2222".into(),
+                parent_version_id: None,
+                checksum: "sum-1".into(),
+                created_at: "2026-09-14 09:10".into(),
+            },
+        ];
+        let stats = InsightStorageStats {
+            total_snapshots: 2,
+            unique_columns: 1,
+            total_size_bytes: 2048.0,
+            total_size_display: "2.0 KB".into(),
+        };
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_history(HistoryView::from_entries("amount", &entries, Some(&stats)), cx)
+            });
+        });
+        view.update(cx, |view, _| {
+            assert!(!view.history_saving(), "出数就认为保存结束（失败另有行内提示）");
+            assert_eq!(view.data().as_history().map(|h| h.entries.len()), Some(2));
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // 保存失败：只挂行内提示（目标头与已有历史照旧可见）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_history_notice("磁盘写满了", cx))
+        });
+        view.update(cx, |view, _| {
+            assert!(!view.history_saving());
+            assert_eq!(view.state(), &InsightPanelState::Data, "失败不抢整页错误态");
+            assert_eq!(view.data().as_history().map(|h| h.entries.len()), Some(2));
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // 空历史（首版之前）也要能渲染：列表区给引导，不显示假数字
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_history(HistoryView::from_entries("amount", &[], None), cx)
+            });
+        });
+        view.update(cx, |view, _| {
+            let history = view.data().as_history().expect("空历史也是载荷");
+            assert!(history.is_empty());
+            assert!(history.stats_line().is_none(), "拿不到统计就不显示数字");
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// 表目标上看不了历史（历史是「某列的历次快照」）：不发请求，也不留在骨架
+    #[gpui_kit::test]
+    fn history_tab_rejects_non_column_targets(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let events = crate::test_support::event_sink(&view, cx);
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_project_open(true, cx);
+                view.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_history_table".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+            });
+        });
+        events.take();
+
+        cx.update(|_window, cx| view.update(cx, |view, cx| view.set_tab(PanelTab::History, cx)));
+        assert!(
+            !events
+                .borrow()
+                .iter()
+                .any(|e| matches!(e, InsightEvent::HistoryRequested { .. })),
+            "表目标说不清「看谁的历史」：{:?}",
+            events.borrow()
+        );
+        // 关键：不能停在 Loading（那会一直转骨架），要落回空态给引导
+        view.update(cx, |view, _| {
+            assert_eq!(view.state(), &InsightPanelState::Empty);
+            assert_eq!(view.empty_hint(), "历史按列记录：请先打开某一列的洞察");
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
     }
 
     #[test]

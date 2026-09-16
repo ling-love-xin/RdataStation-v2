@@ -23,6 +23,26 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 5 一批：快照历史（5.1 + 保存入口）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **190 项** + 集成 **11 项**全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿（本轮需临时带上 `--features opener/reveal`：并行改动中的 `resource_host.rs` 用了 `opener::reveal`，而 `opener` 尚未开 `reveal` feature，与本批无关）；本批文件 `cargo clippy --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 保存入口 | 历史 Tab 顶部的「保存」：无项目置灰并写明原因（快照落项目目录），保存中按钮改文案并置灰。**保存入口必须有**：v1 的 `saveCurrentInsight` 没有任何调用方，前端根本点不到 | `insight_view.rs` + `jobs.rs` |
+| 视图模型 | `HistoryView` / `HistoryEntryView` / `StorageStatsView`：版本列表 + 每行短版本号（`created_at` 只有秒级精度，D18 撞秒时靠它认人）+ 「当前」/「首版」标记 + 存储用量 | `model.rs` |
+| 列表口径 | 顺序**只由存储层的 `ORDER BY` 决定**（视图不再排序：显示顺序与写入顺序只能有一处权威）；分页上限 `HISTORY_PAGE_SIZE` 单一来源（查询与界面提示共用），满一页明示「只列出最近 N 条」（与采样提示 D15 同一立场）；**不另设内层滚动**（面板主体已是滚动区，嵌套滚动滚轮会卡住；Phase 5.2 的对比面板要接在列表下方） | `model.rs` + `insight_view.rs` |
+| 用量行 | 存储统计取不到就**整行不显示**（编一个 0 会让人以为历史被清了）；显示串用后端给的（带单位），面板不换算 | `model.rs` + `insight_view.rs` |
+| 失败语义 | 保存失败只挂**行内提示**（已有历史必须还在，整页转错误态会让人以为快照丢了）；读历史失败推整页错误态（列表无从部分展示） | `insight_view.rs` + `jobs.rs` |
+| 状态分派 | `emit_request_for_tab` 改成「发得出去就进加载态，**发不出去就落空态**」：原先只是沉默返回，而调用方为了「点了有反应」已先摆上骨架——骨架会一直转下去（无项目时切「历史」正是这种情况）。空态文案按 Tab + 项目状态给 | `insight_view.rs` |
+| 顺带修的真问题 | `save_column_snapshot` 原先写完快照又**重新开一次项目库**读历史——DuckDB 在同一进程里对同一份文件只允许一个实例，第二次 open 必失败（集成测试实测表现为「快照真落库了，却提示保存失败」）。现改为复用同一个句柄（`read_history`，保存后的读回与单纯读取共用一处口径） | `service/mod.rs` |
+| 测试 | 视图模型 3（最新/首版标记与顺序不重排 · 用量行 · 缺类型与满页）+ 视图实体 2（有项目才取数·保存事件·出数落回·失败不清列表；表目标切历史落空态）+ 接缝 1（真实项目：列画像 → 切历史 → 两版保存 → 版本链 → 临时表消失后失败只挂提示）+ 集成 2（真项目目录下保存→读历史→版本链；无项目的错误文案） | 各文件测试模块 |
+
+**Phase 5 剩余**：版本对比面板（`old → new (±Δ)` 三色）；TTL 清理入口（`cleanup_old_insight_snapshots` 已就绪，等 Q4/Q5 拍板保留天数与双写补偿）。
+
+**宿主侧待接**：历史 Tab 的保存 / 读取与其他 Tab 同形——装配处只多两行（`attach` 已把 `SnapshotSaveRequested` / `HistoryRequested` 接进接缝，宿主持有 `Subscription` 即生效）。
+
+
 ### 2026-09-17 — Phase 4 一批：Schema 健康报告（4.1 门面 + 4.2 视图 + 4.3 导出 + 4.4 下钻）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **184 项** + 集成 9 项全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
@@ -593,12 +613,12 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 
 ### Phase 5 — 快照历史与版本对比
 
-| # | 任务 | 落点 |
-| --- | --- | --- |
-| 5.1 | 保存快照入口（含 `entity_source`：conn / db / schema / table） | `insight/src/insight_view.rs` |
-| 5.2 | 历史列表（`created_at` + 类型 + 版本链）+ 版本详情 | 同上 |
-| 5.3 | 版本对比面板：差异字段与 `old → new (+Δ)` 摘要；颜色分增 / 减 / 不变**三态**（v1 定义了 `.val-same` 却从未使用，此处修正） | 同上 |
-| 5.4 | 存储用量（后端真实统计，**不用 v1 的 `history.length * 2` 前端估算**）+ 清理（默认 30 天，需确认） | 同上 |
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| 5.1 | 保存快照入口（含 `entity_source`：conn / db / schema / table） | `insight/src/insight_view.rs` | ✅ 一批（`entity_source` 现写 `temp_table=…`：面板手里只有临时表，就如实写） |
+| 5.2 | 历史列表（`created_at` + 类型 + 版本链）+ 版本详情 | 同上 | ✅ 列表（另加短版本号与分页提示；「版本详情」并入 5.3） |
+| 5.3 | 版本对比面板：差异字段与 `old → new (+Δ)` 摘要；颜色分增 / 减 / 不变**三态**（v1 定义了 `.val-same` 却从未使用，此处修正） | 同上 | ⬜ 下一批 |
+| 5.4 | 存储用量（后端真实统计，**不用 v1 的 `history.length * 2` 前端估算**）+ 清理（默认 30 天，需确认） | 同上 | 用量 ✅ 一批 · 清理 ⬜（待 Q4/Q5 拍板） |
 
 ### Phase 6（候选，不在本期）
 

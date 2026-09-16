@@ -200,6 +200,7 @@ pub struct PanelData {
     pub table: Option<TableProfileView>,
     pub multi: Option<MultiColumnView>,
     pub schema: Option<crate::schema_view::SchemaReportView>,
+    pub history: Option<HistoryView>,
 }
 
 impl PanelData {
@@ -217,6 +218,10 @@ impl PanelData {
 
     pub fn as_schema(&self) -> Option<&crate::schema_view::SchemaReportView> {
         self.schema.as_ref()
+    }
+
+    pub fn as_history(&self) -> Option<&HistoryView> {
+        self.history.as_ref()
     }
 
     /// 三个 Tab 都还没取过数
@@ -242,6 +247,11 @@ impl PanelData {
 
     pub fn with_schema(mut self, view: crate::schema_view::SchemaReportView) -> Self {
         self.schema = Some(view);
+        self
+    }
+
+    pub fn with_history(mut self, view: HistoryView) -> Self {
+        self.history = Some(view);
         self
     }
 }
@@ -905,6 +915,96 @@ impl MultiColumnView {
     }
 }
 
+/// 历史列表一页条数。
+///
+/// 查询上限与界面提示共用这一处：两处各写一个数字，提示迟早与事实不符。
+/// 上限本身是**可摘信息**（更老的版本还在库里，只是没列出来），所以界面必须明示
+/// （与采样提示 D15 同一立场：别让人把截断的列表当成全部）。
+pub const HISTORY_PAGE_SIZE: usize = 10;
+
+/// 快照历史（「历史」Tab，Phase 5.1 / 5.2）
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryView {
+    /// 实体名（当前只做列：就是列名）
+    pub entity: String,
+    /// 版本列表（最新在前）
+    pub entries: Vec<HistoryEntryView>,
+    /// 存储用量（取不到就不显示数字，而不是显示 0）
+    pub stats: Option<StorageStatsView>,
+    /// 列表是否被分页截断（列表已满一页；不代表库里一定还有更多）
+    pub truncated: bool,
+}
+
+/// 一个版本（列表里的一行）
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryEntryView {
+    pub version_id: String,
+    /// 短版本号（前 8 位；完整值太长，列表里放不下）
+    pub short_version: String,
+    pub created_at: String,
+    pub data_type: String,
+    /// 父版本（首版为 `None`）：版本链靠它串起来
+    pub has_parent: bool,
+    /// 是否最新一版（列表里打「当前」标记）
+    pub is_latest: bool,
+}
+
+/// 存储用量（面板底部的统计行）
+#[derive(Debug, Clone, PartialEq)]
+pub struct StorageStatsView {
+    pub total_snapshots: usize,
+    pub unique_columns: usize,
+    /// 后端给的展示串（带单位），面板不自己换算
+    pub size_display: String,
+}
+
+impl HistoryView {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// 领域版本列表 + 存储统计 → 视图模型（纯函数）。
+    ///
+    /// `entries` 由存储层按「最新在前」返回（`ORDER BY created_at DESC, rowid DESC`），
+    /// 这里不再排序：**显示顺序与写入顺序只能有一处权威**。
+    pub fn from_entries(
+        entity: &str,
+        entries: &[crate::store::InsightVersionEntry],
+        stats: Option<&crate::store::InsightStorageStats>,
+    ) -> Self {
+        Self {
+            entity: entity.to_string(),
+            entries: entries
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| HistoryEntryView {
+                    version_id: entry.version_id.clone(),
+                    short_version: entry.version_id.chars().take(8).collect(),
+                    created_at: entry.created_at.clone(),
+                    data_type: entry.data_type.clone().unwrap_or_else(|| "—".to_string()),
+                    has_parent: entry.parent_version_id.is_some(),
+                    is_latest: index == 0,
+                })
+                .collect(),
+            truncated: entries.len() >= HISTORY_PAGE_SIZE,
+            stats: stats.map(|stats| StorageStatsView {
+                total_snapshots: stats.total_snapshots,
+                unique_columns: stats.unique_columns,
+                size_display: stats.total_size_display.clone(),
+            }),
+        }
+    }
+
+    /// 存储统计行文案（拿不到统计返回 `None`，不编一个 0 出来）
+    pub fn stats_line(&self) -> Option<String> {
+        let stats = self.stats.as_ref()?;
+        Some(format!(
+            "存储 {} · {} 个快照 · {} 列",
+            stats.size_display, stats.total_snapshots, stats.unique_columns
+        ))
+    }
+}
+
 /// 列画像（「列」Tab 的四区内容 + 目标头所需字段）
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnProfileView {
@@ -1266,9 +1366,12 @@ fn sample_cells(sample: &[serde_json::Value]) -> Vec<SampleCell> {
 
 #[cfg(test)]
 mod tests {
-    use super::types::{ColumnQualityEntry, DistributionBin, ExtremeValue, TableColumnMeta, TextFrequency};
+    use super::types::{
+        ColumnQualityEntry, DistributionBin, ExtremeValue, TableColumnMeta, TextFrequency,
+    };
     use super::*;
     use crate::rule_types::{ExecutionResult, QualityCheck, QualityReport};
+    use crate::store::{InsightStorageStats, InsightVersionEntry};
 
     fn base_stats(detail: ColumnStatsDetail) -> ColumnInsightFull {
         ColumnInsightFull {
@@ -1995,5 +2098,115 @@ mod tests {
         assert_eq!(view.total_count, 0);
         let labels: Vec<&str> = view.basics.iter().map(|r| r.label).collect();
         assert_eq!(&labels[..4], ["总行数", "非空值", "空值", "唯一值"]);
+    }
+
+    // ==================== 快照历史（Phase 5.1） ====================
+
+    fn version(
+        id: &str,
+        parent: Option<&str>,
+        created_at: &str,
+        data_type: &str,
+    ) -> InsightVersionEntry {
+        InsightVersionEntry {
+            snapshot_id: format!("snap-{id}"),
+            column_name: "amount".into(),
+            data_type: Some(data_type.into()),
+            stats_json: "{}".into(),
+            version_id: id.into(),
+            parent_version_id: parent.map(str::to_string),
+            checksum: "sum".into(),
+            created_at: created_at.into(),
+        }
+    }
+
+    fn storage_stats() -> InsightStorageStats {
+        InsightStorageStats {
+            total_snapshots: 3,
+            unique_columns: 1,
+            total_size_bytes: 2048.0,
+            total_size_display: "2.0 KB".into(),
+        }
+    }
+
+    #[test]
+    fn history_marks_latest_and_root_without_reordering() {
+        // 存储层已按「最新在前」返回（D18）：视图**不再排序**，只贴标记
+        let entries = vec![
+            version(
+                "aaaaaaaa-1111",
+                Some("bbbbbbbb-2222"),
+                "2026-09-15 14:22",
+                "DOUBLE",
+            ),
+            version("bbbbbbbb-2222", None, "2026-09-14 09:10", "DOUBLE"),
+        ];
+        let view = HistoryView::from_entries("amount", &entries, None);
+
+        assert_eq!(view.entity, "amount");
+        assert_eq!(
+            view.entries
+                .iter()
+                .map(|e| e.version_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aaaaaaaa-1111", "bbbbbbbb-2222"],
+            "顺序取存储层给的，视图不得重排"
+        );
+        assert!(view.entries[0].is_latest);
+        assert!(!view.entries[1].is_latest, "只有首行是「当前」");
+        assert!(view.entries[0].has_parent);
+        assert!(
+            !view.entries[1].has_parent,
+            "首版无父版本，界面据此打「首版」"
+        );
+        // 短版本号是前 8 位（列表里放不下完整 uuid）
+        assert_eq!(view.entries[0].short_version, "aaaaaaaa");
+        assert_eq!(view.entries[1].short_version, "bbbbbbbb");
+        assert_eq!(view.entries[0].created_at, "2026-09-15 14:22");
+    }
+
+    #[test]
+    fn history_stats_line_needs_real_stats() {
+        let entries = vec![version("aaaaaaaa-1111", None, "2026-09-15 14:22", "DOUBLE")];
+        // 取不到统计就不显示数字（编一个 0 会让人以为历史被清了）
+        assert!(
+            HistoryView::from_entries("amount", &entries, None)
+                .stats_line()
+                .is_none()
+        );
+
+        let stats = storage_stats();
+        let view = HistoryView::from_entries("amount", &entries, Some(&stats));
+        let line = view.stats_line().expect("有统计就该有一行");
+        assert!(line.contains("2.0 KB"), "用量取后端给的展示串：{line}");
+        assert!(
+            line.contains('3') && line.contains('1'),
+            "带上快照数与列数：{line}"
+        );
+    }
+
+    #[test]
+    fn history_flags_a_full_page_and_missing_types() {
+        // 缺类型的快照（列在那时还不带类型）不能显示成空白格
+        let single = vec![version("aaaaaaaa-1111", None, "2026-09-15 14:22", "DOUBLE")];
+        let mut no_type = single.clone();
+        no_type[0].data_type = None;
+        assert_eq!(
+            HistoryView::from_entries("amount", &no_type, None).entries[0].data_type,
+            "—"
+        );
+
+        // 空历史：不是错误，列表区显示引导
+        let empty = HistoryView::from_entries("amount", &[], None);
+        assert!(empty.is_empty());
+        assert!(!empty.truncated);
+
+        // 满一页就明示「只列出最近 N 条」（与采样提示 D15 同一立场）
+        let full: Vec<_> = (0..HISTORY_PAGE_SIZE)
+            .map(|i| version(&format!("v{i:07}"), None, "2026-09-15 14:22", "DOUBLE"))
+            .collect();
+        assert!(HistoryView::from_entries("amount", &full, None).truncated);
+        let short = &full[..HISTORY_PAGE_SIZE - 1];
+        assert!(!HistoryView::from_entries("amount", short, None).truncated);
     }
 }

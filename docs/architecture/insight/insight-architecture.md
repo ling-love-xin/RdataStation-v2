@@ -177,6 +177,24 @@ ProjectInsightStores::save_column_snapshot(insight, entity_source, row_count, el
 
 读取侧排序统一为 `ORDER BY created_at DESC, rowid DESC`（D18）。
 
+**面板侧两个动作**（Phase 5.1）：
+
+```text
+「保存」 ──► 事件 SnapshotSaveRequested { temp_table, column }
+             └─► InsightService::save_column_snapshot(root, temp_table, column)
+                   ① get_column_insight_full(root, …)   ← 重取领域画像（D42）
+                   ② ProjectInsightStores::open(root)    ← 本次操作只开一次（D41）
+                   ③ stores.save_column_snapshot(…)      ← 正文 + 元数据双写
+                   ④ read_history(&stores, column)       ← 复用同一句柄读回
+                 ──► set_history（失败则 set_history_notice：只挂行内提示，D40）
+
+切到「历史」──► 事件 HistoryRequested { column }
+             └─► InsightService::column_history_view(root, column) → 同 ④
+                 ──► set_history（失败则整页错误态）
+```
+
+无项目时**不发事件**也不摆骨架：看不了就说看不了（D39）。
+
 ### 5.5 表级评估
 
 ```
@@ -245,6 +263,11 @@ RulesWatcher（后台线程，drop 即停）：
 | D35 | 数据态**按 Tab 分开存载荷**（`PanelData { column, table, multi, schema }`） | Tab 条是「同一目标的多个视角」而数据态只有一个格子；合在一起就要求“切 Tab 重新取数”，切回去就把已取到的内容丢了（实测：切「表」再切回「多列」丢表单与结果） | 渲染以载荷为准、状态只管错误/骨架；切 Tab 时载荷缺失才取数（事件路径）。**换目标必须清载荷**：载荷只对旧目标成立，留着会比空白更坏 |
 | D36 | Schema 报告的等级与导出都从**视图模型**出发 | 分档阀值只有 `quality_scorer` 一份（顺手把 `schema_analyzer` 自带的「需改进」换成同一份）；导出的是「用户看到的这份结论」，与界面同源，不会出现界面说 3 个孤立表而 JSON 里 4 个 | JSON 分组键取稳定英文，不拿中文展示名当键 |
 | D37 | 下钻只报「看哪张表」，不自己拼临时表名 | 把**源表**变成面板能分析的临时表是宿主的活（它才知道连接与临时表约定）；洞察 crate 自拼会有第二套命名约定 | 事件 `TableDrilldownRequested` 带 conn / db / schema / table |
+| D38 | 历史列表的**顺序与条数口径单一来源**：顺序由存储层 `ORDER BY` 决定（视图不重排），条数由 `HISTORY_PAGE_SIZE` 决定（查询与界面提示共用） | 「谁是最新」两处各写一份，迟早在撞秒（D18）时给出互相矛盾的答案；被截断的列表必须明示（与 D15 同一立场：别让人把截断当成全部） | 满一页时列表下方写「只列出最近 N 条」；列表**不另设内层滚动**（面板主体已是滚动区） |
+| D39 | 取数请求**发不出去也要落一个状态**：`emit_request_for_tab` 发得出去进加载态，发不出去落空态 | 调用方为了「点了有反应」已先摆上骨架；沉默返回会让骨架**一直转下去**（无项目时切「历史」即此：那是「没得看」，不是「在加载」） | 空态文案按 Tab + 项目状态给（同一 Tab 两句话） |
+| D40 | 失败语义分两档：**保存失败只挂行内提示，读失败推整页错误态** | 判据是「失败会不会让人怀疑已有数据没了」：保存失败时已有历史还在，整页错误态反而像快照丢了；而列表读不出来时无从部分展示，「为什么读不到」才是答案 | 与多列执行的失败语义（Phase 3）同形 |
+| D41 | 项目库**现开现用，一次操作只开一个句柄** | DuckDB 在同一进程里对同一份文件只允许一个实例，重叠 `open` 必失败（实测表现为「快照真落库了，却提示保存失败」） | 保存后的读回复用同一句柄（`service::read_history`）；宿主现有做法（资源目录 / Mock 历史 / 连接列表）本就是开→用→放 |
+| D42 | 快照的**正文重取不拼装**：保存时重跑一次领域画像，不把视图模型反拼回领域结构 | 视图模型是**渲染用的投影**（缺字段、带展示文案），反拼回去只能靠猜；而视图模型正是为了「改界面不像改契约」才与领域类型分开的 | 代价：保存多跑一次统计（与打开面板同量级的查询） |
 
 ## 7. 并发与资源
 
@@ -291,7 +314,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **184 项**（迁移基线 53 + Phase 0–4 新增），另有集成测试 9 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **190 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 11 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -324,6 +347,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D32～D34 多列分析 | `service/mod.rs`（`multi_column_view` / `list_multi_rules` / `run_multi_rule` / `rule_params`）、`model.rs`（`MultiColumnView` / `MultiRuleView` / `MultiResultView` / `KeyValueRow` / `quality_notes`）、`insight_view.rs`（`render_multi_view` + 列多选/规则单选）、`jobs.rs`（`MultiColumnRequested` / `MultiRunRequested`） |
 | D35 数据态按 Tab 分栏 | `model.rs`（`PanelData` + `InsightPanelState::Data` 无载荷）、`insight_view.rs`（`render_body` 以载荷为准 / `emit_request_for_tab` / `ensure_data_for_tab`）、`test_support.rs`（记录型宿主） |
 | D36/D37 Schema 健康报告 | `schema_view.rs`（新：视图模型 + `to_json` / `to_markdown`）、`schema_analyzer.rs`（等级共用 `Grade`）、`service/mod.rs`（`schema_report_view`）、`insight_view.rs`（`render_schema_report` + 下钻热点）、`jobs.rs`（`SchemaReportRequested` / `TableDrilldownRequested`） |
+| D38～D42 快照历史 | `model.rs`（`HistoryView` / `HistoryEntryView` / `StorageStatsView` / `HISTORY_PAGE_SIZE`）、`insight_view.rs`（`render_history` + `history_entry_row` / `history_chip` / `set_history_notice` / `history_saving` / `emit_request_for_tab` 的状态落点）、`jobs.rs`（`SnapshotSaveRequested` / `HistoryRequested` → `request_snapshot_save` / `request_history`）、`service/mod.rs`（`save_column_snapshot` / `column_history_view` / `read_history`） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |

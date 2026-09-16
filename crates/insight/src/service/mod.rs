@@ -33,7 +33,8 @@ use shared::error::{CommonError, CoreError};
 
 use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableProfile, TableQuality};
 use crate::model::{
-    ColumnProfileView, MultiColumnView, MultiResultView, MultiRuleView, QualityNote, TableProfileView,
+    ColumnProfileView, HistoryView, MultiColumnView, MultiResultView, MultiRuleView, QualityNote,
+    TableProfileView, HISTORY_PAGE_SIZE,
 };
 use crate::rule::RuleScope;
 use crate::schema_view::SchemaReportView;
@@ -201,6 +202,45 @@ impl InsightService {
             conn_id, database, schema,
         ))?;
         Ok(SchemaReportView::from_report(&report))
+    }
+
+    // ==================== 快照历史（Phase 5.1 / 5.2） ====================
+
+    /// 保存当前列的一次快照（正文 + 元数据双写），返回刷新后的历史。
+    ///
+    /// **重取一次领域画像再存**：面板手里只有视图模型，而快照正文存的是领域结果
+    /// （`ColumnInsightFull`）——把视图模型反向拼回去是不可能的，也不应该。
+    ///
+    /// `entity_source` 记录「这份快照是哪来的」（面板只知道临时表，就如实写临时表）。
+    pub fn save_column_snapshot(
+        project_root: Option<&Path>,
+        temp_table: &str,
+        column: &str,
+    ) -> Result<HistoryView, CoreError> {
+        let root = project_root.ok_or_else(no_project)?;
+        let full = Self::get_column_insight_full(Some(root), temp_table, column)?;
+        let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
+        let entity_source = format!("temp_table={temp_table}");
+        block_on(stores.save_column_snapshot(
+            &full,
+            Some(&entity_source),
+            Some(full.stats.total_count as i32),
+            None,
+        ))?;
+        // 读回历史**复用同一个库句柄**：DuckDB 在同一个进程里对同一份文件只允许一个实例，
+        // 第二次 open 会报「文件已被占用」——那会表现成「快照写进去了，却提示保存失败」
+        // （实测到的就是这个：正文与元数据双双落库，但调用方收到 `open` 错误）。
+        read_history(&stores, column)
+    }
+
+    /// 读一列的历次快照 + 存储用量。
+    pub fn column_history_view(
+        project_root: Option<&Path>,
+        column: &str,
+    ) -> Result<HistoryView, CoreError> {
+        let root = project_root.ok_or_else(no_project)?;
+        let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
+        read_history(&stores, column)
     }
 
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
@@ -472,6 +512,34 @@ fn block_on<T>(
         CoreError::common(CommonError::General(format!("创建异步运行时失败：{e}")))
     })?;
     runtime.block_on(future)
+}
+
+/// 需要项目目录的操作（快照落 `{项目}/.RSmeta/project.db` + `analysis.duckdb`）
+fn no_project() -> CoreError {
+    CoreError::common(CommonError::General(
+        "该操作需要先打开项目（快照存在项目目录下）".to_string(),
+    ))
+}
+
+/// 从**已打开**的库句柄读历史 + 存储用量（保存后的读回与单纯读取共用一处口径）。
+///
+/// 开库归调用方：本模块一律**开一次、用完即弃**（与宿主现有做法一致：
+/// 资源目录 / Mock 历史 / 连接列表都是开→用→放），但**同一次操作里不得重叠开两次**
+/// ——DuckDB 在同一进程里对同一份文件只允许一个实例，重叠 open 必失败。
+fn read_history(
+    stores: &crate::store::ProjectInsightStores,
+    column: &str,
+) -> Result<HistoryView, CoreError> {
+    let entries = block_on(
+        stores
+            .storage
+            .columns
+            .get_history(column, Some(HISTORY_PAGE_SIZE)),
+    )?;
+    // 存储统计失败不影响历史可用：它是底部的参考信息，不是结论。
+    // 拿不到就整行不显示（`stats: None`），也不编一个 0 出来。
+    let stats = block_on(stores.storage.columns.get_storage_stats()).ok();
+    Ok(HistoryView::from_entries(column, &entries, stats.as_ref()))
 }
 
 /// 规则参数 → 实际取值。

@@ -143,6 +143,19 @@ pub fn handle_event(
             schema.clone(),
             cx,
         ),
+        InsightEvent::HistoryRequested { column } => {
+            request_history(view, project_root, column.clone(), cx)
+        }
+        InsightEvent::SnapshotSaveRequested {
+            temp_table,
+            column,
+        } => request_snapshot_save(
+            view,
+            project_root,
+            temp_table.clone(),
+            column.clone(),
+            cx,
+        ),
         // 下钻要先把源表登记成临时表，那是**宿主的活**（它才知道连接与临时表约定）：
         // 这里只把请求转给宿主提供的回调，没接就只记一条日志（不是静默失败）
         InsightEvent::TableDrilldownRequested { table, .. } => {
@@ -507,6 +520,61 @@ pub fn request_schema_report(
     .detach();
 }
 
+/// 读某列的历史（切到「历史」Tab 或缺载荷时补取）。
+///
+/// 读失败推整页错误态（与其他 Tab 的取数同形）：列表无从部分展示，
+/// 而「为什么读不到」正是用户此刻要的答案。
+pub fn request_history(
+    view: &Entity<InsightView>,
+    project_root: Option<PathBuf>,
+    column: String,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        InsightService::column_history_view(project_root.as_deref(), &column)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(history) => panel.set_history(history, cx),
+            Err(err) => {
+                let info = InsightService::describe_error(&err);
+                panel.set_error(info.message, info.retryable, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// 保存快照：重取领域画像 + 双写都在服务里，返回刷新后的历史。
+///
+/// 失败只挂**行内提示**（不是整页错误态）：保存失败时最要紧的是「已有的历史还在」，
+/// 整页转错误态反而会让人以为快照丢了。
+pub fn request_snapshot_save(
+    view: &Entity<InsightView>,
+    project_root: Option<PathBuf>,
+    temp_table: String,
+    column: String,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        InsightService::save_column_snapshot(project_root.as_deref(), &temp_table, &column)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(history) => panel.set_history(history, cx),
+            Err(err) => {
+                let info = InsightService::describe_error(&err);
+                panel.set_history_notice(info.message, cx);
+            }
+        });
+    })
+    .detach();
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -516,7 +584,7 @@ mod tests {
 
     use super::{ProfileRequest, attach, attach_rules};
     use crate::insight_view::InsightView;
-    use crate::model::{InsightTarget, TableEvalProgress};
+    use crate::model::{InsightPanelState, InsightTarget, PanelTab, TableEvalProgress};
     use crate::rule::RuleScope;
     use crate::rule_view::{RuleRowStatus, RulesDialogState};
 
@@ -803,6 +871,118 @@ mod tests {
             assert_eq!(corr, "1", "y = 2x 是完全线性相关：{rows:?}");
             assert!(view.notes.is_empty());
         });
+    }
+
+    /// 历史：面板「保存」→ 接缝开项目库 → 双写 → 回填历史；失败只挂行内提示。
+    ///
+    /// 这条用例是「保存入口可达」的兜底：v1 的保存函数没有任何调用方（前端根本点不到），
+    /// 所以这里钉住「点得到，且点了真落库、真的长一版」。
+    #[gpui_kit::test]
+    fn attach_saves_a_snapshot_and_reads_the_history_back(cx: &mut TestAppContext) {
+        // 取数会写进程级规则集缓存（按项目根键控）：与同类的缓存测试串行
+        let _guard = crate::tests::rule_state_guard();
+        cx.update(gpui_kit::init);
+        let table = "t_insight_jobs_history";
+        seed_probe_table(
+            table,
+            "amount DECIMAL(12,2)",
+            "VALUES (1.5), (2.5), (NULL)",
+        );
+        let root = temp_project("history");
+        let root_for_host = root.clone();
+
+        let (host, panel, _sub) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let sub = host.update(cx, |_host, host_cx| {
+                attach(&panel, host_cx, move || Some(root_for_host.clone()))
+            });
+            (host, panel, sub)
+        });
+        let _host = host;
+
+        // 宿主装配时会做这两件事：告知项目已打开 + 递一个列目标进来
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.set_project_open(true, cx);
+                panel.set_target(
+                    InsightTarget::Column {
+                        temp_table: table.into(),
+                        column: "amount".into(),
+                        data_type: "DECIMAL(12,2)".into(),
+                    },
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(panel.read(cx).data().column.is_some(), "列画像应已回填");
+        });
+
+        // 切到「历史」：库里还没有快照 → 空列表（而**不是**错误态、也不是骨架）
+        cx.update(|cx| panel.update(cx, |panel, cx| panel.set_tab(PanelTab::History, cx)));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let panel = panel.read(cx);
+            let history = panel.data().as_history().expect("切过去应回填历史载荷");
+            assert!(history.is_empty(), "首版之前是空列表");
+            assert_eq!(panel.state(), &InsightPanelState::Data);
+            assert!(!panel.history_saving());
+        });
+
+        // 保存：接缝重取领域画像 + 双写，回填后的列表多一版
+        cx.update(|cx| panel.update(cx, |panel, cx| panel.request_snapshot_save(cx)));
+        assert!(
+            panel.read_with(cx, |panel, _| panel.history_saving()),
+            "点了保存就该立刻进入「保存中」（按钮置灰的依据）"
+        );
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let panel = panel.read(cx);
+            let history = panel.data().as_history().expect("保存后应回填历史");
+            assert_eq!(history.entries.len(), 1, "保存应留下首版");
+            assert!(history.entries[0].is_latest);
+            assert!(!history.entries[0].has_parent, "首版无父版本");
+            assert!(history.stats_line().is_some(), "存储用量应是真实数字");
+            assert!(!panel.history_saving(), "出数后「保存中」要落回");
+            assert_eq!(panel.state(), &InsightPanelState::Data);
+        });
+
+        // 再存一版：版本链串起来（新版的父版本指向上一版）
+        cx.update(|cx| panel.update(cx, |panel, cx| panel.request_snapshot_save(cx)));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let history = panel.read(cx).data().as_history().expect("历史").clone();
+            assert_eq!(history.entries.len(), 2);
+            assert!(history.entries[0].is_latest && history.entries[0].has_parent);
+            assert!(!history.entries[1].is_latest && !history.entries[1].has_parent);
+            assert_ne!(history.entries[0].version_id, history.entries[1].version_id);
+        });
+
+        // 结果集过期（临时表没了）：保存失败**只挂行内提示**——已有的历史必须还在，
+        // 整页转错误态会让人以为快照丢了
+        {
+            let conn = crate::insight_engine::get_or_create_duckdb().expect("内存 DuckDB");
+            let conn = conn.lock().expect("DuckDB 锁不应中毒");
+            conn.execute_batch(&format!("DROP TABLE \"{table}\""))
+                .expect("丢掉临时表（模拟结果集过期）");
+        }
+        cx.update(|cx| panel.update(cx, |panel, cx| panel.request_snapshot_save(cx)));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let panel = panel.read(cx);
+            assert!(!panel.history_saving(), "失败也要解除「保存中」");
+            assert_eq!(
+                panel.state(),
+                &InsightPanelState::Data,
+                "保存失败不抢整页错误态"
+            );
+            let history = panel.data().as_history().expect("历史不得被失败清掉");
+            assert_eq!(history.entries.len(), 2, "失败后旧版本照旧可见");
+        });
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 宿主只写一行（`attach`），所以这一行的契约必须在本 crate 内验住：
