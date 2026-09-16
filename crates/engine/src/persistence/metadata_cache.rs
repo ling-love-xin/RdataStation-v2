@@ -77,7 +77,7 @@ impl MetadataCacheManager {
     /// 构建元数据缓存数据库路径
     ///
     /// 元数据文件跟随连接信息：
-    /// - 全局连接：{data_dir}/RdataStation/system/global_metadata/conn_{id}.sqlite
+    /// - 全局连接：<RDS_HOME>/data/system/global_metadata/conn_{id}.sqlite
     /// - 项目连接：{project_path}/meta/connection_metadata/conn_{id}.sqlite
     fn build_metadata_path(
         conn_id: &str,

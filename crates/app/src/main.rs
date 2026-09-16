@@ -8,8 +8,11 @@
 //! 5. 工作台视图由 `rds-workbench::WorkbenchView` 提供。
 //!
 //! 启动装配顺序（与 `docs/architecture/settings/settings-crate-design.md` 对齐）：
-//!   全局系统库初始化 → SettingsService::init → 主题目录 watch →
-//!   应用已保存主题模式 → 快捷键绑定。
+//!   运行时数据根（TEMP 重定向 + 旧布局迁移）→ 全局系统库初始化 →
+//!   SettingsService::init → 主题目录 watch → 应用已保存主题模式 → 快捷键绑定。
+//!
+//! 数据根位置见 `docs/architecture/runtime/data-paths.md`：默认 = 可执行文件所在目录
+//! （安装目录），`RDS_HOME` 可覆盖。
 
 use analytics_resource::commands::{ClearSearch, DeleteSelected, FocusSearch};
 use editor::commands::{
@@ -29,6 +32,29 @@ use workbench::commands::{
 };
 
 fn main() {
+    // 0. 运行时数据根（设计见 docs/architecture/runtime/data-paths.md）：
+    //    把进程的 TEMP / TMP / TMPDIR 指到 <RDS_HOME>/tmp。只改这一处，
+    //    所有 `std::env::temp_dir()` 调用点（DuckDB spill / 联邦临时库 / 各处 scratch）
+    //    自动落到数据根下，不必逐个改代码。
+    //    必须在任何线程 / 运行时启动前调用，所以放在 main 的第一条语句。
+    if let Err(e) = paths::install_process_temp_dir() {
+        eprintln!("[startup] 临时目录重定向失败，继续用系统临时目录: {e}");
+    }
+    if let Err(e) = paths::ensure_dirs() {
+        eprintln!("[startup] 数据目录创建失败: {e}");
+    }
+    // 0b. 旧布局（%APPDATA%/RdataStation、%LOCALAPPDATA%/RdataStation、~/.rdatastation）
+    //     的数据一次性搬进数据根：只补不盖，一次过（含密钥库，否则存量连接密码解不开）。
+    let migration = paths::migrate_legacy_layout();
+    if !migration.is_empty() {
+        eprintln!("[startup] {}", migration.summary());
+    }
+    eprintln!(
+        "[startup] 数据根 {}（来源：{}）",
+        paths::home().display(),
+        paths::home_origin().label()
+    );
+
     // Windows 主线程默认 1 MiB 栈，而 GPUI 的视图树构建 / 布局 / 事件派发在 debug
     // 构建下递归较深，会在运行期以 `thread 'main' has overflowed its stack` 崩溃
     // （窗口短暂出现后消失／点入口无反应）。把应用主循环放到专用大栈线程执行。
@@ -56,7 +82,7 @@ fn run_app() {
 
             gpui_kit::init(cx);
 
-            // 1. 设置：加载 %APPDATA%/RdataStation/settings.json 为 global。
+            // 1. 设置：加载 <RDS_HOME>/config/settings.json 为 global。
             SettingsService::init(cx);
 
             // 2. 主题资产：先同步加载目录内主题并接入 `Theme`，保证首帧即为 RDS 配色。

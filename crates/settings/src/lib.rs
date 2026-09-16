@@ -1,8 +1,8 @@
 //! rds-settings — 设置服务与持久化。
 //!
 //! `Settings` 以 GPUI global 形式存在（独立于窗口/工作台生命周期）；
-//! 配置文件位于用户配置目录 `%APPDATA%/RdataStation/settings.json`
-//! （非 Windows 回退到系统临时目录，保持可运行）。
+//! 配置文件位置由 `paths::config_dir()` 解析（`<RDS_HOME>/config/settings.json`，
+//! 默认 RDS_HOME = 可执行文件所在目录）。
 //!
 //! 主题切换即时生效：`Theme::change(mode, window, cx)` + 写回磁盘。
 
@@ -64,19 +64,14 @@ fn publish_connection_defaults(defaults: &ConnectionDefaults) {
     }
 }
 
-/// 用户配置目录：`%APPDATA%/RdataStation`。
+/// 全局设置目录：`<RDS_HOME>/config`（默认 RDS_HOME = 可执行文件所在目录，即安装目录）。
 pub fn config_dir() -> PathBuf {
     // 测试路径注入（仅测试构建）：避免测试碰用户真实配置。
     #[cfg(test)]
     if let Some(dir) = CONFIG_DIR_OVERRIDE.read().ok().and_then(|g| g.clone()) {
         return dir;
     }
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        PathBuf::from(appdata).join("RdataStation")
-    } else {
-        // 非 Windows：跟随现有约定放到主目录，保证可写（见 K5：将来改走平台配置目录）。
-        std::env::temp_dir().join("RdataStation")
-    }
+    paths::config_dir()
 }
 
 /// 配置文件路径。

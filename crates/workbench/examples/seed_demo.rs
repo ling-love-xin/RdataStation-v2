@@ -4,9 +4,12 @@
 //! 可选：设置 `RDS_PROJECT_PATH=<项目根>` 时，同时写入项目库（P_/GP_ 连接 + 分组 + 标签 + 展开态）。
 //!
 //! 写入位置（与 app 实际读取一致）：
-//! - 全局库：`{data_dir}/RdataStation/system/global.db`（`engine::migration::get_system_dir()`）
+//! - 全局库：`<RDS_HOME>/data/system/global.db`（`engine::migration::get_system_dir()`）
 //! - 项目库：`{RDS_PROJECT_PATH}/.RSMETA/project.db`
 //! - 种子数据文件：`{system}/seed/seed_ok.sqlite`、`{system}/seed/seed_ok.duckdb`
+//!
+//! `RDS_HOME` 默认为可执行文件所在目录（开发运行时由 `.cargo/config.toml` 钉到仓库根的 `.rds/`）
+//! （见 `docs/architecture/runtime/data-paths.md`）。
 //!
 //! 内容：
 //! - 2 条**可正常连接**的连接（本地 SQLite / DuckDB 文件，含演示表，对象树可浏览）；
@@ -14,7 +17,7 @@
 //! - 部分连接带标签；项目模式下写入分组与成员。
 //!
 //! 幂等：`INSERT OR REPLACE` / `CREATE TABLE IF NOT EXISTS`。
-//! 清理：删除 `{data_dir}/RdataStation` 目录即可回到空态。
+//! 清理：删除 `<RDS_HOME>/data` 目录即可回到空态。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

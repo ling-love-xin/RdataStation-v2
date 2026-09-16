@@ -1,0 +1,9 @@
+[package]
+name = "rds-paths"
+version.workspace = true
+edition.workspace = true
+description = "运行时数据路径的唯一解析点：单一根 RDS_HOME 下的 config / data / logs / tmp / extensions"
+
+[dependencies]
+# 只为"回退目录"与"旧位置迁移"取平台目录；派生逻辑本身不依赖它
+dirs.workspace = true

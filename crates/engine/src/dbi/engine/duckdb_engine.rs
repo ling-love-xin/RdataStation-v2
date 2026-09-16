@@ -502,10 +502,10 @@ impl DuckDBEngine {
 
     /// 初始化 DuckDB 扩展（纯离线 LOAD，不依赖在线仓库）
     ///
-    /// 扩展 .duckdb_extension 文件需预先放置于 {data_dir}/duckdb/extensions/
+    /// 扩展 .duckdb_extension 文件需预先放置于 `<RDS_HOME>/extensions/`（`paths::extensions_dir()`）。
     /// P0 扩展启动时加载，P1 扩展功能触发时按需调用 load_extension_by_name()
-    pub fn init_extensions(conn: &duckdb::Connection, data_dir: &str) -> Result<(), CoreError> {
-        let ext_dir = format!("{}/duckdb/extensions", data_dir);
+    pub fn init_extensions(conn: &duckdb::Connection) -> Result<(), CoreError> {
+        let ext_dir = paths::extensions_dir();
         std::fs::create_dir_all(&ext_dir).map_err(|e| {
             CoreError::common(CommonError::General(format!(
                 "创建 DuckDB 扩展目录失败: {}",
@@ -513,7 +513,7 @@ impl DuckDBEngine {
             )))
         })?;
 
-        let escaped = ext_dir.replace('\'', "''");
+        let escaped = ext_dir.to_string_lossy().replace('\'', "''");
         conn.execute_batch(&format!("SET extension_directory = '{}'", escaped))
             .map_err(|e| {
                 CoreError::database(DatabaseError::Driver {

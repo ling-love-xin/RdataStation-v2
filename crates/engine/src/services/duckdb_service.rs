@@ -18,13 +18,15 @@ impl DuckDbService {
     ///
     /// 流程：ATTACH 外部数据库 → 执行 SQL → DETACH → 返回 QueryResult
     /// 内部调用 dbi::engine::duckdb_engine::DuckDBEngine（DBI 层）
+    ///
+    /// 扩展目录由 `paths::extensions_dir()` 统一解析，不再由调用方传 `data_dir`
+    /// （改造前该参数为空时扩展目录压根不设，ATTACH 外部库时会去找默认位置）。
     pub async fn accelerate_query(
         db_type: &str,
         url: &str,
         conn_name: &str,
         sql: &str,
         engine: &DuckDBEngine,
-        data_dir: Option<&str>,
     ) -> Result<QueryResult, CoreError> {
         let attach_type = match db_type.to_lowercase().as_str() {
             "mysql" => "mysql",
@@ -46,10 +48,8 @@ impl DuckDbService {
             let conn = engine
                 .conn()
                 .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
-            if let Some(dir) = data_dir {
-                DuckDBEngine::init_extensions(&conn, dir)
-                    .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
-            }
+            DuckDBEngine::init_extensions(&conn)
+                .map_err(|e| CoreError::common(CommonError::General(e.to_string())))?;
             conn.execute_batch(&attach_sql).map_err(|e| {
                 CoreError::common(CommonError::General(format!(
                     "Failed to ATTACH source database: {}",

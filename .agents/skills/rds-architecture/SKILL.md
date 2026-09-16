@@ -20,6 +20,7 @@ app ───────────────► 所有 Feature crates
 Feature crates ────► engine, shared, gpui-kit（UI 基础设施）
 engine ────────────► shared
 shared ────────────► (gpui-kit / 第三方)
+任何 crate ────────► paths（运行时数据路径唯一解析点，无内部依赖）
 ```
 
 - Feature 不得依赖 `app`
@@ -27,6 +28,7 @@ shared ────────────► (gpui-kit / 第三方)
 - Feature **可以**直接依赖 `gpui-kit`（UI 基础设施），以便按 GPUI-kit 编码指南把同一业务能力的 model / service / view / command / dialog / workflow 放在同一 feature crate（官方示例：`workspace/src/{workspace_view.rs, rename_dialog.rs, commands.rs}`）
 - 只有 ≥2 个真实使用方的稳定能力才进 `shared/`
 - 依赖必须无环，始终指向更小、更稳定的 crate
+- **运行时数据路径只能走 `paths::*`**：不得在 crate 里自己拼 `APPDATA` / `LOCALAPPDATA` / `env::temp_dir()` / `"RdataStation"` 目录名（口径与目录布局见 `docs/architecture/runtime/data-paths.md`）
 
 ## crate 归属判定标准
 
@@ -39,7 +41,7 @@ shared ────────────► (gpui-kit / 第三方)
 
 ## 模块 → crate 映射
 
-M1 `project` / M2 `engine` / M3 `connection` / M4 `database` / M5 `scratchpad` / M6 `analytics_resource` / M7 `mock` / M8 `insight` / M9 `plugin`；工作台 `workbench`；设置 `settings`。
+M1 `project` / M2 `engine` / M3 `connection` / M4 `database` / M5 `scratchpad` / M6 `analytics_resource` / M7 `mock` / M8 `insight` / M9 `plugin`；工作台 `workbench`；设置 `settings`；运行时数据路径 `paths`。
 
 ## 设计文档位置约定
 
@@ -50,5 +52,6 @@ M1 `project` / M2 `engine` / M3 `connection` / M4 `database` / M5 `scratchpad` /
 ## 关键文档
 
 - `docs/architecture/overview.md`：三层架构 / 双层数据 / 双引擎 / 依赖方向
+- `docs/architecture/runtime/data-paths.md`：运行时数据路径（单一根 `RDS_HOME`、旧布局迁移、git 卫生）
 - `docs/architecture/crate-ownership-proposal.html`：crate 归属示意
 - `docs/architecture/settings/settings-crate-design.md`：crate 拆分判定标准实例

@@ -931,7 +931,7 @@ impl ConnectionService {
     /// 确保连接级元数据缓存已初始化（懒加载，幂等）
     ///
     /// 元数据缓存跟随连接信息：
-    /// - 全局连接：{data_dir}/system/global_metadata/conn_{id}.sqlite
+    /// - 全局连接：<RDS_HOME>/data/system/global_metadata/conn_{id}.sqlite
     /// - 项目连接：{project_path}/meta/connection_metadata/conn_{id}.sqlite
     ///
     /// 如果缓存文件已存在则跳过，否则创建并执行迁移。

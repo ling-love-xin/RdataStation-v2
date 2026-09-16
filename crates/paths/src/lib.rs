@@ -1,0 +1,246 @@
+//! rds-paths — 运行时数据路径的**唯一解析点**。
+//!
+//! 口径（设计见 `docs/architecture/runtime/data-paths.md`）：这个软件生成的**任何信息**
+//! （配置 / 数据 / 日志 / 临时 / 扩展）都待在软件自己的目录下，默认 = **可执行文件所在目录**
+//! （即安装目录），一律不进 git。
+//!
+//! ```text
+//! <RDS_HOME>/
+//! ├── config/settings.json        # 全局设置
+//! ├── data/                       # global.db / analytics.duckdb / 密钥库 / samples
+//! ├── logs/app.YYYY-MM-DD         # 日志（按天滚动）
+//! ├── tmp/                        # DuckDB spill / 联邦临时库 / 进程 scratch
+//! └── extensions/                 # DuckDB 扩展
+//! ```
+//!
+//! **其它 crate 不要再自己拼路径**，也不要直接读 `APPDATA` / `LOCALAPPDATA` / 主目录：
+//! 路径散在多处时，换一个位置要改 N 个文件且必漏（改造前有 9 处硬编码 `"RdataStation"`）。
+//!
+//! ## 覆盖
+//!
+//! | 变量 | 作用 | 默认 |
+//! | --- | --- | --- |
+//! | `RDS_HOME` | 覆盖整个数据根 | 可执行文件所在目录（不可写时回退平台本地数据目录） |
+//! | `RDS_TEMP_DIR` | 只覆盖临时目录（放到机械盘 / 网络盘会拖慢 DuckDB spill） | `<RDS_HOME>/tmp` |
+//!
+//! ## 启动契约
+//!
+//! `crates/app/src/main.rs` **第一条语句**必须是 [`install_process_temp_dir`]：
+//! 它把进程的 `TEMP` / `TMP` / `TMPDIR` 重定向到 [`temp_dir`]，从而一次性覆盖所有
+//! `std::env::temp_dir()` 调用点（DuckDB spill、联邦临时库、各处 scratch），
+//! 不必逐个改代码。必须在任何线程 / 运行时启动前调用，原因见该函数的安全注释。
+
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+pub mod legacy;
+pub mod migrate;
+
+#[cfg(test)]
+mod tests;
+
+pub use migrate::{MigrationReport, migrate_legacy_layout};
+
+/// 数据根环境变量。
+const ENV_HOME: &str = "RDS_HOME";
+/// 临时目录环境变量（单独覆盖）。
+const ENV_TEMP: &str = "RDS_TEMP_DIR";
+/// 回退目录名：数据根不可写时落到平台本地数据目录下的这个名字（与旧布局同名，便于识别）。
+const FALLBACK_DIR_NAME: &str = "RdataStation";
+/// 可写性探测用的临时文件名（写完即删）。
+const PROBE_FILE: &str = ".rds-write-probe";
+
+/// 新布局的目录名（`migrate` 用它避免把新目录当旧数据搬）。
+pub(crate) const NEW_LAYOUT_DIRS: [&str; 5] = ["config", "data", "logs", "tmp", "extensions"];
+
+/// 数据根是怎么定下来的（诊断用：出问题时先看这里）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeOrigin {
+    /// 来自 `RDS_HOME` 环境变量。
+    EnvHome,
+    /// 可执行文件所在目录（默认规则 = 安装目录）。
+    ExecutableDir,
+    /// `RDS_HOME` / 安装目录都不可写，回退平台本地数据目录。
+    FallbackLocalAppData,
+}
+
+impl HomeOrigin {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::EnvHome => "环境变量 RDS_HOME",
+            Self::ExecutableDir => "可执行文件所在目录（安装目录）",
+            Self::FallbackLocalAppData => "安装目录不可写，回退平台本地数据目录",
+        }
+    }
+}
+
+static HOME: OnceLock<PathBuf> = OnceLock::new();
+static HOME_ORIGIN: OnceLock<HomeOrigin> = OnceLock::new();
+/// 重定向前的 `TEMP`（迁移要从旧临时目录里把数据捞回来，见 `legacy::temp_app_dir`）。
+static PREVIOUS_TEMP: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// 数据根。首次调用时解析并缓存（进程内恒定，避免多处解析出不同结果）。
+pub fn home() -> PathBuf {
+    HOME.get_or_init(|| {
+        let (path, origin) = resolve_home();
+        let _ = HOME_ORIGIN.set(origin);
+        path
+    })
+    .clone()
+}
+
+/// 数据根的来源（见 [`HomeOrigin`]）。
+pub fn home_origin() -> HomeOrigin {
+    let _ = home(); // 保证已解析
+    HOME_ORIGIN
+        .get()
+        .copied()
+        .unwrap_or(HomeOrigin::ExecutableDir)
+}
+
+/// 全局设置目录：`<RDS_HOME>/config`。
+pub fn config_dir() -> PathBuf {
+    home().join("config")
+}
+
+/// 全局数据目录：`<RDS_HOME>/data`（global.db / analytics.duckdb / 密钥库 / samples）。
+pub fn data_dir() -> PathBuf {
+    home().join("data")
+}
+
+/// 日志目录：`<RDS_HOME>/logs`。
+pub fn log_dir() -> PathBuf {
+    home().join("logs")
+}
+
+/// 临时目录：`RDS_TEMP_DIR` → 否则 `<RDS_HOME>/tmp`。
+pub fn temp_dir() -> PathBuf {
+    match std::env::var_os(ENV_TEMP) {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => home().join("tmp"),
+    }
+}
+
+/// DuckDB 扩展目录：`<RDS_HOME>/extensions`。
+pub fn extensions_dir() -> PathBuf {
+    home().join("extensions")
+}
+
+/// 建好全部派生目录（幂等）。启动时装一次，后续写入不必各自 `create_dir_all`。
+pub fn ensure_dirs() -> std::io::Result<()> {
+    for dir in [config_dir(), data_dir(), log_dir(), temp_dir(), extensions_dir()] {
+        std::fs::create_dir_all(&dir)?;
+    }
+    Ok(())
+}
+
+/// 把进程的 `TEMP` / `TMP` / `TMPDIR` 重定向到 [`temp_dir`]。
+///
+/// 只改这一处，所有 `std::env::temp_dir()` 调用点（DuckDB spill、联邦临时库、
+/// 各 crate 的 scratch）自动落到 `<RDS_HOME>/tmp`。
+///
+/// # 调用契约
+///
+/// **必须是 `main()` 的第一条语句**（早于任何线程 / gpui / tokio 运行时创建）。
+///
+/// # Safety
+///
+/// 内部对 `std::env::set_var` 的使用是 `unsafe`（Rust 2024）：环境变量表是进程级
+/// 全局状态，多线程下写它会与并发读它的线程构成数据竞争。在 `main()` 第一条语句
+/// 调用时进程只有主线程，不存在并发读写者；此后本进程不再改写这几个变量。
+pub fn install_process_temp_dir() -> std::io::Result<PathBuf> {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir)?;
+    // 记下改造前的 TEMP：旧布局在"数据目录不可用"时曾回退到 %TEMP%/RdataStation，
+    // 迁移要能从那里把真实数据捞回来（见 `legacy::temp_app_dir`）。
+    let _ = PREVIOUS_TEMP.set(std::env::var_os("TEMP").map(PathBuf::from));
+    // SAFETY: 见本函数文档的调用契约——此刻进程只有主线程。
+    unsafe {
+        std::env::set_var("TEMP", &dir);
+        std::env::set_var("TMP", &dir);
+        std::env::set_var("TMPDIR", &dir);
+    }
+    Ok(dir)
+}
+
+/// 重定向前的 `TEMP`（未重定向时为 `None`）。
+pub(crate) fn previous_temp() -> Option<PathBuf> {
+    PREVIOUS_TEMP.get().cloned().flatten()
+}
+
+/// 一段人类可读的路径摘要（启动日志 / 报错诊断用）。
+pub fn summary() -> String {
+    format!(
+        "数据根 {}（来源：{}）\n  配置 {}\n  数据 {}\n  日志 {}\n  临时 {}\n  扩展 {}",
+        home().display(),
+        home_origin().label(),
+        config_dir().display(),
+        data_dir().display(),
+        log_dir().display(),
+        temp_dir().display(),
+        extensions_dir().display(),
+    )
+}
+
+// ==================== 内部：根目录解析 ====================
+
+fn resolve_home() -> (PathBuf, HomeOrigin) {
+    if let Some(raw) = std::env::var_os(ENV_HOME) {
+        let candidate = PathBuf::from(raw);
+        if !candidate.as_os_str().is_empty() {
+            if probe_writable(&candidate) {
+                return (candidate, HomeOrigin::EnvHome);
+            }
+            eprintln!(
+                "[paths] {ENV_HOME}={} 不可写，改用默认位置",
+                candidate.display()
+            );
+        }
+    }
+
+    if let Some(dir) = executable_dir() {
+        if probe_writable(&dir) {
+            return (dir, HomeOrigin::ExecutableDir);
+        }
+        eprintln!(
+            "[paths] 安装目录 {} 不可写（如装在 Program Files），回退本地数据目录",
+            dir.display()
+        );
+    }
+
+    let fallback = fallback_home();
+    eprintln!("[paths] 数据根回退到 {}", fallback.display());
+    (fallback, HomeOrigin::FallbackLocalAppData)
+}
+
+/// 可执行文件所在目录 = 安装目录。
+fn executable_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.parent().map(Path::to_path_buf)
+}
+
+/// 回退根：`%LOCALAPPDATA%/RdataStation`（非 Windows 走 `dirs::data_local_dir()`）。
+fn fallback_home() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir)
+        .join(FALLBACK_DIR_NAME)
+}
+
+/// 目录可写性探测：建目录 + 写一个探针文件再删掉。
+///
+/// 只看 `metadata().permissions().readonly()` 不够——Windows 上 `Program Files`
+/// 的目录属性未必带只读位，真正的判据是"能不能写进去"。
+fn probe_writable(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(PROBE_FILE);
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}

@@ -766,9 +766,7 @@ static GLOBAL_HISTORY_STORE: Lazy<Mutex<HistoryStore>> = Lazy::new(|| {
 
 /// 获取默认历史存储路径
 fn get_default_history_path() -> PathBuf {
-    let app_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("RdataStation");
+    let app_dir = paths::data_dir();
 
     // 确保目录存在
     let _ = std::fs::create_dir_all(&app_dir);

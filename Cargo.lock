@@ -7881,9 +7881,11 @@ name = "rds-app"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "rds-analytics-resource",
  "rds-editor",
  "rds-engine",
  "rds-insight",
+ "rds-paths",
  "rds-settings",
  "rds-workbench",
  "tokio",
@@ -7948,7 +7950,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dashmap",
- "dirs 7.0.0",
  "duckdb",
  "flate2",
  "futures",
@@ -7962,6 +7963,7 @@ dependencies = [
  "postgres-native-tls",
  "rand 0.10.2",
  "rds-connection",
+ "rds-paths",
  "rds-shared",
  "regex",
  "rusqlite",
@@ -8028,6 +8030,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rds-paths"
+version = "0.1.0"
+dependencies = [
+ "dirs 7.0.0",
+]
+
+[[package]]
 name = "rds-plugin"
 version = "0.1.0"
 dependencies = [
@@ -8055,6 +8064,7 @@ dependencies = [
  "duckdb",
  "gpui-kit",
  "rds-engine",
+ "rds-paths",
  "rds-shared",
  "rusqlite",
  "serde",
@@ -8087,6 +8097,7 @@ name = "rds-settings"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "rds-paths",
  "rds-workbench-shell",
  "serde",
  "serde_json",
@@ -8110,6 +8121,7 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "rand 0.10.2",
+ "rds-paths",
  "rusqlite",
  "serde",
  "serde_json",
@@ -8136,6 +8148,7 @@ dependencies = [
  "rds-engine",
  "rds-insight",
  "rds-mock",
+ "rds-paths",
  "rds-project",
  "rds-scratchpad",
  "rds-settings",

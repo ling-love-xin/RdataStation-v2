@@ -12,15 +12,12 @@ use crate::error::{CommonError, CoreError};
 /// 旧版固定盐值（用于向后兼容解密）
 const LEGACY_FIXED_SALT: &[u8] = b"RdataStation_Connection_Vault_2026";
 
+/// 安装级随机盐值的落点：`<RDS_HOME>/data/encryption-salt`。
+///
+/// ⚠ 迁移敏感：这个文件是密钥派生的输入之一，位置变了又不跟着搬，
+/// 存量密文（连接密码）会全部解不开——见 `paths::migrate`。
 fn salt_path() -> PathBuf {
-    let mut path = dirs::data_local_dir().unwrap_or_else(|| {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        tracing::warn!("无法获取系统数据目录，回退到用户主目录: {}", home.display());
-        home
-    });
-    path.push("RdataStation");
-    path.push("encryption-salt");
-    path
+    paths::data_dir().join("encryption-salt")
 }
 
 /// 进程内盐缓存：避免并行测试/并发调用下多个实例各自生成盐值
@@ -83,15 +80,9 @@ fn derive_legacy_key() -> [u8; 32] {
     key
 }
 
+/// 机器标识落点：`<RDS_HOME>/data/machine-id`（与盐值同迁移敏感，见 [`salt_path`]）。
 fn machine_id_path() -> PathBuf {
-    let mut path = dirs::data_local_dir().unwrap_or_else(|| {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        tracing::warn!("无法获取系统数据目录，回退到用户主目录: {}", home.display());
-        home
-    });
-    path.push("RdataStation");
-    path.push("machine-id");
-    path
+    paths::data_dir().join("machine-id")
 }
 
 fn get_machine_id() -> String {

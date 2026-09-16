@@ -78,7 +78,7 @@ impl ExtensionInfo {
 /// 1. 扩展二进制与 DuckDB 版本、操作系统强绑定，不兼容自动拦截
 /// 2. INSTALL 为全局缓存操作，LOAD 为会话级操作
 /// 3. 仅签名扩展默认加载，未签名需手动开启配置
-/// 4. 扩展目录固定指定路径: ~/.rdatastation/duckdb/extensions/
+/// 4. 扩展目录由 `paths::extensions_dir()` 统一指定（`<RDS_HOME>/extensions`）
 pub struct ExtensionManager {
     /// 扩展缓存: name -> ExtensionInfo
     extensions: Mutex<HashMap<String, ExtensionInfo>>,

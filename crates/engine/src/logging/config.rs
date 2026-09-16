@@ -36,7 +36,8 @@ impl Default for LogConfig {
             module_levels: HashMap::new(),
             file_output: true,
             db_output: true,
-            log_dir: PathBuf::from(""),
+            // 日志目录跟随数据根（`<RDS_HOME>/logs`），不再由调用方各自传
+            log_dir: paths::log_dir(),
             retention_days: 7,
             max_db_records: 100_000,
         }

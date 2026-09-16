@@ -1,12 +1,13 @@
 # 运行时数据路径（配置 / 数据 / 临时 / 日志）
 
-状态：**设计待实施**（2026-09-16，口径已确认）。动机：默认路径全部落在 C 盘（`%APPDATA%` / `%TEMP%` / `~`），
-开发机 C 盘空间紧张；且现状没有单一解析入口，路径散落在 7 个 crate 里**各自拼字符串**。
+状态：**已实施**（2026-09-16 设计并落地，代码见 `crates/paths`；实施记录与偏差见 §10）。
+动机：默认路径全部落在 C 盘（`%APPDATA%` / `%TEMP%` / `~`），开发机 C 盘空间紧张；
+且当时的现状没有单一解析入口，路径散落在 7 个 crate 里**各自拼字符串**。
 
 **已确认的口径**：① 这个软件生成的**任何信息**（配置 / 数据 / 日志 / 临时 / 缓存 / 扩展）都待
 在软件自己的目录下，**默认 = 软件的安装目录**（可执行文件所在目录）；② 这些生成物**一律不进 git**。
 
-## 1. 现状侦察（实测）
+## 1. 改造前的现状（实测，已全部替换）
 
 | 类别 | 当前位置（Windows） | 代码点 |
 | --- | --- | --- |
@@ -62,17 +63,20 @@ paths::extensions_dir()  // home/extensions
 | --- | --- | --- |
 | `RDS_HOME` | 覆盖全部派生路径的根 | 见 §2 |
 | `RDS_TEMP_DIR` | 单独覆盖临时目录（放到机械盘/网络盘会拖慢 DuckDB spill） | `<RDS_HOME>/tmp` |
-| `RDS_KNOWN_HOSTS` | SSH known_hosts（**默认仍用 `~/.ssh/known_hosts`**：属用户资产，跨应用共用） | 用户主目录 |
+| ~~`RDS_KNOWN_HOSTS`~~ | SSH known_hosts（**默认仍用 `~/.ssh/known_hosts`**：属用户资产，跨应用共用）。⚠ **本次未实现**（`known_hosts.rs` 未改，见 §9.3）；要用请先落地读取 | 用户主目录 |
 | `RUST_LOG` / 既有日志开关 | 不变 | — |
 
 ## 4. 实施要点（低成本的关键做法）
 
-1. **新建 `crates/paths`**（无重依赖：仅 `std` + 可选 `dirs`），导出 §2 的 6 个函数；所有 crate 依赖它。
-2. **启动最早处设置进程 `TEMP`/`TMPDIR`**（`crates/app/src/main.rs` 第一行）：一次覆盖所有
+> 下列 6 条均已落地；具体文件与偏差见 §10。
+
+1. **新建 `crates/paths`**（无重依赖：仅 `std` + `dirs`），导出 §2 的 6 个函数；所有 crate 依赖它。
+2. **启动最早处设置进程 `TEMP`/`TMPDIR`**（`crates/app/src/main.rs` 第一条语句）：一次覆盖所有
    `std::env::temp_dir()` 调用点（DuckDB spill、联邦临时库、各处 scratch）——**改动面从几十处降到 1 处**。
    注意：`set_var` 必须在任何线程/运行时启动前调用（Rust 2024 中 `set_var` 已是 `unsafe`）。
 3. 替换 9 处硬编码 `"RdataStation"` 字面量为 `paths::*` 调用。
 4. 兼容与迁移：启动时若新路径为空且旧路径有数据 → 提示并**一次性迁移**（或只提示路径变更 + 提供开关）。
+   **已定为：自动迁移、只补不盖、复制不移动、标记文件一次性**（理由见 §10.1）。
 5. **一律不提交**：`.gitignore` 加 `/.rds/`、`/rds-*.log`（数据/日志/临时不入库）。
    注意：`*.fossil` 是**测试用的 SQLite 库**（非生成物），不要加入忽略规则。
    已完成：`docs/tmp/*.log`、`tools/r2*.log` 等**已被跟踪**的日志需 `git rm --cached`（保留工作区文件）——
@@ -88,8 +92,8 @@ paths::extensions_dir()  // home/extensions
 | DuckDB spill 放到项目盘影响性能 | `RDS_TEMP_DIR` 单独覆盖；文档写明取舍 |
 | 安装到 `Program Files`（目录不可写） | 启动探测可写性 → 回退 `%LOCALAPPDATA%/RdataStation` + 日志提示 |
 | 开发时 `cargo clean` 清掉数据 | 文档说明；开发期用 `RDS_HOME=<repo>/.rds` |
-| 旧数据"看起来丢失" | 启动时检测旧路径并提示/迁移（§4.4） |
-| 安装到只读目录 | `paths::home()` 失败时回退：`%LOCALAPPDATA%/RdataStation`（并在日志中提示），保持"能用" |
+| 旧数据"看起来丢失" | 启动时检测旧路径并提示/迁移（§4.4）：**已实现自动迁移**，标记文件 `<<RDS_HOME>>/.migrated-from-legacy` 记录已迁项 |
+| 安装到只读目录 | `paths::home()` 探测可写性失败时回退：`%LOCALAPPDATA%/RdataStation`（并在 stderr 提示），保持"能用" |
 
 ## 6. git 卫生现状（待处理）
 
@@ -169,7 +173,7 @@ manifest、permission 四个子系统；驱动侧还有 `engine/src/driver/wasm/
 `docs/architecture/plugin/plugin-architecture.md`，至少覆盖：清单与版本/依赖解析、权限模型、
 wasm 与 sidecar 两种运行形态的生命周期、路径与进程约束（引用本文档 §8）。
 
-## 9. W2 逐文件改动清单（执行用）
+## 9. W2 逐文件改动清单（执行参照：已全部执行完，结果与偏差见 §10.2）
 
 前置：W1 已产出 `crates/paths`（`home/config_dir/data_dir/log_dir/temp_dir/extensions_dir` +
 可写性探测 + 回退）与 `paths::install_process_temp_dir()`。
@@ -188,8 +192,8 @@ wasm 与 sidecar 两种运行形态的生命周期、路径与进程约束（引
 | 8 | `project/src/ui.rs:879-887` | `sample_project_dir()`：`get_system_dir()` + **两处** `%TEMP%` 回退 | 回退改 `paths::data_dir().join("samples")` | 顺带修“回退到临时目录”隐患 |
 | 9 | `workbench/src/services/workspace_loader.rs:23-28` | `default_global_dir()`：`get_system_dir()` + `%TEMP%` 回退 | 回退改 `paths::data_dir().join("system")` | 同 #8；`global_analysis_db_path()` 靠它跟随 |
 | 10 | `engine/src/duckdb/manager.rs:297-304` | `extensions_dir()`：`dirs::home_dir()/<DUCKDB_EXTENSIONS_DIR>` | `paths::extensions_dir()` | 旧位置兼容读取或迁移（W3） |
-| 11 | `engine/src/dbi/engine/duckdb_engine.rs:505-509` | `init_extensions(conn, data_dir)`：`{data_dir}/duckdb/extensions` | 传参改走 `paths::extensions_dir()` | **待核对**：执行时先看调用方如何传 `data_dir` |
-| 12 | 日志目录：`LogConfig::with_log_dir(...)` 的**调用方**（在 `crates/app`） | `Default` 里 `log_dir: PathBuf::from("")`，目录由调用方传入 | 调用方改传 `paths::log_dir()` | **待定位**：执行时 `grep -rn "with_log_dir\|init_logging(" crates/` |
+| 11 | `engine/src/dbi/engine/duckdb_engine.rs:505-509` | `init_extensions(conn, data_dir)`：`{data_dir}/duckdb/extensions` | 传参改走 `paths::extensions_dir()` | ✅ 已执行，但**改了签名**（参数删掉，理由见 §10.2） |
+| 12 | 日志目录：`LogConfig::with_log_dir(...)` 的**调用方**（在 `crates/app`） | `Default` 里 `log_dir: PathBuf::from("")`，目录由调用方传入 | 调用方改传 `paths::log_dir()` | ✅ 已执行（改为 `Default` 直接取 `paths::log_dir()`；**无调用方**这一事实见 §10.2） |
 
 ### 9.2 由“启动重定向 TEMP/TMPDIR”自动覆盖（不改代码）
 
@@ -203,7 +207,7 @@ wasm 与 sidecar 两种运行形态的生命周期、路径与进程约束（引
 | 位置 | 理由 |
 | --- | --- |
 | `connection/src/known_hosts.rs:57`（`~/.ssh/known_hosts`） | 跨应用共用的用户资产；需要时用 `RDS_KNOWN_HOSTS` 覆盖 |
-| `crates/plugin/*`、`engine/src/driver/loader.rs:135`（插件目录 / wasm 缓存 / sidecar） | **三期 P3-a**，见 `../plugin/plugin-architecture.md` §6 |
+| `crates/plugin/*`、`engine/src/driver/loader.rs:135`（插件目录 / wasm 缓存 / sidecar） | **三期 P3-a**，见 `../plugin/plugin-architecture.md` §6。`loader.rs:177` 的 `~/.rdatastation/jdbc-drivers` 同族（空实现） |
 | `<用户项目>/{project.db, analytics.duckdb}`（M1 项目会话） | 用户资产，留在用户工程目录 |
 
 ### 9.4 启动顺序插入点（W1 的关键一步）
@@ -217,3 +221,68 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 - 位置：必须早于 `init_global_system()`（`main.rs:56`）与 `SettingsService::init(cx)`（`:65`）
 - 约束：`set_var` 在 Rust 2024 是 `unsafe`，必须在**单线程阶段**调用——若 `fn main()` 开头已建 tokio/gpui 线程，需前移到 `main()` 第一条语句
 - 验收：`RDS_HOME=<临时目录> cargo run -p rds-app`，启动后该目录下应出现 `data/`、`logs/`、`tmp/`；且 `%TEMP%` 下不再新增 `RdataStation` 相关目录
+
+## 10. 实施记录（2026-09-16）
+
+### 10.1 实施时定的三个口径
+
+| 决策 | 结论 | 理由 |
+| --- | --- | --- |
+| 旧数据怎么办 | **自动迁移**：启动时只补不盖、复制不移动、迁完写标记文件 | ① `encryption-salt` / `machine-id` 不跟着搬 = 存量连接密码全部解不开（静默故障，用户只会看到"密码不对"）；② 提示式迁移要先做 UI 与阻塞流程，收益不抵成本；③ 复制不移动 → 出问题可回滚 |
+| DuckDB spill 跟不跟走 | **跟走**（`<RDS_HOME>/tmp`），`RDS_TEMP_DIR` 可单独覆盖 | 与"生成物都在软件目录下"同一口径；放机械盘/网络盘会拖慢 spill，留覆盖口 |
+| 开发期数据放哪 | `.cargo/config.toml` 的 `[env] RDS_HOME = { value = ".rds", relative = true }` | 发布版默认 = 安装目录；开发时那是 `target/debug`，一次 `cargo clean` 就把 global.db / 密钥库 / 设置全清掉。钉到仓库根 `.rds/`（已忽略）。**不开 `force`**，命令行 `RDS_HOME=<X> cargo run` 仍然优先 |
+
+### 10.2 落地清单
+
+| 内容 | 位置 |
+| --- | --- |
+| 唯一解析点 + 可写性探测 + 回退 | `crates/paths/src/lib.rs`（`home` / `config_dir` / `data_dir` / `log_dir` / `temp_dir` / `extensions_dir`、`ensure_dirs`、`install_process_temp_dir`、`home_origin`、`summary`） |
+| 旧位置定义（**只给迁移用**） | `crates/paths/src/legacy.rs` |
+| 一次性迁移（只补不盖 + 标记文件） | `crates/paths/src/migrate.rs` |
+| 启动最早处：TEMP 重定向 → 建目录 → 迁移 → 打印数据根 | `crates/app/src/main.rs::main` 的前三步 |
+| 单元测试（7 条：派生同根 / 迁移路由 / 只补不盖 / 递归复制） | `crates/paths/src/tests.rs` |
+| 依赖登记 | 根 `Cargo.toml`（`paths = { path = "crates/paths", package = "rds-paths" }`）；`app` / `engine` / `shared` / `settings` / `project` / `workbench` 六处 `paths.workspace = true` |
+
+替换的 12 处见 §9.1。**实施中的两处偏差**：
+
+1. **#11 `init_extensions` 改了签名**：原计划"传参改走 `paths::extensions_dir()`"，实际把 `data_dir: &str`
+   参数**删掉**（函数内直接取 `paths::extensions_dir()`）。原因：唯一调用方 `DuckDbService::accelerate_query`
+   的 `data_dir: Option<&str>` 会让"参数为 `None` 时扩展目录根本不设"；该 API 全仓无调用方，留一个已经
+   失去意义的参数比删掉更坏（`accelerate_query` 的 `data_dir` 参数一并删除）。
+   顺带修好一处真 bug：**扩展目录原本有两份**（`DuckDBManager::extensions_dir()` 用
+   `~/.rdatastation/duckdb/extensions`，而 `init_extensions` 用 `{data_dir}/duckdb/extensions`），
+   现在两处都走 `paths::extensions_dir()`。
+2. **#12 日志目录没有"调用方"**：`LogConfig::with_log_dir` / `init_logging` **全仓无调用方**
+   （只有定义与文档注释），所以不存在"调用方改传 `paths::log_dir()`"这一步。实际做法：
+   - `LogConfig::default()` 的 `log_dir` 从 `PathBuf::from("")` 改为 `paths::log_dir()`（谁构造谁就对）；
+   - 启动时由 `paths::ensure_dirs()` 建好 `<RDS_HOME>/logs/`；
+   - **日志子系统仍未在启动时接线**（属独立任务）：`init_logging` 需要 `LogStore`（global.db 的
+     `app_logs` 表）与 tokio 运行时，只能在 `initialize_global_system()` 之后调用，还要持有
+     `spawn_log_consumer` 的 `JoinHandle`。**当前应用不产出文件日志**，`<RDS_HOME>/logs/` 会是空的——
+     接线前不要把它当已实现的排障手段（"没实现就不宣传"）。
+
+### 10.3 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo check --all-targets` | 0 error / 0 warning（app 依赖图） |
+| `cargo check -p rds-engine -p rds-settings -p rds-shared -p rds-project -p rds-workbench -p rds-paths --all-targets` | 通过（含各 crate 的测试目标） |
+| `cargo test -p rds-paths` | 7 / 7 |
+| `cargo test -p rds-engine --lib` | 310 / 310（23 ignored） |
+| `cargo test -p rds-shared -p rds-settings --lib` | 22 / 22、21 / 21 |
+| `cargo test -p rds-project --lib` | 29 / 29 |
+| `cargo test -p rds-workbench --lib panels::` / `--test ui_contract` / `--test dialog_host_layer` | 10 / 10、7 / 7、4 / 4 |
+
+实测：`cargo test -p rds-paths` 后 `<repo>/.rds/{config,data,logs,tmp,extensions}` 均被创建
+（`RDS_HOME` 由 `.cargo/config.toml` 钉到仓库根，且 **cargo 会把它转成绝对路径**——这一点很关键：
+若它保持相对字符串，二进制会把它解析成"相对当前工作目录"，换目录启动就换数据位置）。
+
+### 10.4 仍未做（明确不在本次范围）
+
+| 项 | 说明 |
+| --- | --- |
+| 日志子系统接线 | 见 §10.2 偏差 2 |
+| 插件目录 / wasm 缓存 / sidecar 工作目录 | 三期 P3-a，见 `../plugin/plugin-architecture.md` §6 |
+| `~/.rdatastation/jdbc-drivers`（`driver/loader.rs:177`） | 与 `WasmDriverDiscovery` 同族，且 `JdbcDriverDiscovery::load_drivers` 是空实现（返回空 Vec）——随 P3-a 一起定 |
+| `~/.ssh/known_hosts` | 有意不改（跨应用用户资产）；§3 的 `RDS_KNOWN_HOSTS` 覆盖**未实现** |
+| 测试链路的 `env::temp_dir()` | 有意不改（§5）：测试仍用系统临时目录，`set_var` 在 Rust 2024 是 `unsafe` 且与并行测试冲突 |

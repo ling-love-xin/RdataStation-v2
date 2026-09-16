@@ -875,15 +875,16 @@ fn create_in_dir(
     }
 }
 
-/// 内置示例项目的落点：系统数据目录旁的 `samples/示例项目`。
+/// 内置示例项目的落点：数据目录旁的 `samples/示例项目`。
+///
+/// 解析不到系统目录时回退 `paths::data_dir()`——改造前这里退到 `%TEMP%`，
+/// 系统清理一跑示例项目就没了。
 fn sample_project_dir() -> PathBuf {
-    let system = engine::migration::get_system_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("RdataStation").join("system"));
-    system
-        .parent()
-        .map(|p| p.join("samples"))
-        .unwrap_or_else(|| std::env::temp_dir().join("RdataStation").join("samples"))
-        .join("示例项目")
+    let base = engine::migration::get_system_dir()
+        .ok()
+        .and_then(|system| system.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(paths::data_dir);
+    base.join("samples").join("示例项目")
 }
 
 /// 从示例项目开始（内置最小示例：示例 SQL 草稿）。

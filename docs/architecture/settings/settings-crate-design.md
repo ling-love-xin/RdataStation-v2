@@ -47,7 +47,7 @@ pub struct Settings {
 
 ## 4. 持久化
 
-- 配置文件：用户配置目录下 `settings.json`（Windows：`%APPDATA%/RdataStation/`；实施时经 `dirs`/`std::env` 解析，按现有项目约定）
+- 配置文件：`<RDS_HOME>/config/settings.json`（2026-09-16 起由 `paths::config_dir()` 解析；`RDS_HOME` 默认 = 可执行文件所在目录，见 `../runtime/data-paths.md`）
 - 时机：启动加载 → 修改即写（防抖可后置）；主题模式即时生效（`Theme::change(mode, window, cx)`）
 - 迁移：现 `crates/workbench/src/services/persistence_service.rs`（连接持久化）迁移为 settings 的持久化基础，或保留 connection 内、由 settings 统一配置入口（实施时定，见 §8）
 

@@ -33,3 +33,10 @@ RUST_MIN_STACK = "268435456"
 #   - 库不在位时 `crates/engine/build.rs` 会给出一条可执行的提示；
 #   - 不开 `force`：换版本 / 换机器时可用自己的 DUCKDB_LIB_DIR 覆盖。
 DUCKDB_LIB_DIR = { value = "third_party/duckdb/1.5.5", relative = true }
+
+# 运行时数据根（设计见 docs/architecture/runtime/data-paths.md）：
+# 发布版默认落在**可执行文件所在目录**（安装目录）；但开发时那是 `target/debug`，
+# 一次 `cargo clean` 就把 global.db / 密钥库 / 设置全清掉。这里把它钉到仓库根的
+# `.rds/`（已在忽略规则里，不入库）。
+#   - 不开 `force`：命令行里显式 `RDS_HOME=<某处> cargo run` 仍然优先。
+RDS_HOME = { value = ".rds", relative = true }

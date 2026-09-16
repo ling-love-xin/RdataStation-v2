@@ -8,6 +8,8 @@ description = "M1 项目：双层数据架构（系统级共享 + 项目级物�
 # 依赖键别名，使 v1 迁移代码中的 `engine::` / `shared::` 引用直接生效
 engine.workspace = true
 shared.workspace = true
+# 运行时数据路径唯一解析点（示例项目与系统库同层）
+paths.workspace = true
 
 # ===== UI（视图与 model/service 同 crate，见 GPUI-kit 编码指南）=====
 gpui-kit.workspace = true

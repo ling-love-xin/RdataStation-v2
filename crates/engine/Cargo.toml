@@ -7,6 +7,8 @@ description = "RdataStation v2 engine crate: 双引擎基础设施（DuckDB 分�
 [dependencies]
 # 依赖键命名为 shared，使 v1 迁移代码中的 `shared::` 引用直接生效
 shared.workspace = true
+# 运行时数据路径唯一解析点（数据根 / 配置 / 日志 / 临时 / DuckDB 扩展）
+paths.workspace = true
 # 连接层已抽取为独立 crate（driver/factory 与 registry/config 引用它）
 connection.workspace = true
 
@@ -55,7 +57,6 @@ once_cell.workspace = true
 lru.workspace = true
 rand.workspace = true
 sqlglot-rust.workspace = true
-dirs.workspace = true
 percent-encoding.workspace = true
 flate2.workspace = true
 toml.workspace = true

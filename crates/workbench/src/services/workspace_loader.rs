@@ -1,7 +1,7 @@
 //! 工作台连接数据加载器（M3 数据源连接 → 视图模型）
 //!
 //! 生产入口与 `DataSourceService` 共用全局系统库单例
-//! （`{data_dir}/RdataStation/system/global.db`，由 `initialize_global_system` 初始化），
+//! （`<RDS_HOME>/data/system/global.db`，由 `initialize_global_system` 初始化），
 //! 消除"服务写一份、列表读另一份"的路径分裂。
 //!
 //! 职责：
@@ -20,11 +20,12 @@ use engine::persistence::project_db::ProjectDatabaseManager;
 
 use crate::view::ConnectionItem;
 
-/// 全局系统目录：`{data_dir}/RdataStation/system`（global.db 与分析库 analytics.duckdb 均在此）。
+/// 全局系统目录：`<RDS_HOME>/data/system`（global.db 与分析库 analytics.duckdb 均在此）。
 pub fn default_global_dir() -> PathBuf {
     engine::migration::get_system_dir().unwrap_or_else(|_| {
-        // 系统数据目录不可用时的兜底：退到临时目录，保持同名结构。
-        std::env::temp_dir().join("RdataStation").join("system")
+        // 系统数据目录不可用时的兜底：退到数据根下的同名结构（改造前退到 %TEMP%，
+        // 系统清理会连全局配置与分析库一起删掉）。
+        paths::data_dir().join("system")
     })
 }
 

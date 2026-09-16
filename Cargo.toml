@@ -13,6 +13,7 @@ members = [
     "crates/mock",
     "crates/insight",
     "crates/plugin",
+    "crates/paths",
     "crates/shared",
     "crates/settings",
     "crates/workbench_shell",
@@ -39,6 +40,8 @@ edition = "2024"
 # ============================================================================
 [workspace.dependencies]
 # ===== 内部 crate（依赖键沿用迁移代码里的模块名，路径只在本表出现）=====
+# 运行时数据路径唯一解析点：最底层，无内部依赖，任何 crate 都可依赖它
+paths = { path = "crates/paths", package = "rds-paths" }
 shared = { path = "crates/shared", package = "rds-shared" }
 engine = { path = "crates/engine", package = "rds-engine" }
 connection = { path = "crates/connection", package = "rds-connection" }

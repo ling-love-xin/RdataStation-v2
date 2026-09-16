@@ -14,9 +14,6 @@ const MIN_READ_POOL_SIZE: usize = 1;
 #[cfg(not(windows))]
 const MAX_READ_POOL_SIZE: usize = 6;
 
-/// DuckDB 扩展文件统一存放路径
-const DUCKDB_EXTENSIONS_DIR: &str = ".rdatastation/duckdb/extensions";
-
 /// 全局 DuckDB 内存实例（单例）
 static GLOBAL_DUCKDB: OnceLock<Arc<Mutex<duckdb::Connection>>> = OnceLock::new();
 
@@ -26,7 +23,7 @@ static GLOBAL_TEMP_TABLE_MANAGER: OnceLock<TempTableManager> = OnceLock::new();
 /// DuckDBManager 管理全局或项目级 DuckDB 实例的连接池。
 ///
 /// 采用双层连接池架构：
-/// - 全局级：~/.rdatastation/global_analytics.duckdb
+/// - 全局级：`<RDS_HOME>/data/system/analytics.duckdb`
 /// - 项目级：由项目元数据决定路径
 ///
 /// 连接池结构：1 写入连接 + N 读取连接 + 1 后台维护连接
@@ -295,11 +292,11 @@ impl DuckDBManager {
     /// 扩展文件目录的 PathBuf
     ///
     /// # 注意
-    /// 所有实例（全局、项目）通过该路径获取扩展
+    /// 所有实例（全局、项目）通过该路径获取扩展；位置由 `paths::extensions_dir()`
+    /// 统一解析（`<RDS_HOME>/extensions`）——改造前这里与 `init_extensions` 各用
+    /// 一个目录（`~/.rdatastation` vs `{data_dir}/duckdb`），查扩展会查错地方。
     pub fn extensions_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(DUCKDB_EXTENSIONS_DIR)
+        paths::extensions_dir()
     }
 
     /// 确保父目录存在。
@@ -510,11 +507,9 @@ mod tests {
     fn test_extensions_dir_path() {
         let ext_dir = DuckDBManager::extensions_dir();
 
-        // 路径应包含 .rdatastation/duckdb/extensions
-        let path_str = ext_dir.to_string_lossy();
-        assert!(path_str.contains(".rdatastation"));
-        assert!(path_str.contains("duckdb"));
-        assert!(path_str.contains("extensions"));
+        // 扩展目录跟随数据根：<RDS_HOME>/extensions
+        assert_eq!(ext_dir, paths::extensions_dir());
+        assert!(ext_dir.ends_with("extensions"));
     }
 
     #[test]

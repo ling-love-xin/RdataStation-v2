@@ -52,7 +52,7 @@
 
 | 层 | 落在哪 | 例子 | 判据 |
 | --- | --- | --- | --- |
-| **应用级** | `%APPDATA%/RdataStation/settings.json` | 主题模式、导航显示开关、建连超时 | 跨项目复用 + 非结构化 + 极小 |
+| **应用级** | `<RDS_HOME>/config/settings.json`（默认 RDS_HOME = 可执行文件所在目录） | 主题模式、导航显示开关、建连超时 | 跨项目复用 + 非结构化 + 极小 |
 | **项目级** | 项目库 `project.db`（结构化）或项目设置（`.RSmeta/config/settings.json`，由 M1 自持） | 导航展开/选中（`navigator_state`）、洞察规则索引（SQLite 表）、项目名与描述 | 随项目物理隔离；离开该项目即无意义 |
 | **会话态** | 不持久化（内存 / `Shared`） | 当前选中连接、洞察四区折叠态、搜索框文本、上次停留的设置节 | 重开即复位是**期望行为** |
 
@@ -175,7 +175,7 @@ graph TD
 
 | 项 | 现状 | 目标 |
 | --- | --- | --- |
-| 路径 | `%APPDATA%/RdataStation/settings.json`（非 Windows 回退临时目录） | 保持（非 Windows 走 `dirs` 解析的平台配置目录，见 §13 K5） |
+| 路径 | `<RDS_HOME>/config/settings.json`（2026-09-16 改：不再落 `%APPDATA%`） | 保持（`paths::config_dir()` 单一解析点，见 `../runtime/data-paths.md`） |
 | 结构 | 分节对象（`general` / `appearance` / `engine` / `connection_defaults` / `projects` / `navigator`） | 节随登记表增删，**节内字段名 = key 的后半段** |
 | 兼容 | 每个新字段必须 `#[serde(default)]`（已有内嵌测试：旧配置缺 `navigator` 节仍可解析） | 保持；字段删除也安全 |
 | 写盘 | **原子写**：临时文件 + rename；失败返回原因并记入进程级错误槽 | ✅ 已达成（2026-09-16） |
@@ -243,7 +243,7 @@ graph TD
 | K2 | ✅ | **写盘失败静默**（已关闭，2026-09-16） | 改为原子写（临时文件 + rename）+ 返回 `Result` + 进程级错误槽；设置页在底栏上方给危险色提示，成功后自动收起 |
 | K3 | ⬜ | 保存丢弃未知字段 | 全量重写 JSON，未知 key 一次保存即消失（手改文件 / 版本回退场景） |
 | K4 | ⬜ | 无 i18n | 界面文案全中文硬编码；摆设字段 `general.language` 已随 2026-09-16 裁撤删除，i18n 另行立项 |
-| K5 | ⬜ | 非 Windows 配置目录回退临时目录 | `config_dir()` 在无 `APPDATA` 时落 `temp_dir()`（重启可能被清理）；应走平台配置目录 |
+| K5 | ✅ | 原：非 Windows 配置目录回退临时目录（**已关闭**，2026-09-16） | 现由 `paths::config_dir()` 解析（`<RDS_HOME>/config`），不再自己读 `APPDATA` / 回退临时目录（见 `../runtime/data-paths.md`） |
 | K6 | ✅ | 原：`product_tokens` 住在 settings（主题设施暂住特性 crate） | **2026-09-16 已迁出**：落到 `crates/workbench_shell/src/product_tokens.rs`（壳层视图共用资产）。驱动原因不只是“主题设施归位”——导航视图下沉到 `database` 后也要取色，住 settings 会造出 `database → settings`。settings 侧保留重导，`app` / `panels/` 消费方零改动 |
 | K7 | ✅ | **尺寸契约扫描缺口**（已关闭，2026-09-16） | 颜色 + 尺寸扫描均含 `settings_page.rs`；8 个 `SETTINGS_*` 数值进契约 1 |
 | K8 | 🟡 | `ToggleThemeMode` 未接线 | Action 已定义，无键位、无 `on_action`；按"没实现就不宣传"应**接线或删除**（§14 Q2） |

@@ -158,8 +158,8 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | 设计决策 | 代码位置 |
 | --- | --- |
 | R1 第三方依赖版本唯一入口 | `Cargo.toml` → `[workspace.dependencies]` |
-| R1 内部 crate 路径唯一入口 | 同上（`shared` / `engine` / `connection` / `insight` / `mock` / `settings` / `workbench` 条目） |
-| R2 crate 内写法 | `crates/*/Cargo.toml`（13 个成员） |
+| R1 内部 crate 路径唯一入口 | 同上（`paths` / `shared` / `engine` / `connection` / `insight` / `mock` / `settings` / `workbench` 条目） |
+| R2 crate 内写法 | `crates/*/Cargo.toml`（16 个成员） |
 | R3 版本取值来自解析结果 | `Cargo.lock` ↔ 根表版本号 |
 | R4 例外：gpui-kit | `Cargo.toml` → `gpui-kit = "0.6.1"` |
 | R4 例外：specta / sqlglot-rust | 同上（精确锁定条目；sqlglot 的唯一边界见 `crates/engine/src/sql/`） |

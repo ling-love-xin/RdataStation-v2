@@ -16,6 +16,8 @@ mock.workspace = true
 settings.workspace = true
 scratchpad.workspace = true
 analytics_resource.workspace = true
+# 运行时数据路径唯一解析点（全局系统库目录）
+paths.workspace = true
 
 # ===== 工作台外壳（面板状态与视图共用资产；视图下沉的防环层）=====
 # 依赖方向：workbench → workbench-shell；特性 crate（database / scratchpad）下沉视图后 → workbench-shell。

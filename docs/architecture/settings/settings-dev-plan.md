@@ -63,7 +63,7 @@
 
 | 能力 | 现状 | 缺口 |
 | --- | --- | --- |
-| 模型与持久化 | `Settings` 4 节 + `settings.json`（`%APPDATA%/RdataStation`）；缺失 / 坏文件回退默认；**原子写 + 失败可见**（错误槽 → 页面提示） | 非 Windows 落临时目录（K5） |
+| 模型与持久化 | `Settings` 4 节 + `settings.json`（`<RDS_HOME>/config`，2026-09-16 起经 `paths::config_dir()` 解析）；缺失 / 坏文件回退默认；**原子写 + 失败可见**（错误槽 → 页面提示） | K5 已关闭（不再回退临时目录） |
 | 服务与命令 | `SettingsService`（init / get / 9 个 `set_*` / 主题切换）、进程级连接默认值快照 | 构造期直读 2 处（K1）；`ToggleThemeMode` 未接线（K8） |
 | 登记表（准入） | ✅ `registry.rs`：`REGISTRY` 9 项 + `Slot` 分发表 + `presets` + **11 项契约测试** | 待接线项（M6 `keep_versions`）还未入表（按设计如此） |
 | 页面形态 | ✅ 两栏实体已**接到工作台**（P1.6：`SettingsPage` 替下旧单列视图） | `↺` 的 hover 卡未接；键盘输入路径无自动化覆盖（K10） |

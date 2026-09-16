@@ -14,9 +14,6 @@ use shared::error::{CommonError, CoreError};
 use crate::migration::{MigrationManager, MigrationType};
 use crate::persistence::GlobalDatabaseManager;
 
-/// 全局数据目录名称
-const GLOBAL_DATA_DIR_NAME: &str = "RdataStation";
-
 /// 系统目录名称
 const SYSTEM_DIR_NAME: &str = "system";
 
@@ -33,14 +30,10 @@ const GLOBAL_DUCKDB_NAME: &str = "analytics.duckdb";
 static GLOBAL_DB_MANAGER: OnceLock<GlobalDatabaseManager> = OnceLock::new();
 
 /// 获取全局数据目录路径
+///
+/// 位置由 `paths::data_dir()` 解析：`<RDS_HOME>/data`（默认 RDS_HOME = 可执行文件所在目录）。
 pub fn get_global_data_dir() -> Result<PathBuf, CoreError> {
-    let app_dir = dirs::data_dir()
-        .ok_or_else(|| {
-            CoreError::common(CommonError::General(
-                "Failed to get system data directory".to_string(),
-            ))
-        })?
-        .join(GLOBAL_DATA_DIR_NAME);
+    let app_dir = paths::data_dir();
 
     std::fs::create_dir_all(&app_dir).map_err(|e| {
         CoreError::common(CommonError::General(format!(
@@ -71,7 +64,7 @@ pub fn get_system_dir() -> Result<PathBuf, CoreError> {
 
 /// 获取全局 SQLite 数据库路径
 ///
-/// 新路径：{data_dir}/RdataStation/system/global.db
+/// 路径：`<RDS_HOME>/data/system/global.db`
 pub fn get_global_db_path() -> Result<PathBuf, CoreError> {
     let system_dir = get_system_dir()?;
     Ok(system_dir.join(GLOBAL_SQLITE_NAME))
@@ -79,7 +72,7 @@ pub fn get_global_db_path() -> Result<PathBuf, CoreError> {
 
 /// 获取全局 DuckDB 数据库路径
 ///
-/// 新路径：{data_dir}/RdataStation/system/analytics.duckdb
+/// 路径：`<RDS_HOME>/data/system/analytics.duckdb`
 pub fn get_global_duckdb_path() -> Result<PathBuf, CoreError> {
     let system_dir = get_system_dir()?;
     Ok(system_dir.join(GLOBAL_DUCKDB_NAME))
@@ -87,7 +80,7 @@ pub fn get_global_duckdb_path() -> Result<PathBuf, CoreError> {
 
 /// 获取全局元数据目录路径
 ///
-/// 路径：{data_dir}/RdataStation/metadata/global/
+/// 路径：`<RDS_HOME>/data/metadata/global/`
 pub fn get_global_metadata_dir() -> Result<PathBuf, CoreError> {
     let data_dir = get_global_data_dir()?;
     let metadata_dir = data_dir.join("metadata/global");
