@@ -57,18 +57,6 @@ static CONNECTION_DEFAULTS: RwLock<Option<ConnectionDefaults>> = RwLock::new(Non
 /// 但用户必须看得见——否则"改了没存住"是完全静默的（架构 §13 K2）。
 static LAST_SAVE_ERROR: RwLock<Option<String>> = RwLock::new(None);
 
-/// 测试用配置目录覆盖（**只在测试构建存在**；生产代码永远不会设置它）。
-#[cfg(test)]
-static CONFIG_DIR_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
-
-/// 把配置目录指到临时目录（仅测试用）。
-#[cfg(test)]
-pub(crate) fn set_config_dir_for_tests(dir: PathBuf) {
-    if let Ok(mut guard) = CONFIG_DIR_OVERRIDE.write() {
-        *guard = Some(dir);
-    }
-}
-
 /// 读取连接默认值（未发布时回退模型默认）。
 pub fn connection_defaults() -> ConnectionDefaults {
     CONNECTION_DEFAULTS
@@ -86,12 +74,11 @@ fn publish_connection_defaults(defaults: &ConnectionDefaults) {
 }
 
 /// 全局设置目录：`<RDS_HOME>/config`（默认 RDS_HOME = 可执行文件所在目录，即安装目录）。
+///
+/// 路径口径全在 [`paths`]：本 crate **不自拼** `APPDATA` / 目录名（见 `docs/architecture/runtime/data-paths.md`）。
+/// 测试构建的数据根本身由 `paths` 的 `test-support` 隔离（各成员在 `[dev-dependencies]` 打开），
+/// 因此这里不需要任何测试专用分支。
 pub fn config_dir() -> PathBuf {
-    // 测试路径注入（仅测试构建）：避免测试碰用户真实配置。
-    #[cfg(test)]
-    if let Some(dir) = CONFIG_DIR_OVERRIDE.read().ok().and_then(|g| g.clone()) {
-        return dir;
-    }
     paths::config_dir()
 }
 
@@ -507,21 +494,22 @@ mod tests {
 
     /// 错误槽：失败后留下原因（页面据此提示），下一次成功后清空（提示收起）。
     ///
-    /// 走的是公开入口 `save_settings` + 配置目录注入，因此覆盖到真实路径拼装。
+    /// 走公开入口 `save_settings` + 真实路径拼装；数据根本身由 `paths` 的 `test-support`
+    /// 隔离（`docs/architecture/runtime/data-paths.md` §5），这里只需把 `config` **目录**
+    /// 暂时挡住——在它的位置放一个同名文件即可。
     #[test]
     fn last_save_error_tracks_failure_then_success() {
-        let dir = temp_dir("slot");
-        std::fs::create_dir_all(&dir).expect("建目录");
-        let blocker = dir.join("blocked");
-        std::fs::write(&blocker, "x").expect("挡住");
-
-        set_config_dir_for_tests(blocker.join("cfg"));
-        assert!(save_settings(&Settings::default()).is_err());
+        let config = config_dir();
+        let _ = std::fs::remove_dir_all(&config);
+        std::fs::write(&config, "blocked").expect("在 config 目录位置放一个文件");
+        assert!(
+            save_settings(&Settings::default()).is_err(),
+            "目录位置被文件占住时必须失败"
+        );
         assert!(last_save_error().is_some(), "失败必须留下原因");
 
-        set_config_dir_for_tests(dir.join("cfg"));
+        std::fs::remove_file(&config).expect("挪开挡住的文件");
         assert!(save_settings(&Settings::default()).is_ok());
         assert!(last_save_error().is_none(), "成功后必须清空错误槽");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

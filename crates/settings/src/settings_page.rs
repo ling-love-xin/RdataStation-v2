@@ -915,13 +915,11 @@ mod tests {
     #[gpui_kit::test]
     fn page_renders_and_syncs_the_search_condition(cx: &mut gpui_kit::TestAppContext) {
         // 安全模式：显式列举依赖，不通配导入（见 gpui-kit-dev skill「窗口测试」）
-        use crate::set_config_dir_for_tests;
         use std::rc::Rc;
 
         cx.update(|cx| {
             gpui_kit::init(cx);
-            // 配置目录指到临时目录：即使后续某次写入发生，也碰不到用户真实配置。
-            set_config_dir_for_tests(std::env::temp_dir().join("rds_settings_page_window"));
+            // 数据根由 `paths` 的 `test-support` 隔离（不写产品目录），此处无需再做路径覆盖。
             crate::SettingsService::init(cx);
         });
 
