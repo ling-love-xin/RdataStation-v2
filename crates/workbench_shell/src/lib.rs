@@ -12,4 +12,5 @@
 //! **本 crate 不得依赖任何特性 crate**（否则环会以另一种形状回来）。
 //! 设计方案与逐步迁移计划见 `docs/architecture/layout/panels-coupling-plan.md` §8/§9。
 
+pub mod model;
 pub mod ui;

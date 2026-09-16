@@ -35,111 +35,12 @@ use settings::commands::OpenSettings;
 use settings::settings_view::SettingsView;
 
 /// 左侧活动栏面板。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LeftPanel {
-    /// 草稿箱（M5 草稿能力占位）
-    Draft,
-    /// 数据库导航（M4，数据源连接 + 对象树）
-    Database,
-    /// 资源分析（M6）
-    Resources,
-    /// 插件（M9）
-    Plugin,
-}
-
-/// 右侧活动栏面板。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RightPanel {
-    /// 洞察（M8）
-    Insight,
-    /// Mock 数据生成（M7）
-    Mock,
-    /// 历史（查询历史）
-    History,
-}
-
-/// 边栏三模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SidebarMode {
-    /// 展开：活动栏 + 边栏可见
-    Expanded,
-    /// 收起：边栏隐藏、活动栏保留（dock 保留、离屏）
-    Collapsed,
-    /// 完全隐藏：活动栏 + 边栏均隐藏（dock 移除）
-    Hidden,
-}
-
-impl LeftPanel {
-    pub const ALL: [LeftPanel; 4] = [
-        LeftPanel::Draft,
-        LeftPanel::Database,
-        LeftPanel::Resources,
-        LeftPanel::Plugin,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            LeftPanel::Draft => "草稿箱",
-            LeftPanel::Database => "数据库导航",
-            LeftPanel::Resources => "资产库",
-            LeftPanel::Plugin => "插件",
-        }
-    }
-
-    /// 活动栏图标（Lucide）：默认图标集（`IconName`）不含这些语义图标，
-    /// 应用已注册 `AllAssets`（全量目录），故按资产路径直接引用。
-    pub fn icon(self) -> Icon {
-        let path = match self {
-            LeftPanel::Draft => "icons/notebook-text.svg",
-            LeftPanel::Database => "icons/database.svg",
-            LeftPanel::Resources => "icons/chart-column.svg",
-            LeftPanel::Plugin => "icons/puzzle.svg",
-        };
-        Icon::default().path(path)
-    }
-}
-
-impl RightPanel {
-    pub const ALL: [RightPanel; 3] = [RightPanel::Insight, RightPanel::Mock, RightPanel::History];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            RightPanel::Insight => "洞察",
-            RightPanel::Mock => "Mock 生成",
-            RightPanel::History => "历史",
-        }
-    }
-
-    /// 活动栏图标（Lucide），与左侧同样按资产路径引用。
-    pub fn icon(self) -> Icon {
-        let path = match self {
-            RightPanel::Insight => "icons/lightbulb.svg",
-            RightPanel::Mock => "icons/dice-5.svg",
-            RightPanel::History => "icons/clock.svg",
-        };
-        Icon::default().path(path)
-    }
-}
-
-/// 连接条目（Round 21 起由全局系统库真实数据填充；Round 22 扩展完整元数据）。
-#[derive(Debug, Clone)]
-pub struct ConnectionItem {
-    pub id: String,
-    pub name: String,
-    pub driver: String,
-    /// 运行时是否已连接（连接管理器维护，由加载器填充；记录有效性由持久化层过滤）。
-    pub connected: bool,
-    /// 真实元数据（Round 22）：主机 / 端口 / 数据库 / Schema。
-    pub host: Option<String>,
-    pub port: Option<i32>,
-    pub database: Option<String>,
-    pub schema: Option<String>,
-    pub description: Option<String>,
-    /// DuckDB 联邦（本地加速）开关。
-    pub use_duckdb_fed: bool,
-    pub created_at: String,
-    pub updated_at: String,
-}
+///
+/// `LeftPanel` / `RightPanel` / `SidebarMode` / `ConnectionItem` 已下沉外壳 crate
+/// `workbench_shell::model`（视图下沉的前置：特性 crate 也要能命名它们）：
+/// 这里重导保持 `crate::view::X` / `rds_workbench::X` 路径不变。
+/// 三模式状态机 {@link toggle_hidden_mode} 仍在本文件（属逻辑，不属数据）。
+pub use workbench_shell::model::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 
 /// 工作台视图：标题栏 + 左右活动栏 + DockArea（左/右/中央）+ 状态栏。
 pub struct WorkbenchView {

@@ -205,11 +205,33 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 | A'1 | 在 `crates/database` 定 `pub trait NavHost`（宿主能力：读连接列表 / 选中 / 提示 / 时间片；请求编辑连接 / 插入 SQL / 打开属性面板 / 归组与排序的落库）——形状照 `MockHost` |
 | A'2 | workbench 实现 `NavHost`（现 `panels/nav.rs` 的 `shared.*` / `nav_runtime::*` 调用点移入实现体），注册到 `SidebarPanel` |
 | A'3 | `crates/database` 加 `gpui-kit` + `workbench_shell` 依赖，视图搬入（`panels/nav.rs` → `database/src/nav_view.rs`） |
-| A'4 | 同样处理手稿箱：`crates/scratchpad` 得 `pub trait ScratchpadHost`，视图搬入 |
+| A'4 | 同样处理草稿箱：`crates/scratchpad` 得 `pub trait ScratchpadHost`，视图搬入 |
 
-代价：A' 比原 A4/A5 大（nav 的 ~70 处 `shared.*` + 33 处 `nav_runtime::*` 要逐处归到 trait 方法），
+**A' 前置已做（2026-09-16）**：把 `ConnectionItem` / `LeftPanel` / `RightPanel` / `SidebarMode`
+下沉到 `crates/workbench_shell/src/model.rs`（workbench 侧 `crate::view::{...}` 重导，路径不变）。
+理由：`NavHost` 的签名要能命名「连接条目」与「面板枚举」，而这几个类型原本定义在 `workbench` 里——
+不下沉则 `database` 无法定义 trait。
+
+依赖面审计（`panels/nav.rs`，4867 行）——决定 `NavHost` 要盖什么：
+
+| 类别 | 处数 | 去向 |
+| --- | --- | --- |
+| `shared.notice` | 33 | `NavHost::notice(msg)` |
+| `shared.{connections, selected, driver_catalog, project_root}` | 11 | `NavHost` 只读访问器 |
+| 编辑器端口（`show_properties` / `request_query` / `new_connection` / `edit_connection`） | 12 | 直接复用既有 `EditorBridge`（已端口化） |
+| `nav_runtime::*` | 34 | **分两类**：纯存储类（归组/排序/标签/导航状态，~24 处）→ 随视图搬入 `database`（只依 `engine`）；连/断类（`connect_entry`/`disconnect_entry`）→ `NavHost` |
+| `nav_jobs::*` | 19 | 随视图搬入 `database`（后台任务+轮询印，与 P1 同形；参照 `scratchpad_jobs`） |
+| `settings::SettingsService::*`（视图偏好 8 处） | 8 | `NavHost`（宿主自持设置访问，避免新增 `database → settings` 依赖） |
+| `mock::mock_view::SchemaRequest` | 1 | `NavHost::open_mock_panel(..)`（避免新增 `database → mock`） |
+| `crate::components::{group_form_dialog, cache_dialog}` | 2 | `NavHost`（对话框需 `Window`，只有宿主有） |
+| `database::*` | 7 | 无需处理（本来就是目标 crate） |
+
+> 结论：`NavHost` ≈ **宿主状态访问器（11）+ 提示（1）+ 连接开关（2）+ 视图偏好（3）+ 四个宿主命令（属性/SQL/分组表单/缓存对话框/Mock）**，
+> 约 20 个方法；其余全部随视图进 `database`。
+
+代价：A' 比原 A4/A5 大（nav 的 ~74 处 `shared.*` + 34 处 `nav_runtime::*` + 19 处 `nav_jobs::*` 要逐处归位），
 但它**同时完成 P2**，且不再需要「把 `Shared` 下沉」这个本身就矛盾的动作；`Shared` 留在 workbench，
-shell 只承 `ui.rs` 与（可选的）纯宿主级数据枚举。
+shell 只承 `ui.rs` + 纯数据模型（`model.rs`：面板枚举 / 边栏模式 / 连接条目）。
 
 若不想动 trait 面，另一条路是 §8 的**选型 B 前半段**：先把 `Shared` 中专属特性的字段
 （`driver_catalog` / `editor_sql` / `editor_dirty` / `editor_clear` / `mock_*` / `insight_panel` /
