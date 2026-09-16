@@ -58,7 +58,9 @@ DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table`
   面板持多张结果（`results` / `current` / `scenario_source`）+「当前表」下拉，出口作用于选中那张；
 - **不写库**（与单表生成同一定律），且**草稿不参与**（目标表 / 列 / 行数全来自模板）；
 - 列依赖 `resolve_dependencies` 用 Kahn 拓扑排序给出**生成顺序**与依赖映射；
-  注意：生成器本身按列顺序取值，**不解释依赖表达式**，场景表之间也**没有**外键关联（均属待办，见架构文档 §9-I6）。
+  注意：生成器本身按列顺序取值，**不解释依赖表达式**；场景表之间也**没有**外键引用完整性
+  （`ColumnDependency` 与 `DependencyType::ForeignKey` 两代都只是「模型就位、无人写值」，
+  `GeneratorConfig::ForeignKey { values }` 是「值集合」而非跨表引用——证据与两条路选一见架构 §9-I11）。
 
 ### 7. 视图随 crate（Feature 自持视图，方案①两处排版）
 
@@ -91,7 +93,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
 | `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock：场景模板菜单 + 结果表清单与「当前表」）/ `MockDetailView`（中央 tab）/ `MockHost` 契约 / 导入结构 + 列编辑 + 生成器搜索对话框 |
-| `src/mock_view/tests.rs` | 视图测试（21 纯逻辑 + 42 项 GPUI headless 窗口测试；含测试宿主桥） |
+| `src/mock_view/tests.rs` | 视图测试（23 纯逻辑 + 42 项 GPUI headless 窗口测试；含测试宿主桥） |
 | `src/templates.rs` | 内置 6 套场景模板 |
 | `src/persistence.rs` | `MockGenerationStore`（SQLite 读写；读写两侧由真库往返测试验住） |
 | `src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（宿主只回答「项目根在哪」） |
@@ -127,11 +129,11 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | **四个显式出口：新建表 / 追加（自增接续）/ 草稿箱 `{项目}/mock/` / 另存为** | 导出到源库（M7 约束：不回传源库） |
 | **列编辑对话框（列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认）** | 列依赖编辑（依赖表达式待拍板） |
 | **导入源库结构（连接 / 库 / schema / 表，cache-aside 取列）** | 表结构浏览选择器（现在是手填表名 + 连接默认库预填） |
-| **场景模板一键生成**：6 套内置多表模板（面板菜单）+ 多结果与「当前表」切换 | 场景表之间的外键关联（现在是各自独立生成） |
+| **场景模板一键生成**：6 套内置多表模板（面板菜单）+ 多结果与「当前表」切换 | 场景表之间的外键引用完整性（v1 同样未做，见架构 §9-I11） |
 | 草稿目录落盘（调用方给目录） | 草稿箱面板对 `mock/` 分组的展示（Phase D） |
 | 持久化为正式表（`persist_as_asset` / 装配层新建与追加） | 分析资源注册（M6） |
 | **生成历史**（最近 20 条，重放 / 删除 / 自动落库）+ **用户模板**（保存 / 应用 / 删除）都落 `{项目}/.RSmeta/project.db` | —— |
-| 公开 API 集成 32 项 + 视图测试 63 项（21 纯逻辑 + 42 窗口） + 持久化往返 5 项 + 历史/模板 4 项 + 装配 12 项 + 后台任务 10 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
+| 公开 API 集成 32 项 + 视图测试 65 项（23 纯逻辑 + 42 窗口） + 持久化往返 5 项 + 历史/模板 4 项 + 装配 12 项 + 后台任务 10 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
 
 ## 设计与验证
 
@@ -141,7 +143,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
   `crates/workbench/src/services/mock_jobs.rs`（后台任务：进度 + 取消）、
   `crates/workbench/src/components/mock_host.rs`（`MockHost` 的宿主实现）、
   `crates/workbench/src/panels/right.rs`（面板构造期创建 + 句柄登记）、`crates/workbench/src/view.rs`（详情 tab 加入中央 tab 组）。
-- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`（135 单元（21 纯逻辑 + 42 窗口 + 72 其他）+ 32 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
+- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`（137 单元（23 纯逻辑 + 42 窗口 + 72 其他）+ 32 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
   `cargo test -p rds-workbench --test mock_generator --test mock_jobs --test mock_job_cancel -j 2`（装配 12 + 后台任务 10 + 取消 1）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。
 - 生成器目录改动流程：改 `models.rs` 的 `GeneratorConfig` → 跑 `python tools/gen_mock_generator_catalog.py`

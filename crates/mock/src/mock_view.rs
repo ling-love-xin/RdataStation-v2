@@ -243,7 +243,10 @@ impl MockJobKind {
             Self::Generate => "生成中…".to_string(),
             Self::AppendTo(table) => format!("生成并追加到 {table} 中…"),
             Self::Scenario(_) => "按场景模板生成中…".to_string(),
-            Self::Persist(info) => format!("写入项目分析库中…（{} 行）", info.row_count),
+            Self::Persist(info) => format!(
+                "写入项目分析库中…（{} 行）",
+                with_thousands(info.row_count as u64)
+            ),
             Self::Export { path, .. } => format!("导出中…（{path}）"),
             Self::Scratchpad { .. } => "保存到草稿箱中…".to_string(),
         }
@@ -810,6 +813,25 @@ fn new_column_spec(id: u64, name: String, data_type: ColumnDataType) -> MockColu
     }
 }
 
+/// 数据行数的千分位文案（`161000` → `161,000`）。
+///
+/// 场景模板的合计行数可达六位（社交平台 161,000 行），不加分隔难以一眼读量；
+/// 与 `analytics_resource::present` / `insight::model` 各自保留一份同口径小助手的做法一致
+/// （只在文案上用，不引入依赖）。
+///
+/// 注意：只用于**数据行数**；`第 N 行` 这类**行号**不要过它。
+fn with_thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// 导出文件名（含扩展名）。
 fn mock_file_name(table_name: &str, format: &MockExportFormat) -> String {
     let ext = match format {
@@ -1150,7 +1172,9 @@ impl ScenarioChoice {
     pub fn menu_label(&self) -> String {
         format!(
             "{}（{} 张表 · {} 行）",
-            self.name, self.table_count, self.total_rows
+            self.name,
+            self.table_count,
+            with_thousands(self.total_rows as u64)
         )
     }
 }
@@ -1494,8 +1518,9 @@ impl MockPanel {
         self.landed = None;
         self.error = None;
         self.outcome = Some(format!(
-            "已应用模板 {}（{rows} 行 · {count} 列；种子与语言一并写入）",
-            template.name
+            "已应用模板 {}（{} 行 · {count} 列；种子与语言一并写入）",
+            template.name,
+            with_thousands(rows as u64)
         ));
     }
 
@@ -1700,7 +1725,9 @@ impl MockPanel {
                 self.error = None;
                 self.outcome = Some(format!(
                     "已生成 {} 行（耗时 {} ms）→ 临时表 {}",
-                    info.row_count, info.elapsed_ms, info.temp_table_name
+                    with_thousands(info.row_count as u64),
+                    info.elapsed_ms,
+                    info.temp_table_name
                 ));
                 self.results = vec![info];
                 self.current = 0;
@@ -1715,8 +1742,9 @@ impl MockPanel {
                 self.error = None;
                 let total: u32 = tables.iter().map(|table| table.row_count).sum();
                 self.outcome = Some(format!(
-                    "已按「{template_name}」生成 {} 张表（合计 {total} 行）：出口作用于当前选中的那张",
-                    tables.len()
+                    "已按「{template_name}」生成 {} 张表（合计 {} 行）：出口作用于当前选中的那张",
+                    tables.len(),
+                    with_thousands(total as u64)
                 ));
                 self.results = tables;
                 self.current = 0;
@@ -1726,14 +1754,23 @@ impl MockPanel {
             Ok(MockJobDone::Appended { table, total_rows }) => {
                 self.landed = Some(table.clone());
                 self.error = None;
-                self.outcome = Some(format!("已追加到 {table}（表内共 {total_rows} 行）"));
+                self.outcome = Some(format!(
+                    "已追加到 {table}（表内共 {} 行）",
+                    with_thousands(total_rows.max(0) as u64)
+                ));
                 self.host.notify(cx);
             }
             Ok(MockJobDone::Persisted { table, rows }) => {
                 self.landed = Some(table.clone());
                 // 新表要能立刻作为「追加到既有表」的目标
                 self.existing_tables = self.host.existing_tables();
-                self.succeed(format!("已在项目分析库新建表 {table}（{rows} 行）"), cx);
+                self.succeed(
+                    format!(
+                        "已在项目分析库新建表 {table}（{} 行）",
+                        with_thousands(rows.max(0) as u64)
+                    ),
+                    cx,
+                );
             }
             Ok(MockJobDone::Exported { message }) => self.succeed(message, cx),
             Err(e) => {
@@ -2094,11 +2131,15 @@ impl MockPanel {
                 "{} / {} 批（≈{} / {} 行）",
                 progress.batches_done,
                 progress.batches_total,
-                progress.rows_done(),
-                progress.rows_total
+                with_thousands(progress.rows_done() as u64),
+                with_thousands(progress.rows_total as u64)
             ),
             phase if by_table => format!("{}…（{} 张表）", phase.label(), progress.batches_total),
-            phase => format!("{}…（{} 行）", phase.label(), progress.rows_total),
+            phase => format!(
+                "{}…（{} 行）",
+                phase.label(),
+                with_thousands(progress.rows_total as u64)
+            ),
         };
         let cancel =
             cancellable.then(|| {
@@ -2401,59 +2442,60 @@ impl MockPanel {
                 .map(|info| (info.table_name.clone(), info.row_count))
                 .collect();
             let source = self.scenario_source.clone();
-            panel = panel.child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .w_full()
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .w_full()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(format!("结果表（{result_count} 张）")),
-                            )
-                            .child(
-                                Button::new("mock-result-picker")
-                                    .secondary()
-                                    .xsmall()
-                                    .label(format!("{current_label} ▾"))
-                                    .dropdown_menu(move |menu, _window, _cx| {
-                                        let mut menu = menu;
-                                        for (index, (table, rows)) in labels.iter().enumerate() {
-                                            let entity = entity.clone();
-                                            menu = menu.item(
-                                                PopupMenuItem::new(format!("{table}（{rows} 行）"))
+            panel =
+                panel.child(
+                    div()
+                        .v_flex()
+                        .gap_1()
+                        .w_full()
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .w_full()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child(format!("结果表（{result_count} 张）")),
+                                )
+                                .child(
+                                    Button::new("mock-result-picker")
+                                        .secondary()
+                                        .xsmall()
+                                        .label(format!("{current_label} ▾"))
+                                        .dropdown_menu(move |menu, _window, _cx| {
+                                            let mut menu = menu;
+                                            for (index, (table, rows)) in labels.iter().enumerate()
+                                            {
+                                                let entity = entity.clone();
+                                                menu = menu.item(
+                                                    PopupMenuItem::new(format!(
+                                                        "{table}（{} 行）",
+                                                        with_thousands(u64::from(*rows))
+                                                    ))
                                                     .checked(index == current_index)
                                                     .on_click(move |_, _, app| {
                                                         entity.update(app, |panel, cx| {
                                                             panel.select_result(index, cx)
                                                         });
                                                     }),
-                                            );
-                                        }
-                                        menu
-                                    }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .text_ellipsis()
-                            .child(match source {
+                                                );
+                                            }
+                                            menu
+                                        }),
+                                ),
+                        )
+                        .child(div().text_xs().text_color(muted).text_ellipsis().child(
+                            match source {
                                 Some(name) => {
                                     format!("来自场景模板「{name}」：出口只作用于当前选中的那张表")
                                 }
                                 None => "出口只作用于当前选中的那张表".to_string(),
-                            }),
-                    ),
-            );
+                            },
+                        )),
+                );
         }
 
         if let Some(info) = generated.as_ref() {
@@ -2464,7 +2506,10 @@ impl MockPanel {
                     .text_ellipsis()
                     .child(format!(
                         "{} · 临时表 {} · {} 行 · {} ms",
-                        info.table_name, info.temp_table_name, info.row_count, info.elapsed_ms
+                        info.table_name,
+                        info.temp_table_name,
+                        with_thousands(info.row_count as u64),
+                        info.elapsed_ms
                     )),
             );
         }
@@ -2580,12 +2625,12 @@ impl MockPanel {
         }
 
         for template in self.templates.clone() {
-            let rows = template.row_count.max(0);
+            let rows = template.row_count.max(0) as u64;
             let summary = template.description.clone().unwrap_or_default();
             let meta = if summary.is_empty() {
-                format!("{rows} 行")
+                format!("{} 行", with_thousands(rows))
             } else {
-                format!("{rows} 行 · {summary}")
+                format!("{} 行 · {summary}", with_thousands(rows))
             };
             let apply = {
                 let entity = cx.entity();
@@ -2718,7 +2763,8 @@ impl MockPanel {
         }
 
         for task in self.history.clone() {
-            let rows = task.generated_rows.unwrap_or(task.row_count);
+            let rows = task.generated_rows.unwrap_or(task.row_count).max(0);
+            let rows = with_thousands(rows as u64);
             let stamp = task
                 .created_at
                 .as_deref()
@@ -2856,7 +2902,7 @@ impl MockPanel {
 
         let panel = cx.entity();
         let columns = self.draft.columns.len();
-        let rows = self.draft.options.rows;
+        let rows = with_thousands(self.draft.options.rows as u64);
         window.open_dialog(cx, move |dialog, _window, cx| {
             let theme = cx.theme();
             let body = div()
@@ -3851,7 +3897,7 @@ impl Render for MockDetailView {
                     "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {} · {tail}",
                     draft.columns.len(),
                     draft.table_name,
-                    draft.options.rows,
+                    with_thousands(draft.options.rows as u64),
                     locale_label(&draft.options.locale)
                 )
             }
@@ -3859,7 +3905,7 @@ impl Render for MockDetailView {
                 "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {}",
                 draft.columns.len(),
                 draft.table_name,
-                draft.options.rows,
+                with_thousands(draft.options.rows as u64),
                 locale_label(&draft.options.locale)
             ),
         };
@@ -3880,11 +3926,14 @@ impl Render for MockDetailView {
                     for (index, (table, rows)) in result_tables.iter().enumerate() {
                         let panel = panel.clone();
                         menu = menu.item(
-                            PopupMenuItem::new(format!("{table}（{rows} 行）"))
-                                .checked(index == current_index)
-                                .on_click(move |_, _, app| {
-                                    panel.update(app, |panel, cx| panel.select_result(index, cx));
-                                }),
+                            PopupMenuItem::new(format!(
+                                "{table}（{} 行）",
+                                with_thousands(u64::from(*rows))
+                            ))
+                            .checked(index == current_index)
+                            .on_click(move |_, _, app| {
+                                panel.update(app, |panel, cx| panel.select_result(index, cx));
+                            }),
                         );
                     }
                     menu
@@ -3933,7 +3982,7 @@ impl Render for MockDetailView {
                 PREVIEW_ROWS.min(info.preview.rows.len()),
                 info.table_name,
                 info.temp_table_name,
-                info.row_count,
+                with_thousands(info.row_count as u64),
                 info.elapsed_ms
             ),
             None => format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点右上「生成」"),

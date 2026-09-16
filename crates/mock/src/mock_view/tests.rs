@@ -346,6 +346,34 @@ fn summary_counts_complex_items() {
     assert!(summary.contains("3 项"), "{summary}");
 }
 
+/// 行数文案的千分位：只给数据行数用，`第 N 行` 这类行号不过它。
+#[test]
+fn thousands_grouping_covers_the_scenario_scale() {
+    assert_eq!(super::with_thousands(0), "0");
+    assert_eq!(super::with_thousands(999), "999");
+    assert_eq!(super::with_thousands(1_000), "1,000");
+    assert_eq!(super::with_thousands(21_500), "21,500");
+    assert_eq!(super::with_thousands(161_000), "161,000");
+    assert_eq!(super::with_thousands(1_234_567), "1,234,567");
+}
+
+/// 场景菜单文案：用真实模板规模（名称 + 张表 + 千分位行数）。
+#[test]
+fn scenario_menu_label_reads_the_template_scale() {
+    let choices = super::builtin_scenario_choices();
+    assert_eq!(choices.len(), 6, "内置 6 套");
+    let ecommerce = choices
+        .iter()
+        .find(|choice| choice.id == "builtin:ecommerce")
+        .expect("电商模板");
+    assert_eq!(ecommerce.menu_label(), "电商系统（4 张表 · 21,500 行）");
+    let social = choices
+        .iter()
+        .find(|choice| choice.id == "builtin:social_media")
+        .expect("社交模板");
+    assert_eq!(social.menu_label(), "社交平台（4 张表 · 161,000 行）");
+}
+
 // ==================== 测试宿主桥 ====================
 
 /// 假宿主给场景任务回的三张表（表名，行数）。
@@ -732,7 +760,7 @@ fn generate_produces_preview_without_touching_sinks(cx: &mut TestAppContext) {
     panel.update(cx, |panel, _cx| {
         assert!(!panel.is_running(), "回填后应归位空闲");
         let outcome = panel.outcome().expect("应有成功文案");
-        assert!(outcome.contains("已生成 1000 行"), "{outcome}");
+        assert!(outcome.contains("已生成 1,000 行"), "{outcome}");
         assert!(outcome.contains("temp_mock_mock_data"), "{outcome}");
         assert!(panel.error().is_none());
         let info = panel.gen_info().expect("结果应就绪");
@@ -863,7 +891,7 @@ fn append_regenerates_with_target_and_reports_totals(cx: &mut TestAppContext) {
         assert!(
             panel
                 .outcome()
-                .is_some_and(|o| o.contains("已追加到 orders（表内共 1100 行）")),
+                .is_some_and(|o| o.contains("已追加到 orders（表内共 1,100 行）")),
             "{:?}",
             panel.outcome()
         );

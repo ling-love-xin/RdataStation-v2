@@ -102,7 +102,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（重型 crate 链接耗内存（DuckDB 已改动态链接）），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 135 单元（含 63 视图）+ 32 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
+cargo test  -p rds-mock -j 2                                   # 137 单元（含 65 视图）+ 32 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 12 项
 cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 10 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
@@ -113,7 +113,7 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 135 单元（21 纯逻辑 + 42 窗口 + 72 其他）+ 32 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
+| `cargo test -p rds-mock` | 137 单元（23 纯逻辑 + 42 窗口 + 72 其他）+ 32 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
 | `cargo test -p rds-workbench` | 全绿（含 12 装配 + 10 任务测试） |
 
@@ -125,7 +125,7 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 文档 | 内容 |
 | --- | --- |
 | `mock-prototype-design.md` | 长什么样：落位与尺寸 / **方案①两处排版** / 对话框 / 状态矩阵 / 与 v1 逐项对照 |
-| `mock-prototype.html` | 交互稿（v2 原生，RDS Light/Dark + 11 场景可切） |
+| `mock-prototype.html` | 交互稿（v2 原生，RDS Light/Dark + 13 场景可切） |
 | `mock-architecture.md` | 为什么这样设计：不变式 / 概念模型 / 分层与状态所有权 / 数据流 / D1–D19 决策表 / 降级矩阵 / 已知问题 |
 | `mock-dev-plan.md` | 做什么、做到哪：现状盘点 / Phase A–E 任务与落点 / 验收与风险 / 进度记录 |
 | `crates/mock/README.md` | crate 级入口（特点与代码结构，不复述本目录设计） |
@@ -148,4 +148,4 @@ v1 素材（暂存区，删除前请先提炼）：`v1/docs/frontend/mock/mock-d
 | 9 | 生成任务 / 模板**落库接线** | `MockGenerationStore` 8 方法 + 迁移 009 已就位但无 UI | ✅ 已完成（历史段 + 模板段，见 `mock-dev-plan.md` §7 的 C4 / D4-D5 两行） |
 | 10 | ~~**场景模板一键生成**~~ | 6 套内置多表场景从「引擎有 API」变「面板能点」 | ✅ 本轮完成（`MockJobKind::Scenario` + `generate_scenario_at` + 多结果与「当前表」切换） |
 | 11 | ~~**出口改成只认结果**~~ | 场景模板产出的表与草稿无关，出口拿草稿当写入规格会建错表 | ✅ 本轮完成（`MockGenInfo` 带 `columns`；三个出口不再收 `draft`；草稿校验收拢到 `MockJobKind::uses_draft`） |
-| 12 | 场景表之间的**关联完整性**（外键列指向已生成表的主键） | 多表场景目前是「各自独立生成」，表间没有引用关系，关联查询会落空 | 需先拍板（架构 §9-I6 同一条线：依赖只订顺序、不解释取值） |
+| 12 | 场景表之间的**关联完整性**（`order_items.order_id` 指向 `orders.id`） | 多表场景目前各自独立生成，关联查询会落空 | ⚠️ **不是 v2 丢的能力**：v1 同样没做（`ForeignKey { values }` 两代都只是「值集合」；v1 原型的模拟实现是 `'FK_' + 随机数`，引擎的同名分支 `#[allow(dead_code)]`）。`ColumnDependency.ref_table/ref_column` 是现成挂点，做与不做见架构 §9-I11 |
