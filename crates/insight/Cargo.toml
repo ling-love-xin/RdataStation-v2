@@ -30,6 +30,9 @@ toml.workspace = true
 # ===== UI（视图与 model / service 同 crate，见 GPUI-kit 编码指南）=====
 # M8 Phase 1 起：右 Dock 洞察面板的视图在本 crate（归属决策 D21 = 方案 A）
 gpui-kit.workspace = true
+# 视图共用资产（尺寸常量）：面板与外壳必须一致的值到这里取，**不再镜像**。
+# 依赖方向 insight → workbench-shell（后者不得依赖任何特性 crate）。
+workbench_shell.workspace = true
 
 # ===== 规则索引存储（service/indexer）=====
 # 索引写 SQLite（全局库 / 项目库），并对规则文件正文取 SHA256 做增量判据。

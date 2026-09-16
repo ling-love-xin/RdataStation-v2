@@ -23,6 +23,19 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 1 第六批：尺寸常量改取外壳（镜像债清零）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **124 项** + 集成 4 项全绿；零告警）
+
+| 项 | 内容 |
+| --- | --- |
+| 依赖 | `insight` 新增 `workbench_shell` 依赖（方向 insight → workbench-shell；后者不得依赖任何特性 crate），与 `workbench` 同取一份共用资产 |
+| 常量 | `insight/src/ui.rs` 的 4 个**镜像**常量（面板头 / 行高 / 内距 / 空态图标）改为 `pub use workbench_shell::ui::{…}`——镜像两份会在任一侧调整时静默错位，而这几条恰好是面板与外壳必须一致的值；视图侧 `ui::PANEL_HEADER_HEIGHT` 等路径不变 |
+| 保留 | M8 专用常量（Tab 条高 / 直方图条高 / 占比条高 / 样本截断 / 行内图标 / 分区标题字号）仍登记在本 crate |
+
+**背景**：原先的结论是「`shared` 不依赖 gpui-kit，跨 crate 尺寸常量没有归宿；出现第三个使用方时再上收」。外壳 crate 落地后归宿已存在（`crates/workbench_shell`，定位「面板状态 + 视图共用资产」），洞察作为第二个视图自持的模块直接接上。
+
+
 ### 2026-09-16 — Phase 1 第五批：取数作业随特性 crate 归位
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **124 项** + 集成 4 项全绿；零告警）

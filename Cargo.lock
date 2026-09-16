@@ -7993,6 +7993,7 @@ dependencies = [
  "include_dir",
  "rds-engine",
  "rds-shared",
+ "rds-workbench-shell",
  "rusqlite",
  "serde",
  "serde_json",

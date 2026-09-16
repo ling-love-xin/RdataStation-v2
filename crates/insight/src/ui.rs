@@ -20,17 +20,11 @@ pub const INSIGHT_INLINE_ICON_SIZE: f32 = 0.875;
 /// 分区标题字号（0.75rem = 12px，对齐面板内的次级信息层级）
 pub const INSIGHT_SECTION_TITLE_FONT: f32 = 0.75;
 
-// ===== 与 workbench 外壳共用的结构尺寸（镜像，见下）=====
+// ===== 与外壳共用的结构尺寸（重导出）=====
 //
-// `shared` 目前不依赖 gpui-kit，跨 crate 共享尺寸常量还没有归宿：这几个值是面板
-// 与外壳必须一致的（否则面板头会与 Dock tab 条错位），故在两侧各登记一份。
-// 出现第三处使用方时，再统一上收到一个带 gpui-kit 的公共位置。
-
-/// 面板头高度（2.25rem = 36px；镜像 `workbench::ui::PANEL_HEADER_HEIGHT`）
-pub const PANEL_HEADER_HEIGHT: f32 = 2.25;
-/// 列表 / 树行高（1.5rem = 24px；镜像 `workbench::ui::ROW_HEIGHT`）
-pub const ROW_HEIGHT: f32 = 1.5;
-/// 面板内容内距（0.5rem = 8px；镜像 `workbench::ui::PANEL_PADDING`）
-pub const PANEL_PADDING: f32 = 0.5;
-/// 空态图标尺寸（2.25rem = 36px；镜像 `workbench::ui::SCRATCHPAD_EMPTY_ICON_SIZE`）
-pub const EMPTY_ICON_SIZE: f32 = 2.25;
+// 归宿是 `crates/workbench_shell`（"面板状态 + 视图共用资产"）：面板头 / 行高 / 内距 /
+// 空态图标必须与外壳一致，镜像两份会在任一侧调整时静默错位。
+// 故这里**重导出**而不是再登记一份——视图侧 `ui::PANEL_HEADER_HEIGHT` 等路径不变。
+pub use workbench_shell::ui::{
+    PANEL_HEADER_HEIGHT, PANEL_PADDING, ROW_HEIGHT, SCRATCHPAD_EMPTY_ICON_SIZE as EMPTY_ICON_SIZE,
+};
