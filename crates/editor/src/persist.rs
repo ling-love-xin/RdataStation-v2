@@ -17,7 +17,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::model::{DocumentId, EditorMode};
+use crate::model::{DocumentId, EditorMode, ReadOnly};
 use crate::service::OpenOutcome;
 use crate::shared::EditorShared;
 
@@ -84,10 +84,34 @@ pub fn open_file(
     path: &Path,
     mode: EditorMode,
 ) -> Result<OpenOutcome, PersistError> {
+    open_file_with(shared, path, mode, None)
+}
+
+/// 以**编辑器只读**打开（分析资源本体 / 查看历史快照这类"能看不能改"的来源）。
+///
+/// 只读由**发起方判定**后传进来：编辑器不认识 `resources/` 的归属，也不知道
+/// "这条路径是别人的本体，改它要用取回"——它只把"不可输入"表达到底
+/// （状态栏「只读」+ 编辑内核 readonly + 保存动作拒绝）。
+pub fn open_file_read_only(
+    shared: &EditorShared,
+    path: &Path,
+    mode: EditorMode,
+) -> Result<OpenOutcome, PersistError> {
+    open_file_with(shared, path, mode, Some(true))
+}
+
+fn open_file_with(
+    shared: &EditorShared,
+    path: &Path,
+    mode: EditorMode,
+    editor_read_only: Option<bool>,
+) -> Result<OpenOutcome, PersistError> {
     // 先取出结果再变更：`if let Some(x) = shared.service()…` 会把只读借用活到分支体内，
     // 分支里再 `update()` 就会撞上 `RefCell already borrowed`
     let existing = shared.service().find_by_path(path).cloned();
     if let Some(id) = existing {
+        // 已在编辑器里（多半是用户自己开过的工作副本）：只激活、不重读，**也不改只读态**
+        // ——把人家打开的文档悄悄锁上，比不锁更难排查。
         shared.update(|service| service.activate(&id));
         return Ok(OpenOutcome::Activated(id));
     }
@@ -101,9 +125,17 @@ pub fn open_file(
     } else {
         load(path)?
     };
-    Ok(shared.open(
-        crate::service::OpenRequest::file(path, content, mode).with_tier(tier),
-    ))
+    let mut request = crate::service::OpenRequest::file(path, content, mode).with_tier(tier);
+    if let Some(true) = editor_read_only {
+        // 连接维不动（它是另一回事：能不能写库，不是能不能改文本）；
+        // 先取值再移动（`with_read_only` 按值收 `self`）。
+        let connection = request.read_only.connection;
+        request = request.with_read_only(ReadOnly {
+            editor: true,
+            connection,
+        });
+    }
+    Ok(shared.open(request))
 }
 
 /// 保存某文档：写盘成功后清脏（**先写盘、后清脏**，写失败不留"已保存"的假状态）
@@ -171,6 +203,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("建临时目录");
         dir
+    }
+
+    #[test]
+    fn read_only_open_marks_the_document_editor_read_only() {
+        // P1.6（M6）：分析资源本体以编辑器只读打开——可看不可改，改它要走取回。
+        let dir = temp_dir("read_only");
+        let path = dir.join("asset.sql");
+        write(&path, "select 1").expect("写盘");
+        let shared = EditorShared::new();
+
+        let outcome = open_file_read_only(&shared, &path, EditorMode::Sql).expect("打开");
+        let read_only = shared
+            .service()
+            .find(outcome.id())
+            .expect("文档在")
+            .read_only();
+        assert!(read_only.editor, "只读打开要置编辑器只读");
+        assert!(
+            !read_only.connection,
+            "连接维不受影响（能不能写库是另一回事）"
+        );
+
+        // 可写版对照：同一个入口族的默认行为不变（草稿箱走的是它）。
+        let writable = dir.join("draft.sql");
+        write(&writable, "select 2").expect("写盘");
+        let outcome = open_file(&shared, &writable, EditorMode::Sql).expect("打开");
+        assert!(
+            shared
+                .service()
+                .find(outcome.id())
+                .expect("文档在")
+                .read_only()
+                .can_edit(),
+            "可写打开不该被带上只读"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

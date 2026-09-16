@@ -174,8 +174,11 @@ pub fn row_tail(detail: &str, modified: &str, version: i32) -> String {
 pub trait ResourcesHost: 'static {
     /// 归档入口（面板头「归档」）：弹对话框 / 选文件由宿主负责。
     fn request_archive(&self, window: &mut Window, cx: &mut App);
-    /// 打开（只读）。
-    fn request_open(&self, resource_id: &str, window: &mut Window, cx: &mut App);
+    /// 打开（只读）：宿主以**编辑器只读**打开本体——改它要先去取回。
+    ///
+    /// 与 `request_checkout` 同理：收的是**面板已有的那条详情**（本体路径在它身上），
+    /// 宿主不必回头读面板的选中态。
+    fn request_open(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
     /// 取回（检出）。
     ///
     /// 参数给的是**面板已有的那条详情**（而不是一个 id）：宿主据此命工作副本名与
@@ -281,10 +284,17 @@ impl ListDelegate for ArchiveListDelegate {
         let host = self.host.clone();
         // 取回要往草稿箱写一份工作副本：本体异常的存档（缺失 / 内容已变）与只读项目都不给走。
         let can_checkout = row.status == ArchiveStatus::Normal && !self.read_only;
-        let id_open = row.id.clone();
-        // 取回要拿整条详情（宿主拿它拼工作副本名）：在渲染期提前拷一份——
+        // 打开 / 取回都要整条详情（本体路径 / 扩展名在它身上）：渲染期提前拷一份——
         // 菜单回调触发时面板可能已被借用，不能再回头读。
-        let checkout_detail = self.details.get(&row.id).cloned();
+        let open_detail = self.details.get(&row.id).cloned();
+        // 「打开（只读）」要本体在位（缺失的行没什么可开的，旧行也可能没登记路径）。
+        let can_open = open_detail
+            .as_ref()
+            .map(|detail| {
+                detail.status != ArchiveStatus::Missing && detail.payload_rel_path.is_some()
+            })
+            .unwrap_or(false);
+        let checkout_detail = open_detail.clone();
         let id_delete = row.id.clone();
 
         let mut line = div()
@@ -352,11 +362,19 @@ impl ListDelegate for ArchiveListDelegate {
                     .child(line)
                     .context_menu(move |menu, _window, _cx| {
                         let mut menu = menu;
-                        menu = menu.item(PopupMenuItem::new("打开（只读）").on_click({
-                            let host = host.clone();
-                            let id = id_open.clone();
-                            move |_, window, cx| host.request_open(&id, window, cx)
-                        }));
+                        menu = menu.item(
+                            PopupMenuItem::new("打开（只读）")
+                                .disabled(!can_open)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = open_detail.clone();
+                                    move |_, window, cx| {
+                                        if let Some(detail) = detail.as_ref() {
+                                            host.request_open(detail, window, cx);
+                                        }
+                                    }
+                                }),
+                        );
                         menu = menu.item(
                             PopupMenuItem::new("取回（检出）…")
                                 .disabled(!can_checkout)
@@ -410,10 +428,19 @@ impl ListDelegate for ArchiveListDelegate {
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
-        let Some(id) = self.selected_id.clone() else {
+        let Some(detail) = self
+            .selected_id
+            .as_deref()
+            .and_then(|id| self.details.get(id))
+            .cloned()
+        else {
             return;
         };
-        self.host.request_open(&id, window, cx);
+        // 本体缺失 / 旧行没登记路径：回车与菜单项同口径地什么都不做（菜单项也是禁用的）。
+        if detail.status == ArchiveStatus::Missing || detail.payload_rel_path.is_none() {
+            return;
+        }
+        self.host.request_open(&detail, window, cx);
     }
 }
 
@@ -1120,8 +1147,13 @@ impl Render for ResourcesPanel {
             .on_action(cx.listener({
                 let host = host.clone();
                 move |panel: &mut Self, _: &commands::OpenSelected, window, cx| {
-                    if let Some(id) = panel.selected.clone() {
-                        host.request_open(&id, window, cx);
+                    let detail = panel
+                        .selected
+                        .as_deref()
+                        .and_then(|id| panel.snapshot.details.get(id))
+                        .cloned();
+                    if let Some(detail) = detail.as_ref() {
+                        host.request_open(detail, window, cx);
                     }
                 }
             }))

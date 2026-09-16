@@ -4,16 +4,18 @@
 //! 工作台在这里把「重绘 / 只读判定 / 动作去向」注入为 [`ResourcesHost`]——与 `mock_host`
 //! 同一形态（crate 持有视图与状态，宿主只装配）。
 //!
-//! ## 动作去向（本批起：归档与取回是真实现）
+//! ## 动作去向（本批起：归档 / 取回 / 打开都是真实现）
 //!
 //! - **归档**：系统文件选择 → 归档确认对话框 → 入队后台任务（`services::resource_jobs`）。
 //!   目标相对路径与重名避让由 `PayloadStore::{rel_path_taken, free_rel_path}` 定
 //!   （搬本体与命名规则都是本模块的知识，宿主不自己拼 `resources/`）。
+//! - **打开（只读）**：本体以**编辑器只读**打开（`Shared::request_open_in_editor_read_only` →
+//!   编辑器 `persist::open_file_read_only`）；路径由 `PayloadStore::resolve` 解析（守卫在那一层）。
 //! - **取回**：取回对话框 → 入队后台任务 → 回执与"顺手打开"由侧栏轮询印做。
-//! - 打开（只读）：仍需编辑器侧"分析资源锁定"只读来源（P1.6），本批仍给明确回执；
+//! - **撤销归档**：撤销栏的凭据原样交给工作线程（本体移回原位 + 删登记行）。
 //! - 移入回收站：一律走项目级 `ProjectTrash`，而上提尚未落地（P0.8）——**不做**先软删
 //!   再等回收站那条（会变成两套回收站，违反模块硬约束 5）；
-//! - 索引修复对话框：Phase 3（异常计数本批已在状态行可见）。
+//! - 索引修复对话框：Phase 3（异常计数已在状态行可见）。
 //!
 //! 回执而不是空操作：面板上的按钮是既有入口，点了没反应比"明确说还没接入"更难排查。
 
@@ -144,8 +146,27 @@ impl ResourcesHost for WorkbenchResourceHost {
         });
     }
 
-    fn request_open(&self, _resource_id: &str, _window: &mut Window, cx: &mut App) {
-        self.pending("只读打开尚未接入", "（需编辑器只读来源，P1.6）", cx);
+    fn request_open(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法打开存档", cx) else {
+            return;
+        };
+        let Some(rel) = detail.payload_rel_path.as_deref() else {
+            self.notice("资产库：这条存档没有登记本体路径（旧行），请先走索引修复", cx);
+            return;
+        };
+        // 本体路径由 `PayloadStore` 解析（越界与点前缀的守卫在那一层，宿主不自己拼路径）。
+        let payload = PayloadStore::new(root);
+        let path = match payload.resolve(rel) {
+            Ok(path) => path,
+            Err(error) => {
+                self.notice(format!("资产库：无法打开本体（{error}）"), cx);
+                return;
+            }
+        };
+        // **编辑器只读**：改它要先去取回（本体不可写是模块硬约束 2）。
+        self.shared.request_open_in_editor_read_only(path.clone());
+        self.shared.notify_host(cx);
+        let _ = path;
     }
 
     fn request_checkout(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {

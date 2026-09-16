@@ -170,9 +170,27 @@ impl WorkbenchView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        self.open_in_editor_with(path, editor::model::ReadOnly::none(), window, cx)
+    }
+
+    /// 同上，但带上**只读维度**（M6 的存档本体：编辑器只读，改它要先去取回）。
+    ///
+    /// 只读由发起方判定（编辑器不认识 `resources/`），两条路只在“建文档时置不置只读”上分叉：
+    /// 已打开的文档仍旧只激活（不悄悄把用户手上的文档锁掉）。
+    pub(crate) fn open_in_editor_with(
+        &mut self,
+        path: std::path::PathBuf,
+        read_only: editor::model::ReadOnly,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         let mode = editor::mode::resolve_mode(&path, None);
-        let outcome = editor::persist::open_file(&self.editor_service, &path, mode)
-            .map_err(|error| error.to_string())?;
+        let outcome = if read_only.can_edit() {
+            editor::persist::open_file(&self.editor_service, &path, mode)
+        } else {
+            editor::persist::open_file_read_only(&self.editor_service, &path, mode)
+        }
+        .map_err(|error| error.to_string())?;
         // M5 Phase C-2：草稿带连接绑定（`file_meta`）时，打开即预选。
         // 只对**新建**文档生效——同路径已打开走的是“只激活”，不覆盖用户手动改过的连接。
         if !outcome.is_activated() {
@@ -1413,10 +1431,11 @@ impl Render for WorkbenchView {
                 }
             }
         }
-        // M5 草稿箱：双击 / Enter / 右键「打开」→ 中央编辑器（同路径已打开只激活，不重读）。
+        // M5 草稿箱 / M6 资产库：双击 / Enter / 右键「打开」→ 中央编辑器
+        //（同路径已打开只激活，不重读；M6 的本体带编辑器只读）。
         // 消费点在宿主 render（文档与 Dock 面板属宿主状态）；失败走通知栏。
-        if let Some(path) = self.shared.take_open_in_editor() {
-            if let Err(e) = self.open_in_editor(path, window, cx) {
+        if let Some(request) = self.shared.take_open_in_editor() {
+            if let Err(e) = self.open_in_editor_with(request.path, request.read_only, window, cx) {
                 *self.shared.notice.borrow_mut() = Some(format!("打开文件失败: {e}"));
             }
         }

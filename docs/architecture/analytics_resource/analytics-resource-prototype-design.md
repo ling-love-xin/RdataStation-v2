@@ -208,6 +208,8 @@ sequenceDiagram
 
 **不做自动修复**：全部需要用户确认（静默导入会让"资源"变成用户没同意过的东西）。
 
+> **落地现状（2026-09-17）**：三层已全部接上——①应用守卫（Phase 0 的 `PayloadStore` 写入拒绝）、②**编辑器只读**（本刀：`editor::persist::open_file_read_only`，只读维度由发起方经 `OpenInEditorRequest` 传入，宿主走 `open_in_editor_with`）、③文件系统只读属性（辅助，失败只警告）。
+
 ### 4.6 只读的强制与提示（三重）
 
 | 层 | 手段 |

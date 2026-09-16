@@ -268,26 +268,28 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
         body = body.child(section);
     }
 
-    // 动作区：目前只有「取回（检出）…」——它是只读存档**唯一的编辑入口**，也是用户看完
-    // 归档凭证后最可能的下一步。其余动作各自被挡着（打开只读 = P1.6、移入回收站 = P0.8、
+    // 动作区：只读存档的两个真动作（打开（只读）/ 取回（检出）…）——
+    // 取回是**唯一的编辑入口**。其余动作各自被挡着（移入回收站 = P0.8、
     // 标签 / 版本历史 = Phase 2/3），**不提前摆点不动的入口**。
     if let Some(actions) = actions {
-        let blocked = actions.read_only
-            || matches!(
-                detail.status,
-                ArchiveStatus::Missing | ArchiveStatus::ContentChanged
-            );
+        let missing = detail.status == ArchiveStatus::Missing;
+        let changed = detail.status == ArchiveStatus::ContentChanged;
+        let can_open = !missing && detail.payload_rel_path.is_some();
+        let can_checkout = !missing && !changed && !actions.read_only;
         // 禁用时给的理由要**指向出口**（去哪儿处理），不是一句"不可用"。
-        let hint = if actions.read_only {
+        let hint = if missing {
+            "本体缺失，先在状态行「修复…」处理"
+        } else if actions.read_only {
             "项目处于只读模式"
-        } else if blocked {
-            "本体异常，先在状态行「修复…」处理"
+        } else if changed {
+            "内容已变：先在状态行「修复…」接受当前内容或从历史还原，再取回"
         } else {
-            "复制一份可写的工作副本，本体不动"
+            "打开 = 只读查看本体；取回 = 复制一份可写的工作副本（本体不动）"
         };
         let host = actions.host.clone();
         // 闭包是 `Fn`（每帧重建），且它比 `detail` 活得久——拷一份带走。
-        let detail_for_click = detail.clone();
+        let detail_for_open = detail.clone();
+        let detail_for_checkout = detail.clone();
         body = body.child(
             div()
                 .v_flex()
@@ -297,13 +299,34 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                 .border_color(border)
                 .pt_2()
                 .child(
-                    Button::new("archive-detail-checkout")
-                        .ghost()
-                        .label("取回（检出）…")
-                        .disabled(blocked)
-                        .on_click(move |_, window, cx| {
-                            host.request_checkout(&detail_for_click, window, cx)
-                        }),
+                    div()
+                        .h_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(
+                            Button::new("archive-detail-open")
+                                .ghost()
+                                .label("打开（只读）")
+                                .disabled(!can_open)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = detail_for_open.clone();
+                                    move |_, window, cx| host.request_open(&detail, window, cx)
+                                }),
+                        )
+                        .child(
+                            Button::new("archive-detail-checkout")
+                                .ghost()
+                                .label("取回（检出）…")
+                                .disabled(!can_checkout)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = detail_for_checkout.clone();
+                                    move |_, window, cx| {
+                                        host.request_checkout(&detail, window, cx)
+                                    }
+                                }),
+                        ),
                 )
                 .child(div().text_xs().text_color(muted).child(hint)),
         );

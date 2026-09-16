@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use gpui_kit::{App, Focusable as _, TestAppContext, Window};
 
-use rds_analytics_resource::commands::ClearSearch;
+use rds_analytics_resource::commands::{ClearSearch, OpenSelected};
 use rds_analytics_resource::detail_view::ArchiveDetail;
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
@@ -39,8 +39,8 @@ impl ResourcesHost for RecordingHost {
     fn request_archive(&self, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push("archive".to_string());
     }
-    fn request_open(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
-        self.calls.borrow_mut().push(format!("open:{resource_id}"));
+    fn request_open(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls.borrow_mut().push(format!("open:{}", detail.id));
     }
     fn request_checkout(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls
@@ -84,12 +84,41 @@ fn snapshot(rows: Vec<ArchiveRow>, read_only: bool) -> ResourcesSnapshot {
             _ => counts.archived += 1,
         }
     }
+    // 详情与行同一次取数产出（生产入口就是 `build_snapshot`）：打开 / 取回都要靠它，
+    // 窗口用例里也照这个形状造，否则“动作拿得到本体路径”这条链在测试里是断的。
+    let details = rows
+        .iter()
+        .map(|row| (row.id.clone(), detail_for(row)))
+        .collect();
     ResourcesSnapshot {
         rows,
         counts,
         read_only,
-        // 窗口用例只关心行与计数；详情区（右栏用）不在这里造数据。
-        details: std::collections::HashMap::new(),
+        details,
+    }
+}
+
+/// 一行 → 详情（窗口用例只关心动作要用的那几个字段）。
+fn detail_for(row: &ArchiveRow) -> ArchiveDetail {
+    ArchiveDetail {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        alias: None,
+        kind: row.kind,
+        version: row.version,
+        status: row.status,
+        readonly: true,
+        size_label: "1.2 KB".to_string(),
+        modified_label: "2026-09-17 08:00".to_string(),
+        archived_label: "2026-09-17 08:00".to_string(),
+        promoted_from: None,
+        source_connection_id: None,
+        source_table: None,
+        content_hash: Some("0123456789abcdef0123".to_string()),
+        payload_rel_path: Some(format!("{}.sql", row.id)),
+        history_label: String::new(),
+        tags: Vec::new(),
+        group: None,
     }
 }
 
@@ -357,6 +386,46 @@ fn host_selection_mirrors_into_list_without_reentry(cx: &mut TestAppContext) {
     let selected = cx.update(|_window, cx| panel.read(cx).selected_id().map(str::to_string));
     assert_eq!(selected, None);
     assert!(host.calls().is_empty(), "仅渲染与选中不应触发任何宿主动作");
+}
+
+#[gpui_kit::test]
+fn open_selected_action_hands_the_host_the_row_detail(cx: &mut TestAppContext) {
+    // 走生产入口：聚焦面板 → 派发 `OpenSelected`（右键菜单「打开（只读）」与详情面板按钮同一条道）。
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![
+                        row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1),
+                        row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 2),
+                    ],
+                    false,
+                ),
+                cx,
+            );
+            panel.set_selected(Some("ar_2".to_string()), cx);
+        });
+    });
+    cx.update(|window, cx| {
+        let handle = panel.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(OpenSelected), cx);
+    });
+
+    assert_eq!(
+        host.calls(),
+        vec!["open:ar_2"],
+        "打开要拿的是**选中那条的详情**（宿主据此解析本体路径）"
+    );
 }
 
 #[gpui_kit::test]

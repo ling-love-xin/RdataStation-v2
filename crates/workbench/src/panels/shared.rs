@@ -55,6 +55,15 @@ pub struct EditorBridge {
     pub show_search_results: Rc<dyn Fn(Option<ScratchpadSearchView>, &mut App)>,
 }
 
+/// 「在编辑器中打开」请求：路径 + 只读维度。
+///
+/// 只读**由发起方判定**：草稿箱的草稿可写，M6 的存档本体只能看——编辑器两者都不认识。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenInEditorRequest {
+    pub path: std::path::PathBuf,
+    pub read_only: editor::model::ReadOnly,
+}
+
 /// 草稿箱对外命令端口（装配期由 `WorkbenchView::init_workspace` 注入）。
 ///
 /// 编辑区的「全部替换」需要草稿箱的轮询印在跑：原先靠 `Shared` 布尔标记 +
@@ -122,9 +131,10 @@ pub struct Shared {
     pub scratchpad_bridge: Rc<RefCell<Option<ScratchpadBridge>>>,
     /// M5：请求在中央编辑器中打开某个文件（草稿箱双击 / Enter 置位，宿主 render 消费）。
     ///
-    /// 只传**绝对路径**：编辑器无根，按路径自己判定模式 / 只读等级（Phase C 契约）。
+    /// 只传**绝对路径 + 只读维度**：编辑器无根、也不认识 `resources/` 的归属，
+    /// “这条路径能不能改”由发起方说（M6 的存档本体 = 编辑器只读）。
     /// 字段已收为私有：外部只能走 `request_open_in_editor` / `take_open_in_editor`。
-    open_file_request: Rc<RefCell<Option<std::path::PathBuf>>>,
+    open_file_request: Rc<RefCell<Option<OpenInEditorRequest>>>,
     /// B11：请求在中央编辑器里打开一条查询（导航「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL」
     /// 与拖拽都入这里，宿主 render 消费）。字段同样私有，走 `request_query` / `take_query_request`。
     query_request: Rc<RefCell<Option<QueryRequest>>>,
@@ -225,16 +235,30 @@ impl Shared {
     /// 取出（并清空）「在编辑器中打开」请求：宿主 render 每帧调用一次。
     ///
     /// 与 `take_project_action_request` 同口径：取出即清空，同一次请求不会重复打开。
-    pub fn take_open_in_editor(&self) -> Option<std::path::PathBuf> {
+    pub fn take_open_in_editor(&self) -> Option<OpenInEditorRequest> {
         self.open_file_request.borrow_mut().take()
     }
 
-    /// 请求在中央编辑器中打开文件（草稿箱双击 / Enter / 右键「打开」）。
+    /// 请求在中央编辑器中打开文件（草稿箱双击 / Enter / 右键「打开」）——**可写**。
     ///
     /// 生产端（Enter / 右键路径）拿不到 `Window`，消费端（宿主打开文档）必须有 `Window`，
     /// 因此保留「请求 → 宿主 render 消费」的一帧延迟；字段私有，外部只能走这一对方法。
     pub fn request_open_in_editor(&self, path: std::path::PathBuf) {
-        *self.open_file_request.borrow_mut() = Some(path);
+        *self.open_file_request.borrow_mut() = Some(OpenInEditorRequest {
+            path,
+            read_only: editor::model::ReadOnly::none(),
+        });
+    }
+
+    /// 请求在中央编辑器中**以编辑器只读**打开（M6 的存档本体：只能看、不能改）。
+    ///
+    /// 与可写版只差一个只读维度，但语义上是两件事：改存档本体要先去取回（检出），
+    /// 直接允许编辑就等于绕开了本体的只读守卫（模块硬约束 2）。
+    pub fn request_open_in_editor_read_only(&self, path: std::path::PathBuf) {
+        *self.open_file_request.borrow_mut() = Some(OpenInEditorRequest {
+            path,
+            read_only: editor::model::ReadOnly::editor_only(),
+        });
     }
 
     /// 取出（并清空）项目栏的动作请求：宿主 render 每帧调用一次。
@@ -437,12 +461,21 @@ mod tests {
         shared.request_open_in_editor(PathBuf::from("/p/a.sql"));
         assert_eq!(
             shared.take_open_in_editor(),
-            Some(PathBuf::from("/p/a.sql")),
-            "首次取出得到路径"
+            Some(OpenInEditorRequest {
+                path: PathBuf::from("/p/a.sql"),
+                read_only: editor::model::ReadOnly::none(),
+            }),
+            "首次取出得到路径（可写）"
         );
         assert!(
             shared.take_open_in_editor().is_none(),
             "取出即清空：同一请求不会重复打开"
         );
+
+        // 只读版：同一个槽，但带上"编辑器只读"（M6 的存档本体走这条）。
+        shared.request_open_in_editor_read_only(PathBuf::from("/p/resources/a.sql"));
+        let request = shared.take_open_in_editor().expect("只读请求");
+        assert!(!request.read_only.can_edit(), "取回的应是编辑器只读");
+        assert_eq!(request.path, PathBuf::from("/p/resources/a.sql"));
     }
 }

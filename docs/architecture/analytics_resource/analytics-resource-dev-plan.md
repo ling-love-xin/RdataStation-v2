@@ -8,6 +8,21 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 1 第十刀：只读三重守卫（P1.6，编辑器侧）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 编辑器只读打开 ✅ | `editor::persist::open_file_read_only`（与 `open_file` 同一个内部实现，只差一个只读维度）：以**编辑器只读**建文档——状态栏「只读」+ 编辑内核 readonly + 保存动作拒绝，全走既有机制（`ReadOnly { editor, connection }` 的两个维度**不合并**） | `crates/editor/src/persist.rs` |
+| 端口带只读维度 ✅ | 「在编辑器中打开」请求由**路径**扩成 `OpenInEditorRequest { path, read_only }`：草稿箱的草稿可写、M6 的存档本体只能看——**只读由发起方判定**（编辑器不认识 `resources/` 的归属） | `crates/workbench/src/panels/{shared,mod}.rs` |
+| 宿主 ✅ | `WorkbenchView::open_in_editor_with(path, read_only, …)`；同路径已打开仍旧**只激活、不重读、也不改只读态**（不把用户手上的文档悄悄锁上） | `crates/workbench/src/view.rs` |
+| 面板接线 ✅ | `ResourcesHost::request_open` 改收**整条 `ArchiveDetail`**（本体路径在它身上，与 `request_checkout` 同口径）；本体路径由 `PayloadStore::resolve` 解析（越界 / 点前缀守卫在那一层）；菜单「打开（只读）」、回车/双击与详情面板动作区都走它 | `crates/workbench/src/components/resource_host.rs`、`src/{resource_view,detail_view}.rs` |
+| 详情动作区 ✅ | 补上「打开（只读）」（与「取回（检出）…」并列）：打开 = 看本体（缺失的行 / 旧行没登记路径时禁用）；取回 = 拿一份可写工作副本（本体异常或只读项目下禁用）——禁用理由指向出口 | `src/detail_view.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **77 单测 + 3 对话框窗口测试 + 9 面板窗口测试全绿**（+1 窗口测试：派发 `OpenSelected` 后宿主收到的是**选中那条的详情**）；`cargo test -p rds-editor --lib -j 2` → **217 项全绿**（+1：只读打开置编辑器只读且连接维不受影响，可写版对照不戴只读）；`cargo check -p rds-workbench --lib -j 2` 零告警 | — |
+
+**三重守卫的现状**（P1.6 完整形态）：① 应用守卫（写入 `resources/` 直接拒）与 ③ 文件系统只读属性在 Phase 0 已落；本刀补上 ② 编辑器只读。三者仍然**不对等**：只有应用守卫是硬约束，另两层是提示与辅助（网络盘 / 有权限的用户可绕过）。
+
+**未落地**：本体异常的”打开“（缺失 / 内容已变时的修复入口，随索引修复对话框）；`Ctrl+Z`；批量多选；草稿箱发起侧归档入口。
+
 ### 2026-09-17 — Phase 1 第九刀：归档撤销栏（可立即反悔）
 
 | 项 | 内容 | 落点 |
