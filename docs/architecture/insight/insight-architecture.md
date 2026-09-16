@@ -239,6 +239,9 @@ RulesWatcher（后台线程，drop 即停）：
 | D29 | 面板的表目标按 **DuckDB 临时表**内省（`DESCRIBE`），不走源库 | 面板拿到的目标只有 `temp_table`（无 conn/db/schema，见 D20）；`DESCRIBE` 对临时表 / 视图一视同仁，不必按 catalog 过滤（`ATTACH` 进来的文件库表不能混进来） | 代价：临时表由查询结果建出，**没有主键约束**，`PK` 角标基本不会出现（如实不显示） |
 | D30 | 「评估全表」**串行逐列**，每列都单独回填面板 | 并发会撞上引擎并发上限（D12）而失败重试比慢更让人困惑；逐列回填才能给出**真进度**（测试靠观察者断言进度序列确实有中间态） | 大表列多时耗时与列数成正比，UI 上进度可见 |
 | D31 | 界面写的是**实际**采样口径（全量统计 + 样本前 5 行），不照搬原型的「500 行采样」 | 引擎的规则统计是聚合查询，根本不存在 500 行采样；写一个自己不执行的口径比不写更坏 | 原型 §3.2 已加实现期修正说明 |
+| D32 | 多列分析的列清单与表探查**同源**（同一个临时表内省），不另存一份 | v1 的 `availableColumns` 恒空正是「多列分析从未跑通」的根因；两份列清单迟早在临时表重建后不一致 | 列清单的实时性靠「切到该 Tab 时才取数」（事件路径） |
+| D33 | 多列规则的“吃不吃这几列”只做**展示层判定**（列数 + 类型族逐位比对），不在服务层拦 | 用户选错类型时 SQL 自己会给可读错误；服务层再拦一道只会把「为什么不行」变成两处口径 | `MultiRuleView::accepts` / `arity`，界面据此置灰执行入口 |
+| D34 | 多列结果按**数据形态**渲染，不看声明的 `result_type` | 声明与事实不一致时按事实渲染，不会出现「声明 list 却只拿到一个数」的空白表 | 表头取各行键的并集，缺键补「—」（不错位） |
 
 ## 7. 并发与资源
 
@@ -285,7 +288,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **160 项**（迁移基线 53 + Phase 0–3 新增），另有集成测试 6 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **169 项**（迁移基线 53 + Phase 0–3 新增），另有集成测试 9 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -315,6 +318,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 规则执行（SQL 模板与输出映射） | `crates/insight/src/rule_executor.rs` |
 | D24～D27 规则管理对话框 | `crates/insight/src/rule_view.rs`（视图模型 + 实体 + 渲染）、`jobs.rs`（`attach_rules` / `handle_rules_event` / 打开系统编辑器）、`service/mod.rs`（`rules_data` / `toggle_rule` / `create_rule_file` + 两层索引库装配）、`service/indexer.rs`（`rule_dir` / `create_rule_file` / `new_rule_template`）；宿主一行：`workbench/src/panels/right.rs` |
 | D29～D31 表探查与评估全表 | `insight_engine.rs`（`get_temp_table_profile` / `*_on`）、`model.rs`（`TableProfileView` / `TableColumnView` / `TableQualityView` / `TableEvalProgress` / `PanelData`）、`insight_view.rs`（`render_table_profile` + 列名下钻）、`jobs.rs`（`ProfileRequest::Table` / `request_table_evaluation` 的串行进度）、`service/mod.rs`（`profile_table_view`）、`ui.rs`（`INSIGHT_TABLE_*`） |
+| D32～D34 多列分析的数据层 | `service/mod.rs`（`multi_column_view` / `list_multi_rules` / `run_multi_rule` / `rule_params`）、`model.rs`（`MultiColumnView` / `MultiRuleView` / `MultiResultView` / `KeyValueRow` / `quality_notes`）；界面待 Phase 3 三批 |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |

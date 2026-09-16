@@ -21,6 +21,7 @@ use types::{
 
 // 等级是 `quality_scorer` 的定义（阈值与文案的唯一来源），这里只借用类型
 use crate::quality_scorer::Grade;
+use crate::rule_types::{ExecutionResult, QualityReport};
 
 // ==================== 阈值（原型 §3.1） ====================
 
@@ -246,7 +247,7 @@ impl ColumnKind {
         }
     }
 
-    /// 类型徽标文案
+    /// 类型徐标文案
     pub fn label(self) -> &'static str {
         match self {
             ColumnKind::Numeric => "数值",
@@ -254,6 +255,21 @@ impl ColumnKind {
             ColumnKind::DateTime => "时间",
             ColumnKind::Boolean => "布尔",
             ColumnKind::Unknown => "未识别",
+        }
+    }
+
+    /// 类型族的**英文名**：与规则 `applies_to` 里的取值对齐（`Numeric` / `Text` /
+    /// `DateTime` / `Boolean`），用于「这条规则吃不吃这几列」的判定。
+    ///
+    /// 与 [`Self::label`] 分开：展示用中文，**判定不能拿展示文案当键**
+    /// （改文案不应改变规则筛选结果）。
+    pub fn family_name(self) -> &'static str {
+        match self {
+            ColumnKind::Numeric => "Numeric",
+            ColumnKind::Text => "Text",
+            ColumnKind::DateTime => "DateTime",
+            ColumnKind::Boolean => "Boolean",
+            ColumnKind::Unknown => "Unknown",
         }
     }
 
@@ -534,6 +550,275 @@ impl TableProfileView {
                 .count(),
             scored_columns: quality.scored_count as usize,
         });
+        next
+    }
+}
+
+// ==================== 多列分析视图模型（Phase 3.2 / 3.3） ====================
+
+/// 「多列」Tab 的一条候选规则。
+///
+/// 列清单与规则清单都是**数据**（从服务层来），选中的列/规则是**面板状态**
+/// （住 `InsightView`），所以这里只放展示与判定需要的东西。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiRuleView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// 期望的列类型族（`applies_to`），长度 = 需要的列数
+    pub applies_to: Vec<String>,
+    /// 顺序参数（除 `table` 外）：`col1` / `col2` …
+    pub column_params: Vec<String>,
+    /// `single`（默认）/ `list`
+    pub result_type: Option<String>,
+}
+
+impl MultiRuleView {
+    /// 从 `list_insight_rules` 的 JSON 转视图模型（缺关键字段则视为不可用）。
+    ///
+    /// 服务层返回的是 JSON（v1 起就如此，供前端直接吃），转换放在这里：
+    /// 类型化后上层就不必到处 `["name"].as_str().unwrap_or(...)`。
+    pub fn from_rule_json(value: &serde_json::Value) -> Option<Self> {
+        let id = value.get("id")?.as_str()?.to_string();
+        let column_params: Vec<String> = value
+            .get("parameters")
+            .and_then(|p| p.as_array())
+            .map(|params| {
+                params
+                    .iter()
+                    .filter_map(|p| p.as_str())
+                    // `table` 由面板自己填（恒为当前临时表），不占用户的列位
+                    .filter(|p| *p != "table")
+                    .map(|p| p.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            id,
+            name: value.get("name")?.as_str()?.to_string(),
+            description: value
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            applies_to: value
+                .get("applies_to")
+                .and_then(|a| a.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|t| t.as_str())
+                        .map(|t| t.to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            column_params,
+            result_type: value
+                .get("result_type")
+                .and_then(|r| r.as_str())
+                .map(|r| r.to_string()),
+        })
+    }
+
+    /// 该规则需要几列
+    pub fn arity(&self) -> usize {
+        self.column_params.len()
+    }
+
+    /// 选中的列是否满足规则的类型要求。
+    ///
+    /// `Any` 放行；`applies_to` 比参数少时不补全（按位比较，缺位视为不限制）。
+    /// 不做「类型不符就报错」——SQL 自己会拒，界面上先把不可用的选法标出来就够了。
+    pub fn accepts(&self, kinds: &[ColumnKind]) -> bool {
+        if kinds.len() != self.arity() {
+            return false;
+        }
+        kinds.iter().enumerate().all(|(ix, kind)| match self.applies_to.get(ix) {
+            None => true,
+            Some(expected) => {
+                expected.eq_ignore_ascii_case("any")
+                    || expected.eq_ignore_ascii_case(kind.family_name())
+            }
+        })
+    }
+
+    /// 列表里那一行右侧的类型提示（如 `数值 · 数值`）
+    pub fn types_hint(&self) -> String {
+        if self.applies_to.is_empty() {
+            return "通用".to_string();
+        }
+        self.applies_to.join(" · ")
+    }
+}
+
+/// 多列规则的结果（两种形态：单值键值行 / 列表表格）
+#[derive(Debug, Clone, PartialEq)]
+pub enum MultiResultView {
+    /// 一行一个字段（如相关系数 / 协方差 / 样本量）
+    Single(Vec<KeyValueRow>),
+    /// 表格（如交叉频次表）
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+}
+
+/// 键值行（字段名来自规则输出，是**动态字符串**，所以不复用 `StatRow`——
+/// 后者的 `label` 是 `&'static str`，专给固定词汇的统计行）
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyValueRow {
+    pub label: String,
+    pub value: String,
+}
+
+impl MultiResultView {
+    /// 从领域执行结果转视图模型（按**数据形态**分派，不看 `result_type`）。
+    ///
+    /// 为什么按形态：`result_type` 是规则的声明，而真实返回才是事实——
+    /// 两者不一致时按事实渲染，不会出现「声明 list 却只拿到一个数」时的空白表。
+    pub fn from_execution(result: &ExecutionResult) -> Self {
+        match &result.data {
+            serde_json::Value::Array(items) => Self::table_from_items(items),
+            serde_json::Value::Object(map) => Self::Single(
+                map.iter()
+                    .map(|(key, value)| KeyValueRow {
+                        label: key.clone(),
+                        value: json_cell(value),
+                    })
+                    .collect(),
+            ),
+            other => Self::Single(vec![KeyValueRow {
+                label: "结果".to_string(),
+                value: json_cell(other),
+            }]),
+        }
+    }
+
+    /// 列表结果 → 表格：表头按**首次出现顺序**收集（各行键不一致时不丢列）
+    fn table_from_items(items: &[serde_json::Value]) -> Self {
+        let mut headers: Vec<String> = Vec::new();
+        for item in items {
+            if let Some(map) = item.as_object() {
+                for key in map.keys() {
+                    if !headers.contains(key) {
+                        headers.push(key.clone());
+                    }
+                }
+            }
+        }
+        if headers.is_empty() {
+            // 空结果：给空表格（视图据此说「没有数据」），而不是假造一行
+            return Self::Table {
+                headers: Vec::new(),
+                rows: Vec::new(),
+            };
+        }
+        let rows = items
+            .iter()
+            .map(|item| {
+                headers
+                    .iter()
+                    .map(|h| {
+                        item.get(h)
+                            .map(json_cell)
+                            .unwrap_or_else(|| "—".to_string())
+                    })
+                    .collect()
+            })
+            .collect();
+        Self::Table { headers, rows }
+    }
+
+    /// 空结果（没跑过 / 规则未返回行）
+    pub fn is_empty(&self) -> bool {
+        match self {
+            MultiResultView::Single(rows) => rows.is_empty(),
+            MultiResultView::Table { rows, .. } => rows.is_empty(),
+        }
+    }
+}
+
+/// JSON 单元格 → 展示文案（数值仍走 `fmt_num`：`1.5` 不写成 `1.5000`）
+pub fn json_cell(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "—".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n
+            .as_f64()
+            .map(fmt_num)
+            .unwrap_or_else(|| n.to_string()),
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// 质量门控 → 提示行（这一波多列规则自带 `quality` 时才有）
+///
+/// 通过的检查不占行：提示区只用来说「哪里不对」，全通过时是空的。
+pub fn quality_notes(report: Option<&QualityReport>) -> Vec<QualityNote> {
+    let Some(report) = report else {
+        return Vec::new();
+    };
+    report
+        .checks
+        .iter()
+        .filter(|check| !check.passed)
+        .map(|check| QualityNote {
+            level: NoteLevel::Warning,
+            text: match &check.message {
+                message if !message.trim().is_empty() => message.clone(),
+                _ => match check.actual {
+                    Some(actual) => format!("{} 未过 {}（实际 {}）", check.field, check.rule, fmt_num(actual)),
+                    None => format!("{} 未过 {}", check.field, check.rule),
+                },
+            },
+        })
+        .collect()
+}
+
+/// 「多列」Tab 的数据：列清单 + 候选规则 + 最近一次结果
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiColumnView {
+    /// 逻辑表名（结果集名），用于展示
+    pub table_name: String,
+    /// 临时表的**真实**列元数据（v1 的 `availableColumns` 恒空是该项从未跑通的根因）
+    pub columns: Vec<TableColumnView>,
+    /// `category = multi` 的规则
+    pub rules: Vec<MultiRuleView>,
+    /// 最近一次执行结果（没跑过为 `None`）
+    pub result: Option<MultiResultView>,
+    /// 最近一次执行的质量门控提示
+    pub notes: Vec<QualityNote>,
+}
+
+impl MultiColumnView {
+    pub fn from_profile(profile: &TableProfile, table_name: &str, rules: Vec<MultiRuleView>) -> Self {
+        let table = TableProfileView::from_profile(profile, table_name);
+        Self {
+            table_name: table.table_name,
+            columns: table.columns,
+            rules,
+            result: None,
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn column(&self, name: &str) -> Option<&TableColumnView> {
+        self.columns.iter().find(|c| c.name == name)
+    }
+
+    /// 选中的列（按给定顺序）对应的类型族：供 [`MultiRuleView::accepts`] 判定
+    pub fn kinds_of(&self, selected: &[String]) -> Vec<ColumnKind> {
+        selected
+            .iter()
+            .filter_map(|name| self.column(name).map(|c| c.kind))
+            .collect()
+    }
+
+    /// 写下一次执行结果（保留列清单与规则清单）
+    pub fn with_result(&self, result: MultiResultView, notes: Vec<QualityNote>) -> Self {
+        let mut next = self.clone();
+        next.result = Some(result);
+        next.notes = notes;
         next
     }
 }
@@ -901,6 +1186,7 @@ fn sample_cells(sample: &[serde_json::Value]) -> Vec<SampleCell> {
 mod tests {
     use super::types::{ColumnQualityEntry, DistributionBin, ExtremeValue, TableColumnMeta, TextFrequency};
     use super::*;
+    use crate::rule_types::{ExecutionResult, QualityCheck, QualityReport};
 
     fn base_stats(detail: ColumnStatsDetail) -> ColumnInsightFull {
         ColumnInsightFull {
@@ -1336,6 +1622,196 @@ mod tests {
     fn empty_progress_ratio_is_zero_not_nan() {
         assert_eq!(TableEvalProgress { done: 0, total: 0 }.ratio(), 0.0);
         assert_eq!(TableEvalProgress { done: 5, total: 3 }.ratio(), 1.0);
+    }
+
+    // ==================== 多列分析视图模型（Phase 3.2 / 3.3） ====================
+
+    fn multi_rule_json() -> serde_json::Value {
+        serde_json::json!({
+            "id": "pearson-correlation",
+            "name": "Pearson 相关系数",
+            "description": "计算两个数值列的相关系数",
+            "category": "multi",
+            "applies_to": ["Numeric", "Numeric"],
+            "parameters": ["table", "col1", "col2"],
+            "result_type": serde_json::Value::Null,
+            "scope": "内置",
+        })
+    }
+
+    #[test]
+    fn multi_rule_parses_and_drops_the_table_parameter() {
+        let rule = MultiRuleView::from_rule_json(&multi_rule_json()).expect("应能解析");
+        assert_eq!(rule.id, "pearson-correlation");
+        assert_eq!(rule.name, "Pearson 相关系数");
+        assert_eq!(
+            rule.column_params,
+            vec!["col1".to_string(), "col2".to_string()],
+            "`table` 由界面自己填，不占用户的列位"
+        );
+        assert_eq!(rule.arity(), 2);
+        assert_eq!(rule.types_hint(), "Numeric · Numeric");
+        assert!(rule.result_type.is_none());
+
+        // 缺 id / name 的行不可用（宁少不假）
+        assert!(MultiRuleView::from_rule_json(&serde_json::json!({"name": "X"})).is_none());
+        assert!(MultiRuleView::from_rule_json(&serde_json::json!({"id": "x"})).is_none());
+    }
+
+    #[test]
+    fn multi_rule_accepts_only_matching_families_and_arity() {
+        let rule = MultiRuleView::from_rule_json(&multi_rule_json()).unwrap();
+        assert!(rule.accepts(&[ColumnKind::Numeric, ColumnKind::Numeric]));
+        assert!(!rule.accepts(&[ColumnKind::Numeric, ColumnKind::Text]));
+        assert!(!rule.accepts(&[ColumnKind::Numeric]), "列数不对就不该可选");
+        assert!(!rule.accepts(&[]));
+
+        // `Any` 放行；`applies_to` 缺位不限制
+        let any = MultiRuleView {
+            applies_to: vec!["Any".into(), "Any".into()],
+            ..rule.clone()
+        };
+        assert!(any.accepts(&[ColumnKind::Text, ColumnKind::Unknown]));
+        let no_hint = MultiRuleView {
+            applies_to: Vec::new(),
+            ..rule.clone()
+        };
+        assert!(no_hint.accepts(&[ColumnKind::Boolean, ColumnKind::DateTime]));
+        assert_eq!(no_hint.types_hint(), "通用");
+    }
+
+    fn execution(data: serde_json::Value) -> ExecutionResult {
+        ExecutionResult {
+            data,
+            quality: None,
+        }
+    }
+
+    #[test]
+    fn single_result_becomes_key_value_rows() {
+        let view = MultiResultView::from_execution(&execution(serde_json::json!({
+            "correlation": 0.8765,
+            "sample_size": 120,
+            "note": serde_json::Value::Null,
+        })));
+        let MultiResultView::Single(rows) = view else {
+            panic!("对象形态应转成键值行");
+        };
+        let map: Vec<(&str, &str)> = rows.iter().map(|r| (r.label.as_str(), r.value.as_str())).collect();
+        assert!(map.contains(&("correlation", "0.8765")));
+        assert!(map.contains(&("sample_size", "120")), "整数不带小数点：{map:?}");
+        assert!(map.contains(&("note", "—")), "NULL 显式显示，不留空");
+    }
+
+    #[test]
+    fn list_result_becomes_a_table_with_a_union_of_headers() {
+        let view = MultiResultView::from_execution(&execution(serde_json::json!([
+            {"row_label": "paid", "col_label": "cn", "count": 12},
+            // 第二行少一个键：表头取并集，缺的格子留「—」而不是错位
+            {"row_label": "paid", "count": 3},
+        ])));
+        let MultiResultView::Table { headers, rows } = view else {
+            panic!("数组形态应转成表格");
+        };
+        assert_eq!(headers, vec!["row_label", "col_label", "count"]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1][1], "—", "缺键的格子补「—」，不得错位");
+        assert_eq!(rows[1][2], "3");
+
+        // 空数组：空表格（视图说「没有数据」），不造假行
+        let empty = MultiResultView::from_execution(&execution(serde_json::json!([])));
+        assert!(empty.is_empty());
+        assert_eq!(
+            empty,
+            MultiResultView::Table {
+                headers: Vec::new(),
+                rows: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn scalar_result_still_renders() {
+        let view = MultiResultView::from_execution(&execution(serde_json::json!(42)));
+        assert_eq!(
+            view,
+            MultiResultView::Single(vec![KeyValueRow {
+                label: "结果".into(),
+                value: "42".into(),
+            }])
+        );
+    }
+
+    #[test]
+    fn quality_notes_keep_only_failures() {
+        let passed = QualityReport {
+            passed: true,
+            checks: vec![QualityCheck {
+                field: "correlation".into(),
+                passed: true,
+                rule: "min".into(),
+                actual: Some(0.9),
+                severity: "warning".into(),
+                message: "不该出现".into(),
+            }],
+        };
+        assert!(quality_notes(Some(&passed)).is_empty(), "通过的检查不占提示行");
+
+        let failed = QualityReport {
+            passed: false,
+            checks: vec![
+                QualityCheck {
+                    field: "correlation".into(),
+                    passed: false,
+                    rule: "min=0.5".into(),
+                    actual: Some(0.21),
+                    severity: "warning".into(),
+                    message: "相关系数偏低".into(),
+                },
+                QualityCheck {
+                    field: "sample_size".into(),
+                    passed: false,
+                    rule: "min=30".into(),
+                    actual: Some(12.0),
+                    severity: "error".into(),
+                    message: String::new(),
+                },
+            ],
+        };
+        let notes = quality_notes(Some(&failed));
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].text, "相关系数偏低", "有文案就用规则自己的文案");
+        assert_eq!(notes[1].text, "sample_size 未过 min=30（实际 12）", "没文案就拼一条可定位的");
+        assert!(notes.iter().all(|n| n.level == NoteLevel::Warning));
+        assert!(quality_notes(None).is_empty(), "规则没有门控时没有提示");
+    }
+
+    #[test]
+    fn multi_view_keeps_columns_and_marks_the_result_in_place() {
+        let rules = vec![MultiRuleView::from_rule_json(&multi_rule_json()).unwrap()];
+        let view = MultiColumnView::from_profile(&table_profile_fixture(), "orders", rules);
+        assert_eq!(view.table_name, "orders");
+        assert_eq!(view.columns.len(), 3);
+        assert_eq!(
+            view.kinds_of(&["id".into(), "amount".into()]),
+            vec![ColumnKind::Numeric, ColumnKind::Numeric]
+        );
+        assert!(
+            view.rules[0].accepts(&view.kinds_of(&["id".into(), "amount".into()])),
+            "两列数值应满足 Pearson 的要求"
+        );
+        assert!(!view.rules[0].accepts(&view.kinds_of(&["id".into()])), "只选一列不行");
+
+        let done = view.with_result(
+            MultiResultView::Single(vec![KeyValueRow {
+                label: "correlation".into(),
+                value: "0.9".into(),
+            }]),
+            Vec::new(),
+        );
+        assert_eq!(view.result, None, "原视图不被就地修改");
+        assert!(done.result.is_some());
+        assert_eq!(done.columns, view.columns, "写结果不动列清单");
     }
 
     #[test]

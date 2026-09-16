@@ -169,6 +169,111 @@ fn table_profile_lists_columns_without_fake_scores() {
     assert!(view.quality.is_none());
 }
 
+/// 多列分析：列清单来自**真实列元数据**（v1 恒空的 `availableColumns` 是该项从未跑通的根因）
+#[test]
+fn multi_column_view_lists_real_columns_and_multi_rules() {
+    let table = "t_insight_e2e_multi";
+    seed(
+        table,
+        "amount DECIMAL(12,2), qty INTEGER, channel VARCHAR",
+        "VALUES (1.5, 2, 'paid'), (2.5, 4, 'free'), (3.5, 6, 'paid')",
+    );
+
+    let view = InsightService::multi_column_view(None, table, "orders").expect("多列视图应成功");
+    assert_eq!(view.table_name, "orders");
+    let names: Vec<&str> = view.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["amount", "qty", "channel"]);
+    assert!(
+        !view.rules.is_empty(),
+        "内置的 multi 规则应出现在候选里（pearson-correlation / cross-tab）"
+    );
+    let pearson = view
+        .rules
+        .iter()
+        .find(|r| r.id == "pearson-correlation")
+        .expect("Pearson 规则应可用");
+    assert_eq!(pearson.arity(), 2);
+    assert!(
+        pearson.accepts(&view.kinds_of(&["amount".into(), "qty".into()])),
+        "两列数值应被接受"
+    );
+    assert!(
+        !pearson.accepts(&view.kinds_of(&["amount".into(), "channel".into()])),
+        "数值 + 文本不该被 Pearson 接受"
+    );
+    assert!(view.result.is_none(), "未执行前没有结果");
+}
+
+/// 单值结果：两列完全线性相关时 Pearson 系数 ≈ 1，样本量逐行计数
+#[test]
+fn multi_rule_single_result_reaches_the_view_model() {
+    let table = "t_insight_e2e_pearson";
+    let rows: Vec<String> = (1..=10).map(|i| format!("({i}, {})", i * 3)).collect();
+    seed(
+        table,
+        "x INTEGER, y INTEGER",
+        &format!("VALUES {}", rows.join(",")),
+    );
+
+    let (result, notes) = InsightService::run_multi_rule(
+        None,
+        table,
+        "pearson-correlation",
+        &["x".into(), "y".into()],
+    )
+    .expect("执行 Pearson 规则");
+
+    let rds_insight::MultiResultView::Single(rows) = &result else {
+        panic!("单值规则应给出键值行：{result:?}");
+    };
+    let value = |key: &str| {
+        rows.iter()
+            .find(|r| r.label == key)
+            .map(|r| r.value.clone())
+            .unwrap_or_else(|| panic!("应有字段 {key}：{rows:?}"))
+    };
+    let corr: f64 = value("correlation").parse().expect("相关系数应是数字");
+    assert!(
+        (corr - 1.0).abs() < 1e-9,
+        "完全线性相关应给出 1.0，实际 {corr}"
+    );
+    assert_eq!(value("sample_size"), "10");
+    assert!(notes.is_empty(), "该规则没有门控项，不该有提示");
+}
+
+/// 列表结果：交叉频次表按**数据形态**渲染成表格（表头来自规则输出字段）
+#[test]
+fn multi_rule_list_result_becomes_a_table() {
+    let table = "t_insight_e2e_cross_tab";
+    seed(
+        table,
+        "channel VARCHAR, region VARCHAR",
+        "VALUES ('paid', 'cn'), ('paid', 'us'), ('free', 'cn'), ('paid', 'cn')",
+    );
+
+    let (result, _notes) = InsightService::run_multi_rule(
+        None,
+        table,
+        "cross-tab",
+        &["channel".into(), "region".into()],
+    )
+    .expect("执行交叉频次表规则");
+
+    let rds_insight::MultiResultView::Table { headers, rows } = &result else {
+        panic!("列表规则应给出表格：{result:?}");
+    };
+    assert!(!headers.is_empty(), "表头不得为空：{result:?}");
+    assert!(!rows.is_empty(), "至少应有频次不为零的格子");
+    assert!(
+        headers.iter().any(|h| h.contains("count")),
+        "频次列应在表头里：{headers:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.iter().any(|cell| cell == "2")),
+        "paid×cn 出现两次，应能看到计数 2：{rows:?}"
+    );
+}
+
 /// 评估全表：逐列统计 → 每列分数 + 表级摘要。
 ///
 /// 这条用例同时钉住「表级分数与列级分数同源」：`compute_table_quality` 内部逐列调用

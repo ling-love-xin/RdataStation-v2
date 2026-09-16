@@ -32,7 +32,9 @@ use engine::persistence::ProjectDatabaseManager;
 use shared::error::{CommonError, CoreError};
 
 use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableProfile, TableQuality};
-use crate::model::{ColumnProfileView, TableProfileView};
+use crate::model::{
+    ColumnProfileView, MultiColumnView, MultiResultView, MultiRuleView, QualityNote, TableProfileView,
+};
 use crate::rule::RuleScope;
 use crate::rule_types::RuleMeta;
 use crate::rule_view::{build_rules_data, RuleDataInput, RulesData};
@@ -119,6 +121,69 @@ impl InsightService {
         Ok(TableProfileView::from_profile(&profile, table_name))
     }
 
+    // ==================== 多列分析（Phase 3.2 / 3.3） ====================
+
+    /// 「多列」Tab 的数据：**真实列元数据** + `category = multi` 的规则清单。
+    ///
+    /// 列清单与表探查同源（同一个 `get_temp_table_profile`）：v1 的 `availableColumns`
+    /// 恒空是「多列分析从未跑通」的根因，这里不再另存一份列清单。
+    pub fn multi_column_view(
+        project_root: Option<&Path>,
+        temp_table: &str,
+        table_name: &str,
+    ) -> Result<MultiColumnView, CoreError> {
+        let profile = crate::insight_engine::get_temp_table_profile(temp_table)?;
+        let rules = Self::list_multi_rules(project_root)?;
+        Ok(MultiColumnView::from_profile(&profile, table_name, rules))
+    }
+
+    /// `category = multi` 的规则 → 视图模型（不可解析的跳过：宁少不假）
+    pub fn list_multi_rules(project_root: Option<&Path>) -> Result<Vec<MultiRuleView>, CoreError> {
+        let raw = Self::list_insight_rules(project_root, Some("multi"))?;
+        Ok(raw
+            .iter()
+            .filter_map(MultiRuleView::from_rule_json)
+            .collect())
+    }
+
+    /// 跑一条多列规则：参数拼装 → 执行（已持连接）→ 结果与门控转视图模型。
+    ///
+    /// 阻塞（抢 DuckDB 全局锁与并发配额），调用方负责放后台。
+    pub fn run_multi_rule(
+        project_root: Option<&Path>,
+        temp_table: &str,
+        rule_id: &str,
+        columns: &[String],
+    ) -> Result<(MultiResultView, Vec<QualityNote>), CoreError> {
+        let parameters = {
+            let registry = crate::registry_for(project_root);
+            let guard = registry.read().map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "规则注册表锁定失败：{}",
+                    e
+                )))
+            })?;
+            let rule = guard.get(rule_id).ok_or_else(|| {
+                CoreError::common(CommonError::General(format!("规则 '{}' 不存在", rule_id)))
+            })?;
+            rule_params(&rule.query.parameters, temp_table, columns)?
+        };
+
+        let duckdb = crate::insight_engine::get_or_create_duckdb()?;
+        let conn = duckdb.lock().map_err(|e| {
+            CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+        })?;
+        let result = with_rules(project_root, |registry| {
+            crate::insight_engine::execute_insight_rule(registry, rule_id, &conn, &parameters)
+        })?;
+
+        let view = MultiResultView::from_execution(&result);
+        let notes = crate::model::quality_notes(result.quality.as_ref());
+        Ok((view, notes))
+    }
+
+    /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
+    ///
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
     ///
     /// 识别方式是**按消息内容**匹配：引擎侧的 DuckDB 错误还没有结构化分类，
@@ -390,6 +455,33 @@ fn block_on<T>(
     runtime.block_on(future)
 }
 
+/// 规则参数 → 实际取值。
+///
+/// 两条约定（与 `insight-user-guide.md` §4.5 对外口径一致）：
+/// - `table` 恒为当前临时表名，不占用户的列位；
+/// - 其余参数（`col1` / `col2` …）按**选择顺序**对应选中的列——所以顺序就是语义，
+///   列数不匹配时直接报错而不是少传一个参数（少传会让 SQL 悄悄变成另一个查询）。
+pub fn rule_params(
+    parameters: &[String],
+    temp_table: &str,
+    columns: &[String],
+) -> Result<HashMap<String, String>, CoreError> {
+    let column_params: Vec<&String> = parameters.iter().filter(|p| p.as_str() != "table").collect();
+    if column_params.len() != columns.len() {
+        return Err(CoreError::common(CommonError::General(format!(
+            "该规则需要 {} 列，实际选了 {} 列",
+            column_params.len(),
+            columns.len()
+        ))));
+    }
+    let mut params: HashMap<String, String> = HashMap::new();
+    params.insert("table".to_string(), temp_table.to_string());
+    for (name, column) in column_params.iter().zip(columns.iter()) {
+        params.insert((*name).clone(), column.clone());
+    }
+    Ok(params)
+}
+
 /// 去掉 `Display` 的 `[code] ` 前缀（`CoreError` 的 Display 形如 `[C001] 文案`）。
 /// 面板展示的是给人的文案，不展示内部错误码。
 fn strip_error_code(text: &str) -> String {
@@ -409,7 +501,7 @@ fn hits_any(haystack_lower: &str, needles: &[&str]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_error_code, InsightService};
+    use super::{rule_params, strip_error_code, InsightService};
     use crate::insight_engine::ERR_TOO_MANY_CONCURRENT;
     use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError};
 
@@ -464,5 +556,39 @@ mod tests {
         let info = InsightService::describe_error(&err);
         assert_eq!(info.message, "规则 numeric-stats 执行失败", "原文往往自己就能定位");
         assert!(!info.retryable);
+    }
+
+    /// 参数拼装：`table` 恒为临时表名，其余按选择顺序对位
+    #[test]
+    fn rule_params_map_columns_in_order() {
+        let params = rule_params(
+            &["table".into(), "col1".into(), "col2".into()],
+            "t_result_1",
+            &["amount".into(), "qty".into()],
+        )
+        .expect("两列匹配两个参数");
+        assert_eq!(params["table"], "t_result_1");
+        assert_eq!(params["col1"], "amount", "顺序就是语义");
+        assert_eq!(params["col2"], "qty");
+
+        // 只有一个列参数时也一样（不依赖叫 col1 还是 col）
+        let single = rule_params(&["table".into(), "col".into()], "t", &["x".into()]).unwrap();
+        assert_eq!(single["col"], "x");
+        assert_eq!(single.len(), 2, "不该多出参数");
+    }
+
+    /// 列数不匹配：直接报错，不少传参数——少传会让 SQL 静默变成另一个查询
+    #[test]
+    fn rule_params_reject_arity_mismatch() {
+        let err = rule_params(
+            &["table".into(), "col1".into(), "col2".into()],
+            "t",
+            &["amount".into()],
+        )
+        .expect_err("只选一列不该通过");
+        assert!(err.to_string().contains("需要 2 列"), "报错要说清差多少：{err}");
+
+        let err = rule_params(&["table".into(), "col".into()], "t", &[]).expect_err("没选列");
+        assert!(err.to_string().contains("需要 1 列"), "{err}");
     }
 }
