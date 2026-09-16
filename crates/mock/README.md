@@ -57,10 +57,9 @@ DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table`
 - 面板「场景模板 ▾」一键生成：任务种类 `MockJobKind::Scenario(模板 id)`，装配层 `generate_scenario_at` 逐表补预览，
   面板持多张结果（`results` / `current` / `scenario_source`）+「当前表」下拉，出口作用于选中那张；
 - **不写库**（与单表生成同一定律），且**草稿不参与**（目标表 / 列 / 行数全来自模板）；
-- 列依赖 `resolve_dependencies` 用 Kahn 拓扑排序给出**生成顺序**与依赖映射；
-  注意：生成器本身按列顺序取值，**不解释依赖表达式**；场景表之间也**没有**外键引用完整性
-  （`ColumnDependency` 与 `DependencyType::ForeignKey` 两代都只是「模型就位、无人写值」，
-  `GeneratorConfig::ForeignKey { values }` 是「值集合」而非跨表引用——证据与两条路选一见架构 §9-I11）。
+- 列依赖 `resolve_dependencies` 用 Kahn 拓扑排序给出**生成顺序**与依赖映射；注意：生成器本身按列顺序取值，**不解释依赖表达式**。
+- 模板里的引用关系是**用范围手写的**（`orders.user_id` = `rnd_int!(1, 1000)` 对应 `users` 1000 行 + 自增 `id`）：6 套模板中 5 套恰好落域内，**blog 有 2 处悬空**（`author_id` / `user_id` = 1..200，没有对应父表；v1 同款）。
+- 而 `ColumnDependency` / `DependencyType::ForeignKey` 这套**模型**两代都无人写值（`dependency` 全仓库 `None`）；`GeneratorConfig::ForeignKey { values }` 是「值集合」。要把它升级为模型化引用（自动跟随父表行数 + 可校验），见架构 §9-I11。
 
 ### 7. 视图随 crate（Feature 自持视图，方案①两处排版）
 
@@ -129,7 +128,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | **四个显式出口：新建表 / 追加（自增接续）/ 草稿箱 `{项目}/mock/` / 另存为** | 导出到源库（M7 约束：不回传源库） |
 | **列编辑对话框（列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认）** | 列依赖编辑（依赖表达式待拍板） |
 | **导入源库结构（连接 / 库 / schema / 表，cache-aside 取列）** | 表结构浏览选择器（现在是手填表名 + 连接默认库预填） |
-| **场景模板一键生成**：6 套内置多表模板（面板菜单）+ 多结果与「当前表」切换 | 场景表之间的外键引用完整性（v1 同样未做，见架构 §9-I11） |
+| **场景模板一键生成**：6 套内置多表模板（面板菜单）+ 多结果与「当前表」切换 | 表间引用目前是**范围手写约定**（5/6 套恰好成立，blog 有 2 处悬空）——升级为模型化引用见架构 §9-I11 |
 | 草稿目录落盘（调用方给目录） | 草稿箱面板对 `mock/` 分组的展示（Phase D） |
 | 持久化为正式表（`persist_as_asset` / 装配层新建与追加） | 分析资源注册（M6） |
 | **生成历史**（最近 20 条，重放 / 删除 / 自动落库）+ **用户模板**（保存 / 应用 / 删除）都落 `{项目}/.RSmeta/project.db` | —— |

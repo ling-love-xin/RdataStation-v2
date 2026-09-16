@@ -148,4 +148,4 @@ v1 素材（暂存区，删除前请先提炼）：`v1/docs/frontend/mock/mock-d
 | 9 | 生成任务 / 模板**落库接线** | `MockGenerationStore` 8 方法 + 迁移 009 已就位但无 UI | ✅ 已完成（历史段 + 模板段，见 `mock-dev-plan.md` §7 的 C4 / D4-D5 两行） |
 | 10 | ~~**场景模板一键生成**~~ | 6 套内置多表场景从「引擎有 API」变「面板能点」 | ✅ 本轮完成（`MockJobKind::Scenario` + `generate_scenario_at` + 多结果与「当前表」切换） |
 | 11 | ~~**出口改成只认结果**~~ | 场景模板产出的表与草稿无关，出口拿草稿当写入规格会建错表 | ✅ 本轮完成（`MockGenInfo` 带 `columns`；三个出口不再收 `draft`；草稿校验收拢到 `MockJobKind::uses_draft`） |
-| 12 | 场景表之间的**关联完整性**（`order_items.order_id` 指向 `orders.id`） | 多表场景目前各自独立生成，关联查询会落空 | ⚠️ **不是 v2 丢的能力**：v1 同样没做（`ForeignKey { values }` 两代都只是「值集合」；v1 原型的模拟实现是 `'FK_' + 随机数`，引擎的同名分支 `#[allow(dead_code)]`）。`ColumnDependency.ref_table/ref_column` 是现成挂点，做与不做见架构 §9-I11 |
+| 12 | 场景表的**引用关系模型化**（现在是把子表范围手写成父表行数） | 父表行数一改就静默断链；悬空引用（blog 的 `author_id` / `user_id` = 1..200）发现不了 | ✅ **关系是有的**：6 套模板中 5 套恰好落域内（关系由「范围对齐行数」表达）；改成 `ref_table` / `ref_column` 引用后由父表**实际行数**派生取值域（自增父键 O(1)），见架构 §9-I11 |

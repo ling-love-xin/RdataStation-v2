@@ -194,7 +194,6 @@ button{font-family:inherit;cursor:pointer;}
 /* 这两个场景自带「生成 + 场景模板 ▾」并排行，故藏掉单独的「生成」按钮与上一轮的单表结果 */
 [data-scn="scenario"] .scn-hide,[data-scn="scenario-result"] .scn-hide{display:none;}
 [data-scn="scenario-result"] .scn-single{display:none;}
-[data-scn="scenario"] .only-scenario,
 [data-scn="scenario-result"] .only-scenario-result{display:flex;}
 [data-scn="scenario-result"] .scn-row{display:flex;}
 [data-scn="scenario"] .only-imported,
@@ -230,7 +229,7 @@ button{font-family:inherit;cursor:pointer;}
 .inp.area{width:100%;height:84px;resize:none;padding:6px 8px;line-height:1.55;font-family:Consolas,'SFMono-Regular',monospace;}
 
 /* ── 场景可见性 ── */
-.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running,.only-writing,.only-scenario,.only-scenario-result{display:none;}
+.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running,.only-writing,.only-scenario-result{display:none;}
 [data-scn="empty"] .only-empty{display:flex;}
 [data-scn="imported"] .only-imported{display:flex;}
 [data-scn="generated"] .only-imported{display:flex;}
@@ -689,7 +688,7 @@ button{font-family:inherit;cursor:pointer;}
   <div>· v1 的「导入结构弹窗」→ 本稿「导入结构」对话框（连接 / 库 / schema / 表名，读源库结构）；v1 <b>没有</b>的「追加到既有表」是 v2 的<b>显式</b>出口（选表后主键自增接续表内行数），不与「持久化」混为一路。</div>
   <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部「生成历史」（最近 20 条，时间倒序 + 重放 / 删除 / 刷新），生成一次自动落一条，失败行显示原因；v1 的「保存模板」→ 本稿**已画**「用户模板」段（「保存为模板…」对话框只问名字 + 每行「应用 / 删除」）。</div>
   <div>· v1 的「场景模板」→ 本稿**已画**（两个场景：「场景模板」= 下拉选 6 套内置模板；「场景结果」= 一次产多张表 + 「当前表」切换）。<b>与 v1 的形态差异是有意的</b>：v1 的模板对话框是「选一个模板 → 把列定义填进草稿」，一次只服务一张表；v2 是「选一套模板 → 后台一次生成模板里的**全部表**（不写库）」，结果表是一组（`results`），出口作用于「当前表」。场景任务的进度量纲是**张表**（`2 / 4 张表`），不是批次 / 行——面板按任务种类切文案。</div>
-  <div>· 场景表之间**没有**外键约束（`order_items.order_id` 不会取到 `orders.id` 的已生成值）：v1 原型里 `foreign_key` 生成器的模拟实现是 `'FK_' + 随机数`，两代都未落地跨表引用（详见 `mock-architecture.md` §9-I11）。</div>
+  <div>· 场景表之间的**引用关系是有的**，但是「手写约定」：子表外键列的范围照父表行数写（`orders.user_id` = 1..1000 对应 `users` 1000 行 + 自增 `id`），模板里逐套核对：5 套恰好落域内，blog 有 2 处悬空。升级为模型化引用（面板能显示「列 → 父表.列」、取值域跟随父表行数）见 `mock-architecture.md` §9-I11。</div>
 </div>
 
 <script>
