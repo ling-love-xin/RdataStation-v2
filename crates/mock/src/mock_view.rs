@@ -62,7 +62,7 @@ use crate::generator_catalog::{self, GeneratorCategory, GeneratorSpec, ParamFiel
 use crate::history::{self, HistoryAction, RunRecord};
 use crate::models::{
     ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockExportFormat,
-    ReferenceDomain, ScenarioTemplate,
+    ReferenceDomain, ScenarioTemplate, TemplateTable,
 };
 use crate::persistence::{
     MockGenerationDetail, MockGenerationTask, MockTemplateColumn, MockUserTemplate,
@@ -1701,6 +1701,81 @@ impl MockPanel {
         self.load_scenario(template, cx);
     }
 
+    /// 把**当前草稿**加进场景工作副本（自定义多表场景的入口）。
+    ///
+    /// 为何从草稿来：导入源库结构、智能映射、列编辑、行数 / 种子这一整套都在单表态里
+    /// 现成可用——“把一张表调到满意，然后把它加进场景”比再做一个多表编辑器便宜得多，
+    /// 也不破坏现有交互。
+    pub fn add_draft_to_scenario(&mut self, cx: &mut Context<Self>) {
+        let name = self.draft.table_name.trim().to_string();
+        if name.is_empty() {
+            self.fail("草稿的目标表名为空：先在「目标表名」里填一个", cx);
+            return;
+        }
+        if self.draft.columns.is_empty() {
+            self.fail("草稿还没有列：先导入源库结构或手工加列", cx);
+            return;
+        }
+        let Some(template) = self.scenario.as_mut() else {
+            self.fail("先选一套场景模板（或在模板基础上改）", cx);
+            return;
+        };
+        if template.tables.iter().any(|table| table.name == name) {
+            self.fail(
+                format!("场景里已经有表 {name}：先删掉那张，或改草稿的目标表名"),
+                cx,
+            );
+            return;
+        }
+        let table = TemplateTable {
+            name: name.clone(),
+            row_count: self.draft.options.rows,
+            columns: self.draft.columns.iter().map(|c| c.def.clone()).collect(),
+        };
+        template.tables.push(table);
+        self.error = None;
+        self.outcome = Some(format!(
+            "已把草稿 {name}（{} 行 · {} 列）加进本次生成",
+            with_thousands(u64::from(self.draft.options.rows)),
+            self.draft.columns.len()
+        ));
+        cx.notify();
+    }
+
+    /// 从场景工作副本里删掉一张表，**并连带清掉指向它的关系**。
+    ///
+    /// 不清的话，剩余引用会变成“指向模板里没有的表”——生成前校验会报错，
+    /// 但那时用户已经不知道是谁指向它了。所以这里直接清掉并报出清了几条。
+    pub fn remove_scenario_table(&mut self, table: &str, cx: &mut Context<Self>) {
+        let Some(template) = self.scenario.as_mut() else {
+            return;
+        };
+        let before = template.tables.len();
+        template.tables.retain(|t| t.name != table);
+        if template.tables.len() == before {
+            return;
+        }
+        let mut dropped = 0usize;
+        for child in template.tables.iter_mut() {
+            for column in child.columns.iter_mut() {
+                let points_here = column.dependency.as_ref().is_some_and(|dep| {
+                    dep.is_foreign_key() && dep.ref_table.as_deref() == Some(table)
+                });
+                if points_here {
+                    column.dependency = None;
+                    dropped += 1;
+                }
+            }
+        }
+        self.error = None;
+        self.outcome = Some(if dropped == 0 {
+            format!("已从本次生成里删掉表 {table}")
+        } else {
+            format!("已删掉表 {table}，并清掉 {dropped} 条指向它的关系")
+        });
+        cx.notify();
+    }
+
     /// 载入场景工作副本（[`Self::open_scenario`] 按 id 取到模板后调它；测试直接给模板）。
     pub(crate) fn load_scenario(&mut self, template: ScenarioTemplate, cx: &mut Context<Self>) {
         self.scenario = Some(template);
@@ -2979,6 +3054,22 @@ impl MockPanel {
                         ),
                     ));
                     for table in template.tables.iter() {
+                        let remove = {
+                            let entity = cx.entity();
+                            let name = table.name.clone();
+                            Button::new(ElementId::Name(SharedString::from(format!(
+                                "mock-scenario-table-remove-{name}"
+                            ))))
+                            .ghost()
+                            .xsmall()
+                            .label("删除")
+                            .on_click(move |_, _, app| {
+                                let name = name.clone();
+                                entity.update(app, |panel, cx| {
+                                    panel.remove_scenario_table(&name, cx);
+                                });
+                            })
+                        };
                         block = block.child(
                             div()
                                 .h_flex()
@@ -2996,9 +3087,29 @@ impl MockPanel {
                                 )
                                 .child(div().flex_none().text_xs().text_color(muted).child(
                                     format!("{} 行", with_thousands(u64::from(table.row_count))),
-                                )),
+                                ))
+                                .child(remove),
                         );
                     }
+
+                    // 自定义多表：把当前草稿加进来（导入结构 / 列编辑都在单表态里做完）
+                    let add_table = {
+                        let entity = cx.entity();
+                        let mut button = Button::new("mock-scenario-table-add")
+                            .secondary()
+                            .xsmall()
+                            .label("＋ 加表（当前草稿）")
+                            .disabled(running);
+                        if !running {
+                            button = button.on_click(move |_, _, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.add_draft_to_scenario(cx);
+                                });
+                            });
+                        }
+                        button
+                    };
+                    block = block.child(add_table);
 
                     let relations = self.scenario_relations();
                     block = block.child(

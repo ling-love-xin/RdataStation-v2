@@ -2838,3 +2838,145 @@ fn batch_landing_keeps_the_successes_and_reports_the_failures(cx: &mut TestAppCo
         );
     });
 }
+
+/// 自定义多表：把当前草稿加进场景工作副本（导入结构 / 列编辑都在单表态里做完）。
+#[gpui_kit::test]
+fn a_draft_can_be_added_to_the_scenario_as_another_table(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        // 草稿：一张用户自己调好的表
+        panel.draft.table_name = "invoices".to_string();
+        panel.draft.options.rows = 750;
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.add_column("amount".to_string(), ColumnDataType::Text, cx);
+        panel.add_draft_to_scenario(cx);
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        let template = panel.scenario().expect("工作副本");
+        assert_eq!(
+            template
+                .tables
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            ["orders", "items", "users", "invoices"],
+            "新表加在末尾"
+        );
+        let added = template.tables.last().expect("新表");
+        assert_eq!(added.row_count, 750, "行数取草稿");
+        assert_eq!(
+            added
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["id", "amount"],
+            "列取草稿"
+        );
+        let outcome = panel.outcome().unwrap_or_default();
+        assert!(outcome.contains("已把草稿 invoices"), "{outcome}");
+        assert!(outcome.contains("750 行 · 2 列"), "{outcome}");
+    });
+
+    // 重名：拒绝（不静默改掉那张表）
+    panel.update(cx, |panel, cx| {
+        panel.draft.table_name = "orders".to_string();
+        panel.add_draft_to_scenario(cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.error().is_some_and(|e| e.contains("已经有表 orders")),
+            "{:?}",
+            panel.error()
+        );
+        assert_eq!(panel.scenario().expect("工作副本").tables.len(), 4);
+    });
+
+    // 没列的草稿：拒绝（生不出东西的表加进去只会拖累整次生成）
+    panel.update(cx, |panel, cx| {
+        panel.draft.table_name = "empty_one".to_string();
+        panel.draft.columns.clear();
+        panel.add_draft_to_scenario(cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.error().is_some_and(|e| e.contains("还没有列")),
+            "{:?}",
+            panel.error()
+        );
+    });
+
+    // 加进来的表能一起生成：提交的是含 4 张表的工作副本
+    panel.update(cx, |panel, cx| panel.run_scenario(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.results().len(), 4, "4 张表都回来了");
+        assert!(
+            panel
+                .results()
+                .iter()
+                .any(|info| info.table_name == "invoices")
+        );
+    });
+}
+
+/// 删表会**连带清掉指向它的关系**：否则剩余引用变成「指向模板里没有的表」，
+/// 用户到生成前才看到错误，那时已经不知道是谁指向它了。
+#[gpui_kit::test]
+fn removing_a_scenario_table_drops_the_references_pointing_at_it(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        // toy：`orders.user_id → users.id`（orders 的**出边**）与
+        // `items.order_id → orders.id`（指向 orders 的**入边**）
+        assert_eq!(panel.scenario_relations().len(), 2);
+        panel.remove_scenario_table("orders", cx);
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        let template = panel.scenario().expect("工作副本");
+        assert_eq!(
+            template
+                .tables
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            ["items", "users"]
+        );
+        assert!(
+            panel.scenario_relations().is_empty(),
+            "出边随表一起消失，入边必须清掉：{:?}",
+            panel.scenario_relations()
+        );
+        let outcome = panel.outcome().unwrap_or_default();
+        assert!(
+            outcome.contains("清掉 1 条"),
+            "只有指向它的那一条需要清：{outcome}"
+        );
+        assert!(panel.error().is_none(), "{:?}", panel.error());
+    });
+
+    // 删完仍能生成（不再有任何引用，校验通过）
+    panel.update(cx, |panel, cx| panel.run_scenario(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.results().len(), 2);
+        assert!(panel.error().is_none(), "{:?}", panel.error());
+    });
+
+    // 删不存在的表：无声忽略（UI 上不可能发生，测试桥直接调才可能）
+    panel.update(cx, |panel, cx| panel.remove_scenario_table("nope", cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.scenario().expect("工作副本").tables.len(), 2);
+    });
+}
