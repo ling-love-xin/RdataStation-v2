@@ -94,6 +94,8 @@ pub struct EditorPanel {
     ///
     /// 展示归编辑区（结果渲染在中央区）；草稿箱自己只记搜索参数，不回读这份数据。
     scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
+    /// 分析库元数据树是否正在后台加载（避免 render 每帧重复入队）。
+    nav_tree_loading: Cell<bool>,
 }
 
 impl EditorPanel {
@@ -172,6 +174,7 @@ impl EditorPanel {
             property_target: Rc::new(RefCell::new(None)),
             pending_sql: RefCell::new(None),
             scratchpad_search: Rc::new(RefCell::new(None)),
+            nav_tree_loading: Cell::new(false),
         }
     }
 
@@ -334,6 +337,34 @@ impl EditorPanel {
         if self._dialog_sub.is_none() {
             self._dialog_sub = Some(dialog.subscribe_project_confirm(&self.shared, window, cx));
         }
+    }
+
+    /// 后台加载分析库元数据树（连接详情卡用）。
+    ///
+    /// `load_navigator_tree` 会打开 DuckDB 文件（同步读盘），原先在 render 内直接调用——
+    /// 选中联邦连接的那一帧会阻塞；现改为后台执行 + 回填，render 只读缓存。
+    fn ensure_analysis_tree(&self, conn_id: String, cx: &mut Context<Self>) {
+        if self.nav_tree_loading.get() {
+            return;
+        }
+        self.nav_tree_loading.set(true);
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let path = crate::services::workspace_loader::global_analysis_db_path();
+        cx.spawn(async move |_this, cx| {
+            let tree = executor
+                .spawn(async move {
+                    crate::services::db_navigator::load_navigator_tree(&path).unwrap_or_default()
+                })
+                .await;
+            let _ = weak.update(cx, |panel, cx| {
+                *panel.nav_tables.borrow_mut() = tree;
+                *panel.nav_for.borrow_mut() = Some(conn_id);
+                panel.nav_tree_loading.set(false);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 启动属性结果轮询（已有存活任务时不重复启动）。
@@ -676,6 +707,14 @@ impl Render for EditorPanel {
         // M5 草稿箱搜索结果：替换输入框懒创建（须在 `let theme = cx.theme()` 之前）。
         self.ensure_scratchpad_replace_input(window, cx);
 
+        // Round 25：分析库元数据树按需后台加载（同样必须在 `let theme = cx.theme()` 之前：
+        // theme 借了 `cx`，之后再要 `&mut Context` 会 E0502）。
+        if let Some(item) = self.shared.selected_connection() {
+            if item.use_duckdb_fed && self.nav_for.borrow().as_deref() != Some(item.id.as_str()) {
+                self.ensure_analysis_tree(item.id.clone(), cx);
+            }
+        }
+
         let theme = cx.theme();
         let notice = self.shared.notice.borrow().clone();
         let entity = cx.entity();
@@ -847,16 +886,9 @@ impl Render for EditorPanel {
             );
         }
 
-        // Round 25：数据库导航区——选中联邦连接时按需加载分析库元数据树。
+        // Round 25：数据库导航区——分析库元数据树由上文按需后台加载，这里只读缓存。
         if let Some(item) = self.shared.selected_connection() {
             if item.use_duckdb_fed {
-                if self.nav_for.borrow().as_deref() != Some(item.id.as_str()) {
-                    let path = crate::services::workspace_loader::global_analysis_db_path();
-                    let tree = crate::services::db_navigator::load_navigator_tree(&path)
-                        .unwrap_or_default();
-                    *self.nav_tables.borrow_mut() = tree;
-                    *self.nav_for.borrow_mut() = Some(item.id.clone());
-                }
                 let nav = self.nav_tables.borrow();
                 let mut nav_content = div().v_flex().gap_1().mt_1p5();
                 if nav.is_empty() {

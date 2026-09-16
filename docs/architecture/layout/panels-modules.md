@@ -72,7 +72,7 @@
 | 级别 | 问题 | 实测 | 位置 |
 | --- | --- | --- | --- |
 | P1 | **事件路径同步 I/O 阻塞 UI 线程** | 18 处 `block_on`（nav.rs 4 + scratchpad_panel.rs 14，含各自 `Runtime::new`） | `commit_copy_connection` / `share_connection_to_project` / `unshare_connection_from_project` / `delete_connection`；草稿箱 `commit_scratchpad_edit` / `delete_scratchpad_selection` / `undo_scratchpad_delete` / `restore_scratchpad_trash` / `remove_scratchpad_reference` / `apply_scratchpad_relink` / `open_scratchpad_location` |
-| P1 | **render 内同步读盘（真）** | `editor.rs` 连接详情卡：`render` 内按需调 `load_navigator_tree(&global_analysis_db_path())` 读分析库文件（缓存键 = 当前连接） | `panels/editor.rs`「Round 25：数据库导航区」块 |
+| P1 | ~~**render 内同步读盘（真）**~~ ✅ 已修（2026-09-16） | `editor.rs` 连接详情卡：`load_navigator_tree` 改为 `ensure_analysis_tree` 后台加载 + 回填，render 只读缓存（原先选中联邦连接那一帧阻塞） | `panels/editor.rs` |
 | P2 | render 内写状态 + 入队后台任务 | `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`（改 `database_nav` + `enqueue_load` + 起轮询，I/O 在工作线程）；`render_property_panel` → `enqueue_properties`；`render_scratchpad` → `request_scratchpad_load` | nav.rs、editor.rs、scratchpad_panel.rs |
 | P3 | 自绘控件（技术债） | `tool_btn` / 树展开字符 / 文本按钮 | nav.rs、scratchpad_panel.rs、editor.rs |
 
