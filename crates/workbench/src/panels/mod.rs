@@ -258,7 +258,8 @@ impl ComponentPanel for SidebarPanel {
 /// 也调本函数——接线只此一份，端口形状变化时两侧一起变。
 pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
     let editor_for_edit = editor.clone();
-    let editor_for_new = editor;
+    let editor_for_new = editor.clone();
+    let editor_for_sql = editor.clone();
     *shared.editor_bridge.borrow_mut() = Some(EditorBridge {
         edit_connection: Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
             editor_for_edit
@@ -266,6 +267,15 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
         }),
         new_connection: Rc::new(move |window: &mut Window, cx: &mut App| {
             editor_for_new.update(cx, |panel, cx| panel.request_new_connection(window, cx));
+        }),
+        insert_sql: Rc::new(move |sql: String, cx: &mut App| {
+            editor_for_sql.update(cx, |panel, cx| {
+                panel.insert_sql(sql);
+                cx.notify();
+            });
+        }),
+        show_properties: Rc::new(move |request: PropertyRequest, cx: &mut App| {
+            editor.update(cx, |panel, cx| panel.request_properties(request, cx));
         }),
     });
 }

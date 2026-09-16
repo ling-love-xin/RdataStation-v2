@@ -44,6 +44,12 @@ pub struct EditorBridge {
     pub edit_connection: Rc<dyn Fn(String, &mut Window, &mut App)>,
     /// 打开「新建数据源连接」对话框。
     pub new_connection: Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 把导航注入的 SQL 追加到当前草稿（导航右键「新建查询 / 查看数据 / 生成 SQL」）。
+    ///
+    /// 不取 `Window`：编辑区只入私有缓冲，下一次渲染统一 `set_value`（见 `EditorPanel::insert_sql`）。
+    pub insert_sql: Rc<dyn Fn(String, &mut App)>,
+    /// 打开属性面板并加载数据（导航双击对象 / 键盘 F4）。
+    pub show_properties: Rc<dyn Fn(PropertyRequest, &mut App)>,
 }
 
 /// 面板与工作台共享的状态。
@@ -93,10 +99,6 @@ pub struct Shared {
     pub editor_sql: Rc<RefCell<String>>,
     /// 清空编辑区的宿主命令（保存 / 放弃未保存草稿后调用；事件上下文执行，非 render）。
     pub editor_clear: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
-    /// 待注入编辑区的 SQL（导航右键「新建查询 / 查看数据」→ EditorPanel 渲染时消费）。
-    pub editor_set: Rc<RefCell<Option<String>>>,
-    /// Phase B：属性面板请求（数据源导航双击对象 → 编辑区右侧面板）。
-    pub property_target: Rc<RefCell<Option<PropertyRequest>>>,
     /// M7：Mock 面板实体句柄（弱引用；用于导航右键定向导入源库结构）。
     ///
     /// 面板自带状态与对话框（`mock::mock_view::MockPanel`），工作台只持句柄。
@@ -139,7 +141,6 @@ impl Shared {
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
             result_epoch: Rc::new(Cell::new(0)),
-            editor_bridge: Rc::new(RefCell::new(None)),
             project_new_request: Rc::new(Cell::new(false)),
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
@@ -150,8 +151,7 @@ impl Shared {
             editor_dirty: Rc::new(Cell::new(false)),
             editor_sql: Rc::new(RefCell::new(String::new())),
             editor_clear: Rc::new(RefCell::new(None)),
-            editor_set: Rc::new(RefCell::new(None)),
-            property_target: Rc::new(RefCell::new(None)),
+            editor_bridge: Rc::new(RefCell::new(None)),
             mock_panel: Rc::new(RefCell::new(None)),
             insight_panel: Rc::new(RefCell::new(None)),
             mock_detail: Rc::new(RefCell::new(None)),
@@ -223,6 +223,34 @@ impl Shared {
     /// SQL 结果归属失效（切换连接 / 项目）。
     pub fn invalidate_sql_result(&self) {
         self.result_epoch.set(self.result_epoch.get().wrapping_add(1));
+    }
+
+    /// 递「编辑连接」请求（走 `EditorBridge`；装配未完成时静默丢弃）。
+    pub fn edit_connection(&self, id: String, window: &mut Window, cx: &mut App) {
+        if let Some(bridge) = self.editor_bridge.borrow().clone() {
+            (*bridge.edit_connection)(id, window, cx);
+        }
+    }
+
+    /// 递「新建连接」请求（同上）。
+    pub fn new_connection(&self, window: &mut Window, cx: &mut App) {
+        if let Some(bridge) = self.editor_bridge.borrow().clone() {
+            (*bridge.new_connection)(window, cx);
+        }
+    }
+
+    /// 把 SQL 注入编辑区草稿（同上）。
+    pub fn insert_sql(&self, sql: String, cx: &mut App) {
+        if let Some(bridge) = self.editor_bridge.borrow().clone() {
+            (*bridge.insert_sql)(sql, cx);
+        }
+    }
+
+    /// 打开属性面板并加载数据（同上）。
+    pub fn show_properties(&self, request: PropertyRequest, cx: &mut App) {
+        if let Some(bridge) = self.editor_bridge.borrow().clone() {
+            (*bridge.show_properties)(request, cx);
+        }
     }
 
     /// 当前选中连接（克隆，避免长时间持有 RefCell 借用）。

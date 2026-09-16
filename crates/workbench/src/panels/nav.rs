@@ -689,11 +689,14 @@ impl SidebarPanel {
             .find(|c| c.id == item.conn_id)
             .map(|c| (c.name.clone(), c.driver.clone()))
             .unwrap_or_else(|| (item.conn_id.clone(), String::new()));
-        *self.shared.property_target.borrow_mut() = Some(PropertyRequest {
-            property,
-            conn_label,
-            driver,
-        });
+        self.shared.show_properties(
+            PropertyRequest {
+                property,
+                conn_label,
+                driver,
+            },
+            cx,
+        );
         cx.notify();
     }
 
@@ -946,9 +949,7 @@ impl SidebarPanel {
                         let shared = self.shared.clone();
                         move |_, window, app: &mut App| {
                             // 命令端口：直接开对话框（不再置位请求字段等渲染消费）。
-                            if let Some(bridge) = shared.editor_bridge.borrow().clone() {
-                                (*bridge.new_connection)(window, app);
-                            }
+                            shared.new_connection(window, app);
                             entity.update(app, |_, cx| cx.emit(SidebarEvent::NewConnectionRequest));
                         }
                     }),
@@ -1818,9 +1819,7 @@ impl SidebarPanel {
                                 .icon(IconName::Plus)
                                 .label("新建连接")
                                 .on_click(move |_, window, app: &mut App| {
-                                    if let Some(bridge) = shared.editor_bridge.borrow().clone() {
-                                        (*bridge.new_connection)(window, app);
-                                    }
+                                    shared.new_connection(window, app);
                                     entity.update(app, |_, cx| {
                                         cx.emit(SidebarEvent::NewConnectionRequest)
                                     });
@@ -2515,9 +2514,7 @@ impl SidebarPanel {
                         let shared = shared.clone();
                         let cid = cid.clone();
                         move |_, window, app: &mut App| {
-                            if let Some(bridge) = shared.editor_bridge.borrow().clone() {
-                                (*bridge.edit_connection)(cid.clone(), window, app);
-                            }
+                            shared.edit_connection(cid.clone(), window, app);
                             entity.update(app, |_, cx| {
                                 cx.emit(SidebarEvent::EditConnection(cid.clone()));
                             });
@@ -2599,7 +2596,7 @@ impl SidebarPanel {
                                 driver: conn_driver.clone(),
                             };
                             entity.update(app, |this, cx| {
-                                *this.shared.property_target.borrow_mut() = Some(req);
+                                this.shared.show_properties(req, cx);
                                 cx.notify();
                             });
                             return;
@@ -2745,9 +2742,7 @@ impl SidebarPanel {
                                 let cid = cid_edit.clone();
                                 e_edit.update(app, |this, cx| {
                                     // 命令端口：直接开对话框（不再置位请求字段等渲染消费）。
-                                    if let Some(bridge) = this.shared.editor_bridge.borrow().clone() {
-                                        (*bridge.edit_connection)(cid.clone(), window, cx);
-                                    }
+                                    this.shared.edit_connection(cid.clone(), window, cx);
                                     cx.emit(SidebarEvent::EditConnection(cid.clone()));
                                 });
                             }))
@@ -2757,12 +2752,14 @@ impl SidebarPanel {
                                 let label = label_prop.clone();
                                 let drv = drv_prop.clone();
                                 e_prop.update(app, |this, cx| {
-                                    *this.shared.property_target.borrow_mut() =
-                                        Some(PropertyRequest {
+                                    this.shared.show_properties(
+                                        PropertyRequest {
                                             property: prop.clone(),
                                             conn_label: label.clone(),
                                             driver: drv.clone(),
-                                        });
+                                        },
+                                        cx,
+                                    );
                                     cx.notify();
                                 });
                             }))
@@ -3454,7 +3451,7 @@ impl SidebarPanel {
                             driver: n_driver.clone(),
                         };
                         entity.update(app, |this, cx| {
-                            *this.shared.property_target.borrow_mut() = Some(req);
+                            this.shared.show_properties(req, cx);
                             cx.notify();
                         });
                         return;
@@ -3508,11 +3505,14 @@ impl SidebarPanel {
                         let label = label0.clone();
                         let drv = drv0.clone();
                         e.update(app, |this, cx| {
-                            *this.shared.property_target.borrow_mut() = Some(PropertyRequest {
-                                property: prop.clone(),
-                                conn_label: label.clone(),
-                                driver: drv.clone(),
-                            });
+                            this.shared.show_properties(
+                                PropertyRequest {
+                                    property: prop.clone(),
+                                    conn_label: label.clone(),
+                                    driver: drv.clone(),
+                                },
+                                cx,
+                            );
                             cx.notify();
                         });
                     }));
@@ -3524,7 +3524,7 @@ impl SidebarPanel {
                         let shared_sql = shared.clone();
                         menu = menu.item(PopupMenuItem::new("查看数据（LIMIT 200）").on_click(
                             move |_, _, app| {
-                                *shared_sql.editor_set.borrow_mut() = Some(sql.clone());
+                                shared_sql.insert_sql(sql.clone(), app);
                                 e.update(app, |_, cx| cx.emit(SidebarEvent::EditorSqlRequest));
                             },
                         ));
@@ -3914,7 +3914,7 @@ impl SidebarPanel {
         for r in results {
             match r.result {
                 Ok(sql) => {
-                    *self.shared.editor_set.borrow_mut() = Some(sql);
+                    self.shared.insert_sql(sql, cx);
                     cx.emit(SidebarEvent::EditorSqlRequest);
                 }
                 Err(e) => {

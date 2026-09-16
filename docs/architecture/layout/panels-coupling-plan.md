@@ -8,7 +8,7 @@
 
 | 验收项 | 口径 |
 | --- | --- |
-| `Shared` 字段收敛 | 30 → 18（宿主级） |
+| `Shared` 字段收敛 | 原始 35 → 当前 31（S1/S2a/S2b 后）；计划终态 25（含 `editor_*` 交 EditorService） |
 | 跨模块直写归零 | `grep "shared\.\(open_edit\|editor_set\|new_connection_request\|scratchpad_search\|property_target\|scratchpad_pump_request\|focus_nav_search\|open_file_request\)"` 命中 0（面板模块之间） |
 | 行为不变 | 面板单测 16 项 + 契约测试 6 项 + 集成测试全绿；无 UI 文案/尺寸/交互差异 |
 | 防回退 | 新增 `ui_contract` 契约：`Shared` 字段白名单（新增字段需显式登记并说明归属） |
@@ -31,7 +31,8 @@
 | `property_target` | nav（5 处） | editor | **`EditorBridge::show_properties(PropertyRequest)`** | nav → editor 请求 |
 | `open_edit` | nav（2 处） | — | **✅ S2a 已端口化**：`EditorBridge::edit_connection(id)` | 数据字段已删，配对 request 字段一起删 |
 | `new_connection_request` | nav（2 处） | — | **✅ S2a 已端口化**：`EditorBridge::new_connection()` | 同上 |
-| `editor_set` | nav（1 处） | editor / mod | **`EditorBridge::insert_sql(conn_id, sql)`** | nav → editor 请求 |
+| `editor_set` | nav（2 处） | — | **✅ S2b 已端口化**：`EditorBridge::insert_sql(sql)`（编辑区入私有缓冲，渲染期 `set_value`） | 事件路径拿不到窗口，故不立即写输入框 |
+| `property_target` | nav（5 处） | — | **✅ S2b 已端口化**：`EditorBridge::show_properties(request)`；数据归 `EditorPanel`，入队与 loading 置位移到事件路径 | render 不再入队 |
 | `scratchpad_search` | scratchpad（2 处） | editor | **`EditorBridge::show_search_results(view)`** | scratchpad → editor 投递 |
 | `scratchpad_pump_request` | editor（1 处） | mod / scratchpad | **`ScratchpadBridge::ensure_pump()`** | editor → scratchpad 请求 |
 | `open_file_request` | scratchpad | 宿主（`view.rs`） | **`HostBridge::open_in_editor(path)`** | scratchpad → 宿主请求 |
@@ -49,9 +50,9 @@
 EditorBridge {
     fn edit_connection(&self, id: &str, window: &mut Window, cx: &mut App);  // ✅ S2a
     fn new_connection(&self, window: &mut Window, cx: &mut App);             // ✅ S2a
-    fn insert_sql(&self, conn_id: &str, sql: &str, cx: &mut App);            // S2b
-    fn show_properties(&self, request: PropertyRequest, cx: &mut App);       // S2b
-    fn show_search_results(&self, view: ScratchpadSearchView, cx: &mut App); // S2b
+    fn insert_sql(&self, sql: &str, cx: &mut App);                                // ✅ S2b（缓冲）
+    fn show_properties(&self, request: PropertyRequest, cx: &mut App);       // ✅ S2b
+    fn show_search_results(&self, view: ScratchpadSearchView, cx: &mut App); // S2c（待迁）
 }
 
 /// 编辑区调用（提供方：SidebarPanel / 草稿箱）
@@ -81,7 +82,8 @@ HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 
 > 因此 S1 必须连带改这 3 个外部文件（已改），而不是"纯字段搬家"。
 | **S2** | editor 侧端口化（拆两步） | — |
 | **S2a** ✅ | `EditorBridge { edit_connection, new_connection }` + 装配函数 `panels::install_editor_bridge`（生产宿主与同构测试宿主共用一份接线）；nav 4 处改为调端口；删掉 `open_edit` / `new_connection_request` 字段与编辑区 render 的两处 take（副作用回到事件路径） | `Shared` 字段 27 → 25；`dialog_host_layer` 4 项全绿（两个入口测试改走端口） |
-| **S2b** | 其余 3 个请求：`editor_set`（→ `insert_sql`）、`property_target`（→ `show_properties`）、`scratchpad_search`（→ `show_search_results`）；`property_target` 的调用点在键盘路径，需把 `window` 透过去 | 5 个请求字段全归零；§1 验收命令命中 0 |
+| **S2b** ✅ | `editor_set` → `insert_sql`（编辑区私有缓冲：`set_value` 需要 `Window`，而「生成 SQL」的排空路径拿不到窗口）、`property_target` → `show_properties`；nav 7 处改为调端口；`Shared` 新增 4 个便利方法（`edit_connection` / `new_connection` / `insert_sql` / `show_properties`，"端口未装配时静默丢弃"的容错收在一处） | `Shared` 字段 33 → 31；面板 16 项 + 契约 6 项 + `dialog_host_layer` 4 项 + `db_navigator` 2 项全绿 |
+| **S2c** | `scratchpad_search`（双向数据交接：scratchpad 写、编辑区渲染、scratchpad 自读）——需先确定展示状态归谁，再定端口形状 | 剩余 4 个字段（含 S3 的 3 个信号）归零 |
 | **S3** | 反向桥：`ScratchpadBridge::ensure_pump`、`NavBridge::focus_search`、`HostBridge::open_in_editor` | 同上；`scratchpad_pump_request` / `focus_nav_search` / `open_file_request` 归零 |
 | **S4** | `ui_contract` 加 `Shared` 字段白名单契约；更新 `panels-modules.md` §3 与本文档状态 | 契约测试通过；§3 表格与实际一致 |
 

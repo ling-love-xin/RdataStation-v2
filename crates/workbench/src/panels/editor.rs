@@ -30,7 +30,7 @@ use crate::ui;
 
 use super::Shared;
 // 跨模块：导航拖拽载荷 / 属性面板状态 / 草稿追加（编辑区落点）。
-use super::nav::{NavDragPayload, PropertyState, nav_draft_append};
+use super::nav::{NavDragPayload, PropertyRequest, PropertyState, nav_draft_append};
 use super::scratchpad_panel::render_scratchpad_search_pane;
 
 /// 导航拖拽落点语义（`EditorPanel::apply_nav_drag`）。
@@ -83,6 +83,13 @@ pub struct EditorPanel {
     /// 已消费的两个失效戳（与 `Shared` 逐帧对比，不等则丢弃自持缓存）。
     nav_cache_epoch: u64,
     result_epoch: u64,
+    /// Phase B：属性面板请求（导航双击对象 / F4 走 `EditorBridge::show_properties`）。
+    property_target: Rc<RefCell<Option<PropertyRequest>>>,
+    /// 待注入草稿的 SQL（`EditorBridge::insert_sql` 写入；下一次渲染消费）。
+    ///
+    /// `TextareaState::set_value` 需要 `Window`，而「生成 SQL」的排空路径拿不到窗口，
+    /// 因此入自有缓冲——写的是编辑区私有状态，不涉及跨模块字段。
+    pending_sql: RefCell<Option<String>>,
 }
 
 impl EditorPanel {
@@ -158,6 +165,8 @@ impl EditorPanel {
             sql_for: Rc::new(RefCell::new(None)),
             nav_cache_epoch: 0,
             result_epoch: 0,
+            property_target: Rc::new(RefCell::new(None)),
+            pending_sql: RefCell::new(None),
         }
     }
 
@@ -354,6 +363,50 @@ impl EditorPanel {
         *self.props_pump.borrow_mut() = Some(task);
     }
 
+    /// 把导航注入的 SQL 排进草稿缓冲（`EditorBridge::insert_sql`）。
+    ///
+    /// 渲染期统一消费（见 `render`）：`set_value` 需要 `Window`，事件路径取不到。
+    pub fn insert_sql(&self, sql: String) {
+        *self.pending_sql.borrow_mut() = Some(sql);
+    }
+
+    /// 请求属性面板数据（`EditorBridge::show_properties`）：**入队与轮询都在事件路径**，
+    /// 渲染只读 `PropertyState`（不再在 render 内入队）。
+    pub fn request_properties(&self, request: PropertyRequest, cx: &mut Context<Self>) {
+        let key = format!(
+            "{}|{:?}|{}|{:?}",
+            request.property.conn_id, request.property.kind, request.property.name, request.property.parent
+        );
+        {
+            let mut st = self.property.borrow_mut();
+            st.loaded_for = Some(key.clone());
+            st.props = None;
+            st.error = None;
+            st.loading = true;
+        }
+        // 驱动目录已缓存（随组织数据一次加载）：把「数据库类型 + 驱动友好名」一并传给属性面板。
+        let (driver_display, db_type) = {
+            let catalog = self.shared.driver_catalog.borrow();
+            match catalog.get(&request.driver) {
+                Some(meta) => (
+                    format!("{} · {}", meta.name, request.driver),
+                    Some(meta.type_id.clone()),
+                ),
+                None => (request.driver.clone(), None),
+            }
+        };
+        nav_jobs::enqueue_properties(
+            &key,
+            request.property.clone(),
+            &request.conn_label,
+            &driver_display,
+            db_type.as_deref(),
+        );
+        self.ensure_props_pump(cx);
+        *self.property_target.borrow_mut() = Some(request);
+        cx.notify();
+    }
+
     /// 回填属性加载结果（主线程；key 不匹配的过期结果丢弃）。
     fn apply_props_results(&mut self, results: Vec<nav_jobs::PropsResult>, cx: &mut Context<Self>) {
         for r in results {
@@ -378,51 +431,10 @@ impl EditorPanel {
 
     /// 右侧停靠属性面板（DBeaver 式：属性网格 + 子实体表格）。
     fn render_property_panel(&self, cx: &mut Context<Self>) -> Div {
-        let Some(target) = self.shared.property_target.borrow().clone() else {
+        let Some(target) = self.property_target.borrow().clone() else {
             return div();
         };
-
-        let key = format!(
-            "{}|{:?}|{}|{:?}",
-            target.property.conn_id,
-            target.property.kind,
-            target.property.name,
-            target.property.parent
-        );
-        let needs_load = {
-            let mut st = self.property.borrow_mut();
-            if st.loaded_for.as_deref() != Some(key.as_str()) {
-                st.loaded_for = Some(key.clone());
-                st.props = None;
-                st.error = None;
-                st.loading = true;
-                true
-            } else {
-                false
-            }
-        };
-        if needs_load {
-            // 后台加载：render 不做 I/O；结果由 `apply_props_results` 回填。
-            // 驱动目录已缓存（随组织数据一次加载）：把「数据库类型 + 驱动友好名」一并传给属性面板。
-            let (driver_display, db_type) = {
-                let catalog = self.shared.driver_catalog.borrow();
-                match catalog.get(&target.driver) {
-                    Some(meta) => (
-                        format!("{} · {}", meta.name, target.driver),
-                        Some(meta.type_id.clone()),
-                    ),
-                    None => (target.driver.clone(), None),
-                }
-            };
-            nav_jobs::enqueue_properties(
-                &key,
-                target.property.clone(),
-                &target.conn_label,
-                &driver_display,
-                db_type.as_deref(),
-            );
-            self.ensure_props_pump(cx);
-        }
+        // 数据加载与 loading 置位在事件路径（`request_properties`）：渲染只读 `PropertyState`。
 
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
@@ -557,10 +569,10 @@ impl EditorPanel {
                             .child("关闭")
                             .on_click({
                                 let entity = cx.entity();
-                                let shared = self.shared.clone();
                                 let width = self.property_width.clone();
+                                let target = self.property_target.clone();
                                 move |_, _, app: &mut App| {
-                                    *shared.property_target.borrow_mut() = None;
+                                    *target.borrow_mut() = None;
                                     // 关闭时持久化拖拽宽度（拖拽过程不写盘）。
                                     settings::SettingsService::set_property_panel_width(
                                         width.get(),
@@ -626,14 +638,10 @@ impl Render for EditorPanel {
             )));
         }
 
-        // 「编辑连接」/「新建连接」改由 `EditorBridge` 在事件路径直接调用（见 `shared.rs`），
-        // 本处不再消费请求字段（副作用不再发生在 render 内）。
-
-        // 消费导航右键「新建查询 / 查看数据」注入的 SQL：追加到当前草稿后。
-        // 用 `set_value`（不发事件）并手动同步 dirty / editor_sql，与 `clear_sql` 同策略，
-        // 避免在 render 内同步派发 InputEvent 引发重入。
-        let sql_request = self.shared.editor_set.borrow_mut().take();
-        if let Some(sql) = sql_request {
+        // 「编辑连接」/「新建连接」改由 `EditorBridge` 在事件路径直接调用（见 `shared.rs`）。
+        // 消费端口注入的 SQL：只读编辑区私有缓冲（`set_value` 需要 window，故延到渲染期）。
+        let pending_sql = self.pending_sql.borrow_mut().take();
+        if let Some(sql) = pending_sql {
             if let Some(ta) = &self.sql_textarea {
                 let current = ta.read(cx).value().to_string();
                 let combined = if current.trim().is_empty() {
@@ -647,6 +655,9 @@ impl Render for EditorPanel {
             }
         }
 
+        // 消费导航右键「新建查询 / 查看数据」注入的 SQL：追加到当前草稿后。
+        // 用 `set_value`（不发事件）并手动同步 dirty / editor_sql，与 `clear_sql` 同策略，
+        // 避免在 render 内同步派发 InputEvent 引发重入。
         // M5 草稿箱搜索结果：替换输入框懒创建（须在 `let theme = cx.theme()` 之前）。
         self.ensure_scratchpad_replace_input(window, cx);
 
@@ -1235,7 +1246,7 @@ impl Render for EditorPanel {
         // `h_flex()` 默认交叉轴居中：不写 items_stretch，内容列会按内容高度被竖直居中，
         // 高于面板的部分上下同时被裁。
         let mut root = div().h_flex().items_stretch().size_full();
-        if self.shared.property_target.borrow().is_some() {
+        if self.property_target.borrow().is_some() {
             // 属性面板停靠右侧，可拖拽调宽（宽度记忆到 settings.json）。
             let font_size = theme.font_size;
             let width = font_size * self.property_width.get();
