@@ -214,44 +214,6 @@ fn open_org_store(
     }
 }
 
-/// 驱动目录元数据（连接行徽标 / tooltip 用）。
-#[derive(Debug, Clone)]
-pub struct DriverMeta {
-    /// 数据库类型 id（`drivers.type_id`，如 `postgresql`）。
-    pub type_id: String,
-    /// 驱动显示名（`drivers.name`，如 `PostgreSQL (Official)`）。
-    pub name: String,
-}
-
-/// 读取全局驱动目录（`driver id → type_id / 显示名`）。
-///
-/// 供导航连接行解析「类型形状 + 2 字母」与 tooltip 里的驱动显示名。
-/// 渲染期不做 I/O，故由面板在 `cx.defer_in` 中一次性加载并缓存到 `DatabaseNavView`。
-/// 读取失败返回空表（消费方回退通用形状），不影响导航可用性。
-pub fn driver_catalog() -> std::collections::HashMap<String, DriverMeta> {
-    let Ok(path) = engine::migration::get_global_db_path() else {
-        return std::collections::HashMap::new();
-    };
-    let load = || -> Result<std::collections::HashMap<String, DriverMeta>, String> {
-        let conn = rusqlite::Connection::open(&path).map_err(|e| e.to_string())?;
-        let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
-        let drivers = engine::persistence::driver_store::get_all_drivers(&conn)
-            .map_err(|e| e.to_string())?;
-        Ok(drivers
-            .into_iter()
-            .map(|d| {
-                (
-                    d.id,
-                    DriverMeta {
-                        type_id: d.type_id,
-                        name: d.name,
-                    },
-                )
-            })
-            .collect())
-    };
-    load().unwrap_or_default()
-}
 
 /// 读取连接标签（多值）。权威源为连接组织存储（连接域数据），非导航视图状态。
 pub fn list_tags(conn_id: &str, project_root: Option<&Path>) -> Vec<String> {

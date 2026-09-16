@@ -143,7 +143,7 @@ pub struct Shared {
     /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
-    pub driver_catalog: Rc<RefCell<HashMap<String, crate::services::nav_runtime::DriverMeta>>>,
+    pub driver_catalog: Rc<RefCell<HashMap<String, engine::persistence::DriverMeta>>>,
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
     /// notify 不会让子视图重建元素树；打开 / 关闭对话框后必须显式通知宿主重渲染。
     pub host_redraw: Rc<RefCell<Option<Rc<dyn Fn(&mut App)>>>>,

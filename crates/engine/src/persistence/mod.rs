@@ -19,6 +19,7 @@ pub mod cache_version_migration;
 pub mod connection_draft_store;
 pub mod connection_org_store;
 pub mod connection_store;
+pub mod driver_catalog;
 pub mod driver_store;
 pub mod env_store;
 pub mod global_db;
@@ -50,6 +51,7 @@ pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSql
 pub use sql_template_store::{SqlTemplate, SqlTemplateStore};
 pub use workbench_context_store::{EditorContext, WorkbenchContextStore, WorkbenchLayout};
 
+pub use driver_catalog::{DriverMeta, load as load_driver_catalog};
 pub use log_store::LogStore;
 
 use shared::error::{CoreError, StorageError};

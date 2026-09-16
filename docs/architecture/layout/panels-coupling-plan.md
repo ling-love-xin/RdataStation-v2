@@ -212,12 +212,29 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 理由：`NavHost` 的签名要能命名「连接条目」与「面板枚举」，而这几个类型原本定义在 `workbench` 里——
 不下沉则 `database` 无法定义 trait。
 
+**A' 前置之二（2026-09-16）：驱动目录下沉至 `engine`（不是 `database`）。**
+
+原先 `navigation` 的驱动目录（`driver id → type_id / 显示名`）实现在
+`workbench::services::nav_runtime::{DriverMeta, driver_catalog}`，但：
+
+1. 它读的是 `drivers` 表（`engine::persistence::driver_store`），**本来就是引擎侧知识**；
+2. 消费方有两个 crate：`database`（连接行徽标）与 `workbench`（编辑器属性面板 `panels/editor.rs`）；
+3. 放 `database` 会让 `database` 为一段查询新增 `rusqlite` 依赖，而 `engine` 已有。
+
+故落到 `engine::persistence::driver_catalog::{DriverMeta, load}`（`persistence/mod.rs` 重导为
+`DriverMeta` / `load_driver_catalog`），`nav_runtime` 不再持有该实现。
+与 `engine::driver::metadata::DriverMetadata` 的分工：后者是内置驱动的**静态描述**（代码写死），
+前者是库里**已注册的驱动行**（含导出的外部驱动）。
+
+顺带修掉一个副作用：读目录改用 `SQLITE_OPEN_READ_ONLY` 打开全局库，全局库未初始化时
+不再在用户目录里凭空建出一个空 `global.db`。
+
 依赖面审计（`panels/nav.rs`，4867 行）——决定 `NavHost` 要盖什么：
 
 | 类别 | 处数 | 去向 |
 | --- | --- | --- |
 | `shared.notice` | 33 | `NavHost::notice(msg)` |
-| `shared.{connections, selected, driver_catalog, project_root}` | 11 | `NavHost` 只读访问器 |
+| `shared.{connections, selected, driver_catalog, project_root}` | 11 | `driver_catalog` 已下沉 `engine`（见上）；其余为 `NavHost` 只读访问器 |
 | 编辑器端口（`show_properties` / `request_query` / `new_connection` / `edit_connection`） | 12 | 直接复用既有 `EditorBridge`（已端口化） |
 | `nav_runtime::*` | 34 | **分两类**：纯存储类（归组/排序/标签/导航状态，~24 处）→ 随视图搬入 `database`（只依 `engine`）；连/断类（`connect_entry`/`disconnect_entry`）→ `NavHost` |
 | `nav_jobs::*` | 19 | 随视图搬入 `database`（后台任务+轮询印，与 P1 同形；参照 `scratchpad_jobs`） |

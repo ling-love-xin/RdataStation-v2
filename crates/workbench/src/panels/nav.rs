@@ -4295,7 +4295,7 @@ impl SidebarPanel {
         let tags = crate::services::nav_runtime::list_all_tags(root.as_deref());
         let primary_group = crate::services::nav_runtime::list_primary_groups(root.as_deref());
         let ungrouped_order = crate::services::nav_runtime::list_ungrouped_order(root.as_deref());
-        let driver_catalog = crate::services::nav_runtime::driver_catalog();
+        let driver_catalog = engine::persistence::load_driver_catalog();
         *self.shared.driver_catalog.borrow_mut() = driver_catalog;
         let mut view = self.database_nav.borrow_mut();
         view.groups = groups;
