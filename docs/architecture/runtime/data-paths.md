@@ -168,3 +168,52 @@ manifest、permission 四个子系统；驱动侧还有 `engine/src/driver/wasm/
 插件系统（manifest / permission / wasm / sidecar）**缺自己的架构文档**。建议新增
 `docs/architecture/plugin/plugin-architecture.md`，至少覆盖：清单与版本/依赖解析、权限模型、
 wasm 与 sidecar 两种运行形态的生命周期、路径与进程约束（引用本文档 §8）。
+
+## 9. W2 逐文件改动清单（执行用）
+
+前置：W1 已产出 `crates/paths`（`home/config_dir/data_dir/log_dir/temp_dir/extensions_dir` +
+可写性探测 + 回退）与 `paths::install_process_temp_dir()`。
+
+### 9.1 替换清单（12 处 / 8 个文件）
+
+| # | 文件:行 | 现状 | 改成 | 备注 |
+| --- | --- | --- | --- | --- |
+| 1 | `crates/settings/src/lib.rs:68-80` | `config_dir()`：`%APPDATA%/RdataStation`，否则 `temp_dir()/RdataStation` | `paths::config_dir()` | **保留** `#[cfg(test)] CONFIG_DIR_OVERRIDE` 分支（测试路径注入） |
+| 2 | `engine/src/migration/global_init.rs:36-52` | `get_global_data_dir()`：`dirs::data_dir()?/RdataStation` + `create_dir_all` | `let app_dir = paths::data_dir(); create_dir_all(&app_dir)?; Ok(app_dir)` | 删/改写 L18 `GLOBAL_DATA_DIR_NAME` |
+| 3 | 同上 `L58+` | `get_system_dir()` = `get_global_data_dir()/system` | **不改**（自动跟随） | `system/`、`global.db`、`analytics.duckdb` 名字不变 |
+| 4 | `engine/src/persistence/connection_store.rs:645-652` | `dirs::data_dir()/RdataStation` + `create_dir_all` | `paths::data_dir()` + `create_dir_all` | 存储文件名不变 |
+| 5 | `engine/src/persistence/history_store.rs:768-776` | 同上 | 同上 | `sql_history.json` 不变 |
+| 6 | `shared/src/crypto.rs:15-25` | `salt_path()`：`dirs::data_local_dir()/RdataStation/encryption-salt` | `paths::data_dir().join("encryption-salt")` | ⚠ **迁移敏感**：不迁移 = 旧密文全部解不开（连接密码失效） |
+| 7 | `shared/src/crypto.rs:86-95` | `machine_id_path()`：`…/RdataStation/machine-id` | `paths::data_dir().join("machine-id")` | 同上，需迁移 |
+| 8 | `project/src/ui.rs:879-887` | `sample_project_dir()`：`get_system_dir()` + **两处** `%TEMP%` 回退 | 回退改 `paths::data_dir().join("samples")` | 顺带修“回退到临时目录”隐患 |
+| 9 | `workbench/src/services/workspace_loader.rs:23-28` | `default_global_dir()`：`get_system_dir()` + `%TEMP%` 回退 | 回退改 `paths::data_dir().join("system")` | 同 #8；`global_analysis_db_path()` 靠它跟随 |
+| 10 | `engine/src/duckdb/manager.rs:297-304` | `extensions_dir()`：`dirs::home_dir()/<DUCKDB_EXTENSIONS_DIR>` | `paths::extensions_dir()` | 旧位置兼容读取或迁移（W3） |
+| 11 | `engine/src/dbi/engine/duckdb_engine.rs:505-509` | `init_extensions(conn, data_dir)`：`{data_dir}/duckdb/extensions` | 传参改走 `paths::extensions_dir()` | **待核对**：执行时先看调用方如何传 `data_dir` |
+| 12 | 日志目录：`LogConfig::with_log_dir(...)` 的**调用方**（在 `crates/app`） | `Default` 里 `log_dir: PathBuf::from("")`，目录由调用方传入 | 调用方改传 `paths::log_dir()` | **待定位**：执行时 `grep -rn "with_log_dir\|init_logging(" crates/` |
+
+### 9.2 由“启动重定向 TEMP/TMPDIR”自动覆盖（不改代码）
+
+| 位置 | 说明 |
+| --- | --- |
+| `engine/src/duckdb/executor.rs:321`、`federation.rs:361,410,454`、`manager.rs:403,522`、`snapshot.rs:353` | 直接用 `env::temp_dir()`；重定向后自动落 `<RDS_HOME>/tmp`（DuckDB spill / 联邦临时库） |
+| 各 crate 测试里的 `rds_*` 临时目录（`analytics_resource` / `connection` / `database` / `editor` / `engine`） | **保持系统临时目录**（测试不改；Rust 2024 下 `set_var` 是 `unsafe` 且与并行测试冲突） |
+
+### 9.3 明确不改
+
+| 位置 | 理由 |
+| --- | --- |
+| `connection/src/known_hosts.rs:57`（`~/.ssh/known_hosts`） | 跨应用共用的用户资产；需要时用 `RDS_KNOWN_HOSTS` 覆盖 |
+| `crates/plugin/*`、`engine/src/driver/loader.rs:135`（插件目录 / wasm 缓存 / sidecar） | **三期 P3-a**，见 `../plugin/plugin-architecture.md` §6 |
+| `<用户项目>/{project.db, analytics.duckdb}`（M1 项目会话） | 用户资产，留在用户工程目录 |
+
+### 9.4 启动顺序插入点（W1 的关键一步）
+
+`crates/app/src/main.rs`：**在所有路径解析之前**插入：
+
+```rust
+paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) + set_var("TEMP"/"TMPDIR")
+```
+
+- 位置：必须早于 `init_global_system()`（`main.rs:56`）与 `SettingsService::init(cx)`（`:65`）
+- 约束：`set_var` 在 Rust 2024 是 `unsafe`，必须在**单线程阶段**调用——若 `fn main()` 开头已建 tokio/gpui 线程，需前移到 `main()` 第一条语句
+- 验收：`RDS_HOME=<临时目录> cargo run -p rds-app`，启动后该目录下应出现 `data/`、`logs/`、`tmp/`；且 `%TEMP%` 下不再新增 `RdataStation` 相关目录
