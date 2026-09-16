@@ -26,4 +26,6 @@ analytics_resource.workspace = true
 engine.workspace = true
 # 启动最早处：运行时数据根（TEMP 重定向 + 旧布局迁移）
 paths.workspace = true
+# 日志接线后本层要补记启动结果（订阅者挂上之前的信息只能在这里回填）
+tracing.workspace = true
 tokio.workspace = true

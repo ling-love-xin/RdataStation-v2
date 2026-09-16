@@ -7889,6 +7889,7 @@ dependencies = [
  "rds-settings",
  "rds-workbench",
  "tokio",
+ "tracing",
  "winresource",
 ]
 

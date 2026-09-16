@@ -32,6 +32,7 @@ pub mod record;
 pub mod redact;
 pub mod subscriber;
 
+use crate::logging::config::LogConfig;
 use crate::logging::record::LogLevel;
 use crate::persistence::log_store::LogStore;
 use std::path::PathBuf;
@@ -66,6 +67,32 @@ pub fn init_logging(
 pub async fn flush_logs() -> Result<(), shared::error::CoreError> {
     // consumer 通过 channel 异步批量写入，已在定时/阈值触发下自动落盘
     Ok(())
+}
+
+/// 按应用口径初始化日志系统（启动时调用一次）。
+///
+/// - 目录：`paths::log_dir()`（`<RDS_HOME>/logs`，按天滚动 `app.YYYY-MM-DD`）
+/// - 级别：`RUST_LOG` 优先，否则 `Info`；保留 `LogConfig::default()` 的 7 天 / 10 万条
+/// - 三层输出：stderr + 滚动文件（逐行脱敏）+ 全局库 `app_logs` 表
+///
+/// # 前置条件
+///
+/// 必须在 `migration::initialize_global_system()` **之后**、且在 tokio 运行时上下文里调用：
+/// 库层要往全局库的 `app_logs` 表写（表由迁移创建），并起一个异步消费者任务。
+/// 因此**全局库建立之前产生的日志不落文件也不落库**（那时还没有订阅者）——
+/// 启动代码应在调用本函数后补记一条启动结果，否则最早的失败只能从 stderr 看。
+///
+/// 返回的 `JoinHandle` 即日志消费者任务；应用保持它存活（丢弃也不会中止任务）。
+pub fn init_app_logging() -> Result<tokio::task::JoinHandle<()>, String> {
+    let manager = crate::migration::get_global_db_manager()
+        .ok_or_else(|| "全局系统库尚未初始化，日志无法落库".to_string())?;
+    let cfg = LogConfig::default();
+    let store = Arc::new(LogStore::with_config(
+        manager.sqlite_pool(),
+        cfg.max_db_records,
+        cfg.retention_days,
+    ));
+    init_logging(&cfg.log_dir, cfg.min_level, cfg.retention_days, store).map_err(|e| e.to_string())
 }
 
 /// 获取当前会话 ID

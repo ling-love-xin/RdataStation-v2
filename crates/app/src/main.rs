@@ -8,11 +8,11 @@
 //! 5. 工作台视图由 `rds-workbench::WorkbenchView` 提供。
 //!
 //! 启动装配顺序（与 `docs/architecture/settings/settings-crate-design.md` 对齐）：
-//!   运行时数据根（TEMP 重定向 + 旧布局迁移）→ 全局系统库初始化 →
+//!   运行时数据根（TEMP 重定向 + 旧布局迁移）→ 全局系统库初始化 + 日志接线 →
 //!   SettingsService::init → 主题目录 watch → 应用已保存主题模式 → 快捷键绑定。
 //!
 //! 数据根位置见 `docs/architecture/runtime/data-paths.md`：默认 = 可执行文件所在目录
-//! （安装目录），`RDS_HOME` 可覆盖。
+//! （安装目录），`RDS_HOME` 可覆盖；日志见 `docs/architecture/runtime/logging.md`。
 
 use analytics_resource::commands::{ClearSearch, DeleteSelected, FocusSearch};
 use editor::commands::{
@@ -203,12 +203,17 @@ fn run_app() {
         });
 }
 
-/// 初始化全局系统库（执行全局迁移 + 建立连接池单例）。
+/// 初始化全局系统库（执行全局迁移 + 建立连接池单例）并接上日志。
 ///
 /// 运行时全部常驻：sqlx 连接池的后台维护任务依托其存活，不可随初始化结束而销毁。
 /// 失败不阻断启动：工作台会以降级模式显示空列表与错误提示。
 fn init_global_system() {
     static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    /// 日志消费者任务：存住它才叫"应用级"生命周期清晰（丢弃也不会中止任务，
+    /// 但留存句柄后将来要做优雅退出时有东西可 abort）。
+    static LOG_CONSUMER: std::sync::OnceLock<tokio::task::JoinHandle<()>> =
+        std::sync::OnceLock::new();
+
     let runtime = RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -216,9 +221,32 @@ fn init_global_system() {
             .build()
             .expect("failed to build global-db runtime")
     });
-    if let Err(e) = runtime.block_on(engine::migration::initialize_global_system()) {
+    let outcome = runtime.block_on(engine::migration::initialize_global_system());
+    if let Err(e) = &outcome {
         // 启动期一次性错误：stderr 供开发/诊断查看，UI 侧由工作台降级提示补充。
         eprintln!("[startup] 全局系统库初始化失败: {e}");
+    }
+
+    // 日志接线：库层要写全局库的 `app_logs` 表、并起一个异步消费者任务，
+    // 所以只能排在全局库建立之后。`runtime.enter()` 给当前线程挂上运行时上下文。
+    let _in_runtime = runtime.enter();
+    match engine::init_app_logging() {
+        Ok(handle) => {
+            let _ = LOG_CONSUMER.set(handle);
+            // 订阅者是刚挂上的：这之前的日志（含全局库初始化的结果）在这里补记一条，
+            // 否则最早的失败只在 stderr，事后翻文件/库都查不到。
+            match outcome {
+                Ok(()) => tracing::info!("全局系统库初始化完成"),
+                Err(e) => tracing::error!(error = %e, "全局系统库初始化失败"),
+            }
+            tracing::info!(
+                data_root = %paths::home().display(),
+                origin = paths::home_origin().label(),
+                "日志系统已启用"
+            );
+        }
+        // 不阻断启动：拿不到订阅者时日志只走 stderr（代码里大量 eprintln! 仍在）。
+        Err(e) => eprintln!("[startup] 日志系统未启用（只输出 stderr）: {e}"),
     }
 }
 

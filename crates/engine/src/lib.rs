@@ -68,6 +68,7 @@ pub use cache::{
 // 重新导出日志模块
 pub use logging::{
     config::LogConfig,
+    init_app_logging,
     record::{LogLevel, LogLevelCounts, LogPage, LogQuery, LogRecord, LogStats, TargetStat},
 };
 

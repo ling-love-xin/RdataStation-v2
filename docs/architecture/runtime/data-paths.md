@@ -251,14 +251,17 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
    顺带修好一处真 bug：**扩展目录原本有两份**（`DuckDBManager::extensions_dir()` 用
    `~/.rdatastation/duckdb/extensions`，而 `init_extensions` 用 `{data_dir}/duckdb/extensions`），
    现在两处都走 `paths::extensions_dir()`。
-2. **#12 日志目录没有"调用方"**：`LogConfig::with_log_dir` / `init_logging` **全仓无调用方**
-   （只有定义与文档注释），所以不存在"调用方改传 `paths::log_dir()`"这一步。实际做法：
+2. **#12 日志目录没有"调用方"**（2026-09-16 当日**已接线**）：初次改造时发现
+   `LogConfig::with_log_dir` / `init_logging` **全仓无调用方**（只有定义与文档注释），
+   所以不存在"调用方改传 `paths::log_dir()`"这一步。当时做法：
    - `LogConfig::default()` 的 `log_dir` 从 `PathBuf::from("")` 改为 `paths::log_dir()`（谁构造谁就对）；
-   - 启动时由 `paths::ensure_dirs()` 建好 `<RDS_HOME>/logs/`；
-   - **日志子系统仍未在启动时接线**（属独立任务）：`init_logging` 需要 `LogStore`（global.db 的
-     `app_logs` 表）与 tokio 运行时，只能在 `initialize_global_system()` 之后调用，还要持有
-     `spawn_log_consumer` 的 `JoinHandle`。**当前应用不产出文件日志**，`<RDS_HOME>/logs/` 会是空的——
-     接线前不要把它当已实现的排障手段（"没实现就不宣传"）。
+   - 启动时由 `paths::ensure_dirs()` 建好 `<RDS_HOME>/logs/`。
+
+   **当日续作已把子系统接上**（详见 `logging.md`）：新增 `engine::init_app_logging()`，
+   由 `crates/app/src/main.rs::init_global_system` 在全局库建立之后调用
+   （库层要写 `app_logs` 表 + 起异步消费者，所以不能更早），并在接线后补记一条启动结果。
+   接线时一并补齐两个脱敏缺口：文件层改为**逐行脱敏**写盘（原先明文直写），
+   库层的**字段值**也过 `redact_sensitive`（原先只脱敏 message，而连接串大多作为字段进来）。
 3. **实测发现的坑：`cargo test` 会往产品数据根写密钥**。验收时发现 `<repo>/.rds/data` 里
    已经多了 `encryption-salt` / `machine-id`——测试跑的是产品代码里的全局便捷路径（`encrypt_password`
    等），于是它们在数据根生成了一份**跟任何密文都没关系**的随机盐。此时"只补不盖"会让真正的旧密钥
@@ -296,7 +299,7 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 
 | 项 | 说明 |
 | --- | --- |
-| 日志子系统接线 | 见 §10.2 偏差 2 |
+| 日志查询 UI / 优雅退出 flush / 单文件上限 | 见 `logging.md` §6（日志**已接线**，这三项是后续） |
 | 插件目录 / wasm 缓存 / sidecar 工作目录 | 三期 P3-a，见 `../plugin/plugin-architecture.md` §6 |
 | `~/.rdatastation/jdbc-drivers`（`driver/loader.rs:177`） | 与 `WasmDriverDiscovery` 同族，且 `JdbcDriverDiscovery::load_drivers` 是空实现（返回空 Vec）——随 P3-a 一起定 |
 | `~/.ssh/known_hosts` | 有意不改（跨应用用户资产）；§3 的 `RDS_KNOWN_HOSTS` 覆盖**未实现** |
