@@ -133,6 +133,10 @@ button{font-family:inherit;cursor:pointer;}
 .inf{font-size:11px;color:var(--info);}
 .mono-line{font-family:Consolas,'SFMono-Regular',monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .stack{display:flex;flex-direction:column;gap:6px;width:100%;}
+/* 生成历史（D4/D5）：最近若干次运行——每行两条 + 重放 / 删除 */
+.hist{display:flex;flex-direction:column;gap:6px;width:100%;}
+.hist-row{display:flex;flex-direction:column;gap:4px;width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;}
+.hist-row .name{font-family:Consolas,'SFMono-Regular',monospace;font-size:11.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 /* 进度条（Progress 组件示意）：填充色用品牌色，轨道用浅色 */
 .bar{height:6px;border-radius:3px;background:var(--track);overflow:hidden;width:100%;}
 .bar>i{display:block;height:100%;background:var(--primary);border-radius:3px;}
@@ -475,6 +479,21 @@ button{font-family:inherit;cursor:pointer;}
           </div>
           <div class="hint">数据只写入分析库与文件，不回传源库（M7）</div>
 
+          <!-- 生成历史（D4/D5）：最近若干次运行。重放把当时的表名/行数/种子/列写回草稿，
+               删除只删记录；读写全在后台线程，宿主只提供项目根 -->
+          <div class="hist only-generated">
+            <div class="line"><span class="hint grow">生成历史（最近 20 次）</span><button class="btn sm">刷新</button></div>
+            <div class="hist-row">
+              <div class="line"><span class="name">mock_orders</span><span class="hint">1000 行</span></div>
+              <div class="line"><span class="hint grow">09-16 15:02 · 成功 · 1000 行</span><button class="btn sm">重放</button><button class="btn sm">删除</button></div>
+            </div>
+            <div class="hist-row">
+              <div class="line"><span class="name">mock_customers</span><span class="hint">500 行</span></div>
+              <div class="line"><span class="err grow">09-16 14:58 · 分析库已存在表 mock_customers</span><button class="btn sm">重放</button><button class="btn sm">删除</button></div>
+            </div>
+          </div>
+          <div class="hint only-imported">生成历史：本项目还没有生成记录（生成一次后这里会出现可重放的记录）</div>
+
           <!-- 空态 -->
           <div class="hint only-empty">尚未添加列：点「导入结构」从源库表读结构，或「＋ 加列」手工起一列。</div>
         </div>
@@ -582,7 +601,7 @@ button{font-family:inherit;cursor:pointer;}
   <div>· v1 的「生成器下拉（137 项平铺）」→ 本稿按<b>分类子菜单</b>收口；v1 的「⚙ 高级抽屉」→ <b>列编辑对话框</b>（列名 / 类型 / 生成器只读 / 参数 / 空值率 / 唯一 / 恢复智能默认）。</div>
   <div>· v1 的「生成 → 预览表 → 导出 CSV·XLSX·Parquet·SQL / 保存草稿 / 持久化」→ 本稿：生成仍只产<b>内存临时表 + 预览</b>（不写库），四个出口收在右 Dock「出口」按钮组，预览表在中央 tab。</div>
   <div>· v1 的「导入结构弹窗」→ 本稿「导入结构」对话框（连接 / 库 / schema / 表名，读源库结构）；v1 <b>没有</b>的「追加到既有表」是 v2 的<b>显式</b>出口（选表后主键自增接续表内行数），不与「持久化」混为一路。</div>
-  <div>· v1 的「场景模板 / 保存模板 / 历史段」→ 待办（见 mock-dev-plan.md Phase C/D），本稿不画。</div>
+  <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部「生成历史」（最近 20 条，时间倒序 + 重放 / 删除 / 刷新），生成一次自动落一条，失败行显示原因；v1 的「场景模板 / 保存模板」仍待办（`mock-dev-plan.md` Phase C4），本稿暂不画。</div>
 </div>
 
 <script>

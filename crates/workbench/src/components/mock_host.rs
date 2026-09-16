@@ -10,6 +10,8 @@
 //! | 连接清单（导入结构来源） | `Shared::connections`（工作台当前连接列表） |
 //! | 既有分析库表 / 导入列结构 | `services::mock_generator` → `NavCache` / `MetadataService` |
 //! | 只读判定 | `Shared.project_ui.read_only`（与 SQL 执行入口同一护栏） |
+//! | 项目根（生成历史 / 用户模板的落点） | `Shared.project`（面板只拿这一个问题：
+//!   历史的读写都在 mock crate 内完成后台执行，见 `mock::history`） |
 //! | 打开详情 tab | `Shared::open_mock_detail`（宿主命令，接中央 Dock） |
 //! | 重绘 | `Shared::notify_host`（宿主重绘桥，与连接对话框层同一口径） |
 //!
@@ -108,6 +110,11 @@ impl MockHost for WorkbenchMockHost {
 
     fn read_only(&self) -> bool {
         self.shared.project_ui.borrow().read_only
+    }
+
+    fn project_root(&self) -> Option<std::path::PathBuf> {
+        // 固有方法同名：显式限定，避免读者以为在递归
+        WorkbenchMockHost::project_root(self)
     }
 
     fn open_detail(&self, window: &mut Window, cx: &mut App) {

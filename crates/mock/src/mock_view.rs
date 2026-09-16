@@ -19,7 +19,7 @@
 //! # 排版（方案①）
 //!
 //! - **右 Dock（17.5rem，[`MockPanel`]）**：目标表名 / 行数·种子·语言 / 列来源（导入结构 · 手工加列）/
-//!   生成 / 出口按钮组 / 结果与错误；
+//!   生成 / 出口按钮组 / 结果与错误 / **生成历史**（重放配置、删除记录）；
 //! - **中央 tab（[`MockDetailView`]）**：字段清单（编辑走对话框）+ 预览表格。
 //!
 //! 右 Dock 起步宽 17.5rem 且不可拖拽调宽（`ui::RIGHT_DOCK_WIDTH`），字段表与预览表格放不下，
@@ -58,7 +58,9 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::*;
 
 use crate::generator_catalog::{self, GeneratorCategory, GeneratorSpec, ParamField, ParamKind};
+use crate::history::{self, HistoryAction, RunRecord};
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
+use crate::persistence::{MockGenerationDetail, MockGenerationTask};
 use crate::schema_map::ColumnMapper;
 
 // ==================== 宿主契约 ====================
@@ -373,8 +375,13 @@ pub trait MockHost: 'static {
     fn import_columns(&self, request: &SchemaRequest) -> Result<Vec<MockColumnSpec>, String>;
     /// 文件出口的默认目录（项目根 / 工作目录；空串表示由视图回退到当前目录）
     fn export_dir(&self) -> String;
-    /// 只读项目？（落库与写文件据此拒绝）
+    /// 只读项目？（落库与写文件据此拒绍）
     fn read_only(&self) -> bool;
+    /// 当前项目根（生成历史与用户模板的落点）；未打开项目时为 `None`。
+    ///
+    /// 宿主只回答这一个问题：历史的读写全在 mock crate 内完成后台执行
+    /// （见 `history`），存储细节不摊到宿主侧。
+    fn project_root(&self) -> Option<PathBuf>;
     /// 打开中央「Mock 数据」详情 tab（字段 + 预览）
     fn open_detail(&self, window: &mut Window, cx: &mut App);
     /// 宿主重绘 + 依赖视图刷新（导航树等）
@@ -596,7 +603,8 @@ fn split_choice(line: &str) -> Option<(&str, &str)> {
 
 /// 复杂参数的初值文本（JSON 值 → 多行文本，与 [`parse_complex_param`] 成对）。
 pub(crate) fn complex_param_text(config: &GeneratorConfig, key: &str) -> String {
-    let Some(serde_json::Value::Array(items)) = payload_of(config).and_then(|p| p.get(key).cloned())
+    let Some(serde_json::Value::Array(items)) =
+        payload_of(config).and_then(|p| p.get(key).cloned())
     else {
         return String::new();
     };
@@ -694,14 +702,12 @@ pub(crate) fn summarize_params(config: &GeneratorConfig) -> String {
                 let count = raw.as_array().map(|items| items.len()).unwrap_or(0);
                 format!("{count} 项")
             }
-            ParamKind::Bool => {
-                if raw.as_bool().unwrap_or(false) {
-                    "是"
-                } else {
-                    "否"
-                }
-                .to_string()
+            ParamKind::Bool => if raw.as_bool().unwrap_or(false) {
+                "是"
+            } else {
+                "否"
             }
+            .to_string(),
             _ => match raw {
                 serde_json::Value::Null => "未设".to_string(),
                 serde_json::Value::String(s) => s.clone(),
@@ -726,8 +732,8 @@ fn param_text(config: &GeneratorConfig, key: &str) -> String {
         .unwrap_or_default()
 }
 
-/// 按类型给一个可用默认生成器（手工加列用）。
-fn default_generator_for(data_type: &ColumnDataType) -> GeneratorConfig {
+/// 按类型给一个可用默认生成器（手工加列用；历史重放时也用它兜底）。
+pub(crate) fn default_generator_for(data_type: &ColumnDataType) -> GeneratorConfig {
     match data_type {
         ColumnDataType::Integer | ColumnDataType::BigInt => {
             GeneratorConfig::RandomInt { min: 1, max: 1000 }
@@ -791,12 +797,13 @@ fn generator_menu(
         let search = panel.clone();
         menu = menu
             .item(
-                PopupMenuItem::new(format!("搜索生成器…（{} 项）", generator_catalog::all_specs().len()))
-                    .on_click(move |_, window, app| {
-                        search.update(app, |panel, cx| {
-                            panel.open_generator_search(id, window, cx)
-                        });
-                    }),
+                PopupMenuItem::new(format!(
+                    "搜索生成器…（{} 项）",
+                    generator_catalog::all_specs().len()
+                ))
+                .on_click(move |_, window, app| {
+                    search.update(app, |panel, cx| panel.open_generator_search(id, window, cx));
+                }),
             )
             .separator();
         for category in GeneratorCategory::ALL {
@@ -946,7 +953,13 @@ impl ListDelegate for GeneratorSearchDelegate {
                                 .text_ellipsis()
                                 .child(spec.label),
                         )
-                        .child(div().flex_none().text_xs().text_color(muted).child(spec.name))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(spec.name),
+                        )
                         .child(
                             div()
                                 .flex_none()
@@ -969,13 +982,19 @@ impl ListDelegate for GeneratorSearchDelegate {
     }
 
     /// 点一行 / 回车：写回该列的生成器并关掉对话框。
-    fn confirm(&mut self, _secondary: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
+    fn confirm(
+        &mut self,
+        _secondary: bool,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
         let Some(spec) = self.selected.and_then(|ix| self.hits.get(ix.row).copied()) else {
             return;
         };
         let name = spec.name;
-        self.panel
-            .update(cx, |panel, cx| panel.set_generator(self.column_id, name, cx));
+        self.panel.update(cx, |panel, cx| {
+            panel.set_generator(self.column_id, name, cx)
+        });
         window.close_dialog(cx);
     }
 }
@@ -1010,6 +1029,14 @@ pub struct MockPanel {
     import_table: Option<Entity<InputState>>,
     /// 进行中的后台任务（`None` = 空闲；生成与追加共用）
     job: Option<MockJobWatch>,
+    /// 生成历史（最近 [`history::HISTORY_LIMIT`] 条，时间倒序）
+    history: Vec<MockGenerationTask>,
+    /// 历史是否读到过（区分「还没读」与「读完了是空的」）
+    history_loaded: bool,
+    /// 历史读写在途（后台）
+    history_loading: bool,
+    /// 历史读写失败的原因（成功一次就清掉）
+    history_error: Option<String>,
 }
 
 /// 进行中任务的视图侧状态（进度镜像 + 轮询泵句柄）。
@@ -1022,6 +1049,27 @@ struct MockJobWatch {
     cancel_requested: bool,
     /// 轮询泵（持句柄即存活；任务结束或面板销毁时自动停）
     _pump: Task<()>,
+}
+
+/// 交给后台执行器的一件事（读与写共用一条路径）。
+#[derive(Clone)]
+enum HistoryTask {
+    /// 读列表
+    List,
+    /// 删一条后读回列表
+    Delete(String),
+    /// 记一次生成运行后读回列表
+    Record { draft: MockDraft, run: RunRecord },
+    /// 取一条的完整配置（重放）
+    Replay(String),
+}
+
+/// 后台读的回填形态（与 [`HistoryTask`] 一一对应）。
+pub(crate) enum HistoryReply {
+    /// 列表已刷新
+    Listed(Vec<MockGenerationTask>),
+    /// 重放：拿回当时的完整配置（列表不动）
+    Replayed(Box<MockGenerationDetail>),
 }
 
 impl MockPanel {
@@ -1046,6 +1094,10 @@ impl MockPanel {
             import_schema: None,
             import_table: None,
             job: None,
+            history: Vec::new(),
+            history_loaded: false,
+            history_loading: false,
+            history_error: None,
         }
     }
 
@@ -1136,6 +1188,124 @@ impl MockPanel {
     /// 打开中央「Mock 数据」详情 tab（字段清单 + 预览）。
     pub fn open_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.host.open_detail(window, cx);
+    }
+
+    // ==================== 生成历史（后台读写；渲染只读状态） ====================
+
+    /// 重读生成历史（打开面板 / 切换项目时调用）。
+    ///
+    /// 只投一次后台读：开项目库是文件 I/O，事件路径上做会冻 UI，渲染期更不行。
+    pub fn refresh_history(&mut self, cx: &mut Context<Self>) {
+        self.spawn_history(HistoryTask::List, cx);
+    }
+
+    /// 删一条历史（删除与重读在同一件后台动作里完成）。
+    pub fn delete_history(&mut self, task_id: String, cx: &mut Context<Self>) {
+        self.spawn_history(HistoryTask::Delete(task_id), cx);
+    }
+
+    /// 重放一条历史：把当时的表名 / 行数 / 种子 / 语言与列配置写回草稿。
+    ///
+    /// **不自动生成**：重放是「把配置摆回来」，跑不跑由用户定（同模板应用口径）。
+    pub fn replay_history(&mut self, task_id: String, cx: &mut Context<Self>) {
+        self.spawn_history(HistoryTask::Replay(task_id), cx);
+    }
+
+    /// 把面板要做的一件事交给后台执行器，完成后经弱句柄回填。
+    ///
+    /// 未打开项目时不去跑后台：历史没有落点，直接给一句可读的原因
+    /// （而不是一个看起来像「本项目没有记录」的空列表）。
+    fn spawn_history(&mut self, task: HistoryTask, cx: &mut Context<Self>) {
+        let Some(root) = self.host.project_root() else {
+            // 未打开项目：历史没有落点，给一句可读的原因（而不是看起来像「本项目没有记录」）。
+            // 只有「重读列表」才清空：删记录 / 重放失败时，已显示的列表比一片空白有用。
+            if matches!(task, HistoryTask::List) {
+                self.history.clear();
+                self.history_loaded = true;
+            }
+            self.history_loading = false;
+            self.history_error = Some("未打开项目：生成历史随项目保存".to_string());
+            cx.notify();
+            return;
+        };
+        self.history_loading = true;
+        self.history_error = None;
+        let work = cx.background_executor().spawn(async move {
+            // 项目库的打开与读写要 tokio 运行时（GPUI 后台线程不带）：`history::drive` 自己进一个
+            match task {
+                HistoryTask::List => history::drive(history::list(&root, history::HISTORY_LIMIT))
+                    .map(HistoryReply::Listed),
+                HistoryTask::Delete(id) => history::drive(history::run(
+                    &root,
+                    HistoryAction::DeleteTask(id),
+                    history::HISTORY_LIMIT,
+                ))
+                .map(HistoryReply::Listed),
+                HistoryTask::Record { draft, run } => history::drive(history::run(
+                    &root,
+                    HistoryAction::Record { draft, run },
+                    history::HISTORY_LIMIT,
+                ))
+                .map(HistoryReply::Listed),
+                HistoryTask::Replay(id) => history::drive(history::detail(&root, &id))
+                    .map(|detail| HistoryReply::Replayed(Box::new(detail))),
+            }
+        });
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            let reply = work.await;
+            // 面板可能已关闭：弱句柄升级失败就丢弃结果（不 panic）
+            let _ = weak.update(cx, |panel, cx| panel.accept_history(reply, cx));
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// 回填后台结果（`pub(crate)`：窗口测试直接喂它，不等真实后台）。
+    pub(crate) fn accept_history(
+        &mut self,
+        reply: Result<HistoryReply, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.history_loading = false;
+        match reply {
+            Ok(HistoryReply::Listed(tasks)) => {
+                self.history = tasks;
+                self.history_loaded = true;
+                self.history_error = None;
+            }
+            Ok(HistoryReply::Replayed(detail)) => {
+                self.apply_replay(*detail);
+                self.history_loaded = true;
+                self.history_error = None;
+            }
+            // 失败不改列表：能看到的旧列表比一片空白有用
+            Err(reason) => self.history_error = Some(reason),
+        }
+        cx.notify();
+    }
+
+    /// 重放落地：草稿整体换成历史里的那一套（纯状态动作，测试直接调）。
+    pub(crate) fn apply_replay(&mut self, detail: MockGenerationDetail) {
+        let draft = history::draft_of_detail(&detail);
+        let table = draft.table_name.clone();
+        let columns = draft.columns.len();
+        self.next_id = draft
+            .columns
+            .iter()
+            .map(|column| column.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.draft = draft;
+        self.table_pending = Some(self.draft.table_name.clone());
+        // 旧结果作废：草稿已是另一套配置，临时表还是上一套的
+        self.generated = None;
+        self.landed = None;
+        self.error = None;
+        self.outcome = Some(format!(
+            "已重放 {table} 的配置（{columns} 列）：确认后再点生成"
+        ));
     }
 
     /// 导航右键「生成 Mock 数据」：按**源库表**预填目标表名并导入其结构。
@@ -1285,6 +1455,8 @@ impl MockPanel {
         if kind.generates() {
             self.generated = None;
         }
+        // 历史在任务收尾时记（写库在后台）：出口类与取消不记，见 `RunRecord::of`
+        let record = RunRecord::of(kind, &result, &self.draft);
         match result {
             Ok(MockJobDone::Generated(info)) => {
                 self.landed = None;
@@ -1312,7 +1484,8 @@ impl MockPanel {
             Err(e) => {
                 let cancelled = e.contains("取消");
                 // 同名表已存在是落库失败的常见情形：刷新清单，引导到「追加到既有表」
-                if !cancelled && matches!(kind, MockJobKind::Persist(_)) && e.contains("已存在") {
+                if !cancelled && matches!(kind, MockJobKind::Persist(_)) && e.contains("已存在")
+                {
                     self.existing_tables = self.host.existing_tables();
                 }
                 self.outcome = None;
@@ -1326,6 +1499,10 @@ impl MockPanel {
             }
         }
         cx.notify();
+        if let Some(run) = record {
+            let draft = self.draft.clone();
+            self.spawn_history(HistoryTask::Record { draft, run }, cx);
+        }
     }
 
     /// 请求取消进行中的任务：只有**含生成阶段**的任务能取消（引擎按批响应）。
@@ -1359,12 +1536,7 @@ impl MockPanel {
     }
 
     /// 出口：导出文件（调用方已选好路径；后台任务）。
-    pub fn export_file(
-        &mut self,
-        format: &MockExportFormat,
-        path: String,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn export_file(&mut self, format: &MockExportFormat, path: String, cx: &mut Context<Self>) {
         let Some(info) = self.generated.clone() else {
             self.fail("请先生成（预览确认后再导出）", cx);
             return;
@@ -1452,15 +1624,11 @@ impl MockPanel {
         // `searchable` 在 `ListState` 上（搜索框是状态的一部分），占位文案在元素上
         let list = cx.new(|cx| ListState::new(delegate, window, cx).searchable(true));
         window.open_dialog(cx, move |dialog, _window, _cx| {
-            dialog.title("搜索生成器").child(
-                div()
-                    .w_full()
-                    .h(rems(SEARCH_LIST_HEIGHT))
-                    .child(
-                        List::new(&list)
-                            .search_placeholder("按名称 / 中文标签 / 分类搜索（137 项）"),
-                    ),
-            )
+            dialog
+                .title("搜索生成器")
+                .child(div().w_full().h(rems(SEARCH_LIST_HEIGHT)).child(
+                    List::new(&list).search_placeholder("按名称 / 中文标签 / 分类搜索（137 项）"),
+                ))
         });
     }
 
@@ -1546,7 +1714,8 @@ impl MockPanel {
             state.update(cx, |s, cx| s.set_value(initial, window, cx));
             self.table_input = Some(state);
         }
-        if let (Some(pending), Some(input)) = (self.table_pending.take(), self.table_input.clone()) {
+        if let (Some(pending), Some(input)) = (self.table_pending.take(), self.table_input.clone())
+        {
             input.update(cx, |s, cx| s.set_value(pending, window, cx));
         }
         if self.rows_input.is_none() {
@@ -1652,19 +1821,23 @@ impl MockPanel {
             ),
             phase => format!("{}…（{} 行）", phase.label(), progress.rows_total),
         };
-        let cancel = cancellable.then(|| {
-            let entity = cx.entity();
-            let mut button = Button::new("mock-cancel-job")
-                .secondary()
-                .xsmall()
-                .label(if cancel_requested { "正在取消…" } else { "取消" });
-            if !cancel_requested {
-                button = button.on_click(move |_, _, app| {
-                    entity.update(app, |panel, cx| panel.cancel_job(cx));
-                });
-            }
-            button
-        });
+        let cancel =
+            cancellable.then(|| {
+                let entity = cx.entity();
+                let mut button = Button::new("mock-cancel-job").secondary().xsmall().label(
+                    if cancel_requested {
+                        "正在取消…"
+                    } else {
+                        "取消"
+                    },
+                );
+                if !cancel_requested {
+                    button = button.on_click(move |_, _, app| {
+                        entity.update(app, |panel, cx| panel.cancel_job(cx));
+                    });
+                }
+                button
+            });
 
         div()
             .v_flex()
@@ -1826,13 +1999,11 @@ impl MockPanel {
                     let mut menu = menu;
                     for (label, format) in FILE_FORMATS {
                         let entity = entity.clone();
-                        menu = menu.item(PopupMenuItem::new(label).on_click(
-                            move |_, window, app| {
+                        menu =
+                            menu.item(PopupMenuItem::new(label).on_click(move |_, window, app| {
                                 let format = format.clone();
-                                let name = mock_file_name(
-                                    &entity.read(app).draft.table_name,
-                                    &format,
-                                );
+                                let name =
+                                    mock_file_name(&entity.read(app).draft.table_name, &format);
                                 let dir = entity.read(app).host.export_dir();
                                 let dir = if dir.trim().is_empty() {
                                     PathBuf::from(".")
@@ -1856,8 +2027,7 @@ impl MockPanel {
                                         .ok();
                                     })
                                     .detach();
-                            },
-                        ));
+                            }));
                     }
                     menu
                 })
@@ -1917,7 +2087,17 @@ impl MockPanel {
                     .text_color(muted)
                     .child("出口（生成后可用）"),
             )
-            .child(div().v_flex().gap_1().w_full().child(detail).child(persist).child(append).child(scratchpad).child(export))
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .w_full()
+                    .child(detail)
+                    .child(persist)
+                    .child(append)
+                    .child(scratchpad)
+                    .child(export),
+            )
             .child(
                 div()
                     .text_xs()
@@ -1959,6 +2139,183 @@ impl MockPanel {
     }
 
     /// 打开「导入源库结构」对话框。
+    /// 生成历史段：最近若干次运行（重放 / 删除都在事件路径上交给后台）。
+    ///
+    /// 列表与错误分开呈现：读失败时**保留旧列表**（能看到的旧数据比一片空白有用）。
+    /// 行按 `created_at` 倒序（存储层已排），每行的 id 用任务 id——用得下标会在
+    /// 「最新在前」的插入下把 hover 等按 id 记的状态串行。
+    fn render_history(&mut self, cx: &mut Context<Self>) -> Div {
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let border = cx.theme().colors.border;
+        let danger = cx.theme().colors.danger;
+        let success = cx.theme().colors.success;
+
+        let header = {
+            let entity = cx.entity();
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(muted)
+                        .text_ellipsis()
+                        .child(format!("生成历史（最近 {} 次）", history::HISTORY_LIMIT)),
+                )
+                .child(
+                    Button::new("mock-history-refresh")
+                        .ghost()
+                        .xsmall()
+                        .label("刷新")
+                        .on_click(move |_, _, app| {
+                            entity.update(app, |panel, cx| panel.refresh_history(cx));
+                        }),
+                )
+        };
+
+        let mut section = div().v_flex().gap_1().w_full().child(header);
+        if let Some(error) = self.history_error.clone() {
+            section = section.child(div().text_xs().text_color(danger).child(error));
+        }
+        if self.history_loading && !self.history_loaded {
+            return section.child(div().text_xs().text_color(muted).child("读取中…"));
+        }
+        if self.history_loaded && self.history.is_empty() {
+            if self.history_error.is_none() {
+                section = section.child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("本项目还没有生成记录"),
+                );
+            }
+            return section;
+        }
+
+        for task in self.history.clone() {
+            let rows = task.generated_rows.unwrap_or(task.row_count);
+            let stamp = task
+                .created_at
+                .as_deref()
+                .map(history::time_label)
+                .unwrap_or_default();
+            let stamp = (!stamp.is_empty())
+                .then(|| div().flex_none().text_xs().text_color(muted).child(stamp));
+            // 状态文案按语义取色：失败的原因原文展出来（截断由布局管）
+            let (status_text, status_color) = match task.status.as_str() {
+                "success" if task.save_format.as_deref() == Some(history::SAVE_FORMAT_TABLE) => {
+                    (format!("成功 · {rows} 行 · 已追加"), success)
+                }
+                "success" => (format!("成功 · {rows} 行"), success),
+                _ => (
+                    task.error_message
+                        .clone()
+                        .unwrap_or_else(|| "失败".to_string()),
+                    danger,
+                ),
+            };
+
+            let replay = {
+                let entity = cx.entity();
+                let id = task.id.clone();
+                Button::new(ElementId::Name(SharedString::from(format!(
+                    "mock-history-replay-{id}"
+                ))))
+                .ghost()
+                .xsmall()
+                .label("重放")
+                .on_click(move |_, _, app| {
+                    let id = id.clone();
+                    entity.update(app, |panel, cx| panel.replay_history(id, cx));
+                })
+            };
+            let delete = {
+                let entity = cx.entity();
+                let id = task.id.clone();
+                Button::new(ElementId::Name(SharedString::from(format!(
+                    "mock-history-delete-{id}"
+                ))))
+                .ghost()
+                .xsmall()
+                .label("删除")
+                .on_click(move |_, _, app| {
+                    let id = id.clone();
+                    entity.update(app, |panel, cx| panel.delete_history(id, cx));
+                })
+            };
+
+            section = section.child(
+                div()
+                    .id(ElementId::Name(SharedString::from(format!(
+                        "mock-history-{}",
+                        task.id
+                    ))))
+                    .v_flex()
+                    .gap_1()
+                    .w_full()
+                    .p_2()
+                    .border_1()
+                    .border_color(border)
+                    .rounded(cx.theme().radius)
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .text_color(fg)
+                                    .text_ellipsis()
+                                    .child(task.table_name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(format!("{rows} 行")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .children(stamp)
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .text_xs()
+                                            .text_color(status_color)
+                                            .text_ellipsis()
+                                            .child(status_text),
+                                    ),
+                            )
+                            .child(replay)
+                            .child(delete),
+                    ),
+            );
+        }
+        section
+    }
+
     pub fn open_import_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sources.is_empty() {
             self.sources = self.host.schema_sources();
@@ -2209,7 +2566,8 @@ impl Render for MockPanel {
                                     .child("Mock 数据生成"),
                             )
                             .child(target)
-                            .child(actions),
+                            .child(actions)
+                            .child(self.render_history(cx)),
                     ),
             )
     }
@@ -2451,8 +2809,7 @@ impl MockDetailView {
                                                         draft.type_label =
                                                             column_type_label(&chosen);
                                                         draft.def.data_type = chosen;
-                                                        draft.confidence =
-                                                            "manual".to_string();
+                                                        draft.confidence = "manual".to_string();
                                                     }
                                                     cx.notify();
                                                 });
@@ -2489,11 +2846,9 @@ impl MockDetailView {
             for row in param_rows {
                 body = body.child(match row {
                     ParamRowView::Scalar { label, state } => form_line(theme, &label, &state),
-                    ParamRowView::Complex {
-                        label,
-                        hint,
-                        state,
-                    } => complex_form_line(theme, &label, hint, &state),
+                    ParamRowView::Complex { label, hint, state } => {
+                        complex_form_line(theme, &label, hint, &state)
+                    }
                 });
             }
             if let Some((_, message)) = param_error {
@@ -2521,9 +2876,8 @@ impl MockDetailView {
                     )
                     .child({
                         let view = view.clone();
-                        Switch::new("mock-col-unique")
-                            .checked(unique)
-                            .on_click(move |checked, _window, app| {
+                        Switch::new("mock-col-unique").checked(unique).on_click(
+                            move |checked, _window, app| {
                                 let checked = *checked;
                                 view.update(app, |view, cx| {
                                     if let Some(draft) = view.draft.as_mut() {
@@ -2531,7 +2885,8 @@ impl MockDetailView {
                                     }
                                     cx.notify();
                                 });
-                            })
+                            },
+                        )
                     }),
             );
             body = body.child({
@@ -2602,11 +2957,8 @@ impl MockDetailView {
             .iter()
             .copied()
             .collect();
-        let mut previous: HashMap<String, ParamInput> = draft
-            .params
-            .drain(..)
-            .map(|p| (p.key.clone(), p))
-            .collect();
+        let mut previous: HashMap<String, ParamInput> =
+            draft.params.drain(..).map(|p| (p.key.clone(), p)).collect();
         let mut next = Vec::with_capacity(fields.len());
         for field in fields {
             if let Some(item) = previous.remove(field.key) {
@@ -2801,11 +3153,13 @@ impl MockDetailView {
                                 .ghost()
                                 .xsmall()
                                 .label("编辑")
-                                .on_click(move |_, window, app| {
-                                    entity.update(app, |view, cx| {
-                                        view.open_column_dialog(id, window, cx);
-                                    });
-                                })
+                                .on_click(
+                                    move |_, window, app| {
+                                        entity.update(app, |view, cx| {
+                                            view.open_column_dialog(id, window, cx);
+                                        });
+                                    },
+                                )
                             })
                             .child({
                                 let panel = panel.clone();
@@ -2840,9 +3194,7 @@ impl MockDetailView {
                                     .text_xs()
                                     .text_color(muted)
                                     .text_ellipsis()
-                                    .child(format!(
-                                        "{unique}空值 {null_percent}% · {detail}"
-                                    )),
+                                    .child(format!("{unique}空值 {null_percent}% · {detail}")),
                             ),
                     ),
             );
@@ -2959,9 +3311,7 @@ impl Render for MockDetailView {
                 info.row_count,
                 info.elapsed_ms
             ),
-            None => format!(
-                "预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点右上「生成」"
-            ),
+            None => format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点右上「生成」"),
         };
         body = body.child(div().text_xs().text_color(muted).child(preview_title));
 

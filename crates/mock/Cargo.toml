@@ -14,6 +14,8 @@ gpui-kit.workspace = true
 # ===== 数据生成 =====
 fake.workspace = true
 rand.workspace = true
+# 生成历史的读写要进 tokio 运行时（项目库走 tokio::fs / tokio::sync，见 `history`）
+tokio.workspace = true
 
 # ===== 时间 =====
 chrono.workspace = true
@@ -30,9 +32,11 @@ duckdb.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true
+# 生成历史的记录 id（任务 / 列 / 模板）
+uuid.workspace = true
 
 [dev-dependencies]
 # 集成测试（tests/）：`MockEngine` 公开 API 的异步端到端验证需要属性宏与多线程运行时
-tokio.workspace = true
+# （运行时的正式依赖在 [dependencies]，因为生成历史也要用）
 # 面板窗口测试（headless）需要 gpui 的 test-support 能力
 gpui-kit = { workspace = true, features = ["test-support"] }

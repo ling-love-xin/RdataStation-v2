@@ -300,7 +300,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | I1 | ~~临时表命名前缀与 `TempTableManager` 约定不一致~~ | 已解决：管理器新增 `TempTableSource::prefixes()`（**两套命名都认**：v2 `tmp_m_` + v1 `temp_mock_`）与 `list_by_source` / `drop_by_source`（**以库里的实际表为准**，不只靠注册表），表名取自库、删完同步注册表 | —— |
 | I2 | ~~临时表建在进程级内存单例，切项目不会清~~ | 已解决：`DuckDBManager::drop_in_memory_temp_tables(Mock)`（限定 `catalog = memory` + `schema = main`，`ATTACH` 进来的文件库表不会被误删）由宿主在**项目切换**时调用，并让 mock 面板作废旧预览（表名已失效） | 已足够；将来若改成项目作用域分析库，切项目天然不带过去 |
 | I3 | ~~分析库写入是「INSERT 文本 → `execute_batch`」~~ | 已解决：改 **`ATTACH` 跨库直写**（`MockEngine::write_temp_table_to_database`），数据不经 Rust 字符串；回滚只删本次刚建的表（同名既有表不受影响） | —— |
-| I4 | 模板/用户模板与生成任务已落 `project.db`，但**无 UI 入口**且无真实 SQLite 往返测试（仅序列化测试） | 能力在代码里，用户在界面上看不到 | Phase C/D 接面板；补 `MockGenerationStore` 的 SQLite 往返测试 |
+| I4 | 模板/用户模板与生成任务已落 `project.db` | **已完成（除模板 UI）**：生成任务——真库往返测试（`tests/persistence_roundtrip.rs`）+ 生成历史入口（面板底部历史段：重放 / 删除 / 自动落库，`history.rs` + `tests/history_roundtrip.rs`）；用户模板——store 与往返测试已就绪，**面板入口待接线**（C4） | 模板 UI 接线后关闭（Phase C4） |
 | I5 | ~~`mock_view.rs` 为占位文件~~ | 已落地：面板与详情 tab 都在 `crates/mock/src/mock_view.rs`；`{commands,model,generator}.rs` 仍是脚手架占位 | 这三个占位文件按全项目统一政策处理（命令层已退役） |
 | I6 | 文档称「生成器按依赖表达式计算取值」，实际只做拓扑排序 | 用户可能误以为支持 `price * quantity` 计算 | Phase C 明确：要么实现表达式解释，要么把 `dependency` 降级为「顺序提示」 |
 | I7 | ~~生成与落库都是**同步阻塞**调用~~ | 已解决：生成 / 追加 / 三个出口全部走后台工作线程（进度 + 取消，D20/D21/D23） | —— |
@@ -339,6 +339,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 列名规则与置信度 | `crates/mock/src/schema_map.rs`（`ColumnMapper::exact_rules/suffix/fuzzy/fallback_by_type`） |
 | 模板与场景生成 | `crates/mock/src/templates.rs` + `engine.rs::generate_scenario` |
 | 任务/模板持久化 | `crates/mock/src/persistence.rs` + `crates/engine/migrations/project_meta/009_mock_generation.sql` |
+| 生成历史（读 / 重放 / 删除） | `crates/mock/src/history.rs`（后台线程 + 自备 tokio 运行时；宿主经 `MockHost::project_root` 只给项目根） |
 | D4/D5/D6/D17 装配与追加语义 | `crates/workbench/src/services/mock_generator.rs`（`generate_at_with_progress` / `persist_table_at` / `append_table_at` / `export_file` / `save_scratchpad` / `import_columns`） |
 | D20/D21/D22/D23 后台任务 | `crates/workbench/src/services/mock_jobs.rs`（工作线程 + 槽 + `JobPaths` + `start`/`state`/`take_done`/`cancel`）+ `mock_view.rs`（`MockJobKind` / `MockJobPhase` / `MockJobWatch` + 定时泵 + `poll_job`） |
 | D11/D18 视图归属与两处排版 | `crates/mock/src/mock_view.rs`（`MockPanel` 右 Dock / `MockDetailView` 中央 tab / `MockDraft` / `MockHost`） |

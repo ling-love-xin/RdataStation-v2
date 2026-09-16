@@ -69,10 +69,12 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | `crates/mock/src/mock_view/tests.rs` | 视图测试（21 纯逻辑 + 31 项 headless 窗口测试 + 测试宿主桥） |
 | `crates/mock/src/templates.rs` | 内置 6 套场景模板（电商 / HR / 博客 / 金融 / 社交 / 企业通讯录） |
 | `crates/mock/src/persistence.rs` | `MockGenerationStore`：任务历史与用户模板的 SQLite 读写（8 个方法；读写两侧由真库往返测试验住） |
+| `crates/mock/src/history.rs` | **生成历史**：领域门面 + 后台入口（`HistoryAction` / `list` / `detail` / `run` + 草稿⇄历史行的纯映射）；自备 tokio 运行时（`drive`），宿主只回答「项目根在哪」 |
 | `crates/mock/src/error.rs` | `MockError` / `MockResult`（含 DuckDB 错误桥接） |
 | `crates/mock/src/{commands,model,generator}.rs` | **占位**（全项目统一脚手架；命令层按 Round 14 政策退役） |
 | `crates/mock/tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（32 项） |
 | `crates/mock/tests/persistence_roundtrip.rs` | 持久化层**真库往返**（5 项：任务 + 列序 / 可空列 / 历史排序与截尾 / 级联删除 / 模板；走真迁移链） |
+| `crates/mock/tests/history_roundtrip.rs` | 生成历史**端到端**（3 项：记录 → 列表 → 详情 → 重放；失败原因与 `limit` 截尾；项目根不是目录时的可读错误） |
 | `crates/mock/tests/temp_table_cleanup.rs` | 临时表清理集成测试（2 项；独立进程：清理是进程级动作） |
 | `crates/workbench/src/components/mock_host.rs` | **宿主桥**：`MockHost` 实现（后台任务转发 + 路径解析 + 连接清单 + 只读 + 打开详情 + 重绘 + 写入成功后导航缓存失效） |
 | `crates/workbench/src/services/mock_jobs.rs` | **后台任务**：单一工作线程 + 进度槽（含阶段）+ 结果一次性取回 + 取消；任务种类＝生成 / 追加 / 三个出口 |
@@ -96,9 +98,9 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ## 测试与验证命令
 
 ```bash
-# 全量编译/测试必须限并发（DuckDB 静态库链接耗内存），见 .cargo/config.toml 别名
+# 全量编译/测试必须限并发（重型 crate 链接耗内存（DuckDB 已改动态链接）），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 117 单元（含 52 视图）+ 32 引擎 + 5 持久化往返 + 2 清理 集成
+cargo test  -p rds-mock -j 2                                   # 128 单元（含 56 视图）+ 32 引擎 + 5 持久化往返 + 3 历史 + 2 清理 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 10 项
 cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 7 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
@@ -109,7 +111,7 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 117 单元（21 纯逻辑 + 31 窗口 + 65 其他）+ 32 引擎集成 + 5 持久化往返 + 2 清理集成全过 |
+| `cargo test -p rds-mock` | 128 单元（21 纯逻辑 + 35 窗口 + 72 其他）+ 32 引擎集成 + 5 持久化往返 + 3 历史集成 + 2 清理集成全过 |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
 | `cargo test -p rds-workbench` | 全绿（含 12 装配 + 9 任务测试） |
 

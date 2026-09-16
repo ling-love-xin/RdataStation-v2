@@ -74,8 +74,8 @@
 | D2 | 保存到草稿箱 `{项目}/mock/` | ✅ 已完成（「保存到草稿箱 ▾」，时间戳命名；无项目报错） | 文件名 `mock_{表}_{时间戳}.{ext}`；只读项目禁写 |
 | D3 | 持久化为分析资源表 | ✅ 已完成（「持久化为分析库表」：新建 + 同名报错 + 写失败回滚） | 分析库出现新表且行数正确；既有数据不被覆盖 |
 | D3b | 追加到既有表（v2 新增出口） | ✅ 已完成（显式选表 + 主键自增接续 + 缺列报错） | 二次追加累计行数翻倍、主键无重复 |
-| D4 | 生成历史面板（`mock_generation_tasks` / `_columns`） | 右 Dock「历史」面板或 Mock 面板 Tab | 列表按时间倒序、可删除、可重放配置 |
-| D5 | 任务自动落库（生成成功即写 `save_task`） | 装配层 | 生成一次 → 历史多一条；失败时记录 `error_message` |
+| D4 | 生成历史面板（`mock_generation_tasks` / `_columns`） | ✅ 已完成（Mock 面板底部「生成历史」段：最近 20 条 + 重放 / 删除 + 刷新；读写全在 `crates/mock/src/history.rs` 的后台线程） | 列表按时间倒序、可删除、可重放配置 |
+| D5 | 任务自动落库（生成成功即写 `save_task`） | ✅ 已完成（面板在任务收尾时组装 `RunRecord`，后台写入） | 生成一次 → 历史多一条；失败时记录 `error_message` |
 | D6 | 分析资源注册（`persist_as_asset` → M6） | Mock 面板 + `analytics_resource` | 生成后可在资源管理器中看到该表 |
 
 ### Phase E — 项目作用域与并发
@@ -104,7 +104,7 @@
 | T10 | 导出 CSV / SQL INSERT | CSV 首行列头、行数 = 生成行数；INSERT 条数 = 行数 | ✅ 集成 + 装配测试 |
 | T11 | 保存到草稿箱 | `{项目}/mock/mock_{表}_{时间戳}.csv` 出现 | ✅ 装配测试 |
 | T12 | 持久化为分析库表 | 表出现且行数正确；同名再点报「已存在」且不覆盖 | ✅ 装配测试 |
-| T13 | 生成后查历史并重放配置 | 历史条目字段完整；重放后参数一致 | ⬜ 待 Phase D4/D5 |
+| T13 | 生成后查历史并重放配置 | 历史条目字段完整；重放后参数一致 | ✅ `tests/history_roundtrip.rs`（记录 → 列表 → 详情 → 重放草稿；含失败原因与 `limit` 截尾） |
 | T14 | 源表不存在 / 分析库无表 / 追加缺列 | 给出可读中文错误，不 panic，不半途写库 | ✅ 装配测试 |
 | T15 | **生成不写库** | 生成后分析库仍未出现目标表 | ✅ 装配测试 `generate_does_not_write_analysis_db` |
 | T16 | 改列后旧结果作废 | 改生成器 / 增删列 → `gen_info` 置空，出口不可再落旧数据 | ✅ 视图测试 |
@@ -156,4 +156,5 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-16 | Phase E（本轮 · 落库直写） | **去文本中转**：engine 新增 `build_attach_database` / `build_detach_database` / `build_create_table_in` / `build_drop_table_in` / `build_insert_select` + `QualifiedTable`；mock 新增 `write_temp_table_to_database`（`ATTACH` → 建表 → `INSERT SELECT` → `DETACH`，失败只回滚本次刚建的表）；装配层 `persist_table_at` / `append_table_at` 改走直写；**并修掉一个潜在的误删风险**（回滚分支原本会把同名既有表 DROP 掉，现已加测试锁住） | 110 单元 + **30 引擎集成** + **12 装配** + 8 任务集成全过；engine 库测试 305 项全过 |
 | 2026-09-16 | Phase E5（本轮 · 临时表清理） | **按来源清理临时表**：`TempTableSource::prefixes()`（两套命名都认）+ `TempTableManager::list_by_source` / `drop_by_source`（以库为准，限定 `catalog = memory`）+ `DuckDBManager::{in_memory_temp_tables, drop_in_memory_temp_tables}`；mock 暴露 `clear_temp_tables` / `temp_tables`；宿主在**项目切换**时清理并让面板 `forget_generated`（草稿保留） | 111 单元（含 46 视图）+ 30 + **2 清理集成**（独立进程）+ 12 装配 + **8 任务集成**全过 |
 | 2026-09-16 | Phase C5（本轮 · 复杂参数） | **集合类参数可编辑**：`parse_complex_param` / `complex_param_text`（一行一项 / 一行「值, 权重」，分隔符取最后一个）+ `ParamWidget::{Scalar, Complex}`（标量单行、集合多行 `Textarea`）+ `commit_complex_param`（非法输入保留上一个有效值 + 就地行号提示）；`summarize_params` 显示集合项数；**并补上生成前护栏** `constraint_set_problem`（空集合 / 全零权重原本会在生成期 panic 掉工作线程）；目录注释随脚本更新（改 `tools/gen_mock_generator_catalog.py` 后重跑 + rustfmt） | 117 单元（含 52 视图）+ **32 引擎集成** + 2 清理集成 + 12 装配 + 8 任务集成全过 |
+| 2026-09-16 | Phase D4/D5（本轮 · 生成历史） | **生成历史接线**（v1 的「历史」在 v1 源码里并不存在，这里按 v2 语义重做）：`history.rs` 作为**领域门面 + 后台入口**——`HistoryAction::{Record,DeleteTask}` / `list` / `detail` / `run`（跑完动作顺带重读列表，面板不会出现「删了但列表还是旧的」）+ 纯映射 `task_of_run` / `draft_of_detail` / `generator_parts`⇄`config_from_parts`（生成器存**目录名 + 参数 JSON**，重放不需要第二套映射）；`MockHost` 只新增 `project_root()`（存储细节不摊到宿主）；面板新增历史段（时间倒序 + 重放 / 删除 / 刷新）并在生成收尾自动落库（出口类与取消不记，见 `RunRecord::of`）；项目切换时重读（历史随项目走）。**并处理一个环境约束**：项目库走 `tokio::fs`，而 GPUI 后台执行器不是 tokio 运行时 → `history::drive` 在后台线程内自备运行时（与 `resource_jobs` 工作线程同口径） | 128 单元（含 56 视图）+ 32 引擎集成 + **3 历史集成** + 5 持久化往返 + 2 清理集成 + workbench 12 装配 + 8 任务 + 1 取消全过 |
 | 2026-09-16 | Phase C4 前置（本轮 · 持久化往返） | **给 `MockGenerationStore` 补真库往返**（原先只有序列化单测，SQL 那一半没人验；store 目前全项目零调用，接线前先钉住）：新增 `tests/persistence_roundtrip.rs` 5 项，走 `ProjectDatabaseManager` 的真迁移链（顺带验证 009 已挂上）——任务 + 列（乱序插入按 `sort_order` 读回）/ 全可空列保持 `None` / 历史最近在前且 `limit` 截尾 / 列按 `task_id` 归属 / **删任务带走子行**（建表语句的 `ON DELETE CASCADE` 靠连接池的 `foreign_keys=ON`）/ 模板四方法；**并修一处读写不守恒**：`created_at` / `updated_at` 为 `None` 时原本写成空串（读回 `Some("")`，与「确实空」分不开），改为写 `NULL` | 117 单元（含 52 视图）+ 32 引擎集成 + **5 持久化往返** + 2 清理集成全过；`check --all-targets` 零告警 |

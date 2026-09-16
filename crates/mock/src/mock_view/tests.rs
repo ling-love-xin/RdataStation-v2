@@ -19,13 +19,14 @@ use gpui_kit::{
 };
 
 use super::{
-    MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockJobDone, MockJobKind,
-    MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview, MockRunOptions,
-    SchemaRequest, SchemaSource, focus_detail_tab, param_text, parse_percent_ratio, parse_rows,
-    parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
+    HistoryReply, MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockJobDone,
+    MockJobKind, MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview,
+    MockRunOptions, SchemaRequest, SchemaSource, focus_detail_tab, param_text, parse_percent_ratio,
+    parse_rows, parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
 };
 use crate::generator_catalog::{self, ParamKind};
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
+use crate::persistence::{MockGenerationColumn, MockGenerationDetail, MockGenerationTask};
 use crate::schema_map::ColumnMapper;
 
 // ==================== 纯逻辑（无窗口） ====================
@@ -63,7 +64,10 @@ fn parse_percent_ratio_clamps_and_rejects_garbage() {
 #[test]
 fn validate_table_name_rejects_illegal_identifiers() {
     assert_eq!(validate_table_name(" orders "), Ok("orders".to_string()));
-    assert_eq!(validate_table_name("mock_data2"), Ok("mock_data2".to_string()));
+    assert_eq!(
+        validate_table_name("mock_data2"),
+        Ok("mock_data2".to_string())
+    );
     assert!(validate_table_name("").is_err(), "空表名应被拒");
     assert!(validate_table_name("   ").is_err());
     assert!(validate_table_name("1orders").is_err(), "数字开头应被拒");
@@ -272,8 +276,8 @@ fn complex_values_round_trip() {
 /// 所以值里可以带逗号）。
 #[test]
 fn complex_choices_accept_separator_variants() {
-    let value = super::parse_complex_param("choices", "北京, 北京市\t3\n上海，2\n广州,1")
-        .expect("解析");
+    let value =
+        super::parse_complex_param("choices", "北京, 北京市\t3\n上海，2\n广州,1").expect("解析");
     assert_eq!(
         value,
         serde_json::json!([["北京, 北京市", 3.0], ["上海", 2.0], ["广州", 1.0]])
@@ -282,7 +286,10 @@ fn complex_choices_accept_separator_variants() {
     let config = GeneratorConfig::Weighted {
         choices: vec![("北京".to_string(), 3.0), ("上海".to_string(), 0.5)],
     };
-    assert_eq!(super::complex_param_text(&config, "choices"), "北京, 3\n上海, 0.5");
+    assert_eq!(
+        super::complex_param_text(&config, "choices"),
+        "北京, 3\n上海, 0.5"
+    );
 }
 
 /// 非法输入都给带行号的可读原因（不猜、不静默吞掉）。
@@ -367,6 +374,8 @@ struct Recorder {
     job_progress: Cell<MockJobProgress>,
     /// 下一次 `job_state` 谎报 Idle（模拟工作线程异常退出）
     pretend_idle: Cell<bool>,
+    /// 项目根（`None` = 未打开项目：面板应给出可读原因而不是空列表）
+    project_root: RefCell<Option<std::path::PathBuf>>,
 }
 
 fn test_column(name: &str, generator: GeneratorConfig) -> MockColumnSpec {
@@ -405,12 +414,21 @@ impl TestHost {
 
     /// 出口：新建表（同名已存在 → 报错，与真实装配层同一语义）。
     fn persist(&self, draft: &MockDraft, info: &MockGenInfo) -> Result<MockJobDone, String> {
-        self.rec.persisted.borrow_mut().push(draft.table_name.clone());
+        self.rec
+            .persisted
+            .borrow_mut()
+            .push(draft.table_name.clone());
         self.rec
             .sink_temps
             .borrow_mut()
             .push(info.temp_table_name.clone());
-        if self.rec.tables.borrow().iter().any(|t| t == &draft.table_name) {
+        if self
+            .rec
+            .tables
+            .borrow()
+            .iter()
+            .any(|t| t == &draft.table_name)
+        {
             return Err(format!(
                 "分析库已存在表 {}：请改用「追加到既有表」",
                 draft.table_name
@@ -454,7 +472,10 @@ impl MockHost for TestHost {
             }
             MockJobKind::Persist(info) => self.persist(draft, info),
             MockJobKind::Export { info, format, path } => {
-                self.rec.sink_temps.borrow_mut().push(info.temp_table_name.clone());
+                self.rec
+                    .sink_temps
+                    .borrow_mut()
+                    .push(info.temp_table_name.clone());
                 self.rec
                     .exported
                     .borrow_mut()
@@ -464,8 +485,14 @@ impl MockHost for TestHost {
                 })
             }
             MockJobKind::Scratchpad { info, format } => {
-                self.rec.sink_temps.borrow_mut().push(info.temp_table_name.clone());
-                self.rec.scratchpads.borrow_mut().push(format!("{format:?}"));
+                self.rec
+                    .sink_temps
+                    .borrow_mut()
+                    .push(info.temp_table_name.clone());
+                self.rec
+                    .scratchpads
+                    .borrow_mut()
+                    .push(format!("{format:?}"));
                 Ok(MockJobDone::Exported {
                     message: "已保存到草稿箱：/proj/mock/mock_x.csv".to_string(),
                 })
@@ -516,6 +543,10 @@ impl MockHost for TestHost {
 
     fn read_only(&self) -> bool {
         self.rec.read_only.get()
+    }
+
+    fn project_root(&self) -> Option<std::path::PathBuf> {
+        self.rec.project_root.borrow().clone()
     }
 
     fn open_detail(&self, _window: &mut Window, _cx: &mut App) {
@@ -699,10 +730,7 @@ fn generate_without_columns_reports_readable_error(cx: &mut TestAppContext) {
     panel.update(cx, |panel, cx| panel.run_generate(cx));
 
     panel.update(cx, |panel, _cx| {
-        assert_eq!(
-            panel.error(),
-            Some("请先添加列：导入源库结构，或手工加列")
-        );
+        assert_eq!(panel.error(), Some("请先添加列：导入源库结构，或手工加列"));
         assert!(panel.outcome().is_none());
     });
     assert!(rec.generated.borrow().is_empty(), "无列不应触生成");
@@ -757,7 +785,9 @@ fn persist_creates_table_then_reports_existing(cx: &mut TestAppContext) {
     poll_job(cx, &panel);
     panel.update(cx, |panel, _cx| {
         assert!(
-            panel.outcome().is_some_and(|o| o.contains("已在分析库新建表 mock_data")),
+            panel
+                .outcome()
+                .is_some_and(|o| o.contains("已在分析库新建表 mock_data")),
             "{:?}",
             panel.outcome()
         );
@@ -859,7 +889,11 @@ fn column_edits_track_draft_and_invalidate_result(cx: &mut TestAppContext) {
     draw(cx);
     panel.update(cx, |panel, cx| {
         panel.add_column("c1".to_string(), ColumnDataType::Integer, cx);
-        panel.add_column("c2".to_string(), ColumnDataType::Varchar { length: None }, cx);
+        panel.add_column(
+            "c2".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
     });
     panel.update(cx, |panel, _cx| {
         assert_eq!(panel.draft().columns.len(), 2);
@@ -899,7 +933,11 @@ fn reset_column_mapping_restores_inferred_generator(cx: &mut TestAppContext) {
 
     draw(cx);
     panel.update(cx, |panel, cx| {
-        panel.add_column("email".to_string(), ColumnDataType::Varchar { length: None }, cx);
+        panel.add_column(
+            "email".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
     });
     let id = panel.read_with(cx, |panel, _cx| panel.draft().columns[0].id);
     panel.update(cx, |panel, cx| panel.set_generator(id, "uuid_v4", cx));
@@ -1089,7 +1127,11 @@ fn detail_view_renders_fields_and_preview(cx: &mut TestAppContext) {
     draw(cx);
     panel.update(cx, |panel, cx| {
         panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
-        panel.add_column("email".to_string(), ColumnDataType::Varchar { length: None }, cx);
+        panel.add_column(
+            "email".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
     });
     panel.update(cx, |panel, cx| panel.run_generate(cx));
     poll_job(cx, &panel);
@@ -1199,7 +1241,11 @@ fn job_progress_is_mirrored_while_running(cx: &mut TestAppContext) {
             progress.percent()
         );
         assert_eq!(progress.rows_done(), 300, "按批次粒度估算已生成行数");
-        assert!(panel.outcome().is_some_and(|o| o.contains("生成中")), "{:?}", panel.outcome());
+        assert!(
+            panel.outcome().is_some_and(|o| o.contains("生成中")),
+            "{:?}",
+            panel.outcome()
+        );
         assert!(panel.gen_info().is_none(), "未完成不应有结果");
     });
 }
@@ -1233,7 +1279,10 @@ fn cancel_requests_host_and_reports_cancel_outcome(cx: &mut TestAppContext) {
         assert!(!panel.is_running(), "取消后任务应结束");
         let error = panel.error().expect("应有取消文案");
         assert!(error.contains("已取消"), "{error}");
-        assert!(error.contains("残留"), "应提醒临时表可能残留部分行: {error}");
+        assert!(
+            error.contains("残留"),
+            "应提醒临时表可能残留部分行: {error}"
+        );
         assert!(panel.gen_info().is_none(), "取消后旧结果作废");
     });
 }
@@ -1278,9 +1327,7 @@ fn vanished_job_reports_readable_error(cx: &mut TestAppContext) {
     panel.update(cx, |panel, _cx| {
         assert!(!panel.is_running());
         assert!(
-            panel
-                .error()
-                .is_some_and(|e| e.contains("异常结束")),
+            panel.error().is_some_and(|e| e.contains("异常结束")),
             "{:?}",
             panel.error()
         );
@@ -1305,7 +1352,10 @@ fn second_start_while_running_is_rejected(cx: &mut TestAppContext) {
     });
 
     panel.update(cx, |panel, _cx| {
-        assert_eq!(panel.error(), Some("已有任务在进行中（请等它结束或先取消）"));
+        assert_eq!(
+            panel.error(),
+            Some("已有任务在进行中（请等它结束或先取消）")
+        );
         assert!(panel.is_running(), "首个任务仍在进行");
     });
     assert_eq!(rec.started.borrow().len(), 1, "只应提交一次");
@@ -1336,9 +1386,7 @@ fn persist_job_runs_in_background_and_keeps_preview(cx: &mut TestAppContext) {
         );
         assert!(panel.gen_info().is_some(), "写入期间预览仍在");
         assert!(
-            panel
-                .outcome()
-                .is_some_and(|o| o.contains("写入分析库中")),
+            panel.outcome().is_some_and(|o| o.contains("写入分析库中")),
             "{:?}",
             panel.outcome()
         );
@@ -1430,7 +1478,10 @@ fn export_jobs_run_in_background(cx: &mut TestAppContext) {
     assert_eq!(rec.scratchpads.borrow().as_slice(), ["Parquet".to_string()]);
     assert_eq!(
         rec.sink_temps.borrow().as_slice(),
-        ["temp_mock_mock_data".to_string(), "temp_mock_mock_data".to_string()]
+        [
+            "temp_mock_mock_data".to_string(),
+            "temp_mock_mock_data".to_string()
+        ]
     );
 }
 
@@ -1517,7 +1568,11 @@ fn forget_generated_drops_result_but_keeps_draft(cx: &mut TestAppContext) {
         assert!(panel.error().is_none());
         let outcome = panel.outcome().expect("应提示清理");
         assert!(outcome.contains("3 张"), "{outcome}");
-        assert_eq!(panel.draft().table_name, "mock_data", "草稿（用户配置）保留");
+        assert_eq!(
+            panel.draft().table_name,
+            "mock_data",
+            "草稿（用户配置）保留"
+        );
         assert_eq!(panel.draft().columns.len(), 1);
     });
 
@@ -1652,4 +1707,201 @@ fn run_options_constructor_keeps_field_order() {
     assert_eq!(options.rows, 7);
     assert_eq!(options.seed, Some(9));
     assert_eq!(options.locale, Locale::En);
+}
+
+// ==================== 生成历史（D4/D5） ====================
+
+/// 一条历史任务（面板渲染 / 重放用）。
+fn history_task(id: &str, status: &str) -> MockGenerationTask {
+    MockGenerationTask {
+        id: id.to_string(),
+        table_name: "orders".to_string(),
+        table_alias: None,
+        row_count: 500,
+        seed: Some(7),
+        locale: "ZH_CN".to_string(),
+        scene_id: None,
+        save_format: None,
+        status: status.to_string(),
+        error_message: (status != "success").then(|| "分析库已存在表 orders".to_string()),
+        generated_rows: (status == "success").then_some(500),
+        generation_time_ms: Some(42),
+        created_at: Some("2026-09-16T15:02:03+00:00".to_string()),
+        updated_at: Some("2026-09-16T15:02:03+00:00".to_string()),
+    }
+}
+
+/// 一条历史任务的列（重放用）。
+fn history_column(id: &str, task_id: &str, name: &str, order: i32) -> MockGenerationColumn {
+    MockGenerationColumn {
+        id: id.to_string(),
+        task_id: task_id.to_string(),
+        column_name: name.to_string(),
+        column_type: "INTEGER".to_string(),
+        generator: "random_int".to_string(),
+        generator_params: Some(r#"{"min":1,"max":10}"#.to_string()),
+        null_ratio: 0.0,
+        is_unique: false,
+        is_primary_key: false,
+        is_foreign_key: false,
+        ref_table: None,
+        ref_column: None,
+        comment: None,
+        confidence: Some("high".to_string()),
+        sort_order: order,
+    }
+}
+
+/// 未打开项目：历史没有落点，给一句可读的原因（而不是看起来像「本项目没有记录」）。
+#[gpui_kit::test]
+fn history_without_project_reports_a_readable_reason(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| panel.refresh_history(cx));
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert!(!panel.history_loading, "未打开项目不该起后台任务");
+        let reason = panel.history_error.as_deref().unwrap_or_default();
+        assert!(reason.contains("未打开项目"), "{reason}");
+        assert!(panel.history.is_empty());
+    });
+}
+
+/// 列表回填后行能渲染（绘制一帧不 panic），失败行保留原因。
+#[gpui_kit::test]
+fn history_rows_render_and_keep_failure_reasons(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.accept_history(
+            Ok(HistoryReply::Listed(vec![
+                history_task("t_ok", "success"),
+                history_task("t_bad", "failed"),
+            ])),
+            cx,
+        );
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.history_loaded);
+        assert_eq!(panel.history.len(), 2);
+        assert_eq!(panel.history[1].status, "failed");
+        assert_eq!(
+            panel.history[1].error_message.as_deref(),
+            Some("分析库已存在表 orders")
+        );
+        assert!(panel.history_error.is_none());
+    });
+
+    // 读失败：列表保留（能看到的旧数据比一片空白有用），错误另起一行
+    panel.update(cx, |panel, cx| {
+        panel.accept_history(Err("打开项目库失败：坏库".to_string()), cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.history.len(), 2, "读失败不该清掉已显示的列表");
+        assert!(
+            panel
+                .history_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("坏库")
+        );
+    });
+}
+
+/// 重放：草稿整体换成历史里那一套（表名 / 行数 / 种子 / 列），旧结果作废。
+#[gpui_kit::test]
+fn replay_writes_the_recorded_configuration_into_the_draft(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        // 先造出「旧结果 + 旧列」的状态，重放后应全部换掉
+        panel.add_column("legacy".to_string(), ColumnDataType::Text, cx);
+        panel.accept_history(
+            Ok(HistoryReply::Replayed(Box::new(MockGenerationDetail {
+                task: history_task("t1", "success"),
+                columns: vec![
+                    history_column("c0", "t1", "id", 0),
+                    history_column("c1", "t1", "amount", 1),
+                ],
+            }))),
+            cx,
+        );
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.draft().table_name, "orders");
+        assert_eq!(panel.draft().options.rows, 500);
+        assert_eq!(panel.draft().options.seed, Some(7));
+        assert_eq!(panel.draft().options.locale, Locale::ZhCn);
+        assert_eq!(
+            panel
+                .draft()
+                .columns
+                .iter()
+                .map(|c| c.def.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "amount"],
+            "列换成历史里的那一套（旧列不留）"
+        );
+        assert!(
+            panel
+                .outcome
+                .as_deref()
+                .unwrap_or_default()
+                .contains("已重放"),
+            "要有「配置已摆回来」的回执"
+        );
+        assert!(panel.error.is_none());
+        assert!(panel.gen_info().is_none(), "旧临时表已与新配置对不上，作废");
+        // 表名输入框已跟着走（`table_pending` 在渲染时落进输入框并清空）
+        let shown = panel
+            .table_input
+            .as_ref()
+            .expect("渲染后输入框已创建")
+            .read(_cx)
+            .value()
+            .to_string();
+        assert_eq!(shown, "orders");
+        // 列 id 重新编号：不沿用历史里的 id，避免与现存在列撞号
+        assert!(panel.draft().columns.iter().all(|c| c.id < panel.next_id));
+    });
+}
+
+/// 删除失败（如未打开项目）时，列表不变且错误可见。
+#[gpui_kit::test]
+fn delete_history_keeps_the_list_and_reports_failure(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.accept_history(
+            Ok(HistoryReply::Listed(vec![history_task("t1", "success")])),
+            cx,
+        );
+        panel.delete_history("t1".to_string(), cx);
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.history.len(), 1, "删除没成功就不该假装删掉了");
+        assert!(
+            panel
+                .history_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("未打开项目")
+        );
+    });
 }
