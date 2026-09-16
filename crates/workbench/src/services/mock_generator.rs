@@ -297,6 +297,15 @@ pub fn save_scratchpad(
     Ok(format!("已保存到草稿箱：{path}"))
 }
 
+/// 项目切换 / 关闭时清掉本进程的 mock 临时表（返回被删表名）。
+///
+/// 临时表建在 engine 的**进程级内存库**里，不随项目切换释放；宿主在切项目时调它，
+/// 并让 mock 面板作废旧预览（见 `components::project_host::clear_mock_temp_tables`）。
+/// 失败（拿不到内存库）不报错：清理失败最多是多占一点内存，不影响主流程。
+pub fn clear_temp_tables() -> Vec<String> {
+    mock::MockEngine::clear_temp_tables().unwrap_or_default()
+}
+
 /// 预览：Arrow 批次 → 字符串网格（视图层不依赖 Arrow）。
 ///
 /// `read_preview` 只填 `batches`（`rows` 为空），取值必须经 `QueryResult::from_batches`。

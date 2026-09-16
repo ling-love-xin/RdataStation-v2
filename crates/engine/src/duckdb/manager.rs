@@ -1,4 +1,4 @@
-use super::temp_table::TempTableManager;
+use super::temp_table::{TempTableManager, TempTableSource};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -167,6 +167,34 @@ impl DuckDBManager {
     /// - `table_name`: 临时表名
     pub fn register_temp_table(table_name: &str) {
         Self::global_temp_table_manager().register(table_name);
+    }
+
+    /// 列出**内存库**里某来源的临时表（权威来源是库本身，不是注册表）。
+    ///
+    /// # 注意
+    /// 内部要取内存库连接锁（`GLOBAL_DUCKDB` 是 `Mutex<Connection>`）：
+    /// **调用方不得持有该锁**，否则同线程重入会死锁。
+    pub fn in_memory_temp_tables(source: TempTableSource) -> Result<Vec<String>, CoreError> {
+        let conn = Self::get_or_create_in_memory()?;
+        let guard = conn.lock().map_err(|e| {
+            CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+        })?;
+        TempTableManager::list_by_source(&guard, source)
+    }
+
+    /// 删除**内存库**里某来源的全部临时表（同步注册表），返回被删表名。
+    ///
+    /// 用于「项目切换 / 关闭时清掉上一项目的临时产物」：内存库是**进程级单例**，
+    /// 不随项目切换自动释放，同名重复生成会重建，但换名字就会逐张累积。
+    ///
+    /// # 注意
+    /// 同 [`Self::in_memory_temp_tables`]：调用方不得持有内存库连接锁。
+    pub fn drop_in_memory_temp_tables(source: TempTableSource) -> Result<Vec<String>, CoreError> {
+        let conn = Self::get_or_create_in_memory()?;
+        let guard = conn.lock().map_err(|e| {
+            CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+        })?;
+        Self::global_temp_table_manager().drop_by_source(&guard, source)
     }
 
     /// 打开或创建 DuckDB 数据库文件，初始化连接池。
@@ -514,4 +542,3 @@ mod tests {
         Ok(())
     }
 }
-

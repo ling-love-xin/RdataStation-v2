@@ -115,6 +115,7 @@
 | T21 | 出口不可取消 | 出口任务进行中点取消：不转发给宿主、按钮不渲染 | ✅ 视图测试（`rec.cancels == 0`） |
 | T22 | 生成器搜索 | 空查＝全量 137；标签前缀优先于标签包含；多词是 AND；大小写不敏感；确认写回该列且置信度转 `manual`；无命中为空 | ✅ 视图测试（5 纯逻辑 + 2 窗口） |
 | T23 | 落库跨库直写 | 建表 + 写行一次 `ATTACH` 完成；中文列名、20k 行、目标表多列均正确；**同名建表不删既有数据**；插入失败回滚刚建的表且已解挂 | ✅ 引擎测试 4 项 + 装配测试 2 项 |
+| T24 | 临时表清理 | 切项目清掉全部 mock 临时表（两套命名都认、幂等）；`ATTACH` 进来的文件库表不被误删；面板作废旧预览、草稿保留 | ✅ 引擎测试 3 项 + mock 集成 2 项 + 视图测试 1 项 + 任务集成 1 项 |
 
 ## 5. 风险
 
@@ -124,7 +125,7 @@
 | R2 | 生成器参数表单与 137 变体手工对齐 | 新增变体漏配表单，用户看到空参数区 | 参数表单由 `GeneratorConfig` 派生（编译期穷尽匹配），禁止手写清单 |
 | R3 | 分析库并发写入（面板写 + SQL 执行区写） | Windows 同文件多连接受限，可能出现「文件被占用」 | 统一经 engine 的单连接纪律；必要时串行化写入入口（架构 §9-I3） |
 | R4 | ~~大行数同步生成阻塞 UI~~ | 已解决：生成 / 追加 / **三个出口**全部走后台工作线程（进度 + 取消；出口为不定量进度、不提供取消，见架构 D23） | 出口进行中只报阶段（写入 / 导出不可中断） | 若将来要可中断，需引擎侧提供 DuckDB 写入的取消点（目前无） |
-| R5 | 临时表前缀与 engine 管理器约定不一致（架构 §9-I1） | 临时表不随项目关闭清理，长会话内存增长 | 推动 engine 提供按来源枚举的清理入口（Phase E5） |
+| R5 | ~~临时表前缀与 engine 管理器约定不一致~~（架构 §9-I1） | 已解决：清理按**两套前缀**枚举（以库为准），切项目时宿主调 `clear_temp_tables` 并作废面板预览（D27） | 清理后旧预览会作废（面板给一句可读提示）；草稿保留 | 若将来改成项目作用域分析库，切项目天然不带过去，这层清理可退化成冗余 |
 | R6 | 「追加」语义被误用为「替换」 | 用户期望覆盖却得到翻倍数据 | 出口命名与确认文案已区分「持久化（新建）」/「追加」；`landed` 行显示当前落库目标 |
 | R7 | v1 文档与实现继续漂移（本文档以代码为准） | 新人按 v1 文档实现已不存在的命令 | 本目录文档为权威；v1 素材删除前先提炼 |
 | R8 | 临时表名只由目标表名派生（架构 §9-I0e） | 同名目标表并发生成会互相覆盖临时表内容（当前顺序操作为下无影响） | 引入后台并发生成时给临时表名加会话后缀 |
@@ -152,3 +153,4 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-16 | Phase B5（第二段 · 本轮） | **三个出口也转后台任务**：`MockJobKind` 加 `Persist` / `Export` / `Scratchpad`（把 `MockGenInfo` 带进任务）+ `MockJobPhase`（阶段：生成 / 写入 / 导出）+ `JobPaths`（分析库与项目根在 UI 线程解析）；视图侧出口改走 `start_job`、出口任务不渲染取消、完成后**不作废旧预览**；装配层删掉三个已无人调用的同步包装 | 103 单元（含 38 视图）+ 26 引擎集成 + 10 装配 + 8 任务集成全过 |
 | 2026-09-16 | Phase B8（本轮） | **生成器搜索**：`search_generators`（标签 / 名称 / 分类，多词 AND，前缀优先排序）+ `GeneratorSearchDelegate`（`ListDelegate`）+ `MockPanel::open_generator_search`（`List` 自带搜索框 / 虚拟化 / 空态）；字段行菜单首项作入口，选择后写回该列；固定「不在 update 里 read 自己」的重入问题（`current` 由 `&mut self` 算出传入） | 110 单元（含 45 视图）+ 26 引擎集成 + 10 装配 + 8 任务集成全过 |
 | 2026-09-16 | Phase E（本轮 · 落库直写） | **去文本中转**：engine 新增 `build_attach_database` / `build_detach_database` / `build_create_table_in` / `build_drop_table_in` / `build_insert_select` + `QualifiedTable`；mock 新增 `write_temp_table_to_database`（`ATTACH` → 建表 → `INSERT SELECT` → `DETACH`，失败只回滚本次刚建的表）；装配层 `persist_table_at` / `append_table_at` 改走直写；**并修掉一个潜在的误删风险**（回滚分支原本会把同名既有表 DROP 掉，现已加测试锁住） | 110 单元 + **30 引擎集成** + **12 装配** + 8 任务集成全过；engine 库测试 305 项全过 |
+| 2026-09-16 | Phase E5（本轮 · 临时表清理） | **按来源清理临时表**：`TempTableSource::prefixes()`（两套命名都认）+ `TempTableManager::list_by_source` / `drop_by_source`（以库为准，限定 `catalog = memory`）+ `DuckDBManager::{in_memory_temp_tables, drop_in_memory_temp_tables}`；mock 暴露 `clear_temp_tables` / `temp_tables`；宿主在**项目切换**时清理并让面板 `forget_generated`（草稿保留） | 111 单元（含 46 视图）+ 30 + **2 清理集成**（独立进程）+ 12 装配 + **8 任务集成**全过 |

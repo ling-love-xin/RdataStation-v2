@@ -17,6 +17,7 @@
 | 元数据驱动 | 输入只有「列名 + 类型 + 可空/主键」三件事，不需要真实数据样本；未知类型一律退到可读默认值 |
 | 只进不出 | 目标只有分析引擎（内存临时表 / `analytics.duckdb`）与项目文件；没有任何写入源库的代码路径 |
 | 落库一次直写 | 落库/追加走 `ATTACH` 跨库直写（`INSERT ... SELECT`），数据不经 Rust 字符串；建表失败只回滚本次刚建的表 |
+| 临时表随项目收敛 | 切项目时宿主清掉本进程的 mock 临时表（按前缀、以库为准），并作废面板里的旧预览 |
 | 确定性可复现 | `seed` 固定即同序列（`StdRng`），同配置两次生成结果逐值相同（已测） |
 | 列名智能映射 | 四级优先：精确名 → 前后缀 → 模糊子串 → 类型兜底；置信度写回 `high` / `low` / `manual` |
 | 后台任务（生成 / 出口） | 五种任务都在工作线程上跑：生成 / 追加 / 落库 / 导出 / 草稿箱；面板显进度条与阶段文案（生成可取消，出口为不定量进度） |
@@ -69,7 +70,8 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | `crates/mock/src/persistence.rs` | `MockGenerationStore`：任务历史与用户模板的 SQLite 读写（8 个方法） |
 | `crates/mock/src/error.rs` | `MockError` / `MockResult`（含 DuckDB 错误桥接） |
 | `crates/mock/src/{commands,model,generator}.rs` | **占位**（全项目统一脚手架；命令层按 Round 14 政策退役） |
-| `crates/mock/tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（26 项） |
+| `crates/mock/tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（30 项） |
+| `crates/mock/tests/temp_table_cleanup.rs` | 临时表清理集成测试（2 项；独立进程：清理是进程级动作） |
 | `crates/workbench/src/components/mock_host.rs` | **宿主桥**：`MockHost` 实现（后台任务转发 + 路径解析 + 连接清单 + 只读 + 打开详情 + 重绘 + 写入成功后导航缓存失效） |
 | `crates/workbench/src/services/mock_jobs.rs` | **后台任务**：单一工作线程 + 进度槽（含阶段）+ 结果一次性取回 + 取消；任务种类＝生成 / 追加 / 三个出口 |
 | `crates/workbench/src/services/mock_generator.rs` | **装配层**：生成（不写库）/ 落库新建 / 追加 / 导出 / 草稿箱 / 结构导入（cache-aside 取列） |
@@ -94,7 +96,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（DuckDB 静态库链接耗内存），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 110 单元（含 45 视图）+ 30 集成
+cargo test  -p rds-mock -j 2                                   # 111 单元（含 46 视图）+ 30 + 2 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 10 项
 cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 7 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
@@ -105,9 +107,9 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 110 单元（17 纯逻辑 + 28 窗口 + 65 其他）+ 30 集成全过 |
+| `cargo test -p rds-mock` | 111 单元（17 纯逻辑 + 29 窗口 + 65 其他）+ 30 引擎集成 + 2 清理集成全过 |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
-| `cargo test -p rds-workbench` | 全绿（含 12 装配 + 8 任务测试） |
+| `cargo test -p rds-workbench` | 全绿（含 12 装配 + 9 任务测试） |
 
 > 存量欠债（非本模块）：`crates/engine/tests/transaction_affinity.rs` 调用了不存在的 `Value::as_i64()`
 > （实际是 `as_int()`），使 `cargo check --workspace --all-targets` 在该 target 报错。
@@ -134,6 +136,6 @@ v1 素材（暂存区，删除前请先提炼）：`v1/docs/frontend/mock/mock-d
 | 3 | ~~落库去文本中转（`ATTACH` 直写）~~ | 省一次全量序列化与解析；错误定位收在一处 | ✅ 本轮完成（`MockEngine::write_temp_table_to_database` + engine 的 `build_attach_database` / `build_insert_select`；架构 D25/D26） |
 | 4 | ~~生成器搜索~~ | 137 项下按名称 / 标签定位 | ✅ 本轮完成（`search_generators` + `List`/`ListState` 搜索对话框，架构 D24） |
 | 5 | **复杂参数编辑入口**（集合 / 加权） | 约束类生成器从「不可用」变可用 | 面板只读提示（§9-I8） |
-| 6 | **临时表清理** | 前缀与 `TempTableManager` 约定不一致，TTL/清理实际未生效 | §9-I1 / I2 |
+| 6 | ~~临时表清理~~ | 切项目时释放进程级内存库里的临时表 | ✅ 本轮完成（两套前缀、以库为准；切项目时清理 + 面板作废旧预览，架构 D27） |
 | 7 | 生成任务 / 模板**落库接线** | `MockGenerationStore` 8 方法 + 迁移 009 已就位但无 UI | §9-I4 |
 | 8 | **项目作用域分析库** | 与「窗口 = 项目」隔离原则一致 | 装配层已留 `*_at(path, ..)` 入口 |

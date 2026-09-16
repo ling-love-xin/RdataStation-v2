@@ -174,6 +174,33 @@ fn append_job_reports_total_rows() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 项目切换清理：宿主删掉 mock 临时表后，本进程里不再有它（面板据此作废预览）。
+///
+/// 走的是宿主真的会调的那一层（`services::mock_generator::clear_temp_tables`）。
+#[test]
+fn clear_temp_tables_wipes_process_temp_tables() {
+    let _guard = serial();
+    let dir = temp_dir("clear");
+    let db = dir.join("analytics.duckdb");
+    let job = draft("t_job_clear", 1_000);
+
+    mock_jobs::start(&job, MockJobKind::Generate, &paths(&db)).expect("提交任务");
+    let temp_table = match wait_done(Duration::from_secs(180)).expect("生成应成功") {
+        MockJobDone::Generated(info) => info.temp_table_name,
+        other => panic!("期望 Generated，实际 {other:?}"),
+    };
+
+    let cleared = rds_workbench::services::mock_generator::clear_temp_tables();
+    assert!(
+        cleared.contains(&temp_table),
+        "应删掉刚生成的临时表: {cleared:?}"
+    );
+    let after = mock::MockEngine::temp_tables().expect("列临时表");
+    assert!(!after.contains(&temp_table), "清理后不应还在: {after:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 生成任务的便捷封装：提交 → 等结果 → 取出 `MockGenInfo`（出口任务要用它）。
 fn generate_and_take(draft: &MockDraft, db: &Path) -> mock::mock_view::MockGenInfo {
     mock_jobs::start(draft, MockJobKind::Generate, &paths(db)).expect("提交生成任务");

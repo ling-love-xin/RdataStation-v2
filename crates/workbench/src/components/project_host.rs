@@ -69,15 +69,36 @@ pub fn build_host(
     .with_on_opened(on_opened)
 }
 
+/// 项目切换时的 mock 临时表清理。
+///
+/// 内存库是**进程级单例**：上一项目生成的 `temp_mock_*` 不切项目就一直在（架构 §9-I1/I2），
+/// 既是内存占用（换目标表名就多一张），也让「窗口 = 项目」的隔离打折扣。
+/// 这里先取消在跑的任务（避免刚清完又被写回），再删除全部 mock 临时表，
+/// 最后让面板作废旧预览（`gen_info` 里的表名已失效）。
+fn clear_mock_temp_tables(shared: &Shared, cx: &mut App) {
+    let panel = shared.mock_panel.borrow().clone();
+    let live = || panel.as_ref().and_then(|panel| panel.upgrade());
+    if live().is_some_and(|panel| panel.read(cx).is_running()) {
+        crate::services::mock_jobs::cancel();
+    }
+    let cleared = crate::services::mock_generator::clear_temp_tables().len();
+    if let Some(panel) = live() {
+        panel.update(cx, |panel, cx| panel.forget_generated(cleared, cx));
+    }
+}
+
 /// 打开项目后的宿主刷新：连接列表、选中项、导航缓存与结果归属都归零，
 /// 避免残留上一项目的数据。
-fn refresh_after_open(shared: &Shared, _cx: &mut App) {
+fn refresh_after_open(shared: &Shared, cx: &mut App) {
     // 项目打开/切换后：列表按作用域合一（全局 + 该项目 P_/GP_）。
     let root = shared.project.borrow().as_ref().map(|p| p.root.clone());
 
     // M8：告知洞察规则监听器当前项目——监听器每轮读这个值现算目录，
     // 从而自动跟随项目切换（否则会一直看着启动时那个项目）。
     insight::set_watched_project_root(root.clone());
+
+    // M7：清掉上一项目的 mock 临时表（进程级内存库不会随项目切换释放）。
+    clear_mock_temp_tables(shared, cx);
 
     let (conns, notice) =
         crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
@@ -88,4 +109,65 @@ fn refresh_after_open(shared: &Shared, _cx: &mut App) {
     *shared.nav_for.borrow_mut() = None;
     shared.nav_tables.borrow_mut().clear();
     *shared.sql_for.borrow_mut() = None;
+}
+
+#[cfg(test)]
+mod tests {
+    // 显式列举依赖（不要 `use super::*`：父模块的 `use gpui_kit::*` 会跟着进来，
+    // `#[gpui_kit::test]` 展开出的裸 `#[test]` 会解析到它自己，无限递归）
+    use super::{clear_mock_temp_tables, Shared};
+    use gpui_kit::TestAppContext;
+    use mock::mock_view::{MockColumnSpec, MockDraft, MockRunOptions};
+    use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
+
+    fn draft(table: &str) -> MockDraft {
+        MockDraft {
+            table_name: table.to_string(),
+            columns: vec![MockColumnSpec {
+                id: 0,
+                def: ColumnDef {
+                    name: "id".to_string(),
+                    data_type: ColumnDataType::Integer,
+                    generator: GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                    nullable_ratio: 0.0,
+                    unique: true,
+                    dependency: None,
+                },
+                confidence: "high".to_string(),
+                sample_value: String::new(),
+            }],
+            options: MockRunOptions::new(10, Some(1), Locale::ZhCn),
+        }
+    }
+
+    /// 项目切换：清掉本进程的 mock 临时表（上一项目的试算结果不该继续占内存）。
+    ///
+    /// 只断言**自己那张表**：内存库是进程级的，别的 lib 用例可能同时也在建表。
+    #[gpui_kit::test]
+    fn project_switch_clears_mock_temp_tables(cx: &mut TestAppContext) {
+        let shared = Shared::with_connections(Vec::new(), None);
+        let dir = std::env::temp_dir().join(format!("rds_mock_switch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("临时目录");
+        let db = dir.join("analytics.duckdb");
+
+        let info = crate::services::mock_generator::generate_at(&db, &draft("t_switch"), None)
+            .expect("生成应当成功");
+        assert!(
+            mock::MockEngine::temp_tables()
+                .expect("列临时表")
+                .contains(&info.temp_table_name),
+            "前置条件：临时表应当已建好"
+        );
+
+        cx.update(|cx| clear_mock_temp_tables(&shared, cx));
+
+        assert!(
+            !mock::MockEngine::temp_tables()
+                .expect("列临时表")
+                .contains(&info.temp_table_name),
+            "切项目后不应再有上一项目的临时表"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

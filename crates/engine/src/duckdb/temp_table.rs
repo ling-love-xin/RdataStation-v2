@@ -3,6 +3,20 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use duckdb::Connection;
+use shared::error::{CommonError, CoreError};
+
+use crate::sql::SqlEngine;
+
+/// 内存库（`Connection::open_in_memory`）的 catalog 名（DuckDB 固定叫 `memory`）。
+///
+/// [`TempTableManager::list_by_source`] 用它把「属于本库的表」与 `ATTACH` 进来的文件库表分开，
+/// 避免清理时误删文件库里的同名表。
+const IN_MEMORY_CATALOG: &str = "memory";
+
+/// DuckDB 错误 → `CoreError`（本模块只做临时表维度的错误包装）。
+fn db_error(e: duckdb::Error) -> CoreError {
+    CoreError::common(CommonError::General(format!("DuckDB error: {e}")))
+}
 
 /// 临时表来源枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,6 +51,20 @@ impl TempTableSource {
     /// true 表示用户可见，false 表示不可见
     pub fn is_user_visible(&self) -> bool {
         !matches!(self, TempTableSource::Insight)
+    }
+
+    /// 该来源的临时表**命名前缀**（清理时按这些前缀识别）。
+    ///
+    /// 两套命名共存：v2 规范名 `tmp_{缩写}_…`（[`TempTableManager::generate_name`] 产出），
+    /// 以及 v1 沿用至今的 `temp_mock_…`（mock 保持 v1 表名是明确决策，见 mock 架构 D2）。
+    /// 所以清理必须按**多前缀**匹配，只认一套会漏掉另一套。
+    pub fn prefixes(&self) -> &'static [&'static str] {
+        match self {
+            TempTableSource::Query => &["tmp_q_"],
+            TempTableSource::Insight => &["tmp_i_"],
+            TempTableSource::Mock => &["tmp_m_", "temp_mock_"],
+            TempTableSource::Plugin => &["tmp_p_"],
+        }
     }
 }
 
@@ -344,6 +372,80 @@ impl TempTableManager {
         self.cleanup_by_prefix(&prefix)
     }
 
+    /// 列出连接上属于某来源的临时表（**以库里的实际表为准**，不只看注册表）。
+    ///
+    /// 为什么不能只看注册表：注册表只在「新建时」写，进程里可能有没登记的表
+    /// （旧版本建的、或上一次清理漏掉的），按前缀查库才是权威。
+    /// 限定 `catalog = memory` 且 `schema = main`：`ATTACH` 进来的文件库表不是临时表，
+    /// 绝不能当成待清理对象。
+    pub fn list_by_source(
+        conn: &Connection,
+        source: TempTableSource,
+    ) -> Result<Vec<String>, CoreError> {
+        let prefixes = source.prefixes();
+        let sql = SqlEngine::build_select(
+            "information_schema.tables",
+            &["table_name", "table_schema", "table_catalog"],
+            None,
+        );
+        let mut stmt = conn.prepare(&sql).map_err(db_error)?;
+        let mut names = Vec::new();
+        let mut rows = stmt.query([]).map_err(db_error)?;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            let name: String = row.get(0).unwrap_or_default();
+            let schema: String = row.get(1).unwrap_or_default();
+            let catalog: String = row.get(2).unwrap_or_default();
+            if schema != "main" || catalog != IN_MEMORY_CATALOG {
+                continue;
+            }
+            if prefixes.iter().any(|prefix| name.starts_with(prefix)) {
+                names.push(name);
+            }
+        }
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    /// 删除连接上属于某来源的全部临时表（返回被删表名），并同步注册表。
+    ///
+    /// 表名取自库（见 [`Self::list_by_source`]）；注册表里同前缀的名字一并摘掉，
+    /// 否则会留下指向已删表的死名（`count_by_prefix` 会一直报高）。
+    pub fn drop_by_source(
+        &self,
+        conn: &Connection,
+        source: TempTableSource,
+    ) -> Result<Vec<String>, CoreError> {
+        let prefixes = source.prefixes();
+        let mut targets = Self::list_by_source(conn, source)?;
+        {
+            let registry = self.registry.read().unwrap_or_else(|e| e.into_inner());
+            for name in registry.keys() {
+                if prefixes.iter().any(|prefix| name.starts_with(prefix))
+                    && !targets.contains(name)
+                {
+                    targets.push(name.clone());
+                }
+            }
+        }
+        targets.sort();
+
+        let mut dropped = Vec::new();
+        for name in &targets {
+            let sql = SqlEngine::build_drop_table(name, true);
+            match conn.execute(&sql, []) {
+                Ok(_) => {
+                    self.unregister(name);
+                    dropped.push(name.clone());
+                }
+                Err(e) => {
+                    tracing::warn!("[TempTableManager] 清理临时表 {} 失败: {}", name, e)
+                }
+            }
+        }
+        Ok(dropped)
+    }
+
     /// 获取全局 DuckDB 临时表上限。
     ///
     /// # 返回
@@ -358,6 +460,7 @@ impl TempTableManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql::ColumnDefInfo;
 
     #[test]
     fn test_temp_table_source_abbreviation() {
@@ -394,6 +497,89 @@ mod tests {
 
         manager.unregister("tmp_q_test_20260512143025");
         assert_eq!(manager.count(), 0);
+    }
+
+    #[test]
+    fn test_temp_table_source_prefixes() {
+        // mock 两套命名都要认（v2 规范名 + v1 沿用的 temp_mock_）
+        assert!(TempTableSource::Mock.prefixes().contains(&"tmp_m_"));
+        assert!(TempTableSource::Mock.prefixes().contains(&"temp_mock_"));
+        assert_eq!(TempTableSource::Insight.prefixes().len(), 1);
+        assert!(TempTableSource::Insight.prefixes().contains(&"tmp_i_"));
+    }
+
+    /// 按来源列 / 删临时表：以库为准（两套命名都要认），且不碰别的来源的表。
+    #[test]
+    fn test_list_and_drop_by_source_reads_the_database() {
+        let conn = Connection::open_in_memory().expect("内存库");
+        let cols = vec![ColumnDefInfo {
+            name: "id".to_string(),
+            data_type: "INTEGER".to_string(),
+            unique: false,
+            nullable: true,
+        }];
+        for name in ["tmp_m_a", "temp_mock_b", "tmp_i_c", "unrelated"] {
+            conn.execute_batch(&SqlEngine::build_create_table(name, &cols, false))
+                .expect("建表");
+        }
+
+        assert_eq!(
+            TempTableManager::list_by_source(&conn, TempTableSource::Mock).expect("列出"),
+            ["temp_mock_b".to_string(), "tmp_m_a".to_string()],
+            "两套 mock 命名都要列出，别的来源与无关表不列"
+        );
+
+        let manager = TempTableManager::new(50);
+        manager.register("tmp_m_a");
+        manager.register("temp_mock_b");
+        manager.register("tmp_i_c");
+
+        let dropped = manager
+            .drop_by_source(&conn, TempTableSource::Mock)
+            .expect("删除");
+        assert_eq!(dropped, ["temp_mock_b".to_string(), "tmp_m_a".to_string()]);
+        assert!(
+            TempTableManager::list_by_source(&conn, TempTableSource::Mock)
+                .expect("列出")
+                .is_empty(),
+            "删完应当为空"
+        );
+        assert_eq!(
+            TempTableManager::list_by_source(&conn, TempTableSource::Insight).expect("列出"),
+            ["tmp_i_c".to_string()],
+            "别的来源不受影响"
+        );
+        assert_eq!(manager.count(), 1, "注册表只摘被删的那两个");
+    }
+
+    /// `ATTACH` 进来的文件库表**不是**临时表：即使名字带 `temp_mock_` 也不能被当清理对象。
+    #[test]
+    fn test_list_by_source_ignores_attached_databases() {
+        let conn = Connection::open_in_memory().expect("内存库");
+        let dir = std::env::temp_dir().join(format!("rds_tt_attached_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("临时目录");
+        let file_db = dir.join("other.duckdb");
+
+        // 文件库里放一张叫 temp_mock_x 的表（正是 mock 临时表的命名风格）
+        {
+            let file_conn = Connection::open(&file_db).expect("文件库");
+            file_conn
+                .execute_batch("CREATE TABLE temp_mock_x (id INTEGER);")
+                .expect("建表");
+        }
+        conn.execute_batch(&SqlEngine::build_attach_database(
+            &file_db.to_string_lossy(),
+            "other_db",
+        ))
+        .expect("挂载");
+
+        let listed = TempTableManager::list_by_source(&conn, TempTableSource::Mock).expect("列出");
+        assert!(
+            listed.is_empty(),
+            "挂载进来的文件库表不应算作临时表: {listed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

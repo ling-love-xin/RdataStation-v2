@@ -1410,6 +1410,42 @@ fn sinks_require_a_generation_first(cx: &mut TestAppContext) {
     assert!(rec.started.borrow().is_empty(), "不应提交任何任务");
 }
 
+/// 项目切换：面板作废旧生成结果（临时表已被宿主清掉），草稿保留。
+#[gpui_kit::test]
+fn forget_generated_drops_result_but_keeps_draft(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.gen_info().is_some(), "前置条件：已有生成结果");
+    });
+
+    // 宿主清了 3 张临时表 → 结果作废 + 一句可读提示
+    panel.update(cx, |panel, cx| panel.forget_generated(3, cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.gen_info().is_none(), "临时表已不在，旧结果必须作废");
+        assert_eq!(panel.landed(), None);
+        assert!(panel.error().is_none());
+        let outcome = panel.outcome().expect("应提示清理");
+        assert!(outcome.contains("3 张"), "{outcome}");
+        assert_eq!(panel.draft().table_name, "mock_data", "草稿（用户配置）保留");
+        assert_eq!(panel.draft().columns.len(), 1);
+    });
+
+    // 没清到东西就不打扰用户
+    panel.update(cx, |panel, cx| panel.forget_generated(0, cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.outcome().is_none(), "无临时表可清时不该报一句");
+    });
+}
+
 /// `MockRunOptions::new` 是 `#[non_exhaustive]` 结构的唯一构造入口。
 #[test]
 fn run_options_constructor_keeps_field_order() {

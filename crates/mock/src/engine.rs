@@ -10,7 +10,7 @@ use fake::Fake;
 
 use super::generators::generate_cell;
 use engine::duckdb::row_to_arrow::duckdb_rows_to_arrow;
-use engine::duckdb::DuckDBManager;
+use engine::duckdb::{DuckDBManager, TempTableSource};
 use shared::models::QueryResult;
 use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
 use crate::error::{MockError, MockResult};
@@ -440,6 +440,26 @@ impl MockEngine {
         written?; // 写入失败优先报写入（解挂失败不拖淡根因）
         detached.map_err(|e| MockError::Generation(format!("解挂分析库失败: {e}")))?;
         Ok(())
+    }
+
+    // ==================== 临时表生命周期 ====================
+
+    /// 删掉本进程里全部 mock 临时表（切换 / 关闭项目时由宿主调用）。返回被删表名。
+    ///
+    /// 为什么需要显式清：临时表建在 engine 的**进程级内存库**（`GLOBAL_DUCKDB`）里，
+    /// 切项目不会自动释放。同一个目标表名重复生成会 DROP + 重建，**换名字就会逐张累积**，
+    /// 长会话下一直占内存（架构 §9-I1/I2）。
+    ///
+    /// **调用方不得持有内存库连接锁**（本函数内部要取）。
+    pub fn clear_temp_tables() -> MockResult<Vec<String>> {
+        DuckDBManager::drop_in_memory_temp_tables(TempTableSource::Mock)
+            .map_err(|e| MockError::Generation(e.to_string()))
+    }
+
+    /// 当前进程里还留着的 mock 临时表（只读观察：测试与面板用）。
+    pub fn temp_tables() -> MockResult<Vec<String>> {
+        DuckDBManager::in_memory_temp_tables(TempTableSource::Mock)
+            .map_err(|e| MockError::Generation(e.to_string()))
     }
 
     // ==================== 列名智能映射 ====================

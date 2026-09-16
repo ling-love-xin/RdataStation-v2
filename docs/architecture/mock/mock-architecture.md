@@ -237,6 +237,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D24 | 分类子菜单**保留**，另加「搜索生成器」对话框（`List` + `ListState`） | 两条路径对应两种心智：知道「属于哪类」→ 翻菜单；只记得名字 → 搜索。搜索同步过滤（137 项全在内存）无 loading 闪烁；搜索框 / 虚拟化 / 上下键 / 空态全是组件的 | 只留子菜单（137 项翻找慢）；把搜索框塞进弹出菜单（菜单只有 item，无输入控件）；自搓输入框 + 滚动列表 |
 | D25 | 落库改**跨库直写**（`ATTACH` + `INSERT SELECT`），不再用 INSERT 文本 | 数据全程在 DuckDB 内部流动；大行数下没有「读全量 → 拼文本 → 再解析」两跳与对应的内存峰值 | 继续文本中转；把临时表改成文件表（与「生成是试算」语义冲突） |
 | D26 | 回滚**只删本次 `Create` 刚建的表**；追加失败不回滚 | 同名表已存在时建表会失败，此时删表就是删别人的数据（本项目实际存在这个误删风险，已在实现里绕开并加测试锁住） | 「失败就 DROP 目标表」（会把既有数据删掉）；不回滚（留下半成品空表） |
+| D27 | 临时表清理**以库为准 + 多前缀**（`list_by_source` / `drop_by_source`），切项目时由宿主调 | 注册表只在新建时写，会漏（旧版本建的 / 上次清理漏掉的）；而 mock 沿用 v1 的 `temp_mock_` 前缀（D2），只认 `tmp_m_` 一套就等于没清。限定 `catalog = memory` 避免误删 `ATTACH` 进来的文件库表 | 只靠注册表枚举（会漏）；只认一套前缀（mock 永远清不到）；按“所有临时表”一刀切（会碰别的来源） |
 | D20 | 生成 / 追加 / **三个出口**走**后台工作线程 + 进度 + 取消**（`services::mock_jobs`） | 生成是重活，UI 线程 `block_on` 会冻结界面且无法中断；`MockHost` 非 Send，不能在视图里直接 `spawn` | 视图内 `cx.background_spawn`（要求宿主 Send）；不做进度（大行数只能干等） |
 | D21 | 进度用**定时泵（120ms）+ 宿主槽**，而非 render 轮询 | 任务进行中没有其他事件触发重绘，不主动唤醒就看不到进度；轮询频率低不抢主线程 | render 内轮询（永远不会被调到）；GPUI 后台执行器直接跑生成（阻塞后台池线程） |
 | D22 | 任务收尾「清进度 + 写结果」在**同一把锁下一次性**完成 | UI 侧不可能观察到「既无进度也无结果」的空洞，避免误报「工作线程已退出」 | 两个独立原子量（存在观测窗口） |
@@ -293,8 +294,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 
 | 编号 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- |
-| I1 | 临时表命名前缀与 engine 的 `TempTableManager` 约定不一致：注册的是 `temp_mock_*`，而管理器按 `tmp_m_*` 前缀识别（TTL/计数只处理 `tmp_i_`） | 「无 TTL / 项目关闭清理」目前**只在注释里**，没有实际执行路径 | engine 侧提供按来源枚举的清理入口（`drop_by_source(Mock)`），mock 侧保持注册 |
-| I2 | 临时表建在 engine 的**进程级内存单例**（`GLOBAL_DUCKDB`） | 切换项目不会清掉 `temp_mock_*`，与「窗口 = 项目」隔离原则存在张力 | 由 project 会话切换时调用 I1 的清理入口，或把生成目标改为项目分析库 |
+| I1 | ~~临时表命名前缀与 `TempTableManager` 约定不一致~~ | 已解决：管理器新增 `TempTableSource::prefixes()`（**两套命名都认**：v2 `tmp_m_` + v1 `temp_mock_`）与 `list_by_source` / `drop_by_source`（**以库里的实际表为准**，不只靠注册表），表名取自库、删完同步注册表 | —— |
+| I2 | ~~临时表建在进程级内存单例，切项目不会清~~ | 已解决：`DuckDBManager::drop_in_memory_temp_tables(Mock)`（限定 `catalog = memory` + `schema = main`，`ATTACH` 进来的文件库表不会被误删）由宿主在**项目切换**时调用，并让 mock 面板作废旧预览（表名已失效） | 已足够；将来若改成项目作用域分析库，切项目天然不带过去 |
 | I3 | ~~分析库写入是「INSERT 文本 → `execute_batch`」~~ | 已解决：改 **`ATTACH` 跨库直写**（`MockEngine::write_temp_table_to_database`），数据不经 Rust 字符串；回滚只删本次刚建的表（同名既有表不受影响） | —— |
 | I4 | 模板/用户模板与生成任务已落 `project.db`，但**无 UI 入口**且无真实 SQLite 往返测试（仅序列化测试） | 能力在代码里，用户在界面上看不到 | Phase C/D 接面板；补 `MockGenerationStore` 的 SQLite 往返测试 |
 | I5 | ~~`mock_view.rs` 为占位文件~~ | 已落地：面板与详情 tab 都在 `crates/mock/src/mock_view.rs`；`{commands,model,generator}.rs` 仍是脚手架占位 | 这三个占位文件按全项目统一政策处理（命令层已退役） |
@@ -308,10 +309,11 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 层 | 位置 | 数量 | 锁什么 |
 | --- | --- | --- | --- |
 | 单元 | `crates/mock/src/*.rs`（`#[cfg(test)]`） | 65 | 表名净化、DDL 生成、`generate_cell` 各变体、列名规则表、类型串解析、序列化往返、模板自检、生成器目录自检（3：137 覆盖 / 标签与默认 / 分类往返） |
-| 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 45（17 纯逻辑 + 28 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；**生成器搜索**（空查=全量 / 标签前缀优先 / 多词 AND / 大小写不敏感 / 分类名可搜 / 无命中为空）；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；三个对话框可开（导入 / 列编辑 / 生成器搜索）；生成器搜索过滤→确认写回；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒；**出口后台化**：落库 / 导出 / 草稿箱的阶段与结果、完成后预览保留、出口不可取消、无生成结果时拒绝提交 |
+| 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 46（17 纯逻辑 + 29 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；**生成器搜索**（空查=全量 / 标签前缀优先 / 多词 AND / 大小写不敏感 / 分类名可搜 / 无命中为空）；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；三个对话框可开（导入 / 列编辑 / 生成器搜索）；生成器搜索过滤→确认写回；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒；**出口后台化**：落库 / 导出 / 草稿箱的阶段与结果、完成后预览保留、出口不可取消、无生成结果时拒绝提交；**切项目作废旧结果**（草稿保留、无临时表可清时不报提示） |
 | 集成（引擎） | `crates/mock/tests/mock_engine_tests.rs` | 30 | 公开 API 端到端：生成 / 预览 / 映射 / 依赖 / 取消标志 / 类型 / 五种导出 / 持久化 / 草稿目录 / 模板 / 场景；**跨库直写**：建表（含中文列名）/ 追加 / 同名建表不删既有数据 / 失败回滚 + 解挂 |
+| 集成（临时表清理） | `crates/mock/tests/temp_table_cleanup.rs` | 2 | 清掉本进程全部 mock 临时表（幂等）；同名重复生成只留一张。**独立进程**：清理是进程级动作，与并行用例互相踩 |
 | 集成（装配） | `crates/workbench/tests/mock_generator.rs` | 12 | 生成不写分析库；新建 → 同名拒绝（不覆盖）；追加接续主键（`MAX(id)=100` 且无重复）；追加目标不存在 / 缺列的中文错误；**大行数一次落库（20k）**；**目标表多出的列走默认值**；CSV 导出表头；草稿箱无项目拒绝 + 有项目落 `{项目}/mock/`；连接默认库 / schema 预填；类型串映射 |
-| 集成（后台任务） | `crates/workbench/tests/mock_jobs.rs` + `mock_job_cancel.rs` | 7 + 1 | 提交即返回 + 进度可读 + 结果一次性取回 + 生成不写库；并发提交被拒且结束后可恢复；追加任务回表内总行数；**出口**：`Persist` 建表回行数 / 同名表回可读错误不覆盖 / `Export` 写出 CSV（表头 + 行数）/ `Scratchpad` 无项目报错 + 有项目落 `{项目}/mock/`；**取消**在批次边界中断并回可读错误（独立进程：`cancel` 是进程级标志） |
+| 集成（后台任务） | `crates/workbench/tests/mock_jobs.rs` + `mock_job_cancel.rs` | 8 + 1 | 提交即返回 + 进度可读 + 结果一次性取回 + 生成不写库；并发提交被拒且结束后可恢复；追加任务回表内总行数；**出口**：`Persist` 建表回行数 / 同名表回可读错误不覆盖 / `Export` 写出 CSV（表头 + 行数）/ `Scratchpad` 无项目报错 + 有项目落 `{项目}/mock/`；**切项目清理**（宿主入口）；**取消**在批次边界中断并回可读错误（独立进程：`cancel` 是进程级标志） |
 
 回归价值示例：`export_table_creates_named_table_and_drops_temp` 锁 I0b 那个 v1 遗留缺陷；
 `export_sql_insert_writes_insert_statements` 锁 I0d 死锁；`generate_is_reproducible_with_same_seed` 锁可复现性；
@@ -326,6 +328,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | --- | --- |
 | I3 SQL 构造器纪律 | `crates/mock/src/engine.rs`（模块头注释 + 全部 DDL/DML/DQL 调用点） |
 | D25/D26 跨库直写与回滚 | `crates/mock/src/engine.rs`（`write_temp_table_to_database` / `TempTableWriteMode`）+ `crates/engine/src/sql/builder.rs`（`build_attach_database` / `build_detach_database` / `build_create_table_in` / `build_drop_table_in` / `build_insert_select`） |
+| D27 临时表清理 | `crates/engine/src/duckdb/temp_table.rs`（`TempTableSource::prefixes` / `list_by_source` / `drop_by_source`）+ `manager.rs`（`in_memory_temp_tables` / `drop_in_memory_temp_tables`）+ `crates/mock/src/engine.rs`（`clear_temp_tables` / `temp_tables`）+ `crates/workbench/src/components/project_host.rs`（切项目时清理 + 面板作废）+ `mock_view.rs`（`forget_generated`） |
 | D1/D2 内存临时表与命名 | `crates/mock/src/engine.rs`（`TEMP_MOCK_PREFIX` / `get_db` / `sanitize_table_name`） |
 | 生成批次与取消 | `crates/mock/src/engine.rs`（`BATCH_SIZE` / `CANCEL_FLAG` / `generate_with_progress`） |
 | 生成器实现（137 变体） | `crates/mock/src/generators.rs`（`generate_cell`） |

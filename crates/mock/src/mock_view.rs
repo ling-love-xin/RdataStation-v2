@@ -990,6 +990,24 @@ impl MockPanel {
         cx.notify();
     }
 
+    /// 项目已切换：作废与旧项目绑定的生成结果与出口反馈（`cleared` = 宿主刚清掉的临时表数）。
+    ///
+    /// 为什么必须作废：宿主在切项目时删掉了本进程的 mock 临时表（内存库是进程级单例，
+    /// 不切项目就会一直在），`gen_info` 里的临时表名已经指向不存在的表——留着它，
+    /// 用户下一次点「导出 / 落库」只会拿到一个难懂的「表不存在」。
+    ///
+    /// 草稿（目标表名 / 列 / 行数种子）**保留**：那是用户的配置，跨项目可以继续用。
+    pub fn forget_generated(&mut self, cleared: usize, cx: &mut Context<Self>) {
+        self.generated = None;
+        self.landed = None;
+        self.error = None;
+        // 没清到东西就不打扰用户（切项目很常见，每次都报一句是噪声）
+        self.outcome = (cleared > 0).then(|| {
+            format!("已切换项目：清掉 {cleared} 张 mock 临时表，生成结果已作废（请重新生成）")
+        });
+        cx.notify();
+    }
+
     /// 打开中央「Mock 数据」详情 tab（字段清单 + 预览）。
     pub fn open_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.host.open_detail(window, cx);
