@@ -34,6 +34,8 @@ pub struct ResultEntry {
     pub truncated: bool,
     /// 写语句的真实影响行数（B5；驱动没报就是 `None`，界面不编造）
     pub affected_rows: Option<u32>,
+    /// 这份结果是**在哪个连接上**跑出来的（B5 结果工具栏要显示它；`None` = 没绑定）
+    pub connection: Option<String>,
     /// 列名（失败时为空）
     pub columns: Vec<String>,
     /// 行数据（已字符串化；失败时为空）
@@ -58,6 +60,7 @@ impl ResultEntry {
             elapsed_ms,
             truncated,
             affected_rows: None,
+            connection: None,
             columns,
             rows,
             error: None,
@@ -70,6 +73,12 @@ impl ResultEntry {
         self
     }
 
+    /// 带上这份结果的来源连接（结果工具栏显示它；`None` = 当时没绑定连接）
+    pub fn with_connection(mut self, connection: Option<String>) -> Self {
+        self.connection = connection;
+        self
+    }
+
     /// 失败的执行
     pub fn failure(document: DocumentId, sql: String, error: String, elapsed_ms: u64) -> Self {
         Self {
@@ -78,6 +87,7 @@ impl ResultEntry {
             elapsed_ms,
             truncated: false,
             affected_rows: None,
+            connection: None,
             columns: Vec::new(),
             rows: Vec::new(),
             error: Some(error),
@@ -102,6 +112,25 @@ impl ResultEntry {
     /// 是不是「只有影响行数、没有结果集」的写语句（结果区要换成一句文案）
     pub fn affects_rows_only(&self) -> bool {
         self.error.is_none() && self.columns.is_empty() && self.affected_rows.is_some()
+    }
+
+    /// 结果集文本（TSV：表头一行 + 每行一条；复制到剪贴板用）
+    ///
+    /// 单元格里出现制表符 / 换行 / 双引号时用双引号包裹、内部引号双写——不转义的话
+    /// 带制表符的值会把列错开（Excel / DBeaver 都按这个写法读）。
+    ///
+    /// 导出的是**已抓到的行**（被截断的那份就只有前若干行）；没有网格时返回空串
+    /// （调用方应先看 [`ResultEntry::has_grid`]）。其余导出格式属 B7（`persist.rs`）。
+    pub fn to_tsv(&self) -> String {
+        if self.columns.is_empty() {
+            return String::new();
+        }
+        let mut text = tsv_row(&self.columns);
+        for row in &self.rows {
+            text.push('\n');
+            text.push_str(&tsv_row(row));
+        }
+        text
     }
 
     /// 结果区状态行（真实值，无占位文案）
@@ -246,6 +275,29 @@ impl ResultStore {
     }
 }
 
+/// 一行的 TSV（单元格按需加引号）
+fn tsv_row(cells: &[String]) -> String {
+    let mut line = String::new();
+    for (index, cell) in cells.iter().enumerate() {
+        if index > 0 {
+            line.push('\t');
+        }
+        if needs_quotes(cell) {
+            line.push('"');
+            line.push_str(&cell.replace('"', "\"\""));
+            line.push('"');
+        } else {
+            line.push_str(cell);
+        }
+    }
+    line
+}
+
+/// 单元格是不是必须加引号（制表符 / 换行 / 双引号——只有它们会破坏 TSV 的形状）
+fn needs_quotes(cell: &str) -> bool {
+    cell.contains(['\t', '\n', '\r', '"'])
+}
+
 /// 超过上限就淘汰**最旧的未选中**结果集（选中项保留，选中下标跟着修正）
 fn evict_oldest(slot: &mut DocumentResults) {
     while slot.sets.len() > MAX_RESULT_SETS {
@@ -342,6 +394,78 @@ mod tests {
 
         entry.truncated = true;
         assert!(entry.summary().contains("已截断"), "{}", entry.summary());
+    }
+
+    /// 写语句：状态行报影响行数，不当成「0 行 0 列」的结果集
+    #[test]
+    fn writes_report_affected_rows_instead_of_a_grid() {
+        let entry = ResultEntry::success(
+            DocumentId::new("doc-1"),
+            "insert into t values (1)".to_string(),
+            7,
+            false,
+            Vec::new(),
+            Vec::new(),
+        )
+        .with_affected_rows(Some(3));
+
+        assert!(entry.affects_rows_only(), "只有影响行数");
+        assert!(!entry.has_grid(), "写语句没结果集");
+        assert_eq!(entry.summary(), "影响 3 行 · 7 ms");
+    }
+
+    /// 复制成 TSV：表头 + 行；制表符 / 换行 / 引号要转义（不转义会把列错开）
+    #[test]
+    fn tsv_quotes_cells_that_would_break_the_shape() {
+        let mut entry = entry("doc-1", "select 1", 0);
+        entry.columns = vec!["id".to_string(), "note".to_string()];
+        entry.rows = vec![
+            vec!["1".to_string(), "plain".to_string()],
+            vec!["2".to_string(), "two\tcells".to_string()],
+            vec!["3".to_string(), "line\nbreak".to_string()],
+            vec!["4".to_string(), "say \"hi\"".to_string()],
+        ];
+        assert_eq!(
+            entry.to_tsv(),
+            "id\tnote\n1\tplain\n2\t\"two\tcells\"\n3\t\"line\nbreak\"\n4\t\"say \"\"hi\"\"\""
+        );
+    }
+
+    /// 没有网格就没有可复制的文本（空串，不是一行空表头）
+    #[test]
+    fn tsv_is_empty_without_a_grid() {
+        let failed = ResultEntry::failure(
+            DocumentId::new("doc-1"),
+            "select boom".to_string(),
+            "驱动报错：boom".to_string(),
+            3,
+        );
+        assert_eq!(failed.to_tsv(), "");
+
+        let write = ResultEntry::success(
+            DocumentId::new("doc-1"),
+            "delete from t".to_string(),
+            1,
+            false,
+            Vec::new(),
+            Vec::new(),
+        )
+        .with_affected_rows(Some(0));
+        assert_eq!(write.to_tsv(), "");
+    }
+
+    /// 影响行数与来源连接都是"有就给、没就不填"的真值
+    #[test]
+    fn affected_rows_and_connection_are_optional_truth() {
+        let plain = entry("doc-1", "select 1", 1);
+        assert_eq!(plain.affected_rows, None);
+        assert_eq!(plain.connection, None);
+
+        let tagged = entry("doc-1", "select 1", 1)
+            .with_affected_rows(Some(0))
+            .with_connection(Some("conn-1".to_string()));
+        assert_eq!(tagged.affected_rows, Some(0), "零行也是真值，不等于没有");
+        assert_eq!(tagged.connection.as_deref(), Some("conn-1"));
     }
 
     /// 新结果集落位：追加一份，用户在看的旧那份**仍然选中**（原型 §4.4）

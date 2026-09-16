@@ -641,6 +641,65 @@ fn shared_with_sized_runner(content: &str) -> (EditorShared, DocumentId) {
     (shared, id)
 }
 
+/// 假执行器（B5）：按 SQL 内容给出「写语句 / 被截断 / 普通结果」三种真实形状
+struct ToolbarRunner;
+
+impl QueryRunner for ToolbarRunner {
+    fn run(&self, _connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+        if sql.contains("insert") {
+            return Ok(QueryData {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                elapsed_ms: 7,
+                truncated: false,
+                affected_rows: Some(3),
+            });
+        }
+        if sql.contains("truncated") {
+            return Ok(QueryData {
+                columns: vec!["n".to_string()],
+                rows: (0..3).map(|index| vec![index.to_string()]).collect(),
+                elapsed_ms: 4,
+                truncated: true,
+                affected_rows: None,
+            });
+        }
+        Ok(QueryData {
+            columns: vec!["n".to_string(), "note".to_string()],
+            rows: vec![vec!["1".to_string(), "a".to_string()]],
+            elapsed_ms: 2,
+            truncated: false,
+            affected_rows: None,
+        })
+    }
+}
+
+/// 带 `ToolbarRunner` 的共享状态 + 一份文档（B5：结果工具栏）
+fn shared_with_toolbar_runner(content: &str) -> (EditorShared, DocumentId) {
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(ToolbarRunner));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    (shared, id)
+}
+
+/// 跑一句话并等回填（B5 用：结果工具栏要真的跟着结果变）
+fn run_statement(
+    cx: &mut VisualTestContext,
+    panel: &Entity<EditorHostPanel>,
+    sql: &str,
+    placement: execution::ResultPlacement,
+) {
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(execution::ExecTarget::Statement(sql.to_string()), placement, cx)
+        })
+    });
+    wait_for_all_pending(cx, panel);
+}
+
 /// 等本文档“已提交的语句都回填完”（批量是多条，`wait_for_result` 只等第一条）
 fn wait_for_all_pending(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -2160,6 +2219,26 @@ fn the_bound_connection_reaches_the_execution_port(cx: &mut TestAppContext) {
         [Some("P_orders".to_string())],
         "执行器必须收到文档绑定的连接"
     );
+
+    // 【B5】结果也要记住它在哪个连接上跑出来的（结果工具栏显示来源）
+    let entry_connection = cx.update(|_window, _cx| {
+        shared
+            .results()
+            .active(&id)
+            .and_then(|entry| entry.connection.clone())
+    });
+    assert_eq!(
+        entry_connection.as_deref(),
+        Some("P_orders"),
+        "结果记录要带上来源连接"
+    );
+    let (_, _, _, toolbar_connection) =
+        cx.update(|_window, cx| panel.read(cx).result_toolbar_for_test());
+    assert_eq!(
+        toolbar_connection.as_deref(),
+        Some("●P·orders"),
+        "工具栏拿到的是可读的连接段"
+    );
 }
 
 /// 工具栏在 SQL 模式给出连接选择器（没有端口也说清楚，不假装有得选）
@@ -2269,4 +2348,167 @@ fn the_toolbar_only_offers_execution_in_sql_mode(cx: &mut TestAppContext) {
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     assert!(!exec_present(cx), "分析模式的执行随单元落地（1c）");
+}
+
+// ===== B5：结果工具栏（复制 / 刷新 / 影响行数 / 截断 / 分栏）=====
+
+/// 有网格就有复制，剪贴板里是与网格一致的 TSV
+#[gpui_kit::test]
+fn copying_the_active_result_puts_tsv_on_the_clipboard(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    assert!(
+        dialog_button_rendered(cx, "editor-result-copy"),
+        "有网格就该有复制入口"
+    );
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.copy_active_result(cx)));
+    let text = cx.update(|_window, app| {
+        app.read_from_clipboard().and_then(|item| item.text())
+    });
+    assert_eq!(
+        text.as_deref(),
+        Some("n\tnote\n1\ta"),
+        "复制的是网格那份 TSV（表头 + 行）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("复制要有回执");
+    assert!(message.contains("已复制 1 行"), "{message}");
+}
+
+/// 刷新重跑的是**当前选中那份**的 SQL，并且原位替换（结果集数不变）
+#[gpui_kit::test]
+fn refreshing_reruns_the_selected_result_in_place(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, seen, _) = shared_with_runner("select 1;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select first", execution::ResultPlacement::Replace);
+    run_statement(cx, &panel, "select second", execution::ResultPlacement::NewSet);
+    run_statement(cx, &panel, "select third", execution::ResultPlacement::NewSet);
+    assert_eq!(shared.results().set_count(&id), 3);
+
+    // 用户切到最后一份，刷新它
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(2, cx)));
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.refresh_active_result(cx)));
+    wait_for_all_pending(cx, &panel);
+
+    let sqls = seen.lock().expect("锁").clone();
+    assert_eq!(
+        sqls,
+        ["select first", "select second", "select third", "select third"],
+        "刷新重跑的是选中那份的 SQL"
+    );
+    assert_eq!(
+        shared.results().set_count(&id),
+        3,
+        "原位替换：刷出不新开一份结果集"
+    );
+}
+
+/// 写语句：工具栏报影响行数，且不摆复制（没有网格）
+#[gpui_kit::test]
+fn a_write_statement_reports_affected_rows_and_offers_no_copy(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("insert into t values (1);");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(
+        cx,
+        &panel,
+        "insert into t values (1)",
+        execution::ResultPlacement::Replace,
+    );
+
+    let summary = cx
+        .update(|_window, cx| {
+            panel
+                .read(cx)
+                .result_summary_for_test()
+                .map(str::to_string)
+        })
+        .expect("写语句也要有结果区文案");
+    assert!(summary.starts_with("影响 3 行"), "{summary}");
+    assert!(
+        !dialog_button_rendered(cx, "editor-result-copy"),
+        "写语句没有可复制的结果集"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-result-refresh"),
+        "有 SQL 就能重跑"
+    );
+}
+
+/// 截断是警告：工具栏拿到**真实行数**，且已抓到的行仍然可复制
+#[gpui_kit::test]
+fn truncation_is_reported_as_a_warning(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select truncated;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select truncated", execution::ResultPlacement::Replace);
+
+    let (hint, can_copy, sql, _connection) =
+        cx.update(|_window, cx| panel.read(cx).result_toolbar_for_test());
+    assert_eq!(
+        hint.as_deref(),
+        Some("已截断：只拿到前 3 行"),
+        "截断提示要说清拿到多少行"
+    );
+    assert!(can_copy, "被截断的结果集仍能复制已抓到的行");
+    assert_eq!(sql.as_deref(), Some("select truncated"));
+    let summary = cx
+        .update(|_window, cx| {
+            panel
+                .read(cx)
+                .result_summary_for_test()
+                .map(str::to_string)
+        })
+        .expect("有摘要");
+    assert!(summary.contains("已截断"), "{summary}");
+}
+
+/// 结果区在可拖拽分栏里：有结果时出现在下半区，且编辑区没被挤掉
+#[gpui_kit::test]
+fn the_result_pane_sits_in_a_split_without_squeezing_the_editor(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 还没有结果：结果区整个不占位置（不显示空壳）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        cx.debug_bounds("editor-result-pane").is_none(),
+        "没结果时不摆空壳"
+    );
+    let before = cx
+        .debug_bounds("editor-code-area")
+        .expect("编辑区在")
+        .size
+        .height;
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let pane = cx
+        .debug_bounds("editor-result-pane")
+        .expect("有结果时结果区在");
+    assert!(pane.size.height.as_f32() > 0.0, "结果区要有高度");
+    let after = cx
+        .debug_bounds("editor-code-area")
+        .expect("编辑区还在")
+        .size
+        .height;
+    assert!(
+        after.as_f32() > 0.0,
+        "编辑区不能被结果区压成 0（实得 {after:?}）"
+    );
+    assert!(
+        after < before,
+        "分栏生效的标志是编辑区让出了一部分高度（{before:?} → {after:?}）"
+    );
 }

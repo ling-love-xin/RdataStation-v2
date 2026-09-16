@@ -8,7 +8,7 @@
 
 use std::cell::RefCell;
 
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::dock::{
@@ -80,6 +80,18 @@ pub struct EditorHostPanel {
     result_tabs: Vec<ResultSetTab>,
     /// 当前选中的结果集下标（标签条的选中态）
     result_active: usize,
+    /// 【B5】当前选中结果集的 SQL（工具栏「刷新」重跑它；`None` = 无可重跑的东西）
+    result_sql: Option<String>,
+    /// 【B5】当前选中结果集有没有可复制的东西（没有网格就不摆复制按钮）
+    result_can_copy: bool,
+    /// 【B5】截断提示（`Some` = 数据不完整；工具栏用警告色显示）
+    result_truncated_hint: Option<String>,
+    /// 【B5】当前选中结果集的来源连接文案（`●P·orders`；`None` = 当时未绑定 / 认不出）
+    result_connection_text: Option<String>,
+    /// 【B5】结果区高度（rem；拖拽分栏后记在这里，下一次渲染用它当初始尺寸）
+    ///
+    /// 只活在这个面板里（尚未随会话持久化——原型同。）
+    result_height: std::rc::Rc<std::cell::Cell<f32>>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
@@ -172,6 +184,11 @@ impl EditorHostPanel {
             result_summary: None,
             result_tabs: Vec::new(),
             result_active: 0,
+            result_sql: None,
+            result_can_copy: false,
+            result_truncated_hint: None,
+            result_connection_text: None,
+            result_height: std::rc::Rc::new(std::cell::Cell::new(ui::RESULT_PANE_HEIGHT)),
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
         }
@@ -959,6 +976,18 @@ impl EditorHostPanel {
         self.with_document(|doc| doc.tier_notice()).flatten()
     }
 
+    /// 结果工具栏的四块真实状态（供测试断言：截断提示 / 可复制 / 可重跑的 SQL / 来源连接）
+    pub fn result_toolbar_for_test(
+        &self,
+    ) -> (Option<String>, bool, Option<String>, Option<String>) {
+        (
+            self.result_truncated_hint.clone(),
+            self.result_can_copy,
+            self.result_sql.clone(),
+            self.result_connection_text.clone(),
+        )
+    }
+
     /// 本文档的执行状态与结果摘要（供测试断言；`None` = 尚未执行）
     pub fn result_summary_for_test(&self) -> Option<&str> {
         self.result_summary.as_deref()
@@ -1084,7 +1113,7 @@ impl EditorHostPanel {
     /// 很难靠看界面发现）。
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
-        let (tabs, active, grid_data, failed_text, summary, error) = {
+        let (tabs, active, grid_data, failed_text, summary, error, extra) = {
             let store = self.shared.results();
             let active = store.active_index(&self.document).unwrap_or(0);
             let entry = store.active(&self.document);
@@ -1096,15 +1125,33 @@ impl EditorHostPanel {
                     .map(|entry| (entry.columns.clone(), entry.rows.clone())),
                 entry
                     .filter(|entry| !entry.has_grid())
-                    .map(ResultEntry::summary),
+                    .map(empty_text),
                 entry.map(ResultEntry::summary),
                 entry.and_then(|entry| entry.error.clone()),
+                entry.map(|entry| {
+                    (
+                        entry.sql.clone(),
+                        entry.has_grid(),
+                        entry
+                            .truncated
+                            .then(|| result_grid::truncated_hint(entry.row_count())),
+                        entry
+                            .connection
+                            .as_deref()
+                            .map(|id| self.shared.connection_status_text(Some(id))),
+                    )
+                }),
             )
         };
 
         self.result_tabs = tabs;
         self.result_active = active;
         self.result_summary = summary;
+        let (sql, can_copy, truncated_hint, connection_text) = extra.unwrap_or_default();
+        self.result_sql = Some(sql).filter(|sql| !sql.trim().is_empty());
+        self.result_can_copy = can_copy;
+        self.result_truncated_hint = truncated_hint;
+        self.result_connection_text = connection_text;
         self.grid.update(cx, |state, cx| {
             match grid_data {
                 Some((columns, rows)) => state.delegate_mut().set_data(columns, rows),
@@ -1115,6 +1162,40 @@ impl EditorHostPanel {
 
         // 失败原因同时进状态栏（结果区可能被滚出视野）；选中成功的那份则清掉旧提示
         self.set_message(error, cx);
+    }
+
+    /// 【B5】复制当前结果集（TSV）
+    ///
+    /// 复制的是**已抓到的行**（被截断的那份就只有那些行）——不假装能拿到没抓的部分。
+    pub(crate) fn copy_active_result(&mut self, cx: &mut Context<Self>) {
+        let text = self
+            .shared
+            .results()
+            .active(&self.document)
+            .filter(|entry| entry.has_grid())
+            .map(ResultEntry::to_tsv)
+            .filter(|text| !text.is_empty());
+        let Some(text) = text else {
+            self.set_message(Some("没有可复制的结果集".to_string()), cx);
+            return;
+        };
+        let rows = self
+            .shared
+            .results()
+            .active(&self.document)
+            .map(ResultEntry::row_count)
+            .unwrap_or(0);
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.set_message(Some(format!("已复制 {rows} 行（TSV）")), cx);
+    }
+
+    /// 【B5】重跑当前结果集的 SQL（结果**换掉选中那份**，不是新开一份——原位刷新）
+    pub(crate) fn refresh_active_result(&mut self, cx: &mut Context<Self>) {
+        let Some(sql) = self.result_sql.clone() else {
+            self.set_message(Some("这份结果没有可重跑的 SQL".to_string()), cx);
+            return;
+        };
+        self.execute(ExecTarget::Statement(sql), ResultPlacement::Replace, cx);
     }
 
     /// 切换结果集（结果集标签条点击）：选中项只有 `ResultStore` 能改，界面按它重画
@@ -1152,6 +1233,7 @@ impl EventEmitter<BasePanelEvent> for EditorHostPanel {}
 
 /// 执行结论 → 结果记录（视图模型转换，不在这做任何 I/O）
 fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
+    let connection = outcome.connection.clone();
     match outcome.result {
         Ok(data) => ResultEntry::success(
             outcome.document,
@@ -1161,8 +1243,22 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
             data.columns,
             data.rows,
         )
-        .with_affected_rows(data.affected_rows),
-        Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0),
+        .with_affected_rows(data.affected_rows)
+        .with_connection(connection),
+        Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0)
+            .with_connection(connection),
+    }
+}
+
+/// 网格空态文案（没有网格的结果：失败原因 / 写语句都不留空白面板）
+///
+/// 写语句的影响行数已经在工具栏报了（`affected 3 行 · 35 ms`），网格这再说一遍
+/// 只是重复，所以这里只回答“网格为什么是空的”。
+fn empty_text(entry: &ResultEntry) -> String {
+    if entry.affects_rows_only() {
+        "写语句没有结果集".to_string()
+    } else {
+        entry.summary()
     }
 }
 
@@ -1622,27 +1718,6 @@ impl Render for EditorHostPanel {
             row.into_any_element()
         });
 
-        // 结果区：有结果或正在执行时出现（否则不占位置——不显示空壳）
-        let result_summary = match (self.result_visible(), &self.result_summary) {
-            (true, Some(summary)) => Some(summary.clone()),
-            (true, None) => Some("执行中…".to_string()),
-            (false, _) => None,
-        };
-        // 结果集标签条：两份以上结果才画（一份结果不需要切换器）
-        let result_tabs = (result_summary.is_some() && self.result_tabs.len() >= 2).then(|| {
-            let entity = cx.entity();
-            result_sets::render(
-                &self.result_tabs,
-                self.result_active,
-                move |index, _window, app| {
-                    let index = *index;
-                    entity.update(app, |panel, cx| panel.select_result_set(index, cx));
-                },
-                cx,
-            )
-            .into_any_element()
-        });
-
         let mut root = div()
             .v_flex()
             .size_full()
@@ -1680,10 +1755,76 @@ impl Render for EditorHostPanel {
                     .child(SharedString::from(notice)),
             );
         }
-        root = root.child(
+        // 结果区（B5）：有结果或正在执行时才出现（否则不占位置——不显示空壳）
+        let font_size = cx.theme().font_size;
+        let result_pane = self.result_visible().then(|| {
+            let toolbar = result_grid::ResultToolbar {
+                summary: self
+                    .result_summary
+                    .clone()
+                    .unwrap_or_else(|| "执行中…".to_string()),
+                truncated_hint: self.result_truncated_hint.clone(),
+                connection: self.result_connection_text.clone(),
+            };
+            // 结果集标签条：两份以上结果才画（一份结果不需要切换器）
+            let tabs = (self.result_tabs.len() >= 2).then(|| {
+                let entity = cx.entity();
+                result_sets::render(
+                    &self.result_tabs,
+                    self.result_active,
+                    move |index, _window, app| {
+                        let index = *index;
+                        entity.update(app, |panel, cx| panel.select_result_set(index, cx));
+                    },
+                    cx,
+                )
+                .into_any_element()
+            });
+            // 动作：有网格才摆复制（没东西可复制就不摆）；有 SQL 就摆重跑（原位刷新）
+            let copy = self.result_can_copy.then(|| {
+                let entity = cx.entity();
+                Button::new("editor-result-copy")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-result-copy".to_string())
+                    .label("复制")
+                    .on_click(move |_, _window, app| {
+                        entity.update(app, |panel, cx| panel.copy_active_result(cx));
+                    })
+                    .into_any_element()
+            });
+            let refresh = self.result_sql.is_some().then(|| {
+                let entity = cx.entity();
+                Button::new("editor-result-refresh")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-result-refresh".to_string())
+                    .label("⟳ 刷新")
+                    .on_click(move |_, _window, app| {
+                        entity.update(app, |panel, cx| panel.refresh_active_result(cx));
+                    })
+                    .into_any_element()
+            });
+
+            result_grid::render(
+                &self.grid,
+                toolbar,
+                result_grid::ResultControls { copy, refresh },
+                tabs,
+                cx,
+            )
+            .into_any_element()
+        });
+
+        // 编辑区 + 结果区：下半区可拖拽改高（原型 §2.1 ④ 分隔条；拖动条是组件库的
+        // `ResizablePanel`，不手搓鼠标拖拽）。没有结果时只有一个面板，编辑区独占。
+        let mut split = v_resizable("editor-result-split").child(
+            resizable_panel().child(
                 div()
                     .flex_1()
                     .min_h_0()
+                    // 测试按选择器断言“结果区没有把编辑区挤掉”
+                    .debug_selector(|| "editor-code-area".to_string())
                     // 局部内距走 Tailwind 尺度（8px）；结构尺寸才进 ui.rs 常量表
                     .px_2()
                     .child(
@@ -1693,11 +1834,28 @@ impl Render for EditorHostPanel {
                             .readonly(read_only)
                             .size_full(),
                     ),
-            );
-        // 结果区：有结果或正在执行时出现（否则不占位置——不显示空壳）
-        if let Some(summary) = result_summary {
-            root = root.child(result_grid::render(&self.grid, &summary, result_tabs, cx));
+            ),
+        );
+        if let Some(pane) = result_pane {
+            let height = self.result_height.clone();
+            split = split
+                .child(
+                    resizable_panel()
+                        .size(font_size * height.get())
+                        .size_range(
+                            font_size * ui::RESULT_MIN_HEIGHT..font_size * ui::RESULT_MAX_HEIGHT,
+                        )
+                        .flex_none()
+                        .child(pane),
+                )
+                // 拖到哪就记到哪：下一次渲染用它当初始尺寸（同一面板内记得住）
+                .on_resize(move |state, _window, app| {
+                    if let Some(last) = state.read(app).sizes().last() {
+                        height.set(last.as_f32() / app.theme().font_size.as_f32());
+                    }
+                });
         }
+        root = root.child(split);
         root.child(status_bar::render(
             &status,
             status_bar::StatusControls {

@@ -24,13 +24,16 @@ pub const EDITOR_MIN_HEIGHT: f32 = 6.0;
 /// 状态点直径（0.375rem = 6px）：标签脏点与结果集失败点共用一档
 pub const STATUS_DOT_SIZE: f32 = 0.375;
 
-/// 结果区高度（18rem = 288px）
+/// 结果区默认高度（18rem = 288px；可拖拽后以用户拖到的高度为准）
 ///
-/// 1a 固定高度（可拖拽分栏属 1b）：结果区出现/消失时编辑区高度会跳一下，
-/// 但比“按比例分栏”在无结果时不占位更符合“只显示真实内容”。
+/// 结果区出现/消失时编辑区高度会跳一下，但比“按比例分栏”在无结果时不占位更符合
+/// “只显示真实内容”。拖拽改高走组件库的 `ResizablePanel`（不手搓拖动条）。
 pub const RESULT_PANE_HEIGHT: f32 = 18.0;
 
-/// 结果区状态行高（1.5rem = 24px，与编辑器状态栏同档）
+/// 结果区可拖拽的最大高度（48rem = 768px：再高编辑区就没地方了）
+pub const RESULT_MAX_HEIGHT: f32 = 48.0;
+
+/// 结果区状态行高（1.5rem = 24px，与编辑器状态栏同档；结果工具栏同高）
 pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 
 /// 结果集标签条高（1.5rem = 24px，与状态行同档；TabBar 的 Small 档就是这个高）
@@ -45,5 +48,7 @@ pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(64.);
 /// 结果网格列名行高（2rem = 32px）
 pub const RESULT_HEADER_HEIGHT: f32 = 2.0;
 
-/// 结果区最小高度（防止被压成 0）
-pub const RESULT_MIN_HEIGHT: f32 = 4.0;
+/// 结果区最小高度（7rem = 112px：工具栏 24 + 多结果时的标签条 24 + 至少两行网格）
+///
+/// 拖拽不许把它压得比这更小——再小就只剩一条工具栏，看不出自己看的是哪份结果。
+pub const RESULT_MIN_HEIGHT: f32 = 7.0;

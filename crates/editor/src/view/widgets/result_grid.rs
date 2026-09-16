@@ -1,14 +1,20 @@
-//! 结果网格（A14 最小版）
+//! 结果网格（A14 最小版 + B5 工具栏）
 //!
 //! 网格本身用组件库的 `DataTable` + `TableState`（虚拟滚动、列宽拖拽、排序钩子都是现成的，
-//! 不手搓——对齐项目「组件优先」规范）。本文件只做两件事：
+//! 不手搓——对齐项目「组件优先」规范）。本文件只做三件事：
 //!
 //! 1. **把结果变成列与行**（[`ResultGridDelegate`]）：纯数据 + 单元格渲染；
-//! 2. **把空态说清楚**：没有结果、执行失败时都不留空白面板（"按了没反应"的另一面）。
+//! 2. **把空态说清楚**：没有结果、执行失败、写语句都不留空白面板（“按了没反应”的另一面）；
+//! 3. **结果工具栏**（[`ResultToolbar`] + [`ResultControls`]）：左段报真实数字（行数 × 列数 · 耗时 /
+//!    影响 N 行 / 失败原因 + 截断提示），右段是动作（复制 / 刷新）。
+//!
+//! 原型 §2.2 的工具栏还包含**筛选 · 下发开关 · 分析 · 导出**——它们各自属 B15 / B14 / B7，
+//! **没实现就不摆按钮**（“只宣传不实现”的入口不允许存在）。
 //!
 //! 数据源是 [`crate::store::ResultStore`]（结果唯一权威）。网格**不持有真值**——
 //! delegate 里的行是从权威那里拷来的投影，`set_data` 是唯一的写入点。
 
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableState};
@@ -133,6 +139,35 @@ impl TableDelegate for ResultGridDelegate {
     }
 }
 
+/// 结果工具栏的左段输入（除了 `summary` 都是可选真值：没有就不显示）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultToolbar {
+    /// 摘要（`N 行 × M 列 · 12 ms` / `影响 N 行 · 12 ms` / 失败原因）
+    pub summary: String,
+    /// 截断提示（达到驱动行数上限才有；`None` = 没被截断）
+    pub truncated_hint: Option<String>,
+    /// 来源连接文案（`●P·orders`；`None` = 没绑定或不认得）
+    pub connection: Option<String>,
+}
+
+/// 结果工具栏右段的动作控件（由面板构造：它知道点击该干什么）
+///
+/// 与状态栏的 `StatusControls` 同口径：文案交给可穷举的纯函数，控件交给面板。
+#[derive(Default)]
+pub struct ResultControls {
+    /// 复制当前结果集（TSV）
+    pub copy: Option<AnyElement>,
+    /// 重跑当前结果集的 SQL（结果集换一份新的，不是新开一份）
+    pub refresh: Option<AnyElement>,
+}
+
+/// 截断提示文案（达到驱动行数上限时：说清楚看到的是前多少行）
+///
+/// 只报**我们真拿到多少行**；上限是驱动侧的事（`engine` 侧 10000 行），编辑器不猜那个数。
+pub fn truncated_hint(rows: usize) -> String {
+    format!("已截断：只拿到前 {rows} 行")
+}
+
 /// 建一个结果表状态（面板构造时一次；结果变化用 `refresh` 而不是重建）
 pub fn new_table_state(
     delegate: ResultGridDelegate,
@@ -147,37 +182,65 @@ pub fn new_table_state(
     })
 }
 
-/// 渲染结果区（顶部可带结果集标签条 + 状态行 + 网格）
+/// 渲染结果区（顶部可带结果集标签条 + 工具栏 + 网格）
 ///
 /// `tabs` 由宿主填（它知道当前文档有几份结果、选中哪份）：一份结果时传 `None`，
 /// 那一排标签只会白占一行（原型 §2.4 的标签条是“多结果”才需要的切换器）。
+/// **高度不在这里定**：结果区是 `ResizablePanel` 的一个面板（可拖拽），
+/// 它的高度由分栏给出——这里只保证自己撑满那个面板。
 pub fn render(
     state: &Entity<TableState<ResultGridDelegate>>,
-    summary: &str,
+    toolbar: ResultToolbar,
+    controls: ResultControls,
     tabs: Option<AnyElement>,
     cx: &App,
 ) -> impl IntoElement {
-    let muted = cx.theme().colors.muted_foreground;
-    let border = cx.theme().colors.border;
+    let theme = cx.theme();
+    let muted = theme.colors.muted_foreground;
+    let warning = theme.colors.warning;
 
     div()
         .v_flex()
         .w_full()
-        .h(rems(ui::RESULT_PANE_HEIGHT))
-        .min_h(rems(ui::RESULT_MIN_HEIGHT))
-        .border_t(ui::HAIRLINE)
-        .border_color(border)
-        .children(tabs)
+        .h_full()
+        .min_h_0()
+        // 测试按选择器断言“结果区在不在、多高”：分栏是结构，不是装饰
+        .debug_selector(|| "editor-result-pane".to_string())
         .child(
             div()
                 .h_flex()
                 .items_center()
+                .justify_between()
+                .gap_2()
                 .px_2()
                 .h(rems(ui::RESULT_STATUS_BAR_HEIGHT))
                 .text_xs()
                 .text_color(muted)
-                .child(SharedString::from(summary.to_string())),
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .min_w_0()
+                        .child(SharedString::from(toolbar.summary))
+                        .when_some(toolbar.connection, |row, connection| {
+                            row.child(SharedString::from(connection))
+                        })
+                        // 截断是一个**警告**（数据不完整），不是普通说明文字
+                        .when_some(toolbar.truncated_hint, |row, hint| {
+                            row.child(div().text_color(warning).child(SharedString::from(hint)))
+                        }),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_1()
+                        .children(controls.copy)
+                        .children(controls.refresh),
+                ),
         )
+        .children(tabs)
         .child(
             div()
                 .flex_1()
@@ -189,7 +252,7 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::ResultGridDelegate;
+    use super::{ResultGridDelegate, ResultToolbar, truncated_hint};
     use gpui_kit::App;
     use gpui_kit::component::table::TableDelegate as _;
 
@@ -237,5 +300,23 @@ mod tests {
             assert_eq!(grid.columns_count(cx), 2);
             assert_eq!(grid.rows_count(cx), 2);
         });
+    }
+
+    /// 截断提示把“真拿到多少行”说出来
+    #[test]
+    fn truncation_hint_names_the_real_row_count() {
+        let hint = truncated_hint(10_000);
+        assert!(hint.contains("前 10000 行"), "{hint}");
+    }
+
+    /// 工具栏左段没有可选值时不该出现占位（连接没绑就不显示那一段）
+    #[test]
+    fn toolbar_inputs_are_optional_truth() {
+        let bare = ResultToolbar {
+            summary: "1 行 × 1 列 · 2 ms".to_string(),
+            truncated_hint: None,
+            connection: None,
+        };
+        assert!(bare.truncated_hint.is_none() && bare.connection.is_none());
     }
 }
