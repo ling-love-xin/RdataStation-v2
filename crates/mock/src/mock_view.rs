@@ -57,9 +57,13 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::*;
 
+use crate::MockEngine;
 use crate::generator_catalog::{self, GeneratorCategory, GeneratorSpec, ParamField, ParamKind};
 use crate::history::{self, HistoryAction, RunRecord};
-use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
+use crate::models::{
+    ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockExportFormat,
+    ReferenceDomain, ScenarioTemplate,
+};
 use crate::persistence::{
     MockGenerationDetail, MockGenerationTask, MockTemplateColumn, MockUserTemplate,
 };
@@ -174,8 +178,11 @@ pub enum MockJobKind {
     Generate,
     /// 生成后追加到既有分析表（自增起点按表内行数接续）
     AppendTo(String),
-    /// 场景模板：按模板一次生成多张临时表（**不写库**；逐表进度）
-    Scenario(String),
+    /// 场景模板：按工作副本一次生成多张临时表（**不写库**；逐表进度）
+    ///
+    /// 带的是**编辑过的模板**（关系挂在列的 `dependency` 上），不是模板 id：
+    /// 用户改完关系直接生成，再去引擎按 id 重取会丢掉编辑。
+    Scenario(Box<ScenarioTemplate>),
     /// 出口：把已生成结果持久化为分析库**新表**（同名已存在 → `Err`）
     Persist(MockGenInfo),
     /// 出口：把已生成结果导出为文件（路径由调用方在系统对话框里选好）
@@ -242,7 +249,7 @@ impl MockJobKind {
         match self {
             Self::Generate => "生成中…".to_string(),
             Self::AppendTo(table) => format!("生成并追加到 {table} 中…"),
-            Self::Scenario(_) => "按场景模板生成中…".to_string(),
+            Self::Scenario(template) => format!("按场景模板「{}」生成中…", template.name),
             Self::Persist(info) => format!(
                 "写入项目分析库中…（{} 行）",
                 with_thousands(info.row_count as u64)
@@ -1084,6 +1091,12 @@ pub struct MockPanel {
     existing_tables: Vec<String>,
     /// 内置场景模板清单（构造时算一次；见 [`ScenarioChoice`]）
     scenario_templates: Vec<ScenarioChoice>,
+    /// 场景工作副本：选模板后进入**可编辑**态（改完关系再生成）；`None` = 单表态。
+    ///
+    /// 关系就在模板各列的 `dependency` 上（单一权威），这里不另存一份关系清单。
+    scenario: Option<ScenarioTemplate>,
+    /// 「加关系」对话框里正在选的四个位置（都是名字；空 = 未选）。
+    relation_pick: Rc<RefCell<RelationPick>>,
     table_input: Option<Entity<InputState>>,
     /// 待写入表名输入的值（事件路径置位，下一帧渲染时落地）
     table_pending: Option<String>,
@@ -1179,6 +1192,38 @@ impl ScenarioChoice {
     }
 }
 
+/// 场景态里的一条表间关系（渲染与测试用的**派生视图**：真身在列的 `dependency` 上）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScenarioRelation {
+    /// 子表（持有外键列的表）
+    pub child_table: String,
+    /// 子列（外键列）
+    pub child_column: String,
+    /// 父表（被引用的表）
+    pub parent_table: String,
+    /// 父列（被引用的列，目前只支持自增主键）
+    pub parent_column: String,
+}
+
+impl ScenarioRelation {
+    /// 文案：`orders.user_id → users.id`。
+    pub fn label(&self) -> String {
+        format!(
+            "{}.{} → {}.{}",
+            self.child_table, self.child_column, self.parent_table, self.parent_column
+        )
+    }
+}
+
+/// 「加关系」对话框里正在选的四个位置（都是名字；`None` = 未选）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RelationPick {
+    child_table: Option<String>,
+    child_column: Option<String>,
+    parent_table: Option<String>,
+    parent_column: Option<String>,
+}
+
 /// 内置场景模板的轻量清单（构造面板时取一次）。
 fn builtin_scenario_choices() -> Vec<ScenarioChoice> {
     crate::templates::get_builtin_templates()
@@ -1208,6 +1253,8 @@ impl MockPanel {
             sources: Vec::new(),
             existing_tables: Vec::new(),
             scenario_templates: builtin_scenario_choices(),
+            scenario: None,
+            relation_pick: Rc::new(RefCell::new(RelationPick::default())),
             table_input: None,
             table_pending: None,
             rows_input: None,
@@ -1586,12 +1633,407 @@ impl MockPanel {
         self.start_job(MockJobKind::Generate, cx);
     }
 
-    /// 场景模板：一次生成多张临时表（**不写库**；逐表进度）。
+    /// 场景模板：把模板**载入为可编辑的工作副本**（不立即生成）。
     ///
-    /// 与单表生成的差别：目标表 / 列 / 行数全来自模板，**草稿不参与也不被改写**——
-    /// 结果是多张表（`results`），出口作用于当前选中的那张（见 `select_result`）。
-    pub fn run_scenario(&mut self, template_id: String, cx: &mut Context<Self>) {
-        self.start_job(MockJobKind::Scenario(template_id), cx);
+    /// 为何不选即生成：用户要能先看到「本次要生成哪几张表」、并把表间关系调好，
+    /// 再开始生成（关系是这次生成的一部分，不能生成完再补——那就要去改已落地的数据了）。
+    pub fn open_scenario(&mut self, template_id: &str, cx: &mut Context<Self>) {
+        if self.is_running() {
+            self.fail("已有任务在进行中（请等它结束或先取消）", cx);
+            return;
+        }
+        let Some(template) = crate::templates::get_template_by_id(template_id) else {
+            self.fail(format!("场景模板不存在：{template_id}"), cx);
+            return;
+        };
+        self.load_scenario(template, cx);
+    }
+
+    /// 载入场景工作副本（[`Self::open_scenario`] 按 id 取到模板后调它；测试直接给模板）。
+    pub(crate) fn load_scenario(&mut self, template: ScenarioTemplate, cx: &mut Context<Self>) {
+        self.scenario = Some(template);
+        *self.relation_pick.borrow_mut() = RelationPick::default();
+        self.error = None;
+        self.outcome = None;
+        cx.notify();
+    }
+
+    /// 退出场景态（丢弃工作副本，草稿与已有结果不受影响）。
+    pub fn close_scenario(&mut self, cx: &mut Context<Self>) {
+        self.scenario = None;
+        *self.relation_pick.borrow_mut() = RelationPick::default();
+        cx.notify();
+    }
+
+    /// 场景态下的「生成」（后台任务：一次产出模板里的全部表；**不写库**）。
+    pub fn run_scenario(&mut self, cx: &mut Context<Self>) {
+        let Some(template) = self.scenario.clone() else {
+            self.fail("先选一套场景模板", cx);
+            return;
+        };
+        // 生成前校验引用（父表 / 父列不合适就不提交；错误在面板上就地显示）
+        if let Err(e) = MockEngine::resolve_reference_domains(&template) {
+            self.fail(format!("表间关系有问题：{e}"), cx);
+            return;
+        }
+        self.start_job(MockJobKind::Scenario(Box::new(template)), cx);
+    }
+
+    /// 场景工作副本（`None` = 单表态）。
+    pub fn scenario(&self) -> Option<&ScenarioTemplate> {
+        self.scenario.as_ref()
+    }
+
+    /// 工作副本里的表间关系（派生视图：扫列上的 `dependency`，不另存清单）。
+    pub fn scenario_relations(&self) -> Vec<ScenarioRelation> {
+        let Some(template) = self.scenario.as_ref() else {
+            return Vec::new();
+        };
+        template
+            .tables
+            .iter()
+            .flat_map(|table| {
+                table.columns.iter().filter_map(move |col| {
+                    let dep = col.dependency.as_ref()?;
+                    if !dep.is_foreign_key() {
+                        return None;
+                    }
+                    Some(ScenarioRelation {
+                        child_table: table.name.clone(),
+                        child_column: col.name.clone(),
+                        parent_table: dep.ref_table.clone().unwrap_or_default(),
+                        parent_column: dep.ref_column.clone().unwrap_or_default(),
+                    })
+                })
+            })
+            .collect()
+    }
+
+    /// 打开「加关系」对话框（子表.列 → 父表.列）。
+    ///
+    /// 父列只列**自增列**：只有它能算出取值域，其他列在引擎侧会被拒——
+    /// 把不能选的东西藏起来，比先让用户选完再报错好。
+    pub fn open_relation_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(template) = self.scenario.clone() else {
+            self.fail("先选一套场景模板", cx);
+            return;
+        };
+        // 每次打开都从「未选」开始：上一次的选择带到下一次容易误改
+        *self.relation_pick.borrow_mut() = RelationPick::default();
+        let pick = self.relation_pick.clone();
+        let panel = cx.entity();
+        let template = Rc::new(template);
+
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let theme = cx.theme();
+            let muted = theme.colors.muted_foreground;
+            let warning = theme.colors.warning;
+            let current = pick.borrow().clone();
+            let table_names: Vec<String> =
+                template.tables.iter().map(|t| t.name.clone()).collect();
+            let child_columns: Vec<String> = current
+                .child_table
+                .as_deref()
+                .and_then(|name| template.tables.iter().find(|t| t.name == name))
+                .map(|t| t.columns.iter().map(|c| c.name.clone()).collect())
+                .unwrap_or_default();
+            let parent_columns: Vec<String> = current
+                .parent_table
+                .as_deref()
+                .and_then(|name| template.tables.iter().find(|t| t.name == name))
+                .map(|t| {
+                    t.columns
+                        .iter()
+                        .filter(|c| matches!(c.generator, GeneratorConfig::AutoIncrement { .. }))
+                        .map(|c| c.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // 一个下拉行：标签 + 当前值按钮 + 菜单
+            let row = |id: &'static str,
+                       label: &'static str,
+                       current: Option<&String>,
+                       placeholder: &'static str,
+                       items: Vec<String>,
+                       empty_note: &'static str,
+                       on_pick: Rc<dyn Fn(String, &mut App)>| {
+                let pick_for_menu = on_pick.clone();
+                let text = match current {
+                    Some(value) => format!("{value} ▾"),
+                    None => format!("{placeholder} ▾"),
+                };
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .w(rems(4.0))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(label),
+                    )
+                    .child(
+                        Button::new(id)
+                            .ghost()
+                            .label(text)
+                            .dropdown_menu(move |menu, _window, _cx| {
+                                let mut menu = menu;
+                                if items.is_empty() {
+                                    return menu.item(PopupMenuItem::new(empty_note).disabled(true));
+                                }
+                                for item in items.iter() {
+                                    let value = item.clone();
+                                    let pick_for_item = pick_for_menu.clone();
+                                    menu = menu.item(PopupMenuItem::new(item.clone()).on_click(
+                                        move |_, _, app| pick_for_item(value.clone(), app),
+                                    ));
+                                }
+                                menu
+                            }),
+                    )
+            };
+
+            // 每个下拉的点击：改工作选择，再请面板重绘（对话框由窗口重绘时重建）
+            let pick_child_table = pick.clone();
+            let panel_child_table = panel.clone();
+            let on_child_table = Rc::new(move |value: String, app: &mut App| {
+                let mut pick = pick_child_table.borrow_mut();
+                pick.child_table = Some(value);
+                pick.child_column = None;
+                drop(pick);
+                panel_child_table.update(app, |_, cx| cx.notify());
+            });
+            let pick_child_column = pick.clone();
+            let panel_child_column = panel.clone();
+            let on_child_column = Rc::new(move |value: String, app: &mut App| {
+                pick_child_column.borrow_mut().child_column = Some(value);
+                panel_child_column.update(app, |_, cx| cx.notify());
+            });
+            let pick_parent_table = pick.clone();
+            let panel_parent_table = panel.clone();
+            let on_parent_table = Rc::new(move |value: String, app: &mut App| {
+                let mut pick = pick_parent_table.borrow_mut();
+                pick.parent_table = Some(value);
+                pick.parent_column = None;
+                drop(pick);
+                panel_parent_table.update(app, |_, cx| cx.notify());
+            });
+            let pick_parent_column = pick.clone();
+            let panel_parent_column = panel.clone();
+            let on_parent_column = Rc::new(move |value: String, app: &mut App| {
+                pick_parent_column.borrow_mut().parent_column = Some(value);
+                panel_parent_column.update(app, |_, cx| cx.notify());
+            });
+
+            let ready = current.child_table.is_some()
+                && current.child_column.is_some()
+                && current.parent_column.is_some();
+            let mut body = div()
+                .v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("引用只在**本次多表生成**内成立：值取自父表主键的取值域（由自增参数与行数算出）。"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("不读已落地的数据，也不修改已生成的表 / 文件。"),
+                )
+                .child(row(
+                    "mock-relation-child-table",
+                    "子表",
+                    current.child_table.as_ref(),
+                    "选择子表",
+                    table_names.clone(),
+                    "（模板里没有表）",
+                    on_child_table,
+                ))
+                .child(row(
+                    "mock-relation-child-column",
+                    "子列",
+                    current.child_column.as_ref(),
+                    "选择子列",
+                    child_columns,
+                    "（先选子表）",
+                    on_child_column,
+                ))
+                .child(row(
+                    "mock-relation-parent-table",
+                    "父表",
+                    current.parent_table.as_ref(),
+                    "选择父表",
+                    table_names,
+                    "（模板里没有表）",
+                    on_parent_table,
+                ))
+                .child(row(
+                    "mock-relation-parent-column",
+                    "父列",
+                    current.parent_column.as_ref(),
+                    "选择父列",
+                    parent_columns.clone(),
+                    "（先选父表）",
+                    on_parent_column,
+                ));
+            if current.parent_table.is_some() && parent_columns.is_empty() {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(warning)
+                        .child("这张表没有自增主键列——引用目标只能是自增列（域算得出才不用去读数据）"),
+                );
+            }
+
+            let cancel_panel = panel.clone();
+            let ok_panel = panel.clone();
+            dialog.title("加表间关系").child(body).footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("mock-relation-cancel")
+                            .secondary()
+                            .label("取消")
+                            .on_click(move |_, window, app| {
+                                let _ = cancel_panel.update(app, |panel, cx| {
+                                    *panel.relation_pick.borrow_mut() = RelationPick::default();
+                                    cx.notify();
+                                });
+                                window.close_dialog(app);
+                            }),
+                    )
+                    .child({
+                        let mut ok = Button::new("mock-relation-ok")
+                            .with_variant(ButtonVariant::Primary)
+                            .label("添加")
+                            .disabled(!ready);
+                        if ready {
+                            ok = ok.on_click(move |_, window, app| {
+                                let _ = ok_panel.update(app, |panel, cx| panel.add_relation(cx));
+                                window.close_dialog(app);
+                            });
+                        }
+                        ok
+                    }),
+            )
+        });
+    }
+
+    /// 把对话框里选好的四个位置写成一条关系（挂在子列上）。
+    ///
+    /// 同时把该列的 `generator` **对齐到父域**：单表生成时按它取值，
+    /// 域必须落在父域内（否则同一列换个入口就产出不一样的值）。
+    fn add_relation(&mut self, cx: &mut Context<Self>) {
+        let pick = self.relation_pick.borrow().clone();
+        let (Some(child_table), Some(child_column), Some(parent_table), Some(parent_column)) = (
+            pick.child_table,
+            pick.child_column,
+            pick.parent_table,
+            pick.parent_column,
+        ) else {
+            self.fail("子表 / 子列 / 父表 / 父列都要选", cx);
+            return;
+        };
+
+        let mut problem: Option<String> = None;
+        let mut message = String::new();
+        if let Some(template) = self.scenario.as_mut() {
+            let domain = template
+                .tables
+                .iter()
+                .find(|t| t.name == parent_table)
+                .and_then(|parent| {
+                    let column = parent.columns.iter().find(|c| c.name == parent_column)?;
+                    let GeneratorConfig::AutoIncrement { start, step } = column.generator else {
+                        return None;
+                    };
+                    Some(ReferenceDomain {
+                        table: parent_table.clone(),
+                        column: parent_column.clone(),
+                        first: i64::from(start),
+                        step: i64::from(step),
+                        count: parent.row_count,
+                    })
+                });
+            match domain {
+                None => {
+                    problem = Some(format!(
+                        "{parent_table}.{parent_column} 不能作引用目标（只支持自增主键列）"
+                    ));
+                }
+                Some(domain) => {
+                    let child = template
+                        .tables
+                        .iter_mut()
+                        .find(|t| t.name == child_table)
+                        .and_then(|t| t.columns.iter_mut().find(|c| c.name == child_column));
+                    match child {
+                        None => {
+                            problem = Some(format!("子表 {child_table} 没有列 {child_column}"));
+                        }
+                        Some(column) => {
+                            column.dependency =
+                                Some(ColumnDependency::foreign_key(&parent_table, &parent_column));
+                            column.generator = GeneratorConfig::RandomInt {
+                                min: domain.first as i32,
+                                max: domain.last() as i32,
+                            };
+                            message = format!(
+                                "已加关系 {child_table}.{child_column} → {}",
+                                domain.label()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // 提交前再校一遍：同一列被指向两张表之类的问题在这里就能看出来。
+        // 不覆盖已有问题：用户刚做的动作报出来的原因（父列不可用）比它的下游后果更直接。
+        if problem.is_none() {
+            let check = match self.scenario.as_ref() {
+                Some(template) => MockEngine::resolve_reference_domains(template).err(),
+                None => None,
+            };
+            if let Some(e) = check {
+                problem = Some(format!("表间关系有问题：{e}"));
+            }
+        }
+        *self.relation_pick.borrow_mut() = RelationPick::default();
+        match problem {
+            Some(problem) => self.fail(problem, cx),
+            None => self.succeed(message, cx),
+        }
+    }
+
+    /// 删一条关系（只拆引用；该列的生成器保留，它现在是普通随机列）。
+    pub fn remove_relation(
+        &mut self,
+        child_table: &str,
+        child_column: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mut removed = false;
+        if let Some(template) = self.scenario.as_mut() {
+            if let Some(column) = template
+                .tables
+                .iter_mut()
+                .find(|t| t.name == child_table)
+                .and_then(|t| t.columns.iter_mut().find(|c| c.name == child_column))
+            {
+                removed = column.dependency.take().is_some();
+            }
+        }
+        if removed {
+            self.outcome = Some(format!("已删除关系 {child_table}.{child_column}"));
+            self.error = None;
+            cx.notify();
+        }
     }
 
     /// 切换当前选中的结果表（场景生成后不止一张）。
@@ -2259,7 +2701,7 @@ impl MockPanel {
                         menu = menu.item(PopupMenuItem::new(choice.menu_label()).on_click(
                             move |_, _, app| {
                                 let id = id.clone();
-                                entity.update(app, |panel, cx| panel.run_scenario(id, cx));
+                                entity.update(app, |panel, cx| panel.open_scenario(&id, cx));
                             },
                         ));
                     }
@@ -2268,13 +2710,168 @@ impl MockPanel {
         };
 
         // 生成行：单表生成（主按钮，占满剩余宽度）+ 场景模板（多表一键生成）
-        let generate_row = div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(div().flex_1().min_w_0().child(generate))
-            .child(scenario);
+        //
+        // 场景态下换成「生成场景 / 退出」：两套「生成」同时摆在台上会让人分不清
+        // 到底是生单表还是生一批。
+        let generate_row = {
+            let mut row = div().h_flex().items_center().gap_2().w_full();
+            if let Some(template) = self.scenario.clone() {
+                let start = {
+                    let entity = cx.entity();
+                    let mut button =
+                        Button::new("mock-scenario-generate")
+                            .primary()
+                            .label(if generating {
+                                "生成中…".to_string()
+                            } else {
+                                format!("生成 {} 张表", template.tables.len())
+                            });
+                    if !running {
+                        button = button.on_click(move |_, _, app| {
+                            entity.update(app, |panel, cx| panel.run_scenario(cx));
+                        });
+                    }
+                    button
+                };
+                let exit = {
+                    let entity = cx.entity();
+                    let mut button = Button::new("mock-scenario-exit")
+                        .secondary()
+                        .label("退出场景")
+                        .disabled(running);
+                    if !running {
+                        button = button.on_click(move |_, _, app| {
+                            entity.update(app, |panel, cx| panel.close_scenario(cx));
+                        });
+                    }
+                    button
+                };
+                row = row
+                    .child(div().flex_1().min_w_0().child(start))
+                    .child(div().flex_none().child(exit));
+            } else {
+                row = row
+                    .child(div().flex_1().min_w_0().child(generate))
+                    .child(scenario);
+            }
+            row
+        };
+
+        // 场景态：本次要生成的表 + 表间关系（可增删）；单表态下整体为空
+        let scenario_block =
+            {
+                let fg = cx.theme().colors.foreground;
+                let mut block = div().v_flex().gap_1().w_full();
+                if let Some(template) = self.scenario.clone() {
+                    let total_rows: u32 = template.tables.iter().map(|t| t.row_count).sum();
+                    block = block.child(div().text_xs().text_color(muted).text_ellipsis().child(
+                        format!(
+                            "本次生成（{} 张表 · {} 行）· {}",
+                            template.tables.len(),
+                            with_thousands(total_rows as u64),
+                            template.name
+                        ),
+                    ));
+                    for table in template.tables.iter() {
+                        block = block.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .w_full()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_xs()
+                                        .text_color(fg)
+                                        .text_ellipsis()
+                                        .child(table.name.clone()),
+                                )
+                                .child(div().flex_none().text_xs().text_color(muted).child(
+                                    format!("{} 行", with_thousands(u64::from(table.row_count))),
+                                )),
+                        );
+                    }
+
+                    let relations = self.scenario_relations();
+                    block = block.child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("表间关系（{} 条）", relations.len())),
+                    );
+                    if relations.is_empty() {
+                        block = block.child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child("还没有关系：加一条，子表的列就从父表主键域取值"),
+                        );
+                    }
+                    for relation in relations {
+                        let remove = {
+                            let entity = cx.entity();
+                            let child_table = relation.child_table.clone();
+                            let child_column = relation.child_column.clone();
+                            Button::new(ElementId::Name(SharedString::from(format!(
+                                "mock-relation-remove-{}-{}",
+                                child_table, child_column
+                            ))))
+                            .ghost()
+                            .xsmall()
+                            .label("删除")
+                            .on_click(move |_, _, app| {
+                                let child_table = child_table.clone();
+                                let child_column = child_column.clone();
+                                entity.update(app, |panel, cx| {
+                                    panel.remove_relation(&child_table, &child_column, cx);
+                                });
+                            })
+                        };
+                        block = block.child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .gap_2()
+                                .w_full()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_xs()
+                                        .text_color(fg)
+                                        .text_ellipsis()
+                                        .child(relation.label()),
+                                )
+                                .child(remove),
+                        );
+                    }
+
+                    let add = {
+                        let entity = cx.entity();
+                        let mut button = Button::new("mock-add-relation")
+                            .secondary()
+                            .xsmall()
+                            .label("＋ 加关系")
+                            .disabled(running);
+                        if !running {
+                            button = button.on_click(move |_, window, app| {
+                                entity.update(app, |panel, cx| {
+                                    panel.open_relation_dialog(window, cx);
+                                });
+                            });
+                        }
+                        button
+                    };
+                    block = block
+                        .child(add)
+                        .child(div().text_xs().text_color(muted).child(
+                            "关系只在本次多表生成内成立：不读已有数据，也不改已生成的表 / 文件",
+                        ));
+                }
+                block
+            };
 
         // 任务进行中：进度条（组件，不手搓）+ 量纲文案 + 取消
         let job_row = self.render_job_row(cx);
@@ -2426,6 +3023,7 @@ impl MockPanel {
                     .child(add_btn),
             )
             .child(generate_row)
+            .child(scenario_block)
             .child(job_row);
 
         // 结果表多于一张（场景模板）时先选「当前表」：出口、详情、预览都看它

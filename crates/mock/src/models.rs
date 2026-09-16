@@ -556,6 +556,28 @@ pub struct ColumnDependency {
     pub weights: Option<Vec<(String, f64)>>,
 }
 
+impl ColumnDependency {
+    /// 跨表引用（`ref_table` / `ref_column`）——**唯一构造点**。
+    ///
+    /// 内置模板、用户自定义关系、测试都走它，避免各处手写同一组字段
+    /// （漏设一个字段就变成“看着像引用、实际没人读得懂”）。
+    pub fn foreign_key(table: &str, column: &str) -> Self {
+        Self {
+            dep_type: DependencyType::ForeignKey,
+            source_columns: Vec::new(),
+            expression: None,
+            ref_table: Some(table.to_string()),
+            ref_column: Some(column.to_string()),
+            weights: None,
+        }
+    }
+
+    /// 是否是一条跨表引用。
+    pub fn is_foreign_key(&self) -> bool {
+        matches!(self.dep_type, DependencyType::ForeignKey)
+    }
+}
+
 // ==================== 表间引用（场景生成用） ====================
 
 /// 一张表的某个主键列在**本次生成**中的取值域（供子表引用采样）。

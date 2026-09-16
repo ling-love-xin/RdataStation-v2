@@ -1,25 +1,6 @@
 use crate::models::{
-    ColumnDataType, ColumnDef, ColumnDependency, DependencyType, GeneratorConfig, ScenarioTemplate,
-    TemplateTable,
+    ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, ScenarioTemplate, TemplateTable,
 };
-
-/// 跨表引用声明（关系在本模块的**唯一表达处**：挂在列上，而不是模板或任务载荷上）。
-///
-/// - `ref_table` / `ref_column`：父表与父列。父表必须在同一模板里；**不要求排在子表之前**
-///   （取值域由模板参数算出，与“哪张表先跑”无关），引用自身（自关联）也允许；
-/// - 父列必须是自增主键：域 = `[start, start + step×(行数-1)]`，**不读任何已生成的数据**；
-/// - 该列自己的 `generator` 仍要填，且取值域必须**落在父域内**（本模块的自检测试锁定）：
-///   场景生成走父域采样；单表生成没有父表上下文，就按它取值。
-fn foreign_key(parent_table: &str, parent_column: &str) -> ColumnDependency {
-    ColumnDependency {
-        dep_type: DependencyType::ForeignKey,
-        source_columns: Vec::new(),
-        expression: None,
-        ref_table: Some(parent_table.to_string()),
-        ref_column: Some(parent_column.to_string()),
-        weights: None,
-    }
-}
 
 macro_rules! col {
     ($name:expr, $data_type:expr, $gen:expr) => {
@@ -56,6 +37,10 @@ macro_rules! col {
 
 /// 引用列：`col_ref!(列名, 类型, 生成器, "父表", "父列")`；末位可缀 `nullable`。
 ///
+/// 关系挂在列上（`ColumnDependency::foreign_key`），是本模块表达关系的**唯一处**：
+/// 父表必须在同一模板里，**不要求排在子表之前**（域由模板参数算出，与“哪张表先跑”无关），
+/// 引用自身（自关联）也允许。
+///
 /// `generator` 不是冗余：它是**没有父表上下文**（单表生成）时的取值方式，
 /// 取值域必须落在父域内（自检测试锁定这一点）。
 macro_rules! col_ref {
@@ -66,7 +51,7 @@ macro_rules! col_ref {
             generator: $gen,
             nullable_ratio: 0.0,
             unique: false,
-            dependency: Some(foreign_key($parent, $parent_col)),
+            dependency: Some(ColumnDependency::foreign_key($parent, $parent_col)),
         }
     };
     ($name:expr, $data_type:expr, $gen:expr, $parent:expr, $parent_col:expr, nullable) => {
@@ -76,7 +61,7 @@ macro_rules! col_ref {
             generator: $gen,
             nullable_ratio: 0.3,
             unique: false,
-            dependency: Some(foreign_key($parent, $parent_col)),
+            dependency: Some(ColumnDependency::foreign_key($parent, $parent_col)),
         }
     };
 }
@@ -1658,7 +1643,7 @@ mod tests {
     fn is_reference(col: &ColumnDef) -> bool {
         col.dependency
             .as_ref()
-            .is_some_and(|dep| matches!(dep.dep_type, DependencyType::ForeignKey))
+            .is_some_and(ColumnDependency::is_foreign_key)
     }
 
     /// 模板里全部 `(子表, 列, 父表, 父列)` 引用声明。

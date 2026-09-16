@@ -21,12 +21,16 @@ use gpui_kit::{
 use super::{
     HistoryReply, MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockJobDone,
     MockJobKind, MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview,
-    MockRunOptions, SchemaRequest, SchemaSource, focus_detail_tab, param_text, parse_percent_ratio,
-    parse_rows, parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
+    MockRunOptions, RelationPick, ScenarioRelation, SchemaRequest, SchemaSource, focus_detail_tab,
+    param_text, parse_percent_ratio, parse_rows, parse_seed, patch_param, search_generators,
+    summarize_params, validate_table_name,
 };
 use crate::generator_catalog::{self, ParamKind};
 use crate::history;
-use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
+use crate::models::{
+    ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockExportFormat,
+    ScenarioTemplate, TemplateTable,
+};
 use crate::persistence::{
     MockGenerationColumn, MockGenerationDetail, MockGenerationTask, MockTemplateColumn,
     MockUserTemplate,
@@ -393,6 +397,8 @@ struct Recorder {
     appended: RefCell<Vec<String>>,
     /// 提交过的场景模板 id
     scenarios: RefCell<Vec<String>>,
+    /// 每次场景任务提交时，工作副本里的关系（`子表.列→父表.列`）
+    relations: RefCell<Vec<Vec<String>>>,
     exported: RefCell<Vec<(String, String)>>,
     scratchpads: RefCell<Vec<String>>,
     /// 出口类任务拿到的临时表名（证明任务里带的是上一次生成的结果）
@@ -513,18 +519,49 @@ impl MockHost for TestHost {
                 })
             }
             MockJobKind::Persist(info) => self.persist(info),
-            MockJobKind::Scenario(template_id) => {
-                self.rec.scenarios.borrow_mut().push(template_id.clone());
-                Ok(MockJobDone::ScenarioGenerated {
-                    template_name: format!("场景 {template_id}"),
-                    // 三张表：够验证「切换当前表 → 出口作用于选中那张」
-                    tables: SCENARIO_TABLES
+            MockJobKind::Scenario(template) => {
+                self.rec.scenarios.borrow_mut().push(template.id.clone());
+                // 假宿主按**工作副本里的表**回结果（不是写死的三张）：
+                // 这样「改关系 → 生成」的链路在窗口测试里也能验
+                let tables = if template.tables.is_empty() {
+                    SCENARIO_TABLES
                         .iter()
+                        .map(|(table, rows)| ((*table).to_string(), *rows))
+                        .collect::<Vec<_>>()
+                } else {
+                    template
+                        .tables
+                        .iter()
+                        .map(|t| (t.name.clone(), t.row_count))
+                        .collect()
+                };
+                let relations = template
+                    .tables
+                    .iter()
+                    .flat_map(|t| {
+                        t.columns.iter().filter_map(|c| {
+                            let dep = c.dependency.as_ref().filter(|d| d.is_foreign_key())?;
+                            Some(format!(
+                                "{}.{}→{}.{}",
+                                t.name,
+                                c.name,
+                                dep.ref_table.clone().unwrap_or_default(),
+                                dep.ref_column.clone().unwrap_or_default()
+                            ))
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                self.rec.relations.borrow_mut().push(relations);
+                Ok(MockJobDone::ScenarioGenerated {
+                    template_name: template.name.clone(),
+                    // 逐表回结果：够验证「切换当前表 → 出口作用于选中那张」
+                    tables: tables
+                        .into_iter()
                         .map(|(table, rows)| MockGenInfo {
-                            table_name: (*table).to_string(),
+                            table_name: table.clone(),
                             temp_table_name: format!("temp_mock_{table}"),
                             columns: draft.columns.iter().map(|c| c.def.clone()).collect(),
-                            row_count: *rows,
+                            row_count: rows,
                             elapsed_ms: 3,
                             preview: MockPreview {
                                 columns: vec!["id".to_string()],
@@ -2110,6 +2147,53 @@ fn delete_history_keeps_the_list_and_reports_failure(cx: &mut TestAppContext) {
 
 // ==================== 场景模板（C1） ====================
 
+/// 测试用场景模板：三张表（`orders` / `items` / `users`，与 [`SCENARIO_TABLES`] 同名同量），
+/// 两条引用——其中 `orders.user_id → users.id` 是**前向引用**（父表排在后面，合法）。
+///
+/// 面板行为用例用它而不是内置模板：绑内置模板的数字，改模板就会连带改一批用例。
+fn toy_scenario() -> ScenarioTemplate {
+    let id_col = || ColumnDef {
+        name: "id".to_string(),
+        data_type: ColumnDataType::Integer,
+        generator: GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+        nullable_ratio: 0.0,
+        unique: true,
+        dependency: None,
+    };
+    let fk_col = |name: &str, parent: &str, max: i32| ColumnDef {
+        name: name.to_string(),
+        data_type: ColumnDataType::Integer,
+        generator: GeneratorConfig::RandomInt { min: 1, max },
+        nullable_ratio: 0.0,
+        unique: false,
+        dependency: Some(ColumnDependency::foreign_key(parent, "id")),
+    };
+    ScenarioTemplate {
+        id: "toy:scenario".to_string(),
+        name: "玩具场景".to_string(),
+        description: String::new(),
+        category: "测试".to_string(),
+        locale: "zh_cn".to_string(),
+        tables: vec![
+            TemplateTable {
+                name: "orders".to_string(),
+                row_count: 100,
+                columns: vec![id_col(), fk_col("user_id", "users", 40)],
+            },
+            TemplateTable {
+                name: "items".to_string(),
+                row_count: 250,
+                columns: vec![id_col(), fk_col("order_id", "orders", 100)],
+            },
+            TemplateTable {
+                name: "users".to_string(),
+                row_count: 40,
+                columns: vec![id_col()],
+            },
+        ],
+    }
+}
+
 /// 场景模板：一次产出多张结果表，默认选中第一张，并标出来源。
 #[gpui_kit::test]
 fn scenario_generation_fills_one_result_per_table(cx: &mut TestAppContext) {
@@ -2119,11 +2203,19 @@ fn scenario_generation_fills_one_result_per_table(cx: &mut TestAppContext) {
 
     // 草稿里一列都没有：场景模板自带列定义，不该被草稿拦住
     panel.update(cx, |panel, cx| {
-        panel.run_scenario("ecommerce".to_string(), cx)
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
     });
     panel.update(cx, |panel, _cx| {
         assert!(panel.is_running(), "场景生成也走后台任务");
-        assert!(matches!(panel.job_kind(), Some(MockJobKind::Scenario(id)) if id == "ecommerce"));
+        assert!(
+            panel.scenario().is_some(),
+            "生成期间工作副本还在（可直接再生成一次）"
+        );
+        assert!(matches!(
+            panel.job_kind(),
+            Some(MockJobKind::Scenario(template)) if template.id == "toy:scenario"
+        ));
         assert!(
             panel.job_kind().is_some_and(MockJobKind::generates),
             "场景任务包含生成阶段：可取消"
@@ -2133,10 +2225,13 @@ fn scenario_generation_fills_one_result_per_table(cx: &mut TestAppContext) {
     draw(cx);
 
     panel.update(cx, |panel, _cx| {
-        assert_eq!(rec.scenarios.borrow().as_slice(), ["ecommerce".to_string()]);
+        assert_eq!(
+            rec.scenarios.borrow().as_slice(),
+            ["toy:scenario".to_string()]
+        );
         assert_eq!(panel.results().len(), SCENARIO_TABLES.len());
         assert_eq!(panel.current_result(), 0, "默认选第一张");
-        assert_eq!(panel.scenario_source(), Some("场景 ecommerce"));
+        assert_eq!(panel.scenario_source(), Some("玩具场景"));
         assert_eq!(
             panel
                 .results()
@@ -2165,7 +2260,8 @@ fn selecting_a_result_switches_what_the_panel_shows(cx: &mut TestAppContext) {
     let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
 
     panel.update(cx, |panel, cx| {
-        panel.run_scenario("ecommerce".to_string(), cx)
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
     });
     poll_job(cx, &panel);
     draw(cx);
@@ -2199,7 +2295,8 @@ fn exits_apply_to_the_selected_result_table(cx: &mut TestAppContext) {
     let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
 
     panel.update(cx, |panel, cx| {
-        panel.run_scenario("ecommerce".to_string(), cx)
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
     });
     poll_job(cx, &panel);
     draw(cx);
@@ -2247,7 +2344,8 @@ fn single_table_generation_clears_the_scenario_state(cx: &mut TestAppContext) {
 
     panel.update(cx, |panel, cx| {
         panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
-        panel.run_scenario("ecommerce".to_string(), cx);
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
     });
     poll_job(cx, &panel);
     panel.update(cx, |panel, _cx| assert_eq!(panel.results().len(), 3));
@@ -2274,7 +2372,8 @@ fn scenario_job_reports_tables_as_its_unit(cx: &mut TestAppContext) {
     let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
 
     panel.update(cx, |panel, cx| {
-        panel.run_scenario("ecommerce".to_string(), cx)
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
     });
     // 宿主报「已生成 2 / 3 张表」（批次槽位复用为表计数）
     rec.job_progress.set(MockJobProgress {
@@ -2303,5 +2402,210 @@ fn scenario_job_reports_tables_as_its_unit(cx: &mut TestAppContext) {
     panel.update(cx, |panel, _cx| {
         assert_eq!(rec.cancels.get(), 1, "取消应直达宿主");
         assert_eq!(panel.results().len(), 0, "还没回填结果");
+    });
+}
+
+/// 选模板只**载入工作副本**，不立即生成——用户要能先看清单、调关系。
+#[gpui_kit::test]
+fn opening_a_scenario_loads_a_work_copy_without_generating(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| panel.open_scenario("builtin:ecommerce", cx));
+    draw(cx);
+    panel.update(cx, |panel, _cx| {
+        assert!(!panel.is_running(), "载入模板不该提交任务");
+        assert!(rec.scenarios.borrow().is_empty());
+        assert!(rec.started.borrow().is_empty());
+        let template = panel.scenario().expect("工作副本已就位");
+        assert_eq!(template.id, "builtin:ecommerce");
+        assert_eq!(template.name, "电商系统");
+        assert_eq!(
+            template
+                .tables
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            ["users", "products", "orders", "order_items"]
+        );
+        // 关系是派生视图：扫列上的 dependency（不另存清单）
+        let relations = panel.scenario_relations();
+        assert_eq!(relations.len(), 3);
+        assert_eq!(
+            relations
+                .iter()
+                .map(ScenarioRelation::label)
+                .collect::<Vec<_>>(),
+            [
+                "orders.user_id → users.id",
+                "order_items.order_id → orders.id",
+                "order_items.product_id → products.id",
+            ]
+        );
+    });
+
+    // 未知模板 id：可读错误，不静默
+    panel.update(cx, |panel, cx| panel.open_scenario("builtin:nope", cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.error().is_some_and(|e| e.contains("场景模板不存在")),
+            "{:?}",
+            panel.error()
+        );
+    });
+
+    // 退出场景态：工作副本丢掉，草稿与结果不受影响
+    panel.update(cx, |panel, cx| panel.close_scenario(cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.scenario().is_none());
+        assert!(panel.scenario_relations().is_empty());
+    });
+}
+
+/// 加关系：写进子列（模型里唯一的关系表达处），并把该列生成器**对齐到父域**。
+#[gpui_kit::test]
+fn adding_a_relation_writes_it_onto_the_child_column(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        // 先删掉现有的那条，再加一条新的（指向 users）
+        panel.remove_relation("items", "order_id", cx);
+        *panel.relation_pick.borrow_mut() = RelationPick {
+            child_table: Some("items".to_string()),
+            child_column: Some("order_id".to_string()),
+            parent_table: Some("users".to_string()),
+            parent_column: Some("id".to_string()),
+        };
+        panel.add_relation(cx);
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        let template = panel.scenario().expect("工作副本");
+        let column = template
+            .tables
+            .iter()
+            .find(|t| t.name == "items")
+            .and_then(|t| t.columns.iter().find(|c| c.name == "order_id"))
+            .expect("子列");
+        let dep = column.dependency.as_ref().expect("关系写在列上");
+        assert_eq!(dep.ref_table.as_deref(), Some("users"));
+        assert_eq!(dep.ref_column.as_deref(), Some("id"));
+        // users 40 行、id 自增 1..40 → 生成器对齐到 1..40（单表生成也不能跑出父域）
+        assert!(
+            matches!(
+                column.generator,
+                GeneratorConfig::RandomInt { min: 1, max: 40 }
+            ),
+            "{:?}",
+            column.generator
+        );
+        assert!(
+            panel
+                .outcome()
+                .unwrap_or_default()
+                .contains("items.order_id")
+        );
+        assert!(panel.error().is_none(), "{:?}", panel.error());
+    });
+
+    // 删掉后：列上不再有 dependency（生成器保留，此时它就是个普通随机列）
+    panel.update(cx, |panel, cx| {
+        panel.remove_relation("items", "order_id", cx)
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel
+                .scenario_relations()
+                .iter()
+                .all(|r| !(r.child_table == "items" && r.child_column == "order_id")),
+            "删掉的关系不该还在派生视图里"
+        );
+        assert!(panel.outcome().unwrap_or_default().contains("已删除关系"));
+    });
+}
+
+/// 父列不是自增 → 加关系时就拒（只支持算得出域的引用目标），并给出可读原因。
+#[gpui_kit::test]
+fn adding_a_relation_rejects_a_parent_without_a_derivable_domain(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        let mut template = toy_scenario();
+        // 把 users 的主键换成 uuid：域算不出来
+        if let Some(users) = template.tables.iter_mut().find(|t| t.name == "users") {
+            users.columns[0].generator = GeneratorConfig::UuidV4;
+        }
+        panel.load_scenario(template, cx);
+        *panel.relation_pick.borrow_mut() = RelationPick {
+            child_table: Some("items".to_string()),
+            child_column: Some("order_id".to_string()),
+            parent_table: Some("users".to_string()),
+            parent_column: Some("id".to_string()),
+        };
+        panel.add_relation(cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.error().is_some_and(|e| e.contains("不能作引用目标")),
+            "{:?}",
+            panel.error()
+        );
+    });
+
+    // 四个位置没选全：拒绝（不半途写坏工作副本）
+    panel.update(cx, |panel, cx| {
+        *panel.relation_pick.borrow_mut() = RelationPick::default();
+        panel.add_relation(cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.error().is_some_and(|e| e.contains("都要选")),
+            "{:?}",
+            panel.error()
+        );
+    });
+}
+
+/// 改完关系再生成：提交的是**工作副本**（关系随任务走），不是按 id 重取的模板。
+#[gpui_kit::test]
+fn the_edited_work_copy_is_what_gets_generated(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        // 把 items.order_id 改指到 users.id（原为 orders.id）
+        panel.remove_relation("items", "order_id", cx);
+        *panel.relation_pick.borrow_mut() = RelationPick {
+            child_table: Some("items".to_string()),
+            child_column: Some("order_id".to_string()),
+            parent_table: Some("users".to_string()),
+            parent_column: Some("id".to_string()),
+        };
+        panel.add_relation(cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+
+    panel.update(cx, |panel, _cx| {
+        let submitted = rec.relations.borrow();
+        let relations = submitted.last().expect("任务应带回关系");
+        assert!(
+            relations.contains(&"items.order_id→users.id".to_string()),
+            "提交的应是编辑后的关系：{relations:?}"
+        );
+        assert!(
+            !relations.contains(&"items.order_id→orders.id".to_string()),
+            "旧指向不该还在：{relations:?}"
+        );
+        assert_eq!(panel.results().len(), 3, "三张表都回来了");
     });
 }

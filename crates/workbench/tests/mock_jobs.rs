@@ -412,7 +412,9 @@ fn scenario_job_generates_every_table_without_writing_to_the_db() {
 
     mock_jobs::start(
         &job,
-        MockJobKind::Scenario("builtin:hr".to_string()),
+        MockJobKind::Scenario(Box::new(
+            mock::templates::get_template_by_id("builtin:hr").expect("内置模板"),
+        )),
         &no_project,
     )
     .expect("提交场景任务");

@@ -125,7 +125,7 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 文档 | 内容 |
 | --- | --- |
 | `mock-prototype-design.md` | 长什么样：落位与尺寸 / **方案①两处排版** / 对话框 / 状态矩阵 / 与 v1 逐项对照 |
-| `mock-prototype.html` | 交互稿（v2 原生，RDS Light/Dark + 13 场景可切） |
+| `mock-prototype.html` | 交互稿（v2 原生，RDS Light/Dark + 15 场景可切） |
 | `mock-architecture.md` | 为什么这样设计：不变式 / 概念模型 / 分层与状态所有权 / 数据流 / D1–D19 决策表 / 降级矩阵 / 已知问题 |
 | `mock-dev-plan.md` | 做什么、做到哪：现状盘点 / Phase A–E 任务与落点 / 验收与风险 / 进度记录 |
 | `crates/mock/README.md` | crate 级入口（特点与代码结构，不复述本目录设计） |
@@ -148,4 +148,4 @@ v1 素材（暂存区，删除前请先提炼）：`v1/docs/frontend/mock/mock-d
 | 9 | 生成任务 / 模板**落库接线** | `MockGenerationStore` 8 方法 + 迁移 009 已就位但无 UI | ✅ 已完成（历史段 + 模板段，见 `mock-dev-plan.md` §7 的 C4 / D4-D5 两行） |
 | 10 | ~~**场景模板一键生成**~~ | 6 套内置多表场景从「引擎有 API」变「面板能点」 | ✅ 本轮完成（`MockJobKind::Scenario` + `generate_scenario_at` + 多结果与「当前表」切换） |
 | 11 | ~~**出口改成只认结果**~~ | 场景模板产出的表与草稿无关，出口拿草稿当写入规格会建错表 | ✅ 本轮完成（`MockGenInfo` 带 `columns`；三个出口不再收 `draft`；草稿校验收拢到 `MockJobKind::uses_draft`） |
-| 12 | 场景表的**引用关系模型化**（现在是把子表范围手写成父表行数） | 父表行数一改就静默断链；悬空引用（blog 的 `author_id` / `user_id` = 1..200）发现不了 | ✅ **关系是有的**：6 套模板中 5 套恰好落域内（关系由「范围对齐行数」表达）；改成 `ref_table` / `ref_column` 引用后由父表**实际行数**派生取值域（自增父键 O(1)），见架构 §9-I11 |
+| 12 | ~~场景表的**引用关系模型化**~~ | 父表行数一改就静默断链；悬空引用发现不了 | ✅ **已完成**：关系挂在列上（`dependency`），域由父表参数算出（O(1)、不读已落地数据），面板可增删关系；6 套模板 24 处引用已声明化，blog 补上缺失父表；4 项自检盯住约定（见架构 D29 / §9-I11） |

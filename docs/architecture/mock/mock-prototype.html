@@ -189,22 +189,36 @@ button{font-family:inherit;cursor:pointer;}
 .rel{position:relative;}
 .popover.scn{min-width:232px;}
 [data-scn="scenario"] .popover.scn{display:flex;}
-.scn-row{display:none;}
+.scn-row,.scn-row-copy{display:none;}
 [data-scn="scenario"] .scn-row,[data-scn="scenario-result"] .scn-row{display:flex;}
-/* 这两个场景自带「生成 + 场景模板 ▾」并排行，故藏掉单独的「生成」按钮与上一轮的单表结果 */
-[data-scn="scenario"] .scn-hide,[data-scn="scenario-result"] .scn-hide{display:none;}
+[data-scn="scenario-copy"] .scn-row-copy{display:flex;}
+/* 这三个场景自带「生成 + 场景模板 ▾」并排行，故藏掉单独的「生成」按钮与上一轮的单表结果 */
+[data-scn="scenario"] .scn-hide,[data-scn="scenario-result"] .scn-hide,[data-scn="scenario-copy"] .scn-hide{display:none;}
 [data-scn="scenario-result"] .scn-single{display:none;}
+[data-scn="scenario-copy"] .scn-single{display:none;}
 [data-scn="scenario-result"] .only-scenario-result{display:flex;}
-[data-scn="scenario-result"] .scn-row{display:flex;}
+[data-scn="scenario-copy"] .only-scenario-copy{display:flex;}
 [data-scn="scenario"] .only-imported,
 [data-scn="scenario"] .only-generated,
 [data-scn="scenario-result"] .only-imported,
-[data-scn="scenario-result"] .only-generated{display:flex;}
+[data-scn="scenario-result"] .only-generated,
+[data-scn="scenario-copy"] .only-imported{display:flex;}
 [data-scn="scenario"] .exit-enabled,
 [data-scn="scenario-result"] .exit-enabled{display:flex;}
+[data-scn="scenario-copy"] .exit-disabled{display:none;}
+[data-scn="scenario-copy"] .exit-enabled{display:flex;}
 [data-scn="scenario"] .exit-disabled,
 [data-scn="scenario-result"] .exit-disabled{display:none;}
 [data-scn="scenario"] .preview-empty{display:none;}
+[data-scn="scenario-copy"] .preview-empty{display:none;}
+/* 加关系对话框：背后的面板就是工作副本态 */
+[data-scn="relation"] .only-imported{display:flex;}
+[data-scn="relation"] .only-scenario-copy{display:flex;}
+[data-scn="relation"] .scn-row-copy{display:flex;}
+[data-scn="relation"] .scn-hide{display:none;}
+[data-scn="relation"] .scn-single{display:none;}
+[data-scn="relation"] .exit-enabled{display:flex;}
+[data-scn="relation"] .exit-disabled{display:none;}
 
 /* ── 对话框（应用内叠加层） ── */
 .overlay{position:absolute;inset:0;background:var(--overlay);display:none;align-items:center;justify-content:center;padding:24px;z-index:9;}
@@ -229,7 +243,7 @@ button{font-family:inherit;cursor:pointer;}
 .inp.area{width:100%;height:84px;resize:none;padding:6px 8px;line-height:1.55;font-family:Consolas,'SFMono-Regular',monospace;}
 
 /* ── 场景可见性 ── */
-.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running,.only-writing,.only-scenario-result{display:none;}
+.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running,.only-writing,.only-scenario-result,.only-scenario-copy{display:none;}
 [data-scn="empty"] .only-empty{display:flex;}
 [data-scn="imported"] .only-imported{display:flex;}
 [data-scn="generated"] .only-imported{display:flex;}
@@ -295,6 +309,8 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn" data-go="column" onclick="setScene('column')">列编辑对话框</button>
   <button class="scn" data-go="constraint" onclick="setScene('constraint')">约束类参数（多行编辑）</button>
   <button class="scn" data-go="scenario" onclick="setScene('scenario')">场景模板（6 套内置）</button>
+  <button class="scn" data-go="scenario-copy" onclick="setScene('scenario-copy')">场景工作副本（调关系）</button>
+  <button class="scn" data-go="relation" onclick="setScene('relation')">加关系对话框</button>
   <button class="scn" data-go="scenario-result" onclick="setScene('scenario-result')">场景结果（多表 + 当前表）</button>
 </div>
 <div class="scn-hint">场景切换只改变 Mock 面板 / 中央 tab / 对话框的呈现；窗口壳（标题栏 / 活动栏 / 左右边栏）为 v2 五段布局的简化示意。</div>
@@ -512,6 +528,29 @@ button{font-family:inherit;cursor:pointer;}
           <!-- 结果摘要 / 只读 / 落库反馈 / 生成中 -->
           <div class="mono-line only-generated scn-single">临时表 temp_mock_mock_orders · 1000 行 · 12 ms</div>
 
+          <!-- 场景工作副本（C1）：选模板后**不立即生成**——先看清单、调关系，再生成 -->
+          <div class="line scn-row-copy">
+            <button class="btn primary wide" style="flex:1;">生成 4 张表</button>
+            <button class="btn" style="flex:none;">退出场景</button>
+          </div>
+          <div class="only-scenario-copy" style="flex-direction:column;gap:6px;">
+            <div class="hint">本次生成（4 张表 · 21,500 行）· 电商系统</div>
+            <div class="hist-row">
+              <div class="line"><span class="name">users</span><span class="hint">1,000 行</span></div>
+              <div class="line"><span class="name">products</span><span class="hint">500 行</span></div>
+              <div class="line"><span class="name">orders</span><span class="hint">5,000 行</span></div>
+              <div class="line"><span class="name">order_items</span><span class="hint">15,000 行</span></div>
+            </div>
+            <div class="hint">表间关系（3 条）</div>
+            <div class="hist-row">
+              <div class="line"><span class="mono grow" style="font-size:11.5px;">orders.user_id → users.id</span><button class="btn sm">删除</button></div>
+              <div class="line"><span class="mono grow" style="font-size:11.5px;">order_items.order_id → orders.id</span><button class="btn sm">删除</button></div>
+              <div class="line"><span class="mono grow" style="font-size:11.5px;">order_items.product_id → products.id</span><button class="btn sm">删除</button></div>
+            </div>
+            <div class="line"><button class="btn sm" onclick="setScene('relation')">＋ 加关系</button></div>
+            <div class="hint">关系只在本次多表生成内成立：不读已有数据，也不改已生成的表 / 文件</div>
+          </div>
+
           <!-- 场景结果：模板一次产出多张表 → 先选「当前表」，出口 / 详情 / 预览都看它 -->
           <div class="only-scenario-result" style="flex-direction:column;gap:6px;">
             <div class="line">
@@ -656,6 +695,27 @@ button{font-family:inherit;cursor:pointer;}
     </div>
   </div>
 
+  <!-- 加表间关系对话框（C1）：四个下拉；父列只列自增列 -->
+  <div class="overlay" id="ov-relation">
+    <div class="dialog" style="width:470px;">
+      <div class="dh">加表间关系</div>
+      <div class="db">
+        <div class="hint">引用只在**本次多表生成**内成立：值取自父表主键的取值域（由自增参数与行数算出）。</div>
+        <div class="hint">不读已落地的数据，也不修改已生成的表 / 文件。</div>
+        <div class="form-line"><span class="lab">子表</span><button class="btn sm">order_items ▾</button></div>
+        <div class="form-line"><span class="lab">子列</span><button class="btn sm">product_id ▾</button></div>
+        <div class="form-line"><span class="lab">父表</span><button class="btn sm">products ▾</button></div>
+        <div class="form-line"><span class="lab">父列</span><button class="btn sm">id ▾</button></div>
+        <div class="hint">父列只列自增列——只有算得出取值域的才能作引用目标（uuid / 随机主键选不到）</div>
+        <div class="hint">添加时自动把子列的生成器对齐到父域：单表生成时产出的值也不会跑到父域之外</div>
+      </div>
+      <div class="df">
+        <button class="btn" onclick="setScene('scenario-copy')">取消</button>
+        <button class="btn primary" onclick="setScene('scenario-copy')">添加</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 列编辑对话框 -->
   <div class="overlay" id="ov-column">
     <div class="dialog">
@@ -703,6 +763,7 @@ function setScene(name){
   document.getElementById('ov-column').classList.toggle('show', name === 'column');
   document.getElementById('ov-generator').classList.toggle('show', name === 'generator');
   document.getElementById('ov-constraint').classList.toggle('show', name === 'constraint');
+  document.getElementById('ov-relation').classList.toggle('show', name === 'relation');
 }
 setScene('empty');
 </script>

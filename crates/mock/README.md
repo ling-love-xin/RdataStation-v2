@@ -54,12 +54,19 @@ DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table`
 ### 6. 场景模板与列依赖
 
 - 内置 6 套多表模板（电商 / HR / 博客 / 金融 / 社交 / 企业通讯录），引擎 `generate_scenario` 逐表生成并按**表**回调进度；
-- 面板「场景模板 ▾」一键生成：任务种类 `MockJobKind::Scenario(模板 id)`，装配层 `generate_scenario_at` 逐表补预览，
+- 面板「场景模板 ▾」一键生成：任务种类 `MockJobKind::Scenario(工作副本)`，装配层 `generate_scenario_at(template)` 逐表补预览，
   面板持多张结果（`results` / `current` / `scenario_source`）+「当前表」下拉，出口作用于选中那张；
+- **选模板先载入工作副本**（不立即生成）：列出本次要生成的表 + 表间关系段（可删）+「＋ 加关系」，
+  改完再点「生成 N 张表」——关系是这次生成的一部分，生成完再补就只能去改已落地的数据了；
 - **不写库**（与单表生成同一定律），且**草稿不参与**（目标表 / 列 / 行数全来自模板）；
+- **表间引用**：关系挂在列上（`ColumnDependency::foreign_key` 是唯一构造点），取值域由父表参数**算出**
+  （父列自增 + 行数），因此 **O(1) 内存、不读任何已落地数据**，也不要求父表先于子表
+  （自关联与前向引用合法）；单表生成没有父表上下文，按该列自己的 `generator` 取值（域落在父域内，自检锁定）；
+  父列不是自增（uuid / 随机）就拒，并在**生成前**把关（`resolve_reference_domains`）。
 - 列依赖 `resolve_dependencies` 用 Kahn 拓扑排序给出**生成顺序**与依赖映射；注意：生成器本身按列顺序取值，**不解释依赖表达式**。
-- 模板里的引用关系是**用范围手写的**（`orders.user_id` = `rnd_int!(1, 1000)` 对应 `users` 1000 行 + 自增 `id`）：6 套模板中 5 套恰好落域内，**blog 有 2 处悬空**（`author_id` / `user_id` = 1..200，没有对应父表；v1 同款）。
-- 而 `ColumnDependency` / `DependencyType::ForeignKey` 这套**模型**两代都无人写值（`dependency` 全仓库 `None`）；`GeneratorConfig::ForeignKey { values }` 是「值集合」。要把它升级为模型化引用（自动跟随父表行数 + 可校验），见架构 §9-I11。
+- 模板里的引用关系是**声明式的**（`col_ref!(列, 类型, 生成器, "父表", "父列")`），不是手写范围：
+  6 套模板共 24 处；`*_id` 列要么声明引用、要么进 `NOT_A_REFERENCE` 白名单（目前只有 `companies.tax_id`），
+  由 4 项自检盯住（声明可解析 / 生成器域 ⊆ 父域 / 覆盖完整 / 白名单无幽灵条目）。
 
 ### 7. 视图随 crate（Feature 自持视图，方案①两处排版）
 
@@ -92,7 +99,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
 | `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock：场景模板菜单 + 结果表清单与「当前表」）/ `MockDetailView`（中央 tab）/ `MockHost` 契约 / 导入结构 + 列编辑 + 生成器搜索对话框 |
-| `src/mock_view/tests.rs` | 视图测试（23 纯逻辑 + 42 项 GPUI headless 窗口测试；含测试宿主桥） |
+| `src/mock_view/tests.rs` | 视图测试（23 纯逻辑 + 46 项 GPUI headless 窗口测试；含测试宿主桥） |
 | `src/templates.rs` | 内置 6 套场景模板 |
 | `src/persistence.rs` | `MockGenerationStore`（SQLite 读写；读写两侧由真库往返测试验住） |
 | `src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（宿主只回答「项目根在哪」） |
@@ -128,11 +135,11 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | **四个显式出口：新建表 / 追加（自增接续）/ 草稿箱 `{项目}/mock/` / 另存为** | 导出到源库（M7 约束：不回传源库） |
 | **列编辑对话框（列名 / 类型 / 参数 / 空值率 / 唯一 / 恢复智能默认）** | 列依赖编辑（依赖表达式待拍板） |
 | **导入源库结构（连接 / 库 / schema / 表，cache-aside 取列）** | 表结构浏览选择器（现在是手填表名 + 连接默认库预填） |
-| **场景模板一键生成**：6 套内置多表模板（面板菜单）+ 多结果与「当前表」切换 | 表间引用目前是**范围手写约定**（5/6 套恰好成立，blog 有 2 处悬空）——升级为模型化引用见架构 §9-I11 |
+| **场景模板一键生成**：6 套内置多表模板（面板菜单）+ 工作副本可调关系 + 多结果与「当前表」切换 | 跨模板 / 跨库引用；从已落地数据取值（后续的**影子数据**，见架构 §9-I13） |
 | 草稿目录落盘（调用方给目录） | 草稿箱面板对 `mock/` 分组的展示（Phase D） |
 | 持久化为正式表（`persist_as_asset` / 装配层新建与追加） | 分析资源注册（M6） |
 | **生成历史**（最近 20 条，重放 / 删除 / 自动落库）+ **用户模板**（保存 / 应用 / 删除）都落 `{项目}/.RSmeta/project.db` | —— |
-| 公开 API 集成 32 项 + 视图测试 65 项（23 纯逻辑 + 42 窗口） + 持久化往返 5 项 + 历史/模板 4 项 + 装配 12 项 + 后台任务 10 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
+| 公开 API 集成 35 项 + 视图测试 69 项（23 纯逻辑 + 46 窗口） + 持久化往返 5 项 + 历史/模板 4 项 + 装配 12 项 + 后台任务 10 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
 
 ## 设计与验证
 
@@ -142,7 +149,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
   `crates/workbench/src/services/mock_jobs.rs`（后台任务：进度 + 取消）、
   `crates/workbench/src/components/mock_host.rs`（`MockHost` 的宿主实现）、
   `crates/workbench/src/panels/right.rs`（面板构造期创建 + 句柄登记）、`crates/workbench/src/view.rs`（详情 tab 加入中央 tab 组）。
-- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`（137 单元（23 纯逻辑 + 42 窗口 + 72 其他）+ 32 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
+- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`（145 单元（23 纯逻辑 + 46 窗口 + 76 其他）+ 32 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
   `cargo test -p rds-workbench --test mock_generator --test mock_jobs --test mock_job_cancel -j 2`（装配 12 + 后台任务 10 + 取消 1）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。
 - 生成器目录改动流程：改 `models.rs` 的 `GeneratorConfig` → 跑 `python tools/gen_mock_generator_catalog.py`

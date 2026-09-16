@@ -118,10 +118,10 @@ fn run_job(job: &Job) -> Result<MockJobDone, String> {
     };
     match &job.kind {
         MockJobKind::Generate => Ok(MockJobDone::Generated(generate(job, None)?)),
-        MockJobKind::Scenario(template_id) => {
+        MockJobKind::Scenario(template) => {
             // 场景模板不写库：不需要 `db_path`（未打开项目也能生成）
             let (template_name, tables) = mock_generator::generate_scenario_at(
-                template_id,
+                template,
                 move |tables_done, tables_total| {
                     let mut slot = lock(&shared().slot);
                     if let Some(progress) = slot.progress.as_mut() {

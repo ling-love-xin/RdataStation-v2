@@ -37,7 +37,7 @@ use engine::sql::{ColumnDefInfo, SqlEngine};
 use mock::mock_view::{
     MockColumnSpec, MockDraft, MockGenInfo, MockPreview, SchemaRequest, SchemaSource,
 };
-use mock::models::{ColumnDef, GeneratorConfig, MockConfig, MockExportFormat};
+use mock::models::{ColumnDef, GeneratorConfig, MockConfig, MockExportFormat, ScenarioTemplate};
 use mock::{MockEngine, TempTableWriteMode, parse_data_type, sanitize_identifier};
 
 use crate::services::nav_runtime;
@@ -220,23 +220,26 @@ const PREVIEW_ROWS: usize = 20;
 /// 2. 引擎只回表级摘要（`MockScenarioTableResult` 不带预览），所以这里**逐表**再取一次
 ///    预览（`MockEngine::preview` 读同一张内存临时表），让面板的通用结果区对每张表都成立。
 ///
+/// 收的是**模板本身**而不是 id：面板允许在生成前改表间关系（关系挂在列上），
+/// 按 id 重取会把编辑丢掉。
+///
 /// 进度回调按「张表」上报（`on_table_progress(已完成表数, 总表数)`），与单表生成的批次量纲不同。
 pub fn generate_scenario_at<F>(
-    template_id: &str,
+    template: &ScenarioTemplate,
     on_table_progress: F,
 ) -> Result<(String, Vec<MockGenInfo>), String>
 where
     F: Fn(usize, usize) + Send + 'static,
 {
-    let template = mock::templates::get_template_by_id(template_id)
-        .ok_or_else(|| format!("场景模板不存在: {template_id}"))?;
     if template.tables.is_empty() {
         return Err(format!("场景模板「{}」没有可生成的表", template.name));
     }
+    // 引用在生成前先校验：父表 / 父列不合适就报可读原因，不拖到生成中途
+    MockEngine::resolve_reference_domains(template).map_err(|e| format!("表间关系有问题：{e}"))?;
 
     let rt = nav_runtime::bridge_runtime()?;
     let scenario = rt
-        .block_on(MockEngine::generate_scenario(&template, on_table_progress))
+        .block_on(MockEngine::generate_scenario(template, on_table_progress))
         .map_err(|e| format!("场景生成失败: {e}"))?;
 
     let mut tables = Vec::with_capacity(scenario.tables.len());
