@@ -6,6 +6,8 @@ description = "RdataStation 设置：分节 model、JSON 持久化、设置面�
 
 [dependencies]
 gpui-kit.workspace = true
+# 共用尺寸常量表（单一来源；本 crate 不得反向依赖特性 crate）
+workbench_shell.workspace = true
 
 # ===== 序列化 =====
 serde.workspace = true

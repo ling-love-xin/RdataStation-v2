@@ -167,3 +167,25 @@ pub const DIALOG_SEGMENT_ITEM_HEIGHT: f32 = 1.25;
 pub const DIALOG_STATUS_DOT_SIZE: f32 = 0.4375;
 /// 短码徽标圆角（0.125rem = 2px）；横向内距用 Tailwind 尺度 `px_1()`（契约禁止 `.px(...)` 字面量）
 pub const DIALOG_CHIP_RADIUS: f32 = 0.125;
+
+// ===== 设置页（应用级）专用尺寸（rem 基准；登记在此，视图只引用） =====
+//
+// 设置页是居中模态弹层，两栏 = 分节导航 + 内容区；尺寸自成一套，不与主界面行高混用。
+// 数值来源：`docs/architecture/settings/settings-prototype-design.md` §7。
+
+/// 弹层宽度（61.25rem = 980px；与「新建数据源连接」同档）
+pub const SETTINGS_PAGE_WIDTH: f32 = 61.25;
+/// 弹层高度（35rem = 560px；**固定高**——切节 / 加行都不跳高）
+pub const SETTINGS_PAGE_HEIGHT: f32 = 35.0;
+/// 分节导航宽度（12.5rem = 200px；与连接对话框侧栏同宽）
+pub const SETTINGS_NAV_WIDTH: f32 = 12.5;
+/// 设置行标签列宽（15rem = 240px；再窄中长标签要换行）
+pub const SETTINGS_LABEL_WIDTH: f32 = 15.0;
+/// 设置行最小高度（2.5rem = 40px；带说明行时自动增高）
+pub const SETTINGS_ROW_MIN_HEIGHT: f32 = 2.5;
+/// 节标题行高度（1.75rem = 28px）
+pub const SETTINGS_SECTION_HEAD_HEIGHT: f32 = 1.75;
+/// 分组卡与控件圆角（0.375rem = 6px；弹层圆角走 `theme.radius`）
+pub const SETTINGS_CARD_RADIUS: f32 = 0.375;
+/// 分组卡内边距（0.75rem = 12px）
+pub const SETTINGS_CARD_PADDING: f32 = 0.75;

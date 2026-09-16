@@ -17,8 +17,6 @@ pub mod model;
 pub mod product_tokens;
 pub mod registry;
 pub mod settings_page;
-pub mod settings_view;
-pub mod ui;
 
 use crate::model::{ConnectionDefaults, NavigatorFilters, Settings};
 use crate::registry::{SettingValue, Slot};
@@ -277,7 +275,10 @@ impl SettingsService {
         Theme::change(mode, window, cx);
     }
 
-    /// 明暗切换（ToggleThemeMode / 设置面板按钮共用）。
+    /// 明暗切换（`ToggleThemeMode` 命令与设置页「主题模式」两条路径共用）。
+    ///
+    /// 注：`ToggleThemeMode` 目前**未绑键位**（架构 §14 Q2 未拍板：接线还是删除）；
+    /// 设置页走的是 `set_theme_mode`（显式指定目标模式），不依赖本函数。
     pub fn toggle_theme_mode(window: Option<&mut gpui_kit::Window>, cx: &mut App) {
         let next = match Self::theme_mode(cx) {
             ThemeMode::Light => ThemeMode::Dark,

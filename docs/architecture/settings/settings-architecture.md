@@ -89,7 +89,9 @@ graph TD
 | 为什么缓存管理不在本 crate | 缓存对话框要 engine（`rusqlite` / 元数据缓存清理）→ 引入 engine 会把数据库依赖拖进视图 crate；继续由宿主的 `on_open_cache` 回调承接 |
 | 宿主桥 | `SettingsHost { on_close, on_open_cache, (将来) on_restart }`——宿主提供副作用，crate 只表达意图 |
 
-**crate 现状**：`lib.rs`（服务 + 持久化 + `apply_by_key` / `value_by_key` 唯一读写路径）/ `model.rs`（分节 model）/ `registry.rs`（登记表 + `Slot` 分发表 + `presets` + 契约测试）/ `settings_page.rs`（两栏页面，目标形态；待宿主替换）/ `settings_view.rs`（旧单列视图，待退役）/ `ui.rs`（页面尺寸常量，页面自持）/ `commands.rs`（Action）/ `product_tokens.rs`（产品语义 token 加载，属主题设施暂住此处，见 §13 K6）。
+**crate 现状**：`lib.rs`（服务 + 持久化 + `apply_by_key` / `value_by_key` 唯一读写路径）/ `model.rs`（分节 model）/ `registry.rs`（登记表 + `Slot` 分发表 + `presets` + 契约测试）/ `settings_page.rs`（两栏页面，**已接到工作台**）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）/ `product_tokens.rs`（产品语义 token 加载，属主题设施暂住此处，见 §13 K6）。
+
+> 旧单列 `settings_view.rs` 与自持的 `ui.rs` **均已删除**：页面尺寸常量回归**壳层单点** `crates/workbench_shell/src/ui.rs`（依赖方向：`settings → workbench_shell`，而 shell 不依赖任何特性 crate）。
 
 ## 4. 状态所有权与读写路径
 
@@ -231,7 +233,7 @@ graph TD
 | 登记表落地 | 表格在本文 §6；实现侧以 `model.rs` 字段 + `lib.rs` 方法为准，契约测试负责两者一致 |
 | 僵尸项裁撤 | `crates/settings/src/model.rs` + `settings_view.rs`（同轮删字段与行） |
 
-**落地顺序（P0、P1a、P1b 已完成；P1.6 宿主替换与 P2 起待排）**：0 工作区收尾（在途改动先提交，避免与 `view.rs` / `panels/` 冲突）→ 1 model 裁撤 + 登记表与契约测试 ✅ → 1b 两栏页面实体 + 槽位分发表 ✅（宿主替换待 `view.rs` 落地，P1.6）→ 2 搜索 + 写盘失败可见 + 窗口测试 → 3 互斥 / Esc / 契约扫描 → 4 接线延伸（M6 `keep_versions` / 项目排序行 / `ToggleThemeMode` 决断）。逐项任务、验收与风险见 `settings-dev-plan.md` §2–§4。
+**落地顺序（P0、P1、P2、P3 已完成；P4 与 P3.5/P3.6 待做）**：0 工作区收尾 → 1 model 裁撤 + 登记表与契约测试 ✅ → 1b 两栏页面实体 + 槽位分发表 ✅ → 1c 宿主替换 + 常量归位壳层 + 互斥与键位（P1.6 / P3.1–P3.4）✅ → 2 搜索 + 写盘失败可见 + 窗口测试 ✅ → 3 契约扫描 ✅ → 4 接线延伸（M6 `keep_versions` / 项目排序行；`ToggleThemeMode` 与 K1 待拍板）。逐项任务、验收与风险见 `settings-dev-plan.md` §2–§4。
 
 ## 13. 已知问题（K1–K9，权威）
 
@@ -243,9 +245,9 @@ graph TD
 | K4 | ⬜ | 无 i18n | 界面文案全中文硬编码；摆设字段 `general.language` 已随 2026-09-16 裁撤删除，i18n 另行立项 |
 | K5 | ⬜ | 非 Windows 配置目录回退临时目录 | `config_dir()` 在无 `APPDATA` 时落 `temp_dir()`（重启可能被清理）；应走平台配置目录 |
 | K6 | 🟡 | `product_tokens` 住在 settings | 它是主题设施（资产加载 + global），逻辑归主题层；暂住此处，迁出需同时改 `app` 与 `panels/` 消费方 |
-| K7 | ⬜ | 尺寸契约扫描缺口 | `ui_contract` 的尺寸扫描未含 `settings` 视图文件 |
+| K7 | ✅ | **尺寸契约扫描缺口**（已关闭，2026-09-16） | 颜色 + 尺寸扫描均含 `settings_page.rs`；8 个 `SETTINGS_*` 数值进契约 1 |
 | K8 | 🟡 | `ToggleThemeMode` 未接线 | Action 已定义，无键位、无 `on_action`；按"没实现就不宣传"应**接线或删除**（§14 Q2） |
-| K9 | 🟡 | 页面宿主替换未做 | 两栏页面（`settings_page.rs`）已实现，但工作台仍渲染旧的单列 `settings_view`（P1.6 等 `view.rs` 并行改动落地）；页面同时缺 `↺` 的 hover 卡 |
+| K9 | ✅ | **页面宿主替换**（已关闭，2026-09-16） | 工作台渲染 `SettingsPage`（`SettingsHost` 注入关闭 / 缓存对话框），旧单列 `settings_view.rs` 已退役；页面同时缺 `↺` 的 hover 卡（无关紧要，见原型 §11 #9） |
 | K10 | ⚪ | 键盘输入路径无自动化覆盖 | **实测**：headless 下合成的 `cx.emit` 不投递给 `subscribe_in` 订阅者，且 `InputState::set_value` 的值下一帧才可读——因此搜索框"真实输入 → Change → 订阅"只能人工验证（本仓另两个同款订阅同样只测程序性入口） |
 
 ## 14. 待确认（Q1–Q6）

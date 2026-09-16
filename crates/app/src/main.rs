@@ -18,7 +18,7 @@ use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
 use insight::commands::InsightRefresh;
 use settings::SettingsService;
-use settings::commands::OpenSettings;
+use settings::commands::{CloseSettings, FocusSettingsSearch, OpenSettings};
 use workbench::WorkbenchView;
 use workbench::commands::{
     CloseProject, DraftNext, DraftPrev, FocusNavSearch, NavCollapse, NavDown, NavExpand,
@@ -88,7 +88,11 @@ fn run_app() {
             //    只有焦点在工作区编辑面板内才生效，不抢导航树/草稿箱的同名键。
             cx.bind_keys([
                 KeyBinding::new("ctrl-p", ToggleQuickOpen, Some("workbench")),
-                KeyBinding::new("ctrl-,", OpenSettings, Some("workbench")),
+                KeyBinding::new("ctrl-, ", OpenSettings, Some("workbench")),
+                // 设置页内（更深的 key_context 先拿到键）：`Esc` 关闭、`Ctrl+F` 聚焦搜索。
+                // 与 workbench 的 `Ctrl+F`（聚焦数据源导航搜索）不冲突——那只在设置页外生效。
+                KeyBinding::new("escape", CloseSettings, Some("settings")),
+                KeyBinding::new("ctrl-f", FocusSettingsSearch, Some("settings")),
                 // A10 编辑器：保存 / 行注释开关 / 关闭当前文档。
                 // `Ctrl+F` 不在其中：内核（Input context）已绑 `input::Search`，键位先由内核拿到；
                 // 编辑器查找（A11）落地后再定归属，**没实现就不宣传**。

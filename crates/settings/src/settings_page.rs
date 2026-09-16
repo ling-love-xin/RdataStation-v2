@@ -32,8 +32,9 @@ use gpui_kit::*;
 use crate::model::Settings;
 use crate::product_tokens;
 use crate::registry::{self, SettingKind, SettingSpec, SettingValue};
-use crate::ui;
 use crate::{SettingsService, value_by_key};
+// 尺寸常量在**壳层**（单一来源）：workbench 侧经 `crate::ui` 重导，直接依赖 shell 的 crate 走此路径。
+use workbench_shell::ui;
 
 /// 宿主桥：页面的副作用由宿主提供。
 ///
@@ -55,6 +56,10 @@ pub struct SettingsPage {
     nav: Entity<ListState<SectionNav>>,
     /// 搜索框。
     query: Entity<InputState>,
+    /// 页面焦点句柄：`Esc` 关闭 / `Ctrl+F` 聚焦搜索靠它路由（`key_context("settings")`）。
+    focus_handle: FocusHandle,
+    /// 首次渲染时把焦点接到页面上（一次性；否则刚打开时按 `Esc` 没反应）。
+    focus_pending: bool,
     /// 当前搜索词（小写、已 trim；由 `InputEvent::Change` 维护，**不是**每帧去读输入框）。
     filter_lower: String,
     /// 上一次落盘失败的原因（`Some` 时底栏上方出现危险色提示）。
@@ -88,10 +93,18 @@ impl SettingsPage {
             host,
             nav,
             query,
+            focus_handle: cx.focus_handle(),
+            focus_pending: true,
             filter_lower: String::new(),
             save_error: crate::last_save_error(),
             _query_sub: Some(sub),
         }
+    }
+
+    /// 聚焦搜索框（`Ctrl+F`；宿主绑在 `key_context("settings")` 上，路由到本方法）。
+    pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self.query.read(cx).focus_handle(cx);
+        handle.focus(window, cx);
     }
 
     /// 重读设置快照（写入之后调用；页面只有这一个数据来源）。
@@ -144,7 +157,7 @@ impl SettingsPage {
         div()
             .h_flex()
             .w_full()
-            .h(rems(ui::HEADER_HEIGHT))
+            .h(rems(ui::PANEL_HEADER_HEIGHT))
             .flex_none()
             .pl_3()
             .pr_2()
@@ -195,7 +208,7 @@ impl SettingsPage {
 
     fn render_nav(&self, _cx: &Context<Self>) -> Div {
         div()
-            .w(rems(ui::NAV_WIDTH))
+            .w(rems(ui::SETTINGS_NAV_WIDTH))
             .flex_none()
             .h_full()
             .v_flex()
@@ -216,7 +229,7 @@ impl SettingsPage {
         let head = div()
             .h_flex()
             .w_full()
-            .h(rems(ui::SECTION_HEAD_HEIGHT))
+            .h(rems(ui::SETTINGS_SECTION_HEAD_HEIGHT))
             .items_center()
             .gap_2()
             .child(
@@ -265,7 +278,7 @@ impl SettingsPage {
         let mut card = div()
             .v_flex()
             .w_full()
-            .rounded(rems(ui::CARD_RADIUS))
+            .rounded(rems(ui::SETTINGS_CARD_RADIUS))
             .bg(theme.colors.group_box)
             .overflow_hidden();
         for (i, spec) in rows.iter().enumerate() {
@@ -280,7 +293,7 @@ impl SettingsPage {
             .v_flex()
             .w_full()
             .gap_2()
-            .p(rems(ui::CARD_PADDING))
+            .p(rems(ui::SETTINGS_CARD_PADDING))
             .child(head)
             .child(card)
     }
@@ -319,7 +332,7 @@ impl SettingsPage {
         let mut card = div()
             .v_flex()
             .w_full()
-            .rounded(rems(ui::CARD_RADIUS))
+            .rounded(rems(ui::SETTINGS_CARD_RADIUS))
             .bg(theme.colors.group_box)
             .overflow_hidden();
         for (i, spec) in hits.iter().enumerate() {
@@ -329,7 +342,7 @@ impl SettingsPage {
             .v_flex()
             .w_full()
             .gap_2()
-            .p(rems(ui::CARD_PADDING))
+            .p(rems(ui::SETTINGS_CARD_PADDING))
             .child(
                 div()
                     .flex_1()
@@ -408,7 +421,7 @@ impl SettingsPage {
         div()
             .h_flex()
             .w_full()
-            .min_h(rems(ui::ROW_MIN_HEIGHT))
+            .min_h(rems(ui::SETTINGS_ROW_MIN_HEIGHT))
             .gap_3()
             .px_3()
             .py_2()
@@ -419,7 +432,7 @@ impl SettingsPage {
             .child(
                 div()
                     .v_flex()
-                    .w(rems(ui::LABEL_WIDTH))
+                    .w(rems(ui::SETTINGS_LABEL_WIDTH))
                     .flex_none()
                     .gap_0p5()
                     .child(label_row)
@@ -450,7 +463,7 @@ impl SettingsPage {
         div()
             .h_flex()
             .w_full()
-            .min_h(rems(ui::ROW_MIN_HEIGHT))
+            .min_h(rems(ui::SETTINGS_ROW_MIN_HEIGHT))
             .gap_3()
             .px_3()
             .py_2()
@@ -458,7 +471,7 @@ impl SettingsPage {
             .child(
                 div()
                     .v_flex()
-                    .w(rems(ui::LABEL_WIDTH))
+                    .w(rems(ui::SETTINGS_LABEL_WIDTH))
                     .flex_none()
                     .gap_0p5()
                     .child(
@@ -578,8 +591,13 @@ impl SettingsPage {
 }
 
 impl Render for SettingsPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        // 打开后接管焦点：否则 `Esc` / `Ctrl+F` 要等用户先点一下页面才生效（一次性）。
+        if self.focus_pending {
+            self.focus_pending = false;
+            self.focus_handle.focus(window, cx);
+        }
         let active = self.nav.read(cx).delegate().active_key();
         let filter = self.filter_lower.clone();
         let body = if filter.is_empty() {
@@ -603,8 +621,8 @@ impl Render for SettingsPage {
         });
         div()
             .v_flex()
-            .w(rems(ui::PAGE_WIDTH))
-            .h(rems(ui::PAGE_HEIGHT))
+            .w(rems(ui::SETTINGS_PAGE_WIDTH))
+            .h(rems(ui::SETTINGS_PAGE_HEIGHT))
             .max_h_full()
             .rounded_lg()
             .bg(theme.colors.popover)
@@ -635,6 +653,14 @@ impl Render for SettingsPage {
             )
             .when_some(notice, |d, notice| d.child(notice))
             .child(self.render_footer(cx))
+            .key_context("settings")
+            .track_focus(&self.focus_handle)
+            .on_action({
+                let entity = cx.entity();
+                move |_: &crate::commands::FocusSettingsSearch, window, app| {
+                    entity.update(app, |this, cx| this.focus_search(window, cx));
+                }
+            })
             .id(ElementId::Name("settings-page".into()))
             .debug_selector(|| "settings-page".to_string())
     }
@@ -772,7 +798,7 @@ impl ListDelegate for SectionNav {
         let theme = cx.theme().clone();
         let active = self.active == ix.row;
         // 激活条：不激活时留同宽空位，避免文字左右跳动。
-        let bar = div().flex_none().w(ui::ACTIVE_BAR).h(rems(1.0));
+        let bar = div().flex_none().w(ui::TREE_ACTIVE_BAR).h(rems(1.0));
         let bar = if active {
             bar.bg(theme.colors.list_active_border)
         } else {

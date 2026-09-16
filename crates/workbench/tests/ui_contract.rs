@@ -42,6 +42,15 @@ fn ui_size_constants_match_design() {
         (CONTROL_HEIGHT_SM, 26.0, "小控件高"),
         (ICON_SIZE_SM, 14.0, "小图标"),
         (ICON_SIZE_MD, 16.0, "标准图标"),
+        // 设置页（应用级）——数值来源：settings-prototype-design §7
+        (SETTINGS_PAGE_WIDTH, 980.0, "设置页弹层宽"),
+        (SETTINGS_PAGE_HEIGHT, 560.0, "设置页弹层高"),
+        (SETTINGS_NAV_WIDTH, 200.0, "设置页分节导航宽"),
+        (SETTINGS_LABEL_WIDTH, 240.0, "设置页行标签列宽"),
+        (SETTINGS_ROW_MIN_HEIGHT, 40.0, "设置页行最小高"),
+        (SETTINGS_SECTION_HEAD_HEIGHT, 28.0, "设置页节标题行高"),
+        (SETTINGS_CARD_RADIUS, 6.0, "设置页分组卡圆角"),
+        (SETTINGS_CARD_PADDING, 12.0, "设置页分组卡内边距"),
     ];
 
     for (ratio, expected_px, label) in cases {
@@ -67,7 +76,6 @@ fn view_layer_has_no_raw_size_literals() {
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
-        ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
             "panels/scratchpad_panel.rs",
@@ -122,6 +130,11 @@ fn view_layer_has_no_raw_size_literals() {
             "editor/view/highlight.rs",
             include_str!("../../editor/src/view/highlight.rs"),
         ),
+        // 设置页（应用级；P1.6 后旧 `settings_view.rs` 已退役）
+        (
+            "settings/settings_page.rs",
+            include_str!("../../settings/src/settings_page.rs"),
+        ),
     ];
 
     for (name, src) in sources {
@@ -146,7 +159,6 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/panels/shared.rs"),
         ),
         ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
-        ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
             "panels/scratchpad_panel.rs",
@@ -180,8 +192,8 @@ fn ui_sources_have_no_raw_color_literals() {
         ),
         ("project/ui.rs", include_str!("../../project/src/ui.rs")),
         (
-            "settings/settings_view.rs",
-            include_str!("../../settings/src/settings_view.rs"),
+            "settings/settings_page.rs",
+            include_str!("../../settings/src/settings_page.rs"),
         ),
         // 编辑器 crate（A15 纳入扫描）
         ("editor/view/host.rs", include_str!("../../editor/src/view/host.rs")),

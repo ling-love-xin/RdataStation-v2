@@ -31,8 +31,8 @@ use crate::panels::{
 };
 use crate::ui;
 use mock::mock_view::{MockDetailView, focus_detail_tab};
-use settings::commands::OpenSettings;
-use settings::settings_view::SettingsView;
+use settings::commands::{CloseSettings, OpenSettings};
+use settings::settings_page::{SettingsHost, SettingsPage};
 
 /// 左侧活动栏面板。
 ///
@@ -52,8 +52,8 @@ pub struct WorkbenchView {
     right_sidebar: Option<Entity<RightSidebarPanel>>,
     /// Quick Open 输入状态（render 首次懒创建）。
     quick_open_input: Option<Entity<InputState>>,
-    /// 设置面板实体（首次打开时懒创建）。
-    settings_view: Option<Entity<SettingsView>>,
+    /// 设置页实体（首次打开时懒创建）。
+    settings_page: Option<Entity<SettingsPage>>,
     /// M1 项目管理输入实体（懒创建）。
     project_inputs: Option<project::ui::ProjectInputs>,
     /// M1 项目视图宿主（构造期组装；项目视图位于 `project` crate）。
@@ -145,7 +145,7 @@ impl WorkbenchView {
             editor: None,
             right_sidebar: None,
             quick_open_input: None,
-            settings_view: None,
+            settings_page: None,
             project_inputs: None,
             project_host: Some(host),
             _subscription: None,
@@ -893,6 +893,8 @@ impl WorkbenchView {
             )
             .on_click(move |_, _, app| {
                 qo_shared.quick_open.set(true);
+                // 互斥：打开 Quick Open 时收起设置页
+                qo_shared.settings_open.set(false);
                 qo_entity.update(app, |_, cx| cx.notify());
             });
 
@@ -1003,6 +1005,7 @@ impl WorkbenchView {
                     .ghost()
                     .on_click(move |_, _, app| {
                         shared.settings_open.set(true);
+                        shared.quick_open.set(false); // 互斥：与 Quick Open 不同时显示
                         entity.update(app, |_, cx| cx.notify());
                     }),
             );
@@ -1083,36 +1086,45 @@ impl WorkbenchView {
                     .ghost()
                     .on_click(move |_, _, app| {
                         shared.settings_open.set(true);
+                        shared.quick_open.set(false); // 互斥：与 Quick Open 不同时显示
                         entity.update(app, |_, cx| cx.notify());
                     }),
             );
         bar
     }
 
-    /// 设置面板 overlay：居中渲染 SettingsView（懒创建实体）。
-    /// 关闭按钮由 SettingsView 内部回调 Shared.settings_open。
-    fn render_settings_panel(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+    /// 设置页 overlay：居中渲染 `SettingsPage`（懒创建实体）。
+    ///
+    /// 页面自持两栏结构（分节与行由 `settings::registry` 驱动）；宿主只提供 overlay、
+    /// **宿主桥**（关闭 / 缓存管理，副作用在宿主侧）与互斥规则（与 Quick Open 不同时显示）。
+    fn render_settings_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
         if !self.shared.settings_open.get() {
             return None;
         }
-        if self.settings_view.is_none() {
+        if self.settings_page.is_none() {
             let entity = cx.entity();
             let shared = self.shared.clone();
             let on_close: std::rc::Rc<dyn Fn(&mut App)> = std::rc::Rc::new(move |app| {
                 shared.settings_open.set(false);
                 entity.update(app, |_, cx| cx.notify());
             });
-            let on_close = on_close.clone();
             let shared_cache = self.shared.clone();
             let on_open_cache: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
                 std::rc::Rc::new(move |window, app| {
                     crate::components::cache_dialog::open_cache_dialog(window, app, &shared_cache);
                 });
-            self.settings_view =
-                Some(cx.new(move |cx| SettingsView::new(cx, on_close, on_open_cache)));
+            let host = SettingsHost {
+                on_close,
+                on_open_cache,
+            };
+            self.settings_page = Some(cx.new(|cx| SettingsPage::new(window, host, cx)));
         }
         let theme = cx.theme().clone();
-        let view = self.settings_view.clone().expect("settings initialized");
+        let page = self.settings_page.clone().expect("settings page initialized");
         Some(
             div()
                 .absolute()
@@ -1121,7 +1133,7 @@ impl WorkbenchView {
                 .items_center()
                 .justify_center()
                 .bg(theme.colors.overlay)
-                .child(view),
+                .child(page),
         )
     }
 
@@ -1380,7 +1392,7 @@ impl Render for WorkbenchView {
             None
         };
         let quick_open = self.render_quick_open(cx);
-        let settings_panel = self.render_settings_panel(cx);
+        let settings_panel = self.render_settings_panel(window, cx);
 
         // M1：无项目时以选择器覆盖中央区（保留五段外壳）。
         let inputs = self
@@ -1415,6 +1427,8 @@ impl Render for WorkbenchView {
                     entity.update(cx, |this, cx| {
                         let open = this.shared.quick_open.get();
                         this.shared.quick_open.set(!open);
+                        // 互斥：Quick Open 与设置页不同时显示（两个 overlay 会互相压住）
+                        this.shared.settings_open.set(false);
                         cx.notify();
                     });
                 }
@@ -1476,6 +1490,18 @@ impl Render for WorkbenchView {
                     entity.update(cx, |this, cx| {
                         let open = this.shared.settings_open.get();
                         this.shared.settings_open.set(!open);
+                        // 互斥：设置页与 Quick Open 不同时显示
+                        this.shared.quick_open.set(false);
+                        cx.notify();
+                    });
+                }
+            })
+            // 设置页内按 `Esc` 关闭（键位绑在 `key_context("settings")` 上）。
+            .on_action({
+                let entity = cx.entity();
+                move |_: &CloseSettings, _window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.shared.settings_open.set(false);
                         cx.notify();
                     });
                 }

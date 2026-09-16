@@ -6,6 +6,18 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16（第四批）— 宿主替换 + 常量归位壳层 + 互斥与键位（P1.6 / P3.1–P3.4）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **宿主替换（P1.6）** | 工作台渲染 `SettingsPage`（注入 `SettingsHost`：关闭 / 缓存对话框），旧单列 `SettingsView` 与其文件**退役** | `workbench/src/view.rs`、`settings/src/{lib,commands}.rs` |
+| **常量归位（P1.1 修正）** | 8 个设置页尺寸常量登记进**壳层单一来源** `crates/workbench_shell/src/ui.rs`（`SETTINGS_*` 节）；删除 `crates/settings/src/ui.rs`，本 crate 不再自持副本 | 同上 + `settings/Cargo.toml`（新增 `workbench_shell` 依赖） |
+| **互斥（P3.1）** | Quick Open 与设置页四处入口互斥（两个 overlay 不再互相压住）：⚙×2、标题栏搜索入口、两个 action | `workbench/src/view.rs` |
+| **键位（P3.2）** | 页面挂 `key_context("settings")` + 焦点句柄；`Esc` → `CloseSettings`、`Ctrl+F` → `FocusSettingsSearch`；**打开即接管焦点**（否则刚打开按 `Esc` 没反应） | `settings/src/{commands,settings_page}.rs`、`app/src/main.rs`、`workbench/src/view.rs` |
+| **宿主桥收口（P3.4）** | 页面不再持散落的 `Rc<dyn Fn>`：`SettingsHost { on_close, on_open_cache }` 一个结构体 | `settings/src/settings_page.rs` |
+| **契约扫描（P3.3）** | `ui_contract`：契约 1 增 8 个 `SETTINGS_*` 数值；尺寸/颜色扫描用 `settings_page.rs` 替下旧 `settings_view.rs` | `workbench/tests/ui_contract.rs` |
+| 验证 | `cargo test -p rds-settings` **22 项全绿**；`ui_contract` **7 项通过**；`cargo check -p rds-app` 通过（4m42s，零告警） | §5 |
+
 ### 2026-09-16（第三批）— 写盘失败可见 + 原子写 + 搜索高亮 + 窗口冒烟（P2 主体）
 
 | 项 | 内容 | 落点 |
@@ -54,9 +66,9 @@
 | 模型与持久化 | `Settings` 4 节 + `settings.json`（`%APPDATA%/RdataStation`）；缺失 / 坏文件回退默认；**原子写 + 失败可见**（错误槽 → 页面提示） | 非 Windows 落临时目录（K5） |
 | 服务与命令 | `SettingsService`（init / get / 9 个 `set_*` / 主题切换）、进程级连接默认值快照 | 构造期直读 2 处（K1）；`ToggleThemeMode` 未接线（K8） |
 | 登记表（准入） | ✅ `registry.rs`：`REGISTRY` 9 项 + `Slot` 分发表 + `presets` + **11 项契约测试** | 待接线项（M6 `keep_versions`）还未入表（按设计如此） |
-| 页面形态 | ✅ 两栏实体已落地（`settings_page.rs`：导航 / 内容区 / 搜索 / 恢复默认） | **宿主替换未做**（工作台仍挂旧视图，P1.6）；无窗口测试；`↺` 的 hover 卡未接 |
-| 宿主接线 | workbench overlay 懒创建 + `on_close` / `on_open_cache` 回调 | 与 Quick Open 未互斥；`Esc` / `Ctrl+F` 未绑（P3） |
-| 契约扫描 | 颜色扫描已含 `settings_view.rs` | **尺寸扫描未含**（K7，P3） |
+| 页面形态 | ✅ 两栏实体已**接到工作台**（P1.6：`SettingsPage` 替下旧单列视图） | `↺` 的 hover 卡未接；键盘输入路径无自动化覆盖（K10） |
+| 宿主接线 | 工作台 overlay 懒创建 `SettingsPage` + `SettingsHost` 宿主桥 | 互斥 / `Esc` / `Ctrl+F` / 契约扫描均已完成（P3.1–P3.4） |
+| 契约扫描 | ✅ 颜色 + **尺寸**扫描均含 `settings_page.rs`；8 个 `SETTINGS_*` 数值进契约 1 | — |
 | 主题设施 | `rds-theme.json` 明暗 + `product-tokens.json` 产品角色（暂住本 crate，K6） | 无需改动（页面用既有角色） |
 | 待接线项 | — | M6 `resources.keep_versions`（P4） |
 
@@ -95,16 +107,16 @@
 | P2.3 | 写盘失败可见 | `settings/src/lib.rs` + 页面底栏上方提示 | `save_settings` 返回 `Result`；只读目录下改值 → 危险色提示；成功后提示自动收起 | ✅（含原子写） |
 | P2.4 | 底栏提示文案（生效方式 / 路径） | `settings_page.rs` | 各行 `hint` 已写明生效方式；底栏仍为单句路径提示（按节汇总未做） | 🟡 部分 |
 
-### P3 宿主与契约（待排）
+### P3 宿主与契约（✅ 已完成，P3.5 待拍板）
 
-| # | 任务 | 落点 | 验收 |
-| --- | --- | --- | --- |
-| P3.1 | Quick Open 与设置页互斥 | `workbench/src/view.rs` | 两 overlay 不同时为真（打开其一并关闭另一个） |
-| P3.2 | `Esc` 关闭 + `Ctrl+F` 聚焦搜索 | `app/src/main.rs`（`key_context("settings")`）+ 页面 | 键位生效且不影响编辑器 `Ctrl+F` |
-| P3.3 | 尺寸契约扫描纳入设置页视图文件 | `workbench/tests/ui_contract.rs` | 契约测试通过；故意写裸 `px(...)` 能让它变红 |
-| P3.4 | 宿主桥收口（`SettingsHost`：on_close / on_open_cache / 预留 on_restart） | `settings/src/settings_page.rs`、`workbench/src/view.rs` | 页面不再直接持有 `Rc<dyn Fn>` 散字段 |
-| P3.5 | `ToggleThemeMode` 决断（接线或删除） | `settings/src/commands.rs`（+ app 绑键） | 二者之一，且文档同步（K8 关闭） |
-| P3.6 | `K1` 两处构造期直读改走服务 | `workbench/src/{view.rs, panels/}` | 全仓无 `settings::load_settings()` 调用（除 settings 自身） |
+| # | 任务 | 落点 | 验收 | 状态 |
+| --- | --- | --- | --- | --- |
+| P3.1 | Quick Open 与设置页互斥 | `workbench/src/view.rs` | 两 overlay 不同时为真（四处入口都改） | ✅ |
+| P3.2 | `Esc` 关闭 + `Ctrl+F` 聚焦搜索 | `app/src/main.rs`（`key_context("settings")`）+ 页面 | 键位生效且不影响 workbench 的同名键 | ✅（含打开即接管焦点） |
+| P3.3 | 尺寸契约扫描纳入设置页视图文件 | `workbench/tests/ui_contract.rs` | 契约通过；故意写裸 `px(...)` 能让它变红 | ✅ |
+| P3.4 | 宿主桥收口（`SettingsHost`） | `settings_page.rs`、`workbench/src/view.rs` | 页面不再持散落回调 | ✅ |
+| P3.5 | `ToggleThemeMode` 决断（接线或删除） | `settings/src/commands.rs` | 二者之一，且文档同步（K8 关闭） | ⬜ 待拍板（Q2） |
+| P3.6 | `K1` 两处构造期直读改走服务 | `workbench/src/{view.rs, panels/*.rs}` | 全仓无 `settings::load_settings()` 调用（除 settings 自身） | ⬜ |
 
 ### P4 接线延伸（待排，依赖上游模块）
 
