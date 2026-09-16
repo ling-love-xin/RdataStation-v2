@@ -91,7 +91,15 @@ pub fn build_host(
 
     let on_opened = {
         let shared = shared.clone();
-        Rc::new(move |cx: &mut App| refresh_after_open(&shared, cx))
+        let view = entity.clone();
+        Rc::new(move |cx: &mut App| {
+            refresh_after_open(&shared, cx);
+            // M6：资产库列表随项目切换重新取数——面板可能正开着，不重取会一直
+            // 显示上一项目的存档（「切了项目但内容没变」是最难发现的一类错）。
+            if let Some(view) = view.upgrade() {
+                view.update(cx, |this, cx| this.request_resources_refresh(cx));
+            }
+        })
     };
 
     project::ui::ProjectUiHost::new(

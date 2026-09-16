@@ -5,3 +5,4 @@ pub mod connection_dialog;
 pub mod group_form_dialog;
 pub mod mock_host;
 pub mod project_host;
+pub mod resource_host;

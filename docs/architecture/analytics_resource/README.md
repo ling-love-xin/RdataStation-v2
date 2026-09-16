@@ -3,8 +3,8 @@
 > **一句话**：把「值得留存、需被引用、要能复现」的分析产物，从工作区转成**只读、有版本、带来源**的正式存档——回答的不是"我能看到什么数据"（M4），也不是"我正在做什么"（M5），而是**"我留下了什么，它当时长什么样"**。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**设计定稿（2026-09-15）；Phase 0 三批 + Phase 1 三刀已落地**——归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件 + 索引修复（三类孤儿）已可用（`ArchiveService` / `IndexRepair`）；面板（面板头 / **工具栏搜索·筛选·排序** / 行渲染 / 状态行 / 两种空态）、详情面板内容层、呈现层（索引行 → 面板快照）已在 crate 内落地。逐项证据见 `analytics-resource-dev-plan.md` §0 进度记录。
-> 仍待：**workbench 接线**（面板实体 + `ResourcesHost` 桥 + 快照推送；依赖已加）、废弃 `recycle.rs` → `ProjectTrash`（跨 crate）、版本保留策略接设置项、虚拟化列表与右键菜单、五个对话框与 Action。视图仍是 `workbench/src/panels/mod.rs::render_resources_placeholder`（行号随他人改动漂移）。
+> 状态：**设计定稿（2026-09-15）；Phase 0 三批 + Phase 1 四刀已落地**——归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件 + 索引修复（三类孤儿）已可用（`ArchiveService` / `IndexRepair`）；面板（面板头 / **工具栏搜索·筛选·排序** / 行渲染 / 状态行 / 两种空态）、详情面板内容层、呈现层（索引行 → 面板快照）与 **workbench 接线（面板挂载 + 后台取数 + 端口回执）** 均已落地。逐项证据见 `analytics-resource-dev-plan.md` §0 进度记录。
+> 仍待：五个对话框（归档 / 取回 / 版本 / 回收站 / 索引修复）· 编辑器只读打开（P1.6）· Action 按键绑定 · 虚拟化列表与右键菜单 · 废弃 `recycle.rs` → `ProjectTrash`（跨 crate，P0.8）· 版本保留策略接设置项。
 >
 > **边界**：本模块拥有**归档与取回 / 存档登记 / 版本与内容指纹 / 标签与分组 / 检索 / 资源侧回收站 / 索引修复**。连接与内省属 M3/M4；工作区文件读写属 M5；DuckDB 计算属 M2；Mock 生成属 M7；洞察计算属 M8；**项目级 → 系统级提升属 M1**（另立设计）。本模块**不自己取数、不自己计算、不改工作区文件**——只做搬运 + 登记 + 冻结 + 检索。
 
@@ -83,14 +83,16 @@
 | 版本历史 / 回收站 / 分组 / 标签对话框 | `src/{version_view,recycle_view,folder_view,tag_view}.rs`（现状：`recycle_bin_dialog.rs` 3 行占位） |
 | 归档 / 取回 / 索引修复对话框 | `src/dialogs/{archive,checkout,index_repair}.rs`（现状：未创建） |
 | Action 与快捷键 | `src/commands.rs` + `crates/app/src/main.rs`（现状：4 个 Action 已声明并在面板接上处理器；**按键绑定待 app 层**） |
-| 左 Dock 装配 | `crates/workbench/src/panels/`、`crates/workbench/src/view.rs`（`LeftPanel::Resources`；标签已改「资产库」） |
-| 占位渲染（待删除） | `crates/workbench/src/panels/mod.rs::render_resources_placeholder`（行号随他人改动漂移） |
+| 左 Dock 装配（面板实体 + 渲染转发） | `crates/workbench/src/panels/resources.rs`（现状：✅ 已接线：构造期建实体 + 宿主端口 + 轮询回填） |
+| 取数后台任务（列表 + 索引健康） | `crates/workbench/src/services/resource_jobs.rs`（现状：✅ 单工作线程 + 结果槽；指纹扫描在工作线程上） |
+| 宿主端口实现 | `crates/workbench/src/components/resource_host.rs`（现状：✅ 动作类请求给明确回执；对话框批接入后换成真实现） |
+| 占位渲染 | ✅ 已下线（`render_resources_placeholder` 随接线删除） |
 | 迁移（加 9 列） | `crates/engine/migrations/project_meta/020_analytics_resource_archive.sql`（现状：✅ 已新增，含库层契约测试 t016；**不改 007**） |
 | 项目级回收站（上提 + 中性化） | `crates/scratchpad/src/trash.rs` → `crates/engine/`（现状：M5 类型泄漏，待中性化） |
 | 连接池（`busy_timeout` / `acquire` 超时 / 归还语义） | `crates/engine/src/persistence/project_db.rs`（现状：⚠️ 三个缺陷，见架构 §13.2） |
 | 尺寸常量 | `crates/analytics_resource/src/ui.rs`（现状：✅ 8 项；**不在 `workbench/ui.rs`**——依赖方向不允许视图反向读 workbench） |
 | 契约测试范围 | `crates/workbench/tests/ui_contract.rs`（显式文件清单，**不含本 crate 视图**；本 crate 的尺寸/裸值约束暂由自身单测 + 评审保证） |
-| 接线（workspace 别名 / workbench 依赖） | `Cargo.toml` 的 `[workspace.dependencies]`（✅ 别名已加）、`crates/workbench/Cargo.toml`（✅ 依赖已加）｜剩面板渲染入口（待接） |
+| 接线（workspace 别名 / workbench 依赖 / 渲染入口） | `Cargo.toml` 的 `[workspace.dependencies]`（✅ 别名已加）、`crates/workbench/Cargo.toml`（✅ 依赖已加）、面板渲染入口（✅ 已接） |
 | crate 入口文档 | `crates/analytics_resource/README.md`（现状：✅ 已补，特点提炼 + 代码结构 + 能力状态） |
 
 数据链路：`scratchpad（发起归档）→ analytics_resource::service（编排）→ payload（本体：resources/ 或 analytics.duckdb）+ store（索引：project.db）`；删除 → `ProjectTrash`。**无 HTTP / IPC 层。**
@@ -148,7 +150,7 @@ cargo check --workspace --all-targets -j 2
 | --- | --- |
 | 已拍板（不阻塞） | 语义 C 模型 · 命名（资产库 / 分析存档 / 归档 / 取回）· 三种 kind 与第一期范围 · 指纹版本 · 项目级回收站 · `scope` 派生 · 标签为主 + 单层分组 · 只读常态（开发方案 §0） |
 | Phase 0（先做，无 UI） | ✅ 已落地（crate 内）：crate 入口文档 · workspace 别名 · 迁移 020 + 新列接入 · 领域类型 · 本体层 · **归档/取回/再归档闭环 + 变更事件** · **索引修复（三类孤儿）** · 行映射 4 份→1 份 · 9 项继承缺陷修复 · `mod tests` 接线（此前未编译）｜⬜ 待续（需跨 crate 或后续阶段）：engine 连接池修复（`busy_timeout` / `acquire` 超时）· `.RSmeta` 常量去重 · `ProjectTrash` 上提中性化与 `recycle.rs` 废弃 · 版本保留策略接入设置项 · 测试改走 `engine::migration`（详单见开发方案 §0） |
-| Phase 1 | ✅ 面板骨架 · ✅ 行渲染 · ✅ 工具栏（搜索 / 筛选 / 排序）· ✅ 两种空态 · ✅ 详情面板内容层 · ✅ 呈现层 · ✅ 术语收尾（`f93d560`）；⬜ **归档/取回闭环接线（workbench 桥）** · ⬜ 只读三重守卫（编辑器侧）· ⬜ Action 按键绑定 · ⬜ 虚拟化列表 · ⬜ 右键菜单 |
+| Phase 1 | ✅ 面板骨架 · ✅ 行渲染 · ✅ 工具栏（搜索 / 筛选 / 排序）· ✅ 两种空态 · ✅ 详情面板内容层 · ✅ 呈现层 · ✅ 术语收尾（`f93d560`）· ✅ **workbench 接线（面板挂载 + 快照桥）**；⬜ 五个对话框与动作真实现 · ⬜ 只读三重守卫（编辑器侧）· ⬜ Action 按键绑定 · ⬜ 虚拟化列表 · ⬜ 右键菜单 |
 | Phase 2 | 标签（补改名/删除）+ 单层分组 + 搜索筛选排序 + 设置项 + 多选批量 |
 | Phase 3 | 版本历史 + 历史内容保留 + 回收站对话框 + 索引修复对话框 + 异常态呈现 |
 | Phase 4 | `analysis` 档（DuckDB 表）+ M7 Mock 产物 / M5 编辑器结果两处上游接入 |

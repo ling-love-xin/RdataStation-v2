@@ -16,6 +16,8 @@
 | `panels/editor.rs` | 中央编辑区：SQL 草稿区 + 结果区 + 属性面板宿主 + 连接对话框宿主 | 1252 |
 | `panels/right.rs` | `RightSidebarPanel`（洞察 / Mock / 历史） | 194 |
 
+拆分**之后新增**的面板模块：`panels/resources.rs`（M6 资产库装配：构造期建实体 + 宿主端口 + 轮询回填；**视图与状态在 `analytics_resource` crate 内**，本模块只转发渲染）。
+
 切分接缝来自**原有代码的自然边界**：`impl SidebarPanel` 内导航方法与草稿箱方法本来就是两段连续代码，
 `Render for SidebarPanel` 的 4 分支分发点即面板模式边界。
 
@@ -140,3 +142,4 @@
 | 跨模块耦合通道（待收敛） | `crates/workbench/src/panels/shared.rs` 的 12 个字段（§3 表） |
 | 同步 I/O 待迁点（P1） | `nav.rs` 4 处 / `scratchpad_panel.rs` 14 处 `block_on` |
 | 后台任务正例（迁移目标形态） | `crates/workbench/src/services/scratchpad_jobs.rs`、`nav_jobs.rs` |
+| M6 资产库面板装配（crate 内视图 + 宿主端口 + 后台取数） | `panels/resources.rs`、`components/resource_host.rs`、`services/resource_jobs.rs` |

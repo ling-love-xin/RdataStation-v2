@@ -764,6 +764,17 @@ impl WorkbenchView {
 
     // ===== 三模式：Shared 状态 → Dock 同步（render 权威） =====
 
+    /// M6：请求一次资产库列表刷新（**事件路径**：激活面板 / 打开或切换项目之后）。
+    ///
+    /// 入队要带项目根与只读标志（都在 `Shared` 上），并且入队后要启动轮询回填 ——
+    /// 两件事都由侧栏面板持有，所以统一经它转一手（宿主不直接碰 `resource_jobs`）。
+    pub(crate) fn request_resources_refresh(&self, cx: &mut Context<Self>) {
+        let Some(sidebar) = self.sidebar.clone() else {
+            return;
+        };
+        sidebar.update(cx, |panel, cx| panel.request_resources_refresh(cx));
+    }
+
     fn apply_left_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
         let mode = self.shared.left_mode.get();
         let (Some(area), Some(sidebar)) = (&self.area, &self.sidebar) else {
@@ -1049,16 +1060,25 @@ impl WorkbenchView {
                             .toggled(selected)
                             .on_click(move |_, _, app| {
                                 let mode = shared.left_mode.get();
-                                if mode == SidebarMode::Expanded
-                                    && shared.active_left.get() == panel
-                                {
+                                // 激活（而非收起）时才需要取数；收起路径不动面板状态。
+                                let activating = !(mode == SidebarMode::Expanded
+                                    && shared.active_left.get() == panel);
+                                if !activating {
                                     // 再次点击当前激活项 → 收起。
                                     shared.left_mode.set(SidebarMode::Collapsed);
                                 } else {
                                     shared.active_left.set(panel);
                                     shared.left_mode.set(SidebarMode::Expanded);
                                 }
-                                entity.update(app, |_, cx| cx.notify());
+                                let activating_resources =
+                                    activating && panel == LeftPanel::Resources;
+                                entity.update(app, |this, cx| {
+                                    // M6：切到资产库时取一次列表（结果由面板轮询回填）。
+                                    if activating_resources {
+                                        this.request_resources_refresh(cx);
+                                    }
+                                    cx.notify();
+                                });
                             }),
                     ),
             );
@@ -1853,6 +1873,8 @@ fn run_quick_command(
         QuickOpenCommand::OpenResources => {
             shared.active_left.set(LeftPanel::Resources);
             shared.left_mode.set(SidebarMode::Expanded);
+            // M6：与活动栏点击同一口径——激活即取一次列表。
+            entity.update(cx, |this, cx| this.request_resources_refresh(cx));
         }
         QuickOpenCommand::OpenPlugin => {
             shared.active_left.set(LeftPanel::Plugin);

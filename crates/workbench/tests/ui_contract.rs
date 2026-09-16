@@ -68,6 +68,7 @@ fn view_layer_has_no_raw_size_literals() {
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
         ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
+        ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
             "panels/scratchpad_panel.rs",
             include_str!("../src/panels/scratchpad_panel.rs"),
@@ -145,6 +146,7 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/panels/shared.rs"),
         ),
         ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
+        ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
             "panels/scratchpad_panel.rs",

@@ -25,8 +25,11 @@ use database::model::NavSource;
 
 use crate::view::{LeftPanel, RightPanel};
 
+use analytics_resource::resource_view::ResourcesPanel;
+
 mod editor;
 mod nav;
+mod resources;
 mod right;
 // 带 `_panel` 后缀：若名为 `scratchpad`，会遮蔽 `scratchpad` crate（本模块的导入与
 // `SidebarPanel::scratchpad_watch` 字段类型都指向该 crate）；与既有测试模块名一致。
@@ -91,6 +94,10 @@ pub struct SidebarPanel {
     scratchpad_pump: RefCell<Option<Task<()>>>,
     /// 草稿箱目录监控器（外部改动 → 去抖重拉；每个项目根一个）。
     scratchpad_watch: Option<ScratchpadWatcher>,
+    /// M6 资产库面板实体（视图与状态在 `rds-analytics-resource` crate；构造期创建，无 I/O）。
+    resources_panel: Entity<ResourcesPanel>,
+    /// 资产库刷新结果的轮询任务（`ensure_scratchpad_pump` 同一形态）。
+    resources_pump: RefCell<Option<Task<()>>>,
     /// 监控轮询任务（常驻，每 ~1.2 s 探查一次变更标记）。
     scratchpad_watch_poll: RefCell<Option<Task<()>>>,
     /// Ctrl+F 待聚焦标记：搜索框懒创建，先到位的请求在这里等一帧（面板私有，不入 `Shared`）。
@@ -109,11 +116,15 @@ impl SidebarPanel {
         nav_view.type_filter = saved.db_type.clone();
         nav_view.driver_filter = saved.driver.clone();
         nav_view.tag_filter = saved.tag.clone();
+        // M6：资产库面板实体（视图与状态在 `analytics_resource` crate；构造期创建，无 I/O）。
+        let resources_panel = Self::build_resources_panel(&shared, cx);
         Self {
             shared,
             focus_handle: cx.focus_handle(),
             scratchpad: Rc::new(RefCell::new(ScratchpadView::default())),
             database_nav: Rc::new(RefCell::new(nav_view)),
+            resources_panel,
+            resources_pump: RefCell::new(None),
             nav_search: None,
             _nav_search_sub: None,
             nav_tag_input: None,
@@ -133,45 +144,6 @@ impl SidebarPanel {
             nav_search_focus_pending: false,
             active_search: None,
         }
-    }
-
-    fn render_resources_placeholder(&self, fg: Hsla) -> Div {
-        div()
-            .v_flex()
-            .w_full()
-            .gap_1()
-            .pl_2()
-            .pr_2()
-            .pt_2()
-            .pb_2()
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .child("分析资源（下一轮接入）"),
-            )
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .text_color(fg)
-                    .child("· 数据源连接引用"),
-            )
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .text_color(fg)
-                    .child("· DuckDB 分析表"),
-            )
     }
 
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
@@ -223,7 +195,7 @@ impl Render for SidebarPanel {
         let content: Div = match active {
             LeftPanel::Draft => self.render_scratchpad(window, cx),
             LeftPanel::Database => self.render_database_nav(window, cx),
-            LeftPanel::Resources => self.render_resources_placeholder(fg),
+            LeftPanel::Resources => self.render_resources_panel(cx),
             LeftPanel::Plugin => self.render_plugin_placeholder(fg),
         };
         div().v_flex().size_full().min_h_0().bg(bg).child(content)

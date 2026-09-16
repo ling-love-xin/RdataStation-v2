@@ -107,9 +107,9 @@
 
 | 已实现 | 待补 |
 | --- | --- |
-| **归档 / 取回 / 再归档闭环**【Phase 0】`ArchiveService`：本体 move + 登记 + 指纹版本 + 事件；索引失败回滚本体；取回产出可写工作副本 | 面板与对话框的 workbench 接线（Phase 1） |
+| **归档 / 取回 / 再归档闭环**【Phase 0】`ArchiveService`：本体 move + 登记 + 指纹版本 + 事件；索引失败回滚本体；取回产出可写工作副本 | 五个对话框与动作真实现（Phase 1 对话框批） |
 | **索引修复**【Phase 0】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；"从回收站还原"待 P0.8 | 版本保留策略接入设置项 |
-| **面板**【Phase 1】`ResourcesPanel`：面板头 / 工具栏（搜索·筛选·排序）/ 行渲染 / 状态行 / 两种空态；`present.rs` 把索引行转成快照（宿主只需取数 + 推送） | 虚拟化列表（`list::List`）、右键菜单、行图标 |
+| **面板**【Phase 1】`ResourcesPanel`：面板头 / 工具栏（搜索·筛选·排序）/ 行渲染 / 状态行 / 两种空态；`present.rs` 把索引行转成快照；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口） | 五个对话框与动作真实现、虚拟化列表、右键菜单、行图标 |
 | **工具栏数据层**【Phase 1】`filter.rs`：搜索（名称 + 尾部，大小写不敏感）/ 种类多选（全选 = 不限）/ 只看需处理 / 两种排序键（同键翻转方向、同键名称兜底） | 标签维与更多排序键（需 `ArchiveRow` 带原始值，Phase 2） |
 | 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / 只读 / 指纹 / 历史副本与裁剪 / 遍历） | 废弃 `recycle.rs` → `ProjectTrash`（P0.8，跨 crate） |
 | 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤的**存储层**入口（面板已能按 kind 筛可见行） |
@@ -120,4 +120,4 @@
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
 - 验证：`cargo test -p rds-analytics-resource -j 2` → **66 项单测**（16 存储 + 5 领域 + 11 本体 + 7 归档服务 + 7 索引修复 + 6 筛选/排序 + 4 面板 + 5 详情 + 5 呈现）+ `tests/panel_window.rs` **5 项窗口测试**；`cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
-- **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接 DuckDB 静态库会耗尽内存。
+- **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

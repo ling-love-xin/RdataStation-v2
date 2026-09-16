@@ -8,6 +8,27 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 1 第四刀：workbench 接线（面板挂载 + 快照桥）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P1.1/P0.1（续）✅ | 左 Dock「资产库」分支由占位换成真面板：**构造期**创建 `ResourcesPanel` 实体 + 注入宿主端口，渲染只转发（`render_resources_placeholder` 下线） | `crates/workbench/src/panels/resources.rs`（新）、`panels/mod.rs` |
+| 取数桥 ✅ | `services::resource_jobs`：单工作线程 + tokio（`ProjectDatabaseManager::open` → `list_file_archives` → `IndexRepair::scan` → `present::build_snapshot`）；结果槽只留最新一份；`enqueue_refresh` / `drain_snapshot` / `has_pending` | `crates/workbench/src/services/resource_jobs.rs`（新） |
+| 宿主端口 ✅ | `components::resource_host`：`ResourcesHost` 实现——动作类请求给**明确回执**（状态栏提示“尚未接入 + 缺什么”），不接半条链路 | `crates/workbench/src/components/resource_host.rs`（新） |
+| 触发点 ✅ | **事件路径**三处：活动栏切到资产库 · Quick Open「打开资产库」· 项目打开/切换（`project_host::on_opened`）——render 不发起任务（与 nav 面板“render 内入队”的既有债刻意区分） | `crates/workbench/src/view.rs`、`components/project_host.rs` |
+| 回填 ✅ | `ensure_resources_pump`（照 `ensure_scratchpad_pump`）：60 ms 轮询 `drain_snapshot` → 推给面板实体；失败只给提示并**保留上一份列表** | `panels/resources.rs` |
+| 契约 ✅ | 新面板模块登记进 `ui_contract` 的尺寸 / 颜色两份清单（契约 2c 强制：漏登会让两份契约对该文件静默失效） | `crates/workbench/tests/ui_contract.rs` |
+| 验证 | 见下文 | — |
+
+**两处刻意的克制**：
+
+1. **不新增 `Shared` 字段**：面板实体句柄与轮询任务都在 `SidebarPanel` 的私有字段里，宿主经 `WorkbenchView::request_resources_refresh` 转一手（`Shared` 字段白名单契约因此无需变动）；
+2. **`UntrackedFile` 不进行**：它没有资源行可标（未登记的东西不是存档），留给索引修复对话框呈现；本批只把 `缺失` / `内容已变` 折成行状态。
+
+**已知成本**：每次刷新都会重算全部本体指纹（`IndexRepair::scan`）。它发生在工作线程上，但文件多时会慢；若将来成为瓶颈，先在 `indexer` 加“只查存在性”的快路径，**不要**删掉指纹比对（那会让“内容已变”静默失效）。
+
+**未落地**：五个对话框（归档 / 取回 / 版本 / 回收站 / 索引修复）、编辑器只读打开（P1.6）、Action 按键绑定、虚拟化列表、右键菜单、行图标、`ProjectTrash` 上提（P0.8）。
+
 ### 2026-09-16 — Phase 1 第三刀：工具栏（搜索 / 筛选 / 排序）
 
 | 项 | 内容 | 落点 |
