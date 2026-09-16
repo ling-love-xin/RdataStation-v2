@@ -73,10 +73,10 @@ paths::extensions_dir()  // home/extensions
    注意：`set_var` 必须在任何线程/运行时启动前调用（Rust 2024 中 `set_var` 已是 `unsafe`）。
 3. 替换 9 处硬编码 `"RdataStation"` 字面量为 `paths::*` 调用。
 4. 兼容与迁移：启动时若新路径为空且旧路径有数据 → 提示并**一次性迁移**（或只提示路径变更 + 提供开关）。
-5. **一律不提交**：`.gitignore` 加 `/.rds/`、`/rds-*.log`、`*.fossil`；`.` 内部不再需要兜底（数据目录
-   若落在 `target/` 内则已被 `/target` 覆盖）。
+5. **一律不提交**：`.gitignore` 加 `/.rds/`、`/rds-*.log`（数据/日志/临时不入库）。
+   注意：`*.fossil` 是**测试用的 SQLite 库**（非生成物），不要加入忽略规则。
    已完成：`docs/tmp/*.log`、`tools/r2*.log` 等**已被跟踪**的日志需 `git rm --cached`（保留工作区文件）——
-   属索引操作，等仓库安静时做（见 §7）。
+   属索引操作，等仓库安静时做（见 §6）。
 6. 文档同步：本文档 + `settings/*`（settings.json 位置）、`database/*`（sqlite/duckdb 位置）、
    `overview.md`（双层数据落盘位置）、`connection/*`（known_hosts 例外）。
 
@@ -101,13 +101,15 @@ paths::extensions_dir()  // home/extensions
 未跟踪的生成物（应加入忽略规则或删除）：
 
 - 仓库根：`rds-a.log` / `rds-c.log` / `rds-e.log` / `rds-i.log` / `rds-si.log` / `rds-sw.log` / `rds-t.log` / `rds-w*.log`
-- 其他：`commit_msg_b3.txt`（提交信息临时文件）、`crates/workbench/data123`、`crates/workbench/FossilTT.fossil`
+- 其他：`commit_msg_b3.txt`（提交信息临时文件）、`crates/workbench/data123`（先 `file`/`head` 看一眼是测试数据还是废物）
+- **不是生成物、不要删也不要忽略**：`crates/workbench/FossilTT.fossil`（测试用 SQLite 库）等 `*.fossil`
 
 建议动作顺序（等当前并行会话停下来再做，避免动索引）：
 
 1. `.gitignore` 补规则（本文件 §4.5）；
 2. `git rm --cached docs/tmp/*.log tools/r2*.log`（一次提交，说明"生成物不入库"）；
-3. 删除工作区里的临时件（`commit_msg_*.txt`、`FossilTT.fossil`、`rds-*.log`；`data123` 先 `file` 看一眼再定）。
+3. 删除工作区里的临时件（`commit_msg_*.txt`、`rds-*.log`；`data123` 先 `file` 看一眼再定）；
+   `*.fossil` 属测试资产，**不动**。
 
 ## 7. 实现位置映射表
 
@@ -119,4 +121,4 @@ paths::extensions_dir()  // home/extensions
 | 全局数据 / 密钥库 | `crates/engine/src/migration/global_init.rs`、`crates/engine/src/persistence/*`、`crates/shared/src/crypto.rs` |
 | 日志目录 | `crates/engine/src/logging/config.rs` |
 | 系统库 / 分析库 | `crates/project/src/ui.rs`、`crates/workbench/src/services/workspace_loader.rs` |
-| 忽略规则与"不提交" | `/.gitignore`（`/.rds/`、`/rds-*.log`、`*.fossil`）+ 已跟踪日志的 `git rm --cached` 清单（§7） |
+| 忽略规则与"不提交" | `/.gitignore`（`/.rds/`、`/rds-*.log`）+ 已跟踪日志的 `git rm --cached` 清单（§6）；`*.fossil` 是测试库，不忽略 |
