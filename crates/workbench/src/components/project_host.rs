@@ -22,34 +22,69 @@ impl project::ui::ProjectUiNotifier for ViewNotifier {
     }
 }
 
-/// 编辑区桥：读 `Shared` 的编辑区脏标记 / 草稿内容，转发清空命令。
-struct EditorBridge(Shared);
+/// 编辑区桥：把 M1 的未保存草稿拦截接到**编辑器文档**上（B12）
+///
+/// 旧实现读 `Shared` 的三个镜像字段（`editor_dirty` / `editor_sql` / `editor_clear`）——
+/// 那是“编辑区只有一个 SQL 框”时代的产物；现在草稿就是**未命名的编辑器文档**，
+/// 真相在 `EditorService` 里，这里只读它（`EditorShared` 是 `Rc` 句柄，不需要 `cx`）。
+///
+/// 口很窄：有路径的文档是真实文件，项目切换不该碰它们。
+struct EditorBridge {
+    /// 编辑器文档集合（读脏状态与草稿内容）
+    service: editor::shared::EditorShared,
+    /// 宿主句柄（只有 `clear` 要它：关面板需要 Dock 与窗口）
+    host: WeakEntity<WorkbenchView>,
+}
+
+impl EditorBridge {
+    /// 未命名且内容非空的文档（= 需要看管的草稿）
+    fn drafts(&self) -> Vec<(editor::model::DocumentId, String)> {
+        self.service
+            .service()
+            .documents()
+            .iter()
+            .filter(|doc| doc.path().is_none() && !doc.content().trim().is_empty())
+            .map(|doc| (doc.id().clone(), doc.content().to_string()))
+            .collect()
+    }
+}
 
 impl project::ui::ProjectEditorBridge for EditorBridge {
     fn is_dirty(&self) -> bool {
-        self.0.editor_dirty.get()
+        !self.drafts().is_empty()
     }
 
     fn sql(&self) -> String {
-        self.0.editor_sql.borrow().clone()
-    }
-
-    fn clear(&self, window: &mut Window, cx: &mut App) {
-        let clear = self.0.editor_clear.borrow().clone();
-        if let Some(clear) = clear {
-            clear(window, cx);
+        // 优先取**当前活动**草稿；否则任意一份（用户看得到哪份就存哪份）
+        let active = self.service.service().active_id().cloned();
+        let drafts = self.drafts();
+        match active {
+            Some(id) => drafts
+                .iter()
+                .find(|(draft, _)| draft == &id)
+                .map(|(_, sql)| sql.clone())
+                .or_else(|| drafts.first().map(|(_, sql)| sql.clone()))
+                .unwrap_or_default(),
+            None => drafts.first().map(|(_, sql)| sql.clone()).unwrap_or_default(),
         }
     }
 
-    fn mark_clean(&self) {
-        self.0.editor_dirty.set(false);
+    fn clear(&self, window: &mut Window, cx: &mut App) {
+        // 关掉未命名文档 = 草稿已处理（已另存到项目根 / 用户选择丢弃）
+        let _ = self
+            .host
+            .update(cx, |view, cx| view.close_untitled_editor_documents(window, cx));
     }
+
+    /// `clear` 之后草稿已不存在（未命名文档已关）——不需要另一个“清脏”动作
+    fn mark_clean(&self) {}
 }
 
 /// 组装项目视图宿主（在 `WorkbenchView::new` 中调用一次）。
 pub fn build_host(
     shared: &Shared,
     entity: WeakEntity<WorkbenchView>,
+    editor_service: editor::shared::EditorShared,
 ) -> project::ui::ProjectUiHost {
     let save_sort: Rc<dyn Fn(project::ui::ProjectSort, &mut App)> =
         Rc::new(|sort, cx| settings::SettingsService::set_project_sort_mode(sort.key(), cx));
@@ -62,9 +97,12 @@ pub fn build_host(
     project::ui::ProjectUiHost::new(
         shared.project_ui.clone(),
         shared.project.clone(),
-        Rc::new(ViewNotifier(entity)),
+        Rc::new(ViewNotifier(entity.clone())),
     )
-    .with_editor(Rc::new(EditorBridge(shared.clone())))
+    .with_editor(Rc::new(EditorBridge {
+        service: editor_service,
+        host: entity,
+    }))
     .with_sort_saver(save_sort)
     .with_on_opened(on_opened)
 }
@@ -107,7 +145,6 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
     let has = !shared.connections.borrow().is_empty();
     shared.selected.set(if has { Some(0) } else { None });
     shared.invalidate_nav_cache();
-    shared.invalidate_sql_result();
 }
 
 #[cfg(test)]

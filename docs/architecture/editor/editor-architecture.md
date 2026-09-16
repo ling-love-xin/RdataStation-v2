@@ -22,7 +22,7 @@
 | 关注点 | crate | 说明 |
 | --- | --- | --- |
 | 编辑器内核 + 三模式视图 + 执行编排 | **`crates/editor`（新建，见 §3.2）** | 本期主体 |
-| 单文件 SQL 编辑器（历史现状） | `crates/workbench/src/panels.rs::EditorPanel` | 1a/1b 完成后按 §3.3 收编或退役 |
+| 单文件 SQL 编辑器（历史现状） | `crates/workbench/src/panels/editor.rs::EditorPanel` | 1a/1b 完成后按 §3.3 收编或退役 |
 | SQL 执行/解析/转译/缓存/历史存储 | `engine` | 已迁移，多数接线未做（§7） |
 | 元数据（补全数据源） | `database`（`MetadataService`） | 已迁移，零消费 |
 | 单元/会话持久化 | `engine::persistence::workbench_context_store`（+ 新表） | 已有 `EditorContext` 表，需扩展 |
@@ -122,13 +122,13 @@
 | 独立状态与生命周期 | ✅ 多文档、模式、会话、结果集，独立于窗口与项目生命周期 |
 | 稳定公开边界 | ✅ 对外只暴露 `EditorService`（打开/关闭/执行/保存）+ 一组 GPUI Action |
 | 使用方 ≥2 | ✅ ① workbench 中央区；② M4 导航「在 SQL 编辑器中打开 / 查看数据」；③ M5 草稿箱打开文件；④ M7/M8 产物预览（后续） |
-| 是否有更合适的归属 | `workbench` 现已是壳层（布局/活动栏/Dock/Quick Open）且 `panels.rs` 达 7343 行——把编辑器本体继续塞进去会让壳层与本体互相污染 |
+| 是否有更合适的归属 | `workbench` 现已是壳层（布局/活动栏/Dock/Quick Open）且 `panels/` 达 7343 行——把编辑器本体继续塞进去会让壳层与本体互相污染 |
 
 替代方案：先留在 `workbench` 内（改动小），代价是 1c 阶段必然要拆分（notebook 是独立状态与生命周期的典型）。**建议独立**，并在 dev-plan 的 Phase 0 完成骨架与接线。
 
 ### 3.3 与现有 `EditorPanel` 的关系（迁移而非并存）
 
-| 现有内容（`crates/workbench/src/panels.rs`） | 去向 |
+| 现有内容（`crates/workbench/src/panels/`） | 去向 |
 | --- | --- |
 | SQL 区块（`sql_textarea` / `query_result` / `sql_history` / 执行闭包，L6094-6104、L6777-6998） | 迁入 `editor` 的 `view/sql_mode.rs` + `execution.rs`，**闭包内同步 I/O 全部删除** |
 | 连接详情卡 / 数据库导航树（L6566-6773） | 属 M3/M4 的"连接概览"，迁出编辑器面板（回 `workbench` 的独立面板或并入 M4） |
@@ -395,9 +395,13 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 
 ### 7.1 V2 现状：编辑器本体基本不存在
 
+> **本节是 2026-09-15 的开工前盘点**（保留历史证据）。其中与本模块相关的部分已逐条关闭：
+> 编辑器视图 / 执行 / 结果 / 多文档 / 快捷键全部落地（见 §7 末「当前事实」与开发计划的任务表）；
+> **B12（2026-09-16）已删掉旧 `EditorPanel` 的 SQL 框与内联执行闭包**，SQL 编辑器只剩 `crates/editor`。
+
 | 层 | 现状 | 证据 |
 | --- | --- | --- |
-| 编辑器视图 | 一个 `Textarea`（无高亮/行号/补全），仅在连接 `use_duckdb_fed` 时出现 | `crates/workbench/src/panels.rs` L6094、L6809、L6779 |
+| 编辑器视图 | 一个 `Textarea`（无高亮/行号/补全），仅在连接 `use_duckdb_fed` 时出现 | `crates/workbench/src/panels/` L6094、L6809、L6779 |
 | 执行 | 同步直连**全局分析库文件**（与连接无关），无取消/超时/事务/批量 | 同上 L6821-6825；`services/query_runner.rs` |
 | 结果 | 定宽 `div` 表格，无虚拟化/排序/过滤/分页 | 同上 L6921-6950 |
 | 历史 | 20 条 JSON 列表（点击回填） | `services/query_history.rs`（去重 + 上限 20） |

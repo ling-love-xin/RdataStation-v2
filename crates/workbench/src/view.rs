@@ -26,7 +26,8 @@ use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
 use crate::panels::{
-    EditorPanel, ProjectActionRequest, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel,
+    EditorPanel, ProjectActionRequest, QueryRequest, RightSidebarPanel, Shared, SidebarEvent,
+    SidebarPanel,
 };
 use crate::ui;
 use mock::mock_view::{MockDetailView, focus_detail_tab};
@@ -189,6 +190,21 @@ impl WorkbenchView {
         // B1：编辑器的连接端口要用它（连接列表快照 + 项目根）——先 clone 出来，
         // 因为下面构造 `editor_service` 时不能再借 `self`。
         let editor_shared_for_conn = shared.clone();
+        // B11：编辑器的共享状态**提前建好**——M1 项目桥（未保存草稿拦截）与连接端口都要它，
+        // 而下面 `build_host` 就会用到；它是 `Rc` 句柄（不是 gpui 实体），clone 很便宜。
+        let editor_service = editor::shared::EditorShared::new();
+        editor_service.open(editor::service::OpenRequest::untitled(
+            "",
+            editor::model::EditorMode::Sql,
+        ));
+        // A14：把执行端口接上（文档绑定/活动连接）。未接时执行动作会明确报“未接入执行”。
+        crate::services::editor_exec::attach(&editor_service);
+        // A12：把会话存储接上（光标 / 选区 / 模式跨重启保留；未接时不持久化但编辑可用）
+        crate::services::editor_session::attach(&editor_service);
+        // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）
+        crate::services::editor_files::attach(&editor_service);
+        // B1：把连接端口接上（连接列表 + 自动建连；未接时选择器说“未接入连接列表”）
+        crate::services::editor_connections::attach(&editor_service, &editor_shared_for_conn);
         // M1：排序偏好（直读 settings.json，无需 cx）与首屏项目列表（无项目时）都在构造期完成，
         // 避免在 `render` 里做 I/O（GPUI-kit 编码指南：副作用不得放在 render）。
         {
@@ -197,7 +213,12 @@ impl WorkbenchView {
             shared.project_ui.borrow_mut().picker.sort = sort;
         }
         // 项目视图宿主：注入状态句柄 / 重绘 / 编辑区桥 / 排序偏好 / 打开后刷新。
-        let host = crate::components::project_host::build_host(&shared, cx.entity().downgrade());
+        // 编辑区桥拿的是 `EditorShared`（Rc 句柄）：未保存草稿的归属在编辑器一侧（B11/B12）。
+        let host = crate::components::project_host::build_host(
+            &shared,
+            cx.entity().downgrade(),
+            editor_service.clone(),
+        );
         // 对话框层挂载点在 `WorkbenchView::render`；`Root` 的 notify 不会传到子视图，
         // 因此把宿主重绘桥注入 `Shared`，供打开 / 关闭对话框的入口调用。
         {
@@ -229,24 +250,7 @@ impl WorkbenchView {
             _subscription: None,
             _editor_subscription: None,
             _insight_rules_watcher: insight_rules_watcher,
-            editor_service: {
-                // 初始一份未命名 SQL 文档：打开 app 就有可写的编辑区，
-                // 而不是空白（后续可由 A12 的会话恢复替换为上次的文档）。
-                let service = editor::shared::EditorShared::new();
-                service.open(editor::service::OpenRequest::untitled(
-                    "",
-                    editor::model::EditorMode::Sql,
-                ));
-                // A14：把执行端口接上（当前活动连接）。未接时执行动作会明确报“未接入执行”。
-                crate::services::editor_exec::attach(&service);
-                // A12：把会话存储接上（光标 / 选区 / 模式跨重启保留；未接时不持久化但编辑可用）
-                crate::services::editor_session::attach(&service);
-                // A9：把“另存为”的路径选择接上（系统文件对话框；未接时另存为会明确报未接入）
-                crate::services::editor_files::attach(&service);
-                // B1：把连接端口接上（连接列表 + 自动建连；未接时选择器说“未接入连接列表”）
-                crate::services::editor_connections::attach(&service, &editor_shared_for_conn);
-                service
-            },
+            editor_service,
             editor_hosts: Vec::new(),
         }
     }
@@ -267,6 +271,133 @@ impl WorkbenchView {
             .map_err(|error| error.to_string())?;
         self.show_document(outcome.id().clone(), window, cx);
         Ok(())
+    }
+
+    /// 打开一条查询（B11）：导航「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL」与拖拽共用
+    ///
+    /// 语义（原型 §1.2 入口语义）：
+    /// - 复用条件很窄：**未命名 + 内容空 + 同一绑定**的 SQL 文档（连续点几次“打开”不刷标签）；
+    /// - 否则新建一份绑定了该连接的未命名 SQL 文档；
+    /// - 带 SQL 时追加到目标文档（`Shared::append_sql`：**追加不覆盖**，用户手里的草稿不会没了）；
+    /// - `run = true`（「查看数据」）时打开后立即执行整篇（关掉 M4 遗留的“查看数据不自动执行”）。
+    pub fn open_query_document(
+        &mut self,
+        request: QueryRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use editor::model::EditorMode;
+        use editor::service::OpenRequest;
+
+        // 请求带了连接就把导航的当前连接也切过去（与点该连接同口径）
+        if let Some(conn_id) = request.conn_id.as_deref() {
+            let idx = self
+                .shared
+                .connections
+                .borrow()
+                .iter()
+                .position(|c| c.id == conn_id);
+            if let Some(idx) = idx {
+                self.shared.selected.set(Some(idx));
+                self.shared.invalidate_nav_cache();
+            }
+        }
+
+        let sql = request.sql.trim().to_string();
+        let target = self.reusable_query_document(request.conn_id.as_deref(), &sql);
+        let document = match target {
+            Some(id) => {
+                if !sql.is_empty() {
+                    let merged = self
+                        .editor_service
+                        .service()
+                        .find(&id)
+                        .map(|doc| crate::panels::append_sql(doc.content(), &sql))
+                        .unwrap_or_else(|| sql.clone());
+                    self.editor_service
+                        .update(|service| service.set_content(&id, merged));
+                }
+                id
+            }
+            None => {
+                let mut open = OpenRequest::untitled(&sql, EditorMode::Sql);
+                if let Some(conn_id) = request.conn_id.clone() {
+                    open = open.with_connection(conn_id);
+                }
+                self.editor_service.open(open).id().clone()
+            }
+        };
+
+        self.show_document(document.clone(), window, cx);
+        // 面板的内容可能落后于服务层（复用文档时刚追加过）：从文档重载一次再执行
+        if let Some(panel) = self.editor_panel(&document, cx) {
+            panel.update(cx, |panel, cx| {
+                panel.reload_from_document(window, cx);
+                if request.run {
+                    panel.run_all(cx);
+                }
+            });
+        }
+    }
+
+    /// 可复用的查询文档：未命名 + 内容空 + 同一绑定的 SQL 文档（只复用这一种）
+    fn reusable_query_document(
+        &self,
+        conn_id: Option<&str>,
+        sql: &str,
+    ) -> Option<editor::model::DocumentId> {
+        // 带 SQL 的请求总是新建：它有自己的内容要放，不该往别人正在写的草稿里塞
+        if !sql.is_empty() {
+            return None;
+        }
+        self.editor_service
+            .service()
+            .documents()
+            .iter()
+            .find(|doc| {
+                doc.path().is_none()
+                    && doc.mode() == editor::model::EditorMode::Sql
+                    && doc.content().trim().is_empty()
+                    && doc.connection() == conn_id
+            })
+            .map(|doc| doc.id().clone())
+    }
+
+    /// 某文档对应的编辑器面板（没有面板则 `None`）
+    fn editor_panel(
+        &self,
+        document: &editor::model::DocumentId,
+        cx: &App,
+    ) -> Option<Entity<editor::view::host::EditorHostPanel>> {
+        self.editor_hosts
+            .iter()
+            .find(|panel| panel.read(cx).document() == document)
+            .cloned()
+    }
+
+    /// 关闭所有**未命名**文档（M1 项目切换的「未保存草稿」拦截用：内容已另存或用户选择丢弃）
+    ///
+    /// 只关未命名的：有路径的文档是真实文件，项目切换不该把它们关掉。
+    pub fn close_untitled_editor_documents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let untitled: Vec<editor::model::DocumentId> = self
+            .editor_service
+            .service()
+            .documents()
+            .iter()
+            .filter(|doc| doc.path().is_none())
+            .map(|doc| doc.id().clone())
+            .collect();
+        let Some(area) = self.area.clone() else {
+            return;
+        };
+        for id in untitled {
+            if let Some(panel) = self.editor_panel(&id, cx) {
+                editor::view::host::close_document_now(&area, panel, window, cx);
+            } else {
+                // 没有面板（已不在 Dock 上）：直接让服务层收尾，不留孤儿文档
+                let _ = self.editor_service.update(|service| service.close(&id));
+            }
+        }
     }
 
     /// 把一份已存在于 `EditorService` 的文档接到界面上（建面板 / 复用已有面板）
@@ -497,14 +628,8 @@ impl WorkbenchView {
         let sidebar = cx.new(|cx| SidebarPanel::new(shared.clone(), cx));
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
         let right_sidebar = cx.new(|cx| RightSidebarPanel::new(shared.clone(), cx));
-        // M1：宿主命令——清空编辑区（项目保存 / 放弃未保存草稿后调用）。
-        {
-            let editor_for_clear = editor.clone();
-            *shared.editor_clear.borrow_mut() =
-                Some(Rc::new(move |window: &mut Window, cx: &mut App| {
-                    editor_for_clear.update(cx, |panel, cx| panel.clear_sql(window, cx));
-                }));
-        }
+        // B12：旧“编辑区”的 SQL 框已删；M1 的未保存草稿拦截改看**编辑器的未命名文档**
+        // （见 `components/project_host.rs` 的 `EditorBridge`），不再需要 `Shared::editor_clear`。
         // S2：编辑区命令端口——导航 / 草稿箱改调这里，不再直写 `Shared` 的请求字段
         // （接线只此一份，见 `docs/architecture/layout/panels-coupling-plan.md` §3）。
         crate::panels::install_editor_bridge(&shared, editor.clone());
@@ -516,9 +641,10 @@ impl WorkbenchView {
             match event {
                 SidebarEvent::SelectConnection(idx) => {
                     this.shared.selected.set(Some(*idx));
-                    // Round 30：切换连接 → 清空导航树 / SQL 结果残留，防止串数据。
+                    // Round 30：切换连接 → 清空导航缓存，防止串数据。
+                    // B12：SQL 结果不再跟“当前连接”走（每份文档有自己的绑定与结果），
+                    // 因此不再需要结果失效戳。
                     this.shared.invalidate_nav_cache();
-                    this.shared.invalidate_sql_result();
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }
@@ -534,28 +660,6 @@ impl WorkbenchView {
                 }
                 SidebarEvent::NewConnectionRequest => {
                     // 同 `EditConnection`：动作已由端口完成，这里只触发重绘。
-                    if let Some(editor) = &this.editor {
-                        editor.update(cx, |_, cx| cx.notify());
-                    }
-                }
-                SidebarEvent::EditorSqlRequest => {
-                    // SQL 已由 `EditorBridge::insert_sql` 排入草稿；此处只触发重绘。
-                    if let Some(editor) = &this.editor {
-                        editor.update(cx, |_, cx| cx.notify());
-                    }
-                }
-                SidebarEvent::OpenSqlEditor(conn_id) => {
-                    // 连接右键「在 SQL 编辑器中打开」：选中该连接（与侧边栏点击一致，
-                    // 清空导航树 / SQL 结果残留），并通知编辑区重绘。
-                    let idx = this
-                        .shared
-                        .connections
-                        .borrow()
-                        .iter()
-                        .position(|c| c.id == *conn_id);
-                    this.shared.selected.set(idx);
-                    this.shared.invalidate_nav_cache();
-                    this.shared.invalidate_sql_result();
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }
@@ -1335,6 +1439,11 @@ impl Render for WorkbenchView {
                 *self.shared.notice.borrow_mut() = Some(format!("打开文件失败: {e}"));
             }
         }
+        // B11：导航的「打开查询」请求（在 SQL 编辑器中打开 / 查看数据 / 生成 SQL / 拖拽）。
+        // 入队方拿不到 `Window`，消费点在宿主 render（与上一块同一口径）。
+        if let Some(request) = self.shared.take_query_request() {
+            self.open_query_document(request, window, cx);
+        }
 
         let area = self.area.clone().expect("workspace initialized");
         // edition 2024：`.then(|| ...)` 闭包会同时独占 `cx`/`self`，改为显式 if（也更符合
@@ -1791,7 +1900,7 @@ fn run_quick_command(
     entity.update(cx, |_, cx| cx.notify());
 }
 
-/// Quick Open 选中连接：与侧边栏点击一致（清空导航 / SQL 残留，防止串数据）。
+/// Quick Open 选中连接：与侧边栏点击一致（清空导航缓存，防止串数据）。
 fn select_connection(
     idx: usize,
     _name: &str,
@@ -1802,7 +1911,7 @@ fn select_connection(
 ) {
     shared.selected.set(Some(idx));
     shared.invalidate_nav_cache();
-    shared.invalidate_sql_result();
+    shared.invalidate_nav_cache();
     shared.quick_open.set(false);
     entity.update(cx, |_, cx| cx.notify());
 }

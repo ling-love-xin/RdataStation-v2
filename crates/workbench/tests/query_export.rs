@@ -2,8 +2,7 @@
 
 use std::path::PathBuf;
 
-use rds_workbench::services::query_export::{export_csv, export_to_default};
-use rds_workbench::services::query_runner::QueryOutput;
+use rds_workbench::services::query_export::{QueryOutput, export_csv, export_to_default};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("rds_qe_{tag}_{}", std::process::id()));

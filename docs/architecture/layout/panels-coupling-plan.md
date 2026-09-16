@@ -27,20 +27,20 @@
 | `project` / `project_ui` | 宿主（`view.rs`） | editor / scratchpad | **保留 `Shared`** | M1 项目会话与 UI 状态 |
 | `active_left` / `active_right` / `*_mode` / `quick_open` / `settings_open` | 宿主 | 宿主 / mod.rs | **保留 `Shared`** | 布局与三模式（`rds-layout` 口径） |
 | `mock_panel` / `mock_detail` / `insight_panel` / `open_mock_detail` / `host_redraw` | 宿主 | 宿主 / right.rs | **保留 `Shared`** | 宿主级弱句柄与命令 |
-| `editor_sql` / `editor_dirty` | **仅 editor.rs** | editor.rs + `components/project_host.rs`（M1 `ProjectEditorBridge`） | **S2 处理**：随 `EditorService` 契约一起换实现，本步不动 | 现在搬会连带改 M1 桥 |
+| `editor_sql` / `editor_dirty` | ~~仅 editor.rs~~ | — | ✅ **S2 遗留已接（B11/B12，2026-09-16）**：随 `EditorService` 契约一起换实现——草稿 = **未命名编辑器文档**，M1 桥改读 `EditorShared`（`components/project_host.rs`）；两个字段已删 | — |
 | `nav_for` / `nav_tables` | **仅 editor.rs** | 仅 editor.rs（+ 宿主 Quick Open 读表名快照） | **✅ S1 已收回 `EditorPanel`** | 外部失效改为 `Shared::invalidate_nav_cache()`（§3 戳） |
 | `sql_for` | 仅 editor.rs | 仅 editor.rs | **✅ S1 已收回 `EditorPanel`** | 外部失效改为 `Shared::invalidate_sql_result()` |
 | `property_target` | nav（5 处） | editor | **`EditorBridge::show_properties(PropertyRequest)`** | nav → editor 请求 |
 | `open_edit` | nav（2 处） | — | **✅ S2a 已端口化**：`EditorBridge::edit_connection(id)` | 数据字段已删，配对 request 字段一起删 |
 | `new_connection_request` | nav（2 处） | — | **✅ S2a 已端口化**：`EditorBridge::new_connection()` | 同上 |
-| `editor_set` | nav（2 处） | — | **✅ S2b 已端口化**：`EditorBridge::insert_sql(sql)`（编辑区入私有缓冲，渲染期 `set_value`） | 事件路径拿不到窗口，故不立即写输入框 |
+| `editor_set` | nav（2 处） | — | **✅ S2b 已端口化**：`EditorBridge::insert_sql(sql)`（编辑区入私有缓冲，渲染期 `set_value`）→ **B11/B12 再收一步**：改走 `Shared::request_query(QueryRequest)`，旧 SQL 框已删（见下方 B11/B12 行） | 事件路径拿不到窗口，故不立即写输入框 |
 | `property_target` | nav（5 处） | — | **✅ S2b 已端口化**：`EditorBridge::show_properties(request)`；数据归 `EditorPanel`，入队与 loading 置位移到事件路径 | render 不再入队 |
 | `scratchpad_search` | scratchpad（2 处） | editor | **`EditorBridge::show_search_results(view)`** | scratchpad → editor 投递 |
 | `scratchpad_pump_request` | editor（1 处） | mod / scratchpad | **`ScratchpadBridge::ensure_pump()`** | editor → scratchpad 请求 |
 | `open_file_request` | scratchpad | 宿主（`view.rs`） | **✅ S3b：已收为私有字段 + `request_open_in_editor` / `take_open_in_editor` 方法对**（生产端拿不到 `Window`、消费端必须有 `Window`，故保留一帧延迟；端口签名满足不了两边） | 外部不再能直写字段 |
 | `focus_nav_search` | — | — | **✅ S3b：已从 `Shared` 删除**——实测它只由 nav 自己写读（`view.rs` 本来就走 `SidebarPanel::focus_nav_search`），已改为面板私有字段 `nav_search_focus_pending` | 字段寄存的直接证据 |
 
-`editor_clear`（宿主命令闭包）与其它已由宿主持有的项不在本次范围。
+| `editor_clear` | 宿主 | `components/project_host.rs` | ✅ **已删（B11/B12）**：`ProjectEditorBridge::clear` 改由宿主关闭**未命名编辑器文档**（`WorkbenchView::close_untitled_editor_documents`） | 旧 SQL 框已删，不再需要“清空输入框”命令 |
 
 ## 3. 三类桥 + 一个宿主端口
 
@@ -90,6 +90,8 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 | **S3a** ✅ | `scratchpad_pump_request` → `ScratchpadBridge::ensure_pump`（装配入口 `panels::install_scratchpad_bridge`）；删除侧栅 `Render` 里的 take 块（**又一个 render 内副作用回到事件路径**） | `Shared` 字段 31 → 30；面板 16 项 + 契约 6 项 + `dialog_host_layer` 4 项全绿 |
 | **S3b** ✅ | `focus_nav_search` 已删（面板私有字段）；`open_file_request` 收为私有 + 方法对（`request_/take_open_in_editor`），两个 scratchpad 写点与 `view.rs` 读点改走方法 | 面板 16 项 + 契约 7 项全绿；`Shared` pub 字段 31 → 29（另 1 个私有） |
 | **S4** | ✅ 已加 `ui_contract` 契约 4（`Shared` 字段白名单，新增字段必须显式登记）；**待做**：删除已退化为"仅触发重绘"的 `SidebarEvent::{EditConnection, NewConnectionRequest}` | 契约测试 7 项通过；§3 表格与实际一致 |
+| **B11** ✅ | 编辑器对外接口：`Shared::request_query(QueryRequest{conn_id, sql, run})`（私有字段 + 方法对）+ 宿主 `WorkbenchView::open_query_document`（复用/新建绑定该连接的文档 → 注入 SQL → 可选自动执行）· 导航「查看数据」`run = true`（**关闭 M4 遗留的“查看数据不自动执行”**）、「生成 SQL」`run = false`、拖拽同路 | `Shared` 字段 29 → 27；导航 4 处改调请求；面板单测 + `dialog_host_layer` 4 项全绿 |
+| **B12** ✅ | **删掉旧 `EditorPanel` 的 SQL 区块**（Textarea + 内联执行闭包 + 结果表 + 历史列表 + `use_duckdb_fed` 门控，约 250 行）+ 其状态（`sql_textarea`/`query_result`/`sql_history`/`last_executed`/`sql_for`/`pending_sql`/`_sql_sub`）与 `apply_nav_drag`/`insert_sql`/`clear_sql`；**SQL 编辑器只剩 `crates/editor`**；旧路径的“项目只读模式拦截执行”移交给宿主侧待接（记入 1b 余项） | 同上 + `Shared` 字段再减 `editor_dirty`/`editor_sql`/`editor_clear`/`result_epoch` 4 个；契约 4 白名单同步 |
 
 ## 5. 与 P1（同步 I/O 后台化）、P2（视图下沉）的顺序
 

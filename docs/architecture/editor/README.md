@@ -64,7 +64,7 @@
 | --- | --- |
 | 文档 / 模式 / 只读 / 能力表 | `crates/editor/src/{model.rs, mode.rs}` |
 | 打开 / 关闭 / 激活 / 保存 / 脏状态 | `crates/editor/src/service.rs` |
-| 执行编排（目标解析 / 后台任务 / 回填） | `crates/editor/src/execution.rs`（现状：`crates/workbench/src/panels.rs` L6777-6998 内联闭包） |
+| 执行编排（目标解析 / 后台任务 / 回填） | `crates/editor/src/execution.rs`（现状：`crates/workbench/src/panels/` L6777-6998 内联闭包） |
 | 执行通道与门控（源库 / 加速 / 联邦） | `crates/editor/src/channel.rs` + `crates/connection/src/secret.rs` + `crates/engine/src/duckdb/federation.rs` |
 | 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs` + `crates/engine/src/services/execution_service.rs` |
 | 网格渲染层（将来可提炼） | `crates/editor/src/view/widgets/grid/`（`GridDataSource` / `GridEditSink`，架构 §3.6） |
@@ -143,6 +143,6 @@ cargo check --workspace --all-targets -j 2
 | 待你拍板（阻塞开工） | 架构 §13 十项；其中必须回答：多文档标签方案 · SQL→分析 转换粒度 · 批量执行语义 · 分析模式首期语言 · 是否独立 crate |
 | Phase 0（先做，无 UI） | ✅ 已落地：语句切分 · 历史字段贯通 · crate 骨架 · SQL 高亮 · 格式化选型 · Dock 关闭语义（静态）· **P0.2 三组探针跑完（顺序亲和四库成立；并发下 MySQL/PG 会换连接 → 1b 需 per-session 独占连接；MySQL `BEGIN` 已改文本协议）** · P0.10 台账候选探针已实跑／待你跑：编译基线 P0.9 ／余：驱动层真实 `affected_rows`、驱动填 `column_types`（转 1b） |
 | Phase 1a | ✅ **A1–A15 全部完成（含 A9 对话框收尾）**：服务层 · Dock 标签面板 · 内核视图 · SQL 高亮 · 模式切换矩阵（含确认对话框）· 只读两维度 · 状态栏 · 脏状态 · 持久化 + workbench 接线 + 聚焦已存在标签 · Actions 与快捷键 · 查找 / 替换（内核 + 组件库，零自建）· 会话持久化（真 SQLite 实测）· 大文件档位（真 200MB 稀疏文件实测）· 最小执行 + 结果网格（真机四库实测）· ui_contract 契约 · **关闭三态 / 另存为 / 模式切换确认对话框 + 系统文件对话框（`rfd`）**。⬜ 余：A13 的“关折叠”差内核开关 · 工具栏其余控件（执行族 / 格式化 / 历史 / 执行位置 / 连接）随 1b |
-| Phase 1b | 执行闭环（"合格的 SQL 客户端"，并关闭 M4 遗留的"查看数据不自动执行"）。**进度**：✅ B16（关闭口径 + 新建入口 + 工具栏执行级）· 🟡 B1 切片一（连接绑定：文档属性 + 工具栏选择器 + 状态栏 + 执行真的用它）——余：绑定随会话持久化 · ⬜ B2 执行族余项（批量 / 新结果标签）· B3 中断超时 · B4 事务 · B5/B5b 结果区与分段抓取 · B6 错误定位 · B7 导出 · B8 历史面板 · B9 补全 · B10 格式化/转译/执行计划 · B11 对外接口 · B12 移除旧 `EditorPanel` · B13 执行通道 · B14 筛选下发 · B15 DuckDB 分析入口 |
+| Phase 1b | 执行闭环（"合格的 SQL 客户端"，并关闭 M4 遗留的"查看数据不自动执行"）。**进度**：✅ B16（关闭口径 + 新建入口 + 工具栏执行级）· ✅ B11 + B12（**编辑器成为唯一的 SQL 编辑器**：导航四处改走 `QueryRequest`，旧 `EditorPanel` 的 SQL 区块与内联执行闭包已删，M1 草稿拦截改读 `EditorShared`；“查看数据”现在打开即执行）· 🟡 B1 切片一（连接绑定：文档属性 + 工具栏选择器 + 状态栏 + 执行真的用它）——余：绑定随会话持久化 · ⬜ B2 执行族余项（批量 / 新结果标签）· B3 中断超时 · B4 事务 · B5/B5b 结果区与分段抓取 · B6 错误定位 · B7 导出 · B8 历史面板 · B9 补全 · B10 格式化/转译/执行计划 · B13 执行通道 · B14 筛选下发 · B15 DuckDB 分析入口 · 项目只读模式对执行的拦截 |
 | Phase 1c | 分析模式骨架（Cell/Output/Session，仅 SQL + Markdown 单元） |
 | Phase 2 | Python / Rust 内核 · Arrow 变量桥 · 富输出 · `.ipynb` 互操作 |

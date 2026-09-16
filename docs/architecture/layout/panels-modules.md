@@ -50,9 +50,9 @@
 | `selected` / `connections` | nav / editor | 选中连接与列表 |
 | `driver_catalog` | nav / editor | 驱动 id → 类型/显示名 |
 | `open_edit` / `new_connection_request` | nav → editor | ✅ 已端口化（`EditorBridge::edit_connection` / `new_connection`，S2a）；字段已删 |
-| `editor_set` | nav 写 → editor 消费 | SQL 注入请求（S2b 待端口化） |
+| ~~`editor_set`~~ | — | ✅ **已删（B11/B12，2026-09-16）**：SQL 注入改走 `Shared::request_query(QueryRequest)`（私有字段 + 方法对），消费点在宿主 render；`EditorBridge::insert_sql` 一并删除 |
 | `scratchpad_search` | scratchpad 写 → editor 读 | 内容搜索结果落中央区 |
-| `open_file_request` | scratchpad 写 → shared → 宿主 | 在编辑器中打开文件 |
+| `open_file_request` | scratchpad 写 → shared → 宿主 | 在编辑器中打开文件（`QueryRequest` 同形，已收为私有字段 + 方法对） |
 | `project_ui` | editor / scratchpad | 项目管理 UI 状态 |
 
 共 12 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，

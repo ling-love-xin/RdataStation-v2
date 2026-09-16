@@ -38,6 +38,7 @@ use crate::view::{ConnectionItem, RightPanel};
 use mock::mock_view::SchemaRequest;
 
 // 父模块项：子模块可见父模块的私有项，但需显式引入才能按名调用。
+use super::shared::QueryRequest;
 use super::{SidebarEvent, SidebarPanel};
 
 /// 数据库导航面板状态（M4）。
@@ -521,17 +522,6 @@ fn nav_order_members(
     let mut out: Vec<String> = ordered.into_iter().map(|(_, id)| id).collect();
     out.extend(unset);
     out
-}
-
-/// 草稿追加：空草稿直接落片段，否则在末尾换行追加。
-///
-/// 纯函数（无 `Window` / 无 `Entity`），供 `EditorPanel::apply_nav_drag` 与单测共用。
-pub(super) fn nav_draft_append(current: &str, snippet: &str) -> String {
-    if current.trim().is_empty() {
-        snippet.to_string()
-    } else {
-        format!("{}\n{}", current.trim_end(), snippet)
-    }
 }
 
 /// 搜索过滤：节点名命中，或已加载子节点中任一命中。
@@ -2937,13 +2927,18 @@ impl SidebarPanel {
                         // Mock 只针对表 / 视图，见 `render_nav_node` 的对象菜单。
                         .separator()
                         .item(PopupMenuItem::new("在 SQL 编辑器中打开").on_click({
-                            let e = entity.clone();
+                            // `shared` 是上层块里的局部（`self` 不能进 'static 闭包）
+                            let shared = shared.clone();
                             let cid = conn_id.clone();
                             move |_, _, app| {
-                                let cid = cid.clone();
-                                e.update(app, |_, cx| {
-                                    cx.emit(SidebarEvent::OpenSqlEditor(cid));
+                                // B11：只入队「打开查询」请求，开文档在宿主 render 里做
+                                // （菜单回调拿不到 `Window`；绑定该连接 + 聚焦都由宿主完成）
+                                shared.request_query(QueryRequest {
+                                    conn_id: Some(cid.clone()),
+                                    sql: String::new(),
+                                    run: false,
                                 });
+                                shared.notify_host(app);
                             }
                         }))
                         .item(PopupMenuItem::new("查看洞察").on_click({
@@ -3521,12 +3516,18 @@ impl SidebarPanel {
                 if data_like {
                     if let Some(q) = qualified.clone() {
                         let sql = format!("SELECT * FROM {q} LIMIT 200;");
-                        let e = entity.clone();
                         let shared_sql = shared.clone();
+                        let cid_view = conn_id.clone();
                         menu = menu.item(PopupMenuItem::new("查看数据（LIMIT 200）").on_click(
                             move |_, _, app| {
-                                shared_sql.insert_sql(sql.clone(), app);
-                                e.update(app, |_, cx| cx.emit(SidebarEvent::EditorSqlRequest));
+                                // B11：打开一份绑定该连接的查询并**自动执行**
+                                // （M4 遗留的“查看数据不自动执行”在此关闭）
+                                shared_sql.request_query(QueryRequest {
+                                    conn_id: Some(cid_view.clone()),
+                                    sql: sql.clone(),
+                                    run: true,
+                                });
+                                shared_sql.notify_host(app);
                             },
                         ));
                     }
@@ -3611,11 +3612,17 @@ impl SidebarPanel {
                 // 通用模块入口（所有对象节点都有，与节点类型 / 连接状态无关）：
                 // SQL 编辑器 / 洞察；Mock 只针对表 / 视图（`data_like`）。
                 menu = menu.separator().item({
-                    let e = entity.clone();
+                    // `shared` 是上层块里的局部（`self` 不能进 'static 闭包）
+                    let shared = shared.clone();
                     let cid = conn_id.clone();
                     PopupMenuItem::new("在 SQL 编辑器中打开").on_click(move |_, _, app| {
-                        let cid = cid.clone();
-                        e.update(app, |_, cx| cx.emit(SidebarEvent::OpenSqlEditor(cid)));
+                        // B11：同上方连接菜单——只入队，宿主开文档并聚焦
+                        shared.request_query(QueryRequest {
+                            conn_id: Some(cid.clone()),
+                            sql: String::new(),
+                            run: false,
+                        });
+                        shared.notify_host(app);
                     })
                 });
                 if data_like {
@@ -3910,13 +3917,23 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// 回填「生成 SQL」结果：成功注入编辑区（追加在草稿后），失败落提示。
+    /// 回填「生成 SQL」结果：成功注入编辑区（打开一份绑定该连接的草稿），失败落提示。
+    ///
+    /// **不自动执行**：模板是给人改的（写语句更不该替用户跑）。
     fn apply_sql_results(&mut self, results: Vec<nav_jobs::SqlGenResult>, cx: &mut Context<Self>) {
         for r in results {
             match r.result {
                 Ok(sql) => {
-                    self.shared.insert_sql(sql, cx);
-                    cx.emit(SidebarEvent::EditorSqlRequest);
+                    let conn_id = self
+                        .shared
+                        .selected_connection()
+                        .map(|item| item.id.clone());
+                    self.shared.request_query(QueryRequest {
+                        conn_id,
+                        sql,
+                        run: false,
+                    });
+                    self.shared.notify_host(cx);
                 }
                 Err(e) => {
                     *self.shared.notice.borrow_mut() = Some(format!("生成 SQL 失败：{e}"));
@@ -4707,8 +4724,7 @@ mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
     use super::{
-        nav_draft_append, nav_order_members, nav_reorder, nav_step, nav_type_short_label,
-        parse_nav_search,
+        nav_order_members, nav_reorder, nav_step, nav_type_short_label, parse_nav_search,
     };
     use database::model::NavSource;
 
@@ -4802,18 +4818,6 @@ mod tests {
             Some(ids(&["b", "c", "a"]))
         );
         assert_eq!(nav_reorder(&base, "c", Some("gone")), None);
-    }
-
-    #[test]
-    fn nav_draft_append_keeps_existing_sql() {
-        // 空草稿（含仅空白）直接落片段，不留下前导换行。
-        assert_eq!(nav_draft_append("", "mall.order "), "mall.order ");
-        assert_eq!(nav_draft_append("   \n ", "mall.order "), "mall.order ");
-        // 非空草稿：末尾换行追加，并吃掉原有尾随空白。
-        assert_eq!(
-            nav_draft_append("SELECT * FROM x\n\n", "mall.order "),
-            "SELECT * FROM x\nmall.order "
-        );
     }
 
     #[test]

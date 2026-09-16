@@ -44,10 +44,6 @@ pub struct EditorBridge {
     pub edit_connection: Rc<dyn Fn(String, &mut Window, &mut App)>,
     /// 打开「新建数据源连接」对话框。
     pub new_connection: Rc<dyn Fn(&mut Window, &mut App)>,
-    /// 把导航注入的 SQL 追加到当前草稿（导航右键「新建查询 / 查看数据 / 生成 SQL」）。
-    ///
-    /// 不取 `Window`：编辑区只入私有缓冲，下一次渲染统一 `set_value`（见 `EditorPanel::insert_sql`）。
-    pub insert_sql: Rc<dyn Fn(String, &mut App)>,
     /// 打开属性面板并加载数据（导航双击对象 / 键盘 F4）。
     pub show_properties: Rc<dyn Fn(PropertyRequest, &mut App)>,
     /// 投递草稿箱内容搜索结果（`None` = 清空）：结果在中央编辑区展示。
@@ -62,6 +58,34 @@ pub struct EditorBridge {
 pub struct ScratchpadBridge {
     /// 确保草稿箱轮询在跑（结果回填由侧栏渲染消费）。
     pub ensure_pump: Rc<dyn Fn(&mut App)>,
+}
+
+/// 导航 → 中央编辑器的「打开查询」请求（B11）。
+///
+/// 与 `open_file_request` 同一口径：生产端（导航菜单 / 拖拽 / 后台回填）**拿不到 `Window`**
+/// （`SidebarEvent` 订阅回调、`apply_sql_results` 都只有 `Context`），而开文档与写内核都要窗口，
+/// 因此这里只入队，由宿主 `render` 消费。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryRequest {
+    /// 要绑定的连接（`None` = 不绑定，跟随当前活动连接）
+    pub conn_id: Option<String>,
+    /// 要打开的 SQL（空 = 只开一份空白查询）
+    pub sql: String,
+    /// 打开后是否立即执行：「查看数据」为真（M4 遗留的“查看数据不自动执行”在此关闭），
+    /// 「生成 SQL」模板为假（只给草稿，不该替用户跑写语句）
+    pub run: bool,
+}
+
+/// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。
+///
+/// 原先在 `nav.rs`（`nav_draft_append`），现在由导航菜单、拖拽与宿主打开查询共用，
+/// 因此上提到 `Shared` 同层：**拼接规则只有一处**。
+pub fn append_sql(current: &str, snippet: &str) -> String {
+    if current.trim().is_empty() {
+        snippet.to_string()
+    } else {
+        format!("{}\n{}", current.trim_end(), snippet)
+    }
 }
 
 /// 面板与工作台共享的状态。
@@ -85,8 +109,6 @@ pub struct Shared {
     /// 导航元数据缓存失效戳：宿主 / 项目宿主 / Mock 宿主只递增（`invalidate_nav_cache`），
     /// 缓存数据本身由 `EditorPanel` 自持——外部不再直接读写别家的缓存。
     pub nav_cache_epoch: Rc<Cell<u64>>,
-    /// SQL 结果归属失效戳（切换连接 / 项目时置位；消费口径同 `nav_cache_epoch`）。
-    pub result_epoch: Rc<Cell<u64>>,
     /// 编辑区命令端口（`None` = 装配未完成，调用方需容忍空端口）。
     pub editor_bridge: Rc<RefCell<Option<EditorBridge>>>,
     /// 连接对话框的项目下拉选中「＋ 新增项目」→ 宿主打开项目新建入口（由 `WorkbenchView` 消费）。
@@ -103,14 +125,11 @@ pub struct Shared {
     /// 只传**绝对路径**：编辑器无根，按路径自己判定模式 / 只读等级（Phase C 契约）。
     /// 字段已收为私有：外部只能走 `request_open_in_editor` / `take_open_in_editor`。
     open_file_request: Rc<RefCell<Option<std::path::PathBuf>>>,
+    /// B11：请求在中央编辑器里打开一条查询（导航「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL」
+    /// 与拖拽都入这里，宿主 render 消费）。字段同样私有，走 `request_query` / `take_query_request`。
+    query_request: Rc<RefCell<Option<QueryRequest>>>,
     /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
     pub project_ui: Rc<RefCell<project::ui::ProjectUiState>>,
-    /// 编辑区是否存在未保存草稿（切换 / 关闭项目拦截信号）。
-    pub editor_dirty: Rc<Cell<bool>>,
-    /// 编辑区当前 SQL 文本（未保存草稿保存时使用）。
-    pub editor_sql: Rc<RefCell<String>>,
-    /// 清空编辑区的宿主命令（保存 / 放弃未保存草稿后调用；事件上下文执行，非 render）。
-    pub editor_clear: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// M7：Mock 面板实体句柄（弱引用；用于导航右键定向导入源库结构）。
     ///
     /// 面板自带状态与对话框（`mock::mock_view::MockPanel`），工作台只持句柄。
@@ -150,16 +169,13 @@ impl Shared {
             connections: Rc::new(RefCell::new(connections)),
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
-            result_epoch: Rc::new(Cell::new(0)),
             project_new_request: Rc::new(Cell::new(false)),
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
             scratchpad_bridge: Rc::new(RefCell::new(None)),
             open_file_request: Rc::new(RefCell::new(None)),
+            query_request: Rc::new(RefCell::new(None)),
             project_ui: Rc::new(RefCell::new(Default::default())),
-            editor_dirty: Rc::new(Cell::new(false)),
-            editor_sql: Rc::new(RefCell::new(String::new())),
-            editor_clear: Rc::new(RefCell::new(None)),
             editor_bridge: Rc::new(RefCell::new(None)),
             mock_panel: Rc::new(RefCell::new(None)),
             insight_panel: Rc::new(RefCell::new(None)),
@@ -236,9 +252,18 @@ impl Shared {
             .set(self.nav_cache_epoch.get().wrapping_add(1));
     }
 
-    /// SQL 结果归属失效（切换连接 / 项目）。
-    pub fn invalidate_sql_result(&self) {
-        self.result_epoch.set(self.result_epoch.get().wrapping_add(1));
+    /// 请求在中央编辑器里打开一条查询（导航「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL」
+    /// 与拖拽共用）。
+    ///
+    /// 生产端拿不到 `Window`（菜单回调 / 拖拽回调 / 后台回填），而开文档与写内核都要窗口，
+    /// 因此这里只入队，由宿主 `render` 消费（与 `request_open_in_editor` 同一口径）。
+    pub fn request_query(&self, request: QueryRequest) {
+        *self.query_request.borrow_mut() = Some(request);
+    }
+
+    /// 取出（并清空）「打开查询」请求：宿主 render 每帧调用一次。
+    pub fn take_query_request(&self) -> Option<QueryRequest> {
+        self.query_request.borrow_mut().take()
     }
 
     /// 递「编辑连接」请求（走 `EditorBridge`；装配未完成时静默丢弃）。
@@ -252,13 +277,6 @@ impl Shared {
     pub fn new_connection(&self, window: &mut Window, cx: &mut App) {
         if let Some(bridge) = self.editor_bridge.borrow().clone() {
             (*bridge.new_connection)(window, cx);
-        }
-    }
-
-    /// 把 SQL 注入编辑区草稿（同上）。
-    pub fn insert_sql(&self, sql: String, cx: &mut App) {
-        if let Some(bridge) = self.editor_bridge.borrow().clone() {
-            (*bridge.insert_sql)(sql, cx);
         }
     }
 
@@ -359,7 +377,37 @@ mod tests {
     // 注意：不通配导入（`use super::*` / `use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use std::path::PathBuf;
 
-    use super::Shared;
+    use super::{Shared, append_sql};
+
+    /// 「打开查询」请求取出即清空（宿主 render 每帧取用，不得重复开文档）。
+    #[test]
+    fn query_request_is_consumed_once() {
+        let shared = Shared::new();
+        assert!(shared.take_query_request().is_none(), "初始无请求");
+
+        let request = super::QueryRequest {
+            conn_id: Some("P_orders".to_string()),
+            sql: "SELECT * FROM mall.order LIMIT 200;".to_string(),
+            run: true,
+        };
+        shared.request_query(request.clone());
+        assert_eq!(shared.take_query_request(), Some(request), "首次取出得到请求");
+        assert!(
+            shared.take_query_request().is_none(),
+            "取出即清空：同一请求不会重复打开"
+        );
+    }
+
+    /// 草稿追加：空草稿直接落片段（不留前导换行），非空吃掉尾随空白后再追加。
+    #[test]
+    fn append_sql_keeps_existing_draft() {
+        assert_eq!(append_sql("", "mall.order "), "mall.order ");
+        assert_eq!(append_sql("   \n ", "mall.order "), "mall.order ");
+        assert_eq!(
+            append_sql("SELECT * FROM x\n\n", "mall.order "),
+            "SELECT * FROM x\nmall.order "
+        );
+    }
 
     /// 「在编辑器中打开」请求取出即清空（宿主 render 每帧取用，不得重复打开）。
     #[test]

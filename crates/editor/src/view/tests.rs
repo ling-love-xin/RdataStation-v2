@@ -1557,6 +1557,56 @@ fn a_failed_connection_leaves_the_document_unbound(cx: &mut TestAppContext) {
     assert!(message.contains("端口不可达"), "原因要原样带上来：{message}");
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// B11：宿主发起的执行（导航「查看数据」打开后自动跑一次）
+// ══════════════════════════════════════════════════════════════════════
+
+/// 宿主用 `run_all` 触发的执行与 `Ctrl+Shift+Enter` 同一条路（同一套目标解析与回填）
+#[gpui_kit::test]
+fn the_host_can_trigger_a_full_run(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, seen, _seen_conn) = shared_with_runner("select 1;\nselect 2;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 不按键：宿主直接调公开入口（导航「查看数据」路径就是这一条）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.run_all(cx)));
+    wait_for_result(cx, &panel);
+
+    assert_eq!(
+        seen.lock().expect("锁").as_slice(),
+        ["select 1;\nselect 2;".to_string()],
+        "宿主触发的是整篇脚本"
+    );
+
+    // 空文档：不打扰执行器（与快捷键路径同一判据）
+    let shared_empty = EditorShared::new();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    shared_empty.attach_runner(std::sync::Arc::new(CountingRunner { calls: calls.clone() }));
+    let id_empty = shared_empty
+        .open(OpenRequest::untitled("-- 只有注释\n", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel_empty, cx) = open_panel(cx, &shared_empty, &id_empty);
+    cx.update(|_window, cx| panel_empty.update(cx, |panel, cx| panel.run_all(cx)));
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "没有可执行内容就该被拒，不该打扰执行器"
+    );
+}
+
+/// 只数调用次数的执行器
+struct CountingRunner {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl QueryRunner for CountingRunner {
+    fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(QueryData::default())
+    }
+}
+
 /// 绑定的连接要**真的**传到执行器（架构 §12 #26：以前只能走“当前活动连接”）
 #[gpui_kit::test]
 fn the_bound_connection_reaches_the_execution_port(cx: &mut TestAppContext) {

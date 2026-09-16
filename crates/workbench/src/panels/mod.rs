@@ -38,7 +38,8 @@ pub use editor::EditorPanel;
 pub use nav::PropertyRequest;
 pub use right::RightSidebarPanel;
 pub use scratchpad_panel::ScratchpadSearchView;
-pub use shared::{EditorBridge, ProjectActionRequest, ScratchpadBridge, Shared};
+pub use shared::{EditorBridge, ProjectActionRequest, QueryRequest, ScratchpadBridge, Shared};
+pub use shared::append_sql;
 
 use nav::{DatabaseNavView, NavOrderItem};
 use scratchpad_panel::ScratchpadView;
@@ -52,10 +53,6 @@ pub enum SidebarEvent {
     EditConnection(String),
     /// 用户点击了导航面板头「＋」/ 空态「新建连接」（动作已由 `EditorBridge::new_connection` 完成，这里只触发重绘）。
     NewConnectionRequest,
-    /// 导航右键「查看数据」（SQL 已由 `EditorBridge::insert_sql` 排入草稿，这里只触发重绘）。
-    EditorSqlRequest,
-    /// 通用入口：连接 / 对象右键「在 SQL 编辑器中打开」——选中该连接并聚焦中央编辑区。
-    OpenSqlEditor(String),
     /// 通用入口：右键「生成 Mock 数据」（仅表 / 视图）/「查看洞察」——展开右 Dock 并切面板。
     OpenRightPanel(RightPanel),
 }
@@ -268,7 +265,6 @@ pub fn install_scratchpad_bridge(shared: &Shared, sidebar: Entity<SidebarPanel>)
 pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
     let editor_for_edit = editor.clone();
     let editor_for_new = editor.clone();
-    let editor_for_sql = editor.clone();
     let editor_for_search = editor.clone();
     *shared.editor_bridge.borrow_mut() = Some(EditorBridge {
         edit_connection: Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
@@ -277,12 +273,6 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
         }),
         new_connection: Rc::new(move |window: &mut Window, cx: &mut App| {
             editor_for_new.update(cx, |panel, cx| panel.request_new_connection(window, cx));
-        }),
-        insert_sql: Rc::new(move |sql: String, cx: &mut App| {
-            editor_for_sql.update(cx, |panel, cx| {
-                panel.insert_sql(sql);
-                cx.notify();
-            });
         }),
         show_properties: Rc::new(move |request: PropertyRequest, cx: &mut App| {
             editor.update(cx, |panel, cx| panel.request_properties(request, cx));

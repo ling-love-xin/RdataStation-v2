@@ -67,6 +67,7 @@ fn view_layer_has_no_raw_size_literals() {
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
         ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
+        ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
             "panels/scratchpad_panel.rs",
             include_str!("../src/panels/scratchpad_panel.rs"),
@@ -140,6 +141,7 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../src/panels/shared.rs"),
         ),
         ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
+        ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
             "panels/scratchpad_panel.rs",
             include_str!("../src/panels/scratchpad_panel.rs"),
@@ -278,9 +280,6 @@ fn shared_fields_are_whitelisted() {
         "connections",
         "driver_catalog",
         "editor_bridge",
-        "editor_clear",
-        "editor_dirty",
-        "editor_sql",
         "host_redraw",
         "insight_panel",
         "left_mode",
@@ -295,7 +294,6 @@ fn shared_fields_are_whitelisted() {
         "project_open_request",
         "project_ui",
         "quick_open",
-        "result_epoch",
         "right_mode",
         "right_mode_before_hidden",
         "scratchpad_bridge",

@@ -794,6 +794,13 @@ impl EditorHostPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.run_all(cx);
+    }
+
+    /// 执行整篇（**宿主发起的唯一入口**：导航「查看数据」打开文档后自动跑一次，B11）
+    ///
+    /// 与 `Ctrl+Shift+Enter` 同一条路：目标解析 → 提交 → 轮询回填。
+    pub fn run_all(&mut self, cx: &mut Context<Self>) {
         let (text, _selection) = self.editor_snapshot(cx);
         let target = execution::all_target(&text);
         self.execute(target, cx);

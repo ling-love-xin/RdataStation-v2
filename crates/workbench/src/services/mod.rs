@@ -25,7 +25,6 @@ pub mod nav_store;
 pub mod project_session;
 pub mod query_export;
 pub mod query_history;
-pub mod query_runner;
 pub mod resource_jobs;
 pub mod result_service;
 pub mod scratchpad_jobs;

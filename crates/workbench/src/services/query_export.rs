@@ -2,10 +2,21 @@
 //!
 //! 手写 CSV 转义（字段含逗号/引号/换行时加引号包裹、内部引号双写），
 //! 无第三方 csv 依赖；默认导出到全局目录下 `results/`（按秒时间戳命名）。
+//!
+//! B12：`QueryOutput` 原先住在 `query_runner.rs`（直连分析库文件的旧执行器）。那个执行器
+//! 随旧 SQL 区一起删掉了（它绕过 engine 与连接绑定，是本模块要避开的那类路径）；
+//! **数据类型本身**还有用（导出 API 的输入），因而搬到本模块。
 
 use std::path::{Path, PathBuf};
 
-use crate::services::query_runner::QueryOutput;
+/// 查询输出（列名 + 已字符串化的行）
+#[derive(Debug, Clone)]
+pub struct QueryOutput {
+    pub columns: Vec<String>,
+    /// 行数据（每行已按列序转字符串；NULL → "NULL"）
+    pub rows: Vec<Vec<String>>,
+    pub row_count: usize,
+}
 
 /// CSV 字段转义：含 `,` `"` `\r` `\n` 时加引号包裹，内部 `"` 双写。
 fn csv_field(s: &str) -> String {
