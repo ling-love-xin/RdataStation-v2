@@ -42,6 +42,9 @@ pub const RESULT_TABS_HEIGHT: f32 = 1.5;
 /// 结果网格列宽（128px；`Column::width` 只收 `Pixels`，故这里不做 rem 换算）
 pub const RESULT_COLUMN_WIDTH: Pixels = px(128.);
 
+/// 结果网格首列的行号槽宽（48px，原型 §2.4 的固定 `#` 列）
+pub const RESULT_ROW_NUMBER_WIDTH: Pixels = px(48.);
+
 /// 结果网格列最小宽（64px）
 pub const RESULT_COLUMN_MIN_WIDTH: Pixels = px(64.);
 

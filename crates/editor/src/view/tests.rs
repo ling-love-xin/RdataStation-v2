@@ -835,7 +835,7 @@ select boom;",
             .result_summary_for_test()
             .map(|text| text.to_string())
     });
-    assert_eq!(summary.as_deref(), Some("2 行 × 1 列 · 5 ms"));
+    assert_eq!(summary.as_deref(), Some("行数 2 · 耗时 5 ms"));
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
         2,
@@ -873,7 +873,7 @@ select 2;"
 }
 
 #[gpui_kit::test]
-fn a_failing_execution_says_why_instead_of_showing_an_empty_grid(cx: &mut TestAppContext) {
+fn a_failing_execution_gets_an_error_card_instead_of_an_empty_grid(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     bind_editor_keys(cx);
 
@@ -887,14 +887,28 @@ fn a_failing_execution_says_why_instead_of_showing_an_empty_grid(cx: &mut TestAp
     cx.simulate_keystrokes("ctrl-enter");
     wait_for_result(cx, &panel);
 
-    let summary = cx.update(|_window, cx| {
-        panel
-            .read(cx)
-            .result_summary_for_test()
-            .map(|text| text.to_string())
-    });
-    let summary = summary.expect("失败也要有结果区文案");
-    assert!(summary.contains("boom"), "{summary}");
+    // 【B5】工具栏只说“失败”（原型 §2.4 的 `行数 │ 耗时 │ 连接名` 里失败占一段）
+    let summary = cx
+        .update(|_window, cx| panel.read(cx).result_summary_for_test())
+        .expect("失败也要有结果区文案");
+    assert!(summary.contains("失败"), "{summary}");
+    // 【B6】原因在**错误卡片**里（原型 §2.4「错误呈现」），不是一句灰字
+    let card = cx
+        .update(|_window, cx| panel.read(cx).result_error_card_for_test())
+        .expect("失败要有错误卡片");
+    assert!(card.message.contains("boom"), "{}", card.message);
+    assert!(
+        card.location.is_none(),
+        "这条错误认不出位置，就不给定位按钮"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-result-error-card"),
+        "卡片要真的画出来"
+    );
+    assert!(
+        !dialog_button_rendered(cx, "editor-result-error-locate"),
+        "认不出位置就不摆定位按钮"
+    );
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
         0,
@@ -1010,8 +1024,8 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
         1
     );
     assert_eq!(
-        cx.update(|_window, cx| panel.read(cx).result_summary_for_test().map(str::to_string)),
-        Some("5 行 × 1 列 · 3 ms".to_string()),
+        cx.update(|_window, cx| panel.read(cx).result_summary_for_test()),
+        Some("行数 5 · 耗时 3 ms".to_string()),
         "状态行跟着选中的结果集走"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -1122,14 +1136,15 @@ fn interrupting_a_slow_query_ends_it_with_a_visible_reason(cx: &mut TestAppConte
         [None],
         "未绑定连接的文档取消的就是“当前活动连接”"
     );
-    let summary = cx.update(|_window, cx| {
-        panel
-            .read(cx)
-            .result_summary_for_test()
-            .map(|text| text.to_string())
-    });
-    let summary = summary.expect("中断也要有结果区文案");
-    assert!(summary.contains("cancel"), "{summary}");
+    let summary = cx
+        .update(|_window, cx| panel.read(cx).result_summary_for_test())
+        .expect("中断也要有结果区文案");
+    assert!(summary.contains("失败"), "{summary}");
+    // 原因在错误卡片里（原型 §2.4）
+    let card = cx
+        .update(|_window, cx| panel.read(cx).result_error_card_for_test())
+        .expect("中断要有错误卡片");
+    assert!(card.message.contains("cancel"), "{}", card.message);
     assert!(
         cx.update(|_window, cx| panel.read(cx).elapsed_for_test()).is_none(),
         "跑完就不再计时"
@@ -2254,10 +2269,11 @@ fn the_bound_connection_reaches_the_execution_port(cx: &mut TestAppContext) {
         Some("P_orders"),
         "结果记录要带上来源连接"
     );
-    let (_, _, _, toolbar_connection) =
-        cx.update(|_window, cx| panel.read(cx).result_toolbar_for_test());
+    let toolbar = cx
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .expect("有结果就有工具栏");
     assert_eq!(
-        toolbar_connection.as_deref(),
+        toolbar.connection.as_deref(),
         Some("●P·orders"),
         "工具栏拿到的是可读的连接段"
     );
@@ -2447,12 +2463,7 @@ fn a_write_statement_reports_affected_rows_and_offers_no_copy(cx: &mut TestAppCo
     );
 
     let summary = cx
-        .update(|_window, cx| {
-            panel
-                .read(cx)
-                .result_summary_for_test()
-                .map(str::to_string)
-        })
+        .update(|_window, cx| panel.read(cx).result_summary_for_test())
         .expect("写语句也要有结果区文案");
     assert!(summary.starts_with("影响 3 行"), "{summary}");
     assert!(
@@ -2474,24 +2485,21 @@ fn truncation_is_reported_as_a_warning(cx: &mut TestAppContext) {
 
     run_statement(cx, &panel, "select truncated", execution::ResultPlacement::Replace);
 
-    let (hint, can_copy, sql, _connection) =
-        cx.update(|_window, cx| panel.read(cx).result_toolbar_for_test());
+    let toolbar = cx
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .expect("有结果就有工具栏");
+    assert_eq!(toolbar.rows, Some(3), "工具栏报行数");
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .expect("有网格就有状态行");
     assert_eq!(
-        hint.as_deref(),
-        Some("已截断：只拿到前 3 行"),
+        status.truncated_hint.as_deref(),
+        Some("已截断至 3 行"),
         "截断提示要说清拿到多少行"
     );
+    let (sql, can_copy) = cx.update(|_window, cx| panel.read(cx).result_actions_for_test());
     assert!(can_copy, "被截断的结果集仍能复制已抓到的行");
     assert_eq!(sql.as_deref(), Some("select truncated"));
-    let summary = cx
-        .update(|_window, cx| {
-            panel
-                .read(cx)
-                .result_summary_for_test()
-                .map(str::to_string)
-        })
-        .expect("有摘要");
-    assert!(summary.contains("已截断"), "{summary}");
 }
 
 /// 结果区在可拖拽分栏里：有结果时出现在下半区，且编辑区没被挤掉
@@ -2578,7 +2586,7 @@ fn a_locatable_failure_marks_the_word_and_moves_the_caret(cx: &mut TestAppContex
     // headless 里那条路会撞上“不能在窗口更新里再更新窗口”（`update_window` 直接返回 Err），
     // 所以这里直接驱动落地入口——与“对话框按钮的真点击”同一口径（架构 §12 #29）。
     cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.jump_to_error_site_for_test(window, cx))
+        panel.update(cx, |panel, cx| panel.jump_to_error_site_with(window, cx))
     });
     // 文档：`select 1;\n`（10 字节）+ `select * from t `（16 字节）→ 出错词在第 2 行第 17 列
     assert_eq!(
@@ -2653,4 +2661,147 @@ fn a_successful_run_clears_the_error_marks(cx: &mut TestAppContext) {
     );
     let message = cx.update(|_window, cx| panel.read(cx).message.clone());
     assert!(message.is_none(), "成功要清掉旧提示：{message:?}");
+}
+
+// ===== 原型对齐：结果区 ⑤⑥⑦（原型 §2.4）=====
+
+/// 竖向顺序按原型：⑤ 标签条 → ⑥ 工具栏 → 网格 → ⑦ 状态行
+#[gpui_kit::test]
+fn the_result_area_stacks_the_prototype_blocks_in_order(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 两份结果才有标签条（⑤ 是“多结果”的切换器）
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    run_statement(cx, &panel, "select 2", execution::ResultPlacement::NewSet);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    let y = |cx: &mut VisualTestContext, selector: &'static str| {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} 没画出来"))
+            .origin
+            .y
+            .as_f32()
+    };
+    let tabs = y(cx, "editor-result-tabs");
+    let toolbar = y(cx, "editor-result-toolbar");
+    let grid = y(cx, "editor-result-grid");
+    let status = y(cx, "editor-result-status-row");
+    assert!(
+        tabs < toolbar && toolbar < grid && grid < status,
+        "原型 §2.4 的顺序是 ⑤标签条 → ⑥工具栏 → 网格 → ⑦状态行（实得 {tabs} / {toolbar} / {grid} / {status}）"
+    );
+}
+
+/// ⑦ 的“已选第 N 行”跟着表格的选中走（点行不改结果集，只重画那一行）
+#[gpui_kit::test]
+fn the_status_row_reports_the_selected_row(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .expect("有网格就有状态行");
+    assert_eq!(status.selected_row, None, "刚跑完没选中任何行");
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.select_grid_row_for_test(0, cx))
+    });
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .expect("有网格就有状态行");
+    assert_eq!(status.selected_row, Some(1), "选中第一行（1 基）");
+    assert!(
+        dialog_button_rendered(cx, "editor-result-status-row"),
+        "状态行要真的画出来"
+    );
+}
+
+/// 能定位的失败：卡片带「定位到第 N 行」按钮，且它真能把光标送到出错词
+#[gpui_kit::test]
+fn the_error_card_offers_a_working_locate_button(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(LocatedFailureRunner));
+    let id = shared
+        .open(OpenRequest::untitled(
+            "select * from t wheree x = 1;",
+            EditorMode::Sql,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    run_statement(
+        cx,
+        &panel,
+        "select * from t wheree x = 1",
+        execution::ResultPlacement::Replace,
+    );
+
+    let card = cx
+        .update(|_window, cx| panel.read(cx).result_error_card_for_test())
+        .expect("失败要有错误卡片");
+    assert_eq!(card.location.as_deref(), Some("第 1 行 第 17 列"));
+    assert!(
+        dialog_button_rendered(cx, "editor-result-error-card"),
+        "卡片要真的画出来"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-result-error-locate"),
+        "能定位就有按钮"
+    );
+    assert!(
+        !dialog_button_rendered(cx, "editor-result-grid"),
+        "失败时画卡片，不画空网格"
+    );
+
+    // 按钮按下去（headless 里直接驱动落地入口）：光标落到出错词上
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.jump_to_error_site_with(window, cx))
+    });
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx)),
+        16..22,
+        "选中 `wheree`"
+    );
+}
+
+/// 卡片上的「复制」把驱动原文放进剪贴板（拿去搜索 / 报 bug）
+#[gpui_kit::test]
+fn the_error_card_can_copy_the_driver_message(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(LocatedFailureRunner));
+    let id = shared
+        .open(OpenRequest::untitled(
+            "select * from t wheree x = 1;",
+            EditorMode::Sql,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(
+        cx,
+        &panel,
+        "select * from t wheree x = 1",
+        execution::ResultPlacement::Replace,
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-result-error-copy"),
+        "卡片上要有复制"
+    );
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.copy_error_message(cx)));
+    let text = cx.update(|_window, app| {
+        app.read_from_clipboard().and_then(|item| item.text())
+    });
+    let text = text.expect("剪贴板里要有东西");
+    assert!(text.contains("no such column: wheree"), "{text}");
+    assert!(text.contains("第 1 行 第 17 列"), "位置一起复制走：{text}");
 }

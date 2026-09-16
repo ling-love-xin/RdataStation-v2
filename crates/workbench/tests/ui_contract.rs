@@ -120,6 +120,10 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../editor/src/view/widgets/status_bar.rs"),
         ),
         (
+            "editor/view/widgets/error_card.rs",
+            include_str!("../../editor/src/view/widgets/error_card.rs"),
+        ),
+        (
             "editor/view/widgets/result_grid.rs",
             include_str!("../../editor/src/view/widgets/result_grid.rs"),
         ),
@@ -206,6 +210,10 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "editor/view/widgets/status_bar.rs",
             include_str!("../../editor/src/view/widgets/status_bar.rs"),
+        ),
+        (
+            "editor/view/widgets/error_card.rs",
+            include_str!("../../editor/src/view/widgets/error_card.rs"),
         ),
         (
             "editor/view/widgets/result_grid.rs",

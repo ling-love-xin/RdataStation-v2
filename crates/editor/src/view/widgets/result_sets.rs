@@ -61,6 +61,8 @@ pub fn render(
     div()
         // 结构尺寸走常量表；TabBar 自身的高度由组件库按 size 档位决定（Small = 24px）
         .h(rems(ui::RESULT_TABS_HEIGHT))
+        // 测试按选择器断言原型 §2.4 的竖向顺序（⑤ 在 ⑥ 之上）
+        .debug_selector(|| "editor-result-tabs".to_string())
         .child(
             TabBar::new("editor-result-sets")
                 .segmented()

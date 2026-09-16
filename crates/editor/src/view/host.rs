@@ -17,7 +17,7 @@ use gpui_kit::component::dock::{
 };
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::table::TableState;
+use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::*;
 
@@ -34,7 +34,10 @@ use crate::store::ResultEntry;
 use crate::ui;
 use crate::view::dialogs;
 use crate::view::highlight;
-use crate::view::widgets::result_grid::{self, ResultGridDelegate};
+use crate::view::widgets::error_card::{self, ErrorCard};
+use crate::view::widgets::result_grid::{
+    self, ResultGridDelegate, ResultStatus, ResultToolbar,
+};
 use crate::view::widgets::result_sets::{self, ResultSetTab};
 use crate::view::widgets::status_bar::{self, StatusInputs};
 
@@ -74,10 +77,13 @@ pub struct EditorHostPanel {
     tx_since: Option<std::time::Instant>,
     /// 【B4】已发出、尚未回执的事务动作数（轮询泵据此多活一会儿）
     tx_pending: usize,
-    /// 结果区状态行文案（`Some` = 本文档有结果要显示）
+    /// 【B5】结果区要画的东西（工具栏 ⑥ + 状态行 ⑦ + 错误卡片）
     ///
-    /// 缓存在这里而不是每帧 `format!`：`summary()` 要算，而 render 是纯读路径。
-    result_summary: Option<String>,
+    /// 从选中结果集投影一次就缓在这里：render 是纯读路径，不在渲染期算文案。
+    /// `None` = 还没有结论（结果区不出现）。
+    result_toolbar: Option<ResultToolbar>,
+    /// 【B5】结果状态行（⑦）；只有网格时才给（失败 / 写语句那一行是噪音）
+    result_status: Option<ResultStatus>,
     /// 结果集标签（从 `ResultStore` 投影；同样不在渲染期重算）
     result_tabs: Vec<ResultSetTab>,
     /// 当前选中的结果集下标（标签条的选中态）
@@ -86,10 +92,8 @@ pub struct EditorHostPanel {
     result_sql: Option<String>,
     /// 【B5】当前选中结果集有没有可复制的东西（没有网格就不摆复制按钮）
     result_can_copy: bool,
-    /// 【B5】截断提示（`Some` = 数据不完整；工具栏用警告色显示）
-    result_truncated_hint: Option<String>,
-    /// 【B5】当前选中结果集的来源连接文案（`●P·orders`；`None` = 当时未绑定 / 认不出）
-    result_connection_text: Option<String>,
+    /// 【B6】错误卡片的内容（失败时才有；`None` = 这次成功）
+    result_error_card: Option<ErrorCard>,
     /// 【B6】当前选中结果集定位到的出错处（诊断范围 + 状态栏里的位置文案读它）
     error_site: Option<diagnostics::ErrorSite>,
     /// 【B6】上一次算过的位置是哪条结论（`(这次跑的 SQL, 错误文本)`）
@@ -107,6 +111,8 @@ pub struct EditorHostPanel {
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     _editor_sub: Option<Subscription>,
+    /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）
+    _grid_sub: Option<Subscription>,
 }
 
 impl EditorHostPanel {
@@ -175,6 +181,17 @@ impl EditorHostPanel {
             window,
             cx,
         );
+        // 行选中 → 状态行那一段（⑦ 的“已选第 N 行”）要重画（表格自己不通知宿主）
+        let grid_sub = cx.subscribe(&grid, |panel, grid, _event: &TableEvent, cx| {
+            let selected_row = grid.read(cx).selected_row().map(|row| row + 1);
+            if let Some(status) = panel.result_status.take() {
+                panel.result_status = Some(ResultStatus {
+                    selected_row,
+                    ..status
+                });
+            }
+            cx.notify();
+        });
 
         Self {
             shared,
@@ -192,19 +209,20 @@ impl EditorHostPanel {
             tx_open: false,
             tx_since: None,
             tx_pending: 0,
-            result_summary: None,
+            result_toolbar: None,
+            result_status: None,
             result_tabs: Vec::new(),
             result_active: 0,
             result_sql: None,
             result_can_copy: false,
-            result_truncated_hint: None,
-            result_connection_text: None,
+            result_error_card: None,
             error_site: None,
             error_site_key: None,
             window: window.window_handle(),
             result_height: std::rc::Rc::new(std::cell::Cell::new(ui::RESULT_PANE_HEIGHT)),
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
+            _grid_sub: Some(grid_sub),
         }
     }
 
@@ -819,7 +837,7 @@ impl EditorHostPanel {
             from,
             to,
             &self.editor_text(cx),
-            self.result_summary.is_some(),
+            self.result_toolbar.is_some(),
             granularity,
         )
     }
@@ -1037,21 +1055,39 @@ impl EditorHostPanel {
             .unwrap_or(0)
     }
 
-    /// 结果工具栏的四块真实状态（供测试断言：截断提示 / 可复制 / 可重跑的 SQL / 来源连接）
-    pub fn result_toolbar_for_test(
-        &self,
-    ) -> (Option<String>, bool, Option<String>, Option<String>) {
-        (
-            self.result_truncated_hint.clone(),
-            self.result_can_copy,
-            self.result_sql.clone(),
-            self.result_connection_text.clone(),
-        )
+    /// 结果工具栏（⑥）的左段文案（供测试断言；`None` = 还没有结论）
+    ///
+    /// 就是 `ResultToolbar::segments()` 拼起来的那串，原型 §2.4 的 `行数 1,204 │ 耗时 1.2s │ orders`。
+    pub fn result_summary_for_test(&self) -> Option<String> {
+        self.result_toolbar
+            .as_ref()
+            .map(|toolbar| toolbar.segments().join(" · "))
     }
 
-    /// 本文档的执行状态与结果摘要（供测试断言；`None` = 尚未执行）
-    pub fn result_summary_for_test(&self) -> Option<&str> {
-        self.result_summary.as_deref()
+    /// 结果工具栏（⑥）的真实输入（供测试断言各段与显隐）
+    pub fn result_toolbar_for_test(&self) -> Option<ResultToolbar> {
+        self.result_toolbar.clone()
+    }
+
+    /// 结果状态行（⑦）的真实输入（供测试断言总行数 / 截断提示）
+    pub fn result_status_for_test(&self) -> Option<ResultStatus> {
+        self.result_status.clone()
+    }
+
+    /// 当前选中结果集的可重跑 SQL / 可复制（供测试断言按钮显隐）
+    pub fn result_actions_for_test(&self) -> (Option<String>, bool) {
+        (self.result_sql.clone(), self.result_can_copy)
+    }
+
+    /// 【B6】错误卡片的内容（供测试断言摘要与定位文案）
+    pub fn result_error_card_for_test(&self) -> Option<ErrorCard> {
+        self.result_error_card.clone()
+    }
+
+    /// 【B5】选中网格里的某一行（供测试断言状态行⑦的“已选第 N 行”；真机上点行就是这条路）
+    pub fn select_grid_row_for_test(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.grid
+            .update(cx, |state, cx| state.set_selected_row(row, cx));
     }
 
     /// 结果集标签（供测试断言“批量跑出三个结果集”与标签文案）
@@ -1186,10 +1222,16 @@ impl EditorHostPanel {
     /// 很难靠看界面发现）。
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
-        let (tabs, active, grid_data, failed_text, summary, failure, extra) = {
+        let (tabs, active, grid_data, empty, toolbar, status, failure, extra) = {
             let store = self.shared.results();
             let active = store.active_index(&self.document).unwrap_or(0);
             let entry = store.active(&self.document);
+            let connection = entry.and_then(|entry| {
+                entry
+                    .connection
+                    .as_deref()
+                    .map(|id| self.shared.connection_status_text(Some(id)))
+            });
             (
                 result_sets::tabs(store.sets(&self.document)),
                 active,
@@ -1198,8 +1240,25 @@ impl EditorHostPanel {
                     .map(|entry| (entry.columns.clone(), entry.rows.clone())),
                 entry
                     .filter(|entry| !entry.has_grid())
-                    .map(empty_text),
-                entry.map(ResultEntry::summary),
+                    .map(empty_text)
+                    .unwrap_or_default(),
+                // 【B5】工具栏（⑥）：行数 / 影响行数 / 失败 / 耗时 / 连接名
+                entry.map(|entry| ResultToolbar {
+                    rows: entry.has_grid().then(|| entry.row_count()),
+                    affected_rows: entry.affected_rows,
+                    failed: entry.failed(),
+                    elapsed_ms: Some(entry.elapsed_ms),
+                    connection: connection.clone(),
+                }),
+                // 【B5】状态行（⑦）：只有网格才给（写语句的“共 0 行”、失败时的“共 0 行”都是噪音）
+                entry.filter(|entry| entry.has_grid()).map(|entry| ResultStatus {
+                    total_rows: entry.row_count(),
+                    // 选中行在渲染时现读（点行不改结果集，没必要每帧回写状态）
+                    selected_row: None,
+                    truncated_hint: entry
+                        .truncated
+                        .then(|| result_grid::truncated_hint(entry.row_count())),
+                }),
                 // 【B6】失败才谈得上定位：把「哪条 SQL + 什么错误」一起带出去
                 entry.and_then(|entry| {
                     entry
@@ -1207,34 +1266,21 @@ impl EditorHostPanel {
                         .as_ref()
                         .map(|error| (entry.sql.clone(), error.clone()))
                 }),
-                entry.map(|entry| {
-                    (
-                        entry.sql.clone(),
-                        entry.has_grid(),
-                        entry
-                            .truncated
-                            .then(|| result_grid::truncated_hint(entry.row_count())),
-                        entry
-                            .connection
-                            .as_deref()
-                            .map(|id| self.shared.connection_status_text(Some(id))),
-                    )
-                }),
+                entry.map(|entry| (entry.sql.clone(), entry.has_grid())),
             )
         };
 
         self.result_tabs = tabs;
         self.result_active = active;
-        self.result_summary = summary;
-        let (sql, can_copy, truncated_hint, connection_text) = extra.unwrap_or_default();
+        self.result_toolbar = toolbar;
+        self.result_status = status;
+        let (sql, can_copy) = extra.unwrap_or_default();
         self.result_sql = Some(sql).filter(|sql| !sql.trim().is_empty());
         self.result_can_copy = can_copy;
-        self.result_truncated_hint = truncated_hint;
-        self.result_connection_text = connection_text;
         self.grid.update(cx, |state, cx| {
             match grid_data {
                 Some((columns, rows)) => state.delegate_mut().set_data(columns, rows),
-                None => state.delegate_mut().clear(failed_text.unwrap_or_default()),
+                None => state.delegate_mut().clear(empty),
             }
             state.refresh(cx);
         });
@@ -1259,6 +1305,11 @@ impl EditorHostPanel {
         };
         self.error_site = site;
         let reason = failure.map(|(_, error)| error);
+        // 【B6】错误卡片的两个真值：驱动原话 + “定位到第 N 行”（认不出位置就不给后者）
+        self.result_error_card = reason.as_ref().map(|error| ErrorCard {
+            message: error.clone(),
+            location: self.error_site.as_ref().map(|site| site.location_text()),
+        });
         self.apply_error_marks(reason.clone(), cx);
 
         // 失败原因同时进状态栏（结果区可能被滚出视野）；选中成功的那份则清掉旧提示。
@@ -1312,11 +1363,11 @@ impl EditorHostPanel {
     }
 
     /// 跳转的**落地入口**（供测试驱动；真机走上面的窗口句柄路径）
+    /// 跳转的**落地入口**：手上有窗口时直接做（错误卡片上那个按钮，以及测试）
     ///
-    /// 单独开一个口的原因：回填发生在没有窗口的后台轮询里，那条路径在 headless 下会撞上
-    /// “不能在窗口更新里再更新窗口”，测试验不了“光标真的落到出错词上”——这条入口就是
-    /// 被验的那一半（与对话框“真点击”同一口径，架构 §12 #29）。
-    pub fn jump_to_error_site_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 真机的自动跳转走上面的窗口句柄路径（回填发生在没有窗口的后台轮询里）；这条入口是
+    /// 按下去就有窗口的情况，也是测试能驱动的那一半（与对话框“真点击”同一口径，架构 §12 #29）。
+    pub(crate) fn jump_to_error_site_with(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(site) = self.error_site.clone() else {
             return;
         };
@@ -1372,7 +1423,25 @@ impl EditorHostPanel {
 
     /// 是否要显示结果区（本文档有结果或正在执行；且模式允许通信）
     fn result_visible(&self) -> bool {
-        self.execution_allowed() && (self.pending > 0 || self.result_summary.is_some())
+        self.execution_allowed() && (self.pending > 0 || self.result_toolbar.is_some())
+    }
+
+    /// 【B6】复制错误原文（错误卡片上的「复制」）：便于拿去搜索 / 报 bug
+    pub(crate) fn copy_error_message(&mut self, cx: &mut Context<Self>) {
+        let Some(card) = self.result_error_card.clone() else {
+            self.set_message(Some("这次没有错误可复制".to_string()), cx);
+            return;
+        };
+        let location = card
+            .location
+            .as_ref()
+            .map(|location| format!("（{location}）"))
+            .unwrap_or_default();
+        cx.write_to_clipboard(ClipboardItem::new_string(format!(
+            "{}{location}",
+            card.message
+        )));
+        self.set_message(Some("已复制错误原文".to_string()), cx);
     }
 
     /// `Ctrl+W`：请求关闭当前文档
@@ -1920,15 +1989,12 @@ impl Render for EditorHostPanel {
         // 结果区（B5）：有结果或正在执行时才出现（否则不占位置——不显示空壳）
         let font_size = cx.theme().font_size;
         let result_pane = self.result_visible().then(|| {
-            let toolbar = result_grid::ResultToolbar {
-                summary: self
-                    .result_summary
-                    .clone()
-                    .unwrap_or_else(|| "执行中…".to_string()),
-                truncated_hint: self.result_truncated_hint.clone(),
-                connection: self.result_connection_text.clone(),
-            };
-            // 结果集标签条：两份以上结果才画（一份结果不需要切换器）
+            // ⑥ 工具栏：投影里已经有真值；还没结论时（刚提交）只报“执行中…”
+            let toolbar = self.result_toolbar.clone().unwrap_or(ResultToolbar {
+                elapsed_ms: None,
+                ..Default::default()
+            });
+            // 结果集标签条（⑤）：两份以上结果才画（一份结果不需要切换器）
             let tabs = (self.result_tabs.len() >= 2).then(|| {
                 let entity = cx.entity();
                 result_sets::render(
@@ -1968,11 +2034,55 @@ impl Render for EditorHostPanel {
                     .into_any_element()
             });
 
+            // 错误卡片（B6，原型 §2.4）：失败时替掉网格；两个按钮都是真的能按的
+            let card = self.result_error_card.clone().map(|card| {
+                let locate = card.location.as_ref().map(|location| {
+                    let entity = cx.entity();
+                    let label = error_card::locate_label(location);
+                    Button::new("editor-result-error-locate")
+                        .ghost()
+                        .small()
+                        .debug_selector(|| "editor-result-error-locate".to_string())
+                        .label(label)
+                        .on_click(move |_, window, app| {
+                            entity.update(app, |panel, cx| {
+                                panel.jump_to_error_site_with(window, cx)
+                            });
+                        })
+                        .into_any_element()
+                });
+                let copy = {
+                    let entity = cx.entity();
+                    Button::new("editor-result-error-copy")
+                        .ghost()
+                        .small()
+                        .debug_selector(|| "editor-result-error-copy".to_string())
+                        .label("复制")
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.copy_error_message(cx));
+                        })
+                        .into_any_element()
+                };
+                error_card::render(
+                    &card,
+                    error_card::ErrorCardControls {
+                        locate,
+                        copy: Some(copy),
+                    },
+                    cx,
+                )
+                .into_any_element()
+            });
+
             result_grid::render(
                 &self.grid,
-                toolbar,
-                result_grid::ResultControls { copy, refresh },
-                tabs,
+                result_grid::ResultPane {
+                    toolbar,
+                    status: self.result_status.clone(),
+                    controls: result_grid::ResultControls { copy, refresh },
+                    card,
+                    tabs,
+                },
                 cx,
             )
             .into_any_element()
