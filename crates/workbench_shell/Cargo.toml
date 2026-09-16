@@ -8,3 +8,8 @@ description = "工作台外壳：面板状态与视图共用资产（workbench �
 # ===== GPUI-kit 视图层 =====
 # `ui.rs` 的固定描边是 `Pixels`（`px(1.)`），需要 gpui 的 `px` 与 `Pixels`。
 gpui-kit.workspace = true
+
+# ===== 序列化 =====
+# 产品语义 token 资产（`assets/themes/product-tokens.json`）的解析。
+serde.workspace = true
+serde_json.workspace = true

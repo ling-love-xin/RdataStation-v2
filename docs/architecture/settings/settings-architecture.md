@@ -89,7 +89,7 @@ graph TD
 | 为什么缓存管理不在本 crate | 缓存对话框要 engine（`rusqlite` / 元数据缓存清理）→ 引入 engine 会把数据库依赖拖进视图 crate；继续由宿主的 `on_open_cache` 回调承接 |
 | 宿主桥 | `SettingsHost { on_close, on_open_cache, (将来) on_restart }`——宿主提供副作用，crate 只表达意图 |
 
-**crate 现状**：`lib.rs`（服务 + 持久化 + `apply_by_key` / `value_by_key` 唯一读写路径）/ `model.rs`（分节 model）/ `registry.rs`（登记表 + `Slot` 分发表 + `presets` + 契约测试）/ `settings_page.rs`（两栏页面，**已接到工作台**）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）/ `product_tokens.rs`（产品语义 token 加载，属主题设施暂住此处，见 §13 K6）。
+**crate 现状**：`lib.rs`（服务 + 持久化 + `apply_by_key` / `value_by_key` 唯一读写路径）/ `model.rs`（分节 model）/ `registry.rs`（登记表 + `Slot` 分发表 + `presets` + 契约测试）/ `settings_page.rs`（两栏页面，**已接到工作台**）/ `commands.rs`（Action：`OpenSettings` / `CloseSettings` / `FocusSettingsSearch`）；**产品语义 token 已迁至 `workbench_shell::product_tokens`**（本 crate 重导，见 §13 K6）。
 
 > 旧单列 `settings_view.rs` 与自持的 `ui.rs` **均已删除**：页面尺寸常量回归**壳层单点** `crates/workbench_shell/src/ui.rs`（依赖方向：`settings → workbench_shell`，而 shell 不依赖任何特性 crate）。
 
@@ -244,7 +244,7 @@ graph TD
 | K3 | ⬜ | 保存丢弃未知字段 | 全量重写 JSON，未知 key 一次保存即消失（手改文件 / 版本回退场景） |
 | K4 | ⬜ | 无 i18n | 界面文案全中文硬编码；摆设字段 `general.language` 已随 2026-09-16 裁撤删除，i18n 另行立项 |
 | K5 | ⬜ | 非 Windows 配置目录回退临时目录 | `config_dir()` 在无 `APPDATA` 时落 `temp_dir()`（重启可能被清理）；应走平台配置目录 |
-| K6 | 🟡 | `product_tokens` 住在 settings | 它是主题设施（资产加载 + global），逻辑归主题层；暂住此处，迁出需同时改 `app` 与 `panels/` 消费方 |
+| K6 | ✅ | 原：`product_tokens` 住在 settings（主题设施暂住特性 crate） | **2026-09-16 已迁出**：落到 `crates/workbench_shell/src/product_tokens.rs`（壳层视图共用资产）。驱动原因不只是“主题设施归位”——导航视图下沉到 `database` 后也要取色，住 settings 会造出 `database → settings`。settings 侧保留重导，`app` / `panels/` 消费方零改动 |
 | K7 | ✅ | **尺寸契约扫描缺口**（已关闭，2026-09-16） | 颜色 + 尺寸扫描均含 `settings_page.rs`；8 个 `SETTINGS_*` 数值进契约 1 |
 | K8 | 🟡 | `ToggleThemeMode` 未接线 | Action 已定义，无键位、无 `on_action`；按"没实现就不宣传"应**接线或删除**（§14 Q2） |
 | K9 | ✅ | **页面宿主替换**（已关闭，2026-09-16） | 工作台渲染 `SettingsPage`（`SettingsHost` 注入关闭 / 缓存对话框），旧单列 `settings_view.rs` 已退役；页面同时缺 `↺` 的 hover 卡（无关紧要，见原型 §11 #9） |

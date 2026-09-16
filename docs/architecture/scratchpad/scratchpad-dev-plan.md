@@ -351,7 +351,7 @@
 | 当前项目会话 | `crates/workbench/src/services/project_session.rs`、`crates/app/src/main.rs` |
 | 中央编辑区草稿文件模式（Phase C） | `crates/workbench/src/panels/`（`EditorPanel`） |
 | 依赖接线 | 根 `Cargo.toml`（`scratchpad` 别名）、`crates/workbench/Cargo.toml` |
-| 搜索高亮 token | `assets/themes/product-tokens.json` + `crates/settings/src/product_tokens.rs`（`search.match.background`） |
+| 搜索高亮 token | `assets/themes/product-tokens.json` + `crates/workbench_shell/src/product_tokens.rs`（`search.match.background`） |
 
 > 早期方案中的 `crates/workbench/src/components/scratchpad_panel.rs` **未创建**；面板实现全在 `panels/`。
 

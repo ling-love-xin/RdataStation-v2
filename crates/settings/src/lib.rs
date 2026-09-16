@@ -14,9 +14,12 @@ use gpui_kit::App;
 
 pub mod commands;
 pub mod model;
-pub mod product_tokens;
 pub mod registry;
 pub mod settings_page;
+
+// 产品语义 token 已下沉到 `workbench_shell`（视图共用资产，特性 crate 也要用它取色），
+// 此处重导保持 `settings::product_tokens::*` 路径不变。
+pub use workbench_shell::product_tokens;
 
 use crate::model::{ConnectionDefaults, NavigatorFilters, Settings};
 use crate::registry::{SettingValue, Slot};

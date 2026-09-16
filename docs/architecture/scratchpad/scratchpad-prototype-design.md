@@ -264,7 +264,7 @@ flowchart TD
 
 ### 6.4 搜索高亮
 
-产品语义 token `search.match.background`（Light `#FFF3C4` / Dark `#4A3F00`，注册于 `crates/settings/src/product_tokens.rs` + `assets/themes/product-tokens.json`）已落地并消费于内容搜索结果面板（命中段底色）。
+产品语义 token `search.match.background`（Light `#FFF3C4` / Dark `#4A3F00`，注册于 `crates/workbench_shell/src/product_tokens.rs` + `assets/themes/product-tokens.json`）已落地并消费于内容搜索结果面板（命中段底色）。
 
 ## 7. GPUI 落点映射
 

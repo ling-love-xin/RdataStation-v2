@@ -159,8 +159,9 @@
 | `quick_open.group.header` | `#3A3D41` | `#ECECEC` | Quick Open 分组头 |
 | `search.match.background` | `#4A3F00` | `#FFF3C4` | 搜索命中文本底（数据源导航连接行 / 对象行） |
 
-- **已落地**（2026-09-12）：资产 `assets/themes/product-tokens.json`（明暗各 7 角色）；加载设施 `crates/settings/src/product_tokens.rs`（`ProductTokens: Global`、`get(cx)`、`apply_from_str` / `apply_from_path`，缺角色回退语义最接近的标准字段）；app 启动 + `ThemeRegistry::watch_dir` 热更新（`crates/app/src/main.rs::attach_product_tokens`）
+- **已落地**（2026-09-12）：资产 `assets/themes/product-tokens.json`（明暗各 7 角色）；加载设施 `crates/workbench_shell/src/product_tokens.rs`（`ProductTokens: Global`、`get(cx)`、`apply_from_str` / `apply_from_path`，缺角色回退语义最接近的标准字段）；app 启动 + `ThemeRegistry::watch_dir` 热更新（`crates/app/src/main.rs::attach_product_tokens`）
 - 消费：`settings::product_tokens::get(cx).<role>(cx.theme())`（如 `activity_bar_background`）——**代码零 hex**；消费方：`view.rs`（活动栏背景 / 激活条 / 标题栏挖空槽 / Quick Open 分组头）、`panels/nav.rs::nav_name_highlight`（命中底色）
+- 加载设施**为什么住 shell 而不是 settings**（2026-09-16 迁出）：它是主题设施，而导航视图下沉到 `database` 后也要用它取色；住 `settings` 会逼出 `database → settings` 这条不该有的依赖。`settings` 侧保留 `pub use workbench_shell::product_tokens;` 重导，旧路径不变
 - 状态栏背景：`theme.colors.primary` 派生（已有 token，无需新增）
 
 ### 5.5 软件图标
@@ -180,6 +181,6 @@
 | 主题资产（明暗 token + 产品语义角色） | `assets/themes/rds-theme.json` + `assets/themes/product-tokens.json`（独立资产，已落地） |
 | 主题加载（watch_dir 热更新） | `crates/app/src/main.rs`（`load_theme_assets` + `attach_product_tokens`） |
 | 主题切换命令（外观节） | `crates/settings`（`commands.rs` / `model.rs` 外观节） |
-| 产品语义 token 加载与读取 | `crates/settings/src/product_tokens.rs`（`ProductTokens: Global`）+ 各组件 `settings::product_tokens::get(cx).<role>(theme)` 消费 |
+| 产品语义 token 加载与读取 | `crates/workbench_shell/src/product_tokens.rs`（`ProductTokens: Global`）+ 各组件 `settings::product_tokens::get(cx).<role>(theme)` 消费（`settings` 侧为重导） |
 | 图标资产 | `assets/icons/32x32.png`（明亮版）/ 暗黑版待补 |
 | 色卡预览 | `docs/architecture/theme/theme-preview.html` |

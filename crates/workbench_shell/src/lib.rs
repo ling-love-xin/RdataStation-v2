@@ -11,6 +11,12 @@
 //! 依赖方向：`workbench` → `workbench-shell`；`database` / `scratchpad`（下沉视图后）→ `workbench-shell`。
 //! **本 crate 不得依赖任何特性 crate**（否则环会以另一种形状回来）。
 //! 设计方案与逐步迁移计划见 `docs/architecture/layout/panels-coupling-plan.md` §8/§9。
+//!
+//! 现有资产：
+//! - [`ui`]：面板 / 控件尺寸常量；
+//! - [`model`]：面板枚举、边栏模式、连接条目等**纯数据**；
+//! - [`product_tokens`]：产品语义 token（主题取色的产品角色层）。
 
 pub mod model;
+pub mod product_tokens;
 pub mod ui;

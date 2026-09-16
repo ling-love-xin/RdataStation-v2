@@ -8087,6 +8087,7 @@ name = "rds-settings"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "rds-workbench-shell",
  "serde",
  "serde_json",
 ]
@@ -8155,6 +8156,8 @@ name = "rds-workbench-shell"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

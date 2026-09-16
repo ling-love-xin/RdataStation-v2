@@ -44,7 +44,7 @@ description: RdataStation 主题系统：明暗配色 token 对照、产品语�
 0.6 的语义面（`SemanticThemeTokens` / `ColorTokens`）是**固定 18 角色**，装不下上表产品角色；因此落到独立资产 + 独立加载设施：
 
 - **资产**：`assets/themes/product-tokens.json`（`light` / `dark` 各一映射，键名 = 上表角色名，值为 hex；缺失角色回退语义最接近的标准字段）
-- **注册**：`crates/settings/src/product_tokens.rs`——`ProductTokenSet: Global`（`apply_from_str` / `apply_from_path` / `get(cx)`）；app 启动与主题目录热更新时调用（`crates/app/src/main.rs::attach_product_tokens`）
+- **注册**：`crates/workbench_shell/src/product_tokens.rs`——`ProductTokenSet: Global`（`apply_from_str` / `apply_from_path` / `get(cx)`）；app 启动与主题目录热更新时调用（`crates/app/src/main.rs::attach_product_tokens`）。`settings` 侧 `pub use workbench_shell::product_tokens;` 重导，`settings::product_tokens::*` 路径不变
 - **消费**（代码零 hex）：
 
 ```rust
