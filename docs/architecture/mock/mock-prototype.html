@@ -198,6 +198,7 @@ button{font-family:inherit;cursor:pointer;}
 [data-scn="scenario-result"] .scn-single{display:none;}
 [data-scn="scenario-copy"] .scn-single{display:none;}
 [data-scn="scenario-result"] .only-scenario-result{display:flex;}
+[data-scn="scenario-result"] button.only-scenario-result{display:inline-flex;}
 [data-scn="scenario-copy"] .only-scenario-copy{display:flex;}
 [data-scn="scenario"] .only-imported,
 [data-scn="scenario"] .only-generated,
@@ -364,6 +365,8 @@ button{font-family:inherit;cursor:pointer;}
       <div class="center-body">
         <div class="detail-head">
           <span class="grow">字段（5）· 目标表 mock_orders · 1000 行 · 种子 随机 · 简体中文</span>
+          <!-- 场景结果：标题栏也有「当前表」（预览作用于它；与右 Dock 那个是同一状态） -->
+          <button class="btn sm only-scenario-result" style="flex:none;">orders ▾</button>
           <button class="btn primary sm">生成</button>
         </div>
 
