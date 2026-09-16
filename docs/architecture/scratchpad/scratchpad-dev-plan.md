@@ -10,6 +10,25 @@
 
 > 路径注：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/*`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`；**2026-09-17 起面板视图本身也下沉进 crate**（`crates/scratchpad/src/scratchpad_view.rs` + `host.rs`，见“十四次”）。**下列历史条目保留当时的路径**，读时按此换算。
 
+### 2026-09-17（十九次）— Phase C-5 前半：拖草稿文件到编辑器插入
+
+**已完成**
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | 跨 crate 拖放载荷 `InsertFileDrag { label, path }`（**只带路径**） | `crates/shared/src/drag.rs`（新）+ `lib.rs` 重导 |
+| 2 | 草稿树行拖起（仅文件）+ 拖拽幽灵 `ScratchpadDragGhost` | `crates/scratchpad/src/scratchpad_view.rs` |
+| 3 | 编辑器文本区接落点：读盘 → `InputState::replace`（光标处插入）→ 同步服务层 → 提示；只读 / 空文件 / 读失败均在消息里说清 | `crates/editor/src/view/host.rs::{on_drop, insert_file_contents}` |
+| 4 | `editor` 显式声明对 `shared` 的依赖（与其 `lib.rs` 分层描述一致；`engine` 已传递携带，不增编译面） | `crates/editor/Cargo.toml`、`Cargo.lock` |
+
+**关键取舍**：载荷住 `shared` 而不是拖起方 crate——拖放类型要被 `scratchpad` 与 `editor` 同时看见，
+而两个特性 crate 不互相依赖（`database::NavDragPayload` 能住在拖起方，是因为它的消费方在 workbench）。
+
+**验证**：`cargo check -p rds-shared -p rds-scratchpad -p rds-editor --all-targets -j 2` 与 `-p rds-workbench --lib -j 2` 零告警；`cargo test -p rds-editor --lib` → 217 passed；`cargo test -p rds-scratchpad --lib` → 36 passed。
+
+**未接**：系统文件管理器拖文件进树 = 导入。仓库里目前无 OS 拖放入口（全仓无 `FileDropEvent` / `ExternalPaths`），
+需先确认 gpui-kit 是否转发平台事件；目前导入入口是工具栏 `⬇`（系统文件对话框）。
+
 ### 2026-09-17（十八次）— 原型对齐巡检：脏点位置 + 点命中打开
 
 **背景**：按用户要求逐条对照 `scratchpad-prototype-design.md` / `scratchpad-prototype.html`，
@@ -403,7 +422,7 @@
 | C1 | 中央编辑区「草稿箱文件模式」：`.sql` 打开 → 执行引擎 + 连接选择 + `Ctrl+S` 回存；`.py`/`.json`/`.md` 代码编辑器；防重复 Tab ✅ **首片已接（2026-09-16）**：双击/Enter/右键「打开」→ 编辑器（同路径只激活） | `crates/scratchpad/src/scratchpad_view.rs`（发请求）+ `workbench/src/view.rs::open_in_editor` | 双击打开、编辑回存正确 |
 | C2 | `file_meta` 联动：**打开时自动选连接** ✅（2026-09-17）+ **执行后写 `last_connection_id`/`last_executed_at`** ✅（2026-09-17，编辑器回执 + 宿主 1 s 泵） | `scratchpad` store（`file_meta` / `preferred_connection` / `update_file_meta`）+ `editor::shared::ExecReceipt` + `workbench/src/services/scratchpad_meta.rs` | 连接自动恢复 ✅ |
 | C3 | 脏点回显：编辑器未保存修改 → 草稿树文件名前实心圆点（**只有文件**）✅ **已接（2026-09-17）**：经 `ScratchpadHost::dirty_files` 取绝对路径集合，1.2 s 一拍比对缓存 | `crates/scratchpad/src/{host,scratchpad_view}.rs` + `workbench/src/components/scratchpad_host.rs` | 改一处出现、`Ctrl+S` 后消失 |
-| C4 | 拖拽文件到编辑区插入内容；拖放文件进树导入 | workbench | 拖放生效 |
+| C5 | 拖草稿文件到编辑区 → 插入内容到光标处 ✅ **已接（2026-09-17）**；系统文件拖入树导入 ⬜（无 OS 拖放入口，暂用工具栏 `⬇`） | `shared/src/drag.rs` + `scratchpad_view.rs` + `editor/src/view/host.rs` | 拖放生效 ✅ |
 | C4 | 冲突处理：外部修改 → 冲突条 → `diff_with_content` Diff 面板 → 重载（照磁盘）/ 忽略 ✅ **已接（2026-09-17）**：内容判据（非 mtime）；差异落中央编辑区，消解动作在侧栅 | `crates/scratchpad/src/{jobs,host,scratchpad_view}.rs` + `workbench/src/panels/{shared,mod,editor}.rs` | 冲突可消解 ✅ |
 | C5 | 搜索替换：预览计数 → `replace_in_file`（正则/大小写）→ 原子写回 → 刷新 ✅ 已落地（结果栏内嵌替换栏；Diff 预览仍未接） | 同上 | 替换后结果自动刷新 |
 | C6 | 提升为分析资源：经 command/event 调 `analytics_resource`，**移动 + 归档锁定**（详见 Phase D） | `scratchpad` 命令 + 分析资源服务 | 提升后事件刷新 |

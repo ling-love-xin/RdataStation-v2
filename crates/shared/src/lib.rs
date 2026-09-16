@@ -8,6 +8,7 @@
 pub mod api_version;
 pub mod arrow;
 pub mod crypto;
+pub mod drag;
 pub mod error;
 pub mod macros;
 pub mod models;
@@ -28,6 +29,7 @@ pub use models::{QueryResult, Row, Value};
 
 // 重新导出 Arrow 相关
 pub use arrow::{ArrowBatch, ArrowBatchStream, ArrowHandler};
+pub use drag::InsertFileDrag;
 
 // 重新导出流相关
 pub use stream::{ArrowBatchStream as CoreArrowBatchStream, Stream, StreamQueryResult};

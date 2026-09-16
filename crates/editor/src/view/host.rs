@@ -708,6 +708,44 @@ impl EditorHostPanel {
         self.set_message(None, cx);
     }
 
+    /// 把某个文件的内容插到**光标处**（拖放落点；原型 §4.5）。
+    ///
+    /// 只读文档直接拒绝；读盘失败 / 空文件都给一条消息，不静默。
+    fn insert_file_contents(
+        &mut self,
+        payload: &::shared::InsertFileDrag,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor_read_only() {
+            self.set_message(Some("文档只读，无法插入内容".to_string()), cx);
+            return;
+        }
+        let text = match crate::persist::load(&payload.path) {
+            Ok(text) => text,
+            Err(error) => {
+                self.set_message(Some(format!("插入失败：{error}")), cx);
+                return;
+            }
+        };
+        if text.is_empty() {
+            self.set_message(
+                Some(format!("{} 是空文件，没有可插入的内容", payload.label)),
+                cx,
+            );
+            return;
+        }
+        // 在光标处插入：`replace` 替换当前选区，并把光标留在插入内容之后。
+        self.editor
+            .update(cx, |state, cx| state.replace(text, window, cx));
+        // 程序化写入不保证发 `Change` 事件 → 主动同步服务层（与行注释同一口径，幂等）。
+        let new_text = self.editor.read(cx).value().to_string();
+        self.statements = count_statements(&new_text);
+        self.shared
+            .update(|service| service.set_content(&self.document, new_text));
+        self.set_message(Some(format!("已插入 {}", payload.label)), cx);
+    }
+
     // ===== 模式切换（A5 的矩阵 + A9 的确认对话框）=====
     //
     // 入口是工具栏最左的**模式指示器**（原型 §2.2）：点击选目标模式，代价由 `mode::plan_switch`
@@ -1951,6 +1989,15 @@ impl Render for EditorHostPanel {
                     .debug_selector(|| "editor-code-area".to_string())
                     // 局部内距走 Tailwind 尺度（8px）；结构尺寸才进 ui.rs 常量表
                     .px_2()
+                    // 拖放落点（原型 §4.5：拖文件节点到编辑区 → 插入文件内容到光标处）
+                    .on_drop({
+                        let entity = cx.entity();
+                        move |payload: &::shared::InsertFileDrag, window, app| {
+                            entity.update(app, |this, cx| {
+                                this.insert_file_contents(payload, window, cx)
+                            });
+                        }
+                    })
                     .child(
                         Editor::new(&self.editor)
                             .appearance(false)

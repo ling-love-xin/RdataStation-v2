@@ -7944,6 +7944,7 @@ dependencies = [
  "lsp-types",
  "rds-engine",
  "rds-paths",
+ "rds-shared",
 ]
 
 [[package]]

@@ -2,7 +2,7 @@
 
 > 本文回答**为什么这样设计 / 怎么运转**：不变式、概念模型、存储布局、数据流、决策表、降级、测试策略、实现映射，以及**权威的已知问题清单**。
 > 视觉与交互规格看 `scratchpad-prototype-design.md`；进度与阶段任务看 `scratchpad-dev-plan.md`；使用方式看 `scratchpad-user-guide.md`。
-> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中（C-1 打开 / C-2 连接预选与执行回写 / C-3 脏点 / C-4 冲突 Diff 已接；剩拖放）· Phase D 未开始。
+> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中：打开 / 连接预选与执行回写 / 脏点 / 冲突 Diff / **拖入编辑器插入（C-5 前半）** 已接；剩系统文件拖入导入与命中跳行 · Phase D 未开始。
 
 ## 0. 裁决摘要（一页读完）
 
@@ -397,6 +397,26 @@ render_scratchpad（首次 or loaded=false）
 - **为什么经端口而不是让草稿箱依赖 `editor`**：`scratchpad` 不得依赖编辑器 crate；
   「哪些文档脏了」本质是宿主能回答的问题（同项目根 / 只读判定）。
 
+### 6.17 拖放：草稿 → 编辑器插入内容（Phase C-5 前半，已接）
+
+```
+草稿树行拖起（只对文件）
+  → 载荷 `shared::InsertFileDrag { label, path }`（**只带路径**，不带内容）
+  → 跟随鼠标的幽灵：`ScratchpadDragGhost`（胶囊 + 文件名）
+落到编辑器面板的文本区（`crates/editor` 的 `EditorHostPanel`）
+  → 读盘（`persist::load`）→ `InputState::replace`（在光标处插入，替换当前选区）
+  → 同步服务层 `set_content`（程序化写入不保证发 Change 事件）→ 状态栏提示「已插入 …」
+      · 只读文档拒绝；空文件、读盘失败都给消息，不静默
+```
+
+- **载荷为何住在 `shared`**：拖放类型必须被拖起方（`scratchpad`）与落点方（`editor`）同时看见，
+  而两个特性 crate 不互相依赖。住在最底层的 `shared` 不引新依赖边，也不把 UI 拉进数据 crate。
+- **为何只带路径**：拖拽开始时读盘会把整个文件塞进拖拽幽灵，而用户可能中途放弃；
+  内容由落点在真正落下时读（只读 / 空文件 / 失败都由落点决定如何告知）。
+- **未接**：从**系统文件管理器**把文件拖进树 = 导入。仓库里目前没有 OS 文件拖放的入口
+  （全仓无 `FileDropEvent` / `ExternalPaths` 引用），需确认 gpui-kit 是否转发平台拖放事件；
+  在此之前导入的入口是工具栏 `⬇`（系统文件对话框，已可用）。
+
 ## 7. 分层与依赖
 
 ### 7.1 crate 切分
@@ -517,6 +537,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 后台加载（K1） | `scratchpad/src/jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `scratchpad_view.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
 | 文件监控（Phase A5） | `scratchpad/src/watch.rs`（`ScratchpadWatcher` / `ChangeFlag`）+ `scratchpad_view.rs::{ensure_scratchpad_watch, ensure_scratchpad_watch_poll}` |
 | 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `scratchpad_view.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
+| 拖入编辑器插入（C-5 前半） | `shared/src/drag.rs::InsertFileDrag`（载荷）+ `scratchpad_view.rs::{on_drag, ScratchpadDragGhost}` + `editor/src/view/host.rs::{on_drop, insert_file_contents}` |
 | 冲突 Diff（C-4） | `scratchpad_view.rs::{detect_scratchpad_conflicts, render_scratchpad_diff_pane, ScratchpadDiffView}` + `jobs.rs::enqueue_diff` + `host.rs::{draft_content, reload_draft, show_diff}` + `workbench/src/panels/editor.rs::set_scratchpad_diff` |
 | 执行后回写连接（C-2 后半） | `editor::shared::{ExecReceipt, drain_exec_receipts}`（编辑器的公告）+ `workbench/src/services/scratchpad_meta.rs`（1 s 一拍、`draft_targets` 过滤）+ `store.rs::update_file_meta` |
 | 脏点（Phase C-3） | `host.rs::ScratchpadHost::dirty_files`（宿主取编辑器 `EditorService::dirty_ids`）+ `scratchpad_view.rs::{dirty_seen, refresh_dirty_cache, scratchpad_shows_dirty_dot}` |

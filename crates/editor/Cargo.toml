@@ -9,6 +9,9 @@ description = "SQL 编辑器：一个内核 + 三档能力（文本 / SQL / 分�
 [dependencies]
 gpui-kit.workspace = true
 engine.workspace = true
+# 跨 crate 拖放载荷（`shared::InsertFileDrag`：拖起方在草稿箱，落点在本 crate 的编辑器面板）；
+# 与 lib.rs 里「editor → engine / database / shared」的分层描述一致，且 shared 本就在传递依赖里。
+shared.workspace = true
 # 语义着色（A4）：trait 签名用到 lsp-types 与 anyhow（版本随 gpui-base，已在根 Cargo.toml 登记）
 lsp-types.workspace = true
 anyhow.workspace = true

@@ -729,6 +729,31 @@ pub fn render_scratchpad_search_pane(
         .child(div().max_h(rems(16.)).overflow_hidden().child(list))
 }
 
+/// 拖拽幽灵：一个跟着鼠标的胶囊，写着文件名（与用户抓住的东西一致）。
+struct ScratchpadDragGhost {
+    label: String,
+}
+
+impl gpui_kit::Render for ScratchpadDragGhost {
+    fn render(
+        &mut self,
+        _window: &mut gpui_kit::Window,
+        cx: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        let theme = cx.theme();
+        div()
+            .px_2()
+            .py_0p5()
+            .rounded_sm()
+            .border_1()
+            .border_color(theme.colors.border)
+            .bg(theme.colors.popover)
+            .text_xs()
+            .text_color(theme.colors.foreground)
+            .child(self.label.clone())
+    }
+}
+
 /// 冲突 Diff 面板（中央编辑区）：左=磁盘 / 右=编辑器缓冲，逐行标行号与增删。
 ///
 /// 与搜索结果面板同一投影：草稿箱只投载荷（`ScratchpadHost::show_diff`），渲染在编辑区。
@@ -2449,6 +2474,22 @@ impl ScratchpadView {
                         .child("✕")
                         .on_click(delete),
                 );
+        }
+
+        // 拖到编辑区 = 插入文件内容（原型 §4.5）。载荷类型住在 `shared`（两侧都看得见），
+        // 不靠特性 crate 互相依赖。
+        if !is_folder {
+            let label = entry.name.clone();
+            row = row.on_drag(
+                shared::InsertFileDrag {
+                    label: label.clone(),
+                    path: entry.path.clone(),
+                },
+                move |payload, _offset, _window, cx| {
+                    let label = payload.label.clone();
+                    cx.new(|_| ScratchpadDragGhost { label })
+                },
+            );
         }
 
         // 右键菜单（打开位置 / 重命名 / 剪切 / 复制 / 删除）。
