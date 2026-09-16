@@ -1120,8 +1120,13 @@ pub struct MockPanel {
     /// 最近一次**场景生成**用的关系快照（结果还在，关系就还得说得出——
     /// 用户可能已经退出场景态，也可能改过工作副本）。
     last_relations: Vec<ScenarioRelation>,
-    /// 「加关系」对话框里正在选的四个位置（都是名字；空 = 未选）。
+    /// 「加关系」对话框里正在选的四个位置（都是名字；`None` = 未选）。
     relation_pick: Rc<RefCell<RelationPick>>,
+    /// 「编辑表」对话框正在改哪张表（`None` = 没开）
+    table_editing: Option<String>,
+    /// 「编辑表」对话框的输入：表名 / 行数
+    edit_name_input: Option<Entity<InputState>>,
+    edit_rows_input: Option<Entity<InputState>>,
     table_input: Option<Entity<InputState>>,
     /// 待写入表名输入的值（事件路径置位，下一帧渲染时落地）
     table_pending: Option<String>,
@@ -1304,6 +1309,9 @@ impl MockPanel {
             scenario: None,
             last_relations: Vec::new(),
             relation_pick: Rc::new(RefCell::new(RelationPick::default())),
+            table_editing: None,
+            edit_name_input: None,
+            edit_rows_input: None,
             table_input: None,
             table_pending: None,
             rows_input: None,
@@ -1935,6 +1943,210 @@ impl MockPanel {
             return Vec::new();
         };
         relations_of(template)
+    }
+
+    /// 关系目标的**取值域**文案（`1..1,000`）；父列自增且父表在册时给出。
+    ///
+    /// 面板在关系行里显示它：改父表行数前后，用户能直接看到采样域变了——
+    /// 这正是“域由父表行数算出”的可见回报。
+    pub fn relation_range(&self, relation: &ScenarioRelation) -> Option<String> {
+        let template = self.scenario.as_ref()?;
+        let parent = template
+            .tables
+            .iter()
+            .find(|t| t.name == relation.parent_table)?;
+        let column = parent
+            .columns
+            .iter()
+            .find(|c| c.name == relation.parent_column)?;
+        let GeneratorConfig::AutoIncrement { start, step } = column.generator else {
+            return None;
+        };
+        let domain = ReferenceDomain {
+            table: parent.name.clone(),
+            column: column.name.clone(),
+            first: i64::from(start),
+            step: i64::from(step),
+            count: parent.row_count,
+        };
+        Some(format!(
+            "{}..{}",
+            with_thousands(domain.first.max(0) as u64),
+            with_thousands(domain.last().max(0) as u64)
+        ))
+    }
+
+    /// 打开「编辑表」对话框（表名 / 行数）。
+    ///
+    /// 改行数是场景里最常用的一步（比如把财务模板的 10 万行缩下来），而引用它的表
+    /// **自动跟着变**——域由父表行数算出，不需要用户去同步任何东西。
+    pub fn open_table_dialog(&mut self, table: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(current) = self
+            .scenario
+            .as_ref()
+            .and_then(|template| template.tables.iter().find(|t| t.name == table))
+            .cloned()
+        else {
+            self.fail("先选一套场景模板", cx);
+            return;
+        };
+        self.table_editing = Some(current.name.clone());
+        // 上一次的错误留在面板上会让人以为是这次的输入有问题：打开就清掉
+        self.error = None;
+        let name_input = self
+            .edit_name_input
+            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("表名")))
+            .clone();
+        let rows_input = self
+            .edit_rows_input
+            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("行数")))
+            .clone();
+        name_input.update(cx, |state, cx| {
+            state.set_value(current.name.clone(), window, cx)
+        });
+        rows_input.update(cx, |state, cx| {
+            state.set_value(current.row_count.to_string(), window, cx)
+        });
+
+        let panel = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let theme = cx.theme();
+            let muted = theme.colors.muted_foreground;
+            let danger = theme.colors.danger;
+            // 校验没过时对话框不关：错误就地显示，改完能直接再点「应用」
+            let error = panel.read(cx).error.clone();
+            let mut body =
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .child(
+                        div().text_xs().text_color(muted).child(
+                            "只改这张表在本次生成里的配置；已生成的预览与已落地的表都不动。",
+                        ),
+                    )
+                    .child(form_line(theme, "表名", &name_input))
+                    .child(form_line(theme, "行数", &rows_input))
+                    .child(
+                        div().text_xs().text_color(muted).child(
+                            "引用它的表会自动跟着变：取值域由父表行数算出（改完下次生成生效）",
+                        ),
+                    );
+            if let Some(error) = error {
+                body = body.child(div().text_xs().text_color(danger).child(error));
+            }
+            let cancel_panel = panel.clone();
+            let ok_panel = panel.clone();
+            dialog.title("编辑表").child(body).footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("mock-table-cancel")
+                            .secondary()
+                            .label("取消")
+                            .on_click(move |_, window, app| {
+                                let _ = cancel_panel
+                                    .update(app, |panel, _cx| panel.table_editing = None);
+                                window.close_dialog(app);
+                            }),
+                    )
+                    .child(
+                        Button::new("mock-table-ok")
+                            .with_variant(ButtonVariant::Primary)
+                            .label("应用")
+                            .on_click(move |_, window, app| {
+                                let applied = ok_panel.update(app, |panel, cx| {
+                                    panel.apply_table_edit(cx);
+                                    panel.table_editing.is_none()
+                                });
+                                if applied {
+                                    window.close_dialog(app);
+                                }
+                            }),
+                    ),
+            )
+        });
+    }
+
+    /// 应用「编辑表」：校验 → 改工作副本 → **同步指向它的关系的 `ref_table`**。
+    pub fn apply_table_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(original) = self.table_editing.clone() else {
+            return;
+        };
+        // 表名走与单表路径**同一个**校验（非空 / 字母数字下划线 / 不以数字开头）：
+        // 让非法名在这里就被拦住，而不是到生成时才由引擎报出来
+        let name = match self
+            .edit_name_input
+            .as_ref()
+            .map(|input| validate_table_name(&input.read(cx).value()))
+        {
+            Some(Ok(name)) => name,
+            Some(Err(e)) => {
+                self.fail(e, cx);
+                return;
+            }
+            None => return,
+        };
+        let rows = match self
+            .edit_rows_input
+            .as_ref()
+            .map(|input| parse_rows(&input.read(cx).value()))
+        {
+            Some(Ok(rows)) => rows,
+            Some(Err(e)) => {
+                self.fail(e, cx);
+                return;
+            }
+            None => return,
+        };
+        let renamed = name != original;
+        let Some(template) = self.scenario.as_mut() else {
+            return;
+        };
+        if renamed && template.tables.iter().any(|t| t.name == name) {
+            self.fail(format!("本次生成里已经有表 {name}"), cx);
+            return;
+        }
+        let Some(table) = template.tables.iter_mut().find(|t| t.name == original) else {
+            return;
+        };
+        table.name = name.clone();
+        table.row_count = rows;
+        let mut retargeted = 0usize;
+        if renamed {
+            // 改了名，指向它的引用必须跟着改——否则立即变成“指向模板里没有的表”
+            for child in template.tables.iter_mut() {
+                for column in child.columns.iter_mut() {
+                    let points_here = column
+                        .dependency
+                        .as_mut()
+                        .filter(|dep| dep.is_foreign_key())
+                        .is_some_and(|dep| {
+                            if dep.ref_table.as_deref() == Some(original.as_str()) {
+                                dep.ref_table = Some(name.clone());
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    if points_here {
+                        retargeted += 1;
+                    }
+                }
+            }
+        }
+        self.table_editing = None;
+        self.error = None;
+        self.outcome = Some(if retargeted == 0 {
+            format!(
+                "已更新表 {name}（{} 行）：下次生成生效",
+                with_thousands(u64::from(rows))
+            )
+        } else {
+            format!(
+                "已更新表 {name}（{} 行），并同步 {retargeted} 条指向它的引用：下次生成生效",
+                with_thousands(u64::from(rows))
+            )
+        });
+        cx.notify();
     }
 
     /// 打开「加关系」对话框（子表.列 → 父表.列）。
@@ -3054,21 +3266,45 @@ impl MockPanel {
                         ),
                     ));
                     for table in template.tables.iter() {
+                        let edit = {
+                            let entity = cx.entity();
+                            let name = table.name.clone();
+                            let mut button = Button::new(ElementId::Name(SharedString::from(
+                                format!("mock-scenario-table-edit-{name}"),
+                            )))
+                            .ghost()
+                            .xsmall()
+                            .label("编辑")
+                            .disabled(running);
+                            if !running {
+                                button = button.on_click(move |_, window, app| {
+                                    let name = name.clone();
+                                    entity.update(app, |panel, cx| {
+                                        panel.open_table_dialog(&name, window, cx);
+                                    });
+                                });
+                            }
+                            button
+                        };
                         let remove = {
                             let entity = cx.entity();
                             let name = table.name.clone();
-                            Button::new(ElementId::Name(SharedString::from(format!(
-                                "mock-scenario-table-remove-{name}"
-                            ))))
+                            let mut button = Button::new(ElementId::Name(SharedString::from(
+                                format!("mock-scenario-table-remove-{name}"),
+                            )))
                             .ghost()
                             .xsmall()
                             .label("删除")
-                            .on_click(move |_, _, app| {
-                                let name = name.clone();
-                                entity.update(app, |panel, cx| {
-                                    panel.remove_scenario_table(&name, cx);
+                            .disabled(running);
+                            if !running {
+                                button = button.on_click(move |_, _, app| {
+                                    let name = name.clone();
+                                    entity.update(app, |panel, cx| {
+                                        panel.remove_scenario_table(&name, cx);
+                                    });
                                 });
-                            })
+                            }
+                            button
                         };
                         block = block.child(
                             div()
@@ -3088,6 +3324,7 @@ impl MockPanel {
                                 .child(div().flex_none().text_xs().text_color(muted).child(
                                     format!("{} 行", with_thousands(u64::from(table.row_count))),
                                 ))
+                                .child(edit)
                                 .child(remove),
                         );
                     }
@@ -3127,6 +3364,7 @@ impl MockPanel {
                         );
                     }
                     for relation in relations {
+                        let range = self.relation_range(&relation);
                         let remove = {
                             let entity = cx.entity();
                             let child_table = relation.child_table.clone();
@@ -3161,6 +3399,9 @@ impl MockPanel {
                                         .text_ellipsis()
                                         .child(relation.label()),
                                 )
+                                .children(range.map(|range| {
+                                    div().flex_none().text_xs().text_color(muted).child(range)
+                                }))
                                 .child(remove),
                         );
                     }

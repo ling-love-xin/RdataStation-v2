@@ -2980,3 +2980,239 @@ fn removing_a_scenario_table_drops_the_references_pointing_at_it(cx: &mut TestAp
         assert_eq!(panel.scenario().expect("工作副本").tables.len(), 2);
     });
 }
+
+// ==================== 编辑表（改表名 / 行数） ====================
+
+/// 打开「编辑表」对话框并写进两个输入框（对话框状态由面板持有，测试直接写）。
+///
+/// 先关掉还开着的：校验失败的用例会**故意**把它留着，用例之间不该叠罗汉。
+fn open_table_edit_dialog(
+    panel: &Entity<MockPanel>,
+    table: &str,
+    name: &str,
+    rows: &str,
+    cx: &mut VisualTestContext,
+) {
+    cx.update(|window, cx| {
+        if window.has_active_dialog(cx) {
+            window.close_dialog(cx);
+        }
+        panel.update(cx, |panel, cx| panel.open_table_dialog(table, window, cx));
+        assert!(window.has_active_dialog(cx), "编辑表对话框应打开");
+        panel.update(cx, |panel, cx| {
+            if let Some(input) = panel.edit_name_input.clone() {
+                input.update(cx, |state, cx| state.set_value(name, window, cx));
+            }
+            if let Some(input) = panel.edit_rows_input.clone() {
+                input.update(cx, |state, cx| state.set_value(rows, window, cx));
+            }
+        });
+        window.draw(cx).clear(cx);
+    });
+}
+
+/// 点「应用」：与按钮同一条件（`table_editing` 清空＝校验通过 → 收起对话框）。
+fn click_table_edit_apply(panel: &Entity<MockPanel>, cx: &mut VisualTestContext) -> bool {
+    let applied = panel.update(cx, |panel, cx| {
+        panel.apply_table_edit(cx);
+        panel.table_editing.is_none()
+    });
+    if applied {
+        cx.update(|window, cx| window.close_dialog(cx));
+    }
+    applied
+}
+
+/// `items.order_id → orders.id` 那一条（`relation_range` 的观察对象）。
+fn items_reference(panel: &MockPanel) -> ScenarioRelation {
+    panel
+        .scenario_relations()
+        .into_iter()
+        .find(|relation| relation.child_table == "items")
+        .expect("items 的引用")
+}
+
+/// 改行数：工作副本跟着变，引用它的关系的**取值域自动跟着变**——域由父表行数算出，
+/// 用户不需要再去同步任何东西（这是这次编辑最直接的可见回报）。
+#[gpui_kit::test]
+fn editing_a_table_row_count_moves_the_reference_domain(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| panel.load_scenario(toy_scenario(), cx));
+    draw(cx);
+
+    // 改前：orders 100 行 → 域 1..100
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(
+            panel.relation_range(&items_reference(panel)).as_deref(),
+            Some("1..100")
+        );
+    });
+
+    open_table_edit_dialog(&panel, "orders", "orders", "750", cx);
+    assert!(click_table_edit_apply(&panel, cx), "校验通过就该收起对话框");
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        let template = panel.scenario().expect("工作副本");
+        let orders = template
+            .tables
+            .iter()
+            .find(|t| t.name == "orders")
+            .expect("orders 还在");
+        assert_eq!(orders.row_count, 750);
+        assert_eq!(
+            panel.relation_range(&items_reference(panel)).as_deref(),
+            Some("1..750"),
+            "域跟着父表行数走"
+        );
+        let outcome = panel.outcome().unwrap_or_default();
+        assert!(outcome.contains("已更新表 orders"), "{outcome}");
+        assert!(outcome.contains("750 行"), "{outcome}");
+        assert!(panel.error().is_none(), "{:?}", panel.error());
+    });
+
+    // 改完照旧能生成（工作副本仍是唯一事实来源）
+    panel.update(cx, |panel, cx| panel.run_scenario(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.results().len(), 3);
+        assert!(panel.error().is_none(), "{:?}", panel.error());
+    });
+
+    // 父列不是自增（域算不出来）→ 不给域文案，面板那一行就不显示域
+    panel.update(cx, |panel, _cx| {
+        let template = panel.scenario.as_mut().expect("工作副本");
+        if let Some(orders) = template.tables.iter_mut().find(|t| t.name == "orders") {
+            orders.columns[0].generator = GeneratorConfig::UuidV4;
+        }
+        assert!(panel.relation_range(&items_reference(panel)).is_none());
+    });
+}
+
+/// 改表名：指向它的**入边自动跟着改**——否则立刻就变成「指向模板里没有的表」，
+/// 用户在生成前才发现，那时已经不知道是谁指向它了。
+#[gpui_kit::test]
+fn renaming_a_table_retargets_the_references_pointing_at_it(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| panel.load_scenario(toy_scenario(), cx));
+    open_table_edit_dialog(&panel, "orders", "sales_orders", "100", cx);
+    assert!(click_table_edit_apply(&panel, cx));
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        let template = panel.scenario().expect("工作副本");
+        assert!(
+            template.tables.iter().any(|t| t.name == "sales_orders"),
+            "新名字在册"
+        );
+        assert!(
+            !template.tables.iter().any(|t| t.name == "orders"),
+            "旧名字不该留下"
+        );
+        let relation = items_reference(panel);
+        assert_eq!(relation.parent_table, "sales_orders", "入边必须跟着改名");
+        assert_eq!(
+            panel.relation_range(&relation).as_deref(),
+            Some("1..100"),
+            "改名不动行数，域照旧"
+        );
+        assert_eq!(panel.scenario_relations().len(), 2, "两条关系都还在");
+        let outcome = panel.outcome().unwrap_or_default();
+        assert!(outcome.contains("同步 1 条"), "{outcome}");
+    });
+
+    // 改完照旧能生成：没有悬空引用
+    panel.update(cx, |panel, cx| panel.run_scenario(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.results().len(), 3);
+        assert!(
+            panel
+                .results()
+                .iter()
+                .any(|info| info.table_name == "sales_orders")
+        );
+        assert!(panel.error().is_none(), "{:?}", panel.error());
+    });
+}
+
+/// 校验没过就**不收起对话框**（错误就地显示，改完能接着点「应用」）。
+#[gpui_kit::test]
+fn table_edit_rejections_keep_the_dialog_open(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| panel.load_scenario(toy_scenario(), cx));
+
+    // 空表名
+    open_table_edit_dialog(&panel, "orders", "  ", "100", cx);
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.error().is_none(),
+            "刚打开：上一次的错误不该还在（{:?}）",
+            panel.error()
+        );
+    });
+    assert!(!click_table_edit_apply(&panel, cx), "空表名不该收起对话框");
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.error(), Some("表名不能为空"));
+        assert!(panel.table_editing.is_some(), "还在这张表上接着改");
+    });
+
+    // 撞上本次生成里已有的表名
+    open_table_edit_dialog(&panel, "orders", "items", "100", cx);
+    assert!(!click_table_edit_apply(&panel, cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.error().is_some_and(|e| e.contains("已经有表 items")),
+            "{:?}",
+            panel.error()
+        );
+        assert_eq!(panel.scenario().expect("工作副本").tables.len(), 3);
+    });
+
+    // 行数非法：工作副本原样不动
+    open_table_edit_dialog(&panel, "orders", "orders", "0", cx);
+    assert!(!click_table_edit_apply(&panel, cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.error(), Some("行数需为正整数"));
+        let orders = panel
+            .scenario()
+            .expect("工作副本")
+            .tables
+            .iter()
+            .find(|t| t.name == "orders")
+            .expect("orders 还在");
+        assert_eq!(orders.row_count, 100, "原行数保留");
+        assert!(panel.outcome().is_none());
+    });
+
+    // 表名不是合法标识符：与单表路径同一条规矩（非法名不留到生成时才报）
+    open_table_edit_dialog(&panel, "orders", "orders-1", "100", cx);
+    assert!(!click_table_edit_apply(&panel, cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.error(), Some("表名只能包含字母、数字与下划线"));
+        assert!(
+            panel
+                .scenario()
+                .expect("工作副本")
+                .tables
+                .iter()
+                .any(|t| t.name == "orders"),
+            "非法名不写进工作副本"
+        );
+    });
+
+    // 四次都没收起，且渲染不炸（错误行就地显示）
+    cx.update(|window, cx| {
+        assert!(window.has_active_dialog(cx), "校验没过不要收起对话框");
+        window.draw(cx).clear(cx);
+    });
+}

@@ -221,6 +221,14 @@ button{font-family:inherit;cursor:pointer;}
 [data-scn="relation"] .scn-single{display:none;}
 [data-scn="relation"] .exit-enabled{display:flex;}
 [data-scn="relation"] .exit-disabled{display:none;}
+/* 编辑表对话框：背后同样是工作副本态 */
+[data-scn="edit-table"] .only-imported{display:flex;}
+[data-scn="edit-table"] .only-scenario-copy{display:flex;}
+[data-scn="edit-table"] .scn-row-copy{display:flex;}
+[data-scn="edit-table"] .scn-hide{display:none;}
+[data-scn="edit-table"] .scn-single{display:none;}
+[data-scn="edit-table"] .exit-enabled{display:flex;}
+[data-scn="edit-table"] .exit-disabled{display:none;}
 
 /* ── 对话框（应用内叠加层） ── */
 .overlay{position:absolute;inset:0;background:var(--overlay);display:none;align-items:center;justify-content:center;padding:24px;z-index:9;}
@@ -313,6 +321,7 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn" data-go="scenario" onclick="setScene('scenario')">场景模板（6 套内置）</button>
   <button class="scn" data-go="scenario-copy" onclick="setScene('scenario-copy')">场景工作副本（调关系）</button>
   <button class="scn" data-go="relation" onclick="setScene('relation')">加关系对话框</button>
+  <button class="scn" data-go="edit-table" onclick="setScene('edit-table')">编辑表对话框</button>
   <button class="scn" data-go="scenario-result" onclick="setScene('scenario-result')">场景结果（多表 + 当前表）</button>
 </div>
 <div class="scn-hint">场景切换只改变 Mock 面板 / 中央 tab / 对话框的呈现；窗口壳（标题栏 / 活动栏 / 左右边栏）为 v2 五段布局的简化示意。</div>
@@ -540,20 +549,21 @@ button{font-family:inherit;cursor:pointer;}
           <div class="only-scenario-copy" style="flex-direction:column;gap:6px;">
             <div class="hint">本次生成（5 张表 · 22,250 行）· 电商系统 + 自定义</div>
             <div class="hist-row">
-              <div class="line"><span class="name grow">users</span><span class="hint">1,000 行</span><button class="btn sm">删除</button></div>
-              <div class="line"><span class="name grow">products</span><span class="hint">500 行</span><button class="btn sm">删除</button></div>
-              <div class="line"><span class="name grow">orders</span><span class="hint">5,000 行</span><button class="btn sm">删除</button></div>
-              <div class="line"><span class="name grow">order_items</span><span class="hint">15,000 行</span><button class="btn sm">删除</button></div>
-              <div class="line"><span class="name grow">invoices</span><span class="hint">750 行</span><button class="btn sm">删除</button></div>
+              <div class="line"><span class="name grow">users</span><span class="hint">1,000 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
+              <div class="line"><span class="name grow">products</span><span class="hint">500 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
+              <div class="line"><span class="name grow">orders</span><span class="hint">5,000 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
+              <div class="line"><span class="name grow">order_items</span><span class="hint">15,000 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
+              <div class="line"><span class="name grow">invoices</span><span class="hint">750 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
             </div>
             <div class="line"><button class="btn sm">＋ 加表（当前草稿）</button></div>
             <div class="hint">加进来的表取草稿的目标表名 / 行数 / 列：先在单表态把表调好（导入结构、智能映射、列编辑），再一次加进本次生成</div>
             <div class="hint">表间关系（3 条）</div>
             <div class="hist-row">
-              <div class="line"><span class="mono grow" style="font-size:11.5px;">orders.user_id → users.id</span><button class="btn sm">删除</button></div>
-              <div class="line"><span class="mono grow" style="font-size:11.5px;">order_items.order_id → orders.id</span><button class="btn sm">删除</button></div>
-              <div class="line"><span class="mono grow" style="font-size:11.5px;">order_items.product_id → products.id</span><button class="btn sm">删除</button></div>
+              <div class="line"><span class="mono grow" style="font-size:11.5px;">orders.user_id → users.id</span><span class="hint" style="flex:none;">1..1,000</span><button class="btn sm">删除</button></div>
+              <div class="line"><span class="mono grow" style="font-size:11.5px;">order_items.order_id → orders.id</span><span class="hint" style="flex:none;">1..5,000</span><button class="btn sm">删除</button></div>
+              <div class="line"><span class="mono grow" style="font-size:11.5px;">order_items.product_id → products.id</span><span class="hint" style="flex:none;">1..500</span><button class="btn sm">删除</button></div>
             </div>
+            <div class="hint">行尾是取值域（父列自增参数 × 父表行数算出来）：改父表行数它就跟着变，不需要谁去同步</div>
             <div class="line"><button class="btn sm" onclick="setScene('relation')">＋ 加关系</button></div>
             <div class="hint">关系只在本次多表生成内成立：不读已有数据，也不改已生成的表 / 文件</div>
             <div class="hint">场景生成不记入生成历史（历史是单表配置的重放来源）</div>
@@ -726,6 +736,23 @@ button{font-family:inherit;cursor:pointer;}
     </div>
   </div>
 
+  <!-- 编辑表对话框（D32）：只改工作副本的这张表（表名 / 行数），不碰已生成与已落地的 -->
+  <div class="overlay" id="ov-table-edit">
+    <div class="dialog" style="width:440px;">
+      <div class="dh">编辑表</div>
+      <div class="db">
+        <div class="hint">只改这张表在本次生成里的配置；已生成的预览与已落地的表都不动。</div>
+        <div class="form-line"><span class="lab">表名</span><input class="inp" value="orders"></div>
+        <div class="form-line"><span class="lab">行数</span><input class="inp" value="5000"></div>
+        <div class="hint">引用它的表会自动跟着变：取值域由父表行数算出（改完下次生成生效）</div>
+      </div>
+      <div class="df">
+        <button class="btn" onclick="setScene('scenario-copy')">取消</button>
+        <button class="btn primary" onclick="setScene('scenario-copy')">应用</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 列编辑对话框 -->
   <div class="overlay" id="ov-column">
     <div class="dialog">
@@ -758,7 +785,7 @@ button{font-family:inherit;cursor:pointer;}
   <div>· v1 的「导入结构弹窗」→ 本稿「导入结构」对话框（连接 / 库 / schema / 表名，读源库结构）；v1 <b>没有</b>的「追加到既有表」是 v2 的<b>显式</b>出口（选表后主键自增接续表内行数），不与「持久化」混为一路。</div>
   <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部「生成历史」（最近 20 条，时间倒序 + 重放 / 删除 / 刷新），生成一次自动落一条，失败行显示原因；v1 的「保存模板」→ 本稿**已画**「用户模板」段（「保存为模板…」对话框只问名字 + 每行「应用 / 删除」）。</div>
   <div>· v1 的「场景模板」→ 本稿**已画**（两个场景：「场景模板」= 下拉选 6 套内置模板；「场景结果」= 一次产多张表 + 「当前表」切换）。<b>与 v1 的形态差异是有意的</b>：v1 的模板对话框是「选一个模板 → 把列定义填进草稿」，一次只服务一张表；v2 是「选一套模板 → 后台一次生成模板里的**全部表**（不写库）」，结果表是一组（`results`），出口作用于「当前表」。场景任务与批量落库的进度量纲是**张表**（`2 / 4 张表` / `1 / 3 张表`），不是批次 / 行——面板按任务种类切文案。</div>
-  <div>· 场景表之间的**引用关系是有的**，但是「手写约定」：子表外键列的范围照父表行数写（`orders.user_id` = 1..1000 对应 `users` 1000 行 + 自增 `id`），模板里逐套核对：5 套恰好落域内，blog 有 2 处悬空。升级为模型化引用（面板能显示「列 → 父表.列」、取值域跟随父表行数）见 `mock-architecture.md` §9-I11。</div>
+  <div>· 场景表之间的**引用关系**已从「手写约定」升级为**模型化引用**（§9-I11 已落实）：关系声明在子表的列上（`ColumnDependency::foreign_key`），取值域由父列自增参数 + 父表行数**算出**（不读已落地数据）；内置 6 套模板的 24 处引用都改成声明，blog 顺带补上原本缺失的父表 `users`。面板上就是「表间关系」段 + 「＋ 加关系」对话框，关系行尾的 `1..1,000` 就是算出来的域。</div>
 </div>
 
 <script>
@@ -774,6 +801,7 @@ function setScene(name){
   document.getElementById('ov-generator').classList.toggle('show', name === 'generator');
   document.getElementById('ov-constraint').classList.toggle('show', name === 'constraint');
   document.getElementById('ov-relation').classList.toggle('show', name === 'relation');
+  document.getElementById('ov-table-edit').classList.toggle('show', name === 'edit-table');
 }
 setScene('empty');
 </script>
