@@ -26,8 +26,7 @@ use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
 use crate::panels::{
-    EditorPanel, ProjectActionRequest, QueryRequest, RightSidebarPanel, Shared, SidebarEvent,
-    SidebarPanel,
+    EditorPanel, ProjectActionRequest, QueryRequest, RightSidebarPanel, Shared, SidebarPanel,
 };
 use crate::ui;
 use mock::mock_view::{MockDetailView, focus_detail_tab};
@@ -59,7 +58,6 @@ pub struct WorkbenchView {
     /// M1 项目视图宿主（构造期组装；项目视图位于 `project` crate）。
     project_host: Option<project::ui::ProjectUiHost>,
     /// 订阅句柄（保持连接选中事件的订阅存活）。
-    _subscription: Option<Subscription>,
     /// 编辑面板观察句柄（其 notify 级联到宿主，保证对话框层内容同步）。
     _editor_subscription: Option<Subscription>,
     /// M8 洞察规则目录监听句柄（改动 `.rule.toml` 后自动重载规则集）。
@@ -148,7 +146,6 @@ impl WorkbenchView {
             settings_page: None,
             project_inputs: None,
             project_host: Some(host),
-            _subscription: None,
             _editor_subscription: None,
             _insight_rules_watcher: insight_rules_watcher,
             editor_service,
@@ -537,43 +534,26 @@ impl WorkbenchView {
         // 草稿箱命令端口（编辑区「全部替换」需要草稿箱轮询在跑）。
         crate::panels::install_scratchpad_bridge(&shared, sidebar.clone());
 
-        // 订阅侧边栏事件：连接选中 -> 更新共享状态并重绘编辑器。
-        let subscription = cx.subscribe(&sidebar, |this, _entity, event: &SidebarEvent, cx| {
-            match event {
-                SidebarEvent::SelectConnection(idx) => {
-                    this.shared.selected.set(Some(*idx));
-                    // Round 30：切换连接 → 清空导航缓存，防止串数据。
-                    // B12：SQL 结果不再跟“当前连接”走（每份文档有自己的绑定与结果），
-                    // 因此不再需要结果失效戳。
-                    this.shared.invalidate_nav_cache();
-                    if let Some(editor) = &this.editor {
-                        editor.update(cx, |_, cx| cx.notify());
-                    }
+        // 宿主重绘桥再挂一层：除宿主自身，编辑区也要跟上。
+        //
+        // 导航选中连接会递增 `Shared::nav_cache_epoch`（编辑区下一帧据此丢掉分析库
+        // 导航树缓存）；原先由 `SidebarEvent::SelectConnection` 的订阅回调顺带
+        // `editor.notify()` 驱动，事件通道退役后收到这里：只唤醒“脏了但自己不知道”
+        // 的编辑区，不再依赖它恰好因别的原因重渲染。
+        {
+            let weak = cx.entity().downgrade();
+            let editor_for_redraw = editor.clone();
+            *shared.host_redraw.borrow_mut() = Some(Rc::new(move |cx: &mut App| {
+                editor_for_redraw.update(cx, |_, cx| cx.notify());
+                if let Some(view) = weak.upgrade() {
+                    view.update(cx, |_, cx| cx.notify());
                 }
-                SidebarEvent::EditConnection(_) => {
-                    // 对话框已由 `EditorBridge::edit_connection` 在事件路径打开（见 panels/shared.rs）；
-                    // 此处只负责让编辑区重绘（端口调用时已在 `app` 上下文，宿主需跟上）。
-                    // 注意：此处处于宿主自身的 update 上下文，不能回调 `notify_host`
-                    // （会重入借用宿主）；末尾的 `cx.notify()` 已足够让宿主重绘。
-                    if let Some(editor) = &this.editor {
-                        editor.update(cx, |_, cx| cx.notify());
-                    }
-                }
-                SidebarEvent::NewConnectionRequest => {
-                    // 同 `EditConnection`：动作已由端口完成，这里只触发重绘。
-                    if let Some(editor) = &this.editor {
-                        editor.update(cx, |_, cx| cx.notify());
-                    }
-                }
-                SidebarEvent::OpenRightPanel(panel) => {
-                    // 连接右键「生成 Mock 数据 / 查看洞察」：展开右 Dock 并切面板
-                    // （与 Quick Open 的 OpenInsight / OpenMock 同一处理口径）。
-                    this.shared.active_right.set(*panel);
-                    this.shared.right_mode.set(SidebarMode::Expanded);
-                }
-            }
-            cx.notify();
-        });
+            }));
+        }
+
+        // 导航面板的事件通道（`SidebarEvent`）已退役：选中 / 编辑 / 新建 / 开右栏
+        // 都改走宿主端口（`database::nav_host::NavHost`，实现在 `components/nav_host.rs`），
+        // 动作在事件路径上直接完成，不再绕宿主 render 转发一轮。
 
         let (area, _skin) = DockSkin::dock_area("workspace", Some(1), window, cx);
 
@@ -647,7 +627,6 @@ impl WorkbenchView {
                 }));
         }
 
-        self._subscription = Some(subscription);
         // 编辑面板通知级联到宿主：对话框层挂在宿主 render 中（`Root` 的 notify
         // 不会传到子视图），而对话框内部的状态变化（切 Tab / 增删跳 / 测试结果等）
         // 都以 EditorPanel 的 notify 驱动，需同步宿主重绘才能更新层内容。
@@ -1330,8 +1309,6 @@ fn restore_snapshot(mode: SidebarMode) -> SidebarMode {
         mode
     }
 }
-
-impl EventEmitter<SidebarEvent> for WorkbenchView {}
 
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

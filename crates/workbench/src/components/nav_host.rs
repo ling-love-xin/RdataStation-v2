@@ -29,11 +29,11 @@ use crate::services::{nav_runtime, workspace_loader};
 
 /// 宿主端口实现（无状态外壳，状态全在 [`Shared`]）。
 pub struct WorkbenchNavHost {
-    shared: Rc<Shared>,
+    shared: Shared,
 }
 
 impl WorkbenchNavHost {
-    pub fn new(shared: Rc<Shared>) -> Self {
+    pub fn new(shared: Shared) -> Self {
         Self { shared }
     }
 

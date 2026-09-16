@@ -1,14 +1,22 @@
 //! 数据源导航面板（M4）：面板头 / facet 筛选 / 分组-连接-对象树 / 行内编辑 / 拖拽排序。
 //!
-//! 自 `panels.rs` 纯位移迁出（无语义改动）。内容分三段：
-//! 1. 状态类型与纯函数辅助（`DatabaseNavView` / `NavFacet` / `parse_nav_search` / 徽标映射 / 拖拽载荷）；
-//! 2. `impl SidebarPanel` 的导航方法（键盘移动 / 展开折叠 / 打开属性）；
-//! 3. 导航渲染与操作实现（树渲染 / 分组与标签 / 拖拽落点 / 连接增删改 / 刷新预热）。
+//! 本 crate（`database`）自带视图；宿主能力经 [`NavHost`] 注入（`NavView::new`），
+//! 与 `mock` / `insight` / `analytics_resource` 同形。内容分四段：
+//! 1. 状态类型与纯函数辅助（`NavViewState` / `NavFacet` / `parse_nav_search` / 徽标映射 / 拖拽载荷）；
+//! 2. 键盘移动 / 展开折叠 / 打开属性；
+//! 3. 导航渲染与操作实现（树渲染 / 分组与标签 / 拖拽落点 / 连接增删改 / 刷新预热）；
+//! 4. 纯函数单测。
 //!
-//! `SidebarPanel` 的字段声明与面板协议实现在 `super`（`panels/mod.rs`），
-//! 草稿箱面板在 `super::scratchpad`；数据来自 `Shared::connections`（连接列表）
-//! 与 `database::NavigatorService`（对象树懒加载）。
+//! 依赖分工（下沉后不再有 `Shared`）：
+//! - 连接清单 / 选中 / 项目根 / 提示 / 视图偏好 / 连接生命周期 → [`NavHost`]；
+//! - 标签 / 分组 / 排序 / 导航状态落库 → [`crate::nav_store`]（只依 `engine`）；
+//! - 后台任务 → [`crate::nav_jobs`]；对象树元数据 → [`crate::navigator_service`]；
+//! - 驱动目录 → `engine::persistence::driver_catalog`。
+//!
+//! 设计：`docs/architecture/database/database-navigator-prototype-design.md`
+//! （结构设计：`docs/architecture/layout/panels-coupling-plan.md` §9 A'1~A'3）。
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use gpui_kit::base::Disableable as _;
@@ -21,34 +29,33 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, WindowExt a
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use database::commands::{
+use std::rc::Rc;
+
+use crate::commands::{
     NavCollapse, NavDown, NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp,
 };
-use crate::components::group_form_dialog::{self, GroupFormSeed};
-
-use database::model::{
+use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, PropertyRef,
+    PropertyRequest, TableRef,
 };
-use database::sql_gen::DmlKind;
+use crate::nav_host::{NavFilters, NavHost};
+use crate::sql_gen::DmlKind;
+use engine::persistence::driver_catalog::DriverMeta;
 
-use database::nav_jobs;
+use crate::nav_jobs;
 
-use crate::ui;
-use crate::view::{ConnectionItem, RightPanel};
-use mock::mock_view::SchemaRequest;
-
-// 父模块项：子模块可见父模块的私有项，但需显式引入才能按名调用。
-use super::shared::QueryRequest;
-use super::{SidebarEvent, SidebarPanel};
+use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
+use workbench_shell::product_tokens;
+use workbench_shell::ui;
 
 /// 数据库导航面板状态（M4）。
 ///
 /// 数据来自 `Shared::connections`（连接列表）+ `NavigatorService`（对象树懒加载）。
 /// 来源标签页、展开态、加载结果与错误就地保存在此，重启持久化在后续切片接入。
 #[derive(Default)]
-pub(super) struct DatabaseNavView {
+pub struct NavViewState {
     /// 来源筛选（None = 全部）。
-    pub(super) source_filter: Option<NavSource>,
+    pub source_filter: Option<NavSource>,
     /// 搜索过滤词（本地筛选）。
     filter: String,
     /// 已展开节点 key。
@@ -96,11 +103,11 @@ pub(super) struct DatabaseNavView {
     /// 当前选中的节点 key（键盘导航与选中高亮）。
     selected_key: Option<String>,
     /// 附加 facet 筛选：类型（`drivers.type_id`）。
-    pub(super) type_filter: Option<String>,
+    pub type_filter: Option<String>,
     /// 附加 facet 筛选：驱动 id。
-    pub(super) driver_filter: Option<String>,
+    pub driver_filter: Option<String>,
     /// 附加 facet 筛选：标签。
-    pub(super) tag_filter: Option<String>,
+    pub tag_filter: Option<String>,
     /// 搜索框 facet 语法解析结果（每帧重算，不持久化）。
     search_facets: NavSearchFacets,
 }
@@ -182,7 +189,7 @@ fn parse_nav_search(raw: &str) -> NavSearchFacets {
 
 /// 渲染顺序中的可见项（键盘导航用；每帧重建）。
 #[derive(Clone)]
-pub(super) struct NavOrderItem {
+pub struct NavOrderItem {
     key: String,
     conn_id: String,
     path: Option<NavPath>,
@@ -428,7 +435,7 @@ enum ConnDropTarget {
 /// - `moving` 已在 `ids` 里 → 先摘除再插入，因此「拖到自己身上」与「已经就位」都返回 `None`；
 /// - `before` 不在 `ids` 里（目标行被过滤掉）→ 追加到末尾。
 ///
-/// 纯函数：不碰存储；落库顺序由调用方一次写 `0..n`（见 `database::nav_store::set_container_order`）。
+/// 纯函数：不碰存储；落库顺序由调用方一次写 `0..n`（见 `crate::nav_store::set_container_order`）。
 fn nav_reorder(ids: &[String], moving: &str, before: Option<&str>) -> Option<Vec<String>> {
     if before == Some(moving) {
         return None;
@@ -568,28 +575,102 @@ fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: Hsla) -> Div
     div().min_w_0().text_color(fg).child(name.to_string())
 }
 
-pub use database::model::PropertyRequest;
-
-/// 属性面板状态（懒加载一次，按请求 key 失效重载）。
-#[derive(Default)]
-pub(super) struct PropertyState {
-    pub(super) loaded_for: Option<String>,
-    pub(super) props: Option<database::property_panel::ObjectProperties>,
-    pub(super) error: Option<String>,
-    /// 是否正在后台加载（渲染「加载中…」）。
-    pub(super) loading: bool,
+/// 数据源导航面板（M4）。
+///
+/// 视图归本 crate；宿主能力经 [`NavHost`] 注入（与 `mock` / `insight` /
+/// `analytics_resource` 同形，宿主实现在 `crates/workbench/src/components/nav_host.rs`）。
+///
+/// 状态分两处：**实体字段**（输入框 / 轮询任务 / 驱动目录等渲染资产）+ [`NavViewState`]
+/// （展开态、已加载子节点、筛选与行内编辑器标记）。后者用 `Rc<RefCell<…>>` 是因为
+/// 若干 `&self` 辅助函数要就地更新（键盘移动 / 后台回填）。
+pub struct NavView {
+    /// 宿主端口（连接清单 / 选中 / 提示 / 视图偏好 / 连接生命周期 / 对话框）。
+    host: Rc<dyn NavHost>,
+    focus_handle: FocusHandle,
+    /// 视图状态（懒加载对象树）。
+    nav: Rc<RefCell<NavViewState>>,
+    /// 数据源导航搜索框（懒创建）。
+    nav_search: Option<Entity<InputState>>,
+    _nav_search_sub: Option<Subscription>,
+    /// 连接行内联标签输入框（组织编辑器打开时创建，关闭时销毁）。
+    nav_tag_input: Option<Entity<InputState>>,
+    /// 当前标签输入框对应的连接 ID（切换连接时重建并重新预填）。
+    nav_tag_input_for: Option<String>,
+    _nav_tag_sub: Option<Subscription>,
+    /// 行内「复制为模板」输入框（打开时创建，关闭时销毁）。
+    nav_copy_input: Option<Entity<InputState>>,
+    /// 当前复制输入框对应的连接 ID（切换连接时重建）。
+    nav_copy_input_for: Option<String>,
+    _nav_copy_sub: Option<Subscription>,
+    /// 分组名内联重命名输入框（重命名时创建，关闭时销毁）。
+    nav_group_input: Option<Entity<InputState>>,
+    _nav_group_sub: Option<Subscription>,
+    /// 渲染顺序重建的可见项（键盘 ↑↓ 移动 / 展开折叠 / 打开属性）。
+    nav_order: Rc<RefCell<Vec<NavOrderItem>>>,
+    /// 正在轮询预热进度的后台任务（避免重复启动）。
+    warm_poll: Option<Task<()>>,
+    /// 正在轮询导航加载结果的后台任务（避免重复启动；`&self` 路径也要访问）。
+    nav_pump: RefCell<Option<Task<()>>>,
+    /// Ctrl+F 待聚焦标记：搜索框懒创建，先到位的请求在这里等一帧。
+    nav_search_focus_pending: bool,
+    /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
+    driver_catalog: RefCell<HashMap<String, DriverMeta>>,
 }
 
-impl SidebarPanel {
+impl NavView {
+    /// 构造：注入宿主端口，并从宿主恢复 facet 筛选（UI 偏好，跟项目无关）。
+    pub fn new(host: Rc<dyn NavHost>, cx: &mut Context<Self>) -> Self {
+        let saved = host.nav_filters(cx);
+        let mut nav = NavViewState::default();
+        nav.source_filter = saved.source.as_deref().and_then(NavSource::from_key);
+        nav.type_filter = saved.db_type.clone();
+        nav.driver_filter = saved.driver.clone();
+        nav.tag_filter = saved.tag.clone();
+        Self {
+            host,
+            focus_handle: cx.focus_handle(),
+            nav: Rc::new(RefCell::new(nav)),
+            nav_search: None,
+            _nav_search_sub: None,
+            nav_tag_input: None,
+            nav_tag_input_for: None,
+            _nav_tag_sub: None,
+            nav_copy_input: None,
+            nav_copy_input_for: None,
+            _nav_copy_sub: None,
+            nav_group_input: None,
+            _nav_group_sub: None,
+            nav_order: Rc::new(RefCell::new(Vec::new())),
+            warm_poll: None,
+            nav_pump: RefCell::new(None),
+            nav_search_focus_pending: false,
+            driver_catalog: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
+impl Focusable for NavView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for NavView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_nav(window, cx)
+    }
+}
+
+impl NavView {
     /// 聚焦数据源导航搜索框（Ctrl+F，由宿主 action 调用）。
     ///
-    /// 搜索框懒创建：已存在则立即聚焦，否则置位由 `render_database_nav` 消费。
+    /// 搜索框懒创建：已存在则立即聚焦，否则置位由 `render_nav` 消费。
     pub fn focus_nav_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(input) = self.nav_search.clone() {
             let handle = input.read(cx).focus_handle(cx);
             handle.focus(window, cx);
         } else {
-            // 搜索框可能上一帧才创建：置面板自己的待聚焦标记，本帧的 `render_database_nav` 消费。
+            // 搜索框可能上一帧才创建：置面板自己的待聚焦标记，本帧的 `render_nav` 消费。
             self.nav_search_focus_pending = true;
         }
         cx.notify();
@@ -601,7 +682,7 @@ impl SidebarPanel {
         if order.is_empty() {
             return;
         }
-        let current = self.database_nav.borrow().selected_key.clone();
+        let current = self.nav.borrow().selected_key.clone();
         let idx = current.and_then(|k| order.iter().position(|i| i.key == k));
         let next = match idx {
             None => 0,
@@ -609,13 +690,13 @@ impl SidebarPanel {
         };
         let key = order[next].key.clone();
         drop(order);
-        self.database_nav.borrow_mut().selected_key = Some(key);
+        self.nav.borrow_mut().selected_key = Some(key);
         cx.notify();
     }
 
     /// 当前选中项（克隆，避免跨借用）。
     fn nav_selected(&self) -> Option<NavOrderItem> {
-        let key = self.database_nav.borrow().selected_key.clone()?;
+        let key = self.nav.borrow().selected_key.clone()?;
         self.nav_order
             .borrow()
             .iter()
@@ -667,14 +748,13 @@ impl SidebarPanel {
             return;
         };
         let (conn_label, driver) = self
-            .shared
-            .connections
-            .borrow()
+            .host
+            .connections()
             .iter()
             .find(|c| c.id == item.conn_id)
             .map(|c| (c.name.clone(), c.driver.clone()))
             .unwrap_or_else(|| (item.conn_id.clone(), String::new()));
-        self.shared.show_properties(
+        self.host.show_properties(
             PropertyRequest {
                 property,
                 conn_label,
@@ -684,12 +764,11 @@ impl SidebarPanel {
         );
         cx.notify();
     }
-
 }
 
-impl SidebarPanel {
+impl NavView {
     /// 数据源导航面板（M4）：面板头 + 来源 chips + 搜索 + 分组树。
-    pub(super) fn render_database_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub fn render_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if self.nav_search.is_none() {
             let state = cx.new(|cx| InputState::new(window, cx));
             state.update(cx, |s, cx| {
@@ -715,12 +794,11 @@ impl SidebarPanel {
 
         // 本地 SQLite 一次性读取（分组/标签、各连接展开态）不在 render 做，
         // 推到本帧效果周期之后执行，完成后重绘。
-        let need_org = !self.database_nav.borrow().groups_loaded;
+        let need_org = !self.nav.borrow().groups_loaded;
         let need_state: Vec<String> = {
-            let view = self.database_nav.borrow();
-            self.shared
-                .connections
-                .borrow()
+            let view = self.nav.borrow();
+            self.host
+                .connections()
                 .iter()
                 .filter(|c| !view.state_loaded.contains(&c.id))
                 .map(|c| c.id.clone())
@@ -729,7 +807,7 @@ impl SidebarPanel {
         if need_org || !need_state.is_empty() {
             let conn_ids = need_state.clone();
             cx.defer_in(window, move |this, _window, cx| {
-                let org_pending = need_org && !this.database_nav.borrow().groups_loaded;
+                let org_pending = need_org && !this.nav.borrow().groups_loaded;
                 if org_pending {
                     this.reload_nav_org();
                 }
@@ -748,14 +826,14 @@ impl SidebarPanel {
         // 其余为自由文本；与面板 chips 叠加（AND）而非写回，避免输入框反馈环。
         {
             let parsed = parse_nav_search(&raw_search);
-            let mut view = self.database_nav.borrow_mut();
+            let mut view = self.nav.borrow_mut();
             view.filter = parsed.free.clone();
             view.search_facets = parsed;
         }
 
         // 连接行内联**标签**编辑器（`+` 打开）打开时，按需创建标签输入框
         // 并用当前标签预填；关闭时销毁，保证下次打开重新回填。
-        let tag_editor_for = self.database_nav.borrow().tag_editor_for.clone();
+        let tag_editor_for = self.nav.borrow().tag_editor_for.clone();
         match &tag_editor_for {
             Some(conn_id) => {
                 // 已为**本**连接建过则复用；否则重建并重新预填（曾在 A 开过再切 B 时
@@ -763,10 +841,8 @@ impl SidebarPanel {
                 let stale = self.nav_tag_input.is_none()
                     || self.nav_tag_input_for.as_deref() != Some(conn_id.as_str());
                 if stale {
-                    let current = database::nav_store::list_tags(
-                        conn_id,
-                        self.project_root().as_deref(),
-                    );
+                    let current =
+                        crate::nav_store::list_tags(conn_id, self.host.project_root().as_deref());
                     let text = current.join(", ");
                     let input =
                         cx.new(|cx| InputState::new(window, cx).placeholder("标签，逗号分隔"));
@@ -793,22 +869,20 @@ impl SidebarPanel {
         }
 
         // 连接行内「复制为模板」输入框：打开时创建并预填「原名 副本」，关闭时销毁。
-        let copy_for = self.database_nav.borrow().copy_for.clone();
+        let copy_for = self.nav.borrow().copy_for.clone();
         match &copy_for {
             Some(conn_id) => {
                 let stale = self.nav_copy_input.is_none()
                     || self.nav_copy_input_for.as_deref() != Some(conn_id.as_str());
                 if stale {
                     let base = self
-                        .shared
-                        .connections
-                        .borrow()
+                        .host
+                        .connections()
                         .iter()
                         .find(|c| c.id == *conn_id)
                         .map(|c| c.name.clone())
                         .unwrap_or_else(|| conn_id.clone());
-                    let input =
-                        cx.new(|cx| InputState::new(window, cx).placeholder("新连接名称"));
+                    let input = cx.new(|cx| InputState::new(window, cx).placeholder("新连接名称"));
                     input.update(cx, |s, cx| s.set_value(format!("{base} 副本"), window, cx));
                     let sub = cx.subscribe_in(
                         &input,
@@ -832,12 +906,12 @@ impl SidebarPanel {
         }
 
         // 分组重命名输入框：打开时按名称预填，关闭时销毁。
-        let rename_for = self.database_nav.borrow().group_rename_for.clone();
+        let rename_for = self.nav.borrow().group_rename_for.clone();
         match &rename_for {
             Some(group_id) => {
                 if self.nav_group_input.is_none() {
                     let name = self
-                        .database_nav
+                        .nav
                         .borrow()
                         .groups
                         .iter()
@@ -869,18 +943,18 @@ impl SidebarPanel {
         let muted = cx.theme().colors.muted_foreground;
         let border = cx.theme().colors.border;
         let accent = cx.theme().colors.primary;
-        let source_filter = self.database_nav.borrow().source_filter;
+        let source_filter = self.nav.borrow().source_filter;
 
         // 面板头「⟳ 刷新元数据」「断开当前连接」的作用目标：当前选中的连接。
         let current_conn = self.nav_current_connection();
         let current_connected = current_conn
             .as_deref()
-            .map(|id| {
-                crate::services::nav_runtime::is_connected(id)
-                    || self.database_nav.borrow().connected.contains(id)
-            })
+            .map(|id| self.host.is_connected(id) || self.nav.borrow().connected.contains(id))
             .unwrap_or(false);
-        let project_root = self.project_root().map(|p| p.to_string_lossy().to_string());
+        let project_root = self
+            .host
+            .project_root()
+            .map(|p| p.to_string_lossy().to_string());
 
         let header = div()
             .h_flex()
@@ -930,12 +1004,10 @@ impl SidebarPanel {
                     .small()
                     .icon(IconName::Plus)
                     .on_click({
-                        let entity = cx.entity();
-                        let shared = self.shared.clone();
+                        let host = self.host.clone();
                         move |_, window, app: &mut App| {
                             // 命令端口：直接开对话框（不再置位请求字段等渲染消费）。
-                            shared.new_connection(window, app);
-                            entity.update(app, |_, cx| cx.emit(SidebarEvent::NewConnectionRequest));
+                            host.new_connection(window, app);
                         }
                     }),
             )
@@ -955,19 +1027,21 @@ impl SidebarPanel {
                     .child("\u{1f5c2}\u{ff0b}")
                     .on_click({
                         let entity = cx.entity();
+                        let host = self.host.clone();
                         let seed = GroupFormSeed::for_new(self.next_group_name());
                         move |_, window, app: &mut App| {
                             let e = entity.clone();
+                            let host = host.clone();
                             let seed = seed.clone();
-                            group_form_dialog::open_group_form_dialog(
+                            host.open_group_form(
+                                seed,
                                 window,
                                 app,
-                                seed,
-                                move |gid, name, desc, app| {
+                                Rc::new(move |gid, name, desc, app| {
                                     e.update(app, |this, cx| {
                                         this.save_group_form(gid, name, desc, cx);
                                     });
-                                },
+                                }),
                             );
                         }
                     }),
@@ -1027,12 +1101,14 @@ impl SidebarPanel {
                     .icon(IconName::Ellipsis)
                     .dropdown_menu({
                         let entity = cx.entity();
-                        let shared = self.shared.clone();
-                        let show_tags = settings::SettingsService::show_tags(cx);
-                        let show_scope = settings::SettingsService::show_scope(cx);
+                        let host_tags = self.host.clone();
+                        let host_scope = self.host.clone();
+                        let host_cache = self.host.clone();
+                        let show_tags = self.host.show_tags(cx);
+                        let show_scope = self.host.show_scope(cx);
                         move |menu, _window, _cx| {
                             let e_refresh = entity.clone();
-                            let shared_cache = shared.clone();
+                            let host_cache = host_cache.clone();
                             menu.item(PopupMenuItem::new("刷新全部元数据").on_click(
                                 move |_, _, app| {
                                     e_refresh.update(app, |this, cx| this.refresh_all(cx));
@@ -1045,8 +1121,11 @@ impl SidebarPanel {
                                 } else {
                                     "显示标签"
                                 })
-                                .on_click(move |_, _, app| {
-                                    settings::SettingsService::set_show_tags(!show_tags, app);
+                                .on_click({
+                                    let host_tags = host_tags.clone();
+                                    move |_, _, app| {
+                                        host_tags.set_show_tags(!show_tags, app);
+                                    }
                                 }),
                             )
                             .item(
@@ -1055,18 +1134,17 @@ impl SidebarPanel {
                                 } else {
                                     "显示归属域"
                                 })
-                                .on_click(move |_, _, app| {
-                                    settings::SettingsService::set_show_scope(!show_scope, app);
+                                .on_click({
+                                    let host_scope = host_scope.clone();
+                                    move |_, _, app| {
+                                        host_scope.set_show_scope(!show_scope, app);
+                                    }
                                 }),
                             )
                             .separator()
                             .item(
                                 PopupMenuItem::new("缓存管理…").on_click(move |_, window, app| {
-                                    crate::components::cache_dialog::open_cache_dialog(
-                                        window,
-                                        app,
-                                        &shared_cache,
-                                    );
+                                    host_cache.open_cache_dialog(window, app);
                                 }),
                             )
                         }
@@ -1120,9 +1198,9 @@ impl SidebarPanel {
             "筛选 ▾".to_string()
         };
         let filters_active = self.nav_filters_active();
-        let free_text = self.database_nav.borrow().search_facets.free.clone();
+        let free_text = self.nav.borrow().search_facets.free.clone();
         let (cur_type, cur_driver, cur_tag) = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             (
                 view.type_filter.clone(),
                 view.driver_filter.clone(),
@@ -1139,7 +1217,6 @@ impl SidebarPanel {
         let driver_menu_label = match &cur_driver {
             Some(d) => {
                 let name = self
-                    .shared
                     .driver_catalog
                     .borrow()
                     .get(d)
@@ -1346,7 +1423,7 @@ impl SidebarPanel {
             .child(label.to_string())
             .on_click(move |_, _, app| {
                 entity.update(app, |this, cx| {
-                    this.database_nav.borrow_mut().source_filter = target;
+                    this.nav.borrow_mut().source_filter = target;
                     this.write_nav_filters(cx);
                     cx.notify();
                 });
@@ -1356,21 +1433,21 @@ impl SidebarPanel {
     /// 写回 facet 筛选到 `settings.json`（chips 状态为准；搜索 token 不持久化）。
     fn write_nav_filters(&self, cx: &mut Context<Self>) {
         let filters = {
-            let view = self.database_nav.borrow();
-            settings::model::NavigatorFilters {
+            let view = self.nav.borrow();
+            NavFilters {
                 source: view.source_filter.map(|s| s.key().to_string()),
                 db_type: view.type_filter.clone(),
                 driver: view.driver_filter.clone(),
                 tag: view.tag_filter.clone(),
             }
         };
-        settings::SettingsService::set_nav_filters(filters, cx);
+        self.host.set_nav_filters(filters, cx);
     }
 
     /// 应用某个 facet 值（`None` = 清除该项），并持久化 + 重渲染。
     fn apply_facet(&mut self, facet: NavFacet, value: Option<String>, cx: &mut Context<Self>) {
         {
-            let mut view = self.database_nav.borrow_mut();
+            let mut view = self.nav.borrow_mut();
             match facet {
                 NavFacet::Type => view.type_filter = value,
                 NavFacet::Driver => view.driver_filter = value,
@@ -1384,7 +1461,7 @@ impl SidebarPanel {
     /// 清除全部 facet 筛选（附加 facet + 归属域）。
     fn clear_nav_filters(&mut self, cx: &mut Context<Self>) {
         {
-            let mut view = self.database_nav.borrow_mut();
+            let mut view = self.nav.borrow_mut();
             view.type_filter = None;
             view.driver_filter = None;
             view.tag_filter = None;
@@ -1396,7 +1473,7 @@ impl SidebarPanel {
 
     /// 已生效的附加 facet 数（类型 / 驱动 / 标签；chips 与搜索 token 取并）。
     fn nav_active_facet_count(&self) -> usize {
-        let view = self.database_nav.borrow();
+        let view = self.nav.borrow();
         let mut n = 0;
         if view.type_filter.is_some() || view.search_facets.db_type.is_some() {
             n += 1;
@@ -1412,7 +1489,7 @@ impl SidebarPanel {
 
     /// 是否存在任何生效筛选（含归属域与搜索 token）；用于「清除筛选」可用性。
     fn nav_filters_active(&self) -> bool {
-        let view = self.database_nav.borrow();
+        let view = self.nav.borrow();
         view.source_filter.is_some()
             || view.type_filter.is_some()
             || view.driver_filter.is_some()
@@ -1462,7 +1539,7 @@ impl SidebarPanel {
         let mut types: BTreeMap<String, String> = BTreeMap::new();
         let mut drivers: BTreeMap<String, String> = BTreeMap::new();
         {
-            let catalog = self.shared.driver_catalog.borrow();
+            let catalog = self.driver_catalog.borrow();
             for (id, meta) in catalog.iter() {
                 drivers
                     .entry(id.clone())
@@ -1472,9 +1549,9 @@ impl SidebarPanel {
                     .or_insert_with(|| nav_type_short_label(&meta.type_id));
             }
         }
-        let conns: Vec<ConnectionItem> = self.shared.connections.borrow().iter().cloned().collect();
+        let conns: Vec<ConnectionItem> = self.host.connections();
         {
-            let catalog = self.shared.driver_catalog.borrow();
+            let catalog = self.driver_catalog.borrow();
             for c in &conns {
                 let tid = catalog
                     .get(&c.driver)
@@ -1489,7 +1566,7 @@ impl SidebarPanel {
             }
         }
         let tags: BTreeSet<String> = self
-            .database_nav
+            .nav
             .borrow()
             .tags
             .values()
@@ -1511,8 +1588,8 @@ impl SidebarPanel {
         self.nav_order.borrow_mut().clear();
         let muted = cx.theme().colors.muted_foreground;
         let fg = cx.theme().colors.foreground;
-        // 分组 / 成员 / 标签尚未就绪（首次渲染由 `render_database_nav` 的 defer 加载）。
-        if !self.database_nav.borrow().groups_loaded {
+        // 分组 / 成员 / 标签尚未就绪（首次渲染由 `render_nav` 的 defer 加载）。
+        if !self.nav.borrow().groups_loaded {
             return div()
                 .v_flex()
                 .w_full()
@@ -1532,7 +1609,7 @@ impl SidebarPanel {
             driver_filter,
             tag_filter,
         ) = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             (
                 view.filter.to_lowercase(),
                 view.groups.clone(),
@@ -1545,14 +1622,14 @@ impl SidebarPanel {
                 view.tag_filter.clone(),
             )
         };
-        let conns: Vec<ConnectionItem> = self.shared.connections.borrow().iter().cloned().collect();
+        let conns: Vec<ConnectionItem> = self.host.connections();
         let by_id: HashMap<&str, &ConnectionItem> =
             conns.iter().map(|c| (c.id.as_str(), c)).collect();
 
         // 搜索框 facet 语法（`scope:` / `type:` / `driver:` / `tag:`）作为额外约束叠加。
-        let search_facets = self.database_nav.borrow().search_facets.clone();
+        let search_facets = self.nav.borrow().search_facets.clone();
         // 显式主组（连接 ID → 分组 ID）。
-        let primary_explicit = self.database_nav.borrow().primary_group.clone();
+        let primary_explicit = self.nav.borrow().primary_group.clone();
 
         // 主组：用户**显式指定**优先；未指定时回退到分组排序最靠前的一个
         // （`membership` 按分组排序构建）。显式值若已不在所属分组（被移出）则忽略。
@@ -1574,7 +1651,6 @@ impl SidebarPanel {
             }
             if let Some(want_type) = &type_filter {
                 let actual = self
-                    .shared
                     .driver_catalog
                     .borrow()
                     .get(&conn.driver)
@@ -1586,7 +1662,6 @@ impl SidebarPanel {
             }
             if let Some(want_type) = &search_facets.db_type {
                 let actual = self
-                    .shared
                     .driver_catalog
                     .borrow()
                     .get(&conn.driver)
@@ -1647,13 +1722,7 @@ impl SidebarPanel {
 
         // 运行时连接状态与错误集（分组头聚合健康度用；一次算完避免逐条查询）。
         let connected_set: HashSet<String> = {
-            let mut set: HashSet<String> = self
-                .database_nav
-                .borrow()
-                .connected
-                .iter()
-                .cloned()
-                .collect();
+            let mut set: HashSet<String> = self.nav.borrow().connected.iter().cloned().collect();
             for c in &conns {
                 if c.connected {
                     set.insert(c.id.clone());
@@ -1661,8 +1730,7 @@ impl SidebarPanel {
             }
             set
         };
-        let error_set: HashSet<String> =
-            self.database_nav.borrow().errors.keys().cloned().collect();
+        let error_set: HashSet<String> = self.nav.borrow().errors.keys().cloned().collect();
 
         for group in &groups {
             // 组内顺序以存储的手动排序为准（缺省无成员）。
@@ -1774,8 +1842,7 @@ impl SidebarPanel {
         if shown == 0 {
             if conns.is_empty() {
                 // 空态引导（设计 §2.4）：标题 + 说明 + 面板内「新建连接」按钮。
-                let entity = cx.entity();
-                let shared = self.shared.clone();
+                let host = self.host.clone();
                 column = column.child(
                     div()
                         .w_full()
@@ -1804,10 +1871,7 @@ impl SidebarPanel {
                                 .icon(IconName::Plus)
                                 .label("新建连接")
                                 .on_click(move |_, window, app: &mut App| {
-                                    shared.new_connection(window, app);
-                                    entity.update(app, |_, cx| {
-                                        cx.emit(SidebarEvent::NewConnectionRequest)
-                                    });
+                                    host.new_connection(window, app);
                                 }),
                         ),
                 );
@@ -1876,7 +1940,7 @@ impl SidebarPanel {
                     let gid = gid.clone();
                     entity.update(app, |this, cx| {
                         {
-                            let mut view = this.database_nav.borrow_mut();
+                            let mut view = this.nav.borrow_mut();
                             if view.collapsed_groups.contains(&gid) {
                                 view.collapsed_groups.remove(&gid);
                             } else {
@@ -1947,14 +2011,14 @@ impl SidebarPanel {
                         move |_, _, app: &mut App| {
                             entity.update(app, |this, cx| {
                                 let ids: Vec<String> = this
-                                    .database_nav
+                                    .nav
                                     .borrow()
                                     .groups
                                     .iter()
                                     .map(|g| g.id.clone())
                                     .collect();
                                 {
-                                    let mut view = this.database_nav.borrow_mut();
+                                    let mut view = this.nav.borrow_mut();
                                     let all_collapsed = !ids.is_empty()
                                         && ids.iter().all(|id| view.collapsed_groups.contains(id));
                                     if all_collapsed {
@@ -2024,25 +2088,27 @@ impl SidebarPanel {
             })
             .context_menu({
                 let entity = entity.clone();
+                let host = self.host.clone();
                 let gid = gid.clone();
                 let gname = gname.clone();
                 move |menu, _window, _cx| {
                     if is_ungrouped {
                         return menu.item(PopupMenuItem::new("新建分组").on_click({
                             let entity = entity.clone();
+                            let host = host.clone();
                             let seed = GroupFormSeed::for_new(default_group_name.clone());
                             move |_, window, app| {
                                 let e = entity.clone();
                                 let seed = seed.clone();
-                                group_form_dialog::open_group_form_dialog(
+                                host.open_group_form(
+                                    seed,
                                     window,
                                     app,
-                                    seed,
-                                    move |gid, name, desc, app| {
+                                    Rc::new(move |gid, name, desc, app| {
                                         e.update(app, |this, cx| {
                                             this.save_group_form(gid, name, desc, cx);
                                         });
-                                    },
+                                    }),
                                 );
                             }
                         }));
@@ -2059,43 +2125,45 @@ impl SidebarPanel {
                     menu.item(PopupMenuItem::new("重命名分组").on_click(move |_, _, app| {
                         let gid = gid_rename.clone();
                         e_rename.update(app, |this, cx| {
-                            this.database_nav.borrow_mut().group_rename_for = Some(gid.clone());
+                            this.nav.borrow_mut().group_rename_for = Some(gid.clone());
                             cx.notify();
                         });
                     }))
                     // 名称 + 描述一次编辑（行内重命名只改名称，这里补上描述）。
-                    .item(
-                        PopupMenuItem::new("编辑分组…").on_click(move |_, window, app| {
+                    .item(PopupMenuItem::new("编辑分组…").on_click({
+                        let host = host.clone();
+                        move |_, window, app| {
                             let e = e_desc.clone();
                             let seed = seed_desc.clone();
-                            group_form_dialog::open_group_form_dialog(
+                            host.open_group_form(
+                                seed,
                                 window,
                                 app,
-                                seed,
-                                move |gid, name, desc, app| {
+                                Rc::new(move |gid, name, desc, app| {
                                     e.update(app, |this, cx| {
                                         this.save_group_form(gid, name, desc, cx);
                                     });
-                                },
+                                }),
                             );
-                        }),
-                    )
-                    .item(
-                        PopupMenuItem::new("新建分组").on_click(move |_, window, app| {
+                        }
+                    }))
+                    .item(PopupMenuItem::new("新建分组").on_click({
+                        let host = host.clone();
+                        move |_, window, app| {
                             let e = e_new.clone();
                             let seed = seed_new.clone();
-                            group_form_dialog::open_group_form_dialog(
+                            host.open_group_form(
+                                seed,
                                 window,
                                 app,
-                                seed,
-                                move |gid, name, desc, app| {
+                                Rc::new(move |gid, name, desc, app| {
                                     e.update(app, |this, cx| {
                                         this.save_group_form(gid, name, desc, cx);
                                     });
-                                },
+                                }),
                             );
-                        }),
-                    )
+                        }
+                    }))
                     .separator()
                     // 分组排序：拖拽是主路径，这两项是键盘 / 无鼠标时的替代（边界置灰）。
                     .item(PopupMenuItem::new("上移分组").disabled(!can_up).on_click({
@@ -2151,8 +2219,8 @@ impl SidebarPanel {
 
         let mut wrap = div().v_flex().w_full().gap_0p5();
         wrap = wrap.child(header);
-        // 重命名内联输入（打开时创建，见 `render_database_nav`）。
-        if self.database_nav.borrow().group_rename_for.as_deref() == Some(group_id) {
+        // 重命名内联输入（打开时创建，见 `render_nav`）。
+        if self.nav.borrow().group_rename_for.as_deref() == Some(group_id) {
             if let Some(input) = &self.nav_group_input {
                 wrap = wrap.child(div().px_1().pb_0p5().child(Input::new(input)));
             }
@@ -2183,7 +2251,7 @@ impl SidebarPanel {
         let drop_scope = group_id.to_string();
         let drop_before = conn.id.clone();
         let primary_gid = self
-            .database_nav
+            .nav
             .borrow()
             .membership
             .get(&conn.id)
@@ -2237,7 +2305,7 @@ impl SidebarPanel {
                 let cid = conn_id.clone();
                 entity.update(app, |this, cx| {
                     {
-                        let mut view = this.database_nav.borrow_mut();
+                        let mut view = this.nav.borrow_mut();
                         // 展开主组（若已折叠）并选中该连接，使全亮行可见。
                         if let Some(gid) = &primary_gid {
                             view.collapsed_groups.remove(gid);
@@ -2264,11 +2332,11 @@ impl SidebarPanel {
         let danger = cx.theme().colors.danger;
 
         let expanded = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             view.expanded.contains(&conn.id)
         };
         let (connected, error, children) = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             (
                 view.connected.contains(&conn.id) || conn.connected,
                 view.errors.get(&conn.id).cloned(),
@@ -2285,22 +2353,20 @@ impl SidebarPanel {
 
         let source = NavSource::from_conn_id(&conn.id);
         // 来源标识：短码 `P/G/GP` 或文字（设置项，默认短码）。
-        let source_text = if settings::SettingsService::source_short_code(cx) {
+        let source_text = if self.host.source_short_code(cx) {
             source.code().to_string()
         } else {
             source.label().to_string()
         };
-        let filter = self.database_nav.borrow().filter.to_lowercase();
-        let match_bg = settings::product_tokens::get(cx).search_match_background(cx.theme());
+        let filter = self.nav.borrow().filter.to_lowercase();
+        let match_bg = product_tokens::get(cx).search_match_background(cx.theme());
         let project_root = self
-            .shared
-            .project
-            .borrow()
-            .as_ref()
-            .map(|p| p.root.to_string_lossy().to_string());
+            .host
+            .project_root()
+            .map(|p| p.to_string_lossy().to_string());
         let conn_id = conn.id.clone();
         let scope_key = scope_key.to_string();
-        let selected = self.database_nav.borrow().selected_key.as_deref() == Some(conn.id.as_str());
+        let selected = self.nav.borrow().selected_key.as_deref() == Some(conn.id.as_str());
         let selected_bg = cx.theme().colors.list_active;
         // 键盘导航序列（父在前，子随渲染加入）。
         self.nav_order.borrow_mut().push(NavOrderItem {
@@ -2322,7 +2388,6 @@ impl SidebarPanel {
 
         // ---- v7：行内只常驻「徽标 + 名称 + 归属域列」；`+` 与行操作仅 hover / 选中显 ----
         let nav_view = self
-            .shared
             .driver_catalog
             .borrow()
             .get(&conn.driver)
@@ -2332,7 +2397,7 @@ impl SidebarPanel {
             .map(|(t, _)| t.clone())
             .unwrap_or_else(|| conn.driver.clone());
         let driver_name = nav_view.map(|(_, n)| n);
-        let nav_view = self.database_nav.borrow();
+        let nav_view = self.nav.borrow();
         let badge_status = if nav_view.loading.contains(&conn.id) {
             NavBadgeStatus::Connecting
         } else if error.is_some() {
@@ -2393,7 +2458,7 @@ impl SidebarPanel {
         };
 
         // 标签 chip（可选显示，`⋯ → 显示标签`）：默认关；开启后「≤2 chip + `+N`」。
-        let tag_chips = if settings::SettingsService::show_tags(cx) && !tag_list.is_empty() {
+        let tag_chips = if self.host.show_tags(cx) && !tag_list.is_empty() {
             let chip_bg = cx.theme().colors.list_hover;
             // 标签字号用最初版小字 `text_xs`（与行内文字同尺寸，不因换行而变大）。
             let mut chips = div()
@@ -2425,8 +2490,8 @@ impl SidebarPanel {
         };
 
         // 归属域短码：右对齐固定列（可在 `⋯ → 显示归属域` 关闭）。
-        let scope_visible = settings::SettingsService::show_scope(cx);
-        let scope_col = if settings::SettingsService::source_short_code(cx) {
+        let scope_visible = self.host.show_scope(cx);
+        let scope_col = if self.host.source_short_code(cx) {
             ui::NAV_SCOPE_COL_SHORT
         } else {
             ui::NAV_SCOPE_COL_TEXT
@@ -2440,7 +2505,7 @@ impl SidebarPanel {
         // 行尾操作（v8）：`+` 加标签 · `✎` 编辑；仅 hover / 选中显（连接 / 断开走右键菜单）。
         let ops = {
             let entity = cx.entity();
-            let shared = self.shared.clone();
+            let host = self.host.clone();
             let cid = conn_id.clone();
             let hover_bg = cx.theme().colors.list_hover;
             let mut ops = div()
@@ -2471,7 +2536,7 @@ impl SidebarPanel {
                         move |_, _, app: &mut App| {
                             let cid = cid.clone();
                             entity.update(app, |this, cx| {
-                                let mut view = this.database_nav.borrow_mut();
+                                let mut view = this.nav.borrow_mut();
                                 view.tag_editor_for =
                                     if view.tag_editor_for.as_deref() == Some(cid.as_str()) {
                                         None
@@ -2495,14 +2560,10 @@ impl SidebarPanel {
                     .hover(move |s| s.bg(hover_bg))
                     .child("\u{270e}")
                     .on_click({
-                        let entity = entity.clone();
-                        let shared = shared.clone();
+                        let host = host.clone();
                         let cid = cid.clone();
                         move |_, window, app: &mut App| {
-                            shared.edit_connection(cid.clone(), window, app);
-                            entity.update(app, |_, cx| {
-                                cx.emit(SidebarEvent::EditConnection(cid.clone()));
-                            });
+                            host.edit_connection(&cid, window, app);
                         }
                     }),
             );
@@ -2515,7 +2576,7 @@ impl SidebarPanel {
 
         // 「设为主组」子菜单数据（仅归组的连接出现）：所属分组 + 当前主组 + 是否显式。
         let (menu_groups, menu_primary, menu_primary_explicit) = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             let gids = view.membership.get(&conn.id).cloned().unwrap_or_default();
             let explicit = view
                 .primary_group
@@ -2563,7 +2624,7 @@ impl SidebarPanel {
                         // 单击选中（键盘导航基准）；双击打开属性；再次点击展开 / 折叠。
                         let sel_key = conn_id.clone();
                         entity.update(app, |this, cx| {
-                            this.database_nav.borrow_mut().selected_key = Some(sel_key.clone());
+                            this.nav.borrow_mut().selected_key = Some(sel_key.clone());
                             cx.notify();
                         });
                         if ev.click_count() >= 2 {
@@ -2581,7 +2642,7 @@ impl SidebarPanel {
                                 driver: conn_driver.clone(),
                             };
                             entity.update(app, |this, cx| {
-                                this.shared.show_properties(req, cx);
+                                this.host.show_properties(req, cx);
                                 cx.notify();
                             });
                             return;
@@ -2664,7 +2725,7 @@ impl SidebarPanel {
                 // 右键菜单（连接节点）：连接/断开、编辑、查看属性、分组/标签、复制、刷新。
                 .context_menu({
                     let entity = cx.entity();
-                    let shared = self.shared.clone();
+                    let host = self.host.clone();
                     let conn_id = conn.id.clone();
                     let conn_name = conn.name.clone();
                     let conn_driver = conn.driver.clone();
@@ -2692,7 +2753,7 @@ impl SidebarPanel {
                         let e_org = entity.clone();
                         let cid_org = conn_id.clone();
                         let e_copy = entity.clone();
-                        let shared_copy = shared.clone();
+                        let host_copy = host.clone();
                         let name_copy = conn_name.clone();
                         let e_refresh = entity.clone();
                         let cid_refresh = conn_id.clone();
@@ -2713,6 +2774,8 @@ impl SidebarPanel {
                                 let cid = conn_id.clone();
                                 let root = root.clone();
                                 let name = conn_name.clone();
+                                // 探测入口是函数指针；句柄在这里克隆一份，避免把 `self` 借进 'static 闭包。
+                                let host = host.clone();
                                 move |_, _, app| {
                                     // 独立会话探测（不注册连接池 / 不写库）；结果落面板提示。
                                     // 探测入口是函数指针（可跨到工作线程）；视图搬入 `database`
@@ -2721,7 +2784,7 @@ impl SidebarPanel {
                                         &cid,
                                         root.as_deref(),
                                         &name,
-                                        crate::services::nav_runtime::test_entry,
+                                        host.connection_probe(),
                                     );
                                     e.update(app, |this, cx| this.ensure_nav_pump(cx));
                                 }
@@ -2730,8 +2793,7 @@ impl SidebarPanel {
                                 let cid = cid_edit.clone();
                                 e_edit.update(app, |this, cx| {
                                     // 命令端口：直接开对话框（不再置位请求字段等渲染消费）。
-                                    this.shared.edit_connection(cid.clone(), window, cx);
-                                    cx.emit(SidebarEvent::EditConnection(cid.clone()));
+                                    this.host.edit_connection(&cid, window, cx);
                                 });
                             }))
                             .separator()
@@ -2740,7 +2802,7 @@ impl SidebarPanel {
                                 let label = label_prop.clone();
                                 let drv = drv_prop.clone();
                                 e_prop.update(app, |this, cx| {
-                                    this.shared.show_properties(
+                                    this.host.show_properties(
                                         PropertyRequest {
                                             property: prop.clone(),
                                             conn_label: label.clone(),
@@ -2755,7 +2817,7 @@ impl SidebarPanel {
                                 PopupMenuItem::new("移动到分组…").on_click(move |_, _, app| {
                                     let cid = cid_org.clone();
                                     e_org.update(app, |this, cx| {
-                                        this.database_nav.borrow_mut().group_picker_for =
+                                        this.nav.borrow_mut().group_picker_for =
                                             Some(cid.clone());
                                         cx.notify();
                                     });
@@ -2782,7 +2844,7 @@ impl SidebarPanel {
                                                 let cid = cid.clone();
                                                 let root = root.as_deref().map(std::path::Path::new);
                                                 e.update(app, |this, cx| {
-                                                    let _ = database::nav_store::clear_primary_group(
+                                                    let _ = crate::nav_store::clear_primary_group(
                                                         root,
                                                         &cid,
                                                     );
@@ -2806,7 +2868,7 @@ impl SidebarPanel {
                                                 let root = root.as_deref().map(std::path::Path::new);
                                                 e.update(app, |this, cx| {
                                                     let _ =
-                                                        database::nav_store::set_primary_group(
+                                                        crate::nav_store::set_primary_group(
                                                             root,
                                                             &cid,
                                                             &gid,
@@ -2831,7 +2893,7 @@ impl SidebarPanel {
                                     move |_, _, app| {
                                         let cid = cid.clone();
                                         e.update(app, |this, cx| {
-                                            this.database_nav.borrow_mut().copy_for =
+                                            this.nav.borrow_mut().copy_for =
                                                 Some(cid.clone());
                                             cx.notify();
                                         });
@@ -2909,7 +2971,7 @@ impl SidebarPanel {
                         menu.item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
                             let name = name_copy.clone();
                             app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
-                            *shared_copy.notice.borrow_mut() = Some(format!("已复制：{name}"));
+                            host_copy.notice(format!("已复制：{name}"), app);
                             e_copy.update(app, |_, cx| cx.notify());
                         }))
                         .item(PopupMenuItem::new("刷新元数据").on_click(move |_, _, app| {
@@ -2917,33 +2979,32 @@ impl SidebarPanel {
                             let name = name_refresh.clone();
                             e_refresh.update(app, |this, cx| {
                                 this.refresh_node(&cid, &cid, Some(NavPath::Connection), cx);
-                                *this.shared.notice.borrow_mut() = Some(format!("已刷新：{name}"));
+                                this.host.notice(format!("已刷新：{name}"), cx);
                             });
                         }))
                         // 通用模块入口（与连接状态无关）：SQL 编辑器 / 洞察。
                         // Mock 只针对表 / 视图，见 `render_nav_node` 的对象菜单。
                         .separator()
                         .item(PopupMenuItem::new("在 SQL 编辑器中打开").on_click({
-                            // `shared` 是上层块里的局部（`self` 不能进 'static 闭包）
-                            let shared = shared.clone();
+                            // `host` 是上层块里的局部（`self` 不能进 'static 闭包）
+                            let host = host.clone();
                             let cid = conn_id.clone();
                             move |_, _, app| {
                                 // B11：只入队「打开查询」请求，开文档在宿主 render 里做
                                 // （菜单回调拿不到 `Window`；绑定该连接 + 聚焦都由宿主完成）
-                                shared.request_query(QueryRequest {
+                                host.open_query(QueryRequest {
                                     conn_id: Some(cid.clone()),
                                     sql: String::new(),
                                     run: false,
-                                });
-                                shared.notify_host(app);
-                            }
+                                }, app);
+                                                            }
                         }))
                         .item(PopupMenuItem::new("查看洞察").on_click({
                             let e = entity.clone();
                             move |_, _, app| {
-                                e.update(app, |_, cx| {
-                                    cx.emit(SidebarEvent::OpenRightPanel(RightPanel::Insight));
-                                });
+                                e.update(app, |this, cx| {
+this.host.open_right_panel(RightPanel::Insight, cx);
+            });
                             }
                         }))
                     }
@@ -2951,7 +3012,7 @@ impl SidebarPanel {
         );
 
         // 后台加载占位（避免展开后空白，误导为已加载完）。
-        if self.database_nav.borrow().loading.contains(&conn.id) {
+        if self.nav.borrow().loading.contains(&conn.id) {
             block = block.child(
                 div()
                     .pl_6()
@@ -2977,23 +3038,21 @@ impl SidebarPanel {
         }
 
         // 行内编辑器：归组（右键「移动到分组…」）与标签（行尾 `+`）分开，各司其职。
-        let picker_open =
-            self.database_nav.borrow().group_picker_for.as_deref() == Some(conn.id.as_str());
+        let picker_open = self.nav.borrow().group_picker_for.as_deref() == Some(conn.id.as_str());
         if picker_open {
             block = block.child(self.render_group_editor(conn, &scope_key, cx));
         }
-        let tag_open =
-            self.database_nav.borrow().tag_editor_for.as_deref() == Some(conn.id.as_str());
+        let tag_open = self.nav.borrow().tag_editor_for.as_deref() == Some(conn.id.as_str());
         if tag_open {
             block = block.child(self.render_tag_editor(cx));
         }
-        let copy_open = self.database_nav.borrow().copy_for.as_deref() == Some(conn.id.as_str());
+        let copy_open = self.nav.borrow().copy_for.as_deref() == Some(conn.id.as_str());
         if copy_open {
             block = block.child(self.render_copy_editor(cx));
         }
 
         // 展开但未连接（如上次会话遗留的展开态）：不报错，给明下一步指引。
-        let loading_here = self.database_nav.borrow().loading.contains(&conn.id);
+        let loading_here = self.nav.borrow().loading.contains(&conn.id);
         if expanded && !connected && children.is_empty() && error.is_none() && !loading_here {
             block = block.child(
                 div()
@@ -3035,13 +3094,13 @@ impl SidebarPanel {
         let bg = cx.theme().colors.popover;
 
         let (groups, membership) = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             (
                 view.groups.clone(),
                 view.membership.get(&conn.id).cloned().unwrap_or_default(),
             )
         };
-        let root = self.project_root();
+        let root = self.host.project_root();
 
         let mut panel = div()
             .v_flex()
@@ -3100,30 +3159,21 @@ impl SidebarPanel {
                             let root = root.clone();
                             entity.update(app, |this, cx| {
                                 let in_group = this
-                                    .database_nav
+                                    .nav
                                     .borrow()
                                     .membership
                                     .get(&cid)
                                     .map(|gs| gs.iter().any(|g| g == &gid))
                                     .unwrap_or(false);
                                 let result = if in_group {
-                                    database::nav_store::remove_from_group(
-                                        root.as_deref(),
-                                        &gid,
-                                        &cid,
-                                    )
+                                    crate::nav_store::remove_from_group(root.as_deref(), &gid, &cid)
                                 } else {
-                                    database::nav_store::add_to_group(
-                                        root.as_deref(),
-                                        &gid,
-                                        &cid,
-                                    )
+                                    crate::nav_store::add_to_group(root.as_deref(), &gid, &cid)
                                 };
                                 match result {
                                     Ok(()) => this.reload_nav_org(),
                                     Err(e) => {
-                                        *this.shared.notice.borrow_mut() =
-                                            Some(format!("更新分组失败: {e}"));
+                                        this.host.notice(format!("更新分组失败: {e}"), cx);
                                     }
                                 }
                                 cx.notify();
@@ -3157,16 +3207,18 @@ impl SidebarPanel {
                 .child(div().text_xs().text_color(accent).child("新建分组"))
                 .on_click({
                     let entity = cx.entity();
+                    let host = self.host.clone();
                     let seed = GroupFormSeed::for_new(self.next_group_name());
                     move |_, window, app: &mut App| {
                         let e = entity.clone();
+                        let host = host.clone();
                         let seed = seed.clone();
                         let cid = cid_new.clone();
-                        group_form_dialog::open_group_form_dialog(
+                        host.open_group_form(
+                            seed,
                             window,
                             app,
-                            seed,
-                            move |gid, name, desc, app| {
+                            Rc::new(move |gid, name, desc, app| {
                                 // 组内联编辑器：新建后直接把当前连接归入该组。
                                 let cid = cid.clone();
                                 e.update(app, |this, cx| {
@@ -3174,19 +3226,18 @@ impl SidebarPanel {
                                     else {
                                         return;
                                     };
-                                    let root = this.project_root();
-                                    if let Err(err) = database::nav_store::add_to_group(
+                                    let root = this.host.project_root();
+                                    if let Err(err) = crate::nav_store::add_to_group(
                                         root.as_deref(),
                                         &new_gid,
                                         &cid,
                                     ) {
-                                        *this.shared.notice.borrow_mut() =
-                                            Some(format!("归组失败: {err}"));
+                                        this.host.notice(format!("归组失败: {err}"), cx);
                                     }
                                     this.reload_nav_org();
                                     cx.notify();
                                 });
-                            },
+                            }),
                         );
                     }
                 }),
@@ -3284,9 +3335,9 @@ impl SidebarPanel {
             nav_kind_color(&node.kind, theme)
         };
 
-        let filter = self.database_nav.borrow().filter.to_lowercase();
+        let filter = self.nav.borrow().filter.to_lowercase();
         let expanded = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             view.expanded.contains(&node.key)
         };
         if expanded && node.has_children {
@@ -3295,7 +3346,7 @@ impl SidebarPanel {
             }
         }
         let (skip, expanded_eff, error, children) = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             let skip = !filter.is_empty() && !nav_node_matches(&view.children, node, &filter);
             let expanded_now = view.expanded.contains(&node.key);
             (
@@ -3315,17 +3366,15 @@ impl SidebarPanel {
         let n_path = node.expand_path.clone();
         let n_property = node.property.clone();
         let n_conn_label = self
-            .shared
-            .connections
-            .borrow()
+            .host
+            .connections()
             .iter()
             .find(|c| c.id == node.connection_id)
             .map(|c| c.name.clone())
             .unwrap_or_else(|| node.connection_id.clone());
         let n_driver = self
-            .shared
-            .connections
-            .borrow()
+            .host
+            .connections()
             .iter()
             .find(|c| c.id == node.connection_id)
             .map(|c| c.driver.clone())
@@ -3367,8 +3416,7 @@ impl SidebarPanel {
         // 缩进 = 基础内边距 + 层级 × 步长（设计 §2.1）。两者都是 rem 倍率，
         // 直接交给 `rems()` 换算（其基准是主题字号而非 4px，写 `/ 4.` 会放大 4 倍）。
         let indent = ui::TREE_BASE_PADDING + depth as f32 * ui::TREE_INDENT;
-        let selected =
-            self.database_nav.borrow().selected_key.as_deref() == Some(node.key.as_str());
+        let selected = self.nav.borrow().selected_key.as_deref() == Some(node.key.as_str());
         let selected_bg = cx.theme().colors.list_active;
         // 键盘导航序列（父在前，子随递归渲染加入）。
         self.nav_order.borrow_mut().push(NavOrderItem {
@@ -3396,7 +3444,11 @@ impl SidebarPanel {
                 .hover(move |s| s.bg(hover))
                 .child(div().w_2p5().flex_none().text_xs().text_color(muted).child(
                     if node.has_children {
-                        if expanded_eff { "\u{25be}" } else { "\u{25b8}" }
+                        if expanded_eff {
+                            "\u{25be}"
+                        } else {
+                            "\u{25b8}"
+                        }
                     } else {
                         ""
                     },
@@ -3406,7 +3458,7 @@ impl SidebarPanel {
                     nav_name_highlight(
                         &node.name,
                         &filter,
-                        settings::product_tokens::get(cx).search_match_background(cx.theme()),
+                        product_tokens::get(cx).search_match_background(cx.theme()),
                         fg,
                     ),
                 ));
@@ -3433,7 +3485,7 @@ impl SidebarPanel {
                 focus.focus(window, app);
                 let sel_key = n_key.clone();
                 entity.update(app, |this, cx| {
-                    this.database_nav.borrow_mut().selected_key = Some(sel_key.clone());
+                    this.nav.borrow_mut().selected_key = Some(sel_key.clone());
                     cx.notify();
                 });
                 if ev.click_count() >= 2 {
@@ -3444,7 +3496,7 @@ impl SidebarPanel {
                             driver: n_driver.clone(),
                         };
                         entity.update(app, |this, cx| {
-                            this.shared.show_properties(req, cx);
+                            this.host.show_properties(req, cx);
                             cx.notify();
                         });
                         return;
@@ -3463,7 +3515,7 @@ impl SidebarPanel {
         // 右键菜单（对象节点）：查看数据 / 属性 / 复制 / 刷新。
         block = block.child(row.context_menu({
             let entity = cx.entity();
-            let shared = self.shared.clone();
+            let host = self.host.clone();
             let conn_id = node.connection_id.clone();
             let nkey = node.key.clone();
             let dname = node.name.clone();
@@ -3483,7 +3535,9 @@ impl SidebarPanel {
                 _ => None,
             };
             let dml_root = if dml_target.is_some() {
-                self.project_root().map(|p| p.to_string_lossy().to_string())
+                self.host
+                    .project_root()
+                    .map(|p| p.to_string_lossy().to_string())
             } else {
                 None
             };
@@ -3498,7 +3552,7 @@ impl SidebarPanel {
                         let label = label0.clone();
                         let drv = drv0.clone();
                         e.update(app, |this, cx| {
-                            this.shared.show_properties(
+                            this.host.show_properties(
                                 PropertyRequest {
                                     property: prop.clone(),
                                     conn_label: label.clone(),
@@ -3513,24 +3567,26 @@ impl SidebarPanel {
                 if data_like {
                     if let Some(q) = qualified.clone() {
                         let sql = format!("SELECT * FROM {q} LIMIT 200;");
-                        let shared_sql = shared.clone();
+                        let host_sql = host.clone();
                         let cid_view = conn_id.clone();
                         menu = menu.item(PopupMenuItem::new("查看数据（LIMIT 200）").on_click(
                             move |_, _, app| {
                                 // B11：打开一份绑定该连接的查询并**自动执行**
                                 // （M4 遗留的“查看数据不自动执行”在此关闭）
-                                shared_sql.request_query(QueryRequest {
-                                    conn_id: Some(cid_view.clone()),
-                                    sql: sql.clone(),
-                                    run: true,
-                                });
-                                shared_sql.notify_host(app);
+                                host_sql.open_query(
+                                    QueryRequest {
+                                        conn_id: Some(cid_view.clone()),
+                                        sql: sql.clone(),
+                                        run: true,
+                                    },
+                                    app,
+                                );
                             },
                         ));
                     }
                     // 「生成 SQL ▸」：由列信息生成 INSERT / UPDATE / DELETE 模板（只注入不执行）。
                     if let Some((catalog, schema, table)) = dml_target.clone() {
-                        let q = database::sql_gen::qualified_name(
+                        let q = crate::sql_gen::qualified_name(
                             Some(catalog.as_str()),
                             Some(schema.as_str()),
                             &table,
@@ -3572,23 +3628,23 @@ impl SidebarPanel {
                 }
                 {
                     let e = entity.clone();
-                    let shared_copy = shared.clone();
+                    let host_copy = host.clone();
                     let name_copy = dname.clone();
                     menu = menu.item(PopupMenuItem::new("复制名称").on_click(move |_, _, app| {
                         let name = name_copy.clone();
                         app.write_to_clipboard(ClipboardItem::new_string(name.clone()));
-                        *shared_copy.notice.borrow_mut() = Some(format!("已复制：{name}"));
+                        host_copy.notice(format!("已复制：{name}"), app);
                         e.update(app, |_, cx| cx.notify());
                     }));
                 }
                 if let Some(q) = qualified.clone() {
                     let e = entity.clone();
-                    let shared_copy = shared.clone();
+                    let host_copy = host.clone();
                     menu =
                         menu.item(PopupMenuItem::new("复制限定名").on_click(move |_, _, app| {
                             let q = q.clone();
                             app.write_to_clipboard(ClipboardItem::new_string(q.clone()));
-                            *shared_copy.notice.borrow_mut() = Some(format!("已复制：{q}"));
+                            host_copy.notice(format!("已复制：{q}"), app);
                             e.update(app, |_, cx| cx.notify());
                         }));
                 }
@@ -3609,24 +3665,26 @@ impl SidebarPanel {
                 // 通用模块入口（所有对象节点都有，与节点类型 / 连接状态无关）：
                 // SQL 编辑器 / 洞察；Mock 只针对表 / 视图（`data_like`）。
                 menu = menu.separator().item({
-                    // `shared` 是上层块里的局部（`self` 不能进 'static 闭包）
-                    let shared = shared.clone();
+                    // `host` 是上层块里的局部（`self` 不能进 'static 闭包）
+                    let host = host.clone();
                     let cid = conn_id.clone();
                     PopupMenuItem::new("在 SQL 编辑器中打开").on_click(move |_, _, app| {
                         // B11：同上方连接菜单——只入队，宿主开文档并聚焦
-                        shared.request_query(QueryRequest {
-                            conn_id: Some(cid.clone()),
-                            sql: String::new(),
-                            run: false,
-                        });
-                        shared.notify_host(app);
+                        host.open_query(
+                            QueryRequest {
+                                conn_id: Some(cid.clone()),
+                                sql: String::new(),
+                                run: false,
+                            },
+                            app,
+                        );
                     })
                 });
                 if data_like {
                     let e = entity.clone();
                     // 定向请求：连接 + 源库表（catalog / schema / 表名）——Mock 面板据此
                     // 读源库结构并预填目标表名（v1 主路径：源库结构 → 造新数据）。
-                    let request = dml_target.clone().map(|(catalog, schema, table)| SchemaRequest {
+                    let request = dml_target.clone().map(|(catalog, schema, table)| TableRef {
                         conn_id: conn_id.clone(),
                         catalog,
                         schema,
@@ -3636,7 +3694,7 @@ impl SidebarPanel {
                         move |_, _, app| {
                             let request = request.clone();
                             e.update(app, |this, cx| {
-                                this.shared.open_mock_panel(request, cx);
+                                this.host.open_mock_panel(request, cx);
                             });
                         },
                     ));
@@ -3644,8 +3702,8 @@ impl SidebarPanel {
                 menu = menu.item({
                     let e = entity.clone();
                     PopupMenuItem::new("查看洞察").on_click(move |_, _, app| {
-                        e.update(app, |_, cx| {
-                            cx.emit(SidebarEvent::OpenRightPanel(RightPanel::Insight));
+                        e.update(app, |this, cx| {
+                            this.host.open_right_panel(RightPanel::Insight, cx);
                         });
                     })
                 });
@@ -3653,7 +3711,7 @@ impl SidebarPanel {
             }
         }));
 
-        if self.database_nav.borrow().loading.contains(&node.key) {
+        if self.nav.borrow().loading.contains(&node.key) {
             block = block.child(
                 div()
                     .pl(rems(indent + ui::TREE_INDENT))
@@ -3721,13 +3779,13 @@ impl SidebarPanel {
                 let k = k.clone();
                 entity.update(app, |this, cx| {
                     let cur = {
-                        let view = this.database_nav.borrow();
+                        let view = this.nav.borrow();
                         view.page_limit
                             .get(&k)
                             .copied()
                             .unwrap_or(ui::NAV_FOLDER_PAGE_SIZE)
                     };
-                    this.database_nav
+                    this.nav
                         .borrow_mut()
                         .page_limit
                         .insert(k.clone(), cur + ui::NAV_FOLDER_PAGE_SIZE);
@@ -3739,7 +3797,7 @@ impl SidebarPanel {
     /// 展开 / 折叠节点；首次展开时排队后台懒加载，并持久化展开态。
     fn toggle_nav_node(&mut self, conn_id: &str, key: &str, path: NavPath, cx: &mut Context<Self>) {
         let now_expanded = {
-            let mut view = self.database_nav.borrow_mut();
+            let mut view = self.nav.borrow_mut();
             if view.expanded.contains(key) {
                 view.expanded.remove(key);
                 false
@@ -3765,16 +3823,19 @@ impl SidebarPanel {
     ///
     /// 失败时写面板提示（与 `toggle_connection` 同文案），不阻后续可重试。
     fn ensure_connected_for_browse(&mut self, conn_id: &str, cx: &mut Context<Self>) -> bool {
-        let already = crate::services::nav_runtime::is_connected(conn_id)
-            || self.database_nav.borrow().connected.contains(conn_id);
+        let already =
+            self.host.is_connected(conn_id) || self.nav.borrow().connected.contains(conn_id);
         if already {
             return true;
         }
-        let root = self.project_root().map(|p| p.to_string_lossy().to_string());
-        match crate::services::nav_runtime::connect_entry(conn_id, root.as_deref()) {
+        let root = self
+            .host
+            .project_root()
+            .map(|p| p.to_string_lossy().to_string());
+        match self.host.connect(conn_id) {
             Ok(()) => {
                 {
-                    let mut view = self.database_nav.borrow_mut();
+                    let mut view = self.nav.borrow_mut();
                     view.connected.insert(conn_id.to_string());
                     view.prefetched.clear();
                     // 清掉上一次的负载错误（如 CONN_NOT_FOUND），以便重试加载。
@@ -3785,7 +3846,7 @@ impl SidebarPanel {
                 true
             }
             Err(e) => {
-                *self.shared.notice.borrow_mut() = Some(format!("连接失败: {e}"));
+                self.host.notice(format!("连接失败: {e}"), cx);
                 false
             }
         }
@@ -3803,17 +3864,20 @@ impl SidebarPanel {
         cx: &mut Context<Self>,
     ) {
         {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             if view.attempted.contains(key) {
                 return;
             }
         }
         {
-            let mut view = self.database_nav.borrow_mut();
+            let mut view = self.nav.borrow_mut();
             view.attempted.insert(key.to_string());
             view.loading.insert(key.to_string());
         }
-        let project_root = self.project_root().map(|p| p.to_string_lossy().to_string());
+        let project_root = self
+            .host
+            .project_root()
+            .map(|p| p.to_string_lossy().to_string());
         nav_jobs::enqueue_load(conn_id, project_root.as_deref(), key, path, fresh);
         self.ensure_nav_pump(cx);
     }
@@ -3894,7 +3958,7 @@ impl SidebarPanel {
             let conn_id = r.conn_id.clone();
             let project_root = r.project_root.clone();
             {
-                let mut view = self.database_nav.borrow_mut();
+                let mut view = self.nav.borrow_mut();
                 view.loading.remove(&key);
                 match r.result {
                     Ok(children) => {
@@ -3922,18 +3986,21 @@ impl SidebarPanel {
             match r.result {
                 Ok(sql) => {
                     let conn_id = self
-                        .shared
-                        .selected_connection()
-                        .map(|item| item.id.clone());
-                    self.shared.request_query(QueryRequest {
-                        conn_id,
-                        sql,
-                        run: false,
-                    });
-                    self.shared.notify_host(cx);
+                        .host
+                        .selected_index()
+                        .and_then(|i| self.host.connections().get(i).map(|item| item.id.clone()));
+                    self.host.open_query(
+                        QueryRequest {
+                            conn_id,
+                            sql,
+                            run: false,
+                        },
+                        cx,
+                    );
+                    self.host.notify_host(cx);
                 }
                 Err(e) => {
-                    *self.shared.notice.borrow_mut() = Some(format!("生成 SQL 失败：{e}"));
+                    self.host.notice(format!("生成 SQL 失败：{e}"), cx);
                 }
             }
         }
@@ -3951,7 +4018,7 @@ impl SidebarPanel {
                 Ok(m) => format!("{}：{m}", r.name),
                 Err(e) => format!("{}：{e}", r.name),
             };
-            *self.shared.notice.borrow_mut() = Some(msg);
+            self.host.notice(msg, cx);
         }
         cx.notify();
     }
@@ -3965,16 +4032,12 @@ impl SidebarPanel {
         schema: &str,
         project_root: Option<&str>,
     ) {
-        let first_time = self
-            .database_nav
-            .borrow_mut()
-            .prefetched
-            .insert(key.to_string());
+        let first_time = self.nav.borrow_mut().prefetched.insert(key.to_string());
         if !first_time {
             return;
         }
         let targets: Vec<nav_jobs::ColumnTarget> = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             view.children
                 .get(key)
                 .map(|kids| {
@@ -3994,22 +4057,18 @@ impl SidebarPanel {
     }
 
     /// 当前项目根（项目 / 共享连接的导航状态落项目库）。
-    fn project_root(&self) -> Option<std::path::PathBuf> {
-        self.shared.project_root()
-    }
 
     /// 首次渲染某连接时，从库中恢复其展开态。
     fn ensure_nav_state_loaded(&self, conn_id: &str) {
         {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             if view.state_loaded.contains(conn_id) {
                 return;
             }
         }
-        let state =
-            database::nav_store::load_nav_state(conn_id, self.project_root().as_deref());
+        let state = crate::nav_store::load_nav_state(conn_id, self.host.project_root().as_deref());
         let prefix = format!("{conn_id}/");
-        let mut view = self.database_nav.borrow_mut();
+        let mut view = self.nav.borrow_mut();
         for key in state.expanded_keys {
             if key == conn_id || key.starts_with(&prefix) {
                 view.expanded.insert(key);
@@ -4022,22 +4081,19 @@ impl SidebarPanel {
     fn save_nav_state_for(&self, conn_id: &str) {
         let prefix = format!("{conn_id}/");
         let keys: Vec<String> = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             view.expanded
                 .iter()
                 .filter(|k| *k == conn_id || k.starts_with(&prefix))
                 .cloned()
                 .collect()
         };
-        let state = database::model::NavState {
+        let state = crate::model::NavState {
             expanded_keys: keys,
             ..Default::default()
         };
-        let _ = database::nav_store::save_nav_state(
-            conn_id,
-            self.project_root().as_deref(),
-            &state,
-        );
+        let _ =
+            crate::nav_store::save_nav_state(conn_id, self.host.project_root().as_deref(), &state);
     }
 
     /// 容器展示名（分组名；`GROUP_UNGROUPED` → 「未分组」）：拖拽通知文案用。
@@ -4045,7 +4101,7 @@ impl SidebarPanel {
         if scope_id == GROUP_UNGROUPED {
             return "未分组".to_string();
         }
-        self.database_nav
+        self.nav
             .borrow()
             .groups
             .iter()
@@ -4061,7 +4117,7 @@ impl SidebarPanel {
     fn container_order(&self, scope_id: &str) -> Vec<String> {
         if scope_id != GROUP_UNGROUPED {
             return self
-                .database_nav
+                .nav
                 .borrow()
                 .group_order
                 .get(scope_id)
@@ -4069,8 +4125,8 @@ impl SidebarPanel {
                 .unwrap_or_default();
         }
         // 未分组：成员由“不属于任何分组”推导；顺序与分组内同一条规则。
-        let view = self.database_nav.borrow();
-        let conns = self.shared.connections.borrow();
+        let view = self.nav.borrow();
+        let conns = self.host.connections();
         let ranked: HashMap<&str, i64> = view
             .ungrouped_order
             .iter()
@@ -4108,12 +4164,12 @@ impl SidebarPanel {
         target: ConnDropTarget,
         cx: &mut Context<Self>,
     ) {
-        let root = self.project_root();
+        let root = self.host.project_root();
         let conn_id = payload.conn_id.clone();
         let name = payload.name.clone();
         let label = self.container_label(scope_id);
         let groups_of: Vec<String> = self
-            .database_nav
+            .nav
             .borrow()
             .membership
             .get(&conn_id)
@@ -4127,12 +4183,12 @@ impl SidebarPanel {
 
         // 1) 归属。
         let membership = if scope_id == GROUP_UNGROUPED {
-            database::nav_store::remove_from_all_groups(root.as_deref(), &conn_id)
+            crate::nav_store::remove_from_all_groups(root.as_deref(), &conn_id)
         } else {
-            database::nav_store::add_to_group(root.as_deref(), scope_id, &conn_id)
+            crate::nav_store::add_to_group(root.as_deref(), scope_id, &conn_id)
         };
         if let Err(e) = membership {
-            *self.shared.notice.borrow_mut() = Some(format!("移动失败: {e}"));
+            self.host.notice(format!("移动失败: {e}"), cx);
             cx.notify();
             return;
         }
@@ -4151,10 +4207,9 @@ impl SidebarPanel {
             }
         };
         if let Some(next) = next {
-            if let Err(e) =
-                database::nav_store::set_container_order(root.as_deref(), scope_id, &next)
+            if let Err(e) = crate::nav_store::set_container_order(root.as_deref(), scope_id, &next)
             {
-                *self.shared.notice.borrow_mut() = Some(format!("保存排序失败: {e}"));
+                self.host.notice(format!("保存排序失败: {e}"), cx);
                 cx.notify();
                 return;
             }
@@ -4162,21 +4217,24 @@ impl SidebarPanel {
         }
 
         // 3) 通知：先说归属变化（更重的动作），再说位置。
-        *self.shared.notice.borrow_mut() = Some(if !was_member {
-            if scope_id == GROUP_UNGROUPED {
-                format!("已把「{name}」移出分组")
+        self.host.notice(
+            if !was_member {
+                if scope_id == GROUP_UNGROUPED {
+                    format!("已把「{name}」移出分组")
+                } else {
+                    format!("已把「{name}」加入「{label}」")
+                }
             } else {
-                format!("已把「{name}」加入「{label}」")
-            }
-        } else {
-            format!("已调整「{name}」在「{label}」中的位置")
-        });
+                format!("已调整「{name}」在「{label}」中的位置")
+            },
+            cx,
+        );
         cx.notify();
     }
 
     /// 当前分组顺序（ID 列表，按 `sort_order` → 名称）。
     fn group_ids(&self) -> Vec<String> {
-        self.database_nav
+        self.nav
             .borrow()
             .groups
             .iter()
@@ -4195,13 +4253,14 @@ impl SidebarPanel {
         let Some(next) = nav_reorder(&ids, &payload.group_id, before) else {
             return;
         };
-        let root = self.project_root();
-        match database::nav_store::set_group_order(root.as_deref(), &next) {
+        let root = self.host.project_root();
+        match crate::nav_store::set_group_order(root.as_deref(), &next) {
             Ok(()) => {
                 self.reload_nav_org();
-                *self.shared.notice.borrow_mut() = Some(format!("已移动分组「{}」", payload.name));
+                self.host
+                    .notice(format!("已移动分组「{}」", payload.name), cx);
             }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存分组顺序失败: {e}")),
+            Err(e) => self.host.notice(format!("保存分组顺序失败: {e}"), cx),
         }
         cx.notify();
     }
@@ -4212,10 +4271,10 @@ impl SidebarPanel {
         let Some(next) = nav_step(&ids, group_id, delta) else {
             return;
         };
-        let root = self.project_root();
-        match database::nav_store::set_group_order(root.as_deref(), &next) {
+        let root = self.host.project_root();
+        match crate::nav_store::set_group_order(root.as_deref(), &next) {
             Ok(()) => self.reload_nav_org(),
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存分组顺序失败: {e}")),
+            Err(e) => self.host.notice(format!("保存分组顺序失败: {e}"), cx),
         }
         cx.notify();
     }
@@ -4225,13 +4284,12 @@ impl SidebarPanel {
     /// 只作用于连接行——对象节点（库 / 表 / 列…）的顺序由后端内省给出，不能重排。
     /// 容器取「主组解析」（与渲染同一套规则），无任何分组时就是「未分组」。
     fn nav_step_selected(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let Some(conn_id) = self.database_nav.borrow().selected_key.clone() else {
+        let Some(conn_id) = self.nav.borrow().selected_key.clone() else {
             return;
         };
         let Some(name) = self
-            .shared
-            .connections
-            .borrow()
+            .host
+            .connections()
             .iter()
             .find(|c| c.id == conn_id)
             .map(|c| c.name.clone())
@@ -4239,7 +4297,7 @@ impl SidebarPanel {
             return;
         };
         let scope = {
-            let view = self.database_nav.borrow();
+            let view = self.nav.borrow();
             nav_primary_scope(&view.membership, &view.primary_group, &conn_id)
                 .unwrap_or_else(|| GROUP_UNGROUPED.to_string())
         };
@@ -4247,37 +4305,33 @@ impl SidebarPanel {
         let Some(next) = nav_step(&current, &conn_id, delta) else {
             return;
         };
-        let root = self.project_root();
-        match database::nav_store::set_container_order(root.as_deref(), &scope, &next) {
+        let root = self.host.project_root();
+        match crate::nav_store::set_container_order(root.as_deref(), &scope, &next) {
             Ok(()) => {
                 self.reload_nav_org();
                 let how = if delta < 0 { "上移" } else { "下移" };
-                *self.shared.notice.borrow_mut() = Some(format!("已{how}「{name}」"));
+                self.host.notice(format!("已{how}「{name}」"), cx);
             }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存排序失败: {e}")),
+            Err(e) => self.host.notice(format!("保存排序失败: {e}"), cx),
         }
         cx.notify();
     }
 
     /// 重载分组 / 成员关系 / 标签映射（组织变更后调用）。
     fn reload_nav_org(&self) {
-        let root = self.project_root();
-        let groups = database::nav_store::list_groups(root.as_deref());
+        let root = self.host.project_root();
+        let groups = crate::nav_store::list_groups(root.as_deref());
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
         let mut group_order: HashMap<String, Vec<String>> = HashMap::new();
         // 名称表：未手动排序的成员要按名称升序，而名称不在组织存储里。
         let names: HashMap<String, String> = self
-            .shared
-            .connections
-            .borrow()
+            .host
+            .connections()
             .iter()
             .map(|c| (c.id.clone(), c.name.clone()))
             .collect();
         for group in &groups {
-            let stored = database::nav_store::list_group_members_detailed(
-                root.as_deref(),
-                &group.id,
-            );
+            let stored = crate::nav_store::list_group_members_detailed(root.as_deref(), &group.id);
             let ids = nav_order_members(&stored, |id| {
                 names.get(id).cloned().unwrap_or_else(|| id.to_string())
             });
@@ -4289,12 +4343,12 @@ impl SidebarPanel {
             }
             group_order.insert(group.id.clone(), ids);
         }
-        let tags = database::nav_store::list_all_tags(root.as_deref());
-        let primary_group = database::nav_store::list_primary_groups(root.as_deref());
-        let ungrouped_order = database::nav_store::list_ungrouped_order(root.as_deref());
+        let tags = crate::nav_store::list_all_tags(root.as_deref());
+        let primary_group = crate::nav_store::list_primary_groups(root.as_deref());
+        let ungrouped_order = crate::nav_store::list_ungrouped_order(root.as_deref());
         let driver_catalog = engine::persistence::load_driver_catalog();
-        *self.shared.driver_catalog.borrow_mut() = driver_catalog;
-        let mut view = self.database_nav.borrow_mut();
+        *self.driver_catalog.borrow_mut() = driver_catalog;
+        let mut view = self.nav.borrow_mut();
         view.groups = groups;
         view.membership = membership;
         view.group_order = group_order;
@@ -4306,15 +4360,12 @@ impl SidebarPanel {
 
     /// 分组是否折叠（缺省展开）。
     fn group_collapsed(&self, group_id: &str) -> bool {
-        self.database_nav
-            .borrow()
-            .collapsed_groups
-            .contains(group_id)
+        self.nav.borrow().collapsed_groups.contains(group_id)
     }
 
     /// 类别文件夹当前渲染条数上限（缺省 `NAV_FOLDER_PAGE_SIZE`）。
     fn folder_limit(&self, key: &str) -> usize {
-        self.database_nav
+        self.nav
             .borrow()
             .page_limit
             .get(key)
@@ -4324,7 +4375,7 @@ impl SidebarPanel {
 
     /// 生成不与现有分组重名的默认分组名。
     fn next_group_name(&self) -> String {
-        let groups = self.database_nav.borrow().groups.clone();
+        let groups = self.nav.borrow().groups.clone();
         if !groups.iter().any(|g| g.name == "新建分组") {
             return "新建分组".to_string();
         }
@@ -4340,7 +4391,7 @@ impl SidebarPanel {
 
     /// 提交连接行内联标签输入（逗号分隔 → 覆盖式保存）。
     fn commit_nav_tags(&mut self, cx: &mut Context<Self>) {
-        let Some(conn_id) = self.database_nav.borrow().tag_editor_for.clone() else {
+        let Some(conn_id) = self.nav.borrow().tag_editor_for.clone() else {
             return;
         };
         let Some(input) = self.nav_tag_input.clone() else {
@@ -4352,17 +4403,17 @@ impl SidebarPanel {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        let root = self.project_root();
-        match database::nav_store::set_tags(&conn_id, root.as_deref(), &tags) {
+        let root = self.host.project_root();
+        match crate::nav_store::set_tags(&conn_id, root.as_deref(), &tags) {
             Ok(()) => self.reload_nav_org(),
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存标签失败: {e}")),
+            Err(e) => self.host.notice(format!("保存标签失败: {e}"), cx),
         }
         cx.notify();
     }
 
     /// 分组表单初值（编辑时需带上描述；分组头渲染只拿到名称）。
     fn group_form_seed(&self, group_id: &str) -> GroupFormSeed {
-        let view = self.database_nav.borrow();
+        let view = self.nav.borrow();
         view.groups
             .iter()
             .find(|g| g.id == group_id)
@@ -4383,41 +4434,39 @@ impl SidebarPanel {
         description: Option<String>,
         cx: &mut Context<Self>,
     ) -> Option<String> {
-        let root = self.project_root();
+        let root = self.host.project_root();
         let result = match group_id {
-            Some(id) => database::nav_store::update_group(
-                root.as_deref(),
-                &id,
-                &name,
-                description.as_deref(),
-            )
-            .map(|()| id),
-            None => database::nav_store::create_group_with(
-                root.as_deref(),
-                &name,
-                description.as_deref(),
-            ),
+            Some(id) => {
+                crate::nav_store::update_group(root.as_deref(), &id, &name, description.as_deref())
+                    .map(|()| id)
+            }
+            None => {
+                crate::nav_store::create_group_with(root.as_deref(), &name, description.as_deref())
+            }
         };
         let saved = match result {
             Ok(id) => {
                 self.reload_nav_org();
                 let duplicated = self
-                    .database_nav
+                    .nav
                     .borrow()
                     .groups
                     .iter()
                     .filter(|g| g.name == name)
                     .count()
                     > 1;
-                *self.shared.notice.borrow_mut() = Some(if duplicated {
-                    format!("已保存分组「{name}」（存在同名分组）")
-                } else {
-                    format!("已保存分组「{name}」")
-                });
+                self.host.notice(
+                    if duplicated {
+                        format!("已保存分组「{name}」（存在同名分组）")
+                    } else {
+                        format!("已保存分组「{name}」")
+                    },
+                    cx,
+                );
                 Some(id)
             }
             Err(e) => {
-                *self.shared.notice.borrow_mut() = Some(format!("保存分组失败: {e}"));
+                self.host.notice(format!("保存分组失败: {e}"), cx);
                 None
             }
         };
@@ -4427,20 +4476,21 @@ impl SidebarPanel {
 
     /// 删除分组（仅解除关系，不删成员连接与缓存）。
     fn delete_group(&mut self, group_id: &str, cx: &mut Context<Self>) {
-        let root = self.project_root();
-        match database::nav_store::delete_group(root.as_deref(), group_id) {
+        let root = self.host.project_root();
+        match crate::nav_store::delete_group(root.as_deref(), group_id) {
             Ok(()) => {
                 self.reload_nav_org();
-                *self.shared.notice.borrow_mut() = Some("分组已删除（成员连接保留）".to_string());
+                self.host
+                    .notice("分组已删除（成员连接保留）".to_string(), cx);
             }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("删除分组失败: {e}")),
+            Err(e) => self.host.notice(format!("删除分组失败: {e}"), cx),
         }
         cx.notify();
     }
 
     /// 提交行内「复制为模板」：成功后重载连接列表，并提示新名（不含密码）。
     fn commit_copy_connection(&mut self, cx: &mut Context<Self>) {
-        let Some(from_id) = self.database_nav.borrow().copy_for.clone() else {
+        let Some(from_id) = self.nav.borrow().copy_for.clone() else {
             return;
         };
         let Some(input) = self.nav_copy_input.clone() else {
@@ -4450,54 +4500,33 @@ impl SidebarPanel {
         if new_name.is_empty() {
             return;
         }
-        let root = self.project_root().map(|p| p.to_string_lossy().to_string());
-        let result = (|| -> Result<(), String> {
-            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
-            let service = crate::services::data_source_service::DataSourceService::global()
-                .map_err(|e| e.to_string())?;
-            rt.block_on(service.duplicate_as_template(&from_id, root.as_deref(), &new_name))
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })();
-        self.database_nav.borrow_mut().copy_for = None;
+        let result = self.host.copy_connection(&from_id, &new_name);
+        self.nav.borrow_mut().copy_for = None;
         match result {
             Ok(()) => {
                 self.reload_connections(cx);
-                *self.shared.notice.borrow_mut() =
-                    Some(format!("已复制为模板：「{new_name}」（不含密码）"));
+                self.host
+                    .notice(format!("已复制为模板：「{new_name}」（不含密码）"), cx);
             }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("复制失败：{e}")),
+            Err(e) => self.host.notice(format!("复制失败：{e}"), cx),
         }
         cx.notify();
     }
 
     /// 取消行内「复制为模板」。
     fn cancel_copy_connection(&mut self, cx: &mut Context<Self>) {
-        self.database_nav.borrow_mut().copy_for = None;
+        self.nav.borrow_mut().copy_for = None;
         cx.notify();
     }
 
     /// 共享至当前项目（`G_` → 项目侧 `GP_` 快照）。
     fn share_connection_to_project(&mut self, conn_id: &str, name: &str, cx: &mut Context<Self>) {
-        let Some(root) = self.project_root().map(|p| p.to_string_lossy().to_string()) else {
-            *self.shared.notice.borrow_mut() = Some("未打开项目：无法共享".to_string());
-            cx.notify();
-            return;
-        };
-        let result = (|| -> Result<(), String> {
-            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
-            let service = crate::services::data_source_service::DataSourceService::global()
-                .map_err(|e| e.to_string())?;
-            rt.block_on(service.share_to_project(conn_id, &root))
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })();
-        match result {
+        match self.host.share_connection(conn_id) {
             Ok(()) => {
                 self.reload_connections(cx);
-                *self.shared.notice.borrow_mut() = Some(format!("「{name}」已共享至当前项目"));
+                self.host.notice(format!("「{name}」已共享至当前项目"), cx);
             }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("共享失败：{e}")),
+            Err(e) => self.host.notice(format!("共享失败：{e}"), cx),
         }
         cx.notify();
     }
@@ -4509,72 +4538,46 @@ impl SidebarPanel {
         name: &str,
         cx: &mut Context<Self>,
     ) {
-        let root = self.project_root().map(|p| p.to_string_lossy().to_string());
-        let result = (|| -> Result<(), String> {
-            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
-            let service = crate::services::data_source_service::DataSourceService::global()
-                .map_err(|e| e.to_string())?;
-            rt.block_on(service.delete(conn_id, root.as_deref()))
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })();
+        let result = self.host.delete_connection(conn_id).map(|_| ());
         match result {
             Ok(()) => {
-                crate::services::nav_runtime::disconnect_entry(conn_id).ok();
+                // `delete` 对项目侧 `GP_` 即「取消共享」；运行时连接一并断开（缓存保留）。
+                self.host.disconnect(conn_id).ok();
                 self.reload_connections(cx);
-                *self.shared.notice.borrow_mut() =
-                    Some(format!("已取消共享：「{name}」（全局定义保留）"));
+                self.host
+                    .notice(format!("已取消共享：「{name}」（全局定义保留）"), cx);
             }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("取消共享失败：{e}")),
+            Err(e) => self.host.notice(format!("取消共享失败：{e}"), cx),
         }
         cx.notify();
     }
 
     /// 删除连接（物理删除；元数据缓存保留）。
     fn delete_connection(&mut self, conn_id: &str, name: &str, cx: &mut Context<Self>) {
-        let root = self.project_root().map(|p| p.to_string_lossy().to_string());
-        let result = (|| -> Result<String, String> {
-            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
-            let service = crate::services::data_source_service::DataSourceService::global()
-                .map_err(|e| e.to_string())?;
-            let r = rt
-                .block_on(service.delete(conn_id, root.as_deref()))
-                .map_err(|e| e.to_string())?;
-            Ok(r.message)
-        })();
+        let result = self.host.delete_connection(conn_id);
         // 运行时连接一并断开（缓存保留，可在「缓存管理」清理）。
-        crate::services::nav_runtime::disconnect_entry(conn_id).ok();
+        self.host.disconnect(conn_id).ok();
         match result {
             Ok(msg) => {
                 self.reload_connections(cx);
-                *self.shared.notice.borrow_mut() = Some(format!("「{name}」：{msg}"));
+                self.host.notice(format!("「{name}」：{msg}"), cx);
             }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("删除连接失败：{e}")),
+            Err(e) => self.host.notice(format!("删除连接失败：{e}"), cx),
         }
         cx.notify();
     }
 
     /// 重载当前作用域可见连接（增 / 删 / 共享后调用）。
+    ///
+    /// 连接清单与选中下标修正都在宿主侧（那是宿主自持状态），这里只广播一次重载。
     fn reload_connections(&mut self, cx: &mut Context<Self>) {
-        let root = self.project_root();
-        let (items, notice) =
-            crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
-        let len = items.len();
-        *self.shared.connections.borrow_mut() = items;
-        if len == 0 {
-            self.shared.selected.set(None);
-        } else if self.shared.selected.get().is_some_and(|i| i >= len) {
-            self.shared.selected.set(Some(0));
-        }
-        if let Some(n) = notice {
-            *self.shared.notice.borrow_mut() = Some(n);
-        }
+        self.host.reload_connections(cx);
         cx.notify();
     }
 
     /// 提交分组内联重命名。
     fn commit_group_rename(&mut self, cx: &mut Context<Self>) {
-        let Some(group_id) = self.database_nav.borrow().group_rename_for.clone() else {
+        let Some(group_id) = self.nav.borrow().group_rename_for.clone() else {
             return;
         };
         let Some(input) = self.nav_group_input.clone() else {
@@ -4582,13 +4585,13 @@ impl SidebarPanel {
         };
         let name = input.read(cx).value().trim().to_string();
         if !name.is_empty() {
-            let root = self.project_root();
-            match database::nav_store::rename_group(root.as_deref(), &group_id, &name) {
+            let root = self.host.project_root();
+            match crate::nav_store::rename_group(root.as_deref(), &group_id, &name) {
                 Ok(()) => self.reload_nav_org(),
-                Err(e) => *self.shared.notice.borrow_mut() = Some(format!("重命名失败: {e}")),
+                Err(e) => self.host.notice(format!("重命名失败: {e}"), cx),
             }
         }
-        self.database_nav.borrow_mut().group_rename_for = None;
+        self.nav.borrow_mut().group_rename_for = None;
         cx.notify();
     }
 
@@ -4599,17 +4602,17 @@ impl SidebarPanel {
         project_root: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        let already = crate::services::nav_runtime::is_connected(conn_id)
-            || self.database_nav.borrow().connected.contains(conn_id);
+        let already =
+            self.host.is_connected(conn_id) || self.nav.borrow().connected.contains(conn_id);
         let outcome = if already {
-            crate::services::nav_runtime::disconnect_entry(conn_id).map(|_| false)
+            self.host.disconnect(conn_id).map(|_| false)
         } else {
-            crate::services::nav_runtime::connect_entry(conn_id, project_root).map(|_| true)
+            self.host.connect(conn_id).map(|_| true)
         };
         match outcome {
             Ok(is_connected) => {
                 {
-                    let mut view = self.database_nav.borrow_mut();
+                    let mut view = self.nav.borrow_mut();
                     if is_connected {
                         view.connected.insert(conn_id.to_string());
                         // 刷新模式下预取过的标记清空（重新连接后重新预取）。
@@ -4624,7 +4627,7 @@ impl SidebarPanel {
                     self.ensure_warm_poll(cx);
                 }
             }
-            Err(e) => *self.shared.notice.borrow_mut() = Some(format!("连接操作失败: {e}")),
+            Err(e) => self.host.notice(format!("连接操作失败: {e}"), cx),
         }
         cx.notify();
     }
@@ -4676,7 +4679,7 @@ impl SidebarPanel {
     ) {
         let prefix = format!("{key}/");
         {
-            let mut view = self.database_nav.borrow_mut();
+            let mut view = self.nav.borrow_mut();
             view.children
                 .retain(|k, _| k != key && !k.starts_with(&prefix));
             view.attempted
@@ -4687,24 +4690,23 @@ impl SidebarPanel {
         if let Some(p) = path {
             self.ensure_nav_loaded(conn_id, key, p, true, cx);
         }
-        *self.shared.notice.borrow_mut() = Some("已刷新元数据".to_string());
+        self.host.notice("已刷新元数据".to_string(), cx);
         cx.notify();
     }
 
     /// 刷新全部连接的元数据（清掉已加载子节点后重载仍展开的连接根）。
     fn refresh_all(&self, cx: &mut Context<Self>) {
         let roots: Vec<String> = {
-            let view = self.database_nav.borrow();
-            self.shared
-                .connections
-                .borrow()
+            let view = self.nav.borrow();
+            self.host
+                .connections()
                 .iter()
                 .filter(|c| view.expanded.contains(&c.id))
                 .map(|c| c.id.clone())
                 .collect()
         };
         {
-            let mut view = self.database_nav.borrow_mut();
+            let mut view = self.nav.borrow_mut();
             view.children.clear();
             view.attempted.clear();
             view.errors.clear();
@@ -4712,20 +4714,17 @@ impl SidebarPanel {
         for cid in roots {
             self.ensure_nav_loaded(&cid, &cid, NavPath::Connection, true, cx);
         }
-        *self.shared.notice.borrow_mut() = Some("已刷新全部元数据".to_string());
+        self.host.notice("已刷新全部元数据".to_string(), cx);
         cx.notify();
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
-    use super::{
-        nav_order_members, nav_reorder, nav_step, nav_type_short_label, parse_nav_search,
-    };
-    use database::model::NavSource;
+    use super::{nav_order_members, nav_reorder, nav_step, nav_type_short_label, parse_nav_search};
+    use crate::model::NavSource;
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

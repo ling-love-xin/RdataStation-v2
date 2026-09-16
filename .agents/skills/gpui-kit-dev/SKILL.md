@@ -73,7 +73,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 ## 状态与副作用
 
 - `render` 是纯读路径：不做 I/O（`Runtime::new` / `block_on` / `fs` / 打开数据库）、不写 `Shared`、不解析 JSON、不深拷贝大集合。副作用回事件路径（`Shared` 更新 + `cx.notify()`）。
-  - 已知反例（技术债）：`panels/editor.rs` 的连接详情卡在 render 内调 `load_navigator_tree` **同步读分析库文件**（真读盘，缓存键 = 当前连接）；另有 render 内**写状态 + 入队后台任务**（`panels/nav.rs` 的 `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`、`panels/editor.rs` 的 `render_property_panel`、`panels/scratchpad_panel.rs` 的 `render_scratchpad`；I/O 在工作线程）；`project/ui.rs` 的 `render_settings` 每帧 `fs::metadata`。更重的一类是**事件路径**同步 I/O（`block_on` 阻塞 UI 线程）：`nav.rs` 4 处 + `scratchpad_panel.rs` 14 处，见 `docs/architecture/layout/panels-modules.md` §4。
+  - 已知反例（技术债）：`panels/editor.rs` 的连接详情卡在 render 内调 `load_navigator_tree` **同步读分析库文件**（真读盘，缓存键 = 当前连接）；另有 render 内**写状态 + 入队后台任务**（`database/src/nav_view.rs` 的 `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`、`panels/editor.rs` 的 `render_property_panel`、`panels/scratchpad_panel.rs` 的 `render_scratchpad`；I/O 在工作线程）；`project/ui.rs` 的 `render_settings` 每帧 `fs::metadata`。更重的一类是**事件路径**同步 I/O（`block_on` 阻塞 UI 线程）：`nav.rs` 4 处 + `scratchpad_panel.rs` 14 处，见 `docs/architecture/layout/panels-modules.md` §4。
 - 重复元素（列表 / 树 / tab / 协议链）的 `ElementId` 用业务键（`conn.id` / `node.key` / 稳定名称），**不用下标**——下标在增删与「最新在前」插入后会让 hover 等按 id 记录的状态串行。
 
 ## 颜色语义

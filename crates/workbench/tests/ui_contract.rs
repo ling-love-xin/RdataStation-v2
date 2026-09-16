@@ -75,7 +75,8 @@ fn view_layer_has_no_raw_size_literals() {
         ("view.rs", include_str!("../src/view.rs")),
         ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
         ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
-        ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
+        // 导航视图已下沉到 `database` crate（A'3）：清单里换成 crate 内路径。
+        ("database/nav_view.rs", include_str!("../../database/src/nav_view.rs")),
         ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
             "panels/scratchpad_panel.rs",
@@ -158,7 +159,8 @@ fn ui_sources_have_no_raw_color_literals() {
             "panels/shared.rs",
             include_str!("../src/panels/shared.rs"),
         ),
-        ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
+        // 导航视图已下沉到 `database` crate（A'3）：清单里换成 crate 内路径。
+        ("database/nav_view.rs", include_str!("../../database/src/nav_view.rs")),
         ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
             "panels/scratchpad_panel.rs",
@@ -272,6 +274,16 @@ fn every_panel_module_is_registered_in_the_manifests() {
         assert!(
             manifest.matches(quoted.as_str()).count() >= 2,
             "src/{rel} 未同时登记进尺寸与颜色契约清单；漏登会让这两份契约对该文件静默失效"
+        );
+    }
+
+    // 视图下沉到特性 crate 后，受契约约束的视图文件不再住在 `src/panels/` 下，
+    // 目录遍历发现不了它们——故在这里显式点名（新增下沉视图时同步加一行）。
+    for rel in ["database/nav_view.rs"] {
+        let quoted = format!("\"{rel}\"");
+        assert!(
+            manifest.matches(quoted.as_str()).count() >= 2,
+            "{rel}（视图已下沉到特性 crate）未同时登记进尺寸与颜色契约清单"
         );
     }
 }

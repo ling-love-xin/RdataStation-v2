@@ -339,3 +339,16 @@ fn constraints_table(constraints: &[engine::driver::traits::ConstraintDetail]) -
         .collect();
     PropertyTable { headers, rows }
 }
+
+/// 属性面板状态（懒加载一次，按请求 key 失效重载）。
+///
+/// 由消费方（编辑区右侧面板）持有，本 crate 只管类型——原先住在导航视图里，
+/// 但它是**属性面板**的状态，与导航树无关。
+#[derive(Default)]
+pub struct PropertyState {
+    pub loaded_for: Option<String>,
+    pub props: Option<ObjectProperties>,
+    pub error: Option<String>,
+    /// 是否正在后台加载（渲染「加载中…」）。
+    pub loading: bool,
+}

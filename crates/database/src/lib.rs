@@ -15,5 +15,6 @@ pub mod navigator_service;
 pub mod nav_host;
 pub mod nav_jobs;
 pub mod nav_store;
+pub mod nav_view;
 pub mod property_panel;
 pub mod sql_gen;

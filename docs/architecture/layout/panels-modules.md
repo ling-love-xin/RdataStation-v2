@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | `panels/mod.rs` | 面板协议与装配（`SidebarPanel` 字段 + `new` + `BasePanel` / `ComponentPanel` / `Render` 分发 + 资源/插件占位） | 253 |
 | `panels/shared.rs` | `Shared`（面板/组件/宿主三方共用状态） + `ProjectActionRequest` | 298 |
-| `panels/nav.rs` | M4 数据源导航：类型与纯函数、键盘方法、树渲染、分组/标签/拖拽、连接增删改 | 4851 |
+| ~~`panels/nav.rs`~~ → `crates/database/src/nav_view.rs` | M4 数据源导航：类型与纯函数、键盘方法、树渲染、分组/标签/拖拽、连接增删改（**已下沉**，2026-09-16） | 4900+ |
 | `panels/scratchpad_panel.rs` | M5 草稿箱：模板/排序/压平、编辑与剪贴板/回收站、行渲染、内容搜索 | 3504 |
 | `panels/editor.rs` | 中央编辑区：SQL 草稿区 + 结果区 + 属性面板宿主 + 连接对话框宿主 | 1252 |
 | `panels/right.rs` | `RightSidebarPanel`（洞察 / Mock / 历史） | 194 |
@@ -120,7 +120,7 @@
 
 `mock` / `insight` 已是正例（crate 自带 view + `WeakEntity` 句柄，workbench 只装配）；`crates/database/src/database_view.rs`
 与 `commands.rs` 至今是 3 行空占位，说明这是既定路线。现在模块边界 = 未来的 crate 边界，
-`panels/nav.rs` → `crates/database`、`panels/scratchpad_panel.rs` → `crates/scratchpad` 的搬迁成本已降到最低。
+`crates/database/src/nav_view.rs`（原 `panels/nav.rs`，**已下沉**）、`panels/scratchpad_panel.rs` → `crates/scratchpad` 的搬迁成本已降到最低。
 
 **前置条件**：先做 P0（否则搬 `nav.rs` 会连带搬走半个 `Shared`）。
 

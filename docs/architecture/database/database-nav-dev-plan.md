@@ -21,15 +21,15 @@
 | # | 任务 | 落点 | 状态 |
 | --- | --- | --- | --- |
 | V1 | 概念定位与命名（文档） | `database-navigator-prototype-design.md` §1.1/§2/§6；「来源 / 作用域」→「归属域」 | ✅ 2026-09-13 |
-| V2 | 连接行瘦身：**移除行内 🗂 与驱动文本**；名称 `text_ellipsis` | `panels/nav.rs::render_connection_row` | ✅ 2026-09-13 |
-| V3 | **双通道徽标**：颜色 = 状态，形状 = 类型（内叠 2 字母） | `panels/nav.rs::{nav_type_badge, NavBadgeStatus}` + `Shared::driver_catalog`（`nav_runtime::driver_catalog()` 一次性加载） | ✅ 2026-09-13（hover 卡已接：`nav_badge_hover_card` 用 `HoverCard`，300ms 显类型 / 状态 / 驱动） |
-| V4 | **归属域右对齐固定列** + `⋯ → 显示归属域` | `panels/nav.rs::render_connection_row`（`.justify_end()` 定宽列）+ `settings::SettingsService::{show_scope,set_show_scope}` | ✅ 2026-09-13 |
-| V5 | 分组头**聚合健康度** + **全折叠** | `panels/nav.rs::render_group_header`（`已连接/总数` + 失败计数 + 全折叠）+ `render_nav_tree` 预计算连接 / 错误集 | ✅ 2026-09-13 |
-| V6 | **多组引用样式 + 主组** | `panels/nav.rs::{render_nav_tree, render_connection_row, render_reference_row}`；主组显式存储 `connection_group_members.is_primary`（右键 `设为主组 ▸`），未指定回退 `membership[conn][0]`（组排序最前） | ✅ 2026-09-13 |
-| V7 | **facet 入口**（归属域 chips + 「筛选 ▾」承载类型 / 驱动 / 标签） | `panels/nav.rs::{render_database_nav, build_facet_items, nav_facet_candidates, apply_facet}` + `DatabaseNavView` facet 状态 + `settings::model::NavigatorFilters`（持久化）；搜索语法 `scope:/source:/type:/driver:/tag:` | ✅ 2026-09-13（搜索 token 作额外 AND 约束，与 chips 叠加，不互相回写） |
-| V8 | 行操作**悬停 / 选中显隐**（`+`、`✎`、连接/断开） | `panels/nav.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`） | ✅ 2026-09-13（右键 + 键盘仍为全量入口） |
-| V9 | 行尾 **`+` = 标签快捷入口** | `panels/nav.rs::render_connection_row`（复用行内组织编辑器） | ✅ 2026-09-13 |
-| V10 | **`⋯ → 显示标签`**（默认关）+ 标签行内「≤2 chip + `+N`」 | `panels/nav.rs::render_connection_row` + `settings::SettingsService::{show_tags,set_show_tags}` | ✅ 2026-09-13 |
+| V2 | 连接行瘦身：**移除行内 🗂 与驱动文本**；名称 `text_ellipsis` | `database/src/nav_view.rs::render_connection_row` | ✅ 2026-09-13 |
+| V3 | **双通道徽标**：颜色 = 状态，形状 = 类型（内叠 2 字母） | `database/src/nav_view.rs::{nav_type_badge, NavBadgeStatus}` + `Shared::driver_catalog`（`nav_runtime::driver_catalog()` 一次性加载） | ✅ 2026-09-13（hover 卡已接：`nav_badge_hover_card` 用 `HoverCard`，300ms 显类型 / 状态 / 驱动） |
+| V4 | **归属域右对齐固定列** + `⋯ → 显示归属域` | `database/src/nav_view.rs::render_connection_row`（`.justify_end()` 定宽列）+ `settings::SettingsService::{show_scope,set_show_scope}` | ✅ 2026-09-13 |
+| V5 | 分组头**聚合健康度** + **全折叠** | `database/src/nav_view.rs::render_group_header`（`已连接/总数` + 失败计数 + 全折叠）+ `render_nav_tree` 预计算连接 / 错误集 | ✅ 2026-09-13 |
+| V6 | **多组引用样式 + 主组** | `database/src/nav_view.rs::{render_nav_tree, render_connection_row, render_reference_row}`；主组显式存储 `connection_group_members.is_primary`（右键 `设为主组 ▸`），未指定回退 `membership[conn][0]`（组排序最前） | ✅ 2026-09-13 |
+| V7 | **facet 入口**（归属域 chips + 「筛选 ▾」承载类型 / 驱动 / 标签） | `database/src/nav_view.rs::{render_database_nav, build_facet_items, nav_facet_candidates, apply_facet}` + `DatabaseNavView` facet 状态 + `settings::model::NavigatorFilters`（持久化）；搜索语法 `scope:/source:/type:/driver:/tag:` | ✅ 2026-09-13（搜索 token 作额外 AND 约束，与 chips 叠加，不互相回写） |
+| V8 | 行操作**悬停 / 选中显隐**（`+`、`✎`、连接/断开） | `database/src/nav_view.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`） | ✅ 2026-09-13（右键 + 键盘仍为全量入口） |
+| V9 | 行尾 **`+` = 标签快捷入口** | `database/src/nav_view.rs::render_connection_row`（复用行内组织编辑器） | ✅ 2026-09-13 |
+| V10 | **`⋯ → 显示标签`**（默认关）+ 标签行内「≤2 chip + `+N`」 | `database/src/nav_view.rs::render_connection_row` + `settings::SettingsService::{show_tags,set_show_tags}` | ✅ 2026-09-13 |
 
 > 新增常量：`ui.rs::{NAV_BADGE_SIZE, NAV_SCOPE_COL_SHORT, NAV_SCOPE_COL_TEXT, NAV_ADD_TAG_SIZE}`。
 > 单测：`panels::tests::{type_badge_maps_known_types_and_falls_back, search_facets_parse_tokens_and_free_text, type_short_label_strips_category_suffix}`、`database::model::tests::source_key_roundtrip`、`engine::persistence::connection_org_store::tests::primary_group_is_exclusive_and_falls_back`、`settings::model::tests::{legacy_config_without_navigator_uses_defaults, navigator_filters_roundtrip}`。
@@ -80,9 +80,9 @@
 | B2 标签服务（多值 + 检索） | ✅ 服务层就绪（2026-09-11） | `ConnectionOrgStore`：set_tags/list_tags/list_connections_by_tag/list_all_tags；`nav_runtime::{list_tags,set_tags}` 已接线；M3 保存/更新同步、删除清理 |
 | B3 分组/标签视图（拖拽/右键/对话框） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels/`：`render_nav_tree`（分组一级 + 「未分组」）、`render_group_header`（统一色条 + 计数 + 折叠）、`render_group_editor`（右键「移动到分组…」：行内分组多选 + 新建分组）、`render_tag_editor`（行尾 `+`：仅标签输入）、`nav_source_chip`（来源筛选 chips）、`ensure_nav_org` / `reload_nav_org` |
 | B1/B2 视图接线（分组多对多 + 标签多值） | ✅ 已实现 | `nav_runtime::{list_groups,create_group,list_group_members,add_to_group,remove_from_group,list_all_tags}`；`ConnectionOrgStore::list_tag_pairs`（一次性映射） |
-| B1 组内排序口径落地（未排按名称） | ✅ 已实现（2026-09-16） | `ConnectionOrgStore::{MEMBER_ORDER_UNSET, list_group_members_detailed}` + 迁移 `022_normalize_group_member_order.sql`；视图 `panels/nav.rs::nav_order_members`（纯函数，分组内与「未分组」共用） |
+| B1 组内排序口径落地（未排按名称） | ✅ 已实现（2026-09-16） | `ConnectionOrgStore::{MEMBER_ORDER_UNSET, list_group_members_detailed}` + 迁移 `022_normalize_group_member_order.sql`；视图 `database/src/nav_view.rs::nav_order_members`（纯函数，分组内与「未分组」共用） |
 | B7 上下文菜单动作（查看数据 / 复制名 / 查看属性 / 刷新） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels/`：`ContextMenuExt::context_menu` 挂到连接行 / 对象节点 / 分组头；`Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（生成 SELECT → 编辑区）；`toggle_connection` / `refresh_node` / `delete_group` / `create_group_interactive`；分组删除带 `AlertDialog` 确认 |
-| B8 缓存管理入口 + 短码⇄文字开关 + 属性面板宽度记忆 | ✅ 已实现（2026-09-12） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`（数据源导航节）；`crates/workbench/src/components/cache_dialog.rs`（两处入口）；`panels/nav.rs::{refresh_all, render_connection_row}` + `panels/editor.rs::render_property_panel` + `EditorPanel::render`（`h_resizable`） |
+| B8 缓存管理入口 + 短码⇄文字开关 + 属性面板宽度记忆 | ✅ 已实现（2026-09-12） | `crates/settings/src/model.rs`（`Navigator` 分区）+ `settings_view.rs`（数据源导航节）；`crates/workbench/src/components/cache_dialog.rs`（两处入口）；`database/src/nav_view.rs::{refresh_all, render_connection_row}` + `panels/editor.rs::render_property_panel` + `EditorPanel::render`（`h_resizable`） |
 | B7 拖拽（表 / 视图 → 编辑区插入限定名） | ✅ 已实现（2026-09-16） | `crates/workbench/src/panels/`：`NavDragPayload` + `NavDragGhost`（拖拽幽灵）、`render_nav_node` 挂 `on_drag`（仅表 / 视图）、SQL 区容器 `drag_over` + `on_drop`、编辑区 `content` 兜底 `on_drop`、`EditorPanel::apply_nav_drag`（`NavDropMode::{AtCursor, Append}`） |
 | B3 归组拖拽 + 组内外手动排序 | ✅ 已实现（2026-09-16） | `panels/`：`NavConnDragPayload` / `ConnDropTarget` / `nav_reorder`（纯函数）、连接行与引用行挂 `on_drag`+`on_drop`、分组头挂 `on_drop`（归组 / 移出全部）、`SidebarPanel::{apply_conn_drop, container_order, container_label}`；落库 `ConnectionOrgStore::{set_member_order_all, list_ungrouped_order, set_ungrouped_order}` + `nav_runtime::set_container_order` |
 | B3 分组描述表单（名称 + 描述） | ✅ 已实现（2026-09-16） | `crates/workbench/src/components/group_form_dialog.rs`（新建 / 编辑共用；名称必填 + 内联提示）；入口：面板头 `🗂＋`、分组右键「新建分组 / 编辑分组…」、组内联编辑器「新建分组」；落库 `nav_runtime::{create_group_with, update_group}`（`rename_group` 不再洗掉描述） |
@@ -158,14 +158,14 @@
 | 任务 | 状态 | 落点 |
 | --- | --- | --- |
 | C4 大 schema 客户端分页（「加载更多」） | ✅ 已实现（2026-09-12） | `crates/workbench/src/panels/`（`render_more_row`、`folder_limit`、`page_limit`）+ `ui.rs::NAV_FOLDER_PAGE_SIZE`（200/页） |
-| C6 收敛遗留：移除死代码 | ✅ 部分（2026-09-12） | `panels/nav.rs::render_connection_list` 已删（无调用点）；`db_navigator.rs` **保留**（仍被 Mock 面板与 `mock_generator` 消费，属 M5/M6 范围） |
-| C7 快捷键：Ctrl+F 聚焦搜索 + 导航树键盘操作 | ✅ 已实现（2026-09-12） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}` + `app/main.rs` 绑定（`database-nav` context）+ `panels/nav.rs::{nav_move, nav_expand, nav_collapse, nav_open_properties, nav_order}`（选中高亮 + 行点击聚焦面板） |
+| C6 收敛遗留：移除死代码 | ✅ 部分（2026-09-12） | `database/src/nav_view.rs::render_connection_list` 已删（无调用点）；`db_navigator.rs` **保留**（仍被 Mock 面板与 `mock_generator` 消费，属 M5/M6 范围） |
+| C7 快捷键：Ctrl+F 聚焦搜索 + 导航树键盘操作 | ✅ 已实现（2026-09-12） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}` + `app/main.rs` 绑定（`database-nav` context）+ `database/src/nav_view.rs::{nav_move, nav_expand, nav_collapse, nav_open_properties, nav_order}`（选中高亮 + 行点击聚焦面板） |
 | C1 预热方案 C（仅 catalogs/schemas）+ 进度 + 取消 | ✅ 已实现（2026-09-12） | `crates/database/src/navigator_service.rs::warm_schemas`；`crates/workbench/src/services/nav_jobs.rs`（后台任务）；面板头显示「预热 d/t + 取消」 |
-| C2 邻接节点预加载（列） | ✅ 已实现（2026-09-12） | `navigator_service::prefetch_columns` + `nav_jobs::prefetch_columns`；`panels/nav.rs::ensure_nav_loaded` 在「表」文件夹首次加载后排队前 20 张表（`nav_jobs::PREFETCH_BATCH`） |
+| C2 邻接节点预加载（列） | ✅ 已实现（2026-09-12） | `navigator_service::prefetch_columns` + `nav_jobs::prefetch_columns`；`database/src/nav_view.rs::ensure_nav_loaded` 在「表」文件夹首次加载后排队前 20 张表（`nav_jobs::PREFETCH_BATCH`） |
 | 导航后台任务基建（阻塞 → 工作线程） | ✅ 已实现（2026-09-12） | `services/nav_jobs.rs`：单工作线程 + tokio 运行时 + mpsc 串行队列；原子量进度/取消；面板用主线程 async 任务 300ms 轮询重绘 |
 | C-收尾 导航加载全部迁后台（消除 render 期 I/O） | ✅ 已实现（2026-09-12） | `nav_jobs::{enqueue_load, enqueue_properties, drain_load_results, drain_props_results}`；`panels/`：树加载/属性加载改为入队 + 主线程轮询回填（`apply_load_results` / `apply_props_results`），render 只读内存；本地 SQLite 一次性读取（分组/标签、展开态）改用 `cx.defer_in` 在渲染后执行 |
 | C3 增量刷新接入 | ✅ 已实现（首版，2026-09-12） | `crates/database/src/cache.rs`（新增 `NavCache` cache-aside）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；范围：schema / 表 / 视图 / 列；刷新（`fresh`）先 `prune_schema` 再重写；**修复 engine 既有缺陷** `list_columns_normalized` 引用了不存在的 `fkc.table_id` |
-| C5 产品语义 token（含 `search.match.background`）+ 命中高亮 | ✅ 已实现（2026-09-12） | `crates/workbench_shell/src/product_tokens.rs`（`ProductTokens: Global`、`get`、`apply_from_str` / `apply_from_path`；缺失角色回退最接近的标准字段；2026-09-16 自 settings 迁入壳层）+ `assets/themes/product-tokens.json`（明暗各 7 角色：`activity_bar.*` / `title_bar.slot.background` / `quick_open.group.header` / `search.match.background`）；`crates/app/src/main.rs::attach_product_tokens`（启动 + `ThemeRegistry::watch_dir` 热更新）；消费方 `view.rs`（活动栏背景+激活条、标题栏挖空槽、Quick Open 分组头）、`panels/nav.rs::nav_name_highlight`（命中底色：连接行 + 对象行）；单测 `product_tokens::tests::parses_roles_and_tolerates_missing` |
+| C5 产品语义 token（含 `search.match.background`）+ 命中高亮 | ✅ 已实现（2026-09-12） | `crates/workbench_shell/src/product_tokens.rs`（`ProductTokens: Global`、`get`、`apply_from_str` / `apply_from_path`；缺失角色回退最接近的标准字段；2026-09-16 自 settings 迁入壳层）+ `assets/themes/product-tokens.json`（明暗各 7 角色：`activity_bar.*` / `title_bar.slot.background` / `quick_open.group.header` / `search.match.background`）；`crates/app/src/main.rs::attach_product_tokens`（启动 + `ThemeRegistry::watch_dir` 热更新）；消费方 `view.rs`（活动栏背景+激活条、标题栏挖空槽、Quick Open 分组头）、`database/src/nav_view.rs::nav_name_highlight`（命中底色：连接行 + 对象行）；单测 `product_tokens::tests::parses_roles_and_tolerates_missing` |
 | C8 元数据缓存键切身份指纹 | ⚙️ engine 侧部分落地 | `engine::persistence::metadata_identity`（纯函数 + 测试，已提交 `fd1ffdb`）**尚未接线**（由连接侧任务推进） |
 
 **C3 首版说明（已知限制）**
@@ -236,7 +236,7 @@
 | 运行时连接（`workbench::ConnectionService`：connect/close/switch/has/list） | ✅ 已实现（C3 收敛后 50KB：传输/协议层已下沉 `crates/connection`，仅剩依赖 engine 的会话编排） |
 | M4 领域模型 / 视图 / 命令 / 属性面板 | ✅ 已实现（`crates/database/src/{model,property_panel}.rs` + `panels/editor.rs::EditorPanel::render_property_panel`） |
 | 分组 / 标签 / 导航状态表 | ✅ 已实现（`connection_groups` / `connection_group_members` / `connection_tags` / `navigator_state`） |
-| 导航视图与装配 | ✅ 已实现（`panels/nav.rs::{render_database_nav, render_nav_tree, render_connection_row, render_nav_node}`；原 `render_connection_list` / `render_navigation_placeholder` 占位已删） |
+| 导航视图与装配 | ✅ 已实现（`database/src/nav_view.rs::{render_database_nav, render_nav_tree, render_connection_row, render_nav_node}`；原 `render_connection_list` / `render_navigation_placeholder` 占位已删） |
 
 **核心缺口**：导航领域模型、导航编排服务、视图面板、分组/标签/状态表、运行时连接接入、属性面板注册表。
 

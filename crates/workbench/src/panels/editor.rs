@@ -30,7 +30,9 @@ use crate::ui;
 use super::shared::QueryRequest;
 use super::Shared;
 // 跨模块：导航拖拽载荷（落点转成「打开查询」请求，见 `Shared::request_query`）/ 属性面板状态。
-use super::nav::{NavDragPayload, PropertyRequest, PropertyState};
+use database::model::PropertyRequest;
+use database::nav_view::NavDragPayload;
+use database::property_panel::PropertyState;
 use super::scratchpad_panel::{ScratchpadSearchView, render_scratchpad_search_pane};
 
 /// 中央内容区面板。

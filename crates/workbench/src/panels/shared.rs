@@ -17,7 +17,8 @@ use scratchpad::ScratchpadStore;
 
 use gpui_kit::*;
 
-use super::nav::PropertyRequest;
+use database::model::PropertyRequest;
+
 use super::scratchpad_panel::ScratchpadSearchView;
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 // 纯数据类型已下沉到 shell（导航视图下沉后需与 `database` 共用同一份定义），此处重导保持旧路径。
@@ -306,7 +307,7 @@ impl Shared {
 
     /// 展开右 Dock 并切到指定面板。
     ///
-    /// 与 `SidebarEvent::OpenRightPanel` 同一口径：只改状态，布局同步由宿主 render
+    /// 与导航面板「查看洞察」同一口径（现走 `NavHost::open_right_panel`）：只改状态，布局同步由宿主 render
     /// （`apply_right_mode`）完成，因此还需要 `notify_host` 让宿主重渲染。
     pub fn open_right_panel(&self, panel: RightPanel, cx: &mut App) {
         self.active_right.set(panel);

@@ -53,7 +53,7 @@ settings::product_tokens::get(cx).search_match_background(cx.theme())
 ```
 
 - 角色→访问器：`activity_bar_background` / `activity_bar_active_border` / `activity_bar_icon_active` / `activity_bar_icon_inactive` / `title_bar_slot_background` / `quick_open_group_header` / `search_match_background`
-- 消费方：`view.rs`（活动栏背景 / 激活条 / 标题栏挖空槽 / Quick Open 分组头）、`panels/nav.rs::nav_name_highlight`（命中底色）
+- 消费方：`view.rs`（活动栏背景 / 激活条 / 标题栏挖空槽 / Quick Open 分组头）、`database/src/nav_view.rs::nav_name_highlight`（命中底色）
 - **新增产品角色时必须同步改**：`product-tokens.json`（明暗两套）→ `TokenMap` / `ProductTokens` 字段 + `from_map` + 访问器（含回退）→ 消费方
 
 ## 检查清单

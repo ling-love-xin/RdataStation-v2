@@ -519,7 +519,7 @@ flowchart LR
 | 3 | 侧栏条目来源短码 / 脏标记 | `staging.rs::saved_scope_short` + `staging.rs::draft_dirty`（render 处徽标与 `●`） |
 | 4 | 键盘导航 | `crates/workbench/src/commands.rs`（actions）+ `app/main.rs`（bind_keys）+ `render.rs`（容器 handler） |
 | 5 | 拆分对话框单文件 | `components/connection_dialog/{mod,state,staging,render,managers,helpers}.rs` + `project_picker.rs` |
-| 6 | 导航栏「在对话框中编辑」入口 | `panels/nav.rs::render_connection_row`（✎ 按钮 → `shared.open_edit`） |
+| 6 | 导航栏「在对话框中编辑」入口 | `database/src/nav_view.rs::render_connection_row`（✎ 按钮 → `shared.open_edit`） |
 | 7 | 真机集成用例 | `tests/connection_multi_save.rs`（连续保存两条） |
 | 8 | 文档防腐 | 本文（§2.2 / §3.5 / §5.3 / §5.5 / §6 / §7 / §9） |
 | 9 | 类型 × 驱动两层选择去噪（左侧选类型 / 右侧驱动实现短名；未选类型时 Header 提示） | `helpers.rs`（`driver_short_name` / `type_badge`）、`state.rs`（`select_type` / `set_driver_by_value`）、`render.rs` |

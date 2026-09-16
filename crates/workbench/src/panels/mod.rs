@@ -15,20 +15,17 @@ use gpui_kit::EventEmitter;
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::dock::PanelEvent as BasePanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel};
-use gpui_kit::component::input::InputState;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
 use scratchpad::ScratchpadWatcher;
 
-use database::model::NavSource;
-
-use crate::view::{LeftPanel, RightPanel};
+use crate::view::LeftPanel;
 
 use analytics_resource::resource_view::ResourcesPanel;
+use database::nav_view::NavView;
 
 mod editor;
-mod nav;
 mod resources;
 mod right;
 // 带 `_panel` 后缀：若名为 `scratchpad`，会遮蔽 `scratchpad` crate（本模块的导入与
@@ -38,59 +35,26 @@ mod shared;
 
 // 对外路径保持 `crate::panels::X` 不变：组件层、宿主与集成测试零改动。
 pub use editor::EditorPanel;
-pub use nav::PropertyRequest;
+pub use database::model::PropertyRequest;
 pub use right::RightSidebarPanel;
 pub use scratchpad_panel::ScratchpadSearchView;
-pub use shared::{EditorBridge, ProjectActionRequest, QueryRequest, ScratchpadBridge, Shared};
 pub use shared::append_sql;
+pub use shared::{EditorBridge, ProjectActionRequest, QueryRequest, ScratchpadBridge, Shared};
 
-use nav::{DatabaseNavView, NavOrderItem};
 use scratchpad_panel::ScratchpadView;
 
-/// 侧边栏面板发出的事件（由工作台订阅）。
-#[derive(Clone, Debug)]
-pub enum SidebarEvent {
-    /// 用户点击了连接条目。
-    SelectConnection(usize),
-    /// 用户点击了连接「编辑」。
-    EditConnection(String),
-    /// 用户点击了导航面板头「＋」/ 空态「新建连接」（动作已由 `EditorBridge::new_connection` 完成，这里只触发重绘）。
-    NewConnectionRequest,
-    /// 通用入口：右键「生成 Mock 数据」（仅表 / 视图）/「查看洞察」——展开右 Dock 并切面板。
-    OpenRightPanel(RightPanel),
-}
-
 /// 侧边栏面板：按活动工具渲染内容。
+///
+/// 各工具自己带视图（`database` 导航 / `analytics_resource` 资产库 / 草稿箱），
+/// 本面板只做“外壳 + 转发”：与右栏 `RightSidebarPanel` 同一职责。
 pub struct SidebarPanel {
     shared: Shared,
     focus_handle: FocusHandle,
+    /// M4 数据源导航面板实体（视图与状态在 `rds-database` crate）。
+    nav_panel: Entity<NavView>,
     /// M5 草稿箱面板状态（首次渲染触发加载）。
     scratchpad: Rc<RefCell<ScratchpadView>>,
-    /// 数据源导航面板状态（懒加载对象树）。
-    database_nav: Rc<RefCell<DatabaseNavView>>,
-    /// 数据源导航搜索框（懒创建）。
-    nav_search: Option<Entity<InputState>>,
-    _nav_search_sub: Option<Subscription>,
-    /// 连接行内联标签输入框（组织编辑器打开时创建，关闭时销毁）。
-    nav_tag_input: Option<Entity<InputState>>,
-    /// 当前标签输入框对应的连接 ID（切换连接时重建并重新预填）。
-    nav_tag_input_for: Option<String>,
-    _nav_tag_sub: Option<Subscription>,
-    /// 行内「复制为模板」输入框（打开时创建，关闭时销毁）。
-    nav_copy_input: Option<Entity<InputState>>,
-    /// 当前复制输入框对应的连接 ID（切换连接时重建）。
-    nav_copy_input_for: Option<String>,
-    _nav_copy_sub: Option<Subscription>,
-    /// 分组名内联重命名输入框（重命名时创建，关闭时销毁）。
-    nav_group_input: Option<Entity<InputState>>,
-    _nav_group_sub: Option<Subscription>,
-    /// 渲染顺序重建的可见项（键盘 ↑↓ 移动 / 展开折叠 / 打开属性）。
-    nav_order: Rc<RefCell<Vec<NavOrderItem>>>,
-    /// 正在轮询预热进度的后台任务（避免重复启动）。
-    warm_poll: Option<Task<()>>,
-    /// 正在轮询导航加载结果的后台任务（避免重复启动；`&self` 路径也要访问）。
-    nav_pump: RefCell<Option<Task<()>>>,
-    /// 正在轮询草稿箱加载结果的后台任务（同上）。
+    /// 正在轮询草稿箱加载结果的后台任务（避免重复启动）。
     scratchpad_pump: RefCell<Option<Task<()>>>,
     /// 草稿箱目录监控器（外部改动 → 去抖重拉；每个项目根一个）。
     scratchpad_watch: Option<ScratchpadWatcher>,
@@ -100,8 +64,6 @@ pub struct SidebarPanel {
     resources_pump: RefCell<Option<Task<()>>>,
     /// 监控轮询任务（常驻，每 ~1.2 s 探查一次变更标记）。
     scratchpad_watch_poll: RefCell<Option<Task<()>>>,
-    /// Ctrl+F 待聚焦标记：搜索框懒创建，先到位的请求在这里等一帧（面板私有，不入 `Shared`）。
-    nav_search_focus_pending: bool,
     /// 草稿箱当前内容搜索的参数（query / 正则 / 大小写）：自己发起、自己留底，
     /// 外部改动后重跑搜索用；展示数据由编辑区持有（见 `EditorPanel::scratchpad_search`）。
     active_search: Option<(String, bool, bool)>,
@@ -109,41 +71,37 @@ pub struct SidebarPanel {
 
 impl SidebarPanel {
     pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
-        // 从 settings.json 恢复 facet 筛选（UI 偏好，跨项目）。
-        let saved = settings::SettingsService::nav_filters(cx);
-        let mut nav_view = DatabaseNavView::default();
-        nav_view.source_filter = saved.source.as_deref().and_then(NavSource::from_key);
-        nav_view.type_filter = saved.db_type.clone();
-        nav_view.driver_filter = saved.driver.clone();
-        nav_view.tag_filter = saved.tag.clone();
+        // M4：导航面板实体——宿主端口在此注入（视图在 `database` crate，不依赖 workbench）。
+        let nav_host = Rc::new(crate::components::nav_host::WorkbenchNavHost::new(
+            shared.clone(),
+        ));
+        let nav_panel = cx.new(|cx| NavView::new(nav_host, cx));
         // M6：资产库面板实体（视图与状态在 `analytics_resource` crate；构造期创建，无 I/O）。
         let resources_panel = Self::build_resources_panel(&shared, cx);
         Self {
             shared,
             focus_handle: cx.focus_handle(),
+            nav_panel,
             scratchpad: Rc::new(RefCell::new(ScratchpadView::default())),
-            database_nav: Rc::new(RefCell::new(nav_view)),
             resources_panel,
             resources_pump: RefCell::new(None),
-            nav_search: None,
-            _nav_search_sub: None,
-            nav_tag_input: None,
-            nav_tag_input_for: None,
-            _nav_tag_sub: None,
-            nav_copy_input: None,
-            nav_copy_input_for: None,
-            _nav_copy_sub: None,
-            nav_group_input: None,
-            _nav_group_sub: None,
-            nav_order: Rc::new(RefCell::new(Vec::new())),
-            warm_poll: None,
-            nav_pump: RefCell::new(None),
             scratchpad_pump: RefCell::new(None),
             scratchpad_watch: None,
             scratchpad_watch_poll: RefCell::new(None),
-            nav_search_focus_pending: false,
             active_search: None,
         }
+    }
+
+    /// Ctrl+F：聚焦导航搜索框（先到位的请求由导航面板自己等一帧）。
+    pub(crate) fn focus_nav_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.nav_panel
+            .update(cx, |panel, cx| panel.focus_nav_search(window, cx));
+    }
+
+    /// 转发导航面板渲染（含滚动与空态都在 crate 内）。
+    fn render_nav_panel(&mut self) -> Div {
+        let panel = self.nav_panel.clone();
+        div().v_flex().size_full().min_h_0().child(panel)
     }
 
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
@@ -179,8 +137,6 @@ impl SidebarPanel {
 
 impl EventEmitter<BasePanelEvent> for SidebarPanel {}
 
-impl EventEmitter<SidebarEvent> for SidebarPanel {}
-
 impl Focusable for SidebarPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -194,7 +150,7 @@ impl Render for SidebarPanel {
         let active = self.shared.active_left.get();
         let content: Div = match active {
             LeftPanel::Draft => self.render_scratchpad(window, cx),
-            LeftPanel::Database => self.render_database_nav(window, cx),
+            LeftPanel::Database => self.render_nav_panel(),
             LeftPanel::Resources => self.render_resources_panel(cx),
             LeftPanel::Plugin => self.render_plugin_placeholder(fg),
         };

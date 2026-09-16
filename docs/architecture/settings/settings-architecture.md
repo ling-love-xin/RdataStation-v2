@@ -128,11 +128,11 @@ graph TD
 | key | 节 | 类型 | 默认 | 生效 | 消费方 | 入口 | 期次 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `appearance.theme_mode` | 外观 | enum `light`/`dark` | `light` | 即时 | `app/src/main.rs`、`SettingsService::set_theme_mode` | 两者 | ✅ 已落地 |
-| `navigator.source_short_code` | 数据源导航 | bool | `true` | 即时 | `panels/nav.rs::render_connection_row` | 设置页 | ✅ 已落地 |
-| `navigator.show_tags` | 数据源导航 | bool | `false` | 即时 | `panels/nav.rs::render_connection_row` | 两者 | ✅ 已落地 |
-| `navigator.show_scope` | 数据源导航 | bool | `true` | 即时 | `panels/nav.rs::render_connection_row` | 两者 | ✅ 已落地 |
+| `navigator.source_short_code` | 数据源导航 | bool | `true` | 即时 | `database/src/nav_view.rs::render_connection_row` | 设置页 | ✅ 已落地 |
+| `navigator.show_tags` | 数据源导航 | bool | `false` | 即时 | `database/src/nav_view.rs::render_connection_row` | 两者 | ✅ 已落地 |
+| `navigator.show_scope` | 数据源导航 | bool | `true` | 即时 | `database/src/nav_view.rs::render_connection_row` | 两者 | ✅ 已落地 |
 | `navigator.property_panel_width` | 数据源导航 | f32（rem） | `24.5` | 即时 | `panels/editor.rs::EditorPanel`（关闭面板时落盘） | 模块内（拖拽） | ✅ 已落地 |
-| `navigator.filters` | 数据源导航 | struct（4 个 `Option<String>`） | 全空 | 即时 | `panels/mod.rs::SidebarPanel::new` + `panels/nav.rs::write_nav_filters` | 模块内（chips / 筛选 ▾） | ✅ 已落地（作用域见 §14 Q1） |
+| `navigator.filters` | 数据源导航 | struct（4 个 `Option<String>`） | 全空 | 即时 | `panels/mod.rs::SidebarPanel::new` + `database/src/nav_view.rs::write_nav_filters` | 模块内（chips / 筛选 ▾） | ✅ 已落地（作用域见 §14 Q1） |
 | `projects.sort_mode` | 项目 | enum `last_opened`/`name`/`created` | `last_opened` | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写） | 两者 | ✅ 已落地（页面行待落地） |
 | `connection_defaults.connect_timeout_ms` | 连接默认值 | u64（ms） | `15000` | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` | 设置页 | ✅ 已落地 |
 | `connection_defaults.lan_disable_tls` | 连接默认值 | bool | `true` | 下次操作 | `connection_service.rs::apply_lan_tls_default` | 设置页 | ✅ 已落地 |

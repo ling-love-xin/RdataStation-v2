@@ -202,10 +202,24 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 
 | 步 | 内容 |
 | --- | --- |
-| A'1 | 在 `crates/database` 定 `pub trait NavHost`（宿主能力：读连接列表 / 选中 / 提示 / 时间片；请求编辑连接 / 插入 SQL / 打开属性面板 / 归组与排序的落库）——形状照 `MockHost` |
-| A'2 | workbench 实现 `NavHost`（现 `panels/nav.rs` 的 `shared.*` / `nav_runtime::*` 调用点移入实现体），注册到 `SidebarPanel` |
-| A'3 | `crates/database` 加 `gpui-kit` + `workbench_shell` 依赖，视图搬入（`panels/nav.rs` → `database/src/nav_view.rs`） |
-| A'4 | 同样处理草稿箱：`crates/scratchpad` 得 `pub trait ScratchpadHost`，视图搬入 |
+| A'1 | 在 `crates/database` 定 `pub trait NavHost`（宿主能力）——形状照 `MockHost` | ✅ 已做 |
+| A'2 | workbench 实现 `NavHost`（`components/nav_host.rs`），注册到面板 | ✅ 已做 |
+| A'3 | 视图搬入 `crates/database/src/nav_view.rs`；workbench 侧 `SidebarPanel` 只裸转发 | ✅ 已做（2026-09-16） |
+| A'4 | 同样处理草稿箱：`crates/scratchpad` 得 `pub trait ScratchpadHost`，视图搬入 | ⏳ 未做 |
+
+**A'3 落地实况（2026-09-16）** —— 与预估的差异与新增项：
+
+- 视图文件：`panels/nav.rs`（4867 行）→ `crates/database/src/nav_view.rs`，实体名 `NavView`，
+  状态结构 `NavViewState`；`SidebarPanel` 改为持 `Entity<NavView>` 并转发渲染
+  （与 `ResourcesPanel` 同一形态）。
+- `SidebarEvent` **退役**：选中 / 编辑 / 新建连接 / 开右栏都改走宿主端口，
+  动作在事件路径直接完成（不再绕宿主 render 转发一轮）；`view.rs` 的订阅与
+  `impl EventEmitter<SidebarEvent>` 一并删除，`_subscription` 字段随之消失。
+- nav 的键盘动作定义 `database::commands`（workbench 重导，app 侧路径不变）。
+- `PropertyState` 从导航视图移到 `database::property_panel`（它是属性面板的状态）。
+- `ui_contract.rs` 的尺寸 / 颜色清单从 `panels/nav.rs` 换成 `database/nav_view.rs`，
+  并在契约 2c 里**显式点名下沉视图**（目录遍历只看 `src/panels/`，扫不到 crate 外的文件）。
+- 无新增依赖边：`database → workbench_shell` / `gpui-kit` / `engine` 均为下行。
 
 **A' 前置已做（2026-09-16）**：把 `ConnectionItem` / `LeftPanel` / `RightPanel` / `SidebarMode`
 下沉到 `crates/workbench_shell/src/model.rs`（workbench 侧 `crate::view::{...}` 重导，路径不变）。

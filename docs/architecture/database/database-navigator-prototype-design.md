@@ -104,7 +104,7 @@
 
 | 层 | 现状 | 本设计 |
 | --- | --- | --- |
-| 视图 | `panels/nav.rs::render_connection_list` + `render_navigation_placeholder` | 新面板 `DatabaseNavPanel`：来源筛选 + 分组 + 对象树 |
+| 视图 | `database/src/nav_view.rs::render_connection_list` + `render_navigation_placeholder` | 新面板 `DatabaseNavPanel`：来源筛选 + 分组 + 对象树 |
 | 导航数据 | `workbench/services/db_navigator.rs` 只读 DuckDB 分析库 | **移出本模块**；外部库走 `MetadataService` |
 | 缓存 | engine 已实现 L1/L2，导航未接入 | 导航服务编排（§4），**不删缓存** |
 | 连接状态 | `ConnectionItem.connected` 仅记录有效性 | 接入运行时连接服务（§5） |
@@ -584,25 +584,25 @@ flowchart TD
 | --- | --- |
 | 面板容器 | `crates/workbench/src/panels/`（`SidebarPanel::render_database_nav`，按现有面板归属实现，未独立拆文件） |
 | 左 Dock 装配 | `crates/workbench/src/panels/`（`SidebarPanel` 的 `LeftPanel::Database` 分支） |
-| 归属域 facet（原来源筛选 chips） | `panels/nav.rs::nav_source_chip`（全部 / 项目 / 全局 / 共享，默认全部） |
-| 连接行瘦身 + 双通道徽标（v6/v7） | ✅ `panels/nav.rs::{render_connection_row, nav_type_badge, NavBadgeStatus}`；驱动目录 `nav_runtime::driver_catalog()` → `Shared::driver_catalog`（`defer_in` 一次性加载，render 无 I/O） |
-| 徽标 hover 卡（v7） | ✅ `panels/nav.rs::nav_badge_hover_card`（`gpui_kit::component::hover_card::HoverCard`，300ms 延迟） |
-| 归属域右对齐固定列 + 标签（名称下一行）+ 行内 `+`/`✎`（v7） | ✅ `panels/nav.rs::render_connection_row` + `settings::SettingsService::{show_scope, show_tags}`（`⋯` 开关，持久化） |
-| 筛选 facet 入口（类型 / 驱动 / 标签）（v7） | ✅ `panels/nav.rs::{render_database_nav, build_facet_items, nav_facet_candidates, apply_facet, clear_nav_filters}` + `settings::model::NavigatorFilters`（`settings.json` 持久化）；搜索 token 解析 `parse_nav_search` |
-| 分组头健康度 / 全折叠（v6） | ✅ `panels/nav.rs::{render_group_header, render_nav_tree}`（`已连接/总数` + 失败计数 + 全折叠） |
-| 多组引用样式 / 主组（v6） | ✅ `panels/nav.rs::{render_nav_tree, render_connection_row, render_reference_row}`（主组全亮，其它组 `∈ 主组名` 引用行，点击跳主组）；主组显式指定走右键 `设为主组 ▸`（`ConnectionOrgStore::{set_primary_group, clear_primary_group, list_primary_group_pairs}`），未指定回退分组排序 |
-| 行操作悬停显隐（v6/v7） | ✅ `panels/nav.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`；右键 + 键盘仍为全量入口） |
+| 归属域 facet（原来源筛选 chips） | `database/src/nav_view.rs::nav_source_chip`（全部 / 项目 / 全局 / 共享，默认全部） |
+| 连接行瘦身 + 双通道徽标（v6/v7） | ✅ `database/src/nav_view.rs::{render_connection_row, nav_type_badge, NavBadgeStatus}`；驱动目录 `nav_runtime::driver_catalog()` → `Shared::driver_catalog`（`defer_in` 一次性加载，render 无 I/O） |
+| 徽标 hover 卡（v7） | ✅ `database/src/nav_view.rs::nav_badge_hover_card`（`gpui_kit::component::hover_card::HoverCard`，300ms 延迟） |
+| 归属域右对齐固定列 + 标签（名称下一行）+ 行内 `+`/`✎`（v7） | ✅ `database/src/nav_view.rs::render_connection_row` + `settings::SettingsService::{show_scope, show_tags}`（`⋯` 开关，持久化） |
+| 筛选 facet 入口（类型 / 驱动 / 标签）（v7） | ✅ `database/src/nav_view.rs::{render_database_nav, build_facet_items, nav_facet_candidates, apply_facet, clear_nav_filters}` + `settings::model::NavigatorFilters`（`settings.json` 持久化）；搜索 token 解析 `parse_nav_search` |
+| 分组头健康度 / 全折叠（v6） | ✅ `database/src/nav_view.rs::{render_group_header, render_nav_tree}`（`已连接/总数` + 失败计数 + 全折叠） |
+| 多组引用样式 / 主组（v6） | ✅ `database/src/nav_view.rs::{render_nav_tree, render_connection_row, render_reference_row}`（主组全亮，其它组 `∈ 主组名` 引用行，点击跳主组）；主组显式指定走右键 `设为主组 ▸`（`ConnectionOrgStore::{set_primary_group, clear_primary_group, list_primary_group_pairs}`），未指定回退分组排序 |
+| 行操作悬停显隐（v6/v7） | ✅ `database/src/nav_view.rs::render_connection_row`（`.group("nav-conn-row")` + `.group_hover` + `.opacity`；右键 + 键盘仍为全量入口） |
 | 属性面板（连接项类型 / 驱动友好名） | ✅ `crates/database/src/property_panel.rs::load_properties`（`db_type` 行）+ `navigator_service::load_properties` + `panels/editor.rs::EditorPanel::render_property_panel` |
 | 分组 / 标签模型 | `crates/database/src/model.rs`（`ConnectionGroup` / `ConnectionTag` / `NavSource`） |
 | 分组 / 标签 / 状态持久化 | `crates/engine/src/persistence/connection_org_store.rs`（权威存储）+ `crates/workbench/src/services/nav_store.rs`（视图状态） |
-| 分组一级视图 / 行内归组 | `panels/nav.rs::{render_nav_tree, render_group_header, render_org_editor}` |
+| 分组一级视图 / 行内归组 | `database/src/nav_view.rs::{render_nav_tree, render_group_header, render_org_editor}` |
 | 右键菜单（连接 / 对象 / 分组） | `panels/` 的 `ContextMenuExt::context_menu`（`gpui_kit::component::menu`） |
-| 连接右键常驻模块入口（SQL 编辑器 / Mock / 洞察） | ✅ `panels/nav.rs::render_connection_row` 菜单底部三项 → `SidebarEvent::{OpenSqlEditor, OpenRightPanel}`；`view.rs::init_workspace` 订阅处理（选中连接 + 右 Dock 展开切面板） |
+| 连接右键常驻模块入口（SQL 编辑器 / Mock / 洞察） | ✅ `database/src/nav_view.rs::render_connection_row` 菜单底部三项 → `SidebarEvent::{OpenSqlEditor, OpenRightPanel}`；`view.rs::init_workspace` 订阅处理（选中连接 + 右 Dock 展开切面板） |
 | 生成 SELECT → 编辑区 | `Shared::editor_set` + `SidebarEvent::EditorSqlRequest`（`panels/` / `view.rs` 消费） |
-| 新建数据源入口（面板头 `＋` / 空态按钮） | `panels/nav.rs::render_database_nav` / `render_nav_tree`（置位 `Shared::new_connection_request` + `SidebarEvent::NewConnectionRequest`），`EditorPanel::render` 消费并 `request_new_connection` |
-| 面板头 `⟳ 刷新` / `断开当前连接` | `panels/nav.rs::render_database_nav`（`Button::new("nav-refresh")` / `Button::new("nav-disconnect")`）+ `SidebarPanel::nav_current_connection`（选中节点为连接根）；动作走 `refresh_node` / `toggle_connection`，未选中 / 未连接时 `disabled` |
-| 大 schema 分页（「加载更多」） | `panels/nav.rs::{render_more_row, folder_limit}` + `ui.rs::NAV_FOLDER_PAGE_SIZE` |
-| 快捷键（Ctrl+F / ↑↓ / →← / Enter·F4） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}`；`panels/nav.rs::{nav_move, nav_order, nav_open_properties}` |
+| 新建数据源入口（面板头 `＋` / 空态按钮） | `database/src/nav_view.rs::render_database_nav` / `render_nav_tree`（置位 `Shared::new_connection_request` + `SidebarEvent::NewConnectionRequest`），`EditorPanel::render` 消费并 `request_new_connection` |
+| 面板头 `⟳ 刷新` / `断开当前连接` | `database/src/nav_view.rs::render_database_nav`（`Button::new("nav-refresh")` / `Button::new("nav-disconnect")`）+ `SidebarPanel::nav_current_connection`（选中节点为连接根）；动作走 `refresh_node` / `toggle_connection`，未选中 / 未连接时 `disabled` |
+| 大 schema 分页（「加载更多」） | `database/src/nav_view.rs::{render_more_row, folder_limit}` + `ui.rs::NAV_FOLDER_PAGE_SIZE` |
+| 快捷键（Ctrl+F / ↑↓ / →← / Enter·F4） | `workbench::commands::{FocusNavSearch, NavUp, NavDown, NavExpand, NavCollapse, NavOpenProperties}`；`database/src/nav_view.rs::{nav_move, nav_order, nav_open_properties}` |
 | 导航 L2 缓存（cache-aside） | `crates/database/src/cache.rs`（`NavCache`）+ `navigator_service.rs`（`with_context(project_root, fresh)`）；底层 `engine::persistence::MetadataCacheOps` |
 | 后台任务（C1 预热 / C2 预取 / 树加载 / 属性加载） | `crates/workbench/src/services/nav_jobs.rs`（工作线程 + 队列 + 结果队列 + 进度/取消）+ `navigator_service::{warm_schemas, prefetch_columns}`；render 不再做 I/O |
 | 导航领域模型 / 状态 | `crates/database/src/model.rs` |

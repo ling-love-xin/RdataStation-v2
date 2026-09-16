@@ -248,7 +248,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         default_json: "true",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,
-        consumer: "workbench/src/panels/nav.rs::render_connection_row",
+        consumer: "workbench/src/database/src/nav_view.rs::render_connection_row",
         composite: false,
     },
     SettingSpec {
@@ -262,7 +262,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         default_json: "false",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Both,
-        consumer: "workbench/src/panels/nav.rs::render_connection_row",
+        consumer: "workbench/src/database/src/nav_view.rs::render_connection_row",
         composite: false,
     },
     SettingSpec {
@@ -276,7 +276,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         default_json: "true",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Both,
-        consumer: "workbench/src/panels/nav.rs::render_connection_row",
+        consumer: "workbench/src/database/src/nav_view.rs::render_connection_row",
         composite: false,
     },
     SettingSpec {

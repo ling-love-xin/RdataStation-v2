@@ -296,7 +296,7 @@ pub struct PropertyRef {
 
 /// 属性面板请求（导航双击对象时发出，由编辑区右侧面板渲染）。
 ///
-/// 原先定义在 `panels/nav.rs`；导航视图下沉后归本 crate，host 经 [`crate::nav_host::NavHost`]
+/// 原先定义在 `database/src/nav_view.rs`；导航视图下沉后归本 crate，host 经 [`crate::nav_host::NavHost`]
 /// 转交宿主。`conn_label` / `driver` 是**展示用**已解析文本（宿主不可能从 id 反推）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PropertyRequest {
