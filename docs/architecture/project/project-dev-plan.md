@@ -105,7 +105,7 @@
 | 项 | 内容 |
 | --- | --- |
 | edition 2024 | 根 `Cargo.toml` `edition = "2024"`；修复 2024 破坏性变更：`connector.rs` 隐式借用模式下的 `ref`/解引用模式（2 处）、`mock` crate 保留字 `gen` 标识符重命名、`view.rs` `.then(|| ...)` 闭包对 `cx` 的双重独占借用（改为显式 `if`）、`render_*_activity_bar` 返回 `Div` 以避开 RPIT 生命周期捕获 |
-| 工程配置 | `.cargo/config.toml`：`[env] RUST_MIN_STACK`（workspace 全量 codegen 需更大 rustc 线程栈）、`test-all` 别名固定 `-j 2`（并行链接 DuckDB 静态库会耗尽内存，导致 rustc `STATUS_STACK_BUFFER_OVERRUN` / `link.exe` LNK1102） |
+| 工程配置 | `.cargo/config.toml`：`[env] RUST_MIN_STACK`（workspace 全量 codegen 需更大 rustc 线程栈）、`DUCKDB_LIB_DIR`（DuckDB 改动态链接后库的位置，见 `duckdb-linking.md`）、`test-all` 别名固定 `-j 2`（并发链接重型 crate 会耗尽内存，导致 rustc `STATUS_STACK_BUFFER_OVERRUN` / `link.exe` LNK1102） |
 | B5（部分） | 项目菜单改用 `Popover` + ghost `Button` 触发（`render_menu_content` 只提供内容）；删除自绘绝对定位弹层 |
 | 验证 | `cargo test --workspace -j 2`：34 个测试目标全绿、**442 项通过 / 0 失败**；`cargo build -p rds-app -j 2` 通过 |
 

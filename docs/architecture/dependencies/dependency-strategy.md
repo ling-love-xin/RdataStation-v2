@@ -58,7 +58,7 @@ duckdb = { workspace = true, features = ["extra"] }      # 需要额外 feature 
 | `default-members = ["crates/app"]` | 已启用（根 `Cargo.toml`） | 裸 `cargo build/check/run` 只构建 app 依赖图，跳过 `plugin`（extism → wasmtime，图上最重且不在 app 图上）。代价：`cargo test` 默认不覆盖全部 crate，需显式 `--workspace`；编辑器侧 rust-analyzer 默认仍按整个 workspace 检查，如需一致要在编辑器侧关掉 `check.workspace` |
 | `[profile.dev.package."*"] debug = false` | 已启用（根 `Cargo.toml`） | 第三方依赖不产 debuginfo（本仓 crate 保留 `line-tables-only`），降低链接与磁盘开销。代价：依赖内部帧无行号；改动后需一次依赖全量重建 |
 | `tokio` feature 收敛（`full` → 按需） | 已评估：不做 | 实测代码用到 `rt` / `rt-multi-thread` / `macros` / `sync` / `time` / `io-util` / `fs` / `net`（未用 `process` / `signal` / `test-util`）。收敛只能省下 tokio 少许可选依赖，却会因 feature 变更让 tokio 及其全部依赖方重新编译一次，收益低于成本 |
-| `duckdb` 关掉 `bundled`，改用**外部预编译库** | 待评估（下一步） | `bundled` 把 DuckDB 的 C++ 内核一起编（单次重建数分钟，并发链接 OOM → 全仓固定 `-j 2`）。改用外部构建产物 / 系统库后，内核重编不再进入日常循环；**扩展仍走 `INSTALL` 到指定目录**（见 §5，与内核编译解耦） |
+| `duckdb` 关掉 `bundled`，改用**外部预编译库** | ✅ 已启用（2026-09-16） | 内核不再进构建循环：库由 `tools/fetch-duckdb.sh` 取到 `third_party/duckdb/<版本>/`（gitignore），`.cargo/config.toml` 的 `DUCKDB_LIB_DIR` 指向它（`relative = true`），运行时 dll 由 `crates/engine/build.rs` 拷到 `target/<profile>/{,deps}`。设计 / 升级 / 排错见 `duckdb-linking.md`；`target/` 体积用 `tools/target-guard.sh`（默认 60 GB 提醒 + `--clean`）。 |
 | 日常只跑 `cargo check` / `cargo check -p <crate>` | 约定 | 不生成代码、不链接、不产 PDB |
 | Windows 启用 `rust-lld` | 待评估 | 链接耗时下降；需 `.cargo/config.toml`，与 MSVC 工具链兼容性需实测 |
 

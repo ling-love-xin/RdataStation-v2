@@ -1,3 +1,5 @@
+# DuckDB 预编译库（tools/fetch-duckdb.sh 取；设计见 docs/architecture/dependencies/duckdb-linking.md）
+/third_party/duckdb/*/
 /target
 **/*.rs.bk
 node_modules/

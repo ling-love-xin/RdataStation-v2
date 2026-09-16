@@ -184,7 +184,7 @@
   - `cargo test -p rds-workbench --test connection_staging`（暂存：切换 / 补位 / 转正式 / 标签与分组快照）
   - `cargo test -p rds-engine --lib org`（组织元数据：标签检索 / 分组多对多 / 替换语义 / 全局库降级）
   - `cargo test -p rds-workbench --test connection_template`（模板：导出无密码 / 导入还原 / 非法输入拒绝）
-- **编译/测试统一加 `-j 2`**（或用 alias `cargo test-all`）：并发链接 DuckDB 静态库会耗尽内存，触发 rustc `STATUS_STACK_BUFFER_OVERRUN` 崩溃并拖慢宿主（Zed 卡顿）；`.cargo/config.toml` 已含 `RUST_MIN_STACK` 补偿与 alias 说明
+- **编译/测试统一加 `-j 2`**（或用 alias `cargo test-all`）：并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接），触发 rustc `STATUS_STACK_BUFFER_OVERRUN` 崩溃并拖慢宿主（Zed 卡顿）；`.cargo/config.toml` 已含 `RUST_MIN_STACK` 补偿与 alias 说明
 - UI：`cargo run -p rds-app -j 2` 手动走通 §3 场景清单（实例日志可重定向：`target/rds-app.log` / `target/rds-app.err.log`；若运行期报主线程栈溢出，参记录 ㉑）
 - 主题：明暗切换核对 token（theme-preview.html 色卡为基准）
 

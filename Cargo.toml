@@ -62,7 +62,13 @@ gpui-kit = "0.6.1"
 # ===== 分析引擎与数据库驱动 =====
 # arrow 主版本由 duckdb 决定（两端之间传 RecordBatch，必须是同一 arrow），
 # 因此 arrow 只在 duckdb 升级时跟着升。
-duckdb = { version = "1.10505.0", features = ["bundled"] }
+#
+# 内核走**动态链接**（不再开 `bundled`）：编 DuckDB 的 C++ 内核单次要数分钟，
+# 且并发链接静态库会耗尽内存（全仓 `-j 2` 的由来）。库由 `tools/fetch-duckdb.sh`
+# 取到 `third_party/duckdb/<版本>/`，路径在 `.cargo/config.toml` 的 `[env]`。
+# **crate 版本与库版本必须成对升级**：`1.10505.0` ↔ DuckDB `v1.5.5`（映射规则：
+# 第二段十进制数 `10505` → `1.5.5`，见 `libduckdb-sys` 的 build script）。
+duckdb = { version = "1.10505.0" }
 arrow = "58.4.0"
 
 # 语义着色 provider 的类型（`DocumentRangeSemanticTokensProvider` 的入参 / 返回值）。

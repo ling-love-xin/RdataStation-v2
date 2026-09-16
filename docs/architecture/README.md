@@ -66,6 +66,7 @@
 | `mock/mock-architecture.md` | Mock 数据生成**设计理念与架构** | **六条不变式**（含生成不写库 · 出口不覆盖）/ 概念模型（配置 · 列 · 临时表 · 出口）/ 分层与 crate 归属（**视图随 crate，宿主经 `MockHost` 注入**）/ 状态所有权与副作用边界 / 数据流（含生成不写库与 cache-aside 取列）/ D1–D19 决策表 / 降级矩阵 / 性能与可观测 / **§9 已知问题（含 v1 迁移五项实证 + 锁重入死锁教训）** / 测试策略 / 实现位置映射 |
 | `mock/mock-dev-plan.md` | Mock 数据生成开发方案 | 现状盘点（迁移完整度对照）/ **Phase A 完成项 A1–A17（含语义回归 · 方案①排版 · 四出口 · 导入结构）与验收证据** / Phase B–E 任务与落点（已标完成态）/ 测试场景 T1–T16 / 风险 R1–R8 / 验证命令 / 进度记录 |
 | `dependencies/dependency-strategy.md` | 依赖治理 | 版本唯一入口 / 升级流程 / 编译时间手段 / 跨大版本待办 |
+| `dependencies/duckdb-linking.md` | DuckDB 内核动态链接 | 为什么不再 `bundled`（编译时间 / 内存 / 体积）/ 库的落位（`third_party/duckdb/<版本>`，gitignore）/ 取库脚本 / 运行时 dll 拷贝 / 升级步骤与排错 / **§9 `target/` 体积治理（60 GB 提醒 + `--clean`）** |
 
 ## 关联目录
 

@@ -571,6 +571,6 @@ cargo check --workspace --all-targets -j 2
 cargo test -p rds-workbench --test ui_contract -j 2
 ```
 
-> `cargo` 命令固定 `-j 2`：DuckDB 静态库并发链接会 OOM（见 `project-dev-plan.md` §0 工程配置）。
+> `cargo` 命令固定 `-j 2`：并发链接重型 crate 会 OOM（DuckDB 已改动态链接）（见 `project-dev-plan.md` §0 工程配置）。
 
 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。

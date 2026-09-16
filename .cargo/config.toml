@@ -14,8 +14,9 @@
 # 根 Cargo.toml 设了 default-members = ["crates/app"]，
 # 裸 `cargo check` / `cargo test` 只覆盖 app 依赖图（跳过 plugin → wasmtime）
 check-all = "check --workspace --all-targets"
-# -j 2：workspace 全量编译时多个 rustc 同时链接 DuckDB 静态库会耗尽内存，
-# 触发 rustc STATUS_STACK_BUFFER_OVERRUN / link.exe LNK1102（内存不足）
+# -j 2：workspace 全量编译时多个 rustc 同时链接会耗尽内存（历史上最重的是 DuckDB
+# 静态库，现已改动态链接，见 docs/architecture/dependencies/duckdb-linking.md）；
+# 保留 -j 2 是因为其余重型 crate 的 codegen / 链接仍会吃满内存与宿主资源。
 test-all = "test --workspace -j 2"
 clippy-all = "clippy --workspace --all-targets"
 
@@ -25,3 +26,10 @@ clippy-all = "clippy --workspace --all-targets"
 # STATUS_STACK_BUFFER_OVERRUN（0xc0000409）中断编译——表现为 `cargo check` 正常、
 # `cargo test` / `cargo build` 崩溃。抬高 cargo 派生的 rustc 线程栈即可稳定通过。
 RUST_MIN_STACK = "268435456"
+
+# DuckDB 内核：**动态链接**仓库内的预编译库（设计 / 升级 / 排错见
+# docs/architecture/dependencies/duckdb-linking.md）。
+#   - 目录相对本文件（`relative = true`）：开发机不需要设任何环境变量；
+#   - 库不在位时 `crates/engine/build.rs` 会给出一条可执行的提示；
+#   - 不开 `force`：换版本 / 换机器时可用自己的 DUCKDB_LIB_DIR 覆盖。
+DUCKDB_LIB_DIR = { value = "third_party/duckdb/1.5.5", relative = true }

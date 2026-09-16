@@ -49,7 +49,7 @@
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
 | **业务在 crate、视图在 workbench** | 递归复制 / 搜索 / 替换 / 引用重定位等语义都在 `crates/scratchpad`，可单测（14 项基线）；workbench 只做编排与渲染 | 架构 §7.1 |
-| **命令要限并发** | 并发链接 DuckDB 静态库会耗尽内存：`cargo check/test` 必须带 `-j 2` | 本文 §5 |
+| **命令要限并发** | 并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）：`cargo check/test` 必须带 `-j 2` | 本文 §5 |
 | **设计先于实现** | 本轮补模块入口 + 架构 + 使用手册；原型/开发方案的进度记录逐轮追加 | 本文 §6 |
 
 ## 2. 边界
@@ -95,7 +95,7 @@
 ## 5. 测试与验证
 
 ```bash
-# 类型检查（必须 -j 2：并发链接 DuckDB 静态库会耗尽内存）
+# 类型检查（必须 -j 2：并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接））
 env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" \
   check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2
 

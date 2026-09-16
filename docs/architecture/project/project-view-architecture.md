@@ -163,4 +163,4 @@ cargo test -p rds-project --lib -j 2           # 只跑项目 crate（23 项，�
 cargo build -p rds-app -j 2                    # codegen 验证（check ≠ 能出机器码）
 ```
 
-注意：`cargo test --workspace` **必须带 `-j 2`**（并行链接 DuckDB 静态库会耗尽内存，见 `.cargo/config.toml` 的 `test-all` 别名）。
+注意：`cargo test --workspace` **必须带 `-j 2`**（并行链接重型 crate 会耗尽内存（DuckDB 已改动态链接），见 `.cargo/config.toml` 的 `test-all` 别名）。

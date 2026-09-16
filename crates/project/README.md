@@ -84,6 +84,6 @@
 cargo test -p rds-project -j 2          # lib（29）+ 集成（1 名册 + 3 存储）
 ```
 
-- 全量测试**必须** `cargo test --workspace -j 2`：并行链接 DuckDB 静态库会耗尽内存。
+- 全量测试**必须** `cargo test --workspace -j 2`：并行链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。
 - 视图测试不要用 `use gpui_kit::*` / `use super::*` 通配导入（会让 `#[test]` 解析到 gpui 的 `test` 宏自身 → 无限递归）；细则见 `.agents/skills/gpui-kit-dev/SKILL.md`「窗口测试」。
 - 依赖方向：`project → engine / shared / gpui-kit`，不得依赖 `workbench` 或 `settings`。

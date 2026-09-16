@@ -91,7 +91,7 @@ commands ──► services ──► dbi ──► driver ──► native
 1. 依赖方向：`engine → shared`、`engine → connection`（驱动工厂与注册表引用连接层，见 `Cargo.toml` 注释）；**engine 不得依赖任何 Feature crate**
 2. `sqlglot-rust` 只允许出现在本 crate；其它 crate 需要新能力时，先按「先实测再封装」提升为 `engine::sql::*`
 3. 改表结构必须**新增**迁移文件；库文件路径只从 `migration::global_init` 取
-4. 全量编译与测试必须限制并发（`cargo check-all` / `cargo test-all` 别名已含 `-j 2`）：并发链接 DuckDB 静态库会耗尽内存（`LNK1102` / `STATUS_STACK_BUFFER_OVERRUN`）
+4. 全量编译与测试必须限制并发（`cargo check-all` / `cargo test-all` 别名已含 `-j 2`）：并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）（`LNK1102` / `STATUS_STACK_BUFFER_OVERRUN`）
 5. 需要外部服务的用例用 `#[ignore = "需要运行中的 MySQL 服务"]` 或环境变量守卫，默认 `cargo test` 不得依赖外部服务（现基线：`--lib` 23 项忽略）
 
 ## 测试与验证
