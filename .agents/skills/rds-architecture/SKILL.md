@@ -29,6 +29,7 @@ shared ────────────► (gpui-kit / 第三方)
 - 只有 ≥2 个真实使用方的稳定能力才进 `shared/`
 - 依赖必须无环，始终指向更小、更稳定的 crate
 - **运行时数据路径只能走 `paths::*`**：不得在 crate 里自己拼 `APPDATA` / `LOCALAPPDATA` / `env::temp_dir()` / `"RdataStation"` 目录名（口径与目录布局见 `docs/architecture/runtime/data-paths.md`）
+- 开发期数据与临时目录由 `.cargo/config.toml` 的 `[env]` 钉在仓库内（`RDS_HOME=.rds`、`TEMP/TMP/TMPDIR=.rds/tmp`）；系统盘上的历史测试临时目录用 `tools/clean-temp.sh` 清
 
 ## crate 归属判定标准
 

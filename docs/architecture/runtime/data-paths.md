@@ -87,7 +87,9 @@ paths::extensions_dir()  // home/extensions
 
 | 风险 | 处理 |
 | --- | --- |
-| 测试大量用 `env::temp_dir()`（各 crate 的 `rds_*` 前缀临时目录） | **测试不改**（仍用系统临时目录，避免 `set_var` 并发与污染）；只要求生产代码走 `paths::temp_dir()`。Rust 2024 下测试内 `set_var` 是 `unsafe` 且与并行测试冲突，不值得 |
+| 测试大量用 `env::temp_dir()`（各 crate 的 `rds_*` 前缀临时目录） | **测试代码不改**（不引入 `set_var`），而是由 `.cargo/config.toml` 把 `TEMP`/`TMP`/`TMPDIR` 钉到 `<repo>/.rds/tmp`（**必须 `force = true`**：`[env]` 默认不覆盖环境里已存在的变量，而 `TEMP` 天生就存在）——一行代码不改，测试垃圾就从系统盘挪到仓库内。历史积压用 `tools/clean-temp.sh` 清（默认 dry-run） |
+| 测试与风险 | 实际做法 |
+| --- | --- |
 | **测试会往产品数据根写**：开发机上跑 `cargo test` 会在 `<repo>/.rds/data` 落 `encryption-salt` / `machine-id` / `sql_history.json` 与空目录（测试调用的是产品代码里的全局便捷路径） | 密钥类文件由迁移的**覆盖例外**兜住（§10.1）；其余是无害残留。想彻底干净就在首次真机启动前删掉整个 `.rds/` 重建（目录会自动重建并触发迁移） |
 | DuckDB spill 放到项目盘影响性能 | `RDS_TEMP_DIR` 单独覆盖；文档写明取舍 |
 | 安装到 `Program Files`（目录不可写） | 启动探测可写性 → 回退 `%LOCALAPPDATA%/RdataStation` + 日志提示 |
@@ -241,6 +243,8 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 | 启动最早处：TEMP 重定向 → 建目录 → 迁移 → 打印数据根 | `crates/app/src/main.rs::main` 的前三步 |
 | 单元测试（8 条：派生同根 / 迁移路由 / 只补不盖 / **密钥覆盖** / 递归复制） | `crates/paths/src/tests.rs` |
 | 依赖登记 | 根 `Cargo.toml`（`paths = { path = "crates/paths", package = "rds-paths" }`）；`app` / `engine` / `shared` / `settings` / `project` / `workbench` 六处 `paths.workspace = true` |
+| 开发期数据根 / 临时目录的钉住 | `.cargo/config.toml` 的 `[env]`：`RDS_HOME = .rds`（不开 `force`，命令行可用）、`TEMP`/`TMP`/`TMPDIR = .rds/tmp`（**必须 `force`**） |
+| 临时目录积压清理 | `tools/clean-temp.sh`（默认 dry-run；只碰 `$TEMP` 顶层 `rds_*` 条目，`RdataStation*` 明确不碰） |
 
 替换的 12 处见 §9.1。**实施中的两处偏差 + 一处实测发现的坑**：
 
@@ -277,23 +281,29 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 | `cargo check --all-targets` | 0 error / 0 warning（app 依赖图） |
 | `cargo check -p rds-engine -p rds-settings -p rds-shared -p rds-project -p rds-workbench -p rds-paths --all-targets` | 通过（含各 crate 的测试目标） |
 | `cargo test -p rds-paths` | 8 / 8 |
-| `cargo test -p rds-engine --lib` | 310 / 310（23 ignored） |
+| `cargo test -p rds-engine --lib` | 310 / 310（23 ignored）；接通日志后 316 / 316（+6：脱敏 4 + 文件层 2） |
 | `cargo test -p rds-shared -p rds-settings --lib` | 22 / 22、21 / 21 |
 | `cargo test -p rds-project --lib` | 29 / 29 |
 | `cargo test -p rds-workbench --lib panels::` / `--test ui_contract` / `--test dialog_host_layer` | 10 / 10、7 / 7、4 / 4 |
 
-实测：`cargo test -p rds-paths` 后 `<repo>/.rds/{config,data,logs,tmp,extensions}` 均被创建
+测试临时目录收进仓库后另测：`cargo test -p rds-engine --lib persistence::connection_draft_store`
+建的两个 `rds_draft_store_*` 出现在 `<repo>/.rds/tmp`，系统 TEMP 的 `rds_*` 计数不增（以前每跑一次多几个）；
+历史积压 2583 个条目 / 1.17 GB 已由 `tools/clean-temp.sh` 清掉（系统 Temp 1.7 GB → 528 MB）。
+
+**§9.4 的真机验收已于当日完成**（`cargo build -p rds-app` 后独立 `RDS_HOME` 跑 30 秒），实测：
+
+| 验收项 | 实测 |
+| --- | --- |
+| 五个派生目录 | `<RDS_HOME>/{config,data,logs,tmp,extensions}` 均出现 |
+| 旧数据迁移 | `复制 26 项（跳过 0 项）`，含 `settings.json` / `system/` / `samples/` / 密钥库 |
+| 密钥迁移 | `encryption-salt` / `machine-id` 与 `%LOCALAPPDATA%` 那份 **md5 完全一致**（存量连接密码不会失效） |
+| 文件日志 | `logs/app.2026-09-16` 有内容，与 stderr 一致 |
+| 库日志 | `app_logs` 7 行，字段 JSON 正常（`[["data_root","…"],["origin","…"]]`） |
+| `%TEMP%` | 无新增 `RdataStation*` 目录 |
+| 应用本体 | 主题加载、项目库（`<项目>/.RSmeta`）正常打开 |
+
 （`RDS_HOME` 由 `.cargo/config.toml` 钉到仓库根，且 **cargo 会把它转成绝对路径**——这一点很关键：
 若它保持相对字符串，二进制会把它解析成"相对当前工作目录"，换目录启动就换数据位置）。
-
-**未做：§9.4 的真机验收**（`RDS_HOME=<临时目录> cargo run -p rds-app`）——本次没有构建 app 二进制
-（`target/debug/rds-app.exe` 不存在，一次完整链接不划算），且当时工作区有未提交的 editor 改动。
-首次真机启动请对照三条：
-
-1. `<RDS_HOME>` 下出现 `config/ data/ logs/ tmp/ extensions/`；
-2. 控制台出现 `[startup] 数据根 <路径>（来源：…）`，且旧数据存在时多一行迁移摘要；
-3. `%APPDATA%/RdataStation` 的内容被复制进 `<RDS_HOME>/data`（只补不盖），
-   且 `%TEMP%` 下不再新增 `RdataStation*` 目录。
 
 ### 10.4 仍未做（明确不在本次范围）
 
@@ -303,4 +313,4 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 | 插件目录 / wasm 缓存 / sidecar 工作目录 | 三期 P3-a，见 `../plugin/plugin-architecture.md` §6 |
 | `~/.rdatastation/jdbc-drivers`（`driver/loader.rs:177`） | 与 `WasmDriverDiscovery` 同族，且 `JdbcDriverDiscovery::load_drivers` 是空实现（返回空 Vec）——随 P3-a 一起定 |
 | `~/.ssh/known_hosts` | 有意不改（跨应用用户资产）；§3 的 `RDS_KNOWN_HOSTS` 覆盖**未实现** |
-| 测试链路的 `env::temp_dir()` | 有意不改（§5）：测试仍用系统临时目录，`set_var` 在 Rust 2024 是 `unsafe` 且与并行测试冲突 |
+| 测试代码里的 `env::temp_dir()` | **不改代码**（不引入 `set_var`）：由 cargo 把 `TEMP` 钉到 `.rds/tmp`（§5）。不经 cargo 跑的场景（直接跑测试二进制）仍会落系统临时目录，积压用 `tools/clean-temp.sh` 清 |

@@ -40,3 +40,17 @@ DUCKDB_LIB_DIR = { value = "third_party/duckdb/1.5.5", relative = true }
 # `.rds/`（已在忽略规则里，不入库）。
 #   - 不开 `force`：命令行里显式 `RDS_HOME=<某处> cargo run` 仍然优先。
 RDS_HOME = { value = ".rds", relative = true }
+
+# 系统临时目录也收到仓库内（`cargo test` / `cargo run` 的子进程都会拿到）。
+# 为什么：各 crate 的测试在 `env::temp_dir()` 下建 `rds_*` 目录却不清理（设计上允许，
+# 见 data-paths.md §5），实测堆到 2581 个 / 1.2 GB——吃的是系统盘的临时目录。
+# 钉到 `.rds/tmp` 后这类垃圾全落在仓库内（D 盘、已忽略），且不改一行测试代码。
+# 注意：cargo 的子进程（rustc / build script / 测试二进制）都会用这个值，
+# 所以编译期临时文件也会跟着进来；不想这样就在命令行导回系统 TEMP。
+#
+# **必须 `force = true`**：`[env]` 默认不覆盖"环境里已经存在"的变量，而 TEMP/TMP
+# 天生就存在（实测不加 force 时子进程拿到的仍是系统 TEMP）。代价是命令行
+# `TEMP=<某处> cargo test` 不再能覆盖（上面 RDS_HOME 不开 force，那个反而可以）。
+TEMP = { value = ".rds/tmp", relative = true, force = true }
+TMP = { value = ".rds/tmp", relative = true, force = true }
+TMPDIR = { value = ".rds/tmp", relative = true, force = true }
