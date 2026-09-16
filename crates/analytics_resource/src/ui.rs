@@ -1,8 +1,12 @@
 //! 资产库（M6）视图尺寸常量。
 //!
-//! 与 `crates/workbench/src/ui.rs` 的设计值同源（同一套 rem 基准与 Tailwind 对照口径），
-//! 但**常量在本 crate 内声明**：视图随能力同 crate（与 `project::ui` 同例），
-//! 依赖方向不允许 feature 反向读 workbench 的常量。
+//! 与 `crates/workbench_shell/src/ui.rs` 的设计值同源（同一套 rem 基准与 Tailwind 对照口径），
+//! 但**常量在本 crate 内声明**：视图随能力同 crate（与 `project::ui` 同例）。
+//!
+//! 订正（2026-09-16）：原文写「依赖方向不允许 feature 反向读 workbench 的常量」——
+//! 尺寸常量已下沉到外壳 crate `crates/workbench_shell`（只依 gpui-kit），**本 crate 现在可以依赖它**。
+//! 本文件自持是**现状**而非硬约束；是否合并到外壳（消除同源双份）仍未拍板，详见
+//! `docs/architecture/layout/panels-coupling-plan.md` §9。
 //!
 //! 值 = 设计倍率（`rems(x)` 的基准是主题字号，默认 16px，见 `rds-ui-spec`）。
 

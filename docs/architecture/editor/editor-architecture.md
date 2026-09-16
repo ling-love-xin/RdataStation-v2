@@ -509,7 +509,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | `.rdsnote` 读写 | `crates/editor/src/persist.rs`（第二期接入项目版本链） |
 | 宿主装配（中央区 / 对话框层 / 属性面板） | `crates/workbench/src/view.rs`（`init_workspace` 中央区改装配 editor 宿主）+ `components/project_host.rs`（桥不变） |
 | Action 与快捷键 | `crates/editor/src/commands.rs` + `crates/app/src/main.rs`（`bind_keys`，key_context `editor` / `editor-sql` / `editor-notebook`） |
-| 尺寸常量 | `crates/editor/src/ui.rs`（或复用 `crates/workbench/src/ui.rs`，见 §13 #6） |
+| 尺寸常量 | `crates/editor/src/ui.rs`（现状自持；`crates/workbench_shell/src/ui.rs` 已可被任何特性 crate 依赖，合并仍开放——见 §13 #6） |
 
 ---
 

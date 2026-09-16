@@ -38,7 +38,7 @@
 | **状态所有权清晰** | 对话框状态挂 `EditorPanel`（`Rc<ConnectionDialogState>`）；副作用（订阅 / 宿主重绘）一律在面板入口，`render` 是模式同步的权威点 | 架构 §4、#30 |
 | **对话框层挂载机制** | `window.open_dialog` + 宿主 `Root::render_dialog_layer`；`cx.notify` 只重渲染子树 → 打开/关闭后显式 `notify_host` | 架构 §4.2 |
 | **渲染热路径收敛** | 驱动派生数据按“驱动 id + 声明原文”缓存、地址占位“变化才写”（`set_placeholder` 是无条件 notify）、暂存列表用 `LiveEntryView` 逐行短借用 | 架构 #67、#73 |
-| **组件化 + 尺寸契约** | Tab 条 / 分段控件 / 开关一律 gpui-kit 组件（`TabBar::underline` / `segmented` / `Switch`）；模块内**无裸 `px(...)`**，尺寸登记在 `crates/workbench/src/ui.rs`，由 `ui_contract` 契约测试扫描 | 架构 #84–#88 |
+| **组件化 + 尺寸契约** | Tab 条 / 分段控件 / 开关一律 gpui-kit 组件（`TabBar::underline` / `segmented` / `Switch`）；模块内**无裸 `px(...)`**，尺寸登记在 `crates/workbench_shell/src/ui.rs`，由 `ui_contract` 契约测试扫描 | 架构 #84–#88 |
 | **单一写入口** | 结果行 `set_result{,_ok,_line}`、标签 `overlay_authoritative_tags`（权威表优先）、分组/标签同步收在服务层 | 架构 #82、#89 |
 
 ### 工程与文档

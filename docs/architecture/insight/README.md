@@ -82,7 +82,7 @@
 | 规则资产（18 条 TOML） | `crates/insight/insight-rules/` |
 | 规则索引表迁移 | `crates/engine/migrations/global/024_*.sql`、`project_meta/019_*.sql`（现状：✅ 已落地） |
 | 快照表迁移 | `crates/engine/migrations/project_analysis/002_insight_storage.sql`、`project_meta/008_insight_snapshots.sql`（✅ 已迁入） |
-| 尺寸常量 | `crates/workbench/src/ui.rs` |
+| 尺寸常量 | `crates/workbench_shell/src/ui.rs` |
 | 契约测试范围 | `crates/workbench/tests/ui_contract.rs` |
 
 数据链路：`insight（画像 / 评分 / 规则编排）→ engine::DuckDbService（临时表）或 engine::SqlService（源库采样）→ 目标库`；快照：`insight → InsightColumnStore（项目 DuckDB）+ InsightMetaStore（项目 SQLite）`。**无 HTTP / IPC 层。**

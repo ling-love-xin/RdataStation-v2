@@ -42,7 +42,7 @@
 | **两道护栏** | 同项目二次打开由 `project` crate 的 `ProjectLock` 拦截（只读/仍要打开/取消）；只读打开时草稿箱全面禁写并给状态栏提示 | 架构 §7.3 |
 | **不做 multi-root** | 多根会把会话 / 监控 / 文件元数据的复杂度抬高一个量级，与本模块「应用实例即项目」的定位不符 | 架构 §7.4 |
 | **树不承担编辑态** | 脏点、冲突 Diff、多文件 Tab 属编辑器宿主（Phase C）；树只发 `OpenFile(绝对路径)` 语义 | 原型 §9.4 |
-| **零裸值 / 组件不手搓** | 颜色一律 `cx.theme()`（含产品 token `search.match.background`）；尺寸进 `crates/workbench/src/ui.rs`；列表/按钮/菜单用 gpui-kit 组件 | 原型 §6–§7 |
+| **零裸值 / 组件不手搓** | 颜色一律 `cx.theme()`（含产品 token `search.match.background`）；尺寸进 `crates/workbench_shell/src/ui.rs`；列表/按钮/菜单用 gpui-kit 组件 | 原型 §6–§7 |
 
 ### 工程与文档
 
@@ -74,7 +74,7 @@
 | `crates/workbench/src/services/scratchpad_jobs.rs` | 草稿箱后台任务：单工作线程 + tokio 运行时执行加载与重操作（导入/粘贴/清空回收站/搜索/替换），结果队列 + 请求序号防过期 |
 | `crates/workbench/src/panels/`（`SidebarPanel`） | 草稿箱面板：`render_scratchpad`（工具栏 / 搜索 / 树 / 引用 / 回收站 / 撤销栏 / 状态行）、`scratchpad_row`、`render_scratchpad_edit_row`、`render_scratchpad_empty_state`、`request_scratchpad_load` / `ensure_scratchpad_pump`、`ensure_scratchpad_watch`（外部改动监控）、剪贴板与多选、键盘导航 |
 | `crates/workbench/src/panels/`（`EditorPanel`） | 内容搜索结果面板与替换栏：`render_scratchpad_search_pane`、`replace_scratchpad_all` |
-| `crates/workbench/src/{commands,ui}.rs` | `scratchpad` key context 动作；`SCRATCHPAD_GROUP_MAX_HEIGHT` / `SCRATCHPAD_EMPTY_ICON_SIZE` 等尺寸常量 |
+| `crates/workbench/src/commands.rs`、`crates/workbench_shell/src/ui.rs` | `scratchpad` key context 动作；`SCRATCHPAD_GROUP_MAX_HEIGHT` / `SCRATCHPAD_EMPTY_ICON_SIZE` 等尺寸常量（外壳 crate，经 `crate::ui` 重导） |
 | `crates/workbench/src/view.rs`（`WorkbenchView`） | 宿主：消费 `Shared::open_file_request` → `open_in_editor`（把草稿打开到中央编辑器，同路径只激活） |
 | `crates/app/src/main.rs` | 快捷键绑定（`ctrl-a` / `f2` / `delete` / `escape` / `↑↓` / `enter` / `ctrl-n`，context = `scratchpad`） |
 | `crates/scratchpad/README.md` | crate 入口（特点提炼，不复述设计） |

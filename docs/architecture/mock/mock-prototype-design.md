@@ -9,7 +9,7 @@
 | 项 | 取值 | 来源 |
 | --- | --- | --- |
 | 落位（配置与出口） | 右侧 Dock 面板（`RightPanel::Mock`），与洞察 / 历史共用 Dock 槽位 | `crates/workbench/src/view.rs` |
-| 面板宽度 | `ui::RIGHT_DOCK_WIDTH` = 17.5rem（280px）起步；**未发现拖拽调宽**（`DockLayout::tabs()` + `set_dock_size` 固定起步宽） | `crates/workbench/src/ui.rs` |
+| 面板宽度 | `ui::RIGHT_DOCK_WIDTH` = 17.5rem（280px）起步；**未发现拖拽调宽**（`DockLayout::tabs()` + `set_dock_size` 固定起步宽） | `crates/workbench_shell/src/ui.rs` |
 | 落位（字段与预览） | **中央编辑区 tab**「Mock · {目标表}」（`MockDetailView` 加入编辑区 tab 组） | `crates/workbench/src/view.rs` |
 | 面板头 | Dock 的 `ComponentPanel::title/tab_name`（高度 `ui::PANEL_HEADER_HEIGHT` = 2.25rem） | 同上 |
 | 视图归属 | **随 mock crate**（`crates/mock/src/mock_view.rs`，与 `project::ui` / `settings_view` 同例） | 架构 §3 / 决策 D11 |

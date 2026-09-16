@@ -346,7 +346,7 @@
 | 内容搜索（含命中区间） | `crates/scratchpad/src/store.rs`（`search_file_content` / `literal_match_spans`）+ `models.rs::SearchMatch::match_spans` |
 | 面板视图（工具栏/树/虚拟列表/空态/引用/回收站/撤销栏） | `crates/workbench/src/panels/`（`SidebarPanel`：`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move`） |
 | 内容搜索结果 + 替换栏 | `crates/workbench/src/panels/`（`EditorPanel`：`render_scratchpad_search_pane` / `replace_scratchpad_all`） |
-| 快捷键 / 尺寸常量 | `crates/workbench/src/commands.rs`、`crates/workbench/src/ui.rs`、`crates/app/src/main.rs` |
+| 快捷键 / 尺寸常量 | `crates/workbench/src/commands.rs`、`crates/workbench_shell/src/ui.rs`、`crates/app/src/main.rs` |
 | 左 Dock 装配（`LeftPanel::Draft`） | `crates/workbench/src/panels/`（`SidebarPanel`） |
 | 当前项目会话 | `crates/workbench/src/services/project_session.rs`、`crates/app/src/main.rs` |
 | 中央编辑区草稿文件模式（Phase C） | `crates/workbench/src/panels/`（`EditorPanel`） |

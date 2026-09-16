@@ -7884,6 +7884,7 @@ dependencies = [
  "gpui-kit",
  "rds-editor",
  "rds-engine",
+ "rds-insight",
  "rds-settings",
  "rds-workbench",
  "tokio",
@@ -8124,6 +8125,7 @@ dependencies = [
  "duckdb",
  "gpui-kit",
  "percent-encoding",
+ "rds-analytics-resource",
  "rds-connection",
  "rds-database",
  "rds-editor",
@@ -8134,6 +8136,7 @@ dependencies = [
  "rds-scratchpad",
  "rds-settings",
  "rds-shared",
+ "rds-workbench-shell",
  "rfd",
  "rusqlite",
  "serde",
@@ -8142,6 +8145,13 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "rds-workbench-shell"
+version = "0.1.0"
+dependencies = [
+ "gpui-kit",
 ]
 
 [[package]]

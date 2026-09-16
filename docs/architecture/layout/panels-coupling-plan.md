@@ -1,6 +1,8 @@
-# 面板跨模块耦合治理计划（P0/P1）
+# 面板跨模块耦合治理计划（P0/P1/P2）
 
-状态：待执行。依据见 `panels-modules.md` §3（12 个 `Shared` 字段跨模块）与 §4（18 处事件路径同步 I/O）。
+状态：**S1–S4 已完成**（2026-09-16）；**A1–A3 已完成**（`crates/workbench_shell` 已建，仅承 `ui.rs`）；
+**A4/A5 待拍板**——实测发现原计划的下沉对象会造成新的循环依赖，依据见 §9「实测订正」。
+原始依据见 `panels-modules.md` §3（12 个 `Shared` 字段跨模块）与 §4（18 处事件路径同步 I/O）。
 
 ## 1. 目标与验收口径
 
@@ -108,6 +110,8 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 | `EditorBridge` / `ScratchpadBridge` / `NavBridge` / `HostBridge` | `crates/workbench/src/panels/editor.rs`、`scratchpad_panel.rs`、`nav.rs`、`view.rs`（构造期注入，宿主在 `init_workspace` 装配） |
 | 端口接线先例 | `crates/editor/src/shared.rs`、`crates/workbench/src/services/editor_*.rs` |
 | 后台任务形态（P1） | `crates/workbench/src/services/scratchpad_jobs.rs`、`nav_jobs.rs` |
+| `Shared` 字段白名单契约（S4） | `crates/workbench/tests/ui_contract.rs` |
+| 外壳 crate（A1–A3） | `crates/workbench_shell/`（包名 `rds-workbench-shell`） |
 
 ## 7. P1 执行清单（未做，逐点机械可执行）
 
@@ -156,12 +160,12 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 
 | 步 | 动作 | 验收 |
 | --- | --- | --- |
-| A1 | 新建 crate 骨架（`Cargo.toml` + `lib.rs` + `ui.rs`）；workbench 的 `src/ui.rs`（169 行常量）纯位移迁入 | `cargo check -p rds-workbench` 绿 |
-| A2 | workbench：`Cargo.toml` 加依赖；`lib.rs` 把 `pub mod ui;` 换成 `pub use rds_workbench_shell::ui;`（下游 `crate::ui::*` 不变） | 现有 `ui_contract` 契约 1（尺寸常量）全绿 |
-| A3 | `ui_contract.rs` 的 `include_str!` 路径改为指向新 crate（契约 1 需读源码；2a/2b 清单里加上新文件） | 契约测试 7 项全绿 |
-| A4 | 同手法下沉 `Shared`（298 行）+ 连带必需的纯数据枚举（`LeftPanel` / `RightPanel` / `SidebarMode` / `ConnectionItem`，现位于 `view.rs`） | 组件层与宿主仍编译；`crate::panels::Shared` 不变 |
-| A5 | 同手法下沉 `services/nav_runtime.rs`（478 行，nav 视图依赖 33 处）；先查它的 `crate::services::*` 依赖面，必要时一并下沉 | 同上 |
-| A6 | 反向依赖校验：`cargo tree -p rds-workbench` / `-p rds-database` 无环；写进本文件 | 无环 + 三段测试绿 |
+| A1 | 新建 crate 骨架（`Cargo.toml` + `lib.rs` + `ui.rs`）；workbench 的 `src/ui.rs`（169 行常量）纯位移迁入 | ✅ 已做：`crates/workbench_shell/`（包名 `rds-workbench-shell`，依赖键 `workbench_shell`） |
+| A2 | workbench：`Cargo.toml` 加依赖；`lib.rs` 把 `pub mod ui;` 换成 `pub use workbench_shell::ui;` | ✅ 已做：全仓 `crate::ui::*` / `rds_workbench::ui::*` 零改动 |
+| A3 | `ui_contract.rs` 的 `include_str!` 路径改为指向新 crate | ✅ **无需改动**（订正）：契约 1 是 `use rds_workbench::ui::*` 直接读常量（非 include_str），且契约 2a/2b 的清单本来就不含 `ui.rs`（它正当地写着 `px(1.)`） |
+| A4 | 同手法下沉 `Shared` + 纯数据枚举（`LeftPanel` / `RightPanel` / `SidebarMode` / `ConnectionItem`） | ⛔ **会造环，待拍板**——见下方「实测订正」 |
+| A5 | 同手法下沉 `services/nav_runtime.rs`（478 行） | ⛔ **同样会造环**——见下方「实测订正」 |
+| A6 | 反向依赖校验：`cargo tree` 无环 | ✅ 已做（A1–A3 范围）：`cargo tree -p rds-workbench-shell --depth 1` = **仅 gpui-kit**，零内部依赖；`workbench → workbench_shell` 单向 |
 
 **注意事项**（实测所得，避免重蹈）：
 
@@ -169,4 +173,43 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 2. `Shared` 里 `editor_clear` / `host_redraw` / `open_mock_detail` 是 `Rc<dyn Fn(&mut Window, &mut App)>` → 新 crate 必须依赖 `gpui-kit`（`Window` / `App` 类型）。
 3. 下沉后 `Shared` 不可再引用 workbench 内部项（如 `crate::view::ConnectionItem`、`crate::services::nav_runtime::DriverMeta`）——这些必须一并下沉或在 `Shared` 里改类型别名。
 4. 每次只下沉一个模块并立即 `cargo check`，不要一次搬完再编（本会话已多次验证这个节奏最省时间）。
-| `Shared` 字段白名单契约（S4） | `crates/workbench/tests/ui_contract.rs` |
+
+### 实测订正：A4/A5 会造出新的环（2026-09-16）
+
+`sink Shared + nav_runtime` 的前提是「它们不依赖特性 crate」，**实测不成立**。把 `panels/shared.rs`
+的导入与 `nav_runtime` 的引用面摊开后，会新增三条环（均为 `特征 crate → shell → 特征 crate`）：
+
+| # | 边 | 证据 | 后果 |
+| --- | --- | --- | --- |
+| 1 | shell → `scratchpad` | `use scratchpad::ScratchpadStore;`（`Shared::scratchpad_store`）；`EditorBridge::show_search_results` 的载荷是 `ScratchpadSearchView`（现 `panels/scratchpad_panel.rs`） | P2 后 `scratchpad → shell → scratchpad` |
+| 2 | shell → nav（P2 后的 `database`） | `EditorBridge::show_properties(PropertyRequest)`，`PropertyRequest` 现属 `panels/nav.rs`；`driver_catalog: HashMap<String, nav_runtime::DriverMeta>` | P2 后 `database → shell → database` |
+| 3 | shell → `database` / `connection`（经 nav_runtime） | `nav_runtime` 引 `crate::services::{nav_store, data_source_service, connection_service}`（三者依赖 `database` / `connection` / `engine`），而 `nav_runtime` 自身又依 `database::model` | A5 直接成环 |
+
+另两条不算环但需一并处理（属 A4 的「算位移」范围）：
+`Shared` 还引用 `insight::{InsightTarget, InsightView}`、`mock::mock_view::{MockDetailView, MockPanel, SchemaRequest}`；
+以及 `crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode}`（后者确实可直接下沉）。
+
+**订正结论：A4/A5 不是「搬文件」而是设计题。`Shared` 是宿主状态，特性视图本不该看见它。**
+
+仓库里已有**已验证的正例**（`crates/mock` / `crates/insight`）：视图归特性 crate，**不拿 `Shared`**，
+而是拿**本 crate 定义的宿主 trait**——`crates/mock/src/mock_view.rs:355` 的 `pub trait MockHost`，
+`MockPanel::new(host: Rc<dyn MockHost>, cx)`，workbench 在 `components/mock_host.rs` 实现并注入；
+`mock` / `insight` 均**不依赖 workbench**（`Cargo.toml` 实测）。
+
+因此推荐把 A4/A5 换成 **A'**：
+
+| 步 | 内容 |
+| --- | --- |
+| A'1 | 在 `crates/database` 定 `pub trait NavHost`（宿主能力：读连接列表 / 选中 / 提示 / 时间片；请求编辑连接 / 插入 SQL / 打开属性面板 / 归组与排序的落库）——形状照 `MockHost` |
+| A'2 | workbench 实现 `NavHost`（现 `panels/nav.rs` 的 `shared.*` / `nav_runtime::*` 调用点移入实现体），注册到 `SidebarPanel` |
+| A'3 | `crates/database` 加 `gpui-kit` + `workbench_shell` 依赖，视图搬入（`panels/nav.rs` → `database/src/nav_view.rs`） |
+| A'4 | 同样处理手稿箱：`crates/scratchpad` 得 `pub trait ScratchpadHost`，视图搬入 |
+
+代价：A' 比原 A4/A5 大（nav 的 ~70 处 `shared.*` + 33 处 `nav_runtime::*` 要逐处归到 trait 方法），
+但它**同时完成 P2**，且不再需要「把 `Shared` 下沉」这个本身就矛盾的动作；`Shared` 留在 workbench，
+shell 只承 `ui.rs` 与（可选的）纯宿主级数据枚举。
+
+若不想动 trait 面，另一条路是 §8 的**选型 B 前半段**：先把 `Shared` 中专属特性的字段
+（`driver_catalog` / `editor_sql` / `editor_dirty` / `editor_clear` / `mock_*` / `insight_panel` /
+`open_mock_detail`）收回各自模块，`Shared` 缩到纯宿主级（不含任何特性类型）后再下沉——
+但这一步与 A'1/A'2 的工作量重叠，且下完仍要解决 `EditorBridge` 的两处特性载荷。

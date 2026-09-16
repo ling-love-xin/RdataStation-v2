@@ -173,7 +173,7 @@ cargo run -p rds-app     # 设置页改主题 / 显示标签 / 建连超时 → 
 | 设置项字段与默认值 | `crates/settings/src/model.rs` |
 | 服务与持久化（唯一写入者） | `crates/settings/src/lib.rs` |
 | 页面（目标形态） | `crates/settings/src/settings_page.rs`（P1b 新增；`settings_view.rs` 退役） |
-| 尺寸常量 | `crates/workbench/src/ui.rs`（P1.1） |
+| 尺寸常量 | `crates/workbench_shell/src/ui.rs`（P1.1） |
 | 宿主 overlay / 互斥 / 桥 | `crates/workbench/src/view.rs::render_settings_panel`（P1.6 / P3.1 / P3.4） |
 | 命令与键位 | `crates/settings/src/commands.rs`、`crates/app/src/main.rs`（P3.2 / P3.5） |
 | 契约扫描 | `crates/workbench/tests/ui_contract.rs`（P3.3） |

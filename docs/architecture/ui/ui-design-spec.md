@@ -1,6 +1,6 @@
 # RdataStation v2 UI 设计规范
 
-> 状态：已落地 · 关联代码：`crates/workbench/src/ui.rs`（尺寸常量）、`assets/themes/rds-theme.json`（颜色 token）
+> 状态：已落地 · 关联代码：`crates/workbench_shell/src/ui.rs`（尺寸常量，经 `crate::ui` 重导）、`assets/themes/rds-theme.json`（颜色 token）
 > 关联设计：`docs/architecture/layout/layout-design.md`（布局）、`docs/architecture/theme/theme-design.md`（配色）
 > 参考：navop（GPUI 同栈项目）的「集中常量 + 就近常量 + 布局契约」实践
 
@@ -10,7 +10,7 @@
 
 ```
 第 1 层  主题 token     颜色 / 圆角 / 字号         → assets/themes/rds-theme.json
-第 2 层  尺寸常量       栏宽栏高 / 控件高 / 间距   → crates/workbench/src/ui.rs
+第 2 层  尺寸常量       栏宽栏高 / 控件高 / 间距   → crates/workbench_shell/src/ui.rs
 第 3 层  组件规格       各组件如何组合上述两者     → 本文档 §5
 ```
 
@@ -22,9 +22,9 @@
 
 | 类型 | 声明位置 | 表达方式 | 适用 |
 | --- | --- | --- | --- |
-| 结构尺寸倍率 | `crates/workbench/src/ui.rs`（`f32`） | 样式：`rems(ui::TITLE_BAR_HEIGHT)`（gpui 原生）；需 `Pixels` 的 API（如 `set_dock_size`）：`cx.theme().font_size * ui::LEFT_DOCK_WIDTH` | 栏宽栏高、控件高、Quick Open 尺寸 |
+| 结构尺寸倍率 | `crates/workbench_shell/src/ui.rs`（`f32`，经 `crate::ui` 重导） | 样式：`rems(ui::TITLE_BAR_HEIGHT)`（gpui 原生）；需 `Pixels` 的 API（如 `set_dock_size`）：`cx.theme().font_size * ui::LEFT_DOCK_WIDTH` | 栏宽栏高、控件高、Quick Open 尺寸 |
 | 局部间距 | 无需声明 | gpui 的 Tailwind 尺度方法：`gap_1` / `px_2` / `h_9` | 间距、内距等局部尺寸（取值天然受限） |
-| 固定描边 | `crates/workbench/src/ui.rs`（`Pixels`） | `ui::HAIRLINE` | 1px 边框、2px 激活条等不应缩放的细线 |
+| 固定描边 | `crates/workbench_shell/src/ui.rs`（`Pixels`） | `ui::HAIRLINE` | 1px 边框、2px 激活条等不应缩放的细线 |
 
 > `ui.rs` 只声明**设计倍率**（数值依据，可追溯到设计文档）；rem → px 换算交给 gpui 原生 `rems()` 或主题字号，自动随字号 / DPI 缩放。
 
@@ -113,7 +113,7 @@
 
 | 决策 | 位置 |
 | --- | --- |
-| 尺寸常量定义 | `crates/workbench/src/ui.rs` |
+| 尺寸常量定义 | `crates/workbench_shell/src/ui.rs`（外壳 crate；workbench 侧 `pub use workbench_shell::ui;` 重导，路径不变） |
 | 颜色 token | `assets/themes/rds-theme.json` |
 | 五段布局应用 | `crates/workbench/src/view.rs`（`render_title_bar` / `render_*_activity_bar` / `render_status_bar` / `render_quick_open` / `apply_*_mode`） |
 | 面板 / 树 / 列表应用 | `crates/workbench/src/panels/` |
@@ -129,6 +129,10 @@
 ## 7. 布局契约测试
 
 关键不变式已固化为测试：`crates/workbench/tests/ui_contract.rs`（`cargo test -p rds-workbench --test ui_contract`）。
+
+> **为什么常量不在 workbench 里**（2026-09-16 下沉）：视图要下沉到特性 crate（`database` / `scratchpad`）时，
+> 它们需要这套常量，而又不能反向依赖 `workbench`（会成环）。`crates/workbench_shell` 只依 `gpui-kit`、
+> 零内部依赖，两边都可依赖它——详见 `docs/architecture/layout/panels-coupling-plan.md` §9。
 
 | 契约 | 覆盖内容 |
 | --- | --- |

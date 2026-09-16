@@ -338,7 +338,7 @@ v1 把洞察拆成「右栏轻量统计 + 底部四 Tab 容器」两处（`Colum
 
 沿用导航树（M4）「颜色 + 形状双通道」原则：颜色区分类型族，**文字始终显示真实类型名**，不靠颜色单独承载信息。
 
-## 7. 尺寸常量（待登记进 `crates/workbench/src/ui.rs`）
+## 7. 尺寸常量（待登记进 `crates/workbench_shell/src/ui.rs`）
 
 按 M3 连接对话框 / M5 草稿箱的先例，新增一节 `===== 洞察（M8）专用尺寸 =====`，视图只引用不写字面量：
 
@@ -369,7 +369,7 @@ v1 把洞察拆成「右栏轻量统计 + 底部四 Tab 容器」两处（`Colum
 | 服务门面（画像 / 评分 / 规则 / 快照） | `crates/insight/src/service/mod.rs` |
 | 规则作用域与索引 | `crates/insight/src/{rule.rs, rule_registry.rs, service/indexer.rs}` |
 | Action 与快捷键 | `crates/insight/src/commands.rs` + `crates/app/src/main.rs` |
-| 尺寸常量 | `crates/workbench/src/ui.rs` |
+| 尺寸常量 | `crates/workbench_shell/src/ui.rs` |
 | 协议契约（零裸色 / 零裸 px） | `crates/workbench/tests/ui_contract.rs` |
 
 组件选型（**禁止手搓**）：折叠区用 `gpui_kit::component::accordion`（v1 用 `NCollapse`）；表格用 `table::DataTable`；Tab 条用组件 `TabBar` 或 Dock 自带能力；对话框用 `Dialog`；开关用 `Switch`；搜索框用 `input::Input`；右键菜单用 `ContextMenuExt`。图标走资产路径（`icons/lightbulb.svg` 等，`RightPanel::Insight` 已如此）。

@@ -294,8 +294,8 @@ cargo run -p rds-app -j 2
 | 服务门面 + 事件 | `src/service.rs` |
 | 索引修复 | `src/indexer.rs` |
 | Action / 快捷键 | `src/commands.rs` + `crates/app/src/main.rs`（`analytics-resource` context） |
-| 左 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels.rs}` |
+| 左 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels/}` |
 | 迁移 | `crates/engine/migrations/project_meta/020_analytics_resource_archive.sql` |
 | 项目级回收站（上提后） | `crates/engine/src/…`（现 `crates/scratchpad/src/trash.rs`） |
-| 尺寸常量 | `crates/workbench/src/ui.rs`（新增「资产库（M6）专用尺寸」4 项，见原型 §7） |
+| 尺寸常量 | `crates/workbench_shell/src/ui.rs`（新增「资产库（M6）专用尺寸」4 项，见原型 §7） |
 | 契约测试范围 | `crates/workbench/tests/ui_contract.rs` |

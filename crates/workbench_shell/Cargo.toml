@@ -1,0 +1,10 @@
+[package]
+name = "rds-workbench-shell"
+version.workspace = true
+edition.workspace = true
+description = "工作台外壳：面板状态与视图共用资产（workbench 与特性 crate 共用，用于解开视图下沉的循环依赖）"
+
+[dependencies]
+# ===== GPUI-kit 视图层 =====
+# `ui.rs` 的固定描边是 `Pixels`（`px(1.)`），需要 gpui 的 `px` 与 `Pixels`。
+gpui-kit.workspace = true

@@ -1,6 +1,6 @@
 ---
 name: rds-ui-spec
-description: RdataStation UI 尺寸与颜色约束：rem 尺寸常量（crates/workbench/src/ui.rs）、主题 token 取色、组件规格表（标题栏/活动栏/状态栏/树节点/列表/输入框/下拉/tab）。编写或修改任何 UI 布局、控件尺寸、间距、颜色时使用。
+description: RdataStation UI 尺寸与颜色约束：rem 尺寸常量（crates/workbench_shell/src/ui.rs，经 `crate::ui` / `workbench_shell::ui` 引用）、主题 token 取色、组件规格表（标题栏/活动栏/状态栏/树节点/列表/输入框/下拉/tab）。编写或修改任何 UI 布局、控件尺寸、间距、颜色时使用。
 ---
 
 # RdataStation UI 规范
@@ -10,7 +10,7 @@ description: RdataStation UI 尺寸与颜色约束：rem 尺寸常量（crates/w
 三层约束，任何 UI 改动都落在其中一层：
 
 1. 颜色 / 圆角 / 字号 → 主题 token（`cx.theme().colors.*`、`theme.radius`）
-2. 尺寸 / 间距 → `crates/workbench/src/ui.rs` 常量
+2. 尺寸 / 间距 → `crates/workbench_shell/src/ui.rs` 常量（`crate::ui` 是它的重导，路径不变）
 3. 组合方式 → `docs/architecture/ui/ui-design-spec.md` §4 组件规格表
 
 ## 尺寸：rem 基准 + Tailwind 尺度 + 固定描边
@@ -31,6 +31,11 @@ div().gap_1().px_2().h_6()
 // 3) 固定描边（不随字号缩放）
 div().border_b(ui::HAIRLINE)
 ```
+
+> **`ui.rs` 住在 `crates/workbench_shell/src/ui.rs`**（2026-09-16 自 `crates/workbench/src/ui.rs` 下沉到外壳 crate，
+> 目的：视图下沉特性 crate 时不再反向依赖 workbench）。workbench 侧 `pub use workbench_shell::ui;` 重导，
+> 所以 `crate::ui::*` / `rds_workbench::ui::*` 写法全部不变；直接依赖 shell 的 crate 写 `workbench_shell::ui::*`。
+> 新增常量仍登在这个文件（单一来源），但需注意 **shell 不得依赖任何特性 crate**。
 
 规则：**结构尺寸**先进 `ui.rs` 登记倍率；**局部间距**直接用 Tailwind 尺度，无需登记；不得出现裸 `px(N.)`。
 
@@ -93,6 +98,7 @@ div().border_b(ui::HAIRLINE)
 ## 契约测试
 
 改动尺寸后运行 `cargo test -p rds-workbench --test ui_contract`：它会校验
-`ui.rs` 常量与设计值一致、视图层无裸 `px(...)` / 裸色值、边栏隐藏/恢复状态机。
+`ui.rs` 常量与设计值一致（契约 1 走 `rds_workbench::ui::*`，不读路径，故下沉后无需改）、
+视图层无裸 `px(...)` / 裸色值、边栏隐藏/恢复状态机。
 
 > 范围：尺寸与色值契约目前只扫 `view.rs` / `panels/`（`panels/` 下新增子模块由 `ui_contract.rs` 的 2c 守卫强制登记）；`components/connection_dialog/` 与 `project/ui.rs` 仍是存量欠债（见 `connection-dialog-architecture.md` §14 #14）。新增代码请按本 skill 写，不要以这两个目录的既有写法为样例。

@@ -1,6 +1,6 @@
 //! 洞察面板的尺寸常量（M8 专用）。
 //!
-//! 登记约定（对齐 `crates/workbench/src/ui.rs` 与 `crates/mock/src/mock_view.rs`）：
+//! 登记约定（对齐 `crates/workbench_shell/src/ui.rs` 与 `crates/mock/src/mock_view.rs`）：
 //! 结构尺寸集中在本文件，视图只引用常量、不写字面量——`px(` 会被 workbench 的 UI
 //! 契约测试拦下，本 crate 同守该约定。常量取 **rem 倍率**（`f32`），使用处写
 //! `rems(ui::…)`；`rems()` 的基准是主题字号（默认 16px），不是 Tailwind 的 4px。

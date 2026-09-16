@@ -304,7 +304,7 @@ workbench ──► insight ──► engine ──► shared
 | **A. 视图入 insight**（本方案默认） | `insight/src/insight_view.rs` 等自带视图；`insight` 的 `Cargo.toml` 加 `gpui-kit`；`workbench` 只留 `RightSidebarPanel` 装配 | 对齐 `overview.md` §「Feature 可以直接依赖 gpui-kit」与 GPUI-kit 官方指南；`project` 已跑通此路（含宿主桥 `ProjectUiHost` 的成熟范式）；面板状态与域模型同 crate，无需跨 crate 传视图模型 | `insight` 新增 gpui 依赖；需自建宿主桥（参照 `ProjectUiHost`）；与 7 个未迁移 crate 暂时分叉 |
 | **B. 视图留 workbench** | 面板内容写在 `workbench/panels/`（如现状）；`insight` 保持纯后端（`insight → engine → shared`） | 与 `scratchpad` 刚确立的口径一致；crate 纯净、编译快 | `panels/` 继续膨胀（现已 8600+ 行）；面板状态与域模型跨 crate；与 `overview.md` 目标架构相背 |
 
-**影响面**（拍板后需同步修改）：`crates/insight/Cargo.toml`（gpui-kit）、`crates/insight/src/lib.rs`（模块声明）、`crates/workbench/src/panels/`（`RightSidebarPanel` 是渲染内容还是仅装配）、`crates/workbench/src/ui.rs`（尺寸常量放哪边）。
+**影响面**（拍板后需同步修改）：`crates/insight/Cargo.toml`（gpui-kit）、`crates/insight/src/lib.rs`（模块声明）、`crates/workbench/src/panels/`（`RightSidebarPanel` 是渲染内容还是仅装配）、`crates/workbench_shell/src/ui.rs`（尺寸常量放哪边）。
 
 > 本文其余部分按 **方案 A** 书写（文件路径与落点均指向 `crates/insight/src/*_view.rs`）；若改选 B，只需把视图文件落点改为 `workbench/panels/`，其余设计（语义 / 布局 / 交互 / 作用域 / 索引表）不受影响。
 
@@ -507,7 +507,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs` |
 | Action 与快捷键 | `crates/insight/src/commands.rs`、`crates/app/src/main.rs` |
 | 右 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels/}`（`RightSidebarPanel`） |
-| 尺寸常量 | `crates/workbench/src/ui.rs`（新增「洞察（M8）专用尺寸」节） |
+| 尺寸常量 | `crates/workbench_shell/src/ui.rs`（新增「洞察（M8）专用尺寸」节） |
 | 规则资产 | `crates/insight/insight-rules/`（18 条，不改） |
 | 协议契约测试 | `crates/workbench/tests/ui_contract.rs` |
 

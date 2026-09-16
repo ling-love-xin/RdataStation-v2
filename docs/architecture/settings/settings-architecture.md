@@ -225,7 +225,7 @@ graph TD
 | --- | --- |
 | 页面形态与行规格 | `docs/architecture/settings/settings-prototype-design.md` §3/§4 |
 | 页面实现 | `crates/settings/src/settings_page.rs`（新）；`settings_view.rs` 退役 |
-| 尺寸常量 | `crates/workbench/src/ui.rs`（5 个 `SETTINGS_*`，原型 §7） |
+| 尺寸常量 | `crates/workbench_shell/src/ui.rs`（5 个 `SETTINGS_*`，原型 §7） |
 | 宿主 overlay 与互斥 | `crates/workbench/src/view.rs::render_settings_panel` |
 | 命令 | `crates/settings/src/commands.rs`（`OpenSettings` 已有；`ToggleThemeMode` 待接线或删除） |
 | 登记表落地 | 表格在本文 §6；实现侧以 `model.rs` 字段 + `lib.rs` 方法为准，契约测试负责两者一致 |

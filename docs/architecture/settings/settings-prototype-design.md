@@ -3,7 +3,7 @@
 > 状态：**首版（2026-09-16，待迭代）** · 本文回答"设置页长什么样"，"什么能进设置页"归 `settings-architecture.md`
 > 关联：`settings-architecture.md`（准入与作用域裁决）、`settings-prototype.html`（交互稿，**示意稿非权威**）、`settings-dev-plan.md`（开发方案）、`settings-crate-design.md`（crate 沿革）、`../layout/layout-design.md`（入口与五段布局）、`../ui/ui-design-spec.md`（三层约束）、`../theme/theme-design.md`（配色）
 > 落地进度（2026-09-16）：僵尸项裁撤 + 代码侧登记表 + **两栏页面实体**（`crates/settings/src/settings_page.rs`）已落地；**宿主替换未做**（工作台仍渲染旧的单列 `settings_view`），见 `settings-dev-plan.md` §0/§2。
-> 技术栈：gpui-kit 0.6.1，组件只从组件库取（禁止手搓），取色零裸 hex，尺寸只引用 `crates/workbench/src/ui.rs` 常量
+> 技术栈：gpui-kit 0.6.1，组件只从组件库取（禁止手搓），取色零裸 hex，尺寸只引用 `crates/workbench_shell/src/ui.rs` 常量
 
 ## 1. 设计基准
 
@@ -176,7 +176,7 @@
 | `CARD_RADIUS` / `CARD_PADDING` | 0.375 / 0.75 | 6 / 12 | 分组卡圆角与内边距 |
 | `HAIRLINE` / `ACTIVE_BAR` | 1px / 2px | — | 固定描边：分隔线 / 导航激活条 |
 
-**为什么不在 `crates/workbench/src/ui.rs`**（初版设计曾这样写）：依赖方向是 `workbench → settings`，
+**为什么不在 `crates/workbench_shell/src/ui.rs`**（初版设计曾这样写）：依赖方向是 `workbench → settings`，
 页面在 `settings` 里**不能反向引用**工作台的常量；因此页面自持一份。与 workbench 同名常量
 （`ROW_HEIGHT` / `HAIRLINE` / `PANEL_HEADER_HEIGHT`）**保持同值**，调整需两边同步；
 尺寸契约扫描覆盖本文件（见 §11 落地项 5）。

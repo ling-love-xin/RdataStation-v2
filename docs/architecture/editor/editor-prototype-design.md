@@ -3,7 +3,7 @@
 > 状态：**设计稿（待确认，2026-09-15）** · 本文只定义**长什么样、怎么交互**（视觉与交互规格）。
 > 为什么这样设计（概念模型 / 数据流 / 决策取舍 / 实现映射）→ `editor-architecture.md`；做到哪 / 下一步 → `editor-dev-plan.md`；可切换视觉稿 → `editor-prototype.html`。
 > 参考实现：V1 编辑器（`v1/frontend/extensions/builtin/workbench`，CodeMirror 6 + dockview + AG Grid，约 7800 行）——**继承其信息架构，修正其已证实的缺陷**（逐项对照见 §9）。
-> 尺寸与配色一律引用 `crates/workbench/src/ui.rs` 常量与 `theme-design.md` token；本文件出现的数值是**设计倍率**，不是可直接写进代码的字面量。
+> 尺寸与配色一律引用 `crates/workbench_shell/src/ui.rs` 常量与 `theme-design.md` token；本文件出现的数值是**设计倍率**，不是可直接写进代码的字面量。
 
 ---
 
@@ -530,7 +530,10 @@
 
 ---
 
-## 8. 尺寸常量（建议登记到 `crates/workbench/src/ui.rs` 或新 crate 的 `ui.rs`）
+## 8. 尺寸常量（登记在 `crates/workbench_shell/src/ui.rs`）
+
+> 2026-09-16 起尺寸常量统一住在外壳 crate（`crates/workbench_shell`，只依 gpui-kit）：编辑器既可直接依赖它，
+> 也可继续在 `crates/editor/src/ui.rs` 自持（现状是后者，见 §13 #6）；两边不要再各写一份数值。
 
 | 常量 | 值 | 说明 |
 | --- | --- | --- |

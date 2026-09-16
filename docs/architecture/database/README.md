@@ -76,7 +76,7 @@
 | 内省调用（catalog/schema/table/column…） | `crates/database/src/metadata_service.rs` |
 | 各数据库内省实现 / 能力位 | `crates/engine/src/driver/native/{mysql,postgres,sqlite,duckdb}.rs`（`MetadataBrowser`） |
 | 分组 / 标签表与读写 | `crates/engine/src/persistence/connection_org_store.rs` |
-| 尺寸常量 | `crates/workbench/src/ui.rs` |
+| 尺寸常量 | `crates/workbench_shell/src/ui.rs` |
 
 数据链路：`SidebarPanel（导航面板）→ nav_jobs（后台工作线程）→ NavigatorService → MetadataService → 驱动 MetadataBrowser → 目标数据库`；组织数据（分组 / 标签）走 `ConnectionOrgStore → project.db / global.db`。**无 HTTP / IPC 层**。
 

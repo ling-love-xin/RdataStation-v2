@@ -15,6 +15,7 @@ members = [
     "crates/plugin",
     "crates/shared",
     "crates/settings",
+    "crates/workbench_shell",
 ]
 # 默认构建只覆盖 app 依赖图：plugin（extism → wasmtime）不在 app 图上，
 # 裸 `cargo build/check/run` 不必为它付出编译时间。
@@ -49,6 +50,7 @@ mock = { path = "crates/mock", package = "rds-mock" }
 settings = { path = "crates/settings", package = "rds-settings" }
 scratchpad = { path = "crates/scratchpad", package = "rds-scratchpad" }
 analytics_resource = { path = "crates/analytics_resource", package = "rds-analytics-resource" }
+workbench_shell = { path = "crates/workbench_shell", package = "rds-workbench-shell" }
 workbench = { path = "crates/workbench", package = "rds-workbench" }
 
 # ===== 表现层 =====

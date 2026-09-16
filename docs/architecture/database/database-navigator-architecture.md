@@ -345,7 +345,7 @@ flowchart TD
 | 导航状态存储 | `workbench/src/services/nav_store.rs` |
 | 缓存管理对话框 | `workbench/src/components/cache_dialog.rs` |
 | UI 偏好（短码 / 属性面板宽度 / 显示标签 / 显示归属域 / facet 筛选） | `settings/src/model.rs::{Navigator, NavigatorFilters}` + `settings/src/lib.rs` |
-| 尺寸常量 | `workbench/src/ui.rs`（`NAV_BADGE_SIZE` / `NAV_SCOPE_COL_SHORT|TEXT` / `NAV_ADD_TAG_SIZE` / `NAV_FOLDER_PAGE_SIZE` …） |
+| 尺寸常量 | `workbench_shell/src/ui.rs`（`NAV_BADGE_SIZE` / `NAV_SCOPE_COL_SHORT|TEXT` / `NAV_ADD_TAG_SIZE` / `NAV_FOLDER_PAGE_SIZE` …） |
 
 ---
 

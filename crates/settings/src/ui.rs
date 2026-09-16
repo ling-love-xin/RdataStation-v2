@@ -1,8 +1,10 @@
 //! 设置页尺寸常量（rem 基准 + 固定描边）。
 //!
-//! 为什么本 crate 自持一份：页面住在 `settings`，而 `crates/workbench/src/ui.rs` 在工作台侧。
-//! 依赖方向是 `workbench → settings`，**下面不能引用上面**（引用即反向依赖），
-//! 所以页面的结构尺寸在这里登记。
+//! 为什么本 crate 自持一份：页面住在 `settings`，而尺寸常量原在 `crates/workbench`（工作台侧），
+//! 依赖方向是 `workbench → settings`，**下面不能引用上面**。
+//! 订正（2026-09-16）：常量已下沉到外壳 crate `crates/workbench_shell`（只依 gpui-kit），
+//! 上述理由**已不成立**——本 crate 可以依赖外壳并直接复用这份常量。自持是现状，合并待拍板
+//! （见 `docs/architecture/layout/panels-coupling-plan.md` §9）。
 //!
 //! 与 workbench `ui.rs` 同名常量**保持同值**，调整需两边同步；
 //! `ui_contract` 的尺寸契约扫描覆盖本文件（见 `crates/workbench/tests/ui_contract.rs`）。
