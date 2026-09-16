@@ -273,6 +273,7 @@ pub type ConnectionProbe = fn(conn_id: &str, project_root: Option<&str>) -> Resu
 | `nav_jobs::*` | 19 | ✅ **已搬** `database::nav_jobs`（2026-09-16） |
 | `settings::SettingsService::*`（视图偏好 8 处） | 8 | `NavHost`（宿主自持设置访问，避免新增 `database → settings` 依赖） |
 | `mock::mock_view::SchemaRequest` | 1 | `NavHost::open_mock_panel(..)`（避免新增 `database → mock`） |
+| `crate::commands::Nav*`（键盘动作定义，app 绑定） | 7 | ✅ **已搬** `database::commands`（2026-09-16；workbench 重导，app 侧路径不变） |
 | `crate::components::{group_form_dialog, cache_dialog}` | 2 | `NavHost`（对话框需 `Window`，只有宿主有） |
 | `database::*` | 7 | 无需处理（本来就是目标 crate） |
 

@@ -21,7 +21,7 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, WindowExt a
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::commands::{
+use database::commands::{
     NavCollapse, NavDown, NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp,
 };
 use crate::components::group_form_dialog::{self, GroupFormSeed};
