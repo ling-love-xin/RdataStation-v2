@@ -779,13 +779,13 @@ mod tests {
         let run = RunRecord {
             save_format: Some(SAVE_FORMAT_TABLE.to_string()),
             outcome: RunOutcome::Failed {
-                reason: "分析库已存在表 orders".to_string(),
+                reason: "项目分析库已存在表 orders".to_string(),
             },
         };
         let (task, _) = task_of_run(&draft(), &run, Utc::now());
 
         assert_eq!(task.status, "failed");
-        assert_eq!(task.error_message.as_deref(), Some("分析库已存在表 orders"));
+        assert_eq!(task.error_message.as_deref(), Some("项目分析库已存在表 orders"));
         assert_eq!(task.generated_rows, None);
         assert_eq!(task.generation_time_ms, None);
         assert_eq!(task.save_format.as_deref(), Some("table"));

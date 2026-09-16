@@ -8,7 +8,7 @@
 //! | 出口 | 语义 |
 //! | --- | --- |
 //! | 查看详情 | 中央「Mock 数据」tab：字段清单（可编辑）+ 预览表格 |
-//! | 持久化为分析库表 | 在分析库**新建**表（已存在则报错，引导改用「追加」） |
+//! | 持久化为项目分析库表 | 在**项目**分析库（`{项目}/.RSmeta/analytics.duckdb`）**新建**表（已存在则报错，引导改用「追加」） |
 //! | 追加到既有表 | **显式**选择既有表；主键自增起点接续表内行数 |
 //! | 保存到草稿箱 | `{项目}/mock/mock_*.{ext}`（时间戳命名，只读项目禁写） |
 //! | 另存为 | CSV / Parquet / Xlsx / SQL INSERT 文件（调用方在系统对话框选路径） |
@@ -217,7 +217,7 @@ impl MockJobKind {
         match self {
             Self::Generate => "生成中…".to_string(),
             Self::AppendTo(table) => format!("生成并追加到 {table} 中…"),
-            Self::Persist(info) => format!("写入分析库中…（{} 行）", info.row_count),
+            Self::Persist(info) => format!("写入项目分析库中…（{} 行）", info.row_count),
             Self::Export { path, .. } => format!("导出中…（{path}）"),
             Self::Scratchpad { .. } => "保存到草稿箱中…".to_string(),
         }
@@ -275,7 +275,7 @@ impl MockJobPhase {
     pub fn label(self) -> &'static str {
         match self {
             Self::Generating => "生成中",
-            Self::Writing => "写入分析库中",
+            Self::Writing => "写入项目分析库中",
             Self::Exporting => "写出文件中",
         }
     }
@@ -1439,10 +1439,10 @@ impl MockPanel {
         self.start_job(MockJobKind::Generate, cx);
     }
 
-    /// 出口：追加到分析库既有表（显式选择；后台任务：生成 + 追加在一次任务里完成）。
+    /// 出口：追加到**项目**分析库既有表（显式选择；后台任务：生成 + 追加在一次任务里完成）。
     pub fn append_table(&mut self, table: String, cx: &mut Context<Self>) {
         if self.host.read_only() {
-            self.fail("只读模式：不允许写入分析库", cx);
+            self.fail("只读模式：不允许写入项目分析库", cx);
             return;
         }
         self.start_job(MockJobKind::AppendTo(table), cx);
@@ -1572,7 +1572,7 @@ impl MockPanel {
                 self.landed = Some(table.clone());
                 // 新表要能立刻作为「追加到既有表」的目标
                 self.existing_tables = self.host.existing_tables();
-                self.succeed(format!("已在分析库新建表 {table}（{rows} 行）"), cx);
+                self.succeed(format!("已在项目分析库新建表 {table}（{rows} 行）"), cx);
             }
             Ok(MockJobDone::Exported { message }) => self.succeed(message, cx),
             Err(e) => {
@@ -1615,14 +1615,14 @@ impl MockPanel {
         cx.notify();
     }
 
-    /// 出口：持久化为分析库新表（后台任务：大行数落库同样会阻塞界面）。
+    /// 出口：持久化为**项目**分析库新表（后台任务：大行数落库同样会阻塞界面）。
     pub fn persist_table(&mut self, cx: &mut Context<Self>) {
         let Some(info) = self.generated.clone() else {
             self.fail("请先生成（预览确认后再落库）", cx);
             return;
         };
         if self.host.read_only() {
-            self.fail("只读模式：不允许写入分析库", cx);
+            self.fail("只读模式：不允许写入项目分析库", cx);
             return;
         }
         // 目标表名在 `start_job` 的 `sync_inputs` 里从输入框取（任务内部据此命名新表）
@@ -2031,7 +2031,7 @@ impl MockPanel {
             let entity = cx.entity();
             Button::new("mock-persist")
                 .secondary()
-                .label("持久化为分析库表")
+                .label("持久化到项目分析库")
                 .w_full()
                 .disabled(running)
                 .on_click(move |_, _, app| {
@@ -2049,7 +2049,7 @@ impl MockPanel {
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     if tables.is_empty() {
-                        return menu.item(PopupMenuItem::new("（分析库暂无表）").disabled(true));
+                        return menu.item(PopupMenuItem::new("（项目分析库暂无表）").disabled(true));
                     }
                     for name in tables.iter() {
                         let table = name.clone();
@@ -2196,7 +2196,7 @@ impl MockPanel {
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("数据只写入分析库与文件，不回传源库（M7）"),
+                    .child("数据只写入项目分析库（{项目}/.RSmeta/analytics.duckdb）与文件，不回传源库（M7）；要进全局分析库，用资产库存档或草稿箱升级"),
             );
 
         if let Some(text) = outcome {

@@ -26,7 +26,7 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 /// 任务路径（除草稿箱用例外，项目根均为「未打开项目」）。
 fn paths(db: &Path) -> mock_jobs::JobPaths {
     mock_jobs::JobPaths {
-        db_path: db.to_path_buf(),
+        db_path: Some(db.to_path_buf()),
         project_root: None,
     }
 }
@@ -152,7 +152,7 @@ fn append_job_reports_total_rows() {
 
     // 先建表（30 行）
     let seed_draft = draft("t_job_append", 30);
-    let info = mock_generator::generate_at(&db, &seed_draft, None).expect("首次生成");
+    let info = mock_generator::generate_at(Some(&db), &seed_draft, None).expect("首次生成");
     mock_generator::persist_table_at(&db, &seed_draft, &info).expect("建表");
 
     // 追加任务：生成 1000 行后写入，自增起点接续表内 30 行
@@ -256,7 +256,7 @@ fn persist_job_reports_existing_table_error() {
     let draft = draft("t_job_taken", 30);
 
     // 先建表（同步装配层入口，绕开任务）
-    let seed = mock_generator::generate_at(&db, &draft, None).expect("首次生成");
+    let seed = mock_generator::generate_at(Some(&db), &draft, None).expect("首次生成");
     mock_generator::persist_table_at(&db, &draft, &seed).expect("建表");
 
     let info = generate_and_take(&draft, &db);
@@ -332,7 +332,7 @@ fn scratchpad_job_writes_under_project_root() {
             format: MockExportFormat::Csv,
         },
         &mock_jobs::JobPaths {
-            db_path: db.clone(),
+            db_path: Some(db.clone()),
             project_root: Some(dir.clone()),
         },
     )
@@ -353,4 +353,39 @@ fn scratchpad_job_writes_under_project_root() {
     assert!(saved[0].starts_with("mock_t_job_scratch_"), "{saved:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 未打开项目：落库与追加**明确拒绝**，且原因里写清替代路径；
+/// 而纯生成不受影响（内存临时表是进程级的，与库无关）。
+#[test]
+fn sinks_without_a_project_are_refused_with_a_readable_reason() {
+    let _guard = serial();
+    let job = draft("t_job_no_project", 50);
+    let no_project = mock_jobs::JobPaths {
+        db_path: None,
+        project_root: None,
+    };
+
+    // 生成：不碰库，照常可行
+    mock_jobs::start(&job, MockJobKind::Generate, &no_project).expect("提交生成");
+    let info = match wait_done(Duration::from_secs(180)).expect("未打开项目也能生成") {
+        MockJobDone::Generated(info) => info,
+        other => panic!("期望 Generated，实际 {other:?}"),
+    };
+
+    // 落库：拒绝，且理由要给替代路径（用户想进全局时的正路是存档升级）
+    mock_jobs::start(&job, MockJobKind::Persist(info.clone()), &no_project).expect("提交落库");
+    let err = wait_done(Duration::from_secs(60)).expect_err("未打开项目应拒绝落库");
+    assert!(err.contains("未打开项目"), "{err}");
+    assert!(err.contains("资产库存档"), "理由里要给替代路径：{err}");
+
+    // 追加：生成阶段就要读目标表，同样拒绝
+    mock_jobs::start(
+        &job,
+        MockJobKind::AppendTo("t_no_project".to_string()),
+        &no_project,
+    )
+    .expect("提交追加");
+    let err = wait_done(Duration::from_secs(60)).expect_err("未打开项目应拒绝追加");
+    assert!(err.contains("未打开项目"), "{err}");
 }

@@ -434,7 +434,7 @@ impl TestHost {
             .any(|t| t == &draft.table_name)
         {
             return Err(format!(
-                "分析库已存在表 {}：请改用「追加到既有表」",
+                "项目分析库已存在表 {}：请改用「追加到既有表」",
                 draft.table_name
             ));
         }
@@ -791,7 +791,7 @@ fn persist_creates_table_then_reports_existing(cx: &mut TestAppContext) {
         assert!(
             panel
                 .outcome()
-                .is_some_and(|o| o.contains("已在分析库新建表 mock_data")),
+                .is_some_and(|o| o.contains("已在项目分析库新建表 mock_data")),
             "{:?}",
             panel.outcome()
         );
@@ -867,7 +867,7 @@ fn read_only_blocks_sinks_but_allows_generate(cx: &mut TestAppContext) {
 
     panel.update(cx, |panel, cx| panel.persist_table(cx));
     panel.update(cx, |panel, _cx| {
-        assert_eq!(panel.error(), Some("只读模式：不允许写入分析库"));
+        assert_eq!(panel.error(), Some("只读模式：不允许写入项目分析库"));
     });
     panel.update(cx, |panel, cx| panel.append_table("orders".to_string(), cx));
     panel.update(cx, |panel, cx| {
@@ -1365,7 +1365,7 @@ fn second_start_while_running_is_rejected(cx: &mut TestAppContext) {
     assert_eq!(rec.started.borrow().len(), 1, "只应提交一次");
 }
 
-/// 出口（落库）也是后台任务：提交即返回、进行中报「写入分析库」阶段，完成后预览仍可用。
+/// 出口（落库）也是后台任务：提交即返回、进行中报「写入项目分析库」阶段，完成后预览仍可用。
 #[gpui_kit::test]
 fn persist_job_runs_in_background_and_keeps_preview(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
@@ -1390,7 +1390,7 @@ fn persist_job_runs_in_background_and_keeps_preview(cx: &mut TestAppContext) {
         );
         assert!(panel.gen_info().is_some(), "写入期间预览仍在");
         assert!(
-            panel.outcome().is_some_and(|o| o.contains("写入分析库中")),
+            panel.outcome().is_some_and(|o| o.contains("写入项目分析库中")),
             "{:?}",
             panel.outcome()
         );
@@ -1407,7 +1407,7 @@ fn persist_job_runs_in_background_and_keeps_preview(cx: &mut TestAppContext) {
         assert!(
             panel
                 .outcome()
-                .is_some_and(|o| o.contains("已在分析库新建表 mock_data（5 行）")),
+                .is_some_and(|o| o.contains("已在项目分析库新建表 mock_data（5 行）")),
             "{:?}",
             panel.outcome()
         );
@@ -1727,7 +1727,7 @@ fn history_task(id: &str, status: &str) -> MockGenerationTask {
         scene_id: None,
         save_format: None,
         status: status.to_string(),
-        error_message: (status != "success").then(|| "分析库已存在表 orders".to_string()),
+        error_message: (status != "success").then(|| "项目分析库已存在表 orders".to_string()),
         generated_rows: (status == "success").then_some(500),
         generation_time_ms: Some(42),
         created_at: Some("2026-09-16T15:02:03+00:00".to_string()),
@@ -1801,7 +1801,7 @@ fn history_rows_render_and_keep_failure_reasons(cx: &mut TestAppContext) {
         assert_eq!(panel.history[1].status, "failed");
         assert_eq!(
             panel.history[1].error_message.as_deref(),
-            Some("分析库已存在表 orders")
+            Some("项目分析库已存在表 orders")
         );
         assert!(panel.history_error.is_none());
     });

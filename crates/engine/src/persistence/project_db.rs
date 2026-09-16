@@ -373,6 +373,14 @@ pub struct ProjectDatabaseManager {
 }
 
 impl ProjectDatabaseManager {
+    /// 项目分析库（DuckDB）在项目内的固定位置：`{项目}/.RSmeta/analytics.duckdb`。
+    ///
+    /// 单独暴露的原因：调用方常常只拿到「项目根」就要往分析库写（如 mock 的落库出口），
+    /// 而这里正是这份布局的唯一定义处——别处再拼一遍路径就会与它漂移。
+    pub fn analysis_db_path(project_root: &Path) -> PathBuf {
+        project_root.join(".RSmeta").join("analytics.duckdb")
+    }
+
     /// 创建或打开项目数据库
     ///
     /// # 参数
@@ -402,7 +410,7 @@ impl ProjectDatabaseManager {
         let sqlite_db_path = rsmeta_path.join("project.db");
         let sqlite_pool = ProjectSqlitePool::new(sqlite_db_path, sqlite_pool_size).await?;
 
-        let duckdb_path = rsmeta_path.join("analytics.duckdb");
+        let duckdb_path = Self::analysis_db_path(project_path);
         let duckdb_conn = ProjectDuckdbConnection::new(duckdb_path).await?;
 
         let manager = Self {

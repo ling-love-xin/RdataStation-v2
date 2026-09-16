@@ -12,6 +12,8 @@
 //! | 只读判定 | `Shared.project_ui.read_only`（与 SQL 执行入口同一护栏） |
 //! | 项目根（生成历史 / 用户模板的落点） | `Shared.project`（面板只拿这一个问题：
 //!   历史的读写都在 mock crate 内完成后台执行，见 `mock::history`） |
+//! | 项目分析库（落库 / 追加的目标） | `Shared.project` → `{项目}/.RSmeta/analytics.duckdb`
+//!   （Mock **不写全局库**：要进全局走资产库存档 M6 / 草稿箱 M5） |
 //! | 打开详情 tab | `Shared::open_mock_detail`（宿主命令，接中央 Dock） |
 //! | 重绘 | `Shared::notify_host`（宿主重绘桥，与连接对话框层同一口径） |
 //!
@@ -56,9 +58,12 @@ impl WorkbenchMockHost {
 impl MockHost for WorkbenchMockHost {
     fn start_job(&self, draft: &MockDraft, kind: MockJobKind) -> Result<(), String> {
         // 出口类任务要用的路径在这里（UI 线程）解析：工作线程碰不了 `Shared`
+        // 分析库是**项目级**的（`{项目}/.RSmeta/analytics.duckdb`）；未打开项目时为 `None`，
+        // 由任务层给出可读拒绝（Mock 不写全局库）
+        let root = self.project_root();
         let paths = crate::services::mock_jobs::JobPaths {
-            db_path: crate::services::mock_generator::analytics_db_path(),
-            project_root: self.project_root(),
+            db_path: crate::services::mock_generator::analysis_db_path(root.as_deref()),
+            project_root: root,
         };
         crate::services::mock_jobs::start(draft, kind, &paths)
     }
@@ -85,7 +90,8 @@ impl MockHost for WorkbenchMockHost {
     }
 
     fn existing_tables(&self) -> Vec<String> {
-        crate::services::mock_generator::existing_tables()
+        let root = self.project_root();
+        crate::services::mock_generator::existing_tables(root.as_deref())
     }
 
     fn schema_sources(&self) -> Vec<SchemaSource> {

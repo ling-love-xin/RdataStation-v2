@@ -47,7 +47,7 @@ fn cancel_interrupts_running_job_with_readable_error() {
         &draft("t_job_cancel"),
         MockJobKind::Generate,
         &mock_jobs::JobPaths {
-            db_path: db.clone(),
+            db_path: Some(db.clone()),
             project_root: None,
         },
     )

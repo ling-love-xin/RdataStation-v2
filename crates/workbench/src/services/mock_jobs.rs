@@ -35,11 +35,14 @@ use crate::services::mock_generator;
 ///
 /// 工作线程不碰宿主状态（`Shared` 里的 `Rc<RefCell<…>>` 不可跨线程），
 /// 所以「分析库在哪、项目根在哪」在提交任务时就定下来，出口类任务据此落地。
+///
+/// `db_path` 是**项目分析库**（`{项目}/.RSmeta/analytics.duckdb`）且可为 `None`：
+/// Mock 不写全局库，而未打开项目时生成仍然可用（只产内存临时表）。
 #[derive(Debug, Clone)]
 pub struct JobPaths {
-    /// 分析库路径（生成 / 落库 / 追加）
-    pub db_path: PathBuf,
-    /// 项目根（草稿箱出口；未打开项目为 `None`）
+    /// 项目分析库路径（落库 / 追加 / 需要读既有表的生成）；未打开项目为 `None`
+    pub db_path: Option<PathBuf>,
+    /// 项目根（草稿箱出口与历史落点；未打开项目为 `None`）
     pub project_root: Option<PathBuf>,
 }
 
@@ -102,14 +105,21 @@ fn worker(rx: mpsc::Receiver<Job>) {
 
 /// 执行一次任务，进度写进全局槽。
 fn run_job(job: &Job) -> Result<MockJobDone, String> {
+    // 需要碰库的任务（追加 / 落库）：项目分析库缺失时给可读原因，不让 DuckDB 报文件错
+    let db_path = || {
+        job.paths.db_path.as_deref().ok_or_else(|| {
+            "未打开项目：Mock 只写项目分析库（{项目}/.RSmeta/analytics.duckdb）——请先打开项目；\
+             要进全局分析库，用资产库存档（M6）或草稿箱（M5）升级"
+                .to_string()
+        })
+    };
     match &job.kind {
         MockJobKind::Generate => Ok(MockJobDone::Generated(generate(job, None)?)),
         MockJobKind::AppendTo(table) => {
             let info = generate(job, Some(table))?;
             // 进入写入阶段：引擎侧写入没有批次回调，只能报「进行中」
             set_phase(MockJobPhase::Writing);
-            let total_rows =
-                mock_generator::append_table_at(&job.paths.db_path, &job.draft, &info, table)?;
+            let total_rows = mock_generator::append_table_at(db_path()?, &job.draft, &info, table)?;
             Ok(MockJobDone::Appended {
                 table: table.clone(),
                 total_rows,
@@ -117,7 +127,7 @@ fn run_job(job: &Job) -> Result<MockJobDone, String> {
         }
         MockJobKind::Persist(info) => {
             set_phase(MockJobPhase::Writing);
-            let rows = mock_generator::persist_table_at(&job.paths.db_path, &job.draft, info)?;
+            let rows = mock_generator::persist_table_at(db_path()?, &job.draft, info)?;
             // 表名与落库时使用的是同一取值口径（`persist_table_at` 用 trim 后的名字建表）
             Ok(MockJobDone::Persisted {
                 table: job.draft.table_name.trim().to_string(),
@@ -145,8 +155,17 @@ fn run_job(job: &Job) -> Result<MockJobDone, String> {
 /// 生成阶段（进度回调是 `Fn(usize, usize) + Send + 'static`：只能经进程级单例回写，
 /// 与 worker 同源）。
 fn generate(job: &Job, append_to: Option<&str>) -> Result<MockGenInfo, String> {
+    // 只有追加要在生成期读目标表（自增接续）：纯生成不碰任何库
+    let db_path = match append_to {
+        Some(_) => Some(job.paths.db_path.as_deref().ok_or_else(|| {
+            "未打开项目：Mock 只写项目分析库（{项目}/.RSmeta/analytics.duckdb）——请先打开项目；\
+             要进全局分析库，用资产库存档（M6）或草稿箱（M5）升级"
+                .to_string()
+        })?),
+        None => None,
+    };
     mock_generator::generate_at_with_progress(
-        &job.paths.db_path,
+        db_path,
         &job.draft,
         append_to,
         move |batches_done, batches_total| {

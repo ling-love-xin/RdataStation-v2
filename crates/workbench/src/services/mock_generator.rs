@@ -8,17 +8,20 @@
 //!
 //! # 写入语义
 //!
+//! 所有写入都落在**项目分析库** `{项目}/.RSmeta/analytics.duckdb`（未打开项目 → 拒绝，
+//! 原因里写清替代路径）；要进全局分析库走 M6 资产库存档 / M5 草稿箱。
+//!
 //! | 动作 | 目标 | 语义 |
 //! | --- | --- | --- |
-//! | `generate_at_with_progress` | 内存临时表（DuckDB `temp_mock_*`） | **不写库**：只产数据 + 预览（按批回调进度） |
-//! | `persist_table_at` | 分析库 | **新建**表；已存在则 `Err`（引导改用「追加」） |
-//! | `append_table_at` | 分析库既有表 | 保留既有数据，新行接在后面；主键自增接续表内行数 |
+//! | `generate_at_with_progress` | 内存临时表（DuckDB `temp_mock_*`） | **不写库**：只产数据 + 预览（按批回调进度）；`db_path` 为 `None` 也能跑（纯生成不碰库） |
+//! | `persist_table_at` | 项目分析库 | **新建**表；已存在则 `Err`（引导改用「追加」） |
+//! | `append_table_at` | 项目分析库既有表 | 保留既有数据，新行接在后面；主键自增接续表内行数 |
 //! | `export_file` | 调用方指定路径 | CSV / Parquet / Xlsx / SQL INSERT |
 //! | `save_scratchpad` | `{项目}/mock/` | 时间戳命名；无项目报错 |
 //!
 //! 本层全是**同步**实现（阻塞当前线程）：生产入口是 `services::mock_jobs` 的任务种类，
-//! 由它在工作线程上调用；`*_at` 变体接受显式路径——集成测试用，也是「项目作用域分析库」
-//! 将来的接入点（生产路径恒取 [`analytics_db_path`]）。视图侧没有同步出口入口。
+//! 由它在工作线程上调用；`*_at` 变体接受显式路径——集成测试用，也是「任意项目根」的接入面
+//! （生产路径由宿主桥从当前项目派生）。视图侧没有同步出口入口。
 //!
 //! # 已知取舍
 //!
@@ -38,12 +41,20 @@ use mock::{MockEngine, TempTableWriteMode, parse_data_type, sanitize_identifier}
 
 use crate::services::nav_runtime;
 
-/// 分析库（DuckDB）路径：当前与 SQL 执行入口同口径（全局分析库）。
+/// 分析库（DuckDB）路径：**当前项目的项目库** `{项目}/.RSmeta/analytics.duckdb`。
 ///
-/// 项目作用域分析库（`{项目}/.RSmeta/analytics.duckdb`）的切换属待拍板项，
-/// 见 `docs/architecture/mock/mock-prototype-design.md` §8-（3）。
-pub fn analytics_db_path() -> PathBuf {
-    crate::services::workspace_loader::global_analysis_db_path()
+/// # 为什么是项目级
+///
+/// mock 产出的是「这个项目造出来的测试数据」——它属于项目，不属于应用。
+/// 早期实现恒取全局分析库（`{全局}/analytics.duckdb`），后果是：造的数据会掉进
+/// 共享库并跨项目可见，既违背「窗口 = 项目」的隔离，也让「这份数据哪来的」无从追溯。
+/// 要跨项目复用 / 进全局，走**资产库存档**（M6）或**草稿箱**（M5）的升级路径，
+/// 而不是让 mock 直接写全局。
+///
+/// 未打开项目时返回 `None`：此时落库 / 追加不可用（面板与任务层都给可读原因），
+/// 但**生成仍然可用**（只写进程内内存临时表，与库无关）。
+pub fn analysis_db_path(project_root: Option<&Path>) -> Option<PathBuf> {
+    project_root.map(engine::persistence::project_db::ProjectDatabaseManager::analysis_db_path)
 }
 
 /// 打开分析库连接（读写）。
@@ -78,9 +89,21 @@ fn analysis_tables(conn: &duckdb::Connection) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// 未打开项目时的统一理由（落库 / 追加 / 需要读既有表的生成都用它）。
+///
+/// 写全「替代路径」的原因：用户想往全局写时的正常做法是**存档升级**（M6），
+/// 只说「请先打开项目」会让人以为功能被砍了。
+const NO_PROJECT_DB: &str = "未打开项目：Mock 只写项目分析库（{项目}/.RSmeta/analytics.duckdb）\
+——请先打开项目；要进全局分析库，用资产库存档（M6）或草稿箱（M5）升级";
+
 /// 分析库中可作追加目标的分析表（读取失败返回空清单：面板显示「暂无表」）。
-pub fn existing_tables() -> Vec<String> {
-    existing_tables_at(&analytics_db_path())
+///
+/// 未打开项目时也是空清单——真正的拒绝理由在提交任务时给（此处只负责取候选）。
+pub fn existing_tables(project_root: Option<&Path>) -> Vec<String> {
+    match analysis_db_path(project_root) {
+        Some(path) => existing_tables_at(&path),
+        None => Vec::new(),
+    }
 }
 
 /// [`existing_tables`] 的显式路径版本。
@@ -95,7 +118,7 @@ pub fn existing_tables_at(path: &Path) -> Vec<String> {
 fn table_row_count(conn: &duckdb::Connection, table: &str) -> Result<i64, String> {
     let sql = SqlEngine::build_select(table, &["COUNT(*)"], None);
     conn.query_row(&sql, [], |row| row.get(0))
-        .map_err(|_| format!("分析库没有表 {table}"))
+        .map_err(|_| format!("项目分析库没有表 {table}"))
 }
 
 /// 目标表列名（表不存在时报错）。
@@ -103,7 +126,7 @@ fn table_columns(conn: &duckdb::Connection, table: &str) -> Result<Vec<String>, 
     let sql = SqlEngine::build_select_all(table, Some(0));
     let mut stmt = conn
         .prepare(&sql)
-        .map_err(|_| format!("分析库没有表 {table}"))?;
+        .map_err(|_| format!("项目分析库没有表 {table}"))?;
     let _rows = stmt
         .query([])
         .map_err(|e| format!("读取表 {table} 结构失败: {e}"))?;
@@ -113,11 +136,14 @@ fn table_columns(conn: &duckdb::Connection, table: &str) -> Result<Vec<String>, 
 // ==================== 生成 ====================
 
 /// 生成到内存临时表（**不写库**）：`append_to` 给定时按目标表现有行数接续主键自增起点
-/// （「追加到既有表」用）。
+/// （「追加到既有表」用，此时必须有项目分析库）。
+///
+/// `db_path` 是 `Option`：**纯生成不碰任何库**（内存临时表是进程级的，与项目无关），
+/// 所以「未打开项目」也能生成预览；只有追加需要在生成期读目标表。
 ///
 /// 落库 / 落盘是出口的职责（[`persist_table_at`] / [`append_table_at`] / [`export_file`]）。
 pub fn generate_at(
-    db_path: &Path,
+    db_path: Option<&Path>,
     draft: &MockDraft,
     append_to: Option<&str>,
 ) -> Result<MockGenInfo, String> {
@@ -129,7 +155,7 @@ pub fn generate_at(
 /// 回调在工作线程上执行（`Fn + Send + 'static`），只能写共享原子量 / 锁保护的状态，
 /// 不得回到 UI 线程。
 pub fn generate_at_with_progress<F>(
-    db_path: &Path,
+    db_path: Option<&Path>,
     draft: &MockDraft,
     append_to: Option<&str>,
     on_progress: F,
@@ -143,6 +169,9 @@ where
 
     let mut columns: Vec<ColumnDef> = draft.columns.iter().map(|c| c.def.clone()).collect();
     if let Some(table) = append_to {
+        let Some(db_path) = db_path else {
+            return Err(NO_PROJECT_DB.to_string());
+        };
         let conn = open_analysis_db(db_path)?;
         let existing = table_row_count(&conn, table)?;
         for def in columns.iter_mut() {
@@ -207,7 +236,7 @@ pub fn persist_table_at(
     {
         let conn = open_analysis_db(db_path)?;
         if analysis_tables(&conn)?.iter().any(|t| t == &name) {
-            return Err(format!("分析库已存在表 {name}：请改用「追加到既有表」"));
+            return Err(format!("项目分析库已存在表 {name}：请改用「追加到既有表」"));
         }
     }
 
@@ -217,7 +246,7 @@ pub fn persist_table_at(
         &name,
         TempTableWriteMode::Create(column_def_infos(&draft.columns)),
     )
-    .map_err(|e| format!("写入分析库失败: {e}"))?;
+    .map_err(|e| format!("写入项目分析库失败: {e}"))?;
 
     let conn = open_analysis_db(db_path)?;
     table_row_count(&conn, &name)

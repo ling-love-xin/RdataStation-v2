@@ -76,7 +76,7 @@ fn generate_does_not_write_analysis_db() {
     let db = dir.join("analytics.duckdb");
 
     let draft = draft("t_gen_only", 50);
-    let info = generate_at(&db, &draft, None).expect("generate");
+    let info = generate_at(Some(&db), &draft, None).expect("generate");
     assert_eq!(info.row_count, 50);
     assert_eq!(info.temp_table_name, "temp_mock_t_gen_only");
     assert_eq!(info.preview.columns, ["id", "amount", "status"]);
@@ -98,7 +98,7 @@ fn persist_creates_table_and_rejects_second_run() {
     let db = dir.join("analytics.duckdb");
     let draft = draft("t_persist", 50);
 
-    let info = generate_at(&db, &draft, None).expect("generate");
+    let info = generate_at(Some(&db), &draft, None).expect("generate");
     let rows = persist_table_at(&db, &draft, &info).expect("persist");
     assert_eq!(rows, 50);
     assert_eq!(count_rows(&db, "t_persist"), 50);
@@ -124,11 +124,11 @@ fn append_continues_primary_key_sequence() {
     let draft = draft("t_append", 50);
 
     // 首次建表
-    let first = generate_at(&db, &draft, None).expect("generate");
+    let first = generate_at(Some(&db), &draft, None).expect("generate");
     persist_table_at(&db, &draft, &first).expect("persist");
 
     // 追加：生成时按表内行数接续自增起点，再插入
-    let second = generate_at(&db, &draft, Some("t_append")).expect("regenerate for append");
+    let second = generate_at(Some(&db), &draft, Some("t_append")).expect("regenerate for append");
     let total = append_table_at(&db, &draft, &second, "t_append").expect("append");
     assert_eq!(total, 100, "追加后表内应累计 100 行");
 
@@ -157,7 +157,7 @@ fn persist_writes_many_rows_in_one_go() {
     let db = dir.join("analytics.duckdb");
     let draft = draft("t_many", 20_000);
 
-    let info = generate_at(&db, &draft, None).expect("generate");
+    let info = generate_at(Some(&db), &draft, None).expect("generate");
     let rows = persist_table_at(&db, &draft, &info).expect("persist");
     assert_eq!(rows, 20_000);
     assert_eq!(count_rows(&db, "t_many"), 20_000);
@@ -185,7 +185,7 @@ fn append_leaves_extra_target_columns_at_default() {
         .expect("seed row");
     }
 
-    let info = generate_at(&db, &draft, Some("t_extra")).expect("regenerate for append");
+    let info = generate_at(Some(&db), &draft, Some("t_extra")).expect("regenerate for append");
     let total = append_table_at(&db, &draft, &info, "t_extra").expect("append");
     assert_eq!(total, 21, "种子行 1 + 追加 20");
 
@@ -208,8 +208,8 @@ fn append_to_unknown_table_errors() {
     let draft = draft("t_append_missing", 10);
 
     // 生成需要目标表现有行数：表不存在 → 可读报错，不静默写入
-    let err = generate_at(&db, &draft, Some("nope")).expect_err("应报错");
-    assert!(err.contains("分析库没有表 nope"), "err: {err}");
+    let err = generate_at(Some(&db), &draft, Some("nope")).expect_err("应报错");
+    assert!(err.contains("项目分析库没有表 nope"), "err: {err}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -220,13 +220,13 @@ fn append_rejects_column_mismatch() {
     let db = dir.join("analytics.duckdb");
     let draft = draft("t_mismatch", 10);
 
-    let info = generate_at(&db, &draft, None).expect("generate");
+    let info = generate_at(Some(&db), &draft, None).expect("generate");
     persist_table_at(&db, &draft, &info).expect("persist");
 
     // 目标表缺少草稿里的列 → 报缺失列名（不让 DuckDB 原始错误冒到界面）
     let mut narrowed = draft.clone();
     narrowed.columns.push(column("extra", GeneratorConfig::Digit));
-    let info = generate_at(&db, &narrowed, Some("t_mismatch")).expect("regenerate");
+    let info = generate_at(Some(&db), &narrowed, Some("t_mismatch")).expect("regenerate");
     let err = append_table_at(&db, &narrowed, &info, "t_mismatch").expect_err("应报缺列");
     assert!(err.contains("缺少列"), "err: {err}");
     assert!(err.contains("extra"), "err: {err}");
@@ -244,7 +244,7 @@ fn generate_without_columns_errors() {
         columns: Vec::new(),
         options: MockRunOptions::new(10, Some(42), Locale::ZhCn),
     };
-    let err = generate_at(&db, &empty, None).expect_err("应报错");
+    let err = generate_at(Some(&db), &empty, None).expect_err("应报错");
     assert!(err.contains("没有可用的列"), "err: {err}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -255,7 +255,7 @@ fn export_writes_csv_with_header() {
     let dir = temp_dir("export");
     let db = dir.join("analytics.duckdb");
     let draft = draft("t_export", 20);
-    let info = generate_at(&db, &draft, None).expect("generate");
+    let info = generate_at(Some(&db), &draft, None).expect("generate");
 
     let csv = dir.join("t_export.csv");
     let message = export_file(
@@ -279,7 +279,7 @@ fn scratchpad_without_project_errors() {
     let dir = temp_dir("scratch_none");
     let db = dir.join("analytics.duckdb");
     let draft = draft("t_scratch", 5);
-    let info = generate_at(&db, &draft, None).expect("generate");
+    let info = generate_at(Some(&db), &draft, None).expect("generate");
 
     let err = save_scratchpad(&draft, &info, &MockExportFormat::Csv, None).expect_err("应报错");
     assert!(err.contains("未打开项目"), "err: {err}");

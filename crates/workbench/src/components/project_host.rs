@@ -95,7 +95,7 @@ pub fn build_host(
         Rc::new(move |cx: &mut App| {
             refresh_after_open(&shared, cx);
             // M6：资产库列表随项目切换重新取数——面板可能正开着，不重取会一直
-            // 显示上一项目的存档（「切了项目但内容没变」是最难发现的一类错）。
+            // 显示上一项目的存档（“切了项目但内容没变”是最难发现的一类错）。
             if let Some(view) = view.upgrade() {
                 view.update(cx, |this, cx| this.request_resources_refresh(cx));
             }
@@ -120,7 +120,8 @@ pub fn build_host(
 /// 内存库是**进程级单例**：上一项目生成的 `temp_mock_*` 不切项目就一直在（架构 §9-I1/I2），
 /// 既是内存占用（换目标表名就多一张），也让「窗口 = 项目」的隔离打折扣。
 /// 这里先取消在跑的任务（避免刚清完又被写回），再删除全部 mock 临时表，
-/// 最后让面板作废旧预览（`gen_info` 里的表名已失效）。
+/// 最后让面板作废旧预览（`gen_info` 里的表名已失效）并重读生成历史
+/// （历史随项目走，上一个项目的记录不能再摆在这个项目下）。
 fn clear_mock_temp_tables(shared: &Shared, cx: &mut App) {
     let panel = shared.mock_panel.borrow().clone();
     let live = || panel.as_ref().and_then(|panel| panel.upgrade());
@@ -129,7 +130,10 @@ fn clear_mock_temp_tables(shared: &Shared, cx: &mut App) {
     }
     let cleared = crate::services::mock_generator::clear_temp_tables().len();
     if let Some(panel) = live() {
-        panel.update(cx, |panel, cx| panel.forget_generated(cleared, cx));
+        panel.update(cx, |panel, cx| {
+            panel.forget_generated(cleared, cx);
+            panel.refresh_history(cx);
+        });
     }
 }
 
@@ -190,12 +194,8 @@ mod tests {
     #[gpui_kit::test]
     fn project_switch_clears_mock_temp_tables(cx: &mut TestAppContext) {
         let shared = Shared::with_connections(Vec::new(), None);
-        let dir = std::env::temp_dir().join(format!("rds_mock_switch_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("临时目录");
-        let db = dir.join("analytics.duckdb");
-
-        let info = crate::services::mock_generator::generate_at(&db, &draft("t_switch"), None)
+        // 纯生成不碰库（`None`）：临时表落在进程级内存库上，本用例只关心它被清掉
+        let info = crate::services::mock_generator::generate_at(None, &draft("t_switch"), None)
             .expect("生成应当成功");
         assert!(
             mock::MockEngine::temp_tables()
@@ -212,6 +212,5 @@ mod tests {
                 .contains(&info.temp_table_name),
             "切项目后不应再有上一项目的临时表"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

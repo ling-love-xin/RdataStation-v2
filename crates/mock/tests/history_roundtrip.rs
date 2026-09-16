@@ -167,7 +167,7 @@ async fn history_is_newest_first_and_failures_keep_their_reason() {
             RunRecord {
                 save_format: Some(history::SAVE_FORMAT_TABLE.to_string()),
                 outcome: RunOutcome::Failed {
-                    reason: "分析库已存在表 second".to_string(),
+                    reason: "项目分析库已存在表 second".to_string(),
                 },
             },
         ),
@@ -196,7 +196,7 @@ async fn history_is_newest_first_and_failures_keep_their_reason() {
     assert_eq!(tasks[0].status, "failed");
     assert_eq!(
         tasks[0].error_message.as_deref(),
-        Some("分析库已存在表 second"),
+        Some("项目分析库已存在表 second"),
         "失败原因随记录保存"
     );
     assert_eq!(tasks[0].save_format.as_deref(), Some("table"));
