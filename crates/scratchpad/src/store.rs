@@ -114,6 +114,28 @@ impl ScratchpadStore {
         Some(parts.join("/"))
     }
 
+    /// 执行回执 → 要回写的草稿（只保留模块目录内的文件），`(相对路径, 连接 id)`。
+    ///
+    /// 宿主拿到的是编辑器的一串「文件 + 用过的连接」；这里回答「哪些属于草稿箱、该写回什么」：
+    /// - 模块外的路径（`resources/`、`mock/`、临时文件）一律跳过；
+    /// - 同一份草稿有多条回执时**后到者胜**（最后一次执行用的那个连接才是“上次用的”）。
+    pub fn draft_targets(
+        &self,
+        receipts: impl IntoIterator<Item = (PathBuf, Option<String>)>,
+    ) -> Vec<(String, Option<String>)> {
+        let mut targets: Vec<(String, Option<String>)> = Vec::new();
+        for (path, connection) in receipts {
+            let Some(relative) = self.relative_path_of(&path) else {
+                continue;
+            };
+            match targets.iter_mut().find(|(rel, _)| rel == &relative) {
+                Some(slot) => slot.1 = connection,
+                None => targets.push((relative, connection)),
+            }
+        }
+        targets
+    }
+
     pub async fn ensure_dir(&self) -> Result<(), CoreError> {
         // 先做一次旧布局迁移（仅当旧目录存在时执行，幂等且非破坏）。
         self.migrate_legacy_layout().await;
@@ -2042,6 +2064,48 @@ mod tests {
             "内部/隐藏路径不经 API 读写"
         );
 
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn draft_targets_only_keeps_files_inside_the_module() {
+        let project = temp_project("targets");
+        let store = ScratchpadStore::new(project.clone());
+        let module = store.scratchpad_dir().to_path_buf();
+
+        let targets = store.draft_targets([
+            (module.join("q.sql"), Some("P_1".to_string())),
+            (project.join("resources").join("r.sql"), Some("P_9".to_string())),
+            (module.join("sub").join("a.sql"), None),
+        ]);
+
+        assert_eq!(
+            targets,
+            vec![
+                ("q.sql".to_string(), Some("P_1".to_string())),
+                ("sub/a.sql".to_string(), None),
+            ],
+            "只回写模块内的草稿；子目录用 `/` 连接"
+        );
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn draft_targets_let_the_last_receipt_win() {
+        let project = temp_project("targets_last");
+        let store = ScratchpadStore::new(project.clone());
+        let draft = store.scratchpad_dir().join("q.sql");
+
+        let targets = store.draft_targets([
+            (draft.clone(), Some("P_1".to_string())),
+            (draft, Some("G_2".to_string())),
+        ]);
+
+        assert_eq!(
+            targets,
+            vec![("q.sql".to_string(), Some("G_2".to_string()))],
+            "同一份草稿多条回执：最后一次执行的那个连接生效"
+        );
         std::fs::remove_dir_all(&project).ok();
     }
 

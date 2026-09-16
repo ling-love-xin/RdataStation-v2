@@ -1,6 +1,6 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修**——模块根 + 项目级回收站 + 面板闭环（新建含模板/重命名/删除撤销/移动/递归复制/多选/右键/键盘导航）+ 导入与引用（含失效重定位）+ 内容搜索（正则/大小写/命中高亮/全部替换）+ 虚拟列表与空态（2026-09-16） · Phase C 进行中：打开✅ / 连接预选✅（C-2 前半）/ 脏点✅（C-3）/ 执行回写·冲突 Diff·拖放待接 · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
+> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修**——模块根 + 项目级回收站 + 面板闭环 + 导入与引用 + 内容搜索与替换 + 虚拟列表与空态 · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ 冲突 Diff·拖放待接 · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
@@ -9,6 +9,25 @@
 ## 0. 进度记录（最近在前）
 
 > 路径注：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/*`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`；**2026-09-17 起面板视图本身也下沉进 crate**（`crates/scratchpad/src/scratchpad_view.rs` + `host.rs`，见“十四次”）。**下列历史条目保留当时的路径**，读时按此换算。
+
+### 2026-09-17（十六次）— Phase C-2 后半：执行后回写 `last_connection_id`
+
+**已完成**
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | 编辑器新增**执行回执**（`ExecReceipt{document, connection, succeeded}` + `drain_exec_receipts()`）；`drain_exec` 在交回结果的同时留一份，队列封顶 64 条 | `crates/editor/src/shared.rs`（纯加法，不改编辑器行为） |
+| 2 | 宿主新增回写服务：1 s 一拍取回执 → 只算成功 → 文档→绝对路径→`relative_path_of` → `update_file_meta`；失败进状态栏 | `crates/workbench/src/services/scratchpad_meta.rs`（新）+ `services/mod.rs` |
+| 3 | 装配：泵挂在 `WorkbenchView`（与草稿箱面板是否渲染无关），`init_workspace` 起一次 | `crates/workbench/src/view.rs`（`ensure_scratchpad_meta_pump`） |
+
+**关键取舍**
+
+- 泵**不挂在草稿箱面板**：侧栅切到别的工具时草稿箱不渲染，而执行照样发生；挂在宿主才不漏。
+- 回执是**加法**：结果仍归编辑区，编辑器不认识草稿箱；「这路径是不是我的地盘」由消费方（`draft_targets`）判定。
+- 只记**成功**的执行；同一草稿多条回执**后到者胜**（最后一次执行的那个连接才是“上次用的”）。
+- 写的是元数据（`config.json`），按 K1c 保持同步（一次小 JSON 写），不开后台任务。
+
+**验证**：`cargo check -p rds-editor -p rds-workbench --lib -j 2` 零告警；新增 2 项宿主编测（`only_files_inside_the_module_are_written_back` / `the_last_receipt_of_a_draft_wins`）。
 
 ### 2026-09-17（十五次）— Phase C-3：脏点回显（编辑器未保存修改 → 草稿树打点）
 
@@ -347,7 +366,7 @@
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | C1 | 中央编辑区「草稿箱文件模式」：`.sql` 打开 → 执行引擎 + 连接选择 + `Ctrl+S` 回存；`.py`/`.json`/`.md` 代码编辑器；防重复 Tab ✅ **首片已接（2026-09-16）**：双击/Enter/右键「打开」→ 编辑器（同路径只激活） | `crates/scratchpad/src/scratchpad_view.rs`（发请求）+ `workbench/src/view.rs::open_in_editor` | 双击打开、编辑回存正确 |
-| C2 | `file_meta` 联动：**打开时自动选连接**（已接，2026-09-17）+ 执行后写 `last_connection_id`/`last_executed_at`（待接：需编辑器侧执行完成通知） | `scratchpad` store（读侧已有 `file_meta` / `preferred_connection`）+ `workbench/src/view.rs` + 编辑器 | 连接自动恢复 |
+| C2 | `file_meta` 联动：**打开时自动选连接** ✅（2026-09-17）+ **执行后写 `last_connection_id`/`last_executed_at`** ✅（2026-09-17，编辑器回执 + 宿主 1 s 泵） | `scratchpad` store（`file_meta` / `preferred_connection` / `update_file_meta`）+ `editor::shared::ExecReceipt` + `workbench/src/services/scratchpad_meta.rs` | 连接自动恢复 ✅ |
 | C3 | 脏点回显：编辑器未保存修改 → 草稿树文件名前实心圆点（**只有文件**）✅ **已接（2026-09-17）**：经 `ScratchpadHost::dirty_files` 取绝对路径集合，1.2 s 一拍比对缓存 | `crates/scratchpad/src/{host,scratchpad_view}.rs` + `workbench/src/components/scratchpad_host.rs` | 改一处出现、`Ctrl+S` 后消失 |
 | C4 | 拖拽文件到编辑区插入内容；拖放文件进树导入 | workbench | 拖放生效 |
 | C4 | 冲突处理：外部修改 → 冲突对话框 → `diff_with_content` Diff 弹窗 → 接受右侧 | `scratchpad` store + 弹窗 | 冲突可消解 |

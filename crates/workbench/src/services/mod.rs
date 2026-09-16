@@ -25,5 +25,6 @@ pub mod query_export;
 pub mod query_history;
 pub mod resource_jobs;
 pub mod result_service;
+pub mod scratchpad_meta;
 pub mod secret_integration;
 pub mod workspace_loader;

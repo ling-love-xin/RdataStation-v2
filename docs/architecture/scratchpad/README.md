@@ -37,7 +37,8 @@
 | **依赖只向下** | `scratchpad → workbench_shell / gpui-kit / shared`，**不依赖 `workbench`**；宿主能力经本 crate 定义的 `ScratchpadHost` 端口注入（实现在 `workbench/src/components/scratchpad_host.rs`） | 架构 §7.1 |
 | **render 是纯读路径** | 渲染期不做 I/O：加载与重操作（导入/粘贴/清空回收站/搜索/替换）均走 `scratchpad::jobs` 工作线程 + 轮询回填；仅元数据级操作保持同步（架构 K1c） | 架构 §6.1、§13.1 |
 | **双击打开到编辑器** | 行双击 / `Enter` / 右键「打开」→ 中央编辑器（同路径已打开只激活，不重读）；打开时按 `file_meta` **预选连接**；模式与只读等级由编辑器按路径判定 | 架构 §6.12 |
-| **脏点回显** | 编辑器里有未保存修改的文件，在树上前一个实心圆点（只有文件；经 `ScratchpadHost::dirty_files` 取绝对路径集合，1.2 s 一拍比对缓存） | 架构 §6.14 |
+| **执行后回写连接** | 编辑器每完成一次执行留一份回执；宿主 1 s 一拍只对草稿箱内的文件写 `last_connection_id` / `last_executed_at`（模块外路径跳过，同草稿后到者胜） | 架构 §6.13 |
+| **脏点回显** | 编辑器里有未保存修改的文件，在树上前一个实心圆点（只有文件；经 `ScratchpadHost::dirty_files` 取绝对路径集合，1.2 s 一拍比对缓存） | 架构 §6.15 |
 | **外部改动自动刷新** | 监听模块目录（`notify`），1.2 s 去抖后重拉列表，并给已打开的结果面板重跑一次搜索；监控不可用则降级为手动 `↻` | 架构 §6.11 |
 | **窗口 = 项目** | 项目态**不得放进程单例**：workbench 由窗口的 `Shared::project` 按需构造 `ScratchpadStore`；`ScratchpadState`（长生命周期 watcher 场景）接入时**必须按窗口持有** | 架构 §7.2 |
 | **两道护栏** | 同项目二次打开由 `project` crate 的 `ProjectLock` 拦截（只读/仍要打开/取消）；只读打开时草稿箱全面禁写并给状态栏提示 | 架构 §7.3 |
@@ -81,7 +82,8 @@
 | `crates/workbench/src/panels/shared.rs`（`Shared`） | 跨面板共享态：`request_open_in_editor` / `take_open_in_editor`（打开草稿）、`scratchpad_search`（搜索结果）、`scratchpad_pump_request`（轮询印接力）、`scratchpad_store`（元数据级操作） |
 | `crates/workbench/src/panels/mod.rs`（`SidebarPanel`） | 左 Dock 装配：持 `Entity<ScratchpadView>`，`LeftPanel::Draft` 分支转发渲染 |
 | `crates/workbench/src/commands.rs`、`crates/workbench_shell/src/ui.rs` | `scratchpad` key context 动作；`SCRATCHPAD_GROUP_MAX_HEIGHT` / `SCRATCHPAD_EMPTY_ICON_SIZE` 等尺寸常量（外壳 crate，经 `crate::ui` 重导） |
-| `crates/workbench/src/view.rs`（`WorkbenchView`） | 宿主：消费 `Shared::take_open_in_editor()` → `open_in_editor`（同路径只激活；草稿带 `file_meta` 绑定时**预选连接**） |
+| `crates/workbench/src/view.rs`（`WorkbenchView`） | 宿主：消费 `Shared::take_open_in_editor()` → `open_in_editor`（同路径只激活；草稿带 `file_meta` 绑定时**预选连接**）；持「执行回执→元数据回写」泵 |
+| `crates/workbench/src/services/scratchpad_meta.rs` | 执行回执 → 草稿元数据回写（Phase C-2 后半）：1 s 一拍，`draft_targets` 只留模块内草稿，`store.update_file_meta` 同步写（K1c），失败进状态栏 |
 | `crates/app/src/main.rs` | 快捷键绑定（`ctrl-a` / `f2` / `delete` / `escape` / `↑↓` / `enter` / `ctrl-n`，context = `scratchpad`） |
 | `crates/scratchpad/README.md` | crate 入口（特点提炼，不复述设计） |
 
@@ -109,7 +111,10 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" \
 # 绑定与最近执行回读 / 绝对路径→模块内相对路径 / 搜索区间 / 正则大小写 / 递归复制 / 替换 /
 # Diff 行分类与两侧行号 / 面板纯函数（排序·压平·模板后缀·搜索结果映射·脏点判据）/
 # 后台任务（加载·粘贴·导入·搜索替换））
-env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-scratchpad -j 2
+env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-scratchpad -j 2 --lib
+
+# 宿主侧（回执→相对路径的纯函数）
+env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-workbench --lib -j 2 scratchpad_meta
 ```
 
 - 单测覆盖**域逻辑 + 面板纯函数**（排序 / 压平 / 模板后缀 / 搜索结果映射）与后台任务；窗口级交互（多选、剪贴板、虚拟列表、替换栏）仍靠人工验收，见 `scratchpad-user-guide.md` §9。

@@ -2,7 +2,7 @@
 
 > 本文回答**为什么这样设计 / 怎么运转**：不变式、概念模型、存储布局、数据流、决策表、降级、测试策略、实现映射，以及**权威的已知问题清单**。
 > 视觉与交互规格看 `scratchpad-prototype-design.md`；进度与阶段任务看 `scratchpad-dev-plan.md`；使用方式看 `scratchpad-user-guide.md`。
-> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中（C-1 打开 + C-2 前半连接预选 + C-3 脏点已接）· Phase D 未开始。
+> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中（C-1 打开 + C-2 连接预选与执行回写 + C-3 脏点已接）· Phase D 未开始。
 
 ## 0. 裁决摘要（一页读完）
 
@@ -329,10 +329,39 @@ render_scratchpad（首次 or loaded=false）
   草稿箱不做后缀分支。
 - 连接预选（C-2 前半）只对**新建**文档生效：同路径已打开走“只激活”，不覆盖用户手动改过的连接；
   已被删除的连接（不在下拉里）不预选——绑上去只会让执行报错。读元数据属「元数据级操作保持同步」的既定口径（K1c）。
-- **待接**（Phase C 余项）：执行后回写 `file_meta.last_connection_id`（需编辑器侧执行完成通知）、
-  冲突 Diff（`store.rs::diff_with_content` 已在手，未接 UI）、拖放导入/拖入编辑区。
+- **待接**（Phase C 余项）：冲突 Diff（`store.rs::diff_with_content` 已在手，未接 UI）、拖放导入/拖入编辑区。
 
-### 6.14 脏点回显（Phase C-3，已接）
+### 6.13 执行后回写连接（Phase C-2 后半，已接）
+
+```
+编辑器执行完成（`ExecChannel` 出一条 `ExecOutcome`）
+  → `EditorShared::drain_exec` 顺带留一份回执 `ExecReceipt{document, connection, succeeded}`
+      · 结果仍归编辑区；回执只有“哪份文档、用了哪个连接、成没成”
+      · 没人取走时队列封顶 64 条（只保留最近一批）
+  → workbench `services::scratchpad_meta::write_back`（宿主 1 s 一拍，装配期在 `init_workspace` 起泵）
+      · 只算成功的执行；文档 → 绝对路径 → `ScratchpadStore::relative_path_of` 落回模块内身份
+      · 模块外的路径（`resources/`、临时文件）直接跳过；同一草稿多条回执**后到者胜**
+  → `store.update_file_meta(rel, conn)` 写 `last_connection_id` + `last_executed_at`
+      · 属元数据级写入（K1c）：一次小 JSON 写，保持同步，失败进状态栏提示
+```
+
+- **为何泵挂在宿主而不是草稿箱面板上**：侧栅切到别的工具时草稿箱不渲染，而执行照样会发生；
+  泵在 `WorkbenchView` 上，与面板可见性无关。
+- **为何不让草稿箱直接读编辑器**：`scratchpad` 不得依赖 `editor`；回执是编辑器对宿主的“公告”，
+  消费方（草稿箱）自己判定“这路径是不是我的地盘”。
+- 下游效果：下次打开这份草稿时，`file_meta` 里的绑定会被用作预选（§6.12）。
+
+### 6.14 键盘导航
+
+| 输入 | 路径 |
+| --- | --- |
+| `↑` / `↓` | `scratchpad_visible_keys()`（按当前过滤/排序/展开态重新压平）→ 移动单选 → `scroll_to_item(i, Center)` |
+| `Enter` | 文件夹：展开/折叠（展开时懒加载）；文件：Phase C 前回落「打开所在位置」并提示 |
+| `Ctrl+N` | 新建文件（落点规则同 §6.3） |
+
+动作定义在 `workbench/commands.rs`（`scratchpad` key context），绑定在 `app/main.rs`；行点击会 `focus` 面板，保证快捷键生效。
+
+### 6.15 脏点回显（Phase C-3，已接）
 
 ```
 编辑器里改动未保存（`EditorService::dirty_ids`）
@@ -346,16 +375,6 @@ render_scratchpad（首次 or loaded=false）
   `render` 只读自己的缓存——与「render 是纯读路径」一致。
 - **为什么经端口而不是让草稿箱依赖 `editor`**：`scratchpad` 不得依赖编辑器 crate；
   「哪些文档脏了」本质是宿主能回答的问题（同项目根 / 只读判定）。
-
-### 6.13 键盘导航
-
-| 输入 | 路径 |
-| --- | --- |
-| `↑` / `↓` | `scratchpad_visible_keys()`（按当前过滤/排序/展开态重新压平）→ 移动单选 → `scroll_to_item(i, Center)` |
-| `Enter` | 文件夹：展开/折叠（展开时懒加载）；文件：Phase C 前回落「打开所在位置」并提示 |
-| `Ctrl+N` | 新建文件（落点规则同 §6.3） |
-
-动作定义在 `workbench/commands.rs`（`scratchpad` key context），绑定在 `app/main.rs`；行点击会 `focus` 面板，保证快捷键生效。
 
 ## 7. 分层与依赖
 
@@ -477,6 +496,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 后台加载（K1） | `scratchpad/src/jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `scratchpad_view.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
 | 文件监控（Phase A5） | `scratchpad/src/watch.rs`（`ScratchpadWatcher` / `ChangeFlag`）+ `scratchpad_view.rs::{ensure_scratchpad_watch, ensure_scratchpad_watch_poll}` |
 | 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `scratchpad_view.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
+| 执行后回写连接（C-2 后半） | `editor::shared::{ExecReceipt, drain_exec_receipts}`（编辑器的公告）+ `workbench/src/services/scratchpad_meta.rs`（1 s 一拍、`draft_targets` 过滤）+ `store.rs::update_file_meta` |
 | 脏点（Phase C-3） | `host.rs::ScratchpadHost::dirty_files`（宿主取编辑器 `EditorService::dirty_ids`）+ `scratchpad_view.rs::{dirty_seen, refresh_dirty_cache, scratchpad_shows_dirty_dot}` |
 | 打开草稿（Phase C-1）/ 连接预选（C-2 前半） | `scratchpad_view.rs` 发请求 → `host.rs::open_in_editor` → `Shared::request_open_in_editor` → `view.rs::open_in_editor`（同路径只激活；草稿带 `file_meta` 绑定时 `EditorService::set_connection` 预选） |
 

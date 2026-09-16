@@ -28,6 +28,23 @@ use crate::store::ResultStore;
 pub type SavePathPicker =
     Rc<dyn Fn(Option<PathBuf>, String) -> Option<PathBuf>>;
 
+/// 一次执行完成后的**回执**（给宿主看，不给编辑区看）。
+///
+/// 编辑器的结果归编辑区（`drain_exec`），回执只回答“哪份文档、用了哪个连接、成没成”——
+/// 草稿箱据此把“这份草稿最后一次用哪个连接”写回 `file_meta`（M5 Phase C-2）。
+/// 编辑器不关心谁在听，也不做任何过滤（是不是草稿由消费方判定）。
+#[derive(Debug, Clone)]
+pub struct ExecReceipt {
+    pub document: crate::model::DocumentId,
+    /// 实际使用的连接（`None` = 未绑定，跟随当前活动连接）。
+    pub connection: Option<String>,
+    /// 成功才值得记“最近执行”；也留着失败，交给消费方决定。
+    pub succeeded: bool,
+}
+
+/// 无人取走时回执队列的上限（只保留最近的一批，避免无限长）。
+const MAX_EXEC_RECEIPTS: usize = 64;
+
 /// 共享句柄（`Clone` 即克隆 `Rc`，各面板指向同一份状态）
 #[derive(Clone)]
 pub struct EditorShared {
@@ -41,6 +58,8 @@ pub struct EditorShared {
     save_path: Rc<RefCell<Option<SavePathPicker>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
     connections: Rc<RefCell<Option<ConnectionsHandle>>>,
+    /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
+    receipts: Rc<RefCell<Vec<ExecReceipt>>>,
 }
 
 impl Default for EditorShared {
@@ -58,6 +77,7 @@ impl EditorShared {
             sessions: Rc::new(RefCell::new(None)),
             save_path: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
+            receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -120,9 +140,33 @@ impl EditorShared {
     }
 
     /// 结果队列里已完成但尚未取走的执行（轮询泵调用）
+    ///
+    /// **顺带留一份回执**（[`ExecReceipt`]）：结果归编辑区，回执给宿主。
     pub fn drain_exec(&self) -> Vec<crate::execution::ExecOutcome> {
-        let guard = self.exec.borrow();
-        guard.as_ref().map(|channel| channel.drain()).unwrap_or_default()
+        let drained = {
+            let guard = self.exec.borrow();
+            guard.as_ref().map(|channel| channel.drain()).unwrap_or_default()
+        };
+        if !drained.is_empty() {
+            let mut receipts = self.receipts.borrow_mut();
+            for outcome in &drained {
+                receipts.push(ExecReceipt {
+                    document: outcome.document.clone(),
+                    connection: outcome.connection.clone(),
+                    succeeded: outcome.result.is_ok(),
+                });
+            }
+            let overflow = receipts.len().saturating_sub(MAX_EXEC_RECEIPTS);
+            if overflow > 0 {
+                receipts.drain(0..overflow);
+            }
+        }
+        drained
+    }
+
+    /// 取走执行回执（宿主轮询调用；每个回执只交付一次）
+    pub fn drain_exec_receipts(&self) -> Vec<ExecReceipt> {
+        std::mem::take(&mut self.receipts.borrow_mut())
     }
 
     /// 中断当前执行（B3）；没在跑就回绝（理由可读，不是静默）

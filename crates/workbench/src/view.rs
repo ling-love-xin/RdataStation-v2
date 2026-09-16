@@ -78,6 +78,8 @@ pub struct WorkbenchView {
     editor_service: editor::shared::EditorShared,
     /// 已开的编辑面板（按 `DocumentId` 复用：同文档不重复建面板）。
     editor_hosts: Vec<Entity<editor::view::host::EditorHostPanel>>,
+    /// 草稿执行回执 → 元数据回写泵（1 s 一拍；句柄必须被持有，drop 即停）。
+    scratchpad_meta_pump: Option<Task<()>>,
 }
 
 impl WorkbenchView {
@@ -156,6 +158,7 @@ impl WorkbenchView {
             _insight_rules_watcher: insight_rules_watcher,
             editor_service,
             editor_hosts: Vec::new(),
+            scratchpad_meta_pump: None,
         }
     }
 
@@ -569,6 +572,35 @@ impl WorkbenchView {
         project::ui::refresh_picker(self.project_host(), cx);
     }
 
+    /// 启动「草稿执行回执 → 元数据回写」泵（装配期一次）。
+    ///
+    /// 编辑器把「哪份文档用了哪个连接」留在 `EditorShared`；这里每秒取一次，只对草稿箱
+    /// 模块内的文件写回 `file_meta`。**不挂在草稿箱面板上**：侧栅切到别的工具时面板不渲染，
+    /// 而执行照样会发生。
+    fn ensure_scratchpad_meta_pump(&mut self, cx: &mut Context<Self>) {
+        if self.scratchpad_meta_pump.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| loop {
+            executor.timer(std::time::Duration::from_millis(1000)).await;
+            let alive = weak
+                .update(cx, |this, cx| {
+                    crate::services::scratchpad_meta::write_back(
+                        &this.shared,
+                        &this.editor_service,
+                        cx,
+                    )
+                })
+                .is_ok();
+            if !alive {
+                return;
+            }
+        });
+        self.scratchpad_meta_pump = Some(task);
+    }
+
     /// 首次 render 时装配 DockArea：创建面板实体、订阅事件；左右 dock 由
     /// `apply_left_mode` / `apply_right_mode` 按 `Shared` 初始状态装配。
     fn init_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -585,6 +617,8 @@ impl WorkbenchView {
         crate::panels::install_scratchpad_bridge(&shared, sidebar.clone());
         // M6：资产库刷新端口（归档 / 取回完成后，发起方只有 `Shared`，而刷新归侧栏面板）。
         crate::panels::install_resources_bridge(&shared, sidebar.clone());
+        // M5 Phase C-2 后半：草稿执行回执 → 元数据回写（1 s 一拍，与侧栅是否渲染无关）。
+        self.ensure_scratchpad_meta_pump(cx);
 
         // 宿主重绘桥再挂一层：除宿主自身，编辑区也要跟上。
         //
