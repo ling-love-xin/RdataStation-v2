@@ -6,6 +6,7 @@
 //! ## 规则
 //!
 //! 1. **只补不盖**：目标文件已存在就跳过——用户在新位置改过的设置 / 数据不会被旧文件回冲。
+//!    唯一例外是密钥类文件（见 [`SECRET_FILES`]）。
 //! 2. **复制不移动**：旧目录原样留着，出问题可回滚（确认无误后用户自行删除）。
 //! 3. **一次性**：迁完在数据根写标记文件，之后启动不再扫描旧位置。
 //! 4. **迁移敏感**：`encryption-salt` 与 `machine-id` 是连接密码的密钥派生输入，
@@ -19,6 +20,23 @@ use crate::{NEW_LAYOUT_DIRS, config_dir, data_dir, extensions_dir, home};
 /// 迁移完成标记（位于数据根，不进 git）。
 const MARKER_FILE: &str = ".migrated-from-legacy";
 
+/// 密钥类文件名。
+///
+/// 它们是"只补不盖"的**唯一例外**：这两个文件是加密数据的钥匙（不跟着搬 = 存量密文
+/// 全部解不开），而首次迁移时**旧位置那份才是有数据在用的钥匙**；新位置即便已经有文件，
+/// 也只可能是垃圾——开发机上跑过 `cargo test` 就会在那里落一份随机生成的盐，
+/// 那不是任何密文的钥匙。此时覆盖比"保留垃圾、丢掉真钥匙"安全得多。
+const SECRET_FILES: [&str; 2] = ["encryption-salt", "machine-id"];
+
+/// 一条迁移项。
+#[derive(Debug, Clone)]
+pub(crate) struct Item {
+    pub src: PathBuf,
+    pub dest: PathBuf,
+    /// 目标已存在时是否覆盖（密钥类文件为 true，见 [`SECRET_FILES`]）。
+    pub overwrite: bool,
+}
+
 /// 迁移结果。
 #[derive(Debug, Default, Clone)]
 pub struct MigrationReport {
@@ -28,6 +46,8 @@ pub struct MigrationReport {
     pub copied: Vec<(PathBuf, PathBuf)>,
     /// 目标已存在而跳过的条目数。
     pub skipped: usize,
+    /// 目标已存在但被**覆盖**的条目数（只可能是密钥类文件）。
+    pub overwritten: usize,
     /// 失败项（迁移不阻断启动：失败只让用户暂时看不到旧数据）。
     pub errors: Vec<String>,
 }
@@ -51,6 +71,9 @@ impl MigrationReport {
             home().display(),
             self.skipped
         );
+        if self.overwritten > 0 {
+            text.push_str(&format!("，覆盖 {} 项密钥文件", self.overwritten));
+        }
         if !self.errors.is_empty() {
             text.push_str(&format!("，失败 {} 项", self.errors.len()));
             for e in self.errors.iter().take(5) {
@@ -70,11 +93,11 @@ pub fn migrate_legacy_layout() -> MigrationReport {
         return report;
     }
 
-    for (src, dest) in plan() {
-        if !src.exists() {
+    for item in plan() {
+        if !item.src.exists() {
             continue;
         }
-        copy_item(&src, &dest, &mut report);
+        copy_item(&item, &mut report);
     }
 
     // 标记写在最后：中途失败也留在"未标"状态，下次启动重试（幂等）。
@@ -101,7 +124,7 @@ pub fn marker_path() -> PathBuf {
 }
 
 /// 目标清单：旧目录顶层条目 → 新目录。
-fn plan() -> Vec<(PathBuf, PathBuf)> {
+fn plan() -> Vec<Item> {
     let mut items = Vec::new();
 
     // 漫游目录：`settings.json` 进 config，其余（global.db / system/ / metadata/ …）进 data。
@@ -119,7 +142,11 @@ fn plan() -> Vec<(PathBuf, PathBuf)> {
     // DuckDB 扩展：`~/.rdatastation/duckdb/extensions` → `<RDS_HOME>/extensions`。
     if let Some(src) = legacy::home_extensions_dir() {
         if src.exists() && src != extensions_dir() {
-            items.push((src, extensions_dir()));
+            items.push(Item {
+                src,
+                dest: extensions_dir(),
+                overwrite: false,
+            });
         }
     }
 
@@ -134,7 +161,7 @@ pub(crate) fn collect_top_level(
     src: &Path,
     data_dest: &Path,
     config_dest: &Path,
-    items: &mut Vec<(PathBuf, PathBuf)>,
+    items: &mut Vec<Item>,
 ) {
     let Ok(entries) = std::fs::read_dir(src) else {
         return; // 旧目录不存在 = 没什么可搬
@@ -154,19 +181,23 @@ pub(crate) fn collect_top_level(
         } else {
             data_dest
         };
-        items.push((path, dest_root.join(name.as_ref())));
+        items.push(Item {
+            src: path,
+            dest: dest_root.join(name.as_ref()),
+            overwrite: SECRET_FILES.contains(&name.as_ref()),
+        });
     }
 }
 
-pub(crate) fn copy_item(src: &Path, dest: &Path, report: &mut MigrationReport) {
-    if src.is_dir() {
-        copy_dir(src, dest, report);
+pub(crate) fn copy_item(item: &Item, report: &mut MigrationReport) {
+    if item.src.is_dir() {
+        copy_dir(&item.src, &item.dest, item.overwrite, report);
     } else {
-        copy_file(src, dest, report);
+        copy_file(&item.src, &item.dest, item.overwrite, report);
     }
 }
 
-pub(crate) fn copy_dir(src: &Path, dest: &Path, report: &mut MigrationReport) {
+fn copy_dir(src: &Path, dest: &Path, overwrite: bool, report: &mut MigrationReport) {
     let entries = match std::fs::read_dir(src) {
         Ok(entries) => entries,
         Err(e) => {
@@ -175,12 +206,20 @@ pub(crate) fn copy_dir(src: &Path, dest: &Path, report: &mut MigrationReport) {
         }
     };
     for entry in entries.flatten() {
-        copy_item(&entry.path(), &dest.join(entry.file_name()), report);
+        copy_item(
+            &Item {
+                src: entry.path(),
+                dest: dest.join(entry.file_name()),
+                overwrite,
+            },
+            report,
+        );
     }
 }
 
-pub(crate) fn copy_file(src: &Path, dest: &Path, report: &mut MigrationReport) {
-    if dest.exists() {
+fn copy_file(src: &Path, dest: &Path, overwrite: bool, report: &mut MigrationReport) {
+    let existed = dest.exists();
+    if existed && !overwrite {
         report.skipped += 1;
         return;
     }
@@ -193,7 +232,12 @@ pub(crate) fn copy_file(src: &Path, dest: &Path, report: &mut MigrationReport) {
         }
     }
     match std::fs::copy(src, dest) {
-        Ok(_) => report.copied.push((src.to_path_buf(), dest.to_path_buf())),
+        Ok(_) => {
+            if existed {
+                report.overwritten += 1;
+            }
+            report.copied.push((src.to_path_buf(), dest.to_path_buf()));
+        }
         Err(e) => report
             .errors
             .push(format!("复制 {} 失败：{e}", src.display())),

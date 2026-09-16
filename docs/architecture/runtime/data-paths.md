@@ -88,9 +88,10 @@ paths::extensions_dir()  // home/extensions
 | 风险 | 处理 |
 | --- | --- |
 | 测试大量用 `env::temp_dir()`（各 crate 的 `rds_*` 前缀临时目录） | **测试不改**（仍用系统临时目录，避免 `set_var` 并发与污染）；只要求生产代码走 `paths::temp_dir()`。Rust 2024 下测试内 `set_var` 是 `unsafe` 且与并行测试冲突，不值得 |
+| **测试会往产品数据根写**：开发机上跑 `cargo test` 会在 `<repo>/.rds/data` 落 `encryption-salt` / `machine-id` / `sql_history.json` 与空目录（测试调用的是产品代码里的全局便捷路径） | 密钥类文件由迁移的**覆盖例外**兜住（§10.1）；其余是无害残留。想彻底干净就在首次真机启动前删掉整个 `.rds/` 重建（目录会自动重建并触发迁移） |
 | DuckDB spill 放到项目盘影响性能 | `RDS_TEMP_DIR` 单独覆盖；文档写明取舍 |
 | 安装到 `Program Files`（目录不可写） | 启动探测可写性 → 回退 `%LOCALAPPDATA%/RdataStation` + 日志提示 |
-| 开发时 `cargo clean` 清掉数据 | 文档说明；开发期用 `RDS_HOME=<repo>/.rds` |
+| 开发时 `cargo clean` 清掉数据 | 已解决：`.cargo/config.toml` 把开发期的 `RDS_HOME` 钉到 `<repo>/.rds`（§10.1） |
 | 旧数据"看起来丢失" | 启动时检测旧路径并提示/迁移（§4.4）：**已实现自动迁移**，标记文件 `<<RDS_HOME>>/.migrated-from-legacy` 记录已迁项 |
 | 安装到只读目录 | `paths::home()` 探测可写性失败时回退：`%LOCALAPPDATA%/RdataStation`（并在 stderr 提示），保持"能用" |
 
@@ -226,7 +227,7 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 
 | 决策 | 结论 | 理由 |
 | --- | --- | --- |
-| 旧数据怎么办 | **自动迁移**：启动时只补不盖、复制不移动、迁完写标记文件 | ① `encryption-salt` / `machine-id` 不跟着搬 = 存量连接密码全部解不开（静默故障，用户只会看到"密码不对"）；② 提示式迁移要先做 UI 与阻塞流程，收益不抵成本；③ 复制不移动 → 出问题可回滚 |
+| 旧数据怎么办 | **自动迁移**：启动时只补不盖、复制不移动、迁完写标记文件。**例外：密钥类文件（`encryption-salt` / `machine-id`）允许覆盖** | ① `encryption-salt` / `machine-id` 不跟着搬 = 存量连接密码全部解不开（静默故障，用户只会看到"密码不对"）；② 提示式迁移要先做 UI 与阻塞流程，收益不抵成本；③ 复制不移动 → 出问题可回滚；④ 密钥文件必须覆盖：首次迁移时**旧位置那份才是有数据在用的钥匙**，新位置即便有文件也只可能是垃圾（开发机上跑过 `cargo test` 就会在那里落一份随机盐） |
 | DuckDB spill 跟不跟走 | **跟走**（`<RDS_HOME>/tmp`），`RDS_TEMP_DIR` 可单独覆盖 | 与"生成物都在软件目录下"同一口径；放机械盘/网络盘会拖慢 spill，留覆盖口 |
 | 开发期数据放哪 | `.cargo/config.toml` 的 `[env] RDS_HOME = { value = ".rds", relative = true }` | 发布版默认 = 安装目录；开发时那是 `target/debug`，一次 `cargo clean` 就把 global.db / 密钥库 / 设置全清掉。钉到仓库根 `.rds/`（已忽略）。**不开 `force`**，命令行 `RDS_HOME=<X> cargo run` 仍然优先 |
 
@@ -236,12 +237,12 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 | --- | --- |
 | 唯一解析点 + 可写性探测 + 回退 | `crates/paths/src/lib.rs`（`home` / `config_dir` / `data_dir` / `log_dir` / `temp_dir` / `extensions_dir`、`ensure_dirs`、`install_process_temp_dir`、`home_origin`、`summary`） |
 | 旧位置定义（**只给迁移用**） | `crates/paths/src/legacy.rs` |
-| 一次性迁移（只补不盖 + 标记文件） | `crates/paths/src/migrate.rs` |
+| 一次性迁移（只补不盖 + 密钥覆盖例外 + 标记文件） | `crates/paths/src/migrate.rs`（`SECRET_FILES` 是唯一例外） |
 | 启动最早处：TEMP 重定向 → 建目录 → 迁移 → 打印数据根 | `crates/app/src/main.rs::main` 的前三步 |
-| 单元测试（7 条：派生同根 / 迁移路由 / 只补不盖 / 递归复制） | `crates/paths/src/tests.rs` |
+| 单元测试（8 条：派生同根 / 迁移路由 / 只补不盖 / **密钥覆盖** / 递归复制） | `crates/paths/src/tests.rs` |
 | 依赖登记 | 根 `Cargo.toml`（`paths = { path = "crates/paths", package = "rds-paths" }`）；`app` / `engine` / `shared` / `settings` / `project` / `workbench` 六处 `paths.workspace = true` |
 
-替换的 12 处见 §9.1。**实施中的两处偏差**：
+替换的 12 处见 §9.1。**实施中的两处偏差 + 一处实测发现的坑**：
 
 1. **#11 `init_extensions` 改了签名**：原计划"传参改走 `paths::extensions_dir()`"，实际把 `data_dir: &str`
    参数**删掉**（函数内直接取 `paths::extensions_dir()`）。原因：唯一调用方 `DuckDbService::accelerate_query`
@@ -258,6 +259,13 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
      `app_logs` 表）与 tokio 运行时，只能在 `initialize_global_system()` 之后调用，还要持有
      `spawn_log_consumer` 的 `JoinHandle`。**当前应用不产出文件日志**，`<RDS_HOME>/logs/` 会是空的——
      接线前不要把它当已实现的排障手段（"没实现就不宣传"）。
+3. **实测发现的坑：`cargo test` 会往产品数据根写密钥**。验收时发现 `<repo>/.rds/data` 里
+   已经多了 `encryption-salt` / `machine-id`——测试跑的是产品代码里的全局便捷路径（`encrypt_password`
+   等），于是它们在数据根生成了一份**跟任何密文都没关系**的随机盐。此时"只补不盖"会让真正的旧密钥
+   永远迁不进来，表现就是**所有已保存的连接密码突然解不开**（且完全静默）。
+   修法：把密钥类文件定为"只补不盖"的唯一例外（[`SECRET_FILES`]，覆盖式迁移）。
+   为什么覆盖是对的：首次迁移时**旧位置那份才是有数据在用的钥匙**，新位置即便有文件也只可能是
+   垃圾（测试生成的盐 / 半途而废的尝试）。标记文件保证迁移只跑一次，所以这个"覆盖"不会反复发生。
 
 ### 10.3 验证
 
@@ -265,7 +273,7 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 | --- | --- |
 | `cargo check --all-targets` | 0 error / 0 warning（app 依赖图） |
 | `cargo check -p rds-engine -p rds-settings -p rds-shared -p rds-project -p rds-workbench -p rds-paths --all-targets` | 通过（含各 crate 的测试目标） |
-| `cargo test -p rds-paths` | 7 / 7 |
+| `cargo test -p rds-paths` | 8 / 8 |
 | `cargo test -p rds-engine --lib` | 310 / 310（23 ignored） |
 | `cargo test -p rds-shared -p rds-settings --lib` | 22 / 22、21 / 21 |
 | `cargo test -p rds-project --lib` | 29 / 29 |
@@ -274,6 +282,15 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 实测：`cargo test -p rds-paths` 后 `<repo>/.rds/{config,data,logs,tmp,extensions}` 均被创建
 （`RDS_HOME` 由 `.cargo/config.toml` 钉到仓库根，且 **cargo 会把它转成绝对路径**——这一点很关键：
 若它保持相对字符串，二进制会把它解析成"相对当前工作目录"，换目录启动就换数据位置）。
+
+**未做：§9.4 的真机验收**（`RDS_HOME=<临时目录> cargo run -p rds-app`）——本次没有构建 app 二进制
+（`target/debug/rds-app.exe` 不存在，一次完整链接不划算），且当时工作区有未提交的 editor 改动。
+首次真机启动请对照三条：
+
+1. `<RDS_HOME>` 下出现 `config/ data/ logs/ tmp/ extensions/`；
+2. 控制台出现 `[startup] 数据根 <路径>（来源：…）`，且旧数据存在时多一行迁移摘要；
+3. `%APPDATA%/RdataStation` 的内容被复制进 `<RDS_HOME>/data`（只补不盖），
+   且 `%TEMP%` 下不再新增 `RdataStation*` 目录。
 
 ### 10.4 仍未做（明确不在本次范围）
 
