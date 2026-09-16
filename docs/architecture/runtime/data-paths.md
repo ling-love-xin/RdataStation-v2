@@ -90,12 +90,41 @@ paths::extensions_dir()  // home/extensions
 | 测试大量用 `env::temp_dir()`（各 crate 的 `rds_*` 前缀临时目录） | **测试代码不改**（不引入 `set_var`），而是由 `.cargo/config.toml` 把 `TEMP`/`TMP`/`TMPDIR` 钉到 `<repo>/.rds/tmp`（**必须 `force = true`**：`[env]` 默认不覆盖环境里已存在的变量，而 `TEMP` 天生就存在）——一行代码不改，测试垃圾就从系统盘挪到仓库内。历史积压用 `tools/clean-temp.sh` 清（默认 dry-run） |
 | 测试与风险 | 实际做法 |
 | --- | --- |
-| **测试会往产品数据根写**：开发机上跑 `cargo test` 会在 `<repo>/.rds/data` 落 `encryption-salt` / `machine-id` / `sql_history.json`，以及**只有测试表的 `system/global.db`**（草稿存储的默认落点就是产品路径，某些对话框测试没注入 `set_db_path_override`） | 密钥类文件由迁移的**覆盖例外**兜住（§10.1）；`global.db` / `sql_history.json` **不会**被覆盖（迁移是只补不盖）——它们会遮住真数据。所以在真机启动前跑一次清理：删掉 `<repo>/.rds/data` 下这些测试产物（或删整个 `.rds/` 重建），让迁移把真数据带进来 |
+| **测试会往产品数据根写**（密钥库 / 草稿库 / SQL 历史 / 元数据缓存都要落 `paths::*`） | **已由构建期隔离解决**（2026-09-16 续作）：见下方「测试数据根隔离」 |
 | DuckDB spill 放到项目盘影响性能 | `RDS_TEMP_DIR` 单独覆盖；文档写明取舍 |
 | 安装到 `Program Files`（目录不可写） | 启动探测可写性 → 回退 `%LOCALAPPDATA%/RdataStation` + 日志提示 |
 | 开发时 `cargo clean` 清掉数据 | 已解决：`.cargo/config.toml` 把开发期的 `RDS_HOME` 钉到 `<repo>/.rds`（§10.1） |
 | 旧数据"看起来丢失" | 启动时检测旧路径并提示/迁移（§4.4）：**已实现自动迁移**，标记文件 `<<RDS_HOME>>/.migrated-from-legacy` 记录已迁项 |
 | 安装到只读目录 | `paths::home()` 探测可写性失败时回退：`%LOCALAPPDATA%/RdataStation`（并在 stderr 提示），保持"能用" |
+
+### 测试数据根隔离（2026-09-16）
+
+**问题**：测试会调用产品代码里的**全局路径**（密钥库、草稿库、SQL 历史、元数据缓存），
+默认落到产品数据根；因为旧布局迁移是"只补不盖"，这些垃圾还会把真数据挡在门外
+（实测发现一个只有 `connection_drafts` 表的 `system/global.db` 就是这么来的）。
+
+**为什么不逐个测试注入**：全仓几十个测试文件、以后还会加；靠人记得必漏。
+
+**做法（构建期隔离）**：`paths` 新增 `test-support` feature；一旦开启，**测试构建的数据根
+自动换成进程专属临时目录**（`RDS_TEST_HOME` 可定向），无需逐测试改动。
+
+| 环节 | 位置 |
+| --- | --- |
+| 隔离逻辑（`test_root` / `pin_root` / `HomeOrigin::TestRoot`） | `crates/paths/src/lib.rs` |
+| feature 声明 | `crates/paths/Cargo.toml`（`test-support`） |
+| 各成员打开 feature | 各自的 `[dev-dependencies]`：`paths = { workspace = true, features = ["test-support"] }`（仅测试构建生效，`cargo build/run/release` 拿不到） |
+| 防漏开的静态契约 | `crates/paths/tests/test_support_is_wired.rs`（每个依赖 `paths`/`engine`/`shared` 的成员都必须开；漏开在运行时看不出来，所以用扫描兜住） |
+| 自检断言 | `crates/paths/src/tests.rs::test_build_is_isolated_from_the_product_root`（隔离根必须在临时目录下，不能是安装目录 / 开发根） |
+
+**验证口径**：清空 `<repo>/.rds/data`（与 `config`/`logs`）后跑一遍全量测试，它**应该仍然是空的**——
+垃圾会全部落在 `<repo>/.rds/tmp/rds-test-root-<pid>/`（仓库内，已忽略，`tools/clean-temp.sh` 清）。
+
+**两个例外要知道**：
+
+1. `cargo run --example ...` 用的是带 dev-dependencies 的构建，因此也拿到隔离根；example 若要写
+   **开发数据根**（如 `seed_demo`），需自己 `paths::pin_root(RDS_HOME)`（已接）。
+2. 早期版本跑出来的测试产物仍可能躺在 `<repo>/.rds/data`（密钥 / 空 `global.db` / `sql_history.json`）——
+   真机启动前删掉即可，别让它们被"只补不盖"的迁移当成已存在。
 
 ## 6. git 卫生（已处理，2026-09-16）
 
@@ -245,6 +274,7 @@ paths::install_process_temp_dir();   // 内部：create_dir_all(<RDS_HOME>/tmp) 
 | 依赖登记 | 根 `Cargo.toml`（`paths = { path = "crates/paths", package = "rds-paths" }`）；`app` / `engine` / `shared` / `settings` / `project` / `workbench` 六处 `paths.workspace = true` |
 | 开发期数据根 / 临时目录的钉住 | `.cargo/config.toml` 的 `[env]`：`RDS_HOME = .rds`（不开 `force`，命令行可用）、`TEMP`/`TMP`/`TMPDIR = .rds/tmp`（**必须 `force`**） |
 | 临时目录积压清理 | `tools/clean-temp.sh`（默认 dry-run；只碰 `$TEMP` 顶层 `rds_*` 条目，`RdataStation*` 明确不碰） |
+| 测试数据根隔离 | `crates/paths` 的 `test-support` feature + 各成员 `[dev-dependencies]` 打开 + 契约测试 `crates/paths/tests/test_support_is_wired.rs`（见 §5） |
 
 替换的 12 处见 §9.1。**实施中的两处偏差 + 一处实测发现的坑**：
 

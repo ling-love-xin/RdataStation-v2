@@ -35,3 +35,12 @@ paths::extensions_dir();      // DuckDB 扩展
 - **不**管用户项目资产（`<用户项目>/{project.db, analytics.duckdb}`），那属于 M1 项目会话。
 - **不**管 `~/.ssh/known_hosts`（跨应用共用的用户资产，需要时用 `RDS_KNOWN_HOSTS` 覆盖）。
 - 插件目录 / 插件数据目录属三期（P3-a），见 `docs/architecture/plugin/plugin-architecture.md`。
+
+## 测试构建（`test-support` feature）
+
+开了这个 feature，**数据根自动换成进程专属临时目录**（`RDS_TEST_HOME` 可定向），
+这样测试不会往产品目录写东西（口径见 `data-paths.md` §5）。
+
+- 各成员在 `[dev-dependencies]` 里打开它；生产构建（`cargo build` / `cargo run` / release）拿不到。
+- 想把根钉到指定目录（测试或 example）：`paths::pin_root(dir)`（一次性；已解析则返回 `false`）。
+- 自检：`paths::is_isolated_root()`。

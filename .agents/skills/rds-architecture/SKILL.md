@@ -30,6 +30,7 @@ shared ────────────► (gpui-kit / 第三方)
 - 依赖必须无环，始终指向更小、更稳定的 crate
 - **运行时数据路径只能走 `paths::*`**：不得在 crate 里自己拼 `APPDATA` / `LOCALAPPDATA` / `env::temp_dir()` / `"RdataStation"` 目录名（口径与目录布局见 `docs/architecture/runtime/data-paths.md`）
 - 开发期数据与临时目录由 `.cargo/config.toml` 的 `[env]` 钉在仓库内（`RDS_HOME=.rds`、`TEMP/TMP/TMPDIR=.rds/tmp`）；系统盘上的历史测试临时目录用 `tools/clean-temp.sh` 清
+- **测试不得写产品数据根**：`cargo test` 已由 `paths` 的 `test-support` feature 自动隔离数据根（各成员在 `[dev-dependencies]` 打开，有静态契约兜住）；新增成员若依赖 `paths`/`engine`/`shared`，必须同步打开它
 
 ## crate 归属判定标准
 

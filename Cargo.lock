@@ -7865,6 +7865,7 @@ dependencies = [
  "gpui-kit",
  "hex",
  "rds-engine",
+ "rds-paths",
  "rds-shared",
  "rusqlite",
  "serde",
@@ -7905,6 +7906,7 @@ dependencies = [
  "futures",
  "native-tls",
  "percent-encoding",
+ "rds-paths",
  "rds-shared",
  "russh",
  "serde",
@@ -7924,6 +7926,7 @@ version = "0.1.0"
 dependencies = [
  "gpui-kit",
  "rds-engine",
+ "rds-paths",
  "rds-shared",
  "rds-workbench-shell",
  "serde",
@@ -7940,6 +7943,7 @@ dependencies = [
  "gpui-kit",
  "lsp-types",
  "rds-engine",
+ "rds-paths",
 ]
 
 [[package]]
@@ -7996,6 +8000,7 @@ dependencies = [
  "gpui-kit",
  "include_dir",
  "rds-engine",
+ "rds-paths",
  "rds-shared",
  "rds-workbench-shell",
  "rusqlite",
@@ -8019,6 +8024,7 @@ dependencies = [
  "gpui-kit",
  "rand 0.10.2",
  "rds-engine",
+ "rds-paths",
  "rds-shared",
  "rusqlite",
  "serde",
@@ -8045,6 +8051,7 @@ dependencies = [
  "chrono",
  "extism",
  "rds-engine",
+ "rds-paths",
  "rds-shared",
  "reqwest",
  "serde",
@@ -8083,6 +8090,7 @@ dependencies = [
  "chrono",
  "notify",
  "opener",
+ "rds-paths",
  "rds-shared",
  "regex",
  "serde",

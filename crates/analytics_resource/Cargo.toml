@@ -32,5 +32,7 @@ rusqlite.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
+paths = { workspace = true, features = ["test-support"] }
 # 面板窗口测试（headless）需要 gpui 的 test-support 能力（下一批接窗口测试时启用）。
 gpui-kit = { workspace = true, features = ["test-support"] }

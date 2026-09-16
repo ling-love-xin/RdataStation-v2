@@ -40,6 +40,13 @@ struct SeedConn {
 }
 
 fn main() {
+    // 0. 数据根：example 走的是带 `test-support` 的构建（dev-dependencies 生效），
+    //    `paths` 默认会把数据根隔离到临时目录，而这个 example 的用途正是往**开发数据根**
+    //    写演示数据——所以显式钉回 cargo 给的 `RDS_HOME`（见 data-paths.md §5）。
+    if let Some(home) = std::env::var_os("RDS_HOME") {
+        paths::pin_root(std::path::PathBuf::from(home));
+    }
+
     // 1. 解析 app 真实系统目录。
     let system_dir = match engine::migration::get_system_dir() {
         Ok(d) => d,

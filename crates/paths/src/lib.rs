@@ -62,6 +62,9 @@ pub enum HomeOrigin {
     ExecutableDir,
     /// `RDS_HOME` / 安装目录都不可写，回退平台本地数据目录。
     FallbackLocalAppData,
+    /// **测试构建**：隔离到进程专属临时目录（见 `docs/architecture/runtime/data-paths.md` §5），
+    /// 生产构建永远不会出现这个来源。
+    TestRoot,
 }
 
 impl HomeOrigin {
@@ -70,6 +73,7 @@ impl HomeOrigin {
             Self::EnvHome => "环境变量 RDS_HOME",
             Self::ExecutableDir => "可执行文件所在目录（安装目录）",
             Self::FallbackLocalAppData => "安装目录不可写，回退平台本地数据目录",
+            Self::TestRoot => "测试构建的隔离数据根",
         }
     }
 }
@@ -185,6 +189,12 @@ pub fn summary() -> String {
 // ==================== 内部：根目录解析 ====================
 
 fn resolve_home() -> (PathBuf, HomeOrigin) {
+    // 测试构建优先：数据根隔离到临时目录，不让测试写进产品目录。
+    // 口径与理由见 `docs/architecture/runtime/data-paths.md` §5。
+    if let Some(root) = test_root() {
+        return (root, HomeOrigin::TestRoot);
+    }
+
     if let Some(raw) = std::env::var_os(ENV_HOME) {
         let candidate = PathBuf::from(raw);
         if !candidate.as_os_str().is_empty() {
@@ -243,4 +253,66 @@ fn probe_writable(dir: &Path) -> bool {
         }
         Err(_) => false,
     }
+}
+
+// ==================== 测试构建的数据根隔离 ====================
+//
+// 为什么要有这一段：测试会调用**产品代码里的全局路径**（密钥库、草稿库、SQL 历史、
+// 元数据缓存），于是往产品数据根写垃圾；因为旧布局迁移是"只补不盖"，这些垃圾
+// 还会把真数据挡在门外（详见 data-paths.md §5）。
+//
+// 为什么不是逐个测试注入：全仓几十个测试文件、以后还会加；靠纪律必漏。
+// 这里把隔离做成**构建期**的事：`test-support` feature 只被各成员的
+// `[dev-dependencies]` 打开，所以"测试构建拿到隔离根"是结构性的，不靠人记得。
+
+/// 覆盖隔离根的环变量（想让测试数据待在某处时用；也用于 example 定向到开发根）。
+#[cfg(any(test, feature = "test-support"))]
+const ENV_TEST_HOME: &str = "RDS_TEST_HOME";
+
+/// 测试构建的数据根：`RDS_TEST_HOME` → 否则 `<临时目录>/rds-test-root-<pid>`。
+///
+/// 生产构建（无 `test-support`、非本 crate 单测）返回 `None`，一切照旧。
+fn test_root() -> Option<PathBuf> {
+    #[cfg(not(any(test, feature = "test-support")))]
+    {
+        None
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        if let Some(raw) = std::env::var_os(ENV_TEST_HOME) {
+            let path = PathBuf::from(raw);
+            if !path.as_os_str().is_empty() {
+                return Some(path);
+            }
+        }
+        let root = std::env::temp_dir().join(format!("rds-test-root-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        Some(root)
+    }
+}
+
+/// 把本进程的数据根钉到 `dir`（**一次性**；已解析过就返回 `false`）。
+///
+/// 两个用途：
+/// 1. 测试想把数据放在指定目录（而不是默认的进程专属临时目录）；
+/// 2. `cargo run --example ...`：example 用的是带 `test-support` 的构建，
+///    但**要写开发数据根**——把它指回 `RDS_HOME`（见 `examples/seed_demo.rs`）。
+#[cfg(any(test, feature = "test-support"))]
+pub fn pin_root(dir: impl Into<PathBuf>) -> bool {
+    let dir = dir.into();
+    if dir.as_os_str().is_empty() {
+        return false;
+    }
+    // 数据根一旦被解析过就钉不住了（各模块可能已经拿过路径）——返回 false 而不是假装成功
+    if HOME.set(dir).is_err() {
+        return false;
+    }
+    let _ = HOME_ORIGIN.set(HomeOrigin::TestRoot);
+    true
+}
+
+/// 本进程是否用着"隔离数据根"（测试 / example 里用于断言隔离生效）。
+pub fn is_isolated_root() -> bool {
+    home_origin() == HomeOrigin::TestRoot
 }

@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 description = "运行时数据路径的唯一解析点：单一根 RDS_HOME 下的 config / data / logs / tmp / extensions"
 
+[features]
+# 测试专用：开启后**测试构建的数据根自动落到进程专属临时目录**，
+# 不让测试写进产品目录（口径与为什么这么做见 `docs/architecture/runtime/data-paths.md` §5）。
+# 由各成员在 `[dev-dependencies]` 里打开；生产构建（含 cargo run / release）拿不到它。
+test-support = []
+
 [dependencies]
 # 只为"回退目录"与"旧位置迁移"取平台目录；派生逻辑本身不依赖它
 dirs.workspace = true

@@ -64,3 +64,7 @@ regex.workspace = true
 include_dir.workspace = true
 sha2.workspace = true
 hex.workspace = true
+
+[dev-dependencies]
+# 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）
+paths = { workspace = true, features = ["test-support"] }

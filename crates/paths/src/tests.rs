@@ -1,12 +1,15 @@
 //! `rds-paths` 的单元测试。
 //!
 //! 注意：`home()` 是进程级 `OnceLock`，测不了"不同 `RDS_HOME`"——环境变量类断言
-//! 在 Rust 2024 下是 `unsafe` 且与并行测试争用，不值得。这里只测两件真正会坏的事：
-//! ① 派生的五个目录是否都挂在同一个根下；② 迁移的路由与"只补不盖"。
+//! 在 Rust 2024 下是 `unsafe` 且与并行测试争用，不值得。这里只测真正会坏的事：
+//! ① 派生的五个目录是否都挂在同一个根下；② 迁移的路由与"只补不盖"；
+//! ③ 测试构建是否拿到了隔离数据根（不写产品目录）。
 
 use std::path::{Path, PathBuf};
 
-use crate::{config_dir, data_dir, extensions_dir, home, log_dir, migrate, temp_dir};
+use crate::{
+    HomeOrigin, config_dir, data_dir, extensions_dir, home, home_origin, log_dir, migrate, temp_dir,
+};
 
 /// 一个测试自己的临时目录（沿用其它 crate 的 `rds_*` 前缀约定）。
 ///
@@ -48,6 +51,37 @@ fn ensure_dirs_creates_every_derived_dir() {
     for dir in [config_dir(), data_dir(), log_dir(), temp_dir(), extensions_dir()] {
         assert!(dir.is_dir(), "{} 应已存在", dir.display());
     }
+}
+
+/// 测试构建必须拿到隔离的数据根：否则测试会往产品目录写（见 data-paths.md §5），
+/// 而旧布局迁移是"只补不盖"——写进去的垃圾还会把真数据挡在门外。
+#[test]
+fn test_build_is_isolated_from_the_product_root() {
+    assert_eq!(
+        home_origin(),
+        HomeOrigin::TestRoot,
+        "测试构建应使用隔离数据根（`test-support` / `cfg(test)` 未生效）"
+    );
+    assert!(crate::is_isolated_root(), "隔离根判定应与 home_origin 一致");
+
+    // 隔离根必须落在临时目录下——绝不能是安装目录、更不能是 `RDS_HOME` 指的开发根
+    let temp = std::env::temp_dir();
+    assert!(
+        home().starts_with(&temp),
+        "隔离根应在临时目录下：{}（temp={}）",
+        home().display(),
+        temp.display()
+    );
+}
+
+/// `pin_root` 在数据根已经解析过之后必须**拒绝**，不能假装成功。
+#[test]
+fn pin_root_is_rejected_after_resolution() {
+    let _ = home(); // 先解析（解析是进程级一次）
+    assert!(
+        !crate::pin_root(std::env::temp_dir().join("rds_late_pin")),
+        "已经解析过数据根时 pin_root 应返回 false"
+    );
 }
 
 /// 旧目录里的 `settings.json` 归 `config/`，其余归 `data/`；新布局自己的目录名要跳过；
