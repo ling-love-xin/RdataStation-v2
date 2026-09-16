@@ -1,6 +1,6 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修**——模块根 + 项目级回收站 + 面板闭环 + 导入与引用 + 内容搜索与替换 + 虚拟列表与空态 · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ 冲突 Diff·拖放待接 · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
+> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修** · Phase C 进度：打开✅ / 连接预选✅（C-2 前半）/ 执行回写✅（C-2 后半）/ 脏点✅（C-3）/ **冲突 Diff✅（C-4）** / 拖放待接 · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
@@ -9,6 +9,25 @@
 ## 0. 进度记录（最近在前）
 
 > 路径注：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/*`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`；**2026-09-17 起面板视图本身也下沉进 crate**（`crates/scratchpad/src/scratchpad_view.rs` + `host.rs`，见“十四次”）。**下列历史条目保留当时的路径**，读时按此换算。
+
+### 2026-09-17（十七次）— Phase C-4：冲突 Diff（外部改动 vs 编辑器未保存修改）
+
+**已完成**
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | 后台任务新增 `Job::Diff` + `OpResult::Diff` + `enqueue_diff`（读盘在工线程） | `crates/scratchpad/src/jobs.rs` |
+| 2 | 宿主端口新增 `draft_content`（读缓冲）/ `reload_draft`（照磁盘重载并清脏）/ `show_diff`（差异投中央编辑区） | `crates/scratchpad/src/host.rs`、`workbench/src/components/scratchpad_host.rs` |
+| 3 | 检测：外部改动同拍取「脏文档 ∩ 模块内」→ 入队算差异；面板出冲突条（差异 / 重载 / 忽略 3 个动作） | `scratchpad_view.rs::{detect_scratchpad_conflicts, ScratchpadConflict}` |
+| 4 | 中央编辑区的 Diff 面板（左=磁盘 / 右=编辑器，行号 + 红/绿） + `EditorBridge::show_diff` 通路 | `scratchpad_view.rs::render_scratchpad_diff_pane`、`workbench/src/panels/{shared,mod,editor}.rs` |
+
+**关键取舍**
+
+- **判据是内容而不是 mtime**：`diff_with_content` 全 `Unchanged` 就不算冲突——外部改动可能已被写回，或者就是我们自己写的；mtime 分不清这两件事。
+- **消解动作在侧栅冲突条上**（不是中央面板）：它们要同时改编辑器与草稿箱自己的状态；面板只负责把差异看清楚。
+- 「忽略」= 只移除本地条目：下次磁盘再变才重新报冲突（不靠“静默忽略列表”）。
+
+**验证**：`cargo check -p rds-scratchpad -p rds-workbench --lib -j 2` 零告警；`cargo test -p rds-scratchpad -j 2 --lib` → **36 passed**（新增 `diff_markers_follow_unified_diff`）。
 
 ### 2026-09-17（十六次）— Phase C-2 后半：执行后回写 `last_connection_id`
 
@@ -369,7 +388,7 @@
 | C2 | `file_meta` 联动：**打开时自动选连接** ✅（2026-09-17）+ **执行后写 `last_connection_id`/`last_executed_at`** ✅（2026-09-17，编辑器回执 + 宿主 1 s 泵） | `scratchpad` store（`file_meta` / `preferred_connection` / `update_file_meta`）+ `editor::shared::ExecReceipt` + `workbench/src/services/scratchpad_meta.rs` | 连接自动恢复 ✅ |
 | C3 | 脏点回显：编辑器未保存修改 → 草稿树文件名前实心圆点（**只有文件**）✅ **已接（2026-09-17）**：经 `ScratchpadHost::dirty_files` 取绝对路径集合，1.2 s 一拍比对缓存 | `crates/scratchpad/src/{host,scratchpad_view}.rs` + `workbench/src/components/scratchpad_host.rs` | 改一处出现、`Ctrl+S` 后消失 |
 | C4 | 拖拽文件到编辑区插入内容；拖放文件进树导入 | workbench | 拖放生效 |
-| C4 | 冲突处理：外部修改 → 冲突对话框 → `diff_with_content` Diff 弹窗 → 接受右侧 | `scratchpad` store + 弹窗 | 冲突可消解 |
+| C4 | 冲突处理：外部修改 → 冲突条 → `diff_with_content` Diff 面板 → 重载（照磁盘）/ 忽略 ✅ **已接（2026-09-17）**：内容判据（非 mtime）；差异落中央编辑区，消解动作在侧栅 | `crates/scratchpad/src/{jobs,host,scratchpad_view}.rs` + `workbench/src/panels/{shared,mod,editor}.rs` | 冲突可消解 ✅ |
 | C5 | 搜索替换：预览计数 → `replace_in_file`（正则/大小写）→ 原子写回 → 刷新 ✅ 已落地（结果栏内嵌替换栏；Diff 预览仍未接） | 同上 | 替换后结果自动刷新 |
 | C6 | 提升为分析资源：经 command/event 调 `analytics_resource`，**移动 + 归档锁定**（详见 Phase D） | `scratchpad` 命令 + 分析资源服务 | 提升后事件刷新 |
 | C7 | 迁移文档验收：`cargo check --workspace` 零告警；无 `unwrap/expect` 新增；架构红线复核 | 全仓 | 全绿 |

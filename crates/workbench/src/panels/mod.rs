@@ -37,6 +37,7 @@ pub use database::model::PropertyRequest;
 pub use editor::EditorPanel;
 pub use right::RightSidebarPanel;
 pub use scratchpad::ScratchpadSearchView;
+pub use scratchpad::ScratchpadDiffView;
 pub use shared::append_sql;
 pub use shared::{EditorBridge, ProjectActionRequest, QueryRequest, ResourcesBridge, ScratchpadBridge, Shared};
 
@@ -210,6 +211,7 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
     let editor_for_edit = editor.clone();
     let editor_for_new = editor.clone();
     let editor_for_search = editor.clone();
+    let editor_for_diff = editor.clone();
     *shared.editor_bridge.borrow_mut() = Some(EditorBridge {
         edit_connection: Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
             editor_for_edit
@@ -226,5 +228,8 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
                 editor_for_search.update(cx, |panel, cx| panel.set_scratchpad_search(view, cx));
             },
         ),
+        show_diff: Rc::new(move |view: Option<ScratchpadDiffView>, cx: &mut App| {
+            editor_for_diff.update(cx, |panel, cx| panel.set_scratchpad_diff(view, cx));
+        }),
     });
 }

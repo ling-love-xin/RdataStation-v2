@@ -33,7 +33,10 @@ use super::Shared;
 use database::model::PropertyRequest;
 use database::nav_view::NavDragPayload;
 use database::property_panel::PropertyState;
-use scratchpad::{ScratchpadSearchView, scratchpad_view::render_scratchpad_search_pane};
+use scratchpad::{
+    ScratchpadDiffView, ScratchpadSearchView,
+    scratchpad_view::{render_scratchpad_diff_pane, render_scratchpad_search_pane},
+};
 
 /// 中央内容区面板。
 pub struct EditorPanel {
@@ -67,6 +70,8 @@ pub struct EditorPanel {
     ///
     /// 展示归编辑区（结果渲染在中央区）；草稿箱自己只记搜索参数，不回读这份数据。
     scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
+    /// M5：草稿箱冲突 Diff（原型 §4.5「查看差异」→ 落中央编辑区；消解动作在左侧冲突条上）。
+    scratchpad_diff: Rc<RefCell<Option<ScratchpadDiffView>>>,
     /// 分析库元数据树是否正在后台加载（避免 render 每帧重复入队）。
     nav_tree_loading: Cell<bool>,
 }
@@ -108,6 +113,7 @@ impl EditorPanel {
             nav_cache_epoch: 0,
             property_target: Rc::new(RefCell::new(None)),
             scratchpad_search: Rc::new(RefCell::new(None)),
+            scratchpad_diff: Rc::new(RefCell::new(None)),
             nav_tree_loading: Cell::new(false),
         }
     }
@@ -324,6 +330,16 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) {
         *self.scratchpad_search.borrow_mut() = view;
+        cx.notify();
+    }
+
+    /// 投递草稿箱冲突 Diff（`EditorBridge::show_diff`；`None` = 关闭）。
+    pub(super) fn set_scratchpad_diff(
+        &mut self,
+        view: Option<ScratchpadDiffView>,
+        cx: &mut Context<Self>,
+    ) {
+        *self.scratchpad_diff.borrow_mut() = view;
         cx.notify();
     }
 
@@ -867,6 +883,24 @@ impl Render for EditorPanel {
                     clear,
                     replace_all,
                 ));
+            }
+        }
+
+        // M5 草稿箱冲突 Diff（原型 §4.5：冲突时「查看差异」→ 落中央编辑区）。
+        {
+            let diff = self.scratchpad_diff.borrow();
+            if let Some(diff) = diff.as_ref() {
+                let shared = self.shared.clone();
+                let diff_state = self.scratchpad_diff.clone();
+                let entity = entity.clone();
+                let clear = move |_: &gpui_kit::ClickEvent,
+                                  _: &mut gpui_kit::Window,
+                                  app: &mut App| {
+                    *diff_state.borrow_mut() = None;
+                    shared.notify_host(app);
+                    entity.update(app, |_, cx| cx.notify());
+                };
+                content = content.child(render_scratchpad_diff_pane(diff, theme, clear));
             }
         }
 

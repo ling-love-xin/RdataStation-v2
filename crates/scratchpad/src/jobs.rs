@@ -25,7 +25,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
-use crate::{ExternalReferenceStatus, ScratchpadEntry, ScratchpadStore, SearchMatch, TrashEntry};
+use crate::{
+    DiffResult, ExternalReferenceStatus, ScratchpadEntry, ScratchpadStore, SearchMatch, TrashEntry,
+};
 
 /// 模块根加载结果（回传主线程）。
 pub struct LoadResult {
@@ -72,6 +74,11 @@ pub enum OpResult {
         replaced: Option<(usize, usize)>,
         outcome: Result<SearchPayload, String>,
     },
+    /// 冲突 Diff：磁盘内容 vs 编辑器缓冲（行级）。
+    Diff {
+        relative_path: String,
+        outcome: Result<DiffResult, String>,
+    },
 }
 
 enum Job {
@@ -111,6 +118,12 @@ enum Job {
         replacement: String,
         case_sensitive: bool,
         is_regex: bool,
+    },
+    /// 冲突 Diff：磁盘上当前内容（左）vs 编辑器缓冲（右），行级差异回传主线程。
+    Diff {
+        project_root: PathBuf,
+        relative_path: String,
+        other_content: String,
     },
 }
 
@@ -235,6 +248,15 @@ fn worker(rx: mpsc::Receiver<Job>) {
                         });
                         shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
                     }
+                    Job::Diff {
+                        relative_path, ..
+                    } => {
+                        lock(&shared().op_results).push(OpResult::Diff {
+                            relative_path,
+                            outcome: Err(unavailable),
+                        });
+                        shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
+                    }
                 }
             }
             return;
@@ -350,6 +372,26 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     .block_on(store.empty_trash())
                     .map_err(|e| e.to_string());
                 lock(&shared().op_results).push(OpResult::EmptyTrash { outcome });
+                shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
+            }
+            Job::Diff {
+                project_root,
+                relative_path,
+                other_content,
+            } => {
+                let store = ScratchpadStore::new(project_root);
+                let outcome = rt
+                    .block_on(store.diff_with_content(
+                        &relative_path,
+                        &other_content,
+                        "磁盘",
+                        "编辑器",
+                    ))
+                    .map_err(|e| e.to_string());
+                lock(&shared().op_results).push(OpResult::Diff {
+                    relative_path,
+                    outcome,
+                });
                 shared().pending_ops.fetch_sub(1, Ordering::SeqCst);
             }
             Job::Search {
@@ -550,6 +592,19 @@ pub fn enqueue_replace_all(
         replacement: replacement.to_string(),
         case_sensitive,
         is_regex,
+    });
+}
+
+/// 冲突 Diff：磁盘内容（左）vs 编辑器缓冲（右）。
+///
+/// 只在「外部改动 + 该文件在编辑器里有未保存修改」时发起；`other_content` 由调用方
+/// 从编辑器缓冲区取（草稿箱读不到编辑器，见 `host::ScratchpadHost::draft_content`）。
+pub fn enqueue_diff(project_root: &Path, relative_path: &str, other_content: String) {
+    shared().pending_ops.fetch_add(1, Ordering::SeqCst);
+    let _ = shared().tx.send(Job::Diff {
+        project_root: project_root.to_path_buf(),
+        relative_path: relative_path.to_string(),
+        other_content,
     });
 }
 

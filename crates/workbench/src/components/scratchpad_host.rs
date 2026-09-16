@@ -13,7 +13,7 @@ use std::rc::Rc;
 use gpui_kit::App;
 
 use editor::shared::EditorShared;
-use scratchpad::{ScratchpadHost, ScratchpadSearchView};
+use scratchpad::{ScratchpadDiffView, ScratchpadHost, ScratchpadSearchView};
 
 use crate::panels::Shared;
 
@@ -62,6 +62,34 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
             .into_iter()
             .filter_map(|id| service.find(&id).and_then(|doc| doc.path().map(Path::to_path_buf)))
             .collect()
+    }
+
+    fn draft_content(&self, path: &Path) -> Option<String> {
+        let service = self.editor.service();
+        let id = service.find_by_path(path)?.clone();
+        service.find(&id).map(|doc| doc.content().to_string())
+    }
+
+    /// 「照磁盘重载」：读盘 → 替掉缓冲区 → 清脏。
+    ///
+    /// 先读盘再改文档（顺序与 `persist::save_document` 的“先写盘后清脏”同一口径：
+    /// 失败的一步不能留下“已经同步”的假状态）。
+    fn reload_draft(&self, path: &Path) -> Result<(), String> {
+        let content = editor::persist::load(path).map_err(|e| e.to_string())?;
+        let service = self.editor.service();
+        let Some(id) = service.find_by_path(path).cloned() else {
+            return Err("该文件未在编辑器中打开".to_string());
+        };
+        drop(service);
+        self.editor.update(|service| {
+            service.set_content(&id, content);
+            service.mark_saved(&id);
+        });
+        Ok(())
+    }
+
+    fn show_diff(&self, view: Option<ScratchpadDiffView>, cx: &mut App) {
+        self.shared.show_scratchpad_diff(view, cx);
     }
 }
 

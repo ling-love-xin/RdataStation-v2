@@ -20,12 +20,15 @@
 //!
 //! 注入方式：`ScratchpadView::new(host, cx)`。宿主实现见
 //! `crates/workbench/src/components/scratchpad_host.rs`。
+//!
+//! 冲突 Diff 的两个方向：**读**缓冲区（`draft_content`）与**改**缓冲区（`reload_draft`）
+//! 都在编辑器手里，所以走端口；展示归中央编辑区（`show_diff`）。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::App;
 
-use crate::scratchpad_view::ScratchpadSearchView;
+use crate::scratchpad_view::{ScratchpadDiffView, ScratchpadSearchView};
 
 /// 宿主注入的能力。
 pub trait ScratchpadHost: 'static {
@@ -53,5 +56,26 @@ pub trait ScratchpadHost: 'static {
     /// 默认实现返回空集——不接编辑器的宿主（测试 / 其他入口）不用实现它。
     fn dirty_files(&self) -> std::collections::HashSet<PathBuf> {
         std::collections::HashSet::new()
+    }
+
+    /// 该文件在编辑器里的**当前内容**（未打开 / 不是文件 → `None`）。
+    ///
+    /// 冲突 Diff 用：缓冲区在编辑器手里，草稿箱只能问宿主。
+    fn draft_content(&self, path: &Path) -> Option<String> {
+        let _ = path;
+        None
+    }
+
+    /// 用磁盘上的当前内容重载编辑器里这份文档（「照磁盘重载」的右侧），并清掉未保存标记。
+    fn reload_draft(&self, path: &Path) -> Result<(), String> {
+        let _ = path;
+        Err("当前宿主未接入编辑器".to_string())
+    }
+
+    /// 把冲突 Diff 投给中央编辑区（`None` = 关闭）。
+    ///
+    /// 与搜索结果同一理由：宽内容不往 240 px 的侧栅里塞。
+    fn show_diff(&self, view: Option<ScratchpadDiffView>, cx: &mut App) {
+        let _ = (view, cx);
     }
 }

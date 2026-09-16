@@ -23,7 +23,7 @@ pub mod trash;
 pub mod watch;
 
 pub use host::ScratchpadHost;
-pub use scratchpad_view::{ScratchpadSearchView, ScratchpadView};
+pub use scratchpad_view::{ScratchpadDiffView, ScratchpadSearchView, ScratchpadView};
 
 pub use models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,

@@ -21,7 +21,7 @@ use gpui_kit::*;
 
 use database::model::PropertyRequest;
 
-use super::scratchpad_panel::ScratchpadSearchView;
+use scratchpad::{ScratchpadDiffView, ScratchpadSearchView};
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 // 纯数据类型已下沉到 shell（导航视图下沉后需与 `database` 共用同一份定义），此处重导保持旧路径。
 pub use workbench_shell::model::QueryRequest;
@@ -51,8 +51,10 @@ pub struct EditorBridge {
     pub new_connection: Rc<dyn Fn(&mut Window, &mut App)>,
     /// 打开属性面板并加载数据（导航双击对象 / 键盘 F4）。
     pub show_properties: Rc<dyn Fn(PropertyRequest, &mut App)>,
-    /// 投递草稿箱内容搜索结果（`None` = 清空）：结果在中央编辑区展示。
+    /// 投递草稿箱内容搜索结果（`None` = 清空）：结果在中央编辑区展展。
     pub show_search_results: Rc<dyn Fn(Option<ScratchpadSearchView>, &mut App)>,
+    /// 投递草稿箱冲突 Diff（`None` = 关闭）：差异同在中央编辑区展。
+    pub show_diff: Rc<dyn Fn(Option<ScratchpadDiffView>, &mut App)>,
 }
 
 /// 「在编辑器中打开」请求：路径 + 只读维度。
@@ -335,6 +337,13 @@ impl Shared {
     pub fn show_scratchpad_search(&self, view: Option<ScratchpadSearchView>, cx: &mut App) {
         if let Some(bridge) = self.editor_bridge.borrow().clone() {
             (*bridge.show_search_results)(view, cx);
+        }
+    }
+
+    /// 投递草稿箱冲突 Diff（`None` = 关闭）；展示归中央编辑区。
+    pub fn show_scratchpad_diff(&self, view: Option<ScratchpadDiffView>, cx: &mut App) {
+        if let Some(bridge) = self.editor_bridge.borrow().clone() {
+            (*bridge.show_diff)(view, cx);
         }
     }
 

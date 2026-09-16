@@ -33,7 +33,8 @@ use crate::commands::{
 };
 
 use crate::{
-    ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore, TrashEntry,
+    DiffLineKind, DiffResult, ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind,
+    ScratchpadStore, TrashEntry,
 };
 
 use crate::jobs as scratchpad_jobs;
@@ -185,6 +186,27 @@ pub struct ScratchpadSearchView {
     hits: Vec<ScratchpadSearchHit>,
 }
 
+/// 冲突 Diff 面板的载荷（草稿箱经宿主端口投给中央编辑区）。
+///
+/// 「左 = 磁盘，右 = 编辑器里的未保存内容」：左侧是“外面变成了什样”，
+/// 右侧是“我手上是什么”，两侧都标行号。
+pub struct ScratchpadDiffView {
+    /// 模块内相对路径（标题用）。
+    pub relative_path: String,
+    /// 行级差异（`diff_with_content` 的结果）。
+    pub diff: DiffResult,
+}
+
+/// 冲突：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了。
+struct ScratchpadConflict {
+    /// 模块内相对路径（同时是树上的身份）。
+    relative: String,
+    /// 绝对路径（问编辑器 / 让它重载时用）。
+    absolute: std::path::PathBuf,
+    /// `None` = 差异还在后台算（先摆提示，不让用户干等）。
+    diff: Option<DiffResult>,
+}
+
 /// 文件树排序键。
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum ScratchpadSort {
@@ -298,6 +320,10 @@ pub struct ScratchpadViewState {
     search_mode: ScratchpadSearchMode,
     search_regex: bool,
     search_case: bool,
+    /// 冲突（C-4）：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了。
+    conflicts: Vec<ScratchpadConflict>,
+    /// 当前在中央编辑区展示差异的那份草稿（关闭 / 忽略时知道该关谁）。
+    shown_diff: Option<String>,
     /// 搜索输入（懒创建）。
     search_input: Option<Entity<InputState>>,
     _search_sub: Option<Subscription>,
@@ -695,6 +721,101 @@ pub fn render_scratchpad_search_pane(
         .child(div().max_h(rems(16.)).overflow_hidden().child(list))
 }
 
+/// 冲突 Diff 面板（中央编辑区）：左=磁盘 / 右=编辑器缓冲，逐行标行号与增删。
+///
+/// 与搜索结果面板同一投影：草稿箱只投载荷（`ScratchpadHost::show_diff`），渲染在编辑区。
+/// 消解冲突的两个动作（照磁盘重载 / 忽略）留在左侧草稿箱的冲突条上——它们要改编辑器
+/// 与草稿箱自己的状态，面板只负责把差异看清楚。
+pub fn render_scratchpad_diff_pane(
+    view: &ScratchpadDiffView,
+    theme: &gpui_kit::component::Theme,
+    on_clear: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
+) -> Div {
+    let fg = theme.colors.foreground;
+    let muted = theme.colors.muted_foreground;
+    let border = theme.colors.border;
+    let bg = theme.colors.background;
+    let danger = theme.colors.danger;
+    let success = theme.colors.success;
+
+    let header = div()
+        .h_flex()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(fg)
+                .child(format!(
+                    "冲突（{}）· {} → {}",
+                    view.relative_path, view.diff.left_label, view.diff.right_label
+                )),
+        )
+        .child(
+            Button::new("sp-diff-close")
+                .small()
+                .ghost()
+                .label("关闭")
+                .on_click(on_clear),
+        );
+
+    let mut list = div().v_flex().w_full().gap_0p5();
+    for line in &view.diff.lines {
+        let color = match line.kind {
+            DiffLineKind::Added => success,
+            DiffLineKind::Removed => danger,
+            DiffLineKind::Unchanged => muted,
+        };
+        let left = line
+            .line_number_left
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "·".to_string());
+        let right = line
+            .line_number_right
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "·".to_string());
+        list = list.child(
+            div()
+                .h_flex()
+                .gap_2()
+                .w_full()
+                .text_xs()
+                .text_color(color)
+                .child(div().flex_none().child(format!(
+                    "{} {:>5} {:>5}",
+                    scratchpad_diff_marker(line.kind),
+                    left,
+                    right
+                )))
+                .child(div().flex_1().min_w_0().child(line.content.clone())),
+        );
+    }
+
+    div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .p_2()
+        .rounded_md()
+        .border_1()
+        .border_color(border)
+        .bg(bg)
+        .child(header)
+        .child(div().max_h(rems(16.)).overflow_hidden().child(list))
+}
+
+/// 差异行前缀（`similar` 的口径：`+` 新增 / `-` 删除 / 空格原样）。
+fn scratchpad_diff_marker(kind: DiffLineKind) -> &'static str {
+    match kind {
+        DiffLineKind::Added => "+",
+        DiffLineKind::Removed => "-",
+        DiffLineKind::Unchanged => " ",
+    }
+}
+
 /// 命中高亮行：按字节区间把 `content` 切成「普通段 + 命中段」，命中段用命中底色。
 ///
 /// 区间非法（越界 / 非 char 边界 / 重叠）时退化为整体纯文本。
@@ -949,6 +1070,121 @@ impl ScratchpadView {
         true
     }
 
+    /// C-4：外部改动之后，把「编辑器里有未保存修改」的草稿标成冲突，并在后台算内容差异。
+    ///
+    /// 判据是**内容**而不是 mtime：`diff_with_content` 全是 `Unchanged` 就说明不是真冲突
+    /// （外部改动可能已被写回，或者就是我们自己写的）。返回是否发起了差异计算
+    /// （调用方据此确保轮询在跑）。
+    fn detect_scratchpad_conflicts(&mut self) -> bool {
+        let Some(root) = self.host.project_root() else {
+            return false;
+        };
+        let dirty = self.host.dirty_files();
+        if dirty.is_empty() {
+            return false;
+        }
+        let store = ScratchpadStore::new(root.clone());
+        // 先在只读借用里算出新冲突（+ 要拿给后台任务算差异的缓冲区内容）。
+        let mut fresh: Vec<(ScratchpadConflict, String)> = Vec::new();
+        {
+            let view = self.scratchpad.borrow();
+            for absolute in dirty {
+                let Some(relative) = store.relative_path_of(&absolute) else {
+                    continue;
+                };
+                // 已在冲突列表（差异算好了或还在算）就不重复入队。
+                if view.conflicts.iter().any(|c| c.relative == relative) {
+                    continue;
+                }
+                let Some(content) = self.host.draft_content(&absolute) else {
+                    continue;
+                };
+                fresh.push((
+                    ScratchpadConflict {
+                        relative,
+                        absolute,
+                        diff: None,
+                    },
+                    content,
+                ));
+            }
+        }
+        if fresh.is_empty() {
+            return false;
+        }
+        let mut view = self.scratchpad.borrow_mut();
+        for (conflict, content) in fresh {
+            scratchpad_jobs::enqueue_diff(&root, &conflict.relative, content);
+            view.conflicts.push(conflict);
+        }
+        true
+    }
+
+    /// C-4「查看差异」：把某份冲突的行级差异投给中央编辑区（差异还没算好就先提示）。
+    fn show_scratchpad_conflict_diff(&mut self, relative: String, cx: &mut Context<Self>) {
+        let ready = {
+            let view = self.scratchpad.borrow();
+            view.conflicts
+                .iter()
+                .find(|c| c.relative == relative)
+                .and_then(|c| c.diff.clone())
+        };
+        let Some(diff) = ready else {
+            self.host.notice("差异正在计算…".to_string(), cx);
+            return;
+        };
+        self.scratchpad.borrow_mut().shown_diff = Some(relative.clone());
+        self.host.show_diff(
+            Some(ScratchpadDiffView {
+                relative_path: relative,
+                diff,
+            }),
+            cx,
+        );
+    }
+
+    /// C-4「照磁盘重载」：让编辑器用磁盘内容替掉缓冲区，冲突随之消解。
+    fn reload_scratchpad_conflict(&mut self, absolute: std::path::PathBuf, cx: &mut Context<Self>) {
+        match self.host.reload_draft(&absolute) {
+            Ok(()) => {
+                let mut close = false;
+                {
+                    let mut view = self.scratchpad.borrow_mut();
+                    if let Some(pos) = view.conflicts.iter().position(|c| c.absolute == absolute) {
+                        let conflict = view.conflicts.remove(pos);
+                        if view.shown_diff.as_deref() == Some(conflict.relative.as_str()) {
+                            view.shown_diff = None;
+                            close = true;
+                        }
+                    }
+                }
+                if close {
+                    self.host.show_diff(None, cx);
+                }
+                self.host.notice("已按磁盘内容重载".to_string(), cx);
+                cx.notify();
+            }
+            Err(e) => self.host.notice(format!("重载失败: {e}"), cx),
+        }
+    }
+
+    /// C-4「忽略」：本次保留我的缓冲；下次磁盘再变才会重新报冲突。
+    fn ignore_scratchpad_conflict(&mut self, relative: String, cx: &mut Context<Self>) {
+        let mut close = false;
+        {
+            let mut view = self.scratchpad.borrow_mut();
+            view.conflicts.retain(|c| c.relative != relative);
+            if view.shown_diff.as_deref() == Some(relative.as_str()) {
+                view.shown_diff = None;
+                close = true;
+            }
+        }
+        if close {
+            self.host.show_diff(None, cx);
+        }
+        cx.notify();
+    }
+
     /// 启动监控轮询（常驻任务：每 ~1.2 s 看一次变更标记，有变化就重拉一次）。
     ///
     /// 轮询而非“事件驱动立即重拉”，是为了**去抖**：编辑器保存一次常触发多条 OS 事件，
@@ -984,6 +1220,10 @@ impl ScratchpadView {
                     }
                 }
                 this.scratchpad.borrow_mut().loaded = false;
+                // C-4：外部改动 + 编辑器里有未保存修改 → 冲突（差异在后台算）。
+                if this.detect_scratchpad_conflicts() {
+                    this.ensure_scratchpad_pump(cx);
+                }
                 // 结果面板若还开着，顺带重跑一次搜索：外部改动后旧的命中列表已是快照。
                 let pending_search = this.active_search.clone();
                 if let Some((query, is_regex, case_sensitive)) = pending_search {
@@ -1122,6 +1362,7 @@ impl ScratchpadView {
         let mut notice: Option<String> = None;
         let mut error: Option<String> = None;
         let mut search_view: Option<Option<ScratchpadSearchView>> = None;
+        let mut close_diff = false;
 
         for result in results {
             match result {
@@ -1186,7 +1427,44 @@ impl ScratchpadView {
                         }
                     },
                 },
+                scratchpad_jobs::OpResult::Diff {
+                    relative_path,
+                    outcome,
+                } => match outcome {
+                    Ok(diff) => {
+                        // 内容一致 → 不是真冲突（外部改动已被写回 / 就是自己写的），直接撤掉提示。
+                        let real = diff
+                            .lines
+                            .iter()
+                            .any(|l| l.kind != DiffLineKind::Unchanged);
+                        let mut view = self.scratchpad.borrow_mut();
+                        if real {
+                            if let Some(slot) =
+                                view.conflicts.iter_mut().find(|c| c.relative == relative_path)
+                            {
+                                slot.diff = Some(diff);
+                            }
+                        } else {
+                            view.conflicts.retain(|c| c.relative != relative_path);
+                            if view.shown_diff.as_deref() == Some(relative_path.as_str()) {
+                                view.shown_diff = None;
+                                close_diff = true;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.scratchpad
+                            .borrow_mut()
+                            .conflicts
+                            .retain(|c| c.relative != relative_path);
+                        error = Some(format!("差异计算失败: {e}"));
+                    }
+                },
             }
+        }
+
+        if close_diff {
+            self.host.show_diff(None, cx);
         }
 
         {
@@ -2528,6 +2806,8 @@ impl ScratchpadView {
         let info = theme.colors.info;
         let success = theme.colors.success;
         let active_border = theme.colors.list_active_border;
+        let warning = theme.colors.warning;
+        let danger = theme.colors.danger;
 
         let entity = cx.entity();
         let view_handle = self.scratchpad.clone();
@@ -2548,6 +2828,7 @@ impl ScratchpadView {
             filter,
             has_clipboard,
             loading,
+            conflicts,
         ) = {
             let view = self.scratchpad.borrow();
             let filter = view
@@ -2566,6 +2847,11 @@ impl ScratchpadView {
                 &filter,
                 &mut flat,
             );
+            let conflicts: Vec<(String, std::path::PathBuf, bool)> = view
+                .conflicts
+                .iter()
+                .map(|c| (c.relative.clone(), c.absolute.clone(), c.diff.is_some()))
+                .collect();
             (
                 flat,
                 view.error.clone(),
@@ -2582,6 +2868,7 @@ impl ScratchpadView {
                 filter,
                 view.clipboard.is_some(),
                 view.loading,
+                conflicts,
             )
         };
 
@@ -2745,6 +3032,82 @@ impl ScratchpadView {
                             "剪贴板".to_string()
                         },
                     )),
+            );
+        }
+
+        // ── 冲突条（C-4）：同一份草稿在编辑器里有未保存修改，磁盘上又被外部改了 ──
+        for (relative, absolute, diff_ready) in conflicts {
+            let show_diff = {
+                let entity = entity.clone();
+                let relative = relative.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.show_scratchpad_conflict_diff(relative.clone(), cx)
+                    });
+                }
+            };
+            let reload = {
+                let entity = entity.clone();
+                let absolute = absolute.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.reload_scratchpad_conflict(absolute.clone(), cx)
+                    });
+                }
+            };
+            let ignore = {
+                let entity = entity.clone();
+                let relative = relative.clone();
+                move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
+                    entity.update(app, |this, cx| {
+                        this.ignore_scratchpad_conflict(relative.clone(), cx)
+                    });
+                }
+            };
+            toolbar = toolbar.child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .gap_1()
+                    .p_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(warning)
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(danger)
+                                    .child(format!("冲突：{relative}")),
+                            )
+                            .child(
+                                Button::new(format!("sp-conflict-diff-{relative}"))
+                                    .small()
+                                    .label(if diff_ready { "差异" } else { "计算中…" })
+                                    .disabled(!diff_ready)
+                                    .on_click(show_diff),
+                            )
+                            .child(
+                                Button::new(format!("sp-conflict-reload-{relative}"))
+                                    .small()
+                                    .label("重载")
+                                    .on_click(reload),
+                            )
+                            .child(
+                                Button::new(format!("sp-conflict-ignore-{relative}"))
+                                    .small()
+                                    .ghost()
+                                    .label("忽略")
+                                    .on_click(ignore),
+                            ),
+                    ),
             );
         }
 
@@ -3399,6 +3762,7 @@ mod tests {
         scratchpad_split_name, scratchpad_sort_entries,
         search_view_from_payload, ScratchpadEntry,
     };
+    use crate::{DiffLineKind, scratchpad_view::scratchpad_diff_marker};
     use crate::jobs::SearchPayload;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
@@ -3423,6 +3787,17 @@ mod tests {
             modified_at: Some(modified.to_string()),
             children: kids,
         }
+    }
+
+    #[test]
+    fn diff_markers_follow_unified_diff() {
+        assert_eq!(scratchpad_diff_marker(DiffLineKind::Added), "+");
+        assert_eq!(scratchpad_diff_marker(DiffLineKind::Removed), "-");
+        assert_eq!(
+            scratchpad_diff_marker(DiffLineKind::Unchanged),
+            " ",
+            "未变行占位一个空格，左侧行号列不会错位"
+        );
     }
 
     #[test]
