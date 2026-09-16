@@ -23,6 +23,23 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 2 第一批：质量评分卡（列级）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **130 项** + 集成 4 项全绿；`cargo clippy -p rds-insight --all-targets` 对本批文件零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 等级归位 | 新增 `Grade`（五档 + `of(f64)` + `label()`）；列级与表级**共用**一份阀值与文案——表级原先写死 `85/70/50/30`，视图再取一次色就是三处漂移 | `quality_scorer.rs` |
+| 评分卡进视图模型 | `ScoreView` / `DimensionView`；`ColumnProfileView::score: Option<ScoreView>`，**全空列不产分**（`total_count > 0` 才给）——全空列若给 0 分，用户会读成「质量差」而非「没数据」 | `model.rs` |
+| 评分卡渲染 | 钉在**滚动区之外**（分数是这列的头号结论，不该滚走）；总分行大字 + 四维细条（每维条色按**自己**的等级，短板一眼可见），与分布区共用 `ratio_bar` | `insight_view.rs` |
+| 尺寸常量 | `INSIGHT_SCORE_FONT`（1.75rem）；占比条高由分布专用改为两者共用，只留一条常量 | `ui.rs` |
+| 测试 | 等级阀值边界（`85/70/50/30` 含端点、`84.99` 等降级）；`level` 字符串与 `Grade::of(总分)` 对账（防「88 分 · 良好」）；权重合计 1.0；空列 `score == None` 且基础统计照给；渲染测试逐帧画过评分卡 | 三文件测试模块 |
+
+**排掉的坑**：`model.rs` 与 `insight_view.rs` 原先都从**私有再导出**路径引入 `Grade` / `QualityScore`（E0603）——四个领域类型是 `pub use` 到 crate 根的，视图侧一律走 `crate::{…}`，新增类型沿同一路径。
+
+**下一批**：2.2 表级「评估全表」+ 进度（复用 `jobs.rs` 形态）；2.3 规则管理对话框（新文件 `insight/src/rule_view.rs`，含改错行与打开规则文件）；2.4 全局规则目录首次写入时创建（K7）。
+
+
 ### 2026-09-16 — Phase 1 第六批：尺寸常量改取外壳（镜像债清零）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **124 项** + 集成 4 项全绿；零告警）
@@ -448,12 +465,12 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 
 ### Phase 2 — 质量评分与规则管理
 
-| # | 任务 | 落点 |
-| --- | --- | --- |
-| 2.1 | 质量评分卡：总分 + 等级取色（85 / 70 / 50 / 30 四档）+ 四维进度条（权重 .35 / .25 / .20 / .20） | `insight/src/insight_view.rs` |
-| 2.2 | 表级质量聚合：「评估全表」→ `TableQuality` + 逐步进度（避免撞并发上限） | `insight/src/service/mod.rs` |
-| 2.3 | 规则管理视图：三层分组列表 + 启停开关 + 校验错误行 + 打开规则文件 | `insight/src/rule_view.rs`（新文件） |
-| 2.4 | 用户全局规则目录的创建与管理（首次写入时建目录） | `insight/src/service/indexer.rs` |
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| 2.1 | 质量评分卡：总分 + 等级取色（85 / 70 / 50 / 30 四档）+ 四维进度条（权重 .35 / .25 / .20 / .20） | `insight/src/{quality_scorer,model,insight_view,ui}.rs` | ✅ 第一批 |
+| 2.2 | 表级质量聚合：「评估全表」→ `TableQuality` + 逐步进度（避免撞并发上限） | `insight/src/service/mod.rs` | ⬜ |
+| 2.3 | 规则管理视图：三层分组列表 + 启停开关 + 校验错误行 + 打开规则文件 | `insight/src/rule_view.rs`（新文件） | ⬜ |
+| 2.4 | 用户全局规则目录的创建与管理（首次写入时建目录） | `insight/src/service/indexer.rs` | ⬜ |
 
 **验收**：可禁用一条内置规则并验证其不再出现在适用规则列表；故意写坏一个 TOML 能看见错误原文。
 

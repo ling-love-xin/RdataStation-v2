@@ -11,7 +11,7 @@
 pub const INSIGHT_TAB_HEIGHT: f32 = 1.75;
 /// 直方图条高度（0.5rem = 8px）
 pub const INSIGHT_HISTOGRAM_BAR_HEIGHT: f32 = 0.5;
-/// 单条占比条高度（0.375rem = 6px；布尔 True 占比等「只有一条」的分布）
+/// 单条占比条高度（0.375rem = 6px；布尔 True 占比等「只有一条」的分布与评分卡四维共用）
 pub const INSIGHT_RATIO_BAR_HEIGHT: f32 = 0.375;
 /// 样本单元格最大字符数（超出截断，长文本不得撑破面板）
 pub const INSIGHT_SAMPLE_MAX_CHARS: usize = 200;
@@ -19,6 +19,8 @@ pub const INSIGHT_SAMPLE_MAX_CHARS: usize = 200;
 pub const INSIGHT_INLINE_ICON_SIZE: f32 = 0.875;
 /// 分区标题字号（0.75rem = 12px，对齐面板内的次级信息层级）
 pub const INSIGHT_SECTION_TITLE_FONT: f32 = 0.75;
+/// 评分卡总分字号（1.75rem = 28px；四档取色）
+pub const INSIGHT_SCORE_FONT: f32 = 1.75;
 
 // ===== 与外壳共用的结构尺寸（重导出）=====
 //

@@ -26,11 +26,12 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme};
 use gpui_kit::*;
 
-use crate::model::{
-    ColumnKind, ColumnProfileView, DistributionBar, Emphasis, InsightPanelState, InsightTarget,
-    NoteLevel, PanelTab, QualityNote, SampleCell, StatRow,
-};
 use crate::commands::InsightRefresh;
+use crate::model::{
+    ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, InsightPanelState,
+    InsightTarget, NoteLevel, PanelTab, QualityNote, SampleCell, StatRow,
+};
+use crate::quality_scorer::Grade;
 use crate::ui;
 
 /// 面板向宿主发出的请求。
@@ -392,6 +393,57 @@ impl InsightView {
         }
     }
 
+    /// 评分卡（Phase 2）：**钉在滚动区之外**——分数是这列的头号结论，不该滚走。
+    ///
+    /// 只有「列」Tab 且列非全空时出现（后者见 `ColumnProfileView::score`：不产假分数）。
+    fn render_score_card(&self, theme: &Theme) -> Option<Div> {
+        if self.tab != PanelTab::Column {
+            return None;
+        }
+        let InsightPanelState::Data(profile) = &self.state else {
+            return None;
+        };
+        let score = profile.score.as_ref()?;
+        let colors = theme.colors;
+        let color = grade_color(score.grade, theme);
+
+        let mut card = div()
+            .flex_none()
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .px(rems(ui::PANEL_PADDING))
+            .py_1()
+            .border_t_1()
+            .border_color(colors.border)
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(rems(ui::INSIGHT_SCORE_FONT))
+                            .text_color(color)
+                            .child(format!("{:.0}", score.overall)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(color)
+                            .child(score.grade.label()),
+                    ),
+            );
+        for dim in &score.dimensions {
+            card = card.child(dimension_row(dim, theme));
+        }
+        Some(card.child(
+            div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(score.summary.clone()),
+        ))
+    }
+
     /// 列画像四区
     fn render_column_profile(
         &self,
@@ -467,6 +519,7 @@ impl Render for InsightView {
                             )),
                     ),
             )
+            .children(self.render_score_card(theme))
     }
 }
 
@@ -489,6 +542,69 @@ fn kind_badge(kind: ColumnKind, theme: &Theme) -> Div {
         .text_xs()
         .text_color(color)
         .child(kind.label())
+}
+
+/// 等级 → 主题角色（四档取色；「较差」与「差」共用 danger）
+fn grade_color(grade: Grade, theme: &Theme) -> Hsla {
+    let colors = theme.colors;
+    match grade {
+        Grade::Excellent => colors.success,
+        Grade::Good => colors.primary,
+        Grade::Fair => colors.warning,
+        Grade::Poor | Grade::Bad => colors.danger,
+    }
+}
+
+/// 评分卡的一维：名称 + 细条 + 分数（条色按**该维自己的**等级，便于一眼看出短板）
+fn dimension_row(dim: &DimensionView, theme: &Theme) -> Div {
+    let colors = theme.colors;
+    let color = grade_color(Grade::of(dim.score), theme);
+    div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .child(
+            div()
+                .h_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(dim.name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(color)
+                        .child(format!("{:.0}", dim.score)),
+                ),
+        )
+        .child(ratio_bar(
+            (dim.score / 100.0).clamp(0.0, 1.0) as f32,
+            ui::INSIGHT_RATIO_BAR_HEIGHT,
+            color,
+            theme,
+        ))
+}
+
+/// 比例条（底槽 + 填充）：分布区与评分卡共用，避免两处各画一遍
+fn ratio_bar(ratio: f32, height: f32, fill: Hsla, theme: &Theme) -> Div {
+    div()
+        .w_full()
+        .h(rems(height))
+        .rounded_sm()
+        .bg(theme.colors.border)
+        .child(
+            div()
+                .h_full()
+                .w(relative(ratio))
+                .rounded_sm()
+                .bg(fill),
+        )
 }
 
 fn zone_title(title: &str, theme: &Theme) -> Div {
@@ -687,20 +803,7 @@ fn distribution_bar(bar: &DistributionBar, bar_height: f32, theme: &Theme) -> Di
                         .child(bar.text.clone()),
                 ),
         )
-        .child(
-            div()
-                .w_full()
-                .h(rems(bar_height))
-                .rounded_sm()
-                .bg(colors.border)
-                .child(
-                    div()
-                        .h_full()
-                        .w(relative(ratio))
-                        .rounded_sm()
-                        .bg(colors.primary),
-                ),
-        )
+        .child(ratio_bar(ratio, bar_height, colors.primary, theme))
 }
 
 /// 数据质量：提示列表（Info / Warning 两档）

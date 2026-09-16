@@ -15,8 +15,12 @@ pub mod types;
 use std::fmt::Write as _;
 
 use types::{
-    BooleanStats, ColumnInsightFull, ColumnStatsDetail, DateTimeStats, NumericStats, TextStats,
+    BooleanStats, ColumnInsightFull, ColumnStatsDetail, DateTimeStats, NumericStats, QualityScore,
+    TextStats,
 };
+
+// 等级是 `quality_scorer` 的定义（阈值与文案的唯一来源），这里只借用类型
+use crate::quality_scorer::Grade;
 
 // ==================== 阈值（原型 §3.1） ====================
 
@@ -259,6 +263,29 @@ pub struct SampleCell {
     pub value: Option<String>,
 }
 
+/// 质量评分卡（Phase 2）：总分 + 等级 + 四维。
+///
+/// 等级是类型（[`Grade`]）而不是字符串：视图按它取主题色，
+/// 而阈值与文案由 `quality_scorer` 一处提供，不在这里再写一份。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoreView {
+    pub overall: f64,
+    pub grade: Grade,
+    pub summary: String,
+    pub dimensions: Vec<DimensionView>,
+}
+
+/// 评分卡的一维（完整性 / 唯一性 / 类型一致 / 分布均匀）
+#[derive(Debug, Clone, PartialEq)]
+pub struct DimensionView {
+    pub name: String,
+    /// 0–100
+    pub score: f64,
+    /// 权重（四维合计 1.0）
+    pub weight: f64,
+    pub detail: String,
+}
+
 /// 列画像（「列」Tab 的四区内容 + 目标头所需字段）
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnProfileView {
@@ -276,6 +303,8 @@ pub struct ColumnProfileView {
     pub notes: Vec<QualityNote>,
     /// 四区之四：样本数据
     pub sample: Vec<SampleCell>,
+    /// 评分卡：`None` 表示**无数据不产假分数**（列全空时）
+    pub score: Option<ScoreView>,
 }
 
 impl ColumnProfileView {
@@ -296,6 +325,7 @@ impl ColumnProfileView {
             distribution: Vec::new(),
             notes: Vec::new(),
             sample: sample_cells(&full.sample),
+            score: None,
         };
 
         view.basics.push(StatRow {
@@ -352,7 +382,30 @@ impl ColumnProfileView {
             );
         }
 
+        // 评分卡（Phase 2）：列全空时不给分数（「表为空或无数据不产假分数」的口径）
+        view.score = (stats.total_count > 0)
+            .then(|| score_view(&crate::quality_scorer::compute_column_quality(full)));
+
         view
+    }
+}
+
+/// 评分卡的领域结果 → 视图模型（等级按分数现算，不去解析 `level` 字符串）
+fn score_view(score: &QualityScore) -> ScoreView {
+    ScoreView {
+        overall: score.overall_score,
+        grade: Grade::of(score.overall_score),
+        summary: score.summary.clone(),
+        dimensions: score
+            .dimensions
+            .iter()
+            .map(|d| DimensionView {
+                name: d.name.clone(),
+                score: d.score,
+                weight: d.weight,
+                detail: d.detail.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -887,5 +940,51 @@ mod tests {
         full.histogram = Some(Vec::new());
         let view = ColumnProfileView::from_domain(&full);
         assert!(view.distribution.is_empty());
+    }
+
+    #[test]
+    fn score_card_is_built_for_non_empty_columns() {
+        let view = ColumnProfileView::from_domain(&base_stats(ColumnStatsDetail::Numeric(
+            numeric(None, Vec::new()),
+        )));
+        let score = view.score.expect("有数据就应产出评分卡");
+        assert_eq!(score.dimensions.len(), 4, "评分卡固定四维");
+        let weights: f64 = score.dimensions.iter().map(|d| d.weight).sum();
+        assert!((weights - 1.0).abs() < 1e-9, "权重合计应为 1.0");
+        for dim in &score.dimensions {
+            assert!(
+                (0.0..=100.0).contains(&dim.score),
+                "维度得分应在 0–100：{}={}",
+                dim.name,
+                dim.score
+            );
+            assert!(!dim.detail.is_empty(), "维度应带明细文案：{}", dim.name);
+        }
+        assert!(
+            (0.0..=100.0).contains(&score.overall),
+            "总分应在 0–100：{}",
+            score.overall
+        );
+        // 等级按分数现算，与领域结果里的 `level` 字符串同源
+        assert_eq!(score.grade, Grade::of(score.overall));
+        assert!(!score.summary.is_empty());
+    }
+
+    #[test]
+    fn empty_column_has_no_score() {
+        // 「表为空或无数据不产假分数」：全空列若给 0 分，用户会误以为数据质量差，
+        // 实际是根本没有数据——视图据此不渲染评分卡。
+        let mut full = base_stats(ColumnStatsDetail::Numeric(numeric(None, Vec::new())));
+        full.stats.total_count = 0;
+        full.stats.null_count = 0;
+        full.stats.null_rate = 0.0;
+        full.stats.unique_count = None;
+        full.sample.clear();
+        let view = ColumnProfileView::from_domain(&full);
+        assert!(view.score.is_none());
+        // 计数与空值率仍然照给（基础统计不依赖有无数据）
+        assert_eq!(view.total_count, 0);
+        let labels: Vec<&str> = view.basics.iter().map(|r| r.label).collect();
+        assert_eq!(&labels[..4], ["总行数", "非空值", "空值", "唯一值"]);
     }
 }

@@ -277,7 +277,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **85 项**（迁移基线 53 + Phase 0 新增 32），新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **130 项**（迁移基线 53 + Phase 0–2 新增），另有集成测试 4 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -305,7 +305,9 @@ RulesWatcher（后台线程，drop 即停）：
 | D22/D23 目录监听与索引解耦 | `crates/insight/src/service/watcher.rs`（`RulesWatcher` / `rules_fingerprint` / `watch_dirs` / `set_watched_project_root` / `index_is_stale`）；接线在 `workbench/src/view.rs`（构造期启动）与 `workbench/src/components/project_host.rs`（项目切换告知） |
 | D20 不自己取数 | `engine/src/services/{duckdb_service,sql_service}.rs` 为唯一数据入口 |
 | 规则执行（SQL 模板与输出映射） | `crates/insight/src/rule_executor.rs` |
-| 质量评分四维与等级 | `crates/insight/src/quality_scorer.rs` |
+| 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
+| 评分卡视图模型（`ScoreView` / `DimensionView`；全空列不产分） | `crates/insight/src/model.rs`（`ColumnProfileView::score`） |
+| 评分卡渲染（钉在滚动区之外；四维细条） | `crates/insight/src/insight_view.rs`（`render_score_card` / `dimension_row` / `ratio_bar`） |
 | 表探查 | `crates/insight/src/table_profile_service.rs` |
 | Schema 洞察 | `crates/insight/src/schema_analyzer.rs` |
 | 规则资产（18 条） | `crates/insight/insight-rules/` |

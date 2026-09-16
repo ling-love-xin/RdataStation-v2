@@ -15,6 +15,50 @@ pub const GRADE_GOOD: f64 = 70.0;
 pub const GRADE_FAIR: f64 = 50.0;
 pub const GRADE_POOR: f64 = 30.0;
 
+/// 质量等级（总分 → 等级）。
+///
+/// 阈值与文案收在这一处：先前列级与表级各写了一份判断（表级还直接写死 85/70/50/30），
+/// 视图再各写一份取色映射就会三处漂移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grade {
+    /// ≥ 85
+    Excellent,
+    /// ≥ 70
+    Good,
+    /// ≥ 50
+    Fair,
+    /// ≥ 30
+    Poor,
+    /// < 30
+    Bad,
+}
+
+impl Grade {
+    pub fn of(score: f64) -> Self {
+        if score >= GRADE_EXCELLENT {
+            Grade::Excellent
+        } else if score >= GRADE_GOOD {
+            Grade::Good
+        } else if score >= GRADE_FAIR {
+            Grade::Fair
+        } else if score >= GRADE_POOR {
+            Grade::Poor
+        } else {
+            Grade::Bad
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Grade::Excellent => "优秀",
+            Grade::Good => "良好",
+            Grade::Fair => "一般",
+            Grade::Poor => "较差",
+            Grade::Bad => "差",
+        }
+    }
+}
+
 /// Computes a quality score for a single column based on four dimensions:
 /// completeness (null-rate), uniqueness (distinct-ratio), type consistency,
 /// and value distribution (histogram uniformity).
@@ -150,32 +194,21 @@ pub fn compute_column_quality(stats: &ColumnInsightFull) -> QualityScore {
 
     let overall: f64 = dimensions.iter().map(|d| d.score * d.weight).sum();
 
-    let level = if overall >= GRADE_EXCELLENT {
-        "优秀"
-    } else if overall >= GRADE_GOOD {
-        "良好"
-    } else if overall >= GRADE_FAIR {
-        "一般"
-    } else if overall >= GRADE_POOR {
-        "较差"
-    } else {
-        "差"
-    };
+    let grade = Grade::of(overall);
 
-    let summary = if overall >= GRADE_EXCELLENT {
-        format!("数据质量优秀 ({:.0}分)，可直接用于分析", overall)
-    } else if overall >= GRADE_GOOD {
-        format!("数据质量良好 ({:.0}分)，建议关注空值", overall)
-    } else if overall >= GRADE_FAIR {
-        format!("数据质量一般 ({:.0}分)，存在明显质量问题", overall)
-    } else {
-        format!("数据质量较差 ({:.0}分)，建议清洗后使用", overall)
+    let summary = match grade {
+        Grade::Excellent => format!("数据质量优秀 ({:.0}分)，可直接用于分析", overall),
+        Grade::Good => format!("数据质量良好 ({:.0}分)，建议关注空值", overall),
+        Grade::Fair => format!("数据质量一般 ({:.0}分)，存在明显质量问题", overall),
+        Grade::Poor | Grade::Bad => {
+            format!("数据质量较差 ({:.0}分)，建议清洗后使用", overall)
+        }
     };
 
     QualityScore {
         column_name: stats.stats.column_name.clone(),
         overall_score: overall,
-        level: level.into(),
+        level: grade.label().into(),
         dimensions,
         summary,
     }
@@ -215,18 +248,12 @@ pub fn compute_table_quality(
         0.0
     };
 
+    // 表级与列级共用同一套阈值与文案（先前此处写死了 85/70/50/30）
+    let grade = Grade::of(overall);
     let level = if scored_count == 0 {
         "无数据"
-    } else if overall >= 85.0 {
-        "优秀"
-    } else if overall >= 70.0 {
-        "良好"
-    } else if overall >= 50.0 {
-        "一般"
-    } else if overall >= 30.0 {
-        "较差"
     } else {
-        "差"
+        grade.label()
     };
 
     let problem_columns = entries.iter().filter(|e| e.quality_score < 50.0).count();
@@ -397,6 +424,61 @@ mod tests {
         assert_eq!(tq.overall_score, 0.0);
         assert_eq!(tq.level, "无数据");
         assert_eq!(tq.scored_count, 0);
+    }
+
+    /// 等级边界：阈值端点**含在下档**（`>=`），差一个 epsilon 立刻降级。
+    ///
+    /// 边界写死在这里而不是引用常量，是为了让「改阈值」必须来这里同步——
+    /// 否则测试跟着实现一起漂移就失去意义。
+    #[test]
+    fn grade_thresholds_are_inclusive_on_the_boundary() {
+        assert_eq!(Grade::of(100.0), Grade::Excellent);
+        assert_eq!(Grade::of(85.0), Grade::Excellent);
+        assert_eq!(Grade::of(84.99), Grade::Good);
+        assert_eq!(Grade::of(70.0), Grade::Good);
+        assert_eq!(Grade::of(69.99), Grade::Fair);
+        assert_eq!(Grade::of(50.0), Grade::Fair);
+        assert_eq!(Grade::of(49.99), Grade::Poor);
+        assert_eq!(Grade::of(30.0), Grade::Poor);
+        assert_eq!(Grade::of(29.99), Grade::Bad);
+        assert_eq!(Grade::of(0.0), Grade::Bad);
+    }
+
+    #[test]
+    fn grade_labels_are_distinct() {
+        let labels: Vec<&str> = [
+            Grade::Excellent,
+            Grade::Good,
+            Grade::Fair,
+            Grade::Poor,
+            Grade::Bad,
+        ]
+        .iter()
+        .map(|g| g.label())
+        .collect();
+        assert_eq!(labels, vec!["优秀", "良好", "一般", "较差", "差"]);
+    }
+
+    /// 领域结果里的 `level` 字符串必须等于 `Grade::of(总分).label()`：
+    /// 视图按分数现算等级（不去解析字符串），两者一旦漂移就会出现「88 分 · 良好」。
+    #[test]
+    fn level_string_agrees_with_grade_of_score() {
+        for (null_rate, unique_ratio) in [(0.0, 1.0), (0.05, 0.6), (0.4, 0.3), (0.9, 0.01)] {
+            let qs = compute_column_quality(&make_insight(null_rate, unique_ratio));
+            assert_eq!(qs.level, Grade::of(qs.overall_score).label());
+        }
+        let tq = compute_table_quality("t", &[make_insight(0.1, 0.5), make_insight(0.6, 0.05)]);
+        assert_eq!(tq.level, Grade::of(tq.overall_score).label());
+    }
+
+    /// 四维权重合计 1.0：否则总分不再是 0–100 标度，等级阈值也跟着失去意义。
+    #[test]
+    fn dimension_weights_sum_to_one() {
+        let sum = WEIGHT_COMPLETENESS
+            + WEIGHT_UNIQUENESS
+            + WEIGHT_TYPE_CONSISTENCY
+            + WEIGHT_DISTRIBUTION;
+        assert!((sum - 1.0).abs() < 1e-9, "权重合计应为 1.0，实际 {sum}");
     }
 
     #[test]
