@@ -554,3 +554,228 @@ pub fn enqueue_replace_all(
         is_regex,
     });
 }
+
+#[cfg(test)]
+mod tests {
+    // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// 结果队列是**进程级共享**的，测试之间会互相取走结果 —— 用锁串行执行。
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_tests() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 临时项目目录（每个用例一个，避免互扰）。
+    fn temp_project(tag: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "rds_sp_jobs_{tag}_{}_{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp project");
+        dir
+    }
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Runtime::new().expect("tokio runtime")
+    }
+
+    /// 轮询等待结果（真实工作线程 + 真实文件系统，给足 20 s）。
+    fn wait_for<T>(what: &str, mut take: impl FnMut() -> Option<T>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            if let Some(value) = take() {
+                return value;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("等待「{what}」超时（20 s）");
+    }
+
+    /// 按请求序号取出模块根加载结果（丢弃别人的）。
+    fn wait_load(seq: u64) -> LoadResult {
+        wait_for("模块根加载", || {
+            let mut found = None;
+            for r in drain_loads() {
+                if r.seq == seq {
+                    found = Some(r);
+                }
+            }
+            found
+        })
+    }
+
+    #[test]
+    fn root_load_returns_entries_and_reports_failure() {
+        let _guard = lock_tests();
+        let project = temp_project("root");
+        let store = ScratchpadStore::new(project.clone());
+        let rt = rt();
+        rt.block_on(store.create_entry("a.sql", None, false)).unwrap();
+        rt.block_on(store.create_entry("data", None, true)).unwrap();
+        // 先建文件：`save_file` 走 `resolve_path(必须已存在)`，它改的是既有文件的内容。
+        rt.block_on(store.create_entry("b.csv", Some("data"), false))
+            .unwrap();
+        rt.block_on(store.save_file("data/b.csv", "x,y")).unwrap();
+
+        // 带已展开子目录：重拉时一并回传子项（面板用它刷新缓存）。
+        let seq = enqueue_root_load(&project, vec!["data".to_string()]);
+        assert!(has_pending(), "入队后应有在途任务");
+        let result = wait_load(seq);
+        let entries = result.entries.expect("根列表应成功");
+        assert_eq!(entries.len(), 2, "模块根应有 2 个条目");
+        assert_eq!(result.children.len(), 1, "已展开子目录应被刷新");
+        assert_eq!(result.children[0].1.len(), 1);
+
+        // 轮询空闲后 `has_pending` 回落（面板靠它决定何时停掉「加载中…」）。
+        wait_for("待办清零", || (!has_pending()).then_some(()));
+
+        // 失败路径：把项目根指向一个**文件**，`create_dir_all` 必然失败。
+        // 注意相对路径的基准是 `{项目}/scratchpad/`，所以那个文件在 `scratchpad/` 下：
+        // 写成 `{项目}/a.sql` 是个不存在的路径，`create_dir_all` 反而会成功建出目录。
+        let broken = project.join("scratchpad").join("a.sql");
+        let seq_err = enqueue_root_load(&broken, Vec::new());
+        let failed = wait_load(seq_err);
+        assert!(failed.entries.is_err(), "非目录项目根应回传错误");
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn paste_job_moves_and_copies() {
+        let _guard = lock_tests();
+        let project = temp_project("paste");
+        let store = ScratchpadStore::new(project.clone());
+        let rt = rt();
+        rt.block_on(store.create_entry("dir", None, true)).unwrap();
+        rt.block_on(store.create_entry("a.sql", None, false)).unwrap();
+        rt.block_on(store.save_file("a.sql", "select 1")).unwrap();
+
+        // 复制：
+        enqueue_paste(&project, false, vec!["a.sql".to_string()], "dir");
+        wait_for("复制结果", || {
+            matches!(drain_ops().as_slice(), [OpResult::Paste { outcome: Ok(()), .. }]).then_some(())
+        });
+        assert!(project.join("scratchpad/dir/a_copy.sql").is_file());
+
+        // 剪切：原位置应消失。
+        enqueue_paste(&project, true, vec!["a.sql".to_string()], "dir");
+        wait_for("剪切结果", || {
+            matches!(drain_ops().as_slice(), [OpResult::Paste { cut: true, outcome: Ok(()), .. }])
+                .then_some(())
+        });
+        assert!(!project.join("scratchpad/a.sql").exists(), "剪切后原文件应已移走");
+        assert!(project.join("scratchpad/dir/a.sql").is_file());
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn import_and_empty_trash_jobs() {
+        let _guard = lock_tests();
+        let project = temp_project("import");
+        let outside = temp_project("outside");
+        let source = outside.join("raw.csv");
+        std::fs::write(&source, "a,b").unwrap();
+
+        enqueue_import(&project, vec![source.clone()]);
+        wait_for("导入结果", || {
+            matches!(drain_ops().as_slice(), [OpResult::Import { outcome: Ok(()) }]).then_some(())
+        });
+        assert!(project.join("scratchpad/raw.csv").is_file(), "导入应复制进模块根");
+
+        // 删一个文件入回收站，再清空。
+        let store = ScratchpadStore::new(project.clone());
+        let rt = rt();
+        rt.block_on(store.delete_entry("raw.csv")).unwrap();
+        assert_eq!(rt.block_on(store.list_trash()).unwrap().len(), 1);
+        enqueue_empty_trash(&project);
+        wait_for("清空回收站结果", || {
+            matches!(drain_ops().as_slice(), [OpResult::EmptyTrash { outcome: Ok(()) }])
+                .then_some(())
+        });
+        assert!(rt.block_on(store.list_trash()).unwrap().is_empty());
+
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn search_and_replace_jobs_share_one_payload() {
+        let _guard = lock_tests();
+        let project = temp_project("replace");
+        let store = ScratchpadStore::new(project.clone());
+        let rt = rt();
+        rt.block_on(store.create_entry("a.sql", None, false)).unwrap();
+        rt.block_on(store.save_file("a.sql", "select ID from t\nselect id from t\n"))
+            .unwrap();
+
+        // 搜索：不区分大小写 → 两行命中。
+        enqueue_search(&project, "id", false, false);
+        let payload = wait_for("搜索结果", || {
+            drain_ops().into_iter().find_map(|r| match r {
+                OpResult::Search {
+                    replaced: None,
+                    outcome: Ok(payload),
+                    ..
+                } => Some(payload),
+                _ => None,
+            })
+        });
+        assert_eq!(payload.matches.len(), 2);
+        assert!(payload.replaced.is_none(), "搜索任务不带替换汇总");
+
+        // 替换：一次任务内完成写回 + 重搜（替换后不应再有命中）。
+        enqueue_replace_all(&project, "id", "key", false, false);
+        let payload = wait_for("替换结果", || {
+            drain_ops().into_iter().find_map(|r| match r {
+                OpResult::Search {
+                    replaced: Some(_),
+                    outcome: Ok(payload),
+                    ..
+                } => Some(payload),
+                _ => None,
+            })
+        });
+        assert_eq!(payload.replaced, Some((2, 1)), "2 处替换，1 个文件");
+        assert!(payload.matches.is_empty(), "重搜结果应为空");
+        assert_eq!(
+            rt.block_on(store.read_file("a.sql")).unwrap(),
+            "select key from t\nselect key from t\n"
+        );
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[test]
+    fn dir_load_returns_children_only() {
+        let _guard = lock_tests();
+        let project = temp_project("dir");
+        let store = ScratchpadStore::new(project.clone());
+        let rt = rt();
+        rt.block_on(store.create_entry("dir", None, true)).unwrap();
+        rt.block_on(store.create_entry("x.sql", Some("dir"), false))
+            .unwrap();
+        rt.block_on(store.create_entry("sub", Some("dir"), true))
+            .unwrap();
+
+        enqueue_dir_load(&project, "dir");
+        let result = wait_for("子目录加载", || drain_dirs().into_iter().next());
+        assert_eq!(result.parent, "dir");
+        let kids = result.result.expect("子目录列表应成功");
+        assert_eq!(kids.len(), 2);
+        assert!(
+            kids.iter().any(|k| k.name == "sub")
+                && kids.iter().any(|k| k.name == "x.sql"),
+            "应回传该目录的直接子项"
+        );
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+}
