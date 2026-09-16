@@ -99,7 +99,7 @@ impl EditorShared {
     /// 提交一次执行（借用边界内完成：不在 `Ref` 存活期间回调调用方）
     ///
     /// 文档绑定的连接（B1）在这里取出并随请求交给执行器：调用方（面板 / 菜单）不需要知道
-    /// 连接从哪来，只要知道“执行这份文档”。
+    /// 连接从哪来，只要知道“执行这份文档”。`placement` 决定结果落到当前结果集还是新结果集（B2）。
     ///
     /// 对 `Option<ExecChannel>` 的借用刻意收在这里：`ExecChannel` 内部是
     /// `Sender + Arc`，调 `submit` 期间不会回到调用方，因此不构成重入风险。
@@ -107,6 +107,7 @@ impl EditorShared {
         &self,
         document: crate::model::DocumentId,
         target: &crate::execution::ExecTarget,
+        placement: crate::execution::ResultPlacement,
     ) -> Result<(), crate::execution::SubmitError> {
         // 先把绑定拷出来（不把服务层的 `Ref` 带到下面的借用里）
         let connection = self.service.borrow().connection_for(&document);
@@ -114,7 +115,7 @@ impl EditorShared {
         let Some(channel) = guard.as_ref() else {
             return Err(crate::execution::SubmitError::NoRunner);
         };
-        channel.submit(document, target, connection)
+        channel.submit(document, target, connection, placement)
     }
 
     /// 结果队列里已完成但尚未取走的执行（轮询泵调用）

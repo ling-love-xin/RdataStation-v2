@@ -22,7 +22,7 @@ use gpui_kit::*;
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::edit;
-use crate::execution::{self, ExecMenuKind, ExecTarget};
+use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
 use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode};
 use crate::persist;
@@ -33,6 +33,7 @@ use crate::ui;
 use crate::view::dialogs;
 use crate::view::highlight;
 use crate::view::widgets::result_grid::{self, ResultGridDelegate};
+use crate::view::widgets::result_sets::{self, ResultSetTab};
 use crate::view::widgets::status_bar::{self, StatusInputs};
 
 /// 一份文档的编辑面板
@@ -57,12 +58,16 @@ pub struct EditorHostPanel {
     pub(crate) closed: bool,
     /// 结果网格（A14）：数据由 `ResultStore` 拷入 delegate，网格不持有第二份真值
     grid: Entity<TableState<ResultGridDelegate>>,
-    /// 本文档是否有执行正在跑（决定结果区是否显示“执行中”与是否显示结果区）
-    running: bool,
+    /// 本文档**已提交、尚未回填**的语句数（B2：批量 = 多条；`> 0` 就是“执行中”）
+    pending: usize,
     /// 结果区状态行文案（`Some` = 本文档有结果要显示）
     ///
     /// 缓存在这里而不是每帧 `format!`：`summary()` 要算，而 render 是纯读路径。
     result_summary: Option<String>,
+    /// 结果集标签（从 `ResultStore` 投影；同样不在渲染期重算）
+    result_tabs: Vec<ResultSetTab>,
+    /// 当前选中的结果集下标（标签条的选中态）
+    result_active: usize,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
@@ -146,8 +151,10 @@ impl EditorHostPanel {
             message: None,
             closed: false,
             grid,
-            running: false,
+            pending: 0,
             result_summary: None,
+            result_tabs: Vec::new(),
+            result_active: 0,
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
         }
@@ -510,13 +517,14 @@ impl EditorHostPanel {
 
     /// 执行族（执行级）：主按钮 + 下拉菜单
     ///
-    /// 主按钮与 `Ctrl+Enter` 走**同一条路**（`resolve_target`：选区优先）；下拉里的三项是
-    /// **显式目标**（`target_for_menu`）——“执行选区”没选区时置灰，比“点了没反应”明确。
+    /// 主按钮与 `Ctrl+Enter` 走**同一条路**（`resolve_target`：选区优先）；下拉里的五项是
+    /// **显式目标**（`target_for_menu`，后两项见 [`ExecMenuKind`] 的注释）——“执行选区”
+    /// 没选区时置灰、“批量执行”语句不足两条时置灰，比“点了没反应”明确。
     fn render_exec_group(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let run_entity = cx.entity();
         let (_, selection) = self.editor_snapshot(cx);
-        let has_selection = ExecMenuKind::Selection.is_available(&selection);
+        let statements = self.statements;
 
         DropdownButton::new("editor-exec")
             .small()
@@ -534,23 +542,16 @@ impl EditorHostPanel {
             )
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu;
-                for kind in [
-                    ExecMenuKind::CurrentStatement,
-                    ExecMenuKind::Selection,
-                    ExecMenuKind::All,
-                ] {
+                for kind in ExecMenuKind::ALL {
                     let entity = entity.clone();
-                    let available = match kind {
-                        ExecMenuKind::Selection => has_selection,
-                        ExecMenuKind::CurrentStatement | ExecMenuKind::All => true,
-                    };
+                    let available = kind.is_available(&selection, statements);
                     menu = menu.item(
                         PopupMenuItem::new(kind.label()).disabled(!available).on_click(
                             move |_, _window, app| {
                                 entity.update(app, |panel, cx| {
                                     let (text, selection) = panel.editor_snapshot(cx);
                                     let target = execution::target_for_menu(kind, &text, selection);
-                                    panel.execute(target, cx);
+                                    panel.execute(target, kind.placement(), cx);
                                 });
                             },
                         ),
@@ -767,7 +768,7 @@ impl EditorHostPanel {
 
     // ===== 执行（A14）=====
     //
-    // 三个入口（Ctrl+Enter / Ctrl+Shift+Enter / 后续工具栏按钮）共用 `execute`：
+    // 四个入口（Ctrl+Enter / Ctrl+Shift+Enter / 工具栏主按钮 / 执行族菜单）共用 `execute`：
     // 目标解析 → 提交 → 轮询回填。界面不等 I/O。
 
     /// `Ctrl+Enter`：执行（选区优先 → 光标所在语句）
@@ -784,7 +785,7 @@ impl EditorHostPanel {
     pub(crate) fn execute_preferring_selection(&mut self, cx: &mut Context<Self>) {
         let (text, selection) = self.editor_snapshot(cx);
         let target = execution::resolve_target(&text, selection);
-        self.execute(target, cx);
+        self.execute(target, ResultPlacement::Replace, cx);
     }
 
     /// `Ctrl+Shift+Enter`：执行全部
@@ -803,20 +804,28 @@ impl EditorHostPanel {
     pub fn run_all(&mut self, cx: &mut Context<Self>) {
         let (text, _selection) = self.editor_snapshot(cx);
         let target = execution::all_target(&text);
-        self.execute(target, cx);
+        self.execute(target, ResultPlacement::Replace, cx);
     }
 
     /// 提交一次执行
     ///
-    /// 拒绝都要留痕迹：文本模式（能力表禁止通信）、未接入执行、忙、空目标。
-    pub(crate) fn execute(&mut self, target: ExecTarget, cx: &mut Context<Self>) {
+    /// `placement` 决定结果落到当前结果集还是新结果集（B2 的「在新结果标签中执行」/「批量执行」）。
+    /// 拒绍都要留痕迹：文本模式（能力表禁止通信）、未接入执行、忙、空目标。
+    pub(crate) fn execute(
+        &mut self,
+        target: ExecTarget,
+        placement: ResultPlacement,
+        cx: &mut Context<Self>,
+    ) {
         if !self.execution_allowed() {
             self.set_message(Some("文本模式不与数据库通信".to_string()), cx);
             return;
         }
-        match self.shared.submit(self.document.clone(), &target) {
+        // 预期回填条数 = 本次要跑的语句数（批量 > 1）：跑完这几条才算“不执行中”
+        let expected = target.statements().len();
+        match self.shared.submit(self.document.clone(), &target, placement) {
             Ok(()) => {
-                self.running = true;
+                self.pending += expected;
                 self.set_message(None, cx);
                 self.ensure_exec_pump(cx);
             }
@@ -840,6 +849,24 @@ impl EditorHostPanel {
     /// 本文档的执行状态与结果摘要（供测试断言；`None` = 尚未执行）
     pub fn result_summary_for_test(&self) -> Option<&str> {
         self.result_summary.as_deref()
+    }
+
+    /// 结果集标签（供测试断言“批量跑出三个结果集”与标签文案）
+    pub fn result_tabs_for_test(&self) -> Vec<(String, bool)> {
+        self.result_tabs
+            .iter()
+            .map(|tab| (tab.label.clone(), tab.failed))
+            .collect()
+    }
+
+    /// 当前选中的结果集下标（供测试断言点标签真的切了）
+    pub fn result_active_for_test(&self) -> usize {
+        self.result_active
+    }
+
+    /// 还有几条语句没回填（供测试断言“批量执行至少知道自己在跑什么”）
+    pub fn pending_for_test(&self) -> usize {
+        self.pending
     }
 
     /// 结果网格当前行数（供测试断言网格真的拿到了数据）
@@ -883,44 +910,80 @@ impl EditorHostPanel {
     }
 
     /// 取回已完成的执行，填入结果存储与网格
+    ///
+    /// **一条语句一条结论**：批量执行会连续回来多条，每条各自落一个结果集（落位由 outcome
+    /// 自带）。本文档的回填计数减到 0 才算执行完。
     pub(crate) fn drain_exec_results(&mut self, cx: &mut Context<Self>) {
         let outcomes = self.shared.drain_exec();
+        let mut mine_arrived = 0usize;
         for outcome in outcomes {
-            let entry = entry_from(outcome);
-            let is_mine = entry.document == self.document;
-            self.shared
-                .update_results(|store| store.push(entry.clone()));
+            let is_mine = outcome.document == self.document;
             if is_mine {
-                self.apply_result(&entry, cx);
+                mine_arrived += 1;
             }
+            let placement = outcome.placement;
+            let entry = entry_from(outcome);
+            self.shared.update_results(|store| store.push(entry, placement));
+        }
+        if mine_arrived > 0 {
+            self.pending = self.pending.saturating_sub(mine_arrived);
+            self.sync_result_view(cx);
         }
     }
 
-    /// 把一条结果落到本文档的界面上（网格数据 + 状态栏原因）
-    fn apply_result(&mut self, entry: &ResultEntry, cx: &mut Context<Self>) {
-        self.running = false;
-        self.result_summary = Some(entry.summary());
+    /// 按「当前选中的结果集」刷新结果区（网格数据 + 状态行 + 标签条）
+    ///
+    /// **结果区唯一的读点**：结果集可能因一次执行回填、点标签、批量推进而变，但界面只从
+    /// 这里读一次——否则会出现“网格还是上一份、摘要已经换了”的错位（多结果集之后这种错位
+    /// 很难靠看界面发现）。
+    fn sync_result_view(&mut self, cx: &mut Context<Self>) {
+        // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
+        let (tabs, active, grid_data, failed_text, summary, error) = {
+            let store = self.shared.results();
+            let active = store.active_index(&self.document).unwrap_or(0);
+            let entry = store.active(&self.document);
+            (
+                result_sets::tabs(store.sets(&self.document)),
+                active,
+                entry
+                    .filter(|entry| entry.has_grid())
+                    .map(|entry| (entry.columns.clone(), entry.rows.clone())),
+                entry
+                    .filter(|entry| !entry.has_grid())
+                    .map(ResultEntry::summary),
+                entry.map(ResultEntry::summary),
+                entry.and_then(|entry| entry.error.clone()),
+            )
+        };
 
-        // 先拷贝再进闭包：`entry` 借的是 `self.shared`，不能跨 `self.grid.update` 存活
-        let grid_data = entry.has_grid().then(|| (entry.columns.clone(), entry.rows.clone()));
-        let failed_text = (!entry.has_grid()).then(|| entry.summary());
+        self.result_tabs = tabs;
+        self.result_active = active;
+        self.result_summary = summary;
         self.grid.update(cx, |state, cx| {
             match grid_data {
                 Some((columns, rows)) => state.delegate_mut().set_data(columns, rows),
-                None => state
-                    .delegate_mut()
-                    .clear(failed_text.unwrap_or_default()),
+                None => state.delegate_mut().clear(failed_text.unwrap_or_default()),
             }
             state.refresh(cx);
         });
 
-        // 失败原因同时进状态栏（结果区可能被滚出视野）
-        self.set_message(entry.error.clone(), cx);
+        // 失败原因同时进状态栏（结果区可能被滚出视野）；选中成功的那份则清掉旧提示
+        self.set_message(error, cx);
+    }
+
+    /// 切换结果集（结果集标签条点击）：选中项只有 `ResultStore` 能改，界面按它重画
+    pub(crate) fn select_result_set(&mut self, index: usize, cx: &mut Context<Self>) {
+        let changed = self
+            .shared
+            .update_results(|store| store.select(&self.document, index));
+        if changed {
+            self.sync_result_view(cx);
+        }
     }
 
     /// 是否要显示结果区（本文档有结果或正在执行；且模式允许通信）
     fn result_visible(&self) -> bool {
-        self.execution_allowed() && (self.running || self.result_summary.is_some())
+        self.execution_allowed() && (self.pending > 0 || self.result_summary.is_some())
     }
 
     /// `Ctrl+W`：请求关闭当前文档
@@ -1300,7 +1363,7 @@ impl ComponentPanel for EditorHostPanel {
     ) -> Option<impl IntoElement> {
         self.is_dirty().then(|| {
             div()
-                .size(rems(ui::DIRTY_DOT_SIZE))
+                .size(rems(ui::STATUS_DOT_SIZE))
                 .rounded_full()
                 .bg(cx.theme().colors.primary)
         })
@@ -1353,7 +1416,7 @@ impl Render for EditorHostPanel {
             column,
             selected_chars,
             message: self.message.as_deref(),
-            executing: self.running,
+            executing: self.pending > 0,
             connection: connection_text.as_deref(),
         };
 
@@ -1363,6 +1426,20 @@ impl Render for EditorHostPanel {
             (true, None) => Some("执行中…".to_string()),
             (false, _) => None,
         };
+        // 结果集标签条：两份以上结果才画（一份结果不需要切换器）
+        let result_tabs = (result_summary.is_some() && self.result_tabs.len() >= 2).then(|| {
+            let entity = cx.entity();
+            result_sets::render(
+                &self.result_tabs,
+                self.result_active,
+                move |index, _window, app| {
+                    let index = *index;
+                    entity.update(app, |panel, cx| panel.select_result_set(index, cx));
+                },
+                cx,
+            )
+            .into_any_element()
+        });
 
         let mut root = div()
             .v_flex()
@@ -1417,7 +1494,7 @@ impl Render for EditorHostPanel {
             );
         // 结果区：有结果或正在执行时出现（否则不占位置——不显示空壳）
         if let Some(summary) = result_summary {
-            root = root.child(result_grid::render(&self.grid, &summary, cx));
+            root = root.child(result_grid::render(&self.grid, &summary, result_tabs, cx));
         }
         root.child(status_bar::render(&status, cx))
     }

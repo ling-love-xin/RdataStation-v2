@@ -147,10 +147,14 @@ pub fn new_table_state(
     })
 }
 
-/// 渲染结果网格（含顶部状态行）
+/// 渲染结果区（顶部可带结果集标签条 + 状态行 + 网格）
+///
+/// `tabs` 由宿主填（它知道当前文档有几份结果、选中哪份）：一份结果时传 `None`，
+/// 那一排标签只会白占一行（原型 §2.4 的标签条是“多结果”才需要的切换器）。
 pub fn render(
     state: &Entity<TableState<ResultGridDelegate>>,
     summary: &str,
+    tabs: Option<AnyElement>,
     cx: &App,
 ) -> impl IntoElement {
     let muted = cx.theme().colors.muted_foreground;
@@ -163,6 +167,7 @@ pub fn render(
         .min_h(rems(ui::RESULT_MIN_HEIGHT))
         .border_t(ui::HAIRLINE)
         .border_color(border)
+        .children(tabs)
         .child(
             div()
                 .h_flex()

@@ -159,7 +159,7 @@ crates/editor/src/
 ├── execution.rs    执行编排：目标解析（选区/当前语句/全部/批量）+ 后台任务 + 结果回填
 ├── completion.rs   schema 补全（MetadataService + 关键字/函数 + 上下文判定 + 缓存）
 ├── session.rs      Session trait + SqlSession（DuckDB 分析命名空间 + 临时表变量）
-├── store.rs        ResultStore（结果单权威 + 上限淘汰 + 连接归属校验）
+├── store.rs        ResultStore（结果单权威：每文档一份**结果集列表 + 选中项** + 上限淘汰）
 ├── persist.rs      工作区上下文（光标/选区/展开态）+ `.rdsnote` 读写
 ├── commands.rs     Actions：ExecuteCurrent/ExecuteAll/ToggleComment/Format/…
 └── view/
@@ -228,7 +228,7 @@ trait GridEditSink {              // 只有“可编辑网格”实现（结果�
 | 模式 / 只读 / 连接绑定 / 方言 | `Document` | 文档 | `EditorService::set_mode` / 连接选择器 | 能力表消费方、状态栏 |
 | 脏状态 | `Document.dirty`（**与基线比较的派生量**） | 文档 | 内核 `InputEvent` → 与 `baseline` 比较 | 标签脏点、关闭确认、M1 拦截 |
 | 光标 / 选区 | 内核（`EditorState` 自带） | 文档 | 内核 | 状态栏、执行目标解析 |
-| 结果集 | `ResultStore`（按键 `(document_id, connection_id, run_id)`） | 会话内（可持久化引用） | `execution` 回填 | 结果面板、内联输出、导出 |
+| 结果集 | `ResultStore`（每文档一份**结果集列表 + 选中项**；`run_id` / 血缘字段在 B5 引入） | 会话内（可持久化引用） | `execution` 回填 | 结果面板、内联输出、导出 |
 | 执行态（运行中/耗时/可中断） | `Document.exec_state` / `Cell.state` | 单次执行 | `execution` | 状态栏、单元卡片、中断按钮 |
 | 会话（连接 + DuckDB 命名空间 + 临时表） | `SessionRegistry`（按 `session_id`） | 应用（可显式重启） | `session` | 单元执行、变量面板 |
 | 笔记结构（单元顺序 / 折叠 / 选中） | `NoteBook` | 笔记 | `EditorService::{insert,move,delete}_cell` | 笔记本视图 |

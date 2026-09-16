@@ -22,7 +22,7 @@ use gpui_kit::{
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::connection::{ConnectionOption, ConnectionsPort};
-use crate::execution::{QueryData, QueryRunner};
+use crate::execution::{self, QueryData, QueryRunner};
 use crate::mode::CellGranularity;
 use crate::model::{DocumentId, EditorMode};
 use crate::service::OpenRequest;
@@ -600,6 +600,76 @@ fn shared_with_runner(
     (shared, id, seen, seen_connections)
 }
 
+/// 假执行器（B2）：按 SQL 里的 `rows=N` 决定结果行数
+///
+/// 多结果集的测试必须能区分“网格里现在是哪一份”，否则切过去也看不出来。
+struct SizedRunner;
+
+impl QueryRunner for SizedRunner {
+    fn run(&self, _connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+        // 与 `ScriptRunner` 同一口径：带 `boom` 的语句失败（批量要能验“失败不中断”）
+        if sql.contains("boom") {
+            return Err("驱动报错：boom".to_string());
+        }
+        let rows = sql
+            .split("rows=")
+            .nth(1)
+            .and_then(|tail| {
+                let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse::<usize>().ok()
+            })
+            .unwrap_or(1);
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows: (0..rows).map(|index| vec![index.to_string()]).collect(),
+            elapsed_ms: 3,
+            truncated: false,
+        })
+    }
+}
+
+/// 带 `SizedRunner` 的共享状态 + 一份文档（B2：多结果集）
+fn shared_with_sized_runner(content: &str) -> (EditorShared, DocumentId) {
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(SizedRunner));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    (shared, id)
+}
+
+/// 等本文档“已提交的语句都回填完”（批量是多条，`wait_for_result` 只等第一条）
+fn wait_for_all_pending(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let done = cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.drain_exec_results(cx);
+                panel.pending_for_test() == 0
+            })
+        });
+        if done {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "批量结果迟迟没全部回来");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// 网格当前行数（结果区的真实投影）
+fn grid_rows(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) -> usize {
+    cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx))
+}
+
+/// 结果集标签（文案 + 是否失败）
+fn result_tabs(
+    cx: &mut VisualTestContext,
+    panel: &Entity<EditorHostPanel>,
+) -> Vec<(String, bool)> {
+    cx.update(|_window, cx| panel.read(cx).result_tabs_for_test())
+}
+
 /// 在窗口里建面板（宿主建的窗口第一层视图**
 fn open_panel<'a>(
     cx: &'a mut TestAppContext,
@@ -662,7 +732,7 @@ select boom;",
     // 结果进了权威存储（数字都是真实值）
     let stored = shared
         .results()
-        .latest(&id)
+        .active(&id)
         .map(|entry| (entry.row_count(), entry.columns.len(), entry.summary()));
     assert_eq!(stored, Some((2, 1, "2 行 × 1 列 · 5 ms".to_string())));
 
@@ -741,11 +811,118 @@ fn a_failing_execution_says_why_instead_of_showing_an_empty_grid(cx: &mut TestAp
     // 失败原因同时写进结果存储与状态栏
     let stored = shared
         .results()
-        .latest(&id)
+        .active(&id)
         .and_then(|entry| entry.error.clone());
     assert!(stored.is_some(), "错误要进 ResultStore");
     let message = cx.update(|_window, cx| panel.read(cx).message.clone());
     assert!(message.expect("状态栏也要说原因").contains("boom"));
+}
+
+// ===== B2：批量执行与多结果集 =====
+
+/// 批量：三句语句 → 三个结果集，**失败不中断**且失败的那份带标记
+#[gpui_kit::test]
+fn a_batch_lands_three_statements_in_three_result_sets(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (shared, id) = shared_with_sized_runner("select rows=1;\nselect boom;\nselect rows=3;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 走菜单同样的落地入口（菜单点击在 headless 下命中测试不可靠：目标解析已有纯函数单测）
+    let target = execution::batch_target("select rows=1;\nselect boom;\nselect rows=3;");
+    assert_eq!(target.statements().len(), 3, "先确认切出了三句");
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(target, execution::ResultPlacement::NewSet, cx)
+        })
+    });
+    wait_for_all_pending(cx, &panel);
+
+    let tabs = result_tabs(cx, &panel);
+    assert_eq!(
+        tabs,
+        vec![
+            ("结果 1".to_string(), false),
+            ("结果 2".to_string(), true),
+            ("结果 3".to_string(), false),
+        ],
+        "每句一个结果集，中间那句失败要标出来"
+    );
+    assert_eq!(
+        shared.results().set_count(&id),
+        3,
+        "三份结果都在权威存储里"
+    );
+    // 失败不中断：第三句真的跑了（否则它不会有自己的结果集）
+    assert_eq!(grid_rows(cx, &panel), 1, "默认选中第一份");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 点开第三份：网格跟着换（headless 下点击不稳，直接驱动落地入口）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(2, cx)));
+    assert_eq!(grid_rows(cx, &panel), 3, "第三句的结果真的落地了");
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_active_for_test()),
+        2
+    );
+    // 界面上真的画出了标签条（两份以上结果才画）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 「在新结果标签中执行」：新结果放旁边，**原结果集仍选中**（原型 §4.4）
+#[gpui_kit::test]
+fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (shared, id) = shared_with_sized_runner("select rows=2;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 第一次：普通执行（替换语义）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx))
+    });
+    wait_for_result(cx, &panel);
+    assert_eq!(grid_rows(cx, &panel), 2);
+    assert_eq!(result_tabs(cx, &panel).len(), 1);
+
+    // 第二次：同文档、新结果集
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::Statement("select rows=5".to_string()),
+                execution::ResultPlacement::NewSet,
+                cx,
+            )
+        })
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(shared.results().set_count(&id), 2, "新的一份追加在后面");
+    assert_eq!(
+        result_tabs(cx, &panel).len(),
+        2,
+        "两份结果 → 标签条该出现"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_active_for_test()),
+        0,
+        "原结果集保持选中（新结果放旁边，不打扰在看的那份）"
+    );
+    assert_eq!(grid_rows(cx, &panel), 2, "网格还是第一份的数据");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 切到新的一份：网格与选中态一起跟着走
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.select_result_set(1, cx)));
+    assert_eq!(grid_rows(cx, &panel), 5);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_active_for_test()),
+        1
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_summary_for_test().map(str::to_string)),
+        Some("5 行 × 1 列 · 3 ms".to_string()),
+        "状态行跟着选中的结果集走"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
 #[gpui_kit::test]

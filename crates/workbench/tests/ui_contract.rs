@@ -114,6 +114,10 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../editor/src/view/widgets/result_grid.rs"),
         ),
         (
+            "editor/view/widgets/result_sets.rs",
+            include_str!("../../editor/src/view/widgets/result_sets.rs"),
+        ),
+        (
             "editor/view/highlight.rs",
             include_str!("../../editor/src/view/highlight.rs"),
         ),
@@ -190,6 +194,10 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "editor/view/widgets/result_grid.rs",
             include_str!("../../editor/src/view/widgets/result_grid.rs"),
+        ),
+        (
+            "editor/view/widgets/result_sets.rs",
+            include_str!("../../editor/src/view/widgets/result_sets.rs"),
         ),
         (
             "editor/view/highlight.rs",

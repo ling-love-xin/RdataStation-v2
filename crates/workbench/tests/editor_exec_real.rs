@@ -18,7 +18,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use editor::execution::ExecTarget;
+use editor::execution::{ExecTarget, ResultPlacement, batch_target};
 use editor::model::{DocumentId, EditorMode};
 use editor::service::OpenRequest;
 use editor::shared::EditorShared;
@@ -78,16 +78,25 @@ async fn connect_active(manager: &Arc<ConnectionManager>, target: &Target, value
     }
 }
 
-/// 跑一次 `select 1`（走编辑器的执行通道），返回编辑器侧的结果记录
-fn run_through_editor(shared: &EditorShared, document: DocumentId) -> Option<editor::store::ResultEntry> {
-    let target = ExecTarget::Statement("select 1 as n".to_string());
-    shared.submit(document, &target).expect("提交执行");
+/// 跑一次执行（走编辑器的执行通道），把**这次提交**带来的每一份结果都取回落库
+///
+/// `expected` = 预期结论条数（单条 = 1；批量 = 语句数）。返回本次的每份结果。
+fn run_through_editor(
+    shared: &EditorShared,
+    document: DocumentId,
+    target: &ExecTarget,
+    placement: ResultPlacement,
+    expected: usize,
+) -> Vec<editor::store::ResultEntry> {
+    shared
+        .submit(document, target, placement)
+        .expect("提交执行");
 
     // 手动轮询（生产由面板的轮询泵做）
     let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        // 一次执行只会有一个结论：取到就收工（剩下的等下一轮或下一份文档）
-        if let Some(outcome) = shared.drain_exec().into_iter().next() {
+    let mut entries = Vec::new();
+    while entries.len() < expected {
+        for outcome in shared.drain_exec() {
             let entry = match outcome.result {
                 Ok(data) => editor::store::ResultEntry::success(
                     outcome.document,
@@ -97,22 +106,25 @@ fn run_through_editor(shared: &EditorShared, document: DocumentId) -> Option<edi
                     data.columns,
                     data.rows,
                 ),
-                Err(error) => editor::store::ResultEntry::failure(
-                    outcome.document,
-                    outcome.sql,
-                    error,
-                    0,
-                ),
+                Err(error) => {
+                    editor::store::ResultEntry::failure(outcome.document, outcome.sql, error, 0)
+                }
             };
-            shared.update_results(|store| store.push(entry.clone()));
-            return Some(entry);
+            // 落位来自结论自己（"结果放哪"是执行时的语义，不是调用方事后猜的）
+            shared.update_results(|store| store.push(entry.clone(), outcome.placement));
+            entries.push(entry);
         }
-        if Instant::now() > deadline {
-            eprintln!("❌ 执行结果迟迟没回来（30s 超时）");
-            return None;
+        if entries.len() >= expected {
+            break;
         }
+        assert!(
+            Instant::now() < deadline,
+            "只等回 {} 份结果（预期 {expected} 份），30s 超时",
+            entries.len()
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
+    entries
 }
 
 #[test]
@@ -145,7 +157,14 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             .id()
             .clone();
 
-        let entry = run_through_editor(&shared, document).expect("有结果回填");
+        let entries = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Statement("select 1 as n".to_string()),
+            ResultPlacement::Replace,
+            1,
+        );
+        let entry = entries.into_iter().next().expect("有结果回填");
         assert!(
             entry.error.is_none(),
             "{}：执行报错 —— {:?}",
@@ -160,6 +179,44 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             entry.summary(),
             entry.columns,
             entry.rows
+        );
+
+        // B2：批量（逐条独立）——每句一个结果集，失败不中断
+        let script = "select 1 as n;\nselect 2 as n;\nselect 3 as n;";
+        let batch = run_through_editor(
+            &shared,
+            document.clone(),
+            &batch_target(script),
+            ResultPlacement::NewSet,
+            3,
+        );
+        assert_eq!(batch.len(), 3, "{}：批量应当三份结果", target.driver);
+        assert!(
+            batch.iter().all(|entry| entry.error.is_none()),
+            "{}：三条简单查询不该失败 —— {:?}",
+            target.driver,
+            batch.iter().map(|entry| &entry.error).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            batch.iter().map(|entry| entry.row_count()).collect::<Vec<_>>(),
+            vec![1, 1, 1],
+            "{}：每句各自一行",
+            target.driver
+        );
+        assert_eq!(
+            shared.results().set_count(&document),
+            4,
+            "{}：一份替换结果 + 三份批量结果 = 4 个结果集",
+            target.driver
+        );
+        eprintln!(
+            "✅ {}：批量三句 → 三个结果集（{}）",
+            target.driver,
+            batch
+                .iter()
+                .map(|entry| format!("{} 行", entry.row_count()))
+                .collect::<Vec<_>>()
+                .join(" / ")
         );
 
         runtime.block_on(manager.close_all_connections());

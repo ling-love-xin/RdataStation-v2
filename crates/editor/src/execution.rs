@@ -19,7 +19,9 @@
 //!
 //! ## 并发策略（1a）
 //!
-//! 同一通道**同时只跑一次执行**（[`ExecChannel::submit`] 忙时返回 [`SubmitError::Busy`]）。
+//! 同一通道**同时只跑一个作业**（[`ExecChannel::submit`] 忙时返回 [`SubmitError::Busy`]）。
+//! 一个作业可以带多条语句（[`ExecTarget::Batch`]）：它们在**同一条工作线程上顺序**跑完，
+//! 每条语句各自回填一份结果——因此"批量"既不是驱动能力的猜测，也不会中途被别的提交插队。
 //! 事务 / 会话亲和（架构 §12 #2）属 1b：那需要 per-session 独占连接，不是这里加锁能解决的。
 
 use std::collections::VecDeque;
@@ -43,14 +45,29 @@ pub enum ExecTarget {
     Statement(String),
     /// 全文（显式的"执行全部"）
     All(String),
+    /// 批量（B2）：**逐条独立**的语句列表，一条一次执行、失败不中断
+    ///
+    /// 与 `All` 的差别不是"内容多少"而是**语义**：`All` 是整篇一次性发给驱动（驱动自己决定
+    /// 怎么处理多语句），`Batch` 是在客户端切成独立请求逐条跑——所以它对驱动没有额外要求，
+    /// 也因此能给出"每句一个结果集"。
+    Batch(Vec<String>),
 }
 
 impl ExecTarget {
-    /// 要发给驱动的 SQL（`Empty` 为 `None`）
+    /// 要发给驱动的 SQL（`Empty` 与 `Batch` 为 `None`；后者看 [`Self::statements`]）
     pub fn sql(&self) -> Option<&str> {
         match self {
-            Self::Empty => None,
+            Self::Empty | Self::Batch(_) => None,
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => Some(sql),
+        }
+    }
+
+    /// 这次执行要跑的语句（**逐条独立**；`Batch` 之外都是一条）
+    pub fn statements(&self) -> Vec<String> {
+        match self {
+            Self::Empty => Vec::new(),
+            Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => vec![sql.clone()],
+            Self::Batch(list) => list.clone(),
         }
     }
 
@@ -61,8 +78,19 @@ impl ExecTarget {
             Self::Selection(_) => "选区",
             Self::Statement(_) => "当前语句",
             Self::All(_) => "全部",
+            Self::Batch(_) => "批量",
         }
     }
+}
+
+/// 结果落到哪里（B2）：执行族里「批量执行」与「在新结果标签中执行」的差别只在这一维
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultPlacement {
+    /// 替换当前选中的结果集（1a 口径：一次执行一份结果）
+    Replace,
+    /// 追加一个新结果集，**原结果集仍保持选中**（原型 §4.4：V1 常驻 `＋` 按钮的语义——
+    /// “别动我正在看的东西，新的那份放旁边”）
+    NewSet,
 }
 
 /// 解析 `Ctrl+Enter` 的执行目标：**选区优先，否则光标所在语句**
@@ -117,10 +145,11 @@ pub fn all_target(text: &str) -> ExecTarget {
     }
 }
 
-/// 执行族菜单项（原型 §5.1 里**今天真有动作**的三项）
+/// 执行族菜单项（原型 §5.1 的五项）
 ///
-/// 批量执行（逐条独立）与“在新结果标签中执行”属 1b（需要多结果集）；执行计划属 B10——
-/// 没实现就不放进菜单（“只宣传不实现”是明确排除项）。
+/// 后两项（批量 / 新结果标签）都是 `target × placement` 的组合：前者换目标（切成一堆独立请求），
+/// 后者换落位（结果进新结果集）。执行计划属 B10——没实现就不放进菜单
+/// （“只宣传不实现”是原型 §2.2 的明确排除项）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecMenuKind {
     /// 光标所在语句（忽略选区）
@@ -129,23 +158,48 @@ pub enum ExecMenuKind {
     Selection,
     /// 整篇脚本
     All,
+    /// 批量：逐条独立执行（语句不足两条时置灰——没有“批”可言）
+    Batch,
+    /// 在新结果标签中执行（目标同主按钮：选区优先 → 当前语句）
+    NewSet,
 }
 
 impl ExecMenuKind {
+    /// 菜单顺序（原型 §5.1 的次序；渲染与断言共用一份）
+    pub const ALL: [Self; 5] = [
+        Self::CurrentStatement,
+        Self::Selection,
+        Self::All,
+        Self::Batch,
+        Self::NewSet,
+    ];
+
     /// 菜单文案（与原型 §5.1 用词一致）
     pub fn label(self) -> &'static str {
         match self {
             Self::CurrentStatement => "执行当前语句",
             Self::Selection => "执行选区",
             Self::All => "执行全部",
+            Self::Batch => "批量执行（逐条独立）",
+            Self::NewSet => "在新结果标签中执行",
         }
     }
 
-    /// 当前光标 / 选区下这个菜单项能不能用（置灰比“点了没反应”好）
-    pub fn is_available(self, selection: &Range<usize>) -> bool {
+    /// 这一项要不要落到新结果集
+    pub fn placement(self) -> ResultPlacement {
+        match self {
+            // 批量每句一个结果集：都往新结果集里放（原结果集留着回看）
+            Self::Batch | Self::NewSet => ResultPlacement::NewSet,
+            Self::CurrentStatement | Self::Selection | Self::All => ResultPlacement::Replace,
+        }
+    }
+
+    /// 当前光标 / 选区 / 语句数下这个菜单项能不能用（置灰比“点了没反应”好）
+    pub fn is_available(self, selection: &Range<usize>, statements: usize) -> bool {
         match self {
             Self::Selection => selection.end > selection.start,
-            Self::CurrentStatement | Self::All => true,
+            Self::Batch => statements >= 2,
+            Self::CurrentStatement | Self::All | Self::NewSet => true,
         }
     }
 }
@@ -154,6 +208,9 @@ impl ExecMenuKind {
 ///
 /// 与 [`resolve_target`] 的分工：快捷键路径按“选区优先”猜用户意图，菜单路径是用户
 /// 已经说清楚了要执行什么——两者都收敛到 [`ExecTarget`]，执行通道只有一条。
+///
+/// 例外是 `NewSet`：它只换落位，**目标是主按钮那一套**（选区优先），因此直接复用
+/// [`resolve_target`]。
 pub fn target_for_menu(kind: ExecMenuKind, text: &str, selection: Range<usize>) -> ExecTarget {
     match kind {
         ExecMenuKind::CurrentStatement => statement_target(text, selection.start),
@@ -162,7 +219,26 @@ pub fn target_for_menu(kind: ExecMenuKind, text: &str, selection: Range<usize>) 
             None => ExecTarget::Empty,
         },
         ExecMenuKind::All => all_target(text),
+        ExecMenuKind::Batch => batch_target(text),
+        ExecMenuKind::NewSet => resolve_target(text, selection),
     }
+}
+
+/// 批量目标：把脚本按语句切开，每句一条独立请求（**失败不中断**由执行通道保证）
+///
+/// 切分用 [`engine::sql::split_statements`]（词法级，与“执行当前语句”同一套判据），
+/// 空白 / 注释段被丢掉：它们不是可执行内容，拿去 `prepare` 只会得到与用户意图无关的错。
+/// 语句**前面的**注释跟着它一起走（`split` 的既有口径）——注释是合法 SQL，
+/// 且这样批量执行与“执行当前语句”看到的是同一份文本。
+pub fn batch_target(text: &str) -> ExecTarget {
+    let statements: Vec<String> = engine::sql::split_statements(text)
+        .iter()
+        .filter_map(|statement| trimmed(statement.text(text)).map(str::to_string))
+        .collect();
+    if statements.is_empty() {
+        return ExecTarget::Empty;
+    }
+    ExecTarget::Batch(statements)
 }
 
 /// 按字节区间取原文（区间越界或多字节边界不齐时向前收敛，不 panic）
@@ -214,16 +290,22 @@ pub trait QueryRunner: Send + Sync + 'static {
 
 // ===== 跑完放哪 =====
 
-/// 一次执行的请求（工作线程需要知道"这是哪份文档在哪个连接上的哪句话"）
+/// 一次执行的请求（工作线程需要知道"这是哪份文档在哪个连接上的哪几句话"）
+///
+/// 一条 job 可以带多条语句（批量）：工作线程**顺序**跑完它们，逐条回填结论——这样忙标记
+/// 覆盖整批，中途不会被误判成"跑完了"。
 #[derive(Debug, Clone)]
-struct ExecRequest {
+struct ExecJob {
     document: DocumentId,
     /// 文档绑定的连接（B1；`None` = 未绑定）
     connection: Option<String>,
-    sql: String,
+    /// 要跑的语句（逐条独立）
+    statements: Vec<String>,
+    /// 结果落到哪里（B2）
+    placement: ResultPlacement,
 }
 
-/// 一次执行的结论（回到主线程）
+/// 一次执行的结论（回到主线程）：**一条语句一条结论**
 #[derive(Debug, Clone)]
 pub struct ExecOutcome {
     pub document: DocumentId,
@@ -231,6 +313,8 @@ pub struct ExecOutcome {
     pub connection: Option<String>,
     /// 实际执行的 SQL（结果区标题与历史用）
     pub sql: String,
+    /// 这份结果怎么落位（B2）：批量 / 新标签执行都给 `NewSet`
+    pub placement: ResultPlacement,
     pub result: Result<QueryData, String>,
 }
 
@@ -259,7 +343,7 @@ impl SubmitError {
 ///
 /// 生命周期：随宿主（面板 / 工作台）存活；`Drop` 时把工作线程放掉（发送端关闭 → 线程退出）。
 pub struct ExecChannel {
-    tx: Option<Sender<ExecRequest>>,
+    tx: Option<Sender<ExecJob>>,
     done: Arc<Mutex<VecDeque<ExecOutcome>>>,
     busy: Arc<AtomicBool>,
 }
@@ -267,7 +351,7 @@ pub struct ExecChannel {
 impl ExecChannel {
     /// 用一个执行器起通道
     pub fn new(runner: Arc<dyn QueryRunner>) -> Self {
-        let (tx, rx) = mpsc::channel::<ExecRequest>();
+        let (tx, rx) = mpsc::channel::<ExecJob>();
         let done: Arc<Mutex<VecDeque<ExecOutcome>>> = Arc::new(Mutex::new(VecDeque::new()));
         let busy = Arc::new(AtomicBool::new(false));
 
@@ -278,17 +362,22 @@ impl ExecChannel {
             // 驱动解析在 debug 下递归较深（与 nav 工作线程同一考虑）
             .stack_size(16 * 1024 * 1024)
             .spawn(move || {
-                while let Ok(request) = rx.recv() {
+                while let Ok(job) = rx.recv() {
+                    // 忙标记覆盖**整批**：批量的语句之间不是“空闲”，否则面板会在中途收起
+                    // 「执行中」并允许第二次提交（那就成了隐藏的并行执行）。
                     worker_busy.store(true, Ordering::SeqCst);
-                    // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
-                    let result = runner.run(request.connection.as_deref(), &request.sql);
-                    if let Ok(mut queue) = worker_done.lock() {
-                        queue.push_back(ExecOutcome {
-                            document: request.document,
-                            connection: request.connection,
-                            sql: request.sql,
-                            result,
-                        });
+                    for sql in job.statements {
+                        // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
+                        let result = runner.run(job.connection.as_deref(), &sql);
+                        if let Ok(mut queue) = worker_done.lock() {
+                            queue.push_back(ExecOutcome {
+                                document: job.document.clone(),
+                                connection: job.connection.clone(),
+                                sql,
+                                placement: job.placement,
+                                result,
+                            });
+                        }
                     }
                     worker_busy.store(false, Ordering::SeqCst);
                 }
@@ -305,15 +394,18 @@ impl ExecChannel {
     /// 提交一次执行（忙 / 空目标会被拒，**不排队**：排队会让"再按一次"变成隐藏的批量执行）
     ///
     /// `connection` 是**文档绑定的连接**（B1）；`None` = 未绑定，执行器回退到“当前活动连接”。
+    /// `placement` 决定结果落到当前结果集还是新结果集（B2）。
     pub fn submit(
         &self,
         document: DocumentId,
         target: &ExecTarget,
         connection: Option<String>,
+        placement: ResultPlacement,
     ) -> Result<(), SubmitError> {
-        let Some(sql) = target.sql() else {
+        let statements = target.statements();
+        if statements.is_empty() {
             return Err(SubmitError::Empty);
-        };
+        }
         if self.is_busy() {
             return Err(SubmitError::Busy);
         }
@@ -322,10 +414,11 @@ impl ExecChannel {
         };
         self.busy.store(true, Ordering::SeqCst);
         if tx
-            .send(ExecRequest {
+            .send(ExecJob {
                 document,
                 connection,
-                sql: sql.to_string(),
+                statements,
+                placement,
             })
             .is_err()
         {
@@ -361,8 +454,8 @@ impl Drop for ExecChannel {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ExecChannel, ExecMenuKind, ExecTarget, QueryData, QueryRunner, SubmitError, all_target,
-        resolve_target, statement_target, target_for_menu,
+        ExecChannel, ExecMenuKind, ExecTarget, QueryData, QueryRunner, ResultPlacement, SubmitError,
+        all_target, batch_target, resolve_target, statement_target, target_for_menu,
     };
     use crate::model::DocumentId;
     use std::sync::Arc;
@@ -440,13 +533,14 @@ mod tests {
         assert_eq!(target, ExecTarget::Statement("select ';' as a".to_string()));
     }
 
-    /// 菜单是**显式目标**：三项各自独立，不互相推断；“执行选区”没选区就置灰
+    /// 菜单是**显式目标**：各项各自独立，不互相推断；“执行选区”没选区就置灰
     #[test]
     fn menu_items_resolve_their_own_targets() {
         let text = "select 1;\nselect 2;";
         // 只选中第二句的一部分：菜单里的“当前语句”应当给**整句**，
         // “执行选区”才给那段片段（后者会报语法错，但那正是用户当下选的东西）
         let partial = 12..18;
+        let statements = batch_target(text).statements().len();
 
         assert_eq!(
             target_for_menu(ExecMenuKind::CurrentStatement, text, partial.clone()),
@@ -462,35 +556,97 @@ mod tests {
             ExecTarget::All(text.to_string())
         );
 
-        assert!(ExecMenuKind::Selection.is_available(&partial));
-        assert!(!ExecMenuKind::Selection.is_available(&(4..4)));
-        assert!(ExecMenuKind::CurrentStatement.is_available(&(4..4)));
-        assert!(ExecMenuKind::All.is_available(&(4..4)));
+        assert!(ExecMenuKind::Selection.is_available(&partial, statements));
+        assert!(!ExecMenuKind::Selection.is_available(&(4..4), statements));
+        assert!(ExecMenuKind::CurrentStatement.is_available(&(4..4), statements));
+        assert!(ExecMenuKind::All.is_available(&(4..4), statements));
 
-        // 三项文案彼此不同（菜单上看不出区别就是没实现）
-        let labels = [
-            ExecMenuKind::CurrentStatement.label(),
-            ExecMenuKind::Selection.label(),
-            ExecMenuKind::All.label(),
-        ];
-        assert_eq!(labels.len(), 3);
+        // 五项文案彼此不同（菜单上看不出区别就是没实现），顺序也固定
+        let labels: Vec<&str> = ExecMenuKind::ALL.iter().map(|kind| kind.label()).collect();
+        assert_eq!(labels.len(), 5);
         assert!(labels.iter().all(|label| !label.is_empty()));
-        assert_ne!(labels[0], labels[1]);
-        assert_ne!(labels[1], labels[2]);
+        let unique: std::collections::BTreeSet<_> = labels.iter().collect();
+        assert_eq!(unique.len(), labels.len(), "菜单项文案不得重复：{labels:?}");
 
-        // 空文档 / 只有注释：三项都得是 Empty，不得拿注释去 prepare
+        // 空文档 / 只有注释：各项都得是 Empty，不得拿注释去 prepare
         let comments = "-- 只是注释\n";
-        for kind in [
-            ExecMenuKind::CurrentStatement,
-            ExecMenuKind::Selection,
-            ExecMenuKind::All,
-        ] {
+        for kind in ExecMenuKind::ALL {
             assert_eq!(
                 target_for_menu(kind, comments, 3..3),
                 ExecTarget::Empty,
                 "{kind:?} 对纯注释文档应无可执行内容"
             );
         }
+    }
+
+    /// 批量：按语句切开、**逐条独立**（空白与纯注释段不是可执行内容，不进列表）
+    #[test]
+    fn batch_target_splits_the_script_into_independent_statements() {
+        let text = "select 1;\n\nselect 2;\nselect 3";
+        let target = batch_target(text);
+        assert_eq!(
+            target.statements(),
+            vec![
+                "select 1".to_string(),
+                "select 2".to_string(),
+                "select 3".to_string()
+            ]
+        );
+        assert_eq!(target.label(), "批量");
+        assert!(target.sql().is_none(), "批量不走单条 SQL 那条路");
+
+        // 语句**前面**的注释跟着它一起走（与“执行当前语句”拿到的是同一份文本）
+        let commented = batch_target("select 1;\n-- 说明\nselect 2;");
+        assert_eq!(commented.statements().len(), 2);
+        assert!(
+            commented.statements()[1].ends_with("select 2"),
+            "注释属于它后面那句：{:?}",
+            commented.statements()
+        );
+
+        // 字符串里的分号不算切分点（与“执行当前语句”同一套词法级判据）
+        assert_eq!(
+            batch_target("select ';' as a; select 2").statements().len(),
+            2
+        );
+
+        // 不足两条语句 / 纯注释：拿不到“批”
+        assert_eq!(batch_target("select 1").statements().len(), 1);
+        assert!(
+            !ExecMenuKind::Batch.is_available(&(4..4), 1),
+            "只有一句时“批量执行”该置灰"
+        );
+        assert!(ExecMenuKind::Batch.is_available(&(4..4), 2));
+        assert_eq!(batch_target("-- 只是注释"), ExecTarget::Empty);
+    }
+
+    /// 落位：批量与新标签执行都往新结果集放；其余三项换掉当前那份
+    #[test]
+    fn batch_and_new_set_land_in_new_result_sets() {
+        assert_eq!(ExecMenuKind::Batch.placement(), ResultPlacement::NewSet);
+        assert_eq!(ExecMenuKind::NewSet.placement(), ResultPlacement::NewSet);
+        for kind in [
+            ExecMenuKind::CurrentStatement,
+            ExecMenuKind::Selection,
+            ExecMenuKind::All,
+        ] {
+            assert_eq!(kind.placement(), ResultPlacement::Replace, "{kind:?}");
+        }
+
+        // “在新结果标签中执行”只换落位：目标就是主按钮那一套（选区优先）
+        let text = "select 1;\nselect 2;";
+        assert_eq!(
+            target_for_menu(ExecMenuKind::NewSet, text, 10..18),
+            resolve_target(text, 10..18)
+        );
+        assert_eq!(
+            target_for_menu(ExecMenuKind::NewSet, text, 3..3),
+            ExecTarget::Statement("select 1".to_string())
+        );
+        assert!(
+            ExecMenuKind::NewSet.is_available(&(4..4), 0),
+            "没选区也能新开一份结果"
+        );
     }
 
     #[test]
@@ -565,13 +721,33 @@ mod tests {
 
     /// 轮询等待结果（带超时：通道坏掉时测试要失败而不是挂住）
     fn wait(channel: &ExecChannel) -> Vec<super::ExecOutcome> {
+        wait_for(channel, 1)
+    }
+
+    /// 轮询等待 N 条结果（批量：语句逐条回来，只等第一条会把后面的漏掉）
+    fn wait_for(channel: &ExecChannel, count: usize) -> Vec<super::ExecOutcome> {
         let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let done = channel.drain();
-            if !done.is_empty() {
-                return done;
+        let mut collected = Vec::new();
+        while collected.len() < count {
+            collected.extend(channel.drain());
+            if collected.len() >= count {
+                return collected;
             }
-            assert!(Instant::now() < deadline, "后台执行迟迟没有结果");
+            assert!(
+                Instant::now() < deadline,
+                "只等到 {} 条结果（期望 {count} 条）",
+                collected.len()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        collected
+    }
+
+    /// 等通道回到空闲（忙标记在工作线程上清，与回填不同步，不能立刻断言）
+    fn wait_until_idle(channel: &ExecChannel) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while channel.is_busy() {
+            assert!(Instant::now() < deadline, "通道迟迟没回到空闲");
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -584,7 +760,12 @@ mod tests {
         // 绑定连接（B1）：通道要把它原样交给执行器
         let target = ExecTarget::Statement("select 1".to_string());
         channel
-            .submit(document.clone(), &target, Some("P_orders".to_string()))
+            .submit(
+                document.clone(),
+                &target,
+                Some("P_orders".to_string()),
+                ResultPlacement::Replace,
+            )
             .expect("提交");
 
         let done = wait(&channel);
@@ -610,20 +791,94 @@ mod tests {
         let (channel, _calls, _seen) = channel();
         let target = ExecTarget::Statement("select boom".to_string());
         channel
-            .submit(DocumentId::new("doc-err"), &target, None)
+            .submit(
+                DocumentId::new("doc-err"),
+                &target,
+                None,
+                ResultPlacement::Replace,
+            )
             .expect("提交");
 
         let done = wait(&channel);
         let error = done[0].result.as_ref().expect_err("应当失败");
         assert!(error.contains("boom"), "{error}");
-        assert!(!channel.is_busy());
+        wait_until_idle(&channel);
+    }
+
+    /// 批量：三条语句 → 三条结论，顺序不变；**中间那条失败不中断**后面的
+    #[test]
+    fn a_batch_runs_every_statement_and_a_failure_does_not_stop_the_rest() {
+        let (channel, calls, _seen) = channel();
+        let document = DocumentId::new("doc-batch");
+        let target = batch_target("select 1;\nselect boom;\nselect 3;");
+
+        channel
+            .submit(
+                document.clone(),
+                &target,
+                Some("P_orders".to_string()),
+                ResultPlacement::NewSet,
+            )
+            .expect("提交批量");
+
+        let done = wait_for(&channel, 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "三条语句各跑一次");
+        let sqls: Vec<&str> = done.iter().map(|outcome| outcome.sql.as_str()).collect();
+        assert_eq!(sqls, ["select 1", "select boom", "select 3"], "顺序按脚本");
+        assert!(done[0].result.is_ok());
+        assert!(done[1].result.is_err(), "中间那条要如实报错");
+        assert!(done[2].result.is_ok(), "失败不该中断后面的语句");
+        assert!(
+            done.iter()
+                .all(|outcome| outcome.placement == ResultPlacement::NewSet
+                    && outcome.document == document),
+            "每条各自一个结果集，且都认领回原文档"
+        );
+        wait_until_idle(&channel);
+    }
+
+    /// 批量的忙标记覆盖**整批**：语句之间不是空闲（否则第二条提交能插进来，变成隐藏的并行执行）
+    #[test]
+    fn a_batch_stays_busy_between_its_statements() {
+        /// 每句慢 60ms：足够在第一条回填之后、整批跑完之前观察到忙状态
+        struct SlowStatementRunner;
+        impl QueryRunner for SlowStatementRunner {
+            fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+                std::thread::sleep(Duration::from_millis(60));
+                Ok(QueryData::default())
+            }
+        }
+
+        let channel = ExecChannel::new(Arc::new(SlowStatementRunner));
+        let target = batch_target("select 1; select 2; select 3;");
+        channel
+            .submit(
+                DocumentId::new("doc-busy-batch"),
+                &target,
+                None,
+                ResultPlacement::NewSet,
+            )
+            .expect("提交");
+
+        assert_eq!(wait_for(&channel, 1).len(), 1, "第一条回来了");
+        assert!(
+            channel.is_busy(),
+            "整批没跑完就不算空闲（否则面板会收起“执行中”并允许第二次提交）"
+        );
+        assert_eq!(wait_for(&channel, 2).len(), 2, "剩下的两条接着回来");
+        wait_until_idle(&channel);
     }
 
     #[test]
     fn empty_targets_are_rejected_before_touching_the_runner() {
         let (channel, calls, _seen) = channel();
         let error = channel
-            .submit(DocumentId::new("doc-empty"), &ExecTarget::Empty, None)
+            .submit(
+                DocumentId::new("doc-empty"),
+                &ExecTarget::Empty,
+                None,
+                ResultPlacement::Replace,
+            )
             .expect_err("空目标应被拒");
         assert_eq!(error, SubmitError::Empty);
         assert_eq!(calls.load(Ordering::SeqCst), 0, "不该打扰执行器");
@@ -657,7 +912,12 @@ mod tests {
         let target = ExecTarget::Statement("select 1".to_string());
 
         channel
-            .submit(document.clone(), &target, None)
+            .submit(
+                document.clone(),
+                &target,
+                None,
+                ResultPlacement::Replace,
+            )
             .expect("首次提交");
         // 等它真的进到忙状态
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -668,7 +928,7 @@ mod tests {
 
         assert_eq!(
             channel
-                .submit(document, &target, None)
+                .submit(document, &target, None, ResultPlacement::Replace)
                 .expect_err("忙时应被拒"),
             SubmitError::Busy
         );

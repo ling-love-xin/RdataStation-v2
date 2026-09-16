@@ -21,8 +21,8 @@ pub const EDITOR_STATUS_BAR_HEIGHT: f32 = 1.5;
 /// 编辑区最小高度（防止被上方工具栏压成 0）
 pub const EDITOR_MIN_HEIGHT: f32 = 6.0;
 
-/// 标签脏点直径（0.375rem = 6px）
-pub const DIRTY_DOT_SIZE: f32 = 0.375;
+/// 状态点直径（0.375rem = 6px）：标签脏点与结果集失败点共用一档
+pub const STATUS_DOT_SIZE: f32 = 0.375;
 
 /// 结果区高度（18rem = 288px）
 ///
@@ -32,6 +32,9 @@ pub const RESULT_PANE_HEIGHT: f32 = 18.0;
 
 /// 结果区状态行高（1.5rem = 24px，与编辑器状态栏同档）
 pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
+
+/// 结果集标签条高（1.5rem = 24px，与状态行同档；TabBar 的 Small 档就是这个高）
+pub const RESULT_TABS_HEIGHT: f32 = 1.5;
 
 /// 结果网格列宽（128px；`Column::width` 只收 `Pixels`，故这里不做 rem 换算）
 pub const RESULT_COLUMN_WIDTH: Pixels = px(128.);
