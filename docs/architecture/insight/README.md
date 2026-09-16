@@ -77,7 +77,7 @@
 | 视图模型 | `crates/insight/src/model.rs`（现状：✅ 已落地 `PanelTab` / `InsightTarget` / `InsightPanelState` / `ColumnProfileView`；阈值与文案是纯函数） |
 | M8 尺寸常量 | `crates/insight/src/ui.rs`（现状：✅ 已落地；其中 4 个与 workbench 外壳必须一致的值是**镜像**，已注明待上收） |
 | Action 与快捷键 | `crates/insight/src/commands.rs`（现状：✅ 动作已定义，键位待入口批次）+ `crates/app/src/main.rs` |
-| 右 Dock 装配（仅协议） | `crates/workbench/src/panels.rs`（`RightSidebarPanel`）、`view.rs`（`RightPanel::Insight`） |
+| 右 Dock 装配（仅协议） | `crates/workbench/src/panels/`（`RightSidebarPanel`）、`view.rs`（`RightPanel::Insight`） |
 | 规则监听启动 / 项目切换跟随 | `crates/workbench/src/view.rs`（`WorkbenchView::new`）、`components/project_host.rs`（`refresh_after_open`） |
 | 规则资产（18 条 TOML） | `crates/insight/insight-rules/` |
 | 规则索引表迁移 | `crates/engine/migrations/global/024_*.sql`、`project_meta/019_*.sql`（现状：✅ 已落地） |

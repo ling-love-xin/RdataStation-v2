@@ -55,7 +55,7 @@ flowchart TB
 | 视图 | ├ `managers.rs` | 三管理器覆盖层（认证 / 网络 / 环境）CRUD |
 | 视图 | └ `helpers.rs` | 图标、Select 赋值、原型卡片/只读行、URL 重拼、作用域标签、尺寸常量（`GAP_*` / `LABEL_W` / `BADGE_*` / `PROJECT_W` / `DRIVER_W` / `TAB_BODY_H` / `STAGING_H` / `ROW_H`） |
 | 视图 | └ `project_picker.rs` | 项目下拉项 `ProjectItem`（项目名 + 路径双列、搜索、末项「＋ 新增项目」） |
-| 视图 | `crates/workbench/src/panels.rs`（`EditorPanel` / `Shared`） | 入口（`request_new_connection` / `request_edit_connection`）、项目下拉订阅（`ensure_dialog_subscription`）、宿主重绘桥、面板级共享状态（含 `project_new_request`） |
+| 视图 | `crates/workbench/src/panels/`（`EditorPanel` / `Shared`） | 入口（`request_new_connection` / `request_edit_connection`）、项目下拉订阅（`ensure_dialog_subscription`）、宿主重绘桥、面板级共享状态（含 `project_new_request`） |
 | 视图 | `crates/workbench/src/view.rs`（`WorkbenchView`） | 对话框层挂载（`Root::render_dialog_layer`）、观察编辑面板（通知级联） |
 | 服务 | `crates/workbench/src/services/data_source_service.rs` | CRUD / 测试连接 / 同名检查 / 作用域路由 / 摘要解析（`parse_url_host_port_db`） |
 | 服务 | `crates/workbench/src/services/workspace_loader.rs` | 列表可见性合并（全局 + 项目侧）、运行态 `connected` 填充、删除路由 |
@@ -448,7 +448,7 @@ flowchart LR
 | 85 | **Tab 可见下标映射提为纯函数**（`helpers::{dialog_tab_defs, visible_tab_index}`） | `TabBar` 的选中/点击都用**可见下标**，而文件型驱动隐藏「网络」Tab 后可见下标与内部索引错开一位——写错了就是“点能力显示网络内容”。拍成纯函数 + 单测（含“隐藏项被选中 → 回退 0”的降级） |
 | 86 | **ElementId 用业务键（#17 关闭）**：驱动属性行 `prop-del-{key}`（与“同 key 覆盖”写入语义一致）、暂存行 `draft-{saved_id \| new-{i}}`（持久实体不用位置 id）、策略覆盖换 `policy-` 命名空间（原来与分组标题共用 `sec-`，`policy_type` 命中分组 id 时会串状态） | 位置 id 在增删 / 重排后会把按 id 记录的控件状态（hover / 滚动 / 按压）串到别的行；未保存草稿的列表身份本就是下标（`staging_*` 全部以 index 为键），因此保留 `new-{i}` 并在注释里说明理由 |
 | 87 | **`project_path` 收敛为数据载体（#18 关闭）**：它**不渲染输入框**，只由项目下拉写入（选中项目 / 「打开现有目录…」/「＋ 新增项目」）、被保存 / 测试 / 快照同步 / 分组同步读取；删除对它无意义的 `set_placeholder`，并修掉 `state.rs` 里残留的「手动输入路径…」注释 | 旧注释承诺“项目根可编辑”但没有任何渲染点，与「项目单下拉」的决策 #26/#28 矛盾；无项目时用户靠下拉的「打开现有目录…」修正路径，不需要手输入口 |
-| 88 | **连接对话框纳入尺寸契约（#14 关闭）**：模块内 `px(...)` 清零——`min_w(px(0.))` → `min_w(rems(0.))`、`.px(rems(…))` → `px_1()/px_2()/px_3()`（值相等，仅徽标内距 3px→4px）、图标 `px(14.)/px(13.)` → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`，新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract::view_layer_has_no_raw_size_literals` 扫描范围扩到对话框 6 个文件 | 契约用的是 `!src.contains("px(")` 这种粗糙判据，`.px(rems(1.))` 也会命中——所以局部横向内距统一走 Tailwind 尺度方法（与 view.rs / panels.rs 同一规则）；纳入扫描后该模块不会再回退 |
+| 88 | **连接对话框纳入尺寸契约（#14 关闭）**：模块内 `px(...)` 清零——`min_w(px(0.))` → `min_w(rems(0.))`、`.px(rems(…))` → `px_1()/px_2()/px_3()`（值相等，仅徽标内距 3px→4px）、图标 `px(14.)/px(13.)` → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`，新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract::view_layer_has_no_raw_size_literals` 扫描范围扩到对话框 6 个文件 | 契约用的是 `!src.contains("px(")` 这种粗糙判据，`.px(rems(1.))` 也会命中——所以局部横向内距统一走 Tailwind 尺度方法（与 view.rs / panels/ 同一规则）；纳入扫描后该模块不会再回退 |
 | 89 | **标签单一权威 = `connection_tags`（#31 关闭）**：新增 `DataSourceService::overlay_authoritative_tags`（`list` / `get_with_project` 读取时叠加）——**表里有该连接的记录就用表**（含“已清空”），表里完全没有记录（旧数据 / 同步曾失败）则回退行内 `tags` JSON 投影；权威表不可用时告警并原样返回（不阻断列表） | 双源读取（行 JSON + 表）长期有漂移风险（“写进去了但检索不到 / 反之”）。选“每连接回退”而非“表为空才回退”：避免旧库（升级前建的连接，行内有标签但表里没记录）的标签凭空消失；代价是表外清理会让 JSON 复活——已登记为兼容窗口，将来可加回填迁移后去掉回退 |
 | 90 | **未保存确认后**直接推进**项目动作（#4 关闭）**：`PendingAction` 增 `CreateProject(ProjectInputs)` / `OpenFolder(ProjectInputs)`，新增 `request_create_project` / `request_open_folder` 两个入口（脏 → 弹确认并携带动作；干净 → 直接开），`advance_pending` 负责推进 | 以前脏草稿下点项目栏的两个动作项：确认后请求就被丢掉了（回到选择器得重新点一次）。`ProjectInputs` 是可克隆的实体把手，因此把目标动作作为待办携带到确认之后是最直接的实现（`open_unsaved_dialog` 已具备“先关确认再推进”的层栈纪律） |
 | 91 | **类型树不做折叠（§14 #11 判定：不做）**：分类头保持平铺，靠侧栏内部滚动容纳；触发重新评估的条件写进 §14 #11（类型目录 > 15 项或分类 > 6 时再上折叠） | 当前目录是 4 类共 ≤ 10 项（关系型 5 / 文件型 1 / 分析型 2 / NoSQL 2），一屏能看完；折叠会多一层点击与一份折叠状态（要考虑搜索命中时自动展开），收益不抵成本。驱动插件生态把目录撑大后再做，届时可照原型早期版本的可折叠分类实现 |
@@ -519,13 +519,13 @@ flowchart LR
 | 3 | 侧栏条目来源短码 / 脏标记 | `staging.rs::saved_scope_short` + `staging.rs::draft_dirty`（render 处徽标与 `●`） |
 | 4 | 键盘导航 | `crates/workbench/src/commands.rs`（actions）+ `app/main.rs`（bind_keys）+ `render.rs`（容器 handler） |
 | 5 | 拆分对话框单文件 | `components/connection_dialog/{mod,state,staging,render,managers,helpers}.rs` + `project_picker.rs` |
-| 6 | 导航栏「在对话框中编辑」入口 | `panels.rs::render_connection_row`（✎ 按钮 → `shared.open_edit`） |
+| 6 | 导航栏「在对话框中编辑」入口 | `panels/nav.rs::render_connection_row`（✎ 按钮 → `shared.open_edit`） |
 | 7 | 真机集成用例 | `tests/connection_multi_save.rs`（连续保存两条） |
 | 8 | 文档防腐 | 本文（§2.2 / §3.5 / §5.3 / §5.5 / §6 / §7 / §9） |
 | 9 | 类型 × 驱动两层选择去噪（左侧选类型 / 右侧驱动实现短名；未选类型时 Header 提示） | `helpers.rs`（`driver_short_name` / `type_badge`）、`state.rs`（`select_type` / `set_driver_by_value`）、`render.rs` |
 | 10 | 暂存条目类型徽标 + 草稿 `type_id` / `driver_id`（迁移 `021`） | `staging.rs`、`global/021_add_draft_type_driver.sql` |
 | 11 | **布局稳定**：Tab 内容区固定高度 + 内部滚动（切 Tab 不再改变对话框高度） | `render.rs`（`tab_body` + `overflow_y_scrollbar`） |
-| 12 | **性能修复**：元数据 / 暂存恢复一次性（`meta_refreshed`）——避免 dialog builder 重渲染反复建 runtime + 查库 | `mod.rs` 字段 + `render.rs` + `panels.rs::request_*` |
+| 12 | **性能修复**：元数据 / 暂存恢复一次性（`meta_refreshed`）——避免 dialog builder 重渲染反复建 runtime + 查库 | `mod.rs` 字段 + `render.rs` + `panels/editor.rs::request_*` |
 | 13 | **Header 去拥挤**：作用域三态分段按钮 + 项目栏（当时为“项目名 + 悬停气泡”，现已被 #20 的单下拉取代） | `render.rs`（`project_hover` 已删除） |
 | 14 | **标签 / 分组入口**：常规 Tab「组织」卡片（标签输入 + 项目分组勾选）；服务与存储同步（替换语义，迁移 `022`） | `render.rs`、`data_source_service.rs`、`connection_org_store.rs::set_connection_groups` |
 | 15 | 文档体系补全：用户指南（含 USIT 清单）+ 数据字典 / 降级矩阵 / 性能可观测安全 / 成熟度评估 | `connection-user-guide.md`、本文 §10–§13 |
@@ -533,13 +533,13 @@ flowchart LR
 | 17 | **UI 缺陷修复**（真机反馈）：分段控件自绘 / 驱动选中校正 / 类型回推仅补空 / 备注宽度 / 来源提示 | `render.rs`、`state.rs`、`staging.rs` |
 | 18 | **布局再收敛**：暂存区 7.5rem 固定 + 滚动；类型树占满剩余 + 滚动；项目栏移至备注行（仅全局灰显）；类型徽标定宽省略；模板 UI 入口撤下 | `render.rs`（决策 #21–#24） |
 | 19 | **Header 再设计**：3 行（类型徽标 + 名称 + 作用域 / 备注 + 项目 / 驱动 + URI），统一标签列 2.75rem；类型徽标定宽 6rem、未辨识时提示；作用域分段短标签 | `render.rs`、`helpers.rs`（`header_label`）（决策 #25） |
-| 20 | **项目栏单下拉 + 新增项目入口**：项目名（左）+ 路径（右、头部省略）左右结构，末项 `＋ 新增项目`；`handle_project_confirm` 为确认落点（可测）；项目会话变更每帧检测并自动跟随；宿主消费 `project_new_request` 开「新建项目」（有脏草稿先走未保存确认） | `project_picker.rs`（新增）、`state.rs`、`render.rs`、`panels.rs`、`view.rs`；测试 `tests/connection_project_picker.rs` 4 项（决策 #26 / #28 / #29） |
+| 20 | **项目栏单下拉 + 新增项目入口**：项目名（左）+ 路径（右、头部省略）左右结构，末项 `＋ 新增项目`；`handle_project_confirm` 为确认落点（可测）；项目会话变更每帧检测并自动跟随；宿主消费 `project_new_request` 开「新建项目」（有脏草稿先走未保存确认） | `project_picker.rs`（新增）、`state.rs`、`render.rs`、`panels/`、`view.rs`；测试 `tests/connection_project_picker.rs` 4 项（决策 #26 / #28 / #29） |
 | 21 | **项目侧连接编辑回读**：`DataSourceService::get_with_project`（P_/GP_ 路由到项目库）+ `map_project_connection_to_data_source`；`load_for_edit` 带项目根（`open` 取会话快照 / `apply_draft` 取条目路径），分组回显同源 | `services/data_source_service.rs`、`connection_dialog/{state,staging,render}.rs`；测试 `tests/data_source_lifecycle.rs`（新增 1 项 + GP 用例补断言） |
-| 22 | **订阅建立位置修正（回归修复）**：项目下拉订阅从 `open()`（面板 `update` 上下文，重入 panic）移到面板入口 `ensure_dialog_subscription`；`EditorPanel::dialog_state()` 暴露状态供宿主 / 测试只读访问；窗口测试改走生产入口 `request_*` | `panels.rs`、`connection_dialog/render.rs`；回归由 `tests/dialog_host_layer.rs` 3 项守住（决策 #30） |
+| 22 | **订阅建立位置修正（回归修复）**：项目下拉订阅从 `open()`（面板 `update` 上下文，重入 panic）移到面板入口 `ensure_dialog_subscription`；`EditorPanel::dialog_state()` 暴露状态供宿主 / 测试只读访问；窗口测试改走生产入口 `request_*` | `panels/`、`connection_dialog/render.rs`；回归由 `tests/dialog_host_layer.rs` 3 项守住（决策 #30） |
 | 23 | **导航入口同源修复**：`nav_runtime::load_entry(_with)` 改用 `get_with_project`（原先只查全局库 → 项目侧连接点「连接」报「数据源不存在」） | `services/nav_runtime.rs`；测试 `tests/data_source_lifecycle.rs::nav_runtime_resolves_project_connection_with_project_path`（§14 #8 的同类风险已排查） |
 | 24 | **已知问题清单**：架构 §14（13 项，🔴/🟡/⚪）；原型 HTML 与三份连接文档按当前实现全量同步一遍 | 本文 §14、`connection-prototype-design.md`、`connection-user-guide.md`、`connection-dialog-prototype.html` |
 | 25 | **类型可用性（§14 #1/#2 关闭）**：类型目录按 `enabled` 过滤；无可用驱动的类型置灰 + 「暂无驱动」标注 + `select_type` 拒绝并在结果行说明；驱动下拉同理禁用占位 | `engine/persistence/driver_store.rs`、`connection_dialog/{render,state,helpers}.rs`；测试 `connection_type_driver.rs` + `helpers.rs` 单测 |
-| 26 | **项目下拉补「打开现有目录…」**（§14 #3 关闭）：动作项两枚（打开现有目录 / ＋ 新增项目，后者仍为末项），宿主置位 `project_open_request` → `open_folder_dialog` | `project_picker.rs`、`state.rs`、`panels.rs`、`view.rs`；测试 `connection_project_picker.rs` |
+| 26 | **项目下拉补「打开现有目录…」**（§14 #3 关闭）：动作项两枚（打开现有目录 / ＋ 新增项目，后者仍为末项），宿主置位 `project_open_request` → `open_folder_dialog` | `project_picker.rs`、`state.rs`、`panels/`、`view.rs`；测试 `connection_project_picker.rs` |
 | 27 | **GP_ 快照同步 + 项目侧密码保留**（§14 #5 关闭 + 新缺陷修复）：`sync_snapshot_from_global` + footer「从全局定义同步」（仅 GP_ 编辑时显示）；`ProjectConnectionStore::update_connection` 改 `COALESCE` 保留空密码时的原密文 | `services/data_source_service.rs`、`connection_dialog/render.rs`、`engine/persistence/project_connection_store.rs`；测试 `data_source_lifecycle.rs`（+2 项） |
 | 28 | **数据来源审计：零 UI 造数据**（§15）：能力矩阵改读 `drivers.capabilities`；高级 Tab 策略覆盖改读 `environment_policies`（切环境自动重查，覆盖键 = `policy_type`）；环境管理器策略标签按 `policy_type` 映射（修复“全部错标只读连接”与写假类型）；`get` → `get_global`；项目下拉补「不需要项目（仅全局）」（§14 #6 关闭） | `connection_dialog/{helpers,state,render,managers}.rs`、`services/data_source_service.rs`、`staging.rs`（草稿字段改存策略类型）；测试 `helpers.rs`（+2 单测）、`data_source_lifecycle.rs`（+1：策略按环境名读库）、`connection_project_picker.rs`（+1 项） |
 | 29 | **脏数据防护与接口一致性（USIT 前置）**：项目根预检（读写分离，不建目录）/ 项目侧时间戳存储层兜底 / 项目元数据目录拼写统一 `.RSmeta` / 暂存列表按作用域合并 + 幻影条目清理 | `services/{data_source_service,workspace_loader}.rs`、`engine/persistence/{project_db,connection_org_store,project_connection_store}.rs`、`insight/rule_registry.rs`、`nav_store.rs`、`connection_dialog/staging.rs`（决策 #40–#42、#45、#46） |
@@ -570,7 +570,7 @@ flowchart LR
 | 54 | **Id 业务键 + `project_path` 收敛（§14 #17 / #18 关闭）**：`prop-del-{key}` / `draft-{saved_id \| new-i}` / `policy-` 独立命名空间；`project_path` 明确为数据载体（不渲染输入框）并去掉无意义占位写入 | `connection_dialog/{render,state,mod}.rs`（决策 #86/#87） |
 | 55 | **标签单一权威（§14 #31 关闭）**：`overlay_authoritative_tags`（表为准 + 行 JSON 兼容回退）接入 `list` / `get_with_project` | `services/data_source_service.rs`（决策 #89）；测试：`data_source_lifecycle::tag_reads_follow_the_authority_table`（`data_source_lifecycle` 28 项） |
 | 56 | **首次引导 + 未保存确认后推进项目动作（§14 #29 / #4 关闭）**：常规 Tab 顶部空态引导条（仅“未选类型 + 名称/地址为空”时出现）；`PendingAction::{CreateProject,OpenFolder}` + `request_create_project` / `request_open_folder`，确认后直接开目标对话框 | `connection_dialog/render.rs`、`project/src/ui.rs`、`view.rs`（决策 #90）；测试：`project/src/ui/tests.rs::project_action_continues_after_unsaved_confirm` |
-| 57 | **项目栏动作请求的消费收归 `Shared` 并单测（§14 #9 部分关闭）**：`ProjectActionRequest` + `take_project_action_request`（同帧两标记 → 新建优先且都清），`view.rs` 改 `if let Some + match` | `panels.rs`、`view.rs`（决策 #92）；测试：`connection_project_picker::project_action_request_is_consumed_exactly_once` |
+| 57 | **项目栏动作请求的消费收归 `Shared` 并单测（§14 #9 部分关闭）**：`ProjectActionRequest` + `take_project_action_request`（同帧两标记 → 新建优先且都清），`view.rs` 改 `if let Some + match` | `panels/`、`view.rs`（决策 #92）；测试：`connection_project_picker::project_action_request_is_consumed_exactly_once` |
 | 58 | **连接 ID 采用 B 案（§14 #32 关闭）**：`saved_result`（名称入摘要 / ID 入详情）+ `set_result_line`；状态栏提示、快照同步提示、同名拦截消息均去 ID；`conn_display_name` 统一空名回退 | `connection_dialog/{mod,render}.rs`、`services/data_source_service.rs`（决策 #93）；测试：`mod.rs` 内嵌 +1；C 案（ULID 主键 + 迁移）写入 **beta2**（见 §3.2） |
 
 
@@ -596,7 +596,7 @@ flowchart LR
 | 对话框（五 Tab / Header / 侧栏 / 暂存列表 / 管理器） | `crates/workbench/src/components/connection_dialog/{render,managers,helpers}.rs` |
 | 草稿快照与暂存方法 | `connection_dialog/staging.rs`（`ConnectionDraft` + `staging_*`） |
 | 快捷键 Action | `crates/workbench/src/commands.rs` + `crates/app/src/main.rs` |
-| 入口与宿主重绘桥 | `crates/workbench/src/panels.rs`（`EditorPanel::{request_new_connection, request_edit_connection}`、`Shared::{host_redraw, notify_host}`） |
+| 入口与宿主重绘桥 | `crates/workbench/src/panels/`（`EditorPanel::{request_new_connection, request_edit_connection}`、`Shared::{host_redraw, notify_host}`） |
 | 对话框层挂载与通知级联 | `crates/workbench/src/view.rs`（`Root::render_dialog_layer`、`cx.observe(editor)`） |
 | 连接 CRUD / 测试 / 作用域路由 | `crates/workbench/src/services/data_source_service.rs` |
 | 列表可见性与运行态 | `crates/workbench/src/services/workspace_loader.rs` |
@@ -609,7 +609,7 @@ flowchart LR
 | 类型 × 驱动与去噪 | `connection_dialog/{helpers,state}.rs`（`driver_short_name` / `find_driver_by_value` / `select_type`）、`tests/connection_type_driver.rs` |
 | 标签 / 分组入口 | `connection_dialog/{render,staging,state}.rs`（组织卡片 + 草稿字段）、`services/data_source_service.rs`（`list_groups` / `groups_of` / `set_connection_groups`）、`engine/connection_org_store.rs`（`set_connection_groups`） |
 | Layout 稳定与性能标记 | `render.rs`（`tab_body` 固定高度 + `overflow_y_scrollbar`；`meta_refreshed` 字段） |
-| 项目栏下拉与新增项目入口 | `connection_dialog/project_picker.rs`（`ProjectItem`）、`state.rs::handle_project_confirm`、`render.rs::subscribe_project_confirm`、`panels.rs::ensure_dialog_subscription`、`view.rs`（消费 `project_new_request`） |
+| 项目栏下拉与新增项目入口 | `connection_dialog/project_picker.rs`（`ProjectItem`）、`state.rs::handle_project_confirm`、`render.rs::subscribe_project_confirm`、`panels/editor.rs::ensure_dialog_subscription`、`view.rs`（消费 `project_new_request`） |
 | 项目侧连接解析（编辑回读 / 导航连接） | `services/data_source_service.rs::get_with_project`、`connection_dialog/state.rs::load_for_edit`、`services/nav_runtime.rs::load_entry(_with)` |
 | 用户使用指南 | `docs/architecture/connection/connection-user-guide.md` |
 
@@ -755,7 +755,7 @@ flowchart LR
 | # | 关闭方式 | 验证 |
 | --- | --- | --- |
 | 15（🟡） | **Tab 条 / 分段控件 / 开关为自绘**：迁到 `TabBar::underline()`（Tab 条，Small）/ `TabBar::segmented()`（作用域三态，Small：与原型 HTML 的 24–26px 分段等高）/ `Switch`（DuckDB 加速 + 策略覆盖，默认 36×20）；两处开关接 `form_disabled`；策略开关回调改 `set_policy_override(policy_type, want)`（组件传请求值）；可见下标映射提为纯函数 `dialog_tab_defs` / `visible_tab_index`（决策 #84/#85） | `helpers::dialog_tabs_hide_network_for_file_db_and_map_visible_index`；窗口回归：`connection_dialog_ui` 4 / `connection_type_driver` 7 / `connection_staging` 6 / `dialog_host_layer` 4 全绿（组件带 spring 动画，headless 渲染无异常） |
-| 14（⚪） | **连接对话框存量裸 `px(...)`**：`min_w(px(0.))` → `min_w(rems(0.))`（16 处）、`.px(rems(…))` → `px_1/2/3()`（5 处，值相等）、图标 → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`、新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract` 尺寸契约扫描扩到对话框 6 文件（决策 #88） | `ui_contract` 5 项全绿（`view.rs` / `panels.rs` / 对话框模块一起扫描） |
+| 14（⚪） | **连接对话框存量裸 `px(...)`**：`min_w(px(0.))` → `min_w(rems(0.))`（16 处）、`.px(rems(…))` → `px_1/2/3()`（5 处，值相等）、图标 → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`、新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract` 尺寸契约扫描扩到对话框 6 文件（决策 #88） | `ui_contract` 5 项全绿（`view.rs` / `panels/` / 对话框模块一起扫描） |
 | 17（⚪） | **下标参与 ElementId**：驱动属性 `prop-del-{key}`、暂存行 `draft-{saved_id \| new-i}`、策略覆盖 `policy-{policy_type}`（不再与分组标题共用 `sec-`）（决策 #86） | 编译期 + 现有窗口回归（渲染路径全覆盖） |
 | 18（⚪） | **`project_path` 无渲染点**：明确为数据载体（下拉写入，保存 / 测试 / 快照 / 分组同步读取），删除无意义的 `set_placeholder` 与「手动输入路径…」残留注释（决策 #87） | 编译期 + `connection_project_picker` 6 项 / `connection_dialog_ui` 4 项回归 |
 | 29（⚪） | **首次使用引导缺失**：常规 Tab 顶部引导条（五步流程 + 快捷键 + 草稿不丢的说明），仅“未选类型 + 名称/地址都空”时出现，选完类型自动消失（决策 #90 同轮） | 窗口回归（渲染不 panic）；USIT 清单 V 段 |
@@ -849,7 +849,7 @@ flowchart LR
 | 9 | ⚪ | **部分关闭（2026-09-13）**：宿主消费分支的“标记 → 动作”映射与“只消费一次”已由 `Shared::take_project_action_request` + 单测覆盖（含同帧竞态）。**残留**：“真的把目标对话框开起来”那一段（依赖窗口与宿主管线）仍需 `WorkbenchView` 可测试化 | 该路径的剩余局部只能手动验证 | 待 `WorkbenchView` 可测试化（需服务注入桥）后补窗口测试 |
 | 10 | ⚪ | 原型 HTML 为手工维护的示意稿 | 与实现存在漂移风险（需人工同步）。**2026-09-13 已同步一轮**：Tab 改下划线、作用域改浅底分段、开关改组件尺寸、新增结果行（分级 + 详情 / 复制）与首次引导条，**删掉早就撤下的内联协议链**（决策 #72 漏同步）；顶部加“非权威”声明 + 同步戳（决策号），漂移从此可被发现 | 以 `connection-prototype-design.md` 为权威，HTML 仅作视觉参考；根治（从实现截图 / 渲染基线生成）仍需平台工作 |
 | 11 | ⚪→🚫 | 类型树**不可折叠**（四个分类平铺） | — （**本轮判定：不做**，理由见决策 #91：4 类共 ≤10 项，侧栏已内部滚动，折叠的交互与状态成本不抵收益） | 重评触发：类型目录 > 15 项或分类 > 6（驱动插件生态） |
-| 12 | ⚪ | UI 尺寸常量化**只覆盖本模块**（`ui-constraints.md` 三阶段迁移第一阶段） | 其他模块仍写字面量；**注**：`view.rs` / `panels.rs` 已清零，尺寸契约已把连接对话框一并扫描（决策 #88），剩下的欠债在其他模块（设置 / 项目 / 导航） | 按 `ui-constraints.md` §迁移计划推进（属各模块自身工作，不在连接模块范围内） |
+| 12 | ⚪ | UI 尺寸常量化**只覆盖本模块**（`ui-constraints.md` 三阶段迁移第一阶段） | 其他模块仍写字面量；**注**：`view.rs` / `panels/` 已清零，尺寸契约已把连接对话框一并扫描（决策 #88），剩下的欠债在其他模块（设置 / 项目 / 导航） | 按 `ui-constraints.md` §迁移计划推进（属各模块自身工作，不在连接模块范围内） |
 | 13 | ⚪ | 缺 UI 图像回归基线 / 大数据量性能基准 / fuzz | 回归靠断言而非视觉 | 平台级排期 |
 | 14 | ⚪→✅ | ~~连接对话框仍有存量裸 `px(...)`~~（**已关闭**：模块内 `px(...)` 清零 + `ui_contract` 尺寸契约扫描扩到对话框 6 文件，见决策 #88） | — | — |
 | 15 | 🟡→✅ | ~~**Tab 条 / 分段控件 / 开关为自绘**~~（**已关闭**：迁到 `TabBar::underline()` / `TabBar::segmented()` / `Switch`，开关接 `form_disabled`，可见下标映射提为纯函数，见决策 #84/#85） | — | — |
@@ -859,7 +859,7 @@ flowchart LR
 | 19 | 🟡 | **元数据缓存身份指纹未接线**：规则与纯函数（`engine::persistence::metadata_identity`，§3.6）已就绪，但 L2 路径仍按连接 ID（`conn_{id}.sqlite`）；`metadata_cache_index`（引用计数 / 孤儿 / 可读描述）与同指纹并发预热互斥未建 | 同一物理库的多条连接仍各自重建缓存（重复预热）；改名 / 改密 / 换驱动后命中旧缓存的收益尚未兑现 | 与 database-nav 接入 L2 的 Phase C 同轮：路径切 `meta_{fp}.sqlite` + 索引表 + per-fingerprint 互斥 + 旧 `conn_*.sqlite` 按 legacy 保留（不删） |
 | 20 | 🔴→✅ | ~~协议链 / SSH 隧道保存后不生效~~（**已关闭**：三层根因一次性收口，见上方已关闭段） | — | 残留见 #24 |
 | 21 | ⚪ | **启动即有项目会话时不加载 P_/GP_**（`view.rs:165` 用 `load_persisted_connections`，L168 才解析会话）；**关闭项目不清理残留**（`project/ui.rs::do_close` 不触发 `on_opened`） | 项目标签页看不到项目连接；关闭项目后残留行点“连接/编辑”必失败（`project_root=None`） | workbench 宿主侧：构造后按会话刷新一次；关闭后等价刷新（或给 `ProjectUiHost` 加 `on_closed`）；触碰 `view.rs` / `project` UI，需与布局会话协调 |
-| 22 | ⚪ | **M4 导航行无删除入口**：唯一入口在编辑区详情卡（`panels.rs:3165`）；导航行点击也不写 `shared.selected` | M4 用户路径上没有删除能力；删除目标不直观（默认只指第一条） | M4 侧（另一会话）：行内 / 右键删除调同一 `workspace_loader::delete_connection`，删除成功后清导航缓存与状态 |
+| 22 | ⚪ | **M4 导航行无删除入口**：唯一入口在编辑区详情卡（`panels/editor.rs`）；导航行点击也不写 `shared.selected` | M4 用户路径上没有删除能力；删除目标不直观（默认只指第一条） | M4 侧（另一会话）：行内 / 右键删除调同一 `workspace_loader::delete_connection`，删除成功后清导航缓存与状态 |
 | 23 | ⚪ | **M4 标签 / 分组视图未接线**：`nav_runtime::{list_tags,set_tags,*group*}` 有 API、零调用；`database::model::ConnectionGroup` 是未消费的重复模型；`database::model::NavSource::from_conn_id` 自实现前缀推导（与 `id_prefix` 分裂） | 用户看不到 / 改不了标签与分组；遗留 `conn-` ID 在导航侧归错库 | M4 侧（另一会话）：B3 视图接线（消费 `nav_runtime` 组织 API）；`NavSource::from_conn_id` 改依赖 `engine::persistence::id_prefix`（M3 侧已收归单一来源，决策 #68） |
 | 24 | 🟡→✅ | ~~网络配置仍难以在 UI 里真正建成~~（**表单部分已关闭**：本轮改为结构化字段表单 + 组装的 JSON 经 serde 模型单测验证；编辑回填真实字段；`chain` 仍走 JSON） | — | 残留见 #25 |
 | 25 | ⚪→✅ | ~~内联协议链仍是占位（`Hop` 无主机 / 凭据字段，不参与执行）~~（**已关闭**：整块 UI 撤下，多跳改走 `chain` 档案；初始状态里的两条假跳数据一并移除，见决策 #72） | — | 后续如需“可视化多跳编辑器”，应在**档案侧**做（复用 `chain` 的 `ChainHop` 模型与 `network_field_specs` 思路），不在连接表单里做 |
@@ -957,7 +957,7 @@ flowchart LR
 
 | 契约点 | 生产方（M3） | 消费方（M4） | 状态 |
 | --- | --- | --- | --- |
-| 连接列表可见性 | `workspace_loader::load_connections_for_scope`（全局 + 项目侧 P_/GP_ 合并） | 面板读 `shared.connections`（`panels.rs`） | ✅ 打通（刷新时机见 #21） |
+| 连接列表可见性 | `workspace_loader::load_connections_for_scope`（全局 + 项目侧 P_/GP_ 合并） | 面板读 `shared.connections`（`panels/`） | ✅ 打通（刷新时机见 #21） |
 | 来源短码 `P/G/GP` | `engine::persistence::id_prefix`（本轮收归单一来源）；对话框暂存条目 `saved_scope_short` | `database::model::NavSource::from_conn_id`（M4 自实现） | ⚠️ 半通（遗留 `conn-` 判定不一致；M3 侧已统一，M4 侧待改 → #23） |
 | 运行时连接 | `nav_runtime::connect_entry(_with)` → `get_with_project` + 解析网络档案（本轮） | 导航面板按钮 | ✅ 打通（网络方式随请求带出） |
 | 断开 | `nav_runtime::disconnect_entry` → `close_connection`（保留 L2 缓存） | 导航面板按钮 | ✅ 打通 |

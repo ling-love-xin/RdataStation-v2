@@ -14,7 +14,7 @@
 | 3 | **规则正文不入库，只入索引**：库表只存 scope / checksum / enabled / 校验状态，正文归文件 | §4.2 |
 | 4 | 规则**可禁用**（含内置规则），经索引表抑制记录实现，不改文件 | §4.2 |
 | 5 | 规则热加载走**目录监听**（复用 `ThemeRegistry::watch_dir` 同款机制），不设「重新加载」按钮作为唯一入口 | §4.3 |
-| 6 | 洞察 UI 归属 `crates/insight`——**2026-09-16 定案为方案 A**（依据：架构硬约束允许 Feature 直接依赖 gpui-kit 并把同一能力的 model / service / view 放同一 crate；`project` 先例已跑通；`panels.rs` 已 8600+ 行不宜再增） | §3.1 |
+| 6 | 洞察 UI 归属 `crates/insight`——**2026-09-16 定案为方案 A**（依据：架构硬约束允许 Feature 直接依赖 gpui-kit 并把同一能力的 model / service / view 放同一 crate；`project` 先例已跑通；`panels/` 已 8600+ 行不宜再增） | §3.1 |
 | 7 | 多列分析**重新设计**，不照搬 v1（v1 该功能从未跑通） | §5 Phase 3 |
 | 8 | 快照持久化链路在 Phase 0 闭合（`InsightStorage` 构造点接线），不留到最后 | §5 Phase 0 |
 | 9 | 保留 v1 「项目 → 全局」手动 reload 语义**不采纳**：注册表按项目根缓存，消除调用方义务 | §4.3 |
@@ -29,7 +29,7 @@
 
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
-| 1.5 | `Shared::open_insight_column(temp_table, column, data_type)`：入口只发这一条命令（展开右 Dock + 递目标），面板与取数链都在 insight crate | `crates/workbench/src/panels.rs` |
+| 1.5 | `Shared::open_insight_column(temp_table, column, data_type)`：入口只发这一条命令（展开右 Dock + 递目标），面板与取数链都在 insight crate | `crates/workbench/src/panels/` |
 | 1.6 | `InsightRefresh` 绑 `Ctrl+Shift+R`（key context = `insight`，只在焦点位于面板内生效）；面板 `on_action` 与面板头 ⟳ 走同一条路径 | `crates/app/src/main.rs`、`insight_view.rs` |
 | — | app 新增 `insight` 依赖（与 editor / settings 同一口径：app 直接依赖要绑键的 Feature crate） | `crates/app/Cargo.toml` |
 | 测试 | `insight_entry.rs`：请求 → 后台执行器 → 回填（数据态 + 友好错误态），首次覆盖装配胶水（不只重测服务层） | `crates/workbench/tests/` |
@@ -43,11 +43,11 @@
 
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
-| 装配 | 右 Dock 去掉三行占位：面板实体在**构造期**创建 + 登记 `Shared::insight_panel`（右键入口要在事件路径拿到句柄，懒创建会丢目标），渲染改为转发 `InsightView` | `crates/workbench/src/panels.rs` |
+| 装配 | 右 Dock 去掉三行占位：面板实体在**构造期**创建 + 登记 `Shared::insight_panel`（右键入口要在事件路径拿到句柄，懒创建会丢目标），渲染改为转发 `InsightView` | `crates/workbench/src/panels/` |
 | 宿主桥 | **不设 trait**：面板与宿主之间只用事件 + 两个公开方法（`set_profile` / `set_error` / `set_project_open`），因为面板没有需要同步回调宿主的能力（⚙ 也是事件）。何时才需要 `MockHost` 那种 trait：出现「面板得同步问宿主」的需求时（如导出目录、只读态） | — |
 | 事件接缝 | `InsightEvent::ProfileRequested { target }`（带 payload，宿主不必回读面板）；`set_target` 与 ⟳/重试都发它 | `insight_view.rs` |
 | 后台取数 | `services/insight_jobs.rs`：面板只发请求 → 宿主在**后台执行器**上跑阻塞的 `profile_column_view` → 弱句柄回填四态（面板已关则丢结果）。项目根在提交时解析成所有权数据（`Shared` 不可跨线程） | `crates/workbench/src/services/insight_jobs.rs`（新） |
-| 项目开关 | 面板给出「未打开项目：画像可用，规则管理与快照不可用」提示；宿主在**渲染时**同步（同 `apply_*_mode` 口径，值不变不 notify） | `panels.rs` + `insight_view.rs` |
+| 项目开关 | 面板给出「未打开项目：画像可用，规则管理与快照不可用」提示；宿主在**渲染时**同步（同 `apply_*_mode` 口径，值不变不 notify） | `panels/` + `insight_view.rs` |
 
 **一处刻意的降级**：面板头的 ⚙（规则管理）**暂时禁用**并注明「Phase 2 落地」——规则管理对话框属 Phase 2，先给一个「点了没反应」的按钮等于静默失效（同「注册了才宣传」）。`InsightEvent::RulesRequested` 也随之移除（无生产者就不留死变体），Phase 2 接入时一并恢复。
 
@@ -74,7 +74,7 @@
 
 **验证**：`cargo test -p rds-insight` **120 项 lib + 4 项集成全绿**；`cargo check -p rds-engine --all-targets` 零告警。
 
-**未完成（下一批）**：1.5 入口接线（结果表列头右键「洞察此列」/ 导航树右键「查看统计」）、右 Dock 装配（`workbench/src/panels.rs` 去掉三行占位）、`InsightHost` 宿主桥（订阅 `InsightEvent` + 提供项目根）、键位注册；以及**无项目态的降级呈现**（原型 §4：⚙ 与历史禁用 + 「打开项目后可保存快照」引导）——它需要宿主告知「项目是否已打开」，故随装配一起落，不先写一个无人调用的开关。上述落点均在 `workbench`，与并行会话正在改的 `panels.rs` / `view.rs` / `components/` 相交，故本批仍不动。
+**未完成（下一批）**：1.5 入口接线（结果表列头右键「洞察此列」/ 导航树右键「查看统计」）、右 Dock 装配（`workbench/src/panels/` 去掉三行占位）、`InsightHost` 宿主桥（订阅 `InsightEvent` + 提供项目根）、键位注册；以及**无项目态的降级呈现**（原型 §4：⚙ 与历史禁用 + 「打开项目后可保存快照」引导）——它需要宿主告知「项目是否已打开」，故随装配一起落，不先写一个无人调用的开关。上述落点均在 `workbench`，与并行会话正在改的 `panels/` / `view.rs` / `components/` 相交，故本批仍不动。
 
 ### 2026-09-16 — Phase 1 第一批：视图层开工（D21 定案 = 方案 A）
 
@@ -92,7 +92,7 @@
 
 **顺带发现（已修）**：视图模型的数值分布一开始写成自相矛盾的空占位（数值列的直方图挂在 `ColumnInsightFull::histogram` 而非 `NumericStats` 上，漏接会让数值列**永远看不到分布**），已改为在分派时传入并加两条断言固定。
 
-**未完成（下一批）**：1.1 `InsightService::profile_column` 编排、1.5 入口接线（结果表列头右键 / 导航树右键）、右 Dock 装配（`workbench/src/panels.rs` 去掉三行占位）、键位注册。三项落点都在 `workbench`，与并行会话正在改的 `panels.rs` / `view.rs` 相交，故本批不动。
+**未完成（下一批）**：1.1 `InsightService::profile_column` 编排、1.5 入口接线（结果表列头右键 / 导航树右键）、右 Dock 装配（`workbench/src/panels/` 去掉三行占位）、键位注册。三项落点都在 `workbench`，与并行会话正在改的 `panels/` / `view.rs` 相交，故本批不动。
 
 ### 2026-09-15 — Phase 0 第四批：0.2 边界归位（**Phase 0 全部完成**）
 
@@ -165,7 +165,7 @@
 | F5 | `get_latest_meta` / `get_latest_snapshot` / 两处 `get_history` 均为 `ORDER BY created_at DESC`，而 `CURRENT_TIMESTAMP` **只有秒级精度**——同一秒内保存两次时「最新版本」返回任意一条 | 高：版本链会挂错父版本，历史对比比错对象 | ✅ 四处均加 `, rowid DESC` 作确定性兜底 |
 | F6 | `get_history` 把 `created_at`（TIMESTAMP）直接读成 `String` → 行级读取报错，而错误被 `.filter_map(|r| r.ok())` **静默吞掉** → 历史列表**恒为空**（phase 5 的“历史版本”会是一个永远空的列表） | 高：功能看似实现、实际恒空 | ✅ SQL 侧 `CAST(created_at AS VARCHAR)`；两处 `filter_map(r.ok())` 改为**向上抛错**（静默少行比报错难查得多） |
 
-**既有问题（非本轮引入，本轮未触碰）**：`crates/engine/src/sql/{split.rs,highlight.rs}` 共 3 个测试失败（未跟踪的新文件，属 editor Phase 0 在制品）；`ui_contract::view_layer_has_no_raw_size_literals` 失败于 `panels.rs` 裸 `px(`。
+**既有问题（非本轮引入，本轮未触碰）**：`crates/engine/src/sql/{split.rs,highlight.rs}` 共 3 个测试失败（未跟踪的新文件，属 editor Phase 0 在制品）；`ui_contract::view_layer_has_no_raw_size_literals` 失败于 `panels/` 裸 `px(`。
 
 **未完成（Phase 0 最后一项）**：0.2 边界归位（4 类文件搬 crate）。
 
@@ -197,7 +197,7 @@
 | F1 | `insight-rules/table/table-quality-overview.rule.toml` 把 `result_type` 写在 `[meta]` 而非 `[query]`；`RuleMeta` 是 `deny_unknown_fields`，导致**该文件解析失败被静默跳过** → 文档与 `BUILTIN_RULE_COUNT` 都写 18 条，**实际只有 17 条生效**。v1 同病（文件字节一致） | 高：定量核对的口径错了 | ✅ 已修（并把 `builtin = true` 补齐）；新增 `test_builtin_count_matches_constant` 守住常量与实载数一致 |
 | F2 | `crates/engine/insight-rules/` 是 `crates/insight/insight-rules/` 的**逐字节重复副本**（首提交带入），**全仓无任何代码引用**（engine 的 `include_dir!` 只指向自己的 `migrations/`） | 中：后来者可能改错副本 | ⬜ **待你确认删除**（未自行动手） |
 | F3 | `table-quality-overview` 规则的 SQL 引用表 `insight_column_stats`，该表**在迁移与代码中都不存在**（只有 `insight_column_snapshots`）→ 即使解析修复，执行仍会报「表不存在」 | 中：该规则不可执行 | ⬜ **待决策**：建表 / 改 SQL / 下线该规则 |
-| F4 | `ui_contract::view_layer_has_no_raw_size_literals` 失败：`panels.rs` 含裸 `px(` | — | ⬜ **非本轮引入**：HEAD 版本已有裸 `px(`（该测试在 HEAD 即失败），你未提交的改动又新增数处；本轮未触碰该文件 |
+| F4 | `ui_contract::view_layer_has_no_raw_size_literals` 失败：`panels/` 含裸 `px(` | — | ⬜ **非本轮引入**：HEAD 版本已有裸 `px(`（该测试在 HEAD 即失败），你未提交的改动又新增数处；本轮未触碰该文件 |
 
 **未开始（Phase 0 剩余）**：0.2 边界归位（4 类文件搬 crate）、0.5 索引表与 `RuleIndexer`、0.6 目录监听热加载、0.7 快照持久化链路闭合。
 
@@ -288,7 +288,7 @@ workbench ──► insight ──► engine ──► shared
 
 > 与初稿的差异：初稿拟将 `insight_store.rs` 拆为 `column_store` / `table_store` / `schema_store` 三个文件。实际**按原文件整体搬迁**（`body.rs`）——本轮目标是**边界归位**，拆分属内部重构，混在一起会让 diff 难审。
 
-> **过渡期口径**：其余 Feature crate 的 `*_view.rs` 目前多为占位或已删除，视图大多暂收在 `workbench/panels.rs`。本模块的视图归属见 §3.1——**该决策尚未拍板**。
+> **过渡期口径**：其余 Feature crate 的 `*_view.rs` 目前多为占位或已删除，视图大多暂收在 `workbench/panels/`。本模块的视图归属见 §3.1——**该决策尚未拍板**。
 
 ### 3.1 视图归属：两套相反的在用先例（**2026-09-16 定案：方案 A**）
 
@@ -302,11 +302,11 @@ workbench ──► insight ──► engine ──► shared
 | 方案 | 做法 | 优点 | 代价 |
 | --- | --- | --- | --- |
 | **A. 视图入 insight**（本方案默认） | `insight/src/insight_view.rs` 等自带视图；`insight` 的 `Cargo.toml` 加 `gpui-kit`；`workbench` 只留 `RightSidebarPanel` 装配 | 对齐 `overview.md` §「Feature 可以直接依赖 gpui-kit」与 GPUI-kit 官方指南；`project` 已跑通此路（含宿主桥 `ProjectUiHost` 的成熟范式）；面板状态与域模型同 crate，无需跨 crate 传视图模型 | `insight` 新增 gpui 依赖；需自建宿主桥（参照 `ProjectUiHost`）；与 7 个未迁移 crate 暂时分叉 |
-| **B. 视图留 workbench** | 面板内容写在 `workbench/panels.rs`（如现状）；`insight` 保持纯后端（`insight → engine → shared`） | 与 `scratchpad` 刚确立的口径一致；crate 纯净、编译快 | `panels.rs` 继续膨胀（现已 8600+ 行）；面板状态与域模型跨 crate；与 `overview.md` 目标架构相背 |
+| **B. 视图留 workbench** | 面板内容写在 `workbench/panels/`（如现状）；`insight` 保持纯后端（`insight → engine → shared`） | 与 `scratchpad` 刚确立的口径一致；crate 纯净、编译快 | `panels/` 继续膨胀（现已 8600+ 行）；面板状态与域模型跨 crate；与 `overview.md` 目标架构相背 |
 
-**影响面**（拍板后需同步修改）：`crates/insight/Cargo.toml`（gpui-kit）、`crates/insight/src/lib.rs`（模块声明）、`crates/workbench/src/panels.rs`（`RightSidebarPanel` 是渲染内容还是仅装配）、`crates/workbench/src/ui.rs`（尺寸常量放哪边）。
+**影响面**（拍板后需同步修改）：`crates/insight/Cargo.toml`（gpui-kit）、`crates/insight/src/lib.rs`（模块声明）、`crates/workbench/src/panels/`（`RightSidebarPanel` 是渲染内容还是仅装配）、`crates/workbench/src/ui.rs`（尺寸常量放哪边）。
 
-> 本文其余部分按 **方案 A** 书写（文件路径与落点均指向 `crates/insight/src/*_view.rs`）；若改选 B，只需把视图文件落点改为 `workbench/panels.rs`，其余设计（语义 / 布局 / 交互 / 作用域 / 索引表）不受影响。
+> 本文其余部分按 **方案 A** 书写（文件路径与落点均指向 `crates/insight/src/*_view.rs`）；若改选 B，只需把视图文件落点改为 `workbench/panels/`，其余设计（语义 / 布局 / 交互 / 作用域 / 索引表）不受影响。
 
 ## 4. 规则作用域与索引（本轮核心设计）
 
@@ -411,7 +411,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | 1.2 | 视图模型（`InsightPanelState` / `SelectedTarget` / `PanelTab`） | `insight/src/model.rs` |
 | 1.3 | 右 Dock 洞察面板骨架：头部（目标名 + 类型徽标 + 动作）/ 四态（空 / 加载 / 错误 / 数据）/ Tab 条 | `insight/src/insight_view.rs` |
 | 1.4 | 列画像四区：基础统计 / 数据分布 / 数据质量 / 样本数据（含类型分派：Numeric / Text / DateTime / Boolean / Unknown） | 同上 |
-| 1.5 | 入口接线：结果表列头右键「洞察此列」；左侧导航树表右键「查看统计」 | `workbench/src/panels.rs`（只发命令） |
+| 1.5 | 入口接线：结果表列头右键「洞察此列」；左侧导航树表右键「查看统计」 | `workbench/src/panels/`（只发命令） |
 | 1.6 | Action 与快捷键：`OpenInsight`（已有 Quick Open 项）/ `InsightRefresh` | `insight/src/commands.rs`、`app/src/main.rs` |
 
 **验收**：从结果表右键到列画像出数全链路可走；空态 / 加载 / 错误三态可复现。
@@ -506,7 +506,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | 列画像 / 质量卡 / 表探查 | `crates/insight/src/insight_view.rs` |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs` |
 | Action 与快捷键 | `crates/insight/src/commands.rs`、`crates/app/src/main.rs` |
-| 右 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels.rs}`（`RightSidebarPanel`） |
+| 右 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels/}`（`RightSidebarPanel`） |
 | 尺寸常量 | `crates/workbench/src/ui.rs`（新增「洞察（M8）专用尺寸」节） |
 | 规则资产 | `crates/insight/insight-rules/`（18 条，不改） |
 | 协议契约测试 | `crates/workbench/tests/ui_contract.rs` |

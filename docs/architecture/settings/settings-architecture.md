@@ -126,11 +126,11 @@ graph TD
 | key | 节 | 类型 | 默认 | 生效 | 消费方 | 入口 | 期次 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `appearance.theme_mode` | 外观 | enum `light`/`dark` | `light` | 即时 | `app/src/main.rs`、`SettingsService::set_theme_mode` | 两者 | ✅ 已落地 |
-| `navigator.source_short_code` | 数据源导航 | bool | `true` | 即时 | `panels.rs::render_connection_row` | 设置页 | ✅ 已落地 |
-| `navigator.show_tags` | 数据源导航 | bool | `false` | 即时 | `panels.rs::render_connection_row` | 两者 | ✅ 已落地 |
-| `navigator.show_scope` | 数据源导航 | bool | `true` | 即时 | `panels.rs::render_connection_row` | 两者 | ✅ 已落地 |
-| `navigator.property_panel_width` | 数据源导航 | f32（rem） | `24.5` | 即时 | `panels.rs::EditorPanel`（关闭面板时落盘） | 模块内（拖拽） | ✅ 已落地 |
-| `navigator.filters` | 数据源导航 | struct（4 个 `Option<String>`） | 全空 | 即时 | `panels.rs::{SidebarPanel::new, write_nav_filters}` | 模块内（chips / 筛选 ▾） | ✅ 已落地（作用域见 §14 Q1） |
+| `navigator.source_short_code` | 数据源导航 | bool | `true` | 即时 | `panels/nav.rs::render_connection_row` | 设置页 | ✅ 已落地 |
+| `navigator.show_tags` | 数据源导航 | bool | `false` | 即时 | `panels/nav.rs::render_connection_row` | 两者 | ✅ 已落地 |
+| `navigator.show_scope` | 数据源导航 | bool | `true` | 即时 | `panels/nav.rs::render_connection_row` | 两者 | ✅ 已落地 |
+| `navigator.property_panel_width` | 数据源导航 | f32（rem） | `24.5` | 即时 | `panels/editor.rs::EditorPanel`（关闭面板时落盘） | 模块内（拖拽） | ✅ 已落地 |
+| `navigator.filters` | 数据源导航 | struct（4 个 `Option<String>`） | 全空 | 即时 | `panels/mod.rs::SidebarPanel::new` + `panels/nav.rs::write_nav_filters` | 模块内（chips / 筛选 ▾） | ✅ 已落地（作用域见 §14 Q1） |
 | `projects.sort_mode` | 项目 | enum `last_opened`/`name`/`created` | `last_opened` | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写） | 两者 | ✅ 已落地（页面行待落地） |
 | `connection_defaults.connect_timeout_ms` | 连接默认值 | u64（ms） | `15000` | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` | 设置页 | ✅ 已落地 |
 | `connection_defaults.lan_disable_tls` | 连接默认值 | bool | `true` | 下次操作 | `connection_service.rs::apply_lan_tls_default` | 设置页 | ✅ 已落地 |
@@ -231,7 +231,7 @@ graph TD
 | 登记表落地 | 表格在本文 §6；实现侧以 `model.rs` 字段 + `lib.rs` 方法为准，契约测试负责两者一致 |
 | 僵尸项裁撤 | `crates/settings/src/model.rs` + `settings_view.rs`（同轮删字段与行） |
 
-**落地顺序（P0、P1a、P1b 已完成；P1.6 宿主替换与 P2 起待排）**：0 工作区收尾（在途改动先提交，避免与 `view.rs` / `panels.rs` 冲突）→ 1 model 裁撤 + 登记表与契约测试 ✅ → 1b 两栏页面实体 + 槽位分发表 ✅（宿主替换待 `view.rs` 落地，P1.6）→ 2 搜索 + 写盘失败可见 + 窗口测试 → 3 互斥 / Esc / 契约扫描 → 4 接线延伸（M6 `keep_versions` / 项目排序行 / `ToggleThemeMode` 决断）。逐项任务、验收与风险见 `settings-dev-plan.md` §2–§4。
+**落地顺序（P0、P1a、P1b 已完成；P1.6 宿主替换与 P2 起待排）**：0 工作区收尾（在途改动先提交，避免与 `view.rs` / `panels/` 冲突）→ 1 model 裁撤 + 登记表与契约测试 ✅ → 1b 两栏页面实体 + 槽位分发表 ✅（宿主替换待 `view.rs` 落地，P1.6）→ 2 搜索 + 写盘失败可见 + 窗口测试 → 3 互斥 / Esc / 契约扫描 → 4 接线延伸（M6 `keep_versions` / 项目排序行 / `ToggleThemeMode` 决断）。逐项任务、验收与风险见 `settings-dev-plan.md` §2–§4。
 
 ## 13. 已知问题（K1–K9，权威）
 
@@ -242,7 +242,7 @@ graph TD
 | K3 | ⬜ | 保存丢弃未知字段 | 全量重写 JSON，未知 key 一次保存即消失（手改文件 / 版本回退场景） |
 | K4 | ⬜ | 无 i18n | 界面文案全中文硬编码；摆设字段 `general.language` 已随 2026-09-16 裁撤删除，i18n 另行立项 |
 | K5 | ⬜ | 非 Windows 配置目录回退临时目录 | `config_dir()` 在无 `APPDATA` 时落 `temp_dir()`（重启可能被清理）；应走平台配置目录 |
-| K6 | 🟡 | `product_tokens` 住在 settings | 它是主题设施（资产加载 + global），逻辑归主题层；暂住此处，迁出需同时改 `app` 与 `panels.rs` 消费方 |
+| K6 | 🟡 | `product_tokens` 住在 settings | 它是主题设施（资产加载 + global），逻辑归主题层；暂住此处，迁出需同时改 `app` 与 `panels/` 消费方 |
 | K7 | ⬜ | 尺寸契约扫描缺口 | `ui_contract` 的尺寸扫描未含 `settings` 视图文件 |
 | K8 | 🟡 | `ToggleThemeMode` 未接线 | Action 已定义，无键位、无 `on_action`；按"没实现就不宣传"应**接线或删除**（§14 Q2） |
 | K9 | 🟡 | 页面宿主替换未做 | 两栏页面（`settings_page.rs`）已实现，但工作台仍渲染旧的单列 `settings_view`（P1.6 等 `view.rs` 并行改动落地）；页面同时缺 `↺` 的 hover 卡 |

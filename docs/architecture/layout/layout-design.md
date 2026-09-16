@@ -110,7 +110,7 @@
 | --- | --- |
 | `crates/settings/`（**新增 crate**） | 设置能力拆分：model（通用 / 外观(主题) / 引擎路径 / 连接默认值）、持久化、设置视图、`OpenSettings` 命令。迁入 workbench 的 `Tool::Settings` 占位与 `services/persistence_service.rs`。结构见 `docs/architecture/settings/settings-crate-design.md` |
 | `crates/workbench/src/view.rs` | `Tool` 枚举重构为 `LeftPanel`（Draft/Database/Resources/Plugin）+ `RightPanel`（Insight/Mock/History）；`WorkbenchView` 增加右侧活动栏/右侧 dock 装配（`set_dock`）、标题栏重构、Quick Open 状态、三模式状态（`remove_dock`/`toggle_dock`） |
-| `crates/workbench/src/panels.rs` | `SidebarPanel` 按新枚举渲染（草稿箱/插件为占位视图）；新增 `RightSidebarPanel`（洞察/Mock/历史占位）；`Shared` 增加 panel 状态、三模式状态 |
+| `crates/workbench/src/panels/` | `SidebarPanel` 按新枚举渲染（草稿箱/插件为占位视图）；新增 `RightSidebarPanel`（洞察/Mock/历史占位）；`Shared` 增加 panel 状态、三模式状态 |
 | `crates/workbench/src/commands.rs` | 注册基础命令：切换 panel、展开/收起/完全隐藏、打开设置（→ settings）、打开 Quick Open、执行 SQL |
 | `crates/app/src/main.rs` | 注册主题加载：`ThemeRegistry::watch_dir(assets/themes, cx, on_load)` |
 | `assets/themes/rds-theme.json` | 明暗两套主题（见 `theme/theme-design.md`） |
@@ -132,7 +132,8 @@
 | --- | --- |
 | 五段布局 / 标题栏 / 活动栏 | `crates/workbench/src/view.rs`（`WorkbenchView::render_title_bar` / `render_activity_bar` / `init_workspace`） |
 | 左右侧边栏（Dock 装配与三模式） | `crates/workbench/src/view.rs` `init_workspace`（`set_dock` / `toggle_dock` / `remove_dock`） |
-| panel 枚举与占位视图 | `crates/workbench/src/panels.rs`（`LeftPanel` / `RightPanel` / `SidebarPanel` / `RightSidebarPanel`） |
+| panel 枚举 | `crates/workbench/src/view.rs`（`LeftPanel` / `RightPanel` / `SidebarMode`） |
+| 面板实现与模块划分 | `crates/workbench/src/panels/`：`mod.rs`（`SidebarPanel` 装配 + 面板协议）/ `nav.rs`（M4 导航）/ `scratchpad_panel.rs`（M5 草稿箱）/ `editor.rs`（编辑区 + 属性面板宿主 + 连接对话框宿主）/ `right.rs`（`RightSidebarPanel`）/ `shared.rs`（`Shared`）。**对外路径 `crate::panels::X` 由 `mod.rs` 重导保持稳定**；`scratchpad_panel.rs` 带 `_panel` 后缀以避免遮蔽 `scratchpad` crate。拆分依据、边界规则、跨模块耦合审计与后续调整见 `panels-modules.md` |
 | Quick Open 与命令 | `crates/workbench/src/commands.rs` + 标题栏入口（view.rs） |
 | 设置入口（活动栏 ⚙） | `crates/settings`（视图 + `OpenSettings` 命令），workbench 只保留触发按钮 |
 | 主题加载 / 切换 | `crates/app/src/main.rs`（`watch_dir`）+ `crates/settings`（外观节切换命令） |

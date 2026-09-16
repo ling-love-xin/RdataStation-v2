@@ -131,7 +131,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 - 装配与宿主桥：`crates/workbench/src/services/mock_generator.rs`（生成 / 落库 / 追加 / 导出 / 结构导入）、
   `crates/workbench/src/services/mock_jobs.rs`（后台任务：进度 + 取消）、
   `crates/workbench/src/components/mock_host.rs`（`MockHost` 的宿主实现）、
-  `crates/workbench/src/panels.rs`（面板构造期创建 + 句柄登记）、`crates/workbench/src/view.rs`（详情 tab 加入中央 tab 组）。
+  `crates/workbench/src/panels/right.rs`（面板构造期创建 + 句柄登记）、`crates/workbench/src/view.rs`（详情 tab 加入中央 tab 组）。
 - 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`（99 单元（12 纯逻辑 + 22 窗口 + 65 其他）+ 26 集成）；
   `cargo test -p rds-workbench --test mock_generator --test mock_jobs --test mock_job_cancel -j 2`（装配 10 + 后台任务 3 + 取消 1）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。

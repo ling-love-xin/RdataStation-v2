@@ -72,8 +72,8 @@
 | `crates/scratchpad/src/models.rs` | 域模型：`ScratchpadEntry` / `SearchMatch`（含 `match_spans`）/ `ExternalReference(Status)` / `FileMeta` / `AnalyzableFile` / `ReplaceResult` / `DiffResult` 等 |
 | `crates/scratchpad/src/state.rs` | `ScratchpadState`：按项目初始化 store + watcher 标志（**当前无生产调用方**，接入时必须按窗口持有） |
 | `crates/workbench/src/services/scratchpad_jobs.rs` | 草稿箱后台任务：单工作线程 + tokio 运行时执行加载与重操作（导入/粘贴/清空回收站/搜索/替换），结果队列 + 请求序号防过期 |
-| `crates/workbench/src/panels.rs`（`SidebarPanel`） | 草稿箱面板：`render_scratchpad`（工具栏 / 搜索 / 树 / 引用 / 回收站 / 撤销栏 / 状态行）、`scratchpad_row`、`render_scratchpad_edit_row`、`render_scratchpad_empty_state`、`request_scratchpad_load` / `ensure_scratchpad_pump`、`ensure_scratchpad_watch`（外部改动监控）、剪贴板与多选、键盘导航 |
-| `crates/workbench/src/panels.rs`（`EditorPanel`） | 内容搜索结果面板与替换栏：`render_scratchpad_search_pane`、`replace_scratchpad_all` |
+| `crates/workbench/src/panels/`（`SidebarPanel`） | 草稿箱面板：`render_scratchpad`（工具栏 / 搜索 / 树 / 引用 / 回收站 / 撤销栏 / 状态行）、`scratchpad_row`、`render_scratchpad_edit_row`、`render_scratchpad_empty_state`、`request_scratchpad_load` / `ensure_scratchpad_pump`、`ensure_scratchpad_watch`（外部改动监控）、剪贴板与多选、键盘导航 |
+| `crates/workbench/src/panels/`（`EditorPanel`） | 内容搜索结果面板与替换栏：`render_scratchpad_search_pane`、`replace_scratchpad_all` |
 | `crates/workbench/src/{commands,ui}.rs` | `scratchpad` key context 动作；`SCRATCHPAD_GROUP_MAX_HEIGHT` / `SCRATCHPAD_EMPTY_ICON_SIZE` 等尺寸常量 |
 | `crates/workbench/src/view.rs`（`WorkbenchView`） | 宿主：消费 `Shared::open_file_request` → `open_in_editor`（把草稿打开到中央编辑器，同路径只激活） |
 | `crates/app/src/main.rs` | 快捷键绑定（`ctrl-a` / `f2` / `delete` / `escape` / `↑↓` / `enter` / `ctrl-n`，context = `scratchpad`） |

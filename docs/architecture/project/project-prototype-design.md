@@ -267,7 +267,7 @@ v2 采纳「**每一个应用实例即一个项目**」：一次启动只有**�
 | 项目服务编排（CRUD / 打开 / 关闭 / 锁） | `crates/workbench/src/services/project_service.rs` |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs` |
 | 标题栏项目槽（点击开关菜单） | `crates/workbench/src/view.rs`（`render_title_bar`） |
-| 会话与刷新信号 | `crates/workbench/src/panels.rs`（`Shared::project_ui` / `editor_dirty`） |
+| 会话与刷新信号 | `crates/workbench/src/panels/`（`Shared::project_ui` / `editor_dirty`） |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册持久化（固定 / 软删） | `crates/engine/src/persistence/global_db.rs` + 迁移 `crates/engine/migrations/global/019_add_project_ui_state.sql` |
 | 动作 / 快捷键 | `crates/project/src/commands.rs` 占位未用；实际为 `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`） |

@@ -148,7 +148,7 @@ graph LR
 | 宿主契约（`ProjectUiHost` / 三个桥 trait / `OpenProject`） | 同上（文件头「宿主桥」一节） |
 | workbench 侧桥接与装配 | `crates/workbench/src/components/project_host.rs` |
 | 会话类型与解析 | `crates/project/src/ui.rs`（`OpenProject`）、`crates/workbench/src/services/project_session.rs`（`resolve`） |
-| 共享状态字段 | `crates/workbench/src/panels.rs`（`Shared::{project, project_ui, editor_*}`） |
+| 共享状态字段 | `crates/workbench/src/panels/`（`Shared::{project, project_ui, editor_*}`） |
 | 标题栏项目槽 + 菜单 Popover | `crates/workbench/src/view.rs`（`render_title_bar`） |
 | 窗口测试 | `crates/project/src/ui/tests.rs` |
 | 视图测试规范 | `.agents/skills/gpui-kit-dev/SKILL.md`（「窗口测试」一节） |

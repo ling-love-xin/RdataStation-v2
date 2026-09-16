@@ -228,7 +228,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D18 | 排序一律带**确定性兜底**（`, rowid DESC`） | `CURRENT_TIMESTAMP` 只有秒级精度，同一秒内两次写入时「最新」返回任意一条 → 版本链挂错父版本 | 依赖 `rowid` 伪列（DuckDB / SQLite 均支持） |
 | D19 | 行级读取错误**向上抛**，不用 `filter_map(r.ok())` 丢弃 | 静默少行比报错难查得多（曾表现为「历史列表恒为空」） | — |
 | D20 | 洞察**不自己取数** | 数据入口只有 `temp_table` 与 `conn_id`；自建连接会绕开 M3 的池化与只读策略 | — |
-| D21 | 视图归属 = **方案 A（视图入 `crates/insight`）**（2026-09-16 定案） | 硬依据是架构约束「Feature 可以直接依赖 gpui-kit，把同一业务能力的 model / service / view 放在同一 crate」；`project` 已跑通该范式（含宿主桥），而 `panels.rs` 已 8600+ 行不宜再增 | 开发方案 §3.1 |
+| D21 | 视图归属 = **方案 A（视图入 `crates/insight`）**（2026-09-16 定案） | 硬依据是架构约束「Feature 可以直接依赖 gpui-kit，把同一业务能力的 model / service / view 放在同一 crate」；`project` 已跑通该范式（含宿主桥），而 `panels/` 已 8600+ 行不宜再增 | 开发方案 §3.1 |
 | D22 | 规则热加载用**内容哈希轮询**，不用 `notify` / `watch_dir` | `notify` 在本仓只是传递依赖（未声明）；`watch_dir` 需要 gpui `Context`，而洞察在视图归属拍板前不依赖 gpui；内容哈希天然去抖 | 默认 2s 间隔；变更检测有最多一个间隔的延迟 |
 | D23 | 监听线程**不访问数据库**，只重载规则集并置 `index_is_stale` | 把项目库连接拉进后台轮询不划算；解耦后分析正确性不依赖数据库 | 索引可能短期落后于磁盘，由规则管理视图打开时消费标记后同步 |
 
@@ -322,7 +322,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K5 | ~~目录监听热加载未做~~ | — | ✅ 已实现（Phase 0 / 0.6，D22/D23） |
 | K6 | `insight_table_reports` / `insight_schema_reports` 两张表为**预留**，无写入者 | 完成度易被高估 | Phase 4 |
 | K7 | 用户全局规则目录（`{system}/insight-rules/`）**不自动创建** | 首次使用不知道该建在哪 | 建议：首次写入时创建（开发方案 Phase 2 / 2.4） |
-| K8 | ~~视图归属待拍板（D21）~~ **已定案**（D21 = 方案 A，2026-09-16） | 已消除：`insight` 依赖 gpui-kit，视图落 `insight/src/insight_view.rs` + `ui.rs`；`panels.rs` 只负责装配与发命令 | ✅ 已定案 |
+| K8 | ~~视图归属待拍板（D21）~~ **已定案**（D21 = 方案 A，2026-09-16） | 已消除：`insight` 依赖 gpui-kit，视图落 `insight/src/insight_view.rs` + `ui.rs`；`panels/` 只负责装配与发命令 | ✅ 已定案 |
 | K9 | `get_column_insight_full` 并发超限时的**用户重试**由 UI 承担 | 批量场景体验 | Phase 2 批量串行 + 进度缓解 |
 | K10 | 内置规则的**基础统计耦合**（覆盖 `numeric-stats` 会连带影响列画像） | 用户误以为只影响「那条规则」 | 文档说明（本文件 §5.3 + 使用手册） |
 | K11 | `null-check` 规则的 `[[quality]] field = "null_rate"` 指向**不存在的输出字段**（其 `[[output]]` 只有 `total_count` / `non_null_count` / `unique_count`）→ `actual == None`，而 `evaluate_quality` 在**只设 `max` 且 actual 为 None** 时不判定失败 → 该质量门控**永不触发**（静默通过） | 中：用户以为有门控，实际没有 | 待决策：补 `null_rate` 输出字段 / 改 `field` / 让「字段不存在」报错而不是静默通过（倾向后者） |

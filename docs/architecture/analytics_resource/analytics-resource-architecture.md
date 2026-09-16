@@ -1,7 +1,7 @@
 # 资产库 / 分析存档模块（M6）· 设计理念与架构
 
 > 状态：**设计定稿（2026-09-15）；Phase 0 两批已落地（仅 crate 内）**。已可用：领域类型（`model.rs`）、本体层（`payload.rs`）、迁移 020 + 新列接入、**归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件**（`service.rs`，37 项测试全绿）；逐项证据见 `analytics-resource-dev-plan.md` §0。
-> 仍为占位：`commands.rs` / `resource_view.rs` / `recycle_bin_dialog.rs`（视图与 Action，Phase 1）；`indexer.rs`（索引修复）未创建；`recycle.rs` 待废弃（P0.8）；视图落点仍是 `crates/workbench/src/panels.rs::render_resources_placeholder`。
+> 仍为占位：`commands.rs` / `resource_view.rs` / `recycle_bin_dialog.rs`（视图与 Action，Phase 1）；`indexer.rs`（索引修复）未创建；`recycle.rs` 待废弃（P0.8）；视图落点仍是 `crates/workbench/src/panels/mod.rs::render_resources_placeholder`。
 > 前置：v1 蓝本 `v1/backend/src/core/persistence/analytics_resource_store/` + `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v2 现状见 `analytics-resource-dev-plan.md` §1。
 > 关联：`analytics-resource-prototype-design.md`（长什么样）、`analytics-resource-prototype.html`（交互稿）、`analytics-resource-dev-plan.md`（做什么）、`../overview.md`（M6 定位）、`../scratchpad/scratchpad-dev-plan.md` Phase D（上游）。
 >
@@ -29,7 +29,7 @@
 | 一句话定位 | 项目的**分析存档**：把"值得留存、需被引用、要能复现"的分析产物，从工作区转成**只读、有版本、带来源、可组织**的正式资产 |
 | 负责 | 归档与取回（`File` 型）、存档登记与索引、版本与内容指纹、标签与分组、搜索与检索、项目级回收站的资源侧、索引修复（孤儿检测） |
 | 不负责 | 数据源连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算本身（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1，另立设计） |
-| 核心载体 | 左 Dock `LeftPanel::Resources` 面板（`workbench/src/panels.rs`）+ 右侧详情属性面板 + 对话框 |
+| 核心载体 | 左 Dock `LeftPanel::Resources` 面板（`workbench/src/panels/`）+ 右侧详情属性面板 + 对话框 |
 | 关键约束 | **文件系统是本体权威、登记表是索引**；归档后本体不可写；版本必须绑定内容指纹；render 期零 I/O；零裸色值 / 零裸 `px` |
 | 面板职责一句话 | **留证据 + 找回来**；组织归标签与分组，详情归右侧属性面板 |
 
@@ -403,7 +403,7 @@ scratchpad ──► analytics_resource ──► engine, shared
 | `folder.rs` / `tag.rs` | ✅ 511 行 | 保留；文件夹去掉 `parent_folder_id` 用法 |
 | 视图四处占位 | 3 行 × 4 | 按原型落地 |
 | `LeftPanel::Resources` 标签 | "资源分析"（`workbench/src/view.rs:80`） | 改"资产库" |
-| 面板占位渲染 | `panels.rs::render_resources_placeholder`（当前 5846 起，行号随他人改动会漂移） "分析资源（下一轮接入）· 数据源连接引用 · DuckDB 分析表" | 替换为真面板；占位文案随之下线 |
+| 面板占位渲染 | `panels/mod.rs::render_resources_placeholder`（当前 5846 起，行号随他人改动会漂移） "分析资源（下一轮接入）· 数据源连接引用 · DuckDB 分析表" | 替换为真面板；占位文案随之下线 |
 | 迁移 | 007（v1 原样） | ✅ 已新增 `project_meta/020_analytics_resource_archive.sql`（9 列 + 3 索引） |
 | crate 入口 | 无 README | ✅ 已补 `crates/analytics_resource/README.md` |
 

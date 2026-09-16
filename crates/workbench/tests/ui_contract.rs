@@ -64,7 +64,15 @@ fn ui_size_constants_match_design() {
 fn view_layer_has_no_raw_size_literals() {
     let sources: &[(&str, &str)] = &[
         ("view.rs", include_str!("../src/view.rs")),
-        ("panels.rs", include_str!("../src/panels.rs")),
+        ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
+        ("panels/shared.rs", include_str!("../src/panels/shared.rs")),
+        ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
+        (
+            "panels/scratchpad_panel.rs",
+            include_str!("../src/panels/scratchpad_panel.rs"),
+        ),
+        ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
+        ("panels/right.rs", include_str!("../src/panels/right.rs")),
         // 连接对话框模块（M3，#14 已清零；后续改动不得回退）
         (
             "connection_dialog/render.rs",
@@ -126,7 +134,18 @@ fn view_layer_has_no_raw_size_literals() {
 fn ui_sources_have_no_raw_color_literals() {
     let sources: &[(&str, &str)] = &[
         ("workbench/view.rs", include_str!("../src/view.rs")),
-        ("workbench/panels.rs", include_str!("../src/panels.rs")),
+        ("panels/mod.rs", include_str!("../src/panels/mod.rs")),
+        (
+            "panels/shared.rs",
+            include_str!("../src/panels/shared.rs"),
+        ),
+        ("panels/nav.rs", include_str!("../src/panels/nav.rs")),
+        (
+            "panels/scratchpad_panel.rs",
+            include_str!("../src/panels/scratchpad_panel.rs"),
+        ),
+        ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
+        ("panels/right.rs", include_str!("../src/panels/right.rs")),
         (
             "connection_dialog/render.rs",
             include_str!("../src/components/connection_dialog/render.rs"),
@@ -209,4 +228,50 @@ fn hidden_toggle_preserves_prior_mode() {
 fn hidden_toggle_falls_back_to_expanded_on_bad_snapshot() {
     let (mode, _) = toggle_hidden_mode(SidebarMode::Hidden, SidebarMode::Hidden);
     assert_eq!(mode, SidebarMode::Expanded);
+}
+
+/// 契约 2c：`src/panels/` 下的子模块不得脱离扫描清单。
+///
+/// 契约 2a / 2b 依赖 `include_str!` 的**显式清单**——拆分后视图从「一个文件」变成
+/// 「一个目录」，漏登记的新模块会让尺寸 / 颜色契约**静默失效**（扫不到就永不报错）。
+/// 清单是编译期字面量、无法在运行期反射，故这里用本文件自身的源文本做覆盖校验：
+/// 每个在盘的 `panels/*.rs` 都必须以带引号的名字出现**两次**（尺寸清单 + 颜色清单各一次）。
+///
+/// 目录清单暂只含 `panels`；`src/components/` 尚有未纳入扫描的存量文件
+/// （`cache_dialog` / `group_form_dialog` / `mock_host` / `project_host` / `mod.rs`），
+/// 待清零后再把 `components` 加进这份清单。
+#[test]
+fn every_panel_module_is_registered_in_the_manifests() {
+    let manifest = include_str!("ui_contract.rs");
+    for rel in scan_rs_sources("panels") {
+        let quoted = format!("\"{rel}\"");
+        assert!(
+            manifest.matches(quoted.as_str()).count() >= 2,
+            "src/{rel} 未同时登记进尺寸与颜色契约清单；漏登会让这两份契约对该文件静默失效"
+        );
+    }
+}
+
+/// 递归收集 `src/<rel>` 下的全部 `.rs` 文件（返回相对 `src/` 的路径，`/` 分隔）。
+fn scan_rs_sources(rel: &str) -> Vec<String> {
+    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                let rel = path.strip_prefix(base).expect("已在 base 前缀约束下");
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut out = Vec::new();
+    walk(&base.join(rel), &base, &mut out);
+    out.sort();
+    out
 }

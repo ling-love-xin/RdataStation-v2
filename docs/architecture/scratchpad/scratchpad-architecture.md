@@ -447,13 +447,13 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 外部引用 | `store.rs::{add/remove/rename/update_external_reference_path, external_reference_status}` |
 | 文件元数据 | `store.rs::{bind_connections, update_file_meta}` + `models.rs::FileMeta` |
 | 回收站 | `trash.rs`（manifest 与服务） + `store.rs::{delete_entry, list_trash, restore_from_trash, empty_trash}` |
-| 面板编排与渲染 | `workbench/src/panels.rs`（`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move` / `scratchpad_open_selection` / `create/replace…`） |
-| 搜索结果与替换栏 | `workbench/src/panels.rs::{render_scratchpad_search_pane, run_scratchpad_search, replace_scratchpad_all}` |
+| 面板编排与渲染 | `workbench/src/panels/`（`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move` / `scratchpad_open_selection` / `create/replace…`） |
+| 搜索结果与替换栏 | `workbench/src/panels/scratchpad_panel.rs::{render_scratchpad_search_pane, run_scratchpad_search}` + `workbench/src/panels/editor.rs::replace_scratchpad_all` |
 | 快捷键与尺寸 | `workbench/src/commands.rs`、`workbench/src/ui.rs`、`app/src/main.rs` |
-| 文件类型色点 | `workbench/src/panels.rs::scratchpad_icon_color` |
-| 后台加载（K1） | `workbench/src/services/scratchpad_jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `panels.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
-| 文件监控（Phase A5） | `scratchpad/src/watch.rs`（`ScratchpadWatcher` / `ChangeFlag`）+ `panels.rs::{ensure_scratchpad_watch, ensure_scratchpad_watch_poll}` |
-| 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `panels.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
+| 文件类型色点 | `workbench/src/panels/scratchpad_panel.rs::scratchpad_icon_color` |
+| 后台加载（K1） | `workbench/src/services/scratchpad_jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `panels/scratchpad_panel.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
+| 文件监控（Phase A5） | `scratchpad/src/watch.rs`（`ScratchpadWatcher` / `ChangeFlag`）+ `panels/scratchpad_panel.rs::{ensure_scratchpad_watch, ensure_scratchpad_watch_poll}` |
+| 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `panels/scratchpad_panel.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
 
 ## 13. 已知问题（权威清单）
 

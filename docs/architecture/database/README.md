@@ -64,8 +64,8 @@
 
 | 想改 | 去哪 |
 | --- | --- |
-| 面板布局 / 连接行 / 树渲染 / 右键菜单 | `crates/workbench/src/panels.rs`（`SidebarPanel::{render_database_nav, render_nav_tree, render_connection_row, render_nav_node}`） |
-| 属性面板渲染 | `crates/workbench/src/panels.rs::EditorPanel::render_property_panel` + `crates/database/src/property_panel.rs` |
+| 面板布局 / 连接行 / 树渲染 / 右键菜单 | `crates/workbench/src/panels/`（`SidebarPanel::{render_database_nav, render_nav_tree, render_connection_row, render_nav_node}`） |
+| 属性面板渲染 | `crates/workbench/src/panels/editor.rs::EditorPanel::render_property_panel` + `crates/database/src/property_panel.rs` |
 | 左 / 右 Dock 装配、面板事件订阅 | `crates/workbench/src/view.rs`（`LeftPanel` / `RightPanel` / `init_workspace`） |
 | 后台加载 / 预热 / 预取队列 | `crates/workbench/src/services/nav_jobs.rs` |
 | 连接 / 断开 / 标签 / 分组入口 | `crates/workbench/src/services/nav_runtime.rs` |
@@ -97,7 +97,7 @@
 # 模块回归（含导航模型 / 缓存单测）
 cargo test -p rds-engine -p rds-database -p rds-workbench --lib -j 2
 
-# 尺寸 / 颜色契约（扫描 panels.rs / view.rs 等）
+# 尺寸 / 颜色契约（扫描 panels/ / view.rs 等）
 cargo test -p rds-workbench --test ui_contract -j 2
 
 # 全工作区编译守卫（含全部 target）

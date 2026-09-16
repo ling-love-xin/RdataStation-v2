@@ -60,7 +60,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 | 列表 / 树行 | `list::{List, ListState, ListDelegate}`；虚拟化用 `v_virtual_list` | 手搓 hover/选中态行 |
 | 禁用态 | `gpui_kit::base::Disableable as _` 的 `.disabled(bool)`（Input 是本体方法） | 自绘控件漏掉 disabled（实例：对话框三个自绘开关未接 `form_disabled`） |
 
-> 已知反例（技术债，不要照抄）：`crates/workbench/src/components/connection_dialog/render.rs` 的 Tab 条 / 开关、`panels.rs` 的 `tool_btn` / 树展开字符 / 文本按钮。反向结论（“库没有 Tabs/Switch”）已作废。
+> 已知反例（技术债，不要照抄）：`crates/workbench/src/components/connection_dialog/render.rs` 的 Tab 条 / 开关、`panels/` 的 `tool_btn` / 树展开字符 / 文本按钮。反向结论（“库没有 Tabs/Switch”）已作废。
 
 ## 布局与滚动陷阱（项目内已验证）
 
@@ -73,7 +73,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 ## 状态与副作用
 
 - `render` 是纯读路径：不做 I/O（`Runtime::new` / `block_on` / `fs` / 打开数据库）、不写 `Shared`、不解析 JSON、不深拷贝大集合。副作用回事件路径（`Shared` 更新 + `cx.notify()`）。
-  - 已知反例（技术债）：`panels.rs` 的 `ensure_nav_*` / `load_scratchpad` / `render_property_panel` / `render_history_placeholder` 在 render 内同步读盘；`project/ui.rs` 的 `render_settings` 每帧 `fs::metadata`。
+  - 已知反例（技术债）：`panels/nav.rs` 的 `render_connection_row` / `render_nav_node` 与 `panels/editor.rs` 的 `render_property_panel`、`panels/scratchpad_panel.rs` 的 `render_scratchpad` 在 render 内**写状态 + 入队后台任务**（非同步读盘：I/O 在工作线程）；`project/ui.rs` 的 `render_settings` 每帧 `fs::metadata`。更重的一类是**事件路径**同步 I/O（`block_on` 阻塞 UI 线程）：`nav.rs` 4 处 + `scratchpad_panel.rs` 14 处，见 `docs/architecture/layout/panels-modules.md` §4。
 - 重复元素（列表 / 树 / tab / 协议链）的 `ElementId` 用业务键（`conn.id` / `node.key` / 稳定名称），**不用下标**——下标在增删与「最新在前」插入后会让 hover 等按 id 记录的状态串行。
 
 ## 颜色语义

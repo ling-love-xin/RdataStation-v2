@@ -11,7 +11,7 @@
 | 单元测试 | ✅ 56 项随迁 | `crates/mock/src/*.rs` 内联 `#[cfg(test)]` |
 | 公开 API 集成测试 | ❌ 无。v1 那份 `tests/mock_engine_tests.rs` **不可编译**（引用已不存在的 `GeneratorConfig::type_name()`、把 `String` 型 `confidence` 当数值比较、断言恒为空的 `preview.rows`） | 见 `mock-architecture.md` §9-I0a |
 | 命令层（21 个 Tauri 命令） | 🏁 按 Round 14 政策退役，服务本体在 crate 内 | `docs/migration/commands-retirement.md` |
-| 视图层 | ❌ 占位：右 Dock `render_mock_placeholder` 三行静态文案；分析库页「生成 Mock」按钮 `on_click` 为空实现 | 本轮开始时 `crates/workbench/src/panels.rs` |
+| 视图层 | ❌ 占位：右 Dock `render_mock_placeholder` 三行静态文案；分析库页「生成 Mock」按钮 `on_click` 为空实现 | 本轮开始时 `crates/workbench/src/panels/` |
 | 装配层 | ⚠️ 已有 `services/mock_generator.rs` 但**全仓只有测试调用**；且自带一份 `parse_data_type` 副本 | 同上 |
 | 文档 | ❌ 零：无 `docs/architecture/mock/`、无 `crates/mock/README.md`（连接/数据库/项目/草稿箱/编辑器/洞察均有） | `docs/architecture/README.md` 缺口表未列 mock |
 
@@ -23,18 +23,18 @@
 | A2 | 修复 `persist_as_asset` / `export(Table)` 的非法 SQL（`CREATE TABLE t AS SELECT * FROM SELECT * FROM …`） | `crates/mock/src/engine.rs`（两处调用改传源表名）+ `crates/engine/src/sql/{builder,engine}.rs`（参数正名 `source_table` + 文档） | 新增回归 `export_table_creates_named_table_and_drops_temp`；A1 实测先红后绿 |
 | A3 | 类型串收敛为唯一入口 `mock::parse_data_type` | `crates/mock/src/schema_map.rs`（公开）+ `lib.rs`（re-export）+ `crates/workbench/src/services/mock_generator.rs`（删副本） | `parse_data_type_is_public_and_loose`、`map_column_resolves_parameterized_source_types`、`crates/workbench/tests/mock_generator.rs::parse_data_type_maps_common_types` |
 | A4 | 装配层写入语义明确化：**持久化（新建）** + **追加**（主键自增起点接续表内行数）+ 返回总行数 | `crates/workbench/src/services/mock_generator.rs` | `persist_creates_table_and_rejects_second_run`、`append_continues_primary_key_sequence`（累计 100 行、`id` 无重复、`MAX(id)=100`） |
-| A5 | Mock 面板最小可用闭环（目标选择 / 行数 / 生成 / 结果与错误 / 只读护栏） | `crates/mock/src/mock_view.rs`（视图随 crate）+ `crates/workbench/src/components/mock_host.rs`（宿主桥）+ `crates/workbench/src/panels.rs`（实体懒创建 + 句柄登记） | `cargo check -p rds-workbench --all-targets` 通过；8 项窗口测试覆盖面板与对话框 |
+| A5 | Mock 面板最小可用闭环（目标选择 / 行数 / 生成 / 结果与错误 / 只读护栏） | `crates/mock/src/mock_view.rs`（视图随 crate）+ `crates/workbench/src/components/mock_host.rs`（宿主桥）+ `crates/workbench/src/panels/`（实体懒创建 + 句柄登记） | `cargo check -p rds-workbench --all-targets` 通过；8 项窗口测试覆盖面板与对话框 |
 | A6 | 接线「生成 Mock」按钮（原空实现）→ 展开右 Dock Mock 面板；导航右键入口按表名定向选表（`Shared::open_mock_panel`） | 同上 | 同上 |
 | A7 | 清理与卫生：删除死代码 `_generator_of`；`crates/mock/Cargo.toml` 移除未使用 `uuid`、`tokio` 移入 `[dev-dependencies]`；新文件 rustfmt 干净 | `crates/workbench/src/services/mock_generator.rs`、`crates/mock/Cargo.toml` | `cargo check -p rds-mock --all-targets` 通过 |
 | A8 | 文档补齐（本目录五件套 + 交互稿）+ crate README | `docs/architecture/mock/*`、`crates/mock/README.md` | 本文件 |
-| A9 | **视图归属与对话化重构**：面板 + 状态 + 两个语义对话框沉入 mock crate（`mock_view.rs` / `mock_view/tests.rs`）；重交互改走 `Dialog`（生成器选择 / 列配置，含工作副本与「恢复智能默认」）；宿主能力改 traits 注入 | `crates/mock/src/mock_view.rs`、`crates/workbench/src/components/mock_host.rs`、`panels.rs` | 窗口测试：面板渲染 / 定向选表 / 生成与预览 / 只读拦截 / 对话框可打开（8 项） |
+| A9 | **视图归属与对话化重构**：面板 + 状态 + 两个语义对话框沉入 mock crate（`mock_view.rs` / `mock_view/tests.rs`）；重交互改走 `Dialog`（生成器选择 / 列配置，含工作副本与「恢复智能默认」）；宿主能力改 traits 注入 | `crates/mock/src/mock_view.rs`、`crates/workbench/src/components/mock_host.rs`、`panels/` | 窗口测试：面板渲染 / 定向选表 / 生成与预览 / 只读拦截 / 对话框可打开（8 项） |
 | A10 | **生成器目录穷尽派生**（137 变体分类 / 中文标签 / 参数规格 / 默认构造） | `tools/gen_mock_generator_catalog.py` → `crates/mock/src/generator_catalog.rs` | 目录自检 3 项：137 覆盖、标签与默认构造齐备、变体↔分类往返 |
 | A11 | 参数编辑用 **JSON 补丁**（`patch_param`），避开 137 份「表单 → 变体」构造 | `crates/mock/src/mock_view.rs` | 单元测试：整数 / 浮点 / 文本 / 字符串 / `Option` 字段与非法输入保留原值 |
 | A12 | **语义回归**：目标表是用户命名的**新表**（表名输入），不再「从分析库既有表里挑着灌数」；**生成不写库**（只产内存临时表 + 预览） | `mock_view.rs`（`MockDraft.table_name` + `run_generate`）、`services/mock_generator.rs`（`generate` vs `persist_table` 拆分） | 视图测试 `generate_produces_preview_without_touching_sinks`（三出口调用计数为零）；装配测试 `generate_does_not_write_analysis_db` |
 | A13 | **四个显式出口**：新建分析库表（同名报错 + 回滚）/ 追加到既有表（显式选表、主键自增接续、缺列报错）/ 草稿箱 `{项目}/mock/` / 另存为（系统保存对话框） | `services/mock_generator.rs`（`persist_table` / `append_table` / `export_file` / `save_scratchpad`）、`mock_view.rs`（出口按钮组） | 装配测试 10 项（含 `append_continues_primary_key_sequence`：`MAX(id)=100` 且无重复） |
-| A14 | **方案①排版**：右 Dock = 配置 + 出口；**中央「Mock 数据」tab** = 字段卡片 + 预览表（详情持面板实体，状态单一权威） | `mock_view.rs`（`MockDetailView` + `Panel` 协议实现）、`view.rs`（`Shared::open_mock_detail` 宿主命令 + `DockArea::add_panel(Center)`）、`panels.rs`（构造期创建面板实体 + 句柄） | 视图测试：详情渲染字段与预览、`focus_tab` 幂等（未加入 Dock 时静默返回） |
+| A14 | **方案①排版**：右 Dock = 配置 + 出口；**中央「Mock 数据」tab** = 字段卡片 + 预览表（详情持面板实体，状态单一权威） | `mock_view.rs`（`MockDetailView` + `Panel` 协议实现）、`view.rs`（`Shared::open_mock_detail` 宿主命令 + `DockArea::add_panel(Center)`）、`panels/`（构造期创建面板实体 + 句柄） | 视图测试：详情渲染字段与预览、`focus_tab` 幂等（未加入 Dock 时静默返回） |
 | A15 | **列模型解放**：增删列 / 改列名与类型 / 13 类型下拉 / 唯一值改 `Switch` / 生成器改**分类子菜单**（137 项仍在，形态从对话框改为子菜单） | `mock_view.rs`（`add_column` / `remove_column` / `ColumnDraft` / `generator_menu` / `rebuild_params`） | 视图测试：列增删、改列后旧结果作废、智能默认恢复、列编辑对话框可开 |
-| A16 | **导入源库结构**（连接 / 库 / schema / 表）+ 导航右键定向：`NavCache` → `MetadataService` 的 cache-aside 取列，带置信度与示例值 | `services/mock_generator.rs`（`import_columns` / `schema_sources`）、`mock_view.rs`（`preset_from_source` / `open_import_dialog` / `SchemaRequest`）、`panels.rs`（右键菜单传 `SchemaRequest`） | 视图测试 `preset_from_source_imports_columns_and_table_name`；装配测试 `schema_sources_carry_connection_defaults` |
+| A16 | **导入源库结构**（连接 / 库 / schema / 表）+ 导航右键定向：`NavCache` → `MetadataService` 的 cache-aside 取列，带置信度与示例值 | `services/mock_generator.rs`（`import_columns` / `schema_sources`）、`mock_view.rs`（`preset_from_source` / `open_import_dialog` / `SchemaRequest`）、`panels/`（右键菜单传 `SchemaRequest`） | 视图测试 `preset_from_source_imports_columns_and_table_name`；装配测试 `schema_sources_carry_connection_defaults` |
 | A17 | 装配层重构：去掉临时文件中转（`insert_statements` 收在 mock crate）+ 列名规范化唯一入口 `sanitize_identifier`（临时表列名与建表列名必须同一算法） | `crates/mock/src/engine.rs`、`services/mock_generator.rs` | 集成测试 `export_sql_insert_writes_insert_statements`；**并修掉自身引入的锁重入死锁**（架构 §9-I0d） |
 
 **本轮实测数字**：`cargo test -p rds-mock` = 93 单元（含 16 窗口）+ 26 集成测试（0 失败）；
@@ -122,7 +122,7 @@
 
 | 编号 | 风险 | 影响 | 缓解 |
 | --- | --- | --- | --- |
-| R1 | 面板继续长胖 | `panels.rs` 已近 9k 行，`mock_view.rs` 近 2k 行 | 视图随 crate 已定；新能力优先放 mock crate，不在 `panels.rs` 长 |
+| R1 | 面板继续长胖 | `panels/` 已近 9k 行，`mock_view.rs` 近 2k 行 | 视图随 crate 已定；新能力优先放 mock crate，不在 `panels/` 长 |
 | R2 | 生成器参数表单与 137 变体手工对齐 | 新增变体漏配表单，用户看到空参数区 | 参数表单由 `GeneratorConfig` 派生（编译期穷尽匹配），禁止手写清单 |
 | R3 | 分析库并发写入（面板写 + SQL 执行区写） | Windows 同文件多连接受限，可能出现「文件被占用」 | 统一经 engine 的单连接纪律；必要时串行化写入入口（架构 §9-I3） |
 | R4 | ~~大行数同步生成阻塞 UI~~ | 已解决：生成 / 追加 / **三个出口**全部走后台工作线程（进度 + 取消；出口为不定量进度、不提供取消，见架构 D23） | 出口进行中只报阶段（写入 / 导出不可中断） | 若将来要可中断，需引擎侧提供 DuckDB 写入的取消点（目前无） |

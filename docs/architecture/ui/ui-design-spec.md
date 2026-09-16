@@ -116,7 +116,7 @@
 | 尺寸常量定义 | `crates/workbench/src/ui.rs` |
 | 颜色 token | `assets/themes/rds-theme.json` |
 | 五段布局应用 | `crates/workbench/src/view.rs`（`render_title_bar` / `render_*_activity_bar` / `render_status_bar` / `render_quick_open` / `apply_*_mode`） |
-| 面板 / 树 / 列表应用 | `crates/workbench/src/panels.rs` |
+| 面板 / 树 / 列表应用 | `crates/workbench/src/panels/` |
 
 ## 6. 检查清单
 
@@ -133,7 +133,7 @@
 | 契约 | 覆盖内容 |
 | --- | --- |
 | 尺寸常量 | `ui.rs` 倍率 × 16 等于本文档 §2.1 设计值（标题栏 36 / 活动栏 48 / 边栏 240 与 280 等） |
-| 源码扫描 | `view.rs` / `panels.rs` 不出现裸 `px(...)` 与裸 `rgb(...)` / `hsla(...)` |
+| 源码扫描 | `view.rs` / `panels/` 不出现裸 `px(...)` 与裸 `rgb(...)` / `hsla(...)` |
 | 状态机 | 「完全隐藏 / 恢复」往返还原隐藏前模式（不丢失「收起」）+ 异常快照兜底 |
 
 > 新增结构尺寸或改变设计值时，同步修改 `ui.rs`、本文档 §2.1 与契约测试三处；测试失败即回调未同步。

@@ -36,7 +36,7 @@
 
 v1 把洞察拆成「右栏轻量统计 + 底部四 Tab 容器」两处（`ColumnInsightsPanel` + `BottomInsightPanel`），原因是 v1 用 dockview 动态面板、缺一个稳定的右 Dock。v2 已有右 Dock（`RightPanel::Insight`，17.5rem），因此**收敛为单面板**，与 `RightPanel::Mock` / `RightPanel::History` 并列。
 
-`workbench` 侧只保留 `RightSidebarPanel` 的**装配与 Dock 协议**；面板内容的**归属尚未拍板**（详见 `insight-dev-plan.md` §3.1）：方案 A 入 `crates/insight/src/insight_view.rs`（对齐 `overview.md` §「Feature 可直接依赖 gpui-kit」与 `project` 先例），方案 B 留 `workbench/panels.rs`（对齐 `scratchpad` 新确立的口径）。**本文按方案 A 书写**，两种方案下布局与交互不变。
+`workbench` 侧只保留 `RightSidebarPanel` 的**装配与 Dock 协议**；面板内容的**归属尚未拍板**（详见 `insight-dev-plan.md` §3.1）：方案 A 入 `crates/insight/src/insight_view.rs`（对齐 `overview.md` §「Feature 可直接依赖 gpui-kit」与 `project` 先例），方案 B 留 `workbench/panels/`（对齐 `scratchpad` 新确立的口径）。**本文按方案 A 书写**，两种方案下布局与交互不变。
 
 ## 2. 面板布局（17.5rem = 280px 右 Dock）
 
@@ -361,7 +361,7 @@ v1 把洞察拆成「右栏轻量统计 + 底部四 Tab 容器」两处（`Colum
 
 | 设计决策 | 代码落点 |
 | --- | --- |
-| 右 Dock 装配（仅协议：`BasePanel` + `Panel`） | `crates/workbench/src/panels.rs`（`RightSidebarPanel`） |
+| 右 Dock 装配（仅协议：`BasePanel` + `Panel`） | `crates/workbench/src/panels/`（`RightSidebarPanel`） |
 | 面板内容（五 Tab + 目标分派） | `crates/insight/src/insight_view.rs` |
 | 规则管理对话框 | `crates/insight/src/rule_view.rs` |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs` |

@@ -160,7 +160,7 @@
 | `search.match.background` | `#4A3F00` | `#FFF3C4` | 搜索命中文本底（数据源导航连接行 / 对象行） |
 
 - **已落地**（2026-09-12）：资产 `assets/themes/product-tokens.json`（明暗各 7 角色）；加载设施 `crates/settings/src/product_tokens.rs`（`ProductTokens: Global`、`get(cx)`、`apply_from_str` / `apply_from_path`，缺角色回退语义最接近的标准字段）；app 启动 + `ThemeRegistry::watch_dir` 热更新（`crates/app/src/main.rs::attach_product_tokens`）
-- 消费：`settings::product_tokens::get(cx).<role>(cx.theme())`（如 `activity_bar_background`）——**代码零 hex**；消费方：`view.rs`（活动栏背景 / 激活条 / 标题栏挖空槽 / Quick Open 分组头）、`panels.rs::nav_name_highlight`（命中底色）
+- 消费：`settings::product_tokens::get(cx).<role>(cx.theme())`（如 `activity_bar_background`）——**代码零 hex**；消费方：`view.rs`（活动栏背景 / 激活条 / 标题栏挖空槽 / Quick Open 分组头）、`panels/nav.rs::nav_name_highlight`（命中底色）
 - 状态栏背景：`theme.colors.primary` 派生（已有 token，无需新增）
 
 ### 5.5 软件图标

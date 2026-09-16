@@ -57,7 +57,7 @@
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
 | A3 | 项目视图整体迁入 `crates/project/src/ui.rs`：`ProjectUiHost` 承载全部宿主依赖（状态句柄 / `ProjectUiNotifier` / `ProjectEditorBridge` / 排序偏好回调 / 打开后刷新）；`OpenProject` 取代 workbench 的 `ProjectSession`；示例项目落点改为 crate 内推导（`engine::migration::get_system_dir`）；清掉只写不读的 `PickerState::sort_initialized` | `crates/project/src/{ui.rs,lib.rs}`、`Cargo.toml`（+ `gpui-kit`） |
-| A3 | workbench 侧新增宿主桥（`ViewNotifier` / `EditorBridge` / `build_host`），`view.rs` / 标题栏 Popover 均通过 host 调用项目视图；`Shared.project` 类型改 `project::ui::OpenProject`；`WorkbenchView::new(cx)` 在构造期装配 host（无 render 内 I/O） | `crates/workbench/src/components/project_host.rs`、`panels.rs`、`view.rs`、`services/project_session.rs`、`app/src/main.rs` |
+| A3 | workbench 侧新增宿主桥（`ViewNotifier` / `EditorBridge` / `build_host`），`view.rs` / 标题栏 Popover 均通过 host 调用项目视图；`Shared.project` 类型改 `project::ui::OpenProject`；`WorkbenchView::new(cx)` 在构造期装配 host（无 render 内 I/O） | `crates/workbench/src/components/project_host.rs`、`panels/`、`view.rs`、`services/project_session.rs`、`app/src/main.rs` |
 | 窗口测试 | 11 项（见 `project-view-architecture.md` §5）：选择器 / 设置 / 菜单渲染、新建对话框空名校验、浏览目录回填与取消、删除确认名称匹配、未保存拦截（关闭 / 打开）、排序持久化回调、锁占用逃生口、卡片三分支构造、删除确认对话框 | `crates/project/src/ui/tests.rs` |
 | 目录选择 | `pick_directory` / `directory_row` / `target_preview`：系统目录选择器 + 目标路径预览 + 远程范围说明 | `crates/project/src/ui.rs` |
 | 验证 | `cargo check --workspace --all-targets` 零告警；`cargo test --workspace -j 2` 34 个目标全绿（**451 通过 / 0 失败**）；`cargo build -p rds-app -j 2` 通过 | — |
@@ -69,7 +69,7 @@
 | B5 | 6 个自绘模态层改为语义组件：新建 / 打开目录 / 删除确认（输入项目名）/ 重新定位用 `Dialog`，锁占用 / 未保存拦截用 `AlertDialog`；删除 `render_overlays` / `DialogKind` / `dialog_shell` 与 `view.rs` 调用点。校验错误改存 `ProjectUiState::dialog_error`（builder 每帧重读），提交失败保持打开，成功由回调 `window.close_dialog` 显式关闭（Enter 与按钮同路径；不用 `Dialog::on_ok` 返回值，以免被拦截动作另开对话框时 pop 错栈顶） | `project_ui.rs`、`view.rs` |
 | B5 | 未保存拦截拆为「准备」（另存草稿 + 清空编辑区）与「推进」（执行被拦截的打开 / 关闭）两段 | 同上 |
 | B8 | 项目卡片改「一个可见主操作（打开）+ 更多菜单」：固定/取消固定、恢复、在资源管理器中显示、移出列表、重新定位…、删除数据… 收进 `DropdownMenu`，破坏性命令用分隔线隔离；固定状态改用 `Star` 图标常显 | 同上 |
-| B1 | 工作台视图层尺寸改相对 scale：`px(...)` → gpui rem helper（`w_12()` / `h_px()` / `rems(n)` 等）；只能收 `Pixels` 的 API（Dock 起步宽度、`Dialog::w`、`Form::label_width`）改 `cx.theme().font_size * N`，随界面缩放 | `view.rs`、`panels.rs`、`connection_dialog.rs`、`project_ui.rs`、`settings_view.rs` |
+| B1 | 工作台视图层尺寸改相对 scale：`px(...)` → gpui rem helper（`w_12()` / `h_px()` / `rems(n)` 等）；只能收 `Pixels` 的 API（Dock 起步宽度、`Dialog::w`、`Form::label_width`）改 `cx.theme().font_size * N`，随界面缩放 | `view.rs`、`panels/`、`connection_dialog.rs`、`project_ui.rs`、`settings_view.rs` |
 | 验证 | `cargo check --workspace --all-targets` 零告警；`cargo test --workspace -j 2` 34 个目标全绿（442 通过 / 0 失败）；`cargo build -p rds-app -j 2` 通过 | — |
 
 ### 2026-09-11 — Phase A/B 主体 + Phase C1/C2 实现
@@ -85,15 +85,15 @@
 | A3/B3 | 新建项目对话框、打开目录对话框、删除确认（输入项目名）、只读/仍要逃生口、未保存拦截；示例项目入口 | 同上 |
 | B2/B3/B4 | 项目设置（概览 / 重命名 / 存储 `.RSmeta` 大小 + 打开 `.RSmeta` / 依赖自检 / 刷新） | 同上 |
 | A7 | Action：`SwitchProject`（Ctrl+Shift+P）/ `CloseProject`（Ctrl+Shift+W） | `commands.rs`、`view.rs`、`app/src/main.rs` |
-| A6 | 编辑区脏状态（与最近一次执行不同）→ 切换/关闭拦截 | `panels.rs`（`EditorPanel`） |
+| A6 | 编辑区脏状态（与最近一次执行不同）→ 切换/关闭拦截 | `panels/`（`EditorPanel`） |
 
 **二次迭代补全（2026-09-11）**
 
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
 | 排序持久化 | 新增 `settings.projects.sort_mode`（`Projects` 节 + `SettingsService::project_sort_mode/set_project_sort_mode`）；选择器首帧从设置读取，切换即持久化 | `crates/settings/src/{model,lib}.rs`、`project_ui.rs` |
-| 未保存「保存」分支 | 拦截对话框新增「保存并继续」——把编辑区 SQL 另存为项目草稿 `未命名.sql`；`editor_clear_requested` 信号驱动 `EditorPanel` 清空 | `project_ui.rs`、`panels.rs`（`Shared` / `EditorPanel`） |
-| 只读强制禁写 | 只读打开时禁用：SQL 执行、草稿新建/重命名/删除、重命名、归档、创建版本 | `panels.rs`、`project_ui.rs` |
+| 未保存「保存」分支 | 拦截对话框新增「保存并继续」——把编辑区 SQL 另存为项目草稿 `未命名.sql`；`editor_clear_requested` 信号驱动 `EditorPanel` 清空 | `project_ui.rs`、`panels/`（`Shared` / `EditorPanel`） |
+| 只读强制禁写 | 只读打开时禁用：SQL 执行、草稿新建/重命名/删除、重命名、归档、创建版本 | `panels/`、`project_ui.rs` |
 | 重新定位（U5） | 失效卡片「重新定位」：校验新目录 `.RSmeta` → 改写名册 path 与 `project.json` | `project_service::relocate`、`project_ui` |
 | 版本链列表（B8） | 新迁移 `project_meta/018_project_versions.sql` + 项目设置「版本」分节（列表 + 创建快照） | `crates/engine/migrations/project_meta/018_*.sql`、`project_service::{list_versions,create_version}`、`project_ui` |
 | 集成测试目录 | 新增 `crates/project/tests/project_store.rs`（3 项，经公开 API） | `crates/project/tests/` |
@@ -122,7 +122,7 @@
 | 公开字段 struct 未 `#[non_exhaustive]` | ✅ `ProjectSummary` / `CreateProjectInput`（+ `new`/`with_*` builder）/ `OpenedProject`（+ `into_parts`）/ `ProjectVersionRow` / `PickerState` / `ProjectUiState` / `ProjectInputs` |
 | 视图 / 对话框仍在 workbench | ✅ 已迁（批次 A3）：项目视图整体落入 `crates/project/src/ui.rs`，宿主依赖由 `ProjectUiHost`（状态句柄 / `ProjectUiNotifier` / `ProjectEditorBridge` / 排序偏好回调 / 打开后刷新）注入；`settings` 直接依赖已断开 |
 | 自绘 menu / dialog（无 focus trap / Escape / 方向键） | ✅ 项目菜单改 `Popover` + `Button` 触发；新建 / 打开目录 / 删除确认 / 重定位改 `Dialog`，锁占用 / 未保存拦截改 `AlertDialog`（焦点陷阱、Escape、遮罩关闭、footer 布局由组件负责） |
-| 直接 `px(...)` | ✅ 工作台视图层（`view.rs` / `panels.rs` / `project_ui.rs` / `connection_dialog.rs` / `settings_view.rs`）改 rem helper 或 `cx.theme().font_size * N`；仅 1px hairline 保留 `h_px()`（指南允许的 physical boundary 例外） |
+| 直接 `px(...)` | ✅ 工作台视图层（`view.rs` / `panels/` / `project_ui.rs` / `connection_dialog.rs` / `settings_view.rs`）改 rem helper 或 `cx.theme().font_size * N`；仅 1px hairline 保留 `h_px()`（指南允许的 physical boundary 例外） |
 | （工程）edition 2024 | ✅ 全仓 `edition = "2024"`（`.cargo/config.toml` 加 `RUST_MIN_STACK`；`test-all` 别名固定 `-j 2`） |
 | 卡片 hover-only 操作（design-guides） | ✅ 一个可见主操作（打开）+ 次要命令进 `DropdownMenu`（破坏性命令分隔）；固定状态用图标常显 |
 
@@ -162,7 +162,7 @@
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | P0.1 | 依赖接线：`crates/workbench/Cargo.toml` 增 `project.workspace = true`（根别名已存在） | `Cargo.toml` | `workbench → project → engine/shared` 无环 |
-| P0.2 | `Shared` 增：`project_service`、`project_epoch: Rc<Cell<u64>>`（切换后自增，触发面板重载）、`editor_dirty: Rc<Cell<bool>>`（未保存拦截信号） | `crates/workbench/src/panels.rs` | 编译通过；切换后各面板观察到 epoch 变化 |
+| P0.2 | `Shared` 增：`project_service`、`project_epoch: Rc<Cell<u64>>`（切换后自增，触发面板重载）、`editor_dirty: Rc<Cell<bool>>`（未保存拦截信号） | `crates/workbench/src/panels/` | 编译通过；切换后各面板观察到 epoch 变化 |
 | P0.3 | `project_session::resolve()` 收敛为调用 `ProjectService`（单一全局库入口，去重复 `Runtime::new`） | `workbench/src/services/project_session.rs` | 行为等价，零告警 |
 
 ### Phase A — 生命周期核心闭环（Create / Read / 打开 / 切换 / 关闭 + 未保存拦截）
@@ -173,7 +173,7 @@
 | A2 | 选择器视图：视图 Tab（最近/全部/已移除占位）、卡片（状态徽标/路径/元信息/缺失驱动/失效态）、↑↓ 选择、行内操作、空态；**覆盖中央区** | `crates/project/src/project_picker_view.rs`（新，`Entity`） | 无项目态渲染选择器；空态/失效态正确 |
 | A3 | 新建项目对话框（名称/位置/描述/默认连接/初始化选项）+ 三类冲突分支 + 进度态 | `crates/project/src/create_project_dialog.rs`（新） | 校验与文案符合原型 §6 |
 | A4 | 标题栏项目槽 + 项目菜单（切换/设置/重命名/显示位置/归档/关闭），缺失驱动警告行 | `crates/workbench/src/view.rs` | 各菜单项触发对应动作 |
-| A5 | 切换/关闭联动：写会话、`project_epoch += 1`、刷新标题栏/草稿箱/连接/导航；关闭回选择器 | `panels.rs` / `view.rs` / `workspace_loader.rs` | 切换后无跨项目串数据 |
+| A5 | 切换/关闭联动：写会话、`project_epoch += 1`、刷新标题栏/草稿箱/连接/导航；关闭回选择器 | `panels/` / `view.rs` / `workspace_loader.rs` | 切换后无跨项目串数据 |
 | A6 | 未保存拦截：切换/关闭前读 `editor_dirty` → 「保存 / 不保存 / 取消」；取消中止 | `workbench/src/view.rs` + `crates/project/src/`（确认框） | 脏缓冲区下取消切换生效 |
 | A7 | 命令与快捷键：`NewProject` / `OpenProjectPicker` / `SwitchProject` / `CloseProject` / `RenameProject` | `crates/project/src/commands.rs` + `workbench/src/commands.rs` | Quick Open 可检索 |
 | A8 | 收尾：`cargo check --workspace` 零告警；无新增 `unwrap/expect`；架构红线复核 | 全仓 | 全绿 |
@@ -255,7 +255,7 @@
 | 排序方式偏好 | `crates/settings`（`projects.sort_mode`） |
 | 命令 / Action | `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`；project crate 不再有 commands 文件） |
 | 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单内容由 `project::ui::render_menu_content` 提供） |
-| 会话共享与刷新信号 | `crates/workbench/src/panels.rs`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
+| 会话共享与刷新信号 | `crates/workbench/src/panels/`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
 | 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs` / `models.rs` |
 | 示例项目 | 运行时生成到 `{data_dir}/RdataStation/samples/示例项目`（含 `welcome.sql`） |
 | 依赖接线 | 根 `Cargo.toml`、`crates/workbench/Cargo.toml` |

@@ -272,7 +272,7 @@
 | --- | --- |
 | `crates/workbench/src/services/workspace_loader.rs`（新增） | 工作台真实数据加载器：`default_global_dir()`（`%APPDATA%\rdata-station\global`）+ `load_persisted_connections()` / `load_persisted_connections_from(dir)`（目录可注入，便于测试与后续数据目录切换）；tokio runtime + `GlobalDatabaseManager::new` + `get_global_connections` → 映射 `ConnectionItem`；失败降级为空列表 + 错误提示，不阻塞启动 |
 | `crates/workbench/src/view.rs` | `WorkbenchView::new()` 启动时经 loader 加载真实连接 → `Shared::with_connections`；`ConnectionItem::sample()` 占位数据退役 |
-| `crates/workbench/src/panels.rs` | `Shared::with_connections(connections, notice)`（连接为空时 `selected=None`）；连接列表空态 UI（暂无连接 / 加载失败提示） |
+| `crates/workbench/src/panels/` | `Shared::with_connections(connections, notice)`（连接为空时 `selected=None`）；连接列表空态 UI（暂无连接 / 加载失败提示） |
 | `crates/workbench/tests/real_connections.rs`（新增，3 测试） | 真实接入链路集成测试：全局库 roundtrip（迁移 + 保存 + 读回 + 映射）、空库返回空列表、**重开库后连接持久化仍在**（模拟下次启动） |
 | `crates/workbench/examples/seed_demo.rs`（新增） | 演示种子：`cargo run -p rds-workbench --example seed_demo` 向默认全局库写入一条演示连接 |
 | `tools/patch_r21_view.py` / `tools/fix_r21_literal.py` / `tools/write_round21_doc.py` | 本轮修复与文档脚本归档 |
@@ -298,7 +298,7 @@
 | --- | --- |
 | `crates/workbench/src/view.rs` | `ConnectionItem` 扩展 8 个真实元数据字段：`host / port / database / schema / description / use_duckdb_fed / created_at / updated_at` |
 | `crates/workbench/src/services/workspace_loader.rs` | 映射函数填充全部新字段（GlobalConnectionInfo → ConnectionItem 全字段对齐） |
-| `crates/workbench/src/panels.rs` | `EditorPanel::render` 重写：连接详情卡片（状态徽标 + 10 行键值对 + 新建连接按钮），布局从居中改为顶部对齐流式 |
+| `crates/workbench/src/panels/` | `EditorPanel::render` 重写：连接详情卡片（状态徽标 + 10 行键值对 + 新建连接按钮），布局从居中改为顶部对齐流式 |
 | `crates/workbench/tests/real_connections.rs` | 集成测试断言扩展：host/port/database/use_duckdb_fed/description 映射验证 |
 | `tools/patch_r22_*.py`（4 个） | 本轮字段扩展 / 断言 / EditorPanel / 测试映射脚本归档 |
 
@@ -321,7 +321,7 @@
 | 文件 | 内容 |
 | --- | --- |
 | `crates/workbench/src/services/workspace_loader.rs` | 新增 `save_connection` / `save_connection_at(dir, ...)`（目录注入，便于测试）：conn_id 时间戳生成 → `GlobalDatabaseManager::save_global_connection` → 返回 Result；用户名/密码为空时存 None |
-| `crates/workbench/src/panels.rs` | `EditorPanel` 新增表单状态（show_form + 5 个 `Entity<InputState>` 受控输入懒创建）；「新建连接」按钮改 toggle 表单；`Form::vertical` + `Field` + `Input` 渲染 5 字段；「保存连接」按钮：读值 → 校验非空 → `save_connection` → 成功刷新列表 + notice + 清空表单，失败 notice |
+| `crates/workbench/src/panels/` | `EditorPanel` 新增表单状态（show_form + 5 个 `Entity<InputState>` 受控输入懒创建）；「新建连接」按钮改 toggle 表单；`Form::vertical` + `Field` + `Input` 渲染 5 字段；「保存连接」按钮：读值 → 校验非空 → `save_connection` → 成功刷新列表 + notice + 清空表单，失败 notice |
 | `crates/workbench/tests/real_connections.rs` | 新增 `save_connection_at_then_load_roundtrip`：写路径保存 → 读回断言全字段（name/driver/host/port/database/联邦） |
 
 **gpui 0.6 表单组件实证（本轮新 API 修正）**：
@@ -344,7 +344,7 @@
 | --- | --- |
 | `crates/engine/src/persistence/global_db.rs` | 新增 `delete_global_connection(conn_id)`：`sqlite_pool.acquire` → `conn.inner()?.execute("DELETE FROM global_connections WHERE id = ?1", [conn_id])` → `CoreError::storage` 包装 + `tracing::info`；对齐 `delete_environment` 模式 |
 | `crates/workbench/src/services/workspace_loader.rs` | 新增 `delete_connection_at(dir, conn_id)`（目录注入，初始化失败/删除失败均转中文错误）与 `delete_connection(conn_id)`（默认全局目录） |
-| `crates/workbench/src/panels.rs` | 详情卡片底部新增「删除连接」`danger` 按钮：取选中连接 id → `delete_connection` → 成功刷新列表 + 清空选中（`shared.selected.set(None)`）+ notice；失败 notice |
+| `crates/workbench/src/panels/` | 详情卡片底部新增「删除连接」`danger` 按钮：取选中连接 id → `delete_connection` → 成功刷新列表 + 清空选中（`shared.selected.set(None)`）+ notice；失败 notice |
 | `crates/workbench/tests/real_connections.rs` | 新增 `delete_connection_at_removes_from_list`：save → load 1 条 → delete → load 空 |
 
 **本轮踩坑修复（已记录，后续直接复用）**：
@@ -368,7 +368,7 @@
 | --- | --- |
 | `crates/workbench/src/services/db_navigator.rs` | 新增 `load_navigator_tree(duckdb_path) -> Result<Vec<NavTable>, String>`：DuckDbDatabase::new → list_tables("main") → 每表 list_columns → NavTable{name, columns[NavColumn{name, data_type, is_primary_key, is_nullable}]} |
 | `crates/workbench/src/services/mod.rs` | 注册 `db_navigator` 模块 |
-| `crates/workbench/src/panels.rs` | `Shared` 加导航缓存（`nav_for` 记录已加载连接 id + `nav_tables` 树）；详情卡片下「数据库导航（DuckDB 分析库）」区：选中联邦连接按需加载（nav_for 变更时重新加载，避免每帧重查）；渲染表名 + 列数 → 每列（列名/类型/PK 标记）；空库显示"运行 seed_demo 或导入数据" |
+| `crates/workbench/src/panels/` | `Shared` 加导航缓存（`nav_for` 记录已加载连接 id + `nav_tables` 树）；详情卡片下「数据库导航（DuckDB 分析库）」区：选中联邦连接按需加载（nav_for 变更时重新加载，避免每帧重查）；渲染表名 + 列数 → 每列（列名/类型/PK 标记）；空库显示"运行 seed_demo 或导入数据" |
 | `crates/workbench/examples/seed_demo.rs` | 扩展：global.duckdb 幂等建 3 张演示表（orders/order_items/customers）+ 视图 v_order_summary（`CREATE TABLE IF NOT EXISTS`），重跑不报错 |
 | `crates/workbench/tests/db_navigator.rs` | 新增 2 集成测试：建表后读回树（表名排序断言 + 列断言）、空库返回空 |
 
@@ -395,7 +395,7 @@
 | --- | --- |
 | `crates/workbench/src/services/query_runner.rs` | 新增 `execute_sql(duckdb_path, sql) -> Result<QueryOutput, String>`：SQL 非空校验 → duckdb::Connection::open → prepare → query → 收集行（`row.get::<usize, Value>` 循环至 Err 断）→ **query 后**取列名 → 值转字符串（String 去引号、NULL → "NULL"） |
 | `crates/workbench/src/services/mod.rs` | 注册 `query_runner` 模块 |
-| `crates/workbench/src/panels.rs` | EditorPanel 加 `sql_input`（受控 Input）+ `query_result`（Rc<RefCell<Option<QueryOutput>>>）；「SQL 查询（DuckDB 分析库）」区：Input + 「执行」按钮 → execute_sql(global.duckdb) → 结果表格（列头 + 行，定宽截断）；DDL/无返回显示"无结果" |
+| `crates/workbench/src/panels/` | EditorPanel 加 `sql_input`（受控 Input）+ `query_result`（Rc<RefCell<Option<QueryOutput>>>）；「SQL 查询（DuckDB 分析库）」区：Input + 「执行」按钮 → execute_sql(global.duckdb) → 结果表格（列头 + 行，定宽截断）；DDL/无返回显示"无结果" |
 | `crates/workbench/tests/query_runner.rs` | 新增 3 集成测试：SELECT 读回列/行断言、空 SQL 报错、非法 SQL 报错 |
 
 **本轮踩坑修复（已记录，后续直接复用）**：
@@ -416,7 +416,7 @@
 | --- | --- |
 | `crates/workbench/src/services/query_export.rs` | 新增 `csv_field`（逗号/引号/换行加引号包裹、内部引号双写）+ `export_csv(output, path)`（列头 + 数据行写文件）+ `default_export_dir()`（`global/results/`）+ `export_to_default(output)`（秒时间戳命名 `rds_query_<secs>.csv`，返回落盘路径）——**手写转义，无第三方 csv 依赖** |
 | `crates/workbench/src/services/mod.rs` | 注册 `query_export` 模块 |
-| `crates/workbench/src/panels.rs` | SQL 结果表格后加「导出 CSV」ghost 按钮（行：`共 N 行` + 按钮）→ `export_to_default(&out)` → notice 显示导出路径；导出失败也提示 |
+| `crates/workbench/src/panels/` | SQL 结果表格后加「导出 CSV」ghost 按钮（行：`共 N 行` + 按钮）→ `export_to_default(&out)` → notice 显示导出路径；导出失败也提示 |
 | `crates/workbench/tests/query_export.rs` | 新增 3 集成测试：逗号/引号/换行转义断言、导出默认目录落盘读回（列头 + 数据）、空结果仅列头 |
 
 **本轮踩坑修复（已记录，后续直接复用）**：
@@ -432,7 +432,7 @@
 - `Textarea`（`gpui_kit::component::input`）存在：`Textarea::new(&Entity<TextareaState>)` + `.h(px())` 定高 + 继承 Input 样式链（bordered/appearance/disabled/readonly）。
 - `TextareaState = InputBaseState<TextareaMode>`（gpui-base type alias），构造 `TextareaState::new(window, cx)`，读值 `value() -> SharedString`——与 `InputState` 同构，受控懒创建模式（R23 约定）直接复用。
 
-**改动（仅 `crates/workbench/src/panels.rs`）**：
+**改动（仅 `crates/workbench/src/panels/`）**：
 - import 增加 `Textarea, TextareaState`；
 - `sql_input: Option<Entity<InputState>>` → `sql_textarea: Option<Entity<TextareaState>>`（struct 字段 / new 初始化 / 懒创建 / SQL 区取状态四处同步）；
 - SQL 区布局：`h_flex(Input + 按钮)` → `v_flex(Textarea 高 96px + 右对齐执行按钮)`；
@@ -450,7 +450,7 @@
 | --- | --- |
 | `crates/workbench/src/services/query_history.rs` | 新增 `load_history_from(dir)` / `append_history_at(dir, sql)`（**目录可注入**，便于测试与未来多项目隔离）+ 默认目录变体 `load_history()` / `append_history()`：JSON 数组持久化到 `<全局目录>/query_history.json`，去重（相同 SQL 移到最前）→ 插入头部 → 截断 20 条；文件缺失/损坏 → 空历史 |
 | `crates/workbench/src/services/mod.rs` | 注册 `query_history` 模块 |
-| `crates/workbench/src/panels.rs` | `sql_history: Rc<RefCell<Vec<String>>>` 字段（new() 时 `load_history()` 初始化）；执行成功后在 `entity.update` 内 `append_history(&sql)` 刷新；SQL 区「历史」小节——条目（42 字符截断预览）可点击回填 `set_value` 到 Textarea |
+| `crates/workbench/src/panels/` | `sql_history: Rc<RefCell<Vec<String>>>` 字段（new() 时 `load_history()` 初始化）；执行成功后在 `entity.update` 内 `append_history(&sql)` 刷新；SQL 区「历史」小节——条目（42 字符截断预览）可点击回填 `set_value` 到 Textarea |
 | `crates/workbench/tests/query_history.rs` | 新增 3 集成测试（临时目录注入）：去重 + 持久化读回、上限 20 最新在前、缺失文件空历史 + 空白 SQL 忽略 |
 
 **本轮踩坑修复（已记录，后续直接复用）**：
@@ -472,7 +472,7 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `crates/workbench/src/panels.rs` | Shared 加 `sql_for: Rc<RefCell<Option<String>>>`（SQL 结果归属连接 id）；SQL 区渲染前校验 `sql_for == 当前连接 id` 才显示结果，否则隐藏（切走即失效）；执行成功记录归属、失败清空 |
+| `crates/workbench/src/panels/` | Shared 加 `sql_for: Rc<RefCell<Option<String>>>`（SQL 结果归属连接 id）；SQL 区渲染前校验 `sql_for == 当前连接 id` 才显示结果，否则隐藏（切走即失效）；执行成功记录归属、失败清空 |
 | `crates/workbench/src/view.rs` | `SidebarEvent::SelectConnection` 处理（唯一入口）加清理：清空 `nav_for` + `nav_tables` + `sql_for`——切换连接即时清场，导航树下一轮渲染重载 |
 
 **本轮踩坑修复（已记录，后续直接复用）**：
@@ -566,7 +566,7 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `crates/workbench/src/panels.rs`（12KB，新增） | `Shared`（面板间共享状态：active_tool / selected / connections / notice）、`SidebarPanel`（连接列表可选中 / 导航树 / 资源 / 设置）、`EditorPanel`（连接详情 + 新建连接 + 通知文案）、`SidebarEvent`（SelectConnection）；两个面板完整实现 base `Panel` + component `Panel`（panel_name / tab_name / title / Focusable / EventEmitter） |
+| `crates/workbench/src/panels/`（12KB，新增） | `Shared`（面板间共享状态：active_tool / selected / connections / notice）、`SidebarPanel`（连接列表可选中 / 导航树 / 资源 / 设置）、`EditorPanel`（连接详情 + 新建连接 + 通知文案）、`SidebarEvent`（SelectConnection）；两个面板完整实现 base `Panel` + component `Panel`（panel_name / tab_name / title / Focusable / EventEmitter） |
 | `crates/workbench/src/view.rs` | `WorkbenchView` 重构：持有 `Entity<DockArea>`，render 首次懒初始化（`init_workspace`：创建面板实体 → `cx.subscribe` 订阅选中事件 → `DockSkin::dock_area` → `set_center(h_split: sidebar 240px + editor)`）；标题栏加侧边栏收起/展开按钮（`area.toggle_dock(Left)`）；活动栏点击更新共享状态并通知面板 |
 | `crates/workbench/src/lib.rs` | `pub mod panels;` |
 | `tools/fix_round20.py` | 本轮修复脚本归档 |

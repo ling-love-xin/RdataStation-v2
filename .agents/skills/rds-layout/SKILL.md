@@ -1,6 +1,6 @@
 ---
 name: rds-layout
-description: RdataStation 工作台五段布局实现规格：标题栏/左右活动栏/左右 Dock 边栏/状态栏/Quick Open 的尺寸、组件与主题角色，以及边栏三模式 Dock API。修改 crates/workbench 的 view.rs / panels.rs 布局代码时使用。
+description: RdataStation 工作台五段布局实现规格：标题栏/左右活动栏/左右 Dock 边栏/状态栏/Quick Open 的尺寸、组件与主题角色，以及边栏三模式 Dock API。修改 crates/workbench 的 view.rs / panels/ 布局代码时使用。
 ---
 
 # 工作台五段布局实现规格
@@ -54,7 +54,7 @@ description: RdataStation 工作台五段布局实现规格：标题栏/左右�
 ## 布局代码位置
 
 - 标题栏/活动栏/Dock 装配/三模式：`crates/workbench/src/view.rs`（`render_title_bar` / `render_left_activity_bar` / `render_right_activity_bar` / `init_workspace` / `apply_left_mode` / `apply_right_mode`）
-- panel 枚举与占位视图：`crates/workbench/src/panels.rs`（`LeftPanel` / `RightPanel` / `SidebarPanel` / `RightSidebarPanel`）
+- panel 枚举：`crates/workbench/src/view.rs`（`LeftPanel` / `RightPanel` / `SidebarMode`）；面板实现：`crates/workbench/src/panels/`（`mod.rs` 装配 + `nav.rs` / `scratchpad_panel.rs` / `editor.rs` / `right.rs` / `shared.rs`）
 - 命令：`crates/workbench/src/commands.rs`
 
 ## 检查清单

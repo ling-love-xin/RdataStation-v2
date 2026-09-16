@@ -115,9 +115,9 @@
 | 节 | 行 | key | 形态 | 生效 | 消费方 |
 | --- | --- | --- | --- | --- | --- |
 | 外观 | 主题模式 | `appearance.theme_mode` | segmented 浅色 / 深色 | 即时 | `app/src/main.rs`（启动应用）、`SettingsService::set_theme_mode` |
-| 数据源导航 | 来源标识 | `navigator.source_short_code` | segmented 短码 / 文字 | 即时 | `panels.rs::render_connection_row` |
-| 数据源导航 | 显示标签 | `navigator.show_tags` | Switch | 即时 | `panels.rs::render_connection_row` |
-| 数据源导航 | 显示归属域 | `navigator.show_scope` | Switch | 即时 | `panels.rs::render_connection_row` |
+| 数据源导航 | 来源标识 | `navigator.source_short_code` | segmented 短码 / 文字 | 即时 | `panels/nav.rs::render_connection_row` |
+| 数据源导航 | 显示标签 | `navigator.show_tags` | Switch | 即时 | `panels/nav.rs::render_connection_row` |
+| 数据源导航 | 显示归属域 | `navigator.show_scope` | Switch | 即时 | `panels/nav.rs::render_connection_row` |
 | 数据源导航 | 缓存管理… | —（动作行） | `Button` | — | 宿主回调 → `components/cache_dialog.rs`；说明行写「打开缓存对话框，清理元数据缓存」 |
 | 连接默认值 | 建连超时 | `connection_defaults.connect_timeout_ms` | segmented 5/15/30/60s | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` |
 | 连接默认值 | LAN 直连 TLS | `connection_defaults.lan_disable_tls` | segmented 关 TLS / 保留 TLS | 下次操作 | `connection_service.rs::apply_lan_tls_default` |

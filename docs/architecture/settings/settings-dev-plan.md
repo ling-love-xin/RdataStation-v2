@@ -104,7 +104,7 @@
 | P3.3 | 尺寸契约扫描纳入设置页视图文件 | `workbench/tests/ui_contract.rs` | 契约测试通过；故意写裸 `px(...)` 能让它变红 |
 | P3.4 | 宿主桥收口（`SettingsHost`：on_close / on_open_cache / 预留 on_restart） | `settings/src/settings_page.rs`、`workbench/src/view.rs` | 页面不再直接持有 `Rc<dyn Fn>` 散字段 |
 | P3.5 | `ToggleThemeMode` 决断（接线或删除） | `settings/src/commands.rs`（+ app 绑键） | 二者之一，且文档同步（K8 关闭） |
-| P3.6 | `K1` 两处构造期直读改走服务 | `workbench/src/{view.rs, panels.rs}` | 全仓无 `settings::load_settings()` 调用（除 settings 自身） |
+| P3.6 | `K1` 两处构造期直读改走服务 | `workbench/src/{view.rs, panels/}` | 全仓无 `settings::load_settings()` 调用（除 settings 自身） |
 
 ### P4 接线延伸（待排，依赖上游模块）
 
@@ -137,7 +137,7 @@
 
 | # | 风险 | 影响 | 对策 |
 | --- | --- | --- | --- |
-| R1 | 工作区在途改动与页面文件重叠（`workbench/src/view.rs` / `panels.rs`） | 合并冲突、误覆盖 | P0 收尾先提交；页面改动尽量集中在 `settings` crate，宿主只留一行替换 |
+| R1 | 工作区在途改动与页面文件重叠（`workbench/src/view.rs` / `panels/`） | 合并冲突、误覆盖 | P0 收尾先提交；页面改动尽量集中在 `settings` crate，宿主只留一行替换 |
 | R2 | 页面按登记表渲染后，行文案与原型文档漂移 | 文档失真 | 原型 §5 与登记表同轮修改（写进 §7.1 补充纪律） |
 | R3 | `TabBar::segmented` 的交互相对于现有 `Button::toggled` 有差异（键盘 / 焦点） | 体感回退 | P1.4 先在单行验证，再铺开 |
 | R4 | 写盘改 `Result` 触及所有 `set_*` 签名 | 大面积改动 | 保留旧签名（内部记状态）+ 新增 `try_set_*`，页面用后者（P2.3） |

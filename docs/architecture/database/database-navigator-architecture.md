@@ -92,7 +92,7 @@ flowchart TB
 ```
 
 - **M4 领域与服务在 `crates/database`（非 UI）**：`model.rs`（`NavNode`/`NavSource`/`NavPath`/`NavState`）、`navigator_service.rs`（缓存编排 / 懒加载 / 预热 / 分页）、`cache.rs`（L2 cache-aside）、`property_panel.rs`（属性注册表）。
-- **GPUI 视图在 `crates/workbench`**：`panels.rs::SidebarPanel`（导航面板）+ `EditorPanel::render_property_panel`（属性面板）。
+- **GPUI 视图在 `crates/workbench`**：`panels/mod.rs::SidebarPanel`（导航面板）+ `EditorPanel::render_property_panel`（属性面板）。
 - **Feature 之间不得互相依赖 view**；`database` 不依赖 `workbench`。
 
 ### 3.2 render 期零 I/O（核心纪律）
@@ -103,7 +103,7 @@ GPUI 的 `render` 是纯读路径。本模块把一切 I/O 移出：
 | --- | --- | --- |
 | 树节点（schema / 表 / 列） | **后台工作线程**（串行队列 + 结果队列），主线程轮询回填 | `workbench/services/nav_jobs.rs` |
 | 属性面板数据 | 同上（`enqueue_properties` / `drain_props_results`） | 同上 |
-| 分组 / 标签 / 展开态（本地 SQLite 小读） | `cx.defer_in`（本帧之后执行，完成后重绘） | `panels.rs::reload_nav_org` / `ensure_nav_state_loaded` |
+| 分组 / 标签 / 展开态（本地 SQLite 小读） | `cx.defer_in`（本帧之后执行，完成后重绘） | `panels/nav.rs::reload_nav_org` / `ensure_nav_state_loaded` |
 | **驱动目录**（徽标形状 / 驱动显示名） | 与分组数据一起 `defer_in` 一次性加载 → `Shared::driver_catalog` | `nav_runtime::driver_catalog()` |
 
 > 跨线程不传 `Rc` / GPUI `Entity`：后台只回结果，主线程应用。
@@ -182,7 +182,7 @@ connection_tags                -- 连接↔标签 多值（connection_id, tag）
 
 - **无需新增资产**：`AllAssets` 已注册全量 Lucide，按路径引用。
 - 目录外类型 → 回退 `icons/database.svg` + 类型名首 2 字母（空则 `DB`）。
-- 映射函数 `panels.rs::nav_type_badge`（纯函数，带单测）。
+- 映射函数 `panels/nav.rs::nav_type_badge`（纯函数，带单测）。
 
 ### 4.5 导航状态（视图状态）
 
@@ -316,7 +316,7 @@ flowchart TD
 | 层 | 手段 | 例 |
 | --- | --- | --- |
 | 纯函数 | 单元测试 | `panels::tests::type_badge_maps_known_types_and_falls_back`、`settings::model` 默认值 |
-| 来源契约 | 扫描 UI 源码 | `workbench/tests/ui_contract.rs`：`view.rs` / `panels.rs` 不得出现裸 `px(...)` / 裸色值；尺寸常量与 `ui-design-spec` 一致 |
+| 来源契约 | 扫描 UI 源码 | `workbench/tests/ui_contract.rs`：`view.rs` / `panels/` 不得出现裸 `px(...)` / 裸色值；尺寸常量与 `ui-design-spec` 一致 |
 | 对话框宿主层 | 窗口测试 | `workbench/tests/dialog_host_layer.rs`（新数据源入口 → 对话框层渲染） |
 | 加载器 / 作用域 | 集成测试 | `workbench/tests/connection_scope_and_state.rs`（全局 + P_/GP_ 合并、运行态） |
 | 数据库域 | 单元测试 | `crates/database`（模型 / 缓存笔记） |
@@ -329,12 +329,12 @@ flowchart TD
 
 | 能力 | 落点 |
 | --- | --- |
-| 面板容器 / 头部 / 筛选 chips | `workbench/src/panels.rs::{render_database_nav, nav_source_chip}` |
-| 树（分组 + 连接 + 对象） | `panels.rs::{render_nav_tree, render_group_header, render_connection_row, render_nav_node}` |
-| 徽标（状态色 + 类型形状） | `panels.rs::{nav_type_badge, NavBadgeStatus, render_connection_row}` |
+| 面板容器 / 头部 / 筛选 chips | `workbench/src/panels/nav.rs::{render_database_nav, nav_source_chip}` |
+| 树（分组 + 连接 + 对象） | `panels/nav.rs::{render_nav_tree, render_group_header, render_connection_row, render_nav_node}` |
+| 徽标（状态色 + 类型形状） | `panels/nav.rs::{nav_type_badge, NavBadgeStatus, render_connection_row}` |
 | 驱动目录缓存 | `workbench/src/services/nav_runtime.rs::driver_catalog` → `DatabaseNavView::driver_catalog` |
-| 行内编辑器（归组 / 标签分离） | `panels.rs::{render_group_editor, render_tag_editor}`（入口：右键「移动到分组…」、行尾 `+`） |
-| 右键菜单 | `panels.rs` 的 `ContextMenuExt::context_menu` |
+| 行内编辑器（归组 / 标签分离） | `panels/nav.rs::{render_group_editor, render_tag_editor}`（入口：右键「移动到分组…」、行尾 `+`） |
+| 右键菜单 | `panels/` 的 `ContextMenuExt::context_menu` |
 | 键盘导航 | `workbench/src/commands.rs`（`FocusNavSearch` / `NavUp` / `NavDown` / `NavExpand` / `NavCollapse` / `NavOpenProperties`）+ `app/main.rs` 绑定 |
 | 后台任务（树 / 属性 / 预热 / 预取） | `workbench/src/services/nav_jobs.rs` |
 | 导航领域模型 | `database/src/model.rs` |
@@ -356,7 +356,7 @@ flowchart TD
 
 | # | 状态 | 项 | 说明 |
 | --- | --- | --- | --- |
-| 1 | ✅ | **V6 多组引用样式 + 显式主组** | 已实现（2026-09-13）：主组全亮 + 其它组 `∈ 主组名` 引用行（`panels.rs::render_reference_row`），点击跳转主组；主组由 `connection_group_members.is_primary` 显式存储（右键 `设为主组 ▸`，仅归组的连接可见），未指定回退分组排序最前（`membership[conn][0]`）。 |
+| 1 | ✅ | **V6 多组引用样式 + 显式主组** | 已实现（2026-09-13）：主组全亮 + 其它组 `∈ 主组名` 引用行（`panels/nav.rs::render_reference_row`），点击跳转主组；主组由 `connection_group_members.is_primary` 显式存储（右键 `设为主组 ▸`，仅归组的连接可见），未指定回退分组排序最前（`membership[conn][0]`）。 |
 | 2 | 🟡 | **V7 `筛选 ▾` facet 弹层** | 已实现（2026-09-13）：归属域 chips 常驻 + 「筛选 ▾ N」弹层（类型 / 驱动 / 标签单选子菜单 + 清除）；搜索 `scope:/source:/type:/driver:/tag:` 作额外约束。**遗留**：搜索 token 与 chips **单向叠加**（不回写 chips），未做双向同步。 |
 | 3 | ✅ | **徽标 hover 卡** | 已实现（2026-09-13）：0.6.1 无通用 `.tooltip()` 扩展，改用 `gpui_kit::component::hover_card::HoverCard`（300ms 延迟）显类型 / 状态 / 驱动（`nav_badge_hover_card`）。 |
 | 4 | ✅ | **属性面板的驱动显示名** | 已实现（2026-09-13）：「驱动」行显示 `drivers.name · driver_id`（如 `PostgreSQL (Official) · postgres_native`），并新增「数据库类型」行（`load_properties(..., db_type)`）。 |

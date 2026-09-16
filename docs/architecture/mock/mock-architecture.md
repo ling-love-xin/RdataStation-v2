@@ -48,7 +48,7 @@ MockConfig ──┬─ table_name   用户命名的表（用于临时表名与�
 ## 3. 分层与 crate 归属
 
 ```
-表现层   workbench（panels.rs 的右 Dock 面板 + view.rs 的中央详情 tab + services/mock_generator.rs 装配）
+表现层   workbench（panels/ 的右 Dock 面板 + view.rs 的中央详情 tab + services/mock_generator.rs 装配）
             │  MockPanel 实体为唯一 UI 状态（两处视图同源）；生成 / 导出在事件路径
 服务层   crates/mock（MockEngine / ColumnMapper / templates / MockGenerationStore / mock_view）
             │  无 UI 全局状态（仅一个进程级取消标志）
@@ -345,4 +345,4 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D12/D14/D19/D24 对话框与工作副本 | `mock_view.rs`（`open_import_dialog` / `open_column_dialog` / `open_generator_search` / `ColumnDraft` / `generator_menu` / `search_generators` / `GeneratorSearchDelegate`） |
 | D28 集合类参数编辑与前置校验 | `mock_view.rs`（`parse_complex_param` / `complex_param_text` / `split_choice` / `ParamWidget` / `commit_complex_param`）+ `crates/mock/src/engine.rs`（`constraint_set_problem`，生成前校验） |
 | D13 生成器目录 | `tools/gen_mock_generator_catalog.py` → `crates/mock/src/generator_catalog.rs` |
-| 宿主桥 | `crates/workbench/src/components/mock_host.rs`（`MockHost` 实现）+ `crates/workbench/src/panels.rs`（面板构造期创建与句柄登记）+ `crates/workbench/src/view.rs`（详情 tab 宿主命令） |
+| 宿主桥 | `crates/workbench/src/components/mock_host.rs`（`MockHost` 实现）+ `crates/workbench/src/panels/`（面板构造期创建与句柄登记）+ `crates/workbench/src/view.rs`（详情 tab 宿主命令） |

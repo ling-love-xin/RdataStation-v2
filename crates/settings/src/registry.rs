@@ -248,7 +248,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         default_json: "true",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Page,
-        consumer: "workbench/src/panels.rs::render_connection_row",
+        consumer: "workbench/src/panels/nav.rs::render_connection_row",
         composite: false,
     },
     SettingSpec {
@@ -262,7 +262,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         default_json: "false",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Both,
-        consumer: "workbench/src/panels.rs::render_connection_row",
+        consumer: "workbench/src/panels/nav.rs::render_connection_row",
         composite: false,
     },
     SettingSpec {
@@ -276,7 +276,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         default_json: "true",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Both,
-        consumer: "workbench/src/panels.rs::render_connection_row",
+        consumer: "workbench/src/panels/nav.rs::render_connection_row",
         composite: false,
     },
     SettingSpec {
@@ -290,7 +290,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         default_json: "24.5",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Module,
-        consumer: "workbench/src/panels.rs::EditorPanel::render_property_panel",
+        consumer: "workbench/src/panels/editor.rs::EditorPanel::render_property_panel",
         composite: false,
     },
     SettingSpec {
@@ -304,7 +304,7 @@ pub const REGISTRY: &[SettingSpec] = &[
         default_json: "{\"source\":null,\"db_type\":null,\"driver\":null,\"tag\":null}",
         effect: SettingEffect::Immediate,
         entry: SettingEntry::Module,
-        consumer: "workbench/src/panels.rs::{SidebarPanel::new, write_nav_filters}",
+        consumer: "workbench/src/panels/mod.rs::SidebarPanel::new + nav.rs::write_nav_filters",
         composite: true,
     },
     SettingSpec {

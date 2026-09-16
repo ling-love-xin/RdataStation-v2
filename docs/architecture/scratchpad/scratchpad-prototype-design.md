@@ -260,7 +260,7 @@ flowchart TD
 | 数据文件 / JSON | `.csv .tsv .parquet .xlsx .xls .json .ndjson .db .duckdb` | `primary`（品牌色） |
 | 文档 / 其他 | `.md .txt` 及无后缀 | `muted_foreground` |
 
-> 以上为**实现口径**（`panels.rs::scratchpad_icon_color`）：早期设计曾写成 `base.cyan` 且把 `.json` 归入文档类，实测后者在同尺寸下对比度偏低、且 `.json` 多为数据，已归入数据文件并改用 `primary`。
+> 以上为**实现口径**（`panels/scratchpad_panel.rs::scratchpad_icon_color`）：早期设计曾写成 `base.cyan` 且把 `.json` 归入文档类，实测后者在同尺寸下对比度偏低、且 `.json` 多为数据，已归入数据文件并改用 `primary`。
 
 ### 6.4 搜索高亮
 
@@ -270,11 +270,11 @@ flowchart TD
 
 | 原型元素 | GPUI 落点 |
 | --- | --- |
-| 面板容器（草稿箱） | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `ScratchpadView` / `render_scratchpad`） |
-| 左 Dock 内容装配 | `crates/workbench/src/panels.rs`（`SidebarPanel` 的 `LeftPanel::Draft` 分支改调草稿箱视图） |
+| 面板容器（草稿箱） | `crates/workbench/src/panels/`（`SidebarPanel` 的 `ScratchpadView` / `render_scratchpad`） |
+| 左 Dock 内容装配 | `crates/workbench/src/panels/`（`SidebarPanel` 的 `LeftPanel::Draft` 分支改调草稿箱视图） |
 | 面板头 / 工具栏 | gpui-kit `Button`（`.icon().ghost()` 小尺寸） |
 | 搜索输入 | `Input` + `InputState`（`cx.new(InputState::new)`） |
-| 内容搜索结果 + 替换栏 | `crates/workbench/src/panels.rs`：`render_scratchpad_search_pane`（`EditorPanel` 渲染，替换输入 `scratchpad_replace`） |
+| 内容搜索结果 + 替换栏 | `crates/workbench/src/panels/`：`render_scratchpad_search_pane`（`EditorPanel` 渲染，替换输入 `scratchpad_replace`） |
 | 空态引导 | `SidebarPanel::render_scratchpad_empty_state`（大图标 + 分组 `Button`） |
 | 树 / 分组 / 折叠 | 草稿树用 `v_virtual_list`（`item_sizes` + 可视区渲染，`track_scroll` 支持键盘导航滚入）；分组头为自绘标签行 |
 | 右键菜单 | gpui-kit 弹层（`PopupMenu`/自绘 overlay），`popover` token 取色 |
@@ -282,7 +282,7 @@ flowchart TD
 | 撤销栏 | 面板底部自绘条（`popover` + `primary`） |
 | 域模型与存储 | `crates/scratchpad`（`models` / `state` / `store` / `trash`），workbench 通过 workspace 依赖 `scratchpad` |
 | 文件监控 | `notify`（v2 尚未接入，见 `scratchpad-dev-plan.md` Phase A） |
-| SQL 草稿模式 | `crates/workbench/src/panels.rs` `EditorPanel`（新增 scratchpad-file 模式） |
+| SQL 草稿模式 | `crates/workbench/src/panels/` `EditorPanel`（新增 scratchpad-file 模式） |
 | 提升为分析资源 | `analytics_resource` 服务，经 command/event 协作 |
 
 ## 8. 已确认决策

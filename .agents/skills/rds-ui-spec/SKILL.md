@@ -95,4 +95,4 @@ div().border_b(ui::HAIRLINE)
 改动尺寸后运行 `cargo test -p rds-workbench --test ui_contract`：它会校验
 `ui.rs` 常量与设计值一致、视图层无裸 `px(...)` / 裸色值、边栏隐藏/恢复状态机。
 
-> 范围：尺寸与色值契约目前只扫 `view.rs` / `panels.rs`；`components/connection_dialog/` 与 `project/ui.rs` 仍是存量欠债（见 `connection-dialog-architecture.md` §14 #14）。新增代码请按本 skill 写，不要以这两个目录的既有写法为样例。
+> 范围：尺寸与色值契约目前只扫 `view.rs` / `panels/`（`panels/` 下新增子模块由 `ui_contract.rs` 的 2c 守卫强制登记）；`components/connection_dialog/` 与 `project/ui.rs` 仍是存量欠债（见 `connection-dialog-architecture.md` §14 #14）。新增代码请按本 skill 写，不要以这两个目录的既有写法为样例。
