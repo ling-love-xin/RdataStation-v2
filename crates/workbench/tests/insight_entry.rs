@@ -1,6 +1,6 @@
 //! 洞察入口 → 后台取数 → 回填面板的**端到端**（真 DuckDB 内存临时表）。
 //!
-//! 走的是**真实接线**：`insight_jobs::request_profile`——即面板发出
+//! 走的是**真实接线**：`insight::jobs::request_profile`——即面板发出
 //! `InsightEvent::ProfileRequested` 之后宿主调用的那一个函数。它覆盖了中间那段胶水
 //! （提交前解析项目根 → 后台执行器跑阻塞画像 → 弱句柄回填四态），而不只是重测服务层
 //! （服务层的端到端在 `crates/insight/tests/column_profile_e2e.rs`）。
@@ -13,7 +13,7 @@
 use gpui_kit::{AppContext as _, TestAppContext};
 use insight::insight_engine::get_or_create_duckdb;
 use insight::{ColumnKind, InsightPanelState, InsightTarget, InsightView};
-use rds_workbench::services::insight_jobs::{ProfileRequest, request_profile};
+use insight::jobs::{ProfileRequest, request_profile};
 
 /// 建临时表并插数据（表名唯一：DuckDB 连接是进程级单例）
 fn seed(table: &str, ddl: &str, values: &str) {

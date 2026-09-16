@@ -22,6 +22,7 @@
 pub mod commands;
 pub mod insight_engine;
 pub mod insight_view;
+pub mod jobs;
 pub mod model;
 pub mod quality_scorer;
 pub mod rule;

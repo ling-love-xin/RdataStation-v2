@@ -11,8 +11,8 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
 use crate::view::RightPanel;
+use insight::InsightView;
 use mock::mock_view::MockPanel;
-use insight::{InsightEvent, InsightView};
 
 use super::Shared;
 
@@ -44,23 +44,17 @@ impl RightSidebarPanel {
         // 懒创建会让「先右键、后面板尚未渲染」的路径丢目标）。
         let insight_panel = cx.new(|cx| InsightView::new(cx));
         *shared.insight_panel.borrow_mut() = Some(insight_panel.downgrade());
-        // 宿主接线：面板只发「请加载这个目标」，取数在后台执行器上跑完再回填。
-        // 项目根在此处解析成所有权数据（`Shared` 不可跨线程，见 `services::insight_jobs`）。
-        let _insight_sub = {
-            let panel = insight_panel.clone();
-            let shared_for_sub = shared.clone();
-            cx.subscribe(
-                &insight_panel,
-                move |_this, _emitter, event: &InsightEvent, cx| {
-                    let root = shared_for_sub
-                        .project
-                        .borrow()
-                        .as_ref()
-                        .map(|session| session.root.clone());
-                    crate::services::insight_jobs::handle_event(&panel, root, event, cx);
-                },
-            )
-        };
+        // 事件接缝与取数都在 insight crate（`insight::jobs`）：面板发「请加载这个目标」，
+        // 后台跑完回填。宿主只提供「项目根在哪」——`Shared` 不可跨线程，
+        // 闭包在**提交时**才解析，结果以所有权数据交给任务。
+        let root_shared = shared.clone();
+        let _insight_sub = insight::jobs::attach(&insight_panel, cx, move || {
+            root_shared
+                .project
+                .borrow()
+                .as_ref()
+                .map(|session| session.root.clone())
+        });
         Self {
             shared,
             focus_handle: cx.focus_handle(),

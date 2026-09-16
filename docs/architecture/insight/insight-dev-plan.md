@@ -23,6 +23,32 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 1 第五批：取数作业随特性 crate 归位
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **124 项** + 集成 4 项全绿；零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 归位 | `services/insight_jobs.rs`（workbench）→ `insight/src/jobs.rs`：符合面板耦合治理计划 §5 的目标形态「特性 crate 内的 jobs + 面板 drain」。Phase 2 的「评估全表 + 进度」与 Phase 5 的快照保存都要复用同一套后台形态，先摆对位置就不用写两遍 | `crates/insight/src/jobs.rs`（新） |
+| 宿主编排面 | 只剩一行：`insight::jobs::attach(&panel, cx, 项目根提供者闭包)`——事件接缝与取数都在特性 crate 内；项目根用**闭包**而非值（项目可能已切换，且解析结果必须在提交任务前脱离 `Shared`） | `crates/workbench/src/panels/right.rs` |
+| 契约测试 | `attach` 的宿主契约在本 crate 内验住：订阅被触发 → 提供者被问一次 → 后台取数真的跑起来并回填错误态（不是只验「不 panic」） | `jobs.rs` 测试 |
+
+**测试坑（已写进注释）**：宿主实体必须被持有——只留 `Subscription` 不足以让订阅者存活，实体一旦释放，订阅就被剪掉。
+
+**验证边界**：workbench 侧当前因在途重构（`Shared` 字段搬迁、`NavDropMode` 等符号调整）整体编译不过，因此本步的可验证面收在特性 crate 内（`jobs.rs` 自己验了宿主那一行的契约）。
+
+
+### 2026-09-16 — Phase 1 第五批：取数链搬进 crate（耦合治理）
+
+**动机**：`layout/panels-coupling-plan.md` §5 定的目标形态是「**特性 crate 内的 jobs** + 面板 drain」——Phase 2 的「评估全表 + 进度」与 Phase 5 的快照保存要用同一套后台形态，先把位置摆对，省得写两遍。
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 搬迁 | 原 `crates/workbench/src/services/insight_jobs.rs` 整体搬入 insight crate（`ProfileRequest` / `handle_event` / `request_profile` 行为一字未改，只把 `insight::` 前缀改成 `crate::`）；workbench 侧删文件、`services/mod.rs` 去掉声明与文档行 | `crates/insight/src/jobs.rs` |
+| 宿主胶水 | 新增 `jobs::attach(&panel, cx, 项目根闭包)`：**事件形状不再外泄**，宿主只回答「项目根在哪」；闭包在提交时才解析（项目可能已切换），`Subscription` 由本模块返回 | 同上 |
+| 不变式 | 项目根在**提交前**解析成 `PathBuf`（所有权数据）才进后台任务——`Shared` 的 `Rc<RefCell<…>>` 不出线程；弱句柄升级失败即丢结果（面板已关） | 同上 |
+| 测试 | `ProfileRequest` 两项纯函数单测随代码搬入（`rds-insight` lib **121 → 123 项**）；workbench `tests/insight_entry.rs` 改 import 后仍走真实接线 | `crates/insight/src/jobs.rs`、`crates/workbench/tests/insight_entry.rs` |
+
 ### 2026-09-16 — Phase 1 第四批：列入口命令 + 重算键位
 
 **已完成并验证**（`cargo check -p rds-app` 零告警；`rds-insight` lib **121 项**；新增 `crates/workbench/tests/insight_entry.rs` **2 项**——走真实接线的端到端）
@@ -46,7 +72,7 @@
 | 装配 | 右 Dock 去掉三行占位：面板实体在**构造期**创建 + 登记 `Shared::insight_panel`（右键入口要在事件路径拿到句柄，懒创建会丢目标），渲染改为转发 `InsightView` | `crates/workbench/src/panels/` |
 | 宿主桥 | **不设 trait**：面板与宿主之间只用事件 + 两个公开方法（`set_profile` / `set_error` / `set_project_open`），因为面板没有需要同步回调宿主的能力（⚙ 也是事件）。何时才需要 `MockHost` 那种 trait：出现「面板得同步问宿主」的需求时（如导出目录、只读态） | — |
 | 事件接缝 | `InsightEvent::ProfileRequested { target }`（带 payload，宿主不必回读面板）；`set_target` 与 ⟳/重试都发它 | `insight_view.rs` |
-| 后台取数 | `services/insight_jobs.rs`：面板只发请求 → 宿主在**后台执行器**上跑阻塞的 `profile_column_view` → 弱句柄回填四态（面板已关则丢结果）。项目根在提交时解析成所有权数据（`Shared` 不可跨线程） | `crates/workbench/src/services/insight_jobs.rs`（新） |
+| 后台取数 | `insight::jobs`：面板只发请求 → **后台执行器**上跑阻塞的 `profile_column_view` → 弱句柄回填四态（面板已关则丢结果）。项目根在提交时解析成所有权数据（`Shared` 不可跨线程）。宿主侧只剩一行 `jobs::attach(&panel, cx, ‖ 项目根)` 胶水 | `crates/insight/src/jobs.rs`（新，2026-09-16 从 workbench 迁入） |
 | 项目开关 | 面板给出「未打开项目：画像可用，规则管理与快照不可用」提示；宿主在**渲染时**同步（同 `apply_*_mode` 口径，值不变不 notify） | `panels/` + `insight_view.rs` |
 
 **一处刻意的降级**：面板头的 ⚙（规则管理）**暂时禁用**并注明「Phase 2 落地」——规则管理对话框属 Phase 2，先给一个「点了没反应」的按钮等于静默失效（同「注册了才宣传」）。`InsightEvent::RulesRequested` 也随之移除（无生产者就不留死变体），Phase 2 接入时一并恢复。
