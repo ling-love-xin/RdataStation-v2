@@ -575,6 +575,8 @@ pub fn render_scratchpad_search_pane(
     match_bg: Hsla,
     replace_input: Option<&Entity<InputState>>,
     replace_filled: bool,
+    // 点命中标题 → 打开该文件（原型 §4.3：点击命中跳转到文件）。参 = 模块内相对路径。
+    on_open_hit: std::rc::Rc<dyn Fn(String, &mut gpui_kit::Window, &mut App)>,
     on_clear: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
     on_replace_all: impl Fn(&gpui_kit::ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
 ) -> Div {
@@ -636,11 +638,17 @@ pub fn render_scratchpad_search_pane(
         list = list.child(div().text_xs().text_color(muted).child("无匹配"));
     }
     for hit in &search.hits {
+        let open_hit = on_open_hit.clone();
+        let hit_file = hit.file.clone();
         let mut group = div().v_flex().w_full().gap_0p5().child(
             div()
+                .id(format!("sp-hit-{}-{}", hit.file, hit.line))
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(fg)
+                .cursor_pointer()
+                .hover(move |s| s.text_color(primary))
+                .on_click(move |_, window, app| open_hit(hit_file.clone(), window, app))
                 .child(format!("{} · 行 {}", hit.file, hit.line)),
         );
         for line in &hit.before {
@@ -2335,7 +2343,16 @@ impl ScratchpadView {
                     .child(chevron),
             )
             .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon_color))
-            // 编辑器里有未保存修改 → 名称前一个脏点（VS Code 口径：只有文件）。
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(fg)
+                    .overflow_hidden()
+                    .child(entry.name.clone()),
+            )
+            // 脏点（原型 §2/§3：名字 · ● · 大小时间；只有文件画）
             .when(scratchpad_shows_dirty_dot(&ctx.dirty, entry), |this| {
                 this.child(
                     div()
@@ -2346,15 +2363,6 @@ impl ScratchpadView {
                         .bg(primary),
                 )
             })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(fg)
-                    .overflow_hidden()
-                    .child(entry.name.clone()),
-            )
             .child(
                 div()
                     .flex_none()

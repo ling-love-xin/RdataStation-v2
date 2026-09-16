@@ -262,6 +262,8 @@ render_scratchpad（首次 or loaded=false）
          先校验小写化是否改变字节长度，改变则放弃高亮）
   → 回填（OpResult::Search）：ScratchpadSearchView 写入 Shared::scratchpad_search → 编辑区渲染
        · 命中文本高亮用产品 token `search.match.background`
+       · 点命中标题 → `request_open_in_editor`（相对路径 → 模块内绝对路径；同路径只激活）
+         跳转到具体行待编辑器跳行端口
        · 失败：清空结果视图 + 侧栏错误行显示原因
 ```
 
@@ -386,7 +388,7 @@ render_scratchpad（首次 or loaded=false）
 编辑器里改动未保存（`EditorService::dirty_ids`）
   → 宿主端口 `ScratchpadHost::dirty_files()`：脏文档的**绝对路径**集合
   → 视图侧 1.2 s 轮询（与目录监控同拍）比对缓存 `dirty_seen`，有变化才 `cx.notify()`
-  → `scratchpad_row` 按条目绝对路径命中 → 文件名前画一个实心圆点（`primary`）
+  → `scratchpad_row` 按条目绝对路径命中 → 名字之后画一个实心圆点（`primary`；与原型 §2 一致）
       · **只有文件**打点（文件夹不画）；`Ctrl+S` 回存后集合里消失，点随之消失
 ```
 

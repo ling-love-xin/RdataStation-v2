@@ -874,12 +874,25 @@ impl Render for EditorPanel {
                 };
                 // 借用顺序：`theme` 已从 cx 借出，这里不再调用 `entity.update(cx, …)`。
                 let match_bg = settings::product_tokens::get(cx).search_match_background(theme);
+                // 点命中 → 在编辑器里打开该草稿（相对路径 → 模块内绝对路径；跳行仍待编辑器端口）。
+                let open_hit: Rc<dyn Fn(String, &mut gpui_kit::Window, &mut App)> = {
+                    let shared = self.shared.clone();
+                    Rc::new(move |file: String, _window: &mut gpui_kit::Window, _app: &mut App| {
+                        if let Some(root) = shared.project_root() {
+                            let abs = root
+                                .join(scratchpad::MODULE_DIR_NAME)
+                                .join(file.as_str());
+                            shared.request_open_in_editor(abs);
+                        }
+                    })
+                };
                 content = content.child(render_scratchpad_search_pane(
                     search,
                     theme,
                     match_bg,
                     replace_input.as_ref(),
                     replace_filled,
+                    open_hit,
                     clear,
                     replace_all,
                 ));

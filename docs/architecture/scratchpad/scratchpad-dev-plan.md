@@ -10,6 +10,22 @@
 
 > 路径注：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/*`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`；**2026-09-17 起面板视图本身也下沉进 crate**（`crates/scratchpad/src/scratchpad_view.rs` + `host.rs`，见“十四次”）。**下列历史条目保留当时的路径**，读时按此换算。
 
+### 2026-09-17（十八次）— 原型对齐巡检：脏点位置 + 点命中打开
+
+**背景**：按用户要求逐条对照 `scratchpad-prototype-design.md` / `scratchpad-prototype.html`，
+本轮先收两处差异（其余见回话中的巡检清单）。
+
+| # | 差异 | 处理 |
+| --- | --- | --- |
+| 1 | 原型 HTML：名字 · **●** · 大小时间（脏点在名字之后）；实现当时画在名字**前** | 改为名字之后（`scratchpad_row`），文档同步 |
+| 2 | 原型 §4.3「点击命中跳转文件」仍列待补 | 已接：点命中标题 → `request_open_in_editor`（相对路径 → 模块内绝对路径） |
+
+**验证**：`cargo check -p rds-scratchpad -p rds-workbench --lib -j 2` 零告警；`cargo test -p rds-scratchpad --lib` → **36 passed**。
+
+**尚未对齐（明确记录）**：命中**跳行**（需编辑器跳行端口）、提升为分析资源（Phase D）、
+拖放（C-5，下一轮）、原型 §4.5 写的是「冲突对话框」，实现为**冲突条 + 中央 Diff 面板**
+（差异内容一致，形式不同：对话框层需宿主 `open_dialog`，已记入待拍板）。
+
 ### 2026-09-17（十七次）— Phase C-4：冲突 Diff（外部改动 vs 编辑器未保存修改）
 
 **已完成**
