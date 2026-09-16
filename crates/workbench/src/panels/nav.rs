@@ -605,7 +605,8 @@ impl SidebarPanel {
             let handle = input.read(cx).focus_handle(cx);
             handle.focus(window, cx);
         } else {
-            self.shared.focus_nav_search.set(true);
+            // 搜索框可能上一帧才创建：置面板自己的待聚焦标记，本帧的 `render_database_nav` 消费。
+            self.nav_search_focus_pending = true;
         }
         cx.notify();
     }
@@ -720,8 +721,8 @@ impl SidebarPanel {
             self._nav_search_sub = Some(sub);
         }
         // Ctrl+F 请求（搜索框可能上一帧才创建，故在此统一消费）。
-        if self.shared.focus_nav_search.get() {
-            self.shared.focus_nav_search.set(false);
+        if self.nav_search_focus_pending {
+            self.nav_search_focus_pending = false;
             if let Some(input) = self.nav_search.clone() {
                 let handle = input.read(cx).focus_handle(cx);
                 handle.focus(window, cx);

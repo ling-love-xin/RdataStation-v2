@@ -35,8 +35,8 @@
 | `property_target` | nav（5 处） | — | **✅ S2b 已端口化**：`EditorBridge::show_properties(request)`；数据归 `EditorPanel`，入队与 loading 置位移到事件路径 | render 不再入队 |
 | `scratchpad_search` | scratchpad（2 处） | editor | **`EditorBridge::show_search_results(view)`** | scratchpad → editor 投递 |
 | `scratchpad_pump_request` | editor（1 处） | mod / scratchpad | **`ScratchpadBridge::ensure_pump()`** | editor → scratchpad 请求 |
-| `open_file_request` | scratchpad | 宿主（`view.rs`） | **`HostBridge::open_in_editor(path)`** | scratchpad → 宿主请求 |
-| `focus_nav_search` | 宿主 action（nav 1 处消费） | nav | **`NavBridge::focus_search()`** | 宿主 → nav 请求 |
+| `open_file_request` | scratchpad | 宿主（`view.rs`） | **✅ S3b：已收为私有字段 + `request_open_in_editor` / `take_open_in_editor` 方法对**（生产端拿不到 `Window`、消费端必须有 `Window`，故保留一帧延迟；端口签名满足不了两边） | 外部不再能直写字段 |
+| `focus_nav_search` | — | — | **✅ S3b：已从 `Shared` 删除**——实测它只由 nav 自己写读（`view.rs` 本来就走 `SidebarPanel::focus_nav_search`），已改为面板私有字段 `nav_search_focus_pending` | 字段寄存的直接证据 |
 
 `editor_clear`（宿主命令闭包）与其它已由宿主持有的项不在本次范围。
 
@@ -62,7 +62,7 @@ ScratchpadBridge { fn ensure_pump(&self, cx: &mut App); }
 NavBridge { fn focus_search(&self, window: &mut Window, cx: &mut App); }
 
 /// 面板调用（提供方：WorkbenchView）
-HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 open_file_request 的替代
+HostBridge：`open_file_request` 最终未做成端口——改为**私有字段 + 方法对**（生产端 `Enter`/右键路径拿不到 `Window`，`open_in_editor` 必须有 `Window`）。
 ```
 
 依据（不必重新论证，仓库内已有先例）：
@@ -86,8 +86,8 @@ HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 
 | **S2c** | `scratchpad_search`（双向数据交接：scratchpad 写、编辑区渲染、scratchpad 自读）——需先确定展示状态归谁，再定端口形状 | 剩余 4 个字段（含 S3 的 3 个信号）归零 |
 | **S3** | 反向端口，拆两步： | — |
 | **S3a** ✅ | `scratchpad_pump_request` → `ScratchpadBridge::ensure_pump`（装配入口 `panels::install_scratchpad_bridge`）；删除侧栅 `Render` 里的 take 块（**又一个 render 内副作用回到事件路径**） | `Shared` 字段 31 → 30；面板 16 项 + 契约 6 项 + `dialog_host_layer` 4 项全绿 |
-| **S3b** | `focus_nav_search`（宿主→nav，写方在 `view.rs` 的 action）、`open_file_request`（scratchpad→宿主，读方在 `view.rs` 的 render take）；建议均用端口 + `install_*_bridge` 同一形态 | 剩余字段归零 |
-| **S4** | `ui_contract` 加 `Shared` 字段白名单契约；更新 `panels-modules.md` §3 与本文档状态 | 契约测试通过；§3 表格与实际一致 |
+| **S3b** ✅ | `focus_nav_search` 已删（面板私有字段）；`open_file_request` 收为私有 + 方法对（`request_/take_open_in_editor`），两个 scratchpad 写点与 `view.rs` 读点改走方法 | 面板 16 项 + 契约 7 项全绿；`Shared` pub 字段 31 → 29（另 1 个私有） |
+| **S4** | ✅ 已加 `ui_contract` 契约 4（`Shared` 字段白名单，新增字段必须显式登记）；**待做**：删除已退化为"仅触发重绘"的 `SidebarEvent::{EditConnection, NewConnectionRequest}` | 契约测试 7 项通过；§3 表格与实际一致 |
 
 ## 5. 与 P1（同步 I/O 后台化）、P2（视图下沉）的顺序
 

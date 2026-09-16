@@ -252,6 +252,64 @@ fn every_panel_module_is_registered_in_the_manifests() {
     }
 }
 
+/// 契约 4：`Shared` 的字段白名单（防共享可变状态回潮）。
+///
+/// 端口化之后 `Shared` 只应承载**宿主级状态 + 命名端口**：新增字段必须显式登记，
+/// 并同步 `docs/architecture/layout/panels-modules.md` §3 的耦合表。
+#[test]
+fn shared_fields_are_whitelisted() {
+    let src = include_str!("../src/panels/shared.rs");
+    let body = src
+        .split("pub struct Shared {")
+        .nth(1)
+        .expect("应能定位 `pub struct Shared`");
+    let body = body.split("\n}").next().expect("应能定位字段块结尾");
+    let mut found: Vec<String> = body
+        .lines()
+        .filter_map(|l| l.strip_prefix("    pub "))
+        .filter_map(|l| l.split(':').next())
+        .map(|s| s.to_string())
+        .collect();
+    found.sort();
+
+    let expected: Vec<&str> = vec![
+        "active_left",
+        "active_right",
+        "connections",
+        "driver_catalog",
+        "editor_bridge",
+        "editor_clear",
+        "editor_dirty",
+        "editor_sql",
+        "host_redraw",
+        "insight_panel",
+        "left_mode",
+        "left_mode_before_hidden",
+        "mock_detail",
+        "mock_panel",
+        "nav_cache_epoch",
+        "notice",
+        "open_mock_detail",
+        "project",
+        "project_new_request",
+        "project_open_request",
+        "project_ui",
+        "quick_open",
+        "result_epoch",
+        "right_mode",
+        "right_mode_before_hidden",
+        "scratchpad_bridge",
+        "scratchpad_search",
+        "selected",
+        "settings_open",
+    ];
+    assert_eq!(
+        found, expected,
+        "Shared 字段集变化：新增字段请先判定归属（宿主级 / 命名端口），\n\
+         并把白名单与 panels-modules.md §3 耦合表一起更新"
+    );
+}
+
 /// 递归收集 `src/<rel>` 下的全部 `.rs` 文件（返回相对 `src/` 的路径，`/` 分隔）。
 fn scan_rs_sources(rel: &str) -> Vec<String> {
     fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {

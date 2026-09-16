@@ -96,6 +96,8 @@ pub struct SidebarPanel {
     scratchpad_watch: Option<ScratchpadWatcher>,
     /// 监控轮询任务（常驻，每 ~1.2 s 探查一次变更标记）。
     scratchpad_watch_poll: RefCell<Option<Task<()>>>,
+    /// Ctrl+F 待聚焦标记：搜索框懒创建，先到位的请求在这里等一帧（面板私有，不入 `Shared`）。
+    nav_search_focus_pending: bool,
 }
 
 impl SidebarPanel {
@@ -128,6 +130,7 @@ impl SidebarPanel {
             scratchpad_pump: RefCell::new(None),
             scratchpad_watch: None,
             scratchpad_watch_poll: RefCell::new(None),
+            nav_search_focus_pending: false,
         }
     }
 

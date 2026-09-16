@@ -1587,10 +1587,11 @@ impl SidebarPanel {
 
     /// 请求在中央编辑器中打开草稿文件（双击 / Enter / 右键「打开」共用）。
     ///
-    /// 只置位 `Shared::open_file_request`（绝对路径）；真正打开在宿主 `render` 里做，
+    /// 只走 `Shared::request_open_in_editor`（绝对路径）；真正打开在宿主 `render` 里做，
     /// 因为文档与 Dock 面板属宿主状态（编辑器无根的 Phase C 契约）。
     fn request_open_scratchpad_file(&mut self, path: String, cx: &mut Context<Self>) {
-        *self.shared.open_file_request.borrow_mut() = Some(std::path::PathBuf::from(path));
+        self.shared
+            .request_open_in_editor(std::path::PathBuf::from(path));
         self.shared.notify_host(cx);
         cx.notify();
     }
@@ -1878,11 +1879,11 @@ impl SidebarPanel {
             let keys = ctx.keys.clone();
             let position = real;
             // 双击文件 = 在编辑器中打开（与 Enter 同一语义）。
-            let open_flag = self.shared.open_file_request.clone();
+            let open_shared = self.shared.clone();
             move |ev: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
                 let modifiers = ev.modifiers();
                 if ev.click_count() >= 2 && !is_folder {
-                    *open_flag.borrow_mut() = Some(std::path::PathBuf::from(&key));
+                    open_shared.request_open_in_editor(std::path::PathBuf::from(&key));
                 }
                 let mut should_load = false;
                 {
@@ -3303,7 +3304,7 @@ mod tests {
     /// M5 草稿箱：面板内的纯函数语义（排序 / 压平 / 模板后缀 / 请求消费 / 搜索结果映射）。
     ///
     /// 窗口级交互（真点击、真轮询）不在这一层，见 `scratchpad-user-guide.md` §9 验收清单。
-    use super::{ 
+    use super::{
         ScratchpadSearchView, ScratchpadSort, ScratchpadTemplate, ScratchpadEntryKind,
         flatten_scratchpad, join_scratchpad_rel, scratchpad_apply_template_ext,
         scratchpad_entry_matches, scratchpad_size_label, scratchpad_split_name, scratchpad_sort_entries,

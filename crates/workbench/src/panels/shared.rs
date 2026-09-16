@@ -100,7 +100,8 @@ pub struct Shared {
     /// M5：请求在中央编辑器中打开某个文件（草稿箱双击 / Enter 置位，宿主 render 消费）。
     ///
     /// 只传**绝对路径**：编辑器无根，按路径自己判定模式 / 只读等级（Phase C 契约）。
-    pub open_file_request: Rc<RefCell<Option<std::path::PathBuf>>>,
+    /// 字段已收为私有：外部只能走 `request_open_in_editor` / `take_open_in_editor`。
+    open_file_request: Rc<RefCell<Option<std::path::PathBuf>>>,
     /// M1 项目管理 UI 状态（选择器 / 菜单 / 对话框 / 设置 / 项目锁）。
     pub project_ui: Rc<RefCell<project::ui::ProjectUiState>>,
     /// 编辑区是否存在未保存草稿（切换 / 关闭项目拦截信号）。
@@ -121,8 +122,6 @@ pub struct Shared {
     pub insight_panel: Rc<RefCell<Option<WeakEntity<InsightView>>>>,
     /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
-    /// Phase C：Ctrl+F 请求聚焦导航搜索框（宿主置位，导航面板渲染时消费）。
-    pub focus_nav_search: Rc<Cell<bool>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
     pub driver_catalog: Rc<RefCell<HashMap<String, crate::services::nav_runtime::DriverMeta>>>,
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
@@ -166,7 +165,6 @@ impl Shared {
             insight_panel: Rc::new(RefCell::new(None)),
             mock_detail: Rc::new(RefCell::new(None)),
             open_mock_detail: Rc::new(RefCell::new(None)),
-            focus_nav_search: Rc::new(Cell::new(false)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),
             host_redraw: Rc::new(RefCell::new(None)),
         }
@@ -199,11 +197,19 @@ impl Shared {
         Ok((ScratchpadStore::new(root), rt))
     }
 
-    /// 取出（并清空）草稿箱的「在编辑器中打开」请求：宿主 render 每帧调用一次。
+    /// 取出（并清空）「在编辑器中打开」请求：宿主 render 每帧调用一次。
     ///
     /// 与 `take_project_action_request` 同口径：取出即清空，同一次请求不会重复打开。
-    pub fn take_open_file_request(&self) -> Option<std::path::PathBuf> {
+    pub fn take_open_in_editor(&self) -> Option<std::path::PathBuf> {
         self.open_file_request.borrow_mut().take()
+    }
+
+    /// 请求在中央编辑器中打开文件（草稿箱双击 / Enter / 右键「打开」）。
+    ///
+    /// 生产端（Enter / 右键路径）拿不到 `Window`，消费端（宿主打开文档）必须有 `Window`，
+    /// 因此保留「请求 → 宿主 render 消费」的一帧延迟；字段私有，外部只能走这一对方法。
+    pub fn request_open_in_editor(&self, path: std::path::PathBuf) {
+        *self.open_file_request.borrow_mut() = Some(path);
     }
 
     /// 取出（并清空）项目栏的动作请求：宿主 render 每帧调用一次。
@@ -350,15 +356,15 @@ mod tests {
     #[test]
     fn open_file_request_is_consumed_once() {
         let shared = Shared::new();
-        assert!(shared.take_open_file_request().is_none(), "初始无请求");
-        *shared.open_file_request.borrow_mut() = Some(PathBuf::from("/p/a.sql"));
+        assert!(shared.take_open_in_editor().is_none(), "初始无请求");
+        shared.request_open_in_editor(PathBuf::from("/p/a.sql"));
         assert_eq!(
-            shared.take_open_file_request(),
+            shared.take_open_in_editor(),
             Some(PathBuf::from("/p/a.sql")),
             "首次取出得到路径"
         );
         assert!(
-            shared.take_open_file_request().is_none(),
+            shared.take_open_in_editor().is_none(),
             "取出即清空：同一请求不会重复打开"
         );
     }
