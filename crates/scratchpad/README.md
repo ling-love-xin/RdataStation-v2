@@ -83,4 +83,4 @@
 
 - 设计（权威）：`docs/architecture/scratchpad/` 五件套——`README.md`（模块入口）· `scratchpad-architecture.md`（设计理念与架构 + 已知问题）· `scratchpad-prototype-design.md` + `scratchpad-prototype.html`（原型）· `scratchpad-dev-plan.md`（进度）· `scratchpad-user-guide.md`（使用手册）。
 - 验证：`cargo check -p rds-scratchpad -j 2`；后端单测 `cargo test -p rds-scratchpad -j 2`（14 项基线）。
-- **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接 DuckDB 静态库会耗尽内存。
+- **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

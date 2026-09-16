@@ -45,8 +45,6 @@ pub struct StatusInputs<'a> {
     pub message: Option<&'a str>,
     /// 是否有执行在跑（真实状态，不猜）
     pub executing: bool,
-    /// 本次执行已跑的时长（B3；`None` = 没有在跑 → 不显示耗时）
-    pub elapsed: Option<std::time::Duration>,
     /// 连接段（已格式化的文案，如 `●P·orders`）；`None` = 不显示（文本模式没有连接概念）
     pub connection: Option<&'a str>,
 }
@@ -74,11 +72,7 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
         left.push_str(" · 未保存");
     }
     if inputs.executing {
-        // 耗时累加（原型 §4.6：执行中要看得见跑了多久——它也是“该不该中断”的判断依据）
-        match inputs.elapsed {
-            Some(elapsed) => left.push_str(&format!(" · 执行中 {}…", elapsed_text(elapsed))),
-            None => left.push_str(" · 执行中…"),
-        }
+        left.push_str(" · 执行中…");
     }
     if let Some(message) = inputs.message {
         // 提示紧跟在左侧状态段之后：它是“刚才那个动作”的后果，不是文档属性
@@ -104,27 +98,8 @@ pub fn labels(inputs: &StatusInputs) -> StatusLabels {
     }
 }
 
-/// 跑多久了（人读的短文案：′10s 一位小数，之后整秒，过分钟折成 `1m42s`）
-pub fn elapsed_text(elapsed: std::time::Duration) -> String {
-    let secs = elapsed.as_secs_f32();
-    if secs < 10.0 {
-        format!("{secs:.1}s")
-    } else if secs < 60.0 {
-        format!("{}s", secs as u64)
-    } else {
-        let total = secs as u64;
-        format!("{}m{}s", total / 60, total % 60)
-    }
-}
-
 /// 画成状态栏（固定高、顶部分隔线；颜色全部来自主题）
-///
-/// `interrupt` = 执行中的■按钮（B3；由面板在“有语句没回填”时构造，点击走面板的 `interrupt`）。
-pub fn render(
-    inputs: &StatusInputs,
-    interrupt: Option<AnyElement>,
-    cx: &App,
-) -> impl IntoElement {
+pub fn render(inputs: &StatusInputs, cx: &App) -> impl IntoElement {
     let text = labels(inputs);
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
@@ -140,16 +115,7 @@ pub fn render(
 
     StatusBar::new()
         .left(left)
-        .right(
-            div()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .text_xs()
-                .text_color(muted)
-                .child(text.right)
-                .children(interrupt),
-        )
+        .right(div().text_xs().text_color(muted).child(text.right))
         .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT))
         .border_t(ui::HAIRLINE)
         .border_color(border)
@@ -158,7 +124,7 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**（父模块引入了 gpui，`use super::*` 会把它的 `test` 宏带进来）
-    use super::{StatusInputs, elapsed_text, labels};
+    use super::{StatusInputs, labels};
     use crate::model::{EditorMode, ReadOnly};
 
     fn inputs(read_only: ReadOnly) -> StatusInputs<'static> {
@@ -172,7 +138,6 @@ mod tests {
             selected_chars: 0,
             message: None,
             executing: false,
-            elapsed: None,
             // 连接段默认不显示；连接相关的断言在下面的专用用例里给值
             connection: None,
         }
@@ -286,31 +251,5 @@ mod tests {
 
         // 无提示时不显示占位
         assert!(!labels(&inputs(ReadOnly::none())).left.contains("另存为"));
-    }
-
-    /// 执行中要看得见“跑了多久”（B3）：它是判断该不该中断的依据
-    #[test]
-    fn executing_segment_counts_the_time_up() {
-        let mut running = inputs(ReadOnly::none());
-        running.executing = true;
-        assert!(labels(&running).left.contains("执行中…"), "没耗时也得说在执行");
-
-        running.elapsed = Some(std::time::Duration::from_millis(3400));
-        let text = labels(&running).left;
-        assert!(text.contains("执行中 3.4s…"), "{text}");
-
-        // 不在执行时不留耗时（它是执行态的一部分，不是文档属性）
-        let idle = inputs(ReadOnly::none());
-        assert!(!labels(&idle).left.contains("执行中"));
-    }
-
-    #[test]
-    fn elapsed_text_is_short_and_readable() {
-        use std::time::Duration;
-        assert_eq!(elapsed_text(Duration::from_millis(400)), "0.4s");
-        assert_eq!(elapsed_text(Duration::from_millis(9_900)), "9.9s");
-        assert_eq!(elapsed_text(Duration::from_secs(10)), "10s");
-        assert_eq!(elapsed_text(Duration::from_secs(59)), "59s");
-        assert_eq!(elapsed_text(Duration::from_secs(102)), "1m42s");
     }
 }
