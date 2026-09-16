@@ -23,6 +23,22 @@ pub enum ArchiveKind {
 }
 
 impl ArchiveKind {
+    /// 全部种类：顺序即**筛选菜单的候选顺序**与状态行的桶顺序（两处都按它渲染，避免各写一份）。
+    pub const ALL: [Self; 3] = [Self::File, Self::Analysis, Self::TableRef];
+
+    /// 界面文案：回答"本体在哪"（`文件` / `分析表` / `引用`）。
+    ///
+    /// 与 `resource_view::strength_badge` 的文案刻意分开：那个回答"能不能复现"，
+    /// 两者在 `File` 上恰好同词（`已归档` vs `文件`），不要合并——合并后必然要在
+    /// 其中一处的语义上撒谎。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::File => "文件",
+            Self::Analysis => "分析表",
+            Self::TableRef => "引用",
+        }
+    }
+
     /// 落库值（迁移 020 的 `kind` 列，带 `CHECK`）。
     pub fn as_db_str(self) -> &'static str {
         match self {
@@ -217,6 +233,12 @@ mod tests {
             assert_eq!(ArchiveKind::from_db_str(kind.as_db_str()), kind);
         }
         assert_eq!(ArchiveKind::default(), ArchiveKind::File);
+    }
+
+    #[test]
+    fn kind_labels_cover_all_kinds_in_menu_order() {
+        let labels: Vec<&str> = ArchiveKind::ALL.iter().map(|kind| kind.label()).collect();
+        assert_eq!(labels, vec!["文件", "分析表", "引用"]);
     }
 
     #[test]

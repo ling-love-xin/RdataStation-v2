@@ -47,6 +47,14 @@ impl SortOrder {
             Self::Desc => Self::Asc,
         }
     }
+
+    /// 方向箭头（排序菜单项与工具栏按钮共用，见 `SortField::label` 的同类注释）。
+    pub fn arrow(self) -> &'static str {
+        match self {
+            Self::Asc => "↑",
+            Self::Desc => "↓",
+        }
+    }
 }
 
 /// 工具栏筛选条件（全空 = 不限）。
@@ -64,6 +72,41 @@ impl ResourcesFilter {
     /// 是否为空条件（决定面板显示哪一种空态，见模块头注释）。
     pub fn is_empty(&self) -> bool {
         self.query.trim().is_empty() && self.kinds.is_empty() && !self.only_issues
+    }
+
+    /// 勾选 / 取消一个种类（筛选菜单用）。
+    ///
+    /// **三个都选中即视为"不限"**：全选与不选在语义上等价，但留下非空 `kinds` 会让
+    /// [`is_empty`](Self::is_empty) 把"全选"误判成筛选态——空库就会被显示成"没有匹配"，
+    /// 而用户明明什么都没排除。所以这里把等价条件规范化掉，不留脏态。
+    pub fn toggle_kind(&mut self, kind: ArchiveKind) {
+        match self.kinds.iter().position(|k| *k == kind) {
+            Some(index) => {
+                self.kinds.remove(index);
+            }
+            None => {
+                self.kinds.push(kind);
+                if self.kinds.len() == ArchiveKind::ALL.len() {
+                    self.kinds.clear();
+                }
+            }
+        }
+    }
+
+    /// 该种类是否在筛选集合里（菜单打勾用）。
+    ///
+    /// 全选会被规范化为不限制（见 [`toggle_kind`](Self::toggle_kind)），故"全选"态下
+    /// 这里一律为 `false`——菜单显示"都没勾"，与"什么都没过滤"的事实一致。
+    pub fn has_kind(&self, kind: ArchiveKind) -> bool {
+        self.kinds.contains(&kind)
+    }
+
+    /// 菜单里设的条件个数（**不含搜索词**）。
+    ///
+    /// 搜索词在输入框里看得见，算进来会让"筛选 N"这个徽标口径混乱；它只负责数
+    /// "必须开菜单才能看出来"的那几维。
+    pub fn menu_dims(&self) -> usize {
+        self.kinds.len() + usize::from(self.only_issues)
     }
 
     /// 单行是否命中。
@@ -226,5 +269,41 @@ mod tests {
         assert_eq!(SortOrder::Desc.flipped(), SortOrder::Asc);
         assert_eq!(SortField::Name.label(), "名称");
         assert_eq!(SortField::Version.label(), "版本");
+        assert_eq!(SortOrder::Asc.arrow(), "↑");
+        assert_eq!(SortOrder::Desc.arrow(), "↓");
+    }
+
+    #[test]
+    fn toggle_kind_normalizes_select_all_to_unlimited() {
+        let mut filter = ResourcesFilter::default();
+
+        filter.toggle_kind(ArchiveKind::File);
+        filter.toggle_kind(ArchiveKind::Analysis);
+        assert!(filter.has_kind(ArchiveKind::File));
+        assert_eq!(filter.menu_dims(), 2);
+        assert!(!filter.is_empty(), "选了两种就是真筛选");
+
+        // 三个全选 = 不限：不能留下"看起来在筛选"的等价条件。
+        filter.toggle_kind(ArchiveKind::TableRef);
+        assert!(filter.kinds.is_empty());
+        assert!(filter.is_empty());
+        assert!(!filter.has_kind(ArchiveKind::TableRef));
+
+        // 再点一次就取消勾选（不是又选中）。
+        filter.toggle_kind(ArchiveKind::File);
+        filter.toggle_kind(ArchiveKind::File);
+        assert!(!filter.has_kind(ArchiveKind::File));
+    }
+
+    #[test]
+    fn menu_dims_counts_menu_conditions_only() {
+        let mut filter = ResourcesFilter {
+            query: "dau".to_string(),
+            ..ResourcesFilter::default()
+        };
+        // 搜索词不算徽标（它在输入框里看得见）。
+        assert_eq!(filter.menu_dims(), 0);
+        filter.only_issues = true;
+        assert_eq!(filter.menu_dims(), 1);
     }
 }

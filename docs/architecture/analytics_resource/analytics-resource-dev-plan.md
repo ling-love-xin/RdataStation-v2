@@ -1,12 +1,41 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0 两批已落地（仅 crate 内）**——归档/取回/再归档闭环 + 变更事件已可用，37 项测试全绿（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0 三批 + Phase 1 三刀已落地（仅 crate 内）**——归档/取回/再归档闭环 + 变更事件 + 索引修复已可用，**66 单测 + 5 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-16 — Phase 1 第三刀：工具栏（搜索 / 筛选 / 排序）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P1.1（续）✅ | 工具栏（高 2rem）：搜索框（`Input`，占满剩余宽 + 自带清空钮）· `筛选 ▾`（种类多选 / 只看需处理，按钮上标"菜单条件个数"）· `排序 ▾`（名称 / 版本）；空库时也渲染（版式不随"有没有存档"上下跳） | `src/resource_view.rs`、`src/ui.rs`（+2 常量） |
+| P1.2/P2.3（部分）✅ | **两种空态分开**：空库（条件为空 → 引导归档）vs 无匹配（条件非空 → 给"清空筛选"）；可见行 = 筛选 → 排序，**在事件路径算好**（`view_rows`），render 只读 | 同上 |
+| 数据层 ✅ | `ArchiveKind::{ALL, label}`（菜单候选顺序与文案的单一来源）；`ResourcesFilter::{toggle_kind, has_kind, menu_dims}`（**全选规范化为不限**：不留"看起来在筛选"的等价条件，否则空库会被显示成"没有匹配"）+ `SortOrder::arrow` | `src/model.rs`、`src/filter.rs` |
+| 选中语义 ✅ | 悬空选中改在 `refresh_view_rows` 里清：**筛选与排序也会让行消失**，只盯快照会留下指向"看不见的行"的选中态 | `src/resource_view.rs` |
+| 窗口测试 ✅ | +3 项：条件改变可见行且被筛掉的选中被清、排序同键翻转 / 换键保持方向、无匹配态渲染 + 清空筛选（断言**输入框与条件同一次改**） | `tests/panel_window.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **66 单测 + 5 窗口测试全绿**（本刀 +3 单测 +3 窗口）；`cargo check -p rds-analytics-resource --all-targets -j 2` 零告警 | — |
+
+**三条刻意的克制**（避免"看起来支持但算错"）：
+
+1. **状态行仍报库口径计数**（不随筛选变化）：`缺失` / `索引异常` 是"修复…"入口的存在理由，被筛选隐掉就成"看起来没问题的库"；命中数靠"筛选 N"徽标 + 输入框可见。
+2. **排序仍只有名称 / 版本**——行上没有 `size_bytes` / `updated_epoch`，拿格式化后的尾巴（`1.2 KB` vs `900 B`）比较会静默排错（见 `filter.rs` 模块头）。
+3. **搜索只匹配显示名 + 尾部字段**：原型口径里的别名 / 标签 / 来源表需要 `ArchiveRow` 带这些列（Phase 2）。
+
+**实现期踩到的一个坑**（已写进代码注释）：`InputState::set_value` **不会**发 `InputEvent::Change`（gpui-component 内部注释明说）——程序性改词（清空筛选 / 宿主预填）必须自己同步条件，否则"输入框里的字"与"实际生效的条件"会静默不一致。故 `set_query` / `clear_filter` 是唯一入口，且有窗口测试锁住。
+
+**未落地**：虚拟化列表（`list::List`）、右键菜单、行图标（`IconName` 子集未核实）、详情面板接入、五个对话框、Action 按键绑定（app 层）、**workbench 桥**。
+
+### 2026-09-16 — 补记：Phase 1 接线前半与 `present.rs` 呈现层（追记两笔已提交但未入档的落点）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P0.1（续）✅ | workbench 依赖 `analytics_resource`（workspace 别名已就位）；活动栏标签与 Quick Open 文案 `资源分析` → **资产库**（提交 `f93d560`） | `crates/workbench/Cargo.toml`、`crates/workbench/src/view.rs` |
+| P1.x ✅ | 呈现层：索引行 → `ArchiveRow` / `ArchiveCounts` / `ResourcesSnapshot`——`format_size`（< 1 KB 不给 `0.0 KB`）/ `format_scale`（千分位）/ `format_relative_time`（时钟回拨显"刚刚"而不是负值）/ `tail_for`（按 kind 的字段优先级）/ `build_snapshot`（异常态压过 kind）；宿主桥只剩"取数 → 调它 → 推快照"（提交 `51918d4`） | `src/present.rs` |
+| 说明 | 这两笔提交当时未入 §0 与代码地图（同一窗口期内 `README.md` 还把 `present.rs` 漏在代码地图外），本刀一并补齐——文档落后代码的窗口期正是最容易丢线索的时候 | 本文件 + 模块 `README.md` |
 
 ### 2026-09-15 — Phase 1 第二刀：详情面板 + 工具栏数据层（crate 内）
 
@@ -125,7 +154,7 @@
 | `src/commands.rs` | 3 | 占位 |
 | `src/resource_view.rs` | 3 | 占位 |
 | `src/recycle_bin_dialog.rs` | 3 | 占位 |
-| `workbench/src/panels.rs` | `render_resources_placeholder`（当前 5846 起）| 占位文案仍是 v1 语义（"数据源连接引用 / DuckDB 分析表"）|
+| `workbench/src/panels/` | `render_resources_placeholder`（当前 5846 起）| 占位文案仍是 v1 语义（"数据源连接引用 / DuckDB 分析表"）|
 
 ### 1.3 接线缺口（不补则视图永远落不了地）
 
@@ -160,13 +189,13 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| P1.1 | 面板骨架：面板头（标题 + `＋▾` + `⋯`）、工具栏（搜索 / 筛选 / 排序）、行列表（虚拟化）、底部状态行 | `src/resource_view.rs`、`workbench/src/panels.rs` | 切换活动栏可见；`>100` 项流畅；状态行计数正确 |
+| P1.1 | 面板骨架：面板头（标题 + `＋▾` + `⋯`）、工具栏（搜索 / 筛选 / 排序）、行列表（虚拟化）、底部状态行 | `src/resource_view.rs`、`workbench/src/panels/` | 切换活动栏可见；`>100` 项流畅；状态行计数正确 |
 | P1.2 | 行渲染：kind 图标（`muted`）+ 显示名 + 版本徽标（v1 不显示）+ **强度徽标** + 尾部字段（按字段优先级规则） | `src/resource_view.rs` | 三类 kind 行可区分；240px 无异常折行（溢出省略 + tooltip） |
-| P1.3 | 详情属性面板（右侧，默认 20rem，宽度记忆）：基本信息 / 来源 / 版本摘要 / 标签与分组 / 内容预览 / 危险区；`file` 型首版 | `src/detail_view.rs`、`workbench/src/panels.rs` | 选中行切换联动；只读锁标记与"需取回编辑"提示常显 |
+| P1.3 | 详情属性面板（右侧，默认 20rem，宽度记忆）：基本信息 / 来源 / 版本摘要 / 标签与分组 / 内容预览 / 危险区；`file` 型首版 | `src/detail_view.rs`、`workbench/src/panels/` | 选中行切换联动；只读锁标记与"需取回编辑"提示常显 |
 | P1.4 | **归档入口**：草稿箱右键「归档为存档…」+ 面板头「从草稿箱归档…」；确认对话框（显示名 / 目标位置只读 / 分组 / 标签 / 来源连接自动带出 / 保留历史 / 冲突处理） | `src/dialogs/archive.rs`、`crates/scratchpad/src/…`（发起） | 归档后草稿消失、资源只读、两侧面板同步刷新（事件链路通） |
 | P1.5 | **取回（检出）**：右键 → 对话框（目标名 / 目标目录 / 是否打开）→ 复制到草稿箱 + 草稿侧记 `derived_from_resource_id` | `src/dialogs/checkout.rs`、`scratchpad` | 本体不动；重复取回自动改名避让 |
 | P1.6 | 只读三重守卫：写入 API 拒绝（应用守卫）+ 编辑器只读打开 + 文件系统属性（辅助） | `payload.rs`、`workbench` EditorPanel | 任何写入路径返回明确错误文案；编辑器以只读态打开 |
-| P1.7 | 术语与入口收尾：活动栏标签 `资源分析`→**资产库**；Quick Open 文案同步；删占位渲染；`LeftPanel::Resources` 图标复核 | `workbench/src/view.rs`、`panels.rs` | 全仓无"资源分析"作为模块名出现；无占位文案残留 |
+| P1.7 | 术语与入口收尾：活动栏标签 `资源分析`→**资产库**；Quick Open 文案同步；删占位渲染；`LeftPanel::Resources` 图标复核 | `workbench/src/view.rs`、`panels/` | 全仓无"资源分析"作为模块名出现；无占位文案残留 |
 | P1.8 | Action 与快捷键：`Ctrl+F` / `↑↓` / `Enter` / `F2` / `Delete` / `Ctrl+A` / `Esc`；`Ctrl+Shift+A`（草稿箱上下文） | `src/commands.rs`、`crates/app/src/main.rs` | 窗口测试：漫游与打开/删除分支 |
 
 ## 4. Phase 2 — 组织与检索

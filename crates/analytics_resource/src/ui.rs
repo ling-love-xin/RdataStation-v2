@@ -22,3 +22,7 @@ pub const ARCHIVE_EMPTY_ICON_SIZE: f32 = 3.0;
 pub const ARCHIVE_BADGE_HEIGHT: f32 = 1.125;
 /// 详情面板的标签列宽（5.5rem = 88px；固定宽 + 值列弹性，避免长短标签抖动布局）。
 pub const DETAIL_LABEL_WIDTH: f32 = 5.5;
+/// 工具栏行高（2.0rem = 32px；原型 §2.2）。
+pub const TOOLBAR_HEIGHT: f32 = 2.0;
+/// 工具栏紧凑控件高（1.625rem = 26px；与 workbench `CONTROL_HEIGHT_SM` 同值，语义独立）。
+pub const CONTROL_HEIGHT_SM: f32 = 1.625;

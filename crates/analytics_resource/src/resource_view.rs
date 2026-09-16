@@ -11,26 +11,31 @@
 //!   一切服务调用（归档 / 取回 / 打开 / 扫描）都在事件路径经宿主发起。
 //! - 面板不知道 `project.db` / `resources/` 的存在，也不该知道。
 //!
-//! # 本批范围（Phase 1 第一刀）
+//! # 本批范围（Phase 1 第三刀）
 //!
-//! 已落地：面板头（标题 + 归档入口）、提示行（只读与通知分色）、行列表（显示名 / 版本徽标 /
-//! **复现强度徽标** / 尾部字段 / 选中态）、底部状态行（异常时给"修复…"入口）、空态、只读禁写。
+//! 已落地：面板头（标题 + 归档入口）、**工具栏（搜索框 / 筛选 / 排序）**、提示行（只读与通知分色）、
+//! 行列表（显示名 / 版本徽标 / **复现强度徽标** / 尾部字段 / 选中态）、底部状态行（异常时给"修复…"入口）、
+//! 空态**与"无匹配"两态分开**、只读禁写。
 //!
-//! **未落地（下一批，已在开发方案留档）**：搜索框与筛选/排序菜单、虚拟化列表（`list::List`；
-//! 当前行用 `Button` 渲染，几百行以上必须换）、右键菜单、详情属性面板、五个对话框、
-//! Action 与快捷键、行图标（`IconName` 子集尚未逐一核实，先不引入以免资产缺失时静默为空）。
+//! **未落地（下一批，已在开发方案留档）**：虚拟化列表（`list::List`；当前行用 `Button` 渲染，
+//! 几百行以上必须换）、右键菜单、详情属性面板接入、五个对话框、Action 与快捷键（`Ctrl+F` 聚焦 /
+//! `Esc` 清空在 Action 批）、行图标（`IconName` 子集尚未逐一核实，先不引入以免资产缺失时静默为空）。
 
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::commands;
+use crate::filter::{self, ResourcesFilter, SortField, SortOrder};
 use crate::model::{ArchiveKind, ArchiveStatus};
 use crate::ui;
 
@@ -142,17 +147,20 @@ pub fn row_tail(detail: &str, modified: &str, version: i32) -> String {
 // ==================== 宿主契约 ====================
 
 /// 宿主能力：面板不认识服务层与会话，动作一律回宿主（事件路径执行）。
+///
+/// 每个动作都带上 `Window` / `App`：宿主侧要开对话框与只读打开（都需要窗口句柄），
+/// 而面板天然持有它们（`on_click` / `on_action` 都提供）——先把上下文带出去，比将来改签名轻。
 pub trait ResourcesHost: 'static {
     /// 归档入口（面板头「归档」）：弹对话框 / 选文件由宿主负责。
-    fn request_archive(&self);
+    fn request_archive(&self, window: &mut Window, cx: &mut App);
     /// 打开（只读）。
-    fn request_open(&self, resource_id: &str);
+    fn request_open(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 取回（检出）。
-    fn request_checkout(&self, resource_id: &str);
+    fn request_checkout(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 移入回收站。
-    fn request_delete(&self, resource_id: &str);
+    fn request_delete(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 索引修复入口（状态行异常段）。
-    fn request_index_repair(&self);
+    fn request_index_repair(&self, window: &mut Window, cx: &mut App);
 }
 
 // ==================== 面板 ====================
@@ -160,6 +168,23 @@ pub trait ResourcesHost: 'static {
 pub struct ResourcesPanel {
     host: Rc<dyn ResourcesHost>,
     snapshot: ResourcesSnapshot,
+    /// 筛选 + 排序后的可见行。
+    ///
+    /// **事件路径维护**（快照推送 / 条件变更时重算），render 只读：每帧重算会在
+    /// 滚动时持续分配（行集合克隆），且把"规则"搬回渲染路径。
+    view_rows: Vec<ArchiveRow>,
+    /// 工具栏条件（搜索词 / 种类 / 只看需处理）。
+    filter: ResourcesFilter,
+    sort_field: SortField,
+    sort_order: SortOrder,
+    /// 搜索框（**首帧渲染时创建**）。
+    ///
+    /// `InputState::new` 需要 `&mut Window`，而工作台侧的侧栏面板构造期拿不到窗口
+    /// （`SidebarPanel::new` 无窗口参数）——懒创建是本仓库 crate 内面板的既定处理
+    /// （`mock::mock_view::MockPanel` 的输入框同例）。
+    search_input: Option<Entity<InputState>>,
+    /// 搜索框订阅句柄（仅持有；释放即取消）。
+    _search_sub: Option<Subscription>,
     selected: Option<String>,
     notice: Option<String>,
     focus_handle: FocusHandle,
@@ -173,6 +198,12 @@ impl ResourcesPanel {
         Self {
             host,
             snapshot: ResourcesSnapshot::default(),
+            view_rows: Vec::new(),
+            filter: ResourcesFilter::default(),
+            sort_field: SortField::default(),
+            sort_order: SortOrder::default(),
+            search_input: None,
+            _search_sub: None,
             selected: None,
             notice: None,
             focus_handle: cx.focus_handle(),
@@ -180,15 +211,109 @@ impl ResourcesPanel {
         }
     }
 
-    /// 宿主推送数据（事件路径调用；面板不自己取数）。
-    pub fn set_snapshot(&mut self, snapshot: ResourcesSnapshot, cx: &mut Context<Self>) {
-        self.snapshot = snapshot;
-        // 选中项可能已被删除/过滤掉：清掉悬空选中，避免详情面板指向不存在的东西。
+    /// 懒创建搜索框与订阅（首帧渲染时执行一次，见 `search_input` 字段注释）。
+    fn ensure_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search_input.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索存档"));
+        // 用户真在打字的那条路径：输入变化 → 条件更新 → 重算可见行。
+        //
+        // 注意：`InputState::set_value` **不会**发 `InputEvent::Change`（gpui-component 内部注释明说），
+        // 所以程序性改词（清空筛选 / 宿主预填）必须自己同步条件（见 `set_query` / `clear_filter`），
+        // 不能指望这个订阅——否则输入框里的字与实际生效的条件会静默不一致。
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            |this: &mut Self, emitter, event: &InputEvent, _window, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                // 不用 `set_query`：它会把同一个值再写回输入框（正在输入时是无谓的往返）。
+                this.filter.query = emitter.read(cx).value().to_string();
+                this.refresh_view_rows();
+                cx.notify();
+            },
+        );
+        self.search_input = Some(input);
+        self._search_sub = Some(sub);
+    }
+
+    /// 重算可见行（筛选 → 排序）并清理悬空选中。
+    ///
+    /// 选中清理放在这里而不是只放在 `set_snapshot` 里：**筛选与排序也会让行消失**，
+    /// 只盯着快照会留下一个指向"看不见的行"的选中态。
+    fn refresh_view_rows(&mut self) {
+        self.view_rows = filter::apply_view(
+            &self.snapshot.rows,
+            &self.filter,
+            self.sort_field,
+            self.sort_order,
+        );
         if let Some(selected) = self.selected.as_deref() {
-            if !self.snapshot.rows.iter().any(|row| row.id == selected) {
+            if !self.view_rows.iter().any(|row| row.id == selected) {
                 self.selected = None;
             }
         }
+    }
+
+    /// 宿主推送数据（事件路径调用；面板不自己取数）。
+    pub fn set_snapshot(&mut self, snapshot: ResourcesSnapshot, cx: &mut Context<Self>) {
+        self.snapshot = snapshot;
+        self.refresh_view_rows();
+        cx.notify();
+    }
+
+    /// 换一套筛选条件（新建 / 清空走这里）。
+    pub fn set_filter(&mut self, filter: ResourcesFilter, cx: &mut Context<Self>) {
+        self.filter = filter;
+        self.refresh_view_rows();
+        cx.notify();
+    }
+
+    /// 设置搜索词：条件与输入框**同一次改**（见 `ensure_search_input` 里的注释）。
+    pub fn set_query(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter.query = text.to_string();
+        if let Some(input) = self.search_input.clone() {
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+        self.refresh_view_rows();
+        cx.notify();
+    }
+
+    /// 勾选 / 取消一个种类（全选会被规范化为不限，见 `ResourcesFilter::toggle_kind`）。
+    pub fn toggle_kind(&mut self, kind: ArchiveKind, cx: &mut Context<Self>) {
+        self.filter.toggle_kind(kind);
+        self.refresh_view_rows();
+        cx.notify();
+    }
+
+    /// 只看需处理的异常（缺失 / 内容已变）。
+    pub fn toggle_only_issues(&mut self, cx: &mut Context<Self>) {
+        self.filter.only_issues = !self.filter.only_issues;
+        self.refresh_view_rows();
+        cx.notify();
+    }
+
+    /// 选排序字段：同一字段再点一次翻转方向；换字段保持当前方向
+    /// （沿用 M4 与 v1 `use-pagination` 的语义——用户刚调完方向再换字段，不该被重置）。
+    pub fn choose_sort(&mut self, field: SortField, cx: &mut Context<Self>) {
+        if field == self.sort_field {
+            self.sort_order = self.sort_order.flipped();
+        } else {
+            self.sort_field = field;
+        }
+        self.refresh_view_rows();
+        cx.notify();
+    }
+
+    /// 清空筛选（含搜索框）：只在"没有匹配"的空态给这个入口。
+    pub fn clear_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter = ResourcesFilter::default();
+        if let Some(input) = self.search_input.clone() {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        self.refresh_view_rows();
         cx.notify();
     }
 
@@ -203,6 +328,28 @@ impl ResourcesPanel {
 
     pub fn snapshot(&self) -> &ResourcesSnapshot {
         &self.snapshot
+    }
+
+    /// 可见行（筛选 + 排序后）：render 与测试都读它。
+    pub fn view_rows(&self) -> &[ArchiveRow] {
+        &self.view_rows
+    }
+
+    /// 当前筛选条件。
+    pub fn filter(&self) -> &ResourcesFilter {
+        &self.filter
+    }
+
+    /// 当前排序（字段 + 方向）。
+    pub fn sort(&self) -> (SortField, SortOrder) {
+        (self.sort_field, self.sort_order)
+    }
+
+    /// 搜索框实体（宿主接 `Ctrl+F` 聚焦 / `Esc` 清空时用，见 Action 批）。
+    ///
+    /// 首帧渲染前为 `None`（懒创建，见字段注释）。
+    pub fn search_input(&self) -> Option<&Entity<InputState>> {
+        self.search_input.as_ref()
     }
 
     fn select(&mut self, id: Option<String>, cx: &mut Context<Self>) {
@@ -245,8 +392,110 @@ impl ResourcesPanel {
                     .ghost()
                     .label("归档")
                     .disabled(read_only)
-                    .on_click(move |_, _, _| host.request_archive()),
+                    .on_click(move |_, window, cx| host.request_archive(window, cx)),
             )
+    }
+
+    /// 工具栏（高 2rem）：搜索框 + 筛选 + 排序（原型 §2.2）。
+    ///
+    /// 空库时也照常渲染：工具栏是面板版式的一部分，不能随"有没有存档"上下跳。
+    /// 条件在渲染时快照一份给菜单（菜单开启时读一次，之后用 `checked` 表达状态）。
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> Div {
+        let border = cx.theme().colors.border;
+        let panel = cx.entity();
+        let kinds = self.filter.kinds.clone();
+        let only_issues = self.filter.only_issues;
+        // 菜单里设了几个条件就标在按钮上：搜索词不计数（它在输入框里看得见）。
+        let filter_label = match self.filter.menu_dims() {
+            0 => "筛选 ▾".to_string(),
+            dims => format!("筛选 {dims} ▾"),
+        };
+        let (field, order) = (self.sort_field, self.sort_order);
+        let sort_label = format!("{} {} ▾", field.label(), order.arrow());
+
+        let filter_button = Button::new("archive-filter")
+            .ghost()
+            .small()
+            .label(filter_label)
+            .dropdown_menu({
+                let panel = panel.clone();
+                move |menu, _window, _cx| {
+                    let mut menu = menu.item(PopupMenuItem::label("种类"));
+                    for kind in ArchiveKind::ALL {
+                        let target = panel.clone();
+                        let is_checked = kinds.contains(&kind);
+                        menu = menu.item(
+                            PopupMenuItem::new(kind.label())
+                                .checked(is_checked)
+                                .on_click(move |_, _, app| {
+                                    target.update(app, |panel, cx| panel.toggle_kind(kind, cx));
+                                }),
+                        );
+                    }
+                    menu.separator().item(
+                        PopupMenuItem::new("只看需处理")
+                            .checked(only_issues)
+                            .on_click({
+                                let target = panel.clone();
+                                move |_, _, app| {
+                                    target.update(app, |panel, cx| panel.toggle_only_issues(cx));
+                                }
+                            }),
+                    )
+                }
+            });
+
+        let sort_button = Button::new("archive-sort")
+            .ghost()
+            .small()
+            .label(sort_label)
+            .dropdown_menu({
+                let panel = panel.clone();
+                move |menu, _window, _cx| {
+                    let mut menu = menu.item(PopupMenuItem::label("排序"));
+                    for candidate in [SortField::Name, SortField::Version] {
+                        let target = panel.clone();
+                        let is_current = candidate == field;
+                        // 当前字段带上方向箭头：不然用户得回忆上次点的是哪个方向。
+                        let text = if is_current {
+                            format!("{} {}", candidate.label(), order.arrow())
+                        } else {
+                            candidate.label().to_string()
+                        };
+                        menu = menu.item(
+                            PopupMenuItem::new(text)
+                                .checked(is_current)
+                                .on_click(move |_, _, app| {
+                                    target.update(app, |panel, cx| {
+                                        panel.choose_sort(candidate, cx)
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                }
+            });
+
+        div()
+            .flex_none()
+            .h(rems(ui::TOOLBAR_HEIGHT))
+            .h_flex()
+            .gap_1()
+            .px_1()
+            .border_b(px(1.0))
+            .border_color(border)
+            .child(
+                // 搜索框占满除两个按钮之外的宽度（`min_w_0`：窄面板下允许被压缩）。
+                div().flex_1().min_w_0().when_some(self.search_input.clone(), |row, input| {
+                    row.child(
+                        Input::new(&input)
+                            .h(rems(ui::CONTROL_HEIGHT_SM))
+                            .cleanable(true),
+                    )
+                }),
+            )
+            .child(filter_button)
+            .child(sort_button)
     }
 
     fn render_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -290,7 +539,7 @@ impl ResourcesPanel {
         let panel = cx.weak_entity();
         let host_for_rows = self.host.clone();
 
-        for row in &self.snapshot.rows {
+        for row in &self.view_rows {
             let is_selected = self.selected.as_deref() == Some(row.id.as_str());
             let badge = strength_badge(row.kind, row.status);
             let badge_color = match badge_tone(row.kind, row.status) {
@@ -368,7 +617,7 @@ impl ResourcesPanel {
                                     .on_click({
                                         let open_host = host_for_rows.clone();
                                         let id = row.id.clone();
-                                        move |_, _, _| open_host.request_open(&id)
+                                        move |_, window, cx| open_host.request_open(&id, window, cx)
                                     }),
                                 )
                                 .child(
@@ -382,7 +631,7 @@ impl ResourcesPanel {
                                     .on_click({
                                         let checkout_host = host_for_rows.clone();
                                         let id = row.id.clone();
-                                        move |_, _, _| checkout_host.request_checkout(&id)
+                                        move |_, window, cx| checkout_host.request_checkout(&id, window, cx)
                                     }),
                                 )
                                 .child(
@@ -395,7 +644,7 @@ impl ResourcesPanel {
                                     .on_click({
                                         let delete_host = host_for_rows.clone();
                                         let id = row.id.clone();
-                                        move |_, _, _| delete_host.request_delete(&id)
+                                        move |_, window, cx| delete_host.request_delete(&id, window, cx)
                                     }),
                                 )
                             }),
@@ -440,7 +689,7 @@ impl ResourcesPanel {
                     Button::new("index-repair")
                         .ghost()
                         .label("修复…")
-                        .on_click(move |_, _, _| host.request_index_repair()),
+                        .on_click(move |_, window, cx| host.request_index_repair(window, cx)),
                 )
             })
     }
@@ -474,7 +723,44 @@ impl ResourcesPanel {
                     .primary()
                     .label("从草稿箱归档…")
                     .disabled(read_only)
-                    .on_click(move |_, _, _| host.request_archive()),
+                    .on_click(move |_, window, cx| host.request_archive(window, cx)),
+            )
+    }
+
+    /// 搜索 / 筛选无结果：**不是空库态**（原型 §5 状态与空态矩阵）。
+    ///
+    /// 两态的出口才是关键区别：空库引导"归档"（没有东西可用），无匹配引导"清筛选"
+    /// （东西在，只是被挡住了）。文案混用会把用户引到错误的下一步。
+    fn render_no_match(&self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let panel = cx.entity();
+
+        div()
+            .flex_1()
+            .v_flex()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("没有匹配的存档"),
+            )
+            .child(
+                div()
+                    .px_4()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("换个关键词，或去掉几个筛选条件"),
+            )
+            .child(
+                Button::new("archive-clear-filter")
+                    .ghost()
+                    .label("清空筛选")
+                    .on_click(move |_, window, app| {
+                        panel.update(app, |panel, cx| panel.clear_filter(window, cx));
+                    }),
             )
     }
 }
@@ -511,13 +797,22 @@ impl ComponentPanel for ResourcesPanel {
 }
 
 impl Render for ResourcesPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 首帧创建搜索框（懒创建，见字段注释）：之后本帧即可渲染工具栏。
+        self.ensure_search_input(window, cx);
         let background = cx.theme().colors.background;
         // 各区域函数返回具体类型（见上文注释），故可依次调用、各自持有已完成的元素。
         let header = self.render_header(cx);
+        let toolbar = self.render_toolbar(cx);
         let notice = self.render_notice(cx);
-        let body = if self.snapshot.rows.is_empty() {
-            self.render_empty(cx).into_any_element()
+        // 两种空：**空库**（条件为空，没有东西可用）与**无匹配**（条件非空，东西被挡住了）。
+        // `ResourcesFilter::is_empty` 就是为这行判定存在的（见 `filter.rs` 模块头）。
+        let body = if self.view_rows.is_empty() {
+            if self.filter.is_empty() {
+                self.render_empty(cx).into_any_element()
+            } else {
+                self.render_no_match(cx).into_any_element()
+            }
         } else {
             self.render_rows(cx)
         };
@@ -530,31 +825,31 @@ impl Render for ResourcesPanel {
             .key_context("analytics-resource")
             .on_action(cx.listener({
                 let host = host.clone();
-                move |_: &mut Self, _: &commands::RequestArchive, _window, _cx| {
-                    host.request_archive()
+                move |_: &mut Self, _: &commands::RequestArchive, window, cx| {
+                    host.request_archive(window, cx)
                 }
             }))
             .on_action(cx.listener({
                 let host = host.clone();
-                move |panel: &mut Self, _: &commands::OpenSelected, _window, _cx| {
+                move |panel: &mut Self, _: &commands::OpenSelected, window, cx| {
                     if let Some(id) = panel.selected.clone() {
-                        host.request_open(&id);
+                        host.request_open(&id, window, cx);
                     }
                 }
             }))
             .on_action(cx.listener({
                 let host = host.clone();
-                move |panel: &mut Self, _: &commands::CheckoutSelected, _window, _cx| {
+                move |panel: &mut Self, _: &commands::CheckoutSelected, window, cx| {
                     if let Some(id) = panel.selected.clone() {
-                        host.request_checkout(&id);
+                        host.request_checkout(&id, window, cx);
                     }
                 }
             }))
             .on_action(cx.listener({
                 let host = host.clone();
-                move |panel: &mut Self, _: &commands::DeleteSelected, _window, _cx| {
+                move |panel: &mut Self, _: &commands::DeleteSelected, window, cx| {
                     if let Some(id) = panel.selected.clone() {
-                        host.request_delete(&id);
+                        host.request_delete(&id, window, cx);
                     }
                 }
             }))
@@ -564,6 +859,7 @@ impl Render for ResourcesPanel {
             .min_h_0()
             .bg(background)
             .child(header)
+            .child(toolbar)
             .when_some(notice, |panel, notice| panel.child(notice))
             .child(body)
             .child(status)

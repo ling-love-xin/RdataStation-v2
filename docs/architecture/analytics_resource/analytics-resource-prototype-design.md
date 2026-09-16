@@ -248,18 +248,22 @@ sequenceDiagram
 
 > 已知欠债：旧原型稿里出现的 `#0F2A4A` / `#3A3105` / `#4A1A1A` 等语义底色**不在主题资产中**，属自创值——以本文件的口径为准，旧稿待顺手校正。
 
-## 7. 尺寸常量（需新增到 `crates/workbench/src/ui.rs`）
+## 7. 尺寸常量（**已落到 crate 内的 `crates/analytics_resource/src/ui.rs`**）
 
-新增「资产库（M6）专用尺寸」一节，共 4 项（其余全部复用既有常量）：
+原计划写进 `crates/workbench_shell/src/ui.rs`，实现时改为 **crate 内声明**：视图随能力同 crate（架构 §8.2），依赖方向不允许视图反向读 workbench 的常量（与 `project::ui` 同例）；值与 workbench 同源同值。
 
-| 常量 | 倍率 | @16px | 用途 |
-| --- | --- | --- | --- |
-| `ARCHIVE_BADGE_HEIGHT` | 1.125 | 18 | 版本 / 强度徽标高（与 `NAV_BADGE_SIZE` 同值，独立命名便于各自演进） |
-| `DETAIL_PANEL_DEFAULT_WIDTH` | 20.0 | 320 | 详情面板默认宽（`PROPERTY_PANEL_MIN/MAX` 已存在） |
-| `ARCHIVE_EMPTY_ICON_SIZE` | 3.0 | 48 | 空态大图标（v1 空态同为 48px） |
-| `ARCHIVE_STATUS_BAR_HEIGHT` | 1.5 | 24 | 底部状态行（与 `ROW_HEIGHT` 同值，语义独立） |
+| 常量 | 倍率 | @16px | 用途 | 现状 |
+| --- | --- | --- | --- | --- |
+| `ARCHIVE_BADGE_HEIGHT` | 1.125 | 18 | 版本 / 强度徽标高（与 `NAV_BADGE_SIZE` 同值，独立命名便于各自演进） | ✅ |
+| `ARCHIVE_EMPTY_ICON_SIZE` | 3.0 | 48 | 空态大图标（v1 空态同为 48px） | ✅ |
+| `ROW_HEIGHT` / `PANEL_HEADER_HEIGHT` / `ICON_SIZE_SM` | 1.5 / 2.25 / 0.875 | 24 / 36 / 14 | 行高 / 面板头 / 小图标（复用既有口径） | ✅ |
+| `DETAIL_LABEL_WIDTH` | 5.5 | 88 | 详情面板标签列宽（值列弹性） | ✅ |
+| `TOOLBAR_HEIGHT` | 2.0 | 32 | 工具栏行高（§2.2） | ✅ |
+| `CONTROL_HEIGHT_SM` | 1.625 | 26 | 工具栏搜索框高 | ✅ |
+| `DETAIL_PANEL_DEFAULT_WIDTH` | 20.0 | 320 | 详情面板默认宽（接入右侧 Dock 时落） | ⬜ |
+| `ARCHIVE_STATUS_BAR_HEIGHT` | 1.5 | 24 | 底部状态行（当前复用 `ROW_HEIGHT`；语义独立命名待接） | ⬜ |
 
-> 契约测试会校验 `ui.rs` 倍率 × 16 等于本文档设计值；改值需同步 `ui.rs` / 本文档 / `ui_contract.rs` 三处。
+> **契约测试现状**：`crates/workbench/tests/ui_contract.rs` 扫的是**显式文件清单**（workbench `view.rs` / `panels/` + connection_dialog + editor 视图），**不含本 crate 视图**——本文档与 `ui.rs` 的一致性目前靠评审 + 单测；若要纳入契约测试，得先给它加一个跳 crate 的扫描入口。
 
 ### 7.1 对话框宽度（`Dialog::w` 只能收 `Pixels` → 用 `cx.theme().font_size * N`）
 
