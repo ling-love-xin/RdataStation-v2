@@ -789,6 +789,62 @@ parameters = []
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 作用域 → 目录的派发只有这一处（`.RSmeta` 的拼写有多个历史版本）
+    #[test]
+    fn test_rule_dir_dispatch() {
+        let dir = rule_dir(Some(Path::new("/p")), RuleScope::Project).expect("项目层目录");
+        assert!(dir.to_string_lossy().contains(".RSmeta"), "{dir:?}");
+        assert!(dir.to_string_lossy().ends_with("insight-rules"), "{dir:?}");
+        assert_eq!(
+            rule_dir(Some(Path::new("/p")), RuleScope::Builtin),
+            None,
+            "内置层内嵌在二进制里，没有目录"
+        );
+        assert_eq!(
+            rule_dir(None, RuleScope::Project),
+            None,
+            "无项目就没有项目层目录"
+        );
+    }
+
+    /// 新建规则的模板：**能解析**（否则用户第一眼看到的是一条红错），
+    /// 且因 `applies_to` 为空而暂不参与分析。
+    #[test]
+    fn test_new_rule_template_parses_and_stays_inert() {
+        let text = new_rule_template("new-rule");
+        let parsed = parse_rule_toml(&text).expect("模板必须能解析");
+        assert_eq!(parsed.meta.id, "new-rule");
+        assert!(!parsed.meta.builtin);
+        assert!(
+            parsed.meta.applies_to.is_empty(),
+            "空 applies_to = 未填之前不参与任何列的分析"
+        );
+        assert!(
+            crate::builtin_registry()
+                .all_rules()
+                .iter()
+                .all(|r| r.meta.id != parsed.meta.id),
+            "模板 id 不得与内置规则撞车"
+        );
+    }
+
+    /// 文件名与 id 都避让已有文件：两份模板同 id 会让用户编辑的那条被另一条默默顶掉
+    #[test]
+    fn test_create_rule_file_avoids_existing_names() -> Result<(), CoreError> {
+        let root = temp_dir("create_rule");
+        let first = create_rule_file(Some(&root), RuleScope::Project)?;
+        let second = create_rule_file(Some(&root), RuleScope::Project)?;
+        assert_ne!(first, second, "第二次新建不得覆盖第一份模板");
+        assert!(first.exists() && second.exists());
+        assert!(first.to_string_lossy().ends_with("new-rule.rule.toml"), "{first:?}");
+        assert!(
+            second.to_string_lossy().ends_with("new-rule-2.rule.toml"),
+            "{second:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
     /// 用户的启停选择必须活过同步（磁盘现状覆盖不了它）。
     #[test]
     fn test_plan_preserves_user_enabled_choice() {

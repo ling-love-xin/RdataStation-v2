@@ -20,6 +20,7 @@
 //! 唯一的可见出口。
 
 use std::collections::HashSet;
+// 显式引入：`gpui_kit::*` 里也有一个 `Path`（场景路径），不写清楚会静默取错那个
 use std::path::{Path, PathBuf};
 
 use gpui_kit::base::StyledExt;
@@ -32,7 +33,6 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme
 use gpui_kit::*;
 
 use crate::rule::RuleScope;
-use crate::rule_registry::{get_global_rules_dir, get_project_rules_dir};
 use crate::rule_types::RuleMeta;
 use crate::service::indexer::{RuleIndexEntry, RuleLoadStatus};
 use crate::ui;
@@ -187,17 +187,6 @@ pub struct RuleDataInput {
     pub builtin: Vec<RuleMeta>,
 }
 
-impl RuleDataInput {
-    /// 目录路径直接现算（宿主与索引同步器共用同一份拼装，不各自拼字符串）。
-    pub fn with_dirs(project_root: Option<&Path>, global_dir: Option<PathBuf>) -> Self {
-        Self {
-            project_dir: project_root.map(get_project_rules_dir),
-            global_dir,
-            ..Default::default()
-        }
-    }
-}
-
 /// 内置层 id 集合：索引里出现这些 id 且没有来源文件时，是**抑制记录**而非规则文件。
 fn builtin_id_set(builtin: &[RuleMeta]) -> HashSet<String> {
     builtin.iter().map(|m| m.id.clone()).collect()
@@ -343,17 +332,6 @@ pub fn build_rules_data(input: RuleDataInput) -> RulesData {
         total,
         disabled,
         broken,
-    }
-}
-
-/// 该层的规则目录（供接缝建目录用；内置层为 `None`）。
-pub fn scope_dir(project_root: Option<&Path>, scope: RuleScope) -> Option<PathBuf> {
-    match scope {
-        RuleScope::Builtin => None,
-        RuleScope::Project => project_root.map(get_project_rules_dir),
-        RuleScope::Global => engine::migration::get_system_dir()
-            .ok()
-            .map(|dir| get_global_rules_dir(&dir)),
     }
 }
 
@@ -995,7 +973,7 @@ mod tests {
 
     use super::{
         GROUP_ORDER, RuleDataInput, RuleRowStatus, RulesData, RulesEvent, RulesView, build_rules_data,
-        row_matches, scope_dir,
+        row_matches,
     };
     use crate::rule::RuleScope;
     use crate::rule_types::RuleMeta;
@@ -1204,16 +1182,6 @@ mod tests {
         assert!(row_matches(&view, "my-rule"));
         assert!(row_matches(&view, "名称"));
         assert!(!row_matches(&view, "不存在"));
-    }
-
-    #[test]
-    fn layer_dirs_come_from_one_place() {
-        // 项目层：{项目}/.RSmeta/insight-rules/；内置层没有目录
-        let dir = scope_dir(Some(std::path::Path::new("/p")), RuleScope::Project).unwrap();
-        assert!(dir.to_string_lossy().contains(".RSmeta"), "{dir:?}");
-        assert!(dir.to_string_lossy().ends_with("insight-rules"), "{dir:?}");
-        assert_eq!(scope_dir(Some(std::path::Path::new("/p")), RuleScope::Builtin), None);
-        assert_eq!(scope_dir(None, RuleScope::Project), None);
     }
 
     #[test]

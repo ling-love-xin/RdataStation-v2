@@ -118,7 +118,7 @@ cargo check --workspace --all-targets -j 2
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **145 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 第一批新增 22（视图模型与面板状态机）；第二批新增 7（错误→文案+可重试的映射 5、类型族判定 2）；Phase 2 第一批新增 6（等级阀值边界 4 + 权重合计 1 + 空列不产分）；第二批新增 13（规则管理视图模型 10 + 对话框实体与窗口 3）+ 接缝 2（真实项目库加载→开关、新建目录与模板）），另有**集成测试 4 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 → 视图模型，含错误文案对账），**新增功能不得减少**。
+- **基线**：`cargo test -p rds-insight` 当前 **147 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 第一批新增 22（视图模型与面板状态机）；第二批新增 7（错误→文案+可重试的映射 5、类型族判定 2）；Phase 2 第一批新增 6（等级阀值边界 4 + 权重合计 1 + 空列不产分）；第二批新增 17（规则管理视图模型 9 + 对话框实体与窗口 3 + 接缝 2 + 目录派发与新建模板 3）），另有**集成测试 4 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 → 视图模型，含错误文案对账），**新增功能不得减少**。
 
 ## 6. 文档地图
 

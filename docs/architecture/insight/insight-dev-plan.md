@@ -25,7 +25,7 @@
 
 ### 2026-09-16 — Phase 2 第二批：规则管理对话框（2.3 + 2.4）
 
-**已完成并验证**（`cargo test -p rds-insight --lib` **145 项** + 集成 4 项全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
+**已完成并验证**（`cargo test -p rds-insight --lib` **147 项** + 集成 4 项全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
 
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
@@ -36,9 +36,9 @@
 | 面板入口 | ⚙ 由「占位禁用」改为**按项目状态启用** → 开窗 + 发一次取数；`InsightView::rules_view()` 供宿主接缝 | `insight_view.rs` |
 | 2.4 目录 | `rule_dir`（作用域 → 目录，全集一处拼）/ `create_rule_file`（建目录 + 写模板）/ `new_rule_template`（**能解析但不生效**：`applies_to = []`，文件名与 id 按序号避让） | `service/indexer.rs` |
 | 宿主 | 只多一行：`insight::jobs::attach_rules(&insight_panel, cx, 项目根提供者)` | `workbench/src/panels/right.rs` |
-| 测试 | 视图模型 10 项（分组顺序 / 抑制记录不被当成项目规则 / 同 id 覆盖 != 禁用 / 错误原文 / 统计 / 搜索）+ 窗口与实体 3 项（弹窗 + 事件 + 四态逐帧 + 就地翻位）+ 接缝 2 项（真实项目库：加载→开关一路走到规则集；新建目录与模板） | 各文件测试模块 |
+| 测试 | 视图模型 9 项（分组顺序 / 抑制记录不被当成项目规则 / 同 id 覆盖 != 禁用 / 错误原文与文件丢失 / 统计 / 搜索 / 过滤保骨架 / 大小写 / 空数据）+ 窗口与实体 3 项（弹窗 + 事件 + 四态逐帧 + 就地翻位）+ 接缝 2 项（真实项目库：加载→开关一路走到规则集；新建目录与模板）+ 目录派发与新建模板 3 项 | 各文件测试模块 |
 
-**排掉的坑**：`MutexGuard` 与进程级规则缓存——开关会写 `apply_disabled_rules`，必须与同类缓存测试串行（`rule_state_guard()`）；首次跑全集时因此而间歇失败。另：单测里不真的拉起系统编辑器（`cfg!(test)` 短路），否则 `cmd.exe` 的输出会混进测试日志。
+**排掉的坑**：`MutexGuard` 与进程级规则缓存——开关会写 `apply_disabled_rules`，必须与同类缓存测试串行（`rule_state_guard()`）；首次跑全集时因此而间歇失败。另：单测里不真的拉起系统编辑器（`cfg!(test)` 短路），否则 `cmd.exe` 的输出会混进测试日志。收尾时把作用域 → 目录的派发收敛到 `service::indexer::rule_dir` 一处（D28）——原先视图层与同步器各有一份，`.RSmeta` 的拼写会在两处漂移。
 
 **与原型的两处**（已在 §5 标注）：① 新建入口除「＋ 新建项目规则」外，全局分组在目录缺失时也给「创建目录并新建规则」（K7 的落地形态）；② 启停开关是**受控**的（先就地翻位、后台落库失败时回填真值并把原因挂在状态行），不静默丢掉失败。
 
