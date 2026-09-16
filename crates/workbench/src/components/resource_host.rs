@@ -72,6 +72,27 @@ impl WorkbenchResourceHost {
     fn read_only(&self) -> bool {
         self.shared.project_ui.borrow().read_only
     }
+
+    /// 本体绝对路径（越界 / 点前缀守卫由 `PayloadStore::resolve` 把关）。
+    ///
+    /// 拿不到就**给回执**：旧行可能没登记路径，或项目已关闭——两种都要说清，不能静默。
+    fn payload_path(&self, detail: &ArchiveDetail, cx: &mut App) -> Option<PathBuf> {
+        let Some(root) = self.shared.project_root() else {
+            self.pending("无法定位本体", "：还没有打开项目", cx);
+            return None;
+        };
+        let Some(rel) = detail.payload_rel_path.as_deref() else {
+            self.notice("资产库：这条存档没有登记本体路径（旧行）", cx);
+            return None;
+        };
+        match PayloadStore::new(root).resolve(rel) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                self.notice(format!("资产库：无法定位本体（{error}）"), cx);
+                None
+            }
+        }
+    }
 }
 
 impl ResourcesHost for WorkbenchResourceHost {
@@ -147,26 +168,12 @@ impl ResourcesHost for WorkbenchResourceHost {
     }
 
     fn request_open(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
-        let Some(root) = self.require_project("无法打开存档", cx) else {
+        let Some(path) = self.payload_path(detail, cx) else {
             return;
-        };
-        let Some(rel) = detail.payload_rel_path.as_deref() else {
-            self.notice("资产库：这条存档没有登记本体路径（旧行），请先走索引修复", cx);
-            return;
-        };
-        // 本体路径由 `PayloadStore` 解析（越界与点前缀的守卫在那一层，宿主不自己拼路径）。
-        let payload = PayloadStore::new(root);
-        let path = match payload.resolve(rel) {
-            Ok(path) => path,
-            Err(error) => {
-                self.notice(format!("资产库：无法打开本体（{error}）"), cx);
-                return;
-            }
         };
         // **编辑器只读**：改它要先去取回（本体不可写是模块硬约束 2）。
-        self.shared.request_open_in_editor_read_only(path.clone());
+        self.shared.request_open_in_editor_read_only(path);
         self.shared.notify_host(cx);
-        let _ = path;
     }
 
     fn request_checkout(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
@@ -213,6 +220,26 @@ impl ResourcesHost for WorkbenchResourceHost {
             "（等项目级回收站上提，P0.8；不做两套回收站）",
             cx,
         );
+    }
+
+    fn request_reveal(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        let Some(path) = self.payload_path(detail, cx) else {
+            return;
+        };
+        // `opener::reveal` 会选中该文件（而不是只打开目录）；失败给回执而不是静默。
+        if let Err(error) = opener::reveal(&path) {
+            self.notice(format!("资产库：打开资源目录失败（{error}）"), cx);
+        }
+    }
+
+    fn request_copy_path(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        let Some(path) = self.payload_path(detail, cx) else {
+            return;
+        };
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            path.to_string_lossy().to_string(),
+        ));
+        self.notice("资产库：已复制本体路径", cx);
     }
 
     fn request_undo_archive(&self, undo: &ArchiveUndo, _window: &mut Window, cx: &mut App) {

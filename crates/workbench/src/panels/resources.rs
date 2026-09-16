@@ -43,6 +43,9 @@ impl SidebarPanel {
             return;
         };
         let read_only = self.shared.project_ui.borrow().read_only;
+        // 入队即置"加载中"：首个快照到达前状态行给提示、空态不闪（原型 §5）。
+        let panel = self.resources_panel.clone();
+        panel.update(cx, |panel, cx| panel.set_loading(true, cx));
         resource_jobs::enqueue_refresh(root, read_only);
         self.ensure_resources_pump(cx);
     }
@@ -96,6 +99,8 @@ impl SidebarPanel {
         cx: &mut Context<Self>,
     ) {
         let panel = self.resources_panel.clone();
+        // 无论成败都要收掉"加载中"：失败时停在加载态比给出提示更糟（用户会一直等）。
+        panel.update(cx, |panel, cx| panel.set_loading(false, cx));
         match result {
             Ok(snapshot) => panel.update(cx, |panel, cx| {
                 panel.set_notice(None, cx);

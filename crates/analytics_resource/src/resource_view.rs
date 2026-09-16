@@ -91,6 +91,17 @@ impl ArchiveCounts {
         parts.join(" · ")
     }
 
+    /// 状态行完整文案：加载中时加前缀，但**不隐藏计数**——
+    /// 那几项是上一次的库口径，抹掉反而让人以为库空了（原型 §5 的"加载中"行）。
+    pub fn status_line(&self, loading: bool) -> String {
+        let line = self.line();
+        if loading {
+            format!("加载中… · {line}")
+        } else {
+            line
+        }
+    }
+
     /// 是否有需要用户处理的异常（决定状态行是否给"修复…"入口）。
     pub fn has_issues(&self) -> bool {
         self.missing > 0 || self.drifted > 0
@@ -144,7 +155,9 @@ pub fn badge_tone(kind: ArchiveKind, status: ArchiveStatus) -> BadgeTone {
 /// 而那个信号已经给了复现强度徽标）。
 ///
 /// 三个形状：文件 = 文档形；分析表 = 表格形；引用 = 外链形。
-fn kind_icon(kind: ArchiveKind) -> CatalogIcon {
+///
+/// `pub(crate)`：详情面板头部用同一套图标（同一口径只此一份）。
+pub(crate) fn kind_icon(kind: ArchiveKind) -> CatalogIcon {
     match kind {
         ArchiveKind::File => CatalogIcon::FileText,
         ArchiveKind::Analysis => CatalogIcon::Table,
@@ -179,6 +192,10 @@ pub trait ResourcesHost: 'static {
     /// 与 `request_checkout` 同理：收的是**面板已有的那条详情**（本体路径在它身上），
     /// 宿主不必回头读面板的选中态。
     fn request_open(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 在系统文件管理器里显示本体（原型 §3.2：选中文件而不是只开目录）。
+    fn request_reveal(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 复制本体绝对路径到剪贴板（原型 §3.2）。
+    fn request_copy_path(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
     /// 取回（检出）。
     ///
     /// 参数给的是**面板已有的那条详情**（而不是一个 id）：宿主据此命工作副本名与
@@ -388,7 +405,33 @@ impl ListDelegate for ArchiveListDelegate {
                                     }
                                 }),
                         );
-                        // 破坏性项用分隔线隔离。
+                        // 破坏性项用分隔线隔离；其上的两项是"本体在哪儿"的日常动作（原型 §3.2）。
+                        menu = menu.item(
+                            PopupMenuItem::new("复制路径")
+                                .disabled(!can_open)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = open_detail.clone();
+                                    move |_, window, cx| {
+                                        if let Some(detail) = detail.as_ref() {
+                                            host.request_copy_path(detail, window, cx);
+                                        }
+                                    }
+                                }),
+                        );
+                        menu = menu.item(
+                            PopupMenuItem::new("在系统中显示")
+                                .disabled(!can_open)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = open_detail.clone();
+                                    move |_, window, cx| {
+                                        if let Some(detail) = detail.as_ref() {
+                                            host.request_reveal(detail, window, cx);
+                                        }
+                                    }
+                                }),
+                        );
                         menu.separator().item(PopupMenuItem::new("移入回收站").on_click({
                             let host = host.clone();
                             let id = id_delete.clone();
@@ -470,6 +513,11 @@ pub struct ResourcesPanel {
     list: Option<Entity<ListState<ArchiveListDelegate>>>,
     selected: Option<String>,
     notice: Option<String>,
+    /// 正在取数（宿主在事件路径置位；原型 §5 的"加载中"行）。
+    ///
+    /// 用途有二：状态行加前缀，以及**空库那一帧不闪**（没有它，首个快照到达前
+    /// 会先给用户看一眼"还没有任何存档"）。
+    loading: bool,
     /// 上一次归档的撤销凭据（**只在内存里活几秒**，见 [`ArchiveUndo`]）。
     ///
     /// 由宿主在归档成功后推进来（面板不自己造），过期或下一次动作时清掉。
@@ -494,6 +542,7 @@ impl ResourcesPanel {
             list: None,
             selected: None,
             notice: None,
+            loading: false,
             undo: None,
             focus_handle: cx.focus_handle(),
             group: None,
@@ -671,6 +720,15 @@ impl ResourcesPanel {
 
     pub fn set_notice(&mut self, notice: Option<String>, cx: &mut Context<Self>) {
         self.notice = notice;
+        cx.notify();
+    }
+
+    /// 置"正在取数"（**事件路径调用**：入队时置真、快照到达/失败时置假）。
+    pub fn set_loading(&mut self, loading: bool, cx: &mut Context<Self>) {
+        if self.loading == loading {
+            return;
+        }
+        self.loading = loading;
         cx.notify();
     }
 
@@ -987,7 +1045,7 @@ impl ResourcesPanel {
                 div()
                     .text_xs()
                     .text_color(if has_issues { warning } else { muted })
-                    .child(counts.line()),
+                    .child(counts.status_line(self.loading)),
             )
             .when(has_issues, |bar| {
                 bar.child(
@@ -997,6 +1055,31 @@ impl ResourcesPanel {
                         .on_click(move |_, window, cx| host.request_index_repair(window, cx)),
                 )
             })
+    }
+
+    /// 加载中骨架（原型 §5）：3 行灰条，**不用转圈**——形状直接提示"这里将要出现行"，
+    /// 宽度递减以免看着像真行。
+    fn render_loading(&self, cx: &mut Context<Self>) -> Div {
+        let bar_bg = cx.theme().colors.list_hover;
+        let mut skeleton = div()
+            .flex_1()
+            .v_flex()
+            .w_full()
+            .min_h_0()
+            .gap_2()
+            .p_2()
+            // 调试选择器：窗口测试靠它断言"取数期间不摆空态"。
+            .debug_selector(|| "archive-loading".to_string());
+        for ratio in [0.75_f32, 0.55, 0.65] {
+            skeleton = skeleton.child(
+                div()
+                    .h(rems(ui::ROW_HEIGHT))
+                    .w(relative(ratio))
+                    .rounded_sm()
+                    .bg(bar_bg),
+            );
+        }
+        skeleton
     }
 
     fn render_empty(&self, cx: &mut Context<Self>) -> Div {
@@ -1026,6 +1109,7 @@ impl ResourcesPanel {
             .child(
                 Button::new("archive-for-empty")
                     .primary()
+                    .debug_selector(|| "archive-empty-action".to_string())
                     .label("选择文件归档…")
                     .disabled(read_only)
                     .on_click(move |_, window, cx| host.request_archive(window, cx)),
@@ -1117,7 +1201,12 @@ impl Render for ResourcesPanel {
         // `ResourcesFilter::is_empty` 就是为这行判定存在的（见 `filter.rs` 模块头）。
         let body = if self.view_rows.is_empty() {
             if self.filter.is_empty() {
-                self.render_empty(cx).into_any_element()
+                // 首个快照到达前不摆空态：那是"还没读到"，不是"没有存档"（原型 §5）。
+                if self.loading {
+                    self.render_loading(cx).into_any_element()
+                } else {
+                    self.render_empty(cx).into_any_element()
+                }
             } else {
                 self.render_no_match(cx).into_any_element()
             }
@@ -1290,6 +1379,9 @@ mod tests {
         };
         assert_eq!(clean.line(), "3 项 · 已归档 3");
         assert!(!clean.has_issues());
+        // 加载中只加前缀，**不藏计数**（那是上一次的库口径，抹掉会让人以为库空了）。
+        assert_eq!(clean.status_line(true), "加载中… · 3 项 · 已归档 3");
+        assert_eq!(clean.status_line(false), clean.line());
 
         let with_issues = ArchiveCounts {
             total: 4,

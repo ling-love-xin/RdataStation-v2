@@ -153,7 +153,7 @@ rfd = "0.17"
 # ===== 单使用方依赖（同样集中声明，避免各模块自行挑版本）=====
 aes-gcm = "0.11.1"
 similar = "3.2.0"
-opener = "0.8.5"
+opener = { version = "0.8.5", features = ["reveal"] }
 # 文件监控（草稿箱 watch；与 Cargo.lock 已解析的 7.x 对齐）
 notify = "7.0.0"
 fake = { version = "5.1.0", features = [

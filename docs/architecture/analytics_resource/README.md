@@ -3,7 +3,7 @@
 > **一句话**：把「值得留存、需被引用、要能复现」的分析产物，从工作区转成**只读、有版本、带来源**的正式存档——回答的不是"我能看到什么数据"（M4），也不是"我正在做什么"（M5），而是**"我留下了什么，它当时长什么样"**。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**设计定稿（2026-09-15）；Phase 0 三批 + Phase 1 十刀已落地**——归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件 + 索引修复（三类孤儿）已可用（`ArchiveService` / `IndexRepair`）；面板（面板头 / **工具栏搜索·筛选·排序** / **`List` 虚拟化行 + kind 图标 + 右键菜单** / 状态行 / **归档撤销栏** / 两种空态）、**Action 与快捷键（`Ctrl+F` / `Esc` / `Delete`）**、**存档详情接入右栏（`RightPanel::Archive`，选中联动 + 打开 / 取回动作）**、**归档 / 取回对话框与真执行（含重名避让、回执与顺手打开）**、**归档撤销（`undo_archive`，5 秒窗口）**、**只读三重守卫（编辑器只读打开，P1.6）**、呈现层（索引行 → 面板快照，含逐行详情）与 **workbench 接线（面板挂载 + 后台取数 + 端口回执）** 均已落地。逐项证据见 `analytics-resource-dev-plan.md` §0 进度记录。
+> 状态：**设计定稿（2026-09-15）；Phase 0 三批 + Phase 1 十一刀已落地**——归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件 + 索引修复（三类孤儿）已可用（`ArchiveService` / `IndexRepair`）；面板（面板头 / **工具栏搜索·筛选·排序** / **`List` 虚拟化行 + kind 图标 + 右键菜单（打开·取回·复制路径·在系统中显示·移入回收站）** / 状态行 / **加载态（骨架）** / **归档撤销栏** / 两种空态）、**Action 与快捷键（`Ctrl+F` / `Esc` / `Delete`）**、**存档详情接入右栏（`RightPanel::Archive`，选中联动 + 打开 / 取回动作 + 指纹复制）**、**归档 / 取回对话框与真执行（含重名避让、回执与顺手打开）**、**归档撤销（`undo_archive`，5 秒窗口）**、**只读三重守卫（编辑器只读打开，P1.6）**、呈现层（索引行 → 面板快照，含逐行详情）与 **workbench 接线（面板挂载 + 后台取数 + 端口回执）** 均已落地。逐项证据见 `analytics-resource-dev-plan.md` §0 进度记录。
 > 仍待：草稿箱发起侧归档入口 · 版本历史 / 回收站 / 索引修复三个对话框（Phase 3；回收站需先上提 `ProjectTrash`，P0.8）· 批量多选（含 `F2` / `Ctrl+A`）· 废弃 `recycle.rs` → `ProjectTrash` · 版本保留策略接设置项。
 >
 > **边界**：本模块拥有**归档与取回 / 存档登记 / 版本与内容指纹 / 标签与分组 / 检索 / 资源侧回收站 / 索引修复**。连接与内省属 M3/M4；工作区文件读写属 M5；DuckDB 计算属 M2；Mock 生成属 M7；洞察计算属 M8；**项目级 → 系统级提升属 M1**（另立设计）。本模块**不自己取数、不自己计算、不改工作区文件**——只做搬运 + 登记 + 冻结 + 检索。
@@ -76,7 +76,7 @@
 | 标签与双向查询 | `crates/analytics_resource/src/tag.rs`（现状：✅ 搬运，补改名/删除） |
 | 版本（内容指纹版本） | `crates/analytics_resource/src/version.rs`（现状：⚠️ 仍写前快照，但已支持在调用方事务内写快照 + 返回快照行 id；`version_counts()` 批量给详情用） |
 | 回收站 | `crates/analytics_resource/src/recycle.rs`（现状：⚠️ **整体作废**，改走 `ProjectTrash`） |
-| 左 Dock 面板（列表 / 工具栏 / 状态行） | `crates/analytics_resource/src/resource_view.rs`（现状：✅ Phase 1 五刀；`list::List` 虚拟化 + kind 图标 + 行右键菜单已落；对话框 / Action 待做） |
+| 左 Dock 面板（列表 / 工具栏 / 状态行） | `crates/analytics_resource/src/resource_view.rs`（现状：✅ Phase 1 七刀；`list::List` 虚拟化 + kind 图标 + 行右键菜单（含复制路径 / 在系统中显示）已落；**加载态（骨架 + 状态行前缀）**已落；对话框 / Action 待做） |
 | 工具栏规则（搜索 / 筛选 / 排序） | `crates/analytics_resource/src/filter.rs`（现状：✅ 纯函数 + 单测；标签维待 Phase 2） |
 | 详情属性面板（内容层） | `crates/analytics_resource/src/detail_view.rs`（现状：✅ 只读信息区 + **动作区（打开（只读）/ 取回…）**；内容预览 / 危险区随各自批次） |
 | 归档 / 取回对话框 | `crates/analytics_resource/src/dialogs/{archive,checkout}.rs`（现状：✅ 表单 + 校验 + 冲突提示；执行由宿主注入的 `on_submit` 接手） |
@@ -125,7 +125,7 @@ cargo test -p rds-workbench --test ui_contract -j 2
 cargo check --workspace --all-targets -j 2
 ```
 
-- **当前基线（2026-09-17）**：`77 单测 + 3 对话框窗口测试 + 9 面板窗口测试`全绿（`cargo check --all-targets` 零告警）；编辑器侧 `cargo test -p rds-editor --lib` **217 项**（含只读打开）。
+- **当前基线（2026-09-17）**：`77 单测 + 3 对话框窗口测试 + 10 面板窗口测试`全绿（`cargo check --all-targets` 零告警）；编辑器侧 `cargo test -p rds-editor --lib` **217 项**（含只读打开）。
 - 测试场景 T1–T16 见 `analytics-resource-dev-plan.md` §9（归档回滚 / 指纹未变不增版本 / 历史裁剪 / 跨模块还原被拒 / 三类孤儿 / 越界写入 / 跨设备 move 等）。
 - **基线**：v1 的 15 个存储用例改造后全绿且不得减少。
 - 真机矩阵：明暗主题 × 三类 kind × 异常三态；平台矩阵：Windows（只读属性最弱）/ macOS / Linux（大小写敏感）。

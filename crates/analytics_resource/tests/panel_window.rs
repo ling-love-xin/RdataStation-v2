@@ -42,6 +42,14 @@ impl ResourcesHost for RecordingHost {
     fn request_open(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("open:{}", detail.id));
     }
+    fn request_reveal(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls.borrow_mut().push(format!("reveal:{}", detail.id));
+    }
+    fn request_copy_path(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("copy-path:{}", detail.id));
+    }
     fn request_checkout(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls
             .borrow_mut()
@@ -149,6 +157,42 @@ fn renders_empty_state_and_read_only_notice(cx: &mut TestAppContext) {
     let rows = cx.update(|_window, cx| panel.read(cx).snapshot().rows.len());
     assert_eq!(rows, 0);
     assert!(host.calls().is_empty(), "仅渲染不应触发任何宿主动作");
+}
+
+#[gpui_kit::test]
+fn loading_state_shows_skeleton_instead_of_empty_state(cx: &mut TestAppContext) {
+    // 取数期间不能先摆空态：那会给用户看一眼"还没有任何存档"，而其实只是还没读到（原型 §5）。
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_loading(true, cx));
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("archive-loading").is_some(), "取数中给骨架");
+    assert!(
+        cx.debug_bounds("archive-empty-action").is_none(),
+        "取数中不得摆空态按钮"
+    );
+
+    // 快照到达（哪怕是空库）：骨架退场、空态登场。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(snapshot(Vec::new(), false), cx);
+            panel.set_loading(false, cx);
+        });
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("archive-loading").is_none());
+    assert!(cx.debug_bounds("archive-empty-action").is_some());
 }
 
 #[gpui_kit::test]

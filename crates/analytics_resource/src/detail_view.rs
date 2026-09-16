@@ -9,15 +9,21 @@
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::*;
 
 use crate::model::{ArchiveKind, ArchiveStatus};
-use crate::resource_view::{BadgeTone, ResourcesHost, badge_tone, strength_badge};
+use crate::resource_view::{BadgeTone, ResourcesHost, badge_tone, kind_icon, strength_badge};
 use crate::ui;
 
 /// 指纹展示长度（前 12 位：足够比对，又不至于把面板撑爆）。
 pub const HASH_PREVIEW_LEN: usize = 12;
+
+/// 「内容指纹」那一行的标签文案。
+///
+/// 渲染层靠它认出"哪一行可以复制"（复制的是**完整指纹**，展示的仍是缩略）：
+/// 两处共用同一个常量，改文案不会把复制入口改丢。
+pub const HASH_LABEL: &str = "内容指纹";
 
 /// 一条存档的详情快照（**宿主已格式化**：大小 / 时间 / 标签等都已是人读文案）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +107,7 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     if let Some(table) = detail.source_table.as_deref() {
         source.push(("来源表", table.to_string()));
     }
-    source.push(("内容指纹", short_hash(detail.content_hash.as_deref())));
+    source.push((HASH_LABEL, short_hash(detail.content_hash.as_deref())));
     sections.push(("来源".to_string(), source));
 
     // 3) 版本（无历史版本时不出现空分区——与其它分区同一口径：空值不产生行）
@@ -179,7 +185,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
 
     let mut body = div().v_flex().w_full().gap_2().p_2();
 
-    // 头部：名称 + 别名 + 版本 + 强度徽标
+    // 头部：kind 图标 + 名称 + 别名 + 版本 + 强度徽标
     let mut header = div()
         .v_flex()
         .w_full()
@@ -190,6 +196,14 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                 .w_full()
                 .min_w_0()
                 .gap_2()
+                // kind 图标（形状区分，一律 muted）：与列表行同一套，只在行内存在一个色块
+                // 的前提下才允许——这里那个色块是强度徽标。
+                .child(
+                    Icon::new(kind_icon(detail.kind))
+                        .flex_none()
+                        .size_3p5()
+                        .text_color(muted),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -247,23 +261,49 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                 .child(title),
         );
         for (label, value) in rows {
-            section = section.child(
-                div()
-                    .h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .gap_2()
-                    .child(div().w(rems(ui::DETAIL_LABEL_WIDTH)).flex_none().text_xs().text_color(muted).child(label))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_ellipsis()
-                            .text_color(foreground)
-                            .child(value),
-                    ),
-            );
+            // 「内容指纹」那一行多一个复制口（原型 §3.1：前 12 位可复制）——
+            // 拷贝的是**完整指纹**：要拿去比对的时候，截断版没用。
+            let copy_hash = (label == HASH_LABEL)
+                .then(|| detail.content_hash.clone())
+                .flatten();
+            let mut row = div()
+                .h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .child(
+                    div()
+                        .w(rems(ui::DETAIL_LABEL_WIDTH))
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_ellipsis()
+                        .text_color(foreground)
+                        .child(value),
+                );
+            if let Some(hash) = copy_hash {
+                row = row.child(
+                    div()
+                        .id("archive-detail-copy-hash")
+                        .cursor_pointer()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .hover(move |style| style.text_color(foreground))
+                        .child("复制")
+                        .on_click(move |_, _window, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(hash.clone()))
+                        }),
+                );
+            }
+            section = section.child(row);
         }
         body = body.child(section);
     }
