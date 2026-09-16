@@ -555,7 +555,7 @@ impl WorkbenchView {
     /// `apply_left_mode` / `apply_right_mode` 按 `Shared` 初始状态装配。
     fn init_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shared = self.shared.clone();
-        let sidebar = cx.new(|cx| SidebarPanel::new(shared.clone(), cx));
+        let sidebar = cx.new(|cx| SidebarPanel::new(shared.clone(), &self.editor_service, cx));
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
         let right_sidebar = cx.new(|cx| RightSidebarPanel::new(shared.clone(), cx));
         // B12：旧“编辑区”的 SQL 框已删；M1 的未保存草稿拦截改看**编辑器的未命名文档**

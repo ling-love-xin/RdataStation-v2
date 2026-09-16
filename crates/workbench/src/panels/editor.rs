@@ -23,7 +23,7 @@ use crate::components::connection_dialog;
 
 use crate::services::db_navigator::NavTable;
 use database::nav_jobs;
-use crate::services::scratchpad_jobs;
+use scratchpad::jobs as scratchpad_jobs;
 
 use crate::ui;
 
@@ -33,7 +33,7 @@ use super::Shared;
 use database::model::PropertyRequest;
 use database::nav_view::NavDragPayload;
 use database::property_panel::PropertyState;
-use super::scratchpad_panel::{ScratchpadSearchView, render_scratchpad_search_pane};
+use scratchpad::{ScratchpadSearchView, scratchpad_view::render_scratchpad_search_pane};
 
 /// 中央内容区面板。
 pub struct EditorPanel {

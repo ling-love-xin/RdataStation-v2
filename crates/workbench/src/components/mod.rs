@@ -8,4 +8,5 @@ pub mod log_dialog;
 pub mod mock_host;
 pub mod nav_host;
 pub mod project_host;
+pub mod scratchpad_host;
 pub mod resource_host;

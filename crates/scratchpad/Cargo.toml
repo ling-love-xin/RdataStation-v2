@@ -7,6 +7,12 @@ description = "M5 草稿箱：类 VS Code 文件管理的草稿工作区"
 [dependencies]
 shared.workspace = true
 
+# ===== GPUI-kit 视图层 =====
+# 草稿箱视图自带（下沉后本 crate 就是它的家）：要取 `cx.theme()`、要命名 `App`。
+gpui-kit.workspace = true
+# 工作台外壳：面板尺寸常量（`ui::*`）与视图共用纯数据。
+workbench_shell.workspace = true
+
 # ===== 时间 =====
 chrono.workspace = true
 

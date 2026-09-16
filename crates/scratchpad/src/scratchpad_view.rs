@@ -1,15 +1,20 @@
 //! 草稿箱面板（M5）：文件树 / 内联编辑 / 剪贴板 / 回收站 / 内容搜索 / 替换。
 //!
-//! 自 `panels.rs` 纯位移迁出（无语义改动）。内容分三段：
-//! 1. 状态类型与纯函数辅助（`ScratchpadView` / 模板 / 排序 / 压平 / 搜索结果视图）；
-//! 2. `impl SidebarPanel` 的草稿箱方法（加载 / 编辑 / 删除 / 剪贴板 / 引用 / 监控轮询）；
+//! 本 crate（`scratchpad`）自带视图；宿主能力经 [`ScratchpadHost`] 注入（`ScratchpadView::new`），
+//! 与 `mock` / `insight` / `analytics_resource` / `database` 同形。内容分三段：
+//! 1. 状态类型与纯函数辅助（`ScratchpadViewState` / 模板 / 排序 / 压平 / 搜索结果视图）；
+//! 2. 草稿箱方法（加载 / 编辑 / 删除 / 剪贴板 / 引用 / 监控轮询）；
 //! 3. 草稿箱渲染实现（行渲染 / 内联编辑行 / 空态 / 主视图 / 搜索面板）。
 //!
-//! `SidebarPanel` 的字段声明与面板协议实现在 `super`（`panels/mod.rs`），
-//! 数据源导航在 `super::nav`；重操作（读盘 / 导入 / 搜索）走 `services::scratchpad_jobs`
-//! 的工作线程，本模块只做入队与结果回填。
+//! 依赖分工（下沉后不再有 `Shared`）：
+//! - 项目根 / 只读判定 / 提示 / 宿主重绘 / 搜索结果落地 / 在编辑器中打开 → [`ScratchpadHost`]；
+//! - 草稿库、回收站、文件监控 → 本 crate（`store` / `trash` / `watch`）；
+//! - 重操作（读盘 / 导入 / 搜索 / 替换）→ [`crate::jobs`] 的工作线程，本模块只入队与回填。
+//!
+//! 结构设计：`docs/architecture/layout/panels-coupling-plan.md` §9。
 
 use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::base::Disableable as _;
@@ -27,15 +32,17 @@ use crate::commands::{
     ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
 };
 
-use scratchpad::{
+use crate::{
     ExternalReferenceStatus, ScratchpadEntry, ScratchpadEntryKind, ScratchpadStore, TrashEntry,
 };
 
-use crate::services::scratchpad_jobs;
+use crate::jobs as scratchpad_jobs;
 
-use crate::ui;
+use crate::ScratchpadWatcher;
 
-use super::SidebarPanel;
+use workbench_shell::ui;
+
+use crate::host::ScratchpadHost;
 
 /// 内联编辑（新建 / 重命名 / 新建引用 / 引用改名）。
 #[derive(Clone)]
@@ -170,9 +177,9 @@ struct ScratchpadSearchHit {
 /// 内容搜索结果（落中央编辑区；侧栏发起写入，编辑区读取渲染）。
 #[derive(Clone)]
 pub struct ScratchpadSearchView {
-    pub(super) query: String,
-    pub(super) is_regex: bool,
-    pub(super) case_sensitive: bool,
+    pub query: String,
+    pub is_regex: bool,
+    pub case_sensitive: bool,
     scanned: usize,
     truncated: bool,
     hits: Vec<ScratchpadSearchHit>,
@@ -246,7 +253,7 @@ fn scratchpad_sort_entries(entries: &mut [ScratchpadEntry], sort: ScratchpadSort
 /// 数据来自 `rds-scratchpad` 存储；根 = 当前项目会话下的模块目录 `{project}/scratchpad/`。
 /// 闭环：新建/重命名/删除→回收站+撤销/回收站恢复与清空/文件名过滤/引用移除/懒加载/排序。
 #[derive(Default)]
-pub(super) struct ScratchpadView {
+pub struct ScratchpadViewState {
     /// 是否已尝试加载（首次渲染触发一次）。
     loaded: bool,
     /// 是否正在后台加载（状态行显示「加载中…」，并抑制「草稿箱是空的」闪现）。
@@ -335,6 +342,8 @@ struct ScratchpadRowCtx {
     rows: Rc<Vec<(usize, ScratchpadEntry)>>,
     /// 可见行的条目路径（Shift 范围选择按此顺序）。
     keys: Rc<Vec<String>>,
+    /// 有未保存修改的文件（绝对路径）：名称前打脏点。
+    dirty: Rc<HashSet<String>>,
     /// 进行中的行内编辑（重命名行改为渲染输入框）。
     edit: Option<ScratchpadEdit>,
     /// 内联新建行的插入位置（显示序号, 缩进层级）——`None` 表示无内联新建。
@@ -440,6 +449,14 @@ fn scratchpad_basename(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
+/// 该条目要不要画脏点（编辑器里有未保存修改）：**只有文件**画，文件夹不画。
+///
+/// 判据是**绝对路径**——条目路径即绝对路径，编辑器与草稿箱之间只交换绝对路径。
+fn scratchpad_shows_dirty_dot(dirty: &HashSet<String>, entry: &ScratchpadEntry) -> bool {
+    entry.kind == ScratchpadEntryKind::File
+        && dirty.contains(entry.path.to_string_lossy().as_ref())
+}
+
 /// 行尾元信息：相对时间（< 7 天）或日期；文件附加可读大小。
 fn scratchpad_meta_label(entry: &ScratchpadEntry) -> String {
     let time = entry
@@ -526,7 +543,7 @@ fn search_view_from_payload(
 }
 
 /// 内容搜索结果面板（中央编辑区）：头部（查询/命中数/开关标记）+ 命中列表（含上下文）。
-pub(super) fn render_scratchpad_search_pane(
+pub fn render_scratchpad_search_pane(
     search: &ScratchpadSearchView,
     theme: &gpui_kit::component::Theme,
     match_bg: Hsla,
@@ -743,7 +760,7 @@ fn join_scratchpad_rel(parent: &str, name: &str) -> String {
     }
 }
 
-impl ScratchpadView {
+impl ScratchpadViewState {
     /// 在已加载数据（根 + 懒加载子目录）中查找条目类型。
     fn kind_of(&self, key: &str) -> Option<ScratchpadEntryKind> {
         fn walk(entries: &[ScratchpadEntry], key: &str) -> Option<ScratchpadEntryKind> {
@@ -795,19 +812,66 @@ fn scratchpad_icon_color(
     }
 }
 
-impl SidebarPanel {
+/// 草稿箱面板实体。
+///
+/// 视图归本 crate；宿主能力经 [`ScratchpadHost`] 注入（与 `mock` / `insight` /
+/// `analytics_resource` / `database` 同形）。状态分两处：**实体字段**（宿主句柄、轮询任务、
+/// 目录监控）+ [`ScratchpadViewState`]（树 / 选择 / 编辑 / 搜索）。
+pub struct ScratchpadView {
+    /// 宿主端口（项目根 / 只读 / 提示 / 重绘 / 搜索结果落地 / 在编辑器中打开）。
+    host: Rc<dyn ScratchpadHost>,
+    focus_handle: FocusHandle,
+    /// 面板视图状态。
+    scratchpad: Rc<RefCell<ScratchpadViewState>>,
+    /// 正在轮询草稿箱加载结果的后台任务（避免重复启动）。
+    scratchpad_pump: RefCell<Option<Task<()>>>,
+    /// 草稿箱目录监控器（外部改动 → 去抖重拉；每个项目根一个）。
+    scratchpad_watch: Option<ScratchpadWatcher>,
+    /// 监控轮询任务（常驻，每 ~1.2 s 探查一次变更标记）。
+    scratchpad_watch_poll: RefCell<Option<Task<()>>>,
+    /// 当前内容搜索的参数（query / 正则 / 大小写）：自己发起、自己留底，
+    /// 外部改动后重跑搜索用；展示数据由编辑区持有（经端口投递）。
+    active_search: Option<(String, bool, bool)>,
+    /// 上次看到的「编辑器脏文档」（绝对路径）：脏点在树上是**外部状态**，
+    /// 由轮询一拍一次地取回（不在 `render` 里去问宿主），有变化才重绘。
+    dirty_seen: RefCell<Rc<HashSet<String>>>,
+}
+
+impl ScratchpadView {
+    /// 构造：注入宿主端口。
+    pub fn new(host: Rc<dyn ScratchpadHost>, cx: &mut Context<Self>) -> Self {
+        Self {
+            host,
+            focus_handle: cx.focus_handle(),
+            scratchpad: Rc::new(RefCell::new(ScratchpadViewState::default())),
+            scratchpad_pump: RefCell::new(None),
+            scratchpad_watch: None,
+            scratchpad_watch_poll: RefCell::new(None),
+            active_search: None,
+            dirty_seen: RefCell::new(Rc::new(HashSet::new())),
+        }
+    }
+}
+
+impl Focusable for ScratchpadView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for ScratchpadView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_scratchpad(window, cx)
+    }
+}
+
+impl ScratchpadView {
     /// 请求重载草稿箱（渲染与事件路径共用）：**只入队 + 起轮询，不做 I/O**。
     ///
     /// 实际读盘在 `scratchpad_jobs` 的工作线程；结果由 [`Self::apply_scratchpad_loads`] 回填。
     /// 重载时保留已展开子目录（在后台重新拉取），避免「操作后展开态看起来空了」。
     fn request_scratchpad_load(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self
-            .shared
-            .project
-            .borrow()
-            .as_ref()
-            .map(|s| s.root.clone())
-        else {
+        let Some(root) = self.host.project_root() else {
             // 项目关闭：停掉监控（不再关心旧项目的目录事件）。
             self.scratchpad_watch = None;
             let mut view = self.scratchpad.borrow_mut();
@@ -846,16 +910,15 @@ impl SidebarPanel {
     /// 注册监控是一次轻量 OS 调用（不读盘），且只在「项目根首次出现或变化」时发生，
     /// 因此放在请求加载路径（不在渲染循环里反复执行）。
     fn ensure_scratchpad_watch(&mut self, root: &std::path::Path, cx: &mut Context<Self>) {
-        let dir = root.join(scratchpad::MODULE_DIR_NAME);
-        if self
-            .scratchpad_watch
+        let dir = root.join(crate::MODULE_DIR_NAME);
+        if self.scratchpad_watch
             .as_ref()
             .map(|w| w.dir() == dir.as_path())
             .unwrap_or(false)
         {
             return;
         }
-        match scratchpad::ScratchpadWatcher::start(dir) {
+        match crate::ScratchpadWatcher::start(dir) {
             Ok(watcher) => self.scratchpad_watch = Some(watcher),
             Err(e) => {
                 // 监控失败不影响使用（只是不能自动刷新）：降级为手动 `↻`。
@@ -865,6 +928,25 @@ impl SidebarPanel {
             }
         }
         self.ensure_scratchpad_watch_poll(cx);
+    }
+
+    /// 刷新「编辑器脏文档」缓存；有变化返回 `true`（调用方据此重绘）。
+    ///
+    /// 脏点的判据在编辑器手里（哪些文档有未保存修改），草稿箱只经宿主端口要一份
+    /// 绝对路径集合——不依赖 `editor` crate。与目录监控同拍调用，不在 `render` 里碰宿主。
+    fn refresh_dirty_cache(&self) -> bool {
+        let now: HashSet<String> = self
+            .host
+            .dirty_files()
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let mut cache = self.dirty_seen.borrow_mut();
+        if **cache == now {
+            return false;
+        }
+        *cache = Rc::new(now);
+        true
     }
 
     /// 启动监控轮询（常驻任务：每 ~1.2 s 看一次变更标记，有变化就重拉一次）。
@@ -884,26 +966,28 @@ impl SidebarPanel {
         let task = cx.spawn(async move |_this, cx| loop {
             executor.timer(std::time::Duration::from_millis(1200)).await;
             let action = weak.update(cx, |this, cx| {
+                // 脏点与目录监控同一拍：编辑器里存/改都会让这个集合变。
+                let dirty_changed = this.refresh_dirty_cache();
                 let changed = this
                     .scratchpad_watch
                     .as_ref()
                     .map(|w| w.take_changed())
                     .unwrap_or(false);
                 if !changed {
-                    return false;
+                    return dirty_changed;
                 }
                 // 正在内联编辑（新建/重命名）或已有加载在途：本次不打断，留给下一拍。
                 {
                     let view = this.scratchpad.borrow();
                     if view.edit.is_some() || view.loading {
-                        return false;
+                        return dirty_changed;
                     }
                 }
                 this.scratchpad.borrow_mut().loaded = false;
                 // 结果面板若还开着，顺带重跑一次搜索：外部改动后旧的命中列表已是快照。
                 let pending_search = this.active_search.clone();
                 if let Some((query, is_regex, case_sensitive)) = pending_search {
-                    if let Some(root) = this.shared.project_root() {
+                    if let Some(root) = this.host.project_root() {
                         scratchpad_jobs::enqueue_search(&root, &query, case_sensitive, is_regex);
                         this.ensure_scratchpad_pump(cx);
                     }
@@ -924,7 +1008,7 @@ impl SidebarPanel {
     }
 
     /// 启动草稿箱加载结果轮询（已有存活任务时不重复启动）。
-    pub(super) fn ensure_scratchpad_pump(&self, cx: &mut Context<Self>) {
+    pub fn ensure_scratchpad_pump(&self, cx: &mut Context<Self>) {
         if let Some(task) = self.scratchpad_pump.borrow().as_ref() {
             if !task.is_ready() {
                 return;
@@ -1121,18 +1205,23 @@ impl SidebarPanel {
             self.active_search = view
                 .as_ref()
                 .map(|v| (v.query.clone(), v.is_regex, v.case_sensitive));
-            self.shared.show_scratchpad_search(view, cx);
-            self.shared.notify_host(cx);
+            self.host.show_search_results(view, cx);
+            self.host.notify_host(cx);
         }
         if let Some(text) = notice {
-            *self.shared.notice.borrow_mut() = Some(text);
+            self.host.notice(text, cx);
         }
         cx.notify();
     }
 
     /// 构建草稿箱存储 + 运行时（未打开项目时报错）。
     fn scratchpad_store(&self) -> Result<(ScratchpadStore, tokio::runtime::Runtime), String> {
-        self.shared.scratchpad_store()
+        let root = self
+            .host
+            .project_root()
+            .ok_or_else(|| "未打开项目".to_string())?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| format!("运行时错误: {e}"))?;
+        Ok((ScratchpadStore::new(root), rt))
     }
 
     /// 懒创建草稿箱输入框（名称内联编辑 + 文件名过滤）并订阅事件。
@@ -1183,8 +1272,8 @@ impl SidebarPanel {
         cx: &mut Context<Self>,
     ) {
         // M1：只读打开时禁止新建/重命名草稿。
-        if self.shared.project_ui.borrow().read_only {
-            *self.shared.notice.borrow_mut() = Some("只读模式：不允许修改草稿".to_string());
+        if self.host.read_only() {
+            self.host.notice("只读模式：不允许修改草稿".to_string(), cx);
             cx.notify();
             return;
         }
@@ -1246,13 +1335,12 @@ impl SidebarPanel {
             return;
         };
         // M1：只读打开时禁止提交草稿修改。
-        if self.shared.project_ui.borrow().read_only {
-            *self.shared.notice.borrow_mut() = Some("只读模式：不允许修改草稿".to_string());
+        if self.host.read_only() {
+            self.host.notice("只读模式：不允许修改草稿".to_string(), cx);
             cx.notify();
             return;
         }
-        let name = self
-            .scratchpad
+        let name = self.scratchpad
             .borrow()
             .name_input
             .as_ref()
@@ -1325,8 +1413,8 @@ impl SidebarPanel {
     /// 删除所选条目 → 项目级回收站，并记录撤销（批量）。
     fn delete_scratchpad_selection(&mut self, cx: &mut Context<Self>) {
         // M1：只读打开时禁止删除草稿。
-        if self.shared.project_ui.borrow().read_only {
-            *self.shared.notice.borrow_mut() = Some("只读模式：不允许删除草稿".to_string());
+        if self.host.read_only() {
+            self.host.notice("只读模式：不允许删除草稿".to_string(), cx);
             cx.notify();
             return;
         }
@@ -1438,15 +1526,15 @@ impl SidebarPanel {
     /// 复制可能搬运大量字节（递归复制），故入队到后台；结果由 `apply_scratchpad_ops` 回填。
     fn paste_scratchpad_clipboard(&mut self, cx: &mut Context<Self>) {
         // M1：只读打开时禁止写入草稿。
-        if self.shared.project_ui.borrow().read_only {
-            *self.shared.notice.borrow_mut() = Some("只读模式：不允许粘贴草稿".to_string());
+        if self.host.read_only() {
+            self.host.notice("只读模式：不允许粘贴草稿".to_string(), cx);
             cx.notify();
             return;
         }
         let Some(clipboard) = self.scratchpad.borrow().clipboard.clone() else {
             return;
         };
-        let Some(root) = self.shared.project_root() else {
+        let Some(root) = self.host.project_root() else {
             self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
             cx.notify();
             return;
@@ -1500,7 +1588,7 @@ impl SidebarPanel {
 
     /// 清空回收站（删的是可能很大的 payload，故入队后台）。
     fn empty_scratchpad_trash(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self.shared.project_root() else {
+        let Some(root) = self.host.project_root() else {
             self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
             cx.notify();
             return;
@@ -1534,8 +1622,8 @@ impl SidebarPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.shared.project_ui.borrow().read_only {
-            *self.shared.notice.borrow_mut() = Some("只读模式：不允许修改引用".to_string());
+        if self.host.read_only() {
+            self.host.notice("只读模式：不允许修改引用".to_string(), cx);
             cx.notify();
             return;
         }
@@ -1585,24 +1673,17 @@ impl SidebarPanel {
 
     /// 请求在中央编辑器中打开草稿文件（双击 / Enter / 右键「打开」共用）。
     ///
-    /// 只走 `Shared::request_open_in_editor`（绝对路径）；真正打开在宿主 `render` 里做，
-    /// 因为文档与 Dock 面板属宿主状态（编辑器无根的 Phase C 契约）。
+    /// 只把**绝对路径**交给宿主（`ScratchpadHost::open_in_editor`）；编辑器无根，
+    /// 自己按路径判定模式与只读等级（Phase C 契约）。
     fn request_open_scratchpad_file(&mut self, path: String, cx: &mut Context<Self>) {
-        self.shared
-            .request_open_in_editor(std::path::PathBuf::from(path));
-        self.shared.notify_host(cx);
+        self.host.open_in_editor(std::path::PathBuf::from(path));
+        self.host.notify_host(cx);
         cx.notify();
     }
 
     /// 懒加载子目录（展开文件夹时调用）：只入队 + 起轮询，结果由 `apply_scratchpad_dirs` 回填。
     fn request_scratchpad_dir(&mut self, path: String, cx: &mut Context<Self>) {
-        let Some(root) = self
-            .shared
-            .project
-            .borrow()
-            .as_ref()
-            .map(|s| s.root.clone())
-        else {
+        let Some(root) = self.host.project_root() else {
             self.scratchpad.borrow_mut().error =
                 Some("未打开项目：草稿箱根即项目目录，请先打开项目。".to_string());
             cx.notify();
@@ -1617,7 +1698,7 @@ impl SidebarPanel {
         if paths.is_empty() {
             return;
         }
-        let Some(root) = self.shared.project_root() else {
+        let Some(root) = self.host.project_root() else {
             self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
             cx.notify();
             return;
@@ -1712,8 +1793,7 @@ impl SidebarPanel {
         let Some(path) = path else {
             return;
         };
-        let is_folder = self
-            .scratchpad
+        let is_folder = self.scratchpad
             .borrow()
             .kind_of(&path)
             .map(|k| k == ScratchpadEntryKind::Folder)
@@ -1769,8 +1849,7 @@ impl SidebarPanel {
     ///
     /// 搜索要遍历全树，故入队后台；结果由 `apply_scratchpad_ops` 回填。
     fn run_scratchpad_content_search(&mut self, cx: &mut Context<Self>) {
-        let query = self
-            .scratchpad
+        let query = self.scratchpad
             .borrow()
             .search_input
             .as_ref()
@@ -1778,8 +1857,8 @@ impl SidebarPanel {
             .unwrap_or_default();
         if query.is_empty() {
             self.active_search = None;
-            self.shared.show_scratchpad_search(None, cx);
-            self.shared.notify_host(cx);
+            self.host.show_search_results(None, cx);
+            self.host.notify_host(cx);
             cx.notify();
             return;
         }
@@ -1787,7 +1866,7 @@ impl SidebarPanel {
             let v = self.scratchpad.borrow();
             (v.search_regex, v.search_case)
         };
-        let Some(root) = self.shared.project_root() else {
+        let Some(root) = self.host.project_root() else {
             self.scratchpad.borrow_mut().error = Some("未打开项目".to_string());
             cx.notify();
             return;
@@ -1805,8 +1884,7 @@ impl SidebarPanel {
         cx.spawn(async move |_this, cx| {
             executor.timer(std::time::Duration::from_secs(5)).await;
             let _ = weak.update(cx, |this, cx| {
-                let matches = this
-                    .scratchpad
+                let matches = this.scratchpad
                     .borrow()
                     .undo
                     .as_ref()
@@ -1823,15 +1901,14 @@ impl SidebarPanel {
 
 }
 
-impl SidebarPanel {
+impl ScratchpadView {
     /// 渲染草稿树单行（选中态 / 行内操作 / 右键菜单 / 展开时触发懒加载）。
     ///
     /// 同时被普通渲染与虚拟列表闭包调用，行索引按 `ctx.rows` 全局序号。
     fn scratchpad_row(&self, display: usize, ctx: &ScratchpadRowCtx, cx: &mut Context<Self>) -> AnyElement {
         // 内联新建行：插在目标文件夹首行位置（未选中文件夹时在模块根）。
         if ctx.is_edit_row(display) {
-            return self
-                .render_scratchpad_edit_row(ctx.edit_row_depth(display), cx)
+            return self.render_scratchpad_edit_row(ctx.edit_row_depth(display), cx)
                 .into_any_element();
         }
         let Some(real) = ctx.real_index(display) else {
@@ -1878,11 +1955,11 @@ impl SidebarPanel {
             let keys = ctx.keys.clone();
             let position = real;
             // 双击文件 = 在编辑器中打开（与 Enter 同一语义）。
-            let open_shared = self.shared.clone();
+            let open_host = self.host.clone();
             move |ev: &gpui_kit::ClickEvent, window: &mut gpui_kit::Window, app: &mut App| {
                 let modifiers = ev.modifiers();
                 if ev.click_count() >= 2 && !is_folder {
-                    open_shared.request_open_in_editor(std::path::PathBuf::from(&key));
+                    open_host.open_in_editor(std::path::PathBuf::from(&key));
                 }
                 let mut should_load = false;
                 {
@@ -1980,6 +2057,17 @@ impl SidebarPanel {
                     .child(chevron),
             )
             .child(div().w_2().h_2().flex_none().rounded_sm().bg(icon_color))
+            // 编辑器里有未保存修改 → 名称前一个脏点（VS Code 口径：只有文件）。
+            .when(scratchpad_shows_dirty_dot(&ctx.dirty, entry), |this| {
+                this.child(
+                    div()
+                        .w_2()
+                        .h_2()
+                        .flex_none()
+                        .rounded_full()
+                        .bg(primary),
+                )
+            })
             .child(
                 div()
                     .flex_1()
@@ -2423,7 +2511,7 @@ impl SidebarPanel {
     /// 草稿箱面板（M5）：根 = `{project}/scratchpad/`。
     ///
     /// 闭环：新建（内联）/重命名/删除→回收站+撤销栏/回收站恢复与清空/文件名过滤/外部引用移除。
-    pub(super) fn render_scratchpad(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub fn render_scratchpad(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         if !self.scratchpad.borrow().loaded {
             self.request_scratchpad_load(cx);
         }
@@ -2870,6 +2958,7 @@ impl SidebarPanel {
                     .collect(),
             ),
             rows: Rc::new(rows),
+            dirty: self.dirty_seen.borrow().clone(),
             edit: edit.clone(),
             edit_insert,
             selected: selected.clone(),
@@ -3306,10 +3395,11 @@ mod tests {
     use super::{
         ScratchpadSearchView, ScratchpadSort, ScratchpadTemplate, ScratchpadEntryKind,
         flatten_scratchpad, join_scratchpad_rel, scratchpad_apply_template_ext,
-        scratchpad_entry_matches, scratchpad_size_label, scratchpad_split_name, scratchpad_sort_entries,
+        scratchpad_entry_matches, scratchpad_shows_dirty_dot, scratchpad_size_label,
+        scratchpad_split_name, scratchpad_sort_entries,
         search_view_from_payload, ScratchpadEntry,
     };
-    use crate::services::scratchpad_jobs::SearchPayload;
+    use crate::jobs::SearchPayload;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
 
@@ -3333,6 +3423,29 @@ mod tests {
             modified_at: Some(modified.to_string()),
             children: kids,
         }
+    }
+
+    #[test]
+    fn dirty_dot_marks_dirty_files_only() {
+        let mut dirty = HashSet::new();
+        dirty.insert("/p/a.sql".to_string());
+
+        assert!(
+            scratchpad_shows_dirty_dot(&dirty, &file("a.sql", 1, "0")),
+            "编辑器里改过的文件要打点"
+        );
+        assert!(
+            !scratchpad_shows_dirty_dot(&dirty, &file("b.sql", 1, "0")),
+            "没改过的文件不打点"
+        );
+        assert!(
+            !scratchpad_shows_dirty_dot(&dirty, &folder("a.sql", "0", None)),
+            "文件夹不画脏点（即使路径命中）"
+        );
+        assert!(
+            !scratchpad_shows_dirty_dot(&HashSet::new(), &file("a.sql", 1, "0")),
+            "没有脏文档时谁都不打点"
+        );
     }
 
     #[test]
@@ -3478,7 +3591,7 @@ mod tests {
         let payload = SearchPayload {
             scanned: 4,
             truncated: true,
-            matches: vec![scratchpad::SearchMatch {
+            matches: vec![crate::SearchMatch {
                 file: "a.sql".to_string(),
                 line_number: 7,
                 line_content: "select id".to_string(),

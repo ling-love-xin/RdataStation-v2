@@ -25,9 +25,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
-use scratchpad::{
-    ExternalReferenceStatus, ScratchpadEntry, ScratchpadStore, SearchMatch, TrashEntry,
-};
+use crate::{ExternalReferenceStatus, ScratchpadEntry, ScratchpadStore, SearchMatch, TrashEntry};
 
 /// 模块根加载结果（回传主线程）。
 pub struct LoadResult {

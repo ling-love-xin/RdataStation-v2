@@ -79,8 +79,8 @@ fn view_layer_has_no_raw_size_literals() {
         ("database/nav_view.rs", include_str!("../../database/src/nav_view.rs")),
         ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
-            "panels/scratchpad_panel.rs",
-            include_str!("../src/panels/scratchpad_panel.rs"),
+            "scratchpad/scratchpad_view.rs",
+            include_str!("../../scratchpad/src/scratchpad_view.rs"),
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
@@ -163,8 +163,8 @@ fn ui_sources_have_no_raw_color_literals() {
         ("database/nav_view.rs", include_str!("../../database/src/nav_view.rs")),
         ("panels/resources.rs", include_str!("../src/panels/resources.rs")),
         (
-            "panels/scratchpad_panel.rs",
-            include_str!("../src/panels/scratchpad_panel.rs"),
+            "scratchpad/scratchpad_view.rs",
+            include_str!("../../scratchpad/src/scratchpad_view.rs"),
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
@@ -279,7 +279,7 @@ fn every_panel_module_is_registered_in_the_manifests() {
 
     // 视图下沉到特性 crate 后，受契约约束的视图文件不再住在 `src/panels/` 下，
     // 目录遍历发现不了它们——故在这里显式点名（新增下沉视图时同步加一行）。
-    for rel in ["database/nav_view.rs"] {
+    for rel in ["database/nav_view.rs", "scratchpad/scratchpad_view.rs"] {
         let quoted = format!("\"{rel}\"");
         assert!(
             manifest.matches(quoted.as_str()).count() >= 2,
