@@ -26,12 +26,17 @@ pub mod persistence;
 pub mod watcher;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use shared::error::CoreError;
+use engine::persistence::ProjectDatabaseManager;
+use shared::error::{CommonError, CoreError};
 
 use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableProfile, TableQuality};
 use crate::model::ColumnProfileView;
+use crate::rule::RuleScope;
+use crate::rule_types::RuleMeta;
+use crate::rule_view::{build_rules_data, RuleDataInput, RulesData};
+use crate::service::indexer::{rule_dir, sync_project_rules, RuleIndexStore, SyncOutcome};
 use crate::{with_rules, ExecutionResult};
 
 pub use persistence::{
@@ -221,6 +226,149 @@ impl InsightService {
     pub fn reload_insight_rules(project_root: Option<&Path>) -> usize {
         crate::reload_insight_rules(project_root)
     }
+
+    // ==================== 规则管理（Phase 2.3 / 2.4） ====================
+
+    /// 规则管理对话框的数据：**先同步索引再读数**。
+    ///
+    /// 同步是必需的：索引刷新时机与「谁在看它」对齐（D23），打开对话框就是那个时机。
+    /// 同步顺带把启停集合推给装配侧、失效该项目注册表缓存——索引只有被消费才有意义。
+    ///
+    /// 阻塞（要开项目库 + 读写 SQLite），调用方负责放后台。
+    pub fn rules_data(project_root: Option<&Path>) -> Result<RulesData, CoreError> {
+        let stores = IndexStores::open(project_root)?;
+        stores.sync(project_root)?;
+        stores.snapshot(project_root)
+    }
+
+    /// 切换某条规则的启停，返回刷新后的数据。
+    ///
+    /// 写的是**规则所在层**的索引；内置规则没有自己的索引行，按**抑制记录**写到项目库
+    /// （没有项目时才落全局库）——这正是 `plan_index` 保留抑制记录的那条路径。
+    pub fn toggle_rule(
+        project_root: Option<&Path>,
+        scope: RuleScope,
+        rule_id: &str,
+        enabled: bool,
+    ) -> Result<RulesData, CoreError> {
+        let stores = IndexStores::open(project_root)?;
+        let target = stores.write_scope(scope);
+        let store = stores.store(target).ok_or_else(|| {
+            CoreError::common(CommonError::General(format!(
+                "{}层索引不可用，无法保存启停状态",
+                target.label()
+            )))
+        })?;
+        block_on(store.set_enabled(rule_id, enabled))?;
+        stores.sync(project_root)?;
+        stores.snapshot(project_root)
+    }
+
+    /// 新建规则（建目录 + 写模板），返回新文件路径供宿主打开。
+    ///
+    /// 目录在**首次写入时**创建（K7）：不在启动时预设空目录，也不假定用户已手工建好。
+    pub fn create_rule_file(
+        project_root: Option<&Path>,
+        scope: RuleScope,
+    ) -> Result<PathBuf, CoreError> {
+        indexer::create_rule_file(project_root, scope)
+    }
+}
+
+// ==================== 规则索引库（项目层 / 全局层） ====================
+
+/// 两层索引库的开启与读写：界面与接缝都不必知道池、路径与开启方式的差异
+/// （项目库要现开现用，全局库是进程单例）。
+///
+/// 两层都允许缺失：拿不到系统目录就只剩项目层，未打开项目就只剩全局层——
+/// 内置层不依赖任何库，照常可用。
+struct IndexStores {
+    project: Option<RuleIndexStore>,
+    global: Option<RuleIndexStore>,
+}
+
+impl IndexStores {
+    fn open(project_root: Option<&Path>) -> Result<Self, CoreError> {
+        let project = match project_root {
+            Some(root) => Some(RuleIndexStore::project(
+                block_on(ProjectDatabaseManager::open(root, 2))?.sqlite_pool(),
+            )),
+            None => None,
+        };
+        let global = engine::migration::get_global_db_manager()
+            .map(|manager| RuleIndexStore::global(manager.sqlite_pool()));
+        Ok(Self { project, global })
+    }
+
+    fn store(&self, scope: RuleScope) -> Option<&RuleIndexStore> {
+        match scope {
+            RuleScope::Project => self.project.as_ref(),
+            RuleScope::Global => self.global.as_ref(),
+            RuleScope::Builtin => None,
+        }
+    }
+
+    /// 写入落在哪一层的索引：规则所在层；内置规则写**抑制记录**到项目层，
+    /// 无项目时才落全局层（两层都能被 `plan_index` 原样保留）。
+    fn write_scope(&self, scope: RuleScope) -> RuleScope {
+        match scope {
+            RuleScope::Builtin if self.project.is_some() => RuleScope::Project,
+            RuleScope::Builtin => RuleScope::Global,
+            other => other,
+        }
+    }
+
+    /// 磁盘 → 索引：扫描、合并（保留用户启停）、写库、推启停集合。
+    /// 完成后清掉陈旧标记——规则管理视图是本标记的**唯一消费点**（D23）。
+    fn sync(&self, project_root: Option<&Path>) -> Result<SyncOutcome, CoreError> {
+        let outcome = block_on(sync_project_rules(
+            project_root,
+            self.global.as_ref(),
+            self.project.as_ref(),
+            &crate::builtin_rule_ids(),
+        ))?;
+        watcher::clear_index_stale();
+        Ok(outcome)
+    }
+
+    /// 两层索引行 + 内置层元信息 → 对话框视图模型。
+    fn snapshot(&self, project_root: Option<&Path>) -> Result<RulesData, CoreError> {
+        let project_rows = match &self.project {
+            Some(store) => block_on(store.load())?,
+            None => Vec::new(),
+        };
+        let global_rows = match &self.global {
+            Some(store) => block_on(store.load())?,
+            None => Vec::new(),
+        };
+        // 内置层正文内嵌在二进制里：界面只需要展示字段，不解析正文（避开重复的 TOML 解析）
+        let builtin: Vec<RuleMeta> = crate::builtin_registry()
+            .all_rules()
+            .iter()
+            .map(|rule| rule.meta.clone())
+            .collect();
+
+        Ok(build_rules_data(RuleDataInput {
+            project_dir: rule_dir(project_root, RuleScope::Project),
+            global_dir: rule_dir(project_root, RuleScope::Global),
+            project_rows,
+            global_rows,
+            builtin,
+        }))
+    }
+}
+
+/// 同步口径的阻塞桥。
+///
+/// 服务门面是**同步**的（与 `profile_column_view` 一致：调用方负责放后台），
+/// 而库访问是异步的；这里只做这一件转换。
+fn block_on<T>(
+    future: impl std::future::Future<Output = Result<T, CoreError>>,
+) -> Result<T, CoreError> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+        CoreError::common(CommonError::General(format!("创建异步运行时失败：{e}")))
+    })?;
+    runtime.block_on(future)
 }
 
 /// 去掉 `Display` 的 `[code] ` 前缀（`CoreError` 的 Display 形如 `[C001] 文案`）。

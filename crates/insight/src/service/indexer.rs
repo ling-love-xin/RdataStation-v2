@@ -25,11 +25,11 @@
 //!    而不是让规则无声无息地从列表里消失。
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use engine::persistence::{GlobalSqlitePool, ProjectSqlitePool};
-use shared::error::CoreError;
+use shared::error::{CommonError, CoreError, StorageError};
 
 use crate::rule::RuleScope;
 use crate::rule_registry::parse_rule_toml;
@@ -91,6 +91,117 @@ impl RuleIndexEntry {
     pub fn is_present(&self) -> bool {
         self.load_status != RuleLoadStatus::Missing
     }
+}
+
+// ==================== 规则目录与新建规则（Phase 2.3 / 2.4） ====================
+
+/// 某一层的规则目录（内置层没有目录 → `None`）。
+///
+/// 路径拼装只在 `rule_registry` 一处（`.RSmeta` 的拼写有多个历史版本），
+/// 本函数只做「作用域 → 目录」派发，免得界面 / 接缝 / 同步器各拼一次字符串。
+pub fn rule_dir(project_root: Option<&Path>, scope: RuleScope) -> Option<PathBuf> {
+    match scope {
+        RuleScope::Builtin => None,
+        RuleScope::Project => project_root.map(crate::rule_registry::get_project_rules_dir),
+        RuleScope::Global => engine::migration::get_system_dir()
+            .ok()
+            .map(|dir| crate::rule_registry::get_global_rules_dir(&dir)),
+    }
+}
+
+/// 新建模板的文件名前缀（第二个起追加序号：`new-rule`、`new-rule-2`…）。
+const NEW_RULE_STEM: &str = "new-rule";
+
+/// 新建规则：建目录（不存在时）+ 写一份**能解析但暂不生效**的模板，返回文件路径。
+///
+/// 两条都是硬要求：
+/// - **能解析**：空文件会以 `invalid` 落索引，用户第一眼看到的就是一条红色错误；
+/// - **暂不生效**：`applies_to = []` —— 列级规则按类型族匹配，空列表永不命中，
+///   用户填上类型族（或 `Any`）之前它不参与任何分析。
+///
+/// 文件名与 `meta.id` 都按序号避让：注册表里同名 id 是**后者覆盖前者**，
+/// 两份模板同 id 会让用户编辑的那一条被另一条悄悄顶掉。
+pub fn create_rule_file(
+    project_root: Option<&Path>,
+    scope: RuleScope,
+) -> Result<PathBuf, CoreError> {
+    let dir = rule_dir(project_root, scope).ok_or_else(|| {
+        CoreError::common(CommonError::General(format!(
+            "{}规则目录不可用（未打开项目或系统目录取不到）",
+            scope.label()
+        )))
+    })?;
+    std::fs::create_dir_all(&dir).map_err(|e| io_err(&dir, "create_rule_dir", e))?;
+    let (path, id) = free_rule_path(&dir);
+    std::fs::write(&path, new_rule_template(&id))
+        .map_err(|e| io_err(&path, "write_rule_template", e))?;
+    Ok(path)
+}
+
+/// 目录里第一个可用的模板文件名（连同它的规则 id）。
+fn free_rule_path(dir: &Path) -> (PathBuf, String) {
+    for n in 1..=999u32 {
+        let stem = if n == 1 {
+            NEW_RULE_STEM.to_string()
+        } else {
+            format!("{NEW_RULE_STEM}-{n}")
+        };
+        let path = dir.join(format!("{stem}.rule.toml"));
+        if !path.exists() {
+            return (path, stem);
+        }
+    }
+    // 极端情况（目录里已有上千份模板）：退回进程内唯一名，不阻塞用户
+    let stem = format!("{NEW_RULE_STEM}-{}", std::process::id());
+    (dir.join(format!("{stem}.rule.toml")), stem)
+}
+
+/// 新规则的模板正文。
+///
+/// 骨架取 `insight-user-guide.md` §4.6 示例 A（对外契约里的可照抄版本），
+/// 只把 `applies_to` 留空、`id` 换成序号——注释里说清改哪两处就生效。
+pub fn new_rule_template(id: &str) -> String {
+    format!(
+        r#"# 新建的洞察规则（模板）
+#
+# 让它生效只需两步：
+#   1. 把 applies_to 改成要参与的类型族（["Any"] 表示所有列）
+#   2. 把 template 里的 SQL 改成自己的查询（{{{{table}}}} / {{{{col}}}} 是内置占位符）
+# 字段全表与可照抄的示例见 docs/architecture/insight/insight-user-guide.md §4。
+
+[meta]
+id = "{id}"
+name = "新建规则"
+description = "待填写"
+version = "1.0"
+category = "column"
+# 空列表 = 暂不参与任何分析（不写死一个会在所有列上跑的类型）
+applies_to = []
+builtin = false
+
+[query]
+template = """
+SELECT
+    COUNT(*) AS total
+FROM "{{table}}"
+"""
+parameters = ["table"]
+result_type = "single"
+
+[[output]]
+sql_name = "total"
+json_name = "total_count"
+value_type = "i64"
+"#
+    )
+}
+
+fn io_err(path: &Path, operation: &str, reason: impl std::fmt::Display) -> CoreError {
+    CoreError::storage(StorageError::io(
+        path.display().to_string(),
+        operation,
+        reason.to_string(),
+    ))
 }
 
 /// 扫描某作用域的规则目录，产出索引行。

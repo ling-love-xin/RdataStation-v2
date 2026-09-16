@@ -32,6 +32,7 @@ use crate::model::{
     InsightTarget, NoteLevel, PanelTab, QualityNote, SampleCell, StatRow,
 };
 use crate::quality_scorer::Grade;
+use crate::rule_view::RulesView;
 use crate::ui;
 
 /// 面板向宿主发出的请求。
@@ -91,13 +92,17 @@ pub struct InsightView {
     /// 无项目时画像仍可算（临时表在内存里），但**规则管理与快照不可用**——
     /// 它们都落在项目目录下（原型 §4 / 架构 §8）。
     project_open: bool,
+    /// 规则管理对话框（Phase 2.3）。
+    ///
+    /// 随面板在构造期创建：对话框数据靠 `jobs::attach_rules` 后台取，
+    /// 而「开关一条规则」与面板数据同属一个会话，实体提前存在才接得上订阅。
+    rules: Entity<RulesView>,
 }
 
 impl EventEmitter<InsightEvent> for InsightView {}
 
 impl InsightView {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let _ = cx;
         Self {
             target: None,
             state: InsightPanelState::Empty,
@@ -106,7 +111,14 @@ impl InsightView {
             // 保守初值：宿主装配时会立刻告知真实项目状态（`set_project_open`）。
             // 宁可让依赖项目的入口先禁用，也不要给一个点了没用的按钮。
             project_open: false,
+            // 无 I/O：真正的取数与写库在 `jobs::attach_rules` 接到事件之后
+            rules: cx.new(RulesView::new),
         }
+    }
+
+    /// 规则管理对话框实体（宿主用它接 `insight::jobs::attach_rules`）。
+    pub fn rules_view(&self) -> &Entity<RulesView> {
+        &self.rules
     }
 
     pub fn target(&self) -> Option<&InsightTarget> {
@@ -232,15 +244,19 @@ impl InsightView {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Settings)
-                    // 规则管理对话框属 Phase 2；**不给「点了没反应」的按钮**
-                    // （与「注册了才宣传」同一立场，Phase 2 接入后改为按项目状态启用）
-                    .disabled(true)
-                    .tooltip("规则管理（Phase 2 落地）")
+                    // 规则落在项目目录下（`{项目}/.RSmeta/insight-rules/`）：
+                    // 无项目时不给入口，而不是给一个点了没反应的按钮
+                    .disabled(!self.project_open)
+                    .tooltip(if self.project_open {
+                        "规则管理"
+                    } else {
+                        "规则管理（需先打开项目）"
+                    })
                     .on_click({
-                        let entity = entity.clone();
-                        move |_, _, app| {
-                            // Phase 2 会在这里发 `InsightEvent::RulesRequested`
-                            entity.update(app, |_, cx| cx.notify());
+                        let rules = self.rules.clone();
+                        move |_, window, app| {
+                            // 开窗 + 发一次取数请求；数据由接缝回填
+                            rules.update(app, |view, cx| view.begin_load(window, cx));
                         }
                     }),
             )

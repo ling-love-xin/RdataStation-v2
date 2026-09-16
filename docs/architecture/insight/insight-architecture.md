@@ -231,6 +231,10 @@ RulesWatcher（后台线程，drop 即停）：
 | D21 | 视图归属 = **方案 A（视图入 `crates/insight`）**（2026-09-16 定案） | 硬依据是架构约束「Feature 可以直接依赖 gpui-kit，把同一业务能力的 model / service / view 放在同一 crate」；`project` 已跑通该范式（含宿主桥），而 `panels/` 已 8600+ 行不宜再增 | 开发方案 §3.1 |
 | D22 | 规则热加载用**内容哈希轮询**，不用 `notify` / `watch_dir` | `notify` 在本仓只是传递依赖（未声明）；`watch_dir` 需要 gpui `Context`，而洞察在视图归属拍板前不依赖 gpui；内容哈希天然去抖 | 默认 2s 间隔；变更检测有最多一个间隔的延迟 |
 | D23 | 监听线程**不访问数据库**，只重载规则集并置 `index_is_stale` | 把项目库连接拉进后台轮询不划算；解耦后分析正确性不依赖数据库 | 索引可能短期落后于磁盘，由规则管理视图打开时消费标记后同步 |
+| D24 | 规则管理是个**独立实体 + 模态对话框**（不进面板 Tab） | 三层分组 + 每行状态 + 错误原文需要宽度（280px 放不下）；「配置分析器」与「看分析结果」是两类活动 | 对话框宽度 40rem；列表区固定高 + 内部滚动（高度不随条数跳） |
+| D25 | 内置规则的启停写成**项目层的抑制记录** | 内置层不可写，而「本项目不用这条内置规则」本就是项目级决策；`plan_index` 已按「id ∈ 内置层且无来源文件」原样保留这类行 | 无项目时才落全局层；界面把抑制记录从项目规则列表里摘掉（它不是规则，`source_path` 为空） |
+| D26 | 启停写入后**立即重跑一次同步**（而不是只改库） | 索引只有被消费才有意义：同步才会 `apply_disabled_rules` + 失效注册表缓存，否则用户点了开关而分析照旧用旧规则 | 代价是每次开关多一轮磁盘扫描（几十个小 TOML，可忽略）|
+| D27 | 规则文件用**系统默认应用**打开，不用应用内编辑器 | 正文是 TOML，应用内编辑器没有该语言的语法支持；且规则随项目走，本就在版本库里编辑 | 只拉起进程不等待；`OpenFileRequested` 是公开事件，宿主将来想改成内开也不改面板 |
 
 ## 7. 并发与资源
 
@@ -277,7 +281,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **130 项**（迁移基线 53 + Phase 0–2 新增），另有集成测试 4 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **145 项**（迁移基线 53 + Phase 0–2 新增），另有集成测试 4 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -305,6 +309,8 @@ RulesWatcher（后台线程，drop 即停）：
 | D22/D23 目录监听与索引解耦 | `crates/insight/src/service/watcher.rs`（`RulesWatcher` / `rules_fingerprint` / `watch_dirs` / `set_watched_project_root` / `index_is_stale`）；接线在 `workbench/src/view.rs`（构造期启动）与 `workbench/src/components/project_host.rs`（项目切换告知） |
 | D20 不自己取数 | `engine/src/services/{duckdb_service,sql_service}.rs` 为唯一数据入口 |
 | 规则执行（SQL 模板与输出映射） | `crates/insight/src/rule_executor.rs` |
+| D24～D27 规则管理对话框 | `crates/insight/src/rule_view.rs`（视图模型 + 实体 + 渲染）、`jobs.rs`（`attach_rules` / `handle_rules_event` / 打开系统编辑器）、`service/mod.rs`（`rules_data` / `toggle_rule` / `create_rule_file` + 两层索引库装配）、`service/indexer.rs`（`rule_dir` / `create_rule_file` / `new_rule_template`）；宿主一行：`workbench/src/panels/right.rs` |
+| 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
 | 评分卡视图模型（`ScoreView` / `DimensionView`；全空列不产分） | `crates/insight/src/model.rs`（`ColumnProfileView::score`） |
 | 评分卡渲染（钉在滚动区之外；四维细条） | `crates/insight/src/insight_view.rs`（`render_score_card` / `dimension_row` / `ratio_bar`） |
@@ -323,7 +329,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K4 | ~~归属偏差未归位~~ | — | ✅ 已归位（Phase 0 / 0.2）：类型 → `model::types`、仓库 → `store::{body,meta}`、`detect_extremes` → `insight_engine`、门面 → `service::{InsightService,persistence}` |
 | K5 | ~~目录监听热加载未做~~ | — | ✅ 已实现（Phase 0 / 0.6，D22/D23） |
 | K6 | `insight_table_reports` / `insight_schema_reports` 两张表为**预留**，无写入者 | 完成度易被高估 | Phase 4 |
-| K7 | 用户全局规则目录（`{system}/insight-rules/`）**不自动创建** | 首次使用不知道该建在哪 | 建议：首次写入时创建（开发方案 Phase 2 / 2.4） |
+| K7 | ~~用户全局规则目录（`{system}/insight-rules/`）**不自动创建**~~ | 已消除：规则管理对话框在目录缺失时给「创建目录并新建规则」入口，**首次写入时建**（不在启动时预设空目录） | ✅ 已修（Phase 2 / 2.4） |
 | K8 | ~~视图归属待拍板（D21）~~ **已定案**（D21 = 方案 A，2026-09-16） | 已消除：`insight` 依赖 gpui-kit，视图落 `insight/src/insight_view.rs` + `ui.rs`；`panels/` 只负责装配与发命令 | ✅ 已定案 |
 | K9 | `get_column_insight_full` 并发超限时的**用户重试**由 UI 承担 | 批量场景体验 | Phase 2 批量串行 + 进度缓解 |
 | K10 | 内置规则的**基础统计耦合**（覆盖 `numeric-stats` 会连带影响列画像） | 用户误以为只影响「那条规则」 | 文档说明（本文件 §5.3 + 使用手册） |

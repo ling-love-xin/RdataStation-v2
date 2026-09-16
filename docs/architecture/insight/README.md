@@ -65,6 +65,7 @@
 | 规则索引同步 / 目录监听 | `crates/insight/src/service/indexer.rs`、`service/watcher.rs`（现状：✅ 已实现） |
 | 列画像计算（统计 / 样本 / 直方图） | `crates/insight/src/insight_engine.rs`（现状：✅ 已迁移；内部接缝 `*_internal` 待提 `pub`） |
 | 质量评分（四维 + 等级） | `crates/insight/src/quality_scorer.rs`（现状：✅ 已迁移） |
+| 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
 | 异常值检测 | `crates/insight/src/insight_engine.rs`（`detect_extremes`；现状：✅ 已归位，自 `engine/services/duckdb_service.rs`） |
 | 表探查 | `crates/insight/src/table_profile_service.rs`（现状：✅ 已迁移） |
 | Schema 洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（现状：✅ 已迁移，**无服务门面与调用点**） |
@@ -117,7 +118,7 @@ cargo check --workspace --all-targets -j 2
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **130 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 第一批新增 22（视图模型与面板状态机）；第二批新增 7（错误→文案+可重试的映射 5、类型族判定 2）；Phase 2 第一批新增 6（等级阀值边界 4 + 权重合计 1 + 空列不产分）），另有**集成测试 4 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 → 视图模型，含错误文案对账），**新增功能不得减少**。
+- **基线**：`cargo test -p rds-insight` 当前 **145 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 第一批新增 22（视图模型与面板状态机）；第二批新增 7（错误→文案+可重试的映射 5、类型族判定 2）；Phase 2 第一批新增 6（等级阀值边界 4 + 权重合计 1 + 空列不产分）；第二批新增 13（规则管理视图模型 10 + 对话框实体与窗口 3）+ 接缝 2（真实项目库加载→开关、新建目录与模板）），另有**集成测试 4 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 → 视图模型，含错误文案对账），**新增功能不得减少**。
 
 ## 6. 文档地图
 
@@ -141,7 +142,7 @@ cargo check --workspace --all-targets -j 2
 | 已拍板（不阻塞） | 规则随项目走 · 三层作用域 · 正文不入库只入索引（开发方案 已确认决策 1–3） |
 | ✅ Phase 0 已落地 | 五项缺陷修复 · 内部接缝开放 · `RuleScope` + `registry_for` · 索引表与同步器 · **启停生效** · 快照链路闭合 · 占位文件接入 `lib.rs` · **目录监听热加载** · 四类文件边界归位（逐项见开发方案 §0） |
 | ✅ Phase 1 已落地 | 右 Dock 面板装配 · 列画像四区 · 入口命令 `open_insight_column`（`Ctrl+Shift+R`）· 后台取数 `insight::jobs::attach`（六批，逐项见开发方案 §0） |
-| Phase 2（进行中） | ✅ 质量评分卡（列级）；⬜ 表级聚合与进度 · 规则管理对话框 · 全局规则目录创建 |
+| Phase 2（进行中） | ✅ 质量评分卡（列级）· ✅ 规则管理对话框（含全局规则目录首次写入时创建）；⬜ 表级聚合与进度（与 Phase 3.1 合并推进） |
 | Phase 3 | 表探查 + 多列分析（重新设计） |
 | Phase 4 | Schema 洞察报告与导出 |
 | Phase 5 | 快照历史与版本对比（存储链路已就绪） |

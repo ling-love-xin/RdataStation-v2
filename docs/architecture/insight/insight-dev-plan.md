@@ -23,6 +23,28 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 2 第二批：规则管理对话框（2.3 + 2.4）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **145 项** + 集成 4 项全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 对话框 | 新实体 `RulesView` + 模态对话框（`window.open_dialog`）：三层分组（项目 → 全局 → 内置，按**覆盖优先级**而非加载顺序）/ 搜索 / 启停开关 / 校验错误行（错误原文）/ ⧉ 打开规则文件 / 底部统计 | `rule_view.rs`（新文件，~700 行含测试）|
+| 视图模型 | `RulesData` / `RuleGroupView` / `RuleRowView` / `RuleRowStatus`（纯数据 + 纯函数，可脱窗口单测）；搜索在**事件路径**重算可见行，render 只读 | 同上 |
+| 取数与写库 | `InsightService::{rules_data,toggle_rule,create_rule_file}`：**先同步后读数**；两层索引库（项目库现开 / 全局库进程单例）收在私有 `IndexStores`；门面保持同步口径，阻塞段由调用方放后台 | `service/mod.rs` |
+| 接缝 | `jobs::attach_rules(panel, host_cx, 项目根闭包)`；四个事件（重载 / 开关 / 新建 / 打开文件）；订阅回调**只提交任务、不回头改实体**（避免重入） | `jobs.rs` |
+| 面板入口 | ⚙ 由「占位禁用」改为**按项目状态启用** → 开窗 + 发一次取数；`InsightView::rules_view()` 供宿主接缝 | `insight_view.rs` |
+| 2.4 目录 | `rule_dir`（作用域 → 目录，全集一处拼）/ `create_rule_file`（建目录 + 写模板）/ `new_rule_template`（**能解析但不生效**：`applies_to = []`，文件名与 id 按序号避让） | `service/indexer.rs` |
+| 宿主 | 只多一行：`insight::jobs::attach_rules(&insight_panel, cx, 项目根提供者)` | `workbench/src/panels/right.rs` |
+| 测试 | 视图模型 10 项（分组顺序 / 抑制记录不被当成项目规则 / 同 id 覆盖 != 禁用 / 错误原文 / 统计 / 搜索）+ 窗口与实体 3 项（弹窗 + 事件 + 四态逐帧 + 就地翻位）+ 接缝 2 项（真实项目库：加载→开关一路走到规则集；新建目录与模板） | 各文件测试模块 |
+
+**排掉的坑**：`MutexGuard` 与进程级规则缓存——开关会写 `apply_disabled_rules`，必须与同类缓存测试串行（`rule_state_guard()`）；首次跑全集时因此而间歇失败。另：单测里不真的拉起系统编辑器（`cfg!(test)` 短路），否则 `cmd.exe` 的输出会混进测试日志。
+
+**与原型的两处**（已在 §5 标注）：① 新建入口除「＋ 新建项目规则」外，全局分组在目录缺失时也给「创建目录并新建规则」（K7 的落地形态）；② 启停开关是**受控**的（先就地翻位、后台落库失败时回填真值并把原因挂在状态行），不静默丢掉失败。
+
+**下一批**：2.2 表级「评估全表」+ 进度（需先有表探查视图，与 Phase 3.1 合并推进更适合）。
+
+
 ### 2026-09-16 — Phase 2 第一批：质量评分卡（列级）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **130 项** + 集成 4 项全绿；`cargo clippy -p rds-insight --all-targets` 对本批文件零告警）
@@ -468,9 +490,9 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | # | 任务 | 落点 | 状态 |
 | --- | --- | --- | --- |
 | 2.1 | 质量评分卡：总分 + 等级取色（85 / 70 / 50 / 30 四档）+ 四维进度条（权重 .35 / .25 / .20 / .20） | `insight/src/{quality_scorer,model,insight_view,ui}.rs` | ✅ 第一批 |
-| 2.2 | 表级质量聚合：「评估全表」→ `TableQuality` + 逐步进度（避免撞并发上限） | `insight/src/service/mod.rs` | ⬜ |
-| 2.3 | 规则管理视图：三层分组列表 + 启停开关 + 校验错误行 + 打开规则文件 | `insight/src/rule_view.rs`（新文件） | ⬜ |
-| 2.4 | 用户全局规则目录的创建与管理（首次写入时建目录） | `insight/src/service/indexer.rs` | ⬜ |
+| 2.2 | 表级质量聚合：「评估全表」→ `TableQuality` + 逐步进度（避免撞并发上限） | `insight/src/service/mod.rs` | ⬜ 与 Phase 3.1 合并（入口在表探查视图上） |
+| 2.3 | 规则管理视图：三层分组列表 + 启停开关 + 校验错误行 + 打开规则文件 | `insight/src/rule_view.rs`（新文件） | ✅ 第二批 |
+| 2.4 | 用户全局规则目录的创建与管理（首次写入时建目录） | `insight/src/service/indexer.rs` | ✅ 第二批 |
 
 **验收**：可禁用一条内置规则并验证其不再出现在适用规则列表；故意写坏一个 TOML 能看见错误原文。
 

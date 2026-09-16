@@ -21,6 +21,8 @@ pub const INSIGHT_INLINE_ICON_SIZE: f32 = 0.875;
 pub const INSIGHT_SECTION_TITLE_FONT: f32 = 0.75;
 /// 评分卡总分字号（1.75rem = 28px；四档取色）
 pub const INSIGHT_SCORE_FONT: f32 = 1.75;
+/// 规则管理对话框宽度（40rem = 640px；三层分组 + 路径 + 错误原文要宽度）
+pub const INSIGHT_RULES_DIALOG_WIDTH: f32 = 40.0;
 
 // ===== 与外壳共用的结构尺寸（重导出）=====
 //
@@ -28,5 +30,6 @@ pub const INSIGHT_SCORE_FONT: f32 = 1.75;
 // 空态图标必须与外壳一致，镜像两份会在任一侧调整时静默错位。
 // 故这里**重导出**而不是再登记一份——视图侧 `ui::PANEL_HEADER_HEIGHT` 等路径不变。
 pub use workbench_shell::ui::{
-    PANEL_HEADER_HEIGHT, PANEL_PADDING, ROW_HEIGHT, SCRATCHPAD_EMPTY_ICON_SIZE as EMPTY_ICON_SIZE,
+    DIALOG_ROW_HEIGHT, DIALOG_TAB_BODY_HEIGHT, PANEL_HEADER_HEIGHT, PANEL_PADDING, ROW_HEIGHT,
+    SCRATCHPAD_EMPTY_ICON_SIZE as EMPTY_ICON_SIZE,
 };

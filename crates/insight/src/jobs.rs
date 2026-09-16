@@ -17,12 +17,14 @@
 //! `Shared` 里的 `Rc<RefCell<…>>` 不可跨线程，所以**项目根在提交时解析成所有权数据**；
 //! 后台闭包不碰任何宿主状态。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, Context, Entity, Subscription};
 
 use crate::insight_view::{InsightEvent, InsightView};
 use crate::model::InsightTarget;
+use crate::rule::RuleScope;
+use crate::rule_view::{RulesEvent, RulesView};
 use crate::service::InsightService;
 
 /// 一次列画像请求：后台执行所需的全部输入（均为所有权数据，因此可跨线程）。
@@ -90,6 +92,162 @@ pub fn handle_event(
     }
 }
 
+// ==================== 规则管理（Phase 2.3） ====================
+
+/// 把规则管理对话框接上宿主：取数 / 写库 / 新建 / 打开文件都在接缝里完成。
+///
+/// 宿主仍然只写一行，且依然**不必知道事件形状**。
+/// 订阅回调里只提交后台任务、**不回头改对话框状态**——回调是在 `emit` 的内层执行的，
+/// 这时候改同一个实体就是重入（`cannot update … while it is already being updated`）。
+pub fn attach_rules<H: 'static>(
+    panel: &Entity<InsightView>,
+    host_cx: &mut Context<H>,
+    project_root: impl Fn() -> Option<PathBuf> + 'static,
+) -> Subscription {
+    let rules = panel.read(host_cx).rules_view().clone();
+    let subscribed = rules.clone();
+    host_cx.subscribe(&subscribed, move |_this, _emitter, event: &RulesEvent, cx| {
+        let root = project_root();
+        handle_rules_event(&rules, root, event, cx);
+    })
+}
+
+/// 规则事件 → 执行动作。
+pub fn handle_rules_event(
+    view: &Entity<RulesView>,
+    project_root: Option<PathBuf>,
+    event: &RulesEvent,
+    cx: &mut App,
+) {
+    match event {
+        RulesEvent::ReloadRequested => request_rules(view, project_root, cx),
+        RulesEvent::ToggleRequested {
+            rule_id,
+            scope,
+            enabled,
+        } => request_rule_toggle(view, project_root, *scope, rule_id, *enabled, cx),
+        RulesEvent::CreateRuleRequested { scope } => {
+            request_create_rule(view, project_root, *scope, cx)
+        }
+        RulesEvent::OpenFileRequested { path } => open_in_system_editor(path),
+    }
+}
+
+/// 取数：同步索引 → 组装视图模型（阻塞段全在后台执行器上）。
+pub fn request_rules(view: &Entity<RulesView>, project_root: Option<PathBuf>, cx: &mut App) {
+    let weak = view.downgrade();
+    let task = cx
+        .background_executor()
+        .spawn(async move { InsightService::rules_data(project_root.as_deref()) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        // 对话框可能早已关掉：弱句柄升级失败就丢弃结果（不 panic）
+        let _ = weak.update(cx, |view, cx| match result {
+            Ok(data) => view.set_data(data, cx),
+            Err(err) => view.set_error(InsightService::describe_error(&err).message, cx),
+        });
+    })
+    .detach();
+}
+
+/// 开关：写索引 → 重新同步 → 回填新数据。
+///
+/// 失败走 [`RulesView::set_notice`] 而不是整体错误态：列表本身是好的，
+/// 只是这一次没存上；整页变错误会让用户以为规则列表坏了。
+pub fn request_rule_toggle(
+    view: &Entity<RulesView>,
+    project_root: Option<PathBuf>,
+    scope: RuleScope,
+    rule_id: &str,
+    enabled: bool,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let rule_id = rule_id.to_string();
+    let task = cx.background_executor().spawn(async move {
+        // 写库与重读在同一个后台任务里：中间没有可观察的中间态
+        InsightService::toggle_rule(project_root.as_deref(), scope, &rule_id, enabled)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |view, cx| match result {
+            Ok(data) => view.set_data(data, cx),
+            Err(err) => view.set_notice(
+                format!("启停未保存：{}", InsightService::describe_error(&err).message),
+                cx,
+            ),
+        });
+    })
+    .detach();
+}
+
+/// 新建规则：建目录 + 写模板 → 刷新列表 → 在系统编辑器中打开。
+pub fn request_create_rule(
+    view: &Entity<RulesView>,
+    project_root: Option<PathBuf>,
+    scope: RuleScope,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        let path = InsightService::create_rule_file(project_root.as_deref(), scope)?;
+        let data = InsightService::rules_data(project_root.as_deref())?;
+        Ok::<_, shared::error::CoreError>((path, data))
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |view, cx| match result {
+            Ok((path, data)) => {
+                view.set_data(data, cx);
+                open_in_system_editor(&path);
+            }
+            Err(err) => view.set_notice(
+                format!("新建规则失败：{}", InsightService::describe_error(&err).message),
+                cx,
+            ),
+        });
+    })
+    .detach();
+}
+
+/// 在**系统默认应用**里打开规则文件。
+///
+/// 规则正文是项目里的 TOML（可 diff、可进 git），系统编辑器是正确的落点：
+/// 本应用没有 TOML 语法支持，塞进 SQL 编辑器只会得到一屏纯文本。
+/// 只拉起进程、不等待——个别桌面环境下 `start` / `xdg-open` 会卡几秒。
+pub fn open_in_system_editor(path: &Path) {
+    // 单测里不真的拉起外部进程：会弹出编辑器，`cmd.exe` 的输出还会混进测试日志。
+    // 「要打开哪个文件」由调用方的事件断言盖住，这里只跳过最后那一步进程启动。
+    if cfg!(test) {
+        tracing::debug!("跳过系统编辑器（测试构建）：{}", path.display());
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        // `start` 的第一个参数是窗口标题：给空标题，否则带空格的路径会被当成标题
+        command.args(["/C", "start", ""]).arg(path);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg(path);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    if let Err(e) = command.spawn() {
+        tracing::warn!("无法在系统编辑器中打开 {}：{}", path.display(), e);
+    }
+}
+
 /// 提交一次画像请求：后台执行 → 回填面板。
 ///
 /// 回填只走面板的公开方法（`set_profile` / `set_error`），错误经 `describe_error` 转成
@@ -129,9 +287,11 @@ mod tests {
 
     use gpui_kit::{AppContext as _, Context, TestAppContext};
 
-    use super::{ProfileRequest, attach};
+    use super::{ProfileRequest, attach, attach_rules};
     use crate::insight_view::InsightView;
     use crate::model::InsightTarget;
+    use crate::rule::RuleScope;
+    use crate::rule_view::{RuleRowStatus, RulesDialogState};
 
     /// 宿主替身：真实宿主只多持一个订阅句柄（`_sub`）
     struct TestHost;
@@ -230,5 +390,173 @@ mod tests {
                 "订阅应把请求转成取数并回填错误态，实际：{state:?}"
             );
         });
+    }
+
+    // ==================== 规则管理接缝（Phase 2.3） ====================
+
+    /// 一条最小合法规则（能解析、且因 `applies_to = []` 暂不参与分析）
+    const DEMO_RULE: &str = r#"
+[meta]
+id = "demo-rule"
+name = "示例项目规则"
+description = ""
+version = "1.0"
+category = "column"
+applies_to = []
+builtin = false
+
+[query]
+template = "SELECT COUNT(*) AS total FROM \"{table}\""
+parameters = ["table"]
+result_type = "single"
+
+[[output]]
+sql_name = "total"
+json_name = "total_count"
+value_type = "i64"
+"#;
+
+    /// 临时项目：`.RSmeta/insight-rules/` 已建好（规则目录是项目自有的部分）
+    fn temp_project(tag: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("rds_rules_jobs_{}_{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".RSmeta/insight-rules")).expect("建临时项目");
+        root
+    }
+
+    /// 宿主只写一行（`attach_rules`），这一行的契约必须在本 crate 内验住：
+    /// 对话框一发请求，项目根就被取用、索引真的与磁盘对齐、数据真的回填，
+    /// 且**开关注得进规则集**（否则索引就成了只写不读的装饰）。
+    #[gpui_kit::test]
+    fn attach_rules_loads_and_toggles_through_a_real_project(cx: &mut TestAppContext) {
+        // 同步索引会写进程级启停集合缓存：与同类的缓存测试串行（本仓约定）
+        let _guard = crate::tests::rule_state_guard();
+        cx.update(gpui_kit::init);
+        let root = temp_project("attach_rules");
+        std::fs::write(root.join(".RSmeta/insight-rules/demo.rule.toml"), DEMO_RULE)
+            .expect("写一条项目规则");
+
+        let root_for_host = root.clone();
+        let (host, _panel, rules, _sub) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let rules = panel.read(cx).rules_view().clone();
+            let sub = host.update(cx, |_host, host_cx| {
+                attach_rules(&panel, host_cx, move || Some(root_for_host.clone()))
+            });
+            (host, panel, rules, sub)
+        });
+        let _host = host;
+
+        // 打开对话框的等价入口（不弹窗，直接发事件）：同步索引 → 读数 → 回填
+        cx.update(|cx| rules.update(cx, |view, cx| view.request_reload(cx)));
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let view = rules.read(cx);
+            assert_eq!(
+                view.state(),
+                &RulesDialogState::Ready,
+                "取数应成功回填（实际：{:?}）",
+                view.state()
+            );
+            let project = view.data().group(RuleScope::Project).expect("项目分组");
+            assert_eq!(project.rows.len(), 1, "磁盘上的项目规则应进索引");
+            assert_eq!(project.rows[0].id, "demo-rule");
+            assert_eq!(project.rows[0].name, "示例项目规则");
+            assert!(!project.dir_missing, "目录已存在");
+            assert!(
+                view.data().total > 18,
+                "内置 18 条 + 项目规则，实际 {}",
+                view.data().total
+            );
+        });
+
+        // 开关：写索引 → 重新同步 → 推进启停集合 → 注册表失效（下次取数就不再包含它）
+        assert!(
+            crate::with_rules(Some(&root), |registry| Ok(registry.get("demo-rule").is_some()))
+                .expect("取规则集")
+        );
+        cx.update(|cx| {
+            rules.update(cx, |view, cx| {
+                view.request_toggle(RuleScope::Project, "demo-rule", false, cx)
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let row = &rules
+                .read(cx)
+                .data()
+                .group(RuleScope::Project)
+                .unwrap()
+                .rows[0];
+            assert!(!row.enabled, "回填的数据应反映禁用");
+            assert!(
+                !crate::with_rules(Some(&root), |registry| Ok(registry
+                    .get("demo-rule")
+                    .is_some()))
+                .expect("取规则集"),
+                "禁用必须一路走到规则集（否则索引只是只写不读的装饰）"
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(&root);
+        crate::clear_disabled_rules_cache();
+    }
+
+    /// 新建规则：目录首次写入时创建（K7），模板能解析且**暂不生效**
+    #[gpui_kit::test]
+    fn attach_rules_creates_a_parseable_template(cx: &mut TestAppContext) {
+        // 同步索引会写进程级启停集合缓存：与同类的缓存测试串行（本仓约定）
+        let _guard = crate::tests::rule_state_guard();
+        cx.update(gpui_kit::init);
+        // 只建项目根，**不建**规则目录：目录必须由「新建」自己建出来
+        let root = std::env::temp_dir().join(format!("rds_rules_create_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("建临时项目");
+
+        let root_for_host = root.clone();
+        let (host, _panel, rules, _sub) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let rules = panel.read(cx).rules_view().clone();
+            let sub = host.update(cx, |_host, host_cx| {
+                attach_rules(&panel, host_cx, move || Some(root_for_host.clone()))
+            });
+            (host, panel, rules, sub)
+        });
+        let _host = host;
+
+        cx.update(|cx| {
+            rules.update(cx, |view, cx| {
+                view.request_create_rule(RuleScope::Project, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let view = rules.read(cx);
+            assert_eq!(view.state(), &RulesDialogState::Ready);
+            let project = view.data().group(RuleScope::Project).expect("项目分组");
+            assert!(!project.dir_missing, "目录应由新建自己创建");
+            assert_eq!(project.rows.len(), 1);
+            assert_eq!(project.rows[0].id, "new-rule");
+            assert!(
+                project.rows[0].status == RuleRowStatus::Ok,
+                "模板必须能解析，否则用户第一眼看到的就是一条红错：{:?}",
+                project.rows[0].status
+            );
+            assert!(project.rows[0].file.is_some(), "新建后会交给系统编辑器打开");
+            assert!(
+                crate::builtin_registry()
+                    .all_rules()
+                    .iter()
+                    .all(|r| r.meta.id != "new-rule"),
+                "模板 id 不得与内置规则撞车"
+            );
+        });
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

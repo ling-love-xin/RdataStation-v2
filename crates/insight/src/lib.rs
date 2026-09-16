@@ -29,6 +29,7 @@ pub mod rule;
 pub mod rule_executor;
 pub mod rule_registry;
 pub mod rule_types;
+pub mod rule_view;
 pub mod schema_analyzer;
 pub mod service;
 pub mod store;
@@ -78,6 +79,10 @@ pub use model::{
     InsightTarget, NoteLevel, PanelTab, QualityNote, SampleCell, ScoreView, StatRow,
 };
 pub use quality_scorer::Grade;
+pub use rule_view::{
+    build_rules_data, RuleDataInput, RuleGroupView, RuleRowStatus, RuleRowView, RulesData,
+    RulesDialogState, RulesEvent, RulesView,
+};
 pub use rule_types::{
     ExecutionResult, OutputField, QualityCheck, QualityReport, QualityRule, RenderHint, RuleFile,
     RuleMeta, RuleQuery,

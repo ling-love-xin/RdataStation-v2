@@ -30,6 +30,8 @@ pub struct RightSidebarPanel {
     insight_panel: Entity<InsightView>,
     /// 洞察面板的取数请求订阅（仅持有）
     _insight_sub: Subscription,
+    /// 规则管理对话框的取数 / 写库请求订阅（仅持有）
+    _rules_sub: Subscription,
 }
 
 impl RightSidebarPanel {
@@ -55,12 +57,23 @@ impl RightSidebarPanel {
                 .as_ref()
                 .map(|session| session.root.clone())
         });
+        // 规则管理对话框（Phase 2.3）：同一套后台形态，同一个项目根提供者。
+        // 取数 / 写库 / 新建 / 打开规则文件都在 insight crate 的接缝里。
+        let rules_shared = shared.clone();
+        let _rules_sub = insight::jobs::attach_rules(&insight_panel, cx, move || {
+            rules_shared
+                .project
+                .borrow()
+                .as_ref()
+                .map(|session| session.root.clone())
+        });
         Self {
             shared,
             focus_handle: cx.focus_handle(),
             mock_panel,
             insight_panel,
             _insight_sub,
+            _rules_sub,
         }
     }
 
