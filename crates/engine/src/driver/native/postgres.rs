@@ -8,6 +8,7 @@ use sqlx::{Column, Pool, Postgres, Row};
 use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
+use crate::driver::utils::{affected_rows_result, returns_rows};
 use crate::driver::{
     ColumnDetail, DataSourceMeta, Database, PoolStatus, SchemaObject, SchemaObjectKind, Transaction,
 };
@@ -110,6 +111,10 @@ fn build_query_result(
 impl Database for PostgresDatabase {
     async fn query(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let read_only = is_read_only_sql(sql);
+        // B5 / P0.6：不返回结果集的写语句走 `execute`，拿驱动的**真实影响行数**
+        if !read_only && !returns_rows(sql) {
+            return execute_writing(&self.pool, sql).await;
+        }
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(&self.pool)
             .await
@@ -186,6 +191,10 @@ impl Database for PostgresDatabase {
         tokio::select! {
             result = async move {
                 let read_only = is_read_only_sql(&sql_owned);
+                // B5 / P0.6：写语句（无结果集）走 `execute` 拿影响行数
+                if !read_only && !returns_rows(&sql_owned) {
+                    return execute_writing(&pool, &sql_owned).await;
+                }
 
                 let rows = sqlx::query(sqlx::AssertSqlSafe(sql_owned.as_str()))
                     .fetch_all(&pool)
@@ -434,6 +443,14 @@ impl Transaction for PostgresTransaction {
     async fn query(&mut self, sql: &str) -> Result<QueryResult, CoreError> {
         if let Some(ref mut tx) = self.tx {
             let read_only = is_read_only_sql(sql);
+            // B5 / P0.6：事务内的写语句同样要真实影响行数
+            if !read_only && !returns_rows(sql) {
+                let result = sqlx::query(sqlx::AssertSqlSafe(sql))
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+                return Ok(affected_rows_result(result.rows_affected()));
+            }
 
             let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .fetch_all(&mut **tx)
@@ -485,6 +502,15 @@ impl Transaction for PostgresTransaction {
         }
         Ok(())
     }
+}
+
+/// 写语句（不返回结果集）走 `execute`：拿驱动的**真实影响行数**（B5 / P0.6）
+async fn execute_writing(pool: &Pool<Postgres>, sql: &str) -> Result<QueryResult, CoreError> {
+    let result = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .execute(pool)
+        .await
+        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+    Ok(affected_rows_result(result.rows_affected()))
 }
 
 fn postgres_rows_to_arrow(

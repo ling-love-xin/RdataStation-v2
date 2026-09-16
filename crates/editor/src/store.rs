@@ -32,6 +32,8 @@ pub struct ResultEntry {
     pub elapsed_ms: u64,
     /// 结果是否被截断（超出驱动行数上限）
     pub truncated: bool,
+    /// 写语句的真实影响行数（B5；驱动没报就是 `None`，界面不编造）
+    pub affected_rows: Option<u32>,
     /// 列名（失败时为空）
     pub columns: Vec<String>,
     /// 行数据（已字符串化；失败时为空）
@@ -55,10 +57,17 @@ impl ResultEntry {
             sql,
             elapsed_ms,
             truncated,
+            affected_rows: None,
             columns,
             rows,
             error: None,
         }
+    }
+
+    /// 带上写语句的影响行数（结果区显示「影响 N 行」；没有就不要填）
+    pub fn with_affected_rows(mut self, affected_rows: Option<u32>) -> Self {
+        self.affected_rows = affected_rows;
+        self
     }
 
     /// 失败的执行
@@ -68,6 +77,7 @@ impl ResultEntry {
             sql,
             elapsed_ms,
             truncated: false,
+            affected_rows: None,
             columns: Vec::new(),
             rows: Vec::new(),
             error: Some(error),
@@ -89,10 +99,23 @@ impl ResultEntry {
         self.error.is_some()
     }
 
+    /// 是不是「只有影响行数、没有结果集」的写语句（结果区要换成一句文案）
+    pub fn affects_rows_only(&self) -> bool {
+        self.error.is_none() && self.columns.is_empty() && self.affected_rows.is_some()
+    }
+
     /// 结果区状态行（真实值，无占位文案）
     pub fn summary(&self) -> String {
         if let Some(error) = &self.error {
             return format!("执行失败：{error}");
+        }
+        // 写语句没有结果集，只能报影响行数（B5）
+        if let Some(affected) = self.affected_rows {
+            let mut text = format!("影响 {affected} 行 · {} ms", self.elapsed_ms);
+            if self.truncated {
+                text.push_str(" · 已截断");
+            }
+            return text;
         }
         let mut text = format!("{} 行 × {} 列 · {} ms", self.row_count(), self.columns.len(), self.elapsed_ms);
         if self.truncated {

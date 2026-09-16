@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::driver::traits::MetadataBrowser;
+use crate::driver::utils::{affected_rows_result, returns_rows};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObject, SchemaObjectKind, Transaction,
@@ -115,6 +116,22 @@ fn is_read_only_sql(sql: &str) -> bool {
         || sql_upper.starts_with("DESCRIBE")
         || sql_upper.starts_with("EXPLAIN")
         || sql_upper.starts_with("SET")
+}
+
+/// 写语句（不返回行）跑 `exec_drop`，再从连接上读**真实影响行数**（B5 / P0.6）
+///
+/// `exec_iter` 路径对 DML 只能给出「无结果集」这个事实，拿不到计数；
+/// `exec_drop` 会丢弃结果集，随后 `Conn::affected_rows()` 给出服务器报的行数。
+async fn execute_writing(
+    conn: &mut mysql_async::Conn,
+    sql: &str,
+    params: mysql_async::Params,
+) -> Result<QueryResult, CoreError> {
+    use mysql_async::prelude::Queryable;
+    conn.exec_drop(sql, params)
+        .await
+        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+    Ok(affected_rows_result(conn.affected_rows()))
 }
 
 // ============================================================================
@@ -381,6 +398,11 @@ impl Database for MySqlNativeDatabase {
             })
         })?;
 
+        // B5 / P0.6：不返回结果集的写语句走 `exec_drop`，拿驱动的真实影响行数
+        if !is_read_only && !returns_rows(sql) {
+            return execute_writing(&mut conn, sql, mysql_async::Params::Empty).await;
+        }
+
         let mut result = conn
             .query_iter(sql)
             .await
@@ -427,6 +449,16 @@ impl Database for MySqlNativeDatabase {
             })
             .collect();
 
+        // B5 / P0.6：带参数的写语句同样给真实影响行数
+        if !is_read_only && !returns_rows(sql) {
+            return execute_writing(
+                &mut conn,
+                sql,
+                mysql_async::Params::Positional(mysql_params),
+            )
+            .await;
+        }
+
         let params_ref: Vec<&mysql_async::Value> = mysql_params.iter().collect();
 
         let mut result = conn
@@ -468,6 +500,16 @@ impl Database for MySqlNativeDatabase {
                         source: e.to_string(),
                     })
                 })?;
+
+                // B5 / P0.6：不返回结果集的写语句走 `exec_drop`，拿驱动的真实影响行数
+                if !is_read_only && !returns_rows(&sql_owned) {
+                    return execute_writing(
+                        &mut conn,
+                        &sql_owned,
+                        mysql_async::Params::Empty,
+                    )
+                    .await;
+                }
 
                 let mut query_result = conn.query_iter(&sql_owned).await.map_err(|e| {
                     CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
@@ -681,6 +723,11 @@ impl Transaction for MySqlNativeTransaction {
         let mut guard = self.conn.lock().await;
         if let Some(ref mut conn) = *guard {
             let is_read_only = is_read_only_sql(sql);
+
+            // B5 / P0.6：事务内的写语句同样要真实影响行数
+            if !is_read_only && !returns_rows(sql) {
+                return execute_writing(conn, sql, mysql_async::Params::Empty).await;
+            }
 
             let mut result = conn
                 .query_iter(sql)

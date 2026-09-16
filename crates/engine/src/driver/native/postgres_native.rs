@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::driver::traits::MetadataBrowser;
+use crate::driver::utils::{affected_rows_result, returns_rows};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObject, SchemaObjectKind, Transaction,
@@ -115,6 +116,21 @@ fn is_read_only_sql(sql: &str) -> bool {
         || sql_upper.starts_with("DESCRIBE")
         || sql_upper.starts_with("EXPLAIN")
         || sql_upper.starts_with("SET")
+}
+
+/// 写语句（不返回行）走 `Client::execute`，拿**真实影响行数**（B5 / P0.6）
+///
+/// `execute` 会丢弃结果集，只回报 `CommandComplete` 里的行数；
+/// 带 `RETURNING` 的语句要走 `query`，否则数据会被丢掉。
+async fn execute_writing(
+    client: &tokio_postgres::Client,
+    sql: &str,
+) -> Result<QueryResult, CoreError> {
+    let affected = client
+        .execute(sql, &[])
+        .await
+        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+    Ok(affected_rows_result(affected))
 }
 
 // ============================================================================
@@ -347,6 +363,11 @@ impl Database for PostgresNativeDatabase {
         let is_read_only = is_read_only_sql(sql);
         let client = self.client.lock().await;
 
+        // B5 / P0.6：不返回结果集的写语句走 `execute`，拿驱动的真实影响行数
+        if !is_read_only && !returns_rows(sql) {
+            return execute_writing(&client, sql).await;
+        }
+
         let rows = client
             .query(sql, &[])
             .await
@@ -396,6 +417,14 @@ impl Database for PostgresNativeDatabase {
             .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
             .collect();
 
+        // B5 / P0.6：带参数的写语句同样给真实影响行数
+        if !is_read_only && !returns_rows(sql) {
+            let affected = client.execute(sql, &param_refs).await.map_err(|e| {
+                CoreError::database(DatabaseError::query(sql, e.to_string()))
+            })?;
+            return Ok(affected_rows_result(affected));
+        }
+
         let rows = client
             .query(sql, &param_refs)
             .await
@@ -431,6 +460,11 @@ impl Database for PostgresNativeDatabase {
             result = async move {
                 let is_read_only = is_read_only_sql(&sql_owned);
                 let guard = client.lock().await;
+
+                // B5 / P0.6：不返回结果集的写语句走 `execute`，拿驱动的真实影响行数
+                if !is_read_only && !returns_rows(&sql_owned) {
+                    return execute_writing(&guard, &sql_owned).await;
+                }
 
                 let rows = guard
                     .query(&sql_owned, &[])
@@ -660,6 +694,11 @@ impl Transaction for PostgresNativeTransaction {
         }
         let is_read_only = is_read_only_sql(sql);
         let client = self.client.lock().await;
+
+        // B5 / P0.6：事务内的写语句同样要真实影响行数
+        if !is_read_only && !returns_rows(sql) {
+            return execute_writing(&client, sql).await;
+        }
 
         let rows = client
             .query(sql, &[])

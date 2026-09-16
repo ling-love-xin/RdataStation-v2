@@ -577,6 +577,7 @@ impl QueryRunner for ScriptRunner {
             rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
             elapsed_ms: 5,
             truncated: false,
+            affected_rows: None,
         })
     }
 }
@@ -624,6 +625,7 @@ impl QueryRunner for SizedRunner {
             rows: (0..rows).map(|index| vec![index.to_string()]).collect(),
             elapsed_ms: 3,
             truncated: false,
+            affected_rows: None,
         })
     }
 }
@@ -654,6 +656,15 @@ fn wait_for_all_pending(cx: &mut VisualTestContext, panel: &Entity<EditorHostPan
         }
         assert!(std::time::Instant::now() < deadline, "批量结果迟迟没全部回来");
         std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// 等一个条件成立（工作线程把状态摆在内存里时用；超时就直接报出来）
+fn wait_until(mut ready: impl FnMut() -> bool, what: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !ready() {
+        assert!(std::time::Instant::now() < deadline, "等不到：{what}");
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }
 
@@ -930,11 +941,18 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
 /// 假执行器（B3）：卡在 `run` 里等中断（模拟慢查询；驱动侧由取消令牌打断）
 struct BlockingRunner {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// 假执行器真的进去跑了吗
+    ///
+    /// “提交”不等于“驱动在跑”：工作线程要先取到作业、再读中断标记，然后才进 `run`。
+    /// 中断的用例必须等它真的跑起来，否则测到的是“还没开始的那条被标已取消”
+    /// （那是另一条语义，由批量用例钉住）。
+    started: std::sync::Arc<std::sync::atomic::AtomicBool>,
     cancels: SeenConnections,
 }
 
 impl QueryRunner for BlockingRunner {
     fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+        self.started.store(true, std::sync::atomic::Ordering::SeqCst);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !self.stop.load(std::sync::atomic::Ordering::SeqCst) {
             assert!(std::time::Instant::now() < deadline, "假执行器没等到中断");
@@ -960,20 +978,23 @@ fn shared_with_blocking_runner(
     EditorShared,
     DocumentId,
     std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
     SeenConnections,
 ) {
     let shared = EditorShared::new();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancels: SeenConnections = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     shared.attach_runner(std::sync::Arc::new(BlockingRunner {
         stop: stop.clone(),
+        started: started.clone(),
         cancels: cancels.clone(),
     }));
     let id = shared
         .open(OpenRequest::untitled(content, EditorMode::Sql))
         .id()
         .clone();
-    (shared, id, stop, cancels)
+    (shared, id, stop, started, cancels)
 }
 
 /// 中断：慢查询就此结束（结果集报错），中断请求真的到了执行器，跑完不再计时
@@ -981,7 +1002,7 @@ fn shared_with_blocking_runner(
 fn interrupting_a_slow_query_ends_it_with_a_visible_reason(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
 
-    let (shared, id, stop, cancels) = shared_with_blocking_runner("select slow;");
+    let (shared, id, stop, started, cancels) = shared_with_blocking_runner("select slow;");
     let (panel, cx) = open_panel(cx, &shared, &id);
 
     cx.update(|_window, cx| {
@@ -1000,6 +1021,12 @@ fn interrupting_a_slow_query_ends_it_with_a_visible_reason(cx: &mut TestAppConte
     );
     // 执行中画一帧：状态栏那个 ■ 中断 按钮真的渲染（布局/借用问题会在这里暴露）
     cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 等它**真的跑起来**再中断：中断要打断的是“跑着的查询”
+    wait_until(
+        || started.load(std::sync::atomic::Ordering::SeqCst),
+        "假执行器开始跑",
+    );
 
     cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.interrupt(cx)));
     let message = cx.update(|_window, cx| panel.read(cx).message.clone());
@@ -1036,7 +1063,7 @@ fn interrupting_a_slow_query_ends_it_with_a_visible_reason(cx: &mut TestAppConte
 fn interrupting_when_nothing_runs_says_why(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
 
-    let (_shared, id, _stop, _cancels) = shared_with_blocking_runner("select 1;");
+    let (_shared, id, _stop, _started, _cancels) = shared_with_blocking_runner("select 1;");
     let (panel, cx) = open_panel(cx, &_shared, &id);
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).pending_for_test()),
@@ -1078,6 +1105,7 @@ impl QueryRunner for TxRunner {
             rows: vec![vec!["1".to_string()]],
             elapsed_ms: 1,
             truncated: false,
+            affected_rows: None,
         })
     }
 

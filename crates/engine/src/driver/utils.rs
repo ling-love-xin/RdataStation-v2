@@ -180,6 +180,135 @@ pub fn escape_identifier(input: &str) -> String {
     quote_identifier(input, '"')
 }
 
+/// 写语句的结果：**没有结果集，只有影响行数**（B5 / P0.6）
+///
+/// 界面上 DML / DDL 成功时显示“影响 N 行”。`u32` 溢出按上限饱和——不假装是个精确值。
+pub fn affected_rows_result(affected: u64) -> shared::models::QueryResult {
+    shared::models::QueryResult {
+        columns: Vec::new(),
+        batches: Vec::new(),
+        affected_rows: Some(affected.min(u64::from(u32::MAX)) as u32),
+        is_read_only: Some(false),
+        ..Default::default()
+    }
+}
+
+/// 取语句的首个关键字（跳过前置注释与空白）
+///
+/// 只认 ASCII 标识符字符，返回小写；拿不到就返回空串。
+fn first_keyword(sql: &str) -> String {
+    let mut rest = sql;
+    loop {
+        rest = rest.trim_start();
+        if let Some(tail) = rest.strip_prefix("--") {
+            rest = match tail.find('\n') {
+                Some(idx) => &tail[idx + 1..],
+                None => return String::new(),
+            };
+        } else if let Some(tail) = rest.strip_prefix("/*") {
+            rest = match tail.find("*/") {
+                Some(idx) => &tail[idx + 2..],
+                None => return String::new(),
+            };
+        } else {
+            break;
+        }
+    }
+
+    rest.chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+/// 语句里是否出现独立单词 `RETURNING`
+///
+/// 扫描时跳过字符串字面量、引用标识符与注释，所以 `returning_log`、
+/// `'returning'`、`-- returning` 都不算子句。
+fn has_returning_clause(sql: &str) -> bool {
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            // 单引号字面量：`''` 是转义写法
+            b'\'' => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\'' {
+                        if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            // 引用标识符（`"a"` / `` `a` ``）：同样双写转义
+            quote @ (b'"' | b'`') => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == quote {
+                        if i + 1 < bytes.len() && bytes[i + 1] == quote {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            // 行注释
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            // 块注释
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+            }
+            c if c.is_ascii_alphabetic() || c == b'_' => {
+                let start = i;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+                {
+                    i += 1;
+                }
+                if bytes[start..i].eq_ignore_ascii_case(b"returning") {
+                    return true;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// 语句自己会不会返回行
+///
+/// 驱动据它决定「走 `query` 取结果集」还是「走 `execute` 只取影响行数」。
+/// 判定看两部分：
+///
+/// * **首个关键字**——`SELECT` / `WITH` / `VALUES` / `TABLE` / `SHOW` 等本身就会回行
+///   （`WITH … SELECT` 是查询，不能因为不是 `SELECT` 开头就当成写语句）；
+/// * **语句里有没有 `RETURNING`**——带 `RETURNING` 的写语句既影响行、又回行。
+///
+/// 两边都要顾及时驱动给不出「两者兼得」的结果：**保行**，用户至少看得见数据。
+pub fn returns_rows(sql: &str) -> bool {
+    const ROW_KEYWORDS: [&str; 10] = [
+        "select", "with", "values", "table", "show", "describe", "desc", "explain",
+        "pragma", "summarize",
+    ];
+    ROW_KEYWORDS.contains(&first_keyword(sql).as_str()) || has_returning_clause(sql)
+}
+
 /// 解析驱动ID
 pub fn parse_driver_id(url: &str) -> Option<&str> {
     if url.starts_with("mysql://") {
@@ -194,5 +323,84 @@ pub fn parse_driver_id(url: &str) -> Option<&str> {
         Some("clickhouse")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{affected_rows_result, returns_rows};
+
+    /// 写语句（无 RETURNING）不返回行——驱动才会走 `execute` 取影响行数
+    #[test]
+    fn writes_do_not_return_rows() {
+        assert!(!returns_rows("INSERT INTO t VALUES (1)"));
+        assert!(!returns_rows("  update t set a = 1"));
+        assert!(!returns_rows("DELETE FROM t"));
+        assert!(!returns_rows("CREATE TABLE t (a INT)"));
+        assert!(!returns_rows("TRUNCATE t"));
+        assert!(!returns_rows(""));
+    }
+
+    /// 查询语句都返回行
+    #[test]
+    fn reads_return_rows() {
+        assert!(returns_rows("SELECT 1"));
+        assert!(returns_rows("  \n select 1"));
+        assert!(returns_rows("VALUES (1)"));
+        assert!(returns_rows("TABLE t"));
+        assert!(returns_rows("SHOW TABLES"));
+        assert!(returns_rows("EXPLAIN SELECT 1"));
+    }
+
+    /// `WITH …` 是查询，不能因为不是 `SELECT` 开头就当成写语句
+    #[test]
+    fn cte_stays_a_query() {
+        assert!(returns_rows("WITH x AS (SELECT 1) SELECT * FROM x"));
+        assert!(returns_rows(
+            "with recursive f(n) as (select 1) select n from f"
+        ));
+    }
+
+    /// 带 `RETURNING` 的写语句既影响行又回行，按「保行」处理
+    #[test]
+    fn returning_clause_keeps_rows() {
+        assert!(returns_rows("INSERT INTO t (a) VALUES (1) RETURNING id"));
+        assert!(returns_rows("UPDATE t SET a = 1 returning *"));
+        assert!(returns_rows("DELETE FROM t RETURNING *"));
+    }
+
+    /// `RETURNING` 必须是个独立单词：标识符、字符串字面量、注释里的都不算
+    #[test]
+    fn returning_inside_identifiers_is_not_a_clause() {
+        assert!(!returns_rows("INSERT INTO returning_log (a) VALUES (1)"));
+        assert!(!returns_rows("INSERT INTO t (a) VALUES ('returning')"));
+        assert!(!returns_rows("INSERT INTO t (a) VALUES ('it''s returning')"));
+        assert!(!returns_rows("INSERT INTO t (a) VALUES ('后 RETURNING 前')"));
+        assert!(!returns_rows("-- returning\nDELETE FROM t"));
+        assert!(!returns_rows("/* returning */ DELETE FROM t"));
+        assert!(returns_rows("INSERT INTO t (a) VALUES ('x') RETURNING id"));
+    }
+
+    /// 前置注释不参与首关键字判定
+    #[test]
+    fn leading_comments_are_skipped() {
+        assert!(returns_rows("-- 备注\nSELECT 1"));
+        assert!(returns_rows("/* 备注 */ SELECT 1"));
+        assert!(!returns_rows("-- 备注\nDELETE FROM t"));
+        assert!(!returns_rows("/* a */ /* b */ UPDATE t SET a = 1"));
+        assert!(!returns_rows("-- 只有注释"));
+    }
+
+    /// 影响行数超过 u32 上限时饱和，不假装是精确值
+    #[test]
+    fn affected_rows_saturates_at_u32() {
+        let small = affected_rows_result(3);
+        assert_eq!(small.affected_rows, Some(3));
+        assert!(small.columns.is_empty());
+        assert!(small.batches.is_empty());
+        assert_eq!(small.is_read_only, Some(false));
+
+        let huge = affected_rows_result(u64::from(u32::MAX) + 10);
+        assert_eq!(huge.affected_rows, Some(u32::MAX));
     }
 }

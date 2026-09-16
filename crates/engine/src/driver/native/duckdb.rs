@@ -15,7 +15,7 @@ use arrow::array::StringArray;
 use duckdb::Connection;
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::escape_sql_string;
+use crate::driver::utils::{affected_rows_result, escape_sql_string, returns_rows};
 use crate::driver::{ColumnDetail, DataSourceMeta, Database, IndexDetail, Transaction};
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{QueryResult, Value};
@@ -88,6 +88,20 @@ fn is_read_only_sql(sql: &str) -> bool {
         || sql_upper.starts_with("PRAGMA")
 }
 
+/// 写语句（不返回行）走 `Statement::execute`，拿**真实影响行数**（B5 / P0.6）
+///
+/// `execute` 对会返回行的语句会直接报错（要调 `query`），所以调用方必须先确认
+/// 语句既不返回行、也不带 `RETURNING`。
+fn execute_writing(conn: &Connection, sql: &str) -> Result<QueryResult, CoreError> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+    let affected = stmt
+        .execute([])
+        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+    Ok(affected_rows_result(affected as u64))
+}
+
 #[async_trait::async_trait]
 /// Database trait 实现：DuckDB
 ///
@@ -106,6 +120,11 @@ impl Database for DuckDbDatabase {
                     source: e.to_string(),
                 })
             })?;
+
+            // B5 / P0.6：不返回行的写语句走 `execute`，拿驱动的真实影响行数
+            if !is_read_only_sql(&sql_owned) && !returns_rows(&sql_owned) {
+                return execute_writing(&conn, &sql_owned);
+            }
 
             let mut stmt = conn.prepare(&sql_owned).map_err(|e| {
                 CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
@@ -233,6 +252,14 @@ impl Database for DuckDbDatabase {
                 .map(|v| v as &dyn duckdb::ToSql)
                 .collect();
 
+            // B5 / P0.6：带参数的写语句同样给真实影响行数
+            if !is_read_only_sql(&sql_owned) && !returns_rows(&sql_owned) {
+                let affected = stmt
+                    .execute(params_slice.as_slice())
+                    .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+                return Ok(affected_rows_result(affected as u64));
+            }
+
             let row_data: Vec<Vec<duckdb::types::Value>>;
             {
                 let mut rows = stmt.query(params_slice.as_slice()).map_err(|e| {
@@ -313,6 +340,11 @@ impl Database for DuckDbDatabase {
                     operation: "lock".to_string(),
                     source: e.to_string(),
                 }))?;
+
+                // B5 / P0.6：不返回行的写语句走 `execute`，拿驱动的真实影响行数
+                if !is_read_only_sql(&sql_owned) && !returns_rows(&sql_owned) {
+                    return execute_writing(&conn, &sql_owned);
+                }
 
                 let mut stmt = conn.prepare(&sql_owned)
                     .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
@@ -638,6 +670,11 @@ impl Transaction for DuckDbTransaction {
                 source: e.to_string(),
             })
         })?;
+
+        // B5 / P0.6：事务内的写语句同样要真实影响行数
+        if !is_read_only_sql(sql) && !returns_rows(sql) {
+            return execute_writing(&conn, sql);
+        }
 
         let mut stmt = conn
             .prepare(sql)

@@ -219,7 +219,8 @@ fn collect_with_snapshots(
                     data.truncated,
                     data.columns,
                     data.rows,
-                ),
+                )
+                .with_affected_rows(data.affected_rows),
                 Err(error) => {
                     editor::store::ResultEntry::failure(outcome.document, outcome.sql, error, 0)
                 }
@@ -498,6 +499,77 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         );
         run_one(&shared, document.clone(), &format!("DROP TABLE {table}"));
         eprintln!("✅ {}：事务（回滚作废 / 提交生效）", target.driver);
+
+        // B5：写语句的**真实影响行数**（引擎侧 P0.6：六个驱动的 DML 都要给出真值，
+        // 而不是“无结果集”这种看不清成败的结论）
+        let affected_table = format!("rds_affected_probe_{}", std::process::id());
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("CREATE TABLE {affected_table} (n INTEGER)"),
+        );
+        let inserted = run_one(
+            &shared,
+            document.clone(),
+            &format!("INSERT INTO {affected_table} VALUES (1), (2), (3)"),
+        );
+        assert_eq!(
+            inserted.affected_rows,
+            Some(3),
+            "{}：INSERT 三行要报 3（实得 {:?}）",
+            target.driver,
+            inserted.affected_rows
+        );
+        assert!(
+            !inserted.has_grid(),
+            "{}：写语句不该有结果集",
+            target.driver
+        );
+        assert!(
+            inserted.summary().starts_with("影响 3 行"),
+            "{}：结果区状态行要报影响行数（实得 {}）",
+            target.driver,
+            inserted.summary()
+        );
+
+        let updated = run_one(
+            &shared,
+            document.clone(),
+            &format!("UPDATE {affected_table} SET n = n + 1 WHERE n > 1"),
+        );
+        assert_eq!(
+            updated.affected_rows,
+            Some(2),
+            "{}：UPDATE 两行要报 2（实得 {:?}）",
+            target.driver,
+            updated.affected_rows
+        );
+
+        // 零行也要如实报 0：`Some(0)` 和 `None` 在界面上是两回事
+        let deleted = run_one(
+            &shared,
+            document.clone(),
+            &format!("DELETE FROM {affected_table} WHERE n = 99"),
+        );
+        assert_eq!(
+            deleted.affected_rows,
+            Some(0),
+            "{}：DELETE 零行要报 0（实得 {:?}）",
+            target.driver,
+            deleted.affected_rows
+        );
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("DROP TABLE {affected_table}"),
+        );
+        eprintln!(
+            "✅ {}：写语句影响行数 —— INSERT {} / UPDATE {:?} / DELETE {:?}",
+            target.driver,
+            inserted.summary(),
+            updated.affected_rows,
+            deleted.affected_rows
+        );
 
         runtime.block_on(manager.close_all_connections());
         let Some(_timeout_conn) =

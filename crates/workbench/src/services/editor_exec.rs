@@ -162,6 +162,8 @@ fn to_data(result: &QueryResult, elapsed_ms: u64, truncated: bool) -> QueryData 
             .collect(),
         elapsed_ms,
         truncated,
+        // B5：写语句的影响行数由驱动报（拿不到就是 `None`，不编造 0）
+        affected_rows: result.affected_rows,
     }
 }
 

@@ -1160,7 +1160,8 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
             data.truncated,
             data.columns,
             data.rows,
-        ),
+        )
+        .with_affected_rows(data.affected_rows),
         Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0),
     }
 }

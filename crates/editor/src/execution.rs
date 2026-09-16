@@ -311,6 +311,8 @@ pub struct QueryData {
     pub elapsed_ms: u64,
     /// 结果是否被截断（超出驱动的行数上限）
     pub truncated: bool,
+    /// 写语句的真实影响行数（B5；只有驱动报了这个值才是 `Some`）
+    pub affected_rows: Option<u32>,
 }
 
 /// 执行端口：**宿主提供"怎么把 SQL 跑出结果集"**
@@ -936,6 +938,7 @@ mod tests {
                 rows: vec![vec!["1".to_string()]],
                 elapsed_ms: 7,
                 truncated: false,
+                affected_rows: None,
             })
         }
     }
@@ -1040,6 +1043,7 @@ mod tests {
                 rows: vec![vec!["1".to_string()]],
                 elapsed_ms: 1,
                 truncated: false,
+                affected_rows: None,
             })
         }
 

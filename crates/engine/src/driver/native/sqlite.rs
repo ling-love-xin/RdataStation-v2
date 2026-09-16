@@ -16,7 +16,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use rusqlite::Connection;
 
-use crate::driver::utils::quote_identifier;
+use crate::driver::utils::{affected_rows_result, quote_identifier, returns_rows};
 use crate::driver::{ColumnDetail, DataSourceMeta, Database, IndexDetail, Transaction};
 use shared::error::{CoreError, DatabaseError};
 use shared::models::{ArrowBatch, QueryResult, Value};
@@ -85,6 +85,21 @@ fn is_read_only_sql(sql: &str) -> bool {
         || sql_upper.starts_with("EXPLAIN")
 }
 
+/// 写语句（不返回行）走 `Connection::execute`，拿**真实影响行数**（B5 / P0.6）
+///
+/// `Connection::execute` 对会返回行的语句会直接报错（“Execute returned results”），
+/// 所以调用方必须先确认语句既不返回行、也不带 `RETURNING`。
+fn execute_writing(
+    conn: &Connection,
+    sql: &str,
+    params: &[rusqlite::types::Value],
+) -> Result<QueryResult, CoreError> {
+    let affected = conn
+        .execute(sql, rusqlite::params_from_iter(params.iter()))
+        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+    Ok(affected_rows_result(affected as u64))
+}
+
 #[async_trait::async_trait]
 impl Database for SqliteDatabase {
     async fn query(&self, sql: &str) -> Result<QueryResult, CoreError> {
@@ -108,16 +123,6 @@ impl Database for SqliteDatabase {
                 })
             })?;
 
-            let mut stmt = conn.prepare(&sql_owned).map_err(|e| {
-                CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
-            })?;
-
-            let columns: Vec<String> = stmt
-                .column_names()
-                .iter()
-                .map(|name| name.to_string())
-                .collect();
-
             let params_slice: Vec<rusqlite::types::Value> = params
                 .iter()
                 .map(|v| match v {
@@ -128,6 +133,21 @@ impl Database for SqliteDatabase {
                     Value::Text(s) => rusqlite::types::Value::Text(s.clone()),
                     Value::Bytes(b) => rusqlite::types::Value::Blob(b.clone()),
                 })
+                .collect();
+
+            // B5 / P0.6：不返回行的写语句走 `execute`，拿驱动的真实影响行数
+            if !is_read_only_sql(&sql_owned) && !returns_rows(&sql_owned) {
+                return execute_writing(&conn, &sql_owned, &params_slice);
+            }
+
+            let mut stmt = conn.prepare(&sql_owned).map_err(|e| {
+                CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
+            })?;
+
+            let columns: Vec<String> = stmt
+                .column_names()
+                .iter()
+                .map(|name| name.to_string())
                 .collect();
 
             let mut rows = match params_slice.len() {
@@ -217,6 +237,11 @@ impl Database for SqliteDatabase {
                     operation: "lock".to_string(),
                     source: e.to_string(),
                 }))?;
+
+                // B5 / P0.6：不返回行的写语句走 `execute`，拿驱动的真实影响行数
+                if !is_read_only_sql(&sql_owned) && !returns_rows(&sql_owned) {
+                    return execute_writing(&conn, &sql_owned, &[]);
+                }
 
                 let mut stmt = conn.prepare(&sql_owned)
                     .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
@@ -641,6 +666,11 @@ impl Transaction for SqliteTransaction {
                 source: e.to_string(),
             })
         })?;
+
+        // B5 / P0.6：事务内的写语句同样要真实影响行数
+        if !is_read_only_sql(sql) && !returns_rows(sql) {
+            return execute_writing(&conn, sql, &[]);
+        }
 
         let mut stmt = conn
             .prepare(sql)
