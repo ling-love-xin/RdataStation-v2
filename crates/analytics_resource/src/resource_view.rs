@@ -992,6 +992,8 @@ impl Render for ResourcesPanel {
 
         div()
             .id("analytics-resource-panel")
+            // `track_focus` 不能省：没有它面板不在 dispatch path 上，快捷键就落不到动作（已踩）。
+            .track_focus(&self.focus_handle)
             // 键盘上下文：快捷键由 app 层绑到 `analytics-resource` context（视图不自注全局键）。
             .key_context("analytics-resource")
             .on_action(cx.listener({
@@ -1022,6 +1024,20 @@ impl Render for ResourcesPanel {
                     if let Some(id) = panel.selected.clone() {
                         host.request_delete(&id, window, cx);
                     }
+                }
+            }))
+            .on_action(cx.listener({
+                // `Ctrl+F`：聚焦搜索框（`InputState` 需要窗口，而 action 处理器能拿到）。
+                move |panel: &mut Self, _: &commands::FocusSearch, window, cx| {
+                    if let Some(input) = panel.search_input.clone() {
+                        input.update(cx, |state, cx| state.focus(window, cx));
+                    }
+                }
+            }))
+            .on_action(cx.listener({
+                // `Esc`：只清搜索词（种类 / 只看需处理留在菜单里，误清会让人以为筛选坏了）。
+                move |panel: &mut Self, _: &commands::ClearSearch, window, cx| {
+                    panel.set_query("", window, cx);
                 }
             }))
             .v_flex()

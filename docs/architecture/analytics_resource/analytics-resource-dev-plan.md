@@ -8,6 +8,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 1 第六刀：Action 与快捷键（crate + app 层）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P1.8 ✅ | 新增 `FocusSearch`（`Ctrl+F` 聚焦工具栏搜索框）与 `ClearSearch`（`Esc` 只清搜索词——种类 / 只看需处理留在菜单里，误清会让人以为筛选坏了）两个 Action + 面板内处理器；app 层把它们与已有的 `DeleteSelected` 绑到 `analytics-resource` context | `src/commands.rs`、`src/resource_view.rs`、`crates/app/src/main.rs`（+ `Cargo.toml` 依赖） |
+| 命中路径修复 ✅ | 面板根元素补 `.track_focus(&self.focus_handle)`：**没有它面板不在 dispatch path 上**，app 层绑的键与 `.on_action` 根本落不到（编辑器面板已踩过同一个坑）——窗口测试派发 `ClearSearch` 时暴露并修正 | `src/resource_view.rs` |
+| 行漫游与打开 ✅ | `↑↓` 与 `Enter` 不自己声明：列表组件的选中通道与 `confirm` 已接在 `ArchiveListDelegate` 上，两套键语义会打架 | 同上 |
+| 窗口测试 ✅ | +1 项：聚焦面板 → 派发 `ClearSearch` → 断言只清搜索词、菜单条件保留（走生产入口：app 层的 `Esc` 就是派发它） | `tests/panel_window.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **67 单测 + 7 窗口测试全绿**；`cargo check -p rds-app -j 2` 零告警 | — |
+
+**未落地**：`F2` 重命名（随重命名入口）、`Ctrl+A` 全选与批量动作（随多选批）、详情面板接入、五个对话框。
+
+> 注：`Cargo.lock` **未随本刀提交**——工作树里它还含其它模块的在途改动（`rds-workbench-shell` 等），一并提交会混入别人的 WIP；下一次 `cargo` 构建会自动补上本刀的依赖边。
+
 ### 2026-09-16 — Phase 1 第五刀：列表虚拟化 + 行右键菜单（crate 内）
 
 | 项 | 内容 | 落点 |

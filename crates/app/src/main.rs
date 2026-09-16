@@ -11,6 +11,7 @@
 //!   全局系统库初始化 → SettingsService::init → 主题目录 watch →
 //!   应用已保存主题模式 → 快捷键绑定。
 
+use analytics_resource::commands::{ClearSearch, DeleteSelected, FocusSearch};
 use editor::commands::{
     CloseDocument, ExecuteAll, ExecuteSql, OpenDocument, SaveDocument, SaveDocumentAs, ToggleComment,
 };
@@ -137,6 +138,14 @@ fn run_app() {
                 KeyBinding::new("down", ScratchpadDown, Some("scratchpad")),
                 KeyBinding::new("enter", ScratchpadOpen, Some("scratchpad")),
                 KeyBinding::new("ctrl-n", ScratchpadNewFile, Some("scratchpad")),
+                // M6 资产库（仅当焦点在资产库面板内时生效）：`Ctrl+F` 聚焦搜索 /
+                // `Esc` 清搜索词 / `Delete` 移入回收站。`Ctrl+F` 与 workbench 的
+                // 「聚焦数据源导航搜索」、设置页的同名键均不冲突——各自绑在更深的
+                // context 上，只在对应面板内生效（与设置页的注释同一口径）。
+                // 行漫游（`↑↓`）与打开（`Enter`）由列表组件自己的选中 / 确认通道处理。
+                KeyBinding::new("ctrl-f", FocusSearch, Some("analytics-resource")),
+                KeyBinding::new("escape", ClearSearch, Some("analytics-resource")),
+                KeyBinding::new("delete", DeleteSelected, Some("analytics-resource")),
                 // M1 项目管理：切换项目（回选择器）/ 关闭项目。
                 KeyBinding::new("ctrl-shift-p", SwitchProject, Some("workbench")),
                 KeyBinding::new("ctrl-shift-w", CloseProject, Some("workbench")),

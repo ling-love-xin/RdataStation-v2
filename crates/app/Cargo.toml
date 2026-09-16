@@ -20,6 +20,8 @@ settings.workspace = true
 editor.workspace = true
 # M8：洞察的重算动作（Ctrl+Shift+R，`insight` key context）同上
 insight.workspace = true
+# M6：资产库的动作（Ctrl+F / Esc / Delete，`analytics-resource` key context）同上
+analytics_resource.workspace = true
 # 应用启动装配：全局系统库初始化（M3 连接 / M4 元数据的持久化根）
 engine.workspace = true
 tokio.workspace = true

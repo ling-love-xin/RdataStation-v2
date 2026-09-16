@@ -13,8 +13,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui_kit::{App, TestAppContext, Window};
+use gpui_kit::{App, Focusable as _, TestAppContext, Window};
 
+use rds_analytics_resource::commands::ClearSearch;
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus};
 use rds_analytics_resource::resource_view::{
@@ -301,6 +302,51 @@ fn host_selection_mirrors_into_list_without_reentry(cx: &mut TestAppContext) {
     let selected = cx.update(|_window, cx| panel.read(cx).selected_id().map(str::to_string));
     assert_eq!(selected, None);
     assert!(host.calls().is_empty(), "仅渲染与选中不应触发任何宿主动作");
+}
+
+#[gpui_kit::test]
+fn clear_search_action_clears_query_only(cx: &mut TestAppContext) {
+    // 走生产入口：聚焦面板 → 派发 `ClearSearch`（app 层的 `Esc` 就是派发它）。
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![
+                        row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3),
+                        row("ar_2", ArchiveKind::Analysis, ArchiveStatus::Normal, 1),
+                    ],
+                    false,
+                ),
+                cx,
+            );
+            panel.toggle_only_issues(cx);
+        });
+    });
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.set_query("zzz", window, cx));
+    });
+
+    cx.update(|window, cx| {
+        let handle = panel.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(ClearSearch), cx);
+    });
+
+    let (query, kinds_only_issues) = cx.update(|_window, cx| {
+        let filter = panel.read(cx).filter().clone();
+        (filter.query.clone(), filter.only_issues)
+    });
+    assert_eq!(query, "", "`Esc` 应清掉搜索词");
+    assert!(kinds_only_issues, "菜单里的条件不应被 `Esc` 一并清掉");
 }
 
 #[gpui_kit::test]
