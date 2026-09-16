@@ -63,7 +63,7 @@
 | C1 | 场景模板选择与一键生成（6 套内置） | Mock 面板 + `list_templates` / `apply_template` / `generate_scenario` | 电商模板生成 4 张表；逐表进度可见 |
 | C2 | 从数据库导入结构 → 字段表 | ✅ 已完成（导入结构对话框 + 导航右键定向；`NavCache` → `MetadataService` cache-aside） | 选连接/库/schema/表 → 字段表自动填充 + 智能映射（含置信度） |
 | C3 | 列依赖编辑器 | Mock 面板（依赖 `resolve_dependencies`） | 拓扑顺序正确；**先拍板**是否实现表达式计算（§10-（6）） |
-| C4 | 用户模板保存 / 复用（`MockGenerationStore`） | Mock 面板 + `persistence.rs` | 存→列→取→用于生成 全链路；补 SQLite 往返测试 |
+| C4 | 用户模板保存 / 复用（`MockGenerationStore`） | Mock 面板 + `persistence.rs` | 存→列→取→用于生成 全链路；**补 SQLite 往返测试（✅ 已补，见 §7）**；⬜ 余：UI 接线（历史列表 / 模板保存与应用） |
 | C5 | 复杂参数（集合 / 加权）外置编辑入口 | Mock 面板 + `generator_catalog` 的 `ParamKind::Complex` | ✅ 已完成（列编辑对话框里的**多行文本**：一行一项 / 一行「值, 权重」；非法输入保留上一个有效值 + 行号提示；空集合与全零权重在**生成前**拦住） |
 
 ### Phase D — 出口与历史
@@ -156,3 +156,4 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-16 | Phase E（本轮 · 落库直写） | **去文本中转**：engine 新增 `build_attach_database` / `build_detach_database` / `build_create_table_in` / `build_drop_table_in` / `build_insert_select` + `QualifiedTable`；mock 新增 `write_temp_table_to_database`（`ATTACH` → 建表 → `INSERT SELECT` → `DETACH`，失败只回滚本次刚建的表）；装配层 `persist_table_at` / `append_table_at` 改走直写；**并修掉一个潜在的误删风险**（回滚分支原本会把同名既有表 DROP 掉，现已加测试锁住） | 110 单元 + **30 引擎集成** + **12 装配** + 8 任务集成全过；engine 库测试 305 项全过 |
 | 2026-09-16 | Phase E5（本轮 · 临时表清理） | **按来源清理临时表**：`TempTableSource::prefixes()`（两套命名都认）+ `TempTableManager::list_by_source` / `drop_by_source`（以库为准，限定 `catalog = memory`）+ `DuckDBManager::{in_memory_temp_tables, drop_in_memory_temp_tables}`；mock 暴露 `clear_temp_tables` / `temp_tables`；宿主在**项目切换**时清理并让面板 `forget_generated`（草稿保留） | 111 单元（含 46 视图）+ 30 + **2 清理集成**（独立进程）+ 12 装配 + **8 任务集成**全过 |
 | 2026-09-16 | Phase C5（本轮 · 复杂参数） | **集合类参数可编辑**：`parse_complex_param` / `complex_param_text`（一行一项 / 一行「值, 权重」，分隔符取最后一个）+ `ParamWidget::{Scalar, Complex}`（标量单行、集合多行 `Textarea`）+ `commit_complex_param`（非法输入保留上一个有效值 + 就地行号提示）；`summarize_params` 显示集合项数；**并补上生成前护栏** `constraint_set_problem`（空集合 / 全零权重原本会在生成期 panic 掉工作线程）；目录注释随脚本更新（改 `tools/gen_mock_generator_catalog.py` 后重跑 + rustfmt） | 117 单元（含 52 视图）+ **32 引擎集成** + 2 清理集成 + 12 装配 + 8 任务集成全过 |
+| 2026-09-16 | Phase C4 前置（本轮 · 持久化往返） | **给 `MockGenerationStore` 补真库往返**（原先只有序列化单测，SQL 那一半没人验；store 目前全项目零调用，接线前先钉住）：新增 `tests/persistence_roundtrip.rs` 5 项，走 `ProjectDatabaseManager` 的真迁移链（顺带验证 009 已挂上）——任务 + 列（乱序插入按 `sort_order` 读回）/ 全可空列保持 `None` / 历史最近在前且 `limit` 截尾 / 列按 `task_id` 归属 / **删任务带走子行**（建表语句的 `ON DELETE CASCADE` 靠连接池的 `foreign_keys=ON`）/ 模板四方法；**并修一处读写不守恒**：`created_at` / `updated_at` 为 `None` 时原本写成空串（读回 `Some("")`，与「确实空」分不开），改为写 `NULL` | 117 单元（含 52 视图）+ 32 引擎集成 + **5 持久化往返** + 2 清理集成全过；`check --all-targets` 零告警 |

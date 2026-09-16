@@ -209,8 +209,9 @@ impl MockGenerationStore {
                     &task.error_message,
                     task.generated_rows,
                     task.generation_time_ms,
-                    task.created_at.as_deref().unwrap_or(""),
-                    task.updated_at.as_deref().unwrap_or(""),
+                    // 不传就写 NULL：空串是「有一个空时间戳」，与「没有时间戳」在读取侧分不开。
+                    task.created_at.as_deref(),
+                    task.updated_at.as_deref(),
                 ],
             )
             .map_err(|e| storage_err("mock_generation_tasks", "insert", e.to_string()))?;
@@ -358,8 +359,9 @@ impl MockGenerationStore {
                     template.row_count,
                     template.seed,
                     &template.locale,
-                    template.created_at.as_deref().unwrap_or(""),
-                    template.updated_at.as_deref().unwrap_or(""),
+                    // 同上：可空列保持 None，不要退化成空串。
+                    template.created_at.as_deref(),
+                    template.updated_at.as_deref(),
                 ],
             )
             .map_err(|e| storage_err("mock_user_templates", "insert", e.to_string()))?;

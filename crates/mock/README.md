@@ -73,6 +73,8 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 `MockGenerationStore` 把「生成任务 / 列配置 / 用户模板 / 模板列」写入 `{项目}/.RSmeta/project.db`
 （迁移 `engine/migrations/project_meta/009_mock_generation.sql`，4 表 + 3 索引），方法 8 个：
 `save_task` / `get_history` / `get_detail` / `delete_task` / `save_template` / `get_templates` / `get_template_detail` / `delete_template`。
+读写两侧由真库往返测试验住（`tests/persistence_roundtrip.rs`：真 SQLite + 真迁移链）；
+可空列保持 `None`（不写成空串）、历史按时间倒序、删任务靠外键级联带走子行。
 
 ## 代码结构
 
@@ -85,12 +87,13 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
 | `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock）/ `MockDetailView`（中央 tab）/ `MockHost` 契约 / 导入结构 + 列编辑 + 生成器搜索对话框 |
-| `src/mock_view/tests.rs` | 视图测试（12 纯逻辑 + 16 项 GPUI headless 窗口测试；含测试宿主桥） |
+| `src/mock_view/tests.rs` | 视图测试（21 纯逻辑 + 31 项 GPUI headless 窗口测试；含测试宿主桥） |
 | `src/templates.rs` | 内置 6 套场景模板 |
 | `src/persistence.rs` | `MockGenerationStore`（SQLite 读写） |
 | `src/error.rs` | `MockError` / `MockResult`（含 DuckDB / 锁错误桥接） |
 | `src/{commands,model,generator}.rs` | 占位（全项目统一脚手架；命令层按 Round 14 退役） |
-| `tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（26 项） |
+| `tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（32 项） |
+| `tests/persistence_roundtrip.rs` | 持久化层真库往返（5 项；走真迁移链，含级联删除） |
 
 宿主侧（workbench）：
 
