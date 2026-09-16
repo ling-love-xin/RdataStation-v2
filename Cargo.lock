@@ -7919,8 +7919,10 @@ dependencies = [
 name = "rds-database"
 version = "0.1.0"
 dependencies = [
+ "gpui-kit",
  "rds-engine",
  "rds-shared",
+ "rds-workbench-shell",
  "serde",
  "serde_json",
  "specta",

@@ -8,6 +8,9 @@
 //! - 描述全为空白时归一化为 `None`（不写空串）；
 //! - 提示是**从输入值推导**的（每帧重算），不用标志位，所以改回非空后自然消失；
 //! - 新建时名称预填**自动去重的默认名**，避免开局就是空表单。
+//!
+//! 对话框归宿主，但初值类型 `GroupFormSeed` 定义在 `workbench_shell::model`
+//! （导航视图下沉后由 `database` 构造），此处重导保持旧路径。
 
 use std::rc::Rc;
 
@@ -19,36 +22,7 @@ use gpui_kit::component::{ActiveTheme, Theme, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-/// 表单初值。
-#[derive(Clone, Debug)]
-pub struct GroupFormSeed {
-    /// 编辑的分组 ID（`None` = 新建）。
-    pub id: Option<String>,
-    /// 名称初值。
-    pub name: String,
-    /// 描述初值（`None` / 空白都视为空）。
-    pub description: Option<String>,
-}
-
-impl GroupFormSeed {
-    /// 新建：`default_name` 建议给自动去重后的默认名（避免空表单与空名校验）。
-    pub fn for_new(default_name: impl Into<String>) -> Self {
-        Self {
-            id: None,
-            name: default_name.into(),
-            description: None,
-        }
-    }
-
-    /// 编辑现有分组。
-    pub fn for_existing(group: &engine::persistence::ConnectionGroup) -> Self {
-        Self {
-            id: Some(group.id.clone()),
-            name: group.name.clone(),
-            description: group.description.clone(),
-        }
-    }
-}
+pub use workbench_shell::model::GroupFormSeed;
 
 /// 打开分组表单对话框。
 ///

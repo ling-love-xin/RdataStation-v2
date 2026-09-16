@@ -20,6 +20,8 @@ use gpui_kit::*;
 use super::nav::PropertyRequest;
 use super::scratchpad_panel::ScratchpadSearchView;
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
+// 纯数据类型已下沉到 shell（导航视图下沉后需与 `database` 共用同一份定义），此处重导保持旧路径。
+pub use workbench_shell::model::QueryRequest;
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
 ///
 /// 生产方是 `connection_dialog::handle_project_confirm`（置位两个标记之一），
@@ -58,22 +60,6 @@ pub struct EditorBridge {
 pub struct ScratchpadBridge {
     /// 确保草稿箱轮询在跑（结果回填由侧栏渲染消费）。
     pub ensure_pump: Rc<dyn Fn(&mut App)>,
-}
-
-/// 导航 → 中央编辑器的「打开查询」请求（B11）。
-///
-/// 与 `open_file_request` 同一口径：生产端（导航菜单 / 拖拽 / 后台回填）**拿不到 `Window`**
-/// （`SidebarEvent` 订阅回调、`apply_sql_results` 都只有 `Context`），而开文档与写内核都要窗口，
-/// 因此这里只入队，由宿主 `render` 消费。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueryRequest {
-    /// 要绑定的连接（`None` = 不绑定，跟随当前活动连接）
-    pub conn_id: Option<String>,
-    /// 要打开的 SQL（空 = 只开一份空白查询）
-    pub sql: String,
-    /// 打开后是否立即执行：「查看数据」为真（M4 遗留的“查看数据不自动执行”在此关闭），
-    /// 「生成 SQL」模板为假（只给草稿，不该替用户跑写语句）
-    pub run: bool,
 }
 
 /// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。

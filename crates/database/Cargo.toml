@@ -9,6 +9,13 @@ description = "M4 数据库导航：元数据浏览器、对象属性面板"
 engine.workspace = true
 shared.workspace = true
 
+# ===== GPUI-kit 视图层 =====
+# 导航视图自带（下沉后本 crate 就是它的家）：宿主端口 trait 要命名 `Window` / `App`，
+# 视图要取 `cx.theme()`。与 mock / insight 同形。
+gpui-kit.workspace = true
+# 工作台外壳：面板枚举 / 连接条目 / 宿主-视图共用纯数据。
+workbench_shell.workspace = true
+
 # ===== Async 运行时 =====
 tokio.workspace = true
 

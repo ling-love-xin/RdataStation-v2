@@ -12,6 +12,7 @@ pub mod commands;
 pub mod database_view;
 pub mod model;
 pub mod navigator_service;
+pub mod nav_host;
 pub mod nav_store;
 pub mod property_panel;
 pub mod sql_gen;

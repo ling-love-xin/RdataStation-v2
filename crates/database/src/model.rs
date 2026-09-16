@@ -294,6 +294,30 @@ pub struct PropertyRef {
     pub kind: PropertyKind,
 }
 
+/// 属性面板请求（导航双击对象时发出，由编辑区右侧面板渲染）。
+///
+/// 原先定义在 `panels/nav.rs`；导航视图下沉后归本 crate，host 经 [`crate::nav_host::NavHost`]
+/// 转交宿主。`conn_label` / `driver` 是**展示用**已解析文本（宿主不可能从 id 反推）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct PropertyRequest {
+    pub property: PropertyRef,
+    pub conn_label: String,
+    pub driver: String,
+}
+
+/// 数据类对象的四元组定位（Mock 生成 / 洞察的入口参数）。
+///
+/// 与 [`PropertyRef`] 的区别：这里只要「连哪个库的哪张表」，不带来源域与对象种类。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableRef {
+    pub conn_id: String,
+    /// Catalog / 数据库
+    pub catalog: String,
+    pub schema: String,
+    /// 表 / 视图名
+    pub table: String,
+}
+
 /// 导航状态（展开态 / 选中 / 过滤），持久化到 `navigator_state`。
 ///
 /// 定义在 `engine::persistence`（与存储同处一层），此处重导旧路径，导航侧引用不变。

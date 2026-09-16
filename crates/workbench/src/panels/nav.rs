@@ -568,13 +568,7 @@ fn nav_name_highlight(name: &str, filter: &str, match_bg: Hsla, fg: Hsla) -> Div
     div().min_w_0().text_color(fg).child(name.to_string())
 }
 
-/// 属性面板请求（导航双击对象时发出，由编辑区右侧面板渲染）。
-#[derive(Clone)]
-pub struct PropertyRequest {
-    pub property: PropertyRef,
-    pub conn_label: String,
-    pub driver: String,
-}
+pub use database::model::PropertyRequest;
 
 /// 属性面板状态（懒加载一次，按请求 key 失效重载）。
 #[derive(Default)]
@@ -4369,7 +4363,9 @@ impl SidebarPanel {
         view.groups
             .iter()
             .find(|g| g.id == group_id)
-            .map(GroupFormSeed::for_existing)
+            .map(|g| {
+                GroupFormSeed::for_existing(g.id.clone(), g.name.clone(), g.description.clone())
+            })
             .unwrap_or_else(|| GroupFormSeed::for_new(self.next_group_name()))
     }
 
