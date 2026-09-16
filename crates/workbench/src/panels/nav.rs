@@ -428,7 +428,7 @@ enum ConnDropTarget {
 /// - `moving` 已在 `ids` 里 → 先摘除再插入，因此「拖到自己身上」与「已经就位」都返回 `None`；
 /// - `before` 不在 `ids` 里（目标行被过滤掉）→ 追加到末尾。
 ///
-/// 纯函数：不碰存储；落库顺序由调用方一次写 `0..n`（见 `nav_runtime::set_container_order`）。
+/// 纯函数：不碰存储；落库顺序由调用方一次写 `0..n`（见 `database::nav_store::set_container_order`）。
 fn nav_reorder(ids: &[String], moving: &str, before: Option<&str>) -> Option<Vec<String>> {
     if before == Some(moving) {
         return None;
@@ -769,7 +769,7 @@ impl SidebarPanel {
                 let stale = self.nav_tag_input.is_none()
                     || self.nav_tag_input_for.as_deref() != Some(conn_id.as_str());
                 if stale {
-                    let current = crate::services::nav_runtime::list_tags(
+                    let current = database::nav_store::list_tags(
                         conn_id,
                         self.project_root().as_deref(),
                     );
@@ -2785,7 +2785,7 @@ impl SidebarPanel {
                                                 let cid = cid.clone();
                                                 let root = root.as_deref().map(std::path::Path::new);
                                                 e.update(app, |this, cx| {
-                                                    let _ = crate::services::nav_runtime::clear_primary_group(
+                                                    let _ = database::nav_store::clear_primary_group(
                                                         root,
                                                         &cid,
                                                     );
@@ -2809,7 +2809,7 @@ impl SidebarPanel {
                                                 let root = root.as_deref().map(std::path::Path::new);
                                                 e.update(app, |this, cx| {
                                                     let _ =
-                                                        crate::services::nav_runtime::set_primary_group(
+                                                        database::nav_store::set_primary_group(
                                                             root,
                                                             &cid,
                                                             &gid,
@@ -3110,13 +3110,13 @@ impl SidebarPanel {
                                     .map(|gs| gs.iter().any(|g| g == &gid))
                                     .unwrap_or(false);
                                 let result = if in_group {
-                                    crate::services::nav_runtime::remove_from_group(
+                                    database::nav_store::remove_from_group(
                                         root.as_deref(),
                                         &gid,
                                         &cid,
                                     )
                                 } else {
-                                    crate::services::nav_runtime::add_to_group(
+                                    database::nav_store::add_to_group(
                                         root.as_deref(),
                                         &gid,
                                         &cid,
@@ -3178,7 +3178,7 @@ impl SidebarPanel {
                                         return;
                                     };
                                     let root = this.project_root();
-                                    if let Err(err) = crate::services::nav_runtime::add_to_group(
+                                    if let Err(err) = database::nav_store::add_to_group(
                                         root.as_deref(),
                                         &new_gid,
                                         &cid,
@@ -4010,7 +4010,7 @@ impl SidebarPanel {
             }
         }
         let state =
-            crate::services::nav_runtime::load_nav_state(conn_id, self.project_root().as_deref());
+            database::nav_store::load_nav_state(conn_id, self.project_root().as_deref());
         let prefix = format!("{conn_id}/");
         let mut view = self.database_nav.borrow_mut();
         for key in state.expanded_keys {
@@ -4036,7 +4036,7 @@ impl SidebarPanel {
             expanded_keys: keys,
             ..Default::default()
         };
-        let _ = crate::services::nav_runtime::save_nav_state(
+        let _ = database::nav_store::save_nav_state(
             conn_id,
             self.project_root().as_deref(),
             &state,
@@ -4130,9 +4130,9 @@ impl SidebarPanel {
 
         // 1) 归属。
         let membership = if scope_id == GROUP_UNGROUPED {
-            crate::services::nav_runtime::remove_from_all_groups(root.as_deref(), &conn_id)
+            database::nav_store::remove_from_all_groups(root.as_deref(), &conn_id)
         } else {
-            crate::services::nav_runtime::add_to_group(root.as_deref(), scope_id, &conn_id)
+            database::nav_store::add_to_group(root.as_deref(), scope_id, &conn_id)
         };
         if let Err(e) = membership {
             *self.shared.notice.borrow_mut() = Some(format!("移动失败: {e}"));
@@ -4155,7 +4155,7 @@ impl SidebarPanel {
         };
         if let Some(next) = next {
             if let Err(e) =
-                crate::services::nav_runtime::set_container_order(root.as_deref(), scope_id, &next)
+                database::nav_store::set_container_order(root.as_deref(), scope_id, &next)
             {
                 *self.shared.notice.borrow_mut() = Some(format!("保存排序失败: {e}"));
                 cx.notify();
@@ -4199,7 +4199,7 @@ impl SidebarPanel {
             return;
         };
         let root = self.project_root();
-        match crate::services::nav_runtime::set_group_order(root.as_deref(), &next) {
+        match database::nav_store::set_group_order(root.as_deref(), &next) {
             Ok(()) => {
                 self.reload_nav_org();
                 *self.shared.notice.borrow_mut() = Some(format!("已移动分组「{}」", payload.name));
@@ -4216,7 +4216,7 @@ impl SidebarPanel {
             return;
         };
         let root = self.project_root();
-        match crate::services::nav_runtime::set_group_order(root.as_deref(), &next) {
+        match database::nav_store::set_group_order(root.as_deref(), &next) {
             Ok(()) => self.reload_nav_org(),
             Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存分组顺序失败: {e}")),
         }
@@ -4251,7 +4251,7 @@ impl SidebarPanel {
             return;
         };
         let root = self.project_root();
-        match crate::services::nav_runtime::set_container_order(root.as_deref(), &scope, &next) {
+        match database::nav_store::set_container_order(root.as_deref(), &scope, &next) {
             Ok(()) => {
                 self.reload_nav_org();
                 let how = if delta < 0 { "上移" } else { "下移" };
@@ -4265,7 +4265,7 @@ impl SidebarPanel {
     /// 重载分组 / 成员关系 / 标签映射（组织变更后调用）。
     fn reload_nav_org(&self) {
         let root = self.project_root();
-        let groups = crate::services::nav_runtime::list_groups(root.as_deref());
+        let groups = database::nav_store::list_groups(root.as_deref());
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
         let mut group_order: HashMap<String, Vec<String>> = HashMap::new();
         // 名称表：未手动排序的成员要按名称升序，而名称不在组织存储里。
@@ -4277,7 +4277,7 @@ impl SidebarPanel {
             .map(|c| (c.id.clone(), c.name.clone()))
             .collect();
         for group in &groups {
-            let stored = crate::services::nav_runtime::list_group_members_detailed(
+            let stored = database::nav_store::list_group_members_detailed(
                 root.as_deref(),
                 &group.id,
             );
@@ -4292,9 +4292,9 @@ impl SidebarPanel {
             }
             group_order.insert(group.id.clone(), ids);
         }
-        let tags = crate::services::nav_runtime::list_all_tags(root.as_deref());
-        let primary_group = crate::services::nav_runtime::list_primary_groups(root.as_deref());
-        let ungrouped_order = crate::services::nav_runtime::list_ungrouped_order(root.as_deref());
+        let tags = database::nav_store::list_all_tags(root.as_deref());
+        let primary_group = database::nav_store::list_primary_groups(root.as_deref());
+        let ungrouped_order = database::nav_store::list_ungrouped_order(root.as_deref());
         let driver_catalog = engine::persistence::load_driver_catalog();
         *self.shared.driver_catalog.borrow_mut() = driver_catalog;
         let mut view = self.database_nav.borrow_mut();
@@ -4356,7 +4356,7 @@ impl SidebarPanel {
             .filter(|s| !s.is_empty())
             .collect();
         let root = self.project_root();
-        match crate::services::nav_runtime::set_tags(&conn_id, root.as_deref(), &tags) {
+        match database::nav_store::set_tags(&conn_id, root.as_deref(), &tags) {
             Ok(()) => self.reload_nav_org(),
             Err(e) => *self.shared.notice.borrow_mut() = Some(format!("保存标签失败: {e}")),
         }
@@ -4386,14 +4386,14 @@ impl SidebarPanel {
     ) -> Option<String> {
         let root = self.project_root();
         let result = match group_id {
-            Some(id) => crate::services::nav_runtime::update_group(
+            Some(id) => database::nav_store::update_group(
                 root.as_deref(),
                 &id,
                 &name,
                 description.as_deref(),
             )
             .map(|()| id),
-            None => crate::services::nav_runtime::create_group_with(
+            None => database::nav_store::create_group_with(
                 root.as_deref(),
                 &name,
                 description.as_deref(),
@@ -4429,7 +4429,7 @@ impl SidebarPanel {
     /// 删除分组（仅解除关系，不删成员连接与缓存）。
     fn delete_group(&mut self, group_id: &str, cx: &mut Context<Self>) {
         let root = self.project_root();
-        match crate::services::nav_runtime::delete_group(root.as_deref(), group_id) {
+        match database::nav_store::delete_group(root.as_deref(), group_id) {
             Ok(()) => {
                 self.reload_nav_org();
                 *self.shared.notice.borrow_mut() = Some("分组已删除（成员连接保留）".to_string());
@@ -4584,7 +4584,7 @@ impl SidebarPanel {
         let name = input.read(cx).value().trim().to_string();
         if !name.is_empty() {
             let root = self.project_root();
-            match crate::services::nav_runtime::rename_group(root.as_deref(), &group_id, &name) {
+            match database::nav_store::rename_group(root.as_deref(), &group_id, &name) {
                 Ok(()) => self.reload_nav_org(),
                 Err(e) => *self.shared.notice.borrow_mut() = Some(format!("重命名失败: {e}")),
             }

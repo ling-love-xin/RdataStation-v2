@@ -237,6 +237,16 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 理由：它是纯持久化（读写一张表），视图下沉后 `database` 不应为此再引一份 `rusqlite`；
 `NavState` 也随之与存储同层，不再是「数据库域模型兼行映射」。
 
+**A' 前置之四（2026-09-16）：组织元数据 / 导航状态的**门面**搬进 `database`，于是「分组存储 trait」不需要了。**
+
+原计划让 `NavHost` 再挂一个 17 方法的 `GroupStore` trait（因为 `database` 不该直连
+`workbench::services::nav_runtime`）。落地时发现这层抽象多余：那 24 处调用（标签 / 分组 / 排序 /
+导航状态）只依赖 `engine::persistence` + 一个 `project_root`，**不需要宿主参与**。
+故直接搬为 [`database::nav_store`](../../../crates/database/src/nav_store.rs) 的自由函数
+（形如 `list_groups(root: Option<&Path>)`），`nav.rs` 的 24 处调用点已改为
+`database::nav_store::*`（`nav_runtime` 只留连接生命周期：`connect_entry` /
+`disconnect_entry` / `is_connected` / `test_entry` / `build_connect_request`）。
+
 依赖面审计（`panels/nav.rs`，4867 行）——决定 `NavHost` 要盖什么：
 
 | 类别 | 处数 | 去向 |
@@ -244,15 +254,15 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 | `shared.notice` | 33 | `NavHost::notice(msg)` |
 | `shared.{connections, selected, driver_catalog, project_root}` | 11 | `driver_catalog` 已下沉 `engine`（见上）；其余为 `NavHost` 只读访问器 |
 | 编辑器端口（`show_properties` / `request_query` / `new_connection` / `edit_connection`） | 12 | 直接复用既有 `EditorBridge`（已端口化） |
-| `nav_runtime::*` | 34 | **分两类**：纯存储类（归组/排序/标签/导航状态，~24 处）→ 随视图搬入 `database`（只依 `engine`）；连/断类（`connect_entry`/`disconnect_entry`）→ `NavHost` |
+| `nav_runtime::*` | 34 | 纯存储类（24 处）**已搬** `database::nav_store`（见上）；连/断类 → `NavHost` |
 | `nav_jobs::*` | 19 | 随视图搬入 `database`（后台任务+轮询印，与 P1 同形；参照 `scratchpad_jobs`） |
 | `settings::SettingsService::*`（视图偏好 8 处） | 8 | `NavHost`（宿主自持设置访问，避免新增 `database → settings` 依赖） |
 | `mock::mock_view::SchemaRequest` | 1 | `NavHost::open_mock_panel(..)`（避免新增 `database → mock`） |
 | `crate::components::{group_form_dialog, cache_dialog}` | 2 | `NavHost`（对话框需 `Window`，只有宿主有） |
 | `database::*` | 7 | 无需处理（本来就是目标 crate） |
 
-> 结论：`NavHost` ≈ **宿主状态访问器（11）+ 提示（1）+ 连接开关（2）+ 视图偏好（3）+ 四个宿主命令（属性/SQL/分组表单/缓存对话框/Mock）**，
-> 约 20 个方法；其余全部随视图进 `database`。
+> 结论：`NavHost` ≈ **宿主状态访问器（11）+ 提示（1）+ 连接开关（2）+ 视图偏好（3）+ 宿主命令（属性 / SQL / 新建连接 / 编辑连接 / 分组表单 / 缓存对话框 / Mock）**，
+> 约 20 个方法；其余全部随视图进 `database`。**不再需要 `group_store()` 与 `GroupStore` trait**（见前置之四）。
 
 代价：A' 比原 A4/A5 大（nav 的 ~74 处 `shared.*` + 34 处 `nav_runtime::*` + 19 处 `nav_jobs::*` 要逐处归位），
 但它**同时完成 P2**，且不再需要「把 `Shared` 下沉」这个本身就矛盾的动作；`Shared` 留在 workbench，
