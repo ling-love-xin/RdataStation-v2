@@ -1,14 +1,16 @@
-"""在 target/verify-b3 里拼出「HEAD + 本次改动」的树，用于编译与真机验证。
+"""在 target/verify-tree 里拼出「HEAD + 本次改动」的树，用于编译与真机验证。
 
 为什么需要它：工作区里同时有另一个会话的在途重构（workbench_shell / insight /
 analytics_resource 正在搬东西，时有编不过的中间态），直接 `cargo check` 会拿到
 他们的错、看不到我的。副本里他们的文件回到 HEAD，我的文件用本次改动。
 
+**每次改完代码要同步 `MINE` 清单**，否则副本里跑的是旧代码——会得出假结论。
+
 构建配置（`.cargo/config.toml` / `Cargo.toml` / `Cargo.lock`）刻意用**工作区版本**：
 那套配置是动态链接 DuckDB，编译只要几十秒（HEAD 的 bundled 要编 C++ 内核十几分钟），
 而它与本次改动的代码无关。
 
-用法：python verify_b3.py
+用法：`python verify_tree.py`（跑完在副本里 `cargo check/test`，用完 `rm -rf target/verify-tree`）
 """
 
 import os
@@ -21,18 +23,38 @@ ENV = dict(
     # 工作树去解析（“is not in the cache”就是这么来的）
     GIT_INDEX_FILE=os.path.abspath(os.path.join(".git", "index.b3")),
 )
-VERIFY = os.path.abspath(os.path.join("target", "verify-b3"))
+VERIFY = os.path.abspath(os.path.join("target", "verify-tree"))
 
-# 本次改动涉及的文件
+# 本次改动涉及的文件（**每次改完要同步**）
 MINE = [
+    # 引擎：影响行数（B5-1）与错误位置（B6）
+    "crates/engine/src/driver/utils.rs",
+    "crates/engine/src/driver/native/mysql.rs",
+    "crates/engine/src/driver/native/mysql_native.rs",
+    "crates/engine/src/driver/native/postgres.rs",
+    "crates/engine/src/driver/native/postgres_native.rs",
+    "crates/engine/src/driver/native/sqlite.rs",
+    "crates/engine/src/driver/native/duckdb.rs",
+    "crates/engine/src/services/sql_service.rs",
+    "crates/engine/src/connection_manager.rs",
+    "crates/shared/src/error.rs",
+    # 编辑器：结果区（B5）与错误回填（B6）
+    "crates/editor/src/diagnostics.rs",
     "crates/editor/src/execution.rs",
     "crates/editor/src/lib.rs",
     "crates/editor/src/shared.rs",
+    "crates/editor/src/store.rs",
+    "crates/editor/src/ui.rs",
     "crates/editor/src/view/host.rs",
     "crates/editor/src/view/tests.rs",
+    "crates/editor/src/view/widgets/result_grid.rs",
+    "crates/editor/src/view/widgets/result_sets.rs",
     "crates/editor/src/view/widgets/status_bar.rs",
+    # 宿主侧与真机探针
     "crates/workbench/src/services/editor_exec.rs",
     "crates/workbench/tests/editor_exec_real.rs",
+    "crates/workbench/tests/ui_contract.rs",
+    # 文档
     "docs/architecture/editor/editor-dev-plan.md",
     "docs/architecture/editor/editor-prototype-design.md",
 ]
@@ -78,6 +100,8 @@ def main():
     # 断言副本里我的改动在（拿一个已知点对一下）
     with open(os.path.join(VERIFY, "crates/workbench/src/services/editor_exec.rs"), encoding="utf-8") as handle:
         assert "fn cancel(&self" in handle.read(), "副本里缺我的中断实现"
+    with open(os.path.join(VERIFY, "crates/editor/src/diagnostics.rs"), encoding="utf-8") as handle:
+        assert "fn site_in_document" in handle.read(), "副本里缺我的错误定位实现"
     print("自检通过：副本 = HEAD + 本次改动")
 
 

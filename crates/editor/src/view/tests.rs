@@ -2578,7 +2578,7 @@ fn a_locatable_failure_marks_the_word_and_moves_the_caret(cx: &mut TestAppContex
     // headless 里那条路会撞上“不能在窗口更新里再更新窗口”（`update_window` 直接返回 Err），
     // 所以这里直接驱动落地入口——与“对话框按钮的真点击”同一口径（架构 §12 #29）。
     cx.update(|window, cx| {
-        panel.update(cx, |panel, cx| panel.jump_to_error_site_in(window, cx))
+        panel.update(cx, |panel, cx| panel.jump_to_error_site_for_test(window, cx))
     });
     // 文档：`select 1;\n`（10 字节）+ `select * from t `（16 字节）→ 出错词在第 2 行第 17 列
     assert_eq!(

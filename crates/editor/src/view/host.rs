@@ -1273,8 +1273,12 @@ impl EditorHostPanel {
         });
     }
 
-    /// 跳转的**落地入口**：手上有窗口时直接做（测试用；真机走上面的窗口句柄路径）
-    pub(crate) fn jump_to_error_site_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// 跳转的**落地入口**（供测试驱动；真机走上面的窗口句柄路径）
+    ///
+    /// 单独开一个口的原因：回填发生在没有窗口的后台轮询里，那条路径在 headless 下会撞上
+    /// “不能在窗口更新里再更新窗口”，测试验不了“光标真的落到出错词上”——这条入口就是
+    /// 被验的那一半（与对话框“真点击”同一口径，架构 §12 #29）。
+    pub fn jump_to_error_site_for_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(site) = self.error_site.clone() else {
             return;
         };
