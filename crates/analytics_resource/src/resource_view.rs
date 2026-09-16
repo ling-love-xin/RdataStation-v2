@@ -11,26 +11,27 @@
 //!   一切服务调用（归档 / 取回 / 打开 / 扫描）都在事件路径经宿主发起。
 //! - 面板不知道 `project.db` / `resources/` 的存在，也不该知道。
 //!
-//! # 本批范围（Phase 1 第三刀）
+//! # 本批范围（Phase 1 第五刀）
 //!
 //! 已落地：面板头（标题 + 归档入口）、**工具栏（搜索框 / 筛选 / 排序）**、提示行（只读与通知分色）、
-//! 行列表（显示名 / 版本徽标 / **复现强度徽标** / 尾部字段 / 选中态）、底部状态行（异常时给"修复…"入口）、
-//! 空态**与"无匹配"两态分开**、只读禁写。
+//! **行列表（`list::List`：虚拟化 + 组件化 hover / 选中 / 键盘漫游）**、**行的右键菜单**
+//! （打开 / 取回 / 移入回收站）、底部状态行（异常时给"修复…"入口）、空态**与"无匹配"两态分开**、只读禁写。
 //!
-//! **未落地（下一批，已在开发方案留档）**：虚拟化列表（`list::List`；当前行用 `Button` 渲染，
-//! 几百行以上必须换）、右键菜单、详情属性面板接入、五个对话框、Action 与快捷键（`Ctrl+F` 聚焦 /
-//! `Esc` 清空在 Action 批）、行图标（`IconName` 子集尚未逐一核实，先不引入以免资产缺失时静默为空）。
+//! **未落地（下一批，已在开发方案留档）**：详情属性面板接入、五个对话框、Action 与快捷键
+//! （`Ctrl+F` 聚焦 / `Esc` 清空 / 行漫游在 Action 批）、行图标（`IconName` 子集尚未逐一核实，
+//! 先不引入以免资产缺失时静默为空）、行内 hover 动作（原型 §2.3 的 hover 版，随详情面板批）。
 
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -163,6 +164,214 @@ pub trait ResourcesHost: 'static {
     fn request_index_repair(&self, window: &mut Window, cx: &mut App);
 }
 
+// ==================== 列表委托 ====================
+
+/// 存档列表的 `List` 委托（虚拟化 + 组件化 hover / 选中 / 键盘漫游）。
+///
+/// 行数据是**面板可见行的一份副本**：`render_item` 在列表渲染期被调用，而那一刻面板实体
+/// 正被借用（渲染就是从面板的 `render` 进来的），回头去读面板的行集合会直接 panic——
+/// 与 `mock` 的生成器搜索委托同例。面板每次重算可见行都把副本推过来。
+struct ArchiveListDelegate {
+    /// 动作去向（右键菜单用；面板不认识服务层）。
+    host: Rc<dyn ResourcesHost>,
+    /// 面板句柄（选中变化回传；面板已销毁时静默丢弃）。
+    panel: WeakEntity<ResourcesPanel>,
+    rows: Vec<ArchiveRow>,
+    /// 选中的行 id（面板是语义权威，这里是渲染与漫游的锚点）。
+    selected_id: Option<String>,
+    /// 面板正在把自己的选中镜像进列表。
+    ///
+    /// 此间组件回调的 `set_selected_index` **不再回写面板**：镜像发生在面板渲染期，
+    /// 回写就是"更新正在被更新的实体"（GPUI 直接 panic）。
+    syncing_from_panel: bool,
+    /// 项目只读（标题栏锁）：只读时行内动作只剩「打开」。
+    read_only: bool,
+}
+
+impl ArchiveListDelegate {
+    /// 面板推送可见行（快照 / 筛选 / 排序变化时调用）。
+    fn set_rows(
+        &mut self,
+        rows: Vec<ArchiveRow>,
+        selected_id: Option<String>,
+        read_only: bool,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        self.rows = rows;
+        self.selected_id = selected_id;
+        self.read_only = read_only;
+        cx.notify();
+    }
+
+    /// 索引 → 行（越界返回 `None`：行集合刚变的那一帧可能还拿着旧索引）。
+    fn row_at(&self, ix: IndexPath) -> Option<&ArchiveRow> {
+        self.rows.get(ix.row)
+    }
+}
+
+impl ListDelegate for ArchiveListDelegate {
+    type Item = ListItem;
+
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.rows.len()
+    }
+
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<ListItem> {
+        let row = self.row_at(ix)?.clone();
+        let (foreground, muted, success, info, warning, danger) = {
+            let colors = cx.theme().colors;
+            (
+                colors.foreground,
+                colors.muted_foreground,
+                colors.success,
+                colors.info,
+                colors.warning,
+                colors.danger,
+            )
+        };
+        let badge = strength_badge(row.kind, row.status);
+        let badge_color = match badge_tone(row.kind, row.status) {
+            BadgeTone::Success => success,
+            BadgeTone::Info => info,
+            BadgeTone::Warning => warning,
+            BadgeTone::Danger => danger,
+        };
+        // 缺失的行灰显（不是禁用：它仍可被选中看详情、仍可走索引修复）。
+        let name_color = if row.status == ArchiveStatus::Missing {
+            muted
+        } else {
+            foreground
+        };
+        let host = self.host.clone();
+        // 取回要往草稿箱写一份工作副本：本体异常的存档（缺失 / 内容已变）与只读项目都不给走。
+        let can_checkout = row.status == ArchiveStatus::Normal && !self.read_only;
+        let id_open = row.id.clone();
+        let id_checkout = row.id.clone();
+        let id_delete = row.id.clone();
+
+        let mut line = div()
+            .h_flex()
+            .w_full()
+            .min_w_0()
+            .h(rems(ui::ROW_HEIGHT))
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .text_ellipsis()
+                    .text_color(name_color)
+                    .child(row.name.clone()),
+            )
+            // v1 不显示版本徐标（减少噪声）。
+            .when(row.version > 1, |line| {
+                line.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(format!("v{}", row.version)),
+                )
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .h(rems(ui::ARCHIVE_BADGE_HEIGHT))
+                    .text_xs()
+                    .text_color(badge_color)
+                    .child(badge),
+            );
+        if !row.tail.is_empty() {
+            line = line.child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(row.tail.clone()),
+            );
+        }
+
+        Some(
+            ListItem::new(SharedString::from(format!("archive-row-{}", row.id))).child(
+                // 行的动作入口是右键菜单（原型 §3.2）：行本身只承载信息——240px 面板里
+                // 常驻按钮会把尾部字段挤没（hover 版随详情面板批）。
+                //
+                // 菜单挂在行内的容器上（而不是 ListItem 本身）：`context_menu` 返回的是
+                // `ContextMenu<ListItem>`，而委托的 `Item` 必须是 `ListItem`（它要实现
+                // `Selectable`）；容器带**按行 id 的稳定 id**，否则各行会共用同一个菜单位。
+                div()
+                    .id(SharedString::from(format!("archive-row-menu-{}", row.id)))
+                    .w_full()
+                    .child(line)
+                    .context_menu(move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        menu = menu.item(PopupMenuItem::new("打开（只读）").on_click({
+                            let host = host.clone();
+                            let id = id_open.clone();
+                            move |_, window, cx| host.request_open(&id, window, cx)
+                        }));
+                        menu = menu.item(
+                            PopupMenuItem::new("取回（检出）…")
+                                .disabled(!can_checkout)
+                                .on_click({
+                                    let host = host.clone();
+                                    let id = id_checkout.clone();
+                                    move |_, window, cx| host.request_checkout(&id, window, cx)
+                                }),
+                        );
+                        // 破坏性项用分隔线隔离。
+                        menu.separator().item(PopupMenuItem::new("移入回收站").on_click({
+                            let host = host.clone();
+                            let id = id_delete.clone();
+                            move |_, window, cx| host.request_delete(&id, window, cx)
+                        }))
+                    }),
+            ),
+        )
+    }
+
+    /// 组件把选中变化回传（点击 / 键盘漫游）：语义上仍以面板的 `selected` 为准。
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        let id = ix.and_then(|ix| self.row_at(ix).map(|row| row.id.clone()));
+        if self.syncing_from_panel {
+            // 面板镜像：只按它更新锚点，不回写（见字段注释）。
+            self.selected_id = id;
+            return;
+        }
+        // 同一行不重复通知：面板渲染时会把自己的选中镜像回列表（见 `sync_list_selection`），
+        // 没有这层防抖就会变成"面板 → 列表 → 面板"的渲染循环。
+        if id == self.selected_id {
+            return;
+        }
+        self.selected_id = id.clone();
+        let _ = self.panel.update(cx, |panel, cx| panel.set_selected(id, cx));
+    }
+
+    /// 回车 / 双击：打开（只读），与右键菜单第一项同口径。
+    fn confirm(
+        &mut self,
+        _secondary: bool,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        let Some(id) = self.selected_id.clone() else {
+            return;
+        };
+        self.host.request_open(&id, window, cx);
+    }
+}
+
 // ==================== 面板 ====================
 
 pub struct ResourcesPanel {
@@ -185,6 +394,8 @@ pub struct ResourcesPanel {
     search_input: Option<Entity<InputState>>,
     /// 搜索框订阅句柄（仅持有；释放即取消）。
     _search_sub: Option<Subscription>,
+    /// 行列表状态（**首帧渲染时创建**：`ListState` 同样需要窗口；空态不渲染它）。
+    list: Option<Entity<ListState<ArchiveListDelegate>>>,
     selected: Option<String>,
     notice: Option<String>,
     focus_handle: FocusHandle,
@@ -204,6 +415,7 @@ impl ResourcesPanel {
             sort_order: SortOrder::default(),
             search_input: None,
             _search_sub: None,
+            list: None,
             selected: None,
             notice: None,
             focus_handle: cx.focus_handle(),
@@ -231,7 +443,7 @@ impl ResourcesPanel {
                 }
                 // 不用 `set_query`：它会把同一个值再写回输入框（正在输入时是无谓的往返）。
                 this.filter.query = emitter.read(cx).value().to_string();
-                this.refresh_view_rows();
+                this.refresh_view_rows(cx);
                 cx.notify();
             },
         );
@@ -239,11 +451,54 @@ impl ResourcesPanel {
         self._search_sub = Some(sub);
     }
 
-    /// 重算可见行（筛选 → 排序）并清理悬空选中。
+    /// 懒创建列表状态（首帧渲染时执行一次，理由同 [`ensure_search_input`](Self::ensure_search_input)）。
+    ///
+    /// 空态（无可见行）时面板不渲染列表，但状态照建：行回来时直接可用，
+    /// 不用在"有行的那一帧"再走一次创建。
+    fn ensure_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.list.is_some() {
+            return;
+        }
+        let delegate = ArchiveListDelegate {
+            host: self.host.clone(),
+            panel: cx.entity().downgrade(),
+            rows: self.view_rows.clone(),
+            selected_id: self.selected.clone(),
+            syncing_from_panel: false,
+            read_only: self.snapshot.read_only,
+        };
+        let state = cx.new(|cx| ListState::new(delegate, window, cx).selectable(true));
+        self.list = Some(state);
+    }
+
+    /// 把面板的选中（行 id）同步成列表的选中（索引）。
+    ///
+    /// 只在真的不一致时才动：宿主推送快照 / 筛选走的是无窗口路径，改不了列表的索引，
+    /// 于是在渲染时补一次（这是把面板的选中"镜像"给组件，不是业务状态变更）。
+    fn sync_list_selection(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(list) = self.list.clone() else {
+            return;
+        };
+        let target = self
+            .selected
+            .as_deref()
+            .and_then(|id| self.view_rows.iter().position(|row| row.id == id))
+            .map(IndexPath::new);
+        list.update(cx, |state, cx| {
+            if state.selected_index() != target {
+                // 先立"面板镜像"标志：否则组件的回调会反过来更新面板，而此刻面板正在渲染。
+                state.delegate_mut().syncing_from_panel = true;
+                state.set_selected_index(target, window, cx);
+                state.delegate_mut().syncing_from_panel = false;
+            }
+        });
+    }
+
+    /// 重算可见行（筛选 → 排序）并清理悬空选中，同时把行副本推给列表委托。
     ///
     /// 选中清理放在这里而不是只放在 `set_snapshot` 里：**筛选与排序也会让行消失**，
     /// 只盯着快照会留下一个指向"看不见的行"的选中态。
-    fn refresh_view_rows(&mut self) {
+    fn refresh_view_rows(&mut self, cx: &mut Context<Self>) {
         self.view_rows = filter::apply_view(
             &self.snapshot.rows,
             &self.filter,
@@ -255,19 +510,35 @@ impl ResourcesPanel {
                 self.selected = None;
             }
         }
+        self.push_rows_to_list(cx);
+    }
+
+    /// 把可见行推给列表委托。
+    ///
+    /// 列表尚未创建时什么都不做——首帧渲染会带着现有行创建它（`ensure_list`）。
+    fn push_rows_to_list(&self, cx: &mut Context<Self>) {
+        let Some(list) = self.list.clone() else {
+            return;
+        };
+        let rows = self.view_rows.clone();
+        let selected = self.selected.clone();
+        let read_only = self.snapshot.read_only;
+        list.update(cx, |state, cx| {
+            state.delegate_mut().set_rows(rows, selected, read_only, cx);
+        });
     }
 
     /// 宿主推送数据（事件路径调用；面板不自己取数）。
     pub fn set_snapshot(&mut self, snapshot: ResourcesSnapshot, cx: &mut Context<Self>) {
         self.snapshot = snapshot;
-        self.refresh_view_rows();
+        self.refresh_view_rows(cx);
         cx.notify();
     }
 
     /// 换一套筛选条件（新建 / 清空走这里）。
     pub fn set_filter(&mut self, filter: ResourcesFilter, cx: &mut Context<Self>) {
         self.filter = filter;
-        self.refresh_view_rows();
+        self.refresh_view_rows(cx);
         cx.notify();
     }
 
@@ -277,21 +548,21 @@ impl ResourcesPanel {
         if let Some(input) = self.search_input.clone() {
             input.update(cx, |state, cx| state.set_value(text, window, cx));
         }
-        self.refresh_view_rows();
+        self.refresh_view_rows(cx);
         cx.notify();
     }
 
     /// 勾选 / 取消一个种类（全选会被规范化为不限，见 `ResourcesFilter::toggle_kind`）。
     pub fn toggle_kind(&mut self, kind: ArchiveKind, cx: &mut Context<Self>) {
         self.filter.toggle_kind(kind);
-        self.refresh_view_rows();
+        self.refresh_view_rows(cx);
         cx.notify();
     }
 
     /// 只看需处理的异常（缺失 / 内容已变）。
     pub fn toggle_only_issues(&mut self, cx: &mut Context<Self>) {
         self.filter.only_issues = !self.filter.only_issues;
-        self.refresh_view_rows();
+        self.refresh_view_rows(cx);
         cx.notify();
     }
 
@@ -303,7 +574,7 @@ impl ResourcesPanel {
         } else {
             self.sort_field = field;
         }
-        self.refresh_view_rows();
+        self.refresh_view_rows(cx);
         cx.notify();
     }
 
@@ -313,7 +584,7 @@ impl ResourcesPanel {
         if let Some(input) = self.search_input.clone() {
             input.update(cx, |state, cx| state.set_value("", window, cx));
         }
-        self.refresh_view_rows();
+        self.refresh_view_rows(cx);
         cx.notify();
     }
 
@@ -352,11 +623,7 @@ impl ResourcesPanel {
         self.search_input.as_ref()
     }
 
-    fn select(&mut self, id: Option<String>, cx: &mut Context<Self>) {
-        self.set_selected(id, cx);
-    }
-
-    /// 宿主驱动选中（生产入口；面板内点击也走它）。
+    /// 宿主驱动选中（生产入口；列表选中变化也走它）。
     pub fn set_selected(&mut self, id: Option<String>, cx: &mut Context<Self>) {
         self.selected = id;
         cx.notify();
@@ -520,144 +787,20 @@ impl ResourcesPanel {
         )
     }
 
-    /// 滚动容器不是 `Div`（`overflow_y_scrollbar` 返回滚动包装类型），故本区域返回 `AnyElement`。
+    /// 列表主体：`List`（虚拟化 + 组件化的 hover / 选中 / 键盘漫游）。
+    ///
+    /// 行数据在委托里（面板重算可见行时推过去）：`render_item` 在列表渲染期被调用，
+    /// 那一刻面板正被借用，不能回头读面板的行集合。滚动归 `List` 自己（虚拟化列表自带）。
     fn render_rows(&self, cx: &mut Context<Self>) -> AnyElement {
-        // 颜色先拷出（Hsla 是 Copy）：循环体内不再碰 `cx`。
-        let (foreground, muted, success, info, warning, danger) = {
-            let colors = cx.theme().colors;
-            (
-                colors.foreground,
-                colors.muted_foreground,
-                colors.success,
-                colors.info,
-                colors.warning,
-                colors.danger,
-            )
+        let Some(list) = self.list.clone() else {
+            // 理论上不可达（`render` 已先 `ensure_list`）：退化成空区而不是 panic。
+            let _ = cx;
+            return div().flex_1().into_any_element();
         };
-
-        let mut list = div().v_flex().w_full().gap_0p5().px_1().py_1();
-        let panel = cx.weak_entity();
-        let host_for_rows = self.host.clone();
-
-        for row in &self.view_rows {
-            let is_selected = self.selected.as_deref() == Some(row.id.as_str());
-            let badge = strength_badge(row.kind, row.status);
-            let badge_color = match badge_tone(row.kind, row.status) {
-                BadgeTone::Success => success,
-                BadgeTone::Info => info,
-                BadgeTone::Warning => warning,
-                BadgeTone::Danger => danger,
-            };
-            let name_color = if row.status == ArchiveStatus::Missing {
-                muted
-            } else {
-                foreground
-            };
-            let row_id = row.id.clone();
-            let entry_id = SharedString::from(format!("archive-row-{}", row.id));
-            let click_panel = panel.clone();
-            let tail = row.tail.clone();
-            let version = row.version;
-            let name = row.name.clone();
-
-            list = list.child(
-                Button::new(entry_id)
-                    .ghost()
-                    .w_full()
-                    .h(rems(ui::ROW_HEIGHT))
-                    .toggled(is_selected)
-                    .on_click(move |_, _, cx| {
-                        let id = row_id.clone();
-                        let _ = click_panel.update(cx, |panel, cx| panel.select(Some(id), cx));
-                    })
-                    .child(
-                        div()
-                            .h_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .text_ellipsis()
-                                    .text_color(name_color)
-                                    .child(name),
-                            )
-                            // v1 不显示版本徽标（减少噪声）。
-                            .when(version > 1, |line| {
-                                line.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child(format!("v{version}")),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .h(rems(ui::ARCHIVE_BADGE_HEIGHT))
-                                    .text_xs()
-                                    .text_color(badge_color)
-                                    .child(badge),
-                            )
-                            .when(!tail.is_empty(), |line| {
-                                line.child(div().text_xs().text_color(muted).child(tail.clone()))
-                            })
-                            // 行级操作只在**选中行**上出现（hover 版本随菜单批一起做）：
-                            // 与 M4 连接行 / M5 草稿行的行内操作同一惯例，不占默认行宽。
-                            .when(is_selected, |line| {
-                                line.child(
-                                    Button::new(SharedString::from(format!(
-                                        "archive-open-{}",
-                                        row.id
-                                    )))
-                                    .ghost()
-                                    .label("打开")
-                                    .on_click({
-                                        let open_host = host_for_rows.clone();
-                                        let id = row.id.clone();
-                                        move |_, window, cx| open_host.request_open(&id, window, cx)
-                                    }),
-                                )
-                                .child(
-                                    Button::new(SharedString::from(format!(
-                                        "archive-checkout-{}",
-                                        row.id
-                                    )))
-                                    .ghost()
-                                    .label("取回")
-                                    .disabled(row.status != ArchiveStatus::Normal)
-                                    .on_click({
-                                        let checkout_host = host_for_rows.clone();
-                                        let id = row.id.clone();
-                                        move |_, window, cx| checkout_host.request_checkout(&id, window, cx)
-                                    }),
-                                )
-                                .child(
-                                    Button::new(SharedString::from(format!(
-                                        "archive-delete-{}",
-                                        row.id
-                                    )))
-                                    .ghost()
-                                    .label("移入回收站")
-                                    .on_click({
-                                        let delete_host = host_for_rows.clone();
-                                        let id = row.id.clone();
-                                        move |_, window, cx| delete_host.request_delete(&id, window, cx)
-                                    }),
-                                )
-                            }),
-                    ),
-            );
-        }
-
         div()
-            .id("archive-rows")
             .flex_1()
             .min_h_0()
-            .overflow_y_scrollbar()
-            .child(list)
+            .child(List::new(&list).flex_1())
             .into_any_element()
     }
 
@@ -798,8 +941,11 @@ impl ComponentPanel for ResourcesPanel {
 
 impl Render for ResourcesPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 首帧创建搜索框（懒创建，见字段注释）：之后本帧即可渲染工具栏。
+        // 首帧创建搜索框与列表状态（懒创建，见字段注释）：之后本帧即可渲染工具栏与行。
         self.ensure_search_input(window, cx);
+        self.ensure_list(window, cx);
+        // 宿主推送（无窗口）改不了列表索引，这里把面板的选中镜像回去。
+        self.sync_list_selection(window, cx);
         let background = cx.theme().colors.background;
         // 各区域函数返回具体类型（见上文注释），故可依次调用、各自持有已完成的元素。
         let header = self.render_header(cx);

@@ -1,8 +1,8 @@
 //! 资产库面板的窗口测试（GPUI headless）。
 //!
 //! 目的：把面板的**可交互行为**固化成回归——空态与只读提示可渲染、快照推送生效、
-//! 选中可由宿主驱动、悬空选中被清掉、**工具栏条件真的改变可见行**。
-//! 这些是后续改动最容易悄悄弄坏的地方。
+//! 选中可由宿主驱动、悬空选中被清掉、**工具栏条件真的改变可见行**、
+//! **宿主选中镜像回列表时不重入**。这些是后续改动最容易悄悄弄坏的地方。
 //!
 //! 两条纪律（都是踩过的坑）：
 //! 1. **不通配导入**：`use gpui_kit::*` 会把 gpui 的 `test` 属性宏带进作用域，而
@@ -253,6 +253,54 @@ fn toolbar_conditions_narrow_rows_and_clear_dangling_selection(cx: &mut TestAppC
 
     // 筛选是纯视图行为：不应触发任何宿主动作。
     assert!(host.calls().is_empty());
+}
+
+#[gpui_kit::test]
+fn host_selection_mirrors_into_list_without_reentry(cx: &mut TestAppContext) {
+    // 背景：面板在渲染期把选中镜像回列表，而 `ListState::set_selected_index` 会回调委托，
+    // 委托再写回面板就是"更新正在被更新的实体"——这条用例就是钉住那个 panic。
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(
+                snapshot(
+                    vec![
+                        row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 3),
+                        row("ar_2", ArchiveKind::Analysis, ArchiveStatus::Normal, 1),
+                        row("ar_3", ArchiveKind::File, ArchiveStatus::Missing, 2),
+                    ],
+                    false,
+                ),
+                cx,
+            );
+        });
+    });
+    // 建列表的那一帧。
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+
+    // 宿主来回改选中（每次之后都渲染一帧：镜像发生在渲染期）。
+    for id in [Some("ar_2"), Some("ar_1"), Some("ar_3"), None] {
+        cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.set_selected(id.map(str::to_string), cx);
+            });
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+    }
+
+    let selected = cx.update(|_window, cx| panel.read(cx).selected_id().map(str::to_string));
+    assert_eq!(selected, None);
+    assert!(host.calls().is_empty(), "仅渲染与选中不应触发任何宿主动作");
 }
 
 #[gpui_kit::test]

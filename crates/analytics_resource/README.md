@@ -85,7 +85,7 @@
 | `src/helpers.rs` | 时间双格式解析（RFC3339 / SQLite `CURRENT_TIMESTAMP`） | ✅ |
 | `src/tests.rs` | 存储层回归（t001–t016，测试库跑齐 007 + 020） | ✅ 16 项 |
 | `src/commands.rs` | Action 声明（`RequestArchive` / `OpenSelected` / `CheckoutSelected` / `DeleteSelected`，面板已接处理器） | ✅ Phase 1（按键绑定待 app 层） |
-| `src/resource_view.rs` | 左 Dock 面板：面板头 / **工具栏（搜索·筛选·排序）** / 提示行 / 行列表（强度徽标 + 尾部字段 + 选中）/ 状态行 / **两种空态（空库 vs 无匹配）**；宿主动作经 `ResourcesHost` | ✅ Phase 1 三刀（虚拟化列表·右键菜单·行图标待下一批） |
+| `src/resource_view.rs` | 左 Dock 面板：面板头 / **工具栏（搜索·筛选·排序）** / 提示行 / **行列表（`list::List`：虚拟化 + 组件化 hover·选中·键盘漫游，选中以面板的行 id 为准）** / **行右键菜单（打开·取回·移入回收站）** / 状态行 / **两种空态（空库 vs 无匹配）**；宿主动作经 `ResourcesHost` | ✅ Phase 1 五刀（详情面板接入·行图标·批量多选待下一批） |
 | `src/filter.rs` | 工具栏**数据层**（纯函数，零 GPUI 依赖）：`ResourcesFilter`（关键字 / 种类 / 只看异常；`toggle_kind` 把"全选"规范化为不限）+ `SortField`/`SortOrder`（`label` / `arrow` / `flipped`）+ `apply_view`（筛选→排序，同键名称兜底且不随方向翻转）；`is_empty()` 决定面板显示哪一种空态 | ✅ Phase 1 |
 | `src/detail_view.rs` | 详情面板内容层：`ArchiveDetail` 快照 + `detail_rows`（基本信息 / 来源 / 版本 / 组织）+ `alert_line`（只在需处理时出现）+ `render_detail` 只读渲染 | ✅ Phase 1（接入面板 / 右侧 Dock 待做） |
 | `src/present.rs` | 呈现层（纯函数，零 I/O 零 GPUI）：`format_size` / `format_scale` / `format_relative_time` / `tail_for` / `to_row` / `build_snapshot`——索引行 → 面板快照（含字段优先级尾巴与计数口径） | ✅ Phase 1 |
@@ -109,7 +109,7 @@
 | --- | --- |
 | **归档 / 取回 / 再归档闭环**【Phase 0】`ArchiveService`：本体 move + 登记 + 指纹版本 + 事件；索引失败回滚本体；取回产出可写工作副本 | 五个对话框与动作真实现（Phase 1 对话框批） |
 | **索引修复**【Phase 0】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；"从回收站还原"待 P0.8 | 版本保留策略接入设置项 |
-| **面板**【Phase 1】`ResourcesPanel`：面板头 / 工具栏（搜索·筛选·排序）/ 行渲染 / 状态行 / 两种空态；`present.rs` 把索引行转成快照；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口） | 五个对话框与动作真实现、虚拟化列表、右键菜单、行图标 |
+| **面板**【Phase 1】`ResourcesPanel`：面板头 / 工具栏（搜索·筛选·排序）/ **`List` 虚拟化行 + 右键菜单** / 状态行 / 两种空态；`present.rs` 把索引行转成快照；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口） | 详情面板接入、行图标、批量多选、五个对话框与动作真实现 |
 | **工具栏数据层**【Phase 1】`filter.rs`：搜索（名称 + 尾部，大小写不敏感）/ 种类多选（全选 = 不限）/ 只看需处理 / 两种排序键（同键翻转方向、同键名称兜底） | 标签维与更多排序键（需 `ArchiveRow` 带原始值，Phase 2） |
 | 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / 只读 / 指纹 / 历史副本与裁剪 / 遍历） | 废弃 `recycle.rs` → `ProjectTrash`（P0.8，跨 crate） |
 | 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤的**存储层**入口（面板已能按 kind 筛可见行） |
@@ -119,5 +119,5 @@
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
-- 验证：`cargo test -p rds-analytics-resource -j 2` → **66 项单测**（16 存储 + 5 领域 + 11 本体 + 7 归档服务 + 7 索引修复 + 6 筛选/排序 + 4 面板 + 5 详情 + 5 呈现）+ `tests/panel_window.rs` **5 项窗口测试**；`cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
+- 验证：`cargo test -p rds-analytics-resource -j 2` → **66 项单测**（16 存储 + 5 领域 + 11 本体 + 7 归档服务 + 7 索引修复 + 6 筛选/排序 + 4 面板 + 5 详情 + 5 呈现）+ `tests/panel_window.rs` **6 项窗口测试**；`cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。
