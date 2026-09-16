@@ -1,6 +1,0 @@
-[dbg] WorkbenchView::render #0
-[dbg] EditorPanel::render #0
-[dbg] EditorPanel::render step0-lazy
-[dbg] EditorPanel::render step1-theme
-
-thread 'main' (26628) has overflowed its stack

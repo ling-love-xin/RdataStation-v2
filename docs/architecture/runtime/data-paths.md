@@ -77,10 +77,9 @@ paths::extensions_dir()  // home/extensions
 3. 替换 9 处硬编码 `"RdataStation"` 字面量为 `paths::*` 调用。
 4. 兼容与迁移：启动时若新路径为空且旧路径有数据 → 提示并**一次性迁移**（或只提示路径变更 + 提供开关）。
    **已定为：自动迁移、只补不盖、复制不移动、标记文件一次性**（理由见 §10.1）。
-5. **一律不提交**：`.gitignore` 加 `/.rds/`、`/rds-*.log`（数据/日志/临时不入库）。
+5. **一律不提交**：`.gitignore` 加 `/.rds/`、`/rds-*.log`、`/docs/tmp/*.log`、`/tools/*.log`（数据/日志/临时不入库）。
    注意：`*.fossil` 是**测试用的 SQLite 库**（非生成物），不要加入忽略规则。
-   已完成：`docs/tmp/*.log`、`tools/r2*.log` 等**已被跟踪**的日志需 `git rm --cached`（保留工作区文件）——
-   属索引操作，等仓库安静时做（见 §6）。
+   已跟踪的日志已 `git rm --cached`（保留工作区文件），结果与坑见 §6。
 6. 文档同步：本文档 + `settings/*`（settings.json 位置）、`database/*`（sqlite/duckdb 位置）、
    `overview.md`（双层数据落盘位置）、`connection/*`（known_hosts 例外）。
 
@@ -95,25 +94,24 @@ paths::extensions_dir()  // home/extensions
 | 旧数据"看起来丢失" | 启动时检测旧路径并提示/迁移（§4.4）：**已实现自动迁移**，标记文件 `<<RDS_HOME>>/.migrated-from-legacy` 记录已迁项 |
 | 安装到只读目录 | `paths::home()` 探测可写性失败时回退：`%LOCALAPPDATA%/RdataStation`（并在 stderr 提示），保持"能用" |
 
-## 6. git 卫生现状（待处理）
+## 6. git 卫生（已处理，2026-09-16）
 
-`git ls-files` 实测：**已有生成物被跟踪**（均应 `git rm --cached`，保留工作区文件）：
+### 6.1 已经做完的
 
-- `docs/tmp/app.out.log`、`docs/tmp/app.err.log`
-- `tools/r2*.log`（`r21_test` / `r22_*` / `r23_*` 等一批测试日志）
+| 动作 | 结果 |
+| --- | --- |
+| `.gitignore` 补规则 | `/.rds/`、`/rds-*.log`、`/docs/tmp/*.log`、`/tools/*.log` |
+| 已跟踪的日志退出跟踪 | `git rm --cached`：`docs/tmp/app.{out,err}.log` + `tools/*.log`（共 95 个），**工作区文件保留** |
+| 工作区临时件 | `commit_msg_b3.txt` / `crates/workbench/data123` 已不存在（早前已清）；根目录的 `rds-*.log`（上一会话的编译错误堆）保持在盘上且已被忽略 |
 
-未跟踪的生成物（应加入忽略规则或删除）：
+### 6.2 两条不要踩的线
 
-- 仓库根：`rds-a.log` / `rds-c.log` / `rds-e.log` / `rds-i.log` / `rds-si.log` / `rds-sw.log` / `rds-t.log` / `rds-w*.log`
-- 其他：`commit_msg_b3.txt`（提交信息临时文件）、`crates/workbench/data123`（先 `file`/`head` 看一眼是测试数据还是废物）
-- **不是生成物、不要删也不要忽略**：`crates/workbench/FossilTT.fossil`（测试用 SQLite 库）等 `*.fossil`
-
-建议动作顺序（等当前并行会话停下来再做，避免动索引）：
-
-1. `.gitignore` 补规则（本文件 §4.5）；
-2. `git rm --cached docs/tmp/*.log tools/r2*.log`（一次提交，说明"生成物不入库"）；
-3. 删除工作区里的临时件（`commit_msg_*.txt`、`rds-*.log`；`data123` 先 `file` 看一眼再定）；
-   `*.fossil` 属测试资产，**不动**。
+1. **`git rm --cached` 后不能用 `git commit -- <路径>`**：带路径的提交取的是**工作区**内容，
+   而 `--cached` 就是"索引删、工作区留"——两者相遇的结果是**删除被默默吞掉**（提交成功、文件仍在库里）。
+   实测确认。要保留工作区文件时，得把文件先移出工作区再带路径提交（本次采用），或改用临时索引
+   （`GIT_INDEX_FILE=<临时文件> git read-tree HEAD` 后操作）。
+2. **`*.fossil` 是测试资产，不是生成物**：`crates/workbench/FossilTT.fossil` 是测试用 SQLite 库，
+   **不要删也不要加入忽略规则**。
 
 ## 7. 实现位置映射表
 

@@ -1,9 +1,0 @@
-[dbg] WV-render
-[dbg] EP-render
-[dbg] EP-lazy-done
-[dbg] EP-theme-done
-[dbg] EP-detail-entry
-[dbg] EP-detail-rows-div
-[dbg] EP-detail-rows-done
-
-thread 'main' (5756) has overflowed its stack

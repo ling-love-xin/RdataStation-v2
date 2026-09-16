@@ -9,3 +9,6 @@ v1/frontend/node_modules/
 # 口径：软件生成的一切都在自己的安装目录下（默认 = 可执行文件所在目录），且一律不入库
 /.rds/
 /rds-*.log
+# 工具脚本与真机调试跑出来的日志（生成物；`docs/tmp/screenshot.png` 是截图，不属生成物）
+/docs/tmp/*.log
+/tools/*.log
