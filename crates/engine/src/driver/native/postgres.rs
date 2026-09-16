@@ -8,7 +8,7 @@ use sqlx::{Column, Pool, Postgres, Row};
 use std::sync::Arc;
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, returns_rows};
+use crate::driver::utils::{affected_rows_result, byte_offset_for_char, returns_rows};
 use crate::driver::{
     ColumnDetail, DataSourceMeta, Database, PoolStatus, SchemaObject, SchemaObjectKind, Transaction,
 };
@@ -118,7 +118,7 @@ impl Database for PostgresDatabase {
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
             return Ok(QueryResult {
@@ -160,7 +160,7 @@ impl Database for PostgresDatabase {
         let rows = query_builder
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
             return Ok(QueryResult {
@@ -199,7 +199,7 @@ impl Database for PostgresDatabase {
                 let rows = sqlx::query(sqlx::AssertSqlSafe(sql_owned.as_str()))
                     .fetch_all(&pool)
                     .await
-                    .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+                    .map_err(|e| query_error(&sql_owned, e))?;
 
                 if rows.is_empty() {
                     return Ok(QueryResult {
@@ -448,14 +448,14 @@ impl Transaction for PostgresTransaction {
                 let result = sqlx::query(sqlx::AssertSqlSafe(sql))
                     .execute(&mut **tx)
                     .await
-                    .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+                    .map_err(|e| query_error(sql, e))?;
                 return Ok(affected_rows_result(result.rows_affected()));
             }
 
             let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .fetch_all(&mut **tx)
                 .await
-                .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+                .map_err(|e| query_error(sql, e))?;
 
             if rows.is_empty() {
                 return Ok(QueryResult {
@@ -509,8 +509,28 @@ async fn execute_writing(pool: &Pool<Postgres>, sql: &str) -> Result<QueryResult
     let result = sqlx::query(sqlx::AssertSqlSafe(sql))
         .execute(pool)
         .await
-        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+        .map_err(|e| query_error(sql, e))?;
     Ok(affected_rows_result(result.rows_affected()))
+}
+
+/// sqlx 错误 → 引擎错误（**带上数据库报的真实位置**，B6 定位要用）
+///
+/// sqlx 的 `Display` 只给消息，还会把 PG 的**源码行号**写成 “at line N” 附在末尾——
+/// 那不是 SQL 里的位置。真位置在结构化字段里：`PgErrorPosition::Original` 是
+/// **1 基的字符位置**（PG 协议就这么定义），这里换算成 SQL 的**字节偏移**；
+/// `Internal` 说的是服务器自己生成的语句，与我们的 SQL 无关，不能用。
+///
+/// 拿不到位置就退回原来的消息（不假装知道位置）。
+fn query_error(sql: &str, error: sqlx::Error) -> CoreError {
+    let mut mapped = DatabaseError::query(sql, error.to_string());
+    if let Some(db) = error.as_database_error()
+        && let Some(pg) = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+        && let Some(sqlx::postgres::PgErrorPosition::Original(position)) = pg.position()
+        && let Some(offset) = byte_offset_for_char(sql, position)
+    {
+        mapped = mapped.with_position(offset);
+    }
+    CoreError::database(mapped)
 }
 
 fn postgres_rows_to_arrow(

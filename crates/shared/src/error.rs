@@ -198,6 +198,10 @@ pub enum DatabaseError {
     Query {
         sql: String,
         reason: String,
+        /// 出错位置：**0 基的字节偏移**，相对 `sql`（B6 用它把光标送到出错处）
+        ///
+        /// 各家数据库报的是 1 基的**字符**位置，驱动负责换算
+        /// （`driver::utils::byte_offset_for_char`）；拿不到就是 `None`。
         position: Option<usize>,
     },
 
@@ -256,6 +260,7 @@ impl DatabaseError {
         }
     }
 
+    /// 附上出错位置（**0 基字节偏移**，相对 `sql`；调用方已换算好）
     pub fn with_position(mut self, pos: usize) -> Self {
         if let DatabaseError::Query { position, .. } = &mut self {
             *position = Some(pos);

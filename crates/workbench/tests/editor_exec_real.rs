@@ -270,6 +270,27 @@ fn run_one(shared: &EditorShared, document: DocumentId, sql: &str) -> editor::st
     run_with_options(shared, document, sql, RunOptions::default()).0
 }
 
+/// 跑一句**允许失败**的语句（B6 要看驱动真实的错误文本）
+fn run_one_allowing_failure(
+    shared: &EditorShared,
+    document: DocumentId,
+    sql: &str,
+) -> editor::store::ResultEntry {
+    shared
+        .submit(
+            document,
+            &ExecTarget::Statement(sql.to_string()),
+            ResultPlacement::Replace,
+            RunOptions::default(),
+        )
+        .expect("提交执行");
+    collect_with_snapshots(shared, 1)
+        .into_iter()
+        .next()
+        .expect("有结果回填")
+        .0
+}
+
 /// `SELECT count(*)` 的整数值（界面拿到的就是字符串，这里转回数字断言）
 fn count_rows(shared: &EditorShared, document: DocumentId, table: &str) -> i64 {
     let entry = run_one(
@@ -558,6 +579,33 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             target.driver,
             deleted.affected_rows
         );
+        // B6：故意写错列名 —— 真机上回的错误文本要能被定位到**那个词**
+        // （定位靠 `editor::diagnostics`：PG 走结构化位置，其余驱动从文本里认）
+        // 这一步要在 `DROP TABLE` **之前**：表还在，服务器才会去查列名
+        let bad_column = format!("SELECT no_such_column_xyz FROM {affected_table}");
+        let failed = run_one_allowing_failure(&shared, document.clone(), &bad_column);
+        let error_text = failed.error.clone().unwrap_or_default();
+        assert!(
+            failed.error.is_some(),
+            "{}：写错列名却没报错？—— {bad_column}",
+            target.driver
+        );
+        let site = editor::diagnostics::site_in_document(&bad_column, &bad_column, &error_text)
+            .unwrap_or_else(|| panic!("{}：错误文本没能定位 —— {error_text}", target.driver));
+        assert_eq!(
+            &bad_column[site.range()],
+            "no_such_column_xyz",
+            "{}：定位到的应当是写错的那个列名（{}）—— {error_text}",
+            target.driver,
+            site.location_text()
+        );
+        eprintln!(
+            "✅ {}：错误定位 —— {}（{}）",
+            target.driver,
+            site.location_text(),
+            site.token.as_deref().unwrap_or("?")
+        );
+
         run_one(
             &shared,
             document.clone(),

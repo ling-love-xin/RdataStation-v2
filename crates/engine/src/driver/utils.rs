@@ -326,6 +326,20 @@ pub fn parse_driver_id(url: &str) -> Option<&str> {
     }
 }
 
+/// 1 基的**字符**位置（数据库常这么报）→ SQL 里的**字节**偏移
+///
+/// PG 协议的 `position` 字段就是「第 1 个字符是 1、按字符数」；而编辑器内核按字节收
+/// 区间，所以两边要换算。越界（有的驱动给的数字超出语句长度）返回 `None`——
+/// 宁可没有位置，也不要一个错位置。
+pub fn byte_offset_for_char(sql: &str, one_based_char: usize) -> Option<usize> {
+    if one_based_char == 0 {
+        return None;
+    }
+    sql.char_indices()
+        .nth(one_based_char - 1)
+        .map(|(offset, _)| offset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{affected_rows_result, returns_rows};
@@ -389,6 +403,21 @@ mod tests {
         assert!(!returns_rows("-- 备注\nDELETE FROM t"));
         assert!(!returns_rows("/* a */ /* b */ UPDATE t SET a = 1"));
         assert!(!returns_rows("-- 只有注释"));
+    }
+
+    /// 1 基字符位置 → 字节偏移（含多字节字符与越界）
+    #[test]
+    fn char_positions_convert_to_byte_offsets() {
+        use super::byte_offset_for_char;
+
+        assert_eq!(byte_offset_for_char("select 1", 1), Some(0));
+        assert_eq!(byte_offset_for_char("select 1", 8), Some(7));
+        // 越界返回 None，不钳到末尾（那样定位会指到错的地方）
+        assert_eq!(byte_offset_for_char("select 1", 9), None);
+        assert_eq!(byte_offset_for_char("select 1", 0), None);
+        // 多字节：第 8 个**字符**是 `名`，字节偏移 7
+        assert_eq!(byte_offset_for_char("select 名", 8), Some(7));
+        assert_eq!(byte_offset_for_char("select 名", 9), None);
     }
 
     /// 影响行数超过 u32 上限时饱和，不假装是精确值

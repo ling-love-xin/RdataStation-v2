@@ -73,6 +73,7 @@
 
 pub mod commands;
 pub mod connection;
+pub mod diagnostics;
 pub mod edit;
 pub mod execution;
 pub mod limits;

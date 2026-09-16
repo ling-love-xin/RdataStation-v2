@@ -685,6 +685,28 @@ fn shared_with_toolbar_runner(content: &str) -> (EditorShared, DocumentId) {
     (shared, id)
 }
 
+/// 假执行器（B6）：回一条**带位置**的真实格式错误（SQLite 的 `no such column: x`）
+///
+/// 文本用真机抓到的形态之一（另一种是 `near "x": syntax error in … at offset N`）。
+struct LocatedFailureRunner;
+
+impl QueryRunner for LocatedFailureRunner {
+    fn run(&self, _connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+        if sql.contains("wheree") {
+            return Err(format!(
+                "[DB_QUERY] Query failed: no such column: wheree (SQL: {sql})"
+            ));
+        }
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows: vec![vec!["1".to_string()]],
+            elapsed_ms: 1,
+            truncated: false,
+            affected_rows: None,
+        })
+    }
+}
+
 /// 跑一句话并等回填（B5 用：结果工具栏要真的跟着结果变）
 fn run_statement(
     cx: &mut VisualTestContext,

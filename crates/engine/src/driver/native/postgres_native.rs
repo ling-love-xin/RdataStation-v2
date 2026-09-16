@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::driver::traits::MetadataBrowser;
-use crate::driver::utils::{affected_rows_result, returns_rows};
+use crate::driver::utils::{affected_rows_result, byte_offset_for_char, returns_rows};
 use crate::driver::{
     ColumnDetail, ConstraintDetail, DataSourceMeta, Database, IndexDetail, NodeDetail, NodeInfo,
     PoolStatus, SchemaObject, SchemaObjectKind, Transaction,
@@ -129,8 +129,40 @@ async fn execute_writing(
     let affected = client
         .execute(sql, &[])
         .await
-        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+        .map_err(|e| query_error(sql, e))?;
     Ok(affected_rows_result(affected))
+}
+
+/// tokio-postgres 错误 → 引擎错误（**把服务器说的话原样带出来**，B6）
+///
+/// `tokio_postgres::Error` 的 `Display` 只有 “db error” 这种看不出所以然的话；真正的消息
+/// （+ `DETAIL` / `HINT`）在 `as_db_error()` 里。错误文本是用户唯一能看到的线索，
+/// 不能只剩 “db error”。
+///
+/// 位置同理：`ErrorPosition::Original` 是 **1 基的字符位置**（PG 协议定义），
+/// 换算成 SQL 的**字节偏移**给上层用；`Internal` 说的是服务器自己生成的语句，与我们
+/// 的 SQL 无关，不能用。
+fn query_error(sql: &str, error: tokio_postgres::Error) -> CoreError {
+    let Some(db) = error.as_db_error() else {
+        // 不是数据库报的错（IO / 连接断了）：原样带上
+        return CoreError::database(DatabaseError::query(sql, error.to_string()));
+    };
+
+    let mut reason = db.message().to_string();
+    if let Some(detail) = db.detail() {
+        reason.push_str(&format!("（{detail}）"));
+    }
+    if let Some(hint) = db.hint() {
+        reason.push_str(&format!("；建议：{hint}"));
+    }
+
+    let mut mapped = DatabaseError::query(sql, reason);
+    if let Some(tokio_postgres::error::ErrorPosition::Original(position)) = db.position()
+        && let Some(offset) = byte_offset_for_char(sql, *position as usize)
+    {
+        mapped = mapped.with_position(offset);
+    }
+    CoreError::database(mapped)
 }
 
 // ============================================================================
@@ -371,7 +403,7 @@ impl Database for PostgresNativeDatabase {
         let rows = client
             .query(sql, &[])
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
             return Ok(QueryResult {
@@ -428,7 +460,7 @@ impl Database for PostgresNativeDatabase {
         let rows = client
             .query(sql, &param_refs)
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
             return Ok(QueryResult {
@@ -469,7 +501,7 @@ impl Database for PostgresNativeDatabase {
                 let rows = guard
                     .query(&sql_owned, &[])
                     .await
-                    .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+                    .map_err(|e| query_error(&sql_owned, e))?;
 
                 if rows.is_empty() {
                     return Ok(QueryResult {
@@ -703,7 +735,7 @@ impl Transaction for PostgresNativeTransaction {
         let rows = client
             .query(sql, &[])
             .await
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| query_error(sql, e))?;
 
         if rows.is_empty() {
             return Ok(QueryResult {

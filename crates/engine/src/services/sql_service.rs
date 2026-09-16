@@ -492,7 +492,21 @@ impl SqlService {
         &self,
         conn_id: Option<String>,
     ) -> Result<TransactionStatusResult, CoreError> {
-        Ok(self.transaction_status(&self.conn_key_for(&conn_id).await?).await)
+        // 状态查询不该因为「没有连接」而报错：没有连接 = **没有事务**，这就是完整答案。
+        // 开事务 / 回滚不一样——它们非要一条连接不可，所以照旧报 NoActiveConnection。
+        let key = match self.conn_key_for(&conn_id).await {
+            Ok(key) => key,
+            Err(_) if conn_id.is_none() => {
+                return Ok(TransactionStatusResult {
+                    conn_id: DEFAULT_CONN_KEY.to_string(),
+                    is_in_transaction: false,
+                    transaction_start_time_ms: None,
+                    transaction_duration_ms: None,
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(self.transaction_status(&key).await)
     }
 
     /// 事务等接口要的**真实连接 id**：`None` → 当前活动连接

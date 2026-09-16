@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 
+use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity, Position};
 use gpui_kit::base::{StyledExt as _, resizable_panel, v_resizable};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
@@ -21,6 +22,7 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::*;
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
+use crate::diagnostics;
 use crate::edit;
 use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
 use crate::mode::{self, CellGranularity};
@@ -88,6 +90,15 @@ pub struct EditorHostPanel {
     result_truncated_hint: Option<String>,
     /// 【B5】当前选中结果集的来源连接文案（`●P·orders`；`None` = 当时未绑定 / 认不出）
     result_connection_text: Option<String>,
+    /// 【B6】当前选中结果集定位到的出错处（诊断范围 + 状态栏里的位置文案读它）
+    error_site: Option<diagnostics::ErrorSite>,
+    /// 【B6】上一次算过的位置是哪条结论（`(这次跑的 SQL, 错误文本)`）
+    ///
+    /// 位置要拿整篇文档做匹配，而 `sync_result_view` 会被反复调用（回填 / 切标签），
+    /// 所以只在结论变了的时候重算。
+    error_site_key: Option<(String, String)>,
+    /// 面板所在窗口（构造时存下：出错回填发生在没有窗口的轮询里，聚焦要用）
+    window: AnyWindowHandle,
     /// 【B5】结果区高度（rem；拖拽分栏后记在这里，下一次渲染用它当初始尺寸）
     ///
     /// 只活在这个面板里（尚未随会话持久化——原型同。）
@@ -188,6 +199,9 @@ impl EditorHostPanel {
             result_can_copy: false,
             result_truncated_hint: None,
             result_connection_text: None,
+            error_site: None,
+            error_site_key: None,
+            window: window.window_handle(),
             result_height: std::rc::Rc::new(std::cell::Cell::new(ui::RESULT_PANE_HEIGHT)),
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
@@ -976,6 +990,15 @@ impl EditorHostPanel {
         self.with_document(|doc| doc.tier_notice()).flatten()
     }
 
+    /// 【B6】编辑内核里的诊断条数（错误回填画了没有）
+    pub fn diagnostics_for_test(&self, cx: &App) -> usize {
+        self.editor
+            .read(cx)
+            .diagnostics()
+            .map(|set| set.len())
+            .unwrap_or(0)
+    }
+
     /// 结果工具栏的四块真实状态（供测试断言：截断提示 / 可复制 / 可重跑的 SQL / 来源连接）
     pub fn result_toolbar_for_test(
         &self,
@@ -1086,6 +1109,8 @@ impl EditorHostPanel {
 
         let outcomes = self.shared.drain_exec();
         let mut mine_arrived = 0usize;
+        // 【B6】这一轮新到的失败是哪条语句（回填之后要是有位置就跳过去）
+        let mut fresh_failure: Option<String> = None;
         for outcome in outcomes {
             let is_mine = outcome.document == self.document;
             if is_mine {
@@ -1095,6 +1120,9 @@ impl EditorHostPanel {
             }
             let placement = outcome.placement;
             let entry = entry_from(outcome);
+            if is_mine && entry.failed() {
+                fresh_failure = Some(entry.sql.clone());
+            }
             self.shared.update_results(|store| store.push(entry, placement));
         }
         if mine_arrived > 0 {
@@ -1103,6 +1131,13 @@ impl EditorHostPanel {
                 self.running_since = None;
             }
             self.sync_result_view(cx);
+            // 【B6】失败且能定位：把光标送到出错处并聚焦（拿不到位置就只留原因）
+            if let Some(sql) = fresh_failure
+                && self.result_sql.as_deref() == Some(sql.as_str())
+                && self.error_site.is_some()
+            {
+                self.jump_to_error_site(cx);
+            }
         }
     }
 
@@ -1113,7 +1148,7 @@ impl EditorHostPanel {
     /// 很难靠看界面发现）。
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
-        let (tabs, active, grid_data, failed_text, summary, error, extra) = {
+        let (tabs, active, grid_data, failed_text, summary, failure, extra) = {
             let store = self.shared.results();
             let active = store.active_index(&self.document).unwrap_or(0);
             let entry = store.active(&self.document);
@@ -1127,7 +1162,13 @@ impl EditorHostPanel {
                     .filter(|entry| !entry.has_grid())
                     .map(empty_text),
                 entry.map(ResultEntry::summary),
-                entry.and_then(|entry| entry.error.clone()),
+                // 【B6】失败才谈得上定位：把「哪条 SQL + 什么错误」一起带出去
+                entry.and_then(|entry| {
+                    entry
+                        .error
+                        .as_ref()
+                        .map(|error| (entry.sql.clone(), error.clone()))
+                }),
                 entry.map(|entry| {
                     (
                         entry.sql.clone(),
@@ -1160,8 +1201,75 @@ impl EditorHostPanel {
             state.refresh(cx);
         });
 
-        // 失败原因同时进状态栏（结果区可能被滚出视野）；选中成功的那份则清掉旧提示
-        self.set_message(error, cx);
+        // 【B6】定位：结论没变就不重算（要拿整篇文档做匹配，而这里会被反复调用）
+        let site = match &failure {
+            Some((sql, error)) => {
+                let key = (sql.clone(), error.clone());
+                if self.error_site_key.as_ref() == Some(&key) {
+                    self.error_site.clone()
+                } else {
+                    let document = self.editor_text(cx);
+                    let site = diagnostics::site_in_document(&document, sql, error);
+                    self.error_site_key = Some(key);
+                    site
+                }
+            }
+            None => {
+                self.error_site_key = None;
+                None
+            }
+        };
+        self.error_site = site;
+        let reason = failure.map(|(_, error)| error);
+        self.apply_error_marks(reason.clone(), cx);
+
+        // 失败原因同时进状态栏（结果区可能被滚出视野）；选中成功的那份则清掉旧提示。
+        // 【B6】能定位的失败把位置一并说出来（“第 3 行 第 15 列”——用户能直接去那儿看）
+        let message = reason.map(|error| match &self.error_site {
+            Some(site) => format!("{error}（{}）", site.location_text()),
+            None => error,
+        });
+        self.set_message(message, cx);
+    }
+
+    /// 【B6】把出错范围画进编辑内核（行内高亮 + 悬停弹层；没有位置就只清旧的）
+    fn apply_error_marks(&mut self, reason: Option<String>, cx: &mut Context<Self>) {
+        let site = self.error_site.clone();
+        self.editor.update(cx, |state, cx| {
+            let Some(diagnostics) = state.diagnostics_mut() else {
+                return;
+            };
+            diagnostics.clear();
+            if let (Some(site), Some(reason)) = (site, reason) {
+                let (end_line, end_column) = site.end();
+                let range = Position::new(site.line.saturating_sub(1) as u32, site.column.saturating_sub(1) as u32)
+                    ..Position::new(end_line.saturating_sub(1) as u32, end_column.saturating_sub(1) as u32);
+                diagnostics.push(
+                    Diagnostic::new(range, reason)
+                        .with_severity(DiagnosticSeverity::Error)
+                        .with_source("执行"),
+                );
+            }
+            cx.notify();
+        });
+    }
+
+    /// 【B6】把光标送到出错处并聚焦
+    ///
+    /// 回填发生在没有窗口的轮询里，所以用构造时存下的窗口句柄；窗口已经没了就只当没这一步
+    /// （光标已经挪到出错处，_位置_ 已经给出）——不 panic。
+    fn jump_to_error_site(&mut self, cx: &mut Context<Self>) {
+        let Some(site) = self.error_site.clone() else {
+            return;
+        };
+        let range = site.range();
+        let editor = self.editor.clone();
+        let _ = self.window.update(cx, |_view, window, app| {
+            editor.update(app, |state, cx| {
+                state.set_selected_range(range, cx);
+                state.focus(window, cx);
+            });
+        });
     }
 
     /// 【B5】复制当前结果集（TSV）
