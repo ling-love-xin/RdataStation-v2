@@ -11,7 +11,7 @@
 //! 2. **写只走 `SettingsService::apply_by_key`**（唯一写入者）：页面不直接改 model，也不落盘。
 //! 3. **render 是纯读路径**：不读盘、不写盘、不改状态；副作用只在事件路径（点击 / 输入）。
 //!
-//! 「缓存管理…」是**动作行**（不是设置项：没有 key / 默认值 / 生效方式），
+//! 「缓存管理…」与「打开日志目录」是**动作行**（不是设置项：没有 key / 默认值 / 生效方式），
 //! 因此不在登记表里，由页面按节硬编码一行，副作用经宿主桥 `SettingsHost` 回调。
 
 use std::rc::Rc;
@@ -45,6 +45,10 @@ pub struct SettingsHost {
     pub on_close: Rc<dyn Fn(&mut App)>,
     /// 打开「缓存管理」对话框（宿主实现）。
     pub on_open_cache: Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 打开日志目录（宿主实现；设置层不依赖 engine / opener，只负责回调）。
+    pub on_open_log_dir: Rc<dyn Fn(&mut Window, &mut App)>,
+    /// 打开日志查看对话框（宿主实现）。
+    pub on_open_log_view: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 /// 设置页实体（宿主把本实体放在 overlay 层渲染）。
@@ -284,9 +288,40 @@ impl SettingsPage {
         for (i, spec) in rows.iter().enumerate() {
             card = card.child(self.render_row(spec, None, i == last, cx));
         }
-        // 动作行（不是设置项，见文件头注释）：只在「数据源导航」节出现。
-        if active == "navigator" {
-            card = card.child(self.render_action_row(cx));
+        // 动作行（不是设置项，见文件头注释）：按节挂宿主提供的副作用。
+        match active {
+            "navigator" => {
+                let on_click = self.host.on_open_cache.clone();
+                card = card.child(self.render_action_row(
+                    "缓存",
+                    "动作行（不是设置项）：打开缓存对话框，清理元数据缓存",
+                    "缓存管理…",
+                    "settings-open-cache",
+                    on_click,
+                    cx,
+                ));
+            }
+            "logging" => {
+                let on_view = self.host.on_open_log_view.clone();
+                card = card.child(self.render_action_row(
+                    "查看日志",
+                    "动作行（不是设置项）：打开日志查看对话框（最近 500 条，可按级别与关键字筛）",
+                    "查看日志…",
+                    "settings-open-log-view",
+                    on_view,
+                    cx,
+                ));
+                let on_dir = self.host.on_open_log_dir.clone();
+                card = card.child(self.render_action_row(
+                    "日志目录",
+                    "动作行（不是设置项）：在系统文件管理器里打开日志所在目录",
+                    "打开日志目录",
+                    "settings-open-log-dir",
+                    on_dir,
+                    cx,
+                ));
+            }
+            _ => {}
         }
 
         div()
@@ -458,7 +493,17 @@ impl SettingsPage {
     }
 
     /// 动作行（不是设置项）：跳转到宿主提供的副作用。
-    fn render_action_row(&self, cx: &Context<Self>) -> Div {
+    ///
+    /// `label` / `hint` 是左侧说明，`button` 是右侧按钮文案，`id` 作元素 id。
+    fn render_action_row(
+        &self,
+        label: &'static str,
+        hint: &'static str,
+        button: &'static str,
+        id: &'static str,
+        on_click: Rc<dyn Fn(&mut Window, &mut App)>,
+        cx: &Context<Self>,
+    ) -> Div {
         let theme = cx.theme().clone();
         div()
             .h_flex()
@@ -478,14 +523,14 @@ impl SettingsPage {
                         div()
                             .text_sm()
                             .text_color(theme.colors.foreground)
-                            .child("缓存"),
+                            .child(label),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_ellipsis()
                             .text_color(theme.colors.muted_foreground)
-                            .child("动作行（不是设置项）：打开缓存对话框，清理元数据缓存"),
+                            .child(hint),
                     ),
             )
             .child(
@@ -496,14 +541,11 @@ impl SettingsPage {
                     .items_center()
                     .justify_end()
                     .child(
-                        Button::new("settings-open-cache")
+                        Button::new(id)
                             .ghost()
                             .small()
-                            .label("缓存管理…")
-                            .on_click({
-                                let on_open_cache = self.host.on_open_cache.clone();
-                                move |_, window, app| on_open_cache(window, app)
-                            }),
+                            .label(button)
+                            .on_click(move |_, window, app| on_click(window, app)),
                     ),
             )
     }
@@ -886,6 +928,8 @@ mod tests {
         let host = super::SettingsHost {
             on_close: Rc::new(|_| {}),
             on_open_cache: Rc::new(|_, _| {}),
+            on_open_log_dir: Rc::new(|_, _| {}),
+            on_open_log_view: Rc::new(|_, _| {}),
         };
         let (page, cx) = cx.add_window_view(|window, cx| super::SettingsPage::new(window, host, cx));
 

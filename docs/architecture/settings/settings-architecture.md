@@ -136,9 +136,11 @@ graph TD
 | `projects.sort_mode` | 项目 | enum `last_opened`/`name`/`created` | `last_opened` | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写） | 两者 | ✅ 已落地（页面行待落地） |
 | `connection_defaults.connect_timeout_ms` | 连接默认值 | u64（ms） | `15000` | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` | 设置页 | ✅ 已落地 |
 | `connection_defaults.lan_disable_tls` | 连接默认值 | bool | `true` | 下次操作 | `connection_service.rs::apply_lan_tls_default` | 设置页 | ✅ 已落地 |
+| `logging.min_level` | 日志 | enum `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR` | `INFO` | 即时 | `crates/app/src/main.rs`（启动取值）；运行时经装配层注册的 sink → `engine::logging::reload_log_level` | 设置页（另有「查看日志…」/「打开日志目录」两个动作行） | ✅ 已落地（2026-09-16） |
 | `resources.keep_versions` | 分析资产 | i32（`0` = 只留元数据；`-1` = 全留） | `5` | 下次归档 | `analytics_resource/src/service.rs`（现为常量 `DEFAULT_KEEP_VERSIONS`） | 设置页 | ⬜ 待 M6 P2.4 接线 |
 
 > 命名约定：JSON 字段一律 **snake_case**（与现有 `theme_mode` / `source_short_code` / `sort_mode` 一致）。M6 文档里写的 `resources.keepVersions` 是同一项的早期命名，落地时以本表为准并同步 M6 文档。
+> **设置层不依赖 `engine`**：`logging.min_level` 在设置侧是独立的 `LogMinLevel`（同词表），改级别后的“重载日志系统”由装配层（`crates/app`）注册的 sink 完成——反向依赖会把双引擎拖进设置层的依赖图。
 > `navigator.filters` 是**复合值**（4 个可选筛选项打包），登记为一项；若将来拆成多个独立开关，需重新过准入五条。
 > **代码侧权威是 `crates/settings/src/registry.rs`**（`SettingSpec` / `REGISTRY` / `sections()` / `page_rows()` + **`Slot` 分发表**（`slot_for` / `slot_kind` / `slot_is_scalar`）+ `presets` + 11 项契约测试）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
 > **唯一读写路径**：页面对某项的"读当前值 / 写新值 / 判是否偏离默认"全部走 `lib.rs::{value_by_key, apply_by_key}`（按 `Slot` 分发）；页面不直接碰 model 字段，也不落盘。新增项的接入首续：登记 → 模型 → 槽位 → 消费方 → 文档表。

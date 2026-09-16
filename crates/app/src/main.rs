@@ -76,6 +76,20 @@ fn run_app() {
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
+            // 日志级别变更的出口：设置层与 engine 互不依赖（依赖只向下），装配点在这里。
+            // 设置页改级别 → 落盘 + 调这个 sink → 日志系统 reload（即时生效，不用重启）。
+            settings::install_log_level_sink(|level| {
+                if let Err(e) = engine::reload_log_level(level.as_str()) {
+                    eprintln!("[startup] 日志级别切换失败: {e}");
+                }
+            });
+            // 退出前把最后一批日志落库：库侧是"每 100 条或每 1 秒"批量提交，
+            // 不等这一下，关窗口前最后 1 秒的记录就没了。
+            // `Subscription` **一 drop 就退订**（gpui 语义），所以必须 forget —— 钩子要活到进程结束。
+            std::mem::forget(cx.on_app_quit(|_cx| async {
+                let _ = engine::flush_logs().await;
+            }));
+
             // 0. 全局系统库（global.db / analytics.duckdb）：M3 连接、M4 元数据
             //    与工作台列表的共同持久化根，必须在任何 Feature 读取前完成初始化。
             init_global_system();
@@ -229,8 +243,17 @@ fn init_global_system() {
 
     // 日志接线：库层要写全局库的 `app_logs` 表、并起一个异步消费者任务，
     // 所以只能排在全局库建立之后。`runtime.enter()` 给当前线程挂上运行时上下文。
+    //
+    // 级别/保留期从**设置**里读（此刻 `SettingsService::init` 还没跑——设置页尚未创建，
+    // 直接读盘即可；之后用户在设置页改级别时由装配层注册的 sink 走 reload，不走这里）。
+    let saved = settings::load_settings();
+    let log_config = engine::LogConfig {
+        min_level: engine::LogLevel::parse_level(saved.logging.min_level.as_str())
+            .unwrap_or(engine::LogLevel::Info),
+        ..engine::LogConfig::default()
+    };
     let _in_runtime = runtime.enter();
-    match engine::init_app_logging() {
+    match engine::init_app_logging(&log_config) {
         Ok(handle) => {
             let _ = LOG_CONSUMER.set(handle);
             // 订阅者是刚挂上的：这之前的日志（含全局库初始化的结果）在这里补记一条，
@@ -242,6 +265,7 @@ fn init_global_system() {
             tracing::info!(
                 data_root = %paths::home().display(),
                 origin = paths::home_origin().label(),
+                level = log_config.min_level.as_str(),
                 "日志系统已启用"
             );
         }

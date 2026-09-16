@@ -168,6 +168,21 @@ pub const DIALOG_STATUS_DOT_SIZE: f32 = 0.4375;
 /// 短码徽标圆角（0.125rem = 2px）；横向内距用 Tailwind 尺度 `px_1()`（契约禁止 `.px(...)` 字面量）
 pub const DIALOG_CHIP_RADIUS: f32 = 0.125;
 
+// ===== 日志对话框（日志系统的读路径）专用尺寸 =====
+//
+// 日志查看是**只读快照 + 手动刷新**（没有自动轮询），尺寸只需要三件事：
+// 列表的滞高上限、以及时间 / 级别两列的定宽（定宽才能让消息列对齐）。
+// 形态与口径：`docs/architecture/runtime/logging.md`。
+
+/// 日志列表滚动高度上限（22.5rem = 360px；条目少时按内容高度，不撑空）
+pub const DIALOG_LOG_LIST_MAX_HEIGHT: f32 = 22.5;
+/// 时间列定宽（3.75rem = 60px：`HH:MM:SS`）
+pub const DIALOG_LOG_TIME_WIDTH: f32 = 3.75;
+/// 级别列定宽（3.25rem = 52px：`ERROR` 最宽，定宽让消息列对齐）
+pub const DIALOG_LOG_LEVEL_WIDTH: f32 = 3.25;
+/// 模块列定宽（9.75rem = 156px；超长截断，不抢消息列）
+pub const DIALOG_LOG_TARGET_WIDTH: f32 = 9.75;
+
 // ===== 设置页（应用级）专用尺寸（rem 基准；登记在此，视图只引用） =====
 //
 // 设置页是居中模态弹层，两栏 = 分节导航 + 内容区；尺寸自成一套，不与主界面行高混用。

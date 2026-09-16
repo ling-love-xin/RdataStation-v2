@@ -50,7 +50,7 @@
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
 | 两份权威文档 | 原型设计（形态 / 行规格 / 清单）与架构裁决书（D1–D12 / 登记表 / 准入五条 / 退役清单 / 降级矩阵 / K1–K9 / Q1–Q6） | `docs/architecture/settings/settings-prototype-design.md`、`settings-architecture.md`；导航已登记（`docs/architecture/README.md`） |
-| **代码侧登记表** | `SettingSpec`（key / 节 / 标签 / 说明 / 形态 / 默认值 / 生效方式 / 入口 / 消费方）+ `REGISTRY` 9 项 + `sections()` / `page_rows()` 供页面直接消费 | `crates/settings/src/registry.rs`（新增） |
+| **代码侧登记表** | `SettingSpec`（key / 节 / 标签 / 说明 / 形态 / 默认值 / 生效方式 / 入口 / 消费方）+ `REGISTRY` 10 项 + `sections()` / `page_rows()` 供页面直接消费 | `crates/settings/src/registry.rs`（新增） |
 | **契约测试 6 项**（准入护栏） | 登记项必须存在于模型 · **模型叶子必须登记** · 默认值一致 · 枚举默认值在候选内 · 两态文案完整 · 登记表卫生 + 节相邻 + page_rows 分类一致 | 同文件 `#[cfg(test)]` |
 | **裁撤 7 个无生产者字段** | 删 `general`（language / restore_last_workspace）、`engine`（workspace_dir / cache_dir）两整节、`appearance.font_size`、`connection_defaults.{default_driver, query_timeout_ms}` | `crates/settings/src/model.rs` |
 | 视图同步 | 删对应界面行（界面语言 / 工作区目录 / 默认数据源 / 查询超时）与死掉的 `value_text`；现有形态收敛为三节（外观 / 数据源导航 / 连接默认值） | `crates/settings/src/settings_view.rs` |
@@ -65,7 +65,7 @@
 | --- | --- | --- |
 | 模型与持久化 | `Settings` 4 节 + `settings.json`（`<RDS_HOME>/config`，2026-09-16 起经 `paths::config_dir()` 解析）；缺失 / 坏文件回退默认；**原子写 + 失败可见**（错误槽 → 页面提示） | K5 已关闭（不再回退临时目录） |
 | 服务与命令 | `SettingsService`（init / get / 9 个 `set_*` / 主题切换）、进程级连接默认值快照 | 构造期直读 2 处（K1）；`ToggleThemeMode` 未接线（K8） |
-| 登记表（准入） | ✅ `registry.rs`：`REGISTRY` 9 项 + `Slot` 分发表 + `presets` + **11 项契约测试** | 待接线项（M6 `keep_versions`）还未入表（按设计如此） |
+| 登记表（准入） | ✅ `registry.rs`：`REGISTRY` 10 项 + `Slot` 分发表 + `presets` + **11 项契约测试** | 待接线项（M6 `keep_versions`）还未入表（按设计如此） |
 | 页面形态 | ✅ 两栏实体已**接到工作台**（P1.6：`SettingsPage` 替下旧单列视图） | `↺` 的 hover 卡未接；键盘输入路径无自动化覆盖（K10） |
 | 宿主接线 | 工作台 overlay 懒创建 `SettingsPage` + `SettingsHost` 宿主桥 | 互斥 / `Esc` / `Ctrl+F` / 契约扫描均已完成（P3.1–P3.4） |
 | 契约扫描 | ✅ 颜色 + **尺寸**扫描均含 `settings_page.rs`；8 个 `SETTINGS_*` 数值进契约 1 | — |
@@ -160,7 +160,7 @@
 
 ```bash
 # 5.1 本 crate（契约测试 + 模型兼容）
-cargo test -p rds-settings            # ✅ 22 项全绿（含 11 项登记表/槽位契约 + 1 项窗口冒烟）
+cargo test -p rds-settings            # ✅ 21 项全绿（含 11 项登记表/槽位契约 + 1 项窗口冒烟）
 
 # 5.2 宿主与视图契约（尺寸 / 颜色扫描 + 边栏状态机）
 cargo test -p rds-workbench --test ui_contract

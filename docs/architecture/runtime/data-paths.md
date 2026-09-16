@@ -90,7 +90,7 @@ paths::extensions_dir()  // home/extensions
 | 测试大量用 `env::temp_dir()`（各 crate 的 `rds_*` 前缀临时目录） | **测试代码不改**（不引入 `set_var`），而是由 `.cargo/config.toml` 把 `TEMP`/`TMP`/`TMPDIR` 钉到 `<repo>/.rds/tmp`（**必须 `force = true`**：`[env]` 默认不覆盖环境里已存在的变量，而 `TEMP` 天生就存在）——一行代码不改，测试垃圾就从系统盘挪到仓库内。历史积压用 `tools/clean-temp.sh` 清（默认 dry-run） |
 | 测试与风险 | 实际做法 |
 | --- | --- |
-| **测试会往产品数据根写**：开发机上跑 `cargo test` 会在 `<repo>/.rds/data` 落 `encryption-salt` / `machine-id` / `sql_history.json` 与空目录（测试调用的是产品代码里的全局便捷路径） | 密钥类文件由迁移的**覆盖例外**兜住（§10.1）；其余是无害残留。想彻底干净就在首次真机启动前删掉整个 `.rds/` 重建（目录会自动重建并触发迁移） |
+| **测试会往产品数据根写**：开发机上跑 `cargo test` 会在 `<repo>/.rds/data` 落 `encryption-salt` / `machine-id` / `sql_history.json`，以及**只有测试表的 `system/global.db`**（草稿存储的默认落点就是产品路径，某些对话框测试没注入 `set_db_path_override`） | 密钥类文件由迁移的**覆盖例外**兜住（§10.1）；`global.db` / `sql_history.json` **不会**被覆盖（迁移是只补不盖）——它们会遮住真数据。所以在真机启动前跑一次清理：删掉 `<repo>/.rds/data` 下这些测试产物（或删整个 `.rds/` 重建），让迁移把真数据带进来 |
 | DuckDB spill 放到项目盘影响性能 | `RDS_TEMP_DIR` 单独覆盖；文档写明取舍 |
 | 安装到 `Program Files`（目录不可写） | 启动探测可写性 → 回退 `%LOCALAPPDATA%/RdataStation` + 日志提示 |
 | 开发时 `cargo clean` 清掉数据 | 已解决：`.cargo/config.toml` 把开发期的 `RDS_HOME` 钉到 `<repo>/.rds`（§10.1） |

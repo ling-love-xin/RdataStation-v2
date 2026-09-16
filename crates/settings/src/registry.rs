@@ -29,7 +29,10 @@ pub enum SettingKind {
         on: &'static str,
         off: &'static str,
     },
-    /// 枚举（页面用分段控件 ≤ 4 项，多于此用下拉）；元素为 `(落盘值, 显示名)`。
+    /// 枚举（页面用分段控件；元素为 `(落盘值, 显示名)`）。
+    ///
+    /// 当前页面**一律用分段控件**（≤ 4 项最舒展，5 项也能放下）；条目更多时
+    /// 再引入下拉，别在这里写"超过 N 项换控件"的愿望——页面不会读这句话。
     Enum(&'static [(&'static str, &'static str)]),
     /// 数值（页面用输入框 + 校验）。
     Number,
@@ -110,6 +113,7 @@ pub enum Slot {
     ConnectTimeoutMs,
     LanDisableTls,
     ProjectSortMode,
+    LogMinLevel,
 }
 
 /// key → 槽位（登记项都必须有槽位；由契约测试保证）。
@@ -124,6 +128,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "connection_defaults.connect_timeout_ms" => Slot::ConnectTimeoutMs,
         "connection_defaults.lan_disable_tls" => Slot::LanDisableTls,
         "projects.sort_mode" => Slot::ProjectSortMode,
+        "logging.min_level" => Slot::LogMinLevel,
         _ => return None,
     })
 }
@@ -138,6 +143,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::NavigatorFilters => KindTag::Composite,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
+        Slot::LogMinLevel => KindTag::Enum,
     }
 }
 
@@ -218,7 +224,7 @@ impl SettingSpec {
 
 /// 设置项登记表（已落地项；顺序 = 页面上的顺序）。
 ///
-/// 节顺序：外观 → 数据源导航 → 连接默认值 → 项目。
+/// 节顺序：外观 → 数据源导航 → 连接默认值 → 项目 → 日志。
 pub const REGISTRY: &[SettingSpec] = &[
     SettingSpec {
         key: "appearance.theme_mode",
@@ -354,6 +360,26 @@ pub const REGISTRY: &[SettingSpec] = &[
         effect: SettingEffect::NextUse,
         entry: SettingEntry::Both,
         consumer: "workbench/src/view.rs::WorkbenchView::new（读）+ components/project_host.rs（写）",
+        composite: false,
+    },
+    SettingSpec {
+        key: "logging.min_level",
+        section: "logging",
+        section_label: "日志",
+        label: "日志级别",
+        hint: "低于该级别的记录不写文件也不落库（改完立即生效；排障时可临时调成 DEBUG）",
+        kind: SettingKind::Enum(&[
+            ("TRACE", "TRACE"),
+            ("DEBUG", "DEBUG"),
+            ("INFO", "INFO"),
+            ("WARN", "WARN"),
+            ("ERROR", "ERROR"),
+        ]),
+        presets: &[],
+        default_json: "\"INFO\"",
+        effect: SettingEffect::Immediate,
+        entry: SettingEntry::Page,
+        consumer: "crates/app/src/main.rs（启动取值）+ engine::logging::reload_log_level（运行时，经装配层注册的 sink）",
         composite: false,
     },
 ];

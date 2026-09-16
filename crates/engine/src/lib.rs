@@ -68,8 +68,10 @@ pub use cache::{
 // 重新导出日志模块
 pub use logging::{
     config::LogConfig,
+    flush_logs,
     init_app_logging,
     record::{LogLevel, LogLevelCounts, LogPage, LogQuery, LogRecord, LogStats, TargetStat},
+    reload_log_level,
 };
 
 // 重新导出 SQL 服务（查询执行链）

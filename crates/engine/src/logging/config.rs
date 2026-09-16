@@ -25,6 +25,11 @@ pub struct LogConfig {
     pub log_dir: PathBuf,
     /// 日志文件保留天数
     pub retention_days: u32,
+    /// **单个日志文件上限**（字节）。超过后本进程不再往文件写（只补一行说明），
+    /// 库与 stderr 照常——防的是日志风暴在一天内把盘写爆（按天滚动不能防这个）。
+    pub max_file_bytes: u64,
+    /// **日志目录总配额**（字节）。启动清理时在"过期删"之后再过一遍"超配额按最旧删"。
+    pub max_dir_bytes: u64,
     /// 数据库最大记录数（超过后清理旧记录）
     pub max_db_records: usize,
 }
@@ -39,6 +44,9 @@ impl Default for LogConfig {
             // 日志目录跟随数据根（`<RDS_HOME>/logs`），不再由调用方各自传
             log_dir: paths::log_dir(),
             retention_days: 7,
+            // 16 MiB / 文件、256 MiB / 目录：日常远用不到，只在日志风暴时兜底
+            max_file_bytes: 16 * 1024 * 1024,
+            max_dir_bytes: 256 * 1024 * 1024,
             max_db_records: 100_000,
         }
     }

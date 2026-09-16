@@ -11,25 +11,42 @@
 | 文件 | 按天滚动 `app.YYYY-MM-DD`，**逐行脱敏** | `<RDS_HOME>/logs` |
 | 全局库 | `app_logs` 表（异步批量写，脱敏） | `<RDS_HOME>/data/system/global.db` |
 
-- **过滤**：`RUST_LOG` 优先（`EnvFilter` 语法），否则 `Info`。运行时可用
-  `reload_log_level("debug")` 动态改级别（底层是 `reload` layer 的 handle）。
-- **保留**：文件 7 天（启动时清理过期的 `app.*` 文件）；库 10 万条
-  （`LogConfig::default()` 的 `retention_days` / `max_db_records`）。
+- **过滤**：`RUST_LOG` 优先（`EnvFilter` 语法），否则取**设置页的「日志级别」**
+  （`logging.min_level`，默认 `INFO`）。改设置会即时 reload，不用重启。
+  ⚠ 调到 `DEBUG`/`TRACE` 会把**第三方**的内部日志一起放出来（gpui / globset 之类），
+  量很大、排障时反而难找：想看具体模块用 `RUST_LOG=rds_engine=debug,rds_app=debug`
+  （环境变量优先级高于设置项）。
+- **保留与上限（三道闸）**：
+
+  | 闸 | 默认 | 何时生效 |
+  | --- | --- | --- |
+  | 过期天 | 7 天 | 启动清理：删过期的 `app.YYYY-MM-DD` |
+  | 目录配额 | 256 MiB | 启动清理：过期之后仍超配额 → 从最旧的开始删 |
+  | 单文件上限 | 16 MiB | **写入时**：到顶后本进程不再写文件（只补一行说明），库与 stderr 照常 |
+
+  只有"过期删"挡不住一天内写几个 G（日志风暴），所以写入侧单独卡一道。
+  库侧另有 10 万条上限（`max_db_records`）。
 - **落库是异步的**：`DatabaseLogLayer` 只把记录塞进无界 channel，消费者任务按
-  **每 100 条或每 1 秒** 批量写一次事务。进程被杀时最多丢最后 1 秒的记录。
+  **每 100 条或每 1 秒** 批量写一次事务。因此进程直接退出会丢最后一批——
+  `App::on_app_quit` 里调 `engine::flush_logs()` 把它补上（见 §5）。
 
 ## 2. 启动顺序（这条是有约束的）
 
 ```text
 main()  : install_process_temp_dir → ensure_dirs → migrate_legacy_layout
-run_app : gpui_kit → init_global_system()
+run_app : 注册日志级别 sink（设置 → reload） + on_app_quit（退出前 flush）
+          → gpui_kit → init_global_system()
                         ├─ initialize_global_system()   # 建 global.db、跑迁移（006 建 app_logs）
-                        └─ init_app_logging()           # 挂订阅者 + 起消费者任务
+                        └─ init_app_logging(配置从设置读) # 挂订阅者 + 起消费者任务
           → SettingsService::init → 主题 → 键位
 ```
 
 **为什么必须排在全局库之后**：库层要往 `app_logs` 写，而该表由迁移创建；消费者是
 tokio 任务，需要运行时上下文（`runtime.enter()` 挂上后再 `spawn`）。
+
+**级别从哪来**：`SettingsService::init` 还没跑（设置页尚未创建），所以直接读盘
+（`settings::load_settings()`）构 `LogConfig`；之后用户在设置页改级别时，走装配层注册的
+sink 直接 `reload_log_level`，不重走启动流程。
 
 **代价**：全局库建立之前的日志不落文件也不落库（那时还没有订阅者）。所以启动代码在
 接线之后**补记**一条结果：
@@ -63,28 +80,53 @@ INFO  rds_app: data_root="D:\\...\\.rds" origin="环境变量 RDS_HOME" 日志�
 ## 4. 与 v1 的关系
 
 `v1/docs/backend/LOGGING_MODULE.md` 是参考实现（分层、保留策略、`app_logs` 表结构均沿用）。
-v2 去掉的是 Tauri 侧：v1 通过 command 把日志查给前端，v2 目前没有消费方
-（查询类型 `LogQuery` / `LogPage` / `LogStats` / `TargetStat` 已在 `logging/record.rs` 备好）。
+v2 去掉的是 Tauri 侧：v1 通过 command 把日志查给前端，v2 改用**应用内对话框**（见 §5）。
 
-## 5. 实现位置映射表
+## 5. 怎么看到日志（读路径）
+
+三处入口，对应三种问法：
+
+| 问法 | 入口 | 看的是 |
+| --- | --- | --- |
+| “刚才那一下怎么了” | 设置页 → 日志 → **查看日志…** | 全局库 `app_logs`（最近 500 条，级别门槛 + 关键字） |
+| “完整原文 / 崩溃前的” | 设置页 → 日志 → **打开日志目录** | 文件 `app.YYYY-MM-DD`（含崩前已写入的部分） |
+| “现在采到多细” | 设置页 → 日志 → **日志级别** | 改完即时生效（`reload_log_level`） |
+
+对话框（`components/log_dialog.rs`）的两个有意选择：
+
+- **只读快照 + 手动刷新**，不自动轮询：轮询会让“我看到的和上一条不一致”变成日常。
+- 级别是**门槛**（≥）而不是精确匹配：查一次取最新 500 条，级别在本地筛，
+  所以点级别是瞬时的（`LogQuery::level` 是精确匹配，拿它做门槛得查 5 次）。
+
+入口、宿主与重绘：对话框层挂在**宿主视图**的 render 里（`Root::render_dialog_layer`），
+而 `cx.notify()` 只重渲染被标脏的子树——入口是设置页里的一个按钮，没有东西会顺着标脏到
+工作台，所以 `open_log_dialog` 末尾显式 `cx.refresh_windows()`（否则表现是“点了没反应”）。
+
+## 6. 实现位置映射表
 
 | 设计决策 | 实现位置 |
 | --- | --- |
 | 三个出口的装配 + reload handle | `crates/engine/src/logging/subscriber.rs::init_tracing_with_db` |
-| 应用口径入口（目录 / 级别 / 保留 / 库连接） | `crates/engine/src/logging/mod.rs::init_app_logging` |
-| 日志目录 / 保留天数 / 库上限 | `crates/engine/src/logging/config.rs`（`LogConfig::default()` 的 `log_dir` = `paths::log_dir()`） |
+| 应用口径入口（目录 / 级别 / 保留 / 上限 / 库连接） | `crates/engine/src/logging/mod.rs::init_app_logging` |
+| 目录 / 保留天数 / 单文件上限 / 目录配额 / 库上限 | `crates/engine/src/logging/config.rs`（默认值） |
 | 记录结构（与 `app_logs` 列对应） | `crates/engine/src/logging/record.rs` |
-| 脱敏规则 | `crates/engine/src/logging/redact.rs` |
+| 脱敏规则（URL 权限段 + `key=value`） | `crates/engine/src/logging/redact.rs` |
+| 文件层脱敏 + 单文件上限 + 停写说明 | `crates/engine/src/logging/subscriber.rs`（`RedactingMakeWriter` / `FileSink`） |
+| 启动清理（过期 + 目录配额） | `crates/engine/src/logging/subscriber.rs::cleanup_log_files` |
 | 落库（批量 + 上限裁剪 + 过期清理） | `crates/engine/src/persistence/log_store.rs` |
 | `app_logs` 表 | `crates/engine/migrations/global/006_add_app_logs.sql` |
+| 退出前 flush（`on_app_quit` → `flush_logs` → 消费者 oneshot 确认） | `crates/app/src/main.rs` + `logging/subscriber.rs::request_flush` |
 | 启动接线 + 补记启动结果 | `crates/app/src/main.rs::init_global_system` |
+| 级别设置项 + 运行时 reload 的 sink | `crates/settings/src/{model,registry,lib}.rs` + `crates/app/src/main.rs`（装配点） |
+| 查看对话框 + 两个动作行 | `crates/workbench/src/components/log_dialog.rs` + `settings/src/settings_page.rs` |
+| 对话框尺寸 | `crates/workbench_shell/src/ui.rs`（`DIALOG_LOG_*`） |
 | 生命周期 | `crates/engine/src/logging/mod.rs`（`get_log_store` / `set_log_store` / `session_id` / `flush_logs`） |
 
-## 6. 未做
+## 7. 未做
 
 | 项 | 说明 |
 | --- | --- |
-| 日志查询 UI | 无消费方。要做得先定"给谁看"（设置页的日志页？还是"打开日志目录"就够） |
-| 优雅退出 flush | 进程退出即结束；最多丢最后 1 秒的记录 |
-| 级别界面的入口 | `LogConfig::min_level` 目前只能靠 `RUST_LOG` 或 `reload_log_level()` 改 |
-| 单文件大小上限 | 现在只按天滚动；一天内写得极多就是一个大文件（暂不处理） |
+| 历史会话切换 | 对话框只看“最近 500 条”，不能按 `session_id` 分组或只看上次启动（表里已有该列，要加得先定“用户真的会按会话看吗”） |
+| 字段明细 | 记录行只显示 `message`，`fields`（JSON）存了但没展示；要看详情得再做一个展开区 |
+| 自动刷新 | 有意不做（§5）；真需要时优先考虑“打开期间每 2 秒拉一次”的开关，而不是默认轮询 |
+| 级别配置的二级项 | 只有全局级别；没有按模块（`target`）分别设级别（v1 的 `module_levels` 仍是空字段） |

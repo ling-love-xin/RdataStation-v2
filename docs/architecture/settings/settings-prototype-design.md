@@ -122,8 +122,11 @@
 | 连接默认值 | 建连超时 | `connection_defaults.connect_timeout_ms` | segmented 5/15/30/60s | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` |
 | 连接默认值 | LAN 直连 TLS | `connection_defaults.lan_disable_tls` | segmented 关 TLS / 保留 TLS | 下次操作 | `connection_service.rs::apply_lan_tls_default` |
 | 项目 | 列表排序 | `projects.sort_mode` | segmented 最近 / 名称 / 创建 | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写，双入口：选择器内循环按钮） |
+| 日志 | 日志级别 | `logging.min_level` | segmented 全部 / TRACE / DEBUG / INFO / WARN / ERROR | 即时 | `crates/app/src/main.rs`（启动取值）+ 装配层 sink → `engine::logging::reload_log_level` |
+| 日志 | 查看日志… | —（动作行） | `Button` | — | 宿主回调 → `components/log_dialog.rs`；说明行写「打开日志查看对话框」 |
+| 日志 | 打开日志目录 | —（动作行） | `Button` | — | 宿主回调 → `opener::open(paths::log_dir())` |
 
-> **第一版只有 4 节 7 行 + 1 动作行，这是准入规则的必然结果**：僵尸项被裁（架构 §7.2）、未接线的项不画（§6 待接）。页面框架的价值在于后续模块**按规则往里加**，而不是首版行数。
+> **当前是 5 节 8 行 + 3 动作行，这是准入规则的必然结果**：僵尸项被裁（架构 §7.2）、未接线的项不画（§6 待接）。页面框架的价值在于后续模块**按规则往里加**，而不是首版行数。
 
 ### 5.1 本期不设的节（及其理由）
 

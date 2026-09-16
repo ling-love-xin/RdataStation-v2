@@ -8,13 +8,16 @@
 //!
 //! 支持运行时通过 reload handle 动态修改日志级别。
 
+use crate::logging::config::LogConfig;
 use crate::logging::record::{LogLevel, LogRecord, TIMESTAMP_FMT};
 use crate::logging::redact::redact_sensitive;
 use std::fmt;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::Subscriber;
+use tracing_appender::rolling::{RollingFileAppender, RollingWriter};
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::layer::{Context, Layer};
@@ -124,35 +127,62 @@ impl tracing::field::Visit for LogFieldVisitor {
     }
 }
 
-/// 逐行脱敏的滚动文件写入器工厂。
+/// 文件层的共享状态：单文件写入量与"已达上限"标记。
+///
+/// 由 `MakeWriter` 持有（每条事件取一次写入器，状态得跨事件活着）。
+struct FileSink {
+    appender: RollingFileAppender,
+    /// 本文件已写入字节数（启动时以该文件既有大小起算）
+    written: AtomicU64,
+    /// 已达上限：只补一行说明，之后不再写文件
+    truncated: AtomicBool,
+    cap: u64,
+}
+
+impl FileSink {
+    fn new(appender: RollingFileAppender, cap: u64, initial_bytes: u64) -> Self {
+        Self {
+            appender,
+            written: AtomicU64::new(initial_bytes),
+            truncated: AtomicBool::new(false),
+            cap,
+        }
+    }
+}
+
+/// 逐行脱敏 + 单文件上限的滚动文件写入器工厂。
 ///
 /// 为什么包一层：文件层是**明文落盘**，而日志里经常带连接串与错误串。
 /// 库侧有 `redact_sensitive`，文件侧之前没有——等于"密码不进库、但进文件"。
-/// 这里在写盘前逐行脱敏，与库侧同一口径。
-struct RedactingMakeWriter(tracing_appender::rolling::RollingFileAppender);
+/// 这里在写盘前逐行脱敏，并顺手把单文件大小卡住，与库侧同一脱敏口径。
+struct RedactingMakeWriter(Arc<FileSink>);
 
 impl<'a> MakeWriter<'a> for RedactingMakeWriter {
-    type Writer = RedactingWriter<tracing_appender::rolling::RollingWriter<'a>>;
+    type Writer = RedactingWriter<'a, RollingWriter<'a>>;
 
     fn make_writer(&'a self) -> Self::Writer {
-        RedactingWriter::new(self.0.make_writer())
+        RedactingWriter::new(self.0.appender.make_writer(), Some(&self.0))
     }
 
     fn make_writer_for(&'a self, meta: &tracing::Metadata<'_>) -> Self::Writer {
-        RedactingWriter::new(self.0.make_writer_for(meta))
+        RedactingWriter::new(self.0.appender.make_writer_for(meta), Some(&self.0))
     }
 }
 
 /// 按行攒够再脱敏落盘：脱敏模式（URL / `key=value`）不能跨行匹配。
-struct RedactingWriter<W: Write> {
+///
+/// `sink` 为 `None` 时只脱敏不计数（单测用）。
+struct RedactingWriter<'s, W: Write> {
     inner: W,
+    sink: Option<&'s FileSink>,
     pending: Vec<u8>,
 }
 
-impl<W: Write> RedactingWriter<W> {
-    fn new(inner: W) -> Self {
+impl<'s, W: Write> RedactingWriter<'s, W> {
+    fn new(inner: W, sink: Option<&'s FileSink>) -> Self {
         Self {
             inner,
+            sink,
             pending: Vec::new(),
         }
     }
@@ -167,12 +197,29 @@ impl<W: Write> RedactingWriter<W> {
     }
 
     fn write_line(&mut self, line: &[u8]) -> io::Result<()> {
-        let text = String::from_utf8_lossy(line);
-        self.inner.write_all(redact_sensitive(&text).as_bytes())
+        let text = redact_sensitive(&String::from_utf8_lossy(line));
+        let bytes = text.as_bytes();
+
+        if let Some(sink) = self.sink {
+            if sink.written.load(Ordering::Relaxed) >= sink.cap {
+                // 单文件上限：只补一行说明，之后不再增长（库与 stderr 照常）
+                if !sink.truncated.swap(true, Ordering::Relaxed) {
+                    let note = format!(
+                        "…… 日志文件已达上限（{} MiB），本进程后续记录只写库与 stderr ……\n",
+                        sink.cap / (1024 * 1024)
+                    );
+                    self.inner.write_all(note.as_bytes())?;
+                }
+                return Ok(());
+            }
+            sink.written.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        }
+
+        self.inner.write_all(bytes)
     }
 }
 
-impl<W: Write> Write for RedactingWriter<W> {
+impl<W: Write> Write for RedactingWriter<'_, W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.pending.extend_from_slice(buf);
         self.drain_lines()?;
@@ -188,33 +235,50 @@ impl<W: Write> Write for RedactingWriter<W> {
     }
 }
 
-impl<W: Write> Drop for RedactingWriter<W> {
+impl<W: Write> Drop for RedactingWriter<'_, W> {
     fn drop(&mut self) {
         // fmt 层写完一条事件就丢弃 writer，不以换行结尾的最后一行要在这里兜住
         let _ = self.flush();
     }
 }
 
+/// 当前日志文件（`app.<UTC 日期>`）已有多大——用于把"单文件上限"算准。
+///
+/// 日期取 UTC：`tracing-appender` 的按天滚动用的就是 UTC（名字对不上就返回 0，
+/// 后果只是本次计得偏少，不影响正确性）。
+fn current_log_file_size(log_dir: &Path) -> u64 {
+    let name = format!("app.{}", chrono::Utc::now().format("%Y-%m-%d"));
+    std::fs::metadata(log_dir.join(name))
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
 /// 初始化带数据库持久化的 tracing 订阅器（含 reload handle）
 ///
-/// 输出到 stderr + 滚动文件 + 数据库（通过 channel）。
-/// 返回 receiver 端供 spawn_log_consumer 消费。
+/// 输出到 stderr + 滚动文件（逐行脱敏 + 单文件上限）+ 数据库（通过 channel）。
+/// 返回 receiver 端供 `spawn_log_consumer` 消费。
+///
+/// 目录、级别、保留期、文件/目录上限全部取自 `config`（单一来源，不再逐个传参）。
 pub fn init_tracing_with_db(
-    log_dir: &PathBuf,
-    min_level: LogLevel,
-    retention_days: u32,
+    config: &LogConfig,
 ) -> Result<tokio::sync::mpsc::UnboundedReceiver<LogRecord>, Box<dyn std::error::Error + Send + Sync>>
 {
+    let log_dir = &config.log_dir;
     std::fs::create_dir_all(log_dir).map_err(|e| format!("Failed to create log dir: {}", e))?;
 
-    // 启动时清理过期日志文件
-    cleanup_log_files(log_dir, retention_days);
+    // 启动时清理：先按天删过期的，再按总量配额删最旧的
+    cleanup_log_files(log_dir, config.retention_days, config.max_dir_bytes);
 
     let _session_id = init_session_id();
     let file_appender = tracing_appender::rolling::daily(log_dir, "app");
+    let file_sink = Arc::new(FileSink::new(
+        file_appender,
+        config.max_file_bytes,
+        current_log_file_size(log_dir),
+    ));
 
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(min_level.as_str().to_lowercase()));
+        .unwrap_or_else(|_| EnvFilter::new(config.min_level.as_str().to_lowercase()));
 
     // 使用 reload layer 包装 EnvFilter，支持运行时动态修改级别
     let (filter_layer, reload_handle) = tracing_subscriber::reload::Layer::new(env_filter);
@@ -234,7 +298,7 @@ pub fn init_tracing_with_db(
         .compact();
 
     let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(RedactingMakeWriter(file_appender))
+        .with_writer(RedactingMakeWriter(file_sink))
         .with_target(true)
         .with_thread_ids(true)
         .with_line_number(true)
@@ -274,7 +338,10 @@ pub fn reload_log_level(level: &str) -> Result<(), String> {
 ///
 /// 扫描日志目录，删除超过 retention_days 天的 `app.YYYY-MM-DD` 文件。
 /// 在应用启动时调用一次，防止文件无限堆积。
-pub fn cleanup_log_files(log_dir: &PathBuf, retention_days: u32) {
+///
+/// 两道闸：① 过期（按天）——老的不要；② 配额（按字节）——总量超了就从最旧的开始删。
+/// 只有①挡不住"一天内写了几个 G"（这个由写入侧的单文件上限兜）。
+pub fn cleanup_log_files(log_dir: &Path, retention_days: u32, max_dir_bytes: u64) {
     let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
 
     let entries = match std::fs::read_dir(log_dir) {
@@ -310,13 +377,72 @@ pub fn cleanup_log_files(log_dir: &PathBuf, retention_days: u32) {
             }
         }
     }
+
+    enforce_dir_quota(log_dir, max_dir_bytes);
 }
+
+/// 目录配额：总量超过 `max_dir_bytes` 时，从文件名（带日期）最旧的开始删。
+///
+/// 文件名 `app.YYYY-MM-DD` 的字典序就是时间序，所以不需要读 mtime。
+fn enforce_dir_quota(log_dir: &Path, max_dir_bytes: u64) {
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return;
+    };
+
+    let mut files: Vec<(String, PathBuf, u64)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("app.") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        files.push((name.to_string(), path, meta.len()));
+    }
+
+    let mut total: u64 = files.iter().map(|(_, _, size)| *size).sum();
+    if total <= max_dir_bytes {
+        return;
+    }
+
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, path, size) in files {
+        if total <= max_dir_bytes {
+            break;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                total = total.saturating_sub(size);
+                tracing::info!(file = %name, "Removed old log file (dir quota)");
+            }
+            Err(e) => tracing::warn!(file = %name, error = %e, "Failed to remove log file"),
+        }
+    }
+}
+
+/// 日志消费者的 flush 请求通道。
+///
+/// 存在意义：库写入是"每 100 条或每 1 秒"批量提交，退出时最后一批会丢。`request_flush`
+/// 把"立刻提交"排进消费者，供退出钩子等待（托盘：`crates/app` 的 `on_app_quit`）。
+static FLUSH_TX: std::sync::OnceLock<
+    tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
+> = std::sync::OnceLock::new();
 
 /// 启动数据库日志消费任务
 pub fn spawn_log_consumer(
     rx: tokio::sync::mpsc::UnboundedReceiver<LogRecord>,
     log_store: Arc<crate::persistence::log_store::LogStore>,
 ) -> tokio::task::JoinHandle<()> {
+    let (flush_tx, mut flush_rx) =
+        tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<()>>();
+    // 发送者存静态：消费者不会因为"没人发 flush"而退出
+    let _ = FLUSH_TX.set(flush_tx);
+
     tokio::spawn(async move {
         let mut rx = rx;
         let mut batch: Vec<LogRecord> = Vec::with_capacity(100);
@@ -349,6 +475,17 @@ pub fn spawn_log_consumer(
                         }
                     }
                 }
+                Some(done) = flush_rx.recv() => {
+                    // 被请求立即落库（退出前）：写完再回信号，调用方 await 这个信号
+                    if !batch.is_empty() {
+                        if let Err(e) = write_batch_to_store(&log_store, std::mem::take(&mut batch)).await {
+                            fail_count += 1;
+                            eprintln!("Flush log batch write failed (#{}): {}", fail_count, e);
+                        }
+                        batch = Vec::with_capacity(100);
+                    }
+                    let _ = done.send(());
+                }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
                     if !batch.is_empty() {
                         if let Err(e) = write_batch_to_store(&log_store, std::mem::take(&mut batch)).await {
@@ -370,6 +507,21 @@ async fn write_batch_to_store(
     log_store.flush_records(&records).await
 }
 
+/// 请求消费者把已入队的记录立刻落库，返回是否真的等到了。
+///
+/// 日志未接线（或消费者已退出）时返回 `false`；调用方（退出钩子）把 `false` 当
+/// "没什么要等的"处理即可，不是错误。
+pub async fn request_flush() -> bool {
+    let Some(tx) = FLUSH_TX.get() else {
+        return false;
+    };
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    if tx.send(done_tx).is_err() {
+        return false;
+    }
+    done_rx.await.is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,7 +531,7 @@ mod tests {
     fn file_writer_redacts_credentials_per_line() {
         let mut sink: Vec<u8> = Vec::new();
         {
-            let mut w = RedactingWriter::new(&mut sink);
+            let mut w = RedactingWriter::new(&mut sink, None);
             w.write_all(b"connect mysql://root:s3cret@localhost:3306/db\n")
                 .unwrap();
             // 故意拆成两次写：fmt 层并不保证一条记录一次 write
@@ -398,11 +550,41 @@ mod tests {
     fn file_writer_flushes_trailing_line_without_newline() {
         let mut sink: Vec<u8> = Vec::new();
         {
-            let mut w = RedactingWriter::new(&mut sink);
+            let mut w = RedactingWriter::new(&mut sink, None);
             w.write_all(b"tail password=leak").unwrap();
         }
         let text = String::from_utf8_lossy(&sink).to_string();
         assert!(!text.contains("leak"), "{text}");
         assert!(text.contains("tail"), "{text}");
+    }
+
+    /// 单文件上限：到达上限后不再增长，但会留一行说明（库与 stderr 不受影响）。
+    #[test]
+    fn file_writer_stops_at_size_cap_with_one_note() {
+        // 真实 appender（要一个可写目录）；断言只关心"写进去多少"
+        let dir = std::env::temp_dir().join(format!("rds_logcap_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let appender = tracing_appender::rolling::daily(&dir, "app");
+        let file_sink = FileSink::new(appender, 40, 0);
+
+        let mut out: Vec<u8> = Vec::new();
+        {
+            let mut w = RedactingWriter::new(&mut out, Some(&file_sink));
+            for i in 0..10 {
+                w.write_all(format!("line-{i} 0123456789\n").as_bytes())
+                    .unwrap();
+            }
+        }
+        let text = String::from_utf8_lossy(&out).to_string();
+        let lines: Vec<&str> = text.lines().collect();
+        // 前几行写进去了，后面被卡住
+        assert!(text.contains("line-0"), "{text}");
+        assert!(!text.contains("line-9"), "{text}");
+        // 只留一行说明，而不是每行都补一句
+        let notes = lines.iter().filter(|l| l.contains("已达上限")).count();
+        assert_eq!(notes, 1, "{text}");
+        assert!(file_sink.truncated.load(Ordering::Relaxed));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1096,9 +1096,28 @@ impl WorkbenchView {
                 std::rc::Rc::new(move |window, app| {
                     crate::components::cache_dialog::open_cache_dialog(window, app, &shared_cache);
                 });
+            // 「打开日志目录」/「查看日志」：设置层不依赖 engine / opener，这两个副作用由宿主实现。
+            // 目录不存在（还没写过日志）就先建出来——"打开一个不存在的目录"是纯失败体验。
+            let on_open_log_dir: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
+                std::rc::Rc::new(move |_window, _app| {
+                    let dir = paths::log_dir();
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        eprintln!("[settings] 创建日志目录失败 {}: {e}", dir.display());
+                        return;
+                    }
+                    if let Err(e) = opener::open(&dir) {
+                        eprintln!("[settings] 打开日志目录失败 {}: {e}", dir.display());
+                    }
+                });
+            let on_open_log_view: std::rc::Rc<dyn Fn(&mut Window, &mut App)> =
+                std::rc::Rc::new(move |window, app| {
+                    crate::components::log_dialog::open_log_dialog(window, app);
+                });
             let host = SettingsHost {
                 on_close,
                 on_open_cache,
+                on_open_log_dir,
+                on_open_log_view,
             };
             self.settings_page = Some(cx.new(|cx| SettingsPage::new(window, host, cx)));
         }

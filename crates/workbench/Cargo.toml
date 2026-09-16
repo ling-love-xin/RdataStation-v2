@@ -32,6 +32,8 @@ editor.workspace = true
 
 # 系统文件对话框（编辑器打开 / 另存为，A9 收尾）
 rfd.workspace = true
+# 在系统文件管理器里打开日志目录（设置页的动作行）
+opener.workspace = true
 
 # ===== Async 运行时 =====
 tokio.workspace = true

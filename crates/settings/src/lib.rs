@@ -21,8 +21,29 @@ pub mod settings_page;
 // 此处重导保持 `settings::product_tokens::*` 路径不变。
 pub use workbench_shell::product_tokens;
 
-use crate::model::{ConnectionDefaults, NavigatorFilters, Settings};
+use crate::model::{ConnectionDefaults, LogMinLevel, NavigatorFilters, Settings};
 use crate::registry::{SettingValue, Slot};
+
+/// 日志级别变更的副作用出口（**由装配层注册一次**，见 `crates/app/src/main.rs`）。
+///
+/// 为什么要这个槽：级别改完要让日志系统立刻 reload，而 `settings` 不依赖 `engine`
+/// （依赖只向下；反向依赖会把双引擎拖进设置层）。装配层把
+/// `engine::logging::reload_log_level` 注册进来，设置层只管"值变了，通知一声"。
+static LOG_LEVEL_SINK: RwLock<Option<fn(LogMinLevel)>> = RwLock::new(None);
+
+/// 注册日志级别变更出口（重复注册覆盖前一个；未注册时变更只落盘）。
+pub fn install_log_level_sink(sink: fn(LogMinLevel)) {
+    if let Ok(mut guard) = LOG_LEVEL_SINK.write() {
+        *guard = Some(sink);
+    }
+}
+
+/// 通知日志级别变更（无出口时静默——例如测试环境）。
+fn notify_log_level(level: LogMinLevel) {
+    if let Some(sink) = LOG_LEVEL_SINK.read().ok().and_then(|guard| *guard) {
+        sink(level);
+    }
+}
 
 /// 进程级连接默认值快照：供**无 `App` 的异步连接路径**（`ConnectionService`）读取。
 ///
@@ -184,6 +205,7 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         Slot::LanDisableTls => SettingValue::Bool(settings.connection_defaults.lan_disable_tls),
         Slot::ProjectSortMode => SettingValue::Text(settings.projects.sort_mode.clone()),
+        Slot::LogMinLevel => SettingValue::Text(settings.logging.min_level.as_str().to_string()),
     })
 }
 
@@ -253,8 +275,33 @@ impl SettingsService {
                 let Some(text) = value.as_text() else { return false };
                 Self::set_project_sort_mode(text, cx);
             }
+            Slot::LogMinLevel => {
+                let Some(level) = value.as_text().and_then(LogMinLevel::parse) else {
+                    return false;
+                };
+                Self::set_log_min_level(level, cx);
+            }
         }
         true
+    }
+
+    /// 当前日志最低级别。
+    pub fn log_min_level(cx: &App) -> LogMinLevel {
+        cx.global::<Settings>().logging.min_level
+    }
+
+    /// 设置并持久化日志最低级别，并通知日志系统即时 reload。
+    ///
+    /// 通知走 [`install_log_level_sink`] 注册的出口（装配层把 `engine` 的
+    /// `reload_log_level` 接在那里）；没有出口时只落盘，不报错。
+    pub fn set_log_min_level(level: LogMinLevel, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.logging.min_level = level;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+        notify_log_level(level);
     }
 
     /// 读取当前主题模式。
