@@ -108,4 +108,41 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 | `EditorBridge` / `ScratchpadBridge` / `NavBridge` / `HostBridge` | `crates/workbench/src/panels/editor.rs`、`scratchpad_panel.rs`、`nav.rs`、`view.rs`（构造期注入，宿主在 `init_workspace` 装配） |
 | 端口接线先例 | `crates/editor/src/shared.rs`、`crates/workbench/src/services/editor_*.rs` |
 | 后台任务形态（P1） | `crates/workbench/src/services/scratchpad_jobs.rs`、`nav_jobs.rs` |
+
+## 7. P1 执行清单（未做，逐点机械可执行）
+
+**18 处事件路径 `block_on`（阻塞 UI 线程）**：
+
+| 文件 | 位置 | 目标形态 |
+| --- | --- | --- |
+| `panels/nav.rs` | `commit_copy_connection` / `share_connection_to_project` / `unshare_connection_from_project` / `delete_connection`（4 处，各自 `Runtime::new()`） | 在 `nav_jobs` 增 4 个 job 种类 + drain，照现有 `enqueue_properties` / `drain_props_results` 写法 |
+| `panels/scratchpad_panel.rs` | `commit_scratchpad_edit`（6）/ `delete_scratchpad_selection`（3）/ `undo_scratchpad_delete` / `restore_scratchpad_trash` / `remove_scratchpad_reference` / `apply_scratchpad_relink` / `open_scratchpad_location`（共 14） | 入 `scratchpad_jobs` 的 job（`enqueue_import` / `enqueue_paste` 同形）+ 在 `apply_scratchpad_ops` 回填 |
+
+注意两点：① `Shared::scratchpad_store()` 目前**每次操作新建一个 tokio Runtime**，迁移时应改为 worker 内共享运行时；② 操作后需重跑加载（现有代码就在 `block_on` 后紧接 `request_scratchpad_load`），迁移后放到 apply 阶段。
+
+## 8. P2 就绪度评估（结论：**未就绪**，先拍一个前置决策）
+
+实测 `panels/nav.rs` 对 workbench 内部的依赖面（次数）：
+
+| 依赖 | 次数 |
+| --- | --- |
+| `crate::services::nav_runtime` | 33 |
+| `shared.notice` | 33 |
+| `shared.*` 其余（connections / selected / driver_catalog / project_root 等） | ~15 |
+| `crate::services::{data_source_service 4, workspace_loader 1, nav_jobs 1}` | 6 |
+| `crate::ui` / `crate::view` / `crate::components::group_form_dialog` | 3 |
+
+且 `crates/database` 与 `crates/scratchpad` **目前都不依赖 gpui-kit**（纯 service crate）。
+
+**阻塞点**：视图搬进特性 crate 后，这些依赖会变成 **workbench ↔ 特性 crate 的反向依赖**（workbench 已依赖 database/scratchpad）→ 循环依赖，按 `rds-architecture` 硬约束不允许。
+
+前置是「把面板状态与视图依赖下沉」，三种选型（需拍板）：
+
+| 选型 | 内容 | 代价 |
+| --- | --- | --- |
+| **A** | 新建中间 crate（如 `workbench-shell`）：`Shared` + `ui.rs` + `nav_runtime` 等下沉，workbench 与特性 crate 都依赖它 | 低（解循环），但不减耦合 |
+| **B** | 把 `Shared` 拆为「宿主级 + 特性级」，特性级状态随视图进特性 crate（nav 的 ~70 处 `shared.*` 逐处改自持 + 端口） | 高，但最干净（与本次 S1/S2 同源） |
+| **C** | 不下沉，接受视图留在 workbench | 零成本，失去“特性 crate 自带 view”的统一形态 |
+
+建议 **A + B 混合**：先用 A 解循环（低成本），再逐特性做 B（nav → database、scratchpad → scratchpad）。
 | `Shared` 字段白名单契约（S4） | `crates/workbench/tests/ui_contract.rs` |
