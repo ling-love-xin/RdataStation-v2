@@ -328,6 +328,7 @@ fn shared_fields_are_whitelisted() {
         "project_open_request",
         "project_ui",
         "quick_open",
+        "resources_bridge",
         "resources_panel",
         "right_mode",
         "right_mode_before_hidden",

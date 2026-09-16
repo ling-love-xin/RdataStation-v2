@@ -60,6 +60,15 @@ impl SidebarPanel {
         let task = cx.spawn(async move |_this, cx| {
             loop {
                 executor.timer(Duration::from_millis(60)).await;
+                // 动作回执先于快照：它可能带着“顺手打开”（打开要在事件路径发出去）。
+                if let Some(outcome) = resource_jobs::drain_op() {
+                    if weak
+                        .update(cx, |this, cx| this.apply_resource_op(outcome, cx))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
                 if let Some(result) = resource_jobs::drain_snapshot() {
                     if weak
                         .update(cx, |this, cx| this.apply_resources_snapshot(result, cx))
@@ -94,6 +103,45 @@ impl SidebarPanel {
             }),
             Err(err) => panel.update(cx, |panel, cx| panel.set_notice(Some(err), cx)),
         }
+    }
+
+    /// 动作回执：状态栏文案 +（取回时）顺手打开 + 失败原样转述。
+    ///
+    /// 文案在**这里**组装（不在工作线程）：换算相对路径要项目根，写状态栏要 `Shared`——
+    /// 两者都只在这个线程上。
+    fn apply_resource_op(&mut self, outcome: resource_jobs::OpOutcome, cx: &mut Context<Self>) {
+        let message = match outcome {
+            resource_jobs::OpOutcome::Archived {
+                name,
+                version,
+                rel_path,
+            } => format!("资产库：已归档「{name}」v{version} → {rel_path}"),
+            resource_jobs::OpOutcome::CheckedOut {
+                dest,
+                version,
+                open_after,
+            } => {
+                // 展示用相对路径（相对项目根）：状态栏窄，绝对路径会把后半截挤掉。
+                let shown = self
+                    .shared
+                    .project_root()
+                    .and_then(|root| dest.strip_prefix(&root).ok().map(|rel| rel.to_path_buf()))
+                    .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|| dest.to_string_lossy().to_string());
+                if open_after {
+                    self.shared.request_open_in_editor(dest);
+                }
+                format!(
+                    "资产库：已取回 {shown}（v{version} 的工作副本）；改完再归档将生成 v{}",
+                    version + 1
+                )
+            }
+            resource_jobs::OpOutcome::Failed { action, reason } => {
+                format!("资产库：{action}失败：{reason}")
+            }
+        };
+        *self.shared.notice.borrow_mut() = Some(message);
+        self.shared.notify_host(cx);
     }
 
     /// 转发渲染：视图（含滚动与空态）都在 crate 内，本面板不做二次包装。

@@ -8,6 +8,31 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 1 第八刀：归档 / 取回对话框与真执行（P1.4 / P1.5 部分）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 对话框（crate 内）✅ | `dialogs/archive.rs`：来源 / 目标位置 / 来源连接只读摆出 + 显示名 / 标签 / 保留历史内容可填；`dialogs/checkout.rs`：文件名 + 「取回后打开」勾选 + 版本提示。**表单状态、校验与渲染都在 crate**，执行交给宿主注入的 `on_submit`（照 `group_form_dialog` 形状） | `src/dialogs/{mod,archive,checkout}.rs`、`src/ui.rs`（+2 宽度常量） |
+| 校验与解析 ✅ | 纯函数 + 单测：`parse_tags`（`,` / `，` / 空白分隔，去空去重保序）、`parse_keep_versions`（空 = 跟随设置，0–100，越界挡在对话框）、`name_hint` / `file_name_hint`（空 / 路径分隔符 / `.` / `..` / Windows 保留设备名——**注定失败的名字不进服务层**）、`suggest_work_copy_name` | 同上 |
+| 冲突不静默覆盖 ✅ | 归档前探目标是否被占：`PayloadStore::{rel_path_taken, free_rel_path}`（**文件系统层面**，命名规则只在 crate 里写一次）；命中则对话框把"将归档为 resources/x-2.sql"原样摆出，确认按钮同时改文案。登记表层面的占用仍由服务层在提交时拒绝——两处各管一层 | `src/payload.rs` |
+| 真执行 ✅ | `services::resource_jobs`：单线程队列扩成 `Refresh / Archive / Checkout` 三种作业——开库 + 组装 `ArchiveService` + 执行 + **顺手补一次取数**（不让界面停在"说成功了、列表没变"）；取回落点的重名避让（`-2`…`-999`）在动文件**之前**定死 | `crates/workbench/src/services/resource_jobs.rs` |
+| 宿主接线 ✅ | `resource_host`：归档 = 系统文件选择 → 对话框 → 入队；取回 = 对话框 → 入队。回执文案由侧栏轮询印组装（它才有项目根与状态栏）：`已归档「X」v2 → resources/x.sql` / `已取回 scratchpad/x（工作副本）.sql（v3 的工作副本）；改完再归档将生成 v4`；勾了"打开"就递 `Shared::request_open_in_editor` | `crates/workbench/src/components/resource_host.rs`、`panels/resources.rs` |
+| 刷新端口 ✅ | `ResourcesBridge`（照 `ScratchpadBridge`）：入队与轮询都在侧栏面板手里，而发起方在右栏详情 / 对话框回调——端口只此一份，面板之间不互订 | `panels/{shared,mod}.rs`、`view.rs` |
+| 详情动作 ✅ | 详情面板底部动作区「取回（检出）…」：只读存档**唯一的编辑入口**；禁用时给出口（"本体异常，先在状态行『修复…』处理"）。其余动作各自被挡（打开只读 = P1.6 / 回收站 = P0.8 / 标签 = Phase 2 / 版本历史 = Phase 3） | `src/detail_view.rs`、`panels/right.rs` |
+| 端口形状 ✅ | `ResourcesHost::request_checkout` 改收**整条 `ArchiveDetail`**（不再是 id）：宿主据此命名工作副本与提示版本，不必回头读面板选中态（那是渲染期正被借用的对象）；列表委托因此多持一份 `details` 映射 | `src/resource_view.rs` |
+| 窗口测试 ✅ | +3 项：归档对话框开得出 + 按钮真在 + 预填值直接可提交 + 空名/非法份数挡住；带冲突的种子照样渲染；取回对话框同形状（默认名合法、路径分隔符挡住）。提交路径直接调 `submit_*`——**与按钮回调、Enter 走的是同一个函数** | `tests/dialog_window.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **75 单测 + 3 对话框窗口测试 + 7 面板窗口测试全绿**；`cargo test -p rds-workbench --test ui_contract -j 2` → 7 项全绿；`cargo check -p rds-workbench --lib -j 2` 零告警 | — |
+
+**取舍与边界**（避免"看起来支持"）：
+
+1. **归档入口只接了"本地文件"**：草稿箱右键「归档为存档…」是上游（草稿箱 crate）的入口，那边视图正在下沉重构，本刀不碰；面板头与空态的按钮相应改成中性的「归档…」/「选择文件归档…」。本地文件没有"来源草稿连接"可带出，`source_connection` 留空（**不猜**当前活动连接最多也不是它的来路）。
+2. **分组 / 别名不进对话框**：原型 §4.1 的这两格要等 Phase 2 的分组与重命名入口（`folder.rs` 的改名/删除尚待补），现在摆上去也只是个摆设。
+3. **回执用状态栏而不是撤销条**：原型 §4.1 的"归档后给撤销条"要复用 M5 的撤销栅（撤回 = 本体移回 + 删登记行），属另一批；本刀先把动作与回执做真。
+
+**未落地**：撤销栅、草稿箱发起侧、版本历史 / 回收站 / 索引修复三个对话框（Phase 3；回收站还被 P0.8 阻塞）、只读三重守卫（编辑器侧 P1.6）、批量多选。
+
+> 注：`Cargo.lock` 未随本刀提交（工作树里含其它模块的在途改动）。
+
 ### 2026-09-17 — Phase 1 第七刀：存档详情接入右栏（crate + workbench）
 
 | 项 | 内容 | 落点 |

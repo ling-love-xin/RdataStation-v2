@@ -165,6 +165,7 @@ pub fn to_detail(
         source_connection_id: resource.source_connection_id.clone(),
         source_table: resource.source_table.clone(),
         content_hash: resource.content_hash.clone(),
+        payload_rel_path: resource.file_rel_path.clone(),
         // 没有历史版本时给空串：`detail_rows` 据此跳过"版本"分区（不产生空行）。
         history_label: if history_count > 0 {
             format!("{history_count} 个历史版本")

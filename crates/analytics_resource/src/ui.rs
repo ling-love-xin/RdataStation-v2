@@ -26,3 +26,7 @@ pub const DETAIL_LABEL_WIDTH: f32 = 5.5;
 pub const TOOLBAR_HEIGHT: f32 = 2.0;
 /// 工具栏紧凑控件高（1.625rem = 26px；与 workbench `CONTROL_HEIGHT_SM` 同值，语义独立）。
 pub const CONTROL_HEIGHT_SM: f32 = 1.625;
+/// 归档确认对话框宽（34.0rem = 544px；原型 §7.1——表单型六字段）。
+pub const ARCHIVE_DIALOG_WIDTH: f32 = 34.0;
+/// 取回（检出）对话框宽（30.0rem = 480px；原型 §7.1——三字段 + 预览）。
+pub const CHECKOUT_DIALOG_WIDTH: f32 = 30.0;

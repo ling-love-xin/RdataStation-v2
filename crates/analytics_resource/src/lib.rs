@@ -8,6 +8,7 @@
 //! - `indexer`：索引修复（本体与登记表的三类差异：扫描只报告，修复要人工确认）
 //! - `models`：持久层行模型（v1 搬运，逐步并入 `model`）
 //! - `resource` / `folder` / `tag` / `version`：索引层（`project.db`）
+//! - `resource_view` / `detail_view` / `dialogs`：视图层（面板 / 详情 / 对话框；都不自己取数）
 //! - `recycle`：v1 回收站实现（**待废弃**：改走项目级 `ProjectTrash`，见开发方案 P0.8）
 //!
 //! 依赖方向：analytics_resource → engine（persistence::project_db）→ shared。
@@ -22,6 +23,7 @@ use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
 
 pub mod commands;
 pub mod detail_view;
+pub mod dialogs;
 pub mod filter;
 pub mod helpers;
 pub mod indexer;

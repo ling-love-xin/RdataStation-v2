@@ -16,6 +16,7 @@ use std::rc::Rc;
 use gpui_kit::{App, Focusable as _, TestAppContext, Window};
 
 use rds_analytics_resource::commands::ClearSearch;
+use rds_analytics_resource::detail_view::ArchiveDetail;
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus};
 use rds_analytics_resource::resource_view::{
@@ -41,10 +42,10 @@ impl ResourcesHost for RecordingHost {
     fn request_open(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("open:{resource_id}"));
     }
-    fn request_checkout(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
+    fn request_checkout(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls
             .borrow_mut()
-            .push(format!("checkout:{resource_id}"));
+            .push(format!("checkout:{}", detail.id));
     }
     fn request_delete(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("delete:{resource_id}"));

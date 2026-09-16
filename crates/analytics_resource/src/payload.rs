@@ -265,6 +265,48 @@ impl PayloadStore {
         Ok(())
     }
 
+    /// 目标相对路径是否已被占用（**文件系统层面**：本体在位）。
+    ///
+    /// 给对话框做冲突预探用：登记表层面的占用由服务层在提交时拒绝（两处各管一层，
+    /// 这里不查库——查库是异步的，而它要在开窗前同步拿到）。
+    pub fn rel_path_taken(&self, rel: &str) -> bool {
+        self.resolve(rel).map(|path| path.exists()).unwrap_or(false)
+    }
+
+    /// 找一个不冲突的相对路径：主名加 `-2` / `-3`…（原型 §4.1：目标已存在就改名，不静默覆盖）。
+    ///
+    /// 命名规则与取回的落点避让同一套（`workbench` 的 `resource_jobs::free_dest`）：先到先得的
+    /// 后缀，不把时间戳塞进文件名——用户后来要拿这个名字去说话，得念得出来。
+    /// 试到 `-999` 仍冲突就退回原名，让服务层给出明确的失败。
+    pub fn free_rel_path(&self, rel: &str) -> String {
+        if !self.rel_path_taken(rel) {
+            return rel.to_string();
+        }
+        let path = Path::new(rel);
+        let parent = path.parent().filter(|dir| !dir.as_os_str().is_empty());
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("archive");
+        let ext = path.extension().and_then(|ext| ext.to_str());
+        for index in 2..1000 {
+            let name = match ext {
+                Some(ext) => format!("{stem}-{index}.{ext}"),
+                None => format!("{stem}-{index}"),
+            };
+            let candidate = match parent {
+                Some(dir) => dir.join(name),
+                None => PathBuf::from(name),
+            };
+            // 统一用 `/`：`file_rel_path` 是要入库并展示的字符串，不能随平台变。
+            let candidate = candidate.to_string_lossy().replace('\\', "/");
+            if !self.rel_path_taken(&candidate) {
+                return candidate;
+            }
+        }
+        rel.to_string()
+    }
+
     /// 设置只读属性（辅助手段；应用层守卫才是硬约束）。
     pub async fn set_readonly(&self, path: &Path, readonly: bool) -> Result<(), CoreError> {
         let mut perms = fs::metadata(path)
@@ -424,6 +466,33 @@ mod tests {
 
     fn cleanup(dir: &Path) {
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn free_rel_path_avoids_taken_names_keeping_dirs_and_extension() {
+        let project = temp_project("free_rel");
+        let store = PayloadStore::new(&project);
+
+        // 没人占用：原样返回（不无谓地改名）。
+        assert_eq!(store.free_rel_path("dau.sql"), "dau.sql");
+
+        let reports = store.resources_dir().join("reports");
+        std::fs::create_dir_all(&reports).expect("create dir");
+        std::fs::write(reports.join("dau.sql"), b"x").expect("write");
+        std::fs::write(reports.join("dau-2.sql"), b"x").expect("write");
+
+        assert!(store.rel_path_taken("reports/dau.sql"));
+        assert!(!store.rel_path_taken("reports/other.sql"));
+        assert_eq!(
+            store.free_rel_path("reports/dau.sql"),
+            "reports/dau-3.sql",
+            "目录保留、后缀递增、扩展名在末尾"
+        );
+
+        // 越界路径不会被当成“可用名”：resolve 失败按已占用对待，退回原名交给服务层报错。
+        assert_eq!(store.free_rel_path("../outside.sql"), "../outside.sql");
+
+        cleanup(&project);
     }
 
     #[test]

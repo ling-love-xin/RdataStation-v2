@@ -38,7 +38,7 @@ pub use editor::EditorPanel;
 pub use right::RightSidebarPanel;
 pub use scratchpad::ScratchpadSearchView;
 pub use shared::append_sql;
-pub use shared::{EditorBridge, ProjectActionRequest, QueryRequest, ScratchpadBridge, Shared};
+pub use shared::{EditorBridge, ProjectActionRequest, QueryRequest, ResourcesBridge, ScratchpadBridge, Shared};
 
 /// 侧边栏面板：按活动工具渲染内容。
 ///
@@ -186,6 +186,18 @@ pub fn install_scratchpad_bridge(shared: &Shared, sidebar: Entity<SidebarPanel>)
     *shared.scratchpad_bridge.borrow_mut() = Some(ScratchpadBridge {
         ensure_pump: Rc::new(move |cx: &mut App| {
             sidebar.update(cx, |panel, cx| panel.ensure_scratchpad_pump(cx));
+        }),
+    });
+}
+
+/// 注入资产库刷新端口（M6；装配期调用，生产入口同上）。
+///
+/// 归档 / 取回完成后，发起方（右栏详情、对话框回调）只有 `Shared`，
+/// 刷新与轮询回填都在侧栏面板手里——这条线由端口牵，面板之间不互订。
+pub fn install_resources_bridge(shared: &Shared, sidebar: Entity<SidebarPanel>) {
+    *shared.resources_bridge.borrow_mut() = Some(ResourcesBridge {
+        refresh: Rc::new(move |cx: &mut App| {
+            sidebar.update(cx, |panel, cx| panel.request_resources_refresh(cx));
         }),
     });
 }

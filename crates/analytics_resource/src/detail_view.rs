@@ -7,12 +7,13 @@
 //! 版本历史等**动作按钮**随对话框批接入（需要宿主回调，见开发方案 Phase 1）；此处不摆按钮，
 //! 避免出现"点了没反应"的入口。
 
-use gpui_kit::base::StyledExt;
+use gpui_kit::base::{Disableable as _, StyledExt};
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
 use crate::model::{ArchiveKind, ArchiveStatus};
-use crate::resource_view::{BadgeTone, badge_tone, strength_badge};
+use crate::resource_view::{BadgeTone, ResourcesHost, badge_tone, strength_badge};
 use crate::ui;
 
 /// 指纹展示长度（前 12 位：足够比对，又不至于把面板撑爆）。
@@ -39,6 +40,11 @@ pub struct ArchiveDetail {
     pub source_table: Option<String>,
     /// 内容指纹（完整值；展示时截断）。
     pub content_hash: Option<String>,
+    /// 本体在 `resources/` 下的相对路径（`None` = 旧行没有登记）。
+    ///
+    /// 不在面板上展示（原型 §3.1 没有这一行），但**取回**要用它推默认工作副本名
+    /// （显示名与扩展名是两回事：显示名可以改成中文，扩展名不行）。
+    pub payload_rel_path: Option<String>,
     /// 版本历史摘要，如 "3 个历史版本 · 最近副本完整"。
     pub history_label: String,
     pub tags: Vec<String>,
@@ -147,8 +153,17 @@ pub fn alert_line(detail: &ArchiveDetail) -> Option<String> {
     }
 }
 
-/// 渲染详情面板内容（只读信息区；动作按钮随对话框批接入）。
-pub fn render_detail(detail: &ArchiveDetail, cx: &App) -> Div {
+/// 详情面板的动作接线（`None` = 纯只读渲染：crate 单测与无宿主场景）。
+///
+/// 动作一律经宿主端口（与列表右键菜单同一套）：面板不认识服务层，也不自己取数。
+pub struct DetailActions {
+    pub host: std::rc::Rc<dyn ResourcesHost>,
+    /// 项目只读：写类动作一律禁用（与右键菜单同一判据）。
+    pub read_only: bool,
+}
+
+/// 渲染详情面板内容（只读信息区 + 动作区）。
+pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx: &App) -> Div {
     let (foreground, muted, border, tone_color) = {
         let colors = cx.theme().colors;
         (colors.foreground, colors.muted_foreground, colors.border, colors)
@@ -253,6 +268,47 @@ pub fn render_detail(detail: &ArchiveDetail, cx: &App) -> Div {
         body = body.child(section);
     }
 
+    // 动作区：目前只有「取回（检出）…」——它是只读存档**唯一的编辑入口**，也是用户看完
+    // 归档凭证后最可能的下一步。其余动作各自被挡着（打开只读 = P1.6、移入回收站 = P0.8、
+    // 标签 / 版本历史 = Phase 2/3），**不提前摆点不动的入口**。
+    if let Some(actions) = actions {
+        let blocked = actions.read_only
+            || matches!(
+                detail.status,
+                ArchiveStatus::Missing | ArchiveStatus::ContentChanged
+            );
+        // 禁用时给的理由要**指向出口**（去哪儿处理），不是一句"不可用"。
+        let hint = if actions.read_only {
+            "项目处于只读模式"
+        } else if blocked {
+            "本体异常，先在状态行「修复…」处理"
+        } else {
+            "复制一份可写的工作副本，本体不动"
+        };
+        let host = actions.host.clone();
+        // 闭包是 `Fn`（每帧重建），且它比 `detail` 活得久——拷一份带走。
+        let detail_for_click = detail.clone();
+        body = body.child(
+            div()
+                .v_flex()
+                .w_full()
+                .gap_1()
+                .border_t(px(1.0))
+                .border_color(border)
+                .pt_2()
+                .child(
+                    Button::new("archive-detail-checkout")
+                        .ghost()
+                        .label("取回（检出）…")
+                        .disabled(blocked)
+                        .on_click(move |_, window, cx| {
+                            host.request_checkout(&detail_for_click, window, cx)
+                        }),
+                )
+                .child(div().text_xs().text_color(muted).child(hint)),
+        );
+    }
+
     div()
         .v_flex()
         .w_full()
@@ -285,6 +341,7 @@ mod tests {
             source_connection_id: Some("conn_1".to_string()),
             source_table: None,
             content_hash: Some("0123456789abcdef0123".to_string()),
+            payload_rel_path: Some("dau.sql".to_string()),
             history_label: "1 个历史版本".to_string(),
             tags: Vec::new(),
             group: None,

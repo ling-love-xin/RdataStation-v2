@@ -177,7 +177,10 @@ pub trait ResourcesHost: 'static {
     /// 打开（只读）。
     fn request_open(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 取回（检出）。
-    fn request_checkout(&self, resource_id: &str, window: &mut Window, cx: &mut App);
+    ///
+    /// 参数给的是**面板已有的那条详情**（而不是一个 id）：宿主据此命工作副本名与
+    /// 版本提示，不必回头读面板的选中态——那是渲染期正在被借用的对象（已踩过）。
+    fn request_checkout(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
     /// 移入回收站。
     fn request_delete(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 索引修复入口（状态行异常段）。
@@ -197,6 +200,8 @@ struct ArchiveListDelegate {
     /// 面板句柄（选中变化回传；面板已销毁时静默丢弃）。
     panel: WeakEntity<ResourcesPanel>,
     rows: Vec<ArchiveRow>,
+    /// 行 id → 详情：右键菜单发起取回时要用整条详情（`render_item` 里读不了面板，只能提前拷一份）。
+    details: std::collections::HashMap<String, ArchiveDetail>,
     /// 选中的行 id（面板是语义权威，这里是渲染与漫游的锚点）。
     selected_id: Option<String>,
     /// 面板正在把自己的选中镜像进列表。
@@ -213,11 +218,13 @@ impl ArchiveListDelegate {
     fn set_rows(
         &mut self,
         rows: Vec<ArchiveRow>,
+        details: std::collections::HashMap<String, ArchiveDetail>,
         selected_id: Option<String>,
         read_only: bool,
         cx: &mut Context<ListState<Self>>,
     ) {
         self.rows = rows;
+        self.details = details;
         self.selected_id = selected_id;
         self.read_only = read_only;
         cx.notify();
@@ -271,7 +278,9 @@ impl ListDelegate for ArchiveListDelegate {
         // 取回要往草稿箱写一份工作副本：本体异常的存档（缺失 / 内容已变）与只读项目都不给走。
         let can_checkout = row.status == ArchiveStatus::Normal && !self.read_only;
         let id_open = row.id.clone();
-        let id_checkout = row.id.clone();
+        // 取回要拿整条详情（宿主拿它拼工作副本名）：在渲染期提前拷一份——
+        // 菜单回调触发时面板可能已被借用，不能再回头读。
+        let checkout_detail = self.details.get(&row.id).cloned();
         let id_delete = row.id.clone();
 
         let mut line = div()
@@ -349,8 +358,12 @@ impl ListDelegate for ArchiveListDelegate {
                                 .disabled(!can_checkout)
                                 .on_click({
                                     let host = host.clone();
-                                    let id = id_checkout.clone();
-                                    move |_, window, cx| host.request_checkout(&id, window, cx)
+                                    let detail = checkout_detail.clone();
+                                    move |_, window, cx| {
+                                        if let Some(detail) = detail.as_ref() {
+                                            host.request_checkout(detail, window, cx);
+                                        }
+                                    }
                                 }),
                         );
                         // 破坏性项用分隔线隔离。
@@ -491,6 +504,7 @@ impl ResourcesPanel {
             host: self.host.clone(),
             panel: cx.entity().downgrade(),
             rows: self.view_rows.clone(),
+            details: self.snapshot.details.clone(),
             selected_id: self.selected.clone(),
             syncing_from_panel: false,
             read_only: self.snapshot.read_only,
@@ -549,10 +563,13 @@ impl ResourcesPanel {
             return;
         };
         let rows = self.view_rows.clone();
+        let details = self.snapshot.details.clone();
         let selected = self.selected.clone();
         let read_only = self.snapshot.read_only;
         list.update(cx, |state, cx| {
-            state.delegate_mut().set_rows(rows, selected, read_only, cx);
+            state
+                .delegate_mut()
+                .set_rows(rows, details, selected, read_only, cx);
         });
     }
 
@@ -693,8 +710,9 @@ impl ResourcesPanel {
             .child(
                 Button::new("archive-add")
                     .ghost()
-                    .label("归档")
+                    .label("归档…")
                     .disabled(read_only)
+                    // 省略号 = “点了会再问一轮”（宿主先弹系统文件选择，再弹确认对话框）。
                     .on_click(move |_, window, cx| host.request_archive(window, cx)),
             )
     }
@@ -900,7 +918,7 @@ impl ResourcesPanel {
             .child(
                 Button::new("archive-for-empty")
                     .primary()
-                    .label("从草稿箱归档…")
+                    .label("选择文件归档…")
                     .disabled(read_only)
                     .on_click(move |_, window, cx| host.request_archive(window, cx)),
             )
@@ -1024,8 +1042,13 @@ impl Render for ResourcesPanel {
             .on_action(cx.listener({
                 let host = host.clone();
                 move |panel: &mut Self, _: &commands::CheckoutSelected, window, cx| {
-                    if let Some(id) = panel.selected.clone() {
-                        host.request_checkout(&id, window, cx);
+                    let detail = panel
+                        .selected
+                        .as_deref()
+                        .and_then(|id| panel.snapshot.details.get(id))
+                        .cloned();
+                    if let Some(detail) = detail.as_ref() {
+                        host.request_checkout(detail, window, cx);
                     }
                 }
             }))

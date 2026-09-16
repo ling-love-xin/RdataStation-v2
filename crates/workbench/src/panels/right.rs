@@ -14,7 +14,7 @@ use crate::view::RightPanel;
 use insight::InsightView;
 use mock::mock_view::MockPanel;
 
-use analytics_resource::detail_view::render_detail;
+use analytics_resource::detail_view::{DetailActions, render_detail};
 
 use super::Shared;
 
@@ -114,11 +114,20 @@ impl RightSidebarPanel {
             .and_then(|panel| panel.upgrade())
             .and_then(|panel| panel.read(cx).selected_detail().cloned());
         match detail {
-            Some(detail) => div()
-                .v_flex()
-                .size_full()
-                .min_h_0()
-                .child(render_detail(&detail, cx)),
+            Some(detail) => {
+                // 动作接线：宿主端口在**这一层**注入（面板不认识服务层），
+                // 项目只读随 `Shared` 实时取（不缓进快照——它是窗口级状态）。
+                let read_only = self.shared.project_ui.borrow().read_only;
+                let actions = DetailActions {
+                    host: crate::components::resource_host::build_host(&self.shared),
+                    read_only,
+                };
+                div()
+                    .v_flex()
+                    .size_full()
+                    .min_h_0()
+                    .child(render_detail(&detail, Some(actions), cx))
+            }
             None => self.render_archive_detail_empty(cx),
         }
     }

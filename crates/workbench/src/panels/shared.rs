@@ -65,6 +65,17 @@ pub struct ScratchpadBridge {
     pub ensure_pump: Rc<dyn Fn(&mut App)>,
 }
 
+/// 资产库刷新端口（M6，装配期由 `WorkbenchView::init_workspace` 注入）。
+///
+/// “入队 + 轮询”两件事都在侧栏面板手里（`SidebarPanel::request_resources_refresh`），
+/// 而发起动作的地方可能在右栏「存档详情」或对话框回调里——那里只有 `Shared`。
+/// 与 `ScratchpadBridge` 同例：面板之间不互订，端口只此一份。
+#[derive(Clone)]
+pub struct ResourcesBridge {
+    /// 刷新资产库列表（入队 + 确保轮询印在跑）。
+    pub refresh: Rc<dyn Fn(&mut App)>,
+}
+
 /// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。
 ///
 /// 原先在 `nav.rs`（`nav_draft_append`），现在由导航菜单、拖拽与宿主打开查询共用，
@@ -134,6 +145,8 @@ pub struct Shared {
     /// 与 `mock_panel` / `insight_panel` 同例：面板自带状态与视图
     /// （`analytics_resource::resource_view::ResourcesPanel`），宿主只持句柄。
     pub resources_panel: Rc<RefCell<Option<WeakEntity<ResourcesPanel>>>>,
+    /// M6：资产库刷新端口（动作完成后由任意宿主侧位置触发刷新）。
+    pub resources_bridge: Rc<RefCell<Option<ResourcesBridge>>>,
     /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
@@ -174,6 +187,7 @@ impl Shared {
             mock_panel: Rc::new(RefCell::new(None)),
             insight_panel: Rc::new(RefCell::new(None)),
             resources_panel: Rc::new(RefCell::new(None)),
+            resources_bridge: Rc::new(RefCell::new(None)),
             mock_detail: Rc::new(RefCell::new(None)),
             open_mock_detail: Rc::new(RefCell::new(None)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),
@@ -279,6 +293,15 @@ impl Shared {
     pub fn ensure_scratchpad_pump(&self, cx: &mut App) {
         if let Some(bridge) = self.scratchpad_bridge.borrow().clone() {
             (*bridge.ensure_pump)(cx);
+        }
+    }
+
+    /// 请求一次资产库刷新（走 `ResourcesBridge`；装配未完成时静默丢弃）。
+    ///
+    /// “静默丢弃”是对的：端口未装配只出现在测试宿主里，而那里面板压根没挂。
+    pub fn refresh_resources(&self, cx: &mut App) {
+        if let Some(bridge) = self.resources_bridge.borrow().clone() {
+            (*bridge.refresh)(cx);
         }
     }
 

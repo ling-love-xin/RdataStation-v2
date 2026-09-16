@@ -565,6 +565,8 @@ impl WorkbenchView {
         crate::panels::install_editor_bridge(&shared, editor.clone());
         // 草稿箱命令端口（编辑区「全部替换」需要草稿箱轮询在跑）。
         crate::panels::install_scratchpad_bridge(&shared, sidebar.clone());
+        // M6：资产库刷新端口（归档 / 取回完成后，发起方只有 `Shared`，而刷新归侧栏面板）。
+        crate::panels::install_resources_bridge(&shared, sidebar.clone());
 
         // 宿主重绘桥再挂一层：除宿主自身，编辑区也要跟上。
         //
