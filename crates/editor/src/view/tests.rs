@@ -2534,3 +2534,123 @@ fn the_result_pane_sits_in_a_split_without_squeezing_the_editor(cx: &mut TestApp
         "分栏生效的标志是编辑区让出了一部分高度（{before:?} → {after:?}）"
     );
 }
+
+// ===== B6：错误回填（诊断 + 定位 + 聚焦）=====
+
+/// 能定位的失败：诊断画在出错词上、光标跳过去并选中它、状态栏说出位置
+#[gpui_kit::test]
+fn a_locatable_failure_marks_the_word_and_moves_the_caret(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(LocatedFailureRunner));
+    let id = shared
+        .open(OpenRequest::untitled(
+            "select 1;\nselect * from t wheree x = 1;",
+            EditorMode::Sql,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    run_statement(
+        cx,
+        &panel,
+        "select * from t wheree x = 1",
+        execution::ResultPlacement::Replace,
+    );
+
+    // 诊断是回填里当场画的（真机与 headless 走同一条路）
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).diagnostics_for_test(cx)),
+        1,
+        "出错词上要有一条诊断"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("失败要有提示");
+    assert!(
+        message.contains("no such column: wheree") && message.contains("第 2 行 第 17 列"),
+        "提示要说清错误 + 位置：{message}"
+    );
+
+    // 光标跳过去这一步：真机上回填发生在**后台轮询**（没有窗口）里，走的是面板存下的窗口句柄；
+    // headless 里那条路会撞上“不能在窗口更新里再更新窗口”（`update_window` 直接返回 Err），
+    // 所以这里直接驱动落地入口——与“对话框按钮的真点击”同一口径（架构 §12 #29）。
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.jump_to_error_site_in(window, cx))
+    });
+    // 文档：`select 1;\n`（10 字节）+ `select * from t `（16 字节）→ 出错词在第 2 行第 17 列
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx)),
+        26..32,
+        "光标要选中出错的那个词"
+    );
+}
+
+/// 认不出位置的失败：只提示，不动光标、不画诊断（定位错比不定位更糟）
+#[gpui_kit::test]
+fn an_unlocatable_failure_leaves_the_caret_alone(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    // `ScriptRunner` 的 `boom` 里没有任何可定位的线索
+    let (shared, id, _seen, _connections) = shared_with_runner("select boom;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_caret_for_test(0, cx))
+    });
+    run_statement(cx, &panel, "select boom", execution::ResultPlacement::Replace);
+
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx)),
+        0..0,
+        "没有位置就不动光标"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).diagnostics_for_test(cx)),
+        0,
+        "没有位置就不画诊断"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("失败要有提示");
+    assert!(message.contains("boom"), "{message}");
+    assert!(!message.contains("第 "), "没有位置就别编一个出来：{message}");
+}
+
+/// 下一次成功要把旧的诊断清掉（不留“已经修好了还红着”的假象）
+#[gpui_kit::test]
+fn a_successful_run_clears_the_error_marks(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(LocatedFailureRunner));
+    let id = shared
+        .open(OpenRequest::untitled(
+            "select * from t wheree x = 1;\nselect 1;",
+            EditorMode::Sql,
+        ))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    run_statement(
+        cx,
+        &panel,
+        "select * from t wheree x = 1",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).diagnostics_for_test(cx)),
+        1
+    );
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).diagnostics_for_test(cx)),
+        0,
+        "成功之后不该再留着上次的诊断"
+    );
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(message.is_none(), "成功要清掉旧提示：{message:?}");
+}

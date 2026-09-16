@@ -1256,19 +1256,31 @@ impl EditorHostPanel {
 
     /// 【B6】把光标送到出错处并聚焦
     ///
-    /// 回填发生在没有窗口的轮询里，所以用构造时存下的窗口句柄；窗口已经没了就只当没这一步
-    /// （光标已经挪到出错处，_位置_ 已经给出）——不 panic。
+    /// 回填发生在没有窗口的轮询里，所以借构造时存下的窗口句柄。窗口已经没了、或者这次更新
+    /// 落在另一个窗口更新里面（headless 测试就是这样）时，这一步只是没做成——不 panic：
+    /// 位置已经画在诊断与状态栏里了。
     fn jump_to_error_site(&mut self, cx: &mut Context<Self>) {
         let Some(site) = self.error_site.clone() else {
             return;
         };
         let range = site.range();
         let editor = self.editor.clone();
-        let _ = self.window.update(cx, |_view, window, app| {
+        let _ = self.window.update(cx, move |_view, window, app| {
             editor.update(app, |state, cx| {
                 state.set_selected_range(range, cx);
                 state.focus(window, cx);
             });
+        });
+    }
+
+    /// 跳转的**落地入口**：手上有窗口时直接做（测试用；真机走上面的窗口句柄路径）
+    pub(crate) fn jump_to_error_site_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(site) = self.error_site.clone() else {
+            return;
+        };
+        self.editor.update(cx, |state, cx| {
+            state.set_selected_range(site.range(), cx);
+            state.focus(window, cx);
         });
     }
 
