@@ -20,6 +20,9 @@
 //!
 //! 与 `engine/tests/transaction_affinity.rs` 同一套环境变量与建连方式（探针口径一致）。
 //! 执行走的是"当前活动连接"，所以这里先 `set_active_connection` 再提交。
+//!
+//! **六个内置驱动都跑**（`mysql` / `mysql_native` / `postgres` / `postgres_native` / `sqlite` /
+//! `duckdb`）：sqlx 版与 native 版是两套实现——事务、取消、取数各写一遍，只验一边等于只验一半。
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -44,7 +47,7 @@ struct Target {
     slow_sql: &'static str,
 }
 
-const TARGETS: [Target; 4] = [
+const TARGETS: [Target; 6] = [
     Target {
         driver: "mysql",
         env: "RDS_TEST_MYSQL_URL",
@@ -52,7 +55,20 @@ const TARGETS: [Target; 4] = [
         slow_sql: "SELECT SLEEP(3)",
     },
     Target {
+        // 同一台库的**原生驱动**（与 sqlx 版是两套实现：事务、取消、取数都各写一遍）
+        driver: "mysql_native",
+        env: "RDS_TEST_MYSQL_URL",
+        file: false,
+        slow_sql: "SELECT SLEEP(3)",
+    },
+    Target {
         driver: "postgres",
+        env: "RDS_TEST_PG_URL",
+        file: false,
+        slow_sql: "SELECT pg_sleep(3)",
+    },
+    Target {
+        driver: "postgres_native",
         env: "RDS_TEST_PG_URL",
         file: false,
         slow_sql: "SELECT pg_sleep(3)",
