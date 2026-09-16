@@ -23,6 +23,23 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 1 第三批：右 Dock 装配 + 后台取数接线
+
+**已完成并验证**（`cargo check -p rds-workbench --lib` 零告警；`rds-insight` lib **121 项**全绿；`cargo build -p rds-app` 通过；**实际启动一次实例**：右侧洞察面板正常渲染、零 stderr）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 装配 | 右 Dock 去掉三行占位：面板实体在**构造期**创建 + 登记 `Shared::insight_panel`（右键入口要在事件路径拿到句柄，懒创建会丢目标），渲染改为转发 `InsightView` | `crates/workbench/src/panels.rs` |
+| 宿主桥 | **不设 trait**：面板与宿主之间只用事件 + 两个公开方法（`set_profile` / `set_error` / `set_project_open`），因为面板没有需要同步回调宿主的能力（⚙ 也是事件）。何时才需要 `MockHost` 那种 trait：出现「面板得同步问宿主」的需求时（如导出目录、只读态） | — |
+| 事件接缝 | `InsightEvent::ProfileRequested { target }`（带 payload，宿主不必回读面板）；`set_target` 与 ⟳/重试都发它 | `insight_view.rs` |
+| 后台取数 | `services/insight_jobs.rs`：面板只发请求 → 宿主在**后台执行器**上跑阻塞的 `profile_column_view` → 弱句柄回填四态（面板已关则丢结果）。项目根在提交时解析成所有权数据（`Shared` 不可跨线程） | `crates/workbench/src/services/insight_jobs.rs`（新） |
+| 项目开关 | 面板给出「未打开项目：画像可用，规则管理与快照不可用」提示；宿主在**渲染时**同步（同 `apply_*_mode` 口径，值不变不 notify） | `panels.rs` + `insight_view.rs` |
+
+**一处刻意的降级**：面板头的 ⚙（规则管理）**暂时禁用**并注明「Phase 2 落地」——规则管理对话框属 Phase 2，先给一个「点了没反应」的按钮等于静默失效（同「注册了才宣传」）。`InsightEvent::RulesRequested` 也随之移除（无生产者就不留死变体），Phase 2 接入时一并恢复。
+
+**未完成（下一批）**：1.5 入口接线——结果表列头右键「洞察此列」、导航树表右键「查看统计」；1.6 键位注册。面板现已装配并可打开，但**还没有入口把目标递进来**，所以看到的是空态引导。
+
+
 ### 2026-09-16 — Phase 1 第二批：面板侧编排（1.1）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **118 项全绿**，上一批 113 → +5；零告警）

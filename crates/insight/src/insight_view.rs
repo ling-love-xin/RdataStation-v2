@@ -18,7 +18,7 @@
 //! 视图归属：本文件按 **方案 A**（视图入 `crates/insight`）落地，宿主桥由 workbench
 //! 侧订阅 [`InsightEvent`] 装配。
 
-use gpui_kit::base::StyledExt;
+use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -34,14 +34,15 @@ use crate::ui;
 
 /// 面板向宿主发出的请求。
 ///
-/// 面板不自己取数、也不自己开对话框：点 ⟳ / ⚙ 只发事件，由 workbench 侧订阅后执行
+/// 面板**不自己取数**（D20）：换目标或点 ⟳ 只发事件，由 workbench 侧订阅后执行
 /// （对齐「点击回调只改状态，副作用在事件路径」的约定）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InsightEvent {
-    /// ⟳：请宿主重算当前目标（保持 Tab 与折叠态）
-    RefreshRequested,
-    /// ⚙：请宿主打开规则管理对话框
-    RulesRequested,
+    /// 请宿主加载该目标的画像。
+    ///
+    /// 带 payload 而不让宿主回读面板状态：宿主拿到事件就能直接开工，
+    /// 不必再持面板实体（也避开了「读实体时它正在被更新」的租借冲突）。
+    ProfileRequested { target: InsightTarget },
 }
 
 /// 列画像四区（顺序即渲染顺序）
@@ -83,6 +84,11 @@ pub struct InsightView {
     tab: PanelTab,
     /// 四区折叠态：属用户偏好，⟳ 重算与切换 Tab 都不得清空
     open_sections: [bool; 4],
+    /// 未打开项目（宿主告知）。
+    ///
+    /// 无项目时画像仍可算（临时表在内存里），但**规则管理与快照不可用**——
+    /// 它们都落在项目目录下（原型 §4 / 架构 §8）。
+    project_open: bool,
 }
 
 impl EventEmitter<InsightEvent> for InsightView {}
@@ -95,6 +101,9 @@ impl InsightView {
             state: InsightPanelState::Empty,
             tab: PanelTab::Column,
             open_sections: ColumnSection::default_open(),
+            // 保守初值：宿主装配时会立刻告知真实项目状态（`set_project_open`）。
+            // 宁可让依赖项目的入口先禁用，也不要给一个点了没用的按钮。
+            project_open: false,
         }
     }
 
@@ -115,11 +124,25 @@ impl InsightView {
         self.open_sections
     }
 
-    /// 指向新目标：切到该目标的默认 Tab 并进入加载态。折叠偏好保留。
+    /// 是否已打开项目（决定无项目提示；Phase 2 接入规则管理后也会约束 ⚙）
+    pub fn project_open(&self) -> bool {
+        self.project_open
+    }
+
+    /// 宿主告知项目开关（打开 / 切换 / 关闭项目时调用）
+    pub fn set_project_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.project_open != open {
+            self.project_open = open;
+            cx.notify();
+        }
+    }
+
+    /// 指向新目标：切到该目标的默认 Tab、进入加载态，并请宿主取数。折叠偏好保留。
     pub fn set_target(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
         self.tab = target.default_tab();
-        self.target = Some(target);
+        self.target = Some(target.clone());
         self.state = InsightPanelState::Loading;
+        cx.emit(InsightEvent::ProfileRequested { target });
         cx.notify();
     }
 
@@ -145,10 +168,11 @@ impl InsightView {
         cx.notify();
     }
 
-    /// 进入加载态（⟳ 与「重试」共用）；无目标时不动
-    pub fn start_loading(&mut self, cx: &mut Context<Self>) {
-        if self.target.is_some() {
+    /// ⟳ 与「重试」共用：重新加载当前目标（保持 Tab 与折叠偏好）。无目标时不动。
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        if let Some(target) = self.target.clone() {
             self.state = InsightPanelState::Loading;
+            cx.emit(InsightEvent::ProfileRequested { target });
             cx.notify();
         }
     }
@@ -201,11 +225,15 @@ impl InsightView {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Settings)
-                    .tooltip("规则管理")
+                    // 规则管理对话框属 Phase 2；**不给「点了没反应」的按钮**
+                    // （与「注册了才宣传」同一立场，Phase 2 接入后改为按项目状态启用）
+                    .disabled(true)
+                    .tooltip("规则管理（Phase 2 落地）")
                     .on_click({
                         let entity = entity.clone();
                         move |_, _, app| {
-                            entity.update(app, |_, cx| cx.emit(InsightEvent::RulesRequested));
+                            // Phase 2 会在这里发 `InsightEvent::RulesRequested`
+                            entity.update(app, |_, cx| cx.notify());
                         }
                     }),
             )
@@ -218,13 +246,27 @@ impl InsightView {
                     .on_click({
                         let entity = entity.clone();
                         move |_, _, app| {
-                            entity.update(app, |view, cx| {
-                                view.start_loading(cx);
-                                cx.emit(InsightEvent::RefreshRequested);
-                            });
+                            entity.update(app, |view, cx| view.reload(cx));
                         }
                     }),
             )
+    }
+
+    /// 无项目提示：画像仍可算（临时表在内存里），但依赖项目目录的能力不可用
+    fn render_project_hint(&self, theme: &Theme) -> Option<Div> {
+        if self.project_open {
+            return None;
+        }
+        Some(
+            div()
+                .flex_none()
+                .w_full()
+                .px(rems(ui::PANEL_PADDING))
+                .py_1()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child("未打开项目：画像可用，规则管理与快照不可用"),
+        )
     }
 
     /// 目标头：常显当前目标（列名 + 类型徽标 + 空值率）
@@ -391,6 +433,7 @@ impl Render for InsightView {
             .size_full()
             .bg(theme.colors.background)
             .child(self.render_header(&entity, theme))
+            .children(self.render_project_hint(theme))
             .children(self.render_target_head(theme))
             .child(self.render_tab_bar(&entity, theme))
             // 滚动归面板自己（Dock 的 #tab-content 不产生滚动）：滚动条贴内容边缘，
@@ -530,10 +573,7 @@ fn error_block(
                 .xsmall()
                 .label("重试")
                 .on_click(move |_, _, app| {
-                    entity.update(app, |view, cx| {
-                        view.start_loading(cx);
-                        cx.emit(InsightEvent::RefreshRequested);
-                    });
+                    entity.update(app, |view, cx| view.reload(cx));
                 }),
         );
     }
@@ -872,7 +912,7 @@ mod tests {
             );
         });
         // ⟳ 重算：回到加载态但偏好不变
-        view.update(cx, |view, cx| view.start_loading(cx));
+        view.update(cx, |view, cx| view.reload(cx));
         view.update(cx, |view, _| {
             assert!(view.state().is_loading());
             assert_eq!(view.sections_open(), [true, false, true, false]);
@@ -917,14 +957,35 @@ mod tests {
         });
     }
 
+    #[gpui_kit::test]
+    fn project_state_gates_rules_management(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let view = cx.new(InsightView::new);
+        view.update(cx, |view, _| {
+            assert!(
+                !view.project_open(),
+                "保守初值：宿主未告知项目状态前，依赖项目的入口先禁用"
+            );
+        });
+        view.update(cx, |view, cx| view.set_project_open(true, cx));
+        view.update(cx, |view, _| assert!(view.project_open()));
+        view.update(cx, |view, cx| view.set_project_open(false, cx));
+        view.update(cx, |view, _| assert!(!view.project_open()));
+    }
+
     /// 四态 + 五个 Tab 都能渲染一帧而不 panic（渲染是纯读路径，不许有副作用）
     #[gpui_kit::test]
     fn renders_every_state_and_tab(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
 
-        // 空态（无目标）
+        // 空态（无目标）+ 无项目提示（`project_open` 初值为 false）
         cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        // 告知项目已打开：提示行消失、⚙ 可用
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| view.set_project_open(true, cx));
             window.draw(cx).clear(cx);
         });
         // 加载态

@@ -52,6 +52,7 @@ use crate::ui;
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 use mock::mock_view::{MockDetailView, MockPanel};
 use mock::mock_view::SchemaRequest;
+use insight::{InsightEvent, InsightView};
 
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
 ///
@@ -125,6 +126,10 @@ pub struct Shared {
     pub mock_panel: Rc<RefCell<Option<WeakEntity<MockPanel>>>>,
     /// M7：中央「Mock 数据」详情 tab 实体句柄（弱引用；已关闭则重新创建）。
     pub mock_detail: Rc<RefCell<Option<WeakEntity<MockDetailView>>>>,
+    /// M8：洞察面板实体句柄（弱引用；右键入口与 Quick Open 用）。
+    ///
+    /// 面板自带状态与视图（`insight::InsightView`），工作台只持句柄 + 订阅它的取数请求。
+    pub insight_panel: Rc<RefCell<Option<WeakEntity<InsightView>>>>,
     /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// Phase C：Ctrl+F 请求聚焦导航搜索框（宿主置位，导航面板渲染时消费）。
@@ -173,6 +178,7 @@ impl Shared {
             editor_set: Rc::new(RefCell::new(None)),
             property_target: Rc::new(RefCell::new(None)),
             mock_panel: Rc::new(RefCell::new(None)),
+            insight_panel: Rc::new(RefCell::new(None)),
             mock_detail: Rc::new(RefCell::new(None)),
             open_mock_detail: Rc::new(RefCell::new(None)),
             focus_nav_search: Rc::new(Cell::new(false)),
@@ -9609,6 +9615,10 @@ pub struct RightSidebarPanel {
     focus_handle: FocusHandle,
     /// Mock 面板实体（随面板构造期创建，无 I/O；视图与状态均在 mock crate）
     mock_panel: Entity<MockPanel>,
+    /// 洞察面板实体（随面板构造期创建，无 I/O；视图与状态均在 insight crate）
+    insight_panel: Entity<InsightView>,
+    /// 洞察面板的取数请求订阅（仅持有）
+    _insight_sub: Subscription,
 }
 
 impl RightSidebarPanel {
@@ -9618,50 +9628,48 @@ impl RightSidebarPanel {
         let host = crate::components::mock_host::build_host(&shared);
         let mock_panel = cx.new(|cx| MockPanel::new(host, cx));
         *shared.mock_panel.borrow_mut() = Some(mock_panel.downgrade());
+
+        // 洞察面板：同样构造期创建 + 登记句柄（右键入口要在事件路径拿到它，
+        // 懒创建会让「先右键、后面板尚未渲染」的路径丢目标）。
+        let insight_panel = cx.new(|cx| InsightView::new(cx));
+        *shared.insight_panel.borrow_mut() = Some(insight_panel.downgrade());
+        // 宿主接线：面板只发「请加载这个目标」，取数在后台执行器上跑完再回填。
+        // 项目根在此处解析成所有权数据（`Shared` 不可跨线程，见 `services::insight_jobs`）。
+        let _insight_sub = {
+            let panel = insight_panel.clone();
+            let shared_for_sub = shared.clone();
+            cx.subscribe(
+                &insight_panel,
+                move |_this, _emitter, event: &InsightEvent, cx| {
+                    let root = shared_for_sub
+                        .project
+                        .borrow()
+                        .as_ref()
+                        .map(|session| session.root.clone());
+                    crate::services::insight_jobs::handle_event(&panel, root, event, cx);
+                },
+            )
+        };
         Self {
             shared,
             focus_handle: cx.focus_handle(),
             mock_panel,
+            insight_panel,
+            _insight_sub,
         }
     }
 
-    fn render_insight_placeholder(&self, fg: Hsla) -> Div {
-        div()
-            .v_flex()
-            .w_full()
-            .gap_1()
-            .pl_2()
-            .pr_2()
-            .pt_2()
-            .pb_2()
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .child("洞察"),
-            )
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .text_color(fg)
-                    .child("· 库/表/列画像（占位）"),
-            )
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .text_color(fg)
-                    .child("· 数据质量建议（占位）"),
-            )
+    /// M8：洞察面板——视图与状态在 insight crate（`insight::InsightView`），
+    /// 本面板只做「转发渲染」 + 同步项目开关。
+    fn render_insight_panel(&mut self, cx: &mut Context<Self>) -> Div {
+        // 项目可能随时被打开 / 切换 / 关闭：**渲染是权威同步点**（对齐 `apply_*_mode` 的口径），
+        // 面板据此显示「未打开项目」提示（Phase 2 接入规则管理后也会约束 ⚙）。
+        // `set_project_open` 只在值变化时 notify，不会触发渲染循环。
+        let open = self.shared.project.borrow().is_some();
+        self.insight_panel
+            .update(cx, |panel, cx| panel.set_project_open(open, cx));
+        let panel = self.insight_panel.clone();
+        div().v_flex().size_full().min_h_0().child(panel)
     }
 
     /// M7：Mock 生成面板——视图与状态在 mock crate（`mock::mock_view::MockPanel`），
@@ -9744,10 +9752,7 @@ impl Render for RightSidebarPanel {
         // 各分支自己取色：Mock 分支要 `&mut cx`（创建输入框 / 取实体句柄），
         // 不能先 `let fg = cx.theme()…` 把 `cx` 借出去。
         let content: Div = match active {
-            RightPanel::Insight => {
-                let fg = cx.theme().colors.foreground;
-                self.render_insight_placeholder(fg)
-            }
+            RightPanel::Insight => self.render_insight_panel(cx),
             RightPanel::Mock => self.render_mock_panel(cx),
             RightPanel::History => {
                 let fg = cx.theme().colors.foreground;
@@ -9933,5 +9938,225 @@ mod tests {
         assert_eq!(nav_type_short_label("postgresql"), "PostgreSQL");
         // 未知类型回退原 id。
         assert_eq!(nav_type_short_label("snowflake"), "snowflake");
+    }
+
+    /// M5 草稿箱：面板内的纯函数语义（排序 / 压平 / 模板后缀 / 请求消费 / 搜索结果映射）。
+    ///
+    /// 窗口级交互（真点击、真轮询）不在这一层，见 `scratchpad-user-guide.md` §9 验收清单。
+    mod scratchpad_panel {
+        use super::super::{
+            ScratchpadSearchView, ScratchpadSort, ScratchpadTemplate, Shared, ScratchpadEntryKind,
+            flatten_scratchpad, join_scratchpad_rel, scratchpad_apply_template_ext,
+            scratchpad_entry_matches, scratchpad_size_label, scratchpad_split_name, scratchpad_sort_entries,
+            search_view_from_payload, ScratchpadEntry,
+        };
+        use crate::services::scratchpad_jobs::SearchPayload;
+        use std::collections::{HashMap, HashSet};
+        use std::path::PathBuf;
+
+        fn file(name: &str, size: u64, modified: &str) -> ScratchpadEntry {
+            ScratchpadEntry {
+                name: name.to_string(),
+                path: PathBuf::from(format!("/p/{name}")),
+                kind: ScratchpadEntryKind::File,
+                size,
+                modified_at: Some(modified.to_string()),
+                children: None,
+            }
+        }
+
+        fn folder(name: &str, modified: &str, kids: Option<Vec<ScratchpadEntry>>) -> ScratchpadEntry {
+            ScratchpadEntry {
+                name: name.to_string(),
+                path: PathBuf::from(format!("/p/{name}")),
+                kind: ScratchpadEntryKind::Folder,
+                size: 0,
+                modified_at: Some(modified.to_string()),
+                children: kids,
+            }
+        }
+
+        #[test]
+        fn template_suffix_rules() {
+            // 无后缀：补模板后缀。
+            assert_eq!(
+                scratchpad_apply_template_ext("note", ScratchpadTemplate::Sql),
+                "note.sql"
+            );
+            // 上一次由模板补的后缀：随模板切换替换。
+            assert_eq!(
+                scratchpad_apply_template_ext("note.md", ScratchpadTemplate::Sql),
+                "note.sql"
+            );
+            // 用户自写的后缀：尊重不动。
+            assert_eq!(
+                scratchpad_apply_template_ext("note.txt", ScratchpadTemplate::Sql),
+                "note.txt"
+            );
+            // 空白模板：不补也不剥。
+            assert_eq!(
+                scratchpad_apply_template_ext("note", ScratchpadTemplate::Blank),
+                "note"
+            );
+            assert_eq!(
+                scratchpad_apply_template_ext("note.sql", ScratchpadTemplate::Blank),
+                "note"
+            );
+        }
+
+        #[test]
+        fn name_split_and_relative_join() {
+            assert_eq!(
+                scratchpad_split_name("a.sql"),
+                ("a".to_string(), ".sql".to_string())
+            );
+            // 前导点的隐藏名不当作后缀（面板不展示隐藏项，但函数本身应一致）。
+            assert_eq!(
+                scratchpad_split_name(".env"),
+                (".env".to_string(), String::new())
+            );
+            assert_eq!(join_scratchpad_rel("", "a.sql"), "a.sql");
+            assert_eq!(join_scratchpad_rel("dir/", "a.sql"), "dir/a.sql");
+        }
+
+        #[test]
+        fn sort_keeps_folders_first_and_follows_direction() {
+            let mut rows = vec![
+                file("b.sql", 200, "2026-01-02T00:00:00Z"),
+                folder("dir", "2026-01-03T00:00:00Z", None),
+                file("a.sql", 100, "2026-01-04T00:00:00Z"),
+            ];
+            scratchpad_sort_entries(&mut rows, ScratchpadSort::Name, false);
+            let names: Vec<&str> = rows.iter().map(|e| e.name.as_str()).collect();
+            assert_eq!(names, vec!["dir", "a.sql", "b.sql"], "文件夹恒在前，其余按名称升序");
+
+            scratchpad_sort_entries(&mut rows, ScratchpadSort::Size, true);
+            let names: Vec<&str> = rows.iter().map(|e| e.name.as_str()).collect();
+            assert_eq!(names, vec!["dir", "b.sql", "a.sql"], "大小降序（文件夹仍在前）");
+        }
+
+        #[test]
+        fn flatten_respects_expand_and_filter() {
+            let tree = vec![folder(
+                "dir",
+                "t",
+                Some(vec![file("a.sql", 1, "t"), file("b.csv", 2, "t")]),
+            )];
+            let loaded = HashMap::new();
+
+            // 未展开：只出行本身。
+            let mut out = Vec::new();
+            flatten_scratchpad(
+                &tree,
+                0,
+                &HashSet::new(),
+                &loaded,
+                ScratchpadSort::Name,
+                false,
+                "",
+                &mut out,
+            );
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].0, 0, "根层级缩进为 0");
+
+            // 展开：子项深度 +1。
+            let mut expanded = HashSet::new();
+            expanded.insert("/p/dir".to_string());
+            let mut out = Vec::new();
+            flatten_scratchpad(
+                &tree,
+                0,
+                &expanded,
+                &loaded,
+                ScratchpadSort::Name,
+                false,
+                "",
+                &mut out,
+            );
+            assert_eq!(out.len(), 3);
+            assert_eq!(out[1].0, 1);
+
+            // 过滤命中子项：父目录保留（且强制展开），命中项在内。
+            let mut out = Vec::new();
+            flatten_scratchpad(
+                &tree,
+                0,
+                &HashSet::new(),
+                &loaded,
+                ScratchpadSort::Name,
+                false,
+                "b.csv",
+                &mut out,
+            );
+            let names: Vec<&str> = out.iter().map(|(_, e)| e.name.as_str()).collect();
+            assert_eq!(names, vec!["dir", "b.csv"]);
+        }
+
+        #[test]
+        fn entry_matches_self_or_loaded_subtree() {
+            let mut loaded = HashMap::new();
+            loaded.insert("/p/dir".to_string(), vec![file("deep.csv", 1, "t")]);
+            let dir = folder("dir", "t", None);
+
+            assert!(scratchpad_entry_matches(&dir, "", &loaded), "空过滤全通过");
+            assert!(scratchpad_entry_matches(&dir, "di", &loaded), "自身命中");
+            assert!(
+                scratchpad_entry_matches(&dir, "deep", &loaded),
+                "懒加载子树命中"
+            );
+            assert!(!scratchpad_entry_matches(&dir, "nope", &loaded));
+        }
+
+        #[test]
+        fn size_label_uses_readable_units() {
+            assert_eq!(scratchpad_size_label(512), "512 B");
+            assert_eq!(scratchpad_size_label(2048), "2.0 KB");
+            assert_eq!(scratchpad_size_label(3 * 1024 * 1024), "3.0 MB");
+        }
+
+        #[test]
+        fn open_file_request_is_consumed_once() {
+            let shared = Shared::new();
+            assert!(shared.take_open_file_request().is_none(), "初始无请求");
+            *shared.open_file_request.borrow_mut() = Some(PathBuf::from("/p/a.sql"));
+            assert_eq!(
+                shared.take_open_file_request(),
+                Some(PathBuf::from("/p/a.sql")),
+                "首次取出得到路径"
+            );
+            assert!(
+                shared.take_open_file_request().is_none(),
+                "取出即清空：同一请求不会重复打开"
+            );
+        }
+
+        #[test]
+        fn search_payload_maps_into_view() {
+            let payload = SearchPayload {
+                scanned: 4,
+                truncated: true,
+                matches: vec![scratchpad::SearchMatch {
+                    file: "a.sql".to_string(),
+                    line_number: 7,
+                    line_content: "select id".to_string(),
+                    before_context: vec!["before".to_string()],
+                    after_context: vec!["after".to_string()],
+                    match_spans: vec![(7, 9)],
+                }],
+                replaced: None,
+            };
+            let view: ScratchpadSearchView =
+                search_view_from_payload("id".to_string(), true, false, payload);
+            assert_eq!(view.query, "id");
+            assert!(view.is_regex && !view.case_sensitive);
+            assert_eq!(view.scanned, 4);
+            assert!(view.truncated);
+            assert_eq!(view.hits.len(), 1);
+            // 命中区间与上下文逐字段带过来（高亮靠它们渲染）。
+            assert_eq!(view.hits[0].spans, vec![(7, 9)]);
+            assert_eq!(view.hits[0].line, 7);
+            assert_eq!(view.hits[0].before, vec!["before".to_string()]);
+            assert_eq!(view.hits[0].after, vec!["after".to_string()]);
+        }
     }
 }

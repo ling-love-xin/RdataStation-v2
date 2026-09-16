@@ -8,6 +8,7 @@
 //! - `editor_session`：编辑器会话存储的工作台实现（编辑器 A12 光标/模式持久化）
 //! - `editor_files`：编辑器的系统文件对话框（A9 打开 / 另存为）
 //! - `editor_connections`：编辑器的连接端口（B1 连接列表 + 自动建连）
+//! - `insight_jobs`：洞察画像的后台执行（面板只发请求，取数在后台执行器上跑完回填）
 
 pub mod connection_service;
 pub mod data_source_service;
@@ -17,6 +18,7 @@ pub mod editor_connections;
 pub mod editor_exec;
 pub mod editor_files;
 pub mod editor_session;
+pub mod insight_jobs;
 pub mod mock_generator;
 pub mod mock_jobs;
 pub mod nav_jobs;
