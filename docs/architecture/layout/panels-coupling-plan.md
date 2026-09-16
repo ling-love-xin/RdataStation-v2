@@ -84,7 +84,9 @@ HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 
 | **S2a** ✅ | `EditorBridge { edit_connection, new_connection }` + 装配函数 `panels::install_editor_bridge`（生产宿主与同构测试宿主共用一份接线）；nav 4 处改为调端口；删掉 `open_edit` / `new_connection_request` 字段与编辑区 render 的两处 take（副作用回到事件路径） | `Shared` 字段 27 → 25；`dialog_host_layer` 4 项全绿（两个入口测试改走端口） |
 | **S2b** ✅ | `editor_set` → `insert_sql`（编辑区私有缓冲：`set_value` 需要 `Window`，而「生成 SQL」的排空路径拿不到窗口）、`property_target` → `show_properties`；nav 7 处改为调端口；`Shared` 新增 4 个便利方法（`edit_connection` / `new_connection` / `insert_sql` / `show_properties`，"端口未装配时静默丢弃"的容错收在一处） | `Shared` 字段 33 → 31；面板 16 项 + 契约 6 项 + `dialog_host_layer` 4 项 + `db_navigator` 2 项全绿 |
 | **S2c** | `scratchpad_search`（双向数据交接：scratchpad 写、编辑区渲染、scratchpad 自读）——需先确定展示状态归谁，再定端口形状 | 剩余 4 个字段（含 S3 的 3 个信号）归零 |
-| **S3** | 反向桥：`ScratchpadBridge::ensure_pump`、`NavBridge::focus_search`、`HostBridge::open_in_editor` | 同上；`scratchpad_pump_request` / `focus_nav_search` / `open_file_request` 归零 |
+| **S3** | 反向端口，拆两步： | — |
+| **S3a** ✅ | `scratchpad_pump_request` → `ScratchpadBridge::ensure_pump`（装配入口 `panels::install_scratchpad_bridge`）；删除侧栅 `Render` 里的 take 块（**又一个 render 内副作用回到事件路径**） | `Shared` 字段 31 → 30；面板 16 项 + 契约 6 项 + `dialog_host_layer` 4 项全绿 |
+| **S3b** | `focus_nav_search`（宿主→nav，写方在 `view.rs` 的 action）、`open_file_request`（scratchpad→宿主，读方在 `view.rs` 的 render take）；建议均用端口 + `install_*_bridge` 同一形态 | 剩余字段归零 |
 | **S4** | `ui_contract` 加 `Shared` 字段白名单契约；更新 `panels-modules.md` §3 与本文档状态 | 契约测试通过；§3 表格与实际一致 |
 
 ## 5. 与 P1（同步 I/O 后台化）、P2（视图下沉）的顺序

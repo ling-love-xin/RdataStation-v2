@@ -254,7 +254,7 @@ impl EditorPanel {
         );
         *self.shared.notice.borrow_mut() = Some("替换中…".to_string());
         // 结果由侧栏的轮询印回填：请求它确保还在跑。
-        self.shared.scratchpad_pump_request.set(true);
+        self.shared.ensure_scratchpad_pump(cx);
         self.shared.notify_host(cx);
         cx.notify();
     }

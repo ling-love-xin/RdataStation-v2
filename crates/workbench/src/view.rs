@@ -508,6 +508,8 @@ impl WorkbenchView {
         // S2：编辑区命令端口——导航 / 草稿箱改调这里，不再直写 `Shared` 的请求字段
         // （接线只此一份，见 `docs/architecture/layout/panels-coupling-plan.md` §3）。
         crate::panels::install_editor_bridge(&shared, editor.clone());
+        // 草稿箱命令端口（编辑区「全部替换」需要草稿箱轮询在跑）。
+        crate::panels::install_scratchpad_bridge(&shared, sidebar.clone());
 
         // 订阅侧边栏事件：连接选中 -> 更新共享状态并重绘编辑器。
         let subscription = cx.subscribe(&sidebar, |this, _entity, event: &SidebarEvent, cx| {

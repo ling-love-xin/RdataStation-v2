@@ -38,7 +38,7 @@ pub use editor::EditorPanel;
 pub use nav::PropertyRequest;
 pub use right::RightSidebarPanel;
 pub use scratchpad_panel::ScratchpadSearchView;
-pub use shared::{EditorBridge, ProjectActionRequest, Shared};
+pub use shared::{EditorBridge, ProjectActionRequest, ScratchpadBridge, Shared};
 
 use nav::{DatabaseNavView, NavOrderItem};
 use scratchpad_panel::ScratchpadView;
@@ -213,13 +213,6 @@ impl Focusable for SidebarPanel {
 
 impl Render for SidebarPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // 草稿箱后台任务的结果回填：必须在**所有**面板模式下都消费，
-        // 因为编辑区的「全部替换」也复用这个轮询印（此时左侧可能停在数据源面板）。
-        // （仅剩一种例外：“完全隐藏”时侧栏整体不渲染，请求会留在标记里，
-        //  恢复侧栏后当帧补上——任务本身已在后台完成，不会丢结果。）
-        if self.shared.scratchpad_pump_request.take() {
-            self.ensure_scratchpad_pump(cx);
-        }
         let bg = cx.theme().colors.background;
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();
@@ -250,6 +243,15 @@ impl ComponentPanel for SidebarPanel {
             .font_weight(FontWeight::MEDIUM)
             .child(self.shared.active_left.get().label())
     }
+}
+
+/// 注入草稿箱命令端口（装配期调用；生产入口 `WorkbenchView::init_workspace`）。
+pub fn install_scratchpad_bridge(shared: &Shared, sidebar: Entity<SidebarPanel>) {
+    *shared.scratchpad_bridge.borrow_mut() = Some(ScratchpadBridge {
+        ensure_pump: Rc::new(move |cx: &mut App| {
+            sidebar.update(cx, |panel, cx| panel.ensure_scratchpad_pump(cx));
+        }),
+    });
 }
 
 /// 注入编辑区命令端口（装配期调用）。

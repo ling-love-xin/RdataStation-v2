@@ -52,6 +52,16 @@ pub struct EditorBridge {
     pub show_properties: Rc<dyn Fn(PropertyRequest, &mut App)>,
 }
 
+/// 草稿箱对外命令端口（装配期由 `WorkbenchView::init_workspace` 注入）。
+///
+/// 编辑区的「全部替换」需要草稿箱的轮询印在跑：原先靠 `Shared` 布尔标记 +
+/// 侧栏渲染时 `take`（副作用落在 render），现改为事件路径直接调端口。
+#[derive(Clone)]
+pub struct ScratchpadBridge {
+    /// 确保草稿箱轮询在跑（结果回填由侧栏渲染消费）。
+    pub ensure_pump: Rc<dyn Fn(&mut App)>,
+}
+
 /// 面板与工作台共享的状态。
 #[derive(Clone)]
 pub struct Shared {
@@ -85,8 +95,8 @@ pub struct Shared {
     pub project: Rc<RefCell<Option<project::ui::OpenProject>>>,
     /// M5：草稿箱内容搜索结果（侧栏发起，结果落中央编辑区）。
     pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
-    /// M5：请求侧栏确保草稿箱轮询印在跑（编辑区发起替换后置位，侧栏 render 消费）。
-    pub scratchpad_pump_request: Rc<Cell<bool>>,
+    /// 草稿箱命令端口（`None` = 装配未完成，调用方需容忍空端口）。
+    pub scratchpad_bridge: Rc<RefCell<Option<ScratchpadBridge>>>,
     /// M5：请求在中央编辑器中打开某个文件（草稿箱双击 / Enter 置位，宿主 render 消费）。
     ///
     /// 只传**绝对路径**：编辑器无根，按路径自己判定模式 / 只读等级（Phase C 契约）。
@@ -145,7 +155,7 @@ impl Shared {
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
             scratchpad_search: Rc::new(RefCell::new(None)),
-            scratchpad_pump_request: Rc::new(Cell::new(false)),
+            scratchpad_bridge: Rc::new(RefCell::new(None)),
             open_file_request: Rc::new(RefCell::new(None)),
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_dirty: Rc::new(Cell::new(false)),
@@ -243,6 +253,13 @@ impl Shared {
     pub fn insert_sql(&self, sql: String, cx: &mut App) {
         if let Some(bridge) = self.editor_bridge.borrow().clone() {
             (*bridge.insert_sql)(sql, cx);
+        }
+    }
+
+    /// 确保草稿箱轮询在跑（走 `ScratchpadBridge`；装配未完成时静默丢弃）。
+    pub fn ensure_scratchpad_pump(&self, cx: &mut App) {
+        if let Some(bridge) = self.scratchpad_bridge.borrow().clone() {
+            (*bridge.ensure_pump)(cx);
         }
     }
 
