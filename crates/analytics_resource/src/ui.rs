@@ -30,3 +30,10 @@ pub const CONTROL_HEIGHT_SM: f32 = 1.625;
 pub const ARCHIVE_DIALOG_WIDTH: f32 = 34.0;
 /// 取回（检出）对话框宽（30.0rem = 480px；原型 §7.1——三字段 + 预览）。
 pub const CHECKOUT_DIALOG_WIDTH: f32 = 30.0;
+/// 草稿选择对话框宽（34.0rem = 544px）。
+///
+/// 原型 §7.1 只列了五个对话框，本栅复用归档确认那一档：同族的表单 / 列表对话框，
+/// 宽度口径一致比另起一个数字更稳。
+pub const PICK_DIALOG_WIDTH: f32 = 34.0;
+/// 草稿选择列表的最大高度（18.0rem = 288px）：再长就滚动，不靠加高解决。
+pub const PICK_LIST_MAX_HEIGHT: f32 = 18.0;

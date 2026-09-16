@@ -24,7 +24,10 @@ use rds_analytics_resource::dialogs::archive::{
 };
 use rds_analytics_resource::dialogs::checkout::{
     CheckoutDialogResult, CheckoutDialogSeed, build_inputs as build_checkout_inputs,
-    open_checkout_dialog_with, suggest_work_copy_name, submit_checkout,
+    open_checkout_dialog_with, submit_checkout, suggest_work_copy_name,
+};
+use rds_analytics_resource::dialogs::pick::{
+    DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
 };
 
 /// 窗口根：组件库的 `Root`（`open_dialog` / `render_dialog_layer` 依赖它）。
@@ -68,6 +71,79 @@ fn checkout_seed() -> CheckoutDialogSeed {
         target_dir_label: "D:\\proj\\scratchpad".to_string(),
         version: 3,
     }
+}
+
+fn draft(rel: &str, connection: Option<&str>) -> DraftCandidate {
+    DraftCandidate {
+        abs_path: std::path::PathBuf::from(format!("D:/p/scratchpad/{rel}")),
+        rel_path: rel.to_string(),
+        display_name: rel
+            .rsplit_once('/')
+            .map(|(_, name)| name)
+            .unwrap_or(rel)
+            .trim_end_matches(".sql")
+            .to_string(),
+        connection_id: connection.map(str::to_string),
+    }
+}
+
+#[gpui_kit::test]
+fn draft_pick_dialog_opens_and_hands_back_the_checked_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let picked_log: Rc<RefCell<Vec<Vec<DraftCandidate>>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let candidates = vec![
+        draft("reports/a.sql", Some("conn_1")),
+        draft("b.sql", None),
+        draft("reports/c.sql", None),
+    ];
+    let seed = PickDialogSeed {
+        candidates: candidates.clone(),
+    };
+    let state = PickDialogState::new(seed.candidates.len());
+    {
+        let picked_log = picked_log.clone();
+        cx.update(|window, cx| {
+            open_draft_pick_dialog_with(
+                window,
+                cx,
+                seed,
+                state.clone(),
+                move |picked, _window, _cx| {
+                    picked_log.borrow_mut().push(picked);
+                },
+            );
+        });
+        // 未选任何一条：不提交（按钮本就置灰，这条是给今后改动留的绳）。
+        assert!(submit_pick(&candidates, &state).is_none());
+    }
+    draw(cx);
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "草稿选择对话框应打开"
+    );
+    assert!(cx.debug_bounds("draft-pick-ok").is_some());
+    assert!(cx.debug_bounds("draft-pick-cancel").is_some());
+    assert!(picked_log.borrow().is_empty(), "没选就不该回调宿主");
+
+    // 勾两条（含一条带来源连接的）：提交收的就是它们，顺序与列表一致。
+    state.set_selected(0, true);
+    state.set_selected(2, true);
+    let picked = submit_pick(&candidates, &state).expect("选了两条就该通过");
+    assert_eq!(
+        picked
+            .iter()
+            .map(|candidate| candidate.rel_path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["reports/a.sql", "reports/c.sql"]
+    );
+    assert_eq!(
+        picked[0].connection_id.as_deref(),
+        Some("conn_1"),
+        "来源连接随行走"
+    );
 }
 
 #[gpui_kit::test]
@@ -114,7 +190,8 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
             .update(cx, |state, cx| state.set_value("  ", window, cx));
     });
     assert!(
-        cx.update(|_window, cx| submit_archive(&inputs_for_submit, cx)).is_none(),
+        cx.update(|_window, cx| submit_archive(&inputs_for_submit, cx))
+            .is_none(),
         "空显示名不该通过校验"
     );
     assert!(submitted.borrow().is_empty(), "校验不过时宿主不该被通知");
@@ -124,9 +201,9 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
         inputs_for_submit
             .name
             .update(cx, |state, cx| state.set_value("月报 2026", window, cx));
-        inputs_for_submit
-            .tags
-            .update(cx, |state, cx| state.set_value(" 报表, 月度 ，报表 ", window, cx));
+        inputs_for_submit.tags.update(cx, |state, cx| {
+            state.set_value(" 报表, 月度 ，报表 ", window, cx)
+        });
         inputs_for_submit
             .keep_versions
             .update(cx, |state, cx| state.set_value("3", window, cx));
@@ -145,7 +222,8 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
             .update(cx, |state, cx| state.set_value("很多", window, cx));
     });
     assert!(
-        cx.update(|_window, cx| submit_archive(&inputs_for_submit, cx)).is_none(),
+        cx.update(|_window, cx| submit_archive(&inputs_for_submit, cx))
+            .is_none(),
         "非数字不该通过"
     );
 }
@@ -205,12 +283,13 @@ fn checkout_dialog_opens_and_validates_file_name(cx: &mut TestAppContext) {
 
     // 路径分隔符进不了文件名（挡在对话框，不让它变成一次注定失败的复制）。
     cx.update(|window, cx| {
-        inputs_for_submit
-            .file_name
-            .update(cx, |state, cx| state.set_value("子目录/月报.sql", window, cx));
+        inputs_for_submit.file_name.update(cx, |state, cx| {
+            state.set_value("子目录/月报.sql", window, cx)
+        });
     });
     assert!(
-        cx.update(|_window, cx| submit_checkout(&inputs_for_submit, cx)).is_none(),
+        cx.update(|_window, cx| submit_checkout(&inputs_for_submit, cx))
+            .is_none(),
         "含路径分隔符的文件名不该通过"
     );
     assert!(submitted.borrow().is_empty());

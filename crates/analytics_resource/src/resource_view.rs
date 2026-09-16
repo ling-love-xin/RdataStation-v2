@@ -185,8 +185,10 @@ pub fn row_tail(detail: &str, modified: &str, version: i32) -> String {
 /// 每个动作都带上 `Window` / `App`：宿主侧要开对话框与只读打开（都需要窗口句柄），
 /// 而面板天然持有它们（`on_click` / `on_action` 都提供）——先把上下文带出去，比将来改签名轻。
 pub trait ResourcesHost: 'static {
-    /// 归档入口（面板头「归档」）：弹对话框 / 选文件由宿主负责。
-    fn request_archive(&self, window: &mut Window, cx: &mut App);
+    /// 归档入口（面板头「＋ ▾」第一项）：从**草稿箱**选文件归档（宿主弹草稿多选对话框）。
+    fn request_archive_from_drafts(&self, window: &mut Window, cx: &mut App);
+    /// 归档入口（面板头「＋ ▾」第二项）：从**本地文件**选（宿主弹系统文件选择）。
+    fn request_archive_from_file(&self, window: &mut Window, cx: &mut App);
     /// 打开（只读）：宿主以**编辑器只读**打开本体——改它要先去取回。
     ///
     /// 与 `request_checkout` 同理：收的是**面板已有的那条详情**（本体路径在它身上），
@@ -833,12 +835,29 @@ impl ResourcesPanel {
                     .child("资产库"),
             )
             .child(
+                // 原型 §2.1：`＋ ▾` 主操作，两项——**存档的本体必须来自某处**，
+                // 所以菜单里是两个来源，而不是"新建存档"。
                 Button::new("archive-add")
                     .ghost()
-                    .label("归档…")
+                    .label("＋ ▾")
                     .disabled(read_only)
-                    // 省略号 = “点了会再问一轮”（宿主先弹系统文件选择，再弹确认对话框）。
-                    .on_click(move |_, window, cx| host.request_archive(window, cx)),
+                    .dropdown_menu({
+                        let host = host.clone();
+                        move |menu, _window, _cx| {
+                            let drafts_host = host.clone();
+                            let file_host = host.clone();
+                            menu.item(
+                                PopupMenuItem::new("从草稿箱归档…").on_click(move |_, window, cx| {
+                                    drafts_host.request_archive_from_drafts(window, cx)
+                                }),
+                            )
+                            .item(
+                                PopupMenuItem::new("从本地文件归档…").on_click(move |_, window, cx| {
+                                    file_host.request_archive_from_file(window, cx)
+                                }),
+                            )
+                        }
+                    }),
             )
     }
 
@@ -1085,7 +1104,9 @@ impl ResourcesPanel {
     fn render_empty(&self, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().colors.muted_foreground;
         let read_only = self.snapshot.read_only;
-        let host = self.host.clone();
+        // 两个按钮各拿一份（`Rc` 不是 `Copy`：两个闭包都要 `move` 走它）。
+        let host_for_drafts = self.host.clone();
+        let host_for_file = self.host.clone();
 
         div()
             .flex_1()
@@ -1110,9 +1131,16 @@ impl ResourcesPanel {
                 Button::new("archive-for-empty")
                     .primary()
                     .debug_selector(|| "archive-empty-action".to_string())
-                    .label("选择文件归档…")
+                    .label("从草稿箱归档…")
                     .disabled(read_only)
-                    .on_click(move |_, window, cx| host.request_archive(window, cx)),
+                    .on_click(move |_, window, cx| host_for_drafts.request_archive_from_drafts(window, cx)),
+            )
+            .child(
+                Button::new("archive-for-empty-file")
+                    .secondary()
+                    .label("从本地文件归档…")
+                    .disabled(read_only)
+                    .on_click(move |_, window, cx| host_for_file.request_archive_from_file(window, cx)),
             )
     }
 
@@ -1230,7 +1258,8 @@ impl Render for ResourcesPanel {
             .on_action(cx.listener({
                 let host = host.clone();
                 move |_: &mut Self, _: &commands::RequestArchive, window, cx| {
-                    host.request_archive(window, cx)
+                    // 动作没有"选菜单"这一步，落到**本地文件**那条（与面板头第二项一致）。
+                    host.request_archive_from_file(window, cx)
                 }
             }))
             .on_action(cx.listener({

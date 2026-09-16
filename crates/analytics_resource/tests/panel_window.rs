@@ -36,8 +36,11 @@ impl RecordingHost {
 }
 
 impl ResourcesHost for RecordingHost {
-    fn request_archive(&self, _window: &mut Window, _cx: &mut App) {
-        self.calls.borrow_mut().push("archive".to_string());
+    fn request_archive_from_drafts(&self, _window: &mut Window, _cx: &mut App) {
+        self.calls.borrow_mut().push("archive:drafts".to_string());
+    }
+    fn request_archive_from_file(&self, _window: &mut Window, _cx: &mut App) {
+        self.calls.borrow_mut().push("archive:file".to_string());
     }
     fn request_open(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("open:{}", detail.id));

@@ -13,3 +13,4 @@
 
 pub mod archive;
 pub mod checkout;
+pub mod pick;
