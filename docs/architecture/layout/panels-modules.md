@@ -48,7 +48,6 @@
 | 字段 | 使用模块 | 语义 |
 | --- | --- | --- |
 | `notice` | editor / nav / scratchpad | 三方共写同一条提示文案 |
-| `property_target` | nav 写 → editor 读 | 导航双击对象 → 属性面板请求 |
 | `selected` / `connections` | nav / editor | 选中连接与列表 |
 | `driver_catalog` | nav / editor | 驱动 id → 类型/显示名 |
 | `open_edit` / `new_connection_request` | nav → editor | ✅ 已端口化（`EditorBridge::edit_connection` / `new_connection`，S2a）；字段已删 |

@@ -286,6 +286,19 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// `connection` = 本文档绑定的连接 id（B1）；`None` = 未绑定，由实现决定回退口径
     /// （workbench 的实现回退到“当前活动连接”，与 1a 一致）
     fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String>;
+
+    /// 中断这个连接上正在跑的查询（B3）
+    ///
+    /// 语义分三种，都要能给人看：
+    /// - `Ok(true)`：确实送到了取消（有的驱动是发 `KILL QUERY` 这类往返）；
+    /// - `Ok(false)`：没有可中断的查询（已经在两句之间了）——不是错误，但要说出来；
+    /// - `Err(reason)`：中断失败。
+    ///
+    /// 与 [`Self::run`] 一样在**工作线程**上调用（实现里可以阻塞）：通道会起一条一次性线程
+    /// 来调它，UI 线程不等。默认实现 = 不支持中断（宿主没接能力的真实状态）。
+    fn cancel(&self, _connection: Option<&str>) -> Result<bool, String> {
+        Err("当前执行器不支持中断".to_string())
+    }
 }
 
 // ===== 跑完放哪 =====
@@ -346,6 +359,14 @@ pub struct ExecChannel {
     tx: Option<Sender<ExecJob>>,
     done: Arc<Mutex<VecDeque<ExecOutcome>>>,
     busy: Arc<AtomicBool>,
+    /// 正在跑的作业的连接（B3）：中断要知道该取消哪个连接（`busy` 为真时才有意义）
+    running_connection: Arc<Mutex<Option<String>>>,
+    /// 已请求中断（B3）：批量里**剩余语句**据此标"已取消"，而不是接着往下跑
+    cancel_requested: Arc<AtomicBool>,
+    /// 中断尝试的结果文案（主线程轮询取走：中断失败 / 没在跑 都要留痕）
+    cancel_notes: Arc<Mutex<VecDeque<String>>>,
+    /// 执行器句柄：`run` 在工作线程上、`cancel` 在一次性线程上，两处都要拿它
+    runner: Arc<dyn QueryRunner>,
 }
 
 impl ExecChannel {
@@ -354,9 +375,15 @@ impl ExecChannel {
         let (tx, rx) = mpsc::channel::<ExecJob>();
         let done: Arc<Mutex<VecDeque<ExecOutcome>>> = Arc::new(Mutex::new(VecDeque::new()));
         let busy = Arc::new(AtomicBool::new(false));
+        let running_connection: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        let cancel_notes: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
         let worker_done = done.clone();
         let worker_busy = busy.clone();
+        let worker_running = running_connection.clone();
+        let worker_cancelled = cancel_requested.clone();
+        let worker_runner = runner.clone();
         std::thread::Builder::new()
             .name("rds-editor-exec".to_string())
             // 驱动解析在 debug 下递归较深（与 nav 工作线程同一考虑）
@@ -367,8 +394,14 @@ impl ExecChannel {
                     // 「执行中」并允许第二次提交（那就成了隐藏的并行执行）。
                     worker_busy.store(true, Ordering::SeqCst);
                     for sql in job.statements {
-                        // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
-                        let result = runner.run(job.connection.as_deref(), &sql);
+                        // 中断之后**不再往下跑**（架构 §3.4：剩余语句各自回一条“已取消”），
+                        // 否则用户看到的“中断”只是打断了当前那一句。
+                        let result = if worker_cancelled.load(Ordering::SeqCst) {
+                            Err(CANCELED.to_string())
+                        } else {
+                            // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
+                            worker_runner.run(job.connection.as_deref(), &sql)
+                        };
                         if let Ok(mut queue) = worker_done.lock() {
                             queue.push_back(ExecOutcome {
                                 document: job.document.clone(),
@@ -379,6 +412,7 @@ impl ExecChannel {
                             });
                         }
                     }
+                    *lock(&worker_running) = None;
                     worker_busy.store(false, Ordering::SeqCst);
                 }
             })
@@ -388,6 +422,10 @@ impl ExecChannel {
             tx: Some(tx),
             done,
             busy,
+            running_connection,
+            cancel_requested,
+            cancel_notes,
+            runner,
         }
     }
 
@@ -412,6 +450,11 @@ impl ExecChannel {
         let Some(tx) = self.tx.as_ref() else {
             return Err(SubmitError::Busy);
         };
+        // 起跑的记号在**提交线程**上同步写（不能等工作线程收到 job 再写）：
+        // 用户可能刚按执行就按中断，那时工作线程还没开始——按“作业里的连接”去取消
+        // 会取到空值，取消就发给了错误的连接。
+        *lock(&self.running_connection) = connection.clone();
+        self.cancel_requested.store(false, Ordering::SeqCst);
         self.busy.store(true, Ordering::SeqCst);
         if tx
             .send(ExecJob {
@@ -437,9 +480,61 @@ impl ExecChannel {
         queue.drain(..).collect()
     }
 
+    /// 中断当前作业（B3）
+    ///
+    /// 同步只做"能不能中断"的判断（没在跑就直接回绝，理由可读）；真正的中断在一条一次性
+    /// 线程上做——端口实现允许阻塞（有的驱动要发 `KILL QUERY` 这样的往返），而 UI 线程不能等。
+    ///
+    /// 先置中断意图再叫取消：批量里**剩余语句**据此标“已取消”。
+    pub fn cancel(&self) -> Result<(), String> {
+        if !self.is_busy() {
+            return Err("当前没有执行在运行".to_string());
+        }
+        self.cancel_requested.store(true, Ordering::SeqCst);
+        let connection = lock(&self.running_connection).clone();
+        let runner = self.runner.clone();
+        let notes = self.cancel_notes.clone();
+        std::thread::Builder::new()
+            .name("rds-editor-cancel".to_string())
+            .spawn(move || {
+                let note = match runner.cancel(connection.as_deref()) {
+                    Ok(true) => None,
+                    Ok(false) => Some("没有正在执行的查询".to_string()),
+                    Err(error) => Some(format!("中断失败：{error}")),
+                };
+                if let Some(note) = note
+                    && let Ok(mut queue) = notes.lock()
+                {
+                    queue.push_back(note);
+                }
+            })
+            .expect("failed to spawn editor cancel worker");
+        Ok(())
+    }
+
+    /// 中断尝试的结果文案（主线程轮询；成功的中断不需要回执——状态栏已经说了“已请求中断”）
+    pub fn drain_cancel_notes(&self) -> Vec<String> {
+        let mut queue = match self.cancel_notes.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        queue.drain(..).collect()
+    }
+
     /// 是否有执行在跑（状态栏 / 按钮禁用用）
     pub fn is_busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
+    }
+}
+
+/// 中断之后剩余语句的结果文案（架构 §3.4：中断后不再往下跑）
+const CANCELED: &str = "已取消";
+
+/// 取锁（中毒时取回内部值：一条队列中毒不该把整个执行通道拖死）
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
@@ -460,7 +555,7 @@ mod tests {
     use crate::model::DocumentId;
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     // ===== 执行目标解析 =====
@@ -750,6 +845,240 @@ mod tests {
             assert!(Instant::now() < deadline, "通道迟迟没回到空闲");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// 等一次取消真的送到了执行器（取消在一次性线程上做，得等一小下）
+    fn wait_until_cancelled(seen: &SeenConnections) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while seen.lock().expect("锁").is_empty() {
+            assert!(Instant::now() < deadline, "取消没送到执行器");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// 等工作线程真的把某句发出去了（要中断的是“跑着的查询”，不是“刚提交的”那个瞬间）
+    fn wait_until_started(calls: &Arc<AtomicUsize>, expected: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while calls.load(Ordering::SeqCst) < expected {
+            assert!(Instant::now() < deadline, "语句迟迟没发出去");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    // ===== B3：中断 =====
+
+    /// 可取消的假执行器：慢查询在 `run` 里自旋等取消（模拟驱动被取消令牌打断）
+    struct CancellableRunner {
+        stop: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+        seen_cancels: SeenConnections,
+    }
+
+    impl CancellableRunner {
+        fn new() -> (Arc<Self>, Arc<AtomicBool>, Arc<AtomicUsize>, SeenConnections) {
+            let stop = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let seen_cancels: SeenConnections = Arc::new(Mutex::new(Vec::new()));
+            let runner = Arc::new(Self {
+                stop: stop.clone(),
+                calls: calls.clone(),
+                seen_cancels: seen_cancels.clone(),
+            });
+            (runner, stop, calls, seen_cancels)
+        }
+    }
+
+    impl QueryRunner for CancellableRunner {
+        fn run(&self, _connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if sql.contains("slow") {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !self.stop.load(Ordering::SeqCst) {
+                    assert!(Instant::now() < deadline, "假执行器没等到取消");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                return Err("Query cancelled".to_string());
+            }
+            Ok(QueryData {
+                columns: vec!["n".to_string()],
+                rows: vec![vec!["1".to_string()]],
+                elapsed_ms: 1,
+                truncated: false,
+            })
+        }
+
+        fn cancel(&self, connection: Option<&str>) -> Result<bool, String> {
+            self.seen_cancels
+                .lock()
+                .expect("锁")
+                .push(connection.map(str::to_string));
+            self.stop.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+
+    /// 中断要知道取消**哪个连接**：运行中作业的绑定必须原样传下去
+    #[test]
+    fn cancel_reaches_the_runner_with_the_running_connection() {
+        let (runner, _stop, calls, seen_cancels) = CancellableRunner::new();
+        let channel = ExecChannel::new(runner);
+        let target = ExecTarget::Statement("select slow".to_string());
+        channel
+            .submit(
+                DocumentId::new("doc-cancel"),
+                &target,
+                Some("P_orders".to_string()),
+                ResultPlacement::Replace,
+            )
+            .expect("提交");
+
+        wait_until_started(&calls, 1);
+        channel.cancel().expect("中断应当被接受");
+        wait_until_cancelled(&seen_cancels);
+        assert_eq!(
+            seen_cancels.lock().expect("锁").as_slice(),
+            [Some("P_orders".to_string())],
+            "取消的是文档绑定的那个连接"
+        );
+
+        let done = wait(&channel);
+        let error = done[0].result.as_ref().expect_err("被中断的语句要如实报错");
+        assert!(error.contains("cancel"), "{error}");
+        wait_until_idle(&channel);
+    }
+
+    /// 刚提交就中断（工作线程还没拿到 job）：取消仍要发给**这个作业的**连接，
+    /// 而不是拿不到连接就取消活动连接
+    #[test]
+    fn cancel_right_after_submit_still_targets_the_job_connection() {
+        let (runner, _stop, calls, seen_cancels) = CancellableRunner::new();
+        let channel = ExecChannel::new(runner);
+        let target = ExecTarget::Statement("select slow".to_string());
+        channel
+            .submit(
+                DocumentId::new("doc-cancel-early"),
+                &target,
+                Some("P_orders".to_string()),
+                ResultPlacement::Replace,
+            )
+            .expect("提交");
+
+        // 不等工作线程：这一刻正是“工作线程还没开始”的窗口
+        channel.cancel().expect("中断应当被接受");
+        wait_until_cancelled(&seen_cancels);
+        assert_eq!(
+            seen_cancels.lock().expect("锁").as_slice(),
+            [Some("P_orders".to_string())]
+        );
+
+        let done = wait(&channel);
+        assert!(done[0].result.is_err(), "这一句没有真的跑完");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "中断在它开跑前就到了");
+        wait_until_idle(&channel);
+    }
+
+    /// 没在跑就回绝（理由可读）：中断不该是一个“点了没反应”的按钮
+    #[test]
+    fn cancel_without_a_running_job_is_refused() {
+        let (channel, _calls, _seen) = channel();
+        let error = channel.cancel().expect_err("没在跑就该回绝");
+        assert!(error.contains("没有执行"), "{error}");
+    }
+
+    /// 中断之后**剩余语句不再发给驱动**，各自回一条“已取消”（架构 §3.4）
+    #[test]
+    fn cancel_stops_the_rest_of_a_batch() {
+        let (runner, _stop, calls, _seen_cancels) = CancellableRunner::new();
+        let channel = ExecChannel::new(runner);
+        let target = batch_target("select slow;\nselect 2;\nselect 3;");
+        channel
+            .submit(
+                DocumentId::new("doc-batch-cancel"),
+                &target,
+                None,
+                ResultPlacement::NewSet,
+            )
+            .expect("提交批量");
+
+        wait_until_started(&calls, 1);
+        channel.cancel().expect("中断应当被接受");
+        let done = wait_for(&channel, 3);
+
+        let first = done[0].result.as_ref().expect_err("第一句被中断");
+        assert!(first.contains("cancel"), "{first}");
+        for rest in &done[1..] {
+            assert_eq!(
+                rest.result.as_ref().expect_err("剩余语句也要有结果"),
+                "已取消",
+                "剩余语句要标已取消：{:?}",
+                rest.sql
+            );
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "剩余语句不得再发给驱动（“中断”应当真的不再往下跑）"
+        );
+        wait_until_idle(&channel);
+    }
+
+    /// 取消时发现“没在跑的查询”（已在两句之间）要留一句可读的回执，不能当成功
+    #[test]
+    fn a_cancel_that_finds_nothing_running_leaves_a_note() {
+        /// 取消总是“没找到在跑的查询”；`run` 卡住好让通道处于忙态
+        struct NothingToCancel {
+            stop: Arc<AtomicBool>,
+        }
+        impl QueryRunner for NothingToCancel {
+            fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !self.stop.load(Ordering::SeqCst) {
+                    assert!(Instant::now() < deadline, "假执行器没被放行");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(QueryData::default())
+            }
+            fn cancel(&self, _connection: Option<&str>) -> Result<bool, String> {
+                Ok(false)
+            }
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let channel = ExecChannel::new(Arc::new(NothingToCancel { stop: stop.clone() }));
+        channel
+            .submit(
+                DocumentId::new("doc-nothing"),
+                &ExecTarget::Statement("select 1".to_string()),
+                None,
+                ResultPlacement::Replace,
+            )
+            .expect("提交");
+        channel.cancel().expect("中断应当被接受");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut notes = Vec::new();
+        while notes.is_empty() {
+            notes = channel.drain_cancel_notes();
+            assert!(Instant::now() < deadline, "取消回执迟迟没回来");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(notes[0].contains("没有正在执行的查询"), "{}", notes[0]);
+        assert!(channel.drain_cancel_notes().is_empty(), "取走即清空");
+
+        stop.store(true, Ordering::SeqCst);
+        wait(&channel);
+        wait_until_idle(&channel);
+    }
+
+    /// 断了中断能力的执行器要说实话（默认实现 = 不支持，而不是假装成功）
+    #[test]
+    fn the_port_says_the_truth_when_it_cannot_cancel() {
+        let runner = FakeRunner {
+            calls: Arc::new(AtomicUsize::new(0)),
+            seen_connections: Arc::new(Mutex::new(Vec::new())),
+        };
+        let error = runner.cancel(None).expect_err("默认实现不支持中断");
+        assert!(error.contains("不支持中断"), "{error}");
     }
 
     #[test]

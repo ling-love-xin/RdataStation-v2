@@ -124,6 +124,24 @@ impl EditorShared {
         guard.as_ref().map(|channel| channel.drain()).unwrap_or_default()
     }
 
+    /// 中断当前执行（B3）；没在跑就回绝（理由可读，不是静默）
+    pub fn cancel(&self) -> Result<(), String> {
+        let guard = self.exec.borrow();
+        match guard.as_ref() {
+            Some(channel) => channel.cancel(),
+            None => Err("当前未接入执行".to_string()),
+        }
+    }
+
+    /// 中断尝试的结果（主线程轮询：中断失败 / 没在跑 都要留痕）
+    pub fn drain_cancel_notes(&self) -> Vec<String> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|channel| channel.drain_cancel_notes())
+            .unwrap_or_default()
+    }
+
     /// 是否有执行在跑
     pub fn is_executing(&self) -> bool {
         let guard = self.exec.borrow();
