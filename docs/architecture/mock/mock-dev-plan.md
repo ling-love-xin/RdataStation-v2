@@ -64,7 +64,7 @@
 | C2 | 从数据库导入结构 → 字段表 | ✅ 已完成（导入结构对话框 + 导航右键定向；`NavCache` → `MetadataService` cache-aside） | 选连接/库/schema/表 → 字段表自动填充 + 智能映射（含置信度） |
 | C3 | 列依赖编辑器 | Mock 面板（依赖 `resolve_dependencies`） | 拓扑顺序正确；**先拍板**是否实现表达式计算（§10-（6）） |
 | C4 | 用户模板保存 / 复用（`MockGenerationStore`） | Mock 面板 + `persistence.rs` | 存→列→取→用于生成 全链路；补 SQLite 往返测试 |
-| C5 | 复杂参数（集合 / 加权）外置编辑入口 | Mock 面板 + `generator_catalog` 的 `ParamKind::Complex` | `Weighted.choices` / `Sequence.values` 可编辑后生成值符合预期 |
+| C5 | 复杂参数（集合 / 加权）外置编辑入口 | Mock 面板 + `generator_catalog` 的 `ParamKind::Complex` | ✅ 已完成（列编辑对话框里的**多行文本**：一行一项 / 一行「值, 权重」；非法输入保留上一个有效值 + 行号提示；空集合与全零权重在**生成前**拦住） |
 
 ### Phase D — 出口与历史
 
@@ -116,6 +116,7 @@
 | T22 | 生成器搜索 | 空查＝全量 137；标签前缀优先于标签包含；多词是 AND；大小写不敏感；确认写回该列且置信度转 `manual`；无命中为空 | ✅ 视图测试（5 纯逻辑 + 2 窗口） |
 | T23 | 落库跨库直写 | 建表 + 写行一次 `ATTACH` 完成；中文列名、20k 行、目标表多列均正确；**同名建表不删既有数据**；插入失败回滚刚建的表且已解挂 | ✅ 引擎测试 4 项 + 装配测试 2 项 |
 | T24 | 临时表清理 | 切项目清掉全部 mock 临时表（两套命名都认、幂等）；`ATTACH` 进来的文件库表不被误删；面板作废旧预览、草稿保留 | ✅ 引擎测试 3 项 + mock 集成 2 项 + 视图测试 1 项 + 任务集成 1 项 |
+| T25 | 集合类参数可编辑 | 取值集合往返 / 分隔符变体（半角、全角、制表符，值可带逗号）；非法输入保留上一个有效值 + 行号提示；留空 / 全零权重生成前拦住（不 panic） | ✅ 视图测试 6 项 + 引擎测试 2 项 |
 
 ## 5. 风险
 
@@ -154,3 +155,4 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-16 | Phase B8（本轮） | **生成器搜索**：`search_generators`（标签 / 名称 / 分类，多词 AND，前缀优先排序）+ `GeneratorSearchDelegate`（`ListDelegate`）+ `MockPanel::open_generator_search`（`List` 自带搜索框 / 虚拟化 / 空态）；字段行菜单首项作入口，选择后写回该列；固定「不在 update 里 read 自己」的重入问题（`current` 由 `&mut self` 算出传入） | 110 单元（含 45 视图）+ 26 引擎集成 + 10 装配 + 8 任务集成全过 |
 | 2026-09-16 | Phase E（本轮 · 落库直写） | **去文本中转**：engine 新增 `build_attach_database` / `build_detach_database` / `build_create_table_in` / `build_drop_table_in` / `build_insert_select` + `QualifiedTable`；mock 新增 `write_temp_table_to_database`（`ATTACH` → 建表 → `INSERT SELECT` → `DETACH`，失败只回滚本次刚建的表）；装配层 `persist_table_at` / `append_table_at` 改走直写；**并修掉一个潜在的误删风险**（回滚分支原本会把同名既有表 DROP 掉，现已加测试锁住） | 110 单元 + **30 引擎集成** + **12 装配** + 8 任务集成全过；engine 库测试 305 项全过 |
 | 2026-09-16 | Phase E5（本轮 · 临时表清理） | **按来源清理临时表**：`TempTableSource::prefixes()`（两套命名都认）+ `TempTableManager::list_by_source` / `drop_by_source`（以库为准，限定 `catalog = memory`）+ `DuckDBManager::{in_memory_temp_tables, drop_in_memory_temp_tables}`；mock 暴露 `clear_temp_tables` / `temp_tables`；宿主在**项目切换**时清理并让面板 `forget_generated`（草稿保留） | 111 单元（含 46 视图）+ 30 + **2 清理集成**（独立进程）+ 12 装配 + **8 任务集成**全过 |
+| 2026-09-16 | Phase C5（本轮 · 复杂参数） | **集合类参数可编辑**：`parse_complex_param` / `complex_param_text`（一行一项 / 一行「值, 权重」，分隔符取最后一个）+ `ParamWidget::{Scalar, Complex}`（标量单行、集合多行 `Textarea`）+ `commit_complex_param`（非法输入保留上一个有效值 + 就地行号提示）；`summarize_params` 显示集合项数；**并补上生成前护栏** `constraint_set_problem`（空集合 / 全零权重原本会在生成期 panic 掉工作线程）；目录注释随脚本更新（改 `tools/gen_mock_generator_catalog.py` 后重跑 + rustfmt） | 117 单元（含 52 视图）+ **32 引擎集成** + 2 清理集成 + 12 装配 + 8 任务集成全过 |

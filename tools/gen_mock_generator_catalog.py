@@ -209,7 +209,7 @@ LABELS = {
     "Weighted": "加权取值",
 }
 
-# 需要用户填写的复杂参数（列表/元组列表），面板只做只读展示
+# 需要用户填写的复杂参数（列表/元组列表）：面板用多行文本编辑（一行一项 / 一行「值, 权重」）
 COMPLEX_FIELDS = {"values", "choices"}
 
 PARAM_LABEL = {
@@ -388,7 +388,7 @@ def main():
     add("    Text,")
     add("    /// 布尔")
     add("    Bool,")
-    add("    /// 复杂参数（字符串列表 / 加权选项）——面板只读展示，不内联编辑")
+    add("    /// 复杂参数（字符串列表 / 加权选项）——面板用多行文本编辑（一行一项）")
     add("    Complex,")
     add("}")
     add("")
@@ -486,7 +486,8 @@ def main():
     add("/// 由规格标识构造一个可用的默认配置（选择器切换生成器时使用）。")
     add("///")
     add("/// 参数取「可读默认值」（如区间 1~10、日期 2020-01-01~2025-12-31），")
-    add("/// 用户可在参数区继续调整；复杂参数（列表 / 加权选项）留空。")
+    add("/// 用户可在参数区继续调整；复杂参数（列表 / 加权选项）默认留空，")
+    add("/// 需在列编辑对话框里填写（留空会在生成前被拦住，不会 panic）。")
     add("pub fn default_of(name: &str) -> Option<GeneratorConfig> {")
     add("    let config = match name {")
     for name, fields, _ in variants:

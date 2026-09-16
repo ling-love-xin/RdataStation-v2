@@ -80,7 +80,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | --- | --- |
 | `src/lib.rs` | crate 入口与 re-export（含依赖方向声明） |
 | `src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`(13) / `GeneratorConfig`(137) / `Locale`(13) / 导出与持久化模型 / 依赖模型 |
-| `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 进度回调 + 取消）/ 预览 / 5 种导出 / **`write_temp_table_to_database`（跨库直写落库：ATTACH → INSERT SELECT）** / **`clear_temp_tables`·`temp_tables`（临时表生命周期）** / `insert_statements`（INSERT 文本，仅导出脚本用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / 场景生成 / `sanitize_identifier` |
+| `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 进度回调 + 取消 + **集合类参数生成前校验**）/ 预览 / 5 种导出 / **`write_temp_table_to_database`（跨库直写落库：ATTACH → INSERT SELECT）** / **`clear_temp_tables`·`temp_tables`（临时表生命周期）** / `insert_statements`（INSERT 文本，仅导出脚本用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / 场景生成 / `sanitize_identifier` |
 | `src/generators.rs` | `generate_cell`：137 变体 → 值（`fake` crate，接入 `StdRng`） |
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
@@ -110,8 +110,9 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | **落库跨库直写**（`ATTACH` + `INSERT SELECT`，数据不经 Rust 字符串） | 写入期间内存库连接持有目标文件锁（导出类任务不可取消，见架构 D23） |
 | **临时表清理**（切项目时按前缀清掉本进程的 mock 临时表，两套命名都认） | 同目标表名重复生成会重建，**换名字**才会多占一份内存 |
 | 列映射（≈91 条规则 + 类型兜底 + 置信度三态） | —— |
-| 生成器目录（137 变体分类 / 标签 / 参数规格，穷尽派生） | 复杂参数（`values` / `choices`）的外置编辑入口 |
+| 生成器目录（137 变体分类 / 标签 / 参数规格，穷尽派生） | 生成器的「推荐」标记与最近使用 |
 | **生成器搜索**：分类子菜单 + 搜索对话框（中文标签 / 名称 / 分类，多词 AND，`List` 自带搜索框与空态） | 生成器的「推荐」标记与最近使用 |
+| **集合类参数可编辑**：外键取值 / 序列取值 / 加权选项用多行文本填（一行一项 / 一行「值, 权重」） | 集合的导入 / 粘贴（从 CSV 列拷值） |
 | **面板：表名 / 行数·种子·语言 / 列来源 / 生成 / 出口按钮组 / 结果** | 生成器的「推荐」标记与最近使用 |
 | **详情 tab：字段卡片（生成器分类子菜单 / 搜索对话框 + 编辑 / 智能 / 删除）+ 预览表格** | 预览列宽自适应与列头排序（目前固定 9rem） |
 | **四个显式出口：新建表 / 追加（自增接续）/ 草稿箱 `{项目}/mock/` / 另存为** | 项目作用域分析库（装配层已留 `*_at` 路径入口） |

@@ -80,7 +80,7 @@ pub enum ParamKind {
     Text,
     /// 布尔
     Bool,
-    /// 复杂参数（字符串列表 / 加权选项）——面板只读展示，不内联编辑
+    /// 复杂参数（字符串列表 / 加权选项）——面板用多行文本编辑（一行一项）
     Complex,
 }
 
@@ -1849,7 +1849,8 @@ pub fn spec_by_name(name: &str) -> Option<&'static GeneratorSpec> {
 /// 由规格标识构造一个可用的默认配置（选择器切换生成器时使用）。
 ///
 /// 参数取「可读默认值」（如区间 1~10、日期 2020-01-01~2025-12-31），
-/// 用户可在参数区继续调整；复杂参数（列表 / 加权选项）留空。
+/// 用户可在参数区继续调整；复杂参数（列表 / 加权选项）默认留空，
+/// 需在列编辑对话框里填写（留空会在生成前被拦住，不会 panic）。
 pub fn default_of(name: &str) -> Option<GeneratorConfig> {
     let config = match name {
         "auto_increment" => GeneratorConfig::AutoIncrement { start: 1, step: 1 },

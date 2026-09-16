@@ -1,7 +1,7 @@
 # Mock 数据生成（M7）— 原型设计
 
 > 本文件定义**长什么样**：落位与尺寸、两处排版、对话框、状态矩阵、主题映射、与 v1 的逐项对照。
-> 交互稿：`mock-prototype.html`（v2 原生，RDS Light/Dark + 9 场景可切）。
+> 交互稿：`mock-prototype.html`（v2 原生，RDS Light/Dark + 11 场景可切）。
 > 语义与数据流：`mock-architecture.md`；任务与进度：`mock-dev-plan.md`。
 
 ## 1. 落位与尺寸
@@ -133,10 +133,24 @@ v2 右 Dock 没有拖拽调宽），故按「配置与出口在右、字段与�
 └────────────────────────────────────────┘
 ```
 
+集合类参数（外键取值 / 序列取值 / 加权选项）改成**多行文本**（同样是目录派生，不手写清单）：
+
+```
+│ 加权选项                                 │ ← 标签一行
+│ ┌─────────────────────────────────────┐ │
+│ │ 北京, 3                              │ │ ← 一行一项；choices 是「值, 权重」
+│ │ 上海, 1                              │ │   分隔符取**最后一个**（值里可带逗号）
+│ └─────────────────────────────────────┘ │
+│ 每行「值, 权重」，如「北京, 3」…          │ ← 格式提示（muted）
+│ 第 2 行「x」：权重需为数字                 │ ← 解析失败：danger 行（**不写回生成器**）
+```
+
 - **工作副本语义**：「应用」才写回目标列，取消即丢弃（`ColumnDraft`）；
 - 参数表单由 `generator_catalog::spec_of()` 派生（137 变体零手工对齐）；标量参数即时补丁回生成器配置
-  （JSON 补丁，见 `patch_param`）；复杂参数（`ForeignKey.values` / `Sequence.values` / `Weighted.choices`）
-  在对话框内只做说明，不内联编辑；
+  （JSON 补丁，见 `patch_param`）；
+- 集合类参数（`ForeignKey.values` / `Sequence.values` / `Weighted.choices`）用多行文本编辑
+  （`parse_complex_param` / `complex_param_text`）：合法即写回，非法则**保留上一个有效值**并在对话框里
+  给带行号的提示；留空 / 全零权重在生成前被引擎拦住（否则生成期会 panic）；
 - 生成器身份变化（如「恢复智能默认」）后参数行**重建**（事件路径 `defer_in`，不在 render 里建实体）；
 - 「恢复智能默认」= `ColumnMapper::infer(列名, 类型)` 重跑映射（生成器 / 空值率 / 唯一 / 置信度 / 示例值一起复位）。
 
@@ -220,6 +234,7 @@ v2 右 Dock 没有拖拽调宽），故按「配置与出口在右、字段与�
 | 生成中 | 点「生成」/「追加」（后台任务） | 生成按钮转「生成中…」并禁用；下方 `Progress` 进度条 + 「k / N 批（≈已生成 / 目标 行）」+ 「取消」；详情 tab 摘要行尾追加百分比；首批回调前显示「准备中…」 |
 | 写入 / 导出中 | 点三个写出口（`Persist` / `Export` / `Scratchpad`） | 进度条转**不定量动画**、文案转「写入分析库中… / 写出文件中…（N 行）」；**不渲染取消**（DuckDB / 文件系统内不能中断）；生成与其余出口按钮保持禁用 |
 | 生成器搜索 | 字段行菜单首项「搜索生成器…（137 项）」 | 输入即过滤（同步，无 loading 闪烁）；命中行显「中文标签 / 名称 / 分类」，当前生成器打勾；无命中显 `List` 自带空态；点行 / 回车写回该列并关对话框 |
+| 集合类参数非法 | 按组合 / 列编辑对话框里改「取值集合 / 加权选项」 | 多行文本下方出现 danger 行（带行号），生成器**保持上一个有效值**；合法后自动消失 |
 | 取消中 | 已点「取消」，引擎尚未到批次边界 | 取消按钮转「正在取消…」并禁用（不重复下发）；到边界后转为「已取消」文案 |
 | 生成异常 | 后台线程退出（既无进度也无结果） | danger 行「后台生成任务异常结束（工作线程已退出）」；面板归位空闲可重试 |
 
@@ -247,7 +262,7 @@ v2 右 Dock 没有拖拽调宽），故按「配置与出口在右、字段与�
 | --- | --- | --- |
 | 配置面板 | `Entity<MockPanel>`（`crates/mock/src/mock_view.rs`） | 跨 frame 状态在实体上；宿主只持弱句柄 |
 | 详情 tab | `Entity<MockDetailView>` + `BasePanel` / `ComponentPanel` | 由宿主 `DockArea::add_panel(.., DockPlacement::Center, ..)` 加入编辑区 tab 组；`on_added_to` 记 tab 组句柄，重复点「查看详情」用 `TabGroup::select_tab` 聚焦自身 |
-| 表名 / 行数 / 种子 / 参数 / 空值率 | `Input` + `InputState` | `InputState::new` 需要 window：面板在 render 首次创建，对话框在打开时创建 |
+| 表名 / 行数 / 种子 / 参数 / 空值率 | `Input` + `InputState`（标量）/ `Textarea` + `TextareaState`（集合类） | `InputState::new` 需要 window：面板在 render 首次创建，对话框在打开时创建；多行输入高 `COMPLEX_INPUT_HEIGHT` = 5rem |
 | 语言 / 生成器 / 追加目标 / 草稿箱 / 另存为 | `Button` + `dropdown_menu`（`PopupMenuItem::checked/disabled`、`PopupMenu::submenu`） | 生成器 137 项按 **15 类子菜单**承载；追加目标列既有分析表 |
 | 字段行操作 | `Button`（`ghost` / `xsmall`） | ElementId 用列 id（`mock-edit-{id}` / `mock-gen-{id}`），不用下标 |
 | 唯一值开关 | `Switch`（`gpui_kit::component::switch`） | 受控：回调收到请求值，由视图写回并 `notify()` |

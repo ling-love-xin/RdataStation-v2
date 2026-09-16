@@ -200,6 +200,8 @@ button{font-family:inherit;cursor:pointer;}
 .form-line{display:flex;align-items:center;gap:10px;}
 .form-line .lab{flex:1;min-width:0;color:var(--muted);font-size:12px;}
 .form-line .inp{width:150px;}
+/* 集合类参数的多行输入（Textarea 示意） */
+.inp.area{width:100%;height:84px;resize:none;padding:6px 8px;line-height:1.55;font-family:Consolas,'SFMono-Regular',monospace;}
 
 /* ── 场景可见性 ── */
 .only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running,.only-writing{display:none;}
@@ -222,6 +224,7 @@ button{font-family:inherit;cursor:pointer;}
 [data-scn="column"] .only-imported{display:flex;}
 /* 生成器搜索：对话框后面是「已导入结构」的面板态（与列编辑场景同一口径） */
 [data-scn="generator"] .only-imported{display:flex;}
+[data-scn="constraint"] .only-imported{display:flex;}
 .detail-empty{display:none;}
 [data-scn="empty"] .detail-empty{display:flex;}
 [data-scn="empty"] .detail-fields{display:none;}
@@ -265,6 +268,7 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn" data-go="menu" onclick="setScene('menu')">生成器分类子菜单</button>
   <button class="scn" data-go="generator" onclick="setScene('generator')">生成器搜索</button>
   <button class="scn" data-go="column" onclick="setScene('column')">列编辑对话框</button>
+  <button class="scn" data-go="constraint" onclick="setScene('constraint')">约束类参数（多行编辑）</button>
 </div>
 <div class="scn-hint">场景切换只改变 Mock 面板 / 中央 tab / 对话框的呈现；窗口壳（标题栏 / 活动栏 / 左右边栏）为 v2 五段布局的简化示意。</div>
 
@@ -524,6 +528,30 @@ button{font-family:inherit;cursor:pointer;}
     </div>
   </div>
 
+  <!-- 约束类生成器的列编辑（集合类参数：多行文本，一行一项） -->
+  <div class="overlay" id="ov-constraint">
+    <div class="dialog">
+      <div class="dh">列编辑</div>
+      <div class="db">
+        <div class="form-line"><span class="lab">列名</span><input class="inp" value="order_status"></div>
+        <div class="form-line"><span class="lab">类型</span><button class="btn sm">VARCHAR ▾</button></div>
+        <div class="form-line"><span class="lab">生成器</span><span class="xs">加权取值（在字段行的菜单里切换）</span></div>
+        <div class="form-line" style="align-items:flex-start;"><span class="lab">加权选项</span><span></span></div>
+        <textarea class="inp area">北京, 3
+上海, 1
+广州, 1</textarea>
+        <div class="hint">每行「值, 权重」，如「北京, 3」；权重越大越容易被选中</div>
+        <div class="hint">非法输入不写回生成器，只在下方显示带行号的提示（如：第 2 行「x」：权重需为数字）</div>
+        <div class="form-line"><span class="lab">空值率（%）</span><input class="inp" value="0"></div>
+        <div class="form-line"><span class="lab">唯一值</span><button class="btn sm">允许重复</button></div>
+      </div>
+      <div class="df">
+        <button class="btn" onclick="setScene('imported')">取消</button>
+        <button class="btn primary" onclick="setScene('imported')">应用</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 列编辑对话框 -->
   <div class="overlay" id="ov-column">
     <div class="dialog">
@@ -568,6 +596,7 @@ function setScene(name){
   document.querySelectorAll('.scn').forEach(b => b.classList.toggle('on', b.dataset.go === name));
   document.getElementById('ov-column').classList.toggle('show', name === 'column');
   document.getElementById('ov-generator').classList.toggle('show', name === 'generator');
+  document.getElementById('ov-constraint').classList.toggle('show', name === 'constraint');
 }
 setScene('empty');
 </script>

@@ -16,7 +16,7 @@ use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
 use crate::error::{MockError, MockResult};
 use crate::models::{
     ColumnDataType, ColumnDef, ColumnDependency, ColumnMappingResponse, DependencyConfig,
-    DependencyType, ImportSchemaInput, Locale, MockConfig,
+    DependencyType, GeneratorConfig, ImportSchemaInput, Locale, MockConfig,
     MockExportFormat, MockGenerateResult, MockScenarioResult,
     MockScenarioTableResult, ScenarioTemplate,
 };
@@ -115,6 +115,12 @@ impl MockEngine {
                 return Err(MockError::InvalidColumn(format!(
                     "列 '{}' 的 nullable_ratio 必须介于 0.0~1.0，当前: {}",
                     col.name, col.nullable_ratio
+                )));
+            }
+            if let Some(reason) = constraint_set_problem(&col.generator) {
+                return Err(MockError::InvalidColumn(format!(
+                    "列 '{}' {reason}",
+                    col.name
                 )));
             }
         }
@@ -588,6 +594,34 @@ pub fn sanitize_identifier(name: &str) -> String {
         .collect::<String>()
         .trim_matches('_')
         .to_string()
+}
+
+/// 约束类生成器（外键取值 / 序列取值 / 加权取值）的集合问题。
+///
+/// 为什么必须在**生成前**拦住：生成期对空集合会直接 panic——
+/// `ForeignKey` 向空区间取随机索引、`Sequence` 做 `row_index % values.len()`（除零）、
+/// `Weighted` 抽 `0.0..total`（总权重为 0 也是空区间）。工作线程一挂，
+/// 该进程后面所有任务都失败（「后台工作线程不可用」），所以这里给一条可操作的错误。
+fn constraint_set_problem(generator: &GeneratorConfig) -> Option<&'static str> {
+    match generator {
+        GeneratorConfig::ForeignKey { values } if values.is_empty() => {
+            Some("的「外键取值」集合为空：请在列编辑对话框里填取值（一行一个）")
+        }
+        GeneratorConfig::Sequence { values, .. } if values.is_empty() => {
+            Some("的「序列取值」集合为空：请在列编辑对话框里填取值（一行一个）")
+        }
+        GeneratorConfig::Weighted { choices } if choices.is_empty() => {
+            Some("的「加权选项」为空：请在列编辑对话框里填「值, 权重」（至少一个权重大于 0）")
+        }
+        GeneratorConfig::Weighted { choices }
+            if !choices
+                .iter()
+                .any(|(_, weight)| weight.is_finite() && *weight > 0.0) =>
+        {
+            Some("的「加权选项」权重全为 0：请至少让一个权重大于 0")
+        }
+        _ => None,
+    }
 }
 
 fn sanitize_table_name(name: &str) -> String {

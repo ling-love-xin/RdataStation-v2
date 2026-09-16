@@ -870,3 +870,81 @@ async fn generate_scenario_generates_every_table_and_reports_progress() {
     assert_eq!(result.tables[0].temp_table_name, "temp_mock_it_parent");
     assert_eq!(result.tables[1].temp_table_name, "temp_mock_it_child");
 }
+
+// ==================== 约束类生成器（集合类参数） ====================
+
+/// 集合为空 / 权重全为 0：**生成前**拦住并给可读错误。
+///
+/// 不拦的话生成期会直接 panic（空区间取随机索引 / 除零 / 抽 `0.0..0`），
+/// 工作线程一挂，该进程后面所有任务都失败。
+#[tokio::test]
+async fn empty_constraint_collection_is_rejected_before_generating() {
+    for (hint, generator) in [
+        (
+            "外键取值",
+            GeneratorConfig::ForeignKey {
+                values: Vec::new(),
+            },
+        ),
+        (
+            "序列取值",
+            GeneratorConfig::Sequence {
+                values: Vec::new(),
+                cycle: false,
+            },
+        ),
+        ("加权选项", GeneratorConfig::Weighted { choices: Vec::new() }),
+        (
+            "加权选项",
+            GeneratorConfig::Weighted {
+                choices: vec![("a".to_string(), 0.0)],
+            },
+        ),
+    ] {
+        let config = MockConfig {
+            table_name: "t_empty_set".to_string(),
+            row_count: 5,
+            seed: Some(1),
+            locale: Locale::ZhCn,
+            columns: vec![col(
+                "v",
+                ColumnDataType::Varchar { length: None },
+                generator,
+            )],
+        };
+        let err = MockEngine::generate(config)
+            .await
+            .expect_err("应当被拦住");
+        assert!(err.to_string().contains(hint), "{err}");
+        assert!(err.to_string().contains("列 'v'"), "{err}");
+    }
+}
+
+/// 填上集合后就能正常生成（配对的"绿灯"用例：证明拦的是空集合本身）。
+#[tokio::test]
+async fn filled_constraint_collection_generates() {
+    let config = MockConfig {
+        table_name: "t_filled_set".to_string(),
+        row_count: 20,
+        seed: Some(9),
+        locale: Locale::ZhCn,
+        columns: vec![col(
+            "status",
+            ColumnDataType::Varchar { length: None },
+            GeneratorConfig::Weighted {
+                choices: vec![("已发货".to_string(), 3.0), ("已取消".to_string(), 1.0)],
+            },
+        )],
+    };
+    let result = MockEngine::generate(config).await.expect("填了集合就应当能生成");
+    assert_eq!(result.row_count, 20);
+
+    // 值必须来自集合（不能是空串或别的默认值）
+    let rows = rows_of(&result);
+    assert!(
+        rows.iter().all(|values| values
+            .first()
+            .is_some_and(|value| value.to_string() == "已发货" || value.to_string() == "已取消")),
+        "生成值应来自集合: {rows:?}"
+    );
+}

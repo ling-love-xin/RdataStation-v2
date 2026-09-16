@@ -49,7 +49,7 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::progress::Progress;
@@ -397,6 +397,9 @@ const PREVIEW_MIN_HEIGHT: f32 = 10.0;
 const MAX_ROWS: u32 = 1_000_000;
 /// 预览显示行数上限
 const PREVIEW_ROWS: usize = 10;
+/// 集合类参数多行输入的高度（5rem = 80px ≈ 5 行）
+const COMPLEX_INPUT_HEIGHT: f32 = 5.0;
+
 /// 生成器搜索列表高度（16rem = 256px；137 项靠 `List` 虚拟化 + 自带滚动）
 const SEARCH_LIST_HEIGHT: f32 = 16.0;
 
@@ -514,6 +517,115 @@ pub(crate) fn validate_table_name(name: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+/// 集合类参数最多多少项（防手滑贴进几万行；这些是取值集合，不是数据）。
+const MAX_COMPLEX_ITEMS: usize = 1000;
+
+/// 复杂参数（集合 / 加权选项）的文本 → JSON 值。
+///
+/// 格式（与 [`complex_param_text`] 成对）：
+/// - `values`（外键取值 / 序列取值）：一行一个值，空行忽略；
+/// - `choices`（加权选项）：一行「值, 权重」（半角/全角逗号或制表符分隔，取**最后**一个分隔符，
+///   所以值里可以带逗号）。
+///
+/// 校验不通过**不猜**：返回带行号的可读原因，调用方保留上一个有效值并就地提示。
+/// 为何必须拦住空集合与全零权重：生成期对它们会直接 panic（见 `MockEngine` 的 `constraint_set_problem`）。
+pub(crate) fn parse_complex_param(key: &str, text: &str) -> Result<serde_json::Value, String> {
+    let lines: Vec<(usize, &str)> = text
+        .lines()
+        .enumerate()
+        .map(|(index, line)| (index + 1, line.trim()))
+        .filter(|(_, line)| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return Err("至少要有一个值".to_string());
+    }
+    if lines.len() > MAX_COMPLEX_ITEMS {
+        return Err(format!(
+            "最多 {MAX_COMPLEX_ITEMS} 项（当前 {} 项）",
+            lines.len()
+        ));
+    }
+
+    match key {
+        "values" => Ok(serde_json::Value::Array(
+            lines
+                .iter()
+                .map(|(_, line)| serde_json::Value::from((*line).to_string()))
+                .collect(),
+        )),
+        "choices" => {
+            let mut choices = Vec::with_capacity(lines.len());
+            let mut has_positive = false;
+            for (line_no, line) in lines {
+                let Some((name, weight_text)) = split_choice(line) else {
+                    return Err(format!("第 {line_no} 行「{line}」：期望「值, 权重」"));
+                };
+                let Ok(weight) = weight_text.parse::<f64>() else {
+                    return Err(format!("第 {line_no} 行「{weight_text}」：权重需为数字"));
+                };
+                if !weight.is_finite() || weight < 0.0 {
+                    return Err(format!(
+                        "第 {line_no} 行「{weight_text}」：权重需为不小于 0 的数字"
+                    ));
+                }
+                has_positive |= weight > 0.0;
+                choices.push(serde_json::Value::Array(vec![
+                    serde_json::Value::from(name),
+                    serde_json::Value::from(weight),
+                ]));
+            }
+            if !has_positive {
+                return Err("至少一个权重要大于 0（否则无法抽样）".to_string());
+            }
+            Ok(serde_json::Value::Array(choices))
+        }
+        other => Err(format!("暂不支持编辑该参数：{other}")),
+    }
+}
+
+/// 加权选项的一行：`值, 权重`（分隔符取**最后一个**，值里可以带逗号 / 全角逗号 / 制表符）。
+fn split_choice(line: &str) -> Option<(&str, &str)> {
+    let (index, separator) = line
+        .char_indices()
+        .filter(|(_, c)| matches!(c, ',' | '，' | '\t'))
+        .last()?;
+    let name = line[..index].trim();
+    let weight = line[index + separator.len_utf8()..].trim();
+    (!name.is_empty() && !weight.is_empty()).then_some((name, weight))
+}
+
+/// 复杂参数的初值文本（JSON 值 → 多行文本，与 [`parse_complex_param`] 成对）。
+pub(crate) fn complex_param_text(config: &GeneratorConfig, key: &str) -> String {
+    let Some(serde_json::Value::Array(items)) = payload_of(config).and_then(|p| p.get(key).cloned())
+    else {
+        return String::new();
+    };
+    match key {
+        "choices" => items
+            .iter()
+            .map(|item| {
+                let name = item.get(0).and_then(|v| v.as_str()).unwrap_or_default();
+                let weight = item.get(1).and_then(|v| v.as_f64()).unwrap_or_default();
+                format!("{name}, {weight}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => items
+            .iter()
+            .map(|item| item.as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+/// 复杂参数的格式提示（对话框里贴在多行输入下方）。
+pub(crate) fn complex_param_hint(key: &str) -> &'static str {
+    match key {
+        "choices" => "每行「值, 权重」，如「北京, 3」；权重越大越容易被选中",
+        _ => "每行一个值，如「已发货」",
+    }
+}
+
 /// 把生成器参数按 JSON 补丁写回配置（137 变体零手工构造，见 `generator_catalog`）。
 pub(crate) fn patch_param(
     config: &GeneratorConfig,
@@ -521,13 +633,6 @@ pub(crate) fn patch_param(
     text: &str,
     kind: ParamKind,
 ) -> Option<GeneratorConfig> {
-    let mut value = serde_json::to_value(config).ok()?;
-    let outer = value.as_object_mut()?;
-    let payload = match outer.len() {
-        1 => outer.values_mut().next()?.as_object_mut()?,
-        _ => return None,
-    };
-    let slot = payload.get_mut(key)?;
     let next = match kind {
         ParamKind::Int => serde_json::Value::from(text.trim().parse::<i64>().ok()?),
         ParamKind::Float => serde_json::Value::from(text.trim().parse::<f64>().ok()?),
@@ -536,8 +641,25 @@ pub(crate) fn patch_param(
             text.trim().to_lowercase().as_str(),
             "true" | "1" | "是" | "yes"
         )),
-        ParamKind::Complex => return None,
+        // 复杂参数走 `parse_complex_param`（需要校验与行号提示），不在这里续写解析
+        ParamKind::Complex => parse_complex_param(key, text).ok()?,
     };
+    patch_param_value(config, key, next)
+}
+
+/// 把已解析好的 JSON 值写进生成器对应字段（复杂参数的入口）。
+pub(crate) fn patch_param_value(
+    config: &GeneratorConfig,
+    key: &str,
+    next: serde_json::Value,
+) -> Option<GeneratorConfig> {
+    let mut value = serde_json::to_value(config).ok()?;
+    let outer = value.as_object_mut()?;
+    let payload = match outer.len() {
+        1 => outer.values_mut().next()?.as_object_mut()?,
+        _ => return None,
+    };
+    let slot = payload.get_mut(key)?;
     *slot = next;
     serde_json::from_value(value).ok()
 }
@@ -568,7 +690,10 @@ pub(crate) fn summarize_params(config: &GeneratorConfig) -> String {
             continue;
         };
         let text = match field.kind {
-            ParamKind::Complex => continue,
+            ParamKind::Complex => {
+                let count = raw.as_array().map(|items| items.len()).unwrap_or(0);
+                format!("{count} 项")
+            }
             ParamKind::Bool => {
                 if raw.as_bool().unwrap_or(false) {
                     "是"
@@ -2026,6 +2151,34 @@ fn form_line(theme: &gpui_kit::component::Theme, label: &str, input: &Entity<Inp
         )
 }
 
+/// 复杂参数的一行：标签 + 多行文本（全宽）+ 格式提示。
+///
+/// 多行不能用 `form_line` 的「标签 | 定宽输入」横排：值集合一行一个，横排窄框放不下。
+fn complex_form_line(
+    theme: &gpui_kit::component::Theme,
+    label: &str,
+    hint: &str,
+    state: &Entity<TextareaState>,
+) -> Div {
+    div()
+        .v_flex()
+        .gap_1()
+        .w_full()
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(label.to_string()),
+        )
+        .child(Textarea::new(state).h(rems(COMPLEX_INPUT_HEIGHT)))
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(hint.to_string()),
+        )
+}
+
 impl Render for MockPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let fg = cx.theme().colors.foreground;
@@ -2064,10 +2217,31 @@ impl Render for MockPanel {
 
 // ==================== 详情视图（中央 tab：字段 + 预览） ====================
 
-/// 生成器参数的输入框（含订阅句柄：丢掉订阅会立即失效）。
+/// 对话框里的一行参数（标量：单行输入；集合 / 加权：多行文本 + 格式提示）。
+enum ParamRowView {
+    Scalar {
+        label: String,
+        state: Entity<InputState>,
+    },
+    Complex {
+        label: String,
+        hint: &'static str,
+        state: Entity<TextareaState>,
+    },
+}
+
+/// 参数输入控件（标量走单行 `Input`；集合 / 加权走多行 `Textarea`）。
+enum ParamWidget {
+    /// 标量参数：单行输入
+    Scalar(Entity<InputState>),
+    /// 集合 / 加权选项：多行文本（一行一项，格式见 [`parse_complex_param`]）
+    Complex(Entity<TextareaState>),
+}
+
+/// 生成器参数的输入控件（含订阅句柄：丢掉订阅会立即失效）。
 struct ParamInput {
     key: String,
-    state: Entity<InputState>,
+    widget: ParamWidget,
     _sub: Subscription,
 }
 
@@ -2083,6 +2257,8 @@ struct ColumnDraft {
     params: Vec<ParamInput>,
     null_input: Entity<InputState>,
     type_label: String,
+    /// 复杂参数解析失败的原因（键 + 文案）：只在对话框里就地提示，不写回生成器
+    param_error: Option<(String, String)>,
 }
 
 /// Mock 详情（中央编辑区 tab）：字段清单（编辑走对话框）+ 预览表格。
@@ -2193,6 +2369,7 @@ impl MockDetailView {
             sample_value: column.sample_value.clone(),
             params: Vec::new(),
             null_input,
+            param_error: None,
         });
         // 参数输入行按当前生成器建立（生成器身份变化后由 `rebuild_params` 重建）
         self.rebuild_params(window, cx);
@@ -2208,7 +2385,8 @@ impl MockDetailView {
             let null_state = draft.null_input.clone();
             let type_label = draft.type_label.clone();
             let unique = draft.def.unique;
-            let param_rows: Vec<(String, String, Entity<InputState>)> = draft
+            // 参数行：标量单行 / 集合多行，标签与提示都从目录派生（不手写清单）
+            let param_rows: Vec<ParamRowView> = draft
                 .params
                 .iter()
                 .map(|p| {
@@ -2218,15 +2396,20 @@ impl MockDetailView {
                         .find(|f| f.key == p.key)
                         .map(|f| f.label.to_string())
                         .unwrap_or_else(|| p.key.clone());
-                    (p.key.clone(), label, p.state.clone())
+                    match &p.widget {
+                        ParamWidget::Scalar(state) => ParamRowView::Scalar {
+                            label,
+                            state: state.clone(),
+                        },
+                        ParamWidget::Complex(state) => ParamRowView::Complex {
+                            label,
+                            hint: complex_param_hint(&p.key),
+                            state: state.clone(),
+                        },
+                    }
                 })
                 .collect();
-            let complex_notes: Vec<&'static str> = generator_catalog::spec_of(&draft.def.generator)
-                .params
-                .iter()
-                .filter(|f| f.kind == ParamKind::Complex)
-                .map(|f| f.label)
-                .collect();
+            let param_error = draft.param_error.clone();
             let generator_label = generator_catalog::spec_of(&draft.def.generator).label;
 
             let mut body = div()
@@ -2303,15 +2486,22 @@ impl MockDetailView {
                             .child(generator_label),
                     ),
             );
-            for (_key, label, state) in param_rows {
-                body = body.child(form_line(theme, &label, &state));
+            for row in param_rows {
+                body = body.child(match row {
+                    ParamRowView::Scalar { label, state } => form_line(theme, &label, &state),
+                    ParamRowView::Complex {
+                        label,
+                        hint,
+                        state,
+                    } => complex_form_line(theme, &label, hint, &state),
+                });
             }
-            for note in complex_notes {
+            if let Some((_, message)) = param_error {
                 body = body.child(
                     div()
                         .text_xs()
-                        .text_color(theme.colors.muted_foreground)
-                        .child(format!("{note}：复杂参数暂不内联编辑")),
+                        .text_color(theme.colors.danger)
+                        .child(message),
                 );
             }
             body = body.child(form_line(theme, "空值率（%）", &null_state));
@@ -2411,7 +2601,6 @@ impl MockDetailView {
             .params
             .iter()
             .copied()
-            .filter(|f| f.kind != ParamKind::Complex)
             .collect();
         let mut previous: HashMap<String, ParamInput> = draft
             .params
@@ -2424,37 +2613,82 @@ impl MockDetailView {
                 next.push(item);
                 continue;
             }
-            let initial = param_text(&generator, field.key);
-            let state = cx.new(|cx| InputState::new(window, cx));
-            state.update(cx, |s, cx| s.set_value(initial, window, cx));
             let key = field.key.to_string();
-            let key_for_closure = key.clone();
-            let kind = field.kind;
-            let _sub = cx.subscribe_in(
-                &state,
-                window,
-                move |view, emitter, ev: &InputEvent, _window, cx| {
-                    if !matches!(ev, InputEvent::Change) {
-                        return;
-                    }
-                    let text = emitter.read(cx).value().to_string();
-                    let Some(draft) = view.draft.as_mut() else {
-                        return;
-                    };
-                    if let Some(patched) =
-                        patch_param(&draft.def.generator, &key_for_closure, &text, kind)
-                    {
-                        draft.def.generator = patched;
-                        draft.confidence = "manual".to_string();
-                        draft.sample_value.clear();
-                        cx.notify();
-                    }
-                },
-            );
-            next.push(ParamInput { key, state, _sub });
+            let (widget, _sub) = match field.kind {
+                // 集合 / 加权选项：多行文本，改一次解析一次（解析失败保留上一个有效值）
+                ParamKind::Complex => {
+                    let state = cx.new(|cx| TextareaState::new(window, cx));
+                    let initial = complex_param_text(&generator, field.key);
+                    state.update(cx, |s, cx| s.set_value(initial, window, cx));
+                    let key_for_closure = key.clone();
+                    let _sub = cx.subscribe_in(
+                        &state,
+                        window,
+                        move |view, emitter, ev: &InputEvent, _window, cx| {
+                            if !matches!(ev, InputEvent::Change) {
+                                return;
+                            }
+                            let text = emitter.read(cx).value().to_string();
+                            view.commit_complex_param(&key_for_closure, &text, cx);
+                        },
+                    );
+                    (ParamWidget::Complex(state), _sub)
+                }
+                kind => {
+                    let initial = param_text(&generator, field.key);
+                    let state = cx.new(|cx| InputState::new(window, cx));
+                    state.update(cx, |s, cx| s.set_value(initial, window, cx));
+                    let key_for_closure = key.clone();
+                    let _sub = cx.subscribe_in(
+                        &state,
+                        window,
+                        move |view, emitter, ev: &InputEvent, _window, cx| {
+                            if !matches!(ev, InputEvent::Change) {
+                                return;
+                            }
+                            let text = emitter.read(cx).value().to_string();
+                            let Some(draft) = view.draft.as_mut() else {
+                                return;
+                            };
+                            if let Some(patched) =
+                                patch_param(&draft.def.generator, &key_for_closure, &text, kind)
+                            {
+                                draft.def.generator = patched;
+                                draft.confidence = "manual".to_string();
+                                draft.sample_value.clear();
+                                cx.notify();
+                            }
+                        },
+                    );
+                    (ParamWidget::Scalar(state), _sub)
+                }
+            };
+            next.push(ParamInput { key, widget, _sub });
         }
         if let Some(draft) = self.draft.as_mut() {
             draft.params = next;
+            // 参数行重建 = 生成器身份变了（换生成器 / 恢复智能默认）：旧参数的报错不再适用
+            draft.param_error = None;
+        }
+        cx.notify();
+    }
+
+    /// 复杂参数（集合 / 加权选项）编辑：解析成功就写回生成器；失败则**保留上一个有效值**
+    /// 并记下原因（只在对话框里就地提示，不把无效内容写进生成器）。
+    fn commit_complex_param(&mut self, key: &str, text: &str, cx: &mut Context<Self>) {
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
+        match parse_complex_param(key, text) {
+            Ok(value) => {
+                if let Some(patched) = patch_param_value(&draft.def.generator, key, value) {
+                    draft.def.generator = patched;
+                    draft.confidence = "manual".to_string();
+                    draft.sample_value.clear();
+                }
+                draft.param_error = None;
+            }
+            Err(reason) => draft.param_error = Some((key.to_string(), reason)),
         }
         cx.notify();
     }

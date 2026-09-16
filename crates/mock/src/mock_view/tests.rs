@@ -253,6 +253,88 @@ fn generator_search_matches_category_and_handles_miss() {
     }
 }
 
+// ==================== 复杂参数（集合 / 加权选项） ====================
+
+/// 取值集合：一行一个值，空行忽略；回读文本与写入一致（往返）。
+#[test]
+fn complex_values_round_trip() {
+    let value = super::parse_complex_param("values", " 已发货 \n\n已取消\n").expect("解析");
+    assert_eq!(value, serde_json::json!(["已发货", "已取消"]));
+
+    let config = GeneratorConfig::Sequence {
+        values: vec!["甲".to_string(), "乙".to_string()],
+        cycle: true,
+    };
+    assert_eq!(super::complex_param_text(&config, "values"), "甲\n乙");
+}
+
+/// 加权选项：一行「值, 权重」，分隔符取**最后一个**（半角/全角逗号、制表符都能当分隔符，
+/// 所以值里可以带逗号）。
+#[test]
+fn complex_choices_accept_separator_variants() {
+    let value = super::parse_complex_param("choices", "北京, 北京市\t3\n上海，2\n广州,1")
+        .expect("解析");
+    assert_eq!(
+        value,
+        serde_json::json!([["北京, 北京市", 3.0], ["上海", 2.0], ["广州", 1.0]])
+    );
+
+    let config = GeneratorConfig::Weighted {
+        choices: vec![("北京".to_string(), 3.0), ("上海".to_string(), 0.5)],
+    };
+    assert_eq!(super::complex_param_text(&config, "choices"), "北京, 3\n上海, 0.5");
+}
+
+/// 非法输入都给带行号的可读原因（不猜、不静默吞掉）。
+#[test]
+fn complex_param_errors_are_readable() {
+    assert_eq!(
+        super::parse_complex_param("values", " \n\n").unwrap_err(),
+        "至少要有一个值"
+    );
+    assert!(
+        super::parse_complex_param("choices", "北京, x")
+            .unwrap_err()
+            .contains("第 1 行")
+    );
+    assert!(
+        super::parse_complex_param("choices", "北京, -1")
+            .unwrap_err()
+            .contains("不小于 0")
+    );
+    assert!(
+        super::parse_complex_param("choices", "北京, 0\n上海, 0")
+            .unwrap_err()
+            .contains("至少一个权重")
+    );
+    assert!(
+        super::parse_complex_param("choices", "北京")
+            .unwrap_err()
+            .contains("期望")
+    );
+
+    let too_many = (0..1001)
+        .map(|index| format!("v{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        super::parse_complex_param("values", &too_many)
+            .unwrap_err()
+            .contains("最多"),
+        "应有项数上限"
+    );
+}
+
+/// 参数摘要带上集合项数（字段行一眼可见「取值集合 3 项」）。
+#[test]
+fn summary_counts_complex_items() {
+    let config = GeneratorConfig::ForeignKey {
+        values: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+    };
+    let summary = super::summarize_params(&config);
+    assert!(summary.contains("3 项"), "{summary}");
+}
+
 // ==================== 测试宿主桥 ====================
 
 #[derive(Default)]
@@ -1443,6 +1525,123 @@ fn forget_generated_drops_result_but_keeps_draft(cx: &mut TestAppContext) {
     panel.update(cx, |panel, cx| panel.forget_generated(0, cx));
     panel.update(cx, |panel, _cx| {
         assert!(panel.outcome().is_none(), "无临时表可清时不该报一句");
+    });
+}
+
+/// 约束类生成器（取值集合 / 加权选项）能在列编辑对话框里编辑：
+/// 合法输入写回生成器；非法输入**保留上一个有效值**并就地提示（带行号）。
+#[gpui_kit::test]
+fn complex_param_edits_write_back_and_keep_last_valid(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "city".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        let id = panel.draft().columns[0].id;
+        panel.set_generator(id, "weighted", cx);
+        id
+    });
+    draw(cx);
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+    });
+
+    // 参数行里的这一项应当是**多行控件**（不是单行 Input）
+    detail.update(cx, |view, _cx| {
+        let draft = view.draft.as_ref().expect("对话框应已打开");
+        let widget = draft
+            .params
+            .iter()
+            .find(|p| p.key == "choices")
+            .map(|p| &p.widget)
+            .expect("加权选项应有一行参数");
+        assert!(
+            matches!(widget, super::ParamWidget::Complex(_)),
+            "集合类参数应当用多行控件"
+        );
+        assert!(matches!(
+            &draft.def.generator,
+            GeneratorConfig::Weighted { choices } if choices.is_empty()
+        ));
+    });
+
+    // 合法输入：写回生成器，错误清空
+    detail.update(cx, |view, cx| {
+        view.commit_complex_param("choices", "北京, 3\n上海, 1", cx)
+    });
+    detail.update(cx, |view, _cx| {
+        let draft = view.draft.as_ref().expect("对话框应已打开");
+        assert_eq!(draft.param_error, None);
+        assert!(
+            matches!(
+                &draft.def.generator,
+                GeneratorConfig::Weighted { choices }
+                    if choices == &vec![("北京".to_string(), 3.0), ("上海".to_string(), 1.0)]
+            ),
+            "{:?}",
+            draft.def.generator
+        );
+        assert_eq!(draft.confidence, "manual");
+    });
+
+    // 非法输入：生成器**不变** + 提示带行号
+    detail.update(cx, |view, cx| {
+        view.commit_complex_param("choices", "北京, 3\n上海, x", cx)
+    });
+    detail.update(cx, |view, _cx| {
+        let draft = view.draft.as_ref().expect("对话框应已打开");
+        let (key, message) = draft.param_error.clone().expect("应就地提示");
+        assert_eq!(key, "choices");
+        assert!(message.contains("第 2 行"), "{message}");
+        assert!(
+            matches!(
+                &draft.def.generator,
+                GeneratorConfig::Weighted { choices } if choices.len() == 2
+            ),
+            "非法输入不应改写生成器"
+        );
+    });
+}
+
+/// 约束类生成器的列编辑对话框能建起来并渲染（多行 `Textarea` 在对话框里正常挂载）。
+#[gpui_kit::test]
+fn constraint_column_dialog_opens(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, detail, cx) = open_harness(cx, test_host(&rec));
+
+    let id = panel.update(cx, |panel, cx| {
+        panel.add_column(
+            "order_status".to_string(),
+            ColumnDataType::Varchar { length: None },
+            cx,
+        );
+        let id = panel.draft().columns[0].id;
+        panel.set_generator(id, "foreign_key", cx);
+        id
+    });
+    draw(cx);
+    cx.update(|window, cx| {
+        detail.update(cx, |view, cx| view.open_column_dialog(id, window, cx));
+    });
+    cx.update(|window, cx| {
+        assert!(window.has_active_dialog(cx), "列编辑对话框应打开");
+        window.draw(cx).clear(cx);
+    });
+    detail.update(cx, |view, _cx| {
+        let draft = view.draft.as_ref().expect("对话框应已打开");
+        assert!(
+            draft
+                .params
+                .iter()
+                .any(|p| p.key == "values" && matches!(p.widget, super::ParamWidget::Complex(_))),
+            "外键取值的取值集合应当是多行控件"
+        );
     });
 }
 
