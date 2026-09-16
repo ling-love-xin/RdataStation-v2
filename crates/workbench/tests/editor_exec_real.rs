@@ -31,6 +31,11 @@ struct Target {
     env: &'static str,
     /// 文件型库走 `file_path`，网络库走 `url_override`
     file: bool,
+    /// 一句“够久”的查询（B3：超时要一句跑得比超时长的查询；中断要一句跑得比手速长的）
+    ///
+    /// 刻意选**不物化大结果**的写法（聚合 / count）：被放弃的查询还会在后台跑完，
+    /// 不能让它一下吃掉几 GB 内存。
+    slow_sql: &'static str,
 }
 
 const TARGETS: [Target; 4] = [
@@ -38,28 +43,95 @@ const TARGETS: [Target; 4] = [
         driver: "mysql",
         env: "RDS_TEST_MYSQL_URL",
         file: false,
+        slow_sql: "SELECT SLEEP(3)",
     },
     Target {
         driver: "postgres",
         env: "RDS_TEST_PG_URL",
         file: false,
+        slow_sql: "SELECT pg_sleep(3)",
     },
     Target {
         driver: "sqlite",
         env: "RDS_TEST_SQLITE_PATH",
         file: true,
+        // 递归 CTE：只计数，行是流式产生的（不会把几百万行攒在内存里）；
+        // 量级取“两秒左右”：要跑得比 1s 超时长，又不能长到拖住后续重连
+        slow_sql: "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 5000000) SELECT count(*) FROM c",
     },
     Target {
         driver: "duckdb",
         env: "RDS_TEST_DUCKDB_PATH",
         file: true,
+        // 交叉连接求和：聚合流式，~4e8 次乘法约一秒到两秒
+        slow_sql: "SELECT sum(a.range::BIGINT * b.range::BIGINT) FROM range(20000) a, range(20000) b",
     },
 ];
 
 /// 建连并设为活动连接（返回 conn_id；失败返回 None 并打印原因）
-async fn connect_active(manager: &Arc<ConnectionManager>, target: &Target, value: &str) -> Option<String> {
+async fn connect_active(
+    manager: &Arc<ConnectionManager>,
+    target: &Target,
+    value: &str,
+) -> Option<String> {
+    connect_active_with(manager, target, value, None).await
+}
+
+/// 建连（**带重试**）：B3 的两个案例都会放弃一句还在跑的查询，而 sqlite / duckdb 的取消
+/// 只是断掉等待——驱动侧的任务要跑完才撒手（连接与库文件因此被占住好几秒）。这是引擎侧现状，
+/// 不是编辑器的问题，所以这里重试而不是当成失败。
+fn connect_with_retry(
+    runtime: &tokio::runtime::Runtime,
+    manager: &Arc<ConnectionManager>,
+    target: &Target,
+    value: &str,
+    query_timeout_secs: Option<u32>,
+) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(id) = runtime.block_on(connect_active_with(
+            manager,
+            target,
+            value,
+            query_timeout_secs,
+        )) {
+            return Some(id);
+        }
+        if Instant::now() > deadline {
+            return None;
+        }
+        eprintln!(
+            "⏳ {}：连接暂时不可用（上一次被放弃的查询还占着），1s 后重试",
+            target.driver
+        );
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// B3 用的库值：文件型库给一个**临时库文件**（非文件型库原样用 URL）
+fn b3_value(target: &Target, value: &str, tag: &str) -> String {
+    if !target.file {
+        return value.to_string();
+    }
+    let path = std::env::temp_dir().join(format!(
+        "rds_b3_{}_{}_{tag}.db",
+        target.driver,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    path.to_string_lossy().to_string()
+}
+
+/// 同上，但可以给连接配一个查询超时（秒；B3 要一个“1 秒就到点”的连接）
+async fn connect_active_with(
+    manager: &Arc<ConnectionManager>,
+    target: &Target,
+    value: &str,
+    query_timeout_secs: Option<u32>,
+) -> Option<String> {
     let mut config = DriverConnectionConfig::new(target.driver);
     config.name = Some(format!("A14 编辑器执行探针（{}）", target.driver));
+    config.query_timeout = query_timeout_secs;
     if target.file {
         config.file_path = Some(value.to_string());
     } else {
@@ -91,8 +163,11 @@ fn run_through_editor(
     shared
         .submit(document, target, placement)
         .expect("提交执行");
+    collect_outcomes(shared, expected)
+}
 
-    // 手动轮询（生产由面板的轮询泵做）
+/// 等回填（生产由面板的轮询泵做；这里手动轮询），落位用结论自带的
+fn collect_outcomes(shared: &EditorShared, expected: usize) -> Vec<editor::store::ResultEntry> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut entries = Vec::new();
     while entries.len() < expected {
@@ -218,6 +293,82 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
                 .collect::<Vec<_>>()
                 .join(" / ")
         );
+
+        // B3 的库值：文件型库换成**临时库文件**（每例一个）——被放弃的查询会占着库文件，
+        // 而两个案例要接连重连；临时文件让它们互不干扰（且在 temp 目录，用完就丢）。
+        let cancel_value = b3_value(&target, &value, "cancel");
+        let timeout_value = b3_value(&target, &value, "timeout");
+
+        // B3-a：中断——慢查询跑到一半按中断，应当很快回一条取消错误
+        runtime.block_on(manager.close_all_connections());
+        let Some(_cancel_conn) =
+            connect_with_retry(&runtime, &manager, &target, &cancel_value, None)
+        else {
+            panic!("{} 建连接失败", target.driver);
+        };
+        shared
+            .submit(
+                document.clone(),
+                &ExecTarget::Statement(target.slow_sql.to_string()),
+                ResultPlacement::Replace,
+            )
+            .expect("提交慢查询");
+        // 等它真的开始跑（取消要中断的是“跑着的查询”，不是“刚提交”那个瞬间）
+        std::thread::sleep(Duration::from_millis(400));
+        let cancel_started = Instant::now();
+        shared.cancel().expect("中断应当被接受");
+        let cancelled = collect_outcomes(&shared, 1);
+        let cancel_waited = cancel_started.elapsed();
+        let error = cancelled[0]
+            .error
+            .clone()
+            .unwrap_or_else(|| format!("{}：这句没被中断", target.driver));
+        assert!(
+            error.to_lowercase().contains("cancel"),
+            "{}：中断要如实报错，实得 —— {error}",
+            target.driver
+        );
+        assert!(
+            cancel_waited < Duration::from_secs(5),
+            "{}：中断应当很快返回（等了 {cancel_waited:?}）",
+            target.driver
+        );
+        eprintln!(
+            "✅ {}：中断回了一条可读错误（{cancel_waited:?}，{error}）",
+            target.driver
+        );
+
+        // B3-b：超时——连接配了 1 秒，慢查询应当被引擎取消并报可读错误
+        runtime.block_on(manager.close_all_connections());
+        let Some(_timeout_conn) =
+            connect_with_retry(&runtime, &manager, &target, &timeout_value, Some(1))
+        else {
+            panic!("{} 建超时连接失败", target.driver);
+        };
+        let started = Instant::now();
+        let timed_out = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Statement(target.slow_sql.to_string()),
+            ResultPlacement::Replace,
+            1,
+        );
+        let waited = started.elapsed();
+        let error = timed_out[0]
+            .error
+            .clone()
+            .unwrap_or_else(|| format!("{}：这句没超时（{}），超时分支没验到", target.driver, target.slow_sql));
+        assert!(
+            error.contains("timed out"),
+            "{}：超时要报可读错误，实得 —— {error}",
+            target.driver
+        );
+        assert!(
+            waited < Duration::from_secs(10),
+            "{}：超时后不该等慢查询跑完（等了 {waited:?}）",
+            target.driver
+        );
+        eprintln!("✅ {}：超时可读（{error}）", target.driver);
 
         runtime.block_on(manager.close_all_connections());
     }

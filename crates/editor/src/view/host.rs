@@ -60,6 +60,8 @@ pub struct EditorHostPanel {
     grid: Entity<TableState<ResultGridDelegate>>,
     /// 本文档**已提交、尚未回填**的语句数（B2：批量 = 多条；`> 0` 就是“执行中”）
     pending: usize,
+    /// 本文档当前这轮执行是什么时候开始的（B3：状态栏耗时累加；`pending == 0` 时清掉）
+    running_since: Option<std::time::Instant>,
     /// 结果区状态行文案（`Some` = 本文档有结果要显示）
     ///
     /// 缓存在这里而不是每帧 `format!`：`summary()` 要算，而 render 是纯读路径。
@@ -152,6 +154,7 @@ impl EditorHostPanel {
             closed: false,
             grid,
             pending: 0,
+            running_since: None,
             result_summary: None,
             result_tabs: Vec::new(),
             result_active: 0,
@@ -825,12 +828,37 @@ impl EditorHostPanel {
         let expected = target.statements().len();
         match self.shared.submit(self.document.clone(), &target, placement) {
             Ok(()) => {
+                if self.pending == 0 {
+                    // 批量期间一直计同一轮的时间：后一句不该把计时清零
+                    self.running_since = Some(std::time::Instant::now());
+                }
                 self.pending += expected;
                 self.set_message(None, cx);
                 self.ensure_exec_pump(cx);
             }
             Err(error) => self.set_message(Some(error.message().to_string()), cx),
         }
+    }
+
+    /// 中断当前执行（B3；原型 §5.1：入口在**状态栏 ■**）
+    ///
+    /// 同步只回绍“没在跑”；真正的中断在工作线程上做（端口实现允许阻塞）。
+    /// 中断之后的剩余语句由通道标“已取消”（不是接着往下跑）。
+    pub(crate) fn interrupt(&mut self, cx: &mut Context<Self>) {
+        match self.shared.cancel() {
+            Ok(()) => self.set_message(Some("已请求中断…".to_string()), cx),
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
+    /// 本文档现在能不能中断（状态栏据此决定要不要画■按钮）
+    fn can_interrupt(&self) -> bool {
+        self.pending > 0
+    }
+
+    /// 状态栏那行“执行中 3.4s…”读的耗时（供测试断言“跑完就不再计时”）
+    pub fn elapsed_for_test(&self) -> Option<std::time::Duration> {
+        self.running_since.map(|since| since.elapsed())
     }
 
     /// 当前模式是否允许执行（**读能力表**，不在视图里另写一份模式判断）
@@ -883,6 +911,7 @@ impl EditorHostPanel {
     /// 启动结果轮询（已有存活任务时不重复启动）
     ///
     /// 与 `workbench` 的导航任务同一模式：**后台等、主线程回填**，空闲即退出。
+    /// 执行期间顺带 `cx.notify()`：状态栏的耗时累加跟着这个节拍走（不另起一个定时器）。
     fn ensure_exec_pump(&self, cx: &mut Context<Self>) {
         if let Some(task) = self.exec_pump.borrow().as_ref()
             && !task.is_ready()
@@ -898,6 +927,9 @@ impl EditorHostPanel {
                 let keep_going = weak
                     .update(cx, |this, cx| {
                         this.drain_exec_results(cx);
+                        if this.pending > 0 {
+                            cx.notify();
+                        }
                         this.shared.is_executing()
                     })
                     .unwrap_or(false);
@@ -914,6 +946,11 @@ impl EditorHostPanel {
     /// **一条语句一条结论**：批量执行会连续回来多条，每条各自落一个结果集（落位由 outcome
     /// 自带）。本文档的回填计数减到 0 才算执行完。
     pub(crate) fn drain_exec_results(&mut self, cx: &mut Context<Self>) {
+        // 中断尝试的结果先收（失败 / 没在跑 都要留痕，不能默默把按钮点一下就算完）
+        if let Some(note) = self.shared.drain_cancel_notes().into_iter().last() {
+            self.set_message(Some(note), cx);
+        }
+
         let outcomes = self.shared.drain_exec();
         let mut mine_arrived = 0usize;
         for outcome in outcomes {
@@ -927,6 +964,9 @@ impl EditorHostPanel {
         }
         if mine_arrived > 0 {
             self.pending = self.pending.saturating_sub(mine_arrived);
+            if self.pending == 0 {
+                self.running_since = None;
+            }
             self.sync_result_view(cx);
         }
     }
@@ -1417,8 +1457,23 @@ impl Render for EditorHostPanel {
             selected_chars,
             message: self.message.as_deref(),
             executing: self.pending > 0,
+            elapsed: self.running_since.map(|since| since.elapsed()),
             connection: connection_text.as_deref(),
         };
+
+        // 中断（B3）：只在本文档真有语句没回填时出现（原型 §5.1：「中断」挂在状态栏■）
+        let interrupt = self.can_interrupt().then(|| {
+            let entity = cx.entity();
+            Button::new("editor-interrupt")
+                .ghost()
+                .small()
+                .debug_selector(|| "editor-interrupt".to_string())
+                .label("■ 中断")
+                .on_click(move |_, _window, app| {
+                    entity.update(app, |panel, cx| panel.interrupt(cx));
+                })
+                .into_any_element()
+        });
 
         // 结果区：有结果或正在执行时出现（否则不占位置——不显示空壳）
         let result_summary = match (self.result_visible(), &self.result_summary) {
@@ -1496,6 +1551,6 @@ impl Render for EditorHostPanel {
         if let Some(summary) = result_summary {
             root = root.child(result_grid::render(&self.grid, &summary, result_tabs, cx));
         }
-        root.child(status_bar::render(&status, cx))
+        root.child(status_bar::render(&status, interrupt, cx))
     }
 }

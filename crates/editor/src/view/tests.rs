@@ -925,6 +925,132 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
+// ===== B3：中断与超时 =====
+
+/// 假执行器（B3）：卡在 `run` 里等中断（模拟慢查询；驱动侧由取消令牌打断）
+struct BlockingRunner {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cancels: SeenConnections,
+}
+
+impl QueryRunner for BlockingRunner {
+    fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !self.stop.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline, "假执行器没等到中断");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        Err("Query cancelled".to_string())
+    }
+
+    fn cancel(&self, connection: Option<&str>) -> Result<bool, String> {
+        self.cancels
+            .lock()
+            .expect("锁")
+            .push(connection.map(str::to_string));
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(true)
+    }
+}
+
+/// 带可中断假执行器的共享状态 + 一份文档
+fn shared_with_blocking_runner(
+    content: &str,
+) -> (
+    EditorShared,
+    DocumentId,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    SeenConnections,
+) {
+    let shared = EditorShared::new();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancels: SeenConnections = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    shared.attach_runner(std::sync::Arc::new(BlockingRunner {
+        stop: stop.clone(),
+        cancels: cancels.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    (shared, id, stop, cancels)
+}
+
+/// 中断：慢查询就此结束（结果集报错），中断请求真的到了执行器，跑完不再计时
+#[gpui_kit::test]
+fn interrupting_a_slow_query_ends_it_with_a_visible_reason(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (shared, id, stop, cancels) = shared_with_blocking_runner("select slow;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::Statement("select slow".to_string()),
+                execution::ResultPlacement::Replace,
+                cx,
+            )
+        })
+    });
+    assert_eq!(cx.update(|_window, cx| panel.read(cx).pending_for_test()), 1);
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).elapsed_for_test()).is_some(),
+        "执行中就该有耗时（状态栏的“执行中 3.4s…”靠它）"
+    );
+    // 执行中画一帧：状态栏那个 ■ 中断 按钮真的渲染（布局/借用问题会在这里暴露）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.interrupt(cx)));
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(
+        message.expect("中断要有回执").contains("已请求中断"),
+        "点了中断必须看得见"
+    );
+
+    wait_for_all_pending(cx, &panel);
+    assert_eq!(
+        cancels.lock().expect("锁").as_slice(),
+        [None],
+        "未绑定连接的文档取消的就是“当前活动连接”"
+    );
+    let summary = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .result_summary_for_test()
+            .map(|text| text.to_string())
+    });
+    let summary = summary.expect("中断也要有结果区文案");
+    assert!(summary.contains("cancel"), "{summary}");
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).elapsed_for_test()).is_none(),
+        "跑完就不再计时"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // 释放仍在自旋的假执行器（它已经返回了，这里只是让变量活着）
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 没在跑时点中断：回绝并说原因（“点了没反应”不可接受）
+#[gpui_kit::test]
+fn interrupting_when_nothing_runs_says_why(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (_shared, id, _stop, _cancels) = shared_with_blocking_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &_shared, &id);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).pending_for_test()),
+        0
+    );
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.interrupt(cx)));
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(
+        message.expect("回绝也要说原因").contains("没有执行"),
+        "没在跑就该直说"
+    );
+}
+
 #[gpui_kit::test]
 fn text_mode_refuses_to_execute(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);

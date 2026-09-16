@@ -4,6 +4,14 @@
 //! 那个问题：**当前活动连接**（`SqlService::execute(None, …)` 走连接管理器里的活动连接）。
 //! 连接绑定到具体数据源是 1b 的事，那之前先"用当前连接跑"，跑不成会明确报错。
 //!
+//! ## 中断与超时（B3）
+//!
+//! - **中断**：`SqlService::cancel_query(conn_id)` 翻转该连接的取消令牌（引擎侧
+//!   `query_with_cancel` 一直 select 着它），驱动因此回一条 "Query cancelled"。
+//! - **超时**：按**连接**的 `query_timeout`（连接对话框的高级选项）交给引擎的
+//!   `SqlExecuteOptions::timeout_ms`——到点后引擎自己取消并报 "Query timed out after Nms"。
+//!   连接没配 = 没有超时，不在这里编一个默认值。
+//!
 //! ## 线程模型
 //!
 //! 编辑器的执行通道在自己的**工作线程**上调用 `QueryRunner::run`，所以这里可以安全地
@@ -23,7 +31,11 @@ use shared::models::{QueryResult, Value};
 
 /// 引擎执行器（编辑器执行端口的工作台实现）
 struct EngineQueryRunner {
+    /// 跑查询的 runtime（工作线程上 `block_on`，串行）
     runtime: tokio::runtime::Runtime,
+    /// 取消用的**另一个** runtime：`runtime` 正被工作线程占着，而取消要立刻跑完
+    /// （引擎的取消就是翻转内存里的 `CancellationToken`，很快）
+    cancel_runtime: tokio::runtime::Runtime,
     service: SqlService,
 }
 
@@ -38,16 +50,38 @@ impl EngineQueryRunner {
         let manager = engine::connection_manager::get_connection_manager();
         Some(Self {
             runtime,
+            cancel_runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .thread_name("rds-editor-cancel-rt")
+                .build()
+                .ok()?,
             service: SqlService::new(manager.clone()),
         })
+    }
+
+    /// 本次执行该用多长超时（毫秒）：按**连接**的 `query_timeout`（B3）
+    ///
+    /// 未绑定的文档看当前活动连接（与 `execute(None, …)` 同口径）；连接没配就是
+    /// **没有超时**——不在这里造一个默认值（超时是连接属性，不是编辑器属性）。
+    async fn query_timeout_ms(&self, connection: Option<&str>) -> Option<u64> {
+        let manager = engine::connection_manager::get_connection_manager();
+        let conn_id = match connection {
+            Some(id) => Some(id.to_string()),
+            None => manager.get_active_connection_id().await,
+        }?;
+        let config = manager.get_connection_config(&conn_id).await?;
+        config.query_timeout.map(|secs| u64::from(secs) * 1000)
     }
 }
 
 impl QueryRunner for EngineQueryRunner {
     fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+        let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let options = SqlExecuteOptions {
             // 历史由引擎侧统一记录（含耗时/行数，真实值）
             record_history: true,
+            // 超时：引擎在到点后**自己取消**并返回“Query timed out after Nms”
+            timeout_ms,
             ..Default::default()
         };
         // 连接：文档绑定了就用它（B1）；未绑定回退到“当前活动连接”（1a 口径）
@@ -56,6 +90,13 @@ impl QueryRunner for EngineQueryRunner {
             .block_on(self.service.execute(connection.map(str::to_string), sql, options))
             .map_err(|error| error.to_string())?;
         Ok(to_data(&executed.result, executed.elapsed_ms, executed.truncated))
+    }
+
+    /// 中断：走引擎的取消令牌（`Ok(false)` = 令牌不在 → 已在两句之间）
+    fn cancel(&self, connection: Option<&str>) -> Result<bool, String> {
+        self.cancel_runtime
+            .block_on(self.service.cancel_query(connection.map(str::to_string)))
+            .map_err(|error| error.to_string())
     }
 }
 
