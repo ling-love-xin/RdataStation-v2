@@ -484,3 +484,52 @@ fn scenario_job_generates_every_table_without_writing_to_the_db() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 批量落库：一次把多张结果依次落成分析库新表；已存在的跳过并报出，**成功的保留**。
+#[test]
+fn persist_all_lands_every_table_and_reports_conflicts() {
+    let _guard = serial();
+    let dir = temp_dir("persist_all");
+    let db = dir.join("analytics.duckdb");
+    let drafts = [
+        draft("t_all_a", 10),
+        draft("t_all_b", 20),
+        draft("t_all_c", 30),
+    ];
+    let mut infos = Vec::new();
+    for one in &drafts {
+        infos.push(generate_and_take(one, &db));
+    }
+    // 先占一张同名表（模拟「上次已经落过这张」）：它应当失败，其余照落
+    mock_generator::persist_table_at(&db, &infos[1]).expect("先占 t_all_b");
+    assert_eq!(count_rows(&db, "t_all_b"), 20);
+
+    mock_jobs::start(&drafts[0], MockJobKind::PersistAll(infos), &paths(&db))
+        .expect("提交批量落库");
+    let done = wait_done(Duration::from_secs(300)).expect("批量落库应成功收尾");
+    match done {
+        MockJobDone::PersistedAll { landed, failed } => {
+            assert_eq!(
+                landed
+                    .iter()
+                    .map(|(table, _)| table.as_str())
+                    .collect::<Vec<_>>(),
+                ["t_all_a", "t_all_c"],
+                "按提交顺序落，已存在的那张跳过"
+            );
+            assert_eq!(landed[0].1, 10);
+            assert_eq!(landed[1].1, 30);
+            assert_eq!(failed.len(), 1, "{failed:?}");
+            assert_eq!(failed[0].0, "t_all_b");
+            assert!(failed[0].1.contains("已存在"), "{}", failed[0].1);
+        }
+        other => panic!("期望 PersistedAll，实际 {other:?}"),
+    }
+
+    // 成功的真的落进了库（且既有数据没被覆盖）
+    assert_eq!(count_rows(&db, "t_all_a"), 10);
+    assert_eq!(count_rows(&db, "t_all_b"), 20, "同名那张保持原样");
+    assert_eq!(count_rows(&db, "t_all_c"), 30);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

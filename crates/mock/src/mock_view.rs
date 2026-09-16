@@ -183,6 +183,8 @@ pub enum MockJobKind {
     /// 带的是**编辑过的模板**（关系挂在列的 `dependency` 上），不是模板 id：
     /// 用户改完关系直接生成，再去引擎按 id 重取会丢掉编辑。
     Scenario(Box<ScenarioTemplate>),
+    /// 出口：把多张已生成结果**依次**落成分析库新表（每张仍走「新建」语义：同名报错不覆盖）
+    PersistAll(Vec<MockGenInfo>),
     /// 出口：把已生成结果持久化为分析库**新表**（同名已存在 → `Err`）
     Persist(MockGenInfo),
     /// 出口：把已生成结果导出为文件（路径由调用方在系统对话框里选好）
@@ -212,6 +214,14 @@ impl MockJobKind {
         matches!(self, Self::Generate | Self::AppendTo(_) | Self::Scenario(_))
     }
 
+    /// 进度量纲是否按「张表」计（而非批次 / 行）。
+    ///
+    /// 场景生成与批量落库都是一次处理多张表，`rows_total` 为 0，面板据此把
+    /// `batches_done / batches_total` 读作表计数。
+    pub fn by_table(&self) -> bool {
+        matches!(self, Self::Scenario(_) | Self::PersistAll(_))
+    }
+
     /// 是否**以当前草稿为输入**（目标表 / 列 / 行数）。
     ///
     /// 只有 `Generate` 与 `AppendTo` 是：场景模板自带表与列（草稿不参与也不被改写），
@@ -225,7 +235,7 @@ impl MockJobKind {
     pub fn phase(&self) -> MockJobPhase {
         match self {
             Self::Generate | Self::AppendTo(_) | Self::Scenario(_) => MockJobPhase::Generating,
-            Self::Persist(_) => MockJobPhase::Writing,
+            Self::Persist(_) | Self::PersistAll(_) => MockJobPhase::Writing,
             Self::Export { .. } | Self::Scratchpad { .. } => MockJobPhase::Exporting,
         }
     }
@@ -237,7 +247,7 @@ impl MockJobKind {
     pub fn rows_total(&self, draft: &MockDraft) -> u32 {
         match self {
             Self::Generate | Self::AppendTo(_) => draft.options.rows,
-            Self::Scenario(_) => 0,
+            Self::Scenario(_) | Self::PersistAll(_) => 0,
             Self::Persist(info) | Self::Export { info, .. } | Self::Scratchpad { info, .. } => {
                 info.row_count
             }
@@ -250,6 +260,7 @@ impl MockJobKind {
             Self::Generate => "生成中…".to_string(),
             Self::AppendTo(table) => format!("生成并追加到 {table} 中…"),
             Self::Scenario(template) => format!("按场景模板「{}」生成中…", template.name),
+            Self::PersistAll(infos) => format!("落库 {} 张表中…", infos.len()),
             Self::Persist(info) => format!(
                 "写入项目分析库中…（{} 行）",
                 with_thousands(info.row_count as u64)
@@ -265,12 +276,21 @@ impl MockJobKind {
 pub enum MockJobDone {
     /// 生成完成
     Generated(MockGenInfo),
-    /// 场景模板生成完成（多张临时表；顺序即模板里的表序）
+    /// 场景生成完成（多张临时表；顺序即模板里的表序）
     ScenarioGenerated {
         /// 模板名（结果区文案与来源标注）
         template_name: String,
         /// 逐表结果（含预览）
         tables: Vec<MockGenInfo>,
+    },
+    /// 批量落库完成：成功的表（表名 + 表内行数）与失败的表（表名 + 可读原因）
+    ///
+    /// 不用「全成功或全失败」：已落的表不回滚（回滚别人的数据比留下已落的多张更危险）。
+    PersistedAll {
+        /// 落库成功的表
+        landed: Vec<(String, i64)>,
+        /// 落库失败的表（同名已存在 / 写失败）
+        failed: Vec<(String, String)>,
     },
     /// 生成并追加完成（表名 + 表内总行数）
     Appended {
@@ -1083,6 +1103,8 @@ pub struct MockPanel {
     scenario_source: Option<String>,
     /// 最近一次成功落库的表名（出口反馈用）
     landed: Option<String>,
+    /// 本会话里已落库的表（项目库里确实有了；切项目时清空——那是另一个库）
+    landed_tables: Vec<String>,
     outcome: Option<String>,
     error: Option<String>,
     /// 可导入结构的连接（事件路径加载）
@@ -1273,6 +1295,7 @@ impl MockPanel {
             current: 0,
             scenario_source: None,
             landed: None,
+            landed_tables: Vec::new(),
             outcome: None,
             error: None,
             sources: Vec::new(),
@@ -1410,6 +1433,8 @@ impl MockPanel {
         self.scenario_source = None;
         self.last_relations.clear();
         self.landed = None;
+        // 另一个项目 = 另一个分析库：上一项目的落库记录在这里不成立
+        self.landed_tables.clear();
         self.error = None;
         // 没清到东西就不打扰用户（切项目很常见，每次都报一句是噪声）
         self.outcome = (cleared > 0).then(|| {
@@ -1710,6 +1735,74 @@ impl MockPanel {
     /// 场景工作副本（`None` = 单表态）。
     pub fn scenario(&self) -> Option<&ScenarioTemplate> {
         self.scenario.as_ref()
+    }
+
+    /// 关系闭包里**还没落库**的表（按结果表顺序；已落库的跳过）。
+    ///
+    /// 为何要它：关系是跨表的，而出口以「当前表」为单位——用户很容易只落其中
+    /// 几张，留下悬空的引用。这里把「还差哪几张」摆出来，让他一次落完。
+    /// 空 = 当前表不参与关系，或关系里的表都落了。
+    pub fn pending_relation_tables(&self) -> Vec<String> {
+        if self.last_relations.is_empty() {
+            return Vec::new();
+        }
+        let Some(current) = self.current_info().map(|info| info.table_name.clone()) else {
+            return Vec::new();
+        };
+        // 从当前表出发沿关系双向走一遍，得到它与关系闭包（父子链）
+        let mut closure = vec![current];
+        loop {
+            let mut added = false;
+            for relation in &self.last_relations {
+                for (from, to) in [
+                    (&relation.child_table, &relation.parent_table),
+                    (&relation.parent_table, &relation.child_table),
+                ] {
+                    if closure.iter().any(|name| name == from)
+                        && !closure.iter().any(|name| name == to)
+                    {
+                        closure.push(to.clone());
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+        self.results
+            .iter()
+            .map(|info| info.table_name.clone())
+            .filter(|name| closure.iter().any(|c| c == name))
+            .filter(|name| !self.landed_tables.iter().any(|landed| landed == name))
+            .collect()
+    }
+
+    /// 本会话已落库的表。
+    pub fn landed_tables(&self) -> &[String] {
+        &self.landed_tables
+    }
+
+    /// 出口：把关系闭包里还没落库的表**依次**落成分析库新表（后台任务）。
+    ///
+    /// 逐张走「新建」语义：同名已存在就跳过它并报出原因（不覆盖、也不回滚别人）。
+    pub fn persist_related(&mut self, cx: &mut Context<Self>) {
+        if self.host.read_only() {
+            self.fail("只读模式：不允许写入项目分析库", cx);
+            return;
+        }
+        let pending = self.pending_relation_tables();
+        if pending.is_empty() {
+            self.fail("关系里没有待落库的表", cx);
+            return;
+        }
+        let infos: Vec<MockGenInfo> = self
+            .results
+            .iter()
+            .filter(|info| pending.contains(&info.table_name))
+            .cloned()
+            .collect();
+        self.start_job(MockJobKind::PersistAll(infos), cx);
     }
 
     /// 当前结果表的**跨表后果**（用于出口提示；`None` = 它不参与任何关系）。
@@ -2269,6 +2362,9 @@ impl MockPanel {
             }
             Ok(MockJobDone::Persisted { table, rows }) => {
                 self.landed = Some(table.clone());
+                if !self.landed_tables.contains(&table) {
+                    self.landed_tables.push(table.clone());
+                }
                 // 新表要能立刻作为「追加到既有表」的目标
                 self.existing_tables = self.host.existing_tables();
                 self.succeed(
@@ -2278,6 +2374,47 @@ impl MockPanel {
                     ),
                     cx,
                 );
+            }
+            Ok(MockJobDone::PersistedAll { landed, failed }) => {
+                for (table, _) in &landed {
+                    if !self.landed_tables.contains(table) {
+                        self.landed_tables.push(table.clone());
+                    }
+                }
+                self.landed = landed.last().map(|(table, _)| table.clone());
+                self.existing_tables = self.host.existing_tables();
+                let mut parts: Vec<String> = Vec::new();
+                if !landed.is_empty() {
+                    parts.push(format!(
+                        "已落库 {} 张：{}",
+                        landed.len(),
+                        landed
+                            .iter()
+                            .map(|(table, _)| table.as_str())
+                            .collect::<Vec<_>>()
+                            .join("、")
+                    ));
+                }
+                if !failed.is_empty() {
+                    parts.push(format!(
+                        "失败 {} 张：{}",
+                        failed.len(),
+                        failed
+                            .iter()
+                            .map(|(table, reason)| format!("{table}（{reason}）"))
+                            .collect::<Vec<_>>()
+                            .join("；")
+                    ));
+                }
+                if failed.is_empty() {
+                    self.succeed(parts.join("；"), cx);
+                } else {
+                    // 部分失败：成功的保留（不回滚别人的表），失败的原因原样摆出来
+                    self.error = Some(parts.join("；"));
+                    self.outcome = None;
+                    self.host.notify(cx);
+                    cx.notify();
+                }
             }
             Ok(MockJobDone::Exported { message }) => self.succeed(message, cx),
             Err(e) => {
@@ -2624,14 +2761,13 @@ impl MockPanel {
         let progress = job.progress;
         let cancellable = job.kind.generates();
         let cancel_requested = job.cancel_requested;
-        // 场景模板的量纲是「张表」：批次计数被复用为表计数，行数恒 0（见 `MockJobKind::rows_total`）
-        let by_table = matches!(job.kind, MockJobKind::Scenario(_));
+        let by_table = job.kind.by_table();
 
         let muted = cx.theme().colors.muted_foreground;
         let detail = match progress.phase {
             MockJobPhase::Generating if progress.batches_total == 0 => "准备中…".to_string(),
             MockJobPhase::Generating if by_table => format!(
-                "{} / {} 张表（每张表逐个生成）",
+                "{} / {} 张表（每张表逐个处理）",
                 progress.batches_done, progress.batches_total
             ),
             MockJobPhase::Generating => format!(
@@ -2641,7 +2777,12 @@ impl MockPanel {
                 with_thousands(progress.rows_done() as u64),
                 with_thousands(progress.rows_total as u64)
             ),
-            phase if by_table => format!("{}…（{} 张表）", phase.label(), progress.batches_total),
+            phase if by_table => format!(
+                "{}…（{} / {} 张表）",
+                phase.label(),
+                progress.batches_done,
+                progress.batches_total
+            ),
             phase => format!(
                 "{}…（{} 行）",
                 phase.label(),
@@ -3244,6 +3385,45 @@ impl MockPanel {
                     .text_xs()
                     .text_color(cx.theme().colors.warning)
                     .child(note),
+            );
+        }
+        // 关系里还没落库的表：摆出来 + 一键依次落（免得用户漏落，留下悬空引用）
+        let pending_tables = self.pending_relation_tables();
+        if !pending_tables.is_empty() {
+            let button = {
+                let entity = cx.entity();
+                let mut button = Button::new("mock-persist-related")
+                    .secondary()
+                    .xsmall()
+                    .label(format!("落库这 {} 张", pending_tables.len()))
+                    .disabled(running);
+                if !running {
+                    button = button.on_click(move |_, _, app| {
+                        entity.update(app, |panel, cx| panel.persist_related(cx));
+                    });
+                }
+                button
+            };
+            panel = panel.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(cx.theme().colors.warning)
+                            .text_ellipsis()
+                            .child(format!(
+                                "关系里还有 {} 张没落库：{}",
+                                pending_tables.len(),
+                                pending_tables.join("、")
+                            )),
+                    )
+                    .child(button),
             );
         }
         panel

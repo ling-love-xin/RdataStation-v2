@@ -102,9 +102,9 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（重型 crate 链接耗内存（DuckDB 已改动态链接）），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 147 单元（含 71 视图）+ 35 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
+cargo test  -p rds-mock -j 2                                   # 149 单元（含 73 视图）+ 35 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 12 项
-cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 10 项
+cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 11 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
 ```
 
@@ -113,9 +113,9 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 147 单元（23 纯逻辑 + 48 窗口 + 76 其他）+ 35 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
+| `cargo test -p rds-mock` | 149 单元（23 纯逻辑 + 50 窗口 + 76 其他）+ 35 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
-| `cargo test -p rds-workbench` | 全绿（含 12 装配 + 10 任务测试） |
+| `cargo test -p rds-workbench` | 全绿（含 12 装配 + 11 任务测试） |
 
 > 存量欠债（非本模块）：`crates/engine/tests/transaction_affinity.rs` 调用了不存在的 `Value::as_i64()`
 > （实际是 `as_int()`），使 `cargo check --workspace --all-targets` 在该 target 报错。

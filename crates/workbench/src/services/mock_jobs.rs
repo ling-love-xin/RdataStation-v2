@@ -156,6 +156,23 @@ fn run_job(job: &Job) -> Result<MockJobDone, String> {
                 rows,
             })
         }
+        MockJobKind::PersistAll(infos) => {
+            set_phase(MockJobPhase::Writing);
+            let db = db_path()?;
+            let total = infos.len();
+            let mut landed = Vec::new();
+            let mut failed = Vec::new();
+            for (index, info) in infos.iter().enumerate() {
+                // 逐张报进度（量纲是「张表」：`rows_total` 为 0，见 `MockJobKind::by_table`）
+                set_tables_progress(index, total);
+                match mock_generator::persist_table_at(db, info) {
+                    Ok(rows) => landed.push((info.table_name.clone(), rows)),
+                    Err(e) => failed.push((info.table_name.clone(), e)),
+                }
+            }
+            set_tables_progress(total, total);
+            Ok(MockJobDone::PersistedAll { landed, failed })
+        }
         MockJobKind::Export { info, format, path } => {
             set_phase(MockJobPhase::Exporting);
             let message = mock_generator::export_file(info, format, path)?;
@@ -202,6 +219,15 @@ fn set_phase(phase: MockJobPhase) {
     let mut slot = lock(&shared().slot);
     if let Some(progress) = slot.progress.as_mut() {
         progress.phase = phase;
+    }
+}
+
+/// 按「张表」报进度（多表任务：场景生成 / 批量落库）。
+fn set_tables_progress(done: usize, total: usize) {
+    let mut slot = lock(&shared().slot);
+    if let Some(progress) = slot.progress.as_mut() {
+        progress.batches_done = done;
+        progress.batches_total = total;
     }
 }
 

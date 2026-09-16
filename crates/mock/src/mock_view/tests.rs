@@ -519,6 +519,39 @@ impl MockHost for TestHost {
                 })
             }
             MockJobKind::Persist(info) => self.persist(info),
+            MockJobKind::PersistAll(infos) => {
+                // 假宿主逐张走「新建」语义：已存在的报错，其余成功（与真实装配层同一口径）
+                let mut landed = Vec::new();
+                let mut failed = Vec::new();
+                for info in infos {
+                    self.rec
+                        .persisted
+                        .borrow_mut()
+                        .push(info.table_name.clone());
+                    self.rec
+                        .sink_temps
+                        .borrow_mut()
+                        .push(info.temp_table_name.clone());
+                    if self
+                        .rec
+                        .tables
+                        .borrow()
+                        .iter()
+                        .any(|t| t == &info.table_name)
+                    {
+                        failed.push((
+                            info.table_name.clone(),
+                            format!(
+                                "项目分析库已存在表 {}：请改用「追加到既有表」",
+                                info.table_name
+                            ),
+                        ));
+                    } else {
+                        landed.push((info.table_name.clone(), 5));
+                    }
+                }
+                Ok(MockJobDone::PersistedAll { landed, failed })
+            }
             MockJobKind::Scenario(template) => {
                 self.rec.scenarios.borrow_mut().push(template.id.clone());
                 // 假宿主按**工作副本里的表**回结果（不是写死的三张）：
@@ -2695,6 +2728,113 @@ fn scenario_runs_are_not_recorded_in_history(cx: &mut TestAppContext) {
             panel.outcome().unwrap_or_default().contains("生成 3 张表"),
             "{:?}",
             panel.outcome()
+        );
+    });
+}
+
+/// 关系里还没落库的表要摆出来，并能一次依次落库（含当前表；已落库的跳过）。
+#[gpui_kit::test]
+fn landing_the_whole_relation_closure_in_one_go(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    // 默认录制器里已有一张 `orders`（供「同名已存在」用例）；这条要验全新落库
+    *rec.tables.borrow_mut() = Vec::new();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+
+    // 当前表 orders：关系闭包 = orders / users（引用了 users）+ items（被 items 的 order_id 引用）
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(
+            panel.pending_relation_tables(),
+            [
+                "orders".to_string(),
+                "items".to_string(),
+                "users".to_string()
+            ],
+            "按结果表顺序列出闭包里全部未落库的表"
+        );
+        assert!(panel.landed_tables().is_empty());
+    });
+
+    panel.update(cx, |panel, cx| panel.persist_related(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(
+            rec.persisted.borrow().as_slice(),
+            [
+                "orders".to_string(),
+                "items".to_string(),
+                "users".to_string()
+            ],
+            "依次落库的顺序就是结果表顺序"
+        );
+        assert_eq!(
+            panel.landed_tables(),
+            [
+                "orders".to_string(),
+                "items".to_string(),
+                "users".to_string()
+            ]
+        );
+        assert!(
+            panel.pending_relation_tables().is_empty(),
+            "落完了就不再提示"
+        );
+        let outcome = panel.outcome().unwrap_or_default();
+        assert!(outcome.contains("已落库 3 张"), "{outcome}");
+        assert!(panel.error().is_none(), "{:?}", panel.error());
+    });
+
+    // 再点一次：没有待落库的表 → 可读拒绝（不空跑一个任务）
+    let started = rec.started.borrow().len();
+    panel.update(cx, |panel, cx| panel.persist_related(cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(rec.started.borrow().len(), started, "不该提交任务");
+        assert!(
+            panel.error().is_some_and(|e| e.contains("没有待落库")),
+            "{:?}",
+            panel.error()
+        );
+    });
+}
+
+/// 批量落库里的部分失败：**成功的保留**（不回滚别人的表），失败的原样报出。
+#[gpui_kit::test]
+fn batch_landing_keeps_the_successes_and_reports_the_failures(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    // 项目库里已经有一张 items：它应当失败，其余照落
+    *rec.tables.borrow_mut() = vec!["items".to_string()];
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, cx| panel.persist_related(cx));
+    poll_job(cx, &panel);
+
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(
+            panel.landed_tables(),
+            ["orders".to_string(), "users".to_string()],
+            "成功的两张记下来"
+        );
+        let error = panel.error().unwrap_or_default();
+        assert!(error.contains("失败 1 张"), "{error}");
+        assert!(error.contains("items"), "{error}");
+        assert!(
+            panel
+                .pending_relation_tables()
+                .contains(&"items".to_string()),
+            "失败的那张还在待落库清单里（可以修好再落）"
         );
     });
 }
