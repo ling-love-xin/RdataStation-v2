@@ -63,8 +63,9 @@
 | `src/trash.rs` | `ProjectTrash`：项目级回收站（`TrashManifest` / `TrashEntry`，含来源与原路径） |
 | `src/watch.rs` | `ScratchpadWatcher` / `ChangeFlag`：模块目录文件监控（**外部改动 → 变更标记**，视图侧去抖重拉；只监听内容目录，`.RSmeta` 不在范围内） |
 | `src/state.rs` | `ScratchpadState`：按项目初始化 store + watcher 标志（**当前无生产调用方**；监控器已自持生命周期，接入时须按窗口持有） |
+| `src/jobs.rs` | 后台任务：单工作线程 + tokio 运行时执行加载与重操作（导入 / 粘贴 / 清空回收站 / 搜索 / 替换），结果队列 + 请求序号防过期（视图只入队 / 轮询 / 回填） |
 
-依赖方向：`scratchpad → shared`（视图层在 `workbench`，本 crate 不依赖 gpui）。
+- 依赖方向：`scratchpad → shared`（**crate 内不含 gpui**，也不依赖 workbench；视图在 `workbench/src/panels/*`）。模板：`[dev-dependencies]` 必须打开 `paths/test-support`（测试数据根隔离，见 `docs/architecture/runtime/data-paths.md` §5）。
 
 ## 能力状态
 

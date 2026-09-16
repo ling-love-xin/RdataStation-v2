@@ -8,6 +8,25 @@
 
 ## 0. 进度记录（最近在前）
 
+> **路径注**：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/scratchpad_panel.rs` / `editor.rs` / `shared.rs`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`。**下列历史条目保留当时的路径**，读时按此换算。
+
+### 2026-09-16（十三次）— 结构解耦跟随：文档路径与新 API 对齐
+
+**背景**（协作完成的结构调整）：
+
+| 变化 | 新位置 |
+| --- | --- |
+| 面板按面板拆模块 | `workbench/src/panels/{scratchpad_panel,editor,shared,resources,right,mod}.rs` |
+| 草稿箱后台任务移入 crate | `crates/scratchpad/src/jobs.rs`（`pub mod jobs`）——crate 现在自带异步编排，`cargo test -p rds-scratchpad` 直接覆盖任务层 |
+| UI 尺寸常量落外壳 crate | `crates/workbench_shell/src/ui.rs`（经 `crate::ui` 重导） |
+| «在编辑器中打开» 请求封装 | `Shared::request_open_in_editor(path)` / `Shared::take_open_in_editor()`（字段私有） |
+
+**本次已完成**：模块入口 §3 代码地图、架构 §6.1/§6.6/§6.7/§6.8/§6.11–6.12 数据流标签、§7.1/§7.2/§10/§12/§13 的路径与 API 名全部按新结构对齐；原型页脚路径同步。
+
+**新规矩已满足**：依赖 `paths`/`engine`/`shared` 的成员必须在 `[dev-dependencies]` 打开 `paths/test-support`（原因见 `docs/architecture/runtime/data-paths.md` §5）——`crates/scratchpad` 已具备该行，静态契约 `cargo test -p rds-paths` 已验证（1 passed）。
+
+**验证**：`cargo test -p rds-paths -j 2` 通过；本轮仅文档改动，编译状态以当时工作区为准。
+
 ### 2026-09-16（十二次）— Phase C-1：双击 / Enter / 右键「打开」→ 中央编辑器
 
 **已完成**
