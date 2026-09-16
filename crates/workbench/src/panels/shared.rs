@@ -15,6 +15,8 @@ use insight::{InsightTarget, InsightView};
 use mock::mock_view::{MockDetailView, MockPanel, SchemaRequest};
 use scratchpad::ScratchpadStore;
 
+use analytics_resource::resource_view::ResourcesPanel;
+
 use gpui_kit::*;
 
 use database::model::PropertyRequest;
@@ -127,6 +129,11 @@ pub struct Shared {
     ///
     /// 面板自带状态与视图（`insight::InsightView`），工作台只持句柄 + 订阅它的取数请求。
     pub insight_panel: Rc<RefCell<Option<WeakEntity<InsightView>>>>,
+    /// M6：资产库面板实体句柄（弱引用；右侧「存档详情」取它的选中项）。
+    ///
+    /// 与 `mock_panel` / `insight_panel` 同例：面板自带状态与视图
+    /// （`analytics_resource::resource_view::ResourcesPanel`），宿主只持句柄。
+    pub resources_panel: Rc<RefCell<Option<WeakEntity<ResourcesPanel>>>>,
     /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
@@ -166,6 +173,7 @@ impl Shared {
             editor_bridge: Rc::new(RefCell::new(None)),
             mock_panel: Rc::new(RefCell::new(None)),
             insight_panel: Rc::new(RefCell::new(None)),
+            resources_panel: Rc::new(RefCell::new(None)),
             mock_detail: Rc::new(RefCell::new(None)),
             open_mock_detail: Rc::new(RefCell::new(None)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),

@@ -41,6 +41,7 @@ use gpui_kit::*;
 use gpui_kit::assets::IconName as CatalogIcon;
 
 use crate::commands;
+use crate::detail_view::ArchiveDetail;
 use crate::filter::{self, ResourcesFilter, SortField, SortOrder};
 use crate::model::{ArchiveKind, ArchiveStatus};
 use crate::ui;
@@ -102,6 +103,8 @@ pub struct ResourcesSnapshot {
     pub rows: Vec<ArchiveRow>,
     pub counts: ArchiveCounts,
     pub read_only: bool,
+    /// 行 id → 详情快照（右侧详情面板用；与 `rows` 同一次取数产出，不在渲染期补取）。
+    pub details: std::collections::HashMap<String, ArchiveDetail>,
 }
 
 /// 复现强度徽标文案（原型 §3.2：**行内唯一的颜色信号**）。
@@ -639,6 +642,14 @@ impl ResourcesPanel {
     /// 当前排序（字段 + 方向）。
     pub fn sort(&self) -> (SortField, SortOrder) {
         (self.sort_field, self.sort_order)
+    }
+
+    /// 选中行的详情快照（右侧详情面板用）。
+    ///
+    /// 未选中、或快照里没有该行的详情时返回 `None`（详情面板据此显示空态）。
+    pub fn selected_detail(&self) -> Option<&ArchiveDetail> {
+        let id = self.selected.as_deref()?;
+        self.snapshot.details.get(id)
     }
 
     /// 搜索框实体（宿主接 `Ctrl+F` 聚焦 / `Esc` 清空时用，见 Action 批）。

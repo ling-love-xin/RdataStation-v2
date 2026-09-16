@@ -39,6 +39,8 @@ pub enum RightPanel {
     Mock,
     /// 历史（查询历史）
     History,
+    /// 存档详情（M6：选中存档的归档凭证）
+    Archive,
 }
 
 /// 边栏三模式。
@@ -83,13 +85,19 @@ impl LeftPanel {
 }
 
 impl RightPanel {
-    pub const ALL: [RightPanel; 3] = [RightPanel::Insight, RightPanel::Mock, RightPanel::History];
+    pub const ALL: [RightPanel; 4] = [
+        RightPanel::Insight,
+        RightPanel::Mock,
+        RightPanel::History,
+        RightPanel::Archive,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             RightPanel::Insight => "洞察",
             RightPanel::Mock => "Mock 生成",
             RightPanel::History => "历史",
+            RightPanel::Archive => "存档详情",
         }
     }
 
@@ -99,6 +107,7 @@ impl RightPanel {
             RightPanel::Insight => "icons/lightbulb.svg",
             RightPanel::Mock => "icons/dice-5.svg",
             RightPanel::History => "icons/clock.svg",
+            RightPanel::Archive => "icons/file-text.svg",
         };
         Icon::default().path(path)
     }

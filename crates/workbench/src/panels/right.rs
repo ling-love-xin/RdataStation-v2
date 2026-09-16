@@ -14,6 +14,8 @@ use crate::view::RightPanel;
 use insight::InsightView;
 use mock::mock_view::MockPanel;
 
+use analytics_resource::detail_view::render_detail;
+
 use super::Shared;
 
 /// 右侧边栏面板：洞察 / Mock 生成 / 历史。
@@ -98,6 +100,48 @@ impl RightSidebarPanel {
         div().v_flex().size_full().min_h_0().child(panel)
     }
 
+    /// M6：存档详情——视图在 `analytics_resource` crate（`detail_view::render_detail`），
+    /// 数据取左侧资产库面板的选中项；本面板只做转发渲染与空态。
+    ///
+    /// 选中变化能刷到这里，靠**宿主侧的观察**（`init_workspace` 观察资产库面板实体 →
+    /// 唤醒本面板）——面板之间不直接互相订阅，跨 crate 的视图也无从知道对方存在。
+    fn render_archive_detail(&mut self, cx: &mut Context<Self>) -> Div {
+        let detail = self
+            .shared
+            .resources_panel
+            .borrow()
+            .as_ref()
+            .and_then(|panel| panel.upgrade())
+            .and_then(|panel| panel.read(cx).selected_detail().cloned());
+        match detail {
+            Some(detail) => div()
+                .v_flex()
+                .size_full()
+                .min_h_0()
+                .child(render_detail(&detail, cx)),
+            None => self.render_archive_detail_empty(cx),
+        }
+    }
+
+    /// 详情空态：说的是"去哪儿选"，不是一句"无数据"。
+    fn render_archive_detail_empty(&self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        div()
+            .v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(div().text_sm().text_color(muted).child("未选中存档"))
+            .child(
+                div()
+                    .px_4()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("在左侧「资产库」选中一行，这里显示它的归档凭证"),
+            )
+    }
+
     fn render_history_placeholder(&self, fg: Hsla) -> Div {
         let mut panel = div()
             .v_flex()
@@ -176,6 +220,7 @@ impl Render for RightSidebarPanel {
                 let fg = cx.theme().colors.foreground;
                 self.render_history_placeholder(fg)
             }
+            RightPanel::Archive => self.render_archive_detail(cx),
         };
         div().v_flex().size_full().min_h_0().bg(bg).child(content)
     }

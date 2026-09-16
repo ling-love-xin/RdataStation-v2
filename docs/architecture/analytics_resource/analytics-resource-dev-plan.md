@@ -8,6 +8,30 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 1 第七刀：存档详情接入右栏（crate + workbench）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| P1.3（续）✅ | 右侧新增面板档位「存档详情」（`RightPanel::Archive`）：只做转发渲染 + 空态，视图仍在 crate 内（`detail_view::render_detail`）——档位名/图标属外壳数据 | `crates/workbench_shell/src/model.rs`、`crates/workbench/src/panels/right.rs` |
+| 数据链 ✅ | 详情与行**同一次取数产出**：`build_snapshot` 增 `history_counts` 入参，为每行落一份 `ArchiveDetail`（`ResourcesSnapshot.details`），面板按选中行 id 取（`selected_detail()`）——详情不在渲染期补取，也不额外开库 | `src/present.rs`、`src/resource_view.rs`、`crates/workbench/src/services/resource_jobs.rs` |
+| 版本数一次查完 ✅ | `AnalyticsResourceStore::version_counts()`（`GROUP BY resource_id`）：逐行查会把一次刷新变成 N+1 次查询；不在结果里的行 = 无历史版本（写前快照语义下当前版本不进版本表） | `src/version.rs` |
+| 时间口径 ✅ | 详情用**绝对时间**（`format_timestamp`，`%Y-%m-%d %H:%M`），行上仍用相对时间：列表窄要扫得快，详情是看"归档凭证"的地方要精确值；时区与 `connector.rs` 同口径（UTC，本地化是全局议题） | 同上 |
+| 空值不空行 ✅ | "版本"分区在无历史版本时**整节不出现**（与其它分区同一口径）：一排"（无）"除了占地方没有信息量 | `src/detail_view.rs` |
+| 联动 ✅ | 宿主观察**资产库面板实体**（不是 `SidebarPanel`：子实体的 `notify` 不级联到父面板）→ 右栏正显示存档详情时唤醒它重渲染；句柄存 `WorkbenchView` 私有字段。面板之间不互订，跨 crate 的视图也无从知道对方存在 | `crates/workbench/src/view.rs`、`crates/workbench/src/panels/resources.rs` |
+| 契约 ✅ | `Shared` 新增 `resources_panel` 弱句柄进白名单（与 `mock_panel` / `insight_panel` 同例） | `crates/workbench/tests/ui_contract.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **69 单测 + 7 窗口测试全绿**（+2 详情单测）；`cargo test -p rds-workbench --test ui_contract -j 2` → 7 项全绿 | — |
+
+**取舍记录**：详情落在**右 Dock 的档位**里，而不是原型 §3.1 的"编辑区右侧 20rem 属性面板"（`PROPERTY_PANEL_*`）——右 Dock 已有"面板档位"这套现成机制（切换/图标/快捷键/宽度记忆都由外壳管），而属性面板那条路要等 M4 的 `h_resizable` 容器接进编辑区。两者将来若合并，宽度口径按 `RIGHT_DOCK_WIDTH`（17.5rem）与 `DETAIL_PANEL_DEFAULT_WIDTH`（20rem）取一，**不要两份并存**。
+
+**已知缺口**（本轮没做，均记在下）：
+
+1. **关闭项目后左栏仍显示上一个项目的存档**（详情同理）——刷新只挂在"打开/切换项目"上（`project_host::on_opened`），宿主没有 close 回调可挂；要修需先给项目宿主补一个 `on_closed` 或让面板在无项目时清空快照。
+2. 详情面板只做**只读信息区**：动作按钮（取回 / 版本历史 / 打标签 / 移入回收站）、内容预览与危险区随对话框批接入（原型 §3.1 的其余分节）。
+
+**未落地**：五个对话框、只读三重守卫（编辑器侧）、批量多选（含 `F2` / `Ctrl+A`）。
+
+> 注：`Cargo.lock` **未随本刀提交**——工作树里它还含其它模块的在途改动，一并提交会混入别人的 WIP。
+
 ### 2026-09-16 — Phase 1 第六刀：Action 与快捷键（crate + app 层）
 
 | 项 | 内容 | 落点 |

@@ -60,6 +60,11 @@ pub struct WorkbenchView {
     /// 订阅句柄（保持连接选中事件的订阅存活）。
     /// 编辑面板观察句柄（其 notify 级联到宿主，保证对话框层内容同步）。
     _editor_subscription: Option<Subscription>,
+    /// 资产库面板观察句柄（M6：左栏选中 / 数据变化 → 唤醒右栏「存档详情」）。
+    ///
+    /// 观察的是**面板实体**而不是 `SidebarPanel`：子实体的 `notify` 不级联到父面板，
+    /// 订在侧栏上一条都收不到。句柄必须被持有——drop 即解除观察。
+    _archive_subscription: Option<Subscription>,
     /// M8 洞察规则目录监听句柄（改动 `.rule.toml` 后自动重载规则集）。
     ///
     /// 句柄必须**被持有**：它是 RAII 语义——drop 即停后台线程，
@@ -147,6 +152,7 @@ impl WorkbenchView {
             project_inputs: None,
             project_host: Some(host),
             _editor_subscription: None,
+            _archive_subscription: None,
             _insight_rules_watcher: insight_rules_watcher,
             editor_service,
             editor_hosts: Vec::new(),
@@ -657,6 +663,24 @@ impl WorkbenchView {
         // 不会传到子视图），而对话框内部的状态变化（切 Tab / 增删跳 / 测试结果等）
         // 都以 EditorPanel 的 notify 驱动，需同步宿主重绘才能更新层内容。
         self._editor_subscription = Some(cx.observe(&editor, |_, _, cx| cx.notify()));
+
+        // M6：左栏「资产库」的选中 / 快照变化要唤醒右栏「存档详情」。**面板之间不互相订阅**
+        // （跨 crate 的视图无从知道对方存在），这条线由宿主持有——右侧详情只读左栏的选中，
+        // 方向单一。右栏没在显示存档详情时不唤醒：切过去的那一帧会自然重渲染。
+        if let Some(panel) = shared
+            .resources_panel
+            .borrow()
+            .clone()
+            .and_then(|weak| weak.upgrade())
+        {
+            let shared_for_archive = shared.clone();
+            let right_for_archive = right_sidebar.clone();
+            self._archive_subscription = Some(cx.observe(&panel, move |_, _, cx| {
+                if shared_for_archive.active_right.get() == RightPanel::Archive {
+                    right_for_archive.update(cx, |_, cx| cx.notify());
+                }
+            }));
+        }
         self.area = Some(area);
         self.sidebar = Some(sidebar);
         self.editor = Some(editor);

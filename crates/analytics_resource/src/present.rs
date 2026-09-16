@@ -9,12 +9,16 @@
 
 use chrono::{DateTime, Utc};
 
+use crate::detail_view::ArchiveDetail;
 use crate::model::{ArchiveKind, ArchiveStatus};
 use crate::resource_view::{ArchiveCounts, ArchiveRow, ResourcesSnapshot};
 use crate::AnalyticsResource;
 
 /// 单行状态映射：`resource_id → 状态`（来自 `IndexRepair::scan` 的结果）。
 pub type ArchiveStatuses = std::collections::HashMap<String, ArchiveStatus>;
+
+/// 历史版本数映射：`resource_id → 条数`（来自 `AnalyticsResourceStore::version_counts`）。
+pub type VersionCounts = std::collections::HashMap<String, i64>;
 
 /// 大小文案：按 1024 进制分档，`< 1 KB` 用字节（避免出现 `0.0 KB` 这种没信息量的值）。
 pub fn format_size(bytes: Option<i32>) -> String {
@@ -88,6 +92,15 @@ pub fn format_relative_time(now: DateTime<Utc>, then: DateTime<Utc>) -> String {
     }
 }
 
+/// 绝对时间文案（详情面板用）：`2026-09-16 14:03`。
+///
+/// 行上用相对时间（面板窄、扫读快），详情面板是看"归档凭证"的地方，要的是精确值。
+/// 时区口径与仓库既有格式化一致（`connector.rs` 同）：直接展示库里的 UTC 值，
+/// 本地时区转换是全局议题，不在本模块单独改。
+pub fn format_timestamp(when: DateTime<Utc>) -> String {
+    when.format("%Y-%m-%d %H:%M").to_string()
+}
+
 /// 一行存档的尾巴字段（**字段优先级**：大小/规模 > 相对时间；两者都无则空串）。
 pub fn tail_for(resource: &AnalyticsResource, kind: ArchiveKind, now: DateTime<Utc>) -> String {
     let detail = match kind {
@@ -121,6 +134,49 @@ pub fn to_row(
     }
 }
 
+/// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
+///
+/// 与 [`to_row`](crate::present::to_row) 同一纪律：取值全部来自行模型与宿主推来的映射，
+/// 不在渲染期算。
+pub fn to_detail(
+    resource: &AnalyticsResource,
+    status: ArchiveStatus,
+    history_count: i64,
+) -> ArchiveDetail {
+    let kind = ArchiveKind::from_db_str(&resource.kind);
+    // 与行的尾巴同一口径：文件型给体积、分析表型给规模、引用型不给（不假装有值）。
+    let size_label = match kind {
+        ArchiveKind::File => format_size(resource.file_size),
+        ArchiveKind::Analysis => format_scale(resource.row_count, resource.column_count),
+        ArchiveKind::TableRef => String::new(),
+    };
+    ArchiveDetail {
+        id: resource.id.clone(),
+        name: resource.name.clone(),
+        alias: resource.alias.clone(),
+        kind,
+        version: resource.version,
+        status,
+        readonly: resource.readonly != 0,
+        size_label,
+        modified_label: format_timestamp(resource.updated_at),
+        archived_label: resource.archived_at.map(format_timestamp).unwrap_or_default(),
+        promoted_from: resource.promoted_from.clone(),
+        source_connection_id: resource.source_connection_id.clone(),
+        source_table: resource.source_table.clone(),
+        content_hash: resource.content_hash.clone(),
+        // 没有历史版本时给空串：`detail_rows` 据此跳过"版本"分区（不产生空行）。
+        history_label: if history_count > 0 {
+            format!("{history_count} 个历史版本")
+        } else {
+            String::new()
+        },
+        // 标签与分组属 Phase 2（那时才有按行的标签数据与分组列），此处不编造。
+        tags: Vec::new(),
+        group: None,
+    }
+}
+
 /// 组装面板快照：行（按状态与种类计分）+ 计数 + 只读标志。
 ///
 /// 计数口径与状态行文案一一对应：`缺失` 与 `索引异常`（内容已变）各自计数，
@@ -128,6 +184,7 @@ pub fn to_row(
 pub fn build_snapshot(
     resources: &[AnalyticsResource],
     statuses: &ArchiveStatuses,
+    history_counts: &VersionCounts,
     read_only: bool,
     now: DateTime<Utc>,
 ) -> ResourcesSnapshot {
@@ -136,6 +193,7 @@ pub fn build_snapshot(
         ..ArchiveCounts::default()
     };
     let mut rows = Vec::with_capacity(resources.len());
+    let mut details = std::collections::HashMap::with_capacity(resources.len());
 
     for resource in resources {
         let row = to_row(resource, statuses, now);
@@ -148,6 +206,11 @@ pub fn build_snapshot(
                 ArchiveKind::TableRef => counts.table_ref += 1,
             },
         }
+        let history_count = history_counts.get(&resource.id).copied().unwrap_or(0);
+        details.insert(
+            resource.id.clone(),
+            to_detail(resource, row.status, history_count),
+        );
         rows.push(row);
     }
 
@@ -155,17 +218,19 @@ pub fn build_snapshot(
         rows,
         counts,
         read_only,
+        details,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveStatuses, build_snapshot, format_relative_time, format_scale, format_size, tail_for,
+        ArchiveStatuses, VersionCounts, build_snapshot, format_relative_time, format_scale,
+        format_size, format_timestamp, tail_for,
     };
     use crate::model::{ArchiveKind, ArchiveStatus};
     use crate::models::AnalyticsResource;
-    use chrono::{Duration, Utc};
+    use chrono::{DateTime, Duration, Utc};
     use serde_json::Value;
 
     fn row_model(id: &str, kind: &str, file_size: Option<i32>) -> AnalyticsResource {
@@ -266,6 +331,49 @@ mod tests {
     }
 
     #[test]
+    fn details_carry_per_kind_size_and_real_history_count() {
+        let now = Utc::now();
+        let file = row_model("ar_file", "file", Some(1229));
+        let analysis = {
+            let mut row = row_model("ar_analysis", "analysis", None);
+            row.row_count = Some(12480);
+            row.column_count = Some(18);
+            row
+        };
+        let table_ref = row_model("ar_ref", "table_ref", None);
+        let resources = vec![file, analysis, table_ref];
+
+        // 只有分析表有历史版本（版本数来自存储层的批量查询）。
+        let mut counts = VersionCounts::new();
+        counts.insert("ar_analysis".to_string(), 3);
+
+        let snapshot = build_snapshot(&resources, &ArchiveStatuses::new(), &counts, false, now);
+
+        let file = snapshot.details.get("ar_file").expect("文件型详情");
+        assert_eq!(file.size_label, "1.2 KB", "文件型给体积");
+        assert_eq!(file.history_label, "", "无历史版本 → 空串（分区会被跳过）");
+        assert!(file.readonly, "归档后只读");
+        assert_eq!(file.content_hash.as_deref(), Some("abc"));
+        // 详情用绝对时间（行上用相对时间）。
+        assert_eq!(file.modified_label, format_timestamp(now));
+
+        let analysis = snapshot.details.get("ar_analysis").expect("分析表详情");
+        assert_eq!(analysis.size_label, "12,480 行 × 18 列");
+        assert_eq!(analysis.history_label, "3 个历史版本");
+
+        let table_ref = snapshot.details.get("ar_ref").expect("引用型详情");
+        assert_eq!(table_ref.size_label, "", "引用型不给体积（不假装有值）");
+    }
+
+    #[test]
+    fn timestamps_are_absolute_and_zero_padded() {
+        let when = DateTime::parse_from_rfc3339("2026-09-16T04:05:00Z")
+            .expect("rfc3339")
+            .with_timezone(&Utc);
+        assert_eq!(format_timestamp(when), "2026-09-16 04:05");
+    }
+
+    #[test]
     fn snapshot_counts_route_status_before_kind() {
         let now = Utc::now();
         let resources = vec![
@@ -280,7 +388,7 @@ mod tests {
         statuses.insert("ar_4".to_string(), ArchiveStatus::Missing);
         statuses.insert("ar_5".to_string(), ArchiveStatus::ContentChanged);
 
-        let snapshot = build_snapshot(&resources, &statuses, true, now);
+        let snapshot = build_snapshot(&resources, &statuses, &VersionCounts::new(), true, now);
 
         assert_eq!(snapshot.rows.len(), 5);
         assert_eq!(snapshot.counts.total, 5);

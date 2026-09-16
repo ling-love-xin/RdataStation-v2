@@ -29,7 +29,10 @@ impl SidebarPanel {
         cx: &mut Context<Self>,
     ) -> Entity<ResourcesPanel> {
         let host = crate::components::resource_host::build_host(shared);
-        cx.new(|cx| ResourcesPanel::new(host, cx))
+        let panel = cx.new(|cx| ResourcesPanel::new(host, cx));
+        // 登记弱句柄：右侧「存档详情」要拿它的选中项（宿主级弱句柄，与 mock / insight 同例）。
+        *shared.resources_panel.borrow_mut() = Some(panel.downgrade());
+        panel
     }
 
     /// 请求一次列表刷新（**事件路径**）：入队 + 启动轮询回填。

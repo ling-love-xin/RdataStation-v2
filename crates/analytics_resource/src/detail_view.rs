@@ -98,11 +98,13 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     source.push(("内容指纹", short_hash(detail.content_hash.as_deref())));
     sections.push(("来源".to_string(), source));
 
-    // 3) 版本
-    sections.push((
-        "版本".to_string(),
-        vec![("历史", detail.history_label.clone())],
-    ));
+    // 3) 版本（无历史版本时不出现空分区——与其它分区同一口径：空值不产生行）
+    if !detail.history_label.is_empty() {
+        sections.push((
+            "版本".to_string(),
+            vec![("历史", detail.history_label.clone())],
+        ));
+    }
 
     // 4) 组织（标签 / 分组只在有内容时出现）
     let mut org = Vec::new();

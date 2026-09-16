@@ -82,6 +82,8 @@ fn snapshot(rows: Vec<ArchiveRow>, read_only: bool) -> ResourcesSnapshot {
         rows,
         counts,
         read_only,
+        // 窗口用例只关心行与计数；详情区（右栏用）不在这里造数据。
+        details: std::collections::HashMap::new(),
     }
 }
 

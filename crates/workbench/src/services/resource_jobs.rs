@@ -89,6 +89,12 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         .list_file_archives()
         .await
         .map_err(|e| format!("读取存档列表失败：{e}"))?;
+    // 版本数**一次查完**：详情面板的"版本"区要按行给历史条数，逐行查会把一次刷新
+    // 变成 N+1 次查询（面板展示的是整个列表）。
+    let history_counts = store
+        .version_counts()
+        .await
+        .map_err(|e| format!("读取版本历史失败：{e}"))?;
     // 扫描只报告、不改状态（`IndexRepair` 的硬原则），可安全地反复调用。
     let report = IndexRepair::new(&payload, &store)
         .scan()
@@ -112,7 +118,13 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         statuses.insert(id.to_string(), status);
     }
 
-    Ok(build_snapshot(&rows, &statuses, job.read_only, Utc::now()))
+    Ok(build_snapshot(
+        &rows,
+        &statuses,
+        &history_counts,
+        job.read_only,
+        Utc::now(),
+    ))
 }
 
 /// 提交一次刷新（**事件路径**调用：激活面板 / 打开或切换项目 / 归档等变更之后）。
