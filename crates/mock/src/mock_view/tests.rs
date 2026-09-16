@@ -348,6 +348,9 @@ fn summary_counts_complex_items() {
 
 // ==================== 测试宿主桥 ====================
 
+/// 假宿主给场景任务回的三张表（表名，行数）。
+const SCENARIO_TABLES: [(&str, u32); 3] = [("orders", 100), ("items", 250), ("users", 40)];
+
 #[derive(Default)]
 struct Recorder {
     notifies: Cell<usize>,
@@ -360,6 +363,8 @@ struct Recorder {
     generated: RefCell<Vec<(String, u32, Option<u32>, Option<String>)>>,
     persisted: RefCell<Vec<String>>,
     appended: RefCell<Vec<String>>,
+    /// 提交过的场景模板 id
+    scenarios: RefCell<Vec<String>>,
     exported: RefCell<Vec<(String, String)>>,
     scratchpads: RefCell<Vec<String>>,
     /// 出口类任务拿到的临时表名（证明任务里带的是上一次生成的结果）
@@ -406,7 +411,9 @@ impl TestHost {
     /// 造一份生成结果（预览两行，与旧测试的预期一致）。
     fn gen_info(&self, draft: &MockDraft) -> MockGenInfo {
         MockGenInfo {
+            table_name: draft.table_name.clone(),
             temp_table_name: format!("temp_mock_{}", draft.table_name),
+            columns: draft.columns.iter().map(|c| c.def.clone()).collect(),
             row_count: draft.options.rows,
             elapsed_ms: 7,
             preview: MockPreview {
@@ -417,11 +424,14 @@ impl TestHost {
     }
 
     /// 出口：新建表（同名已存在 → 报错，与真实装配层同一语义）。
-    fn persist(&self, draft: &MockDraft, info: &MockGenInfo) -> Result<MockJobDone, String> {
+    ///
+    /// 目标表名取 `info.table_name`（**不是草稿**）：与 `mock_generator::persist_table_at`
+    /// 同一口径——场景模板的多张表因此能各自落到自己的表名下。
+    fn persist(&self, info: &MockGenInfo) -> Result<MockJobDone, String> {
         self.rec
             .persisted
             .borrow_mut()
-            .push(draft.table_name.clone());
+            .push(info.table_name.clone());
         self.rec
             .sink_temps
             .borrow_mut()
@@ -431,15 +441,15 @@ impl TestHost {
             .tables
             .borrow()
             .iter()
-            .any(|t| t == &draft.table_name)
+            .any(|t| t == &info.table_name)
         {
             return Err(format!(
                 "项目分析库已存在表 {}：请改用「追加到既有表」",
-                draft.table_name
+                info.table_name
             ));
         }
         Ok(MockJobDone::Persisted {
-            table: draft.table_name.clone(),
+            table: info.table_name.clone(),
             rows: 5,
         })
     }
@@ -474,7 +484,28 @@ impl MockHost for TestHost {
                     total_rows: 100 + draft.options.rows as i64,
                 })
             }
-            MockJobKind::Persist(info) => self.persist(draft, info),
+            MockJobKind::Persist(info) => self.persist(info),
+            MockJobKind::Scenario(template_id) => {
+                self.rec.scenarios.borrow_mut().push(template_id.clone());
+                Ok(MockJobDone::ScenarioGenerated {
+                    template_name: format!("场景 {template_id}"),
+                    // 三张表：够验证「切换当前表 → 出口作用于选中那张」
+                    tables: SCENARIO_TABLES
+                        .iter()
+                        .map(|(table, rows)| MockGenInfo {
+                            table_name: (*table).to_string(),
+                            temp_table_name: format!("temp_mock_{table}"),
+                            columns: draft.columns.iter().map(|c| c.def.clone()).collect(),
+                            row_count: *rows,
+                            elapsed_ms: 3,
+                            preview: MockPreview {
+                                columns: vec!["id".to_string()],
+                                rows: vec![vec![rows.to_string()]],
+                            },
+                        })
+                        .collect(),
+                })
+            }
             MockJobKind::Export { info, format, path } => {
                 self.rec
                     .sink_temps
@@ -1390,7 +1421,9 @@ fn persist_job_runs_in_background_and_keeps_preview(cx: &mut TestAppContext) {
         );
         assert!(panel.gen_info().is_some(), "写入期间预览仍在");
         assert!(
-            panel.outcome().is_some_and(|o| o.contains("写入项目分析库中")),
+            panel
+                .outcome()
+                .is_some_and(|o| o.contains("写入项目分析库中")),
             "{:?}",
             panel.outcome()
         );
@@ -2044,5 +2077,203 @@ fn delete_history_keeps_the_list_and_reports_failure(cx: &mut TestAppContext) {
                 .unwrap_or_default()
                 .contains("未打开项目")
         );
+    });
+}
+
+// ==================== 场景模板（C1） ====================
+
+/// 场景模板：一次产出多张结果表，默认选中第一张，并标出来源。
+#[gpui_kit::test]
+fn scenario_generation_fills_one_result_per_table(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    // 草稿里一列都没有：场景模板自带列定义，不该被草稿拦住
+    panel.update(cx, |panel, cx| {
+        panel.run_scenario("ecommerce".to_string(), cx)
+    });
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.is_running(), "场景生成也走后台任务");
+        assert!(matches!(panel.job_kind(), Some(MockJobKind::Scenario(id)) if id == "ecommerce"));
+        assert!(
+            panel.job_kind().is_some_and(MockJobKind::generates),
+            "场景任务包含生成阶段：可取消"
+        );
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(rec.scenarios.borrow().as_slice(), ["ecommerce".to_string()]);
+        assert_eq!(panel.results().len(), SCENARIO_TABLES.len());
+        assert_eq!(panel.current_result(), 0, "默认选第一张");
+        assert_eq!(panel.scenario_source(), Some("场景 ecommerce"));
+        assert_eq!(
+            panel
+                .results()
+                .iter()
+                .map(|info| info.table_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["orders", "items", "users"],
+            "顺序即模板里的表序"
+        );
+        // 当前表 = 第一张：任务结果区与详情都看它
+        let info = panel.gen_info().expect("结果应就绪");
+        assert_eq!(info.table_name, "orders");
+        assert_eq!(info.temp_table_name, "temp_mock_orders");
+        assert_eq!(panel.draft().table_name, "mock_data", "场景不改草稿");
+        let outcome = panel.outcome.clone().unwrap_or_default();
+        assert!(outcome.contains("3 张表"), "{outcome}");
+        assert!(outcome.contains("合计 390 行"), "{outcome}");
+    });
+}
+
+/// 切换当前表：`gen_info`（结果区 / 详情）跟着走。
+#[gpui_kit::test]
+fn selecting_a_result_switches_what_the_panel_shows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.run_scenario("ecommerce".to_string(), cx)
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+
+    panel.update(cx, |panel, cx| panel.select_result(2, cx));
+    draw(cx);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.current_result(), 2);
+        assert_eq!(
+            panel.gen_info().map(|i| i.table_name.as_str()),
+            Some("users")
+        );
+    });
+
+    // 越界不生效（渲染期不会 panic，也不会把当前表弄丢）
+    panel.update(cx, |panel, cx| panel.select_result(9, cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.current_result(), 2, "越界下标不该改状态");
+        assert_eq!(
+            panel.gen_info().map(|i| i.table_name.as_str()),
+            Some("users")
+        );
+    });
+}
+
+/// 出口作用于**当前选中**那张：目标表名取自结果，不是草稿。
+#[gpui_kit::test]
+fn exits_apply_to_the_selected_result_table(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.run_scenario("ecommerce".to_string(), cx)
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+
+    // 选中第二张（items）后落库
+    panel.update(cx, |panel, cx| {
+        panel.select_result(1, cx);
+        panel.persist_table(cx);
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(rec.persisted.borrow().as_slice(), ["items".to_string()]);
+        assert_eq!(
+            rec.sink_temps.borrow().as_slice(),
+            ["temp_mock_items".to_string()]
+        );
+        assert_eq!(panel.landed(), Some("items"));
+    });
+
+    // 换到第三张再导出：文件名也跟当前表走
+    panel.update(cx, |panel, cx| {
+        panel.select_result(2, cx);
+        let name = panel.export_file_name(&MockExportFormat::Csv);
+        assert_eq!(name, "users.csv");
+        panel.export_file(&MockExportFormat::Csv, "/tmp/users.csv".to_string(), cx);
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(rec.sink_temps.borrow().as_slice()[1], "temp_mock_users");
+        assert!(
+            panel
+                .outcome()
+                .unwrap_or_default()
+                .contains("/tmp/users.csv")
+        );
+    });
+}
+
+/// 单表生成回到「一张结果、无来源」：场景态不残留。
+#[gpui_kit::test]
+fn single_table_generation_clears_the_scenario_state(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.run_scenario("ecommerce".to_string(), cx);
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| assert_eq!(panel.results().len(), 3));
+
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.results().len(), 1);
+        assert_eq!(panel.current_result(), 0);
+        assert_eq!(panel.scenario_source(), None);
+        assert_eq!(
+            panel.gen_info().map(|i| i.table_name.as_str()),
+            Some("mock_data")
+        );
+    });
+}
+
+/// 进行中的场景任务按「张表」报进度，不拿行数当量纲。
+#[gpui_kit::test]
+fn scenario_job_reports_tables_as_its_unit(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    rec.hold_job.set(true);
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.run_scenario("ecommerce".to_string(), cx)
+    });
+    // 宿主报「已生成 2 / 3 张表」（批次槽位复用为表计数）
+    rec.job_progress.set(MockJobProgress {
+        phase: MockJobPhase::Generating,
+        batches_done: 2,
+        batches_total: 3,
+        rows_total: 0,
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        let progress = panel.job_progress().expect("进行中应有进度");
+        assert_eq!(progress.rows_total, 0, "场景任务的行数由模板定，草稿不参与");
+        assert_eq!(progress.rows_done(), 0, "没有行数量纲：别算出行数");
+        assert_eq!(progress.batches_total, 3);
+        assert!(
+            panel
+                .job_kind()
+                .is_some_and(|kind| { matches!(kind, MockJobKind::Scenario(_)) })
+        );
+    });
+
+    // 取消：场景任务含生成阶段，引擎逐表响应
+    panel.update(cx, |panel, cx| panel.cancel_job(cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(rec.cancels.get(), 1, "取消应直达宿主");
+        assert_eq!(panel.results().len(), 0, "还没回填结果");
     });
 }

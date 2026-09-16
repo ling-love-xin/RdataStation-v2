@@ -1,6 +1,7 @@
 //! M7 Mock 装配层集成测试：生成 → 落库（新建 / 追加）/ 导出的端到端语义。
 //!
-//! 全部走显式路径入口（`*_at`）：生产入口恒取全局分析库，测试用临时库文件隔离。
+//! 全部走显式路径入口（`*_at`）。出口（落库 / 追加 / 导出 / 草稿箱）的输入是**生成结果自己**
+//! （`MockGenInfo`：目标表名 + 列定义 + 临时表），不读草稿——场景模板产出的多张表因此能各自落地。
 
 use std::path::PathBuf;
 
@@ -99,7 +100,7 @@ fn persist_creates_table_and_rejects_second_run() {
     let draft = draft("t_persist", 50);
 
     let info = generate_at(Some(&db), &draft, None).expect("generate");
-    let rows = persist_table_at(&db, &draft, &info).expect("persist");
+    let rows = persist_table_at(&db, &info).expect("persist");
     assert_eq!(rows, 50);
     assert_eq!(count_rows(&db, "t_persist"), 50);
     assert_eq!(
@@ -109,7 +110,7 @@ fn persist_creates_table_and_rejects_second_run() {
     );
 
     // 二次落库：不覆盖，报错并给出「追加」引导
-    let err = persist_table_at(&db, &draft, &info).expect_err("应拒绝同名建表");
+    let err = persist_table_at(&db, &info).expect_err("应拒绝同名建表");
     assert!(err.contains("已存在"), "err: {err}");
     assert!(err.contains("追加"), "err: {err}");
     assert_eq!(count_rows(&db, "t_persist"), 50, "既有数据不应被覆盖");
@@ -125,11 +126,11 @@ fn append_continues_primary_key_sequence() {
 
     // 首次建表
     let first = generate_at(Some(&db), &draft, None).expect("generate");
-    persist_table_at(&db, &draft, &first).expect("persist");
+    persist_table_at(&db, &first).expect("persist");
 
     // 追加：生成时按表内行数接续自增起点，再插入
     let second = generate_at(Some(&db), &draft, Some("t_append")).expect("regenerate for append");
-    let total = append_table_at(&db, &draft, &second, "t_append").expect("append");
+    let total = append_table_at(&db, &second, "t_append").expect("append");
     assert_eq!(total, 100, "追加后表内应累计 100 行");
 
     let conn = duckdb::Connection::open(&db).expect("open duckdb");
@@ -158,7 +159,7 @@ fn persist_writes_many_rows_in_one_go() {
     let draft = draft("t_many", 20_000);
 
     let info = generate_at(Some(&db), &draft, None).expect("generate");
-    let rows = persist_table_at(&db, &draft, &info).expect("persist");
+    let rows = persist_table_at(&db, &info).expect("persist");
     assert_eq!(rows, 20_000);
     assert_eq!(count_rows(&db, "t_many"), 20_000);
 
@@ -186,7 +187,7 @@ fn append_leaves_extra_target_columns_at_default() {
     }
 
     let info = generate_at(Some(&db), &draft, Some("t_extra")).expect("regenerate for append");
-    let total = append_table_at(&db, &draft, &info, "t_extra").expect("append");
+    let total = append_table_at(&db, &info, "t_extra").expect("append");
     assert_eq!(total, 21, "种子行 1 + 追加 20");
 
     let conn = duckdb::Connection::open(&db).expect("open duckdb");
@@ -221,13 +222,13 @@ fn append_rejects_column_mismatch() {
     let draft = draft("t_mismatch", 10);
 
     let info = generate_at(Some(&db), &draft, None).expect("generate");
-    persist_table_at(&db, &draft, &info).expect("persist");
+    persist_table_at(&db, &info).expect("persist");
 
-    // 目标表缺少草稿里的列 → 报缺失列名（不让 DuckDB 原始错误冒到界面）
+    // 目标表缺少结果里的列 → 报缺失列名（不让 DuckDB 原始错误冒到界面）
     let mut narrowed = draft.clone();
     narrowed.columns.push(column("extra", GeneratorConfig::Digit));
     let info = generate_at(Some(&db), &narrowed, Some("t_mismatch")).expect("regenerate");
-    let err = append_table_at(&db, &narrowed, &info, "t_mismatch").expect_err("应报缺列");
+    let err = append_table_at(&db, &info, "t_mismatch").expect_err("应报缺列");
     assert!(err.contains("缺少列"), "err: {err}");
     assert!(err.contains("extra"), "err: {err}");
 
@@ -259,7 +260,6 @@ fn export_writes_csv_with_header() {
 
     let csv = dir.join("t_export.csv");
     let message = export_file(
-        &draft,
         &info,
         &MockExportFormat::Csv,
         csv.to_str().expect("utf-8 path"),
@@ -281,11 +281,11 @@ fn scratchpad_without_project_errors() {
     let draft = draft("t_scratch", 5);
     let info = generate_at(Some(&db), &draft, None).expect("generate");
 
-    let err = save_scratchpad(&draft, &info, &MockExportFormat::Csv, None).expect_err("应报错");
+    let err = save_scratchpad(&info, &MockExportFormat::Csv, None).expect_err("应报错");
     assert!(err.contains("未打开项目"), "err: {err}");
 
     // 有项目根：写入 {项目}/mock/mock_<表>_<时间戳>.csv
-    let message = save_scratchpad(&draft, &info, &MockExportFormat::Csv, Some(&dir))
+    let message = save_scratchpad(&info, &MockExportFormat::Csv, Some(&dir))
         .expect("save to scratchpad");
     assert!(message.contains("已保存到草稿箱"), "{message}");
     let mock_dir = dir.join("mock");

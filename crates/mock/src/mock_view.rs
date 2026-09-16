@@ -131,10 +131,18 @@ impl MockRunOptions {
 }
 
 /// 生成结果（内存临时表）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 带着**列定义**（`columns`）的目的：出口（落库 / 导出 / 草稿箱）只能凭结果自己完成——
+/// 单表生成时它与草稿列一致，但场景模板生成的多张表与草稿**没有任何关系**，
+/// 「拿草稿当出口规格」会在场景下建出列名对不上的表。
+#[derive(Debug, Clone)]
 pub struct MockGenInfo {
+    /// 目标表名（单表生成 = 草稿里的目标表；场景模板 = 模板里的表名）
+    pub table_name: String,
     /// 内存临时表名（`temp_mock_*`）
     pub temp_table_name: String,
+    /// 生成时用的列定义（出口建表 / 校对目标列结构用）
+    pub columns: Vec<ColumnDef>,
     /// 本次生成行数
     pub row_count: u32,
     /// 生成耗时（毫秒）
@@ -154,16 +162,20 @@ pub struct MockPreview {
 
 /// 后台任务种类（决定任务干什么、收尾时怎么归置结果）。
 ///
-/// 分两组：**生成类**（`Generate` / `AppendTo`）自己产出 `MockGenInfo`；
+/// 分两组：**生成类**（`Generate` / `Scenario` / `AppendTo`）自己产出结果；
 /// **出口类**（`Persist` / `Export` / `Scratchpad`）消费上一次生成的结果，
-///  поэтому把 `MockGenInfo` 带在身上——工作线程要靠它找到内存临时表，
+/// 因此把 `MockGenInfo` 带在身上——工作线程靠它找到内存临时表、拿到目标表名与列定义，
 /// 而视图侧不能把「最近一次结果」另存一份隐式状态（两处状态必然漂移）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 出口类**不读草稿**：场景模板产出的多张表与草稿无关，出口只认结果自己（见 [`MockGenInfo`]）。
+#[derive(Debug, Clone)]
 pub enum MockJobKind {
     /// 只生成到内存临时表（**不写库**）
     Generate,
     /// 生成后追加到既有分析表（自增起点按表内行数接续）
     AppendTo(String),
+    /// 场景模板：按模板一次生成多张临时表（**不写库**；逐表进度）
+    Scenario(String),
     /// 出口：把已生成结果持久化为分析库**新表**（同名已存在 → `Err`）
     Persist(MockGenInfo),
     /// 出口：把已生成结果导出为文件（路径由调用方在系统对话框里选好）
@@ -190,22 +202,35 @@ impl MockJobKind {
     /// 两个后果：只有生成阶段能取消（引擎按批响应）；只有生成类收尾时要作废旧预览
     /// （它把临时表重建了，而出口类只读不改，临时表与预览仍彼此一致）。
     pub fn generates(&self) -> bool {
+        matches!(self, Self::Generate | Self::AppendTo(_) | Self::Scenario(_))
+    }
+
+    /// 是否**以当前草稿为输入**（目标表 / 列 / 行数）。
+    ///
+    /// 只有 `Generate` 与 `AppendTo` 是：场景模板自带表与列（草稿不参与也不被改写），
+    /// 三个出口只看已生成的结果（见 [`MockGenInfo`])。
+    /// 面板据此决定要不要先校验草稿（表名 / 行数输入 / 至少一列）。
+    pub fn uses_draft(&self) -> bool {
         matches!(self, Self::Generate | Self::AppendTo(_))
     }
 
     /// 任务开始时的阶段（进度条形态与文案据此切换；进行中时以宿主上报的阶段为准）。
     pub fn phase(&self) -> MockJobPhase {
         match self {
-            Self::Generate | Self::AppendTo(_) => MockJobPhase::Generating,
+            Self::Generate | Self::AppendTo(_) | Self::Scenario(_) => MockJobPhase::Generating,
             Self::Persist(_) => MockJobPhase::Writing,
             Self::Export { .. } | Self::Scratchpad { .. } => MockJobPhase::Exporting,
         }
     }
 
     /// 本次任务处理的行数（文案用）：生成类按草稿设定，出口类按已生成结果。
+    ///
+    /// 场景模板的总行数写在模板里（草稿不参与），因此这里给 0——面板对场景任务
+    /// 按「张表」报进度（见 `render_job_row`），不拿行数当量纲。
     pub fn rows_total(&self, draft: &MockDraft) -> u32 {
         match self {
             Self::Generate | Self::AppendTo(_) => draft.options.rows,
+            Self::Scenario(_) => 0,
             Self::Persist(info) | Self::Export { info, .. } | Self::Scratchpad { info, .. } => {
                 info.row_count
             }
@@ -217,6 +242,7 @@ impl MockJobKind {
         match self {
             Self::Generate => "生成中…".to_string(),
             Self::AppendTo(table) => format!("生成并追加到 {table} 中…"),
+            Self::Scenario(_) => "按场景模板生成中…".to_string(),
             Self::Persist(info) => format!("写入项目分析库中…（{} 行）", info.row_count),
             Self::Export { path, .. } => format!("导出中…（{path}）"),
             Self::Scratchpad { .. } => "保存到草稿箱中…".to_string(),
@@ -229,6 +255,13 @@ impl MockJobKind {
 pub enum MockJobDone {
     /// 生成完成
     Generated(MockGenInfo),
+    /// 场景模板生成完成（多张临时表；顺序即模板里的表序）
+    ScenarioGenerated {
+        /// 模板名（结果区文案与来源标注）
+        template_name: String,
+        /// 逐表结果（含预览）
+        tables: Vec<MockGenInfo>,
+    },
     /// 生成并追加完成（表名 + 表内总行数）
     Appended {
         /// 目标表
@@ -286,11 +319,12 @@ impl MockJobPhase {
 pub struct MockJobProgress {
     /// 当前阶段
     pub phase: MockJobPhase,
-    /// 已完成批次（仅生成阶段有意义）
+    /// 已完成「量」（单表生成 = 批次；场景模板 = 张表）。
+    /// 量纲由任务种类决定（见 `MockJobKind::rows_total`：场景任务为 0 行，按张表报）。
     pub batches_done: usize,
-    /// 总批次（首次回调前为 0，表示「尚未开始」）
+    /// 总量（单表生成 = 总批次；场景模板 = 总表数）。首次回调前为 0，表示「尚未开始」
     pub batches_total: usize,
-    /// 本次任务的行数（文案用）
+    /// 本次任务的行数（文案用；场景模板为 0，因为行数写在模板里、草稿不参与）
     pub rows_total: u32,
 }
 
@@ -304,6 +338,9 @@ impl MockJobProgress {
     }
 
     /// 已完成行数（批次粒度估算：向下取整到批）。
+    ///
+    /// `rows_total` 为 0 时恒为 0——场景模板任务就是这种（量纲是「张表」，不是行），
+    /// 面板对这类任务改用 `batches_done / batches_total` 报「{done} / {total} 张表」。
     pub fn rows_done(&self) -> u32 {
         if self.batches_total == 0 {
             return 0;
@@ -1009,8 +1046,12 @@ pub struct MockPanel {
     draft: MockDraft,
     /// 列 id 计数器（列可增删，键用 id）
     next_id: u64,
-    /// 最近一次生成结果
-    generated: Option<MockGenInfo>,
+    /// 最近一次运行的**结果表**（单表生成 = 1 条；场景模板 = N 条）
+    results: Vec<MockGenInfo>,
+    /// 当前选中的结果表下标（出口作用于它；越界视为 0）
+    current: usize,
+    /// 当前结果来自哪套场景模板（`None` = 单表生成；面板据此给一句来源说明）
+    scenario_source: Option<String>,
     /// 最近一次成功落库的表名（出口反馈用）
     landed: Option<String>,
     outcome: Option<String>,
@@ -1019,6 +1060,8 @@ pub struct MockPanel {
     sources: Vec<SchemaSource>,
     /// 分析库既有表（追加候选，事件路径加载）
     existing_tables: Vec<String>,
+    /// 内置场景模板清单（构造时算一次；见 [`ScenarioChoice`]）
+    scenario_templates: Vec<ScenarioChoice>,
     table_input: Option<Entity<InputState>>,
     /// 待写入表名输入的值（事件路径置位，下一帧渲染时落地）
     table_pending: Option<String>,
@@ -1086,6 +1129,45 @@ pub(crate) enum HistoryReply {
     TemplateApplied(Box<(MockUserTemplate, Vec<MockTemplateColumn>)>),
 }
 
+/// 内置场景模板的条目（面板菜单用）：只留名字与规模，模板本体在生成时按 id 重取。
+///
+/// 缓存的原因：[`crate::templates::get_builtin_templates`] 会现场构造整套列定义
+/// （数百个 `ColumnDef`），每帧重建不划算——「渲染期零 I/O」同样包含「零重活」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScenarioChoice {
+    /// 模板 id（提交任务用）
+    pub id: String,
+    /// 模板名（菜单与来源文案用）
+    pub name: String,
+    /// 模板里的表数
+    pub table_count: usize,
+    /// 模板里的总行数（菜单预览用）
+    pub total_rows: u32,
+}
+
+impl ScenarioChoice {
+    /// 菜单条目文案：`零售电商（5 张表 · 12,000 行）`。
+    pub fn menu_label(&self) -> String {
+        format!(
+            "{}（{} 张表 · {} 行）",
+            self.name, self.table_count, self.total_rows
+        )
+    }
+}
+
+/// 内置场景模板的轻量清单（构造面板时取一次）。
+fn builtin_scenario_choices() -> Vec<ScenarioChoice> {
+    crate::templates::get_builtin_templates()
+        .into_iter()
+        .map(|template| ScenarioChoice {
+            table_count: template.tables.len(),
+            total_rows: template.tables.iter().map(|t| t.row_count).sum(),
+            id: template.id,
+            name: template.name,
+        })
+        .collect()
+}
+
 impl MockPanel {
     /// 创建面板（宿主在 `cx.new` 中调用；构造不做 I/O）。
     pub fn new(host: Rc<dyn MockHost>, _cx: &mut Context<Self>) -> Self {
@@ -1093,12 +1175,15 @@ impl MockPanel {
             host,
             draft: MockDraft::default(),
             next_id: 1,
-            generated: None,
+            results: Vec::new(),
+            current: 0,
+            scenario_source: None,
             landed: None,
             outcome: None,
             error: None,
             sources: Vec::new(),
             existing_tables: Vec::new(),
+            scenario_templates: builtin_scenario_choices(),
             table_input: None,
             table_pending: None,
             rows_input: None,
@@ -1126,7 +1211,34 @@ impl MockPanel {
 
     /// 最近一次生成结果
     pub fn gen_info(&self) -> Option<&MockGenInfo> {
-        self.generated.as_ref()
+        self.current_info()
+    }
+
+    /// 当前结果表（`current` 越界时回退到第一条；空结果返回 `None`）。
+    fn current_info(&self) -> Option<&MockGenInfo> {
+        self.results
+            .get(self.current.min(self.results.len().saturating_sub(1)))
+            .filter(|_| !self.results.is_empty())
+    }
+
+    /// 结果表清单（场景生成后不止一张；出口作用于当前选中的那张）。
+    pub fn results(&self) -> &[MockGenInfo] {
+        &self.results
+    }
+
+    /// 当前选中的结果表下标。
+    pub fn current_result(&self) -> usize {
+        self.current
+    }
+
+    /// 当前结果来自哪套场景模板（`None` = 单表生成）。
+    pub fn scenario_source(&self) -> Option<&str> {
+        self.scenario_source.as_deref()
+    }
+
+    /// 可用的内置场景模板（面板「场景模板 ▾」菜单；构造时算好，渲染期零重活）。
+    pub fn scenario_templates(&self) -> &[ScenarioChoice] {
+        &self.scenario_templates
     }
 
     /// 最近一次成功文案
@@ -1164,6 +1276,11 @@ impl MockPanel {
         self.job.as_ref().is_some_and(|job| job.kind.generates())
     }
 
+    /// 进行中任务的种类（无任务时为 `None`）；面板与测试据此区分量纲（批次 / 张表）。
+    pub fn job_kind(&self) -> Option<&MockJobKind> {
+        self.job.as_ref().map(|job| &job.kind)
+    }
+
     /// 进行中任务的进度（无任务时为 `None`）
     pub fn job_progress(&self) -> Option<MockJobProgress> {
         self.job.as_ref().map(|job| job.progress)
@@ -1191,7 +1308,9 @@ impl MockPanel {
     ///
     /// 草稿（目标表名 / 列 / 行数种子）**保留**：那是用户的配置，跨项目可以继续用。
     pub fn forget_generated(&mut self, cleared: usize, cx: &mut Context<Self>) {
-        self.generated = None;
+        self.results.clear();
+        self.current = 0;
+        self.scenario_source = None;
         self.landed = None;
         self.error = None;
         // 没清到东西就不打扰用户（切项目很常见，每次都报一句是噪声）
@@ -1370,7 +1489,8 @@ impl MockPanel {
         self.next_id = count as u64 + 1;
         self.draft = draft;
         // 旧结果作废：草稿已是另一套配置，临时表还是上一套的
-        self.generated = None;
+        self.results.clear();
+        self.current = 0;
         self.landed = None;
         self.error = None;
         self.outcome = Some(format!(
@@ -1394,7 +1514,8 @@ impl MockPanel {
         self.draft = draft;
         self.table_pending = Some(self.draft.table_name.clone());
         // 旧结果作废：草稿已是另一套配置，临时表还是上一套的
-        self.generated = None;
+        self.results.clear();
+        self.current = 0;
         self.landed = None;
         self.error = None;
         self.outcome = Some(format!(
@@ -1412,7 +1533,8 @@ impl MockPanel {
             Ok(columns) => {
                 self.draft.columns = columns;
                 self.next_id = self.draft.columns.iter().map(|c| c.id).max().unwrap_or(0) + 1;
-                self.generated = None;
+                self.results.clear();
+                self.current = 0;
                 self.landed = None;
                 self.error = None;
                 self.outcome = Some(format!(
@@ -1439,6 +1561,22 @@ impl MockPanel {
         self.start_job(MockJobKind::Generate, cx);
     }
 
+    /// 场景模板：一次生成多张临时表（**不写库**；逐表进度）。
+    ///
+    /// 与单表生成的差别：目标表 / 列 / 行数全来自模板，**草稿不参与也不被改写**——
+    /// 结果是多张表（`results`），出口作用于当前选中的那张（见 `select_result`）。
+    pub fn run_scenario(&mut self, template_id: String, cx: &mut Context<Self>) {
+        self.start_job(MockJobKind::Scenario(template_id), cx);
+    }
+
+    /// 切换当前选中的结果表（场景生成后不止一张）。
+    pub fn select_result(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.results.len() && index != self.current {
+            self.current = index;
+            cx.notify();
+        }
+    }
+
     /// 出口：追加到**项目**分析库既有表（显式选择；后台任务：生成 + 追加在一次任务里完成）。
     pub fn append_table(&mut self, table: String, cx: &mut Context<Self>) {
         if self.host.read_only() {
@@ -1454,13 +1592,17 @@ impl MockPanel {
             self.fail("已有任务在进行中（请等它结束或先取消）", cx);
             return;
         }
-        if let Err(e) = self.sync_inputs(cx) {
-            self.fail(e, cx);
-            return;
-        }
-        if self.draft.columns.is_empty() {
-            self.fail("请先添加列：导入源库结构，或手工加列", cx);
-            return;
+        // 草稿驱动的任务才校验草稿：场景模板与出口都不读草稿（见 `MockJobKind::uses_draft`），
+        // 拿它们的输入拦截会给出与当前动作无关的错误
+        if kind.uses_draft() {
+            if let Err(e) = self.sync_inputs(cx) {
+                self.fail(e, cx);
+                return;
+            }
+            if self.draft.columns.is_empty() {
+                self.fail("请先添加列：导入源库结构，或手工加列", cx);
+                return;
+            }
         }
         if let Err(e) = self.host.start_job(&self.draft, kind.clone()) {
             self.fail(e, cx);
@@ -1547,7 +1689,8 @@ impl MockPanel {
         cx: &mut Context<Self>,
     ) {
         if kind.generates() {
-            self.generated = None;
+            self.results.clear();
+            self.current = 0;
         }
         // 历史在任务收尾时记（写库在后台）：出口类与取消不记，见 `RunRecord::of`
         let record = RunRecord::of(kind, &result, &self.draft);
@@ -1559,7 +1702,25 @@ impl MockPanel {
                     "已生成 {} 行（耗时 {} ms）→ 临时表 {}",
                     info.row_count, info.elapsed_ms, info.temp_table_name
                 ));
-                self.generated = Some(info);
+                self.results = vec![info];
+                self.current = 0;
+                self.scenario_source = None;
+                self.host.notify(cx);
+            }
+            Ok(MockJobDone::ScenarioGenerated {
+                template_name,
+                tables,
+            }) => {
+                self.landed = None;
+                self.error = None;
+                let total: u32 = tables.iter().map(|table| table.row_count).sum();
+                self.outcome = Some(format!(
+                    "已按「{template_name}」生成 {} 张表（合计 {total} 行）：出口作用于当前选中的那张",
+                    tables.len()
+                ));
+                self.results = tables;
+                self.current = 0;
+                self.scenario_source = Some(template_name);
                 self.host.notify(cx);
             }
             Ok(MockJobDone::Appended { table, total_rows }) => {
@@ -1617,7 +1778,7 @@ impl MockPanel {
 
     /// 出口：持久化为**项目**分析库新表（后台任务：大行数落库同样会阻塞界面）。
     pub fn persist_table(&mut self, cx: &mut Context<Self>) {
-        let Some(info) = self.generated.clone() else {
+        let Some(info) = self.current_info().cloned() else {
             self.fail("请先生成（预览确认后再落库）", cx);
             return;
         };
@@ -1631,7 +1792,7 @@ impl MockPanel {
 
     /// 出口：导出文件（调用方已选好路径；后台任务）。
     pub fn export_file(&mut self, format: &MockExportFormat, path: String, cx: &mut Context<Self>) {
-        let Some(info) = self.generated.clone() else {
+        let Some(info) = self.current_info().cloned() else {
             self.fail("请先生成（预览确认后再导出）", cx);
             return;
         };
@@ -1651,7 +1812,7 @@ impl MockPanel {
 
     /// 出口：保存到草稿箱（`{项目}/mock/`；后台任务）。
     pub fn save_scratchpad(&mut self, format: &MockExportFormat, cx: &mut Context<Self>) {
-        let Some(info) = self.generated.clone() else {
+        let Some(info) = self.current_info().cloned() else {
             self.fail("请先生成（预览确认后再保存）", cx);
             return;
         };
@@ -1674,7 +1835,8 @@ impl MockPanel {
         self.next_id += 1;
         let spec = new_column_spec(id, name, data_type);
         self.draft.columns.push(spec);
-        self.generated = None;
+        self.results.clear();
+        self.current = 0;
         self.landed = None;
         cx.notify();
     }
@@ -1682,7 +1844,8 @@ impl MockPanel {
     /// 删列。
     pub fn remove_column(&mut self, id: u64, cx: &mut Context<Self>) {
         self.draft.columns.retain(|c| c.id != id);
-        self.generated = None;
+        self.results.clear();
+        self.current = 0;
         self.landed = None;
         cx.notify();
     }
@@ -1696,7 +1859,8 @@ impl MockPanel {
             column.def.generator = config;
             column.confidence = "manual".to_string();
             column.sample_value.clear();
-            self.generated = None;
+            self.results.clear();
+            self.current = 0;
             self.landed = None;
         }
         cx.notify();
@@ -1730,7 +1894,8 @@ impl MockPanel {
     pub fn apply_column(&mut self, edited: MockColumnSpec, cx: &mut Context<Self>) {
         if let Some(slot) = self.draft.columns.iter_mut().find(|c| c.id == edited.id) {
             *slot = edited;
-            self.generated = None;
+            self.results.clear();
+            self.current = 0;
             self.landed = None;
         }
         cx.notify();
@@ -1745,7 +1910,8 @@ impl MockPanel {
             slot.def.unique = false;
             slot.confidence = mapped.confidence;
             slot.sample_value = mapped.sample_value;
-            self.generated = None;
+            self.results.clear();
+            self.current = 0;
             self.landed = None;
         }
         cx.notify();
@@ -1782,7 +1948,19 @@ impl MockPanel {
 
     /// 生成结果是否就绪（出口按钮是否可用）
     fn has_result(&self) -> bool {
-        self.generated.is_some()
+        !self.results.is_empty()
+    }
+
+    /// 「另存为」的默认文件名：取**当前结果表**的名字（场景模板下与草稿无关）。
+    ///
+    /// 没结果时回退到草稿的目标表名：按钮在无结果时本来就点不开（`has_result` 拦着），
+    /// 这里只保证函数本身不会给出空名字。
+    fn export_file_name(&self, format: &MockExportFormat) -> String {
+        let table = self
+            .current_info()
+            .map(|info| info.table_name.clone())
+            .unwrap_or_else(|| self.draft.table_name.clone());
+        mock_file_name(&table, format)
     }
 
     /// 测试用：直接写行数输入框（校验失败路径：非法行数止于视图，不触宿主）。
@@ -1902,10 +2080,16 @@ impl MockPanel {
         let progress = job.progress;
         let cancellable = job.kind.generates();
         let cancel_requested = job.cancel_requested;
+        // 场景模板的量纲是「张表」：批次计数被复用为表计数，行数恒 0（见 `MockJobKind::rows_total`）
+        let by_table = matches!(job.kind, MockJobKind::Scenario(_));
 
         let muted = cx.theme().colors.muted_foreground;
         let detail = match progress.phase {
             MockJobPhase::Generating if progress.batches_total == 0 => "准备中…".to_string(),
+            MockJobPhase::Generating if by_table => format!(
+                "{} / {} 张表（每张表逐个生成）",
+                progress.batches_done, progress.batches_total
+            ),
             MockJobPhase::Generating => format!(
                 "{} / {} 批（≈{} / {} 行）",
                 progress.batches_done,
@@ -1913,6 +2097,7 @@ impl MockPanel {
                 progress.rows_done(),
                 progress.rows_total
             ),
+            phase if by_table => format!("{}…（{} 张表）", phase.label(), progress.batches_total),
             phase => format!("{}…（{} 行）", phase.label(), progress.rows_total),
         };
         let cancel =
@@ -2013,7 +2198,44 @@ impl MockPanel {
             button
         };
 
-        // 任务进行中：进度条（组件，不手搓）+ 批次文案 + 取消
+        // 场景模板（内置 6 套多表一键生成）：同样是生成类任务，进行中一并禁用
+        let scenario = {
+            let entity = cx.entity();
+            let templates = self.scenario_templates.clone();
+            Button::new("mock-scenario")
+                .secondary()
+                .label("场景模板 ▾")
+                .disabled(running)
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let mut menu = menu;
+                    if templates.is_empty() {
+                        return menu
+                            .item(PopupMenuItem::new("（没有可用的场景模板）").disabled(true));
+                    }
+                    for choice in templates.iter() {
+                        let id = choice.id.clone();
+                        let entity = entity.clone();
+                        menu = menu.item(PopupMenuItem::new(choice.menu_label()).on_click(
+                            move |_, _, app| {
+                                let id = id.clone();
+                                entity.update(app, |panel, cx| panel.run_scenario(id, cx));
+                            },
+                        ));
+                    }
+                    menu
+                })
+        };
+
+        // 生成行：单表生成（主按钮，占满剩余宽度）+ 场景模板（多表一键生成）
+        let generate_row = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .child(div().flex_1().min_w_0().child(generate))
+            .child(scenario);
+
+        // 任务进行中：进度条（组件，不手搓）+ 量纲文案 + 取消
         let job_row = self.render_job_row(cx);
 
         // 出口：详情 tab + 落库 + 追加 + 草稿箱 + 另存为（任务进行中全部禁用：一次只能跑一个）
@@ -2049,7 +2271,8 @@ impl MockPanel {
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     if tables.is_empty() {
-                        return menu.item(PopupMenuItem::new("（项目分析库暂无表）").disabled(true));
+                        return menu
+                            .item(PopupMenuItem::new("（项目分析库暂无表）").disabled(true));
                     }
                     for name in tables.iter() {
                         let table = name.clone();
@@ -2096,8 +2319,7 @@ impl MockPanel {
                         menu =
                             menu.item(PopupMenuItem::new(label).on_click(move |_, window, app| {
                                 let format = format.clone();
-                                let name =
-                                    mock_file_name(&entity.read(app).draft.table_name, &format);
+                                let name = entity.read(app).export_file_name(&format);
                                 let dir = entity.read(app).host.export_dir();
                                 let dir = if dir.trim().is_empty() {
                                     PathBuf::from(".")
@@ -2128,7 +2350,10 @@ impl MockPanel {
         };
 
         let column_count = self.draft.columns.len();
-        let generated = self.generated.clone();
+        // 当前结果表（出口作用于它）；多张时上面给一个「当前表」选择器
+        let generated = self.current_info().cloned();
+        let result_count = self.results.len();
+        let current_index = self.current.min(result_count.saturating_sub(1));
         let outcome = self.outcome.clone();
         let error = self.error.clone();
         let landed = self.landed.clone();
@@ -2159,8 +2384,77 @@ impl MockPanel {
                     .child(import_btn)
                     .child(add_btn),
             )
-            .child(generate)
+            .child(generate_row)
             .child(job_row);
+
+        // 结果表多于一张（场景模板）时先选「当前表」：出口、详情、预览都看它
+        if result_count > 1 {
+            let entity = cx.entity();
+            let current_label = self
+                .results
+                .get(current_index)
+                .map(|info| info.table_name.clone())
+                .unwrap_or_default();
+            let labels: Vec<(String, u32)> = self
+                .results
+                .iter()
+                .map(|info| (info.table_name.clone(), info.row_count))
+                .collect();
+            let source = self.scenario_source.clone();
+            panel = panel.child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .w_full()
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(format!("结果表（{result_count} 张）")),
+                            )
+                            .child(
+                                Button::new("mock-result-picker")
+                                    .secondary()
+                                    .xsmall()
+                                    .label(format!("{current_label} ▾"))
+                                    .dropdown_menu(move |menu, _window, _cx| {
+                                        let mut menu = menu;
+                                        for (index, (table, rows)) in labels.iter().enumerate() {
+                                            let entity = entity.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(format!("{table}（{rows} 行）"))
+                                                    .checked(index == current_index)
+                                                    .on_click(move |_, _, app| {
+                                                        entity.update(app, |panel, cx| {
+                                                            panel.select_result(index, cx)
+                                                        });
+                                                    }),
+                                            );
+                                        }
+                                        menu
+                                    }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .text_ellipsis()
+                            .child(match source {
+                                Some(name) => {
+                                    format!("来自场景模板「{name}」：出口只作用于当前选中的那张表")
+                                }
+                                None => "出口只作用于当前选中的那张表".to_string(),
+                            }),
+                    ),
+            );
+        }
 
         if let Some(info) = generated.as_ref() {
             panel = panel.child(
@@ -2169,8 +2463,8 @@ impl MockPanel {
                     .text_color(muted)
                     .text_ellipsis()
                     .child(format!(
-                        "临时表 {} · {} 行 · {} ms",
-                        info.temp_table_name, info.row_count, info.elapsed_ms
+                        "{} · 临时表 {} · {} 行 · {} ms",
+                        info.table_name, info.temp_table_name, info.row_count, info.elapsed_ms
                     )),
             );
         }
@@ -3512,6 +3806,19 @@ impl Render for MockDetailView {
         let outcome = self.panel.read(cx).outcome().map(|s| s.to_string());
         let error = self.panel.read(cx).error().map(|s| s.to_string());
         let landed = self.panel.read(cx).landed().map(|s| s.to_string());
+        // 结果表不止一张（场景模板）时：预览看的是「当前表」，所以要能切、要说清在看哪张
+        let (result_count, scenario_source, result_tables) = {
+            let panel = self.panel.read(cx);
+            (
+                panel.results().len(),
+                panel.scenario_source().map(|s| s.to_string()),
+                panel
+                    .results()
+                    .iter()
+                    .map(|info| (info.table_name.clone(), info.row_count))
+                    .collect::<Vec<_>>(),
+            )
+        };
 
         let generate = {
             let entity = self.panel.clone();
@@ -3556,6 +3863,33 @@ impl Render for MockDetailView {
                 locale_label(&draft.options.locale)
             ),
         };
+        // 当前表选择器（只有场景模板会一次产出多张）
+        let picker = (result_count > 1).then(|| {
+            let panel = self.panel.clone();
+            let current_index = panel.read(cx).current_result();
+            let label = result_tables
+                .get(current_index)
+                .map(|(table, _)| table.clone())
+                .unwrap_or_default();
+            Button::new("mock-detail-result-picker")
+                .secondary()
+                .xsmall()
+                .label(format!("{label} ▾"))
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let mut menu = menu;
+                    for (index, (table, rows)) in result_tables.iter().enumerate() {
+                        let panel = panel.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(format!("{table}（{rows} 行）"))
+                                .checked(index == current_index)
+                                .on_click(move |_, _, app| {
+                                    panel.update(app, |panel, cx| panel.select_result(index, cx));
+                                }),
+                        );
+                    }
+                    menu
+                })
+        });
         let header = div()
             .h_flex()
             .items_center()
@@ -3571,6 +3905,7 @@ impl Render for MockDetailView {
                     .text_ellipsis()
                     .child(summary),
             )
+            .children(picker)
             .child(generate);
 
         let mut body = div()
@@ -3594,8 +3929,9 @@ impl Render for MockDetailView {
 
         let preview_title = match generated.as_ref() {
             Some(info) => format!(
-                "预览（前 {} 行）· 临时表 {} · 本次 {} 行 · {} ms",
+                "预览（前 {} 行）· {} · 临时表 {} · 本次 {} 行 · {} ms",
                 PREVIEW_ROWS.min(info.preview.rows.len()),
+                info.table_name,
                 info.temp_table_name,
                 info.row_count,
                 info.elapsed_ms
@@ -3603,6 +3939,13 @@ impl Render for MockDetailView {
             None => format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点右上「生成」"),
         };
         body = body.child(div().text_xs().text_color(muted).child(preview_title));
+
+        // 场景模板的结果表与草稿毫无关系：不说一句，用户会拿草稿的字段去对预览的列
+        if let Some(name) = scenario_source.as_deref() {
+            body = body.child(div().text_xs().text_color(muted).child(format!(
+                "预览来自场景模板「{name}」，与上面的草稿列无关；要看别的表用标题栏的下拉切换"
+            )));
+        }
 
         let preview = generated.as_ref().map(|info| info.preview.clone());
         match preview {

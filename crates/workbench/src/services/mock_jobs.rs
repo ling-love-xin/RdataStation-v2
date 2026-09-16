@@ -7,9 +7,11 @@
 //!
 //! 任务类型（[`MockJobKind`]）：
 //! - `Generate`：只产内存临时表 + 预览（**不写库**）；
+//! - `Scenario(模板 id)`：按内置场景模板一次生成多张临时表（**同样不写库**；进度按「张表」计）；
 //! - `AppendTo(表名)`：生成后追加到分析库既有表（同一次任务里完成，自增起点按表内行数接续）；
 //! - `Persist` / `Export` / `Scratchpad`：三个**出口**，只读已生成的内存临时表，分别写分析库新表 /
-//!   指定文件 / 草稿箱目录。
+//!   指定文件 / 草稿箱目录；目标表名与列定义全部取自**结果自己**（`MockGenInfo`）——
+//!   场景模板的多张表因此能各自落到自己的表名下，**出口不读草稿**。
 //!
 //! 阶段（[`MockJobPhase`]）：生成有批次粒度进度；写入分析库与写文件跑在 DuckDB / 文件系统内部，
 //! 探不到中间点，只能报「进行中」——面板据此切成不定量进度条。
@@ -87,6 +89,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// 任务（只能通过 [`start`] 提交）。
 struct Job {
+    /// 单表生成用的草稿（出口类任务只用 `kind` 里的结果，不读它）
     draft: MockDraft,
     kind: MockJobKind,
     /// 任务需要的路径（提交时由 UI 线程解析）
@@ -115,11 +118,30 @@ fn run_job(job: &Job) -> Result<MockJobDone, String> {
     };
     match &job.kind {
         MockJobKind::Generate => Ok(MockJobDone::Generated(generate(job, None)?)),
+        MockJobKind::Scenario(template_id) => {
+            // 场景模板不写库：不需要 `db_path`（未打开项目也能生成）
+            let (template_name, tables) = mock_generator::generate_scenario_at(
+                template_id,
+                move |tables_done, tables_total| {
+                    let mut slot = lock(&shared().slot);
+                    if let Some(progress) = slot.progress.as_mut() {
+                        progress.phase = MockJobPhase::Generating;
+                        // 场景任务的量纲是「张表」，不是行/批次（见 `MockJobKind::rows_total`）
+                        progress.batches_done = tables_done;
+                        progress.batches_total = tables_total;
+                    }
+                },
+            )?;
+            Ok(MockJobDone::ScenarioGenerated {
+                template_name,
+                tables,
+            })
+        }
         MockJobKind::AppendTo(table) => {
             let info = generate(job, Some(table))?;
             // 进入写入阶段：引擎侧写入没有批次回调，只能报「进行中」
             set_phase(MockJobPhase::Writing);
-            let total_rows = mock_generator::append_table_at(db_path()?, &job.draft, &info, table)?;
+            let total_rows = mock_generator::append_table_at(db_path()?, &info, table)?;
             Ok(MockJobDone::Appended {
                 table: table.clone(),
                 total_rows,
@@ -127,26 +149,22 @@ fn run_job(job: &Job) -> Result<MockJobDone, String> {
         }
         MockJobKind::Persist(info) => {
             set_phase(MockJobPhase::Writing);
-            let rows = mock_generator::persist_table_at(db_path()?, &job.draft, info)?;
-            // 表名与落库时使用的是同一取值口径（`persist_table_at` 用 trim 后的名字建表）
+            let rows = mock_generator::persist_table_at(db_path()?, info)?;
+            // 表名与落库时使用的是同一取值口径（`persist_table_at` 用 trim 后的结果表名建表）
             Ok(MockJobDone::Persisted {
-                table: job.draft.table_name.trim().to_string(),
+                table: info.table_name.trim().to_string(),
                 rows,
             })
         }
         MockJobKind::Export { info, format, path } => {
             set_phase(MockJobPhase::Exporting);
-            let message = mock_generator::export_file(&job.draft, info, format, path)?;
+            let message = mock_generator::export_file(info, format, path)?;
             Ok(MockJobDone::Exported { message })
         }
         MockJobKind::Scratchpad { info, format } => {
             set_phase(MockJobPhase::Exporting);
-            let message = mock_generator::save_scratchpad(
-                &job.draft,
-                info,
-                format,
-                job.paths.project_root.as_deref(),
-            )?;
+            let message =
+                mock_generator::save_scratchpad(info, format, job.paths.project_root.as_deref())?;
             Ok(MockJobDone::Exported { message })
         }
     }

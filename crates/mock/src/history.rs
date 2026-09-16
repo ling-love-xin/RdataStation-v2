@@ -21,7 +21,7 @@
 //! 为什么要自己进一次 tokio 运行时（[`drive`]）：项目库的打开与读写走 `tokio::fs` /
 //! `tokio::sync`（`ProjectDatabaseManager`），而调用我们的线程是 **GPUI 后台执行器**的
 //! 线程池——它没有 tokio reactor，直接 `.await` 会在“没有 reactor”处 panic。与工作台
-//! 后台任务（`services::{resource_jobs,scratchpad_jobs}`）在工作线程里进运行时的口径一致；
+//! 后台任务（`services::resource_jobs` / `scratchpad::jobs`）在工作线程里进运行时的口径一致；
 //! 差别只是那边线程是自己起的，这里借的是 GPUI 的后台线程（不阻塞 UI）。
 //!
 //! # 一次动作 = 一次读
@@ -707,7 +707,9 @@ mod tests {
 
     fn gen_info() -> MockGenInfo {
         MockGenInfo {
+            table_name: "orders".to_string(),
             temp_table_name: "temp_mock_orders".to_string(),
+            columns: Vec::new(),
             row_count: 500,
             elapsed_ms: 42,
             preview: MockPreview {

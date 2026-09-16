@@ -153,7 +153,7 @@ fn append_job_reports_total_rows() {
     // 先建表（30 行）
     let seed_draft = draft("t_job_append", 30);
     let info = mock_generator::generate_at(Some(&db), &seed_draft, None).expect("首次生成");
-    mock_generator::persist_table_at(&db, &seed_draft, &info).expect("建表");
+    mock_generator::persist_table_at(&db, &info).expect("建表");
 
     // 追加任务：生成 1000 行后写入，自增起点接续表内 30 行
     mock_jobs::start(
@@ -257,7 +257,7 @@ fn persist_job_reports_existing_table_error() {
 
     // 先建表（同步装配层入口，绕开任务）
     let seed = mock_generator::generate_at(Some(&db), &draft, None).expect("首次生成");
-    mock_generator::persist_table_at(&db, &draft, &seed).expect("建表");
+    mock_generator::persist_table_at(&db, &seed).expect("建表");
 
     let info = generate_and_take(&draft, &db);
     mock_jobs::start(&draft, MockJobKind::Persist(info), &paths(&db)).expect("提交落库任务");
@@ -388,4 +388,97 @@ fn sinks_without_a_project_are_refused_with_a_readable_reason() {
     .expect("提交追加");
     let err = wait_done(Duration::from_secs(60)).expect_err("未打开项目应拒绝追加");
     assert!(err.contains("未打开项目"), "{err}");
+}
+
+/// 场景模板任务：按内置模板一次生成多张临时表，逐表带预览与列定义，**不写库**；
+/// 再把其中一张落到项目分析库——表名与列定义都取自**结果自己**，不是草稿。
+///
+/// 用最便宜的内置模板（人力资源系统：500 + 20 + 500 行），避免把测试拖成负担。
+#[test]
+fn scenario_job_generates_every_table_without_writing_to_the_db() {
+    let _guard = serial();
+    let dir = temp_dir("scenario_job");
+    let db = dir.join("analytics.duckdb");
+    // 草稿与场景毫无关系，且**一列都没有**：场景模板自带表与列
+    let job = MockDraft {
+        table_name: "unused_by_scenario".to_string(),
+        columns: Vec::new(),
+        options: MockRunOptions::new(1, None, Locale::ZhCn),
+    };
+    let no_project = mock_jobs::JobPaths {
+        db_path: None,
+        project_root: None,
+    };
+
+    mock_jobs::start(
+        &job,
+        MockJobKind::Scenario("builtin:hr".to_string()),
+        &no_project,
+    )
+    .expect("提交场景任务");
+    let done = wait_done(Duration::from_secs(300)).expect("场景生成应成功");
+    let tables = match done {
+        MockJobDone::ScenarioGenerated {
+            template_name,
+            tables,
+        } => {
+            assert_eq!(template_name, "人力资源系统");
+            assert_eq!(
+                tables
+                    .iter()
+                    .map(|info| info.table_name.as_str())
+                    .collect::<Vec<_>>(),
+                ["employees", "departments", "salaries"],
+                "顺序即模板里的表序"
+            );
+            assert_eq!(
+                tables.iter().map(|info| info.row_count).collect::<Vec<_>>(),
+                [500, 20, 500]
+            );
+            for info in &tables {
+                assert_eq!(
+                    info.temp_table_name,
+                    format!("temp_mock_{}", info.table_name)
+                );
+                assert!(!info.columns.is_empty(), "结果要带列定义：出口据此建表");
+                assert_eq!(
+                    info.columns
+                        .iter()
+                        .map(|c| c.name.as_str())
+                        .collect::<Vec<_>>(),
+                    info.preview.columns,
+                    "预览列与列定义同一套（{}）",
+                    info.table_name
+                );
+                assert!(!info.preview.rows.is_empty(), "逐表补预览");
+            }
+            tables
+        }
+        other => panic!("期望 ScenarioGenerated，实际 {other:?}"),
+    };
+
+    // 生成不写库：项目分析库文件根本不该出现（场景任务连 db_path 都不需要）
+    assert!(!db.exists(), "场景生成不应碰分析库");
+
+    // 出口：把选中的那张（departments）写成分析库新表
+    let chosen = tables.into_iter().nth(1).expect("第二张表");
+    mock_jobs::start(&job, MockJobKind::Persist(chosen), &paths(&db)).expect("提交落库任务");
+    let done = wait_done(Duration::from_secs(300)).expect("场景结果应能落库");
+    match done {
+        MockJobDone::Persisted { table, rows } => {
+            assert_eq!(
+                table, "departments",
+                "表名取自结果，不是草稿的 unused_by_scenario"
+            );
+            assert_eq!(rows, 20);
+        }
+        other => panic!("期望 Persisted，实际 {other:?}"),
+    }
+    assert_eq!(count_rows(&db, "departments"), 20);
+    assert_eq!(
+        mock_generator::existing_tables_at(&db),
+        ["departments".to_string()]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -14,6 +14,7 @@
 //! | 动作 | 目标 | 语义 |
 //! | --- | --- | --- |
 //! | `generate_at_with_progress` | 内存临时表（DuckDB `temp_mock_*`） | **不写库**：只产数据 + 预览（按批回调进度）；`db_path` 为 `None` 也能跑（纯生成不碰库） |
+//! | `generate_scenario_at` | 内存临时表（模板里的每张表一张） | **不写库**：按内置场景模板一次生成多张表，逐表补预览；进度按「张表」计 |
 //! | `persist_table_at` | 项目分析库 | **新建**表；已存在则 `Err`（引导改用「追加」） |
 //! | `append_table_at` | 项目分析库既有表 | 保留既有数据，新行接在后面；主键自增接续表内行数 |
 //! | `export_file` | 调用方指定路径 | CSV / Parquet / Xlsx / SQL INSERT |
@@ -189,7 +190,8 @@ where
         row_count: draft.options.rows,
         seed: draft.options.seed,
         locale: draft.options.locale.clone(),
-        columns,
+        // 留一份给结果：出口（落库建表 / 目标列校对）要凭它，不能再去读草稿
+        columns: columns.clone(),
     };
 
     let rt = nav_runtime::bridge_runtime()?;
@@ -198,37 +200,92 @@ where
         .map_err(|e| format!("Mock 生成失败: {e}"))?;
 
     Ok(MockGenInfo {
+        table_name: result.table_name,
         temp_table_name: result.temp_table_name,
+        columns,
         row_count: result.row_count,
         elapsed_ms: result.elapsed_ms,
         preview: flatten_preview(&result.preview),
     })
 }
 
+/// 预览行数上限：面板详情只展示前若干行（与「生成后立刻看几眼」的用途对齐）。
+const PREVIEW_ROWS: usize = 20;
+
+/// 场景模板：一次生成模板里的**全部表**（同样**不写库**，逐表产出内存临时表）。
+///
+/// 与 [`generate_at`] 的两点不同：
+///
+/// 1. 目标表 / 列 / 行数全部来自模板——**草稿不参与**（用户的多表选择与草稿配置互不干扰）；
+/// 2. 引擎只回表级摘要（`MockScenarioTableResult` 不带预览），所以这里**逐表**再取一次
+///    预览（`MockEngine::preview` 读同一张内存临时表），让面板的通用结果区对每张表都成立。
+///
+/// 进度回调按「张表」上报（`on_table_progress(已完成表数, 总表数)`），与单表生成的批次量纲不同。
+pub fn generate_scenario_at<F>(
+    template_id: &str,
+    on_table_progress: F,
+) -> Result<(String, Vec<MockGenInfo>), String>
+where
+    F: Fn(usize, usize) + Send + 'static,
+{
+    let template = mock::templates::get_template_by_id(template_id)
+        .ok_or_else(|| format!("场景模板不存在: {template_id}"))?;
+    if template.tables.is_empty() {
+        return Err(format!("场景模板「{}」没有可生成的表", template.name));
+    }
+
+    let rt = nav_runtime::bridge_runtime()?;
+    let scenario = rt
+        .block_on(MockEngine::generate_scenario(&template, on_table_progress))
+        .map_err(|e| format!("场景生成失败: {e}"))?;
+
+    let mut tables = Vec::with_capacity(scenario.tables.len());
+    for table in &scenario.tables {
+        let preview = MockEngine::preview(&table.temp_table_name, PREVIEW_ROWS)
+            .map_err(|e| format!("读取 {} 的预览失败: {e}", table.table_name))?;
+        // 列定义取模板里那张表的（与引擎拿去建临时表的是同一份）：出口据此建同名同列的表
+        let columns = template
+            .tables
+            .iter()
+            .find(|t| t.name == table.table_name)
+            .map(|t| t.columns.clone())
+            .ok_or_else(|| format!("模板里找不到表 {}", table.table_name))?;
+        tables.push(MockGenInfo {
+            table_name: table.table_name.clone(),
+            temp_table_name: table.temp_table_name.clone(),
+            columns,
+            row_count: table.row_count,
+            elapsed_ms: table.elapsed_ms,
+            preview: flatten_preview(&preview),
+        });
+    }
+
+    Ok((scenario.template_name, tables))
+}
+
 // ==================== 出口：落库 ====================
 
 /// 目标表的列定义（列名走 `sanitize_identifier`：与临时表列名同一算法，否则 `INSERT` 列清单对不上）。
-fn column_def_infos(columns: &[MockColumnSpec]) -> Vec<ColumnDefInfo> {
+fn column_def_infos(columns: &[ColumnDef]) -> Vec<ColumnDefInfo> {
     columns
         .iter()
-        .map(|c| ColumnDefInfo {
-            name: sanitize_identifier(&c.def.name),
-            data_type: c.def.data_type.to_duckdb_type(),
-            unique: c.def.unique,
-            nullable: c.def.nullable_ratio > 0.0,
+        .map(|def| ColumnDefInfo {
+            name: sanitize_identifier(&def.name),
+            data_type: def.data_type.to_duckdb_type(),
+            unique: def.unique,
+            nullable: def.nullable_ratio > 0.0,
         })
         .collect()
 }
 
 /// 出口：在分析库**新建**表（已存在 → `Err`，面板据此引导改用「追加」）。
 ///
+/// 目标表名与列定义都取自**结果自己**（[`MockGenInfo`]）：`info.table_name` 建表，
+/// `info.columns` 出 DDL——场景模板的多张表因此能各自落到自己的表名下。
+///
 /// 写入失败时不留下半成品空表：建表与写行都在**同一个 ATTACH 会话**里（引擎侧失败即回滚建表）。
-pub fn persist_table_at(
-    db_path: &Path,
-    draft: &MockDraft,
-    info: &MockGenInfo,
-) -> Result<i64, String> {
-    let name = draft.table_name.trim().to_string();
+pub fn persist_table_at(db_path: &Path, info: &MockGenInfo) -> Result<i64, String> {
+    let name = info.table_name.trim().to_string();
     if name.is_empty() {
         return Err("目标表名不能为空".to_string());
     }
@@ -244,7 +301,7 @@ pub fn persist_table_at(
         db_path,
         &info.temp_table_name,
         &name,
-        TempTableWriteMode::Create(column_def_infos(&draft.columns)),
+        TempTableWriteMode::Create(column_def_infos(&info.columns)),
     )
     .map_err(|e| format!("写入项目分析库失败: {e}"))?;
 
@@ -255,19 +312,14 @@ pub fn persist_table_at(
 /// 出口：追加到分析库既有表（返回表内总行数）。
 ///
 /// 列结构必须一致：缺失列直接报错，不让 DuckDB 的原始错误冒到界面上。
-pub fn append_table_at(
-    db_path: &Path,
-    draft: &MockDraft,
-    info: &MockGenInfo,
-    table: &str,
-) -> Result<i64, String> {
+pub fn append_table_at(db_path: &Path, info: &MockGenInfo, table: &str) -> Result<i64, String> {
     {
         let conn = open_analysis_db(db_path)?;
         let target_columns = table_columns(&conn, table)?;
-        let missing: Vec<String> = draft
+        let missing: Vec<String> = info
             .columns
             .iter()
-            .map(|c| sanitize_identifier(&c.def.name))
+            .map(|def| sanitize_identifier(&def.name))
             .filter(|name| !target_columns.iter().any(|t| t == name))
             .collect();
         if !missing.is_empty() {
@@ -293,8 +345,9 @@ pub fn append_table_at(
 // ==================== 出口：落盘 ====================
 
 /// 出口：导出文件（CSV / Parquet / Xlsx / SQL INSERT）。
+///
+/// 写进文件里的表名取自结果（SQL INSERT 的表名、Xlsx 的表头用），不是草稿。
 pub fn export_file(
-    draft: &MockDraft,
     info: &MockGenInfo,
     format: &MockExportFormat,
     path: &str,
@@ -303,7 +356,7 @@ pub fn export_file(
         &info.temp_table_name,
         format,
         Some(path),
-        Some(&draft.table_name),
+        Some(&info.table_name),
     )
     .map_err(|e| format!("导出失败: {e}"))
     .map(|_| format!("已导出：{path}"))
@@ -311,7 +364,6 @@ pub fn export_file(
 
 /// 出口：保存到草稿箱项目目录（`{项目}/mock/`）。
 pub fn save_scratchpad(
-    _draft: &MockDraft,
     info: &MockGenInfo,
     format: &MockExportFormat,
     project_root: Option<&Path>,

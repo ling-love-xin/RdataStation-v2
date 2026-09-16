@@ -103,6 +103,26 @@ generate_scenario(&template, on_progress)
       每张表完成回调 on_progress(已完成表数, 总表数)
 ```
 
+v2 的接线（`MockJobKind::Scenario(模板 id)`）：
+
+```
+面板「场景模板 ▾」──► mock_jobs（工作线程）──► mock_generator::generate_scenario_at
+                                                   ├ 按 id 重取模板（模板清单只在面板缓存名字与规模）
+                                                   ├ generate_scenario（进度按「张表」回调）
+                                                   └ 逐表 MockEngine::preview 补预览
+        ◄── ScenarioGenerated { template_name, tables: Vec<MockGenInfo> }
+```
+
+语义要点：
+
+- **不写库**：与单表生成同一定律（只产 `temp_mock_*`），未打开项目也能跑；
+- **草稿不参与**：目标表 / 列 / 行数全来自模板，草稿既不被读也不被改写
+  （面板的草稿校验只对 `Generate` / `AppendTo` 生效，见 `MockJobKind::uses_draft`）；
+- **多张结果 + 当前表**：面板持 `results` 与 `current`，结果区 / 详情 / 四个出口都作用于选中那张；
+- **量纲是「张表」**：`MockJobProgress.batches_done / batches_total` 复用为表计数，`rows_total = 0`
+  （行数写在模板里，面板不拿行数当量纲）；
+- **出口只看结果**：`MockGenInfo` 自带 `columns`，场景表因此能各自落到自己的表名下（见 §4.5）。
+
 列依赖（`resolve_dependencies`）只产出**拓扑排序后的列顺序 + 依赖映射**，用于 UI 编辑与顺序提示；当前生成器本身按 `columns` 顺序取值，不解释依赖表达式——这是与 v1 文档描述不一致的地方（见 §9）。
 
 ### 4.4 从元数据导入结构
@@ -137,17 +157,25 @@ ImportSchemaInput{ conn_id, database, schema, tables, connection_type }
 面板草稿（表名 + 列 + 行数/种子/语言）
    └ 追加时：读项目分析库目标表行数 → 主键自增起点 = 行数 + 1 （append_to 分支）
         └ MockEngine::generate（内存临时表 temp_mock_* + 前 10 行预览）
-             └ MockGenInfo（表名 / 行数 / 耗时 / 预览字符串网格）
+             └ MockGenInfo（表名 + **列定义** + 行数 / 耗时 / 预览字符串网格）
+
+场景模板（`Scenario(模板 id)`，同样不写库、同样不读草稿）
+   └ templates::get_template_by_id → MockEngine::generate_scenario
+        └ 逐表 MockEngine::preview → Vec<MockGenInfo>（每张表都是完整的出口输入）
 ```
 
 **出口（与生成同一条后台任务链路）**：
 
+出口的输入是**结果自己**（`MockGenInfo`）——目标表名取 `info.table_name`，建表 DDL 取 `info.columns`，
+数据取 `info.temp_table_name`。**不读草稿**的原因：场景模板产出的多张表与草稿毫无关系，
+拿草稿当写入规格会建出「数据是场景表的、列名是草稿的」的表。
+
 | 出口 | 步骤（均在工作线程上执行） |
 | --- | --- |
-| 持久化为项目分析库表 | 任务 `Persist`：查既有表（同名 → `Err` 含「已存在」，引导追加）→ 直写建表 + 写行（`ATTACH` → `CREATE TABLE`（列名走 `sanitize_identifier`，与临时表列名同一算法）→ `INSERT ... SELECT` → `DETACH`；插入失败只回滚**本次刚建的表**）→ 返回表内行数 |
+| 持久化为项目分析库表 | 任务 `Persist(info)`：查既有表（同名 → `Err` 含「已存在」，引导追加）→ 直写建表 + 写行（`ATTACH` → `CREATE TABLE`（列名走 `sanitize_identifier`，与临时表列名同一算法）→ `INSERT ... SELECT` → `DETACH`；插入失败只回滚**本次刚建的表**）→ 返回表内行数 |
 | 追加到既有表 | 任务 `AppendTo(表)`：生成 + 校验列 + 直写追加在同一次任务里完成（阶段先 `Generating` 后 `Writing`） |
-| 保存到草稿箱 | 任务 `Scratchpad`：项目根由宿主在**提交前**解析（工作线程碰不了 `Shared`）→ `save_to_scratchpad`（时间戳命名）→ 返回文件路径 |
-| 另存为 | 系统保存对话框（`prompt_for_new_path`，异步回传）→ 任务 `Export`：`MockEngine::export` |
+| 保存到草稿箱 | 任务 `Scratchpad(info)`：项目根由宿主在**提交前**解析（工作线程碰不了 `Shared`）→ `save_to_scratchpad`（时间戳命名）→ 返回文件路径 |
+| 另存为 | 系统保存对话框（`prompt_for_new_path`，异步回传；默认文件名取**当前结果表**）→ 任务 `Export{info}`：`MockEngine::export` |
 
 **后台任务（生成 / 追加 / 三个出口）**：
 
@@ -191,7 +219,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 
 | 状态 | 所有者 | 读写时机 |
 | --- | --- | --- |
-| 草稿（表名 / 列 / 行数·种子·语言 / 最近结果 / 出口状态） | `mock::mock_view::MockPanel`（实体，crate 内） | 面板自己的事件路径写；渲染只读 |
+| 草稿（表名 / 列 / 行数·种子·语言 / 最近结果 / 出口状态） | `mock::mock_view::MockPanel`（实体，crate 内） | 面板自己的事件路径写；渲染只读。结果区是**一组**结果表（`results` + `current` + `scenario_source`）：单表生成 1 条，场景模板 N 条 |
 | 后台任务槽（进度 + 已完成结果） | `workbench::services::mock_jobs`（进程级单例 + 工作线程） | worker 写、UI 轮询读；`start` / `take_done` 都过同一把锁 |
 | 任务进度镜像（含取消请求标志） | `MockPanel.job: Option<MockJobWatch>` | 由定时泵更新；`cx.notify()` 驱动重绘 |
 | 字段编辑工作副本 | `mock::mock_view::MockDetailView::draft: Option<ColumnDraft>` | 列编辑对话框打开时建、应用 / 取消时丢弃 |
@@ -313,11 +341,11 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 层 | 位置 | 数量 | 锁什么 |
 | --- | --- | --- | --- |
 | 单元 | `crates/mock/src/*.rs`（`#[cfg(test)]`） | 72 | 表名净化、DDL 生成、`generate_cell` 各变体、列名规则表、类型串解析、序列化往返、模板自检、生成器目录自检（3：137 覆盖 / 标签与默认 / 分类往返） |
-| 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 58（21 纯逻辑 + 37 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；**生成器搜索**（空查=全量 / 标签前缀优先 / 多词 AND / 大小写不敏感 / 分类名可搜 / 无命中为空）；**复杂参数**（取值集合往返 / 分隔符变体 / 行号可读错误 / 摘要项数）；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；三个对话框可开（导入 / 列编辑 / 生成器搜索）；生成器搜索过滤→确认写回；约束类列的对话框可开 + 集合类参数写回 / 非法输入保留上一个有效值；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒；**出口后台化**：落库 / 导出 / 草稿箱的阶段与结果、完成后预览保留、出口不可取消、无生成结果时拒绝提交；**切项目作废旧结果**（草稿保留、无临时表可清时不报提示） |
+| 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 63（21 纯逻辑 + 42 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案；**生成器搜索**（空查=全量 / 标签前缀优先 / 多词 AND / 大小写不敏感 / 分类名可搜 / 无命中为空）；**复杂参数**（取值集合往返 / 分隔符变体 / 行号可读错误 / 摘要项数）；面板空态与候选加载；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；三个对话框可开（导入 / 列编辑 / 生成器搜索）；生成器搜索过滤→确认写回；约束类列的对话框可开 + 集合类参数写回 / 非法输入保留上一个有效值；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒；**出口后台化**：落库 / 导出 / 草稿箱的阶段与结果、完成后预览保留、出口不可取消、无生成结果时拒绝提交；**切项目作废旧结果**（草稿保留、无临时表可清时不报提示）；**场景模板**：一次回填多张结果（顺序即模板表序）/ 来源标注 / 切换当前表看 `gen_info` / 越界下标不改状态 / 出口落选中那张（表名与临时表都取自结果）/ 导出文件名跟当前表 / 单表生成清掉场景态 / 进度按「张表」计（`rows_done` 为 0） |
 | 集成（引擎） | `crates/mock/tests/mock_engine_tests.rs` | 32 | 公开 API 端到端：生成 / 预览 / 映射 / 依赖 / 取消标志 / 类型 / 五种导出 / 持久化 / 草稿目录 / 模板 / 场景；**跨库直写**：建表（含中文列名）/ 追加 / 同名建表不删既有数据 / 失败回滚 + 解挂；**集合类参数**：空集合与全零权重生成前拦住 / 填了就能生成且取值来自集合 |
 | 集成（临时表清理） | `crates/mock/tests/temp_table_cleanup.rs` | 2 | 清掉本进程全部 mock 临时表（幂等）；同名重复生成只留一张。**独立进程**：清理是进程级动作，与并行用例互相踩 |
 | 集成（装配） | `crates/workbench/tests/mock_generator.rs` | 12 | 生成不写分析库；新建 → 同名拒绝（不覆盖）；追加接续主键（`MAX(id)=100` 且无重复）；追加目标不存在 / 缺列的中文错误；**大行数一次落库（20k）**；**目标表多出的列走默认值**；CSV 导出表头；草稿箱无项目拒绝 + 有项目落 `{项目}/mock/`；连接默认库 / schema 预填；类型串映射 |
-| 集成（后台任务） | `crates/workbench/tests/mock_jobs.rs` + `mock_job_cancel.rs` | 8 + 1 | 提交即返回 + 进度可读 + 结果一次性取回 + 生成不写库；并发提交被拒且结束后可恢复；追加任务回表内总行数；**出口**：`Persist` 建表回行数 / 同名表回可读错误不覆盖 / `Export` 写出 CSV（表头 + 行数）/ `Scratchpad` 无项目报错 + 有项目落 `{项目}/mock/`；**切项目清理**（宿主入口）；**取消**在批次边界中断并回可读错误（独立进程：`cancel` 是进程级标志） |
+| 集成（后台任务） | `crates/workbench/tests/mock_jobs.rs` + `mock_job_cancel.rs` | 10 + 1 | 提交即返回 + 进度可读 + 结果一次性取回 + 生成不写库；并发提交被拒且结束后可恢复；追加任务回表内总行数；**出口**：`Persist` 建表回行数 / 同名表回可读错误不覆盖 / `Export` 写出 CSV（表头 + 行数）/ `Scratchpad` 无项目报错 + 有项目落 `{项目}/mock/`；**场景模板**：一键生成多张临时表（逐表带预览与列定义）/ 逐表进度 / 不写库（连 `db_path` 都不需要）/ 结果能各自落库（表名取自结果而非草稿）；**切项目清理**（宿主入口）；**取消**在批次边界中断并回可读错误（独立进程：`cancel` 是进程级标志） |
 | 集成（持久化往返） | `crates/mock/tests/persistence_roundtrip.rs` | 5 | store 读写守恒：列序 / 可空列（`None` 不写成空串）/ 历史排序与 `limit` 截尾 / 级联删除 / 模板四方法；走 `ProjectDatabaseManager` 的真迁移链 |
 | 集成（历史 / 模板） | `crates/mock/tests/history_roundtrip.rs` | 4 | 记录 → 列表 → 详情 → 重放；模板存 ↔ 取 ↔ 应用 ↔ 删；失败原因与 `limit` 截尾；项目根不是目录时的可读错误 |
 
@@ -340,11 +368,11 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 生成器实现（137 变体） | `crates/mock/src/generators.rs`（`generate_cell`） |
 | D7 类型串唯一入口 | `crates/mock/src/schema_map.rs`（`parse_data_type`）+ `lib.rs` re-export |
 | 列名规则与置信度 | `crates/mock/src/schema_map.rs`（`ColumnMapper::exact_rules/suffix/fuzzy/fallback_by_type`） |
-| 模板与场景生成 | `crates/mock/src/templates.rs` + `engine.rs::generate_scenario` |
+| 模板与场景生成 | `crates/mock/src/templates.rs` + `engine.rs::generate_scenario` + **装配层 `mock_generator::generate_scenario_at`**（逐表补预览；装配层入口） |
 | 任务/模板持久化 | `crates/mock/src/persistence.rs` + `crates/engine/migrations/project_meta/009_mock_generation.sql` |
 | 生成历史（读 / 重放 / 删除） | `crates/mock/src/history.rs`（后台线程 + 自备 tokio 运行时；宿主经 `MockHost::project_root` 只给项目根） |
 | 用户模板（存 / 应用 / 删） | 同上（`template_of_draft` / `draft_of_template`；与历史共用两份「列」表公共映射） |
-| D4/D5/D6/D17 装配与追加语义 | `crates/workbench/src/services/mock_generator.rs`（`generate_at_with_progress` / `persist_table_at` / `append_table_at` / `export_file` / `save_scratchpad` / `import_columns`） |
+| D4/D5/D6/D17 装配与追加语义 | `crates/workbench/src/services/mock_generator.rs`（`generate_at_with_progress` / `generate_scenario_at` / `persist_table_at` / `append_table_at` / `export_file` / `save_scratchpad` / `import_columns`；**出口的输入是 `MockGenInfo`，不收草稿**） |
 | D20/D21/D22/D23 后台任务 | `crates/workbench/src/services/mock_jobs.rs`（工作线程 + 槽 + `JobPaths` + `start`/`state`/`take_done`/`cancel`）+ `mock_view.rs`（`MockJobKind` / `MockJobPhase` / `MockJobWatch` + 定时泵 + `poll_job`） |
 | D11/D18 视图归属与两处排版 | `crates/mock/src/mock_view.rs`（`MockPanel` 右 Dock / `MockDetailView` 中央 tab / `MockDraft` / `MockHost`） |
 | D12/D14/D19/D24 对话框与工作副本 | `mock_view.rs`（`open_import_dialog` / `open_column_dialog` / `open_generator_search` / `ColumnDraft` / `generator_menu` / `search_generators` / `GeneratorSearchDelegate`） |
