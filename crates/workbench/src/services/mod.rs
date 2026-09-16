@@ -19,7 +19,6 @@ pub mod editor_files;
 pub mod editor_session;
 pub mod mock_generator;
 pub mod mock_jobs;
-pub mod nav_jobs;
 pub mod nav_runtime;
 pub mod project_session;
 pub mod query_export;

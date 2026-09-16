@@ -22,7 +22,7 @@ use gpui_kit::*;
 use crate::components::connection_dialog;
 
 use crate::services::db_navigator::NavTable;
-use crate::services::nav_jobs;
+use database::nav_jobs;
 use crate::services::scratchpad_jobs;
 
 use crate::ui;

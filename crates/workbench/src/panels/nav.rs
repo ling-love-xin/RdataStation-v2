@@ -31,7 +31,7 @@ use database::model::{
 };
 use database::sql_gen::DmlKind;
 
-use crate::services::nav_jobs;
+use database::nav_jobs;
 
 use crate::ui;
 use crate::view::{ConnectionItem, RightPanel};
@@ -2715,10 +2715,13 @@ impl SidebarPanel {
                                 let name = conn_name.clone();
                                 move |_, _, app| {
                                     // 独立会话探测（不注册连接池 / 不写库）；结果落面板提示。
+                                    // 探测入口是函数指针（可跨到工作线程）；视图搬入 `database`
+                                    // 后改由宿主端口供给（`NavHost::connection_probe`）。
                                     nav_jobs::enqueue_test_connection(
                                         &cid,
                                         root.as_deref(),
                                         &name,
+                                        crate::services::nav_runtime::test_entry,
                                     );
                                     e.update(app, |this, cx| this.ensure_nav_pump(cx));
                                 }

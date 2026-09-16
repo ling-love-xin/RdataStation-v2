@@ -18,9 +18,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
-use database::model::{NavNode, NavNodeKind, NavPath, PropertyRef};
-use database::property_panel::ObjectProperties;
-use database::sql_gen::DmlKind;
+use crate::model::{NavNode, NavNodeKind, NavPath, PropertyRef};
+use crate::nav_host::ConnectionProbe;
+use crate::property_panel::ObjectProperties;
+use crate::sql_gen::DmlKind;
 
 /// 预取目标（catalog / schema / 表或视图名）。
 #[derive(Clone, Debug)]
@@ -99,10 +100,14 @@ enum Job {
         kind: DmlKind,
     },
     /// 右键「测试连接」：独立会话探测，结果回传主线程。
+    ///
+    /// `probe` 由视图从宿主取（[`ConnectionProbe`]）：它是**函数指针**，故可随任务跨线程；
+    /// 服务单例与桥接运行时由宿主侧函数自取，不跟着任务跑。
     TestConnection {
         conn_id: String,
         project_root: Option<String>,
         name: String,
+        probe: ConnectionProbe,
     },
 }
 
@@ -158,8 +163,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn service(project_root: Option<String>) -> database::navigator_service::NavigatorService {
-    database::navigator_service::NavigatorService::with_context(
+fn service(project_root: Option<String>) -> crate::navigator_service::NavigatorService {
+    crate::navigator_service::NavigatorService::with_context(
         engine::get_connection_manager().clone(),
         project_root,
         false,
@@ -180,7 +185,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 path,
                 fresh,
             } => {
-                let svc = database::navigator_service::NavigatorService::with_context(
+                let svc = crate::navigator_service::NavigatorService::with_context(
                     engine::get_connection_manager().clone(),
                     project_root.clone(),
                     fresh,
@@ -270,11 +275,11 @@ fn worker(rx: mpsc::Receiver<Job>) {
                         )
                         .await
                         .map_err(|e| e.to_string())?;
-                    let columns: Vec<database::sql_gen::DmlColumn> = nodes
+                    let columns: Vec<crate::sql_gen::DmlColumn> = nodes
                         .iter()
                         .filter_map(|n| match &n.kind {
                             NavNodeKind::Column { primary, .. } => {
-                                Some(database::sql_gen::DmlColumn {
+                                Some(crate::sql_gen::DmlColumn {
                                     name: n.name.clone(),
                                     primary: *primary,
                                 })
@@ -282,7 +287,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                             _ => None,
                         })
                         .collect();
-                    Ok(database::sql_gen::dml_template(&qualified, &columns, kind))
+                    Ok(crate::sql_gen::dml_template(&qualified, &columns, kind))
                 });
                 lock(&shared().sql_results).push(SqlGenResult { key, result });
                 shared().pending_sql.fetch_sub(1, Ordering::SeqCst);
@@ -291,10 +296,10 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 conn_id,
                 project_root,
                 name,
+                probe,
             } => {
-                // 走 `nav_runtime`，与右键「连接」同一套 URL / 网络档案规则。
-                let result =
-                    crate::services::nav_runtime::test_entry(&conn_id, project_root.as_deref());
+                // 走宿主给的探测入口，与右键「连接」同一套 URL / 网络档案规则。
+                let result = probe(&conn_id, project_root.as_deref());
                 lock(&shared().test_results).push(TestConnResult {
                     conn_id,
                     name,
@@ -388,12 +393,21 @@ pub fn enqueue_generate_dml(
 }
 
 /// 提交「测试连接」（右键）。
-pub fn enqueue_test_connection(conn_id: &str, project_root: Option<&str>, name: &str) {
+/// 提交连接测试（独立会话探测）。
+///
+/// `probe` 由视图从宿主取（`NavHost::connection_probe`）；见 [`ConnectionProbe`] 的跨线程约定。
+pub fn enqueue_test_connection(
+    conn_id: &str,
+    project_root: Option<&str>,
+    name: &str,
+    probe: ConnectionProbe,
+) {
     shared().pending_test.fetch_add(1, Ordering::SeqCst);
     let _ = shared().tx.send(Job::TestConnection {
         conn_id: conn_id.to_string(),
         project_root: project_root.map(|s| s.to_string()),
         name: name.to_string(),
+        probe,
     });
 }
 

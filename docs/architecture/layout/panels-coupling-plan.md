@@ -247,6 +247,21 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 `database::nav_store::*`（`nav_runtime` 只留连接生命周期：`connect_entry` /
 `disconnect_entry` / `is_connected` / `test_entry` / `build_connect_request`）。
 
+**A' 前置之五（2026-09-16）：后台任务模块 `nav_jobs` 搬进 `database`。**
+
+19 处调用只在导航视图里，且该模块只依 `engine` + `database` 自身（`NavigatorService` /
+`property_panel` / `sql_gen`）。唯一的外部依赖是工作线程里的
+`nav_runtime::test_entry` —— 工作线程拿不到 `Rc<dyn NavHost>`（不能跨线程），
+所以端口用**函数指针**表达这个需求：
+
+```rust
+pub type ConnectionProbe = fn(conn_id: &str, project_root: Option<&str>) -> Result<String, String>;
+// NavHost::connection_probe(&self) -> ConnectionProbe
+```
+
+实现以无状态函数返回（内部自取服务单例与进程级桥接运行时），天然 `Send`。
+这比“把 `DataSourceService` / `ConnectionService` 搬下引擎层”小得多；后者是另一笔账（见下方「待办」）。
+
 依赖面审计（`panels/nav.rs`，4867 行）——决定 `NavHost` 要盖什么：
 
 | 类别 | 处数 | 去向 |
@@ -255,7 +270,7 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 | `shared.{connections, selected, driver_catalog, project_root}` | 11 | `driver_catalog` 已下沉 `engine`（见上）；其余为 `NavHost` 只读访问器 |
 | 编辑器端口（`show_properties` / `request_query` / `new_connection` / `edit_connection`） | 12 | 直接复用既有 `EditorBridge`（已端口化） |
 | `nav_runtime::*` | 34 | 纯存储类（24 处）**已搬** `database::nav_store`（见上）；连/断类 → `NavHost` |
-| `nav_jobs::*` | 19 | 随视图搬入 `database`（后台任务+轮询印，与 P1 同形；参照 `scratchpad_jobs`） |
+| `nav_jobs::*` | 19 | ✅ **已搬** `database::nav_jobs`（2026-09-16） |
 | `settings::SettingsService::*`（视图偏好 8 处） | 8 | `NavHost`（宿主自持设置访问，避免新增 `database → settings` 依赖） |
 | `mock::mock_view::SchemaRequest` | 1 | `NavHost::open_mock_panel(..)`（避免新增 `database → mock`） |
 | `crate::components::{group_form_dialog, cache_dialog}` | 2 | `NavHost`（对话框需 `Window`，只有宿主有） |

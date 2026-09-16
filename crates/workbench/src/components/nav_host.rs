@@ -20,7 +20,7 @@ use std::rc::Rc;
 use gpui_kit::{App, Window};
 
 use database::model::{PropertyRequest, TableRef};
-use database::nav_host::{NavFilters, NavHost};
+use database::nav_host::{ConnectionProbe, NavFilters, NavHost};
 use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
 
 use crate::panels::Shared;
@@ -150,9 +150,10 @@ impl NavHost for WorkbenchNavHost {
         nav_runtime::disconnect_entry(conn_id)
     }
 
-    fn test_connection(&self, conn_id: &str) -> Result<String, String> {
-        let root = self.root_text();
-        nav_runtime::test_entry(conn_id, root.as_deref())
+    fn connection_probe(&self) -> ConnectionProbe {
+        // `nav_runtime::test_entry` 的签名与本类型一致（无状态函数：内部自取
+        // `DataSourceService` 单例 + 进程级桥接运行时），故可直接作为函数指针使用。
+        nav_runtime::test_entry
     }
 
     // ==================== 连接增删改 / 共享 ====================

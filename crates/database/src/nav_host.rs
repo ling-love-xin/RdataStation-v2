@@ -38,6 +38,12 @@ use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightP
 
 use crate::model::{PropertyRequest, TableRef};
 
+/// 独立会话探测入口（连接 id + 项目根 → 可展示结果文案）。
+///
+/// 刻意做成**函数指针**而不是 `&self` 方法：它要随任务被送到视图的后台工作线程，
+/// 而宿主句柄 `Rc<dyn NavHost>` 不能跨线程。实现必须是无状态函数。
+pub type ConnectionProbe = fn(conn_id: &str, project_root: Option<&str>) -> Result<String, String>;
+
 /// 导航筛选条件（来源域 / 数据库类型 / 驱动 / 标签）。
 ///
 /// 与 `settings::model::NavigatorFilters` 字段一一对应——不直接复用那个类型，
@@ -107,8 +113,12 @@ pub trait NavHost: 'static {
     /// 关闭运行时连接。**保留**元数据缓存与状态（缓存只在「缓存管理」中清理）。
     fn disconnect(&self, conn_id: &str) -> Result<(), String>;
 
-    /// 独立会话探测（不注册连接池、不写库），返回可展示的结果文案。
-    fn test_connection(&self, conn_id: &str) -> Result<String, String>;
+    /// 独立会话探测的**可跨线程**入口（视图把它交给后台任务线程执行）。
+    ///
+    /// 为什么是函数指针而不是 `&self` 方法：探测在视图的后台工作线程上跑
+    /// （`database::nav_jobs`），而 `Rc<dyn NavHost>` 不能跨线程。实现须返回一个
+    /// **无状态**函数（内部自取服务单例与进程级桥接运行时），因而天然 `Send`。
+    fn connection_probe(&self) -> ConnectionProbe;
 
     // ==================== 连接增删改 / 共享 ====================
 
