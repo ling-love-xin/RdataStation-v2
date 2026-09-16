@@ -36,7 +36,8 @@
 | --- | --- | --- |
 | **依赖只向下** | `scratchpad → workbench_shell / gpui-kit / shared`，**不依赖 `workbench`**；宿主能力经本 crate 定义的 `ScratchpadHost` 端口注入（实现在 `workbench/src/components/scratchpad_host.rs`） | 架构 §7.1 |
 | **render 是纯读路径** | 渲染期不做 I/O：加载与重操作（导入/粘贴/清空回收站/搜索/替换）均走 `scratchpad::jobs` 工作线程 + 轮询回填；仅元数据级操作保持同步（架构 K1c） | 架构 §6.1、§13.1 |
-| **双击打开到编辑器** | 行双击 / `Enter` / 右键「打开」→ 中央编辑器（同路径已打开只激活，不重读）；模式与只读等级由编辑器按路径判定 | 架构 §6.12 |
+| **双击打开到编辑器** | 行双击 / `Enter` / 右键「打开」→ 中央编辑器（同路径已打开只激活，不重读）；打开时按 `file_meta` **预选连接**；模式与只读等级由编辑器按路径判定 | 架构 §6.12 |
+| **脏点回显** | 编辑器里有未保存修改的文件，在树上前一个实心圆点（只有文件；经 `ScratchpadHost::dirty_files` 取绝对路径集合，1.2 s 一拍比对缓存） | 架构 §6.14 |
 | **外部改动自动刷新** | 监听模块目录（`notify`），1.2 s 去抖后重拉列表，并给已打开的结果面板重跑一次搜索；监控不可用则降级为手动 `↻` | 架构 §6.11 |
 | **窗口 = 项目** | 项目态**不得放进程单例**：workbench 由窗口的 `Shared::project` 按需构造 `ScratchpadStore`；`ScratchpadState`（长生命周期 watcher 场景）接入时**必须按窗口持有** | 架构 §7.2 |
 | **两道护栏** | 同项目二次打开由 `project` crate 的 `ProjectLock` 拦截（只读/仍要打开/取消）；只读打开时草稿箱全面禁写并给状态栏提示 | 架构 §7.3 |
@@ -72,8 +73,8 @@
 | `crates/scratchpad/src/models.rs` | 域模型：`ScratchpadEntry` / `SearchMatch`（含 `match_spans`）/ `ExternalReference(Status)` / `FileMeta` / `AnalyzableFile` / `ReplaceResult` / `DiffResult` 等 |
 | `crates/scratchpad/src/state.rs` | `ScratchpadState`：按项目初始化 store + watcher 标志（**当前无生产调用方**，接入时必须按窗口持有） |
 | `crates/scratchpad/src/jobs.rs` | 草稿箱后台任务（crate 内）：单工作线程 + tokio 运行时执行加载与重操作（导入/粘贴/清空回收站/搜索/替换），结果队列 + 请求序号防过期 |
-| `crates/scratchpad/src/scratchpad_view.rs` | **面板视图（A'4 下沉进 crate）**：`ScratchpadView`（工具栏 / 搜索行 / 树 / 引用 / 回收站 / 撤销栏 / 状态行）、`scratchpad_row`、`render_scratchpad_edit_row`、`render_scratchpad_empty_state`、`request_scratchpad_load` / `ensure_scratchpad_pump`、`ensure_scratchpad_watch`（外部改动监控）、剪贴板与多选、键盘导航；纯函数辅助（排序 / 压平 / 模板后缀 / 搜索结果映射）带单测 |
-| `crates/scratchpad/src/host.rs` | `ScratchpadHost` 端口（**本 crate 定义、宿主实现**）：项目根 / 只读判定 / 状态栏提示 / 宿主重绘 / 搜索结果投递 / 在中央编辑器打开文件 |
+| `crates/scratchpad/src/scratchpad_view.rs` | **面板视图（A'4 下沉进 crate）**：`ScratchpadView`（工具栏 / 搜索行 / 树 / 引用 / 回收站 / 撤销栏 / 状态行）、`scratchpad_row`、`render_scratchpad_edit_row`、`render_scratchpad_empty_state`、`request_scratchpad_load` / `ensure_scratchpad_pump`、`ensure_scratchpad_watch`（外部改动监控）、剪贴板与多选、键盘导航、**脏点回显**（`dirty_seen` 缓存 + `scratchpad_shows_dirty_dot`）；纯函数辅助（排序 / 压平 / 模板后缀 / 搜索结果映射 / 脏点判据）带单测 |
+| `crates/scratchpad/src/host.rs` | `ScratchpadHost` 端口（**本 crate 定义、宿主实现**）：项目根 / 只读判定 / 状态栏提示 / 宿主重绘 / 搜索结果投递 / 在中央编辑器打开文件 / **脏文档集合**（`dirty_files`，默认空集） |
 | `crates/scratchpad/src/commands.rs` | 面板键盘动作（`ScratchpadNewFile` / `ScratchpadRename` / `ScratchpadDelete` / `ScratchpadOpen` / ↑↓ / `ScratchpadSelectAll` / `ScratchpadCancelEdit`） |
 | `crates/workbench/src/components/scratchpad_host.rs` | 宿主端口实现（`WorkbenchScratchpadHost`）：**只做转接，不加戏**，全部落到 `Shared` |
 | `crates/workbench/src/panels/editor.rs`（`EditorPanel`） | 内容搜索结果面板与替换栏：`render_scratchpad_search_pane`、`replace_scratchpad_all` |
@@ -104,9 +105,10 @@
 env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" \
   check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2
 
-# 单测（32 项：模块根隔离 / 路径防护 / 回收站来源 / 跨模块还原拒绝 / 旧布局迁移 / 引用状态与重定位 /
+# 单测（33 项：模块根隔离 / 路径防护 / 回收站来源 / 跨模块还原拒绝 / 旧布局迁移 / 引用状态与重定位 /
 # 绑定与最近执行回读 / 绝对路径→模块内相对路径 / 搜索区间 / 正则大小写 / 递归复制 / 替换 /
-# Diff 行分类与两侧行号 / 面板纯函数（排序·压平·模板后缀·搜索结果映射）/ 后台任务（加载·粘贴·导入·搜索替换））
+# Diff 行分类与两侧行号 / 面板纯函数（排序·压平·模板后缀·搜索结果映射·脏点判据）/
+# 后台任务（加载·粘贴·导入·搜索替换））
 env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-scratchpad -j 2
 ```
 

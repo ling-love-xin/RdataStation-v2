@@ -63,8 +63,8 @@
 | `src/watch.rs` | `ScratchpadWatcher` / `ChangeFlag`：模块目录文件监控（**外部改动 → 变更标记**，视图侧去抖重拉；只监听内容目录，`.RSmeta` 不在范围内） |
 | `src/state.rs` | `ScratchpadState`：按项目初始化 store + watcher 标志（**当前无生产调用方**；监控器已自持生命周期，接入时须按窗口持有） |
 | `src/jobs.rs` | 后台任务：单工作线程 + tokio 运行时执行加载与重操作（导入 / 粘贴 / 清空回收站 / 搜索 / 替换），结果队列 + 请求序号防过期（视图只入队 / 轮询 / 回填） |
-| `src/scratchpad_view.rs` | 面板视图（`ScratchpadView`）：工具栏 / 搜索 / 树 / 引用 / 回收站 / 撤销栏 / 状态行、剪贴板与多选、键盘导航；含纯函数辅助与其单测（排序 / 压平 / 模板后缀 / 搜索结果映射） |
-| `src/host.rs` | `ScratchpadHost` 端口（**本 crate 定义、宿主实现**）：项目根 / 只读判定 / 状态栏提示 / 宿主重绘 / 搜索结果投递 / 在编辑器打开文件 |
+| `src/scratchpad_view.rs` | 面板视图（`ScratchpadView`）：工具栏 / 搜索 / 树 / 引用 / 回收站 / 撤销栏 / 状态行、剪贴板与多选、键盘导航、脏点回显；含纯函数辅助与其单测（排序 / 压平 / 模板后缀 / 搜索结果映射 / 脏点判据） |
+| `src/host.rs` | `ScratchpadHost` 端口（**本 crate 定义、宿主实现**）：项目根 / 只读判定 / 状态栏提示 / 宿主重绘 / 搜索结果投递 / 在编辑器打开文件 / 脏文档集合（`dirty_files`，带空集默认实现） |
 | `src/commands.rs` | 面板键盘动作（`Scratchpad*` 系列 Action） |
 
 - 依赖方向：`scratchpad → workbench_shell / gpui-kit / shared`（**不依赖 workbench**；宿主能力经 `ScratchpadHost` 端口注入，实现在 `workbench/src/components/scratchpad_host.rs`）。模板：`[dev-dependencies]` 必须打开 `paths/test-support`（测试数据根隔离，见 `docs/architecture/runtime/data-paths.md` §5）。
@@ -73,17 +73,17 @@
 
 | 已实现 | 待补 |
 | --- | --- |
-| 模块根 + 内部态隔离 + 旧布局迁移 | 脏点、冲突 Diff（Phase C） |
+| 模块根 + 内部态隔离 + 旧布局迁移 | 冲突 Diff（Phase C） |
 | 项目级回收站（来源/原路径/还原/清空） | 拖放导入 / 拖入编辑器（Phase C） |
 | 列表/新建（含模板）/重命名/删除/移动/复制（文件与**文件夹递归**） | 执行后回写 `last_connection_id`（Phase C-2 后半；打开预选已接） |
 | 懒加载、排序（名称/大小/时间）、文件名过滤、**虚拟列表**（只渲染可视区）、空态大图标 + 按钮 | 提升/存档只读/取回/版本（Phase D，依赖 `analytics_resource`） |
 | 内容搜索（正则/大小写）+ **命中高亮** + **全部替换**（结果与替换栏落中央编辑区） | 点击命中跳转文件（依赖编辑器打开） |
 | 外部引用（添加文件或目录 / 自定义别名 / 改名 / 打开 / 移除 / 可用性探测 / **失效后重新引用**）、文件元数据（数据源绑定：读 `file_meta` + 写 `bind_connections` / `update_file_meta`） | 引用目录的展开浏览（当前只作入口） |
 | **文件监控**（`notify` 递归监听模块根 + 1.2 s 去抖重拉；启动失败降级为手动 `↻`） | 已打开搜索结果的自动重搜（外部改动只重拉树，不重跑搜索） |
-| 面板侧：多选（Ctrl/Shift/Ctrl+A）、剪切/复制/粘贴、撤销栏（5s 自动消失）、右键菜单、F2/Del/Esc/↑↓/Enter/Ctrl+N、导入、打开所在位置、只读模式禁写 | Phase D 回收站与资源删除的合并展示 |
+| 面板侧：多选（Ctrl/Shift/Ctrl+A）、剪切/复制/粘贴、撤销栏（5s 自动消失）、右键菜单、F2/Del/Esc/↑↓/Enter/Ctrl+N、导入、打开所在位置、**脏点**（编辑器未保存修改）、只读模式禁写 | Phase D 回收站与资源删除的合并展示 |
 
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/scratchpad/` 五件套——`README.md`（模块入口）· `scratchpad-architecture.md`（设计理念与架构 + 已知问题）· `scratchpad-prototype-design.md` + `scratchpad-prototype.html`（原型）· `scratchpad-dev-plan.md`（进度）· `scratchpad-user-guide.md`（使用手册）。
-- 验证：`cargo check -p rds-scratchpad -j 2`；单测 `cargo test -p rds-scratchpad -j 2 --lib`（**32 项**：域逻辑 + 面板纯函数 + 后台任务）。
+- 验证：`cargo check -p rds-scratchpad -j 2`；单测 `cargo test -p rds-scratchpad -j 2 --lib`（**33 项**：域逻辑 + 面板纯函数 + 后台任务）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

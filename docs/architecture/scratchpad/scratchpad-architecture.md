@@ -2,7 +2,7 @@
 
 > 本文回答**为什么这样设计 / 怎么运转**：不变式、概念模型、存储布局、数据流、决策表、降级、测试策略、实现映射，以及**权威的已知问题清单**。
 > 视觉与交互规格看 `scratchpad-prototype-design.md`；进度与阶段任务看 `scratchpad-dev-plan.md`；使用方式看 `scratchpad-user-guide.md`。
-> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中（C-1 打开 + C-2 前半连接预选已接）· Phase D 未开始。
+> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中（C-1 打开 + C-2 前半连接预选 + C-3 脏点已接）· Phase D 未开始。
 
 ## 0. 裁决摘要（一页读完）
 
@@ -330,7 +330,22 @@ render_scratchpad（首次 or loaded=false）
 - 连接预选（C-2 前半）只对**新建**文档生效：同路径已打开走“只激活”，不覆盖用户手动改过的连接；
   已被删除的连接（不在下拉里）不预选——绑上去只会让执行报错。读元数据属「元数据级操作保持同步」的既定口径（K1c）。
 - **待接**（Phase C 余项）：执行后回写 `file_meta.last_connection_id`（需编辑器侧执行完成通知）、
-  脏点回显、冲突 Diff（`store.rs::diff_with_content` 已在手，未接 UI）、拖放导入/拖入编辑区。
+  冲突 Diff（`store.rs::diff_with_content` 已在手，未接 UI）、拖放导入/拖入编辑区。
+
+### 6.14 脏点回显（Phase C-3，已接）
+
+```
+编辑器里改动未保存（`EditorService::dirty_ids`）
+  → 宿主端口 `ScratchpadHost::dirty_files()`：脏文档的**绝对路径**集合
+  → 视图侧 1.2 s 轮询（与目录监控同拍）比对缓存 `dirty_seen`，有变化才 `cx.notify()`
+  → `scratchpad_row` 按条目绝对路径命中 → 文件名前画一个实心圆点（`primary`）
+      · **只有文件**打点（文件夹不画）；`Ctrl+S` 回存后集合里消失，点随之消失
+```
+
+- **为何不在 `render` 里问宿主**：脏文档集合是**外部状态**（编辑器拥有），所以走「轮询取回 + 缓存比对」，
+  `render` 只读自己的缓存——与「render 是纯读路径」一致。
+- **为什么经端口而不是让草稿箱依赖 `editor`**：`scratchpad` 不得依赖编辑器 crate；
+  「哪些文档脏了」本质是宿主能回答的问题（同项目根 / 只读判定）。
 
 ### 6.13 键盘导航
 
@@ -355,8 +370,8 @@ app ──► workbench ──► scratchpad ──► workbench_shell / gpui-ki
 
 | 层 | 内容 | 测试性 |
 | --- | --- | --- |
-| `crates/scratchpad` | 全部文件系统与配置语义（含递归复制、搜索、替换、路径防护、回收站、迁移）+ **面板视图与后台任务** | 可单测（32 项：`#[tokio::test]` + 临时项目目录 + 面板纯函数） |
-| `crates/workbench` | 宿主端口实现（项目根 / 只读 / 提示 / 重绘 / 搜索结果落地 / 打开文件）、左 Dock 装配（`SidebarPanel` 持 `Entity<ScratchpadView>`） | 目前靠人工验收 |
+| `crates/scratchpad` | 全部文件系统与配置语义（含递归复制、搜索、替换、路径防护、回收站、迁移）+ **面板视图与后台任务** | 可单测（33 项：`#[tokio::test]` + 临时项目目录 + 面板纯函数） |
+| `crates/workbench` | 宿主端口实现（项目根 / 只读 / 提示 / 重绘 / 搜索结果落地 / 打开文件 / 脏文档集合）、左 Dock 装配（`SidebarPanel` 持 `Entity<ScratchpadView>`） | 目前靠人工验收 |
 
 **为什么复制/搜索放在 crate 而不是面板**：它们是"文件系统语义"，会随 `resources/`、`mock/` 复用；放 view 层则既难测又会被复制三份。
 
@@ -436,9 +451,9 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 
 ## 11. 测试策略
 
-- **crate 层（已自动化）**：`#[tokio::test]` + 临时项目目录 + 面板纯函数，覆盖 32 项：
-  模块根与元数据隔离、内部路径拒绝、回收站来源与原路径、跨模块还原拒绝、旧布局迁移、引用状态与重命名校验、引用重定位、绑定往返、绑定与最近执行回读（含预选优先级）、绝对路径→模块内相对路径、搜索正则与大小写、命中区间（含 Unicode 变宽回退）、递归复制与重名避让、字面量/正则替换与 `$` 语义、Diff 行分类与两侧行号、面板纯函数（排序/压平/模板后缀/搜索结果映射）、后台任务（根加载/目录加载/导入与清空回收站/粘贴/搜索替换共用载荷）。
-- **面板层（窗口级仍人工）**：多选（Ctrl/Shift/Ctrl+A）、剪贴板、模板与落点、虚拟列表滚动与键盘导航、替换栏、只读拒绝、**打开草稿预选连接**——见 `scratchpad-user-guide.md` §9 验收清单。
+- **crate 层（已自动化）**：`#[tokio::test]` + 临时项目目录 + 面板纯函数，覆盖 33 项：
+  模块根与元数据隔离、内部路径拒绝、回收站来源与原路径、跨模块还原拒绝、旧布局迁移、引用状态与重命名校验、引用重定位、绑定往返、绑定与最近执行回读（含预选优先级）、绝对路径→模块内相对路径、搜索正则与大小写、命中区间（含 Unicode 变宽回退）、递归复制与重名避让、字面量/正则替换与 `$` 语义、Diff 行分类与两侧行号、面板纯函数（排序/压平/模板后缀/搜索结果映射/脏点判据）、后台任务（根加载/目录加载/导入与清空回收站/粘贴/搜索替换共用载荷）。
+- **面板层（窗口级仍人工）**：多选（Ctrl/Shift/Ctrl+A）、剪贴板、模板与落点、虚拟列表滚动与键盘导航、替换栏、只读拒绝、**打开草稿预选连接**、**脏点生灭**——见 `scratchpad-user-guide.md` §9 验收清单。
 - **未自动化原因**：窗口级交互需要窗口与主题环境；按架构约定（窗口测试走宿主入口）应在 `workbench` 侧补，属后续工作项（§13.4）。
 
 ## 12. 实现映射
@@ -462,6 +477,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | 后台加载（K1） | `scratchpad/src/jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `scratchpad_view.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
 | 文件监控（Phase A5） | `scratchpad/src/watch.rs`（`ScratchpadWatcher` / `ChangeFlag`）+ `scratchpad_view.rs::{ensure_scratchpad_watch, ensure_scratchpad_watch_poll}` |
 | 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `scratchpad_view.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
+| 脏点（Phase C-3） | `host.rs::ScratchpadHost::dirty_files`（宿主取编辑器 `EditorService::dirty_ids`）+ `scratchpad_view.rs::{dirty_seen, refresh_dirty_cache, scratchpad_shows_dirty_dot}` |
 | 打开草稿（Phase C-1）/ 连接预选（C-2 前半） | `scratchpad_view.rs` 发请求 → `host.rs::open_in_editor` → `Shared::request_open_in_editor` → `view.rs::open_in_editor`（同路径只激活；草稿带 `file_meta` 绑定时 `EditorService::set_connection` 预选） |
 
 ## 13. 已知问题（权威清单）
@@ -488,7 +504,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | # | 事项 | 影响 |
 | --- | --- | --- |
 | K6 | 引用目录是否可在树内展开浏览 | 现在只作入口（`↗` 打开位置）；展开需要"跨根路径树"的读写策略 |
-| K7 | 多文件 Tab 与草稿箱的关系 | 已接首片（双击/Enter/右键「打开」→ 编辑器；同路径只激活不重读）；Tab 体系 / 脏点 / 冲突 Diff 仍属编辑器侧 |
+| K7 | 多文件 Tab 与草稿箱的关系 | 已接首片（双击/Enter/右键「打开」→ 编辑器；同路径只激活不重读）；**脏点已接（C-3，经 `ScratchpadHost::dirty_files` 回读）**；Tab 体系 / 冲突 Diff 仍属编辑器侧 |
 | K8 | 提升（Phase D）时引用与 `file_meta` 的处置 | 归档是"连引用一起冻结"还是"只冻结内容"，需与 M6 语义裁决书对齐 |
 
 ### 13.4 工程债
