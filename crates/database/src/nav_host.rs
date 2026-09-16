@@ -69,12 +69,9 @@ pub trait NavHost: 'static {
 
     // ==================== 宿主状态（写） ====================
 
-    /// 设置选中连接。实现须一并处理「选中切换 = 导航缓存失效 + 编辑区重绘」的连带动作
+    /// 设置选中连接。实现须一并处理「选中切换 = 导航缓存失效 + 宿主重绘」的连带动作
     /// （原先由宿主订阅 `SidebarEvent::SelectConnection` 完成）。
     fn select_connection(&self, index: Option<usize>, cx: &mut App);
-
-    /// 覆盖连接清单（增 / 删 / 共享后由 [`NavHost::reload_connections`] 回填）。
-    fn set_connections(&self, items: Vec<ConnectionItem>);
 
     /// 状态栏提示（一行文本；由宿主决定展示与清除时机）。
     fn notice(&self, message: String, cx: &mut App);
@@ -115,20 +112,20 @@ pub trait NavHost: 'static {
 
     // ==================== 连接增删改 / 共享 ====================
 
-    /// 重载当前作用域可见连接并回填 [`NavHost::connections`]。
-    fn reload_connections(&self);
+    /// 重载当前作用域可见连接并回填 [`NavHost::connections`]；
+    /// 连接数变化时一并修正选中下标（空表 → 取消选中，越界 → 回到首项）。
+    fn reload_connections(&self, cx: &mut App);
 
-    /// 按模板复制连接（`from_id` → 新名称）。
+    /// 按模板复制连接（新名称；不含密码）。项目根由宿主自持。
     fn copy_connection(&self, from_id: &str, new_name: &str) -> Result<(), String>;
 
-    /// 把全局连接共享进指定项目（`GP_` 记录）。
-    fn share_connection(&self, conn_id: &str, project_root: &str) -> Result<(), String>;
+    /// 把全局连接共享进当前项目（`GP_` 快照）；未打开项目 → `Err`。
+    fn share_connection(&self, conn_id: &str) -> Result<(), String>;
 
-    /// 取消共享 / 删除项目级记录（全局定义保留）。调用方负责随后断开运行时连接。
-    fn unshare_connection(&self, conn_id: &str, project_root: &str) -> Result<(), String>;
-
-    /// 删除连接（连带清理 Secret）。调用方负责随后断开运行时连接。
-    fn delete_connection(&self, conn_id: &str) -> Result<(), String>;
+    /// 删除连接记录；项目侧 `GP_` 走同一条路（删掉即「取消共享」，全局定义保留）。
+    ///
+    /// 返回服务层的可展示文案。调用方负责随后 [`NavHost::disconnect`]（缓存保留）。
+    fn delete_connection(&self, conn_id: &str) -> Result<String, String>;
 
     // ==================== 宿主命令（需窗口 / 需别的面板） ====================
 
