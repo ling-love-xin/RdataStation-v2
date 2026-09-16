@@ -1,7 +1,10 @@
 # 运行时数据路径（配置 / 数据 / 临时 / 日志）
 
-状态：**设计待实施**（2026-09-16）。动机：默认路径全部落在 C 盘（`%APPDATA%` / `%TEMP%` / `~`），
+状态：**设计待实施**（2026-09-16，口径已确认）。动机：默认路径全部落在 C 盘（`%APPDATA%` / `%TEMP%` / `~`），
 开发机 C 盘空间紧张；且现状没有单一解析入口，路径散落在 7 个 crate 里**各自拼字符串**。
+
+**已确认的口径**：① 这个软件生成的**任何信息**（配置 / 数据 / 日志 / 临时 / 缓存 / 扩展）都待
+在软件自己的目录下，**默认 = 软件的安装目录**（可执行文件所在目录）；② 这些生成物**一律不进 git**。
 
 ## 1. 现状侦察（实测）
 
@@ -42,10 +45,12 @@ paths::temp_dir()        // home/tmp
 paths::extensions_dir()  // home/extensions
 ```
 
-**默认值规则（关键决策点）**：`RDS_HOME` 未设时取 `可执行文件所在目录的上一级 + /.rds`：
+**默认值规则**：`RDS_HOME` 未设时 = **可执行文件所在目录**（即软件的安装目录；开发运行时即 `target/debug/`）：
 
-- 开发运行（`target/debug/rds-app.exe`）→ `<repo>/target/debug/../../.rds` = `<repo>/.rds`（不占 C 盘）
-- 发行安装 → `<安装目录>/.rds`（随安装位置；若装在 C 盘再用 `RDS_HOME` 覆盖）
+- 一切生成物都在这个目录下，随软件装到哪就跟到哪，**不碰 C 盘**（除非软件本身装在 C 盘，那时用 `RDS_HOME` 覆盖）
+- 启动先探测可写性：不可写（如装在 `Program Files`）→ 回退 `%LOCALAPPDATA%/RdataStation` 并在日志里明确提示
+- **开发注意**：从 `target/debug` 运行时数据落在 `target/` 内，`cargo clean` 会连数据一起清掉；
+  开发期间要保留就设 `RDS_HOME=<repo>/.rds`（该目录已在忽略规则中）
 
 > 为什么不默认放"用户项目目录"：`<用户项目>/{project.sqlite, analysis.duckdb}` 是**用户资产**，
 > 归 M1 项目会话管理（已在项目根下）；而 settings / global.sqlite / 密钥库是**应用资产**，
@@ -68,7 +73,10 @@ paths::extensions_dir()  // home/extensions
    注意：`set_var` 必须在任何线程/运行时启动前调用（Rust 2024 中 `set_var` 已是 `unsafe`）。
 3. 替换 9 处硬编码 `"RdataStation"` 字面量为 `paths::*` 调用。
 4. 兼容与迁移：启动时若新路径为空且旧路径有数据 → 提示并**一次性迁移**（或只提示路径变更 + 提供开关）。
-5. `.gitignore` 加 `/.rds/`（数据与日志不入库）；`.rds/` 内再放 `.gitignore` 兜底。
+5. **一律不提交**：`.gitignore` 加 `/.rds/`、`/rds-*.log`、`*.fossil`；`.` 内部不再需要兜底（数据目录
+   若落在 `target/` 内则已被 `/target` 覆盖）。
+   已完成：`docs/tmp/*.log`、`tools/r2*.log` 等**已被跟踪**的日志需 `git rm --cached`（保留工作区文件）——
+   属索引操作，等仓库安静时做（见 §7）。
 6. 文档同步：本文档 + `settings/*`（settings.json 位置）、`database/*`（sqlite/duckdb 位置）、
    `overview.md`（双层数据落盘位置）、`connection/*`（known_hosts 例外）。
 
@@ -78,10 +86,30 @@ paths::extensions_dir()  // home/extensions
 | --- | --- |
 | 测试大量用 `env::temp_dir()`（各 crate 的 `rds_*` 前缀临时目录） | **测试不改**（仍用系统临时目录，避免 `set_var` 并发与污染）；只要求生产代码走 `paths::temp_dir()`。Rust 2024 下测试内 `set_var` 是 `unsafe` 且与并行测试冲突，不值得 |
 | DuckDB spill 放到项目盘影响性能 | `RDS_TEMP_DIR` 单独覆盖；文档写明取舍 |
+| 安装到 `Program Files`（目录不可写） | 启动探测可写性 → 回退 `%LOCALAPPDATA%/RdataStation` + 日志提示 |
+| 开发时 `cargo clean` 清掉数据 | 文档说明；开发期用 `RDS_HOME=<repo>/.rds` |
 | 旧数据"看起来丢失" | 启动时检测旧路径并提示/迁移（§4.4） |
 | 安装到只读目录 | `paths::home()` 失败时回退：`%LOCALAPPDATA%/RdataStation`（并在日志中提示），保持"能用" |
 
-## 6. 实现位置映射表
+## 6. git 卫生现状（待处理）
+
+`git ls-files` 实测：**已有生成物被跟踪**（均应 `git rm --cached`，保留工作区文件）：
+
+- `docs/tmp/app.out.log`、`docs/tmp/app.err.log`
+- `tools/r2*.log`（`r21_test` / `r22_*` / `r23_*` 等一批测试日志）
+
+未跟踪的生成物（应加入忽略规则或删除）：
+
+- 仓库根：`rds-a.log` / `rds-c.log` / `rds-e.log` / `rds-i.log` / `rds-si.log` / `rds-sw.log` / `rds-t.log` / `rds-w*.log`
+- 其他：`commit_msg_b3.txt`（提交信息临时文件）、`crates/workbench/data123`、`crates/workbench/FossilTT.fossil`
+
+建议动作顺序（等当前并行会话停下来再做，避免动索引）：
+
+1. `.gitignore` 补规则（本文件 §4.5）；
+2. `git rm --cached docs/tmp/*.log tools/r2*.log`（一次提交，说明"生成物不入库"）；
+3. 删除工作区里的临时件（`commit_msg_*.txt`、`FossilTT.fossil`、`rds-*.log`；`data123` 先 `file` 看一眼再定）。
+
+## 7. 实现位置映射表
 
 | 设计决策 | 实现位置 |
 | --- | --- |
@@ -91,4 +119,4 @@ paths::extensions_dir()  // home/extensions
 | 全局数据 / 密钥库 | `crates/engine/src/migration/global_init.rs`、`crates/engine/src/persistence/*`、`crates/shared/src/crypto.rs` |
 | 日志目录 | `crates/engine/src/logging/config.rs` |
 | 系统库 / 分析库 | `crates/project/src/ui.rs`、`crates/workbench/src/services/workspace_loader.rs` |
-| 忽略规则 | `/.gitignore` |
+| 忽略规则与"不提交" | `/.gitignore`（`/.rds/`、`/rds-*.log`、`*.fossil`）+ 已跟踪日志的 `git rm --cached` 清单（§7） |

@@ -4,3 +4,9 @@
 **/*.rs.bk
 node_modules/
 v1/frontend/node_modules/
+
+# 运行时生成物（配置/数据/日志/临时/扩展）——设计见 docs/architecture/runtime/data-paths.md
+# 口径：软件生成的一切都在自己的安装目录下（默认 = 可执行文件所在目录），且一律不入库
+/.rds/
+/rds-*.log
+*.fossil
