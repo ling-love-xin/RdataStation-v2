@@ -108,6 +108,7 @@ impl EditorShared {
         document: crate::model::DocumentId,
         target: &crate::execution::ExecTarget,
         placement: crate::execution::ResultPlacement,
+        options: crate::execution::RunOptions,
     ) -> Result<(), crate::execution::SubmitError> {
         // 先把绑定拷出来（不把服务层的 `Ref` 带到下面的借用里）
         let connection = self.service.borrow().connection_for(&document);
@@ -115,7 +116,7 @@ impl EditorShared {
         let Some(channel) = guard.as_ref() else {
             return Err(crate::execution::SubmitError::NoRunner);
         };
-        channel.submit(document, target, connection, placement)
+        channel.submit(document, target, connection, placement, options)
     }
 
     /// 结果队列里已完成但尚未取走的执行（轮询泵调用）
@@ -140,6 +141,38 @@ impl EditorShared {
             .as_ref()
             .map(|channel| channel.drain_cancel_notes())
             .unwrap_or_default()
+    }
+
+    /// 请一个事务动作（B4）：开始 / 提交 / 回滚；没在跑才接受（理由可读）
+    pub fn request_transaction(
+        &self,
+        document: crate::model::DocumentId,
+        action: crate::execution::TxAction,
+    ) -> Result<(), String> {
+        let connection = self.service.borrow().connection_for(&document);
+        let guard = self.exec.borrow();
+        match guard.as_ref() {
+            Some(channel) => channel.request_transaction(document, action, connection),
+            None => Err("当前未接入执行".to_string()),
+        }
+    }
+
+    /// 事务动作的结论（主线程轮询）
+    pub fn drain_tx_notes(&self) -> Vec<crate::execution::TxNote> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|channel| channel.drain_tx_notes())
+            .unwrap_or_default()
+    }
+
+    /// 【B4】执行器支不支持事务（界面据此决定摆不摆 TX 区）
+    pub fn has_transactions(&self) -> bool {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|channel| channel.supports_transactions())
+            .unwrap_or(false)
     }
 
     /// 是否有执行在跑

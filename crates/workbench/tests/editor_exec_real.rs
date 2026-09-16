@@ -24,7 +24,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use editor::execution::{ExecTarget, ResultPlacement, batch_target};
+use editor::execution::{ExecTarget, ResultPlacement, RunOptions, TxAction, TxSnapshot, batch_target};
 use editor::model::{DocumentId, EditorMode};
 use editor::service::OpenRequest;
 use editor::shared::EditorShared;
@@ -167,17 +167,34 @@ fn run_through_editor(
     expected: usize,
 ) -> Vec<editor::store::ResultEntry> {
     shared
-        .submit(document, target, placement)
+        .submit(
+            document,
+            target,
+            placement,
+            RunOptions::default(),
+        )
         .expect("提交执行");
     collect_outcomes(shared, expected)
 }
 
 /// 等回填（生产由面板的轮询泵做；这里手动轮询），落位用结论自带的
 fn collect_outcomes(shared: &EditorShared, expected: usize) -> Vec<editor::store::ResultEntry> {
+    collect_with_snapshots(shared, expected)
+        .into_iter()
+        .map(|(entry, _)| entry)
+        .collect()
+}
+
+/// 同上，但把每份结果**执行后的事务状态**一起带回来（B4 要用）
+fn collect_with_snapshots(
+    shared: &EditorShared,
+    expected: usize,
+) -> Vec<(editor::store::ResultEntry, TxSnapshot)> {
     let deadline = Instant::now() + Duration::from_secs(30);
-    let mut entries = Vec::new();
-    while entries.len() < expected {
+    let mut collected = Vec::new();
+    while collected.len() < expected {
         for outcome in shared.drain_exec() {
+            let transaction = outcome.transaction;
             let entry = match outcome.result {
                 Ok(data) => editor::store::ResultEntry::success(
                     outcome.document,
@@ -193,19 +210,77 @@ fn collect_outcomes(shared: &EditorShared, expected: usize) -> Vec<editor::store
             };
             // 落位来自结论自己（"结果放哪"是执行时的语义，不是调用方事后猜的）
             shared.update_results(|store| store.push(entry.clone(), outcome.placement));
-            entries.push(entry);
+            collected.push((entry, transaction));
         }
-        if entries.len() >= expected {
+        if collected.len() >= expected {
             break;
         }
         assert!(
             Instant::now() < deadline,
             "只等回 {} 份结果（预期 {expected} 份），30s 超时",
-            entries.len()
+            collected.len()
         );
         std::thread::sleep(Duration::from_millis(20));
     }
-    entries
+    collected
+}
+
+/// 跑一句（带执行选项），成功则返回结果 + 执行后的事务状态
+fn run_with_options(
+    shared: &EditorShared,
+    document: DocumentId,
+    sql: &str,
+    options: RunOptions,
+) -> (editor::store::ResultEntry, TxSnapshot) {
+    shared
+        .submit(
+            document,
+            &ExecTarget::Statement(sql.to_string()),
+            ResultPlacement::Replace,
+            options,
+        )
+        .expect("提交执行");
+    let (entry, transaction) = collect_with_snapshots(shared, 1)
+        .into_iter()
+        .next()
+        .expect("有结果回填");
+    assert!(entry.error.is_none(), "`{sql}` 报错 —— {:?}", entry.error);
+    (entry, transaction)
+}
+
+/// 跑一句（默认选项）
+fn run_one(shared: &EditorShared, document: DocumentId, sql: &str) -> editor::store::ResultEntry {
+    run_with_options(shared, document, sql, RunOptions::default()).0
+}
+
+/// `SELECT count(*)` 的整数值（界面拿到的就是字符串，这里转回数字断言）
+fn count_rows(shared: &EditorShared, document: DocumentId, table: &str) -> i64 {
+    let entry = run_one(
+        shared,
+        document,
+        &format!("SELECT count(*) AS n FROM {table}"),
+    );
+    entry.rows[0][0].parse().expect("count 应当是可解析的整数")
+}
+
+/// 走编辑器端口做一个事务动作，并等回执（生产由面板的轮询泵做）
+fn tx_action(shared: &EditorShared, document: DocumentId, action: TxAction) {
+    shared
+        .request_transaction(document, action)
+        .expect("事务动作应当被接受");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(note) = shared
+            .drain_tx_notes()
+            .into_iter()
+            .find(|note| note.action == action)
+        {
+            note.result.expect("事务动作应当成功");
+            return;
+        }
+        assert!(Instant::now() < deadline, "{action:?} 的回执迟迟没回来");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -322,6 +397,7 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
                 document.clone(),
                 &ExecTarget::Statement(target.slow_sql.to_string()),
                 ResultPlacement::Replace,
+            RunOptions::default(),
             )
             .expect("提交慢查询");
         // 等它真的开始跑（取消要中断的是“跑着的查询”，不是“刚提交”那个瞬间）
@@ -349,7 +425,64 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             target.driver
         );
 
-        // B3-b：超时——连接配了 1 秒，慢查询应当被引擎取消并报可读错误
+        // B4：事务——自动提交关 → 执行进事务 → **回滚作废 / 提交生效**
+        runtime.block_on(manager.close_all_connections());
+        let tx_value = b3_value(&target, &value, "tx");
+        let Some(_tx_conn) = connect_with_retry(&runtime, &manager, &target, &tx_value, None) else {
+            failed_to_connect.push(format!("{}（B4 事务用连接）", target.driver));
+            continue;
+        };
+        let table = format!("rds_tx_probe_{}", std::process::id());
+        // 建表在自动提交下做：四个库对“事务内 DDL”的态度不一样（MySQL 会隐式提交），
+        // 把 DDL 拉进事务只会验出驱动差异，验不出我们要的东西
+        run_one(&shared, document.clone(), &format!("CREATE TABLE {table} (n INTEGER)"));
+
+        let (_, in_tx) = run_with_options(
+            &shared,
+            document.clone(),
+            &format!("INSERT INTO {table} VALUES (1)"),
+            RunOptions {
+                use_transaction: true,
+            },
+        );
+        assert!(
+            in_tx.in_transaction,
+            "{}：自动提交关时，执行应当进事务（结论里要看得到）",
+            target.driver
+        );
+        assert_eq!(
+            count_rows(&shared, document.clone(), &table),
+            1,
+            "{}：事务内的插入自己看得见",
+            target.driver
+        );
+        tx_action(&shared, document.clone(), TxAction::Rollback);
+        assert_eq!(
+            count_rows(&shared, document.clone(), &table),
+            0,
+            "{}：回滚后数据不该变",
+            target.driver
+        );
+
+        let (_, committed) = run_with_options(
+            &shared,
+            document.clone(),
+            &format!("INSERT INTO {table} VALUES (2)"),
+            RunOptions {
+                use_transaction: true,
+            },
+        );
+        assert!(committed.in_transaction, "{}：第二次也要进事务", target.driver);
+        tx_action(&shared, document.clone(), TxAction::Commit);
+        assert_eq!(
+            count_rows(&shared, document.clone(), &table),
+            1,
+            "{}：提交后数据要生效",
+            target.driver
+        );
+        run_one(&shared, document.clone(), &format!("DROP TABLE {table}"));
+        eprintln!("✅ {}：事务（回滚作废 / 提交生效）", target.driver);
+
         runtime.block_on(manager.close_all_connections());
         let Some(_timeout_conn) =
             connect_with_retry(&runtime, &manager, &target, &timeout_value, Some(1))

@@ -563,7 +563,7 @@ struct ScriptRunner {
 }
 
 impl QueryRunner for ScriptRunner {
-    fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+    fn run(&self, connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         self.seen.lock().expect("锁").push(sql.to_string());
         self.seen_connections
             .lock()
@@ -606,7 +606,7 @@ fn shared_with_runner(
 struct SizedRunner;
 
 impl QueryRunner for SizedRunner {
-    fn run(&self, _connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         // 与 `ScriptRunner` 同一口径：带 `boom` 的语句失败（批量要能验“失败不中断”）
         if sql.contains("boom") {
             return Err("驱动报错：boom".to_string());
@@ -934,7 +934,7 @@ struct BlockingRunner {
 }
 
 impl QueryRunner for BlockingRunner {
-    fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !self.stop.load(std::sync::atomic::Ordering::SeqCst) {
             assert!(std::time::Instant::now() < deadline, "假执行器没等到中断");
@@ -1049,6 +1049,198 @@ fn interrupting_when_nothing_runs_says_why(cx: &mut TestAppContext) {
         message.expect("回绝也要说原因").contains("没有执行"),
         "没在跑就该直说"
     );
+}
+
+// ===== B4：事务 =====
+
+/// 假执行器（B4）：支持事务，记录执行选项与事务动作
+struct TxRunner {
+    actions: std::sync::Arc<std::sync::Mutex<Vec<(crate::execution::TxAction, Option<String>)>>>,
+    options: std::sync::Arc<std::sync::Mutex<Vec<crate::execution::RunOptions>>>,
+    open: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl QueryRunner for TxRunner {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _sql: &str,
+        options: crate::execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        self.options.lock().expect("锁").push(options);
+        if options.use_transaction {
+            // 模拟引擎：自动提交关掉时，执行会先开一个事务
+            self.open
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows: vec![vec!["1".to_string()]],
+            elapsed_ms: 1,
+            truncated: false,
+        })
+    }
+
+    fn transaction_snapshot(&self, _connection: Option<&str>) -> crate::execution::TxSnapshot {
+        crate::execution::TxSnapshot {
+            in_transaction: self.open.load(std::sync::atomic::Ordering::SeqCst),
+        }
+    }
+
+    fn transaction(
+        &self,
+        connection: Option<&str>,
+        action: crate::execution::TxAction,
+    ) -> Result<(), String> {
+        self.actions
+            .lock()
+            .expect("锁")
+            .push((action, connection.map(str::to_string)));
+        let open = match action {
+            crate::execution::TxAction::Begin => true,
+            crate::execution::TxAction::Commit | crate::execution::TxAction::Rollback => false,
+        };
+        self.open.store(open, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn supports_transactions(&self) -> bool {
+        true
+    }
+}
+
+/// 带事务假执行器的共享状态 + 一份文档（返回记录用的两个句柄）
+#[allow(clippy::type_complexity)]
+fn shared_with_tx_runner(
+    content: &str,
+) -> (
+    EditorShared,
+    DocumentId,
+    std::sync::Arc<std::sync::Mutex<Vec<crate::execution::RunOptions>>>,
+    std::sync::Arc<std::sync::Mutex<Vec<(crate::execution::TxAction, Option<String>)>>>,
+) {
+    let shared = EditorShared::new();
+    let actions = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let options = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    shared.attach_runner(std::sync::Arc::new(TxRunner {
+        actions: actions.clone(),
+        options: options.clone(),
+        open: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    (shared, id, options, actions)
+}
+
+/// 等事务动作的回执都回来了
+fn wait_for_tx_idle(cx: &mut VisualTestContext, panel: &Entity<EditorHostPanel>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let done = cx.update(|_window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.drain_exec_results(cx);
+                panel.tx_pending_for_test() == 0
+            })
+        });
+        if done {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "事务动作的回执迟迟没回来");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// 自动提交关掉时，**下一次执行**要带上“进事务”，执行后的 TX 区也要跟着变
+#[gpui_kit::test]
+fn toggling_autocommit_puts_the_next_execution_in_a_transaction(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (shared, id, options, _actions) = shared_with_tx_runner("insert into t values (1);");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).autocommit_for_test()),
+        "默认是自动提交"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).tx_text_for_test()),
+        "TX 未开启"
+    );
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.toggle_autocommit(cx)));
+    assert!(
+        !cx.update(|_window, cx| panel.read(cx).autocommit_for_test()),
+        "点一下就关掉"
+    );
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.execute_preferring_selection(cx))
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        options.lock().expect("锁").as_slice(),
+        [crate::execution::RunOptions {
+            use_transaction: true
+        }],
+        "自动提交关 → 执行要进事务"
+    );
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).tx_text_for_test())
+            .starts_with("TX 已开启"),
+        "执行后停在事务里，状态栏要如实说"
+    );
+    // 画一帧：此时 TX 区应出现提交 / 回滚按钮（渲染路径不 panic）
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// 状态栏的事务动作：开始 → 提交，动作真的到执行器，TX 区跟着开合
+#[gpui_kit::test]
+fn transaction_actions_from_the_status_bar_show_up_in_the_tx_area(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let (shared, id, _options, actions) = shared_with_tx_runner("select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.tx_action(crate::execution::TxAction::Begin, cx)
+        })
+    });
+    wait_for_tx_idle(cx, &panel);
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).tx_text_for_test())
+            .starts_with("TX 已开启"),
+        "开始事务后 TX 区要开"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.tx_action(crate::execution::TxAction::Commit, cx)
+        })
+    });
+    wait_for_tx_idle(cx, &panel);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).tx_text_for_test()),
+        "TX 未开启",
+        "提交后 TX 区要关"
+    );
+    assert_eq!(
+        actions
+            .lock()
+            .expect("锁")
+            .iter()
+            .map(|(action, _)| *action)
+            .collect::<Vec<_>>(),
+        [
+            crate::execution::TxAction::Begin,
+            crate::execution::TxAction::Commit
+        ],
+        "两个动作都要真的送到执行器"
+    );
+    cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
 #[gpui_kit::test]
@@ -1904,7 +2096,7 @@ struct CountingRunner {
 }
 
 impl QueryRunner for CountingRunner {
-    fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(QueryData::default())
     }

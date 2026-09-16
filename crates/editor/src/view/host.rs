@@ -62,6 +62,16 @@ pub struct EditorHostPanel {
     pending: usize,
     /// 本文档当前这轮执行是什么时候开始的（B3：状态栏耗时累加；`pending == 0` 时清掉）
     running_since: Option<std::time::Instant>,
+    /// 【B4】自动提交：开 = 每次执行自成一体（默认）；关 = 执行时若没有事务就先开一个，
+    /// 由用户显式提交或回滚
+    autocommit: bool,
+    /// 【B4】本文档绑定的连接上有没有活动事务（界面上的 TX 区读它）
+    tx_open: bool,
+    /// 【B4】这个事务是什么时候开始的（**本地观测时刻**：事务可能是在别处开的，
+    /// 界面的时长从“我们第一次看到它”算起）
+    tx_since: Option<std::time::Instant>,
+    /// 【B4】已发出、尚未回执的事务动作数（轮询泵据此多活一会儿）
+    tx_pending: usize,
     /// 结果区状态行文案（`Some` = 本文档有结果要显示）
     ///
     /// 缓存在这里而不是每帧 `format!`：`summary()` 要算，而 render 是纯读路径。
@@ -155,6 +165,10 @@ impl EditorHostPanel {
             grid,
             pending: 0,
             running_since: None,
+            autocommit: true,
+            tx_open: false,
+            tx_since: None,
+            tx_pending: 0,
             result_summary: None,
             result_tabs: Vec::new(),
             result_active: 0,
@@ -812,8 +826,9 @@ impl EditorHostPanel {
 
     /// 提交一次执行
     ///
-    /// `placement` 决定结果落到当前结果集还是新结果集（B2 的「在新结果标签中执行」/「批量执行」）。
-    /// 拒绍都要留痕迹：文本模式（能力表禁止通信）、未接入执行、忙、空目标。
+    /// `placement` 决定结果落到当前结果集还是新结果集（B2 的「在新结果标签中执行」/「批量执行」）；
+    /// 自动提交关闭时（B4）本次执行先开一个事务。
+    /// 拒绝都要留痕迹：文本模式（能力表禁止通信）、未接入执行、忙、空目标。
     pub(crate) fn execute(
         &mut self,
         target: ExecTarget,
@@ -826,7 +841,14 @@ impl EditorHostPanel {
         }
         // 预期回填条数 = 本次要跑的语句数（批量 > 1）：跑完这几条才算“不执行中”
         let expected = target.statements().len();
-        match self.shared.submit(self.document.clone(), &target, placement) {
+        // B4：自动提交关掉时，本次执行进事务（引擎在没有事务时会先自动开一个）
+        let options = execution::RunOptions {
+            use_transaction: !self.autocommit,
+        };
+        match self
+            .shared
+            .submit(self.document.clone(), &target, placement, options)
+        {
             Ok(()) => {
                 if self.pending == 0 {
                     // 批量期间一直计同一轮的时间：后一句不该把计时清零
@@ -840,9 +862,57 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【B4】请一个事务动作（开始 / 提交 / 回滚）：状态栏 TX 区的菜单调它
+    pub(crate) fn tx_action(&mut self, action: execution::TxAction, cx: &mut Context<Self>) {
+        match self
+            .shared
+            .request_transaction(self.document.clone(), action)
+        {
+            Ok(()) => {
+                self.tx_pending += 1;
+                self.set_message(Some(format!("{}…", action.label())), cx);
+                self.ensure_exec_pump(cx);
+            }
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
+    /// 【B4】切换自动提交（下一次执行生效）
+    pub(crate) fn toggle_autocommit(&mut self, cx: &mut Context<Self>) {
+        self.autocommit = !self.autocommit;
+        let text = if self.autocommit {
+            "自动提交：开（每次执行自成一体）".to_string()
+        } else {
+            "自动提交：关（执行后停在事务里，待提交/回滚）".to_string()
+        };
+        self.set_message(Some(text), cx);
+    }
+
+    /// 【B4】用一次快照刷新 TX 区（时长从**首次看到**事务开始算）
+    fn apply_tx_snapshot(&mut self, snapshot: execution::TxSnapshot) {
+        self.tx_open = snapshot.in_transaction;
+        match (snapshot.in_transaction, self.tx_since) {
+            (true, None) => self.tx_since = Some(std::time::Instant::now()),
+            (false, _) => self.tx_since = None,
+            _ => {}
+        }
+    }
+
+    /// TX 区文案（纯文本；按钮另画）：“TX 未开启” / “TX 已开启 3.4s”
+    fn tx_text(&self) -> String {
+        match (self.tx_open, self.tx_since) {
+            (true, Some(since)) => format!(
+                "TX 已开启 {}",
+                status_bar::elapsed_text(since.elapsed())
+            ),
+            (true, None) => "TX 已开启".to_string(),
+            (false, _) => "TX 未开启".to_string(),
+        }
+    }
+
     /// 中断当前执行（B3；原型 §5.1：入口在**状态栏 ■**）
     ///
-    /// 同步只回绍“没在跑”；真正的中断在工作线程上做（端口实现允许阻塞）。
+    /// 同步只回绝“没在跑”；真正的中断在工作线程上做（端口实现允许阻塞）。
     /// 中断之后的剩余语句由通道标“已取消”（不是接着往下跑）。
     pub(crate) fn interrupt(&mut self, cx: &mut Context<Self>) {
         match self.shared.cancel() {
@@ -859,6 +929,21 @@ impl EditorHostPanel {
     /// 状态栏那行“执行中 3.4s…”读的耗时（供测试断言“跑完就不再计时”）
     pub fn elapsed_for_test(&self) -> Option<std::time::Duration> {
         self.running_since.map(|since| since.elapsed())
+    }
+
+    /// 【B4】TX 区文案（供测试断言）
+    pub fn tx_text_for_test(&self) -> String {
+        self.tx_text()
+    }
+
+    /// 【B4】自动提交开关的当前值
+    pub fn autocommit_for_test(&self) -> bool {
+        self.autocommit
+    }
+
+    /// 【B4】还没回执的事务动作数
+    pub fn tx_pending_for_test(&self) -> usize {
+        self.tx_pending
     }
 
     /// 当前模式是否允许执行（**读能力表**，不在视图里另写一份模式判断）
@@ -927,10 +1012,11 @@ impl EditorHostPanel {
                 let keep_going = weak
                     .update(cx, |this, cx| {
                         this.drain_exec_results(cx);
-                        if this.pending > 0 {
+                        if this.pending > 0 || this.tx_pending > 0 {
                             cx.notify();
                         }
-                        this.shared.is_executing()
+                        // 事务动作的回执还没到也要继续轮询（它不在“执行忙”里）
+                        this.shared.is_executing() || this.tx_pending > 0
                     })
                     .unwrap_or(false);
                 if !keep_going {
@@ -951,12 +1037,32 @@ impl EditorHostPanel {
             self.set_message(Some(note), cx);
         }
 
+        // B4：事务动作的结论（成功/失败都要让界面看见；成功时顺便刷新 TX 区）
+        for note in self.shared.drain_tx_notes() {
+            self.tx_pending = self.tx_pending.saturating_sub(1);
+            if note.document != self.document {
+                continue;
+            }
+            match note.result {
+                Ok(snapshot) => {
+                    self.apply_tx_snapshot(snapshot);
+                    self.set_message(Some(format!("已{}", note.action.label())), cx);
+                }
+                Err(reason) => self.set_message(
+                    Some(format!("{}失败：{reason}", note.action.label())),
+                    cx,
+                ),
+            }
+        }
+
         let outcomes = self.shared.drain_exec();
         let mut mine_arrived = 0usize;
         for outcome in outcomes {
             let is_mine = outcome.document == self.document;
             if is_mine {
                 mine_arrived += 1;
+                // B4：事务状态跟着结论回来（用户手敲 BEGIN / COMMIT 也走同一路径）
+                self.apply_tx_snapshot(outcome.transaction);
             }
             let placement = outcome.placement;
             let entry = entry_from(outcome);
@@ -1445,6 +1551,8 @@ impl Render for EditorHostPanel {
         } else {
             None
         };
+        // TX 区（B4）：只在会通信的模式 + 执行器真支持事务时出现（“不摆点了没用的控件”）
+        let tx_text = (communicating && self.shared.has_transactions()).then(|| self.tx_text());
         let status = StatusInputs {
             mode: self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text),
             dirty: self.is_dirty(),
@@ -1459,6 +1567,7 @@ impl Render for EditorHostPanel {
             executing: self.pending > 0,
             elapsed: self.running_since.map(|since| since.elapsed()),
             connection: connection_text.as_deref(),
+            tx: tx_text.as_deref(),
         };
 
         // 中断（B3）：只在本文档真有语句没回填时出现（原型 §5.1：「中断」挂在状态栏■）
@@ -1473,6 +1582,43 @@ impl Render for EditorHostPanel {
                     entity.update(app, |panel, cx| panel.interrupt(cx));
                 })
                 .into_any_element()
+        });
+
+        // 事务区控件（B4）：自动提交常显（它是模式，模式要一直看得见），
+        // 提交 / 回滚只在事务真开着时出现（原型 §2.5：事务区）
+        let tx_controls = (communicating && self.shared.has_transactions()).then(|| {
+            let mut row = div().h_flex().items_center().gap_1();
+            let autocommit_entity = cx.entity();
+            row = row.child(
+                Button::new("editor-autocommit")
+                    .ghost()
+                    .small()
+                    .debug_selector(|| "editor-autocommit".to_string())
+                    .toggled(self.autocommit)
+                    .label("自动提交")
+                    .on_click(move |_, _window, app| {
+                        autocommit_entity.update(app, |panel, cx| panel.toggle_autocommit(cx));
+                    }),
+            );
+            if self.tx_open {
+                for (action, id) in [
+                    (execution::TxAction::Commit, "editor-tx-commit"),
+                    (execution::TxAction::Rollback, "editor-tx-rollback"),
+                ] {
+                    let entity = cx.entity();
+                    row = row.child(
+                        Button::new(id)
+                            .ghost()
+                            .small()
+                            .debug_selector(move || id.to_string())
+                            .label(action.label())
+                            .on_click(move |_, _window, app| {
+                                entity.update(app, |panel, cx| panel.tx_action(action, cx));
+                            }),
+                    );
+                }
+            }
+            row.into_any_element()
         });
 
         // 结果区：有结果或正在执行时出现（否则不占位置——不显示空壳）
@@ -1551,6 +1697,13 @@ impl Render for EditorHostPanel {
         if let Some(summary) = result_summary {
             root = root.child(result_grid::render(&self.grid, &summary, result_tabs, cx));
         }
-        root.child(status_bar::render(&status, interrupt, cx))
+        root.child(status_bar::render(
+            &status,
+            status_bar::StatusControls {
+                tx: tx_controls,
+                interrupt,
+            },
+            cx,
+        ))
     }
 }

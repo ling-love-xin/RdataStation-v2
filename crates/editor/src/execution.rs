@@ -93,6 +93,44 @@ pub enum ResultPlacement {
     NewSet,
 }
 
+/// 一次执行的附加选项（B4）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RunOptions {
+    /// 本次执行要不要（在没有事务时）**自动开一个事务**——「自动提交」关掉时为真
+    pub use_transaction: bool,
+}
+
+/// 会话的事务状态快照（B4）
+///
+/// 跟着**每次执行结果**与**每个事务动作**一起回来：界面不必再单独问一句（问就要阻塞等待）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TxSnapshot {
+    /// 这个连接上有没有活动事务
+    pub in_transaction: bool,
+}
+
+/// 事务动作（B4）：三种都要走**驱动**的事务接口，而不是拼 `BEGIN` / `COMMIT` 文本
+///
+/// 理由（P0.2 实测）：MySQL 的显式 `BEGIN` 会被 prepared 协议拒绝（1295），
+/// 且池里每次取到的未必是同一条物理连接——拼文本的“事务”只是看着像。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxAction {
+    Begin,
+    Commit,
+    Rollback,
+}
+
+impl TxAction {
+    /// 动作文案（状态栏菜单 / 消息用）
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Begin => "开启事务",
+            Self::Commit => "提交",
+            Self::Rollback => "回滚",
+        }
+    }
+}
+
 /// 解析 `Ctrl+Enter` 的执行目标：**选区优先，否则光标所在语句**
 ///
 /// 语句定位是**词法级**的（`engine::sql::split`），不是 `split(';')`——字符串里的分号、
@@ -285,7 +323,34 @@ pub struct QueryData {
 pub trait QueryRunner: Send + Sync + 'static {
     /// `connection` = 本文档绑定的连接 id（B1）；`None` = 未绑定，由实现决定回退口径
     /// （workbench 的实现回退到“当前活动连接”，与 1a 一致）
-    fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String>;
+    ///
+    /// `options.use_transaction`（B4）= 本次执行先自动开一个事务（「自动提交」关闭时）。
+    fn run(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        options: RunOptions,
+    ) -> Result<QueryData, String>;
+
+    /// 这个连接上的事务状态（B4）
+    ///
+    /// 在**工作线程**上调用（可以阻塞），每次执行与每个事务动作之后各问一次。
+    /// 默认实现 = 不知道 → 报“不在事务里”（宿主没接事务能力时的真实状态）。
+    fn transaction_snapshot(&self, _connection: Option<&str>) -> TxSnapshot {
+        TxSnapshot::default()
+    }
+
+    /// 事务动作（B4）：走驱动的事务接口。默认实现 = 不支持事务。
+    fn transaction(&self, _connection: Option<&str>, _action: TxAction) -> Result<(), String> {
+        Err("当前执行器不支持事务".to_string())
+    }
+
+    /// 这个执行器支不支持事务（B4）：界面据此决定**要不要摆 TX 区**
+    ///
+    /// 与全仓口径一致：能力没有就不摆控件，而不是摆一个点了没用的（原型 §2.2 排除项）。
+    fn supports_transactions(&self) -> bool {
+        false
+    }
 
     /// 中断这个连接上正在跑的查询（B3）
     ///
@@ -316,6 +381,8 @@ struct ExecJob {
     statements: Vec<String>,
     /// 结果落到哪里（B2）
     placement: ResultPlacement,
+    /// 执行选项（B4：自动提交关 → 本次执行进事务）
+    options: RunOptions,
 }
 
 /// 一次执行的结论（回到主线程）：**一条语句一条结论**
@@ -328,7 +395,18 @@ pub struct ExecOutcome {
     pub sql: String,
     /// 这份结果怎么落位（B2）：批量 / 新标签执行都给 `NewSet`
     pub placement: ResultPlacement,
+    /// 执行之后这个连接上的事务状态（B4）
+    pub transaction: TxSnapshot,
     pub result: Result<QueryData, String>,
+}
+
+/// 一次事务动作的结论（回到主线程）
+#[derive(Debug, Clone)]
+pub struct TxNote {
+    pub document: DocumentId,
+    pub action: TxAction,
+    /// 动作结果（`Err` = 失败原因）+ 动作之后的状态；界面两个都要
+    pub result: Result<TxSnapshot, String>,
 }
 
 /// 提交被拒的原因
@@ -365,6 +443,8 @@ pub struct ExecChannel {
     cancel_requested: Arc<AtomicBool>,
     /// 中断尝试的结果文案（主线程轮询取走：中断失败 / 没在跑 都要留痕）
     cancel_notes: Arc<Mutex<VecDeque<String>>>,
+    /// 事务动作的结论（主线程轮询取走：B4）
+    tx_notes: Arc<Mutex<VecDeque<TxNote>>>,
     /// 执行器句柄：`run` 在工作线程上、`cancel` 在一次性线程上，两处都要拿它
     runner: Arc<dyn QueryRunner>,
 }
@@ -378,6 +458,7 @@ impl ExecChannel {
         let running_connection: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let cancel_requested = Arc::new(AtomicBool::new(false));
         let cancel_notes: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let tx_notes: Arc<Mutex<VecDeque<TxNote>>> = Arc::new(Mutex::new(VecDeque::new()));
 
         let worker_done = done.clone();
         let worker_busy = busy.clone();
@@ -400,14 +481,17 @@ impl ExecChannel {
                             Err(CANCELED.to_string())
                         } else {
                             // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
-                            worker_runner.run(job.connection.as_deref(), &sql)
+                            worker_runner.run(job.connection.as_deref(), &sql, job.options)
                         };
+                        // B4：事务状态跟着结论一起回去（界面不必再单独问一句）
+                        let transaction = worker_runner.transaction_snapshot(job.connection.as_deref());
                         if let Ok(mut queue) = worker_done.lock() {
                             queue.push_back(ExecOutcome {
                                 document: job.document.clone(),
                                 connection: job.connection.clone(),
                                 sql,
                                 placement: job.placement,
+                                transaction,
                                 result,
                             });
                         }
@@ -425,6 +509,7 @@ impl ExecChannel {
             running_connection,
             cancel_requested,
             cancel_notes,
+            tx_notes,
             runner,
         }
     }
@@ -432,13 +517,15 @@ impl ExecChannel {
     /// 提交一次执行（忙 / 空目标会被拒，**不排队**：排队会让"再按一次"变成隐藏的批量执行）
     ///
     /// `connection` 是**文档绑定的连接**（B1）；`None` = 未绑定，执行器回退到“当前活动连接”。
-    /// `placement` 决定结果落到当前结果集还是新结果集（B2）。
+    /// `placement` 决定结果落到当前结果集还是新结果集（B2）；`options` 携带
+    /// 「自动提交关闭 → 本次执行进事务」（B4）。
     pub fn submit(
         &self,
         document: DocumentId,
         target: &ExecTarget,
         connection: Option<String>,
         placement: ResultPlacement,
+        options: RunOptions,
     ) -> Result<(), SubmitError> {
         let statements = target.statements();
         if statements.is_empty() {
@@ -462,6 +549,7 @@ impl ExecChannel {
                 connection,
                 statements,
                 placement,
+                options,
             })
             .is_err()
         {
@@ -469,6 +557,48 @@ impl ExecChannel {
             return Err(SubmitError::Busy);
         }
         Ok(())
+    }
+
+    /// 请一个事务动作（B4）：开始 / 提交 / 回滚
+    ///
+    /// 同步只做「能不能做」的判断（有执行在跑就回绝——事务动作插在执行中间会让
+    /// “提交了什么”说不清）；动作本身在一次性线程上做（端口允许阻塞，UI 不等）。
+    pub fn request_transaction(
+        &self,
+        document: DocumentId,
+        action: TxAction,
+        connection: Option<String>,
+    ) -> Result<(), String> {
+        if self.is_busy() {
+            return Err("有执行在跑，先等它结束再操作事务".to_string());
+        }
+        let runner = self.runner.clone();
+        let notes = self.tx_notes.clone();
+        std::thread::Builder::new()
+            .name("rds-editor-tx".to_string())
+            .spawn(move || {
+                let result = runner
+                    .transaction(connection.as_deref(), action)
+                    .map(|()| runner.transaction_snapshot(connection.as_deref()));
+                if let Ok(mut queue) = notes.lock() {
+                    queue.push_back(TxNote {
+                        document,
+                        action,
+                        result,
+                    });
+                }
+            })
+            .expect("failed to spawn editor tx worker");
+        Ok(())
+    }
+
+    /// 事务动作的结论（主线程轮询；取走即清空）
+    pub fn drain_tx_notes(&self) -> Vec<TxNote> {
+        let mut queue = match self.tx_notes.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        queue.drain(..).collect()
     }
 
     /// 取回已完成的执行（主线程轮询；取走即清空）
@@ -525,6 +655,11 @@ impl ExecChannel {
     pub fn is_busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
     }
+
+    /// 执行器支不支持事务（B4）：界面据此决定摆不摆 TX 区
+    pub fn supports_transactions(&self) -> bool {
+        self.runner.supports_transactions()
+    }
 }
 
 /// 中断之后剩余语句的结果文案（架构 §3.4：中断后不再往下跑）
@@ -549,8 +684,9 @@ impl Drop for ExecChannel {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ExecChannel, ExecMenuKind, ExecTarget, QueryData, QueryRunner, ResultPlacement, SubmitError,
-        all_target, batch_target, resolve_target, statement_target, target_for_menu,
+        ExecChannel, ExecMenuKind, ExecTarget, QueryData, QueryRunner, ResultPlacement, RunOptions,
+        SubmitError, TxAction, TxNote, TxSnapshot, all_target, batch_target, resolve_target,
+        statement_target, target_for_menu,
     };
     use crate::model::DocumentId;
     use std::sync::Arc;
@@ -786,7 +922,7 @@ mod tests {
     }
 
     impl QueryRunner for FakeRunner {
-        fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+        fn run(&self, connection: Option<&str>, sql: &str, _options: RunOptions) -> Result<QueryData, String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.seen_connections
                 .lock()
@@ -889,7 +1025,7 @@ mod tests {
     }
 
     impl QueryRunner for CancellableRunner {
-        fn run(&self, _connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+        fn run(&self, _connection: Option<&str>, sql: &str, _options: RunOptions) -> Result<QueryData, String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if sql.contains("slow") {
                 let deadline = Instant::now() + Duration::from_secs(5);
@@ -929,6 +1065,7 @@ mod tests {
                 &target,
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
+            RunOptions::default(),
             )
             .expect("提交");
 
@@ -960,6 +1097,7 @@ mod tests {
                 &target,
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
+            RunOptions::default(),
             )
             .expect("提交");
 
@@ -997,6 +1135,7 @@ mod tests {
                 &target,
                 None,
                 ResultPlacement::NewSet,
+            RunOptions::default(),
             )
             .expect("提交批量");
 
@@ -1030,7 +1169,7 @@ mod tests {
             stop: Arc<AtomicBool>,
         }
         impl QueryRunner for NothingToCancel {
-            fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+            fn run(&self, _connection: Option<&str>, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while !self.stop.load(Ordering::SeqCst) {
                     assert!(Instant::now() < deadline, "假执行器没被放行");
@@ -1051,6 +1190,7 @@ mod tests {
                 &ExecTarget::Statement("select 1".to_string()),
                 None,
                 ResultPlacement::Replace,
+            RunOptions::default(),
             )
             .expect("提交");
         channel.cancel().expect("中断应当被接受");
@@ -1081,6 +1221,190 @@ mod tests {
         assert!(error.contains("不支持中断"), "{error}");
     }
 
+    // ===== B4：事务 =====
+
+    /// 假执行器（B4）：支持事务，记录执行选项与事务动作
+    struct TxRunner {
+        actions: Arc<Mutex<Vec<(TxAction, Option<String>)>>>,
+        options: Arc<Mutex<Vec<RunOptions>>>,
+        open: Arc<AtomicBool>,
+    }
+
+    impl TxRunner {
+        #[allow(clippy::type_complexity)]
+        fn new() -> (
+            Arc<Self>,
+            Arc<Mutex<Vec<(TxAction, Option<String>)>>>,
+            Arc<Mutex<Vec<RunOptions>>>,
+            Arc<AtomicBool>,
+        ) {
+            let actions = Arc::new(Mutex::new(Vec::new()));
+            let options = Arc::new(Mutex::new(Vec::new()));
+            let open = Arc::new(AtomicBool::new(false));
+            let runner = Arc::new(Self {
+                actions: actions.clone(),
+                options: options.clone(),
+                open: open.clone(),
+            });
+            (runner, actions, options, open)
+        }
+    }
+
+    impl QueryRunner for TxRunner {
+        fn run(
+            &self,
+            _connection: Option<&str>,
+            _sql: &str,
+            options: RunOptions,
+        ) -> Result<QueryData, String> {
+            self.options.lock().expect("锁").push(options);
+            // 模拟引擎：自动提交关掉时，执行会先开一个事务
+            if options.use_transaction {
+                self.open.store(true, Ordering::SeqCst);
+            }
+            Ok(QueryData::default())
+        }
+
+        fn transaction_snapshot(&self, _connection: Option<&str>) -> TxSnapshot {
+            TxSnapshot {
+                in_transaction: self.open.load(Ordering::SeqCst),
+            }
+        }
+
+        fn transaction(&self, connection: Option<&str>, action: TxAction) -> Result<(), String> {
+            self.actions
+                .lock()
+                .expect("锁")
+                .push((action, connection.map(str::to_string)));
+            match action {
+                TxAction::Begin => self.open.store(true, Ordering::SeqCst),
+                TxAction::Commit | TxAction::Rollback => self.open.store(false, Ordering::SeqCst),
+            }
+            Ok(())
+        }
+
+        fn supports_transactions(&self) -> bool {
+            true
+        }
+    }
+
+    /// 等一次事务动作的回执（它不在“执行忙”里，得单独等）
+    fn wait_for_tx_notes(channel: &ExecChannel, count: usize) -> Vec<TxNote> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut notes = Vec::new();
+        while notes.len() < count {
+            notes.extend(channel.drain_tx_notes());
+            if notes.len() >= count {
+                return notes;
+            }
+            assert!(Instant::now() < deadline, "事务动作的回执迟迟没回来");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        notes
+    }
+
+    /// 事务动作：真的送到执行器（带着作业的连接），回执带回新状态
+    #[test]
+    fn a_transaction_action_reaches_the_runner_and_reports_the_new_state() {
+        let (runner, actions, _options, _open) = TxRunner::new();
+        let channel = ExecChannel::new(runner);
+        let document = DocumentId::new("doc-tx");
+
+        assert!(channel.supports_transactions(), "这个执行器支持事务");
+        channel
+            .request_transaction(
+                document.clone(),
+                TxAction::Begin,
+                Some("P_orders".to_string()),
+            )
+            .expect("开启事务应当被接受");
+        let notes = wait_for_tx_notes(&channel, 1);
+        assert_eq!(notes[0].action, TxAction::Begin);
+        assert_eq!(
+            notes[0].result.as_ref().expect("动作应当成功").in_transaction,
+            true
+        );
+        assert_eq!(
+            actions.lock().expect("锁").as_slice(),
+            [(TxAction::Begin, Some("P_orders".to_string()))],
+            "事务动作要落在文档绑定的那个连接上"
+        );
+    }
+
+    /// 提交：执行器收到 Commit，回执说明已不在事务里
+    #[test]
+    fn committing_reports_that_the_transaction_is_closed() {
+        let (runner, actions, _options, open) = TxRunner::new();
+        open.store(true, Ordering::SeqCst);
+        let channel = ExecChannel::new(runner);
+
+        channel
+            .request_transaction(DocumentId::new("doc-tx"), TxAction::Commit, None)
+            .expect("提交应当被接受");
+        let notes = wait_for_tx_notes(&channel, 1);
+        assert_eq!(notes[0].action, TxAction::Commit);
+        assert!(!notes[0].result.as_ref().expect("动作应当成功").in_transaction);
+        assert_eq!(actions.lock().expect("锁").len(), 1);
+    }
+
+    /// 有执行在跑时事务动作被回绝（理由可读）——插在执行中间会让“提交了什么”说不清
+    #[test]
+    fn transaction_actions_are_refused_while_a_statement_is_running() {
+        let (runner, _stop, calls, _seen) = CancellableRunner::new();
+        let channel = ExecChannel::new(runner);
+        channel
+            .submit(
+                DocumentId::new("doc-tx-busy"),
+                &ExecTarget::Statement("select slow".to_string()),
+                None,
+                ResultPlacement::Replace,
+                RunOptions::default(),
+            )
+            .expect("提交");
+        wait_until_started(&calls, 1);
+
+        let error = channel
+            .request_transaction(DocumentId::new("doc-tx-busy"), TxAction::Commit, None)
+            .expect_err("忙着时不该接事务动作");
+        assert!(error.contains("有执行在跑"), "{error}");
+
+        channel.cancel().expect("收尾：中断掉那句慢查询");
+        wait_for(&channel, 1);
+        wait_until_idle(&channel);
+    }
+
+    /// 执行选项（自动提交关）真的到了执行器，且**执行后的事务状态跟着结论回来**
+    #[test]
+    fn run_options_reach_the_runner_and_the_snapshot_rides_along() {
+        let (runner, _actions, options, _open) = TxRunner::new();
+        let channel = ExecChannel::new(runner);
+        channel
+            .submit(
+                DocumentId::new("doc-tx-run"),
+                &ExecTarget::Statement("insert into t values (1)".to_string()),
+                None,
+                ResultPlacement::Replace,
+                RunOptions {
+                    use_transaction: true,
+                },
+            )
+            .expect("提交");
+
+        let done = wait(&channel);
+        assert_eq!(
+            options.lock().expect("锁").as_slice(),
+            [RunOptions {
+                use_transaction: true
+            }],
+            "自动提交关掉时，执行要带上“进事务”的选项"
+        );
+        assert!(
+            done[0].transaction.in_transaction,
+            "结论里要带执行后的事务状态（界面不必再问一次）"
+        );
+        wait_until_idle(&channel);
+    }
+
     #[test]
     fn submitted_sql_comes_back_with_its_outcome() {
         let (channel, calls, seen) = channel();
@@ -1094,6 +1418,7 @@ mod tests {
                 &target,
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
+            RunOptions::default(),
             )
             .expect("提交");
 
@@ -1125,6 +1450,7 @@ mod tests {
                 &target,
                 None,
                 ResultPlacement::Replace,
+            RunOptions::default(),
             )
             .expect("提交");
 
@@ -1147,6 +1473,7 @@ mod tests {
                 &target,
                 Some("P_orders".to_string()),
                 ResultPlacement::NewSet,
+            RunOptions::default(),
             )
             .expect("提交批量");
 
@@ -1172,7 +1499,7 @@ mod tests {
         /// 每句慢 60ms：足够在第一条回填之后、整批跑完之前观察到忙状态
         struct SlowStatementRunner;
         impl QueryRunner for SlowStatementRunner {
-            fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+            fn run(&self, _connection: Option<&str>, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
                 std::thread::sleep(Duration::from_millis(60));
                 Ok(QueryData::default())
             }
@@ -1186,6 +1513,7 @@ mod tests {
                 &target,
                 None,
                 ResultPlacement::NewSet,
+            RunOptions::default(),
             )
             .expect("提交");
 
@@ -1207,6 +1535,7 @@ mod tests {
                 &ExecTarget::Empty,
                 None,
                 ResultPlacement::Replace,
+            RunOptions::default(),
             )
             .expect_err("空目标应被拒");
         assert_eq!(error, SubmitError::Empty);
@@ -1221,7 +1550,7 @@ mod tests {
             release: Arc<Mutex<bool>>,
         }
         impl QueryRunner for SlowRunner {
-            fn run(&self, _connection: Option<&str>, _sql: &str) -> Result<QueryData, String> {
+            fn run(&self, _connection: Option<&str>, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 loop {
                     if *self.release.lock().unwrap() {
@@ -1246,6 +1575,7 @@ mod tests {
                 &target,
                 None,
                 ResultPlacement::Replace,
+            RunOptions::default(),
             )
             .expect("首次提交");
         // 等它真的进到忙状态
@@ -1257,7 +1587,13 @@ mod tests {
 
         assert_eq!(
             channel
-                .submit(document, &target, None, ResultPlacement::Replace)
+                .submit(
+                    document,
+                    &target,
+                    None,
+                    ResultPlacement::Replace,
+                    RunOptions::default(),
+                )
                 .expect_err("忙时应被拒"),
             SubmitError::Busy
         );

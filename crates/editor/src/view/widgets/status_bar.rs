@@ -49,6 +49,19 @@ pub struct StatusInputs<'a> {
     pub elapsed: Option<std::time::Duration>,
     /// 连接段（已格式化的文案，如 `●P·orders`）；`None` = 不显示（文本模式没有连接概念）
     pub connection: Option<&'a str>,
+    /// 【B4】事务区文案（`TX 未开启` / `TX 已开启 3.4s`）；`None` = 不显示
+    pub tx: Option<&'a str>,
+}
+
+/// 状态栏里的可交互控件（由面板构造：它知道点击该干什么）
+///
+/// 文案走 [`labels`]（纯函数、可穷举），控件走这里——两者分开才能把“该显示什么”测干净。
+#[derive(Default)]
+pub struct StatusControls {
+    /// 【B4】事务区控件（自动提交开关 + 事务开启时的提交 / 回滚），挂在**左段**
+    pub tx: Option<AnyElement>,
+    /// 【B3】中断按钮，挂在**右段**
+    pub interrupt: Option<AnyElement>,
 }
 
 /// 状态栏文案（左右两段）
@@ -60,10 +73,15 @@ pub struct StatusLabels {
 
 /// 计算状态栏文案（纯函数）
 pub fn labels(inputs: &StatusInputs) -> StatusLabels {
-    // 左：连接（会通信的模式才有）+ 模式 + 语句数（SQL 模式才有语句概念）+ 未保存 + 动作提示
+    // 左：连接（会通信的模式才有）+ 事务 + 模式 + 语句数（SQL 模式才有语句概念）+ 未保存 + 动作提示
     let mut left = String::new();
     if let Some(connection) = inputs.connection {
         left.push_str(connection);
+        left.push_str(" · ");
+    }
+    if let Some(tx) = inputs.tx {
+        // 【B4】事务是**连接级**的事实，紧跟在连接段后面
+        left.push_str(tx);
         left.push_str(" · ");
     }
     left.push_str(inputs.mode.short_label());
@@ -119,10 +137,10 @@ pub fn elapsed_text(elapsed: std::time::Duration) -> String {
 
 /// 画成状态栏（固定高、顶部分隔线；颜色全部来自主题）
 ///
-/// `interrupt` = 执行中的■按钮（B3；由面板在“有语句没回填”时构造，点击走面板的 `interrupt`）。
+/// `controls` 里的控件由面板给（它们要拿面板实体去处理点击）。
 pub fn render(
     inputs: &StatusInputs,
-    interrupt: Option<AnyElement>,
+    controls: StatusControls,
     cx: &App,
 ) -> impl IntoElement {
     let text = labels(inputs);
@@ -136,7 +154,8 @@ pub fn render(
         .gap_1()
         .text_xs()
         .text_color(muted)
-        .child(text.left);
+        .child(text.left)
+        .children(controls.tx);
 
     StatusBar::new()
         .left(left)
@@ -148,7 +167,7 @@ pub fn render(
                 .text_xs()
                 .text_color(muted)
                 .child(text.right)
-                .children(interrupt),
+                .children(controls.interrupt),
         )
         .h(rems(ui::EDITOR_STATUS_BAR_HEIGHT))
         .border_t(ui::HAIRLINE)
@@ -175,6 +194,7 @@ mod tests {
             elapsed: None,
             // 连接段默认不显示；连接相关的断言在下面的专用用例里给值
             connection: None,
+            tx: None,
         }
     }
 
@@ -312,5 +332,25 @@ mod tests {
         assert_eq!(elapsed_text(Duration::from_secs(10)), "10s");
         assert_eq!(elapsed_text(Duration::from_secs(59)), "59s");
         assert_eq!(elapsed_text(Duration::from_secs(102)), "1m42s");
+    }
+
+    /// 【B4】事务区跟着连接段（它是连接级事实），没给就不占位
+    #[test]
+    fn the_transaction_segment_follows_the_connection() {
+        let mut with_tx = inputs(ReadOnly::none());
+        with_tx.connection = Some("●P·orders");
+        with_tx.tx = Some("TX 未开启");
+        let text = labels(&with_tx).left;
+        assert!(
+            text.starts_with("●P·orders · TX 未开启 · SQL"),
+            "事务紧随连接、在模式之前：{text}"
+        );
+
+        let mut running = inputs(ReadOnly::none());
+        running.tx = Some("TX 已开启 3.4s");
+        assert!(labels(&running).left.contains("TX 已开启 3.4s"));
+
+        // 没有事务信息（未接执行）时不出现占位文案
+        assert!(!labels(&inputs(ReadOnly::none())).left.contains("TX"));
     }
 }

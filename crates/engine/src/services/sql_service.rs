@@ -94,7 +94,7 @@ impl SqlService {
 
         // SQL 语句分类（智能路由）
         let (stmt_type, _normalized) = SqlEngine::parse_and_route(sql, SqlDialect::Ansi);
-        let (_is_ddl, _is_dml, is_dql) = {
+        let (is_ddl, _is_dml, is_dql) = {
             let is_ddl = matches!(stmt_type, SqlStatementType::Ddl);
             let is_dml = matches!(
                 stmt_type,
@@ -127,35 +127,38 @@ impl SqlService {
         // 获取数据库连接
         let db = self.get_database(conn_id.clone()).await?;
 
-        // 创建取消令牌（支持前端 cancel_query）
         let conn_key = match conn_id.clone() {
             Some(id) => id,
             None => DEFAULT_CONN_KEY.to_string(),
         };
-        let cancel_token = self.manager.create_cancel_token(&conn_key).await;
+
+        // ---- B4：事务路由 ----
+        // ① 会话里**已经有事务** → 这条语句必须走事务对象（同一物理连接，架构 §12 #2 的会话亲和）；
+        // ② 自动提交关闭（`use_transaction`）且还没事务 → 本次执行先自动开一个。
+        // DDL 不自动开事务：MySQL 会隐式提交，那样界面上的“事务已开启”就骗人了。
+        //
+        // 事务用**真实连接 id**（未绑定时解析成当前活动连接）：拿 “active” 这种虚拟键去开事务，
+        // 引擎会报 `Connection 'active' not found`（真机上踩过——缓存/取消令牌可以按虚拟键归档，
+        // 事务不行，它要拿 id 去找连接）。
+        let tx_key = self.conn_key_for(&conn_id).await?;
+        let in_transaction = self.manager.has_transaction(&tx_key).await;
+        let auto_begin = options.use_transaction && !is_ddl && !in_transaction;
+        if auto_begin {
+            self.manager.begin_transaction(&tx_key).await?;
+        }
 
         // 执行查询（支持取消和超时）
         //
         // 这里不用 `?` 提前返回：失败也要写历史（v1 只在成功时记，失败查询在历史里不可见）。
-        let query_result = if let Some(timeout_ms) = options.timeout_ms {
-            match tokio::time::timeout(
-                tokio::time::Duration::from_millis(timeout_ms),
-                db.query_with_cancel(sql, cancel_token.clone()),
-            )
-            .await
-            {
-                Ok(inner_result) => inner_result,
-                Err(_elapsed) => {
-                    cancel_token.cancel();
-                    Err(query_timeout_error(sql, timeout_ms))
-                }
+        let query_result = if in_transaction || auto_begin {
+            match self.manager.query_in_transaction(&tx_key, sql).await {
+                Some(result) => result,
+                // 竞态兜底：刚判过还有、这会儿被别处提交/回滚了 → 回落普通路径
+                None => run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await,
             }
         } else {
-            db.query_with_cancel(sql, cancel_token.clone()).await
+            run_plain(&self.manager, &db, sql, options.timeout_ms, &conn_key).await
         };
-
-        // 清理取消令牌
-        self.manager.remove_cancel_token(&conn_key).await;
 
         // 失败留痕：v1 只在成功时写历史，失败查询在历史里不可见（排障时无法回溯）
         let mut result = match query_result {
@@ -451,97 +454,74 @@ impl SqlService {
         .await
     }
 
-    /// 开始事务
+    /// 开始事务（B4）：走**驱动**的事务接口，事务对象挂到连接管理器上
+    ///
+    /// 不再是 `db.query("BEGIN TRANSACTION")`：MySQL 的显式 `BEGIN` 会被 prepared 协议拒绍（1295），
+    /// 且池里每次取到的未必是同一条物理连接（P0.2c 实测）。
     pub async fn begin_transaction(
         &self,
         conn_id: Option<String>,
     ) -> Result<TransactionStatusResult, CoreError> {
-        let db = self.get_database(conn_id.clone()).await?;
-        let conn_id_str = match conn_id {
-            Some(ref id) => id.clone(),
-            None => DEFAULT_CONN_KEY.to_string(),
-        };
-
-        // 执行 BEGIN TRANSACTION
-        db.query("BEGIN TRANSACTION").await?;
-
-        // 返回事务状态
-        Ok(TransactionStatusResult {
-            conn_id: conn_id_str,
-            is_in_transaction: true,
-            transaction_start_time_ms: Some(
-                match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                    Ok(d) => d.as_millis() as u64,
-                    Err(_) => 0u64,
-                },
-            ),
-            transaction_duration_ms: Some(0),
-        })
+        let conn_key = self.conn_key_for(&conn_id).await?;
+        self.manager.begin_transaction(&conn_key).await?;
+        Ok(self.transaction_status(&conn_key).await)
     }
 
-    /// 提交事务
+    /// 提交事务（返回提交后的状态：已不在事务里）
     pub async fn commit_transaction(
         &self,
         conn_id: Option<String>,
     ) -> Result<TransactionStatusResult, CoreError> {
-        let db = self.get_database(conn_id.clone()).await?;
-        let conn_id_str = match conn_id {
-            Some(ref id) => id.clone(),
-            None => DEFAULT_CONN_KEY.to_string(),
-        };
-
-        // 执行 COMMIT
-        db.query("COMMIT").await?;
-
-        // 返回事务状态
-        Ok(TransactionStatusResult {
-            conn_id: conn_id_str,
-            is_in_transaction: false,
-            transaction_start_time_ms: None,
-            transaction_duration_ms: None,
-        })
+        let conn_key = self.conn_key_for(&conn_id).await?;
+        self.manager.commit_transaction(&conn_key).await?;
+        Ok(self.transaction_status(&conn_key).await)
     }
 
-    /// 回滚事务
+    /// 回滚事务（返回回滚后的状态：已不在事务里）
     pub async fn rollback_transaction(
         &self,
         conn_id: Option<String>,
     ) -> Result<TransactionStatusResult, CoreError> {
-        let db = self.get_database(conn_id.clone()).await?;
-        let conn_id_str = match conn_id {
-            Some(ref id) => id.clone(),
-            None => DEFAULT_CONN_KEY.to_string(),
-        };
-
-        // 执行 ROLLBACK
-        db.query("ROLLBACK").await?;
-
-        // 返回事务状态
-        Ok(TransactionStatusResult {
-            conn_id: conn_id_str,
-            is_in_transaction: false,
-            transaction_start_time_ms: None,
-            transaction_duration_ms: None,
-        })
+        let conn_key = self.conn_key_for(&conn_id).await?;
+        self.manager.rollback_transaction(&conn_key).await?;
+        Ok(self.transaction_status(&conn_key).await)
     }
 
-    /// 获取事务状态
+    /// 获取事务状态：**读真值**（连接管理器上的活动事务），不再是固定返回“未开启”
     pub async fn get_transaction_status(
         &self,
         conn_id: Option<String>,
     ) -> Result<TransactionStatusResult, CoreError> {
-        let conn_id_str = match conn_id {
-            Some(ref id) => id.clone(),
-            None => DEFAULT_CONN_KEY.to_string(),
-        };
+        Ok(self.transaction_status(&self.conn_key_for(&conn_id).await?).await)
+    }
 
-        // 检查事务状态（简化实现，实际应从 session 获取）
-        Ok(TransactionStatusResult {
-            conn_id: conn_id_str,
-            is_in_transaction: false, // 实际应从 session 查询
-            transaction_start_time_ms: None,
-            transaction_duration_ms: None,
-        })
+    /// 事务等接口要的**真实连接 id**：`None` → 当前活动连接
+    ///
+    /// 不能拿 `DEFAULT_CONN_KEY`（"active"）去开事务：那是个给缓存/取消令牌归档用的虚拟键，
+    /// 拿去查连接会得到 `Connection 'active' not found`。
+    async fn conn_key_for(&self, conn_id: &Option<String>) -> Result<String, CoreError> {
+        match conn_id {
+            Some(id) => Ok(id.clone()),
+            None => self
+                .manager
+                .get_active_connection_id()
+                .await
+                .ok_or_else(|| {
+                    CoreError::connection(shared::error::ConnectionError::NoActiveConnection)
+                }),
+        }
+    }
+
+    /// 把一个连接的事务状态拼成结果（时间戳由“已开多久”倒推，界面要的是真实值）
+    async fn transaction_status(&self, conn_key: &str) -> TransactionStatusResult {
+        let elapsed = self.manager.transaction_elapsed(conn_key).await;
+        TransactionStatusResult {
+            conn_id: conn_key.to_string(),
+            is_in_transaction: elapsed.is_some(),
+            transaction_start_time_ms: elapsed
+                .map(|elapsed| unix_ms_now().saturating_sub(elapsed.as_millis() as u64)),
+            transaction_duration_ms: elapsed.map(|elapsed| elapsed.as_millis() as u64),
+        }
     }
 
     /// 取消指定连接正在执行的查询
@@ -566,6 +546,46 @@ fn query_timeout_error(sql: &str, timeout_ms: u64) -> CoreError {
         reason: format!("Query timed out after {}ms", timeout_ms),
         position: None,
     })
+}
+
+/// 普通执行路径（**带取消令牌与超时**）
+///
+/// 事务内的语句走另一条路（驱动的事务对象只有 `query/commit/rollback`，没有取消入口），
+/// 所以只有这里能取消与超时。
+async fn run_plain(
+    manager: &Arc<ConnectionManager>,
+    db: &DynDatabase,
+    sql: &str,
+    timeout_ms: Option<u64>,
+    conn_key: &String,
+) -> Result<QueryResult, CoreError> {
+    let cancel_token = manager.create_cancel_token(conn_key).await;
+    let result = if let Some(timeout_ms) = timeout_ms {
+        match tokio::time::timeout(
+            tokio::time::Duration::from_millis(timeout_ms),
+            db.query_with_cancel(sql, cancel_token.clone()),
+        )
+        .await
+        {
+            Ok(inner_result) => inner_result,
+            Err(_elapsed) => {
+                cancel_token.cancel();
+                Err(query_timeout_error(sql, timeout_ms))
+            }
+        }
+    } else {
+        db.query_with_cancel(sql, cancel_token).await
+    };
+    manager.remove_cancel_token(conn_key).await;
+    result
+}
+
+/// 当前 unix 毫秒时间戳（失败时给 0：界面只拿它减一下算时长，不做绝对时间展示）
+fn unix_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub fn value_to_sql(val: &serde_json::Value) -> String {

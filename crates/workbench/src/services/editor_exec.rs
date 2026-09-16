@@ -31,18 +31,21 @@ use shared::models::{QueryResult, Value};
 
 /// 引擎执行器（编辑器执行端口的工作台实现）
 struct EngineQueryRunner {
-    /// 跑查询的 runtime（工作线程上 `block_on`，串行）
+    /// 执行器的 tokio runtime（**多线程**，随执行器常驻）
+    ///
+    /// 为什么不是 `current_thread`：sqlx 的连接在**首次使用时**把驱动任务（读写协议的
+    /// 那个后台任务）挂到当时的 runtime 上；单线程 runtime 只在 `block_on` 期间被驱动，
+    /// 一旦某条语句死在另一个 runtime 上（事务提交就是这么一条：它走旁路调用），
+    /// 驱动任务就没人跑了——真机现象是 `COMMIT` 永远等不到响应。多线程 runtime 留出
+    /// 工作线程，让这些后台任务在任何调用路径下都能推进。
     runtime: tokio::runtime::Runtime,
-    /// 取消用的**另一个** runtime：`runtime` 正被工作线程占着，而取消要立刻跑完
-    /// （引擎的取消就是翻转内存里的 `CancellationToken`，很快）
-    cancel_runtime: tokio::runtime::Runtime,
     service: SqlService,
 }
 
 impl EngineQueryRunner {
     fn new() -> Option<Self> {
-        // 单线程 runtime 足够：执行是串行的（编辑器通道同时只跑一次执行）
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .thread_name("rds-editor-exec-rt")
             .build()
@@ -50,11 +53,6 @@ impl EngineQueryRunner {
         let manager = engine::connection_manager::get_connection_manager();
         Some(Self {
             runtime,
-            cancel_runtime: tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .thread_name("rds-editor-cancel-rt")
-                .build()
-                .ok()?,
             service: SqlService::new(manager.clone()),
         })
     }
@@ -75,13 +73,20 @@ impl EngineQueryRunner {
 }
 
 impl QueryRunner for EngineQueryRunner {
-    fn run(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+    fn run(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        run_options: editor::execution::RunOptions,
+    ) -> Result<QueryData, String> {
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let options = SqlExecuteOptions {
             // 历史由引擎侧统一记录（含耗时/行数，真实值）
             record_history: true,
             // 超时：引擎在到点后**自己取消**并返回“Query timed out after Nms”
             timeout_ms,
+            // B4：自动提交关 → 引擎在没有事务时先自动开一个（DDL 除外）
+            use_transaction: run_options.use_transaction,
             ..Default::default()
         };
         // 连接：文档绑定了就用它（B1）；未绑定回退到“当前活动连接”（1a 口径）
@@ -92,9 +97,44 @@ impl QueryRunner for EngineQueryRunner {
         Ok(to_data(&executed.result, executed.elapsed_ms, executed.truncated))
     }
 
+    /// 事务状态：读引擎的**真值**（活动事务挂在连接管理器上，不是猜的）
+    fn transaction_snapshot(&self, connection: Option<&str>) -> editor::execution::TxSnapshot {
+        let status = self
+            .runtime
+            .block_on(self.service.get_transaction_status(connection.map(str::to_string)));
+        match status {
+            Ok(status) => editor::execution::TxSnapshot {
+                in_transaction: status.is_in_transaction,
+            },
+            // 读不到就当作“不在事务里”：界面会因此少一个 TX 标记，不会凭空多一个
+            Err(_) => editor::execution::TxSnapshot::default(),
+        }
+    }
+
+    /// 事务动作：走引擎的驱动级事务接口（不是拼 `BEGIN` 文本——MySQL 会报 1295）
+    fn transaction(
+        &self,
+        connection: Option<&str>,
+        action: editor::execution::TxAction,
+    ) -> Result<(), String> {
+        use editor::execution::TxAction;
+        let conn = connection.map(str::to_string);
+        let result = match action {
+            TxAction::Begin => self.runtime.block_on(self.service.begin_transaction(conn)),
+            TxAction::Commit => self.runtime.block_on(self.service.commit_transaction(conn)),
+            TxAction::Rollback => self.runtime.block_on(self.service.rollback_transaction(conn)),
+        };
+        result.map(|_status| ()).map_err(|error| error.to_string())
+    }
+
+    /// 引擎侧四个原生驱动都支持事务（P0.2 实测：含 MySQL 的驱动级事务）
+    fn supports_transactions(&self) -> bool {
+        true
+    }
+
     /// 中断：走引擎的取消令牌（`Ok(false)` = 令牌不在 → 已在两句之间）
     fn cancel(&self, connection: Option<&str>) -> Result<bool, String> {
-        self.cancel_runtime
+        self.runtime
             .block_on(self.service.cancel_query(connection.map(str::to_string)))
             .map_err(|error| error.to_string())
     }

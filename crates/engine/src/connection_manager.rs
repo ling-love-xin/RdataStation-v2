@@ -8,12 +8,22 @@ use specta::Type;
 
 use crate::cache::CacheManager;
 use crate::driver::registry::DriverConnectionConfig;
-use crate::driver::traits::DynDatabase;
+use crate::driver::traits::{DynDatabase, Transaction};
 use crate::driver::DriverRegistry;
-use shared::error::{ConnectionError, CoreError};
+use shared::error::{ConnectionError, CoreError, DatabaseError, TransactionState};
+use shared::models::QueryResult;
 
 /// 连接 ID 类型
 pub type ConnId = String;
+
+/// 事务类错误（操作名 + 状态 + 可读原因）
+fn transaction_error(operation: &str, state: TransactionState, reason: &str) -> CoreError {
+    CoreError::database(DatabaseError::Transaction {
+        operation: operation.to_string(),
+        state,
+        reason: reason.to_string(),
+    })
+}
 
 /// 连接类型枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Type)]
@@ -113,8 +123,31 @@ pub struct ConnectionManager {
     tunnels: connection::chain::TunnelRegistry,
     /// 取消令牌映射（每个连接一个正在执行的查询令牌）
     cancel_tokens: tokio::sync::RwLock<HashMap<ConnId, tokio_util::sync::CancellationToken>>,
+    /// 【B4】活动事务：每个连接至多一个。
+    ///
+    /// 事务对象**持有那条物理连接**（驱动 `begin_transaction` 时拿的就是它），所以事务内的
+    /// 语句必须走这里而不是重新取连接——P0.2c 实测：MySQL / PG 并发下会另开物理连接，
+    /// 靠池的顺序巧合做会话亲和不可靠（架构 §12 #2）。
+    transactions: tokio::sync::Mutex<HashMap<ConnId, ActiveTransaction>>,
     /// 空闲超时时间（默认 30 分钟）
     idle_timeout: tokio::sync::RwLock<Duration>,
+}
+
+/// 一个活动事务（事务对象 + 开始时刻）
+///
+/// 事务对象本身不能跨驱动统一成 SQL 文本：MySQL 的显式 `BEGIN` 会被 prepared 协议拒绍
+/// （1295），必须走驱动的 `begin_transaction`（P0.2 的结论）。
+pub struct ActiveTransaction {
+    tx: Box<dyn Transaction>,
+    /// 开始时刻（界面显示事务时长用；`Instant` 单调，不受系统时间调整影响）
+    started_at: std::time::Instant,
+}
+
+impl ActiveTransaction {
+    /// 事务已持续多久
+    pub fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
 }
 
 impl ConnectionManager {
@@ -128,6 +161,7 @@ impl ConnectionManager {
             active_conn_id: tokio::sync::RwLock::new(None),
             tunnels: connection::chain::TunnelRegistry::new(),
             cancel_tokens: tokio::sync::RwLock::new(HashMap::new()),
+            transactions: tokio::sync::Mutex::new(HashMap::new()),
             idle_timeout: tokio::sync::RwLock::new(Duration::from_secs(30 * 60)),
         }
     }
@@ -480,6 +514,108 @@ impl ConnectionManager {
         } else {
             false
         }
+    }
+
+    /* ===== 事务（B4） ===== */
+
+    /// 开始事务：拿**驱动**的事务对象存下来（不再是拼一句 `BEGIN`）
+    ///
+    /// 已有活动事务时拒绝并给可读原因：嵌套事务是 `SAVEPOINT` 的事，不在这里假装支持。
+    /// 事务对象持有那条物理连接，后续语句必须走 [`Self::query_in_transaction`]。
+    pub async fn begin_transaction(&self, conn_id: &str) -> Result<(), CoreError> {
+        let db = self.get_or_reconnect(&conn_id.to_string()).await?;
+        let mut transactions = self.transactions.lock().await;
+        if transactions.contains_key(conn_id) {
+            return Err(transaction_error(
+                "begin",
+                TransactionState::InProgress,
+                "这个连接上已经有事务在跑（先提交或回滚）",
+            ));
+        }
+        let tx = db.begin_transaction().await?;
+        transactions.insert(
+            conn_id.to_string(),
+            ActiveTransaction {
+                tx,
+                started_at: Instant::now(),
+            },
+        );
+        Ok(())
+    }
+
+    /// 提交并移除活动事务，返回它持续了多久（消息里用得上）
+    pub async fn commit_transaction(&self, conn_id: &str) -> Result<Duration, CoreError> {
+        let mut transactions = self.transactions.lock().await;
+        let Some(mut active) = transactions.remove(conn_id) else {
+            return Err(transaction_error(
+                "commit",
+                TransactionState::NotStarted,
+                "这个连接上没有活动事务",
+            ));
+        };
+        let elapsed = active.elapsed();
+        active.tx.commit().await.map_err(|error| {
+            // 提交失败就不再把它当成“还开着”：如实报错，比留一个说不清状态的句柄强
+            transaction_error("commit", TransactionState::Failed(error.to_string()), &error.to_string())
+        })?;
+        Ok(elapsed)
+    }
+
+    /// 回滚并移除活动事务，返回它持续了多久
+    pub async fn rollback_transaction(&self, conn_id: &str) -> Result<Duration, CoreError> {
+        let mut transactions = self.transactions.lock().await;
+        let Some(mut active) = transactions.remove(conn_id) else {
+            return Err(transaction_error(
+                "rollback",
+                TransactionState::NotStarted,
+                "这个连接上没有活动事务",
+            ));
+        };
+        let elapsed = active.elapsed();
+        active.tx.rollback().await.map_err(|error| {
+            transaction_error(
+                "rollback",
+                TransactionState::Failed(error.to_string()),
+                &error.to_string(),
+            )
+        })?;
+        Ok(elapsed)
+    }
+
+    /// 事务已开了多久（`None` = 没有活动事务）——界面上的 TX 时长读的就是它
+    pub async fn transaction_elapsed(&self, conn_id: &str) -> Option<Duration> {
+        self.transactions
+            .lock()
+            .await
+            .get(conn_id)
+            .map(ActiveTransaction::elapsed)
+    }
+
+    /// 这个连接上有没有活动事务
+    pub async fn has_transaction(&self, conn_id: &str) -> bool {
+        self.transactions.lock().await.contains_key(conn_id)
+    }
+
+    /// **事务内**执行一条语句
+    ///
+    /// 返回 `None` = 这个连接上没有活动事务（调用方自己回退到普通执行路径）。
+    /// 全程持有槽位：一个连接同时只跑一条事务内语句（事务对象不是可重入的）。
+    ///
+    /// 注意：这条路径**暂时不支持取消与超时**（驱动的事务对象只有 `query/commit/rollback`，
+    /// 没有取消令牌入口）——要补得先在驱动 `Transaction` trait 上开取消口。
+    pub async fn query_in_transaction(
+        &self,
+        conn_id: &str,
+        sql: &str,
+    ) -> Option<Result<QueryResult, CoreError>> {
+        let mut transactions = self.transactions.lock().await;
+        let active = transactions.get_mut(conn_id)?;
+        Some(active.tx.query(sql).await)
+    }
+
+    /// 连接断开时丢掉它的事务（重连后原来的事务已经不在了，留着只会骗界面）
+    pub async fn drop_transaction(&self, conn_id: &str) {
+        self.transactions.lock().await.remove(conn_id);
     }
 
     /// 获取连接配置（用于重连）"
