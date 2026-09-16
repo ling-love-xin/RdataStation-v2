@@ -59,10 +59,64 @@ pub struct SqlExecuteOptions {
     pub use_cache: bool,
 }
 
+/// 把一条查询套成**窗口**（`LIMIT n OFFSET m`）——分段抓取的取数方式
+///
+/// 为什么套子查询而不是让驱动持游标：四个内置驱动的取数路径都是“一次拿全”，持游标要改四份
+/// 实现，而且 sqlite / duckdb 的语句借连接的生命周期（自引用）。套一层窗口是**四个方言都认**
+/// 的写法（别名 `rds_segment` 是 MySQL 这类要别名的方言要求的），内存被窗口界住。
+/// 代价是每段会**重跑一次查询**：`ORDER BY` 不稳的查询可能在两段之间重复或跳过行——
+/// 这条取舍要写在界面上，不能假装它和游标等价。
+///
+/// 不返回行的语句（DML / DDL / 事务控制）没有“分段”可言 → `None`。
+pub fn window_sql(sql: &str, limit: usize, offset: usize) -> Option<String> {
+    let trimmed = sql.trim().trim_end_matches(';').trim_end();
+    if trimmed.is_empty() || limit == 0 || !crate::driver::utils::returns_rows(trimmed) {
+        return None;
+    }
+    Some(format!(
+        "SELECT * FROM (\n{trimmed}\n) AS rds_segment LIMIT {limit} OFFSET {offset}"
+    ))
+}
+
 impl SqlService {
     /// 创建新的 SQL 服务
     pub fn new(manager: Arc<ConnectionManager>) -> Self {
         Self { manager }
+    }
+
+    /// 分段抓取的**一段**：把原 SQL 套成窗口（[`window_sql`]）再跑一次
+    ///
+    /// 每段都走普通执行路径（超时 / 取消 / 事务都一样），只是**不记历史、不用缓存**——
+    /// 分段抓取不该把同一句的历史写十几遍，缓存也不该按“带 LIMIT 的变身”去命中。
+    ///
+    /// 判断“还有没有下一段”由调用方做：一段拿满 `limit` 行就**可能**还有（拿不满就是到底了），
+    /// 引擎不去问总数（`COUNT(*)` 对一条重查询是另一笔开销）。
+    pub async fn execute_segment(
+        &self,
+        conn_id: Option<String>,
+        sql: &str,
+        limit: usize,
+        offset: usize,
+        timeout_ms: Option<u64>,
+    ) -> Result<SqlExecuteResult, CoreError> {
+        let Some(windowed) = window_sql(sql, limit, offset) else {
+            return Err(CoreError::database(DatabaseError::Query {
+                sql: sql.to_string(),
+                reason: "这条语句没有结果集，不能分段抓取".to_string(),
+                position: None,
+            }));
+        };
+        self.execute(
+            conn_id,
+            &windowed,
+            SqlExecuteOptions {
+                record_history: false,
+                use_transaction: false,
+                timeout_ms,
+                use_cache: false,
+            },
+        )
+        .await
     }
 
     /// 执行 SQL 查询
@@ -636,6 +690,44 @@ mod tests {
         let service = new_service();
         let result = service.execute(None, "", Default::default()).await;
         assert!(result.is_err());
+    }
+
+    /// 窗口包装：查询套上 `LIMIT/OFFSET`，尾分号与空白先去掉
+    #[test]
+    fn window_sql_wraps_queries_with_limit_and_offset() {
+        use super::window_sql;
+
+        let wrapped = window_sql("SELECT n FROM t", 1000, 2000).expect("查询能分段");
+        assert!(wrapped.contains("SELECT n FROM t"), "{wrapped}");
+        assert!(wrapped.ends_with("LIMIT 1000 OFFSET 2000"), "{wrapped}");
+        // 别名是 MySQL 这类要别名的方言要求的
+        assert!(wrapped.contains("AS rds_segment"), "{wrapped}");
+
+        // 尾分号 / 空白不该带进子查询（带进就是语法错）
+        let cleaned = window_sql("  SELECT 1;  ", 10, 0).expect("能分段");
+        assert!(!cleaned.contains(";"), "{cleaned}");
+
+        // `WITH …` 也是查询：照样能分段（`SELECT * FROM (WITH …)` 四个方言都认）
+        let cte = window_sql("WITH x AS (SELECT 1 AS n) SELECT n FROM x", 10, 0);
+        assert!(cte.is_some(), "CTE 应当能分段：{cte:?}");
+    }
+
+    /// 没有结果集的语句不能分段（DML / DDL / 空 / limit 0）
+    #[test]
+    fn window_sql_refuses_statements_without_a_result_set() {
+        use super::window_sql;
+
+        for sql in [
+            "INSERT INTO t VALUES (1)",
+            "UPDATE t SET n = 1",
+            "DELETE FROM t",
+            "CREATE TABLE t (n INT)",
+            "",
+            "   ;  ",
+        ] {
+            assert!(window_sql(sql, 1000, 0).is_none(), "不该能分段：{sql}");
+        }
+        assert!(window_sql("SELECT 1", 0, 0).is_none(), "limit 0 不是一段");
     }
 
     #[tokio::test]

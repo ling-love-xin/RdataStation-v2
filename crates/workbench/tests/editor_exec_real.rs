@@ -606,6 +606,82 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             site.token.as_deref().unwrap_or("?")
         );
 
+        // B5b：分段抓取 —— 引擎把原 SQL 套成窗口再取（`SqlService::execute_segment`）
+        // 这张表专门用来验分段：5 行不同值，看“拼起来到底重不重、漏不漏”
+        let seg_table = format!("rds_seg_probe_{}", std::process::id());
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("CREATE TABLE {seg_table} (n INTEGER)"),
+        );
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("INSERT INTO {seg_table} VALUES (1), (2), (3), (4), (5)"),
+        );
+        let service = engine::services::sql_service::SqlService::new(manager.clone());
+        let segment = |sql: &str, offset: usize, limit: usize| -> Vec<String> {
+            let outcome = runtime.block_on(service.execute_segment(
+                None,
+                sql,
+                limit,
+                offset,
+                None,
+            ));
+            let result = outcome.unwrap_or_else(|error| {
+                panic!("{}：第 {offset} 段取数失败 —— {error}", target.driver)
+            });
+            result
+                .result
+                .to_rows()
+                .into_iter()
+                .flatten()
+                .map(|value| value.to_string())
+                .collect()
+        };
+
+        let sql = format!("SELECT n FROM {seg_table} ORDER BY n");
+        let mut collected = Vec::new();
+        for offset in [0, 2, 4] {
+            collected.extend(segment(&sql, offset, 2));
+        }
+        assert_eq!(
+            collected,
+            ["1", "2", "3", "4", "5"],
+            "{}：三段拼起来要不重不漏（窗口重跑的取舍就靠这条盯住）",
+            target.driver
+        );
+        // 拿不满一段 = 到底了（编辑器据此决定“还有没有下一段”）
+        assert_eq!(segment(&sql, 4, 2).len(), 1, "{}：最后一段只有 1 行", target.driver);
+
+        // 没有结果集的语句不能分段（DML 没有“第 2 段”可言）
+        let dml = runtime.block_on(service.execute_segment(
+            None,
+            &format!("DELETE FROM {seg_table} WHERE n = 99"),
+            2,
+            0,
+            None,
+        ));
+        assert!(dml.is_err(), "{}：DML 不该能分段", target.driver);
+
+        // CTE 也能分段（子查询里套 `WITH`：四个方言都得认）
+        let cte = format!("WITH x AS (SELECT n FROM {seg_table}) SELECT n FROM x ORDER BY n");
+        assert_eq!(
+            segment(&cte, 0, 2),
+            ["1", "2"],
+            "{}：CTE 也要能分段",
+            target.driver
+        );
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("DROP TABLE {seg_table}"),
+        );
+        eprintln!(
+            "✅ {}：分段抓取 —— 三段拼成 5 行不重不漏（DML 拒绝 / CTE 可分段也验了）",
+            target.driver
+        );
+
         run_one(
             &shared,
             document.clone(),
