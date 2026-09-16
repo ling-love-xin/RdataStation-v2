@@ -167,8 +167,34 @@ impl WorkbenchView {
         let mode = editor::mode::resolve_mode(&path, None);
         let outcome = editor::persist::open_file(&self.editor_service, &path, mode)
             .map_err(|error| error.to_string())?;
+        // M5 Phase C-2：草稿带连接绑定（`file_meta`）时，打开即预选。
+        // 只对**新建**文档生效——同路径已打开走的是“只激活”，不覆盖用户手动改过的连接。
+        if !outcome.is_activated() {
+            if let Some(conn_id) = self.scratchpad_preferred_connection(&path) {
+                self.editor_service
+                    .update(|service| service.set_connection(outcome.id(), Some(conn_id)));
+            }
+        }
         self.show_document(outcome.id().clone(), window, cx);
         Ok(())
+    }
+
+    /// 草稿路径 → 打开时应预选的连接（非草稿 / 未绑定 / 连接已不在下拉里 → `None`）。
+    ///
+    /// 读的是草稿元数据（`.RSmeta/scratchpad/config.json` 的 `file_meta`），属「元数据级操作
+    /// 保持同步」的既定口径（K1c），与侧栏引用增删改同路；任何一步失败都退化为“不预选”。
+    fn scratchpad_preferred_connection(&self, path: &std::path::Path) -> Option<String> {
+        let (store, runtime) = self.shared.scratchpad_store().ok()?;
+        let relative = store.relative_path_of(path)?;
+        let meta = runtime.block_on(store.file_meta(&relative)).ok()?;
+        let conn_id = meta.preferred_connection()?;
+        // 已被删除的连接不预选：它不在下拉里，绑上去只会让执行报错。
+        let known = self
+            .editor_service
+            .connection_options()
+            .iter()
+            .any(|option| option.id == conn_id);
+        known.then(|| conn_id.to_string())
     }
 
     /// 打开一条查询（B11）：导航「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL」与拖拽共用

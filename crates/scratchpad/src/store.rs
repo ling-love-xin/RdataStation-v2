@@ -8,8 +8,8 @@ use tokio::time::{Duration, timeout};
 
 use crate::models::{
     AnalyzableFile, DiffLine, DiffLineKind, DiffResult, ExternalReference, ExternalReferenceStatus,
-    ReplaceResult, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind, ScratchpadResponse,
-    SearchMatch, SearchResult,
+    FileMeta, ReplaceResult, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind,
+    ScratchpadResponse, SearchMatch, SearchResult,
 };
 use crate::trash::{ProjectTrash, TrashEntry};
 use shared::error::{CoreError, StorageError};
@@ -91,6 +91,27 @@ impl ScratchpadStore {
     /// 项目级回收站。
     pub fn trash(&self) -> &ProjectTrash {
         &self.trash
+    }
+
+    /// 绝对路径 → 模块内相对路径（不在模块目录下、或指向内部/隐藏路径时返回 `None`）。
+    ///
+    /// 与 `resolve_path` 反向：`resolve_path(relative_path_of(p)?)` 回到同一路径。
+    /// 给「这个绝对路径是不是草稿」的判定用：打开草稿时预选连接、执行后回写元数据、
+    /// 脏点回显都需要先把中央编辑区的路径对回模块内身份。
+    pub fn relative_path_of(&self, path: &Path) -> Option<String> {
+        let relative = path.strip_prefix(&self.scratchpad_dir).ok()?;
+        let parts: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let first = parts.first()?;
+        // 内部/隐藏目录（`.RSmeta` 等）不经 API 读写，与 `resolve_path` 的拒绝规则一致。
+        if first.starts_with('.') {
+            return None;
+        }
+        Some(parts.join("/"))
     }
 
     pub async fn ensure_dir(&self) -> Result<(), CoreError> {
@@ -937,6 +958,19 @@ impl ScratchpadStore {
         entry.last_executed_at = Some(Utc::now());
 
         self.save_config(&config).await
+    }
+
+    /// 读取单个草稿的元数据（连接绑定 / 最近执行）——打开草稿预选连接的读侧。
+    ///
+    /// 无记录时返回默认值（空绑定、无最近执行）：调用方只需问「该用哪个连接」，
+    /// 不需要区分「没有记录」与「记录为空」。
+    pub async fn file_meta(&self, relative_path: &str) -> Result<FileMeta, CoreError> {
+        let config = self.load_config().await?;
+        Ok(config
+            .file_meta
+            .get(relative_path)
+            .cloned()
+            .unwrap_or_default())
     }
 
     /// 全文内容搜索。
@@ -1881,6 +1915,131 @@ mod tests {
                 .get("q.sql")
                 .map(|m| m.bound_connections.clone()),
             Some(vec!["P_1".to_string(), "G_2".to_string()])
+        );
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn file_meta_roundtrip_covers_binding_and_last_execution() {
+        let project = temp_project("meta");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+
+        // 没绑定、没执行过的草稿是常态：返回默认值，不报错。
+        let fresh = store.file_meta("q.sql").await.unwrap();
+        assert!(fresh.bound_connections.is_empty());
+        assert_eq!(fresh.preferred_connection(), None);
+
+        store
+            .bind_connections("q.sql", vec!["P_1".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            store.file_meta("q.sql").await.unwrap().preferred_connection(),
+            Some("P_1")
+        );
+
+        // 执行回存：显式绑定保留，最近执行补齐；换实例读回，确认已落盘。
+        store
+            .update_file_meta("q.sql", Some("G_9".to_string()))
+            .await
+            .unwrap();
+        let reloaded = ScratchpadStore::new(project.clone());
+        let meta = reloaded.file_meta("q.sql").await.unwrap();
+        assert_eq!(meta.bound_connections, vec!["P_1".to_string()]);
+        assert_eq!(meta.last_connection_id.as_deref(), Some("G_9"));
+        assert!(meta.last_executed_at.is_some(), "执行时间应被记下");
+        assert_eq!(
+            meta.preferred_connection(),
+            Some("P_1"),
+            "预选看显式绑定，执行记录只做回退"
+        );
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn diff_with_content_classifies_lines_and_numbers_sides() {
+        let project = temp_project("diff");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store.create_entry("q.sql", None, false).await.unwrap();
+        store
+            .save_file("q.sql", "select 1\nselect 2\n")
+            .await
+            .unwrap();
+
+        let result = store
+            .diff_with_content("q.sql", "select 1\nselect 3\n", "磁盘", "编辑器")
+            .await
+            .unwrap();
+
+        assert_eq!(result.left_label, "磁盘");
+        assert_eq!(result.right_label, "编辑器");
+        assert!(result.lines.iter().any(|l| {
+            l.kind == DiffLineKind::Unchanged && l.content.trim_end() == "select 1"
+        }));
+        assert!(result
+            .lines
+            .iter()
+            .any(|l| l.kind == DiffLineKind::Removed && l.content.contains("select 2")));
+        assert!(result
+            .lines
+            .iter()
+            .any(|l| l.kind == DiffLineKind::Added && l.content.contains("select 3")));
+
+        // 两侧行号各自编号：新增行没有左侧行号，删除行没有右侧行号。
+        let added = result
+            .lines
+            .iter()
+            .find(|l| l.kind == DiffLineKind::Added)
+            .unwrap();
+        assert!(added.line_number_left.is_none());
+        assert!(added.line_number_right.is_some());
+        let removed = result
+            .lines
+            .iter()
+            .find(|l| l.kind == DiffLineKind::Removed)
+            .unwrap();
+        assert!(removed.line_number_left.is_some());
+        assert!(removed.line_number_right.is_none());
+
+        std::fs::remove_dir_all(&project).ok();
+    }
+
+    #[tokio::test]
+    async fn relative_path_of_maps_editor_paths_back_into_the_module() {
+        let project = temp_project("relpath");
+        let store = ScratchpadStore::new(project.clone());
+        store.ensure_dir().await.unwrap();
+        store.create_entry("q.sql", None, false).await.unwrap();
+        store.create_entry("sub", None, true).await.unwrap();
+        store
+            .create_entry("deep.sql", Some("sub"), false)
+            .await
+            .unwrap();
+
+        let root = store.scratchpad_dir();
+        assert_eq!(
+            store.relative_path_of(&root.join("q.sql")),
+            Some("q.sql".to_string())
+        );
+        assert_eq!(
+            store.relative_path_of(&root.join("sub").join("deep.sql")),
+            Some("sub/deep.sql".to_string()),
+            "子目录用 `/` 连接（与条目相对路径同一口径）"
+        );
+        assert_eq!(store.relative_path_of(root), None, "模块根自身不是草稿");
+        assert_eq!(
+            store.relative_path_of(&project.join("other.sql")),
+            None,
+            "模块外的文件不是草稿"
+        );
+        assert_eq!(
+            store.relative_path_of(&root.join(".tmp").join("x.sql")),
+            None,
+            "内部/隐藏路径不经 API 读写"
         );
 
         std::fs::remove_dir_all(&project).ok();

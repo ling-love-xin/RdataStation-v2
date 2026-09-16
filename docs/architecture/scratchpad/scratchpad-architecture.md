@@ -2,7 +2,7 @@
 
 > 本文回答**为什么这样设计 / 怎么运转**：不变式、概念模型、存储布局、数据流、决策表、降级、测试策略、实现映射，以及**权威的已知问题清单**。
 > 视觉与交互规格看 `scratchpad-prototype-design.md`；进度与阶段任务看 `scratchpad-dev-plan.md`；使用方式看 `scratchpad-user-guide.md`。
-> 状态：Phase A/B 已落地（2026-09-15）· Phase C/D 未开始。
+> 状态：Phase A/B 已落地（2026-09-15）· Phase C 进行中（C-1 打开 + C-2 前半连接预选已接）· Phase D 未开始。
 
 ## 0. 裁决摘要（一页读完）
 
@@ -12,11 +12,11 @@
 | 2 | **内部态全在 `{项目}/.RSmeta/scratchpad/`**（`config.json`） | 面板不需要忽略规则；用户可见目录里没有半内部文件 |
 | 3 | **回收站为项目级** `.RSmeta/trash/`，条目自带 `origin` + `original_rel_path` | 草稿与将来的资源删除共用一个回收站，还原能回原模块原路径 |
 | 4 | **导入与引用区分**：导入 = 复制进模块目录；引用 = 只记绝对路径 + 别名 | 体积/迁移/失效语义完全不同，UI 与后端都必须分开表达 |
-| 5 | **编辑器无根**：树只发 `OpenFile(绝对路径)` 语义 | 编辑器不假设项目根，同一编辑器将来可开 `resources/`、`mock/` |
+| 5 | **编辑器无根**：树只发「打开这个绝对路径」的意图 | 编辑器不假设项目根，同一编辑器将来可开 `resources/`、`mock/` |
 | 6 | **重结果落中央编辑区**（内容搜索结果与替换栏） | 侧栏只承载输入与开关；240 px 面板不承担宽内容 |
 | 7 | **提升为资源 = 移动 + 只读存档**，修改须取回（检出） | 归档是"冻结凭证"语义，与 M6 的版本模型对齐 |
 | 8 | **窗口 = 项目**：项目态不放进程单例，不做 multi-root | 会话/监控/元数据复杂度可控 |
-| 9 | **业务在 crate、视图在 workbench** | 复制/搜索/替换/路径防护可单测（14 项基线） |
+| 9 | **业务与视图都在 crate**（2026-09-16 视图下沉，A'4） | 复制/搜索/替换/路径防护与面板纯函数可单测（32 项），宿主能力经 `ScratchpadHost` 端口注入 |
 
 ## 1. 定位与边界
 
@@ -37,7 +37,7 @@ M4 数据源管理/导航       M5 草稿箱（本文）          M6 资产库/�
 | --- | --- |
 | `project`（M1） | 提供项目会话（`OpenProject.root`）、项目锁、只读标志；**回收站位置与清单格式由本模块实现、位置约定与项目元数据目录一致** |
 | `connection` / `database`（M2/M3/M4） | 草稿只保存**连接 ID**（`file_meta.last_connection_id` / `bound_connections`），执行与内省完全在它们内部 |
-| `editor` | Phase C 接线的对方：草稿箱发 `OpenFile`，编辑器负责打开/回存/脏点/冲突 |
+| `editor` | Phase C 接线的对方：草稿箱发「打开这个路径」，编辑器负责打开/回存/脏点/冲突 |
 | `analytics_resource`（M6） | Phase D 的对方：草稿箱右键「提升为分析资源」经 command/event 发起，草稿箱**不依赖**其视图 |
 | `mock`（M7） | 无直接依赖；M7 的产物进 `mock/` 与草稿箱同级 |
 
@@ -308,23 +308,29 @@ render_scratchpad（首次 or loaded=false）
   且每次发起重载时会先清一次标记（本次重拉已包含此刻之前的所有改动）。
 - **降级**：监控启动失败（权限/网络盘）只记 `tracing::warn`，退化为手动 `↻`，不影响功能。
 
-### 6.12 打开文件（Phase C-1，已接）
+### 6.12 打开文件（Phase C-1 已接 + C-2 前半：连接预选）
 
 ```
 双击行 / Enter / 右键「打开」（仅文件）
-  → request_open_scratchpad_file：只置位 Shared::open_file_request = 绝对路径 + notify
-  → 宿主 WorkbenchView::render 消费（take_open_file_request，取出即清空）：
+  → ScratchpadView::request_open_scratchpad_file
+  → ScratchpadHost::open_in_editor(path)（= Shared::request_open_in_editor，绝对路径）
+  → 宿主 WorkbenchView::render 消费（take_open_in_editor，取出即清空）：
       open_in_editor(path) → editor::persist::open_file（同路径已打开只激活，不重读）
                             → show_document（建/复用 Dock 面板，加中央 tab 组）
+      新建文档且路径在 `{项目}/scratchpad/` 下时：
+        store.relative_path_of(path) → store.file_meta(rel).preferred_connection()
+        → 该 id 在下拉里（`EditorShared::connection_options`）则 EditorService::set_connection
       失败 → 通知栏「打开文件失败: …」
 ```
 
-- **为何不在草稿箱面板里直接开**：文档与 Dock 面板属宿主（`WorkbenchView`）状态，
-  且编辑器**无根**（只认绝对路径）——侧栏只发“要打开这个路径”的意图。
+- **为何不在草稿箱视图里直接开**：文档与 Dock 面板属宿主（`WorkbenchView`）状态，
+  且编辑器**无根**（只认绝对路径）——视图只发“要打开这个路径”的意图。
 - 模式与只读等级由编辑器按路径自行判定（`editor::mode::resolve_mode`）；
   草稿箱不做后缀分支。
-- **待接**（Phase C 余项）：SQL 草稿模式绑定连接（`file_meta.last_connection_id` 回填）、
-  脏点回显、冲突 Diff、拖放导入/拖入编辑区。
+- 连接预选（C-2 前半）只对**新建**文档生效：同路径已打开走“只激活”，不覆盖用户手动改过的连接；
+  已被删除的连接（不在下拉里）不预选——绑上去只会让执行报错。读元数据属「元数据级操作保持同步」的既定口径（K1c）。
+- **待接**（Phase C 余项）：执行后回写 `file_meta.last_connection_id`（需编辑器侧执行完成通知）、
+  脏点回显、冲突 Diff（`store.rs::diff_with_content` 已在手，未接 UI）、拖放导入/拖入编辑区。
 
 ### 6.13 键盘导航
 
@@ -341,15 +347,16 @@ render_scratchpad（首次 or loaded=false）
 ### 7.1 crate 切分
 
 ```
-app ──► workbench ──► scratchpad ──► shared
+app ──► workbench ──► scratchpad ──► workbench_shell / gpui-kit / shared
+ │            │             └────► project / database / settings / engine（宿主侧，不进 crate）
  │            └────► project / database / settings / engine
- └─ 视图只在 app / workbench / settings（有 gpui 的层）
+ └─ 宿主能力经本 crate 定义的 `ScratchpadHost` 端口注入（实现在 `workbench/src/components/scratchpad_host.rs`）
 ```
 
 | 层 | 内容 | 测试性 |
 | --- | --- | --- |
-| `crates/scratchpad` | 全部文件系统与配置语义（含递归复制、搜索、替换、路径防护、回收站、迁移） | 可单测（14 项基线，`#[tokio::test]` + 临时项目目录） |
-| `crates/workbench` | 面板状态（`ScratchpadView`）、编排（把点击/键盘映射到 store 调用）、Theme 取色、尺寸 | 目前靠人工验收 |
+| `crates/scratchpad` | 全部文件系统与配置语义（含递归复制、搜索、替换、路径防护、回收站、迁移）+ **面板视图与后台任务** | 可单测（32 项：`#[tokio::test]` + 临时项目目录 + 面板纯函数） |
+| `crates/workbench` | 宿主端口实现（项目根 / 只读 / 提示 / 重绘 / 搜索结果落地 / 打开文件）、左 Dock 装配（`SidebarPanel` 持 `Entity<ScratchpadView>`） | 目前靠人工验收 |
 
 **为什么复制/搜索放在 crate 而不是面板**：它们是"文件系统语义"，会随 `resources/`、`mock/` 复用；放 view 层则既难测又会被复制三份。
 
@@ -358,13 +365,13 @@ app ──► workbench ──► scratchpad ──► shared
 | 状态 | 归属 | 生命周期 |
 | --- | --- | --- |
 | `ScratchpadStore` | 按窗口按需构造（`Shared::scratchpad_store()`） | 每次调用新建，无进程级缓存 |
-| `ScratchpadView` | `SidebarPanel` 实体的 `Rc<RefCell<…>>` | 面板生命周期 |
+| `ScratchpadView` | `SidebarPanel` 持有的 `Entity<ScratchpadView>`（crate 内定义，自持状态） | 面板生命周期 |
 | `Shared::scratchpad_search` | `Shared`（面板与编辑区**共用**） | 窗口生命周期 |
-| `scratchpad_pump`（轮询任务） | `SidebarPanel` 的 `RefCell<Option<Task<()>>>` | 任务空闲自退；面板销毁后 `weak.update` 失败即结束 |
-| `Shared::scratchpad_pump_request` | `Shared`（`Cell<bool>`） | 编辑区发起的替换需复用侧栏轮询印；置位后由 `SidebarPanel::render` 消费（**任何左侧面板模式下都消费**，仅“完全隐藏”时留到恢复侧栏的那一帧） |
+| `scratchpad_pump`（轮询任务） | `ScratchpadView` 的 `RefCell<Option<Task<()>>>` | 任务空闲自退；视图销毁后 `weak.update` 失败即结束 |
+| `Shared::scratchpad_pump_request` | `Shared`（`Cell<bool>`） | 编辑区发起的替换需复用侧栏轮询印；置位后由 `ScratchpadView::render` 消费（**任何左侧面板模式下都消费**，仅“完全隐藏”时留到恢复侧栏的那一帧） |
 | `jobs` 工作线程 / 结果队列 | 进程级单例（OnceLock，在 **crate 内**） | **无项目态**：只装「任务 + 结果」，不装当前项目；项目根作为参数传入 |
-| `ScratchpadWatcher`（目录监控） | `SidebarPanel` 的 `Option<…>` | 随窗口/面板存活；项目根变化时换监控点；drop 即停止监听 |
-| 监控轮询任务 | `SidebarPanel` 的 `RefCell<Option<Task<()>>>` | 常驻（1.2 s 一拍）；面板销毁后自动结束 |
+| `ScratchpadWatcher`（目录监控） | `ScratchpadView` 的 `Option<…>` | 随视图存活；项目根变化时换监控点；drop 即停止监听 |
+| 监控轮询任务 | `ScratchpadView` 的 `RefCell<Option<Task<()>>>` | 常驻（1.2 s 一拍）；视图销毁后自动结束 |
 | `ScratchpadState` | crate 提供，**当前无生产调用方** | 将来 watcher 用，接入时按窗口持有 |
 
 > 为何工作线程可以是单例而项目态不行：线程与队列是无状态基础设施（等同连接池），每个任务自带 `project_root`，不会串项目。项目态（当前面板看到的条目/选中/展开）始终在窗口的 `Shared` 与视图实体里。
@@ -429,10 +436,10 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 
 ## 11. 测试策略
 
-- **crate 层（已自动化）**：`#[tokio::test]` + 临时项目目录，覆盖 14 项：
-  模块根与元数据隔离、内部路径拒绝、回收站来源与原路径、跨模块还原拒绝、旧布局迁移、引用状态与重命名校验、引用重定位、绑定往返、搜索正则与大小写、命中区间（含 Unicode 变宽回退）、递归复制与重名避让、字面量/正则替换与 `$` 语义。
-- **面板层（当前人工）**：多选（Ctrl/Shift/Ctrl+A）、剪贴板、模板与落点、虚拟列表滚动与键盘导航、替换栏、只读拒绝——见 `scratchpad-user-guide.md` §9 验收清单。
-- **未自动化原因**：面板需要窗口与主题环境；按架构约定（窗口测试走宿主入口）应在 `workbench` 侧补，属后续工作项（§13.4）。
+- **crate 层（已自动化）**：`#[tokio::test]` + 临时项目目录 + 面板纯函数，覆盖 32 项：
+  模块根与元数据隔离、内部路径拒绝、回收站来源与原路径、跨模块还原拒绝、旧布局迁移、引用状态与重命名校验、引用重定位、绑定往返、绑定与最近执行回读（含预选优先级）、绝对路径→模块内相对路径、搜索正则与大小写、命中区间（含 Unicode 变宽回退）、递归复制与重名避让、字面量/正则替换与 `$` 语义、Diff 行分类与两侧行号、面板纯函数（排序/压平/模板后缀/搜索结果映射）、后台任务（根加载/目录加载/导入与清空回收站/粘贴/搜索替换共用载荷）。
+- **面板层（窗口级仍人工）**：多选（Ctrl/Shift/Ctrl+A）、剪贴板、模板与落点、虚拟列表滚动与键盘导航、替换栏、只读拒绝、**打开草稿预选连接**——见 `scratchpad-user-guide.md` §9 验收清单。
+- **未自动化原因**：窗口级交互需要窗口与主题环境；按架构约定（窗口测试走宿主入口）应在 `workbench` 侧补，属后续工作项（§13.4）。
 
 ## 12. 实现映射
 
@@ -440,20 +447,22 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 | --- | --- |
 | 根 / 元数据 / 回收站路径 | `crates/scratchpad/src/store.rs::{new, ensure_dir, META_DIR_NAME, MODULE_DIR_NAME}`、`trash.rs::ProjectTrash::new` |
 | 旧布局迁移 | `store.rs::migrate_legacy_layout` |
-| 路径防护 | `store.rs::{resolve_path_impl, validate_name}` |
+| 路径防护 | `store.rs::{resolve_path_impl, validate_name, relative_path_of}`（`relative_path_of` = 反向：绝对路径 → 模块内相对路径，供「这个路径是不是草稿」的判定） |
 | 列表 / 懒加载 | `store.rs::{list_local_entries, list_directory_entries, scan_dir_tree}` |
 | 递归复制 / 移动 | `store.rs::{copy_entry, copy_dir_contents, move_entry}` |
 | 搜索 / 替换 / Diff | `store.rs::{search_file_content, literal_match_spans, replace_in_file, diff_with_content}` |
 | 外部引用 | `store.rs::{add/remove/rename/update_external_reference_path, external_reference_status}` |
-| 文件元数据 | `store.rs::{bind_connections, update_file_meta}` + `models.rs::FileMeta` |
+| 文件元数据 | `store.rs::{file_meta, bind_connections, update_file_meta}` + `models.rs::{FileMeta, FileMeta::preferred_connection}`（读侧 → 打开预选；写侧 → 绑定与执行回存） |
 | 回收站 | `trash.rs`（manifest 与服务） + `store.rs::{delete_entry, list_trash, restore_from_trash, empty_trash}` |
-| 面板编排与渲染 | `workbench/src/panels/`（`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move` / `scratchpad_open_selection` / `create/replace…`） |
-| 搜索结果与替换栏 | `workbench/src/panels/scratchpad_panel.rs::{render_scratchpad_search_pane, run_scratchpad_search}` + `workbench/src/panels/editor.rs::replace_scratchpad_all` |
-| 快捷键与尺寸 | `workbench/src/commands.rs`、`workbench_shell/src/ui.rs`、`app/src/main.rs` |
-| 文件类型色点 | `workbench/src/panels/scratchpad_panel.rs::scratchpad_icon_color` |
-| 后台加载（K1） | `scratchpad/src/jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `panels/scratchpad_panel.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
-| 文件监控（Phase A5） | `scratchpad/src/watch.rs`（`ScratchpadWatcher` / `ChangeFlag`）+ `panels/scratchpad_panel.rs::{ensure_scratchpad_watch, ensure_scratchpad_watch_poll}` |
-| 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `panels/scratchpad_panel.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
+| 面板视图与编排 | `scratchpad/src/scratchpad_view.rs`（`ScratchpadView`：`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move` / `scratchpad_open_selection` / `create/replace…`；**2026-09-16 由 workbench 下沉，宿主能力走 `ScratchpadHost`**） |
+| 宿主端口与装配 | `scratchpad/src/host.rs`（trait）+ `workbench/src/components/scratchpad_host.rs`（实现）+ `workbench/src/panels/mod.rs`（`SidebarPanel` 持 `Entity<ScratchpadView>`） |
+| 搜索结果与替换栏 | `scratchpad/src/scratchpad_view.rs::{render_scratchpad_search_pane, run_scratchpad_search}` + `workbench/src/panels/editor.rs::replace_scratchpad_all` |
+| 快捷键与尺寸 | `scratchpad/src/commands.rs`、`workbench/src/commands.rs`、`workbench_shell/src/ui.rs`、`app/src/main.rs` |
+| 文件类型色点 | `scratchpad/src/scratchpad_view.rs::scratchpad_icon_color` |
+| 后台加载（K1） | `scratchpad/src/jobs.rs`（`enqueue_root_load` / `enqueue_dir_load` / `drain_loads` / `drain_dirs` / `invalidate_loads`）+ `scratchpad_view.rs::{request_scratchpad_load, ensure_scratchpad_pump, apply_scratchpad_loads, apply_scratchpad_dirs}` |
+| 文件监控（Phase A5） | `scratchpad/src/watch.rs`（`ScratchpadWatcher` / `ChangeFlag`）+ `scratchpad_view.rs::{ensure_scratchpad_watch, ensure_scratchpad_watch_poll}` |
+| 重操作后台化（K1b） | 同上模块的 `enqueue_import` / `enqueue_paste` / `enqueue_empty_trash` / `enqueue_search` / `enqueue_replace_all` / `drain_ops` + `scratchpad_view.rs::apply_scratchpad_ops`（侧栏）与 `EditorPanel::replace_scratchpad_all`（仅入队） |
+| 打开草稿（Phase C-1）/ 连接预选（C-2 前半） | `scratchpad_view.rs` 发请求 → `host.rs::open_in_editor` → `Shared::request_open_in_editor` → `view.rs::open_in_editor`（同路径只激活；草稿带 `file_meta` 绑定时 `EditorService::set_connection` 预选） |
 
 ## 13. 已知问题（权威清单）
 

@@ -83,6 +83,18 @@ pub struct FileMeta {
     pub bound_connections: Vec<String>,
 }
 
+impl FileMeta {
+    /// 打开草稿时预选的连接：**显式绑定优先**，其次回退到最近一次执行用过的连接。
+    ///
+    /// 两者都没有时返回 `None`——宿主按「未选连接」呈现，不替用户猜一个。
+    pub fn preferred_connection(&self) -> Option<&str> {
+        self.bound_connections
+            .first()
+            .map(String::as_str)
+            .or(self.last_connection_id.as_deref())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScratchpadConfig {
     pub external_references: Vec<ExternalReference>,
@@ -117,7 +129,7 @@ pub struct ReplaceResult {
     pub file_path: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffLineKind {
     Unchanged,
@@ -138,4 +150,29 @@ pub struct DiffResult {
     pub lines: Vec<DiffLine>,
     pub left_label: String,
     pub right_label: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferred_connection_prefers_explicit_binding() {
+        let mut meta = FileMeta::default();
+        assert_eq!(meta.preferred_connection(), None, "未绑定且未执行过 → 不预选");
+
+        meta.last_connection_id = Some("G_9".to_string());
+        assert_eq!(
+            meta.preferred_connection(),
+            Some("G_9"),
+            "没有显式绑定时回退最近执行"
+        );
+
+        meta.bound_connections = vec!["P_1".to_string(), "P_2".to_string()];
+        assert_eq!(
+            meta.preferred_connection(),
+            Some("P_1"),
+            "显式绑定列表取首个（顺序即优先级）"
+        );
+    }
 }

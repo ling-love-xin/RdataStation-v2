@@ -447,7 +447,7 @@ button{font-family:inherit;cursor:pointer;}
 </div>
 
 <div class="foot">
-  落地：面板视图 <code>crates/workbench/src/panels/scratchpad_panel.rs</code>（草稿箱树 / 引用 / 回收站，<code>SidebarPanel</code> 持其状态）与 <code>crates/workbench/src/panels/editor.rs</code>（内容搜索结果 + 替换栏），域模型/存储/后台任务 <code>crates/scratchpad</code>（<code>models</code>/<code>store</code>/<code>trash</code>/<code>jobs</code>/<code>watch</code>），根目录语义与 <code>.RSmeta/scratchpad/</code> 元数据迁移见 <code>scratchpad-dev-plan.md</code> Phase A。<br>
+  落地：面板视图 <code>crates/scratchpad/src/scratchpad_view.rs</code>（草稿箱树 / 引用 / 回收站；宿主能力经 <code>crates/scratchpad/src/host.rs::ScratchpadHost</code>，实现与装配在 <code>crates/workbench/src/components/scratchpad_host.rs</code>），内容搜索结果 + 替换栏在 <code>crates/workbench/src/panels/editor.rs</code>，域模型/存储/后台任务同属 <code>crates/scratchpad</code>（<code>models</code>/<code>store</code>/<code>trash</code>/<code>jobs</code>/<code>watch</code>），根目录语义与 <code>.RSmeta/scratchpad/</code> 元数据迁移见 <code>scratchpad-dev-plan.md</code> Phase A。<br>
   树行统一走 <code>v_virtual_list</code>（只渲染可视区行）；色值只存在于主题资产，组件经 <code>cx.theme()</code> 读取，代码零裸 hex。
 </div>
 </body>

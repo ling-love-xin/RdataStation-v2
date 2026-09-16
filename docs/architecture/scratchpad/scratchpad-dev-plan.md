@@ -1,6 +1,6 @@
 # 草稿箱模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修**——模块根 + 项目级回收站 + 面板闭环（新建含模板/重命名/删除撤销/移动/递归复制/多选/右键/键盘导航）+ 导入与引用（含失效重定位）+ 内容搜索（正则/大小写/命中高亮/全部替换）+ 虚拟列表与空态（2026-09-16，`cargo check -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad` 14 passed） · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase C（双击打开/脏点/冲突 Diff/拖放，依赖编辑器）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
+> 状态：**Phase A/B 全部落地 + K1/K1b（加载与重操作全面后台化，render 零 I/O）已修**——模块根 + 项目级回收站 + 面板闭环（新建含模板/重命名/删除撤销/移动/递归复制/多选/右键/键盘导航）+ 导入与引用（含失效重定位）+ 内容搜索（正则/大小写/命中高亮/全部替换）+ 虚拟列表与空态（2026-09-16，`cargo check -p rds-workbench -p rds-app --all-targets -j 2` 零告警；`cargo test -p rds-scratchpad` 14 passed） · 待续：K1c（元数据级操作保持同步，**有意保留**）、Phase C（双击打开✅ / 连接预选✅（C-2 前半）/ 执行回写·脏点·冲突 Diff·拖放，依赖编辑器）、Phase D（提升/存档/取回，依赖 `analytics_resource`）
 > 关联文件：`scratchpad-prototype-design.md`（原型与已确认决策）、`scratchpad-prototype.html`（可交互原型）、`crates/scratchpad/README.md`（crate 入口与特点提炼）
 > 前置：v1 后端/前端为行为蓝本（`v1/backend/src/core/scratchpad`、`v1/frontend/extensions/builtin/scratchpad`）；v2 后端已迁移（`crates/scratchpad`，`models`/`state`/`store` 47 个方法）
 > 本方案核心变更：草稿箱根 = **模块目录 `{project}/scratchpad/`**（可见），内部元数据 `.RSmeta/scratchpad/`，回收站为**项目级** `.RSmeta/trash/`（草稿 + 资源共用）
@@ -8,7 +8,36 @@
 
 ## 0. 进度记录（最近在前）
 
-> **路径注**：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/scratchpad_panel.rs` / `editor.rs` / `shared.rs`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`。**下列历史条目保留当时的路径**，读时按此换算。
+> 路径注：2026-09-16 起草稿箱后台任务已从 workbench 移入 crate（`crates/scratchpad/src/jobs.rs`），面板按面板拆模块（`crates/workbench/src/panels/*`），尺寸常量落到 `crates/workbench_shell/src/ui.rs`；**2026-09-17 起面板视图本身也下沉进 crate**（`crates/scratchpad/src/scratchpad_view.rs` + `host.rs`，见“十四次”）。**下列历史条目保留当时的路径**，读时按此换算。
+
+### 2026-09-17（十四次）— 面板解耦跟随（A'4 视图下沉）+ Phase C-2 前半（打开预选连接）
+
+**协作完成（panels-coupling A'4：视图下沉，宿主走端口）**
+
+| 变化 | 新位置 |
+| --- | --- |
+| 面板视图（含纯函数与测试） | `crates/scratchpad/src/scratchpad_view.rs`（`ScratchpadView` / `ScratchpadSearchView`） |
+| 面板键盘动作 | `crates/scratchpad/src/commands.rs` |
+| 宿主端口（本 crate 定义） | `crates/scratchpad/src/host.rs`（`pub trait ScratchpadHost`） |
+| 端口实现 + 装配 | `workbench/src/components/scratchpad_host.rs`（`WorkbenchScratchpadHost`）+ `panels/mod.rs`（`SidebarPanel` 持 `Entity<ScratchpadView>`） |
+| 旧文件 | `workbench/src/panels/scratchpad_panel.rs` 已删 |
+
+依赖方向随之更新：`scratchpad → workbench_shell / gpui-kit / shared`（仍**不依赖 workbench**）；本模块文档（入口 §3/§4/§5、架构 §6.12/§7.1/§7.2/§12）已按新落点对齐。
+
+**本次已完成（Phase C-2 前半：草稿 → 连接预选）**
+
+| # | 改动 | 位置 |
+| --- | --- | --- |
+| 1 | `FileMeta::preferred_connection()`：预选口径 = **显式绑定优先，其次最近执行**；都没有则不预选 | `crates/scratchpad/src/models.rs` |
+| 2 | `ScratchpadStore::file_meta(rel)`：元数据读侧（无记录返回默认值，不报错） | `crates/scratchpad/src/store.rs` |
+| 3 | `ScratchpadStore::relative_path_of(abs)`：绝对路径 → 模块内相对路径（反向；模块外与点前缀路径返回 `None`） | 同上 |
+| 4 | 打开草稿即预选连接：只对**新建**文档生效（同路径只激活不覆盖用户选择），且连接必须在编辑器下拉里（已删除的不绑） | `crates/workbench/src/view.rs::open_in_editor` |
+
+`DiffLineKind` 补派生 `Copy / PartialEq / Eq`（冲突 Diff 断言需要，纯加法）。
+
+**验证**：`cargo check -p rds-scratchpad --all-targets -j 2` 与 `cargo check -p rds-workbench --lib -j 2` 零告警；`cargo test -p rds-scratchpad -j 2 --lib` → **32 passed**（新增 3 项：`preferred_connection_prefers_explicit_binding` / `file_meta_roundtrip_covers_binding_and_last_execution` / `relative_path_of_maps_editor_paths_back_into_the_module`）。
+
+**下一步（C-2 后半，未做）**：执行完成后回写 `last_connection_id` / `last_executed_at`。需编辑器侧给一个执行完成通知——建议照本仓既有端口风格加 `EditorShared::attach_document_sink`，在 `editor/src/view/host.rs::drain_exec_results` 回调；workbench 侧收到后调 `update_file_meta`。缓做原因：该文件正被并行任务修改，避免冲突。
 
 ### 2026-09-16（十三次）— 结构解耦跟随：文档路径与新 API 对齐
 
@@ -294,14 +323,14 @@
 | B8 | 多选（Ctrl/Shift）与批量删除 ✅ | 同上 | 菜单按单/多选自适应 |
 | B9 | 草稿树虚拟列表（`v_virtual_list`，只渲染可视区）+ 排序（名称/大小/时间）；引用/回收站底部限高可滚 ✅ | 同上 | 大目录流畅、面板整体可达 |
 
-> 落点修正：`crates/workbench/src/components/scratchpad_panel.rs` 是早期方案中的文件，实际实现全部在 `panels/` 的 `SidebarPanel` / `EditorPanel` 内，未单独拆文件。
+> 落点修正：早期方案里的 `components/scratchpad_panel.rs` 不是实际落点；面板先落在 `panels/`（`SidebarPanel` / `EditorPanel`），**2026-09-16 再下沉至 `crates/scratchpad/src/scratchpad_view.rs`**（见“十四次”）。
 
 ### Phase C — 编辑器联动与生态
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| C1 | 中央编辑区「草稿箱文件模式」：`.sql` 打开 → 执行引擎 + 连接选择 + `Ctrl+S` 回存；`.py`/`.json`/`.md` 代码编辑器；防重复 Tab ✅ **首片已接（2026-09-16）**：双击/Enter/右键「打开」→ 编辑器（同路径只激活）；回存与连接回填待续 | `crates/workbench/src/panels/` `EditorPanel` | 双击打开、编辑回存正确 |
-| C2 | `file_meta` 联动：执行后写 `last_connection_id`/`last_executed_at`；再次打开自动选连接 | `scratchpad` store + 编辑器 | 连接自动恢复 |
+| C1 | 中央编辑区「草稿箱文件模式」：`.sql` 打开 → 执行引擎 + 连接选择 + `Ctrl+S` 回存；`.py`/`.json`/`.md` 代码编辑器；防重复 Tab ✅ **首片已接（2026-09-16）**：双击/Enter/右键「打开」→ 编辑器（同路径只激活） | `crates/scratchpad/src/scratchpad_view.rs`（发请求）+ `workbench/src/view.rs::open_in_editor` | 双击打开、编辑回存正确 |
+| C2 | `file_meta` 联动：**打开时自动选连接**（已接，2026-09-17）+ 执行后写 `last_connection_id`/`last_executed_at`（待接：需编辑器侧执行完成通知） | `scratchpad` store（读侧已有 `file_meta` / `preferred_connection`）+ `workbench/src/view.rs` + 编辑器 | 连接自动恢复 |
 | C3 | 拖拽文件到编辑区插入内容；拖放文件进树导入 | workbench | 拖放生效 |
 | C4 | 冲突处理：外部修改 → 冲突对话框 → `diff_with_content` Diff 弹窗 → 接受右侧 | `scratchpad` store + 弹窗 | 冲突可消解 |
 | C5 | 搜索替换：预览计数 → `replace_in_file`（正则/大小写）→ 原子写回 → 刷新 ✅ 已落地（结果栏内嵌替换栏；Diff 预览仍未接） | 同上 | 替换后结果自动刷新 |
@@ -357,27 +386,28 @@
 | --- | --- |
 | 模块根 = `{project}/scratchpad/`；内部元数据 `.RSmeta/scratchpad/` | `crates/scratchpad/src/store.rs`（`ScratchpadStore::new` / `ensure_dir` / `scan_dir_tree` / `resolve_path_impl`） |
 | 项目级回收站（含来源/原路径） | `crates/scratchpad/src/trash.rs`（`ProjectTrash` / `TrashEntry` / `TrashManifest`） |
-| 文件元数据 / 数据源绑定 / 外部引用可用性 | `crates/scratchpad/src/models.rs`（`FileMeta::bound_connections` / `ExternalReferenceStatus`）、`store.rs`（`bind_connections` / `external_reference_status`） |
+| 文件元数据 / 数据源绑定 / 外部引用可用性 | `crates/scratchpad/src/models.rs`（`FileMeta::bound_connections` / `FileMeta::preferred_connection` / `ExternalReferenceStatus`）、`store.rs`（`file_meta` / `bind_connections` / `update_file_meta` / `external_reference_status`） |
 | 旧 `.scratchpad/` 迁移（→ 模块根/元数据/项目回收站） | `crates/scratchpad/src/store.rs`（`migrate_legacy_layout` / `move_dir_contents` / `ingest_trash_dir`） |
 | 文件监控 | `crates/scratchpad/src/state.rs`（`notify`）+ 事件推送 |
 | 域模型 / 存储 API | `crates/scratchpad/src/{models,state,store}.rs` |
 | 递归复制 / 移动 / 替换 / 引用重定位 | `crates/scratchpad/src/store.rs`（`copy_entry` / `copy_dir_contents` / `move_entry` / `replace_in_file` / `update_external_reference_path`） |
 | 内容搜索（含命中区间） | `crates/scratchpad/src/store.rs`（`search_file_content` / `literal_match_spans`）+ `models.rs::SearchMatch::match_spans` |
-| 面板视图（工具栏/树/虚拟列表/空态/引用/回收站/撤销栏） | `crates/workbench/src/panels/`（`SidebarPanel`：`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move`） |
-| 内容搜索结果 + 替换栏 | `crates/workbench/src/panels/`（`EditorPanel`：`render_scratchpad_search_pane` / `replace_scratchpad_all`） |
-| 快捷键 / 尺寸常量 | `crates/workbench/src/commands.rs`、`crates/workbench_shell/src/ui.rs`、`crates/app/src/main.rs` |
-| 左 Dock 装配（`LeftPanel::Draft`） | `crates/workbench/src/panels/`（`SidebarPanel`） |
+| 面板视图（工具栏/树/虚拟列表/空态/引用/回收站/撤销栏） | `crates/scratchpad/src/scratchpad_view.rs`（`ScratchpadView`：`render_scratchpad` / `scratchpad_row` / `render_scratchpad_edit_row` / `render_scratchpad_empty_state` / `scratchpad_move`） |
+| 内容搜索结果 + 替换栏 | `crates/scratchpad/src/scratchpad_view.rs`（`render_scratchpad_search_pane` / `run_scratchpad_search`）+ `crates/workbench/src/panels/editor.rs::replace_scratchpad_all` |
+| 宿主端口 / 端口实现 | `crates/scratchpad/src/host.rs`（`ScratchpadHost`）+ `crates/workbench/src/components/scratchpad_host.rs` |
+| 快捷键 / 尺寸常量 | `crates/scratchpad/src/commands.rs`、`crates/workbench/src/commands.rs`、`crates/workbench_shell/src/ui.rs`、`crates/app/src/main.rs` |
+| 左 Dock 装配（`LeftPanel::Draft`） | `crates/workbench/src/panels/`（`SidebarPanel` 持 `Entity<ScratchpadView>`） |
 | 当前项目会话 | `crates/workbench/src/services/project_session.rs`、`crates/app/src/main.rs` |
-| 中央编辑区草稿文件模式（Phase C） | `crates/workbench/src/panels/`（`EditorPanel`） |
+| 中央编辑区草稿文件模式（Phase C） | 打开：`crates/workbench/src/view.rs::open_in_editor`（含 C-2 连接预选）；后续（脏点/冲突）待定 |
 | 依赖接线 | 根 `Cargo.toml`（`scratchpad` 别名）、`crates/workbench/Cargo.toml` |
 | 搜索高亮 token | `assets/themes/product-tokens.json` + `crates/workbench_shell/src/product_tokens.rs`（`search.match.background`） |
 
-> 早期方案中的 `crates/workbench/src/components/scratchpad_panel.rs` **未创建**；面板实现全在 `panels/`。
+> 早期方案中的 `crates/workbench/src/components/scratchpad_panel.rs` **未创建**；面板实现 2026-09-16 前在 `panels/`，**2026-09-17 起在 `crates/scratchpad/src/scratchpad_view.rs`**。
 
 ## 6. 验证方式
 
 - 每阶段：`cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2` 零告警 + 对应测试（`crypto` 之外的单测均在 `store.rs` 内联模块）
-- 后端单测基线：`cargo test -p rds-scratchpad -j 2`（14 项；含临时项目目录的端到端文件操作）
+- 后端单测基线：`cargo test -p rds-scratchpad -j 2 --lib`（**32 项**；含临时项目目录的端到端文件操作 + 面板纯函数 + 后台任务）
 - UI：`cargo run -p rds-app` 手动走通 §3 场景清单与 `scratchpad-user-guide.md` §9 验收清单
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
 - 阶段完成后回填本文件「进度记录」、`crates/scratchpad/README.md` 能力表与原型文档同步
