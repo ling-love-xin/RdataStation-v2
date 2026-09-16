@@ -12,6 +12,12 @@
 //! $env:RDS_TEST_DUCKDB_PATH="D:\data\123"
 //! ```
 //!
+//! **sh / bash 下一律加单引号**：`RDS_TEST_SQLITE_PATH=D:\FossilT\T.fossil` 里的反斜杠会被
+//! 当成转义吃掉（变成相对路径 `FossilTT.fossil`），于是驱动在工作目录里新建一个空库——
+//! 看着“通过”了，实际一句都没碰到真库。
+//!
+//! 建连失败**不会中断整轮**（一个坏驱动不该把后面的库全遮住），最后会一并报出来。
+//!
 //! 与 `engine/tests/transaction_affinity.rs` 同一套环境变量与建连方式（探针口径一致）。
 //! 执行走的是"当前活动连接"，所以这里先 `set_active_connection` 再提交。
 
@@ -211,6 +217,9 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
     let manager = engine::connection_manager::get_connection_manager().clone();
 
     let mut checked = 0;
+    // 建连失败**只记账、不中断整轮**：一个坏驱动（环境 / feature 缺失）不该把后面的库
+    // 全遮住——MySQL 的 `mysql-rsa` 缺失就是这类
+    let mut failed_to_connect: Vec<String> = Vec::new();
     for target in TARGETS {
         let Ok(value) = std::env::var(target.env) else {
             eprintln!("⏭️  {}：未设 {} ，跳过", target.driver, target.env);
@@ -220,7 +229,8 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
 
         // 每次换一个活动连接：编辑器执行走"当前活动连接"
         let Some(_conn_id) = runtime.block_on(connect_active(&manager, &target, &value)) else {
-            panic!("{} 已配置环境变量但建连失败", target.driver);
+            failed_to_connect.push(target.driver.to_string());
+            continue;
         };
 
         // 走**生产路径**：`editor_exec::attach` 把引擎执行器接到编辑器上
@@ -304,7 +314,8 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         let Some(_cancel_conn) =
             connect_with_retry(&runtime, &manager, &target, &cancel_value, None)
         else {
-            panic!("{} 建连接失败", target.driver);
+            failed_to_connect.push(format!("{}（B3 中断用连接）", target.driver));
+            continue;
         };
         shared
             .submit(
@@ -343,7 +354,8 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         let Some(_timeout_conn) =
             connect_with_retry(&runtime, &manager, &target, &timeout_value, Some(1))
         else {
-            panic!("{} 建超时连接失败", target.driver);
+            failed_to_connect.push(format!("{}（B3 超时用连接）", target.driver));
+            continue;
         };
         let started = Instant::now();
         let timed_out = run_through_editor(
@@ -372,6 +384,11 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
 
         runtime.block_on(manager.close_all_connections());
     }
+
+    assert!(
+        failed_to_connect.is_empty(),
+        "这些库已配置环境变量但建不上连接（真机验证被阻塞，其余库照跑）：{failed_to_connect:?}"
+    );
 
     if checked == 0 {
         eprintln!("⚠️ 没有任何 RDS_TEST_* 环境变量，真机链路未验证（不算失败）");
