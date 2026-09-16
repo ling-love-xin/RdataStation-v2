@@ -23,6 +23,27 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 5 二批：版本对比（5.2 收尾 + 5.3）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **196 项** + 集成 **12 项**全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿（需临时带 `--features opener/reveal`，同上批）；本批文件 `cargo clippy --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 方向定案 | 对比方向固定为**「选中的那一版 → 最新一版」**（D43）：这个 Tab 问的是「和上次比变了什么」，两个方向都能选只是多一个状态（还要多一套「谁是基准」的文案）。最新那一版**不给点击入口**（`ListItem` 的 disabled 态），状态层也兜一道底——拿最新当基准无从比 | `insight_view.rs` + `service/mod.rs` |
+| 视图模型 | `VersionDiffView` / `DiffRowView` / `DeltaView`：行集合与「列」Tab 的**基础统计同源**（同一个 `ColumnProfileView`），所以对比里的数字就是用户已读过的那几个（D44） | `model.rs` |
+| 行集合 | 质量分（头号结论，两侧都算得出才给）→ 总行数 / 非空值 / 空值 / 空值率 / 唯一值 / 类型 → 类型专属行（平均 / 长度范围 / 跨度 …）。「空值」与「空值率」在「列」Tab 里合成一行（`12（14.3%）`）便于阅读，而对比要的是**能对齐的两个数**，故拆开；旧版有、新版没有的行（类型变了）如实列出并在新版侧写「—」 | `model.rs` |
+| 差值口径 | 一律**按展示精度算**（计数取整、占比 1 位小数、评分取整）：否则会出现「显示 62 → 62 却 +0.4」「显示 8.2% → 8.2% 却 +0.01」这种自相矛盾。解不出数字的行（`3 ~ 8` / `2.5（右偏）` / 类型串）只说「已变」，**不编差值** | `model.rs` |
+| 三态着色 | 方向 ≠ 好坏（空值率上升是坏、唯一值上升不一定是好）→ 增 / 减 / 变化无数值 / 不变 用 `info` / `warning` / `primary` / `muted_foreground`，**不用** `success` / `danger` 预设评价；箭头（▲ ▼ ◆ ●）才是方向 | `insight_view.rs` |
+| 组件 | 可点版本行用 `ListItem`（hover / 选中 / 禁用三态与其它列表同一套视觉）；对比面板用 `DescriptionList`（`columns(1)` + `bordered(false)` + `label_width` 常量），不手搭表格 | `insight_view.rs` + `ui.rs`（`INSIGHT_DIFF_LABEL_WIDTH`） |
+| 载荷口径 | 对比结果就在 `HistoryView.diff` 里（与列表同一个载荷）：面板「有没有对比」只认载荷，选择位在出数时**从载荷反推**——列表刷新后「最新」就变了，留一个指向旧「当前」的选中位比不选中更坏（D43） | `model.rs` + `insight_view.rs` |
+| 失败语义 | 对比失败 → `set_compare_notice`：行内提示 + **放掉选中位**（否则留下「亮着却没有面板」的死状态，而选中的意义就是「面板该在」）；列表照旧可见，不抢整页错误态 | `insight_view.rs` + `jobs.rs` |
+| 服务护栏 | 拿最新一版当基准 → 「最新一版没有更新的版本可比」；版本不在列表里 → 「这一版已不在历史里（找不到 xxxxxxxx）」。都是**可读的错误**，不是静默给一份空对比 | `service/mod.rs` |
+| 引导 | 只有一版时说「再存一版就能对比」；多版且未选中时说「点更早的一版，和当前对比」（行可点这件事必须说出来） | `insight_view.rs` |
+| 测试 | 模型 4（方向与千分位 / 完全一致 / 文本行与类型变化 / 空值拆两行）+ 视图 2（选中→事件→出数面板在（`debug_selector` 锚点）→✕ 关掉→刷新后落回；对比失败放掉选中位）+ 接缝 1（扩展上批用例：两次保存之间真插一行，对比看得见 `3 → 4`）+ 集成 1（真项目：两版对比、基准=最新报错、版本不存在报错） | 各文件测试模块 |
+
+**Phase 5 剩余**：TTL 清理入口（`cleanup_old_insight_snapshots` 已就绪，等 **Q4/Q5** 拍板保留天数与双写补偿）。
+
+
 ### 2026-09-17 — Phase 5 一批：快照历史（5.1 + 保存入口）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **190 项** + 集成 **11 项**全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿（本轮需临时带上 `--features opener/reveal`：并行改动中的 `resource_host.rs` 用了 `opener::reveal`，而 `opener` 尚未开 `reveal` feature，与本批无关）；本批文件 `cargo clippy --all-targets` 零告警）
@@ -616,8 +637,8 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | # | 任务 | 落点 | 状态 |
 | --- | --- | --- | --- |
 | 5.1 | 保存快照入口（含 `entity_source`：conn / db / schema / table） | `insight/src/insight_view.rs` | ✅ 一批（`entity_source` 现写 `temp_table=…`：面板手里只有临时表，就如实写） |
-| 5.2 | 历史列表（`created_at` + 类型 + 版本链）+ 版本详情 | 同上 | ✅ 列表（另加短版本号与分页提示；「版本详情」并入 5.3） |
-| 5.3 | 版本对比面板：差异字段与 `old → new (+Δ)` 摘要；颜色分增 / 减 / 不变**三态**（v1 定义了 `.val-same` 却从未使用，此处修正） | 同上 | ⬜ 下一批 |
+| 5.2 | 历史列表（`created_at` + 类型 + 版本链）+ 版本详情 | 同上 | ✅ 二批（另加短版本号与分页提示） |
+| 5.3 | 版本对比面板：差异字段与 `old → new (+Δ)` 摘要；颜色分增 / 减 / 不变**三态**（v1 定义了 `.val-same` 却从未使用，此处修正） | 同上 | ✅ 二批（另加「变了但算不出数值」一档，方向用箭头而不用颜色暗示好坏） |
 | 5.4 | 存储用量（后端真实统计，**不用 v1 的 `history.length * 2` 前端估算**）+ 清理（默认 30 天，需确认） | 同上 | 用量 ✅ 一批 · 清理 ⬜（待 Q4/Q5 拍板） |
 
 ### Phase 6（候选，不在本期）

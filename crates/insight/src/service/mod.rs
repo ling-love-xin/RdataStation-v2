@@ -243,6 +243,52 @@ impl InsightService {
         read_history(&stores, column)
     }
 
+    /// 对比某一版与**最新一版**（Phase 5.2）。
+    ///
+    /// 方向固定为「选中版本 → 最新版本」：这个 Tab 问的是「和上次比变了什么」，
+    /// 两个方向都能选只是多一个状态（还要多一套「谁是基准」的文案）。
+    ///
+    /// 返回值仍是**整份历史**（列表 + 对比）：对比面板与列表同属一个载荷，
+    /// 面板只管「有没有对比」——这样刷新列表时不会留下指向旧「当前」的对比（D43）。
+    pub fn compare_column_snapshots(
+        project_root: Option<&Path>,
+        column: &str,
+        baseline_version: &str,
+    ) -> Result<HistoryView, CoreError> {
+        let root = project_root.ok_or_else(no_project)?;
+        let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
+        let entries = history_entries(&stores, column)?;
+
+        let baseline = entries
+            .iter()
+            .find(|entry| entry.version_id == baseline_version)
+            .ok_or_else(|| {
+                CoreError::common(CommonError::General(format!(
+                    "这一版已不在历史里（找不到 {}）",
+                    baseline_version.chars().take(8).collect::<String>()
+                )))
+            })?;
+        let latest = entries.first().ok_or_else(|| {
+            CoreError::common(CommonError::General("这一列还没有快照".to_string()))
+        })?;
+        if latest.version_id == baseline.version_id {
+            return Err(CoreError::common(CommonError::General(
+                "最新一版没有更新的版本可比".to_string(),
+            )));
+        }
+
+        // 两侧正文都读出来比：比的是**存下来的那份结论**，不是现在重算的
+        let diff = crate::model::VersionDiffView::between(
+            &baseline.parse_insight()?,
+            &baseline.created_at,
+            &latest.parse_insight()?,
+            &latest.created_at,
+        )
+        .with_baseline_version(&baseline.version_id);
+
+        Ok(history_view_of(&stores, column, entries).with_diff(diff))
+    }
+
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
     ///
     /// 识别方式是**按消息内容**匹配：引擎侧的 DuckDB 错误还没有结构化分类，
@@ -530,16 +576,34 @@ fn read_history(
     stores: &crate::store::ProjectInsightStores,
     column: &str,
 ) -> Result<HistoryView, CoreError> {
-    let entries = block_on(
+    let entries = history_entries(stores, column)?;
+    Ok(history_view_of(stores, column, entries))
+}
+
+/// 读历次快照（顺序由存储层的 `ORDER BY` 定：最新在前）
+fn history_entries(
+    stores: &crate::store::ProjectInsightStores,
+    column: &str,
+) -> Result<Vec<crate::store::InsightVersionEntry>, CoreError> {
+    block_on(
         stores
             .storage
             .columns
             .get_history(column, Some(HISTORY_PAGE_SIZE)),
-    )?;
-    // 存储统计失败不影响历史可用：它是底部的参考信息，不是结论。
-    // 拿不到就整行不显示（`stats: None`），也不编一个 0 出来。
+    )
+}
+
+/// 历史条目 + 存储用量 → 视图模型。
+///
+/// 存储统计失败不影响历史可用：它是底部的参考信息，不是结论。
+/// 拿不到就整行不显示（`stats: None`），也不编一个 0 出来。
+fn history_view_of(
+    stores: &crate::store::ProjectInsightStores,
+    column: &str,
+    entries: Vec<crate::store::InsightVersionEntry>,
+) -> HistoryView {
     let stats = block_on(stores.storage.columns.get_storage_stats()).ok();
-    Ok(HistoryView::from_entries(column, &entries, stats.as_ref()))
+    HistoryView::from_entries(column, &entries, stats.as_ref())
 }
 
 /// 规则参数 → 实际取值。

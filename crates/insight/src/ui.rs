@@ -35,6 +35,8 @@ pub const INSIGHT_TABLE_TYPE_WIDTH: f32 = 4.5;
 pub const INSIGHT_TABLE_FLAG_WIDTH: f32 = 1.75;
 /// 表探查：质量列宽（3.25rem = 52px，容得下「95 优秀」）
 pub const INSIGHT_TABLE_QUALITY_WIDTH: f32 = 3.25;
+/// 版本对比：标签列宽（4rem = 64px，容得下「长度范围」四个中文字）
+pub const INSIGHT_DIFF_LABEL_WIDTH: f32 = 4.0;
 
 // ===== 与外壳共用的结构尺寸（重导出）=====
 //

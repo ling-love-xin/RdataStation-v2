@@ -195,6 +195,19 @@ ProjectInsightStores::save_column_snapshot(insight, entity_source, row_count, el
 
 无项目时**不发事件**也不摆骨架：看不了就说看不了（D39）。
 
+对比（Phase 5.2）走的是同一条链，只是多读一版正文：
+
+```text
+点更早的一版 ──► 事件 VersionCompareRequested { column, version_id }
+                 └─► InsightService::compare_column_snapshots(root, column, version_id)
+                       ① 读列表（最新在前）  ← 基准与「当前」都从这份列表里取
+                       ② 两侧正文 parse_insight()  ← 比的是**存下来的结论**，不是现在重算的
+                       ③ VersionDiffView::between(old, old_label, new, new_label)
+                       ⋮ 护栏：基准 = 最新 → 「最新一版没有更新的版本可比」
+                       ⋮      版本不在列表 → 「这一版已不在历史里」
+                    ──► set_history（列表 + 对比一起回来；失败则 set_compare_notice）
+```
+
 ### 5.5 表级评估
 
 ```
@@ -268,6 +281,8 @@ RulesWatcher（后台线程，drop 即停）：
 | D40 | 失败语义分两档：**保存失败只挂行内提示，读失败推整页错误态** | 判据是「失败会不会让人怀疑已有数据没了」：保存失败时已有历史还在，整页错误态反而像快照丢了；而列表读不出来时无从部分展示，「为什么读不到」才是答案 | 与多列执行的失败语义（Phase 3）同形 |
 | D41 | 项目库**现开现用，一次操作只开一个句柄** | DuckDB 在同一进程里对同一份文件只允许一个实例，重叠 `open` 必失败（实测表现为「快照真落库了，却提示保存失败」） | 保存后的读回复用同一句柄（`service::read_history`）；宿主现有做法（资源目录 / Mock 历史 / 连接列表）本就是开→用→放 |
 | D42 | 快照的**正文重取不拼装**：保存时重跑一次领域画像，不把视图模型反拼回领域结构 | 视图模型是**渲染用的投影**（缺字段、带展示文案），反拼回去只能靠猜；而视图模型正是为了「改界面不像改契约」才与领域类型分开的 | 代价：保存多跑一次统计（与打开面板同量级的查询） |
+| D43 | 对比方向固定为**「选中版本 → 最新版本」**，且**对比结果也在载荷里**（`HistoryView.diff`） | 方向可选只是多一个状态（还要多一套「谁是基准」的文案），而这个 Tab 的问题永远是「和上次比变了什么」；对比结果与列表同属一个载荷，才能让「有没有对比」只认载荷——否则列表一刷新（保存 / ⟳），手里就留下一份指向旧「当前」的差值 | 选择位在出数时从载荷反推；刷新列表不自动续取对比；最新一版不给点击入口 |
+| D44 | 对比的**行集合与「列」Tab 同源**（同一个 `ColumnProfileView`），差值一律**按展示精度算** | 另立一套对比口径，迟早在两处对不上（如「空值」在 Tab 里是 `12（14.3%）` 一行、而对比必须拆成两个可对齐的数）；按展示精度算差值则避免了「显示 62 → 62 却 +0.4」这种自相矛盾 | 解不出数字的展示串（区间 / 带方向后缀 / 类型名）只说「已变」，不编差值 |
 
 ## 7. 并发与资源
 
@@ -314,7 +329,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **190 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 11 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **196 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 12 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -348,6 +363,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D35 数据态按 Tab 分栏 | `model.rs`（`PanelData` + `InsightPanelState::Data` 无载荷）、`insight_view.rs`（`render_body` 以载荷为准 / `emit_request_for_tab` / `ensure_data_for_tab`）、`test_support.rs`（记录型宿主） |
 | D36/D37 Schema 健康报告 | `schema_view.rs`（新：视图模型 + `to_json` / `to_markdown`）、`schema_analyzer.rs`（等级共用 `Grade`）、`service/mod.rs`（`schema_report_view`）、`insight_view.rs`（`render_schema_report` + 下钻热点）、`jobs.rs`（`SchemaReportRequested` / `TableDrilldownRequested`） |
 | D38～D42 快照历史 | `model.rs`（`HistoryView` / `HistoryEntryView` / `StorageStatsView` / `HISTORY_PAGE_SIZE`）、`insight_view.rs`（`render_history` + `history_entry_row` / `history_chip` / `set_history_notice` / `history_saving` / `emit_request_for_tab` 的状态落点）、`jobs.rs`（`SnapshotSaveRequested` / `HistoryRequested` → `request_snapshot_save` / `request_history`）、`service/mod.rs`（`save_column_snapshot` / `column_history_view` / `read_history`） |
+| D43/D44 版本对比 | `model.rs`（`VersionDiffView` / `DiffRowView` / `DeltaView` / `VersionDiffView::between` + `display_number` / `CANONICAL_LABELS`）、`insight_view.rs`（`render_version_diff` / `diff_row_value` / `toggle_compare_version` / `dismiss_diff` / `set_compare_notice` / `is_latest_version`）、`jobs.rs`（`VersionCompareRequested` → `request_version_compare`）、`service/mod.rs`（`compare_column_snapshots` / `history_entries`）、`ui.rs`（`INSIGHT_DIFF_LABEL_WIDTH`） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |

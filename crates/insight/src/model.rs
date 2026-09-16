@@ -933,6 +933,11 @@ pub struct HistoryView {
     pub stats: Option<StorageStatsView>,
     /// 列表是否被分页截断（列表已满一页；不代表库里一定还有更多）
     pub truncated: bool,
+    /// 版本对比（Phase 5.2）：`None` = 没在对比（面板不出现）。
+    ///
+    /// 对比结果也在**载荷**里而不在视图字段里：面板「有没有对比"只认载荷，
+    /// 视图只管「用户点了哪一版」（与 D35「渲染以载荷为准」同一口径）。
+    pub diff: Option<VersionDiffView>,
 }
 
 /// 一个版本（列表里的一行）
@@ -956,6 +961,259 @@ pub struct StorageStatsView {
     pub unique_columns: usize,
     /// 后端给的展示串（带单位），面板不自己换算
     pub size_display: String,
+}
+
+/// 版本对比（`HistoryView::diff`，Phase 5.2）。
+///
+/// 方向固定为**「选中的那一版 → 最新一版」**：这个 Tab 问的是「和上次比变了什么」，
+/// 两个方向都能选只是多一个状态（还要多一套「谁是基准」的文案）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct VersionDiffView {
+    /// 基准版本（对比面板标题里的那个时间）
+    pub baseline_version: String,
+    pub baseline_label: String,
+    pub latest_label: String,
+    pub rows: Vec<DiffRowView>,
+    /// 有变化的行数（面板头据此给结论，不数第二遍）
+    pub changed: usize,
+}
+
+/// 对比面板的一行：`旧 → 新` + 差值
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffRowView {
+    pub label: String,
+    /// 基准版本的展示值（新类型不再产这行时是「—」，不假装还有值）
+    pub old: String,
+    pub new: String,
+    pub delta: DeltaView,
+}
+
+/// 变化方向。
+///
+/// **方向 ≠ 好坏**：空值率升是坏，唯一值升不一定是好，所以这里只给方向，
+/// 由视图映射到中性的主题角色（不用 `success` / `danger` 预设评价）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeltaView {
+    /// 数值增加（文案已带符号与单位）
+    Up(String),
+    /// 数值减少
+    Down(String),
+    /// 两侧展示值完全一致
+    Same,
+    /// 变了，但算不出数值差（类型 / 区间 / 带单位的文本值）
+    Changed,
+}
+
+impl DeltaView {
+    /// 面板头数「几项有变化」用
+    pub fn is_changed(&self) -> bool {
+        !matches!(self, DeltaView::Same)
+    }
+
+    /// 差值文案（不变 / 已变这两档没有数字）
+    pub fn text(&self) -> &str {
+        match self {
+            DeltaView::Up(text) | DeltaView::Down(text) => text,
+            DeltaView::Same => "不变",
+            DeltaView::Changed => "已变",
+        }
+    }
+}
+
+impl VersionDiffView {
+    /// 两份领域画像 → 对比视图（纯函数）。
+    ///
+    /// 行集合与「列」Tab 的基础统计**同源**（同一个 [`ColumnProfileView`]）：
+    /// 对比里出现的数字就是用户已经读过的那几个，不另立一套口径。
+    pub fn between(
+        baseline: &ColumnInsightFull,
+        baseline_label: &str,
+        latest: &ColumnInsightFull,
+        latest_label: &str,
+    ) -> Self {
+        let old = ColumnProfileView::from_domain(baseline);
+        let new = ColumnProfileView::from_domain(latest);
+        let s = &baseline.stats;
+        let n = &latest.stats;
+
+        let mut rows = Vec::new();
+
+        // 头号结论先给：质量分（两侧都算得出才有——全空列不产分，D2 口径）
+        if let (Some(old_score), Some(new_score)) = (&old.score, &new.score) {
+            rows.push(DiffRowView::scored("质量分", old_score.overall, new_score.overall));
+        }
+
+        rows.push(DiffRowView::count(
+            "总行数",
+            s.total_count as f64,
+            n.total_count as f64,
+        ));
+        rows.push(DiffRowView::count(
+            "非空值",
+            s.total_count.saturating_sub(s.null_count) as f64,
+            n.total_count.saturating_sub(n.null_count) as f64,
+        ));
+        // 「空值」与「空值率」拆成两行：「列」Tab 把它俩写成了一行
+        // （`12（14.3%）`），而对比要的是能对齐的两个数
+        rows.push(DiffRowView::count(
+            "空值",
+            s.null_count as f64,
+            n.null_count as f64,
+        ));
+        rows.push(DiffRowView::rate("空值率", s.null_rate, n.null_rate));
+        rows.push(match (s.unique_count, n.unique_count) {
+            (Some(a), Some(b)) => DiffRowView::count("唯一值", a as f64, b as f64),
+            // 至少一侧算不出唯一值（未识别类型）就不给差值
+            _ => DiffRowView::text("唯一值", "—", "—"),
+        });
+        rows.push(DiffRowView::text("类型", &s.data_type, &n.data_type));
+
+        // 类型专属行（平均 / 长度范围 / 跨度 / True 占比 …）逐行对齐：
+        // 能解成数字就给数值差，否则只说「已变」（区间 / 类别串算不出差值）
+        for row in &new.basics {
+            if CANONICAL_LABELS.contains(&row.label) {
+                continue;
+            }
+            let paired = old.basics.iter().find(|r| r.label == row.label);
+            rows.push(DiffRowView::from_display(
+                row.label,
+                paired.map(|r| r.value.as_str()),
+                &row.value,
+            ));
+        }
+        // 旧版有、新版没有的行（类型变了）：如实列出来，新版侧写「—」
+        for row in &old.basics {
+            if CANONICAL_LABELS.contains(&row.label)
+                || new.basics.iter().any(|r| r.label == row.label)
+            {
+                continue;
+            }
+            rows.push(DiffRowView::from_display(row.label, Some(&row.value), "—"));
+        }
+
+        let changed = rows.iter().filter(|r| r.delta.is_changed()).count();
+        Self {
+            baseline_version: String::new(),
+            baseline_label: baseline_label.to_string(),
+            latest_label: latest_label.to_string(),
+            rows,
+            changed,
+        }
+    }
+
+    /// 挂上基准版本号（服务知道对的是哪一版；`between` 只算差值）
+    pub fn with_baseline_version(mut self, version_id: &str) -> Self {
+        self.baseline_version = version_id.to_string();
+        self
+    }
+
+    /// 面板头的一句结论
+    pub fn summary(&self) -> String {
+        if self.changed == 0 {
+            return format!("与 {latest} 完全一致", latest = self.latest_label);
+        }
+        format!("{} 项有变化", self.changed)
+    }
+}
+
+/// 对比里我亲自给出的行（不参与「类型专属行」的二次扫描）
+const CANONICAL_LABELS: [&str; 5] = ["总行数", "非空值", "空值", "唯一值", "类型"];
+
+impl DiffRowView {
+    /// 计数行（整数展示 + 整数差）
+    fn count(label: &str, old: f64, new: f64) -> Self {
+        Self {
+            label: label.to_string(),
+            old: fmt_int(old.max(0.0) as u32),
+            new: fmt_int(new.max(0.0) as u32),
+            delta: delta_of(old, new, |v| fmt_int(v as u32), ""),
+        }
+    }
+
+    /// 占比行（1 位小数的百分数）
+    fn rate(label: &str, old: f64, new: f64) -> Self {
+        // 先按**展示精度**取整再算差：否则会出现「显示 8.2% → 8.2% 却 +0.01」的自相矛盾
+        let round = |v: f64| (v * 1000.0).round() / 1000.0;
+        let (a, b) = (round(old), round(new));
+        Self {
+            label: label.to_string(),
+            old: fmt_pct(a),
+            new: fmt_pct(b),
+            delta: delta_of(a, b, fmt_pct, ""),
+        }
+    }
+
+    /// 评分行（与评分卡同一精度：整数）
+    fn scored(label: &str, old: f64, new: f64) -> Self {
+        let (a, b) = (old.round(), new.round());
+        Self {
+            label: label.to_string(),
+            old: format!("{a:.0}"),
+            new: format!("{b:.0}"),
+            delta: delta_of(a, b, |v| format!("{v:.0}"), ""),
+        }
+    }
+
+    /// 纯文本行（类型 / 唯一值这类两侧都是字符串的）
+    fn text(label: &str, old: &str, new: &str) -> Self {
+        Self::from_display(label, Some(old), new)
+    }
+
+    /// 文本行：能解成数字就给数值差，否则只说变没变
+    fn from_display(label: &str, old: Option<&str>, new: &str) -> Self {
+        let old_text = old.unwrap_or("—").to_string();
+        let delta = match (old.and_then(display_number), display_number(new)) {
+            (Some((a, unit_a)), Some((b, unit_b))) if unit_a == unit_b => {
+                let suffix = if unit_a { "%" } else { "" };
+                delta_of(a, b, fmt_delta_number, suffix)
+            }
+            _ if old_text == new => DeltaView::Same,
+            _ => DeltaView::Changed,
+        };
+        Self {
+            label: label.to_string(),
+            old: old_text,
+            new: new.to_string(),
+            delta,
+        }
+    }
+}
+
+/// 方向 + 差值文案（差为零就是「不变」；`show` 拿到的是**绝对值**，符号由这里加）
+fn delta_of(old: f64, new: f64, show: impl Fn(f64) -> String, suffix: &str) -> DeltaView {
+    let diff = new - old;
+    if diff.abs() < f64::EPSILON {
+        return DeltaView::Same;
+    }
+    let sign = if diff > 0.0 { "+" } else { "-" };
+    let text = format!("{sign}{}{suffix}", show(diff.abs()));
+    if diff > 0.0 {
+        DeltaView::Up(text)
+    } else {
+        DeltaView::Down(text)
+    }
+}
+
+/// 差值里的数值文案：整数加千分位（与计数行同一口径），小数去尾零
+fn fmt_delta_number(v: f64) -> String {
+    if v.fract() == 0.0 && v < u32::MAX as f64 {
+        return fmt_int(v as u32);
+    }
+    fmt_num(v)
+}
+
+/// 展示串 → 数值（只认「纯数值」：数字 + 千分位 + 可有 `%` 后缀）。
+///
+/// 带单位 / 区间 / 类别串（`1.2 万` / `3–8` / `Top 3 类` / `2.5（右偏）`）一律不认——
+/// 宁可不给差值，也不给一个错的差值。返回值第二项表示「这是百分数」。
+fn display_number(text: &str) -> Option<(f64, bool)> {
+    let trimmed = text.trim();
+    let (body, percent) = match trimmed.strip_suffix('%') {
+        Some(rest) => (rest, true),
+        None => (trimmed, false),
+    };
+    let parsed = body.replace(',', "").parse::<f64>().ok()?;
+    parsed.is_finite().then_some((parsed, percent))
 }
 
 impl HistoryView {
@@ -987,6 +1245,7 @@ impl HistoryView {
                 })
                 .collect(),
             truncated: entries.len() >= HISTORY_PAGE_SIZE,
+            diff: None,
             stats: stats.map(|stats| StorageStatsView {
                 total_snapshots: stats.total_snapshots,
                 unique_columns: stats.unique_columns,
@@ -1002,6 +1261,18 @@ impl HistoryView {
             "存储 {} · {} 个快照 · {} 列",
             stats.size_display, stats.total_snapshots, stats.unique_columns
         ))
+    }
+
+    /// 挂上对比结果（服务读两版正文后调用）
+    pub fn with_diff(mut self, diff: VersionDiffView) -> Self {
+        self.diff = Some(diff);
+        self
+    }
+
+    /// 放下对比结果（用户点 ✕，或基准版已不在列表里）
+    pub fn without_diff(mut self) -> Self {
+        self.diff = None;
+        self
     }
 }
 
@@ -2208,5 +2479,127 @@ mod tests {
         assert!(HistoryView::from_entries("amount", &full, None).truncated);
         let short = &full[..HISTORY_PAGE_SIZE - 1];
         assert!(!HistoryView::from_entries("amount", short, None).truncated);
+    }
+
+    // ==================== 版本对比（Phase 5.2） ====================
+
+    /// 基准 / 最新一对画像：行数翻倍、空值大幅减少、唯一值占比升高
+    fn compare_pair() -> (ColumnInsightFull, ColumnInsightFull) {
+        let numeric = || base_stats(ColumnStatsDetail::Numeric(numeric(None, Vec::new())));
+        let old = numeric();
+        let mut new = numeric();
+        new.stats.total_count = 2000;
+        new.stats.null_count = 10;
+        new.stats.null_rate = 0.005;
+        new.stats.unique_count = Some(1900);
+        (old, new)
+    }
+
+    fn row_of<'a>(diff: &'a VersionDiffView, label: &str) -> &'a DiffRowView {
+        diff.rows
+            .iter()
+            .find(|r| r.label == label)
+            .unwrap_or_else(|| panic!("应有「{label}」这一行：{:?}", diff.rows))
+    }
+
+    #[test]
+    fn diff_reports_direction_for_counts_and_rates() {
+        let (old, new) = compare_pair();
+        let diff = VersionDiffView::between(&old, "2026-09-14 09:10", &new, "2026-09-15 14:22")
+            .with_baseline_version("v-1");
+
+        assert_eq!(diff.baseline_version, "v-1");
+        assert_eq!(diff.baseline_label, "2026-09-14 09:10");
+        // 总行数 1000 → 2000：千分位与「列」Tab 同一口径
+        let total = row_of(&diff, "总行数");
+        assert_eq!((total.old.as_str(), total.new.as_str()), ("1,000", "2,000"));
+        assert_eq!(total.delta, DeltaView::Up("+1,000".into()));
+        // 空值率 2.0% → 0.5%：（差值按**展示精度**算，不出现「显示没变却 +0.01」）
+        let rate = row_of(&diff, "空值率");
+        assert_eq!((rate.old.as_str(), rate.new.as_str()), ("2.0%", "0.5%"));
+        assert_eq!(rate.delta, DeltaView::Down("-1.5%".into()));
+        // 唯一值 480 → 1900
+        assert_eq!(
+            row_of(&diff, "唯一值").delta,
+            DeltaView::Up("+1,420".into())
+        );
+        assert_eq!(row_of(&diff, "类型").delta, DeltaView::Same);
+
+        // 质量分排在最前（它才是「到底变好了没」的结论），展示精度与评分卡一致
+        let scored = ColumnProfileView::from_domain(&old)
+            .score
+            .expect("有数据就有分")
+            .overall;
+        assert_eq!(diff.rows[0].label, "质量分");
+        assert_eq!(diff.rows[0].old, format!("{:.0}", scored.round()));
+
+        // 变化行数与摘要是同一口径，不数第二遍
+        assert_eq!(
+            diff.changed,
+            diff.rows.iter().filter(|r| r.delta.is_changed()).count()
+        );
+        assert_eq!(diff.summary(), format!("{} 项有变化", diff.changed));
+    }
+
+    #[test]
+    fn diff_says_same_when_nothing_moved() {
+        let full = base_stats(ColumnStatsDetail::Numeric(numeric(Some(0.2), Vec::new())));
+        let diff = VersionDiffView::between(&full, "2026-09-14 09:10", &full, "2026-09-15 14:22");
+        assert!(
+            diff.rows.iter().all(|r| !r.delta.is_changed()),
+            "同一份数据不该报出变化：{:?}",
+            diff.rows
+        );
+        assert_eq!(diff.changed, 0);
+        assert!(
+            diff.summary().contains("完全一致"),
+            "摘要应直接给结论：{}",
+            diff.summary()
+        );
+    }
+
+    #[test]
+    fn diff_keeps_text_rows_and_dropped_rows_honest() {
+        // 数值 → 文本：数值专属行在新版没有对应行，如实写「—」而不是编一个
+        let old = base_stats(ColumnStatsDetail::Numeric(numeric(Some(2.5), Vec::new())));
+        let mut new = base_stats(ColumnStatsDetail::Text(TextStats {
+            min_length: 3,
+            max_length: 8,
+            top_values: vec![TextFrequency {
+                value: "a".into(),
+                count: 5,
+                ratio: 0.5,
+            }],
+        }));
+        new.stats.data_type = "VARCHAR".into();
+        let diff = VersionDiffView::between(&old, "2026-09-14 09:10", &new, "2026-09-15 14:22");
+
+        let kind = row_of(&diff, "类型");
+        assert_eq!(kind.delta, DeltaView::Changed, "类型变了就是变了");
+        assert_eq!((kind.old.as_str(), kind.new.as_str()), ("DECIMAL(12,2)", "VARCHAR"));
+
+        // 旧版独有的行保留，新版侧写「—」（不假装还有值）
+        let avg = row_of(&diff, "平均");
+        assert_eq!(avg.old, fmt_num(123.4567));
+        assert_eq!(avg.new, "—");
+        assert_eq!(avg.delta, DeltaView::Changed);
+        // 带方向的展示串（`2.5（右偏）`）解不出数字：两侧一致时说「不变」
+        // （那一支在 `diff_says_same_when_nothing_moved` 里盖住），这里只说它不编差值
+        let skew = row_of(&diff, "偏度");
+        assert_eq!(skew.old, "2.5（右偏）");
+        assert_eq!(skew.new, "—");
+        assert_eq!(skew.delta, DeltaView::Changed);
+        // 新版独有的行照旧出现
+        assert_eq!(row_of(&diff, "长度范围").new, "3 ~ 8");
+    }
+
+    #[test]
+    fn diff_splits_the_null_row_into_count_and_rate() {
+        // 「列」Tab 把空值写成一行（`20（2.0%）`）便于阅读，而对比要的是**能对齐的两个数**
+        let (old, new) = compare_pair();
+        let diff = VersionDiffView::between(&old, "09-14", &new, "09-15");
+        assert_eq!(row_of(&diff, "空值").delta, DeltaView::Down("-10".into()));
+        assert_eq!(row_of(&diff, "空值率").new, "0.5%");
+        assert_eq!(row_of(&diff, "非空值").delta, DeltaView::Up("+1,010".into()));
     }
 }

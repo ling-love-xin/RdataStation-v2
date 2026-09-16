@@ -22,6 +22,8 @@ use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::description_list::{DescriptionItem, DescriptionList, DescriptionText};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::radio::Radio;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -30,10 +32,10 @@ use gpui_kit::*;
 
 use crate::commands::InsightRefresh;
 use crate::model::{
-    ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, HistoryEntryView,
-    HistoryView, InsightPanelState, InsightTarget, MultiColumnView, MultiResultView, MultiRuleView,
-    NoteLevel, PanelData, PanelTab, QualityNote, SampleCell, StatRow, TableColumnView,
-    TableProfileView, HISTORY_PAGE_SIZE,
+    ColumnKind, ColumnProfileView, DeltaView, DiffRowView, DimensionView, DistributionBar, Emphasis,
+    HistoryEntryView, HistoryView, InsightPanelState, InsightTarget, MultiColumnView,
+    MultiResultView, MultiRuleView, NoteLevel, PanelData, PanelTab, QualityNote, SampleCell, StatRow,
+    TableColumnView, TableProfileView, VersionDiffView, HISTORY_PAGE_SIZE,
 };
 use crate::quality_scorer::Grade;
 use crate::rule_view::RulesView;
@@ -93,6 +95,8 @@ pub enum InsightEvent {
     },
     /// 请宿主读取某列的历次快照
     HistoryRequested { column: String },
+    /// 请宿主对比某一版与最新一版（读两版正文，方向固定为「选中 → 最新」）
+    VersionCompareRequested { column: String, version_id: String },
 }
 
 /// 列画像四区（顺序即渲染顺序）
@@ -157,6 +161,11 @@ pub struct InsightView {
     multi_notice: Option<String>,
     /// 快照保存中（按钮置灰；历史列表照旧可见）
     history_saving: bool,
+    /// 历史 Tab 的对比基准（选中的那一版的 `version_id`）。
+    ///
+    /// 它与载荷里的 `diff` 说的是同一件事：出数时由载荷反推（[`Self::set_history`]），
+    /// 只为了「点了以后、结果还没到」这一小段能亮着并显示取数提示。
+    compare_target: Option<String>,
     /// 快照保存 / 读取的失败提示。
     ///
     /// 存成**行内提示**而不是错误态：保存失败时最要紧的是「已有的历史还在」，
@@ -186,6 +195,7 @@ impl InsightView {
             multi_running: false,
             multi_notice: None,
             history_saving: false,
+            compare_target: None,
             history_notice: None,
             open_schema_sections: [true; SchemaSection::ALL.len()],
         }
@@ -235,6 +245,8 @@ impl InsightView {
         self.tab = target.default_tab();
         self.target = Some(target);
         self.data = PanelData::default();
+        // 对比基准只对旧目标（旧列）成立，跟着载荷一起清
+        self.compare_target = None;
         self.state = InsightPanelState::Loading;
         if self.emit_request_for_tab(self.tab, cx) {
             cx.notify();
@@ -279,12 +291,81 @@ impl InsightView {
     ///
     /// 保存中标记在出数时落回：它挂在「保存动作」上，不挂在面板状态上
     /// （面板状态只有四态，多一个 `Saving` 会让渲染分派多出一条不可能的分支）。
+    ///
+    /// 对比基准**从载荷反推**（`history.diff`）：列表刷新后「最新」就变了，
+    /// 留着一个指向旧「当前」的选中位比不选中更坏（D43）。
     pub fn set_history(&mut self, history: HistoryView, cx: &mut Context<Self>) {
+        self.compare_target = history
+            .diff
+            .as_ref()
+            .map(|diff| diff.baseline_version.clone());
         self.data = std::mem::take(&mut self.data).with_history(history);
         self.history_saving = false;
         self.history_notice = None;
         self.state = InsightPanelState::Data;
         cx.notify();
+    }
+
+    /// 历史 Tab 的版本行被点：选/取消对比基准（方向固定为「选中 → 最新」）。
+    ///
+    /// 只改选择位并发事件，差值由接缝读两版正文后回填（渲染路径零 I/O）。
+    pub fn toggle_compare_version(&mut self, version_id: &str, cx: &mut Context<Self>) {
+        if self.compare_target.as_deref() == Some(version_id) {
+            self.dismiss_diff(cx);
+            return;
+        }
+        // 最新一版没有更新的版本可比（列表行也不给它点击入口，这里是状态层的兜底）
+        if self.is_latest_version(version_id) {
+            return;
+        }
+        let Some(InsightTarget::Column { column, .. }) = self.target.clone() else {
+            return;
+        };
+        self.compare_target = Some(version_id.to_string());
+        // 上一个基准的差值已经不成立了：先放掉，渲染依此显示「读取版本正文…」
+        self.clear_diff();
+        cx.emit(InsightEvent::VersionCompareRequested {
+            column,
+            version_id: version_id.to_string(),
+        });
+        cx.notify();
+    }
+
+    /// 关掉对比面板（点 ✕ 或再点一次选中的那一行）
+    pub fn dismiss_diff(&mut self, cx: &mut Context<Self>) {
+        self.compare_target = None;
+        self.clear_diff();
+        cx.notify();
+    }
+
+    /// 对比取数失败：挂行内提示，并**把选中位一并放掉**。
+    ///
+    /// 不放掉会留下「选中亮着、面板却没出来」的死状态——选中的意义就是「面板该在」。
+    pub fn set_compare_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        self.compare_target = None;
+        self.clear_diff();
+        self.set_history_notice(message, cx);
+    }
+
+    /// 对比基准（选中的那一版的 `version_id`；`None` = 没在对比）
+    pub fn compare_target(&self) -> Option<&str> {
+        self.compare_target.as_deref()
+    }
+
+    /// 这一版是不是列表里的「当前」（对比固定为「选中 → 最新」，拿最新当基准无从比）
+    fn is_latest_version(&self, version_id: &str) -> bool {
+        self.data
+            .history
+            .as_ref()
+            .and_then(|history| history.entries.first())
+            .is_some_and(|entry| entry.version_id == version_id)
+    }
+
+    /// 放下对比结果（选择位由调用方处理）
+    fn clear_diff(&mut self) {
+        if let Some(history) = self.data.history.take() {
+            self.data.history = Some(history.without_diff());
+        }
     }
 
     /// 历史 Tab 的「保存」：发请求（重取领域画像 + 双写都归接缝）
@@ -469,6 +550,7 @@ impl InsightView {
     pub fn clear_target(&mut self, cx: &mut Context<Self>) {
         self.target = None;
         self.data = PanelData::default();
+        self.compare_target = None;
         self.state = InsightPanelState::Empty;
         cx.notify();
     }
@@ -1257,11 +1339,11 @@ impl InsightView {
         body.child(accordion)
     }
 
-    /// 快照历史（Tab「历史」，Phase 5.1）：保存入口 + 版本列表 + 存储用量。
+    /// 快照历史（Tab「历史」，Phase 5.1 / 5.2）：保存入口 + 版本列表 + 对比面板 + 存储用量。
     ///
     /// 列表**不另设内层滚动**：面板主体已经是滚动区（`#insight-body`），再来一层
     /// 就是嵌套滚动（滚轮到底后停住、外层接不上）。高度上限靠分页
-    /// （[`HISTORY_PAGE_SIZE`]）而不是靠固定高度——Phase 5.2 的对比面板要接在列表下方。
+    /// （[`HISTORY_PAGE_SIZE`]）而不是靠固定高度。
     fn render_history(
         &self,
         history: &HistoryView,
@@ -1326,9 +1408,22 @@ impl InsightView {
         } else {
             let mut list = div().v_flex().w_full();
             for entry in &history.entries {
-                list = list.child(history_entry_row(entry, theme));
+                list = list.child(history_entry_row(
+                    entry,
+                    entity,
+                    self.compare_target.as_deref() == Some(entry.version_id.as_str()),
+                    theme,
+                ));
             }
             body = body.child(list);
+
+            // 上一行是唯一不能点的那一行（没有更新的版本可比）；多版时教一次怎么用
+            if history.entries.len() < 2 {
+                body = body.child(muted_line("再存一版就能对比", theme));
+            } else if history.diff.is_none() && self.compare_target.is_none() {
+                body = body.child(muted_line("点更早的一版，和当前对比", theme));
+            }
+
             if history.truncated {
                 body = body.child(muted_line(
                     &format!("只列出最近 {HISTORY_PAGE_SIZE} 条"),
@@ -1337,12 +1432,89 @@ impl InsightView {
             }
         }
 
+        // 对比面板：出现与否**只认载荷**（点过但结果未到时给一行取数提示）
+        if let Some(diff) = &history.diff {
+            body = body.child(self.render_version_diff(diff, entity, theme));
+        } else if self.compare_target.is_some() {
+            body = body.child(muted_line("读取版本正文…", theme));
+        }
+
         // 存储用量：拿不到就整行不显示（编一个 0 会让人以为历史被清了）
         if let Some(line) = history.stats_line() {
             body = body.child(muted_line(&line, theme));
         }
 
         body
+    }
+
+    /// 版本对比面板（Phase 5.2）：头行（与谁比 + 关掉）+ 逐字段 `旧 → 新` + 差值。
+    ///
+    /// 行集合来自视图模型（与「列」Tab 的基础统计同源），这里只负责把
+    /// **方向**映射到主题角色：方向 ≠ 好坏，所以不用 `success` / `danger` 预设评价；
+    /// 不变的那一档要安静（它是大多数行）。
+    fn render_version_diff(
+        &self,
+        diff: &VersionDiffView,
+        entity: &Entity<Self>,
+        theme: &Theme,
+    ) -> Div {
+        let colors = theme.colors;
+
+        let head = div()
+            .h_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(colors.foreground)
+                    .text_ellipsis()
+                    .child(format!("与 {} 对比", diff.baseline_label)),
+            )
+            .child(
+                Button::new("insight-diff-close")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Close)
+                    .tooltip("关掉对比")
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| entity.update(app, |view, cx| view.dismiss_diff(cx))
+                    }),
+            );
+
+        // 逐行：`旧 → 新` + 差值（两侧的展示串与「列」Tab 同源，不另立一套口径）
+        let mut rows = DescriptionList::new()
+            .columns(1)
+            .bordered(false)
+            .with_size(Size::Small)
+            .label_width(rems(ui::INSIGHT_DIFF_LABEL_WIDTH));
+        for row in &diff.rows {
+            let value = diff_row_value(row, theme).into_any_element();
+            rows = rows.child(
+                DescriptionItem::new(row.label.clone()).value(DescriptionText::AnyElement(value)),
+            );
+        }
+
+        div()
+            // 测试锚点：`debug_bounds` 只认 `debug_selector`（非测试构建 no-op）
+            .debug_selector(|| "insight-version-diff".to_string())
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .p_2()
+            .rounded_sm()
+            .bg(colors.list_hover)
+            .child(head)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child(diff.summary()),
+            )
+            .child(rows)
     }
 
     /// 列画像四区
@@ -1916,41 +2088,54 @@ fn schema_row(
     body.into_any_element()
 }
 
-// ==================== 快照历史的片段（Phase 5.1） ====================
+// ==================== 快照历史的片段（Phase 5.1 / 5.2） ====================
 
-/// 历史列表的一行：时间 + 短版本号 + 类型 + 首版/当前标记。
+/// 历史列表的一行：时间 + 短版本号 + 类型 + 首版/当前标记 + 选中态。
 ///
 /// 短版本号必须露出来：`created_at` 只有秒级精度（D18），同一秒存两次快照时
-/// 时间戳会重复，到那时告状/比对的靠的只能是这个 id。
-fn history_entry_row(entry: &HistoryEntryView, theme: &Theme) -> Div {
+/// 时间戳会重复，到那时告状 / 比对的靠的只能是这个 id。
+///
+/// 用 `ListItem` 而不是手搭 div：hover / 选中 / 禁用三态与其它列表保持一套视觉，
+/// 键盘与 a11y 也不用手接。**最新一版不可点**（没有更新的版本可比）。
+fn history_entry_row(
+    entry: &HistoryEntryView,
+    entity: &Entity<InsightView>,
+    selected: bool,
+    theme: &Theme,
+) -> ListItem {
     let colors = theme.colors;
-    let mut row = div()
-        .h_flex()
-        .w_full()
-        .gap_2()
+    let mut row = ListItem::new(ElementId::Name(
+        format!("insight-history-{}", entry.version_id).into(),
+    ))
+        .selected(selected)
+        .disabled(entry.is_latest)
         .px_1()
-        .py_0p5()
-        .rounded_sm()
         .text_xs()
         .child(
             div()
-                .flex_1()
-                .min_w_0()
-                .text_ellipsis()
-                .text_color(colors.foreground)
-                .child(entry.created_at.clone()),
-        )
-        .child(
-            div()
-                .flex_none()
-                .text_color(colors.muted_foreground)
-                .child(entry.short_version.clone()),
-        )
-        .child(
-            div()
-                .flex_none()
-                .text_color(colors.muted_foreground)
-                .child(entry.data_type.clone()),
+                .h_flex()
+                .w_full()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .text_color(colors.foreground)
+                        .child(entry.created_at.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(colors.muted_foreground)
+                        .child(entry.short_version.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(colors.muted_foreground)
+                        .child(entry.data_type.clone()),
+                ),
         );
 
     // 标记只给「值得一眼看出」的两行：最新一版与首版。
@@ -1961,7 +2146,16 @@ fn history_entry_row(entry: &HistoryEntryView, theme: &Theme) -> Div {
         row = row.child(history_chip("首版", colors.muted_foreground, theme));
     }
 
-    row
+    // 最新那行不给点击：方向固定为「选中 → 最新」，拿最新当基准无从比
+    if entry.is_latest {
+        return row;
+    }
+    // 闭包要 `'static`：实体克隆一份进闭包（引用会逃出函数体）
+    let entity = entity.clone();
+    let version_id = entry.version_id.clone();
+    row.on_click(move |_, _window, app| {
+        entity.update(app, |view, cx| view.toggle_compare_version(&version_id, cx));
+    })
 }
 
 /// 版本行上的小标记（文案色 + 淡底；不写裸 hex）
@@ -1973,6 +2167,44 @@ fn history_chip(text: &str, color: Hsla, theme: &Theme) -> Div {
         .bg(theme.colors.list_hover)
         .text_color(color)
         .child(text.to_string())
+}
+
+/// 对比的一行值：`旧 → 新` + 差值（方向用箭头与色档区分，颜色不预设好坏）
+fn diff_row_value(row: &DiffRowView, theme: &Theme) -> Div {
+    let colors = theme.colors;
+    let color = match row.delta {
+        // 方向 ≠ 好坏：上升不一定是好事（空值率升就是坏），所以只用中性色
+        DeltaView::Up(_) => colors.info,
+        DeltaView::Down(_) => colors.warning,
+        DeltaView::Same => colors.muted_foreground,
+        DeltaView::Changed => colors.primary,
+    };
+    let marker = match row.delta {
+        DeltaView::Up(_) => "▲",
+        DeltaView::Down(_) => "▼",
+        DeltaView::Same => "●",
+        DeltaView::Changed => "◆",
+    };
+
+    div()
+        .h_flex()
+        .w_full()
+        .gap_2()
+        .text_xs()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                .text_color(colors.muted_foreground)
+                .child(format!("{} → {}", row.old, row.new)),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_color(color)
+                .child(format!("{} {marker}", row.delta.text())),
+        )
 }
 
 fn zone_title(title: &str, theme: &Theme) -> Div {
@@ -2284,7 +2516,7 @@ mod tests {
     use super::{truncate, InsightEvent, InsightView};
     use crate::model::{
         ColumnProfileView, HistoryView, InsightPanelState, InsightTarget, MultiColumnView,
-        MultiResultView, MultiRuleView, PanelTab, TableProfileView,
+        MultiResultView, MultiRuleView, PanelTab, TableProfileView, VersionDiffView,
     };
     // 领域类型从 crate 根再导出引用（`model.rs` 里对 `types` 的 `use` 是私有的）
     use crate::{
@@ -2464,6 +2696,35 @@ mod tests {
                 ratio: 0.4,
             }]),
         })
+    }
+
+    /// 版本对比用的领域画像（行数 / 空值数可变，其余固定）
+    fn compare_insight(total_count: u32, null_count: u32) -> ColumnInsightFull {
+        ColumnInsightFull {
+            stats: ColumnStats {
+                column_name: "amount".into(),
+                data_type: "DECIMAL(12,2)".into(),
+                total_count,
+                null_count,
+                null_rate: null_count as f64 / total_count.max(1) as f64,
+                unique_count: Some(total_count / 2),
+                stats_detail: ColumnStatsDetail::Numeric(NumericStats {
+                    min: 1.0,
+                    max: 99.0,
+                    avg: 50.0,
+                    median: 50.0,
+                    p25: 25.0,
+                    p75: 75.0,
+                    sum: 3500.0,
+                    stddev: Some(10.0),
+                    skewness: None,
+                    kurtosis: None,
+                    is_extreme: Vec::new(),
+                }),
+            },
+            sample: vec![serde_json::json!(42), serde_json::Value::Null],
+            histogram: None,
+        }
     }
 
     #[gpui_kit::test]
@@ -3310,6 +3571,193 @@ mod tests {
         view.update(cx, |view, _| {
             assert_eq!(view.state(), &InsightPanelState::Empty);
             assert_eq!(view.empty_hint(), "历史按列记录：请先打开某一列的洞察");
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// 历史 Tab 的对比（Phase 5.2）：点一版做基准 → 发事件；出数后面板才在；✕ 关掉
+    #[gpui_kit::test]
+    fn history_compare_selects_a_version_and_can_be_dismissed(cx: &mut TestAppContext) {
+        use crate::store::InsightVersionEntry;
+
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let events = crate::test_support::event_sink(&view, cx);
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_project_open(true, cx);
+                view.set_target(column_target(), cx);
+                // 对比面板长在「历史」Tab 里：不切过去就先没得渲染
+                view.set_tab(PanelTab::History, cx);
+            });
+        });
+        let entries = |created_at: &str, version: &str, parent: Option<&str>| InsightVersionEntry {
+            snapshot_id: format!("snap-{version}"),
+            column_name: "amount".into(),
+            data_type: Some("DECIMAL(12,2)".into()),
+            stats_json: "{}".into(),
+            version_id: version.into(),
+            parent_version_id: parent.map(str::to_string),
+            checksum: "sum".into(),
+            created_at: created_at.into(),
+        };
+        let list = vec![
+            entries("2026-09-15 14:22", "aaaaaaaa-1111", Some("bbbbbbbb-2222")),
+            entries("2026-09-14 09:10", "bbbbbbbb-2222", None),
+        ];
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_history(HistoryView::from_entries("amount", &list, None), cx)
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("insight-version-diff").is_none(),
+            "没选版本时不该有对比面板"
+        );
+        events.take();
+
+        // 最新那一版不给比：方向固定为「选中 → 最新」，拿它当基准无从比
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.toggle_compare_version("aaaaaaaa-1111", cx))
+        });
+        assert!(
+            events.take().is_empty(),
+            "点最新一版不该发请求（它没有更新的版本可比）"
+        );
+        view.update(cx, |view, _| assert!(view.compare_target().is_none()));
+
+        // 点更早的一版：选中位亮起 + 发请求（差值由接缝读两版正文后回填）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.toggle_compare_version("bbbbbbbb-2222", cx))
+        });
+        assert_eq!(
+            view.read_with(cx, |view, _| view.compare_target().map(str::to_string)),
+            Some("bbbbbbbb-2222".into())
+        );
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                InsightEvent::VersionCompareRequested { column, version_id }
+                    if column == "amount" && version_id == "bbbbbbbb-2222"
+            )),
+            "对比要带名单与版本号：{:?}",
+            events.borrow()
+        );
+        // 结果未到时先给取数提示，不假装有差值
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("insight-version-diff").is_none());
+        events.take();
+
+        // 出数：面板出现，且**选中位由载荷反推**（不靠视图自己记）
+        let diff = VersionDiffView::between(
+            &compare_insight(1000, 20),
+            "2026-09-14 09:10",
+            &compare_insight(2000, 10),
+            "2026-09-15 14:22",
+        )
+        .with_baseline_version("bbbbbbbb-2222");
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_history(
+                    HistoryView::from_entries("amount", &list, None).with_diff(diff),
+                    cx,
+                )
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("insight-version-diff").is_some(),
+            "出数后对比面板应在"
+        );
+        view.update(cx, |view, _| {
+            assert_eq!(view.compare_target(), Some("bbbbbbbb-2222"), "选中位跟载荷走");
+            assert_eq!(view.state(), &InsightPanelState::Data, "对比不抢整页状态");
+        });
+
+        // ✕ 关掉：只改自身状态（不发事件），面板随之消失
+        cx.update(|_window, cx| view.update(cx, |view, cx| view.dismiss_diff(cx)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("insight-version-diff").is_none(),
+            "关掉后不该再有对比面板"
+        );
+        view.update(cx, |view, _| {
+            assert!(view.compare_target().is_none());
+            assert!(
+                view.data()
+                    .as_history()
+                    .is_some_and(|h| h.diff.is_none() && h.entries.len() == 2),
+                "列表要留着（关掉的只是对比）"
+            );
+        });
+        assert!(events.take().is_empty(), "关面板是本地状态，不该发事件");
+
+        // 刷新列表（保存 / ⟳）：对比不再自动续取——留着会指向已变的「当前」
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.toggle_compare_version("bbbbbbbb-2222", cx)
+            })
+        });
+        events.take();
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_history(HistoryView::from_entries("amount", &list, None), cx)
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        view.update(cx, |view, _| {
+            assert!(
+                view.compare_target().is_none(),
+                "列表刷新后选中位要落回（载荷里没有对比）"
+            );
+        });
+    }
+
+    /// 对比取数失败：挂行内提示并放掉选中位（不留「亮着但没面板」的死状态）
+    #[gpui_kit::test]
+    fn compare_failure_releases_the_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_project_open(true, cx);
+                view.set_target(column_target(), cx);
+                view.set_tab(PanelTab::History, cx);
+                view.set_history(
+                    HistoryView::from_entries(
+                        "amount",
+                        &[crate::store::InsightVersionEntry {
+                            snapshot_id: "snap-1".into(),
+                            column_name: "amount".into(),
+                            data_type: Some("DOUBLE".into()),
+                            stats_json: "{}".into(),
+                            version_id: "bbbbbbbb-2222".into(),
+                            parent_version_id: None,
+                            checksum: "sum".into(),
+                            created_at: "2026-09-14 09:10".into(),
+                        }],
+                        None,
+                    ),
+                    cx,
+                );
+            });
+        });
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_compare_notice("这一版已不在历史里", cx))
+        });
+        view.update(cx, |view, _| {
+            assert!(view.compare_target().is_none());
+            assert_eq!(view.state(), &InsightPanelState::Data, "不抢整页错误态");
+            assert!(
+                view.data()
+                    .as_history()
+                    .is_some_and(|h| !h.is_empty() && h.diff.is_none()),
+                "列表照旧可见"
+            );
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));
     }

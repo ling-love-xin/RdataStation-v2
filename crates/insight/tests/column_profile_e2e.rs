@@ -242,6 +242,79 @@ fn snapshot_history_round_trip_over_a_real_project() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// 版本对比：读**两份存下来的正文**算差（不是拿现在重算的去比）。
+///
+/// 方向固定为「选中版本 → 最新版本」；
+#[test]
+fn snapshot_comparison_reads_both_stored_bodies() {
+    let _serial = serial();
+    let table = "t_insight_e2e_history_compare";
+    let root = temp_project_dir("history_compare");
+    seed(
+        table,
+        "amount DECIMAL(12,2)",
+        "VALUES (1.5), (2.5), (NULL)",
+    );
+
+    let first = InsightService::save_column_snapshot(Some(&root), table, "amount").expect("首版");
+    let baseline = first.entries[0].version_id.clone();
+
+    // 数据变了再存一版：插一行 + 把空值补上
+    {
+        let conn = get_or_create_duckdb().expect("内存 DuckDB");
+        let conn = conn.lock().expect("DuckDB 锁不应中毒");
+        let sql = format!("INSERT INTO \"{table}\" VALUES (9.5)");
+        conn.execute_batch(&sql).expect("插一行");
+        let sql = format!("UPDATE \"{table}\" SET amount = 3.5 WHERE amount IS NULL");
+        conn.execute_batch(&sql).expect("补上空值");
+    }
+    let second =
+        InsightService::save_column_snapshot(Some(&root), table, "amount").expect("第二版");
+    assert_eq!(second.entries.len(), 2);
+
+    let compared = InsightService::compare_column_snapshots(Some(&root), "amount", &baseline)
+        .expect("对比应成功");
+    // 列表一并回来（对比面板与列表同属一个载荷，D43）
+    assert_eq!(compared.entries.len(), 2);
+    let diff = compared.diff.as_ref().expect("应有对比结果");
+    assert_eq!(diff.baseline_version, baseline, "基准就是选中的那一版");
+    assert_eq!(
+        diff.baseline_label, first.entries[0].created_at,
+        "面板标题用的是那一版的时间"
+    );
+
+    let row = |label: &str| {
+        diff.rows
+            .iter()
+            .find(|row| row.label == label)
+            .unwrap_or_else(|| panic!("应变到「{label}」：{:?}", diff.rows))
+    };
+    // 3 行 → 4 行；空值 1 → 0（把 NULL 补成了 3.5）
+    assert_eq!((row("总行数").old.as_str(), row("总行数").new.as_str()), ("3", "4"));
+    assert!(row("总行数").delta.is_changed());
+    assert_eq!((row("空值").old.as_str(), row("空值").new.as_str()), ("1", "0"));
+    assert!(diff.changed > 0, "明明改了数据，不该说「完全一致」");
+
+    // 拿最新一版当基准：方向固定为「选中 → 最新」，与自身比没有意义
+    let latest = second.entries[0].version_id.clone();
+    let err = InsightService::compare_column_snapshots(Some(&root), "amount", &latest)
+        .expect_err("最新一版没有可比的对象");
+    assert!(
+        InsightService::describe_error(&err).message.contains("最新一版"),
+        "错误要说清为什么：{err}"
+    );
+
+    // 编造的版本号：不能静默给一份“空对比”
+    let err = InsightService::compare_column_snapshots(Some(&root), "amount", "ffffffff-0000")
+        .expect_err("不存在的版本应报错");
+    assert!(
+        InsightService::describe_error(&err).message.contains("已不在历史里"),
+        "错误要指向「这一版没了」：{err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// 无项目时快照不可用，但错误要说人话（而不是把 `[code]` 摆给用户看）
 #[test]
 fn snapshot_without_a_project_explains_itself() {

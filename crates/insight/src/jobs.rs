@@ -146,6 +146,10 @@ pub fn handle_event(
         InsightEvent::HistoryRequested { column } => {
             request_history(view, project_root, column.clone(), cx)
         }
+        InsightEvent::VersionCompareRequested {
+            column,
+            version_id,
+        } => request_version_compare(view, project_root, column.clone(), version_id.clone(), cx),
         InsightEvent::SnapshotSaveRequested {
             temp_table,
             column,
@@ -541,6 +545,34 @@ pub fn request_history(
             Err(err) => {
                 let info = InsightService::describe_error(&err);
                 panel.set_error(info.message, info.retryable, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// 对比某一版与最新一版（读两版正文再算差）。
+///
+/// 失败只挂**行内提示并放掉选中位**：列表本身是好的，推整页错误态会让人以为
+/// 历史没了；而选中位若不放，界面上会留下「亮着但没有面板」的死状态。
+pub fn request_version_compare(
+    view: &Entity<InsightView>,
+    project_root: Option<PathBuf>,
+    column: String,
+    version_id: String,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        InsightService::compare_column_snapshots(project_root.as_deref(), &column, &version_id)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(history) => panel.set_history(history, cx),
+            Err(err) => {
+                let info = InsightService::describe_error(&err);
+                panel.set_compare_notice(info.message, cx);
             }
         });
     })
@@ -949,15 +981,52 @@ mod tests {
             assert_eq!(panel.state(), &InsightPanelState::Data);
         });
 
-        // 再存一版：版本链串起来（新版的父版本指向上一版）
+        // 再存一版：版本链串起来（新版的父版本指向上一版）。
+        // 两版之间真的改一次数据，这样下面的对比才有东西可比
+        {
+            let conn = crate::insight_engine::get_or_create_duckdb().expect("内存 DuckDB");
+            let conn = conn.lock().expect("DuckDB 锁不应中毒");
+            conn.execute_batch(&format!("INSERT INTO \"{table}\" VALUES (9.5)"))
+                .expect("插一行（模拟数据变了）");
+        }
         cx.update(|cx| panel.update(cx, |panel, cx| panel.request_snapshot_save(cx)));
         cx.run_until_parked();
-        cx.update(|cx| {
+        let baseline_version = cx.update(|cx| {
             let history = panel.read(cx).data().as_history().expect("历史").clone();
             assert_eq!(history.entries.len(), 2);
             assert!(history.entries[0].is_latest && history.entries[0].has_parent);
             assert!(!history.entries[1].is_latest && !history.entries[1].has_parent);
             assert_ne!(history.entries[0].version_id, history.entries[1].version_id);
+            history.entries[1].version_id.clone()
+        });
+
+        // 对比：方向固定为「选中 → 最新」，差值从**存下来的两份正文**算
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_compare_version(&baseline_version, cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let panel = panel.read(cx);
+            assert_eq!(panel.compare_target(), Some(baseline_version.as_str()));
+            let diff = panel
+                .data()
+                .as_history()
+                .and_then(|history| history.diff.clone())
+                .expect("对比结果应已回填");
+            assert_eq!(diff.baseline_version, baseline_version);
+            let total = diff
+                .rows
+                .iter()
+                .find(|row| row.label == "总行数")
+                .expect("应变到总行数");
+            assert_eq!(
+                (total.old.as_str(), total.new.as_str()),
+                ("3", "4"),
+                "两版之间插了一行，对比要看得见"
+            );
+            assert!(total.delta.is_changed());
         });
 
         // 结果集过期（临时表没了）：保存失败**只挂行内提示**——已有的历史必须还在，
