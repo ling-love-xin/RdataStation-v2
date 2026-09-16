@@ -16,12 +16,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use engine::sql::{ColumnDefInfo, SqlEngine};
 use rds_mock::{
     ColumnDataType, ColumnDef, ColumnDependency, DependencyType, GeneratorConfig, Locale,
-    MockConfig, MockEngine, MockExportFormat, ScenarioTemplate, TemplateTable, TempTableWriteMode,
+    MockConfig, MockEngine, MockExportFormat, ScenarioTemplate, TempTableWriteMode, TemplateTable,
     parse_data_type,
 };
-use engine::sql::{ColumnDefInfo, SqlEngine};
 use shared::models::QueryResult;
 
 // ==================== 配置构造 ====================
@@ -160,7 +160,10 @@ async fn write_temp_table_creates_table_in_file_database() {
         &db,
         &result.temp_table_name,
         "t_sink_create",
-        TempTableWriteMode::Create(vec![int_column("id", true, false), int_column("金额", false, true)]),
+        TempTableWriteMode::Create(vec![
+            int_column("id", true, false),
+            int_column("金额", false, true),
+        ]),
     )
     .expect("直写建表应当成功");
 
@@ -209,7 +212,11 @@ async fn write_temp_table_appends_to_existing_table() {
         TempTableWriteMode::Append,
     )
     .expect("追加应当成功");
-    assert_eq!(file_row_count(&db, "t_sink_append"), 20, "既有 10 行不应被覆盖");
+    assert_eq!(
+        file_row_count(&db, "t_sink_append"),
+        20,
+        "既有 10 行不应被覆盖"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -266,7 +273,11 @@ async fn write_temp_table_rolls_back_and_detaches_after_failure() {
         locale: Locale::ZhCn,
         columns: vec![
             auto_increment("id"),
-            col("note", ColumnDataType::Varchar { length: Some(16) }, GeneratorConfig::Word),
+            col(
+                "note",
+                ColumnDataType::Varchar { length: Some(16) },
+                GeneratorConfig::Word,
+            ),
         ],
     })
     .await
@@ -871,6 +882,249 @@ async fn generate_scenario_generates_every_table_and_reports_progress() {
     assert_eq!(result.tables[1].temp_table_name, "temp_mock_it_child");
 }
 
+// ==================== 表间引用（多表场景） ====================
+
+/// 声明一条跨表引用（挂在列上，是本模块表达关系的唯一处）。
+fn reference(parent_table: &str, parent_column: &str) -> ColumnDependency {
+    ColumnDependency {
+        dep_type: DependencyType::ForeignKey,
+        source_columns: Vec::new(),
+        expression: None,
+        ref_table: Some(parent_table.to_string()),
+        ref_column: Some(parent_column.to_string()),
+        weights: None,
+    }
+}
+
+/// 引用列：场景生成时值从父表主键域取；单表生成时按自己的生成器取值。
+fn ref_col(
+    name: &str,
+    parent_table: &str,
+    parent_column: &str,
+    fallback: GeneratorConfig,
+) -> ColumnDef {
+    ColumnDef {
+        dependency: Some(reference(parent_table, parent_column)),
+        ..col(name, ColumnDataType::Integer, fallback)
+    }
+}
+
+/// 取某张临时表某一列的全部值（字符串化）。
+fn column_of(temp_table: &str, column: &str) -> Vec<String> {
+    let preview = MockEngine::preview(temp_table, 10_000).expect("读预览");
+    let index = preview
+        .columns
+        .iter()
+        .position(|c| c == column)
+        .unwrap_or_else(|| panic!("{temp_table} 里没有列 {column}：{:?}", preview.columns));
+    QueryResult::from_batches(preview.columns.clone(), preview.batches.clone())
+        .rows
+        .iter()
+        .map(|row| match &row[index] {
+            shared::models::Value::Null => "NULL".to_string(),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+/// 引用：子表外键列的每个值都落在**父表主键域**内，且确实用上了父键（不是常数）。
+///
+/// 域是算出来的（父列自增参数 + 父表行数），所以这里同时验证了“不读已落地数据”也能对齐。
+#[tokio::test]
+async fn scenario_references_stay_inside_the_parent_key_domain() {
+    let template = ScenarioTemplate {
+        id: "it:refs".to_string(),
+        name: "引用完整性".to_string(),
+        description: "父表 5 行、子表 40 行，子表两列引用父表主键".to_string(),
+        category: "测试".to_string(),
+        locale: "zh_cn".to_string(),
+        tables: vec![
+            TemplateTable {
+                name: "it_ref_parent".to_string(),
+                row_count: 5,
+                columns: vec![auto_increment("id")],
+            },
+            TemplateTable {
+                name: "it_ref_child".to_string(),
+                row_count: 40,
+                columns: vec![
+                    auto_increment("id"),
+                    ref_col(
+                        "parent_id",
+                        "it_ref_parent",
+                        "id",
+                        GeneratorConfig::RandomInt { min: 1, max: 5 },
+                    ),
+                    ref_col(
+                        "parent_id_again",
+                        "it_ref_parent",
+                        "id",
+                        GeneratorConfig::RandomInt { min: 1, max: 5 },
+                    ),
+                ],
+            },
+        ],
+    };
+
+    let result = MockEngine::generate_scenario(&template, |_, _| {})
+        .await
+        .expect("场景生成应当成功");
+
+    let parent_keys = column_of(&result.tables[0].temp_table_name, "id");
+    assert_eq!(parent_keys.len(), 5, "父表应生成 5 行");
+    let child_keys = column_of(&result.tables[1].temp_table_name, "parent_id");
+    assert_eq!(child_keys.len(), 40, "子表应生成 40 行");
+
+    let bad: Vec<&String> = child_keys
+        .iter()
+        .filter(|value| !parent_keys.contains(value))
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "子表外键应全部落在父表主键域 {parent_keys:?} 内，越界的有 {bad:?}"
+    );
+
+    let distinct: std::collections::HashSet<&String> = child_keys.iter().collect();
+    assert!(
+        distinct.len() > 1,
+        "40 行只抽到同一个父键（{}），说明没真的按域采样",
+        distinct.len()
+    );
+    let again = column_of(&result.tables[1].temp_table_name, "parent_id_again");
+    assert!(
+        again.iter().all(|value| parent_keys.contains(value)),
+        "同一张表上的第二条引用同样要在域内"
+    );
+}
+
+/// 引用**自身**（自关联）合法：父域就是本表主键域；引用**后面**才生成的表也合法
+/// （域由模板参数算出，与“哪张表先跑”无关）。
+#[tokio::test]
+async fn scenario_references_allow_self_and_forward_targets() {
+    let template = ScenarioTemplate {
+        id: "it:refs-order".to_string(),
+        name: "自关联与前向引用".to_string(),
+        description: "child 引用自己（parent_id）并引用后生成的 later 表".to_string(),
+        category: "测试".to_string(),
+        locale: "en".to_string(),
+        tables: vec![
+            TemplateTable {
+                name: "it_selfref_child".to_string(),
+                row_count: 12,
+                columns: vec![
+                    auto_increment("id"),
+                    ref_col(
+                        "parent_id",
+                        "it_selfref_child",
+                        "id",
+                        GeneratorConfig::RandomInt { min: 1, max: 12 },
+                    ),
+                    ref_col(
+                        "later_id",
+                        "it_selfref_later",
+                        "id",
+                        GeneratorConfig::RandomInt { min: 1, max: 3 },
+                    ),
+                ],
+            },
+            TemplateTable {
+                name: "it_selfref_later".to_string(),
+                row_count: 3,
+                columns: vec![auto_increment("id")],
+            },
+        ],
+    };
+
+    let result = MockEngine::generate_scenario(&template, |_, _| {})
+        .await
+        .expect("自关联与前向引用都应当成功");
+
+    let own = column_of(&result.tables[0].temp_table_name, "id");
+    assert!(
+        column_of(&result.tables[0].temp_table_name, "parent_id")
+            .iter()
+            .all(|value| own.contains(value)),
+        "自关联列应落在本表主键域内"
+    );
+    let later = column_of(&result.tables[1].temp_table_name, "id");
+    assert_eq!(later.len(), 3);
+    assert!(
+        column_of(&result.tables[0].temp_table_name, "later_id")
+            .iter()
+            .all(|value| later.contains(value)),
+        "前向引用应落在后生成的表的主键域内"
+    );
+}
+
+/// 解析不了的引用：**生成前**就报可读错误（不猜、也不去读已落地的数据）。
+#[test]
+fn scenario_reference_resolution_reports_readable_errors() {
+    // 父表总是只有一列 `id`；`parent_column` 是**子表引用时写的列名**
+    let build = |parent: &str, parent_column: &str, parent_gen: GeneratorConfig| ScenarioTemplate {
+        id: "it:refs-bad".to_string(),
+        name: "坏引用".to_string(),
+        description: String::new(),
+        category: "测试".to_string(),
+        locale: "en".to_string(),
+        tables: vec![
+            TemplateTable {
+                name: "it_bad_parent".to_string(),
+                row_count: 8,
+                columns: vec![ColumnDef {
+                    generator: parent_gen,
+                    ..auto_increment("id")
+                }],
+            },
+            TemplateTable {
+                name: "it_bad_child".to_string(),
+                row_count: 4,
+                columns: vec![
+                    auto_increment("id"),
+                    ref_col(
+                        "fk",
+                        parent,
+                        parent_column,
+                        GeneratorConfig::RandomInt { min: 1, max: 8 },
+                    ),
+                ],
+            },
+        ],
+    };
+
+    let missing_table = build(
+        "nope",
+        "id",
+        GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+    );
+    let err = MockEngine::resolve_reference_domains(&missing_table).expect_err("应报错");
+    assert!(err.to_string().contains("没有的表"), "err: {err}");
+
+    let missing_column = build(
+        "it_bad_parent",
+        "nope",
+        GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+    );
+    let err = MockEngine::resolve_reference_domains(&missing_column).expect_err("应报错");
+    assert!(err.to_string().contains("没有这一列"), "err: {err}");
+
+    // 父列不是自增（uuid / 随机）→ 算不出域，明确拒绝
+    let not_auto = build("it_bad_parent", "id", GeneratorConfig::UuidV4);
+    let err = MockEngine::resolve_reference_domains(&not_auto).expect_err("应报错");
+    assert!(err.to_string().contains("自增"), "err: {err}");
+
+    // 全是好引用时：域按 (表, 列) 去重（两条引用指向同一父列）
+    let ok = build(
+        "it_bad_parent",
+        "id",
+        GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+    );
+    let domains = MockEngine::resolve_reference_domains(&ok).expect("应解析成功");
+    assert_eq!(domains.len(), 1, "两条引用指向同一父列，域应只有一条");
+    assert_eq!(domains[0].first, 1);
+    assert_eq!(domains[0].last(), 8);
+    assert_eq!(domains[0].count, 8);
+}
+
 // ==================== 约束类生成器（集合类参数） ====================
 
 /// 集合为空 / 权重全为 0：**生成前**拦住并给可读错误。
@@ -882,9 +1136,7 @@ async fn empty_constraint_collection_is_rejected_before_generating() {
     for (hint, generator) in [
         (
             "外键取值",
-            GeneratorConfig::ForeignKey {
-                values: Vec::new(),
-            },
+            GeneratorConfig::ForeignKey { values: Vec::new() },
         ),
         (
             "序列取值",
@@ -893,7 +1145,12 @@ async fn empty_constraint_collection_is_rejected_before_generating() {
                 cycle: false,
             },
         ),
-        ("加权选项", GeneratorConfig::Weighted { choices: Vec::new() }),
+        (
+            "加权选项",
+            GeneratorConfig::Weighted {
+                choices: Vec::new(),
+            },
+        ),
         (
             "加权选项",
             GeneratorConfig::Weighted {
@@ -912,9 +1169,7 @@ async fn empty_constraint_collection_is_rejected_before_generating() {
                 generator,
             )],
         };
-        let err = MockEngine::generate(config)
-            .await
-            .expect_err("应当被拦住");
+        let err = MockEngine::generate(config).await.expect_err("应当被拦住");
         assert!(err.to_string().contains(hint), "{err}");
         assert!(err.to_string().contains("列 'v'"), "{err}");
     }
@@ -936,7 +1191,9 @@ async fn filled_constraint_collection_generates() {
             },
         )],
     };
-    let result = MockEngine::generate(config).await.expect("填了集合就应当能生成");
+    let result = MockEngine::generate(config)
+        .await
+        .expect("填了集合就应当能生成");
     assert_eq!(result.row_count, 20);
 
     // 值必须来自集合（不能是空串或别的默认值）

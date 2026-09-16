@@ -37,8 +37,8 @@ pub use models::{
     ColumnDataType, ColumnDef, ColumnDependency, ColumnMappingResponse, DependencyConfig,
     DependencyType, GeneratorConfig, ImportSchemaInput, Locale, MockConfig, MockExportFormat,
     MockExportInput, MockGenerateResult, MockPersistAssetInput, MockPersistAssetResult,
-    MockSaveToScratchpadInput, MockScenarioResult, MockScenarioTableResult, ScenarioTemplate,
-    TemplateTable,
+    MockSaveToScratchpadInput, MockScenarioResult, MockScenarioTableResult, ReferenceDomain,
+    ScenarioTemplate, TemplateTable,
 };
 pub use persistence::{
     MockGenerationColumn, MockGenerationDetail, MockGenerationStore, MockGenerationTask,

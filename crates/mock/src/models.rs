@@ -556,6 +556,69 @@ pub struct ColumnDependency {
     pub weights: Option<Vec<(String, f64)>>,
 }
 
+// ==================== 表间引用（场景生成用） ====================
+
+/// 一张表的某个主键列在**本次生成**中的取值域（供子表引用采样）。
+///
+/// 由父列的 `AutoIncrement { start, step }` 与父表行数**算出来**，因此：
+///
+/// - **不读任何已有数据**（不查库、不开文件）——父表与子表在同一次多表生成里产出；
+/// - **O(1) 内存**：等差数列，不需要把十万量级的主键装进内存；
+/// - 域是「本次生成会产出的值」的精确集合（自增列逐行 `+step`，不受唯一性重试影响）。
+///
+/// 父键不是自增（uuid / 随机）时**算不出域**——那种情形直接拒绝并给可读理由
+/// （见 `MockEngine::resolve_reference_domains`），不猜、也不去读已落地的数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceDomain {
+    /// 父表名（模板里的表名）
+    pub table: String,
+    /// 被引用的父列名
+    pub column: String,
+    /// 域下界（`AutoIncrement.start`）
+    pub first: i64,
+    /// 步长（`AutoIncrement.step`）
+    pub step: i64,
+    /// 取值个数（= 父表行数）
+    pub count: u32,
+}
+
+impl ReferenceDomain {
+    /// 域内第 `index` 个值（调用方保证 `index < count`）。
+    pub fn value_at(&self, index: u32) -> i64 {
+        self.first + self.step * i64::from(index)
+    }
+
+    /// 域上界（`count` 为 0 时等于下界——空域，生成前会被拦下）。
+    pub fn last(&self) -> i64 {
+        match self.count.checked_sub(1) {
+            Some(last) => self.value_at(last),
+            None => self.first,
+        }
+    }
+
+    /// 引用目标文案：`users.id（1..1000）`（面板展示关系时用）。
+    pub fn label(&self) -> String {
+        if self.step == 1 {
+            format!(
+                "{}.{}（{}..{}）",
+                self.table,
+                self.column,
+                self.first,
+                self.last()
+            )
+        } else {
+            format!(
+                "{}.{}（{}..{}，步长 {}）",
+                self.table,
+                self.column,
+                self.first,
+                self.last(),
+                self.step
+            )
+        }
+    }
+}
+
 /// 依赖解析配置
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

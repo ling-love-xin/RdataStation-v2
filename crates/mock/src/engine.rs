@@ -16,9 +16,9 @@ use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
 use crate::error::{MockError, MockResult};
 use crate::models::{
     ColumnDataType, ColumnDef, ColumnDependency, ColumnMappingResponse, DependencyConfig,
-    DependencyType, GeneratorConfig, ImportSchemaInput, Locale, MockConfig,
-    MockExportFormat, MockGenerateResult, MockScenarioResult,
-    MockScenarioTableResult, ScenarioTemplate,
+    DependencyType, GeneratorConfig, ImportSchemaInput, Locale, MockConfig, MockExportFormat,
+    MockGenerateResult, MockScenarioResult, MockScenarioTableResult, ReferenceDomain,
+    ScenarioTemplate,
 };
 use crate::schema_map::{ColumnMapper, parse_data_type};
 use crate::templates;
@@ -97,6 +97,23 @@ impl MockEngine {
     /// 返回 `MockGenerateResult` 包含预览 `QueryResult` 和耗时。
     pub async fn generate_with_progress<F>(
         config: MockConfig,
+        on_progress: F,
+    ) -> MockResult<MockGenerateResult>
+    where
+        F: Fn(usize, usize) + Send + 'static,
+    {
+        Self::generate_table(config, &[], on_progress).await
+    }
+
+    /// 生成一张表（内部实现）：`domains` 是本次多表生成的父表取值域，供声明了跨表引用的列采样。
+    ///
+    /// 引用的**校验**在 [`Self::resolve_reference_domains`]（场景级，错就报）；到了生成单表这一步，
+    /// 域清单里没有匹配项只意味着一件事：**这是一次单表生成**，没有父表上下文。
+    /// 此时按该列自己的 `generator` 取值（模板与面板都保证它的域落在父表域内），
+    /// 而不是报错——单表生成本来就没有“对齐哪张父表”可言。
+    async fn generate_table<F>(
+        config: MockConfig,
+        domains: &[ReferenceDomain],
         on_progress: F,
     ) -> MockResult<MockGenerateResult>
     where
@@ -186,14 +203,32 @@ impl MockEngine {
                 let mut row_vals = Vec::with_capacity(config.columns.len());
 
                 for (col_idx, col) in config.columns.iter().enumerate() {
+                    // 跨表引用列：值从父表的主键域里取（域由父列的自增参数与行数算出，不读数据）
+                    let domain = col
+                        .dependency
+                        .as_ref()
+                        .filter(|dep| matches!(dep.dep_type, DependencyType::ForeignKey))
+                        .and_then(|dep| Self::domain_for(dep, domains));
                     let mut attempts = 0;
                     let value = loop {
-                        let val = generate_cell(
-                            &col.generator,
-                            &mut rng,
-                            global_row as usize,
-                            &config.locale,
-                        );
+                        let val = match domain {
+                            Some(domain) if domain.count > 0 => {
+                                let index = (0..domain.count).fake_with_rng::<u32, _>(&mut rng);
+                                domain.value_at(index.min(domain.count - 1)).to_string()
+                            }
+                            Some(_) => {
+                                return Err(MockError::Generation(format!(
+                                    "引用目标 '{}' 的父表行数为 0，没有可采样的主键值",
+                                    col.name
+                                )));
+                            }
+                            None => generate_cell(
+                                &col.generator,
+                                &mut rng,
+                                global_row as usize,
+                                &config.locale,
+                            ),
+                        };
                         if !col.unique || !unique_sets[col_idx].contains(&val) {
                             if col.unique {
                                 unique_sets[col_idx].insert(val.clone());
@@ -784,10 +819,97 @@ impl MockEngine {
 }
 
 impl MockEngine {
-    /// 解析列依赖关系，生成拓扑排序后的列顺序和依赖映射
+    /// 解析场景模板里的**表间引用**，算出每条引用目标的取值域（生成前校验 + 采样依据）。
     ///
-    /// 对带有 `dependency` 字段的列进行拓扑排序，确保依赖列在依赖它们的列之前生成。
-    /// 返回 `DependencyConfig` 包含排序后的列名列表和依赖映射。
+    /// 规则（全部可在生成前判定，不需要读任何已有数据）：
+    ///
+    /// 1. 父表必须在**同一个模板**里（跨模板引用不成立，那是别的项目/别的库的事了）；
+    /// 2. 父列必须存在，且是 `AutoIncrement`——域 = `[start, start + step×(行数-1)]`；
+    ///    非自增主键（uuid / 随机）算不出域，直接拒绝而不是去读已落地的数据。
+    ///
+    /// **不要求父表先于子表**：域由模板参数算出，与「哪张表先跑」无关——
+    /// 引用自身（自关联）或引用后面才生成的表都是合法的，跑完整个场景两张表都在。
+    ///
+    /// 返回的域清单已按 `(父表, 父列)` 去重；面板也调它做**提交前**校验。
+    pub fn resolve_reference_domains(
+        template: &ScenarioTemplate,
+    ) -> MockResult<Vec<ReferenceDomain>> {
+        let mut domains: Vec<ReferenceDomain> = Vec::new();
+        for table in &template.tables {
+            for col in &table.columns {
+                let Some(dep) = &col.dependency else { continue };
+                if !matches!(dep.dep_type, DependencyType::ForeignKey) {
+                    continue;
+                }
+                let parent_name = dep.ref_table.as_deref().unwrap_or_default();
+                let parent_column = dep.ref_column.as_deref().unwrap_or_default();
+                if parent_name.is_empty() || parent_column.is_empty() {
+                    return Err(MockError::InvalidColumn(format!(
+                        "表 '{}' 的列 '{}' 声明了引用但没写清父表 / 父列",
+                        table.name, col.name
+                    )));
+                }
+                let Some(parent_idx) = template
+                    .tables
+                    .iter()
+                    .position(|t| t.name == parent_name)
+                else {
+                    return Err(MockError::InvalidColumn(format!(
+                        "表 '{}' 的列 '{}' 引用了模板里没有的表 '{parent_name}'",
+                        table.name, col.name
+                    )));
+                };
+                let parent = &template.tables[parent_idx];
+                let Some(parent_col) = parent.columns.iter().find(|c| c.name == parent_column)
+                else {
+                    return Err(MockError::InvalidColumn(format!(
+                        "表 '{}' 的列 '{}' 引用了 '{parent_name}.{parent_column}'，\
+                         但父表里没有这一列",
+                        table.name, col.name
+                    )));
+                };
+                let GeneratorConfig::AutoIncrement { start, step } = parent_col.generator else {
+                    return Err(MockError::InvalidColumn(format!(
+                        "父表 '{parent_name}' 的列 '{parent_column}' 不是自增生成，算不出取值域——\
+                         引用目标目前只支持自增主键（不读已生成的数据）"
+                    )));
+                };
+                if parent.row_count == 0 {
+                    return Err(MockError::InvalidColumn(format!(
+                        "父表 '{parent_name}' 的行数为 0，没有可引用的主键值"
+                    )));
+                }
+                if domains
+                    .iter()
+                    .any(|d| d.table == parent_name && d.column == parent_column)
+                {
+                    continue;
+                }
+                domains.push(ReferenceDomain {
+                    table: parent_name.to_string(),
+                    column: parent_column.to_string(),
+                    first: i64::from(start),
+                    step: i64::from(step),
+                    count: parent.row_count,
+                });
+            }
+        }
+        Ok(domains)
+    }
+
+    /// 从域清单里找某条引用对应的父表取值域（不存在 → `None`，由调用方转成可读错误）。
+    fn domain_for<'a>(
+        dep: &ColumnDependency,
+        domains: &'a [ReferenceDomain],
+    ) -> Option<&'a ReferenceDomain> {
+        let table = dep.ref_table.as_deref()?;
+        let column = dep.ref_column.as_deref()?;
+        domains
+            .iter()
+            .find(|d| d.table == table && d.column == column)
+    }
+
+    /// 解析列依赖关系，生成拓扑排序后的列顺序和依赖映射
     pub fn resolve_dependencies(columns: &[ColumnDef]) -> DependencyConfig {
         let mut dependencies: std::collections::HashMap<String, ColumnDependency> =
             std::collections::HashMap::new();
@@ -963,6 +1085,8 @@ impl MockEngine {
     ///
     /// 根据场景模板（ScenarioTemplate）一次性生成所有关联表。
     /// 每张表独立生成，支持进度回调和取消检查。
+    /// 模板里声明了**表间引用**的列（`dependency.dep_type == ForeignKey`）从**父表主键域**取值，
+    /// 域由父列的自增参数与行数算出——不读任何已落地的数据（见 [`Self::resolve_reference_domains`]）。
     /// 返回 `MockScenarioResult` 包含每张表的生成结果摘要。
     pub async fn generate_scenario(
         template: &ScenarioTemplate,
@@ -971,6 +1095,8 @@ impl MockEngine {
         let start = Instant::now();
         let mut table_results = Vec::new();
         let mut total_rows = 0u32;
+        // 一次生成共用一份域清单：父表先于子表，因此下游能直接查
+        let domains = Self::resolve_reference_domains(template)?;
 
         for (idx, table) in template.tables.iter().enumerate() {
             if Self::is_cancelled() {
@@ -990,7 +1116,7 @@ impl MockEngine {
                 columns: table.columns.clone(),
             };
 
-            let result = Self::generate_with_progress(config, |_, _| {}).await?;
+            let result = Self::generate_table(config, &domains, |_, _| {}).await?;
             total_rows += result.row_count;
 
             table_results.push(MockScenarioTableResult {

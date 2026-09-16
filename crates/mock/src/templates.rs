@@ -1,6 +1,25 @@
 use crate::models::{
-    ColumnDataType, ColumnDef, GeneratorConfig, ScenarioTemplate, TemplateTable,
+    ColumnDataType, ColumnDef, ColumnDependency, DependencyType, GeneratorConfig, ScenarioTemplate,
+    TemplateTable,
 };
+
+/// 跨表引用声明（关系在本模块的**唯一表达处**：挂在列上，而不是模板或任务载荷上）。
+///
+/// - `ref_table` / `ref_column`：父表与父列。父表必须在同一模板里；**不要求排在子表之前**
+///   （取值域由模板参数算出，与“哪张表先跑”无关），引用自身（自关联）也允许；
+/// - 父列必须是自增主键：域 = `[start, start + step×(行数-1)]`，**不读任何已生成的数据**；
+/// - 该列自己的 `generator` 仍要填，且取值域必须**落在父域内**（本模块的自检测试锁定）：
+///   场景生成走父域采样；单表生成没有父表上下文，就按它取值。
+fn foreign_key(parent_table: &str, parent_column: &str) -> ColumnDependency {
+    ColumnDependency {
+        dep_type: DependencyType::ForeignKey,
+        source_columns: Vec::new(),
+        expression: None,
+        ref_table: Some(parent_table.to_string()),
+        ref_column: Some(parent_column.to_string()),
+        weights: None,
+    }
+}
 
 macro_rules! col {
     ($name:expr, $data_type:expr, $gen:expr) => {
@@ -31,6 +50,33 @@ macro_rules! col {
             nullable_ratio: 0.0,
             unique: true,
             dependency: None,
+        }
+    };
+}
+
+/// 引用列：`col_ref!(列名, 类型, 生成器, "父表", "父列")`；末位可缀 `nullable`。
+///
+/// `generator` 不是冗余：它是**没有父表上下文**（单表生成）时的取值方式，
+/// 取值域必须落在父域内（自检测试锁定这一点）。
+macro_rules! col_ref {
+    ($name:expr, $data_type:expr, $gen:expr, $parent:expr, $parent_col:expr) => {
+        ColumnDef {
+            name: $name.to_string(),
+            data_type: $data_type,
+            generator: $gen,
+            nullable_ratio: 0.0,
+            unique: false,
+            dependency: Some(foreign_key($parent, $parent_col)),
+        }
+    };
+    ($name:expr, $data_type:expr, $gen:expr, $parent:expr, $parent_col:expr, nullable) => {
+        ColumnDef {
+            name: $name.to_string(),
+            data_type: $data_type,
+            generator: $gen,
+            nullable_ratio: 0.3,
+            unique: false,
+            dependency: Some(foreign_key($parent, $parent_col)),
         }
     };
 }
@@ -203,7 +249,13 @@ fn ecommerce_template() -> ScenarioTemplate {
                         GeneratorConfig::UuidV4,
                         unique
                     ),
-                    col!("user_id", ColumnDataType::Integer, rnd_int!(1, 1000)),
+                    col_ref!(
+                        "user_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 1000),
+                        "users",
+                        "id"
+                    ),
                     col!(
                         "status",
                         ColumnDataType::Varchar { length: Some(20) },
@@ -266,8 +318,20 @@ fn ecommerce_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("order_id", ColumnDataType::Integer, rnd_int!(1, 5000)),
-                    col!("product_id", ColumnDataType::Integer, rnd_int!(1, 500)),
+                    col_ref!(
+                        "order_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 5000),
+                        "orders",
+                        "id"
+                    ),
+                    col_ref!(
+                        "product_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 500),
+                        "products",
+                        "id"
+                    ),
                     col!("quantity", ColumnDataType::Integer, rnd_int!(1, 10)),
                     col!(
                         "unit_price",
@@ -332,7 +396,13 @@ fn hr_template() -> ScenarioTemplate {
                         GeneratorConfig::SafeEmail,
                         unique
                     ),
-                    col!("department_id", ColumnDataType::Integer, rnd_int!(1, 20)),
+                    col_ref!(
+                        "department_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 20),
+                        "departments",
+                        "id"
+                    ),
                     col!(
                         "position",
                         ColumnDataType::Varchar { length: Some(50) },
@@ -383,16 +453,20 @@ fn hr_template() -> ScenarioTemplate {
                         ColumnDataType::Varchar { length: Some(100) },
                         GeneratorConfig::CompanyName
                     ),
-                    col!(
+                    col_ref!(
                         "manager_id",
                         ColumnDataType::Integer,
                         rnd_int!(1, 500),
+                        "employees",
+                        "id",
                         nullable
                     ),
-                    col!(
+                    col_ref!(
                         "parent_id",
                         ColumnDataType::Integer,
                         rnd_int!(1, 10),
+                        "departments",
+                        "id",
                         nullable
                     ),
                     col!(
@@ -418,7 +492,13 @@ fn hr_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("employee_id", ColumnDataType::Integer, rnd_int!(1, 500)),
+                    col_ref!(
+                        "employee_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 500),
+                        "employees",
+                        "id"
+                    ),
                     col!("year", ColumnDataType::Integer, rnd_int!(2022, 2025)),
                     col!("month", ColumnDataType::Integer, rnd_int!(1, 12)),
                     col!(
@@ -455,10 +535,44 @@ fn blog_template() -> ScenarioTemplate {
     ScenarioTemplate {
         id: "builtin:blog".to_string(),
         name: "博客 / 内容平台".to_string(),
-        description: "包含文章、评论、标签三张表，模拟 UGC 内容平台数据".to_string(),
+        description: "包含用户、文章、评论、标签四张表，模拟 UGC 内容平台数据".to_string(),
         category: "内容平台".to_string(),
         locale: "zh_cn".to_string(),
         tables: vec![
+            TemplateTable {
+                name: "users".to_string(),
+                row_count: 200,
+                columns: vec![
+                    col!(
+                        "id",
+                        ColumnDataType::Integer,
+                        GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+                        unique
+                    ),
+                    col!(
+                        "username",
+                        ColumnDataType::Varchar { length: Some(30) },
+                        GeneratorConfig::Username,
+                        unique
+                    ),
+                    col!(
+                        "display_name",
+                        ColumnDataType::Varchar { length: Some(60) },
+                        GeneratorConfig::Name
+                    ),
+                    col!(
+                        "email",
+                        ColumnDataType::Varchar { length: Some(100) },
+                        GeneratorConfig::SafeEmail,
+                        unique
+                    ),
+                    col!(
+                        "joined_at",
+                        ColumnDataType::DateTime,
+                        dt!("2019-01-01T00:00:00Z", "2025-12-31T23:59:59Z")
+                    ),
+                ],
+            },
             TemplateTable {
                 name: "articles".to_string(),
                 row_count: 1000,
@@ -480,7 +594,13 @@ fn blog_template() -> ScenarioTemplate {
                         GeneratorConfig::UuidV4,
                         unique
                     ),
-                    col!("author_id", ColumnDataType::Integer, rnd_int!(1, 200)),
+                    col_ref!(
+                        "author_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 200),
+                        "users",
+                        "id"
+                    ),
                     col!(
                         "content",
                         ColumnDataType::Text,
@@ -528,12 +648,26 @@ fn blog_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("article_id", ColumnDataType::Integer, rnd_int!(1, 1000)),
-                    col!("user_id", ColumnDataType::Integer, rnd_int!(1, 200)),
-                    col!(
+                    col_ref!(
+                        "article_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 1000),
+                        "articles",
+                        "id"
+                    ),
+                    col_ref!(
+                        "user_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 200),
+                        "users",
+                        "id"
+                    ),
+                    col_ref!(
                         "parent_id",
                         ColumnDataType::Integer,
                         rnd_int!(1, 5000),
+                        "comments",
+                        "id",
                         nullable
                     ),
                     col!(
@@ -606,8 +740,20 @@ fn finance_template() -> ScenarioTemplate {
                         GeneratorConfig::UuidV4,
                         unique
                     ),
-                    col!("account_id", ColumnDataType::Integer, rnd_int!(1, 500)),
-                    col!("product_id", ColumnDataType::Integer, rnd_int!(1, 100)),
+                    col_ref!(
+                        "account_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 500),
+                        "accounts",
+                        "id"
+                    ),
+                    col_ref!(
+                        "product_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 100),
+                        "products",
+                        "id"
+                    ),
                     col!(
                         "amount",
                         ColumnDataType::Float,
@@ -871,7 +1017,13 @@ fn social_media_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("user_id", ColumnDataType::Integer, rnd_int!(1, 1000)),
+                    col_ref!(
+                        "user_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 1000),
+                        "users",
+                        "id"
+                    ),
                     col!(
                         "content",
                         ColumnDataType::Text,
@@ -918,8 +1070,20 @@ fn social_media_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("follower_id", ColumnDataType::Integer, rnd_int!(1, 1000)),
-                    col!("following_id", ColumnDataType::Integer, rnd_int!(1, 1000)),
+                    col_ref!(
+                        "follower_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 1000),
+                        "users",
+                        "id"
+                    ),
+                    col_ref!(
+                        "following_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 1000),
+                        "users",
+                        "id"
+                    ),
                     col!(
                         "followed_at",
                         ColumnDataType::DateTime,
@@ -937,8 +1101,20 @@ fn social_media_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("user_id", ColumnDataType::Integer, rnd_int!(1, 1000)),
-                    col!("post_id", ColumnDataType::Integer, rnd_int!(1, 10000)),
+                    col_ref!(
+                        "user_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 1000),
+                        "users",
+                        "id"
+                    ),
+                    col_ref!(
+                        "post_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 10000),
+                        "posts",
+                        "id"
+                    ),
                     col!(
                         "created_at",
                         ColumnDataType::DateTime,
@@ -1032,10 +1208,12 @@ fn company_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!(
+                    col_ref!(
                         "parent_company_id",
                         ColumnDataType::Integer,
-                        rnd_int!(1, 50)
+                        rnd_int!(1, 50),
+                        "companies",
+                        "id"
                     ),
                     col!(
                         "name",
@@ -1074,11 +1252,19 @@ fn company_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("company_id", ColumnDataType::Integer, rnd_int!(1, 50)),
-                    col!(
+                    col_ref!(
+                        "company_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 50),
+                        "companies",
+                        "id"
+                    ),
+                    col_ref!(
                         "parent_dept_id",
                         ColumnDataType::Integer,
                         rnd_int!(1, 500),
+                        "departments",
+                        "id",
                         nullable
                     ),
                     col!(
@@ -1115,8 +1301,20 @@ fn company_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("company_id", ColumnDataType::Integer, rnd_int!(1, 50)),
-                    col!("dept_id", ColumnDataType::Integer, rnd_int!(1, 500)),
+                    col_ref!(
+                        "company_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 50),
+                        "companies",
+                        "id"
+                    ),
+                    col_ref!(
+                        "dept_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 500),
+                        "departments",
+                        "id"
+                    ),
                     col!(
                         "code",
                         ColumnDataType::Varchar { length: Some(20) },
@@ -1186,7 +1384,13 @@ fn company_template() -> ScenarioTemplate {
                         GeneratorConfig::AutoIncrement { start: 1, step: 1 },
                         unique
                     ),
-                    col!("company_id", ColumnDataType::Integer, rnd_int!(1, 50)),
+                    col_ref!(
+                        "company_id",
+                        ColumnDataType::Integer,
+                        rnd_int!(1, 50),
+                        "companies",
+                        "id"
+                    ),
                     col!(
                         "client_name",
                         ColumnDataType::Varchar { length: Some(200) },
@@ -1332,6 +1536,148 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ==================== 表间引用（关系自检） ====================
+
+    /// 名字里带 `_id` 但**故意不是引用**的列（改了就得同步改这里，并写清理由）。
+    ///
+    /// 这些列是「标识」而不是「指向另一张表的行」（如税号）。
+    const NOT_A_REFERENCE: &[(&str, &str, &str)] = &[("builtin:company", "companies", "tax_id")];
+
+    /// 模板里声明的引用都要能解析成取值域（父表 / 父列存在、父列可算域）。
+    ///
+    /// 这是「关系能生成」的前提：解析不了的引用在生成前就被拦下，
+    /// 内置模板更不应该存在解析不了的引用。
+    #[test]
+    fn every_declared_reference_resolves() {
+        for template in get_builtin_templates() {
+            let domains = crate::engine::MockEngine::resolve_reference_domains(&template)
+                .unwrap_or_else(|e| panic!("{} 的引用解析失败: {e}", template.id));
+            let declared = declared_references(&template).len();
+            assert!(
+                !domains.is_empty() || declared == 0,
+                "{} 声明了 {declared} 条引用，却一条域也没解析出来",
+                template.id
+            );
+            for domain in &domains {
+                assert!(domain.count > 0, "{domain:?} 的行数为 0");
+            }
+        }
+    }
+
+    /// 引用列的 `generator` 取值域必须**落在父域内**。
+    ///
+    /// 为何要管这个：场景生成走父域采样，但**单表生成没有父表上下文**，按它自己的
+    /// `generator` 取值——那时产出的值也得落在父表可能的取值范围内，
+    /// 否则同一列在两种生成方式下值域不同，用户换个入口就看到不一样的数据。
+    #[test]
+    fn reference_generators_stay_inside_the_parent_domain() {
+        for template in get_builtin_templates() {
+            let domains = crate::engine::MockEngine::resolve_reference_domains(&template)
+                .expect("引用解析应当成功");
+            for (child_table, column, parent_table, parent_column) in declared_references(&template)
+            {
+                let domain = domains
+                    .iter()
+                    .find(|d| d.table == parent_table && d.column == parent_column)
+                    .unwrap_or_else(|| panic!("{} 的父域缺失", template.id));
+                let GeneratorConfig::RandomInt { min, max } = column.generator else {
+                    panic!(
+                        "{}.{} 是引用列，生成器需是整数区间（单表生成时按它取值），实际: {:?}",
+                        child_table, column.name, column.generator
+                    );
+                };
+                assert!(
+                    i64::from(min) >= domain.first && i64::from(max) <= domain.last(),
+                    "{}.{} 的取值域 {}..{} 超出了父域 {}..{}（{}）",
+                    child_table,
+                    column.name,
+                    min,
+                    max,
+                    domain.first,
+                    domain.last(),
+                    domain.label()
+                );
+            }
+        }
+    }
+
+    /// 名字里带 `_id` 的列（除自带主键 `id`）**要么声明为引用，要么在白名单里**。
+    ///
+    /// 为何要这条：引用一旦漏声明，生成出来的就是「看着像外键、实际是随机数」的列，
+    /// 关联查询会落空——这类问题只能在评审时看出来。让测试顶出来，
+    /// 逼作者在「声明引用」与「明确写进白名单」之间选一个。
+    #[test]
+    fn every_id_column_is_declared_or_explicitly_not_a_reference() {
+        let mut undeclared = Vec::new();
+        for template in get_builtin_templates() {
+            for table in &template.tables {
+                for col in &table.columns {
+                    if col.name == "id" || !col.name.ends_with("_id") || is_reference(col) {
+                        continue;
+                    }
+                    let allowed = NOT_A_REFERENCE.iter().any(|(id, table_name, col_name)| {
+                        *id == template.id && *table_name == table.name && *col_name == col.name
+                    });
+                    if !allowed {
+                        undeclared.push(format!("{}.{}.{}", template.id, table.name, col.name));
+                    }
+                }
+            }
+        }
+        assert!(
+            undeclared.is_empty(),
+            "这些 `*_id` 列既没声明引用、也不在 NOT_A_REFERENCE 白名单里：{undeclared:?}"
+        );
+    }
+
+    /// 白名单里不能有幽灵条目（列已改名 / 已删 / 其实已经是引用）。
+    #[test]
+    fn the_not_a_reference_allowlist_has_no_stale_entries() {
+        for (id, table_name, col_name) in NOT_A_REFERENCE {
+            let template = get_template_by_id(id).unwrap_or_else(|| panic!("{id} 不存在"));
+            let table = template
+                .tables
+                .iter()
+                .find(|t| t.name == *table_name)
+                .unwrap_or_else(|| panic!("{id} 里没有表 {table_name}"));
+            let column = table
+                .columns
+                .iter()
+                .find(|c| c.name == *col_name)
+                .unwrap_or_else(|| panic!("{id}.{table_name} 里没有列 {col_name}"));
+            assert!(
+                !is_reference(column),
+                "{id}.{table_name}.{col_name} 已声明为引用，应从白名单里删掉"
+            );
+        }
+    }
+
+    /// 列是否声明了跨表引用。
+    fn is_reference(col: &ColumnDef) -> bool {
+        col.dependency
+            .as_ref()
+            .is_some_and(|dep| matches!(dep.dep_type, DependencyType::ForeignKey))
+    }
+
+    /// 模板里全部 `(子表, 列, 父表, 父列)` 引用声明。
+    fn declared_references(template: &ScenarioTemplate) -> Vec<(&str, &ColumnDef, &str, &str)> {
+        let mut out = Vec::new();
+        for table in &template.tables {
+            for col in &table.columns {
+                let Some(dep) = col.dependency.as_ref().filter(|_| is_reference(col)) else {
+                    continue;
+                };
+                out.push((
+                    table.name.as_str(),
+                    col,
+                    dep.ref_table.as_deref().unwrap_or_default(),
+                    dep.ref_column.as_deref().unwrap_or_default(),
+                ));
+            }
+        }
+        out
     }
 
     #[test]
