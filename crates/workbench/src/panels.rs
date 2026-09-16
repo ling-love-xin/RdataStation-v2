@@ -52,7 +52,7 @@ use crate::ui;
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 use mock::mock_view::{MockDetailView, MockPanel};
 use mock::mock_view::SchemaRequest;
-use insight::{InsightEvent, InsightView};
+use insight::{InsightEvent, InsightTarget, InsightView};
 
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
 ///
@@ -259,6 +259,34 @@ impl Shared {
         self.active_right.set(panel);
         self.right_mode.set(SidebarMode::Expanded);
         self.notify_host(cx);
+    }
+
+    /// M8：打开洞察面板并**指向一列**（结果表列头右键「洞察此列」的宿主侧入口）。
+    ///
+    /// 入口只发这一条命令：面板状态与取数链都在 insight crate（`services::insight_jobs`），
+    /// 这里只做「展开右 Dock + 递目标」——面板收到目标后会发 `ProfileRequested`，
+    /// 由右栏面板构造期建立的订阅接手取数。
+    pub fn open_insight_column(
+        &self,
+        temp_table: impl Into<String>,
+        column: impl Into<String>,
+        data_type: impl Into<String>,
+        cx: &mut App,
+    ) {
+        self.open_right_panel(RightPanel::Insight, cx);
+        let panel = self.insight_panel.borrow().clone();
+        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::Column {
+                        temp_table: temp_table.into(),
+                        column: column.into(),
+                        data_type: data_type.into(),
+                    },
+                    cx,
+                );
+            });
+        }
     }
 
     /// 打开 Mock 面板；`source` 给定时按**源库表**定向（导航右键「生成 Mock 数据」）。

@@ -16,6 +16,7 @@ use editor::commands::{
 };
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
+use insight::commands::InsightRefresh;
 use settings::SettingsService;
 use settings::commands::OpenSettings;
 use workbench::WorkbenchView;
@@ -103,6 +104,10 @@ fn run_app() {
                 // 这两个键内核没有占用（已核对 `input/base/state.rs` 的 `init`）。
                 KeyBinding::new("ctrl-enter", ExecuteSql, Some("editor")),
                 KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
+                // M8 洞察：`Ctrl+Shift+R` = 重算当前目标的画像。键位绑在 `insight` context 上
+                // （面板根元素的 `key_context`），只有焦点在洞察面板内才生效，
+                // 不抢其它面板的同名键。
+                KeyBinding::new("ctrl-shift-r", InsightRefresh, Some("insight")),
                 // A11 查找 / 替换**不注册键位**：`Ctrl+F` / `Ctrl+H` 是编辑器内核自己的能力
                 // （`input::Search` / `input::Replace` → 组件库的查找面板），内核在 `Input`
                 // context 里先拿到按键，应用层再绑只会重复。焦点不在编辑器内时，

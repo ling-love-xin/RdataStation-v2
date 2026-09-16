@@ -30,6 +30,7 @@ use crate::model::{
     ColumnKind, ColumnProfileView, DistributionBar, Emphasis, InsightPanelState, InsightTarget,
     NoteLevel, PanelTab, QualityNote, SampleCell, StatRow,
 };
+use crate::commands::InsightRefresh;
 use crate::ui;
 
 /// 面板向宿主发出的请求。
@@ -197,6 +198,11 @@ impl InsightView {
             *slot = open.contains(&i);
         }
         cx.notify();
+    }
+
+    /// ⟳ 的 Action 入口（与面板头按钮同一条路径）
+    fn on_refresh(&mut self, _: &InsightRefresh, _window: &mut Window, cx: &mut Context<Self>) {
+        self.reload(cx);
     }
 
     // ==================== 渲染片段 ====================
@@ -429,6 +435,8 @@ impl Render for InsightView {
 
         div()
             .key_context("insight")
+            // ⟳ 的键位（`Ctrl+Shift+R`，绑在 `insight` context 上；键位在 app 层注册）
+            .on_action(cx.listener(Self::on_refresh))
             .v_flex()
             .size_full()
             .bg(theme.colors.background)

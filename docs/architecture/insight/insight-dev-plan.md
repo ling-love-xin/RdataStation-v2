@@ -23,6 +23,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-16 — Phase 1 第四批：列入口命令 + 重算键位
+
+**已完成并验证**（`cargo check -p rds-app` 零告警；`rds-insight` lib **121 项**；新增 `crates/workbench/tests/insight_entry.rs` **2 项**——走真实接线的端到端）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 1.5 | `Shared::open_insight_column(temp_table, column, data_type)`：入口只发这一条命令（展开右 Dock + 递目标），面板与取数链都在 insight crate | `crates/workbench/src/panels.rs` |
+| 1.6 | `InsightRefresh` 绑 `Ctrl+Shift+R`（key context = `insight`，只在焦点位于面板内生效）；面板 `on_action` 与面板头 ⟳ 走同一条路径 | `crates/app/src/main.rs`、`insight_view.rs` |
+| — | app 新增 `insight` 依赖（与 editor / settings 同一口径：app 直接依赖要绑键的 Feature crate） | `crates/app/Cargo.toml` |
+| 测试 | `insight_entry.rs`：请求 → 后台执行器 → 回填（数据态 + 友好错误态），首次覆盖装配胶水（不只重测服务层） | `crates/workbench/tests/` |
+
+**未完成**：结果表列头右键「洞察此列」的**界面落点**在结果区（M5/编辑器在途）——宿主侧入口已就位，接线时只需一行；导航树表节点的右键「查看洞察」已能打开面板，表探查取数属 Phase 3。
+
+
 ### 2026-09-16 — Phase 1 第三批：右 Dock 装配 + 后台取数接线
 
 **已完成并验证**（`cargo check -p rds-workbench --lib` 零告警；`rds-insight` lib **121 项**全绿；`cargo build -p rds-app` 通过；**实际启动一次实例**：右侧洞察面板正常渲染、零 stderr）
