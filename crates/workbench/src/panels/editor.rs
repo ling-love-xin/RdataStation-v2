@@ -21,6 +21,7 @@ use gpui_kit::*;
 
 use crate::components::connection_dialog;
 
+use crate::services::db_navigator::NavTable;
 use crate::services::nav_jobs;
 use crate::services::scratchpad_jobs;
 
@@ -71,6 +72,17 @@ pub struct EditorPanel {
     /// M5 草稿箱内容搜索的「替换为」输入框（懒创建，有搜索结果时才建）。
     scratchpad_replace: Option<Entity<InputState>>,
     _scratchpad_replace_sub: Option<Subscription>,
+    /// Round 25：连接详情卡「分析库元数据树」缓存（哪个连接加载的 + 表列表）。
+    ///
+    /// 宿主 / 项目宿主 / Mock 宿主**不直接读写这里**：它们只递增
+    /// `Shared::nav_cache_epoch` 递失效信号，本面板在 `sync_shared_epochs` 消费。
+    nav_for: Rc<RefCell<Option<String>>>,
+    nav_tables: Rc<RefCell<Vec<NavTable>>>,
+    /// Round 30：当前 SQL 结果归属的连接 ID（失效信号走 `Shared::result_epoch`）。
+    sql_for: Rc<RefCell<Option<String>>>,
+    /// 已消费的两个失效戳（与 `Shared` 逐帧对比，不等则丢弃自持缓存）。
+    nav_cache_epoch: u64,
+    result_epoch: u64,
 }
 
 impl EditorPanel {
@@ -141,7 +153,36 @@ impl EditorPanel {
             props_pump: RefCell::new(None),
             scratchpad_replace: None,
             _scratchpad_replace_sub: None,
+            nav_for: Rc::new(RefCell::new(None)),
+            nav_tables: Rc::new(RefCell::new(Vec::new())),
+            sql_for: Rc::new(RefCell::new(None)),
+            nav_cache_epoch: 0,
+            result_epoch: 0,
         }
+    }
+
+    /// 消费宿主侧的失效信号（宿主只递增 `Shared` 的 epoch，不碰本面板数据）。
+    fn sync_shared_epochs(&mut self) {
+        let nav = self.shared.nav_cache_epoch.get();
+        if nav != self.nav_cache_epoch {
+            self.nav_cache_epoch = nav;
+            *self.nav_for.borrow_mut() = None;
+            self.nav_tables.borrow_mut().clear();
+        }
+        let res = self.shared.result_epoch.get();
+        if res != self.result_epoch {
+            self.result_epoch = res;
+            *self.sql_for.borrow_mut() = None;
+        }
+    }
+
+    /// 当前连接的分析库表名快照（宿主 Quick Open 的「表」分组用）。
+    pub fn nav_table_names(&self) -> Vec<String> {
+        self.nav_tables
+            .borrow()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect()
     }
 
     /// 懒创建草稿箱搜索结果的「替换为」输入框（有结果时才建）并订阅回车执行。
@@ -554,6 +595,8 @@ impl Focusable for EditorPanel {
 
 impl Render for EditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 宿主失效信号（切换连接 / 项目 / Mock 落库）在渲染入口消费：只读 Shared，不写别家数据。
+        self.sync_shared_epochs();
         // 受控输入懒创建（render 首次初始化，需要 window）；SQL 查询区保留。
         if self.sql_textarea.is_none() {
             let ta = cx.new(|cx| TextareaState::new(window, cx));
@@ -789,14 +832,14 @@ impl Render for EditorPanel {
         // Round 25：数据库导航区——选中联邦连接时按需加载分析库元数据树。
         if let Some(item) = self.shared.selected_connection() {
             if item.use_duckdb_fed {
-                if self.shared.nav_for.borrow().as_deref() != Some(item.id.as_str()) {
+                if self.nav_for.borrow().as_deref() != Some(item.id.as_str()) {
                     let path = crate::services::workspace_loader::global_analysis_db_path();
                     let tree = crate::services::db_navigator::load_navigator_tree(&path)
                         .unwrap_or_default();
-                    *self.shared.nav_tables.borrow_mut() = tree;
-                    *self.shared.nav_for.borrow_mut() = Some(item.id.clone());
+                    *self.nav_tables.borrow_mut() = tree;
+                    *self.nav_for.borrow_mut() = Some(item.id.clone());
                 }
-                let nav = self.shared.nav_tables.borrow();
+                let nav = self.nav_tables.borrow();
                 let mut nav_content = div().v_flex().gap_1().mt_1p5();
                 if nav.is_empty() {
                     nav_content = nav_content.child(
@@ -866,12 +909,13 @@ impl Render for EditorPanel {
                 let qr_closure = query_result.clone();
                 let shared = self.shared.clone();
                 let shared_export = self.shared.clone();
-                let shared_view = self.shared.clone();
+                let sql_for_view = self.sql_for.clone();
                 let entity = entity.clone();
                 let entity_export = entity.clone();
                 let entity_hist = entity.clone();
                 let conn_id = item.id.clone();
                 let last_exec = self.last_executed.clone();
+                let sql_for = self.sql_for.clone();
 
                 let mut sql_ui = div()
                     .v_flex()
@@ -939,7 +983,7 @@ impl Render for EditorPanel {
                                                 let n = out.row_count;
                                                 *qr_closure.borrow_mut() = Some(out);
                                                 *last_exec.borrow_mut() = sql.clone();
-                                                *shared.sql_for.borrow_mut() =
+                                                *sql_for.borrow_mut() =
                                                     Some(conn_id.clone());
                                                 *shared.notice.borrow_mut() =
                                                     Some(format!("查询完成，返回 {} 行", n));
@@ -947,7 +991,7 @@ impl Render for EditorPanel {
                                             }
                                             Err(e) => {
                                                 *qr_closure.borrow_mut() = None;
-                                                *shared.sql_for.borrow_mut() = None;
+                                                *sql_for.borrow_mut() = None;
                                                 *shared.notice.borrow_mut() =
                                                     Some(format!("查询失败: {}", e));
                                                 false
@@ -1015,7 +1059,7 @@ impl Render for EditorPanel {
                 }
 
                 let result_visible =
-                    shared_view.sql_for.borrow().as_deref() == Some(item.id.as_str());
+                    sql_for_view.borrow().as_deref() == Some(item.id.as_str());
                 let result = if result_visible {
                     query_result.borrow().clone()
                 } else {

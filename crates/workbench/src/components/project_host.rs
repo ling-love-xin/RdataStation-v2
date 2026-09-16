@@ -106,9 +106,8 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
     *shared.notice.borrow_mut() = notice;
     let has = !shared.connections.borrow().is_empty();
     shared.selected.set(if has { Some(0) } else { None });
-    *shared.nav_for.borrow_mut() = None;
-    shared.nav_tables.borrow_mut().clear();
-    *shared.sql_for.borrow_mut() = None;
+    shared.invalidate_nav_cache();
+    shared.invalidate_sql_result();
 }
 
 #[cfg(test)]

@@ -19,7 +19,6 @@ use gpui_kit::*;
 
 use super::nav::PropertyRequest;
 use super::scratchpad_panel::ScratchpadSearchView;
-use crate::services::db_navigator::NavTable;
 use crate::view::{ConnectionItem, LeftPanel, RightPanel, SidebarMode};
 /// 连接对话框「项目栏」动作项 → 宿主消费分支的动作请求（#9）。
 ///
@@ -52,11 +51,11 @@ pub struct Shared {
     pub selected: Rc<Cell<Option<usize>>>,
     pub connections: Rc<RefCell<Vec<ConnectionItem>>>,
     pub notice: Rc<RefCell<Option<String>>>,
-    /// Round 25：数据库导航缓存（哪个连接加载的 + 表→列树）。
-    pub nav_for: Rc<RefCell<Option<String>>>,
-    pub nav_tables: Rc<RefCell<Vec<NavTable>>>,
-    /// Round 30：SQL 结果归属（哪个连接执行的，切换连接即失效）。
-    pub sql_for: Rc<RefCell<Option<String>>>,
+    /// 导航元数据缓存失效戳：宿主 / 项目宿主 / Mock 宿主只递增（`invalidate_nav_cache`），
+    /// 缓存数据本身由 `EditorPanel` 自持——外部不再直接读写别家的缓存。
+    pub nav_cache_epoch: Rc<Cell<u64>>,
+    /// SQL 结果归属失效戳（切换连接 / 项目时置位；消费口径同 `nav_cache_epoch`）。
+    pub result_epoch: Rc<Cell<u64>>,
     /// 编辑请求（侧边栏「编辑」→ EditorPanel 渲染时消费并打开对话框）。
     pub open_edit: Rc<RefCell<Option<String>>>,
     /// 新建数据源请求（导航面板头「＋」/ 空态按钮 → EditorPanel 渲染时消费并打开对话框）。
@@ -127,9 +126,8 @@ impl Shared {
             })),
             connections: Rc::new(RefCell::new(connections)),
             notice: Rc::new(RefCell::new(notice)),
-            nav_for: Rc::new(RefCell::new(None)),
-            nav_tables: Rc::new(RefCell::new(Vec::new())),
-            sql_for: Rc::new(RefCell::new(None)),
+            nav_cache_epoch: Rc::new(Cell::new(0)),
+            result_epoch: Rc::new(Cell::new(0)),
             open_edit: Rc::new(RefCell::new(None)),
             new_connection_request: Rc::new(Cell::new(false)),
             project_new_request: Rc::new(Cell::new(false)),
@@ -201,6 +199,20 @@ impl Shared {
             (false, true) => Some(ProjectActionRequest::OpenFolder),
             (false, false) => None,
         }
+    }
+
+    /// 导航元数据缓存失效（切换连接 / 项目 / 分析库被写入后调用）。
+    ///
+    /// 语义：**只声明“这些缓存不再可信”**，不关心数据在哪——缓存由 `EditorPanel`
+    /// 自持并在下一次渲染时对比戳后丢弃重载。
+    pub fn invalidate_nav_cache(&self) {
+        self.nav_cache_epoch
+            .set(self.nav_cache_epoch.get().wrapping_add(1));
+    }
+
+    /// SQL 结果归属失效（切换连接 / 项目）。
+    pub fn invalidate_sql_result(&self) {
+        self.result_epoch.set(self.result_epoch.get().wrapping_add(1));
     }
 
     /// 当前选中连接（克隆，避免长时间持有 RefCell 借用）。

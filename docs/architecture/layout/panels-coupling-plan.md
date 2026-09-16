@@ -25,8 +25,9 @@
 | `project` / `project_ui` | 宿主（`view.rs`） | editor / scratchpad | **保留 `Shared`** | M1 项目会话与 UI 状态 |
 | `active_left` / `active_right` / `*_mode` / `quick_open` / `settings_open` | 宿主 | 宿主 / mod.rs | **保留 `Shared`** | 布局与三模式（`rds-layout` 口径） |
 | `mock_panel` / `mock_detail` / `insight_panel` / `open_mock_detail` / `host_redraw` | 宿主 | 宿主 / right.rs | **保留 `Shared`** | 宿主级弱句柄与命令 |
-| `editor_sql` / `editor_dirty` | **仅 editor.rs** | 仅 editor.rs | **收回 `EditorPanel` 字段** | 编辑器自用；M1 拦截走既有 `ProjectEditorBridge` 只读访问器 |
-| `nav_for` / `nav_tables` / `sql_for` | editor.rs（宿主切换连接时清空） | 仅 editor.rs | **收回 `EditorPanel` 字段** | 编辑区结果归属；宿主改调 `EditorPanel::reset_results()` |
+| `editor_sql` / `editor_dirty` | **仅 editor.rs** | editor.rs + `components/project_host.rs`（M1 `ProjectEditorBridge`） | **S2 处理**：随 `EditorService` 契约一起换实现，本步不动 | 现在搬会连带改 M1 桥 |
+| `nav_for` / `nav_tables` | **仅 editor.rs** | 仅 editor.rs（+ 宿主 Quick Open 读表名快照） | **✅ S1 已收回 `EditorPanel`** | 外部失效改为 `Shared::invalidate_nav_cache()`（§3 戳） |
+| `sql_for` | 仅 editor.rs | 仅 editor.rs | **✅ S1 已收回 `EditorPanel`** | 外部失效改为 `Shared::invalidate_sql_result()` |
 | `property_target` | nav（5 处） | editor | **`EditorBridge::show_properties(PropertyRequest)`** | nav → editor 请求 |
 | `open_edit` | nav（2 处，editor 1 处清理） | editor | **`EditorBridge::edit_connection(id)`** | nav → editor 请求 |
 | `new_connection_request` | nav（2 处） | editor / mod | **`EditorBridge::new_connection()`** | nav → editor 请求 |
@@ -72,7 +73,11 @@ HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 
 
 | 步 | 内容 | 验收 |
 | --- | --- | --- |
-| **S1** | 把只被 `editor.rs` 读写的 5 个字段收回编辑器（`editor_sql` / `editor_dirty` / `nav_for` / `nav_tables` / `sql_for`）；宿主切换连接处改调 `EditorPanel::reset_results()` | 面板单测 + 集成测试全绿；`Shared` 字段 30 → 25 |
+| **S1** ✅ | 3 个字段（`nav_for` / `nav_tables` / `sql_for`）收回 `EditorPanel`；外部失效改为 `Shared::{invalidate_nav_cache, invalidate_sql_result}` 两个戳，编辑区在 `sync_shared_epochs` 消费；Quick Open 改用 `EditorPanel::nav_table_names()` 快照 | 面板单测 16 项 + 契约 6 项全绿；`Shared` 字段 30 → 27 |
+
+> S1 实测订正：这三个字段**并非只有 `editor.rs` 读写**——`view.rs`（切换连接 / Quick Open）
+> 与 `components/{project_host,mock_host}.rs` 也在清/读它们。此前结论偏差源于审计范围只扫了 `panels/`；
+> 因此 S1 必须连带改这 3 个外部文件（已改），而不是"纯字段搬家"。
 | **S2** | editor 侧端口化：`EditorBridge` 五方法；nav / scratchpad 改为调用 | 同上；上述 5 个请求字段 + `scratchpad_search` 归零；`ConnectionDialogState` 打开路径不变 |
 | **S3** | 反向桥：`ScratchpadBridge::ensure_pump`、`NavBridge::focus_search`、`HostBridge::open_in_editor` | 同上；`scratchpad_pump_request` / `focus_nav_search` / `open_file_request` 归零 |
 | **S4** | `ui_contract` 加 `Shared` 字段白名单契约；更新 `panels-modules.md` §3 与本文档状态 | 契约测试通过；§3 表格与实际一致 |
@@ -81,7 +86,7 @@ HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 
 
 推荐顺序 **S1 → S2/S3 → P2 → P1**，理由：
 
-- **S1 零风险**：纯字段搬家，无跨模块签名变化，先做可以先拿到"耦合收敛"的第一块收益；
+- **S1 已完成**：3 个缓存/归属字段回归编辑区，外部只递失效信号（代价是改 3 个外部文件，见上表订正）；
 - **S2/S3 必须在 P2 之前**：视图下沉（`nav.rs` → `crates/database`）时，若协作还靠共享字段，就会连带搬走半个 `Shared`；端口化之后只搬端口；
 - **P1 放在 P2 之后**：`block_on` 的后台化目标形态是"特性 crate 内的 jobs + 面板 drain"。草稿箱已有 `services/scratchpad_jobs.rs`，而它按 P2 会迁入 `crates/scratchpad`——先做 P1 等于把这段代码写两遍（nav 的 4 处同理，属 `crates/database`）。
 

@@ -45,9 +45,9 @@ impl WorkbenchMockHost {
             .map(|session| session.root.clone())
     }
 
-    /// 落库 / 追加成功：让分析库导航树失效（下一帧按 `nav_for` 重新加载）。
+    /// 落库 / 追加成功：让分析库导航树失效（编辑区下一帧按 `Shared::nav_cache_epoch` 重载）。
     fn invalidate_analysis_nav(&self) {
-        *self.shared.nav_for.borrow_mut() = None;
+        self.shared.invalidate_nav_cache();
     }
 }
 

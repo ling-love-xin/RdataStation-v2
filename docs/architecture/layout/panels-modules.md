@@ -72,12 +72,11 @@
 | 级别 | 问题 | 实测 | 位置 |
 | --- | --- | --- | --- |
 | P1 | **事件路径同步 I/O 阻塞 UI 线程** | 18 处 `block_on`（nav.rs 4 + scratchpad_panel.rs 14，含各自 `Runtime::new`） | `commit_copy_connection` / `share_connection_to_project` / `unshare_connection_from_project` / `delete_connection`；草稿箱 `commit_scratchpad_edit` / `delete_scratchpad_selection` / `undo_scratchpad_delete` / `restore_scratchpad_trash` / `remove_scratchpad_reference` / `apply_scratchpad_relink` / `open_scratchpad_location` |
-| P2 | **render 内写状态 + 入队后台任务** | `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`（改 `database_nav` + `enqueue_load` + 起轮询）；`render_property_panel` → `enqueue_properties` + `ensure_props_pump`；`render_scratchpad` → `request_scratchpad_load` | nav.rs L2294 / L3294、editor.rs L383、scratchpad_panel.rs L2428 |
+| P1 | **render 内同步读盘（真）** | `editor.rs` 连接详情卡：`render` 内按需调 `load_navigator_tree(&global_analysis_db_path())` 读分析库文件（缓存键 = 当前连接） | `panels/editor.rs`「Round 25：数据库导航区」块 |
+| P2 | render 内写状态 + 入队后台任务 | `render_connection_row` / `render_nav_node` → `ensure_nav_loaded`（改 `database_nav` + `enqueue_load` + 起轮询，I/O 在工作线程）；`render_property_panel` → `enqueue_properties`；`render_scratchpad` → `request_scratchpad_load` | nav.rs、editor.rs、scratchpad_panel.rs |
 | P3 | 自绘控件（技术债） | `tool_btn` / 树展开字符 / 文本按钮 | nav.rs、scratchpad_panel.rs、editor.rs |
 
-> 订正：`gpui-kit-dev` skill 原「已知反例」称上述位置"在 render 内**同步读盘**"——实测不成立：
-> `ensure_nav_loaded` 只入队（I/O 在工作线程）、`right.rs::render_history_placeholder` 是纯占位、
-> `load_scratchpad` 函数已不存在。真正的同步 I/O 在**事件路径**（上表 P1），此前未被记录。
+> 订正：`gpui-kit-dev` skill 原「已知反例」将 `ensure_nav_*` / `render_property_panel` / `render_history_placeholder` / `load_scratchpad` 列为"render 内同步读盘"——实测：`ensure_nav_loaded` 只入队（I/O 在工作线程）、`right.rs::render_history_placeholder` 是纯占位、`load_scratchpad` 函数已不存在。**真正的 render 内同步读盘是 `panels/editor.rs` 连接详情卡的 `load_navigator_tree`（上表 P1）**，此前未被记录。
 > 另：`settings::SettingsService::*` 访问器走 `cx.global::<Settings>()`，render 内调用不构成 I/O 违规。
 
 ## 5. 架构调整建议（按优先级）
@@ -85,7 +84,7 @@
 ### P0 — 把 `Shared` 按职责分组，特性状态归还特性
 
 现状：`Shared` 同时承载宿主级状态（活动面板 / 三模式 / Quick Open / 选中 / 连接列表 / 项目会话 /
-宿主重绘桥 / 各方弱句柄）与**特性内状态**（`nav_for` / `nav_tables` / `sql_for` / `driver_catalog` /
+宿主重绘桥 / 各方弱句柄）与**特性内状态**（`driver_catalog` /
 `scratchpad_search` / `property_target` / `open_edit` / `editor_set` / `new_connection_request` /
 `focus_nav_search` / `open_file_request`）。
 

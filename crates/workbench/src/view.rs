@@ -510,9 +510,8 @@ impl WorkbenchView {
                 SidebarEvent::SelectConnection(idx) => {
                     this.shared.selected.set(Some(*idx));
                     // Round 30：切换连接 → 清空导航树 / SQL 结果残留，防止串数据。
-                    *this.shared.nav_for.borrow_mut() = None;
-                    this.shared.nav_tables.borrow_mut().clear();
-                    *this.shared.sql_for.borrow_mut() = None;
+                    this.shared.invalidate_nav_cache();
+                    this.shared.invalidate_sql_result();
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }
@@ -547,9 +546,8 @@ impl WorkbenchView {
                         .iter()
                         .position(|c| c.id == *conn_id);
                     this.shared.selected.set(idx);
-                    *this.shared.nav_for.borrow_mut() = None;
-                    this.shared.nav_tables.borrow_mut().clear();
-                    *this.shared.sql_for.borrow_mut() = None;
+                    this.shared.invalidate_nav_cache();
+                    this.shared.invalidate_sql_result();
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }
@@ -1107,7 +1105,14 @@ impl WorkbenchView {
         let shared_close = shared.clone();
         let entity_close = entity.clone();
 
-        let list = quick_open_results(&input, shared, entity, cx);
+        // 分析库元数据树由编辑区自持（见 `panels-modules.md` §5 P0）：
+        // Quick Open 只取一份快照，不再直读别家的缓存字段。
+        let nav_tables = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.read(cx).nav_table_names())
+            .unwrap_or_default();
+        let list = quick_open_results(&input, shared, entity, &nav_tables, cx);
 
         Some(
             div()
@@ -1509,6 +1514,7 @@ fn quick_open_results(
     input: &Entity<InputState>,
     shared: Shared,
     entity: Entity<WorkbenchView>,
+    nav_tables: &[String],
     cx: &mut App,
 ) -> Div {
     let theme = cx.theme();
@@ -1638,12 +1644,7 @@ fn quick_open_results(
                     .child(format!("{name}  ·  {driver}")),
             );
         }
-        let tables: Vec<String> = shared
-            .nav_tables
-            .borrow()
-            .iter()
-            .map(|t| t.name.clone())
-            .collect();
+        let tables: Vec<String> = nav_tables.to_vec();
         for t in tables {
             if !matches(&t) {
                 continue;
@@ -1792,9 +1793,8 @@ fn select_connection(
     cx: &mut App,
 ) {
     shared.selected.set(Some(idx));
-    *shared.nav_for.borrow_mut() = None;
-    shared.nav_tables.borrow_mut().clear();
-    *shared.sql_for.borrow_mut() = None;
+    shared.invalidate_nav_cache();
+    shared.invalidate_sql_result();
     shared.quick_open.set(false);
     entity.update(cx, |_, cx| cx.notify());
 }
