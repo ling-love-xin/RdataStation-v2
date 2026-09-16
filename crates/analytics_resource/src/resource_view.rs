@@ -14,17 +14,18 @@
 //! # 本批范围（Phase 1 第五刀）
 //!
 //! 已落地：面板头（标题 + 归档入口）、**工具栏（搜索框 / 筛选 / 排序）**、提示行（只读与通知分色）、
-//! **行列表（`list::List`：虚拟化 + 组件化 hover / 选中 / 键盘漫游）**、**行的右键菜单**
-//! （打开 / 取回 / 移入回收站）、底部状态行（异常时给"修复…"入口）、空态**与"无匹配"两态分开**、只读禁写。
+//! **行列表（`list::List`：虚拟化 + 组件化 hover / 选中 / 键盘漫游）**、**kind 图标**、
+//! **行的右键菜单**（打开 / 取回 / 移入回收站）、底部状态行（异常时给"修复…"入口）、
+//! 空态**与"无匹配"两态分开**、只读禁写。
 //!
 //! **未落地（下一批，已在开发方案留档）**：详情属性面板接入、五个对话框、Action 与快捷键
-//! （`Ctrl+F` 聚焦 / `Esc` 清空 / 行漫游在 Action 批）、行图标（`IconName` 子集尚未逐一核实，
-//! 先不引入以免资产缺失时静默为空）、行内 hover 动作（原型 §2.3 的 hover 版，随详情面板批）。
+//! （`Ctrl+F` 聚焦 / `Esc` 清空 / 行漫游在 Action 批）、行内 hover 动作（原型 §2.3 的 hover 版，
+//! 随详情面板批）、批量多选。
 
 use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -34,6 +35,10 @@ use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+/// kind 图标取**完整 Lucide 目录**（`gpui_kit::assets`）：组件子集（`default-icons.txt`）
+/// 里没有表格形；另外用别名避免与组件子集的同名枚举混淆。
+use gpui_kit::assets::IconName as CatalogIcon;
 
 use crate::commands;
 use crate::filter::{self, ResourcesFilter, SortField, SortOrder};
@@ -129,6 +134,18 @@ pub fn badge_tone(kind: ArchiveKind, status: ArchiveStatus) -> BadgeTone {
         (ArchiveStatus::Normal, ArchiveKind::File) => BadgeTone::Success,
         (ArchiveStatus::Normal, ArchiveKind::Analysis) => BadgeTone::Info,
         (ArchiveStatus::Normal, ArchiveKind::TableRef) => BadgeTone::Warning,
+    }
+}
+
+/// kind 图标（形状区分，**不靠颜色**——原型 §6 的视觉通道预算：一行只允许一个颜色信号，
+/// 而那个信号已经给了复现强度徽标）。
+///
+/// 三个形状：文件 = 文档形；分析表 = 表格形；引用 = 外链形。
+fn kind_icon(kind: ArchiveKind) -> CatalogIcon {
+    match kind {
+        ArchiveKind::File => CatalogIcon::FileText,
+        ArchiveKind::Analysis => CatalogIcon::Table,
+        ArchiveKind::TableRef => CatalogIcon::ExternalLink,
     }
 }
 
@@ -260,6 +277,14 @@ impl ListDelegate for ArchiveListDelegate {
             .min_w_0()
             .h(rems(ui::ROW_HEIGHT))
             .gap_2()
+            .child(
+                // kind 图标：一律 muted（颜色信号留给复现强度徽标）；
+                // `size_3p5` 是 `ui::ICON_SIZE_SM`（0.875rem = 14px）的 Tailwind 等价写法。
+                Icon::new(kind_icon(row.kind))
+                    .flex_none()
+                    .size_3p5()
+                    .text_color(muted),
+            )
             .child(
                 div()
                     .flex_1()
@@ -1015,8 +1040,23 @@ impl Render for ResourcesPanel {
 #[cfg(test)]
 mod tests {
     // 安全模式：测试模块不通配导入（会与 `#[gpui_kit::test]` 展开的 `#[test]` 自相残杀）。
-    use super::{ArchiveCounts, BadgeTone, badge_tone, row_tail, strength_badge};
+    use super::{ArchiveCounts, BadgeTone, badge_tone, kind_icon, row_tail, strength_badge};
     use crate::model::{ArchiveKind, ArchiveStatus};
+
+    #[test]
+    fn kind_icons_use_three_distinct_shapes() {
+        // 形状区分（不靠颜色）：三个 kind 的图标互不相同，且都来自已捆绑的资产目录
+        // （枚举由 gpui-kit-assets 的构建脚本按 svg 文件名生成，编译通过即资产存在）。
+        let icons = [
+            kind_icon(ArchiveKind::File),
+            kind_icon(ArchiveKind::Analysis),
+            kind_icon(ArchiveKind::TableRef),
+        ];
+        assert_eq!(icons[0], gpui_kit::assets::IconName::FileText);
+        assert_eq!(icons[1], gpui_kit::assets::IconName::Table);
+        assert_eq!(icons[2], gpui_kit::assets::IconName::ExternalLink);
+        assert!(icons[0] != icons[1] && icons[1] != icons[2] && icons[0] != icons[2]);
+    }
 
     #[test]
     fn strength_badge_follows_kind_and_status() {
