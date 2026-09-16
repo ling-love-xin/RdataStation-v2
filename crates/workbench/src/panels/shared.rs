@@ -330,7 +330,7 @@ impl Shared {
 
     /// M8：打开洞察面板并**指向一列**（结果表列头右键「洞察此列」的宿主侧入口）。
     ///
-    /// 入口只发这一条命令：面板状态与取数链都在 insight crate（`services::insight_jobs`），
+    /// 入口只发这一条命令：面板状态与取数链都在 insight crate（`insight::jobs`），
     /// 这里只做「展开右 Dock + 递目标」——面板收到目标后会发 `ProfileRequested`，
     /// 由右栏面板构造期建立的订阅接手取数。
     pub fn open_insight_column(
@@ -360,13 +360,15 @@ impl Shared {
     ///
     /// 定向动作（读源库结构 + 预填目标表名）在事件路径执行：面板实体随右栏面板
     /// **构造期创建**（`RightSidebarPanel::new`），因此这里总能拿到句柄。
+    /// 顺带让面板重读生成历史：面板可能已摆了几个项目（也可能刚切过项目）。
     pub fn open_mock_panel(&self, source: Option<SchemaRequest>, cx: &mut App) {
         self.open_right_panel(RightPanel::Mock, cx);
-        let Some(source) = source else {
+        let panel = self.mock_panel.borrow().clone();
+        let Some(panel) = panel.and_then(|weak| weak.upgrade()) else {
             return;
         };
-        let panel = self.mock_panel.borrow().clone();
-        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
+        panel.update(cx, |panel, cx| panel.refresh_history(cx));
+        if let Some(source) = source {
             panel.update(cx, |panel, cx| panel.preset_from_source(source, cx));
         }
     }
