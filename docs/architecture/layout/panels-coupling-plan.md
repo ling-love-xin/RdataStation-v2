@@ -1,0 +1,98 @@
+# 面板跨模块耦合治理计划（P0/P1）
+
+状态：待执行。依据见 `panels-modules.md` §3（12 个 `Shared` 字段跨模块）与 §4（18 处事件路径同步 I/O）。
+
+## 1. 目标与验收口径
+
+目标：**跨模块写入点从"任意字段"收敛为"少数端口方法"**，`Shared` 只保留宿主级状态。
+
+| 验收项 | 口径 |
+| --- | --- |
+| `Shared` 字段收敛 | 30 → 18（宿主级） |
+| 跨模块直写归零 | `grep "shared\.\(open_edit\|editor_set\|new_connection_request\|scratchpad_search\|property_target\|scratchpad_pump_request\|focus_nav_search\|open_file_request\)"` 命中 0（面板模块之间） |
+| 行为不变 | 面板单测 16 项 + 契约测试 6 项 + 集成测试全绿；无 UI 文案/尺寸/交互差异 |
+| 防回退 | 新增 `ui_contract` 契约：`Shared` 字段白名单（新增字段需显式登记并说明归属） |
+
+## 2. 字段级去向
+
+写/读列取自 2026-09-16 的 `grep` 实测（`shared.<field>` 的写入构造点与引用文件）。
+
+| 字段 | 写入方 | 读取方 | 去向 | 形态 |
+| --- | --- | --- | --- | --- |
+| `notice` | editor / nav / scratchpad | 三方 + `view.rs` | **保留 `Shared`** | 三类面板共用的状态栏提示，宿主级 |
+| `selected` / `connections` | editor / nav | editor / nav + 宿主 | **保留 `Shared`** | 连接列表与选中，宿主级 |
+| `driver_catalog` | nav（加载） | nav / editor | **保留 `Shared`** | 只读快照（随组织数据一次性加载） |
+| `project` / `project_ui` | 宿主（`view.rs`） | editor / scratchpad | **保留 `Shared`** | M1 项目会话与 UI 状态 |
+| `active_left` / `active_right` / `*_mode` / `quick_open` / `settings_open` | 宿主 | 宿主 / mod.rs | **保留 `Shared`** | 布局与三模式（`rds-layout` 口径） |
+| `mock_panel` / `mock_detail` / `insight_panel` / `open_mock_detail` / `host_redraw` | 宿主 | 宿主 / right.rs | **保留 `Shared`** | 宿主级弱句柄与命令 |
+| `editor_sql` / `editor_dirty` | **仅 editor.rs** | 仅 editor.rs | **收回 `EditorPanel` 字段** | 编辑器自用；M1 拦截走既有 `ProjectEditorBridge` 只读访问器 |
+| `nav_for` / `nav_tables` / `sql_for` | editor.rs（宿主切换连接时清空） | 仅 editor.rs | **收回 `EditorPanel` 字段** | 编辑区结果归属；宿主改调 `EditorPanel::reset_results()` |
+| `property_target` | nav（5 处） | editor | **`EditorBridge::show_properties(PropertyRequest)`** | nav → editor 请求 |
+| `open_edit` | nav（2 处，editor 1 处清理） | editor | **`EditorBridge::edit_connection(id)`** | nav → editor 请求 |
+| `new_connection_request` | nav（2 处） | editor / mod | **`EditorBridge::new_connection()`** | nav → editor 请求 |
+| `editor_set` | nav（1 处） | editor / mod | **`EditorBridge::insert_sql(conn_id, sql)`** | nav → editor 请求 |
+| `scratchpad_search` | scratchpad（2 处） | editor | **`EditorBridge::show_search_results(view)`** | scratchpad → editor 投递 |
+| `scratchpad_pump_request` | editor（1 处） | mod / scratchpad | **`ScratchpadBridge::ensure_pump()`** | editor → scratchpad 请求 |
+| `open_file_request` | scratchpad | 宿主（`view.rs`） | **`HostBridge::open_in_editor(path)`** | scratchpad → 宿主请求 |
+| `focus_nav_search` | 宿主 action（nav 1 处消费） | nav | **`NavBridge::focus_search()`** | 宿主 → nav 请求 |
+
+`editor_clear`（宿主命令闭包）与其它已由宿主持有的项不在本次范围。
+
+## 3. 三类桥 + 一个宿主端口
+
+桥是**强类型方法集合**，持有 `Rc<dyn Fn(...)>` 或 `WeakEntity`，在面板构造期注入（与既有接线口径一致）：
+
+```rust
+/// 导航/草稿箱调用（提供方：EditorPanel）
+EditorBridge {
+    fn edit_connection(&self, id: &str, window: &mut Window, cx: &mut App);
+    fn new_connection(&self, window: &mut Window, cx: &mut App);
+    fn insert_sql(&self, conn_id: &str, sql: &str, cx: &mut App);
+    fn show_properties(&self, request: PropertyRequest, cx: &mut App);
+    fn show_search_results(&self, view: ScratchpadSearchView, cx: &mut App);
+}
+
+/// 编辑区调用（提供方：SidebarPanel / 草稿箱）
+ScratchpadBridge { fn ensure_pump(&self, cx: &mut App); }
+
+/// 宿主调用（提供方：SidebarPanel）
+NavBridge { fn focus_search(&self, window: &mut Window, cx: &mut App); }
+
+/// 面板调用（提供方：WorkbenchView）
+HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 open_file_request 的替代
+```
+
+依据（不必重新论证，仓库内已有先例）：
+
+- `crates/editor/src/shared.rs` 的 `EditorShared` + `services/{editor_exec, editor_files, editor_connections, editor_session}.rs` 就是端口接线；
+- `rds-architecture` skill 硬约束：Feature 间协作走 **command / event / shared service**，不走共享可变字段；
+- `SidebarEvent` 已证明"枚举事件"适合**宿主订阅**的少数场景；端口更适合**点对点调用 + 需要窗口句柄**的场景（本表全部属于后者）。
+
+## 4. 迁移步骤（每步独立可编译、可验证）
+
+| 步 | 内容 | 验收 |
+| --- | --- | --- |
+| **S1** | 把只被 `editor.rs` 读写的 5 个字段收回编辑器（`editor_sql` / `editor_dirty` / `nav_for` / `nav_tables` / `sql_for`）；宿主切换连接处改调 `EditorPanel::reset_results()` | 面板单测 + 集成测试全绿；`Shared` 字段 30 → 25 |
+| **S2** | editor 侧端口化：`EditorBridge` 五方法；nav / scratchpad 改为调用 | 同上；上述 5 个请求字段 + `scratchpad_search` 归零；`ConnectionDialogState` 打开路径不变 |
+| **S3** | 反向桥：`ScratchpadBridge::ensure_pump`、`NavBridge::focus_search`、`HostBridge::open_in_editor` | 同上；`scratchpad_pump_request` / `focus_nav_search` / `open_file_request` 归零 |
+| **S4** | `ui_contract` 加 `Shared` 字段白名单契约；更新 `panels-modules.md` §3 与本文档状态 | 契约测试通过；§3 表格与实际一致 |
+
+## 5. 与 P1（同步 I/O 后台化）、P2（视图下沉）的顺序
+
+推荐顺序 **S1 → S2/S3 → P2 → P1**，理由：
+
+- **S1 零风险**：纯字段搬家，无跨模块签名变化，先做可以先拿到"耦合收敛"的第一块收益；
+- **S2/S3 必须在 P2 之前**：视图下沉（`nav.rs` → `crates/database`）时，若协作还靠共享字段，就会连带搬走半个 `Shared`；端口化之后只搬端口；
+- **P1 放在 P2 之后**：`block_on` 的后台化目标形态是"特性 crate 内的 jobs + 面板 drain"。草稿箱已有 `services/scratchpad_jobs.rs`，而它按 P2 会迁入 `crates/scratchpad`——先做 P1 等于把这段代码写两遍（nav 的 4 处同理，属 `crates/database`）。
+
+若希望**先拿到可见收益**（消除点击卡顿）再谈结构，可把 P1 提前，但需接受 18 处 I/O 迁移会被 P2 再搬一次；此时建议 P1 只做 scratchpad 的 14 处（路径最短、正例最近）。
+
+## 6. 实现位置映射表
+
+| 设计决策 | 实现位置 |
+| --- | --- |
+| 宿主级状态（收敛后） | `crates/workbench/src/panels/shared.rs` |
+| `EditorBridge` / `ScratchpadBridge` / `NavBridge` / `HostBridge` | `crates/workbench/src/panels/editor.rs`、`scratchpad_panel.rs`、`nav.rs`、`view.rs`（构造期注入，宿主在 `init_workspace` 装配） |
+| 端口接线先例 | `crates/editor/src/shared.rs`、`crates/workbench/src/services/editor_*.rs` |
+| 后台任务形态（P1） | `crates/workbench/src/services/scratchpad_jobs.rs`、`nav_jobs.rs` |
+| `Shared` 字段白名单契约（S4） | `crates/workbench/tests/ui_contract.rs` |

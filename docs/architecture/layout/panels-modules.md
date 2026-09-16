@@ -91,6 +91,7 @@
 
 建议：`Shared` 只留宿主级状态 + 三类**桥**（`NavBridge` / `EditorBridge` / `ScratchpadBridge`），
 特性内状态收回各自模块（`DatabaseNavView` 已在做，其余溢出字段同理）。
+**字段级去向与迁移顺序见 `panels-coupling-plan.md`**。
 
 ### P0 — 请求标记 → 端口/命令，而不是共享可变字段
 
