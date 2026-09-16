@@ -29,6 +29,7 @@ pub mod log_store;
 pub mod metadata_cache;
 pub mod metadata_cache_pool;
 pub mod metadata_identity;
+pub mod navigator_state;
 pub mod network_store;
 pub mod plugin_store;
 pub mod project_connection_store;
@@ -47,6 +48,7 @@ pub use global_db::{
 };
 pub use metadata_cache::{ConnectionType, MetadataCacheManager, MetadataCacheOps};
 pub use metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
+pub use navigator_state::{NavState, NavigatorStateStore};
 pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSqlitePool};
 pub use sql_template_store::{SqlTemplate, SqlTemplateStore};
 pub use workbench_context_store::{EditorContext, WorkbenchContextStore, WorkbenchLayout};

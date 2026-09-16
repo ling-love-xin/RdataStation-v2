@@ -18,7 +18,6 @@ use crate::services::connection_service::{
     resolve_network_method_with_project, ConnectRequest, ConnectionService,
 };
 use crate::services::data_source_service::DataSourceService;
-use crate::services::nav_store::NavStore;
 
 /// 进程级桥接运行时：`nav_runtime` 的同步入口用它把异步调用落地。
 ///
@@ -168,12 +167,15 @@ pub fn is_connected(conn_id: &str) -> bool {
 }
 
 /// 打开导航持久化存储：全局连接（含遗留 `conn-`）→ 全局库；项目 / 共享连接 → 项目库。
-fn open_store(conn_id: &str, project_root: Option<&Path>) -> Result<NavStore, String> {
+fn open_store(
+    conn_id: &str,
+    project_root: Option<&Path>,
+) -> Result<engine::persistence::NavigatorStateStore, String> {
     if engine::persistence::id_prefix::uses_project_storage(conn_id) {
         let root = project_root.ok_or_else(|| "未打开项目，无法读写项目导航状态".to_string())?;
-        NavStore::open_project(root)
+        engine::persistence::NavigatorStateStore::open_project(root).map_err(|e| e.to_string())
     } else {
-        NavStore::open_global()
+        engine::persistence::NavigatorStateStore::open_global().map_err(|e| e.to_string())
     }
 }
 
@@ -197,7 +199,9 @@ pub fn save_nav_state(
     } else {
         "global"
     };
-    store.save_state(conn_id, scope, state)
+    store
+        .save_state(conn_id, scope, state)
+        .map_err(|e| e.to_string())
 }
 
 /// 打开连接组织元数据存储（标签 / 分组的权威源）：

@@ -229,6 +229,14 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 顺带修掉一个副作用：读目录改用 `SQLITE_OPEN_READ_ONLY` 打开全局库，全局库未初始化时
 不再在用户目录里凭空建出一个空 `global.db`。
 
+**A' 前置之三（2026-09-16）：导航视图状态存储下沉至 `engine`。**
+
+`workbench::services::nav_store::NavStore`（读写 `navigator_state` 表）与它依赖的
+`database::model::NavState` 一并落到 `engine::persistence::navigator_state`
+（`NavigatorStateStore` / `NavState`；`database::model` 重导旧名）。
+理由：它是纯持久化（读写一张表），视图下沉后 `database` 不应为此再引一份 `rusqlite`；
+`NavState` 也随之与存储同层，不再是「数据库域模型兼行映射」。
+
 依赖面审计（`panels/nav.rs`，4867 行）——决定 `NavHost` 要盖什么：
 
 | 类别 | 处数 | 去向 |

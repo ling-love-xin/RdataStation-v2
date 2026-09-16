@@ -295,28 +295,9 @@ pub struct PropertyRef {
 }
 
 /// 导航状态（展开态 / 选中 / 过滤），持久化到 `navigator_state`。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NavState {
-    /// 已展开节点 key
-    pub expanded_keys: Vec<String>,
-    /// 选中节点 key
-    pub selected_key: Option<String>,
-    /// 搜索过滤词
-    pub filter_text: String,
-    /// 格式版本（便于后续迁移）
-    pub version: u32,
-}
-
-impl Default for NavState {
-    fn default() -> Self {
-        Self {
-            expanded_keys: Vec::new(),
-            selected_key: None,
-            filter_text: String::new(),
-            version: 1,
-        }
-    }
-}
+///
+/// 定义在 `engine::persistence`（与存储同处一层），此处重导旧路径，导航侧引用不变。
+pub use engine::persistence::NavState;
 
 /// 连接条目（数据源列表项，视图输入）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -21,7 +21,6 @@ pub mod mock_generator;
 pub mod mock_jobs;
 pub mod nav_jobs;
 pub mod nav_runtime;
-pub mod nav_store;
 pub mod project_session;
 pub mod query_export;
 pub mod query_history;
