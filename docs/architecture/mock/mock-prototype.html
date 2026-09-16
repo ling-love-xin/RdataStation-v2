@@ -479,6 +479,16 @@ button{font-family:inherit;cursor:pointer;}
           </div>
           <div class="hint">数据只写入分析库与文件，不回传源库（M7）</div>
 
+          <!-- 用户模板（C4）：保存当前配置 / 套用已有模板。只存「怎么造数据」，不存目标表名 -->
+          <div class="hist only-generated">
+            <div class="line"><span class="hint grow">用户模板（1）</span><button class="btn sm">保存为模板…</button></div>
+            <div class="hist-row">
+              <div class="line"><span class="name">电商主数据</span><button class="btn sm">应用</button><button class="btn sm">删除</button></div>
+              <div class="line"><span class="hint grow">1000 行 · 4 列</span></div>
+            </div>
+          </div>
+          <div class="hint only-imported">用户模板：还没有保存的模板（把当前列配置存下来，下次一键套用）</div>
+
           <!-- 生成历史（D4/D5）：最近若干次运行。重放把当时的表名/行数/种子/列写回草稿，
                删除只删记录；读写全在后台线程，宿主只提供项目根 -->
           <div class="hist only-generated">
@@ -601,7 +611,7 @@ button{font-family:inherit;cursor:pointer;}
   <div>· v1 的「生成器下拉（137 项平铺）」→ 本稿按<b>分类子菜单</b>收口；v1 的「⚙ 高级抽屉」→ <b>列编辑对话框</b>（列名 / 类型 / 生成器只读 / 参数 / 空值率 / 唯一 / 恢复智能默认）。</div>
   <div>· v1 的「生成 → 预览表 → 导出 CSV·XLSX·Parquet·SQL / 保存草稿 / 持久化」→ 本稿：生成仍只产<b>内存临时表 + 预览</b>（不写库），四个出口收在右 Dock「出口」按钮组，预览表在中央 tab。</div>
   <div>· v1 的「导入结构弹窗」→ 本稿「导入结构」对话框（连接 / 库 / schema / 表名，读源库结构）；v1 <b>没有</b>的「追加到既有表」是 v2 的<b>显式</b>出口（选表后主键自增接续表内行数），不与「持久化」混为一路。</div>
-  <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部「生成历史」（最近 20 条，时间倒序 + 重放 / 删除 / 刷新），生成一次自动落一条，失败行显示原因；v1 的「场景模板 / 保存模板」仍待办（`mock-dev-plan.md` Phase C4），本稿暂不画。</div>
+  <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部「生成历史」（最近 20 条，时间倒序 + 重放 / 删除 / 刷新），生成一次自动落一条，失败行显示原因；v1 的「保存模板」→ 本稿**已画**「用户模板」段（「保存为模板…」对话框只问名字 + 每行「应用 / 删除」）。v1 的「场景模板」（6 套内置一键生成）仍待办（`mock-dev-plan.md` Phase C1），本稿暂不画。</div>
 </div>
 
 <script>

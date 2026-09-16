@@ -60,7 +60,9 @@ use gpui_kit::*;
 use crate::generator_catalog::{self, GeneratorCategory, GeneratorSpec, ParamField, ParamKind};
 use crate::history::{self, HistoryAction, RunRecord};
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
-use crate::persistence::{MockGenerationDetail, MockGenerationTask};
+use crate::persistence::{
+    MockGenerationDetail, MockGenerationTask, MockTemplateColumn, MockUserTemplate,
+};
 use crate::schema_map::ColumnMapper;
 
 // ==================== 宿主契约 ====================
@@ -1031,12 +1033,16 @@ pub struct MockPanel {
     job: Option<MockJobWatch>,
     /// 生成历史（最近 [`history::HISTORY_LIMIT`] 条，时间倒序）
     history: Vec<MockGenerationTask>,
-    /// 历史是否读到过（区分「还没读」与「读完了是空的」）
+    /// 用户模板（与历史同一次后台读拿回，见 `HistorySnapshot`）
+    templates: Vec<MockUserTemplate>,
+    /// 历史与模板是否读到过（区分「还没读」与「读完了是空的」）
     history_loaded: bool,
-    /// 历史读写在途（后台）
+    /// 历史与模板读写在途（后台）
     history_loading: bool,
-    /// 历史读写失败的原因（成功一次就清掉）
+    /// 历史与模板读写失败的原因（成功一次就清掉）
     history_error: Option<String>,
+    /// 「保存为模板」对话框的名称输入框
+    template_name: Option<Entity<InputState>>,
 }
 
 /// 进行中任务的视图侧状态（进度镜像 + 轮询泵句柄）。
@@ -1054,22 +1060,30 @@ struct MockJobWatch {
 /// 交给后台执行器的一件事（读与写共用一条路径）。
 #[derive(Clone)]
 enum HistoryTask {
-    /// 读列表
+    /// 读快照（历史 + 模板）
     List,
-    /// 删一条后读回列表
+    /// 删一条历史后读回
     Delete(String),
-    /// 记一次生成运行后读回列表
+    /// 记一次生成运行后读回
     Record { draft: MockDraft, run: RunRecord },
-    /// 取一条的完整配置（重放）
+    /// 把草稿存成模板后读回
+    SaveTemplate { name: String, draft: MockDraft },
+    /// 删一个模板后读回
+    DeleteTemplate(String),
+    /// 取一条历史的完整配置（重放）
     Replay(String),
+    /// 取一个模板的完整配置（应用）
+    ApplyTemplate(String),
 }
 
 /// 后台读的回填形态（与 [`HistoryTask`] 一一对应）。
 pub(crate) enum HistoryReply {
-    /// 列表已刷新
-    Listed(Vec<MockGenerationTask>),
+    /// 历史与模板已刷新
+    Listed(history::HistorySnapshot),
     /// 重放：拿回当时的完整配置（列表不动）
     Replayed(Box<MockGenerationDetail>),
+    /// 应用模板：拿回模板与它的列（列表不动）
+    TemplateApplied(Box<(MockUserTemplate, Vec<MockTemplateColumn>)>),
 }
 
 impl MockPanel {
@@ -1095,9 +1109,11 @@ impl MockPanel {
             import_table: None,
             job: None,
             history: Vec::new(),
+            templates: Vec::new(),
             history_loaded: false,
             history_loading: false,
             history_error: None,
+            template_name: None,
         }
     }
 
@@ -1211,6 +1227,36 @@ impl MockPanel {
         self.spawn_history(HistoryTask::Replay(task_id), cx);
     }
 
+    /// 把当前草稿存成用户模板（名字由保存对话框给，空名在这里拦住）。
+    ///
+    /// 两道门都落在动作本身而不只在对话框上：对话框只是入口之一，
+    /// 校验在这里才能保证「不管谁调都不会存出一份套不出东西的模板」。
+    pub fn save_template(&mut self, name: String, cx: &mut Context<Self>) {
+        if self.draft.columns.is_empty() {
+            self.history_error =
+                Some("先加列（或导入结构）再存模板：空配置存下来没有意义".to_string());
+            cx.notify();
+            return;
+        }
+        if name.trim().is_empty() {
+            self.history_error = Some("模板名不能为空".to_string());
+            cx.notify();
+            return;
+        }
+        let draft = self.draft.clone();
+        self.spawn_history(HistoryTask::SaveTemplate { name, draft }, cx);
+    }
+
+    /// 应用一个用户模板：把它存的行数 / 种子 / 语言与列写回草稿（**不动目标表名**）。
+    pub fn apply_template(&mut self, template_id: String, cx: &mut Context<Self>) {
+        self.spawn_history(HistoryTask::ApplyTemplate(template_id), cx);
+    }
+
+    /// 删一个用户模板（删除与重读在同一件后台动作里完成）。
+    pub fn delete_template(&mut self, template_id: String, cx: &mut Context<Self>) {
+        self.spawn_history(HistoryTask::DeleteTemplate(template_id), cx);
+    }
+
     /// 把面板要做的一件事交给后台执行器，完成后经弱句柄回填。
     ///
     /// 未打开项目时不去跑后台：历史没有落点，直接给一句可读的原因
@@ -1221,10 +1267,11 @@ impl MockPanel {
             // 只有「重读列表」才清空：删记录 / 重放失败时，已显示的列表比一片空白有用。
             if matches!(task, HistoryTask::List) {
                 self.history.clear();
+                self.templates.clear();
                 self.history_loaded = true;
             }
             self.history_loading = false;
-            self.history_error = Some("未打开项目：生成历史随项目保存".to_string());
+            self.history_error = Some("未打开项目：生成历史与模板随项目保存".to_string());
             cx.notify();
             return;
         };
@@ -1247,6 +1294,22 @@ impl MockPanel {
                     history::HISTORY_LIMIT,
                 ))
                 .map(HistoryReply::Listed),
+                HistoryTask::SaveTemplate { name, draft } => history::drive(history::run(
+                    &root,
+                    HistoryAction::SaveTemplate { name, draft },
+                    history::HISTORY_LIMIT,
+                ))
+                .map(HistoryReply::Listed),
+                HistoryTask::DeleteTemplate(id) => history::drive(history::run(
+                    &root,
+                    HistoryAction::DeleteTemplate(id),
+                    history::HISTORY_LIMIT,
+                ))
+                .map(HistoryReply::Listed),
+                HistoryTask::ApplyTemplate(id) => {
+                    history::drive(history::template_detail(&root, &id))
+                        .map(|detail| HistoryReply::TemplateApplied(Box::new(detail)))
+                }
                 HistoryTask::Replay(id) => history::drive(history::detail(&root, &id))
                     .map(|detail| HistoryReply::Replayed(Box::new(detail))),
             }
@@ -1269,8 +1332,9 @@ impl MockPanel {
     ) {
         self.history_loading = false;
         match reply {
-            Ok(HistoryReply::Listed(tasks)) => {
-                self.history = tasks;
+            Ok(HistoryReply::Listed(snapshot)) => {
+                self.history = snapshot.tasks;
+                self.templates = snapshot.templates;
                 self.history_loaded = true;
                 self.history_error = None;
             }
@@ -1279,10 +1343,40 @@ impl MockPanel {
                 self.history_loaded = true;
                 self.history_error = None;
             }
+            Ok(HistoryReply::TemplateApplied(detail)) => {
+                let (template, columns) = *detail;
+                self.apply_template_config(&template, &columns);
+                self.history_loaded = true;
+                self.history_error = None;
+            }
             // 失败不改列表：能看到的旧列表比一片空白有用
             Err(reason) => self.history_error = Some(reason),
         }
         cx.notify();
+    }
+
+    /// 应用模板落地：行数 / 种子 / 语言与列换成模板里那一套，**目标表名不动**
+    /// （纯状态动作，测试直接调）。
+    pub(crate) fn apply_template_config(
+        &mut self,
+        template: &MockUserTemplate,
+        columns: &[MockTemplateColumn],
+    ) {
+        let mut draft = history::draft_of_template(template, columns);
+        // 模板不存表名：用户正在写的目标表名保住（换表名是另一件事）
+        draft.table_name = self.draft.table_name.clone();
+        let rows = draft.options.rows;
+        let count = draft.columns.len();
+        self.next_id = count as u64 + 1;
+        self.draft = draft;
+        // 旧结果作废：草稿已是另一套配置，临时表还是上一套的
+        self.generated = None;
+        self.landed = None;
+        self.error = None;
+        self.outcome = Some(format!(
+            "已应用模板 {}（{rows} 行 · {count} 列；种子与语言一并写入）",
+            template.name
+        ));
     }
 
     /// 重放落地：草稿整体换成历史里的那一套（纯状态动作，测试直接调）。
@@ -2139,6 +2233,138 @@ impl MockPanel {
     }
 
     /// 打开「导入源库结构」对话框。
+    /// 用户模板段：把当前配置存下来 / 套用已有模板 / 删除。
+    ///
+    /// 与历史段共用同一次后台读（`HistorySnapshot`）；「保存」走对话框问名字，
+    /// 空配置与空名都在事件路径上拦住（不给静默失败）。
+    fn render_templates(&mut self, cx: &mut Context<Self>) -> Div {
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let border = cx.theme().colors.border;
+
+        let header = {
+            let entity = cx.entity();
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(muted)
+                        .text_ellipsis()
+                        .child(format!("用户模板（{}）", self.templates.len())),
+                )
+                .child(
+                    Button::new("mock-template-save")
+                        .ghost()
+                        .xsmall()
+                        .label("保存为模板…")
+                        .on_click(move |_, window, app| {
+                            entity.update(app, |panel, cx| {
+                                panel.open_save_template_dialog(window, cx);
+                            });
+                        }),
+                )
+        };
+
+        let mut section = div().v_flex().gap_1().w_full().child(header);
+        // 首次读取中：历史段已经说「读取中…」，这里不重复
+        if self.history_loading && !self.history_loaded {
+            return section;
+        }
+        if self.history_loaded && self.templates.is_empty() {
+            return section.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("还没有保存的模板：把当前列配置存下来，下次一键套用"),
+            );
+        }
+
+        for template in self.templates.clone() {
+            let rows = template.row_count.max(0);
+            let summary = template.description.clone().unwrap_or_default();
+            let meta = if summary.is_empty() {
+                format!("{rows} 行")
+            } else {
+                format!("{rows} 行 · {summary}")
+            };
+            let apply = {
+                let entity = cx.entity();
+                let id = template.id.clone();
+                Button::new(ElementId::Name(SharedString::from(format!(
+                    "mock-template-apply-{id}"
+                ))))
+                .ghost()
+                .xsmall()
+                .label("应用")
+                .on_click(move |_, _, app| {
+                    let id = id.clone();
+                    entity.update(app, |panel, cx| panel.apply_template(id, cx));
+                })
+            };
+            let delete = {
+                let entity = cx.entity();
+                let id = template.id.clone();
+                Button::new(ElementId::Name(SharedString::from(format!(
+                    "mock-template-delete-{id}"
+                ))))
+                .ghost()
+                .xsmall()
+                .label("删除")
+                .on_click(move |_, _, app| {
+                    let id = id.clone();
+                    entity.update(app, |panel, cx| panel.delete_template(id, cx));
+                })
+            };
+
+            section = section.child(
+                div()
+                    .id(ElementId::Name(SharedString::from(format!(
+                        "mock-template-{}",
+                        template.id
+                    ))))
+                    .v_flex()
+                    .gap_1()
+                    .w_full()
+                    .p_2()
+                    .border_1()
+                    .border_color(border)
+                    .rounded(cx.theme().radius)
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .text_color(fg)
+                                    .text_ellipsis()
+                                    .child(template.name.clone()),
+                            )
+                            .child(apply)
+                            .child(delete),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .text_ellipsis()
+                            .child(meta),
+                    ),
+            );
+        }
+        section
+    }
+
     /// 生成历史段：最近若干次运行（重放 / 删除都在事件路径上交给后台）。
     ///
     /// 列表与错误分开呈现：读失败时**保留旧列表**（能看到的旧数据比一片空白有用）。
@@ -2314,6 +2540,68 @@ impl MockPanel {
             );
         }
         section
+    }
+
+    /// 「保存为模板」对话框：只问名字——行数 / 种子 / 语言 / 列 / 生成器参数都取当前配置。
+    ///
+    /// 校验本身在 [`MockPanel::save_template`]；这里提前拒空配置，只是为了别弹一个
+    /// 必然失败的框。名字默认填「{目标表名} 配置」。
+    pub fn open_save_template_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft.columns.is_empty() {
+            self.history_error =
+                Some("先加列（或导入结构）再存模板：空配置存下来没有意义".to_string());
+            cx.notify();
+            return;
+        }
+        let name = self
+            .template_name
+            .get_or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("模板名")))
+            .clone();
+        let suggestion = format!("{} 配置", self.draft.table_name.trim());
+        name.update(cx, |state, cx| state.set_value(suggestion, window, cx));
+
+        let panel = cx.entity();
+        let columns = self.draft.columns.len();
+        let rows = self.draft.options.rows;
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let theme = cx.theme();
+            let body = div()
+                .v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!(
+                            "存下当前配置：{rows} 行 · {columns} 列（含生成器与参数）。\
+                             目标表名不存——套用时按当时的输入走。"
+                        )),
+                )
+                .child(form_line(theme, "模板名", &name));
+            let panel_save = panel.clone();
+            let input = name.clone();
+            dialog.title("保存为模板").child(body).footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("mock-template-dialog-cancel")
+                            .secondary()
+                            .label("取消")
+                            .on_click(move |_, window, app| {
+                                window.close_dialog(app);
+                            }),
+                    )
+                    .child(
+                        Button::new("mock-template-dialog-ok")
+                            .with_variant(ButtonVariant::Primary)
+                            .label("保存")
+                            .on_click(move |_, window, app| {
+                                let value = input.read(app).value().to_string();
+                                panel_save.update(app, |panel, cx| panel.save_template(value, cx));
+                                window.close_dialog(app);
+                            }),
+                    ),
+            )
+        });
     }
 
     pub fn open_import_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2567,6 +2855,7 @@ impl Render for MockPanel {
                             )
                             .child(target)
                             .child(actions)
+                            .child(self.render_templates(cx))
                             .child(self.render_history(cx)),
                     ),
             )

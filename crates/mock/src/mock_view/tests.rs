@@ -25,8 +25,12 @@ use super::{
     parse_rows, parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
 };
 use crate::generator_catalog::{self, ParamKind};
+use crate::history;
 use crate::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale, MockExportFormat};
-use crate::persistence::{MockGenerationColumn, MockGenerationDetail, MockGenerationTask};
+use crate::persistence::{
+    MockGenerationColumn, MockGenerationDetail, MockGenerationTask, MockTemplateColumn,
+    MockUserTemplate,
+};
 use crate::schema_map::ColumnMapper;
 
 // ==================== 纯逻辑（无窗口） ====================
@@ -1779,10 +1783,13 @@ fn history_rows_render_and_keep_failure_reasons(cx: &mut TestAppContext) {
 
     panel.update(cx, |panel, cx| {
         panel.accept_history(
-            Ok(HistoryReply::Listed(vec![
-                history_task("t_ok", "success"),
-                history_task("t_bad", "failed"),
-            ])),
+            Ok(HistoryReply::Listed(history::HistorySnapshot {
+                tasks: vec![
+                    history_task("t_ok", "success"),
+                    history_task("t_bad", "failed"),
+                ],
+                templates: Vec::new(),
+            })),
             cx,
         );
     });
@@ -1878,6 +1885,137 @@ fn replay_writes_the_recorded_configuration_into_the_draft(cx: &mut TestAppConte
     });
 }
 
+// ==================== 用户模板（C4） ====================
+
+/// 一个用户模板（列表 / 应用用）。
+fn history_template(id: &str, name: &str) -> MockUserTemplate {
+    MockUserTemplate {
+        id: id.to_string(),
+        name: name.to_string(),
+        description: Some("2 列".to_string()),
+        row_count: 750,
+        seed: Some(99),
+        locale: "EN".to_string(),
+        created_at: Some("2026-09-16T15:02:03+00:00".to_string()),
+        updated_at: Some("2026-09-16T15:02:03+00:00".to_string()),
+    }
+}
+
+/// 模板里的列（与应用用同一形状）。
+fn template_column(id: &str, template_id: &str, name: &str, order: i32) -> MockTemplateColumn {
+    MockTemplateColumn {
+        id: id.to_string(),
+        template_id: template_id.to_string(),
+        column_name: name.to_string(),
+        column_type: "INTEGER".to_string(),
+        generator: "safe_email".to_string(),
+        generator_params: None,
+        null_ratio: 0.0,
+        is_unique: false,
+        is_primary_key: false,
+        is_foreign_key: false,
+        ref_table: None,
+        ref_column: None,
+        comment: None,
+        confidence: None,
+        sort_order: order,
+    }
+}
+
+/// 应用模板：行数 / 种子 / 语言 / 列都换成模板里那一套，**目标表名不动**。
+#[gpui_kit::test]
+fn applying_a_template_keeps_the_target_table_name(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        // 用户正在写别的表：应用模板不该把它换掉
+        panel.draft.table_name = "orders_next".to_string();
+        panel.add_column("legacy".to_string(), ColumnDataType::Text, cx);
+        panel.accept_history(
+            Ok(HistoryReply::Listed(history::HistorySnapshot {
+                tasks: Vec::new(),
+                templates: vec![history_template("tpl1", "电商主数据")],
+            })),
+            cx,
+        );
+    });
+    draw(cx);
+    panel.update(cx, |panel, _cx| assert_eq!(panel.templates.len(), 1));
+
+    panel.update(cx, |panel, cx| {
+        panel.accept_history(
+            Ok(HistoryReply::TemplateApplied(Box::new((
+                history_template("tpl1", "电商主数据"),
+                vec![
+                    template_column("tc0", "tpl1", "id", 0),
+                    template_column("tc1", "tpl1", "email", 1),
+                ],
+            )))),
+            cx,
+        );
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.draft().table_name, "orders_next", "表名保住");
+        assert_eq!(panel.draft().options.rows, 750);
+        assert_eq!(panel.draft().options.seed, Some(99));
+        assert_eq!(panel.draft().options.locale, Locale::En);
+        assert_eq!(
+            panel
+                .draft()
+                .columns
+                .iter()
+                .map(|column| column.def.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["id", "email"],
+            "列换成模板里的那一套"
+        );
+        assert!(panel.gen_info().is_none(), "旧临时表与新配置对不上，作废");
+        let outcome = panel.outcome.clone().unwrap_or_default();
+        assert!(outcome.contains("已应用模板 电商主数据"), "{outcome}");
+    });
+}
+
+/// 存模板的两道门：空配置与空名字都在事件路径上拦住。
+#[gpui_kit::test]
+fn saving_a_template_rejects_empty_draft_and_empty_name(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    // 一列都没有：存下来套不出任何东西
+    panel.update(cx, |panel, cx| {
+        panel.save_template("我的模板".to_string(), cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        let note = panel.history_error.clone().unwrap_or_default();
+        assert!(note.contains("先加列"), "{note}");
+    });
+
+    // 有列但名字是空白：拒绝（不静默变成「无标题模板」）
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.save_template("   ".to_string(), cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        let note = panel.history_error.clone().unwrap_or_default();
+        assert!(note.contains("模板名不能为空"), "{note}");
+        assert!(panel.templates.is_empty());
+    });
+
+    // 两道门都过了：请求真的发出去（这里没有项目根，所以回一条可读原因而不是静默丢弃）
+    panel.update(cx, |panel, cx| {
+        panel.save_template("我的模板".to_string(), cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        let note = panel.history_error.clone().unwrap_or_default();
+        assert!(note.contains("未打开项目"), "{note}");
+    });
+}
+
 /// 删除失败（如未打开项目）时，列表不变且错误可见。
 #[gpui_kit::test]
 fn delete_history_keeps_the_list_and_reports_failure(cx: &mut TestAppContext) {
@@ -1887,7 +2025,10 @@ fn delete_history_keeps_the_list_and_reports_failure(cx: &mut TestAppContext) {
 
     panel.update(cx, |panel, cx| {
         panel.accept_history(
-            Ok(HistoryReply::Listed(vec![history_task("t1", "success")])),
+            Ok(HistoryReply::Listed(history::HistorySnapshot {
+                tasks: vec![history_task("t1", "success")],
+                templates: Vec::new(),
+            })),
             cx,
         );
         panel.delete_history("t1".to_string(), cx);

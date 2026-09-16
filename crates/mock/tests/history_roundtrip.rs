@@ -8,7 +8,9 @@
 
 use std::path::PathBuf;
 
-use rds_mock::history::{self, HistoryAction, RunOutcome, RunRecord, draft_of_detail};
+use rds_mock::history::{
+    self, HistoryAction, RunOutcome, RunRecord, draft_of_detail, draft_of_template,
+};
 use rds_mock::mock_view::{MockColumnSpec, MockDraft, MockRunOptions};
 use rds_mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
 use rds_mock::persistence::MockGenerationTask;
@@ -98,7 +100,8 @@ async fn a_run_is_recorded_listed_and_replayed() {
         history::HISTORY_LIMIT,
     )
     .await
-    .expect("记录一次运行");
+    .expect("记录一次运行")
+    .tasks;
 
     assert_eq!(tasks.len(), 1, "记录后列表应包含这一条");
     let task = &tasks[0];
@@ -113,7 +116,8 @@ async fn a_run_is_recorded_listed_and_replayed() {
     // 列表读回同一份（面板刷新走这条）
     let listed = history::list(&root, history::HISTORY_LIMIT)
         .await
-        .expect("读列表");
+        .expect("读列表")
+        .tasks;
     assert_eq!(ids(&listed), vec![task.id.as_str()]);
 
     // 重放：草稿从历史还原（生成器与参数经目录名 + 参数 JSON 一条路往返）
@@ -141,7 +145,8 @@ async fn a_run_is_recorded_listed_and_replayed() {
         history::HISTORY_LIMIT,
     )
     .await
-    .expect("删除");
+    .expect("删除")
+    .tasks;
     assert!(after_delete.is_empty());
     assert!(
         history::detail(&root, &task.id).await.is_err(),
@@ -181,7 +186,8 @@ async fn history_is_newest_first_and_failures_keep_their_reason() {
 
     let tasks = history::list(&root, history::HISTORY_LIMIT)
         .await
-        .expect("读列表");
+        .expect("读列表")
+        .tasks;
     assert_eq!(tasks.len(), 2);
     assert_eq!(
         tasks[0].table_name, "second",
@@ -197,9 +203,70 @@ async fn history_is_newest_first_and_failures_keep_their_reason() {
     assert_eq!(tasks[1].status, "success");
 
     // limit 截尾（面板一次只取最近若干条）
-    let only_one = history::list(&root, 1).await.expect("读列表");
+    let only_one = history::list(&root, 1).await.expect("读列表").tasks;
     assert_eq!(only_one.len(), 1);
     assert_eq!(only_one[0].table_name, "second");
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn a_template_is_saved_listed_replayed_and_deleted() {
+    let root = temp_project("template");
+    let saved = draft("orders", Some(11));
+
+    let templates = history::run(
+        &root,
+        HistoryAction::SaveTemplate {
+            name: "  电商主数据  ".to_string(),
+            draft: saved,
+        },
+        history::HISTORY_LIMIT,
+    )
+    .await
+    .expect("保存模板")
+    .templates;
+
+    assert_eq!(templates.len(), 1, "保存后列表里应有一条");
+    let template = &templates[0];
+    assert_eq!(template.name, "电商主数据", "名字取 trim 后的值");
+    assert_eq!(template.row_count, 250);
+    assert_eq!(template.seed, Some(11));
+    assert_eq!(template.locale, "EN");
+    assert_eq!(template.description.as_deref(), Some("2 列"));
+
+    // 应用：拿详细配置还原出一份草稿（表名由调用方决定，模板里不存）
+    let (read_back, columns) = history::template_detail(&root, &template.id)
+        .await
+        .expect("读模板详情");
+    let replayed = draft_of_template(&read_back, &columns);
+    assert_eq!(replayed.options.rows, 250);
+    assert_eq!(replayed.options.seed, Some(11));
+    assert_eq!(replayed.options.locale, Locale::En);
+    assert_eq!(
+        replayed
+            .columns
+            .iter()
+            .map(|column| column.def.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["id", "amount"]
+    );
+    assert_eq!(replayed.columns[1].def.nullable_ratio, 0.1);
+
+    // 删：列表与详情同时消失
+    let left = history::run(
+        &root,
+        HistoryAction::DeleteTemplate(template.id.clone()),
+        history::HISTORY_LIMIT,
+    )
+    .await
+    .expect("删除模板")
+    .templates;
+    assert!(left.is_empty());
+    assert!(
+        history::template_detail(&root, &template.id).await.is_err(),
+        "删掉的模板不该还能读出详情"
+    );
 
     std::fs::remove_dir_all(&root).ok();
 }

@@ -1,4 +1,9 @@
-//! 生成历史（M7 · D4/D5）：领域动作 + 后台执行入口。
+//! 生成历史与用户模板（M7 · D4/D5/C4）：领域动作 + 后台执行入口。
+//!
+//! # 为什么要一个快照
+//!
+//! 面板同时要「最近几次运行」与「保存过的模板」——两者在同一个库里、同一次打开连接就能读完，
+//! 所以一次后台读返回 [`HistorySnapshot`]，不做两次往返（也就不会出现「一半新一半旧」）。
 //!
 //! # 为什么在 mock crate 内
 //!
@@ -35,9 +40,10 @@ use crate::generator_catalog;
 use crate::mock_view::{
     MockColumnSpec, MockDraft, MockJobDone, MockJobKind, default_generator_for,
 };
-use crate::models::{ColumnDef, GeneratorConfig, Locale};
+use crate::models::{ColumnDef, DependencyType, GeneratorConfig, Locale};
 use crate::persistence::{
     MockGenerationColumn, MockGenerationDetail, MockGenerationStore, MockGenerationTask,
+    MockTemplateColumn, MockUserTemplate,
 };
 use crate::schema_map::parse_data_type;
 
@@ -57,6 +63,22 @@ pub enum HistoryAction {
     Record { draft: MockDraft, run: RunRecord },
     /// 删一条历史（连带它的列行）。
     DeleteTask(String),
+    /// 把当前草稿存成用户模板。
+    SaveTemplate { name: String, draft: MockDraft },
+    /// 删一个用户模板（连带它的列行）。
+    DeleteTemplate(String),
+}
+
+/// 一次读到的历史与模板。
+///
+/// 两者在同一个库里、同一次打开连接就能读完，所以合成一次读——面板不会出现
+/// 「历史是新的、模板还是旧的」这种一半新一半旧的中间态。
+#[derive(Debug, Clone, Default)]
+pub struct HistorySnapshot {
+    /// 最近若干次运行（时间倒序）
+    pub tasks: Vec<MockGenerationTask>,
+    /// 保存过的用户模板（时间倒序）
+    pub templates: Vec<MockUserTemplate>,
 }
 
 /// 一次生成运行的结局。
@@ -115,12 +137,12 @@ impl RunRecord {
     }
 }
 
-/// 执行一次动作，并返回**动作之后**的列表。
+/// 执行一次动作，并返回**动作之后**的历史与模板。
 pub async fn run(
     project_root: &Path,
     action: HistoryAction,
     limit: u32,
-) -> Result<Vec<MockGenerationTask>, String> {
+) -> Result<HistorySnapshot, String> {
     let store = open_store(project_root).await?;
     match action {
         HistoryAction::Record { draft, run } => {
@@ -136,14 +158,27 @@ pub async fn run(
                 .await
                 .map_err(|e| format!("删除生成历史失败：{e}"))?;
         }
+        HistoryAction::SaveTemplate { name, draft } => {
+            let (template, columns) = template_of_draft(&name, &draft, Utc::now());
+            store
+                .save_template(&template, &columns)
+                .await
+                .map_err(|e| format!("保存模板失败：{e}"))?;
+        }
+        HistoryAction::DeleteTemplate(id) => {
+            store
+                .delete_template(&id)
+                .await
+                .map_err(|e| format!("删除模板失败：{e}"))?;
+        }
     }
-    read_history(&store, limit).await
+    read_snapshot(&store, limit).await
 }
 
-/// 只读列表（打开面板 / 切换项目时用）。
-pub async fn list(project_root: &Path, limit: u32) -> Result<Vec<MockGenerationTask>, String> {
+/// 只读快照（打开面板 / 切换项目时用）。
+pub async fn list(project_root: &Path, limit: u32) -> Result<HistorySnapshot, String> {
     let store = open_store(project_root).await?;
-    read_history(&store, limit).await
+    read_snapshot(&store, limit).await
 }
 
 /// 取一条历史任务的完整配置（重放用）。
@@ -153,6 +188,18 @@ pub async fn detail(project_root: &Path, task_id: &str) -> Result<MockGeneration
         .get_detail(task_id)
         .await
         .map_err(|e| format!("读取生成历史详情失败：{e}"))
+}
+
+/// 取一个模板的完整配置（应用模板用）。
+pub async fn template_detail(
+    project_root: &Path,
+    template_id: &str,
+) -> Result<(MockUserTemplate, Vec<MockTemplateColumn>), String> {
+    let store = open_store(project_root).await?;
+    store
+        .get_template_detail(template_id)
+        .await
+        .map_err(|e| format!("读取模板详情失败：{e}"))
 }
 
 async fn open_store(project_root: &Path) -> Result<MockGenerationStore, String> {
@@ -171,14 +218,16 @@ pub fn drive<T>(future: impl std::future::Future<Output = Result<T, String>>) ->
     runtime.block_on(future)
 }
 
-async fn read_history(
-    store: &MockGenerationStore,
-    limit: u32,
-) -> Result<Vec<MockGenerationTask>, String> {
-    store
+async fn read_snapshot(store: &MockGenerationStore, limit: u32) -> Result<HistorySnapshot, String> {
+    let tasks = store
         .get_history(limit)
         .await
-        .map_err(|e| format!("读取生成历史失败：{e}"))
+        .map_err(|e| format!("读取生成历史失败：{e}"))?;
+    let templates = store
+        .get_templates()
+        .await
+        .map_err(|e| format!("读取模板列表失败：{e}"))?;
+    Ok(HistorySnapshot { tasks, templates })
 }
 
 // ==================== 映射（纯函数，单测锁住） ====================
@@ -222,33 +271,55 @@ pub fn task_of_run(
         .iter()
         .enumerate()
         .map(|(index, spec)| {
-            let (generator, params) = generator_parts(&spec.def.generator)
-                .unwrap_or_else(|| (String::from("unknown"), None));
-            let dependency = spec.def.dependency.as_ref();
-            MockGenerationColumn {
-                id: Uuid::new_v4().to_string(),
-                task_id: task_id.clone(),
-                column_name: spec.def.name.clone(),
-                // 存**建表类型**（面板类型列显示的就是它），重放靠 `parse_data_type` 读回
-                column_type: spec.def.data_type.to_duckdb_type(),
-                generator,
-                generator_params: params,
-                null_ratio: spec.def.nullable_ratio,
-                is_unique: spec.def.unique,
-                is_primary_key: false,
-                is_foreign_key: dependency.is_some_and(|d| {
-                    matches!(d.dep_type, crate::models::DependencyType::ForeignKey)
-                }),
-                ref_table: dependency.and_then(|d| d.ref_table.clone()),
-                ref_column: dependency.and_then(|d| d.ref_column.clone()),
-                comment: None,
-                confidence: Some(spec.confidence.clone()),
-                sort_order: index as i32,
-            }
+            ColumnFields::of(spec).into_task(
+                Uuid::new_v4().to_string(),
+                task_id.clone(),
+                index as i32,
+            )
         })
         .collect();
 
     (task, columns)
+}
+
+/// 草稿 + 模板名 → 用户模板与模板列。
+///
+/// 模板存的是「怎么造数据」（行数 / 种子 / 语言 / 列），**不存目标表名**——表名是
+/// 「造到哪张表」，属于一次运行的输入，不属于可复用的配置，见 [`draft_of_template`]。
+pub fn template_of_draft(
+    name: &str,
+    draft: &MockDraft,
+    now: DateTime<Utc>,
+) -> (MockUserTemplate, Vec<MockTemplateColumn>) {
+    let template_id = Uuid::new_v4().to_string();
+    let stamp = now.to_rfc3339();
+    let template = MockUserTemplate {
+        id: template_id.clone(),
+        name: name.trim().to_string(),
+        // 描述当列表里的概览用（保存对话框只问名字，不额外要求用户写说明）
+        description: Some(format!("{} 列", draft.columns.len())),
+        row_count: draft.options.rows as i32,
+        // seed 是 u32：按位存进 i32 列，应用模板时按位读回
+        seed: draft.options.seed.map(|seed| seed as i32),
+        locale: locale_token(&draft.options.locale),
+        created_at: Some(stamp.clone()),
+        updated_at: Some(stamp),
+    };
+
+    let columns = draft
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            ColumnFields::of(spec).into_template(
+                Uuid::new_v4().to_string(),
+                template_id.clone(),
+                index as i32,
+            )
+        })
+        .collect();
+
+    (template, columns)
 }
 
 /// 历史条目 + 列 → 草稿（重放）。
@@ -257,42 +328,217 @@ pub fn task_of_run(
 /// **列依赖不随重放恢复**：依赖是结构导入的产物（`import_columns` 目前恒为 `None`），
 /// 要它的人重新导入一次即可；硬塞一个空 `source_columns` 的依赖反而会在生成期出事。
 pub fn draft_of_detail(detail: &MockGenerationDetail) -> MockDraft {
-    let mut draft = MockDraft::default();
+    let mut draft = draft_of_parts(
+        detail.task.row_count,
+        detail.task.seed,
+        &detail.task.locale,
+        detail.columns.iter().map(|column| spec_of_stored(column)),
+    );
     draft.table_name = detail.task.table_name.clone();
-    draft.options.rows = detail.task.row_count.max(1) as u32;
-    draft.options.seed = detail.task.seed.map(|seed| seed as u32);
-    draft.options.locale = locale_of(&detail.task.locale).unwrap_or(Locale::ZhCn);
+    draft
+}
 
-    draft.columns = detail
-        .columns
-        .iter()
+/// 模板 + 列 → 草稿（应用模板）。
+///
+/// **不改目标表名**：模板不存表名，这里留 `MockDraft::default()` 的名字，由调用方按当前
+/// 输入覆盖（「把这份配置摆回来」不该顺手换掉用户正在写的表名）。
+pub fn draft_of_template(template: &MockUserTemplate, columns: &[MockTemplateColumn]) -> MockDraft {
+    draft_of_parts(
+        template.row_count,
+        template.seed,
+        &template.locale,
+        columns.iter().map(|column| spec_of_stored(column)),
+    )
+}
+
+/// 运行参数 + 列 → 草稿（重放与应用模板共用的骨架）。
+fn draft_of_parts(
+    rows: i32,
+    seed: Option<i32>,
+    locale: &str,
+    columns: impl Iterator<Item = MockColumnSpec>,
+) -> MockDraft {
+    let mut draft = MockDraft::default();
+    // 行数下限 1：历史行里可能出现 0（旧记录 / 手工改库），引擎对 0 行会直接拒绝
+    draft.options.rows = rows.max(1) as u32;
+    draft.options.seed = seed.map(|seed| seed as u32);
+    draft.options.locale = locale_of(locale).unwrap_or(Locale::ZhCn);
+    draft.columns = columns
         .enumerate()
-        .map(|(index, column)| {
-            let data_type = parse_data_type(&column.column_type);
-            let generator =
-                config_from_parts(&column.generator, column.generator_params.as_deref())
-                    .unwrap_or_else(|| default_generator_for(&data_type));
-            MockColumnSpec {
-                id: index as u64 + 1,
-                def: ColumnDef {
-                    name: column.column_name.clone(),
-                    data_type,
-                    generator,
-                    nullable_ratio: column.null_ratio,
-                    unique: column.is_unique,
-                    dependency: None,
-                },
-                // 置信度是「这一列是怎么来的」的标注：记录里有就用它，没有就当手工列
-                confidence: column
-                    .confidence
-                    .clone()
-                    .unwrap_or_else(|| "manual".to_string()),
-                sample_value: String::new(),
-            }
+        .map(|(index, mut spec)| {
+            spec.id = index as u64 + 1;
+            spec
         })
         .collect();
-
     draft
+}
+
+/// 存下来的列 → 草稿列（两张「列」表共用的读取面）。
+fn spec_of_stored(column: &impl StoredColumn) -> MockColumnSpec {
+    let data_type = parse_data_type(column.column_type());
+    let generator = config_from_parts(column.generator(), column.generator_params())
+        .unwrap_or_else(|| default_generator_for(&data_type));
+    MockColumnSpec {
+        // 由 `draft_of_parts` 统一编号
+        id: 0,
+        def: ColumnDef {
+            name: column.column_name().to_string(),
+            data_type,
+            generator,
+            nullable_ratio: column.null_ratio(),
+            unique: column.is_unique(),
+            // 依赖不随重放 / 应用模板恢复（见 `draft_of_detail`）
+            dependency: None,
+        },
+        // 置信度是「这一列是怎么来的」的标注：记录里有就用它，没有就当手工列
+        confidence: column
+            .confidence()
+            .map(str::to_string)
+            .unwrap_or_else(|| "manual".to_string()),
+        sample_value: String::new(),
+    }
+}
+
+// ==================== 两张「列」表的公共面向 ====================
+
+/// 存下来的列（`mock_generation_columns` / `mock_template_columns` 字段完全一致，
+/// 只有父 id 的列名不同）。
+///
+/// 抽出来的理由：读两张表、写两张表要四份 11 字段的映射，任何一处写错都不会有人发现
+/// ——公共部分收成一份，差异只剩「父 id 叫什么」。
+trait StoredColumn {
+    fn column_name(&self) -> &str;
+    fn column_type(&self) -> &str;
+    fn generator(&self) -> &str;
+    fn generator_params(&self) -> Option<&str>;
+    fn null_ratio(&self) -> f64;
+    fn is_unique(&self) -> bool;
+    fn confidence(&self) -> Option<&str>;
+}
+
+impl StoredColumn for MockGenerationColumn {
+    fn column_name(&self) -> &str {
+        &self.column_name
+    }
+    fn column_type(&self) -> &str {
+        &self.column_type
+    }
+    fn generator(&self) -> &str {
+        &self.generator
+    }
+    fn generator_params(&self) -> Option<&str> {
+        self.generator_params.as_deref()
+    }
+    fn null_ratio(&self) -> f64 {
+        self.null_ratio
+    }
+    fn is_unique(&self) -> bool {
+        self.is_unique
+    }
+    fn confidence(&self) -> Option<&str> {
+        self.confidence.as_deref()
+    }
+}
+
+impl StoredColumn for MockTemplateColumn {
+    fn column_name(&self) -> &str {
+        &self.column_name
+    }
+    fn column_type(&self) -> &str {
+        &self.column_type
+    }
+    fn generator(&self) -> &str {
+        &self.generator
+    }
+    fn generator_params(&self) -> Option<&str> {
+        self.generator_params.as_deref()
+    }
+    fn null_ratio(&self) -> f64 {
+        self.null_ratio
+    }
+    fn is_unique(&self) -> bool {
+        self.is_unique
+    }
+    fn confidence(&self) -> Option<&str> {
+        self.confidence.as_deref()
+    }
+}
+
+/// 草稿列 → 两张「列」表的公共字段（写路径，与 [`StoredColumn`] 对偶）。
+struct ColumnFields {
+    column_name: String,
+    column_type: String,
+    generator: String,
+    generator_params: Option<String>,
+    null_ratio: f64,
+    is_unique: bool,
+    is_foreign_key: bool,
+    ref_table: Option<String>,
+    ref_column: Option<String>,
+    confidence: Option<String>,
+}
+
+impl ColumnFields {
+    fn of(spec: &MockColumnSpec) -> Self {
+        let (generator, generator_params) =
+            generator_parts(&spec.def.generator).unwrap_or_else(|| (String::from("unknown"), None));
+        let dependency = spec.def.dependency.as_ref();
+        Self {
+            column_name: spec.def.name.clone(),
+            // 存**建表类型**（面板类型列显示的就是它），读回靠 `parse_data_type`
+            column_type: spec.def.data_type.to_duckdb_type(),
+            generator,
+            generator_params,
+            null_ratio: spec.def.nullable_ratio,
+            is_unique: spec.def.unique,
+            is_foreign_key: dependency
+                .is_some_and(|d| matches!(d.dep_type, DependencyType::ForeignKey)),
+            ref_table: dependency.and_then(|d| d.ref_table.clone()),
+            ref_column: dependency.and_then(|d| d.ref_column.clone()),
+            confidence: Some(spec.confidence.clone()),
+        }
+    }
+
+    fn into_task(self, id: String, task_id: String, sort_order: i32) -> MockGenerationColumn {
+        MockGenerationColumn {
+            id,
+            task_id,
+            column_name: self.column_name,
+            column_type: self.column_type,
+            generator: self.generator,
+            generator_params: self.generator_params,
+            null_ratio: self.null_ratio,
+            is_unique: self.is_unique,
+            // 主键不是草稿里的概念（v2 没有主键配置），一律不标
+            is_primary_key: false,
+            is_foreign_key: self.is_foreign_key,
+            ref_table: self.ref_table,
+            ref_column: self.ref_column,
+            comment: None,
+            confidence: self.confidence,
+            sort_order,
+        }
+    }
+
+    fn into_template(self, id: String, template_id: String, sort_order: i32) -> MockTemplateColumn {
+        MockTemplateColumn {
+            id,
+            template_id,
+            column_name: self.column_name,
+            column_type: self.column_type,
+            generator: self.generator,
+            generator_params: self.generator_params,
+            null_ratio: self.null_ratio,
+            is_unique: self.is_unique,
+            is_primary_key: false,
+            is_foreign_key: self.is_foreign_key,
+            ref_table: self.ref_table,
+            ref_column: self.ref_column,
+            comment: None,
+            confidence: self.confidence,
+            sort_order,
+        }
+    }
 }
 
 /// 生成器配置 →（目录名，参数 JSON）。

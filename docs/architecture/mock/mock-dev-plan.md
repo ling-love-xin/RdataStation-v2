@@ -63,7 +63,7 @@
 | C1 | 场景模板选择与一键生成（6 套内置） | Mock 面板 + `list_templates` / `apply_template` / `generate_scenario` | 电商模板生成 4 张表；逐表进度可见 |
 | C2 | 从数据库导入结构 → 字段表 | ✅ 已完成（导入结构对话框 + 导航右键定向；`NavCache` → `MetadataService` cache-aside） | 选连接/库/schema/表 → 字段表自动填充 + 智能映射（含置信度） |
 | C3 | 列依赖编辑器 | Mock 面板（依赖 `resolve_dependencies`） | 拓扑顺序正确；**先拍板**是否实现表达式计算（§10-（6）） |
-| C4 | 用户模板保存 / 复用（`MockGenerationStore`） | Mock 面板 + `persistence.rs` | 存→列→取→用于生成 全链路；**补 SQLite 往返测试（✅ 已补，见 §7）**；⬜ 余：UI 接线（历史列表 / 模板保存与应用） |
+| C4 | 用户模板保存 / 复用（`MockGenerationStore`） | ✅ 已完成（「保存为模板…」对话框 + 模板段「应用 / 删除」；套用不动目标表名） | 存→列→取→用于生成 全链路；SQLite 往返测试已补（见 §7） |
 | C5 | 复杂参数（集合 / 加权）外置编辑入口 | Mock 面板 + `generator_catalog` 的 `ParamKind::Complex` | ✅ 已完成（列编辑对话框里的**多行文本**：一行一项 / 一行「值, 权重」；非法输入保留上一个有效值 + 行号提示；空集合与全零权重在**生成前**拦住） |
 
 ### Phase D — 出口与历史
@@ -105,6 +105,7 @@
 | T11 | 保存到草稿箱 | `{项目}/mock/mock_{表}_{时间戳}.csv` 出现 | ✅ 装配测试 |
 | T12 | 持久化为分析库表 | 表出现且行数正确；同名再点报「已存在」且不覆盖 | ✅ 装配测试 |
 | T13 | 生成后查历史并重放配置 | 历史条目字段完整；重放后参数一致 | ✅ `tests/history_roundtrip.rs`（记录 → 列表 → 详情 → 重放草稿；含失败原因与 `limit` 截尾） |
+| T13b | 存模板 → 读模板 → 应用模板 | 行数 / 种子 / 语言 / 列与生成器参数原样回来；**目标表名不被换掉** | ✅ 同上（`a_template_is_saved_listed_replayed_and_deleted`）+ 视图测试（应用不动表名 / 空配置与空名被拦） |
 | T14 | 源表不存在 / 分析库无表 / 追加缺列 | 给出可读中文错误，不 panic，不半途写库 | ✅ 装配测试 |
 | T15 | **生成不写库** | 生成后分析库仍未出现目标表 | ✅ 装配测试 `generate_does_not_write_analysis_db` |
 | T16 | 改列后旧结果作废 | 改生成器 / 增删列 → `gen_info` 置空，出口不可再落旧数据 | ✅ 视图测试 |
@@ -156,5 +157,6 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-16 | Phase E（本轮 · 落库直写） | **去文本中转**：engine 新增 `build_attach_database` / `build_detach_database` / `build_create_table_in` / `build_drop_table_in` / `build_insert_select` + `QualifiedTable`；mock 新增 `write_temp_table_to_database`（`ATTACH` → 建表 → `INSERT SELECT` → `DETACH`，失败只回滚本次刚建的表）；装配层 `persist_table_at` / `append_table_at` 改走直写；**并修掉一个潜在的误删风险**（回滚分支原本会把同名既有表 DROP 掉，现已加测试锁住） | 110 单元 + **30 引擎集成** + **12 装配** + 8 任务集成全过；engine 库测试 305 项全过 |
 | 2026-09-16 | Phase E5（本轮 · 临时表清理） | **按来源清理临时表**：`TempTableSource::prefixes()`（两套命名都认）+ `TempTableManager::list_by_source` / `drop_by_source`（以库为准，限定 `catalog = memory`）+ `DuckDBManager::{in_memory_temp_tables, drop_in_memory_temp_tables}`；mock 暴露 `clear_temp_tables` / `temp_tables`；宿主在**项目切换**时清理并让面板 `forget_generated`（草稿保留） | 111 单元（含 46 视图）+ 30 + **2 清理集成**（独立进程）+ 12 装配 + **8 任务集成**全过 |
 | 2026-09-16 | Phase C5（本轮 · 复杂参数） | **集合类参数可编辑**：`parse_complex_param` / `complex_param_text`（一行一项 / 一行「值, 权重」，分隔符取最后一个）+ `ParamWidget::{Scalar, Complex}`（标量单行、集合多行 `Textarea`）+ `commit_complex_param`（非法输入保留上一个有效值 + 就地行号提示）；`summarize_params` 显示集合项数；**并补上生成前护栏** `constraint_set_problem`（空集合 / 全零权重原本会在生成期 panic 掉工作线程）；目录注释随脚本更新（改 `tools/gen_mock_generator_catalog.py` 后重跑 + rustfmt） | 117 单元（含 52 视图）+ **32 引擎集成** + 2 清理集成 + 12 装配 + 8 任务集成全过 |
+| 2026-09-16 | Phase C4（本轮 · 用户模板） | **用户模板接线**：「保存为模板…」对话框（只问名字；行数 / 种子 / 语言 / 列 / 生成器参数都取当前配置）+ 模板段（应用 / 删除）；`template_of_draft` / `draft_of_template` 与历史共用 `ColumnFields` / `StoredColumn` 两份公共映射（两张「列」表字段完全一致，差异只剩父 id 的列名）；**模板不存目标表名**——「怎么造数据」可复用，「造到哪张表」留当时的输入；空配置与空名两道门都落在 `save_template`（对话框只是入口之一）；`HistorySnapshot` 一次读回历史 + 模板（不会出现一半新一半旧） | 130 单元（含 58 视图）+ 32 引擎集成 + **4 历史/模板集成** + 5 持久化往返 + 2 清理集成全过 |
 | 2026-09-16 | Phase D4/D5（本轮 · 生成历史） | **生成历史接线**（v1 的「历史」在 v1 源码里并不存在，这里按 v2 语义重做）：`history.rs` 作为**领域门面 + 后台入口**——`HistoryAction::{Record,DeleteTask}` / `list` / `detail` / `run`（跑完动作顺带重读列表，面板不会出现「删了但列表还是旧的」）+ 纯映射 `task_of_run` / `draft_of_detail` / `generator_parts`⇄`config_from_parts`（生成器存**目录名 + 参数 JSON**，重放不需要第二套映射）；`MockHost` 只新增 `project_root()`（存储细节不摊到宿主）；面板新增历史段（时间倒序 + 重放 / 删除 / 刷新）并在生成收尾自动落库（出口类与取消不记，见 `RunRecord::of`）；项目切换时重读（历史随项目走）。**并处理一个环境约束**：项目库走 `tokio::fs`，而 GPUI 后台执行器不是 tokio 运行时 → `history::drive` 在后台线程内自备运行时（与 `resource_jobs` 工作线程同口径） | 128 单元（含 56 视图）+ 32 引擎集成 + **3 历史集成** + 5 持久化往返 + 2 清理集成 + workbench 12 装配 + 8 任务 + 1 取消全过 |
 | 2026-09-16 | Phase C4 前置（本轮 · 持久化往返） | **给 `MockGenerationStore` 补真库往返**（原先只有序列化单测，SQL 那一半没人验；store 目前全项目零调用，接线前先钉住）：新增 `tests/persistence_roundtrip.rs` 5 项，走 `ProjectDatabaseManager` 的真迁移链（顺带验证 009 已挂上）——任务 + 列（乱序插入按 `sort_order` 读回）/ 全可空列保持 `None` / 历史最近在前且 `limit` 截尾 / 列按 `task_id` 归属 / **删任务带走子行**（建表语句的 `ON DELETE CASCADE` 靠连接池的 `foreign_keys=ON`）/ 模板四方法；**并修一处读写不守恒**：`created_at` / `updated_at` 为 `None` 时原本写成空串（读回 `Some("")`，与「确实空」分不开），改为写 `NULL` | 117 单元（含 52 视图）+ 32 引擎集成 + **5 持久化往返** + 2 清理集成全过；`check --all-targets` 零告警 |

@@ -60,7 +60,7 @@ DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table`
 
 Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 
-- `MockPanel`：右 Dock 280px——目标表名 / 行数·种子·语言 / 列来源 / 生成 / 出口按钮组 / 结果 / **生成历史**（最近 20 条，可重放配置、可删除）；
+- `MockPanel`：右 Dock 280px——目标表名 / 行数·种子·语言 / 列来源 / 生成 / 出口按钮组 / 结果 / **用户模板**（保存为模板… + 应用 / 删除）/ **生成历史**（最近 20 条，可重放配置、可删除）；
 - `MockDetailView`：中央「Mock 数据」tab——字段卡片（生成器分类子菜单 + 编辑 / 智能 / 删除）+ 预览表格；
 - 详情 tab 只持 `Entity<MockPanel>`，字段与预览都从它读、编辑动作写回它（**状态单一权威**）；
 - crate 依赖 `gpui-kit`（UI 基础设施），**不依赖 workbench**；
@@ -90,12 +90,12 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | `src/mock_view/tests.rs` | 视图测试（21 纯逻辑 + 31 项 GPUI headless 窗口测试；含测试宿主桥） |
 | `src/templates.rs` | 内置 6 套场景模板 |
 | `src/persistence.rs` | `MockGenerationStore`（SQLite 读写；读写两侧由真库往返测试验住） |
-| `src/history.rs` | **生成历史**：领域门面 + 后台入口（宿主只回答「项目根在哪」） |
+| `src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（宿主只回答「项目根在哪」） |
 | `src/error.rs` | `MockError` / `MockResult`（含 DuckDB / 锁错误桥接） |
 | `src/{commands,model,generator}.rs` | 占位（全项目统一脚手架；命令层按 Round 14 退役） |
 | `tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（32 项） |
 | `tests/persistence_roundtrip.rs` | 持久化层真库往返（5 项；走真迁移链，含级联删除） |
-| `tests/history_roundtrip.rs` | 生成历史端到端（3 项；记录 / 列表 / 详情 / 重放 + 可读错误） |
+| `tests/history_roundtrip.rs` | 生成历史 / 用户模板端到端（4 项；记录 / 列表 / 详情 / 重放 / 模板存取用删 + 可读错误） |
 
 宿主侧（workbench）：
 
