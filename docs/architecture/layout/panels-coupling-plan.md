@@ -29,8 +29,8 @@
 | `nav_for` / `nav_tables` | **仅 editor.rs** | 仅 editor.rs（+ 宿主 Quick Open 读表名快照） | **✅ S1 已收回 `EditorPanel`** | 外部失效改为 `Shared::invalidate_nav_cache()`（§3 戳） |
 | `sql_for` | 仅 editor.rs | 仅 editor.rs | **✅ S1 已收回 `EditorPanel`** | 外部失效改为 `Shared::invalidate_sql_result()` |
 | `property_target` | nav（5 处） | editor | **`EditorBridge::show_properties(PropertyRequest)`** | nav → editor 请求 |
-| `open_edit` | nav（2 处，editor 1 处清理） | editor | **`EditorBridge::edit_connection(id)`** | nav → editor 请求 |
-| `new_connection_request` | nav（2 处） | editor / mod | **`EditorBridge::new_connection()`** | nav → editor 请求 |
+| `open_edit` | nav（2 处） | — | **✅ S2a 已端口化**：`EditorBridge::edit_connection(id)` | 数据字段已删，配对 request 字段一起删 |
+| `new_connection_request` | nav（2 处） | — | **✅ S2a 已端口化**：`EditorBridge::new_connection()` | 同上 |
 | `editor_set` | nav（1 处） | editor / mod | **`EditorBridge::insert_sql(conn_id, sql)`** | nav → editor 请求 |
 | `scratchpad_search` | scratchpad（2 处） | editor | **`EditorBridge::show_search_results(view)`** | scratchpad → editor 投递 |
 | `scratchpad_pump_request` | editor（1 处） | mod / scratchpad | **`ScratchpadBridge::ensure_pump()`** | editor → scratchpad 请求 |
@@ -44,13 +44,14 @@
 桥是**强类型方法集合**，持有 `Rc<dyn Fn(...)>` 或 `WeakEntity`，在面板构造期注入（与既有接线口径一致）：
 
 ```rust
-/// 导航/草稿箱调用（提供方：EditorPanel）
+/// 导航/草稿箱调用（提供方：EditorPanel）；装配入口 `panels::install_editor_bridge`。
+/// `S2a` 已落地前两项，其余待 `S2b`。
 EditorBridge {
-    fn edit_connection(&self, id: &str, window: &mut Window, cx: &mut App);
-    fn new_connection(&self, window: &mut Window, cx: &mut App);
-    fn insert_sql(&self, conn_id: &str, sql: &str, cx: &mut App);
-    fn show_properties(&self, request: PropertyRequest, cx: &mut App);
-    fn show_search_results(&self, view: ScratchpadSearchView, cx: &mut App);
+    fn edit_connection(&self, id: &str, window: &mut Window, cx: &mut App);  // ✅ S2a
+    fn new_connection(&self, window: &mut Window, cx: &mut App);             // ✅ S2a
+    fn insert_sql(&self, conn_id: &str, sql: &str, cx: &mut App);            // S2b
+    fn show_properties(&self, request: PropertyRequest, cx: &mut App);       // S2b
+    fn show_search_results(&self, view: ScratchpadSearchView, cx: &mut App); // S2b
 }
 
 /// 编辑区调用（提供方：SidebarPanel / 草稿箱）
@@ -78,7 +79,9 @@ HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 
 > S1 实测订正：这三个字段**并非只有 `editor.rs` 读写**——`view.rs`（切换连接 / Quick Open）
 > 与 `components/{project_host,mock_host}.rs` 也在清/读它们。此前结论偏差源于审计范围只扫了 `panels/`；
 > 因此 S1 必须连带改这 3 个外部文件（已改），而不是"纯字段搬家"。
-| **S2** | editor 侧端口化：`EditorBridge` 五方法；nav / scratchpad 改为调用 | 同上；上述 5 个请求字段 + `scratchpad_search` 归零；`ConnectionDialogState` 打开路径不变 |
+| **S2** | editor 侧端口化（拆两步） | — |
+| **S2a** ✅ | `EditorBridge { edit_connection, new_connection }` + 装配函数 `panels::install_editor_bridge`（生产宿主与同构测试宿主共用一份接线）；nav 4 处改为调端口；删掉 `open_edit` / `new_connection_request` 字段与编辑区 render 的两处 take（副作用回到事件路径） | `Shared` 字段 27 → 25；`dialog_host_layer` 4 项全绿（两个入口测试改走端口） |
+| **S2b** | 其余 3 个请求：`editor_set`（→ `insert_sql`）、`property_target`（→ `show_properties`）、`scratchpad_search`（→ `show_search_results`）；`property_target` 的调用点在键盘路径，需把 `window` 透过去 | 5 个请求字段全归零；§1 验收命令命中 0 |
 | **S3** | 反向桥：`ScratchpadBridge::ensure_pump`、`NavBridge::focus_search`、`HostBridge::open_in_editor` | 同上；`scratchpad_pump_request` / `focus_nav_search` / `open_file_request` 归零 |
 | **S4** | `ui_contract` 加 `Shared` 字段白名单契约；更新 `panels-modules.md` §3 与本文档状态 | 契约测试通过；§3 表格与实际一致 |
 
@@ -86,7 +89,8 @@ HostBridge { fn open_in_editor(&self, path: PathBuf, cx: &mut App); } // 已有 
 
 推荐顺序 **S1 → S2/S3 → P2 → P1**，理由：
 
-- **S1 已完成**：3 个缓存/归属字段回归编辑区，外部只递失效信号（代价是改 3 个外部文件，见上表订正）；
+- **S1 / S2a 已完成**：缓存/归属字段回归编辑区；两个对话框请求走端口（`install_editor_bridge`）；
+  遗留：`SidebarEvent::{EditConnection, NewConnectionRequest}` 现在只剩"触发重绘"，清理归 S4；
 - **S2/S3 必须在 P2 之前**：视图下沉（`nav.rs` → `crates/database`）时，若协作还靠共享字段，就会连带搬走半个 `Shared`；端口化之后只搬端口；
 - **P1 放在 P2 之后**：`block_on` 的后台化目标形态是"特性 crate 内的 jobs + 面板 drain"。草稿箱已有 `services/scratchpad_jobs.rs`，而它按 P2 会迁入 `crates/scratchpad`——先做 P1 等于把这段代码写两遍（nav 的 4 处同理，属 `crates/database`）。
 

@@ -626,16 +626,8 @@ impl Render for EditorPanel {
             )));
         }
 
-        // 消费侧边栏「编辑」请求（open_edit 置位后在此打开对话框）。
-        let edit_request = self.shared.open_edit.borrow_mut().take();
-        if let Some(cid) = edit_request {
-            self.request_edit_connection(cid, window, cx);
-        }
-
-        // 消费导航面板头「＋」/ 空态「新建连接」请求。
-        if self.shared.new_connection_request.take() {
-            self.request_new_connection(window, cx);
-        }
+        // 「编辑连接」/「新建连接」改由 `EditorBridge` 在事件路径直接调用（见 `shared.rs`），
+        // 本处不再消费请求字段（副作用不再发生在 render 内）。
 
         // 消费导航右键「新建查询 / 查看数据」注入的 SQL：追加到当前草稿后。
         // 用 `set_value`（不发事件）并手动同步 dirty / editor_sql，与 `clear_sql` 同策略，

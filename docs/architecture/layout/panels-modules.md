@@ -49,8 +49,8 @@
 | `property_target` | nav 写 → editor 读 | 导航双击对象 → 属性面板请求 |
 | `selected` / `connections` | nav / editor | 选中连接与列表 |
 | `driver_catalog` | nav / editor | 驱动 id → 类型/显示名 |
-| `open_edit` / `new_connection_request` | nav 写 → editor 消费 | 打开连接对话框请求 |
-| `editor_set` / `new_connection_request` | nav 写 → mod/editor 消费 | SQL 注入请求 |
+| `open_edit` / `new_connection_request` | nav → editor | ✅ 已端口化（`EditorBridge::edit_connection` / `new_connection`，S2a）；字段已删 |
+| `editor_set` | nav 写 → editor 消费 | SQL 注入请求（S2b 待端口化） |
 | `scratchpad_search` | scratchpad 写 → editor 读 | 内容搜索结果落中央区 |
 | `open_file_request` | scratchpad 写 → shared → 宿主 | 在编辑器中打开文件 |
 | `project_ui` | editor / scratchpad | 项目管理 UI 状态 |
@@ -90,7 +90,8 @@
 
 建议：`Shared` 只留宿主级状态 + 三类**桥**（`NavBridge` / `EditorBridge` / `ScratchpadBridge`），
 特性内状态收回各自模块（`DatabaseNavView` 已在做，其余溢出字段同理）。
-**字段级去向与迁移顺序见 `panels-coupling-plan.md`**。
+**字段级去向与迁移顺序见 `panels-coupling-plan.md`**（S1、S2a 已落地：
+`nav_cache_epoch` / `result_epoch` 失效戳 + `EditorBridge` 两个对话框请求）。
 
 ### P0 — 请求标记 → 端口/命令，而不是共享可变字段
 

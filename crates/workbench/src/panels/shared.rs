@@ -33,6 +33,19 @@ pub enum ProjectActionRequest {
     OpenFolder,
 }
 
+/// 编辑区对外命令端口（装配期由 `WorkbenchView::init_workspace` 注入）。
+///
+/// 导航 / 草稿箱不再直写 `Shared` 的请求字段，改调这里的方法：方法内部**立即**
+/// 让编辑区完成动作（打开对话框等），不再等到编辑区渲染时 `take()`——
+/// 副作用因此从 render 路径回到事件路径（`gpui-kit-dev` skill「状态与副作用」）。
+#[derive(Clone)]
+pub struct EditorBridge {
+    /// 打开「编辑数据源连接」对话框。
+    pub edit_connection: Rc<dyn Fn(String, &mut Window, &mut App)>,
+    /// 打开「新建数据源连接」对话框。
+    pub new_connection: Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
 /// 面板与工作台共享的状态。
 #[derive(Clone)]
 pub struct Shared {
@@ -56,10 +69,8 @@ pub struct Shared {
     pub nav_cache_epoch: Rc<Cell<u64>>,
     /// SQL 结果归属失效戳（切换连接 / 项目时置位；消费口径同 `nav_cache_epoch`）。
     pub result_epoch: Rc<Cell<u64>>,
-    /// 编辑请求（侧边栏「编辑」→ EditorPanel 渲染时消费并打开对话框）。
-    pub open_edit: Rc<RefCell<Option<String>>>,
-    /// 新建数据源请求（导航面板头「＋」/ 空态按钮 → EditorPanel 渲染时消费并打开对话框）。
-    pub new_connection_request: Rc<Cell<bool>>,
+    /// 编辑区命令端口（`None` = 装配未完成，调用方需容忍空端口）。
+    pub editor_bridge: Rc<RefCell<Option<EditorBridge>>>,
     /// 连接对话框的项目下拉选中「＋ 新增项目」→ 宿主打开项目新建入口（由 `WorkbenchView` 消费）。
     pub project_new_request: Rc<Cell<bool>>,
     /// 连接对话框的项目下拉选中「打开现有目录…」→ 宿主打开目录选择（由 `WorkbenchView` 消费）。
@@ -128,8 +139,7 @@ impl Shared {
             notice: Rc::new(RefCell::new(notice)),
             nav_cache_epoch: Rc::new(Cell::new(0)),
             result_epoch: Rc::new(Cell::new(0)),
-            open_edit: Rc::new(RefCell::new(None)),
-            new_connection_request: Rc::new(Cell::new(false)),
+            editor_bridge: Rc::new(RefCell::new(None)),
             project_new_request: Rc::new(Cell::new(false)),
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),

@@ -944,8 +944,11 @@ impl SidebarPanel {
                     .on_click({
                         let entity = cx.entity();
                         let shared = self.shared.clone();
-                        move |_, _, app: &mut App| {
-                            shared.new_connection_request.set(true);
+                        move |_, window, app: &mut App| {
+                            // 命令端口：直接开对话框（不再置位请求字段等渲染消费）。
+                            if let Some(bridge) = shared.editor_bridge.borrow().clone() {
+                                (*bridge.new_connection)(window, app);
+                            }
                             entity.update(app, |_, cx| cx.emit(SidebarEvent::NewConnectionRequest));
                         }
                     }),
@@ -1814,8 +1817,10 @@ impl SidebarPanel {
                                 .small()
                                 .icon(IconName::Plus)
                                 .label("新建连接")
-                                .on_click(move |_, _, app: &mut App| {
-                                    shared.new_connection_request.set(true);
+                                .on_click(move |_, window, app: &mut App| {
+                                    if let Some(bridge) = shared.editor_bridge.borrow().clone() {
+                                        (*bridge.new_connection)(window, app);
+                                    }
                                     entity.update(app, |_, cx| {
                                         cx.emit(SidebarEvent::NewConnectionRequest)
                                     });
@@ -2509,8 +2514,10 @@ impl SidebarPanel {
                         let entity = entity.clone();
                         let shared = shared.clone();
                         let cid = cid.clone();
-                        move |_, _, app: &mut App| {
-                            *shared.open_edit.borrow_mut() = Some(cid.clone());
+                        move |_, window, app: &mut App| {
+                            if let Some(bridge) = shared.editor_bridge.borrow().clone() {
+                                (*bridge.edit_connection)(cid.clone(), window, app);
+                            }
                             entity.update(app, |_, cx| {
                                 cx.emit(SidebarEvent::EditConnection(cid.clone()));
                             });
@@ -2734,10 +2741,13 @@ impl SidebarPanel {
                                     e.update(app, |this, cx| this.ensure_nav_pump(cx));
                                 }
                             }))
-                            .item(PopupMenuItem::new("编辑连接…").on_click(move |_, _, app| {
+                            .item(PopupMenuItem::new("编辑连接…").on_click(move |_, window, app| {
                                 let cid = cid_edit.clone();
                                 e_edit.update(app, |this, cx| {
-                                    *this.shared.open_edit.borrow_mut() = Some(cid.clone());
+                                    // 命令端口：直接开对话框（不再置位请求字段等渲染消费）。
+                                    if let Some(bridge) = this.shared.editor_bridge.borrow().clone() {
+                                        (*bridge.edit_connection)(cid.clone(), window, cx);
+                                    }
                                     cx.emit(SidebarEvent::EditConnection(cid.clone()));
                                 });
                             }))

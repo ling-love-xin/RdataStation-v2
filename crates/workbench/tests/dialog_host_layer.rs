@@ -19,7 +19,7 @@ use gpui_kit::{
     Subscription, TestAppContext, VisualTestContext, Window, div,
 };
 
-use rds_workbench::panels::{EditorPanel, Shared};
+use rds_workbench::panels::{EditorPanel, Shared, install_editor_bridge};
 
 /// 简化宿主：与 `WorkbenchView` 同构——挂对话框层 + 注入宿主重绘桥 + 观察编辑面板。
 struct HostView {
@@ -39,6 +39,8 @@ impl HostView {
             let _ = weak.update(cx, |_, cx| cx.notify());
         });
         *shared.host_redraw.borrow_mut() = Some(bridge);
+        // 编辑区命令端口（与生产 `WorkbenchView::init_workspace` 同一份接线）。
+        install_editor_bridge(&shared, editor.clone());
         let subscription = cx.observe(&editor, |_, _, cx| cx.notify());
         Self {
             shared,
@@ -137,19 +139,21 @@ fn editor_notify_cascades_to_host_layer(cx: &mut TestAppContext) {
 fn sidebar_edit_request_renders_dialog_layer(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (host, cx) = open_host(cx);
-    let (shared, editor) = cx.update(|_, cx| {
+    let (shared, _editor) = cx.update(|_, cx| {
         let host = host.read(cx);
         (host.shared.clone(), host.editor.clone())
     });
 
-    // 模拟侧边栏「编辑」入口：置位 open_edit 并通知编辑面板（宿主重绘由事件路径负责）。
-    *shared.open_edit.borrow_mut() = Some("G_conn_demo".to_string());
-    cx.update(|_, cx| {
-        editor.update(cx, |_, cx| cx.notify());
+    // 先渲染一帧完成装配（端口在 `init_workspace` 注入；生产里导航入口在首帧之后才可点）。
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 模拟侧边栏「编辑」入口：走命令端口（与导航点击同一路径；对话框在事件路径直接打开）。
+    cx.update(|window, cx| {
+        let bridge = shared.editor_bridge.borrow().clone().expect("编辑区端口已注入");
+        (*bridge.edit_connection)("G_conn_demo".to_string(), window, cx);
     });
 
-    // 第一帧：编辑面板 render 消费请求并打开对话框（渲染期通知宿主）；
-    // 第二帧：宿主重绘，层进入元素树。
+    // 宿主重绘，层进入元素树。
     cx.update(|window, cx| window.draw(cx).clear(cx));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
@@ -166,16 +170,18 @@ fn sidebar_edit_request_renders_dialog_layer(cx: &mut TestAppContext) {
 fn sidebar_new_connection_request_renders_dialog_layer(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let (host, cx) = open_host(cx);
-    let (shared, editor) = cx.update(|_, cx| {
+    let (shared, _editor) = cx.update(|_, cx| {
         let host = host.read(cx);
         (host.shared.clone(), host.editor.clone())
     });
 
-    // 模拟导航面板头「＋」/ 空态「新建连接」：置位请求并通知编辑面板
-    //（宿主重绘由 `SidebarEvent::NewConnectionRequest` 事件路径负责）。
-    shared.new_connection_request.set(true);
-    cx.update(|_, cx| {
-        editor.update(cx, |_, cx| cx.notify());
+    // 先渲染一帧完成装配（端口在 `init_workspace` 注入）。
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 模拟导航面板头「＋」/ 空态「新建连接」：走命令端口（对话框在事件路径直接打开）。
+    cx.update(|window, cx| {
+        let bridge = shared.editor_bridge.borrow().clone().expect("编辑区端口已注入");
+        (*bridge.new_connection)(window, cx);
     });
 
     cx.update(|window, cx| window.draw(cx).clear(cx));

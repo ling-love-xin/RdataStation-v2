@@ -25,7 +25,9 @@ use gpui_kit::*;
 use crate::commands::{
     CloseProject, FocusNavSearch, HideSidebars, RestoreSidebars, SwitchProject, ToggleQuickOpen,
 };
-use crate::panels::{EditorPanel, ProjectActionRequest, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel};
+use crate::panels::{
+    EditorPanel, ProjectActionRequest, RightSidebarPanel, Shared, SidebarEvent, SidebarPanel,
+};
 use crate::ui;
 use mock::mock_view::{MockDetailView, focus_detail_tab};
 use settings::commands::OpenSettings;
@@ -503,6 +505,9 @@ impl WorkbenchView {
                     editor_for_clear.update(cx, |panel, cx| panel.clear_sql(window, cx));
                 }));
         }
+        // S2：编辑区命令端口——导航 / 草稿箱改调这里，不再直写 `Shared` 的请求字段
+        // （接线只此一份，见 `docs/architecture/layout/panels-coupling-plan.md` §3）。
+        crate::panels::install_editor_bridge(&shared, editor.clone());
 
         // 订阅侧边栏事件：连接选中 -> 更新共享状态并重绘编辑器。
         let subscription = cx.subscribe(&sidebar, |this, _entity, event: &SidebarEvent, cx| {
@@ -517,7 +522,8 @@ impl WorkbenchView {
                     }
                 }
                 SidebarEvent::EditConnection(_) => {
-                    // 编辑请求已写入 shared.open_edit；通知编辑器渲染消费并打开对话框。
+                    // 对话框已由 `EditorBridge::edit_connection` 在事件路径打开（见 panels/shared.rs）；
+                    // 此处只负责让编辑区重绘（端口调用时已在 `app` 上下文，宿主需跟上）。
                     // 注意：此处处于宿主自身的 update 上下文，不能回调 `notify_host`
                     // （会重入借用宿主）；末尾的 `cx.notify()` 已足够让宿主重绘。
                     if let Some(editor) = &this.editor {
@@ -525,7 +531,7 @@ impl WorkbenchView {
                     }
                 }
                 SidebarEvent::NewConnectionRequest => {
-                    // 请求已写入 shared.new_connection_request；通知编辑区渲染消费。
+                    // 同 `EditConnection`：动作已由端口完成，这里只触发重绘。
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }

@@ -38,7 +38,7 @@ pub use editor::EditorPanel;
 pub use nav::PropertyRequest;
 pub use right::RightSidebarPanel;
 pub use scratchpad_panel::ScratchpadSearchView;
-pub use shared::{ProjectActionRequest, Shared};
+pub use shared::{EditorBridge, ProjectActionRequest, Shared};
 
 use nav::{DatabaseNavView, NavOrderItem};
 use scratchpad_panel::ScratchpadView;
@@ -250,4 +250,22 @@ impl ComponentPanel for SidebarPanel {
             .font_weight(FontWeight::MEDIUM)
             .child(self.shared.active_left.get().label())
     }
+}
+
+/// 注入编辑区命令端口（装配期调用）。
+///
+/// 生产入口：`WorkbenchView::init_workspace`；与宿主同构的测试宿主（`tests/dialog_host_layer.rs`）
+/// 也调本函数——接线只此一份，端口形状变化时两侧一起变。
+pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
+    let editor_for_edit = editor.clone();
+    let editor_for_new = editor;
+    *shared.editor_bridge.borrow_mut() = Some(EditorBridge {
+        edit_connection: Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
+            editor_for_edit
+                .update(cx, |panel, cx| panel.request_edit_connection(id, window, cx));
+        }),
+        new_connection: Rc::new(move |window: &mut Window, cx: &mut App| {
+            editor_for_new.update(cx, |panel, cx| panel.request_new_connection(window, cx));
+        }),
+    });
 }
