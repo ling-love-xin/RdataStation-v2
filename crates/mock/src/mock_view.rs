@@ -1095,6 +1095,9 @@ pub struct MockPanel {
     ///
     /// 关系就在模板各列的 `dependency` 上（单一权威），这里不另存一份关系清单。
     scenario: Option<ScenarioTemplate>,
+    /// 最近一次**场景生成**用的关系快照（结果还在，关系就还得说得出——
+    /// 用户可能已经退出场景态，也可能改过工作副本）。
+    last_relations: Vec<ScenarioRelation>,
     /// 「加关系」对话框里正在选的四个位置（都是名字；空 = 未选）。
     relation_pick: Rc<RefCell<RelationPick>>,
     table_input: Option<Entity<InputState>>,
@@ -1215,6 +1218,28 @@ impl ScenarioRelation {
     }
 }
 
+/// 从模板里扫出全部表间关系（真身在列的 `dependency` 上，这里是派生）。
+fn relations_of(template: &ScenarioTemplate) -> Vec<ScenarioRelation> {
+    template
+        .tables
+        .iter()
+        .flat_map(|table| {
+            table.columns.iter().filter_map(move |col| {
+                let dep = col.dependency.as_ref()?;
+                if !dep.is_foreign_key() {
+                    return None;
+                }
+                Some(ScenarioRelation {
+                    child_table: table.name.clone(),
+                    child_column: col.name.clone(),
+                    parent_table: dep.ref_table.clone().unwrap_or_default(),
+                    parent_column: dep.ref_column.clone().unwrap_or_default(),
+                })
+            })
+        })
+        .collect()
+}
+
 /// 「加关系」对话框里正在选的四个位置（都是名字；`None` = 未选）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RelationPick {
@@ -1254,6 +1279,7 @@ impl MockPanel {
             existing_tables: Vec::new(),
             scenario_templates: builtin_scenario_choices(),
             scenario: None,
+            last_relations: Vec::new(),
             relation_pick: Rc::new(RefCell::new(RelationPick::default())),
             table_input: None,
             table_pending: None,
@@ -1382,6 +1408,7 @@ impl MockPanel {
         self.results.clear();
         self.current = 0;
         self.scenario_source = None;
+        self.last_relations.clear();
         self.landed = None;
         self.error = None;
         // 没清到东西就不打扰用户（切项目很常见，每次都报一句是噪声）
@@ -1653,6 +1680,7 @@ impl MockPanel {
     pub(crate) fn load_scenario(&mut self, template: ScenarioTemplate, cx: &mut Context<Self>) {
         self.scenario = Some(template);
         *self.relation_pick.borrow_mut() = RelationPick::default();
+        // 已结果及其关系快照不动：载入工作副本不等于重新生成，旧结果仍然能导出
         self.error = None;
         self.outcome = None;
         cx.notify();
@@ -1684,29 +1712,61 @@ impl MockPanel {
         self.scenario.as_ref()
     }
 
+    /// 当前结果表的**跨表后果**（用于出口提示；`None` = 它不参与任何关系）。
+    ///
+    /// 为何要给这句：**出口只作用于当前表**，而关系是跨表的——只落子表不落父表，
+    /// 落地的数据就悬空了（而 mock 不改已落地的数据，也不会去替用户补）。
+    pub fn current_relation_note(&self) -> Option<String> {
+        let current = self.current_info()?.table_name.clone();
+        let mut out: Vec<String> = Vec::new();
+        let parents: Vec<String> = self
+            .last_relations
+            .iter()
+            .filter(|r| r.child_table == current)
+            .map(|r| {
+                format!(
+                    "{} → {}.{}",
+                    r.child_column, r.parent_table, r.parent_column
+                )
+            })
+            .collect();
+        if !parents.is_empty() {
+            let mut parents = parents;
+            parents.sort();
+            parents.dedup();
+            out.push(format!(
+                "引用了 {}：只落这张表，被引用的表不会跟着落库",
+                parents.join("、")
+            ));
+        }
+        let children: Vec<String> = self
+            .last_relations
+            .iter()
+            .filter(|r| r.parent_table == current)
+            .map(|r| format!("{}.{}", r.child_table, r.child_column))
+            .collect();
+        if !children.is_empty() {
+            let mut children = children;
+            children.sort();
+            children.dedup();
+            out.push(format!(
+                "被 {} 引用：只落这张表，引用它的一方会落空",
+                children.join("、")
+            ));
+        }
+        (!out.is_empty()).then(|| out.join("；"))
+    }
+
+    /// 最近一次**场景生成**用的关系快照（结果还在就保留；单表生成会清掉）。
+    pub fn last_relations(&self) -> &[ScenarioRelation] {
+        &self.last_relations
+    }
     /// 工作副本里的表间关系（派生视图：扫列上的 `dependency`，不另存清单）。
     pub fn scenario_relations(&self) -> Vec<ScenarioRelation> {
         let Some(template) = self.scenario.as_ref() else {
             return Vec::new();
         };
-        template
-            .tables
-            .iter()
-            .flat_map(|table| {
-                table.columns.iter().filter_map(move |col| {
-                    let dep = col.dependency.as_ref()?;
-                    if !dep.is_foreign_key() {
-                        return None;
-                    }
-                    Some(ScenarioRelation {
-                        child_table: table.name.clone(),
-                        child_column: col.name.clone(),
-                        parent_table: dep.ref_table.clone().unwrap_or_default(),
-                        parent_column: dep.ref_column.clone().unwrap_or_default(),
-                    })
-                })
-            })
-            .collect()
+        relations_of(template)
     }
 
     /// 打开「加关系」对话框（子表.列 → 父表.列）。
@@ -2174,6 +2234,8 @@ impl MockPanel {
                 self.results = vec![info];
                 self.current = 0;
                 self.scenario_source = None;
+                // 单表结果没有跨表关系可言：清掉上一轮的场景关系快照
+                self.last_relations.clear();
                 self.host.notify(cx);
             }
             Ok(MockJobDone::ScenarioGenerated {
@@ -2188,6 +2250,9 @@ impl MockPanel {
                     tables.len(),
                     with_thousands(total as u64)
                 ));
+                // 关系快照随结果留存：出口要按它提醒「只落这张会怎么悬空」，
+                // 而工作副本随时可能被改或退出场景态
+                self.last_relations = self.scenario.as_ref().map(relations_of).unwrap_or_default();
                 self.results = tables;
                 self.current = 0;
                 self.scenario_source = Some(template_name);
@@ -2869,6 +2934,12 @@ impl MockPanel {
                         .child(div().text_xs().text_color(muted).child(
                             "关系只在本次多表生成内成立：不读已有数据，也不改已生成的表 / 文件",
                         ));
+                    block = block.child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("场景生成不记入生成历史（历史是单表配置的重放来源）"),
+                    );
                 }
                 block
             };
@@ -3164,6 +3235,15 @@ impl MockPanel {
                     .text_xs()
                     .text_color(muted)
                     .child("结果已就绪：点「查看详情」看字段与预览"),
+            );
+        }
+        // 关系是跨表的，而出口只作用于当前表：把「只落这张」的后果说清楚
+        if let Some(note) = self.current_relation_note() {
+            panel = panel.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().colors.warning)
+                    .child(note),
             );
         }
         panel

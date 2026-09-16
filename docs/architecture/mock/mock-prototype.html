@@ -130,6 +130,7 @@ button{font-family:inherit;cursor:pointer;}
 .hint{font-size:11px;color:var(--muted);}
 .ok{font-size:11px;color:var(--success);}
 .err{font-size:11px;color:var(--danger);}
+.warn{font-size:11px;color:var(--warning);}
 .inf{font-size:11px;color:var(--info);}
 .mono-line{font-family:Consolas,'SFMono-Regular',monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .stack{display:flex;flex-direction:column;gap:6px;width:100%;}
@@ -549,6 +550,7 @@ button{font-family:inherit;cursor:pointer;}
             </div>
             <div class="line"><button class="btn sm" onclick="setScene('relation')">＋ 加关系</button></div>
             <div class="hint">关系只在本次多表生成内成立：不读已有数据，也不改已生成的表 / 文件</div>
+            <div class="hint">场景生成不记入生成历史（历史是单表配置的重放来源）</div>
           </div>
 
           <!-- 场景结果：模板一次产出多张表 → 先选「当前表」，出口 / 详情 / 预览都看它 -->
@@ -569,6 +571,7 @@ button{font-family:inherit;cursor:pointer;}
             </div>
             <div class="hint">来自场景模板「电商系统」：出口只作用于当前选中的那张表</div>
             <div class="mono-line">orders · 临时表 temp_mock_orders · 5,000 行 · 18 ms</div>
+            <div class="warn">引用了 user_id → users.id：只落这张表，被引用的表不会跟着落库；被 order_items.order_id 引用：只落这张表，引用它的一方会落空</div>
           </div>
           <div class="ok only-running">生成中…</div>
           <div class="inf only-readonly">只读模式：不允许落库与写文件（仍可生成预览）</div>

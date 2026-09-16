@@ -2609,3 +2609,92 @@ fn the_edited_work_copy_is_what_gets_generated(cx: &mut TestAppContext) {
         assert_eq!(panel.results().len(), 3, "三张表都回来了");
     });
 }
+
+/// 出口只作用于当前表，而关系是跨表的——面板必须把「只落这张」的后果说出来。
+#[gpui_kit::test]
+fn the_panel_spells_out_what_landing_only_the_current_table_means(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.last_relations().len(), 2, "关系快照随结果留存");
+        // 当前表 = orders（第 0 张）：它引用了 users
+        assert_eq!(
+            panel.gen_info().map(|i| i.table_name.as_str()),
+            Some("orders")
+        );
+        let note = panel.current_relation_note().expect("有跨表关系就该有提示");
+        assert!(note.contains("引用了 user_id → users.id"), "{note}");
+        assert!(note.contains("不会跟着落库"), "{note}");
+    });
+
+    // 切到 users（被 orders 引用）：提示换成「被引用」那一侧
+    panel.update(cx, |panel, cx| panel.select_result(2, cx));
+    draw(cx);
+    panel.update(cx, |panel, _cx| {
+        let note = panel.current_relation_note().expect("被引用也要提示");
+        assert!(note.contains("被 orders.user_id 引用"), "{note}");
+        assert!(note.contains("落空"), "{note}");
+    });
+
+    // 单表生成：没有任何跨表关系可言，提示必须消失
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.run_generate(cx);
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.last_relations().is_empty(),
+            "单表结果清掉场景关系快照"
+        );
+        assert!(panel.current_relation_note().is_none());
+    });
+
+    // 切项目（作废结果）：快照也跟着清
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, cx| panel.forget_generated(3, cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.last_relations().is_empty());
+        assert!(panel.current_relation_note().is_none());
+    });
+}
+
+/// 场景生成不记生成历史（历史是单表配置的重放来源）——面板上要说明，别让人以为是丢了。
+#[gpui_kit::test]
+fn scenario_runs_are_not_recorded_in_history(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.history.is_empty(),
+            "场景生成不该往历史里塞单表记录：{:?}",
+            panel.history.len()
+        );
+        assert!(
+            panel.outcome().unwrap_or_default().contains("生成 3 张表"),
+            "{:?}",
+            panel.outcome()
+        );
+    });
+}
