@@ -50,6 +50,8 @@ pub struct EditorBridge {
     pub insert_sql: Rc<dyn Fn(String, &mut App)>,
     /// 打开属性面板并加载数据（导航双击对象 / 键盘 F4）。
     pub show_properties: Rc<dyn Fn(PropertyRequest, &mut App)>,
+    /// 投递草稿箱内容搜索结果（`None` = 清空）：结果在中央编辑区展示。
+    pub show_search_results: Rc<dyn Fn(Option<ScratchpadSearchView>, &mut App)>,
 }
 
 /// 草稿箱对外命令端口（装配期由 `WorkbenchView::init_workspace` 注入）。
@@ -94,7 +96,6 @@ pub struct Shared {
     /// P0：当前项目会话（草稿箱根 / 项目作用域连接 / 标题栏项目名共用）。
     pub project: Rc<RefCell<Option<project::ui::OpenProject>>>,
     /// M5：草稿箱内容搜索结果（侧栏发起，结果落中央编辑区）。
-    pub scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
     /// 草稿箱命令端口（`None` = 装配未完成，调用方需容忍空端口）。
     pub scratchpad_bridge: Rc<RefCell<Option<ScratchpadBridge>>>,
     /// M5：请求在中央编辑器中打开某个文件（草稿箱双击 / Enter 置位，宿主 render 消费）。
@@ -153,7 +154,6 @@ impl Shared {
             project_new_request: Rc::new(Cell::new(false)),
             project_open_request: Rc::new(Cell::new(false)),
             project: Rc::new(RefCell::new(None)),
-            scratchpad_search: Rc::new(RefCell::new(None)),
             scratchpad_bridge: Rc::new(RefCell::new(None)),
             open_file_request: Rc::new(RefCell::new(None)),
             project_ui: Rc::new(RefCell::new(Default::default())),
@@ -266,6 +266,15 @@ impl Shared {
     pub fn ensure_scratchpad_pump(&self, cx: &mut App) {
         if let Some(bridge) = self.scratchpad_bridge.borrow().clone() {
             (*bridge.ensure_pump)(cx);
+        }
+    }
+
+    /// 投递草稿箱内容搜索结果（走 `EditorBridge`；装配未完成时静默丢弃）。
+    ///
+    /// 结果展示归编辑区（`EditorPanel::scratchpad_search`）；草稿箱不再回读这份展示数据。
+    pub fn show_scratchpad_search(&self, view: Option<ScratchpadSearchView>, cx: &mut App) {
+        if let Some(bridge) = self.editor_bridge.borrow().clone() {
+            (*bridge.show_search_results)(view, cx);
         }
     }
 

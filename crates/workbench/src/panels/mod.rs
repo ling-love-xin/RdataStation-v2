@@ -98,6 +98,9 @@ pub struct SidebarPanel {
     scratchpad_watch_poll: RefCell<Option<Task<()>>>,
     /// Ctrl+F 待聚焦标记：搜索框懒创建，先到位的请求在这里等一帧（面板私有，不入 `Shared`）。
     nav_search_focus_pending: bool,
+    /// 草稿箱当前内容搜索的参数（query / 正则 / 大小写）：自己发起、自己留底，
+    /// 外部改动后重跑搜索用；展示数据由编辑区持有（见 `EditorPanel::scratchpad_search`）。
+    active_search: Option<(String, bool, bool)>,
 }
 
 impl SidebarPanel {
@@ -131,6 +134,7 @@ impl SidebarPanel {
             scratchpad_watch: None,
             scratchpad_watch_poll: RefCell::new(None),
             nav_search_focus_pending: false,
+            active_search: None,
         }
     }
 
@@ -265,6 +269,7 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
     let editor_for_edit = editor.clone();
     let editor_for_new = editor.clone();
     let editor_for_sql = editor.clone();
+    let editor_for_search = editor.clone();
     *shared.editor_bridge.borrow_mut() = Some(EditorBridge {
         edit_connection: Rc::new(move |id: String, window: &mut Window, cx: &mut App| {
             editor_for_edit
@@ -282,5 +287,10 @@ pub fn install_editor_bridge(shared: &Shared, editor: Entity<EditorPanel>) {
         show_properties: Rc::new(move |request: PropertyRequest, cx: &mut App| {
             editor.update(cx, |panel, cx| panel.request_properties(request, cx));
         }),
+        show_search_results: Rc::new(
+            move |view: Option<ScratchpadSearchView>, cx: &mut App| {
+                editor_for_search.update(cx, |panel, cx| panel.set_scratchpad_search(view, cx));
+            },
+        ),
     });
 }

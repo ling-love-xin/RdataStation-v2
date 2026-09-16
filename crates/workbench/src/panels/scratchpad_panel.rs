@@ -901,12 +901,7 @@ impl SidebarPanel {
                 }
                 this.scratchpad.borrow_mut().loaded = false;
                 // 结果面板若还开着，顺带重跑一次搜索：外部改动后旧的命中列表已是快照。
-                let pending_search = this
-                    .shared
-                    .scratchpad_search
-                    .borrow()
-                    .as_ref()
-                    .map(|s| (s.query.clone(), s.is_regex, s.case_sensitive));
+                let pending_search = this.active_search.clone();
                 if let Some((query, is_regex, case_sensitive)) = pending_search {
                     if let Some(root) = this.shared.project_root() {
                         scratchpad_jobs::enqueue_search(&root, &query, case_sensitive, is_regex);
@@ -1123,7 +1118,10 @@ impl SidebarPanel {
             }
         }
         if let Some(view) = search_view {
-            *self.shared.scratchpad_search.borrow_mut() = view;
+            self.active_search = view
+                .as_ref()
+                .map(|v| (v.query.clone(), v.is_regex, v.case_sensitive));
+            self.shared.show_scratchpad_search(view, cx);
             self.shared.notify_host(cx);
         }
         if let Some(text) = notice {
@@ -1767,7 +1765,7 @@ impl SidebarPanel {
         cx.notify();
     }
 
-    /// 运行内容搜索（结果写入 `Shared::scratchpad_search`，由中央编辑区渲染）。
+    /// 运行内容搜索（经端口投递到中央编辑区展示；参数留存供外部改动后重跑）。
     ///
     /// 搜索要遍历全树，故入队后台；结果由 `apply_scratchpad_ops` 回填。
     fn run_scratchpad_content_search(&mut self, cx: &mut Context<Self>) {
@@ -1779,7 +1777,8 @@ impl SidebarPanel {
             .map(|i| i.read(cx).value().trim().to_string())
             .unwrap_or_default();
         if query.is_empty() {
-            *self.shared.scratchpad_search.borrow_mut() = None;
+            self.active_search = None;
+            self.shared.show_scratchpad_search(None, cx);
             self.shared.notify_host(cx);
             cx.notify();
             return;

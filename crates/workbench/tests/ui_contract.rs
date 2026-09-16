@@ -299,7 +299,6 @@ fn shared_fields_are_whitelisted() {
         "right_mode",
         "right_mode_before_hidden",
         "scratchpad_bridge",
-        "scratchpad_search",
         "selected",
         "settings_open",
     ];

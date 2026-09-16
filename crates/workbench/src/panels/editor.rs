@@ -31,7 +31,7 @@ use crate::ui;
 use super::Shared;
 // 跨模块：导航拖拽载荷 / 属性面板状态 / 草稿追加（编辑区落点）。
 use super::nav::{NavDragPayload, PropertyRequest, PropertyState, nav_draft_append};
-use super::scratchpad_panel::render_scratchpad_search_pane;
+use super::scratchpad_panel::{ScratchpadSearchView, render_scratchpad_search_pane};
 
 /// 导航拖拽落点语义（`EditorPanel::apply_nav_drag`）。
 ///
@@ -90,6 +90,10 @@ pub struct EditorPanel {
     /// `TextareaState::set_value` 需要 `Window`，而「生成 SQL」的排空路径拿不到窗口，
     /// 因此入自有缓冲——写的是编辑区私有状态，不涉及跨模块字段。
     pending_sql: RefCell<Option<String>>,
+    /// M5：草稿箱内容搜索结果（草稿箱经端口投递，见 `set_scratchpad_search`）。
+    ///
+    /// 展示归编辑区（结果渲染在中央区）；草稿箱自己只记搜索参数，不回读这份数据。
+    scratchpad_search: Rc<RefCell<Option<ScratchpadSearchView>>>,
 }
 
 impl EditorPanel {
@@ -167,6 +171,7 @@ impl EditorPanel {
             result_epoch: 0,
             property_target: Rc::new(RefCell::new(None)),
             pending_sql: RefCell::new(None),
+            scratchpad_search: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -196,7 +201,7 @@ impl EditorPanel {
 
     /// 懒创建草稿箱搜索结果的「替换为」输入框（有结果时才建）并订阅回车执行。
     fn ensure_scratchpad_replace_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.scratchpad_replace.is_some() || self.shared.scratchpad_search.borrow().is_none() {
+        if self.scratchpad_replace.is_some() || self.scratchpad_search.borrow().is_none() {
             return;
         }
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("替换为…"));
@@ -234,7 +239,7 @@ impl EditorPanel {
             return;
         }
         let (query, is_regex, case_sensitive) = {
-            let search = self.shared.scratchpad_search.borrow();
+            let search = self.scratchpad_search.borrow();
             match search.as_ref() {
                 Some(s) => (s.query.clone(), s.is_regex, s.case_sensitive),
                 None => return,
@@ -361,6 +366,16 @@ impl EditorPanel {
             }
         });
         *self.props_pump.borrow_mut() = Some(task);
+    }
+
+    /// 投递草稿箱内容搜索结果（`EditorBridge::show_search_results`；`None` = 清空）。
+    pub(super) fn set_scratchpad_search(
+        &mut self,
+        view: Option<ScratchpadSearchView>,
+        cx: &mut Context<Self>,
+    ) {
+        *self.scratchpad_search.borrow_mut() = view;
+        cx.notify();
     }
 
     /// 把导航注入的 SQL 排进草稿缓冲（`EditorBridge::insert_sql`）。
@@ -1158,9 +1173,10 @@ impl Render for EditorPanel {
 
         // M5 草稿箱内容搜索结果（原型 §4.3/§4.5：结果与替换栏落中央编辑区）。
         {
-            let search = self.shared.scratchpad_search.borrow();
+            let search = self.scratchpad_search.borrow();
             if let Some(search) = search.as_ref() {
                 let shared = self.shared.clone();
+                let search_state = self.scratchpad_search.clone();
                 let replace_input = self.scratchpad_replace.clone();
                 let replace_filled = replace_input
                     .as_ref()
@@ -1169,7 +1185,7 @@ impl Render for EditorPanel {
                 let clear = {
                     let entity = entity.clone();
                     move |_: &gpui_kit::ClickEvent, _: &mut gpui_kit::Window, app: &mut App| {
-                        *shared.scratchpad_search.borrow_mut() = None;
+                        *search_state.borrow_mut() = None;
                         shared.notify_host(app);
                         entity.update(app, |_, cx| cx.notify());
                     }
