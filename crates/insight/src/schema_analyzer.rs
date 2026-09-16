@@ -503,17 +503,7 @@ impl SchemaAnalyzer {
 
         score = score.clamp(0.0, 100.0);
 
-        let level = if score >= 85.0 {
-            "优秀"
-        } else if score >= 70.0 {
-            "良好"
-        } else if score >= 50.0 {
-            "需改进"
-        } else if score >= 30.0 {
-            "较差"
-        } else {
-            "差"
-        };
+        let level = crate::quality_scorer::Grade::of(score).label();
 
         let mut parts = vec![format!("{} 张表, {} 个列", table_count, total_columns)];
 

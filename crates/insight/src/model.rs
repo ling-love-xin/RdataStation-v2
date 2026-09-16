@@ -106,9 +106,11 @@ pub enum InsightTarget {
         temp_table: String,
         columns: Vec<String>,
     },
-    /// 结构洞察：连接 / schema 级
+    /// 结构目标（Schema 健康报告）。`database` 是必需的：分析器的表清单要按
+    /// `table_catalog` 过滤（`information_schema` 里同名表可能属于不同库）。
     Schema {
         conn_id: String,
+        database: String,
         schema: Option<String>,
     },
 }
@@ -197,6 +199,7 @@ pub struct PanelData {
     pub column: Option<ColumnProfileView>,
     pub table: Option<TableProfileView>,
     pub multi: Option<MultiColumnView>,
+    pub schema: Option<crate::schema_view::SchemaReportView>,
 }
 
 impl PanelData {
@@ -212,9 +215,13 @@ impl PanelData {
         self.multi.as_ref()
     }
 
+    pub fn as_schema(&self) -> Option<&crate::schema_view::SchemaReportView> {
+        self.schema.as_ref()
+    }
+
     /// 三个 Tab 都还没取过数
     pub fn is_empty(&self) -> bool {
-        self.column.is_none() && self.table.is_none() && self.multi.is_none()
+        self.column.is_none() && self.table.is_none() && self.multi.is_none() && self.schema.is_none()
     }
 
     // 写入用链式构造：新数据只换它自己那一格，别的 Tab 的载荷不动
@@ -230,6 +237,11 @@ impl PanelData {
 
     pub fn with_multi(mut self, view: MultiColumnView) -> Self {
         self.multi = Some(view);
+        self
+    }
+
+    pub fn with_schema(mut self, view: crate::schema_view::SchemaReportView) -> Self {
+        self.schema = Some(view);
         self
     }
 }
@@ -1332,10 +1344,13 @@ mod tests {
 
         let schema = InsightTarget::Schema {
             conn_id: "G_1".into(),
+            database: "shop".into(),
             schema: None,
         };
         assert_eq!(schema.default_tab(), PanelTab::Schema);
         assert_eq!(schema.title(), "全部结构");
+        assert_eq!(schema.detail().as_deref(), Some("G_1"));
+        assert_eq!(schema.temp_table(), "", "结构目标没有临时表");
     }
 
     #[test]

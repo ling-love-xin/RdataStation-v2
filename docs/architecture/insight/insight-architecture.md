@@ -242,7 +242,9 @@ RulesWatcher（后台线程，drop 即停）：
 | D32 | 多列分析的列清单与表探查**同源**（同一个临时表内省），不另存一份 | v1 的 `availableColumns` 恒空正是「多列分析从未跑通」的根因；两份列清单迟早在临时表重建后不一致 | 列清单的实时性靠「切到该 Tab 时才取数」（事件路径） |
 | D33 | 多列规则的“吃不吃这几列”只做**展示层判定**（列数 + 类型族逐位比对），不在服务层拦 | 用户选错类型时 SQL 自己会给可读错误；服务层再拦一道只会把「为什么不行」变成两处口径 | `MultiRuleView::accepts` / `arity`，界面据此置灰执行入口 |
 | D34 | 多列结果按**数据形态**渲染，不看声明的 `result_type` | 声明与事实不一致时按事实渲染，不会出现「声明 list 却只拿到一个数」的空白表 | 表头取各行键的并集，缺键补「—」（不错位） |
-| D35 | 数据态**按 Tab 分开存载荷**（`PanelData { column, table, multi }`） | Tab 条是「同一目标的多个视角」而数据态只有一个格子；合在一起就要求“切 Tab 重新取数”，切回去就把已取到的内容丢了（实测：切「表」再切回「多列」丢表单与结果） | 渲染以载荷为准、状态只管错误/骨架；切 Tab 时载荷缺失才取数（事件路径） |
+| D35 | 数据态**按 Tab 分开存载荷**（`PanelData { column, table, multi, schema }`） | Tab 条是「同一目标的多个视角」而数据态只有一个格子；合在一起就要求“切 Tab 重新取数”，切回去就把已取到的内容丢了（实测：切「表」再切回「多列」丢表单与结果） | 渲染以载荷为准、状态只管错误/骨架；切 Tab 时载荷缺失才取数（事件路径）。**换目标必须清载荷**：载荷只对旧目标成立，留着会比空白更坏 |
+| D36 | Schema 报告的等级与导出都从**视图模型**出发 | 分档阀值只有 `quality_scorer` 一份（顺手把 `schema_analyzer` 自带的「需改进」换成同一份）；导出的是「用户看到的这份结论」，与界面同源，不会出现界面说 3 个孤立表而 JSON 里 4 个 | JSON 分组键取稳定英文，不拿中文展示名当键 |
+| D37 | 下钻只报「看哪张表」，不自己拼临时表名 | 把**源表**变成面板能分析的临时表是宿主的活（它才知道连接与临时表约定）；洞察 crate 自拼会有第二套命名约定 | 事件 `TableDrilldownRequested` 带 conn / db / schema / table |
 
 ## 7. 并发与资源
 
@@ -289,7 +291,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **174 项**（迁移基线 53 + Phase 0–3 新增），另有集成测试 9 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **184 项**（迁移基线 53 + Phase 0–4 新增），另有集成测试 9 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -320,7 +322,8 @@ RulesWatcher（后台线程，drop 即停）：
 | D24～D27 规则管理对话框 | `crates/insight/src/rule_view.rs`（视图模型 + 实体 + 渲染）、`jobs.rs`（`attach_rules` / `handle_rules_event` / 打开系统编辑器）、`service/mod.rs`（`rules_data` / `toggle_rule` / `create_rule_file` + 两层索引库装配）、`service/indexer.rs`（`rule_dir` / `create_rule_file` / `new_rule_template`）；宿主一行：`workbench/src/panels/right.rs` |
 | D29～D31 表探查与评估全表 | `insight_engine.rs`（`get_temp_table_profile` / `*_on`）、`model.rs`（`TableProfileView` / `TableColumnView` / `TableQualityView` / `TableEvalProgress` / `PanelData`）、`insight_view.rs`（`render_table_profile` + 列名下钻）、`jobs.rs`（`ProfileRequest::Table` / `request_table_evaluation` 的串行进度）、`service/mod.rs`（`profile_table_view`）、`ui.rs`（`INSIGHT_TABLE_*`） |
 | D32～D34 多列分析 | `service/mod.rs`（`multi_column_view` / `list_multi_rules` / `run_multi_rule` / `rule_params`）、`model.rs`（`MultiColumnView` / `MultiRuleView` / `MultiResultView` / `KeyValueRow` / `quality_notes`）、`insight_view.rs`（`render_multi_view` + 列多选/规则单选）、`jobs.rs`（`MultiColumnRequested` / `MultiRunRequested`） |
-| D35 数据态按 Tab 分栏 | `model.rs`（`PanelData` + `InsightPanelState::Data` 无载荷）、`insight_view.rs`（`render_body` 以载荷为准 / `ensure_data_for_tab`）、`test_support.rs`（记录型宿主） |
+| D35 数据态按 Tab 分栏 | `model.rs`（`PanelData` + `InsightPanelState::Data` 无载荷）、`insight_view.rs`（`render_body` 以载荷为准 / `emit_request_for_tab` / `ensure_data_for_tab`）、`test_support.rs`（记录型宿主） |
+| D36/D37 Schema 健康报告 | `schema_view.rs`（新：视图模型 + `to_json` / `to_markdown`）、`schema_analyzer.rs`（等级共用 `Grade`）、`service/mod.rs`（`schema_report_view`）、`insight_view.rs`（`render_schema_report` + 下钻热点）、`jobs.rs`（`SchemaReportRequested` / `TableDrilldownRequested`） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |

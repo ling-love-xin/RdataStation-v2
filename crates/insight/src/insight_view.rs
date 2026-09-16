@@ -36,6 +36,7 @@ use crate::model::{
 };
 use crate::quality_scorer::Grade;
 use crate::rule_view::RulesView;
+use crate::schema_view::{SchemaReportView, SchemaSection, SchemaTone};
 use crate::ui;
 
 /// 面板向宿主发出的请求。
@@ -67,6 +68,22 @@ pub enum InsightEvent {
         temp_table: String,
         rule_id: String,
         columns: Vec<String>,
+    },
+    /// 请宿主加载 Schema 健康报告（走源库内省，要连接 ID + 库 + schema）
+    SchemaReportRequested {
+        conn_id: String,
+        database: String,
+        schema: String,
+    },
+    /// 请宿主把某张表下钻到表探查。
+    ///
+    /// 下钻要把**源表**变成面板能分析的临时表（登记临时表是宿主的活），
+    /// 因此这里只报「看哪张表」，不自己拼临时表名。
+    TableDrilldownRequested {
+        conn_id: String,
+        database: String,
+        schema: String,
+        table: String,
     },
 }
 
@@ -130,6 +147,8 @@ pub struct InsightView {
     multi_running: bool,
     /// 多列执行的失败提示（列表照旧可见：整页转错误态会让用户以为表单坏了）
     multi_notice: Option<String>,
+    /// 结构四区的展开态（顺序同 `SchemaSection::ALL`；默认全展开）
+    open_schema_sections: [bool; SchemaSection::ALL.len()],
 }
 
 impl EventEmitter<InsightEvent> for InsightView {}
@@ -151,6 +170,7 @@ impl InsightView {
             multi_rule: None,
             multi_running: false,
             multi_notice: None,
+            open_schema_sections: [true; SchemaSection::ALL.len()],
         }
     }
 
@@ -189,18 +209,53 @@ impl InsightView {
         }
     }
 
-    /// 指向新目标：切到该目标的默认 Tab、进入加载态，并请宿主取数。折叠偏好保留。
+    /// 指向新目标：切到该目标的默认 Tab、清掉旧载荷、进入加载态，并请宿主取数。
+    ///
+    /// **清载荷是必需的**：载荷按 Tab 分开存，而它们都只对**旧目标**成立——
+    /// 留着旧载荷会直接渲染出上一个目标的数据（比空白更坏：看起来像新目标的结果）。
+    /// 折叠偏好不在此列：它们是用户口味，不随目标变。
     pub fn set_target(&mut self, target: InsightTarget, cx: &mut Context<Self>) {
         self.tab = target.default_tab();
-        self.target = Some(target.clone());
+        self.target = Some(target);
+        self.data = PanelData::default();
         self.state = InsightPanelState::Loading;
-        cx.emit(InsightEvent::ProfileRequested { target });
-        cx.notify();
+        if self.emit_request_for_tab(self.tab, cx) {
+            cx.notify();
+        }
     }
 
     /// 数据态载荷（宿主与测试读；三个 Tab 各自的最近一次结果）
     pub fn data(&self) -> &PanelData {
         &self.data
+    }
+
+    /// 出数（Schema 健康报告）
+    pub fn set_schema_report(
+        &mut self,
+        report: crate::schema_view::SchemaReportView,
+        cx: &mut Context<Self>,
+    ) {
+        self.data = std::mem::take(&mut self.data).with_schema(report);
+        self.state = InsightPanelState::Data;
+        cx.notify();
+    }
+
+    /// 结构 Tab 的表格下钻请求（点报告里的表名）
+    pub fn request_table_drilldown(&mut self, table: impl Into<String>, cx: &mut Context<Self>) {
+        let Some(InsightTarget::Schema {
+            conn_id,
+            database,
+            schema,
+        }) = self.target.clone()
+        else {
+            return;
+        };
+        cx.emit(InsightEvent::TableDrilldownRequested {
+            conn_id,
+            database,
+            schema: schema.unwrap_or_default(),
+            table: table.into(),
+        });
     }
 
     /// 出数（列画像）
@@ -222,10 +277,10 @@ impl InsightView {
     /// 修剪而不是清空：临时表重建后列可能没变，把用户的选择无差别抹掉是坏体验。
     pub fn set_multi_view(&mut self, view: MultiColumnView, cx: &mut Context<Self>) {
         self.multi_selected.retain(|name| view.column(name).is_some());
-        if let Some(rule) = self.multi_rule.clone() {
-            if !view.rules.iter().any(|r| r.id == rule) {
-                self.multi_rule = None;
-            }
+        if let Some(rule) = self.multi_rule.clone()
+            && !view.rules.iter().any(|r| r.id == rule)
+        {
+            self.multi_rule = None;
         }
         self.multi_selected.dedup();
         self.data = std::mem::take(&mut self.data).with_multi(view);
@@ -355,26 +410,70 @@ impl InsightView {
     /// 回到无目标空态（项目切换 / 目标失效且不可重试）
     pub fn clear_target(&mut self, cx: &mut Context<Self>) {
         self.target = None;
+        self.data = PanelData::default();
         self.state = InsightPanelState::Empty;
         cx.notify();
     }
 
-    /// ⟳ 与「重试」共用：重新加载当前目标（保持 Tab 与折叠偏好）。无目标时不动。
+    /// ⟳ 与「重试」共用：重新加载**当前 Tab 看的东西**（保持 Tab 与折叠偏好）。无目标时不动。
+    ///
+    /// 按 Tab 而不是按目标种类发：用户在「表」Tab 上点 ⟳，想重算的是表探查，
+    /// 而不是回到列画像。
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        if let Some(target) = self.target.clone() {
-            self.state = InsightPanelState::Loading;
-            cx.emit(InsightEvent::ProfileRequested { target });
+        if self.target.is_none() {
+            return;
+        }
+        self.state = InsightPanelState::Loading;
+        if self.emit_request_for_tab(self.tab, cx) {
             cx.notify();
         }
     }
 
-    /// 切 Tab（保留折叠偏好与已有数据：切回来仍看得到上次结果）
+    /// 按 Tab 发对应的取数请求（**不管载荷在不在**：要不要发由调用方判）。
     ///
-    /// **切到某个 Tab 就是“看这份数据”的意图**，因此这里会在事件路径上补一次取数
-    /// （数据态只有一个格子，切到没有数据的 Tab 就会只剩期次提示）：
-    /// - 「多列」：该临时表还没取过 → 发 `MultiColumnRequested`
-    /// - 「列」：目标是列且当前不是列画像 → 重发 `ProfileRequested`
-    /// - 「表」：目标带临时表且当前不是表探查 → 重发 `ProfileRequested`
+    /// 返回是否真的发了（目标种类与 Tab 不匹配时不发——比如拿列目标去要结构报告）。
+    fn emit_request_for_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) -> bool {
+        let Some(target) = self.target.clone() else {
+            return false;
+        };
+        // 列目标才需要列名：表 / 多列目标没有「哪一列」这回事，取整表
+        let request = match tab {
+            PanelTab::Column => match &target {
+                InsightTarget::Column { .. } => InsightEvent::ProfileRequested { target },
+                _ => return false,
+            },
+            PanelTab::Table => InsightEvent::ProfileRequested {
+                target: InsightTarget::Table {
+                    temp_table: target.temp_table().to_string(),
+                    table_name: target.table_name(),
+                },
+            },
+            PanelTab::MultiColumn => InsightEvent::MultiColumnRequested {
+                temp_table: target.temp_table().to_string(),
+                table_name: target.table_name(),
+            },
+            PanelTab::Schema => match &target {
+                InsightTarget::Schema {
+                    conn_id,
+                    database,
+                    schema,
+                } => InsightEvent::SchemaReportRequested {
+                    conn_id: conn_id.clone(),
+                    database: database.clone(),
+                    schema: schema.clone().unwrap_or_default(),
+                },
+                _ => return false,
+            },
+            PanelTab::History => return false,
+        };
+        cx.emit(request);
+        true
+    }
+
+    /// 切 Tab：切过去就补一次取数（事件路径）。
+    ///
+    /// 「切到某个 Tab」= 「我要看这份数据」：载荷按 Tab 分开存，缺的那一份才请求，
+    /// 已有的一份直接渲染（切回来仍看得到上次结果，折叠偏好也保留）。
     ///
     /// 不能放在 render 里做：那会造成「渲染一次发一次请求」。
     pub fn set_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) {
@@ -406,33 +505,16 @@ impl InsightView {
                 .multi
                 .as_ref()
                 .is_some_and(|view| view.is_for(target.temp_table())),
-            PanelTab::Schema | PanelTab::History => false,
+            PanelTab::Schema => self.data.schema.is_none(),
+            PanelTab::History => false,
         };
         if !missing {
             return;
         }
-
-        // 列目标才需要列名：表 / 多列目标没有「哪一列」这回事，取整表
-        let request = match tab {
-            PanelTab::Column => match &target {
-                InsightTarget::Column { .. } => InsightEvent::ProfileRequested { target },
-                _ => return,
-            },
-            PanelTab::Table => InsightEvent::ProfileRequested {
-                target: InsightTarget::Table {
-                    temp_table: target.temp_table().to_string(),
-                    table_name: target.table_name(),
-                },
-            },
-            PanelTab::MultiColumn => InsightEvent::MultiColumnRequested {
-                temp_table: target.temp_table().to_string(),
-                table_name: target.table_name(),
-            },
-            PanelTab::Schema | PanelTab::History => return,
-        };
         self.state = InsightPanelState::Loading;
-        cx.emit(request);
-        cx.notify();
+        if self.emit_request_for_tab(tab, cx) {
+            cx.notify();
+        }
     }
 
     fn set_tab_from_index(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -650,8 +732,12 @@ impl InsightView {
                 self.render_multi_view(view, entity, theme, inline_icon)
                     .into_any_element()
             }),
+            PanelTab::Schema => self.data.as_schema().map(|report| {
+                self.render_schema_report(report, entity, theme, inline_icon)
+                    .into_any_element()
+            }),
             // 后续期次落地：没有载荷也没有骨架，直接给期次提示
-            PanelTab::Schema | PanelTab::History => None,
+            PanelTab::History => None,
         };
         if let Some(element) = payload {
             return vec![element];
@@ -660,6 +746,14 @@ impl InsightView {
             return vec![skeleton(theme).into_any_element()];
         }
         vec![empty_state(IconName::Info, self.empty_hint(), theme, empty_icon).into_any_element()]
+    }
+
+    /// 同步结构四区的展开态（与列画像同口径：Accordion 只给「当前展开的下标集合」）
+    fn set_open_schema_sections(&mut self, open: &[usize], cx: &mut Context<Self>) {
+        for (i, slot) in self.open_schema_sections.iter_mut().enumerate() {
+            *slot = open.contains(&i);
+        }
+        cx.notify();
     }
 
     fn empty_hint(&self) -> &'static str {
@@ -991,6 +1085,93 @@ impl InsightView {
         }
 
         body
+    }
+
+    /// 结构洞察（Tab「结构」，Phase 4.2）：健康条 + 四个折叠区 + 表名下钻。
+    ///
+    /// 四个区**都渲染**（哪怕为空）：空区的意义是「检查过、没问题」，
+    /// 直接隐藏会让人以为这项没做。
+    fn render_schema_report(
+        &self,
+        report: &SchemaReportView,
+        entity: &Entity<Self>,
+        theme: &Theme,
+        inline_icon: Pixels,
+    ) -> Div {
+        let colors = theme.colors;
+        let color = grade_color(report.grade, theme);
+
+        // 健康条：分数是这张报告的头号结论
+        let body = div().v_flex().w_full().gap_2().child(
+            div()
+                .v_flex()
+                .w_full()
+                .gap_1()
+                .p_2()
+                .rounded_sm()
+                .bg(colors.list_hover)
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(rems(ui::INSIGHT_HEALTH_SCORE_FONT))
+                                .text_color(color)
+                                .child(format!("{:.0}", report.health)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(color)
+                                .child(report.grade.label()),
+                        )
+                        .child(div().flex_1().min_w_0().text_xs().text_ellipsis().child(
+                            format!(
+                                "{} 表 · {} 列 · 需关注 {} 项",
+                                report.table_count,
+                                report.total_columns,
+                                report.issue_count()
+                            ),
+                        )),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(colors.muted_foreground)
+                        .child(report.summary.clone()),
+                ),
+        );
+
+        // 四个折叠区（默认全展开：报告本身不长，折起来反而多点一下）
+        let mut accordion = Accordion::new("insight-schema-sections")
+            .multiple(true)
+            .with_size(Size::Small)
+            .on_toggle_click({
+                let entity = entity.clone();
+                move |open, _window, app| {
+                    entity.update(app, |view, cx| view.set_open_schema_sections(open, cx));
+                }
+            });
+        for (ix, section) in SchemaSection::ALL.iter().enumerate() {
+            let group = report.group(*section);
+            let open = self.open_schema_sections[ix];
+            let title = schema_section_title(*section, group.map_or(0, |g| g.rows.len()), theme);
+            accordion = accordion.item(|item| {
+                item.title(title).open(open).children({
+                    match group {
+                        Some(group) if !group.is_empty() => group
+                            .rows
+                            .iter()
+                            .map(|row| schema_row(row, entity, theme, inline_icon))
+                            .collect::<Vec<_>>(),
+                        _ => vec![muted_line(section.empty_hint(), theme).into_any_element()],
+                    }
+                })
+            });
+        }
+
+        body.child(accordion)
     }
 
     /// 列画像四区
@@ -1481,6 +1662,89 @@ fn table_column_row(
     row
 }
 
+// ==================== 结构洞察的片段（Phase 4.2） ====================
+
+/// 分区标题：`外键候选 (3)`
+fn schema_section_title(section: SchemaSection, count: usize, theme: &Theme) -> Div {
+    div()
+        .h_flex()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.colors.foreground)
+                .child(section.title()),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(format!("({count})")),
+        )
+}
+
+/// 报告的一行：主文案 + 说明 + 可下钻的表名热点
+fn schema_row(
+    row: &crate::schema_view::SchemaRowView,
+    entity: &Entity<InsightView>,
+    theme: &Theme,
+    inline_icon: Pixels,
+) -> AnyElement {
+    let colors = theme.colors;
+    let (tone_color, icon) = match row.tone {
+        SchemaTone::Normal => (colors.muted_foreground, IconName::Info),
+        SchemaTone::Warning => (colors.warning, IconName::TriangleAlert),
+        SchemaTone::Danger => (colors.danger, IconName::TriangleAlert),
+    };
+
+    let mut body = div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .py_1()
+        .child(
+            div()
+                .h_flex()
+                .gap_1()
+                .text_sm()
+                .text_color(colors.foreground)
+                .child(Icon::new(icon).size(inline_icon).text_color(tone_color))
+                .child(div().flex_1().min_w_0().text_ellipsis().child(row.title.clone())),
+        )
+        .child(
+            div()
+                .pl_4()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(row.detail.clone()),
+        );
+
+    // 涉及的表 → 下钻热点（最多几个，长清单会让面板变成一条链接列表）
+    if !row.tables.is_empty() {
+        let mut links = div().h_flex().flex_wrap().gap_1().pl_4();
+        for table in row.tables.iter().take(ui::INSIGHT_SCHEMA_DRILLDOWN_LIMIT) {
+            links = links.child(
+                Button::new(ElementId::Name(
+                    format!("insight-schema-to-{}", table).into(),
+                ))
+                .ghost()
+                .xsmall()
+                .label(table.clone())
+                .tooltip("看这张表的表探查")
+                .on_click({
+                    let entity = entity.clone();
+                    let table = table.clone();
+                    move |_, _, app| {
+                        entity.update(app, |view, cx| view.request_table_drilldown(table.clone(), cx))
+                    }
+                }),
+            );
+        }
+        body = body.child(links);
+    }
+    body.into_any_element()
+}
+
 fn zone_title(title: &str, theme: &Theme) -> Div {
     div()
         .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
@@ -1798,6 +2062,55 @@ mod tests {
         DateTimeStats, DistributionBin, KeyValueRow, NoteLevel, NumericStats, QualityNote,
         TableColumnMeta, TableProfile, TableQuality, TextFrequency, TextStats,
     };
+
+    /// 结构报告的典型形态：四区各一行（外键候选 / critical 不一致 / 孤立表 / 冗余列）
+    fn schema_report() -> crate::schema_view::SchemaReportView {
+        use crate::schema_analyzer::{
+            ForeignKeyCandidate, OrphanTable, RedundantColumn, SchemaInsightReport, TypeMismatch,
+            TypeMismatchEntry,
+        };
+        crate::schema_view::SchemaReportView::from_report(&SchemaInsightReport {
+            schema_name: "public".into(),
+            table_count: 4,
+            total_columns: 21,
+            fk_candidates: vec![ForeignKeyCandidate {
+                source_table: "orders".into(),
+                source_column: "user_id".into(),
+                target_table: "users".into(),
+                target_column: "id".into(),
+                confidence: "high".into(),
+                naming_pattern: "{table}_id".into(),
+            }],
+            type_mismatches: vec![TypeMismatch {
+                column_name: "status".into(),
+                tables: vec![
+                    TypeMismatchEntry {
+                        table_name: "orders".into(),
+                        data_type: "VARCHAR".into(),
+                    },
+                    TypeMismatchEntry {
+                        table_name: "users".into(),
+                        data_type: "INTEGER".into(),
+                    },
+                ],
+                severity: "critical".into(),
+            }],
+            orphan_tables: vec![OrphanTable {
+                table_name: "logs".into(),
+                column_count: 5,
+                reason: "没有关联".into(),
+            }],
+            redundant_columns: vec![RedundantColumn {
+                column_name: "created_at".into(),
+                table_count: 3,
+                tables: vec!["orders".into(), "users".into(), "logs".into()],
+                suggestion: "考虑抽到公共表".into(),
+            }],
+            summary: "Schema健康评分 68 (一般)。4 张表, 21 个列".into(),
+            health_score: 68.0,
+            health_level: "一般".into(),
+        })
+    }
 
     /// 多列分析的典型形态：三列（数值 / 数值 / 文本）+ 两条规则（一条吃两数值、一条吃两文本）
     fn multi_view() -> MultiColumnView {
@@ -2533,6 +2846,72 @@ mod tests {
         view.update(cx, |view, _| {
             assert!(view.data().multi.as_ref().unwrap().result.is_some());
             assert_eq!(view.multi_selection().len(), 2);
+        });
+    }
+
+    /// 结构 Tab：切过去才发请求；报告回填后可下钻（下钻只报「看哪张表」）
+    #[gpui_kit::test]
+    fn schema_tab_requests_the_report_and_drills_down(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let events = crate::test_support::event_sink(&view, cx);
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_target(
+                    InsightTarget::Schema {
+                        conn_id: "G_pg".into(),
+                        database: "shop".into(),
+                        schema: Some("public".into()),
+                    },
+                    cx,
+                );
+            });
+        });
+        assert_eq!(
+            view.read_with(cx, |view, _| view.tab()),
+            PanelTab::Schema,
+            "结构目标直接落到「结构」Tab"
+        );
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                InsightEvent::SchemaReportRequested { conn_id, database, schema }
+                    if conn_id == "G_pg" && database == "shop" && schema == "public"
+            )),
+            "结构目标要带齐连接 / 库 / schema：{:?}",
+            events.borrow()
+        );
+        events.take();
+
+        // 回填报告后可渲染（四区 + 健康条），下钻只报源表
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_schema_report(schema_report(), cx))
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.request_table_drilldown("orders", cx))
+        });
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                InsightEvent::TableDrilldownRequested { table, conn_id, database, schema }
+                    if table == "orders" && conn_id == "G_pg" && database == "shop" && schema == "public"
+            )),
+            "下钻要带靶表的定位信息（登记临时表是宿主的活）：{:?}",
+            events.borrow()
+        );
+
+        // 四区展开态可同步（Accordion 给的是当前展开的下标集合）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_open_schema_sections(&[1, 3], cx))
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        view.update(cx, |view, _| {
+            assert_eq!(
+                view.data().as_schema().map(|report| report.table_count),
+                Some(4)
+            );
         });
     }
 

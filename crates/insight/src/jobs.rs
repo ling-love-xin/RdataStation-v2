@@ -132,6 +132,22 @@ pub fn handle_event(
             columns.clone(),
             cx,
         ),
+        InsightEvent::SchemaReportRequested {
+            conn_id,
+            database,
+            schema,
+        } => request_schema_report(
+            view,
+            conn_id.clone(),
+            database.clone(),
+            schema.clone(),
+            cx,
+        ),
+        // 下钻要先把源表登记成临时表，那是**宿主的活**（它才知道连接与临时表约定）：
+        // 这里只把请求转给宿主提供的回调，没接就只记一条日志（不是静默失败）
+        InsightEvent::TableDrilldownRequested { table, .. } => {
+            tracing::info!("Schema 报告下钻请求（宿主未接）: {table}");
+        }
     }
 }
 
@@ -463,6 +479,34 @@ pub fn request_multi_run(
     .detach();
 }
 
+/// Schema 健康报告：取数 → 视图模型（阻塞段在后台执行器上）。
+///
+/// 与其他取数不同，这一路要走**源库内省**（不是 DuckDB 临时表），
+/// 因此带的是连接 ID + 库 + schema；失败推整页错误态（报告无从部分展示）。
+pub fn request_schema_report(
+    view: &Entity<InsightView>,
+    conn_id: String,
+    database: String,
+    schema: String,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        InsightService::schema_report_view(conn_id, &database, &schema)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(report) => panel.set_schema_report(report, cx),
+            Err(err) => {
+                let info = InsightService::describe_error(&err);
+                panel.set_error(info.message, info.retryable, cx);
+            }
+        });
+    })
+    .detach();
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -526,6 +570,7 @@ mod tests {
             },
             InsightTarget::Schema {
                 conn_id: "G_1".into(),
+                database: "shop".into(),
                 schema: None,
             },
         ] {

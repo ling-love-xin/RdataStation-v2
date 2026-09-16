@@ -23,6 +23,24 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 4 一批：Schema 健康报告（4.1 门面 + 4.2 视图 + 4.3 导出 + 4.4 下钻）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **184 项** + 集成 9 项全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 门面 | `InsightService::schema_report_view`：分析器是异步的（走源库内省），门面保持同步口径（同一道阻塞桥），调用方放后台 | `service/mod.rs` |
+| 目标 | `InsightTarget::Schema` 补 `database`：分析器的表清单要按 `table_catalog` 过滤，否则同名表会跳库混在一起 | `model.rs` |
+| 视图模型 | `schema_view.rs`：四个分区（外键候选 / 类型不一致 / 孤立表 / 冗余列）+ 行语气（中性 / 提示 / 问题）+ 可下钻的表清单；**等级按分数现算**（`Grade`），不再解析领域里的 `health_level` 字符串——顺手把 `schema_analyzer::compute_health` 的分档也换成同一份阀值（原先 50–70 那段自己叫「需改进」） | `schema_view.rs`（新）+ `schema_analyzer.rs` |
+| 导出 | `to_json` / `to_markdown`（纯函数）：JSON 分组键用稳定英文（不拿中文当键）、`issue_count` 与界面同源；Markdown 表格转义竖线与换行（否则表会断列），空分区写明「空」的含义 | `schema_view.rs` |
+| 结构 Tab | 健康条（分数 + 等级 + 规模 + 需关注项数）+ 四个折叠区（默认全展开，**空区也渲染**并解释「空」是什么）+ 表名下钻热点（每行最多 4 个） | `insight_view.rs` |
+| 接缝 | `SchemaReportRequested`（带连接 / 库 / schema）；`TableDrilldownRequested` 只报「看哪张表」——把源表登记成临时表是宿主的活（它才知道连接与临时表约定） | `jobs.rs` |
+| 顺带修的真问题 | ① `set_target` 原先一律发 `ProfileRequested`：结构目标因此永远停在加载态。现改为**按目标种类发对应请求**；② 换目标**必须清载荷**——载荷按 Tab 分开存，不清就会渲染出上一个目标的数据（比空白更坏） | `insight_view.rs` |
+| 测试 | 视图模型与导出 9（分组 / 等级取数 / 语气 / 问题计数 / 空报告 / JSON 稳定键 / Markdown 可读 / 转义 / 陌生置信度）+ 结构 Tab 实体与窗口 1 | `schema_view.rs` + `insight_view.rs` |
+
+**未接（下一批或宿主侧）**：导出按钮需要宿主提供「选路径 + 写文件」（面板不发一个无人处理的请求）；下钻需要宿主把源表登记成临时表。两者都是宿主侧一两行，但落在正在并行改动的 `panels/` 与编辑器里。
+
+
 ### 2026-09-17 — Phase 3 三批：多列分析的界面与接线（3.2 / 3.3 收尾）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **174 项** + 集成 **9 项**全绿（连跑 3 次稳定）；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
@@ -568,10 +586,10 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 
 | # | 任务 | 落点 |
 | --- | --- | --- |
-| 4.1 | `get_schema_insight` 门面（补上唯一缺失的命令等价物） | `insight/src/service/mod.rs` |
-| 4.2 | 报告视图：健康评分条 + 四个折叠区（外键候选 / 类型不一致 / 孤立表 / 冗余列），置信度与严重度分级取色 | `insight/src/schema_view.rs`（新文件） |
-| 4.3 | 导出 JSON / Markdown | 同上 |
-| 4.4 | 下钻联动：类型不一致的受影响表 → 表探查 | 同上 |
+| 4.1 | `get_schema_insight` 门面（补上唯一缺失的命令等价物） | `insight/src/service/mod.rs` | ✅ Phase 4 一批 |
+| 4.2 | 报告视图：健康评分条 + 四个折叠区（外键候选 / 类型不一致 / 孤立表 / 冗余列），置信度与严重度分级取色 | `insight/src/schema_view.rs`（新文件） | ✅ Phase 4 一批 |
+| 4.3 | 导出 JSON / Markdown | 同上 | 🟡 函数与测试完成；界面按钮待宿主提供选路径 |
+| 4.4 | 下钻联动：类型不一致的受影响表 → 表探查 | 同上 | 🟡 事件已发；宿主的「源表 → 临时表」登记待接 |
 
 ### Phase 5 — 快照历史与版本对比
 

@@ -36,6 +36,7 @@ use crate::model::{
     ColumnProfileView, MultiColumnView, MultiResultView, MultiRuleView, QualityNote, TableProfileView,
 };
 use crate::rule::RuleScope;
+use crate::schema_view::SchemaReportView;
 use crate::rule_types::RuleMeta;
 use crate::rule_view::{build_rules_data, RuleDataInput, RulesData};
 use crate::service::indexer::{rule_dir, sync_project_rules, RuleIndexStore, SyncOutcome};
@@ -182,8 +183,26 @@ impl InsightService {
         Ok((view, notes))
     }
 
-    /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
+    // ==================== 结构洞察（Phase 4） ====================
+
+    /// Schema 健康报告 → 面板视图模型（Phase 4 的门面：补上唯一缺的命令等价物）。
     ///
+    /// 分析器本身是异步的（要走源库内省），而服务门面是**同步**口径
+    /// （与 `profile_column_view` 一致）：这里用阻塞桥接上，调用方负责放后台。
+    ///
+    /// `database` 由调用方给出：表清单要按 `table_catalog` 过滤，
+    /// 否则同名表会跨库混在一起。
+    pub fn schema_report_view(
+        conn_id: String,
+        database: &str,
+        schema: &str,
+    ) -> Result<SchemaReportView, CoreError> {
+        let report = block_on(crate::schema_analyzer::SchemaAnalyzer::analyze(
+            conn_id, database, schema,
+        ))?;
+        Ok(SchemaReportView::from_report(&report))
+    }
+
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
     ///
     /// 识别方式是**按消息内容**匹配：引擎侧的 DuckDB 错误还没有结构化分类，

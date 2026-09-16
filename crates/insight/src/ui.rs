@@ -21,6 +21,10 @@ pub const INSIGHT_INLINE_ICON_SIZE: f32 = 0.875;
 pub const INSIGHT_SECTION_TITLE_FONT: f32 = 0.75;
 /// 评分卡总分字号（1.75rem = 28px；四档取色）
 pub const INSIGHT_SCORE_FONT: f32 = 1.75;
+/// Schema 健康分字号（2.25rem = 36px；结构洞察的头号结论）
+pub const INSIGHT_HEALTH_SCORE_FONT: f32 = 2.25;
+/// 结构报告每行最多给几个表名下钻热点（再多就改成一条链接列表了）
+pub const INSIGHT_SCHEMA_DRILLDOWN_LIMIT: usize = 4;
 /// 规则管理对话框宽度（40rem = 640px；三层分组 + 路径 + 错误原文要宽度）
 pub const INSIGHT_RULES_DIALOG_WIDTH: f32 = 40.0;
 /// 表探查：序号列宽（1.25rem = 20px）

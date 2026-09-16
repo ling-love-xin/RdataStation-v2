@@ -31,6 +31,7 @@ pub mod rule_registry;
 pub mod rule_types;
 pub mod rule_view;
 pub mod schema_analyzer;
+pub mod schema_view;
 pub mod service;
 pub mod store;
 pub mod table_profile_service;
@@ -95,6 +96,9 @@ pub use rule_types::{
 pub use schema_analyzer::{
     ForeignKeyCandidate, OrphanTable, RedundantColumn, SchemaAnalyzer, SchemaInsightReport,
     TableColumnInfo, TypeMismatch, TypeMismatchEntry,
+};
+pub use schema_view::{
+    confidence_label, SchemaGroupView, SchemaReportView, SchemaRowView, SchemaSection, SchemaTone,
 };
 
 pub const BUILTIN_RULES_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/insight-rules");
