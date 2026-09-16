@@ -145,4 +145,28 @@ HostBridge：`open_file_request` 最终未做成端口——改为**私有字段
 | **C** | 不下沉，接受视图留在 workbench | 零成本，失去“特性 crate 自带 view”的统一形态 |
 
 建议 **A + B 混合**：先用 A 解循环（低成本），再逐特性做 B（nav → database、scratchpad → scratchpad）。
+
+## 9. A 步拆解（可执行规格）
+
+目标：新建 `crates/workbench-shell`（包名 `rds-workbench-shell`），承接「面板状态 + 视图共用资产」，
+使 workbench 与特性 crate 都能依赖它，从而解开循环。
+
+**关键手法：下沉 + `pub use` 重导**——与本次拆模块同一招，下游 `crate::ui::` / `crate::panels::Shared` 
+等路径保持可用，**改动面为零**。
+
+| 步 | 动作 | 验收 |
+| --- | --- | --- |
+| A1 | 新建 crate 骨架（`Cargo.toml` + `lib.rs` + `ui.rs`）；workbench 的 `src/ui.rs`（169 行常量）纯位移迁入 | `cargo check -p rds-workbench` 绿 |
+| A2 | workbench：`Cargo.toml` 加依赖；`lib.rs` 把 `pub mod ui;` 换成 `pub use rds_workbench_shell::ui;`（下游 `crate::ui::*` 不变） | 现有 `ui_contract` 契约 1（尺寸常量）全绿 |
+| A3 | `ui_contract.rs` 的 `include_str!` 路径改为指向新 crate（契约 1 需读源码；2a/2b 清单里加上新文件） | 契约测试 7 项全绿 |
+| A4 | 同手法下沉 `Shared`（298 行）+ 连带必需的纯数据枚举（`LeftPanel` / `RightPanel` / `SidebarMode` / `ConnectionItem`，现位于 `view.rs`） | 组件层与宿主仍编译；`crate::panels::Shared` 不变 |
+| A5 | 同手法下沉 `services/nav_runtime.rs`（478 行，nav 视图依赖 33 处）；先查它的 `crate::services::*` 依赖面，必要时一并下沉 | 同上 |
+| A6 | 反向依赖校验：`cargo tree -p rds-workbench` / `-p rds-database` 无环；写进本文件 | 无环 + 三段测试绿 |
+
+**注意事项**（实测所得，避免重蹈）：
+
+1. `ui.rs` 可能用 `gpui_kit` 的 `rems()` → 新 crate 需要 `gpui-kit` 依赖（架构约束允许 Feature/crate 依赖 UI 基础设施）。
+2. `Shared` 里 `editor_clear` / `host_redraw` / `open_mock_detail` 是 `Rc<dyn Fn(&mut Window, &mut App)>` → 新 crate 必须依赖 `gpui-kit`（`Window` / `App` 类型）。
+3. 下沉后 `Shared` 不可再引用 workbench 内部项（如 `crate::view::ConnectionItem`、`crate::services::nav_runtime::DriverMeta`）——这些必须一并下沉或在 `Shared` 里改类型别名。
+4. 每次只下沉一个模块并立即 `cargo check`，不要一次搬完再编（本会话已多次验证这个节奏最省时间）。
 | `Shared` 字段白名单契约（S4） | `crates/workbench/tests/ui_contract.rs` |
