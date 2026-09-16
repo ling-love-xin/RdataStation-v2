@@ -539,7 +539,7 @@ impl WorkbenchView {
                     }
                 }
                 SidebarEvent::EditorSqlRequest => {
-                    // SQL 已写入 shared.editor_set；通知编辑区渲染消费。
+                    // SQL 已由 `EditorBridge::insert_sql` 排入草稿；此处只触发重绘。
                     if let Some(editor) = &this.editor {
                         editor.update(cx, |_, cx| cx.notify());
                     }

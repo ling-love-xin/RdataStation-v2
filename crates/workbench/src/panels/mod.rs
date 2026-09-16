@@ -50,9 +50,9 @@ pub enum SidebarEvent {
     SelectConnection(usize),
     /// 用户点击了连接「编辑」。
     EditConnection(String),
-    /// 用户点击了导航面板头「＋」/ 空态「新建连接」（已置位 `shared.new_connection_request`）。
+    /// 用户点击了导航面板头「＋」/ 空态「新建连接」（动作已由 `EditorBridge::new_connection` 完成，这里只触发重绘）。
     NewConnectionRequest,
-    /// 导航右键「查看数据」已写入 `shared.editor_set`，请编辑区渲染时消费。
+    /// 导航右键「查看数据」（SQL 已由 `EditorBridge::insert_sql` 排入草稿，这里只触发重绘）。
     EditorSqlRequest,
     /// 通用入口：连接 / 对象右键「在 SQL 编辑器中打开」——选中该连接并聚焦中央编辑区。
     OpenSqlEditor(String),
