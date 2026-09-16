@@ -10,7 +10,7 @@ use engine::services::duckdb_service::{duckdb_value_to_json, DuckDbService};
 
 use crate::model::types::{
     ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats, DistributionBin, ExtremeValue,
-    NumericStats, TextFrequency, TextStats,
+    NumericStats, TableColumnMeta, TableProfile, TextFrequency, TextStats,
 };
 
 /// Default number of sample rows pulled from a column for display
@@ -99,6 +99,85 @@ pub fn get_column_insight_full_on(
         stats,
         sample,
         histogram,
+    })
+}
+
+/// 临时表画像（表探查（Tab「表」）的数据源）：DuckDB 内省列元数据 + 行数。
+///
+/// 与 [`crate::table_profile_service::get_table_profile`]（源库内省，走 `SqlService`）分工不同：
+/// 面板的表目标指向的是 **DuckDB 临时表**（`t_result_N`），源库连接信息在这里既没有也不需要。
+///
+/// 走 `DESCRIBE` 而不是 `information_schema`：前者对临时表 / 视图 / CTE 一视同仁，
+/// 也不需要自己按 `table_catalog = 'memory'` 过滤（`ATTACH` 进来的文件库表不该混进来）。
+pub fn get_temp_table_profile(temp_table: &str) -> Result<TableProfile, CoreError> {
+    let _permit = insight_semaphore()
+        .try_acquire()
+        .map_err(|_| CoreError::common(CommonError::General(ERR_TOO_MANY_CONCURRENT.to_string())))?;
+
+    let duckdb = get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {}", e)))
+    })?;
+    get_temp_table_profile_on(&conn, temp_table)
+}
+
+/// 在**调用方已持有的连接**上内省临时表（同 `*_on` 系列的口径）。
+///
+/// `DESCRIBE` 的输出列有六个且顺序稳定：`column_name` / `column_type` / `null` / `key` /
+/// `default` / `extra`。这里只取前四个，用**下标**而不是列名定位——`Statement::column_names()`
+/// 在查询未执行时会 panic，而 `DESCRIBE` 的列定义是 DuckDB 的稳定契约。
+pub fn get_temp_table_profile_on(
+    conn: &duckdb::Connection,
+    temp_table: &str,
+) -> Result<TableProfile, CoreError> {
+    let sql = format!("DESCRIBE \"{}\"", temp_table);
+    let mut stmt = conn.prepare(&sql).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "DuckDB describe prepare failed: {}",
+            e
+        )))
+    })?;
+
+    let columns: Vec<TableColumnMeta> = stmt
+        .query_map([], |row| {
+            let name: String = row.get(0)?;
+            let data_type: String = row.get(1)?;
+            // `null` 列给的是 "YES" / "NO"
+            let nullable: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+            let key: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
+            Ok((name, data_type, nullable, key))
+        })
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "DuckDB describe query failed: {}",
+                e
+            )))
+        })?
+        .filter_map(|row| row.ok())
+        .enumerate()
+        .map(|(ix, (name, data_type, nullable, key))| TableColumnMeta {
+            column_name: name,
+            data_type,
+            is_nullable: nullable.eq_ignore_ascii_case("YES"),
+            // 临时表多半由查询结果建出，没有主键约束；有则如实标出
+            is_primary_key: key.eq_ignore_ascii_case("PRI"),
+            ordinal_position: ix as i32 + 1,
+        })
+        .collect();
+
+    // 行数失败不算致命：列清单仍可看，只是没行数（与源库内省同一取舍）
+    let row_count: i64 = conn
+        .query_row(&format!("SELECT COUNT(*) FROM \"{}\"", temp_table), [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0);
+
+    Ok(TableProfile {
+        table_name: temp_table.to_string(),
+        db_type: "DuckDB".to_string(),
+        columns,
+        row_count: Some(row_count.clamp(0, i32::MAX as i64) as i32),
+        schema_name: None,
     })
 }
 
@@ -445,58 +524,11 @@ fn compute_boolean_stats(
     }
 }
 
-/// 列类型族判定（决定走哪套规则）。
-///
-/// **归属**：四个判定函数原本在 `engine/services/duckdb_service.rs`，但唯一使用方是本文件，
-/// 且它们编码的是「哪种类型该用哪些统计量」——画像的业务语义，不是数据层的通用能力。
-/// 故于 Phase 1 第二批移入（与 `detect_extremes` 同理，避免低层持有上层词汇）。
-///
-/// `typeof()` 会带参数或后缀（`DECIMAL(12,2)` / `VARCHAR(255)` / `TIMESTAMP WITH TIME ZONE` /
-/// `TIMESTAMP_NS`），所以先取基名再比较：精确比较曾把 **DECIMAL 列当文本列**统计。
-fn type_base(dt_lower: &str) -> &str {
-    dt_lower.split(['(', ' ']).next().unwrap_or(dt_lower).trim()
-}
-
-/// 数值族（含无符号整型：自 Parquet / 外部源读入的列可能是 `UBIGINT` 等）
-fn is_numeric_type(dt_lower: &str) -> bool {
-    matches!(
-        type_base(dt_lower),
-        "bigint"
-            | "integer"
-            | "int"
-            | "smallint"
-            | "tinyint"
-            | "double"
-            | "float"
-            | "hugeint"
-            | "decimal"
-            | "numeric"
-            | "real"
-            | "utinyint"
-            | "usmallint"
-            | "uinteger"
-            | "ubigint"
-    )
-}
-
-/// 时间族。按**前缀**判而不是基名：`timestamp_ns` / `timestamp_us` 的基名仍是它自己，
-/// 但它们都是月时间戳。
-fn is_datetime_type(dt_lower: &str) -> bool {
-    let base = type_base(dt_lower);
-    base == "date" || base == "datetime" || base.starts_with("timestamp") || base.starts_with("time")
-}
-
-fn is_binary_type(dt_lower: &str) -> bool {
-    matches!(type_base(dt_lower), "blob" | "bytea" | "binary" | "varbinary")
-}
-
-/// 数组族：DuckDB 的 `INTEGER[]`，以及外部源的 `ARRAY` / `LIST` 写法
-fn is_array_type(dt_lower: &str) -> bool {
-    dt_lower.starts_with('[')
-        || dt_lower.ends_with(']')
-        || dt_lower.contains("list")
-        || dt_lower.contains("array")
-}
+// ==================== 类型族判定 ====================
+//
+// 已迁至 `crate::model`（唯一来源）：列画像与表探查都要用它，
+// 放在下层（领域词汇）后依赖方向才单一。此处仅导入使用。
+use crate::model::{is_array_type, is_binary_type, is_datetime_type, is_numeric_type};
 
 /// 列样本值（条数取 [`DEFAULT_SAMPLE_SIZE`]）。
 ///
@@ -972,6 +1004,53 @@ mod tests {
         assert!(tq.overall_score <= 100.0);
     }
 
+    /// 临时表内省：列清单（名 / 类型 / 可空 / 序号）与行数都要真的从 DuckDB 读出来。
+    ///
+    /// `DESCRIBE` 的列序是接口契约（column_name / column_type / null / key），
+    /// 这里靠断言把它钉住：一旦 DuckDB 改列序，本测试先红。
+    #[test]
+    fn test_temp_table_profile_reads_columns_and_row_count() -> Result<(), CoreError> {
+        let duckdb = get_or_create_duckdb()?;
+        let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
+        conn.execute_batch(
+            "CREATE OR REPLACE TEMP TABLE t_insight_profile_probe (
+                 id INTEGER NOT NULL, amount DECIMAL(12,2), note VARCHAR, flag BOOLEAN
+             );
+             INSERT INTO t_insight_profile_probe VALUES (1, 1.5, 'a', true), (2, NULL, NULL, false);",
+        )
+        .expect("建探针临时表");
+
+        let profile = get_temp_table_profile_on(&conn, "t_insight_profile_probe")?;
+        assert_eq!(profile.columns.len(), 4);
+        let names: Vec<&str> = profile
+            .columns
+            .iter()
+            .map(|c| c.column_name.as_str())
+            .collect();
+        assert_eq!(names, vec!["id", "amount", "note", "flag"]);
+        assert_eq!(profile.columns[1].data_type, "DECIMAL(12,2)");
+        assert_eq!(profile.columns[0].ordinal_position, 1);
+        assert_eq!(profile.columns[3].ordinal_position, 4);
+        assert_eq!(profile.row_count, Some(2));
+        assert_eq!(profile.db_type, "DuckDB");
+
+        // 临时表由查询结果建出时没有主键约束：不该凭空报一个 PK
+        assert!(
+            profile.columns.iter().all(|c| !c.is_primary_key),
+            "临时表没有主键约束，不得凭空标 PK"
+        );
+        Ok(())
+    }
+
+    /// 内省不存在的表：报错而不是空清单（空清单会让界面显示「没有列」，误导）
+    #[test]
+    fn test_temp_table_profile_rejects_missing_table() {
+        let duckdb = get_or_create_duckdb().expect("连接");
+        let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
+        let err = get_temp_table_profile_on(&conn, "t_insight_profile_absent_table");
+        assert!(err.is_err(), "不存在的表应报错：{err:?}");
+    }
+
     #[test]
     fn test_list_insight_rules_all() -> Result<(), CoreError> {
         let registry = test_registry();
@@ -1022,28 +1101,6 @@ mod tests {
             "should contain numeric-stats"
         );
         Ok(())
-    }
-
-    /// DuckDB 的 `typeof()` 会带参数或后缀，精确比较会把列判错族
-    /// （曾把 `DECIMAL(12,2)` 当文本列做统计）
-    #[test]
-    fn parameterised_types_keep_their_family() {
-        assert!(is_numeric_type("decimal(12,2)"));
-        assert!(is_numeric_type("numeric(18,4)"));
-        assert!(is_numeric_type("bigint"));
-        // 无符号整型：自 Parquet / 外部源读入的列可能是这些
-        assert!(is_numeric_type("ubigint"));
-        assert!(is_numeric_type("utinyint"));
-
-        assert!(is_datetime_type("timestamp with time zone"));
-        assert!(is_datetime_type("timestamptz"));
-        assert!(is_datetime_type("timestamp_ns"));
-        assert!(is_datetime_type("time with time zone"));
-        assert!(is_datetime_type("date"));
-
-        assert!(is_binary_type("blob"));
-        assert!(is_array_type("integer[]"));
-        assert!(is_array_type("list"));
     }
 
     /// 文本族不得漏进其它族（否则会去做不可能的统计）

@@ -236,6 +236,9 @@ RulesWatcher（后台线程，drop 即停）：
 | D26 | 启停写入后**立即重跑一次同步**（而不是只改库） | 索引只有被消费才有意义：同步才会 `apply_disabled_rules` + 失效注册表缓存，否则用户点了开关而分析照旧用旧规则 | 代价是每次开关多一轮磁盘扫描（几十个小 TOML，可忽略）|
 | D27 | 规则文件用**系统默认应用**打开，不用应用内编辑器 | 正文是 TOML，应用内编辑器没有该语言的语法支持；且规则随项目走，本就在版本库里编辑 | 只拉起进程不等待；`OpenFileRequested` 是公开事件，宿主将来想改成内开也不改面板 |
 | D28 | 作用域 → 目录的派发**只留一处**（`service::indexer::rule_dir`） | 同步器 / 新建 / 对话框三处都要这个路径，各拼一次字符串迟早在 `.RSmeta` 的拼写上分叉 | 视图层的 `RuleDataInput` 只收已算好的路径 |
+| D29 | 面板的表目标按 **DuckDB 临时表**内省（`DESCRIBE`），不走源库 | 面板拿到的目标只有 `temp_table`（无 conn/db/schema，见 D20）；`DESCRIBE` 对临时表 / 视图一视同仁，不必按 catalog 过滤（`ATTACH` 进来的文件库表不能混进来） | 代价：临时表由查询结果建出，**没有主键约束**，`PK` 角标基本不会出现（如实不显示） |
+| D30 | 「评估全表」**串行逐列**，每列都单独回填面板 | 并发会撞上引擎并发上限（D12）而失败重试比慢更让人困惑；逐列回填才能给出**真进度**（测试靠观察者断言进度序列确实有中间态） | 大表列多时耗时与列数成正比，UI 上进度可见 |
+| D31 | 界面写的是**实际**采样口径（全量统计 + 样本前 5 行），不照搬原型的「500 行采样」 | 引擎的规则统计是聚合查询，根本不存在 500 行采样；写一个自己不执行的口径比不写更坏 | 原型 §3.2 已加实现期修正说明 |
 
 ## 7. 并发与资源
 
@@ -282,7 +285,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **147 项**（迁移基线 53 + Phase 0–2 新增），另有集成测试 4 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **160 项**（迁移基线 53 + Phase 0–3 新增），另有集成测试 6 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -311,6 +314,8 @@ RulesWatcher（后台线程，drop 即停）：
 | D20 不自己取数 | `engine/src/services/{duckdb_service,sql_service}.rs` 为唯一数据入口 |
 | 规则执行（SQL 模板与输出映射） | `crates/insight/src/rule_executor.rs` |
 | D24～D27 规则管理对话框 | `crates/insight/src/rule_view.rs`（视图模型 + 实体 + 渲染）、`jobs.rs`（`attach_rules` / `handle_rules_event` / 打开系统编辑器）、`service/mod.rs`（`rules_data` / `toggle_rule` / `create_rule_file` + 两层索引库装配）、`service/indexer.rs`（`rule_dir` / `create_rule_file` / `new_rule_template`）；宿主一行：`workbench/src/panels/right.rs` |
+| D29～D31 表探查与评估全表 | `insight_engine.rs`（`get_temp_table_profile` / `*_on`）、`model.rs`（`TableProfileView` / `TableColumnView` / `TableQualityView` / `TableEvalProgress` / `PanelData`）、`insight_view.rs`（`render_table_profile` + 列名下钻）、`jobs.rs`（`ProfileRequest::Table` / `request_table_evaluation` 的串行进度）、`service/mod.rs`（`profile_table_view`）、`ui.rs`（`INSIGHT_TABLE_*`） |
+| 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
 | 评分卡视图模型（`ScoreView` / `DimensionView`；全空列不产分） | `crates/insight/src/model.rs`（`ColumnProfileView::score`） |
@@ -332,7 +337,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K6 | `insight_table_reports` / `insight_schema_reports` 两张表为**预留**，无写入者 | 完成度易被高估 | Phase 4 |
 | K7 | ~~用户全局规则目录（`{system}/insight-rules/`）**不自动创建**~~ | 已消除：规则管理对话框在目录缺失时给「创建目录并新建规则」入口，**首次写入时建**（不在启动时预设空目录） | ✅ 已修（Phase 2 / 2.4） |
 | K8 | ~~视图归属待拍板（D21）~~ **已定案**（D21 = 方案 A，2026-09-16） | 已消除：`insight` 依赖 gpui-kit，视图落 `insight/src/insight_view.rs` + `ui.rs`；`panels/` 只负责装配与发命令 | ✅ 已定案 |
-| K9 | `get_column_insight_full` 并发超限时的**用户重试**由 UI 承担 | 批量场景体验 | Phase 2 批量串行 + 进度缓解 |
+| K9 | `get_column_insight_full` 并发超限时的**用户重试**由 UI 承担 | 批量场景体验 | ✅ 已修（Phase 2 / 2.2）：「评估全表」串行逐列，不会超限；进度逐列回填（D30） |
 | K10 | 内置规则的**基础统计耦合**（覆盖 `numeric-stats` 会连带影响列画像） | 用户误以为只影响「那条规则」 | 文档说明（本文件 §5.3 + 使用手册） |
 | K11 | `null-check` 规则的 `[[quality]] field = "null_rate"` 指向**不存在的输出字段**（其 `[[output]]` 只有 `total_count` / `non_null_count` / `unique_count`）→ `actual == None`，而 `evaluate_quality` 在**只设 `max` 且 actual 为 None** 时不判定失败 → 该质量门控**永不触发**（静默通过） | 中：用户以为有门控，实际没有 | 待决策：补 `null_rate` 输出字段 / 改 `field` / 让「字段不存在」报错而不是静默通过（倾向后者） |
 | K12 | `quality-score` 规则用 `value_type = "str"`，该值**不在支持列表**中，靠 `match` 的兜底分支当成 `String` 处理而侥幸工作 | 中：`value_type` 写错时不会报「未知类型」，而是在读取时报出难以归因的错误（如把 DOUBLE 列当 String 读） | 待决策：解析期校验 `value_type` 白名单（与 `deny_unknown_fields` 同一立场：早失败优于静默错） |

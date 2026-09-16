@@ -12,7 +12,7 @@
 
 use gpui_kit::{AppContext as _, TestAppContext};
 use insight::insight_engine::get_or_create_duckdb;
-use insight::{ColumnKind, InsightPanelState, InsightTarget, InsightView};
+use insight::{ColumnKind, InsightPanelState, InsightTarget, InsightView, PanelData};
 use insight::jobs::{ProfileRequest, request_profile};
 
 /// 建临时表并插数据（表名唯一：DuckDB 连接是进程级单例）
@@ -36,7 +36,7 @@ fn column_target(temp_table: &str) -> InsightTarget {
 }
 
 fn request_of(temp_table: &str) -> ProfileRequest {
-    ProfileRequest {
+    ProfileRequest::Column {
         temp_table: temp_table.to_string(),
         column: "amount".into(),
     }
@@ -61,7 +61,7 @@ fn profile_request_fills_the_panel(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     cx.update(|cx| match view.read(cx).state() {
-        InsightPanelState::Data(profile) => {
+        InsightPanelState::Data(PanelData::Column(profile)) => {
             assert_eq!(profile.column, "amount");
             assert_eq!(profile.kind, ColumnKind::Numeric);
             assert_eq!(profile.total_count, 12);

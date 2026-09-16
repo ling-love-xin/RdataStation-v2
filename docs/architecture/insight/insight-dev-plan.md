@@ -23,7 +23,30 @@
 
 ## 0. 进度记录（最近在前）
 
-### 2026-09-16 — Phase 2 第二批：规则管理对话框（2.3 + 2.4）
+### 2026-09-17 — Phase 3 一批：表探查 + 评估全表（3.1 + 3.4 + 2.2）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **160 项** + 集成 **6 项**全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 表内省 | `get_temp_table_profile(_on)`：`DESCRIBE` + `COUNT(*)` → 列元数据与行数。走临时表而不是源库（面板的表目标只有 `temp_table`），也不按 catalog 过滤（`ATTACH` 进来的表不得混入）——**D29** | `insight_engine.rs` |
+| 视图模型 | `TableProfileView` / `TableColumnView` / `TableQualityView` / `TableEvalProgress`；`PanelData::Column | Table` 取代「数据态只装列画像」 | `model.rs` |
+| 表 Tab | 表头（表名 + 行数）+ 评估入口 + 表级质量卡 + 进度行 + 列元数据表（序号 / 列名【PK】/ 类型 / 可空 / 质量）+ 底部**实际**口径；未评估显示 `—`，不产假分数 | `insight_view.rs` |
+| 评估全表 | **串行逐列**、每列单独回填（**D30**）：真进度而不是转动图标；单列失败直接报错，不静默跳列。表级摘要与列分数同源（`compute_table_quality`） | `jobs.rs` |
+| 列名下钻 | 表 → 列（点列名切「列」Tab，目标持 `temp_table` + 列名 + 类型） | `insight_view.rs` |
+| 类型族归位 | 四个判定谓词自 `insight_engine` 迁到 `model`（**唯一来源**）：列画像的分派与表探查的徐标共用，依赖方向变单一（算法层 → 领域词汇） | `model.rs` / `insight_engine.rs` |
+| 测试 | 视图模型 6（列 / 无假分 / 进度单调且不丢分 / 摘要与问题列数 / 行数缩写 / 进度边界）+ 内省 2（真 DuckDB：列序与行数、不存在的表报错）+ 接缝 2（表目标→探查回填；评估的进度序列断言有中间态）+ 窗口 1（四类评估状态逐帧）+ 集成 2（真 DuckDB 表探查、评估逐列打分） | 各文件测试模块 |
+
+**测试踩的坑**：观察者（`cx.observe`）的订阅必须由**外层**持有——写在 `cx.update(\|cx\| { let _obs = … })` 里会随闭包一起析构，表现是「进度序列为空」而功能其实正常。
+
+**与原型的两处**（原型已加修正说明）：① 底部写的是**实际**口径（全量统计 + 样本前 5 行），不照搬原型的「500 行采样」（**D31**）；② `PK` 角标只在元数据真带主键时出现，从查询结果建的临时表通常没有。
+
+**待接线**：宿主入口 `Shared::open_insight_table`（与 `open_insight_column` 同形，一行）——本次未改 `panels/shared.rs`（该文件正在并行改动中）；导航右键「查看统计」与结果集入口因此还没接上。
+
+**下一批**：Phase 3.2/3.3（多列分析重新设计：列清单改取真实列元数据 + 规则选择与结果渲染）。
+
+
+### 2026-09-16 — Phase 2 二批：规则管理对话框（2.3 + 2.4）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **147 项** + 集成 4 项全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿；本批文件 `cargo clippy --all-targets` 零告警）
 
@@ -42,7 +65,7 @@
 
 **与原型的两处**（已在 §5 标注）：① 新建入口除「＋ 新建项目规则」外，全局分组在目录缺失时也给「创建目录并新建规则」（K7 的落地形态）；② 启停开关是**受控**的（先就地翻位、后台落库失败时回填真值并把原因挂在状态行），不静默丢掉失败。
 
-**下一批**：2.2 表级「评估全表」+ 进度（需先有表探查视图，与 Phase 3.1 合并推进更适合）。
+**下一批**：2.2 表级「评估全表」+ 进度——已于 Phase 3 一批与表探查视图合并落地（入口在表探查上）。
 
 
 ### 2026-09-16 — Phase 2 第一批：质量评分卡（列级）
@@ -490,7 +513,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | # | 任务 | 落点 | 状态 |
 | --- | --- | --- | --- |
 | 2.1 | 质量评分卡：总分 + 等级取色（85 / 70 / 50 / 30 四档）+ 四维进度条（权重 .35 / .25 / .20 / .20） | `insight/src/{quality_scorer,model,insight_view,ui}.rs` | ✅ 第一批 |
-| 2.2 | 表级质量聚合：「评估全表」→ `TableQuality` + 逐步进度（避免撞并发上限） | `insight/src/service/mod.rs` | ⬜ 与 Phase 3.1 合并（入口在表探查视图上） |
+| 2.2 | 表级质量聚合：「评估全表」→ `TableQuality` + 逐步进度（避免撞并发上限） | `insight/src/service/mod.rs`、`jobs.rs` | ✅ Phase 3 一批（入口在表探查上） |
 | 2.3 | 规则管理视图：三层分组列表 + 启停开关 + 校验错误行 + 打开规则文件 | `insight/src/rule_view.rs`（新文件） | ✅ 第二批 |
 | 2.4 | 用户全局规则目录的创建与管理（首次写入时建目录） | `insight/src/service/indexer.rs` | ✅ 第二批 |
 
@@ -498,12 +521,12 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 
 ### Phase 3 — 表探查与多列分析
 
-| # | 任务 | 落点 |
-| --- | --- | --- |
-| 3.1 | 表探查视图：列元数据表（序号 / 列名 + PK 角标 / 类型 / 可空 / 质量分）+ 行数 + 评估入口 | `insight/src/insight_view.rs` |
-| 3.2 | 多列分析**重新设计**：列清单来源改为「当前结果集 / DuckDB 临时表的真实列元数据」（v1 的 `availableColumns` 恒空是该项从未跑通的根因） | `insight/src/service/mod.rs` |
-| 3.3 | 规则选择与结果渲染：单值 KV / `result_type = "list"` 表格 | `insight/src/insight_view.rs` |
-| 3.4 | 表探查 → 列画像下钻（点列名） | 同上 |
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| 3.1 | 表探查视图：列元数据表（序号 / 列名 + PK 角标 / 类型 / 可空 / 质量分）+ 行数 + 评估入口 | `insight/src/insight_view.rs` | ✅ Phase 3 一批 |
+| 3.2 | 多列分析**重新设计**：列清单来源改为「当前结果集 / DuckDB 临时表的真实列元数据」（v1 的 `availableColumns` 恒空是该项从未跑通的根因） | `insight/src/service/mod.rs` | ⬜ |
+| 3.3 | 规则选择与结果渲染：单值 KV / `result_type = "list"` 表格 | `insight/src/insight_view.rs` | ⬜ |
+| 3.4 | 表探查 → 列画像下钻（点列名） | 同上 | ✅ Phase 3 一批 |
 
 ### Phase 4 — Schema 洞察报告
 

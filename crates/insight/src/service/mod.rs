@@ -32,7 +32,7 @@ use engine::persistence::ProjectDatabaseManager;
 use shared::error::{CommonError, CoreError};
 
 use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableProfile, TableQuality};
-use crate::model::ColumnProfileView;
+use crate::model::{ColumnProfileView, TableProfileView};
 use crate::rule::RuleScope;
 use crate::rule_types::RuleMeta;
 use crate::rule_view::{build_rules_data, RuleDataInput, RulesData};
@@ -98,6 +98,25 @@ impl InsightService {
     ) -> Result<ColumnProfileView, CoreError> {
         let full = Self::get_column_insight_full(project_root, temp_table, column_name)?;
         Ok(ColumnProfileView::from_domain(&full))
+    }
+
+    // ==================== 表探查（Phase 3.1） ====================
+
+    /// 表探查（Tab「表」）：临时表内省 → 视图模型。
+    ///
+    /// **不跑规则**：表探查只看元数据与行数；逐列规则统计是「评估全表」的事
+    /// （那一步很贵，必须由用户显式发起，进度也要可见）。
+    ///
+    /// `project_root` 目前不被使用（表探查不依赖规则集），保留形参是为了与
+    /// 列画像门面保持一致的调用口径——将来表级取样规则要分项目时不用改签名。
+    pub fn profile_table_view(
+        project_root: Option<&Path>,
+        temp_table: &str,
+        table_name: &str,
+    ) -> Result<TableProfileView, CoreError> {
+        let _ = project_root;
+        let profile = crate::insight_engine::get_temp_table_profile(temp_table)?;
+        Ok(TableProfileView::from_profile(&profile, table_name))
     }
 
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。

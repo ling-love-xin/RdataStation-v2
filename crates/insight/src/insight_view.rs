@@ -29,7 +29,8 @@ use gpui_kit::*;
 use crate::commands::InsightRefresh;
 use crate::model::{
     ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, InsightPanelState,
-    InsightTarget, NoteLevel, PanelTab, QualityNote, SampleCell, StatRow,
+    InsightTarget, NoteLevel, PanelData, PanelTab, QualityNote, SampleCell, StatRow,
+    TableColumnView, TableProfileView,
 };
 use crate::quality_scorer::Grade;
 use crate::rule_view::RulesView;
@@ -46,6 +47,14 @@ pub enum InsightEvent {
     /// 带 payload 而不让宿主回读面板状态：宿主拿到事件就能直接开工，
     /// 不必再持面板实体（也避开了「读实体时它正在被更新」的租借冲突）。
     ProfileRequested { target: InsightTarget },
+    /// 请宿主评估整表质量（逐列串行 + 进度回填）。
+    ///
+    /// 只带 `temp_table`：列清单由接缝在后台现读（元数据可能已变，
+    /// 而带着一份可能过期的列名去跑统计，失败会指向不存在的那一列）。
+    TableEvaluateRequested {
+        temp_table: String,
+        table_name: String,
+    },
 }
 
 /// 列画像四区（顺序即渲染顺序）
@@ -160,9 +169,38 @@ impl InsightView {
         cx.notify();
     }
 
-    /// 出数
+    /// 出数（列画像）
     pub fn set_profile(&mut self, profile: ColumnProfileView, cx: &mut Context<Self>) {
-        self.state = InsightPanelState::Data(profile);
+        self.state = InsightPanelState::Data(PanelData::Column(profile));
+        cx.notify();
+    }
+
+    /// 出数（表探查）
+    pub fn set_table_profile(&mut self, profile: TableProfileView, cx: &mut Context<Self>) {
+        self.state = InsightPanelState::Data(PanelData::Table(profile));
+        cx.notify();
+    }
+
+    /// 「评估全表」：发请求并进入评估中（按钮变灰、进度行出现）。
+    ///
+    /// 整表重算不把已有分数清空——列分数是逐列长出来的，清空会让面板闪一下空白。
+    pub fn request_table_evaluation(&mut self, cx: &mut Context<Self>) {
+        let Some(InsightTarget::Table {
+            temp_table,
+            table_name,
+        }) = self.target.clone()
+        else {
+            return;
+        };
+        if let InsightPanelState::Data(PanelData::Table(profile)) = &self.state {
+            let total = profile.columns.len();
+            let next = profile.evaluating(0, total);
+            self.state = InsightPanelState::Data(PanelData::Table(next));
+        }
+        cx.emit(InsightEvent::TableEvaluateRequested {
+            temp_table,
+            table_name,
+        });
         cx.notify();
     }
 
@@ -326,7 +364,7 @@ impl InsightView {
                     .child(detail),
             );
         }
-        if let InsightPanelState::Data(profile) = &self.state {
+        if let Some(profile) = self.state.column() {
             head = head.child(
                 div()
                     .text_xs()
@@ -341,15 +379,23 @@ impl InsightView {
                     )),
             );
         }
+        if let Some(profile) = self.state.table() {
+            head = head.child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child(format!("{} 行", crate::model::fmt_rows(profile.row_count))),
+            );
+        }
         Some(head)
     }
 
     /// 当前数据的类型族（无数据时退回目标声明的类型字符串）
     fn data_kind(&self) -> ColumnKind {
-        match &self.state {
-            InsightPanelState::Data(profile) => profile.kind,
-            _ => ColumnKind::Unknown,
-        }
+        self.state
+            .column()
+            .map(|profile| profile.kind)
+            .unwrap_or(ColumnKind::Unknown)
     }
 
     fn render_tab_bar(&self, entity: &Entity<Self>, theme: &Theme) -> Div {
@@ -390,10 +436,25 @@ impl InsightView {
                 error_block(message, *retryable, entity.clone(), theme, inline_icon)
                     .into_any_element(),
             ],
-            (InsightPanelState::Data(profile), PanelTab::Column) => vec![
-                self.render_column_profile(profile, entity, theme, inline_icon)
-                    .into_any_element(),
-            ],
+            (InsightPanelState::Data(data), PanelTab::Column) => match data.as_column() {
+                Some(profile) => vec![self
+                    .render_column_profile(profile, entity, theme, inline_icon)
+                    .into_any_element()],
+                // 数据态里装的不是列表：按「本 Tab 尚无内容」处理，不硬塞
+                None => vec![
+                    empty_state(IconName::Info, tab_hint(self.tab), theme, empty_icon)
+                        .into_any_element(),
+                ],
+            },
+            (InsightPanelState::Data(data), PanelTab::Table) => match data.as_table() {
+                Some(profile) => vec![self
+                    .render_table_profile(profile, entity, theme, inline_icon)
+                    .into_any_element()],
+                None => vec![
+                    empty_state(IconName::Info, tab_hint(self.tab), theme, empty_icon)
+                        .into_any_element(),
+                ],
+            },
             // 其余 Tab 在后续期次落地：给期次提示，不显示假数据
             (InsightPanelState::Data(_), tab) => vec![
                 empty_state(IconName::Info, tab_hint(tab), theme, empty_icon).into_any_element(),
@@ -416,10 +477,7 @@ impl InsightView {
         if self.tab != PanelTab::Column {
             return None;
         }
-        let InsightPanelState::Data(profile) = &self.state else {
-            return None;
-        };
-        let score = profile.score.as_ref()?;
+        let score = self.state.column()?.score.as_ref()?;
         let colors = theme.colors;
         let color = grade_color(score.grade, theme);
 
@@ -458,6 +516,133 @@ impl InsightView {
                 .text_color(colors.muted_foreground)
                 .child(score.summary.clone()),
         ))
+    }
+
+    /// 表探查（Tab「表」，Phase 3.1）：列元数据表 + 行数 + 评估入口 + 表级质量。
+    ///
+    /// 列名是下钻热点（点它切到该列的「列」Tab）——表→列是用户最常走的下一步。
+    fn render_table_profile(
+        &self,
+        profile: &TableProfileView,
+        entity: &Entity<Self>,
+        theme: &Theme,
+        inline_icon: Pixels,
+    ) -> Div {
+        let colors = theme.colors;
+        let evaluating = profile.progress.is_some();
+
+        let mut body = div().v_flex().w_full().gap_2();
+
+        // 评估入口（串行逐列；评估中禁用，避免重复排队撞并发上限）
+        body = body.child(
+            div().h_flex().w_full().gap_2().child(div().flex_1()).child(
+                Button::new("insight-eval-table")
+                    .small()
+                    .icon(if evaluating {
+                        IconName::RotateCw
+                    } else {
+                        IconName::TriangleAlert
+                    })
+                    .label(if evaluating { "评估中…" } else { "评估全表" })
+                    .disabled(evaluating || profile.columns.is_empty())
+                    .tooltip("逐列串行评分（避免撞后端并发上限），进度会一列列回填")
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, app| {
+                            entity.update(app, |view, cx| view.request_table_evaluation(cx))
+                        }
+                    }),
+            ),
+        );
+
+        // 表级质量：评估完才有（没评估就是没有，不是 0 分）
+        if let Some(quality) = &profile.quality {
+            let color = grade_color(quality.grade, theme);
+            body = body.child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .gap_1()
+                    .p_2()
+                    .rounded_sm()
+                    .bg(colors.list_hover)
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(rems(ui::INSIGHT_SCORE_FONT * 0.75))
+                                    .text_color(color)
+                                    .child(format!("{:.0}", quality.overall)),
+                            )
+                            .child(div().text_xs().text_color(color).child(quality.grade.label()))
+                            .child(div().flex_1().min_w_0().text_xs().text_ellipsis().child(
+                                if quality.problem_columns > 0 {
+                                    format!("{} 列需关注", quality.problem_columns)
+                                } else {
+                                    "无问题列".to_string()
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(colors.muted_foreground)
+                            .child(quality.summary.clone()),
+                    ),
+            );
+        }
+
+        // 进度行（进行中）：进度条 + 文字，让用户知道还在动
+        if let Some(progress) = profile.progress {
+            body = body.child(
+                div()
+                    .v_flex()
+                    .w_full()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(colors.muted_foreground)
+                            .child(format!("正在评估 {}/{} 列…", progress.done, progress.total)),
+                    )
+                    .child(ratio_bar(
+                        progress.ratio(),
+                        ui::INSIGHT_RATIO_BAR_HEIGHT,
+                        colors.primary,
+                        theme,
+                    )),
+            );
+        }
+
+        // 列元数据表：# 列名（PK） / 类型 / 可空 / 质量
+        body = body.child(table_header_row(theme));
+        if profile.columns.is_empty() {
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(colors.muted_foreground)
+                    .child("该临时表没有可见的列"),
+            );
+        }
+        for column in &profile.columns {
+            body = body.child(table_column_row(
+                profile,
+                column,
+                entity,
+                theme,
+                inline_icon,
+            ));
+        }
+
+        // 采样口径必须常驻：口径写错比不写更坏——这里写的是**实际**口径
+        body.child(
+            div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child("行数与质量分基于全量统计；样本值为前 5 行，直方图至少 10 行"),
+        )
     }
 
     /// 列画像四区
@@ -623,6 +808,147 @@ fn ratio_bar(ratio: f32, height: f32, fill: Hsla, theme: &Theme) -> Div {
         )
 }
 
+/// 表探查的表头行
+fn table_header_row(theme: &Theme) -> Div {
+    let colors = theme.colors;
+    div()
+        .h_flex()
+        .w_full()
+        .gap_2()
+        .px_1()
+        .py_0p5()
+        .bg(colors.list_hover)
+        .text_xs()
+        .text_color(colors.muted_foreground)
+        .child(div().w(rems(ui::INSIGHT_TABLE_INDEX_WIDTH)).child("#"))
+        .child(div().flex_1().min_w_0().child("列名"))
+        .child(
+            div()
+                .w(rems(ui::INSIGHT_TABLE_TYPE_WIDTH))
+                .text_ellipsis()
+                .child("类型"),
+        )
+        .child(div().w(rems(ui::INSIGHT_TABLE_FLAG_WIDTH)).child("可空"))
+        .child(
+            div()
+                .w(rems(ui::INSIGHT_TABLE_QUALITY_WIDTH))
+                .child("质量"),
+        )
+}
+
+/// 表探查的一行：列名为下钻热点（点击切到该列的「列」Tab）
+fn table_column_row(
+    profile: &TableProfileView,
+    column: &TableColumnView,
+    entity: &Entity<InsightView>,
+    theme: &Theme,
+    inline_icon: Pixels,
+) -> Div {
+    let colors = theme.colors;
+    let quality = match (column.score, column.grade()) {
+        (Some(score), Some(grade)) => div()
+            .text_color(grade_color(grade, theme))
+            .child(format!("{:.0} {}", score, grade.label())),
+        _ => div().text_color(colors.muted_foreground).child("—"),
+    };
+
+    let mut row = div()
+        .h_flex()
+        .w_full()
+        .gap_2()
+        .h(rems(ui::ROW_HEIGHT))
+        .px_1()
+        .child(
+            div()
+                .w(rems(ui::INSIGHT_TABLE_INDEX_WIDTH))
+                .text_color(colors.muted_foreground)
+                .child(column.index.to_string()),
+        )
+        .child(
+            div()
+                .h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    // 列名用 Button（ghost、无内距）：白搓 div 会丢 hover / 键盘 / a11y
+                    Button::new(ElementId::Name(
+                        format!("insight-table-col-{}", column.name).into(),
+                    ))
+                    .ghost()
+                    .xsmall()
+                    .label(column.name.clone())
+                    .tooltip("看这一列的画像")
+                    .on_click({
+                        let entity = entity.clone();
+                        let next = column.clone();
+                        let temp_table = profile.table_name.clone();
+                        move |_, _, app| {
+                            entity.update(app, |view, cx| {
+                                // 表头里的临时表名与目标一致：目标已换时以当前目标为准
+                                let temp = match &view.target {
+                                    Some(InsightTarget::Table { temp_table, .. }) => temp_table.clone(),
+                                    _ => temp_table.clone(),
+                                };
+                                view.set_target(
+                                    InsightTarget::Column {
+                                        temp_table: temp,
+                                        column: next.name.clone(),
+                                        data_type: next.data_type.clone(),
+                                    },
+                                    cx,
+                                );
+                            });
+                        }
+                    }),
+                )
+                .child(if column.primary_key {
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(colors.info)
+                        .child("PK")
+                } else {
+                    div()
+                }),
+        )
+        .child(
+            div()
+                .w(rems(ui::INSIGHT_TABLE_TYPE_WIDTH))
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .text_ellipsis()
+                .child(column.data_type.clone()),
+        )
+        .child(
+            div()
+                .w(rems(ui::INSIGHT_TABLE_FLAG_WIDTH))
+                .text_xs()
+                .text_color(if column.nullable {
+                    colors.muted_foreground
+                } else {
+                    colors.foreground
+                })
+                .child(if column.nullable { "YES" } else { "NO" }),
+        )
+        .child(
+            div()
+                .w(rems(ui::INSIGHT_TABLE_QUALITY_WIDTH))
+                .text_xs()
+                .child(quality),
+        );
+
+    // 类型未识别：给一个可点的提示（不是所有列都能算质量）
+    if column.kind == ColumnKind::Unknown {
+        row = row.child(
+            Icon::new(IconName::Info)
+                .size(inline_icon)
+                .text_color(colors.muted_foreground),
+        );
+    }
+    row
+}
+
 fn zone_title(title: &str, theme: &Theme) -> Div {
     div()
         .text_size(rems(ui::INSIGHT_SECTION_TITLE_FONT))
@@ -634,7 +960,7 @@ fn zone_title(title: &str, theme: &Theme) -> Div {
 fn tab_hint(tab: PanelTab) -> &'static str {
     match tab {
         PanelTab::Column => "右键结果表中的列，查看列画像",
-        PanelTab::Table => "表探查将在 Phase 3 落地",
+        PanelTab::Table => "右键表（或结果集）选择「查看统计」",
         PanelTab::MultiColumn => "多列分析将在 Phase 3 落地",
         PanelTab::Schema => "结构洞察将在 Phase 4 落地",
         PanelTab::History => "快照历史将在 Phase 5 落地",
@@ -930,12 +1256,51 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::{truncate, InsightView};
-    use crate::model::{ColumnProfileView, InsightPanelState, InsightTarget, PanelTab};
+    use crate::model::{
+        ColumnProfileView, InsightPanelState, InsightTarget, PanelTab, TableProfileView,
+    };
     // 领域类型从 crate 根再导出引用（`model.rs` 里对 `types` 的 `use` 是私有的）
     use crate::{
-        BooleanStats, ColumnInsightFull, ColumnStats, ColumnStatsDetail, DateTimeStats,
-        DistributionBin, NumericStats, TextFrequency, TextStats,
+        BooleanStats, ColumnInsightFull, ColumnQualityEntry, ColumnStats, ColumnStatsDetail,
+        DateTimeStats, DistributionBin, NumericStats, TableColumnMeta, TableProfile, TableQuality,
+        TextFrequency, TextStats,
     };
+
+    /// 三列表（数值 / 数值 / 未识别）——表探查的典型形态
+    fn table_view() -> TableProfileView {
+        TableProfileView::from_profile(
+            &TableProfile {
+                table_name: "t_insight_view_table".into(),
+                db_type: "DuckDB".into(),
+                columns: vec![
+                    TableColumnMeta {
+                        column_name: "id".into(),
+                        data_type: "BIGINT".into(),
+                        is_nullable: false,
+                        is_primary_key: true,
+                        ordinal_position: 1,
+                    },
+                    TableColumnMeta {
+                        column_name: "amount".into(),
+                        data_type: "DECIMAL(12,2)".into(),
+                        is_nullable: true,
+                        is_primary_key: false,
+                        ordinal_position: 2,
+                    },
+                    TableColumnMeta {
+                        column_name: "payload".into(),
+                        data_type: "BLOB".into(),
+                        is_nullable: true,
+                        is_primary_key: false,
+                        ordinal_position: 3,
+                    },
+                ],
+                row_count: Some(124_000),
+                schema_name: None,
+            },
+            "orders",
+        )
+    }
 
     fn column_target() -> InsightTarget {
         InsightTarget::Column {
@@ -1199,6 +1564,94 @@ mod tests {
                 window.draw(cx).clear(cx);
             });
         }
+    }
+
+    /// 表探查（Tab「表」）：四类状态（未评估 / 评估中 / 评估完 / 空列清单）都能渲染一帧。
+    ///
+    /// 四种都由**同一份视图模型**的不同字段组合而成，所以这里逐帧画过去；
+    /// 顺带盖住列名下钻热点（点它切到「列」Tab）。
+    #[gpui_kit::test]
+    fn table_tab_renders_every_evaluation_state(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let draw = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        };
+
+        let base = table_view();
+        let temp_table = "t_insight_view_table".to_string();
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_target(
+                    InsightTarget::Table {
+                        temp_table: temp_table.clone(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+                // 1) 刚探查出来：有列清单、没有分数
+                view.set_table_profile(base.clone(), cx);
+            });
+        });
+        draw(cx);
+        view.update(cx, |view, _| {
+            assert_eq!(view.tab(), PanelTab::Table, "表目标应落到「表」Tab");
+            let table = view.state().table().expect("表探查数据）；");
+            assert!(table.columns.iter().all(|c| c.score.is_none()));
+        });
+
+        // 2) 评估中：进度行 + 已算出的分数
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_table_profile(base.with_column_score("id", 95.0).evaluating(1, 3), cx)
+            });
+        });
+        draw(cx);
+
+        // 3) 评估完：表级摘要 + 每列分数
+        let quality = TableQuality {
+            table_name: "orders".into(),
+            overall_score: 72.0,
+            level: "良好".into(),
+            column_scores: vec![ColumnQualityEntry {
+                column_name: "id".into(),
+                quality_score: 95.0,
+                level: "优秀".into(),
+                null_rate: 0.0,
+            }],
+            summary: "表质量良好 (72分)，3 列已评估".into(),
+            scored_count: 3,
+            total_columns: 3,
+        };
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_table_profile(base.evaluating(3, 3).evaluated(&quality), cx)
+            });
+        });
+        draw(cx);
+        view.update(cx, |view, _| {
+            let table = view.state().table().unwrap();
+            assert!(table.quality.is_some());
+            assert!(table.progress.is_none());
+        });
+
+        // 4) 空列清单：不渲染半截表头也不 panic
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                let empty = TableProfileView::from_profile(
+                    &TableProfile {
+                        table_name: temp_table.clone(),
+                        db_type: "DuckDB".into(),
+                        columns: Vec::new(),
+                        row_count: None,
+                        schema_name: None,
+                    },
+                    "empty_table",
+                );
+                view.set_table_profile(empty, cx);
+            });
+        });
+        draw(cx);
     }
 
     #[test]

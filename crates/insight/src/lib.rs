@@ -50,7 +50,7 @@ pub use model::types::{
 };
 pub use store::{ProjectInsightStores, InsightMetaStore, InsightSnapshotMeta, InsightStorage};
 
-pub use insight_engine::detect_extremes;
+pub use insight_engine::{detect_extremes, get_temp_table_profile};
 pub use rule::{RuleLoadFailure, RuleScope, RuleSource};
 pub use rule_executor::RuleExecutor;
 pub use rule_registry::{
@@ -76,7 +76,8 @@ pub use store::{
 pub use insight_view::{InsightEvent, InsightView};
 pub use model::{
     ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, InsightPanelState,
-    InsightTarget, NoteLevel, PanelTab, QualityNote, SampleCell, ScoreView, StatRow,
+    InsightTarget, NoteLevel, PanelData, PanelTab, QualityNote, SampleCell, ScoreView, StatRow,
+    TableColumnView, TableEvalProgress, TableProfileView, TableQualityView,
 };
 pub use quality_scorer::Grade;
 pub use rule_view::{

@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 
 use types::{
     BooleanStats, ColumnInsightFull, ColumnStatsDetail, DateTimeStats, NumericStats, QualityScore,
-    TextStats,
+    TableProfile, TableQuality, TextStats,
 };
 
 // 等级是 `quality_scorer` 的定义（阈值与文案的唯一来源），这里只借用类型
@@ -160,7 +160,33 @@ pub enum InsightPanelState {
         /// 是否值得让用户重试（临时表失效 / 连接断开可重试；语法类错误不可）
         retryable: bool,
     },
-    Data(ColumnProfileView),
+    Data(PanelData),
+}
+
+/// 数据态里装的是什么：目标种类决定渲染哪一支。
+///
+/// 四种目标（列 / 表 / 多列 / 结构）各有自己的视图模型，因此 `Data` 必须是和类型——
+/// 「数据态只装列画像」在 Phase 3 起就不够用了。
+#[derive(Debug, Clone, PartialEq)]
+pub enum PanelData {
+    Column(ColumnProfileView),
+    Table(TableProfileView),
+}
+
+impl PanelData {
+    pub fn as_column(&self) -> Option<&ColumnProfileView> {
+        match self {
+            PanelData::Column(profile) => Some(profile),
+            PanelData::Table(_) => None,
+        }
+    }
+
+    pub fn as_table(&self) -> Option<&TableProfileView> {
+        match self {
+            PanelData::Table(profile) => Some(profile),
+            PanelData::Column(_) => None,
+        }
+    }
 }
 
 impl InsightPanelState {
@@ -177,6 +203,22 @@ impl InsightPanelState {
     /// 已出数
     pub fn is_data(&self) -> bool {
         matches!(self, InsightPanelState::Data(_))
+    }
+
+    /// 数据态里的列画像（不是列画像则为 `None`）
+    pub fn column(&self) -> Option<&ColumnProfileView> {
+        match self {
+            InsightPanelState::Data(data) => data.as_column(),
+            _ => None,
+        }
+    }
+
+    /// 数据态里的表探查（不是表探查则为 `None`）
+    pub fn table(&self) -> Option<&TableProfileView> {
+        match self {
+            InsightPanelState::Data(data) => data.as_table(),
+            _ => None,
+        }
     }
 }
 
@@ -214,6 +256,82 @@ impl ColumnKind {
             ColumnKind::Unknown => "未识别",
         }
     }
+
+    /// 由**类型名**推类型族（表探查只拿得到元数据，没有统计结果可看）。
+    ///
+    /// 判定复用 [`is_numeric_type`] 等谓词：它们与列画像的分派共用一套口径，
+    /// 两处各写一份「什么算数值」迟早分岔。
+    pub fn of_type_name(data_type: &str) -> Self {
+        let dt = data_type.to_lowercase();
+        if is_numeric_type(&dt) {
+            ColumnKind::Numeric
+        } else if is_datetime_type(&dt) {
+            ColumnKind::DateTime
+        } else if dt == "boolean" || dt == "bool" {
+            ColumnKind::Boolean
+        } else if dt.is_empty() || is_binary_type(&dt) || is_array_type(&dt) {
+            // 二进制 / 数组族不参与列统计，与列画像的 `Unknown` 同口径
+            ColumnKind::Unknown
+        } else {
+            ColumnKind::Text
+        }
+    }
+}
+
+// ==================== 类型族判定（唯一来源） ====================
+//
+// 归属变更（Phase 3.1）：自 `insight_engine` 迁入。它同时服务两处消费者——
+// 列画像（决定走哪套统计规则）与表探查（列的类型徽标），而两者都在本文件下游；
+// 放进 `model` 后依赖方向变得单一（算法层 → 领域词汇），不再反向。
+//
+// `typeof()` 会带参数或后缀（`DECIMAL(12,2)` / `VARCHAR(255)` / `TIMESTAMP WITH TIME ZONE` /
+// `TIMESTAMP_NS`），所以先取基名再比较：精确比较曾把 **DECIMAL 列当文本列**统计。
+
+/// 取类型基名（去参数与后缀）
+pub fn type_base(dt_lower: &str) -> &str {
+    dt_lower.split(['(', ' ']).next().unwrap_or(dt_lower).trim()
+}
+
+/// 数值族（含无符号整型：自 Parquet / 外部源读入的列可能是 `UBIGINT` 等）
+pub fn is_numeric_type(dt_lower: &str) -> bool {
+    matches!(
+        type_base(dt_lower),
+        "bigint"
+            | "integer"
+            | "int"
+            | "smallint"
+            | "tinyint"
+            | "double"
+            | "float"
+            | "hugeint"
+            | "decimal"
+            | "numeric"
+            | "real"
+            | "utinyint"
+            | "usmallint"
+            | "uinteger"
+            | "ubigint"
+    )
+}
+
+/// 时间族。按**前缀**判而不是基名：`timestamp_ns` / `timestamp_us` 的基名仍是它自己，
+/// 但它们都是时间戳。
+pub fn is_datetime_type(dt_lower: &str) -> bool {
+    let base = type_base(dt_lower);
+    base == "date" || base == "datetime" || base.starts_with("timestamp") || base.starts_with("time")
+}
+
+/// 二进制族（不参与列统计）
+pub fn is_binary_type(dt_lower: &str) -> bool {
+    matches!(type_base(dt_lower), "blob" | "bytea" | "binary" | "varbinary")
+}
+
+/// 数组族：DuckDB 的 `INTEGER[]`，以及外部源的 `ARRAY` / `LIST` 写法
+pub fn is_array_type(dt_lower: &str) -> bool {
+    dt_lower.starts_with('[')
+        || dt_lower.ends_with(']')
+        || dt_lower.contains("list")
+        || dt_lower.contains("array")
 }
 
 /// 值的强调语义（视图映射到主题角色，模型不持色值）
@@ -284,6 +402,140 @@ pub struct DimensionView {
     /// 权重（四维合计 1.0）
     pub weight: f64,
     pub detail: String,
+}
+
+// ==================== 表探查视图模型（Phase 3.1） ====================
+
+/// 表探查（「表」Tab）：列元数据表 + 行数 + 表级质量（评估后才有）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableProfileView {
+    /// 逻辑表名（目标里的 `table_name`，用于展示与快照归属）
+    pub table_name: String,
+    /// 数据源标签（当前恒为「DuckDB 临时表」：面板只认临时表，见 D20）
+    pub source_label: &'static str,
+    pub row_count: u64,
+    pub columns: Vec<TableColumnView>,
+    /// 表级质量：`None` = 还没「评估全表」（不是 0 分）
+    pub quality: Option<TableQualityView>,
+    /// 评估进度：进行中才有
+    pub progress: Option<TableEvalProgress>,
+}
+
+/// 表探查里的一列
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableColumnView {
+    /// 序号（从 1 起，与元数据里的 `ordinal_position` 一致）
+    pub index: i32,
+    pub name: String,
+    pub data_type: String,
+    pub kind: ColumnKind,
+    pub nullable: bool,
+    pub primary_key: bool,
+    /// 该列的质量分：未评估为 `None`（不显示假分值）
+    pub score: Option<f64>,
+}
+
+impl TableColumnView {
+    pub fn grade(&self) -> Option<Grade> {
+        self.score.map(Grade::of)
+    }
+}
+
+/// 表级质量摘要（由各列分数聚合而来）
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableQualityView {
+    pub overall: f64,
+    pub grade: Grade,
+    pub summary: String,
+    /// 评分低于 [`TABLE_PROBLEM_SCORE`] 的列数
+    pub problem_columns: usize,
+    pub scored_columns: usize,
+}
+
+/// 「评估全表」的进度（串行评分，避免撞后端并发上限）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableEvalProgress {
+    pub done: usize,
+    pub total: usize,
+}
+
+impl TableEvalProgress {
+    pub fn ratio(&self) -> f32 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        (self.done as f32 / self.total as f32).clamp(0.0, 1.0)
+    }
+}
+
+/// 表级「需要关注」的分数阀：与评分卡四档同源（低于「一般」即算问题列）
+pub const TABLE_PROBLEM_SCORE: f64 = 50.0;
+
+impl TableProfileView {
+    /// 从领域结果构建（纯函数）。
+    ///
+    /// 类型族由类型名推导：表探查只看元数据，不跑列级统计——
+    /// 那些统计要逐列过规则，正是「评估全表」要干的事。
+    pub fn from_profile(profile: &TableProfile, table_name: &str) -> Self {
+        let columns = profile
+            .columns
+            .iter()
+            .map(|column| TableColumnView {
+                index: column.ordinal_position,
+                name: column.column_name.clone(),
+                data_type: column.data_type.clone(),
+                kind: ColumnKind::of_type_name(&column.data_type),
+                nullable: column.is_nullable,
+                primary_key: column.is_primary_key,
+                score: None,
+            })
+            .collect();
+        Self {
+            table_name: table_name.to_string(),
+            source_label: "DuckDB 临时表",
+            row_count: profile.row_count.unwrap_or(0).max(0) as u64,
+            columns,
+            quality: None,
+            progress: None,
+        }
+    }
+
+    /// 评估进行中的中间态（不丢已有分数：用户看着分数一列列长出来）
+    pub fn evaluating(&self, done: usize, total: usize) -> Self {
+        let mut next = self.clone();
+        next.progress = Some(TableEvalProgress { done, total });
+        next
+    }
+
+    /// 写入一列的分数
+    pub fn with_column_score(&self, column: &str, score: f64) -> Self {
+        let mut next = self.clone();
+        if let Some(row) = next.columns.iter_mut().find(|row| row.name == column) {
+            row.score = Some(score);
+        }
+        next
+    }
+
+    /// 评估完成：写表级摘要。
+    ///
+    /// 列分数不在这里重算——它与 `compute_table_quality` 内部的打分同源
+    /// （都是 `compute_column_quality`），两处各算一次迟早在阈值上分岔。
+    pub fn evaluated(&self, quality: &TableQuality) -> Self {
+        let mut next = self.clone();
+        next.progress = None;
+        next.quality = Some(TableQualityView {
+            overall: quality.overall_score,
+            grade: Grade::of(quality.overall_score),
+            summary: quality.summary.clone(),
+            problem_columns: quality
+                .column_scores
+                .iter()
+                .filter(|entry| entry.quality_score < TABLE_PROBLEM_SCORE)
+                .count(),
+            scored_columns: quality.scored_count as usize,
+        });
+        next
+    }
 }
 
 /// 列画像（「列」Tab 的四区内容 + 目标头所需字段）
@@ -564,8 +816,8 @@ fn fill_boolean(view: &mut ColumnProfileView, b: &BooleanStats) {
 // ==================== 小工具 ====================
 
 /// 千分位整数（画像里的行数动辄百万，裸数字难读）
-pub fn fmt_int(v: u32) -> String {
-    let digits = v.to_string();
+pub fn fmt_int(n: u32) -> String {
+    let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, ch) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i) % 3 == 0 {
@@ -574,6 +826,21 @@ pub fn fmt_int(v: u32) -> String {
         out.push(ch);
     }
     out
+}
+
+/// 行数文案：万 / 亿 缩写（`124000` → `12.4 万`）
+///
+/// 只在**展示**上缩写：内部与快照里仍是精确值（`u64`），不给用户看“约”字。
+pub fn fmt_rows(n: u64) -> String {
+    const WAN: u64 = 10_000;
+    const YI: u64 = 100_000_000;
+    if n < WAN {
+        fmt_int(n as u32)
+    } else if n < YI {
+        format!("{:.1} 万", n as f64 / WAN as f64)
+    } else {
+        format!("{:.1} 亿", n as f64 / YI as f64)
+    }
 }
 
 /// 数值文案：整数不带小数点，小数最多 4 位且去尾零
@@ -632,7 +899,7 @@ fn sample_cells(sample: &[serde_json::Value]) -> Vec<SampleCell> {
 
 #[cfg(test)]
 mod tests {
-    use super::types::{DistributionBin, ExtremeValue, TextFrequency};
+    use super::types::{ColumnQualityEntry, DistributionBin, ExtremeValue, TableColumnMeta, TextFrequency};
     use super::*;
 
     fn base_stats(detail: ColumnStatsDetail) -> ColumnInsightFull {
@@ -895,6 +1162,180 @@ mod tests {
         assert_eq!(view.sample[0].index, 1);
         assert_eq!(view.sample[0].value.as_deref(), Some("abc"));
         assert_eq!(view.sample[1].value, None, "NULL 要显式表达，不能当空串");
+    }
+
+    /// DuckDB 的 `typeof()` 会带参数或后缀，精确比较会把列判错族
+    /// （曾把 `DECIMAL(12,2)` 当文本列做统计）
+    #[test]
+    fn parameterised_types_keep_their_family() {
+        assert!(is_numeric_type("decimal(12,2)"));
+        assert!(is_numeric_type("numeric(18,4)"));
+        assert!(is_numeric_type("bigint"));
+        // 无符号整型：自 Parquet / 外部源读入的列可能是这些
+        assert!(is_numeric_type("ubigint"));
+        assert!(is_numeric_type("utinyint"));
+
+        assert!(is_datetime_type("timestamp with time zone"));
+        assert!(is_datetime_type("timestamptz"));
+        assert!(is_datetime_type("timestamp_ns"));
+        assert!(is_datetime_type("time with time zone"));
+        assert!(is_datetime_type("date"));
+
+        assert!(is_binary_type("blob"));
+        assert!(is_array_type("integer[]"));
+        assert!(is_array_type("list"));
+    }
+
+    /// 文本族不得漏进其它族（否则会去做不可能的统计）
+    #[test]
+    fn text_like_types_stay_out_of_other_families() {
+        assert!(!is_numeric_type("varchar"));
+        assert!(!is_numeric_type("varchar(255)"));
+        assert!(!is_datetime_type("varchar"));
+        assert!(!is_binary_type("varchar"));
+        assert!(!is_array_type("varchar"));
+        // `timestamp` 开头但不是时间类型的反例不存在；保留一条边界：空串
+        assert!(!is_numeric_type(""));
+        assert!(!is_datetime_type(""));
+    }
+
+    /// 表探查只拿得到类型名：类型名 → 类型族要与列画像的路由同口径
+    #[test]
+    fn type_name_maps_to_the_same_families() {
+        assert_eq!(ColumnKind::of_type_name("DECIMAL(12,2)"), ColumnKind::Numeric);
+        assert_eq!(ColumnKind::of_type_name("BIGINT"), ColumnKind::Numeric);
+        assert_eq!(ColumnKind::of_type_name("TIMESTAMP_NS"), ColumnKind::DateTime);
+        assert_eq!(ColumnKind::of_type_name("BOOLEAN"), ColumnKind::Boolean);
+        assert_eq!(ColumnKind::of_type_name("VARCHAR(255)"), ColumnKind::Text);
+        assert_eq!(ColumnKind::of_type_name("BLOB"), ColumnKind::Unknown);
+        assert_eq!(ColumnKind::of_type_name("INTEGER[]"), ColumnKind::Unknown);
+        assert_eq!(ColumnKind::of_type_name(""), ColumnKind::Unknown);
+    }
+
+    // ==================== 表探查视图模型（Phase 3.1） ====================
+
+    fn table_profile_fixture() -> TableProfile {
+        TableProfile {
+            table_name: "t_result_1".into(),
+            db_type: "DuckDB".into(),
+            columns: vec![
+                TableColumnMeta {
+                    column_name: "id".into(),
+                    data_type: "BIGINT".into(),
+                    is_nullable: false,
+                    is_primary_key: true,
+                    ordinal_position: 1,
+                },
+                TableColumnMeta {
+                    column_name: "amount".into(),
+                    data_type: "DECIMAL(12,2)".into(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    ordinal_position: 2,
+                },
+                TableColumnMeta {
+                    column_name: "payload".into(),
+                    data_type: "BLOB".into(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    ordinal_position: 3,
+                },
+            ],
+            row_count: Some(124_000),
+            schema_name: None,
+        }
+    }
+
+    #[test]
+    fn table_view_lists_columns_with_families_and_no_fake_scores() {
+        let view = TableProfileView::from_profile(&table_profile_fixture(), "orders");
+        assert_eq!(view.table_name, "orders");
+        assert_eq!(view.row_count, 124_000);
+        assert_eq!(view.columns.len(), 3);
+        assert_eq!(view.columns[0].kind, ColumnKind::Numeric);
+        assert!(view.columns[0].primary_key);
+        assert!(!view.columns[0].nullable);
+        assert_eq!(view.columns[2].kind, ColumnKind::Unknown, "BLOB 不参与列统计");
+        assert!(
+            view.columns.iter().all(|c| c.score.is_none()),
+            "没评估就是没分，不给假分值"
+        );
+        assert!(view.quality.is_none());
+        assert!(view.progress.is_none());
+    }
+
+    #[test]
+    fn evaluation_progress_is_monotonic_and_keeps_scores() {
+        let base = TableProfileView::from_profile(&table_profile_fixture(), "orders");
+        let started = base.evaluating(0, 3);
+        assert_eq!(started.progress, Some(TableEvalProgress { done: 0, total: 3 }));
+        assert_eq!(started.progress.unwrap().ratio(), 0.0);
+
+        let one = started.with_column_score("id", 95.0);
+        let two = one
+            .with_column_score("amount", 72.0)
+            .evaluating(2, 3);
+        assert_eq!(two.columns[0].score, Some(95.0), "先算出来的分不得被覆盖");
+        assert_eq!(two.columns[1].score, Some(72.0));
+        assert_eq!(two.columns[0].grade(), Some(Grade::Excellent));
+        assert_eq!(two.columns[1].grade(), Some(Grade::Good));
+        assert_eq!(two.progress.unwrap().ratio(), 2.0 / 3.0);
+        assert!(two.columns[2].score.is_none());
+
+        // 未知列名不造行也不 panic（列清单可能刚变）
+        assert_eq!(two.with_column_score("不存在", 10.0).columns.len(), 3);
+    }
+
+    #[test]
+    fn evaluated_writes_the_summary_and_counts_problem_columns() {
+        let base = TableProfileView::from_profile(&table_profile_fixture(), "orders");
+        let quality = TableQuality {
+            table_name: "orders".into(),
+            overall_score: 68.4,
+            level: "一般".into(),
+            column_scores: vec![
+                ColumnQualityEntry {
+                    column_name: "payload".into(),
+                    quality_score: 30.0,
+                    level: "较差".into(),
+                    null_rate: 0.2,
+                },
+                ColumnQualityEntry {
+                    column_name: "amount".into(),
+                    quality_score: 72.0,
+                    level: "良好".into(),
+                    null_rate: 0.05,
+                },
+            ],
+            summary: "表质量一般 (68分)，2 列已评估 (1风险列)".into(),
+            scored_count: 2,
+            total_columns: 2,
+        };
+
+        let done = base.evaluating(2, 2).evaluated(&quality);
+        assert!(done.progress.is_none(), "评估完进度行必须消失");
+        let view = done.quality.expect("应有表级摘要");
+        assert_eq!(view.overall, 68.4);
+        assert_eq!(view.grade, Grade::Fair);
+        assert_eq!(view.problem_columns, 1, "低于 50 分才算问题列");
+        assert_eq!(view.scored_columns, 2);
+        assert!(view.summary.contains("一般"));
+    }
+
+    #[test]
+    fn row_count_formatting_switches_units() {
+        assert_eq!(fmt_rows(0), "0");
+        assert_eq!(fmt_rows(9_999), "9,999");
+        assert_eq!(fmt_rows(10_000), "1.0 万");
+        assert_eq!(fmt_rows(124_000), "12.4 万");
+        assert_eq!(fmt_rows(99_999_999), "10000.0 万");
+        assert_eq!(fmt_rows(100_000_000), "1.0 亿");
+    }
+
+    #[test]
+    fn empty_progress_ratio_is_zero_not_nan() {
+        assert_eq!(TableEvalProgress { done: 0, total: 0 }.ratio(), 0.0);
+        assert_eq!(TableEvalProgress { done: 5, total: 3 }.ratio(), 1.0);
     }
 
     #[test]

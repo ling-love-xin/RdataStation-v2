@@ -1,4 +1,4 @@
-//! 列画像**端到端**：真实 DuckDB 临时表 → 规则驱动统计 → 面板视图模型。
+//! 列画像与表探查的**端到端**：真实 DuckDB 临时表 → 规则驱动统计 → 面板视图模型。
 //!
 //! 为什么放在 `tests/`（集成测试）而不是 lib 单测：
 //! - 它要在**进程级 DuckDB 单例**（内存连接，`get_or_create_duckdb`）上建临时表。
@@ -9,7 +9,7 @@
 //! 不连任何外部数据库：DuckDB 是本地内存引擎，统计走内置的 18 条规则。
 //!
 //! **不覆盖**：时间列的统计（`compute_datetime_stats`）——它的规则 SQL 对数据形态更敏感，
-//! 留到 Phase 3 的表探查批次一起补，避免在这里用构造数据迁就实现。
+//! 留到后续批次一起补，避免在这里用构造数据迁就实现。
 
 use rds_insight::insight_engine::get_or_create_duckdb;
 use rds_insight::{ColumnKind, InsightService};
@@ -140,4 +140,70 @@ fn missing_result_set_is_reported_with_a_friendly_message() {
         "不得把内部错误码展示给用户：{}",
         info.message
     );
+}
+
+// ==================== 表探查（Phase 3.1 / 2.2） ====================
+
+/// 表探查：列元数据与行数来自 DuckDB，类型族按真实类型名判定，且**不产假分数**
+#[test]
+fn table_profile_lists_columns_without_fake_scores() {
+    let table = "t_insight_e2e_table";
+    seed(
+        table,
+        "id BIGINT, amount DECIMAL(12,2), note VARCHAR, payload BLOB",
+        "VALUES (1, 1.5, 'a', 'x'::BLOB), (2, NULL, NULL, 'y'::BLOB)",
+    );
+
+    let view = InsightService::profile_table_view(None, table, "orders").expect("表探查应成功");
+    assert_eq!(view.table_name, "orders", "展示名取目标里的逻辑名");
+    assert_eq!(view.row_count, 2);
+    let names: Vec<&str> = view.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["id", "amount", "note", "payload"]);
+    assert_eq!(view.columns[1].kind, ColumnKind::Numeric, "DECIMAL 归数值族");
+    assert_eq!(view.columns[2].kind, ColumnKind::Text);
+    assert_eq!(view.columns[3].kind, ColumnKind::Unknown, "BLOB 不参与列统计");
+    assert!(
+        view.columns.iter().all(|c| c.score.is_none()),
+        "只是探查：分数要等用户点「评估全表」"
+    );
+    assert!(view.quality.is_none());
+}
+
+/// 评估全表：逐列统计 → 每列分数 + 表级摘要。
+///
+/// 这条用例同时钉住「表级分数与列级分数同源」：`compute_table_quality` 内部逐列调用
+/// 同一个 `compute_column_quality`，所以列上的分数必须与摘要里的聚合对得上。
+#[test]
+fn table_evaluation_scores_every_column() {
+    let table = "t_insight_e2e_table_eval";
+    let rows: Vec<String> = (1..=12)
+        .map(|i| format!("({i}, {i}.5, 'v{i}')"))
+        .collect();
+    seed(
+        table,
+        "id BIGINT, amount DECIMAL(12,2), note VARCHAR",
+        &format!("VALUES {}", rows.join(",")),
+    );
+
+    let view = InsightService::profile_table_view(None, table, "orders").expect("表探查");
+    let mut evaluated = Vec::new();
+    for column in &view.columns {
+        let full = InsightService::get_column_insight_full(None, table, &column.name)
+            .expect("逐列统计");
+        evaluated.push(full);
+    }
+    let quality = InsightService::compute_table_quality("orders", &evaluated);
+    let done = view.evaluating(evaluated.len(), evaluated.len()).evaluated(&quality);
+
+    assert!(done.progress.is_none(), "评估完进度行必须消失");
+    let summary = done.quality.expect("应有表级摘要");
+    assert_eq!(summary.scored_columns, 3);
+    assert!(summary.summary.contains("表质量"), "摘要：{}", summary.summary);
+    // 全量非空、无重复的三列：分数应明显偏高（不写死具体数值，只钉区间关系）
+    assert!(
+        summary.overall > 50.0,
+        "干净数据不该被判成差：{}",
+        summary.overall
+    );
+    assert_eq!(summary.grade, rds_insight::Grade::of(summary.overall));
 }

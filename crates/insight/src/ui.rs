@@ -23,6 +23,14 @@ pub const INSIGHT_SECTION_TITLE_FONT: f32 = 0.75;
 pub const INSIGHT_SCORE_FONT: f32 = 1.75;
 /// 规则管理对话框宽度（40rem = 640px；三层分组 + 路径 + 错误原文要宽度）
 pub const INSIGHT_RULES_DIALOG_WIDTH: f32 = 40.0;
+/// 表探查：序号列宽（1.25rem = 20px）
+pub const INSIGHT_TABLE_INDEX_WIDTH: f32 = 1.25;
+/// 表探查：类型列宽（4.5rem = 72px）
+pub const INSIGHT_TABLE_TYPE_WIDTH: f32 = 4.5;
+/// 表探查：可空列宽（1.75rem = 28px，「YES / NO」）
+pub const INSIGHT_TABLE_FLAG_WIDTH: f32 = 1.75;
+/// 表探查：质量列宽（3.25rem = 52px，容得下「95 优秀」）
+pub const INSIGHT_TABLE_QUALITY_WIDTH: f32 = 3.25;
 
 // ===== 与外壳共用的结构尺寸（重导出）=====
 //

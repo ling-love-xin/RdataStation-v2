@@ -22,34 +22,45 @@ use std::path::{Path, PathBuf};
 use gpui_kit::{App, Context, Entity, Subscription};
 
 use crate::insight_view::{InsightEvent, InsightView};
-use crate::model::InsightTarget;
+use crate::model::{ColumnProfileView, InsightTarget, TableProfileView};
 use crate::rule::RuleScope;
 use crate::rule_view::{RulesEvent, RulesView};
 use crate::service::InsightService;
 
-/// 一次列画像请求：后台执行所需的全部输入（均为所有权数据，因此可跨线程）。
+/// 一次画像请求：后台执行所需的全部输入（均为所有权数据，因此可跨线程）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileRequest {
-    pub temp_table: String,
-    pub column: String,
+pub enum ProfileRequest {
+    Column {
+        temp_table: String,
+        column: String,
+    },
+    Table {
+        temp_table: String,
+        table_name: String,
+    },
 }
 
 impl ProfileRequest {
     /// 从面板目标解析出请求；**当前不支持的形态返回 `None`**。
     ///
-    /// Phase 1 只做列画像：表探查 / 多列 / 结构在后续期次落地，面板侧已按 Tab 给出期次提示，
-    /// 这里就不再假装有行为。
+    /// Phase 1 做列画像，Phase 3 加表探查；多列与结构在后续期次落地，
+    /// 面板侧已按 Tab 给出期次提示，这里就不假装有行为。
     pub fn of(target: &InsightTarget) -> Option<Self> {
         match target {
             InsightTarget::Column {
                 temp_table, column, ..
-            } => Some(Self {
+            } => Some(Self::Column {
                 temp_table: temp_table.clone(),
                 column: column.clone(),
             }),
-            InsightTarget::Table { .. }
-            | InsightTarget::MultiColumn { .. }
-            | InsightTarget::Schema { .. } => None,
+            InsightTarget::Table {
+                temp_table,
+                table_name,
+            } => Some(Self::Table {
+                temp_table: temp_table.clone(),
+                table_name: table_name.clone(),
+            }),
+            InsightTarget::MultiColumn { .. } | InsightTarget::Schema { .. } => None,
         }
     }
 }
@@ -89,6 +100,16 @@ pub fn handle_event(
             };
             request_profile(view, project_root, request, cx);
         }
+        InsightEvent::TableEvaluateRequested {
+            temp_table,
+            table_name,
+        } => request_table_evaluation(
+            view,
+            project_root,
+            temp_table.clone(),
+            table_name.clone(),
+            cx,
+        ),
     }
 }
 
@@ -250,8 +271,8 @@ pub fn open_in_system_editor(path: &Path) {
 
 /// 提交一次画像请求：后台执行 → 回填面板。
 ///
-/// 回填只走面板的公开方法（`set_profile` / `set_error`），错误经 `describe_error` 转成
-/// 「给人看的文案 + 是否可重试」——面板因此永远不接触 `CoreError`。
+/// 回填只走面板的公开方法（`set_profile` / `set_table_profile` / `set_error`），
+/// 错误经 `describe_error` 转成「给人看的文案 + 是否可重试」——面板因此永远不接触 `CoreError`。
 pub fn request_profile(
     view: &Entity<InsightView>,
     project_root: Option<PathBuf>,
@@ -260,22 +281,109 @@ pub fn request_profile(
 ) {
     let weak = view.downgrade();
     let task = cx.background_executor().spawn(async move {
-        InsightService::profile_column_view(
-            project_root.as_deref(),
-            &request.temp_table,
-            &request.column,
-        )
+        let root = project_root.as_deref();
+        match request {
+            ProfileRequest::Column {
+                temp_table,
+                column,
+            } => InsightService::profile_column_view(root, &temp_table, &column)
+                .map(ProfileOutcome::Column),
+            ProfileRequest::Table {
+                temp_table,
+                table_name,
+            } => InsightService::profile_table_view(root, &temp_table, &table_name)
+                .map(ProfileOutcome::Table),
+        }
     });
     cx.spawn(async move |cx| {
         let result = task.await;
         // 面板可能已关闭：弱句柄升级失败就丢弃结果（不 panic）
         let _ = weak.update(cx, |panel, cx| match result {
-            Ok(profile) => panel.set_profile(profile, cx),
+            Ok(ProfileOutcome::Column(profile)) => panel.set_profile(profile, cx),
+            Ok(ProfileOutcome::Table(profile)) => panel.set_table_profile(profile, cx),
             Err(err) => {
                 let info = InsightService::describe_error(&err);
                 panel.set_error(info.message, info.retryable, cx);
             }
         });
+    })
+    .detach();
+}
+
+/// 取数产物（两种目标各自回填到对应的 setter）
+enum ProfileOutcome {
+    Column(ColumnProfileView),
+    Table(TableProfileView),
+}
+
+/// 「评估全表」：**逐列串行**算质量分，每列回来就回填一次（真实进度，不是转动图标）。
+///
+/// 串行是刻意选择：并发会撞上引擎的并发上限（D12），而失败重试反而让用户更困惑；
+/// 一列一列跑既不会超限，又能把进度如实给出来。为了让进度真的动起来，每列单独 dispatch
+/// 到后台执行器（而不是一整个循环全在后台），算完一列就回头更新一次面板。
+pub fn request_table_evaluation(
+    view: &Entity<InsightView>,
+    project_root: Option<PathBuf>,
+    temp_table: String,
+    table_name: String,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    cx.spawn(async move |cx| {
+        // 先拿列清单：以**磁盘现状**为准（目标带的列可能已过期）
+        let base = {
+            let table = temp_table.clone();
+            let name = table_name.clone();
+            let root = project_root.clone();
+            let task = cx.background_executor().spawn(async move {
+                InsightService::profile_table_view(root.as_deref(), &table, &name)
+            });
+            task.await
+        };
+        let base = match base {
+            Ok(profile) => profile,
+            Err(err) => {
+                let info = InsightService::describe_error(&err);
+                let _ = weak.update(cx, |panel, cx| panel.set_error(info.message, info.retryable, cx));
+                return;
+            }
+        };
+
+        let total = base.columns.len();
+        let mut evaluated: Vec<crate::model::types::ColumnInsightFull> = Vec::with_capacity(total);
+        let mut current = base.evaluating(0, total);
+        let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
+
+        for column in base.columns.iter() {
+            let table = temp_table.clone();
+            let name = column.name.clone();
+            let root = project_root.clone();
+            let task = cx.background_executor().spawn(async move {
+                InsightService::get_column_insight_full(root.as_deref(), &table, &name)
+            });
+            match task.await {
+                Ok(full) => {
+                    let score = InsightService::compute_column_quality(&full).overall_score;
+                    evaluated.push(full);
+                    current = current
+                        .with_column_score(&column.name, score)
+                        .evaluating(evaluated.len(), total);
+                }
+                Err(err) => {
+                    // 单列失败不报废整表：直接报错（用户的下一步是重试或修正数据）
+                    let info = InsightService::describe_error(&err);
+                    let _ =
+                        weak.update(cx, |panel, cx| panel.set_error(info.message, info.retryable, cx));
+                    return;
+                }
+            }
+            let _ = weak.update(cx, |panel, cx| panel.set_table_profile(current.clone(), cx));
+        }
+
+        // 表级摘要：与列分数的打分同源（`compute_table_quality` 内部逐列调用同一函数）
+        let quality = InsightService::compute_table_quality(&table_name, &evaluated);
+        let done = current.evaluated(&quality);
+        let _ = weak.update(cx, |panel, cx| panel.set_table_profile(done, cx));
     })
     .detach();
 }
@@ -289,7 +397,7 @@ mod tests {
 
     use super::{ProfileRequest, attach, attach_rules};
     use crate::insight_view::InsightView;
-    use crate::model::InsightTarget;
+    use crate::model::{InsightTarget, TableEvalProgress};
     use crate::rule::RuleScope;
     use crate::rule_view::{RuleRowStatus, RulesDialogState};
 
@@ -311,7 +419,7 @@ mod tests {
         };
         assert_eq!(
             ProfileRequest::of(&target),
-            Some(ProfileRequest {
+            Some(ProfileRequest::Column {
                 temp_table: "t_result_1".into(),
                 column: "amount".into(),
             })
@@ -319,13 +427,24 @@ mod tests {
     }
 
     #[test]
-    fn later_phase_targets_are_not_pretended() {
-        // Phase 1 只做列画像：其余目标没有生产者就不该被当成有行为
-        for target in [
-            InsightTarget::Table {
-                temp_table: "t".into(),
+    fn table_target_maps_to_a_table_request() {
+        let target = InsightTarget::Table {
+            temp_table: "t_result_1".into(),
+            table_name: "orders".into(),
+        };
+        assert_eq!(
+            ProfileRequest::of(&target),
+            Some(ProfileRequest::Table {
+                temp_table: "t_result_1".into(),
                 table_name: "orders".into(),
-            },
+            })
+        );
+    }
+
+    #[test]
+    fn later_phase_targets_are_not_pretended() {
+        // 多列与结构属 Phase 3/4：没有生产者就不该被当成有行为
+        for target in [
             InsightTarget::MultiColumn {
                 temp_table: "t".into(),
                 columns: vec!["a".into()],
@@ -337,6 +456,149 @@ mod tests {
         ] {
             assert_eq!(ProfileRequest::of(&target), None, "{target:?}");
         }
+    }
+
+    // ==================== 表探查与评估全表（Phase 3.1 / 2.2） ====================
+
+    /// 建探针临时表（DuckDB 是进程单例，表名带用例后缀以避免串台）
+    fn seed_probe_table(table: &str, columns: &str, values: &str) {
+        let conn = crate::insight_engine::get_or_create_duckdb().expect("内存 DuckDB");
+        let conn = conn.lock().expect("DuckDB 锁不应中毒");
+        conn.execute_batch(&format!("CREATE OR REPLACE TEMP TABLE \"{table}\" ({columns})"))
+            .expect("建探针表");
+        conn.execute_batch(&format!("INSERT INTO \"{table}\" {values}"))
+            .expect("插数据");
+    }
+
+    /// 表目标 → 后台内省 → 面板拿到列清单（走真实接线）
+    #[gpui_kit::test]
+    fn attach_turns_a_table_request_into_a_profile(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        seed_probe_table(
+            "t_insight_jobs_table",
+            "id INTEGER, amount DECIMAL(12,2), note VARCHAR",
+            "VALUES (1, 1.5, 'a'), (2, NULL, NULL), (3, 3.5, 'c')",
+        );
+
+        let (host, panel, _sub) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let sub = host.update(cx, |_host, host_cx| attach(&panel, host_cx, || None));
+            (host, panel, sub)
+        });
+        let _host = host;
+
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_insight_jobs_table".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let state = panel.read(cx).state();
+            let table = state.table().expect("表目标应回填表探查，而不是列画像");
+            assert_eq!(table.table_name, "orders");
+            assert_eq!(table.row_count, 3);
+            assert_eq!(table.columns.len(), 3);
+            assert_eq!(table.columns[0].kind, crate::model::ColumnKind::Numeric);
+            assert!(
+                table.columns.iter().all(|c| c.score.is_none()),
+                "只是探查，不跑规则：分数得等用户点「评估全表」"
+            );
+        });
+    }
+
+    /// 「评估全表」：逐列串行 + 真实进度，最后给出表级质量。
+    ///
+    /// 进度不是假的：观察者按 notify 记录每一帧的 `progress`，必须看到**中间态**。
+    #[gpui_kit::test]
+    fn table_evaluation_reports_progress_and_final_quality(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        seed_probe_table(
+            "t_insight_jobs_eval",
+            "id INTEGER, amount DECIMAL(12,2), note VARCHAR",
+            "VALUES (1, 1.5, 'a'), (2, 2.5, 'b'), (3, NULL, NULL), (4, 4.5, 'd')",
+        );
+        let traces: Arc<Mutex<Vec<Option<TableEvalProgress>>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen = traces.clone();
+
+        let (host, panel, _sub, _obs) = cx.update(|cx| {
+            let host = cx.new(TestHost::new);
+            let panel = cx.new(InsightView::new);
+            let sub = host.update(cx, |_host, host_cx| attach(&panel, host_cx, || None));
+            // 观察者记录进度序列（面板每次回填都会 notify）
+            let seen = seen.clone();
+            let panel_for_obs = panel.clone();
+            // 订阅必须被**外层**持有：在闭包里 `let _obs = …` 会随闭包一起析构，
+            // 评估还没开始观察就没了（本仓踩过的同一个坑）
+            let obs = host.update(cx, |_host, host_cx| {
+                host_cx.observe(&panel_for_obs, move |_this, panel, cx| {
+                    let progress = panel.read(cx).state().table().and_then(|t| t.progress);
+                    seen.lock().unwrap().push(progress);
+                })
+            });
+            (host, panel, sub, obs)
+        });
+        let _host = host;
+
+        // 先探查（拿列清单），再发起评估：与用户点两次按钮同一条路径
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::Table {
+                        temp_table: "t_insight_jobs_eval".into(),
+                        table_name: "orders".into(),
+                    },
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        traces.lock().unwrap().clear();
+
+        cx.update(|cx| panel.update(cx, |panel, cx| panel.request_table_evaluation(cx)));
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let table = panel
+                .read(cx)
+                .state()
+                .table()
+                .expect("评估后仍是表探查数据")
+                .clone();
+            assert!(table.progress.is_none(), "跑完进度行必须消失");
+            let quality = table.quality.expect("应有表级质量摘要");
+            assert_eq!(quality.scored_columns, 3, "三列都应评到分");
+            assert!(
+                (0.0..=100.0).contains(&quality.overall),
+                "总分应在 0–100：{}",
+                quality.overall
+            );
+            assert!(
+                table.columns.iter().all(|c| c.score.is_some()),
+                "每列都应带上自己的分数：{:?}",
+                table.columns.iter().map(|c| c.score).collect::<Vec<_>>()
+            );
+            assert_eq!(quality.grade, crate::quality_scorer::Grade::of(quality.overall));
+        });
+
+        let traces = traces.lock().unwrap().clone();
+        assert!(
+            traces.iter().any(|p| matches!(p, Some(p) if p.done > 0 && p.done < p.total)),
+            "必须能观察到中间进度（不是只有开始与结束）：{traces:?}"
+        );
+        assert_eq!(
+            traces.last(),
+            Some(&None),
+            "最后一帧应是「无进度」的完成态：{traces:?}"
+        );
     }
 
     /// 宿主只写一行（`attach`），所以这一行的契约必须在本 crate 内验住：
