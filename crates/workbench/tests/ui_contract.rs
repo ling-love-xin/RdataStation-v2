@@ -334,7 +334,7 @@ fn shared_fields_are_whitelisted() {
         "insight_panel",
         "left_mode",
         "left_mode_before_hidden",
-        "mock_detail",
+        "mock_details",
         "mock_panel",
         "nav_cache_epoch",
         "notice",

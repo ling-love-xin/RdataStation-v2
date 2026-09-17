@@ -82,7 +82,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | `crates/workbench/src/services/mock_jobs.rs` | **后台任务**：单一工作线程 + 进度槽（含阶段）+ 结果一次性取回 + 取消；任务种类＝生成 / 场景模板 / 追加 / 三个出口 |
 | `crates/workbench/src/services/mock_generator.rs` | **装配层**：生成（不写库）/ 场景模板（逐表补预览）/ 落库新建 / 追加 / 导出 / 草稿箱 / 结构导入（cache-aside 取列）；**出口的输入是结果（`MockGenInfo`），不收草稿** |
 | `crates/workbench/src/panels/` | 右 Dock 面板构造期创建 + 句柄登记；`Shared::open_mock_panel`（入口统一） |
-| `crates/workbench/src/view.rs` | 中央「Mock 数据」tab 的宿主命令（`Shared::open_mock_detail`） |
+| `crates/workbench/src/view.rs` | 中央「Mock 数据」tab 的宿主命令（`Shared::open_mock_detail`）：**一个目标一个 tab**（按 `DetailTarget::key()` 去重），已存在则聚焦 |
 
 ## 改前必守约束
 

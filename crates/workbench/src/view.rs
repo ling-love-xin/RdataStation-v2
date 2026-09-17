@@ -680,14 +680,14 @@ impl WorkbenchView {
             );
         });
 
-        // M7：宿主命令——打开 Mock 详情 tab（面板「查看详情」调用）。
-        // 详情与配置面板同属 mock crate：面板实体在 `RightSidebarPanel` 构造期已登记弱句柄，
-        // 这里只负责把它接入中央 tab 组（首次加入，已存在则聚焦自身 tab）。
+        // M7：宿主命令——打开某张表 / 草稿的详情 tab（面板「查看详情」与结果表清单调用）。
+        // 详情与配置面板同属 mock crate：**一个目标一个 tab**（按 `DetailTarget::key` 去重），
+        // 已存在就聚焦。面板实体在 `RightSidebarPanel` 构造期已登记弱句柄，这里只负责接入中央 tab 组。
         {
             let shared_for_detail = shared.clone();
             let area_for_detail = area.clone();
-            *shared.open_mock_detail.borrow_mut() =
-                Some(Rc::new(move |window: &mut Window, cx: &mut App| {
+            *shared.open_mock_detail.borrow_mut() = Some(Rc::new(
+                move |target: mock::mock_view::DetailTarget, window: &mut Window, cx: &mut App| {
                     let Some(panel) = shared_for_detail
                         .mock_panel
                         .borrow()
@@ -696,10 +696,12 @@ impl WorkbenchView {
                     else {
                         return;
                     };
+                    let key = target.key();
                     let alive = shared_for_detail
-                        .mock_detail
+                        .mock_details
                         .borrow()
-                        .clone()
+                        .get(&key)
+                        .cloned()
                         .and_then(|weak| weak.upgrade());
                     if let Some(detail) = alive {
                         // 已在 Dock 中（tab 被切走也只是失焦）：聚焦即可，不重复加入。
@@ -707,13 +709,17 @@ impl WorkbenchView {
                         focus_detail_tab(&detail, window, cx);
                         return;
                     }
-                    let detail = cx.new(|cx| MockDetailView::new(panel.clone(), cx));
-                    *shared_for_detail.mock_detail.borrow_mut() = Some(detail.downgrade());
+                    let detail = cx.new(|cx| MockDetailView::new(panel.clone(), target, cx));
+                    shared_for_detail
+                        .mock_details
+                        .borrow_mut()
+                        .insert(key, detail.downgrade());
                     area_for_detail.update(cx, |area, cx| {
                         area.add_panel(detail.clone(), DockPlacement::Center, None, window, cx);
                     });
                     focus_detail_tab(&detail, window, cx);
-                }));
+                },
+            ));
         }
 
         // 编辑面板通知级联到宿主：对话框层挂在宿主 render 中（`Root` 的 notify

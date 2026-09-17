@@ -333,7 +333,7 @@ v2 右 Dock 没有拖拽调宽），故按「配置与出口在右、字段与�
 | 需求 | 选用 | 说明 |
 | --- | --- | --- |
 | 配置面板 | `Entity<MockPanel>`（`crates/mock/src/mock_view.rs`） | 跨 frame 状态在实体上；宿主只持弱句柄 |
-| 详情 tab | `Entity<MockDetailView>` + `BasePanel` / `ComponentPanel` | 由宿主 `DockArea::add_panel(.., DockPlacement::Center, ..)` 加入编辑区 tab 组；`on_added_to` 记 tab 组句柄，重复点「查看详情」用 `TabGroup::select_tab` 聚焦自身 |
+| 详情 tab | `Entity<MockDetailView>` + `BasePanel` / `ComponentPanel` | 由宿主 `DockArea::add_panel(.., DockPlacement::Center, ..)` 加入编辑区 tab 组；**一个目标一个 tab**（草稿与每张结果表各一个，键 = `DetailTarget::key()`）；`on_added_to` 记 tab 组句柄，重复点「查看详情」用 `TabGroup::select_tab` 聚焦自身；tab 被激活时把那张表设为当前表（`focus_table`） |
 | 表名 / 行数 / 种子 / 参数 / 空值率 | `Input` + `InputState`（标量）/ `Textarea` + `TextareaState`（集合类） | `InputState::new` 需要 window：面板在 render 首次创建，对话框在打开时创建；多行输入高 `COMPLEX_INPUT_HEIGHT` = 5rem |
 | 语言 / 生成器 / 追加目标 / 草稿箱 / 另存为 | `Button` + `dropdown_menu`（`PopupMenuItem::checked/disabled`、`PopupMenu::submenu`） | 生成器 137 项按 **15 类子菜单**承载；追加目标列既有分析表 |
 | 字段行操作 | `Button`（`ghost` / `xsmall`） | ElementId 用列 id（`mock-edit-{id}` / `mock-gen-{id}`），不用下标 |

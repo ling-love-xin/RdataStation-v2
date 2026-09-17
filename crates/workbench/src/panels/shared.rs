@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use insight::{InsightTarget, InsightView};
-use mock::mock_view::{MockDetailView, MockPanel, SchemaRequest};
+use mock::mock_view::{DetailTarget, MockDetailView, MockPanel, SchemaRequest};
 use scratchpad::ScratchpadStore;
 
 use analytics_resource::dialogs::index_repair::RepairDialogState;
@@ -186,8 +186,9 @@ pub struct Shared {
     ///
     /// 面板自带状态与对话框（`mock::mock_view::MockPanel`），工作台只持句柄。
     pub mock_panel: Rc<RefCell<Option<WeakEntity<MockPanel>>>>,
-    /// M7：中央「Mock 数据」详情 tab 实体句柄（弱引用；已关闭则重新创建）。
-    pub mock_detail: Rc<RefCell<Option<WeakEntity<MockDetailView>>>>,
+    /// M7：中央详情 tab 实体句柄（弱引用）：**一个目标一个 tab**，键 = `DetailTarget::key()`
+    /// （草稿 `draft`，结果表 `table:{表名}`）；已关闭则为死弱引用，下次打开重建。
+    pub mock_details: Rc<RefCell<HashMap<String, WeakEntity<MockDetailView>>>>,
     /// M8：洞察面板实体句柄（弱引用；右键入口与 Quick Open 用）。
     ///
     /// 面板自带状态与视图（`insight::InsightView`），工作台只持句柄 + 订阅它的取数请求。
@@ -203,8 +204,8 @@ pub struct Shared {
     pub version_dialog: Rc<RefCell<VersionDialogFlow>>,
     /// M6：索引修复对话框的流转（扫描 → 开窗 → 修复后重扫换行；见 `RepairDialogFlow`）。
     pub repair_dialog: Rc<RefCell<RepairDialogFlow>>,
-    /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
-    pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
+    /// M7：打开某个 Mock 详情 tab 的宿主命令（面板「查看详情」与结果表清单调用；需要窗口，照 `editor_clear` 口径）。
+    pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(DetailTarget, &mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
     pub driver_catalog: Rc<RefCell<HashMap<String, engine::persistence::DriverMeta>>>,
     /// 宿主重绘桥：连接对话框层挂在 `WorkbenchView::render` 上，而 `Root` 的
@@ -246,7 +247,7 @@ impl Shared {
             resources_bridge: Rc::new(RefCell::new(None)),
             version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
             repair_dialog: Rc::new(RefCell::new(RepairDialogFlow::default())),
-            mock_detail: Rc::new(RefCell::new(None)),
+            mock_details: Rc::new(RefCell::new(HashMap::new())),
             open_mock_detail: Rc::new(RefCell::new(None)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),
             host_redraw: Rc::new(RefCell::new(None)),

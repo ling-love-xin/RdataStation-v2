@@ -452,7 +452,10 @@ pub trait MockHost: 'static {
     /// （见 `history`），存储细节不摊到宿主侧。
     fn project_root(&self) -> Option<PathBuf>;
     /// 打开中央「Mock 数据」详情 tab（字段 + 预览）
-    fn open_detail(&self, window: &mut Window, cx: &mut App);
+    /// 打开（或聚焦）中央详情 tab（`target` 决定是哪张表 / 草稿）。
+    ///
+    /// 宿主按 `target.key()` 去重：同一张表只有一个 tab，重复调用就是把它切到前台。
+    fn open_detail(&self, target: DetailTarget, window: &mut Window, cx: &mut App);
     /// 宿主重绘 + 依赖视图刷新（导航树等）
     fn notify(&self, cx: &mut App);
 }
@@ -1455,9 +1458,48 @@ impl MockPanel {
         cx.notify();
     }
 
-    /// 打开中央「Mock 数据」详情 tab（字段清单 + 预览）。
+    /// 打开中央「Mock 数据」详情 tab（草稿 tab：字段清单 + 预览）。
     pub fn open_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.host.open_detail(window, cx);
+        self.open_detail_for(DetailTarget::Draft, window, cx);
+    }
+
+    /// 打开（或聚焦）某个详情 tab：草稿，或某张结果表。
+    pub fn open_detail_for(
+        &mut self,
+        target: DetailTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.host.open_detail(target, window, cx);
+    }
+
+    /// 打开某张**结果表**的详情 tab（右 Dock 结果区点一行 / 「查看详情」走这条）。
+    pub fn open_table_detail(&mut self, table: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_detail_for(DetailTarget::Table(table.to_string()), window, cx);
+    }
+
+    /// 「查看详情」看谁：有结果就看当前表（tab 就是那张表），没结果看草稿。
+    pub fn current_detail_target(&self) -> DetailTarget {
+        self.results
+            .get(self.current)
+            .map(|info| DetailTarget::Table(info.table_name.clone()))
+            .unwrap_or(DetailTarget::Draft)
+    }
+
+    /// 中央某个 tab 被激活：把它对应的表设为「当前表」（出口作用于它）。
+    ///
+    /// 表不在本轮结果里（tab 是上一轮留下的）就什么都不做：`current` 不该指向不存在的表。
+    pub fn focus_table(&mut self, table: &str, cx: &mut Context<Self>) {
+        if let Some(index) = self
+            .results
+            .iter()
+            .position(|info| info.table_name == table)
+        {
+            if index != self.current {
+                self.current = index;
+                cx.notify();
+            }
+        }
     }
 
     // ==================== 生成历史（后台读写；渲染只读状态） ====================
@@ -3445,14 +3487,24 @@ impl MockPanel {
         let job_row = self.render_job_row(cx);
 
         // 出口：详情 tab + 落库 + 追加 + 草稿箱 + 另存为（任务进行中全部禁用：一次只能跑一个）
+        //
+        // 「查看详情」看的是**当前表**（结果表一个表一个 tab）：没结果时才回草稿。
         let detail = {
             let entity = cx.entity();
+            let has_result = self.has_result();
             Button::new("mock-open-detail")
                 .secondary()
-                .label("查看详情（字段与预览）")
+                .label(if has_result {
+                    "查看详情（当前表）"
+                } else {
+                    "查看详情（字段与预览）"
+                })
                 .w_full()
                 .on_click(move |_, window, app| {
-                    entity.update(app, |panel, cx| panel.open_detail(window, cx));
+                    entity.update(app, |panel, cx| {
+                        let target = panel.current_detail_target();
+                        panel.open_detail_for(target, window, cx);
+                    });
                 })
         };
         let persist = {
@@ -3594,74 +3646,89 @@ impl MockPanel {
             .child(scenario_block)
             .child(job_row);
 
-        // 结果表多于一张（场景模板）时先选「当前表」：出口、详情、预览都看它
-        if result_count > 1 {
-            let entity = cx.entity();
-            let current_label = self
-                .results
-                .get(current_index)
-                .map(|info| info.table_name.clone())
-                .unwrap_or_default();
-            let labels: Vec<(String, u32)> = self
-                .results
-                .iter()
-                .map(|info| (info.table_name.clone(), info.row_count))
-                .collect();
-            let source = self.scenario_source.clone();
-            panel =
-                panel.child(
+        // 结果表：**一张表一个中央 tab**——这里列出每张表，点一行打开 / 切到它的 tab
+        // （当前表 = 出口作用的那张；与实际打开的 tab 同一状态：切 tab 也会改这里）
+        if result_count > 0 {
+            let mut list = div().v_flex().gap_1().w_full().child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("结果表（{result_count} 张）· 点一行打开 / 切到它的 tab")),
+            );
+            for (index, info) in self.results.iter().enumerate() {
+                let current = index == current_index;
+                let name = info.table_name.clone();
+                let open = {
+                    let entity = cx.entity();
+                    let click_name = name.clone();
                     div()
-                        .v_flex()
-                        .gap_1()
+                        .id(ElementId::Name(SharedString::from(format!(
+                            "mock-result-open-{click_name}"
+                        ))))
+                        .px_1()
+                        .py_0p5()
+                        .rounded(cx.theme().radius)
+                        .text_xs()
+                        .font_weight(if current {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .text_color(fg)
+                        .cursor_pointer()
+                        .child(name.clone())
+                        .on_click(move |_, window, app| {
+                            let name = click_name.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.select_result(index, cx);
+                                panel.open_table_detail(&name, window, cx);
+                            });
+                        })
+                };
+                list = list.child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
                         .w_full()
                         .child(
                             div()
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .w_full()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child(format!("结果表（{result_count} 张）")),
-                                )
-                                .child(
-                                    Button::new("mock-result-picker")
-                                        .secondary()
-                                        .xsmall()
-                                        .label(format!("{current_label} ▾"))
-                                        .dropdown_menu(move |menu, _window, _cx| {
-                                            let mut menu = menu;
-                                            for (index, (table, rows)) in labels.iter().enumerate()
-                                            {
-                                                let entity = entity.clone();
-                                                menu = menu.item(
-                                                    PopupMenuItem::new(format!(
-                                                        "{table}（{} 行）",
-                                                        with_thousands(u64::from(*rows))
-                                                    ))
-                                                    .checked(index == current_index)
-                                                    .on_click(move |_, _, app| {
-                                                        entity.update(app, |panel, cx| {
-                                                            panel.select_result(index, cx)
-                                                        });
-                                                    }),
-                                                );
-                                            }
-                                            menu
-                                        }),
-                                ),
+                                .flex_none()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(if current { "●" } else { "○" }),
                         )
-                        .child(div().text_xs().text_color(muted).text_ellipsis().child(
-                            match source {
-                                Some(name) => {
-                                    format!("来自场景模板「{name}」：出口只作用于当前选中的那张表")
-                                }
-                                None => "出口只作用于当前选中的那张表".to_string(),
-                            },
-                        )),
+                        .child(open)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .text_ellipsis()
+                                .child(format!(
+                                    "{} 行",
+                                    with_thousands(u64::from(info.row_count))
+                                )),
+                        )
+                        .children(current.then(|| {
+                            div().flex_none().text_xs().text_color(muted).child("当前表")
+                        })),
                 );
+            }
+            let source = self.scenario_source.clone();
+            panel = panel.child(list.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .text_ellipsis()
+                    .child(match source {
+                        Some(name) => {
+                            format!("来自场景模板「{name}」：出口只作用于当前表——切 tab 就是切表")
+                        }
+                        None => "出口只作用于当前表——切 tab 就是切表".to_string(),
+                    }),
+            ));
         }
 
         if let Some(info) = generated.as_ref() {
@@ -4462,11 +4529,45 @@ struct ColumnDraft {
     param_error: Option<(String, String)>,
 }
 
+/// 中央详情 tab 的**身份**：一张结果表一个 tab，另有草稿 tab（列定义可编辑那张）。
+///
+/// 为何用名字而不是下标做身份：tab 是长命的东西，而 `results` 每次生成都会重建
+/// （下标会指向别的表）；名字才是用户看到的那张表。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetailTarget {
+    /// 草稿 tab：单表态的列定义（可编辑）+ 草稿目标表的预览
+    Draft,
+    /// 结果表 tab：该表的列（只读）与预览
+    Table(String),
+}
+
+impl DetailTarget {
+    /// 宿主登记 tab 用的键（同一个键只开一个 tab）。
+    pub fn key(&self) -> String {
+        match self {
+            Self::Draft => "draft".to_string(),
+            Self::Table(name) => format!("table:{name}"),
+        }
+    }
+
+    /// 日志 / 测试用的短名。
+    pub fn label(&self) -> String {
+        match self {
+            Self::Draft => "草稿".to_string(),
+            Self::Table(name) => name.clone(),
+        }
+    }
+}
+
 /// Mock 详情（中央编辑区 tab）：字段清单（编辑走对话框）+ 预览表格。
 ///
 /// 状态单一权威：持有配置面板实体，字段与预览都从它读取；编辑动作写回面板。
+/// **一个 tab 对应一个目标**（草稿或某张结果表，见 [`DetailTarget`]）：tab 被激活就等于
+/// 把那张表设为「当前表」，出口（落库 / 追加 / 导出）跟着它走。
 pub struct MockDetailView {
     panel: Entity<MockPanel>,
+    /// 这个 tab 管的是哪张表 / 草稿
+    target: DetailTarget,
     /// 列编辑对话框的工作副本
     draft: Option<ColumnDraft>,
     focus_handle: FocusHandle,
@@ -4508,14 +4609,43 @@ pub fn focus_detail_tab(detail: &Entity<MockDetailView>, window: &mut Window, cx
 
 impl MockDetailView {
     /// 创建详情视图（持有配置面板实体，状态单一权威）。
-    pub fn new(panel: Entity<MockPanel>, cx: &mut Context<Self>) -> Self {
+    pub fn new(panel: Entity<MockPanel>, target: DetailTarget, cx: &mut Context<Self>) -> Self {
         // 状态变化即重绘：字段/预览跟随配置面板
         cx.observe(&panel, |_, _, cx| cx.notify()).detach();
         Self {
             panel,
+            target,
             draft: None,
             focus_handle: cx.focus_handle(),
             group: None,
+        }
+    }
+
+    /// 这个 tab 管的目标（宿主建 tab / 测试用）。
+    pub fn target(&self) -> &DetailTarget {
+        &self.target
+    }
+
+    /// tab 标题：结果表写 `表名（N 行）`，草稿写目标表名（与旧行为一致）。
+    ///
+    /// 行数实时取自面板结果，所以重新生成 / 「编辑表」改完行数后标题会自己更新。
+    pub fn tab_label(&self, cx: &App) -> String {
+        let panel = self.panel.read(cx);
+        match &self.target {
+            DetailTarget::Draft => format!("Mock · {}", panel.draft().table_name),
+            DetailTarget::Table(name) => {
+                match panel
+                    .results()
+                    .iter()
+                    .find(|info| &info.table_name == name)
+                {
+                    Some(info) => format!(
+                        "Mock · {name}（{} 行）",
+                        with_thousands(u64::from(info.row_count))
+                    ),
+                    None => format!("Mock · {name}"),
+                }
+            }
         }
     }
 
@@ -5053,6 +5183,99 @@ impl MockDetailView {
             .child(list)
             .into_any_element()
     }
+    /// 结果表 tab 的列清单（**只读**）：列来自这次生成（`MockGenInfo.columns`）。
+    ///
+    /// 为何不给编辑入口：这张表的列是「这次生成」的产物（模板或草稿的结果），
+    /// 就地改列会让「结果」与「产出它的配置」分叉——要改列回草稿 tab 改，再重新生成。
+    fn render_result_columns(
+        &self,
+        info: Option<&MockGenInfo>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let border = cx.theme().colors.border;
+        let radius = cx.theme().radius;
+
+        let mut block = div().v_flex().gap_1().w_full();
+        let Some(info) = info else {
+            return block.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("这一轮没有这张表的列信息（重新生成后再看）。"),
+            );
+        };
+        block = block.child(div().text_xs().text_color(muted).child(format!(
+            "列（{}）· 只读：它们是这次生成的产物；要改列请回草稿 tab 改完重新生成",
+            info.columns.len()
+        )));
+        for def in info.columns.iter() {
+            let mut meta: Vec<String> = Vec::new();
+            if def.unique {
+                meta.push("唯一".to_string());
+            }
+            if def.nullable_ratio > 0.0 {
+                meta.push(format!(
+                    "空值 {}%",
+                    (def.nullable_ratio * 100.0).round() as i64
+                ));
+            }
+            let reference = def
+                .dependency
+                .as_ref()
+                .filter(|dep| dep.is_foreign_key())
+                .and_then(|dep| dep.ref_table.clone().zip(dep.ref_column.clone()))
+                .map(|(table, column)| format!("引用 {table}.{column}"));
+            block = block.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .border_1()
+                    .border_color(border)
+                    .rounded(radius)
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(fg)
+                            .child(def.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(column_type_label(&def.data_type)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(muted)
+                            .text_ellipsis()
+                            .child(summarize_params(&def.generator)),
+                    )
+                    .children(reference.map(|text| {
+                        div().flex_none().text_xs().text_color(muted).child(text)
+                    }))
+                    .children((!meta.is_empty()).then(|| {
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(meta.join(" · "))
+                    })),
+            );
+        }
+        block
+    }
 }
 
 impl Render for MockDetailView {
@@ -5061,26 +5284,33 @@ impl Render for MockDetailView {
         let muted = cx.theme().colors.muted_foreground;
         let success = cx.theme().colors.success;
         let danger = cx.theme().colors.danger;
-        let draft = self.panel.read(cx).draft().clone();
-        let generated = self.panel.read(cx).gen_info().cloned();
-        let outcome = self.panel.read(cx).outcome().map(|s| s.to_string());
-        let error = self.panel.read(cx).error().map(|s| s.to_string());
-        let landed = self.panel.read(cx).landed().map(|s| s.to_string());
-        // 结果表不止一张（场景模板）时：预览看的是「当前表」，所以要能切、要说清在看哪张
-        let (result_count, scenario_source, result_tables) = {
+        // 一次取齐渲染要用的状态（读租约不能跨到 `cx` 的独占使用处）
+        let (draft, generated, outcome, error, landed, scenario_source, progress) = {
             let panel = self.panel.read(cx);
+            // 本 tab 看哪张表：草稿 tab 看草稿目标表，结果表 tab 看它自己
+            // （与面板的「当前表」无关——切 tab 就能对照两张表的预览）
+            let table = match &self.target {
+                DetailTarget::Draft => panel.draft().table_name.clone(),
+                DetailTarget::Table(name) => name.clone(),
+            };
             (
-                panel.results().len(),
-                panel.scenario_source().map(|s| s.to_string()),
+                panel.draft().clone(),
                 panel
                     .results()
                     .iter()
-                    .map(|info| (info.table_name.clone(), info.row_count))
-                    .collect::<Vec<_>>(),
+                    .find(|info| info.table_name == table)
+                    .cloned(),
+                panel.outcome().map(|s| s.to_string()),
+                panel.error().map(|s| s.to_string()),
+                panel.landed().map(|s| s.to_string()),
+                panel.scenario_source().map(|s| s.to_string()),
+                panel.job_progress(),
             )
         };
 
-        let generate = {
+        let is_draft = matches!(self.target, DetailTarget::Draft);
+        // 生成按钮只属于草稿 tab：结果表 tab 上摆一个「生成」会让人以为能只重跑这一张
+        let generate = is_draft.then(|| {
             let entity = self.panel.clone();
             let running = self.panel.read(cx).is_running();
             let generating = self.panel.read(cx).is_generating();
@@ -5094,65 +5324,41 @@ impl Render for MockDetailView {
                 });
             }
             button
-        };
-        let seed = match draft.options.seed {
-            Some(seed) => seed.to_string(),
-            None => "随机".to_string(),
-        };
-        // 任务进行中：摘要行尾追加阶段（面板已有进度条与取消，这里只做一行文字同步）
-        let summary = match self.panel.read(cx).job_progress() {
-            Some(progress) => {
-                let tail = if progress.phase.is_quantified() {
-                    format!("{} {:.0}%", progress.phase.label(), progress.percent())
-                } else {
-                    progress.phase.label().to_string()
+        });
+        // 摘要行：草稿 tab 说草稿（含进行中的阶段），结果表 tab 说这张表自己
+        let summary = match &self.target {
+            DetailTarget::Draft => {
+                let seed = match draft.options.seed {
+                    Some(seed) => seed.to_string(),
+                    None => "随机".to_string(),
                 };
-                format!(
-                    "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {} · {tail}",
+                let base = format!(
+                    "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {}",
                     draft.columns.len(),
                     draft.table_name,
                     with_thousands(draft.options.rows as u64),
                     locale_label(&draft.options.locale)
-                )
-            }
-            None => format!(
-                "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {}",
-                draft.columns.len(),
-                draft.table_name,
-                with_thousands(draft.options.rows as u64),
-                locale_label(&draft.options.locale)
-            ),
-        };
-        // 当前表选择器（只有场景模板会一次产出多张）
-        let picker = (result_count > 1).then(|| {
-            let panel = self.panel.clone();
-            let current_index = panel.read(cx).current_result();
-            let label = result_tables
-                .get(current_index)
-                .map(|(table, _)| table.clone())
-                .unwrap_or_default();
-            Button::new("mock-detail-result-picker")
-                .secondary()
-                .xsmall()
-                .label(format!("{label} ▾"))
-                .dropdown_menu(move |menu, _window, _cx| {
-                    let mut menu = menu;
-                    for (index, (table, rows)) in result_tables.iter().enumerate() {
-                        let panel = panel.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(format!(
-                                "{table}（{} 行）",
-                                with_thousands(u64::from(*rows))
-                            ))
-                            .checked(index == current_index)
-                            .on_click(move |_, _, app| {
-                                panel.update(app, |panel, cx| panel.select_result(index, cx));
-                            }),
-                        );
+                );
+                // 任务进行中：摘要行尾追加阶段（面板已有进度条与取消，这里只做一行文字同步）
+                match progress.as_ref() {
+                    Some(progress) if progress.phase.is_quantified() => {
+                        format!("{base} · {} {:.0}%", progress.phase.label(), progress.percent())
                     }
-                    menu
-                })
-        });
+                    Some(progress) => format!("{base} · {}", progress.phase.label()),
+                    None => base,
+                }
+            }
+            DetailTarget::Table(name) => match generated.as_ref() {
+                Some(info) => {
+                    let rows = with_thousands(u64::from(info.row_count));
+                    match scenario_source.as_deref() {
+                        Some(source) => format!("表 {name} · {rows} 行 · 来自场景模板「{source}」"),
+                        None => format!("表 {name} · {rows} 行 · 本次生成"),
+                    }
+                }
+                None => format!("表 {name} · 这一轮没有它的结果（重新生成后再看）"),
+            },
+        };
         let header = div()
             .h_flex()
             .items_center()
@@ -5168,8 +5374,7 @@ impl Render for MockDetailView {
                     .text_ellipsis()
                     .child(summary),
             )
-            .children(picker)
-            .child(generate);
+            .children(generate);
 
         let mut body = div()
             .v_flex()
@@ -5179,15 +5384,23 @@ impl Render for MockDetailView {
             .p_3()
             .child(header);
 
-        if draft.columns.is_empty() {
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("暂无列：在右 Dock 面板导入源库结构或手工加列。"),
-            );
-        } else {
-            body = body.child(self.render_fields(cx));
+        match &self.target {
+            DetailTarget::Draft => {
+                if draft.columns.is_empty() {
+                    body = body.child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("暂无列：在右 Dock 面板导入源库结构或手工加列。"),
+                    );
+                } else {
+                    body = body.child(self.render_fields(cx));
+                }
+            }
+            // 结果表 tab：列只读（它们来自这次生成）；要改列就回草稿 tab 改，再重新生成
+            DetailTarget::Table(_) => {
+                body = body.child(self.render_result_columns(generated.as_ref(), cx));
+            }
         }
 
         let preview_title = match generated.as_ref() {
@@ -5199,15 +5412,20 @@ impl Render for MockDetailView {
                 with_thousands(info.row_count as u64),
                 info.elapsed_ms
             ),
-            None => format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点右上「生成」"),
+            None if is_draft => {
+                format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点右上「生成」")
+            }
+            None => format!("预览（前 {PREVIEW_ROWS} 行）· 这一轮没有这张表的结果"),
         };
         body = body.child(div().text_xs().text_color(muted).child(preview_title));
 
-        // 场景模板的结果表与草稿毫无关系：不说一句，用户会拿草稿的字段去对预览的列
-        if let Some(name) = scenario_source.as_deref() {
-            body = body.child(div().text_xs().text_color(muted).child(format!(
-                "预览来自场景模板「{name}」，与上面的草稿列无关；要看别的表用标题栏的下拉切换"
-            )));
+        // 场景表 tab：说清它的列与预览都是这张表自己的（看别的表切 tab，不再有下拉）
+        if matches!(self.target, DetailTarget::Table(_)) {
+            if let Some(name) = scenario_source.as_deref() {
+                body = body.child(div().text_xs().text_color(muted).child(format!(
+                    "来自场景模板「{name}」：这张表的列与预览都属于它自己；看别的表切 tab（或在右 Dock 结果区点一行）"
+                )));
+            }
         }
 
         let preview = generated.as_ref().map(|info| info.preview.clone());
@@ -5353,20 +5571,34 @@ impl BasePanel for MockDetailView {
     ) {
         self.group = Some(group);
     }
+
+    /// tab 被激活 = 这张表成为「当前表」：出口（落库 / 追加 / 导出）都作用于它。
+    ///
+    /// 这就是「切 tab 就是切表」的落地点：用户不必再去面板里选一次。
+    /// 草稿 tab 不动当前表（草稿不是结果表）。
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if !active {
+            return;
+        }
+        let DetailTarget::Table(name) = self.target.clone() else {
+            return;
+        };
+        self.panel
+            .update(cx, |panel, cx| panel.focus_table(&name, cx));
+    }
 }
 
 impl ComponentPanel for MockDetailView {
     fn tab_name(&self, cx: &App) -> Option<SharedString> {
-        let table = self.panel.read(cx).draft().table_name.clone();
-        Some(format!("Mock · {table}").into())
+        Some(self.tab_label(cx).into())
     }
 
     fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let table = self.panel.read(cx).draft().table_name.clone();
+        let label = self.tab_label(cx);
         div()
             .text_sm()
             .font_weight(FontWeight::MEDIUM)
-            .child(format!("Mock · {table}"))
+            .child(label)
     }
 }
 

@@ -123,10 +123,10 @@ impl MockHost for WorkbenchMockHost {
         WorkbenchMockHost::project_root(self)
     }
 
-    fn open_detail(&self, window: &mut Window, cx: &mut App) {
+    fn open_detail(&self, target: mock::mock_view::DetailTarget, window: &mut Window, cx: &mut App) {
         let open = self.shared.open_mock_detail.borrow().clone();
         if let Some(open) = open {
-            open(window, cx);
+            open(target, window, cx);
         } else {
             // 宿主未装配（理论上不会）：退到只重绘，面板结果仍可查看
             self.shared.notify_host(cx);

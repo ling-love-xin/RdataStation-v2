@@ -61,7 +61,7 @@ MockConfig ──┬─ table_name   用户命名的表（用于临时表名与�
 
 - **为什么单独一个 crate**：有独立生命周期（生成任务/模板持久化独立于窗口）、有稳定边界（`MockEngine` 为唯一入口）、使用方 ≥2（workbench 面板 + 未来的 CLI/导出工具）。
 - **为什么视图在本 crate**：按「Feature 自持视图」（与 `project::ui` / `settings_view` 同例），mock 配置面板（`MockPanel`）、详情 tab（`MockDetailView`）与三个对话框（导入结构 / 列编辑 / 生成器搜索）随能力同 crate；crate 依赖 `gpui-kit`（UI 基础设施，架构允许），**不依赖 workbench**——生成 / 出口 / 列来源 / 既有表 / 只读标志 / 打开详情 / 重绘均由 [`MockHost`](../../../crates/mock/src/mock_view.rs) 注入。
-- **宿主桥**：workbench 侧 `crates/workbench/src/components/mock_host.rs` 实现全部 `MockHost` 能力（转发到 `services::mock_generator` 与 `Shared`）；中央 tab 的加入与聚焦由 `view.rs` 注册在 `Shared::open_mock_detail` 上。
+- **宿主桥**：workbench 侧 `crates/workbench/src/components/mock_host.rs` 实现全部 `MockHost` 能力（转发到 `services::mock_generator` 与 `Shared`）；中央 tab 的加入与聚焦由 `view.rs` 注册在 `Shared::open_mock_detail` 上——**一个目标一个 tab**（按 `DetailTarget::key()` 去重：草稿 `draft`，每张结果表 `table:{表名}`）。
 
 ## 4. 五条数据流
 
@@ -257,8 +257,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 字段编辑工作副本 | `mock::mock_view::MockDetailView::draft: Option<ColumnDraft>` | 列编辑对话框打开时建、应用 / 取消时丢弃 |
 | 生成器搜索列表 | `ListState<GeneratorSearchDelegate>`（对话框打开时建；由 dialog builder 闭包持有） | `List` 组件的搜索框改 query → `perform_search` 同步过滤；确认写回面板后关对话框 |
 | 面板实体句柄 | `Shared.mock_panel`（`WeakEntity<MockPanel>`） | 面板**构造期**登记；导航右键用它定向导入结构（懒创建会让「先右键、后面板未渲染」丢目标） |
-| 详情 tab 句柄 | `Shared.mock_detail`（`WeakEntity<MockDetailView>`） | 首次「查看详情」时建并入中央 tab 组；tab 被关闭后实体释放 → 下次重新创建 |
-| 打开详情的宿主命令 | `Shared.open_mock_detail`（`Rc<dyn Fn(&mut Window, &mut App)>`） | 由宿主构造期装配（需要 DockArea），与 `editor_clear` 同一口径 |
+| 详情 tab 句柄 | `Shared.mock_details`（`HashMap<目标 key, WeakEntity<MockDetailView>>`） | 首次「查看详情」时按 `DetailTarget::key()` 建 tab 并登记（**一个目标一个 tab**）；tab 被关闭后实体释放 → 下次重新创建 |
+| 打开详情的宿主命令 | `Shared.open_mock_detail`（`Rc<dyn Fn(DetailTarget, &mut Window, &mut App)>`） | 由宿主构造期装配（需要 DockArea），与 `editor_clear` 同一口径；按 key 去重，已存在则 `TabGroup::select_tab` 聚焦 |
 | 列来源 / 既有表 | 面板状态（由宿主 `MockHost::schema_sources/existing_tables` 提供） | 打开面板 / 导入对话框 / 落库报「已存在」时加载；渲染只读 |
 | 取消标志 | mock crate 进程级 `AtomicBool` | 生成前重置、批次边界读 |
 | 生成任务 / 用户模板 | 项目 SQLite（`MockGenerationStore`） | 命令式调用（事务内） |
@@ -434,4 +434,4 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D31 自定义多表 | `mock_view.rs`（`add_draft_to_scenario` / `remove_scenario_table`；工作副本表清单的「删除」与「＋ 加表（当前草稿）」） |
 | D32 编辑表 | `mock_view.rs`（`open_table_dialog` / `apply_table_edit` 改工作副本并重定向入边；`relation_range` 由父列自增参数 + 父表行数算域文案） |
 | D13 生成器目录 | `tools/gen_mock_generator_catalog.py` → `crates/mock/src/generator_catalog.rs` |
-| 宿主桥 | `crates/workbench/src/components/mock_host.rs`（`MockHost` 实现）+ `crates/workbench/src/panels/`（面板构造期创建与句柄登记）+ `crates/workbench/src/view.rs`（详情 tab 宿主命令） |
+| 宿主桥 | `crates/workbench/src/components/mock_host.rs`（`MockHost` 实现）+ `crates/workbench/src/panels/`（面板构造期创建与句柄登记）+ `crates/workbench/src/view.rs`（详情 tab 宿主命令：按目标 key 建 tab / 已存在则聚焦） |

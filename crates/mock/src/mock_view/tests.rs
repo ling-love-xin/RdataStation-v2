@@ -19,8 +19,8 @@ use gpui_kit::{
 };
 
 use super::{
-    HistoryReply, MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost, MockJobDone,
-    MockJobKind, MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview,
+    DetailTarget, HistoryReply, MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost,
+    MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview,
     MockRunOptions, RelationPick, ScenarioRelation, SchemaRequest, SchemaSource, focus_detail_tab,
     param_text, parse_percent_ratio, parse_rows, parse_seed, patch_param, search_generators,
     summarize_params, validate_table_name,
@@ -387,6 +387,8 @@ const SCENARIO_TABLES: [(&str, u32); 3] = [("orders", 100), ("items", 250), ("us
 struct Recorder {
     notifies: Cell<usize>,
     opened_detail: Cell<usize>,
+    /// 打开过的详情 tab（`DetailTarget::key()`，按顺序）
+    opened_targets: RefCell<Vec<String>>,
     /// 提交的后台任务（种类）
     started: RefCell<Vec<MockJobKind>>,
     /// 取消请求次数
@@ -682,8 +684,9 @@ impl MockHost for TestHost {
         self.rec.project_root.borrow().clone()
     }
 
-    fn open_detail(&self, _window: &mut Window, _cx: &mut App) {
+    fn open_detail(&self, target: DetailTarget, _window: &mut Window, _cx: &mut App) {
         self.rec.opened_detail.set(self.rec.opened_detail.get() + 1);
+        self.rec.opened_targets.borrow_mut().push(target.key());
     }
 
     fn notify(&self, _cx: &mut App) {
@@ -754,7 +757,7 @@ fn open_harness(
     let slot_in = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let panel = cx.new(|cx| MockPanel::new(host, cx));
-        let detail = cx.new(|cx| MockDetailView::new(panel.clone(), cx));
+        let detail = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Draft, cx));
         *slot_in.borrow_mut() = Some((panel.clone(), detail.clone()));
         // 窗口根必须是 `Root`（Entity 才能交给它）：外包一层 Harness 实体
         let harness = cx.new(|_cx| Harness { panel, detail });
@@ -1162,6 +1165,160 @@ fn open_detail_calls_host(cx: &mut TestAppContext) {
         });
     });
     assert_eq!(rec.opened_detail.get(), 1);
+    assert_eq!(rec.opened_targets.borrow().as_slice(), ["draft".to_string()]);
+}
+
+/// 「一表一 tab」：**结果表一个表一个 tab**，视图身份是表名（不是下标）。
+///
+/// 为何锁：`results` 每次生成都会重建，用下标做身份会让 tab 指向别的表；
+/// 同时右 Dock 的结果表清单是这些 tab 的**管理入口**（点一行就打开 / 切过去）。
+#[gpui_kit::test]
+fn each_result_table_gets_its_own_detail_tab(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    // 场景生成 → 三张结果表
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+
+    // 草稿与结果表是两种身份（键也不同）：同一个键只会有一个 tab
+    assert_eq!(DetailTarget::Draft.key(), "draft");
+    assert_eq!(DetailTarget::Table("items".into()).key(), "table:items");
+    assert_ne!(
+        DetailTarget::Draft.key(),
+        DetailTarget::Table("items".into()).key()
+    );
+
+    // **生成本身不开 tab**（不淹用户）：清单里点一行才开
+    assert!(
+        rec.opened_targets.borrow().is_empty(),
+        "{:?}",
+        rec.opened_targets.borrow()
+    );
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.open_table_detail("items", window, cx);
+        });
+    });
+    assert_eq!(
+        rec.opened_targets.borrow().as_slice(),
+        ["table:items".to_string()]
+    );
+}
+
+/// 切 tab 就是切表：详情 tab 被激活时把那张表设为「当前表」（出口作用于它）。
+///
+/// 为何锁：中央 tab 与右 Dock 是同一状态（面板那行会打 ●「当前表」）——
+/// 用户在中央切 tab，出口目标跟着走，不必回面板再选一次。
+#[gpui_kit::test]
+fn activating_a_table_tab_makes_it_current(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+
+    panel.update(cx, |panel, cx| {
+        assert_eq!(panel.current_result(), 0, "场景生成后停在第一张（orders）");
+        panel.focus_table("items", cx);
+        assert_eq!(panel.current_result(), 1, "切 tab 把当前表改成 items");
+        assert_eq!(panel.current_detail_target().label(), "items");
+        // 不在本轮结果里的表名不动状态（tab 可能是上一轮留下的）
+        panel.focus_table("gone", cx);
+        assert_eq!(panel.current_result(), 1);
+    });
+}
+
+/// tab 标题：结果表写 `表名（N 行）`（行数实时取自结果），草稿写目标表名。
+#[gpui_kit::test]
+fn tab_titles_name_the_table_and_its_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+
+    let source = panel.clone();
+    let (draft_view, orders_view, items_view) = cx.update(|_window, cx| {
+        (
+            cx.new(|cx| MockDetailView::new(source.clone(), DetailTarget::Draft, cx)),
+            cx.new(|cx| {
+                MockDetailView::new(source.clone(), DetailTarget::Table("orders".into()), cx)
+            }),
+            cx.new(|cx| MockDetailView::new(source.clone(), DetailTarget::Table("items".into()), cx)),
+        )
+    });
+
+    // 读另一个实体（详情）**不能**再包在 `panel.update` 里：`tab_label` 会回读面板，
+    // 而面板正被 update 持有 → gpui 会以「already being updated」panic。
+    let draft_label = draft_view.read_with(cx, |view, cx| view.tab_label(cx));
+    let orders_label = orders_view.read_with(cx, |view, cx| view.tab_label(cx));
+    let items_label = items_view.read_with(cx, |view, cx| view.tab_label(cx));
+    assert_eq!(draft_label, "Mock · mock_data");
+    assert_eq!(orders_label, "Mock · orders（100 行）");
+    assert_eq!(items_label, "Mock · items（250 行）");
+}
+
+/// 每张结果表 tab 认的是**自己那张表**（与面板的「当前表」无关）。
+///
+/// 为何锁：以前只有一个详情 tab，预览跟着「当前表」跑；现在两张 tab 并排看，
+/// 必须各自认自己的表（标题与预览都走同一个「按表名查结果」的入口）。
+#[gpui_kit::test]
+fn a_table_tab_carries_its_own_table(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+
+    // 面板停在 orders，但 items 的 tab 依旧认 items
+    let source = panel.clone();
+    let items_view = panel.update(cx, |_panel, cx| {
+        cx.new(|cx| {
+            MockDetailView::new(source.clone(), DetailTarget::Table("items".into()), cx)
+        })
+    });
+    let (current, items_rows, items_columns) = panel.read_with(cx, |panel, _cx| {
+        let items = panel
+            .results()
+            .iter()
+            .find(|info| info.table_name == "items")
+            .expect("items 在结果里");
+        (
+            panel.current_result(),
+            items.row_count,
+            items.preview.columns.clone(),
+        )
+    });
+    assert_eq!(current, 0, "面板停在 orders");
+    assert_eq!(items_rows, 250);
+    assert_eq!(items_columns, vec!["id"]);
+    // items 的 tab 认 items（标题与预览走同一个「按表名查结果」的入口）
+    assert_eq!(
+        items_view.read_with(cx, |view, _cx| view.target().label()),
+        "items"
+    );
+    assert_eq!(
+        items_view.read_with(cx, |view, cx| view.tab_label(cx)),
+        "Mock · items（250 行）"
+    );
 }
 
 #[gpui_kit::test]
@@ -1342,7 +1499,7 @@ fn focus_tab_in_dock_selects_self(cx: &mut TestAppContext) {
         let area = cx.new(|cx| DockArea::new("mock-focus-area", None, window, cx));
         // 再建一个同类面板压在详情之上，再把组切到它：这样详情 tab **不是**当前激活项，
         // `select_tab` 不会走「已激活即返回」的捷径，切换才是真被验证。
-        let other = cx.new(|cx| MockDetailView::new(panel.clone(), cx));
+        let other = cx.new(|cx| MockDetailView::new(panel.clone(), DetailTarget::Draft, cx));
         area.update(cx, |area, cx| {
             area.add_panel(detail.clone(), DockPlacement::Center, None, window, cx);
             area.add_panel(other, DockPlacement::Center, None, window, cx);

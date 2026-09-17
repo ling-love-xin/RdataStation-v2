@@ -26,7 +26,7 @@
 | `driver_catalog` | nav（加载） | nav / editor | **保留 `Shared`** | 只读快照（随组织数据一次性加载） |
 | `project` / `project_ui` | 宿主（`view.rs`） | editor / scratchpad | **保留 `Shared`** | M1 项目会话与 UI 状态 |
 | `active_left` / `active_right` / `*_mode` / `quick_open` / `settings_open` | 宿主 | 宿主 / mod.rs | **保留 `Shared`** | 布局与三模式（`rds-layout` 口径） |
-| `mock_panel` / `mock_detail` / `insight_panel` / `open_mock_detail` / `host_redraw` | 宿主 | 宿主 / right.rs | **保留 `Shared`** | 宿主级弱句柄与命令 |
+| `mock_panel` / `mock_details` / `insight_panel` / `open_mock_detail` / `host_redraw` | 宿主 | 宿主 / right.rs | **保留 `Shared`** | 宿主级弱句柄与命令 |
 | `editor_sql` / `editor_dirty` | ~~仅 editor.rs~~ | — | ✅ **S2 遗留已接（B11/B12，2026-09-16）**：随 `EditorService` 契约一起换实现——草稿 = **未命名编辑器文档**，M1 桥改读 `EditorShared`（`components/project_host.rs`）；两个字段已删 | — |
 | `nav_for` / `nav_tables` | **仅 editor.rs** | 仅 editor.rs（+ 宿主 Quick Open 读表名快照） | **✅ S1 已收回 `EditorPanel`** | 外部失效改为 `Shared::invalidate_nav_cache()`（§3 戳） |
 | `sql_for` | 仅 editor.rs | 仅 editor.rs | **✅ S1 已收回 `EditorPanel`** | 外部失效改为 `Shared::invalidate_sql_result()` |

@@ -59,7 +59,7 @@
 共 12 个字段跨模块。它们**没有类型级保护**：任何模块都能写任何字段，改一处语义不会有编译错误，
 只能靠约定与 review。
 
-> 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `insight_panel` / `resources_panel`）：
+> 另一类不在此列的字段是**宿主 ↔ 特性 crate 视图的实体弱句柄**（`mock_panel` / `mock_details` / `insight_panel` / `resources_panel`）：
 > 它们只在 workbench 内部读写——特性 crate 拿到的是注入的宿主端口，根本不认识 `Shared`——用途是
 > "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项）。新增同类句柄只需更新
 > `ui_contract.rs` 的白名单，不必改本表。
