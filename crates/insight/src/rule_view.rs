@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::base::StyledExt;
 use gpui_kit::component::accordion::Accordion;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
@@ -33,6 +34,7 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme
 use gpui_kit::*;
 
 use crate::rule::RuleScope;
+use crate::rule_registry::PendingProjectRules;
 use crate::rule_types::RuleMeta;
 use crate::service::indexer::{RuleIndexEntry, RuleLoadStatus};
 use crate::ui;
@@ -100,7 +102,7 @@ impl RuleGroupView {
     }
 }
 
-/// 对话框的完整数据（三组 + 底部统计）
+/// 对话框的完整数据（三组 + 底部统计 + 信任门横幅）
 ///
 /// 统计数字取自**未过滤**的全量数据：搜索词不该让「共 20 条」变成「共 2 条」，
 /// 那会让人误以为规则被删了。
@@ -111,6 +113,38 @@ pub struct RulesData {
     pub disabled: usize,
     /// 异常条数（解析失败 + 文件丢失）
     pub broken: usize,
+    /// 项目层有规则但**未信任**因而未装配（信任门横幅；`None` = 没这回事）
+    pub pending: Option<PendingRulesView>,
+}
+
+/// 未信任的项目规则（信任门横幅的数据）。
+///
+/// 这是「你正在决定什么」的全部信息：多少条、叫什么、目录在哪、其中几条本来就解析不过。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRulesView {
+    pub ids: Vec<String>,
+    /// 其中解析失败的条数（未信任也看得见「这份规则本身就有毛病」）
+    pub invalid: usize,
+    pub dir: String,
+    /// 用户此前已明确选择「不加载」（此时横幅改说「你选择了不加载」）
+    pub declined: bool,
+}
+
+impl PendingRulesView {
+    pub fn count(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// 展示用的 id 列表：最多 6 条，多的部分用「等 N 条」收尾。
+    pub fn summary(&self) -> String {
+        const SHOWN: usize = 6;
+        let shown: Vec<&str> = self.ids.iter().take(SHOWN).map(|id| id.as_str()).collect();
+        let mut text = shown.join(" / ");
+        if self.ids.len() > SHOWN {
+            text.push_str(&format!(" 等 {} 条", self.ids.len()));
+        }
+        text
+    }
 }
 
 impl Default for RulesData {
@@ -126,6 +160,7 @@ impl Default for RulesData {
             total: 0,
             disabled: 0,
             broken: 0,
+            pending: None,
         }
     }
 }
@@ -185,6 +220,10 @@ pub struct RuleDataInput {
     pub global_rows: Vec<RuleIndexEntry>,
     /// 内置规则元信息（正文内嵌，界面只需要展示字段）
     pub builtin: Vec<RuleMeta>,
+    /// 未信任而未装配的项目规则（见 [`PendingProjectRules`]）
+    pub pending: Option<PendingProjectRules>,
+    /// 用户此前已明确选择「不加载该项目规则」
+    pub trust_declined: bool,
 }
 
 /// 内置层 id 集合：索引里出现这些 id 且没有来源文件时，是**抑制记录**而非规则文件。
@@ -332,6 +371,12 @@ pub fn build_rules_data(input: RuleDataInput) -> RulesData {
         total,
         disabled,
         broken,
+        pending: input.pending.as_ref().map(|pending| PendingRulesView {
+            ids: pending.ids.clone(),
+            invalid: pending.invalid,
+            dir: pending.dir.display().to_string(),
+            declined: input.trust_declined,
+        }),
     }
 }
 
@@ -362,6 +407,8 @@ pub enum RulesEvent {
     CreateRuleRequested { scope: RuleScope },
     /// 在系统编辑器中打开规则文件
     OpenFileRequested { path: PathBuf },
+    /// 项目规则信任门（Q1 ③ / D53）：用户对「该项目自带规则要不要加载」做出的决定
+    TrustDecided { trusted: bool },
 }
 
 /// 规则管理对话框（实体；状态与渲染，不做 I/O）。
@@ -379,6 +426,14 @@ pub struct RulesView {
     /// 搜索框（**打开时懒创建**：`InputState::new` 需要窗口，而面板构造期没有窗口）
     search_input: Option<Entity<InputState>>,
     _search_sub: Option<Subscription>,
+    /// 打开本对话框时捕获的窗口句柄。
+    ///
+    /// 首次遇到未信任的项目规则时要在**取数回填那一刻**弹确认框（那一刻没有窗口），
+    /// 所以得先把窗口存下来，回填时用 `update_window` 打开（对话框层是栈式的，
+    /// 叠在规则对话框上是 kit 支持的行为）。
+    window: Option<AnyWindowHandle>,
+    /// 本次会话是否已就该项目的未信任规则问过（问过就不再打扰，横幅始终保留入口）
+    trust_prompted: bool,
 }
 
 impl EventEmitter<RulesEvent> for RulesView {}
@@ -394,6 +449,8 @@ impl RulesView {
             open_groups: [true; GROUP_ORDER.len()],
             search_input: None,
             _search_sub: None,
+            window: None,
+            trust_prompted: false,
         }
     }
 
@@ -425,11 +482,18 @@ impl RulesView {
 
     /// 取数完成（接缝调用）
     pub fn set_data(&mut self, data: RulesData, cx: &mut Context<Self>) {
+        let first_sight_of_untrusted = data.pending.is_some() && !self.trust_prompted;
         self.data = data;
         self.state = RulesDialogState::Ready;
         self.notice = None;
         self.refresh_visible();
         cx.notify();
+
+        // **首次弹确认**（Q1 ③）：问一次就够，之后再遇到只留横幅
+        if first_sight_of_untrusted {
+            self.trust_prompted = true;
+            self.open_trust_prompt(cx);
+        }
     }
 
     /// 取数失败（接缝调用）：整体错误态——没有数据可看时才是这个态
@@ -483,6 +547,8 @@ impl RulesView {
     /// 已有数据时不回退到 Loading——重开对话框不该闪白，后台刷新完成后就地替换。
     pub fn begin_load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ensure_search_input(window, cx);
+        // 存下窗口：首次确认框要在「取数回填」那一刻弹（那时没有窗口）
+        self.window = Some(window.window_handle());
         if self.data.total == 0 && !matches!(self.state, RulesDialogState::Error { .. }) {
             self.state = RulesDialogState::Loading;
         }
@@ -510,6 +576,107 @@ impl RulesView {
     /// 重试 / ⟳：只发请求，状态由接缝回填
     pub fn request_reload(&mut self, cx: &mut Context<Self>) {
         cx.emit(RulesEvent::ReloadRequested);
+    }
+
+    /// 信任门的回答（横幅按钮 / 确认框共用）：发事件，写库与重装由接缝完成。
+    ///
+    /// 视图**不自己改 `pending`**：真值只能来自「库里的决定 + 重新装配」——
+    /// 就地改会做出一个库与注册表都没跟上的假象。
+    pub fn request_trust(&mut self, trusted: bool, cx: &mut Context<Self>) {
+        self.trust_prompted = true;
+        cx.emit(RulesEvent::TrustDecided { trusted });
+        cx.notify();
+    }
+
+    /// 首次遇到未信任的项目规则：叠一个确认框（决定记住，不在本视图）。
+    ///
+    /// 取数回填那一刻没有窗口，所以用 `begin_load` 时存下的句柄 `update_window`。
+    /// 拿不到窗口（脱窗口单测 / 非常规装配）就不弹——横幅仍在，不会变成静默忽略。
+    fn open_trust_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(window_handle) = self.window else {
+            return;
+        };
+        let Some(pending) = self.data.pending.clone() else {
+            return;
+        };
+
+        let entity = cx.entity();
+        let opened = cx.update_window(window_handle, move |_, window, cx| {
+            let entity = entity.clone();
+            window.open_dialog(cx, move |dialog, _window, cx| {
+                let theme = cx.theme();
+                let mut body = div()
+                    .v_flex()
+                    .w_full()
+                    .gap_2()
+                    .text_sm()
+                    .child(
+                        div()
+                            .text_color(theme.colors.foreground)
+                            .child(format!(
+                                "该项目带了 {} 条规则，是否加载？",
+                                pending.count()
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(
+                                "规则 SQL 会在本机执行。只放行单条只读查询，\
+                                 但仍能读到本机能读到的数据——确认来源可信后再加载。",
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(format!("规则：{}", pending.summary())),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(format!("目录：{}", pending.dir)),
+                    );
+                if pending.invalid > 0 {
+                    body = body.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.warning)
+                            .child(format!("其中 {} 条本身解析失败", pending.invalid)),
+                    );
+                }
+                dialog
+                    .title("项目规则：是否加载")
+                    .child(body)
+                    .button_props(
+                        DialogButtonProps::default()
+                            .ok_text("信任并加载")
+                            .cancel_text("不加载")
+                            .show_cancel(true),
+                    )
+                    .on_ok({
+                        let entity = entity.clone();
+                        move |_, _window, app| {
+                            entity.update(app, |view, cx| view.request_trust(true, cx));
+                            true
+                        }
+                    })
+                    .on_cancel({
+                        let entity = entity.clone();
+                        move |_, _window, app| {
+                            entity.update(app, |view, cx| view.request_trust(false, cx));
+                            true
+                        }
+                    })
+            });
+        });
+
+        if let Err(e) = opened {
+            // 弹不出来不是致命错误：横幅仍在（用户仍能做出决定）
+            tracing::warn!("[rules] 打开项目规则确认框失败: {e}");
+        }
     }
 
     /// 开关：先**就地翻位**（避免等一次后台往返才动的视觉回弹），再发请求；
@@ -758,14 +925,108 @@ impl Render for RulesView {
             _ => self.render_groups(&entity, theme).into_any_element(),
         };
 
-        div()
+        // 信任门横幅在**分组之前**：未信任的项目规则不在下面的分组里
+        let banner = self
+            .data
+            .pending
+            .as_ref()
+            .map(|pending| pending_banner(pending, &entity, theme));
+
+        let mut root = div()
             .v_flex()
             .w_full()
             .gap_2()
-            .child(self.render_toolbar(&entity, theme))
-            .child(body)
-            .child(self.render_status(theme))
+            .child(self.render_toolbar(&entity, theme));
+        if let Some(banner) = banner {
+            root = root.child(banner);
+        }
+        root.child(body).child(self.render_status(theme))
     }
+}
+
+/// 信任门横幅（Q1 ③ / D53）：未信任的项目规则**未装配**，得让用户看得见并做得成决定。
+///
+/// 放在分组之前而不是塞进项目组里：它决定的是「下面那个项目组会不会有内容」。
+fn pending_banner(pending: &PendingRulesView, entity: &Entity<RulesView>, theme: &Theme) -> Div {
+    let colors = theme.colors;
+    let mut body = div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .p_2()
+        .rounded_md()
+        .border_1()
+        .border_color(colors.warning)
+        .child(
+            div()
+                .text_sm()
+                .text_color(colors.foreground)
+                .child(if pending.declined {
+                    format!("该项目带了 {} 条规则；你此前选择了不加载。", pending.count())
+                } else {
+                    format!("该项目带了 {} 条规则，尚未加载（未信任）。", pending.count())
+                }),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(
+                    "规则 SQL 会在本机执行——只放行单条只读查询，但仍能读到本机能读到的数据。\
+                     确认来源可信后再加载；项目规则随项目走，克隆别人的仓库时尤其要看一眼。",
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .child(format!("规则：{}", pending.summary())),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(colors.muted_foreground)
+                .text_ellipsis()
+                .child(format!("目录：{}", pending.dir)),
+        );
+
+    if pending.invalid > 0 {
+        body = body.child(
+            div()
+                .text_xs()
+                .text_color(colors.warning)
+                .child(format!("其中 {} 条本身解析失败", pending.invalid)),
+        );
+    }
+
+    let mut actions = div().h_flex().w_full().gap_2().child(
+        Button::new("insight-rule-trust-accept")
+            .primary()
+            .xsmall()
+            .label(if pending.declined {
+                "改为信任并加载"
+            } else {
+                "信任并加载"
+            })
+            .on_click({
+                let entity = entity.clone();
+                move |_, _, app| entity.update(app, |view, cx| view.request_trust(true, cx))
+            }),
+    );
+    if !pending.declined {
+        actions = actions.child(
+            Button::new("insight-rule-trust-decline")
+                .ghost()
+                .xsmall()
+                .label("不加载")
+                .on_click({
+                    let entity = entity.clone();
+                    move |_, _, app| entity.update(app, |view, cx| view.request_trust(false, cx))
+                }),
+        );
+    }
+
+    body.child(actions)
 }
 
 // ==================== 片段助手（纯渲染） ====================
@@ -972,8 +1233,8 @@ mod tests {
     };
 
     use super::{
-        GROUP_ORDER, RuleDataInput, RuleRowStatus, RulesData, RulesEvent, RulesView, build_rules_data,
-        row_matches,
+        GROUP_ORDER, PendingProjectRules, PendingRulesView, RuleDataInput, RuleRowStatus, RulesData,
+        RulesEvent, RulesView, build_rules_data, row_matches,
     };
     use crate::rule::RuleScope;
     use crate::rule_types::RuleMeta;
@@ -1029,6 +1290,8 @@ mod tests {
             project_rows: vec![index_row("my-rule", RuleScope::Project, true)],
             global_rows: vec![index_row("shared-rule", RuleScope::Global, true)],
             builtin: vec![meta("null-check", "空值检查"), meta("numeric-stats", "数值统计")],
+            pending: None,
+            trust_declined: false,
         }
     }
 
@@ -1128,6 +1391,89 @@ mod tests {
             .unwrap();
         assert_eq!(gone.status, RuleRowStatus::Missing);
         assert!(gone.file.is_none(), "文件已不在，不给必然失败的开入口");
+    }
+
+    /// 信任门（Q1 ③）：信任状态是**库里的决定**，视图不得自己就地改。
+    #[gpui_kit::test]
+    fn pending_banner_actions_emit_decision_without_touching_local_state(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (rules, sink, cx) = open_dialog_harness(cx);
+        cx.update(|window, cx| rules.update(cx, |view, cx| view.begin_load(window, cx)));
+
+        let mut data = sample_data();
+        data.pending = Some(PendingRulesView {
+            ids: vec!["gated-a".into(), "gated-b".into()],
+            invalid: 1,
+            dir: "/p/.RSmeta/insight-rules".into(),
+            declined: false,
+        });
+        cx.update(|_window, cx| {
+            rules.update(cx, |view, cx| view.set_data(data.clone(), cx))
+        });
+        draw(cx);
+
+        // 首次拿到带 pending 的数据 → 叠一个确认框（规则对话框仍在下面）
+        assert!(
+            cx.update(|window, cx| window.has_active_dialog(cx)),
+            "首次遇到未信任的项目规则应弹确认框"
+        );
+
+        // 两个按钮共用的那条路：只发事件，不改本视图的 pending
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.request_trust(true, cx)));
+        let seen = sink.read_with(cx, |sink, _| sink.events.borrow().clone());
+        assert_eq!(seen.last(), Some(&RulesEvent::TrustDecided { trusted: true }));
+        rules.update(cx, |view, _| {
+            assert!(
+                view.data().pending.is_some(),
+                "决定要等库里写了、重新装配后才生效（否则界面会撒谎）"
+            );
+            assert!(view.trust_prompted, "问过一次就不再追问");
+        });
+
+        // 第二次回填（例如 ⟳ 刷新）不该重开确认框；横幅照旧可渲染
+        cx.update(|_window, cx| {
+            rules.update(cx, |view, cx| view.set_data(data.clone(), cx))
+        });
+        draw(cx);
+        rules.update(cx, |view, _| assert!(view.trust_prompted));
+
+        // 改主意（拒绝）走同一条路
+        cx.update(|_window, cx| rules.update(cx, |view, cx| view.request_trust(false, cx)));
+        let seen = sink.read_with(cx, |sink, _| sink.events.borrow().clone());
+        assert_eq!(seen.last(), Some(&RulesEvent::TrustDecided { trusted: false }));
+    }
+
+    /// 搜索不该把信任门横幅过滤掉（它不属于任何分组）。
+    #[test]
+    fn pending_survives_filtering() {
+        let mut input = input();
+        input.pending = Some(PendingProjectRules {
+            dir: PathBuf::from("/p/.RSmeta/insight-rules"),
+            ids: vec!["a".into(), "b".into(), "c".into()],
+            invalid: 0,
+        });
+        let data = build_rules_data(input);
+        assert!(data.pending.is_some(), "有 pending 数据时应出现在横幅上");
+
+        let filtered = data.filtered("不存在的词");
+        assert!(filtered.pending.is_some(), "搜索不该弄丢横幅");
+        assert_eq!(filtered.visible_rows(), 0, "但行确实被过滤了");
+    }
+
+    /// 横幅文案：超过 6 条只列前 6 条，用「等 N 条」收尾（不至于把对话框撞开）。
+    #[test]
+    fn pending_summary_is_bounded() {
+        let view = PendingRulesView {
+            ids: (0..8).map(|i| format!("rule-{i}")).collect(),
+            invalid: 0,
+            dir: "/p".into(),
+            declined: false,
+        };
+        assert_eq!(view.count(), 8);
+        let summary = view.summary();
+        assert!(summary.contains("rule-0") && summary.contains("rule-5"), "{summary}");
+        assert!(!summary.contains("rule-6"), "只列前 6 条：{summary}");
+        assert!(summary.contains("等 8 条"), "多的部分要收尾：{summary}");
     }
 
     #[test]
@@ -1277,6 +1623,8 @@ mod tests {
             project_rows: vec![index_row("my-rule", RuleScope::Project, true)],
             global_rows: Vec::new(),
             builtin: vec![meta("null-check", "空值检查")],
+            pending: None,
+            trust_declined: false,
         })
     }
 

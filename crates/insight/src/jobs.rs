@@ -25,6 +25,7 @@ use crate::insight_view::{InsightEvent, InsightView};
 use crate::model::{ColumnProfileView, InsightTarget, TableProfileView};
 use crate::rule::RuleScope;
 use crate::rule_view::{RulesEvent, RulesView};
+use crate::service::rule_trust::RuleTrust;
 use crate::service::InsightService;
 
 /// 一次画像请求：后台执行所需的全部输入（均为所有权数据，因此可跨线程）。
@@ -209,7 +210,43 @@ pub fn handle_rules_event(
             request_create_rule(view, project_root, *scope, cx)
         }
         RulesEvent::OpenFileRequested { path } => open_in_system_editor(path),
+        RulesEvent::TrustDecided { trusted } => {
+            request_rules_trust(view, project_root, *trusted, cx)
+        }
     }
+}
+
+/// 信任门的回答：写库 + 重装注册表 + 回填列表（三件事都在接缝里，视图不碰库）。
+pub fn request_rules_trust(
+    view: &Entity<RulesView>,
+    project_root: Option<PathBuf>,
+    trusted: bool,
+    cx: &mut App,
+) {
+    let weak = view.downgrade();
+    let state = if trusted {
+        RuleTrust::Trusted
+    } else {
+        RuleTrust::Declined
+    };
+    let task = cx.background_executor().spawn(async move {
+        InsightService::decide_project_rules_trust(project_root.as_deref(), state)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |view, cx| match result {
+            Ok(data) => view.set_data(data, cx),
+            // 写库失败时不改信任状态：回填真值（仍是未信任），只提一句
+            Err(err) => view.set_notice(
+                format!(
+                    "信任状态未保存：{}",
+                    InsightService::describe_error(&err).message
+                ),
+                cx,
+            ),
+        });
+    })
+    .detach();
 }
 
 /// 取数：同步索引 → 组装视图模型（阻塞段全在后台执行器上）。
@@ -1204,6 +1241,9 @@ value_type = "i64"
         let root = temp_project("attach_rules");
         std::fs::write(root.join(".RSmeta/insight-rules/demo.rule.toml"), DEMO_RULE)
             .expect("写一条项目规则");
+        // 信任门（Q1 ③）：项目规则默认不装配；本用例测的是「宿主接缝 + 启停真的落到规则集」，
+        // 所以先把项目设为已信任（信任门本身另有专测）
+        crate::apply_project_rule_trust(&root, crate::RuleTrust::Trusted);
 
         let root_for_host = root.clone();
         let (host, _panel, rules, _sub) = cx.update(|cx| {

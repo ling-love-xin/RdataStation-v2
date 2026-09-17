@@ -1,8 +1,8 @@
 # 洞察模块（M8）· 设计理念与架构
 
-> 状态：**设计定稿 + Phase 0 已落地**（2026-09-15） · 关联文件：`README.md`（模块入口）、`insight-prototype-design.md`（原型）、`insight-dev-plan.md`（开发方案与进度）、`insight-user-guide.md`（使用手册）
+> 状态：**Phase 0–5 完成 + 规则安全边界收口**（2026-09-17） · 关联文件：`README.md`（模块入口）、`insight-prototype-design.md`（原型）、`insight-dev-plan.md`（开发方案与进度）、`insight-user-guide.md`（使用手册）
 > 本文回答**为什么这样设计 / 怎么运转**：概念模型 → 不变式 → 分层与归属 → 状态所有权 → 数据流 → 决策表 → 并发 → 降级 → 测试 → 实现映射 → 已知问题（权威）。
-> 现状口径：**后端算法与规则体系已完整落地并有测试覆盖；视图层尚未开始**（Phase 1 起，见开发方案 §5）。
+> 现状口径：**画像 / 评分 / 规则 / 报告 / 快照历史全部落地**（含右 Dock 面板与规则管理对话框）；规则安全边界 = 解析期静态门（D52）+ 项目规则信任门（D53）；临时表走 `duckdb::analysis`（D50/D51）。宿主侧仍欠：表入口、Schema 导出按钮与下钻（见开发方案 §0）。
 
 ## 1. 定位与边界
 
@@ -33,7 +33,7 @@ M1~M5 解决「连得上、看得见、查得动」；**M8 解决「这份数据
 | **画像** | 对目标的统计结论（`ColumnInsightFull` / `TableQuality` / `SchemaInsightReport`） | 内存值 |
 | **快照** | 画像的持久化副本 + 版本链 | 项目 `analytics.duckdb` + `project.db` |
 
-### 2.2 八条不变式
+### 2.2 九条不变式
 
 1. **一次分析 = 一个目标 + 一份结论**——面板头部永显当前目标，杜绝「这数是哪来的」。
 2. **结论可追溯**——每个数字来自统计量、评分维度或规则之一；UI 不发明结论。
@@ -43,6 +43,7 @@ M1~M5 解决「连得上、看得见、查得动」；**M8 解决「这份数据
 6. **启停在覆盖之后应用**——禁用针对「最终生效的那一条」，与它来自哪一层无关。
 7. **采样必须明示**——任何基于采样得出的结论，界面必须标出采样行数（表探查与批量评估后端为 `LIMIT 500`）。
 8. **快照正文与元数据成对写入**——不允许「只写一半也算成功」的静默降级。
+9. **项目层规则先得信任才装配**——项目规则跟着仓库走，未信任时**不装配也不执行**，但必须把「带了什么」摊在用户面前（D53）。
 
 ## 3. 分层与 crate 归属
 
@@ -109,11 +110,19 @@ registry_for(project_root)
        ① builtin_registry()            内层：include_dir 编译期嵌入（16 条，只读）
        ② get_system_dir() → {system}/insight-rules/    全局层（跨项目）
        ③ get_project_rules_dir(root) → {项目}/.RSmeta/insight-rules/   项目层
+          · **信任门**（D53）：project_rule_trust(root) 不是 Trusted 就**不装配**，
+            只扫描磁盘把「带了什么」记进 registry.pending_project（不执行任何 SQL）；
+            Trusted 才走 load_from_dir(dir, scope)
           · 每层 load_from_dir(dir, scope)：同名 insert 覆盖 + 记录 RuleSource + 记录失败
        ④ 日志逐条播报 failures
        ⑤ apply 禁用：disabled_snapshot(key) → registry.remove_rules(&set)
        ⑥ 返回（缓存）
 ```
+
+信任状态的读取走 `project_rule_trust`：进程级缓存 → 未命中则**自开一条只读连接**查全局库的
+`insight_rule_trust`（不用连接池的 `acquire_sync`——它在 tokio 运行时内会直接报错，
+而装配路径确实可能从异步侧进来）；查不到 / 出错一律按「未决定」（fail closed）。
+用户做出决定后 `apply_project_rule_trust` 更新缓存并使注册表缓存失效，下次装配就是新结果。
 
 `with_rules(project_root, f)` 是服务层统一入口：查缓存 → 加读锁 → 执行闭包，避免各处重复「取表 → 加锁 → 解引用」样板。
 
@@ -306,7 +315,8 @@ RulesWatcher（后台线程，drop 即停）：
 | D49 | 质量门控的 `field` 必须在 `[[output]]` 里真实存在（解析期，2026-09-17 定案 = Q6） | 字段不存在时取值为 `None`，而「只设 `max`」的判定对 `None` 是**通过**——门控形同虚设而界面看不出来（K11：内置的 `null-check` 就指着不存在的 `null_rate`） | 与 `deny_unknown_fields` 同一立场（早失败优于静默错）；**值合法地为 `null`**（如空表算不出空值率）仍算通过——那是刻意的 |
 | D50 | 分析用临时表**统一走 `engine::duckdb::analysis`**：名字带 `tmp_i_`（与 `TempTableSource::Insight` 对齐）、建表即登记、**用完即删**，惰性清理负责真正 DROP（2026-09-17） | 临时表的一切回收机制都靠**前缀**识别（TTL / 上限 / 按来源清理）；建表时另起一个名字（历史上的 `rs_<uuid>`）等于把所有回收机制关掉（K16）。而「只腾登记表不执行 DDL」会让表变成再也找不到的孤儿 | 中间产物用 `with_analysis_temp_table`（建 → 用 → 无论成败都收）；需要跨函数持有时用 create / drop 对；`drop` 只接受 `tmp_i_` 开头（防误删）。分析侧的 engine 支撑落在 `crates/engine/src/duckdb/`（新模块 `analysis.rs`） |
 | D51 | 连接建立时给 DuckDB 上**内存闸与溢写口**：`memory_limit` 默认 **2GB**、`temp_directory` 钉 `<RDS_HOME>/tmp`、`max_temp_directory_size` 默认 **10GB**；两个大小值可由 `RDS_DUCKDB_MEMORY_LIMIT` / `RDS_DUCKDB_MAX_TEMP_SIZE` 覆盖（非法值回退默认并告警）；登记概览用 `DuckDBManager::temp_table_stats()` 暴露，洞察建表时接近上限打 warn（2026-09-17，K16 ③④） | 内存库是**进程级单例**，DuckDB 默认吃物理内存的 80%——桌面应用把机器吃光不是可接受的失败方式；设了上限后到顶是**溢写到 `tmp/`**（慢一点）而不是报错，而溢写目录必须是我们自己会清理的地方（系统临时目录是用户清理不到的角落）。可观测是配套：登记表只增不减时没有任何外部表现，计数是唯一的提前信号 | 值拼进 SQL 前过 `parse_size_setting` 白名单（DuckDB 的 `SET` 不接受绑定参数）；临时目录建不出来时跳过溢写设置、不挡启动 |
-| D52 | 规则 SQL 走**解析期静态门**：只放行单条 `SELECT` / `WITH`，拒分号多语句、拒黑名单关键字（`ATTACH`/`COPY`/`INSTALL`/`SET`/`CREATE`/`DROP`…）与表函数（`read_*` / `*_scan` / `*_attach` / `*_query` / `glob` / `query_table`…）；**校验前先剥字符串字面量、注释与双引号标识符**（2026-09-17，Q1 ① 落地） | 规则文件随项目走（能来自别人仓库），而模板 SQL 原样交给 DuckDB 执行——最便宜的防线是在解析期就把「不是只读查询」的写法拒掉。**定位是防呆，不是安全边界**：DuckDB 没有官方解析沙箱，黑名单天然有漏（`SELECT` 里仍可能藏着未列入的函数），它做的是把风险从「随手就撞上」压到「得刻意构造」 | 报错文案点出规则 id + 撞上的词 + 改法（列名 / 表名加双引号即放行——剥掉双引号标识符是有意的，防误报）；真正的边界是「项目规则信任门」（Q1 ③，待拍板） |
+| D52 | 规则 SQL 走**解析期静态门**：只放行单条 `SELECT` / `WITH`，拒分号多语句、拒黑名单关键字（`ATTACH`/`COPY`/`INSTALL`/`SET`/`CREATE`/`DROP`…）与表函数（`read_*` / `*_scan` / `*_attach` / `*_query` / `glob` / `query_table`…）；**校验前先剥字符串字面量、注释与双引号标识符**（2026-09-17，Q1 ① 落地） | 规则文件随项目走（能来自别人仓库），而模板 SQL 原样交给 DuckDB 执行——最便宜的防线是在解析期就把「不是只读查询」的写法拒掉。**定位是防呆，不是安全边界**：DuckDB 没有官方解析沙箱，黑名单天然有漏（`SELECT` 里仍可能藏着未列入的函数），它做的是把风险从「随手就撞上」压到「得刻意构造」 | 报错文案点出规则 id + 撞上的词 + 改法（列名 / 表名加双引号即放行——剥掉双引号标识符是有意的，防误报）；真正的边界是「项目规则信任门」（Q1 ③） |
+| D53 | **项目规则信任门**：项目层规则在用户做出决定前**不装配、不执行**；决定（`trusted` / `declined`）记在**全局库** `insight_rule_trust`（键 = 规范化项目路径），默认无记录 = 未决定；首次在规则管理里遇到时**弹一次确认框**，之后由列表顶部的横幅改主意（2026-09-17，Q1 ③ 落地） | 静态门（D52）只挡「不是只读查询」的写法，挡不住一条**合法但恶意**的查询；而项目规则跟着仓库走——「克隆不信任的仓库 + 打开项目」是一个真实的攻击面。决定必须由人做，且必须记在**项目碰不到的地方**：存项目库等于让项目自己给自己发信任（自我授权） | `declined` 也落库：把「不加载」记成一次决定，才不会每次开项目都追问。**fail closed**：无记录 / 查库失败 / 值不认识，一律按未决定。已知取舍：信任绑定**路径**而非内容——用户自己改规则不会被反复打扰，代价是 `git pull` 带进来的新规则不会重新确认 |
 
 ## 7. 并发与资源
 
@@ -332,6 +342,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 场景 | 行为 | 用户可见结果 |
 | --- | --- | --- |
 | 系统目录不可用（`get_system_dir` 失败） | 跳过全局层，内置层照常 | 全局规则不生效，洞察功能正常 |
+| 全局库不可用（信任记录写不进） | 项目层保持**未装配**，信任动作报错并挂行内提示 | 「信任状态未保存」；规则管理里仍能看到未信任横幅 |
 | 全局 / 项目规则目录不存在 | 该层返回 0 条，不报错 | 视为「该层无规则」 |
 | 单条规则解析失败 | 标记 `invalid` + 记错误原文，其余照常 | 规则列表红行 + 错误原文 |
 | 规则文件被删 | 索引转 `missing`，规则不再生效 | 「规则文件不见了」提示 |
@@ -396,6 +407,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D50 分析临时表生命周期 | `crates/engine/src/duckdb/analysis.rs`（新：`ANALYSIS_TABLE_PREFIX` / `create_analysis_temp_table` / `drop_analysis_temp_table` / `with_analysis_temp_table` / `cleanup_analysis_temp_tables` / `analysis_temp_tables`）、`duckdb/manager.rs`（`temp_table_manager()` 访问器）、`duckdb/mod.rs`（挂模块）、`services/duckdb_service.rs`（`infer_type` / `json_to_duckdb_value` 改 `pub(crate)` 共用）、`crates/insight/src/service/persistence.rs`（两处样本表改用作用域封装） |
 | D51 内存闸与可观测 | `duckdb/manager.rs`（`configure_connection`：`memory_limit` / `temp_directory` / `max_temp_directory_size` + `size_setting` / `parse_size_setting` 白名单 + `temp_table_stats()` 访问器）、`duckdb/temp_table.rs`（`TempTableStats` + `TempTableManager::stats()`）、`duckdb/analysis.rs`（`warn_if_near_capacity`） |
 | D52 规则 SQL 静态门 | `crates/insight/src/rule_registry.rs`（`SQL_FORBIDDEN_KEYWORDS` / `validate_rule_sql` / `is_forbidden_function` / `strip_literals_and_comments` / `sql_tokens`；挂点在 `validate_rule` 的第一条） |
+| D53 项目规则信任门 | `crates/engine/migrations/global/025_insight_rule_trust.sql`（新表）、`crates/insight/src/service/rule_trust.rs`（`RuleTrust` / `trust_key` / `read_at` / `write`）、`lib.rs`（`normalized_project_key` / `project_rule_trust` / `apply_project_rule_trust` / `scan_pending_project_rules`）、`rule_registry.rs`（`PendingProjectRules` + 注册表字段）、`rule_view.rs`（`PendingRulesView` + 横幅 + 首次确认框 + `RulesEvent::TrustDecided`）、`service/mod.rs`（`decide_project_rules_trust`）、`jobs.rs`（`request_rules_trust`） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
@@ -410,7 +422,7 @@ RulesWatcher（后台线程，drop 即停）：
 
 | # | 问题 | 影响 | 状态 |
 | --- | --- | --- | --- |
-| K1 | **无 SQL 沙箱**：v1 文档声称有 `ATTACH`/`INSTALL` 等黑名单，v2 代码里**不存在**；唯一防线是 `validate_identifiers`——只校验**参数值**字符（字母数字 / `_` / `-` / `.`），不校验规则 SQL 本身 | 安全：用户规则文件的 SQL 直接在该进程的 DuckDB 上执行，可 `ATTACH`/`COPY` 到任意路径 | **已核查（2026-09-17）**：原来的「禁用扩展 / 只读连接」选项（Q1-b）**在现有共享连接上不可行**——`register_external_database`（`ATTACH`）、`load_file_source`（`read_csv_auto`/`read_parquet`/`read_excel_auto`）与 `ExtensionManager` 的 `INSTALL`/`LOAD` 都跑在**同一个进程级内存单例**（即洞察与结果集临时表所在的连接）。**静态门已落地**（D52）：多语句 / DDL / 文件与远端表函数在解析期被拒；**项目规则信任门待拍板**（Q1 ③）——没它之前，打开不可信仓库的项目仍等于运行其规则 SQL |
+| K1 | ~~**无 SQL 沙箱**~~ | — | **已收口**（2026-09-17）：① 原来的「禁用扩展 / 只读连接」选项（Q1-b）**在现有共享连接上不可行**——`register_external_database`（`ATTACH`）、`load_file_source`（`read_csv_auto`/`read_parquet`/`read_excel_auto`）与 `INSTALL`/`LOAD` 都跑在洞察所在的**同一个内存单例**上；② **解析期静态门已落地**（D52）：多语句 / DDL / 文件与远端表函数在解析期被拒；③ **项目规则信任门已落地**（D53）：未信任的项目规则不装配、不执行，决定记在全局库。剩下的是**已知取舍**而非缺口：静态门是防呆（黑名单有漏）、信任绑路径而非内容（`git pull` 带进的新规则不重新确认） |
 | K2 | `crates/engine/insight-rules/` 是 `crates/insight/insight-rules/` 的**逐字节重复副本**，全仓零代码引用 | 后来者可能改错副本 | 待删除确认 |
 | K3 | ~~`table-quality-overview` 的 SQL 引用表 `insight_column_stats`，该表不存在~~ | — | ✅ 已处置（2026-09-17）：**下线**。那条 SQL 要从一张「逐列统计物化表」里读，而静态 SQL 不可能对任意表的每一列算统计（需动态 SQL）；能力本身已在 Rust 侧（「评估全表」+ 表质量摘要）。规则文件已删，需要时从 git 历史取 |
 | K4 | ~~归属偏差未归位~~ | — | ✅ 已归位（Phase 0 / 0.2）：类型 → `model::types`、仓库 → `store::{body,meta}`、`detect_extremes` → `insight_engine`、门面 → `service::{InsightService,persistence}` |
@@ -431,7 +443,7 @@ RulesWatcher（后台线程，drop 即停）：
 
 | # | 问题 | 选项 |
 | --- | --- | --- |
-| Q1 | **规则 SQL 的安全边界**（K1） | **已核查（2026-09-17）**。① **解析期静态门**：**已落地**（D52）——只放行单条 `SELECT` / `WITH`，拒多语句 / DDL / 文件与远端表函数；**定位是防呆，不是安全边界**。② **诚实声明**：规则文件 = 可信本地文件（现状，文档已写）。③ **项目规则信任门**（推荐，**待拍板**）：项目层规则来自仓库，克隆不信任的仓库 + 打开项目 = 把它的 SQL 拿到本机执行 → 首次发现项目规则时要求用户确认信任（或默认不加载）。✖ 不推荐 (b) 的「禁用扩展 / 只读连接」：已核查会连带砸掉产品自身的 `ATTACH` / `read_csv` / `INSTALL`（同一内存单例）；✖ 不推荐 (d) 沙箱执行（成本与收益不成比例） |
+| Q1 | **规则 SQL 的安全边界**（K1） | **已定案（2026-09-17）**：① **解析期静态门**——已落地（D52）；② **项目规则信任门**——已落地（D53，首次弹确认 + 决定入全局库）；③ **诚实声明**——规则文件仍是「可信本地文件」量级，但「不可信项目」这条路已经堵上（未信任不装配）。✖ 不采用 (b) 「禁用扩展 / 只读连接」：已核查会连带砸掉产品自身的 `ATTACH` / `read_csv` / `INSTALL`（同一内存单例）；✖ 不采用 (d) 沙箱执行（成本与收益不成比例）。**若将来要再严一档**：在 `insight_rule_trust` 上加一列规则集内容指纹，指纹变了重新确认 |
 | Q2 | 视图归属（K8） | 方案 A / B（开发方案 §3.1） |
 | Q3 | `table-quality-overview` 的处置（K3） | **已定（2026-09-17）：下线**（K3 已处置：静态 SQL 无法对每列算统计，能力已在「评估全表」） |
 | Q4 | 快照保留上限与清理默认值 | 每列 `MAX_VERSIONS_PER_COLUMN`；清理默认 30 天（v1 硬编码） |

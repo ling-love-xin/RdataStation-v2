@@ -20,6 +20,30 @@ pub struct RuleRegistry {
     sources: HashMap<String, RuleSource>,
     /// 解析失败记录：单条失败不连坐，仅登记以便界面展示错误原文。
     failures: Vec<RuleLoadFailure>,
+    /// 项目层有规则文件、但**未信任**因而未装配时的概览（信任门的可见面，
+    /// 见 `crate::project_rule_trust`）。
+    pending_project: Option<PendingProjectRules>,
+}
+
+/// 未信任而未装配的项目规则：信任门要展示「有什么」才能让用户做决定。
+///
+/// 扫描磁盘得到，与索引同一口径（`service::indexer::scan_scope_dir`）——
+/// 解析 TOML 不执行任何 SQL，所以「未信任也先看一眼」是安全的。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingProjectRules {
+    /// 规则目录
+    pub dir: PathBuf,
+    /// 规则 id（解析得出的 `meta.id`；解析失败时用文件名）
+    pub ids: Vec<String>,
+    /// 其中解析失败的条数（未信任也看得见「这份规则本身就有毛病」）
+    pub invalid: usize,
+}
+
+impl PendingProjectRules {
+    /// 规则文件条数。
+    pub fn count(&self) -> usize {
+        self.ids.len()
+    }
 }
 
 impl Default for RuleRegistry {
@@ -34,7 +58,18 @@ impl RuleRegistry {
             rules: HashMap::new(),
             sources: HashMap::new(),
             failures: Vec::new(),
+            pending_project: None,
         }
+    }
+
+    /// 登记「有项目规则但未信任」（见 [`PendingProjectRules`]）。
+    pub fn set_pending_project(&mut self, pending: PendingProjectRules) {
+        self.pending_project = Some(pending);
+    }
+
+    /// 未信任而未装配的项目规则；`None` 表示「该项目没有项目规则」或「已装配」。
+    pub fn pending_project(&self) -> Option<&PendingProjectRules> {
+        self.pending_project.as_ref()
     }
 
     /// 从文件系统目录加载一层规则（`Global` 或 `Project`）。

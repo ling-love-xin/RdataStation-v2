@@ -359,6 +359,8 @@ template = "SELECT 2"
         let root = temp_dir("watch_content");
         let rules_dir = get_project_rules_dir(&root);
         std::fs::create_dir_all(&rules_dir).expect("mkdir rules");
+        // 信任门（Q1 ③）：项目规则默认不装配，本用例测的是**监听热加载**，先信任到项目
+        crate::apply_project_rule_trust(&root, crate::RuleTrust::Trusted);
         set_watched_project_root(Some(root.clone()));
 
         let watcher = RulesWatcher::spawn_with(Duration::from_millis(30));
@@ -393,6 +395,9 @@ template = "SELECT 2"
         let rules_b = get_project_rules_dir(&root_b);
         std::fs::create_dir_all(&rules_a).expect("mkdir a");
         std::fs::create_dir_all(&rules_b).expect("mkdir b");
+        // 信任门（Q1 ③）：两个项目都先信任，否则项目层不装配，用例测不到切换行为
+        crate::apply_project_rule_trust(&root_a, crate::RuleTrust::Trusted);
+        crate::apply_project_rule_trust(&root_b, crate::RuleTrust::Trusted);
         std::fs::write(rules_a.join("a.rule.toml"), RULE_A).expect("write a");
 
         set_watched_project_root(Some(root_a.clone()));

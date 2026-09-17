@@ -57,13 +57,15 @@ pub use insight_engine::{detect_extremes, get_temp_table_profile};
 pub use rule::{RuleLoadFailure, RuleScope, RuleSource};
 pub use rule_executor::RuleExecutor;
 pub use rule_registry::{
-    get_global_rules_dir, get_project_rules_dir, parse_rule_toml, RuleRegistry, RULES_DIR_NAME,
+    get_global_rules_dir, get_project_rules_dir, parse_rule_toml, PendingProjectRules, RuleRegistry,
+    RULES_DIR_NAME,
 };
 pub use service::indexer::{
     plan_index, scan_scope_dir, sync_project_rules, RuleIndexEntry, RuleIndexStore, RuleLoadStatus,
     SyncOutcome,
 };
 pub use service::{InsightErrorInfo, InsightService};
+pub use service::rule_trust::RuleTrust;
 pub use service::watcher::{
     clear_index_stale, index_is_stale, rules_fingerprint, set_watched_project_root, watch_dirs,
     watched_project_root, RulesWatcher, DEFAULT_POLL_INTERVAL,
@@ -143,7 +145,80 @@ fn disabled_snapshot(key: &Option<PathBuf>) -> std::collections::HashSet<String>
 
 /// 缓存键：项目根做规范化，避免同一目录的多种写法（相对 / 绝对 / 带 `..`）各自建一份。
 fn cache_key(project_root: Option<&Path>) -> Option<PathBuf> {
-    project_root.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()))
+    project_root.map(normalized_project_key)
+}
+
+/// 项目根的规范写法（注册表缓存与信任记录**共用一套归一**）。
+///
+/// 两处必须一致：缓存分叉只是多算一次，而信任记录分叉会让用户「明明信任过了，
+/// 换个入口打开项目又被问一次」。规范化失败（路径不存在等）时原样使用。
+pub fn normalized_project_key(project_root: &Path) -> PathBuf {
+    project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf())
+}
+
+/// 项目规则的信任状态缓存（`项目根 → 决定`）。
+///
+/// 为什么要缓存：`build_registry` 在**同步**上下文里跑（与禁用集合同理），
+/// 而查库是异步的。缓存未命中时直接**同步查一次**全局库（一次主键查询，
+/// 与它已经做的文件读取同量级）——不做异步预热：预热没到之前已信任的项目
+/// 会静默少装一层规则，那比多一次查询严重得多。
+type TrustCache = RwLock<HashMap<PathBuf, RuleTrust>>;
+
+static PROJECT_TRUST: OnceLock<TrustCache> = OnceLock::new();
+
+fn project_trust_cache() -> &'static TrustCache {
+    PROJECT_TRUST.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// 某项目的规则信任状态（同步可读，未命中时查一次全局库）。
+///
+/// **fail closed**：查不到记录、取不到连接、库里值不认识，一律 [`RuleTrust::Undecided`]
+/// （= 项目层不装配，且会在规则管理里问一次）。
+pub fn project_rule_trust(project_root: &Path) -> RuleTrust {
+    let key = normalized_project_key(project_root);
+
+    let cached = project_trust_cache()
+        .read()
+        .ok()
+        .and_then(|cache| cache.get(&key).copied());
+    if let Some(state) = cached {
+        return state;
+    }
+
+    let state = match engine::migration::get_global_db_manager() {
+        Some(manager) => {
+            let db = manager.sqlite_pool().path().clone();
+            service::rule_trust::read_at(&db, project_root)
+        }
+        None => RuleTrust::Undecided,
+    };
+
+    if let Ok(mut cache) = project_trust_cache().write() {
+        cache.insert(key, state);
+    }
+    state
+}
+
+/// 更新信任缓存并使该项目的注册表缓存失效（用户做出决定后调用）。
+///
+/// 注册表失效是**必需**的：注册表是「按当时信任状态装配的结果」，状态变了它就不再有效。
+pub fn apply_project_rule_trust(project_root: &Path, state: RuleTrust) {
+    let key = normalized_project_key(project_root);
+    if let Ok(mut cache) = project_trust_cache().write() {
+        cache.insert(key.clone(), state);
+    } else {
+        tracing::warn!("Failed to update rule trust cache: lock poisoned");
+        return;
+    }
+
+    match registry_cache().write() {
+        Ok(mut cache) => {
+            cache.remove(&Some(key));
+        }
+        Err(e) => tracing::warn!("Failed to invalidate registry cache: {e}"),
+    }
 }
 
 /// 仅加载内置规则的注册表（不触碰文件系统与用户目录）。
@@ -181,16 +256,32 @@ fn build_registry(project_root: Option<&Path>) -> RuleRegistry {
     }
 
     // 项目层：{项目}/.RSmeta/insight-rules/。
+    //
+    // **信任门**（Q1 ③ / D53）：项目规则跟着仓库走，所以「未信任」时**不装配**——
+    // 但要把「有什么」留下来（扫描磁盘，不执行 SQL），否则用户连自己在决定什么都不知道。
     if let Some(root) = project_root {
         let dir = get_project_rules_dir(root);
-        match registry.load_from_dir(&dir, RuleScope::Project) {
-            Ok(0) => {}
-            Ok(count) => tracing::info!("Loaded {} project insight rules from {}", count, dir.display()),
-            Err(e) => tracing::warn!(
-                "Failed to load project insight rules from {}: {}",
-                dir.display(),
-                e
-            ),
+        if project_rule_trust(root).is_trusted() {
+            match registry.load_from_dir(&dir, RuleScope::Project) {
+                Ok(0) => {}
+                Ok(count) => tracing::info!(
+                    "Loaded {} project insight rules from {}",
+                    count,
+                    dir.display()
+                ),
+                Err(e) => tracing::warn!(
+                    "Failed to load project insight rules from {}: {}",
+                    dir.display(),
+                    e
+                ),
+            }
+        } else if let Some(pending) = scan_pending_project_rules(&dir) {
+            tracing::info!(
+                "Project insight rules not loaded (untrusted): {} rule file(s) in {}",
+                pending.count(),
+                dir.display()
+            );
+            registry.set_pending_project(pending);
         }
     }
 
@@ -214,6 +305,23 @@ fn build_registry(project_root: Option<&Path>) -> RuleRegistry {
     }
 
     registry
+}
+
+/// 扫一遍项目规则目录：**未信任**时给界面一个「带了什么」的概览。
+///
+/// 只做目录扫描 + TOML 解析（与索引同一口径），**不注册、不执行**任何 SQL。
+/// 目录不存在 / 没有规则文件时返回 `None`（没东西可决定，不必打扰用户）。
+fn scan_pending_project_rules(dir: &Path) -> Option<PendingProjectRules> {
+    let entries = service::indexer::scan_scope_dir(dir, RuleScope::Project);
+    if entries.is_empty() {
+        return None;
+    }
+    let invalid = entries.iter().filter(|e| !e.is_present()).count();
+    Some(PendingProjectRules {
+        dir: dir.to_path_buf(),
+        ids: entries.into_iter().map(|e| e.rule_id).collect(),
+        invalid,
+    })
 }
 
 /// 内置规则的 id 集合。
@@ -454,5 +562,118 @@ mod tests {
         clear_disabled_rules_cache();
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
+    }
+
+    /// 信任门（Q1 ③ / D53）：未信任时项目层**不装配**，但「有什么」要看得见。
+    ///
+    /// 这条用例钉住三个断言：
+    /// 1. 未信任 → 规则不在生效集合里（安全性：不能靠「忘了加载」泄漏执行）；
+    /// 2. `pending_project` 把条数与 id 报出来（可用性：用户要知道自己在决定什么）；
+    /// 3. 信任后重建 → 规则真的进来了，且 pending 消失。
+    #[test]
+    fn test_project_rules_are_gated_until_trusted() -> Result<(), CoreError> {
+        let _guard = rule_state_guard();
+
+        let root = std::env::temp_dir().join(format!(
+            "rds_insight_trust_gate_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let rules_dir = rule_registry::get_project_rules_dir(&root);
+        std::fs::create_dir_all(&rules_dir).expect("建规则目录");
+        std::fs::write(
+            rules_dir.join("gated.rule.toml"),
+            r#"
+[meta]
+id = "gated-rule"
+name = "信任门前后的规则"
+category = "column"
+applies_to = ["Any"]
+version = "1.0"
+builtin = false
+
+[query]
+template = "SELECT COUNT(*) AS total FROM {table}"
+parameters = ["table"]
+
+[[output]]
+sql_name = "total"
+json_name = "total_count"
+value_type = "i64"
+"#,
+        )
+        .expect("写项目规则");
+
+        // 未信任（无记录）：项目层不装配，但能看到到底带了什么
+        apply_project_rule_trust(&root, RuleTrust::Undecided);
+        clear_registry_cache();
+        assert!(
+            !with_rules(Some(&root), |reg| Ok(reg.get("gated-rule").is_some()))?,
+            "未信任的项目规则不得参与装配"
+        );
+        let pending = registry_for(Some(&root))
+            .read()
+            .expect("读注册表")
+            .pending_project()
+            .cloned();
+        let pending = pending.expect("未信任但存在项目规则时，必须留下可见的待决定信息");
+        assert_eq!(pending.count(), 1);
+        assert_eq!(pending.ids, vec!["gated-rule".to_string()]);
+        assert_eq!(pending.invalid, 0);
+
+        // 明确拒绝：同样不装配，状态由调用方（界面）展示
+        apply_project_rule_trust(&root, RuleTrust::Declined);
+        assert!(
+            !with_rules(Some(&root), |reg| Ok(reg.get("gated-rule").is_some()))?,
+            "已拒绝的项目规则同样不得参与装配"
+        );
+
+        // 信任：缓存失效 → 重建后规则进来，且不再有 pending
+        apply_project_rule_trust(&root, RuleTrust::Trusted);
+        assert!(
+            with_rules(Some(&root), |reg| Ok(reg.get("gated-rule").is_some()))?,
+            "已信任后项目规则应参与装配"
+        );
+        assert!(
+            registry_for(Some(&root))
+                .read()
+                .expect("读注册表")
+                .pending_project()
+                .is_none()
+        );
+
+        apply_project_rule_trust(&root, RuleTrust::Undecided);
+        clear_registry_cache();
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// 没有项目规则文件时不打扰用户：`pending_project` 为 `None`（没有东西可决定）。
+    #[test]
+    fn test_no_project_rule_files_means_no_pending() {
+        let _guard = rule_state_guard();
+
+        let root = std::env::temp_dir().join(format!(
+            "rds_insight_trust_empty_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("建项目目录");
+
+        apply_project_rule_trust(&root, RuleTrust::Undecided);
+        clear_registry_cache();
+        assert!(
+            registry_for(Some(&root))
+                .read()
+                .expect("读注册表")
+                .pending_project()
+                .is_none(),
+            "没有项目规则文件时不该有待决定信息"
+        );
+
+        clear_registry_cache();
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

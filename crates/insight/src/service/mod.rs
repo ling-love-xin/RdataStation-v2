@@ -23,6 +23,7 @@
 
 pub mod indexer;
 pub mod persistence;
+pub mod rule_trust;
 pub mod watcher;
 
 use std::collections::HashMap;
@@ -37,10 +38,11 @@ use crate::model::{
     TableProfileView, HISTORY_PAGE_SIZE,
 };
 use crate::rule::RuleScope;
-use crate::schema_view::SchemaReportView;
 use crate::rule_types::RuleMeta;
 use crate::rule_view::{build_rules_data, RuleDataInput, RulesData};
+use crate::schema_view::SchemaReportView;
 use crate::service::indexer::{rule_dir, sync_project_rules, RuleIndexStore, SyncOutcome};
+use crate::service::rule_trust::RuleTrust;
 use crate::{with_rules, ExecutionResult};
 
 pub use persistence::{
@@ -457,6 +459,30 @@ impl InsightService {
         stores.snapshot(project_root)
     }
 
+    /// 项目规则**信任门**：记录用户的一次决定，并返回刷新后的数据（Q1 ③ / D53）。
+    ///
+    /// 决定落在全局库（项目库在被信任前就是不可信输入，不能自己给自己发信任），
+    /// 随后推给装配侧的缓存并失效该项目注册表——**下次取数就能看见项目层已经装上**。
+    ///
+    /// 阻塞（开全局库 + 写库 + 重扫索引），调用方负责放后台。
+    pub fn decide_project_rules_trust(
+        project_root: Option<&Path>,
+        state: RuleTrust,
+    ) -> Result<RulesData, CoreError> {
+        let root = project_root.ok_or_else(no_project)?;
+        let manager = engine::migration::get_global_db_manager().ok_or_else(|| {
+            CoreError::common(CommonError::General(
+                "全局库不可用，无法保存规则信任状态".to_string(),
+            ))
+        })?;
+
+        block_on(rule_trust::write(&manager.sqlite_pool(), root, state))?;
+        crate::apply_project_rule_trust(root, state);
+
+        // 信任状态变了 → 重新装配 + 重新扫索引（上面已失效缓存，这里取到的就是新集合）
+        Self::rules_data(project_root)
+    }
+
     /// 切换某条规则的启停，返回刷新后的数据。
     ///
     /// 写的是**规则所在层**的索引；内置规则没有自己的索引行，按**抑制记录**写到项目库
@@ -564,12 +590,31 @@ impl IndexStores {
             .map(|rule| rule.meta.clone())
             .collect();
 
+        // 信任门（Q1 ③）：未信任时项目层**没装配**，所以横幅的数据不能从索引行推——
+        // 它来自装配侧（`registry.pending_project()`）与信任记录本身。
+        let (pending, trust_declined) = match project_root {
+            Some(root) => {
+                let pending = crate::registry_for(Some(root))
+                    .read()
+                    .ok()
+                    .and_then(|registry| registry.pending_project().cloned());
+                let declined = matches!(
+                    crate::project_rule_trust(root),
+                    rule_trust::RuleTrust::Declined
+                );
+                (pending, declined)
+            }
+            None => (None, false),
+        };
+
         Ok(build_rules_data(RuleDataInput {
             project_dir: rule_dir(project_root, RuleScope::Project),
             global_dir: rule_dir(project_root, RuleScope::Global),
             project_rows,
             global_rows,
             builtin,
+            pending,
+            trust_declined,
         }))
     }
 }
@@ -681,7 +726,19 @@ fn hits_any(haystack_lower: &str, needles: &[&str]) -> bool {
 mod tests {
     use super::{rule_params, strip_error_code, InsightService};
     use crate::insight_engine::ERR_TOO_MANY_CONCURRENT;
+    use crate::service::rule_trust::RuleTrust;
     use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError};
+
+    /// 信任门需要项目根：无项目时给出可读错误，而不是去写一个不相干的记录。
+    #[test]
+    fn decide_rules_trust_requires_a_project() {
+        let err = InsightService::decide_project_rules_trust(None, RuleTrust::Trusted)
+            .expect_err("无项目时应报错");
+        assert!(
+            err.to_string().contains("项目"),
+            "报错要说清要项目根: {err}"
+        );
+    }
 
     #[test]
     fn error_code_prefix_is_not_shown_to_users() {

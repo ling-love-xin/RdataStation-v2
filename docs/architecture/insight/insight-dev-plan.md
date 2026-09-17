@@ -23,6 +23,25 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Q1 ③ 落地：项目规则信任门（D53）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **216 项**（本批 +11：存储 5 + 门控 2 + 服务 1 + 视图 3）· 集成 **13 项** · `cargo test -p rds-engine --lib` **360 项**（迁移目录多一个文件，无断言受影响）全绿；本批文件 clippy 零新增告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 决定记在哪 | 新表 `insight_rule_trust`（**全局库**，键 = 规范化项目路径，`state ∈ trusted/declined`）——存项目库等于让项目给自己发信任（自我授权） | `crates/engine/migrations/global/025_insight_rule_trust.sql` + `crates/insight/src/service/rule_trust.rs`（新） |
+| 门控 | `build_registry` 的项目层：信任不是 `Trusted` 就**不装配**，改为扫盘把「带了什么」（id 列表 + 解析失败条数）记进 `registry.pending_project`（扫描不执行任何 SQL） | `crates/insight/src/lib.rs` + `rule_registry.rs`（`PendingProjectRules`） |
+| fail closed | 无记录 / 查库失败 / 库里值不认识 → 未决定（不装配）。读法：进程级缓存 → 未命中**自开一条只读连接**查全局库（**不用 `acquire_sync`**：它在 tokio 运行时内直接报错，而装配路径确实会从 `profile_column_from_table` 这类 async 进来——真失败就会静默少装一层规则） | `lib.rs`（`project_rule_trust` / `apply_project_rule_trust`） |
+| 首次弹确认 | 首次在规则管理里拿到「有未信任项目规则」的数据 → **叠一个确认框**（对话框层是栈式的；窗口句柄在 `begin_load` 时存下，回填时 `update_window` 打开）；两个按钮 → `RulesEvent::TrustDecided`。之后再遇到只留横幅 | `rule_view.rs` |
+| 常驻横幅 | 列表顶部：多少条 / 叫什么（前 6 条 + 「等 N 条」）/ 目录 / 其中几条解析失败；按钮「信任并加载」/「不加载」（已拒绝时改说「你此前选择了不加载」+「改为信任并加载」） | 同上 |
+| 接缝 | `RulesEvent::TrustDecided` → 写全局库 → 推缓存 + 失效注册表 → 重扫索引 → 回填列表；写库失败只挂行内提示（信任状态不变） | `jobs.rs` + `service/mod.rs`（`decide_project_rules_trust`） |
+| 测试 | 存储 5（往返 / 按项目隔离 / 路径归一 / 脏值 / 表未建）+ 门控 2（未信任与已拒绝都不装配且 pending 可见 → 信任后进来且 pending 消失；没有规则文件就不打扰）+ 服务 1（无项目报错）+ 视图 3（确认框只弹一次、两个按钮发事件且**不就地改状态**、横幅不被搜索过滤、摘要截断） | 各文件测试模块 |
+| 顺带修的测试 | 监听热加载 / 宿主接缝两个用例原以「项目规则自动装配」为前提 → 现在显式信任那个临时项目（并把「为什么要先信任」写在注释里） | `service/watcher.rs` / `jobs.rs` |
+
+**对用户的影响（破坏性）**：项目规则**第一次不再自动生效**——打开「洞察规则」会被问一次；回答记在全局库，之后不再问（横幅可随时改主意）。从没打开过规则管理的项目，其规则不参与分析（fail closed，文档已写）。
+
+**上游踩到的坑（供后来者）**：`GlobalSqlitePool::acquire_sync` 在「已处于 tokio 运行时」的调用点会**直接返回错误**（它自己的契约）——同步读全局库的那段最初用它，单测里全是 `#[tokio::test]` 所以当场就红了。改成自开只读连接后与运行环境无关。
+
 ### 2026-09-17 — Q1 ① 落地：规则 SQL 静态门（D52）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **205 项**（本批 +3）+ 集成 **13 项**全绿；16 条内置规则全过（`test_builtin_count_matches_constant` 的「内置规则必须全部可解析」就是回归网）；本批文件 clippy 零新增告警）
