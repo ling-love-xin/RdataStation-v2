@@ -316,7 +316,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
         if is_version_section {
             if let Some(actions) = actions.as_ref() {
                 let host = actions.host.clone();
-                let detail_for_history = detail.clone();
+                let resource_id = detail.id.clone();
                 section = section.child(
                     Button::new("archive-detail-versions")
                         .ghost()
@@ -324,7 +324,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                         .debug_selector(|| "archive-detail-versions".to_string())
                         .label("查看全部…")
                         .on_click(move |_, window, cx| {
-                            host.request_version_history(&detail_for_history, window, cx)
+                            host.request_version_history(&resource_id, window, cx)
                         }),
                 );
             }

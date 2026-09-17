@@ -8,6 +8,25 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 3 第二刀：索引修复对话框（原型 §4.5）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 对话框 ✅ | `dialogs/index_repair.rs`：三分组（有文件无记录 / 有记录无本体 / 指纹不匹配）+ 行内动作列（与版本历史不同：这里一行最多两个动作、行内容短，装得下）；每组标计数与一句说明；干净时给一句话而不是空表格 | 同上、`src/ui.rs`（+2 常量） |
+| 行数据合成 ✅ | `present::build_repair_rows`：按分组顺序 + 组内路径排序；**指纹不匹配行把两个指纹都摆出来**（“登记 xxx · 实际 yyy”，各缩到 12 位）；未登记行的标题取文件名（完整路径在副文案里） | `src/present.rs` |
+| 三个真动作 ✅ | 补登为存档（`adopt_file`，**固定文件型**——`resources/` 里只可能是文件，所以不摆一个只有一项的 kind 选择器；来源无从得知留空）；删除记录（`remove_orphan_record`，走 `AlertDialog` 二次确认）；接受当前内容（`accept_current_content`，回执说明“旧内容不可得，那一版只留元数据”） | `crates/workbench/src/services/resource_jobs.rs`（`Job::IndexRepairAction`） |
+| 跳转而非重复 ✅ | 「从历史还原」在本对话框里就是「打开版本历史…」：挑哪一版是版本历史的活，不在这里重复一遍挑选 UI（跳转类动作由宿主在事件路径拦截，不入修复作业） | `crates/analytics_resource/src/dialogs/index_repair.rs`、`crates/workbench/src/panels/resources.rs` |
+| 两个入口真接 ✅ | 状态行「修复…」与面板头「⋯ → 重建索引…」→ `Job::IndexScan`（后台线程，逐个本体算 sha256）→ 报告 → 侧栏 render 开窗；修完一项**自动重扫**并把新行推回已开的窗（与版本历史同形） | `crates/workbench/src/{components/resource_host.rs,panels/{shared,resources,mod}.rs}` |
+| 端口简化 ✅ | `ResourcesHost::request_version_history` 改收 `resource_id: &str`（原来收整条 `ArchiveDetail` 但只用 id）：调用方不再为一个 id 克隆整条详情，索引用修复对话框也能直接调它 | `src/resource_view.rs`、`src/detail_view.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **92 单测 + 6 对话框窗口测试 + 11 面板窗口测试全绿**（+3 对话框、+2 呈现单测；+1 对话框窗口测试：三分组各行的动作就位 / 干净时不给动作 / 修完换空行后对话框还在）；`cargo test -p rds-workbench --test ui_contract -j 2` 7 项全绿（`Shared` 白名单 +`repair_dialog`）；`cargo check -p rds-workbench --all-targets -j 2` 零告警 | — |
+
+**两处刻意的取舍**：
+
+1. **不分资源**：整个项目只有一份索引，所以修复会话不带 id（版本历史那种“同一个存档才复用”的判断在这里不存在）；
+2. **「从回收站还原」摆着但置灰**并给 tooltip：“等项目级回收站上提（P0.8）后才可用”——藏起来用户会以为没有这个能力，摆出来能说清为什么现在没有。
+
+**未落地**：“有文件、无记录”的按目录批量补登（现为逐行）；详情面板版本区的“最近 3 条”明细；回收站对话框（等 P0.8）。
+
 ### 2026-09-17 — Phase 3 第一刀：版本历史对话框（原型 §4.3）
 
 | 项 | 内容 | 落点 |

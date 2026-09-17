@@ -10,6 +10,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::detail_view::ArchiveDetail;
+use crate::dialogs::index_repair::{RepairGroup, RepairRow};
 use crate::dialogs::version::VersionRow;
 use crate::model::{ArchiveKind, ArchiveStatus};
 use crate::resource_view::{ArchiveCounts, ArchiveRow, ResourcesSnapshot};
@@ -274,10 +275,86 @@ fn version_delta(previous_version: i32, previous: &Candidate, current: &Candidat
     format!("较 v{previous_version} {}", parts.join(" · "))
 }
 
+/// 扫描报告 → 修复行（对话框用，按分组顺序排好）。
+///
+/// 格式化的活都在这里：指纹缩略（复用详情面板的 `short_hash`，前 12 位）与行标题 /
+/// 副文案；对话框只渲染与派发动作。
+///
+/// 顺序：分组按 `RepairGroup::ALL`，组内按本体路径（稳定、与扫描结果同序）。
+pub fn build_repair_rows(report: &crate::IndexScanReport) -> Vec<RepairRow> {
+    let mut rows: Vec<RepairRow> = report
+        .issues
+        .iter()
+        .map(|issue| match issue {
+            crate::IndexIssue::UntrackedFile { rel_path } => RepairRow {
+                group: RepairGroup::Untracked,
+                title: file_name_of(rel_path),
+                detail: format!("本体 resources/{rel_path}：存在但没有登记记录"),
+                hash_detail: String::new(),
+                rel_path: rel_path.clone(),
+                resource_id: None,
+            },
+            crate::IndexIssue::MissingPayload {
+                resource_id,
+                name,
+                rel_path,
+            } => RepairRow {
+                group: RepairGroup::Missing,
+                title: name.clone(),
+                detail: format!("期望位置 resources/{rel_path}：本体不在了"),
+                hash_detail: String::new(),
+                rel_path: rel_path.clone(),
+                resource_id: Some(resource_id.clone()),
+            },
+            crate::IndexIssue::ContentChanged {
+                resource_id,
+                name,
+                rel_path,
+                expected_hash,
+                actual_hash,
+            } => RepairRow {
+                group: RepairGroup::Changed,
+                title: name.clone(),
+                detail: format!("本体 resources/{rel_path}：内容与登记不符"),
+                hash_detail: format!(
+                    "登记 {} · 实际 {}",
+                    crate::detail_view::short_hash(Some(expected_hash)),
+                    crate::detail_view::short_hash(Some(actual_hash))
+                ),
+                rel_path: rel_path.clone(),
+                resource_id: Some(resource_id.clone()),
+            },
+        })
+        .collect();
+
+    rows.sort_by(|a, b| {
+        let group = group_order(a.group).cmp(&group_order(b.group));
+        group.then_with(|| a.rel_path.cmp(&b.rel_path))
+    });
+    rows
+}
+
+/// 分组顺序（`RepairGroup::ALL` 的下标）。
+fn group_order(group: RepairGroup) -> usize {
+    RepairGroup::ALL
+        .iter()
+        .position(|candidate| *candidate == group)
+        .unwrap_or(usize::MAX)
+}
+
+/// 相对路径 → 文件名（未登记行的标题：路径太长，行里放不下，完整路径在副文案里）。
+fn file_name_of(rel_path: &str) -> String {
+    rel_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(rel_path)
+        .to_string()
+}
+
 /// 组装面板快照：行（按状态与种类计分）+ 计数 + 只读标志。
 ///
 /// 计数口径与状态行文案一一对应：`缺失` 与 `索引异常`（内容已变）各自计数，
-/// 因为它们在界面上是两个不同的可点入口（都进索引修复，但处理方式不同）。
+/// 因为它们在上是两个不同的可点入口（都进索引修复，但处理方式不同）。
 pub fn build_snapshot(
     resources: &[AnalyticsResource],
     statuses: &ArchiveStatuses,
@@ -322,11 +399,13 @@ pub fn build_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveStatuses, VersionCounts, build_snapshot, build_version_rows, format_relative_time,
-        format_scale, format_size, format_timestamp, tail_for,
+        ArchiveStatuses, VersionCounts, build_repair_rows, build_snapshot, build_version_rows,
+        format_relative_time, format_scale, format_size, format_timestamp, tail_for,
     };
+    use crate::dialogs::index_repair::RepairGroup;
     use crate::model::{ArchiveKind, ArchiveStatus};
     use crate::models::{AnalyticsResource, ResourceVersion};
+    use crate::{IndexIssue, IndexScanReport};
     use chrono::{DateTime, Duration, Utc};
     use serde_json::Value;
 
@@ -360,6 +439,64 @@ mod tests {
             definition_sql: None,
             archived_at: Some(now),
         }
+    }
+
+    #[test]
+    fn repair_rows_group_in_order_and_keep_both_fingerprints() {
+        let report = IndexScanReport {
+            issues: vec![
+                // 故意乱序给：输出应按分组 / 路径排好。
+                IndexIssue::ContentChanged {
+                    resource_id: "ar_2".to_string(),
+                    name: "月报".to_string(),
+                    rel_path: "reports/dau.sql".to_string(),
+                    expected_hash: "1111111111111111".to_string(),
+                    actual_hash: "2222222222222222".to_string(),
+                },
+                IndexIssue::UntrackedFile {
+                    rel_path: "z/deep/外来表.sql".to_string(),
+                },
+                IndexIssue::MissingPayload {
+                    resource_id: "ar_1".to_string(),
+                    name: "周报".to_string(),
+                    rel_path: "weekly.sql".to_string(),
+                },
+                IndexIssue::UntrackedFile {
+                    rel_path: "a.sql".to_string(),
+                },
+            ],
+        };
+
+        let rows = build_repair_rows(&report);
+        let groups: Vec<RepairGroup> = rows.iter().map(|row| row.group).collect();
+        assert_eq!(
+            groups,
+            vec![
+                RepairGroup::Untracked,
+                RepairGroup::Untracked,
+                RepairGroup::Missing,
+                RepairGroup::Changed,
+            ],
+            "分组按原型顺序，组内按路径"
+        );
+        // 未登记行：标题取文件名（路径太长），完整路径在副文案里。
+        assert_eq!(rows[0].title, "a.sql");
+        assert!(rows[0].rel_path == "a.sql" && rows[0].resource_id.is_none());
+        assert!(rows[0].detail.contains("resources/a.sql"));
+        assert_eq!(rows[1].title, "外来表.sql", "嵌套路径取最后一段");
+        // 指纹不匹配：两个指纹都缩到 12 位（期望 / 实际各一份，不藏任何一边）。
+        assert_eq!(
+            rows[3].hash_detail,
+            "登记 111111111111 · 实际 222222222222"
+        );
+        assert!(rows[3].detail.contains("reports/dau.sql"));
+        assert_eq!(rows[3].resource_id.as_deref(), Some("ar_2"));
+        assert!(rows[2].hash_detail.is_empty(), "缺本体没有指纹可对");
+    }
+
+    #[test]
+    fn repair_rows_of_clean_report_are_empty() {
+        assert!(build_repair_rows(&IndexScanReport::default()).is_empty());
     }
 
     #[test]

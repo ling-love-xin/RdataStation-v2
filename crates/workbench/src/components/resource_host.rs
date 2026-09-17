@@ -13,11 +13,13 @@
 //!   编辑器 `persist::open_file_read_only`）；路径由 `PayloadStore::resolve` 解析（守卫在那一层）。
 //! - **取回**：取回对话框 → 入队后台任务 → 回执与"顺手打开"由侧栏轮询印做。
 //! - **撤销归档**：撤销栏的凭据原样交给工作线程（本体移回原位 + 删登记行）。
-//! - 面板头「⋯」四项：**打开资源目录**（系统文件管理器开 `resources/`）与 **刷新**（同一条取数路径）
-//!   是真实现；**回收站…** 与 **重建索引…** 沿用下两条的明确回执（入口先摆出，点了要说清为什么没动）。
+//! - 面板头「⋯」四项：**打开资源目录**（系统文件管理器开 `resources/`）、**刷新**（同一条取数路径）
+//!   与 **重建索引…**（扫描 → 索引修复对话框）是真实现；**回收站…** 沿用下一条的明确回执
+//!   ——入口先摆出来，点了说清为什么没动，而不是给一个点不动的按钮。
 //! - 移入回收站：一律走项目级 `ProjectTrash`，而上提尚未落地（P0.8）——**不做**先软删
 //!   再等回收站那条（会变成两套回收站，违反模块硬约束 5）；
-//! - 索引修复对话框：Phase 3（异常计数已在状态行可见）。
+//! - 索引修复：扫描（后台线程，逐个本体算 sha256）→ 对话框三分组 → 行内动作
+//!   （补登 / 删记录 / 接受当前内容 / 打开版本历史）；“从回收站还原”摆着但置灰（等 P0.8）。
 //!
 //! 回执而不是空操作：面板上的按钮是既有入口，点了没反应比"明确说还没接入"更难排查。
 
@@ -427,13 +429,13 @@ impl ResourcesHost for WorkbenchResourceHost {
         });
     }
 
-    fn request_version_history(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+    fn request_version_history(&self, resource_id: &str, _window: &mut Window, cx: &mut App) {
         // 取数在后台线程：版本行要读索引表 + 问 `.RSmeta` 下的副本清单，
         // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。
         let Some(root) = self.require_project("无法打开版本历史", cx) else {
             return;
         };
-        resource_jobs::enqueue_versions(root, detail.id.clone());
+        resource_jobs::enqueue_versions(root, resource_id.to_string());
         self.notice("资产库：正在读取版本历史…", cx);
     }
 
@@ -480,11 +482,13 @@ impl ResourcesHost for WorkbenchResourceHost {
     }
 
     fn request_index_repair(&self, _window: &mut Window, cx: &mut App) {
-        self.pending(
-            "索引修复对话框尚未接入",
-            "（Phase 3；异常计数已在状态行显示）",
-            cx,
-        );
+        // 扫描要逐个本体算 sha256（“指纹不匹配”那一档的代价），所以走后台线程；
+        // 报告回来后再开对话框（开窗要 `Window`，轮询任务里没有）。
+        let Some(root) = self.require_project("无法检查索引", cx) else {
+            return;
+        };
+        resource_jobs::enqueue_index_scan(root);
+        self.notice("资产库：正在检查索引…", cx);
     }
 
     fn request_open_payload_dir(&self, _window: &mut Window, cx: &mut App) {

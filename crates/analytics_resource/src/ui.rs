@@ -51,3 +51,7 @@ pub const VERSION_COL_SIZE: f32 = 5.0;
 pub const VERSION_COL_HASH: f32 = 9.0;
 /// 见 [`VERSION_COL_VERSION`]。
 pub const VERSION_COL_COPY: f32 = 5.0;
+/// 索引修复对话框宽（54.0rem = 864px；原型 §7.1——三分组 + 表格 + 动作列）。
+pub const REPAIR_DIALOG_WIDTH: f32 = 54.0;
+/// 修复列表最大高度（24.0rem = 384px）：未登记文件可能一次报出几十条，靠滚动。
+pub const REPAIR_LIST_MAX_HEIGHT: f32 = 24.0;

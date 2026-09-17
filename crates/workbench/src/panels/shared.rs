@@ -15,6 +15,7 @@ use insight::{InsightTarget, InsightView};
 use mock::mock_view::{MockDetailView, MockPanel, SchemaRequest};
 use scratchpad::ScratchpadStore;
 
+use analytics_resource::dialogs::index_repair::RepairDialogState;
 use analytics_resource::dialogs::version::VersionDialogState;
 use analytics_resource::resource_view::ResourcesPanel;
 
@@ -109,6 +110,23 @@ pub struct VersionDialogFlow {
     pub session: Option<VersionDialogSession>,
 }
 
+/// M6：索引修复对话框的一次会话（行集合可被宿主换掉，与版本历史同一形态）。
+pub struct RepairDialogSession {
+    pub state: RepairDialogState,
+}
+
+/// M6：索引修复对话框的流转状态（待开 → 已开 → 关闭）。
+///
+/// 不分资源：整个项目只有一份索引，所以会话不带 id（版本历史那种“同一个存档才复用”
+/// 的判断在这里不存在）。
+#[derive(Default)]
+pub struct RepairDialogFlow {
+    /// 待开的扫描结果（取数回来时置位，侧栏 render 消费开窗）。
+    pub pending: Option<crate::services::resource_jobs::IndexScanRows>,
+    /// 已开的会话（`None` = 没开；关窗时清掉）。
+    pub session: Option<RepairDialogSession>,
+}
+
 /// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。
 ///
 /// 原先在 `nav.rs`（`nav_draft_append`），现在由导航菜单、拖拽与宿主打开查询共用，
@@ -183,6 +201,8 @@ pub struct Shared {
     pub resources_bridge: Rc<RefCell<Option<ResourcesBridge>>>,
     /// M6：版本历史对话框的流转（取数 → 开窗 → 动作后刷新行；见 `VersionDialogFlow`）。
     pub version_dialog: Rc<RefCell<VersionDialogFlow>>,
+    /// M6：索引修复对话框的流转（扫描 → 开窗 → 修复后重扫换行；见 `RepairDialogFlow`）。
+    pub repair_dialog: Rc<RefCell<RepairDialogFlow>>,
     /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
@@ -225,6 +245,7 @@ impl Shared {
             resources_panel: Rc::new(RefCell::new(None)),
             resources_bridge: Rc::new(RefCell::new(None)),
             version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
+            repair_dialog: Rc::new(RefCell::new(RepairDialogFlow::default())),
             mock_detail: Rc::new(RefCell::new(None)),
             open_mock_detail: Rc::new(RefCell::new(None)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),

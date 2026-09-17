@@ -26,6 +26,9 @@ use rds_analytics_resource::dialogs::checkout::{
     CheckoutDialogResult, CheckoutDialogSeed, build_inputs as build_checkout_inputs,
     open_checkout_dialog_with, submit_checkout, suggest_work_copy_name,
 };
+use rds_analytics_resource::dialogs::index_repair::{
+    RepairDialogState, RepairGroup, RepairRow, open_index_repair_dialog_with,
+};
 use rds_analytics_resource::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
 };
@@ -380,4 +383,81 @@ fn version_dialog_lists_rows_and_shows_actions_after_selection(cx: &mut TestAppC
         "换过的行要真渲染出来（还原后的新版本就在列表里）"
     );
     assert_eq!(closed.get(), 0, "对话框还开着：动作不该把它关掉");
+}
+
+fn repair_row(group: RepairGroup, title: &str) -> RepairRow {
+    RepairRow {
+        group,
+        title: title.to_string(),
+        detail: format!("本体 resources/{title}.sql"),
+        hash_detail: if group == RepairGroup::Changed {
+            "登记 111111111111 · 实际 222222222222".to_string()
+        } else {
+            String::new()
+        },
+        rel_path: format!("{title}.sql"),
+        resource_id: (group != RepairGroup::Untracked).then(|| "ar_1".to_string()),
+    }
+}
+
+#[gpui_kit::test]
+fn index_repair_dialog_groups_rows_and_shows_inline_actions(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let closed: Rc<Cell<usize>> = Rc::new(Cell::new(0));
+    let state = RepairDialogState::new();
+    {
+        let closed = closed.clone();
+        cx.update(|window, cx| {
+            open_index_repair_dialog_with(
+                window,
+                cx,
+                state.clone(),
+                move |_action, _window, _cx| {},
+                move |_cx| closed.set(closed.get() + 1),
+            );
+        });
+    }
+    draw(cx);
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "索引修复对话框应打开"
+    );
+    assert!(cx.debug_bounds("repair-close").is_some());
+    assert!(
+        cx.debug_bounds("repair-adopt-0").is_none(),
+        "干净时只是“没有需要处理的问题”，不给动作按钮"
+    );
+
+    // 三组各一行：每组第一个动作的选择器都是“…-0”（序号按组内算）。
+    state.set_rows(vec![
+        repair_row(RepairGroup::Untracked, "a.sql"),
+        repair_row(RepairGroup::Missing, "周报"),
+        repair_row(RepairGroup::Changed, "月报"),
+    ]);
+    draw(cx);
+    assert!(cx.debug_bounds("repair-adopt-0").is_some(), "未登记行给补登");
+    assert!(
+        cx.debug_bounds("repair-delete-0").is_some(),
+        "缺本体行给删记录"
+    );
+    assert!(
+        cx.debug_bounds("repair-accept-0").is_some(),
+        "指纹不匹配行给接受当前内容"
+    );
+    assert!(
+        cx.debug_bounds("repair-versions-0").is_some(),
+        "并可跳去版本历史挑一版还原"
+    );
+
+    // 修完最后一项 → 宿主换空行：空态回来（对话框没被关掉）。
+    state.set_rows(Vec::new());
+    draw(cx);
+    assert!(cx.debug_bounds("repair-adopt-0").is_none());
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "修复不该把对话框关掉"
+    );
+    assert_eq!(closed.get(), 0);
 }

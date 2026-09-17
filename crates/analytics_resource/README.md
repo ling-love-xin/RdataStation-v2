@@ -75,7 +75,7 @@
 | `src/payload.rs` | 本体层：`resolve` 守卫、归档搬运（跨设备兜底）、只读标记、sha256 指纹、历史副本与裁剪（`store_version_copy` / `prune_version_copies`）、**版本副本查询与使用**（`version_copies` / `version_copy_file` / `delete_version_copy` / `copy_version_out` / `restore_version_copy`）、`replace_payload` / `move_payload_out`、`rel_path_taken` / `free_rel_path`（重名避让，命名规则只此一处） | ✅ Phase 0 + Phase 3 第一刀 |
 | `src/models.rs` | 持久层行模型（v1 搬运 + 迁移 020 的 9 个新列） | ✅ |
 | `src/service.rs` | 归档服务：归档（首次）/ 再归档（指纹未变即幂等、变了才增版本）/ 取回（检出）/ **还原到历史版本**（用旧内容生成新版本；无副本拒、指纹相同幂等）/ **取回历史版本** / **撤销归档**（本体移回 + 硬删行）编排 + `ResourcesChanged` 广播 | ✅ Phase 0 + Phase 3 第一刀 |
-| `src/indexer.rs` | 索引修复：`IndexRepair::{scan, adopt_file, accept_current_content, remove_orphan_record}`（扫描只报告、修复靠人工确认） | ✅ Phase 0 |
+| `src/indexer.rs` | 索引修复：`IndexRepair::{scan, adopt_file, accept_current_content, remove_orphan_record}`（扫描只报告、修复靠人工确认） | ✅ Phase 0（UI 已接：`dialogs/index_repair.rs`） |
 | `src/resource.rs` | 登记 CRUD / 分页 / 搜索 / 排序（统一行映射 `map_resource_row` + 事务化 `update_resource`）+ 归档专用写入（`insert_archive` / `update_archive_content` / `find_archive_by_rel_path`）+ `hard_delete_row`（撤销归档与索引修复共用） | ✅ 搬运 + 边界修复 + 新列接入 |
 | `src/folder.rs` | 分组（v1 为自引用文件夹，按设计**降级为单层分组**） | ✅ 搬运（改名/删除待补） |
 | `src/tag.rs` | 标签 CRUD + 双向查询 | ✅ 搬运（改名/删除待补） |
@@ -88,8 +88,8 @@
 | `src/resource_view.rs` | 左 Dock 面板：**面板头（标题图标 + `＋ ▾` 归档入口 + `⋯` 四项：重建索引… / 打开资源目录 / 回收站… / 刷新）** / **工具栏（搜索·筛选·排序）** / 提示行 / **行列表（`list::List`：虚拟化 + 组件化 hover·选中·键盘漫游，选中以面板的行 id 为准；行首带 kind 图标）** / **行右键菜单（打开·取回·版本历史·复制路径·在系统中显示·移入回收站）** / **加载态（3 行骨架 + 状态行前缀）** / **归档撤销栏（状态行上方，5 秒窗口）** / 状态行 / **两种空态（空库 vs 无匹配）**；快照带逐行详情（`selected_detail()`，右栏「存档详情」取它）；宿主动作经 `ResourcesHost`（菜单动作抽成 `HeaderMenuAction` + `dispatch_header_action`，弹层点不到也能测） | ✅ Phase 1 八刀（批量多选待下一批） |
 | `src/filter.rs` | 工具栏**数据层**（纯函数，零 GPUI 依赖）：`ResourcesFilter`（关键字 / 种类 / 只看异常；`toggle_kind` 把"全选"规范化为不限）+ `SortField`/`SortOrder`（`label` / `arrow` / `flipped`）+ `apply_view`（筛选→排序，同键名称兜底且不随方向翻转）；`is_empty()` 决定面板显示哪一种空态 | ✅ Phase 1 |
 | `src/detail_view.rs` | 详情面板内容层：`ArchiveDetail` 快照 + `detail_rows`（基本信息 / 来源 / **版本（分区总是出现）** / 组织）+ `alert_line`（只在需处理时出现）+ `render_detail`（只读信息区 + **版本区的「查看全部…」入口** + **动作区：打开（只读）/ 取回（检出）…**） | ✅ Phase 1 + Phase 3 第一刀（动作接线经 `DetailActions` 注入；内容预览随后续批次） |
-| `src/dialogs/archive.rs` / `checkout.rs` / `pick.rs` / **`version.rs`** | 归档确认 / 取回（检出）/ 草稿多选 / **版本历史**对话框：种子（宿主备好的来源与只读信息）+ 表单（名称 / 标签 / 保留份数；文件名 / 是否打开；勾选列表；版本表格 + 选中后动作栏）+ 校验与解析（纯函数）+ `open_*_dialog`；版本历史的状态可被宿主换行（`set_rows`）与收放忙态 | ✅ Phase 1 + Phase 3 第一刀（执行由宿主注入的 `on_submit` / `on_action` 接手） |
-| `src/present.rs` | 呈现层（纯函数，零 I/O 零 GPUI）：`format_size` / `format_scale` / `format_relative_time` / `format_timestamp` / `tail_for` / `to_row` / **`to_detail`** / **`build_version_rows`**（当前版本 + 历史版本合成行、相邻版本差异）/ `build_snapshot`——索引行 → 面板快照（含字段优先级尾巴、逐行详情与计数口径） | ✅ Phase 1 + Phase 3 第一刀 |
+| `src/dialogs/archive.rs` / `checkout.rs` / `pick.rs` / **`version.rs`** / **`index_repair.rs`** | 归档确认 / 取回（检出）/ 草稿多选 / **版本历史** / **索引修复**对话框：种子（宿主备好的来源与只读信息）+ 表单（名称 / 标签 / 保留份数；文件名 / 是否打开；勾选列表；版本表格 + 选中后动作栏；三分组 + 行内动作）+ 校验与解析（纯函数）+ `open_*_dialog`；后两者的状态可被宿主换行（`set_rows`）与收放忙态 | ✅ Phase 1 + Phase 3 前两刀（执行由宿主注入的 `on_submit` / `on_action` 接手） |
+| `src/present.rs` | 呈现层（纯函数，零 I/O 零 GPUI）：`format_size` / `format_scale` / `format_relative_time` / `format_timestamp` / `tail_for` / `to_row` / **`to_detail`** / **`build_version_rows`**（当前版本 + 历史版本合成行、相邻版本差异）/ **`build_repair_rows`**（扫描报告 → 三分组修复行）/ `build_snapshot`——索引行 → 面板快照（含字段优先级尾巴、逐行详情与计数口径） | ✅ Phase 1 + Phase 3 前两刀 |
 | `src/ui.rs` | 视图尺寸常量（与 `workbench/ui.rs` 同源同值，但**在本 crate 声明**：依赖方向不允许反向读 workbench） | ✅ 8 项 |
 | `src/recycle_bin_dialog.rs` | 回收站对话框 | ⬜ 占位（Phase 3） |
 
@@ -109,7 +109,7 @@
 | 已实现 | 待补 |
 | --- | --- |
 | **归档 / 取回 / 再归档闭环**【Phase 0】`ArchiveService`：本体 move + 登记 + 指纹版本 + 事件；索引失败回滚本体；取回产出可写工作副本 | 五个对话框与动作真实现（Phase 1 对话框批） |
-| **索引修复**【Phase 0】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；"从回收站还原"待 P0.8 | 版本保留策略接入设置项 |
+| **索引修复**【Phase 0 + Phase 3 第二刀】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；**对话框已接**（`dialogs/index_repair.rs` + `present::build_repair_rows` + 宿主接线）：三分组、行内动作（补登固定文件型 / 删记录走确认 / 接受当前内容 / 打开版本历史），修完自动重扫换行；"从回收站还原"置灰等 P0.8 | 按目录批量补登、版本保留策略接入设置项 |
 | **版本历史**【Phase 3 第一刀】`dialogs/version.rs` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（副本缺失行露出来）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**、**删除内容副本**（`AlertDialog` 确认）；动作后宿主换行，不关窗 | 详情面板的"最近 3 条"明细（需批量取数）、版本保留策略接入设置项 |
 | **面板**【Phase 1】`ResourcesPanel`：面板头（标题图标 + `＋ ▾` / `⋯` 四项）/ 工具栏（搜索·筛选·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | 批量多选、标题点击折叠（需与 M4/M5 面板头一起做）、五个对话框与动作真实现 |
 | **详情面板**【Phase 1】`detail_view.rs` 只读信息区（基本信息 / 来源 / 版本 / 组织 + 需处理提示条）+ 动作区（打开（只读）/ 取回）；右 Dock 转发渲染与空态；版本数由存储层一次查完 | 内容预览、危险区（随各自批次） |
@@ -124,5 +124,5 @@
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
-- 验证：`cargo test -p rds-analytics-resource -j 2` → **87 项单测**（16 存储 + 5 领域 + 13 本体 + 11 归档服务 + 7 索引修复 + 6 筛选/排序 + 6 面板 + 5 详情 + 9 呈现 + 6 对话框 + 3 版本对话框）+ `tests/panel_window.rs` **11 项面板窗口测试** + `tests/dialog_window.rs` **5 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-workbench --all-targets -j 2` 与 `cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
+- 验证：`cargo test -p rds-analytics-resource -j 2` → **92 项单测**（16 存储 + 5 领域 + 13 本体 + 11 归档服务 + 7 索引修复 + 6 筛选/排序 + 6 面板 + 5 详情 + 11 呈现 + 6 对话框 + 3 版本对话框 + 3 索引修复对话框）+ `tests/panel_window.rs` **11 项面板窗口测试** + `tests/dialog_window.rs` **6 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-workbench --all-targets -j 2` 与 `cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

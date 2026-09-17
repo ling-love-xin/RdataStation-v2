@@ -203,8 +203,12 @@ pub trait ResourcesHost: 'static {
     /// 参数给的是**面板已有的那条详情**（而不是一个 id）：宿主据此命工作副本名与
     /// 版本提示，不必回头读面板的选中态——那是渲染期正在被借用的对象（已踩过）。
     fn request_checkout(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
-    /// 打开版本历史对话框（右键菜单「版本历史…」与详情面板「查看全部…」共用）。
-    fn request_version_history(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 打开版本历史对话框（右键菜单「版本历史…」、详情面板「查看全部…」与索引修复的
+    /// 「打开版本历史…」共用）。
+    ///
+    /// 只收 id：对话框的数据（含显示名）由宿主在取数线程上查库得到，
+    /// 调用方不必为了一个 id 去克隆整条详情。
+    fn request_version_history(&self, resource_id: &str, window: &mut Window, cx: &mut App);
     /// 撤销上一次归档（底部撤销栏的「撤销」按钮）。
     ///
     /// 凭据里的原路径只在内存里活一会儿（见 [`ArchiveUndo`]）：失效了就调不到这里。
@@ -383,6 +387,8 @@ impl ListDelegate for ArchiveListDelegate {
             .unwrap_or(false);
         let checkout_detail = open_detail.clone();
         let id_delete = row.id.clone();
+        // 版本历史的入口只带 id（对话框的显示名由宿主查库得到）。
+        let id_versions = row.id.clone();
 
         let mut line = div()
             .h_flex()
@@ -479,11 +485,9 @@ impl ListDelegate for ArchiveListDelegate {
                             PopupMenuItem::new("版本历史…")
                                 .on_click({
                                     let host = host.clone();
-                                    let detail = open_detail.clone();
+                                    let id = id_versions.clone();
                                     move |_, window, cx| {
-                                        if let Some(detail) = detail.as_ref() {
-                                            host.request_version_history(detail, window, cx);
-                                        }
+                                        host.request_version_history(&id, window, cx)
                                     }
                                 }),
                         );

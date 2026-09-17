@@ -25,12 +25,13 @@ use std::sync::{Mutex, OnceLock};
 use chrono::Utc;
 use engine::persistence::project_db::ProjectDatabaseManager;
 
+use analytics_resource::dialogs::index_repair::{RepairAction, RepairRow};
 use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
 use analytics_resource::payload::PayloadStore;
-use analytics_resource::present::{ArchiveStatuses, build_snapshot, build_version_rows};
+use analytics_resource::present::{ArchiveStatuses, build_repair_rows, build_snapshot, build_version_rows};
 use analytics_resource::resource_view::ResourcesSnapshot;
 use analytics_resource::{
-    AnalyticsResourceStore, ArchiveRequest, ArchiveService, ArchiveStatus, ArchiveUndo,
+    AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService, ArchiveStatus, ArchiveUndo,
     CheckoutRequest, IndexIssue, IndexRepair,
 };
 
@@ -82,11 +83,29 @@ struct VersionActionJob {
     action: VersionAction,
 }
 
+/// 一次索引扫描任务（扫描不改任何状态，所以不带只读标志）。
+struct IndexScanJob {
+    project_root: PathBuf,
+}
+
+/// 一次索引修复动作任务（补登 / 删孤儿记录 / 接受当前内容）。
+struct IndexRepairActionJob {
+    project_root: PathBuf,
+    read_only: bool,
+    action: RepairAction,
+}
+
 /// 版本历史取数结果（宿主据此开窗，或刷新已经开着的那个窗）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionRows {
     pub resource_id: String,
     pub seed: VersionDialogSeed,
+}
+
+/// 索引扫描结果（宿主据此开窗，或刷新已经开着的那个窗）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexScanRows {
+    pub rows: Vec<RepairRow>,
 }
 
 /// 队列里的作业。
@@ -97,6 +116,8 @@ enum Job {
     Undo(UndoJob),
     Versions(VersionsJob),
     VersionAction(VersionActionJob),
+    IndexScan(IndexScanJob),
+    IndexRepairAction(IndexRepairActionJob),
 }
 
 /// 动作回执（工作线程 → 事件路径）。
@@ -123,6 +144,8 @@ pub enum OpOutcome {
     Undone { name: String },
     /// 版本历史动作完成（`note` 已是一句有信息量的话，事件路径直接印）。
     VersionActionDone { note: String },
+    /// 索引修复动作完成（同上）。
+    RepairDone { note: String },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed { action: &'static str, reason: String },
 }
@@ -137,6 +160,8 @@ struct Jobs {
     op_result: Mutex<Option<OpOutcome>>,
     /// 版本历史槽：只留最新一份（版本对话框一次只开一个）。
     versions: Mutex<Option<Result<VersionRows, String>>>,
+    /// 索引扫描槽：只留最新一份（索引修复对话框一次只开一个）。
+    index_scan: Mutex<Option<Result<IndexScanRows, String>>>,
 }
 
 static JOBS: OnceLock<Jobs> = OnceLock::new();
@@ -154,6 +179,7 @@ fn jobs() -> &'static Jobs {
             result: Mutex::new(None),
             op_result: Mutex::new(None),
             versions: Mutex::new(None),
+            index_scan: Mutex::new(None),
         }
     })
 }
@@ -202,6 +228,20 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     resource_id: job.resource_id.clone(),
                 }));
                 *lock(&jobs().versions) = Some(result);
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
+            Job::IndexScan(job) => {
+                let result = rt.block_on(load_index_report(&job));
+                *lock(&jobs().index_scan) = Some(result);
+            }
+            Job::IndexRepairAction(job) => {
+                let outcome = rt.block_on(run_repair_action(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 修完立刻重扫：对话框的行集合自己就更新了（可能变空）。
+                let result = rt.block_on(load_index_report(&IndexScanJob {
+                    project_root: job.project_root.clone(),
+                }));
+                *lock(&jobs().index_scan) = Some(result);
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
         }
@@ -456,6 +496,84 @@ async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
     }
 }
 
+/// 索引扫描 → 修复行（工作线程上执行）。
+///
+/// 要逐个本体算 sha256（“指纹不匹配”那一档的代价），所以必须离 UI 线程；
+/// 与 `refresh` 各自扫一次（那一份扫是为了行状态与计数），二者都不改任何状态。
+async fn load_index_report(job: &IndexScanJob) -> Result<IndexScanRows, String> {
+    let manager = ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE)
+        .await
+        .map_err(|e| format!("打开项目库失败：{e}"))?;
+    let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+    let payload = PayloadStore::new(job.project_root.clone());
+    let report = IndexRepair::new(&payload, &store)
+        .scan()
+        .await
+        .map_err(|e| format!("扫描本体失败：{e}"))?;
+
+    Ok(IndexScanRows {
+        rows: build_repair_rows(&report),
+    })
+}
+
+/// 执行一次索引修复动作（工作线程上执行）。
+async fn run_repair_action(job: &IndexRepairActionJob) -> OpOutcome {
+    let service = match open_service(job.project_root.clone()).await {
+        Ok(service) => service,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "索引修复",
+                reason,
+            };
+        }
+    };
+    let repair = IndexRepair::new(service.payload(), service.store());
+
+    match job.action.clone() {
+        RepairAction::Adopt { rel_path } => {
+            // `resources/` 里只可能是文件，所以固定文件型；来源无从得知，留空（原型 §4.5）。
+            match repair.adopt_file(&rel_path, None, ArchiveKind::File).await {
+                Ok(resource) => OpOutcome::RepairDone {
+                    note: format!("已补登「{}」（resources/{rel_path}）", resource.name),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "补登存档",
+                    reason: error.to_string(),
+                },
+            }
+        }
+        RepairAction::DeleteRecord { resource_id } => {
+            match repair.remove_orphan_record(&resource_id).await {
+                Ok(()) => OpOutcome::RepairDone {
+                    note: "已删除孤儿登记记录".to_string(),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "删除记录",
+                    reason: error.to_string(),
+                },
+            }
+        }
+        RepairAction::AcceptContent { resource_id } => {
+            match repair.accept_current_content(&resource_id).await {
+                Ok(resource) => OpOutcome::RepairDone {
+                    note: format!(
+                        "已接受当前内容（「{}」现为 v{}；旧内容不可得，那一版只留元数据）",
+                        resource.name, resource.version
+                    ),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "接受当前内容",
+                    reason: error.to_string(),
+                },
+            }
+        }
+        // 跳转类动作由宿主在事件路径拦截（不入这个作业）；真走到这里只给一句话。
+        RepairAction::OpenVersions { .. } => OpOutcome::RepairDone {
+            note: "版本历史已打开".to_string(),
+        },
+    }
+}
+
 /// 取行 → 扫描 → 组装快照（工作线程上执行）。
 async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
     let manager = ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE)
@@ -628,6 +746,31 @@ pub fn drain_op() -> Option<OpOutcome> {
 /// 取走最新版本历史取数结果（未就绪时 `None`）。
 pub fn drain_versions() -> Option<Result<VersionRows, String>> {
     lock(&jobs().versions).take()
+}
+
+/// 提交一次索引扫描（**事件路径**调用：状态行「修复…」与面板头「重建索引…」）。
+pub fn enqueue_index_scan(project_root: PathBuf) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::IndexScan(IndexScanJob { project_root }));
+}
+
+/// 提交一次索引修复动作（**事件路径**调用：索引修复对话框的行内动作）。
+pub fn enqueue_index_repair_action(
+    project_root: PathBuf,
+    read_only: bool,
+    action: RepairAction,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::IndexRepairAction(IndexRepairActionJob {
+        project_root,
+        read_only,
+        action,
+    }));
+}
+
+/// 取走最新索引扫描结果（未就绪时 `None`）。
+pub fn drain_index_scan() -> Option<Result<IndexScanRows, String>> {
+    lock(&jobs().index_scan).take()
 }
 
 #[cfg(test)]

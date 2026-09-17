@@ -21,6 +21,7 @@ use gpui_kit::*;
 
 use crate::view::LeftPanel;
 
+use analytics_resource::dialogs::index_repair::{RepairDialogState, open_index_repair_dialog};
 use analytics_resource::dialogs::version::{VersionDialogState, open_version_dialog};
 use analytics_resource::resource_view::ResourcesPanel;
 use database::nav_view::NavView;
@@ -162,6 +163,37 @@ impl SidebarPanel {
         );
     }
 
+    /// 消费「待开的索引修复对话框」（M6）：与版本历史同一形态（见 `ensure_version_dialog`）。
+    ///
+    /// 不分资源且一次只开一个：关窗就把会话清掉（下次扫描回来重新开）。
+    fn ensure_repair_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(scan) = self.shared.repair_dialog.borrow_mut().pending.take() else {
+            return;
+        };
+        let read_only = self.shared.project_ui.borrow().read_only;
+        let state = RepairDialogState::new();
+        state.set_read_only(read_only);
+        state.set_rows(scan.rows.clone());
+        {
+            let mut flow = self.shared.repair_dialog.borrow_mut();
+            flow.session = Some(shared::RepairDialogSession { state: state.clone() });
+        }
+
+        let entity = cx.entity();
+        let shared_for_close = self.shared.clone();
+        open_index_repair_dialog(
+            window,
+            cx,
+            state,
+            move |action, _window, cx| {
+                entity.update(cx, |this, cx| this.request_repair_action(action, cx));
+            },
+            move |_cx| {
+                shared_for_close.repair_dialog.borrow_mut().session = None;
+            },
+        );
+    }
+
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
         div()
             .v_flex()
@@ -203,8 +235,9 @@ impl Focusable for SidebarPanel {
 
 impl Render for SidebarPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // M6：版本历史对话框的待开数据在这一帧消费（开窗要 `Window`，见方法注释）。
+        // M6：版本历史对话框与索引修复对话框的待开数据都在这一帧消费（开窗要 `Window`）。
         self.ensure_version_dialog(window, cx);
+        self.ensure_repair_dialog(window, cx);
         let bg = cx.theme().colors.background;
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();
