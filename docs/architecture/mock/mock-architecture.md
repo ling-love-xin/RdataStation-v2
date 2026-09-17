@@ -34,7 +34,7 @@ MockConfig ──┬─ table_name   用户命名的表（用于临时表名与�
                                     generator     生成器（137 变体；可自动映射或手工指定）
                                     nullable_ratio 0.0~1.0，>0 时按概率写 NULL
                                     unique        是否要求列值唯一（重试上限 100 次）
-                                    dependency    可选列依赖（拓扑排序用）
+                                    dependency    可选列依赖：当前只承载跨表引用（ForeignKey），其余变体是 v1 空壳
 ```
 
 派生概念：
@@ -158,7 +158,9 @@ orders.user_id ──(dependency: ForeignKey{ref_table: users, ref_column: id})�
 - **校验在生成前**：`MockEngine::resolve_reference_domains` 检查父表 / 父列 / 可算域，
   面板提交前也调它（错就地显示，不等到生成中途）。
 
-列依赖（`resolve_dependencies`）只产出**拓扑排序后的列顺序 + 依赖映射**，用于 UI 编辑与顺序提示；当前生成器本身按 `columns` 顺序取值，不解释依赖表达式——这是与 v1 文档描述不一致的地方（见 §9）。
+列依赖字段 `dependency` 现在只承载**跨表引用**（`dep_type == ForeignKey`：`resolve_reference_domains` 生成前校验并算取值域，`generate_table` 按域采样，见 D29 / §9-I11）；
+**不解释依赖表达式**（`Expression` / `Template` / `Sequence` / `Weighted` 四个变体与 `source_columns` / `expression` / `weights` 三个字段是 v1 遗留空壳，无构造点也无读取点）。
+也没有「拓扑排序」这一步：列按 `columns` 顺序取值，跨表引用不依赖列间顺序（域由父表参数算出，父表先跑后跑都合法）。
 
 ### 4.4 从元数据导入结构
 

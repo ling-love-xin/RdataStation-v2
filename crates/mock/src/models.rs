@@ -505,18 +505,25 @@ pub struct MockScenarioTableResult {
 // ==================== 列依赖模型 ====================
 
 /// 列依赖类型
+///
+/// **当前只有 [`DependencyType::ForeignKey`] 是活的**：`dependency` 现在只承载**跨表引用**
+/// （`ColumnDependency::foreign_key` 是唯一构造点，引擎读它算取值域，见架构 D29 / §9-I11）。
+/// 其余四个变体是 v1 遗留的**空壳**：全仓无构造点也无读取点（`source_columns` / `expression` /
+/// `weights` 三个字段同理），而依赖表达式的旧代码（`resolve_dependencies` 拓扑排序、
+/// `eval_expression`）已按「本模块不解释依赖表达式」删除（§9-I6 / I25）。
+/// 要不要真做表达式是**待拍板项**（见 `mock-dev-plan.md` C3）；不做的话下次可以从模型里删掉。
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum DependencyType {
-    /// 计算表达式：引用其他列的计算（如 `price * quantity`）
+    /// 计算表达式：引用其他列的计算（如 `price * quantity`）——**空壳，未接线**
     Expression,
-    /// 外键引用：引用其他表的列
+    /// 外键引用：引用其他表的列（当前唯一在用的变体）
     ForeignKey,
-    /// 模板引用：使用模板字符串拼接（如 `{first_name} {last_name}`）
+    /// 模板引用：使用模板字符串拼接（如 `{first_name} {last_name}`）——**空壳，未接线**
     Template,
-    /// 序列依赖：基于序列生成器
+    /// 序列依赖：基于序列生成器——**空壳，未接线**
     Sequence,
-    /// 加权依赖：基于加权随机选择
+    /// 加权依赖：基于加权随机选择——**空壳，未接线**
     Weighted,
 }
 
@@ -526,15 +533,15 @@ pub enum DependencyType {
 pub struct ColumnDependency {
     /// 依赖类型
     pub dep_type: DependencyType,
-    /// 依赖的源列名列表
+    /// 依赖的源列名列表（**空壳字段**：只有表达式 / 模板类依赖会用到，当前零使用）
     pub source_columns: Vec<String>,
-    /// 表达式/模板字符串
+    /// 表达式/模板字符串（**空壳字段**，同上）
     pub expression: Option<String>,
     /// 外键引用的目标表名
     pub ref_table: Option<String>,
     /// 外键引用的目标列名
     pub ref_column: Option<String>,
-    /// 权重配置（用于 Weighted 类型）
+    /// 权重配置（用于 Weighted 类型；**空壳字段**，同上）
     pub weights: Option<Vec<(String, f64)>>,
 }
 
