@@ -31,20 +31,11 @@ pub use database::commands::{
     NavCollapse, NavDown, NavExpand, NavOpenProperties, NavReorderDown, NavReorderUp, NavUp,
 };
 
-// 草稿箱（M5）局部动作：绑定在草稿箱面板的 `key_context("scratchpad")` 上。
-actions!(
-    scratchpad,
-    [
-        ScratchpadSelectAll,
-        ScratchpadRename,
-        ScratchpadDelete,
-        ScratchpadCancelEdit,
-        ScratchpadUp,
-        ScratchpadDown,
-        ScratchpadOpen,
-        ScratchpadNewFile
-    ]
-);
+// 草稿箱（M5）局部动作：定义在 `scratchpad::commands`（随草稿箱视图归位），此处重导。
+pub use scratchpad::commands::{
+    ScratchpadCancelEdit, ScratchpadDelete, ScratchpadDown, ScratchpadNewFile, ScratchpadOpen,
+    ScratchpadRename, ScratchpadSelectAll, ScratchpadUp,
+};
 
 // 连接对话框（M3）局部动作：仅绑定在为对话框容器声明的 key context 上。
 //

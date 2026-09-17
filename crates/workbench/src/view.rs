@@ -111,11 +111,12 @@ impl WorkbenchView {
         crate::services::editor_files::attach(&editor_service);
         // B1：把连接端口接上（连接列表 + 自动建连；未接时选择器说“未接入连接列表”）
         crate::services::editor_connections::attach(&editor_service, &editor_shared_for_conn);
-        // M1：排序偏好（直读 settings.json，无需 cx）与首屏项目列表（无项目时）都在构造期完成，
-        // 避免在 `render` 里做 I/O（GPUI-kit 编码指南：副作用不得放在 render）。
+        // M1：排序偏好与首屏项目列表（无项目时）都在构造期完成，避免在 `render` 里做 I/O
+        //（GPUI-kit 编码指南：副作用不得放在 render）。偏好走 `SettingsService`（唯一读路径），
+        // 不直读 `settings.json`：`app` 已在开窗前 `SettingsService::init`（K1）。
         {
-            let sort =
-                project::ui::ProjectSort::from_key(&settings::load_settings().projects.sort_mode);
+            let saved_sort = settings::SettingsService::project_sort_mode(cx);
+            let sort = project::ui::ProjectSort::from_key(&saved_sort);
             shared.project_ui.borrow_mut().picker.sort = sort;
         }
         // 项目视图宿主：注入状态句柄 / 重绘 / 编辑区桥 / 排序偏好 / 打开后刷新。

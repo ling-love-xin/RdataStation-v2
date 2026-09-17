@@ -148,7 +148,16 @@ pub const SCRATCHPAD_EMPTY_ICON_SIZE: f32 = 2.25;
 pub const DIALOG_FORM_LABEL_WIDTH: f32 = 4.25;
 /// 对话框行高（1.75rem ≈ 28px：暂存条目 / 分组标题 / 表单行）
 pub const DIALOG_ROW_HEIGHT: f32 = 1.75;
-/// Tab 内容区固定高度（20.5rem ≈ 328px；超出内部滚动，保证对话框高度不跳）
+/// 对话框「两列行」高度（32.5rem = 520px；左栏类型树 / 右栏 Tab 内容区共用）。
+///
+/// 两列**等高且行高确定**：夹住行高后，切 Tab / 加草稿 / 目录变化都不会改变对话框高度
+/// （设计 §2「布局恒定」）。取值按本工程侧栏自然高（搜索 + 暂存 7.5rem + 标签行 +
+/// 类型树全部可见）取整；类型目录增长时类型树内部滚动，不再撑高对话框。
+pub const DIALOG_BODY_HEIGHT: f32 = 32.5;
+/// Tab 内容区高度（20.5rem ≈ 328px；**保留作为设计参考值与其它面板的尺寸来源**）。
+///
+/// 注：连接对话框两列等高改造后，右列实际高度由 [`DIALOG_BODY_HEIGHT`]（两列行高）决定，
+/// 本常量在该对话框内不再引用（`insight` 的对比视图仍在用）。
 pub const DIALOG_TAB_BODY_HEIGHT: f32 = 20.5;
 /// 暂存列表固定高度（7.5rem = 120px；超出内部滚动）
 pub const DIALOG_STAGING_HEIGHT: f32 = 7.5;

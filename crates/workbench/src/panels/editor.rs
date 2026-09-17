@@ -102,9 +102,10 @@ impl EditorPanel {
             dialog: None,
             _dialog_sub: None,
             property: Rc::new(RefCell::new(PropertyState::default())),
-            property_width: Rc::new(Cell::new(
-                settings::load_settings().navigator.property_panel_width,
-            )),
+            // 属性面板宽度走 `SettingsService`（唯一读路径，K1）；`app` 已在开窗前 init。
+            property_width: Rc::new(Cell::new(settings::SettingsService::property_panel_width(
+                cx,
+            ))),
             props_pump: RefCell::new(None),
             scratchpad_replace: None,
             _scratchpad_replace_sub: None,

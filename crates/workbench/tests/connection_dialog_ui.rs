@@ -31,6 +31,11 @@ struct DialogHarness {
 impl DialogHarness {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let _ = window;
+        // 面板构造会读设置 global（`SettingsService::*`）：测试里注入默认设置，
+        // 不调 `SettingsService::init`（那会读用户磁盘配置，测试结果就与用户状态相关）。
+        if !cx.has_global::<settings::model::Settings>() {
+            cx.set_global(settings::model::Settings::default());
+        }
         Self {
             editor: cx.new(|cx| EditorPanel::new(Shared::new(), cx)),
         }

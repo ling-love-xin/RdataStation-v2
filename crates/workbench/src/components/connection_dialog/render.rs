@@ -166,6 +166,9 @@ impl ConnectionDialogState {
             self.sync_project_selection(&prefilled, window, cx);
             // 拉取一次元数据（认证/网络/环境引用选项 + 类型 / 驱动目录）。
             self.refresh_meta(window, cx);
+            // 目录就绪后重放编辑回读的驱动定位：`load_for_edit` 早于本帧执行，
+            // 那时按驱动反查不到类型（见 `pending_driver_value` 字段文档）。
+            self.replay_pending_driver_locator(window, cx);
             // 暂存列表：首次打开时恢复上次会话的草稿（关栏不丢失，跨会话延续）。
             self.staging_restore(window, cx);
             // 暂存列表：清理历史遗留的已保存条目（暂存区只保留未保存草稿；用户决策）。
@@ -1174,6 +1177,9 @@ impl ConnectionDialogState {
                         if type_badge_now.is_none() && untouched {
                             Some(
                                 div()
+                                    .id("conn-general-guide")
+                                    // 测试锚点：`debug_bounds` 只认 debug_selector（非测试构建 no-op）。
+                                    .debug_selector(|| "conn-general-guide".to_string())
                                     .w_full()
                                     .v_flex()
                                     .gap(rems(GAP_SM))
@@ -1244,13 +1250,18 @@ impl ConnectionDialogState {
                 }
             };
 
-            // Tab 内容区固定高度 + 垂直滚动：切换 Tab 不再改变对话框高度，
-            // 侧栏（暂存列表 / 类型树）与 Header 位置保持稳定（布局不跳动）。
+            // Tab 内容区与左侧栏**等高**（行高 `BODY_H`，由外层行给定）+ 垂直滚动：切换 Tab
+            // 不改变对话框高度，侧栏（暂存列表 / 类型树）与 Header 位置保持稳定（布局不跳动）。
+            // 三向显式约束（height / min / max）：只给 `h()` 时，flex 子项的自动最小尺寸
+            // 会按内容撑高（长内容 Tab 会把对话框拉长）。
             let tab_body = div()
                 .id("conn-tab-body")
+                // 测试锚点：矩阵测试断言「五个 Tab 的高度一致」（切 Tab 不改变对话框高度）。
+                .debug_selector(|| "conn-tab-body".to_string())
                 .w_full()
-                .h(rems(TAB_BODY_H))
-                .min_h_0()
+                .h(rems(BODY_H))
+                .min_h(rems(BODY_H))
+                .max_h(rems(BODY_H))
                 .overflow_y_scrollbar()
                 .child(tab_content);
 
@@ -1503,9 +1514,13 @@ impl ConnectionDialogState {
                 }));
             }
             let side_panel = div()
+                // 测试锚点：矩阵测试断言侧栏与 Tab 内容区等高（两列等高才谈得上“布局恒定”）。
+                .debug_selector(|| "conn-side-panel".to_string())
                 .w(rems(12.5))
-                .h_full()
-                .min_h_0()
+                // 与 Tab 内容区同高（行高由外层给定；三向夹住避免类型树内容撑高）。
+                .h(rems(BODY_H))
+                .min_h(rems(BODY_H))
+                .max_h(rems(BODY_H))
                 .flex_shrink_0()
                 .v_flex()
                 .gap(rems(0.75))
@@ -1553,12 +1568,17 @@ impl ConnectionDialogState {
                                 ),
                         )
                         // 暂存区固定高度 + 滚动：条目再多也只在区域内滚动，不拉长对话框。
+                        // 三向显式约束（height / min / max）而不是只给 `h()`：flex 子项的
+                        // 自动最小尺寸（`min-height:auto`）会按内容撑开，只有显式 min/max 能夹住。
                         .child(
                             div()
                                 .id("staging-scroll")
+                                // 测试锚点：矩阵测试断言「条目再多高度也不增长」（固定高度 + 内部滚动）。
+                                .debug_selector(|| "conn-staging-scroll".to_string())
                                 .w_full()
                                 .h(rems(STAGING_H))
-                                .min_h_0()
+                                .min_h(rems(STAGING_H))
+                                .max_h(rems(STAGING_H))
                                 .overflow_y_scrollbar()
                                 .child(staging_list),
                         ),
@@ -2125,7 +2145,12 @@ impl ConnectionDialogState {
                 .child(
                     div()
                         .h_flex()
-                        // 两列等高于行高，左侧「高度恒定 + 内部滚动」才成立（设计 §「布局恒定」）。
+                        // 两列等高于**行高**，且行高确定（三向夹住）：左侧「高度恒定 + 内部滚动」
+                        // 才成立——否则侧栏按类型树内容自适应，既会撑高对话框，也会让右列下方留空
+                        // （设计 §2「布局恒定」）。
+                        .h(rems(BODY_H))
+                        .min_h(rems(BODY_H))
+                        .max_h(rems(BODY_H))
                         .items_stretch()
                         .gap(rems(1.))
                         // 快捷键 context：绑定在 app 层（Ctrl+Enter 保存 / Ctrl+T 测试 / ↑↓ 切换条目）。

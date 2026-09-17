@@ -454,6 +454,7 @@ flowchart LR
 | 91 | **类型树不做折叠（§14 #11 判定：不做）**：分类头保持平铺，靠侧栏内部滚动容纳；触发重新评估的条件写进 §14 #11（类型目录 > 15 项或分类 > 6 时再上折叠） | 当前目录是 4 类共 ≤ 10 项（关系型 5 / 文件型 1 / 分析型 2 / NoSQL 2），一屏能看完；折叠会多一层点击与一份折叠状态（要考虑搜索命中时自动展开），收益不抵成本。驱动插件生态把目录撑大后再做，届时可照原型早期版本的可折叠分类实现 |
 | 92 | **项目栏动作请求的“决策 + 只消费一次”收归 `Shared::take_project_action_request`（#9 部分关闭）**：返回 `ProjectActionRequest::{CreateProject, OpenFolder}`（同帧两标记 → 新建优先且两个都清）；`WorkbenchView::render` 改为 `if let Some(request) = …` + `match` | 旧写法在 render 里直接 `replace(false)` 两个标记再 `if/else`：“标记 → 动作”的映射与“不会重复开窗”都只能在无窗口环境下验证 → 现抽出后可直接单测（`produce → consume → 二次 None`、同帧竞态）。**残留**：“真的把目标对话框开起来”仍需 `WorkbenchView` 可测试化（服务注入桥），见 §14 #9 |
 | 93 | **连接 ID 命名采用 B 案（`#32` 关闭）+ C 案记入 beta2**：① 生成规则与路由**不动**（`G_conn_{名}` / `P_conn_{随机}` / `GP_conn_{名}_{日期}`）；② **界面与提示词不再出现 ID**——新增 `saved_result`（保存结果行：摘要只有名称，ID + 落点进「详情」）、状态栏提示去 ID、快照同步提示改用重载后的名称、同名拦截消息去 ID；③ 改名语义成文：**编辑改名不换 ID**（`update` 按 ID 定位），新建重名被拦（不静默覆盖）；④ 主键改 ULID + 存量迁移（原 C 案）列为 **beta2** 条目，范围见 §3.2 | “用户看到 ID 里的名字片段会误以为是稳定主键”是**语义误导**（不是功能缺陷）：B 案用零迁移的方式消除误读，且「详情 / 复制」保留了报障所需的 ID；C 案收益（主键真正稳定）当前无阻塞性需求（缓存复用已由指纹负责，决策 #65），而需迁全部表 + 改路由判定 + 兼容期——所以放 beta2 而不是本版 |
+| 94 | **对话框「两列行」高度先定（`DIALOG_BODY_HEIGHT = 32.5rem`），侧栏与 Tab 内容区各自填满**：行 / 侧栏 / 内容区三处都用 `h + min_h + max_h` 三向夹住；`DIALOG_TAB_BODY_HEIGHT`（20.5rem）在本对话框内不再引用（`insight` 的对比视图仍在用，值保留）；并用窗口测试断言两列等高 + 切 Tab 高度一致 | 只给 `h()` 时**夹不住** flex 子项的自动最小尺寸（`min-height:auto` 按内容）：实测侧栏自然高 522px vs 右列 328px —— 既让右列下方留 194px 空白，又让**侧栏内容（类型树条目数）反向决定对话框高度**（目录 / 驱动插件增长则对话框变高）。而 `.min_h_0()` 在该组合下未生效（三向显式约束才夹住，实测 120px→412px 回归）。“两列等高”是原型 §2「布局恒定」的前提（左栏内部滚动的剩余高度才可预测） |
 
 
 ---
@@ -582,7 +583,7 @@ flowchart LR
 | B | 暂存条目拖拽排序 / 「测试全部」 | 批量配置的可用性 | gpui-kit 0.6 无开箱拖拽，可用上下移替代 |
 | C | 自绘 tooltip（暂存条目短码释义） | 减少认知成本 | 需接入 gpui-base `TooltipOverlay` |
 | D | 分组 / 标签管理与视图（新建分组、按标签检索） | 组织能力的消费侧 | 导航模块（database-nav） |
-| E | 项目下拉支持**浏览目录打开其他项目**（复用 `project::ui::open_folder_dialog`） | 现在只能选“当前 + 最近项目”；未在最近列表的本机项目需先去标题栏切换项目 | 需在宿主消费 `project_new_request` 旁扩展一个 `project_open_request` 入口 |
+| E | ~~项目下拉支持**浏览目录打开其他项目**~~（**已完成**：决策 #26/#41 补 `project_open_request` + 「打开现有目录…」，#4 又让它在脏草稿下确认后直接开窗） | — | — |
 | F | 国际化 / 可访问性 / 指标（§13 缺口） | 平台级能力 | 全局排期 |
 | G | **连接主键改 ULID + 存量迁移**（原 C 案，**beta2**）：前缀只留作用域标记，`uid` 作真主键 / 外键锚点（缓存索引 / 审计 / 跨项目引用 / 导入导出） | 主键与名称彻底解耦（B 案只解决“误读”，ID 仍与名称同构） | 需迁全部表 + 改路由判定 + 兼容期；触发条件：出现名称变更频繁 / 需要外部稳定引用（集成 / API）的真实需求，或与「缓存索引表」同轮做 |
 | H | 标签权威表的**回填迁移**（把存量 `tags` JSON 灌进 `connection_tags`）→ 删掉兼容回退 | 彻底兑现 #31 的单一权威（当前保留回退仅为了旧库） | 写入 `initialize_global_system` 的一次性迁移（幂等），与项目库名册遍历同模式 |
@@ -608,7 +609,9 @@ flowchart LR
 | 暂存行为测试 | `crates/workbench/tests/connection_staging.rs`、`connection_drafts_persist.rs`、`connection_multi_save.rs` |
 | 类型 × 驱动与去噪 | `connection_dialog/{helpers,state}.rs`（`driver_short_name` / `find_driver_by_value` / `select_type`）、`tests/connection_type_driver.rs` |
 | 标签 / 分组入口 | `connection_dialog/{render,staging,state}.rs`（组织卡片 + 草稿字段）、`services/data_source_service.rs`（`list_groups` / `groups_of` / `set_connection_groups`）、`engine/connection_org_store.rs`（`set_connection_groups`） |
-| Layout 稳定与性能标记 | `render.rs`（`tab_body` 固定高度 + `overflow_y_scrollbar`；`meta_refreshed` 字段） |
+| Layout 稳定与性能标记 | `render.rs`（两列行高 `DIALOG_BODY_HEIGHT` + 侧栏 / Tab 内容区三向夹住；`meta_refreshed` 字段）；尺寸常量登记在 `crates/workbench_shell/src/ui.rs` |
+| 编辑回读的驱动定位（目录时序） | `connection_dialog/state.rs`（`pending_driver_value` + `replay_pending_driver_locator`）、`render.rs`（`refresh_meta` 之后重放） |
+| 渲染状态矩阵 / 编辑回填测试 | `crates/workbench/tests/connection_render_matrix.rs`、`connection_edit_backfill.rs` |
 | 项目栏下拉与新增项目入口 | `connection_dialog/project_picker.rs`（`ProjectItem`）、`state.rs::handle_project_confirm`、`render.rs::subscribe_project_confirm`、`panels/editor.rs::ensure_dialog_subscription`、`view.rs`（消费 `project_new_request`） |
 | 项目侧连接解析（编辑回读 / 导航连接） | `services/data_source_service.rs::get_with_project`、`connection_dialog/state.rs::load_for_edit`、`services/nav_runtime.rs::load_entry(_with)` |
 | 用户使用指南 | `docs/architecture/connection/connection-user-guide.md` |
@@ -719,7 +722,7 @@ flowchart LR
 | 数据模型 | 表 / 字段 / 迁移字典（§10）+ 兼容策略 | 良 | 缺模式版本号（草稿 JSON 结构演进） |
 | 交互设计 | 原型文档 + 可交互 HTML + 主题 token 映射 | 良 | 缺多分辨率 / 高 DPI 截图基线 |
 | 使用文档 | 用户指南 + USIT 清单（`connection-user-guide.md`） | 良 | 缺录屏 / 动图 |
-| 测试 | 单测 / 窗口测试 / 服务集成 / 真机用例；临时库隔离 | 良 | 缺 UI 图像回归、缺 fuzz / 属性测试 |
+| 测试 | 单测 / 窗口测试 / 服务集成 / 真机用例；临时库隔离；**状态矩阵渲染冒烟 + 编辑回填端到端**（2026-09-17 补） | 良 | 缺 UI 图像回归、缺 fuzz / 属性测试 |
 | 错误处理 | 降级矩阵（§11）+ 结果行分级与可复制详情 | 中良 | 缺统一错误码（诊断文本已可复制） |
 | 性能 | 一次性元数据、固定布局、写入量小 | 中 | 缺基准数据与大数据量（数千连接）验证 |
 | 可观测性 | 结构化日志 + 诊断接口 | 中 | 缺指标（metric）与面板 / 追踪 |
@@ -748,7 +751,9 @@ flowchart LR
 > **#33 轮（同日）**：#33 关闭（引用计数覆盖项目名册）+ #34 残留消除（项目库存量明文启动时逐库迁移）；共用同一份「已知项目」来源，见决策 #81。
 > **#28 轮（2026-09-13）**：#28 关闭（结果行分级 + 详情 / 复制，见下段）；顺带补上「窗口测试如何断言节点真的渲染」的机制说明（`debug_selector` 而非 `.id`，见 §7 约定与决策 #83）。
 > **#32 轮（2026-09-13）**：连接 ID 采用 **B 案**（界面与提示词不出现 ID；名称入摘要、ID 入「详情」；改名语义成文）；原 C 案（ULID 主键 + 迁移）列入 **beta2**，见 §3.2 / 决策 #93。
+> **登记补充（2026-09-13 晚）**：新增两条 ⚪——**#35** `SettingsService` 读取 global 未安装时 panic（本模块 7 个宿主已内联兜底；根治归 `settings` crate）、**#36** 保存结果行的「详情 / 复制」入口是否算噪音（待 USIT 定夺）。同时把后续表的 **E（项目下拉浏览目录）标为已完成**（改由 #26/#41 的「打开现有目录…」+ #4 的确认后直接推进提供，无需另做宿主入口）。
 > **#15/#14/#17/#18/#29/#31/#4 轮（2026-09-13）**：本模块可做的 7 项一次性关闭——组件化迁移（Tab 条 / 分段控件 / 开关）、尺寸契约纳入扫描、ElementId 业务键、`project_path` 收敛、首次引导、标签单一权威、未保存确认后直接推进项目动作。至此本模块只剩 **🟡 #7**（分组管理在导航侧）与 **⚪ #9 / #10 / #11 / #12 / #13**（宿主分支测试 / 原型 HTML / 类型树折叠 / 全局尺寸迁移 / 图像回归），以及 **#19 / #21 / #22 / #23**（M4 与宿主侧）与 **#32 / #1**（待拍板 / 平台）。
+> **全量回归轮（2026-09-17）**：新增两个测试套件（**渲染状态矩阵** + **编辑回填端到端**），由此**拖出一个真缺陷**——编辑既有连接时类型 / 驱动未回填（驱动定位早于目录加载，见下方“已关闭（全量回归轮）”）。关闭 **#13 的一部分**（状态矩阵渲染冒烟）；16 个测试目标 / 145 用例全绿，四条真机连接（MySQL·PG·SQLite·DuckDB）测试连接 + 真实连接双链路通过。
 
 **已关闭（#15/#14/#17/#18/#29/#31/#4 轮，2026-09-13：组件化 · 尺寸契约 · 标识 · 标签 · 引导 · 项目动作）**
 
@@ -827,6 +832,15 @@ flowchart LR
 | 新增（🔴） | **文件型工厂忽略 `url_override`（USIT 发现）**：sqlite / duckdb 工厂改从 `to_url()` 取地址（去前缀与查询串）——原先只读 `config.database`，服务层传 url_override 也会报「Database path is required for SQLite」 | 同上（真实文件探测：成功且磁盘出现空库文件） |
 | 新增（🟡） | **暂存条目与表单不一致（USIT 发现）**：当前条目的类型徽标 / 名称改取 live 表单快照（`staging_display_type_id`），不再等草稿写回 | `helpers::staging_type_badge_prefers_live_form_for_current_entry` |
 
+**已关闭（全量回归轮，2026-09-17：渲染矩阵 + 编辑回填）**
+
+| # | 关闭方式 | 验证 |
+| --- | --- | --- |
+| 新增（🔴） | **编辑既有连接时类型 / 驱动不回填（本轮拖出）**：`EditorPanel::request_edit_connection` → `open` → `load_for_edit` 发生在**驱动目录加载之前**（目录在首帧 `refresh_meta` 才拉），那时按 `db_type` / `driver_id` 反查必失败 → 左侧类型树无选中、驱动下拉为空、类型徽标不显示（名称 / 地址 / 备注 / 标签回填不受影响，因为不依赖目录）。修法：新增 `pending_driver_value` 记录未定位的驱动值，目录就绪后由 `replay_pending_driver_locator`（在 `refresh_meta` 之后）重放一次定位；命中即清空，目录仍空（服务降级）则保留待下次 | `connection_edit_backfill::editing_saved_connection_backfills_form`（真实服务落库 → 编辑入口 → 逐项断言名称 / 地址 / 备注 / 标签 / 类型 / 驱动 / 作用域 + 五 Tab 渲染 + 已保存连接不进暂存区） |
+| 13（⚪，部分） | **缺 UI 状态矩阵冒烟**：新增 `connection_render_matrix` —— 空态引导条「出现 → 填名称消失 → 清空复现」（判据是表单内容而非一次性标记）、五个 Tab 在**全局库未初始化**时逐一渲染、作用域三态切换渲染、结果行四级渲染、**暂存区固定高度回归**（草稿累加到 13 条时 `conn-staging-scroll` 高度必须不变） | 同文件 2 项，全绿（图像回归 / 性能基准 / fuzz 仍缺） |
+| 新增（⚪） | **测试锚点补缺**：渲染层此前只有结果行三处 `debug_selector`，矩阵断言需要“节点真的渲染”的坐标；补 `conn-general-guide`（引导条）/ `conn-staging-scroll`（暂存滚动容器）/ `conn-tab-body` / `conn-side-panel` 四处（不改布局，仅测试构建登记坐标） | 上述两个套件 |
+| 新增（🔴） | **两列不等高 + 侧栏撑高对话框（本轮拖出，决策 #94）**：侧栏自然高 522px、Tab 内容区固定 328px → 右列下方留 194px 空白，且**类型树条目数反向决定对话框高度**（目录增长即变高）。修法：先定行高（`DIALOG_BODY_HEIGHT = 32.5rem`，三向夹住），侧栏与内容区各自同高填满；`DIALOG_TAB_BODY_HEIGHT` 降为内容区最小高参考值 | `connection_edit_backfill`（目录就绪 → 侧栏 == 内容区 == 520px）、`connection_render_matrix`（降级路径同样等高） |
+
 **已关闭（契约审计轮，2026-09-12，详见 §16）**
 
 | # | 关闭方式 | 验证 |
@@ -848,9 +862,9 @@ flowchart LR
 | 8 | ⚪ | ~~`DataSourceService::get`（只查全局库）仍是公开 API~~（**已关闭**：重命名为 `get_global`） | — | — |
 | 9 | ⚪ | **部分关闭（2026-09-13）**：宿主消费分支的“标记 → 动作”映射与“只消费一次”已由 `Shared::take_project_action_request` + 单测覆盖（含同帧竞态）。**残留**：“真的把目标对话框开起来”那一段（依赖窗口与宿主管线）仍需 `WorkbenchView` 可测试化 | 该路径的剩余局部只能手动验证 | 待 `WorkbenchView` 可测试化（需服务注入桥）后补窗口测试 |
 | 10 | ⚪ | 原型 HTML 为手工维护的示意稿 | 与实现存在漂移风险（需人工同步）。**2026-09-13 已同步一轮**：Tab 改下划线、作用域改浅底分段、开关改组件尺寸、新增结果行（分级 + 详情 / 复制）与首次引导条，**删掉早就撤下的内联协议链**（决策 #72 漏同步）；顶部加“非权威”声明 + 同步戳（决策号），漂移从此可被发现 | 以 `connection-prototype-design.md` 为权威，HTML 仅作视觉参考；根治（从实现截图 / 渲染基线生成）仍需平台工作 |
-| 11 | ⚪→🚫 | 类型树**不可折叠**（四个分类平铺） | — （**本轮判定：不做**，理由见决策 #91：4 类共 ≤10 项，侧栏已内部滚动，折叠的交互与状态成本不抵收益） | 重评触发：类型目录 > 15 项或分类 > 6（驱动插件生态） |
+| 11 | ⚪→🚫 | 类型树**不可折叠**（分类平铺）。实测种子目录：relational 5 / file-based 1 / analytics 2（nosql 2 条 `enabled=0` → 整类不显示）＝**3 分类 + 8 项** | —（**判定：不做**，理由见决策 #91：侧栏已固定高度 + 内部滚动，折叠的交互与状态成本不抵收益） | **三选项（待拍板）**：**① 维持现状**（推荐）；**② 上折叠**——必须同时满足三条规则：搜索命中**自动展开**该分类、选中类型所在分类**始终可见**、默认全展开且折叠态不落库（ElementId 用独立命名空间 `type-cat:{id}`）；成本 ≈60–80 行 + 3 个测试（折叠集合纯函数单测 + 窗口测试：折叠后不渲染 / 搜索自动展开 / 选中分类不被折）+ 原型与 HTML 同步；**③ 替代：分类头吸顶（sticky）**——不引入点击与状态，类型变多时滚动中不迷失；需先核实 0.6.1 滚动容器是否支持 pinned header，不支持则退为“滚动时顶部常驻当前分类名”。**重评触发**：类型 > 15 项或分类 > 6（驱动插件生态） |
 | 12 | ⚪ | UI 尺寸常量化**只覆盖本模块**（`ui-constraints.md` 三阶段迁移第一阶段） | 其他模块仍写字面量；**注**：`view.rs` / `panels/` 已清零，尺寸契约已把连接对话框一并扫描（决策 #88），剩下的欠债在其他模块（设置 / 项目 / 导航） | 按 `ui-constraints.md` §迁移计划推进（属各模块自身工作，不在连接模块范围内） |
-| 13 | ⚪ | 缺 UI 图像回归基线 / 大数据量性能基准 / fuzz | 回归靠断言而非视觉 | 平台级排期 |
+| 13 | ⚪→部分✅ | **状态矩阵渲染冒烟已补（2026-09-17）**：引导条出现 / 消失 / 复现、五 Tab 降级渲染、作用域三态、结果行四级、暂存区固定高度回归（`connection_render_matrix`）；仍缺 UI 图像回归基线 / 大数据量性能基准 / fuzz | 关键状态不再可能“无人触碰”；余下缺口不影响主链路 | 图像回归 / 性能基准 / fuzz 归平台级排期 |
 | 14 | ⚪→✅ | ~~连接对话框仍有存量裸 `px(...)`~~（**已关闭**：模块内 `px(...)` 清零 + `ui_contract` 尺寸契约扫描扩到对话框 6 文件，见决策 #88） | — | — |
 | 15 | 🟡→✅ | ~~**Tab 条 / 分段控件 / 开关为自绘**~~（**已关闭**：迁到 `TabBar::underline()` / `TabBar::segmented()` / `Switch`，开关接 `form_disabled`，可见下标映射提为纯函数，见决策 #84/#85） | — | — |
 | 16 | ⚪→✅ | ~~**渲染热路径上的写状态与重计算**~~（**已关闭**）：第一批（决策 #67）驱动派生数据缓存 + 地址占位守卫；后半（决策 #73）暂存列表 `LiveEntryView` + `form_matches_draft` + 逐行短借用。**唯一保留项**：`render.rs` 里类型 / 驱动目录的每帧克隆（类型 ≤10、驱动 ≤6，各仅若干小字符串，量级远小于已收敛的两项）| 每帧 JSON 反序列化、额外 notify 循环与整表草稿克隆均已消除 | 若将来目录规模增长（驱动插件生态）再优化：把 `types` / `drivers` 改为 `Rc<Vec<…>>` 快照（会改动 `pub` 字段类型，需同步测试赋值写法），当前收益不抵改动面 |
@@ -872,6 +886,8 @@ flowchart LR
 | 32 | ⚪→✅ | ~~**连接 ID 命名方案待拍板**~~（**已关闭**：采用 **B 案**——生成规则 / 路由不动，界面与提示词不再出现 ID（名称入摘要、ID 入「详情」），改名语义成文“编辑改名不换 ID / 新建重名被拦”；原 **C 案（ULID 主键 + 迁移）列为 beta2**，见 §3.2 与决策 #93） | — | — |
 | 33 | 🟡→✅ | ~~引用计数不覆盖未打开的项目~~（**已关闭**：遍历项目名册 + `other` 记项目名，见 #33 已关闭段） | — | — |
 | 34 | 🔴→✅ | ~~网络档案 `config` 里的 SSH / 代理密码是明文入库~~（**已关闭**：写/读加解密 + 存量迁移（全局库 + 项目库）+ 列表脱敏 + 直查 SQL 路径补解密，见 #34 已关闭段） | — | — |
+| 35 | ⚪ | **`SettingsService` 的读取方法在 global 未安装时直接 panic**（`cx.global::<Settings>()`）：本模块 7 个窗口测试宿主在 `EditorPanel::new` 处集体挂掉（`no state of type rds_settings::model::Settings exists`） | 任何不经 app 启动路径构造面板的入口（测试 / 将来的 headless / 脚本）都会碰；目前只能在每个宿主手写“注入默认设置” | 两选一：① `crates/settings` 的访问器自愈（与 `workbench_shell::product_tokens::apply_from_path` 同风格：缺失即装默认）；② 保持 panic 但提供 `settings::test_support::install_default(cx)` 单一入口。本模块已按方式②在 7 个宿主内联注入（归属 `settings` crate 决定） |
+| 36 | ⚪ | **保存成功的结果行**每次都出现「详情 / 复制」入口（因为 B 案把连接 ID 挂在 `detail` 上，而 `detail.is_some()` 即渲染入口） | 每次保存多两个小链接；对不需要 ID 的用户可能是噪音 | 待 USIT 定夺：① 保持现状（按需可见，最省事）；② 改为“点开时才展开”的懒加载；③ 只在 `name` 为空/冲突场景才附详情 |
 
 ---
 

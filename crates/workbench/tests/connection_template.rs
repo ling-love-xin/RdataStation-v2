@@ -28,6 +28,10 @@ struct Harness {
 impl Harness {
     fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let shared = Shared::new();
+        // 面板构造会读设置 global（`SettingsService::*`）：注入默认值，不读用户磁盘配置。
+        if !cx.has_global::<settings::model::Settings>() {
+            cx.set_global(settings::model::Settings::default());
+        }
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
         let weak = cx.entity().downgrade();
         let bridge: Rc<dyn Fn(&mut App)> = Rc::new(move |cx: &mut App| {

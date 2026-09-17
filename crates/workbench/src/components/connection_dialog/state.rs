@@ -182,6 +182,7 @@ impl ConnectionDialogState {
             fields_synced_for: Rc::new(RefCell::new(None)),
             url_placeholder_for: Rc::new(RefCell::new(String::new())),
             driver_derived: Rc::new(RefCell::new(DriverDerived::default())),
+            pending_driver_value: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -696,6 +697,20 @@ impl ConnectionDialogState {
         hit
     }
 
+    /// 目录就绪后重放「编辑回读的驱动定位」（见 `pending_driver_value` 字段文档）。
+    ///
+    /// 只重放一次：命中即清空；目录仍为空（服务降级）则保留，等下次 `refresh_meta` 后再试。
+    pub(crate) fn replay_pending_driver_locator(&self, window: &mut Window, cx: &mut App) {
+        let Some(value) = self.pending_driver_value.borrow().clone() else {
+            return;
+        };
+        if self.drivers.borrow().is_empty() {
+            return;
+        }
+        *self.pending_driver_value.borrow_mut() = None;
+        self.set_driver_by_value("", &value, window, cx);
+    }
+
     /// 编辑回读：按连接 ID 预填全部 Tab 字段（协议链 / 驱动属性 / SSL / 策略覆盖 / 作用域 / 缓存路径）。
     ///
     /// `project_root`：项目侧（P_/GP_）连接只存在项目库里，回读必须带上项目根。
@@ -745,7 +760,14 @@ impl ConnectionDialogState {
                     .map(|d| (d.type_id.clone(), driver_short_name(&d.name)))
                     .unwrap_or((String::new(), did.clone()))
             };
-            self.set_driver_by_value(&tid, &value, window, cx);
+            // 首帧之前调用时驱动目录为空（`refresh_meta` 还没跑）→ 定位必然失败；
+            // 记下驱动值，等目录就绪后重放（否则左侧类型树无选中、驱动下拉为空）。
+            let located = self.set_driver_by_value(&tid, &value, window, cx).is_some();
+            *self.pending_driver_value.borrow_mut() = if located {
+                None
+            } else {
+                Some(did.clone())
+            };
         }
         self.scope.update(cx, |s, cx| {
             s.set_selected_value(&SharedString::from(scope_label(&ds.scope)), window, cx)

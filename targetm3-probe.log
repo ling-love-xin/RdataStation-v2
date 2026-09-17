@@ -1,0 +1,38 @@
+   Compiling rds-mock v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\mock)
+warning: method `jump_to_error_site_in` is never used
+    --> crates\editor\src\view\host.rs:1277:19
+     |
+ 112 | impl EditorHostPanel {
+     | -------------------- method in this implementation
+...
+1277 |     pub(crate) fn jump_to_error_site_in(&mut self, window: &mut Window, cx: &mut Context<...
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `rds-editor` (lib) generated 1 warning
+   Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.98s
+     Running tests\zz_fixture_probe.rs (target\debug\deps\zz_fixture_probe-b3420ab3855a5f8a.exe)
+
+running 1 test
+
+=== 真机自检（测试连接 / 真实连接）===
+[测试连接] MySQL      success=true  耗时=Some(  296)ms 版本=Some("9.7.2")
+            msg=连接成功 · 296 ms
+[真实连接] MySQL      OK   运行时 id=zz_probe_mysql 耗时=846ms
+[测试连接] PostgreSQL success=true  耗时=Some(  190)ms 版本=None
+            msg=连接成功 · 190 ms
+[真实连接] PostgreSQL OK   运行时 id=zz_probe_postgres 耗时=235ms
+[测试连接] SQLite     success=true  耗时=Some(    2)ms 版本=Some("3.53.2")
+            msg=连接成功 · 2 ms
+[真实连接] SQLite     OK   运行时 id=zz_probe_sqlite 耗时=18ms
+[测试连接] DuckDB     success=true  耗时=Some(   28)ms 版本=Some("v1.5.5")
+            msg=连接成功 · 28 ms
+[真实连接] DuckDB     OK   运行时 id=zz_probe_duckdb 耗时=47ms
+=== 四条连接全部通过 ===
+
+test probe_and_connect_all_fixtures ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.34s
+

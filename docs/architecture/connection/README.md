@@ -91,13 +91,18 @@ cargo test -p rds-workbench --lib \
   --test connection_multi_save --test connection_drafts_persist --test connection_type_driver \
   --test connection_project_picker --test dialog_host_layer --test connection_tunnel_cleanup \
   --test connection_scope_and_state --test real_connections --test global_service_singleton \
-  --test connection_template --test ui_contract -j 2
+  --test connection_template --test ui_contract \
+  --test connection_render_matrix --test connection_edit_backfill -j 2
 
 # 全工作区编译守卫（含全部 target）
 cargo check --workspace --all-targets -j 2
 ```
 
-- 基准（2026-09-13）：工作台 lib 52、`data_source_lifecycle` 28、`ui_contract` 5，其余连接套件 1–7 项，全绿；`check --workspace --all-targets` 零警告。
+- 基准（2026-09-17）：**18 个目标 / 148 用例全绿**——lib 64、`data_source_lifecycle` 28、`connection_type_driver` 7、`connection_project_picker` 7、`ui_contract` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`db_navigator` 2、`connection_edit_backfill` / `connection_drafts_persist` / `connection_tunnel_cleanup` 各 1。
+- **两条补强套件**（2026-09-17）：`connection_render_matrix`（状态 × 渲染矩阵：引导条三态、五 Tab 降级渲染、作用域三态、结果行四级、**暂存区固定高度 + 两列等高**）与 `connection_edit_backfill`（编辑入口 → 读库 → 表单逐项回填 + 五 Tab 渲染；**本轮由此拖出“类型 / 驱动不回填”缺陷**）。
+- **布局高度的写法约定**（本轮踩到，必守）：固定高度必须 `h + min_h + max_h` **三向显式**约束——只给 `h()`（哪怕再加 `min_h_0()`）夹不住 flex 子项的自动最小尺寸，内容多时会按内容撑高（实测暂存区 120px → 412px、侧栏 522px 撑高对话框）。
+- 测试模块的硬规则：**禁** `use gpui_kit::*` / `use super::*`（`#[test]` 宏遮蔽）；断言“节点真的渲染”必须 `.debug_selector(...)` + `cx.debug_bounds(...)`（`.id(...)` **不**登记坐标）；宿主设置 `host_redraw` 桥时，面板入口要**从宿主外部**触发（在 `Harness::update` 内调会重入 panic）。
+- **真机测试环境**（4 条内网 / 本地连接：MySQL·PG·SQLite·DuckDB，含口令与注意事项）见 `connection-user-guide.md` §9.0；建议矩阵说明哪条连接盖哪些清单段。
 - 契约测试 `ui_contract`：尺寸（禁裸 `px(`）+ 颜色（禁 `rgb(` / `hsla(`）扫描范围含本模块全部文件。
 - 真机验收走 `connection-user-guide.md` §9 的 A–V 清单（USIT）。
 
@@ -116,7 +121,7 @@ cargo check --workspace --all-targets -j 2
 
 | 类别 | 项 |
 | --- | --- |
-| 模块内可做 | 标签权威表**回填迁移**（去掉兼容回退）、对话框状态矩阵渲染冒烟测试 |
+| 模块内可做 | 标签权威表**回填迁移**（去掉兼容回退） |
 | 需协调 | 元数据缓存指纹接线（与导航接入 L2 同轮）、宿主开窗分支测试（需 `WorkbenchView` 可测试化） |
 | M4 / 宿主侧 | 分组管理在导航侧、导航行删除入口、标签视图接线、打开·关闭项目刷新 |
 | 待拍板 / 平台 | 驱动插件安装、其他模块尺寸迁移、图像回归与性能基准 |

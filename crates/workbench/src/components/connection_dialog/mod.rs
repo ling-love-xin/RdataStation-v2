@@ -338,6 +338,13 @@ pub struct ConnectionDialogState {
     /// 驱动派生数据缓存（表单字段 / 能力 / 认证方法）；由 `driver_derived()` 按需刷新，
     /// 避免渲染期每帧解析声明 JSON（§6 决策 #67）。
     pub(crate) driver_derived: Rc<RefCell<DriverDerived>>,
+    /// 编辑回读时**未能当场定位**的驱动值（记录的 `db_type` / `driver_id`）。
+    ///
+    /// `open` → `load_for_edit` 发生在驱动目录加载（首帧 `refresh_meta`）**之前**，
+    /// 那时目录为空、按驱动反查不到类型；若就这么算了，左侧类型树无选中、驱动下拉为空
+    /// （USIT 反馈过“编辑 sqlite 连接却看不到类型/徽标”）。这里先记下驱动值，
+    /// 目录就绪后由 `replay_pending_driver_locator` 重放一次定位（命中即清空）。
+    pub pending_driver_value: Rc<RefCell<Option<String>>>,
     pub ssl_ca: Entity<InputState>,
     pub ssl_cert: Entity<InputState>,
     ssl_key: Entity<InputState>,

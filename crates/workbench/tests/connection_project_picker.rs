@@ -42,6 +42,10 @@ impl PickerHarness {
         let _ = window;
         let shared = Shared::new();
         *shared.project.borrow_mut() = Some(OpenProject::new(root, "演示项目"));
+        // 面板构造会读设置 global（`SettingsService::*`）：注入默认值，不读用户磁盘配置。
+        if !cx.has_global::<settings::model::Settings>() {
+            cx.set_global(settings::model::Settings::default());
+        }
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
         Self { shared, editor }
     }
