@@ -200,7 +200,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 ```
 
 - **工作副本语义**：「应用」才写回目标列，取消即丢弃（`ColumnDraft`）；
-- 参数表单由 `generator_catalog::spec_of()` 派生（137 变体零手工对齐）；标量参数即时补丁回生成器配置
+- 参数表单由 `generator_catalog::spec_of()` 派生（143 变体零手工对齐）；标量参数即时补丁回生成器配置
   （JSON 补丁，见 `patch_param`）；
 - 集合类参数（`ForeignKey.values` / `Sequence.values` / `Weighted.choices`）用多行文本编辑
   （`parse_complex_param` / `complex_param_text`）：合法即写回，非法则**保留上一个有效值**并在对话框里
@@ -215,15 +215,15 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 ```
 ┌ 搜索生成器 ────────────────────────────┐
 │ [按名称 / 中文标签 / 分类搜索…        ] │ ← List 组件自带搜索框（同步过滤，无 loading 闪烁）
-│ 命中 4 / 137 · 标签前缀命中靠前          │
+│ 命中 4 / 143 · 标签前缀命中靠前          │
 │ ✓ 邮箱地址          email        Person │ ← 命中行：中文标签（主）/ 名称 / 分类（辅）
 │   安全邮箱          safe_email   Person │ ← `✓` = 该列当前在用的生成器（ListItem::confirmed）
 │   免费邮箱服务商     free_email_… Person │
-│   免费邮箱          free_email   Person │ ← 137 项由 List 虚拟化 + 自带滚动（高 16rem）
+│   免费邮箱          free_email   Person │ ← 143 项由 List 虚拟化 + 自带滚动（高 16rem）
 └────────────────────────────────────────┘
 ```
 
-- 入口：字段行的生成器菜单**首项**「搜索生成器…（137 项）」；
+- 入口：字段行的生成器菜单**首项**「搜索生成器…（143 项）」；
 - 匹配：中文标签 / 名称 / 分类名，大小写不敏感，多词之间是 **AND**（可分别落在不同字段上）；
   排序＝标签前缀 → 名称前缀 → 标签包含 → 名称包含 → 分类名包含，同级保持目录顺序（`search_generators`）；
 - 确认（点行 / 回车）即写回**该列**（`MockPanel::set_generator`，置信度转 `manual`）并关闭对话框；
@@ -295,36 +295,42 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 
 ### 4.5 尚未落地（本稿不画）
 
-- 列依赖编辑（`dependency` / `DependencyType`）：模型已就位但生成器不解释表达式，见 `mock-architecture.md` §9-I6；
+- 列间表达式（`dependency` 的旧 `DependencyType` 已删，见架构 D40）：本模块**不解释表达式**；
 - **跨模板 / 跨库引用**：引用目标必须在同一模板里、且父列可算域；
 - **影子数据**（读已落地数据、按其特征生成相似数据）：与当前「生成不读数据」的边界相反，单独立项（§9-I13）；
 - v1 原型的「⚙ 高级抽屉 / 时序关联（可选）」：v1 后端零实现（`v1/frontend/.../MockAdvancedDrawer.vue` 只有 UI），
-  v2 不迁——真要做应作为「数值列跟随日期列」的独立生成器重新设计，而不是搬抽屉。
+  v2 不搬抽屉。**已部分落地**：`time_series` 生成器（起始值 + 趋势 + 周期 + 噪声，按行序展开）＋ `sequential_date`
+  按同一行序铺开，两列并排即一条带季节性的时间序列；**仍未做**的是「真去看日期列的实际取值」——那是跨列求值。
+- **业务日历**（只排工作日 / 跳节假日）：时序与时序日期都只按步长推进，不看日历。
 
 入口按钮**在实现前不渲染**（不摆空控件）。
 
-## 5. 生成器目录（137 变体）
+## 5. 生成器目录（143 变体）
 
-`GeneratorConfig` 共 **137** 个变体（v1 文档写的「106」已过时），由 `tools/gen_mock_generator_catalog.py`
+`GeneratorConfig` 共 **143** 个变体（v1 文档写的「106」已过时），由 `tools/gen_mock_generator_catalog.py`
 从 `models.rs` **穷尽派生**为 `crates/mock/src/generator_catalog.rs`（分类 / 中文标签 / 参数规格 / 默认构造）：
 
 | 分类 | 数量 | 代表变体 |
 | --- | --- | --- |
-| 数值 | 10 | `auto_increment` / `random_int` / `random_decimal` / `normal` / `random_walk` / `boolean` |
+| 数值 | 16 | `auto_increment` / `random_int` / `random_decimal` / `normal` / `log_normal` / `poisson` / `exponential` / `pareto` / `beta` / `binomial` / `time_series` / `random_walk` / `boolean` |
 | 文本 | 9 | `constant` / `words` / `sentence` / `paragraph` / `regex` / `template` |
 | Markdown | 8 | `markdown_bold_word` / `markdown_link` / `markdown_bullet_points` |
 | 个人信息 | 15 | `name` / `safe_email` / `username` / `password` / `cell_number` |
-| 地址与网络标识 | 25 | `city` / `zip_code` / `latitude` / `geohash` / `ipv4` / `mac_address` |
+| 地址与网络标识 | 24 | `city` / `zip_code` / `latitude` / `geohash` / `ipv4` / `mac_address` |
 | 日期时间 | 9 | `date_time` / `date_time_between` / `sequential_date_with_gaps` |
 | 商业 | 16 | `company_name` / `job_title` / `industry` / `catch_phrase` |
 | 金融 | 6 | `currency_code` / `bic` / `isin` / `credit_card_number` |
-| 网络与技术 | 13 | `uuid_v4` / `url` / `user_agent` / `semver` / `file_path` |
+| 网络与技术 | 14 | `uuid_v4` / `url` / `user_agent` / `semver` / `file_path` |
 | 图片 | 5 | `image_url` / `image_url_blur` / `image_url_custom` |
 | 颜色 | 6 | `hex_color` / `rgb_color` / `hsla_color` |
 | Ferroid ID | 5 | `ferroid_ulid` / `ferroid_twitter_id` / … |
 | 标准编码 | 5 | `isbn13` / `rfc_status_code` |
 | 汽车与行政 | 2 | `licence_plate` / `health_insurance_code` |
 | 约束 | 3 | `foreign_key` / `sequence` / `weighted`（行为变体，参数为集合） |
+
+**数值类**是数据科学家最在意的一组：均匀（`random_int` / `random_float` / `random_decimal`）、正态 / 对数正态之外，还有
+**泊松**（到达数）/ **指数**（等待时间）/ **帕累托**（长尾）/ **Beta**（比例）/ **二项**（成功次数）与 **`time_series`**（起始值 + 趋势 + 周期 + 噪声，
+按行序展开——与 `sequential_date` 同一行序并排就是一条带季节性的时间序列）。参数护栏在**生成前**拦非法值（λ / α 非正或非有限、`p` 越界、`n = 0`）。
 
 **约束类**是行为变体（指定集合 / 循环序列 / 加权选择），参数为列表，面板只读展示——它们的编辑点应是模板与导入场景。
 
@@ -369,7 +375,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 生成中 | 点「生成」/「追加」（后台任务） | 中央表头：生成按钮转「生成中…」并禁用 + `Progress` 进度条 + 「k / N 批（≈已生成 / 目标 行）」+ 「取消」（批次边界响应；点后转「正在取消…」）；右 Dock 清单行只给 `◐ 生成中 40%`；首批回调前显示「准备中…」 |
 | 场景生成中 | 点「生成 N 张表」（后台任务 `Scenario`） | 进度与取消在**右 Dock 场景清单下**（它属于这一批）：`Progress` + 「k / N 张表（每张表逐个生成）」+ 「取消」（含生成阶段），动作行转「生成中… / 退出场景」双禁用；结果区在回填前仍是上一次的结果（或空） |
 | 写入 / 导出中 | 点三个写出口（`Persist` / `Export` / `Scratchpad`） | 中央表头的进度行转**不定量动画**、文案转「写入分析库中… / 写出文件中…（N 行）」；**不渲染取消**（DuckDB / 文件系统内不能中断）；生成与其余出口按钮保持禁用 |
-| 生成器搜索 | 字段行菜单首项「搜索生成器…（137 项）」 | 输入即过滤（同步，无 loading 闪烁）；命中行显「中文标签 / 名称 / 分类」，当前生成器打勾；无命中显 `List` 自带空态；点行 / 回车写回该列并关对话框 |
+| 生成器搜索 | 字段行菜单首项「搜索生成器…（143 项）」 | 输入即过滤（同步，无 loading 闪烁）；命中行显「中文标签 / 名称 / 分类」，当前生成器打勾；无命中显 `List` 自带空态；点行 / 回车写回该列并关对话框 |
 | 集合类参数非法 | 按组合 / 列编辑对话框里改「取值集合 / 加权选项」 | 多行文本下方出现 danger 行（带行号），生成器**保持上一个有效值**；合法后自动消失 |
 | 取消中 | 已点「取消」，引擎尚未到批次边界 | 取消按钮转「正在取消…」并禁用（不重复下发）；到边界后转为「已取消」文案 |
 | 生成异常 | 后台线程退出（既无进度也无结果） | danger 行「后台生成任务异常结束（工作线程已退出）」；面板归位空闲可重试 |
@@ -402,7 +408,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 配置面板 | `Entity<MockPanel>`（`crates/mock/src/mock_view.rs`） | 跨 frame 状态在实体上；宿主只持弱句柄 |
 | 详情 tab | `Entity<MockDetailView>` + `BasePanel` / `ComponentPanel` | 由宿主 `DockArea::add_panel(.., DockPlacement::Center, ..)` 加入编辑区 tab 组；**一个目标一个 tab**（草稿与每张结果表各一个，键 = `DetailTarget::key()`）；`on_added_to` 记 tab 组句柄，重复点「查看详情」用 `TabGroup::select_tab` 聚焦自身；tab 被激活时把那张表设为当前表（`focus_table`） |
 | 表名 / 行数 / 种子 / 参数 / 空值率 | `Input` + `InputState`（标量）/ `Textarea` + `TextareaState`（集合类） | `InputState::new` 需要 window：面板在 render 首次创建，对话框在打开时创建；多行输入高 `COMPLEX_INPUT_HEIGHT` = 5rem |
-| 语言 / 生成器 / 追加目标 / 草稿箱 / 另存为 | `Button` + `dropdown_menu`（`PopupMenuItem::checked/disabled`、`PopupMenu::submenu`） | 生成器 137 项按 **15 类子菜单**承载；追加目标列既有分析表 |
+| 语言 / 生成器 / 追加目标 / 草稿箱 / 另存为 | `Button` + `dropdown_menu`（`PopupMenuItem::checked/disabled`、`PopupMenu::submenu`） | 生成器 143 项按 **15 类子菜单**承载；追加目标列既有分析表 |
 | 字段行操作 | `Button`（`ghost` / `xsmall`） | ElementId 用列 id（`mock-edit-{id}` / `mock-gen-{id}`），不用下标 |
 | 唯一值开关 | `Switch`（`gpui_kit::component::switch`） | 受控：回调收到请求值，由视图写回并 `notify()` |
 | 表清单 / 关系子行 | 普通行 `div` + `on_click`（一屏几十行，不需要虚拟化） | 用 `List` 反而要为「点一行切 tab」再包一层 delegate；行高 26px、关系子行 `text_xs` |
@@ -412,7 +418,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | **任务进度** | `Progress`（`gpui_kit::component::progress`，`.value(0..100)`） | 不手搓进度条；文案与取消按钮同排一行 |
 | **进度轮询** | `cx.spawn` + `background_executor().timer(120ms)` + 弱句柄 | 任务进行中没有其他事件触发重绘，必须主动唤醒（与 `scratchpad_jobs` 的泵同例） |
 | 导入结构 / 列编辑 / 生成器搜索 | `window.open_dialog` + `Dialog`（+ `DialogFooter`） | 焦点陷阱 / Escape / 遮罩关闭由组件负责；窗口根须为 `Root`；搜索对话框本身无 footer（点行即确认） |
-| **生成器搜索结果列表** | `List` + `ListState` + `ListDelegate`（`gpui_kit::component::list`） | 搜索框 / 虚拟化 / 上下键 / 回车与点击确认 / 空态全是组件的，不手搓；`perform_search` 同步过滤（137 项全在内存） |
+| **生成器搜索结果列表** | `List` + `ListState` + `ListDelegate`（`gpui_kit::component::list`） | 搜索框 / 虚拟化 / 上下键 / 回车与点击确认 / 空态全是组件的，不手搓；`perform_search` 同步过滤（143 项全在内存） |
 | 另存为（选路径） | `App::prompt_for_new_path` + `Window::spawn` | 异步回传：取消则不动；落盘动作在回传里执行（事件路径） |
 | 滚动区 | `overflow_y_scrollbar()` / `overflow_x_scrollbar()` + `max_h` / `flex_1().min_h_0()` | Dock 内容区自身不产生滚动，面板与 tab 各自给滚动主体 |
 | 宿主能力 | `MockHost`（生成 / 出口 / 来源 / 只读 / 打开详情 / 重绘） | 与 `project::ui::ProjectUiHost` 同范式；workbench 侧桥接见 `components/mock_host.rs` |
@@ -423,7 +429,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | --- | --- | --- |
 | 配置区（表名 / 行数 / 种子 / 语言 / 重置） | **已迁（改落位）** | 表名输入保留（造新表）；行数 / 种子 / 语言保留；这四项属于「这张表的设计」，与列定义一起落**中央 tab 的表头**（v1 全堆在右面板）；「重置」并入字段行「智能」与列编辑「恢复智能默认」 |
 | 字段表（可增删列 / 改名改类型 / 生成器 / 空值率 / 唯一 / ⚙） | **已迁（改落位）** | 落**中央 tab**的字段卡片 + 列编辑对话框（工作副本 + 应用/取消）；列来源（导入结构 / ＋ 加列）也在那张 tab 的「列」段，右 Dock 不再管列 |
-| 生成器下拉（137 项平铺） | **已迁（改形态）** | 分类子菜单（15 类）；搜索待办 |
+| 生成器下拉（143 项平铺） | **已迁（改形态）** | 分类子菜单（15 类）；搜索待办 |
 | 智能映射 + 置信度 | 照搬 | `ColumnMapper` 原样使用，换呈现（徽标三态） |
 | 行数 / 种子 / 语言三参数 | 照搬 | `MockConfig` 已是引擎输入 |
 | 生成 → 预览（前 10 行） | **已迁** | 预览表落中央 tab（`#` 行号 + 固定列宽 + 横向滚动），行数上限 `PREVIEW_ROWS` |
@@ -437,7 +443,7 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 列依赖编辑器 | 不做（A 已完成） | v1 的 `DependencyType` 空壳与空字段已从模型里删掉（架构 D40）：`dependency` = 跨表引用，界面上就是「加关系」对话框。列间求值（模板 / 加权 / 算术）若要做，是一次**带求值器**的独立特性，届时再设计编辑器 |
 | v1 进度条 / 取消（`mock:generate-progress`） | **已迁（改形态）** | Tauri 事件通道退役 → 工作线程 + 进度槽 + 120ms 定时泵；取消走引擎的进程级标志（批次边界响应） |
 | 数据分布图 | 不迁 | 属可视化专项，与结果集图表合并考虑 |
-| ⚙ 高级抽屉 / 时序关联（可选） | 不迁 | v1 只有 UI（`MockAdvancedDrawer.vue`），后端零实现；真要做按「数值列跟随日期列趋势」的独立生成器重设（§4.5） |
+| ⚙ 高级抽屉 / 时序关联（可选） | **不搬抽屉、部分重做** | v1 只有 UI（`MockAdvancedDrawer.vue`），后端零实现；v2 不搬抽屉，而是给数值类加了 `time_series`（趋势 + 周期 + 噪声，按行序展开）——数列与时序日期同一行序并排即一条时间序列。「真去看日期列的实际取值」属跨列求值，仍未做（§4.5） |
 | 生成器清单里的「🔗 外键」条目与筛选标签 | **降级** | v1 的 `foreign_key` 是「值集合」而非跨表引用（模拟实现为 `'FK_' + 随机数`）；v2 不设筛选标签（改分类子菜单 + 搜索），也不在文案上暗示跨表引用。**模板里的真实引用不靠它表达**——靠列上的 `ColumnDependency::foreign_key` 声明（域由父列自增参数 + 父表行数算出），见 `mock-architecture.md` §9-I11 |
 | Vue 组件 / Pinia store / `mock-api.ts` | 不迁 | Tauri IPC 与 Vue 层退役（`docs/migration/commands-retirement.md`） |
 
@@ -451,5 +457,6 @@ v2 的右 Dock 起步 280px（可拖拽调宽，但不强求用户去拖），�
 | 4 | ~~目标库作用域~~ | ✅ 已定（拍板）：**Mock 输出恒为项目级**——`{项目}/.RSmeta/analytics.duckdb`；未打开项目时落库 / 追加明确拒绝（原因里写清替代路径），纯生成仍可用；要跨项目复用 / 进全局，走资产库存档（M6）或草稿箱（M5）升级 |
 | 5 | ~~出口（落库 / 导出）的后台化~~ | ✅ 已定并实现：三个写出口并入 `services::mock_jobs` 的任务种类（`Persist` / `Export` / `Scratchpad`），阶段上报 + 不定量进度条；出口**不可取消**（DuckDB / 文件系统内没有中断点，强杀会留半张表 / 半个文件） |
 | 6 | ~~依赖表达式~~ | ✅ 已定（A 步）：**删空壳**——`DependencyType` 四个变体与 `source_columns` / `expression` / `weights` 三个字段已从模型删除（架构 D40），`dependency` 只留跨表引用。列间求值（模板 / 加权 / 算术）作为**独立特性**另行立项（届时带求值器一起进） |
-| 7 | ~~生成器搜索~~ | ✅ 已实现：字段行菜单首项开「搜索生成器」对话框（`List` + `ListState`，按标签 / 名称 / 分类过滤，137 项） |
+| 7 | ~~生成器搜索~~ | ✅ 已实现：字段行菜单首项开「搜索生成器」对话框（`List` + `ListState`，按标签 / 名称 / 分类过滤，143 项） |
+| 8 | ~~数值 / 时序生成器覆盖面~~ | ✅ 部分已定：补上分布族（泊松 / 指数 / 帕累托 / Beta / 二项）与 `time_series`（趋势 + 周期 + 噪声），共 143 变体；**仍未做**：业务日历（工作日 / 节假日）与「跟随另一列取值」（跨列求值，随第 6 项一起立项） |
 | 8 | ~~排版分权（管理表 vs 设计这张表）~~ | ✅ 已定（本稿）：**右 Dock = 管理表**（清单唯一入口 + 出口组 + 折叠历史 / 模板），**中央 tab = 这张表的设计与生成状态**（表名 / 行数 / 种子 / 语言 + 生成 + 列 + 预览）；状态单点：单表任务（生成 / 写出口）的进度与取消在中央表头，集合任务（场景 N 张表）的在右 Dock 场景清单下，二者互斥 |

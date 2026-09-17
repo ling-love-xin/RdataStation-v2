@@ -741,6 +741,59 @@ fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
             ))
         }
 
+        // ===== 分布族：参数越界会让抽样退化成常量或 NaN =====
+        GeneratorConfig::Poisson { lambda } | GeneratorConfig::Exponential { lambda }
+            if !lambda.is_finite() || *lambda <= 0.0 =>
+        {
+            Some(format!(
+                "的「强度 λ」需为大于 0 的有限数（当前 {lambda}）：它决定事件到达速率，越小事件越稀"
+            ))
+        }
+        GeneratorConfig::Pareto { scale_value, .. }
+            if !scale_value.is_finite() || *scale_value <= 0.0 =>
+        {
+            Some(format!(
+                "的「尺度（最小值）」需为大于 0 的有限数（当前 {scale_value}）：帕累托分布的取值不会低于它"
+            ))
+        }
+        GeneratorConfig::Pareto { alpha, .. } if !alpha.is_finite() || *alpha <= 0.0 => {
+            Some(format!(
+                "的「形状参数 α」需为大于 0 的有限数（当前 {alpha}）：α 越小尾巴越重，为 0 时算不出取值"
+            ))
+        }
+        GeneratorConfig::Beta { alpha, beta }
+            if !alpha.is_finite() || !beta.is_finite() || *alpha <= 0.0 || *beta <= 0.0 =>
+        {
+            Some(format!(
+                "的「形状参数 α / β」需为大于 0 的有限数（当前 α {alpha} / β {beta}）：Beta 分布取值落在 0~1 之间"
+            ))
+        }
+        GeneratorConfig::Binomial { trials, .. } if *trials == 0 => {
+            Some("的「试验次数 n」需大于 0：n 为 0 时整列都是同一个值".to_string())
+        }
+        GeneratorConfig::Binomial { probability, .. }
+            if !probability.is_finite() || *probability < 0.0 || *probability > 1.0 =>
+        {
+            Some(format!(
+                "的「概率 p」需落在 0~1 之间（当前 {probability}）：p 是单次试验成功的概率"
+            ))
+        }
+        GeneratorConfig::TimeSeries {
+            start,
+            trend,
+            amplitude,
+            noise,
+            ..
+        } if !start.is_finite()
+            || !trend.is_finite()
+            || !amplitude.is_finite()
+            || !noise.is_finite() =>
+        {
+            Some(format!(
+                "的「起始值 / 趋势 / 周期振幅 / 噪声强度」需均为有限数（当前 {start} / {trend} / {amplitude} / {noise}）：NaN 或无穷会让整列取值失去意义"
+            ))
+        }
+
         // ===== 日期时间类：fake 按「分钟差」取随机偏移，差 ≤ 0 就是空区间 =====
         GeneratorConfig::DateTime { min, max }
         | GeneratorConfig::DateTimeBetween {
@@ -1296,6 +1349,57 @@ mod tests {
             })
             .is_some()
         );
+        // 分布族：参数越界会让抽样退化成常量 / NaN（λ ≤ 0、α ≤ 0、p 越界）
+        assert!(generator_param_problem(&GeneratorConfig::Poisson { lambda: 0.0 }).is_some());
+        assert!(generator_param_problem(&GeneratorConfig::Poisson { lambda: -1.0 }).is_some());
+        assert!(
+            generator_param_problem(&GeneratorConfig::Exponential { lambda: f64::NAN }).is_some()
+        );
+        assert!(
+            generator_param_problem(&GeneratorConfig::Pareto {
+                scale_value: 0.0,
+                alpha: 2.0,
+            })
+            .is_some()
+        );
+        assert!(
+            generator_param_problem(&GeneratorConfig::Pareto {
+                scale_value: 1.0,
+                alpha: 0.0,
+            })
+            .is_some()
+        );
+        assert!(
+            generator_param_problem(&GeneratorConfig::Beta {
+                alpha: 0.0,
+                beta: 2.0,
+            })
+            .is_some()
+        );
+        assert!(
+            generator_param_problem(&GeneratorConfig::Binomial {
+                trials: 0,
+                probability: 0.5,
+            })
+            .is_some()
+        );
+        assert!(
+            generator_param_problem(&GeneratorConfig::Binomial {
+                trials: 10,
+                probability: 1.5,
+            })
+            .is_some()
+        );
+        assert!(
+            generator_param_problem(&GeneratorConfig::TimeSeries {
+                start: 0.0,
+                trend: f64::INFINITY,
+                period: 24,
+                amplitude: 1.0,
+                noise: 1.0,
+            })
+            .is_some()
+        );
     }
 
     /// 合法参数不能被误拦：护栏过宽会让正常配置也生不出来。
@@ -1329,6 +1433,33 @@ mod tests {
                 max: "2024-12-31".to_string(),
             },
             GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+            // 分布族边界：λ / α / p 取到端点值都合法
+            GeneratorConfig::Poisson { lambda: 0.5 },
+            GeneratorConfig::Exponential { lambda: 3.0 },
+            GeneratorConfig::Pareto {
+                scale_value: 1.0,
+                alpha: 1.5,
+            },
+            GeneratorConfig::Beta {
+                alpha: 2.0,
+                beta: 5.0,
+            },
+            GeneratorConfig::Binomial {
+                trials: 10,
+                probability: 0.0,
+            },
+            GeneratorConfig::Binomial {
+                trials: 10,
+                probability: 1.0,
+            },
+            // `period` 为 0 表示「不叠加周期项」，是合法输入
+            GeneratorConfig::TimeSeries {
+                start: 0.0,
+                trend: 0.0,
+                period: 0,
+                amplitude: 0.0,
+                noise: 0.0,
+            },
         ] {
             assert!(generator_param_problem(&generator).is_none(), "{generator:?}");
         }

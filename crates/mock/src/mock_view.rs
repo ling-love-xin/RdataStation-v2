@@ -482,7 +482,7 @@ const PREVIEW_ROWS: usize = 10;
 /// 集合类参数多行输入的高度（5rem = 80px ≈ 5 行）
 const COMPLEX_INPUT_HEIGHT: f32 = 5.0;
 
-/// 生成器搜索列表高度（16rem = 256px；137 项靠 `List` 虚拟化 + 自带滚动）
+/// 生成器搜索列表高度（16rem = 256px；143 项靠 `List` 虚拟化 + 自带滚动）
 const SEARCH_LIST_HEIGHT: f32 = 16.0;
 
 /// 13 种语言（面板下拉用）
@@ -709,7 +709,7 @@ pub(crate) fn complex_param_hint(key: &str) -> &'static str {
     }
 }
 
-/// 把生成器参数按 JSON 补丁写回配置（137 变体零手工构造，见 `generator_catalog`）。
+/// 把生成器参数按 JSON 补丁写回配置（143 变体零手工构造，见 `generator_catalog`）。
 pub(crate) fn patch_param(
     config: &GeneratorConfig,
     key: &str,
@@ -973,7 +973,7 @@ fn generator_menu_label(name: &str, label: &str, recommended: &str) -> String {
 /// 搜索生成器目录：按**中文标签 / 名称 / 分类名**匹配（大小写不敏感，多词之间是 AND）。
 ///
 /// 排序（越靠前越像用户要找的）：标签前缀 → 名称前缀 → 标签包含 → 名称包含 → 分类名包含；
-/// 同级保持目录顺序。空查询返回全部 137 项（对话框初态）。
+/// 同级保持目录顺序。空查询返回全部 143 项（对话框初态）。
 ///
 /// 搜索是“知道大概叫什么”的路径；按分类翻菜单是“知道属于哪类”的路径，两者并存（D24）。
 pub fn search_generators(query: &str) -> Vec<&'static GeneratorSpec> {
@@ -1013,7 +1013,7 @@ pub fn search_generators(query: &str) -> Vec<&'static GeneratorSpec> {
 
 /// 「搜索生成器」列表的委托：内层靠 `List` 组件（自带搜索框 / 虚拟化 / 回车与点击确认）。
 ///
-/// 目录只有 137 项且全在内存：`perform_search` 同步过滤，不走异步搜索通道（无需 loading 占位）。
+/// 目录只有 143 项且全在内存：`perform_search` 同步过滤，不走异步搜索通道（无需 loading 占位）。
 struct GeneratorSearchDelegate {
     /// 选中后写回的面板（草稿的单一权威）
     panel: Entity<MockPanel>,
@@ -1028,7 +1028,7 @@ struct GeneratorSearchDelegate {
 }
 
 impl GeneratorSearchDelegate {
-    /// 建委托：初态＝全量目录（137 项）+ 勾出该列当前的生成器。
+    /// 建委托：初态＝全量目录（143 项）+ 勾出该列当前的生成器。
     ///
     /// `current` 由调用方（面板自己的 `&mut self`）算好传入：本方法在面板的 update 里被调用，
     /// 那时 `read` 面板会触发「already being updated」重入 panic。
@@ -3023,7 +3023,7 @@ impl MockPanel {
         self.recent_generators.truncate(RECENT_GENERATORS);
     }
 
-    /// 打开「搜索生成器」对话框（137 项按名称 / 中文标签 / 分类过滤）。
+    /// 打开「搜索生成器」对话框（143 项按名称 / 中文标签 / 分类过滤）。
     ///
     /// 用 `List` 组件而不是手搜：搜索框 / 虚拟化 / 上下键 / 回车与点击确认 / 空态全是组件的，
     /// 且搜索是**同步**的（目录全在内存），不会闪 loading。
@@ -3042,7 +3042,7 @@ impl MockPanel {
             dialog
                 .title("搜索生成器")
                 .child(div().w_full().h(rems(SEARCH_LIST_HEIGHT)).child(
-                    List::new(&list).search_placeholder("按名称 / 中文标签 / 分类搜索（137 项）"),
+                    List::new(&list).search_placeholder("按名称 / 中文标签 / 分类搜索（143 项）"),
                 ))
         });
     }

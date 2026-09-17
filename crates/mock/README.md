@@ -17,7 +17,7 @@
 
 ```
 列名 + 类型串 ─► mock::parse_data_type（唯一类型入口）─► ColumnMapper::infer
-    精确名 → 前后缀 → 模糊子串 → 类型兜底（≈91 条规则，137 个生成器变体）
+    精确名 → 前后缀 → 模糊子串 → 类型兜底（≈91 条规则，143 个生成器变体）
   ─► ColumnMappingResponse{ generator, confidence: "high"|"low", sample_value }
 ```
 
@@ -84,7 +84,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 - crate 依赖 `gpui-kit`（UI 基础设施），**不依赖 workbench**；
 - 宿主能力（生成 / 四个出口 / 列来源 / 既有表 / 只读 / 打开详情 / 重绘）由 `MockHost` 注入，
   workbench 侧实现见 `crates/workbench/src/components/mock_host.rs`；
-- 137 个生成器的分类 / 中文标签 / 参数规格由 `generator_catalog.rs` **穷尽派生**（脚本生成，见下）。
+- 143 个生成器的分类 / 中文标签 / 参数规格由 `generator_catalog.rs` **穷尽派生**（脚本生成，见下）。
 
 ### 8. 生成任务与用户模板的持久化
 
@@ -99,9 +99,9 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | 文件 | 职责 |
 | --- | --- |
 | `src/lib.rs` | crate 入口与 re-export（含依赖方向声明） |
-| `src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`(13) / `GeneratorConfig`(137) / `Locale`(13) / 导出与持久化模型 / 依赖模型 |
+| `src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`(13) / `GeneratorConfig`(143) / `Locale`(13) / 导出与持久化模型 / 依赖模型 |
 | `src/engine.rs` | `MockEngine`：生成（分批 10k 行 + 进度回调 + 取消 + **集合类参数生成前校验**）/ 预览 / 5 种导出 / **`write_temp_table_to_database`（跨库直写落库：ATTACH → INSERT SELECT）** / **`clear_temp_tables`·`temp_tables`（临时表生命周期）** / `insert_statements`（INSERT 文本，仅导出脚本用）/ 草稿目录 / 持久化为资产 / 列映射 / 模板 / 场景生成 / `sanitize_identifier` |
-| `src/generators.rs` | `generate_cell`：137 变体 → 值（`fake` crate，接入 `StdRng`） |
+| `src/generators.rs` | `generate_cell`：143 变体 → 值（`fake` crate，接入 `StdRng`） |
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
 | `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock：表清单 + 场景动作 + 出口 + 折叠历史 / 模板；输入状态与动作也归它）/ `MockDetailView`（中央 tab：一个目标一个，表头 + 列 + 预览）/ `MockHost` 契约 / 导入结构 + 列编辑 + 生成器搜索 + 加关系 + 编辑表对话框 |
@@ -133,7 +133,8 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | **落库跨库直写**（`ATTACH` + `INSERT SELECT`，数据不经 Rust 字符串） | 写入期间内存库连接持有目标文件锁（导出类任务不可取消，见架构 D23） |
 | **临时表清理**（切项目时按前缀清掉本进程的 mock 临时表，两套命名都认） | 同目标表名重复生成会重建，**换名字**才会多占一份内存 |
 | 列映射（≈91 条规则 + 类型兜底 + 置信度三态） | —— |
-| 生成器目录（137 变体分类 / 标签 / 参数规格，穷尽派生） | 生成器的「推荐」标记与最近使用 |
+| 生成器目录（143 变体分类 / 标签 / 参数规格，穷尽派生） | 生成器的「推荐」标记与最近使用 |
+| **数值分布族与时序**：正态 / 对数正态 / 泊松 / 指数 / 帕累托 / Beta / 二项 + 时序数值（起始值 · 趋势 · 周期 · 噪声，按行序展开） | 业务日历（工作日 / 节假日）；「跟随另一列取值」（跨列求值，独立特性） |
 | **生成器搜索**：分类子菜单 + 搜索对话框（中文标签 / 名称 / 分类，多词 AND，`List` 自带搜索框与空态） | 生成器的「推荐」标记与最近使用 |
 | **集合类参数可编辑**：外键取值 / 序列取值 / 加权选项用多行文本填（一行一项 / 一行「值, 权重」） | 集合的导入 / 粘贴（从 CSV 列拷值） |
 | **面板：表名 / 行数·种子·语言 / 列来源 / 生成 / 出口按钮组 / 结果** | 生成器的「推荐」标记与最近使用 |
@@ -162,3 +163,6 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。
 - 生成器目录改动流程：改 `models.rs` 的 `GeneratorConfig` → 跑 `python tools/gen_mock_generator_catalog.py`
   → `rustfmt` 生成文件 → 补 `LABELS` / 默认值字典。
+- 分布类生成器**不引 `rand_distr`**：Box-Muller（标准正态）/ 逆变换（指数、帕累托）/ Marsaglia-Tsang（Gamma，供 Beta）
+  都在 `generators.rs` 里自建；泊松在 `λ ≥ 30`、二项在 `n > 64` 时改用正态近似，避免单值 O(λ) / O(n) 次循环
+  拖慢十万行生成。参数护栏全在 `engine.rs::generator_param_problem`（λ、α 非正 / 非有限，p 越界，n 为 0 都在**生成前**拦住）。

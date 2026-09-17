@@ -28,12 +28,12 @@
 | A7 | 清理与卫生：删除死代码 `_generator_of`；`crates/mock/Cargo.toml` 移除未使用 `uuid`、`tokio` 移入 `[dev-dependencies]`；新文件 rustfmt 干净 | `crates/workbench/src/services/mock_generator.rs`、`crates/mock/Cargo.toml` | `cargo check -p rds-mock --all-targets` 通过 |
 | A8 | 文档补齐（本目录五件套 + 交互稿）+ crate README | `docs/architecture/mock/*`、`crates/mock/README.md` | 本文件 |
 | A9 | **视图归属与对话化重构**：面板 + 状态 + 两个语义对话框沉入 mock crate（`mock_view.rs` / `mock_view/tests.rs`）；重交互改走 `Dialog`（生成器选择 / 列配置，含工作副本与「恢复智能默认」）；宿主能力改 traits 注入 | `crates/mock/src/mock_view.rs`、`crates/workbench/src/components/mock_host.rs`、`panels/` | 窗口测试：面板渲染 / 定向选表 / 生成与预览 / 只读拦截 / 对话框可打开（8 项） |
-| A10 | **生成器目录穷尽派生**（137 变体分类 / 中文标签 / 参数规格 / 默认构造） | `tools/gen_mock_generator_catalog.py` → `crates/mock/src/generator_catalog.rs` | 目录自检 3 项：137 覆盖、标签与默认构造齐备、变体↔分类往返 |
-| A11 | 参数编辑用 **JSON 补丁**（`patch_param`），避开 137 份「表单 → 变体」构造 | `crates/mock/src/mock_view.rs` | 单元测试：整数 / 浮点 / 文本 / 字符串 / `Option` 字段与非法输入保留原值 |
+| A10 | **生成器目录穷尽派生**（143 变体分类 / 中文标签 / 参数规格 / 默认构造） | `tools/gen_mock_generator_catalog.py` → `crates/mock/src/generator_catalog.rs` | 目录自检 3 项：143 覆盖、标签与默认构造齐备、变体↔分类往返 |
+| A11 | 参数编辑用 **JSON 补丁**（`patch_param`），避开 143 份「表单 → 变体」构造 | `crates/mock/src/mock_view.rs` | 单元测试：整数 / 浮点 / 文本 / 字符串 / `Option` 字段与非法输入保留原值 |
 | A12 | **语义回归**：目标表是用户命名的**新表**（表名输入），不再「从分析库既有表里挑着灌数」；**生成不写库**（只产内存临时表 + 预览） | `mock_view.rs`（`MockDraft.table_name` + `run_generate`）、`services/mock_generator.rs`（`generate` vs `persist_table` 拆分） | 视图测试 `generate_produces_preview_without_touching_sinks`（三出口调用计数为零）；装配测试 `generate_does_not_write_analysis_db` |
 | A13 | **四个显式出口**：新建分析库表（同名报错 + 回滚）/ 追加到既有表（显式选表、主键自增接续、缺列报错）/ 草稿箱 `{项目}/mock/` / 另存为（系统保存对话框） | `services/mock_generator.rs`（`persist_table` / `append_table` / `export_file` / `save_scratchpad`）、`mock_view.rs`（出口按钮组） | 装配测试 10 项（含 `append_continues_primary_key_sequence`：`MAX(id)=100` 且无重复） |
 | A14 | **方案①排版**：右 Dock = 配置 + 出口；**中央「Mock 数据」tab** = 字段卡片 + 预览表（详情持面板实体，状态单一权威） | `mock_view.rs`（`MockDetailView` + `Panel` 协议实现）、`view.rs`（`Shared::open_mock_detail` 宿主命令 + `DockArea::add_panel(Center)`）、`panels/`（构造期创建面板实体 + 句柄） | 视图测试：详情渲染字段与预览、`focus_tab` 幂等（未加入 Dock 时静默返回） |
-| A15 | **列模型解放**：增删列 / 改列名与类型 / 13 类型下拉 / 唯一值改 `Switch` / 生成器改**分类子菜单**（137 项仍在，形态从对话框改为子菜单） | `mock_view.rs`（`add_column` / `remove_column` / `ColumnDraft` / `generator_menu` / `rebuild_params`） | 视图测试：列增删、改列后旧结果作废、智能默认恢复、列编辑对话框可开 |
+| A15 | **列模型解放**：增删列 / 改列名与类型 / 13 类型下拉 / 唯一值改 `Switch` / 生成器改**分类子菜单**（143 项仍在，形态从对话框改为子菜单） | `mock_view.rs`（`add_column` / `remove_column` / `ColumnDraft` / `generator_menu` / `rebuild_params`） | 视图测试：列增删、改列后旧结果作废、智能默认恢复、列编辑对话框可开 |
 | A16 | **导入源库结构**（连接 / 库 / schema / 表）+ 导航右键定向：`NavCache` → `MetadataService` 的 cache-aside 取列，带置信度与示例值 | `services/mock_generator.rs`（`import_columns` / `schema_sources`）、`mock_view.rs`（`preset_from_source` / `open_import_dialog` / `SchemaRequest`）、`panels/`（右键菜单传 `SchemaRequest`） | 视图测试 `preset_from_source_imports_columns_and_table_name`；装配测试 `schema_sources_carry_connection_defaults` |
 | A17 | 装配层重构：去掉临时文件中转（`insert_statements` 收在 mock crate）+ 列名规范化唯一入口 `sanitize_identifier`（临时表列名与建表列名必须同一算法） | `crates/mock/src/engine.rs`、`services/mock_generator.rs` | 集成测试 `export_sql_insert_writes_insert_statements`；**并修掉自身引入的锁重入死锁**（架构 §9-I0d） |
 
@@ -48,13 +48,13 @@
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | B1 | 字段表：列名 / 类型 / 生成器（含置信度）/ 参数摘要 / 增删列 | ✅ 已完成（中央 tab 字段卡片） | 表可滚动（16rem 上限）、参数摘要可读 |
-| B2 | 生成器选择（137 变体，按 15 分类分组） | ✅ 已完成（字段行的**分类子菜单**） | 选到的变体与 `GeneratorConfig` 一一对应（目录自检测试） |
+| B2 | 生成器选择（143 变体，按 15 分类分组） | ✅ 已完成（字段行的**分类子菜单**） | 选到的变体与 `GeneratorConfig` 一一对应（目录自检测试） |
 | B3 | 参数编辑（标量：数值 / 文本 / 布尔；列名 / 类型 / 空值率 / 唯一） | ✅ 已完成（列编辑对话框）；复杂参数待外置入口 | 非法值保留原值；取消不污染目标列 |
 | B4 | 行数预设与种子开关（可复现） | ✅ 已完成（行数 / 种子输入 + 校验） | 同 seed 两次生成结果一致（引擎测试兜底） |
 | B5 | 生成中态与取消（`generate_with_progress` + `cancel()`） | ✅ 已完成（`services::mock_jobs` 工作线程 + 面板进度条 / 取消 + 定时泵；追加与**三个出口**同走后台） | 大行数生成时进度可见、可中断；出口报不定量进度且不可取消 |
 | B6 | 预览（前 10 行） | ✅ 已完成（中央 tab 预览表，`#` 行号 + 横向滚动） | 列名与值来自真实生成结果 |
 | B7 | 生成器「推荐」标记与最近使用 | ✅ 已完成（生成器菜单顶部给「最近使用」：本会话点过的，最近在前、去重、最多 5 条；智能映射推荐的那项标「推荐」——`recommended_generator` 与导入结构同源（`ColumnMapper::infer`，列名 + 类型），只标记不写回） | 常用生成器一眼可选（翻分类与搜索之外的第三条路） |
-| B8 | 生成器**搜索**（137 项按名称 / 标签） | ✅ 已完成（字段行菜单首项开「搜索生成器」对话框：`List` + `ListState`，同步过滤 + 多词 AND，无命中显空态） | 输入关键词即过滤；确认写回该列 |
+| B8 | 生成器**搜索**（143 项按名称 / 标签） | ✅ 已完成（字段行菜单首项开「搜索生成器」对话框：`List` + `ListState`，同步过滤 + 多词 AND，无命中显空态） | 输入关键词即过滤；确认写回该列 |
 
 ### Phase C — 入口扩展
 
@@ -102,6 +102,15 @@
 | F5 | ✅ 结果表 tab 只读表头（事实 + 跨表后果）与只读列；空态给起手卡片（选模板 / 导入结构 / 手工加列） | `MockDetailView::render` + `relation_note_for` | 结果表 tab 不出输入框与生成按钮；跨表后果与 `relation_note_for` 同源 |
 | F6 | ✅ 历史 / 模板折叠（默认收起，标题写条数） | `render_folds`（`Collapsible`）+ `fold_open` | 默认收起；展开后重放 / 应用 / 删除仍可用 |
 
+### Phase G — 生成器覆盖（数值分布族与时序）
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| G1 | ✅ 分布族：泊松（到达数）/ 指数（等待时间）/ 帕累托（长尾）/ Beta（比例）/ 二项（成功次数） | `models.rs`（5 个变体）+ `generators.rs`（Knuth 法 + 逆变换 + Marsaglia-Tsang）+ `tools/gen_mock_generator_catalog.py`（标签 / 参数 / 默认值） | 泊松 λ=5 样本均值落 3~8、λ=200 落 180~220（走正态近似）；指数均值 ≈ 1/λ；帕累托恒 ≥ 最小取值；Beta 恒在 0~1 且均值 ≈ α/(α+β)；二项均值 ≈ np |
+| G2 | ✅ 时序数值 `TimeSeries`（起始值 + 趋势 + 周期 + 噪声，按行序展开） | 同上 | 相隔一个周期的两行只差 `trend × period`；同 seed 整列一致；`period = 0` 合法（不叠周期，只留趋势） |
+| G3 | ✅ 生成前参数护栏扩到分布族 | `engine.rs::generator_param_problem` | λ / α 非正或非有限、`p` 越界、`n = 0` 都在生成前拦住；边界值（`p = 0` / `1`、`λ = 0.5`、`period = 0`）不误拦 |
+| G4 | 业务日历（只排工作日 / 跳节假日） | —— | 待做：时序与顺序日期都只按步长推进，不看日历 |
+
 ## 4. 测试场景（验收清单）
 
 | 编号 | 场景 | 断言 | 状态 |
@@ -128,20 +137,22 @@
 | T19 | 出口（落库 / 导出 / 草稿箱）后台化 | 提交即返回、阶段报写入 / 导出；落库回表内行数并刷新追加候选 | ✅ 视图测试（`persist_job_runs_in_background_and_keeps_preview` 等 4 项）+ 任务测试 4 项 |
 | T20 | 出口完成后预览仍可用 | 落库 / 导出只读临时表 → `MockGenInfo` 不作废（可接着导另一个格式） | ✅ 视图测试 + 任务测试 |
 | T21 | 出口不可取消 | 出口任务进行中点取消：不转发给宿主、按钮不渲染 | ✅ 视图测试（`rec.cancels == 0`） |
-| T22 | 生成器搜索 | 空查＝全量 137；标签前缀优先于标签包含；多词是 AND；大小写不敏感；确认写回该列且置信度转 `manual`；无命中为空 | ✅ 视图测试（5 纯逻辑 + 2 窗口） |
+| T22 | 生成器搜索 | 空查＝全量 143；标签前缀优先于标签包含；多词是 AND；大小写不敏感；确认写回该列且置信度转 `manual`；无命中为空 | ✅ 视图测试（5 纯逻辑 + 2 窗口） |
 | T23 | 落库跨库直写 | 建表 + 写行一次 `ATTACH` 完成；中文列名、20k 行、目标表多列均正确；**同名建表不删既有数据**；插入失败回滚刚建的表且已解挂 | ✅ 引擎测试 4 项 + 装配测试 2 项 |
 | T24 | 临时表清理 | 切项目清掉全部 mock 临时表（两套命名都认、幂等）；`ATTACH` 进来的文件库表不被误删；面板作废旧预览、草稿保留 | ✅ 引擎测试 3 项 + mock 集成 2 项 + 视图测试 1 项 + 任务集成 1 项 |
 | T25 | 集合类参数可编辑 | 取值集合往返 / 分隔符变体（半角、全角、制表符，值可带逗号）；非法输入保留上一个有效值 + 行号提示；留空 / 全零权重生成前拦住（不 panic） | ✅ 视图测试 6 项 + 引擎测试 2 项 |
 | T26 | 状态单点 | `job_row_scope`：单表任务是 `Single`、场景任务是 `Collection`（同时刻只有一处画进度与取消） | ✅ 窗口测试（`the_table_list_keeps_status_and_progress_in_one_place`） |
 | T27 | 清单是唯一入口 | 点单表行开草稿 tab、点结果行开该表 tab；代码里不存在「查看详情」按钮与「当前表」选择器 | ✅ `mock-open-detail` 已删；状态点口径由 `table_status` 锁定 |
 | T28 | 关系挂在子表行下 | 子表行下渲染 `↳` 子行；`outgoing_relations` 按子表归组（父表无出边），落父表后 `⚠` 消失 | ✅ 窗口测试（同上） |
+| T29 | 分布族与时序的统计性质 | 泊松 λ=5 均值落 3~8、λ=200 落 180~220；指数 λ=2 均值 ≈ 0.5；帕累托恒 ≥ 最小取值；Beta 恒在 0~1 且均值 ≈ α/(α+β)；二项 n=10 p=0.5 均值 ≈ 5；时序隔一个周期只差 `trend × period`、同 seed 整列一致、`period = 0` 只留趋势 | ✅ 单元测试 9 项（宽容差，只校量级） |
+| T30 | 分布族非法参数不进入抽样 | λ / α 非正或非有限、`p` 越界、`n = 0` 被 `generator_param_problem` 拦住并给出可读原因；合法边界值不误拦 | ✅ 单元测试（旧拒绝 / 误拦两组用例扩项） |
 
 ## 5. 风险
 
 | 编号 | 风险 | 影响 | 缓解 |
 | --- | --- | --- | --- |
 | R1 | 面板继续长胖 | `panels/` 已近 9k 行，`mock_view.rs` 近 2k 行 | 视图随 crate 已定；新能力优先放 mock crate，不在 `panels/` 长 |
-| R2 | 生成器参数表单与 137 变体手工对齐 | 新增变体漏配表单，用户看到空参数区 | 参数表单由 `GeneratorConfig` 派生（编译期穷尽匹配），禁止手写清单 |
+| R2 | 生成器参数表单与 143 变体手工对齐 | 新增变体漏配表单，用户看到空参数区 | 参数表单由 `GeneratorConfig` 派生（编译期穷尽匹配），禁止手写清单 |
 | R3 | 分析库并发写入（面板写 + SQL 执行区写） | Windows 同文件多连接受限，可能出现「文件被占用」 | 统一经 engine 的单连接纪律；必要时串行化写入入口（架构 §9-I3） |
 | R4 | ~~大行数同步生成阻塞 UI~~ | 已解决：生成 / 追加 / **三个出口**全部走后台工作线程（进度 + 取消；出口为不定量进度、不提供取消，见架构 D23） | 出口进行中只报阶段（写入 / 导出不可中断） | 若将来要可中断，需引擎侧提供 DuckDB 写入的取消点（目前无） |
 | R5 | ~~临时表前缀与 engine 管理器约定不一致~~（架构 §9-I1） | 已解决：清理按**两套前缀**枚举（以库为准），切项目时宿主调 `clear_temp_tables` 并作废面板预览（D27） | 清理后旧预览会作废（面板给一句可读提示）；草稿保留 | 若将来改成项目作用域分析库，切项目天然不带过去，这层清理可退化成冗余 |
@@ -192,3 +203,5 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-18 | Phase F（本轮 · 排版分权落地） | **把 D38 原型落到实现**：右 Dock 收成「管理表」——表清单（`render_table_list`：单表 / 本次生成 / 结果表三态共用一个渲染器，行 = 状态点 + 表名 + 行数，点一行切 / 开它的 tab）+ 集合动作与它的进度 + 出口组（生成前禁用，与原型一致）+ 出口反馈 + **折叠**的历史 / 模板（`Collapsible`，默认收起）；中央 tab 拿回「这张表的设计与生成状态」——表头（表名 / 行数 / 种子 / 语言；输入状态仍归面板：`ensure_inputs` / `render_target_rows`）+ 生成三态 + `render_job_row(Single)` + 失败原因与重试，列来源（导入结构 / ＋ 加列）也搬过去；结果表 tab 只读表头（事实 + 跨表后果 `relation_note_for`）与只读列，空态给起手卡片。**删掉**「查看详情」按钮（`mock-open-detail`）与独立的「当前表」选择器（清单点一行就是入口）。**两条不变式落到可测纯逻辑**：`job_row_scope`（进度只在一处：单表在中央、集合在右 Dock）与 `table_status`（已落库 / 未落库 / 引用的表未落库 / 生成中 / 失败；悬空引用优先于「已落库」），关系按子表归组（`outgoing_relations`） | 166 单元（+1 窗口用例）+ 34 引擎集成 + 5 持久化 + 4 历史/模板 + 2 清理全过；workbench 12 装配 + 11 任务 + 1 取消全过；`check --all-targets` 零告警；rustfmt 只格式化本轮 hunk（HEAD 原有漂移未动） |
 | 2026-09-18 | B7 生成器推荐 / 最近使用（本轮） | **把「常用的一眼可选」补上**：生成器菜单顶部加**「最近使用」**分组（`recent_generators`：`set_generator` 里 `remember_generator` 去重入队，最近在前、最多 5 条；菜单与搜索对话框两条路径都经 `set_generator`，不必各自记一笔）；**「推荐」标记**取 `recommended_generator`（与导入结构同一条 `ColumnMapper::infer` 推理，仅用于标记菜单项，不写回配置——写回仍然只有用户点击或导入）；当前生成器打勾（`PopupMenuItem::checked`），菜单项文案用 `generator_menu_label` 加后缀（组件没有「右侧说明」的位置）。**应用侧验证**：`check -p rds-app --all-targets` 通过（整个二进制装配含新 mock 布局）、workbench lib 74 项全过 | 167 单元（+1 窗口用例 `generator_menu_remembers_recent_picks_and_marks_the_recommendation`）；原型 `menu` 场景同步（最近使用 + 推荐后缀） |
 | 2026-09-18 | 口径澄清：落库即项目级持久表（本轮） | **取消 D6「分析资源注册」这条待办**（用户口径）：落库落地的是本项目上的一张**持久表**——它就是分析资源的项目级形态，不存在「再登记一次」也没有触发时机；资源管理器（M6）列的是 `resources/` 下的存档副本（`list_file_archives`，文件语义），本就不应包含项目库里的表。同时订正两处会误导实现的说法：`persist_as_asset` 的「资源注册用」改为「建表在内存库内；写项目库的是装配层 `write_temp_table_to_database`」，概念模型里的「持久表」定义改指项目分析库里的真表。新决策 **D39** 记下被否的三个方案（自动登记 / 登记按钮 / 给 mock 开直写资源库的口子）与理由 | 纯文档：不动代码与测试；`mock-dev-plan` D6、`mock-architecture` §2 · §4.5 · 决策 D39、两处 README 同步 |
+| 2026-09-18 | A 步：删空壳 + 列依赖订正（前一批提交 `373cc6d`） | **把「看着能用、实际没人读」的模型字段删干净**：`DependencyType` 四个变体与 `source_columns` / `expression` / `weights` 三个空字段从 `models.rs` 删除，`ColumnDependency { ref_table, ref_column }` **存在即跨表引用**（新决策 D40；文档里关于「依赖表达式」的说明一并订正为「本模块不解释表达式」） | 167 单元（23 纯逻辑 + 64 窗口 + 80 其他）+ 34 引擎集成 + 5 持久化 + 4 历史/模板 + 2 清理全过；`check --all-targets` 零告警 |
+| 2026-09-18 | Phase G（本轮 · 生成器覆盖） | **把数值与时序补到数据科学家常用的形态**：数值类新增 5 个分布变体（`Poisson` λ / `Exponential` λ / `Pareto` 最小取值·α / `Beta` α·β / `Binomial` n·p）+ `TimeSeries`（起始值 · 趋势 · 周期 · 噪声，按行序展开——与 `sequential_date` 同一行序并排即一条带季节性的时间序列），共 143 变体。分布实现**自建**（Box-Muller / 逆变换 / Marsaglia-Tsang；泊松 `λ ≥ 30` 与二项 `n > 64` 转正态近似，避开单值 O(λ) / O(n) 次循环拖慢十万行生成，新决策 D41）。**参数护栏扩到分布族**：λ / α 非正或非有限、`p` 越界、`n = 0` 都在生成前拦住并给可读原因；`period = 0` 表示「不叠周期」不算错。目录脚本的 `LABELS` / `PARAM_LABEL` / 默认值字典同步（143 断言），并在写完文件后提示「请跑 rustfmt」——脚本产出的是紧凑写法，不格式化就会让每次重跑混进几百行与逻辑无关的换行 | **176 单元**（+9：分布族与时序统计冒烟）+ 34 引擎集成 + 5 持久化 + 4 历史/模板 + 2 清理全过；workbench 12 装配 + 11 任务全过；`check --all-targets` 零告警；rustfmt 只格式化本轮 hunk（HEAD 原有漂移未动） |

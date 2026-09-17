@@ -833,8 +833,8 @@ button{font-family:inherit;cursor:pointer;}
     <div class="dialog">
       <div class="dh">搜索生成器</div>
       <div class="db">
-        <input class="inp search" value="邮箱" placeholder="按名称 / 中文标签 / 分类搜索（137 项）">
-        <div class="hint">命中 4 / 137 · 标签前缀命中排在前面（多词之间是「都要命中」）</div>
+        <input class="inp search" value="邮箱" placeholder="按名称 / 中文标签 / 分类搜索（143 项）">
+        <div class="hint">命中 4 / 143 · 标签前缀命中排在前面（多词之间是「都要命中」）</div>
         <div class="slist">
           <div class="srow on"><span class="check">✓</span><span class="label">邮箱地址</span><span class="gname">email</span><span class="gcat">Person</span></div>
           <div class="srow"><span class="check"></span><span class="label">安全邮箱</span><span class="gname">safe_email</span><span class="gcat">Person</span></div>
@@ -935,7 +935,7 @@ button{font-family:inherit;cursor:pointer;}
   <div><b>与 v1 原型的对应关系</b>（v1 文件：<code>v1/prototype/mock-data-generator.html</code>，本稿为参考重画而非搬运）：</div>
   <div>· v1 右面板「配置区（表名输入 / 行数 / 种子 / 语言 / 重置）」→ 本稿同样以<b>目标表名输入框</b>为起点（造新表），保留行数 / 种子 / 语言三项，但这四项是「这张表的设计」，故落在<b>中央 tab 的表头</b>；v1 的「重置」并入字段行的「智能」与列编辑的「恢复智能默认」。</div>
   <div>· v1 的字段表（可增删列、列名与类型可改、生成器下拉、空值率、唯一、⚙ 高级抽屉）→ 本稿落在<b>中央 tab</b>（这张表那张 tab）：字段卡片两行（名称 / 类型 / 置信度 + 生成器 ▾ / 编辑 / 智能 / 删除 + 参数摘要），列来源（导入结构 / ＋ 加列）也在这个 tab 的「列」段。</div>
-  <div>· v1 的「生成器下拉（137 项平铺）」→ 本稿按<b>分类子菜单</b>收口；v1 的「⚙ 高级抽屉」→ <b>列编辑对话框</b>（列名 / 类型 / 生成器只读 / 参数 / 空值率 / 唯一 / 恢复智能默认）。</div>
+  <div>· v1 的「生成器下拉（143 项平铺）」→ 本稿按<b>分类子菜单</b>收口；v1 的「⚙ 高级抽屉」→ <b>列编辑对话框</b>（列名 / 类型 / 生成器只读 / 参数 / 空值率 / 唯一 / 恢复智能默认）。</div>
   <div>· v1 的「生成 → 预览表 → 导出 CSV·XLSX·Parquet·SQL / 保存草稿 / 持久化」→ 本稿：生成仍只产<b>内存临时表 + 预览</b>（不写库）；<b>生成在中央表头</b>（这张表的动作，带进度条 / 批次 / 取消 / 失败重试），<b>四个出口在右 Dock</b>（作用于当前 tab 那张表，生成前禁用），预览表在中央 tab。</div>
   <div>· v1 的「导入结构弹窗」→ 本稿「导入结构」对话框（连接 / 库 / schema / 表名，读源库结构）；v1 <b>没有</b>的「追加到既有表」是 v2 的<b>显式</b>出口（选表后主键自增接续表内行数），不与「持久化」混为一路。</div>
   <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部<b>折叠</b>的「生成历史（20）· 用户模板（1）」（默认收起，点标题展开），历史最近 20 条、时间倒序 + 重放 / 删除 / 刷新，生成一次自动落一条，失败行显示原因；v1 的「保存模板」→ 同一个折叠段里的「用户模板」（「保存为模板…」对话框只问名字 + 每行「应用 / 删除」）。默认收起是因为面板的天天用部分是上面那份表清单。</div>

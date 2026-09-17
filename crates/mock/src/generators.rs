@@ -39,18 +39,11 @@ pub(super) fn generate_cell(
             NumberWithFormat(fmt).fake_with_rng::<String, _>(rng)
         }
         GeneratorConfig::Normal { mean, std_dev } => {
-            let u1: f64 = rng.random();
-            let u1 = u1.max(1e-10);
-            let u2: f64 = rng.random();
-            let z = (-2.0_f64 * u1.ln()).sqrt() * (2.0_f64 * std::f64::consts::PI * u2).cos();
-            (mean + std_dev * z).to_string()
+            (mean + std_dev * standard_normal(rng)).to_string()
         }
         GeneratorConfig::LogNormal { median, dispersion } => {
-            let u1: f64 = rng.random();
-            let u1 = u1.max(1e-10);
-            let u2: f64 = rng.random();
-            let z = (-2.0_f64 * u1.ln()).sqrt() * (2.0_f64 * std::f64::consts::PI * u2).cos();
-            (median.ln() + dispersion * z).exp().to_string()
+            let value = (median.ln() + dispersion * standard_normal(rng)).exp();
+            value.to_string()
         }
         GeneratorConfig::RandomWalk {
             start,
@@ -58,18 +51,88 @@ pub(super) fn generate_cell(
             volatility,
         } => {
             let base = *start + (row_index as f64) * *step;
-            let noise_scale = (row_index as f64).sqrt().max(0.0) * *volatility;
-            let u1: f64 = rng.random();
-            let u1 = u1.max(1e-10);
-            let u2: f64 = rng.random();
-            let noise = (-2.0_f64 * u1.ln()).sqrt()
-                * (2.0_f64 * std::f64::consts::PI * u2).cos()
-                * noise_scale;
-            (base + noise).to_string()
+            // 游走的方差随步数线性增长（布朗运动）：第 i 行的噪声尺度是 √i·波动率
+            let noise_scale = (row_index as f64).sqrt() * *volatility;
+            (base + noise_scale * standard_normal(rng)).to_string()
         }
         GeneratorConfig::Boolean { ratio } => {
             use fake::faker::boolean::en::Boolean;
             Boolean(*ratio).fake_with_rng::<bool, _>(rng).to_string()
+        }
+        GeneratorConfig::Poisson { lambda } => {
+            // 计数类分布（到达数 / 事件数）：λ 小走 Knuth 逐次相乘（精确），
+            // λ 大改用正态近似（N(λ, √λ) 取整）——否则单值就是 O(λ) 次循环，
+            // 十万行 × λ=1000 会卡住生成。
+            let lambda = lambda.max(1e-9);
+            let count = if lambda < 30.0 {
+                let limit = (-lambda).exp();
+                let mut k: u64 = 0;
+                let mut product = 1.0_f64;
+                loop {
+                    product *= rng.random::<f64>();
+                    if product <= limit || k >= 100_000 {
+                        break k;
+                    }
+                    k += 1;
+                }
+            } else {
+                (lambda + lambda.sqrt() * standard_normal(rng))
+                    .round()
+                    .max(0.0) as u64
+            };
+            count.to_string()
+        }
+        GeneratorConfig::Exponential { lambda } => {
+            // 等待时间 / 间隔：逆变换法（1 - U 避免 ln(0)）
+            let lambda = lambda.max(1e-9);
+            let u = 1.0 - rng.random::<f64>();
+            (-u.ln() / lambda).to_string()
+        }
+        GeneratorConfig::Pareto { scale_value, alpha } => {
+            // 长尾（幂律）：逆变换 —— x_m / U^(1/α)，恒 ≥ x_m
+            let alpha = alpha.max(1e-9);
+            let u = 1.0 - rng.random::<f64>();
+            (scale_value * u.powf(-1.0 / alpha)).to_string()
+        }
+        GeneratorConfig::Beta { alpha, beta } => {
+            // 比例 / 比率类（0..1）：两个 Gamma 之比
+            let x = gamma_sample(alpha.max(1e-9), rng);
+            let y = gamma_sample(beta.max(1e-9), rng);
+            let value = if x + y > 0.0 { x / (x + y) } else { 0.5 };
+            value.to_string()
+        }
+        GeneratorConfig::Binomial {
+            trials,
+            probability,
+        } => {
+            // 成功次数：n 小逐次抽（精确），n 大用正态近似（np 与 np(1-p)）
+            let p = probability.clamp(0.0, 1.0);
+            let successes = if *trials <= 64 {
+                (0..*trials).filter(|_| rng.random::<f64>() < p).count() as u64
+            } else {
+                let n = f64::from(*trials);
+                let sigma = (n * p * (1.0 - p)).sqrt();
+                (n * p + sigma * standard_normal(rng)).round().clamp(0.0, n) as u64
+            };
+            successes.to_string()
+        }
+        GeneratorConfig::TimeSeries {
+            start,
+            trend,
+            period,
+            amplitude,
+            noise,
+        } => {
+            // 时序数值：按行序推进 —— 趋势（每行增量）+ 周期（行数为周期）+ 噪声。
+            // 与 `sequential_date` 按同一行序展开，两列并排就是一条时间序列。
+            let i = row_index as f64;
+            let seasonal = if *period == 0 {
+                0.0
+            } else {
+                let phase = 2.0 * std::f64::consts::PI * i / f64::from(*period);
+                amplitude * phase.sin()
+            };
+            (start + trend * i + seasonal + noise * standard_normal(rng)).to_string()
         }
 
         // ========== 文本类 ==========
@@ -754,6 +817,43 @@ pub(super) fn generate_cell(
     }
 }
 
+/// 标准正态随机数（均值 0、标准差 1）：Box-Muller 变换。
+///
+/// 只依赖 `rand` 提供的均匀分布，避免为几个分布额外引入 `rand_distr` 依赖。
+fn standard_normal(rng: &mut StdRng) -> f64 {
+    // 取 1-U 而不是 U，避开 ln(0) 得到 -inf
+    let u1 = 1.0 - rng.random::<f64>();
+    let u2 = rng.random::<f64>();
+    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+}
+
+/// Gamma 分布抽样（Marsaglia-Tsang 挤压法），要求 `shape > 0`。
+///
+/// Beta 分布由两个 Gamma 之比得到，所以必须支持 `shape < 1`：
+/// 此时用提升变换 `x^(1/shape) · Γ(shape + 1)` 绕开主分支对 `shape ≥ 1` 的要求。
+fn gamma_sample(shape: f64, rng: &mut StdRng) -> f64 {
+    if shape < 1.0 {
+        let u = 1.0 - rng.random::<f64>();
+        let g = gamma_sample(shape + 1.0, rng);
+        return g * u.powf(1.0 / shape);
+    }
+    let d = shape - 1.0 / 3.0;
+    let c = 1.0 / (9.0 * d).sqrt();
+    loop {
+        let x = standard_normal(rng);
+        let v = 1.0 + c * x;
+        if v <= 0.0 {
+            continue;
+        }
+        let v = v * v * v;
+        let u: f64 = rng.random::<f64>();
+        // 挤压判据：先试廉价的对数判据，落空再走完整判据
+        if u < 1.0 - 0.0331 * x.powi(4) || u.ln() < 0.5 * x * x + d * (1.0 - v + v.ln()) {
+            return d * v;
+        }
+    }
+}
+
 fn parse_date(s: &str) -> chrono::NaiveDate {
     chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .ok()
@@ -1177,5 +1277,191 @@ mod tests {
             let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert!(!val.is_empty(), "phone number should not be empty");
         }
+    }
+
+    // ===== 分布族与时序：统计性质冒烟（宽容差，只求量级正确）=====
+
+    /// 取一列样本值，供分布类断言复用。
+    fn sample_column(generator: &GeneratorConfig, count: usize) -> Vec<f64> {
+        let mut rng = rng();
+        (0..count)
+            .map(|i| {
+                generate_cell(generator, &mut rng, i, &Locale::ZhCn)
+                    .parse::<f64>()
+                    .expect("生成值应能解析为数字")
+            })
+            .collect()
+    }
+
+    fn mean(values: &[f64]) -> f64 {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+
+    #[test]
+    fn test_poisson_is_non_negative_integer_near_lambda() {
+        let samples = sample_column(&GeneratorConfig::Poisson { lambda: 5.0 }, 5_000);
+        assert!(
+            samples.iter().all(|v| *v >= 0.0 && v.fract() == 0.0),
+            "泊松取值应为非负整数"
+        );
+        let avg = mean(&samples);
+        assert!(
+            (3.0..8.0).contains(&avg),
+            "泊松 λ=5 的样本均值应接近 5，实际 {avg}"
+        );
+    }
+
+    /// λ 大于 30 走正态近似（避免 O(λ) 次循环），这里只校验量级仍然对得上。
+    #[test]
+    fn test_poisson_large_lambda_uses_normal_approximation() {
+        let samples = sample_column(&GeneratorConfig::Poisson { lambda: 200.0 }, 2_000);
+        let avg = mean(&samples);
+        assert!(
+            (180.0..220.0).contains(&avg),
+            "泊松 λ=200 的样本均值应接近 200，实际 {avg}"
+        );
+    }
+
+    #[test]
+    fn test_exponential_mean_near_inverse_lambda() {
+        let samples = sample_column(&GeneratorConfig::Exponential { lambda: 2.0 }, 5_000);
+        assert!(samples.iter().all(|v| *v >= 0.0), "指数分布取值不应为负");
+        let avg = mean(&samples);
+        assert!(
+            (0.35..0.65).contains(&avg),
+            "指数 λ=2 的样本均值应接近 0.5，实际 {avg}"
+        );
+    }
+
+    #[test]
+    fn test_pareto_never_below_scale() {
+        let samples = sample_column(
+            &GeneratorConfig::Pareto {
+                scale_value: 10.0,
+                alpha: 1.5,
+            },
+            1_000,
+        );
+        assert!(
+            samples.iter().all(|v| *v >= 10.0),
+            "帕累托取值不应低于最小取值（实测最小 {:?}）",
+            samples.iter().cloned().fold(f64::INFINITY, f64::min)
+        );
+    }
+
+    #[test]
+    fn test_beta_within_unit_interval() {
+        let samples = sample_column(
+            &GeneratorConfig::Beta {
+                alpha: 2.0,
+                beta: 5.0,
+            },
+            1_000,
+        );
+        assert!(
+            samples.iter().all(|v| (0.0..=1.0).contains(v)),
+            "Beta 取值应落在 0~1 之间"
+        );
+        // Beta(2,5) 的期望是 α/(α+β) ≈ 0.286
+        let avg = mean(&samples);
+        assert!(
+            (0.20..0.38).contains(&avg),
+            "Beta(2,5) 的样本均值应接近 0.286，实际 {avg}"
+        );
+    }
+
+    #[test]
+    fn test_binomial_count_within_trials_near_np() {
+        let samples = sample_column(
+            &GeneratorConfig::Binomial {
+                trials: 10,
+                probability: 0.5,
+            },
+            2_000,
+        );
+        assert!(
+            samples
+                .iter()
+                .all(|v| (0.0..=10.0).contains(v) && v.fract() == 0.0),
+            "二项取值应为 0~n 之间的整数"
+        );
+        let avg = mean(&samples);
+        assert!(
+            (4.5..5.5).contains(&avg),
+            "二项 n=10 p=0.5 的样本均值应接近 5，实际 {avg}"
+        );
+    }
+
+    /// 时序：按行序推进，相隔一个周期的两行只差趋势（周期项互相抵消）。
+    #[test]
+    fn test_time_series_period_cancels_over_full_cycle() {
+        let generator = GeneratorConfig::TimeSeries {
+            start: 50.0,
+            trend: 1.5,
+            period: 12,
+            amplitude: 7.0,
+            noise: 0.0,
+        };
+        let mut seq_rng = rng();
+        let value_at = |rng: &mut StdRng, i: usize| -> f64 {
+            generate_cell(&generator, rng, i, &Locale::ZhCn)
+                .parse()
+                .expect("时序取值应能解析为数字")
+        };
+        for i in 0..12 {
+            let diff = value_at(&mut seq_rng, i + 12) - value_at(&mut seq_rng, i);
+            let expected = 1.5 * 12.0;
+            assert!(
+                (diff - expected).abs() < 1e-9,
+                "相隔一个周期应只差趋势×周期={expected}，实际 {diff}"
+            );
+        }
+        // 同 seed 重放整列一致
+        let mut first = rng();
+        let mut second = rng();
+        let column_a: Vec<f64> = (0..24).map(|i| value_at(&mut first, i)).collect();
+        let column_b: Vec<f64> = (0..24).map(|i| value_at(&mut second, i)).collect();
+        assert_eq!(column_a, column_b, "同一 seed 应生成完全相同的时序列");
+    }
+
+    /// `period` 为 0 表示不叠加周期项：此时取值只含起始值 + 趋势。
+    #[test]
+    fn test_time_series_without_period_keeps_trend_only() {
+        let generator = GeneratorConfig::TimeSeries {
+            start: 10.0,
+            trend: 3.0,
+            period: 0,
+            amplitude: 9.0,
+            noise: 0.0,
+        };
+        let samples = sample_column(&generator, 6);
+        for (i, value) in samples.iter().enumerate() {
+            let expected = 10.0 + 3.0 * i as f64;
+            assert!(
+                (value - expected).abs() < 1e-9,
+                "第 {i} 行应为 {expected}，实际 {value}"
+            );
+        }
+    }
+
+    /// 均值参数别被写反：正态的均值在 `mean`，标准差在 `std_dev`。
+    #[test]
+    fn test_normal_mean_and_std_dev_are_reasonable() {
+        let samples = sample_column(
+            &GeneratorConfig::Normal {
+                mean: 100.0,
+                std_dev: 15.0,
+            },
+            5_000,
+        );
+        let avg = mean(&samples);
+        assert!(
+            (99.0..101.0).contains(&avg),
+            "正态均值应接近 100，实际 {avg}"
+        );
+        assert!(
+            samples.iter().any(|v| *v < 100.0) && samples.iter().any(|v| *v > 100.0),
+            "正态分布应同时产生均值两侧的取值"
+        );
     }
 }

@@ -3,7 +3,7 @@
 //! 基于数据源元数据（schema_map 列映射）生成测试数据，仅落 DuckDB 分析引擎临时表，
 //! 不回传各源数据库（M7 约束）。
 //! - `engine`：MockEngine 执行管线
-//! - `generator_catalog`：生成器目录（137 变体的分类 / 中文标签 / 参数规格，由脚本穷尽派生）
+//! - `generator_catalog`：生成器目录（143 变体的分类 / 中文标签 / 参数规格，由脚本穷尽派生）
 //! - `generators`：fake crate 驱动的各类数据生成器
 //! - `history`：生成历史的后台读写（宿主只提供项目根）
 //! - `models`：列定义/依赖/配置/导出模型

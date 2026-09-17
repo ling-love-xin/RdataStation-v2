@@ -3,7 +3,7 @@
 """生成 crates/mock/src/generator_catalog.rs（M7 生成器目录）。
 
 为什么用脚本生成：
-- 137 个 GeneratorConfig 变体，手工维护标签/参数清单必然漂移（v1 的 mockGeneratorDefs.ts 就是手写 1354 行）；
+- 143 个 GeneratorConfig 变体，手工维护标签/参数清单必然漂移（v1 的 mockGeneratorDefs.ts 就是手写 1354 行）；
 - 目录由 models.rs 的枚举**穷尽派生**：新增变体时 `spec_of` 的 match 会编译失败，强制补齐；
 - 标签与默认值在本脚本的字典里维护（一次性），参数默认值按字段名启发式给出。
 
@@ -66,6 +66,12 @@ LABELS = {
     "LogNormal": "对数正态分布",
     "RandomWalk": "随机游走",
     "Boolean": "布尔值",
+    "Poisson": "泊松分布",
+    "Exponential": "指数分布",
+    "Pareto": "帕累托分布（长尾）",
+    "Beta": "Beta 分布（比例）",
+    "Binomial": "二项分布",
+    "TimeSeries": "时序数值（趋势 + 周期）",
     # 文本
     "Constant": "固定值",
     "Words": "随机词组",
@@ -229,6 +235,16 @@ PARAM_LABEL = {
     "median": "中位数",
     "dispersion": "离散度",
     "volatility": "波动率",
+    "lambda": "强度 λ",
+    "scale_value": "尺度（最小值）",
+    "alpha": "形状参数 α",
+    "beta": "形状参数 β",
+    "trials": "试验次数 n",
+    "probability": "概率 p",
+    "trend": "趋势（每行增量）",
+    "period": "周期（行数）",
+    "amplitude": "周期振幅",
+    "noise": "噪声强度",
     "count": "数量",
     "before": "早于",
     "after": "晚于",
@@ -281,6 +297,14 @@ def default_for(field, ty):
             "dispersion": "0.5",
             "volatility": "0.1",
             "miss_probability": "0.1",
+            "lambda": "1.0",
+            "scale_value": "1.0",
+            "alpha": "1.5",
+            "beta": "1.0",
+            "probability": "0.5",
+            "trend": "0.0",
+            "amplitude": "1.0",
+            "noise": "0.1",
         }.get(field, "0.0")
     # 整数族
     return {
@@ -297,6 +321,8 @@ def default_for(field, ty):
         "blur_amount": "2",
         "seed": "42",
         "count": "1",
+        "trials": "10",
+        "period": "24",
     }.get(field, "0")
 
 
@@ -341,7 +367,7 @@ def snake(name):
 
 def main():
     variants = parse_models()
-    assert len(variants) == 137, f"变体数异常: {len(variants)}"
+    assert len(variants) == 143, f"变体数异常: {len(variants)}"
 
     lines = []
     add = lines.append
@@ -521,7 +547,7 @@ def main():
     add("")
     add("    #[test]")
     add("    fn all_specs_cover_every_variant() {")
-    add("        assert_eq!(all_specs().len(), 137, \"规格数与变体数应一致\");")
+    add("        assert_eq!(all_specs().len(), 143, \"规格数与变体数应一致\");")
     add("        // 标识唯一")
     add("        let mut names: Vec<&str> = all_specs().iter().map(|s| s.name).collect();")
     add("        names.sort_unstable();")
@@ -553,6 +579,9 @@ def main():
 
     OUT.write_text("\n".join(lines), encoding="utf-8")
     print(f"wrote {OUT} ({len(lines)} 行, {len(variants)} 规格)")
+    # 脚本产出的是紧凑写法，与仓库里 rustfmt 过的版本有排版差异；不格式化的话
+    # 每次重跑都会在 diff 里混进几百行与逻辑无关的换行变动（README §设计与验证 写了这一步）。
+    print("提示：请对生成文件跑一次 rustfmt（--edition 2024），否则会带进格式漂移")
 
 
 if __name__ == "__main__":

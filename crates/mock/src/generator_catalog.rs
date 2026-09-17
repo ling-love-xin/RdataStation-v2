@@ -290,6 +290,121 @@ static SPEC_BOOLEAN: GeneratorSpec = GeneratorSpec {
     }],
 };
 
+/// `Poisson`
+static SPEC_POISSON: GeneratorSpec = GeneratorSpec {
+    name: "poisson",
+    label: "泊松分布",
+    category: GeneratorCategory::Numeric,
+    params: &[ParamField {
+        key: "lambda",
+        label: "强度 λ",
+        kind: ParamKind::Float,
+    }],
+};
+
+/// `Exponential`
+static SPEC_EXPONENTIAL: GeneratorSpec = GeneratorSpec {
+    name: "exponential",
+    label: "指数分布",
+    category: GeneratorCategory::Numeric,
+    params: &[ParamField {
+        key: "lambda",
+        label: "强度 λ",
+        kind: ParamKind::Float,
+    }],
+};
+
+/// `Pareto`
+static SPEC_PARETO: GeneratorSpec = GeneratorSpec {
+    name: "pareto",
+    label: "帕累托分布（长尾）",
+    category: GeneratorCategory::Numeric,
+    params: &[
+        ParamField {
+            key: "scale_value",
+            label: "尺度（最小值）",
+            kind: ParamKind::Float,
+        },
+        ParamField {
+            key: "alpha",
+            label: "形状参数 α",
+            kind: ParamKind::Float,
+        },
+    ],
+};
+
+/// `Beta`
+static SPEC_BETA: GeneratorSpec = GeneratorSpec {
+    name: "beta",
+    label: "Beta 分布（比例）",
+    category: GeneratorCategory::Numeric,
+    params: &[
+        ParamField {
+            key: "alpha",
+            label: "形状参数 α",
+            kind: ParamKind::Float,
+        },
+        ParamField {
+            key: "beta",
+            label: "形状参数 β",
+            kind: ParamKind::Float,
+        },
+    ],
+};
+
+/// `Binomial`
+static SPEC_BINOMIAL: GeneratorSpec = GeneratorSpec {
+    name: "binomial",
+    label: "二项分布",
+    category: GeneratorCategory::Numeric,
+    params: &[
+        ParamField {
+            key: "trials",
+            label: "试验次数 n",
+            kind: ParamKind::Int,
+        },
+        ParamField {
+            key: "probability",
+            label: "概率 p",
+            kind: ParamKind::Float,
+        },
+    ],
+};
+
+/// `TimeSeries`
+static SPEC_TIME_SERIES: GeneratorSpec = GeneratorSpec {
+    name: "time_series",
+    label: "时序数值（趋势 + 周期）",
+    category: GeneratorCategory::Numeric,
+    params: &[
+        ParamField {
+            key: "start",
+            label: "起始值",
+            kind: ParamKind::Float,
+        },
+        ParamField {
+            key: "trend",
+            label: "趋势（每行增量）",
+            kind: ParamKind::Float,
+        },
+        ParamField {
+            key: "period",
+            label: "周期（行数）",
+            kind: ParamKind::Int,
+        },
+        ParamField {
+            key: "amplitude",
+            label: "周期振幅",
+            kind: ParamKind::Float,
+        },
+        ParamField {
+            key: "noise",
+            label: "噪声强度",
+            kind: ParamKind::Float,
+        },
+    ],
+};
+
 /// `Constant`
 static SPEC_CONSTANT: GeneratorSpec = GeneratorSpec {
     name: "constant",
@@ -1556,6 +1671,12 @@ pub fn spec_of(config: &GeneratorConfig) -> &'static GeneratorSpec {
         GeneratorConfig::LogNormal { .. } => &SPEC_LOG_NORMAL,
         GeneratorConfig::RandomWalk { .. } => &SPEC_RANDOM_WALK,
         GeneratorConfig::Boolean { .. } => &SPEC_BOOLEAN,
+        GeneratorConfig::Poisson { .. } => &SPEC_POISSON,
+        GeneratorConfig::Exponential { .. } => &SPEC_EXPONENTIAL,
+        GeneratorConfig::Pareto { .. } => &SPEC_PARETO,
+        GeneratorConfig::Beta { .. } => &SPEC_BETA,
+        GeneratorConfig::Binomial { .. } => &SPEC_BINOMIAL,
+        GeneratorConfig::TimeSeries { .. } => &SPEC_TIME_SERIES,
         GeneratorConfig::Constant { .. } => &SPEC_CONSTANT,
         GeneratorConfig::Words { .. } => &SPEC_WORDS,
         GeneratorConfig::Sentence { .. } => &SPEC_SENTENCE,
@@ -1703,6 +1824,12 @@ static ALL_SPECS: &[&GeneratorSpec] = &[
     &SPEC_LOG_NORMAL,
     &SPEC_RANDOM_WALK,
     &SPEC_BOOLEAN,
+    &SPEC_POISSON,
+    &SPEC_EXPONENTIAL,
+    &SPEC_PARETO,
+    &SPEC_BETA,
+    &SPEC_BINOMIAL,
+    &SPEC_TIME_SERIES,
     &SPEC_CONSTANT,
     &SPEC_WORDS,
     &SPEC_SENTENCE,
@@ -1883,6 +2010,27 @@ pub fn default_of(name: &str) -> Option<GeneratorConfig> {
             volatility: 0.1,
         },
         "boolean" => GeneratorConfig::Boolean { ratio: 50 },
+        "poisson" => GeneratorConfig::Poisson { lambda: 1.0 },
+        "exponential" => GeneratorConfig::Exponential { lambda: 1.0 },
+        "pareto" => GeneratorConfig::Pareto {
+            scale_value: 1.0,
+            alpha: 1.5,
+        },
+        "beta" => GeneratorConfig::Beta {
+            alpha: 1.5,
+            beta: 1.0,
+        },
+        "binomial" => GeneratorConfig::Binomial {
+            trials: 10,
+            probability: 0.5,
+        },
+        "time_series" => GeneratorConfig::TimeSeries {
+            start: 0.0,
+            trend: 0.0,
+            period: 24,
+            amplitude: 1.0,
+            noise: 0.1,
+        },
         "constant" => GeneratorConfig::Constant {
             value: "".to_string(),
         },
@@ -2072,7 +2220,7 @@ mod tests {
 
     #[test]
     fn all_specs_cover_every_variant() {
-        assert_eq!(all_specs().len(), 137, "规格数与变体数应一致");
+        assert_eq!(all_specs().len(), 143, "规格数与变体数应一致");
         // 标识唯一
         let mut names: Vec<&str> = all_specs().iter().map(|s| s.name).collect();
         names.sort_unstable();

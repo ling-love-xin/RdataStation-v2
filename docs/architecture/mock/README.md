@@ -26,7 +26,8 @@
 | 四个显式出口（**恒为项目级**） | 持久化到项目分析库（新建，同名报错）/ 追加到既有表（显式选表，主键自增接续）/ 保存到草稿箱 `{项目}/mock/` / 另存为（CSV·Parquet·Xlsx·SQL INSERT） |
 | 两处排版（D38） | **右 Dock（280px 起步，可拖拽调宽）= 管理表**：表清单（唯一入口，表名 · 行数 · 状态点）+ 集合动作 + 出口组 + 折叠的历史 / 模板；**中央「Mock 数据」tab = 这张表的设计与生成状态**：表名 / 行数 / 种子 / 语言 + 生成 + 进度与取消 + 列 + 预览（同源：详情持面板实体）。状态单点：单表任务进度在中央表头，场景（集合）任务的在右 Dock 场景清单下 |
 | 视图随 crate | 面板 + 详情 tab + 三个语义对话框（导入结构 / 列编辑 / 生成器搜索）同 crate；宿主能力经 `MockHost` 注入 |
-| 生成器目录穷尽派生 | 137 变体的分类 / 标签 / 参数规格由脚本从 `models.rs` 派生，新增变体编译失败强制补齐 |
+| 生成器目录穷尽派生 | 143 变体的分类 / 标签 / 参数规格由脚本从 `models.rs` 派生，新增变体编译失败强制补齐 |
+| 数值分布族与时序 | 数值类不止均匀与正态：还有对数正态 / 泊松 / 指数 / 帕累托 / Beta / 二项，另有**时序数值**（起始值 + 趋势 + 周期 + 噪声，按行序展开）；分布实现自建（Box-Muller / 逆变换 / Marsaglia-Tsang，大 λ 走正态近似），不引 `rand_distr`（架构 D41） |
 | 生成器两条找法 | 分类子菜单（知道属于哪类）+ **搜索对话框**（只记得名字：按中文标签 / 名称 / 分类过滤，多词 AND） |
 | 集合类参数可编辑 | `ForeignKey.values` / `Sequence.values` / `Weighted.choices` 在列编辑对话框里用多行文本填（一行一项 / 一行「值, 权重」）；留空或全零权重在生成前拦住，不会 panic |
 | 场景模板与列依赖 | 内置 6 套多表场景模板，**中央表头**「场景模板 ▾」选一套 → 右 Dock 拿回工作副本（清单 + 关系）→「生成 N 张表」（逐表进度按「张表」计，进度与取消也在那一段）；结果**一张表一个中央 tab**、右 Dock 结果表清单是管理入口（状态点 + 关系子行）；列间依赖字段 `dependency` 只用于**跨表引用**（取值域由父表参数算出）——**没有拓扑排序，也不解释依赖表达式**；v1 的空壳变体与空字段已从模型里删掉（架构 D40） |
@@ -62,9 +63,9 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | 文件 | 职责 |
 | --- | --- |
 | `crates/mock/src/lib.rs` | crate 入口与 re-export；写明依赖方向 |
-| `crates/mock/src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`（13 类）/ `GeneratorConfig`（137 变体）/ `Locale` / 导出与持久化模型 / 依赖模型 |
+| `crates/mock/src/models.rs` | 域模型：`MockConfig` / `ColumnDef` / `ColumnDataType`（13 类）/ `GeneratorConfig`（143 变体）/ `Locale` / 导出与持久化模型 / 依赖模型 |
 | `crates/mock/src/engine.rs` | `MockEngine`：生成（分批 10k 行）/ 预览 / 导出 / **`insert_statements`**（INSERT 文本，**仅导出 SQL 脚本出口用**；落库已改跨库直写）/ 持久化为资产 / 列映射 / 模板 / 场景生成 / 取消 / `sanitize_identifier`（列名规范化唯一入口） |
-| `crates/mock/src/generators.rs` | `generate_cell`：137 变体 → 值（fake crate，确定性接入 `StdRng`） |
+| `crates/mock/src/generators.rs` | `generate_cell`：143 变体 → 值（fake crate，确定性接入 `StdRng`） |
 | `crates/mock/src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `crates/mock/src/schema_map.rs` | `ColumnMapper`（列名规则表）+ **`parse_data_type`（类型串唯一入口）** |
 | `crates/mock/src/mock_view.rs` | **视图**：`MockPanel`（右 Dock 配置 + 场景模板菜单 + 出口 + 结果表清单与「当前表」+ 进度与取消）/ `MockDetailView`（中央字段 + 预览 + 列编辑对话框）/ `MockHost` 契约 / `MockJobKind`·`MockJobPhase` / `search_generators` + 搜索对话框 / **集合类参数的多行编辑** |
@@ -141,7 +142,7 @@ v1 素材（暂存区，删除前请先提炼）：`v1/docs/frontend/mock/mock-d
 | 1 | ~~生成走后台任务 + 进度 + 取消~~ | 十万行不再卡界面 | ✅ 已完成（`services::mock_jobs`；取消在批次边界） |
 | 2 | ~~出口也纳入后台任务（Persist / Export）~~ | 落库与导出不再阻塞界面；完成后预览仍可用 | ✅ 本轮完成（架构 D23；出口不可取消：DuckDB / 文件系统无中断点） |
 | 3 | ~~落库去文本中转（`ATTACH` 直写）~~ | 省一次全量序列化与解析；错误定位收在一处 | ✅ 本轮完成（`MockEngine::write_temp_table_to_database` + engine 的 `build_attach_database` / `build_insert_select`；架构 D25/D26） |
-| 4 | ~~生成器搜索~~ | 137 项下按名称 / 标签定位 | ✅ 本轮完成（`search_generators` + `List`/`ListState` 搜索对话框，架构 D24） |
+| 4 | ~~生成器搜索~~ | 143 项下按名称 / 标签定位 | ✅ 本轮完成（`search_generators` + `List`/`ListState` 搜索对话框，架构 D24） |
 | 5 | ~~复杂参数编辑入口（集合 / 加权）~~ | 约束类生成器从「不可用」变可用 | ✅ 本轮完成（列编辑里的多行文本 + 生成前拦截空集合，架构 D28） |
 | 6 | ~~临时表清理~~ | 切项目时释放进程级内存库里的临时表 | ✅ 本轮完成（两套前缀、以库为准；切项目时清理 + 面板作废旧预览，架构 D27） |
 | 7 | ~~生成任务 / 模板**落库接线**~~ | `MockGenerationStore` 8 方法 + 迁移 009 已就位但无 UI | ✅ 已完成（历史段 + 模板段） |

@@ -198,7 +198,7 @@ fn column_type_labels_are_complete() {
 fn generator_search_empty_query_returns_whole_catalog() {
     let hits = search_generators("");
     assert_eq!(hits.len(), generator_catalog::all_specs().len());
-    assert_eq!(hits.len(), 137);
+    assert_eq!(hits.len(), 143);
     assert_eq!(hits[0].name, generator_catalog::all_specs()[0].name);
 }
 
@@ -1525,12 +1525,12 @@ fn generator_search_filters_then_applies_to_column(cx: &mut TestAppContext) {
             )
         });
         // 初态：全量目录（不输入也能直接翻）
-        assert_eq!(list.read(cx).delegate().hits().len(), 137);
+        assert_eq!(list.read(cx).delegate().hits().len(), 143);
 
         // 与 `List` 搜索框同一入口：改 query 触发 `perform_search`
         list.update(cx, |state, cx| state.set_query("电话", window, cx));
         let hits = list.read(cx).delegate().hits();
-        assert!(hits.len() < 137 && !hits.is_empty(), "应过滤到少数项");
+        assert!(hits.len() < 143 && !hits.is_empty(), "应过滤到少数项");
         expected = hits[0].name.to_string();
 
         // 选中 + 确认（等价于点一行 / 回车）

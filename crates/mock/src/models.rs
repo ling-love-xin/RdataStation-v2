@@ -127,6 +127,31 @@ pub enum GeneratorConfig {
     Boolean {
         ratio: u8,
     },
+    Poisson {
+        lambda: f64,
+    },
+    Exponential {
+        lambda: f64,
+    },
+    Pareto {
+        scale_value: f64,
+        alpha: f64,
+    },
+    Beta {
+        alpha: f64,
+        beta: f64,
+    },
+    Binomial {
+        trials: u32,
+        probability: f64,
+    },
+    TimeSeries {
+        start: f64,
+        trend: f64,
+        period: u32,
+        amplitude: f64,
+        noise: f64,
+    },
 
     // 字符串/文本类
     Constant {

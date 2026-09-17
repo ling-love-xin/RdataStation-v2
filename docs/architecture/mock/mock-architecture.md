@@ -31,7 +31,7 @@ MockConfig ──┬─ table_name   用户命名的表（用于临时表名与�
              └─ columns: Vec<ColumnDef>
                                  └─ name          列名（智能映射的第一依据）
                                     data_type     列类型（13 类；决定 DDL 与兜底生成器）
-                                    generator     生成器（137 变体；可自动映射或手工指定）
+                                    generator     生成器（143 变体；可自动映射或手工指定）
                                     nullable_ratio 0.0~1.0，>0 时按概率写 NULL
                                     unique        是否要求列值唯一（重试上限 100 次）
                                     dependency    可选列依赖：跨表引用（ref_table / ref_column，存在即引用）
@@ -92,7 +92,11 @@ MockConfig ─► generate_with_progress
    ─► ColumnMappingResponse{ generator, confidence: "high"|"low", sample_value }
 ```
 
-共 ≈91 条列名规则 + 类型兜底，覆盖 137 个生成器变体中的常用项。类型兜底产生的 `confidence` 恒为 `low`（UI 据此提示「按类型猜测」）。
+共 ≈91 条列名规则 + 类型兜底，覆盖 143 个生成器变体中的常用项。类型兜底产生的 `confidence` 恒为 `low`（UI 据此提示「按类型猜测」）。
+
+数值类可覆盖常见的统计形态（不只均匀与正态）：**对数正态**（收入 / 价格）、**泊松**（到达数 / 计数）、**指数**（等待时间 / 间隔）、
+**帕累托**（长尾 / 幂律）、**Beta**（比例 / 比率）、**二项**（成功次数）、**时序数值**（起始值 + 趋势 + 周期 + 噪声，按行序展开，
+与 `sequential_date` 同一行序并排就是一条时间序列）。分布实现自建（D41）。仍缺的是**业务日历**（工作日 / 节假日）与「跟随另一列取值」（跨列求值，独立特性）。
 
 ### 4.3 场景模板（多表生成）
 
@@ -299,18 +303,18 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D10 | 取消检查在批次边界 | 实现简单、可预测；10k 行批次的延迟可接受 | 行级检查（热路径原子读 + 分支） |
 | D11 | **视图随 mock crate**（`mock_view`），宿主能力 traits 注入 | 与 M1/M3 的「Feature 自持视图」一致；model/service/view 同 crate 降低跨 crate 调用链 | 视图留 workbench（旧方案：状态拆两处、参数表单无法复用 crate 内目录） |
 | D12 | 重交互走**语义 Dialog**（生成器选择 / 列配置） | 焦点陷阱 / Escape / 遮罩关闭由组件负责；窄栏（280px）不挤入表单 | 面板内联展开（无焦点语义，窄栏更窄） |
-| D13 | 生成器目录**由 models.rs 穷尽派生**（脚本生成 + `spec_of` 穷尽 match） | 137 变体不可能手写对齐（v1 就是手写 1354 行且已漂移）；新增变体会编译失败强制补齐 | 手写生成器清单（漏项 / 漂移） |
+| D13 | 生成器目录**由 models.rs 穷尽派生**（脚本生成 + `spec_of` 穷尽 match） | 143 变体不可能手写对齐（v1 就是手写 1354 行且已漂移）；新增变体会编译失败强制补齐 | 手写生成器清单（漏项 / 漂移） |
 | D14 | 列配置用**工作副本**（应用 / 取消） | 与其余模块的对话框语义一致；取消不污染已配置的列 | 即时写回（无法取消，误改难回退） |
 | D15 | **生成不写库**（只产内存临时表 + 预览） | 生成是「试算」不是「提交」；写入必须显式点出口，避免误写与不可预览的副作用 | 生成即写分析库（v1 无此语义，v2 早期曾这么实现，已回归） |
 | D16 | 目标表是**用户命名的新表**（表名输入） | v1 主路径就是「命名新表 + 组织列」；「往既有表灌数」只是其中一个出口 | 从分析库既有表里选（把 mock 降级为灌数器） |
 | D17 | 追加必须**显式选表**，同名不自动追加 | 「持久化」与「追加」是两个语义不同的出口；静默追加会让用户以为新建了一张 | 表已存在时隐式走追加（v1 的 `CREATE TABLE AS SELECT` 会直接报错） |
 | D18 | 字段表与预览落**中央 tab**（方案①），表名 / 行数 / 种子 / 语言也一并归它（D38 扩过） | 右 Dock 起步 280px，宽表与字段卡片放不下（**可拖拽调宽**：`DockSkin` 给每个 placement 都画了 resize 抓手，旧文写的「不可拖拽」是错的）；中央 tab 与编辑器同构（单一权威状态） | 全塞右 Dock（v1 是 380px 可拖拽宽栏） |
 | D19 | 生成器切换走**分类子菜单**，参数在列编辑对话框 | 生成器身份与参数行必须一致；同一对话框内改生成器会让参数行失效（要么重建、要么错位） | 对话框内提供生成器下拉（参数行与生成器不同步） |
-| D24 | 分类子菜单**保留**，另加「搜索生成器」对话框（`List` + `ListState`） | 两条路径对应两种心智：知道「属于哪类」→ 翻菜单；只记得名字 → 搜索。搜索同步过滤（137 项全在内存）无 loading 闪烁；搜索框 / 虚拟化 / 上下键 / 空态全是组件的 | 只留子菜单（137 项翻找慢）；把搜索框塞进弹出菜单（菜单只有 item，无输入控件）；自搓输入框 + 滚动列表 |
+| D24 | 分类子菜单**保留**，另加「搜索生成器」对话框（`List` + `ListState`） | 两条路径对应两种心智：知道「属于哪类」→ 翻菜单；只记得名字 → 搜索。搜索同步过滤（143 项全在内存）无 loading 闪烁；搜索框 / 虚拟化 / 上下键 / 空态全是组件的 | 只留子菜单（143 项翻找慢）；把搜索框塞进弹出菜单（菜单只有 item，无输入控件）；自搓输入框 + 滚动列表 |
 | D25 | 落库改**跨库直写**（`ATTACH` + `INSERT SELECT`），不再用 INSERT 文本 | 数据全程在 DuckDB 内部流动；大行数下没有「读全量 → 拼文本 → 再解析」两跳与对应的内存峰值 | 继续文本中转；把临时表改成文件表（与「生成是试算」语义冲突） |
 | D26 | 回滚**只删本次 `Create` 刚建的表**；追加失败不回滚 | 同名表已存在时建表会失败，此时删表就是删别人的数据（本项目实际存在这个误删风险，已在实现里绕开并加测试锁住） | 「失败就 DROP 目标表」（会把既有数据删掉）；不回滚（留下半成品空表） |
 | D27 | 临时表清理**以库为准 + 多前缀**（`list_by_source` / `drop_by_source`），切项目时由宿主调 | 注册表只在新建时写，会漏（旧版本建的 / 上次清理漏掉的）；而 mock 沿用 v1 的 `temp_mock_` 前缀（D2），只认 `tmp_m_` 一套就等于没清。限定 `catalog = memory` 避免误删 `ATTACH` 进来的文件库表 | 只靠注册表枚举（会漏）；只认一套前缀（mock 永远清不到）；按“所有临时表”一刀切（会碰别的来源） |
-| D28 | 集合类参数用**多行文本**编辑（一行一项 / 一行「值, 权重」），解析失败保留上一个有效值 | 多行文本比键值对表格轻，且 137 变体零手工对齐（还是同一套目录派生）；值里可带逗号（分隔符取**最后一个**）。同时把「空集合 / 权重全零」提到**生成前**拦住——生成期对它们会 panic，工作线程一挂该进程后续任务全失败 | 集合编辑器表格 / 子对话框（重且要为三个参数各写一套）；只改编辑器不做生成前校验（手改配置 / 旧模板仍会 panic） |
+| D28 | 集合类参数用**多行文本**编辑（一行一项 / 一行「值, 权重」），解析失败保留上一个有效值 | 多行文本比键值对表格轻，且 143 变体零手工对齐（还是同一套目录派生）；值里可带逗号（分隔符取**最后一个**）。同时把「空集合 / 权重全零」提到**生成前**拦住——生成期对它们会 panic，工作线程一挂该进程后续任务全失败 | 集合编辑器表格 / 子对话框（重且要为三个参数各写一套）；只改编辑器不做生成前校验（手改配置 / 旧模板仍会 panic） |
 | D29 | 表间引用**挂在列上**（`dependency`），取值域由**父表参数算出**（自增 + 行数），不读已落地数据 | 关系属于「两列之间」而不是「某张模板的附加清单」——挂列上就只有一处权威（不会出现模板清单与列定义两份）。域算得出来就 O(1)、无内存、不碰库，也才能在**生成前**就把错报出来；因此不要求父表先于子表（自关联 / 前向引用都合法） | 模板/任务里另存一份关系清单（两处状态必漂移）；建值池或读父表已有主键（越界，且十万量级要装内存）；生成后 UPDATE 子表（要改已落地的数据） |
 | D31 | 自定义多表**从单表草稿加表**（而不是另做多表草稿 / 多表编辑器） | 导入结构、智能映射、列编辑、行数 / 种子这一整套都在单表态里现成可用；把它加成场景的一张表，等于复用了整条调表链路，成本只是「草稿 → `TemplateTable`」的一次转换。做成多表草稿则要把 `MockDraft` 拆成 N 份，波及面板输入、列编辑、历史 / 模板（用户模板存的是单表配置）、出口——那是大手术 | 多表草稿 / 多表编辑器（重且与现有单表链路并存会分裂状态）；从内置模板复制表（用户要的往往是自己的结构，模板里那几张只是起点） |
 | D30 | 批量落库**逐张走「新建」语义**：同名的跳过并报出，**成功的不回滚** | 「全成功或全失败」听着干净，代价是回滚——而回滚会碰到别人（或上次）已经落好的表，比「留下几张已落的」危险得多。逐张落还有个好处：同名冲突能落到具体表名上，而不是一句「批量失败」 | 事务化全量（回滚会删别人的表）；先检查后落（检查与落之间仍有窗口，且多一次全库扫描） |
@@ -326,6 +330,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D37 | 切项目清理临时表**不等锁**（`try_lock`），拿不到就留给「任务收尾」重试 | 清理要内存库连接锁，而出口任务（不可取消，D23）可能整段持锁——在 UI 线程上同步等锁就是界面假死到大行数落库 / 导出结束。拿不到锁就置一个 `pending_temp_cleanup`，在任务收尾那一拍（锁已释放）重试；一直没机会就下次切项目再试（临时表是进程内存，晚清只是多占一会儿，不影响正确性） | UI 线程同步等锁（假死）；直接跳过不重试（临时表一直不释放）；把清理丢进后台线程（还得自己找回 UI 线程通知面板） |
 | D38 | **右 Dock = 管理表**（清单唯一入口 + 出口组 + 折叠的历史 / 模板），**中央 tab = 这张表的设计与生成状态**（表名 / 行数 / 种子 / 语言 + 生成 + 列 + 预览）；**状态单点**：单表任务的进度 / 取消在中央表头，集合任务（场景 N 张表）的在右 Dock 场景清单下 | 「有哪些表 · 落了没 · 关系连到谁」是集合视角，「这张表怎么造 · 造到哪一步」是单表视角——混在一栏里就会重复（进度条 / 当前表 / 生成按钮各画两遍）。清单行只给状态点与百分比（`◐ orders 40%`）就够：要停任务就点那一行切到那张 tab 再取消，**入口唯一**。散开还有几处顺带收益：出口组挨着清单（作用于当前 tab 那张表，语义清楚）；关系并进清单行（`↳ user_id → users.id · 1..1,000` 挂在**子表**行下），不再单开一段；历史 / 模板默认收起，面板的天天用部分就是那份清单 | 配置与出口都留在右 Dock（280px 里塞表名 / 行数 / 种子 / 语言 / 生成 / 进度 / 出口 / 历史，天天用的一半要滚动才够）；列表与详情各画一份进度（两处都要同步，也容易不一致）；给清单再配一个「当前表」选择器（`sel` 那一行就是当前表，多一个是多一处状态）；把集合任务的进度也塞进中央（那里看的可能是别的表，且它不属于某一张表） |
 | D40 | 列依赖模型**只留跨表引用**：`ColumnDependency { ref_table, ref_column }`，删掉 v1 的 `DependencyType`（Expression / Template / Sequence / Weighted）与 `source_columns` / `expression` / `weights` 三个空字段 | 这四个变体与三个字段在 v1 与 v2 **两代都没被求值过**（全仓零构造零读取），而依赖求值的旧代码早按「本模块不解释依赖表达式」删了；模型里留着「看着能用、实际没人读」的字段，只会让下一个读代码的人（包括我自己）把它当半成品再规划一轮。删掉之后语义只剩一句话：**列上有 `dependency` 就是跨表引用**，取值域由父表参数算出 | 留着当「以后要做的占位」（`mock-dev-plan` C3 就因此挂了三个月，还让我误判成「有半成品可收尾」）；只标 `#[deprecated]` / 只删变体留字段（半吊子状态更绕）；顺手实现求值（那是**带求值器**进来的独立特性，不是 A 步） |
+| D41 | 分布类生成器**自建实现，不引 `rand_distr`**；泊松 `λ ≥ 30`、二项 `n > 64` 改走**正态近似** | crate 现有依赖只有 `rand` + `fake`，而需要的分布用三个助手就能拼全：Box-Muller（标准正态）、逆变换（指数 / 帕累托）、Marsaglia-Tsang（Gamma，供 Beta 用两个 Gamma 之比）。吞吐上两边都得看：Knuth 法抽一个泊松值是 O(λ) 次循环，二项精确法是 O(n) 次伯努利——十万行 × λ=1000 会直接卡住生成，而近似分支是常数时间且量级正确（均值 λ / np、标准差 √λ / √(np(1-p))，两项都有统计冒烟测试盯着） | 引 `rand_distr`（多一个依赖，且大部分分布用不上）；全用近似（小 λ / 小 n 下取值会失真，而小参数恰恰是默认值）；泊松逐次循环到底（默认 λ=1 无感，但架不住用户把 λ 调到千级后十万行） |
 | D39 | 落库**不做「资源注册」这一步**：出口把表落在项目分析库，那张持久表**就是**分析资源的项目级形态 | 「落库 = 本项目上一张持久表」已经是完整语义（D3 / E4 实现）；再叠一层「登记到 M6」需要新的触发时机、重复登记的版本语义、以及一个不搬本体的索引入口（`archive()` 是**文件**语义：先校验 `source_path` 是文件，再 `payload.archive_in` 把本体 **move** 进 `resources/`——照搬会把整个 `analytics.duckdb` 搬走）。而资源管理器列的本来就是 `resources/` 下的存档副本（`list_file_archives`），**不应**包含项目库里的表：项目表在本项目的分析库视图 / 导航里看，进全局是用户在资源管理器发起的 M6 存档（对表怎么存档是 M6 自己的事） | 「持久化后自动登记为分析资源」（塞满资源库，且清单里的表会与项目库的重名难辨）；「出口组加登记按钮」（多一个用户要理解的概念，而它没有增值——表已经在项目上了）；给 mock 开一条直写资源库 / 全局库的口子（破不变式 I9：输出恒为项目级） |
 
 ## 7. 降级与容错矩阵
@@ -359,6 +364,8 @@ SchemaRequest{conn_id, catalog, schema, table}
 ## 8. 性能与可观测
 
 - **批量**：10k 行 / 批，批内先拼值再一次性 `INSERT`（避免逐行往返）。
+- **分布抽样的单值成本**：正态 / 指数 / 帕累托 / Beta 都是常数时间；泊松在 `λ ≥ 30`、二项在 `n > 64` 时切到正态近似，
+  避免「单值 O(λ) 次循环」在十万行上变成千万次迭代（默认 λ=1 / n=10 走精确分支，形状不失真，见 D41）。
 - **行数上限**：面板侧 `MAX_ROWS = 1_000_000`（误输入护栏）；引擎侧不设上限，由 row_count 决定。
 - **进度粒度**：按生成批次（`BATCH_SIZE = 10_000` 行/批）回调；面板每 120ms 拉一次，越接近尾声越密。
   提交到首批完成之间显示「准备中…」（总量随首批回调返回）。
@@ -373,7 +380,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | --- | --- | --- | --- |
 | I0a | v1 的集成测试文件 `v1/backend/tests/mock_engine_tests.rs` **无法编译**（`response.generator.type_name()`、`confidence > 0.0`、`preview.rows` 非空），从未通过 | 该文件引用的 API 在 v1/v2 的 `models.rs` 中都不存在（`confidence` 是 `String`、无 `type_name`）；`read_preview` 只填 `batches` | 本轮按 v2 真实契约重写为 26 项集成测试（`crates/mock/tests/`），并在文件头记录差异 |
 | I0b | `persist_as_asset` 与 `export(Table)` 生成非法 SQL：`CREATE TABLE t AS SELECT * FROM SELECT * FROM …` | 集成测试 `persist_as_asset_creates_table_and_consumes_temp` 实测报 Parser Error；根因是 `build_create_table_as_select(table, source_table)` 第二参数是**源表名** | 已修（engine 参数正名 + 两处调用改为传表名 + 新增 `export(Table)` 回归测试） |
-| I0c | v1 设计文档与实际实现有出入 | 文档称 `history.rs` / `mock_get_history` / `mock_clear_history` / `mock_re_generate` 已完成，v1 源码中并不存在；文档称生成器 106 变体，实际 137 | 本目录文档以**代码为准**重写；v1 文档仅作素材 |
+| I0c | v1 设计文档与实际实现有出入 | 文档称 `history.rs` / `mock_get_history` / `mock_clear_history` / `mock_re_generate` 已完成，v1 源码中并不存在；文档称生成器 106 变体，实际远不止（现 143） | 本目录文档以**代码为准**重写；v1 文档仅作素材 |
 | I0d | `export(SqlInsert)` 曾**死锁**：重构后它先取内存库连接锁、再调 `insert_statements`（后者又取同一把锁） | 集成测试 `export_sql_insert_writes_insert_statements` 挂住不返回（进程被外部终止时才退） | 已修：`export` 的 SqlInsert 分支提前返回、不持锁；`insert_statements` 文档写明「调用方不得持锁」 |
 | I0e | 临时表名只由目标表名派生（`temp_mock_{表名}`） | 同名目标表并发生成会互相覆盖临时表内容（单用户顺序操作为下无影响，集成测试并行必须用不同表名） | 若将来引入后台并发生成，给临时表名加会话后缀 |
 
@@ -391,7 +398,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | I10 | ~~出口（持久化为分析库表 / 另存为 / 草稿箱）仍是**同步阻塞**调用~~ | 已解决：出口并入 `mock_jobs` 的任务种类（`Persist` / `Export` / `Scratchpad`），阶段上报 + 不定量进度条 | —— |
 | I8 | ~~复杂参数（`ForeignKey.values` / `Sequence.values` / `Weighted.choices`）无编辑入口~~ | 已解决：列编辑对话框里的**多行文本**（一行一项 / 一行「值, 权重」）+ 生成前拦空集合与全零权重（D28） | —— |
 | I11 | ~~「列依赖 / 外键」模型空转~~ | **已解决**：跨表引用现在挂在列上（`ColumnDependency::foreign_key` 是唯一构造点），生成路径真的读它——`MockEngine::resolve_reference_domains` 算域 + 校验，`generate_table` 按域采样；内置 6 套模板的 24 处引用已从「范围手写」改为声明引用（blog 顺带补了缺失的父表 `users`）。历史上它是「用范围对齐父表行数」的手写约定（5/6 套恰好落域内，blog 有 2 处悬空，v1 同款），升级后由自检测试盯住：声明可解析 / 生成器域 ⊆ 父域 / 每个 `*_id` 列要么声明要么在白名单。**仍不考虑**：跨模板 / 跨库引用，以及从已落地数据里取值（那是后续的**影子数据**，不属本轮边界） | —— |
-| I12 | v1 原型的「⚙ 高级抽屉 / 时序关联（可选）」未迁 | v1 前端有 UI（`v1/frontend/extensions/builtin/workbench/ui/components/panels/MockAdvancedDrawer.vue`）、v1 后端**零实现**（`v1/backend` 全文 grep 无 timeseries / 趋势）；v2 不迁 | 若真要做，应作为「数值列跟随日期列趋势」的**独立生成器**重新设计，而不是搬抽屉（见 `mock-prototype-design.md` §4.5） |
+| I12 | v1 原型的「⚙ 高级抽屉 / 时序关联（可选）」未迁 | v1 前端有 UI（`v1/frontend/extensions/builtin/workbench/ui/components/panels/MockAdvancedDrawer.vue`）、v1 后端**零实现**（`v1/backend` 全文 grep 无 timeseries / 趋势）。**已部分落地**：`GeneratorConfig::TimeSeries`（起始值 + 趋势 + 周期 + 噪声，按行序展开）＋ `sequential_date` 同一行序并排即一条时间序列；**仍未做**的是「真的看日期列的实际取值」——那属跨列求值 | 剩下的部分要做就作为「数值列跟随日期列」的**跨列求值**独立特性重新设计，而不是搬抽屉（见 `mock-prototype-design.md` §4.5） |
 | I13 | **影子数据**（读已落地数据、按其特征生成相似数据） | 与当前的「生成不读数据」边界相反：本轮的表间引用**不读任何已落地数据**（域由父表参数算出）；把“读真实数据再仿制”做进来会同时碰到 I1（只进分析引擎）与「不改已落地数据」两条 | 要做就单独立项：读什么（表 / 文件）、读多少、采样出来的值怎么回写（只写内存临时表）都要先定；本轮的引用设计**不构成障碍**（引用列只是众多生成器中的一种） |
 | I14 | **落地数据之间的引用完整性**：出口以「当前表」为单位，而关系是跨表的 | 只落子表不落父表，项目库里就有悬空值（而 mock 不改已落地数据，也不会替用户补）——未来 JOIN 会落空。**当前处置**（§4.6 / D30）：出口区给 warning 说明跨表后果（「引用了 x → y.z：只落这张表…」/「被 … 引用：…」）+ 列出「关系里还有 N 张没落库」+ **一键依次落库**；场景态里写明“场景生成不记入历史” | **剩下的方向未拍板**：落库时给目标表加 `FOREIGN KEY` DDL（DuckDB 要求父表先存在、插入顺序受限，与现在的自由落库 / 追加相冲）。至于「跨会话续落」（上次落的父表 + 这次生成的子表）——那要读已落地的数据，属影子数据的边界之外 |
 | I15 | ~~生成期参数没有护栏 → panic → **锁毒化、会话废掉**~~ | 实测：`RandomInt{min>max}`、映射兜底 `Sentence{1,1}` 等空区间会在工作线程里 panic；panic 发生在持有内存库连接锁期间 → `Mutex` 被毒化，**该进程之后每次生成都报 `poisoned lock`**；再叠加 worker 侧「panic 后进度槽永远 `Some`」，面板卡在「已有任务在进行中」且取消按钮不再渲染——只能重启应用 | **已解决**（D33）：① 兜底改 `Sentence{1,3}`；② `generator_param_problem` 把「不能采样」的参数全拦在生成前（区间类 / 时间区间 / 权重非负且和 > 0），错误带具体数字；③ `get_conn` 遇毒化**复用连接**并 `warn`；④ `mock_jobs::worker` 用 `catch_unwind` 把 panic 降级成「这一次任务失败」。回归：单元 4 项 + 引擎集成 1 项 + workbench 2 项 |
@@ -410,7 +417,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 
 | 层 | 位置 | 数量 | 锁什么 |
 | --- | --- | --- | --- |
-| 单元 | `crates/mock/src/*.rs`（`#[cfg(test)]`） | 79 | 表名净化、DDL 生成（**列名净化 / 净化后为空与重名都要报可读错误**）、`generate_cell` 各变体、列名规则表、类型串解析、序列化往返、**生成前护栏**（反向区间 / 半开空区间 / 负权重 / 时间区间不足一分钟全被拦，合法参数不被误拦）、**SQL 字面量覆盖**（时间戳 / 日期 / 时间 / 十进制 / 大整数 / 二进制 / 区间）、模板自检（**4 项关系自检**：声明可解析 / 生成器域 ⊆ 父域 / `*_id` 列必须声明或进白名单 / 白名单无幽灵条目）、生成器目录自检（3：137 覆盖 / 标签与默认 / 分类往返） |
+| 单元 | `crates/mock/src/*.rs`（`#[cfg(test)]`） | 79 | 表名净化、DDL 生成（**列名净化 / 净化后为空与重名都要报可读错误**）、`generate_cell` 各变体、列名规则表、类型串解析、序列化往返、**生成前护栏**（反向区间 / 半开空区间 / 负权重 / 时间区间不足一分钟全被拦，合法参数不被误拦）、**SQL 字面量覆盖**（时间戳 / 日期 / 时间 / 十进制 / 大整数 / 二进制 / 区间）、模板自检（**4 项关系自检**：声明可解析 / 生成器域 ⊆ 父域 / `*_id` 列必须声明或进白名单 / 白名单无幽灵条目）、生成器目录自检（3：143 覆盖 / 标签与默认 / 分类往返） |
 | 视图 | `crates/mock/src/mock_view/tests.rs`（GPUI headless，窗口根 `Root`） | 86（23 纯逻辑 + 63 窗口） | 解析 / 校验 / JSON 参数补丁 / 摘要文案 / **行数千分位**（`with_thousands`，六位数量级）；**场景菜单文案**（名称 + 张表 + 千分位行数，取真实内置模板）；**生成器搜索**（空查=全量 / 标签前缀优先 / 多词 AND / 大小写不敏感 / 分类名可搜 / 无命中为空）；**复杂参数**（取值集合往返 / 分隔符变体 / 行号可读错误 / 摘要项数）；面板空态与候选加载（连接 + 既有分析表）；**切项目清掉项目级清单**（既有表 / 连接）；**生成不写库**（三出口调用计数为零）；行数与列校验失败不触宿主；落库新建 → 同名报错；追加按目标表重算自增；只读拦截四个出口；列增删与「改列作废旧结果」；智能默认恢复；定向导入结构；三个对话框可开（导入 / 列编辑 / 生成器搜索）；生成器搜索过滤→确认写回；约束类列的对话框可开 + 集合类参数写回 / 非法输入保留上一个有效值；详情 tab 渲染与 `focus_tab`（含进 Dock 后真正切 tab）；**一表一 tab**（每张结果表一个 tab · 身份是表名 · 切 tab 即切表 · 标题带表名与行数 · 各 tab 预览认自己那张表 · 生成本身不开 tab · **真实 Dock 里切 tab 也验**：`set_active` 是排程投递的，用例用 `run_until_parked` 把它推到位）；**后台任务**：进度镜像 / 取消 / 提交失败 / 异常结束 / 重复提交被拒；**出口后台化**：落库 / 导出 / 草稿箱的阶段与结果、完成后预览保留、出口不可取消、无生成结果时拒绝提交；**切项目作废旧结果**（草稿保留、无临时表可清时不报提示）；**场景模板**：选模板只载入工作副本（不提交任务）；**自定义多表**：草稿加表（名字 / 行数 / 列取值与草稿一致、重名拒、空列拒、加完能一起生成）、删表连带清入边（出边随表消失）；**跨表后果与批量落库**：出口提示引用了谁 / 被谁引用、待落库清单与闭包计算（已落库的跳过）、一键依次落库、部分失败保留成功的、无待落时拒绝提交/ 未知 id 可读错误 / 退出场景态 / 关系是派生视图（扫列的 `dependency`）/ **加关系写在子列上并把生成器对齐到父域** / 父列非自增时拒并给原因 / 四个位置没选全也拒 / **提交的是编辑后的工作副本**（关系随任务走）/ 一次回填多张结果（顺序即模板表序）/ 来源标注 / 切换当前表看 `gen_info` / 越界下标不改状态 / 出口落选中那张（表名与临时表都取自结果）/ 导出文件名跟当前表 / 单表生成清掉场景态 / 进度按「张表」计（`rows_done` 为 0）；**编辑表**（改行数 → 引用它的关系取值域跟着走、父列非自增时不给域 / 改名 → 入边自动重定向且照旧能生成 / 空表名 · 非法标识符 · 撞已有表名 · 非法行数都拒且**不收起对话框**、工作副本原样不动） |
 | 集成（引擎） | `crates/mock/tests/mock_engine_tests.rs` | 34 | 公开 API 端到端：生成 / 预览 / 映射 / 取消标志 / 类型串（含带修饰的形状） / 五种导出 / 持久化 / 草稿目录 / 模板 / 场景；**取值覆盖**：时间 / 日期 / 十进制列在预览与 SQL 导出里都有值（不是 NULL）、非法参数在生成前被拦且拦完内存库仍可用；**跨库直写**：建表（含中文列名）/ 追加 / 同名建表不删既有数据 / 失败回滚 + 解挂；**集合类参数**：空集合与全零权重生成前拦住 / 填了就能生成且取值来自集合 |
 | 单元（engine 侧共用渲染） | `crates/engine/src/duckdb/value_text.rs` + `row_to_arrow.rs` | 3 + 3 | `value_text`：时间戳 / 日期 / 时间 / 区间 / 二进制 / 容器 / NULL 的文本渲染；`row_to_arrow`：时间与十进制不再变 NULL、容器给文本、真 NULL 仍是 NULL |
@@ -436,13 +443,14 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D28 集合类参数编辑与前置校验 | `mock_view.rs`（`parse_complex_param` / `complex_param_text` / `split_choice` / `ParamWidget` / `commit_complex_param`）+ `crates/mock/src/engine.rs`（`generator_param_problem`，**生成前的唯一闸门**：集合 / 区间 / 时间区间 / 权重） |
 | D35 一表一 tab | `mock_view.rs`（`DetailTarget` / `MockDetailView::target`·`tab_label` / `BasePanel::set_active` → `MockPanel::focus_table` / `open_detail_for`·`open_table_detail` / 结果表清单点行 / 结果表 tab 的只读列 `render_result_columns`）+ `crates/workbench/src/view.rs`（`Shared.mock_details` 按 key 去重开 tab）+ `panels/shared.rs`（句柄表与宿主命令签名） |
 | D33 参数护栏与 panic 围栏 | `crates/mock/src/engine.rs`（`generator_param_problem` / `datetime_range_problem` / `date_range_problem`；`get_conn` 遇锁毒化复用连接并 `warn`）+ `crates/mock/src/schema_map.rs`（文本兜底 `Sentence{1,3}`）+ `crates/workbench/src/services/mock_jobs.rs`（`run_job_catching` = `catch_unwind` 兜住 panic → 一次任务失败） |
+| D41 分布族与时序实现 | `crates/mock/src/generators.rs`（`standard_normal` / `gamma_sample` + `Poisson` / `Exponential` / `Pareto` / `Beta` / `Binomial` / `TimeSeries` 分支）+ `crates/mock/src/engine.rs`（分布参数的生成前护栏）+ `tools/gen_mock_generator_catalog.py`（标签 / 参数 / 默认值） |
 | D34 值 → 文本唯一实现 | `crates/engine/src/duckdb/value_text.rs`（`display_text` / `timestamp_text` / `date_text` / `time_text` / `interval_text` / `blob_hex`）+ `row_to_arrow.rs`（非原生类型走 `display_text`）+ `crates/mock/src/engine.rs`（`value_to_sql_literal` 补时间 / 十进制 / 二进制 / 大整数） |
 | 列名净化一致性 | `crates/mock/src/engine.rs`（`sanitize_identifier` + `build_create_table_ddl` 与 `safe_col_names` 同算法）+ `crates/workbench/src/services/mock_generator.rs`（`column_def_infos`，落地侧同口径） |
 | D36/D37 取消重发与不等锁清理 | `mock_view.rs`（`poll_job` 的 Running 分支重发 `cancel_job`；`job_project` 记提交时的项目并在 `finish_job` 里做归属告知与历史抉择）+ `mock_view.rs::MockPanel` / `crates/workbench/src/panels/shared.rs`（`pending_temp_cleanup`）+ `crates/mock/src/engine.rs`（`try_clear_temp_tables`）+ `crates/engine/src/duckdb/manager.rs`（`try_drop_in_memory_temp_tables`）+ `crates/workbench/src/components/{project_host,mock_host}.rs`（切项目不等锁 / 收尾重试）+ `crates/workbench/src/view.rs`（启动取锁 → `read_only`） |
 | D27 临时表清理 | `crates/engine/src/duckdb/temp_table.rs`（`TempTableSource::prefixes` / `list_by_source` / `drop_by_source`）+ `manager.rs`（`in_memory_temp_tables` / `drop_in_memory_temp_tables`）+ `crates/mock/src/engine.rs`（`clear_temp_tables` / `temp_tables`）+ `crates/workbench/src/components/project_host.rs`（切项目时清理 + 面板作废 + **重读候选清单**）+ `mock_view.rs`（`forget_generated` 清结果与项目级清单） |
 | D1/D2 内存临时表与命名 | `crates/mock/src/engine.rs`（`TEMP_MOCK_PREFIX` / `get_db` / `sanitize_table_name`） |
 | 生成批次与取消 | `crates/mock/src/engine.rs`（`BATCH_SIZE` / `CANCEL_FLAG` / `generate_with_progress`） |
-| 生成器实现（137 变体） | `crates/mock/src/generators.rs`（`generate_cell`） |
+| 生成器实现（143 变体） | `crates/mock/src/generators.rs`（`generate_cell`；分布类另有三个助手：`standard_normal`（Box-Muller）/ `gamma_sample`（Marsaglia-Tsang）/ 逆变换内联在各分支） |
 | D7 类型串唯一入口 | `crates/mock/src/schema_map.rs`（`parse_data_type`）+ `lib.rs` re-export |
 | 列名规则与置信度 | `crates/mock/src/schema_map.rs`（`ColumnMapper::exact_rules/suffix/fuzzy/fallback_by_type`） |
 | 模板与场景生成 | `crates/mock/src/templates.rs` + `engine.rs::generate_scenario` + **装配层 `mock_generator::generate_scenario_at`**（逐表补预览；装配层入口） |
