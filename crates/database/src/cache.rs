@@ -70,7 +70,17 @@ impl NavCache {
     /// 清理某 schema 的缓存行（刷新时先删后写；依赖外键级联删除表 / 列）。
     pub fn prune_schema(&mut self, catalog: &str, schema: &str) {
         if let Some(id) = self.schema_id(catalog, schema) {
-            let _ = self.ops.delete_schema(id);
+            // 失败不能静默：刷新路径全靠它清掉旧行。历史上底层 `delete_schema` 引用了
+            // 不存在的 `views` 表（整事务回滚），而这里 `let _ =` 把现象吞成了
+            // 「点了刷新但旧对象还在」——排查成本极高，故改为告警留痕。
+            if let Err(e) = self.ops.delete_schema(id) {
+                tracing::warn!(
+                    catalog,
+                    schema,
+                    error = %e,
+                    "清理导航缓存失败：已删除的对象会残留在缓存里"
+                );
+            }
         }
     }
 
@@ -150,6 +160,9 @@ impl NavCache {
             return;
         };
         for (ix, col) in columns.iter().enumerate() {
+            // 第 7 个参数是 `is_identity`（自增标识），不是 `is_unique`：
+            // `columns` 表没有唯一性列（唯一性由 `indexes` 表达），而 `ColumnDetail`
+            // 也不携带自增信息，所以保守写 false——主键走 `is_primary`，两者互不佑替。
             let _ = self.ops.save_column(
                 table_id,
                 &col.name,
@@ -235,5 +248,44 @@ mod tests {
     #[test]
     fn project_connection_without_root_has_no_cache() {
         assert!(NavCache::open("P_conn_no_root", None).is_none());
+    }
+
+    /// 刷新路径：`prune_schema` 必须真正清掉旧行。
+    ///
+    /// 这是「右键 ▸ 刷新元数据」的用户可见行为回归点——此前底层 `delete_schema`
+    /// 引用了不存在的 `views` 表，整条事务回滚，刷新后旧对象仍命中缓存。
+    #[test]
+    fn prune_schema_clears_stale_rows() {
+        let root = temp_root("prune");
+        let root_s = root.to_string_lossy().to_string();
+
+        let mut cache = NavCache::open("P_conn_prune", Some(&root_s)).expect("打开缓存");
+        cache.put_schemas("main", &["public".to_string()]);
+        let sid = cache.schema_id("main", "public").expect("schema_id");
+        cache.put_objects(
+            sid,
+            &[SchemaObject {
+                name: "t_old".to_string(),
+                kind: SchemaObjectKind::Table,
+                children: None,
+                comment: None,
+                table_name: None,
+                event: None,
+            }],
+        );
+        cache.put_columns(sid, "t_old", &[col("id", true)]);
+        assert!(cache.objects(sid, false).is_some(), "前置：应命中表");
+        assert!(cache.columns(sid, "t_old").is_some(), "前置：应命中列");
+
+        cache.prune_schema("main", "public");
+
+        assert!(
+            cache.schema_id("main", "public").is_none(),
+            "schema 行应被清掉"
+        );
+        assert!(cache.objects(sid, false).is_none(), "刷新后不应命中旧表");
+        assert!(cache.columns(sid, "t_old").is_none(), "刷新后不应命中旧列");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

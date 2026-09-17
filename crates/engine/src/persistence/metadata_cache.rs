@@ -800,6 +800,12 @@ impl MetadataCacheOps {
     // ==================== Column 操作（规范化） ====================
 
     /// 保存列元数据
+    ///
+    /// `is_identity`（自增/生成标识）与 `is_primary`（主键）是**两个独立维度**，见迁移
+    /// 008 的抬头（其存在的原因就是这两列曾被拥挤在一起）。历史上本方法的第 7 个参数
+    /// 叫 `_is_unique`、被直接丢弃，而 `is_identity` 又拿 `is_primary` 顶替——迁移把列拆开
+    /// 了，写入侧没跟上；`columns` 表也没有 `is_unique` 列（唯一性由 `indexes` 表达），
+    /// 所以该参数已换成真正有含义的 `is_identity`。
     #[allow(clippy::too_many_arguments)]
     pub fn save_column(
         &self,
@@ -809,7 +815,7 @@ impl MetadataCacheOps {
         ordinal_position: i32,
         is_nullable: bool,
         is_primary: bool,
-        _is_unique: bool,
+        is_identity: bool,
         column_default: Option<&str>,
         comment: Option<&str>,
     ) -> Result<i64, CoreError> {
@@ -824,7 +830,7 @@ impl MetadataCacheOps {
             "INSERT OR REPLACE INTO columns
              (table_id, column_name, ordinal_position, data_type, is_nullable, is_identity, is_primary, column_default, column_comment, introspect_level, is_loaded, last_sync, last_accessed)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 3, 1, ?10, ?10)",
-            rusqlite::params![table_id, column_name, ordinal_position, data_type, is_nullable as i32, is_primary as i32, is_primary as i32, column_default, comment, now],
+            rusqlite::params![table_id, column_name, ordinal_position, data_type, is_nullable as i32, is_identity as i32, is_primary as i32, column_default, comment, now],
         ).map_err(|e| CoreError::storage(
             StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -1102,6 +1108,11 @@ impl MetadataCacheOps {
     // ==================== View 操作 ====================
 
     /// 保存视图定义
+    ///
+    /// `view_definitions` 与视图（`tables` 里 `table_type = 'VIEW'` 的那一行）是 1:1：
+    /// 这里同时写 `id = table_id` 以满足「一条视图一行定义」并让重复保存幂等。
+    /// 注意 `table_id` 是 `NOT NULL` 且带 `ON DELETE CASCADE`——历史实现的 INSERT
+    /// 漏了这列，语句直接违反非空约束，视图定义因此从未真正落库（调用方还吞了错）。
     pub fn save_view(
         &self,
         table_id: i64,
@@ -1118,8 +1129,8 @@ impl MetadataCacheOps {
 
         self.conn.execute(
             "INSERT OR REPLACE INTO view_definitions
-             (id, view_definition, is_updatable, check_option, introspect_level, is_loaded, last_sync)
-             VALUES (?1, ?2, ?3, ?4, 3, 1, ?5)",
+             (id, table_id, view_definition, is_updatable, check_option, introspect_level, is_loaded, last_sync)
+             VALUES (?1, ?1, ?2, ?3, ?4, 3, 1, ?5)",
             rusqlite::params![table_id, view_definition, is_updatable.map(|b| b as i32), check_option, now],
         ).map_err(|e| CoreError::storage(
             StorageError::Persistence {
@@ -2736,7 +2747,10 @@ impl MetadataCacheOps {
         Ok(result)
     }
 
-    /// 删除 Schema 及关联数据（级联）
+    /// 删除 Schema 及关联数据（级联），返回删除的行数
+    ///
+    /// 计数含：schema 本身 + 表/视图（规范化模型里视图是 `tables` 的一行）+ 例程；
+    /// 子表（columns / indexes / view_definitions 等）由外键级联删除，不计入。
     pub fn delete_schema(&mut self, schema_id: i64) -> Result<usize, CoreError> {
         // 先获取 schema 信息用于 FTS 清理
         let schema_name: String = self
@@ -2762,7 +2776,14 @@ impl MetadataCacheOps {
             })
         })?;
 
-        // 删除 tables（会通过触发器级联删除 columns 和 indexes）
+        // 删除 tables —— **视图也在这张表里**（`table_type = 'VIEW'`）：规范化模型没有
+        // 独立的 `views` 表（见迁移 005/006/007 的注释），本语句同时清掉表与视图。
+        // columns / indexes / foreign_keys / check_constraints / view_definitions /
+        // triggers 均由外键 `ON DELETE CASCADE` 级联（`open()` 已设 `PRAGMA foreign_keys=ON`）。
+        //
+        // 谨记：这里曾写有 `DELETE FROM views`，而该表根本不存在——整条语句报
+        // "no such table: views"、事务回滚，调用方（`NavCache::prune_schema`）用
+        // `let _ =` 吞掉错误，于是「刷新元数据」永远清不掉旧行。
         let table_count = tx
             .execute(
                 "DELETE FROM tables WHERE schema_id = ?1",
@@ -2772,20 +2793,6 @@ impl MetadataCacheOps {
                 CoreError::storage(StorageError::Persistence {
                     store: "sqlite".to_string(),
                     operation: "delete_tables".to_string(),
-                    reason: e.to_string(),
-                })
-            })?;
-
-        // 删除 views
-        let view_count = tx
-            .execute(
-                "DELETE FROM views WHERE schema_id = ?1",
-                rusqlite::params![schema_id],
-            )
-            .map_err(|e| {
-                CoreError::storage(StorageError::Persistence {
-                    store: "sqlite".to_string(),
-                    operation: "delete_views".to_string(),
                     reason: e.to_string(),
                 })
             })?;
@@ -2839,7 +2846,7 @@ impl MetadataCacheOps {
             })
         })?;
 
-        Ok(schema_deleted + table_count + view_count + routine_count)
+        Ok(schema_deleted + table_count + routine_count)
     }
 
     // ==================== V6: 索引表与懒加载 ====================
@@ -5086,6 +5093,101 @@ mod tests {
 
         let result = ops.list_tables("test_db", None);
         assert!(result.is_err());
+        Ok(())
+    }
+
+    /// 建一个跑过迁移、且 `PRAGMA foreign_keys=ON` 的缓存库（项目型 → 文件落在临时目录）。
+    /// 返回 (操作句柄, 库文件路径, 临时根)。
+    fn fresh_ops(tag: &str) -> (MetadataCacheOps, PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("rdata_test_mdc_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+
+        let project = dir.to_string_lossy().to_string();
+        let manager =
+            MetadataCacheManager::new("test_conn_mdc", ConnectionType::Project, Some(&project))
+                .expect("构造缓存管理器");
+        let db_path = manager.db_path().clone();
+        let conn = manager.open().expect("打开缓存库（含迁移与 PRAGMA）");
+        (MetadataCacheOps::new(conn), db_path, dir)
+    }
+
+    /// 回归：`delete_schema` 必须真正删掉表 / 视图 / 列。
+    ///
+    /// 历史缺陷：函数里有 `DELETE FROM views`，而规范化模型没有 `views` 表（视图是
+    /// `tables` 里 `table_type='VIEW'` 的行）——语句报 `no such table: views`、事务回滚；
+    /// 调用方 `NavCache::prune_schema` 又用 `let _ =` 吞错，于是「刷新元数据」静默失效。
+    #[test]
+    fn delete_schema_clears_tables_views_and_children() -> Result<(), CoreError> {
+        let (mut ops, db_path, dir) = fresh_ops("delete_schema");
+
+        let schema_id = ops.save_schema("main", "public", None, None)?;
+        let table_id = ops.save_table(schema_id, "t1", "TABLE", Some("表"), None, None)?;
+        ops.save_column(table_id, "id", "INTEGER", 0, false, true, false, None, None)?;
+        let view_id = ops.save_table(schema_id, "v1", "VIEW", None, None, None)?;
+        ops.save_view(view_id, "SELECT 1", None, None)?;
+
+        // 前置：视图定义确实落库（`table_id` 是 NOT NULL，历史实现漏写该列）
+        let views: i64 = ops
+            .get_connection()
+            .query_row("SELECT COUNT(*) FROM view_definitions", [], |r| r.get(0))?;
+        assert_eq!(views, 1, "save_view 应写入 view_definitions");
+
+        let deleted = ops.delete_schema(schema_id)?;
+        assert!(deleted >= 2, "至少删掉 schema + 表/视图，实际 {deleted}");
+        assert!(
+            ops.list_tables_normalized(schema_id, None)?.is_empty(),
+            "表/视图应被清空"
+        );
+        assert!(ops.get_schema_id("main", "public")?.is_none(), "schema 行应删除");
+
+        // 级联：子表不得留孤儿行（依赖 PRAGMA foreign_keys=ON + ON DELETE CASCADE）
+        drop(ops);
+        let raw = Connection::open(&db_path)?;
+        for (table, column) in [
+            ("columns", "table_id"),
+            ("view_definitions", "table_id"),
+            ("indexes", "table_id"),
+        ] {
+            let orphans: i64 = raw.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?1"),
+                rusqlite::params![table_id],
+                |r| r.get(0),
+            )?;
+            assert_eq!(orphans, 0, "{table} 应无孤儿行（级联删除）");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// `columns.is_identity`（自增）与 `columns.is_primary`（主键）必须各自独立写入。
+    ///
+    /// 迁移 008 专门为此拆列（抬头写着「之前 is_primary 被映射到 is_identity 列，
+    /// 但主键 ≠ 自增列」），但写入侧一直把同一个值塞进两列——本测试锁死这个语义。
+    #[test]
+    fn save_column_keeps_identity_and_primary_independent() -> Result<(), CoreError> {
+        let (ops, _db_path, dir) = fresh_ops("column_flags");
+        let schema_id = ops.save_schema("main", "public", None, None)?;
+        let table_id = ops.save_table(schema_id, "t1", "TABLE", None, None, None)?;
+
+        // 自增主键：两列都为真
+        ops.save_column(table_id, "id", "INTEGER", 0, false, true, true, None, None)?;
+        // 普通主键（如 uuid）：是主键但**不是**自增
+        ops.save_column(table_id, "code", "TEXT", 1, false, true, false, None, None)?;
+
+        let cols = ops.list_columns_normalized(table_id)?;
+        let id = cols.iter().find(|c| c.column_name == "id").expect("id 列");
+        assert!(id.is_primary_key && id.is_identity, "id 应同时是主键与自增");
+
+        let code = cols
+            .iter()
+            .find(|c| c.column_name == "code")
+            .expect("code 列");
+        assert!(code.is_primary_key, "code 应是主键");
+        assert!(!code.is_identity, "code 不是自增列（旧实现会误报为自增）");
+
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 }

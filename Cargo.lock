@@ -7935,6 +7935,7 @@ dependencies = [
  "serde_json",
  "specta",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -7942,6 +7943,7 @@ name = "rds-editor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gpui-kit",
  "lsp-types",
  "rds-engine",
