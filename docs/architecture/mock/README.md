@@ -29,7 +29,7 @@
 | 生成器目录穷尽派生 | 137 变体的分类 / 标签 / 参数规格由脚本从 `models.rs` 派生，新增变体编译失败强制补齐 |
 | 生成器两条找法 | 分类子菜单（知道属于哪类）+ **搜索对话框**（只记得名字：按中文标签 / 名称 / 分类过滤，多词 AND） |
 | 集合类参数可编辑 | `ForeignKey.values` / `Sequence.values` / `Weighted.choices` 在列编辑对话框里用多行文本填（一行一项 / 一行「值, 权重」）；留空或全零权重在生成前拦住，不会 panic |
-| 场景模板与列依赖 | 内置 6 套多表场景模板，面板「场景模板 ▾」一键生成（逐表进度按「张表」计，结果用「当前表」下拉切换）；列间依赖用 Kahn 拓扑排序定序（生成顺序，不是取值计算） |
+| 场景模板与列依赖 | 内置 6 套多表场景模板，面板「场景模板 ▾」一键生成（逐表进度按「张表」计，结果**一张表一个中央 tab**、右 Dock 结果表清单是管理入口）；列间依赖用 Kahn 拓扑排序定序（生成顺序，不是取值计算） |
 | SQL 全量走构造器 | DDL/DML/DQL 一律 `engine::sql::SqlEngine` 生成，`format!` 仅保留给 DuckDB 专有 `COPY` |
 
 ## 边界
@@ -103,7 +103,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（重型 crate 链接耗内存（DuckDB 已改动态链接）），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 160 单元（含 79 视图）+ 37 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
+cargo test  -p rds-mock -j 2                                   # 164 单元（含 83 视图）+ 37 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 12 项
 cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 11 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
@@ -114,7 +114,7 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 160 单元（23 纯逻辑 + 56 窗口 + 81 其他）+ 37 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
+| `cargo test -p rds-mock` | 164 单元（23 纯逻辑 + 60 窗口 + 81 其他）+ 37 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
 | `cargo test -p rds-workbench` | 全绿（含 12 装配 + 11 任务测试） |
 
