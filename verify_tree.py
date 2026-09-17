@@ -42,6 +42,8 @@ MINE = [
     "crates/engine/src/driver/native/duckdb.rs",
     "crates/engine/src/services/sql_service.rs",
     "crates/engine/src/persistence/history_store.rs",
+    "crates/engine/src/sql/filter.rs",
+    "crates/engine/src/sql/mod.rs",
     "crates/engine/src/connection_manager.rs",
     "crates/shared/src/error.rs",
     # 编辑器：结果区（B5）与错误回填（B6）

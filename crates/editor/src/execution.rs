@@ -60,17 +60,28 @@ pub enum ExecTarget {
         offset: usize,
         limit: usize,
     },
+    /// 【B14】下发源库：把筛选词翻成一条 **WHERE 重查**（结果落**新结果集**）
+    ///
+    /// 与 `Segment` 一样，编辑器只表达意图：**怎么拼 WHERE 是执行器的事**——方言差异
+    /// （CAST 目标类型）、去不去 LIMIT、ORDER BY 怎么摆，都得知道连接才能定。
+    /// 这里带的是拼条件需要的原料：原 SQL、筛选词、结果集的列名。
+    Filtered {
+        sql: String,
+        filter: String,
+        columns: Vec<String>,
+    },
 }
 
 /// 分段抓取的一段多少行（B5b；计划口径：固定 1000 行/段）
 pub const SEGMENT_ROWS: usize = 1000;
-    impl ExecTarget {
+
+impl ExecTarget {
     /// 要发给驱动的 SQL（`Empty` 与 `Batch` 为 `None`；后者看 [`Self::statements`]）
     pub fn sql(&self) -> Option<&str> {
         match self {
             Self::Empty | Self::Batch(_) => None,
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => Some(sql),
-            Self::Segment { sql, .. } => Some(sql),
+            Self::Segment { sql, .. } | Self::Filtered { sql, .. } => Some(sql),
         }
     }
 
@@ -80,7 +91,7 @@ pub const SEGMENT_ROWS: usize = 1000;
             Self::Empty => Vec::new(),
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => vec![sql.clone()],
             Self::Batch(list) => list.clone(),
-            Self::Segment { sql, .. } => vec![sql.clone()],
+            Self::Segment { sql, .. } | Self::Filtered { sql, .. } => vec![sql.clone()],
         }
     }
 
@@ -88,6 +99,18 @@ pub const SEGMENT_ROWS: usize = 1000;
     pub fn segment(&self) -> Option<(usize, usize)> {
         match self {
             Self::Segment { offset, limit, .. } => Some((*offset, *limit)),
+            _ => None,
+        }
+    }
+
+    /// 【B14】下发源库要的原料：`(原 SQL, 筛选词, 结果集的列)`
+    pub fn filtered(&self) -> Option<(&str, &str, &[String])> {
+        match self {
+            Self::Filtered {
+                sql,
+                filter,
+                columns,
+            } => Some((sql, filter, columns)),
             _ => None,
         }
     }
@@ -101,6 +124,7 @@ pub const SEGMENT_ROWS: usize = 1000;
             Self::All(_) => "全部",
             Self::Batch(_) => "批量",
             Self::Segment { .. } => "取下一段",
+            Self::Filtered { .. } => "下发筛选",
         }
     }
 }
@@ -341,6 +365,8 @@ pub struct QueryData {
     pub affected_rows: Option<u32>,
     /// 【B5b】这一段是不是**拿满了**（拿满 = 可能还有下一段；"还有没有"只靠这个判）
     pub has_more: bool,
+    /// 【B14】这次执行附带的一句话说明（如“已去掉原查询的 LIMIT”）；没有就是 `None`
+    pub notice: Option<String>,
 }
 
 /// 执行端口：**宿主提供"怎么把 SQL 跑出结果集"**
@@ -395,6 +421,20 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持中断".to_string())
     }
 
+    /// 【B14】下发源库：把筛选词拼成 `WHERE` 重查（**方言差异由实现负责**）
+    ///
+    /// `columns` 是结果集的列名（筛选命中的就是这些输出列）。默认实现 = 不支持下发
+    /// （宿主没接能力的真实状态，不是静默失败）。
+    fn run_filtered(
+        &self,
+        _connection: Option<&str>,
+        _sql: &str,
+        _filter: &str,
+        _columns: &[String],
+    ) -> Result<QueryData, String> {
+        Err("当前执行器不支持下发筛选".to_string())
+    }
+
     /// 【B5b】取下一段：`sql` 是**原 SQL**（不是上一段套了窗口的那句），
     /// `offset` = 已经拿到的行数
     ///
@@ -430,6 +470,8 @@ struct ExecJob {
     options: RunOptions,
     /// 【B5b】取下一段的 `(offset, limit)`；`Some` 时走 `fetch_next` 而不是 `run`
     segment: Option<(usize, usize)>,
+    /// 【B14】下发源库的筛选词与列名；`Some` 时走 `run_filtered`
+    filtered: Option<(String, Vec<String>)>,
 }
 
 /// 一次执行的结论（回到主线程）：**一条语句一条结论**
@@ -534,6 +576,14 @@ impl ExecChannel {
                                 offset,
                                 limit,
                             )
+                        } else if let Some((filter, columns)) = job.filtered.as_ref() {
+                            // 【B14】下发源库：拼 WHERE 的活交给执行器（它才知道方言）
+                            worker_runner.run_filtered(
+                                job.connection.as_deref(),
+                                &sql,
+                                filter,
+                                columns,
+                            )
                         } else {
                             // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
                             worker_runner.run(job.connection.as_deref(), &sql, job.options)
@@ -607,6 +657,10 @@ impl ExecChannel {
                 options,
                 // 【B5b】取下一段走另一条取数路径（`fetch_next`），其余字段都一样
                 segment: target.segment(),
+                // 【B14】下发筛选走 `run_filtered`（筛词与列名在这儿带上）
+                filtered: target
+                    .filtered()
+                    .map(|(_, filter, columns)| (filter.to_string(), columns.to_vec())),
             })
             .is_err()
         {
@@ -1012,6 +1066,7 @@ mod tests {
                 truncated: false,
                 affected_rows: None,
                 has_more: false,
+                notice: None,
             })
         }
 
@@ -1037,6 +1092,7 @@ mod tests {
                 truncated: false,
                 affected_rows: None,
                 has_more: false,
+                notice: None,
             })
         }
     }
@@ -1143,6 +1199,7 @@ mod tests {
                 truncated: false,
                 affected_rows: None,
                 has_more: false,
+                notice: None,
             })
         }
 

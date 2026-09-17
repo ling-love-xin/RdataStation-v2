@@ -795,6 +795,87 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             deleted.affected_rows
         );
 
+        // B14：下发源库 —— 把筛选词翻成一条 WHERE 重查（CAST 目标类型按方言给，宿主编）
+        let push_table = format!("rds_push_probe_{}", std::process::id());
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("CREATE TABLE {push_table} (n INTEGER, tag VARCHAR(32))"),
+        );
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("INSERT INTO {push_table} VALUES (1, 'alpha'), (2, 'beta'), (3, 'gamma')"),
+        );
+        let push_sql = format!("SELECT n, tag FROM {push_table} ORDER BY n");
+        let base = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Statement(push_sql.clone()),
+            ResultPlacement::Replace,
+            1,
+        );
+        assert!(
+            base[0].error.is_none(),
+            "{}：基准查询失败 —— {:?}",
+            target.driver,
+            base[0].error
+        );
+        let columns = base[0].columns.clone();
+        let pushed = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Filtered {
+                sql: push_sql.clone(),
+                filter: "mm".to_string(),
+                columns: columns.clone(),
+            },
+            ResultPlacement::NewSet,
+            1,
+        );
+        assert!(
+            pushed[0].error.is_none(),
+            "{}：下发筛选失败 —— {:?}",
+            target.driver,
+            pushed[0].error
+        );
+        assert_eq!(
+            pushed[0].rows,
+            vec![vec!["3".to_string(), "gamma".to_string()]],
+            "{}：下发只该回命中的那一行（`mm` 只命中 gamma）",
+            target.driver
+        );
+        // LIMIT 要被去掉：原查询 LIMIT 1 只能看到 alpha，不去掉就永远筛不到第 3 行
+        let limited = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Filtered {
+                sql: format!("{push_sql} LIMIT 1"),
+                filter: "mm".to_string(),
+                columns: columns.clone(),
+            },
+            ResultPlacement::NewSet,
+            1,
+        );
+        assert_eq!(
+            limited[0].rows.len(),
+            1,
+            "{}：带 LIMIT 的原查询下发后仍能筛到第 3 行（说明 LIMIT 真的去掉了）—— {:?}",
+            target.driver,
+            limited[0].error
+        );
+        // 「已去掉 LIMIT」的提示在编辑器侧（随执行结论进状态栏），面板测试已盯；
+        // 这里只钉“去掉之后真能筛到”。
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("DROP TABLE {push_table}"),
+        );
+        eprintln!(
+            "✅ {}：下发源库 —— 筛选词拼 WHERE 重查（命中 1 行；带 LIMIT 的原查询也能筛到全部）",
+            target.driver
+        );
+
         // B8：历史面板的数据源 —— 走编辑器执行三次（含一次失败），引擎的 `history_store`
         // 里就该有这三条，且耗时 / 成败 / 失败原因 / 行数 / 时间都是真值。
         let before = editor::history::load(500).map(|items| items.len()).unwrap_or(0);

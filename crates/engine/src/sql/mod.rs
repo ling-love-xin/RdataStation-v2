@@ -13,9 +13,11 @@
 //! - `builder` — Expression Builder 封装（DDL/DML 生成）
 //! - `formatter` — SQL 格式化
 //! - `transpiler` — 方言转换
+//! - `filter` — 下发源库的筛选改写（包一层子查询 + WHERE + ORDER BY 提到外层）
 
 mod builder;
 mod engine;
+mod filter;
 mod formatter;
 mod highlight;
 mod parser;
@@ -24,5 +26,6 @@ mod transpiler;
 
 pub use builder::QualifiedTable;
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
+pub use filter::{FilterRewrite, rewrite_with_filter};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
 pub use split::{split_statements, SqlStatement};

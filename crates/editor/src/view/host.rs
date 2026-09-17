@@ -19,6 +19,7 @@ use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputSt
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -133,6 +134,8 @@ pub struct EditorHostPanel {
     filter_version: u64,
     /// 【B15】防抖任务句柄（仅持有；下一次输入会取代它）
     filter_debounce: RefCell<Option<Task<()>>>,
+    /// 【B14】下发源库开关（原型 §5.5 的 `▢ 下发源库`）：开着时应用筛选会重查源库
+    pushdown: bool,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
@@ -285,6 +288,7 @@ impl EditorHostPanel {
             filter_text: String::new(),
             filter_version: 0,
             filter_debounce: RefCell::new(None),
+            pushdown: false,
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
@@ -1267,12 +1271,23 @@ impl EditorHostPanel {
         let mut fresh_failure: Option<String> = None;
         // 【B5b】取下一段失败的原因（要等结果区同步完再说，否则会被“选中那份没有错”冲掉）
         let mut segment_failure: Option<String> = None;
+        // 【B14】执行自带的一句说明（如“已去掉原查询的 LIMIT”）——同样要等同步完再说
+        let mut fresh_notice: Option<String> = None;
+        // 【B14】落在**新结果集**上的失败：它不抢选中（B2 的语义），所以结果区不会报它——
+        // 状态栏补一句，否则用户只看到标签上多个红点，不知道为什么
+        let mut background_failure: Option<String> = None;
         for outcome in outcomes {
             let is_mine = outcome.document == self.document;
             if is_mine {
                 mine_arrived += 1;
                 // B4：事务状态跟着结论回来（用户手敲 BEGIN / COMMIT 也走同一路径）
                 self.apply_tx_snapshot(outcome.transaction);
+                // 【B14】提示从**结论**里取（它随这次执行回来，不是猜的）
+                if let Ok(data) = outcome.result.as_ref()
+                    && let Some(notice) = data.notice.clone()
+                {
+                    fresh_notice = Some(notice);
+                }
             }
             let placement = outcome.placement;
             let entry = entry_from(outcome);
@@ -1287,6 +1302,12 @@ impl EditorHostPanel {
                     continue;
                 }
                 fresh_failure = Some(entry.sql.clone());
+                if placement == ResultPlacement::NewSet {
+                    background_failure = Some(format!(
+                        "新结果集执行失败：{}",
+                        entry.error.clone().unwrap_or_default()
+                    ));
+                }
             }
             self.shared.update_results(|store| store.push(entry, placement));
         }
@@ -1301,6 +1322,18 @@ impl EditorHostPanel {
             // 【B5b】取段失败的原因在这里说（同步结果区会按“选中那份”重写提示）
             let segment_reason = segment_failure.is_some();
             if let Some(reason) = segment_failure {
+                self.set_message(Some(reason), cx);
+            }
+            // 【B14】执行自带的说明（成功且没有失败原因时才说，别把失败提示盖掉）
+            if let Some(notice) = fresh_notice
+                && self.message.is_none()
+            {
+                self.set_message(Some(notice), cx);
+            }
+            // 【B14】没被选中的那份失败了：至少让状态栏说一句
+            if let Some(reason) = background_failure
+                && self.message.is_none()
+            {
                 self.set_message(Some(reason), cx);
             }
             // 【B7】导出在跑就推进它（还要抓就再提交一段；抓完了/崩了就落盘或作废）
@@ -1598,6 +1631,9 @@ impl EditorHostPanel {
     }
 
     /// 【B15】把当前筛选词应用到网格（事件路径：重算一次视图行序）
+    ///
+    /// 【B14】开关开着（且词非空）时，**同一份词也下发一次**：本地筛完再看源库那边——
+    /// 两档语义并存（原型 §5.5），下发产生的是一份**新结果集**，原结果不动。
     pub(crate) fn apply_filter(&mut self, cx: &mut Context<Self>) {
         let filter = self.filter_text.clone();
         let grid = self.grid.clone();
@@ -1607,6 +1643,45 @@ impl EditorHostPanel {
         });
         self.refresh_filter_hint(cx);
         cx.notify();
+        if self.pushdown && !self.filter_text.trim().is_empty() {
+            self.pushdown_filter(cx);
+        }
+    }
+
+    /// 【B14】下发源库：把当前筛选词交给执行器拼 `WHERE` 重查（结果落**新结果集**）
+    pub(crate) fn pushdown_filter(&mut self, cx: &mut Context<Self>) {
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(Some("没有可下发的结果集".to_string()), cx);
+            return;
+        };
+        let filter = self.filter_text.trim().to_string();
+        if filter.is_empty() {
+            self.set_message(Some("先填一个筛选词再下发".to_string()), cx);
+            return;
+        }
+        self.execute(
+            ExecTarget::Filtered {
+                sql: entry.sql.clone(),
+                filter,
+                columns: entry.columns.clone(),
+            },
+            // 原型 §5.5：下发**产生新结果集**，原结果保留
+            ResultPlacement::NewSet,
+            cx,
+        );
+    }
+
+    /// 【B14】开关切换：打开时若已有筛选词就立刻下发一次（“打开后把条件拼为 WHERE 重查”）
+    pub(crate) fn set_pushdown(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.pushdown = open;
+        cx.notify();
+        if open && !self.filter_text.trim().is_empty() {
+            self.pushdown_filter(cx);
+        }
     }
 
     /// 【B15】清除筛选（工具栏那个 ✕）：输入框清空也要走 change，所以直接一起做
@@ -2411,9 +2486,12 @@ impl Render for EditorHostPanel {
                 .h_flex()
                 .items_center()
                 .gap_1()
-                .w(rems(ui::RESULT_FILTER_WIDTH))
                 .debug_selector(|| "editor-result-filter".to_string())
-                .child(Input::new(&self.filter_input))
+                .child(
+                    div()
+                        .w(rems(ui::RESULT_FILTER_WIDTH))
+                        .child(Input::new(&self.filter_input)),
+                )
                 .when(!self.filter_text.trim().is_empty(), |row| {
                     let entity = cx.entity();
                     row.child(
@@ -2426,6 +2504,17 @@ impl Render for EditorHostPanel {
                                 entity.update(app, |panel, cx| panel.clear_filter(window, cx));
                             }),
                     )
+                })
+                // 【B14】下发源库开关（原型 §5.5 的 `▢ 下发源库`）：开着时应用筛选会重查
+                .child({
+                    let entity = cx.entity();
+                    Switch::new("editor-result-pushdown")
+                        .checked(self.pushdown)
+                        .label("下发源库")
+                        .on_click(move |checked, _window, app| {
+                            let open = *checked;
+                            entity.update(app, |panel, cx| panel.set_pushdown(open, cx));
+                        })
                 })
                 .into_any_element();
 

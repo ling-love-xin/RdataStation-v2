@@ -113,6 +113,58 @@ impl QueryRunner for EngineQueryRunner {
         Ok(data)
     }
 
+    /// 【B14】下发源库：把筛选词拼成 `WHERE` 重查，结果落**新结果集**
+    ///
+    /// 方言差异（CAST 目标类型）与 LIMIT 处理都在执行器里（它才知道连接是什么库），
+    /// 这里只把原料给过去。
+    fn run_filtered(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        filter: &str,
+        columns: &[String],
+    ) -> Result<QueryData, String> {
+        let manager = engine::connection_manager::get_connection_manager();
+        let db_type = self.runtime.block_on(async {
+            let conn_id = match connection {
+                Some(id) => Some(id.to_string()),
+                None => manager.get_active_connection_id().await,
+            }?;
+            manager
+                .get_connection_info(&conn_id)
+                .await
+                .map(|info| info.db_type)
+        });
+        // MySQL 没有 `CAST(x AS TEXT)` 这个目标类型（用 CHAR）；其余库用 TEXT
+        let cast_type = match db_type.as_deref() {
+            Some(kind) if kind.to_ascii_lowercase().starts_with("mysql") => "CHAR",
+            _ => "TEXT",
+        };
+        let rewritten = engine::sql::rewrite_with_filter(sql, columns, filter, cast_type)?;
+        let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
+        let options = SqlExecuteOptions {
+            // 下发是一次真查询：同样进历史（用户能回头找）
+            record_history: true,
+            timeout_ms,
+            ..Default::default()
+        };
+        let executed = self
+            .runtime
+            .block_on(self.service.execute(
+                connection.map(str::to_string),
+                &rewritten.sql,
+                options,
+            ));
+        editor::history::bump();
+        let executed = executed.map_err(|error| error.to_string())?;
+        let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
+        // 去掉过 LIMIT 要说出来（场景 34）：不说的话用户会以为“怎么多了这么多行”
+        data.notice = rewritten
+            .dropped_limit
+            .map(|limit| format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）"));
+        Ok(data)
+    }
+
     /// 【B5b】取下一段：同一条原 SQL 的后一段（引擎套窗口取，见 `SqlService::execute_segment`）
     fn fetch_next(
         &self,
@@ -207,6 +259,8 @@ fn to_data(result: &QueryResult, elapsed_ms: u64, truncated: bool) -> QueryData 
         affected_rows: result.affected_rows,
         // 非分段路径没有“下一段”可言；分段抓取由调用方按“拿没拿满”标
         has_more: false,
+        // 【B14】下发筛选的“已去掉 LIMIT”之类提示由调用方另设
+        notice: None,
     }
 }
 

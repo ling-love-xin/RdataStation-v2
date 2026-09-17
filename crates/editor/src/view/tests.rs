@@ -581,6 +581,7 @@ impl QueryRunner for ScriptRunner {
             truncated: false,
             affected_rows: None,
             has_more: false,
+            notice: None,
         })
     }
 }
@@ -630,6 +631,7 @@ impl QueryRunner for SizedRunner {
             truncated: false,
             affected_rows: None,
             has_more: false,
+            notice: None,
         })
     }
 }
@@ -658,6 +660,7 @@ impl QueryRunner for ToolbarRunner {
                 truncated: false,
                 affected_rows: Some(3),
                 has_more: false,
+                notice: None,
             });
         }
         if sql.contains("truncated") {
@@ -668,6 +671,7 @@ impl QueryRunner for ToolbarRunner {
                 truncated: true,
                 affected_rows: None,
                 has_more: false,
+                notice: None,
             });
         }
         Ok(QueryData {
@@ -677,6 +681,7 @@ impl QueryRunner for ToolbarRunner {
             truncated: false,
             affected_rows: None,
             has_more: false,
+            notice: None,
         })
     }
 }
@@ -713,6 +718,7 @@ impl QueryRunner for SegmentRunner {
             truncated: false,
             affected_rows: None,
             has_more: true,
+            notice: None,
         })
     }
 
@@ -731,6 +737,7 @@ impl QueryRunner for SegmentRunner {
             truncated: false,
             affected_rows: None,
             has_more: false,
+            notice: None,
         })
     }
 }
@@ -767,6 +774,7 @@ impl QueryRunner for MoreUnsupportedRunner {
             truncated: false,
             affected_rows: None,
             has_more: true,
+            notice: None,
         })
     }
 }
@@ -785,6 +793,7 @@ impl QueryRunner for LocatedFailureRunner {
             truncated: false,
             affected_rows: None,
             has_more: false,
+            notice: None,
         })
     }
 }
@@ -1285,6 +1294,7 @@ impl QueryRunner for TxRunner {
             truncated: false,
             affected_rows: None,
             has_more: false,
+            notice: None,
         })
     }
 
@@ -3162,6 +3172,157 @@ fn export_follows_the_filter(cx: &mut TestAppContext) {
         .expect("导出回执");
     assert!(message.contains("已筛选"), "回执要说明是筛选后的结果：{message}");
     std::fs::remove_file(&path).ok();
+}
+
+// ===== B14：下发源库 =====
+
+/// 假执行器（B14）：记下发筛选收到的原料，并回一条**带提示**的结果
+struct PushdownRunner {
+    /// 每次下发收到的 `(原 SQL, 筛选词, 列名)`
+    seen: std::sync::Arc<std::sync::Mutex<Vec<(String, String, Vec<String>)>>>,
+}
+
+impl QueryRunner for PushdownRunner {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        Ok(QueryData {
+            columns: vec!["id".to_string(), "name".to_string()],
+            rows: vec![vec!["1".to_string(), "orders".to_string()]],
+            elapsed_ms: 3,
+            truncated: false,
+            affected_rows: None,
+            has_more: false,
+            notice: None,
+        })
+    }
+
+    fn run_filtered(
+        &self,
+        _connection: Option<&str>,
+        sql: &str,
+        filter: &str,
+        columns: &[String],
+    ) -> Result<QueryData, String> {
+        self.seen
+            .lock()
+            .expect("锁")
+            .push((sql.to_string(), filter.to_string(), columns.to_vec()));
+        Ok(QueryData {
+            columns: columns.to_vec(),
+            rows: vec![vec!["2".to_string(), "orders_archive".to_string()]],
+            elapsed_ms: 9,
+            truncated: false,
+            affected_rows: None,
+            has_more: false,
+            // 下发的执行器会带上“已去掉 LIMIT”这类说明
+            notice: Some("已去掉原查询的 LIMIT 10（下发筛选要能查到全部行）".to_string()),
+        })
+    }
+}
+
+/// 【B14】下发源库：开关打开且已有筛选词 → 立刻重查，结果落**新结果集**
+#[gpui_kit::test]
+fn pushdown_re_runs_on_the_source_as_a_new_result_set(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(PushdownRunner {
+        seen: seen.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("select 1", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    assert_eq!(shared.results().set_count(&id), 1, "先是本地那一份");
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_filter_for_test("orders", cx);
+            panel.set_pushdown(true, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    let seen = seen.lock().expect("锁").clone();
+    assert_eq!(seen.len(), 1, "打开开关且已有筛选词 → 立刻下发一次");
+    assert_eq!(seen[0].0, "select 1", "下发用的是原 SQL（改写是执行器的事）");
+    assert_eq!(seen[0].1, "orders", "筛选词原样过去");
+    assert_eq!(
+        seen[0].2,
+        vec!["id".to_string(), "name".to_string()],
+        "结果集的列名要带过去（拼条件要用）"
+    );
+    assert_eq!(
+        shared.results().set_count(&id),
+        2,
+        "下发产生新结果集，原结果保留（原型 §5.5）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("执行器带的说明要显示出来");
+    assert!(message.contains("已去掉"), "{message}");
+}
+
+/// 【B14】开关关着（默认）：筛选只在本地，不打扰源库
+#[gpui_kit::test]
+fn local_filtering_does_not_touch_the_source(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(PushdownRunner {
+        seen: seen.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("select 1", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("orders", cx)));
+    wait_for_all_pending(cx, &panel);
+
+    assert!(
+        seen.lock().expect("锁").is_empty(),
+        "没开下发就不该重查源库"
+    );
+    assert_eq!(shared.results().set_count(&id), 1, "本地筛选不产生新结果集");
+}
+
+/// 【B14】执行器不支持下发：留一句可读原因（不静默）
+#[gpui_kit::test]
+fn pushdown_without_support_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_filter_for_test("a", cx);
+            panel.set_pushdown(true, cx);
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    // 失败的是**新结果集**（不抢选中）→ 标签上有红点，状态栏也要说一句
+    let tabs = result_tabs(cx, &panel);
+    assert_eq!(tabs.len(), 2, "下发失败也留一份（能被看见）");
+    assert!(
+        tabs.iter().any(|(_, failed)| *failed),
+        "失败的那份要带标记：{tabs:?}"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留原因");
+    assert!(message.contains("不支持下发筛选"), "{message}");
 }
 
 // ===== B7：导出 =====
