@@ -29,6 +29,7 @@ mod plugin;
 mod snapshot;
 mod temp_table;
 pub mod analysis;
+pub mod accel;
 pub mod row_to_arrow;
 pub mod value_text;
 

@@ -12,19 +12,19 @@
 //! “不能用”严重得多：用户会以为自己在看本地副本 / 联邦结果，实际跑的还是源库——
 //! 那是一条**静默的语义错误**。所以这里逐条给原因，宁可不给选。
 //!
-//! ## 本切片（切片一）的门控口径
+//! ## 本切片（切片二）的门控口径
 //!
 //! | 通道 | 条件 |
 //! | --- | --- |
-//! | 本地加速 | 连接存在 · **开启了 DuckDB 联邦**（`use_duckdb_fed`）· **执行侧已接入加速路由** · 分析引擎已起来 |
-//! | 联邦 | 同上 + **已注册外部源**（切片二/三才接） |
+//! | 本地加速 | 连接存在 · **开启了 DuckDB 联邦**（`use_duckdb_fed`）· 驱动类型可加速（mysql / postgres / sqlite / duckdb）· **扩展可用**（试过且失败才拦，见 `accel::extension_state`） |
+//! | 联邦 | 尚未接入（切片三：外部源注册入口） |
 //!
-//! 判据的顺序 = **谁能先改**：连接开关（用户自己就能改）→ 版本能力（执行侧接没接）→
-//! 运行时就绪（引擎起没起来）。行尾给的原因就是第一条过不去的，而不是一堆条件的合集。
+//! 判据的顺序 = **谁能先改**：连接开关（用户自己就能改）→ 驱动类型（换连接）→ 扩展
+//! （联网装一次 / 放离线包）。行尾给的原因就是第一条过不去的。
 //!
-//! “执行侧尚未接入”这一条是**如实**的关键：宿主执行器（`editor_exec.rs`）目前只会
-//! 把语句发到源库，所以这一档现在不可选——原因就写在菜单行尾。切片二接上真正的
-//! `ATTACH` 路由后，去掉这条判据即可（端口是唯一的开关处）。
+//! **扩展为什么是“试过才拦”**：安装扩展要联网（首次）也真的会失败，但菜单每帧都要画，
+//! 不能在这里做 I/O。所以没试过就不拦（让用户能选、执行时在**工作线程**上真装一次），
+//! 试过且失败就把原因记下来，之后菜单行尾就说那条原因（重试成功会清掉）。
 //!
 //! ## 不查库、不建连
 //!
@@ -65,33 +65,23 @@ impl ChannelsPort for WorkbenchChannels {
 
         let accelerated = if !connection.use_duckdb_fed {
             ChannelAvailability::blocked("该连接未开启本地加速（连接设置里的 DuckDB 联邦）")
-        } else if !execution_supports_accelerated() {
-            // 这一条是**如实**：宿主执行器还没接加速路由，选了也会发到源库
-            ChannelAvailability::blocked("本地加速的执行尚未接入")
-        } else if !engine::duckdb::DuckDBManager::is_initialized() {
-            ChannelAvailability::blocked("分析引擎尚未就绪")
         } else {
-            ChannelAvailability::ok()
+            match engine::duckdb::accel::AccelKind::from_db_type(&connection.driver) {
+                Err(reason) => ChannelAvailability::blocked(reason),
+                // 扩展试过且失败 → 如实挡着（原因就是装扩展失败的原话）；没试过不拦
+                Ok(kind) => match engine::duckdb::accel::extension_state(kind) {
+                    Err(reason) => ChannelAvailability::blocked(reason),
+                    Ok(()) => ChannelAvailability::ok(),
+                },
+            }
         };
 
         ChannelAvailabilitySet {
-            federated: if accelerated.available {
-                ChannelAvailability::blocked("尚未注册外部源")
-            } else {
-                // 连加速都不通就谈不上联邦：把第一道缺口如实说出来（别让用户以为是“缺外部源”）
-                accelerated.clone()
-            },
+            // 联邦查询的入口（注册外部源）还没接：与其给个“看着能用”的选项，不如如实说
+            federated: ChannelAvailability::blocked("联邦查询尚未接入（外部源注册入口）"),
             accelerated,
         }
     }
-}
-
-/// 本进程的执行器有没有“把语句发到本地加速副本”的能力
-///
-/// 切片二接上 `federation::attach_data_source` 之后这里改回 `true`——门控只有一个开关处，
-/// 免得散在界面上（用户改一处就生效）。
-fn execution_supports_accelerated() -> bool {
-    false
 }
 
 /// 把通道端口接到编辑器共享状态上（**启动装配调用一次**）
@@ -150,12 +140,26 @@ mod tests {
     fn an_unwired_execution_side_still_blocks_the_channel() {
         let availability = port(vec![connection("P_a", true)]).availability(Some("P_a"));
         let gate = availability.for_channel(ExecChannel::Accelerated);
-        assert!(!gate.available, "执行侧还没接加速路由，不许说能用");
-        assert!(gate.reason.unwrap_or_default().contains("尚未接入"));
-        // 联邦的缺口按“第一道没通的”说（尚未注册外部源属更靠后的一档）
+        assert!(
+            gate.available,
+            "开关开了、扩展没试过、驱动能加速 → 可造：{:?}",
+            gate.reason
+        );
+        // 联邦的入口还没接：必须挂在“尚未接入”上，而不是模模糊糊的“不可用”
         let federated = availability.for_channel(ExecChannel::Federated);
         assert!(!federated.available);
-        assert!(!federated.reason.unwrap_or_default().is_empty());
+        assert!(federated.reason.unwrap_or_default().contains("尚未接入"));
+    }
+
+    /// 驱动类型不能加速（比如将来接的 ClickHouse）→ 原因说在类型上，不报“开关没开”
+    #[test]
+    fn a_driver_without_acceleration_says_so() {
+        let mut item = connection("P_c", true);
+        item.driver = "clickhouse".to_string();
+        let availability = port(vec![item]).availability(Some("P_c"));
+        let gate = availability.for_channel(ExecChannel::Accelerated);
+        assert!(!gate.available);
+        assert!(gate.reason.unwrap_or_default().contains("clickhouse"));
     }
 
     /// 未绑定连接 / 连接不在列表：两档都要给可读原因，而不是静默不可用

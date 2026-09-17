@@ -9,7 +9,8 @@
 //! | --- | --- | --- |
 //! | 作用**源库对象**的写语句 / DDL | 允许（受连接只读策略） | **禁止**（本地副本只读） |
 //! | 事务 | 支持 | 不支持 |
-//! | 数据新鲜度 | 实时 | ATTACH 时的**快照**（徽标与状态栏要显式提示） |
+//! | 数据新鲜度 | 实时 | **实时**（本地加速是 `ATTACH` 源库，不是复制一份）——但**表清单**
+//! 在 `ATTACH` 时定型，源库后来新建的表要「重新 ATTACH」才看得见（切片二实测） |
 //!
 //! ## 门控如实
 //!
@@ -25,7 +26,7 @@ pub enum ExecChannel {
     /// 源库直连（实时数据；写语句与事务都在这档）
     #[default]
     Source,
-    /// DuckDB 本地加速（`ATTACH` 源库副本；只读快照）
+    /// DuckDB 本地加速（`ATTACH` 源库；**只读挂载**，读的是源库的实时数据）
     Accelerated,
     /// 联邦查询（DuckDB + 多个外部源）
     Federated,
@@ -64,14 +65,26 @@ impl ExecChannel {
         matches!(self, Self::Source)
     }
 
-    /// 数据是不是 `ATTACH` 时的快照（界面要显式提示新鲜度）
-    pub fn is_snapshot(self) -> bool {
+    /// 语句是不是在本机引擎（DuckDB）上跑的
+    ///
+    /// 它与“数据新鲜度”无关——加速档读的也是源库的实时数据（切片二实测），
+    /// 真正被它决定的是**能力边界**：写语句落在源库对象上时会被拒（只读挂载），
+    /// 事务没有意义（DuckDB 侧不参与源库事务）。
+    pub fn runs_locally(self) -> bool {
         !matches!(self, Self::Source)
     }
 
     /// 拒绝写语句时给用户的话（原型 §5.7 的口径）
     pub fn write_refusal(self) -> &'static str {
         self.label()
+    }
+
+    /// 写拒绝的完整理由（两档共用一句话：**源库是只读挂载的**）
+    pub fn write_refusal_reason(self) -> String {
+        format!(
+            "{}通道不能写源库（源库是只读挂载的），请切回源库再试",
+            self.write_refusal()
+        )
     }
 
     /// 从持久化的短码还原（认不出回源库——不假装记住了别的）
@@ -209,13 +222,13 @@ pub fn menu_items(
         .collect()
 }
 
-/// 状态栏那一段文案（原型 §2.5：`通道 源库`；非源库档要显式带“快照”提示）
+/// 状态栏那一段文案（原型 §2.5：`通道 源库`）
 ///
-/// 新鲜度是**能力边界**（原型 §5.7 那张表）：加速 / 联邦看到的是 `ATTACH` 那一刻的数据，
-/// 界面不提示就等于让用户拿旧数据当实时数据用。
+/// 非源库档带上**只读**两个字：那是用户最需要知道的能力边界（写语句会被拒，切回源库
+/// 才能改数据）。数据是实时的，所以**不写“快照”**——那会让人以为看到的是旧数据。
 pub fn status_text(channel: ExecChannel) -> String {
-    if channel.is_snapshot() {
-        format!("通道 {}（快照）", channel.label())
+    if channel.runs_locally() {
+        format!("通道 {}（源库只读）", channel.label())
     } else {
         format!("通道 {}", channel.label())
     }
@@ -247,10 +260,7 @@ pub fn statement_allowed(channel: ExecChannel, sql: &str) -> Result<(), String> 
         SqlStatementType::Insert
         | SqlStatementType::Update
         | SqlStatementType::Delete
-        | SqlStatementType::Ddl => Err(format!(
-            "{}通道不能写源库（本地副本只读），请切回源库再试",
-            channel.write_refusal()
-        )),
+        | SqlStatementType::Ddl => Err(channel.write_refusal_reason()),
         _ => Ok(()),
     }
 }
@@ -267,12 +277,12 @@ mod tests {
         assert_eq!(ExecChannel::ALL.len(), 3);
         assert!(ExecChannel::Source.allows_source_writes());
         assert!(ExecChannel::Source.allows_transactions());
-        assert!(!ExecChannel::Source.is_snapshot());
+        assert!(!ExecChannel::Source.runs_locally());
 
         for channel in [ExecChannel::Accelerated, ExecChannel::Federated] {
             assert!(!channel.allows_source_writes(), "{} 不能写源库", channel.label());
             assert!(!channel.allows_transactions());
-            assert!(channel.is_snapshot(), "是 ATTACH 快照，要提示新鲜度");
+            assert!(channel.runs_locally(), "这两档的语句在 DuckDB 上跑");
         }
     }
 
@@ -314,15 +324,19 @@ mod tests {
         assert!(!items[1].available);
     }
 
+    /// 状态栏要写**只读**（能力边界），不写“快照”（数据其实是实时的）
     #[test]
-    fn the_status_segment_names_the_snapshot_channels() {
+    fn the_status_segment_marks_the_read_only_local_channels() {
         assert_eq!(status_text(ExecChannel::Source), "通道 源库");
-        assert!(
-            status_text(ExecChannel::Accelerated).contains("快照"),
-            "加速看到的是 ATTACH 那一刻的数据，必须显式说：{}",
-            status_text(ExecChannel::Accelerated)
+        assert_eq!(
+            status_text(ExecChannel::Accelerated),
+            "通道 本地加速（源库只读）"
         );
-        assert!(status_text(ExecChannel::Federated).contains("快照"));
+        assert!(status_text(ExecChannel::Federated).contains("源库只读"));
+        assert!(
+            !status_text(ExecChannel::Accelerated).contains("快照"),
+            "数据是实时的，写“快照”会让人以为看到的是旧数据"
+        );
     }
 
     /// 切通道后顶部那一行提示要说清**旧结果来自哪档**（否则“灰了”等于没解释）

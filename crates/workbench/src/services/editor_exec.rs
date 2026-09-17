@@ -24,9 +24,12 @@
 
 use std::sync::Arc;
 
+use editor::channel::ExecChannel;
 use editor::execution::{QueryData, QueryRunner};
 use editor::shared::EditorShared;
-use engine::services::sql_service::{SqlExecuteOptions, SqlService};
+use engine::duckdb::accel;
+use engine::persistence::history_store::{self, SqlHistoryEntry};
+use engine::services::sql_service::{SqlExecuteOptions, SqlService, window_sql};
 use shared::models::{QueryResult, Value};
 
 /// 引擎执行器（编辑器执行端口的工作台实现）
@@ -70,15 +73,114 @@ impl EngineQueryRunner {
         let config = manager.get_connection_config(&conn_id).await?;
         config.query_timeout.map(|secs| u64::from(secs) * 1000)
     }
+
+    /// 本次执行到底用哪个连接 id（绑定优先 → 未绑定回退当前活动连接）
+    fn resolve_conn_id(&self, connection: Option<&str>) -> Option<String> {
+        let manager = engine::connection_manager::get_connection_manager();
+        self.runtime.block_on(async {
+            match connection {
+                Some(id) => Some(id.to_string()),
+                None => manager.get_active_connection_id().await,
+            }
+        })
+    }
+
+    /// 加速档的源：宿主侧的连接信息（`db_type` + 带凭据的 URL）→ 引擎的 [`accel::AccelSource`]
+    ///
+    /// 引擎不读连接库、也不解密口令：这里把两样它需要的东西递过去。
+    fn accel_source(&self, connection: Option<&str>) -> Result<accel::AccelSource, String> {
+        let manager = engine::connection_manager::get_connection_manager();
+        let conn_id = self
+            .resolve_conn_id(connection)
+            .ok_or_else(|| "本地加速需要一个连接：先绑定一个，或在导航里选中它".to_string())?;
+        let info = self
+            .runtime
+            .block_on(manager.get_connection_info(&conn_id))
+            .ok_or_else(|| format!("拿不到连接 {conn_id} 的信息，无法在本地挂载它"))?;
+        accel::AccelSource::new(&conn_id, &info.db_type, &info.url)
+    }
+
+    /// 加速档执行（B13）：在 DuckDB 上跑，源库以**只读**方式挂着
+    ///
+    /// 与源库档同口径：查询只取**第一段**（套窗口），写语句原样（DuckDB 侧只读挂载会
+    /// 拒掉作用源对象的写，本地临时对象照常允许）。
+    fn run_on_accel(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+        let source = self.accel_source(connection)?;
+        let session = accel::ensure_session(&source)?;
+        let (to_run, segmented) = match window_sql(sql, editor::execution::SEGMENT_ROWS, 0) {
+            Some(wrapped) => (wrapped, true),
+            None => (sql.to_string(), false),
+        };
+        let started = std::time::Instant::now();
+        let outcome = session.run(&to_run);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        record_accel_history(&source, sql, elapsed_ms, &outcome);
+        // 【B8】历史面板据此重新加载（与源库档同一节拍）
+        editor::history::bump();
+        let result = outcome.map_err(|error| error.to_string())?;
+        let mut data = to_data(&result, elapsed_ms, false);
+        data.has_more = segmented
+            && !data.columns.is_empty()
+            && data.rows.len() == editor::execution::SEGMENT_ROWS;
+        Ok(data)
+    }
+
+    /// 加速档的「取下一段」（与源库档同一套窗口包装，见 `sql_service::window_sql`）
+    fn fetch_next_on_accel(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<QueryData, String> {
+        let source = self.accel_source(connection)?;
+        let session = accel::ensure_session(&source)?;
+        let wrapped = window_sql(sql, limit, offset)
+            .ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
+        let started = std::time::Instant::now();
+        let outcome = session.run(&wrapped);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        record_accel_history(&source, sql, elapsed_ms, &outcome);
+        editor::history::bump();
+        let result = outcome.map_err(|error| error.to_string())?;
+        let mut data = to_data(&result, elapsed_ms, false);
+        data.has_more = data.rows.len() == limit;
+        Ok(data)
+    }
+
+    /// 加速档的下发（筛选 / 排序）：改写（引擎的 `sql::rewrite_*`）之后照跑
+    fn run_rewritten_on_accel(
+        &self,
+        connection: Option<&str>,
+        rewritten: &engine::sql::Rewrite,
+        notice: impl FnOnce(&str) -> String,
+    ) -> Result<QueryData, String> {
+        let source = self.accel_source(connection)?;
+        let session = accel::ensure_session(&source)?;
+        let started = std::time::Instant::now();
+        let outcome = session.run(&rewritten.sql);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        record_accel_history(&source, &rewritten.sql, elapsed_ms, &outcome);
+        editor::history::bump();
+        let result = outcome.map_err(|error| error.to_string())?;
+        let mut data = to_data(&result, elapsed_ms, false);
+        data.notice = rewritten.dropped_limit.as_deref().map(notice);
+        Ok(data)
+    }
 }
 
 impl QueryRunner for EngineQueryRunner {
     fn run(
         &self,
         connection: Option<&str>,
+        channel: ExecChannel,
         sql: &str,
         run_options: editor::execution::RunOptions,
     ) -> Result<QueryData, String> {
+        // 【B13】加速档不走源库驱动：这条语句在 DuckDB 上跑（源库只读挂载）
+        if channel != ExecChannel::Source {
+            return self.run_on_accel(connection, sql);
+        }
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let options = SqlExecuteOptions {
             // 历史由引擎侧统一记录（含耗时/行数，真实值）
@@ -120,6 +222,7 @@ impl QueryRunner for EngineQueryRunner {
     fn run_filtered(
         &self,
         connection: Option<&str>,
+        channel: ExecChannel,
         sql: &str,
         filter: &str,
         columns: &[String],
@@ -141,6 +244,12 @@ impl QueryRunner for EngineQueryRunner {
             _ => "TEXT",
         };
         let rewritten = engine::sql::rewrite_with_filter(sql, columns, filter, cast_type)?;
+        // 【B13】加速档：改写照样做，但语句在 DuckDB 上跑（不是发回源库）
+        if channel != ExecChannel::Source {
+            return self.run_rewritten_on_accel(connection, &rewritten, |limit| {
+                format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）")
+            });
+        }
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let options = SqlExecuteOptions {
             // 下发是一次真查询：同样进历史（用户能回头找）
@@ -169,11 +278,18 @@ impl QueryRunner for EngineQueryRunner {
     fn run_sorted_down(
         &self,
         connection: Option<&str>,
+        channel: ExecChannel,
         sql: &str,
         column: &str,
         descending: bool,
     ) -> Result<QueryData, String> {
         let rewritten = engine::sql::rewrite_with_order(sql, column, descending)?;
+        // 【B13】加速档：同上——改写服从“在哪儿跑”
+        if channel != ExecChannel::Source {
+            return self.run_rewritten_on_accel(connection, &rewritten, |limit| {
+                format!("已去掉原查询的 {limit}（排序下发要能排全部行）")
+            });
+        }
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let options = SqlExecuteOptions {
             record_history: true,
@@ -200,10 +316,15 @@ impl QueryRunner for EngineQueryRunner {
     fn fetch_next(
         &self,
         connection: Option<&str>,
+        channel: ExecChannel,
         sql: &str,
         offset: usize,
         limit: usize,
     ) -> Result<QueryData, String> {
+        // 【B13】加速档的分段：同一套窗口包装，但在 DuckDB 上取数
+        if channel != ExecChannel::Source {
+            return self.fetch_next_on_accel(connection, sql, offset, limit);
+        }
         let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
         let executed = self
             .runtime
@@ -256,11 +377,74 @@ impl QueryRunner for EngineQueryRunner {
         true
     }
 
-    /// 中断：走引擎的取消令牌（`Ok(false)` = 令牌不在 → 已在两句之间）
+    /// 中断：源库档翻引擎的取消令牌；加速档叫 DuckDB 中断
+    ///
+    /// 两处都试是有意的：编辑器只知道“这条文档在执行”，不知道当前那次执行具体落在哪一边
+    /// （状态在引擎侧），而两边各自的中断都是幂等的（没在跑就是 noop / `false`）。
     fn cancel(&self, connection: Option<&str>) -> Result<bool, String> {
-        self.runtime
+        let mut cancelled = false;
+        let mut reason: Option<String> = None;
+        if let Some(conn_id) = self.resolve_conn_id(connection) {
+            match accel::cancel(&conn_id) {
+                Some(Ok(true)) => cancelled = true,
+                Some(Ok(false)) => {}
+                Some(Err(error)) => reason = Some(error),
+                None => {}
+            }
+        }
+        match self
+            .runtime
             .block_on(self.service.cancel_query(connection.map(str::to_string)))
-            .map_err(|error| error.to_string())
+        {
+            Ok(true) => cancelled = true,
+            Ok(false) => {}
+            Err(error) => {
+                // 只有两遍都没送出去才算失败
+                if !cancelled && reason.is_none() {
+                    reason = Some(error.to_string());
+                }
+            }
+        }
+        match (cancelled, reason) {
+            (true, _) => Ok(true),
+            (false, Some(reason)) => Err(reason),
+            (false, None) => Ok(false),
+        }
+    }
+}
+
+/// 加速档的执行也进同一条历史流水（与源库档一致）
+///
+/// `db_type` 写成「源库类型·加速」：历史面板按它显示来源徽标（`MYSQL·加速`），
+/// 一眼能看出这条是**在本地加速档上跑的**。把通道做成历史记录的正经字段随切片三。
+fn record_accel_history(
+    source: &accel::AccelSource,
+    sql: &str,
+    elapsed_ms: u64,
+    outcome: &Result<QueryResult, shared::error::CoreError>,
+) {
+    let entry = match outcome {
+        Ok(result) => SqlHistoryEntry {
+            conn_id: Some(source.conn_id.clone()),
+            db_type: Some(format!("{}·加速", source.kind.label())),
+            elapsed_ms,
+            success: true,
+            error_message: None,
+            rows_returned: Some(result.total_rows() as u64),
+            rows_affected: None,
+        },
+        Err(error) => SqlHistoryEntry {
+            conn_id: Some(source.conn_id.clone()),
+            db_type: Some(format!("{}·加速", source.kind.label())),
+            elapsed_ms,
+            success: false,
+            error_message: Some(error.to_string()),
+            rows_returned: None,
+            rows_affected: None,
+        },
+    };
+    if let Err(error) = history_store::save_sql_history(sql, &entry) {
+        tracing::error!(error = %error, "本地加速的执行未记入历史");
     }
 }
 

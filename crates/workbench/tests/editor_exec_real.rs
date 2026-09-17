@@ -211,6 +211,8 @@ fn collect_with_snapshots(
     while collected.len() < expected {
         for outcome in shared.drain_exec() {
             let transaction = outcome.transaction;
+            // 与面板的 `entry_from` 同一口径：**通道也要带上**（否则测试里看不出它跑在哪一档）
+            let channel = outcome.channel;
             let entry = match outcome.result {
                 Ok(data) => editor::store::ResultEntry::success(
                     outcome.document,
@@ -221,10 +223,15 @@ fn collect_with_snapshots(
                     data.rows,
                 )
                 .with_affected_rows(data.affected_rows)
-                .with_has_more(data.has_more),
-                Err(error) => {
-                    editor::store::ResultEntry::failure(outcome.document, outcome.sql, error, 0)
-                }
+                .with_has_more(data.has_more)
+                .with_channel(channel),
+                Err(error) => editor::store::ResultEntry::failure(
+                    outcome.document,
+                    outcome.sql,
+                    error,
+                    0,
+                )
+                .with_channel(channel),
             };
             // 落位来自结论自己（"结果放哪"是执行时的语义，不是调用方事后猜的）
             shared.update_results(|store| store.push(entry.clone(), outcome.placement));
@@ -1006,7 +1013,158 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         "这些库已配置环境变量但建不上连接（真机验证被阻塞，其余库照跑）：{failed_to_connect:?}"
     );
 
+    // 【B13 切片二】本地加速通道：语句真的在 DuckDB 上跑（源库只读挂载）
+    if let Ok(mysql_url) = std::env::var("RDS_TEST_MYSQL_URL") {
+        check_accelerated_channel(&runtime, &manager, &mysql_url);
+    } else {
+        eprintln!("⏭️  本地加速通道：未设 RDS_TEST_MYSQL_URL，跳过");
+    }
+
     if checked == 0 {
         eprintln!("⚠️ 没有任何 RDS_TEST_* 环境变量，真机链路未验证（不算失败）");
     }
+}
+
+/// 【B13 切片二】加速档走**生产路径**：编辑器 → 执行器 → DuckDB（源库以只读方式挂着）
+///
+/// 验四件事：① 不写限定名能查到源表（会话里 `USE` 生效）；② 结果集记住的通道 = 加速；
+/// ③ 写源库被拒（DuckDB 只读挂载，是编辑器闸门之外的第二道防线）；
+/// ④ 本地临时对象能建（会话变量，不是源库对象）。
+///
+/// 数据准备与清理都走**源库档**（同一份文档、同一个执行器）：这本身就是“同一句 SQL
+/// 在两个通道上跑”的对照。
+fn check_accelerated_channel(
+    runtime: &tokio::runtime::Runtime,
+    manager: &Arc<ConnectionManager>,
+    mysql_url: &str,
+) {
+    let target = Target {
+        driver: "mysql_native",
+        env: "RDS_TEST_MYSQL_URL",
+        file: false,
+        slow_sql: "SELECT SLEEP(3)",
+    };
+    let Some(_conn_id) = runtime.block_on(connect_active(manager, &target, mysql_url)) else {
+        panic!("本地加速通道：MySQL 建不上连接");
+    };
+
+    let shared = EditorShared::new();
+    rds_workbench::services::editor_exec::attach(&shared);
+    let document = shared
+        .open(OpenRequest::untitled("select 1", EditorMode::Sql))
+        .id()
+        .clone();
+
+    let table = "rds_accel_e2e";
+    for sql in [
+        format!("DROP TABLE IF EXISTS mysql.{table}"),
+        format!("CREATE TABLE mysql.{table} (id INT)"),
+        format!("INSERT INTO mysql.{table} VALUES (1)"),
+        format!("INSERT INTO mysql.{table} VALUES (2)"),
+    ] {
+        let entry = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Statement(sql.clone()),
+            ResultPlacement::Replace,
+            1,
+        );
+        assert!(
+            entry[0].error.is_none(),
+            "源库档准备工作失败（{sql}）：{:?}",
+            entry[0].error
+        );
+    }
+
+    // 切到本地加速（文档属性；结果集要记住它）
+    assert!(
+        shared.update(|service| {
+            service.set_channel(&document, editor::channel::ExecChannel::Accelerated)
+        }),
+        "切通道应当算作变更"
+    );
+    assert_eq!(
+        shared.service().channel_for(&document),
+        editor::channel::ExecChannel::Accelerated,
+        "前置：文档的通道已切到加速（提交时要读它）"
+    );
+
+    // ① + ②：不写限定名查到源表，且通道记在结果上
+    let entries = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(format!("SELECT count(*) AS n FROM {table}")),
+        ResultPlacement::Replace,
+        1,
+    );
+    let entry = &entries[0];
+    assert!(
+        entry.error.is_none(),
+        "加速档应当能查到源表（未限定名）：{:?}",
+        entry.error
+    );
+    assert_eq!(entry.rows[0][0], "2", "源表两行都应当看得到");
+    assert_eq!(
+        entry.channel,
+        editor::channel::ExecChannel::Accelerated,
+        "结果集要记住自己是加速档跑的"
+    );
+    eprintln!("✅ 本地加速：未限定名查到源表（{}），结果带加速通道", entry.summary());
+
+    // ③：写源库被 DuckDB 拒（编辑器闸门之外的兜底）
+    let write = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(format!("INSERT INTO {table} VALUES (3)")),
+        ResultPlacement::Replace,
+        1,
+    );
+    let reason = write[0]
+        .error
+        .clone()
+        .expect("加速档写源库必须失败");
+    assert!(
+        reason.contains("read-only"),
+        "拒绝理由要说清是只读挂载：{reason}"
+    );
+    eprintln!("✅ 本地加速：写源库被拒（{reason}）");
+
+    // ④：本地临时对象允许（会话变量）
+    let temp = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(
+            "CREATE TEMP TABLE rds_accel_vars AS SELECT 42 AS answer".to_string(),
+        ),
+        ResultPlacement::Replace,
+        1,
+    );
+    assert!(
+        temp[0].error.is_none(),
+        "本地临时对象应当允许：{:?}",
+        temp[0].error
+    );
+    let value = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement("SELECT answer FROM rds_accel_vars".to_string()),
+        ResultPlacement::Replace,
+        1,
+    );
+    assert_eq!(value[0].rows[0][0], "42");
+    eprintln!("✅ 本地加速：本地临时对象可用（会话变量）");
+
+    // 收尾：切回源库档把表删掉（不留垃圾）
+    shared.update(|service| {
+        service.set_channel(&document, editor::channel::ExecChannel::Source);
+    });
+    let cleanup = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(format!("DROP TABLE IF EXISTS mysql.{table}")),
+        ResultPlacement::Replace,
+        1,
+    );
+    assert!(cleanup[0].error.is_none(), "清理失败：{:?}", cleanup[0].error);
+    runtime.block_on(manager.close_all_connections());
 }

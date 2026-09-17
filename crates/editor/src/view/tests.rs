@@ -558,20 +558,26 @@ type SeenSql = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 /// 执行器看到的连接序列（B1 断言用）
 type SeenConnections = std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>;
 
+/// 执行器看到的**通道**序列（B13 断言用）：文档的“执行位置”必须真的传到执行器
+type SeenChannels = std::sync::Arc<std::sync::Mutex<Vec<crate::channel::ExecChannel>>>;
+
 /// 假执行器：记录收到的连接与 SQL，按 SQL 内容决定成败
 struct ScriptRunner {
     seen: SeenSql,
     /// 收到的连接（B1）：绑定的连接必须原样传到这里
     seen_connections: SeenConnections,
+    /// 收到的通道（B13）：文档的执行位置必须原样传到这里
+    seen_channels: SeenChannels,
 }
 
 impl QueryRunner for ScriptRunner {
-    fn run(&self, connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(&self, connection: Option<&str>, channel: crate::channel::ExecChannel, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         self.seen.lock().expect("锁").push(sql.to_string());
         self.seen_connections
             .lock()
             .expect("锁")
             .push(connection.map(str::to_string));
+        self.seen_channels.lock().expect("锁").push(channel);
         if sql.contains("boom") {
             return Err("驱动报错：boom".to_string());
         }
@@ -598,6 +604,7 @@ fn shared_with_runner(
     shared.attach_runner(std::sync::Arc::new(ScriptRunner {
         seen: seen.clone(),
         seen_connections: seen_connections.clone(),
+        seen_channels: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
     let id = shared
         .open(OpenRequest::untitled(content, mode))
@@ -606,13 +613,35 @@ fn shared_with_runner(
     (shared, id, seen, seen_connections)
 }
 
+/// 同上，但把**通道**序列也带回来（B13 的断言要看它）
+fn shared_with_channel_recorder(
+    content: &str,
+) -> (
+    EditorShared,
+    DocumentId,
+    SeenChannels,
+) {
+    let shared = EditorShared::new();
+    let channels = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    shared.attach_runner(std::sync::Arc::new(ScriptRunner {
+        seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        seen_connections: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        seen_channels: channels.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    (shared, id, channels)
+}
+
 /// 假执行器（B2）：按 SQL 里的 `rows=N` 决定结果行数
 ///
 /// 多结果集的测试必须能区分“网格里现在是哪一份”，否则切过去也看不出来。
 struct SizedRunner;
 
 impl QueryRunner for SizedRunner {
-    fn run(&self, _connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         // 与 `ScriptRunner` 同一口径：带 `boom` 的语句失败（批量要能验“失败不中断”）
         if sql.contains("boom") {
             return Err("驱动报错：boom".to_string());
@@ -652,7 +681,7 @@ fn shared_with_sized_runner(content: &str) -> (EditorShared, DocumentId) {
 struct ToolbarRunner;
 
 impl QueryRunner for ToolbarRunner {
-    fn run(&self, _connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         if sql.contains("insert") {
             return Ok(QueryData {
                 columns: Vec::new(),
@@ -711,7 +740,7 @@ struct SegmentRunner {
 }
 
 impl QueryRunner for SegmentRunner {
-    fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
@@ -726,6 +755,7 @@ impl QueryRunner for SegmentRunner {
     fn fetch_next(
         &self,
         _connection: Option<&str>,
+        _channel: ExecChannel,
         _sql: &str,
         offset: usize,
         limit: usize,
@@ -767,7 +797,7 @@ fn shared_with_segment_runner(
 struct MoreUnsupportedRunner;
 
 impl QueryRunner for MoreUnsupportedRunner {
-    fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         Ok(QueryData {
             columns: vec!["n".to_string()],
             rows: vec![vec!["1".to_string()]],
@@ -781,7 +811,7 @@ impl QueryRunner for MoreUnsupportedRunner {
 }
 
 impl QueryRunner for LocatedFailureRunner {
-    fn run(&self, _connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         if sql.contains("wheree") {
             return Err(format!(
                 "[DB_QUERY] Query failed: no such column: wheree (SQL: {sql})"
@@ -1138,7 +1168,7 @@ struct BlockingRunner {
 }
 
 impl QueryRunner for BlockingRunner {
-    fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         self.started.store(true, std::sync::atomic::Ordering::SeqCst);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !self.stop.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1279,6 +1309,7 @@ impl QueryRunner for TxRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _channel: ExecChannel,
         _sql: &str,
         options: crate::execution::RunOptions,
     ) -> Result<QueryData, String> {
@@ -2314,7 +2345,7 @@ struct CountingRunner {
 }
 
 impl QueryRunner for CountingRunner {
-    fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+    fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(QueryData::default())
     }
@@ -3198,6 +3229,7 @@ impl QueryRunner for PushdownRunner {
     fn run(
         &self,
         _connection: Option<&str>,
+        _channel: ExecChannel,
         _sql: &str,
         _options: execution::RunOptions,
     ) -> Result<QueryData, String> {
@@ -3215,6 +3247,7 @@ impl QueryRunner for PushdownRunner {
     fn run_filtered(
         &self,
         _connection: Option<&str>,
+        _channel: ExecChannel,
         sql: &str,
         filter: &str,
         columns: &[String],
@@ -3238,6 +3271,7 @@ impl QueryRunner for PushdownRunner {
     fn run_sorted_down(
         &self,
         _connection: Option<&str>,
+        _channel: ExecChannel,
         _sql: &str,
         column: &str,
         descending: bool,
@@ -3833,7 +3867,10 @@ fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppCont
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("切换要留痕");
     assert!(message.contains("执行位置已切到本地加速"), "{message}");
-    assert!(message.contains("快照"), "非源库档要提新鲜度：{message}");
+    assert!(
+        message.contains("只读"),
+        "非源库档要说清能力边界（源库只读）：{message}"
+    );
     // 切完那一刻旧结果就已经是“旧”的了（不用等下一次执行）
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
@@ -3862,6 +3899,37 @@ fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppCont
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
         ["源库", "加速·旧"]
+    );
+}
+
+/// 【B13】文档的“执行位置”要**真的**传到执行器（与连接绑定同一口径：不分流就是装饰）
+#[gpui_kit::test]
+fn the_document_channel_reaches_the_execution_port(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, channels) = shared_with_channel_recorder("select 1;");
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_channels(Rc::new(FakeChannels::open()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 默认是源库档
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    assert_eq!(
+        channels.lock().expect("锁").as_slice(),
+        [ExecChannel::Source],
+        "默认档要如实传到执行器"
+    );
+
+    // 切到本地加速之后再执行：同一个文档、不同通道
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+    });
+    run_statement(cx, &panel, "select 2", execution::ResultPlacement::Replace);
+    assert_eq!(
+        channels.lock().expect("锁").as_slice(),
+        [ExecChannel::Source, ExecChannel::Accelerated],
+        "切档后执行器收到的通道要跟着变"
     );
 }
 
@@ -3898,6 +3966,7 @@ fn the_snapshot_channel_refuses_source_writes_with_a_reason(cx: &mut TestAppCont
         .expect("要留原因");
     assert!(message.contains("不能写源库"), "{message}");
     assert!(message.contains("请切回源库"), "{message}");
+    assert!(message.contains("只读挂载"), "理由要说清是只读挂载：{message}");
 
     // 读语句照跑（加速档就是用来跑分析的）
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);

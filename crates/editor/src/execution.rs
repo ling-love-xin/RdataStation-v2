@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 
+use crate::channel::ExecChannel;
 use crate::model::DocumentId;
 
 // ===== 执行什么 =====
@@ -406,10 +407,15 @@ pub trait QueryRunner: Send + Sync + 'static {
     /// `connection` = 本文档绑定的连接 id（B1）；`None` = 未绑定，由实现决定回退口径
     /// （workbench 的实现回退到“当前活动连接”，与 1a 一致）
     ///
+    /// 【B13】`channel` = 本文档的**执行通道**（源库 / 本地加速 / 联邦）：回答“这条语句
+    /// 到底发到哪儿”。实现必须**按它分流**——源库档走驱动，加速档走 DuckDB 上的附加源；
+    /// 不分流就等于把用户的“执行位置”当成了装饰。
+    ///
     /// `options.use_transaction`（B4）= 本次执行先自动开一个事务（「自动提交」关闭时）。
     fn run(
         &self,
         connection: Option<&str>,
+        channel: ExecChannel,
         sql: &str,
         options: RunOptions,
     ) -> Result<QueryData, String>;
@@ -454,6 +460,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn run_filtered(
         &self,
         _connection: Option<&str>,
+        _channel: ExecChannel,
         _sql: &str,
         _filter: &str,
         _columns: &[String],
@@ -467,6 +474,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn run_sorted_down(
         &self,
         _connection: Option<&str>,
+        _channel: ExecChannel,
         _sql: &str,
         _column: &str,
         _descending: bool,
@@ -483,6 +491,7 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn fetch_next(
         &self,
         _connection: Option<&str>,
+        _channel: ExecChannel,
         _sql: &str,
         _offset: usize,
         _limit: usize,
@@ -621,6 +630,7 @@ impl ExecQueue {
                             // 【B5b】取下一段：同一条原 SQL 的后一段（不新开结果集）
                             worker_runner.fetch_next(
                                 job.connection.as_deref(),
+                                job.channel,
                                 &sql,
                                 offset,
                                 limit,
@@ -629,6 +639,7 @@ impl ExecQueue {
                             // 【B14】下发源库：拼 WHERE 的活交给执行器（它才知道方言）
                             worker_runner.run_filtered(
                                 job.connection.as_deref(),
+                                job.channel,
                                 &sql,
                                 filter,
                                 columns,
@@ -637,13 +648,14 @@ impl ExecQueue {
                             // 【B14】排序下发：同上，改写与方言差异都在执行器
                             worker_runner.run_sorted_down(
                                 job.connection.as_deref(),
+                                job.channel,
                                 &sql,
                                 column,
                                 *descending,
                             )
                         } else {
                             // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
-                            worker_runner.run(job.connection.as_deref(), &sql, job.options)
+                            worker_runner.run(job.connection.as_deref(), job.channel, &sql, job.options)
                         };
                         // B4：事务状态跟着结论一起回去（界面不必再单独问一句）
                         let transaction = worker_runner.transaction_snapshot(job.connection.as_deref());
@@ -863,6 +875,7 @@ mod tests {
         SEGMENT_ROWS, SubmitError, TxAction, TxNote, TxSnapshot, all_target, batch_target,
         resolve_target, statement_target, target_for_menu,
     };
+    use crate::channel::ExecChannel;
     use crate::model::DocumentId;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -1114,7 +1127,7 @@ mod tests {
     }
 
     impl QueryRunner for FakeRunner {
-        fn run(&self, connection: Option<&str>, sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+        fn run(&self, connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: RunOptions) -> Result<QueryData, String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.seen_connections
                 .lock()
@@ -1138,6 +1151,7 @@ mod tests {
         fn fetch_next(
             &self,
             connection: Option<&str>,
+            _channel: ExecChannel,
             _sql: &str,
             offset: usize,
             limit: usize,
@@ -1246,7 +1260,7 @@ mod tests {
     }
 
     impl QueryRunner for CancellableRunner {
-        fn run(&self, _connection: Option<&str>, sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+        fn run(&self, _connection: Option<&str>, _channel: ExecChannel, sql: &str, _options: RunOptions) -> Result<QueryData, String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if sql.contains("slow") {
                 let deadline = Instant::now() + Duration::from_secs(5);
@@ -1396,7 +1410,7 @@ mod tests {
             stop: Arc<AtomicBool>,
         }
         impl QueryRunner for NothingToCancel {
-            fn run(&self, _connection: Option<&str>, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+            fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while !self.stop.load(Ordering::SeqCst) {
                     assert!(Instant::now() < deadline, "假执行器没被放行");
@@ -1482,6 +1496,7 @@ mod tests {
         fn run(
             &self,
             _connection: Option<&str>,
+            _channel: ExecChannel,
             _sql: &str,
             options: RunOptions,
         ) -> Result<QueryData, String> {
@@ -1770,7 +1785,7 @@ mod tests {
         /// 每句慢 60ms：足够在第一条回填之后、整批跑完之前观察到忙状态
         struct SlowStatementRunner;
         impl QueryRunner for SlowStatementRunner {
-            fn run(&self, _connection: Option<&str>, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+            fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
                 std::thread::sleep(Duration::from_millis(60));
                 Ok(QueryData::default())
             }
@@ -1823,7 +1838,7 @@ mod tests {
             release: Arc<Mutex<bool>>,
         }
         impl QueryRunner for SlowRunner {
-            fn run(&self, _connection: Option<&str>, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
+            fn run(&self, _connection: Option<&str>, _channel: ExecChannel, _sql: &str, _options: RunOptions) -> Result<QueryData, String> {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 loop {
                     if *self.release.lock().unwrap() {

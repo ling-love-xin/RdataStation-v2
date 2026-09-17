@@ -717,8 +717,8 @@ impl EditorHostPanel {
             return; // 本来就在这档：不啥都留痕（切了才留）
         }
         let mut message = format!("执行位置已切到{}", channel.label());
-        if channel.is_snapshot() {
-            message.push_str("（看的是 ATTACH 快照，作用源库的写语句会被拒）");
+        if channel.runs_locally() {
+            message.push_str("（源库以只读方式挂载；作用源库的写语句会被拒）");
         }
         if self.tx_open && !channel.allows_transactions() {
             message.push_str("；源库上还有未提交的事务（切回源库可见）");
@@ -726,7 +726,7 @@ impl EditorHostPanel {
         self.set_message(Some(message), cx);
     }
 
-    /// 【B13】当前通道能不能跑写语句（写语句在快照通道上会被拒，理由要可读）
+    /// 【B13】当前通道能不能跑写语句（本地加速档对源库是**只读挂载**，写语句直接拒）
     fn channel_write_check(&self, target: &ExecTarget) -> Result<(), String> {
         let channel = self.channel();
         if channel.allows_source_writes() {
