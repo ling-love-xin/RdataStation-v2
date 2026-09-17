@@ -18,6 +18,7 @@
 | **结论可追溯到算法** | 每个数字来自统计量 / 评分维度 / 规则之一；UI **不发明结论** | 原型 §1.1 |
 | **采样必须明示** | 表探查与批量评估基于 `LIMIT 500` 采样，UI 常驻「基于 N 行采样」 | 原型 §3.2、§4 |
 | **面板收敛为一处** | v1 的「右栏轻量统计 + 底栏四 Tab」两处合并为**单个右 Dock 面板**（17.5rem） | 原型 §1.3 |
+| **凡 DuckDB 能分析的资源都能洞察** | 入口四个（导航树 / 分析存档 / 草稿箱 / 编辑器结果集），**含 CSV / Parquet / Excel / JSON 这类文件**（靠 DuckDB 扩展直接读）；数据怎么进 DuckDB 由来源定，分析能力只有一套（已接前三个） | 架构 D58/D59 |
 
 ### 分析与规则
 
@@ -36,7 +37,7 @@
 | --- | --- | --- |
 | **视图归属 = 方案 A**（2026-09-16 定案） | 视图与本 crate 的 model / service 同 crate，依赖 `gpui-kit`（架构约束允许并鼓励）；`workbench` 侧只装配与订阅事件；面板自己不做 I/O | 开发方案 §3.1、架构 D21/K8 |
 | **依赖只向下** | `workbench → insight → engine → shared`；洞察不依赖任何业务 Feature crate | 开发方案 §3 |
-| **不自己取数** | 数据入口是 `temp_table`（DuckDB 临时表）或 `conn_id`；洞察不建连接、不执行用户 SQL | 原型 §1.1 |
+| **不自己取数** | 数据入口只有两种：**已有临时表**（结果集 / 分析表，直接分析）与**源取样** `SampleSource`（洞察侧自己包 `LIMIT 500` 落 `tmp_i_`，D58/D59）；不建连接、不执行用户 SQL、**不反拼装**数据（D42） | 原型 §1.1、架构 D58 |
 | **快照双写** | 正文进项目 DuckDB（`insight_column_snapshots`），元数据 + 版本链进项目 SQLite（`insight_snapshots`） | 开发方案 §1.1 |
 | **零裸值** | 颜色取主题 token（缺失角色补 `product-tokens.json`），尺寸进 `ui.rs`（新增「洞察（M8）专用尺寸」节） | 原型 §6 / §7 |
 | **组件不手搓** | 折叠区 / 表格 / Tab 条 / 对话框 / 开关 / 菜单一律用 gpui-kit 组件 | 原型 §8 |
@@ -72,6 +73,9 @@
 | 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：✅ 已归位） |
 | 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位；**同一进程对同一项目库不得重叠 open**，见架构 D41；按天数清理已可用） |
 | 服务门面（画像 / 评分 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
+| 源取样通道（入口统一契约） | `crates/insight/src/model.rs`（`SampleSource::{new, on_duckdb, duckdb_file}` / `InsightTarget::{SourceColumn, SourceTable}`）、`service/persistence.rs`（`sample_source_to_analysis_table` 按 `conn_id` 分流：源库连接走引擎打型，`None` 走内存库 `CREATE TABLE … AS`） |
+| 文件类数据源的读取器口径 | `crates/engine/src/dbi/engine/duckdb_engine.rs`（`file_reader_function`：CSV / Parquet / Excel / JSON；`load_file_source` 与洞察**共用**它）、`crates/engine/src/duckdb/analysis.rs`（`create_analysis_temp_table_as`） |
+| 入口接线（三个右键「查看统计」） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`） |
 | 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（现状：✅ 五 Tab 全部落地——列画像 + 质量卡 · 表探查 + 评估全表 · 多列分析 · Schema 报告 · 快照历史与版本对比；不显示假数据） |
 | 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 二批） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：✅ Phase 4 一批；导出函数已就绪，导出的宿主按钮待接） |
@@ -90,7 +94,7 @@
 
 ## 4. 改这个模块前必须遵守
 
-1. **不自己取数**：数据入口只有 `temp_table` 与 `conn_id` 两种；不建连接、不执行用户 SQL。
+1. **不自己取数**：入口只给 `SampleSource`（或指已有临时表），「取样 → 落 `tmp_i_`」统一由 `service/persistence.rs` 做；不建连接、不执行用户 SQL、**不反拼装**数据（D42）。
 2. **规则只有三个写入者**：文件（正文）、索引同步器（索引）、用户启停动作（`enabled`）。**UI 不直接改索引表、代码不硬编码规则**。
 3. **规则正文永不入库**：库表只承载索引与状态；正文以文件为唯一真相源。
 4. **同名整体覆盖**：不做字段级合并，不引入前缀命名空间（沿用 v1 语义）。
@@ -120,7 +124,7 @@ cargo check --workspace --all-targets -j 2
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **221 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3），另有**集成测试 13 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）的 engine 支撑另有 14 项：`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`。
+- **基线**：`cargo test -p rds-insight` 当前 **222 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3；**文件类数据源新增 1**），另有**集成测试 13 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处（`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`），其中 `duckdb::analysis` 现 **8 项**（含 CTAS 2 项）。引擎单测总量当前 **377 项**（`cargo test -p rds-engine --lib`）。
 
 ## 6. 文档地图
 
@@ -145,7 +149,8 @@ cargo check --workspace --all-targets -j 2
 | ✅ Phase 0 已落地 | 五项缺陷修复 · 内部接缝开放 · `RuleScope` + `registry_for` · 索引表与同步器 · **启停生效** · 快照链路闭合 · 占位文件接入 `lib.rs` · **目录监听热加载** · 四类文件边界归位（逐项见开发方案 §0） |
 | ✅ Phase 1 已落地 | 右 Dock 面板装配 · 列画像四区 · 入口命令 `open_insight_column`（`Ctrl+Shift+R`）· 后台取数 `insight::jobs::attach`（六批，逐项见开发方案 §0） |
 | ✅ Phase 2 已落地 | 列级质量评分卡 · 规则管理对话框（三层分组 / 启停 / 校验错误行 / 新建规则）· K7 全局规则目录 · 表级评估全表 + 进度（逐项见开发方案 §0） |
-| Phase 3（已落地） | 表探查视图 + 列名下钻 · 多列分析（真实列清单 + 规则执行 + 结果渲染）；⬜ 宿主侧入口（`Shared::open_insight_table` 与导航右键「查看统计」） |
+| Phase 3（已完成） | 表探查视图 + 列名下钻 · 多列分析（真实列清单 + 规则执行 + 结果渲染）· ✅ 宿主侧入口（导航右键「查看统计」，D59 补齐） |
 | Phase 4（进行中） | ✅ 门面 · 报告视图 · 导出函数 · 下钻事件；⬜ 导出按钮与下钻的宿主侧接线（选路径 / 登记临时表） |
-| Phase 5（已完成） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（方向固定为「选中 → 最新」）· ✅ 存储清理（确认框 · 成对删 · 回执）；⬜ 保留天数取值待拍板（Q4/Q5） |
+| Phase 5（已完成） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（方向固定为「选中 → 最新」）· ✅ 存储清理（确认框 · 成对删 · 回执）· ✅ 保留天数定案固定 30 天（D56） |
+| 入口（D58/D59） | ✅ 源取样通道 · ✅ 导航树 / 分析存档 / 草稿箱三个右键「查看统计」· ✅ **文件类数据源**（CSV / Parquet / Excel / JSON，含 excel 扩展）；⬜ 编辑器结果集列头「洞察此列」（用户明确不着急）· ⬜ 分析表型存档（本体是 `analytics.duckdb` 库文件，要 ATTACH + 重建定义） |
 | 待确认 | 规则安全边界若**再严一档**：`insight_rule_trust` 加规则集内容指纹（现绑定项目路径，见 D53 取舍）· 快照双写若要做故障注入测试（现只测补偿函数契约，见 D55） |

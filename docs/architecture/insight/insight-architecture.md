@@ -2,7 +2,7 @@
 
 > 状态：**Phase 0–5 完成 + 规则安全边界收口**（2026-09-17） · 关联文件：`README.md`（模块入口）、`insight-prototype-design.md`（原型）、`insight-dev-plan.md`（开发方案与进度）、`insight-user-guide.md`（使用手册）
 > 本文回答**为什么这样设计 / 怎么运转**：概念模型 → 不变式 → 分层与归属 → 状态所有权 → 数据流 → 决策表 → 并发 → 降级 → 测试 → 实现映射 → 已知问题（权威）。
-> 现状口径：**画像 / 评分 / 规则 / 报告 / 快照历史全部落地**（含右 Dock 面板与规则管理对话框）；规则安全边界 = 解析期静态门（D52）+ 项目规则信任门（D53）；临时表走 `duckdb::analysis`（D50/D51）。宿主侧仍欠：表入口、Schema 导出按钮与下钻（见开发方案 §0）。
+> 现状口径：**画像 / 评分 / 规则 / 报告 / 快照历史全部落地**（含右 Dock 面板与规则管理对话框）；规则安全边界 = 解析期静态门（D52）+ 项目规则信任门（D53）；临时表走 `duckdb::analysis`（D50/D51）；入口统一为源取样（D58），导航树 / 分析存档 / 草稿箱三个入口与**文件类数据源**（CSV / Parquet / Excel / JSON）已接（D59）。宿主侧仍欠：Schema 导出按钮与下钻、编辑器结果集入口（见开发方案 §0）。
 
 ## 1. 定位与边界
 
@@ -322,6 +322,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D56 | 快照**保留期固定 30 天**（`model::SNAPSHOT_RETENTION_DAYS`），**不做配置项**（2026-09-17，Q4 定案） | v1 就是 30 天；快照是轻量 JSON（几 KB 级），30 天足够回答「上周和现在有什么不同」。而每多一个配置项就多一处能写错的数——清理对话与执行取同一个常量，就没有「写的和删的不一致」的可能 | 要改就改常量（单一来源）；上限另有 `MAX_VERSIONS_PER_COLUMN` 兜底 |
 | D57 | 版本链被清理剪过的**头部**在界面上标「更早的版本已清理」（数据层**不改**）——只在列表未分页截断时判（2026-09-17，K14 定案） | 剪链是「删 30 天前」的必然副产物：存活版本的 `parent_version_id` 仍指着已删的父版，那它就不再满足「首版」条件（`parent = None`），界面会既不标首版也不解释。改数据（把头部 `parent` 置空）会丢掉「它前面还有历史」这个事实；改界面则只说真话 | 判据要三合一（最旧一版 + 父版不在列表 + 列表完整），否则分页会造成假阳性；对比不沿链走，所以不影响差值 |
 | D58 | **入口统一为「源取样」**：导航树 / 分析存档 / 草稿箱 / 编辑器结果集都只给 `SampleSource { conn_id, sql, label }`（一段**只读取样查询** + 来源标签），洞察侧统一包一层 `SELECT * FROM (…) LIMIT 500` → 落 `tmp_i_` 分析临时表 → 之后与「临时表目标」**完全同路**（D53 后的新目标形态：`SourceColumn` / `SourceTable`）（2026-09-17） | 数据入口五花八门（表 / 查询 / 存档记录），但**分析能力只有一套**（列画像 / 表探查 / 多列 / 下钻都要临时表）。每个入口各写一套取数 + 一套回收，必然分叉；而「把数据拼成临时表」又绝不能反拼装——结果集手里只有字符串化的行，拼出来的表会把 DOUBLE 当字符串，质量评分给出**错**结论（D42 同一立场） | 抽样口径（行数）只在洞察侧（不写进入口）；样本表由现成机制回收（TTL 30 分钟 / 上限 100）；SQL 由入口给是因为**只有它知道该源的方言与引号规则**；下钻 / 多列 / 保存快照接着用**同一份样本表**（`PanelData.source_sample`），不重新抽样 |
+| D59 | **文件类数据源与三个入口接线**：`SampleSource.conn_id` 改 `Option`——`None` = 跑在 **DuckDB 内存库**（CSV / Parquet / Excel / JSON 这类**靠扩展直接读的文件**，以及已 `ATTACH` 的表）；扩展名 → 读取函数的映射与 `load_file_source` **共用一处**；取样落表分两条（源库连接走引擎 JSON 打型，DuckDB 侧走 `CREATE TABLE … AS` **不过 Rust**）。入口：导航树 / 分析存档 / 草稿箱右键「查看统计」（2026-09-18） | 产品口径是「凡 DuckDB 能分析的资源都能洞察」——文件（尤其 Excel，要靠 excel 扩展）与库表在这一点上没有区别，区别只在**数据怎么进 DuckDB**：库表过引擎（JSON 打型），文件让 DuckDB 自己读（还省一次序列化往返，类型也更准）。入口侧的「能不能分析」判定必须与取样共用同一处口径，否则会出现「菜单亮着但点了报不支持」 | 分析表型存档（本体是 `analytics.duckdb` **库文件**，要 ATTACH + 用重建定义取数）与编辑器结果集入口**未接**（后者用户明确说不急）；格式判定在**宿主**侧——草稿箱不依赖 `engine`，走端口问宿主，否则读取器口径会被抄第二份 |
 
 ## 7. 并发与资源
 
@@ -419,6 +420,8 @@ RulesWatcher（后台线程，drop 即停）：
 | D53 项目规则信任门 | `crates/engine/migrations/global/025_insight_rule_trust.sql`（新表）、`crates/insight/src/service/rule_trust.rs`（`RuleTrust` / `trust_key` / `read_at` / `write`）、`lib.rs`（`normalized_project_key` / `project_rule_trust` / `apply_project_rule_trust` / `scan_pending_project_rules`）、`rule_registry.rs`（`PendingProjectRules` + 注册表字段）、`rule_view.rs`（`PendingRulesView` + 横幅 + 首次确认框 + `RulesEvent::TrustDecided`）、`service/mod.rs`（`decide_project_rules_trust`）、`jobs.rs`（`request_rules_trust`） |
 | D54 查询结果临时表命名与回收 | `crates/engine/src/duckdb/temp_table.rs`（`generate_unique_name` / `drop_temp_table` / `quote_ident` + 三条用例）、`duckdb/mod.rs`（导出）、`services/duckdb_service.rs`（`create_temp_table_internal` 改用它 + 用例） |
 | D58 源取样统一入口 | `crates/insight/src/model.rs`（`SampleSource` / `InsightTarget::{SourceColumn, SourceTable}` / `PanelData::source_sample` + `sample_table()`）、`service/persistence.rs`（`SOURCE_SAMPLE_LIMIT` / `sample_source_to_analysis_table` / `profile_source_column` / `profile_source_table`）、`service/mod.rs`（两个同步门面）、`jobs.rs`（`ProfileRequest::Source*` + 取样后回填样本表）、`insight_view.rs`（`set_source_sample` / 保存·多列·下钻改用 `sample_table`） |
+| D59 文件类数据源 | `engine/src/dbi/engine/duckdb_engine.rs`（`file_reader_function` + `load_file_source` 改用它）、`engine/src/duckdb/analysis.rs`（`create_analysis_temp_table_as`）、`insight/src/model.rs`（`SampleSource::{on_duckdb, duckdb_file}`）、`insight/src/service/persistence.rs`（按 `conn_id` 分流：`sample_from_connection` / 内存库 CTAS） |
+| D59 三个入口接线 | `analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats` + 行菜单）、`scratchpad/src/{host,scratchpad_view}.rs`（`ScratchpadHost::{can_view_stats, view_stats}` + 行菜单）、`workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs`、`workbench/src/panels/shared.rs`（`insight_sample_sql` 口径一处 + `open_insight_source_table`） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |

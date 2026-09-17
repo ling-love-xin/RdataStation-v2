@@ -1,11 +1,11 @@
 # 洞察模块（M8）· 原型设计
 
-> 状态：**设计定稿（原型 v1，2026-09-15）**，代码尚未开始 · 关联文件：`insight-prototype.html`（可交互原型）、`insight-dev-plan.md`（开发方案）
+> 状态：**设计定稿（原型 v1，2026-09-15）**，界面已落地（Phase 1–5；三入口接线与**文件类数据源**见开发方案 §0 的 2026-09-18 批次）· 关联文件：`insight-prototype.html`（可交互原型）、`insight-dev-plan.md`（开发方案）
 > 技术栈：gpui-kit 0.6（五段布局见 `layout/layout-design.md`；右 Dock 起步宽 17.5rem = 280px）
 > 前置：v1 前端蓝本 `v1/frontend/extensions/builtin/workbench/ui/components/panels/`（`InsightStatsSection` / `QualityScoreCard` / `TableProfileView` / `SchemaInsightPanel` / `InsightHistoryTab` / `ColumnInsightsPanel` / `MultiColumnView`）+ `insight-store.ts`
 > 关联文档：`overview.md`（M8 定位）、`ui/ui-design-spec.md`（尺寸与色值规范）、`../connection/connection-prototype-design.md`（作用域三态参照）
 >
-> **范围界定**：本模块只负责**画像 / 评分 / 规则 / 报告**。SQL 执行与结果集属 M5 编辑器；对象树与内省属 M4；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接。
+> **范围界定**：本模块只负责**画像 / 评分 / 规则 / 报告**。SQL 执行与结果集属 M5 编辑器；对象树与内省属 M4；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自源取样（`SampleSource`：库表 / 文件 / 结果集的只读查询）或已有的 DuckDB 临时表（D58/D59）。
 
 ## 1. 设计基准与语义
 
@@ -291,7 +291,9 @@ v1 把洞察拆成「右栏轻量统计 + 底部四 Tab 容器」两处（`Colum
 结果表列头右键「洞察此列」
   └─► 目标 = 该列 ──► 面板切「列」Tab ──► 骨架屏 ──► 列画像（+ 质量评分卡）
 导航树表右键「查看统计」
-  └─► 目标 = 该表 ──► 面板切「表」Tab ──► 走采样查询 ──► 表探查
+  └─► 目标 = 该表 ──► 面板切「表」Tab ──► 取样（源库查询 LIMIT 500 → `tmp_i_` 样本表）──► 表探查
+分析存档 / 草稿箱文件右键「查看统计」（D59）
+  └─► 数据文件（CSV / Parquet / Excel / JSON）交 DuckDB 直接读 ──► 同一份样本表 ──► 表探查
 表探查列名点击 ──► 目标 = 该列 ──► 切「列」Tab
 表探查「评估全表」──► 串行评分（进度）──► 表质量摘要 + 各列质量分
 结构 Tab 类型不一致点击表名 ──► 切「表」Tab

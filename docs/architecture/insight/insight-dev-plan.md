@@ -23,6 +23,21 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — 文件类数据源 + 三个入口接线（D59）
+
+**背景**（产品口径）：**凡 DuckDB 能分析的资源都能洞察**——数据库导航树、分析存档、草稿箱、编辑器结果集，**包括 Excel 这类需要扩展的文件**（CSV / Parquet / Excel / JSON）。上一批（D58）交的是「源取样通道」，宿主侧入口还欠着（当时记档在案）；本批把通道补成「文件也能走」，并接上三个入口。
+
+**已完成并验证**（`cargo test -p rds-engine --lib` **377 项**（本批 +2：`create_analysis_temp_table_as` 建成且登记 / 失败不留半成品）· `cargo test -p rds-insight --lib` **222 项**（本批 +1：文件来源的读取器映射与路径转义）· 集成 `column_profile_e2e` **13 项** · `rds-analytics-resource` lib **93 项**（本批 +1：`can_view_stats` 三态）+ 窗口 **11 项** · `rds-scratchpad` **36 项** · `rds-workbench` lib **72 项**（本批 +1：取样 SQL 的引号与空段）+ `insight_entry` **2 项** + `ui_contract` **7 项** 全绿）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **D59** 文件类数据源 | `SampleSource.conn_id` 改 `Option`：`None` = 跑在 **DuckDB 内存库**（文件与已 `ATTACH` 的表）；新增 `on_duckdb` / `duckdb_file`（扩展名 → 读取函数，**映射与 `load_file_source` 共用一处**；路径做单引号转义；认不出的格式直接报「这个格式还不能分析」而不是猜一个读取器） | `insight/src/model.rs` + `engine/src/dbi/engine/duckdb_engine.rs` |
+| 取样分两条 | 源库连接 → 引擎 JSON 打型建表（原路，抽为 `sample_from_connection`）；DuckDB 侧 → `create_analysis_temp_table_as`（`CREATE TABLE … AS`，**数据不过 Rust**，类型由 DuckDB 定，失败收半成品） | `insight/src/service/persistence.rs` + `engine/src/duckdb/analysis.rs` |
+| 入口①导航树 | 表右键「查看统计」→ 按驱动加引号的限定名 → `open_insight_source_table`；引号与拼装收进 `Shared::insight_sample_sql`（**口径只一处**） | `workbench/src/components/nav_host.rs` + `panels/shared.rs` |
+| 入口②分析存档 | 行右键「查看统计」：受管文件走本体文件（`duckdb_file`）；远端引用按 `source_connection_id` + `schema.table` 重新取样；分析表型（本体在 `analytics.duckdb`，要 ATTACH + 重建定义）随后续批次。菜单项是否可用由 `can_view_stats` 定（按 kind + 可读扩展名） | `analytics_resource/src/resource_view.rs` + `workbench/src/components/resource_host.rs` |
+| 入口③草稿箱 | 文件右键「查看统计」：判定与落地都问宿主（`ScratchpadHost::can_view_stats` / `view_stats`）——草稿箱不依赖 `engine`，读取器口径不该在那边抄一份（默认实现 `false`，不接洞察的宿主不会摆出点了没反应的入口） | `scratchpad/src/{host,scratchpad_view}.rs` + `workbench/src/components/scratchpad_host.rs` |
+| 暂不做 | 编辑器结果集列头「洞察此列」——用户明确说不急（真做时照 `FilterValueHook` 那样注入，**不需要执行期物化**：洞察侧会重跑取样） | — |
+
 ### 2026-09-17 — 入口统一：源取样通道（D58）
 
 **背景**：产品口径确定——**凡是能喂给 DuckDB 的数据都能洞察**（数据库导航树 / 分析存档 / 草稿箱 / 编辑器 SELECT 结果集）。它们形态各异，但分析能力只有一套（列画像 / 表探查 / 多列 / 下钻都要临时表），所以先把入口统一成一条通道。
