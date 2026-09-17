@@ -8,6 +8,28 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 3 第一刀：版本历史对话框（原型 §4.3）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 本体层版本副本 ✅ | `version_copies`（有哪些版本的副本，降序）/ `version_copy_file`（某版本的副本文件：按目录里的实际文件名取，改名后也能找到自己的历史）/ `delete_version_copy`（只删副本、不删版本行）/ `copy_version_out`（取回该版本为草稿）/ `restore_version_copy`（写回本体位置，含只读属性恢复） | `src/payload.rs` |
+| 还原语义 ✅ | `ArchiveService::restore_version`：**用旧内容生成新版本**（与再归档同序：留副本 → 写前快照 → 覆盖本体 → 索引 +1），两条守卫不静默降级——版本无副本则拒（并说清“可能已被保留策略裁剪”），副本内容与当前指纹相同则幂等返回（不为“还原到自己”造无用版本） | `src/service.rs`、`ChangeReason::Restored`（`src/model.rs`） |
+| 历史版本取回 ✅ | `ArchiveService::checkout_version`：源换成历史副本，其余与 `checkout` 同一语义与守卫（不得落在 `resources/` 内） | 同上 |
+| 行数据合成 ✅ | `present::build_version_rows`：**当前版本也占一行**（写前快照语义下版本表里没有它），相邻版本算“较 vN 大小±X · 指纹是否变”；历史行的大小 / 指纹从快照 JSON 取，**解析失败就留空**（不拿当前值顶替） | `src/present.rs` |
+| 对话框 ✅ | `dialogs/version.rs`：版本 / 时间 / 大小 / 指纹 / 变化 / 副本六列的表格（最多 50 行 + 明说“还有 N 个更早的未列出”）；选中行后动作栏才出场（还原为当前版本 / 取回该版本为草稿 / 删除内容副本）；删副本走 `AlertDialog` 二次确认（副本不进回收站）；只读项目下三动作置灰且**说明原因** | 同上、`src/ui.rs`（+6 常数） |
+| 行可被换掉 ✅ | `VersionDialogState` 由宿主持有克隆：动作完成后 worker 再取一次版本 → `set_rows` 换行，**不必关窗重开**（选中项在新行里不存在则自动清掉） | 同上 |
+| 两个入口 ✅ | 行右键菜单「版本历史…」（在“取回…”之后，不设禁用：本体缺失也能看历史）+ 详情面板「版本」分区的「查看全部…」（该分区改成**总是出现**：只有 v1 的存档也能打开，而“没有历史”本身就是一条信息） | `src/resource_view.rs`、`src/detail_view.rs` |
+| 宿主接线 ✅ | `Job::Versions` / `Job::VersionAction`（动作后**顺手再取一次版本 + 主列表**）；`Shared::version_dialog`（`pending` → 侧栏 render 开窗 → `session` → 关窗清掉）；只读与无项目时拒绝并把对话框忙态收掉 | `crates/workbench/src/{services/resource_jobs.rs,components/resource_host.rs,panels/{shared,resources,mod}.rs}` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **87 单测 + 5 对话框窗口测试 + 11 面板窗口测试全绿**（+1 本体、+2 服务、+2 呈现、+3 对话框单测；+1 对话框窗口测试：列表渲染 / 选中后动作栏出现 / 换行后选中被清）；`cargo test -p rds-workbench --test ui_contract -j 2` 7 项全绿（`Shared` 白名单 +`version_dialog`）；`cargo check -p rds-workbench --all-targets -j 2` 零告警 | — |
+
+**三处刻意的取舍**：
+
+1. **不做行级 diff**（原型 §4.3 已定）：只给“大小 ±N · 指纹是否变”两个值，文本 diff 归编辑器；
+2. **不做原地回滚**：还原就是新版本（与 git `revert` 同构），历史永远只追加；
+3. **列表不虚拟化**：版本行最多列 50 条并**明说**（与草稿选择对话框同一口径）——版本元数据行不随保留策略缩减，真成为问题再上 `List`。
+
+**未落地**：详情面板版本区的“最近 3 条”明细（需要一次批量“每存档最近 N 版”取数）、回收到对话框 / 索引修复对话框（Phase 3 余下两项）。
+
 ### 2026-09-17 — Phase 1 第十三刀：面板头收口（`⋯` 四项 + 标题图标，原型 §2.1）
 
 | 项 | 内容 | 落点 |

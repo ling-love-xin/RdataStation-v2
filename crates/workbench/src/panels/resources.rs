@@ -17,6 +17,7 @@ use std::time::Duration;
 use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
+use analytics_resource::dialogs::version::VersionAction;
 use analytics_resource::resource_view::{ResourcesPanel, ResourcesSnapshot};
 
 use super::SidebarPanel;
@@ -50,6 +51,50 @@ impl SidebarPanel {
         self.ensure_resources_pump(cx);
     }
 
+    /// 执行一个版本历史动作（版本对话框的动作栏经此入队）。
+    ///
+    /// 忙态由对话框自己置上（按钮立即置灰），这里只负责校验与送作业；
+    /// 只读项目下拒绝并把忙态收掉——否则那三个按钮会一直转不出结果。
+    pub(crate) fn request_version_action(
+        &self,
+        resource_id: &str,
+        name: &str,
+        action: VersionAction,
+        cx: &mut Context<Self>,
+    ) {
+        let read_only = self.shared.project_ui.borrow().read_only;
+        let Some(root) = self.shared.project_root() else {
+            self.finish_version_action("还没有打开项目".to_string(), cx);
+            return;
+        };
+        if read_only {
+            self.finish_version_action("项目为只读模式，不能改版本".to_string(), cx);
+            return;
+        }
+        resource_jobs::enqueue_version_action(
+            root,
+            read_only,
+            resource_id.to_string(),
+            name.to_string(),
+            action,
+        );
+        self.ensure_resources_pump(cx);
+    }
+
+    /// 收掉对话框的忙态并给状态栏回执（入队被挡、取数 / 动作失败都走它）。
+    fn finish_version_action(&self, message: String, cx: &mut Context<Self>) {
+        {
+            let flow = self.shared.version_dialog.borrow();
+            if let Some(session) = flow.session.as_ref() {
+                session.state.set_busy(false);
+                session.state.set_note(Some(message.clone()));
+            }
+        }
+        *self.shared.notice.borrow_mut() = Some(format!("资产库：{message}"));
+        self.shared.notify_host(cx);
+        cx.notify();
+    }
+
     /// 轮询回填（`ensure_scratchpad_pump` 同一形态）：结果就绪就推给面板实体，
     /// 无待办时再多等一拍后退出（避免空转）。
     fn ensure_resources_pump(&self, cx: &mut Context<Self>) {
@@ -75,6 +120,14 @@ impl SidebarPanel {
                 if let Some(result) = resource_jobs::drain_snapshot() {
                     if weak
                         .update(cx, |this, cx| this.apply_resources_snapshot(result, cx))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                if let Some(result) = resource_jobs::drain_versions() {
+                    if weak
+                        .update(cx, |this, cx| this.apply_versions(result, cx))
                         .is_err()
                     {
                         return;
@@ -107,6 +160,44 @@ impl SidebarPanel {
                 panel.set_snapshot(snapshot, cx);
             }),
             Err(err) => panel.update(cx, |panel, cx| panel.set_notice(Some(err), cx)),
+        }
+    }
+
+    /// 回填一份版本历史取数结果（开窗 / 刷新行都由它驱动）。
+    ///
+    /// 两条路：**已有会话**（同一个存档）→ 直接换行，对话框自己就更新了（还原完不必关窗重开）；
+    /// **没有会话** → 置 `pending`，下一次侧栏渲染开窗（开窗要 `Window`，而这里没有）。
+    fn apply_versions(
+        &mut self,
+        result: Result<resource_jobs::VersionRows, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(rows) => {
+                let mut opened = false;
+                {
+                    let mut flow = self.shared.version_dialog.borrow_mut();
+                    if let Some(session) = flow.session.as_ref() {
+                        if session.resource_id == rows.resource_id {
+                            session.state.set_busy(false);
+                            session.state.set_note(None);
+                            session.state.set_rows(rows.seed.rows.clone());
+                            opened = true;
+                        }
+                    }
+                    if !opened {
+                        flow.pending = Some(rows);
+                    }
+                }
+                if !opened {
+                    // 侧栏自己重绘一帧就能开窗；宿主也要重绘（状态栏回执一并到位）。
+                    self.shared.notify_host(cx);
+                    cx.notify();
+                }
+            }
+            Err(err) => {
+                self.finish_version_action(format!("读取版本历史失败：{err}"), cx);
+            }
         }
     }
 
@@ -154,6 +245,7 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::Undone { name } => {
                 format!("资产库：已撤销归档「{name}」（本体已回到原位置）")
             }
+            resource_jobs::OpOutcome::VersionActionDone { note } => format!("资产库：{note}"),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
             }

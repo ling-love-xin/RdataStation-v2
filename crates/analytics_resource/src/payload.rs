@@ -349,7 +349,7 @@ impl PayloadStore {
     /// 存放一份历史内容副本：`.RSmeta/resources/versions/<id>/<version>/<文件名>`。
     ///
     /// 幂等：同版本副本已存在时直接返回；本体缺失时返回 `Ok(None)`（版本行仍保留，
-    /// 由界面上以"副本缺失"呈现，而不是让历史查询失败）。
+    /// 由界面上以“副本缺失”呈现，而不是让历史查询失败）。
     pub async fn store_version_copy(
         &self,
         resource_id: &str,
@@ -364,10 +364,7 @@ impl PayloadStore {
             .file_name()
             .ok_or_else(|| io_err(&source, "version_copy", "本体没有文件名"))?;
 
-        let dir = self
-            .versions_dir()
-            .join(safe_segment(resource_id)?)
-            .join(version.to_string());
+        let dir = self.version_copy_dir(resource_id)?.join(version.to_string());
         fs::create_dir_all(&dir)
             .await
             .map_err(|e| io_err(&dir, "version_copy_dir", e))?;
@@ -382,6 +379,139 @@ impl PayloadStore {
         Ok(Some(dest))
     }
 
+    /// 历史副本目录：`.RSmeta/resources/versions/<id>/`（可能不存在）。
+    fn version_copy_dir(&self, resource_id: &str) -> Result<PathBuf, CoreError> {
+        Ok(self.versions_dir().join(safe_segment(resource_id)?))
+    }
+
+    /// 有内容副本的版本号（**降序**）；目录不存在 = 空。
+    ///
+    /// 只回答“哪些版本能还原 / 能取回”：版本行可能在而副本已被裁剪（架构 §5.2）。
+    pub async fn version_copies(&self, resource_id: &str) -> Result<Vec<i32>, CoreError> {
+        let dir = self.version_copy_dir(resource_id)?;
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut versions = Vec::new();
+        let mut entries = fs::read_dir(&dir)
+            .await
+            .map_err(|e| io_err(&dir, "version_list_read", e))?;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(version) = entry.file_name().to_string_lossy().parse::<i32>() {
+                versions.push(version);
+            }
+        }
+        versions.sort_unstable_by(|a, b| b.cmp(a));
+        Ok(versions)
+    }
+
+    /// 某版本的内容副本文件（`None` = 没有副本：被裁剪过，或从未生成）。
+    ///
+    /// 副本文件名沿用当时的本体名（可能与当前本体名不同）——故用“目录里第一个文件”
+    /// 而不是拼文件名，免得改名后找不到自己的历史。
+    pub async fn version_copy_file(
+        &self,
+        resource_id: &str,
+        version: i32,
+    ) -> Result<Option<PathBuf>, CoreError> {
+        let dir = self.version_copy_dir(resource_id)?.join(version.to_string());
+        if !dir.is_dir() {
+            return Ok(None);
+        }
+        let mut entries = fs::read_dir(&dir)
+            .await
+            .map_err(|e| io_err(&dir, "version_copy_read", e))?;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_file() {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
+    }
+
+    /// 删除某版本的内容副本（**只删副本，不删版本行**——与裁剪同一口径）；
+    /// 返回是否真的删掉了东西。
+    pub async fn delete_version_copy(
+        &self,
+        resource_id: &str,
+        version: i32,
+    ) -> Result<bool, CoreError> {
+        let dir = self.version_copy_dir(resource_id)?.join(version.to_string());
+        if !dir.is_dir() {
+            return Ok(false);
+        }
+        fs::remove_dir_all(&dir)
+            .await
+            .map_err(|e| io_err(&dir, "version_copy_delete", e))?;
+        Ok(true)
+    }
+
+    /// 把某版本的内容副本复制到外部路径（“取回该版本为草稿”）；
+    /// 返回 `false` = 该版本没有副本。
+    ///
+    /// 与 `copy_out` 的差别只在**源**；落点的可写处理一致（Windows 下复制会继承只读属性）。
+    pub async fn copy_version_out(
+        &self,
+        resource_id: &str,
+        version: i32,
+        dest: &Path,
+    ) -> Result<bool, CoreError> {
+        let Some(source) = self.version_copy_file(resource_id, version).await? else {
+            return Ok(false);
+        };
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| io_err(parent, "version_checkout_create_parent", e))?;
+        }
+        fs::copy(&source, dest)
+            .await
+            .map_err(|e| io_err(dest, "version_checkout_copy", e))?;
+        if let Err(e) = self.set_readonly(dest, false).await {
+            tracing::warn!(error = %e, path = %dest.display(), "清除工作副本只读属性失败");
+        }
+        Ok(true)
+    }
+
+    /// 把某版本的内容副本**写回本体位置**（“还原为当前版本”的本体侧动作）；
+    /// 返回 `false` = 该版本没有副本。
+    ///
+    /// 与 `replace_payload` 的差别：源是副本而不是工作区文件，所以**复制**而不是搬移
+    /// （副本要留着，它仍是历史）。指纹判定与版本递增在服务层做，这一层只管字节。
+    pub async fn restore_version_copy(
+        &self,
+        resource_id: &str,
+        version: i32,
+        rel: &str,
+    ) -> Result<bool, CoreError> {
+        let Some(source) = self.version_copy_file(resource_id, version).await? else {
+            return Ok(false);
+        };
+        let dest = self.resolve(rel)?;
+        if dest.exists() {
+            if let Err(e) = self.set_readonly(&dest, false).await {
+                tracing::warn!(error = %e, path = %dest.display(), "清除旧本体只读属性失败");
+            }
+            fs::remove_file(&dest)
+                .await
+                .map_err(|e| io_err(&dest, "restore_remove_old", e))?;
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| io_err(parent, "restore_create_parent", e))?;
+        }
+        fs::copy(&source, &dest)
+            .await
+            .map_err(|e| io_err(&dest, "restore_copy", e))?;
+        // 写回的内容同样是本体：恢复只读属性（辅助层，应用守卫才是硬约束）。
+        if let Err(e) = self.set_readonly(&dest, true).await {
+            tracing::warn!(error = %e, path = %dest.display(), "设置本体只读属性失败");
+        }
+        Ok(true)
+    }
+
     /// 裁剪历史副本：只保留最近 `keep` 个版本目录，返回被删除的份数。
     ///
     /// **只删内容副本，不删版本行**（架构 §5.2）：版本元数据永久保留，界面以"副本缺失"标注。
@@ -390,7 +520,7 @@ impl PayloadStore {
         resource_id: &str,
         keep: u32,
     ) -> Result<usize, CoreError> {
-        let dir = self.versions_dir().join(safe_segment(resource_id)?);
+        let dir = self.version_copy_dir(resource_id)?;
         if !dir.is_dir() {
             return Ok(0);
         }
@@ -626,6 +756,108 @@ mod tests {
         assert_eq!(removed, 2, "保留 2 份、应删 2 份");
         assert!(store.versions_dir().join("ar_test").join("4").is_dir());
         assert!(!store.versions_dir().join("ar_test").join("1").is_dir());
+
+        cleanup(&project);
+    }
+
+    #[tokio::test]
+    async fn version_copies_can_be_listed_copied_out_deleted_and_restored() {
+        let project = temp_project("versions_ops");
+        let store = PayloadStore::new(&project);
+        let source = project.join("draft.sql");
+        tokio::fs::write(&source, b"old").await.expect("write");
+        store.archive_in(&source, "dau.sql").await.expect("archive");
+
+        // 造两份历史副本：v1 = "old"、v2 = "mid"（本体当前是 "mid"）。
+        store
+            .store_version_copy("ar_test", 1, "dau.sql")
+            .await
+            .expect("copy v1");
+        let mid = project.join("mid.sql");
+        tokio::fs::write(&mid, b"mid").await.expect("write mid");
+        store
+            .replace_payload(&mid, "dau.sql")
+            .await
+            .expect("replace");
+        store
+            .store_version_copy("ar_test", 2, "dau.sql")
+            .await
+            .expect("copy v2");
+
+        assert_eq!(
+            store.version_copies("ar_test").await.expect("list"),
+            vec![2, 1],
+            "副本列举降序（新的在前）"
+        );
+        assert!(
+            store
+                .version_copy_file("ar_test", 3)
+                .await
+                .expect("probe")
+                .is_none(),
+            "没写过的版本没有副本"
+        );
+        assert!(
+            store
+                .version_copies("ar_never")
+                .await
+                .expect("missing dir")
+                .is_empty(),
+            "从未留过副本的存档 = 空，而不是错误"
+        );
+
+        // 复制出去 = “取回该版本为草稿”：内容是那一版的字节，且副本本身不动。
+        let dest = project.join("scratchpad").join("dau（v1 工作副本）.sql");
+        assert!(
+            store
+                .copy_version_out("ar_test", 1, &dest)
+                .await
+                .expect("copy out")
+        );
+        assert_eq!(tokio::fs::read(&dest).await.expect("read"), b"old");
+        assert!(!store.is_readonly(&dest), "工作副本不应只读");
+        assert!(
+            !store
+                .copy_version_out("ar_test", 9, &dest)
+                .await
+                .expect("missing copy"),
+            "没有副本的版本 = false（调用方据此给明确原因）"
+        );
+
+        // 写回本体 = “还原为当前版本”的本体侧动作：内容回到 v1，且本体重新只读。
+        assert!(
+            store
+                .restore_version_copy("ar_test", 1, "dau.sql")
+                .await
+                .expect("restore")
+        );
+        let payload = store.resolve("dau.sql").expect("resolve");
+        assert_eq!(tokio::fs::read(&payload).await.expect("read"), b"old");
+        assert!(store.is_readonly(&payload), "写回的本体也要带只读属性");
+        assert!(
+            store
+                .version_copy_file("ar_test", 1)
+                .await
+                .expect("probe")
+                .is_some(),
+            "还原不消耗副本（它仍是历史）"
+        );
+
+        // 删副本：只删这一份（版本行不在这一层）；重复删 = false。
+        assert!(
+            store
+                .delete_version_copy("ar_test", 2)
+                .await
+                .expect("delete")
+        );
+        assert_eq!(store.version_copies("ar_test").await.expect("list"), vec![1]);
+        assert!(
+            !store
+                .delete_version_copy("ar_test", 2)
+                .await
+                .expect("again"),
+            "已经删过 = false"
+        );
 
         cleanup(&project);
     }

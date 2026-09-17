@@ -37,3 +37,17 @@ pub const CHECKOUT_DIALOG_WIDTH: f32 = 30.0;
 pub const PICK_DIALOG_WIDTH: f32 = 34.0;
 /// 草稿选择列表的最大高度（18.0rem = 288px）：再长就滚动，不靠加高解决。
 pub const PICK_LIST_MAX_HEIGHT: f32 = 18.0;
+/// 版本历史对话框宽（48.0rem = 768px；原型 §7.1——版本表格多列）。
+pub const VERSION_DIALOG_WIDTH: f32 = 48.0;
+/// 版本列表最大高度（20.0rem = 320px）：版本行可积上百条，靠滚动而不是加高对话框。
+pub const VERSION_LIST_MAX_HEIGHT: f32 = 20.0;
+/// 版本表格的列宽（rem）：固定宽 + 差异列弹性，避免长短值抽动列位。
+pub const VERSION_COL_VERSION: f32 = 3.5;
+/// 见 [`VERSION_COL_VERSION`]。
+pub const VERSION_COL_TIME: f32 = 8.0;
+/// 见 [`VERSION_COL_VERSION`]。
+pub const VERSION_COL_SIZE: f32 = 5.0;
+/// 见 [`VERSION_COL_VERSION`]。
+pub const VERSION_COL_HASH: f32 = 9.0;
+/// 见 [`VERSION_COL_VERSION`]。
+pub const VERSION_COL_COPY: f32 = 5.0;

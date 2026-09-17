@@ -10,6 +10,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::detail_view::ArchiveDetail;
+use crate::dialogs::version::VersionRow;
 use crate::model::{ArchiveKind, ArchiveStatus};
 use crate::resource_view::{ArchiveCounts, ArchiveRow, ResourcesSnapshot};
 use crate::AnalyticsResource;
@@ -178,6 +179,101 @@ pub fn to_detail(
     }
 }
 
+/// 版本差异的中间态：快照与资源行两种来源先归一，再算差异。
+struct Candidate {
+    version: i32,
+    size: Option<i32>,
+    hash: Option<String>,
+    time: DateTime<Utc>,
+    is_current: bool,
+    has_copy: bool,
+}
+
+/// 版本历史行（对话框用）：当前版本 + 历史版本，降序。
+///
+/// 合成两件事：
+///
+/// 1. **当前版本也占一行**——写前快照语义下版本表里没有当前版本（它在资源行上），
+///    只列历史会让人以为“最新版不见了”；
+/// 2. **相邻版本差异**（大小 ±N · 指纹是否变）——不做行级 diff，两个值就够一眼看出
+///    “这一版改了多大”；
+///
+/// `payload_ok` = 当前本体在位（当前版本行的“副本”就是本体）；`copies` = 有内容副本的
+/// 历史版本号（`PayloadStore::version_copies`）——两者都是宿主在取数线程上问过文件系统
+/// 才有的，不在渲染期算。
+///
+/// 历史行的大小 / 指纹只能从快照 JSON 里取（表结构如此）；解析失败就**留空**，
+/// 不拿当前版本的值顶替——那会伪造历史。
+pub fn build_version_rows(
+    current: &AnalyticsResource,
+    versions: &[crate::models::ResourceVersion],
+    copies: &[i32],
+    payload_ok: bool,
+) -> Vec<VersionRow> {
+    let mut candidates = vec![Candidate {
+        version: current.version,
+        size: current.file_size,
+        hash: current.content_hash.clone(),
+        time: current.archived_at.unwrap_or(current.updated_at),
+        is_current: true,
+        has_copy: payload_ok,
+    }];
+    for version in versions {
+        // 快照是当时那条资源记录的序列化；字段结构随迁移演进，解析不出来不算错。
+        let snapshot = serde_json::from_value::<AnalyticsResource>(version.snapshot.clone()).ok();
+        candidates.push(Candidate {
+            version: version.version,
+            size: snapshot.as_ref().and_then(|record| record.file_size),
+            hash: snapshot.as_ref().and_then(|record| record.content_hash.clone()),
+            time: version.created_at,
+            is_current: false,
+            has_copy: copies.contains(&version.version),
+        });
+    }
+    candidates.sort_unstable_by(|a, b| b.version.cmp(&a.version));
+
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| VersionRow {
+            version: candidate.version,
+            is_current: candidate.is_current,
+            time_label: format_timestamp(candidate.time),
+            size_label: format_size(candidate.size),
+            hash_short: crate::detail_view::short_hash(candidate.hash.as_deref()),
+            has_copy: candidate.has_copy,
+            // 与**上一版**（版本号 -1）比：列表里它的下一行（降序）。
+            delta_label: candidates
+                .get(index + 1)
+                .filter(|previous| previous.version == candidate.version - 1)
+                .map(|previous| version_delta(previous.version, previous, candidate))
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// 相邻两版的差异文案：`较 v1 大小+1.2 KB · 指纹已变`。
+///
+/// 两侧都有值才比（快照里缺字段就不编）；两样都比不出来时给空串。
+fn version_delta(previous_version: i32, previous: &Candidate, current: &Candidate) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let (Some(now), Some(before)) = (current.size, previous.size) {
+        let delta = now - before;
+        parts.push(match delta {
+            0 => "大小不变".to_string(),
+            delta if delta > 0 => format!("大小+{}", format_size(Some(delta))),
+            delta => format!("大小-{}", format_size(Some(-delta))),
+        });
+    }
+    if let (Some(now), Some(before)) = (current.hash.as_deref(), previous.hash.as_deref()) {
+        parts.push(if now == before { "指纹相同" } else { "指纹已变" }.to_string());
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!("较 v{previous_version} {}", parts.join(" · "))
+}
+
 /// 组装面板快照：行（按状态与种类计分）+ 计数 + 只读标志。
 ///
 /// 计数口径与状态行文案一一对应：`缺失` 与 `索引异常`（内容已变）各自计数，
@@ -226,11 +322,11 @@ pub fn build_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveStatuses, VersionCounts, build_snapshot, format_relative_time, format_scale,
-        format_size, format_timestamp, tail_for,
+        ArchiveStatuses, VersionCounts, build_snapshot, build_version_rows, format_relative_time,
+        format_scale, format_size, format_timestamp, tail_for,
     };
     use crate::model::{ArchiveKind, ArchiveStatus};
-    use crate::models::AnalyticsResource;
+    use crate::models::{AnalyticsResource, ResourceVersion};
     use chrono::{DateTime, Duration, Utc};
     use serde_json::Value;
 
@@ -402,5 +498,68 @@ mod tests {
         assert!(snapshot.read_only);
         // 行状态与计数同源（同一个 statuses 映射）。
         assert_eq!(snapshot.rows[3].status, ArchiveStatus::Missing);
+    }
+
+    /// 历史行：快照里带上当时的大小与指纹（生产路径就是资源记录的序列化）。
+    fn history_version(version: i32, size: i32, hash: &str, at: DateTime<Utc>) -> ResourceVersion {
+        let mut record = row_model("ar_1", "file", Some(size));
+        record.version = version;
+        record.content_hash = Some(hash.to_string());
+        ResourceVersion {
+            id: format!("arv_{version}"),
+            resource_id: "ar_1".to_string(),
+            version,
+            snapshot: serde_json::to_value(&record).expect("snapshot json"),
+            created_at: at,
+        }
+    }
+
+    #[test]
+    fn version_rows_include_current_and_compare_adjacent_versions() {
+        let now = Utc::now();
+        let mut current = row_model("ar_1", "file", Some(1024));
+        current.version = 3;
+        current.content_hash = Some("333333333333ffff".to_string());
+        let history = vec![
+            history_version(2, 2048, "222222222222ffff", now),
+            history_version(1, 1024, "111111111111ffff", now),
+        ];
+
+        // 只有 v2 还留着副本：v1 的已被保留策略裁掉。
+        let rows = build_version_rows(&current, &history, &[2], true);
+        let versions: Vec<i32> = rows.iter().map(|row| row.version).collect();
+        assert_eq!(versions, vec![3, 2, 1], "降序，且当前版本也在列表里");
+        assert!(rows[0].is_current);
+        assert!(!rows[1].is_current);
+        assert!(rows[0].has_copy, "当前版本的“副本”就是本体");
+        assert!(rows[1].has_copy);
+        assert!(!rows[2].has_copy, "副本被裁的版本要露出来");
+        assert_eq!(rows[0].hash_short, "333333333333", "指纹只展示前 12 位");
+        assert_eq!(rows[0].delta_label, "较 v2 大小-1.0 KB · 指纹已变");
+        assert_eq!(rows[1].delta_label, "较 v1 大小+1.0 KB · 指纹已变");
+        assert!(rows[2].delta_label.is_empty(), "最旧一版没有可比的上一版");
+        assert_eq!(rows[0].time_label, format_timestamp(now));
+    }
+
+    #[test]
+    fn version_rows_tolerate_unreadable_snapshots() {
+        let mut current = row_model("ar_1", "file", Some(1024));
+        current.version = 2;
+        let broken = ResourceVersion {
+            id: "arv_1".to_string(),
+            resource_id: "ar_1".to_string(),
+            version: 1,
+            snapshot: Value::Null,
+            created_at: Utc::now(),
+        };
+
+        let rows = build_version_rows(&current, &[broken], &[], false);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].hash_short, "—", "解析不出来的快照不伪造指纹");
+        assert_eq!(rows[1].size_label, "");
+        assert!(
+            rows[1].delta_label.is_empty(),
+            "两侧都没值就不给差异（宁可不比也不编）"
+        );
     }
 }

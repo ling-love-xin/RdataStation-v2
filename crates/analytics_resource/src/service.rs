@@ -244,7 +244,137 @@ impl ArchiveService {
         })
     }
 
-    /// 撤销一次归档（原型 §4.1：归档是"把文件从工作区搬走"的不可逆动作，必须给一个立即反悔的窗口）。
+    /// 还原到某个历史版本：**用旧内容生成新版本**，不覆盖历史（原型 §4.3）。
+    ///
+    /// 与 `archive_into_existing` 同构（写前快照 → 覆盖本体 → 索引 +1），只是内容来源从
+    /// “工作区文件”换成“历史副本”；两条守卫：
+    ///
+    /// - 该版本没有内容副本（被保留策略裁掉 / 从未生成）→ 拒绝，并说清“副本没了”；
+    /// - 副本内容与当前内容指纹相同 → 幂等返回，不产生无意义的新版本（架构 §5.1）。
+    pub async fn restore_version(
+        &self,
+        resource_id: &str,
+        version: i32,
+    ) -> Result<ArchiveOutcome, CoreError> {
+        let current = self.store.get_resource_by_id(resource_id).await?;
+        if current.deleted_at.is_some() {
+            return Err(service_err("restore", "存档已删除，无法还原"));
+        }
+        let rel_path = current
+            .file_rel_path
+            .clone()
+            .ok_or_else(|| service_err("restore", "该存档没有本体路径（非文件型或旧行）"))?;
+
+        let copy = self
+            .payload
+            .version_copy_file(resource_id, version)
+            .await?
+            .ok_or_else(|| {
+                service_err(
+                    "restore",
+                    &format!("v{version} 没有内容副本（可能已被保留策略裁剪），无法还原"),
+                )
+            })?;
+        let copy_hash = self.payload.content_hash(&copy).await?;
+        if copy_hash == current.content_hash.clone().unwrap_or_default() {
+            // 幂等：要还原的内容就是当前内容，什么都不做（与再归档的指纹守卫同一口径）。
+            return Ok(ArchiveOutcome {
+                resource_id: current.id,
+                version: current.version,
+                content_hash: copy_hash,
+                file_rel_path: rel_path,
+                created_new_version: false,
+            });
+        }
+
+        // 与再归档同序：先把当前内容留副本、写快照行，再覆盖本体，最后动索引。
+        self.payload
+            .store_version_copy(resource_id, current.version, &rel_path)
+            .await?;
+        let snapshot = serde_json::to_string(&current).map_err(|e| {
+            CoreError::storage(StorageError::Serialization {
+                format: "JSON".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+        let snapshot_id = self
+            .store
+            .save_resource_version(resource_id, current.version, &snapshot)
+            .await?;
+
+        if !self
+            .payload
+            .restore_version_copy(resource_id, version, &rel_path)
+            .await?
+        {
+            // 副本在“查到”与“写回”之间消失（并发裁剪 / 外部删除）：说清，不静默降级。
+            return Err(service_err(
+                "restore",
+                &format!("v{version} 的内容副本在写回前消失，还原中止"),
+            ));
+        }
+
+        let updated = self
+            .store
+            .update_archive_content(resource_id, &copy_hash, &snapshot_id)
+            .await?;
+
+        if let Err(e) = self
+            .payload
+            .prune_version_copies(resource_id, self.keep_versions)
+            .await
+        {
+            tracing::warn!(error = %e, resource_id, "裁剪历史内容副本失败");
+        }
+
+        self.emit(ChangeReason::Restored, Some(resource_id.to_string()));
+
+        Ok(ArchiveOutcome {
+            resource_id: updated.id,
+            version: updated.version,
+            content_hash: copy_hash,
+            file_rel_path: rel_path,
+            created_new_version: true,
+        })
+    }
+
+    /// 取回某个**历史版本**为工作副本（版本历史对话框的“取回该版本为草稿”）。
+    ///
+    /// 与 `checkout` 同一语义，只是源换成历史副本（本体不动）。
+    pub async fn checkout_version(
+        &self,
+        resource_id: &str,
+        version: i32,
+        dest_path: &std::path::Path,
+    ) -> Result<CheckoutOutcome, CoreError> {
+        if dest_path.starts_with(self.payload.resources_dir()) {
+            return Err(service_err(
+                "checkout_version",
+                "取回目标不能位于 resources/ 内（那是归档本体目录）",
+            ));
+        }
+        let resource = self.store.get_resource_by_id(resource_id).await?;
+        // 本体异常（缺失 / 内容已变）不影响历史副本：能从历史取回就让它取。
+        if !self
+            .payload
+            .copy_version_out(resource_id, version, dest_path)
+            .await?
+        {
+            return Err(service_err(
+                "checkout_version",
+                &format!("v{version} 没有内容副本（可能已被保留策略裁剪），无法取回"),
+            ));
+        }
+        self.emit(ChangeReason::CheckedOut, Some(resource.id.clone()));
+
+        Ok(CheckoutOutcome {
+            resource_id: resource.id,
+            version,
+            dest_path: dest_path.to_path_buf(),
+        })
+    }
+
+    /// 撤销一次归档（原型 §4.1：归档是“把文件从工作区搬走”的不可逆动作，必须给一个立即反悔的窗口）。
     ///
     /// **只管刚发生的那一次**，三条都不静默降级：
     ///
@@ -739,6 +869,128 @@ mod tests {
             service.undo_archive(&undo).await.is_err(),
             "已有新版本不给撤销"
         );
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t122_restore_version_brings_old_content_forward() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let mut events = service.subscribe();
+        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+        let first = service
+            .archive(archive_req(&draft, "dau.sql", None))
+            .await
+            .expect("archive");
+        let _ = events.recv().await.expect("archived event");
+
+        // v2：内容变了 → v1 进历史（版本行 + 内容副本）。
+        let second_draft = write_draft(&dir, "dau2.sql", b"select 2;").await;
+        let second = service
+            .archive(archive_req(
+                &second_draft,
+                "dau.sql",
+                Some(&first.resource_id),
+            ))
+            .await
+            .expect("re-archive");
+        assert_eq!(second.version, 2);
+        let _ = events.recv().await.expect("updated event");
+
+        // 从历史取回 v1（不改本体）：内容是 v1 的字节，且工作副本可写。
+        let copy = dir.join("dau（v1 工作副本）.sql");
+        let checked = service
+            .checkout_version(&first.resource_id, 1, &copy)
+            .await
+            .expect("checkout version");
+        assert_eq!(checked.version, 1);
+        assert_eq!(fs::read(&copy).await.expect("read copy"), b"select 1;");
+        assert!(!service.payload().is_readonly(&copy), "工作副本不应只读");
+        let _ = events.recv().await.expect("checked out event");
+
+        // 还原到 v1：生成 v3（不覆盖历史），本体内容回到 v1 的字节。
+        let restored = service
+            .restore_version(&first.resource_id, 1)
+            .await
+            .expect("restore");
+        assert!(restored.created_new_version);
+        assert_eq!(restored.version, 3, "还原 = 生成新版本，不是原地回滚");
+        let payload = service.payload().resources_dir().join("dau.sql");
+        assert_eq!(fs::read(&payload).await.expect("read"), b"select 1;");
+        assert!(service.payload().is_readonly(&payload), "还原后的本体仍只读");
+
+        // 历史：v1、v2 都有行（写前快照语义），且两份副本都还在（还原不消耗副本）。
+        let versions = service
+            .store()
+            .get_resource_versions(&first.resource_id)
+            .await
+            .expect("versions");
+        let numbers: Vec<i32> = versions.iter().map(|v| v.version).collect();
+        assert_eq!(numbers, vec![2, 1]);
+        assert_eq!(
+            service
+                .payload()
+                .version_copies(&first.resource_id)
+                .await
+                .expect("copies"),
+            vec![2, 1]
+        );
+
+        assert_eq!(
+            events.recv().await.expect("restored event").reason,
+            ChangeReason::Restored
+        );
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn t123_restore_version_requires_copy_and_skips_identical_content() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+        let first = service
+            .archive(archive_req(&draft, "dau.sql", None))
+            .await
+            .expect("archive");
+        let second_draft = write_draft(&dir, "dau2.sql", b"select 2;").await;
+        service
+            .archive(archive_req(
+                &second_draft,
+                "dau.sql",
+                Some(&first.resource_id),
+            ))
+            .await
+            .expect("re-archive");
+
+        // 副本被裁掉（或手工清理）：拒绝并说清原因，不动任何状态。
+        assert!(
+            service
+                .payload()
+                .delete_version_copy(&first.resource_id, 1)
+                .await
+                .expect("delete copy")
+        );
+        let error = service
+            .restore_version(&first.resource_id, 1)
+            .await
+            .expect_err("no copy");
+        assert!(
+            error.to_string().contains("没有内容副本"),
+            "原因要指向副本不在：{error}"
+        );
+
+        // 内容与当前一致的版本：幂等（不为“还原到自己”造一个无意义的新版本）。
+        service
+            .payload()
+            .store_version_copy(&first.resource_id, 2, "dau.sql")
+            .await
+            .expect("copy v2");
+        let outcome = service
+            .restore_version(&first.resource_id, 2)
+            .await
+            .expect("idempotent restore");
+        assert!(!outcome.created_new_version);
+        assert_eq!(outcome.version, 2, "指纹未变不得递增版本");
 
         let _ = fs::remove_dir_all(&dir).await;
     }

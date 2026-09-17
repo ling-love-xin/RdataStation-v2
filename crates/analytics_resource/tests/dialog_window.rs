@@ -9,7 +9,7 @@
 //! 1. **不通配导入**（`use gpui_kit::*` 会把 `test` 属性宏带进作用域）；
 //! 2. 实体访问包在 `cx.update(|window, cx| …)` 里。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui_kit::component::{Root, WindowExt as _};
@@ -28,6 +28,9 @@ use rds_analytics_resource::dialogs::checkout::{
 };
 use rds_analytics_resource::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
+};
+use rds_analytics_resource::dialogs::version::{
+    VersionDialogSeed, VersionDialogState, VersionRow, open_version_dialog_with,
 };
 
 /// 窗口根：组件库的 `Root`（`open_dialog` / `render_dialog_layer` 依赖它）。
@@ -293,4 +296,88 @@ fn checkout_dialog_opens_and_validates_file_name(cx: &mut TestAppContext) {
         "含路径分隔符的文件名不该通过"
     );
     assert!(submitted.borrow().is_empty());
+}
+
+fn version_row(version: i32, is_current: bool, has_copy: bool) -> VersionRow {
+    VersionRow {
+        version,
+        is_current,
+        time_label: format!("2026-09-17 0{version}:00"),
+        size_label: "1.2 KB".to_string(),
+        hash_short: "0123456789ab".to_string(),
+        has_copy,
+        delta_label: if version > 1 {
+            format!("较 v{} 大小+0.2 KB · 指纹已变", version - 1)
+        } else {
+            String::new()
+        },
+    }
+}
+
+fn version_seed() -> VersionDialogSeed {
+    VersionDialogSeed {
+        name: "月报".to_string(),
+        current_version: 3,
+        rows: vec![
+            version_row(3, true, true),
+            version_row(2, false, true),
+            // v1 的副本已被保留策略裁掉：它仍要列出来（行上标"副本缺失"）。
+            version_row(1, false, false),
+        ],
+    }
+}
+
+#[gpui_kit::test]
+fn version_dialog_lists_rows_and_shows_actions_after_selection(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let closed: Rc<Cell<usize>> = Rc::new(Cell::new(0));
+    let state = VersionDialogState::new();
+    {
+        let closed = closed.clone();
+        cx.update(|window, cx| {
+            open_version_dialog_with(
+                window,
+                cx,
+                version_seed(),
+                state.clone(),
+                move |_action, _window, _cx| {},
+                move |_cx| closed.set(closed.get() + 1),
+            );
+        });
+    }
+    draw(cx);
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "版本历史对话框应打开"
+    );
+    assert!(cx.debug_bounds("version-close").is_some());
+    assert!(
+        cx.debug_bounds("version-row-3").is_some() && cx.debug_bounds("version-row-1").is_some(),
+        "当前版本与历史行都要在（行数少的存档就是两行）"
+    );
+    assert!(
+        cx.debug_bounds("version-restore").is_none(),
+        "没选中就不摆动作栏（768px 里每行三个按钮装不下）"
+    );
+
+    // 选中历史行 → 动作栏登场。
+    state.set_selected(Some(2));
+    draw(cx);
+    assert!(cx.debug_bounds("version-restore").is_some());
+    assert!(cx.debug_bounds("version-checkout").is_some());
+    assert!(cx.debug_bounds("version-delete-copy").is_some());
+
+    // 动作完成 → 宿主换一批行（还原把 v4 顶上来了，选中的 v2 不在新行里）：
+    // 选中与动作栏一起退场（不能指向一个已经不在列表里的版本）。
+    state.set_rows(vec![version_row(4, true, true), version_row(3, false, true)]);
+    draw(cx);
+    assert!(state.selected().is_none(), "新行里没有它 → 选中清掉");
+    assert!(cx.debug_bounds("version-restore").is_none());
+    assert!(
+        cx.debug_bounds("version-row-4").is_some(),
+        "换过的行要真渲染出来（还原后的新版本就在列表里）"
+    );
+    assert_eq!(closed.get(), 0, "对话框还开着：动作不该把它关掉");
 }

@@ -9,7 +9,7 @@
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{ActiveTheme, Icon};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable as _};
 use gpui_kit::*;
 
 use crate::model::{ArchiveKind, ArchiveStatus};
@@ -21,9 +21,12 @@ pub const HASH_PREVIEW_LEN: usize = 12;
 
 /// 「内容指纹」那一行的标签文案。
 ///
-/// 渲染层靠它认出"哪一行可以复制"（复制的是**完整指纹**，展示的仍是缩略）：
+/// 渲染层靠它认出“哪一行可以复制”（复制的是**完整指纹**，展示的仍是缩略）：
 /// 两处共用同一个常量，改文案不会把复制入口改丢。
 pub const HASH_LABEL: &str = "内容指纹";
+
+/// 「版本」分区的标题（渲染层靠它认出“这个分区要多一个『查看全部…』入口”）。
+pub const VERSION_SECTION_TITLE: &str = "版本";
 
 /// 一条存档的详情快照（**宿主已格式化**：大小 / 时间 / 标签等都已是人读文案）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,13 +113,14 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     source.push((HASH_LABEL, short_hash(detail.content_hash.as_deref())));
     sections.push(("来源".to_string(), source));
 
-    // 3) 版本（无历史版本时不出现空分区——与其它分区同一口径：空值不产生行）
-    if !detail.history_label.is_empty() {
-        sections.push((
-            "版本".to_string(),
-            vec![("历史", detail.history_label.clone())],
-        ));
-    }
+    // 3) 版本（**总是出现**：只有 v1 的存档也能打开版本历史看一眼——那个列表里
+    //    至少有一行当前版本，而“没有历史”本身就是一条信息）
+    let history = if detail.history_label.is_empty() {
+        "只有当前版本".to_string()
+    } else {
+        detail.history_label.clone()
+    };
+    sections.push((VERSION_SECTION_TITLE.to_string(), vec![("历史", history)]));
 
     // 4) 组织（标签 / 分组只在有内容时出现）
     let mut org = Vec::new();
@@ -253,6 +257,8 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
 
     // 分区
     for (title, rows) in detail_rows(detail) {
+        // 「这个分区要多一个入口吗」得在 `title` 被 move 进子元素之前定下。
+        let is_version_section = title == VERSION_SECTION_TITLE;
         let mut section = div().v_flex().w_full().gap_1().child(
             div()
                 .text_xs()
@@ -304,6 +310,24 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                 );
             }
             section = section.child(row);
+        }
+        // 版本分区多一个入口（原型 §3.1 的「查看全部…」）：打开版本历史对话框。
+        // 只读项目下也可用——历史读取与还原是两件事，后者在对话框里自己管。
+        if is_version_section {
+            if let Some(actions) = actions.as_ref() {
+                let host = actions.host.clone();
+                let detail_for_history = detail.clone();
+                section = section.child(
+                    Button::new("archive-detail-versions")
+                        .ghost()
+                        .xsmall()
+                        .debug_selector(|| "archive-detail-versions".to_string())
+                        .label("查看全部…")
+                        .on_click(move |_, window, cx| {
+                            host.request_version_history(&detail_for_history, window, cx)
+                        }),
+                );
+            }
         }
         body = body.child(section);
     }

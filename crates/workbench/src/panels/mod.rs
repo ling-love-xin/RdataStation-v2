@@ -21,6 +21,7 @@ use gpui_kit::*;
 
 use crate::view::LeftPanel;
 
+use analytics_resource::dialogs::version::{VersionDialogState, open_version_dialog};
 use analytics_resource::resource_view::ResourcesPanel;
 use database::nav_view::NavView;
 use scratchpad::ScratchpadView;
@@ -109,6 +110,58 @@ impl SidebarPanel {
         div().v_flex().size_full().min_h_0().child(panel)
     }
 
+    /// 消费「待开的版本历史对话框」（M6）：建状态 → 存会话 → 开窗。
+    ///
+    /// 开窗与关窗都要 `Window`，而轮询任务里没有——所以取数回来只置 `pending`，
+    /// 在这一帧（render）里开。关窗时清会话：再开同一存档才会走"新开"那条。
+    fn ensure_version_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(rows) = self.shared.version_dialog.borrow_mut().pending.take() else {
+            return;
+        };
+        let read_only = self.shared.project_ui.borrow().read_only;
+        let state = VersionDialogState::new();
+        state.set_read_only(read_only);
+        state.set_rows(rows.seed.rows.clone());
+
+        let resource_id = rows.resource_id.clone();
+        let name = rows.seed.name.clone();
+        {
+            let mut flow = self.shared.version_dialog.borrow_mut();
+            flow.session = Some(shared::VersionDialogSession {
+                resource_id: resource_id.clone(),
+                state: state.clone(),
+            });
+        }
+
+        let entity = cx.entity();
+        let shared_for_close = self.shared.clone();
+        let resource_id_for_close = resource_id.clone();
+        open_version_dialog(
+            window,
+            cx,
+            rows.seed,
+            state,
+            move |action, _window, cx| {
+                let resource_id = resource_id.clone();
+                let name = name.clone();
+                entity.update(cx, |this, cx| {
+                    this.request_version_action(&resource_id, &name, action, cx)
+                });
+            },
+            move |_cx| {
+                let mut flow = shared_for_close.version_dialog.borrow_mut();
+                let same = flow
+                    .session
+                    .as_ref()
+                    .map(|session| session.resource_id.as_str())
+                    == Some(resource_id_for_close.as_str());
+                if same {
+                    flow.session = None;
+                }
+            },
+        );
+    }
+
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
         div()
             .v_flex()
@@ -149,7 +202,9 @@ impl Focusable for SidebarPanel {
 }
 
 impl Render for SidebarPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // M6：版本历史对话框的待开数据在这一帧消费（开窗要 `Window`，见方法注释）。
+        self.ensure_version_dialog(window, cx);
         let bg = cx.theme().colors.background;
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();

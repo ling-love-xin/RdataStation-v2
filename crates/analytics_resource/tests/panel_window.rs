@@ -59,6 +59,11 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("checkout:{}", detail.id));
     }
+    fn request_version_history(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("versions:{}", detail.id));
+    }
     fn request_delete(&self, resource_id: &str, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("delete:{resource_id}"));
     }

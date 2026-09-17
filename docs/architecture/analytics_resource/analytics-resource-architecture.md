@@ -253,7 +253,7 @@ scratchpad ──► analytics_resource ──► engine, shared
 
 | 事件 | 载荷 | 消费方 |
 | --- | --- | --- |
-| `ResourcesChanged` | `{ reason: Archived / CheckedOut / Updated / Deleted / Restored / IndexRebuilt, resource_id }` | 资产库面板（刷新列表）、草稿箱面板（刷新树）、编辑器（只读态/标签失效） |
+| `ResourcesChanged` | `{ reason: Archived / Updated / CheckedOut / Undone / Restored, resource_id }`（**当前已实现这五个**；`Deleted` / `IndexRebuilt` 随回收站与索引修复对话框落地） | 资产库面板（刷新列表）、草稿箱面板（刷新树）、编辑器（只读态/标签失效） |
 
 - v1 的 `analytics-resource-changed` 是 Tauri `app.emit`，**前端零监听**（链路是断的）。v2 没有 Tauri 事件总线，改用**服务上的可观察状态 + 订阅**（`watch` 通道或共享 `Entity`），并且**发/收两端同时落地**才有意义。
 - 事件必须带 `reason`：面板据此决定"局部更新"还是"整表刷新"（v1 只有无载荷的"变了"）。

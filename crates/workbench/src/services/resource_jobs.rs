@@ -25,8 +25,9 @@ use std::sync::{Mutex, OnceLock};
 use chrono::Utc;
 use engine::persistence::project_db::ProjectDatabaseManager;
 
+use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
 use analytics_resource::payload::PayloadStore;
-use analytics_resource::present::{ArchiveStatuses, build_snapshot};
+use analytics_resource::present::{ArchiveStatuses, build_snapshot, build_version_rows};
 use analytics_resource::resource_view::ResourcesSnapshot;
 use analytics_resource::{
     AnalyticsResourceStore, ArchiveRequest, ArchiveService, ArchiveStatus, ArchiveUndo,
@@ -65,12 +66,37 @@ struct UndoJob {
     undo: ArchiveUndo,
 }
 
+/// 一次版本历史取数任务。
+struct VersionsJob {
+    project_root: PathBuf,
+    resource_id: String,
+}
+
+/// 一次版本历史动作任务（还原 / 取回该版本 / 删副本）。
+struct VersionActionJob {
+    project_root: PathBuf,
+    read_only: bool,
+    resource_id: String,
+    /// 存档显示名（回执文案用；事件路径不必再查库）。
+    name: String,
+    action: VersionAction,
+}
+
+/// 版本历史取数结果（宿主据此开窗，或刷新已经开着的那个窗）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionRows {
+    pub resource_id: String,
+    pub seed: VersionDialogSeed,
+}
+
 /// 队列里的作业。
 enum Job {
     Refresh(RefreshJob),
     Archive(ArchiveJob),
     Checkout(CheckoutJob),
     Undo(UndoJob),
+    Versions(VersionsJob),
+    VersionAction(VersionActionJob),
 }
 
 /// 动作回执（工作线程 → 事件路径）。
@@ -95,6 +121,8 @@ pub enum OpOutcome {
     },
     /// 已撤销归档：显示名（本体已回原位）。
     Undone { name: String },
+    /// 版本历史动作完成（`note` 已是一句有信息量的话，事件路径直接印）。
+    VersionActionDone { note: String },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed { action: &'static str, reason: String },
 }
@@ -107,6 +135,8 @@ struct Jobs {
     result: Mutex<Option<Result<ResourcesSnapshot, String>>>,
     /// 动作回执槽：同样只留最新一份（同一时刻用户只可能刚做完一个动作）。
     op_result: Mutex<Option<OpOutcome>>,
+    /// 版本历史槽：只留最新一份（版本对话框一次只开一个）。
+    versions: Mutex<Option<Result<VersionRows, String>>>,
 }
 
 static JOBS: OnceLock<Jobs> = OnceLock::new();
@@ -123,6 +153,7 @@ fn jobs() -> &'static Jobs {
             pending: AtomicUsize::new(0),
             result: Mutex::new(None),
             op_result: Mutex::new(None),
+            versions: Mutex::new(None),
         }
     })
 }
@@ -156,6 +187,21 @@ fn worker(rx: mpsc::Receiver<Job>) {
             Job::Undo(job) => {
                 let outcome = rt.block_on(run_undo(&job));
                 *lock(&jobs().op_result) = Some(outcome);
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
+            Job::Versions(job) => {
+                let result = rt.block_on(load_versions(&job));
+                *lock(&jobs().versions) = Some(result);
+            }
+            Job::VersionAction(job) => {
+                let outcome = rt.block_on(run_version_action(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 动作改的是版本与本体：既刷新对话框的行，也刷新主列表。
+                let result = rt.block_on(load_versions(&VersionsJob {
+                    project_root: job.project_root.clone(),
+                    resource_id: job.resource_id.clone(),
+                }));
+                *lock(&jobs().versions) = Some(result);
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
         }
@@ -266,6 +312,147 @@ async fn run_undo(job: &UndoJob) -> OpOutcome {
             action: "撤销归档",
             reason: error.to_string(),
         },
+    }
+}
+
+/// 版本历史取数：当前版本行 + 历史版本行 + 副本清单 → 对话框种子（工作线程上执行）。
+///
+/// “副本在不在”与“本体在不在”都要问文件系统（`.RSmeta` 与 `resources/`），
+/// 所以这一整套也在工作线程上——渲染期零 I/O 的纪律同样适用于对话框。
+async fn load_versions(job: &VersionsJob) -> Result<VersionRows, String> {
+    let service = open_service(job.project_root.clone()).await?;
+    let current = service
+        .store()
+        .get_resource_by_id(&job.resource_id)
+        .await
+        .map_err(|e| format!("读取存档失败：{e}"))?;
+    let versions = service
+        .store()
+        .get_resource_versions(&job.resource_id)
+        .await
+        .map_err(|e| format!("读取版本历史失败：{e}"))?;
+    let copies = service
+        .payload()
+        .version_copies(&job.resource_id)
+        .await
+        .map_err(|e| format!("读取历史副本失败：{e}"))?;
+    let payload_ok = current
+        .file_rel_path
+        .as_deref()
+        .map(|rel| {
+            service
+                .payload()
+                .resolve(rel)
+                .map(|path| path.is_file())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    Ok(VersionRows {
+        resource_id: job.resource_id.clone(),
+        seed: VersionDialogSeed {
+            name: current.name.clone(),
+            current_version: current.version,
+            rows: build_version_rows(&current, &versions, &copies, payload_ok),
+        },
+    })
+}
+
+/// 执行一次版本历史动作（工作线程上执行）。
+async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
+    let service = match open_service(job.project_root.clone()).await {
+        Ok(service) => service,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "版本历史",
+                reason,
+            };
+        }
+    };
+
+    match job.action {
+        VersionAction::Restore { version } => match service
+            .restore_version(&job.resource_id, version)
+            .await
+        {
+            Ok(outcome) if outcome.created_new_version => OpOutcome::VersionActionDone {
+                note: format!(
+                    "已还原「{}」到 v{version}（生成 v{}；历史未改动）",
+                    job.name, outcome.version
+                ),
+            },
+            Ok(_) => OpOutcome::VersionActionDone {
+                note: format!("「{}」v{version} 的内容与当前一致，无需还原", job.name),
+            },
+            Err(error) => OpOutcome::Failed {
+                action: "还原版本",
+                reason: error.to_string(),
+            },
+        },
+        VersionAction::CheckoutDraft { version } => {
+            // 扩展名取自本体路径（显示名可以是中文，扩展名不行）；落点定在草稿箱目录，
+            // 重名避让与常规取回同一套（动文件之前定死）。
+            let current = match service.store().get_resource_by_id(&job.resource_id).await {
+                Ok(current) => current,
+                Err(error) => {
+                    return OpOutcome::Failed {
+                        action: "取回版本",
+                        reason: error.to_string(),
+                    };
+                }
+            };
+            let extension = current
+                .file_rel_path
+                .as_deref()
+                .and_then(|rel| Path::new(rel).extension())
+                .and_then(|ext| ext.to_str())
+                .map(|ext| format!(".{ext}"))
+                .unwrap_or_default();
+            let dir = job.project_root.join(scratchpad::MODULE_DIR_NAME);
+            let dest = free_dest(&dir.join(format!(
+                "{}（v{version} 工作副本）{extension}",
+                job.name
+            )));
+            match service
+                .checkout_version(&job.resource_id, version, &dest)
+                .await
+            {
+                Ok(_) => {
+                    let shown = dest
+                        .strip_prefix(&job.project_root)
+                        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| dest.to_string_lossy().to_string());
+                    OpOutcome::VersionActionDone {
+                        note: format!("已取回「{}」v{version} 到 {shown}", job.name),
+                    }
+                }
+                Err(error) => OpOutcome::Failed {
+                    action: "取回版本",
+                    reason: error.to_string(),
+                },
+            }
+        }
+        VersionAction::DeleteCopy { version } => {
+            match service
+                .payload()
+                .delete_version_copy(&job.resource_id, version)
+                .await
+            {
+                Ok(true) => OpOutcome::VersionActionDone {
+                    note: format!(
+                        "已删除「{}」v{version} 的内容副本（版本记录保留）",
+                        job.name
+                    ),
+                },
+                Ok(false) => OpOutcome::VersionActionDone {
+                    note: format!("「{}」v{version} 已经没有内容副本", job.name),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "删除内容副本",
+                    reason: error.to_string(),
+                },
+            }
+        }
     }
 }
 
@@ -396,6 +583,33 @@ pub fn enqueue_undo(project_root: PathBuf, read_only: bool, undo: ArchiveUndo) {
     }));
 }
 
+/// 提交一次版本历史取数（**事件路径**调用：右键「版本历史…」/ 详情「查看全部…」）。
+pub fn enqueue_versions(project_root: PathBuf, resource_id: String) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::Versions(VersionsJob {
+        project_root,
+        resource_id,
+    }));
+}
+
+/// 提交一次版本历史动作（**事件路径**调用：版本历史对话框的动作栏）。
+pub fn enqueue_version_action(
+    project_root: PathBuf,
+    read_only: bool,
+    resource_id: String,
+    name: String,
+    action: VersionAction,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::VersionAction(VersionActionJob {
+        project_root,
+        read_only,
+        resource_id,
+        name,
+        action,
+    }));
+}
+
 /// 还有排队或执行中的作业。
 pub fn has_pending() -> bool {
     jobs().pending.load(Ordering::SeqCst) > 0
@@ -409,6 +623,11 @@ pub fn drain_snapshot() -> Option<Result<ResourcesSnapshot, String>> {
 /// 取走最新动作回执（未就绪时 `None`）。
 pub fn drain_op() -> Option<OpOutcome> {
     lock(&jobs().op_result).take()
+}
+
+/// 取走最新版本历史取数结果（未就绪时 `None`）。
+pub fn drain_versions() -> Option<Result<VersionRows, String>> {
+    lock(&jobs().versions).take()
 }
 
 #[cfg(test)]

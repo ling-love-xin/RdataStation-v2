@@ -204,6 +204,8 @@ pub enum ChangeReason {
     CheckedOut,
     /// 撤销归档（本体移回原位 + 删登记行）。
     Undone,
+    /// 从版本历史还原（旧内容 → 生成新版本，与 `Updated` 的区别在发起方与文案）。
+    Restored,
 }
 
 /// 资产库变更事件。

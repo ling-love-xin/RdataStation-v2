@@ -15,6 +15,7 @@ use insight::{InsightTarget, InsightView};
 use mock::mock_view::{MockDetailView, MockPanel, SchemaRequest};
 use scratchpad::ScratchpadStore;
 
+use analytics_resource::dialogs::version::VersionDialogState;
 use analytics_resource::resource_view::ResourcesPanel;
 
 use gpui_kit::*;
@@ -85,6 +86,27 @@ pub struct ScratchpadBridge {
 pub struct ResourcesBridge {
     /// 刷新资产库列表（入队 + 确保轮询印在跑）。
     pub refresh: Rc<dyn Fn(&mut App)>,
+}
+
+/// M6：版本历史对话框的一次会话（数据源 id + 可更新的对话框状态）。
+///
+/// 动作完成后 worker 会再取一次版本，回填时用 `state.set_rows` 换掉行——
+/// 所以还原完**不必关窗重开**（这就是把对话框状态放在 crate 数据结构里的原因）。
+pub struct VersionDialogSession {
+    pub resource_id: String,
+    pub state: VersionDialogState,
+}
+
+/// M6：版本历史对话框的流转状态（待开 → 已开 → 关闭）。
+///
+/// 两段时间两处消费：取数回来时无会话 → 置 `pending`（侧栏 render 开窗）；
+/// 已有会话 → 直接 `set_rows` 更新已开的窗。
+#[derive(Default)]
+pub struct VersionDialogFlow {
+    /// 待开的数据（取数回来时置位，侧栏 render 消费开窗）。
+    pub pending: Option<crate::services::resource_jobs::VersionRows>,
+    /// 已开的会话（`None` = 没开；关窗时清掉）。
+    pub session: Option<VersionDialogSession>,
 }
 
 /// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。
@@ -159,6 +181,8 @@ pub struct Shared {
     pub resources_panel: Rc<RefCell<Option<WeakEntity<ResourcesPanel>>>>,
     /// M6：资产库刷新端口（动作完成后由任意宿主侧位置触发刷新）。
     pub resources_bridge: Rc<RefCell<Option<ResourcesBridge>>>,
+    /// M6：版本历史对话框的流转（取数 → 开窗 → 动作后刷新行；见 `VersionDialogFlow`）。
+    pub version_dialog: Rc<RefCell<VersionDialogFlow>>,
     /// M7：打开 Mock 详情 tab 的宿主命令（面板「查看详情」调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
@@ -200,6 +224,7 @@ impl Shared {
             insight_panel: Rc::new(RefCell::new(None)),
             resources_panel: Rc::new(RefCell::new(None)),
             resources_bridge: Rc::new(RefCell::new(None)),
+            version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
             mock_detail: Rc::new(RefCell::new(None)),
             open_mock_detail: Rc::new(RefCell::new(None)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),

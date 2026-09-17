@@ -427,6 +427,16 @@ impl ResourcesHost for WorkbenchResourceHost {
         });
     }
 
+    fn request_version_history(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        // 取数在后台线程：版本行要读索引表 + 问 `.RSmeta` 下的副本清单，
+        // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。
+        let Some(root) = self.require_project("无法打开版本历史", cx) else {
+            return;
+        };
+        resource_jobs::enqueue_versions(root, detail.id.clone());
+        self.notice("资产库：正在读取版本历史…", cx);
+    }
+
     fn request_delete(&self, _resource_id: &str, _window: &mut Window, cx: &mut App) {
         self.pending(
             "移入回收站尚未接入",
