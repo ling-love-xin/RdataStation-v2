@@ -3109,6 +3109,62 @@ fn the_table_list_keeps_status_and_progress_in_one_place(cx: &mut TestAppContext
     });
 }
 
+/// B7：生成器菜单的两条便利——「最近使用」（本会话点过的，最近在前、去重、只留几条）
+/// 与「推荐」（与导入结构同一条智能映射推理，只用于标记，不写回配置）。
+#[gpui_kit::test]
+fn generator_menu_remembers_recent_picks_and_marks_the_recommendation(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("email".to_string(), ColumnDataType::Integer, cx);
+        panel.add_column("amount".to_string(), ColumnDataType::Integer, cx);
+    });
+    draw(cx);
+
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.recent_generators().is_empty(),
+            "还没点过任何生成器：不给空的「最近使用」分组"
+        );
+        // 推荐与导入结构同源（`ColumnMapper::infer`）：列名命中 → 那个生成器
+        assert_eq!(
+            panel.recommended_generator("email", &ColumnDataType::Integer),
+            "safe_email"
+        );
+        // 认不出的名字走类型兜底（整数 → 随机整数），与 schema_map 的用例同一口径
+        assert_eq!(
+            panel.recommended_generator("xyz_field", &ColumnDataType::Integer),
+            "random_int"
+        );
+    });
+
+    // 点两个不同的生成器，再点回第一个：最近的在前、同一个不重复
+    let ids: Vec<u64> = panel.update(cx, |panel, _cx| {
+        panel
+            .draft()
+            .columns
+            .iter()
+            .map(|column| column.id)
+            .collect()
+    });
+    panel.update(cx, |panel, cx| {
+        panel.set_generator(ids[0], "random_int", cx);
+        panel.set_generator(ids[1], "digit", cx);
+        panel.set_generator(ids[0], "random_int", cx);
+    });
+    draw(cx);
+    panel.update(cx, |panel, _cx| {
+        let recent: Vec<&str> = panel
+            .recent_generators()
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(recent, ["random_int", "digit"]);
+    });
+}
+
 /// 场景生成不记生成历史（历史是单表配置的重放来源）——面板上要说明，别让人以为是丢了。
 #[gpui_kit::test]
 fn scenario_runs_are_not_recorded_in_history(cx: &mut TestAppContext) {

@@ -877,17 +877,48 @@ fn mock_file_name(table_name: &str, format: &MockExportFormat) -> String {
     format!("{table_name}.{ext}")
 }
 
+/// 「最近使用」的生成器最多记几条（菜单只放最前面这几条，多了也翻不动）。
+const RECENT_GENERATORS: usize = 5;
+
 /// 生成器选择菜单（按分类分子菜单）——菜单路径：知道「属于哪类」时最快。
 ///
 /// 详情 tab 的字段行专用（列编辑对话框里生成器是只读展示，见 D19）；
-/// 选中即写回**配置面板**（状态单一权威）。菜单第一项是「搜索生成器」，
-/// 给「只记得名字」的场景用（137 项靠分类翻找太慢）。
+/// 选中即写回**配置面板**（状态单一权威）。菜单自上而下（B7）：
+///
+/// 1. **最近使用**（本会话点过的，最多 [`RECENT_GENERATORS`] 条）——常用的不必再翻分类；
+/// 2. 「搜索生成器…」——只记得名字时的第二条路径；
+/// 3. 15 类子菜单：当前生成器打勾，**智能映射推荐**的那项标「推荐」。
 fn generator_menu(
     panel: Entity<MockPanel>,
     id: u64,
+    current: String,
+    recent: Vec<String>,
+    recommended: String,
 ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
     move |menu, window, cx| {
         let mut menu = menu;
+        if !recent.is_empty() {
+            menu = menu.label("最近使用");
+            for name in recent.iter() {
+                let Some(spec) = generator_catalog::all_specs()
+                    .iter()
+                    .copied()
+                    .find(|spec| spec.name == name.as_str())
+                else {
+                    continue;
+                };
+                let panel = panel.clone();
+                let picked = spec.name;
+                menu = menu.item(
+                    PopupMenuItem::new(generator_menu_label(picked, spec.label, &recommended))
+                        .checked(current == picked)
+                        .on_click(move |_, _, app| {
+                            panel.update(app, |panel, cx| panel.set_generator(id, picked, cx));
+                        }),
+                );
+            }
+            menu = menu.separator();
+        }
         let search = panel.clone();
         menu = menu
             .item(
@@ -902,6 +933,8 @@ fn generator_menu(
             .separator();
         for category in GeneratorCategory::ALL {
             let panel = panel.clone();
+            let recommended = recommended.clone();
+            let current = current.clone();
             menu = menu.submenu(category.label(), window, cx, move |sub, _window, _cx| {
                 let mut sub = sub;
                 for spec in generator_catalog::all_specs()
@@ -911,14 +944,27 @@ fn generator_menu(
                 {
                     let panel = panel.clone();
                     let name = spec.name;
-                    sub = sub.item(PopupMenuItem::new(spec.label).on_click(move |_, _, app| {
-                        panel.update(app, |panel, cx| panel.set_generator(id, name, cx));
-                    }));
+                    sub = sub.item(
+                        PopupMenuItem::new(generator_menu_label(name, spec.label, &recommended))
+                            .checked(current == name)
+                            .on_click(move |_, _, app| {
+                                panel.update(app, |panel, cx| panel.set_generator(id, name, cx));
+                            }),
+                    );
                 }
                 sub
             });
         }
         menu
+    }
+}
+
+/// 菜单项文案：推荐项加后缀（组件没有「右侧说明」的位置，标在标签里最省事）。
+fn generator_menu_label(name: &str, label: &str, recommended: &str) -> String {
+    if name == recommended {
+        format!("{label}（推荐）")
+    } else {
+        label.to_string()
     }
 }
 
@@ -1162,6 +1208,8 @@ pub struct MockPanel {
     history_error: Option<String>,
     /// 「保存为模板」对话框的名称输入框
     template_name: Option<Entity<InputState>>,
+    /// 本会话点过的生成器（目录名，最近在前；生成器菜单的「最近使用」，见 B7）
+    recent_generators: Vec<String>,
     /// 底部折叠段（生成历史 / 用户模板）是否展开（默认收起：面板天天用的是上面那份清单）
     fold_open: bool,
 }
@@ -1369,6 +1417,7 @@ impl MockPanel {
             history_loading: false,
             history_error: None,
             template_name: None,
+            recent_generators: Vec::new(),
             fold_open: false,
         }
     }
@@ -2946,6 +2995,7 @@ impl MockPanel {
         let Some(config) = generator_catalog::default_of(name) else {
             return;
         };
+        self.remember_generator(name);
         if let Some(column) = self.draft.columns.iter_mut().find(|c| c.id == id) {
             column.def.generator = config;
             column.confidence = "manual".to_string();
@@ -2955,6 +3005,28 @@ impl MockPanel {
             self.landed = None;
         }
         cx.notify();
+    }
+
+    /// 本会话点过的生成器（最近在前；生成器菜单的「最近使用」，见 B7）。
+    pub fn recent_generators(&self) -> &[String] {
+        &self.recent_generators
+    }
+
+    /// 某列的**推荐生成器**（目录名）——生成器菜单里标「推荐」（B7）。
+    ///
+    /// 与导入结构走同一条推理（`ColumnMapper::infer`：列名 + 类型 → 生成器），
+    /// 但**只用来标记菜单项**，不写回配置：写回仍然只有用户点击（或导入那条路径）。
+    pub fn recommended_generator(&self, name: &str, data_type: &ColumnDataType) -> String {
+        generator_catalog::spec_of(&ColumnMapper::infer(name, data_type).generator)
+            .name
+            .to_string()
+    }
+
+    /// 记一笔「刚用过哪个生成器」（去重后放最前，只留 [`RECENT_GENERATORS`] 条）。
+    fn remember_generator(&mut self, name: &str) {
+        self.recent_generators.retain(|recent| recent != name);
+        self.recent_generators.insert(0, name.to_string());
+        self.recent_generators.truncate(RECENT_GENERATORS);
     }
 
     /// 打开「搜索生成器」对话框（137 项按名称 / 中文标签 / 分类过滤）。
@@ -5373,6 +5445,15 @@ impl MockDetailView {
             };
             let id = column.id;
             let label = spec.label;
+            // 生成器菜单要的三样（B7）：当前是谁、最近用过哪些、智能映射推荐哪个
+            let (current_generator, recent_generators, recommended_generator) = {
+                let panel = self.panel.read(cx);
+                (
+                    spec.name.to_string(),
+                    panel.recent_generators().to_vec(),
+                    panel.recommended_generator(&column.def.name, &column.def.data_type),
+                )
+            };
             let unique = if column.def.unique { "唯一 · " } else { "" };
             let null_percent = (column.def.nullable_ratio * 100.0).round() as i64;
             let detail = if summary.is_empty() {
@@ -5438,7 +5519,13 @@ impl MockDetailView {
                                 .ghost()
                                 .xsmall()
                                 .label(format!("{label} ▾"))
-                                .dropdown_menu(generator_menu(self.panel.clone(), id))
+                                .dropdown_menu(generator_menu(
+                                    self.panel.clone(),
+                                    id,
+                                    current_generator.clone(),
+                                    recent_generators.clone(),
+                                    recommended_generator.clone(),
+                                ))
                             })
                             .child({
                                 let entity = cx.entity();

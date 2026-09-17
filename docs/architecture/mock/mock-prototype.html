@@ -594,6 +594,11 @@ button{font-family:inherit;cursor:pointer;}
                   <!-- 生成器菜单：15 类 × 均值 9 项；分类子菜单知道「属于哪类」时最快，首项「搜索生成器…」开搜索对话框 -->
                   <div class="popover gen" style="left:0;top:calc(100% + 4px);">
                     <div class="menu">
+                      <!-- 最近使用（B7）：本会话点过的，最近在前；常用的不必再翻分类 -->
+                      <div class="hint" style="padding:2px 8px;">最近使用</div>
+                      <div class="menu-item">随机定点数<span class="tag">random_decimal</span></div>
+                      <div class="menu-item">自增序列<span class="tag">auto_increment</span></div>
+                      <div class="menu-sep"></div>
                       <div class="menu-item">数值<span class="arrow">›</span></div>
                       <div class="menu-item">文本<span class="arrow">›</span></div>
                       <div class="menu-item">个人信息<span class="arrow">›</span></div>
@@ -609,7 +614,8 @@ button{font-family:inherit;cursor:pointer;}
                       <div class="menu-item">约束<span class="arrow">›</span></div>
                     </div>
                     <div class="menu">
-                      <div class="menu-item on">安全邮箱<span class="tag">safe_email</span></div>
+                      <!-- 智能映射推荐的那项标「推荐」（只标记，不写回；写回仍靠点击） -->
+                      <div class="menu-item on">安全邮箱（推荐）<span class="tag">safe_email</span></div>
                       <div class="menu-item">邮箱地址<span class="tag">email</span></div>
                       <div class="menu-item">免费邮箱<span class="tag">free_email</span></div>
                       <div class="menu-item">用户名<span class="tag">username</span></div>
