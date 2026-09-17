@@ -60,7 +60,12 @@
 //! - ✅ 对外接口（B11）：`EditorHostPanel::run_all`（宿主发起执行：导航「查看数据」打开即跑）；
 //!   导航的「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL / 拖拽」统一走宿主 `open_query_document`
 //!   （请求形状在宿主侧：`panels::QueryRequest`）
-//! - ⬜ 1b 待做：`completion`（B9）· 格式化 / 转译 / 执行计划（B10）· 结果区分栏可拖拽（B5）·
+//! - ✅ `format` + `translate`（B10 切片一 / 二）：格式化与**方言转译**的**计划**（纯函数）——
+//!   有选区只动选区、整篇时光标按语句内偏移映射回去、哪几条没动要报给用户；
+//!   转译的**源方言只从连接来**（未绑定就不猜，面板拒绝并说明）。两者都走引擎的
+//!   “切分 → 逐条改写 → 原位回填”骨架（`engine::sql::script`）
+//!   ——转译尤其需要：sqlglot 的整篇 `transpile` 对脚本会**静默丢语句**（架构 §12 #19）
+//! - ⬜ 1b 待做：`completion`（B9）· 执行计划（B10 切片三）· 结果区分栏可拖拽（B5）·
 //!   结果工具栏与标签的通道徽标 / 血缘摘要（B5，依赖 B13/B14/B15）· 导出（B7：CSV / JSON / INSERT 已做，
 //!   Parquet / XLSX 待 DuckDB 扩展）
 //!   · 绑定随会话持久化（B1 余项）· 执行位置三通道（B13）
@@ -89,5 +94,6 @@ pub mod service;
 pub mod session;
 pub mod shared;
 pub mod store;
+pub mod translate;
 pub mod ui;
 pub mod view;

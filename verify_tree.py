@@ -45,6 +45,9 @@ MINE = [
     "crates/engine/src/sql/filter.rs",
     "crates/engine/src/sql/formatter.rs",
     "crates/engine/src/sql/engine.rs",
+    "crates/engine/src/sql/explain.rs",
+    "crates/engine/src/sql/script.rs",
+    "crates/engine/src/sql/transpiler.rs",
     "crates/engine/src/sql/mod.rs",
     "crates/engine/src/connection_manager.rs",
     "crates/engine/src/duckdb/accel.rs",
@@ -61,6 +64,9 @@ MINE = [
     # 编辑器：结果区（B5）与错误回填（B6）
     "crates/editor/Cargo.toml",
     "crates/editor/src/format.rs",
+    "crates/editor/src/translate.rs",
+    "crates/editor/src/store.rs",
+    "crates/editor/src/view/results/sets.rs",
     "crates/editor/src/commands.rs",
     "crates/editor/src/connection.rs",
     "crates/editor/src/channel.rs",
@@ -94,7 +100,7 @@ MINE = [
     "crates/workbench/src/panels/right.rs",
     "crates/app/src/main.rs",
     "crates/workbench/tests/editor_exec_real.rs",
-    "crates/workbench/tests/ui_contract.rs",
+    # ui_contract.rs 不搬：它正被另一个会话改（quick_open 的视图登记），副本用 HEAD 版正好自洽
     # 文档
     "docs/architecture/editor/README.md",
     "docs/architecture/editor/editor-architecture.md",
@@ -153,6 +159,10 @@ def main():
         assert "pub fn plan" in handle.read(), "副本里缺格式化计划实现（MINE 没同步？）"
     with open(os.path.join(VERIFY, "crates/engine/src/sql/formatter.rs"), encoding="utf-8") as handle:
         assert "format_with_report" in handle.read(), "副本里缺格式化报告实现"
+    with open(os.path.join(VERIFY, "crates/editor/src/translate.rs"), encoding="utf-8") as handle:
+        assert "pub fn targets_for" in handle.read(), "副本里缺转译目标表（MINE 没同步？）"
+    with open(os.path.join(VERIFY, "crates/engine/src/sql/explain.rs"), encoding="utf-8") as handle:
+        assert "pub fn explain_sql" in handle.read(), "副本里缺执行计划前缀实现"
     print("自检通过：副本 = HEAD + 本次改动")
     print(f"下一步：cd {os.path.relpath(VERIFY)} && cargo check -p rds-workbench — **不要**设 CARGO_TARGET_DIR")
 

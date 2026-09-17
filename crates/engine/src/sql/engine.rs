@@ -212,8 +212,23 @@ impl SqlEngine {
     ///
     /// 将 SQL 从源方言转换为目标方言。
     /// 转换失败时返回错误信息。
+    ///
+    /// **只吃单条**：对脚本会静默丢弃第二条及以后的语句（架构 §12 #19）。
+    /// 界面请用 [`Self::transpile_report`]。
     pub fn transpile(sql: &str, source: SqlDialect, target: SqlDialect) -> Result<String, String> {
         transpiler::transpile(sql, source, target)
+    }
+
+    /// 【B10】脚本级方言转译（带报告：翻了几条 / 哪几条因为解析不了而逐字保留）
+    ///
+    /// 与 [`Self::transpile`] 的差别：**先按词法切分再逐条转译**，脚本一条都不丢
+    /// （整篇接口会静默截断——实测 `"SELECT 1; SELECT 2;"` → `"SELECT 1"`）。
+    pub fn transpile_report(
+        script: &str,
+        source: SqlDialect,
+        target: SqlDialect,
+    ) -> transpiler::TranspileReport {
+        transpiler::transpile_with_report(script, source, target)
     }
 
     // ==================== 近期需要的（预留） ====================

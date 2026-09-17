@@ -97,7 +97,13 @@ struct WindowedSegment {
 fn window_segment(sql: &str, limit: usize, offset: usize) -> Option<WindowedSegment> {
     const PREFIX: &str = "SELECT * FROM (\n";
     let trimmed = sql.trim().trim_end_matches(';').trim_end();
-    if trimmed.is_empty() || limit == 0 || !crate::driver::utils::returns_rows(trimmed) {
+    if trimmed.is_empty()
+        || limit == 0
+        || !crate::driver::utils::returns_rows(trimmed)
+        // 元信息 / 会话控制语句**不能包**（`SELECT * FROM (EXPLAIN …)` 是语法错误，真机踩到）：
+        // 它们在 `execute_first_segment` 里走“原路执行”分支，分段自然也就无从谈起
+        || !crate::driver::utils::wrappable_in_subquery(trimmed)
+    {
         return None;
     }
     let start = PREFIX.len();
@@ -891,6 +897,28 @@ mod tests {
             assert!(window_sql(sql, 1000, 0).is_none(), "不该能分段：{sql}");
         }
         assert!(window_sql("SELECT 1", 0, 0).is_none(), "limit 0 不是一段");
+    }
+
+    /// 【B10】元信息语句**不能**被窗口包装（真机踩到）：
+    /// `SELECT * FROM (EXPLAIN SELECT …) AS rds_segment LIMIT 1000 OFFSET 0` 在 MySQL 上报 1064。
+    /// 拿不到窗口就该走“原路执行”，而不是发一条包坏的语句出去。
+    #[test]
+    fn window_sql_leaves_meta_statements_alone() {
+        use super::window_sql;
+
+        for sql in [
+            "EXPLAIN SELECT n FROM t",
+            "EXPLAIN QUERY PLAN SELECT n FROM t",
+            "SHOW TABLES",
+            "PRAGMA table_info(t)",
+        ] {
+            assert!(
+                window_sql(sql, 1000, 0).is_none(),
+                "元信息语句不该被包：{sql}"
+            );
+        }
+        // 正常查询照旧能包（分段抓取靠它）
+        assert!(window_sql("SELECT n FROM t", 1000, 0).is_some());
     }
 
     /// 分段执行的报错要还原成**用户写的那句**：位置平移、回显的 SQL 换掉、落在包装上就不给位置

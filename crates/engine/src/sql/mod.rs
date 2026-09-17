@@ -13,20 +13,27 @@
 //! - `builder` — Expression Builder 封装（DDL/DML 生成）
 //! - `formatter` — SQL 格式化
 //! - `transpiler` — 方言转换
+//! - `explain` — 执行计划（EXPLAIN）的方言前缀
+//! - `script` — 脚本级改写骸架（切分 → 逐条改写 → 原位回填，格式化与转译共用）
 //! - `filter` — 下发源库的筛选改写（包一层子查询 + WHERE + ORDER BY 提到外层）
 
 mod builder;
 mod engine;
+mod explain;
 mod filter;
 mod formatter;
 mod highlight;
 mod parser;
+mod script;
 mod split;
 mod transpiler;
 
 pub use builder::QualifiedTable;
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
+pub use explain::explain_sql;
 pub use formatter::FormatReport;
 pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
+pub use script::ScriptRewrite;
 pub use split::{split_statements, SqlStatement};
+pub use transpiler::TranspileReport;

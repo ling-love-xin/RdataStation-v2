@@ -47,22 +47,41 @@ impl FormatPlan {
 /// 驱动类型 → sqlglot 方言
 ///
 /// 认不出的驱动用 `Ansi`（**不是猜某个具体方言**：猜错会静默改写用户的注释与引号风格）。
+/// **格式化**用这个口径（排版猜错只是难看）；**转译**要用 [`dialect_of_known`]
+/// （转译猜错是把语句改成别的意思）。
 pub fn dialect_of(db_type: &str) -> SqlDialect {
+    dialect_of_known(db_type).unwrap_or(SqlDialect::Ansi)
+}
+
+/// 驱动类型 → sqlglot 方言；**认不出返回 `None`**
+///
+/// 【B10 转译用】转译的方向错不得：源方言错了，sqlglot 会按错误的读法解释引号、函数与
+/// 分页语法，输出看着像 SQL 但意思变了。所以未绑定连接（空驱动名）或认不出的驱动
+/// 一律 `None`，由调用方拒绝并给原因。
+pub fn dialect_of_known(db_type: &str) -> Option<SqlDialect> {
     let normalized = db_type.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
     if normalized.starts_with("mysql") {
-        SqlDialect::Mysql
+        Some(SqlDialect::Mysql)
     } else if normalized.starts_with("postgres") || normalized.starts_with("pg") {
-        SqlDialect::Postgres
+        Some(SqlDialect::Postgres)
     } else if normalized.starts_with("sqlite") {
-        SqlDialect::Sqlite
+        Some(SqlDialect::Sqlite)
     } else if normalized.starts_with("duckdb") {
-        SqlDialect::Duckdb
+        Some(SqlDialect::Duckdb)
     } else if normalized.starts_with("mssql") || normalized.starts_with("sqlserver") {
-        SqlDialect::MsSQL
+        Some(SqlDialect::MsSQL)
     } else if normalized.starts_with("oracle") {
-        SqlDialect::Oracle
+        Some(SqlDialect::Oracle)
+    } else if normalized.starts_with("ansi")
+        || normalized.starts_with("standard")
+        || normalized.starts_with("generic")
+    {
+        Some(SqlDialect::Ansi)
     } else {
-        SqlDialect::Ansi
+        None
     }
 }
 
@@ -102,8 +121,8 @@ pub fn plan(text: &str, selection: Range<usize>, dialect: SqlDialect) -> FormatP
     }
 }
 
-/// 席位钳制（选区可能来自内核，理论上不会越界；越界也不能 panic）
-fn clamp_range(text: &str, range: Range<usize>) -> Range<usize> {
+/// 选区钳制（选区可能来自内核，理论上不会越界；越界也不能 panic）
+pub(crate) fn clamp_range(text: &str, range: Range<usize>) -> Range<usize> {
     let len = text.len();
     let start = range.start.min(len);
     let end = range.end.min(len).max(start);
@@ -134,7 +153,7 @@ pub fn map_offset(old: &str, new: &str, offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{dialect_of, map_offset, plan};
+    use super::{dialect_of, dialect_of_known, map_offset, plan};
     use engine::sql::SqlDialect;
 
     #[test]
@@ -147,6 +166,16 @@ mod tests {
         // 认不出不猜具体方言（猜错会静默改写注释与引号）
         assert_eq!(dialect_of("clickhouse"), SqlDialect::Ansi);
         assert_eq!(dialect_of(""), SqlDialect::Ansi);
+    }
+
+    /// 【B10 转译】认不出就是认不出——转译要用这个口径（见 `source_dialect`）
+    #[test]
+    fn the_strict_lookup_refuses_to_guess() {
+        assert_eq!(dialect_of_known("mysql"), Some(SqlDialect::Mysql));
+        assert_eq!(dialect_of_known("duckdb"), Some(SqlDialect::Duckdb));
+        assert_eq!(dialect_of_known("standard-sql"), Some(SqlDialect::Ansi));
+        assert_eq!(dialect_of_known("clickhouse"), None);
+        assert_eq!(dialect_of_known(""), None, "未绑定连接 = 不知道源方言");
     }
 
     #[test]

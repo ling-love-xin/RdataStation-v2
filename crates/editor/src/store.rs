@@ -41,6 +41,11 @@ pub struct ResultEntry {
     pub channel: ExecChannel,
     /// 【B5b】这一段拿满了没有（拿满 = 可能还有下一段；界面据此摆「取下一段」）
     pub has_more: bool,
+    /// 【B10】结果集标签的自定义标题（`None` = 界面按序号给“结果 N”）
+    ///
+    /// 用在“这份结果横竖不是普通查询输出”的场合（今天只有**执行计划**）——
+    /// 用户看到标签就知道自己在看什么，而不用去悬停摘要里找。
+    pub title: Option<String>,
     /// 列名（失败时为空）
     pub columns: Vec<String>,
     /// 行数据（已字符串化；失败时为空）
@@ -70,6 +75,7 @@ impl ResultEntry {
             channel: ExecChannel::default(),
             // 一次拿完的路径（非分段）没有“下一段”可言；分段抓取由 `has_more` 另行标
             has_more: truncated,
+            title: None,
             columns,
             rows,
             error: None,
@@ -100,6 +106,12 @@ impl ResultEntry {
         self
     }
 
+    /// 【B10】给结果集贴一个标题（如「执行计划」；不贴就是“结果 N”）
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
     /// 失败的执行
     pub fn failure(document: DocumentId, sql: String, error: String, elapsed_ms: u64) -> Self {
         Self {
@@ -111,6 +123,7 @@ impl ResultEntry {
             connection: None,
             channel: ExecChannel::default(),
             has_more: false,
+            title: None,
             columns: Vec::new(),
             rows: Vec::new(),
             error: Some(error),

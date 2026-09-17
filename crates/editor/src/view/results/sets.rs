@@ -52,7 +52,11 @@ pub fn tabs(sets: &[ResultEntry], current: ExecChannel) -> Vec<ResultSetTab> {
     sets.iter()
         .enumerate()
         .map(|(index, entry)| ResultSetTab {
-            label: format!("结果 {}", index + 1),
+            // 【B10】有自定义标题就用它（如「执行计划」），否则按序号
+            label: entry
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("结果 {}", index + 1)),
             failed: entry.failed(),
             channel: entry.channel,
             stale: entry.channel != current,
@@ -158,6 +162,21 @@ mod tests {
         assert_eq!(labels, ["结果 1", "结果 2", "结果 3"]);
         let failed: Vec<bool> = rendered.iter().map(|tab| tab.failed).collect();
         assert_eq!(failed, [false, true, false]);
+    }
+
+    /// 【B10】有自己的标题就用它（如「执行计划」），否则按序号——
+    /// 用户看标签就知道那份结果是什么，而不用去悬停摘要里找
+    #[test]
+    fn a_custom_title_replaces_the_numbered_label() {
+        let sets = [
+            ok("select 1"),
+            ok("EXPLAIN select 1").with_title("执行计划"),
+        ];
+        let labels: Vec<String> = tabs(&sets, ExecChannel::Source)
+            .into_iter()
+            .map(|tab| tab.label)
+            .collect();
+        assert_eq!(labels, ["结果 1".to_string(), "执行计划".to_string()]);
     }
 
     /// 【B13】标签必带通道徽标；来自别的通道的标 `·旧`（原型 §5.7 规则 2）

@@ -79,7 +79,7 @@
 | 中央区装配 | `crates/workbench/src/view.rs::init_workspace` |
 | SQL 执行 / 事务 / 取消 | `crates/engine/src/services/sql_service.rs` |
 | 历史存储 | `crates/engine/src/persistence/history_store.rs` |
-| 格式化 / 转译 | `crates/engine/src/sql/{formatter.rs, transpiler.rs}`（格式化 ✅ 走 sqlglot generator，**按语句区间原位回填**（`format_with_report`）、区间外一个字节不动；编辑器侧的“格式化哪一段 / 光标去哪”在 `crates/editor/src/format.rs`；转译未接线，注意 `transpile` 只吃单条） |
+| 格式化 / 转译 / 执行计划 | `crates/engine/src/sql/{formatter.rs, script.rs, transpiler.rs, explain.rs}`（✅ B10 三个都接线了）：格式化与转译共用 **`script.rs`** 的“切分 → 逐条改写 → 原位回填”（区间外一个字节不动）；转译**先切分再逐条**（整篇 `transpile` 对脚本会静默丢语句）；执行计划的前缀按方言生成。编辑器侧的“改哪一段 / 光标去哪”分别在 `crates/editor/src/{format.rs, translate.rs}` |
 | 编辑器上下文持久化 | `crates/engine/src/persistence/workbench_context_store.rs` |
 | 尺寸常量 | `crates/editor/src/ui.rs` |
 | 契约测试范围 | `crates/workbench/tests/ui_contract.rs` |
@@ -143,6 +143,6 @@ cargo check --workspace --all-targets -j 2
 | 待你拍板（阻塞开工） | 架构 §13 十项；其中必须回答：多文档标签方案 · SQL→分析 转换粒度 · 批量执行语义 · 分析模式首期语言 · 是否独立 crate |
 | Phase 0（先做，无 UI） | ✅ 已落地：语句切分 · 历史字段贯通 · crate 骨架 · SQL 高亮 · 格式化选型 · Dock 关闭语义（静态）· **P0.2 三组探针跑完（顺序亲和四库成立；并发下 MySQL/PG 会换连接 → 1b 需 per-session 独占连接；MySQL `BEGIN` 已改文本协议）** · P0.10 台账候选探针已实跑／待你跑：编译基线 P0.9 ／余：驱动层真实 `affected_rows`、驱动填 `column_types`（转 1b） |
 | Phase 1a | ✅ **A1–A15 全部完成（含 A9 对话框收尾）**：服务层 · Dock 标签面板 · 内核视图 · SQL 高亮 · 模式切换矩阵（含确认对话框）· 只读两维度 · 状态栏 · 脏状态 · 持久化 + workbench 接线 + 聚焦已存在标签 · Actions 与快捷键 · 查找 / 替换（内核 + 组件库，零自建）· 会话持久化（真 SQLite 实测）· 大文件档位（真 200MB 稀疏文件实测）· 最小执行 + 结果网格（真机四库实测）· ui_contract 契约 · **关闭三态 / 另存为 / 模式切换确认对话框 + 系统文件对话框（`rfd`）**。⬜ 余：A13 的“关折叠”差内核开关 · 工具栏其余控件（执行族 / 格式化 / 历史 / 执行位置 / 连接）随 1b |
-| Phase 1b | 执行闭环（"合格的 SQL 客户端"，并关闭 M4 遗留的"查看数据不自动执行"）。**进度**：✅ B16（关闭口径 + 新建入口 + 工具栏执行级）· ✅ B11 + B12（**编辑器成为唯一的 SQL 编辑器**：导航四处改走 `QueryRequest`，旧 `EditorPanel` 的 SQL 区块与内联执行闭包已删，M1 草稿拦截改读 `EditorShared`；“查看数据”现在打开即执行）· ✅ B14（筛选 / 排序本地那档 + 下发源库那档都收圆）· ✅ B8（历史面板在右 Dock）· ✅ B7 / B5 / B5b / B6 / B2 / B3 / B4（导出 / 结果区 / 分段抓取 / 错误定位 / 执行族 / 中断 / 事务）· 🟡 B13 执行通道（**切片一 / 二 / 三前半已完成**：三档互斥 + 门控真值 + 随会话持久化 + 切通道旧结果标灰与提示 + **加速档真接通**（`ATTACH … READ_ONLY` / `USE` 解析表名 / 四类执行全分流）+ **「重新挂载源库」入口** + **历史带通道字段**；余：联邦外部源入口 · 执行计划按通道（B10））· 🟡 B10 格式化 / 转译 / 执行计划（**切片一（格式化）已完成**：`format_with_report` 原位回填 + `editor/src/format.rs` 的 `plan` + 工具栏「格式化」与真注册的 `Ctrl+Shift+F`；余：切片二方言转译 · 切片三执行计划）· 🟡 B1 切片一（连接绑定：文档属性 + 工具栏选择器 + 状态栏 + 执行真的用它）——余：绑定随会话持久化 · ⬜ B9 补全 · B15 DuckDB 分析入口 · 项目只读模式对执行的拦截 |
+| Phase 1b | 执行闭环（"合格的 SQL 客户端"，并关闭 M4 遗留的"查看数据不自动执行"）。**进度**：✅ B16（关闭口径 + 新建入口 + 工具栏执行级）· ✅ B11 + B12（**编辑器成为唯一的 SQL 编辑器**：导航四处改走 `QueryRequest`，旧 `EditorPanel` 的 SQL 区块与内联执行闭包已删，M1 草稿拦截改读 `EditorShared`；“查看数据”现在打开即执行）· ✅ B14（筛选 / 排序本地那档 + 下发源库那档都收圆）· ✅ B8（历史面板在右 Dock）· ✅ B7 / B5 / B5b / B6 / B2 / B3 / B4（导出 / 结果区 / 分段抓取 / 错误定位 / 执行族 / 中断 / 事务）· ✅ **B10 格式化 / 转译 / 执行计划（三个切片全完成）**：格式化与转译共用脚本骨架（**脚本一条不丢**）· 工具栏「格式化」+ `Ctrl+Shift+F` · 「⋯ 更多 ▾ ▸ 转译为」十个目标 · 执行计划**按通道取方言**且落新结果集贴标题 · 🟡 B13 执行通道（**切片一 / 二 / 三前半已完成**：三档互斥 + 门控真值 + 随会话持久化 + 切通道旧结果标灰与提示 + **加速档真接通**（`ATTACH … READ_ONLY` / `USE` 解析表名 / 四类执行全分流）+ **「重新挂载源库」入口** + **历史带通道字段**；余：联邦外部源入口）· 🟡 B1 切片一（连接绑定：文档属性 + 工具栏选择器 + 状态栏 + 执行真的用它）——余：绑定随会话持久化 · ⬜ B9 补全 · B15 DuckDB 分析入口 · 项目只读模式对执行的拦截 |
 | Phase 1c | 分析模式骨架（Cell/Output/Session，仅 SQL + Markdown 单元） |
 | Phase 2 | Python / Rust 内核 · Arrow 变量桥 · 富输出 · `.ipynb` 互操作 |

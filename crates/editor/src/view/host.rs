@@ -30,6 +30,7 @@ use crate::edit;
 use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
 use crate::export::{self, ExportFormat, ExportScope};
 use crate::format;
+use crate::translate;
 use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode};
 use crate::persist;
@@ -92,6 +93,11 @@ pub struct EditorHostPanel {
     tx_pending: usize,
     /// 【B13】已请出、尚未回执的“重新挂载加速源”数（同上）
     refresh_pending: usize,
+    /// 【B10】在途结果集的**自定义标题**队列（按提交顺序回填；`None` = 就是“结果 N”）
+    ///
+    /// 为什么要队列：执行是**一条语句一个结论**地回到界面的（批量更是好几条），
+    /// “这一份是执行计划”这种信息必须**按位**对上，不能拿一个布尔量糊过去。
+    pending_labels: std::collections::VecDeque<Option<String>>,
     /// 【B5】结果区要画的东西（工具栏 ⑥ + 状态行 ⑦ + 错误卡片）
     ///
     /// 从选中结果集投影一次就缓在这里：render 是纯读路径，不在渲染期算文案。
@@ -299,6 +305,7 @@ impl EditorHostPanel {
             tx_since: None,
             tx_pending: 0,
             refresh_pending: 0,
+            pending_labels: std::collections::VecDeque::new(),
             result_toolbar: None,
             result_status: None,
             result_tabs: Vec::new(),
@@ -619,6 +626,8 @@ impl EditorHostPanel {
             toolbar = toolbar.child(self.render_exec_group(cx));
             // 文档级：格式化（原型 §2.2：执行级之后是文档级）
             toolbar = toolbar.child(self.render_format_button(cx));
+            // 文档级：⋯ 更多 ▾（低频动作收拢：方言转译 …）
+            toolbar = toolbar.child(self.render_more_group(cx));
             // 通道级 + 连接（右对齐）：原型 §2.2 两栏——“执行位置”在“连接”左边
             toolbar = toolbar.child(
                 div()
@@ -748,11 +757,101 @@ impl EditorHostPanel {
             return;
         }
 
-        let new_text = plan.text.clone();
-        let cursor = plan.cursor;
-        let selection = plan.selection.clone();
+        self.apply_rewrite(
+            plan.text.clone(),
+            plan.selection.clone(),
+            plan.cursor,
+            window,
+            cx,
+        );
+        // 内核的 Change 事件会把内容写回服务层（脏状态跟着变），这里只补一句结果
+        let mut message = format!("已格式化 {} 条语句", plan.formatted);
+        if plan.kept_verbatim > 0 {
+            message.push_str(&format!(
+                "；{} 条解析不了，原样保留",
+                plan.kept_verbatim
+            ));
+        }
+        self.set_message(Some(message), cx);
+    }
+
+    /// 【B10】方言转译整篇 / 选区（工具栏「⋯ 更多 ▾ ▸ 转译为」）
+    ///
+    /// 与格式化同一条路（计划在 [`crate::translate::plan`]，落地在 [`Self::apply_rewrite`]），
+    /// 但**源方言是硬前提**：转译的方向错不得，所以未绑定连接 / 驱动认不出时直接拒绝并说明，
+    /// 不拿起 Ansi 乱翻（那会把 `\``a\`` 与 `# 注释` 静默改成别的意思）。
+    pub(crate) fn transpile_document(
+        &mut self,
+        target: engine::sql::SqlDialect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor_read_only() {
+            self.set_message(Some("只读文档不能转译".to_string()), cx);
+            return;
+        }
+        if !self.execution_allowed() {
+            self.set_message(Some("文本模式不解析 SQL".to_string()), cx);
+            return;
+        }
+        let source = match self.source_dialect() {
+            Ok(source) => source,
+            Err(reason) => {
+                self.set_message(Some(reason), cx);
+                return;
+            }
+        };
+        if source == target {
+            self.set_message(Some("目标方言与源相同，没什么可转译的".to_string()), cx);
+            return;
+        }
+
+        let label = translate::label_of(target);
+        let (text, selection) = self.editor_snapshot(cx);
+        let plan = translate::plan(&text, selection, source, target);
+        if !plan.changes(&text) {
+            let message = if plan.kept_verbatim > 0 {
+                format!(
+                    "{} 条语句转译不了（可能是还没写完），已原样保留",
+                    plan.kept_verbatim
+                )
+            } else {
+                format!("已经是 {label} 能直接用的写法")
+            };
+            self.set_message(Some(message), cx);
+            return;
+        }
+
+        self.apply_rewrite(
+            plan.text.clone(),
+            plan.selection.clone(),
+            plan.cursor,
+            window,
+            cx,
+        );
+        let mut message = format!("已转译为 {label}（{} 条语句）", plan.transpiled);
+        if plan.kept_verbatim > 0 {
+            message.push_str(&format!(
+                "；{} 条解析不了，原样保留",
+                plan.kept_verbatim
+            ));
+        }
+        self.set_message(Some(message), cx);
+    }
+
+    /// 把一次“整篇 / 选区改写”的结果落到内核（格式化与转译共用）
+    ///
+    /// - 用 `replace_all`（进撤销栈）——`set_value` 会清空撤销历史，绝不能用于这两个动作；
+    /// - 落完把选区 / 光标恢复回去：用户按的是“排一下 / 翻一下”，不是“跳回文首”。
+    fn apply_rewrite(
+        &mut self,
+        new_text: String,
+        selection: Option<std::ops::Range<usize>>,
+        cursor: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.editor.update(cx, |state, cx| {
-            // `replace_all` 会记进撤销历史（与 `set_value` 不同：后者清空历史）
             state.replace_all(new_text, window, cx);
             match selection.clone() {
                 Some(range) => state.set_selected_range(range, cx),
@@ -765,15 +864,18 @@ impl EditorHostPanel {
                 }
             }
         });
-        // 内核的 Change 事件会把内容写回服务层（脏状态跟着变），这里只补一句结果
-        let mut message = format!("已格式化 {} 条语句", plan.formatted);
-        if plan.kept_verbatim > 0 {
-            message.push_str(&format!(
-                "；{} 条解析不了，原样保留",
-                plan.kept_verbatim
-            ));
+    }
+
+    /// 本文档的**源方言**（转译用）
+    ///
+    /// 未绑定连接 / 驱动认不出 → `Err(原因)`：转译的方向错不得，宁可不做也不猜。
+    fn source_dialect(&self) -> Result<engine::sql::SqlDialect, String> {
+        let db_type = self.connection_db_type();
+        if db_type.trim().is_empty() {
+            return Err("未绑定连接：转译要知道源方言（先选一个连接）".to_string());
         }
-        self.set_message(Some(message), cx);
+        format::dialect_of_known(&db_type)
+            .ok_or_else(|| format!("认不出驱动「{db_type}」的方言，无法确定转译方向"))
     }
 
     /// 本文档绑定连接的驱动类型（`None` / 未绑定 → 空串 → 方言用 Ansi）
@@ -1042,6 +1144,56 @@ impl EditorHostPanel {
             .label("格式化")
             .on_click(move |_, window, app| {
                 entity.update(app, |panel, cx| panel.format_document(window, cx));
+            })
+    }
+
+    /// 【B10】文档级：`⋯ 更多 ▾`（原型 §2.2 的“低频动作收拢”，不占常驻宽度）
+    ///
+    /// 今天只有 **方言转译**（切片二）；原型的“执行计划”随切片三进来，“校验语法 / 保存为
+    /// 片段 / 复制为 INSERT”还没实现——**没实现就不摆**。
+    ///
+    /// 目标清单在**渲染时**定好（源方言已知就排除它自己）；菜单回调是 `Fn`，不能在里头读面板。
+    /// 源方言未知（未绑定连接）时仍把目标列出来——点下去会收到一句可读的拒绝，
+    /// 比“菜单里什么都没有”更容易看懂。
+    fn render_more_group(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let targets: Vec<translate::Target> = match self.source_dialect() {
+            Ok(source) => translate::targets_for(source),
+            Err(_) => translate::TARGETS.to_vec(),
+        };
+
+        Button::new("editor-more")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-more".to_string())
+            .label("⋯ 更多 ▾")
+            .dropdown_menu(move |menu, window, cx| {
+                // 【B10】执行计划在“转译”之前（原型 §2.2 的更多菜单顺序）
+                let plan_entity = entity.clone();
+                let menu = menu.item(
+                    PopupMenuItem::new("执行计划").on_click(move |_, _window, app| {
+                        plan_entity.update(app, |panel, cx| panel.explain_current(cx));
+                    }),
+                );
+                menu.submenu("转译为", window, cx, {
+                    let entity = entity.clone();
+                    let targets = targets.clone();
+                    move |sub, _window, _cx| {
+                        let mut sub = sub;
+                        for target in targets.iter() {
+                            let entity = entity.clone();
+                            let dialect = target.dialect;
+                            sub = sub.item(PopupMenuItem::new(target.label).on_click(
+                                move |_, window, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.transpile_document(dialect, window, cx);
+                                    });
+                                },
+                            ));
+                        }
+                        sub
+                    }
+                })
             })
     }
 
@@ -1356,6 +1508,20 @@ impl EditorHostPanel {
         placement: ResultPlacement,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.execute_labeled(target, placement, None, cx)
+    }
+
+    /// 同 [`Self::execute`]，但给这一批回填的结果贴一个**自定义标题**（今天只有执行计划用）
+    ///
+    /// 标题是**按位**记的（`pending_labels`）：回填是一条语句一个结论，
+    /// “这份是计划、那份是数据”不能靠一个布尔量猜。
+    pub(crate) fn execute_labeled(
+        &mut self,
+        target: ExecTarget,
+        placement: ResultPlacement,
+        title: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.execution_allowed() {
             self.set_message(Some("文本模式不与数据库通信".to_string()), cx);
             return false;
@@ -1385,6 +1551,8 @@ impl EditorHostPanel {
                     self.running_since = Some(std::time::Instant::now());
                 }
                 self.pending += expected;
+                self.pending_labels
+                    .extend((0..expected).map(|_| title.clone()));
                 self.set_message(None, cx);
                 self.ensure_exec_pump(cx);
                 true
@@ -1393,6 +1561,58 @@ impl EditorHostPanel {
                 self.set_message(Some(error.message().to_string()), cx);
                 false
             }
+        }
+    }
+
+    /// 【B10】执行计划（原型 §5.1：`EXPLAIN` 当前语句 / 选区，**在当前通道上执行**）
+    ///
+    /// - 前缀**按方言生成**（SQLite 是 `EXPLAIN QUERY PLAN`；SQL Server / Oracle 要先改会话开关
+    ///   或再查计划视图，如实说不支持）；
+    /// - 方言取**当前通道**的：源库档用源库的，加速 / 联邦档用 DuckDB 的——那儿才是真要跑的引擎；
+    /// - 结果落**新结果集**并贴「执行计划」标题（不抢用户正在看的那份）。
+    pub(crate) fn explain_current(&mut self, cx: &mut Context<Self>) {
+        if !self.execution_allowed() {
+            self.set_message(Some("文本模式不与数据库通信".to_string()), cx);
+            return;
+        }
+        let (text, selection) = self.editor_snapshot(cx);
+        let sql = match execution::resolve_target(&text, selection) {
+            ExecTarget::Selection(sql) | ExecTarget::Statement(sql) => sql,
+            // `resolve_target` 只会给这三种；空文档 / 只有注释的文档没什么可解释的
+            _ => {
+                self.set_message(Some("没有可生成执行计划的语句".to_string()), cx);
+                return;
+            }
+        };
+        let dialect = if self.channel().runs_locally() {
+            // 加速 / 联邦：语句（连带计划）都在 DuckDB 上跑，计划就该看 DuckDB 的
+            engine::sql::SqlDialect::Duckdb
+        } else {
+            match self.source_dialect() {
+                Ok(dialect) => dialect,
+                Err(reason) => {
+                    self.set_message(Some(reason), cx);
+                    return;
+                }
+            }
+        };
+        let Some(explain) = engine::sql::explain_sql(dialect, &sql) else {
+            self.set_message(
+                Some(format!(
+                    "{} 暂不支持生成执行计划（要先改会话开关 / 再查计划视图）",
+                    translate::label_of(dialect)
+                )),
+                cx,
+            );
+            return;
+        };
+        if self.execute_labeled(
+            ExecTarget::Statement(explain),
+            ResultPlacement::NewSet,
+            Some("执行计划".to_string()),
+            cx,
+        ) {
+            self.set_message(Some("已提交执行计划（结果落新的结果集）".to_string()), cx);
         }
     }
 
@@ -1694,7 +1914,16 @@ impl EditorHostPanel {
                 }
             }
             let placement = outcome.placement;
-            let entry = entry_from(outcome);
+            // 【B10】在途标题按位弹出（只有本文档的回填才算数；别的文档那份不能把队列吃了）
+            let title = if is_mine {
+                self.pending_labels.pop_front().flatten()
+            } else {
+                None
+            };
+            let mut entry = entry_from(outcome);
+            if let Some(title) = title {
+                entry = entry.with_title(title);
+            }
             if is_mine && entry.failed() {
                 // 【B5b】取下一段失败：**已经抓到的行是用户的成果**，不能因为再抓失败就清掉。
                 // 所以这次失败不入存储（选中那份原样不动），只把原因说出来。

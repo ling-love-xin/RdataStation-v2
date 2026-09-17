@@ -617,6 +617,27 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             site.token.as_deref().unwrap_or("?")
         );
 
+        // B10：执行计划 —— 权威来源是**源库自己的 EXPLAIN**，前缀按方言生成
+        // （SQLite 是 `EXPLAIN QUERY PLAN`；裸 EXPLAIN 给的是 VM 指令，对用户没意义）
+        let plan_sql = engine::sql::explain_sql(
+            editor::format::dialect_of(&target.driver),
+            &format!("SELECT n FROM {affected_table}"),
+        )
+        .unwrap_or_else(|| panic!("{}：内置驱动都该能生成执行计划", target.driver));
+        let plan = run_one(&shared, document.clone(), &plan_sql);
+        assert!(
+            plan.has_grid() && !plan.columns.is_empty(),
+            "{}：执行计划要回一份有列的网格（实得 {} 列）",
+            target.driver,
+            plan.columns.len()
+        );
+        eprintln!(
+            "✅ {}：执行计划 —— {plan_sql}\n      → {} 行 × {} 列",
+            target.driver,
+            plan.rows.len(),
+            plan.columns.len()
+        );
+
         // B5b：分段抓取 —— 引擎把原 SQL 套成窗口再取（`SqlService::execute_segment`）
         // 这张表专门用来验分段：5 行不同值，看“拼起来到底重不重、漏不漏”
         let seg_table = format!("rds_seg_probe_{}", std::process::id());

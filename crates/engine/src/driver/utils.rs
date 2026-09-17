@@ -309,6 +309,37 @@ pub fn returns_rows(sql: &str) -> bool {
     ROW_KEYWORDS.contains(&first_keyword(sql).as_str()) || has_returning_clause(sql)
 }
 
+/// 能不能被包进 `SELECT * FROM ( … ) AS 别名` 里去（分段抓取的窗口包装）
+///
+/// 分段抓取靠“把原句套成子查询 + LIMIT/OFFSET”取数（见 `SqlService::window_sql`）。
+/// 下面这些首关键字**不接受子查询上下文**，套上去就是语法错误——真机踩到过：
+/// MySQL 上 `SELECT * FROM (\nEXPLAIN SELECT …\n) AS rds_segment LIMIT 1000 OFFSET 0`
+/// 报 1064。
+///
+/// - `explain` / `show` / `describe` / `desc` / `summarize`：**元信息语句**（结果就几行，
+///   本来也不需要分段）；
+/// - `pragma` / `set` / `use` / `call` / `exec(ute)`：**会话控制 / 存储过程调用**
+///   （在有些库里连“子查询里出现”都不合法）。
+///
+/// 拿不准的一律**按能包**算（`select` / `with` / `values` / `table` 等正常查询）；
+/// 包不了的那些走 `execute_first_segment` 的“原路执行”分支（那段代码本就在）。
+pub fn wrappable_in_subquery(sql: &str) -> bool {
+    const UNWRAPPABLE: [&str; 11] = [
+        "explain",
+        "show",
+        "describe",
+        "desc",
+        "summarize",
+        "pragma",
+        "set",
+        "use",
+        "call",
+        "exec",
+        "execute",
+    ];
+    !UNWRAPPABLE.contains(&first_keyword(sql).as_str())
+}
+
 /// 解析驱动ID
 pub fn parse_driver_id(url: &str) -> Option<&str> {
     if url.starts_with("mysql://") {
@@ -342,7 +373,32 @@ pub fn byte_offset_for_char(sql: &str, one_based_char: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{affected_rows_result, returns_rows};
+    use super::{affected_rows_result, returns_rows, wrappable_in_subquery};
+
+    /// 【B10】能不能包进子查询：元信息 / 会话控制语句不行（真机踩到）
+    #[test]
+    fn meta_statements_are_not_wrappable_in_a_subquery() {
+        for sql in [
+            "EXPLAIN SELECT 1",
+            "explain analyze select 1",
+            "SHOW TABLES",
+            "DESCRIBE t",
+            "PRAGMA table_info(t)",
+            "SET search_path TO public",
+            "USE db",
+        ] {
+            assert!(!wrappable_in_subquery(sql), "不该能包：{sql}");
+        }
+        // 正常查询（含前面带注释的）照旧能包
+        for sql in [
+            "SELECT 1",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "  values (1)",
+            "-- 注释\nSELECT 1",
+        ] {
+            assert!(wrappable_in_subquery(sql), "该能包：{sql}");
+        }
+    }
 
     /// 写语句（无 RETURNING）不返回行——驱动才会走 `execute` 取影响行数
     #[test]

@@ -6,8 +6,8 @@
 //!
 //! ## 取舍
 //!
-//! - **多语句脚本**：`parse_statements_with_comments` 逐条生成，以 `;\n\n` 连接并补尾分号
-//!   （编辑器面向脚本，单条 `parse` 会把多语句判为解析失败）。
+//! - **多语句脚本**：走 `super::script::rewrite_statements`（切分 → 逐条格式化 → 原位回填），
+//!   语句之间以 `;\n\n` 拉开；**一条没写完不影响其它条**。
 //! - **解析失败原样返回**：编辑中的文本（未写完）不能因为格式化成坏内容，也不报错。
 //! - **注释**：只有**语句前**的注释能通过解析——实测（`crates/engine/tests/sqlglot_capabilities.rs` 的
 //!   「块注释位置与可解析性」）行内 / 尾随注释会让整条语句解析失败，而解析失败即**原样返回**，
@@ -20,7 +20,7 @@
 use sqlglot_rust::{Dialect, generate_pretty, parse_statements_with_comments};
 
 use super::engine::SqlDialect;
-use super::split::split_statements;
+use super::script::rewrite_statements;
 
 /// 格式化的结果（给界面用：**改了几条 / 哪几条没动**都要说得清）
 ///
@@ -41,56 +41,15 @@ pub struct FormatReport {
 /// 与 [`format`] 的区别（后者保留是为了兼容旧的调用点）：
 ///
 /// - 旧的 `parse_statements_with_comments` 是**整篇**解析：脚本里有一句没写完，全篇都不格式化；
-/// - 这里用 P0.4 的词法切分（`split::split_statements`）拿到每条语句的**字节区间**，逐条格式化
-///   再**回填原位**：区间外的内容（注释、空行、没写完的那句）一个字节都不动。
-///
-/// 语句之间的空白会被规整为「`;` + 两个换行」（DBeaver 那种读感）；**区间里含注释时不碰它**
-/// （注释归用户，不归格式化器）。
+/// - 这里走 [`super::script::rewrite_statements`]：词法切分拿到每条语句的**字节区间**，逐条
+///   格式化再**回填原位**：区间外的内容（注释、空行、没写完的那句）一个字节都不动。
 pub fn format_with_report(sql: &str, dialect: SqlDialect) -> FormatReport {
     let inner = to_inner_dialect(dialect);
-    let spans = split_statements(sql);
-    if spans.is_empty() {
-        return FormatReport {
-            text: sql.to_string(),
-            formatted: 0,
-            kept_verbatim: 0,
-        };
-    }
-
-    let mut out = String::with_capacity(sql.len() + sql.len() / 8);
-    let mut cursor = 0usize;
-    let mut formatted = 0usize;
-    let mut kept_verbatim = 0usize;
-
-    for (index, span) in spans.iter().enumerate() {
-        if span.start < cursor || span.end > sql.len() {
-            continue; // 防御：区间不合法就跳过（不该发生）
-        }
-        // 语句之间的内容：注释与空行都在这里
-        let gap = &sql[cursor..span.start];
-        let is_first = index == 0;
-        out.push_str(&normalize_gap(gap, is_first));
-
-        let body = span.text(sql);
-        match format_single(body, inner) {
-            Some(text) => {
-                out.push_str(&text);
-                formatted += 1;
-            }
-            None => {
-                out.push_str(body);
-                kept_verbatim += 1;
-            }
-        }
-        cursor = span.end;
-    }
-    // 尾部（最后一句之后的分号 / 空白 / 注释）
-    out.push_str(&normalize_tail(&sql[cursor..]));
-
+    let rewritten = rewrite_statements(sql, |body| format_single(body, inner));
     FormatReport {
-        text: out,
-        formatted,
-        kept_verbatim,
+        text: rewritten.text,
+        formatted: rewritten.rewritten,
+        kept_verbatim: rewritten.kept_verbatim,
     }
 }
 
@@ -109,33 +68,6 @@ fn format_single(body: &str, dialect: Dialect) -> Option<String> {
         return None;
     }
     Some(bodies.join(";\n\n"))
-}
-
-/// 语句之间的空白：只有空白与分号时规整成 `;\n\n`；含注释或其它内容就原样保留
-fn normalize_gap(gap: &str, is_first: bool) -> String {
-    // 分号属于 gap（语句区间不含尾分号），所以“只有空白 + 分号”才是可规整的形状
-    let only_separators = gap.chars().all(|ch| ch.is_whitespace() || ch == ';');
-    if only_separators {
-        if is_first {
-            // 开头到第一条语句之间：只留空白（不凭空插换行）
-            return String::new();
-        }
-        return ";\n\n".to_string();
-    }
-    // 含注释：原样（注释归用户）
-    gap.to_string()
-}
-
-/// 尾部：空白规整成单个换行；有注释就原样
-fn normalize_tail(tail: &str) -> String {
-    if tail.trim().is_empty() {
-        return if tail.is_empty() {
-            String::new()
-        } else {
-            "\n".to_string()
-        };
-    }
-    tail.to_string()
 }
 
 fn to_inner_dialect(dialect: SqlDialect) -> Dialect {
