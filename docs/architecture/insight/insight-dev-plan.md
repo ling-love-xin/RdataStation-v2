@@ -46,7 +46,7 @@
 
 ### 2026-09-17 — Phase 5 一批：快照历史（5.1 + 保存入口）
 
-**已完成并验证**（`cargo test -p rds-insight --lib` **190 项** + 集成 **11 项**全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿（本轮需临时带上 `--features opener/reveal`：并行改动中的 `resource_host.rs` 用了 `opener::reveal`，而 `opener` 尚未开 `reveal` feature，与本批无关）；本批文件 `cargo clippy --all-targets` 零告警）
+**已完成并验证**（`cargo test -p rds-insight --lib` **190 项** + 集成 **11 项**全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿（当时需临时带 `--features opener/reveal`：`resource_host.rs` 用了 `opener::reveal` 而 `opener` 尚未开该 feature，与本批无关；**已由根 Cargo.toml 补上 `features = ["reveal"]`，现已不需要**）；本批文件 `cargo clippy --all-targets` 零告警）
 
 | 项 | 内容 | 落点 |
 | --- | --- | --- |
