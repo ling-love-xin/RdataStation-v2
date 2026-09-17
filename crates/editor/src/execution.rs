@@ -51,14 +51,26 @@ pub enum ExecTarget {
     /// 怎么处理多语句），`Batch` 是在客户端切成独立请求逐条跑——所以它对驱动没有额外要求，
     /// 也因此能给出"每句一个结果集"。
     Batch(Vec<String>),
+    /// 【B5b】取下一段：对**同一条原 SQL** 取 `offset` 之后的 `limit` 行
+    ///
+    /// 目标与 `Statement` 的区别不在“内容多少”而在**取数方式**：它不动当前结果集的位置，
+    /// 新抓到的行**接在**选中那份的后面（[`ResultPlacement::Append`]）。
+    Segment {
+        sql: String,
+        offset: usize,
+        limit: usize,
+    },
 }
 
-impl ExecTarget {
+/// 分段抓取的一段多少行（B5b；计划口径：固定 1000 行/段）
+pub const SEGMENT_ROWS: usize = 1000;
+    impl ExecTarget {
     /// 要发给驱动的 SQL（`Empty` 与 `Batch` 为 `None`；后者看 [`Self::statements`]）
     pub fn sql(&self) -> Option<&str> {
         match self {
             Self::Empty | Self::Batch(_) => None,
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => Some(sql),
+            Self::Segment { sql, .. } => Some(sql),
         }
     }
 
@@ -68,6 +80,15 @@ impl ExecTarget {
             Self::Empty => Vec::new(),
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => vec![sql.clone()],
             Self::Batch(list) => list.clone(),
+            Self::Segment { sql, .. } => vec![sql.clone()],
+        }
+    }
+
+    /// 取下一段要的 `(offset, limit)`（其他目标为 `None`）
+    pub fn segment(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::Segment { offset, limit, .. } => Some((*offset, *limit)),
+            _ => None,
         }
     }
 
@@ -79,6 +100,7 @@ impl ExecTarget {
             Self::Statement(_) => "当前语句",
             Self::All(_) => "全部",
             Self::Batch(_) => "批量",
+            Self::Segment { .. } => "取下一段",
         }
     }
 }
@@ -91,6 +113,10 @@ pub enum ResultPlacement {
     /// 追加一个新结果集，**原结果集仍保持选中**（原型 §4.4：V1 常驻 `＋` 按钮的语义——
     /// “别动我正在看的东西，新的那份放旁边”）
     NewSet,
+    /// 【B5b】把这一段**接在选中那份后面**（取下一段：不新开、不替换）
+    ///
+    /// 接的前提是列形状一致（同一份结果的下一段）；形状变了就当一份新结果落下。
+    Append,
 }
 
 /// 一次执行的附加选项（B4）
@@ -313,6 +339,8 @@ pub struct QueryData {
     pub truncated: bool,
     /// 写语句的真实影响行数（B5；只有驱动报了这个值才是 `Some`）
     pub affected_rows: Option<u32>,
+    /// 【B5b】这一段是不是**拿满了**（拿满 = 可能还有下一段；"还有没有"只靠这个判）
+    pub has_more: bool,
 }
 
 /// 执行端口：**宿主提供"怎么把 SQL 跑出结果集"**
@@ -366,6 +394,21 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn cancel(&self, _connection: Option<&str>) -> Result<bool, String> {
         Err("当前执行器不支持中断".to_string())
     }
+
+    /// 【B5b】取下一段：`sql` 是**原 SQL**（不是上一段套了窗口的那句），
+    /// `offset` = 已经拿到的行数
+    ///
+    /// 与 [`Self::run`] 一样在**工作线程**上调用。默认实现 = 不支持（宿主没接能力的真实状态，
+    /// 与 `cancel` 同一口径：不假装成功）。
+    fn fetch_next(
+        &self,
+        _connection: Option<&str>,
+        _sql: &str,
+        _offset: usize,
+        _limit: usize,
+    ) -> Result<QueryData, String> {
+        Err("当前执行器不支持分段抓取".to_string())
+    }
 }
 
 // ===== 跑完放哪 =====
@@ -385,6 +428,8 @@ struct ExecJob {
     placement: ResultPlacement,
     /// 执行选项（B4：自动提交关 → 本次执行进事务）
     options: RunOptions,
+    /// 【B5b】取下一段的 `(offset, limit)`；`Some` 时走 `fetch_next` 而不是 `run`
+    segment: Option<(usize, usize)>,
 }
 
 /// 一次执行的结论（回到主线程）：**一条语句一条结论**
@@ -481,6 +526,14 @@ impl ExecChannel {
                         // 否则用户看到的“中断”只是打断了当前那一句。
                         let result = if worker_cancelled.load(Ordering::SeqCst) {
                             Err(CANCELED.to_string())
+                        } else if let Some((offset, limit)) = job.segment {
+                            // 【B5b】取下一段：同一条原 SQL 的后一段（不新开结果集）
+                            worker_runner.fetch_next(
+                                job.connection.as_deref(),
+                                &sql,
+                                offset,
+                                limit,
+                            )
                         } else {
                             // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
                             worker_runner.run(job.connection.as_deref(), &sql, job.options)
@@ -552,6 +605,8 @@ impl ExecChannel {
                 statements,
                 placement,
                 options,
+                // 【B5b】取下一段走另一条取数路径（`fetch_next`），其余字段都一样
+                segment: target.segment(),
             })
             .is_err()
         {
@@ -687,8 +742,8 @@ mod tests {
     // 安全模式：**不通配导入**
     use super::{
         ExecChannel, ExecMenuKind, ExecTarget, QueryData, QueryRunner, ResultPlacement, RunOptions,
-        SubmitError, TxAction, TxNote, TxSnapshot, all_target, batch_target, resolve_target,
-        statement_target, target_for_menu,
+        SEGMENT_ROWS, SubmitError, TxAction, TxNote, TxSnapshot, all_target, batch_target,
+        resolve_target, statement_target, target_for_menu,
     };
     use crate::model::DocumentId;
     use std::sync::Arc;
@@ -912,6 +967,23 @@ mod tests {
         assert_eq!(resolve_target(text, 100..200), ExecTarget::Statement(text.to_string()));
     }
 
+    /// 【B5b】取下一段是个**显式目标**：带 (offset, limit)，标签可读，SQL 就是原 SQL
+    #[test]
+    fn a_segment_target_carries_its_offset_and_limit() {
+        let target = ExecTarget::Segment {
+            sql: "select n from t".to_string(),
+            offset: 1_000,
+            limit: SEGMENT_ROWS,
+        };
+        assert_eq!(target.segment(), Some((1_000, SEGMENT_ROWS)));
+        assert_eq!(target.statements(), ["select n from t".to_string()]);
+        assert_eq!(target.sql(), Some("select n from t"));
+        assert_eq!(target.label(), "取下一段");
+
+        // 其它目标没有分段语义（不会误走 fetch_next）
+        assert_eq!(all_target("select 1").segment(), None);
+    }
+
     // ===== 执行通道 =====
 
     /// 假执行器看到的连接序列（B1 断言用）
@@ -939,6 +1011,32 @@ mod tests {
                 elapsed_ms: 7,
                 truncated: false,
                 affected_rows: None,
+                has_more: false,
+            })
+        }
+
+        /// 【B5b】分段假执行器：记下每次要的 (offset, limit)
+        fn fetch_next(
+            &self,
+            connection: Option<&str>,
+            _sql: &str,
+            offset: usize,
+            limit: usize,
+        ) -> Result<QueryData, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen_connections
+                .lock()
+                .expect("锁")
+                .push(connection.map(str::to_string));
+            Ok(QueryData {
+                columns: vec!["n".to_string()],
+                rows: (offset..offset + limit)
+                    .map(|n| vec![n.to_string()])
+                    .collect(),
+                elapsed_ms: 3,
+                truncated: false,
+                affected_rows: None,
+                has_more: false,
             })
         }
     }
@@ -1044,6 +1142,7 @@ mod tests {
                 elapsed_ms: 1,
                 truncated: false,
                 affected_rows: None,
+                has_more: false,
             })
         }
 
@@ -1407,6 +1506,43 @@ mod tests {
             "结论里要带执行后的事务状态（界面不必再问一次）"
         );
         wait_until_idle(&channel);
+    }
+
+    /// 【B5b】取下一段的作业走 `fetch_next`（不是 `run`），并把收到的段接在选中那份后面
+    #[test]
+    fn a_segment_job_fetches_the_next_page_instead_of_running_the_sql() {
+        let (channel, calls, _seen) = channel();
+        let document = DocumentId::new("doc-test");
+
+        channel
+            .submit(
+                document.clone(),
+                &ExecTarget::Segment {
+                    sql: "select n from t".to_string(),
+                    offset: 1_000,
+                    limit: 2,
+                },
+                None,
+                ResultPlacement::Append,
+                RunOptions::default(),
+            )
+            .expect("提交");
+
+        let done = wait(&channel);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "取下一段也是一次执行");
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].sql, "select n from t", "传下去的是原 SQL");
+        assert_eq!(
+            done[0].placement,
+            ResultPlacement::Append,
+            "取下一段是追加，不是替换"
+        );
+        let data = done[0].result.as_ref().expect("应当成功");
+        assert_eq!(
+            data.rows,
+            vec![vec!["1000".to_string()], vec!["1001".to_string()]],
+            "拿到的正是 offset 之后的那一段"
+        );
     }
 
     #[test]

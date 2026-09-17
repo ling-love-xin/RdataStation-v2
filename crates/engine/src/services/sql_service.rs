@@ -68,20 +68,168 @@ pub struct SqlExecuteOptions {
 /// 这条取舍要写在界面上，不能假装它和游标等价。
 ///
 /// 不返回行的语句（DML / DDL / 事务控制）没有“分段”可言 → `None`。
+///
+/// 包装**不对外可见**：`execute_segment` / `execute_first_segment` 会把报错里的位置与回显的
+/// SQL 还原成用户的原句（见 [`unwrap_segment_error`]），界面上不会冒出 `rds_segment`。
 pub fn window_sql(sql: &str, limit: usize, offset: usize) -> Option<String> {
+    window_segment(sql, limit, offset).map(|window| window.sql)
+}
+
+/// 窗口包装的产物：套好的 SQL + **原句在它里面占哪一段**
+///
+/// 包装是内部实现（用户从没写过 `rds_segment`）：驱动报的位置、错误消息里回显的 SQL 都是
+/// 相对**发出去的这段文本**的，要还原回用户的原句就得知道原句落在哪（见
+/// [`unwrap_segment_error`]）。
+struct WindowedSegment {
+    /// 真正发给驱动的文本
+    sql: String,
+    /// 原句裁掉首尾空白与尾分号后，在 `sql` 里的字节区间
+    body: std::ops::Range<usize>,
+    /// 原句里被裁掉的头部长（`body` 内的偏移加上它就得到原句内的偏移）
+    indent: usize,
+}
+
+/// 构造函数——[`window_sql`] 与错误还原共用同一套算法（前缀长度必须对上）
+fn window_segment(sql: &str, limit: usize, offset: usize) -> Option<WindowedSegment> {
+    const PREFIX: &str = "SELECT * FROM (\n";
     let trimmed = sql.trim().trim_end_matches(';').trim_end();
     if trimmed.is_empty() || limit == 0 || !crate::driver::utils::returns_rows(trimmed) {
         return None;
     }
-    Some(format!(
-        "SELECT * FROM (\n{trimmed}\n) AS rds_segment LIMIT {limit} OFFSET {offset}"
-    ))
+    let start = PREFIX.len();
+    Some(WindowedSegment {
+        sql: format!("{PREFIX}{trimmed}\n) AS rds_segment LIMIT {limit} OFFSET {offset}"),
+        body: start..start + trimmed.len(),
+        indent: sql.len() - sql.trim_start().len(),
+    })
+}
+
+/// 把「相对窗口 SQL」的错误结论还原成「相对用户原句」的
+///
+/// 包装不该泄漏到界面上：错误消息里回显的 SQL 换成用户写的那句，位置平移到原句坐标。
+/// 位置落在包装部分（`SELECT * FROM (` 或 `) AS rds_segment LIMIT …`）上时**不给位置**——
+/// 给个错的位置比不给更糟（用户会照着找，还以为自己的 SQL 没问题）。
+fn unwrap_segment_error(
+    result: Result<SqlExecuteResult, CoreError>,
+    original: &str,
+    window: &WindowedSegment,
+) -> Result<SqlExecuteResult, CoreError> {
+    match result {
+        Err(CoreError::Database(DatabaseError::Query {
+            reason, position, ..
+        })) => {
+            let position = position.and_then(|pos| {
+                let offset_in_body = pos.checked_sub(window.body.start)?;
+                (offset_in_body < window.body.len()).then(|| window.indent + offset_in_body)
+            });
+            Err(CoreError::Database(DatabaseError::Query {
+                sql: original.to_string(),
+                reason,
+                position,
+            }))
+        }
+        other => other,
+    }
 }
 
 impl SqlService {
     /// 创建新的 SQL 服务
     pub fn new(manager: Arc<ConnectionManager>) -> Self {
         Self { manager }
+    }
+
+    /// 执行一句：**查询只取第一段**（`limit` 行），写语句走原来的路（B5b）
+    ///
+    /// 与 [`Self::execute`] 的区别只有一件事：查询会被套成窗口（见 [`window_sql`]）。
+    /// 历史记的是**用户执行的原 SQL**（不是套了 `LIMIT` 的变身）——历史面板上出现的
+    /// 应当是人写的那句，否则“重放”会变成重放一个带窗口的别名查询。
+    ///
+    /// 分段抓取的开头一句走这里；后续段走 [`Self::execute_segment`]。
+    pub async fn execute_first_segment(
+        &self,
+        conn_id: Option<String>,
+        sql: &str,
+        limit: usize,
+        options: SqlExecuteOptions,
+    ) -> Result<SqlExecuteResult, CoreError> {
+        let Some(window) = window_segment(sql, limit, 0) else {
+            // 写语句 / 无结果集：没有分段可言，原路执行（历史也由原路记）
+            return self.execute(conn_id, sql, options).await;
+        };
+
+        let started = std::time::Instant::now();
+        let record_history = options.record_history;
+        let result = self
+            .execute(
+                conn_id.clone(),
+                &window.sql,
+                SqlExecuteOptions {
+                    record_history: false,
+                    ..options
+                },
+            )
+            .await;
+        // 报错要按**用户写的那句**报（位置与回显的 SQL 都是）
+        let result = unwrap_segment_error(result, sql, &window);
+
+        if record_history {
+            let conn_key = self
+                .conn_key_for(&conn_id)
+                .await
+                .unwrap_or_else(|_| DEFAULT_CONN_KEY.to_string());
+            match &result {
+                Ok(outcome) => {
+                    self.record_history(
+                        conn_id.as_deref(),
+                        &conn_key,
+                        sql,
+                        outcome.elapsed_ms,
+                        None,
+                        Some(outcome.result.total_rows() as u64),
+                        None,
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    self.record_history(
+                        conn_id.as_deref(),
+                        &conn_key,
+                        sql,
+                        started.elapsed().as_millis() as u64,
+                        Some(error.to_string()),
+                        None,
+                        None,
+                    )
+                    .await;
+                }
+            }
+        }
+        result
+    }
+
+    /// 写一条执行历史（与 [`Self::execute`] 里那两处同一张表）
+    async fn record_history(
+        &self,
+        conn_id: Option<&str>,
+        conn_key: &str,
+        sql: &str,
+        elapsed_ms: u64,
+        error_message: Option<String>,
+        rows_returned: Option<u64>,
+        rows_affected: Option<u64>,
+    ) {
+        let entry = SqlHistoryEntry {
+            conn_id: conn_id.map(str::to_string),
+            db_type: self.db_type_of(conn_key).await,
+            elapsed_ms,
+            success: error_message.is_none(),
+            error_message,
+            rows_returned,
+            rows_affected,
+        };
+        if let Err(e) = history_store::save_sql_history(sql, &entry) {
+            tracing::error!(error = %e, "Failed to save SQL history");
+        }
     }
 
     /// 分段抓取的**一段**：把原 SQL 套成窗口（[`window_sql`]）再跑一次
@@ -99,24 +247,27 @@ impl SqlService {
         offset: usize,
         timeout_ms: Option<u64>,
     ) -> Result<SqlExecuteResult, CoreError> {
-        let Some(windowed) = window_sql(sql, limit, offset) else {
+        let Some(window) = window_segment(sql, limit, offset) else {
             return Err(CoreError::database(DatabaseError::Query {
                 sql: sql.to_string(),
                 reason: "这条语句没有结果集，不能分段抓取".to_string(),
                 position: None,
             }));
         };
-        self.execute(
-            conn_id,
-            &windowed,
-            SqlExecuteOptions {
-                record_history: false,
-                use_transaction: false,
-                timeout_ms,
-                use_cache: false,
-            },
-        )
-        .await
+        let result = self
+            .execute(
+                conn_id,
+                &window.sql,
+                SqlExecuteOptions {
+                    record_history: false,
+                    use_transaction: false,
+                    timeout_ms,
+                    use_cache: false,
+                },
+            )
+            .await;
+        // 同上：分段执行也不能把包装掉包给用户看
+        unwrap_segment_error(result, sql, &window)
     }
 
     /// 执行 SQL 查询
@@ -219,18 +370,16 @@ impl SqlService {
             Ok(result) => result,
             Err(err) => {
                 if options.record_history {
-                    let entry = SqlHistoryEntry {
-                        conn_id: conn_id.clone(),
-                        db_type: self.db_type_of(&conn_key).await,
-                        elapsed_ms: start_time.elapsed().as_millis() as u64,
-                        success: false,
-                        error_message: Some(err.to_string()),
-                        rows_returned: None,
-                        rows_affected: None,
-                    };
-                    if let Err(e) = history_store::save_sql_history(sql, &entry) {
-                        tracing::error!(error = %e, "Failed to save failed SQL to history");
-                    }
+                    self.record_history(
+                        conn_id.as_deref(),
+                        &conn_key,
+                        sql,
+                        start_time.elapsed().as_millis() as u64,
+                        Some(err.to_string()),
+                        None,
+                        None,
+                    )
+                    .await;
                 }
                 return Err(err);
             }
@@ -261,27 +410,26 @@ impl SqlService {
                 stmt_type = ?stmt_type,
                 "SQL executed"
             );
-            let entry = SqlHistoryEntry {
-                conn_id: conn_id.clone(),
-                db_type: self.db_type_of(&conn_key).await,
+            self.record_history(
+                conn_id.as_deref(),
+                &conn_key,
+                sql,
                 elapsed_ms,
-                success: true,
-                error_message: None,
-                rows_returned: if is_dql {
+                None,
+                if is_dql {
                     // 用方法而**不是字段**：native 驱动只填 Arrow `batches`，
                     // `QueryResult.total_rows` 字段恒为 0（见架构 §12 #21）
                     Some(result.total_rows() as u64)
                 } else {
                     None
                 },
-                rows_affected: match result.is_read_only {
+                // 作用于源库的写语句只记 `rows_affected`
+                match result.is_read_only {
                     Some(false) => result.affected_rows.map(u64::from),
                     _ => None,
                 },
-            };
-            if let Err(e) = history_store::save_sql_history(sql, &entry) {
-                tracing::error!(error = %e, "Failed to save SQL history");
-            }
+            )
+            .await;
         }
 
         Ok(SqlExecuteResult {
@@ -728,6 +876,96 @@ mod tests {
             assert!(window_sql(sql, 1000, 0).is_none(), "不该能分段：{sql}");
         }
         assert!(window_sql("SELECT 1", 0, 0).is_none(), "limit 0 不是一段");
+    }
+
+    /// 分段执行的报错要还原成**用户写的那句**：位置平移、回显的 SQL 换掉、落在包装上就不给位置
+    #[test]
+    fn segment_errors_are_rewritten_for_the_original_sql() {
+        use super::{unwrap_segment_error, window_segment};
+
+        fn query_error_at(sql: &str, position: usize) -> CoreError {
+            CoreError::database(DatabaseError::Query {
+                sql: sql.to_string(),
+                reason: "boom".to_string(),
+                position: Some(position),
+            })
+        }
+
+        // PG 报的位置是相对**发出去的文本**（= 包装后）的：模拟“写错的列名”在包装里的偏移
+        let original = "SELECT no_such_column_xyz FROM t";
+        let window = window_segment(original, 1000, 0).expect("查询能分段");
+        let typo_at = window.sql.find("no_such_column_xyz").expect("包装里有原句");
+        // 先确认场景成立：包装确实把原句推后了（不然这条测试什么都没盯住）
+        assert!(typo_at > 0, "原句不在包装的开头");
+
+        let mapped = unwrap_segment_error(
+            Err(query_error_at(&window.sql, typo_at)),
+            original,
+            &window,
+        );
+        let Err(CoreError::Database(DatabaseError::Query { sql, position, .. })) = mapped else {
+            panic!("应当仍是查询错误");
+        };
+        assert_eq!(sql, original, "回显的 SQL 应当是用户写的那句（不带包装）");
+        let position = position.expect("位置该还原出来");
+        assert_eq!(
+            &original[position..position + "no_such_column_xyz".len()],
+            "no_such_column_xyz",
+            "还原后的位置要正好落在写错的词上（实得 {position}）"
+        );
+
+        // 位置落在包装上（`AS rds_segment` 那一带）→ 不给位置（给错位置比不给更糟）
+        let tail = window.sql.find("AS rds_segment").expect("有别名");
+        let tailed = unwrap_segment_error(
+            Err(query_error_at(&window.sql, tail)),
+            original,
+            &window,
+        );
+        assert!(
+            matches!(
+                tailed,
+                Err(CoreError::Database(DatabaseError::Query {
+                    position: None,
+                    ..
+                }))
+            ),
+            "落在包装上的位置不该给出去"
+        );
+
+        // 原句带前导空白：偏移要按**原句**（含空白）算，否则光标会差几个字
+        let indented = "   SELECT no_such_column_xyz FROM t";
+        let window = window_segment(indented, 10, 0).expect("能分段");
+        let typo_at = window.sql.find("no_such_column_xyz").expect("有");
+        let mapped = unwrap_segment_error(
+            Err(query_error_at(&window.sql, typo_at)),
+            indented,
+            &window,
+        );
+        let Err(CoreError::Database(DatabaseError::Query { position, .. })) = mapped else {
+            panic!("应当仍是查询错误");
+        };
+        let position = position.expect("位置该还原出来");
+        assert_eq!(
+            &indented[position..position + "no_such_column_xyz".len()],
+            "no_such_column_xyz",
+            "带前导空白的原句也要对得上（实得 {position}）"
+        );
+
+        // 不是查询错误就原样放行（位置平移到别的错误域上就是胡乱改）
+        let untouched = unwrap_segment_error(
+            Err(CoreError::database(DatabaseError::TableNotFound {
+                table: "t".to_string(),
+            })),
+            original,
+            &window,
+        );
+        assert!(
+            matches!(
+                untouched,
+                Err(CoreError::Database(DatabaseError::TableNotFound { .. }))
+            ),
+            "其它错误域不该被改写"
+        );
     }
 
     #[tokio::test]

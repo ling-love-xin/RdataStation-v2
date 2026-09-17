@@ -220,7 +220,8 @@ fn collect_with_snapshots(
                     data.columns,
                     data.rows,
                 )
-                .with_affected_rows(data.affected_rows),
+                .with_affected_rows(data.affected_rows)
+                .with_has_more(data.has_more),
                 Err(error) => {
                     editor::store::ResultEntry::failure(outcome.document, outcome.sql, error, 0)
                 }
@@ -380,6 +381,8 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         );
 
         // B2：批量（逐条独立）——每句一个结果集，失败不中断
+        // 用**相对口径**断言份数：这个文档后面还有别的用例在推结果集，写死总数会随流程改动而碎
+        let sets_before_batch = shared.results().set_count(&document);
         let script = "select 1 as n;\nselect 2 as n;\nselect 3 as n;";
         let batch = run_through_editor(
             &shared,
@@ -403,9 +406,10 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         );
         assert_eq!(
             shared.results().set_count(&document),
-            4,
-            "{}：一份替换结果 + 三份批量结果 = 4 个结果集",
-            target.driver
+            sets_before_batch + 3,
+            "{}：批量三句该新增三个结果集（批量前 {} 份）",
+            target.driver,
+            sets_before_batch
         );
         eprintln!(
             "✅ {}：批量三句 → 三个结果集（{}）",
@@ -679,6 +683,102 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         );
         eprintln!(
             "✅ {}：分段抓取 —— 三段拼成 5 行不重不漏（DML 拒绝 / CTE 可分段也验了）",
+            target.driver
+        );
+
+        // B5b：**走编辑器**的分段抓取（首段 1000 行 → 取下一段接在同一份结果上）
+        // 建 1200 行：分成 6 批插（每批 200 行——SQLite 对多行 VALUES 有上限，不一次塞 1200 行）
+        let page_table = format!("rds_page_probe_{}", std::process::id());
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("CREATE TABLE {page_table} (n INTEGER)"),
+        );
+        for chunk in 0..6 {
+            let values: Vec<String> = (1..=200)
+                .map(|i| format!("({})", chunk * 200 + i))
+                .collect();
+            run_one(
+                &shared,
+                document.clone(),
+                &format!("INSERT INTO {page_table} VALUES {}", values.join(", ")),
+            );
+        }
+        let page_sql = format!("SELECT n FROM {page_table} ORDER BY n");
+        let sets_before_page = shared.results().set_count(&document);
+        let first = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Statement(page_sql.clone()),
+            ResultPlacement::Replace,
+            1,
+        );
+        let first = first.into_iter().next().expect("有结果回填");
+        assert_eq!(
+            first.row_count(),
+            editor::execution::SEGMENT_ROWS,
+            "{}：首段就是一段（{} 行）",
+            target.driver,
+            editor::execution::SEGMENT_ROWS
+        );
+        assert!(
+            first.can_fetch_more(),
+            "{}：首段拿满了 → 还能取下一段",
+            target.driver
+        );
+
+        let more = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Segment {
+                sql: page_sql.clone(),
+                offset: editor::execution::SEGMENT_ROWS,
+                limit: editor::execution::SEGMENT_ROWS,
+            },
+            ResultPlacement::Append,
+            1,
+        );
+        let more = more.into_iter().next().expect("取段也要有回填");
+        assert!(
+            more.error.is_none(),
+            "{}：取下一段失败 —— {:?}",
+            target.driver,
+            more.error
+        );
+
+        let active = shared
+            .results_active(&document)
+            .expect("有选中结果");
+        assert_eq!(
+            shared.results().set_count(&document),
+            sets_before_page,
+            "{}：取下一段既不新开也不吞掉结果集（取段前 {} 份，现 {} 份）",
+            target.driver,
+            sets_before_page,
+            shared.results().set_count(&document)
+        );
+        assert_eq!(active.row_count(), 1_200, "{}：两段接起来 1200 行", target.driver);
+        assert!(!active.can_fetch_more(), "{}：第二段没拿满 → 到底了", target.driver);
+        // 拼起来不重不漏：看接缝两边的值
+        assert_eq!(
+            (active.rows[0][0].as_str(), active.rows[999][0].as_str()),
+            ("1", "1000"),
+            "{}：首段是 1..1000",
+            target.driver
+        );
+        assert_eq!(
+            (active.rows[1000][0].as_str(), active.rows[1199][0].as_str()),
+            ("1001", "1200"),
+            "{}：第二段接在 1001..1200",
+            target.driver
+        );
+        run_one(
+            &shared,
+            document.clone(),
+            &format!("DROP TABLE {page_table}"),
+        );
+        eprintln!(
+            "✅ {}：分段抓取（编辑器链路）—— 首段 1000 行 + 取下一段接成 1200 行不重不漏",
             target.driver
         );
 

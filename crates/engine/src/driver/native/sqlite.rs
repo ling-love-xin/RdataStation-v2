@@ -85,6 +85,25 @@ fn is_read_only_sql(sql: &str) -> bool {
         || sql_upper.starts_with("EXPLAIN")
 }
 
+/// rusqlite 错误 → 引擎错误
+///
+/// `SqlInputError` 的 `Display` 会把 **SQL 原文与偏移拼进文本**（`{msg} in {sql} at offset {n}`）：
+/// 位置埋在文本里、SQL 又重复一遍。分段抓取发给驱动的是**窗口包装**（`SELECT * FROM ( … )`），
+/// 于是报错会把内部的 `rds_segment` 泄漏给用户，位置也会按错的坐标被解析。这里取出结构化的
+/// 「消息 + 出错 token 的字节偏移」（`sqlite3_error_offset`，0 基、相对本次发出的 SQL），
+/// 与 PG 两条路径同一口径；`offset` 为负表示拿不到位置。
+fn sqlite_error(sql: &str, error: rusqlite::Error) -> CoreError {
+    if let rusqlite::Error::SqlInputError { msg, offset, .. } = &error {
+        let mapped = DatabaseError::query(sql, msg.clone());
+        return CoreError::database(if *offset >= 0 {
+            mapped.with_position(*offset as usize)
+        } else {
+            mapped
+        });
+    }
+    CoreError::database(DatabaseError::query(sql, error.to_string()))
+}
+
 /// 写语句（不返回行）走 `Connection::execute`，拿**真实影响行数**（B5 / P0.6）
 ///
 /// `Connection::execute` 对会返回行的语句会直接报错（“Execute returned results”），
@@ -96,7 +115,7 @@ fn execute_writing(
 ) -> Result<QueryResult, CoreError> {
     let affected = conn
         .execute(sql, rusqlite::params_from_iter(params.iter()))
-        .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+        .map_err(|e| sqlite_error(sql, e))?;
     Ok(affected_rows_result(affected as u64))
 }
 
@@ -140,9 +159,9 @@ impl Database for SqliteDatabase {
                 return execute_writing(&conn, &sql_owned, &params_slice);
             }
 
-            let mut stmt = conn.prepare(&sql_owned).map_err(|e| {
-                CoreError::database(DatabaseError::query(&sql_owned, e.to_string()))
-            })?;
+            let mut stmt = conn
+                .prepare(&sql_owned)
+                .map_err(|e| sqlite_error(&sql_owned, e))?;
 
             let columns: Vec<String> = stmt
                 .column_names()
@@ -177,7 +196,7 @@ impl Database for SqliteDatabase {
                     stmt.query(rusqlite::params_from_iter(params_refs))
                 }
             }
-            .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+            .map_err(|e| sqlite_error(&sql_owned, e))?;
 
             let mut row_data: Vec<Vec<rusqlite::types::Value>> = Vec::new();
             while let Ok(Some(row)) = rows.next() {
@@ -244,7 +263,7 @@ impl Database for SqliteDatabase {
                 }
 
                 let mut stmt = conn.prepare(&sql_owned)
-                    .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+                    .map_err(|e| sqlite_error(&sql_owned, e))?;
 
                 let columns: Vec<String> = stmt.column_names()
                     .iter()
@@ -252,7 +271,7 @@ impl Database for SqliteDatabase {
                     .collect();
 
                 let mut rows = stmt.query([])
-                    .map_err(|e| CoreError::database(DatabaseError::query(&sql_owned, e.to_string())))?;
+                    .map_err(|e| sqlite_error(&sql_owned, e))?;
 
                 let mut row_data: Vec<Vec<rusqlite::types::Value>> = Vec::new();
                 while let Ok(Some(row)) = rows.next() {
@@ -674,7 +693,7 @@ impl Transaction for SqliteTransaction {
 
         let mut stmt = conn
             .prepare(sql)
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| sqlite_error(sql, e))?;
 
         let columns: Vec<String> = stmt
             .column_names()
@@ -684,7 +703,7 @@ impl Transaction for SqliteTransaction {
 
         let mut rows = stmt
             .query([])
-            .map_err(|e| CoreError::database(DatabaseError::query(sql, e.to_string())))?;
+            .map_err(|e| sqlite_error(sql, e))?;
 
         let mut row_data: Vec<Vec<rusqlite::types::Value>> = Vec::new();
         while let Ok(Some(row)) = rows.next() {

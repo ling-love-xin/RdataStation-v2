@@ -101,6 +101,11 @@ impl EditorShared {
         change(&mut self.results.borrow_mut())
     }
 
+    /// 某文档当前选中的结果集（克隆一份：调用方拿着它做決定，不拖住 `Ref`）
+    pub fn results_active(&self, document: &crate::model::DocumentId) -> Option<crate::store::ResultEntry> {
+        self.results.borrow().active(document).cloned()
+    }
+
     /// 便捷：打开文档（同路径重复打开 = 激活）
     pub fn open(&self, request: OpenRequest) -> OpenOutcome {
         self.update(|service| service.open(request))

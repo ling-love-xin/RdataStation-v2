@@ -227,11 +227,18 @@ pub struct ResultStatus {
     pub selected_row: Option<usize>,
     /// 截断提示（`Some` = 数据不完整）
     pub truncated_hint: Option<String>,
+    /// 【B5b】还能取下一段吗（`true` 时总行数显示成 `1,000+`，并摆「取下一段」）
+    pub has_more: bool,
 }
 
 /// 状态行左右两段（纯函数；截断提示单独渲染——它是警告，要另一种颜色）
 pub fn status_segments(status: &ResultStatus) -> (String, String) {
-    let left = format!("共 {} 行", thousands(status.total_rows));
+    // 【B5b】还有下一段时总数不是“共”而是“已抓”：`1,000+` 说的就是“至少这么多”
+    let left = if status.has_more {
+        format!("共 {}+ 行", thousands(status.total_rows))
+    } else {
+        format!("共 {} 行", thousands(status.total_rows))
+    };
     let right = match status.selected_row {
         Some(row) => format!("已选第 {} 行", thousands(row)),
         None => "未选中行".to_string(),
@@ -248,6 +255,8 @@ pub struct ResultControls {
     pub copy: Option<AnyElement>,
     /// 重跑当前结果集的 SQL（结果集换一份新的，不是新开一份）
     pub refresh: Option<AnyElement>,
+    /// 【B5b】取下一段（只在这份结果还有下一段时给）
+    pub more: Option<AnyElement>,
 }
 
 /// 结果区一次要画的东西（面板一次读齐；`render` 只负责画）
@@ -320,9 +329,16 @@ pub fn render(
     let theme = cx.theme();
     let muted = theme.colors.muted_foreground;
 
+    // 先把各段拆开：工具栏先拿走 refresh/copy，状态行⑦再拿 more（部分移动会让字段不可用）
+    let ResultPane {
+        toolbar,
+        status,
+        controls,
+        card,
+        tabs,
+    } = pane;
     // 有卡片就不画网格（网格里本来也没东西，画出来只是一块空白）
-    let has_card = pane.card.is_some();
-    let status = pane.status;
+    let has_card = card.is_some();
 
     div()
         .v_flex()
@@ -332,7 +348,7 @@ pub fn render(
         // 测试按选择器断言“结果区在不在、多高”：分栏是结构，不是装饰
         .debug_selector(|| "editor-result-pane".to_string())
         // ⑤ 结果集标签条（原型里在工具栏上面）
-        .children(pane.tabs)
+        .children(tabs)
         // ⑥ 结果工具栏
         .child(
             div()
@@ -353,7 +369,7 @@ pub fn render(
                         .gap_2()
                         .min_w_0()
                         .children(
-                            pane.toolbar
+                            toolbar
                                 .segments()
                                 .into_iter()
                                 .map(|segment| SharedString::from(segment)),
@@ -364,12 +380,12 @@ pub fn render(
                         .h_flex()
                         .items_center()
                         .gap_1()
-                        .children(pane.controls.refresh)
-                        .children(pane.controls.copy),
+                        .children(controls.refresh)
+                        .children(controls.copy),
                 ),
         )
         // 有卡片：卡片替掉网格；否则画网格
-        .children(pane.card)
+        .children(card)
         .when(!has_card, |pane| {
             pane.child(
                 div()
@@ -415,7 +431,9 @@ pub fn render(
                             .h_flex()
                             .items_center()
                             .gap_2()
-                            .child(SharedString::from(right)),
+                            .child(SharedString::from(right))
+                            // 【B5b】取下一段就在状态行里（原型 §2.4 的 ⑦ 是分页与“取下一段”的家）
+                            .children(controls.more),
                     ),
             )
         })
@@ -549,6 +567,7 @@ mod tests {
             total_rows: 1_204,
             selected_row: None,
             truncated_hint: None,
+            has_more: false,
         };
         assert_eq!(status_segments(&idle), ("共 1,204 行".to_string(), "未选中行".to_string()));
 
@@ -557,6 +576,18 @@ mod tests {
             ..idle.clone()
         };
         assert_eq!(status_segments(&picked).1, "已选第 12 行");
+    }
+
+    /// 【B5b】还有下一段时总数是 `1,000+`（“至少这么多”，不是“共”）
+    #[test]
+    fn a_partial_result_shows_a_plus_after_the_count() {
+        let partial = ResultStatus {
+            total_rows: 1_000,
+            selected_row: None,
+            truncated_hint: None,
+            has_more: true,
+        };
+        assert_eq!(status_segments(&partial).0, "共 1,000+ 行");
     }
 
     /// 耗时：不到一秒报毫秒（`0.0s` 什么都没说），过一秒按人读的写法

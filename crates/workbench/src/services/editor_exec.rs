@@ -90,11 +90,49 @@ impl QueryRunner for EngineQueryRunner {
             ..Default::default()
         };
         // 连接：文档绑定了就用它（B1）；未绑定回退到“当前活动连接”（1a 口径）
+        //
+        // 【B5b】查询走 `execute_first_segment`：只取第一段（1000 行），后续段由「取下一段」来要；
+        // 写语句没有分段可言，引擎内部会走原路（历史记的都是**用户执行的原 SQL**）。
         let executed = self
             .runtime
-            .block_on(self.service.execute(connection.map(str::to_string), sql, options))
+            .block_on(self.service.execute_first_segment(
+                connection.map(str::to_string),
+                sql,
+                editor::execution::SEGMENT_ROWS,
+                options,
+            ))
             .map_err(|error| error.to_string())?;
-        Ok(to_data(&executed.result, executed.elapsed_ms, executed.truncated))
+        let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
+        // 【B5b】首段拿满了就标“可能还有下一段”（写语句没有分段可言）：
+        // 拿不满 = 这一份结果就这么多，界面不摆「取下一段」。
+        data.has_more =
+            !data.columns.is_empty() && data.rows.len() == editor::execution::SEGMENT_ROWS;
+        Ok(data)
+    }
+
+    /// 【B5b】取下一段：同一条原 SQL 的后一段（引擎套窗口取，见 `SqlService::execute_segment`）
+    fn fetch_next(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<QueryData, String> {
+        let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
+        let executed = self
+            .runtime
+            .block_on(self.service.execute_segment(
+                connection.map(str::to_string),
+                sql,
+                limit,
+                offset,
+                timeout_ms,
+            ))
+            .map_err(|error| error.to_string())?;
+        let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
+        // “还有没有下一段”由**拿没拿满**判（引擎不问总数）
+        data.has_more = data.rows.len() == limit;
+        Ok(data)
     }
 
     /// 事务状态：读引擎的**真值**（活动事务挂在连接管理器上，不是猜的）
@@ -164,6 +202,8 @@ fn to_data(result: &QueryResult, elapsed_ms: u64, truncated: bool) -> QueryData 
         truncated,
         // B5：写语句的影响行数由驱动报（拿不到就是 `None`，不编造 0）
         affected_rows: result.affected_rows,
+        // 非分段路径没有“下一段”可言；分段抓取由调用方按“拿没拿满”标
+        has_more: false,
     }
 }
 

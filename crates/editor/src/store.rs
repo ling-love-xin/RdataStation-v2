@@ -36,6 +36,8 @@ pub struct ResultEntry {
     pub affected_rows: Option<u32>,
     /// 这份结果是**在哪个连接上**跑出来的（B5 结果工具栏要显示它；`None` = 没绑定）
     pub connection: Option<String>,
+    /// 【B5b】这一段拿满了没有（拿满 = 可能还有下一段；界面据此摆「取下一段」）
+    pub has_more: bool,
     /// 列名（失败时为空）
     pub columns: Vec<String>,
     /// 行数据（已字符串化；失败时为空）
@@ -61,6 +63,8 @@ impl ResultEntry {
             truncated,
             affected_rows: None,
             connection: None,
+            // 一次拿完的路径（非分段）没有“下一段”可言；分段抓取由 `has_more` 另行标
+            has_more: truncated,
             columns,
             rows,
             error: None,
@@ -79,6 +83,12 @@ impl ResultEntry {
         self
     }
 
+    /// 【B5b】标上“这一段拿满了没有”（「取下一段」能不能按就靠它）
+    pub fn with_has_more(mut self, has_more: bool) -> Self {
+        self.has_more = has_more;
+        self
+    }
+
     /// 失败的执行
     pub fn failure(document: DocumentId, sql: String, error: String, elapsed_ms: u64) -> Self {
         Self {
@@ -88,10 +98,38 @@ impl ResultEntry {
             truncated: false,
             affected_rows: None,
             connection: None,
+            has_more: false,
             columns: Vec::new(),
             rows: Vec::new(),
             error: Some(error),
         }
+    }
+
+    /// 这份结果还能不能取下一段（原型 §2.4 的 ⑦：分页 / 取下一段）
+    pub fn can_fetch_more(&self) -> bool {
+        self.error.is_none() && self.has_more
+    }
+
+    /// 【B5b】把新抓到的这一段接在后面（取下一段）
+    ///
+    /// **列形状不一致就不接**（返回 `false`）：那已经不是“同一份结果的下一段”了，
+    /// 调用方应当把它当一份新结果落下，而不是把两行的列错开。
+    ///
+    /// 耗时取**累加**（抓取这份结果总共花了多久）；`has_more` 以最后一段为准。
+    pub fn append_rows(
+        &mut self,
+        columns: &[String],
+        rows: Vec<Vec<String>>,
+        elapsed_ms: u64,
+        has_more: bool,
+    ) -> bool {
+        if self.error.is_some() || self.columns != columns {
+            return false;
+        }
+        self.rows.extend(rows);
+        self.elapsed_ms = self.elapsed_ms.saturating_add(elapsed_ms);
+        self.has_more = has_more;
+        true
     }
 
     /// 结果行数（真实值：来自行数据，不读驱动的 `total_rows` 字段，见架构 §12 #21）
@@ -208,6 +246,31 @@ impl ResultStore {
                 slot.sets.push(entry);
                 if slot.sets.len() == 1 {
                     slot.active = 0;
+                }
+            }
+            // 【B5b】接在选中那份后面（取下一段）：列形状不一致时落成一份新结果
+            ResultPlacement::Append => {
+                // 失败的那次取段不入库（调用方应当已经把它变成一句提示）：
+                // 已经抓到的行是用户的成果，不能因为“再抓失败”就清掉
+                if entry.failed() {
+                    return;
+                }
+                let appended = match slot.sets.get_mut(slot.active) {
+                    Some(current) => current.append_rows(
+                        &entry.columns,
+                        entry.rows.clone(),
+                        entry.elapsed_ms,
+                        entry.has_more,
+                    ),
+                    None => false,
+                };
+                if !appended {
+                    if let Some(current) = slot.sets.get_mut(slot.active) {
+                        *current = entry;
+                    } else {
+                        slot.sets.push(entry);
+                        slot.active = 0;
+                    }
                 }
             }
         }
@@ -466,6 +529,61 @@ mod tests {
             .with_connection(Some("conn-1".to_string()));
         assert_eq!(tagged.affected_rows, Some(0), "零行也是真值，不等于没有");
         assert_eq!(tagged.connection.as_deref(), Some("conn-1"));
+    }
+
+    /// 【B5b】取下一段：接在后面、耗时累加、`has_more` 以最后一段为准、**不新开结果集**
+    #[test]
+    fn appending_a_segment_extends_the_same_result() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+
+        let mut first = entry("doc-1", "select n from t", 0);
+        first.columns = vec!["n".to_string()];
+        first.rows = vec![vec!["1".to_string()], vec!["2".to_string()]];
+        first.elapsed_ms = 5;
+        first.has_more = true;
+        store.push(first, ResultPlacement::Replace);
+        assert!(
+            store.active(&document).expect("有结果").can_fetch_more(),
+            "第一段拿满了 → 还能取下一段"
+        );
+
+        let mut second = entry("doc-1", "select n from t", 0);
+        second.columns = vec!["n".to_string()];
+        second.rows = vec![vec!["3".to_string()], vec!["4".to_string()]];
+        second.elapsed_ms = 3;
+        second.has_more = false;
+        store.push(second, ResultPlacement::Append);
+
+        assert_eq!(store.set_count(&document), 1, "取下一段不新开结果集");
+        let active = store.active(&document).expect("有结果");
+        assert_eq!(active.row_count(), 4, "两段接起来");
+        assert_eq!(active.elapsed_ms, 8, "耗时累加（抓这份结果花了多久）");
+        assert!(
+            !active.can_fetch_more(),
+            "最后一段没拿满 → 没有下一段了"
+        );
+    }
+
+    /// 列形状变了就不接（当一份新结果落下），不把两行的列错开
+    #[test]
+    fn appending_a_mismatched_shape_replaces_instead_of_mixing_columns() {
+        let mut store = ResultStore::new();
+        let document = DocumentId::new("doc-1");
+
+        let mut first = entry("doc-1", "select n from t", 0);
+        first.columns = vec!["n".to_string()];
+        first.rows = vec![vec!["1".to_string()]];
+        store.push(first, ResultPlacement::Replace);
+
+        let mut other = entry("doc-1", "select n from t", 0);
+        other.columns = vec!["n".to_string(), "m".to_string()];
+        other.rows = vec![vec!["1".to_string(), "2".to_string()]];
+        store.push(other, ResultPlacement::Append);
+
+        let active = store.active(&document).expect("有结果");
+        assert_eq!(active.row_count(), 1, "形状不一致时不接");
+        assert_eq!(active.columns, ["n".to_string(), "m".to_string()]);
     }
 
     /// 新结果集落位：追加一份，用户在看的旧那份**仍然选中**（原型 §4.4）

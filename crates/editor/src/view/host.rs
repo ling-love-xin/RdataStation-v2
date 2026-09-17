@@ -1185,6 +1185,8 @@ impl EditorHostPanel {
         let mut mine_arrived = 0usize;
         // 【B6】这一轮新到的失败是哪条语句（回填之后要是有位置就跳过去）
         let mut fresh_failure: Option<String> = None;
+        // 【B5b】取下一段失败的原因（要等结果区同步完再说，否则会被“选中那份没有错”冲掉）
+        let mut segment_failure: Option<String> = None;
         for outcome in outcomes {
             let is_mine = outcome.document == self.document;
             if is_mine {
@@ -1195,6 +1197,15 @@ impl EditorHostPanel {
             let placement = outcome.placement;
             let entry = entry_from(outcome);
             if is_mine && entry.failed() {
+                // 【B5b】取下一段失败：**已经抓到的行是用户的成果**，不能因为再抓失败就清掉。
+                // 所以这次失败不入存储（选中那份原样不动），只把原因说出来。
+                if placement == ResultPlacement::Append {
+                    segment_failure = Some(format!(
+                        "取下一段失败：{}",
+                        entry.error.clone().unwrap_or_default()
+                    ));
+                    continue;
+                }
                 fresh_failure = Some(entry.sql.clone());
             }
             self.shared.update_results(|store| store.push(entry, placement));
@@ -1205,6 +1216,10 @@ impl EditorHostPanel {
                 self.running_since = None;
             }
             self.sync_result_view(cx);
+            // 【B5b】取段失败的原因在这里说（同步结果区会按“选中那份”重写提示）
+            if let Some(reason) = segment_failure {
+                self.set_message(Some(reason), cx);
+            }
             // 【B6】失败且能定位：把光标送到出错处并聚焦（拿不到位置就只留原因）
             if let Some(sql) = fresh_failure
                 && self.result_sql.as_deref() == Some(sql.as_str())
@@ -1258,6 +1273,7 @@ impl EditorHostPanel {
                     truncated_hint: entry
                         .truncated
                         .then(|| result_grid::truncated_hint(entry.row_count())),
+                    has_more: entry.can_fetch_more(),
                 }),
                 // 【B6】失败才谈得上定位：把「哪条 SQL + 什么错误」一起带出去
                 entry.and_then(|entry| {
@@ -1411,6 +1427,35 @@ impl EditorHostPanel {
         self.execute(ExecTarget::Statement(sql), ResultPlacement::Replace, cx);
     }
 
+    /// 【B5b】取下一段（状态行⑦上的那个按钮）
+    ///
+    /// 提交一次 `Segment` 目标（落位 `Append`）：不动用户在看的那份的位置，新抓到的行
+    /// **接在后面**。忙 / 没结果 / 没有下一段都回绝得可读（不静默）。
+    pub(crate) fn fetch_more(&mut self, cx: &mut Context<Self>) {
+        let Some(sql) = self.result_sql.clone() else {
+            self.set_message(Some("这份结果没有可重取的 SQL".to_string()), cx);
+            return;
+        };
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::can_fetch_more)
+        else {
+            self.set_message(Some("这份结果已经取完了".to_string()), cx);
+            return;
+        };
+        let offset = entry.row_count();
+        self.execute(
+            ExecTarget::Segment {
+                sql,
+                offset,
+                limit: execution::SEGMENT_ROWS,
+            },
+            ResultPlacement::Append,
+            cx,
+        );
+    }
+
     /// 切换结果集（结果集标签条点击）：选中项只有 `ResultStore` 能改，界面按它重画
     pub(crate) fn select_result_set(&mut self, index: usize, cx: &mut Context<Self>) {
         let changed = self
@@ -1475,6 +1520,7 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
             data.rows,
         )
         .with_affected_rows(data.affected_rows)
+        .with_has_more(data.has_more)
         .with_connection(connection),
         Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0)
             .with_connection(connection),
@@ -2033,6 +2079,23 @@ impl Render for EditorHostPanel {
                     })
                     .into_any_element()
             });
+            // 【B5b】取下一段：只在这份结果真还有下一段时摆（状态行⑦里）
+            let more = self
+                .result_status
+                .as_ref()
+                .is_some_and(|status| status.has_more)
+                .then(|| {
+                    let entity = cx.entity();
+                    Button::new("editor-result-more")
+                        .ghost()
+                        .small()
+                        .debug_selector(|| "editor-result-more".to_string())
+                        .label("取下一段")
+                        .on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.fetch_more(cx));
+                        })
+                        .into_any_element()
+                });
 
             // 错误卡片（B6，原型 §2.4）：失败时替掉网格；两个按钮都是真的能按的
             let card = self.result_error_card.clone().map(|card| {
@@ -2079,7 +2142,11 @@ impl Render for EditorHostPanel {
                 result_grid::ResultPane {
                     toolbar,
                     status: self.result_status.clone(),
-                    controls: result_grid::ResultControls { copy, refresh },
+                    controls: result_grid::ResultControls {
+                        copy,
+                        refresh,
+                        more,
+                    },
                     card,
                     tabs,
                 },

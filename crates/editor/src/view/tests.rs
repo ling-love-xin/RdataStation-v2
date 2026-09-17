@@ -578,6 +578,7 @@ impl QueryRunner for ScriptRunner {
             elapsed_ms: 5,
             truncated: false,
             affected_rows: None,
+            has_more: false,
         })
     }
 }
@@ -626,6 +627,7 @@ impl QueryRunner for SizedRunner {
             elapsed_ms: 3,
             truncated: false,
             affected_rows: None,
+            has_more: false,
         })
     }
 }
@@ -653,6 +655,7 @@ impl QueryRunner for ToolbarRunner {
                 elapsed_ms: 7,
                 truncated: false,
                 affected_rows: Some(3),
+                has_more: false,
             });
         }
         if sql.contains("truncated") {
@@ -662,6 +665,7 @@ impl QueryRunner for ToolbarRunner {
                 elapsed_ms: 4,
                 truncated: true,
                 affected_rows: None,
+                has_more: false,
             });
         }
         Ok(QueryData {
@@ -670,6 +674,7 @@ impl QueryRunner for ToolbarRunner {
             elapsed_ms: 2,
             truncated: false,
             affected_rows: None,
+            has_more: false,
         })
     }
 }
@@ -690,6 +695,80 @@ fn shared_with_toolbar_runner(content: &str) -> (EditorShared, DocumentId) {
 /// 文本用真机抓到的形态之一（另一种是 `near "x": syntax error in … at offset N`）。
 struct LocatedFailureRunner;
 
+/// 假执行器（B5b）：首段 2 行且**拿满了**（has_more），取下一段再给 2 行
+///
+/// 记下每次要的 `(offset, limit)`：界面按的 offset 对不对是这条链路的关键。
+struct SegmentRunner {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
+}
+
+impl QueryRunner for SegmentRunner {
+    fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows: vec![vec!["1".to_string()], vec!["2".to_string()]],
+            elapsed_ms: 2,
+            truncated: false,
+            affected_rows: None,
+            has_more: true,
+        })
+    }
+
+    fn fetch_next(
+        &self,
+        _connection: Option<&str>,
+        _sql: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<QueryData, String> {
+        self.asked.lock().expect("锁").push((offset, limit));
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows: vec![vec!["3".to_string()], vec!["4".to_string()]],
+            elapsed_ms: 1,
+            truncated: false,
+            affected_rows: None,
+            has_more: false,
+        })
+    }
+}
+
+/// 带 `SegmentRunner` 的共享状态 + 一份文档（B5b）
+fn shared_with_segment_runner(
+    content: &str,
+) -> (
+    EditorShared,
+    DocumentId,
+    std::sync::Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
+) {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(SegmentRunner {
+        asked: asked.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled(content, EditorMode::Sql))
+        .id()
+        .clone();
+    (shared, id, asked)
+}
+
+/// 假执行器（B5b）：说“还有下一段”但不支持取（默认 `fetch_next` 说实话）
+struct MoreUnsupportedRunner;
+
+impl QueryRunner for MoreUnsupportedRunner {
+    fn run(&self, _connection: Option<&str>, _sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
+        Ok(QueryData {
+            columns: vec!["n".to_string()],
+            rows: vec![vec!["1".to_string()]],
+            elapsed_ms: 1,
+            truncated: false,
+            affected_rows: None,
+            has_more: true,
+        })
+    }
+}
+
 impl QueryRunner for LocatedFailureRunner {
     fn run(&self, _connection: Option<&str>, sql: &str, _options: execution::RunOptions) -> Result<QueryData, String> {
         if sql.contains("wheree") {
@@ -703,6 +782,7 @@ impl QueryRunner for LocatedFailureRunner {
             elapsed_ms: 1,
             truncated: false,
             affected_rows: None,
+            has_more: false,
         })
     }
 }
@@ -1202,6 +1282,7 @@ impl QueryRunner for TxRunner {
             elapsed_ms: 1,
             truncated: false,
             affected_rows: None,
+            has_more: false,
         })
     }
 
@@ -2804,4 +2885,93 @@ fn the_error_card_can_copy_the_driver_message(cx: &mut TestAppContext) {
     let text = text.expect("剪贴板里要有东西");
     assert!(text.contains("no such column: wheree"), "{text}");
     assert!(text.contains("第 1 行 第 17 列"), "位置一起复制走：{text}");
+}
+
+// ===== B5b：分段抓取（⑦ 状态行里的分页位）=====
+
+/// 首段拿满：状态行报 `2+` 并摆「取下一段」；取回来接在同一份结果上
+#[gpui_kit::test]
+fn fetching_the_next_segment_appends_to_the_same_result(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        2,
+        "首段两行"
+    );
+    let summary = cx
+        .update(|_window, cx| panel.read(cx).result_summary_for_test())
+        .expect("有结果");
+    assert!(summary.contains("行数 2"), "{summary}");
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .expect("有网格就有状态行");
+    assert!(status.has_more, "拿满了 → 还有下一段");
+    assert!(
+        dialog_button_rendered(cx, "editor-result-more"),
+        "还有下一段就摆「取下一段」"
+    );
+
+    // 按下去（headless 里直接驱动落地入口）：再拿两行，接在同一份结果上
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.fetch_more(cx)));
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS)],
+        "要的正是“已经拿到的行数”之后那一段"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        4,
+        "两段接起来"
+    );
+    assert_eq!(
+        shared.results().set_count(&id),
+        1,
+        "取下一段不新开结果集"
+    );
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .expect("还有状态行");
+    assert_eq!(status.total_rows, 4);
+    assert!(!status.has_more, "最后一段没拿满 → 到底了");
+    assert!(
+        !dialog_button_rendered(cx, "editor-result-more"),
+        "到底了就不摆按钮"
+    );
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(message.is_none(), "一次成功的取段不留提示：{message:?}");
+}
+
+/// 执行器不支持取下一段：按钮按下去要留一句可读原因（不静默、不假装成功）
+#[gpui_kit::test]
+fn fetching_a_segment_without_support_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(MoreUnsupportedRunner));
+    let id = shared
+        .open(OpenRequest::untitled("select 1;", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    assert!(dialog_button_rendered(cx, "editor-result-more"), "有下一段就摆按钮");
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.fetch_more(cx)));
+    wait_for_all_pending(cx, &panel);
+
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("失败要留原因");
+    assert!(message.contains("不支持分段抓取"), "{message}");
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        1,
+        "取不回来不该动已抓到的行"
+    );
 }
