@@ -130,6 +130,81 @@ impl TempTableStats {
     }
 }
 
+/// 生成一个**唯一**的临时表名：`tmp_{缩写}_{描述}_{紧凑时间戳}_{8 位随机}`。
+///
+/// 为什么需要随机尾巴：表名要内联进 SQL，而[`TempTableManager::generate_name`] 只到**秒**——
+/// 同一秒建两张同描述的表会撞名（`CREATE TABLE` 直接失败）。查询结果表与洞察中间表都走这里。
+///
+/// 前缀由 [`TempTableSource::prefixes`] 决定：TTL / 上限 / 按来源清理全靠它识别，
+/// 自己拼一个别的名字（历史上的 `rs_<uuid>`）等于把那些机制全关掉。
+pub fn generate_unique_name(source: TempTableSource, description: &str) -> String {
+    let prefix = source
+        .prefixes()
+        .first()
+        .copied()
+        .unwrap_or("tmp_x_");
+    let desc = sanitize_description(description);
+    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
+    let uniq = uuid::Uuid::new_v4().simple().to_string();
+    format!("{prefix}{desc}_{stamp}_{}", &uniq[..8])
+}
+
+/// 描述里只留字母 / 数字 / 下划线（表名要内联进 SQL，虽有引号也不值得冒险）。
+fn sanitize_description(description: &str) -> String {
+    let cleaned: String = description
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "tmp".to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// 表名的 SQL 引用（`"name"`；内部双引号双写）。
+pub(crate) fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// 删除一张**属于指定来源**的临时表（前缀守卫），并同步登记表。
+///
+/// 与 [`TempTableManager::drop_by_source`] 的分工：本函数删**一张**（结果集被丢弃 /
+/// 替换时只丢它自己那一张），那个删**一批**（项目切换 / 关闭时的清场）。
+///
+/// 幂等：表不存在也算成功；但名字**必须**落在该来源的前缀下——放开前缀就等于给了一把
+/// 「传什么名字就删什么表」的刀。
+pub fn drop_temp_table(
+    conn: &Connection,
+    source: TempTableSource,
+    name: &str,
+) -> Result<(), CoreError> {
+    if !source.prefixes().iter().any(|p| name.starts_with(p)) {
+        return Err(CoreError::common(CommonError::General(format!(
+            "拒绝删除非本来源的临时表：{name}（{:?} 只允许这些前缀：{}）",
+            source,
+            source.prefixes().join(" / ")
+        ))));
+    }
+
+    conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_ident(name)))
+        .map_err(|e| {
+            CoreError::common(CommonError::General(format!(
+                "删除临时表 {name} 失败: {e}"
+            )))
+        })?;
+    // 登记表同步摘掉：留着会让「登记数」与库里的实际张数对不上
+    super::manager::DuckDBManager::temp_table_manager().unregister(name);
+    Ok(())
+}
+
 /// 临时表管理器
 ///
 /// 负责临时表命名、TTL 清理、数量上限管理。
@@ -498,6 +573,7 @@ impl TempTableManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::duckdb::manager::DuckDBManager;
     use crate::sql::ColumnDefInfo;
 
     #[test]
@@ -729,5 +805,68 @@ mod tests {
         let cleaned = manager.lazy_cleanup_insight_tables();
         assert_eq!(cleaned.len(), 5);
         assert_eq!(manager.count_by_prefix("tmp_i_"), 100);
+    }
+
+    /// K16：统一的命名口——前缀跟来源走，同秒同描述不撞名（结果集表与洞察表共用）。
+    #[test]
+    fn test_generate_unique_name_prefixes_and_stays_unique() {
+        for (source, prefix) in [
+            (TempTableSource::Query, "tmp_q_"),
+            (TempTableSource::Insight, "tmp_i_"),
+            (TempTableSource::Mock, "tmp_m_"),
+            (TempTableSource::Plugin, "tmp_p_"),
+        ] {
+            let name = generate_unique_name(source, "result");
+            assert!(
+                name.starts_with(prefix),
+                "{source:?} 的表名应落 {prefix} 前缀下（回收机制以此识别）: {name}"
+            );
+        }
+
+        let a = generate_unique_name(TempTableSource::Query, "result");
+        let b = generate_unique_name(TempTableSource::Query, "result");
+        assert_ne!(a, b, "同一秒建两张同描述的表不得撞名");
+    }
+
+    /// 定向删除：名字必须属于该来源，否则拒——否则这就是一把「传什么名字就删什么表」的刀。
+    #[test]
+    fn test_drop_temp_table_refuses_other_sources() {
+        let conn = Connection::open_in_memory().expect("内存连接");
+        let err = drop_temp_table(&conn, TempTableSource::Query, "tmp_i_someone_else")
+            .expect_err("跨来源的表名应被拒");
+        let text = err.to_string();
+        assert!(text.contains("tmp_q_"), "报错要列出允许的前缀：{text}");
+    }
+
+    /// 定向删除的正路：表真的没、登记也同步摘掉（否则「登记数」与库里张数会对不上）。
+    #[test]
+    fn test_drop_temp_table_drops_and_unregisters() {
+        let conn = Connection::open_in_memory().expect("内存连接");
+        let name = generate_unique_name(TempTableSource::Query, "drop_check");
+        conn.execute_batch(&format!("CREATE TABLE {} (id INTEGER)", quote_ident(&name)))
+            .expect("建表");
+        DuckDBManager::register_temp_table(&name);
+        // 用**全名**当前缀断言：并行跑的用例可能也登记了 tmp_q_ 表，不能用前缀计数
+        assert_eq!(
+            DuckDBManager::temp_table_manager().count_by_prefix(&name),
+            1,
+            "建完应当被登记"
+        );
+
+        drop_temp_table(&conn, TempTableSource::Query, &name).expect("删表");
+        let still_there = conn
+            .query_row(
+                "SELECT COUNT(*) FROM information_schema.tables
+                 WHERE table_catalog = 'memory' AND table_schema = 'main' AND table_name = ?",
+                duckdb::params![name],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(still_there, 0, "表应已删除");
+        assert_eq!(
+            DuckDBManager::temp_table_manager().count_by_prefix(&name),
+            0,
+            "登记表也要同步摘掉"
+        );
     }
 }

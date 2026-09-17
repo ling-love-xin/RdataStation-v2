@@ -317,6 +317,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D51 | 连接建立时给 DuckDB 上**内存闸与溢写口**：`memory_limit` 默认 **2GB**、`temp_directory` 钉 `<RDS_HOME>/tmp`、`max_temp_directory_size` 默认 **10GB**；两个大小值可由 `RDS_DUCKDB_MEMORY_LIMIT` / `RDS_DUCKDB_MAX_TEMP_SIZE` 覆盖（非法值回退默认并告警）；登记概览用 `DuckDBManager::temp_table_stats()` 暴露，洞察建表时接近上限打 warn（2026-09-17，K16 ③④） | 内存库是**进程级单例**，DuckDB 默认吃物理内存的 80%——桌面应用把机器吃光不是可接受的失败方式；设了上限后到顶是**溢写到 `tmp/`**（慢一点）而不是报错，而溢写目录必须是我们自己会清理的地方（系统临时目录是用户清理不到的角落）。可观测是配套：登记表只增不减时没有任何外部表现，计数是唯一的提前信号 | 值拼进 SQL 前过 `parse_size_setting` 白名单（DuckDB 的 `SET` 不接受绑定参数）；临时目录建不出来时跳过溢写设置、不挡启动 |
 | D52 | 规则 SQL 走**解析期静态门**：只放行单条 `SELECT` / `WITH`，拒分号多语句、拒黑名单关键字（`ATTACH`/`COPY`/`INSTALL`/`SET`/`CREATE`/`DROP`…）与表函数（`read_*` / `*_scan` / `*_attach` / `*_query` / `glob` / `query_table`…）；**校验前先剥字符串字面量、注释与双引号标识符**（2026-09-17，Q1 ① 落地） | 规则文件随项目走（能来自别人仓库），而模板 SQL 原样交给 DuckDB 执行——最便宜的防线是在解析期就把「不是只读查询」的写法拒掉。**定位是防呆，不是安全边界**：DuckDB 没有官方解析沙箱，黑名单天然有漏（`SELECT` 里仍可能藏着未列入的函数），它做的是把风险从「随手就撞上」压到「得刻意构造」 | 报错文案点出规则 id + 撞上的词 + 改法（列名 / 表名加双引号即放行——剥掉双引号标识符是有意的，防误报）；真正的边界是「项目规则信任门」（Q1 ③） |
 | D53 | **项目规则信任门**：项目层规则在用户做出决定前**不装配、不执行**；决定（`trusted` / `declined`）记在**全局库** `insight_rule_trust`（键 = 规范化项目路径），默认无记录 = 未决定；首次在规则管理里遇到时**弹一次确认框**，之后由列表顶部的横幅改主意（2026-09-17，Q1 ③ 落地） | 静态门（D52）只挡「不是只读查询」的写法，挡不住一条**合法但恶意**的查询；而项目规则跟着仓库走——「克隆不信任的仓库 + 打开项目」是一个真实的攻击面。决定必须由人做，且必须记在**项目碰不到的地方**：存项目库等于让项目自己给自己发信任（自我授权） | `declined` 也落库：把「不加载」记成一次决定，才不会每次开项目都追问。**fail closed**：无记录 / 查库失败 / 值不认识，一律按未决定。已知取舍：信任绑定**路径**而非内容——用户自己改规则不会被反复打扰，代价是 `git pull` 带进来的新规则不会重新确认 |
+| D54 | **查询结果临时表**：命名统一走 `duckdb::generate_unique_name(Query, …)`（前缀 `tmp_q_` + 时间戳 + 8 位随机）、建完即登记；回收两个口——**定向** `drop_temp_table(conn, Query, name)`（结果集被丢弃 / 替换 / 关文档）与**清场** `DuckDBManager::drop_in_memory_temp_tables(Query)`（项目切换 / 关闭）（2026-09-17，K16 结果集侧） | 结果集表历史上叫 `rs_<uuid>`，不属于任何来源前缀 → TTL / 上限 / 按来源清理 / 关项目清场对它**全都看不见**（K16）。命名与回收口必须成对设计：只改名字不提供定向口，就只能「全清」而不能「丢一个」——那会把用户还在看的结果一起删掉 | 命名与删除都收在 `duckdb::temp_table`（与洞察中间表 / mock 共用一份实现）；**建表方负责回收**（宿主路径目前未接线，见 K16） |
 
 ## 7. 并发与资源
 
@@ -328,7 +329,7 @@ RulesWatcher（后台线程，drop 即停）：
 | DuckDB 溢写 | `temp_directory` = `<RDS_HOME>/tmp`（`paths::temp_dir()`）；`max_temp_directory_size` 默认 **10GB**（`RDS_DUCKDB_MAX_TEMP_SIZE` 覆盖） | 同上 |
 | 临时表登记概览 | `DuckDBManager::temp_table_stats()`（按来源计数）；洞察建表时 ≥ 上限 80% 打 warn | `duckdb::{manager, temp_table, analysis}` |
 | 洞察中间表 | 前缀 `tmp_i_`（**由 `duckdb::analysis` 统一产出，建表即登记**）；TTL 30 分钟 / 上限 100 由管理器判定，`cleanup_analysis_temp_tables` 真正 DROP | `engine::duckdb::{analysis, temp_table}` |
-| 查询结果表 | 前缀 `tmp_q_`（⚠️ 现状仍叫 `rs_<uuid>`，回收机制看不见它，见 K16）；无 TTL，项目关闭清理（**宿主还没接**） | `engine::duckdb::temp_table` |
+| 查询结果表 | 前缀 `tmp_q_`（**由 `duckdb::generate_unique_name` 统一产出，建表即登记**）；无 TTL / 上限；结果集被丢弃 / 替换 / 关文档时定向 `drop_temp_table`，项目切换 / 关闭时 `drop_in_memory_temp_tables(Query)` 清场（D54） | `engine::duckdb::temp_table` |
 | 样本行数 | `DEFAULT_SAMPLE_SIZE = 5` | `insight_engine` |
 | 直方图最小行数 | `HISTOGRAM_MIN_ROWS = 10` | 同上 |
 | 每列保留版本数 | `MAX_VERSIONS_PER_COLUMN`（超出淘汰最旧） | `store::body` |
@@ -408,6 +409,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D51 内存闸与可观测 | `duckdb/manager.rs`（`configure_connection`：`memory_limit` / `temp_directory` / `max_temp_directory_size` + `size_setting` / `parse_size_setting` 白名单 + `temp_table_stats()` 访问器）、`duckdb/temp_table.rs`（`TempTableStats` + `TempTableManager::stats()`）、`duckdb/analysis.rs`（`warn_if_near_capacity`） |
 | D52 规则 SQL 静态门 | `crates/insight/src/rule_registry.rs`（`SQL_FORBIDDEN_KEYWORDS` / `validate_rule_sql` / `is_forbidden_function` / `strip_literals_and_comments` / `sql_tokens`；挂点在 `validate_rule` 的第一条） |
 | D53 项目规则信任门 | `crates/engine/migrations/global/025_insight_rule_trust.sql`（新表）、`crates/insight/src/service/rule_trust.rs`（`RuleTrust` / `trust_key` / `read_at` / `write`）、`lib.rs`（`normalized_project_key` / `project_rule_trust` / `apply_project_rule_trust` / `scan_pending_project_rules`）、`rule_registry.rs`（`PendingProjectRules` + 注册表字段）、`rule_view.rs`（`PendingRulesView` + 横幅 + 首次确认框 + `RulesEvent::TrustDecided`）、`service/mod.rs`（`decide_project_rules_trust`）、`jobs.rs`（`request_rules_trust`） |
+| D54 查询结果临时表命名与回收 | `crates/engine/src/duckdb/temp_table.rs`（`generate_unique_name` / `drop_temp_table` / `quote_ident` + 三条用例）、`duckdb/mod.rs`（导出）、`services/duckdb_service.rs`（`create_temp_table_internal` 改用它 + 用例） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
@@ -437,7 +439,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15）；`engine/tests/transaction_affinity.rs` 的 `as_i64` 编译错误也已修（`Value` 只有 `as_int`，随 `b838ea0` 提交） |
 | K14 | 清理旧快照后，**存活版本的 `parent_version_id` 可能指向已被删的父版**（链的起段被剪掉） | 低（外观级）：今天只用它打「首版」标记——被剪过的那一版会得不到标记；对比不沿链走（直接拿两行比），分析结论不受影响 | 待决：清理时一并把断链头部标成首版 / 或在界面改成「这一版之前的历史已清理」。要么就维持现状（不清就不存在这个问题） |
 | K15 | ~~`quality-score` 是残留规则（无代码按 id 执行；SQL 对文本列跑不通）~~ | — | ✅ 已处置（2026-09-17）：**下线**。它的自述就写着真实评分在 `quality_scorer.rs`——留着就是「同一能力两份口径」。规则文件已删，需要时从 git 历史取 |
-| K16 | **临时表的回收机制与建表命名对不上**：`create_duckdb_temp_table` / `create_temp_table_internal` 建的表叫 `rs_<uuid>`，而回收全靠前缀识别（`tmp_q_` / `tmp_i_` / `temp_mock_` / `tmp_p_`）——`list_by_source`、`drop_by_source`、`lazy_cleanup_insight_tables` 对这些表**全都看不见**，`register` 触发的惰性清理因此对它们无效；且 `drop_in_memory_temp_tables` 只有 mock 调过 | 中：结果集表与洞察样本表在进程内只增不减（内存库，吃 RSS）；而文档写的「TTL 30 分钟 / 项目关闭清理」对它们不成立——文档与运行行为不一致比单纯泄漏更难查 | **洞察侧已修**（2026-09-17，D50）：`duckdb::analysis` 统一按 `tmp_i_` 建表、用完即删、惰性清理真正 DROP；**内存闸与可观测已补**（D51）：`memory_limit` / `temp_directory` / `max_temp_directory_size` + 登记概览告警；**只剩结果集侧未接**：编辑器要求结果集活到用户不用为止，回收策略得与编辑器生命周期一起定（改前缀为 `tmp_q_` + 丢弃/关项目时 drop，mock 的 `clear_temp_tables` 就是范本） |
+| K16 | **临时表的回收机制与建表命名对不上**：`create_duckdb_temp_table` / `create_temp_table_internal` 建的表叫 `rs_<uuid>`，而回收全靠前缀识别（`tmp_q_` / `tmp_i_` / `temp_mock_` / `tmp_p_`）——`list_by_source`、`drop_by_source`、`lazy_cleanup_insight_tables` 对这些表**全都看不见**，`register` 触发的惰性清理因此对它们无效；且 `drop_in_memory_temp_tables` 只有 mock 调过 | 中：结果集表与洞察样本表在进程内只增不减（内存库，吃 RSS）；而文档写的「TTL 30 分钟 / 项目关闭清理」对它们不成立——文档与运行行为不一致比单纯泄漏更难查 | **已收口（2026-09-17）**：① 洞察侧——`duckdb::analysis` 统一按 `tmp_i_` 建表、用完即删（D50）；② 内存闸与可观测——`memory_limit` / `temp_directory` / 登记概览（D51）；③ 结果集侧——命名改为 `tmp_q_` + 建表即登记，并备好定向 `drop_temp_table` 与清场 `drop_in_memory_temp_tables(Query)`（D54）。**唯一还没落的是宿主接线**：今天全仓没有任何调用者 `create_duckdb_temp_table` / `open_insight_column`（结果集 → 临时表 → 洞察这条路还没接），所以既没有活泄漏、也没有可回收的对象；接线时按 D54 的契约在丢弃点调 `drop_temp_table` |
 
 ## 12. 待确认
 

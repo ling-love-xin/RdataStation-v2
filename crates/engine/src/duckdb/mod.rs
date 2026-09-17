@@ -43,4 +43,7 @@ pub use manager::DuckDBManager;
 pub use metrics::{DuckDBMetrics, MetricsSnapshot};
 pub use plugin::{PluginConnection, PluginManager, PluginPermissionLevel};
 pub use snapshot::{SnapshotInfo, SnapshotManager};
-pub use temp_table::{TempTableConfig, TempTableManager, TempTableSource};
+pub use temp_table::{
+    drop_temp_table, generate_unique_name, TempTableConfig, TempTableManager, TempTableSource,
+    TempTableStats,
+};

@@ -23,6 +23,19 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — K16 结果集侧收口：查询结果临时表的命名与回收口（D54）
+
+**已完成并验证**（`cargo test -p rds-engine --lib` **373 项**（本批新增 4：命名 1 + 拒跨来源 1 + 定向删除 1 + 建表前缀/登记 1）· `cargo test -p rds-insight --lib` **216 项** + 集成 **13 项** · `cargo test -p rds-workbench --test insight_entry` **2 项**（环境干净后补跑的）全绿；本批文件 clippy 零新增告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 命名收口 | `generate_unique_name(source, description)`：`tmp_{缩写}_{描述}_{时间戳}_{8 位随机}`。描述清洗与名字生成从 `analysis.rs` **搬到 `temp_table.rs`**（两处共用一份实现，不再各拼一套）；`sanitize_description` 空描述兜底从 `t` 对齐为 `tmp`（无行为影响） | `duckdb/temp_table.rs` + `duckdb/mod.rs`（导出） |
+| 结果集建表改前缀 | `create_temp_table_internal` 从 `rs_<uuid>` 改为 `tmp_q_result_<时间戳>_<随机>`，仍建完即登记——**前缀终于与回收机制对齐** | `services/duckdb_service.rs` |
+| 定向删除口 | 新增 `drop_temp_table(conn, source, name)`：前缀守卫（拒跨来源）+ `DROP TABLE IF EXISTS` + 同步摘登记。与 `drop_by_source`（按来源清场）分工：前者丢**一张**，后者清**一批** | `duckdb/temp_table.rs` |
+| 洞察侧复用 | `analysis.rs` 的 `generate_table_name` / `quote_ident` 改为转发共享实现；`drop_analysis_temp_table` 保留自己的前缀报错文案后转调 `drop_temp_table` | `duckdb/analysis.rs` |
+
+**K16 至此收口（三块全做完）**，但有一条**诚实的边界**要记下：全仓仍然**没有任何调用者**去建结果集临时表（`create_duckdb_temp_table` / `open_insight_column` 都是零调用）——“结果集 → 临时表 → 洞察”这条路还没接。所以今天既没有活泄漏、也没有可回收对象；接线时按 D54 的契约在丢弃点调 `drop_temp_table` 即可（宿主侧欠账见下一条）。
+
 ### 2026-09-17 — Q1 ③ 落地：项目规则信任门（D53）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **216 项**（本批 +11：存储 5 + 门控 2 + 服务 1 + 视图 3）· 集成 **13 项** · `cargo test -p rds-engine --lib` **360 项**（迁移目录多一个文件，无断言受影响）全绿；本批文件 clippy 零新增告警）

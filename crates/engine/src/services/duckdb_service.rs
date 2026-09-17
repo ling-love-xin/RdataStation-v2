@@ -85,12 +85,24 @@ impl DuckDbService {
         Self::create_temp_table_internal(&mut conn, columns, rows)
     }
 
+    /// 建一张**查询结果**临时表（表名带 `tmp_q_` 前缀、建完即登记）并回填数据。
+    ///
+    /// 命名走 [`crate::duckdb::generate_unique_name`]：前缀不是装饰——
+    /// TTL / 上限 / 按来源清理 / 关项目清场全靠它识别；历史上的 `rs_<uuid>` 不属于任何前缀，
+    /// 于是那些机制对它全部失效（K16）。
+    ///
+    /// 回收责任在**建表方**：结果集被丢弃 / 替换 / 关文档时调
+    /// [`crate::duckdb::drop_temp_table`]（定向），项目切换 / 关闭时调
+    /// [`crate::duckdb::DuckDBManager::drop_in_memory_temp_tables`]（清场）。
     pub fn create_temp_table_internal(
         conn: &mut duckdb::Connection,
         columns: &[String],
         rows: &[Vec<serde_json::Value>],
     ) -> Result<String, CoreError> {
-        let table_name = format!("rs_{}", uuid::Uuid::new_v4().to_string().replace('-', "_"));
+        let table_name = crate::duckdb::generate_unique_name(
+            crate::duckdb::TempTableSource::Query,
+            "result",
+        );
         let col_defs: Vec<String> = columns
             .iter()
             .enumerate()
@@ -357,5 +369,37 @@ impl DuckDbService {
         })?;
 
         Ok(file_path.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DuckDbService;
+    use crate::duckdb::{drop_temp_table, TempTableSource};
+    use crate::DuckDBManager;
+    use serde_json::json;
+
+    /// K16：结果集临时表必须带 `tmp_q_` 前缀并登记——前缀是 TTL / 上限 /
+    /// 按来源清理 / 关项目清场唯一的识别依据（历史上的 `rs_<uuid>` 什么机制都识别不了）。
+    #[test]
+    fn test_create_temp_table_uses_query_prefix_and_registers() {
+        let columns = vec!["id".to_string(), "name".to_string()];
+        let rows = vec![vec![json!(1), json!("a")]];
+
+        let table = DuckDbService::create_duckdb_temp_table(&columns, &rows).expect("建表");
+        assert!(
+            table.starts_with("tmp_q_"),
+            "结果集临时表名要在 tmp_q_ 前缀下: {table}"
+        );
+        assert_eq!(
+            DuckDBManager::temp_table_manager().count_by_prefix(&table),
+            1,
+            "建完应当被登记（按来源清理才看得见它）"
+        );
+
+        // 定向回收口能用（建表方在结果集丢弃 / 替换时调它）
+        let conn = DuckDbService::get_or_create_duckdb().expect("内存连接");
+        let guard = conn.lock().expect("锁");
+        drop_temp_table(&guard, TempTableSource::Query, &table).expect("删表");
     }
 }

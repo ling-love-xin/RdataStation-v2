@@ -116,10 +116,7 @@ pub fn drop_analysis_temp_table(conn: &Connection, table: &str) -> Result<(), Co
         ))));
     }
 
-    conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_ident(table)))
-        .map_err(|e| CoreError::common(CommonError::General(format!("删分析临时表失败: {e}"))))?;
-    DuckDBManager::temp_table_manager().unregister(table);
-    Ok(())
+    super::temp_table::drop_temp_table(conn, TempTableSource::Insight, table)
 }
 
 /// 建 → 用 → **无论如何都收掉**（纯中间产物的默认姿势）。
@@ -179,34 +176,13 @@ pub fn analysis_temp_tables(conn: &Connection) -> Result<Vec<String>, CoreError>
 /// 末尾那截随机不是好看：管理器的 `generate_name` 只到**秒**，同一秒建两张同描述的表
 /// 会撞名（`CREATE TABLE` 直接失败）。分析路径一秒内建多张完全可能（多列分析逐列）。
 fn generate_table_name(description: &str) -> String {
-    let desc = sanitize_description(description);
-    let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
-    let uniq = uuid::Uuid::new_v4().simple().to_string();
-    format!("{ANALYSIS_TABLE_PREFIX}{desc}_{stamp}_{}", &uniq[..8])
-}
-
-/// 描述里只留字母 / 数字 / 下划线（表名要内联进 SQL，虽有引号也不值得冒险）
-fn sanitize_description(description: &str) -> String {
-    let cleaned: String = description
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if cleaned.trim_matches('_').is_empty() {
-        "t".to_string()
-    } else {
-        cleaned
-    }
+    // 命名口径与查询结果表 / mock 共用一份实现（前缀由来源决定，随机尾巴防同秒撞名）
+    super::temp_table::generate_unique_name(TempTableSource::Insight, description)
 }
 
 /// 标识符引号（名字由本模块生成 / 校验过，这里只做最小必要的包裹）
 fn quote_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
+    super::temp_table::quote_ident(name)
 }
 
 /// 灌数据（参数化插入；值的转换与结果集那条路径共用一份实现）
@@ -305,14 +281,24 @@ mod tests {
     }
 
     /// 描述会被清洗成可安全内联的片段（表名要拼进 SQL）
+    ///
+    /// 清洗与命名现在都在 `temp_table`（与查询结果表 / mock 共用一份实现），
+    /// 所以这里断言生成出来的**名字**，而不是那个已经不是本模块内部的函数。
     #[test]
     fn description_is_sanitized() {
-        assert_eq!(sanitize_description("col_sample"), "col_sample");
-        assert_eq!(sanitize_description("a b-c"), "a_b_c");
-        assert_eq!(
-            sanitize_description("列画像 样本"),
-            "t",
-            "全是非 ASCII 时给个兜底，不留空片段"
+        let name = super::super::temp_table::generate_unique_name(
+            TempTableSource::Insight,
+            "a b-c",
+        );
+        assert!(name.starts_with("tmp_i_a_b_c_"), "清洗后应只留下划线：{name}");
+
+        let fallback = super::super::temp_table::generate_unique_name(
+            TempTableSource::Insight,
+            "列画像 样本",
+        );
+        assert!(
+            fallback.starts_with("tmp_i_tmp_"),
+            "全是非 ASCII 时给个兜底，不留空片段：{fallback}"
         );
     }
 
