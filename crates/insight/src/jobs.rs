@@ -39,13 +39,22 @@ pub enum ProfileRequest {
         temp_table: String,
         table_name: String,
     },
+    /// 源目标：先取样成分析临时表，再走与临时表目标同一条路
+    SourceColumn {
+        source: crate::model::SampleSource,
+        column: String,
+    },
+    SourceTable {
+        source: crate::model::SampleSource,
+        table_name: String,
+    },
 }
 
 impl ProfileRequest {
     /// 从面板目标解析出请求；**当前不支持的形态返回 `None`**。
     ///
-    /// Phase 1 做列画像，Phase 3 加表探查；多列与结构在后续期次落地，
-    /// 面板侧已按 Tab 给出期次提示，这里就不假装有行为。
+    /// Phase 1 做列画像，Phase 3 加表探查；多列与结构在后续期次落地（结构走
+    /// `SchemaReportRequested`，不经这里），面板侧已按 Tab 给出期次提示。
     pub fn of(target: &InsightTarget) -> Option<Self> {
         match target {
             InsightTarget::Column {
@@ -59,6 +68,16 @@ impl ProfileRequest {
                 table_name,
             } => Some(Self::Table {
                 temp_table: temp_table.clone(),
+                table_name: table_name.clone(),
+            }),
+            InsightTarget::SourceColumn {
+                source, column, ..
+            } => Some(Self::SourceColumn {
+                source: source.clone(),
+                column: column.clone(),
+            }),
+            InsightTarget::SourceTable { source, table_name } => Some(Self::SourceTable {
+                source: source.clone(),
                 table_name: table_name.clone(),
             }),
             InsightTarget::MultiColumn { .. } | InsightTarget::Schema { .. } => None,
@@ -157,11 +176,13 @@ pub fn handle_event(
         InsightEvent::SnapshotSaveRequested {
             temp_table,
             column,
+            source_label,
         } => request_snapshot_save(
             view,
             project_root,
             temp_table.clone(),
             column.clone(),
+            source_label.clone(),
             cx,
         ),
         // 下钻要先把源表登记成临时表，那是**宿主的活**（它才知道连接与临时表约定）：
@@ -388,6 +409,14 @@ pub fn request_profile(
                 table_name,
             } => InsightService::profile_table_view(root, &temp_table, &table_name)
                 .map(ProfileOutcome::Table),
+            ProfileRequest::SourceColumn { source, column } => {
+                InsightService::profile_source_column(root, &source, &column)
+                    .map(|(temp_table, view)| ProfileOutcome::SourceColumn { temp_table, view })
+            }
+            ProfileRequest::SourceTable { source, table_name } => {
+                InsightService::profile_source_table(&source, &table_name)
+                    .map(|(temp_table, view)| ProfileOutcome::SourceTable { temp_table, view })
+            }
         }
     });
     cx.spawn(async move |cx| {
@@ -396,6 +425,14 @@ pub fn request_profile(
         let _ = weak.update(cx, |panel, cx| match result {
             Ok(ProfileOutcome::Column(profile)) => panel.set_profile(profile, cx),
             Ok(ProfileOutcome::Table(profile)) => panel.set_table_profile(profile, cx),
+            Ok(ProfileOutcome::SourceColumn { temp_table, view }) => {
+                panel.set_source_sample(temp_table, cx);
+                panel.set_profile(view, cx);
+            }
+            Ok(ProfileOutcome::SourceTable { temp_table, view }) => {
+                panel.set_source_sample(temp_table, cx);
+                panel.set_table_profile(view, cx);
+            }
             Err(err) => {
                 let info = InsightService::describe_error(&err);
                 panel.set_error(info.message, info.retryable, cx);
@@ -409,6 +446,15 @@ pub fn request_profile(
 enum ProfileOutcome {
     Column(ColumnProfileView),
     Table(TableProfileView),
+    /// 源目标的列画像：带上取样得到的临时表（面板后续保存 / 下钻 / 多列都用它）
+    SourceColumn {
+        temp_table: String,
+        view: ColumnProfileView,
+    },
+    SourceTable {
+        temp_table: String,
+        view: TableProfileView,
+    },
 }
 
 /// 「评估全表」：**逐列串行**算质量分，每列回来就回填一次（真实进度，不是转动图标）。
@@ -658,11 +704,17 @@ pub fn request_snapshot_save(
     project_root: Option<PathBuf>,
     temp_table: String,
     column: String,
+    source_label: Option<String>,
     cx: &mut App,
 ) {
     let weak = view.downgrade();
     let task = cx.background_executor().spawn(async move {
-        InsightService::save_column_snapshot(project_root.as_deref(), &temp_table, &column)
+        InsightService::save_column_snapshot(
+            project_root.as_deref(),
+            &temp_table,
+            &column,
+            source_label.as_deref(),
+        )
     });
     cx.spawn(async move |cx| {
         let result = task.await;
@@ -725,6 +777,38 @@ mod tests {
             ProfileRequest::of(&target),
             Some(ProfileRequest::Table {
                 temp_table: "t_result_1".into(),
+                table_name: "orders".into(),
+            })
+        );
+    }
+
+    /// 源目标也要能解析出请求（否则入口给了目标却没人取数）。
+    #[test]
+    fn source_targets_map_to_sampling_requests() {
+        let source = crate::model::SampleSource::new("G_1", "SELECT * FROM `shop`.`orders`", "shop.orders");
+
+        let col = InsightTarget::SourceColumn {
+            source: source.clone(),
+            column: "amount".into(),
+            data_type: "DECIMAL".into(),
+        };
+        assert_eq!(
+            ProfileRequest::of(&col),
+            Some(ProfileRequest::SourceColumn {
+                source: source.clone(),
+                column: "amount".into(),
+            }),
+            "源列目标要走「取样 + 画像」那条路"
+        );
+
+        let table = InsightTarget::SourceTable {
+            source: source.clone(),
+            table_name: "orders".into(),
+        };
+        assert_eq!(
+            ProfileRequest::of(&table),
+            Some(ProfileRequest::SourceTable {
+                source,
                 table_name: "orders".into(),
             })
         );

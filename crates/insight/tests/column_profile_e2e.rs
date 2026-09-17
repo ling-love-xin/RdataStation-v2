@@ -196,7 +196,7 @@ fn snapshot_history_round_trip_over_a_real_project() {
 
     // 首版：库里空空，保存后列表只此一条
     let first =
-        InsightService::save_column_snapshot(Some(&root), table, "amount").expect("保存首版");
+        InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("保存首版");
     assert_eq!(first.entity, "amount");
     assert_eq!(first.entries.len(), 1, "首版应只有一条记录");
     assert!(first.entries[0].is_latest);
@@ -214,7 +214,7 @@ fn snapshot_history_round_trip_over_a_real_project() {
 
     // 第二次保存：新的一版挂到首版之后，且非空值统计确实来自本次重算
     let second =
-        InsightService::save_column_snapshot(Some(&root), table, "amount").expect("保存第二版");
+        InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("保存第二版");
     assert_eq!(second.entries.len(), 2);
     assert!(second.entries[0].is_latest, "最新一版在最前");
     assert!(second.entries[0].has_parent, "第二版应有父版本");
@@ -258,7 +258,7 @@ fn snapshot_comparison_reads_both_stored_bodies() {
         "VALUES (1.5), (2.5), (NULL)",
     );
 
-    let first = InsightService::save_column_snapshot(Some(&root), table, "amount").expect("首版");
+    let first = InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("首版");
     let baseline = first.entries[0].version_id.clone();
 
     // 数据变了再存一版：插一行 + 把空值补上
@@ -271,7 +271,7 @@ fn snapshot_comparison_reads_both_stored_bodies() {
         conn.execute_batch(&sql).expect("补上空值");
     }
     let second =
-        InsightService::save_column_snapshot(Some(&root), table, "amount").expect("第二版");
+        InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("第二版");
     assert_eq!(second.entries.len(), 2);
 
     let compared = InsightService::compare_column_snapshots(Some(&root), "amount", &baseline)
@@ -328,7 +328,7 @@ fn cleanup_with_a_30_day_window_leaves_fresh_snapshots_alone() {
     let root = temp_project_dir("cleanup");
     seed(table, "amount DECIMAL(12,2)", "VALUES (1.5), (2.5)");
 
-    InsightService::save_column_snapshot(Some(&root), table, "amount").expect("保存一版");
+    InsightService::save_column_snapshot(Some(&root), table, "amount", None).expect("保存一版");
     let view = InsightService::cleanup_old_snapshots(Some(&root), "amount", SNAPSHOT_RETENTION_DAYS)
         .expect("清理应成功");
 

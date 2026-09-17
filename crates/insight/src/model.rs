@@ -84,10 +84,50 @@ impl PanelTab {
     }
 }
 
+/// 取样来源：洞察的入口五花八门（导航树 / 分析存档 / 草稿箱 / 编辑器结果集），
+/// 但它们都能归约成「在某条连接上跑一段只读查询，取一份样本」。
+///
+/// **只装定位信息，不装数据**（D20 同一立场）：样本由接缝侧（`jobs`）执行，落在
+/// `tmp_i_` 分析临时表上（建表即登记，TTL / 上限 / 回收都是现成的）。
+///
+/// `sql` 由**入口**构造（只有它知道该源的方言与引号规则）；抽样口径（`LIMIT`）
+/// 不写在入口里——洞察统一包一层 `SELECT * FROM (…) AS … LIMIT n`，
+/// 免得每个入口各写一次「取多少行」（口径一处分：「501 行样本」这种错最费时间）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SampleSource {
+    /// 样本要跑在哪条连接上（M3）
+    pub conn_id: String,
+    /// 只读取样查询（不带 `LIMIT` 也可以：外层会再包一层）
+    pub sql: String,
+    /// 人类可读的来源描述（面板副标题 / 快照来源）：如「analytics.orders」「结果集 · orders」
+    pub label: String,
+}
+
+impl SampleSource {
+    pub fn new(conn_id: impl Into<String>, sql: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            conn_id: conn_id.into(),
+            sql: sql.into(),
+            label: label.into(),
+        }
+    }
+
+    /// 来源描述（面板副标题与快照 `entity_source` 用它）。
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// 样本要跑在哪条连接上。
+    pub fn conn_id(&self) -> &str {
+        &self.conn_id
+    }
+}
+
 /// 面板当前指向的分析目标。
 ///
 /// 只装**定位信息**（临时表名 / 连接 ID / 列名），不装数据：洞察不自己取数（D20），
-/// 取数由宿主在收到目标后发起。
+/// 取数由宿主在收到目标后发起。带 [`SampleSource`] 的两个变体是同一个规则的延伸：
+/// 入口只给「去哪个表取样本」，样本表由接缝侧统一建。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsightTarget {
     /// 列画像：结果表（临时表）中的一列
@@ -99,6 +139,17 @@ pub enum InsightTarget {
     /// 表探查：结果表整体
     Table {
         temp_table: String,
+        table_name: String,
+    },
+    /// 源表列画像：先取样，其余与 [`InsightTarget::Column`] 完全同路
+    SourceColumn {
+        source: SampleSource,
+        column: String,
+        data_type: String,
+    },
+    /// 源表表探查：先取样，其余与 [`InsightTarget::Table`] 完全同路
+    SourceTable {
+        source: SampleSource,
         table_name: String,
     },
     /// 多列分析
@@ -119,8 +170,8 @@ impl InsightTarget {
     /// 该目标默认落到哪个 Tab（入口点击后直接切过去）
     pub fn default_tab(&self) -> PanelTab {
         match self {
-            InsightTarget::Column { .. } => PanelTab::Column,
-            InsightTarget::Table { .. } => PanelTab::Table,
+            InsightTarget::Column { .. } | InsightTarget::SourceColumn { .. } => PanelTab::Column,
+            InsightTarget::Table { .. } | InsightTarget::SourceTable { .. } => PanelTab::Table,
             InsightTarget::MultiColumn { .. } => PanelTab::MultiColumn,
             InsightTarget::Schema { .. } => PanelTab::Schema,
         }
@@ -129,14 +180,17 @@ impl InsightTarget {
     /// 目标头主标题
     pub fn title(&self) -> String {
         match self {
-            InsightTarget::Column { column, .. } => column.clone(),
-            InsightTarget::Table { table_name, .. } => table_name.clone(),
+            InsightTarget::Column { column, .. } | InsightTarget::SourceColumn { column, .. } => {
+                column.clone()
+            }
+            InsightTarget::Table { table_name, .. }
+            | InsightTarget::SourceTable { table_name, .. } => table_name.clone(),
             InsightTarget::MultiColumn { columns, .. } => format!("{} 列", columns.len()),
             InsightTarget::Schema { schema, .. } => schema.clone().unwrap_or_else(|| "全部结构".into()),
         }
     }
 
-    /// 目标头副标题（定位信息：列的声明类型 / 临时表名）
+    /// 目标头副标题（定位信息：列的声明类型 / 临时表名 / 取样来源）
     pub fn detail(&self) -> Option<String> {
         match self {
             InsightTarget::Column {
@@ -145,27 +199,45 @@ impl InsightTarget {
                 ..
             } => Some(format!("{data_type} · {temp_table}")),
             InsightTarget::Table { temp_table, .. } => Some(temp_table.clone()),
+            InsightTarget::SourceColumn {
+                source, data_type, ..
+            } => Some(format!("{data_type} · 来源 {}", source.label())),
+            InsightTarget::SourceTable { source, .. } => Some(format!("来源 {}", source.label())),
             InsightTarget::MultiColumn { temp_table, .. } => Some(temp_table.clone()),
             InsightTarget::Schema { conn_id, .. } => Some(conn_id.clone()),
         }
     }
 
-    /// 数据来源的临时表名（结构目标没有临时表 → 空串）。
+    /// 目标**自带**的临时表名；源目标还没有样本表（要取样后才有）→ 空串。
     ///
-    /// 取数请求只认它：三个目标种类都指向临时表，视图因此不必逐个 `match`。
+    /// 取数请求只认它：临时表三兄弟都指向临时表，视图因此不必逐个 `match`。
+    /// 面板要拿「当前该分析哪张临时表」请用 `PanelData::sample_table()`——
+    /// 源目标那里已经解析出了样本表。
     pub fn temp_table(&self) -> &str {
         match self {
             InsightTarget::Column { temp_table, .. }
             | InsightTarget::Table { temp_table, .. }
             | InsightTarget::MultiColumn { temp_table, .. } => temp_table,
-            InsightTarget::Schema { .. } => "",
+            InsightTarget::SourceColumn { .. }
+            | InsightTarget::SourceTable { .. }
+            | InsightTarget::Schema { .. } => "",
+        }
+    }
+
+    /// 源目标的取样来源（临时表目标为 `None`）。
+    pub fn source(&self) -> Option<&SampleSource> {
+        match self {
+            InsightTarget::SourceColumn { source, .. }
+            | InsightTarget::SourceTable { source, .. } => Some(source),
+            _ => None,
         }
     }
 
     /// 展示用的表名（列 / 多列目标没有独立表名，退回临时表名）
     pub fn table_name(&self) -> String {
         match self {
-            InsightTarget::Table { table_name, .. } => table_name.clone(),
+            InsightTarget::Table { table_name, .. }
+            | InsightTarget::SourceTable { table_name, .. } => table_name.clone(),
             _ => self.temp_table().to_string(),
         }
     }
@@ -201,9 +273,24 @@ pub struct PanelData {
     pub multi: Option<MultiColumnView>,
     pub schema: Option<crate::schema_view::SchemaReportView>,
     pub history: Option<HistoryView>,
+    /// 取样来源解析出的**分析临时表名**（源目标才有；接缝侧取样后回填）。
+    ///
+    /// 面板自己要「接着分析哪张临时表」（保存快照 / 多列 / 下钻）时读它——
+    /// 源目标的 `InsightTarget` 里没有临时表名（那是取样之后才知道的事）。
+    pub source_sample: Option<String>,
 }
 
 impl PanelData {
+    /// 当前该分析哪张临时表：源目标读解析出的样本表，其余目标读目标自带的。
+    pub fn sample_table<'a>(&'a self, target: &'a InsightTarget) -> Option<&'a str> {
+        match target.source() {
+            Some(_) => self.source_sample.as_deref(),
+            None => {
+                let table = target.temp_table();
+                (!table.is_empty()).then_some(table)
+            }
+        }
+    }
     pub fn as_column(&self) -> Option<&ColumnProfileView> {
         self.column.as_ref()
     }
@@ -1798,6 +1885,74 @@ mod tests {
         assert_eq!(schema.title(), "全部结构");
         assert_eq!(schema.detail().as_deref(), Some("G_1"));
         assert_eq!(schema.temp_table(), "", "结构目标没有临时表");
+    }
+
+    /// 源目标（导航树 / 结果集 / 存档 / 草稿箱）与临时表目标**同形**：
+    /// Tab、标题、下钻都一致，差别只在「多一步取样」。
+    #[test]
+    fn source_targets_mirror_temp_table_targets() {
+        let source = SampleSource::new("G_1", "SELECT * FROM `shop`.`orders`", "shop.orders");
+        assert_eq!(source.label(), "shop.orders");
+        assert_eq!(source.conn_id(), "G_1");
+
+        let col = InsightTarget::SourceColumn {
+            source: source.clone(),
+            column: "amount".into(),
+            data_type: "DECIMAL".into(),
+        };
+        assert_eq!(col.default_tab(), PanelTab::Column);
+        assert_eq!(col.title(), "amount");
+        assert_eq!(
+            col.detail().as_deref(),
+            Some("DECIMAL · 来源 shop.orders"),
+            "副标题要说清样本是从哪取的"
+        );
+        assert_eq!(col.temp_table(), "", "样本表要取样后才知道");
+        assert!(col.source().is_some());
+
+        let table = InsightTarget::SourceTable {
+            source,
+            table_name: "orders".into(),
+        };
+        assert_eq!(table.default_tab(), PanelTab::Table);
+        assert_eq!(table.title(), "orders");
+        assert_eq!(table.table_name(), "orders");
+        assert_eq!(table.detail().as_deref(), Some("来源 shop.orders"));
+    }
+
+    /// 面板「当前该分析哪张临时表」：源目标读解析出的样本表，其余读目标自带的。
+    #[test]
+    fn sample_table_resolves_source_and_plain_targets() {
+        let mut data = PanelData::default();
+
+        let plain = InsightTarget::Column {
+            temp_table: "tmp_q_x".into(),
+            column: "amount".into(),
+            data_type: "DOUBLE".into(),
+        };
+        assert_eq!(data.sample_table(&plain), Some("tmp_q_x"));
+        assert_eq!(
+            data.sample_table(&InsightTarget::Schema {
+                conn_id: "G_1".into(),
+                database: "shop".into(),
+                schema: None,
+            }),
+            None,
+            "结构目标没有临时表"
+        );
+
+        let source = InsightTarget::SourceColumn {
+            source: SampleSource::new("G_1", "SELECT 1", "shop.orders"),
+            column: "amount".into(),
+            data_type: "DOUBLE".into(),
+        };
+        assert_eq!(
+            data.sample_table(&source),
+            None,
+            "还没取样时没有可分析的临时表"
+        );
+        data.source_sample = Some("tmp_i_sample_1".into());
+        assert_eq!(data.sample_table(&source), Some("tmp_i_sample_1"));
     }
 
     #[test]

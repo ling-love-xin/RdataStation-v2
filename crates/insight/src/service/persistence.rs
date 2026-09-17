@@ -1,7 +1,125 @@
 use crate::model::types::ColumnInsightFull;
+use crate::model::{ColumnProfileView, SampleSource, TableProfileView};
 use crate::store::{InsightMetaStore, InsightStorage};
 use crate::{insight_engine, quality_scorer, store};
 use shared::error::{CommonError, CoreError};
+
+/// 源取样的行数上限（与源表列画像的 `LIMIT 500` 同一口径）。
+///
+/// 不放进 `SampleSource`：抽样多少行是**洞察的口径**，不该由每个入口各写一次。
+pub const SOURCE_SAMPLE_LIMIT: usize = 500;
+
+/// 源取样统一口径：入口给的只读查询 → `tmp_i_` 分析临时表（建表即登记）。
+///
+/// 这是「凡能喂给 DuckDB 的数据都能洞察」的落点：导航树表 / 分析存档 / 草稿箱 /
+/// 编辑器结果集都只提供「连接 + 一段只读查询 + 标签」，样本与后续分析在洞察这边完成。
+///
+/// 外层**再包一层 `LIMIT`**：入口的查询可以不带限（源表全量查询），
+/// 也不能靠入口自觉——口径只在这里。
+pub async fn sample_source_to_analysis_table(source: &SampleSource) -> Result<String, CoreError> {
+    use engine::get_connection_manager;
+    use engine::services::sql_service::SqlExecuteOptions;
+    use engine::SqlService;
+
+    let sample_sql = format!(
+        "SELECT * FROM ({}) AS rds_sample LIMIT {SOURCE_SAMPLE_LIMIT}",
+        source.sql.trim().trim_end_matches(';')
+    );
+
+    let service = SqlService::new(get_connection_manager().clone());
+    let opts = SqlExecuteOptions {
+        record_history: false,
+        use_transaction: false,
+        timeout_ms: Some(15_000),
+        use_cache: false,
+    };
+    let result = service
+        .execute(Some(source.conn_id.clone()), &sample_sql, opts)
+        .await?;
+    let json = serde_json::to_value(&result.result)
+        .map_err(|e| CoreError::common(CommonError::General(format!("Serialize error: {e}"))))?;
+
+    let (columns, rows) = batch_columns_and_rows(&json);
+    if columns.is_empty() {
+        return Err(CoreError::common(CommonError::General(format!(
+            "取样没有拿到列（来源：{}）——查询可能没有结果集",
+            source.label
+        ))));
+    }
+
+    let duckdb = insight_engine::get_or_create_duckdb()?;
+    let conn = duckdb
+        .lock()
+        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB lock error: {e}"))))?;
+    engine::duckdb::analysis::create_analysis_temp_table(&conn, &columns, &rows, "source_sample")
+}
+
+/// 首个 batch 的列与行（引擎的执行结果 JSON → 可建表的两段）。
+fn batch_columns_and_rows(
+    json: &serde_json::Value,
+) -> (Vec<String>, Vec<Vec<serde_json::Value>>) {
+    match json["batches"]
+        .as_array()
+        .and_then(|batches| batches.first())
+    {
+        Some(batch) => {
+            let cols: Vec<String> = batch["columns"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|c| c.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let rows: Vec<Vec<serde_json::Value>> = batch["rows"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .map(|row| row.as_array().cloned().unwrap_or_default())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            (cols, rows)
+        }
+        None => (vec![], vec![]),
+    }
+}
+
+/// 源目标的列画像：取样 → 画像，返回**（样本表名, 视图）**。
+///
+/// 返回样本表名是必需的：面板保存快照 / 开多列 / 下钻都要接着用同一份样本
+/// （否则会再抽一次，两次结果还不一样）。
+pub async fn profile_source_column(
+    project_root: Option<&std::path::Path>,
+    source: &SampleSource,
+    column_name: &str,
+) -> Result<(String, ColumnProfileView), CoreError> {
+    let temp_table = sample_source_to_analysis_table(source).await?;
+
+    let duckdb = insight_engine::get_or_create_duckdb()?;
+    let conn = duckdb
+        .lock()
+        .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB lock error: {e}"))))?;
+    // 与样表同一把锁：用 `*_on`（已持连接版本），避开 std `Mutex` 自重入
+    let full = crate::with_rules(project_root, |registry| {
+        insight_engine::get_column_insight_full_on(registry, &conn, &temp_table, column_name)
+    })?;
+    Ok((temp_table, ColumnProfileView::from_domain(&full)))
+}
+
+/// 源目标的表探查：取样 → 内省，返回**（样本表名, 视图）**。
+///
+/// 表探查不跑规则（与临时表那一路同一口径）：逐列统计是「评估全表」的事。
+pub async fn profile_source_table(
+    source: &SampleSource,
+    table_name: &str,
+) -> Result<(String, TableProfileView), CoreError> {
+    let temp_table = sample_source_to_analysis_table(source).await?;
+    let profile = insight_engine::get_temp_table_profile(&temp_table)?;
+    Ok((temp_table, TableProfileView::from_profile(&profile, table_name)))
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn save_column_insight_snapshot(
@@ -128,6 +246,9 @@ pub async fn profile_column_from_table(
     let manager = get_connection_manager().clone();
     let service = SqlService::new(manager);
 
+    // 采样取自**用户源库**：反引号三段名是 MySQL 语法（PostgreSQL / SQLite 会直接报错）。
+    // 本函数目前无宿主侧调用者（表入口与导航右键欠账，见
+    // `docs/architecture/insight/insight-dev-plan.md`），接线前须先按 `db_type` 分派方言。
     let sample_sql = format!(
         "SELECT * FROM `{}`.`{}`.`{}` LIMIT 500",
         database, schema, table
@@ -146,33 +267,7 @@ pub async fn profile_column_from_table(
     let json = serde_json::to_value(&result.result)
         .map_err(|e| CoreError::common(CommonError::General(format!("Serialize error: {}", e))))?;
 
-    let (columns, rows) = match json["batches"]
-        .as_array()
-        .and_then(|batches| batches.first())
-    {
-        Some(batch) => {
-            let cols: Vec<String> = batch["columns"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|c| c.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let rows_data: Vec<Vec<serde_json::Value>> = batch["rows"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .map(|row| row.as_array().cloned().unwrap_or_default())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            (cols, rows_data)
-        }
-        None => (vec![], vec![]),
-    };
+    let (columns, rows) = batch_columns_and_rows(&json);
 
     if columns.is_empty() {
         return Err(CoreError::common(CommonError::General(
@@ -215,6 +310,9 @@ pub async fn batch_evaluate_columns(
     let manager = get_connection_manager().clone();
     let service = SqlService::new(manager);
 
+    // 采样取自**用户源库**：反引号三段名是 MySQL 语法（PostgreSQL / SQLite 会直接报错）。
+    // 本函数目前无宿主侧调用者（表入口与导航右键欠账，见
+    // `docs/architecture/insight/insight-dev-plan.md`），接线前须先按 `db_type` 分派方言。
     let sample_sql = format!(
         "SELECT * FROM `{}`.`{}`.`{}` LIMIT 500",
         database, schema, table

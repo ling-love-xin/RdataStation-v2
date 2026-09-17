@@ -106,6 +106,35 @@ impl InsightService {
         Ok(ColumnProfileView::from_domain(&full))
     }
 
+    // ==================== 源取样（统一入口契约）====================
+
+    /// 源目标列画像：**取样 → 分析临时表 → 画像**，返回（样本表名, 视图）。
+    ///
+    /// 「凡能喂给 DuckDB 的数据都能洞察」的落点：导航树 / 分析存档 / 草稿箱 /
+    /// 编辑器结果集都只需给出「连接 + 只读查询 + 标签」，其余在这里完成。
+    ///
+    /// 返回样本表名是必需的：面板保存快照 / 开多列 / 下钻要接着用**同一份样本**。
+    /// 阻塞（要跑源库查询 + DuckDB 分析），调用方负责放后台。
+    pub fn profile_source_column(
+        project_root: Option<&Path>,
+        source: &crate::model::SampleSource,
+        column_name: &str,
+    ) -> Result<(String, ColumnProfileView), CoreError> {
+        block_on(persistence::profile_source_column(
+            project_root,
+            source,
+            column_name,
+        ))
+    }
+
+    /// 源目标表探查：取样 → 内省，返回（样本表名, 视图）。
+    pub fn profile_source_table(
+        source: &crate::model::SampleSource,
+        table_name: &str,
+    ) -> Result<(String, TableProfileView), CoreError> {
+        block_on(persistence::profile_source_table(source, table_name))
+    }
+
     // ==================== 表探查（Phase 3.1） ====================
 
     /// 表探查（Tab「表」）：临时表内省 → 视图模型。
@@ -213,16 +242,21 @@ impl InsightService {
     /// **重取一次领域画像再存**：面板手里只有视图模型，而快照正文存的是领域结果
     /// （`ColumnInsightFull`）——把视图模型反向拼回去是不可能的，也不应该。
     ///
-    /// `entity_source` 记录「这份快照是哪来的」（面板只知道临时表，就如实写临时表）。
+    /// `entity_source` 记录「这份快照是哪来的」：源目标传来源描述（如
+    /// `analytics.orders`），临时表目标只能说临时表名（如实写，不编）。
     pub fn save_column_snapshot(
         project_root: Option<&Path>,
         temp_table: &str,
         column: &str,
+        source_label: Option<&str>,
     ) -> Result<HistoryView, CoreError> {
         let root = project_root.ok_or_else(no_project)?;
         let full = Self::get_column_insight_full(Some(root), temp_table, column)?;
         let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
-        let entity_source = format!("temp_table={temp_table}");
+        let entity_source = match source_label {
+            Some(label) => format!("{label} · {column}"),
+            None => format!("temp_table={temp_table}"),
+        };
         block_on(stores.save_column_snapshot(
             &full,
             Some(&entity_source),

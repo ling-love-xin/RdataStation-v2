@@ -23,6 +23,23 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — 入口统一：源取样通道（D58）
+
+**背景**：产品口径确定——**凡是能喂给 DuckDB 的数据都能洞察**（数据库导航树 / 分析存档 / 草稿箱 / 编辑器 SELECT 结果集）。它们形态各异，但分析能力只有一套（列画像 / 表探查 / 多列 / 下钻都要临时表），所以先把入口统一成一条通道。
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **221 项**（本批 +3：源目标同形、样本表解析、请求映射）· 集成 **13 项**全绿；本批文件 clippy 零新增告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 统一契约 | `SampleSource { conn_id, sql, label }`：入口只给「哪条连接 + 一段只读查询 + 来源标签」 | `model.rs` |
+| 统一口径 | `sample_source_to_analysis_table`：外层再包一层 `SELECT * FROM (…) AS rds_sample LIMIT 500` → 落 `tmp_i_` 分析临时表（建表即登记，TTL / 上限 / 回收全现成）。**行数上限只在洞察侧**，不让每个入口各写一次 | `service/persistence.rs`（`SOURCE_SAMPLE_LIMIT`） |
+| 目标形态 | `InsightTarget::{SourceColumn, SourceTable}`：Tab / 标题 / 下钻与临时表目标**完全同形**，副标题写「来源 xxx」，差别只在「多一步取样」 | `model.rs` |
+| 取数与回填 | `ProfileRequest::{SourceColumn, SourceTable}` → 取样 → 画像 → 接缝把**样本表名回填**面板（`PanelData.source_sample`），保存快照 / 多列 / 下钻接着用**同一份样本**（不重新抽样） | `jobs.rs` + `insight_view.rs`（`set_source_sample` / `sample_table()`） |
+| 快照来源 | 保存快照带上来源标签（`SnapshotSaveRequested.source_label`）→ `entity_source` 写「`analytics.orders · amount`」而不是一个过期就没人认识的 `tmp_i_…` | `insight_view.rs` + `jobs.rs` + `service/mod.rs` |
+| 测试 | 源目标与临时表目标同形（Tab / 标题 / 副标题 / 空临时表名）；`PanelData::sample_table` 三态（普通目标 / 源目标未取样 / 已取样）；源目标能解析成取样请求 | `model.rs` / `jobs.rs` 测试模块 |
+
+**宿主侧仍欠（一次一行）**：`Shared::open_insight_source_table / open_insight_source_column`（把上表的目标推给面板）还没写，导航树 / 存档 / 草稿箱 / 结果网格的右键菜单也还没接——所以本批交付的是**通道**，四个入口接上即可用（结果集用 `SampleSource::new(conn_id, 原SQL, "结果集 · xxx")`，洞察侧会自己包 LIMIT）。
+
 ### 2026-09-17 — 快照收尾三件：Q5 双写回滚 · Q4 保留期定案 · K14 剪链标注
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **218 项**（本批 +2：双写回滚 1 + 剪链标注 1）· 集成 **13 项**全绿；本批文件 clippy 零新增告警）

@@ -94,6 +94,9 @@ pub enum InsightEvent {
     SnapshotSaveRequested {
         temp_table: String,
         column: String,
+        /// 取样来源描述（源目标才有）：进快照的 `entity_source`，
+        /// 否则快照存的是 `temp_table=tmp_i_…`——一个过了 30 分钟就没人认识的随机名。
+        source_label: Option<String>,
     },
     /// 请宿主读取某列的历次快照
     HistoryRequested { column: String },
@@ -258,6 +261,12 @@ impl InsightView {
         if self.emit_request_for_tab(self.tab, cx) {
             cx.notify();
         }
+    }
+
+    /// 取样来源解析出样本表（接缝侧取样后回填）：源目标的保存 / 多列 / 下钻都读它。
+    pub fn set_source_sample(&mut self, temp_table: impl Into<String>, cx: &mut Context<Self>) {
+        self.data.source_sample = Some(temp_table.into());
+        cx.notify();
     }
 
     /// 数据态载荷（宿主与测试读；三个 Tab 各自的最近一次结果）
@@ -454,17 +463,26 @@ impl InsightView {
 
     /// 历史 Tab 的「保存」：发请求（重取领域画像 + 双写都归接缝）
     pub fn request_snapshot_save(&mut self, cx: &mut Context<Self>) {
-        let Some(InsightTarget::Column {
-            temp_table, column, ..
-        }) = self.target.clone()
-        else {
+        let Some(target) = self.target.clone() else {
             return;
         };
+        // 列目标与源列目标都能存：看到的是同一列的画像，就不该因为入口不同而不能留档
+        let column = match &target {
+            InsightTarget::Column { column, .. } | InsightTarget::SourceColumn { column, .. } => {
+                column.clone()
+            }
+            _ => return,
+        };
+        let Some(temp_table) = self.data.sample_table(&target).map(str::to_string) else {
+            return;
+        };
+        let source_label = target.source().map(|source| source.label().to_string());
         self.history_saving = true;
         self.history_notice = None;
         cx.emit(InsightEvent::SnapshotSaveRequested {
             temp_table,
             column,
+            source_label,
         });
         cx.notify();
     }
@@ -556,7 +574,12 @@ impl InsightView {
         let Some(rule_id) = self.multi_rule.clone() else {
             return;
         };
-        let Some(temp_table) = self.target.as_ref().map(|t| t.temp_table().to_string()) else {
+        let Some(temp_table) = self
+            .target
+            .as_ref()
+            .and_then(|target| self.data.sample_table(target))
+            .map(str::to_string)
+        else {
             return;
         };
         if !self.multi_ready() {
@@ -603,13 +626,20 @@ impl InsightView {
     ///
     /// 整表重算不把已有分数清空——列分数是逐列长出来的，清空会让面板闪一下空白。
     pub fn request_table_evaluation(&mut self, cx: &mut Context<Self>) {
-        let Some(InsightTarget::Table {
-            temp_table,
-            table_name,
-        }) = self.target.clone()
-        else {
+        let Some(target) = self.target.clone() else {
             return;
         };
+        // 源表也能评：用的是取样出来的那张临时表
+        if !matches!(
+            target,
+            InsightTarget::Table { .. } | InsightTarget::SourceTable { .. }
+        ) {
+            return;
+        }
+        let Some(temp_table) = self.data.sample_table(&target).map(str::to_string) else {
+            return;
+        };
+        let table_name = target.table_name();
         if let Some(profile) = &self.data.table {
             let total = profile.columns.len();
             let next = profile.evaluating(0, total);
@@ -668,19 +698,38 @@ impl InsightView {
         // 快照落项目目录，所以「历史」还要项目已打开（无项目看不了，不是错误）
         let request = match tab {
             PanelTab::Column => match &target {
-                InsightTarget::Column { .. } => Some(InsightEvent::ProfileRequested { target }),
+                InsightTarget::Column { .. } | InsightTarget::SourceColumn { .. } => {
+                    Some(InsightEvent::ProfileRequested { target })
+                }
                 _ => None,
             },
-            PanelTab::Table => Some(InsightEvent::ProfileRequested {
-                target: InsightTarget::Table {
-                    temp_table: target.temp_table().to_string(),
+            PanelTab::Table => match &target {
+                // 已经有源目标 → 原样再发（取样在接缝里做）
+                InsightTarget::SourceTable { .. } => Some(InsightEvent::ProfileRequested { target }),
+                // 源列目标看整表：同一个来源，换成表目标（取样口径一致）
+                InsightTarget::SourceColumn { source, .. } => {
+                    Some(InsightEvent::ProfileRequested {
+                        target: InsightTarget::SourceTable {
+                            source: source.clone(),
+                            table_name: target.table_name(),
+                        },
+                    })
+                }
+                _ => Some(InsightEvent::ProfileRequested {
+                    target: InsightTarget::Table {
+                        temp_table: target.temp_table().to_string(),
+                        table_name: target.table_name(),
+                    },
+                }),
+            },
+            PanelTab::MultiColumn => match self.data.sample_table(&target) {
+                Some(temp_table) => Some(InsightEvent::MultiColumnRequested {
+                    temp_table: temp_table.to_string(),
                     table_name: target.table_name(),
-                },
-            }),
-            PanelTab::MultiColumn => Some(InsightEvent::MultiColumnRequested {
-                temp_table: target.temp_table().to_string(),
-                table_name: target.table_name(),
-            }),
+                }),
+                // 源目标还没解析出样本表（还没看过列 / 表）→ 没有可分析的临时表
+                None => None,
+            },
             PanelTab::Schema => match &target {
                 InsightTarget::Schema {
                     conn_id,
@@ -694,8 +743,10 @@ impl InsightView {
                 _ => None,
             },
             PanelTab::History => match &target {
-                // 历史是「某列的历次快照」：只有列目标说得清“看谁的历史”
-                InsightTarget::Column { column, .. } if self.project_open => {
+                // 历史是「某列的历次快照」：只有列目标（含源列）说得清“看谁的历史”
+                InsightTarget::Column { column, .. } | InsightTarget::SourceColumn { column, .. }
+                    if self.project_open =>
+                {
                     Some(InsightEvent::HistoryRequested {
                         column: column.clone(),
                     })
@@ -3602,7 +3653,7 @@ mod tests {
         assert!(
             events.borrow().iter().any(|e| matches!(
                 e,
-                InsightEvent::SnapshotSaveRequested { temp_table, column }
+                InsightEvent::SnapshotSaveRequested { temp_table, column, .. }
                     if temp_table == "t_result_1" && column == "amount"
             )),
             "保存要带齐临时表与列：{:?}",

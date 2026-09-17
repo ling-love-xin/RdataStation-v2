@@ -321,6 +321,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D55 | 快照**双写失败时回滚已写入的那一半**（正文成了、元数据没成 → 删正文），错误文案里写清「已回滚」；回滚自身失败时同时报两件事（2026-09-17，Q5 定案） | D16 说「成对写入」，就得说得出成对失败怎么办。原实现只把错误往上抛，留下的是**界面上看不见、清理也配不上对**的孤儿正文——存储用量与真实历史从此对不上 | 回滚失败不掩盖原错误（原错 + 回滚失败 + 出路）；孤儿靠存储清理（按时间删正文）兜底 |
 | D56 | 快照**保留期固定 30 天**（`model::SNAPSHOT_RETENTION_DAYS`），**不做配置项**（2026-09-17，Q4 定案） | v1 就是 30 天；快照是轻量 JSON（几 KB 级），30 天足够回答「上周和现在有什么不同」。而每多一个配置项就多一处能写错的数——清理对话与执行取同一个常量，就没有「写的和删的不一致」的可能 | 要改就改常量（单一来源）；上限另有 `MAX_VERSIONS_PER_COLUMN` 兜底 |
 | D57 | 版本链被清理剪过的**头部**在界面上标「更早的版本已清理」（数据层**不改**）——只在列表未分页截断时判（2026-09-17，K14 定案） | 剪链是「删 30 天前」的必然副产物：存活版本的 `parent_version_id` 仍指着已删的父版，那它就不再满足「首版」条件（`parent = None`），界面会既不标首版也不解释。改数据（把头部 `parent` 置空）会丢掉「它前面还有历史」这个事实；改界面则只说真话 | 判据要三合一（最旧一版 + 父版不在列表 + 列表完整），否则分页会造成假阳性；对比不沿链走，所以不影响差值 |
+| D58 | **入口统一为「源取样」**：导航树 / 分析存档 / 草稿箱 / 编辑器结果集都只给 `SampleSource { conn_id, sql, label }`（一段**只读取样查询** + 来源标签），洞察侧统一包一层 `SELECT * FROM (…) LIMIT 500` → 落 `tmp_i_` 分析临时表 → 之后与「临时表目标」**完全同路**（D53 后的新目标形态：`SourceColumn` / `SourceTable`）（2026-09-17） | 数据入口五花八门（表 / 查询 / 存档记录），但**分析能力只有一套**（列画像 / 表探查 / 多列 / 下钻都要临时表）。每个入口各写一套取数 + 一套回收，必然分叉；而「把数据拼成临时表」又绝不能反拼装——结果集手里只有字符串化的行，拼出来的表会把 DOUBLE 当字符串，质量评分给出**错**结论（D42 同一立场） | 抽样口径（行数）只在洞察侧（不写进入口）；样本表由现成机制回收（TTL 30 分钟 / 上限 100）；SQL 由入口给是因为**只有它知道该源的方言与引号规则**；下钻 / 多列 / 保存快照接着用**同一份样本表**（`PanelData.source_sample`），不重新抽样 |
 
 ## 7. 并发与资源
 
@@ -417,6 +418,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D52 规则 SQL 静态门 | `crates/insight/src/rule_registry.rs`（`SQL_FORBIDDEN_KEYWORDS` / `validate_rule_sql` / `is_forbidden_function` / `strip_literals_and_comments` / `sql_tokens`；挂点在 `validate_rule` 的第一条） |
 | D53 项目规则信任门 | `crates/engine/migrations/global/025_insight_rule_trust.sql`（新表）、`crates/insight/src/service/rule_trust.rs`（`RuleTrust` / `trust_key` / `read_at` / `write`）、`lib.rs`（`normalized_project_key` / `project_rule_trust` / `apply_project_rule_trust` / `scan_pending_project_rules`）、`rule_registry.rs`（`PendingProjectRules` + 注册表字段）、`rule_view.rs`（`PendingRulesView` + 横幅 + 首次确认框 + `RulesEvent::TrustDecided`）、`service/mod.rs`（`decide_project_rules_trust`）、`jobs.rs`（`request_rules_trust`） |
 | D54 查询结果临时表命名与回收 | `crates/engine/src/duckdb/temp_table.rs`（`generate_unique_name` / `drop_temp_table` / `quote_ident` + 三条用例）、`duckdb/mod.rs`（导出）、`services/duckdb_service.rs`（`create_temp_table_internal` 改用它 + 用例） |
+| D58 源取样统一入口 | `crates/insight/src/model.rs`（`SampleSource` / `InsightTarget::{SourceColumn, SourceTable}` / `PanelData::source_sample` + `sample_table()`）、`service/persistence.rs`（`SOURCE_SAMPLE_LIMIT` / `sample_source_to_analysis_table` / `profile_source_column` / `profile_source_table`）、`service/mod.rs`（两个同步门面）、`jobs.rs`（`ProfileRequest::Source*` + 取样后回填样本表）、`insight_view.rs`（`set_source_sample` / 保存·多列·下钻改用 `sample_table`） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
