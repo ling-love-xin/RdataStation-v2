@@ -24,6 +24,9 @@
   --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
   --track:#E7E7E7; --overlay:rgba(20,20,30,.28); --popover:#FFFFFF;
   --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+  /* 美化用（观感 token，不参与语义角色） */
+  --scroll-thumb:#C9C9C9; --scroll-thumb-hover:#AFAFAF; --focus-ring:rgba(194,91,70,.16);
+  --btn-shadow:rgba(20,20,30,.08); --warn-bg:#FBF1E1;
 }
 [data-theme="dark"]{
   --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
@@ -34,6 +37,8 @@
   --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
   --track:#3C3C3C; --overlay:rgba(0,0,0,.5); --popover:#252526;
   --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+  --scroll-thumb:#4A4A4A; --scroll-thumb-hover:#5C5C5C; --focus-ring:rgba(232,132,111,.20);
+  --btn-shadow:rgba(0,0,0,.35); --warn-bg:#3A2E12;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);padding:28px 20px 24px;font-size:13px;-webkit-font-smoothing:antialiased;}
@@ -350,6 +355,53 @@ button{font-family:inherit;cursor:pointer;}
 .note{max-width:1180px;margin:14px auto 0;padding:0 4px;color:var(--muted);font-size:11.5px;line-height:1.7;}
 .note b{color:var(--fg);}
 .note code{background:var(--sidebar);border:1px solid var(--border);border-radius:4px;padding:0 4px;}
+
+/* ─────────────────────────────────────────────────────────
+   视觉打磨：只改观感（颜色 / 圆角 / 阴影 / 滚动条 / 微动效），
+   **不动布局结构、不写 display / visibility**（场景可见性不归这里管）。
+   ───────────────────────────────────────────────────────── */
+/* 细滚动条：面板与滚动区不被粗滚动条抢镜 */
+.panel-body::-webkit-scrollbar,.prev-wrap::-webkit-scrollbar,.field-grid::-webkit-scrollbar,.menu::-webkit-scrollbar,.dialog .db::-webkit-scrollbar{width:9px;height:9px;}
+.panel-body::-webkit-scrollbar-thumb,.prev-wrap::-webkit-scrollbar-thumb,.field-grid::-webkit-scrollbar-thumb,.menu::-webkit-scrollbar-thumb,.dialog .db::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:6px;border:2px solid transparent;background-clip:content-box;}
+.panel-body::-webkit-scrollbar-thumb:hover,.prev-wrap::-webkit-scrollbar-thumb:hover,.field-grid::-webkit-scrollbar-thumb:hover{background:var(--scroll-thumb-hover);background-clip:content-box;}
+.panel-body::-webkit-scrollbar-track,.prev-wrap::-webkit-scrollbar-track,.field-grid::-webkit-scrollbar-track{background:transparent;}
+/* 表清单：一块轻卡片；行与状态点给到可扫读的层次 */
+.lst{border:1px solid var(--border);border-radius:8px;padding:3px;background:var(--bg);}
+.lrow{transition:background .12s ease;}
+.st::before,.sd::before{display:inline-block;width:11px;text-align:center;}
+.sd{padding:1px 0;}
+.sd.w{background:var(--warn-bg);border-radius:9px;padding:1px 7px 1px 3px;}
+/* 关系子行的竖向引线（纯装饰，不占布局语义） */
+.lsub{margin-left:9px;border-left:1px solid var(--border);padding:2px 6px 2px 10px;}
+/* 输入聚焦环 / 主按钮投影 / 按下的微位移 */
+.inp:focus{border-color:var(--active-border);box-shadow:0 0 0 3px var(--focus-ring);}
+.btn{transition:background .12s ease,border-color .12s ease,transform .06s ease;}
+.btn.primary{box-shadow:0 1px 2px var(--btn-shadow);}
+.btn:active{transform:translateY(.5px);}
+.btn[disabled]:active{transform:none;}
+/* 字段卡片与只读列：悬停才提示可交互 / 隔行底温 */
+.fcard{transition:border-color .15s ease,box-shadow .15s ease;}
+.fcard:hover{border-color:var(--active-border);box-shadow:0 1px 3px var(--btn-shadow);}
+.ro-row{padding:3px 6px;border-radius:5px;}
+.ro-row:nth-child(odd){background:var(--sidebar);}
+/* 进度条与预览表 */
+.bar{box-shadow:inset 0 1px 1px var(--btn-shadow);}
+.prev-table th{position:sticky;top:0;z-index:1;}
+.prev-table tr:hover td{background:var(--hover);}
+/* 折叠段：像一张可点的卡片 */
+.fold{background:var(--bg);}
+.fold>summary{padding:6px 9px;transition:color .12s ease;}
+.fold>summary::before{transition:transform .15s ease;}
+.fold[open]>summary{border-bottom:1px solid var(--border);}
+/* 空态卡片：虚线框说「从这里开始」（只命中卡片，不命中同名的禁用按钮） */
+.card{border-radius:10px;}
+.only-empty.card{border-style:dashed;border-color:var(--active-border);background:transparent;}
+/* 右 Dock 抓手：平时一条细线，拖 / 悬停才亮 */
+.dock-grip:hover,.dock-grip.on{background:transparent;}
+.dock-grip::after{content:"";position:absolute;left:2px;top:0;bottom:0;width:1px;background:var(--sidebar-border);transition:background .15s ease,width .15s ease,left .15s ease;}
+.dock-grip:hover::after,.dock-grip.on::after{left:1px;width:3px;border-radius:2px;background:var(--active-border);}
+/* 文案行高：小字成段时更好读 */
+.hint,.ok,.err,.warn,.inf,.mono-line,.sd,.st{line-height:1.5;}
 </style>
 </head>
 <body>
