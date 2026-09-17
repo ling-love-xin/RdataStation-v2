@@ -1165,7 +1165,10 @@ fn open_detail_calls_host(cx: &mut TestAppContext) {
         });
     });
     assert_eq!(rec.opened_detail.get(), 1);
-    assert_eq!(rec.opened_targets.borrow().as_slice(), ["draft".to_string()]);
+    assert_eq!(
+        rec.opened_targets.borrow().as_slice(),
+        ["draft".to_string()]
+    );
 }
 
 /// 「一表一 tab」：**结果表一个表一个 tab**，视图身份是表名（不是下标）。
@@ -1258,7 +1261,9 @@ fn tab_titles_name_the_table_and_its_rows(cx: &mut TestAppContext) {
             cx.new(|cx| {
                 MockDetailView::new(source.clone(), DetailTarget::Table("orders".into()), cx)
             }),
-            cx.new(|cx| MockDetailView::new(source.clone(), DetailTarget::Table("items".into()), cx)),
+            cx.new(|cx| {
+                MockDetailView::new(source.clone(), DetailTarget::Table("items".into()), cx)
+            }),
         )
     });
 
@@ -1291,9 +1296,7 @@ fn a_table_tab_carries_its_own_table(cx: &mut TestAppContext) {
     // 面板停在 orders，但 items 的 tab 依旧认 items
     let source = panel.clone();
     let items_view = panel.update(cx, |_panel, cx| {
-        cx.new(|cx| {
-            MockDetailView::new(source.clone(), DetailTarget::Table("items".into()), cx)
-        })
+        cx.new(|cx| MockDetailView::new(source.clone(), DetailTarget::Table("items".into()), cx))
     });
     let (current, items_rows, items_columns) = panel.read_with(cx, |panel, _cx| {
         let items = panel
@@ -1319,6 +1322,66 @@ fn a_table_tab_carries_its_own_table(cx: &mut TestAppContext) {
         items_view.read_with(cx, |view, cx| view.tab_label(cx)),
         "Mock · items（250 行）"
     );
+}
+
+/// 真实 Dock 里切 tab 会触发 `Panel::set_active` → 当前表跟着换。
+///
+/// 为何要这条：上一条用例直接调 `focus_table`（接口级），而**生产路径**是 Dock 切 tab
+/// 回调 `set_active`。不验这一跳，「切 tab 就是切表」可能只是个没接上的钩子。
+#[gpui_kit::test]
+fn switching_tabs_in_a_real_dock_updates_the_current_table(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    poll_job(cx, &panel);
+
+    let source = panel.clone();
+    // `area` 要一直持有：DockArea 是 TabGroup 的宿主，丢掉它就等于丢掉 tab 组。
+    let (area, group) = cx.update(|window, cx| {
+        let area = cx.new(|cx| DockArea::new("mock-tabs-area", None, window, cx));
+        let orders = cx.new(|cx| {
+            MockDetailView::new(source.clone(), DetailTarget::Table("orders".into()), cx)
+        });
+        let items = cx
+            .new(|cx| MockDetailView::new(source.clone(), DetailTarget::Table("items".into()), cx));
+        area.update(cx, |area, cx| {
+            area.add_panel(orders, DockPlacement::Center, None, window, cx);
+            area.add_panel(items.clone(), DockPlacement::Center, None, window, cx);
+        });
+        let group = items
+            .read(cx)
+            .group
+            .clone()
+            .expect("进 Dock 后应注入 group")
+            .upgrade()
+            .expect("tab 组应存活");
+        (area, group)
+    });
+
+    // 先切到 orders（第 0 张），再切回 items：当前表应跟着切 tab 走。
+    // 注：`Panel::set_active` 是**排程**投递的（`spawn_in` + `reconcile_active`），
+    // 所以要 `run_until_parked` 把回调推到位（与编辑器侧的对话框回调同一口径）。
+    cx.update(|window, cx| group.update(cx, |group, cx| group.select_tab(0, window, cx)));
+    cx.run_until_parked();
+    assert_eq!(
+        panel.read_with(cx, |panel, _cx| panel.current_detail_target().label()),
+        "orders"
+    );
+
+    cx.update(|window, cx| group.update(cx, |group, cx| group.select_tab(1, window, cx)));
+    cx.run_until_parked();
+    assert_eq!(
+        panel.read_with(cx, |panel, _cx| panel.current_detail_target().label()),
+        "items",
+        "在真实 Dock 里切 tab 也要把当前表换成 items"
+    );
+
+    drop(area);
 }
 
 #[gpui_kit::test]
