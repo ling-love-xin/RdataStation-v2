@@ -53,7 +53,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | M4 数据库导航 | 上游（输入结构） | 只消费「列名 + 类型」；结构由宿主编排读取（L2 缓存 `NavCache` → 实时内省 `MetadataService`） |
 | M2 engine | 下游（执行与生命周期） | 临时表建在 engine 的进程级内存库；只 `register_temp_table` 注册，TTL/清理归 engine（见架构 §9-I1） |
 | M1 project | 持久化载体 | 生成任务与用户模板落 `{项目}/.RSmeta/project.db`（迁移 `009_mock_generation.sql`）；产物落 `{项目}/mock/` |
-| M5 草稿箱 / M6 资源 | 出口 | 草稿箱目录按项目根拼 `{项目}/mock/`（草稿箱文档已预留该模块目录）；`persist_as_asset` 供资源注册 |
+| M5 草稿箱 / M6 资源 | 出口 | 草稿箱目录按项目根拼 `{项目}/mock/`（草稿箱文档已预留该模块目录）；落库 = 项目分析库里的**持久表**（即分析资源的项目级形态），**不做「资源注册」那一步**——M6 存档由用户在资源管理器发起 |
 | M8 洞察 | 无依赖 | 各自独立使用分析引擎临时表（`temp_mock_` / `temp_insight_`） |
 | workbench（M5 视图层） | **唯一装配方** | `services/mock_generator.rs` 决定「从哪读结构、往哪写」；`components/mock_host.rs` 实现 `MockHost` |
 
