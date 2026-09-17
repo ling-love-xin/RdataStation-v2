@@ -112,6 +112,24 @@ impl TempTableConfig {
     }
 }
 
+/// 临时表登记的数量概览（按来源分档）。
+///
+/// 用途是**可观测**：登记表只增不减时（K16 的病症），除了这张概览没有别的可见信号。
+/// 权威来源仍是库本身（[`TempTableManager::list_by_source`]），这里只是计数。
+pub struct TempTableStats {
+    pub query: usize,
+    pub insight: usize,
+    pub mock: usize,
+    pub plugin: usize,
+}
+
+impl TempTableStats {
+    /// 已认得的表合计（不含名字不带任何来源前缀的表）。
+    pub fn total(&self) -> usize {
+        self.query + self.insight + self.mock + self.plugin
+    }
+}
+
 /// 临时表管理器
 ///
 /// 负责临时表命名、TTL 清理、数量上限管理。
@@ -264,6 +282,26 @@ impl TempTableManager {
             .read()
             .map(|r| r.keys().filter(|name| name.starts_with(prefix)).count())
             .unwrap_or(0)
+    }
+
+    /// 按来源统计登记表数量（日志 / 诊断；见 [`TempTableStats`]）。
+    ///
+    /// 多前缀的来源（mock 同时有 `tmp_m_` 与 `temp_mock_`）按前缀**去重**计数，
+    /// 不会因为命中两套前缀而被算两次（前缀之间互不包含，故“去重”就是一次匹配）。
+    pub fn stats(&self) -> TempTableStats {
+        let registry = self.registry.read().unwrap_or_else(|e| e.into_inner());
+        let count = |source: TempTableSource| {
+            registry
+                .keys()
+                .filter(|name| source.prefixes().iter().any(|p| name.starts_with(p)))
+                .count()
+        };
+        TempTableStats {
+            query: count(TempTableSource::Query),
+            insight: count(TempTableSource::Insight),
+            mock: count(TempTableSource::Mock),
+            plugin: count(TempTableSource::Plugin),
+        }
     }
 
     /// 惰性清理洞察中间表。
@@ -593,6 +631,28 @@ mod tests {
         assert_eq!(manager.count_by_prefix("tmp_i_"), 2);
         assert_eq!(manager.count_by_prefix("tmp_q_"), 1);
         assert_eq!(manager.count_by_prefix("tmp_m_"), 0);
+    }
+
+    /// K16 ④：登记概览要按来源分档，且 mock 的两套前缀（`tmp_m_` / `temp_mock_`）不能算两次。
+    #[test]
+    fn test_stats_counts_by_source() {
+        let manager = TempTableManager::new(50);
+
+        manager.register("tmp_q_orders_20260512143025");
+        manager.register("tmp_i_col_amount_20260512143030");
+        manager.register("tmp_i_col_price_20260512143031");
+        manager.register("tmp_m_users_20260512143030");
+        manager.register("temp_mock_users");
+        manager.register("tmp_p_plugin_20260512143035");
+        // 不带任何来源前缀的表：既不属于任何一档，也不该被硬塞进某一档
+        manager.register("unrelated_table");
+
+        let stats = manager.stats();
+        assert_eq!(stats.query, 1);
+        assert_eq!(stats.insight, 2);
+        assert_eq!(stats.mock, 2, "两套 mock 前缀都要算上");
+        assert_eq!(stats.plugin, 1);
+        assert_eq!(stats.total(), 6, "合计不含名字不带前缀的表");
     }
 
     #[test]

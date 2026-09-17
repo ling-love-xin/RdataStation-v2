@@ -23,6 +23,22 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — K16 ③+④：内存闸与可观测（D51）
+
+**已完成并验证**（`cargo test -p rds-engine --lib` **357 项**全绿（本批新增 4：`manager` 3 + `temp_table` 1；总数里另有你在改的 `sql_service` / `history_store` 新增的用例）· `cargo test -p rds-insight --lib` **202 项** + 集成 **13 项**全绿；本批文件 clippy 零新增告警——`manager.rs` 那条 `collapsible_if` 是既有代码；workbench 侧因 `crates/editor` 在制品编译不过，**未跑** `insight_entry`）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 内存闸（③） | `configure_connection` 上 `SET memory_limit`（默认 **2GB**）——内存库是进程级单例，DuckDB 默认吃物理内存的 80%，桌面应用把机器吃光不是可接受的失败方式 | `duckdb/manager.rs` |
+| 溢写口（③） | `SET temp_directory` 钉 `<RDS_HOME>/tmp`（`paths::temp_dir()`；先 `create_dir_all`，**建不出来就跳过溢写设置、不挡启动**）+ `SET max_temp_directory_size`（默认 **10GB**）；到顶是「溢写到 `tmp/`、慢一点」而不是报错 | 同上 |
+| 覆盖与防呆 | `RDS_DUCKDB_MEMORY_LIMIT` / `RDS_DUCKDB_MAX_TEMP_SIZE` 可覆盖；值拼进 SQL 前过 `parse_size_setting` 白名单（数字 + 可选 B/KB/MB/GB/TB）——`SET` 不接受绑定参数，窄白名单同时挡住手滑与注入；非法值回退默认并告警，**配错环境变量不该让程序起不来** | 同上（`size_setting` / `parse_size_setting`） |
+| 可观测（④） | `TempTableStats`（按来源分档计数；mock 的两套前缀不重复计）+ `TempTableManager::stats()` + `DuckDBManager::temp_table_stats()`；洞察建表时 ≥ 上限 80% 打 warn（`warn_if_near_capacity`）——登记表只增不减**没有任何外部表现**，这条日志是唯一的提前信号 | `duckdb/temp_table.rs` + `manager.rs` + `analysis.rs` |
+| 测试 | `parse_size_setting` 白名单（合法 4 / 非法 6，含 SQL 尾巴）、`size_setting` 覆盖与回退、`configure_connection` **真读回** `current_setting('memory_limit')` / `temp_directory` / `max_temp_directory_size`、`stats` 分档计数 | 各文件测试模块 |
+
+**本批把上一条里的 ③④ 做完了**（上一条按当时状态记录，不改）。**K16 至此只剩结果集侧（`tmp_q_`）未接**——回收策略得与编辑器生命周期一起定。
+
+**踩到的一个真坑**：`duckdb-rs` 的 `execute_batch` **不把换行当语句分隔符**（必须分号）。第一版用 `\n` 拼接，结果**所有**建连接的路径都报 `Parser Error: syntax error at or near "SET"`（12 个测试同时红）。已改为 `settings.join(";\n")` 并补尾分号。
+
 ### 2026-09-17 — Q1 核查（规则 SQL 安全边界）：先前的「禁用外部访问」建议作废
 
 **核查结论**（只读代码，无改动）：对 DuckDB 设 `enable_external_access = false` / 「只读连接 / 禁用扩展」这类限制**在现有连接模型下不可行**——`dbi/engine/duckdb_engine.rs` 的 `register_external_database`（`ATTACH`）与 `load_file_source`（`read_csv_auto` / `read_parquet` / `read_excel_auto`）、`duckdb/extensions.rs` 的 `INSTALL` / `LOAD` 都跑在**同一个进程级内存单例**上（就是洞察与结果集临时表所在的连接），且该开关只能在建连接时设、设了回不去 → 会把产品自身的「连接 DuckDB 数据源 / 打开 CSV·Parquet·Excel / 装扩展」一起挡掉。

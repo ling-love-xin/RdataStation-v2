@@ -83,7 +83,26 @@ pub fn create_analysis_temp_table(
     }
 
     DuckDBManager::register_temp_table(&table);
+    warn_if_near_capacity();
     Ok(table)
+}
+
+/// 登记数接近上限时给一条**可见信号**（K16 ④）。
+///
+/// 登记表只增不减是 K16 的病症，而它没有任何外部表现（表在内存库里，界面看不到）。
+/// 正常路径下 `create` 会先惰性清理，计数应该远低于上限；一旦持续贴着上限，
+/// 说明清理没跟上（或 TTL 被改了）——这条日志是提前发现「内存库在长大」的唯一入口。
+fn warn_if_near_capacity() {
+    let Some(max) = super::temp_table::TempTableConfig::insight().max_count else {
+        return;
+    };
+    let count = DuckDBManager::temp_table_manager().count_by_prefix(ANALYSIS_TABLE_PREFIX);
+    // 80% 开始提醒：留出「还能跑一阵，但该查了」的余量
+    if count * 5 >= max * 4 {
+        tracing::warn!(
+            "[analysis] 洞察中间表登记数 {count}/{max} 接近上限——检查创建与回收是否成对（K16）"
+        );
+    }
 }
 
 /// 删掉一张分析临时表（并同步登记表）。幂等：表不在也返回成功。
