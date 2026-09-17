@@ -244,12 +244,21 @@ impl EditorHostPanel {
         // 【B5b】滚动到底自动加载：组件库在可见范围接近末尾时调 delegate 的 `load_more`，
         // 而“该不该再取一段”只有面板知道（选中哪份结果、忙不忙）——走钩子交回给面板。
         // 面板自己的 `fetch_more` 仍是**显式按钮**与自动加载共用的同一条路。
+        // 【B14】右键「按值筛选」也走同一套：值写进筛选框并立刻应用（滤镜 UI 在面板这边）。
         {
-            let weak = cx.entity().downgrade();
+            let load_weak = cx.entity().downgrade();
+            let filter_weak = cx.entity().downgrade();
             grid.update(cx, |state, _cx| {
                 state.delegate_mut().set_load_more_hook(std::rc::Rc::new(
                     move |app: &mut App| {
-                        _ = weak.update(app, |panel, cx| panel.fetch_more(cx));
+                        _ = load_weak.update(app, |panel, cx| panel.fetch_more(cx));
+                    },
+                ));
+                state.delegate_mut().set_filter_value_hook(std::rc::Rc::new(
+                    move |value: &str, app: &mut App| {
+                        let value = value.to_string();
+                        _ = filter_weak
+                            .update(app, |panel, cx| panel.apply_filter_value(&value, cx));
                     },
                 ));
             });
@@ -1673,6 +1682,23 @@ impl EditorHostPanel {
             ResultPlacement::NewSet,
             cx,
         );
+    }
+
+    /// 【B14】按值筛选（右键菜单来的）：把值写进筛选框并立刻应用（**本地**那档）
+    ///
+    /// 输入框要跟着变（用户得看到自己被填了什么）；窗口句柄是构造时存的——
+    /// 菜单点击发生在独立事件里，但没有 `window` 参数（headless 里甚至真的没有窗口），
+    /// 拿不到就只改真值，筛选照样生效。
+    pub(crate) fn apply_filter_value(&mut self, value: &str, cx: &mut Context<Self>) {
+        self.filter_text = value.to_string();
+        // 掐掉在途的防抖：这次是直接定稿，不该再被 300ms 后的旧词覆盖
+        self.filter_version = self.filter_version.wrapping_add(1);
+        let input = self.filter_input.clone();
+        let text = value.to_string();
+        let _ = self.window.update(cx, |_panel, window, app| {
+            input.update(app, |state, cx| state.set_value(text, window, cx));
+        });
+        self.apply_filter(cx);
     }
 
     /// 【B14】开关切换：打开时若已有筛选词就立刻下发一次（“打开后把条件拼为 WHERE 重查”）

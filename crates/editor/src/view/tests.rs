@@ -3325,6 +3325,64 @@ fn pushdown_without_support_says_so(cx: &mut TestAppContext) {
     assert!(message.contains("不支持下发筛选"), "{message}");
 }
 
+/// 【B14】按值筛选（右键菜单的落点）：值写进筛选框就生效
+#[gpui_kit::test]
+fn filtering_by_value_from_the_menu_works(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_sized_runner("select rows=3");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+    assert!(
+        cx.update(|_window, cx| grid.read(cx).delegate().has_filter_value_hook()),
+        "面板要把「按值筛选」的钩子接上（右键菜单才有这一项）"
+    );
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.apply_filter_value("1", cx))
+    });
+    assert_eq!(grid_rows(cx, &panel), 1, "按值筛出那一行");
+    let toolbar = cx
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .expect("有工具栏");
+    assert_eq!(toolbar.filtered, Some((1, 3)), "工具栏明示已筛选");
+}
+
+/// 【B15】冻结列：原生 `Column.fixed` 真的落到列定义上（改完要重建列组）
+#[gpui_kit::test]
+fn freezing_a_column_pins_it_left(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_sized_runner("select rows=3");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+    let before = cx.update(|_window, cx| {
+        grid.read(cx).delegate().column(1, cx).fixed
+    });
+    assert_eq!(before, None, "数据列默认不钉");
+
+    cx.update(|_window, cx| {
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().toggle_freeze(0);
+            state.refresh(cx);
+        })
+    });
+    assert!(
+        cx.update(|_window, cx| grid.read(cx).delegate().is_frozen(0)),
+        "冻结状态在 delegate 里"
+    );
+    let pinned = cx.update(|_window, cx| {
+        grid.read(cx).delegate().column(1, cx).fixed
+    });
+    assert_eq!(
+        pinned,
+        Some(gpui_kit::component::table::ColumnFixed::Left),
+        "冻结要落成 `Column.fixed`（原生能力，不手搓）"
+    );
+}
+
 // ===== B7：导出 =====
 
 /// 假导出路径选择器：记下（格式，默认文件名），返回给定路径（`None` = 用户取消）

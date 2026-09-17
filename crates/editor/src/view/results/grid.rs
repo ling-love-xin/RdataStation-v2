@@ -19,6 +19,7 @@ use std::rc::Rc;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
 use gpui_kit::*;
 
@@ -31,6 +32,63 @@ use crate::view::widgets::status_bar;
 /// 而 delegate 在 `TableState` 里拿不到面板实体，所以走这个钩子（与执行通道同一个口径：
 /// 视图不自己发执行，只把意图交回给知道全局的那一层）。
 pub type LoadMoreHook = Rc<dyn Fn(&mut App)>;
+
+/// 【B14】「按值筛选」的钩子（面板注入：把值写进筛选框并立刻生效）
+pub type FilterValueHook = Rc<dyn Fn(&str, &mut App)>;
+
+/// 右键菜单的动作（界面按它决定点击后干什么）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextAction {
+    /// 按值筛选（值原样交给面板）
+    FilterByValue(String),
+    /// 复制此值
+    CopyValue(String),
+    /// 冻结 / 取消冻结这一**数据列**
+    ToggleFreeze(usize),
+}
+
+/// 右键菜单里的一项
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMenuItem {
+    pub label: String,
+    pub action: ContextAction,
+    /// 这项前面要不要加一条分隔线
+    pub separator_before: bool,
+}
+
+/// 右键菜单的项（**纯函数**：有什么、叫什么都在这里定，界面只负责画）
+///
+/// 原型 §5.5 的右键入口：按值筛选（写进筛选框、默认本地）· 复制此值 ·
+/// 冻结 / 取消冻结（原生 `Column.fixed`）。
+pub fn context_menu_items(
+    value: &str,
+    column_name: &str,
+    column: usize,
+    frozen: bool,
+) -> Vec<ContextMenuItem> {
+    let preview = preview_of(value);
+    vec![
+        ContextMenuItem {
+            label: format!("按值筛选「{preview}」"),
+            action: ContextAction::FilterByValue(value.to_string()),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: "复制此值".to_string(),
+            action: ContextAction::CopyValue(value.to_string()),
+            separator_before: false,
+        },
+        ContextMenuItem {
+            label: if frozen {
+                "取消冻结此列".to_string()
+            } else {
+                format!("冻结「{column_name}」")
+            },
+            action: ContextAction::ToggleFreeze(column),
+            separator_before: true,
+        },
+    ]
+}
 
 /// 网格数据（表头 + 行）
 #[derive(Default)]
@@ -49,6 +107,13 @@ pub struct ResultGridDelegate {
     filter: String,
     /// 【B15】本地排序（列下标按**数据列**算，`0` = 第一数据列；`None` = 原顺序）
     sort: Option<(usize, bool /* 降序 */)>,
+    /// 【B14】最近右键的单元格（视图行号，列下标含行号槽）——组件库没给访问器，
+    /// 所以在 `render_td` 上自己记（事件从最内层开始派发，不会丢）
+    context_cell: Option<(usize, usize)>,
+    /// 【B15】冻结的数据列（原生 `Column.fixed`：横向滚动时钉在左侧）
+    frozen: Vec<usize>,
+    /// 【B14】按值筛选的钩子（面板注入）
+    on_filter_value: Option<FilterValueHook>,
     /// 【B15】视图行序：当前看着的这一串行，元素是 `rows` 里的下标
     ///
     /// 筛选与排序都只改这个映射，**数据行一行不动**（所以清除筛选能原样恢复，
@@ -72,6 +137,9 @@ impl ResultGridDelegate {
         self.empty_text = "查询返回 0 行".to_string();
         // 换了一份结果，旧的排序与筛选不该跟过来（列都可能不是同一批）
         self.sort = None;
+        // 冻结也一样：列都换了一批，钉子留在旧列号上没有意义
+        self.frozen.clear();
+        self.context_cell = None;
         self.rebuild_view_rows();
     }
 
@@ -84,6 +152,32 @@ impl ResultGridDelegate {
         // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果
         self.has_more = false;
         self.loading_more = false;
+    }
+
+    /// 【B14】记下最近右键的单元格（由 `render_td` 上的右键处理调用）
+    pub fn set_context_cell(&mut self, cell: Option<(usize, usize)>) {
+        self.context_cell = cell;
+    }
+
+    /// 【B14】注入「按值筛选」钩子（面板构造时一次）
+    pub fn set_filter_value_hook(&mut self, hook: FilterValueHook) {
+        self.on_filter_value = Some(hook);
+    }
+
+    /// 【B15】这一数据列冻结了吗
+    pub fn is_frozen(&self, column: usize) -> bool {
+        self.frozen.contains(&column)
+    }
+
+    /// 【B15】冻结 / 取消冻结（切换；返回切换后的状态）
+    pub fn toggle_freeze(&mut self, column: usize) -> bool {
+        if let Some(at) = self.frozen.iter().position(|frozen| *frozen == column) {
+            self.frozen.remove(at);
+            false
+        } else {
+            self.frozen.push(column);
+            true
+        }
     }
 
     /// 【B15】设置本地筛选词（空 = 不筛）；只改视图行序，不重查
@@ -180,6 +274,12 @@ impl ResultGridDelegate {
         self.has_more && !self.loading_more && self.on_load_more.is_some()
     }
 
+    /// 测试用：按值筛选的钩子接上了吗（接线正确性；真点击在窗口里驱动）
+    #[cfg(test)]
+    pub fn has_filter_value_hook(&self) -> bool {
+        self.on_filter_value.is_some()
+    }
+
     /// 网格里的列名（供测试断言；不复制行数据）
     pub fn columns_for_test(&self) -> &[String] {
         &self.columns
@@ -221,6 +321,18 @@ impl ResultGridDelegate {
             .and_then(|row| row.get(col_ix - 1))
             .cloned()
             .unwrap_or_default()
+    }
+}
+
+/// 菜单里的值预览（短、单行；太长的值不该把菜单撑开）
+fn preview_of(value: &str) -> String {
+    let folded: String = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if folded.chars().count() > 24 {
+        let mut text: String = folded.chars().take(24).collect();
+        text.push('…');
+        text
+    } else {
+        folded
     }
 }
 
@@ -335,6 +447,8 @@ impl TableDelegate for ResultGridDelegate {
             // 【B15】可本地排序：组件库点列头时会在 Default → Descending → Ascending 里循环，
             // 并回调 `perform_sort`（排序状态存在它那边，这里只把当前态回去，refresh 后指示器不丢）
             .sort(self.sort_mark(index))
+            // 【B15】冻结列用原生 `fixed_left`（横向滚动钉在左侧；行号槽一直是钉住的）
+            .when(self.is_frozen(index), |column| column.fixed_left())
     }
 
     fn render_td(
@@ -361,14 +475,88 @@ impl TableDelegate for ResultGridDelegate {
 
         // `NULL` 是 SQL 里的一个真实值：灰 + 斜体，与字符串 "NULL" 区分开（原型 §2.4）
         let is_null = text == "NULL";
+        // 【B14】右键菜单要用“哪个单元格”：组件库只公开了 `right_clicked_row`，
+        // 没有单元格访问器，所以在单元格自己身上记一笔（事件从最内层派发，不会丢）
+        let table = cx.entity().clone();
         div()
             .px_2()
             .truncate()
             .text_xs()
             .text_color(if is_null { muted } else { foreground })
             .when(is_null, |cell| cell.italic())
+            .on_mouse_down(MouseButton::Right, move |_, _window, app| {
+                table.update(app, |state, _cx| {
+                    state.delegate_mut().set_context_cell(Some((row_ix, col_ix)));
+                });
+            })
             .child(SharedString::from(text))
     }
+
+    /// 【B14】右键菜单：按值筛选 / 复制此值 / 冻结此列（原型 §5.5 的右键入口）
+    ///
+    /// 目标单元格是**最近右键的那一个**（[`Self::context_cell`]）：没有就什么都不摆
+    /// （不猜一个“大概是想筛这个”）。菜单项由 [`context_menu_items`] 给（纯函数，可断言）。
+    fn context_menu(
+        &mut self,
+        _row_ix: usize,
+        menu: PopupMenu,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        let Some((row, col)) = self.context_cell else {
+            return menu;
+        };
+        if Self::is_row_number(col) || row >= self.view_rows.len() {
+            return menu;
+        }
+        let column = col - 1;
+        let value = self.cell(row, col);
+        let column_name = self
+            .columns
+            .get(column)
+            .cloned()
+            .unwrap_or_else(|| format!("列 {}", column + 1));
+
+        let mut menu = menu;
+        for item in context_menu_items(&value, &column_name, column, self.is_frozen(column)) {
+            if item.separator_before {
+                menu = menu.separator();
+            }
+            match item.action {
+                ContextAction::FilterByValue(needle) => {
+                    // 没接钩子就不摆这一项（能力没有就不给入口）
+                    if let Some(hook) = self.on_filter_value.clone() {
+                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                            move |_, _window, app| hook(&needle, app),
+                        ));
+                    }
+                }
+                ContextAction::CopyValue(copied) => {
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            app.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                        },
+                    ));
+                }
+                ContextAction::ToggleFreeze(column) => {
+                    // 冻结是**表格自己的事**（改的是 `Column.fixed`），不需要面板：
+                    // 点击发生在独立事件里（不在表格的更新栈内），可以安全地更新它并重建列组
+                    let table = cx.entity().clone();
+                    menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                        move |_, _window, app| {
+                            table.update(app, |state, cx| {
+                                state.delegate_mut().toggle_freeze(column);
+                                state.refresh(cx);
+                            });
+                        },
+                    ));
+                }
+            }
+        }
+        menu
+    }
+
+
 
     fn render_empty(
         &mut self,
@@ -674,8 +862,8 @@ pub fn render(
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ResultGridDelegate, ResultStatus, ResultToolbar, compare_cells, duration_text,
-        status_segments, thousands, truncated_hint,
+        ContextAction, ResultGridDelegate, ResultStatus, ResultToolbar, compare_cells,
+        context_menu_items, duration_text, preview_of, status_segments, thousands, truncated_hint,
     };
     use gpui_kit::App;
     use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
@@ -702,6 +890,55 @@ mod tests {
                 .collect(),
         );
         grid
+    }
+
+    /// 【B14】右键菜单的项：按值筛选 / 复制此值 / 冻结（文案随冻结状态变）
+    #[test]
+    fn context_menu_offers_filter_copy_and_freeze() {
+        let items = context_menu_items("orders", "name", 1, false);
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, ["按值筛选「orders」", "复制此值", "冻结「name」"]);
+        assert_eq!(
+            items[0].action,
+            ContextAction::FilterByValue("orders".to_string()),
+            "值原样给面板（预览只管显示）"
+        );
+        assert_eq!(items[1].action, ContextAction::CopyValue("orders".to_string()));
+        assert_eq!(items[2].action, ContextAction::ToggleFreeze(1));
+        assert!(items[2].separator_before, "冻结那项前面要有分隔线");
+
+        let frozen = context_menu_items("orders", "name", 1, true);
+        assert_eq!(frozen[2].label, "取消冻结此列", "已冻结时给的是反向动作");
+    }
+
+    /// 值预览：空白折叠 + 截断（长值不该把菜单撑开）
+    #[test]
+    fn the_value_preview_folds_and_truncates() {
+        assert_eq!(preview_of("a\nb  c"), "a b c");
+        let long = "x".repeat(40);
+        let preview = preview_of(&long);
+        assert_eq!(preview.chars().count(), 25, "24 个字符 + 省略号");
+        assert!(preview.ends_with('…'), "{preview}");
+        let items = context_menu_items(&long, "c", 0, false);
+        assert!(items[0].label.contains('…'), "{}", items[0].label);
+    }
+
+    /// 【B15】冻结列：切换、换数据时清空（列都换了一批，旧列号没意义）
+    #[test]
+    fn freezing_columns_toggles_and_resets_with_data() {
+        let mut grid = grid();
+        assert!(!grid.is_frozen(0));
+        assert!(grid.toggle_freeze(0), "第一次是冻结");
+        assert!(grid.is_frozen(0));
+        assert!(grid.toggle_freeze(1));
+        assert!(!grid.toggle_freeze(0), "再切一次是取消");
+        assert!(!grid.is_frozen(0) && grid.is_frozen(1));
+
+        grid.set_data(
+            vec!["a".to_string()],
+            vec![vec!["1".to_string()]],
+        );
+        assert!(!grid.is_frozen(1), "换了一份结果：冻结不跟过来");
     }
 
     /// 【B15】筛选只改视图行序：命中那些行还在原位，行号跟的是视图
