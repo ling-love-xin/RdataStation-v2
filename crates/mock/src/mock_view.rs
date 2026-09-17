@@ -3616,17 +3616,15 @@ impl MockPanel {
 
         // ── 本次 Mock 表：场景工作副本（还没有结果）——行尾「编辑 / ✕」，关系挂子表行下 ──
         if let Some(template) = self.scenario.clone() {
-            let total_rows: u32 = template.tables.iter().map(|table| table.row_count).sum();
             list = list.child(
                 div()
                     .text_xs()
                     .text_color(muted)
                     .text_ellipsis()
                     .child(format!(
-                        "本次 Mock 表（{}）· {} · {} 行",
+                        "本次 Mock 表（{}）· {}",
                         template.tables.len(),
-                        template.name,
-                        with_thousands(u64::from(total_rows))
+                        template.name
                     )),
             );
             let relations = relations_of(&template);
@@ -3848,6 +3846,13 @@ impl MockPanel {
                         .child(format!("{rows} 行")),
                 )
                 .child(render_status_cell(glyph, &status, color)),
+        )
+        // 状态点分两套口径（生成的 / 落库的），一句话说清各是哪个
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child("状态：○ 未生成 ◐ 生成中 ● 已生成 ✓ 已落库 ⚠ 引用的表没落库（多表时才有）"),
         )
     }
 
