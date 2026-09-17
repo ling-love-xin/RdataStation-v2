@@ -66,6 +66,10 @@
 | 项目下拉 | `connection_dialog/project_picker.rs`（+ `Shared::{project_new_request, project_open_request}` → `take_project_action_request`） |
 | 落库 / 回读 / 测试连接 / 作用域路由 | `crates/workbench/src/services/data_source_service.rs` |
 | 连接组装与隧道 | `crates/workbench/src/services/connection_service.rs` + `crates/connection/src/{url,url_params,chain}.rs` |
+| **网络配置（SSH / 代理 / SOCKS / SSL）**：模型 | `crates/connection/src/config.rs`（`SshConfig` / `SshAuth` / `ProxyConfig` / `SslConfig` / `ChainHop` / `ConnectionMethod`） |
+| **网络配置**：真实拨号与隧道 | `crates/connection/src/connector.rs`（`SshTunnelConnector` 基于 **russh** 做端口转发、`SslConnector`、`TunnelGuard`）、`stream.rs`（隧道流）、`known_hosts.rs`（主机指纹校验）、`chain.rs`（`apply_network_method` 单跳 + `process_chain` 多跳 + `TunnelRegistry` 守卫表） |
+| **网络配置**：落库 | `crates/engine/src/persistence/network_store.rs`（结构化字段组装 / 回填 + 凭据 AES 加密 / 脱敏 / 存量迁移） |
+| **网络配置**：UI 入口 | 「网络」Tab（引用下拉 + 「管理网络配置」）→ `connection_dialog/managers.rs`（类型 + 字段表单）+ `helpers.rs::{network_field_specs, network_config_values}`（按类型展开字段）；**内联协议链编辑器已撤下**（决策 #72，多跳走 `chain` 档案） |
 | 表结构与迁移 | `crates/engine/src/{migrations/global,persistence}/*`（`global_connections` / `connection_drafts` / `auth_store` / `network_store` / `connection_org_store` / `metadata_identity`） |
 | ID 规则与作用域判定 | `crates/engine/src/persistence/id_prefix.rs` |
 
@@ -85,7 +89,8 @@
 ## 5. 测试与验证
 
 ```sh
-# 模块回归（工作台 lib + 连接相关套件）
+# 模块回归（连接组织存储 + 工作台 lib + 连接相关套件）
+cargo test -p rds-engine --lib connection_org_store -j 2
 cargo test -p rds-workbench --lib \
   --test data_source_lifecycle --test connection_dialog_ui --test connection_staging \
   --test connection_multi_save --test connection_drafts_persist --test connection_type_driver \
@@ -98,11 +103,12 @@ cargo test -p rds-workbench --lib \
 cargo check --workspace --all-targets -j 2
 ```
 
-- 基准（2026-09-17）：**18 个目标 / 148 用例全绿**——lib 64、`data_source_lifecycle` 28、`connection_type_driver` 7、`connection_project_picker` 7、`ui_contract` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`db_navigator` 2、`connection_edit_backfill` / `connection_drafts_persist` / `connection_tunnel_cleanup` 各 1。
+- 基准（2026-09-17）：**18 个目标 / 155 用例全绿**——lib 71、`data_source_lifecycle` 28、`connection_type_driver` 7、`connection_project_picker` 7、`ui_contract` 7、`connection_staging` 6、`real_connections` 5、`connection_dialog_ui` 4、`dialog_host_layer` 4、`connection_multi_save` 3、`connection_render_matrix` 2、`connection_scope_and_state` 2、`connection_template` 2、`global_service_singleton` 2、`db_navigator` 2、`connection_edit_backfill` / `connection_drafts_persist` / `connection_tunnel_cleanup` 各 1。
+- **引擎侧存量迁移**（同一轮）：`cargo test -p rds-engine --lib` = **369 项全绿**——含新增的启动迁移接线测试（`migration::global_init::startup_migration_backfills_tags_for_global_and_project`）与项目打开回填（`persistence::project_db::opening_project_backfills_legacy_connection_tags`）。
 - **两条补强套件**（2026-09-17）：`connection_render_matrix`（状态 × 渲染矩阵：引导条三态、五 Tab 降级渲染、作用域三态、结果行四级、**暂存区固定高度 + 两列等高**）与 `connection_edit_backfill`（编辑入口 → 读库 → 表单逐项回填 + 五 Tab 渲染；**本轮由此拖出“类型 / 驱动不回填”缺陷**）。
 - **布局高度的写法约定**（本轮踩到，必守）：固定高度必须 `h + min_h + max_h` **三向显式**约束——只给 `h()`（哪怕再加 `min_h_0()`）夹不住 flex 子项的自动最小尺寸，内容多时会按内容撑高（实测暂存区 120px → 412px、侧栏 522px 撑高对话框）。
 - 测试模块的硬规则：**禁** `use gpui_kit::*` / `use super::*`（`#[test]` 宏遮蔽）；断言“节点真的渲染”必须 `.debug_selector(...)` + `cx.debug_bounds(...)`（`.id(...)` **不**登记坐标）；宿主设置 `host_redraw` 桥时，面板入口要**从宿主外部**触发（在 `Harness::update` 内调会重入 panic）。
-- **真机测试环境**（4 条内网 / 本地连接：MySQL·PG·SQLite·DuckDB，含口令与注意事项）见 `connection-user-guide.md` §9.0；建议矩阵说明哪条连接盖哪些清单段。
+- **标签单一权威**（2026-09-17 收尾）：读取**只认** `connection_tags`；行内 `tags` JSON 降为写入侧投影；存量数据由**两处**一次性回填迁入（都幂等）——① 启动迁移 `initialize_global_system` → `migrate_legacy_data`（全局库 + 名册里已存在权威表的项目库）；② 打开项目、项目迁移建好表之后 `ProjectDatabaseManager::open` → `backfill_project_connection_tags`（否则升级后第一次打开项目看不到旧标签）；两处都不建表不建目录（决策 #95）。
 - 契约测试 `ui_contract`：尺寸（禁裸 `px(`）+ 颜色（禁 `rgb(` / `hsla(`）扫描范围含本模块全部文件。
 - 真机验收走 `connection-user-guide.md` §9 的 A–V 清单（USIT）。
 
@@ -121,7 +127,8 @@ cargo check --workspace --all-targets -j 2
 
 | 类别 | 项 |
 | --- | --- |
-| 模块内可做 | 标签权威表**回填迁移**（去掉兼容回退） |
+| 模块内可做 | **（已清空）**——标签权威表回填迁移已于 2026-09-17 完成（决策 #89 收尾，兼容回退已删）；本模块内暂无可自主推进项 |
+| 待拍板 | #36 保存结果行「详情 / 复制」是否算噪音（待 USIT）；#11 类型树折叠三选项（①维持现状〔推荐〕/②上折叠/③分类头吸顶） |
 | 需协调 | 元数据缓存指纹接线（与导航接入 L2 同轮）、宿主开窗分支测试（需 `WorkbenchView` 可测试化） |
 | M4 / 宿主侧 | 分组管理在导航侧、导航行删除入口、标签视图接线、打开·关闭项目刷新 |
 | 待拍板 / 平台 | 驱动插件安装、其他模块尺寸迁移、图像回归与性能基准 |

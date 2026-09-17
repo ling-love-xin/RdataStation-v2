@@ -130,10 +130,37 @@ pub async fn initialize_global_system() -> Result<(), CoreError> {
     )
     .await?;
 
-    // 存量网络档案的凭据加密迁移（一次性、幂等）：升级前写入的明文 `config` 在这里转密文。
-    // 覆盖全局库 + 已登记项目库（名册）；失败仅告警——迁移不应阻断启动
-    // （读路径对明文仍兼容，下次编辑保存也会自动加密）。
+    // 启动时的一次性存量数据迁移（幂等；失败仅告警，不阻断启动）。
+    let (migrated, tags_migrated) = migrate_legacy_data(&manager).await;
+    if migrated > 0 {
+        tracing::info!(count = migrated, "网络档案明文凭据已加密（一次性迁移）");
+    }
+    if tags_migrated > 0 {
+        tracing::info!(count = tags_migrated, "连接标签已回填到权威表（一次性迁移）");
+    }
+
+    install_global_db_manager(manager)?;
+
+    tracing::info!("Global system initialized successfully");
+    Ok(())
+}
+
+/// 启动时的一次性**存量数据迁移**（幂等；失败仅告警，不阻断启动）。
+///
+/// ① 存量网络档案的凭据加密——升级前写入的明文 `config` 在这里转密文
+///   （读路径对明文仍兼容，下次编辑保存也会自动加密）；
+/// ② 存量连接标签回填——早期数据的标签只存于连接行内 `tags` JSON，而
+///   `connection_tags` 是后来引入的权威检索表；回填完成后，读取侧不再需要
+///   “表里无记录 → 用行内 JSON”的兼容回退（决策 #89）。
+///
+/// 覆盖**全局库 + 名册里的每个项目库**；返回 `(网络档案加密条数, 标签回填条数)`。
+///
+/// 抽成独立函数是为了可测：启动入口 `initialize_global_system` 解析的是真实
+/// 数据目录（测试不能碰），而这一步只需要一个已建好的管理器——否则“回填是否
+/// 真的被启动路径调用”只能靠人读代码（测试见本文件 `mod tests`）。
+pub async fn migrate_legacy_data(manager: &GlobalDatabaseManager) -> (usize, usize) {
     let mut migrated = 0usize;
+    let mut tags_migrated = 0usize;
     match manager.sqlite_pool().acquire().await {
         Ok(sqlite) => match sqlite.inner() {
             Ok(conn) => {
@@ -144,12 +171,19 @@ pub async fn initialize_global_system() -> Result<(), CoreError> {
                         "全局库网络档案凭据加密迁移失败（读路径仍兼容明文）"
                     ),
                 }
+                match crate::persistence::connection_org_store::backfill_all_connection_tags(conn) {
+                    Ok(n) => tags_migrated += n,
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "全局库连接标签回填失败（该库标签读取将为空，非阻断）"
+                    ),
+                }
             }
             Err(e) => tracing::warn!(error = %e, "获取全局库连接失败，跳过网络档案加密迁移"),
         },
         Err(e) => tracing::warn!(error = %e, "获取全局库连接失败，跳过网络档案加密迁移"),
     }
-    // 项目库：名册里的每个项目根（不存在 / 无 network_configs 表自动跳过，读路径无副作用）
+    // 项目库：名册里的每个项目根（不存在 / 无对应表自动跳过，读路径无副作用）
     match manager.get_all_projects().await {
         Ok(projects) => {
             for p in projects {
@@ -166,20 +200,21 @@ pub async fn initialize_global_system() -> Result<(), CoreError> {
                         "项目库网络档案加密迁移失败（读路径仍兼容明文）"
                     ),
                 }
+                match crate::persistence::connection_org_store::backfill_project_connection_tags(
+                    std::path::Path::new(&p.path),
+                ) {
+                    Ok(n) => tags_migrated += n,
+                    Err(e) => tracing::warn!(
+                        project = %p.path,
+                        error = %e,
+                        "项目库连接标签回填失败（该项目标签读取将为空，非阻断）"
+                    ),
+                }
             }
         }
         Err(e) => tracing::warn!(error = %e, "读取项目名册失败，跳过项目库网络档案加密迁移"),
     }
-    if migrated > 0 {
-        tracing::info!(count = migrated, "网络档案明文凭据已加密（一次性迁移）");
-    }
-
-    // 存储到全局实例
-    install_global_db_manager(manager)?;
-
-    tracing::info!("Global database manager initialized successfully");
-
-    Ok(())
+    (migrated, tags_migrated)
 }
 
 /// 注入全局库管理器（测试 / 嵌入场景；只能设置一次）。
@@ -211,4 +246,90 @@ pub async fn shutdown_global_system() -> Result<(), CoreError> {
         tracing::info!("Global database manager shut down successfully");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    // 注意：不通配导入（避免引入与 `#[tokio::test]` 同名的属性宏）。
+    use super::migrate_legacy_data;
+    use crate::persistence::GlobalDatabaseManager;
+    use rusqlite::Connection;
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rds_startup_mig_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// 建一个“升级前”的项目库：连接行内 `tags` JSON 有值，权威标签表为空表。
+    ///
+    /// 权威表**存在但无记录**：这对应“项目已经打开过（项目迁移建好表）、但启动迁移还
+    /// 没跑”的真实升级现场；若连表都没有（更旧的项目库），回填会按“不建表”规则跳过，
+    /// 由项目打开路径 `ProjectDatabaseManager::open` 负责（见 project_db 的回填测试）。
+    fn legacy_project_root(base: &std::path::Path, conn_id: &str) -> std::path::PathBuf {
+        let root = base.join("proj");
+        std::fs::create_dir_all(root.join(".RSmeta")).expect("mkdir .RSmeta");
+        let conn = Connection::open(root.join(".RSmeta").join("project.db")).expect("open project db");
+        conn.execute_batch(
+            "CREATE TABLE connections (id TEXT PRIMARY KEY, name TEXT, tags TEXT);\n             CREATE TABLE connection_tags (connection_id TEXT NOT NULL, tag TEXT NOT NULL,\n                 PRIMARY KEY (connection_id, tag));",
+        )
+        .expect("create tables");
+        conn.execute(
+            "INSERT INTO connections (id, name, tags) VALUES (?1, ?1, ?2)",
+            rusqlite::params![conn_id, r#"["proj-tag"]"#],
+        )
+        .expect("insert legacy row");
+        root
+    }
+
+    /// 启动迁移的**接线回归**：`migrate_legacy_data` 必须覆盖全局库 + 名册里的项目库，
+    /// 且幂等（第二次不再写入）。本测试的存在意义是防止“回填函数写好了但启动没调”。
+    #[tokio::test]
+    async fn startup_migration_backfills_tags_for_global_and_project() {
+        let base = temp_dir("tags");
+        let manager = GlobalDatabaseManager::new(
+            base.join("global.db"),
+            base.join("analytics.duckdb"),
+            2,
+        )
+        .await
+        .expect("init manager");
+
+        // 全局侧：一条带行内 JSON 标签、权威表无记录的连接。
+        {
+            let sqlite = manager.sqlite_pool().acquire().await.expect("acquire");
+            let conn = sqlite.inner().expect("rusqlite conn");
+            conn.execute(
+                "INSERT INTO global_connections (id, name, driver, tags) VALUES ('G_legacy', 'legacy', 'sqlite', ?1)",
+                rusqlite::params![r#"["global-tag"]"#],
+            )
+            .expect("insert legacy global row");
+        }
+
+        // 项目侧：登记到名册（迁移只遍历名册，未登记的项目不会被扫到）。
+        let root = legacy_project_root(&base, "P_legacy");
+        manager
+            .save_project_info_smart(
+                "p1",
+                "Proj",
+                None,
+                &root.to_string_lossy(),
+                "active",
+                None,
+            )
+            .await
+            .expect("register project");
+
+        // 首次：全局 1 条 + 项目 1 条。
+        let (_, tags_migrated) = migrate_legacy_data(&manager).await;
+        assert_eq!(tags_migrated, 2, "全局 + 项目各应回填 1 条");
+
+        // 幂等：再跑一次不再写入。
+        let (_, again) = migrate_legacy_data(&manager).await;
+        assert_eq!(again, 0, "回填必须是幂等的");
+
+        manager.close().await.expect("close manager");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

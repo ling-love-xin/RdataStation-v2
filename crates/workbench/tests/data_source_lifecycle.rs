@@ -838,7 +838,8 @@ fn global_delete_cleans_project_group_membership() {
 #[test]
 fn tag_reads_follow_the_authority_table() {
     // 回归点（#31）：标签曾双源（连接行 `tags` JSON 与 `connection_tags` 表各读写一路）。
-    // 现约定：**权威表为准**，行内 JSON 仅作旧数据的兼容回退（表里没有该连接记录时）。
+    // 现约定：**权威表是唯一来源**，行内 JSON 只作写入侧的兼容投影（v1 数据形态 / 导出）；
+    // 存量数据由启动时的回填迁移导入（决策 #89）。
     fn tags_of(
         service: &DataSourceService,
         rt: &tokio::runtime::Runtime,
@@ -890,16 +891,33 @@ fn tag_reads_follow_the_authority_table() {
         "清空后不应回退到旧 JSON"
     );
 
-    // 4) 旧数据兼容窗口：表里没有该连接的记录（升级前建的连接 / 历史同步失败）→ 回退行内 JSON。
+    // 4) 表里无记录 = **无标签**（不再回退行内 JSON）：避免“清空过的连接被旧投影复活”。
+    //    存量数据（行内 JSON 有标签 + 表无记录）靠启动回填迁移导入——见第 5 步。
     let mut legacy = input("tagged", "sqlite", "sqlite:///tmp/authority.db");
     legacy.tags = Some(r#"["legacy"]"#.to_string());
     rt.block_on(service.update(&gid, &legacy, None))
         .expect("update");
     org.set_tags(&gid, &[]).expect("clear table only");
+    assert!(
+        tags_of(&service, &rt, &gid).is_empty(),
+        "表里无记录时不应回退到行内 JSON（兼容回退已移除）"
+    );
+
+    // 5) 回填迁移（幂等）：把行内 JSON 导入权威表 → 读取侧又能看到标签；再跑一次不重复写。
+    assert_eq!(
+        org.backfill_tags_from_json().expect("backfill"),
+        1,
+        "应回填 1 条（仅该连接的行内 JSON 非空且表里无记录）"
+    );
     assert_eq!(
         tags_of(&service, &rt, &gid),
         vec!["legacy".to_string()],
-        "表无记录时回退行内 JSON（兼容旧库；后续可用回填迁移去掉该回退）"
+        "回填后由权威表提供标签"
+    );
+    assert_eq!(
+        org.backfill_tags_from_json().expect("backfill again"),
+        0,
+        "回填是幂等的（表里已有记录 → 不再写）"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

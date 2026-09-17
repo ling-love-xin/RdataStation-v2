@@ -264,6 +264,19 @@ impl ConnectionOrgStore {
         }
     }
 
+    /// 本库的标签回填（复用已打开的存储句柄；等价于 [`backfill_all_connection_tags`] /
+    /// [`backfill_project_connection_tags`]，按 `is_project` 选连接表）。
+    ///
+    /// 表不存在（未迁移的老库）时返回 `Ok(0)`，**不建表**。
+    pub fn backfill_tags_from_json(&self) -> Result<usize, CoreError> {
+        let table = if self.is_project {
+            PROJECT_CONNECTIONS_TABLE
+        } else {
+            GLOBAL_CONNECTIONS_TABLE
+        };
+        backfill_tags_inner(&self.conn, table)
+    }
+
     // ==================== 分组（项目级） ====================
 
     /// 新建分组。
@@ -645,9 +658,135 @@ impl ConnectionOrgStore {
     }
 }
 
+// ==================== 标签回填迁移（#31 → 去掉兼容回退） ====================
+
+/// 全局库的连接表名。
+const GLOBAL_CONNECTIONS_TABLE: &str = "global_connections";
+/// 项目库的连接表名。
+const PROJECT_CONNECTIONS_TABLE: &str = "connections";
+
+/// 把**全局库**连接行内 `tags` JSON 回填进权威表 `connection_tags`（一次性、幂等）。
+///
+/// 背景：`connection_tags` 是后来引入的权威检索表，早期数据的标签只存在行内 `tags`
+/// JSON 里；回填完成后，读取侧不再需要“表里无记录 → 用行内 JSON”的兼容回退
+/// （决策 #89）。
+///
+/// 规则（宁可少迁，不误伤用户数据）：
+/// - `connection_tags` / 连接表不存在 → `Ok(0)`（**不建表**，老库零副作用）；
+/// - 只迁移**权威表里没有任何记录**的连接：表里有记录 = 新写入路径已生效或用户改过，
+///   一律不覆盖；用户“清空标签”时行内 JSON 与表同时为空，不会因此被复活；
+/// - 行内 JSON 为空 / 非数组 / 元素全空白或重复 → 该行按“无标签”处理（跳过）；
+/// - 返回本次写入的连接数（0 = 无待迁移数据），供启动日志与测试断言。
+pub fn backfill_all_connection_tags(conn: &Connection) -> Result<usize, CoreError> {
+    backfill_tags_inner(conn, GLOBAL_CONNECTIONS_TABLE)
+}
+
+/// 项目库版本（`{root}/.RSmeta/project.db`）。
+///
+/// 库文件或任一表不存在 → `Ok(0)`：**不建目录、不建表**（与网络档案迁移同一约定，
+/// 读路径无副作用）。
+pub fn backfill_project_connection_tags(project_root: &Path) -> Result<usize, CoreError> {
+    let db_path = project_root.join(RS_META_DIR_NAME).join(PROJECT_DB_NAME);
+    if !db_path.exists() {
+        return Ok(0);
+    }
+    let conn = Connection::open(&db_path).map_err(|e| store_err("open_project_org_store", e))?;
+    backfill_tags_inner(&conn, PROJECT_CONNECTIONS_TABLE)
+}
+
+fn backfill_tags_inner(conn: &Connection, source_table: &str) -> Result<usize, CoreError> {
+    if !table_exists(conn, "connection_tags")? || !table_exists(conn, source_table)? {
+        return Ok(0);
+    }
+    // 先收集待迁移集合（连接 ID → 规范化标签），避免边查边写。
+    let mut pending: Vec<(String, Vec<String>)> = Vec::new();
+    {
+        let sql = format!(
+            "SELECT id, tags FROM {source_table} WHERE tags IS NOT NULL AND tags <> ''"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| store_err("select_connection_tags_json", e))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| store_err("select_connection_tags_json_rows", e))?;
+        for (id, json) in rows.filter_map(Result::ok) {
+            let tags = tags_from_json(&json);
+            if !tags.is_empty() {
+                pending.push((id, tags));
+            }
+        }
+    }
+    let mut migrated = 0usize;
+    for (id, tags) in pending {
+        if has_tag_rows(conn, &id)? {
+            continue;
+        }
+        for tag in &tags {
+            conn.execute(
+                "INSERT OR IGNORE INTO connection_tags (connection_id, tag) VALUES (?1, ?2)",
+                params![id, tag],
+            )
+            .map_err(|e| store_err("insert_connection_tag_backfill", e))?;
+        }
+        migrated += 1;
+    }
+    Ok(migrated)
+}
+
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, CoreError> {
+    use rusqlite::OptionalExtension;
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| store_err("probe_table", e))?;
+    Ok(found.is_some())
+}
+
+/// 权威表里是否已有该连接的记录（含“表里无记录 = 未同步 / 已清空”这一歧义点：
+/// 只有行内 JSON 非空时才会走到这里的判断）。
+fn has_tag_rows(conn: &Connection, conn_id: &str) -> Result<bool, CoreError> {
+    use rusqlite::OptionalExtension;
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM connection_tags WHERE connection_id = ?1 LIMIT 1",
+            params![conn_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| store_err("probe_connection_tag", e))?;
+    Ok(found.is_some())
+}
+
+/// 解析行内 `tags` JSON（数组）：去首尾空白、去空串、去重；无法解析按空处理。
+fn tags_from_json(json: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tag in serde_json::from_str::<Vec<String>>(json).unwrap_or_default() {
+        let tag = tag.trim();
+        if !tag.is_empty() && !out.iter().any(|t| t == tag) {
+            out.push(tag.to_string());
+        }
+    }
+    out
+}
+
+fn store_err(operation: &str, e: rusqlite::Error) -> CoreError {
+    CoreError::storage(StorageError::Persistence {
+        store: "sqlite".to_string(),
+        operation: operation.to_string(),
+        reason: e.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `.optional()`（探测表 / 行是否存在）在测试里用到。
+    use rusqlite::OptionalExtension as _;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("rds_org_{tag}_{}", std::process::id()));
@@ -918,6 +1057,117 @@ mod tests {
         // remove_connection 不触碰分组表也不报错
         store.remove_connection("G_a").expect("cleanup");
         assert!(store.list_tags("G_a").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 建一个只有连接表的「旧项目库」（没有 `connection_tags`）。
+    fn legacy_project_db(dir: &Path, rows: &[(&str, &str)]) -> PathBuf {
+        std::fs::create_dir_all(dir.join(RS_META_DIR_NAME)).expect("mkdir .RSmeta");
+        let db = dir.join(RS_META_DIR_NAME).join(PROJECT_DB_NAME);
+        let conn = Connection::open(&db).expect("open raw");
+        conn.execute_batch(
+            "CREATE TABLE connections (id TEXT PRIMARY KEY, name TEXT, tags TEXT);",
+        )
+        .expect("create connections");
+        for (id, tags) in rows {
+            conn.execute(
+                "INSERT INTO connections (id, name, tags) VALUES (?1, ?1, ?2)",
+                params![id, tags],
+            )
+            .expect("insert legacy row");
+        }
+        db
+    }
+
+    #[test]
+    fn tag_backfill_imports_legacy_json_rows_only() {
+        let dir = temp_dir("tag_backfill");
+        let db = legacy_project_db(
+            &dir,
+            &[
+                ("P_a", r#"["prod", "core ", "", "prod"]"#), // 去空 / 去重
+                ("P_b", ""),                                       // 空 JSON → 跳过
+                ("P_c", "not-json"),                              // 非数组 → 跳过
+                ("P_keep", r#"["old"]"#),                        // 权威表已有记录 → 不覆盖
+            ],
+        );
+        // 预先给 P_keep 写权威表记录（模拟“新写入路径已生效 / 用户改过”）。
+        {
+            let conn = Connection::open(&db).expect("reopen");
+            conn.execute(
+                "CREATE TABLE connection_tags (connection_id TEXT NOT NULL, tag TEXT NOT NULL,\n                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (connection_id, tag))",
+                [],
+            )
+            .expect("create tags table");
+            conn.execute(
+                "INSERT INTO connection_tags (connection_id, tag) VALUES ('P_keep', 'new')",
+                [],
+            )
+            .expect("seed keep");
+        }
+
+        // 首次：只迁移「表里无记录且 JSON 非空」的 P_a。
+        assert_eq!(backfill_project_connection_tags(&dir).expect("backfill"), 1);
+        let store = ConnectionOrgStore::open_at(db.clone(), true).expect("open store");
+        assert_eq!(store.list_tags("P_a"), vec!["core".to_string(), "prod".to_string()]);
+        assert!(store.list_tags("P_b").is_empty(), "空 JSON 不应写入");
+        assert!(store.list_tags("P_c").is_empty(), "非数组 JSON 不应写入");
+        assert_eq!(
+            store.list_tags("P_keep"),
+            vec!["new".to_string()],
+            "权威表已有记录时不得被行内 JSON 覆盖"
+        );
+
+        // 幂等：再跑一次不再写入（也没有重复行）。
+        assert_eq!(backfill_project_connection_tags(&dir).expect("backfill again"), 0);
+        assert_eq!(store.list_tags("P_a"), vec!["core".to_string(), "prod".to_string()]);
+        drop(store);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tag_backfill_skips_missing_files_and_tables() {
+        let dir = temp_dir("tag_backfill_skip");
+        // 1) 项目库文件不存在 → 0，且不建目录。
+        let missing = dir.join("no_such_project");
+        assert_eq!(backfill_project_connection_tags(&missing).expect("missing"), 0);
+        assert!(!missing.exists(), "不得为迁移创建目录");
+
+        // 2) 有连接表、没有权威表 → 0，且**不得**凭空创建 connection_tags。
+        let legacy = dir.join("legacy");
+        let db = legacy_project_db(&legacy, &[("P_a", r#"["prod"]"#)]);
+        assert_eq!(backfill_project_connection_tags(&legacy).expect("legacy"), 0);
+        {
+            let conn = Connection::open(&db).expect("reopen");
+            let has: Option<i64> = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='connection_tags'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()
+                .expect("probe");
+            assert!(has.is_none(), "不得凭空创建 connection_tags 表");
+            conn.execute(
+                "CREATE TABLE connection_tags (connection_id TEXT NOT NULL, tag TEXT NOT NULL,\n                 PRIMARY KEY (connection_id, tag))",
+                [],
+            )
+            .expect("create tags table");
+        }
+        // 3) 权威表存在后 → 正常迁移。
+        assert_eq!(backfill_project_connection_tags(&legacy).expect("now"), 1);
+
+        // 4) 全局库版本：同上（连接表 `global_connections`）。
+        let global_db = dir.join("global.db");
+        let conn = Connection::open(&global_db).expect("open global raw");
+        conn.execute_batch(
+            "CREATE TABLE global_connections (id TEXT PRIMARY KEY, name TEXT, tags TEXT);\n             CREATE TABLE connection_tags (connection_id TEXT NOT NULL, tag TEXT NOT NULL,\n                 PRIMARY KEY (connection_id, tag));\n             INSERT INTO global_connections (id, name, tags) VALUES ('G_a', 'G_a', '[\"prod\"]');",
+        )
+        .expect("seed global");
+        assert_eq!(backfill_all_connection_tags(&conn).expect("global"), 1);
+        assert_eq!(backfill_all_connection_tags(&conn).expect("global again"), 0);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

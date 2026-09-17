@@ -424,15 +424,17 @@ impl DataSourceService {
     pub async fn list(&self) -> Result<Vec<DataSource>, CoreError> {
         let infos = self.global_db.get_global_connections(None, None).await?;
         let mut items: Vec<DataSource> = infos.into_iter().map(map_info_to_data_source).collect();
-        // #31：标签读取以权威表为准（行内 JSON 仅兼容回退）。
+        // #31：标签读取**只认权威表**（行内 JSON 不再作为来源，见 `overlay_authoritative_tags`）。
         self.overlay_authoritative_tags(&mut items, None);
         Ok(items)
     }
 
-    /// 标签读取叠加（#31）：**`connection_tags`（权威检索表）为准**，连接行 `tags` JSON 仅作兼容回退。
+    /// 标签读取叠加（#31）：**`connection_tags` 是唯一权威**。
     ///
-    /// 语义：表里存在该连接的记录 → 用表（含“已清空”）；表里完全没有记录（旧数据 / 同步曾失败）
-    /// → 保留行内 JSON 投影，避免历史连接的标签凭空消失。权威表打不开时告警并原样返回（不阻断列表）。
+    /// 语义：表里有该连接的记录 → 用表；表里没有 → 该连接**没有标签**（含“被清空”）。
+    /// 行内 `tags` JSON 只作写入侧的**兼容投影**（v1 数据形态 / 导出），读取不再回退到它——
+    /// 存量数据由启动时的回填迁移（`connection_org_store::backfill_{all,project}_connection_tags`，
+    /// 决策 #89）保证进表。仅当权威表**根本打不开**（库缺 / 文件损坏）时，降级保留投影并告警。
     fn overlay_authoritative_tags(&self, items: &mut [DataSource], project_path: Option<&str>) {
         let store = match open_org_store(self.global_db, project_path) {
             Ok(store) => store,
@@ -440,7 +442,7 @@ impl DataSourceService {
                 tracing::warn!(
                     target: "data_source_service",
                     error = %e,
-                    "标签权威表不可用：本次读取使用连接行 JSON 投影"
+                    "标签权威表不可用：本次读取使用连接行 JSON 投影（降级）"
                 );
                 return;
             }
@@ -450,13 +452,11 @@ impl DataSourceService {
         for (conn_id, tag) in store.list_tag_pairs() {
             by_conn.entry(conn_id).or_default().push(tag);
         }
-        if by_conn.is_empty() {
-            return;
-        }
         for ds in items.iter_mut() {
-            if let Some(tags) = by_conn.get(&ds.id) {
-                ds.tags = serde_json::to_string(tags).ok();
-            }
+            // 表里无记录 = 无标签（**不**回退行内 JSON）：清空过的连接不会被旧投影复活。
+            ds.tags = by_conn
+                .get(&ds.id)
+                .and_then(|tags| serde_json::to_string(tags).ok());
         }
     }
 
@@ -1153,7 +1153,8 @@ fn project_display_name(path: &str) -> String {
 /// 同步连接标签到权威检索表（`connection_tags`）。
 ///
 /// 连接的 `tags` JSON 字段保留作为**兼容投影**（v1 数据形态 / 导出）；读取侧
-/// （`overlay_authoritative_tags`）以本表为准，JSON 只在表里没有该连接记录时回退。
+/// （`overlay_authoritative_tags`）**只读本表**，行内 JSON 不再是标签来源
+/// （存量数据由启动时的回填迁移导入，决策 #89）。
 /// 检索（`tag:x`）与导航消费统一读连接组织存储。同步失败仅告警，不阻断连接保存。
 fn sync_connection_tags(
     global_db: &GlobalDatabaseManager,

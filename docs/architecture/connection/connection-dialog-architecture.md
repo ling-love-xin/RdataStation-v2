@@ -449,12 +449,13 @@ flowchart LR
 | 86 | **ElementId 用业务键（#17 关闭）**：驱动属性行 `prop-del-{key}`（与“同 key 覆盖”写入语义一致）、暂存行 `draft-{saved_id \| new-{i}}`（持久实体不用位置 id）、策略覆盖换 `policy-` 命名空间（原来与分组标题共用 `sec-`，`policy_type` 命中分组 id 时会串状态） | 位置 id 在增删 / 重排后会把按 id 记录的控件状态（hover / 滚动 / 按压）串到别的行；未保存草稿的列表身份本就是下标（`staging_*` 全部以 index 为键），因此保留 `new-{i}` 并在注释里说明理由 |
 | 87 | **`project_path` 收敛为数据载体（#18 关闭）**：它**不渲染输入框**，只由项目下拉写入（选中项目 / 「打开现有目录…」/「＋ 新增项目」）、被保存 / 测试 / 快照同步 / 分组同步读取；删除对它无意义的 `set_placeholder`，并修掉 `state.rs` 里残留的「手动输入路径…」注释 | 旧注释承诺“项目根可编辑”但没有任何渲染点，与「项目单下拉」的决策 #26/#28 矛盾；无项目时用户靠下拉的「打开现有目录…」修正路径，不需要手输入口 |
 | 88 | **连接对话框纳入尺寸契约（#14 关闭）**：模块内 `px(...)` 清零——`min_w(px(0.))` → `min_w(rems(0.))`、`.px(rems(…))` → `px_1()/px_2()/px_3()`（值相等，仅徽标内距 3px→4px）、图标 `px(14.)/px(13.)` → `rems(ui::ICON_SIZE_SM)`、色条 → `ui::TREE_ACTIVE_BAR`，新增 `DIALOG_STATUS_DOT_SIZE` / `DIALOG_CHIP_RADIUS`；`ui_contract::view_layer_has_no_raw_size_literals` 扫描范围扩到对话框 6 个文件 | 契约用的是 `!src.contains("px(")` 这种粗糙判据，`.px(rems(1.))` 也会命中——所以局部横向内距统一走 Tailwind 尺度方法（与 view.rs / panels/ 同一规则）；纳入扫描后该模块不会再回退 |
-| 89 | **标签单一权威 = `connection_tags`（#31 关闭）**：新增 `DataSourceService::overlay_authoritative_tags`（`list` / `get_with_project` 读取时叠加）——**表里有该连接的记录就用表**（含“已清空”），表里完全没有记录（旧数据 / 同步曾失败）则回退行内 `tags` JSON 投影；权威表不可用时告警并原样返回（不阻断列表） | 双源读取（行 JSON + 表）长期有漂移风险（“写进去了但检索不到 / 反之”）。选“每连接回退”而非“表为空才回退”：避免旧库（升级前建的连接，行内有标签但表里没记录）的标签凭空消失；代价是表外清理会让 JSON 复活——已登记为兼容窗口，将来可加回填迁移后去掉回退 |
+| 89 | **标签单一权威 = `connection_tags`（#31 关闭；2026-09-17 回填迁移收尾，兼容回退已删）**：新增 `DataSourceService::overlay_authoritative_tags`（`list` / `get_with_project` 读取时叠加）——**表里有该连接的记录就用表**；表里没有 = 该连接**无标签**（含“已清空”）；行内 `tags` JSON 降为写入侧的兼容投影（v1 数据形态 / 导出）。存量数据由启动时的一次性回填迁移（`initialize_global_system` → `connection_org_store::backfill_{all,project}_connection_tags`，全局库 + 项目名册，幂等、不建表）导入；仅当权威表**根本打不开**时降级保留投影并告警 | 双源读取（行 JSON + 表）长期有漂移风险（“写进去了但检索不到 / 反之”）。曾有“每连接回退”的兼容窗口（表无记录则用 JSON），代价是表外清理会让 JSON 复活；回填迁移到位后该窗口关闭：**单一权威且不会再复活**。注：首次纳入项目名册的项目在下一次启动完成回填（与网络档案迁移同一窗口） |
 | 90 | **未保存确认后**直接推进**项目动作（#4 关闭）**：`PendingAction` 增 `CreateProject(ProjectInputs)` / `OpenFolder(ProjectInputs)`，新增 `request_create_project` / `request_open_folder` 两个入口（脏 → 弹确认并携带动作；干净 → 直接开），`advance_pending` 负责推进 | 以前脏草稿下点项目栏的两个动作项：确认后请求就被丢掉了（回到选择器得重新点一次）。`ProjectInputs` 是可克隆的实体把手，因此把目标动作作为待办携带到确认之后是最直接的实现（`open_unsaved_dialog` 已具备“先关确认再推进”的层栈纪律） |
 | 91 | **类型树不做折叠（§14 #11 判定：不做）**：分类头保持平铺，靠侧栏内部滚动容纳；触发重新评估的条件写进 §14 #11（类型目录 > 15 项或分类 > 6 时再上折叠） | 当前目录是 4 类共 ≤ 10 项（关系型 5 / 文件型 1 / 分析型 2 / NoSQL 2），一屏能看完；折叠会多一层点击与一份折叠状态（要考虑搜索命中时自动展开），收益不抵成本。驱动插件生态把目录撑大后再做，届时可照原型早期版本的可折叠分类实现 |
 | 92 | **项目栏动作请求的“决策 + 只消费一次”收归 `Shared::take_project_action_request`（#9 部分关闭）**：返回 `ProjectActionRequest::{CreateProject, OpenFolder}`（同帧两标记 → 新建优先且两个都清）；`WorkbenchView::render` 改为 `if let Some(request) = …` + `match` | 旧写法在 render 里直接 `replace(false)` 两个标记再 `if/else`：“标记 → 动作”的映射与“不会重复开窗”都只能在无窗口环境下验证 → 现抽出后可直接单测（`produce → consume → 二次 None`、同帧竞态）。**残留**：“真的把目标对话框开起来”仍需 `WorkbenchView` 可测试化（服务注入桥），见 §14 #9 |
 | 93 | **连接 ID 命名采用 B 案（`#32` 关闭）+ C 案记入 beta2**：① 生成规则与路由**不动**（`G_conn_{名}` / `P_conn_{随机}` / `GP_conn_{名}_{日期}`）；② **界面与提示词不再出现 ID**——新增 `saved_result`（保存结果行：摘要只有名称，ID + 落点进「详情」）、状态栏提示去 ID、快照同步提示改用重载后的名称、同名拦截消息去 ID；③ 改名语义成文：**编辑改名不换 ID**（`update` 按 ID 定位），新建重名被拦（不静默覆盖）；④ 主键改 ULID + 存量迁移（原 C 案）列为 **beta2** 条目，范围见 §3.2 | “用户看到 ID 里的名字片段会误以为是稳定主键”是**语义误导**（不是功能缺陷）：B 案用零迁移的方式消除误读，且「详情 / 复制」保留了报障所需的 ID；C 案收益（主键真正稳定）当前无阻塞性需求（缓存复用已由指纹负责，决策 #65），而需迁全部表 + 改路由判定 + 兼容期——所以放 beta2 而不是本版 |
 | 94 | **对话框「两列行」高度先定（`DIALOG_BODY_HEIGHT = 32.5rem`），侧栏与 Tab 内容区各自填满**：行 / 侧栏 / 内容区三处都用 `h + min_h + max_h` 三向夹住；`DIALOG_TAB_BODY_HEIGHT`（20.5rem）在本对话框内不再引用（`insight` 的对比视图仍在用，值保留）；并用窗口测试断言两列等高 + 切 Tab 高度一致 | 只给 `h()` 时**夹不住** flex 子项的自动最小尺寸（`min-height:auto` 按内容）：实测侧栏自然高 522px vs 右列 328px —— 既让右列下方留 194px 空白，又让**侧栏内容（类型树条目数）反向决定对话框高度**（目录 / 驱动插件增长则对话框变高）。而 `.min_h_0()` 在该组合下未生效（三向显式约束才夹住，实测 120px→412px 回归）。“两列等高”是原型 §2「布局恒定」的前提（左栏内部滚动的剩余高度才可预测） |
+| 95 | **标签回填的**职责拆分（补齐 #89 的时序缺口）：全局库在**启动迁移**（`migration::global_init::migrate_legacy_data`，抽成可测函数以便断言“启动真的调了”）；项目库在**打开项目、跑完项目迁移之后**（`ProjectDatabaseManager::open` → `backfill_project_connection_tags`）再补一次 | 项目库的 `connection_tags` 由**项目迁移**创建，而启动迁移早于项目被打开：只靠启动补，会出现“升级后第一次打开项目看不到旧标签，要重启一次才回来”（实测：表不存在时回填按“不建表”规则返回 0）。两处都幂等，重复跑不再写入 |
 
 
 ---
@@ -500,7 +501,8 @@ flowchart LR
 | 窗口 + 单测 | `connection_dialog_ui.rs::result_line_levels_and_detail_entry` + `helpers.rs`（内嵌 +1，#28） | 结果行分级：级别可读（`result_level()` 供 UI 着色）/ 短消息不渲染详情入口 / 长错误渲染「详情」+「复制」且未展开时不渲染正文 / 展开后正文节点出现；`result_needs_detail` 阈值按 **char** 计（80 字不折叠、81 字折叠）与换行判定；服务层 `data_source_lifecycle::group_sync_failure_is_reported_to_caller`（项目库不可用 → 返回 Err 带原因，供结果行降级展示） |
 | 单测 | `connection_dialog/helpers.rs`（内嵌 +1，#15） | `dialog_tab_defs` / `visible_tab_index`：文件型不出现「网络」Tab、能力 / 高级的可见下标错开一位、隐藏项被选中时回退第 1 项（Tab 与内容不会错配） |
 | 契约 | `ui_contract.rs`（#14 扩展） | 尺寸契约扫描范围扩到连接对话框 6 文件（`!contains("px(")`）；颜色契约保持覆盖（含全部对话框文件） |
-| 服务层 | `data_source_lifecycle.rs::tag_reads_follow_the_authority_table`（#31） | 标签权威表：保存后表与 JSON 同步可见 / 直接改表 → 读取跟随（表为准）/ 服务清空 → 不复活旧 JSON / 表无记录 → 回退行内 JSON（兼容旧库） |
+| 服务层 | `data_source_lifecycle.rs::tag_reads_follow_the_authority_table`（#31 + 2026-09-17 回填） | 标签权威表：保存后表与 JSON 同步可见 / 直接改表 → 读取跟随（表为准）/ 服务清空 → 不复活旧 JSON / **表里无记录 → 无标签（不再回退行内 JSON）** / **回填迁移幂等**：行内 JSON 导入权威表后读取可见，再跑一次为 0 |
+| 单测 | `connection_org_store.rs`（内嵌 +2，2026-09-17 回填迁移） | `tag_backfill_imports_legacy_json_rows_only`：仅迁移“表无记录 + JSON 非空”的行（去空白 / 去重）；空 JSON / 非数组 / 表里已有记录 → 一律不动（不覆盖用户数据）；二次运行为 0（幂等）。`tag_backfill_skips_missing_files_and_tables`：库文件不存在 → 0 且不建目录；无 `connection_tags` 表 → 0 且**不建表**；全局库版本同（`global_connections`） |
 | 窗口 | `project/src/ui/tests.rs::project_action_continues_after_unsaved_confirm`（#4） | 脏草稿下请求「＋ 新增项目」先出确认且不动编辑区 / 走「放弃并继续」同一调用序列 → 编辑区被清空且**新建对话框直接打开**（表单重置）/ 干净时「打开现有目录…」直接开窗 |
 | 单测 | `connection_dialog/mod.rs`（内嵌 +1，#32 B 案） | `saved_result`：摘要含名称且**不含连接 ID**（短摘要不触发折叠）；详情含 ID（“详情 / 复制”入口因此出现，供排障）；空名回退「未命名连接」；`conn_display_name` 去空白 |
 | 单测 | `connection_project_picker.rs::project_action_request_is_consumed_exactly_once`（#9） | 宿主消费分支：无请求 → `None`；新建 / 打开目录各自“取回一次即消”（二次取回为 `None`，不重复开窗）；同帧两标记 → 新建优先且两个标记均被清除（不会在下一帧补开一窗） |
@@ -586,7 +588,7 @@ flowchart LR
 | E | ~~项目下拉支持**浏览目录打开其他项目**~~（**已完成**：决策 #26/#41 补 `project_open_request` + 「打开现有目录…」，#4 又让它在脏草稿下确认后直接开窗） | — | — |
 | F | 国际化 / 可访问性 / 指标（§13 缺口） | 平台级能力 | 全局排期 |
 | G | **连接主键改 ULID + 存量迁移**（原 C 案，**beta2**）：前缀只留作用域标记，`uid` 作真主键 / 外键锚点（缓存索引 / 审计 / 跨项目引用 / 导入导出） | 主键与名称彻底解耦（B 案只解决“误读”，ID 仍与名称同构） | 需迁全部表 + 改路由判定 + 兼容期；触发条件：出现名称变更频繁 / 需要外部稳定引用（集成 / API）的真实需求，或与「缓存索引表」同轮做 |
-| H | 标签权威表的**回填迁移**（把存量 `tags` JSON 灌进 `connection_tags`）→ 删掉兼容回退 | 彻底兑现 #31 的单一权威（当前保留回退仅为了旧库） | 写入 `initialize_global_system` 的一次性迁移（幂等），与项目库名册遍历同模式 |
+| H | ~~标签权威表的**回填迁移**（把存量 `tags` JSON 灌进 `connection_tags`）→ 删掉兼容回退~~（**已完成 2026-09-17**：`connection_org_store::{backfill_all_connection_tags, backfill_project_connection_tags, ConnectionOrgStore::backfill_tags_from_json}` 写入 `initialize_global_system` 的一次性迁移（全局库 + 项目名册，幂等、不建表不建目录）；读取侧 `overlay_authoritative_tags` 不再回退行内 JSON） | — | — |
 
 ---
 
@@ -662,6 +664,8 @@ flowchart LR
 | `project_meta/*` | 项目侧连接 / 分组 / 导航状态（见导航模块方案） |
 
 > 迁移采用 include_dir 编译期嵌入 + 版本号幂等执行；新增列一律带默认值，旧行安全。
+>
+> **非 SQL 的一次性数据迁移**（代码内幂等，写在 `initialize_global_system`）：① 网络档案明文凭据加密（全局 + 项目名册）；② **连接标签回填**（`connection_org_store::backfill_{all,project}_connection_tags`：把行内 `tags` JSON 灌进权威表 `connection_tags`，只处理“表里无记录”的连接，不建表不建目录）。两者都覆盖全局库 + 项目名册，失败仅告警。
 
 ---
 
@@ -677,7 +681,8 @@ flowchart LR
 | 标签 / 分组同步失败 | 标签：无提示（日志告警）；分组：结果行 **warning 级**（「已保存：…（分组未同步：原因）」） | 不阻断保存；分组这一步不再静默（#28） |
 | 草稿持久化失败 | 无提示（日志告警） | 内存草稿仍可用 |
 | 元数据（引用 / 类型 / 驱动）拉取失败 | 对应下拉为空 | 不阻断其他字段；下次打开重试 |
-| 标签权威表不可用（库损坏 / 打不开） | 无提示（日志告警），列表仍显示行内 `tags` 投影 | 不阻断列表读取（#31） |
+| 标签权威表不可用（库损坏 / 打不开） | 无提示（日志告警），列表**降级显示行内 `tags` 投影** | 不阻断列表读取（#31）；仅此错误路径才读投影，正常路径只读权威表 |
+| 标签回填迁移失败（启动时） | 无提示（日志告警） | 不阻断启动；该库的旧数据标签读取为空（行内投影不再作为读取来源），修库后下次启动重试（迁移幂等） |
 | 未打开项目 + 项目作用域 | 保存被拦截并提示 | 引导改「仅全局」或先打开项目 |
 | 项目侧连接（P_/GP_）编辑回读但无项目根 | 表单为空（不报错、不误写） | `get_with_project` 返回 `None`；对话框保持空表单，可改用全局连接或先打开项目 |
 | 驱动目录缺该驱动 | 下拉未选中 | 完整名 / 短名回退解析；仍失败需手选类型 |
@@ -840,6 +845,7 @@ flowchart LR
 | 13（⚪，部分） | **缺 UI 状态矩阵冒烟**：新增 `connection_render_matrix` —— 空态引导条「出现 → 填名称消失 → 清空复现」（判据是表单内容而非一次性标记）、五个 Tab 在**全局库未初始化**时逐一渲染、作用域三态切换渲染、结果行四级渲染、**暂存区固定高度回归**（草稿累加到 13 条时 `conn-staging-scroll` 高度必须不变） | 同文件 2 项，全绿（图像回归 / 性能基准 / fuzz 仍缺） |
 | 新增（⚪） | **测试锚点补缺**：渲染层此前只有结果行三处 `debug_selector`，矩阵断言需要“节点真的渲染”的坐标；补 `conn-general-guide`（引导条）/ `conn-staging-scroll`（暂存滚动容器）/ `conn-tab-body` / `conn-side-panel` 四处（不改布局，仅测试构建登记坐标） | 上述两个套件 |
 | 新增（🔴） | **两列不等高 + 侧栏撑高对话框（本轮拖出，决策 #94）**：侧栏自然高 522px、Tab 内容区固定 328px → 右列下方留 194px 空白，且**类型树条目数反向决定对话框高度**（目录增长即变高）。修法：先定行高（`DIALOG_BODY_HEIGHT = 32.5rem`，三向夹住），侧栏与内容区各自同高填满；`DIALOG_TAB_BODY_HEIGHT` 降为内容区最小高参考值 | `connection_edit_backfill`（目录就绪 → 侧栏 == 内容区 == 520px）、`connection_render_matrix`（降级路径同样等高） |
+| 新增（🟡） | **存量标签回填的时序缺口（决策 #95，补齐 #89）**：项目库的 `connection_tags` 由项目迁移创建，而启动迁移早于项目被打开 → 旧项目库（无该表）**拿不到回填**，表现为“升级后第一次打开项目看不到旧标签，重启一次才回来”。修法：启动迁移抽为可测函数 `migrate_legacy_data`（全局 + 名册项目）；项目库在 `ProjectDatabaseManager::open` 跑完迁移后立即回填一次 | `migration::global_init::startup_migration_backfills_tags_for_global_and_project`（全局 + 项目各 1 条 + 幂等 + 防“函数写了没接线”）、`persistence::project_db::opening_project_backfills_legacy_connection_tags`（真实时间线：建表 → 手写旧行 → 再打开 → 标签已在权威表） |
 
 **已关闭（契约审计轮，2026-09-12，详见 §16）**
 
@@ -882,7 +888,7 @@ flowchart LR
 | 28 | 🟡→✅ | ~~结果行只有成败不分级~~（**已关闭**：`ResultLine` 分级 + 详情 / 复制，见上方「已关闭（#28 轮）」段与决策 #82） | — | — |
 | 29 | ⚪→✅ | ~~**首次使用引导缺失**~~（**已关闭**：常规 Tab 顶部空态引导条，仅“未选类型 + 名称/地址为空”时出现） | — | 后续可选：类型树 hover 说明（需接 Tooltip 覆盖层） |
 | 30 | ⚪→✅ | ~~`auth_configs.auth_data` 仍是裸 JSON 文本~~（**已关闭**：字段化组装 / 校验 / 回填纯函数 + 管理器按类型展开字段 + 列表真脱敏，见 A5 已关闭段） | — | — |
-| 31 | ⚪→✅ | ~~**标签双源未收敛**~~（**已关闭**：读取以权威表 `connection_tags` 为准，行内 JSON 降为兼容回退；将来可加回填迁移后去掉回退，见决策 #89） | — | — |
+| 31 | ⚪→✅ | ~~**标签双源未收敛**~~（**已关闭**：读取以权威表 `connection_tags` 为准；行内 JSON 降为写入侧兼容投影，**2026-09-17 回填迁移后读取不再回退**，见决策 #89） | — | — |
 | 32 | ⚪→✅ | ~~**连接 ID 命名方案待拍板**~~（**已关闭**：采用 **B 案**——生成规则 / 路由不动，界面与提示词不再出现 ID（名称入摘要、ID 入「详情」），改名语义成文“编辑改名不换 ID / 新建重名被拦”；原 **C 案（ULID 主键 + 迁移）列为 beta2**，见 §3.2 与决策 #93） | — | — |
 | 33 | 🟡→✅ | ~~引用计数不覆盖未打开的项目~~（**已关闭**：遍历项目名册 + `other` 记项目名，见 #33 已关闭段） | — | — |
 | 34 | 🔴→✅ | ~~网络档案 `config` 里的 SSH / 代理密码是明文入库~~（**已关闭**：写/读加解密 + 存量迁移（全局库 + 项目库）+ 列表脱敏 + 直查 SQL 路径补解密，见 #34 已关闭段） | — | — |

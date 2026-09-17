@@ -445,6 +445,23 @@ impl ProjectDatabaseManager {
 
         tracing::info!(db_path = %db_path.display(), "Project SQLite tables initialized via migrations");
 
+        // 存量连接标签回填（一次性、幂等）。
+        //
+        // 时序问题：项目库的 `connection_tags` 由**项目迁移**创建，而启动时的全局
+        // 迁移（`migration::global_init::migrate_legacy_data`）早于项目被打开——那时
+        // 旧项目库还没这张表，回填只能返回 0（不建表）。若只靠下次启动补，就会出现
+        // “升级后第一次打开项目看不到旧标签，要重启一次才回来”。
+        // 因此在这里（迁移刚建好表之后）立即回填一次；失败仅告警，不阻断项目打开。
+        if let Err(e) = crate::persistence::connection_org_store::backfill_project_connection_tags(
+            &self.project_path,
+        ) {
+            tracing::warn!(
+                project = %self.project_path.display(),
+                error = %e,
+                "项目库连接标签回填失败（标签读取降级为空，非阻断）"
+            );
+        }
+
         // sqlite 在 drop 时自动归还到连接池
         Ok(())
     }
@@ -903,5 +920,52 @@ mod tests {
 
         let manager = ProjectDatabaseManager::open(&project_path, 3).await;
         assert!(manager.is_ok(), "创建项目数据库失败: {:?}", manager.err());
+    }
+
+    /// 打开项目时立即回填存量标签：旧项目库（行内 `tags` JSON 有值、权威表无记录）
+    /// 在 `open` 走完迁移后，权威表就应有标签——否则“升级后第一次打开项目看不到旧标签，
+    /// 要重启一次才回来”（启动时的全局迁移那时还没看到这张表）。
+    ///
+    /// 用例按真实时间线：先用 `open` 建立真实表结构，再手写一条“升级前形态”的行
+    /// （绕开服务层，模拟旧版产品写入的数据），再打开一次。
+    #[tokio::test]
+    async fn opening_project_backfills_legacy_connection_tags() {
+        let project_path = test_temp_dir("tag_backfill_on_open");
+        let _ = std::fs::remove_dir_all(&project_path);
+        let db_path = project_path.join(".RSmeta").join("project.db");
+
+        // 第一次打开：跑迁移建表（此时无存量行）。
+        let first = ProjectDatabaseManager::open(&project_path, 2)
+            .await
+            .expect("first open");
+        drop(first);
+
+        // 模拟“升级前”的数据：行内 JSON 有标签，权威表为空。
+        {
+            let conn = rusqlite::Connection::open(&db_path).expect("open raw");
+            conn.execute(
+                "INSERT INTO connections (id, name, driver, tags) VALUES ('P_legacy', 'legacy', 'sqlite', '[\"prod\"]')",
+                [],
+            )
+            .expect("seed legacy row");
+        }
+
+        // 再打开（等价于升级后第一次打开旧项目）→ 回填应已生效。
+        let second = ProjectDatabaseManager::open(&project_path, 2)
+            .await
+            .expect("second open");
+        drop(second);
+
+        let conn = rusqlite::Connection::open(&db_path).expect("reopen");
+        let tag: String = conn
+            .query_row(
+                "SELECT tag FROM connection_tags WHERE connection_id = 'P_legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("legacy tag should be backfilled on project open");
+        assert_eq!(tag, "prod");
+
+        let _ = std::fs::remove_dir_all(&project_path);
     }
 }
