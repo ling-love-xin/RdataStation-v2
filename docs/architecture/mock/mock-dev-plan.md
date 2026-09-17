@@ -88,6 +88,19 @@
 | E4 | 项目作用域分析库（`{项目}/.RSmeta/analytics.duckdb`） | ✅ 已完成（**已拍板：Mock 输出恒为项目级**）——`analysis_db_path(project_root)` 派生自当前项目；未打开项目时落库 / 追加**明确拒绝**（可读原因 + 替代路径），纯生成仍可用 | 打开项目时写项目库；要进全局走资产库存档（M6）/ 草稿箱（M5）升级 |
 | E5 | 临时表随项目切换清理（架构 §9-I1/I2） | engine 提供 `drop_by_source(Mock)`；project 会话切换时调用 | 切项目后无 `temp_mock_*` 残留 |
 
+### Phase F — 排版分权（管理表 vs 设计这张表，D38）
+
+> 原型已改完（`mock-prototype.html`）；实现待下一轮，按 ①–④ 优先级逐步落，每步用现有窗口测试锁住。
+
+| # | 任务 | 落点 | 验收 |
+| --- | --- | --- | --- |
+| F1 | 右 Dock 收成「管理表」：移走表名 / 行数 / 种子 / 语言 / 列来源 / 生成行 / 进度行 / 「查看详情」按钮 / 「当前表」选择器，只留清单 + 出口组 + 折叠的历史 / 模板 | `crates/mock/src/mock_view.rs`（`MockPanel::render`） | 右 Dock 只四块；既有窗口测试的 `debug_selector` 断言改指新位置 |
+| F2 | 表清单：单表行 / 场景清单 / 结果表清单三态共用一个渲染器（行 = 状态点 + 表名 + 行数；`sel` = 当前 tab）；点行 → `open_detail_for(target)` | 同上（新增 `render_table_list`）+ `MockPanel::current_detail_target` | 点单表行开草稿 tab、点结果行开该表 tab；状态点随 `results` / `landed_tables` / `job` 变 |
+| F3 | 关系并进清单行（挂在**子表**行下的 `↳` 子行，行尾 ✕ 删关系）；场景动作行（`生成 N 张表` / `退出场景`）与它的进度行（量纲 = 张表）留在右 Dock | 同上（`render_scenario_block` 拆两段） | 关系子行与删关系测试改指新结构；场景进度只在这一处渲染 |
+| F4 | 中央 tab 拿回「设计」：表头（表名 / 行数 / 种子 / 语言输入 + 生成三态 + 场景模板菜单）+ 进度 / 阶段 / 失败重试 | `MockDetailView::render`（新增 `render_head`）+ 面板出让输入状态 | 四项在中央可改且写回同一 `MockDraft`；生成与取消只在中央渲染 |
+| F5 | 结果表 tab 只读表头（事实 + 跨表后果）与只读列；空态给起手卡片（选模板 / 导入结构 / 手工加列） | 同上 + `MockPanel`（空态动作） | 结果表 tab 不出输入框与生成按钮；跨表后果与 `current_relation_note` 同源 |
+| F6 | 历史 / 模板折叠（默认收起，标题写条数） | 同上（`Collapsible` + 标题行 `Button`） | 默认收起；展开后重放 / 应用 / 删除仍可用 |
+
 ## 4. 测试场景（验收清单）
 
 | 编号 | 场景 | 断言 | 状态 |
@@ -118,6 +131,9 @@
 | T23 | 落库跨库直写 | 建表 + 写行一次 `ATTACH` 完成；中文列名、20k 行、目标表多列均正确；**同名建表不删既有数据**；插入失败回滚刚建的表且已解挂 | ✅ 引擎测试 4 项 + 装配测试 2 项 |
 | T24 | 临时表清理 | 切项目清掉全部 mock 临时表（两套命名都认、幂等）；`ATTACH` 进来的文件库表不被误删；面板作废旧预览、草稿保留 | ✅ 引擎测试 3 项 + mock 集成 2 项 + 视图测试 1 项 + 任务集成 1 项 |
 | T25 | 集合类参数可编辑 | 取值集合往返 / 分隔符变体（半角、全角、制表符，值可带逗号）；非法输入保留上一个有效值 + 行号提示；留空 / 全零权重生成前拦住（不 panic） | ✅ 视图测试 6 项 + 引擎测试 2 项 |
+| T26 | 状态单点 | 生成中：中央表头有进度条 + 取消，右 Dock 只有 `◐ 生成中 40%`（没有第二个进度条 / 取消）；场景生成中反之（进度在右 Dock 场景清单下，中央不画生成行） | ⬜ Phase F |
+| T27 | 清单是唯一入口 | 点单表行开草稿 tab、点结果行开该表 tab；代码里不存在「查看详情」按钮与「当前表」选择器 | ⬜ Phase F |
+| T28 | 关系挂在子表行下 | 子表行下按关系条数渲染 `↳` 子行（行尾 ✕ 删关系）；删完子行消失，改父表行数后域跟着变 | ⬜ Phase F |
 
 ## 5. 风险
 
@@ -171,3 +187,4 @@ cargo test  -p rds-workbench --test mock_generator -j 2
 | 2026-09-18 | 一表一 tab（本轮） | **详情 tab 从「单一 tab」改为「一个目标一个 tab」**（按 `DetailTarget::key()` 去重：草稿 `draft`，每张结果表 `table:{表名}`）：`view.rs` 的宿主命令改为查 `Shared.mock_details`（`HashMap<key, WeakEntity<MockDetailView>>`）——已存在则 `TabGroup::select_tab` 聚焦，不存在才建；`MockDetailView::new` 开始收 `target`，tab 标题写「`Mock · items（1,000 行）`」（行数实时取自结果，重生成或「编辑表」改行数后标题自己更新），**预览取自己那张表**（以前只有一个 tab，预览跟着面板「当前表」跑，两张表并排看就没有差别）；**切 tab 就是切表**——`BasePanel::set_active` 调 `panel.focus_table(表名)` 把那张表设为当前表（四个出口跟着走），右 Dock 的结果表清单是这些 tab 的管理入口（点一行开 / 切，打开即选中）。**身份用 key 不用下标**：`results` 每次生成都会重建，下标做身份会让 tab 指向别的表；表不在本轮结果里时不改状态（tab 可能是上一轮留下的） | 视图测试新增 4 项（一表一 tab · 切 tab 即切表 · 标题带表名与行数 · 预览各看各表）+ `open_detail_calls_host` 补断言；`Shared` 契约白名单与 `panels-coupling-plan` §2 / `panels-modules` §3 耦合表同步 |
 | 2026-09-17 | 审计与硬缺陷修复（本轮） | **先把「会毁掉整个 mock 会话」的漏洞补掉**（用户要求排查后继续）。实测确认并修复五类问题，全部在生成/渲染**入口处**设护栏而非靠 `catch_unwind` 兜：① **生成期参数护栏**（D33）——`constraint_set_problem` 扩成 `generator_param_problem`，把区间类（`min >= max` / 反向）、时间区间（fake 走 `(0..分钟差)`，不足一分钟即空区间）、权重（非有限 / 负数 / 全零）全拦在生成前，错误带具体数字；② **映射兜底的空区间**——`schema_map` 的文本兜底原为 `Sentence { min: 1, max: 1 }`（实测必 panic），改 `{1,3}` 与 `default_generator_for` 对齐；③ **panic 不再废掉会话**——`get_conn` 遇锁毒化复用连接并 `warn`（实测毒化后该进程之后每次生成都报 `poisoned lock`），`mock_jobs::worker` 用 `run_job_catching` 兜住 panic → 降级为「这一次任务失败」（此前进度槽永远 `Running`，面板卡在「已有任务在进行中」且取消按钮消失，只能重启）；④ **值覆盖**（D34）——新增 `engine::duckdb::value_text` 作唯一渲染处，实测 `created_at` / `amount` 在预览里是 `Null`、导出的 `.sql` 里是 `NULL`（`row_to_arrow` 只认 5 类变体、`value_to_sql_literal` 只认 9 类），两侧补齐并加端到端用例；⑤ **列名净化一致性**——`build_create_table_ddl` 改用 `sanitize_identifier`（实测 `Order Date` 会产出 `CREATE TABLE … (Order Date VARCHAR …)` → DuckDB `Parser Error`），净化后为空 / 重名报可读错误。另有 ⑥ **「追加到既有表」候选清单**：`refresh_sources` 原本只有测试调用（新会话菜单永远写「暂无表」、切项目后留着旧项目表名），改为打开面板与切项目时刷新、`forget_generated` 清掉项目级清单。**审计还列出未修项**：`parse_data_type` 对 `NUMERIC(10,3)` / `TIMESTAMP WITH TIME ZONE` 等落 `Text`、三份重复的类型解析（含全项目零调用的 `import_schema`）、列依赖表达式仍未接线、持久化 `save_task` 无事务等，见架构 §9-I5/I6/I19 与下一批计划 | 160 单元（23 纯逻辑 + 56 窗口 + 81 其他）+ **37 引擎集成** + 5 持久化 + 4 历史/模板 + 2 清理全过；engine 库测试 336 项全过；workbench 66 lib + 12 装配 + 11 任务 + 1 取消全过；顺带修掉 HEAD 上 `workbench/src/panels/shared.rs` 测试模块缺 `super::` 导致 `--lib` 测试目标编不过的问题 |
 | 2026-09-18 | P2 行为 + P3 清理（本轮 · 收尾） | **把审计剩下的欠账一次清完**。**P2（行为）**：① **取消由面板持续压**（D36）——引擎在生成开始会清一次取消标志，提交后头几百毫秒点的取消会被吞掉，而面板侧「正在取消」不可逆；改为每个轮询周期重发（`cancel` 幂等）；② **跨项目收尾归属**——出口任务的写入路径与临时表名都是提交那一刻快照的，旧行为却在切项目后按「当前项目」叙事、还把结果记进新项目的历史；现在面板记 `job_project`，不一致就追加「写入的是上一个项目」并**不记历史**；③ **切项目不等锁**（D37）——出口任务不可取消且整段持有内存库连接锁，UI 线程同步等锁会假死；改为 `try_lock` + 拿不到就置 `pending_temp_cleanup`、在任务收尾那一拍重试；④ `PersistedAll` 补上导航失效；⑤ **启动恢复的项目也取写锁**（被占用 → 只读 + 提示）——原先 `read_only` 只在交互式打开时写，六个模块的只读护栏在启动实例上全不生效。**P3（清理）**：⑥ `parse_data_type` 改成「剥参数 + 取首词」（`NUMERIC(10,3)` / `INT(11) UNSIGNED` / `DOUBLE PRECISION` / `TIMESTAMP WITH TIME ZONE` 都认，不再静默落 `Text`）；⑦ 删掉三份重复的类型解析（`import_schema` 零调用 / `map_sql_type_to_column_data_type` / `infer_datatype_for_column`）与依赖表达式死代码（`resolve_dependencies` + 两个 `#[allow(dead_code)]` + `DependencyConfig`）——**本模块不解释依赖表达式**；⑧ 删掉三个未在 `lib.rs` 声明的占位文件；⑨ 持久化三条写路径（`save_task` / `save_template` / `delete_template`）改走 rusqlite 事务 | 165 单元（23 纯逻辑 + 63 窗口 + 79 其他）+ **34 引擎集成**（删掉 3 项依赖解析用例）+ 5 持久化 + 4 历史/模板 + 2 清理全过；workbench 侧 check 与四个 mock 测试目标全过；新增 2 项窗口用例（取消重发 / 跨项目归属） |
+| 2026-09-18 | 原型改版：管理表 vs 设计这张表（本轮 · 先改原型） | **排版分权（D38，本轮只落原型，实现见 Phase F）**：右 Dock 收回「管理表」——表清单（唯一入口：表名 · 行数 · 状态点，点一行切 / 开它的 tab）+ 出口组 + 折叠的历史 / 模板；中央 tab 拿回「这张表的设计与生成状态」——表名 / 行数 / 种子 / 语言、生成、进度与取消、失败原因与重试、列、预览、跨表后果。**状态单点**：单表任务的进度 / 取消在中央表头，集合任务（场景 N 张表）的在右 Dock 场景清单下（两者互斥），清单行只给状态点与百分比（`◐ orders 40%`）。**订正两处旧结论**：① 右 Dock **可拖拽调宽**——`DockSkin::render_resize_handle` 给每个 placement（含 Right）都画了抓手（`resize-handle-right` + `ResizePanel`），旧文写的「不可拖拽」是错的；② 关系不再单开一段，改为挂在**子表**行下的 `↳` 子行。原型：`mock-prototype.html` 重排右 Dock 与中央区，+2 场景（生成失败（参数护栏）/ 场景生成中（张表进度），共 18 场景），右 Dock 左边缘加了真能拖的调宽抓手 | 交互稿 + `mock-prototype-design.md` §1–§3 / §6–§10、`mock-architecture.md` D18 订正 + D38、本目录 README 同步；实现未动 |

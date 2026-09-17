@@ -134,9 +134,10 @@ v2 的接线（`MockJobKind::Scenario(工作副本)`）：
   而关系行里的取值域**会自动跟着变**（域由父表行数算出），改名字则**自动重定向指向它的入边**；
 - **多张结果 + 当前表**：面板持 `results` 与 `current`，结果区与四个出口都作用于选中那张；
   **中央一个目标一个 tab**（每张结果表一个 + 一个草稿 tab，见 D35）：右 Dock 的结果表清单就是这些 tab
-  的管理入口（点一行打开 / 切过去），tab 被激活时把那张表设为当前表（**切 tab 就是切表**）；
-  生成本身不开 tab（结果表多时不淹用户），按需打开；
+  的管理入口（点一行打开 / 切过去，行尾带状态点：`✓ 已落库` / `○ 未落库` / `⚠ 引用的表未落库`），
+  tab 被激活时把那张表设为当前表（**切 tab 就是切表**）；生成本身不开 tab（结果表多时不淹用户），按需打开；
 - **量纲是「张表」**：`MockJobProgress.batches_done / batches_total` 复用为表计数，`rows_total = 0`；
+  集合任务的进度行与取消画在**右 Dock 的场景清单下**（它属于这一批，不属于某张表），单表任务反之在中央表头（D38）；
 - **出口只看结果**：`MockGenInfo` 自带 `columns`，场景表因此能各自落到自己的表名下（见 §4.5）。
 
 #### 表间引用（取值域由父表参数算出）
@@ -260,7 +261,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 字段编辑工作副本 | `mock::mock_view::MockDetailView::draft: Option<ColumnDraft>` | 列编辑对话框打开时建、应用 / 取消时丢弃 |
 | 生成器搜索列表 | `ListState<GeneratorSearchDelegate>`（对话框打开时建；由 dialog builder 闭包持有） | `List` 组件的搜索框改 query → `perform_search` 同步过滤；确认写回面板后关对话框 |
 | 面板实体句柄 | `Shared.mock_panel`（`WeakEntity<MockPanel>`） | 面板**构造期**登记；导航右键用它定向导入结构（懒创建会让「先右键、后面板未渲染」丢目标） |
-| 详情 tab 句柄 | `Shared.mock_details`（`HashMap<目标 key, WeakEntity<MockDetailView>>`） | 首次「查看详情」时按 `DetailTarget::key()` 建 tab 并登记（**一个目标一个 tab**）；tab 被关闭后实体释放 → 下次重新创建 |
+| 详情 tab 句柄 | `Shared.mock_details`（`HashMap<目标 key, WeakEntity<MockDetailView>>`） | 首次打开时按 `DetailTarget::key()` 建 tab 并登记（**一个目标一个 tab**，入口是右 Dock 清单点一行 / 定向打开）；tab 被关闭后实体释放 → 下次重新创建 |
 | 打开详情的宿主命令 | `Shared.open_mock_detail`（`Rc<dyn Fn(DetailTarget, &mut Window, &mut App)>`） | 由宿主构造期装配（需要 DockArea），与 `editor_clear` 同一口径；按 key 去重，已存在则 `TabGroup::select_tab` 聚焦 |
 | 列来源 / 既有表 | 面板状态（由宿主 `MockHost::schema_sources/existing_tables` 提供） | 打开面板 / 导入对话框 / 落库报「已存在」时加载；渲染只读 |
 | 取消标志 | mock crate 进程级 `AtomicBool` | 生成前重置、批次边界读 |
@@ -296,7 +297,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D15 | **生成不写库**（只产内存临时表 + 预览） | 生成是「试算」不是「提交」；写入必须显式点出口，避免误写与不可预览的副作用 | 生成即写分析库（v1 无此语义，v2 早期曾这么实现，已回归） |
 | D16 | 目标表是**用户命名的新表**（表名输入） | v1 主路径就是「命名新表 + 组织列」；「往既有表灌数」只是其中一个出口 | 从分析库既有表里选（把 mock 降级为灌数器） |
 | D17 | 追加必须**显式选表**，同名不自动追加 | 「持久化」与「追加」是两个语义不同的出口；静默追加会让用户以为新建了一张 | 表已存在时隐式走追加（v1 的 `CREATE TABLE AS SELECT` 会直接报错） |
-| D18 | 字段表与预览落**中央 tab**（方案①） | 右 Dock 280px 且不可拖拽调宽，宽表与字段卡片放不下；中央 tab 与编辑器同构（单一权威状态） | 全塞右 Dock（v1 是 380px 可拖拽宽栏，v2 不具备） |
+| D18 | 字段表与预览落**中央 tab**（方案①），表名 / 行数 / 种子 / 语言也一并归它（D38 扩过） | 右 Dock 起步 280px，宽表与字段卡片放不下（**可拖拽调宽**：`DockSkin` 给每个 placement 都画了 resize 抓手，旧文写的「不可拖拽」是错的）；中央 tab 与编辑器同构（单一权威状态） | 全塞右 Dock（v1 是 380px 可拖拽宽栏） |
 | D19 | 生成器切换走**分类子菜单**，参数在列编辑对话框 | 生成器身份与参数行必须一致；同一对话框内改生成器会让参数行失效（要么重建、要么错位） | 对话框内提供生成器下拉（参数行与生成器不同步） |
 | D24 | 分类子菜单**保留**，另加「搜索生成器」对话框（`List` + `ListState`） | 两条路径对应两种心智：知道「属于哪类」→ 翻菜单；只记得名字 → 搜索。搜索同步过滤（137 项全在内存）无 loading 闪烁；搜索框 / 虚拟化 / 上下键 / 空态全是组件的 | 只留子菜单（137 项翻找慢）；把搜索框塞进弹出菜单（菜单只有 item，无输入控件）；自搓输入框 + 滚动列表 |
 | D25 | 落库改**跨库直写**（`ATTACH` + `INSERT SELECT`），不再用 INSERT 文本 | 数据全程在 DuckDB 内部流动；大行数下没有「读全量 → 拼文本 → 再解析」两跳与对应的内存峰值 | 继续文本中转；把临时表改成文件表（与「生成是试算」语义冲突） |
@@ -316,6 +317,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | D35 | **一个目标一个中央 tab**（草稿 + 每张结果表），身份 = `DetailTarget::key()`；**切 tab 就是切表**；不在生成时一次性开全部 tab | 单个 tab + 「当前表」下拉会把两张表的字段与预览混在一个 tab 里（要切下拉才看得出差别，而 tab 并排对照更自然），且“我在看哪张表”多一层间接。身份用**名字**不用下标：`results` 每次生成都会重建，下标会让旧 tab 指向别的表。生成时一次开 N 个 tab 会在 4~5 张表的场景里淹掉编辑区，所以按需打开（首个进面板、其余从结果表清单点）。**旧 tab 不自动关**：重新生成 / 切项目后，上一轮的 tab 留在 Dock 里显示「这一轮没有它的结果」——关不关 tab 是用户的窗口布局，不由数据作主（结果仍在面板里，要看得重新生成） | 单 tab + 下拉（预览与「当前表」脱钩，容易看错表）；用下标做身份（重建后指向别的表）；自动开全部 tab（多表时淹界面）；为每张表存一份草稿（状态分裂，见 D31） |
 | D36 | 取消由面板**持续压**（每个轮询周期重发 `cancel`），而不是只在点的那一刻发一次 | 引擎在每次生成开始时清一次取消标志（`reset_cancel`），而取消按钮从提交起就可点——提交后头几百毫秒（`AppendTo` 要先开库读目标表行数，窗口更宽）点的取消会被清掉，任务照常跑完。重发是幂等的（置一个 `AtomicBool`），直到任务真的结束；这比把取消做成任务级句柄（要改引擎公开 API 与全部调用点）便宜得多，语义也够用 | 任务级取消令牌（改 API 面）；只在点击时发一次（保留被吞的窗口）；面板侧把「正在取消」做成可撤销（用户看不出来到底取没取到） |
 | D37 | 切项目清理临时表**不等锁**（`try_lock`），拿不到就留给「任务收尾」重试 | 清理要内存库连接锁，而出口任务（不可取消，D23）可能整段持锁——在 UI 线程上同步等锁就是界面假死到大行数落库 / 导出结束。拿不到锁就置一个 `pending_temp_cleanup`，在任务收尾那一拍（锁已释放）重试；一直没机会就下次切项目再试（临时表是进程内存，晚清只是多占一会儿，不影响正确性） | UI 线程同步等锁（假死）；直接跳过不重试（临时表一直不释放）；把清理丢进后台线程（还得自己找回 UI 线程通知面板） |
+| D38 | **右 Dock = 管理表**（清单唯一入口 + 出口组 + 折叠的历史 / 模板），**中央 tab = 这张表的设计与生成状态**（表名 / 行数 / 种子 / 语言 + 生成 + 列 + 预览）；**状态单点**：单表任务的进度 / 取消在中央表头，集合任务（场景 N 张表）的在右 Dock 场景清单下 | 「有哪些表 · 落了没 · 关系连到谁」是集合视角，「这张表怎么造 · 造到哪一步」是单表视角——混在一栏里就会重复（进度条 / 当前表 / 生成按钮各画两遍）。清单行只给状态点与百分比（`◐ orders 40%`）就够：要停任务就点那一行切到那张 tab 再取消，**入口唯一**。散开还有几处顺带收益：出口组挨着清单（作用于当前 tab 那张表，语义清楚）；关系并进清单行（`↳ user_id → users.id · 1..1,000` 挂在**子表**行下），不再单开一段；历史 / 模板默认收起，面板的天天用部分就是那份清单 | 配置与出口都留在右 Dock（280px 里塞表名 / 行数 / 种子 / 语言 / 生成 / 进度 / 出口 / 历史，天天用的一半要滚动才够）；列表与详情各画一份进度（两处都要同步，也容易不一致）；给清单再配一个「当前表」选择器（`sel` 那一行就是当前表，多一个是多一处状态）；把集合任务的进度也塞进中央（那里看的可能是别的表，且它不属于某一张表） |
 
 ## 7. 降级与容错矩阵
 
@@ -440,7 +442,7 @@ SchemaRequest{conn_id, catalog, schema, table}
 | 用户模板（存 / 应用 / 删） | 同上（`template_of_draft` / `draft_of_template`；与历史共用两份「列」表公共映射） |
 | D4/D5/D6/D17 装配与追加语义 | `crates/workbench/src/services/mock_generator.rs`（`generate_at_with_progress` / `generate_scenario_at` / `persist_table_at` / `append_table_at` / `export_file` / `save_scratchpad` / `import_columns`；**出口的输入是 `MockGenInfo`，不收草稿**） |
 | D20/D21/D22/D23 后台任务 | `crates/workbench/src/services/mock_jobs.rs`（工作线程 + 槽 + `JobPaths` + `start`/`state`/`take_done`/`cancel`）+ `mock_view.rs`（`MockJobKind` / `MockJobPhase` / `MockJobWatch` + 定时泵 + `poll_job`） |
-| D11/D18 视图归属与两处排版 | `crates/mock/src/mock_view.rs`（`MockPanel` 右 Dock / `MockDetailView` 中央 tab / `MockDraft` / `MockHost`） |
+| D11/D18/D38 视图归属与两处排版 | `crates/mock/src/mock_view.rs`（`MockPanel` 右 Dock / `MockDetailView` 中央 tab / `MockDraft` / `MockHost`） |
 | D12/D14/D19/D24 对话框与工作副本 | `mock_view.rs`（`open_import_dialog` / `open_column_dialog` / `open_generator_search` / `ColumnDraft` / `generator_menu` / `search_generators` / `GeneratorSearchDelegate`） |
 | D28 集合类参数编辑与前置校验 | `mock_view.rs`（`parse_complex_param` / `complex_param_text` / `split_choice` / `ParamWidget` / `commit_complex_param`）+ `crates/mock/src/engine.rs`（`generator_param_problem`，生成前校验） |
 | D29 表间引用 | `crates/mock/src/models.rs`（`ColumnDependency::{foreign_key, is_foreign_key}` = 唯一构造点；`ReferenceDomain` 域与文案）+ `crates/mock/src/engine.rs`（`resolve_reference_domains` 校验＋算域；`generate_table` 按域采样）+ `crates/mock/src/templates.rs`（`col_ref!` + 24 处声明 + 4 项关系自检）+ `mock_view.rs`（`load_scenario` / `add_relation` / `remove_relation` / `scenario_relations` / `open_relation_dialog`） |

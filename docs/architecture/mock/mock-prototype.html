@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RdataStation Mock 数据生成（M7）· 原型</title>
 <!--
-  本文件是 v2 原生交互稿（RDS Light/Dark 双主题 + 可切场景），**不是** v1 文件的搬运：
+  本文件是 v2 原生交互稿（RDS Light/Dark 双主题 + 18 场景可切），**不是** v1 文件的搬运：
   设计参考 v1 `prototype/mock-data-generator.html`（表名输入 / 行数·种子·语言 / 可增删列 / 生成器选择 /
   ⚙ 高级抽屉 / 预览表 / 四个导出 / 保存草稿 / 持久化），按 v2 口径重画：
-  右 Dock 280px 只放「配置 + 出口」，字段表与预览表格落**中央 tab**（280px 放不下宽表）；
-  **一张结果表一个 tab**（标题 = 表名 · 行数），右侧面板是这些 tab 的管理入口（切 / 落库）。
+  右 Dock（280px 起步，左边缘可拖拽调宽）管表：表清单（唯一入口：表名 · 行数 · 状态点）+ 出口组
+  + 折叠的历史 / 模板；中央**一张表一个 tab**，放这张表的设计与生成状态（表名 / 行数 / 种子 / 语言、
+  生成、进度与取消、列、预览、跨表后果）。
+  状态单点：进度条 / 取消 / 失败原因只画在中央，清单行只给状态点与百分比（`◐ orders 40%`）。
   语义与状态矩阵见 mock-prototype-design.md，尺寸与取色见 theme / ui 规范。
 -->
 <style>
@@ -140,26 +142,124 @@ button{font-family:inherit;cursor:pointer;}
 .hist{display:flex;flex-direction:column;gap:6px;width:100%;}
 .hist-row{display:flex;flex-direction:column;gap:4px;width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;}
 .hist-row .name{font-family:Consolas,'SFMono-Regular',monospace;font-size:11.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* ── 右 Dock：表清单（管理入口；表名 · 行数 · 状态点，点一行切 / 开它的 tab） ── */
+.lst{display:flex;flex-direction:column;gap:2px;width:100%;}
+.lrow{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;font-size:12px;}
+.lrow:hover{background:var(--hover);}
+.lrow.sel{background:var(--accent);position:relative;}
+.lrow.sel::before{content:"";position:absolute;left:0;top:3px;bottom:3px;width:2px;border-radius:2px;background:var(--active-border);}
+.lrow .name{font-family:Consolas,'SFMono-Regular',monospace;font-size:11.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lrow .hint{flex:none;}
+/* 关系行：挂在**子表**那一行下面（行尾是取值域 = 父列自增参数 × 父表行数） */
+.lsub{display:flex;align-items:center;gap:6px;padding:2px 6px 2px 16px;color:var(--muted);font-size:11px;}
+.lsub .rel{flex:1;min-width:0;font-family:Consolas,'SFMono-Regular',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.xbtn{border:none;background:transparent;color:var(--muted);font-size:11px;line-height:1;padding:0 2px;cursor:pointer;}
+.xbtn:hover{color:var(--danger);}
+/* 行状态：一态一个 span，由场景决定显示哪个（点 = 状态点，字 = 一句话） */
+.st{display:none;font-size:11px;flex:none;}
+.st::before{margin-right:4px;}
+.st-new::before{content:"○";color:var(--muted);}
+.st-run::before{content:"◐";color:var(--primary);}
+.st-ok::before{content:"●";color:var(--success);}
+.st-fail::before{content:"⚠";color:var(--warning);}
+[data-scn="empty"] .st-new,[data-scn="imported"] .st-new,[data-scn="readonly"] .st-new,
+[data-scn="menu"] .st-new,[data-scn="column"] .st-new,[data-scn="generator"] .st-new,
+[data-scn="constraint"] .st-new,[data-scn="scenario"] .st-new,
+[data-scn="generated"] .st-ok,[data-scn="writing"] .st-ok,[data-scn="persist"] .st-ok,
+[data-scn="running"] .st-run,[data-scn="failed"] .st-fail{display:inline-flex;}
+/* 静态状态（多表清单里写死的那种）：○ 未落库 / ● 已落库 / ⚠ 引用的表未落库 */
+.sd{font-size:11px;flex:none;}
+.sd::before{margin-right:4px;}
+.sd.o::before{content:"○";}
+.sd.k::before{content:"✓";}
+.sd.w::before{content:"⚠";}
+.sd.o{color:var(--muted);}
+.sd.k{color:var(--success);}
+.sd.w{color:var(--warning);}
+/* 生成中那一场是 10 万行（10 批）的任务：输入框与清单行数跟着切 */
+.sz-100k{display:none;}
+[data-scn="running"] .sz-1k{display:none;}
+[data-scn="running"] input.sz-100k{display:inline-block;}
+[data-scn="running"] span.sz-100k{display:inline;}
+/* 折叠段（历史 / 模板）：面板的天天用部分是上面那份清单，落盘记录收在底下 */
+.fold{border:1px solid var(--border);border-radius:6px;}
+.fold>summary{list-style:none;cursor:pointer;padding:5px 8px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;}
+.fold>summary::-webkit-details-marker{display:none;}
+.fold>summary::before{content:"▸";font-size:9px;}
+.fold[open]>summary::before{content:"▾";}
+.fold>summary:hover{color:var(--fg);}
+.fold-body{padding:6px 8px;display:flex;flex-direction:column;gap:6px;}
+/* 右 Dock 可拖拽调宽：左边缘的抓手（宽 5px） */
+.sidebar-r{position:relative;}
+.dock-grip{position:absolute;left:0;top:0;bottom:0;width:5px;cursor:col-resize;z-index:4;}
+.dock-grip:hover,.dock-grip.on{background:var(--active-border);}
 /* 进度条（Progress 组件示意）：填充色用品牌色，轨道用浅色 */
 .bar{height:6px;border-radius:3px;background:var(--track);overflow:hidden;width:100%;}
 .bar>i{display:block;height:100%;background:var(--primary);border-radius:3px;}
 /* 不定量进度（Progress::loading）：写入 / 导出 / 导出拿到不到中间进度，条带往复滑动 */
 .bar.loading>i{width:38%;animation:bar-slide 1.15s ease-in-out infinite;}
 @keyframes bar-slide{0%{transform:translateX(-105%);}50%{transform:translateX(165%);}100%{transform:translateX(-105%);}}
-[data-scn="running"] .exit-disabled{display:none;}
-.detail-running{display:none;}
-[data-scn="running"] .detail-running{display:flex;}
-.detail-writing{display:none;}
-[data-scn="writing"] .detail-writing{display:flex;}
 [data-scn="running"] .hint.only-generated,
 [data-scn="running"] .prev-wrap{display:none;}
+/* 出口：有结果才可用；生成 / 写入进行中一律禁用（一次只跑一个任务） */
 .exit-enabled{display:none;}
-[data-scn="generated"] .exit-enabled,[data-scn="persist"] .exit-enabled{display:flex;}
-[data-scn="generated"] .exit-disabled,[data-scn="persist"] .exit-disabled{display:none;}
+[data-scn="generated"] .exit-enabled,
+[data-scn="persist"] .exit-enabled,
+[data-scn="scenario-result"] .exit-enabled{display:flex;}
+[data-scn="generated"] .exit-disabled,
+[data-scn="persist"] .exit-disabled,
+[data-scn="scenario-result"] .exit-disabled{display:none;}
+
+/* ── 中央区：这张表的设计与生成状态（表头 → 列 → 预览）；一张表一个 tab ── */
+.camp-head{display:flex;flex-direction:column;gap:6px;width:100%;padding-bottom:8px;border-bottom:1px solid var(--border);}
+.head-row{display:flex;align-items:center;gap:6px;width:100%;}
+.head-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* 进度 / 阶段 / 失败：状态只在中央这一处画（清单行只给状态点与百分比） */
+.camp-progress,.camp-writing,.camp-failed,.staging-hint{display:none;}
+[data-scn="running"] .camp-progress{display:flex;}
+[data-scn="writing"] .camp-writing{display:flex;}
+[data-scn="failed"] .camp-failed{display:flex;}
+[data-scn="scenario-copy"] .staging-hint,
+[data-scn="scenario-running"] .staging-hint,
+[data-scn="relation"] .staging-hint,
+[data-scn="edit-table"] .staging-hint{display:flex;}
+/* 场景（集合级）任务：进度与取消在右 Dock 的场景清单下——它属于这一批，不属于单张表；
+   单表任务反之（在中央表头）。两者互斥，同一时刻只有一处进度 */
+.scn-job,.scn-job-running,.scn-job-actions{display:none;}
+[data-scn="scenario-copy"] .scn-job-actions,
+[data-scn="relation"] .scn-job-actions,
+[data-scn="edit-table"] .scn-job-actions{display:flex;}
+[data-scn="scenario-running"] .scn-job,
+[data-scn="scenario-running"] .scn-job-running{display:flex;}
+/* 生成行：单表生成 + 场景模板只在「单表设计」态出现——多表生成是集合级动作，在右 Dock */
+.gen-block{display:none;}
+[data-scn="empty"] .gen-block,[data-scn="imported"] .gen-block,[data-scn="generated"] .gen-block,
+[data-scn="running"] .gen-block,[data-scn="writing"] .gen-block,[data-scn="persist"] .gen-block,
+[data-scn="readonly"] .gen-block,[data-scn="menu"] .gen-block,[data-scn="column"] .gen-block,
+[data-scn="generator"] .gen-block,[data-scn="constraint"] .gen-block,[data-scn="failed"] .gen-block,
+[data-scn="scenario"] .gen-block{display:flex;}
+/* 同一动作三态：生成（无结果）/ 重新生成（有结果，收成小按钮）/ 生成中（禁用） */
+.gen-primary,.gen-again,.gen-running{display:none;}
+[data-scn="imported"] .gen-primary,[data-scn="readonly"] .gen-primary,[data-scn="menu"] .gen-primary,
+[data-scn="column"] .gen-primary,[data-scn="generator"] .gen-primary,[data-scn="constraint"] .gen-primary,
+[data-scn="failed"] .gen-primary,[data-scn="scenario"] .gen-primary{display:inline-flex;}
+[data-scn="generated"] .gen-again,[data-scn="writing"] .gen-again,[data-scn="persist"] .gen-again{display:inline-flex;}
+[data-scn="running"] .gen-running{display:inline-flex;}
+/* 结果表 tab 上不画草稿那一套（草稿表头 / 列编辑 / 草稿预览） */
+[data-scn="scenario-result"] .hide-in-result{display:none;}
+/* 单表态才画的那一块（单表清单 + 状态图例）：进了场景就换成场景清单 */
+.no-scenario{display:flex;}
+[data-scn="scenario-copy"] .no-scenario,
+[data-scn="scenario-running"] .no-scenario,
+[data-scn="scenario-result"] .no-scenario,
+[data-scn="relation"] .no-scenario,
+[data-scn="edit-table"] .no-scenario{display:none;}
+/* 结果表 tab 的列：只读清单（来自这次生成） */
+.ro-grid{display:flex;flex-direction:column;gap:2px;width:100%;border:1px solid var(--border);border-radius:8px;padding:6px 8px;}
+.ro-row{display:flex;align-items:center;gap:8px;font-size:11.5px;padding:2px 0;}
+.ro-row .mono{flex:none;min-width:110px;}
 
 /* ── 中央字段卡片 + 预览表 ── */
-.detail-head{display:flex;align-items:center;gap:8px;width:100%;}
-.detail-head .grow{flex:1;min-width:0;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .field-grid{display:flex;flex-direction:column;gap:8px;max-height:236px;overflow:auto;padding-right:2px;}
 .fcard{border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;}
 .fcard .head{display:flex;align-items:center;gap:8px;font-size:12px;}
@@ -177,7 +277,8 @@ button{font-family:inherit;cursor:pointer;}
 .prev-table th{color:var(--muted);font-weight:600;background:var(--sidebar);}
 .prev-table td.idx{color:var(--muted);min-width:40px;}
 
-/* ── 生成器分类子菜单（附在字段行的按钮下方） ── */
+/* ── 生成器分类子菜单（附在字段行的按钮下方；该场景下字段区不滚动，菜单不会被裁掉） ── */
+[data-scn="menu"] .field-grid{overflow:visible;max-height:none;}
 .popover{position:absolute;z-index:6;background:var(--popover);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);padding:4px;display:none;min-width:150px;}
 [data-scn="menu"] .popover.gen{display:flex;gap:4px;}
 .menu{display:flex;flex-direction:column;gap:2px;min-width:136px;max-height:260px;overflow:auto;}
@@ -188,49 +289,11 @@ button{font-family:inherit;cursor:pointer;}
 .menu-item .tag{margin-left:auto;color:var(--muted);font-size:10.5px;}
 .menu-sep{height:1px;background:var(--border);margin:3px 4px;}
 
-/* ── 场景模板（C1）：「生成」行右挂的下拉 + 多结果的一张表一个 tab ── */
+/* ── 场景模板（C1）：菜单挂在中央「场景模板 ▾」下方；本次生成清单在右 Dock ── */
 .rel{position:relative;}
 .popover.scn{min-width:232px;}
 [data-scn="scenario"] .popover.scn{display:flex;}
-.scn-row,.scn-row-copy{display:none;}
-[data-scn="scenario"] .scn-row,[data-scn="scenario-result"] .scn-row{display:flex;}
-[data-scn="scenario-copy"] .scn-row-copy{display:flex;}
-/* 这三个场景自带「生成 + 场景模板 ▾」并排行，故藏掉单独的「生成」按钮与上一轮的单表结果 */
-[data-scn="scenario"] .scn-hide,[data-scn="scenario-result"] .scn-hide,[data-scn="scenario-copy"] .scn-hide{display:none;}
-[data-scn="scenario-result"] .scn-single{display:none;}
-[data-scn="scenario-copy"] .scn-single{display:none;}
-[data-scn="scenario-result"] .only-scenario-result{display:flex;}
-[data-scn="scenario-result"] button.only-scenario-result{display:inline-flex;}
-[data-scn="scenario-copy"] .only-scenario-copy{display:flex;}
-[data-scn="scenario"] .only-imported,
-[data-scn="scenario"] .only-generated,
-[data-scn="scenario-result"] .only-imported,
-[data-scn="scenario-result"] .only-generated,
-[data-scn="scenario-copy"] .only-imported{display:flex;}
-[data-scn="scenario"] .exit-enabled,
-[data-scn="scenario-result"] .exit-enabled{display:flex;}
-[data-scn="scenario-copy"] .exit-disabled{display:none;}
-[data-scn="scenario-copy"] .exit-enabled{display:flex;}
-[data-scn="scenario"] .exit-disabled,
-[data-scn="scenario-result"] .exit-disabled{display:none;}
-[data-scn="scenario"] .preview-empty{display:none;}
-[data-scn="scenario-copy"] .preview-empty{display:none;}
-/* 加关系对话框：背后的面板就是工作副本态 */
-[data-scn="relation"] .only-imported{display:flex;}
-[data-scn="relation"] .only-scenario-copy{display:flex;}
-[data-scn="relation"] .scn-row-copy{display:flex;}
-[data-scn="relation"] .scn-hide{display:none;}
-[data-scn="relation"] .scn-single{display:none;}
-[data-scn="relation"] .exit-enabled{display:flex;}
-[data-scn="relation"] .exit-disabled{display:none;}
-/* 编辑表对话框：背后同样是工作副本态 */
-[data-scn="edit-table"] .only-imported{display:flex;}
-[data-scn="edit-table"] .only-scenario-copy{display:flex;}
-[data-scn="edit-table"] .scn-row-copy{display:flex;}
-[data-scn="edit-table"] .scn-hide{display:none;}
-[data-scn="edit-table"] .scn-single{display:none;}
-[data-scn="edit-table"] .exit-enabled{display:flex;}
-[data-scn="edit-table"] .exit-disabled{display:none;}
+/* 加关系 / 编辑表对话框：背后都是场景工作副本态（表清单 + 关系 + 生成 N 张表） */
 
 /* ── 对话框（应用内叠加层） ── */
 .overlay{position:absolute;inset:0;background:var(--overlay);display:none;align-items:center;justify-content:center;padding:24px;z-index:9;}
@@ -254,36 +317,31 @@ button{font-family:inherit;cursor:pointer;}
 /* 集合类参数的多行输入（Textarea 示意） */
 .inp.area{width:100%;height:84px;resize:none;padding:6px 8px;line-height:1.55;font-family:Consolas,'SFMono-Regular',monospace;}
 
-/* ── 场景可见性 ── */
-.only-empty,.only-imported,.only-generated,.only-persist,.only-readonly,.only-column,.only-running,.only-writing,.only-scenario-result,.only-scenario-copy{display:none;}
+/* ── 场景可见性（其余可见性规则贴在各自段落里） ── */
+/* 列已就绪：除空态外都是它（空态给的是大卡片） */
+.only-imported{display:flex;}
+[data-scn="empty"] .only-imported{display:none;}
+.only-empty,.only-generated,.only-persist,.only-readonly,.only-scenario-result,.only-scenario-copy{display:none;}
 [data-scn="empty"] .only-empty{display:flex;}
-[data-scn="imported"] .only-imported{display:flex;}
-[data-scn="generated"] .only-imported{display:flex;}
-[data-scn="generated"] .only-generated{display:flex;}
-[data-scn="running"] .only-imported{display:flex;}
-[data-scn="running"] .only-running{display:flex;}
-/* 写入 / 导出中：字段与预览保留（生成已结束，临时表未动），出口按钮保持禁用态 */
-[data-scn="writing"] .only-imported{display:flex;}
-[data-scn="writing"] .only-generated{display:flex;}
-[data-scn="writing"] .only-writing{display:flex;}
-[data-scn="persist"] .only-imported{display:flex;}
+/* 有结果：结果摘要 + 草稿预览（写入 / 导出中临时表未动，照旧显示） */
+[data-scn="generated"] .only-generated,
+[data-scn="writing"] .only-generated,
 [data-scn="persist"] .only-generated{display:flex;}
 [data-scn="persist"] .only-persist{display:flex;}
-[data-scn="readonly"] .only-imported{display:flex;}
 [data-scn="readonly"] .only-readonly{display:flex;}
-[data-scn="menu"] .only-imported{display:flex;}
-[data-scn="column"] .only-imported{display:flex;}
-/* 生成器搜索：对话框后面是「已导入结构」的面板态（与列编辑场景同一口径） */
-[data-scn="generator"] .only-imported{display:flex;}
-[data-scn="constraint"] .only-imported{display:flex;}
-.detail-empty{display:none;}
-[data-scn="empty"] .detail-empty{display:flex;}
-[data-scn="empty"] .detail-fields{display:none;}
+[data-scn="scenario-result"] .only-scenario-result{display:flex;}
+[data-scn="scenario-copy"] .only-scenario-copy,
+[data-scn="scenario-running"] .only-scenario-copy,
+[data-scn="relation"] .only-scenario-copy,
+[data-scn="edit-table"] .only-scenario-copy{display:flex;}
+/* 预览空态：草稿还没有结果时（结果表那份由 only-scenario-result 管） */
 .preview-empty{display:none;}
-[data-scn="imported"] .preview-empty,
-[data-scn="readonly"] .preview-empty,
-[data-scn="menu"] .preview-empty,
-[data-scn="column"] .preview-empty{display:flex;}
+[data-scn="imported"] .preview-empty,[data-scn="running"] .preview-empty,[data-scn="failed"] .preview-empty,
+[data-scn="readonly"] .preview-empty,[data-scn="menu"] .preview-empty,[data-scn="column"] .preview-empty,
+[data-scn="generator"] .preview-empty,[data-scn="constraint"] .preview-empty,[data-scn="scenario"] .preview-empty,
+[data-scn="scenario-copy"] .preview-empty,[data-scn="scenario-running"] .preview-empty,
+[data-scn="relation"] .preview-empty,
+[data-scn="edit-table"] .preview-empty{display:flex;}
 .inline{display:inline;}
 [data-scn="empty"] .count-zero{display:inline;}
 .count-zero{display:none;}
@@ -300,7 +358,7 @@ button{font-family:inherit;cursor:pointer;}
     <div class="logo">R</div>
     <div>
       <h1>Mock 数据生成（M7）· 原型</h1>
-      <div class="sub">右 Dock 280px（配置 + 出口）+ 中央一张结果表一个 tab（表名 · 行数 + 字段 + 预览）</div>
+      <div class="sub">右 Dock（可拖拽调宽）管表：本次 Mock 表清单 + 出口｜中央一张表一个 tab：这张表的设计（列 / 预览）与生成状态</div>
     </div>
   </div>
   <div class="head-actions">
@@ -315,6 +373,7 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn" data-go="running" onclick="setScene('running')">生成中（进度 + 取消）</button>
   <button class="scn" data-go="writing" onclick="setScene('writing')">写入 / 导出中（不定量）</button>
   <button class="scn" data-go="persist" onclick="setScene('persist')">落库反馈（同名已存在）</button>
+  <button class="scn" data-go="failed" onclick="setScene('failed')">生成失败（参数护栏）</button>
   <button class="scn" data-go="readonly" onclick="setScene('readonly')">只读项目</button>
   <button class="scn" data-go="menu" onclick="setScene('menu')">生成器分类子菜单</button>
   <button class="scn" data-go="generator" onclick="setScene('generator')">生成器搜索</button>
@@ -322,11 +381,12 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn" data-go="constraint" onclick="setScene('constraint')">约束类参数（多行编辑）</button>
   <button class="scn" data-go="scenario" onclick="setScene('scenario')">场景模板（6 套内置）</button>
   <button class="scn" data-go="scenario-copy" onclick="setScene('scenario-copy')">场景工作副本（调关系）</button>
+  <button class="scn" data-go="scenario-running" onclick="setScene('scenario-running')">场景生成中（张表进度）</button>
   <button class="scn" data-go="relation" onclick="setScene('relation')">加关系对话框</button>
   <button class="scn" data-go="edit-table" onclick="setScene('edit-table')">编辑表对话框</button>
   <button class="scn" data-go="scenario-result" onclick="setScene('scenario-result')">场景结果（多表 → 多 tab）</button>
 </div>
-<div class="scn-hint">场景切换只改变 Mock 面板 / 中央 tab / 对话框的呈现；窗口壳（标题栏 / 活动栏 / 左右边栏）为 v2 五段布局的简化示意。</div>
+<div class="scn-hint">场景切换只改变 Mock 面板 / 中央 tab / 对话框的呈现；窗口壳（标题栏 / 活动栏 / 左右边栏）为 v2 五段布局的简化示意。右 Dock 左边缘可拖拽调宽（与 v2 的 Dock 一致）。</div>
 
 <div class="wrap">
 <div class="app" id="app" data-scn="empty">
@@ -367,36 +427,103 @@ button{font-family:inherit;cursor:pointer;}
       </div>
     </div>
 
-    <!-- 中央区：编辑区 tab 组（工作台 | Mock 数据） -->
+    <!-- 中央区：编辑区 tab 组（工作台 | Mock 数据）——一张表一个 tab -->
     <div class="center">
       <div class="tabs">
         <div class="tab">工作台</div>
-        <div class="tab on scn-single">Mock · mock_orders <span class="x">✕</span></div>
-        <!-- 场景结果：**一张结果表一个 tab**（标题就是表名 + 行数）；右 Dock 的本次生成清单负责切/管 -->
+        <!-- 草稿 tab：这张表的设计（列定义可编辑）；结果表态下换成结果表 tab -->
+        <div class="tab on hide-in-result">Mock · mock_orders <span class="x">✕</span></div>
+        <!-- 场景结果：**一张结果表一个 tab**（标题就是表名 + 行数）；右 Dock 的「结果表」清单负责切/管 -->
         <div class="tab on only-scenario-result">Mock · orders（5,000 行） <span class="x">✕</span></div>
         <div class="tab only-scenario-result">Mock · order_items（15,000 行） <span class="x">✕</span></div>
         <div class="tab only-scenario-result">Mock · users（1,000 行） <span class="x">✕</span></div>
         <div class="tab only-scenario-result">Mock · products（500 行） <span class="x">✕</span></div>
       </div>
       <div class="center-body">
-        <div class="detail-head">
-          <span class="grow scn-single">字段（5）· 目标表 mock_orders · 1000 行 · 种子 随机 · 简体中文</span>
-          <!-- 场景结果：当前 tab 就是那张表，标题栏不再需要「当前表」下拉 -->
-          <span class="grow only-scenario-result">表 orders · 5,000 行 · 来自场景模板「电商系统」</span>
-          <button class="btn primary sm scn-hide">生成</button>
+        <!-- ── 表头：这张表的设计（表名 / 行数 / 种子 / 语言都在这儿改）+ 生成动作 ── -->
+        <div class="camp-head hide-in-result">
+          <div class="head-row">
+            <input class="inp" style="width:152px;" value="mock_orders" aria-label="目标表名">
+            <input class="inp num sz-1k" value="1000" aria-label="行数">
+            <input class="inp num sz-100k" value="100000" aria-label="行数" style="width:78px;">
+            <input class="inp num" placeholder="随机种子" aria-label="种子">
+            <button class="btn sm">简体中文 ▾</button>
+            <span class="grow"></span>
+          </div>
+          <!-- 生成行：单表生成 + 场景模板（多表生成是集合级动作，在右 Dock） -->
+          <div class="head-row gen-block">
+            <button class="btn primary only-empty" disabled>生成</button>
+            <button class="btn primary gen-primary">生成</button>
+            <button class="btn sm gen-again">重新生成</button>
+            <button class="btn sm gen-running" disabled>生成中…</button>
+            <span class="rel">
+              <button class="btn sm">场景模板 ▾</button>
+              <!-- 菜单：模板名 + 规模（张表 · 行数）；一选就拿回模板建工作副本（不立即生成） -->
+              <div class="popover scn" style="left:0;top:calc(100% + 4px);">
+                <div class="menu">
+                  <div class="menu-item on">电商系统<span class="tag">4 张表 · 21,500 行</span></div>
+                  <div class="menu-item">人力资源系统<span class="tag">3 张表 · 1,020 行</span></div>
+                  <div class="menu-item">博客 / 内容平台<span class="tag">4 张表 · 6,300 行</span></div>
+                  <div class="menu-item">金融 / 交易系统<span class="tag">3 张表 · 100,600 行</span></div>
+                  <div class="menu-item">社交平台<span class="tag">4 张表 · 161,000 行</span></div>
+                  <div class="menu-item">企业组织架构<span class="tag">5 张表 · 3,750 行</span></div>
+                </div>
+              </div>
+            </span>
+            <span class="mono-line grow only-generated">临时表 temp_mock_mock_orders · 1000 行 · 12 ms</span>
+          </div>
+          <!-- 生成中：进度条 + 批次 + 取消（进度与取消只在中央这一处画） -->
+          <div class="head-row camp-progress">
+            <div class="bar" style="flex:1;"><i style="width:40%"></i></div>
+            <span class="hint" style="flex:none;">4 / 10 批（≈40000 / 100000 行）</span>
+            <button class="btn sm" style="flex:none;">取消</button>
+          </div>
+          <!-- 写入 / 导出：没有批次回调 → 不定量进度，也不给取消 -->
+          <div class="head-row camp-writing">
+            <div class="bar loading" style="flex:1;"><i></i></div>
+            <span class="hint" style="flex:none;">写入分析库中…（100000 行）</span>
+          </div>
+          <!-- 失败：参数护栏在事件路径上拦下（草稿原样保留），原因就地给 + 重试 -->
+          <div class="head-row camp-failed">
+            <span class="err grow">生成失败：行数需为 1..1,000,000 的整数</span>
+            <button class="btn sm" style="flex:none;">重试</button>
+          </div>
+          <div class="hint staging-hint">这是草稿：把表名 / 行数 / 列调好，再去右侧「＋ 加表」把它加进本次生成</div>
         </div>
 
-        <!-- 中央 tab：生成中（摘要行尾带进度，预览保留旧结果或空态） -->
-        <div class="detail-running">
-          <div class="hint">字段（5）· 目标表 mock_orders · 100000 行 · 种子 随机 · 简体中文 · 生成中 40%</div>
+        <!-- ── 结果表 tab 的表头：这张表是「这次生成」的产物 → 只读，只讲事实与关系 ── -->
+        <div class="camp-head only-scenario-result">
+          <div class="head-row">
+            <span class="grow"><b>orders</b> · 5,000 行 · 已生成（临时表 <span class="mono">temp_mock_orders</span> · 18 ms）</span>
+          </div>
+          <div class="head-row">
+            <span class="warn grow">引用了 users.id：只落这张表，被引用的表不会跟着落库；被 order_items.order_id 引用：只落这张表，引用它的一方会落空</span>
+          </div>
         </div>
-        <!-- 中央 tab：写入 / 导出中（摘要行尾带阶段，预览保留） -->
-        <div class="detail-writing">
-          <div class="hint">字段（5）· 目标表 mock_orders · 100000 行 · 种子 随机 · 简体中文 · 写入分析库中</div>
+
+        <!-- 空态：给出下一步（设计在这张 tab 里起手，右 Dock 只管表与出口） -->
+        <div class="only-empty card" style="flex-direction:column;gap:8px;">
+          <div style="font-size:12.5px;font-weight:600;">还没有列：先把这张表造起来</div>
+          <div class="line" style="flex-wrap:wrap;">
+            <button class="btn sm" onclick="setScene('scenario')">选场景模板（6 套）</button>
+            <button class="btn sm" onclick="setScene('imported')">导入源库结构</button>
+            <button class="btn sm">＋ 手工加列</button>
+          </div>
+          <div class="hint">列定义、表名 / 行数、预览都在这张 tab 里改；右侧面板负责管理表（清单 / 出口 / 历史）。</div>
         </div>
-        <div class="detail-empty hint">暂无列：在右 Dock「Mock 数据生成」面板点「导入结构」或「＋ 加列」。</div>
+        <!-- ── 列 + 预览：草稿 tab 可编辑，结果表 tab 只读 ── -->
         <div class="only-imported detail-fields" style="flex-direction:column;gap:10px;">
-          <div class="field-grid">
+          <!-- 草稿 tab：列来源（导入源库结构 / 手工加列） -->
+          <div class="line hide-in-result">
+            <span class="hint grow">列（<span class="count-zero">0</span><span class="count-five">5</span>）</span>
+            <button class="btn sm">导入结构</button>
+            <button class="btn sm">＋ 加列</button>
+          </div>
+          <!-- 结果表 tab：列来自这次生成 → 只读（要改列回草稿 tab 改，再重新生成） -->
+          <div class="line only-scenario-result">
+            <span class="hint grow">列（6）· 来自这次生成（只读）</span>
+          </div>
+          <div class="field-grid hide-in-result">
             <div class="fcard">
               <div class="head"><span class="name">id</span><span class="type">INTEGER</span><span class="badge high">high</span></div>
               <div class="ops">
@@ -410,7 +537,35 @@ button{font-family:inherit;cursor:pointer;}
             <div class="fcard">
               <div class="head"><span class="name">customer_email</span><span class="type">VARCHAR</span><span class="badge high">high</span></div>
               <div class="ops">
-                <button class="btn ghost sm" onclick="setScene('menu')">安全邮箱 ▾</button>
+                <span class="rel">
+                  <button class="btn ghost sm" onclick="setScene('menu')">安全邮箱 ▾</button>
+                  <!-- 生成器菜单：15 类 × 均值 9 项；分类子菜单知道「属于哪类」时最快，首项「搜索生成器…」开搜索对话框 -->
+                  <div class="popover gen" style="left:0;top:calc(100% + 4px);">
+                    <div class="menu">
+                      <div class="menu-item">数值<span class="arrow">›</span></div>
+                      <div class="menu-item">文本<span class="arrow">›</span></div>
+                      <div class="menu-item">个人信息<span class="arrow">›</span></div>
+                      <div class="menu-item">地址与网络标识<span class="arrow">›</span></div>
+                      <div class="menu-item">日期时间<span class="arrow">›</span></div>
+                      <div class="menu-item">商业<span class="arrow">›</span></div>
+                      <div class="menu-item">金融<span class="arrow">›</span></div>
+                      <div class="menu-item">网络与技术<span class="arrow">›</span></div>
+                      <div class="menu-item">图片<span class="arrow">›</span></div>
+                      <div class="menu-item">颜色<span class="arrow">›</span></div>
+                      <div class="menu-item">标准编码<span class="arrow">›</span></div>
+                      <div class="menu-item">汽车与行政<span class="arrow">›</span></div>
+                      <div class="menu-item">约束<span class="arrow">›</span></div>
+                    </div>
+                    <div class="menu">
+                      <div class="menu-item on">安全邮箱<span class="tag">safe_email</span></div>
+                      <div class="menu-item">邮箱地址<span class="tag">email</span></div>
+                      <div class="menu-item">免费邮箱<span class="tag">free_email</span></div>
+                      <div class="menu-item">用户名<span class="tag">username</span></div>
+                      <div class="menu-item">姓名<span class="tag">name</span></div>
+                      <div class="menu-item">手机号<span class="tag">phone</span></div>
+                    </div>
+                  </div>
+                </span>
                 <button class="btn ghost sm" onclick="setScene('column')">编辑</button>
                 <button class="btn ghost sm">智能</button>
                 <button class="btn ghost sm">删除</button>
@@ -448,13 +603,21 @@ button{font-family:inherit;cursor:pointer;}
               </div>
             </div>
           </div>
+          <!-- 结果表 tab 的列：一行一列（名称 / 类型 / 生成器或取值域），没有编辑入口 -->
+          <div class="ro-grid only-scenario-result">
+            <div class="ro-row"><span class="mono">id</span><span class="hint">INTEGER</span><span class="hint grow">自增序列 · 1..5,000</span></div>
+            <div class="ro-row"><span class="mono">order_number</span><span class="hint">VARCHAR</span><span class="hint grow">订单号 · ORD-2024-######</span></div>
+            <div class="ro-row"><span class="mono">user_id</span><span class="hint">INTEGER</span><span class="hint grow">取自 users.id · 1..1,000</span></div>
+            <div class="ro-row"><span class="mono">status</span><span class="hint">VARCHAR</span><span class="hint grow">加权取值 · paid / pending / shipped</span></div>
+            <div class="ro-row"><span class="mono">total_amount</span><span class="hint">DECIMAL(12, 2)</span><span class="hint grow">随机定点数 · 0.01..99999.99</span></div>
+            <div class="ro-row"><span class="mono">created_at</span><span class="hint">TIMESTAMP</span><span class="hint grow">日期时间（区间）· 2024-01-01..2024-12-31</span></div>
+          </div>
 
           <!-- 预览表（生成后就绪） -->
-          <div class="hint only-generated scn-single">预览（前 3 行）· 临时表 <span class="mono">temp_mock_mock_orders</span> · 本次 1000 行 · 12 ms</div>
-          <div class="hint only-scenario-result">预览（前 3 行）· orders · 临时表 <span class="mono">temp_mock_orders</span> · 本次 5,000 行 · 18 ms</div>
-          <div class="hint only-scenario-result">每张表一个 tab（标题 = 表名 · 行数）：切 tab 就是切表；右 Dock「本次生成」里点一行也能切过来</div>
-          <div class="hint preview-empty">预览（前 10 行）· 尚无结果——点右上「生成」</div>
-          <div class="prev-wrap only-generated scn-single" style="flex-direction:column;">
+          <div class="hint only-generated hide-in-result">预览（前 3 行）· 临时表 <span class="mono">temp_mock_mock_orders</span> · 本次 1000 行 · 12 ms</div>
+          <div class="hint only-scenario-result">预览（前 3 行）· 临时表 <span class="mono">temp_mock_orders</span> · 本次 5,000 行 · 18 ms</div>
+          <div class="hint preview-empty hide-in-result">预览（前 10 行）· 尚无结果——点表头「生成」</div>
+          <div class="prev-wrap only-generated hide-in-result" style="flex-direction:column;">
             <table class="prev-table">
               <tr>
                 <th class="idx">#</th><th>id</th><th>customer_email</th><th>amount</th><th>status</th><th>created_at</th>
@@ -479,195 +642,129 @@ button{font-family:inherit;cursor:pointer;}
       </div>
     </div>
 
-    <!-- 右 Dock：Mock 生成面板（配置 + 出口） -->
-    <div class="sidebar-r">
+    <!-- 右 Dock：Mock 生成面板（管理表：清单 + 出口 + 折叠的历史 / 模板；左边缘可拖拽调宽） -->
+    <div class="sidebar-r" id="dockRight">
+      <div class="dock-grip" id="dockGrip" title="拖拽调宽"></div>
       <div class="panel-head"><span class="ttl">Mock 生成</span><span class="actions"><span>⟳</span><span>▾</span></span></div>
       <div class="panel-body">
         <div class="mock">
-          <div class="title">Mock 数据生成</div>
-
-          <!-- 目标表名（新表） -->
-          <div class="hint">目标表名（新表；落库与文件名取此名）</div>
-          <input class="inp" value="mock_orders" aria-label="目标表名">
-          <div class="line">
-            <input class="inp num" value="1000" aria-label="行数">
-            <input class="inp num" placeholder="随机种子" aria-label="种子">
-            <button class="btn sm">简体中文 ▾</button>
+          <!-- ── ① 表清单：唯一管理入口（表名 · 行数 · 状态点）；点一行 = 切 / 开它的 tab ── -->
+          <div class="line no-scenario">
+            <span class="hint grow">本次 Mock 表（1）</span>
+          </div>
+          <div class="line only-scenario-copy">
+            <span class="hint grow">本次 Mock 表（4）· 电商系统</span>
+          </div>
+          <div class="line only-scenario-result">
+            <span class="hint grow">结果表（4）· 点一行切到它的 tab</span>
           </div>
 
-          <!-- 列来源 -->
-          <div class="line">
-            <span class="hint grow">列（<span class="count-zero">0</span><span class="count-five">5</span>）</span>
-            <button class="btn sm">导入结构</button>
-            <button class="btn sm">＋ 加列</button>
-          </div>
-
-          <!-- 生成（后台任务：进行中时禁用，进度与取消另起一行） -->
-          <button class="btn primary wide only-running" disabled>生成中…</button>
-          <button class="btn primary wide only-writing" disabled>生成</button>
-          <button class="btn primary wide only-empty" disabled>生成</button>
-          <button class="btn primary wide only-imported" disabled>生成</button>
-          <button class="btn primary wide only-generated scn-hide">生成</button>
-
-          <!-- 生成行（场景模板场景）：单表生成为主按钮，右侧挂「场景模板 ▾」 -->
-          <div class="line scn-row">
-            <button class="btn primary wide" style="flex:1;">生成</button>
-            <span class="rel" style="flex:none;">
-              <button class="btn">场景模板 ▾</button>
-              <!-- 菜单：模板名 + 规模（张表 · 行数）；一选就按模板生成全部表（不写库） -->
-              <div class="popover scn" style="right:0;top:calc(100% + 4px);">
-                <div class="menu">
-                  <div class="menu-item on">电商系统<span class="tag">4 张表 · 21,500 行</span></div>
-                  <div class="menu-item">人力资源系统<span class="tag">3 张表 · 1,020 行</span></div>
-                  <div class="menu-item">博客 / 内容平台<span class="tag">4 张表 · 6,300 行</span></div>
-                  <div class="menu-item">金融 / 交易系统<span class="tag">3 张表 · 100,600 行</span></div>
-                  <div class="menu-item">社交平台<span class="tag">4 张表 · 161,000 行</span></div>
-                  <div class="menu-item">企业组织架构<span class="tag">5 张表 · 3,750 行</span></div>
-                </div>
-              </div>
-            </span>
-          </div>
-
-          <!-- 任务进行中：进度条 + 批次文案 + 取消 -->
-          <div class="only-running" style="flex-direction:column;gap:6px;">
-            <div class="bar"><i style="width:40%"></i></div>
-            <div class="line">
-              <span class="hint grow">4 / 10 批（≈40000 / 100000 行）</span>
-              <button class="btn sm">取消</button>
+          <!-- 单表：草稿与它的结果都是这一行（sel = 当前 tab） -->
+          <div class="lst no-scenario">
+            <div class="lrow sel">
+              <span class="name grow">mock_orders</span>
+              <span class="hint sz-1k">1000 行</span>
+              <span class="hint sz-100k">100000 行</span>
+              <span class="st st-new">未生成</span>
+              <span class="st st-run">生成中 40%</span>
+              <span class="st st-ok">已生成</span>
+              <span class="st st-fail">生成失败</span>
             </div>
+            <div class="hint">状态：○ 未生成 ◐ 生成中 ● 已生成 ✓ 已落库 ⚠ 引用的表没落库（多表时才有）</div>
           </div>
 
-          <!-- 出口进行中：不定量进度 + 阶段文案（无批次回调 → 也不给取消） -->
-          <div class="only-writing" style="flex-direction:column;gap:6px;">
-            <div class="bar loading"><i></i></div>
-            <div class="line">
-              <span class="hint grow">写入分析库中…（100000 行）</span>
-            </div>
+          <!-- 场景工作副本（C1）：待生成的表 + 关系（关系挂在**子表**那一行下，行尾 ✕ 删关系） -->
+          <div class="lst only-scenario-copy">
+            <div class="lrow"><span class="name grow">users</span><span class="hint">1,000 行</span><span class="sd o">待生成</span><button class="btn ghost sm" onclick="setScene('edit-table')">编辑</button><button class="xbtn">✕</button></div>
+            <div class="lrow"><span class="name grow">products</span><span class="hint">500 行</span><span class="sd o">待生成</span><button class="btn ghost sm" onclick="setScene('edit-table')">编辑</button><button class="xbtn">✕</button></div>
+            <div class="lrow"><span class="name grow">orders</span><span class="hint">5,000 行</span><span class="sd o">待生成</span><button class="btn ghost sm" onclick="setScene('edit-table')">编辑</button><button class="xbtn">✕</button></div>
+            <div class="lsub"><span>↳</span><span class="rel grow">user_id → users.id · 1..1,000</span><button class="xbtn">✕</button></div>
+            <div class="lrow"><span class="name grow">order_items</span><span class="hint">15,000 行</span><span class="sd o">待生成</span><button class="btn ghost sm" onclick="setScene('edit-table')">编辑</button><button class="xbtn">✕</button></div>
+            <div class="lsub"><span>↳</span><span class="rel grow">order_id → orders.id · 1..5,000</span><button class="xbtn">✕</button></div>
+            <div class="lsub"><span>↳</span><span class="rel grow">product_id → products.id · 1..500</span><button class="xbtn">✕</button></div>
           </div>
-
-          <!-- 结果摘要 / 只读 / 落库反馈 / 生成中 -->
-          <div class="mono-line only-generated scn-single">临时表 temp_mock_mock_orders · 1000 行 · 12 ms</div>
-
-          <!-- 场景工作副本（C1）：选模板后**不立即生成**——先看清单、调关系，再生成 -->
-          <div class="line scn-row-copy">
-            <button class="btn primary wide" style="flex:1;">生成 5 张表</button>
+          <div class="line only-scenario-copy">
+            <button class="btn sm">＋ 加表（当前草稿）</button>
+            <button class="btn sm" onclick="setScene('relation')">＋ 加关系</button>
+            <span class="grow"></span>
+          </div>
+          <div class="hint only-scenario-copy">关系行尾是取值域（父列自增参数 × 父表行数算出来）：改父表行数它跟着变，不需要谁去同步。</div>
+          <div class="hint only-scenario-copy">加进来的表取草稿的表名 / 行数 / 列：先在中央那张草稿 tab 里调好，再加进本次生成。</div>
+          <!-- 集合级动作与它的进度留在管理侧（它属于这一批，不属于单张表；单表任务反之在中央） -->
+          <div class="line scn-job-actions">
+            <button class="btn primary" style="flex:1;">生成 4 张表</button>
             <button class="btn" style="flex:none;">退出场景</button>
           </div>
-          <div class="only-scenario-copy" style="flex-direction:column;gap:6px;">
-            <div class="hint">本次生成（5 张表 · 22,250 行）· 电商系统 + 自定义</div>
-            <div class="hist-row">
-              <div class="line"><span class="name grow">users</span><span class="hint">1,000 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
-              <div class="line"><span class="name grow">products</span><span class="hint">500 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
-              <div class="line"><span class="name grow">orders</span><span class="hint">5,000 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
-              <div class="line"><span class="name grow">order_items</span><span class="hint">15,000 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
-              <div class="line"><span class="name grow">invoices</span><span class="hint">750 行</span><button class="btn sm" onclick="setScene('edit-table')">编辑</button><button class="btn sm">删除</button></div>
-            </div>
-            <div class="line"><button class="btn sm">＋ 加表（当前草稿）</button></div>
-            <div class="hint">加进来的表取草稿的目标表名 / 行数 / 列：先在单表态把表调好（导入结构、智能映射、列编辑），再一次加进本次生成</div>
-            <div class="hint">表间关系（3 条）</div>
-            <div class="hist-row">
-              <div class="line"><span class="mono grow" style="font-size:11.5px;">orders.user_id → users.id</span><span class="hint" style="flex:none;">1..1,000</span><button class="btn sm">删除</button></div>
-              <div class="line"><span class="mono grow" style="font-size:11.5px;">order_items.order_id → orders.id</span><span class="hint" style="flex:none;">1..5,000</span><button class="btn sm">删除</button></div>
-              <div class="line"><span class="mono grow" style="font-size:11.5px;">order_items.product_id → products.id</span><span class="hint" style="flex:none;">1..500</span><button class="btn sm">删除</button></div>
-            </div>
-            <div class="hint">行尾是取值域（父列自增参数 × 父表行数算出来）：改父表行数它就跟着变，不需要谁去同步</div>
-            <div class="line"><button class="btn sm" onclick="setScene('relation')">＋ 加关系</button></div>
-            <div class="hint">关系只在本次多表生成内成立：不读已有数据，也不改已生成的表 / 文件</div>
-            <div class="hint">场景生成不记入生成历史（历史是单表配置的重放来源）</div>
+          <div class="line scn-job-running">
+            <button class="btn primary" style="flex:1;" disabled>生成中…</button>
+            <button class="btn" style="flex:none;" disabled>退出场景</button>
+          </div>
+          <div class="head-row scn-job">
+            <div class="bar" style="flex:1;"><i style="width:50%"></i></div>
+            <span class="hint" style="flex:none;">2 / 4 张表</span>
+            <button class="btn sm" style="flex:none;">取消</button>
           </div>
 
-          <!-- 场景结果：每张结果表都有自己的中央 tab；这里列出来点一行就切到它的 tab -->
-          <div class="only-scenario-result" style="flex-direction:column;gap:6px;">
-            <div class="line"><span class="hint grow">结果表（4 张）· 点一行切到它的 tab</span></div>
-            <div class="hist-row">
-              <div class="line"><span class="name grow">users</span><span class="hint">1,000 行</span><span class="hint">tab 未开</span></div>
-              <div class="line"><span class="name grow">products</span><span class="hint">500 行</span><span class="hint">tab 未开</span></div>
-              <div class="line sel"><span class="name grow">orders</span><span class="hint">5,000 行</span><span class="hint">当前 tab</span></div>
-              <div class="line"><span class="name grow">order_items</span><span class="hint">15,000 行</span><span class="hint">tab 未开</span></div>
-            </div>
-            <div class="hint">来自场景模板「电商系统」：出口作用于**当前 tab 那张表**——切 tab 就是切表，不必再去选一次</div>
-            <div class="mono-line">orders · 临时表 temp_mock_orders · 5,000 行 · 18 ms</div>
-            <div class="warn">引用了 user_id → users.id：只落这张表，被引用的表不会跟着落库；被 order_items.order_id 引用：只落这张表，引用它的一方会落空</div>
-            <div class="line"><span class="warn grow">关系里还有 2 张没落库：items、users</span><button class="btn sm">落库这 2 张</button></div>
+          <!-- ── ② 结果表清单：每张结果表一个中央 tab；⚠ = 它引用的表还没落库 ── -->
+          <div class="lst only-scenario-result">
+            <div class="lrow"><span class="name grow">users</span><span class="hint">1,000 行</span><span class="sd k">已落库</span></div>
+            <div class="lrow"><span class="name grow">products</span><span class="hint">500 行</span><span class="sd o">未落库</span></div>
+            <div class="lrow sel"><span class="name grow">orders</span><span class="hint">5,000 行</span><span class="sd o">未落库</span></div>
+            <div class="lsub"><span>↳</span><span class="rel grow">user_id → users.id · 1..1,000</span></div>
+            <div class="lrow"><span class="name grow">order_items</span><span class="hint">15,000 行</span><span class="sd w">引用的表未落库</span></div>
+            <div class="lsub"><span>↳</span><span class="rel grow">order_id → orders.id · 1..5,000</span></div>
+            <div class="lsub"><span>↳</span><span class="rel grow">product_id → products.id · 1..500</span></div>
           </div>
-          <div class="ok only-running">生成中…</div>
-          <div class="inf only-readonly">只读模式：不允许落库与写文件（仍可生成预览）</div>
-          <div class="ok only-persist">已在分析库新建表 mock_orders（1000 行）</div>
-          <div class="err only-persist">分析库已存在表 mock_orders：请改用「追加到既有表」</div>
+          <!-- 关系闭包里还差哪几张（沿当前表双向走）：一次落完，悬空引用就没了 -->
+          <div class="line only-scenario-result">
+            <span class="warn grow">还有 3 张没落库：products、orders、order_items</span>
+            <button class="btn sm" style="flex:none;">落库这 3 张</button>
+          </div>
+          <div class="hint only-scenario-result">出口按钮作用于当前 tab 那张表；「落库这 3 张」把关系闭包里缺的一次补齐（补完 ⚠ 自己就没了）。</div>
 
-          <!-- 出口：生成前禁用 / 生成后可用（同一组按钮两种状态） -->
-          <div class="hint">出口（生成后可用）</div>
+          <!-- ── ③ 出口：作用于当前 tab 那张表；有结果才可用 ── -->
+          <div class="hint">出口（作用于当前 tab 那张表；生成后可用）</div>
           <div class="stack exit-disabled">
-            <button class="btn wide" disabled>查看详情（字段与预览）</button>
             <button class="btn wide" disabled>持久化到项目分析库</button>
             <button class="btn wide" disabled>追加到既有表 ▾</button>
             <button class="btn wide" disabled>保存到草稿箱 ▾</button>
             <button class="btn wide" disabled>另存为 ▾</button>
           </div>
           <div class="stack exit-enabled">
-            <button class="btn wide">查看详情（字段与预览）</button>
             <button class="btn wide">持久化到项目分析库</button>
             <button class="btn wide">追加到既有表 ▾</button>
             <button class="btn wide">保存到草稿箱 ▾</button>
             <button class="btn wide">另存为 ▾</button>
           </div>
+          <!-- 出口反馈就地给（失败给可读原因） -->
+          <div class="ok only-persist">已在项目分析库新建表 mock_orders（1000 行）</div>
+          <div class="err only-persist">分析库已存在表 mock_orders：请改用「追加到既有表」</div>
+          <div class="inf only-readonly">只读模式：不允许落库与写文件（仍可生成预览）</div>
           <div class="hint">数据只写入项目分析库与文件，不回传源库（M7）；要进全局走资产库存档 / 草稿箱升级</div>
 
-          <!-- 用户模板（C4）：保存当前配置 / 套用已有模板。只存「怎么造数据」，不存目标表名 -->
-          <div class="hist only-generated">
-            <div class="line"><span class="hint grow">用户模板（1）</span><button class="btn sm">保存为模板…</button></div>
-            <div class="hist-row">
-              <div class="line"><span class="name">电商主数据</span><button class="btn sm">应用</button><button class="btn sm">删除</button></div>
-              <div class="line"><span class="hint grow">1000 行 · 4 列</span></div>
+          <!-- ── ④ 折叠：生成历史（D4/D5）+ 用户模板（C4）——面板的天天用部分是上面那份清单 ── -->
+          <details class="fold">
+            <summary>生成历史（20）· 用户模板（1）</summary>
+            <div class="fold-body">
+              <div class="line"><span class="hint grow">生成历史（最近 20 次）</span><button class="btn sm">刷新</button></div>
+              <div class="hist-row">
+                <div class="line"><span class="name">mock_orders</span><span class="hint">1000 行</span></div>
+                <div class="line"><span class="hint grow">09-16 15:02 · 成功 · 1000 行</span><button class="btn sm">重放</button><button class="btn sm">删除</button></div>
+              </div>
+              <div class="hist-row">
+                <div class="line"><span class="name">mock_customers</span><span class="hint">500 行</span></div>
+                <div class="line"><span class="err grow">09-16 14:58 · 分析库已存在表 mock_customers</span><button class="btn sm">重放</button><button class="btn sm">删除</button></div>
+              </div>
+              <div class="hint">生成一次自动落一条（失败也落，带原因）；重放把当时的表名 / 行数 / 种子 / 列写回草稿，删除只删记录。本项目还没有记录时这里是空态。</div>
+              <div class="line"><span class="hint grow">用户模板（1）</span><button class="btn sm">保存为模板…</button></div>
+              <div class="hist-row">
+                <div class="line"><span class="name">电商主数据</span><button class="btn sm">应用</button><button class="btn sm">删除</button></div>
+                <div class="line"><span class="hint grow">1000 行 · 4 列</span></div>
+              </div>
+              <div class="hint">模板只存「怎么造数据」（行数 / 种子 / 语言 / 列），不存目标表名；场景生成不记入生成历史。</div>
             </div>
-          </div>
-          <div class="hint only-imported">用户模板：还没有保存的模板（把当前列配置存下来，下次一键套用）</div>
-
-          <!-- 生成历史（D4/D5）：最近若干次运行。重放把当时的表名/行数/种子/列写回草稿，
-               删除只删记录；读写全在后台线程，宿主只提供项目根 -->
-          <div class="hist only-generated">
-            <div class="line"><span class="hint grow">生成历史（最近 20 次）</span><button class="btn sm">刷新</button></div>
-            <div class="hist-row">
-              <div class="line"><span class="name">mock_orders</span><span class="hint">1000 行</span></div>
-              <div class="line"><span class="hint grow">09-16 15:02 · 成功 · 1000 行</span><button class="btn sm">重放</button><button class="btn sm">删除</button></div>
-            </div>
-            <div class="hist-row">
-              <div class="line"><span class="name">mock_customers</span><span class="hint">500 行</span></div>
-              <div class="line"><span class="err grow">09-16 14:58 · 分析库已存在表 mock_customers</span><button class="btn sm">重放</button><button class="btn sm">删除</button></div>
-            </div>
-          </div>
-          <div class="hint only-imported">生成历史：本项目还没有生成记录（生成一次后这里会出现可重放的记录）</div>
-
-          <!-- 空态 -->
-          <div class="hint only-empty">尚未添加列：点「导入结构」从源库表读结构，或「＋ 加列」手工起一列。</div>
+          </details>
         </div>
-      </div>
-    </div>
-
-    <!-- 生成器分类子菜单（挂在 customer_email 字段行的按钮下方） -->
-    <div class="popover gen" style="left:300px;top:212px;">
-      <div class="menu">
-        <div class="menu-item">数值<span class="arrow">›</span></div>
-        <div class="menu-item">文本<span class="arrow">›</span></div>
-        <div class="menu-item">个人信息<span class="arrow">›</span></div>
-        <div class="menu-item">地址与网络标识<span class="arrow">›</span></div>
-        <div class="menu-item">日期时间<span class="arrow">›</span></div>
-        <div class="menu-item">商业<span class="arrow">›</span></div>
-        <div class="menu-item">金融<span class="arrow">›</span></div>
-        <div class="menu-item">网络与技术<span class="arrow">›</span></div>
-        <div class="menu-item">图片<span class="arrow">›</span></div>
-        <div class="menu-item">颜色<span class="arrow">›</span></div>
-        <div class="menu-item">标准编码<span class="arrow">›</span></div>
-        <div class="menu-item">汽车与行政<span class="arrow">›</span></div>
-        <div class="menu-item">约束<span class="arrow">›</span></div>
-      </div>
-      <div class="menu">
-        <div class="menu-item on">安全邮箱<span class="tag">safe_email</span></div>
-        <div class="menu-item">邮箱地址<span class="tag">email</span></div>
-        <div class="menu-item">免费邮箱<span class="tag">free_email</span></div>
-        <div class="menu-item">用户名<span class="tag">username</span></div>
-        <div class="menu-item">姓名<span class="tag">name</span></div>
-        <div class="menu-item">手机号<span class="tag">phone</span></div>
       </div>
     </div>
 
@@ -778,14 +875,15 @@ button{font-family:inherit;cursor:pointer;}
 
 <div class="note">
   <div><b>与 v1 原型的对应关系</b>（v1 文件：<code>v1/prototype/mock-data-generator.html</code>，本稿为参考重画而非搬运）：</div>
-  <div>· v1 右面板「配置区（表名输入 / 行数 / 种子 / 语言 / 重置）」→ 本稿同样以<b>目标表名输入框</b>为起点（造新表），保留行数 / 种子 / 语言三项；v1 的「重置」并入字段行的「智能」与列编辑的「恢复智能默认」。</div>
-  <div>· v1 的字段表（可增删列、列名与类型可改、生成器下拉、空值率、唯一、⚙ 高级抽屉）→ 本稿因右 Dock 只有 280px，整体移到<b>中央 tab</b>（单表态那张 tab）：字段卡片两行（名称 / 类型 / 置信度 + 生成器 ▾ / 编辑 / 智能 / 删除 + 参数摘要）。</div>
+  <div>· v1 右面板「配置区（表名输入 / 行数 / 种子 / 语言 / 重置）」→ 本稿同样以<b>目标表名输入框</b>为起点（造新表），保留行数 / 种子 / 语言三项，但这四项是「这张表的设计」，故落在<b>中央 tab 的表头</b>；v1 的「重置」并入字段行的「智能」与列编辑的「恢复智能默认」。</div>
+  <div>· v1 的字段表（可增删列、列名与类型可改、生成器下拉、空值率、唯一、⚙ 高级抽屉）→ 本稿落在<b>中央 tab</b>（这张表那张 tab）：字段卡片两行（名称 / 类型 / 置信度 + 生成器 ▾ / 编辑 / 智能 / 删除 + 参数摘要），列来源（导入结构 / ＋ 加列）也在这个 tab 的「列」段。</div>
   <div>· v1 的「生成器下拉（137 项平铺）」→ 本稿按<b>分类子菜单</b>收口；v1 的「⚙ 高级抽屉」→ <b>列编辑对话框</b>（列名 / 类型 / 生成器只读 / 参数 / 空值率 / 唯一 / 恢复智能默认）。</div>
-  <div>· v1 的「生成 → 预览表 → 导出 CSV·XLSX·Parquet·SQL / 保存草稿 / 持久化」→ 本稿：生成仍只产<b>内存临时表 + 预览</b>（不写库），四个出口收在右 Dock「出口」按钮组，预览表在中央 tab。</div>
+  <div>· v1 的「生成 → 预览表 → 导出 CSV·XLSX·Parquet·SQL / 保存草稿 / 持久化」→ 本稿：生成仍只产<b>内存临时表 + 预览</b>（不写库）；<b>生成在中央表头</b>（这张表的动作，带进度条 / 批次 / 取消 / 失败重试），<b>四个出口在右 Dock</b>（作用于当前 tab 那张表，生成前禁用），预览表在中央 tab。</div>
   <div>· v1 的「导入结构弹窗」→ 本稿「导入结构」对话框（连接 / 库 / schema / 表名，读源库结构）；v1 <b>没有</b>的「追加到既有表」是 v2 的<b>显式</b>出口（选表后主键自增接续表内行数），不与「持久化」混为一路。</div>
-  <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部「生成历史」（最近 20 条，时间倒序 + 重放 / 删除 / 刷新），生成一次自动落一条，失败行显示原因；v1 的「保存模板」→ 本稿**已画**「用户模板」段（「保存为模板…」对话框只问名字 + 每行「应用 / 删除」）。</div>
-  <div>· v1 的「场景模板」→ 本稿**已画**（两个场景：「场景模板」= 下拉选 6 套内置模板；「场景结果」= 一次产多张表，<b>一张表一个中央 tab</b>，右 Dock「本次生成」清单是管理入口）。<b>与 v1 的形态差异是有意的</b>：v1 的模板对话框是「选一个模板 → 把列定义填进草稿」，一次只服务一张表；v2 是「选一套模板 → 后台一次生成模板里的**全部表**（不写库）」，结果表是一组（`results`），每张结果表对应一个 tab、标题就是表名 + 行数。场景任务与批量落库的进度量纲是**张表**（`2 / 4 张表` / `1 / 3 张表`），不是批次 / 行——面板按任务种类切文案。</div>
-  <div>· 场景表之间的**引用关系**已从「手写约定」升级为**模型化引用**（§9-I11 已落实）：关系声明在子表的列上（`ColumnDependency::foreign_key`），取值域由父列自增参数 + 父表行数**算出**（不读已落地数据）；内置 6 套模板的 24 处引用都改成声明，blog 顺带补上原本缺失的父表 `users`。面板上就是「表间关系」段 + 「＋ 加关系」对话框，关系行尾的 `1..1,000` 就是算出来的域。</div>
+  <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部<b>折叠</b>的「生成历史（20）· 用户模板（1）」（默认收起，点标题展开），历史最近 20 条、时间倒序 + 重放 / 删除 / 刷新，生成一次自动落一条，失败行显示原因；v1 的「保存模板」→ 同一个折叠段里的「用户模板」（「保存为模板…」对话框只问名字 + 每行「应用 / 删除」）。默认收起是因为面板的天天用部分是上面那份表清单。</div>
+  <div>· v1 的「场景模板」→ 本稿**已画**（三个场景：「场景模板」= 中央表头下拉选 6 套内置模板；「场景工作副本」= 选完先看清单、调关系，再生成；「场景结果」= 一次产多张表，<b>一张表一个中央 tab</b>，右 Dock 的「结果表」清单是管理入口）。<b>与 v1 的形态差异是有意的</b>：v1 的模板对话框是「选一个模板 → 把列定义填进草稿」，一次只服务一张表；v2 是「选一套模板 → 拿回工作副本 → 后台一次生成模板里的**全部表**（不写库）」，结果表是一组（`results`），每张结果表对应一个 tab、标题就是表名 + 行数。场景任务与批量落库的进度量纲是**张表**（`2 / 4 张表` / `1 / 3 张表`），不是批次 / 行——面板按任务种类切文案。</div>
+  <div>· <b>本轮改版（分权与状态单点）</b>：右 Dock 收回「管理表」——表清单（唯一入口：表名 · 行数 · 状态点，点一行切 / 开它的 tab）+ 出口组 + 折叠的历史 / 模板；中央 tab 拿回「这张表的设计与生成状态」——表名 / 行数 / 种子 / 语言、生成、进度条与取消、失败原因与重试、列、预览、跨表后果。状态单点：<b>进度条 / 批次文案 / 取消 / 失败原因只画一处</b>——单表任务在中央表头，集合任务（场景）在右 Dock 场景清单下（量纲是「张表」），两者互斥；清单行只给状态点与百分比（`◐ orders 40%`）。单表生成在中央、多表生成（「生成 N 张表 / 退出场景」）在右 Dock——同一时刻只出现一个「生成」，不会分不清生单表还是生一批。出口反馈（落库 / 导出成功或失败）就地给在出口按钮下面。</div>
+  <div>· 场景表之间的**引用关系**已从「手写约定」升级为**模型化引用**（§9-I11 已落实）：关系声明在子表的列上（`ColumnDependency::foreign_key`），取值域由父列自增参数 + 父表行数**算出**（不读已落地数据）；内置 6 套模板的 24 处引用都改成声明，blog 顺带补上原本缺失的父表 `users`。面板上就是<b>清单行下的 `↳` 子行</b>（挂在子表那行，行尾 `✕` 删关系）+「＋ 加关系」对话框，子行尾的 `1..1,000` 就是算出来的域；结果表清单里的 `⚠ 引用的表未落库` 也来自同一份关系数据。</div>
 </div>
 
 <script>
@@ -804,6 +902,22 @@ function setScene(name){
   document.getElementById('ov-table-edit').classList.toggle('show', name === 'edit-table');
 }
 setScene('empty');
+
+// 右 Dock 可拖拽调宽（左边缘抓手）：宽度落在 220..620px，中央区跟着让位。
+// v2 里这段由 gpui-component 的 DockSkin 提供（resize-handle-right + 拖拽改 Dock 尺寸）。
+const dockRight = document.getElementById('dockRight');
+const dockGrip = document.getElementById('dockGrip');
+let dragging = false, dragX = 0, dragW = 0;
+dockGrip.addEventListener('mousedown', e => {
+  dragging = true; dragX = e.clientX; dragW = dockRight.getBoundingClientRect().width;
+  dockGrip.classList.add('on'); e.preventDefault();
+});
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const w = Math.min(620, Math.max(220, dragW - (e.clientX - dragX)));
+  dockRight.style.width = w + 'px';
+});
+window.addEventListener('mouseup', () => { dragging = false; dockGrip.classList.remove('on'); });
 </script>
 </body>
 </html>
