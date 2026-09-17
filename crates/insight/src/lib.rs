@@ -10,7 +10,7 @@
 //! # 规则作用域与注册表生命周期
 //!
 //! 规则分三层，后加载者整体覆盖前者（见 [`RuleScope`]）：
-//! `Builtin`（内嵌，18 条）→ `Global`（`{系统目录}/insight-rules/`）→ `Project`（`{项目}/.RSmeta/insight-rules/`）。
+//! `Builtin`（内嵌，16 条）→ `Global`（`{系统目录}/insight-rules/`）→ `Project`（`{项目}/.RSmeta/insight-rules/`）。
 //!
 //! 注册表**按项目根缓存**（[`registry_for`]），不是进程级单例：
 //! 「一实例一项目」下切换项目必须换规则集，而进程单例只能靠调用方记得手动重载——

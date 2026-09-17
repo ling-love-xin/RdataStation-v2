@@ -5,7 +5,7 @@
 //!
 //! | 作用域 | 位置 | 可见范围 | 可写 |
 //! | --- | --- | --- | --- |
-//! | [`RuleScope::Builtin`] | 应用内嵌（`include_dir!`，随二进制分发，18 条） | 所有项目 | ❌ |
+//! | [`RuleScope::Builtin`] | 应用内嵌（`include_dir!`，随二进制分发，16 条） | 所有项目 | ❌ |
 //! | [`RuleScope::Global`] | `{系统目录}/insight-rules/` | 所有项目 | ✅ |
 //! | [`RuleScope::Project`] | `{项目}/.RSmeta/insight-rules/` | 当前项目 | ✅ |
 //!

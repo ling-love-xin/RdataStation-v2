@@ -1235,8 +1235,9 @@ value_type = "i64"
             assert_eq!(project.rows[0].name, "示例项目规则");
             assert!(!project.dir_missing, "目录已存在");
             assert!(
-                view.data().total > 18,
-                "内置 18 条 + 项目规则，实际 {}",
+                view.data().total > crate::rule_types::BUILTIN_RULE_COUNT,
+                "内置 {} 条 + 项目规则，实际 {}",
+                crate::rule_types::BUILTIN_RULE_COUNT,
                 view.data().total
             );
         });

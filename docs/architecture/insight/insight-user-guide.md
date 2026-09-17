@@ -187,7 +187,7 @@
 
 | 层 | 目录 | 可见范围 | 可写 | 覆盖优先级 |
 | --- | --- | --- | --- | --- |
-| 内置 | 应用内嵌（随二进制分发，18 条） | 所有项目 | ❌ | 最低 |
+| 内置 | 应用内嵌（随二进制分发，16 条） | 所有项目 | ❌ | 最低 |
 | **全局** | `{系统目录}/insight-rules/` | 所有项目 | ✅ | 中 |
 | **项目** | `{项目}/.RSmeta/insight-rules/` | 当前项目 | ✅ | 最高 |
 
@@ -391,7 +391,7 @@ value_type = "i64"
 
 > 实务建议：只运行你理解或信任来源的规则文件；把项目规则目录纳入代码评审，与对待源码同样严格。
 
-### 4.8 内置规则一览（18 条）
+### 4.8 内置规则一览（16 条）
 
 | id | 分类 | applies_to | result_type | 参数 |
 | --- | --- | --- | --- | --- |
@@ -408,16 +408,15 @@ value_type = "i64"
 | `cross-tab` | multi | Text, Text | list | table, col1, col2 |
 | `grouped-stats` | multi | Numeric, Text | list | table, num_col, cat_col |
 | `scatter-sample` | multi | Numeric, Numeric | list | table, col1, col2 |
-| `quality-score` | quality | Any | single | table, col |
 | `table-row-count` | table | Any | single | table |
 | `table-column-overview` | table | Any | list | table |
 | `table-null-overview` | table | Any | list | table, col |
-| `table-quality-overview` | table | Any | list | table |
 
 > 其中 `numeric-stats` / `histogram` / `text-*` / `datetime-*` / `boolean-ratio` 同时是**列画像基础统计的实现**——覆盖或禁用它们会连带影响列画像本身（`insight-architecture.md` K10）。
 >
-> 另一半（`null-check` / `quality-score` / 四条 `table-*`）**没有任何代码按 id 执行**——它们是规则库里的可复用条目，不是面板当前会跑的东西（`quality-score` 尤其如此：它的自述就写着真实评分在 `quality_scorer.rs`）；其中 `quality-score` 与 `table-quality-overview` 自身还有问题待决策（K3 / K15）。
-> `table-quality-overview` 的 SQL 引用了当前**不存在的表**，执行会失败（K3，待决策）。
+> 另一半（`null-check` / 四条 `table-*` / 四条 `multi`）**没有任何代码按 id 执行它们**——它们是规则库里的可复用条目，不是面板当前会跑的东西；`multi` 那四条可由多列 Tab 选着跑，其余的要等宿主侧入口。
+>
+> 2026-09-17 下线了两条**跑不通**的残留规则（需要时从 git 历史取）：`quality-score`（能力在 `quality_scorer.rs`，同一件事不留两份口径）与 `table-quality-overview`（要读一张从不存在的逐列统计物化表，静态 SQL 无解；能力在「评估全表」）。
 
 ## 5. FAQ 与排查
 

@@ -4,7 +4,12 @@ use serde_json::Value;
 /// Number of built-in TOML rule files shipped with the application
 /// (counted in `src-tauri/insight-rules/`). Update when rules are added
 /// or removed so that docs and tests stay synchronised.
-pub const BUILTIN_RULE_COUNT: usize = 18;
+/// 内嵌规则数（`crates/insight/insight-rules/**/*.toml`）。
+///
+/// 增删规则文件时必须同步这里，否则「文档写 N 条、实际加载 M 条」的老毛病会重演
+/// （开发方案 §0 F1 就是这个：一条规则因字段位置写错被静默跳过，而常量还写着 18）。
+/// 2026-09-17 由 18 降为 16：下线两条跑不通的残留规则（见架构 K3 / K15）。
+pub const BUILTIN_RULE_COUNT: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

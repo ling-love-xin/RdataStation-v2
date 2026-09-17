@@ -23,6 +23,21 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — 死副本与残留规则收口（Q2 / Q3 / K15 处置）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **202 项** + 集成 **13 项**全绿；本批只改常量与注释，无逻辑改动；clippy 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **Q2 = K2** 删重复规则目录 | `crates/engine/insight-rules/` 整目录删除——**没有任何代码引用它**（v1 迁移时留下的死副本，内容还是旧的，带着 `str`）。要找回从 git 历史取 | — |
+| **Q3 = K3** 下线 `table-quality-overview` | 它的 SQL 从一张**从不存在的物化表**（`insight_column_stats`）里读逐列统计；静态 SQL 不可能对任意表的每一列算统计（需动态 SQL），而能力已在 Rust 侧（「评估全表」+ 表质量摘要）。留着就是「一条永远跑不通的内置规则」 | `insight-rules/table/` |
+| **K15** 下线 `quality-score` | 残留规则：无代码按 id 执行，自述也写着真实评分在 `quality_scorer.rs`；且 SQL 对文本列跑不通（`AVG(VARCHAR)` 是绑定错误）。同一件事不留两份口径 | `insight-rules/quality/`（目录随之清空） |
+| 口径同步 | `BUILTIN_RULE_COUNT` 18 → **16**；`jobs` 测试里硬编码的 18 改成引用常量（免得下次再漂）；代码注释与使用手册 §4.8（表 + 注）、README / 原型 / 本方案里的「18 条」全部对齐 | 多处 |
+| **顺带的发现（新记 K16）** | **临时表的 TTL/上限在生产里是死代码**：`TempTableManager` 除测试与一个没人调用的 `list_by_source` 外**没有调用者**，而实际建表路径（`create_duckdb_temp_table`）建的表叫 `rs_<uuid>`（不登记、不带 `tmp_q_`/`tmp_i_` 前缀）→ 进程内内存表**永不回收**。而文档写的「TTL 30 分钟」与实际行为不符——这比单纯泄漏更难查。已记档（含三条处置方向），与 Q1 一起等你定 | 架构 §7 行改注 + K16 |
+
+**对用户的影响**：内置规则从 18 条变 16 条（规则管理里少两条）。若曾对这两条做过启停，那份项目层抑制记录会被 `plan_index` 原样保留（不报错、也不会把规则复活）。
+
+
 ### 2026-09-17 — 规则校验补强：Q6 / Q7 落地（K11 / K12 结案）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **202 项** + 集成 **13 项**全绿；本批文件 `cargo clippy --all-targets` 零告警）
@@ -441,7 +456,7 @@
 
 | 层 | 状态 |
 | --- | --- |
-| 规则资产（`crates/insight/insight-rules/`，18 条 TOML） | ✅ 与 v1 字节级一致；`include_dir!` 编译期嵌入。**注：其中 1 条因字段位置写错被静默跳过（见 §0 F1，已修）** |
+| 规则资产（`crates/insight/insight-rules/`，16 条 TOML） | ✅ 与 v1 字节级一致；`include_dir!` 编译期嵌入。**注：其中 1 条因字段位置写错被静默跳过（见 §0 F1，已修）** |
 | 规则引擎（`rule_types` / `rule_registry` / `rule_executor`） | ✅ 已迁移；`by_category` 覆盖缺陷**已修**（§0 0.1）；已升级为三层作用域 + 来源与失败记录（§0 0.4） |
 | 分析服务（`insight_engine` / `quality_scorer` / `table_profile_service` / `schema_analyzer`） | ✅ 已迁移；53 单测与 v1 **逐个对齐** |
 | 快照存储 | ✅ 已迁移；**但全仓无 `::new()` 构造点** → 链路悬空（**已于 0.7 闭合**） |
@@ -474,7 +489,7 @@ v1 有 7 个 Vue 组件（约 2188 行）+ `insight-store.ts`（607 行，23 个
 ### 1.3 关键缺口
 
 ① 边界归位（4 个文件搬 crate）；② 规则作用域与索引表；③ 用户规则加载与热加载接线；④ 快照存储构造点；⑤ 洞察视图（右 Dock）；⑥ 规则管理视图；⑦ 多列分析重新设计；⑧ Schema 洞察门面。
-**可复用**：全部算法与 18 条规则资产开箱可用；v1 三个可用面板的布局语义可直接参照。
+**可复用**：全部算法与规则资产开箱可用；v1 三个可用面板的布局语义可直接参照。
 
 ## 2. Phase 0 前置修复（实证缺陷，与功能解耦）
 
@@ -536,7 +551,7 @@ workbench ──► insight ──► engine ──► shared
 
 | 层 | 存储位置 | 作用域 | 可写 | 优先级 |
 | --- | --- | --- | --- | --- |
-| `Builtin` | `crates/insight/insight-rules/`（`include_dir!` 编译期嵌入，18 条） | 所有项目 | ❌ | 最低 |
+| `Builtin` | `crates/insight/insight-rules/`（`include_dir!` 编译期嵌入，16 条） | 所有项目 | ❌ | 最低 |
 | `Global` | `{data_dir}/RdataStation/system/insight-rules/` | 所有项目 | ✅ | 中 |
 | `Project` | `{项目}/.RSmeta/insight-rules/` | 当前项目 | ✅ | 最高 |
 
@@ -730,7 +745,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | Action 与快捷键 | `crates/insight/src/commands.rs`、`crates/app/src/main.rs` |
 | 右 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels/}`（`RightSidebarPanel`） |
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs`（新增「洞察（M8）专用尺寸」节） |
-| 规则资产 | `crates/insight/insight-rules/`（18 条，不改） |
+| 规则资产 | `crates/insight/insight-rules/`（16 条） |
 | 协议契约测试 | `crates/workbench/tests/ui_contract.rs` |
 
 ## 9. 验证方式

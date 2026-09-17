@@ -106,7 +106,7 @@ engine 侧只剩**连接与迁移**（`ProjectDatabaseManager` 及其 SQLite/Duc
 registry_for(project_root)
   ├─ 缓存命中 → 直接返回
   └─ 未命中 → build_registry：
-       ① builtin_registry()            内层：include_dir 编译期嵌入（18 条，只读）
+       ① builtin_registry()            内层：include_dir 编译期嵌入（16 条，只读）
        ② get_system_dir() → {system}/insight-rules/    全局层（跨项目）
        ③ get_project_rules_dir(root) → {项目}/.RSmeta/insight-rules/   项目层
           · 每层 load_from_dir(dir, scope)：同名 insert 覆盖 + 记录 RuleSource + 记录失败
@@ -311,7 +311,7 @@ RulesWatcher（后台线程，drop 即停）：
 | --- | --- | --- |
 | 洞察并发操作 | 4，**超出即返回可读错误**（不排队） | `INSIGHT_MAX_CONCURRENT` |
 | DuckDB 内存连接 | **进程级单例**，`Mutex` 全局串行 | `DuckDBManager::get_or_create_in_memory` |
-| 洞察中间表 | 前缀 `tmp_i_`，TTL 30 分钟，上限 100，惰性清理 | `engine::duckdb::temp_table` |
+| 洞察中间表 | 前缀 `tmp_i_`，TTL 30 分钟，上限 100，惰性清理 | `engine::duckdb::temp_table`（⚠️ **生产代码里没有调用者**，实际建的表叫 `rs_<uuid>`，见 K16） |
 | 查询结果表 | 前缀 `tmp_q_`，无 TTL，项目关闭清理 | 同上 |
 | 样本行数 | `DEFAULT_SAMPLE_SIZE = 5` | `insight_engine` |
 | 直方图最小行数 | `HISTOGRAM_MIN_ROWS = 10` | 同上 |
@@ -336,7 +336,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 未打开项目 | 快照与规则管理不可用；临时表画像仍可算 | 面板提示「打开项目后可保存快照」 |
 | 全 NULL / BLOB / ARRAY 列 | `Unknown` 变体，只出计数 | 「类型未识别」，**不生成分布** |
 | 空表 | `TableQuality` 返回「表为空或无数据」 | 不产假分数 |
-| 规则目录为空（首次使用） | 只有 18 条内置规则 | 全局层需用户自行创建目录 |
+| 规则目录为空（首次使用） | 只有 16 条内置规则 | 全局层需用户自行创建目录 |
 
 ## 9. 测试策略
 
@@ -394,7 +394,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 评分卡渲染（钉在滚动区之外；四维细条） | `crates/insight/src/insight_view.rs`（`render_score_card` / `dimension_row` / `ratio_bar`） |
 | 表探查 | `crates/insight/src/table_profile_service.rs` |
 | Schema 洞察 | `crates/insight/src/schema_analyzer.rs` |
-| 规则资产（18 条） | `crates/insight/insight-rules/` |
+| 规则资产（16 条） | `crates/insight/insight-rules/` |
 | 服务层统一入口 | `crates/insight/src/service/mod.rs`（`with_rules` 契约） |
 
 ## 11. 已知问题与后续项（**权威清单**）
@@ -403,7 +403,7 @@ RulesWatcher（后台线程，drop 即停）：
 | --- | --- | --- | --- |
 | K1 | **无 SQL 沙箱**：v1 文档声称有 `ATTACH`/`INSTALL` 等黑名单，v2 代码里**不存在**；唯一防线是 `validate_identifiers`——只校验**参数值**字符（字母数字 / `_` / `-` / `.`），不校验规则 SQL 本身 | 安全：用户规则文件的 SQL 直接在该进程的 DuckDB 上执行，可 `ATTACH`/`COPY` 到任意路径 | 待决策（见 §12） |
 | K2 | `crates/engine/insight-rules/` 是 `crates/insight/insight-rules/` 的**逐字节重复副本**，全仓零代码引用 | 后来者可能改错副本 | 待删除确认 |
-| K3 | `table-quality-overview` 规则的 SQL 引用表 `insight_column_stats`，该表**不存在**（只有 `insight_column_snapshots`） | 该规则解析通过但执行必失败 | 待决策：建表 / 改 SQL / 下线 |
+| K3 | ~~`table-quality-overview` 的 SQL 引用表 `insight_column_stats`，该表不存在~~ | — | ✅ 已处置（2026-09-17）：**下线**。那条 SQL 要从一张「逐列统计物化表」里读，而静态 SQL 不可能对任意表的每一列算统计（需动态 SQL）；能力本身已在 Rust 侧（「评估全表」+ 表质量摘要）。规则文件已删，需要时从 git 历史取 |
 | K4 | ~~归属偏差未归位~~ | — | ✅ 已归位（Phase 0 / 0.2）：类型 → `model::types`、仓库 → `store::{body,meta}`、`detect_extremes` → `insight_engine`、门面 → `service::{InsightService,persistence}` |
 | K5 | ~~目录监听热加载未做~~ | — | ✅ 已实现（Phase 0 / 0.6，D22/D23） |
 | K6 | `insight_table_reports` / `insight_schema_reports` 两张表为**预留**，无写入者 | 完成度易被高估 | Phase 4 |
@@ -415,7 +415,8 @@ RulesWatcher（后台线程，drop 即停）：
 | K12 | ~~`quality-score` 用 `value_type = "str"`，不在支持列表里，靠兜底当 `String` 读~~ | — | ✅ 已修（2026-09-17）：① 解析期新增 `value_type` 白名单（D48），② 内置规则里**共 8 处** `"str"` 全部改正（`quality-score` 3 × `String?`、`table-column-overview` 4 × `String`、`table-null-overview` 1 × `String`） |
 | K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15）；`engine/tests/transaction_affinity.rs` 的 `as_i64` 编译错误也已修（`Value` 只有 `as_int`，随 `b838ea0` 提交） |
 | K14 | 清理旧快照后，**存活版本的 `parent_version_id` 可能指向已被删的父版**（链的起段被剪掉） | 低（外观级）：今天只用它打「首版」标记——被剪过的那一版会得不到标记；对比不沿链走（直接拿两行比），分析结论不受影响 | 待决：清理时一并把断链头部标成首版 / 或在界面改成「这一版之前的历史已清理」。要么就维持现状（不清就不存在这个问题） |
-| K15 | `quality-score` 是**残留规则**：没有任何代码按 id 执行它（其自述也说真实评分在 `quality_scorer.rs`），而且它的 SQL 对文本列根本跑不通（`AVG(VARCHAR)` 是绑定错误）、`min/max/avg` 三列对数值列也不是字符串——类型声明只能是权宜（已改成 `String?` 以过白名单） | 低：当前无人执行；哪天有人启用它，会得到一句指向字段的错误，不会静默出错 | 待决（与 K3 同一类问题）：下线 / 按列类型拆成三条 / 改 SQL（`CAST` + `TRY_CAST`）后真正启用 |
+| K15 | ~~`quality-score` 是残留规则（无代码按 id 执行；SQL 对文本列跑不通）~~ | — | ✅ 已处置（2026-09-17）：**下线**。它的自述就写着真实评分在 `quality_scorer.rs`——留着就是「同一能力两份口径」。规则文件已删，需要时从 git 历史取 |
+| K16 | **临时表的 TTL / 上限在生产里是死代码**：`TempTableManager`（TTL 30 分钟 / 上限 50 / 前缀 `tmp_q_`·`tmp_i_`）除测试与一个没人调用的 `list_by_source` 外**没有任何调用者**；而实际建表路径（`DuckDbService::create_duckdb_temp_table`）建的表叫 `rs_<uuid>`，既不登记也不带那两个前缀 | **中**：进程内的内存表**永不回收**（样本表每次洞察留一张、结果集表每跑一次查询留一张），长时间使用持续吃 RSS；而文档（§7 与使用手册）写的是「TTL 30 分钟」——**文档与运行行为不一致**比单纯泄漏更难查 | 待决（与 Q1 相邻）：建表时接回管理器（登记 + 认 `rs_`）· 洞察中间表用完即删 · 给 DuckDB 设 `memory_limit` 与 `temp_directory` |
 
 ## 12. 待确认
 
@@ -423,7 +424,7 @@ RulesWatcher（后台线程，drop 即停）：
 | --- | --- | --- |
 | Q1 | **规则 SQL 的安全边界**（K1） | (a) 启动期静态黑名单（`ATTACH`/`INSTALL`/`COPY`/`EXPORT`…）；(b) DuckDB 侧限制（只读连接 / 禁用扩展）；(c) 明确「用户规则文件 = 可信本地文件」并在文档声明（当前事实）；(d) 引入沙箱执行（成本最高） |
 | Q2 | 视图归属（K8） | 方案 A / B（开发方案 §3.1） |
-| Q3 | `table-quality-overview` 的处置（K3） | 建表 / 改 SQL / 下线 |
+| Q3 | `table-quality-overview` 的处置（K3） | **已定（2026-09-17）：下线**（K3 已处置：静态 SQL 无法对每列算统计，能力已在「评估全表」） |
 | Q4 | 快照保留上限与清理默认值 | 每列 `MAX_VERSIONS_PER_COLUMN`；清理默认 30 天（v1 硬编码） |
 | Q5 | 快照双写失败的补偿策略（D16） | 重试 / 标记待清理 / 放任（Phase 5 决定） |
 | Q6 | 质量门控的「字段不存在」应报错还是静默通过（K11） | **已定（2026-09-17）：解析期报错**（D49，产物 = K11 已修）——与 `deny_unknown_fields` 同一立场 |
