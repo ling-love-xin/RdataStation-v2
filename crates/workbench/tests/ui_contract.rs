@@ -132,6 +132,10 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../editor/src/view/results/sets.rs"),
         ),
         (
+            "editor/view/history.rs",
+            include_str!("../../editor/src/view/history.rs"),
+        ),
+        (
             "editor/view/highlight.rs",
             include_str!("../../editor/src/view/highlight.rs"),
         ),
@@ -222,6 +226,10 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "editor/view/results/sets.rs",
             include_str!("../../editor/src/view/results/sets.rs"),
+        ),
+        (
+            "editor/view/history.rs",
+            include_str!("../../editor/src/view/history.rs"),
         ),
         (
             "editor/view/highlight.rs",

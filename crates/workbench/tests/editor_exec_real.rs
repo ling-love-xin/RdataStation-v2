@@ -795,6 +795,68 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
             deleted.affected_rows
         );
 
+        // B8：历史面板的数据源 —— 走编辑器执行三次（含一次失败），引擎的 `history_store`
+        // 里就该有这三条，且耗时 / 成败 / 失败原因 / 行数 / 时间都是真值。
+        let before = editor::history::load(500).map(|items| items.len()).unwrap_or(0);
+        run_one(&shared, document.clone(), "select 1 as n");
+        run_one(&shared, document.clone(), "select 2 as n");
+        // 失败那次不能用 `run_one`（它断言语句得成功）：走同一条编辑器链路，只断言“确实失败了”
+        let failed_entry = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::Statement("select no_such_column_xyz as n".to_string()),
+            ResultPlacement::Replace,
+            1,
+        );
+        assert!(
+            failed_entry[0].error.is_some(),
+            "{}：这一句本来就该失败（探针用错了语句？）",
+            target.driver
+        );
+        let items = editor::history::load(500).expect("能读到历史（引擎的 history_store）");
+        assert!(
+            items.len() >= before + 3,
+            "{}：三次执行都要留痕（执行前 {} 条，现 {} 条）",
+            target.driver,
+            before,
+            items.len()
+        );
+        let succeeded = items
+            .iter()
+            .find(|item| item.sql == "select 1 as n")
+            .unwrap_or_else(|| panic!("{}：成功的那条没留痕", target.driver));
+        assert!(
+            succeeded.rows_text.as_deref() == Some("返回 1 行"),
+            "{}：成功那条要带返回行数，实得 {:?}",
+            target.driver,
+            succeeded.rows_text
+        );
+        assert_eq!(
+            succeeded.time_text, "刚刚",
+            "{}：刚执行的记录时间就是“刚刚”",
+            target.driver
+        );
+        assert!(
+            succeeded.duration_text.ends_with("ms") || succeeded.duration_text.ends_with('s'),
+            "{}：耗时是真值（实得 {}）",
+            target.driver,
+            succeeded.duration_text
+        );
+        let failed = items
+            .iter()
+            .find(|item| item.sql.contains("no_such_column_xyz"))
+            .unwrap_or_else(|| panic!("{}：失败的那条也要留痕", target.driver));
+        assert!(
+            failed.failed() && failed.error.as_deref().is_some_and(|text| !text.is_empty()),
+            "{}：失败要带原因，实得 {:?}",
+            target.driver,
+            failed.error
+        );
+        eprintln!(
+            "✅ {}：历史面板数据 —— 三次执行都留痕（成功 {} · 耗时 {} · 失败带原因）",
+            target.driver, succeeded.rows_text.as_deref().unwrap_or("-"), succeeded.duration_text
+        );
+
         runtime.block_on(manager.close_all_connections());
         let Some(_timeout_conn) =
             connect_with_retry(&runtime, &manager, &target, &timeout_value, Some(1))

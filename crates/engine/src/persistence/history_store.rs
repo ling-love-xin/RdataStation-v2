@@ -127,10 +127,14 @@ impl HistoryRecord {
         format!("{} ({} ms)", secs, self.duration_ms)
     }
 
-    /// 获取 SQL 预览（前 100 个字符）
+    /// 获取 SQL 预览（前 100 个**字符**）
+    ///
+    /// 按字符算而不是按字节：SQL 里有中文（注释 / 字符串字面量）时，按字节切会把一个汉字
+    /// 切成两半——那是 UTF-8 边界 panic（真机上抓到的同一个毛病），不是“截断得不好看”。
     pub fn sql_preview(&self) -> String {
-        if self.sql.len() > 100 {
-            format!("{}...", &self.sql[..100])
+        if self.sql.chars().count() > 100 {
+            let head: String = self.sql.chars().take(100).collect();
+            format!("{head}...")
         } else {
             self.sql.clone()
         }
@@ -598,22 +602,23 @@ impl HistoryStore {
                 let rest = rest.trim_start();
                 #[allow(clippy::manual_strip)]
                 if rest.starts_with('"') {
-                    let mut end = 1;
+                    // 找闭合引号时**按字节位置记**（`char_indices` 给的就是字节偏移）：
+                    // 曾经按“字符数 +1”累加，汉字是多字节，`rest[1..end]` 直接踩 UTF-8 边界。
                     let mut escape = false;
-                    for c in rest[1..].chars() {
+                    let mut closing = None;
+                    for (offset, c) in rest.char_indices().skip(1) {
                         if escape {
                             escape = false;
-                            end += 1;
                         } else if c == '\\' {
                             escape = true;
-                            end += 1;
                         } else if c == '"' {
+                            closing = Some(offset);
                             break;
-                        } else {
-                            end += 1;
                         }
                     }
-                    return Some(rest[1..end].to_string());
+                    // 找不到闭合引号 = JSON 损坏：当作没有这个键，不去切一个非法区间
+                    let end = closing?;
+                    return Some(Self::unescape_json(&rest[1..end]));
                 }
             }
             None
@@ -747,6 +752,35 @@ impl HistoryStore {
                 c => c.to_string(),
             })
             .collect()
+    }
+
+    /// JSON 转义的反向操作（与 [`Self::escape_json`] 对称）
+    ///
+    /// 不还原的话，含引号的 SQL / 错误消息读回来会多一层 `\"`：历史面板上看到的就是
+    /// 一句被改过的 SQL（曾在真机上把 PG 的 `字段 "x" 不存在` 显示成 `字段 \"x\" 不存在`）。
+    /// 认不得的转义序列原样留着（宁可多一个反斜杠，也不吃掉用户的字符）。
+    fn unescape_json(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        }
+        out
     }
 }
 
@@ -1231,6 +1265,43 @@ mod sql_history_entry_tests {
             Some("no such column: nope")
         );
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 中文（多字节）不能按字节切
+    ///
+    /// 真机上就是这么炸的：PG 的中文错误消息写进历史，下次读盘时手写的 JSON 提取把
+    /// “字符数 +1”当成字节下标用——`rest[1..end]` 切在一个汉字中间，直接 panic。
+    /// SQL 预览（`sql_preview`）是同一个毛病（按字节截断中文 SQL），一并盯住。
+    #[test]
+    fn multibyte_text_round_trips_and_previews() {
+        let (mut store, path) = temp_store("multibyte");
+        let entry = SqlHistoryEntry {
+            conn_id: Some("conn-cn".to_string()),
+            db_type: Some("postgres".to_string()),
+            elapsed_ms: 8,
+            success: false,
+            error_message: Some("字段 \"no_such_column\" 不存在".to_string()),
+            rows_returned: None,
+            rows_affected: None,
+        };
+        let sql = format!("SELECT '{}' AS 中文列", "很长很长的中文注释".repeat(20));
+        save_sql_history_into(&mut store, &sql, &entry).expect("save history");
+
+        // 重新读盘：走的是手写的 JSON 提取（曾经的中炸点）
+        let mut reloaded = HistoryStore::new(path.clone());
+        reloaded.load().expect("load history");
+        let record = &reloaded.get_records(None)[0];
+        assert_eq!(record.sql, sql, "中文 SQL 要原样回来");
+        assert_eq!(
+            record.error_message.as_deref(),
+            Some("字段 \"no_such_column\" 不存在"),
+            "中文错误原因要原样回来（否则历史面板上的失败原因就是断的）"
+        );
+
+        let preview = record.sql_preview();
+        assert!(preview.ends_with("..."), "长句要截断：{preview}");
+        assert_eq!(preview.chars().count(), 103, "100 个字符 + “...”");
         let _ = std::fs::remove_file(path);
     }
 

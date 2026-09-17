@@ -11,12 +11,13 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
 use crate::view::RightPanel;
+use editor::view::history::HistoryView;
 use insight::InsightView;
 use mock::mock_view::MockPanel;
 
 use analytics_resource::detail_view::{DetailActions, render_detail};
 
-use super::Shared;
+use super::{QueryRequest, Shared};
 
 /// 右侧边栏面板：洞察 / Mock 生成 / 历史。
 ///
@@ -34,10 +35,12 @@ pub struct RightSidebarPanel {
     _insight_sub: Subscription,
     /// 规则管理对话框的取数 / 写库请求订阅（仅持有）
     _rules_sub: Subscription,
+    /// 历史面板实体（B8）：视图与状态在 editor crate，本面板只转发渲染 + 注入重放端口
+    history_panel: Entity<HistoryView>,
 }
 
 impl RightSidebarPanel {
-    pub fn new(shared: Shared, cx: &mut Context<Self>) -> Self {
+    pub fn new(shared: Shared, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // 构造期创建 Mock 面板实体（不触 I/O）：导航右键定向导入结构需要在事件路径
         // 拿到句柄，懒创建（首帧 render）会让「先右键、后面板尚未渲染」的路径丢目标。
         let host = crate::components::mock_host::build_host(&shared);
@@ -69,6 +72,25 @@ impl RightSidebarPanel {
                 .as_ref()
                 .map(|session| session.root.clone())
         });
+
+        // 历史面板（B8）：视图与状态在 editor crate（数据读引擎的 `history_store`）。
+        // 重放 = **在中央编辑器打开**（不替用户执行：写语句可能就在历史里），
+        // 而“开文档”是宿主的事 —— 这里注入重放端口：入队请求 + 唤醒宿主 render 消费。
+        let history_panel = cx.new(|cx| HistoryView::new(window, cx));
+        {
+            let shared = shared.clone();
+            history_panel.update(cx, |view, _cx| {
+                view.attach_replay(std::rc::Rc::new(move |item, app| {
+                    shared.request_query(QueryRequest {
+                        conn_id: item.conn_id.clone(),
+                        sql: item.sql.clone(),
+                        // 打开即就绪，但不替用户执行（历史里什么都有，包括写语句）
+                        run: false,
+                    });
+                    shared.notify_host(app);
+                }));
+            });
+        }
         Self {
             shared,
             focus_handle: cx.focus_handle(),
@@ -76,6 +98,7 @@ impl RightSidebarPanel {
             insight_panel,
             _insight_sub,
             _rules_sub,
+            history_panel,
         }
     }
 
@@ -151,60 +174,12 @@ impl RightSidebarPanel {
             )
     }
 
-    fn render_history_placeholder(&self, fg: Hsla) -> Div {
-        let mut panel = div()
-            .v_flex()
-            .w_full()
-            .gap_1()
-            .pl_2()
-            .pr_2()
-            .pt_2()
-            .pb_2()
-            .child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .child("历史"),
-            );
-        let history = crate::services::query_history::load_history();
-        if history.is_empty() {
-            panel = panel.child(
-                div()
-                    .h_6()
-                    .pl_2()
-                    .pr_2()
-                    .text_xs()
-                    .text_color(fg)
-                    .child("暂无历史记录"),
-            );
-        } else {
-            for (i, sql) in history.iter().take(20).enumerate() {
-                let preview: String = if sql.chars().count() > 42 {
-                    let mut s: String = sql.chars().take(42).collect();
-                    s.push('…');
-                    s
-                } else {
-                    sql.clone()
-                };
-                panel = panel.child(
-                    div()
-                        .id(ElementId::Name(SharedString::from(format!(
-                            "right-hist-{i}"
-                        ))))
-                        .h_6()
-                        .pl_2()
-                        .pr_2()
-                        .text_xs()
-                        .text_color(fg)
-                        .child(preview),
-                );
-            }
-        }
-        panel
+    /// B8：历史面板——视图与状态在 editor crate（`editor::view::history::HistoryView`），
+    /// 本面板只做「转发渲染」。重放端口已在构造期注入。
+    fn render_history_panel(&mut self, cx: &mut Context<Self>) -> Div {
+        let panel = self.history_panel.clone();
+        let _ = cx;
+        div().v_flex().size_full().min_h_0().child(panel)
     }
 }
 
@@ -225,10 +200,7 @@ impl Render for RightSidebarPanel {
         let content: Div = match active {
             RightPanel::Insight => self.render_insight_panel(cx),
             RightPanel::Mock => self.render_mock_panel(cx),
-            RightPanel::History => {
-                let fg = cx.theme().colors.foreground;
-                self.render_history_placeholder(fg)
-            }
+            RightPanel::History => self.render_history_panel(cx),
             RightPanel::Archive => self.render_archive_detail(cx),
         };
         div().v_flex().size_full().min_h_0().bg(bg).child(content)

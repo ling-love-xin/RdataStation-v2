@@ -15,6 +15,8 @@ shared.workspace = true
 # 语义着色（A4）：trait 签名用到 lsp-types 与 anyhow（版本随 gpui-base，已在根 Cargo.toml 登记）
 lsp-types.workspace = true
 anyhow.workspace = true
+# 历史面板（B8）：引擎的历史记录带 `chrono::DateTime`（相对时间文案在 `history.rs`）
+chrono.workspace = true
 
 [dev-dependencies]
 # 测试构建的数据根自动隔离（不写产品目录；见 data-paths.md §5）

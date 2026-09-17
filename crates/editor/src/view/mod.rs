@@ -5,6 +5,7 @@
 
 pub mod dialogs;
 pub mod highlight;
+pub mod history;
 pub mod host;
 pub mod results;
 pub mod widgets;

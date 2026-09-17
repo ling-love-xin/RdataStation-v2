@@ -100,8 +100,11 @@ impl QueryRunner for EngineQueryRunner {
                 sql,
                 editor::execution::SEGMENT_ROWS,
                 options,
-            ))
-            .map_err(|error| error.to_string())?;
+            ));
+        // 【B8】不管成败，引擎都记了一条历史（含耗时 / 行数 / 失败原因）——
+        // 摇一下版本号：右 Dock 的历史面板据此重新加载（面板不读盘，也不每帧问文件）
+        editor::history::bump();
+        let executed = executed.map_err(|error| error.to_string())?;
         let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
         // 【B5b】首段拿满了就标“可能还有下一段”（写语句没有分段可言）：
         // 拿不满 = 这一份结果就这么多，界面不摆「取下一段」。

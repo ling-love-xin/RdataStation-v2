@@ -608,7 +608,7 @@ impl WorkbenchView {
         let shared = self.shared.clone();
         let sidebar = cx.new(|cx| SidebarPanel::new(shared.clone(), &self.editor_service, cx));
         let editor = cx.new(|cx| EditorPanel::new(shared.clone(), cx));
-        let right_sidebar = cx.new(|cx| RightSidebarPanel::new(shared.clone(), cx));
+        let right_sidebar = cx.new(|cx| RightSidebarPanel::new(shared.clone(), window, cx));
         // B12：旧“编辑区”的 SQL 框已删；M1 的未保存草稿拦截改看**编辑器的未命名文档**
         // （见 `components/project_host.rs` 的 `EditorBridge`），不再需要 `Shared::editor_clear`。
         // S2：编辑区命令端口——导航 / 草稿箱改调这里，不再直写 `Shared` 的请求字段
