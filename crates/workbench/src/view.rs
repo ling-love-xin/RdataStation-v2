@@ -93,6 +93,32 @@ impl WorkbenchView {
             crate::services::workspace_loader::load_connections_for_scope(project_root.as_deref());
         let shared = Shared::with_connections(connections, notice);
         *shared.project.borrow_mut() = project;
+        // 启动恢复的项目也要**取写锁**：`project_ui.lock/read_only` 原本只在交互式打开时写，
+        // 而启动路径直接装会话——结果是「另一实例占着同一个项目」时两边都以为自己可写，
+        // 各模块的只读护栅（mock 的四个出口 / 资源库 / 草稿箱 / 编辑器替换）全部不生效。
+        // 处置与交互式打开一致：被占用 → 只读打开 + 提示。
+        if let Some(root) = project_root.clone() {
+            let opened = match project::service::open(&root) {
+                Ok(project::service::OpenOutcome::Opened(opened)) => Ok(opened),
+                Ok(project::service::OpenOutcome::Busy(_)) => {
+                    project::service::open_read_only(&root)
+                }
+                Err(e) => Err(e),
+            };
+            match opened {
+                Ok(opened) => {
+                    let (store, lock, read_only, _summary) = opened.into_parts();
+                    // store 仅用于确认加载成功（与 `project::ui::apply_opened` 同口径）
+                    drop(store);
+                    let mut ui = shared.project_ui.borrow_mut();
+                    ui.lock = lock;
+                    ui.read_only = read_only;
+                    ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
+                }
+                // 取锁 / 载入失败：不动会话（项目仍是当前项目），只提示一声
+                Err(e) => shared.project_ui.borrow_mut().notice = Some(e),
+            }
+        }
         // B1：编辑器的连接端口要用它（连接列表快照 + 项目根）——先 clone 出来，
         // 因为下面构造 `editor_service` 时不能再借 `self`。
         let editor_shared_for_conn = shared.clone();

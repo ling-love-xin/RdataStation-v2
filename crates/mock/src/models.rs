@@ -422,24 +422,6 @@ pub struct ColumnMappingResponse {
     pub sample_value: String,
 }
 
-// ==================== 导入结构请求 ====================
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportSchemaInput {
-    pub conn_id: String,
-    pub database: String,
-    pub schema: Option<String>,
-    pub tables: Vec<String>,
-    #[serde(default = "default_connection_type")]
-    pub connection_type: String,
-    pub project_path: Option<String>,
-}
-
-fn default_connection_type() -> String {
-    "global".to_string()
-}
-
 // ==================== 生成历史记录 ====================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -639,14 +621,4 @@ impl ReferenceDomain {
             )
         }
     }
-}
-
-/// 依赖解析配置
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct DependencyConfig {
-    /// 拓扑排序后的列生成顺序
-    pub sorted_columns: Vec<String>,
-    /// 每列的依赖信息
-    pub dependencies: std::collections::HashMap<String, ColumnDependency>,
 }

@@ -339,6 +339,7 @@ fn shared_fields_are_whitelisted() {
         "nav_cache_epoch",
         "notice",
         "open_mock_detail",
+        "pending_temp_cleanup",
         "project",
         "project_new_request",
         "project_open_request",

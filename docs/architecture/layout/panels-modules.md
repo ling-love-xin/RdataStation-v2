@@ -67,6 +67,9 @@
 > 同类还有 M6 的两个对话框流转字段（`version_dialog` / `repair_dialog`）：它们不跨模块——轮询写、
 > 侧栏 render 消费与清会话，crate 拿到的只是对话框状态的克隆——但它们是
 > “取数在后台、开窗在 render”的**两段式**例子：轮询里没有 `Window`，所以只置 `pending`。
+>
+> M7 的 `pending_temp_cleanup` 也在此列：切项目时拿不到内存库连接锁（出口任务不可取消且整段持锁）
+> 就置位，等任务收尾那一拍由 `mock_host::take_job_done` 重试——两边都在 workbench 内部，不跨模块。
 
 ## 4. 与 gpui-kit 约束的差距（审计）
 

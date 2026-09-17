@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::sync::Arc;
 
-use shared::error::{CommonError, CoreError, StorageError};
 use engine::persistence::project_db::{ProjectSqlitePool, SqlitePoolConnection};
+use shared::error::{CommonError, CoreError, StorageError};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -184,10 +184,14 @@ impl MockGenerationStore {
     ) -> Result<(), CoreError> {
         let conn = self.get_conn().await?;
         let inner = conn.inner()?;
+        // 事务：父行与 N 个子行分次写，中途失败会留下「有历史没列」的记录
+        // （读回来是个不能生成的空配置，而提示还指向这次写失败——很难查）
+        let tx = inner
+            .unchecked_transaction()
+            .map_err(|e| storage_err("mock_generation", "begin", e.to_string()))?;
 
-        inner
-            .execute(
-                r#"INSERT INTO mock_generation_tasks (
+        tx.execute(
+            r#"INSERT INTO mock_generation_tasks (
                 id, table_name, table_alias, row_count, seed, locale,
                 scene_id, save_format, status, error_message,
                 generated_rows, generation_time_ms, created_at, updated_at
@@ -196,30 +200,29 @@ impl MockGenerationStore {
                 ?, ?, ?, ?,
                 ?, ?, ?, ?
             )"#,
-                rusqlite::params![
-                    &task.id,
-                    &task.table_name,
-                    &task.table_alias,
-                    task.row_count,
-                    task.seed,
-                    &task.locale,
-                    &task.scene_id,
-                    &task.save_format,
-                    &task.status,
-                    &task.error_message,
-                    task.generated_rows,
-                    task.generation_time_ms,
-                    // 不传就写 NULL：空串是「有一个空时间戳」，与「没有时间戳」在读取侧分不开。
-                    task.created_at.as_deref(),
-                    task.updated_at.as_deref(),
-                ],
-            )
-            .map_err(|e| storage_err("mock_generation_tasks", "insert", e.to_string()))?;
+            rusqlite::params![
+                &task.id,
+                &task.table_name,
+                &task.table_alias,
+                task.row_count,
+                task.seed,
+                &task.locale,
+                &task.scene_id,
+                &task.save_format,
+                &task.status,
+                &task.error_message,
+                task.generated_rows,
+                task.generation_time_ms,
+                // 不传就写 NULL：空串是「有一个空时间戳」，与「没有时间戳」在读取侧分不开。
+                task.created_at.as_deref(),
+                task.updated_at.as_deref(),
+            ],
+        )
+        .map_err(|e| storage_err("mock_generation_tasks", "insert", e.to_string()))?;
 
         for col in columns {
-            inner
-                .execute(
-                    r#"INSERT INTO mock_generation_columns (
+            tx.execute(
+                r#"INSERT INTO mock_generation_columns (
                     id, task_id, column_name, column_type, generator,
                     generator_params, null_ratio, is_unique, is_primary_key,
                     is_foreign_key, ref_table, ref_column, comment,
@@ -230,27 +233,29 @@ impl MockGenerationStore {
                     ?, ?, ?, ?,
                     ?, ?
                 )"#,
-                    rusqlite::params![
-                        &col.id,
-                        &col.task_id,
-                        &col.column_name,
-                        &col.column_type,
-                        &col.generator,
-                        &col.generator_params,
-                        col.null_ratio,
-                        col.is_unique as i32,
-                        col.is_primary_key as i32,
-                        col.is_foreign_key as i32,
-                        &col.ref_table,
-                        &col.ref_column,
-                        &col.comment,
-                        &col.confidence,
-                        col.sort_order,
-                    ],
-                )
-                .map_err(|e| storage_err("mock_generation_columns", "insert", e.to_string()))?;
+                rusqlite::params![
+                    &col.id,
+                    &col.task_id,
+                    &col.column_name,
+                    &col.column_type,
+                    &col.generator,
+                    &col.generator_params,
+                    col.null_ratio,
+                    col.is_unique as i32,
+                    col.is_primary_key as i32,
+                    col.is_foreign_key as i32,
+                    &col.ref_table,
+                    &col.ref_column,
+                    &col.comment,
+                    &col.confidence,
+                    col.sort_order,
+                ],
+            )
+            .map_err(|e| storage_err("mock_generation_columns", "insert", e.to_string()))?;
         }
 
+        tx.commit()
+            .map_err(|e| storage_err("mock_generation", "commit", e.to_string()))?;
         Ok(())
     }
 
@@ -346,30 +351,32 @@ impl MockGenerationStore {
     ) -> Result<(), CoreError> {
         let conn = self.get_conn().await?;
         let inner = conn.inner()?;
+        // 事务：模板头与列一次写完（同 `save_task`：中途失败不留半份）
+        let tx = inner
+            .unchecked_transaction()
+            .map_err(|e| storage_err("mock_template", "begin", e.to_string()))?;
 
-        inner
-            .execute(
-                r#"INSERT INTO mock_user_templates (
+        tx.execute(
+            r#"INSERT INTO mock_user_templates (
                     id, name, description, row_count, seed, locale, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
-                rusqlite::params![
-                    &template.id,
-                    &template.name,
-                    &template.description,
-                    template.row_count,
-                    template.seed,
-                    &template.locale,
-                    // 同上：可空列保持 None，不要退化成空串。
-                    template.created_at.as_deref(),
-                    template.updated_at.as_deref(),
-                ],
-            )
-            .map_err(|e| storage_err("mock_user_templates", "insert", e.to_string()))?;
+            rusqlite::params![
+                &template.id,
+                &template.name,
+                &template.description,
+                template.row_count,
+                template.seed,
+                &template.locale,
+                // 同上：可空列保持 None，不要退化成空串。
+                template.created_at.as_deref(),
+                template.updated_at.as_deref(),
+            ],
+        )
+        .map_err(|e| storage_err("mock_user_templates", "insert", e.to_string()))?;
 
         for col in columns {
-            inner
-                .execute(
-                    r#"INSERT INTO mock_template_columns (
+            tx.execute(
+                r#"INSERT INTO mock_template_columns (
                         id, template_id, column_name, column_type, generator,
                         generator_params, null_ratio, is_unique, is_primary_key,
                         is_foreign_key, ref_table, ref_column, comment,
@@ -380,27 +387,29 @@ impl MockGenerationStore {
                         ?, ?, ?, ?,
                         ?, ?
                     )"#,
-                    rusqlite::params![
-                        &col.id,
-                        &col.template_id,
-                        &col.column_name,
-                        &col.column_type,
-                        &col.generator,
-                        &col.generator_params,
-                        col.null_ratio,
-                        col.is_unique as i32,
-                        col.is_primary_key as i32,
-                        col.is_foreign_key as i32,
-                        &col.ref_table,
-                        &col.ref_column,
-                        &col.comment,
-                        &col.confidence,
-                        col.sort_order,
-                    ],
-                )
-                .map_err(|e| storage_err("mock_template_columns", "insert", e.to_string()))?;
+                rusqlite::params![
+                    &col.id,
+                    &col.template_id,
+                    &col.column_name,
+                    &col.column_type,
+                    &col.generator,
+                    &col.generator_params,
+                    col.null_ratio,
+                    col.is_unique as i32,
+                    col.is_primary_key as i32,
+                    col.is_foreign_key as i32,
+                    &col.ref_table,
+                    &col.ref_column,
+                    &col.comment,
+                    &col.confidence,
+                    col.sort_order,
+                ],
+            )
+            .map_err(|e| storage_err("mock_template_columns", "insert", e.to_string()))?;
         }
 
+        tx.commit()
+            .map_err(|e| storage_err("mock_template", "commit", e.to_string()))?;
         Ok(())
     }
 
@@ -483,20 +492,24 @@ impl MockGenerationStore {
         let conn = self.get_conn().await?;
         let inner = conn.inner()?;
 
-        inner
-            .execute(
-                "DELETE FROM mock_template_columns WHERE template_id = ?",
-                rusqlite::params![template_id],
-            )
-            .map_err(|e| storage_err("mock_template_columns", "delete", e.to_string()))?;
+        let tx = inner
+            .unchecked_transaction()
+            .map_err(|e| storage_err("mock_template", "begin", e.to_string()))?;
 
-        inner
-            .execute(
-                "DELETE FROM mock_user_templates WHERE id = ?",
-                rusqlite::params![template_id],
-            )
-            .map_err(|e| storage_err("mock_user_templates", "delete", e.to_string()))?;
+        tx.execute(
+            "DELETE FROM mock_template_columns WHERE template_id = ?",
+            rusqlite::params![template_id],
+        )
+        .map_err(|e| storage_err("mock_template_columns", "delete", e.to_string()))?;
 
+        tx.execute(
+            "DELETE FROM mock_user_templates WHERE id = ?",
+            rusqlite::params![template_id],
+        )
+        .map_err(|e| storage_err("mock_user_templates", "delete", e.to_string()))?;
+
+        tx.commit()
+            .map_err(|e| storage_err("mock_template", "commit", e.to_string()))?;
         Ok(())
     }
 }

@@ -1142,6 +1142,11 @@ pub struct MockPanel {
     import_table: Option<Entity<InputState>>,
     /// 进行中的后台任务（`None` = 空闲；生成与追加共用）
     job: Option<MockJobWatch>,
+    /// 当前任务**提交时**的项目根（出口类任务的写入点也是那一刻快照的）。
+    ///
+    /// 用途：任务收尾时对比当前项目——切项目后回来的结果要能说清「写进的是上一个项目」，
+    /// 而不是让用户在新项目里找一张不存在的表。
+    job_project: Option<PathBuf>,
     /// 生成历史（最近 [`history::HISTORY_LIMIT`] 条，时间倒序）
     history: Vec<MockGenerationTask>,
     /// 用户模板（与历史同一次后台读拿回，见 `HistorySnapshot`）
@@ -1324,6 +1329,7 @@ impl MockPanel {
             import_schema: None,
             import_table: None,
             job: None,
+            job_project: None,
             history: Vec::new(),
             templates: Vec::new(),
             history_loaded: false,
@@ -2561,6 +2567,9 @@ impl MockPanel {
             self.fail(e, cx);
             return;
         }
+        // 记下提交时的项目：出口任务的写入路径也是那一刻快照的（工作线程碰不了 `Shared`），
+        // 收尾时用它判断归属（见 `finish_job`）
+        self.job_project = self.host.project_root();
         let progress = MockJobProgress {
             phase: kind.phase(),
             batches_done: 0,
@@ -2613,11 +2622,21 @@ impl MockPanel {
 
         match self.host.job_state() {
             MockJobState::Running(progress) => {
+                let mut notify = false;
                 if let Some(job) = self.job.as_mut() {
+                    // 取消要**持续压**：引擎在每次生成开始时清一次取消标志（`reset_cancel`），
+                    // 提交后头几百毫秒点的取消会被那一下清掉。这里每个轮询周期重发一次，
+                    // 直到任务真的结束——`cancel` 幂等，重发无副作用。
+                    if job.cancel_requested {
+                        self.host.cancel_job();
+                    }
                     if job.progress != progress {
                         job.progress = progress;
-                        cx.notify();
+                        notify = true;
                     }
+                }
+                if notify {
+                    cx.notify();
                 }
                 true
             }
@@ -2645,8 +2664,17 @@ impl MockPanel {
             self.results.clear();
             self.current = 0;
         }
-        // 历史在任务收尾时记（写库在后台）：出口类与取消不记，见 `RunRecord::of`
-        let record = RunRecord::of(kind, &result, &self.draft);
+        // 任务是在**哪个项目**下提交的：出口类任务的写入路径在提交那一刻快照（`JobPaths`），
+        // 切项目不会改写入点。结果回来时若项目已变，得说清楚，别让用户在新项目里找一张不存在的表
+        // （临时表名 / `landed_tables` 也都是上一个项目的）。
+        let project_changed = self.job_project != self.host.project_root();
+        // 历史在任务收尾时记（写库在后台）：出口类与取消不记，见 `RunRecord::of`。
+        // 跨项目的结果**不记**：历史属于项目，把上一个项目跑出来的东西记到当前项目头上是误导。
+        let record = if project_changed {
+            None
+        } else {
+            RunRecord::of(kind, &result, &self.draft)
+        };
         match result {
             Ok(MockJobDone::Generated(info)) => {
                 self.landed = None;
@@ -2771,6 +2799,15 @@ impl MockPanel {
         if let Some(run) = record {
             let draft = self.draft.clone();
             self.spawn_history(HistoryTask::Record { draft, run }, cx);
+        }
+        // 项目已变：给已写好的成败文案追加一句归属说明（结果本身仍展示——它就是刚跑出来的）
+        if project_changed {
+            let note = "（注意：这个任务是在上一个项目下提交的，写入的也是那个项目；当前项目没有变化）";
+            match (&mut self.outcome, &mut self.error) {
+                (Some(text), _) => text.push_str(note),
+                (None, Some(text)) => text.push_str(note),
+                (None, None) => self.outcome = Some(note.trim_start_matches('（').to_string()),
+            }
         }
     }
 

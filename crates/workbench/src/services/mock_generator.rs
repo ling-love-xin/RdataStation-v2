@@ -390,6 +390,11 @@ pub fn clear_temp_tables() -> Vec<String> {
     mock::MockEngine::clear_temp_tables().unwrap_or_default()
 }
 
+/// 非阻塞版：`None` = 内存库连接正忙（有任务在跑），留给调用方稍后重试。
+pub fn try_clear_temp_tables() -> Option<Vec<String>> {
+    mock::MockEngine::try_clear_temp_tables().ok().flatten()
+}
+
 /// 预览：Arrow 批次 → 字符串网格（视图层不依赖 Arrow）。
 ///
 /// `read_preview` 只填 `batches`（`rows` 为空），取值必须经 `QueryResult::from_batches`。

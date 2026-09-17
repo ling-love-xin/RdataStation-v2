@@ -13,39 +13,62 @@ pub struct ColumnMappingRule {
 /// 这是**唯一**的类型字符串入口，服务于两类调用方：
 /// - 源库元数据（`INFORMATION_SCHEMA` / 导航树）给出的原始类型串，含长度精度，
 ///   如 `VARCHAR(64)` / `DECIMAL(12,2)` / `TIMESTAMP`；
-/// - 内部规范名（模板与 `import_schema` 使用的小写名：`integer` / `decimal` / `datetime` …）。
+/// - 内部规范名（模板使用的全小写名：`integer` / `decimal` / `datetime` …）。
 ///
 /// 两类输入都按大写前缀/全等匹配，因此同一张表不会因为「谁调用的」而得到不同列类型。
 /// 未知类型回退 `Text`（DDL 渲染同为 `VARCHAR`，见 `ColumnDataType::to_duckdb_type`）。
 pub fn parse_data_type(data_type: &str) -> ColumnDataType {
     let up = data_type.trim().to_uppercase();
-    // 带长度/精度修饰的类型先按前缀匹配：VARCHAR(64) / DECIMAL(12,2) / NUMERIC(10,3)
-    if up.contains("VARCHAR") || up.contains("CHAR") {
+    // 先剁掉参数部分，再取首词：
+    // `VARCHAR(64)` → `VARCHAR`；`INT(11) UNSIGNED` → `INT`；`DOUBLE PRECISION` → `DOUBLE`；
+    // `TIMESTAMP WITH TIME ZONE` → `TIMESTAMP`（这样带修饰的类型不会落到末行回退）
+    let word = up
+        .split('(')
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if word.starts_with("VARCHAR") || word.starts_with("CHAR") {
         ColumnDataType::Varchar { length: None }
-    } else if up == "INTEGER" || up == "INT" || up == "TINYINT" || up == "SMALLINT" {
+    } else if word == "TINYINT"
+        || word == "SMALLINT"
+        || word == "MEDIUMINT"
+        || word == "INT"
+        || word == "INTEGER"
+        || word == "INT2"
+        || word == "INT4"
+    {
         ColumnDataType::Integer
-    } else if up == "BIGINT" {
+    } else if word == "BIGINT" || word == "INT8" {
         ColumnDataType::BigInt
-    } else if up.starts_with("DECIMAL") || up == "NUMERIC" {
+    } else if word.starts_with("DECIMAL")
+        || word.starts_with("NUMERIC")
+        || word.starts_with("NUMBER")
+    {
+        // 精度 / 标度不解析：mock 只需要一个可用的 DECIMAL 列型（写死 18,2，与旧行为一致）
         ColumnDataType::Decimal {
             precision: 18,
             scale: 2,
         }
-    } else if up == "BOOLEAN" || up == "BOOL" {
+    } else if word == "BOOLEAN" || word == "BOOL" {
         ColumnDataType::Boolean
-    } else if up == "DOUBLE" {
+    } else if word == "DOUBLE" || word == "FLOAT8" {
         ColumnDataType::Double
-    } else if up == "FLOAT" || up == "REAL" {
+    } else if word == "FLOAT" || word == "FLOAT4" || word == "REAL" {
         ColumnDataType::Float
-    } else if up == "DATE" {
+    } else if word == "DATE" {
         ColumnDataType::Date
-    } else if up == "TIMESTAMP" || up == "DATETIME" {
+    } else if word.starts_with("TIMESTAMP") || word.starts_with("DATETIME") {
         ColumnDataType::Timestamp
-    } else if up == "UUID" {
+    } else if word == "UUID" {
         ColumnDataType::Uuid
-    } else if up == "BLOB" {
+    } else if word == "BLOB" || word == "BYTEA" || word.starts_with("BINARY") {
         ColumnDataType::Blob
     } else {
+        // `TEXT` / `CLOB` / `STRING` 与真正认不出的类型一律归到 `Text`
+        // （DDL 同为 `VARCHAR`；两者在 mock 里不需要区分）
         ColumnDataType::Text
     }
 }
@@ -891,6 +914,42 @@ mod tests {
         ));
     }
 
+    /// 带修饰的类型串（各家驱动给的形状不一）必须都认出来——
+    /// 落回 `Text` 会让金额 / 时间列静默降级为文本（下游 `SUM` / 时间运算直接用不了）。
+    #[test]
+    fn test_parse_data_type_recognizes_decorated_types() {
+        for (raw, expected) in [
+            ("NUMERIC(10,3)", "decimal"),
+            ("NUMBER(10,2)", "decimal"),
+            ("DECIMAL128(38,0)", "decimal"),
+            ("DOUBLE PRECISION", "double"),
+            ("FLOAT8", "double"),
+            ("FLOAT4", "float"),
+            ("TIMESTAMP WITH TIME ZONE", "timestamp"),
+            ("TIMESTAMP WITHOUT TIME ZONE", "timestamp"),
+            ("TIMESTAMPTZ", "timestamp"),
+            ("CHARACTER VARYING(32)", "varchar"),
+            ("INT(11) UNSIGNED", "integer"),
+            ("INT8", "bigint"),
+            ("MEDIUMINT", "integer"),
+            ("BYTEA", "blob"),
+        ] {
+            let actual = match parse_data_type(raw) {
+                ColumnDataType::Decimal { .. } => "decimal",
+                ColumnDataType::Double => "double",
+                ColumnDataType::Float => "float",
+                ColumnDataType::Timestamp => "timestamp",
+                ColumnDataType::Varchar { .. } => "varchar",
+                ColumnDataType::Integer => "integer",
+                ColumnDataType::BigInt => "bigint",
+                ColumnDataType::Blob => "blob",
+                ColumnDataType::Text => "text",
+                other => panic!("{raw} 落到了意外类型：{other:?}"),
+            };
+            assert_eq!(actual, expected, "{raw}");
+        }
+    }
+
     #[test]
     fn test_parse_data_type_numeric_and_boolean() {
         assert!(matches!(parse_data_type("DOUBLE"), ColumnDataType::Double));
@@ -925,7 +984,7 @@ mod tests {
         assert!(matches!(parse_data_type(""), ColumnDataType::Text));
     }
 
-    /// 内部规范名（模板 / import_schema 使用）必须与源库类型串走同一套判定。
+    /// 内部规范名（模板使用）必须与源库类型串走同一套判定。
     #[test]
     fn test_parse_data_type_canonical_names() {
         assert!(matches!(

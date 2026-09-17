@@ -1384,6 +1384,83 @@ fn switching_tabs_in_a_real_dock_updates_the_current_table(cx: &mut TestAppConte
     drop(area);
 }
 
+/// 取消要**持续压**：引擎在生成开始会清一次取消标志（`reset_cancel`），
+/// 提交后头几百毫秒点的取消会被那一下清掉——所以轮询周期里要重发（`cancel` 幂等）。
+#[gpui_kit::test]
+fn cancel_is_reasserted_on_every_poll_while_running(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    rec.hold_job.set(true);
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+    panel.update(cx, |panel, cx| panel.cancel_job(cx));
+    assert_eq!(rec.cancels.get(), 1, "点取消立刻发一次");
+
+    // 模拟「标志被清掉、任务还在跑」：宿主写过取消结果，但任务没结束
+    // （假宿主一收到取消就写结果，与真实实现不同，所以这里把它擦掉）
+    *rec.job_result.borrow_mut() = None;
+    panel.update(cx, |panel, cx| {
+        let _ = panel.poll_job(cx);
+    });
+    assert_eq!(rec.cancels.get(), 2, "轮询到运行中的任务要补发取消");
+
+    *rec.job_result.borrow_mut() = None;
+    panel.update(cx, |panel, cx| {
+        let _ = panel.poll_job(cx);
+    });
+    assert_eq!(rec.cancels.get(), 3, "只要任务还在跑就持续补发");
+}
+
+/// 任务跨项目收尾：写的是**上一个项目**——文案要说清归属，结果也不记进当前项目的历史。
+///
+/// 为何要有这一条：出口任务的写入路径与临时表名都是**提交那一刻**快照的，切项目不会改写入点；
+/// 不说清，用户会在新项目里找一张不存在的表（旧行为就是这么误导的）。
+#[gpui_kit::test]
+fn a_job_finishing_after_a_project_switch_is_attributed_to_its_own_project(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    rec.hold_job.set(true);
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    *rec.project_root.borrow_mut() = Some(std::path::PathBuf::from("/proj/a"));
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+    });
+    panel.update(cx, |panel, cx| panel.run_generate(cx));
+
+    // 项目切到 B，任务此刻才回来
+    *rec.project_root.borrow_mut() = Some(std::path::PathBuf::from("/proj/b"));
+    let info = {
+        let draft = panel.read_with(cx, |panel, _cx| panel.draft().clone());
+        TestHost { rec: rec.clone() }.gen_info(&draft)
+    };
+    *rec.job_result.borrow_mut() = Some(Ok(MockJobDone::Generated(info)));
+    panel.update(cx, |panel, cx| {
+        let _ = panel.poll_job(cx);
+    });
+
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.error().is_none(), "{:?}", panel.error());
+        let outcome = panel.outcome().unwrap_or_default();
+        assert!(outcome.contains("已生成"), "{outcome}");
+        assert!(
+            outcome.contains("上一个项目"),
+            "要说清归属（否则用户会在新项目里找这张表）：{outcome}"
+        );
+        assert!(
+            panel.history.is_empty(),
+            "跨项目回来的结果不该记进当前项目的历史"
+        );
+        assert!(panel.history_error.is_none(), "{:?}", panel.history_error);
+    });
+}
+
 #[gpui_kit::test]
 fn import_dialog_opens_and_applies_selection(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);

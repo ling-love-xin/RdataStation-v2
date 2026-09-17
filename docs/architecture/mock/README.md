@@ -74,7 +74,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | `crates/mock/src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（`HistoryAction` / `HistorySnapshot` / `list` / `detail` / `template_detail` / `run` + 草稿⇄历史行的纯映射）；自备 tokio 运行时（`drive`），宿主只回答「项目根在哪」 |
 | `crates/mock/src/error.rs` | `MockError` / `MockResult`（含 DuckDB 错误桥接） |
 | `crates/mock/src/{commands,model,generator}.rs` | **占位**（全项目统一脚手架；命令层按 Round 14 政策退役） |
-| `crates/mock/tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（37 项） |
+| `crates/mock/tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（34 项） |
 | `crates/mock/tests/persistence_roundtrip.rs` | 持久化层**真库往返**（5 项：任务 + 列序 / 可空列 / 历史排序与截尾 / 级联删除 / 模板；走真迁移链） |
 | `crates/mock/tests/history_roundtrip.rs` | 生成历史 / 用户模板**端到端**（4 项：记录 → 列表 → 详情 → 重放；模板存 ↔ 取 ↔ 应用 ↔ 删除；失败原因与 `limit` 截尾；项目根不是目录时的可读错误） |
 | `crates/mock/tests/temp_table_cleanup.rs` | 临时表清理集成测试（2 项；独立进程：清理是进程级动作） |
@@ -103,7 +103,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（重型 crate 链接耗内存（DuckDB 已改动态链接）），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 165 单元（含 84 视图）+ 37 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
+cargo test  -p rds-mock -j 2                                   # 165 单元（含 86 视图）+ 34 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 12 项
 cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 11 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
@@ -114,7 +114,7 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 165 单元（23 纯逻辑 + 61 窗口 + 81 其他）+ 37 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
+| `cargo test -p rds-mock` | 165 单元（23 纯逻辑 + 63 窗口 + 79 其他）+ 34 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
 | `cargo test -p rds-workbench` | 全绿（含 12 装配 + 11 任务测试） |
 

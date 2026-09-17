@@ -128,7 +128,17 @@ fn clear_mock_temp_tables(shared: &Shared, cx: &mut App) {
     if live().is_some_and(|panel| panel.read(cx).is_running()) {
         crate::services::mock_jobs::cancel();
     }
-    let cleared = crate::services::mock_generator::clear_temp_tables().len();
+    // **非阻塞**清理：出口任务（落库 / 导出）不可取消且整段持有内存库连接锁，
+    // 在 UI 线程上同步等锁 = 界面假死到那个任务结束。拿不到锁就记一笔，
+    // 等它收尾那一拍再清（`mock_host::take_job_done`，那时锁已经空了）；
+    // 若那个任务迟迟不回来（或面板已被关掉），下一次切项目会再试一遍。
+    let cleared = match crate::services::mock_generator::try_clear_temp_tables() {
+        Some(cleared) => cleared.len(),
+        None => {
+            shared.pending_temp_cleanup.set(true);
+            0
+        }
+    };
     if let Some(panel) = live() {
         panel.update(cx, |panel, cx| {
             panel.forget_generated(cleared, cx);

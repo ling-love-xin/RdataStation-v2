@@ -15,10 +15,9 @@ use shared::models::QueryResult;
 use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
 use crate::error::{MockError, MockResult};
 use crate::models::{
-    ColumnDataType, ColumnDef, ColumnDependency, ColumnMappingResponse, DependencyConfig,
-    DependencyType, GeneratorConfig, ImportSchemaInput, Locale, MockConfig, MockExportFormat,
-    MockGenerateResult, MockScenarioResult, MockScenarioTableResult, ReferenceDomain,
-    ScenarioTemplate,
+    ColumnDef, ColumnDependency, ColumnMappingResponse, DependencyType, GeneratorConfig, Locale,
+    MockConfig, MockExportFormat, MockGenerateResult, MockScenarioResult, MockScenarioTableResult,
+    ReferenceDomain, ScenarioTemplate,
 };
 use crate::schema_map::{ColumnMapper, parse_data_type};
 use crate::templates;
@@ -505,6 +504,16 @@ impl MockEngine {
             .map_err(|e| MockError::Generation(e.to_string()))
     }
 
+    /// **非阻塞**版清理：拿不到内存库连接锁时返回 `Ok(None)`（调用方稍后重试）。
+    ///
+    /// 用途：切项目时宿主在 **UI 线程**上清理——而出口任务（落库 / 导出）持有连接锁且不可取消
+    /// （D23），同步等锁会把界面冻到任务结束。拿到锁就清，拿不到就留给「任务收尾」那一拍重试
+    /// （`MockHost::take_job_done`）。
+    pub fn try_clear_temp_tables() -> MockResult<Option<Vec<String>>> {
+        DuckDBManager::try_drop_in_memory_temp_tables(TempTableSource::Mock)
+            .map_err(|e| MockError::Generation(e.to_string()))
+    }
+
     /// 当前进程里还留着的 mock 临时表（只读观察：测试与面板用）。
     pub fn temp_tables() -> MockResult<Vec<String>> {
         DuckDBManager::in_memory_temp_tables(TempTableSource::Mock)
@@ -757,11 +766,8 @@ fn datetime_range_problem(min: &str, max: &str) -> Option<String> {
     let (Some(start), Some(end)) = (parse(min), parse(max)) else {
         return None;
     };
-    ((end - start).num_minutes() <= 0).then(|| {
-        format!(
-            "的时间区间不足一分钟（{min} ~ {max}）：需要 max 比 min 晚一分钟以上"
-        )
-    })
+    ((end - start).num_minutes() <= 0)
+        .then(|| format!("的时间区间不足一分钟（{min} ~ {max}）：需要 max 比 min 晚一分钟以上"))
 }
 
 /// `Date` 的区间问题：两界都能解析时，`max` 不能早于 `min`（同一天可以）。
@@ -834,10 +840,9 @@ fn value_to_sql_literal(val: &duckdb::types::Value) -> String {
             "INTERVAL '{}'",
             engine::duckdb::value_text::interval_text(*months, *days, *nanos)
         ),
-        Value::Blob(bytes) | Value::Geometry(bytes) => format!(
-            "'{}'::BLOB",
-            engine::duckdb::value_text::blob_hex(bytes)
-        ),
+        Value::Blob(bytes) | Value::Geometry(bytes) => {
+            format!("'{}'::BLOB", engine::duckdb::value_text::blob_hex(bytes))
+        }
         // mock 产不出的容器 / 联合类型：不再静默——真出现了要看得见
         other => {
             tracing::warn!(
@@ -851,74 +856,6 @@ fn value_to_sql_literal(val: &duckdb::types::Value) -> String {
 
 fn quote_sql_text(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
-}
-
-impl MockEngine {
-    /// 从真实数据库导入表结构
-    ///
-    /// 读取指定数据库连接中目标表的列信息（名称/类型/注释），
-    /// 通过 `ColumnMapper` 自动推断每列的 `GeneratorConfig`。
-    /// 返回 `Vec<ColumnDef>` 可直接用于 Mock 生成配置。
-    pub fn import_schema(input: &ImportSchemaInput) -> MockResult<Vec<ColumnDef>> {
-        use engine::persistence::metadata_cache::{
-            ConnectionType, MetadataCacheManager, MetadataCacheOps,
-        };
-
-        let cache_conn_type = if input.connection_type == "project" {
-            ConnectionType::Project
-        } else {
-            ConnectionType::Global
-        };
-
-        let cache_manager = MetadataCacheManager::new(
-            &input.conn_id,
-            cache_conn_type,
-            input.project_path.as_deref(),
-        )
-        .map_err(|e| MockError::Config(format!("Failed to open metadata cache: {}", e)))?;
-
-        let conn = cache_manager
-            .open()
-            .map_err(|e| MockError::Config(format!("Failed to open cache connection: {}", e)))?;
-        let ops = MetadataCacheOps::new(conn);
-
-        let mut all_columns: Vec<ColumnDef> = Vec::new();
-        let default_schema = input.schema.as_deref().unwrap_or("default");
-
-        for table_name in &input.tables {
-            match ops.list_columns(&input.database, default_schema, table_name) {
-                Ok(columns) => {
-                    for col in columns {
-                        let data_type = map_sql_type_to_column_data_type(&col.data_type);
-                        let inferred = ColumnMapper::infer(&col.name, &data_type);
-                        all_columns.push(ColumnDef {
-                            name: col.name,
-                            data_type,
-                            generator: inferred.generator,
-                            nullable_ratio: if col.is_nullable { 0.1 } else { 0.0 },
-                            unique: col.is_unique,
-                            dependency: None,
-                        });
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Warning: Failed to get columns for table {}: {}",
-                        table_name,
-                        e
-                    );
-                }
-            }
-        }
-
-        if all_columns.is_empty() {
-            return Err(MockError::Config(
-                "No columns found. Ensure metadata cache has been populated.".to_string(),
-            ));
-        }
-
-        Ok(all_columns)
-    }
 }
 
 impl MockEngine {
@@ -1073,178 +1010,6 @@ impl MockEngine {
             .find(|d| d.table == table && d.column == column)
     }
 
-    /// 解析列依赖关系，生成拓扑排序后的列顺序和依赖映射
-    pub fn resolve_dependencies(columns: &[ColumnDef]) -> DependencyConfig {
-        let mut dependencies: std::collections::HashMap<String, ColumnDependency> =
-            std::collections::HashMap::new();
-        let mut has_dep = false;
-
-        for col in columns {
-            if let Some(ref dep) = col.dependency {
-                dependencies.insert(col.name.clone(), dep.clone());
-                has_dep = true;
-            }
-        }
-
-        if !has_dep {
-            return DependencyConfig {
-                sorted_columns: columns.iter().map(|c| c.name.clone()).collect(),
-                dependencies: std::collections::HashMap::new(),
-            };
-        }
-
-        // 拓扑排序：Kahn 算法
-        let mut in_degree: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        let mut adj: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
-
-        // 初始化所有列
-        for col in columns {
-            in_degree.entry(col.name.clone()).or_insert(0);
-            adj.entry(col.name.clone()).or_default();
-        }
-
-        // 构建依赖图
-        for col in columns {
-            if let Some(ref dep) = col.dependency {
-                for src in &dep.source_columns {
-                    adj.entry(src.clone())
-                        .or_default()
-                        .push(col.name.clone());
-                    *in_degree.entry(col.name.clone()).or_insert(0) += 1;
-                }
-            }
-        }
-
-        // Kahn 拓扑排序
-        let mut queue: Vec<String> = in_degree
-            .iter()
-            .filter(|(_, deg)| **deg == 0)
-            .map(|(name, _)| name.clone())
-            .collect();
-
-        let mut sorted = Vec::new();
-        while let Some(node) = queue.pop() {
-            sorted.push(node.clone());
-            if let Some(neighbors) = adj.get(&node) {
-                for neighbor in neighbors {
-                    if let Some(deg) = in_degree.get_mut(neighbor) {
-                        *deg -= 1;
-                        if *deg == 0 {
-                            queue.push(neighbor.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        // 如果排序结果不完整，说明有循环依赖，回退到原始顺序
-        if sorted.len() != columns.len() {
-            sorted = columns.iter().map(|c| c.name.clone()).collect();
-        }
-
-        DependencyConfig {
-            sorted_columns: sorted,
-            dependencies,
-        }
-    }
-
-    /// 解析依赖列的值
-    ///
-    /// 根据 `ColumnDependency` 配置，从已生成的行数据中计算依赖列的值。
-    /// 支持表达式（简单运算）、模板（字符串拼接）、外键引用等类型。
-    #[allow(dead_code)]
-    fn resolve_dependent_value(
-        dep: &ColumnDependency,
-        row_values: &std::collections::HashMap<String, String>,
-        _rng: &mut fake::rand::rngs::StdRng,
-    ) -> String {
-        match dep.dep_type {
-            DependencyType::Expression => {
-                if let Some(ref expr) = dep.expression {
-                    Self::eval_expression(expr, row_values)
-                } else {
-                    String::new()
-                }
-            }
-            DependencyType::Template => {
-                if let Some(ref tmpl) = dep.expression {
-                    let mut result = tmpl.clone();
-                    for (col_name, val) in row_values {
-                        result = result.replace(&format!("{{{}}}", col_name), val);
-                    }
-                    result
-                } else {
-                    String::new()
-                }
-            }
-            DependencyType::ForeignKey => {
-                // 外键引用：从源列获取值（由 generate_cell 层处理）
-                dep.source_columns
-                    .first()
-                    .and_then(|col| row_values.get(col))
-                    .cloned()
-                    .unwrap_or_default()
-            }
-            DependencyType::Sequence => {
-                // 序列依赖：基于源列生成序列值
-                dep.source_columns
-                    .first()
-                    .and_then(|col| row_values.get(col))
-                    .map(|v| format!("seq_{}", v))
-                    .unwrap_or_default()
-            }
-            DependencyType::Weighted => {
-                // 加权依赖：简化实现，返回第一个源列的值
-                dep.source_columns
-                    .first()
-                    .and_then(|col| row_values.get(col))
-                    .cloned()
-                    .unwrap_or_default()
-            }
-        }
-    }
-
-    /// 简单表达式求值
-    ///
-    /// 支持 `+`, `-`, `*`, `/` 运算符和列名引用。
-    /// 仅处理 `col_name operator col_name` 或 `col_name operator literal` 的简单形式。
-    #[allow(dead_code)]
-    fn eval_expression(
-        expr: &str,
-        row_values: &std::collections::HashMap<String, String>,
-    ) -> String {
-        // 替换列名为实际值
-        let mut resolved = expr.to_string();
-        for (col_name, val) in row_values {
-            resolved = resolved.replace(col_name, val);
-        }
-
-        // 尝试解析并计算简单表达式
-        let parts: Vec<&str> = resolved.split_whitespace().collect();
-        if parts.len() == 3 {
-            let left = parts[0].parse::<f64>().unwrap_or(0.0);
-            let right = parts[2].parse::<f64>().unwrap_or(0.0);
-            let result = match parts[1] {
-                "+" => left + right,
-                "-" => left - right,
-                "*" => left * right,
-                "/" => {
-                    if right != 0.0 {
-                        left / right
-                    } else {
-                        0.0
-                    }
-                }
-                _ => return resolved,
-            };
-            return format!("{:.2}", result);
-        }
-
-        resolved
-    }
-
     /// 多表场景批量生成
     ///
     /// 根据场景模板（ScenarioTemplate）一次性生成所有关联表。
@@ -1307,112 +1072,12 @@ impl MockEngine {
     }
 }
 
-fn map_sql_type_to_column_data_type(sql_type: &str) -> ColumnDataType {
-    let lower = sql_type.to_lowercase();
-    if lower.contains("int") {
-        if lower.contains("big") {
-            ColumnDataType::BigInt
-        } else {
-            ColumnDataType::Integer
-        }
-    } else if lower.contains("float") || lower.contains("real") {
-        ColumnDataType::Float
-    } else if lower.contains("double") {
-        ColumnDataType::Double
-    } else if lower.contains("decimal") || lower.contains("numeric") {
-        ColumnDataType::Decimal {
-            precision: 18,
-            scale: 2,
-        }
-    } else if lower.contains("bool") {
-        ColumnDataType::Boolean
-    } else if lower.contains("date")
-        || lower.contains("timestamp")
-        || lower.contains("datetime")
-        || lower.contains("time")
-    {
-        ColumnDataType::DateTime
-    } else if lower.contains("blob") || lower.contains("binary") {
-        ColumnDataType::Blob
-    } else if lower.contains("text") || lower.contains("clob") {
-        ColumnDataType::Text
-    } else {
-        ColumnDataType::Varchar { length: None }
-    }
-}
-
-/// Infer ColumnDataType from a SQL type string (lowercase, with optional size).
-/// e.g. "int" -> Integer, "varchar(255)" -> Varchar { length: Some(255) }
-#[allow(dead_code)]
-fn infer_datatype_for_column(sql_type: &str) -> ColumnDataType {
-    let lower = sql_type.trim().to_lowercase();
-
-    if lower == "int"
-        || lower == "integer"
-        || lower == "int4"
-        || lower == "int8"
-        || lower == "bigint"
-        || lower == "smallint"
-        || lower == "tinyint"
-        || lower == "serial"
-        || lower == "bigserial"
-    {
-        ColumnDataType::Integer
-    } else if lower.starts_with("varchar") || lower.starts_with("char") {
-        let length = lower
-            .trim_start_matches(|c: char| c.is_alphabetic())
-            .trim_matches(|c: char| c == '(' || c == ')')
-            .parse::<u32>()
-            .ok()
-            .map(|v| v as usize);
-        ColumnDataType::Varchar {
-            length: length.map(|v| v as u32),
-        }
-    } else if lower.starts_with("decimal") || lower.starts_with("numeric") {
-        let inner = lower
-            .trim_start_matches(|c: char| c.is_alphabetic())
-            .trim_matches(|c: char| c == '(' || c == ')');
-        let parts: Vec<&str> = inner.split(',').collect();
-        let precision = parts
-            .first()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(10);
-        let scale = parts
-            .get(1)
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0);
-        ColumnDataType::Decimal { precision, scale }
-    } else if lower == "float"
-        || lower == "real"
-        || lower == "float4"
-        || lower == "double"
-        || lower == "float8"
-        || lower == "double precision"
-    {
-        ColumnDataType::Float
-    } else if lower == "bool" || lower == "boolean" {
-        ColumnDataType::Boolean
-    } else if lower == "date" {
-        ColumnDataType::Date
-    } else if lower.starts_with("timestamp") || lower.starts_with("datetime") {
-        ColumnDataType::DateTime
-    } else if lower == "time" {
-        ColumnDataType::Timestamp
-    } else if lower == "blob" || lower == "bytea" || lower == "binary" {
-        ColumnDataType::Blob
-    } else if lower.contains("text") || lower.contains("clob") {
-        ColumnDataType::Text
-    } else {
-        ColumnDataType::Varchar { length: None }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use engine::CoreError;
     use crate::generators::generate_cell;
-    use crate::models::GeneratorConfig;
+    use crate::models::{ColumnDataType, GeneratorConfig};
     use crate::models::Locale;
 
     #[test]
@@ -1583,24 +1248,6 @@ mod tests {
         let generator = GeneratorConfig::Boolean { ratio: 100 };
         let val = generate_cell(&generator, &mut rng, 0, &Locale::ZhCn);
         assert_eq!(val, "true");
-    }
-
-    #[test]
-    fn test_infer_datatype_for_column_int() {
-        let dt = infer_datatype_for_column("int");
-        assert!(matches!(dt, ColumnDataType::Integer));
-    }
-
-    #[test]
-    fn test_infer_datatype_for_column_varchar_size() {
-        let dt = infer_datatype_for_column("varchar(255)");
-        assert!(matches!(dt, ColumnDataType::Varchar { .. }));
-    }
-
-    #[test]
-    fn test_infer_datatype_for_column_decimal() {
-        let dt = infer_datatype_for_column("decimal(10,2)");
-        assert!(matches!(dt, ColumnDataType::Decimal { .. }));
     }
 
     /// 「不能采样」的参数必须在生成前被拦——它们原本会在工作线程里 panic，

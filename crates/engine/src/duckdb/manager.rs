@@ -238,6 +238,22 @@ impl DuckDBManager {
         Self::global_temp_table_manager().drop_by_source(&guard, source)
     }
 
+    /// [`Self::drop_in_memory_temp_tables`] 的**非阻塞**版：锁被占用时返回 `Ok(None)`。
+    ///
+    /// 用途：切项目时宿主在 UI 线程上清理，而出口任务（不可取消）可能整段持有连接锁——
+    /// 在 UI 线程上等锁就是界面假死；拿不到就先跳过，留给调用方稍后重试。
+    pub fn try_drop_in_memory_temp_tables(
+        source: TempTableSource,
+    ) -> Result<Option<Vec<String>>, CoreError> {
+        let conn = Self::get_or_create_in_memory()?;
+        let Ok(guard) = conn.try_lock() else {
+            return Ok(None);
+        };
+        Self::global_temp_table_manager()
+            .drop_by_source(&guard, source)
+            .map(Some)
+    }
+
     /// 打开或创建 DuckDB 数据库文件，初始化连接池。
     ///
     /// # 参数

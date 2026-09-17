@@ -74,13 +74,23 @@ impl MockHost for WorkbenchMockHost {
 
     fn take_job_done(&self) -> Option<Result<MockJobDone, String>> {
         let done = crate::services::mock_jobs::take_done();
-        // 写入分析库成功（新建 / 追加）→ 导航树失效：本方法在 UI 线程上被调用，
+        // 写入分析库成功（新建 / 追加 / 批量落库）→ 导航树失效：本方法在 UI 线程上被调用，
         // 而写入本身在 worker 线程上，碰不了 `Shared`
         if matches!(
             &done,
-            Some(Ok(MockJobDone::Persisted { .. } | MockJobDone::Appended { .. }))
+            Some(Ok(MockJobDone::Persisted { .. }
+                | MockJobDone::Appended { .. }
+                | MockJobDone::PersistedAll { .. }))
         ) {
             self.invalidate_analysis_nav();
+        }
+        // 收尾这一拍：任务已结束（内存库连接锁已释放），把切项目时没能做掉的临时表清掉。
+        // 为什么在这里：切项目时**不能让 UI 线程等锁**（出口任务不可取消且整段持锁，见
+        // `project_host::clear_mock_temp_tables`），而任务一结束锁就空了——正是重试的时机。
+        if done.is_some() && self.shared.pending_temp_cleanup.get() {
+            if crate::services::mock_generator::try_clear_temp_tables().is_some() {
+                self.shared.pending_temp_cleanup.set(false);
+            }
         }
         done
     }

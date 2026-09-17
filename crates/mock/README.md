@@ -106,7 +106,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | `src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（宿主只回答「项目根在哪」） |
 | `src/error.rs` | `MockError` / `MockResult`（含 DuckDB / 锁错误桥接） |
 | `src/{commands,model,generator}.rs` | 占位（全项目统一脚手架；命令层按 Round 14 退役） |
-| `tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（37 项） |
+| `tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（34 项） |
 | `tests/persistence_roundtrip.rs` | 持久化层真库往返（5 项；走真迁移链，含级联删除） |
 | `tests/history_roundtrip.rs` | 生成历史 / 用户模板端到端（4 项；记录 / 列表 / 详情 / 重放 / 模板存取用删 + 可读错误） |
 
@@ -142,7 +142,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | 草稿目录落盘（调用方给目录） | 草稿箱面板对 `mock/` 分组的展示（Phase D） |
 | 持久化为正式表（`persist_as_asset` / 装配层新建与追加） | 分析资源注册（M6） |
 | **生成历史**（最近 20 条，重放 / 删除 / 自动落库）+ **用户模板**（保存 / 应用 / 删除）都落 `{项目}/.RSmeta/project.db` | —— |
-| 公开 API 集成 37 项 + 视图测试 84 项（23 纯逻辑 + 61 窗口） + 持久化往返 5 项 + 历史/模板 4 项 + 装配 12 项 + 后台任务 11 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
+| 公开 API 集成 34 项 + 视图测试 86 项（23 纯逻辑 + 63 窗口） + 持久化往返 5 项 + 历史/模板 4 项 + 装配 12 项 + 后台任务 11 项 | 并发生成（临时表名会与同名目标表冲突，见架构 §9-I0e） |
 
 ## 设计与验证
 
@@ -152,7 +152,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
   `crates/workbench/src/services/mock_jobs.rs`（后台任务：进度 + 取消）、
   `crates/workbench/src/components/mock_host.rs`（`MockHost` 的宿主实现）、
   `crates/workbench/src/panels/right.rs`（面板构造期创建 + 句柄登记）、`crates/workbench/src/view.rs`（详情 tab 加入中央 tab 组）。
-- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`（165 单元（23 纯逻辑 + 61 窗口 + 81 其他）+ 37 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
+- 验证：`cargo check -p rds-mock --all-targets -j 2`；`cargo test -p rds-mock -j 2`（165 单元（23 纯逻辑 + 63 窗口 + 79 其他）+ 34 引擎集成 + 5 持久化往返 + 4 历史/模板 + 2 清理）；
   `cargo test -p rds-workbench --test mock_generator --test mock_jobs --test mock_job_cancel -j 2`（装配 12 + 后台任务 11 + 取消 1）。
 - **命令约定**：全量编译/测试必须限制并发（`cargo check-all` / `cargo test-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）。
 - 生成器目录改动流程：改 `models.rs` 的 `GeneratorConfig` → 跑 `python tools/gen_mock_generator_catalog.py`

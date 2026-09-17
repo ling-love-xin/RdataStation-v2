@@ -189,6 +189,9 @@ pub struct Shared {
     /// M7：中央详情 tab 实体句柄（弱引用）：**一个目标一个 tab**，键 = `DetailTarget::key()`
     /// （草稿 `draft`，结果表 `table:{表名}`）；已关闭则为死弱引用，下次打开重建。
     pub mock_details: Rc<RefCell<HashMap<String, WeakEntity<MockDetailView>>>>,
+    /// M7：切项目清理没能立刻做掉（内存库连接被不可取消的出口任务占着）时置位，
+    /// 等任务收尾那一拍重试（见 `mock_host::take_job_done`）。
+    pub pending_temp_cleanup: Rc<Cell<bool>>,
     /// M8：洞察面板实体句柄（弱引用；右键入口与 Quick Open 用）。
     ///
     /// 面板自带状态与视图（`insight::InsightView`），工作台只持句柄 + 订阅它的取数请求。
@@ -242,6 +245,7 @@ impl Shared {
             project_ui: Rc::new(RefCell::new(Default::default())),
             editor_bridge: Rc::new(RefCell::new(None)),
             mock_panel: Rc::new(RefCell::new(None)),
+            pending_temp_cleanup: Rc::new(Cell::new(false)),
             insight_panel: Rc::new(RefCell::new(None)),
             resources_panel: Rc::new(RefCell::new(None)),
             resources_bridge: Rc::new(RefCell::new(None)),
