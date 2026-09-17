@@ -23,6 +23,7 @@ use gpui_kit::{
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::connection::{ConnectionOption, ConnectionsPort};
 use crate::execution::{self, QueryData, QueryRunner};
+use crate::export::{self, ExportFormat, ExportScope};
 use crate::mode::CellGranularity;
 use crate::model::{DocumentId, EditorMode};
 use crate::service::OpenRequest;
@@ -2973,5 +2974,267 @@ fn fetching_a_segment_without_support_says_so(cx: &mut TestAppContext) {
         cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
         1,
         "取不回来不该动已抓到的行"
+    );
+}
+
+// ===== B7：导出 =====
+
+/// 假导出路径选择器：记下（格式，默认文件名），返回给定路径（`None` = 用户取消）
+type PickedExports = std::sync::Arc<std::sync::Mutex<Vec<(ExportFormat, String)>>>;
+
+fn attach_export_picker(shared: &EditorShared, path: Option<PathBuf>) -> PickedExports {
+    let seen: PickedExports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = seen.clone();
+    shared.attach_export_path_picker(std::rc::Rc::new(move |format, name| {
+        recorder.lock().expect("锁").push((format, name));
+        path.clone()
+    }));
+    seen
+}
+
+/// 导出用的临时文件路径（不写产品目录；`.cargo/config.toml` 把临时目录钉在仓库内）
+fn export_temp_path(tag: &str, extension: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "rds_export_{tag}_{}.{extension}",
+        std::process::id()
+    ))
+}
+
+/// 选中结果集导出（仅已抓取）：问一次路径、写出的内容与提示都是真值
+#[gpui_kit::test]
+fn exporting_the_fetched_rows_writes_the_chosen_file(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1");
+    let path = export_temp_path("csv", "csv");
+    let picked = attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+    });
+
+    let asked = picked.lock().expect("锁").clone();
+    assert_eq!(asked.len(), 1, "导出要问一次路径");
+    assert_eq!(asked[0].0, ExportFormat::Csv, "格式要原样给到对话框");
+    assert_eq!(
+        asked[0].1, "result_1.csv",
+        "猜不出表名时用结果序号当默认名（`select 1` 里没有 FROM）"
+    );
+    let text = std::fs::read_to_string(&path).expect("文件要真的写出来");
+    assert_eq!(text, "n,note\n1,a", "CSV 是表头 + 那一行");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("导出成功要留回执");
+    assert!(message.contains("已导出 1 行"), "{message}");
+    assert!(
+        message.contains(path.to_string_lossy().as_ref()),
+        "回执要带上落盘位置：{message}"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// 用户在对话框里取消：什么都不做（不弹提示、不落文件）——与另存为同口径
+#[gpui_kit::test]
+fn cancelling_the_export_changes_nothing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1");
+    let path = export_temp_path("cancel", "csv");
+    std::fs::remove_file(&path).ok();
+    let picked = attach_export_picker(&shared, None);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+    });
+
+    assert_eq!(picked.lock().expect("锁").len(), 1, "取消也要先问过路径");
+    assert!(!path.exists(), "取消不该落文件");
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(message.is_none(), "取消不是错误，不留提示：{message:?}");
+}
+
+/// 没有注入路径选择器：明确报“未接入”（不静默失败）
+#[gpui_kit::test]
+fn exporting_without_a_picker_says_so(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("select 1");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+    });
+
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留原因");
+    assert!(message.contains("未接入"), "{message}");
+}
+
+/// 抓全量后导出：先把剩下的段抓完，再落盘（json 里是全部 4 行）
+#[gpui_kit::test]
+fn exporting_everything_fetches_the_rest_first(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let path = export_temp_path("all", "json");
+    let picked = attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    // 首段两行且“还有下一段”——这时点「抓全量后导出」
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result_all(ExportFormat::Json, cx)
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS)],
+        "导出前要把剩下的段取回来（offset = 已抓到的行数）"
+    );
+    let picked = picked.lock().expect("锁").clone();
+    assert_eq!(
+        picked.as_slice(),
+        [(ExportFormat::Json, "t.json".to_string())],
+        "默认名从 SQL 里的表名来"
+    );
+    let text = std::fs::read_to_string(&path).expect("抓完就该落盘");
+    assert_eq!(
+        text.matches("\"n\":").count(),
+        4,
+        "导出的应当是四行（首段 2 + 取回 2）：{text}"
+    );
+    assert!(text.contains("\"4\""), "最后一段的值也在：{text}");
+    assert_eq!(
+        shared.results().set_count(&id),
+        1,
+        "抓全量不该新开结果集"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        4,
+        "抓到的东西留着（用户没白等）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("落盘回执");
+    assert!(message.contains("已导出 4 行"), "{message}");
+    std::fs::remove_file(&path).ok();
+}
+
+/// 抓全量中途取段失败：**不落半截文件**，已经抓到的行也不动
+#[gpui_kit::test]
+fn a_failed_segment_cancels_the_export(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(MoreUnsupportedRunner));
+    let id = shared
+        .open(OpenRequest::untitled("select n from t", EditorMode::Sql))
+        .id()
+        .clone();
+    let path = export_temp_path("failed", "csv");
+    std::fs::remove_file(&path).ok();
+    attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.export_active_result_all(ExportFormat::Csv, cx)
+        });
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert!(!path.exists(), "取段失败就不该落一个半截文件");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("失败要留原因");
+    assert!(message.contains("不支持分段抓取"), "{message}");
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        1,
+        "已抓到的行不动"
+    );
+}
+
+/// 菜单项随“还有没有下一段”长出来（面板投影与纯函数对得上）
+#[gpui_kit::test]
+fn the_export_menu_grows_with_a_next_segment(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .expect("有网格就有状态行");
+    assert!(status.has_more, "这条假执行器首段拿满");
+
+    // 面板投影出来的两项真值（菜单就是按它们长的）
+    let items = export::menu_items(status.has_more, "2");
+    let labels: Vec<String> = items.iter().map(|item| item.label.clone()).collect();
+    assert!(
+        labels.contains(&"已抓取 2 行".to_string()),
+        "还有下一段时要先报已抓多少：{labels:?}"
+    );
+    assert!(
+        labels.contains(&"抓全量后导出（会重跑查询）".to_string()),
+        "还有下一段才有第二组：{labels:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| item.action == Some((ExportFormat::Csv, ExportScope::All))),
+        "第二组指向“抓全量”：{labels:?}"
+    );
+    assert!(dialog_button_rendered(cx, "editor-result-export"), "有网格就摆导出");
+
+    // 抓到底之后：第二组消失（不再摆一个多余的重跑入口）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.fetch_more(cx)));
+    wait_for_all_pending(cx, &panel);
+    let status = cx
+        .update(|_window, cx| panel.read(cx).result_status_for_test())
+        .expect("还有状态行");
+    assert!(!status.has_more, "第二段没拿满 → 到底了");
+    let labels: Vec<String> = export::menu_items(status.has_more, "4")
+        .into_iter()
+        .map(|item| item.label)
+        .collect();
+    assert_eq!(labels, ["CSV", "JSON", "INSERT"], "到底了只给三项");
+}
+
+/// 写语句 / 失败没有网格：导出要回绝得可读（不能抓一个空网格去写文件）
+#[gpui_kit::test]
+fn exporting_without_a_grid_is_refused(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_toolbar_runner("insert into t values (1)");
+    let path = export_temp_path("nogrid", "csv");
+    std::fs::remove_file(&path).ok();
+    attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(
+        cx,
+        &panel,
+        "insert into t values (1)",
+        execution::ResultPlacement::Replace,
+    );
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+    });
+
+    assert!(!path.exists(), "写语句没有可导出的网格");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留原因");
+    assert!(message.contains("没有可导出的结果集"), "{message}");
+    // 范围也一并确认：导出菜单不在这份结果上出现
+    assert!(
+        !dialog_button_rendered(cx, "editor-result-export"),
+        "没有网格就不摆导出"
     );
 }

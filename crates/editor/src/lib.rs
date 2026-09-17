@@ -61,7 +61,8 @@
 //!   导航的「在 SQL 编辑器中打开 / 查看数据 / 生成 SQL / 拖拽」统一走宿主 `open_query_document`
 //!   （请求形状在宿主侧：`panels::QueryRequest`）
 //! - ⬜ 1b 待做：`completion`（B9）· 格式化 / 转译 / 执行计划（B10）· 结果区分栏可拖拽（B5）·
-//!   结果工具栏与标签的通道徽标 / 血缘摘要（B5，依赖 B13/B14/B15）· 分段抓取（B5b）
+//!   结果工具栏与标签的通道徽标 / 血缘摘要（B5，依赖 B13/B14/B15）· 导出（B7：CSV / JSON / INSERT 已做，
+//!   Parquet / XLSX 待 DuckDB 扩展）
 //!   · 绑定随会话持久化（B1 余项）· 执行位置三通道（B13）
 //!   · **项目只读模式对执行的拦截**（旧路径有，1b 删除时有遗失，需在新执行入口补回）
 //!   · 事务内的语句暂不可取消 / 无超时（驱动 `Transaction` trait 没有取消入口）
@@ -76,6 +77,7 @@ pub mod connection;
 pub mod diagnostics;
 pub mod edit;
 pub mod execution;
+pub mod export;
 pub mod limits;
 pub mod mode;
 pub mod model;

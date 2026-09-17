@@ -25,6 +25,7 @@ use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::diagnostics;
 use crate::edit;
 use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
+use crate::export::{self, ExportFormat, ExportScope};
 use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode};
 use crate::persist;
@@ -40,6 +41,16 @@ use crate::view::widgets::result_grid::{
 };
 use crate::view::widgets::result_sets::{self, ResultSetTab};
 use crate::view::widgets::status_bar::{self, StatusInputs};
+
+/// 【B7】「抓全量后导出」的在途状态
+///
+/// `set` 是发起时的结果集下标：抓取期间用户切了结果集就作废（取段是 `Append` 落位，
+/// 会接到**当前选中**那份上，接着写盘就会把两份结果拼在一起）。
+struct PendingExport {
+    format: ExportFormat,
+    path: std::path::PathBuf,
+    set: usize,
+}
 
 /// 一份文档的编辑面板
 pub struct EditorHostPanel {
@@ -107,6 +118,12 @@ pub struct EditorHostPanel {
     ///
     /// 只活在这个面板里（尚未随会话持久化——原型同。）
     result_height: std::rc::Rc<std::cell::Cell<f32>>,
+    /// 【B7】「抓全量后导出」的在途状态（`None` = 没有导出在跑）
+    ///
+    /// 抓全量是**多轮取段**：每段回来推进一次，最后一段（没拿满）才落盘。中途换结果集、
+    /// 取段失败、用户中断都作废——**不落一个半截的文件**（宁可没有，也不要一份看起来
+    /// 完整、实则少一半的导出）。
+    pending_export: Option<PendingExport>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
@@ -220,6 +237,7 @@ impl EditorHostPanel {
             error_site_key: None,
             window: window.window_handle(),
             result_height: std::rc::Rc::new(std::cell::Cell::new(ui::RESULT_PANE_HEIGHT)),
+            pending_export: None,
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
@@ -916,15 +934,18 @@ impl EditorHostPanel {
     /// `placement` 决定结果落到当前结果集还是新结果集（B2 的「在新结果标签中执行」/「批量执行」）；
     /// 自动提交关闭时（B4）本次执行先开一个事务。
     /// 拒绝都要留痕迹：文本模式（能力表禁止通信）、未接入执行、忙、空目标。
+    ///
+    /// 返回**是否真的提交了**：导出那条路要先记在途状态、再提交取段，
+    /// 提交没成（忙 / 未接入）就得把在途状态撒回去（否则状态会残留到下一次）。
     pub(crate) fn execute(
         &mut self,
         target: ExecTarget,
         placement: ResultPlacement,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if !self.execution_allowed() {
             self.set_message(Some("文本模式不与数据库通信".to_string()), cx);
-            return;
+            return false;
         }
         // 预期回填条数 = 本次要跑的语句数（批量 > 1）：跑完这几条才算“不执行中”
         let expected = target.statements().len();
@@ -944,8 +965,12 @@ impl EditorHostPanel {
                 self.pending += expected;
                 self.set_message(None, cx);
                 self.ensure_exec_pump(cx);
+                true
             }
-            Err(error) => self.set_message(Some(error.message().to_string()), cx),
+            Err(error) => {
+                self.set_message(Some(error.message().to_string()), cx);
+                false
+            }
         }
     }
 
@@ -1217,9 +1242,12 @@ impl EditorHostPanel {
             }
             self.sync_result_view(cx);
             // 【B5b】取段失败的原因在这里说（同步结果区会按“选中那份”重写提示）
+            let segment_reason = segment_failure.is_some();
             if let Some(reason) = segment_failure {
                 self.set_message(Some(reason), cx);
             }
+            // 【B7】导出在跑就推进它（还要抓就再提交一段；抓完了/崩了就落盘或作废）
+            self.advance_pending_export(segment_reason, cx);
             // 【B6】失败且能定位：把光标送到出错处并聚焦（拿不到位置就只留原因）
             if let Some(sql) = fresh_failure
                 && self.result_sql.as_deref() == Some(sql.as_str())
@@ -1463,6 +1491,156 @@ impl EditorHostPanel {
             .update_results(|store| store.select(&self.document, index));
         if changed {
             self.sync_result_view(cx);
+        }
+    }
+
+    /// 【B7】导出选中结果集（**仅已抓取的行**，不发新查询）
+    pub(crate) fn export_active_result(
+        &mut self,
+        format: ExportFormat,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_export(format, ExportScope::Fetched, cx);
+    }
+
+    /// 【B7】抓全量后导出（多轮取段；中途失败 / 换结果集就作废，不落半截文件）
+    pub(crate) fn export_active_result_all(
+        &mut self,
+        format: ExportFormat,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_export(format, ExportScope::All, cx);
+    }
+
+    /// 导出的共同开头：选路径（用户取消 = 什么都不做）→ 直接落盘 / 先抓全量
+    fn start_export(&mut self, format: ExportFormat, scope: ExportScope, cx: &mut Context<Self>) {
+        if !self.shared.has_export_path_picker() {
+            self.set_message(Some("导出未接入（宿主未注入路径选择器）".to_string()), cx);
+            return;
+        }
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(Some("没有可导出的结果集".to_string()), cx);
+            return;
+        };
+        // 抓到一半再发现“执行器忙”更糟（路径都选完了），先问清楚（通道的忙是全局的：别的文档也在跑）
+        if self.shared.is_executing() {
+            self.set_message(Some("执行中，稍候再导出".to_string()), cx);
+            return;
+        }
+        // 结果集序号（1 基）当默认名的兜底：SQL 里能猜出表名就用表名
+        let index = self.result_active + 1;
+        let default_name = export::default_file_name(Some(&entry.sql), index, format);
+        let Some(path) = self.shared.pick_export_path(format, default_name) else {
+            // 用户取消：不是错误，不弹提示（与另存为同口径）
+            return;
+        };
+        // 「抓全量」只在**真还有下一段**时才需要取段；已经抓完了就是普通导出
+        if scope == ExportScope::Fetched || !entry.can_fetch_more() {
+            self.write_export(&entry, format, index, &path, cx);
+            return;
+        }
+        self.pending_export = Some(PendingExport {
+            format,
+            path,
+            set: self.result_active,
+        });
+        // 不另外摆一条“正在抓取”提示：状态栏已经在报「执行中 3.4s…」，
+        // 而且 `execute` 成功时会清掉提示（设了也会被清）
+        let submitted = self.execute(
+            ExecTarget::Segment {
+                sql: entry.sql.clone(),
+                offset: entry.row_count(),
+                limit: execution::SEGMENT_ROWS,
+            },
+            ResultPlacement::Append,
+            cx,
+        );
+        if !submitted {
+            // 没提交成功（通道拒了）：在途状态得撒回去，否则会残留到下一次取段
+            self.pending_export = None;
+        }
+    }
+
+    /// 编码并落盘（事件路径上同步写：与另存为同一口径）
+    fn write_export(
+        &mut self,
+        entry: &ResultEntry,
+        format: ExportFormat,
+        index: usize,
+        path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) {
+        let table = export::default_table_name(Some(&entry.sql), index);
+        let text = export::encode(entry, format, &table);
+        // INSERT 对空结果给空串（没有行就没有语句）；CSV / JSON 空结果仍有表头 / `[]`
+        if text.is_empty() {
+            self.set_message(Some("这份结果没有可导出的行".to_string()), cx);
+            return;
+        }
+        match std::fs::write(path, text) {
+            Ok(()) => self.set_message(
+                Some(format!(
+                    "已导出 {} 行（{}）→ {}",
+                    entry.row_count(),
+                    format.label(),
+                    path.display()
+                )),
+                cx,
+            ),
+            Err(error) => self.set_message(Some(format!("导出失败：{error}")), cx),
+        }
+    }
+
+    /// 【B7】推进「抓全量后导出」：每段回填后决定“再抓一段”还是“落盘”
+    ///
+    /// `last_segment_failed` 来自回填循环（取段失败时那句失败**不入存储**，得在这里了断）：
+    /// 失败 / 结果集被切换都作废，**不落半截文件**。
+    fn advance_pending_export(&mut self, last_segment_failed: bool, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_export.as_ref() else {
+            return;
+        };
+        if last_segment_failed {
+            self.pending_export = None;
+            return;
+        }
+        let set = pending.set;
+        if self.result_active != set {
+            self.pending_export = None;
+            self.set_message(Some("导出取消：结果集已切换".to_string()), cx);
+            return;
+        }
+        let Some(entry) = self.shared.results_active(&self.document) else {
+            self.pending_export = None;
+            return;
+        };
+        if !entry.can_fetch_more() {
+            let Some(pending) = self.pending_export.take() else {
+                return;
+            };
+            self.write_export(&entry, pending.format, set + 1, &pending.path, cx);
+            return;
+        }
+        // 还有下一段：接着抓（每次一段，等它回来再推进）
+        let Some(sql) = self.result_sql.clone() else {
+            self.pending_export = None;
+            return;
+        };
+        let offset = entry.row_count();
+        let submitted = self.execute(
+            ExecTarget::Segment {
+                sql,
+                offset,
+                limit: execution::SEGMENT_ROWS,
+            },
+            ResultPlacement::Append,
+            cx,
+        );
+        if !submitted {
+            self.pending_export = None;
         }
     }
 
@@ -2097,6 +2275,58 @@ impl Render for EditorHostPanel {
                         .into_any_element()
                 });
 
+            // 【B7】导出：格式 × 范围（原型 §2.4 的 `⤓ 导出 ▾`）。没网格就不摆（没东西可导）。
+            // 菜单项由 `export::menu_items` 给（纯函数，可逐项断言）——这里只负责画。
+            let export = self.result_can_copy.then(|| {
+                let entity = cx.entity();
+                let rows_text = self
+                    .result_status
+                    .as_ref()
+                    .map(|status| result_grid::thousands(status.total_rows))
+                    .unwrap_or_else(|| "0".to_string());
+                let has_more = self
+                    .result_status
+                    .as_ref()
+                    .is_some_and(|status| status.has_more);
+                DropdownButton::new("editor-result-export")
+                    .small()
+                    .button(
+                        Button::new("editor-result-export-btn")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-result-export".to_string())
+                            .label("⤓ 导出"),
+                    )
+                    .dropdown_menu(move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        for item in export::menu_items(has_more, &rows_text) {
+                            if item.separator_before {
+                                menu = menu.separator();
+                            }
+                            let Some((format, scope)) = item.action else {
+                                // 分组标题（“已抓取 N 行” / “抓全量后导出”）
+                                menu = menu.item(PopupMenuItem::label(item.label));
+                                continue;
+                            };
+                            let entity = entity.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(item.label).on_click(move |_, _window, app| {
+                                    entity.update(app, |panel, cx| match scope {
+                                        ExportScope::Fetched => {
+                                            panel.export_active_result(format, cx)
+                                        }
+                                        ExportScope::All => {
+                                            panel.export_active_result_all(format, cx)
+                                        }
+                                    });
+                                }),
+                            );
+                        }
+                        menu
+                    })
+                    .into_any_element()
+            });
+
             // 错误卡片（B6，原型 §2.4）：失败时替掉网格；两个按钮都是真的能按的
             let card = self.result_error_card.clone().map(|card| {
                 let locate = card.location.as_ref().map(|location| {
@@ -2144,6 +2374,7 @@ impl Render for EditorHostPanel {
                     status: self.result_status.clone(),
                     controls: result_grid::ResultControls {
                         copy,
+                        export,
                         refresh,
                         more,
                     },

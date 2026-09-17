@@ -30,11 +30,16 @@ const FILTERS: &[(&str, &[&str])] = &[
     ("文本与数据", &["txt", "md", "json", "csv", "log"]),
 ];
 
-/// 注入另存为的路径选择器（**宿主调用一次**；未注入时“另存为”会明确报“未接入”）
+/// 注入另存为与导出的路径选择器（**宿主调用一次**；未注入时两者都会明确报“未接入”）
 pub fn attach(shared: &EditorShared) {
     shared.attach_save_path_picker(std::rc::Rc::new(
         |current: Option<PathBuf>, default_name: String| {
             pick_save_path(current.as_deref(), &default_name)
+        },
+    ));
+    shared.attach_export_path_picker(std::rc::Rc::new(
+        |format: editor::export::ExportFormat, default_name: String| {
+            pick_export_path(format, &default_name)
         },
     ));
 }
@@ -70,5 +75,19 @@ fn pick_save_path(current: Option<&Path>, default_name: &str) -> Option<PathBuf>
     for (name, extensions) in FILTERS {
         dialog = dialog.add_filter(*name, extensions);
     }
+    dialog.save_file()
+}
+
+/// 弹「导出结果」；用户取消返回 `None`
+///
+/// 默认名由编辑器给（`orders.csv` / `result_1.json`……）：它才知道结果集来自哪张表。
+/// 过滤按格式来（导出只该看见自己那一种）——这与另存为不同：那里是开文档，认多种扩展。
+fn pick_export_path(format: editor::export::ExportFormat, default_name: &str) -> Option<PathBuf> {
+    let mut dialog = rfd::FileDialog::new()
+        .set_title(format!("导出结果（{}）", format.label()))
+        .set_file_name(default_name)
+        .add_filter(format.detail(), &[format.extension()]);
+    // 已经另存过的文档？不推目录：导出跟文档位置无关，默认目录交给系统记住上次用的
+    dialog = dialog.add_filter("所有文件", &["*"]);
     dialog.save_file()
 }

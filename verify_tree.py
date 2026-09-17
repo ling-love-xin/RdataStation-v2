@@ -10,7 +10,12 @@ analytics_resource 正在搬东西，时有编不过的中间态），直接 `ca
 那套配置是动态链接 DuckDB，编译只要几十秒（HEAD 的 bundled 要编 C++ 内核十几分钟），
 而它与本次改动的代码无关。
 
-用法：`python verify_tree.py`（跑完在副本里 `cargo check/test`，用完 `rm -rf target/verify-tree`）
+**不要给副本指定 `CARGO_TARGET_DIR=<主 target>`**：同包名同 target 名在不同路径下会算出同一个
+fingerprint 目录，两边互相顶掉产物与 dep-info——实测跑出过 235 项旧测试（新测试一个没进），
+用完还得删本才能恢复。副本用**自己的 target**（副本目录里的 `target/`），代价是首轮要全量编。
+
+用法：`python verify_tree.py` → `cd target/verify-tree && cargo check/test …`（**不设** `CARGO_TARGET_DIR`）
+→ 用完 `rm -rf target/verify-tree`
 """
 
 import os
@@ -41,6 +46,7 @@ MINE = [
     # 编辑器：结果区（B5）与错误回填（B6）
     "crates/editor/src/diagnostics.rs",
     "crates/editor/src/execution.rs",
+    "crates/editor/src/export.rs",
     "crates/editor/src/lib.rs",
     "crates/editor/src/shared.rs",
     "crates/editor/src/store.rs",
@@ -52,6 +58,7 @@ MINE = [
     "crates/editor/src/view/widgets/status_bar.rs",
     # 宿主侧与真机探针
     "crates/workbench/src/services/editor_exec.rs",
+    "crates/workbench/src/services/editor_files.rs",
     "crates/workbench/tests/editor_exec_real.rs",
     "crates/workbench/tests/ui_contract.rs",
     # 文档
@@ -97,12 +104,17 @@ def main():
         shutil.copy2(name, os.path.join(VERIFY, name))
         print(f"覆盖构建配置 {name}")
 
-    # 断言副本里我的改动在（拿一个已知点对一下）
+    # 断言副本里我的改动在（拿几个已知点对一下）
     with open(os.path.join(VERIFY, "crates/workbench/src/services/editor_exec.rs"), encoding="utf-8") as handle:
         assert "fn cancel(&self" in handle.read(), "副本里缺我的中断实现"
     with open(os.path.join(VERIFY, "crates/editor/src/diagnostics.rs"), encoding="utf-8") as handle:
         assert "fn site_in_document" in handle.read(), "副本里缺我的错误定位实现"
+    with open(os.path.join(VERIFY, "crates/editor/src/export.rs"), encoding="utf-8") as handle:
+        assert "pub fn menu_items" in handle.read(), "副本里缺导出实现（MINE 没同步？）"
+    with open(os.path.join(VERIFY, "crates/engine/src/services/sql_service.rs"), encoding="utf-8") as handle:
+        assert "fn unwrap_segment_error" in handle.read(), "副本里缺包装错误的还原实现"
     print("自检通过：副本 = HEAD + 本次改动")
+    print(f"下一步：cd {os.path.relpath(VERIFY)} && cargo check -p rds-workbench — **不要**设 CARGO_TARGET_DIR")
 
 
 if __name__ == "__main__":

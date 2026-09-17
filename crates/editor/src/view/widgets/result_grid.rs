@@ -253,6 +253,8 @@ pub fn status_segments(status: &ResultStatus) -> (String, String) {
 pub struct ResultControls {
     /// 复制当前结果集（TSV）
     pub copy: Option<AnyElement>,
+    /// 【B7】导出当前结果集（下拉：格式 × 仅已抓取 / 抓全量）
+    pub export: Option<AnyElement>,
     /// 重跑当前结果集的 SQL（结果集换一份新的，不是新开一份）
     pub refresh: Option<AnyElement>,
     /// 【B5b】取下一段（只在这份结果还有下一段时给）
@@ -380,6 +382,8 @@ pub fn render(
                         .h_flex()
                         .items_center()
                         .gap_1()
+                        // 顺序照原型 §2.4 的右段：… 分析 ▾ · 导出 ▾ · ⟳ · 复制
+                        .children(controls.export)
                         .children(controls.refresh)
                         .children(controls.copy),
                 ),

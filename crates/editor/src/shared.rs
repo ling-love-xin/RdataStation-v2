@@ -28,6 +28,12 @@ use crate::store::ResultStore;
 pub type SavePathPicker =
     Rc<dyn Fn(Option<PathBuf>, String) -> Option<PathBuf>>;
 
+/// 导出落盘的路径选择端口（由宿主注入：编辑器不依赖 `rfd`）
+///
+/// 入参 = （格式，默认文件名）；返回 = 用户选的路径（`None` = 用户取消，**不是错误**）。
+/// 与另存为分开：导出的过滤条件与默认名规则不同（格式决定扩展名），且导出**不改文档身份**。
+pub type ExportPathPicker = Rc<dyn Fn(crate::export::ExportFormat, String) -> Option<PathBuf>>;
+
 /// 一次执行完成后的**回执**（给宿主看，不给编辑区看）。
 ///
 /// 编辑器的结果归编辑区（`drain_exec`），回执只回答“哪份文档、用了哪个连接、成没成”——
@@ -56,6 +62,8 @@ pub struct EditorShared {
     sessions: Rc<RefCell<Option<Rc<dyn SessionStore>>>>,
     /// 另存为路径选择器：宿主注入后才有（无宿主 = 另存为明确报“未接入”，不静默失败）
     save_path: Rc<RefCell<Option<SavePathPicker>>>,
+    /// 导出落盘路径选择器：宿主注入后才有（无宿主 = 导出明确报“未接入”）
+    export_path: Rc<RefCell<Option<ExportPathPicker>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
     connections: Rc<RefCell<Option<ConnectionsHandle>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
@@ -76,6 +84,7 @@ impl EditorShared {
             exec: Rc::new(RefCell::new(None)),
             sessions: Rc::new(RefCell::new(None)),
             save_path: Rc::new(RefCell::new(None)),
+            export_path: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
@@ -272,6 +281,26 @@ impl EditorShared {
     pub fn pick_save_path(&self, current: Option<PathBuf>, default_name: String) -> Option<PathBuf> {
         let guard = self.save_path.borrow();
         guard.as_ref().and_then(|picker| picker(current, default_name))
+    }
+
+    /// 注入导出路径选择器（**宿主调用一次**：workbench 接 `rfd`）
+    pub fn attach_export_path_picker(&self, picker: ExportPathPicker) {
+        *self.export_path.borrow_mut() = Some(picker);
+    }
+
+    /// 是否接了导出路径选择器（未接时导出要明确报原因）
+    pub fn has_export_path_picker(&self) -> bool {
+        self.export_path.borrow().is_some()
+    }
+
+    /// 弹一次导出路径选择（未注入时返回 `None`，调用方必须先看 [`Self::has_export_path_picker`]）
+    pub fn pick_export_path(
+        &self,
+        format: crate::export::ExportFormat,
+        default_name: String,
+    ) -> Option<PathBuf> {
+        let guard = self.export_path.borrow();
+        guard.as_ref().and_then(|picker| picker(format, default_name))
     }
 
     /// 注入连接端口（**宿主调用一次**：workbench 接 M3/M4 的连接列表与自动建连）
