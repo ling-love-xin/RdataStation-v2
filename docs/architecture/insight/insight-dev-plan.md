@@ -828,8 +828,9 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | --- | --- | --- |
 | 4.1 | `get_schema_insight` 门面（补上唯一缺失的命令等价物） | `insight/src/service/mod.rs` | ✅ Phase 4 一批 |
 | 4.2 | 报告视图：健康评分条 + 四个折叠区（外键候选 / 类型不一致 / 孤立表 / 冗余列），置信度与严重度分级取色 | `insight/src/schema_view.rs`（新文件） | ✅ Phase 4 一批 |
-| 4.3 | 导出 JSON / Markdown | 同上 | 🟡 函数与测试完成；界面按钮待宿主提供选路径 |
-| 4.4 | 下钻联动：类型不一致的受影响表 → 表探查 | 同上 | 🟡 事件已发；宿主的「源表 → 临时表」登记待接 |
+| 4.3 | 导出 JSON / Markdown | 同上 | ✅ 一批（函数）+ **收尾（D60）**：面板侧编码 + 宿主选路径写文件 + 状态栏回执 |
+| 4.4 | 下钻联动：类型不一致的受影响表 → 表探查 | 同上 | ✅ 一批（事件）+ **收尾（D60）**：宿主走源取样（不建临时表） |
+| 4.5 | **入口**：导航树「结构洞察」→ `InsightTarget::Schema` | `database/src/nav_view.rs` + `workbench/src/components/nav_host.rs` | ⬜ **未接**（宿主侧无一处构造 `InsightTarget::Schema`，界面打不开「结构」Tab） |
 
 ### Phase 5 — 快照历史与版本对比
 
@@ -838,7 +839,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | 5.1 | 保存快照入口（含 `entity_source`：conn / db / schema / table） | `insight/src/insight_view.rs` | ✅ 一批（`entity_source` 现写 `temp_table=…`：面板手里只有临时表，就如实写） |
 | 5.2 | 历史列表（`created_at` + 类型 + 版本链）+ 版本详情 | 同上 | ✅ 二批（另加短版本号与分页提示） |
 | 5.3 | 版本对比面板：差异字段与 `old → new (+Δ)` 摘要；颜色分增 / 减 / 不变**三态**（v1 定义了 `.val-same` 却从未使用，此处修正） | 同上 | ✅ 二批（另加「变了但算不出数值」一档，方向用箭头而不用颜色暗示好坏） |
-| 5.4 | 存储用量（后端真实统计，**不用 v1 的 `history.length * 2` 前端估算**）+ 清理（默认 30 天，需确认） | 同上 | ✅ 用量（一批）· ✅ 清理（三批：确认框 + 回执 + 成对删；**天数取值仍待 Q4 拍板**） |
+| 5.4 | 存储用量（后端真实统计，**不用 v1 的 `history.length * 2` 前端估算**）+ 清理（默认 30 天，需确认） | 同上 | ✅ 用量（一批）· ✅ 清理（三批：确认框 + 回执 + 成对删；**天数固定 30 天，D56**） |
 
 ### Phase 6（候选，不在本期）
 

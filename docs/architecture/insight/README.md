@@ -68,8 +68,8 @@
 | 质量评分（四维 + 等级） | `crates/insight/src/quality_scorer.rs`（现状：✅ 已迁移） |
 | 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
 | 异常值检测 | `crates/insight/src/insight_engine.rs`（`detect_extremes`；现状：✅ 已归位，自 `engine/services/duckdb_service.rs`） |
-| 表探查 | `crates/insight/src/table_profile_service.rs`（源库内省）、`insight_engine.rs`（临时表内省 `get_temp_table_profile`）（现状：✅ Phase 3 一批） |
-| 结构洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（分析器）+ `schema_view.rs`（视图模型与导出）（现状：✅ Phase 4 一批；导出与下钻的宿主侧待接） |
+| 表探查 | `crates/insight/src/table_profile_service.rs`（源库内省，**现状：零调用**——面板只探查 DuckDB 临时表，源库表走取样；这条路径也未在真机跑通）、`insight_engine.rs`（临时表内省 `get_temp_table_profile`，面板走这条）（现状：✅ Phase 3 一批） |
+| 结构洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（分析器）+ `schema_view.rs`（视图模型与导出）（现状：✅ Phase 4 一批；导出与下钻已接（D60）；⬜ **入口未接**——导航树没有「结构洞察」菜单项，宿主侧无一处构造 `InsightTarget::Schema`） |
 | 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：✅ 已归位） |
 | 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位；**同一进程对同一项目库不得重叠 open**，见架构 D41；按天数清理已可用） |
 | 服务门面（画像 / 评分 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
@@ -78,7 +78,7 @@
 | 入口接线（三个右键「查看统计」） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`） |
 | 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（现状：✅ 五 Tab 全部落地——列画像 + 质量卡 · 表探查 + 评估全表 · 多列分析 · Schema 报告 · 快照历史与版本对比；不显示假数据） |
 | 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 二批） |
-| Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：✅ Phase 4 一批；导出函数已就绪，导出的宿主按钮待接） |
+| Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：✅ Phase 4 一批 + **导出落地**（D60）：面板「导出 ▾」→ JSON / Markdown → 宿主选路径写文件） |
 | 视图模型 | `crates/insight/src/model.rs`（现状：✅ 已落地 `PanelTab` / `InsightTarget` / `InsightPanelState` / `PanelData` / `ColumnProfileView` / `TableProfileView` / `MultiColumnView` / `HistoryView`；阈值与文案是纯函数） |
 | M8 尺寸常量 | `crates/insight/src/ui.rs`（现状：✅ M8 专用值在本文件；面板头 / 行高 / 内距等与外壳必须一致的值**重导出** `workbench_shell::ui`，不镜像） |
 | Action 与快捷键 | `crates/insight/src/commands.rs`（现状：✅ 动作已定义，键位待入口批次）+ `crates/app/src/main.rs` |
