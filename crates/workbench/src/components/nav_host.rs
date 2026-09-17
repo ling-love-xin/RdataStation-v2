@@ -249,4 +249,46 @@ impl NavHost for WorkbenchNavHost {
         });
         self.shared.open_mock_panel(source, cx);
     }
+
+    fn open_insight_table(&self, source: TableRef, cx: &mut App) {
+        // 采集 SQL 在宿主拼：只有这里同时知道「连接是什么驱动」与「洞察要什么形状」（D58）。
+        // 名字按驱动加引号（MySQL 系反引号，其余双引号）——表名带点 / 空格 / 保留字时，
+        // 不加引号在各方言下都解析不过。
+        let driver = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .find(|conn| conn.id == source.conn_id)
+            .map(|conn| conn.driver.clone())
+            .unwrap_or_default();
+        let quote = if driver.contains("mysql") || driver.contains("maria") {
+            '`'
+        } else {
+            '"'
+        };
+        let parts = [
+            source.catalog.as_str(),
+            source.schema.as_str(),
+            source.table.as_str(),
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .map(|part| engine::driver::utils::quote_identifier(part, quote))
+        .collect::<Vec<_>>();
+        let qualified = parts.join(".");
+
+        let label = if source.schema.is_empty() {
+            format!("{}.{}", source.catalog, source.table)
+        } else {
+            format!("{}.{}.{}", source.catalog, source.schema, source.table)
+        };
+        let sample = insight::SampleSource::new(
+            source.conn_id.clone(),
+            format!("SELECT * FROM {qualified}"),
+            label,
+        );
+        self.shared
+            .open_insight_source_table(sample, source.table, cx);
+    }
 }

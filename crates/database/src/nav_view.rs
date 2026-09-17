@@ -3690,6 +3690,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                         schema,
                         table,
                     });
+                    // 洞察那份先克隆出来：Mock 的闭包会把 `request` move 进去
+                    let request_for_insight = request.clone();
                     menu = menu.item(PopupMenuItem::new("生成 Mock 数据").on_click(
                         move |_, _, app| {
                             let request = request.clone();
@@ -3698,6 +3700,17 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             });
                         },
                     ));
+                    // 【M8】看这张源表的统计：取样（LIMIT 500 → 分析临时表）由洞察侧完成，
+                    // 这里只给「哪条连接 + 哪张表」（D58 的统一入口）。
+                    if let Some(source) = request_for_insight {
+                        let e = entity.clone();
+                        menu = menu.item(PopupMenuItem::new("查看统计").on_click(
+                            move |_, _, app| {
+                                let source = source.clone();
+                                e.update(app, |this, cx| this.host.open_insight_table(source, cx));
+                            },
+                        ));
+                    }
                 }
                 menu = menu.item({
                     let e = entity.clone();

@@ -82,8 +82,8 @@ pub use insight_view::{InsightEvent, InsightView};
 pub use model::{
     ColumnKind, ColumnProfileView, DimensionView, DistributionBar, Emphasis, InsightPanelState,
     InsightTarget, KeyValueRow, MultiColumnView, MultiResultView, MultiRuleView, NoteLevel,
-    PanelData, PanelTab, QualityNote, SampleCell, ScoreView, StatRow, TableColumnView,
-    TableEvalProgress, TableProfileView, TableQualityView,
+    PanelData, PanelTab, QualityNote, SampleCell, SampleSource, ScoreView, StatRow,
+    TableColumnView, TableEvalProgress, TableProfileView, TableQualityView,
 };
 pub use service::rule_params;
 pub use quality_scorer::Grade;

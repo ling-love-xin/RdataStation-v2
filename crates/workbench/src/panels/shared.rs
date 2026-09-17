@@ -453,6 +453,58 @@ impl Shared {
         }
     }
 
+    /// M8：打开洞察面板并**指向一张源表**（导航树右键「查看统计」的宿主侧入口）。
+    ///
+    /// 与 [`Self::open_insight_column`] 的区别：那个指向**已经存在**的临时表，
+    /// 这个给出「取样来源」——取样（`LIMIT 500` → `tmp_i_` 临时表）由 insight 侧完成（D58），
+    /// 所以导航树 / 分析存档 / 草稿箱都能用同一个入口。
+    ///
+    /// `source.sql` 由调用方构造：只有它知道该连接方言下的限定名写法。
+    pub fn open_insight_source_table(
+        &self,
+        source: insight::SampleSource,
+        table_name: impl Into<String>,
+        cx: &mut App,
+    ) {
+        self.open_right_panel(RightPanel::Insight, cx);
+        let panel = self.insight_panel.borrow().clone();
+        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::SourceTable {
+                        source,
+                        table_name: table_name.into(),
+                    },
+                    cx,
+                );
+            });
+        }
+    }
+
+    /// M8：打开洞察面板并**指向源数据里的一列**（结果集列头右键「洞察此列」等入口）。
+    pub fn open_insight_source_column(
+        &self,
+        source: insight::SampleSource,
+        column: impl Into<String>,
+        data_type: impl Into<String>,
+        cx: &mut App,
+    ) {
+        self.open_right_panel(RightPanel::Insight, cx);
+        let panel = self.insight_panel.borrow().clone();
+        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::SourceColumn {
+                        source,
+                        column: column.into(),
+                        data_type: data_type.into(),
+                    },
+                    cx,
+                );
+            });
+        }
+    }
+
     /// 打开 Mock 面板；`source` 给定时按**源库表**定向（导航右键「生成 Mock 数据」）。
     ///
     /// 定向动作（读源库结构 + 预填目标表名）在事件路径执行：面板实体随右栏面板
