@@ -14,6 +14,8 @@
 //! 数据源是 [`crate::store::ResultStore`]（结果唯一权威）。网格**不持有真值**——
 //! delegate 里的行是从权威那里拷来的投影，`set_data` 是唯一的写入点。
 
+use std::rc::Rc;
+
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
@@ -23,6 +25,13 @@ use gpui_kit::*;
 use crate::ui;
 use crate::view::widgets::status_bar;
 
+/// 滚动到底要更多数据时的回调（面板注入：它才知道当前选中哪份结果、忙不忙）
+///
+/// 组件库在**可见范围接近末尾**时调 delegate 的 [`TableDelegate::load_more`]，
+/// 而 delegate 在 `TableState` 里拿不到面板实体，所以走这个钩子（与执行通道同一个口径：
+/// 视图不自己发执行，只把意图交回给知道全局的那一层）。
+pub type LoadMoreHook = Rc<dyn Fn(&mut App)>;
+
 /// 网格数据（表头 + 行）
 #[derive(Default)]
 pub struct ResultGridDelegate {
@@ -30,15 +39,20 @@ pub struct ResultGridDelegate {
     rows: Vec<Vec<String>>,
     /// 空态文案（没有结果 / 执行失败都在这里说清楚）
     empty_text: String,
+    /// 这份结果**还能不能取下一段**（面板从权威结果同步过来；`load_more` 据此决定要不要真的取）
+    has_more: bool,
+    /// 正在取下一段（防止“滚动到底”在回填之前反复触发）
+    loading_more: bool,
+    /// 取下一段的回调（面板构造时注入）
+    on_load_more: Option<LoadMoreHook>,
 }
 
 impl ResultGridDelegate {
     /// 空网格：只带一句空态说明
     pub fn empty(text: impl Into<String>) -> Self {
         Self {
-            columns: Vec::new(),
-            rows: Vec::new(),
             empty_text: text.into(),
+            ..Default::default()
         }
     }
 
@@ -54,6 +68,29 @@ impl ResultGridDelegate {
         self.columns.clear();
         self.rows.clear();
         self.empty_text = text.into();
+        // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果
+        self.has_more = false;
+        self.loading_more = false;
+    }
+
+    /// 这份结果还能不能取下一段（面板在结果变化时同步；`true` 才启用滚动到底加载）
+    pub fn set_has_more(&mut self, has_more: bool) {
+        self.has_more = has_more;
+    }
+
+    /// 正在取下一段（回填之前不该重复触发）
+    pub fn set_loading_more(&mut self, loading_more: bool) {
+        self.loading_more = loading_more;
+    }
+
+    /// 注入取下一段的回调（面板构造时一次）
+    pub fn set_load_more_hook(&mut self, hook: LoadMoreHook) {
+        self.on_load_more = Some(hook);
+    }
+
+    /// 能不能现在就取下一段（纯函数：面板与测试都是同一套判据）
+    pub fn wants_more(&self) -> bool {
+        self.has_more && !self.loading_more && self.on_load_more.is_some()
     }
 
     /// 网格里的列名（供测试断言；不复制行数据）
@@ -98,6 +135,37 @@ impl TableDelegate for ResultGridDelegate {
 
     fn rows_count(&self, _cx: &App) -> usize {
         self.rows.len()
+    }
+
+    /// 滚动到底自动加载（B5b）：组件库在可见范围距末尾不足 `load_more_threshold` 行时
+    /// 反复调 [`Self::load_more`]，所以真实条件与防重入都在这里判——
+    /// “还有没有下一段”是结果的真值（面板同步），不是表格猜的。
+    fn has_more(&self, _cx: &App) -> bool {
+        self.has_more
+    }
+
+    fn load_more(&mut self, _window: &mut Window, cx: &mut Context<TableState<Self>>) {
+        if !self.wants_more() {
+            return;
+        }
+        let Some(hook) = self.on_load_more.clone() else {
+            return;
+        };
+        // 乐观置位：组件库会在“接近末尾”的每一帧都调进来，而回调是异步的（下面那行
+        // `spawn_in`）——不先拦住的话同一帧里的后续调用会再发一次。真实值由面板回填时同步
+        // （面板提交通道上失败会把这一下撤回去）。
+        self.loading_more = true;
+        //
+        // 面板会在提交成功时置 `loading_more`（下一次同步回这里），
+        // 所以这里不必自己改状态——避免“面板以为没在取、delegate 以为在取”的两份真值。
+        //
+        // 回调要**挪出当前更新栈**：面板会回头把 `loading_more` 写回本 delegate，
+        // 同步调用就是“更新一个正在更新的实体”→ panic（组件库自己的
+        // `load_more_if_need` 也是用 `spawn_in` 把它挪出去的）。
+        cx.spawn_in(_window, async move |_view, window| {
+            _ = window.update(|_window, cx| hook(cx));
+        })
+        .detach();
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {

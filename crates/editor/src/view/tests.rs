@@ -13,6 +13,7 @@ use std::rc::Rc;
 use gpui_kit::component::dock::{
     BasePanel as _, DockArea, DockPlacement, DockSkin, Panel as _,
 };
+use gpui_kit::component::table::TableDelegate as _;
 use gpui_kit::component::{Root, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -2975,6 +2976,107 @@ fn fetching_a_segment_without_support_says_so(cx: &mut TestAppContext) {
         1,
         "取不回来不该动已抓到的行"
     );
+}
+
+/// 【B5b】滚动到底自动加载：组件库调 delegate 的 `load_more` → 面板真的去取下一段
+#[gpui_kit::test]
+fn scrolling_to_the_bottom_fetches_the_next_segment(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+    let wants = |cx: &mut VisualTestContext| {
+        cx.update(|_window, cx| {
+            grid.update(cx, |state, _cx| state.delegate_mut().wants_more())
+        })
+    };
+    assert!(wants(cx), "首段拿满 + 有下一段 → delegate 允许取更多");
+
+    // 模拟组件库在“可见范围靠近末尾”时的调用（真机里由 `load_more_if_need` 触发；
+    // 回调是异步挪出更新栈的，所以要 `run_until_parked` 把它推到位）
+    cx.update(|window, cx| {
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().load_more(window, cx);
+            // 同一帧里再调一次：乐观置位要把它拦下来（真机上滚动会连发）
+            state.delegate_mut().load_more(window, cx);
+        });
+    });
+    cx.run_until_parked();
+    // 提交之后到了回填之前：不许再触发一次（否则每次滚动都撞“执行中”的回绝）
+    assert!(!wants(cx), "正在取下一段时不该重复触发");
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS)],
+        "自动加载要的正是“已经拿到的行数”之后那一段，而且同一帧里只发一次"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        4,
+        "两段接起来"
+    );
+    assert!(!wants(cx), "抓到没拿满的一段就不该再取");
+    assert_eq!(shared.results().set_count(&id), 1, "自动加载不新开结果集");
+}
+
+/// 【B5b】真渲染几帧：让**组件库自己**在“可见范围靠近末尾”时触发取段
+///
+/// 上一条测试是手动调 `load_more`（验回调链路），这一条让它从渲染路径自然发生：
+/// 行数少于阈值（默认 20）时，`load_more_if_need` 的条件在上方恒成立。
+#[gpui_kit::test]
+fn rendering_a_short_result_asks_for_more_by_itself(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    for _ in 0..3 {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        asked.lock().expect("锁").as_slice(),
+        [(2, execution::SEGMENT_ROWS)],
+        "渲染路径应当自己触发取段，而且只发一次"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
+        4,
+        "两段接起来"
+    );
+}
+
+/// 【B5b】没有下一段时 delegate 不该允许取更多（没有结果 / 写语句都不行）
+#[gpui_kit::test]
+fn a_finished_result_does_not_ask_for_more(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _asked) = shared_with_segment_runner("select n from t");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+
+    let wants = |cx: &mut VisualTestContext| {
+        cx.update(|_window, cx| {
+            grid.update(cx, |state, _cx| state.delegate_mut().wants_more())
+        })
+    };
+    assert!(!wants(cx), "还没执行过：没有下一段可言");
+
+    run_statement(cx, &panel, "select n from t", execution::ResultPlacement::Replace);
+    wait_for_all_pending(cx, &panel);
+    // 取完两段（首段 2 行 + 取回 2 行）后到底
+    cx.update(|window, cx| {
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().load_more(window, cx);
+        });
+    });
+    cx.run_until_parked();
+    wait_for_all_pending(cx, &panel);
+    assert!(!wants(cx), "第二段没拿满 → 到底了");
 }
 
 // ===== B7：导出 =====

@@ -122,6 +122,8 @@ pub struct EditorHostPanel {
     /// 取段失败、用户中断都作废——**不落一个半截的文件**（宁可没有，也不要一份看起来
     /// 完整、实则少一半的导出）。
     pending_export: Option<PendingExport>,
+    /// 【B5b】正在取下一段（滚动到底自动加载的防重入真值；同步给网格 delegate）
+    fetching_more: bool,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
@@ -208,6 +210,20 @@ impl EditorHostPanel {
             cx.notify();
         });
 
+        // 【B5b】滚动到底自动加载：组件库在可见范围接近末尾时调 delegate 的 `load_more`，
+        // 而“该不该再取一段”只有面板知道（选中哪份结果、忙不忙）——走钩子交回给面板。
+        // 面板自己的 `fetch_more` 仍是**显式按钮**与自动加载共用的同一条路。
+        {
+            let weak = cx.entity().downgrade();
+            grid.update(cx, |state, _cx| {
+                state.delegate_mut().set_load_more_hook(std::rc::Rc::new(
+                    move |app: &mut App| {
+                        _ = weak.update(app, |panel, cx| panel.fetch_more(cx));
+                    },
+                ));
+            });
+        }
+
         Self {
             shared,
             document,
@@ -236,6 +252,7 @@ impl EditorHostPanel {
             window: window.window_handle(),
             result_height: std::rc::Rc::new(std::cell::Cell::new(ui::RESULT_PANE_HEIGHT)),
             pending_export: None,
+            fetching_more: false,
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
@@ -1136,6 +1153,11 @@ impl EditorHostPanel {
         self.grid.read(cx).delegate().row_count_for_test()
     }
 
+    /// 网格实体（测试用：滚动到底自动加载得真在表格上调 `load_more` 才算验到链路）
+    pub(crate) fn grid_for_test(&self) -> Entity<TableState<ResultGridDelegate>> {
+        self.grid.clone()
+    }
+
     /// 把光标放到指定位移（供测试断言“执行的是光标所在那句”；键位路径仍走真按键）
     pub fn set_caret_for_test(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.editor
@@ -1237,6 +1259,8 @@ impl EditorHostPanel {
             self.pending = self.pending.saturating_sub(mine_arrived);
             if self.pending == 0 {
                 self.running_since = None;
+                // 【B5b】本文档这一轮执行全部结束：取段也结束了（滚动到底可以再次触发）
+                self.fetching_more = false;
             }
             self.sync_result_view(cx);
             // 【B5b】取段失败的原因在这里说（同步结果区会按“选中那份”重写提示）
@@ -1315,6 +1339,9 @@ impl EditorHostPanel {
         self.result_tabs = tabs;
         self.result_active = active;
         self.result_toolbar = toolbar;
+        // 【B5b】滚动到底自动加载的两个真值要先取出来（`status` 接着就被移动了）
+        let has_more = status.as_ref().is_some_and(|status| status.has_more);
+        let loading_more = self.fetching_more;
         self.result_status = status;
         let (sql, can_copy) = extra.unwrap_or_default();
         self.result_sql = Some(sql).filter(|sql| !sql.trim().is_empty());
@@ -1324,6 +1351,9 @@ impl EditorHostPanel {
                 Some((columns, rows)) => state.delegate_mut().set_data(columns, rows),
                 None => state.delegate_mut().clear(empty),
             }
+            // 【B5b】这份结果还能不能再取一段 / 是不是正在取
+            state.delegate_mut().set_has_more(has_more);
+            state.delegate_mut().set_loading_more(loading_more);
             state.refresh(cx);
         });
 
@@ -1457,6 +1487,7 @@ impl EditorHostPanel {
     ///
     /// 提交一次 `Segment` 目标（落位 `Append`）：不动用户在看的那份的位置，新抓到的行
     /// **接在后面**。忙 / 没结果 / 没有下一段都回绝得可读（不静默）。
+    /// 与滚动到底自动加载走的是**同一条路**（那个只负责把意图送到这里）。
     pub(crate) fn fetch_more(&mut self, cx: &mut Context<Self>) {
         let Some(sql) = self.result_sql.clone() else {
             self.set_message(Some("这份结果没有可重取的 SQL".to_string()), cx);
@@ -1471,7 +1502,7 @@ impl EditorHostPanel {
             return;
         };
         let offset = entry.row_count();
-        self.execute(
+        let submitted = self.execute(
             ExecTarget::Segment {
                 sql,
                 offset,
@@ -1480,6 +1511,25 @@ impl EditorHostPanel {
             ResultPlacement::Append,
             cx,
         );
+        // 提交成功才算“正在取”：回填之前滚动到底不该再触发一次（防重入的真值在这边）
+        if submitted {
+            self.mark_fetching_more(cx);
+        } else {
+            // 没提交成功：把 delegate 的乐观置位撤回去，否则滚动到底会一直不再触发
+            let grid = self.grid.clone();
+            grid.update(cx, |state, _cx| state.delegate_mut().set_loading_more(false));
+        }
+    }
+
+    /// 【B5b】标记“正在取下一段”
+    ///
+    /// 除了面板自己的真值，还要**当场**同步给网格的 delegate：提交到回填之间没有
+    /// `sync_result_view`（那是一次全量投影，太重），不补这一下的话“滚动到底”会在
+    /// 这段窗口里反复触发、每次都撞上“执行中”的回绝。
+    fn mark_fetching_more(&mut self, cx: &mut Context<Self>) {
+        self.fetching_more = true;
+        let grid = self.grid.clone();
+        grid.update(cx, |state, _cx| state.delegate_mut().set_loading_more(true));
     }
 
     /// 切换结果集（结果集标签条点击）：选中项只有 `ResultStore` 能改，界面按它重画
@@ -1560,6 +1610,8 @@ impl EditorHostPanel {
         if !submitted {
             // 没提交成功（通道拒了）：在途状态得撒回去，否则会残留到下一次取段
             self.pending_export = None;
+        } else {
+            self.mark_fetching_more(cx);
         }
     }
 
@@ -1639,6 +1691,8 @@ impl EditorHostPanel {
         );
         if !submitted {
             self.pending_export = None;
+        } else {
+            self.mark_fetching_more(cx);
         }
     }
 
