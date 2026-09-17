@@ -17,6 +17,7 @@
 //! | 项目根、只读判定 | 端口读取器 | 宿主自持的会话状态（`project_ui`） |
 //! | 状态栏提示、宿主重绘 | 端口 | 提示与模态层都在宿主 |
 //! | 内容搜索结果展示、在编辑器中打开文件 | 端口 | 结果与文件都在中央编辑区，属宿主 |
+//! | 洞察「查看统计」（可分析判定 + 落地面板） | 端口 | 读取器口径在 `engine`，草稿箱不依赖它 |
 //!
 //! 注入方式：`ScratchpadView::new(host, cx)`。宿主实现见
 //! `crates/workbench/src/components/scratchpad_host.rs`。
@@ -49,6 +50,25 @@ pub trait ScratchpadHost: 'static {
 
     /// 在中央编辑器里打开一个文件（**绝对路径**；编辑器按路径自己判定模式与只读等级）。
     fn open_in_editor(&self, path: PathBuf);
+
+    /// 这份草稿能不能「查看统计」（M8 洞察）：宿主按文件类型判定。
+    ///
+    /// 判定为什么要问宿主：草稿箱不认识 DuckDB 的读取器口径（也不该认识——
+    /// 它不依赖 `engine`），而“哪些文件能分析”只有那一处口径。
+    /// 默认 `false`：不接洞察的宿主（测试 / 其他入口）不用实现它，也不会摆出
+    /// 一个点了没反应的入口。
+    fn can_view_stats(&self, path: &Path) -> bool {
+        let _ = path;
+        false
+    }
+
+    /// 在洞察面板里看这份草稿的数据统计（M8：右键「查看统计」）。
+    ///
+    /// 与 [`Self::open_in_editor`] 同理只给**绝对路径**：取样来源（`SampleSource`）
+    /// 的构造在宿主侧——那里才知道 DuckDB 的读取器与路径转义。
+    fn view_stats(&self, path: PathBuf, label: String, cx: &mut App) {
+        let _ = (path, label, cx);
+    }
 
     /// 当前**有未保存修改**的文件（绝对路径）：草稿树在这些条目上打脏点。
     ///

@@ -4,7 +4,8 @@
 //! 并实现它，装配期注入面板（`ScratchpadView::new`）。
 //!
 //! 实现原则——**只做转接，不加戏**：项目根 / 只读判定 / 提示 / 重绘 / 搜索结果落地 /
-//! 在编辑器中打开文件 / 脏文档集合，全部直接落到 `Shared` 的对应字段与端口。
+//! 在编辑器中打开文件 / 脏文档集合 / 洞察「查看统计」（路径 → 取样来源 → 右 Dock 面板），
+//! 全部直接落到 `Shared` 的对应字段与端口。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -50,6 +51,26 @@ impl ScratchpadHost for WorkbenchScratchpadHost {
 
     fn open_in_editor(&self, path: PathBuf) {
         self.shared.request_open_in_editor(path);
+    }
+
+    /// 「查看统计」的可行性判定：与取样共**同一处口径**（DuckDB 的读取器映射）。
+    ///
+    /// 判定与执行各写一份，迟早会出现“菜单亮着但点了报不支持”。
+    fn can_view_stats(&self, path: &Path) -> bool {
+        engine::dbi::engine::duckdb_engine::DuckDBEngine::file_reader_function(
+            &path.display().to_string(),
+        )
+        .is_some()
+    }
+
+    /// 洞察落地面板（M8）：路径 → 取样来源 → 右 Dock 的洞察面板（D58）。
+    fn view_stats(&self, path: PathBuf, label: String, cx: &mut App) {
+        match insight::SampleSource::duckdb_file(&path, label.clone()) {
+            Ok(source) => self.shared.open_insight_source_table(source, label, cx),
+            // 判定已经挡过（`can_view_stats`）：走到这里是可分析格式但读不到
+            // （路径刚被挪走 / 删了），把真实原因说清。
+            Err(error) => self.notice(format!("草稿箱：{error}"), cx),
+        }
     }
 
     /// 脏点：把编辑器里带未保存修改的文档路径报给草稿箱。

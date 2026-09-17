@@ -46,6 +46,11 @@ impl ResourcesHost for RecordingHost {
     fn request_open(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("open:{}", detail.id));
     }
+    fn request_view_stats(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("view-stats:{}", detail.id));
+    }
     fn request_reveal(&self, detail: &ArchiveDetail, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push(format!("reveal:{}", detail.id));
     }

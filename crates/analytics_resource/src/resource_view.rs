@@ -36,6 +36,8 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use engine::dbi::engine::duckdb_engine::DuckDBEngine;
+
 /// kind 图标取**完整 Lucide 目录**（`gpui_kit::assets`）：组件子集（`default-icons.txt`）
 /// 里没有表格形；另外用别名避免与组件子集的同名枚举混淆。
 use gpui_kit::assets::IconName as CatalogIcon;
@@ -178,6 +180,32 @@ pub fn row_tail(detail: &str, modified: &str, version: i32) -> String {
     }
 }
 
+/// 这条存档能否「查看统计」（M8 洞察）：判定按种类分，三类的可分析性来源不同。
+///
+/// - **受管文件**：本体得是 DuckDB 读得动的数据文件——扩展名口径只有一处
+///   （[`DuckDBEngine::file_reader_function`]：CSV / Parquet / Excel / JSON）；
+///   `.sql` / `.md` 这类文本不是数据，不给入口。
+/// - **远端引用**：有来源连接与表名就能取样（取样 SQL 由宿主按驱动拼，不在面板）。
+/// - **分析表**：本体是项目内的 `analytics.duckdb`，要 ATTACH + 重建定义——随后续批次接。
+///
+/// 缺失的行一律不给：本体不在，取不到数。
+pub fn can_view_stats(detail: &ArchiveDetail) -> bool {
+    if detail.status == ArchiveStatus::Missing {
+        return false;
+    }
+    match detail.kind {
+        ArchiveKind::File => detail
+            .payload_rel_path
+            .as_deref()
+            .and_then(DuckDBEngine::file_reader_function)
+            .is_some(),
+        ArchiveKind::TableRef => {
+            detail.source_connection_id.is_some() && detail.source_table.is_some()
+        }
+        ArchiveKind::Analysis => false,
+    }
+}
+
 // ==================== 宿主契约 ====================
 
 /// 宿主能力：面板不认识服务层与会话，动作一律回宿主（事件路径执行）。
@@ -194,6 +222,12 @@ pub trait ResourcesHost: 'static {
     /// 与 `request_checkout` 同理：收的是**面板已有的那条详情**（本体路径在它身上），
     /// 宿主不必回头读面板的选中态。
     fn request_open(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
+    /// 在**洞察面板**里看这条存档的数据统计（M8：右键「查看统计」）。
+    ///
+    /// 与 [`Self::request_open`] 同理：只收**面板已有的那条详情**（本体位置 / 来源连接
+    /// 都在它身上），宿主不必回头读面板的选中态。只有 [`can_view_stats`] 为真的行
+    /// 会摆这一项；宿主仍按种类分流，走不通的那类要给回执而不是静默。
+    fn request_view_stats(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
     /// 在系统文件管理器里显示本体（原型 §3.2：选中文件而不是只开目录）。
     fn request_reveal(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App);
     /// 复制本体绝对路径到剪贴板（原型 §3.2）。
@@ -385,6 +419,8 @@ impl ListDelegate for ArchiveListDelegate {
                 detail.status != ArchiveStatus::Missing && detail.payload_rel_path.is_some()
             })
             .unwrap_or(false);
+        // 「查看统计」只对**数据可得**的行摆出来（口径见 `can_view_stats`）。
+        let can_stats = open_detail.as_ref().is_some_and(can_view_stats);
         let checkout_detail = open_detail.clone();
         let id_delete = row.id.clone();
         // 版本历史的入口只带 id（对话框的显示名由宿主查库得到）。
@@ -464,6 +500,19 @@ impl ListDelegate for ArchiveListDelegate {
                                     move |_, window, cx| {
                                         if let Some(detail) = detail.as_ref() {
                                             host.request_open(detail, window, cx);
+                                        }
+                                    }
+                                }),
+                        );
+                        menu = menu.item(
+                            PopupMenuItem::new("查看统计")
+                                .disabled(!can_stats)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = open_detail.clone();
+                                    move |_, window, cx| {
+                                        if let Some(detail) = detail.as_ref() {
+                                            host.request_view_stats(detail, window, cx);
                                         }
                                     }
                                 }),
@@ -1467,9 +1516,10 @@ impl Render for ResourcesPanel {
 mod tests {
     // 安全模式：测试模块不通配导入（会与 `#[gpui_kit::test]` 展开的 `#[test]` 自相残杀）。
     use super::{
-        ArchiveCounts, BadgeTone, HeaderMenuAction, badge_tone, kind_icon, row_tail,
-        strength_badge,
+        ArchiveCounts, BadgeTone, HeaderMenuAction, badge_tone, can_view_stats, kind_icon,
+        row_tail, strength_badge,
     };
+    use crate::detail_view::ArchiveDetail;
     use crate::model::{ArchiveKind, ArchiveStatus};
 
     #[test]
@@ -1579,5 +1629,65 @@ mod tests {
             "4 项 · 已归档 3 · 分析表 1 · 缺失 1 · 索引异常 2"
         );
         assert!(with_issues.has_issues());
+    }
+
+    /// 构造一条详情：只写与判定相关的字段，其余取最小可用值。
+    fn detail(kind: ArchiveKind, status: ArchiveStatus, payload: Option<&str>) -> ArchiveDetail {
+        ArchiveDetail {
+            id: "ar_1".to_string(),
+            name: "订单".to_string(),
+            alias: None,
+            kind,
+            version: 1,
+            status,
+            readonly: true,
+            size_label: String::new(),
+            modified_label: String::new(),
+            archived_label: String::new(),
+            promoted_from: None,
+            source_connection_id: None,
+            source_table: None,
+            content_hash: None,
+            payload_rel_path: payload.map(str::to_string),
+            history_label: String::new(),
+            tags: Vec::new(),
+            group: None,
+        }
+    }
+
+    #[test]
+    fn view_stats_only_for_data_sources_that_can_be_sampled() {
+        let file = |payload: Option<&str>| {
+            detail(ArchiveKind::File, ArchiveStatus::Normal, payload)
+        };
+
+        // 受管文件：本体扩展名得是 DuckDB 读得动的（大小写不敏感、中文名照认）。
+        assert!(can_view_stats(&file(Some("orders.csv"))));
+        assert!(can_view_stats(&file(Some("2026 预算.XLSX"))));
+        assert!(can_view_stats(&file(Some("data/events.ndjson"))));
+        // 非数据文件：`.sql` 是脚本不是数据，不给入口（不是“点了才说不行”）。
+        assert!(!can_view_stats(&file(Some("dau.sql"))));
+        assert!(!can_view_stats(&file(None)));
+        // 缺失的行：本体不在，取不到数（即便扩展名可读）。
+        assert!(!can_view_stats(&detail(
+            ArchiveKind::File,
+            ArchiveStatus::Missing,
+            Some("orders.csv")
+        )));
+
+        // 远端引用：连接与表名都齐了才给（取样 SQL 由宿主按驱动拼）。
+        let mut reference = detail(ArchiveKind::TableRef, ArchiveStatus::Normal, None);
+        assert!(!can_view_stats(&reference), "没有表名就没有可取样的对象");
+        reference.source_connection_id = Some("conn_1".to_string());
+        assert!(!can_view_stats(&reference), "没有连接就不知道去哪取样");
+        reference.source_table = Some("public.orders".to_string());
+        assert!(can_view_stats(&reference));
+
+        // 分析表：本体是 analytics.duckdb，要 ATTACH + 重建定义——后续批次接前不给入口。
+        assert!(!can_view_stats(&detail(
+            ArchiveKind::Analysis,
+            ArchiveStatus::Normal,
+            Some("analytics.duckdb")
+        )));
     }
 }

@@ -453,6 +453,33 @@ impl Shared {
         }
     }
 
+    /// M8：源表取样 SQL——限定名各段按**连接驱动**加引号（MySQL 系反引号，其余双引号）。
+    ///
+    /// 导航树与分析存档的「查看统计」共用（口径只此一处）：表名带点 / 空格 / 保留字时，
+    /// 不加引号在各方言下都解析不过。空段自动略去，`orders` / `public.orders` /
+    /// `catalog.schema.orders` 三种写法都覆盖。
+    pub fn insight_sample_sql(&self, conn_id: &str, parts: &[&str]) -> String {
+        let driver = self
+            .connections
+            .borrow()
+            .iter()
+            .find(|conn| conn.id == conn_id)
+            .map(|conn| conn.driver.clone())
+            .unwrap_or_default();
+        let quote = if driver.contains("mysql") || driver.contains("maria") {
+            '`'
+        } else {
+            '"'
+        };
+        let qualified = parts
+            .iter()
+            .filter(|part| !part.is_empty())
+            .map(|part| engine::driver::utils::quote_identifier(part, quote))
+            .collect::<Vec<_>>()
+            .join(".");
+        format!("SELECT * FROM {qualified}")
+    }
+
     /// M8：打开洞察面板并**指向一张源表**（导航树右键「查看统计」的宿主侧入口）。
     ///
     /// 与 [`Self::open_insight_column`] 的区别：那个指向**已经存在**的临时表，
@@ -533,6 +560,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{Shared, append_sql, OpenInEditorRequest};
+    use crate::view::ConnectionItem;
 
     /// 「打开查询」请求取出即清空（宿主 render 每帧取用，不得重复开文档）。
     #[test]
@@ -588,5 +616,54 @@ mod tests {
         let request = shared.take_open_in_editor().expect("只读请求");
         assert!(!request.read_only.can_edit(), "取回的应是编辑器只读");
         assert_eq!(request.path, PathBuf::from("/p/resources/a.sql"));
+    }
+
+    /// 连接条目（只填取样 SQL 判定要用的两个字段）。
+    fn conn(id: &str, driver: &str) -> ConnectionItem {
+        ConnectionItem {
+            id: id.to_string(),
+            name: id.to_string(),
+            driver: driver.to_string(),
+            connected: true,
+            host: None,
+            port: None,
+            database: None,
+            schema: None,
+            description: None,
+            use_duckdb_fed: false,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    /// 源表取样 SQL：限定名按驱动加引号、空段略去（导航树与分析存档的「查看统计」共用）。
+    #[test]
+    fn insight_sample_sql_quotes_by_driver_and_skips_empty_parts() {
+        let shared = Shared::new();
+        // 连接记录不在（或 id 认不出）时按 ANSI 双引号——不猜一个方言。
+        assert_eq!(
+            shared.insight_sample_sql("G_1", &["public", "orders"]),
+            "SELECT * FROM \"public\".\"orders\""
+        );
+
+        shared
+            .connections
+            .borrow_mut()
+            .extend([conn("G_1", "mysql"), conn("P_2", "postgres")]);
+        // MySQL 系反引号（保留字 `order` 不加引号在那边解析不过）。
+        assert_eq!(
+            shared.insight_sample_sql("G_1", &["mall", "order"]),
+            "SELECT * FROM `mall`.`order`"
+        );
+        // 其余库双引号；空段略去（导航侧 catalog / schema 可能为空）。
+        assert_eq!(
+            shared.insight_sample_sql("P_2", &["", "", "orders"]),
+            "SELECT * FROM \"orders\""
+        );
+        // 引号本身要双写（否则拼出来的 SQL 断在名字里）。
+        assert_eq!(
+            shared.insight_sample_sql("P_2", &["od\"d"]),
+            "SELECT * FROM \"od\"\"d\""
+        );
     }
 }

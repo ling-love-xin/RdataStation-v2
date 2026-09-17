@@ -1992,6 +1992,17 @@ impl ScratchpadView {
         cx.notify();
     }
 
+    /// 请求在洞察面板里看这份草稿的数据统计（右键「查看统计」）。
+    ///
+    /// 与 [`Self::request_open_scratchpad_file`] 同理只给路径与显示名：能不能分析、
+    /// 怎么取数都在宿主侧（`ScratchpadHost::view_stats`），草稿箱不依赖 `engine`。
+    fn request_view_stats(&mut self, path: String, label: String, cx: &mut Context<Self>) {
+        self.host
+            .view_stats(std::path::PathBuf::from(path), label, cx);
+        self.host.notify_host(cx);
+        cx.notify();
+    }
+
     /// 懒加载子目录（展开文件夹时调用）：只入队 + 起轮询，结果由 `apply_scratchpad_dirs` 回填。
     fn request_scratchpad_dir(&mut self, path: String, cx: &mut Context<Self>) {
         let Some(root) = self.host.project_root() else {
@@ -2252,6 +2263,10 @@ impl ScratchpadView {
         let entity = cx.entity();
         let view_handle = self.scratchpad.clone();
         let is_folder = entry.kind == ScratchpadEntryKind::Folder;
+        // 「查看统计」（M8 洞察）：判定问宿主——读取器口径在 `engine`，草稿箱不认识它
+        // （也不该认识：依赖只向下）。判定不是真时菜单项根本不出现。
+        let can_stats = !is_folder && self.host.can_view_stats(std::path::Path::new(&key));
+        let stats_label = entry.name.clone();
         let is_selected = ctx.selected.contains(&key);
         let is_expanded = ctx.expanded.contains(&key);
         // 展开且尚未懒加载过子目录 → 触发加载。
@@ -2519,6 +2534,22 @@ impl ScratchpadView {
                             this.request_open_scratchpad_file(open_doc_key.clone(), cx)
                         });
                     }));
+                    if can_stats {
+                        // 只把路径与显示名交给宿主：取样来源（DuckDB 读取器 + 路径转义）在那边构造。
+                        let stats_entity = menu_entity.clone();
+                        let stats_key = menu_key.clone();
+                        let stats_label = stats_label.clone();
+                        menu = menu.item(PopupMenuItem::new("查看统计").on_click(
+                            move |_, _, app| {
+                                let entity = stats_entity.clone();
+                                let key = stats_key.clone();
+                                let label = stats_label.clone();
+                                entity.update(app, |this, cx| {
+                                    this.request_view_stats(key.clone(), label.clone(), cx)
+                                });
+                            },
+                        ));
+                    }
                 }
                 menu.item(PopupMenuItem::new("打开位置").on_click(move |_, _, app| {
                     open_entity.update(app, |this, cx| {

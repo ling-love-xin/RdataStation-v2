@@ -391,6 +391,51 @@ impl ResourcesHost for WorkbenchResourceHost {
         self.shared.notify_host(cx);
     }
 
+    fn request_view_stats(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
+        // 面板只给「能取到数」的行摆入口（`can_view_stats`），这里仍按种类分流：
+        // 走得通的那类把**取样来源**交给洞察侧（D58），走不通的给回执而不是静默。
+        match detail.kind {
+            // 受管文件：本体交给 DuckDB 直接读（CSV / Parquet / Excel / JSON）。
+            ArchiveKind::File => {
+                let Some(path) = self.payload_path(detail, cx) else {
+                    return;
+                };
+                match insight::SampleSource::duckdb_file(&path, detail.name.clone()) {
+                    Ok(source) => {
+                        self.shared
+                            .open_insight_source_table(source, detail.name.clone(), cx)
+                    }
+                    // 面板已经按扩展名挡过一次：走到这里说明是可读格式但读不到
+                    // （扩展名对不上 / 路径刚被挪走），把真实原因说清。
+                    Err(error) => self.notice(format!("资产库：{error}"), cx),
+                }
+            }
+            // 远端引用：没有本体，按来源连接重新取样（连接不在或已删时报给洞察侧）。
+            ArchiveKind::TableRef => {
+                let (Some(conn_id), Some(table)) = (
+                    detail.source_connection_id.as_deref(),
+                    detail.source_table.as_deref(),
+                ) else {
+                    self.notice("资产库：这条引用没有来源连接或表名，无法取样", cx);
+                    return;
+                };
+                // 归档侧只存了一个 `schema.table` 字符串（见 `ArchiveBinding`），
+                // 所以按点拆段后交给共用助手加引号（与导航树「查看统计」同口径）。
+                let parts: Vec<&str> = table.split('.').collect();
+                let sql = self.shared.insight_sample_sql(conn_id, &parts);
+                let source =
+                    insight::SampleSource::new(conn_id.to_string(), sql, detail.name.clone());
+                self.shared
+                    .open_insight_source_table(source, detail.name.clone(), cx);
+            }
+            // 分析表：本体是项目内的 `analytics.duckdb`，要 ATTACH + 用重建定义取数
+            // （不是“读一个文件”那么简单）——随后续批次接（面板据此也不给入口）。
+            ArchiveKind::Analysis => {
+                self.notice("资产库：分析表型存档的洞察随 M8 后续批次接入", cx);
+            }
+        }
+    }
+
     fn request_checkout(&self, detail: &ArchiveDetail, window: &mut Window, cx: &mut App) {
         let Some(root) = self.require_project("无法取回", cx) else {
             return;
