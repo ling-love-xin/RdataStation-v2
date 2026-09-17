@@ -37,7 +37,7 @@
 | --- | --- | --- |
 | **视图归属 = 方案 A**（2026-09-16 定案） | 视图与本 crate 的 model / service 同 crate，依赖 `gpui-kit`（架构约束允许并鼓励）；`workbench` 侧只装配与订阅事件；面板自己不做 I/O | 开发方案 §3.1、架构 D21/K8 |
 | **依赖只向下** | `workbench → insight → engine → shared`；洞察不依赖任何业务 Feature crate | 开发方案 §3 |
-| **不自己取数** | 数据入口只有两种：**已有临时表**（结果集 / 分析表，直接分析）与**源取样** `SampleSource`（洞察侧自己包 `LIMIT 500` 落 `tmp_i_`，D58/D59）；不建连接、不执行用户 SQL、**不反拼装**数据（D42） | 原型 §1.1、架构 D58 |
+| **不自己取数** | 数据入口只有两种：**已有临时表**（结果集 / 分析表，直接分析）与**源取样** `SampleSource`（洞察侧自己包 `LIMIT 500` 落 `tmp_i_`，D58/D59）；不建连接、不执行用户 SQL、**不反拼装**数据（D42） | 原型 §1.1、架构 D58/D60 |
 | **快照双写** | 正文进项目 DuckDB（`insight_column_snapshots`），元数据 + 版本链进项目 SQLite（`insight_snapshots`） | 开发方案 §1.1 |
 | **零裸值** | 颜色取主题 token（缺失角色补 `product-tokens.json`），尺寸进 `ui.rs`（新增「洞察（M8）专用尺寸」节） | 原型 §6 / §7 |
 | **组件不手搓** | 折叠区 / 表格 / Tab 条 / 对话框 / 开关 / 菜单一律用 gpui-kit 组件 | 原型 §8 |
@@ -124,7 +124,7 @@ cargo check --workspace --all-targets -j 2
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **222 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3；**文件类数据源新增 1**），另有**集成测试 13 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处（`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`），其中 `duckdb::analysis` 现 **8 项**（含 CTAS 2 项）。引擎单测总量当前 **377 项**（`cargo test -p rds-engine --lib`）。
+- **基线**：`cargo test -p rds-insight` 当前 **225 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3；**文件类数据源新增 1**；**Schema 导出与下钻新增 3**），另有**集成测试 13 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处（`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`），其中 `duckdb::analysis` 现 **8 项**（含 CTAS 2 项）。引擎单测总量当前 **377 项**（`cargo test -p rds-engine --lib`）。
 
 ## 6. 文档地图
 
@@ -150,7 +150,7 @@ cargo check --workspace --all-targets -j 2
 | ✅ Phase 1 已落地 | 右 Dock 面板装配 · 列画像四区 · 入口命令 `open_insight_column`（`Ctrl+Shift+R`）· 后台取数 `insight::jobs::attach`（六批，逐项见开发方案 §0） |
 | ✅ Phase 2 已落地 | 列级质量评分卡 · 规则管理对话框（三层分组 / 启停 / 校验错误行 / 新建规则）· K7 全局规则目录 · 表级评估全表 + 进度（逐项见开发方案 §0） |
 | Phase 3（已完成） | 表探查视图 + 列名下钻 · 多列分析（真实列清单 + 规则执行 + 结果渲染）· ✅ 宿主侧入口（导航右键「查看统计」，D59 补齐） |
-| Phase 4（进行中） | ✅ 门面 · 报告视图 · 导出函数 · 下钻事件；⬜ 导出按钮与下钻的宿主侧接线（选路径 / 登记临时表） |
+| Phase 4（已完成） | ✅ 门面 · 报告视图 · 导出函数 · 下钻事件 · ✅ **导出与下钻的宿主接线**（导出：面板算内容 + 宿主选路径写文件 + 状态栏回执；下钻：源取样通道，不建临时表。D60） |
 | Phase 5（已完成） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（方向固定为「选中 → 最新」）· ✅ 存储清理（确认框 · 成对删 · 回执）· ✅ 保留天数定案固定 30 天（D56） |
 | 入口（D58/D59） | ✅ 源取样通道 · ✅ 导航树 / 分析存档 / 草稿箱三个右键「查看统计」· ✅ **文件类数据源**（CSV / Parquet / Excel / JSON，含 excel 扩展）；⬜ 编辑器结果集列头「洞察此列」（用户明确不着急）· ⬜ 分析表型存档（本体是 `analytics.duckdb` 库文件，要 ATTACH + 重建定义） |
 | 待确认 | 规则安全边界若**再严一档**：`insight_rule_trust` 加规则集内容指纹（现绑定项目路径，见 D53 取舍）· 快照双写若要做故障注入测试（现只测补偿函数契约，见 D55） |

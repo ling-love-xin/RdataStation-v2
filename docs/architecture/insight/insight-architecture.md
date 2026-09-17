@@ -2,7 +2,7 @@
 
 > 状态：**Phase 0–5 完成 + 规则安全边界收口**（2026-09-17） · 关联文件：`README.md`（模块入口）、`insight-prototype-design.md`（原型）、`insight-dev-plan.md`（开发方案与进度）、`insight-user-guide.md`（使用手册）
 > 本文回答**为什么这样设计 / 怎么运转**：概念模型 → 不变式 → 分层与归属 → 状态所有权 → 数据流 → 决策表 → 并发 → 降级 → 测试 → 实现映射 → 已知问题（权威）。
-> 现状口径：**画像 / 评分 / 规则 / 报告 / 快照历史全部落地**（含右 Dock 面板与规则管理对话框）；规则安全边界 = 解析期静态门（D52）+ 项目规则信任门（D53）；临时表走 `duckdb::analysis`（D50/D51）；入口统一为源取样（D58），导航树 / 分析存档 / 草稿箱三个入口与**文件类数据源**（CSV / Parquet / Excel / JSON）已接（D59）。宿主侧仍欠：Schema 导出按钮与下钻、编辑器结果集入口（见开发方案 §0）。
+> 现状口径：**画像 / 评分 / 规则 / 报告 / 快照历史全部落地**（含右 Dock 面板与规则管理对话框）；规则安全边界 = 解析期静态门（D52）+ 项目规则信任门（D53）；临时表走 `duckdb::analysis`（D50/D51）；入口统一为源取样（D58），导航树 / 分析存档 / 草稿箱三个入口与**文件类数据源**（CSV / Parquet / Excel / JSON）已接（D59），Schema 报告的**导出与下钻**已接（D60）。宿主侧仍欠：编辑器结果集入口（见开发方案 §0）。
 
 ## 1. 定位与边界
 
@@ -300,7 +300,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D34 | 多列结果按**数据形态**渲染，不看声明的 `result_type` | 声明与事实不一致时按事实渲染，不会出现「声明 list 却只拿到一个数」的空白表 | 表头取各行键的并集，缺键补「—」（不错位） |
 | D35 | 数据态**按 Tab 分开存载荷**（`PanelData { column, table, multi, schema }`） | Tab 条是「同一目标的多个视角」而数据态只有一个格子；合在一起就要求“切 Tab 重新取数”，切回去就把已取到的内容丢了（实测：切「表」再切回「多列」丢表单与结果） | 渲染以载荷为准、状态只管错误/骨架；切 Tab 时载荷缺失才取数（事件路径）。**换目标必须清载荷**：载荷只对旧目标成立，留着会比空白更坏 |
 | D36 | Schema 报告的等级与导出都从**视图模型**出发 | 分档阀值只有 `quality_scorer` 一份（顺手把 `schema_analyzer` 自带的「需改进」换成同一份）；导出的是「用户看到的这份结论」，与界面同源，不会出现界面说 3 个孤立表而 JSON 里 4 个 | JSON 分组键取稳定英文，不拿中文展示名当键 |
-| D37 | 下钻只报「看哪张表」，不自己拼临时表名 | 把**源表**变成面板能分析的临时表是宿主的活（它才知道连接与临时表约定）；洞察 crate 自拼会有第二套命名约定 | 事件 `TableDrilldownRequested` 带 conn / db / schema / table |
+| D37 | 下钻只报「看哪张表」，不自己拼临时表名 | 把**源表**变成面板能分析的临时表是宿主的活（它才知道连接与临时表约定）；洞察 crate 自拼会有第二套命名约定 | 事件 `TableDrilldownRequested` 带 conn / db / schema / table。**D60 收尾时改为源取样**：宿主不再建临时表，只给「在哪条连接上查哪张表」（D58 之后建临时表是多余的一步） |
 | D38 | 历史列表的**顺序与条数口径单一来源**：顺序由存储层 `ORDER BY` 决定（视图不重排），条数由 `HISTORY_PAGE_SIZE` 决定（查询与界面提示共用） | 「谁是最新」两处各写一份，迟早在撞秒（D18）时给出互相矛盾的答案；被截断的列表必须明示（与 D15 同一立场：别让人把截断当成全部） | 满一页时列表下方写「只列出最近 N 条」；列表**不另设内层滚动**（面板主体已是滚动区） |
 | D39 | 取数请求**发不出去也要落一个状态**：`emit_request_for_tab` 发得出去进加载态，发不出去落空态 | 调用方为了「点了有反应」已先摆上骨架；沉默返回会让骨架**一直转下去**（无项目时切「历史」即此：那是「没得看」，不是「在加载」） | 空态文案按 Tab + 项目状态给（同一 Tab 两句话） |
 | D40 | 失败语义分两档：**保存失败只挂行内提示，读失败推整页错误态** | 判据是「失败会不会让人怀疑已有数据没了」：保存失败时已有历史还在，整页错误态反而像快照丢了；而列表读不出来时无从部分展示，「为什么读不到」才是答案 | 与多列执行的失败语义（Phase 3）同形 |
@@ -323,6 +323,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D57 | 版本链被清理剪过的**头部**在界面上标「更早的版本已清理」（数据层**不改**）——只在列表未分页截断时判（2026-09-17，K14 定案） | 剪链是「删 30 天前」的必然副产物：存活版本的 `parent_version_id` 仍指着已删的父版，那它就不再满足「首版」条件（`parent = None`），界面会既不标首版也不解释。改数据（把头部 `parent` 置空）会丢掉「它前面还有历史」这个事实；改界面则只说真话 | 判据要三合一（最旧一版 + 父版不在列表 + 列表完整），否则分页会造成假阳性；对比不沿链走，所以不影响差值 |
 | D58 | **入口统一为「源取样」**：导航树 / 分析存档 / 草稿箱 / 编辑器结果集都只给 `SampleSource { conn_id, sql, label }`（一段**只读取样查询** + 来源标签），洞察侧统一包一层 `SELECT * FROM (…) LIMIT 500` → 落 `tmp_i_` 分析临时表 → 之后与「临时表目标」**完全同路**（D53 后的新目标形态：`SourceColumn` / `SourceTable`）（2026-09-17） | 数据入口五花八门（表 / 查询 / 存档记录），但**分析能力只有一套**（列画像 / 表探查 / 多列 / 下钻都要临时表）。每个入口各写一套取数 + 一套回收，必然分叉；而「把数据拼成临时表」又绝不能反拼装——结果集手里只有字符串化的行，拼出来的表会把 DOUBLE 当字符串，质量评分给出**错**结论（D42 同一立场） | 抽样口径（行数）只在洞察侧（不写进入口）；样本表由现成机制回收（TTL 30 分钟 / 上限 100）；SQL 由入口给是因为**只有它知道该源的方言与引号规则**；下钻 / 多列 / 保存快照接着用**同一份样本表**（`PanelData.source_sample`），不重新抽样 |
 | D59 | **文件类数据源与三个入口接线**：`SampleSource.conn_id` 改 `Option`——`None` = 跑在 **DuckDB 内存库**（CSV / Parquet / Excel / JSON 这类**靠扩展直接读的文件**，以及已 `ATTACH` 的表）；扩展名 → 读取函数的映射与 `load_file_source` **共用一处**；取样落表分两条（源库连接走引擎 JSON 打型，DuckDB 侧走 `CREATE TABLE … AS` **不过 Rust**）。入口：导航树 / 分析存档 / 草稿箱右键「查看统计」（2026-09-18） | 产品口径是「凡 DuckDB 能分析的资源都能洞察」——文件（尤其 Excel，要靠 excel 扩展）与库表在这一点上没有区别，区别只在**数据怎么进 DuckDB**：库表过引擎（JSON 打型），文件让 DuckDB 自己读（还省一次序列化往返，类型也更准）。入口侧的「能不能分析」判定必须与取样共用同一处口径，否则会出现「菜单亮着但点了报不支持」 | 分析表型存档（本体是 `analytics.duckdb` **库文件**，要 ATTACH + 用重建定义取数）与编辑器结果集入口**未接**（后者用户明确说不急）；格式判定在**宿主**侧——草稿箱不依赖 `engine`，走端口问宿主，否则读取器口径会被抄第二份 |
+| D60 | **Phase 4 收尾：Schema 报告的导出与下钻**。导出：`content` 在**面板侧**编码（`to_json` / `to_markdown`），事件只带 `format` / `file_stem` / `content`，宿主弹保存对话框（`rfd`）、写文件、状态栏回执；下钻：**不建临时表**——宿主按 `{conn_id, database, schema, table}` 拼源取样 SQL（与导航树同口径）交 `SampleSource`，洞察侧自己取样（D58/D59）（2026-09-18） | 「导出与界面同源」是老口径（D36），**编码放在哪**是新的：让宿主再懂一遍 JSON 分组键 / Markdown 转义，就会出现「界面说 3 项、文件里 4 项」。下钻的旧设计（宿主登记临时表）在 D58 之后是多余的一步：源取样通道本来就能从「连接 + 表名」取到数据，建临时表只是把同一件事做两遍 | 导出回执走**状态栏**（不在 280px 面板里再塞一行）；下钻的面板标题用表名（不带 schema 前缀）；导出内容随事件传（报告几 KB 级，不让宿主回读面板——避开渲染期租借冲突） |
 
 ## 7. 并发与资源
 
@@ -422,6 +423,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D58 源取样统一入口 | `crates/insight/src/model.rs`（`SampleSource` / `InsightTarget::{SourceColumn, SourceTable}` / `PanelData::source_sample` + `sample_table()`）、`service/persistence.rs`（`SOURCE_SAMPLE_LIMIT` / `sample_source_to_analysis_table` / `profile_source_column` / `profile_source_table`）、`service/mod.rs`（两个同步门面）、`jobs.rs`（`ProfileRequest::Source*` + 取样后回填样本表）、`insight_view.rs`（`set_source_sample` / 保存·多列·下钻改用 `sample_table`） |
 | D59 文件类数据源 | `engine/src/dbi/engine/duckdb_engine.rs`（`file_reader_function` + `load_file_source` 改用它）、`engine/src/duckdb/analysis.rs`（`create_analysis_temp_table_as`）、`insight/src/model.rs`（`SampleSource::{on_duckdb, duckdb_file}`）、`insight/src/service/persistence.rs`（按 `conn_id` 分流：`sample_from_connection` / 内存库 CTAS） |
 | D59 三个入口接线 | `analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats` + 行菜单）、`scratchpad/src/{host,scratchpad_view}.rs`（`ScratchpadHost::{can_view_stats, view_stats}` + 行菜单）、`workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs`、`workbench/src/panels/shared.rs`（`insight_sample_sql` 口径一处 + `open_insight_source_table`） |
+| D60 导出与下钻落地 | `insight/src/schema_view.rs`（`SchemaExportFormat` / `schema_export_file_stem`）、`insight_view.rs`（`InsightEvent::SchemaExportRequested` / `request_schema_export` / 健康条的「导出 ▾」）、`workbench/src/components/insight_actions.rs`（新：订阅事件 → 下钻与导出）、`workbench/src/panels/right.rs`（装配 + 持有订阅）、`panels/shared.rs`（`Shared::say`） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |

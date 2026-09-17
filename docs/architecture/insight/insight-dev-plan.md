@@ -23,6 +23,21 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — Phase 4 收尾：Schema 报告的导出与下钻（D60）
+
+**背景**：Phase 4 一批把门面 / 视图 / 导出函数 / 下钻事件做完了，但两处**宿主动作**悬着——导出按钮「等宿主提供选路径 + 写文件后再画」、下钻「等宿主登记临时表」。本批把这两条断头路补齐（并在 D58 之后把下钻改成源取样，不再建临时表）。
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **225 项**（本批 +3：导出格式标签与扩展名 · 文件名净化 · 面板侧导出事件）· 集成 `column_profile_e2e` **13 项** · `rds-workbench --lib` **73 项**（本批 +1：下钻端到端）· `insight_entry` **2 项** 全绿）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 导出格式与文件名 | `SchemaExportFormat { Json, Markdown }`（菜单标签 / 扩展名）+ `schema_export_file_stem`：只挡**文件名非法字符**、保留中文（ASCII 化会把中文名变成横线）、空名兜底 `schema` | `schema_view.rs` |
+| 导出事件 | `InsightEvent::SchemaExportRequested { format, file_stem, content }`：**内容在面板侧编码**（与界面同源的视图模型，D36）——宿主只选路径写文件，不必懂 JSON 分组键与 Markdown 转义；没有报告时不发事件 | `insight_view.rs`（`request_schema_export`）+ `jobs.rs`（未接时记日志） |
+| 导出按钮 | 结构 Tab 健康条右上「导出 ▾」（JSON / Markdown 两项）：原型画的两个 `⤓` 图标并成一个菜单 | `insight_view.rs` |
+| 下钻落地 | 宿主按 `{conn_id, database, schema, table}` 拼源取样 SQL（与导航树同口径）交 `SampleSource` → 展开右 Dock 面板；**不建临时表**——D58 之后那一步是多余的 | `workbench/src/components/insight_actions.rs`（新）+ `panels/right.rs`（装配 + 持有订阅） |
+| 导出落地 | `rfd` 保存对话框（默认名 `schema-<schema 名>.<扩展名>`）→ 写文件 → **状态栏回执**；回执收进 `Shared::say`（写入 notice + 请求宿主重绘，两件事不再各处写一遍） | 同上 + `panels/shared.rs` |
+| 测试 | 导出格式标签 / 扩展名 · 文件名净化（中文保留 / 非法字符挡 / 空名兜底）· 面板侧导出（无报告不发、JSON 带真内容与安全名、Markdown 同事件不同编码）· **下钻端到端**（发事件 → 宿主落地：右 Dock 展开 + 面板目标换成源取样，MySQL 反引号） | `schema_view.rs` / `insight_view.rs` / `insight_actions.rs` 测试模块 |
+
 ### 2026-09-18 — 文件类数据源 + 三个入口接线（D59）
 
 **背景**（产品口径）：**凡 DuckDB 能分析的资源都能洞察**——数据库导航树、分析存档、草稿箱、编辑器结果集，**包括 Excel 这类需要扩展的文件**（CSV / Parquet / Excel / JSON）。上一批（D58）交的是「源取样通道」，宿主侧入口还欠着（当时记档在案）；本批把通道补成「文件也能走」，并接上三个入口。
