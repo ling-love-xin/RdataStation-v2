@@ -96,8 +96,16 @@ impl ProjectStore {
         let project_db_path = meta_dir.join(PROJECT_DB_NAME);
         migration_manager.migrate(&project_db_path, MigrationType::ProjectMeta)?;
 
+        // 分析库必须走 DuckDB 迁移器：`MigrationManager` 是 rusqlite 实现，会给
+        // `analytics.duckdb` 写出 SQLite 格式的文件——该文件 DuckDB 仍能正常读写
+        // （内置 SQLite 存储后端），因此不会报错，但存储格式与迁移账本会和 DuckDB
+        // 原生库分裂（详见 `engine::migration::duckdb` 的模块与函数注释）。
+        // 这里写全路径而非 `use`：`duckdb` 这个模块名会和测试里的 duckdb crate 撞名。
         let analytics_db_path = meta_dir.join(ANALYTICS_DB_NAME);
-        migration_manager.migrate(&analytics_db_path, MigrationType::ProjectAnalysis)?;
+        engine::migration::duckdb::migrate_at_path(
+            &analytics_db_path,
+            MigrationType::ProjectAnalysis,
+        )?;
 
         // 保存项目信息（project.json + 同步到 project.db）
         store.save_info()?;
@@ -933,6 +941,16 @@ mod tests {
         // 层 2：DuckDB 分析引擎 analytics.duckdb（项目级分析数据 / mock 落盘目标）
         let analytics_path = meta_dir.join(ANALYTICS_DB_NAME);
         assert!(analytics_path.exists(), "analytics.duckdb 应存在");
+        // 格式断言：必须是 DuckDB **原生**格式。只断言「能被 duckdb::Connection 打开」
+        // 是无效的——DuckDB 内置 SQLite 存储后端（`duckdb_databases().type = 'sqlite'`），
+        // SQLite 格式的同名文件同样能打开，断言会假通过（该缺陷曾据此逃过整套测试）。
+        let head = std::fs::read(&analytics_path)
+            .map_err(|e| persistence::io_to_core_error(e, &analytics_path, "read header"))?;
+        assert!(
+            head.len() >= 12 && &head[8..12] == b"DUCK",
+            "analytics.duckdb 必须是 DuckDB 原生格式（魔数在偏移 8），实际头部: {:?}",
+            &head[..head.len().min(16)]
+        );
         let dconn = duckdb::Connection::open(&analytics_path).map_err(|e| {
             persistence::persistence_to_core_error("analytics.duckdb", "open", &e.to_string())
         })?;

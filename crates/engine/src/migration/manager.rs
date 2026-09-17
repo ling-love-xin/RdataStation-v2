@@ -53,11 +53,25 @@ impl MigrationManager {
     }
 
     /// 执行指定类型的迁移
+    ///
+    /// `ProjectAnalysis` 会被拒绝——它的载体是 DuckDB 文件，而本管理器基于 rusqlite：
+    /// 用它建 `analytics.duckdb` 会写出 **SQLite 格式**的文件。DuckDB 内置 SQLite 存储
+    /// 后端仍能打开这种文件（`duckdb_databases().type = 'sqlite'`），所以既不会报错、
+    /// 也无法从「open 成功」的断言里发现，只会让存储格式与迁移账本悄悄分裂。
+    /// DuckDB 侧请走 `crate::migration::duckdb::{migrate_at_path, apply_migrations}`。
     pub fn migrate(
         &self,
         db_path: &Path,
         migration_type: MigrationType,
     ) -> Result<Vec<Migration>, CoreError> {
+        if migration_type == MigrationType::ProjectAnalysis {
+            return Err(CoreError::common(CommonError::General(
+                "MigrationManager 不支持 ProjectAnalysis（目标为 DuckDB 文件）：请改用 \
+                 engine::migration::duckdb::migrate_at_path / apply_migrations"
+                    .to_string(),
+            )));
+        }
+
         // 确保父目录存在
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -221,5 +235,43 @@ impl MigrationManager {
 impl Default for MigrationManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db_path(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rds_mgr_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("db")
+    }
+
+    /// 防线：rusqlite 迁移器必须拒绝 DuckDB 类型，且**不得**留下半成品文件。
+    #[test]
+    fn rejects_project_analysis() {
+        let db_path = temp_db_path("guard");
+
+        let err = MigrationManager::new()
+            .migrate(&db_path, MigrationType::ProjectAnalysis)
+            .expect_err("ProjectAnalysis 必须被拒绝");
+        assert!(
+            err.to_string().contains("duckdb"),
+            "错误信息应指向 DuckDB 迁移器：{err}"
+        );
+        assert!(!db_path.exists(), "被拒绝时不应创建任何文件");
+    }
+
+    /// 对照组：SQLite 类型照常执行（确认防线没有误伤）。
+    #[test]
+    fn allows_sqlite_types() {
+        let db_path = temp_db_path("ok");
+
+        let applied = MigrationManager::new()
+            .migrate(&db_path, MigrationType::ProjectMeta)
+            .expect("ProjectMeta 应正常执行");
+        assert!(!applied.is_empty(), "首次应至少应用 1 条迁移");
+        assert!(db_path.exists(), "project.db 应被创建");
     }
 }
