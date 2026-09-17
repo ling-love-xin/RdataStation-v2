@@ -403,7 +403,7 @@ RulesWatcher（后台线程，drop 即停）：
 
 | # | 问题 | 影响 | 状态 |
 | --- | --- | --- | --- |
-| K1 | **无 SQL 沙箱**：v1 文档声称有 `ATTACH`/`INSTALL` 等黑名单，v2 代码里**不存在**；唯一防线是 `validate_identifiers`——只校验**参数值**字符（字母数字 / `_` / `-` / `.`），不校验规则 SQL 本身 | 安全：用户规则文件的 SQL 直接在该进程的 DuckDB 上执行，可 `ATTACH`/`COPY` 到任意路径 | 待决策（见 §12） |
+| K1 | **无 SQL 沙箱**：v1 文档声称有 `ATTACH`/`INSTALL` 等黑名单，v2 代码里**不存在**；唯一防线是 `validate_identifiers`——只校验**参数值**字符（字母数字 / `_` / `-` / `.`），不校验规则 SQL 本身 | 安全：用户规则文件的 SQL 直接在该进程的 DuckDB 上执行，可 `ATTACH`/`COPY` 到任意路径 | **已核查（2026-09-17）**：原来的「禁用扩展 / 只读连接」选项（Q1-b）**在现有共享连接上不可行**——`register_external_database`（`ATTACH`）、`load_file_source`（`read_csv_auto`/`read_parquet`/`read_excel_auto`）与 `ExtensionManager` 的 `INSTALL`/`LOAD` 都跑在**同一个进程级内存单例**（即洞察与结果集临时表所在的连接）。推荐组合见 §12 Q1（待拍板） |
 | K2 | `crates/engine/insight-rules/` 是 `crates/insight/insight-rules/` 的**逐字节重复副本**，全仓零代码引用 | 后来者可能改错副本 | 待删除确认 |
 | K3 | ~~`table-quality-overview` 的 SQL 引用表 `insight_column_stats`，该表不存在~~ | — | ✅ 已处置（2026-09-17）：**下线**。那条 SQL 要从一张「逐列统计物化表」里读，而静态 SQL 不可能对任意表的每一列算统计（需动态 SQL）；能力本身已在 Rust 侧（「评估全表」+ 表质量摘要）。规则文件已删，需要时从 git 历史取 |
 | K4 | ~~归属偏差未归位~~ | — | ✅ 已归位（Phase 0 / 0.2）：类型 → `model::types`、仓库 → `store::{body,meta}`、`detect_extremes` → `insight_engine`、门面 → `service::{InsightService,persistence}` |
@@ -424,7 +424,7 @@ RulesWatcher（后台线程，drop 即停）：
 
 | # | 问题 | 选项 |
 | --- | --- | --- |
-| Q1 | **规则 SQL 的安全边界**（K1） | (a) 启动期静态黑名单（`ATTACH`/`INSTALL`/`COPY`/`EXPORT`…）；(b) DuckDB 侧限制（只读连接 / 禁用扩展）；(c) 明确「用户规则文件 = 可信本地文件」并在文档声明（当前事实）；(d) 引入沙箱执行（成本最高） |
+| Q1 | **规则 SQL 的安全边界**（K1） | **已核查（2026-09-17），推荐如下（待拍板）**：① **解析期静态门**（防呆层）：只放行单条 `SELECT` / `WITH`，禁分号与多语句，关键字黑名单（`ATTACH`/`COPY`/`EXPORT`/`INSTALL`/`LOAD`/`PRAGMA`/`SET`/`CALL`/`CREATE`/`DROP`/`ALTER`…）与表函数黑名单（`read_*`/`glob`/`*_scan`/`query*`）；报错文案写明「规则 SQL 只允许对临时表做只读聚合」。**定位是防呆，不是安全边界**（DuckDB 无官方解析沙箱）。② **诚实声明**：规则文件 = 可信本地文件（现状，文档已写）。③ **项目规则信任门**（推荐新增，真正的边界）：项目层规则来自仓库，克隆不信任的仓库 + 打开项目 = 把它的 SQL 拿到本机执行 → 首次发现项目规则时要求用户确认信任（或默认不加载）。✖ 不推荐 (b) 的「禁用扩展 / 只读连接」：已核查会连带砸掉产品自身的 `ATTACH` / `read_csv` / `INSTALL`（同一内存单例）；✖ 不推荐 (d) 沙箱执行（成本与收益不成比例） |
 | Q2 | 视图归属（K8） | 方案 A / B（开发方案 §3.1） |
 | Q3 | `table-quality-overview` 的处置（K3） | **已定（2026-09-17）：下线**（K3 已处置：静态 SQL 无法对每列算统计，能力已在「评估全表」） |
 | Q4 | 快照保留上限与清理默认值 | 每列 `MAX_VERSIONS_PER_COLUMN`；清理默认 30 天（v1 硬编码） |

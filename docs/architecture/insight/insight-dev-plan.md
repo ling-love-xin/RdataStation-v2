@@ -23,6 +23,12 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Q1 核查（规则 SQL 安全边界）：先前的「禁用外部访问」建议作废
+
+**核查结论**（只读代码，无改动）：对 DuckDB 设 `enable_external_access = false` / 「只读连接 / 禁用扩展」这类限制**在现有连接模型下不可行**——`dbi/engine/duckdb_engine.rs` 的 `register_external_database`（`ATTACH`）与 `load_file_source`（`read_csv_auto` / `read_parquet` / `read_excel_auto`）、`duckdb/extensions.rs` 的 `INSTALL` / `LOAD` 都跑在**同一个进程级内存单例**上（就是洞察与结果集临时表所在的连接），且该开关只能在建连接时设、设了回不去 → 会把产品自身的「连接 DuckDB 数据源 / 打开 CSV·Parquet·Excel / 装扩展」一起挡掉。
+
+**Q1 推荐改为**（已写进架构 §11 K1 / §12 Q1 与手册 §4.7，待拍板）：① **解析期静态门**（只放行单条 `SELECT` / `WITH`，禁分号 / `ATTACH` / `COPY` / `read_*` 等——**防呆层，不是安全边界**）；② 诚实声明（规则文件 = 可信本地文件，现状）；③ **项目规则信任门**（推荐新增，真正的边界：项目规则跟着仓库走，克隆不信任的仓库 + 打开项目 = 把它的 SQL 拿到本机执行）。
+
 ### 2026-09-17 — 临时表一致化（K16 ①+②：洞察中间表改走 `duckdb::analysis`）
 
 **已完成并验证**（`cargo test -p rds-engine --lib` **345 项**（含新增 `duckdb::analysis` **6 项**）· `cargo test -p rds-insight --lib` **202 项** + 集成 **13 项** · `cargo test -p rds-workbench --test insight_entry` **2 项**全绿；本批文件 clippy 零告警，全仓 `cargo fmt --check` 本就不通过，未跑 fmt）
