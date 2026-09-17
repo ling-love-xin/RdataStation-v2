@@ -12,3 +12,5 @@ v1/frontend/node_modules/
 # 工具脚本与真机调试跑出来的日志（生成物；`docs/tmp/screenshot.png` 是截图，不属生成物）
 /docs/tmp/*.log
 /tools/*.log
+# 手工回归跑的输出（历史上的 `targetm3-regression.log` 曾误入库；日志不入库）
+/target*.log
