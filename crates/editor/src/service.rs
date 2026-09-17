@@ -41,6 +41,8 @@ pub struct Document {
     tier: FileTier,
     /// 绑定的连接 id（B1）；`None` = 未绑定 → 执行跟随**当前活动连接**（1a 口径）
     connection: Option<String>,
+    /// 【B13】执行通道（文档级属性，与连接绑定同类；随会话持久化）
+    channel: crate::channel::ExecChannel,
 }
 
 impl Document {
@@ -54,6 +56,7 @@ impl Document {
         read_only: ReadOnly,
         tier: FileTier,
         connection: Option<String>,
+        channel: crate::channel::ExecChannel,
     ) -> Self {
         Self {
             id,
@@ -65,6 +68,7 @@ impl Document {
             read_only,
             tier,
             connection,
+            channel,
         }
     }
 
@@ -101,6 +105,11 @@ impl Document {
     /// 绑定的连接 id（B1）；`None` = 未绑定，执行跟随当前活动连接
     pub fn connection(&self) -> Option<&str> {
         self.connection.as_deref()
+    }
+
+    /// 【B13】执行通道（文档级属性；默认源库直连）
+    pub fn channel(&self) -> crate::channel::ExecChannel {
+        self.channel
     }
 
     /// 提示卡文案（档位带来的操作限制；`None` = 不显示）
@@ -166,6 +175,8 @@ pub struct OpenRequest {
     pub tier: FileTier,
     /// 绑定连接（B1）；`None` = 未绑定，执行跟随当前活动连接
     pub connection: Option<String>,
+    /// 【B13】执行通道（默认源库直连）
+    pub channel: crate::channel::ExecChannel,
 }
 
 impl OpenRequest {
@@ -178,6 +189,7 @@ impl OpenRequest {
             read_only: ReadOnly::none(),
             tier: FileTier::Normal,
             connection: None,
+            channel: crate::channel::ExecChannel::default(),
         }
     }
 
@@ -190,6 +202,7 @@ impl OpenRequest {
             read_only: ReadOnly::none(),
             tier: FileTier::Normal,
             connection: None,
+            channel: crate::channel::ExecChannel::default(),
         }
     }
 
@@ -201,6 +214,12 @@ impl OpenRequest {
 
     pub fn with_read_only(mut self, read_only: ReadOnly) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    /// 【B13】带上执行通道（导航 / 会话恢复用）
+    pub fn with_channel(mut self, channel: crate::channel::ExecChannel) -> Self {
+        self.channel = channel;
         self
     }
 
@@ -334,6 +353,7 @@ impl EditorService {
             request.read_only,
             request.tier,
             request.connection,
+            request.channel,
         ));
         self.active = Some(id.clone());
 
@@ -439,6 +459,27 @@ impl EditorService {
             }
             None => false,
         }
+    }
+
+    /// 【B13】切换某文档的执行通道（返回是否真的变了）
+    pub fn set_channel(&mut self, id: &DocumentId, channel: crate::channel::ExecChannel) -> bool {
+        match self.documents.iter_mut().find(|doc| doc.id() == id) {
+            Some(doc) => {
+                let changed = doc.channel != channel;
+                doc.channel = channel;
+                changed
+            }
+            None => false,
+        }
+    }
+
+    /// 【B13】某文档当前的执行通道（文档不存在时给默认档）
+    pub fn channel_for(&self, id: &DocumentId) -> crate::channel::ExecChannel {
+        self.documents
+            .iter()
+            .find(|doc| doc.id() == id)
+            .map(|doc| doc.channel)
+            .unwrap_or_default()
     }
 
     /// 某文档绑定的连接（执行时用；`None` = 未绑定或文档不存在）

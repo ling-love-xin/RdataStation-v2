@@ -6,7 +6,7 @@
 //! | --- | --- | --- |
 //! | 执行什么 | [`resolve_target`] | **纯函数**（选区 > 光标所在语句 > 全部，语句定位走 `engine::sql::split`） |
 //! | 谁来跑 | [`QueryRunner`] | 端口（宿主注入：连接池 / 全局单例 / 假实现都由宿主决定） |
-//! | 跑完放哪 | [`ExecChannel`] 的结果队列 | 工作线程 → 主线程（GPUI 轮询泵取回） |
+//! | 跑完放哪 | [`ExecQueue`] 的结果队列 | 工作线程 → 主线程（GPUI 轮询泵取回） |
 //!
 //! ## 线程模型
 //!
@@ -19,7 +19,7 @@
 //!
 //! ## 并发策略（1a）
 //!
-//! 同一通道**同时只跑一个作业**（[`ExecChannel::submit`] 忙时返回 [`SubmitError::Busy`]）。
+//! 同一通道**同时只跑一个作业**（[`ExecQueue::submit`] 忙时返回 [`SubmitError::Busy`]）。
 //! 一个作业可以带多条语句（[`ExecTarget::Batch`]）：它们在**同一条工作线程上顺序**跑完，
 //! 每条语句各自回填一份结果——因此"批量"既不是驱动能力的猜测，也不会中途被别的提交插队。
 //! 事务 / 会话亲和（架构 §12 #2）属 1b：那需要 per-session 独占连接，不是这里加锁能解决的。
@@ -508,6 +508,8 @@ struct ExecJob {
     placement: ResultPlacement,
     /// 执行选项（B4：自动提交关 → 本次执行进事务）
     options: RunOptions,
+    /// 【B13】这次执行走哪个通道（回填结论时原样带回去）
+    channel: crate::channel::ExecChannel,
     /// 【B5b】取下一段的 `(offset, limit)`；`Some` 时走 `fetch_next` 而不是 `run`
     segment: Option<(usize, usize)>,
     /// 【B14】下发源库的筛选词与列名；`Some` 时走 `run_filtered`
@@ -522,6 +524,8 @@ pub struct ExecOutcome {
     pub document: DocumentId,
     /// 实际使用的连接（B1）；`None` = 未绑定（跟随当前活动连接）
     pub connection: Option<String>,
+    /// 【B13】这次执行走的是哪个通道（结果集要记住它：界面据此打徽标、切通道后标灰）
+    pub channel: crate::channel::ExecChannel,
     /// 实际执行的 SQL（结果区标题与历史用）
     pub sql: String,
     /// 这份结果怎么落位（B2）：批量 / 新标签执行都给 `NewSet`
@@ -561,10 +565,13 @@ impl SubmitError {
     }
 }
 
-/// 执行通道：一条工作线程 + 一个结果队列
+/// 执行队列：一条工作线程 + 一个结果队列
 ///
 /// 生命周期：随宿主（面板 / 工作台）存活；`Drop` 时把工作线程放掉（发送端关闭 → 线程退出）。
-pub struct ExecChannel {
+///
+/// **与「执行通道」（[`crate::channel::ExecChannel`]：源库 / 加速 / 联邦）不是一回事**：那个回答
+/// “在哪儿跑”，这个负责“把作业交给线程并收结论”。名字分开是为了不让两件事读起来像同一件。
+pub struct ExecQueue {
     tx: Option<Sender<ExecJob>>,
     done: Arc<Mutex<VecDeque<ExecOutcome>>>,
     busy: Arc<AtomicBool>,
@@ -580,8 +587,8 @@ pub struct ExecChannel {
     runner: Arc<dyn QueryRunner>,
 }
 
-impl ExecChannel {
-    /// 用一个执行器起通道
+impl ExecQueue {
+    /// 用一个执行器起队列
     pub fn new(runner: Arc<dyn QueryRunner>) -> Self {
         let (tx, rx) = mpsc::channel::<ExecJob>();
         let done: Arc<Mutex<VecDeque<ExecOutcome>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -646,6 +653,7 @@ impl ExecChannel {
                                 connection: job.connection.clone(),
                                 sql,
                                 placement: job.placement,
+                                channel: job.channel,
                                 transaction,
                                 result,
                             });
@@ -673,7 +681,7 @@ impl ExecChannel {
     ///
     /// `connection` 是**文档绑定的连接**（B1）；`None` = 未绑定，执行器回退到“当前活动连接”。
     /// `placement` 决定结果落到当前结果集还是新结果集（B2）；`options` 携带
-    /// 「自动提交关闭 → 本次执行进事务」（B4）。
+    /// 「自动提交关闭 → 本次执行进事务」（B4）；`channel` 是**执行通道**（B13，原样回到结论里）。
     pub fn submit(
         &self,
         document: DocumentId,
@@ -681,6 +689,7 @@ impl ExecChannel {
         connection: Option<String>,
         placement: ResultPlacement,
         options: RunOptions,
+        channel: crate::channel::ExecChannel,
     ) -> Result<(), SubmitError> {
         let statements = target.statements();
         if statements.is_empty() {
@@ -705,6 +714,7 @@ impl ExecChannel {
                 statements,
                 placement,
                 options,
+                channel,
                 // 【B5b】取下一段走另一条取数路径（`fetch_next`），其余字段都一样
                 segment: target.segment(),
                 // 【B14】下发筛选走 `run_filtered`（筛词与列名在这儿带上）
@@ -838,7 +848,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     }
 }
 
-impl Drop for ExecChannel {
+impl Drop for ExecQueue {
     fn drop(&mut self) {
         // 关掉发送端 → 工作线程 `recv` 返回 Err → 线程自然退出
         self.tx = None;
@@ -849,7 +859,7 @@ impl Drop for ExecChannel {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ExecChannel, ExecMenuKind, ExecTarget, QueryData, QueryRunner, ResultPlacement, RunOptions,
+        ExecQueue, ExecMenuKind, ExecTarget, QueryData, QueryRunner, ResultPlacement, RunOptions,
         SEGMENT_ROWS, SubmitError, TxAction, TxNote, TxSnapshot, all_target, batch_target,
         resolve_target, statement_target, target_for_menu,
     };
@@ -1151,10 +1161,10 @@ mod tests {
         }
     }
 
-    fn channel() -> (ExecChannel, Arc<AtomicUsize>, SeenConnections) {
+    fn channel() -> (ExecQueue, Arc<AtomicUsize>, SeenConnections) {
         let calls = Arc::new(AtomicUsize::new(0));
         let seen_connections = Arc::new(Mutex::new(Vec::new()));
-        let channel = ExecChannel::new(Arc::new(FakeRunner {
+        let channel = ExecQueue::new(Arc::new(FakeRunner {
             calls: calls.clone(),
             seen_connections: seen_connections.clone(),
         }));
@@ -1162,12 +1172,12 @@ mod tests {
     }
 
     /// 轮询等待结果（带超时：通道坏掉时测试要失败而不是挂住）
-    fn wait(channel: &ExecChannel) -> Vec<super::ExecOutcome> {
+    fn wait(channel: &ExecQueue) -> Vec<super::ExecOutcome> {
         wait_for(channel, 1)
     }
 
     /// 轮询等待 N 条结果（批量：语句逐条回来，只等第一条会把后面的漏掉）
-    fn wait_for(channel: &ExecChannel, count: usize) -> Vec<super::ExecOutcome> {
+    fn wait_for(channel: &ExecQueue, count: usize) -> Vec<super::ExecOutcome> {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut collected = Vec::new();
         while collected.len() < count {
@@ -1186,7 +1196,7 @@ mod tests {
     }
 
     /// 等通道回到空闲（忙标记在工作线程上清，与回填不同步，不能立刻断言）
-    fn wait_until_idle(channel: &ExecChannel) {
+    fn wait_until_idle(channel: &ExecQueue) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while channel.is_busy() {
             assert!(Instant::now() < deadline, "通道迟迟没回到空闲");
@@ -1271,7 +1281,7 @@ mod tests {
     #[test]
     fn cancel_reaches_the_runner_with_the_running_connection() {
         let (runner, _stop, calls, seen_cancels) = CancellableRunner::new();
-        let channel = ExecChannel::new(runner);
+        let channel = ExecQueue::new(runner);
         let target = ExecTarget::Statement("select slow".to_string());
         channel
             .submit(
@@ -1280,6 +1290,7 @@ mod tests {
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1303,7 +1314,7 @@ mod tests {
     #[test]
     fn cancel_right_after_submit_still_targets_the_job_connection() {
         let (runner, _stop, calls, seen_cancels) = CancellableRunner::new();
-        let channel = ExecChannel::new(runner);
+        let channel = ExecQueue::new(runner);
         let target = ExecTarget::Statement("select slow".to_string());
         channel
             .submit(
@@ -1312,6 +1323,7 @@ mod tests {
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1341,7 +1353,7 @@ mod tests {
     #[test]
     fn cancel_stops_the_rest_of_a_batch() {
         let (runner, _stop, calls, _seen_cancels) = CancellableRunner::new();
-        let channel = ExecChannel::new(runner);
+        let channel = ExecQueue::new(runner);
         let target = batch_target("select slow;\nselect 2;\nselect 3;");
         channel
             .submit(
@@ -1350,6 +1362,7 @@ mod tests {
                 None,
                 ResultPlacement::NewSet,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("提交批量");
 
@@ -1397,7 +1410,7 @@ mod tests {
         }
 
         let stop = Arc::new(AtomicBool::new(false));
-        let channel = ExecChannel::new(Arc::new(NothingToCancel { stop: stop.clone() }));
+        let channel = ExecQueue::new(Arc::new(NothingToCancel { stop: stop.clone() }));
         channel
             .submit(
                 DocumentId::new("doc-nothing"),
@@ -1405,6 +1418,7 @@ mod tests {
                 None,
                 ResultPlacement::Replace,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("提交");
         channel.cancel().expect("中断应当被接受");
@@ -1503,7 +1517,7 @@ mod tests {
     }
 
     /// 等一次事务动作的回执（它不在“执行忙”里，得单独等）
-    fn wait_for_tx_notes(channel: &ExecChannel, count: usize) -> Vec<TxNote> {
+    fn wait_for_tx_notes(channel: &ExecQueue, count: usize) -> Vec<TxNote> {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut notes = Vec::new();
         while notes.len() < count {
@@ -1521,7 +1535,7 @@ mod tests {
     #[test]
     fn a_transaction_action_reaches_the_runner_and_reports_the_new_state() {
         let (runner, actions, _options, _open) = TxRunner::new();
-        let channel = ExecChannel::new(runner);
+        let channel = ExecQueue::new(runner);
         let document = DocumentId::new("doc-tx");
 
         assert!(channel.supports_transactions(), "这个执行器支持事务");
@@ -1550,7 +1564,7 @@ mod tests {
     fn committing_reports_that_the_transaction_is_closed() {
         let (runner, actions, _options, open) = TxRunner::new();
         open.store(true, Ordering::SeqCst);
-        let channel = ExecChannel::new(runner);
+        let channel = ExecQueue::new(runner);
 
         channel
             .request_transaction(DocumentId::new("doc-tx"), TxAction::Commit, None)
@@ -1565,7 +1579,7 @@ mod tests {
     #[test]
     fn transaction_actions_are_refused_while_a_statement_is_running() {
         let (runner, _stop, calls, _seen) = CancellableRunner::new();
-        let channel = ExecChannel::new(runner);
+        let channel = ExecQueue::new(runner);
         channel
             .submit(
                 DocumentId::new("doc-tx-busy"),
@@ -1573,6 +1587,7 @@ mod tests {
                 None,
                 ResultPlacement::Replace,
                 RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
         wait_until_started(&calls, 1);
@@ -1591,7 +1606,7 @@ mod tests {
     #[test]
     fn run_options_reach_the_runner_and_the_snapshot_rides_along() {
         let (runner, _actions, options, _open) = TxRunner::new();
-        let channel = ExecChannel::new(runner);
+        let channel = ExecQueue::new(runner);
         channel
             .submit(
                 DocumentId::new("doc-tx-run"),
@@ -1601,6 +1616,7 @@ mod tests {
                 RunOptions {
                     use_transaction: true,
                 },
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1636,6 +1652,7 @@ mod tests {
                 None,
                 ResultPlacement::Append,
                 RunOptions::default(),
+                crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1670,6 +1687,7 @@ mod tests {
                 Some("P_orders".to_string()),
                 ResultPlacement::Replace,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1702,6 +1720,7 @@ mod tests {
                 None,
                 ResultPlacement::Replace,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1725,6 +1744,7 @@ mod tests {
                 Some("P_orders".to_string()),
                 ResultPlacement::NewSet,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("提交批量");
 
@@ -1756,7 +1776,7 @@ mod tests {
             }
         }
 
-        let channel = ExecChannel::new(Arc::new(SlowStatementRunner));
+        let channel = ExecQueue::new(Arc::new(SlowStatementRunner));
         let target = batch_target("select 1; select 2; select 3;");
         channel
             .submit(
@@ -1765,6 +1785,7 @@ mod tests {
                 None,
                 ResultPlacement::NewSet,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("提交");
 
@@ -1787,6 +1808,7 @@ mod tests {
                 None,
                 ResultPlacement::Replace,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect_err("空目标应被拒");
         assert_eq!(error, SubmitError::Empty);
@@ -1814,7 +1836,7 @@ mod tests {
         }
 
         let release = Arc::new(Mutex::new(false));
-        let channel = ExecChannel::new(Arc::new(SlowRunner {
+        let channel = ExecQueue::new(Arc::new(SlowRunner {
             release: release.clone(),
         }));
         let document = DocumentId::new("doc-slow");
@@ -1827,6 +1849,7 @@ mod tests {
                 None,
                 ResultPlacement::Replace,
             RunOptions::default(),
+            crate::channel::ExecChannel::default(),
             )
             .expect("首次提交");
         // 等它真的进到忙状态
@@ -1844,6 +1867,7 @@ mod tests {
                     None,
                     ResultPlacement::Replace,
                     RunOptions::default(),
+                    crate::channel::ExecChannel::default(),
                 )
                 .expect_err("忙时应被拒"),
             SubmitError::Busy
@@ -1858,7 +1882,7 @@ mod tests {
     #[test]
     fn dropping_the_channel_lets_the_worker_exit() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let channel = ExecChannel::new(Arc::new(FakeRunner {
+        let channel = ExecQueue::new(Arc::new(FakeRunner {
             calls: calls.clone(),
             seen_connections: Arc::new(Mutex::new(Vec::new())),
         }));

@@ -59,6 +59,8 @@ impl WorkbenchSessionStore {
             // 1a 还没有连接绑定（架构 §12 #26）：先留空，1b 接连接绑定后写真实 conn_id
             connection_id: String::new(),
             mode: session.mode.as_key().to_string(),
+            // 【B13】通道是文档属性（源库 / 加速 / 联邦）：存短码，重启后认回来
+            channel: session.channel.code().to_string(),
             content: session.content.clone(),
             cursor_position: session.cursor,
             selection_start: session.selection.map(|(start, _)| start),
@@ -73,6 +75,8 @@ impl WorkbenchSessionStore {
             // 会话标识就是路径键：当作路径用（Windows 上大小写不敏感，能打开同一文件）
             path: Some(context.id),
             mode: EditorMode::from_key(&context.mode),
+            // 认不出的通道码回源库档（`from_code` 的零值语义）：不假装记住了别的
+            channel: editor::channel::ExecChannel::from_code(&context.channel),
             content: context.content,
             cursor: context.cursor_position,
             selection: match (context.selection_start, context.selection_end) {
@@ -118,14 +122,16 @@ fn now_ms() -> u64 {
 mod tests {
     // 安全模式：**不通配导入**
     use super::WorkbenchSessionStore;
+    use editor::channel::ExecChannel;
     use editor::model::EditorMode;
     use editor::session::SavedSession;
 
     fn session() -> SavedSession {
         SavedSession {
             id: "d:/sql/a.sql".to_string(),
-            path: Some("D:/sql/a.sql".to_string()),
+            path: Some("D:/sql/A.sql".to_string()),
             mode: EditorMode::Analysis,
+            channel: ExecChannel::Source,
             content: "select 1;".to_string(),
             cursor: 7,
             selection: Some((1, 3)),
@@ -144,6 +150,27 @@ mod tests {
         assert_eq!(back.content, "select 1;");
         assert_eq!(back.cursor, 7);
         assert_eq!(back.selection, Some((1, 3)));
+    }
+
+    /// 【B13】通道以短码存库、按短码认回来；认不出的码回源库档（不假装记住了别的）
+    #[test]
+    fn the_channel_travels_as_a_code() {
+        let mut accelerated = session();
+        accelerated.channel = ExecChannel::Accelerated;
+        let row = WorkbenchSessionStore::to_context(&accelerated);
+        assert_eq!(row.channel, "accelerated");
+        assert_eq!(
+            WorkbenchSessionStore::to_session(row).channel,
+            ExecChannel::Accelerated
+        );
+
+        let mut unknown = WorkbenchSessionStore::to_context(&session());
+        unknown.channel = "notebook-v9".to_string();
+        assert_eq!(
+            WorkbenchSessionStore::to_session(unknown).channel,
+            ExecChannel::Source,
+            "认不出的通道不该把整份会话弄丢，也不能冒充别的档"
+        );
     }
 
     #[test]

@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::channel::ExecChannel;
 use crate::model::EditorMode;
 
 /// 一份可恢复的编辑器会话
@@ -28,6 +29,8 @@ pub struct SavedSession {
     /// 文档标题（恢复时的兜底展示；真实标题由路径推断）
     pub path: Option<String>,
     pub mode: EditorMode,
+    /// 【B13】执行通道（文档级属性，与模式同类：重启后不能丢）
+    pub channel: ExecChannel,
     pub content: String,
     /// 光标（字节偏移）
     pub cursor: usize,
@@ -121,6 +124,7 @@ pub fn worth_saving(session: &SavedSession) -> bool {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{MemorySessionStore, SavedSession, SessionStore, session_id_for_path, worth_saving};
+    use crate::channel::ExecChannel;
     use crate::model::EditorMode;
 
     fn session(id: &str, content: &str, mode: EditorMode) -> SavedSession {
@@ -128,6 +132,7 @@ mod tests {
             id: id.to_string(),
             path: Some(id.to_string()),
             mode,
+            channel: ExecChannel::default(),
             content: content.to_string(),
             cursor: 7,
             selection: Some((1, 3)),
@@ -147,6 +152,18 @@ mod tests {
         assert_eq!(loaded.cursor, 7);
         assert_eq!(loaded.selection, Some((1, 3)));
         assert_eq!(store.len(), 1);
+    }
+
+    /// 【B13】通道是文档属性，与模式一样得跟着会话回来（否则重启都回源库档）
+    #[test]
+    fn the_channel_rides_along_with_the_session() {
+        let store = MemorySessionStore::new();
+        let mut saved = session("d:/sql/a.sql", "select 1;", EditorMode::Sql);
+        saved.channel = ExecChannel::Accelerated;
+        store.save(&saved).expect("save");
+
+        let loaded = store.load("d:/sql/a.sql").expect("load").expect("有");
+        assert_eq!(loaded.channel, ExecChannel::Accelerated);
     }
 
     #[test]

@@ -16,6 +16,7 @@
 //! 上限 [`MAX_RESULT_SETS`]（原型 §2.4：上限 5、超出淘汰最旧）淘汰的是**最旧的未选中项**：
 //! 正在看的那一份永远不会被自己的下一个结果挤掉。
 
+use crate::channel::ExecChannel;
 use crate::execution::ResultPlacement;
 use crate::model::DocumentId;
 
@@ -36,6 +37,8 @@ pub struct ResultEntry {
     pub affected_rows: Option<u32>,
     /// 这份结果是**在哪个连接上**跑出来的（B5 结果工具栏要显示它；`None` = 没绑定）
     pub connection: Option<String>,
+    /// 【B13】这份结果是**在哪个通道上**跑出来的（标签徽标 + 切通道后标灰都读它）
+    pub channel: ExecChannel,
     /// 【B5b】这一段拿满了没有（拿满 = 可能还有下一段；界面据此摆「取下一段」）
     pub has_more: bool,
     /// 列名（失败时为空）
@@ -63,6 +66,8 @@ impl ResultEntry {
             truncated,
             affected_rows: None,
             connection: None,
+            // 认不出通道时按源库算（默认档；真实通道由 `entry_from` 从结论里带上）
+            channel: ExecChannel::default(),
             // 一次拿完的路径（非分段）没有“下一段”可言；分段抓取由 `has_more` 另行标
             has_more: truncated,
             columns,
@@ -83,6 +88,12 @@ impl ResultEntry {
         self
     }
 
+    /// 【B13】带上这份结果的来源通道（标签徽标与“切通道即失效”的标灰读它）
+    pub fn with_channel(mut self, channel: ExecChannel) -> Self {
+        self.channel = channel;
+        self
+    }
+
     /// 【B5b】标上“这一段拿满了没有”（「取下一段」能不能按就靠它）
     pub fn with_has_more(mut self, has_more: bool) -> Self {
         self.has_more = has_more;
@@ -98,6 +109,7 @@ impl ResultEntry {
             truncated: false,
             affected_rows: None,
             connection: None,
+            channel: ExecChannel::default(),
             has_more: false,
             columns: Vec::new(),
             rows: Vec::new(),

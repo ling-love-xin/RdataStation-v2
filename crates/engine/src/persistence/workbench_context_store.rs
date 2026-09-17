@@ -76,6 +76,11 @@ pub struct EditorContext {
     ///
     /// 模式是**文档属性**（见编辑器架构 §2），重启后要不丢，就得和光标一起落库。
     pub mode: String,
+    /// 【B13】执行通道（`source` / `accelerated` / `federated`；旧库补列时默认 `source`）
+    ///
+    /// 与模式同属**文档属性**：它决定“这条 SQL 在哪儿跑”（源库 / 本地加速副本 / 联邦），
+    /// 重启后不能静静回退到源库——那会让用户以为自己还在看加速副本。
+    pub channel: String,
     /// 编辑器内容
     pub content: String,
     /// 光标位置
@@ -139,6 +144,7 @@ impl WorkbenchContextStore {
                     id TEXT PRIMARY KEY,
                     connection_id TEXT NOT NULL,
                     mode TEXT NOT NULL DEFAULT 'sql',
+                    channel TEXT NOT NULL DEFAULT 'source',
                     content TEXT NOT NULL,
                     cursor_position INTEGER NOT NULL DEFAULT 0,
                     selection_start INTEGER,
@@ -162,6 +168,13 @@ impl WorkbenchContextStore {
                 "editor_contexts",
                 "mode",
                 "TEXT NOT NULL DEFAULT 'sql'",
+            )?;
+            // 【B13】老库也要能恢复通道（默认源库档：认不出就是源库，不冒充别的）
+            ensure_column(
+                conn,
+                "editor_contexts",
+                "channel",
+                "TEXT NOT NULL DEFAULT 'source'",
             )?;
 
             Ok(())
@@ -231,12 +244,13 @@ impl WorkbenchContextStore {
         self.with_connection(|conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO editor_contexts
-                 (id, connection_id, mode, content, cursor_position, selection_start, selection_end, updated_at_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     context.id,
                     context.connection_id,
                     context.mode,
+                    context.channel,
                     context.content,
                     context.cursor_position as i64,
                     context.selection_start.map(|v| v as i64),
@@ -257,7 +271,7 @@ impl WorkbenchContextStore {
     pub fn load_editor_context(&self, editor_id: &str) -> Result<Option<EditorContext>, CoreError> {
         self.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, connection_id, mode, content, cursor_position, selection_start, selection_end, updated_at_ms
+                "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end, updated_at_ms
                  FROM editor_contexts WHERE id = ?1"
             ).map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -270,11 +284,12 @@ impl WorkbenchContextStore {
                     id: row.get(0)?,
                     connection_id: row.get(1)?,
                     mode: row.get(2)?,
-                    content: row.get(3)?,
-                    cursor_position: row.get::<_, i64>(4)? as usize,
-                    selection_start: row.get::<_, Option<i64>>(5)?.map(|v| v as usize),
-                    selection_end: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
-                    updated_at_ms: row.get::<_, i64>(7)? as u64,
+                    channel: row.get(3)?,
+                    content: row.get(4)?,
+                    cursor_position: row.get::<_, i64>(5)? as usize,
+                    selection_start: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
+                    selection_end: row.get::<_, Option<i64>>(7)?.map(|v| v as usize),
+                    updated_at_ms: row.get::<_, i64>(8)? as u64,
                 })
             }).optional().map_err(|e| CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -294,7 +309,7 @@ impl WorkbenchContextStore {
         self.with_connection(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, connection_id, mode, content, cursor_position, selection_start, selection_end, updated_at_ms
+                    "SELECT id, connection_id, mode, channel, content, cursor_position, selection_start, selection_end, updated_at_ms
                      FROM editor_contexts ORDER BY updated_at_ms DESC LIMIT 1",
                 )
                 .map_err(|e| {
@@ -311,11 +326,12 @@ impl WorkbenchContextStore {
                         id: row.get(0)?,
                         connection_id: row.get(1)?,
                         mode: row.get(2)?,
-                        content: row.get(3)?,
-                        cursor_position: row.get::<_, i64>(4)? as usize,
-                        selection_start: row.get::<_, Option<i64>>(5)?.map(|v| v as usize),
-                        selection_end: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
-                        updated_at_ms: row.get::<_, i64>(7)? as u64,
+                        channel: row.get(3)?,
+                        content: row.get(4)?,
+                        cursor_position: row.get::<_, i64>(5)? as usize,
+                        selection_start: row.get::<_, Option<i64>>(6)?.map(|v| v as usize),
+                        selection_end: row.get::<_, Option<i64>>(7)?.map(|v| v as usize),
+                        updated_at_ms: row.get::<_, i64>(8)? as u64,
                     })
                 })
                 .optional()
@@ -452,12 +468,39 @@ mod tests {
             id: id.to_string(),
             connection_id: "conn-1".to_string(),
             mode: mode.to_string(),
+            channel: "source".to_string(),
             content: "select 1;".to_string(),
             cursor_position: 4,
             selection_start: Some(1),
             selection_end: Some(3),
             updated_at_ms: 1_700_000_000_000,
         }
+    }
+
+    /// 【B13】通道与模式同类：必须一起落库（否则重启后“加速”会静静变回源库）
+    #[test]
+    fn editor_context_round_trips_with_its_channel() {
+        let (dir, db) = temp_db("channel");
+        let store = open_store(&db);
+
+        let mut accelerated = context("doc.sql", "sql");
+        accelerated.channel = "accelerated".to_string();
+        store.save_editor_context(&accelerated).expect("save");
+
+        let loaded = store
+            .load_editor_context("doc.sql")
+            .expect("load")
+            .expect("存在");
+        assert_eq!(loaded.channel, "accelerated");
+        assert_eq!(loaded.mode, "sql");
+
+        let latest = store
+            .load_latest_editor_context()
+            .expect("load")
+            .expect("有记录");
+        assert_eq!(latest.channel, "accelerated", "最近一份走同一条列映射");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -563,6 +606,7 @@ mod tests {
             .expect("load")
             .expect("老行还在");
         assert_eq!(loaded.mode, "sql", "补列后旧行取默认模式");
+        assert_eq!(loaded.channel, "source", "通道列同样补默认档：认不出就是源库");
         assert_eq!(loaded.content, "select 9;");
 
         // 再开一次也不该报错（幂等：列已存在）

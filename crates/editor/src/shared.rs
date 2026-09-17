@@ -16,8 +16,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::channel::{ChannelAvailabilitySet, ChannelsHandle};
 use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_text};
-use crate::execution::{ExecChannel, QueryRunner};
+use crate::execution::{ExecQueue, QueryRunner};
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
 use crate::session::{SavedSession, SessionStore};
 use crate::store::ResultStore;
@@ -57,7 +58,7 @@ pub struct EditorShared {
     service: Rc<RefCell<EditorService>>,
     results: Rc<RefCell<ResultStore>>,
     /// 执行通道：宿主注入后才有（无宿主 = 无执行，这是真实的能力状态而非错误）
-    exec: Rc<RefCell<Option<ExecChannel>>>,
+    exec: Rc<RefCell<Option<ExecQueue>>>,
     /// 会话存储：宿主注入后才有（无宿主 = 不持久化光标/模式）
     sessions: Rc<RefCell<Option<Rc<dyn SessionStore>>>>,
     /// 另存为路径选择器：宿主注入后才有（无宿主 = 另存为明确报“未接入”，不静默失败）
@@ -66,6 +67,8 @@ pub struct EditorShared {
     export_path: Rc<RefCell<Option<ExportPathPicker>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
     connections: Rc<RefCell<Option<ConnectionsHandle>>>,
+    /// 【B13】通道门控端口：宿主注入后才有（无宿主 = 加速 / 联邦两档都不可用并给原因）
+    channels: Rc<RefCell<Option<ChannelsHandle>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
 }
@@ -86,6 +89,7 @@ impl EditorShared {
             save_path: Rc::new(RefCell::new(None)),
             export_path: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
+            channels: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -122,7 +126,7 @@ impl EditorShared {
 
     /// 注入执行器（**宿主调用一次**；重复注入会换掉旧通道，旧通道的工作线程随之退出）
     pub fn attach_runner(&self, runner: Arc<dyn QueryRunner>) {
-        *self.exec.borrow_mut() = Some(ExecChannel::new(runner));
+        *self.exec.borrow_mut() = Some(ExecQueue::new(runner));
     }
 
     /// 是否接了执行（未接时执行动作要明确说明，而不是静默）
@@ -135,7 +139,7 @@ impl EditorShared {
     /// 文档绑定的连接（B1）在这里取出并随请求交给执行器：调用方（面板 / 菜单）不需要知道
     /// 连接从哪来，只要知道“执行这份文档”。`placement` 决定结果落到当前结果集还是新结果集（B2）。
     ///
-    /// 对 `Option<ExecChannel>` 的借用刻意收在这里：`ExecChannel` 内部是
+    /// 对 `Option<ExecQueue>` 的借用刻意收在这里：`ExecQueue` 内部是
     /// `Sender + Arc`，调 `submit` 期间不会回到调用方，因此不构成重入风险。
     pub fn submit(
         &self,
@@ -144,13 +148,19 @@ impl EditorShared {
         placement: crate::execution::ResultPlacement,
         options: crate::execution::RunOptions,
     ) -> Result<(), crate::execution::SubmitError> {
-        // 先把绑定拷出来（不把服务层的 `Ref` 带到下面的借用里）
-        let connection = self.service.borrow().connection_for(&document);
+        // 先把文档属性拷出来（不把服务层的 `Ref` 带到下面的借用里）：B1 的连接 + B13 的通道
+        let (connection, channel) = {
+            let service = self.service.borrow();
+            (
+                service.connection_for(&document),
+                service.channel_for(&document),
+            )
+        };
         let guard = self.exec.borrow();
-        let Some(channel) = guard.as_ref() else {
+        let Some(channel_queue) = guard.as_ref() else {
             return Err(crate::execution::SubmitError::NoRunner);
         };
-        channel.submit(document, target, connection, placement, options)
+        channel_queue.submit(document, target, connection, placement, options, channel)
     }
 
     /// 结果队列里已完成但尚未取走的执行（轮询泵调用）
@@ -339,5 +349,24 @@ impl EditorShared {
         conn_id: Option<&str>,
     ) -> Option<crate::connection::ConnectionChip> {
         chip_for(conn_id, &self.connection_options())
+    }
+
+    /// 【B13】注入通道门控端口（**宿主调用一次**：workbench 读连接的本地加速开关与 DuckDB 就绪）
+    pub fn attach_channels(&self, port: ChannelsHandle) {
+        *self.channels.borrow_mut() = Some(port);
+    }
+
+    /// 是否接了通道端口（未接 = 加速 / 联邦都不可用，并给出原因，而不是假装可选）
+    pub fn has_channels(&self) -> bool {
+        self.channels.borrow().is_some()
+    }
+
+    /// 某连接上「本地加速 / 联邦」的可用性（**渲染路径可调**：实现必须是内存快照）
+    pub fn channel_availability(&self, conn_id: Option<&str>) -> ChannelAvailabilitySet {
+        let guard = self.channels.borrow();
+        match guard.as_ref() {
+            Some(port) => port.availability(conn_id),
+            None => ChannelAvailabilitySet::blocked("尚未接入通道能力"),
+        }
     }
 }

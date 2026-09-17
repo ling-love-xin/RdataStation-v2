@@ -23,6 +23,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::channel::{self, ExecChannel};
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
 use crate::diagnostics;
 use crate::edit;
@@ -134,8 +135,12 @@ pub struct EditorHostPanel {
     filter_version: u64,
     /// 【B15】防抖任务句柄（仅持有；下一次输入会取代它）
     filter_debounce: RefCell<Option<Task<()>>>,
-    /// 【B14】下发源库开关（原型 §5.5 的 `▢ 下发源库`）：开着时应用筛选会重查源库
+    /// 【B15】下发源库开关（原型 §5.5 的 `▢ 下发源库`）：开着时应用筛选会重查源库
     pushdown: bool,
+    /// 【B13】结果区顶部那一行（切通道后“旧结果来自 X”；`None` = 不提示）
+    ///
+    /// 与标签条上那份星徽标互为补充：徽标说“它来自哪档”，这一行说“为什么它现在是旧的”。
+    result_notice: Option<String>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
@@ -308,6 +313,7 @@ impl EditorHostPanel {
             filter_version: 0,
             filter_debounce: RefCell::new(None),
             pushdown: false,
+            result_notice: None,
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
@@ -425,9 +431,9 @@ impl EditorHostPanel {
     ///
     /// 未命名文档没有稳定标识，返回 `None`（不存——重启后无法把它认回来）。
     pub fn session_snapshot(&self, cx: &App) -> Option<crate::session::SavedSession> {
-        let (path, mode) = self.with_document(|doc| {
+        let (path, mode, channel) = self.with_document(|doc| {
             let path = doc.path()?.to_string_lossy().into_owned();
-            Some((path, doc.mode()))
+            Some((path, doc.mode(), doc.channel()))
         })??;
         let id = crate::session::session_id_for_path(std::path::Path::new(&path));
 
@@ -442,6 +448,7 @@ impl EditorHostPanel {
             id,
             path: Some(path),
             mode,
+            channel,
             content: self.editor_text(cx),
             cursor,
             selection,
@@ -484,7 +491,32 @@ impl EditorHostPanel {
             state.set_cursor_position(position, window, cx);
             state.set_selected_range(start..end, cx);
         });
+        // 【B13】通道也随会话回来；**已失效就回退源库并说清原因**（原型 §5.7：绑定过但
+        // 现已失效——比如之后再打开时那个连接没开本地加速——不能静静地接着用它）
+        self.restore_channel(session.channel, cx);
         cx.notify();
+    }
+
+    /// 【B13】把会话里的通道写回文档（不可用 → 留源库档 + 状态栏给原因）
+    fn restore_channel(&mut self, channel: ExecChannel, cx: &mut Context<Self>) {
+        if channel == ExecChannel::Source {
+            return;
+        }
+        let availability = self
+            .shared
+            .channel_availability(self.bound_connection().as_deref());
+        let gate = availability.for_channel(channel);
+        if gate.available {
+            self.shared
+                .update(|service| service.set_channel(&self.document, channel));
+            self.sync_result_view(cx);
+            return;
+        }
+        let reason = gate.reason.unwrap_or_else(|| "不可用".to_string());
+        self.set_message(
+            Some(format!("{}通道已失效：{reason}（回退源库）", channel.label())),
+            cx,
+        );
     }
 
     /// 编辑器是否可输入（供窗口测试断言只读组合；生产代码读同一个判据）
@@ -574,10 +606,157 @@ impl EditorHostPanel {
             // 只有 SQL 模式的执行是“对当前文档执行”：文本模式按能力表不通信，
             // 分析模式的执行是**笔记级**动作（单元级按钮 + Shift+Enter，1c 落地）
             toolbar = toolbar.child(self.render_exec_group(cx));
-            // 连接选择器（通道级 / 连接，右对齐）：原型 §2.2 把它放工具栏右侧
-            toolbar = toolbar.child(div().ml_auto().child(self.render_connection_picker(cx)));
+            // 通道级 + 连接（右对齐）：原型 §2.2 两栏——“执行位置”在“连接”左边
+            toolbar = toolbar.child(
+                div()
+                    .ml_auto()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(self.render_channel_picker(cx))
+                    .child(self.render_connection_picker(cx)),
+            );
         }
         toolbar
+    }
+
+    /// 【B13】执行位置选择器（工具栏右侧：原型 §2.2 的「执行位置 ▾」）
+    ///
+    /// 三档**互斥**（原型 §5.7）：源库直连 / DuckDB 本地加速 / 联邦查询。菜单项由纯函数
+    /// [`channel::menu_items`] 给（哪项能点、为什么不能点都在那儿定），这里只负责画：
+    /// 不可用项**保留形态但置灰 + 行尾给原因**，当前项打勾。
+    fn render_channel_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let current = self.channel();
+        let items = self.channel_menu();
+
+        Button::new("editor-channel")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-channel".to_string())
+            .label(format!("执行位置：{} ▾", current.label()))
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                // 菜单回调是 `Fn`：不能把 `items` 搬进去，逐项 clone 字段名与下标（少而短）
+                for item in items.iter() {
+                    let entity = entity.clone();
+                    let channel = item.channel;
+                    menu = menu.item(
+                        PopupMenuItem::new(item.label.clone())
+                            .checked(item.current)
+                            .disabled(!item.available)
+                            .on_click(move |_, _window, app| {
+                                entity.update(app, |panel, cx| panel.set_channel(channel, cx));
+                            }),
+                    );
+                }
+                menu
+            })
+    }
+
+    /// 本文档绑定的连接 id（`None` = 未绑定，执行跟随当前活动连接）
+    fn bound_connection(&self) -> Option<String> {
+        self.with_document(|doc| doc.connection().map(str::to_string))
+            .flatten()
+    }
+
+    /// 本文档当前的执行通道（B13；文档属性，读的是服务层的真值）
+    pub fn channel(&self) -> ExecChannel {
+        self.with_document(|doc| doc.channel())
+            .unwrap_or_default()
+    }
+
+    /// 源库档能不能用：绑定的连接已建连（**未绑定算可用**——那是在跟随当前活动连接，
+    /// 它到底连没连不归这里断言，真发错东西了由执行器报可读原因）
+    fn source_channel_ready(&self) -> bool {
+        match self.bound_connection() {
+            None => true,
+            Some(id) => self
+                .shared
+                .connection_options()
+                .iter()
+                .find(|option| option.id == id)
+                .is_some_and(|option| option.connected),
+        }
+    }
+
+    /// 【B13】「执行位置 ▾」的菜单项（纯函数算的：可用性 + 不可用原因 + 当前项打勾）
+    ///
+    /// 门控真值来自宿主注入的 `ChannelsPort`；**没注入端口就不给选**（如实报“尚未接入”）。
+    pub fn channel_menu(&self) -> Vec<channel::ChannelMenuItem> {
+        let availability = self
+            .shared
+            .channel_availability(self.bound_connection().as_deref());
+        channel::menu_items(self.channel(), self.source_channel_ready(), &availability)
+    }
+
+    /// 【B13】切换执行通道（「执行位置 ▾」调用）
+    ///
+    /// 门控是**第二道闸**（菜单已经置灰了）：不可用的通道就算被程序叫到也不给切——
+    /// 否则界面会停在一个“看着能用、一按就错”的状态。切完旧结果**保留**（原型 §5.7 规则 2：
+    /// 不删用户的东西，只标灰 + 顶部一行说清它来自哪档）。
+    pub(crate) fn set_channel(&mut self, channel: ExecChannel, cx: &mut Context<Self>) {
+        if channel != ExecChannel::Source {
+            let availability = self
+                .shared
+                .channel_availability(self.bound_connection().as_deref());
+            let gate = availability.for_channel(channel);
+            if !gate.available {
+                let reason = gate.reason.unwrap_or_else(|| "不可用".to_string());
+                self.set_message(Some(format!("{}不可用：{reason}", channel.label())), cx);
+                return;
+            }
+        }
+        let changed = self
+            .shared
+            .update(|service| service.set_channel(&self.document, channel));
+        // 结果区的投影跟着换（旧结果标灰与顶部提示都在那边算）；它会重写状态栏提示，
+        // 所以“已切到 X”这句必须放在它**之后**说
+        self.sync_result_view(cx);
+        if !changed {
+            return; // 本来就在这档：不啥都留痕（切了才留）
+        }
+        let mut message = format!("执行位置已切到{}", channel.label());
+        if channel.is_snapshot() {
+            message.push_str("（看的是 ATTACH 快照，作用源库的写语句会被拒）");
+        }
+        if self.tx_open && !channel.allows_transactions() {
+            message.push_str("；源库上还有未提交的事务（切回源库可见）");
+        }
+        self.set_message(Some(message), cx);
+    }
+
+    /// 【B13】当前通道能不能跑写语句（写语句在快照通道上会被拒，理由要可读）
+    fn channel_write_check(&self, target: &ExecTarget) -> Result<(), String> {
+        let channel = self.channel();
+        if channel.allows_source_writes() {
+            return Ok(());
+        }
+        for sql in target.statements() {
+            channel::statement_allowed(channel, &sql)?;
+        }
+        Ok(())
+    }
+
+    /// 【B13】通道现在能不能执行（不可用就给可读原因）
+    fn channel_ready(&self) -> Result<(), String> {
+        let channel = self.channel();
+        if channel == ExecChannel::Source {
+            return Ok(());
+        }
+        let availability = self
+            .shared
+            .channel_availability(self.bound_connection().as_deref());
+        let gate = availability.for_channel(channel);
+        if gate.available {
+            Ok(())
+        } else {
+            Err(format!(
+                "{}不可用：{}",
+                channel.label(),
+                gate.reason.unwrap_or_else(|| "不可用".to_string())
+            ))
+        }
     }
 
     /// 连接选择器（工具栏右侧）：本文档执行时用哪个连接（B1）
@@ -1018,11 +1197,20 @@ impl EditorHostPanel {
             self.set_message(Some("文本模式不与数据库通信".to_string()), cx);
             return false;
         }
+        // 【B13】通道门控与写拒绝都在**提交之前**：注定被拒的语句不该跑一半（也不该让
+        // “本地副本只读”这种事等驱动报一个谁也不懂的错）
+        if let Err(reason) = self.channel_ready().and_then(|()| self.channel_write_check(&target))
+        {
+            self.set_message(Some(reason), cx);
+            return false;
+        }
+        let channel = self.channel();
         // 预期回填条数 = 本次要跑的语句数（批量 > 1）：跑完这几条才算“不执行中”
         let expected = target.statements().len();
-        // B4：自动提交关掉时，本次执行进事务（引擎在没有事务时会先自动开一个）
+        // B4：自动提交关掉时，本次执行进事务（引擎在没有事务时会先自动开一个）；
+        // B13：加速 / 联邦没有事务语义，那两档上不走事务
         let options = execution::RunOptions {
-            use_transaction: !self.autocommit,
+            use_transaction: !self.autocommit && channel.allows_transactions(),
         };
         match self
             .shared
@@ -1192,6 +1380,16 @@ impl EditorHostPanel {
             .iter()
             .map(|tab| (tab.label.clone(), tab.failed))
             .collect()
+    }
+
+    /// 【B13】结果集标签的通道徽标（供测试断言“每份结果记住了自己是哪档跑的”）
+    pub fn result_badges_for_test(&self) -> Vec<String> {
+        self.result_tabs.iter().map(|tab| tab.badge()).collect()
+    }
+
+    /// 【B13】结果区顶部那一行提示（切通道后旧结果那一条）
+    pub fn result_notice_for_test(&self) -> Option<String> {
+        self.result_notice.clone()
     }
 
     /// 当前选中的结果集下标（供测试断言点标签真的切了）
@@ -1374,7 +1572,8 @@ impl EditorHostPanel {
     /// 很难靠看界面发现）。
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
-        let (tabs, active, grid_data, empty, toolbar, status, failure, extra) = {
+        let current_channel = self.channel();
+        let (tabs, active, grid_data, empty, toolbar, status, failure, extra, notice) = {
             let store = self.shared.results();
             let active = store.active_index(&self.document).unwrap_or(0);
             let entry = store.active(&self.document);
@@ -1385,7 +1584,7 @@ impl EditorHostPanel {
                     .map(|id| self.shared.connection_status_text(Some(id)))
             });
             (
-                result_sets::tabs(store.sets(&self.document)),
+                result_sets::tabs(store.sets(&self.document), current_channel),
                 active,
                 entry
                     .filter(|entry| entry.has_grid())
@@ -1422,11 +1621,17 @@ impl EditorHostPanel {
                         .map(|error| (entry.sql.clone(), error.clone()))
                 }),
                 entry.map(|entry| (entry.sql.clone(), entry.has_grid())),
+                // 【B13】选中这份来自别的通道 → 顶部一行说清“旧结果来自 X”（原型 §5.7 规则 2）；
+                // 同一档就不提示（切换本身已经写在工具栏与状态栏上了）
+                entry
+                    .filter(|entry| entry.channel != current_channel)
+                    .map(|entry| channel::stale_notice(entry.channel, current_channel)),
             )
         };
 
         self.result_tabs = tabs;
         self.result_active = active;
+        self.result_notice = notice;
         self.result_toolbar = toolbar;
         // 【B5b】滚动到底自动加载的两个真值要先取出来（`status` 接着就被移动了）
         let has_more = status.as_ref().is_some_and(|status| status.has_more);
@@ -1994,6 +2199,8 @@ impl EventEmitter<BasePanelEvent> for EditorHostPanel {}
 /// 执行结论 → 结果记录（视图模型转换，不在这做任何 I/O）
 fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
     let connection = outcome.connection.clone();
+    // 【B13】通道也随结论回来：标签星徽标与“切通道后标灰”靠它
+    let channel = outcome.channel;
     match outcome.result {
         Ok(data) => ResultEntry::success(
             outcome.document,
@@ -2005,9 +2212,11 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
         )
         .with_affected_rows(data.affected_rows)
         .with_has_more(data.has_more)
-        .with_connection(connection),
+        .with_connection(connection)
+        .with_channel(channel),
         Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0)
-            .with_connection(connection),
+            .with_connection(connection)
+            .with_channel(channel),
     }
 }
 
@@ -2409,8 +2618,14 @@ impl Render for EditorHostPanel {
         } else {
             None
         };
-        // TX 区（B4）：只在会通信的模式 + 执行器真支持事务时出现（“不摆点了没用的控件”）
-        let tx_text = (communicating && self.shared.has_transactions()).then(|| self.tx_text());
+        // 【B13】通道段：会通信的模式才有（文本模式没有“执行位置”这回事）
+        let current_channel = self.channel();
+        let channel_text = communicating.then(|| channel::status_text(current_channel));
+        // TX 区（B4）：会通信 + 执行器真支持事务 + **当前通道支持事务**
+        // （加速 / 联邦没有事务语义，那时摆一个 TX 区就是摆了个假控件）
+        let tx_available =
+            communicating && self.shared.has_transactions() && current_channel.allows_transactions();
+        let tx_text = tx_available.then(|| self.tx_text());
         let status = StatusInputs {
             mode: self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text),
             dirty: self.is_dirty(),
@@ -2425,6 +2640,7 @@ impl Render for EditorHostPanel {
             executing: self.pending > 0,
             elapsed: self.running_since.map(|since| since.elapsed()),
             connection: connection_text.as_deref(),
+            channel: channel_text.as_deref(),
             tx: tx_text.as_deref(),
         };
 
@@ -2444,7 +2660,7 @@ impl Render for EditorHostPanel {
 
         // 事务区控件（B4）：自动提交常显（它是模式，模式要一直看得见），
         // 提交 / 回滚只在事务真开着时出现（原型 §2.5：事务区）
-        let tx_controls = (communicating && self.shared.has_transactions()).then(|| {
+        let tx_controls = tx_available.then(|| {
             let mut row = div().h_flex().items_center().gap_1();
             let autocommit_entity = cx.entity();
             row = row.child(
@@ -2725,6 +2941,7 @@ impl Render for EditorHostPanel {
                     },
                     card,
                     tabs,
+                    notice: self.result_notice.clone(),
                 },
                 cx,
             )

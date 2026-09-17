@@ -728,6 +728,8 @@ pub struct ResultPane {
     pub card: Option<AnyElement>,
     /// 结果集标签条（两份以上结果才给）
     pub tabs: Option<AnyElement>,
+    /// 【B13】结果区顶部那一行提示（切通道后“旧结果来自 X”）；`None` = 不摆
+    pub notice: Option<String>,
 }
 
 /// 截断提示文案（达到驱动行数上限时；原型 §2.4 的口径是 `已截断至 N 行`）
@@ -794,6 +796,7 @@ pub fn render(
         controls,
         card,
         tabs,
+        notice,
     } = pane;
     // 有卡片就不画网格（网格里本来也没东西，画出来只是一块空白）
     let has_card = card.is_some();
@@ -807,6 +810,26 @@ pub fn render(
         .debug_selector(|| "editor-result-pane".to_string())
         // ⑤ 结果集标签条（原型里在工具栏上面）
         .children(tabs)
+        // 【B13】切通道后的那一行提示（原型 §5.7 规则 2）：旧结果不删，但要能看出它不是
+        // 现在这档跑的——颜色（标签标灰）只是一个通道，白话在这一行
+        .children(notice.map(|text| {
+            let theme = cx.theme();
+            let warning = theme.colors.warning;
+            div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(warning)
+                .bg(warning.opacity(0.18))
+                .border_b(ui::HAIRLINE)
+                .border_color(warning)
+                // 测试按选择器断言“切了通道要说一句”
+                .debug_selector(|| "editor-result-notice".to_string())
+                .child(SharedString::from(text))
+        }))
         // ⑥ 结果工具栏
         .child(
             div()

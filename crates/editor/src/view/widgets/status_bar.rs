@@ -49,6 +49,8 @@ pub struct StatusInputs<'a> {
     pub elapsed: Option<std::time::Duration>,
     /// 连接段（已格式化的文案，如 `●P·orders`）；`None` = 不显示（文本模式没有连接概念）
     pub connection: Option<&'a str>,
+    /// 【B13】执行通道段（`通道 源库` / `通道 本地加速（快照）`）；`None` = 不显示
+    pub channel: Option<&'a str>,
     /// 【B4】事务区文案（`TX 未开启` / `TX 已开启 3.4s`）；`None` = 不显示
     pub tx: Option<&'a str>,
 }
@@ -73,10 +75,16 @@ pub struct StatusLabels {
 
 /// 计算状态栏文案（纯函数）
 pub fn labels(inputs: &StatusInputs) -> StatusLabels {
-    // 左：连接（会通信的模式才有）+ 事务 + 模式 + 语句数（SQL 模式才有语句概念）+ 未保存 + 动作提示
+    // 左：连接（会通信的模式才有）+ 通道 + 事务 + 模式 + 语句数（SQL 模式才有语句概念）
+    //     + 未保存 + 动作提示
     let mut left = String::new();
     if let Some(connection) = inputs.connection {
         left.push_str(connection);
+        left.push_str(" · ");
+    }
+    if let Some(channel) = inputs.channel {
+        // 【B13】通道紧跟连接：同一个连接上，源库直连与本地加速看的是两份数据
+        left.push_str(channel);
         left.push_str(" · ");
     }
     if let Some(tx) = inputs.tx {
@@ -194,6 +202,7 @@ mod tests {
             elapsed: None,
             // 连接段默认不显示；连接相关的断言在下面的专用用例里给值
             connection: None,
+            channel: None,
             tx: None,
         }
     }
@@ -352,5 +361,22 @@ mod tests {
 
         // 没有事务信息（未接执行）时不出现占位文案
         assert!(!labels(&inputs(ReadOnly::none())).left.contains("TX"));
+    }
+
+    /// 【B13】通道段在连接与事务之间（原型 §2.5 的那一行顺序），没给就不占位
+    #[test]
+    fn the_channel_segment_sits_between_connection_and_transaction() {
+        let mut with_channel = inputs(ReadOnly::none());
+        with_channel.connection = Some("●P·orders");
+        with_channel.channel = Some("通道 源库");
+        with_channel.tx = Some("TX 未开启");
+        let text = labels(&with_channel).left;
+        assert!(
+            text.starts_with("●P·orders · 通道 源库 · TX 未开启 · SQL"),
+            "通道在连接之后、事务之前：{text}"
+        );
+
+        // 没给通道（文本模式）时不留占位
+        assert!(!labels(&inputs(ReadOnly::none())).left.contains("通道"));
     }
 }

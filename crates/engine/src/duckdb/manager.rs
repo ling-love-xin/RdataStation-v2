@@ -157,6 +157,15 @@ impl DuckDBManager {
         Ok(())
     }
 
+    /// 分析引擎在本进程里起来了没有（**纯读**：不触发初始化、不拿锁）
+    ///
+    /// 界面门控用（B13「执行位置」每帧都要判一次）：`global()` 会顺手初始化——首次
+    /// 可能有真实代价，渲染路径不能调它；`get_or_create_in_memory()` 也会初始化。
+    /// 还没起来就是“尚不可用”，原因由调用方拼。
+    pub fn is_initialized() -> bool {
+        GLOBAL_DUCKDB.get().is_some()
+    }
+
     /// 验证分析 SQL（兼容旧 API）。
     ///
     /// # 参数

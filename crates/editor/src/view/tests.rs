@@ -22,6 +22,7 @@ use gpui_kit::{
 };
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
+use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
 use crate::connection::{ConnectionOption, ConnectionsPort};
 use crate::execution::{self, QueryData, QueryRunner};
 use crate::export::{self, ExportFormat, ExportScope};
@@ -2388,18 +2389,27 @@ fn the_toolbar_shows_the_connection_picker_in_sql_mode(cx: &mut TestAppContext) 
         cx.debug_bounds("editor-connection").is_some(),
         "SQL 模式应当有连接选择器"
     );
+    // 【B13】执行位置与连接同属“右对齐的通道级”两栏（原型 §2.2）
+    assert!(
+        cx.debug_bounds("editor-channel").is_some(),
+        "SQL 模式应当有「执行位置」指示器"
+    );
 
     // 未接端口：选项表为空（菜单会直说“未接入连接列表”）
     assert!(shared.connection_options().is_empty());
     assert!(!shared.has_connections());
 
-    // 文本模式：不与数据库通信 → 连不上问题都不该问，选择器不出现
+    // 文本模式：不与数据库通信 → 连不上问题都不该问，两个选择器都不出现
     shared.update(|service| {
         service.set_mode(&id, EditorMode::Text);
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(cx.debug_bounds("editor-connection").is_none());
+    assert!(
+        cx.debug_bounds("editor-channel").is_none(),
+        "文本模式没有“在哪儿执行”这回事"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3678,6 +3688,331 @@ fn the_export_menu_grows_with_a_next_segment(cx: &mut TestAppContext) {
         .map(|item| item.label)
         .collect();
     assert_eq!(labels, ["CSV", "JSON", "INSERT"], "到底了只给三项");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// B13：执行通道（源库 / 本地加速 / 联邦）
+// ══════════════════════════════════════════════════════════════════════
+
+/// 假通道端口：可用性由用例说了算（真门控在宿主：`services/editor_channels.rs`）
+struct FakeChannels {
+    accelerated: ChannelAvailability,
+    federated: ChannelAvailability,
+}
+
+impl FakeChannels {
+    /// 两档都通（用来验“选得到、切得动”的那条路）
+    fn open() -> Self {
+        Self {
+            accelerated: ChannelAvailability::ok(),
+            federated: ChannelAvailability::ok(),
+        }
+    }
+
+    /// 两档都不通（各自的理由由调用方给）
+    fn blocked(accelerated: &str, federated: &str) -> Self {
+        Self {
+            accelerated: ChannelAvailability::blocked(accelerated),
+            federated: ChannelAvailability::blocked(federated),
+        }
+    }
+}
+
+impl ChannelsPort for FakeChannels {
+    fn availability(&self, _conn_id: Option<&str>) -> ChannelAvailabilitySet {
+        ChannelAvailabilitySet {
+            accelerated: self.accelerated.clone(),
+            federated: self.federated.clone(),
+        }
+    }
+}
+
+/// 菜单项 -> (文案, 能不能点, 是不是当前档)
+fn channel_menu_rows(
+    panel: &Entity<EditorHostPanel>,
+    cx: &mut VisualTestContext,
+) -> Vec<(String, bool, bool)> {
+    cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .channel_menu()
+            .into_iter()
+            .map(|item| (item.label, item.available, item.current))
+            .collect()
+    })
+}
+
+/// 菜单门控：不可用项**保留形态 + 行尾给原因**，当前项打勾（原型 §2.2 / §5.7）
+#[gpui_kit::test]
+fn the_channel_menu_greys_out_with_reasons(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_channels(Rc::new(FakeChannels::blocked(
+        "该连接未开启本地加速",
+        "尚未注册外部源",
+    )));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    let rows = channel_menu_rows(&panel, cx);
+    assert_eq!(rows.len(), 3, "三档都在菜单里（互斥靠选项，不是靠藏）");
+    assert_eq!(rows[0].0, "源库");
+    assert!(rows[0].1 && rows[0].2, "源库是当前档且可用");
+    assert_eq!(rows[1].0, "本地加速（该连接未开启本地加速）");
+    assert!(!rows[1].1, "不可用要置灰");
+    assert_eq!(rows[2].0, "联邦（尚未注册外部源）");
+    assert!(!rows[2].1);
+}
+
+/// 未绑定连接 → 源库档仍可用（执行器会回退到当前活动连接）；绑了没连上的连接 → 置灰给原因
+#[gpui_kit::test]
+fn the_source_channel_follows_the_connection_state(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    // 未绑定：不清不白地说“不可用”是错的——1a 口径确实是跟随当前活动连接
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    let rows = channel_menu_rows(&panel, cx);
+    assert!(rows[0].1, "未绑定不算源库不可用：{}", rows[0].0);
+
+    // 绑了一个没有运行态的连接：源库档置灰 + 原因
+    let (shared2, id2, _seen2, _seen_conn2) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared2.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_down", "P", "down",
+    )])));
+    shared2.update(|service| service.set_connection(&id2, Some("P_down".to_string())));
+    let (panel2, cx) = open_panel(cx, &shared2, &id2);
+    let rows = channel_menu_rows(&panel2, cx);
+    assert_eq!(rows[0].0, "源库（连接未建立）");
+    assert!(!rows[0].1, "连接没起来就不该说源库档能用");
+}
+
+/// 没接通道端口：后两档都不可用，原因如实说“尚未接入”（而不是看起来能选）
+#[gpui_kit::test]
+fn without_a_channel_port_the_snapshot_channels_are_unavailable(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    let rows = channel_menu_rows(&panel, cx);
+    assert!(!rows[1].1 && !rows[2].1, "没接端口就不给选");
+    assert!(rows[1].0.contains("尚未接入通道能力"), "{}", rows[1].0);
+}
+
+/// 【B13】切到加速档：后续结果记住通道（徽标），切回源库后旧结果标灰 + 顶部一行提示
+#[gpui_kit::test]
+fn switching_channels_stamps_results_and_greys_the_old_ones(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_channels(Rc::new(FakeChannels::open()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 源库档跑一份
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    assert_eq!(
+        shared.results().sets(&id)[0].channel,
+        ExecChannel::Source,
+        "源库档跑的结果要记住自己是源库档"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
+        ["源库"]
+    );
+
+    // 切到本地加速：文档属性变了（这是“在哪儿跑”的真值）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+    });
+    assert_eq!(shared.service().channel_for(&id), ExecChannel::Accelerated);
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("切换要留痕");
+    assert!(message.contains("执行位置已切到本地加速"), "{message}");
+    assert!(message.contains("快照"), "非源库档要提新鲜度：{message}");
+    // 切完那一刻旧结果就已经是“旧”的了（不用等下一次执行）
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
+        ["源库·旧"]
+    );
+    let notice = cx
+        .update(|_window, cx| panel.read(cx).result_notice_for_test())
+        .expect("要有顶部提示");
+    assert!(notice.contains("旧结果来自源库"), "{notice}");
+
+    // 加速档再跑一份：它带的是加速徽标（不是源库）
+    run_statement(cx, &panel, "select 2", execution::ResultPlacement::NewSet);
+    let sets = shared.results().sets(&id).to_vec();
+    assert_eq!(sets.len(), 2);
+    assert_eq!(sets[1].channel, ExecChannel::Accelerated);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
+        ["源库·旧", "加速"]
+    );
+
+    // 切回源库：角色对调（“旧”跟着当前通道走，不写死在某一档上）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Source, cx));
+    });
+    assert_eq!(shared.service().channel_for(&id), ExecChannel::Source);
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).result_badges_for_test()),
+        ["源库", "加速·旧"]
+    );
+}
+
+/// 【B13】加速档拒绝**作用源库的写语句**，原因可读；读语句照跑
+#[gpui_kit::test]
+fn the_snapshot_channel_refuses_source_writes_with_a_reason(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, seen, _seen_conn) = shared_with_runner("update t set a = 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_channels(Rc::new(FakeChannels::open()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+    });
+
+    let submitted = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::Statement("update t set a = 1".to_string()),
+                execution::ResultPlacement::Replace,
+                cx,
+            )
+        })
+    });
+    assert!(!submitted, "写语句不该被提交");
+    assert!(
+        seen.lock().expect("锁").is_empty(),
+        "被拒的语句不许打扰执行器（更不能跑一半）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留原因");
+    assert!(message.contains("不能写源库"), "{message}");
+    assert!(message.contains("请切回源库"), "{message}");
+
+    // 读语句照跑（加速档就是用来跑分析的）
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    assert_eq!(seen.lock().expect("锁").len(), 1);
+}
+
+/// 【B13】通道不可用时就算被程序叫到也不切（菜单置灰之外的**第二道闸**）
+#[gpui_kit::test]
+fn an_unavailable_channel_cannot_be_switched_to(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_channels(Rc::new(FakeChannels::blocked(
+        "该连接未开启本地加速",
+        "尚未注册外部源",
+    )));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Federated, cx));
+    });
+    assert_eq!(
+        shared.service().channel_for(&id),
+        ExecChannel::Source,
+        "不可用就不切：界面不许停在“看着能用、一按就错”的状态"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留原因");
+    assert!(message.contains("联邦不可用"), "{message}");
+    assert!(message.contains("尚未注册外部源"), "{message}");
+}
+
+/// 【B13】通道随会话恢复：可用就恢复，已失效就**回退源库并说清原因**
+#[gpui_kit::test]
+fn the_channel_comes_back_with_the_session_or_falls_back_with_a_reason(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_channels(Rc::new(FakeChannels::open()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    let mut session = crate::session::SavedSession {
+        id: "d:/sql/a.sql".to_string(),
+        path: Some("D:/sql/a.sql".to_string()),
+        mode: EditorMode::Sql,
+        channel: ExecChannel::Accelerated,
+        content: "select 1;".to_string(),
+        cursor: 0,
+        selection: None,
+    };
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
+    });
+    assert_eq!(
+        shared.service().channel_for(&id),
+        ExecChannel::Accelerated,
+        "通道与模式同类：会话里存着就该回来"
+    );
+
+    // 已失效：回退源库 + 原因（不静静地接着用那一档）
+    let (shared2, id2, _seen2, _seen_conn2) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared2.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared2.attach_channels(Rc::new(FakeChannels::blocked(
+        "分析引擎尚未就绪",
+        "尚未注册外部源",
+    )));
+    let (panel2, cx) = open_panel(cx, &shared2, &id2);
+    session.channel = ExecChannel::Accelerated;
+    cx.update(|window, cx| {
+        panel2.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
+    });
+    assert_eq!(shared2.service().channel_for(&id2), ExecChannel::Source);
+    let message = cx
+        .update(|_window, cx| panel2.read(cx).message.clone())
+        .expect("回退也要留痕");
+    assert!(message.contains("已失效"), "{message}");
+    assert!(message.contains("回退源库"), "{message}");
+}
+
+/// 【B13】会话快照要带上通道（存的是短码：重启后按码认回来）
+#[gpui_kit::test]
+fn the_session_snapshot_carries_the_channel(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    // 未命名文档不存会话（重启后认不回来）——通道也不例外
+    assert!(
+        cx.update(|_window, cx| panel.read(cx).session_snapshot(cx))
+            .is_none(),
+        "未命名文档没有稳定标识，不该存"
+    );
+
+    // 有路径的文档：快照里带通道码
+    let (shared2, id2) = shared_with_document("D:/sql/channel.sql", "select 1;");
+    shared2.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared2.attach_channels(Rc::new(FakeChannels::open()));
+    let (panel2, cx) = open_panel(cx, &shared2, &id2);
+    cx.update(|_window, cx| {
+        panel2.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+    });
+
+    let snapshot = cx
+        .update(|_window, cx| panel2.read(cx).session_snapshot(cx))
+        .expect("有路径就该存会话");
+    assert_eq!(snapshot.channel, ExecChannel::Accelerated);
+    assert_eq!(snapshot.channel.code(), "accelerated");
 }
 
 /// 写语句 / 失败没有网格：导出要回绝得可读（不能抓一个空网格去写文件）
