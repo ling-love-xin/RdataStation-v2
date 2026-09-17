@@ -132,6 +132,8 @@ fn clear_mock_temp_tables(shared: &Shared, cx: &mut App) {
     if let Some(panel) = live() {
         panel.update(cx, |panel, cx| {
             panel.forget_generated(cleared, cx);
+            // 候选清单是「当前项目」的派生视图：旧项目的分析库表名不能继续摆在新项目下
+            panel.refresh_sources(cx);
             panel.refresh_history(cx);
         });
     }

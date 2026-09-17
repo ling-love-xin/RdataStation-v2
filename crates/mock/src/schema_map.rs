@@ -701,9 +701,12 @@ impl ColumnMapper {
                 confidence: "low",
                 sample_value: "550e8400-...",
             },
+            // 未知列名的文本列：`Sentence(1..3)`——**上界必须大于下界**：
+            // `Sentence(min..max)` 走 `rand` 的 `random_range`，空区间会直接 panic（`1..1` 就是空区间），
+            // 而 panic 发生在持有内存库连接锁期间，会把整个进程的 mock 生成打坏。
             ColumnDataType::Varchar { .. } | ColumnDataType::Text => ColumnMappingRule {
                 patterns: &[],
-                generator: || GeneratorConfig::Sentence { min: 1, max: 1 },
+                generator: || GeneratorConfig::Sentence { min: 1, max: 3 },
                 confidence: "low",
                 sample_value: "自然语言句子",
             },

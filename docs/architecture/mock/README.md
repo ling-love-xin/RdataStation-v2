@@ -16,6 +16,7 @@
 | 生成与写入分离 | 「生成」只产内存临时表 `temp_mock_*` + 预览；落库 / 落盘只能由出口按钮触发 |
 | 元数据驱动 | 输入只有「列名 + 类型 + 可空/主键」三件事，不需要真实数据样本；未知类型一律退到可读默认值 |
 | 只进不出 | 目标只有分析引擎（内存临时表 / `analytics.duckdb`）与项目文件；没有任何写入源库的代码路径 |
+| 只取结构 | 与源库的**唯一沟通**是「表结构」（列名 / 类型 / 可空 / 主键），经元数据管理取（`NavCache` L2 → `MetadataService` 实时内省，cache-aside）；**不涉跨库取数**，也不读源库一行数据 |
 | 落库一次直写 | 落库/追加走 `ATTACH` 跨库直写（`INSERT ... SELECT`），数据不经 Rust 字符串；建表失败只回滚本次刚建的表 |
 | 临时表随项目收敛 | 切项目时宿主清掉本进程的 mock 临时表（按前缀、以库为准），并作废面板里的旧预览 |
 | 确定性可复现 | `seed` 固定即同序列（`StdRng`），同配置两次生成结果逐值相同（已测） |
@@ -73,7 +74,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 | `crates/mock/src/history.rs` | **生成历史与用户模板**：领域门面 + 后台入口（`HistoryAction` / `HistorySnapshot` / `list` / `detail` / `template_detail` / `run` + 草稿⇄历史行的纯映射）；自备 tokio 运行时（`drive`），宿主只回答「项目根在哪」 |
 | `crates/mock/src/error.rs` | `MockError` / `MockResult`（含 DuckDB 错误桥接） |
 | `crates/mock/src/{commands,model,generator}.rs` | **占位**（全项目统一脚手架；命令层按 Round 14 政策退役） |
-| `crates/mock/tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（32 项） |
+| `crates/mock/tests/mock_engine_tests.rs` | 公开 API 端到端集成测试（37 项） |
 | `crates/mock/tests/persistence_roundtrip.rs` | 持久化层**真库往返**（5 项：任务 + 列序 / 可空列 / 历史排序与截尾 / 级联删除 / 模板；走真迁移链） |
 | `crates/mock/tests/history_roundtrip.rs` | 生成历史 / 用户模板**端到端**（4 项：记录 → 列表 → 详情 → 重放；模板存 ↔ 取 ↔ 应用 ↔ 删除；失败原因与 `limit` 截尾；项目根不是目录时的可读错误） |
 | `crates/mock/tests/temp_table_cleanup.rs` | 临时表清理集成测试（2 项；独立进程：清理是进程级动作） |
@@ -102,7 +103,7 @@ workbench ──► mock                  （宿主：实现 MockHost + 持面�
 ```bash
 # 全量编译/测试必须限并发（重型 crate 链接耗内存（DuckDB 已改动态链接）），见 .cargo/config.toml 别名
 cargo check -p rds-mock --all-targets -j 2
-cargo test  -p rds-mock -j 2                                   # 154 单元（含 78 视图）+ 35 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
+cargo test  -p rds-mock -j 2                                   # 160 单元（含 79 视图）+ 37 引擎 + 5 持久化往返 + 4 历史/模板 + 2 清理 集成
 cargo test  -p rds-workbench --test mock_generator -j 2         # 装配层 12 项
 cargo test  -p rds-workbench --test mock_jobs -j 2              # 后台任务 11 项
 cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项（独立进程）
@@ -113,7 +114,7 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | 目标 | 结果 |
 | --- | --- |
 | `cargo check -p rds-mock --all-targets` | 通过（零告警） |
-| `cargo test -p rds-mock` | 154 单元（23 纯逻辑 + 55 窗口 + 76 其他）+ 35 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
+| `cargo test -p rds-mock` | 160 单元（23 纯逻辑 + 56 窗口 + 81 其他）+ 37 引擎集成 + 5 持久化往返 + 4 历史/模板集成 + 2 清理集成全过 |
 | `cargo check -p rds-workbench --all-targets` | 通过（零告警） |
 | `cargo test -p rds-workbench` | 全绿（含 12 装配 + 11 任务测试） |
 
@@ -126,7 +127,7 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | --- | --- |
 | `mock-prototype-design.md` | 长什么样：落位与尺寸 / **方案①两处排版** / 对话框 / 状态矩阵 / 与 v1 逐项对照 |
 | `mock-prototype.html` | 交互稿（v2 原生，RDS Light/Dark + 16 场景可切） |
-| `mock-architecture.md` | 为什么这样设计：不变式 / 概念模型 / 分层与状态所有权 / 数据流 / D1–D32 决策表 / 降级矩阵 / 已知问题 |
+| `mock-architecture.md` | 为什么这样设计：不变式 / 概念模型 / 分层与状态所有权 / 数据流 / D1–D34 决策表 / 降级矩阵 / 已知问题 |
 | `mock-dev-plan.md` | 做什么、做到哪：现状盘点 / Phase A–E 任务与落点 / 验收与风险 / 进度记录 |
 | `crates/mock/README.md` | crate 级入口（特点与代码结构，不复述本目录设计） |
 

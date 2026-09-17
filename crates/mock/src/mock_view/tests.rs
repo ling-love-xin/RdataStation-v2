@@ -807,6 +807,37 @@ fn refresh_sources_loads_connections_and_tables(cx: &mut TestAppContext) {
     });
 }
 
+/// 切项目（`forget_generated`）要把**当前项目的派生清单**一并清掉：
+///
+/// 「追加到既有表」的候选、连接清单都按项目作用域变——上一项目的表名摆在新项目下，
+/// 点下去只会得到「项目分析库没有表 X」，而用户完全不知道为什么。
+#[gpui_kit::test]
+fn forgetting_generated_clears_project_scoped_lists(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    panel.update(cx, |panel, cx| panel.refresh_sources(cx));
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.existing_tables(), ["orders".to_string()]);
+        assert_eq!(panel.sources().len(), 2);
+    });
+
+    panel.update(cx, |panel, cx| panel.forget_generated(2, cx));
+    panel.update(cx, |panel, _cx| {
+        assert!(
+            panel.existing_tables().is_empty(),
+            "旧项目的既有表清单不该留在新项目下"
+        );
+        assert!(panel.sources().is_empty(), "连接清单随项目作用域变");
+        assert!(
+            panel.outcome().is_some_and(|o| o.contains("已切换项目")),
+            "{:?}",
+            panel.outcome()
+        );
+    });
+}
+
 /// 生成**不写库**（对齐 v1：生成只产临时表 + 预览）。
 #[gpui_kit::test]
 fn generate_produces_preview_without_touching_sinks(cx: &mut TestAppContext) {

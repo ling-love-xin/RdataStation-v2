@@ -604,7 +604,7 @@ const MAX_COMPLEX_ITEMS: usize = 1000;
 ///   所以值里可以带逗号）。
 ///
 /// 校验不通过**不猜**：返回带行号的可读原因，调用方保留上一个有效值并就地提示。
-/// 为何必须拦住空集合与全零权重：生成期对它们会直接 panic（见 `MockEngine` 的 `constraint_set_problem`）。
+/// 为何必须拦住空集合与全零权重：生成期对它们会直接 panic（见 `MockEngine` 的 `generator_param_problem`）。
 pub(crate) fn parse_complex_param(key: &str, text: &str) -> Result<serde_json::Value, String> {
     let lines: Vec<(usize, &str)> = text
         .lines()
@@ -1441,8 +1441,12 @@ impl MockPanel {
         self.scenario_source = None;
         self.last_relations.clear();
         self.landed = None;
-        // 另一个项目 = 另一个分析库：上一项目的落库记录在这里不成立
+        // 另一个项目 = 另一个分析库：上一项目的落库记录、「追加到既有表」候选在这里都不成立
         self.landed_tables.clear();
+        self.existing_tables.clear();
+        // 连接清册也随作用域变（全局 + 该项目的 `P_` / `GP_`）：宿主在切项目后会重读，
+        // 真没重读也不打紧——导入对话框在清册为空时会自己拉一次
+        self.sources.clear();
         self.error = None;
         // 没清到东西就不打扰用户（切项目很常见，每次都报一句是噪声）
         self.outcome = (cleared > 0).then(|| {

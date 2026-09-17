@@ -134,7 +134,7 @@ impl MockEngine {
                     col.name, col.nullable_ratio
                 )));
             }
-            if let Some(reason) = constraint_set_problem(&col.generator) {
+            if let Some(reason) = generator_param_problem(&col.generator) {
                 return Err(MockError::InvalidColumn(format!(
                     "列 '{}' {reason}",
                     col.name
@@ -158,7 +158,7 @@ impl MockEngine {
         let drop_sql = SqlEngine::build_drop_table(&table_name, true);
         conn.execute_batch(&drop_sql)?;
 
-        let ddl = Self::build_create_table_ddl(&table_name, &config.columns);
+        let ddl = Self::build_create_table_ddl(&table_name, &config.columns)?;
         conn.execute_batch(&ddl)?;
 
         let total_batches = config.row_count.div_ceil(BATCH_SIZE as u32);
@@ -283,11 +283,19 @@ impl MockEngine {
             .map_err(|e| MockError::Generation(format!("DuckDB error: {}", e)))
     }
 
+    /// 取内存库连接。
+    ///
+    /// **锁被毒化时不报错、直接复用**：毒化只可能是上一次任务在持锁期间失败（例如生成器参数造成的空区间）。
+    /// DuckDB 连接本身仍然可用（那些失败发生在拼值 / 取数之间，语句未半途提交），
+    /// 而把「上一次任务的失败」升级成「本进程后续每次生成都失败」对用户毫无帮助——
+    /// 实测后果就是面板之后每个任务都拿到 `poisoned lock`，只能重启应用。
     fn get_conn(
         db: &Arc<Mutex<duckdb::Connection>>,
     ) -> MockResult<std::sync::MutexGuard<'_, duckdb::Connection>> {
-        db.lock()
-            .map_err(|e| MockError::Generation(format!("DuckDB lock error: {}", e)))
+        Ok(db.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Mock: 内存库连接锁曾被毒化（上一次任务在持锁期间失败），已恢复复用");
+            poisoned.into_inner()
+        }))
     }
 
     // ==================== 预览刷新 ====================
@@ -546,18 +554,39 @@ impl MockEngine {
 
     // ==================== 私有方法 ====================
 
-    fn build_create_table_ddl(table_name: &str, columns: &[ColumnDef]) -> String {
-        let col_infos: Vec<ColumnDefInfo> = columns
-            .iter()
-            .map(|c| ColumnDefInfo {
-                name: c.name.clone(),
-                data_type: c.data_type.to_duckdb_type(),
-                unique: c.unique,
-                nullable: c.nullable_ratio > 0.0,
-            })
-            .collect();
+    /// 临时表 DDL。
+    ///
+    /// 列名走 [`sanitize_identifier`]——插值时的列清单是**同一算法**得出的（`generate_table` 里的
+    /// `safe_col_names`）。两边不一致时：源库列名里的空格 / 连字符（`Order Date`）会让 DDL 直接
+    /// 语法错误，就算能建出来，`INSERT` 也会报「列不存在」。落地路径（`write_temp_table_to_database`
+    /// 的 `Create`）早就按净化名建表，这里补齐最后一块。
+    ///
+    /// 净化后为空 / 与另一列重名在**这里**报可读错误：否则用户看到的是 DuckDB 原始报错。
+    fn build_create_table_ddl(table_name: &str, columns: &[ColumnDef]) -> MockResult<String> {
+        let mut col_infos: Vec<ColumnDefInfo> = Vec::with_capacity(columns.len());
+        for column in columns {
+            let name = sanitize_identifier(&column.name);
+            if name.is_empty() {
+                return Err(MockError::InvalidColumn(format!(
+                    "列名 '{}' 去掉符号后为空：列名需含字母 / 数字 / 下划线",
+                    column.name
+                )));
+            }
+            if col_infos.iter().any(|def| def.name == name) {
+                return Err(MockError::InvalidColumn(format!(
+                    "列名 '{}' 与另一列同名（都归一到 {name}）：改一个名字",
+                    column.name
+                )));
+            }
+            col_infos.push(ColumnDefInfo {
+                name,
+                data_type: column.data_type.to_duckdb_type(),
+                unique: column.unique,
+                nullable: column.nullable_ratio > 0.0,
+            });
+        }
 
-        SqlEngine::build_create_table(table_name, &col_infos, false)
+        Ok(SqlEngine::build_create_table(table_name, &col_infos, false))
     }
 
     fn read_preview(
@@ -631,32 +660,117 @@ pub fn sanitize_identifier(name: &str) -> String {
         .to_string()
 }
 
-/// 约束类生成器（外键取值 / 序列取值 / 加权取值）的集合问题。
+/// 生成器参数在**采样期会不会直接 panic**（空区间 / 权重和非正 / 除零）。
 ///
-/// 为什么必须在**生成前**拦住：生成期对空集合会直接 panic——
-/// `ForeignKey` 向空区间取随机索引、`Sequence` 做 `row_index % values.len()`（除零）、
-/// `Weighted` 抽 `0.0..total`（总权重为 0 也是空区间）。工作线程一挂，
-/// 该进程后面所有任务都失败（「后台工作线程不可用」），所以这里给一条可操作的错误。
-fn constraint_set_problem(generator: &GeneratorConfig) -> Option<&'static str> {
+/// 为什么必须在**生成前**拦住：这些参数原样进 `rand` 的采样——
+/// - `RandomInt` 反向区间 → `Uniform::new_inclusive` 失败（`expect` panic）；
+/// - `RandomFloat` / `RandomDecimal` / `Words` / `Sentence` / `Sentences` / `Password` 的 `min..max`
+///   是**半开区间**，`min >= max` 即空区间（`random_range` panic）；
+/// - `Date` / `DateTime` / `DateTimeBetween` 走 fake 的 `(0..分钟差)`，区间不足一分钟也是空区间；
+/// - `ForeignKey` 向空集合取随机索引、`Sequence` 做 `row_index % len`（除零）、
+///   `Weighted` 抽 `0.0..total`（总权重非正）。
+///
+/// 后果不是「这一次任务失败」：panic 发生在**持有内存库连接锁**期间，锁会被毒化，
+/// 该进程之后每一次生成都报 `poisoned lock`，用户只能重启应用（实测）。
+/// 所以这里是「参数能不能采样」的**唯一闸门**，错误信息要能直接指导用户改哪个字段。
+fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
     match generator {
+        // ===== 集合类：空集合 / 全零权重（生成期除零或空区间）=====
         GeneratorConfig::ForeignKey { values } if values.is_empty() => {
-            Some("的「外键取值」集合为空：请在列编辑对话框里填取值（一行一个）")
+            Some("的「外键取值」集合为空：请在列编辑对话框里填取值（一行一个）".to_string())
         }
         GeneratorConfig::Sequence { values, .. } if values.is_empty() => {
-            Some("的「序列取值」集合为空：请在列编辑对话框里填取值（一行一个）")
+            Some("的「序列取值」集合为空：请在列编辑对话框里填取值（一行一个）".to_string())
         }
-        GeneratorConfig::Weighted { choices } if choices.is_empty() => {
-            Some("的「加权选项」为空：请在列编辑对话框里填「值, 权重」（至少一个权重大于 0）")
-        }
-        GeneratorConfig::Weighted { choices }
-            if !choices
+        GeneratorConfig::Weighted { choices } => {
+            if choices.is_empty() {
+                return Some(
+                    "的「加权选项」为空：请在列编辑对话框里填「值, 权重」（至少一个权重大于 0）"
+                        .to_string(),
+                );
+            }
+            if choices
                 .iter()
-                .any(|(_, weight)| weight.is_finite() && *weight > 0.0) =>
-        {
-            Some("的「加权选项」权重全为 0：请至少让一个权重大于 0")
+                .any(|(_, weight)| !weight.is_finite() || *weight < 0.0)
+            {
+                return Some(
+                    "的「加权选项」权重必须是不小于 0 的有限数（负数 / NaN 会让总权重变成非正，抽不到值）"
+                        .to_string(),
+                );
+            }
+            if !choices.iter().any(|(_, weight)| *weight > 0.0) {
+                return Some("的「加权选项」权重全为 0：请至少让一个权重大于 0".to_string());
+            }
+            None
         }
+
+        // ===== 随机区间类：空区间 =====
+        GeneratorConfig::RandomInt { min, max } if min > max => Some(format!(
+            "的随机整数区间是空的（min {min} > max {max}）：把 min 改小或 max 改大"
+        )),
+        GeneratorConfig::RandomFloat { min, max, .. }
+            if !min.is_finite() || !max.is_finite() || min >= max =>
+        {
+            Some(format!(
+                "的随机小数区间不是有效区间（min {min} / max {max}）：需要两者都是有限数且 min < max"
+            ))
+        }
+        GeneratorConfig::RandomDecimal { min, max, .. }
+            if !min.is_finite() || !max.is_finite() || min >= max =>
+        {
+            Some(format!(
+                "的随机小数区间不是有效区间（min {min} / max {max}）：需要两者都是有限数且 min < max"
+            ))
+        }
+        GeneratorConfig::Words { min, max }
+        | GeneratorConfig::Sentence { min, max }
+        | GeneratorConfig::Sentences { min, max }
+        | GeneratorConfig::Password { min, max }
+            if min >= max =>
+        {
+            Some(format!(
+                "的取值区间是空的（min {min} ≥ max {max}）：需要 min < max（区间是半开区间）"
+            ))
+        }
+
+        // ===== 日期时间类：fake 按「分钟差」取随机偏移，差 ≤ 0 就是空区间 =====
+        GeneratorConfig::DateTime { min, max }
+        | GeneratorConfig::DateTimeBetween {
+            start: min,
+            end: max,
+        } => datetime_range_problem(min, max),
+        GeneratorConfig::Date { min, max } => date_range_problem(min, max),
+
         _ => None,
     }
+}
+
+/// `DateTime` / `DateTimeBetween` 的区间问题：解析得出的两界差值必须**至少一分钟**。
+///
+/// 解析不出来的串不在这里拦：生成器自己会回退到默认窗口（并记 `tracing::warn!`）。
+fn datetime_range_problem(min: &str, max: &str) -> Option<String> {
+    let parse = |text: &str| {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .ok()
+            .map(|d| d.to_utc())
+    };
+    let (Some(start), Some(end)) = (parse(min), parse(max)) else {
+        return None;
+    };
+    ((end - start).num_minutes() <= 0).then(|| {
+        format!(
+            "的时间区间不足一分钟（{min} ~ {max}）：需要 max 比 min 晚一分钟以上"
+        )
+    })
+}
+
+/// `Date` 的区间问题：两界都能解析时，`max` 不能早于 `min`（同一天可以）。
+fn date_range_problem(min: &str, max: &str) -> Option<String> {
+    let parse = |text: &str| chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").ok();
+    let (Some(start), Some(end)) = (parse(min), parse(max)) else {
+        return None;
+    };
+    (end < start).then(|| format!("的日期区间反向（{min} ~ {max}）：把 max 改到 min 之后"))
 }
 
 fn sanitize_table_name(name: &str) -> String {
@@ -674,19 +788,69 @@ fn sanitize_table_name(name: &str) -> String {
     }
 }
 
+/// DuckDB 值 → SQL 字面量（导出 `.sql` 用）。
+///
+/// 覆盖范围必须 ⊇ mock 能产出的列类型（`ColumnDataType::to_duckdb_type` 的取值集合）：
+/// 时间戳 / 日期 / 十进制 / 大整数 / 二进制一个都不能漏——漏掉的会被**静默**写成 `NULL`，
+/// 导出的脚本就悄悄丢了这些列的数据（v1 遗留：这里原本只列了 9 个变体，DateTime / DECIMAL 全变 NULL）。
 fn value_to_sql_literal(val: &duckdb::types::Value) -> String {
+    use duckdb::types::Value;
     match val {
-        duckdb::types::Value::Null => "NULL".to_string(),
-        duckdb::types::Value::Boolean(b) => b.to_string(),
-        duckdb::types::Value::TinyInt(i) => i.to_string(),
-        duckdb::types::Value::SmallInt(i) => i.to_string(),
-        duckdb::types::Value::Int(i) => i.to_string(),
-        duckdb::types::Value::BigInt(i) => i.to_string(),
-        duckdb::types::Value::Float(f) => f.to_string(),
-        duckdb::types::Value::Double(f) => f.to_string(),
-        duckdb::types::Value::Text(s) => format!("'{}'", s.replace('\'', "''")),
-        _ => "NULL".to_string(),
+        Value::Null => "NULL".to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::TinyInt(i) => i.to_string(),
+        Value::SmallInt(i) => i.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::BigInt(i) => i.to_string(),
+        Value::HugeInt(i) => i.to_string(),
+        Value::UHugeInt(i) => i.to_string(),
+        Value::UTinyInt(i) => i.to_string(),
+        Value::USmallInt(i) => i.to_string(),
+        Value::UInt(i) => i.to_string(),
+        Value::UBigInt(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Double(f) => f.to_string(),
+        // 十进制按**数字字面量**写（`Decimal` 的 Display 带小数点，不加引号）
+        Value::Decimal(d) => d.to_string(),
+        Value::Text(s) => quote_sql_text(s),
+        Value::Enum(s) => quote_sql_text(s),
+        // 时间类加类型前缀：目标库不会把它当字符串列
+        Value::Timestamp(unit, raw) => format!(
+            "TIMESTAMP '{}'",
+            engine::duckdb::value_text::timestamp_text(*unit, *raw)
+        ),
+        Value::Date32(days) => {
+            format!("DATE '{}'", engine::duckdb::value_text::date_text(*days))
+        }
+        Value::Time64(unit, raw) => format!(
+            "TIME '{}'",
+            engine::duckdb::value_text::time_text(*unit, *raw)
+        ),
+        Value::Interval {
+            months,
+            days,
+            nanos,
+        } => format!(
+            "INTERVAL '{}'",
+            engine::duckdb::value_text::interval_text(*months, *days, *nanos)
+        ),
+        Value::Blob(bytes) | Value::Geometry(bytes) => format!(
+            "'{}'::BLOB",
+            engine::duckdb::value_text::blob_hex(bytes)
+        ),
+        // mock 产不出的容器 / 联合类型：不再静默——真出现了要看得见
+        other => {
+            tracing::warn!(
+                "Mock: 导出 SQL 时遇到未覆盖的 DuckDB 值类型（{:?}），已写 NULL",
+                std::mem::discriminant(other)
+            );
+            "NULL".to_string()
+        }
     }
+}
+
+fn quote_sql_text(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
 }
 
 impl MockEngine {
@@ -1276,7 +1440,7 @@ mod tests {
             unique: true,
             dependency: None,
         }];
-        let ddl = MockEngine::build_create_table_ddl("users", &cols);
+        let ddl = MockEngine::build_create_table_ddl("users", &cols).expect("列名合法");
         assert_eq!(ddl, "CREATE TABLE \"users\" (id INT UNIQUE NOT NULL)");
     }
 
@@ -1300,11 +1464,85 @@ mod tests {
                 dependency: None,
             },
         ];
-        let ddl = MockEngine::build_create_table_ddl("users", &cols);
+        let ddl = MockEngine::build_create_table_ddl("users", &cols).expect("列名合法");
         assert_eq!(
             ddl,
             "CREATE TABLE \"users\" (id INT UNIQUE NOT NULL, name VARCHAR(100) NOT NULL)"
         );
+    }
+
+    /// 列名要按 `sanitize_identifier` 落到 DDL 上：插入值时的列清单是同一算法得出的。
+    ///
+    /// 不这样做的后果是实测过的：`Order Date` 会直接产出非法 SQL
+    /// （`CREATE TABLE ... (Order Date VARCHAR …)`）——DuckDB 报 `Parser Error`，
+    /// 而用户完全看不出是「列名带空格」造成的。
+    #[test]
+    fn create_table_ddl_sanitizes_column_names() {
+        let cols = vec![
+            ColumnDef {
+                name: "Order Date".to_string(),
+                data_type: ColumnDataType::Date,
+                generator: GeneratorConfig::Date {
+                    min: "2024-01-01".to_string(),
+                    max: "2024-12-31".to_string(),
+                },
+                nullable_ratio: 0.0,
+                unique: false,
+                dependency: None,
+            },
+            ColumnDef {
+                name: "#序号".to_string(),
+                data_type: ColumnDataType::Integer,
+                generator: GeneratorConfig::RandomInt { min: 1, max: 10 },
+                nullable_ratio: 0.0,
+                unique: false,
+                dependency: None,
+            },
+        ];
+        let ddl = MockEngine::build_create_table_ddl("probe_space", &cols).expect("能建表");
+        assert!(ddl.contains("Order_Date"), "{ddl}");
+        assert!(ddl.contains("序号"), "{ddl}");
+        assert!(!ddl.contains("Order Date"), "{ddl}");
+    }
+
+    /// 净化后为空 / 重名要在建表前报可读错误，而不是把 DuckDB 的原始报错扔给用户。
+    #[test]
+    fn create_table_ddl_reports_unusable_column_names() {
+        let blank = vec![ColumnDef {
+            name: "***".to_string(),
+            data_type: ColumnDataType::Integer,
+            generator: GeneratorConfig::RandomInt { min: 1, max: 10 },
+            nullable_ratio: 0.0,
+            unique: false,
+            dependency: None,
+        }];
+        let reason = MockEngine::build_create_table_ddl("probe_blank", &blank)
+            .expect_err("全符号列名要拒")
+            .to_string();
+        assert!(reason.contains("去掉符号后为空"), "{reason}");
+
+        let duplicated = vec![
+            ColumnDef {
+                name: "user id".to_string(),
+                data_type: ColumnDataType::Integer,
+                generator: GeneratorConfig::RandomInt { min: 1, max: 10 },
+                nullable_ratio: 0.0,
+                unique: false,
+                dependency: None,
+            },
+            ColumnDef {
+                name: "user_id".to_string(),
+                data_type: ColumnDataType::Integer,
+                generator: GeneratorConfig::RandomInt { min: 1, max: 10 },
+                nullable_ratio: 0.0,
+                unique: false,
+                dependency: None,
+            },
+        ];
+        let reason = MockEngine::build_create_table_ddl("probe_dup", &duplicated)
+            .expect_err("净化后重名要拒")
+            .to_string();
+        assert!(reason.contains("同名"), "{reason}");
     }
 
     #[test]
@@ -1363,5 +1601,137 @@ mod tests {
     fn test_infer_datatype_for_column_decimal() {
         let dt = infer_datatype_for_column("decimal(10,2)");
         assert!(matches!(dt, ColumnDataType::Decimal { .. }));
+    }
+
+    /// 「不能采样」的参数必须在生成前被拦——它们原本会在工作线程里 panic，
+    /// 而 panic 发生在持有内存库连接锁期间，会把整个进程的 mock 生成打坏（实测）。
+    #[test]
+    fn generator_params_that_cannot_be_sampled_are_rejected() {
+        // 反向区间：实测 `RandomInt { min: 10, max: 5 }` 直接 panic
+        assert!(
+            generator_param_problem(&GeneratorConfig::RandomInt { min: 10, max: 5 }).is_some()
+        );
+        // 半开区间：`min == max` 就是空区间（`Sentence { min: 1, max: 1 }` 实测过）
+        assert!(generator_param_problem(&GeneratorConfig::Sentence { min: 1, max: 1 }).is_some());
+        assert!(
+            generator_param_problem(&GeneratorConfig::RandomFloat {
+                min: 1.0,
+                max: 1.0,
+                precision: 2,
+            })
+            .is_some()
+        );
+        assert!(
+            generator_param_problem(&GeneratorConfig::RandomDecimal {
+                min: 0.0,
+                max: 0.0,
+                scale: 2,
+            })
+            .is_some()
+        );
+        assert!(generator_param_problem(&GeneratorConfig::Words { min: 3, max: 2 }).is_some());
+        assert!(generator_param_problem(&GeneratorConfig::Password { min: 8, max: 8 }).is_some());
+        // 权重含负数：总权重可能 ≤ 0，抽 `0.0..total` 就是空区间
+        assert!(
+            generator_param_problem(&GeneratorConfig::Weighted {
+                choices: vec![("a".to_string(), 5.0), ("b".to_string(), -5.0)],
+            })
+            .is_some()
+        );
+        // 时间区间不足一分钟：fake 走 `(0..分钟差)`，差 ≤ 0 即空区间
+        assert!(
+            generator_param_problem(&GeneratorConfig::DateTime {
+                min: "2024-01-01T00:00:00Z".to_string(),
+                max: "2024-01-01T00:00:30Z".to_string(),
+            })
+            .is_some()
+        );
+        assert!(
+            generator_param_problem(&GeneratorConfig::Date {
+                min: "2024-12-31".to_string(),
+                max: "2024-01-01".to_string(),
+            })
+            .is_some()
+        );
+    }
+
+    /// 合法参数不能被误拦：护栏过宽会让正常配置也生不出来。
+    #[test]
+    fn valid_generator_params_pass_the_guard() {
+        for generator in [
+            // `RandomInt` 是**闭**区间，min == max 合法
+            GeneratorConfig::RandomInt { min: 5, max: 5 },
+            GeneratorConfig::RandomInt { min: 1, max: 10 },
+            GeneratorConfig::RandomFloat {
+                min: 0.0,
+                max: 1.0,
+                precision: 2,
+            },
+            GeneratorConfig::Sentence { min: 1, max: 3 },
+            GeneratorConfig::Weighted {
+                choices: vec![("a".to_string(), 1.0), ("b".to_string(), 2.0)],
+            },
+            GeneratorConfig::DateTime {
+                min: "2020-01-01T00:00:00Z".to_string(),
+                max: "2025-12-31T23:59:59Z".to_string(),
+            },
+            // 同一天的日期区间合法（下界 00:00:00 ~ 上界 23:59:59）
+            GeneratorConfig::Date {
+                min: "2024-01-01".to_string(),
+                max: "2024-01-01".to_string(),
+            },
+            // 解析不出来的时间串不由这里拦：生成器自己会回退到默认窗口
+            GeneratorConfig::DateTime {
+                min: "2024-01-01".to_string(),
+                max: "2024-12-31".to_string(),
+            },
+            GeneratorConfig::AutoIncrement { start: 1, step: 1 },
+        ] {
+            assert!(generator_param_problem(&generator).is_none(), "{generator:?}");
+        }
+    }
+
+    /// 时间 / 日期 / 十进制 / 大整数 / 二进制都要有字面量：
+    /// 这几类曾经整片漏掉（`_ => "NULL"`），导出的 `.sql` 会静默丢数据。
+    #[test]
+    fn sql_literals_cover_every_mock_column_type() {
+        use duckdb::types::{Decimal, TimeUnit, Value};
+
+        assert_eq!(
+            value_to_sql_literal(&Value::Timestamp(TimeUnit::Second, 1_704_164_645)),
+            "TIMESTAMP '2024-01-02 03:04:05'"
+        );
+        assert_eq!(
+            value_to_sql_literal(&Value::Date32(19_724)),
+            "DATE '2024-01-02'"
+        );
+        assert_eq!(
+            value_to_sql_literal(&Value::Time64(TimeUnit::Second, 5)),
+            "TIME '00:00:05'"
+        );
+        assert_eq!(
+            value_to_sql_literal(&Value::Decimal(Decimal::new(4, 2, 1234).expect("decimal"))),
+            "12.34"
+        );
+        assert_eq!(
+            value_to_sql_literal(&Value::HugeInt(i128::from(i64::MAX) + 1)),
+            "9223372036854775808"
+        );
+        assert_eq!(
+            value_to_sql_literal(&Value::Blob(vec![0x41, 0x0A])),
+            "'\\x41\\x0A'::BLOB"
+        );
+        assert_eq!(
+            value_to_sql_literal(&Value::Text("it's".to_string())),
+            "'it''s'"
+        );
+        assert_eq!(
+            value_to_sql_literal(&Value::Interval {
+                months: 1,
+                days: 0,
+                nanos: 3_600_000_000_000,
+            }),
+            "INTERVAL '1 months 01:00:00'"
+        );
     }
 }

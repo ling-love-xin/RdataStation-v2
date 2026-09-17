@@ -1205,3 +1205,120 @@ async fn filled_constraint_collection_generates() {
         "生成值应来自集合: {rows:?}"
     );
 }
+
+/// 时间 / 日期 / 十进制列：预览与 SQL 导出都必须有值（不能是 NULL）。
+///
+/// 这两条曾经一起坏掉：`row_to_arrow` 只认 5 类变体、`value_to_sql_literal` 只认 9 类，
+/// 于是 DateTime / DECIMAL 列在预览里恒为 NULL、在导出的 `.sql` 里也全是 NULL——
+/// 用户看到的就是「生成完了但数据是空的」。
+#[tokio::test]
+async fn temporal_and_decimal_columns_survive_preview_and_sql_export() {
+    let dir = temp_dir("value_coverage");
+    let path = dir.join("out.sql");
+
+    let config = MockConfig {
+        table_name: "value_coverage".to_string(),
+        row_count: 3,
+        seed: Some(11),
+        locale: Locale::ZhCn,
+        columns: vec![
+            auto_increment("id"),
+            col(
+                "created_at",
+                ColumnDataType::DateTime,
+                GeneratorConfig::DateTime {
+                    min: "2024-01-01T00:00:00Z".to_string(),
+                    max: "2024-12-31T23:59:59Z".to_string(),
+                },
+            ),
+            col(
+                "birth_date",
+                ColumnDataType::Date,
+                GeneratorConfig::Date {
+                    min: "1980-01-01".to_string(),
+                    max: "2000-12-31".to_string(),
+                },
+            ),
+            col(
+                "amount",
+                ColumnDataType::Decimal {
+                    precision: 10,
+                    scale: 2,
+                },
+                GeneratorConfig::RandomDecimal {
+                    min: 1.0,
+                    max: 100.0,
+                    scale: 2,
+                },
+            ),
+        ],
+    };
+    let result = MockEngine::generate(config).await.expect("生成");
+
+    // 预览：每一格都得有值
+    let rows = rows_of(&result);
+    assert_eq!(rows.len(), 3);
+    for row in &rows {
+        for (index, value) in row.iter().enumerate() {
+            assert_ne!(
+                value,
+                &shared::models::Value::Null,
+                "预览第 {index} 列是 NULL：{row:?}"
+            );
+        }
+    }
+    assert_eq!(
+        result.preview.columns,
+        vec!["id", "created_at", "birth_date", "amount"]
+    );
+
+    // 导出的 `.sql`：时间戳 / 日期要有类型前缀，且整份脚本不含 NULL
+    MockEngine::export(
+        &result.temp_table_name,
+        &MockExportFormat::SqlInsert,
+        Some(path.to_str().expect("路径应为 UTF-8")),
+        Some("value_coverage"),
+    )
+    .expect("SQL INSERT 导出");
+    let sql = std::fs::read_to_string(&path).expect("导出文件应当可读");
+    assert!(sql.contains("TIMESTAMP '"), "{sql}");
+    assert!(sql.contains("DATE '"), "{sql}");
+    assert!(!sql.contains("NULL"), "导出里不该有 NULL 占位：{sql}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 非法参数要在**生成前**被拦，而不是在工作线程里 panic。
+///
+/// 为什么重要：panic 发生在持有内存库连接锁期间会毒化锁，本进程之后每次生成都报
+/// `poisoned lock`——用户只能重启应用（v1 的两处兜底就踩过：映射兜底 `Sentence{1,1}`、
+/// 反向区间）。这里从公开 API 锁住拦截行为。
+#[tokio::test]
+async fn unsamplable_generator_params_are_rejected_before_generation() {
+    let config = MockConfig {
+        table_name: "bad_range".to_string(),
+        row_count: 3,
+        seed: Some(1),
+        locale: Locale::ZhCn,
+        columns: vec![
+            auto_increment("id"),
+            col(
+                "n",
+                ColumnDataType::Integer,
+                GeneratorConfig::RandomInt { min: 10, max: 5 },
+            ),
+        ],
+    };
+    let reason = MockEngine::generate(config)
+        .await
+        .expect_err("反向区间必须被拦")
+        .to_string();
+    assert!(reason.contains("min 10 > max 5"), "{reason}");
+    assert!(reason.contains('n'), "错误里要点出是哪一列：{reason}");
+
+    // 拦下之后内存库仍然可用（没有被 panic 毒化）
+    let ok = MockEngine::generate(basic_config("bad_range_after"))
+        .await
+        .expect("拦截之后照常能生成");
+    assert_eq!(ok.row_count, 50);
+}

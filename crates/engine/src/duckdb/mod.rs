@@ -28,6 +28,7 @@ mod plugin;
 mod snapshot;
 mod temp_table;
 pub mod row_to_arrow;
+pub mod value_text;
 
 // 导出所有核心类型
 pub use executor::{DuckDBExecutor, DuckDBResult};

@@ -411,14 +411,18 @@ impl Shared {
     ///
     /// 定向动作（读源库结构 + 预填目标表名）在事件路径执行：面板实体随右栏面板
     /// **构造期创建**（`RightSidebarPanel::new`），因此这里总能拿到句柄。
-    /// 顺带让面板重读生成历史：面板可能已摆了几个项目（也可能刚切过项目）。
+    /// 顺带让面板重读生成历史与候选清单（连接 / 既有分析表）：面板可能已摆了几个项目
+    /// （也可能刚切过项目），而这两份清单是「打开面板时该是最新的」状态，不是渲染期能拉的 I/O。
     pub fn open_mock_panel(&self, source: Option<SchemaRequest>, cx: &mut App) {
         self.open_right_panel(RightPanel::Mock, cx);
         let panel = self.mock_panel.borrow().clone();
         let Some(panel) = panel.and_then(|weak| weak.upgrade()) else {
             return;
         };
-        panel.update(cx, |panel, cx| panel.refresh_history(cx));
+        panel.update(cx, |panel, cx| {
+            panel.refresh_sources(cx);
+            panel.refresh_history(cx);
+        });
         if let Some(source) = source {
             panel.update(cx, |panel, cx| panel.preset_from_source(source, cx));
         }
@@ -430,7 +434,7 @@ mod tests {
     // 注意：不通配导入（`use super::*` / `use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use std::path::PathBuf;
 
-    use super::{Shared, append_sql};
+    use super::{Shared, append_sql, OpenInEditorRequest};
 
     /// 「打开查询」请求取出即清空（宿主 render 每帧取用，不得重复开文档）。
     #[test]

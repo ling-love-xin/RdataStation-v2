@@ -98,11 +98,27 @@ struct Job {
 
 fn worker(rx: mpsc::Receiver<Job>) {
     while let Ok(job) = rx.recv() {
-        let result = run_job(&job);
+        let result = run_job_catching(|| run_job(&job));
         let mut slot = lock(&shared().slot);
         // 一次性收尾：清进度 + 写结果（UI 不会看到中间态）
         slot.progress = None;
         slot.done = Some(result);
+    }
+}
+
+/// 跑一次任务并**兜住 panic**。
+///
+/// 为什么必须兜：`run_job` 里任何一处 panic（历史上真实发生过：生成器参数造成的空区间、
+/// 映射兜底的空区间）都会让工作线程直接结束——进度槽里的 `progress` 永远是 `Some`，
+/// 此后 `start()` 每次都回「已有任务在进行中」，面板的取消按钮也不再渲染，用户只能重启应用。
+/// 兜住之后，panic 变成**这一次任务**的失败原因，面板照常可用。
+pub(crate) fn run_job_catching<F>(run: F) -> Result<MockJobDone, String>
+where
+    F: FnOnce() -> Result<MockJobDone, String> + std::panic::UnwindSafe,
+{
+    match std::panic::catch_unwind(run) {
+        Ok(result) => result,
+        Err(_) => Err("后台任务异常结束（内部错误）：这次没有产物，请检查列参数后重试".to_string()),
     }
 }
 
@@ -285,4 +301,35 @@ pub fn take_done() -> Option<Result<MockJobDone, String>> {
 /// 无任务时调用无害：下一次生成开始会重置该标志。
 pub fn cancel() {
     mock::MockEngine::cancel();
+}
+
+#[cfg(test)]
+mod tests {
+    // 注意：不通配导入（`use super::*` 会把 gpui 的东西带进作用域，见同目录其它测试的约定）。
+    use super::{MockJobDone, run_job_catching};
+
+    /// 任务内部 panic 不能掀翻工作线程：必须变成「这一次任务的失败原因」。
+    ///
+    /// 为什么值得一条测试：panic 逃出去会让进度槽永远停在 `Some`，之后 `start()` 全被
+    /// 「已有任务在进行中」拒掉，面板的取消按钮也不再渲染——只能重启应用。
+    #[test]
+    fn job_panic_becomes_a_failed_result() {
+        let outcome = run_job_catching(|| panic!("模拟生成器参数造成的 panic"));
+        let Err(reason) = outcome else {
+            panic!("panic 必须转成 Err");
+        };
+        assert!(reason.contains("后台任务异常结束"), "{reason}");
+        assert!(reason.contains("请检查列参数"), "{reason}");
+    }
+
+    /// 正常结果原样透传（兜住 panic 不能顺手把成功也吞了）。
+    #[test]
+    fn normal_result_passes_through() {
+        let outcome = run_job_catching(|| {
+            Ok(MockJobDone::Exported {
+                message: "ok".into(),
+            })
+        });
+        assert!(matches!(outcome, Ok(MockJobDone::Exported { .. })));
+    }
 }
