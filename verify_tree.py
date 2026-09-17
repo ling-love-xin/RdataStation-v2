@@ -49,7 +49,12 @@ MINE = [
     "crates/engine/src/duckdb/manager.rs",
     "crates/engine/src/duckdb/mod.rs",
     "crates/engine/src/persistence/workbench_context_store.rs",
+    "crates/engine/src/services/execution_service.rs",
     "crates/engine/tests/duckdb_accel_probe.rs",
+    "crates/engine/tests/transaction_affinity.rs",
+    "crates/insight/src/schema_analyzer.rs",
+    "crates/insight/src/service/persistence.rs",
+    "crates/insight/src/table_profile_service.rs",
     "crates/shared/src/error.rs",
     # 编辑器：结果区（B5）与错误回填（B6）
     "crates/editor/Cargo.toml",

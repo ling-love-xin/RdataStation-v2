@@ -61,6 +61,7 @@ async fn fetch_table_columns(
     );
 
     let opts = SqlExecuteOptions {
+        channel: None,
         record_history: false,
         use_transaction: false,
         timeout_ms: Some(15000),
@@ -139,6 +140,7 @@ async fn fetch_row_count(
     );
 
     let opts = SqlExecuteOptions {
+        channel: None,
         record_history: false,
         use_transaction: false,
         timeout_ms: Some(30000),

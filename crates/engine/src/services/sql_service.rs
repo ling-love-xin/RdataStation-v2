@@ -57,6 +57,10 @@ pub struct SqlExecuteOptions {
     pub timeout_ms: Option<u64>,
     /// 是否使用查询缓存
     pub use_cache: bool,
+    /// 【B13】执行通道（`source` / `accelerated` / `federated`）：历史要记“这句在哪儿跑的”
+    ///
+    /// 由**执行器**填（它是唯一知道通道的一方）；不填 = 没接通道信息（老调用方）。
+    pub channel: Option<String>,
 }
 
 /// 把一条查询套成**窗口**（`LIMIT n OFFSET m`）——分段抓取的取数方式
@@ -159,6 +163,8 @@ impl SqlService {
 
         let started = std::time::Instant::now();
         let record_history = options.record_history;
+        // 通道要先拷出来：下面 `SqlExecuteOptions { ..options }` 会把整个 options 移进内层执行
+        let channel = options.channel.clone();
         let result = self
             .execute(
                 conn_id.clone(),
@@ -187,6 +193,7 @@ impl SqlService {
                         None,
                         Some(outcome.result.total_rows() as u64),
                         None,
+                        channel.as_deref(),
                     )
                     .await;
                 }
@@ -199,6 +206,7 @@ impl SqlService {
                         Some(error.to_string()),
                         None,
                         None,
+                        channel.as_deref(),
                     )
                     .await;
                 }
@@ -208,6 +216,7 @@ impl SqlService {
     }
 
     /// 写一条执行历史（与 [`Self::execute`] 里那两处同一张表）
+    #[allow(clippy::too_many_arguments)]
     async fn record_history(
         &self,
         conn_id: Option<&str>,
@@ -217,6 +226,7 @@ impl SqlService {
         error_message: Option<String>,
         rows_returned: Option<u64>,
         rows_affected: Option<u64>,
+        channel: Option<&str>,
     ) {
         let entry = SqlHistoryEntry {
             conn_id: conn_id.map(str::to_string),
@@ -226,6 +236,7 @@ impl SqlService {
             error_message,
             rows_returned,
             rows_affected,
+            channel: channel.map(str::to_string),
         };
         if let Err(e) = history_store::save_sql_history(sql, &entry) {
             tracing::error!(error = %e, "Failed to save SQL history");
@@ -263,6 +274,8 @@ impl SqlService {
                     use_transaction: false,
                     timeout_ms,
                     use_cache: false,
+                    // 分段抓取本身不记历史（第一段那条已经记了），通道也无需带
+                    channel: None,
                 },
             )
             .await;
@@ -378,6 +391,7 @@ impl SqlService {
                         Some(err.to_string()),
                         None,
                         None,
+                        options.channel.as_deref(),
                     )
                     .await;
                 }
@@ -428,6 +442,7 @@ impl SqlService {
                     Some(false) => result.affected_rows.map(u64::from),
                     _ => None,
                 },
+                options.channel.as_deref(),
             )
             .await;
         }

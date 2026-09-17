@@ -92,6 +92,7 @@ impl ResultService {
         let manager = connection_manager::get_connection_manager();
         let service = SqlService::new(manager.clone());
         let opts = SqlExecuteOptions {
+            channel: None,
             record_history: false,
             use_transaction: true,
             timeout_ms: Some(10000),

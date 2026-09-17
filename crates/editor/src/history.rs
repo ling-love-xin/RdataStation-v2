@@ -101,7 +101,7 @@ pub fn item_from(record: &SqlHistoryRecord, now: DateTime<Utc>) -> HistoryItem {
         time_text: time_text(now, record.executed_at),
         duration_text: duration_text(record.duration_ms.unwrap_or(0)),
         rows_text: rows_text(record.rows_returned, record.rows_affected),
-        source_text: source_text(record.db_type.as_deref()),
+        source_text: source_text(record.db_type.as_deref(), record.channel.as_deref()),
         error: record.error_message.clone(),
         conn_id: record.conn_id.clone(),
     }
@@ -172,13 +172,30 @@ pub fn rows_text(rows_returned: Option<u64>, rows_affected: Option<u64>) -> Opti
     rows_affected.map(|affected| format!("影响 {} 行", thousands(affected as usize)))
 }
 
-/// 来源文案：库类型（`mysql` / `sqlite` / …）；没有就不显示
+/// 来源文案：库类型（`mysql` / `sqlite` / …）+ **执行通道**（`·加速` / `·联邦`）
+///
+/// 两个维度分开来：`MYSQL·加速` 说的是“数据是 MySQL 的、语句是在本地加速档上跑的”。
+/// 通道认不出就不缀（老记录没有这一项）；库类型没有就不显示。
 ///
 /// 不在这里翻连接名：面板没有连接列表的快照（那是编辑器绑定与导航的事），
 /// 拿一个 id 去猜名字不如老实显示库类型。
-pub fn source_text(db_type: Option<&str>) -> Option<String> {
+pub fn source_text(db_type: Option<&str>, channel: Option<&str>) -> Option<String> {
     let db_type = db_type.map(str::trim).filter(|text| !text.is_empty())?;
-    Some(db_type.to_uppercase())
+    let mut text = db_type.to_uppercase();
+    if let Some(mark) = channel_mark(channel) {
+        text.push('·');
+        text.push_str(mark);
+    }
+    Some(text)
+}
+
+/// 通道后缀（源库档不缀：那是默认档，缀上去只是噪音）
+fn channel_mark(channel: Option<&str>) -> Option<&'static str> {
+    match crate::channel::ExecChannel::from_code(channel?) {
+        crate::channel::ExecChannel::Source => None,
+        crate::channel::ExecChannel::Accelerated => Some("加速"),
+        crate::channel::ExecChannel::Federated => Some("联邦"),
+    }
 }
 
 /// 千分位（与结果区的数字写法一致）
@@ -208,6 +225,7 @@ mod tests {
             sql: sql.to_string(),
             conn_id: Some("conn-1".to_string()),
             db_type: Some("mysql".to_string()),
+            channel: None,
             executed_at: Utc.with_ymd_and_hms(2026, 9, 17, 6, 0, 0).unwrap(),
             duration_ms: Some(12),
             success: Some(true),
@@ -272,9 +290,24 @@ mod tests {
 
     #[test]
     fn source_text_is_the_database_kind() {
-        assert_eq!(source_text(Some("mysql")).as_deref(), Some("MYSQL"));
-        assert_eq!(source_text(Some("  ")).as_deref(), None);
-        assert_eq!(source_text(None).as_deref(), None);
+        assert_eq!(source_text(Some("mysql"), None).as_deref(), Some("MYSQL"));
+        assert_eq!(source_text(Some("  "), None).as_deref(), None);
+        assert_eq!(source_text(None, None).as_deref(), None);
+        // 【B13】通道是第二个维度：源库档不缀（默认档缀上去只是噪音）
+        assert_eq!(source_text(Some("mysql"), Some("source")).as_deref(), Some("MYSQL"));
+        assert_eq!(
+            source_text(Some("mysql"), Some("accelerated")).as_deref(),
+            Some("MYSQL·加速")
+        );
+        assert_eq!(
+            source_text(Some("postgres"), Some("federated")).as_deref(),
+            Some("POSTGRES·联邦")
+        );
+        // 认不出的通道码不缀（老记录里也没有这一项）
+        assert_eq!(
+            source_text(Some("mysql"), Some("notebook-v9")).as_deref(),
+            Some("MYSQL")
+        );
     }
 
     #[test]

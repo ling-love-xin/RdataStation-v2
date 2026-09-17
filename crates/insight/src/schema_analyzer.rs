@@ -132,6 +132,7 @@ impl SchemaAnalyzer {
         );
 
         let opts = SqlExecuteOptions {
+            channel: None,
             record_history: false,
             use_transaction: false,
             timeout_ms: Some(10000),
@@ -175,6 +176,7 @@ impl SchemaAnalyzer {
         );
 
         let opts = SqlExecuteOptions {
+            channel: None,
             record_history: false,
             use_transaction: false,
             timeout_ms: Some(15000),

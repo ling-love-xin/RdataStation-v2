@@ -163,6 +163,30 @@ impl EditorShared {
         channel_queue.submit(document, target, connection, placement, options, channel)
     }
 
+    /// 【B13】请一次“重新挂载加速源”（表清单刷新）
+    ///
+    /// 与 [`Self::submit`] 同一口径：连接从**服务层**取（调用方不需要知道绑定在哪）。
+    pub fn request_source_refresh(
+        &self,
+        document: crate::model::DocumentId,
+    ) -> Result<(), String> {
+        let connection = self.service.borrow().connection_for(&document);
+        let guard = self.exec.borrow();
+        let Some(queue) = guard.as_ref() else {
+            return Err("当前未接入执行".to_string());
+        };
+        queue.request_source_refresh(document, connection)
+    }
+
+    /// 【B13】重新挂载的回执（面板轮询取走）
+    pub fn drain_source_notes(&self) -> Vec<crate::execution::SourceNote> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|queue| queue.drain_source_notes())
+            .unwrap_or_default()
+    }
+
     /// 结果队列里已完成但尚未取走的执行（轮询泵调用）
     ///
     /// **顺带留一份回执**（[`ExecReceipt`]）：结果归编辑区，回执给宿主。

@@ -89,6 +89,8 @@ pub struct EditorHostPanel {
     tx_since: Option<std::time::Instant>,
     /// 【B4】已发出、尚未回执的事务动作数（轮询泵据此多活一会儿）
     tx_pending: usize,
+    /// 【B13】已请出、尚未回执的“重新挂载加速源”数（同上）
+    refresh_pending: usize,
     /// 【B5】结果区要画的东西（工具栏 ⑥ + 状态行 ⑦ + 错误卡片）
     ///
     /// 从选中结果集投影一次就缓在这里：render 是纯读路径，不在渲染期算文案。
@@ -295,6 +297,7 @@ impl EditorHostPanel {
             tx_open: false,
             tx_since: None,
             tx_pending: 0,
+            refresh_pending: 0,
             result_toolbar: None,
             result_status: None,
             result_tabs: Vec::new(),
@@ -625,10 +628,14 @@ impl EditorHostPanel {
     /// 三档**互斥**（原型 §5.7）：源库直连 / DuckDB 本地加速 / 联邦查询。菜单项由纯函数
     /// [`channel::menu_items`] 给（哪项能点、为什么不能点都在那儿定），这里只负责画：
     /// 不可用项**保留形态但置灰 + 行尾给原因**，当前项打勾。
+    ///
+    /// 本地跑的那两档额外给一个**维护动作**：`重新挂载源库（刷新表清单）`（见
+    /// [`channel::refresh_item_label`]）——源库新建的表要重挂才看得见。
     fn render_channel_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let current = self.channel();
         let items = self.channel_menu();
+        let refresh_label = channel::refresh_item_label(current);
 
         Button::new("editor-channel")
             .ghost()
@@ -648,6 +655,14 @@ impl EditorHostPanel {
                             .on_click(move |_, _window, app| {
                                 entity.update(app, |panel, cx| panel.set_channel(channel, cx));
                             }),
+                    );
+                }
+                if let Some(label) = refresh_label {
+                    let entity = entity.clone();
+                    menu = menu.separator().item(
+                        PopupMenuItem::new(label).on_click(move |_, _window, app| {
+                            entity.update(app, |panel, cx| panel.refresh_source(cx));
+                        }),
                     );
                 }
                 menu
@@ -688,6 +703,33 @@ impl EditorHostPanel {
             .shared
             .channel_availability(self.bound_connection().as_deref());
         channel::menu_items(self.channel(), self.source_channel_ready(), &availability)
+    }
+
+    /// 【B13】重新挂载加速档的源库（表清单刷新）
+    ///
+    /// 只对**本地跑**的通道有意义（源库档没有“挂载”这回事）；不在那两档时直说原因，
+    /// 不要让一个“按了没反应”的菜单项存在。动作在旁路线程上做，回执由轮询泵取回。
+    pub(crate) fn refresh_source(&mut self, cx: &mut Context<Self>) {
+        if !self.channel().runs_locally() {
+            self.set_message(
+                Some("现在不是本地加速档，没有可重新挂载的源".to_string()),
+                cx,
+            );
+            return;
+        }
+        match self.shared.request_source_refresh(self.document.clone()) {
+            Ok(()) => {
+                self.refresh_pending += 1;
+                self.set_message(Some("正在重新挂载源库…".to_string()), cx);
+                self.ensure_exec_pump(cx);
+            }
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
+    /// 【B13】还没回执的重新挂载数（供测试断言）
+    pub fn refresh_pending_for_test(&self) -> usize {
+        self.refresh_pending
     }
 
     /// 【B13】切换执行通道（「执行位置 ▾」调用）
@@ -1439,11 +1481,13 @@ impl EditorHostPanel {
                 let keep_going = weak
                     .update(cx, |this, cx| {
                         this.drain_exec_results(cx);
-                        if this.pending > 0 || this.tx_pending > 0 {
+                        if this.pending > 0 || this.tx_pending > 0 || this.refresh_pending > 0 {
                             cx.notify();
                         }
-                        // 事务动作的回执还没到也要继续轮询（它不在“执行忙”里）
-                        this.shared.is_executing() || this.tx_pending > 0
+                        // 事务动作 / 重新挂载的回执还没到也要继续轮询（它们不在“执行忙”里）
+                        this.shared.is_executing()
+                            || this.tx_pending > 0
+                            || this.refresh_pending > 0
                     })
                     .unwrap_or(false);
                 if !keep_going {
@@ -1479,6 +1523,18 @@ impl EditorHostPanel {
                     Some(format!("{}失败：{reason}", note.action.label())),
                     cx,
                 ),
+            }
+        }
+
+        // 【B13】重新挂载加速源的回执（成败都要说出来：它是用户按的一个动作）
+        for note in self.shared.drain_source_notes() {
+            self.refresh_pending = self.refresh_pending.saturating_sub(1);
+            if note.document != self.document {
+                continue;
+            }
+            match note.result {
+                Ok(()) => self.set_message(Some("已重新挂载源库（新表可见了）".to_string()), cx),
+                Err(reason) => self.set_message(Some(format!("重新挂载失败：{reason}")), cx),
             }
         }
 

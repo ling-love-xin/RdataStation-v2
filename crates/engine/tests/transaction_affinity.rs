@@ -39,6 +39,7 @@ use rds_engine::{AutoDriverRegistrar, DriverConnectionConfig};
 /// 执行选项：关缓存（避免缓存掩盖真实执行）、关历史（探针不污染用户历史）
 fn options() -> SqlExecuteOptions {
     SqlExecuteOptions {
+        channel: None,
         record_history: false,
         use_transaction: false,
         timeout_ms: Some(15_000),

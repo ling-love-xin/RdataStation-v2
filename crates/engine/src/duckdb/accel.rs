@@ -301,6 +301,13 @@ impl AccelSession {
 static SESSIONS: Lazy<Mutex<HashMap<String, Arc<AccelSession>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// 建立会话时的全局互斥（**只护“装扩展 + ATTACH”这一段**，不护查询）
+///
+/// 为什么需要它：`INSTALL` 与 `LOAD` 都是进程级资源（扩展目录里的同一个文件），
+/// 两个源同时首次建立会话时会撞上“正在写同一个文件”。生产上执行器是单工作线程
+/// （基本串行），但“重新挂载”走旁路线程、以后也可能有第二个执行者——这里兜住。
+static MOUNT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 /// 扩展状态（按种类）：试过、失败了才拦；没试过不拦
 static EXTENSION_FAILURES: Lazy<Mutex<HashMap<AccelKind, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -322,6 +329,14 @@ pub fn extension_state(kind: AccelKind) -> Result<(), String> {
 /// **会做 I/O**：首次要 `INSTALL` 扩展（联网一次）、`ATTACH` 源库。所以它属于**事件路径**
 /// （工作线程上的执行），不属于渲染路径；界面可用性看 [`extension_state`]。
 pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String> {
+    if let Some(session) = session_for(&source.conn_id) {
+        return Ok(session);
+    }
+    // 挂载这一步串行（见 `MOUNT_LOCK`）；查询不受它影响
+    let _mount = MOUNT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // 拿锁期间可能已被别人建好了
     if let Some(session) = session_for(&source.conn_id) {
         return Ok(session);
     }
@@ -451,7 +466,12 @@ mod tests {
 
     /// 造一个有数据的 DuckDB 文件当“源”
     fn source_file(dir: &std::path::Path, rows: i64) -> std::path::PathBuf {
-        let path = dir.join("source.duckdb");
+        source_file_named(dir, "source.duckdb", rows)
+    }
+
+    /// 同上，文件名可指定（并发用例要两个不同的源）
+    fn source_file_named(dir: &std::path::Path, name: &str, rows: i64) -> std::path::PathBuf {
+        let path = dir.join(name);
         let conn = Connection::open(&path).expect("建源文件");
         conn.execute_batch(&format!(
             "CREATE TABLE orders AS SELECT i AS id FROM range({rows}) AS r(i)"
@@ -607,6 +627,44 @@ mod tests {
             "7",
             "重挂不该把会话里的临时表弄丢"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 两个不同的源同时建立会话：装扩展 / 挂载串行，互不影响
+    #[test]
+    fn concurrent_mounts_do_not_race_on_the_extension_directory() {
+        drop_all();
+        let dir = temp_dir("concurrent");
+        let first = AccelSource {
+            conn_id: "C_conc_1".to_string(),
+            kind: AccelKind::DuckDb,
+            connection_string: source_file_named(&dir, "first.duckdb", 1)
+                .to_string_lossy()
+                .to_string(),
+        };
+        let second = AccelSource {
+            conn_id: "C_conc_2".to_string(),
+            kind: AccelKind::DuckDb,
+            connection_string: source_file_named(&dir, "second.duckdb", 2)
+                .to_string_lossy()
+                .to_string(),
+        };
+
+        let handles: Vec<_> = [first, second]
+            .into_iter()
+            .map(|source| {
+                std::thread::spawn(move || {
+                    let session = super::ensure_session(&source).expect("建会话");
+                    session.run("SELECT count(*) FROM orders").expect("查表")
+                })
+            })
+            .collect();
+        let counts: Vec<String> = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("线程不该 panic").to_rows()[0][0].to_string())
+            .collect();
+        assert_eq!(counts.len(), 2, "两条会话都建起来了");
+        drop_all();
         let _ = std::fs::remove_dir_all(dir);
     }
 

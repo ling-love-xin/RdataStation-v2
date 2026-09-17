@@ -26,6 +26,7 @@ pub async fn re_execute_with_filter(
     }
 
     let options = SqlExecuteOptions {
+        channel: None,
         record_history: false,
         use_transaction: false,
         timeout_ms: None,

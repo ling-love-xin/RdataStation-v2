@@ -53,6 +53,7 @@ async fn sample_from_connection(
 
     let service = SqlService::new(get_connection_manager().clone());
     let opts = SqlExecuteOptions {
+        channel: None,
         record_history: false,
         use_transaction: false,
         timeout_ms: Some(15_000),
@@ -279,6 +280,7 @@ pub async fn profile_column_from_table(
     );
 
     let opts = SqlExecuteOptions {
+        channel: None,
         record_history: false,
         use_transaction: false,
         timeout_ms: Some(15000),
@@ -343,6 +345,7 @@ pub async fn batch_evaluate_columns(
     );
 
     let opts = SqlExecuteOptions {
+        channel: None,
         record_history: false,
         use_transaction: false,
         timeout_ms: Some(15000),

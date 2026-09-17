@@ -498,6 +498,18 @@ pub trait QueryRunner: Send + Sync + 'static {
     ) -> Result<QueryData, String> {
         Err("当前执行器不支持分段抓取".to_string())
     }
+
+    /// 【B13】重新挂载加速档的源库（**表清单刷新**）
+    ///
+    /// 为什么需要它：加速档的数据是实时的，但在 `ATTACH` 时定型的**表清单**是静态的——
+    /// 源库后来新建的表在旧会话里根本不存在（真机实测）。重新挂载只改表清单，不影响已有
+    /// 结果集（那些行已经取回来了）。
+    ///
+    /// 与 [`Self::run`] 一样在**旁路线程**上调用（`ATTACH` 是 I/O）。
+    /// 默认实现 = 不支持（没接本地加速的执行器）。
+    fn refresh_accelerated_source(&self, _connection: Option<&str>) -> Result<(), String> {
+        Err("当前执行器未接入本地加速".to_string())
+    }
 }
 
 // ===== 跑完放哪 =====
@@ -525,6 +537,17 @@ struct ExecJob {
     filtered: Option<(String, Vec<String>)>,
     /// 【B14】排序下发的列名与方向；`Some` 时走 `run_sorted_down`
     sorted_down: Option<(String, bool)>,
+}
+
+/// 【B13】一次“重新挂载加速源”的回执
+///
+/// 它**不产结果集**（是挂载维护，不是查询），所以走与事务动作同一条“一次性线程 + 回执”
+/// 的旁路，而不是执行队列。
+#[derive(Debug, Clone)]
+pub struct SourceNote {
+    pub document: DocumentId,
+    /// `Ok` = 已重新挂载（表清单刷新）；`Err` = 失败原因
+    pub result: Result<(), String>,
 }
 
 /// 一次执行的结论（回到主线程）：**一条语句一条结论**
@@ -592,6 +615,8 @@ pub struct ExecQueue {
     cancel_notes: Arc<Mutex<VecDeque<String>>>,
     /// 事务动作的结论（主线程轮询取走：B4）
     tx_notes: Arc<Mutex<VecDeque<TxNote>>>,
+    /// 【B13】重新挂载加速源的回执（主线程轮询取走）
+    source_notes: Arc<Mutex<VecDeque<SourceNote>>>,
     /// 执行器句柄：`run` 在工作线程上、`cancel` 在一次性线程上，两处都要拿它
     runner: Arc<dyn QueryRunner>,
 }
@@ -606,6 +631,8 @@ impl ExecQueue {
         let cancel_requested = Arc::new(AtomicBool::new(false));
         let cancel_notes: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let tx_notes: Arc<Mutex<VecDeque<TxNote>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let source_notes: Arc<Mutex<VecDeque<SourceNote>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
 
         let worker_done = done.clone();
         let worker_busy = busy.clone();
@@ -685,6 +712,7 @@ impl ExecQueue {
             cancel_requested,
             cancel_notes,
             tx_notes,
+            source_notes,
             runner,
         }
     }
@@ -782,6 +810,39 @@ impl ExecQueue {
     /// 事务动作的结论（主线程轮询；取走即清空）
     pub fn drain_tx_notes(&self) -> Vec<TxNote> {
         let mut queue = match self.tx_notes.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        queue.drain(..).collect()
+    }
+
+    /// 【B13】请一次“重新挂载加速源”（表清单刷新：源库新建的表要重挂才看得见）
+    ///
+    /// 与 [`Self::request_transaction`] 同一套：同步只做“能不能做”的判断，动作在一次性
+    /// 线程上做（`ATTACH` 是 I/O，UI 不等），回执经 [`Self::drain_source_notes`] 取回。
+    /// **不占执行位**：它不产结果集，也不该把“执行中”灯点亮。
+    pub fn request_source_refresh(
+        &self,
+        document: DocumentId,
+        connection: Option<String>,
+    ) -> Result<(), String> {
+        let runner = self.runner.clone();
+        let notes = self.source_notes.clone();
+        std::thread::Builder::new()
+            .name("rds-editor-refresh-source".to_string())
+            .spawn(move || {
+                let result = runner.refresh_accelerated_source(connection.as_deref());
+                if let Ok(mut queue) = notes.lock() {
+                    queue.push_back(SourceNote { document, result });
+                }
+            })
+            .expect("failed to spawn editor source refresh worker");
+        Ok(())
+    }
+
+    /// 【B13】重新挂载的回执（主线程轮询；取走即清空）
+    pub fn drain_source_notes(&self) -> Vec<SourceNote> {
+        let mut queue = match self.source_notes.lock() {
             Ok(queue) => queue,
             Err(poisoned) => poisoned.into_inner(),
         };
@@ -1544,6 +1605,80 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         notes
+    }
+
+    /// 截掉“这一轮”里最先到达的重新挂载回执（真线程，带超时）
+    fn wait_for_source_note(channel: &ExecQueue) -> super::SourceNote {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(note) = channel.drain_source_notes().into_iter().next() {
+                return note;
+            }
+            assert!(Instant::now() < deadline, "重新挂载的回执迟迟没回来");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// 【B13】重新挂载加速源：走旁路线程，回执从队列取（**不占执行位**）
+    #[test]
+    fn a_source_refresh_runs_off_the_execution_queue() {
+        /// 假执行器：记录被要求重新挂载的连接，并给一个结果
+        struct RefreshRunner {
+            seen: Arc<Mutex<Vec<Option<String>>>>,
+            fail_with: Option<String>,
+        }
+
+        impl QueryRunner for RefreshRunner {
+            fn run(
+                &self,
+                _connection: Option<&str>,
+                _channel: ExecChannel,
+                _sql: &str,
+                _options: RunOptions,
+            ) -> Result<QueryData, String> {
+                Ok(QueryData::default())
+            }
+
+            fn refresh_accelerated_source(&self, connection: Option<&str>) -> Result<(), String> {
+                self.seen
+                    .lock()
+                    .expect("锁")
+                    .push(connection.map(str::to_string));
+                match &self.fail_with {
+                    Some(reason) => Err(reason.clone()),
+                    None => Ok(()),
+                }
+            }
+        }
+
+        let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let channel = ExecQueue::new(Arc::new(RefreshRunner {
+            seen: seen.clone(),
+            fail_with: None,
+        }));
+        channel
+            .request_source_refresh(DocumentId::new("doc-refresh"), Some("P_orders".to_string()))
+            .expect("请一次重新挂载");
+        assert!(!channel.is_busy(), "重新挂载不该把“执行中”灯点亮");
+        let note = wait_for_source_note(&channel);
+        assert!(note.result.is_ok(), "假执行器应当成功");
+        assert_eq!(note.document.as_str(), "doc-refresh");
+        assert_eq!(
+            seen.lock().expect("锁").as_slice(),
+            [Some("P_orders".to_string())],
+            "绑定/活动连接要原样传下去"
+        );
+
+        // 失败也要如实回一条（不能只有成功才留痕）
+        let channel = ExecQueue::new(Arc::new(RefreshRunner {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            fail_with: Some("挂不上".to_string()),
+        }));
+        channel
+            .request_source_refresh(DocumentId::new("doc-refresh-2"), None)
+            .expect("请一次");
+        let note = wait_for_source_note(&channel);
+        assert_eq!(note.result.expect_err("应当失败"), "挂不上");
     }
 
     /// 事务动作：真的送到执行器（带着作业的连接），回执带回新状态

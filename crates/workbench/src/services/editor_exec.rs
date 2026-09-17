@@ -189,6 +189,8 @@ impl QueryRunner for EngineQueryRunner {
             timeout_ms,
             // B4：自动提交关 → 引擎在没有事务时先自动开一个（DDL 除外）
             use_transaction: run_options.use_transaction,
+            // 【B13】历史要记“这句在哪儿跑的”（源库档也记，别让加速档成为唯一带标记的）
+            channel: Some(channel.code().to_string()),
             ..Default::default()
         };
         // 连接：文档绑定了就用它（B1）；未绑定回退到“当前活动连接”（1a 口径）
@@ -255,6 +257,7 @@ impl QueryRunner for EngineQueryRunner {
             // 下发是一次真查询：同样进历史（用户能回头找）
             record_history: true,
             timeout_ms,
+            channel: Some(channel.code().to_string()),
             ..Default::default()
         };
         let executed = self
@@ -294,6 +297,7 @@ impl QueryRunner for EngineQueryRunner {
         let options = SqlExecuteOptions {
             record_history: true,
             timeout_ms,
+            channel: Some(channel.code().to_string()),
             ..Default::default()
         };
         let executed = self
@@ -377,6 +381,17 @@ impl QueryRunner for EngineQueryRunner {
         true
     }
 
+    /// 【B13】重新挂载加速档的源库（表清单刷新：源库新建的表要重挂才看得见）
+    ///
+    /// 已在旁路线程上调用（`ATTACH` 是 I/O）。没有会话就建一条（等价于“先挂一次”）。
+    fn refresh_accelerated_source(&self, connection: Option<&str>) -> Result<(), String> {
+        let source = self.accel_source(connection)?;
+        let session = accel::ensure_session(&source)?;
+        session.refresh().map_err(|error| error.to_string())?;
+        tracing::info!(source = %source.conn_id, "本地加速源已重新挂载（表清单已刷新）");
+        Ok(())
+    }
+
     /// 中断：源库档翻引擎的取消令牌；加速档叫 DuckDB 中断
     ///
     /// 两处都试是有意的：编辑器只知道“这条文档在执行”，不知道当前那次执行具体落在哪一边
@@ -415,8 +430,8 @@ impl QueryRunner for EngineQueryRunner {
 
 /// 加速档的执行也进同一条历史流水（与源库档一致）
 ///
-/// `db_type` 写成「源库类型·加速」：历史面板按它显示来源徽标（`MYSQL·加速`），
-/// 一眼能看出这条是**在本地加速档上跑的**。把通道做成历史记录的正经字段随切片三。
+/// `db_type` 写**源库的真实类型**、`channel` 写 `accelerated`：两个维度分开记——
+/// “数据是什么库的”与“语句在哪儿跑的”是两件事，历史面板按它们拼出 `MYSQL·加速`。
 fn record_accel_history(
     source: &accel::AccelSource,
     sql: &str,
@@ -426,21 +441,23 @@ fn record_accel_history(
     let entry = match outcome {
         Ok(result) => SqlHistoryEntry {
             conn_id: Some(source.conn_id.clone()),
-            db_type: Some(format!("{}·加速", source.kind.label())),
+            db_type: Some(source.kind.label().to_string()),
             elapsed_ms,
             success: true,
             error_message: None,
             rows_returned: Some(result.total_rows() as u64),
             rows_affected: None,
+            channel: Some(editor::channel::ExecChannel::Accelerated.code().to_string()),
         },
         Err(error) => SqlHistoryEntry {
             conn_id: Some(source.conn_id.clone()),
-            db_type: Some(format!("{}·加速", source.kind.label())),
+            db_type: Some(source.kind.label().to_string()),
             elapsed_ms,
             success: false,
             error_message: Some(error.to_string()),
             rows_returned: None,
             rows_affected: None,
+            channel: Some(editor::channel::ExecChannel::Accelerated.code().to_string()),
         },
     };
     if let Err(error) = history_store::save_sql_history(sql, &entry) {

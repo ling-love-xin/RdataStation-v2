@@ -1154,17 +1154,83 @@ fn check_accelerated_channel(
     assert_eq!(value[0].rows[0][0], "42");
     eprintln!("✅ 本地加速：本地临时对象可用（会话变量）");
 
-    // 收尾：切回源库档把表删掉（不留垃圾）
+    // ⑤：源库新建的表要「重新挂载」才看得见（数据实时、表清单在 ATTACH 时定型）
+    let late_table = "rds_accel_late";
+    shared.update(|service| {
+        service.set_channel(&document, editor::channel::ExecChannel::Source);
+    });
+    let created = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(format!("CREATE TABLE mysql.{late_table} (id INT)")),
+        ResultPlacement::Replace,
+        1,
+    );
+    assert!(created[0].error.is_none(), "建新表失败：{:?}", created[0].error);
+    shared.update(|service| {
+        service.set_channel(&document, editor::channel::ExecChannel::Accelerated);
+    });
+    let invisible = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(format!("SELECT count(*) FROM {late_table}")),
+        ResultPlacement::Replace,
+        1,
+    );
+    assert!(
+        invisible[0].error.is_some(),
+        "ATTACH 之后新建的表在旧会话里不该可见（表清单是挂载时定型的）"
+    );
+    // 菜单上的「重新挂载源库」走的就是这一条（旁路线程 + 回执）
+    shared
+        .request_source_refresh(document.clone())
+        .expect("请一次重新挂载");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let notes = shared.drain_source_notes();
+        if let Some(note) = notes.first() {
+            assert!(note.result.is_ok(), "重新挂载失败：{:?}", note.result);
+            break;
+        }
+        assert!(Instant::now() < deadline, "重新挂载的回执迟迟没回来");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let visible = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(format!("SELECT count(*) FROM {late_table}")),
+        ResultPlacement::Replace,
+        1,
+    );
+    assert!(
+        visible[0].error.is_none(),
+        "重新挂载后新表应当可见：{:?}",
+        visible[0].error
+    );
+    assert_eq!(visible[0].rows[0][0], "0");
+    eprintln!("✅ 本地加速：重新挂载后能看到源库新建的表（表清单刷新）");
+
+    // 收尾：切回源库档把两张表都删掉（不留垃圾）
     shared.update(|service| {
         service.set_channel(&document, editor::channel::ExecChannel::Source);
     });
     let cleanup = run_through_editor(
         &shared,
         document.clone(),
-        &ExecTarget::Statement(format!("DROP TABLE IF EXISTS mysql.{table}")),
+        &ExecTarget::Statement(format!(
+            "DROP TABLE IF EXISTS mysql.{table};"
+        )),
         ResultPlacement::Replace,
         1,
     );
     assert!(cleanup[0].error.is_none(), "清理失败：{:?}", cleanup[0].error);
+    let late_cleanup = run_through_editor(
+        &shared,
+        document.clone(),
+        &ExecTarget::Statement(format!("DROP TABLE IF EXISTS mysql.{late_table}")),
+        ResultPlacement::Replace,
+        1,
+    );
+    assert!(late_cleanup[0].error.is_none(), "清理失败：{:?}", late_cleanup[0].error);
     runtime.block_on(manager.close_all_connections());
 }

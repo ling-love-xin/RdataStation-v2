@@ -43,6 +43,13 @@ pub struct HistoryRecord {
     pub error_message: Option<String>,
     pub rows_affected: Option<u64>,
     pub rows_returned: Option<u64>,
+    /// 【B13】执行通道（`source` / `accelerated` / `federated`；老记录没有这一项）
+    ///
+    /// 与 `db_type` 分开：`db_type` 回答“数据是什么库的”，通道回答“语句在哪儿跑的”。
+    /// 加速档两者都得说清（`MySQL` + `accelerated`），否则用户分不清这条是源库直连还是本地跑。
+    ///
+    /// 老记录文件里没有这一项（手写 JSON 解析按 `Option` 给 `None`），不影响读取。
+    pub channel: Option<String>,
 }
 
 impl HistoryRecord {
@@ -71,6 +78,7 @@ impl HistoryRecord {
             error_message: None,
             rows_affected: None,
             rows_returned: None,
+            channel: None,
         }
     }
 
@@ -670,6 +678,7 @@ impl HistoryStore {
             sql,
             db_type,
             connection_id,
+            channel: extract_string(json, "channel"),
             timestamp: extract_u64(json, "timestamp").unwrap_or(0),
             duration_ms: extract_u64(json, "duration_ms").unwrap_or(0),
             success: extract_bool(json, "success").unwrap_or(false),
@@ -712,6 +721,13 @@ impl HistoryStore {
                 result.push_str(&format!(
                     "    \"error_message\": \"{}\",\n",
                     Self::escape_json(err)
+                ));
+            }
+
+            if let Some(ref channel) = record.channel {
+                result.push_str(&format!(
+                    "    \"channel\": \"{}\",\n",
+                    Self::escape_json(channel)
                 ));
             }
 
@@ -815,6 +831,8 @@ pub struct SqlHistoryRecord {
     pub sql: String,
     pub conn_id: Option<String>,
     pub db_type: Option<String>,
+    /// 【B13】执行通道（`source` / `accelerated` / `federated`；老记录为 `None`）
+    pub channel: Option<String>,
     pub executed_at: chrono::DateTime<chrono::Utc>,
     pub duration_ms: Option<u64>,
     pub success: Option<bool>,
@@ -844,6 +862,8 @@ pub struct SqlHistoryEntry {
     pub rows_returned: Option<u64>,
     /// 影响行数（作用于源库的写语句）
     pub rows_affected: Option<u64>,
+    /// 【B13】执行通道（`source` / `accelerated` / `federated`；执行器知道它在哪一档上跑）
+    pub channel: Option<String>,
 }
 
 /// 保存 SQL 历史（写入全局存储）
@@ -873,6 +893,7 @@ pub fn save_sql_history_into(
         .unwrap_or_else(|| "unknown".to_string());
 
     let mut record = HistoryRecord::new(sql.to_string(), db_type, connection_id);
+    record.channel = entry.channel.clone();
     if entry.success {
         record.mark_success(entry.elapsed_ms);
     } else {
@@ -919,6 +940,7 @@ pub fn get_sql_history(limit: usize) -> Result<Vec<SqlHistoryRecord>, std::io::E
             } else {
                 Some(r.db_type.clone())
             },
+            channel: r.channel.clone(),
             executed_at: chrono::DateTime::from_timestamp((r.timestamp / 1000) as i64, 0)
                 .unwrap_or_else(chrono::Utc::now),
             duration_ms: Some(r.duration_ms),
@@ -960,6 +982,7 @@ pub fn search_sql_history(
             } else {
                 Some(r.db_type.clone())
             },
+            channel: r.channel.clone(),
             executed_at: chrono::DateTime::from_timestamp((r.timestamp / 1000) as i64, 0)
                 .unwrap_or_else(chrono::Utc::now),
             duration_ms: Some(r.duration_ms),
@@ -1204,6 +1227,7 @@ mod sql_history_entry_tests {
             error_message: None,
             rows_returned: Some(7),
             rows_affected: None,
+            channel: None,
         };
 
         save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save history");
@@ -1220,6 +1244,49 @@ mod sql_history_entry_tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// 【B13】通道跟着记录落盘与读回（`db_type` 管“数据是什么库的”，通道管“在哪儿跑的”）
+    #[test]
+    fn the_execution_channel_round_trips() {
+        let (mut store, path) = temp_store("channel");
+        let entry = SqlHistoryEntry {
+            conn_id: Some("conn-1".to_string()),
+            db_type: Some("MySQL".to_string()),
+            elapsed_ms: 9,
+            success: true,
+            error_message: None,
+            rows_returned: Some(1),
+            rows_affected: None,
+            channel: Some("accelerated".to_string()),
+        };
+        save_sql_history_into(&mut store, "SELECT 1", &entry).expect("save");
+        let record = &store.get_records(None)[0];
+        assert_eq!(record.channel.as_deref(), Some("accelerated"));
+        assert_eq!(record.db_type, "MySQL", "两个维度分开记");
+
+        // 写盘 → 重读：通道不能只活在内存里
+        let mut reloaded = HistoryStore::new(path.clone());
+        reloaded.load().expect("load");
+        assert_eq!(reloaded.get_records(None)[0].channel.as_deref(), Some("accelerated"));
+
+        // 老记录（没有 channel 字段）读回来是 `None`，不是解析失败
+        let legacy = r#"[{
+  "id": "old-1",
+  "sql": "SELECT 2",
+  "db_type": "sqlite",
+  "connection_id": "conn-1",
+  "timestamp": 1,
+  "duration_ms": 3,
+  "success": true
+}]"#;
+        std::fs::write(&path, legacy).expect("写老格式");
+        reloaded.load().expect("读老格式");
+        let old = &reloaded.get_records(None)[0];
+        assert_eq!(old.channel, None, "老记录没有通道 = 不知道，不编一个");
+        assert_eq!(old.db_type, "sqlite");
+
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn write_entry_records_rows_affected() {
         let (mut store, path) = temp_store("write");
@@ -1231,6 +1298,7 @@ mod sql_history_entry_tests {
             error_message: None,
             rows_returned: None,
             rows_affected: Some(3),
+            channel: None,
         };
 
         save_sql_history_into(&mut store, "UPDATE t SET x = 1", &entry).expect("save history");
@@ -1253,6 +1321,7 @@ mod sql_history_entry_tests {
             error_message: Some("no such column: nope".to_string()),
             rows_returned: None,
             rows_affected: None,
+            channel: None,
         };
 
         save_sql_history_into(&mut store, "SELECT nope FROM t", &entry).expect("save history");
@@ -1284,6 +1353,7 @@ mod sql_history_entry_tests {
             error_message: Some("字段 \"no_such_column\" 不存在".to_string()),
             rows_returned: None,
             rows_affected: None,
+            channel: None,
         };
         let sql = format!("SELECT '{}' AS 中文列", "很长很长的中文注释".repeat(20));
         save_sql_history_into(&mut store, &sql, &entry).expect("save history");

@@ -246,6 +246,16 @@ pub fn stale_notice(result_channel: ExecChannel, current: ExecChannel) -> String
     )
 }
 
+/// 「重新挂载源库」菜单项的文案（**只在本地跑的通道上存在**）
+///
+/// 它不是“执行位置”的一档（那是三选一），而是那一档上的**维护动作**：源库新建的表要重挂
+/// 才看得见（数据本来就是实时的）。
+///
+/// 返回值 = `None` 时**不摆这一项**：源库档没有“挂载”这回事，摆一个按了没用的项就是噪音。
+pub fn refresh_item_label(current: ExecChannel) -> Option<&'static str> {
+    current.runs_locally().then_some("重新挂载源库（刷新表清单）")
+}
+
 /// 这条语句在指定通道上允许执行吗（不允许就给**可读原因**）
 ///
 /// 判定用引擎的语句类型（`SqlEngine::parse_and_route`，Ansi 方言足够区分 DML/DDL）：
@@ -268,8 +278,8 @@ pub fn statement_allowed(channel: ExecChannel, sql: &str) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelAvailability, ChannelAvailabilitySet, ExecChannel, menu_items, stale_notice,
-        statement_allowed, status_text,
+        ChannelAvailability, ChannelAvailabilitySet, ExecChannel, menu_items, refresh_item_label,
+        stale_notice, statement_allowed, status_text,
     };
 
     #[test]
@@ -322,6 +332,16 @@ mod tests {
         assert!(!items[0].available);
         assert!(items[1].current, "当前是加速档（就算它暂时不可用也如实标着）");
         assert!(!items[1].available);
+    }
+
+    #[test]
+    fn the_refresh_item_only_exists_on_local_channels() {
+        assert!(refresh_item_label(ExecChannel::Source).is_none());
+        for channel in [ExecChannel::Accelerated, ExecChannel::Federated] {
+            let label = refresh_item_label(channel).expect("本地跑的两档要摆这一项");
+            assert!(label.contains("重新挂载"), "{label}");
+            assert!(label.contains("表清单"), "要把“为什么”说清楚：{label}");
+        }
     }
 
     /// 状态栏要写**只读**（能力边界），不写“快照”（数据其实是实时的）

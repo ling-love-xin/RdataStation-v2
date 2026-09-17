@@ -3933,6 +3933,92 @@ fn the_document_channel_reaches_the_execution_port(cx: &mut TestAppContext) {
     );
 }
 
+/// 【B13】「重新挂载源库」：只在本地跑的两档出现，回执要让用户看得见
+#[gpui_kit::test]
+fn refreshing_the_source_reports_back_from_the_side_thread(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    /// 假执行器：只关心“被要求重新挂载几次”
+    struct RefreshRunner {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl QueryRunner for RefreshRunner {
+        fn run(
+            &self,
+            _connection: Option<&str>,
+            _channel: ExecChannel,
+            _sql: &str,
+            _options: execution::RunOptions,
+        ) -> Result<QueryData, String> {
+            Ok(QueryData::default())
+        }
+
+        fn refresh_accelerated_source(&self, _connection: Option<&str>) -> Result<(), String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    let shared = EditorShared::new();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    shared.attach_runner(std::sync::Arc::new(RefreshRunner {
+        calls: calls.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("select 1;", EditorMode::Sql))
+        .id()
+        .clone();
+    shared.attach_channels(Rc::new(FakeChannels::open()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 源库档：没有“挂载”这回事，直说而不是默默不发
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.refresh_source(cx)));
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留原因");
+    assert!(message.contains("不是本地加速档"), "{message}");
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "源库档不该去打扰执行器"
+    );
+
+    // 切到加速档：同一个动作现在真的有东西可挂
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Accelerated, cx));
+    });
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.refresh_source(cx)));
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).refresh_pending_for_test()),
+        1,
+        "请出去就要记一笔（否则轮询泵不知道要等回执）"
+    );
+    // 回执在旁路线程上产生：轮询泵（生产中就是它）取回来
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.drain_exec_results(cx)));
+        let done = cx.update(|_window, cx| {
+            panel.read(cx).refresh_pending_for_test() == 0
+                && panel
+                    .read(cx)
+                    .message
+                    .as_deref()
+                    .is_some_and(|text| text.contains("已重新挂载源库"))
+        });
+        if done {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "重新挂载的回执迟迟没回来");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    // 菜单项本身也只在本地跑的那两档存在（纯函数）
+    assert!(crate::channel::refresh_item_label(ExecChannel::Source).is_none());
+    assert!(crate::channel::refresh_item_label(ExecChannel::Accelerated).is_some());
+}
+
 /// 【B13】加速档拒绝**作用源库的写语句**，原因可读；读语句照跑
 #[gpui_kit::test]
 fn the_snapshot_channel_refuses_source_writes_with_a_reason(cx: &mut TestAppContext) {
