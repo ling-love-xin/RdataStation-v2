@@ -87,6 +87,43 @@ pub fn create_analysis_temp_table(
     Ok(table)
 }
 
+/// 直接以一条 `SELECT` **建**一张分析临时表（`CREATE TABLE … AS`），并登记。
+///
+/// 与 [`create_analysis_temp_table`] 的区别：数据**不过 Rust**——文件类数据源
+/// （CSV / Parquet / Excel 这类靠 DuckDB 扩展读的）在库里直接落表，
+/// 既省一次序列化往返，类型也由 DuckDB 自己定（比 JSON 打型准）。
+///
+/// `select_sql` 由调用方给（应当已带 `LIMIT`）；失败会把半成品收掉再返回错误。
+pub fn create_analysis_temp_table_as(
+    conn: &Connection,
+    select_sql: &str,
+    description: &str,
+) -> Result<String, CoreError> {
+    // 惰性清理放在建表前：让 TTL / 上限在「下一次建表」这个廉价时机生效
+    if let Err(e) = cleanup_analysis_temp_tables(conn) {
+        tracing::warn!("[analysis] 惰性清理洞察中间表失败: {e}");
+    }
+
+    let table = generate_table_name(description);
+    conn.execute_batch(&format!(
+        "CREATE TABLE {} AS {}",
+        quote_ident(&table),
+        select_sql
+    ))
+    .map_err(|e| {
+        // 建表失败时可能已经留了半成品（DuckDB 的 CTAS 是原子的，但不同版本行为
+        // 不一）——幂等地收一下，代价是一次不存在的 DROP
+        let _ = conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", quote_ident(&table)));
+        CoreError::common(CommonError::General(format!(
+            "建分析临时表 {table} 失败（来源：{description}）: {e}"
+        )))
+    })?;
+
+    DuckDBManager::register_temp_table(&table);
+    warn_if_near_capacity();
+    Ok(table)
+}
+
 /// 登记数接近上限时给一条**可见信号**（K16 ④）。
 ///
 /// 登记表只增不减是 K16 的病症，而它没有任何外部表现（表在内存库里，界面看不到）。
@@ -300,6 +337,45 @@ mod tests {
             fallback.starts_with("tmp_i_tmp_"),
             "全是非 ASCII 时给个兜底，不留空片段：{fallback}"
         );
+    }
+
+    /// `CREATE TABLE … AS`：文件类数据源（CSV / Parquet / Excel）走这条，数据不过 Rust。
+    #[test]
+    fn create_as_builds_and_registers_a_prefixed_table() {
+        let conn = Connection::open_in_memory().expect("内存连接");
+        let table = create_analysis_temp_table_as(
+            &conn,
+            "SELECT 1 AS id, 'x' AS name LIMIT 10",
+            "file_sample",
+        )
+        .expect("建成");
+        assert!(
+            table.starts_with(ANALYSIS_TABLE_PREFIX),
+            "前缀要能被回收机制认出来: {table}"
+        );
+        assert!(table_exists(&conn, &table));
+        assert_eq!(
+            DuckDBManager::temp_table_manager().count_by_prefix(&table),
+            1,
+            "建完应当被登记"
+        );
+        let n: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |r| r.get(0))
+            .expect("计数");
+        assert_eq!(n, 1, "数据应当真的落进去了");
+
+        drop_analysis_temp_table(&conn, &table).expect("收掉");
+    }
+
+    /// 建表失败时不留半成品（名字已经生成，不能只靠“反正没登记”）。
+    #[test]
+    fn create_as_leaves_nothing_behind_on_failure() {
+        let conn = Connection::open_in_memory().expect("内存连接");
+        assert!(
+            create_analysis_temp_table_as(&conn, "SELECT * FROM no_such_table", "bad").is_err()
+        );
+        let listed = analysis_temp_tables(&conn).expect("列出");
+        assert!(listed.is_empty(), "失败不该留下表: {listed:?}");
     }
 
     /// 默认姿势：用完就收，body 失败也收

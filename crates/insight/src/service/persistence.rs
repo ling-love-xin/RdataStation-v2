@@ -17,14 +17,39 @@ pub const SOURCE_SAMPLE_LIMIT: usize = 500;
 /// 外层**再包一层 `LIMIT`**：入口的查询可以不带限（源表全量查询），
 /// 也不能靠入口自觉——口径只在这里。
 pub async fn sample_source_to_analysis_table(source: &SampleSource) -> Result<String, CoreError> {
-    use engine::get_connection_manager;
-    use engine::services::sql_service::SqlExecuteOptions;
-    use engine::SqlService;
-
     let sample_sql = format!(
         "SELECT * FROM ({}) AS rds_sample LIMIT {SOURCE_SAMPLE_LIMIT}",
         source.sql.trim().trim_end_matches(';')
     );
+
+    match source.conn_id() {
+        // 源库连接：数据过 Rust（引擎的执行结果是 JSON，要重新打型建表）
+        Some(conn_id) => sample_from_connection(conn_id, &sample_sql, &source.label).await,
+        // DuckDB 内存库：**数据不过 Rust**——`CREATE TABLE … AS` 直接在库里落，
+        // 文件类（CSV / Parquet / Excel，靠扩展读）与已 `ATTACH` 的库表走这条
+        None => {
+            let duckdb = insight_engine::get_or_create_duckdb()?;
+            let conn = duckdb.lock().map_err(|e| {
+                CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+            })?;
+            engine::duckdb::analysis::create_analysis_temp_table_as(
+                &conn,
+                &sample_sql,
+                "source_sample",
+            )
+        }
+    }
+}
+
+/// 从一条**源库连接**取样本并落成分析临时表。
+async fn sample_from_connection(
+    conn_id: &str,
+    sample_sql: &str,
+    label: &str,
+) -> Result<String, CoreError> {
+    use engine::get_connection_manager;
+    use engine::services::sql_service::SqlExecuteOptions;
+    use engine::SqlService;
 
     let service = SqlService::new(get_connection_manager().clone());
     let opts = SqlExecuteOptions {
@@ -34,7 +59,7 @@ pub async fn sample_source_to_analysis_table(source: &SampleSource) -> Result<St
         use_cache: false,
     };
     let result = service
-        .execute(Some(source.conn_id.clone()), &sample_sql, opts)
+        .execute(Some(conn_id.to_string()), sample_sql, opts)
         .await?;
     let json = serde_json::to_value(&result.result)
         .map_err(|e| CoreError::common(CommonError::General(format!("Serialize error: {e}"))))?;
@@ -42,8 +67,7 @@ pub async fn sample_source_to_analysis_table(source: &SampleSource) -> Result<St
     let (columns, rows) = batch_columns_and_rows(&json);
     if columns.is_empty() {
         return Err(CoreError::common(CommonError::General(format!(
-            "取样没有拿到列（来源：{}）——查询可能没有结果集",
-            source.label
+            "取样没有拿到列（来源：{label}）——查询可能没有结果集"
         ))));
     }
 

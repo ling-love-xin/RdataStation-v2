@@ -377,32 +377,45 @@ impl DuckDBEngine {
             .unwrap_or_default()
     }
 
+    /// 按扩展名选 DuckDB 的读取函数（CSV / Parquet / Excel / JSON）。
+    ///
+    /// 支持的文件类型就这一处定义：`load_file_source`（建临时表）与洞察的源取样
+    /// （`SampleSource::duckdb_file`）共用它。`None` = 这个格式没有对应的读取函数，
+    /// 调用方应当直接报「不支持」而不是猜一个读取器。
+    pub fn file_reader_function(path: &str) -> Option<&'static str> {
+        let lower = path.to_ascii_lowercase();
+        if lower.ends_with(".csv") || lower.ends_with(".tsv") || lower.ends_with(".txt") {
+            Some("read_csv_auto")
+        } else if lower.ends_with(".parquet") {
+            Some("read_parquet")
+        } else if lower.ends_with(".xlsx") || lower.ends_with(".xls") {
+            // 需要 excel 扩展（`INSTALL excel; LOAD excel;`）；没装时由 DuckDB 报错
+            Some("read_excel_auto")
+        } else if lower.ends_with(".json") || lower.ends_with(".ndjson") {
+            Some("read_json_auto")
+        } else {
+            None
+        }
+    }
+
     /// 加载文件数据源
     pub async fn load_file_source(&self, path: &str, table_name: &str) -> Result<(), CoreError> {
         let conn_arc = self.get_conn_arc()?;
         let conn = conn_arc.lock().map_err(mutex_lock_err)?;
 
-        let sql = if path.ends_with(".csv") {
-            format!(
-                "CREATE TEMP TABLE IF NOT EXISTS {} AS SELECT * FROM read_csv_auto('{}')",
-                table_name, path
-            )
-        } else if path.ends_with(".parquet") {
-            format!(
-                "CREATE TEMP TABLE IF NOT EXISTS {} AS SELECT * FROM read_parquet('{}')",
-                table_name, path
-            )
-        } else if path.ends_with(".xlsx") || path.ends_with(".xls") {
-            format!(
-                "CREATE TEMP TABLE IF NOT EXISTS {} AS SELECT * FROM read_excel_auto('{}')",
-                table_name, path
-            )
-        } else {
-            return Err(CoreError::common(CommonError::NotSupported(format!(
-                "Unsupported file type: {}",
-                path
-            ))));
+        let reader = match Self::file_reader_function(path) {
+            Some(reader) => reader,
+            None => {
+                return Err(CoreError::common(CommonError::General(format!(
+                    "不支持的文件类型：{path}"
+                ))));
+            }
         };
+        let escaped = path.replace('\'', "''");
+        let sql = format!(
+            "CREATE TEMP TABLE IF NOT EXISTS {} AS SELECT * FROM {reader}('{escaped}')",
+            table_name
+        );
 
         conn.execute(&sql, []).map_err(|e| {
             CoreError::database(DatabaseError::Driver {

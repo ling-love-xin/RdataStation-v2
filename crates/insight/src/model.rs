@@ -84,8 +84,8 @@ impl PanelTab {
     }
 }
 
-/// 取样来源：洞察的入口五花八门（导航树 / 分析存档 / 草稿箱 / 编辑器结果集），
-/// 但它们都能归约成「在某条连接上跑一段只读查询，取一份样本」。
+/// 取样来源：洞察的入口五花八门（导航树 / 分析存档 / 草稿箱 / 编辑器结果集 /
+/// CSV·Parquet·Excel 这类**文件**），但它们都能归约成「跑一段只读查询，取一份样本」。
 ///
 /// **只装定位信息，不装数据**（D20 同一立场）：样本由接缝侧（`jobs`）执行，落在
 /// `tmp_i_` 分析临时表上（建表即登记，TTL / 上限 / 回收都是现成的）。
@@ -95,21 +95,61 @@ impl PanelTab {
 /// 免得每个入口各写一次「取多少行」（口径一处分：「501 行样本」这种错最费时间）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SampleSource {
-    /// 样本要跑在哪条连接上（M3）
-    pub conn_id: String,
+    /// 样本跑在哪条连接上。
+    ///
+    /// `None` = 跑在 **DuckDB 内存库**上——文件类（CSV / Parquet / Excel，靠 DuckDB 扩展
+    /// 直接读）与已 `ATTACH` 进来的库表走这条：它们不属于任何「源库连接」，
+    /// 但同样是可以分析的数据（用户口径：凡 DuckDB 能分析的都能洞察）。
+    pub conn_id: Option<String>,
     /// 只读取样查询（不带 `LIMIT` 也可以：外层会再包一层）
     pub sql: String,
-    /// 人类可读的来源描述（面板副标题 / 快照来源）：如「analytics.orders」「结果集 · orders」
+    /// 人类可读的来源描述（面板副标题 / 快照来源）：如「analytics.orders」
     pub label: String,
 }
 
 impl SampleSource {
+    /// 源库连接上的取样（导航树 / 结果集 / 存档里的表）。
     pub fn new(conn_id: impl Into<String>, sql: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
-            conn_id: conn_id.into(),
+            conn_id: Some(conn_id.into()),
             sql: sql.into(),
             label: label.into(),
         }
+    }
+
+    /// **DuckDB 内存库**上的取样：文件（CSV / Parquet / Excel）与已 `ATTACH` 的库表。
+    pub fn on_duckdb(sql: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            conn_id: None,
+            sql: sql.into(),
+            label: label.into(),
+        }
+    }
+
+    /// 文件来源：按扩展名选 DuckDB 的读取函数（映射与 `DuckDBEngine::load_file_source`
+    /// 同一处），路径做单引号转义。
+    ///
+    /// 不认识的扩展名直接报错，而不是猜一个读取器——猜错时用户看到的是
+    /// 一句与「这个格式不支持」毫无关系的解析错误。
+    pub fn duckdb_file(
+        path: impl AsRef<std::path::Path>,
+        label: impl Into<String>,
+    ) -> Result<Self, shared::error::CoreError> {
+        let path = path.as_ref();
+        let display = path.display().to_string();
+        let reader = engine::dbi::engine::duckdb_engine::DuckDBEngine::file_reader_function(
+            &display,
+        )
+        .ok_or_else(|| {
+                shared::error::CoreError::common(shared::error::CommonError::General(format!(
+                    "这个格式还不能分析：{display}（支持 CSV / Parquet / Excel / JSON）"
+                )))
+            })?;
+        let escaped = display.replace('\'', "''");
+        Ok(Self::on_duckdb(
+            format!("SELECT * FROM {reader}('{escaped}')"),
+            label,
+        ))
     }
 
     /// 来源描述（面板副标题与快照 `entity_source` 用它）。
@@ -117,9 +157,9 @@ impl SampleSource {
         &self.label
     }
 
-    /// 样本要跑在哪条连接上。
-    pub fn conn_id(&self) -> &str {
-        &self.conn_id
+    /// 样本要跑在哪条连接上；`None` = DuckDB 内存库。
+    pub fn conn_id(&self) -> Option<&str> {
+        self.conn_id.as_deref()
     }
 }
 
@@ -1893,7 +1933,7 @@ mod tests {
     fn source_targets_mirror_temp_table_targets() {
         let source = SampleSource::new("G_1", "SELECT * FROM `shop`.`orders`", "shop.orders");
         assert_eq!(source.label(), "shop.orders");
-        assert_eq!(source.conn_id(), "G_1");
+        assert_eq!(source.conn_id(), Some("G_1"));
 
         let col = InsightTarget::SourceColumn {
             source: source.clone(),
@@ -1918,6 +1958,33 @@ mod tests {
         assert_eq!(table.title(), "orders");
         assert_eq!(table.table_name(), "orders");
         assert_eq!(table.detail().as_deref(), Some("来源 shop.orders"));
+    }
+
+    /// 文件来源（CSV / Parquet / Excel / JSON）：**不走源库连接**，靠 DuckDB 扩展直接读。
+    #[test]
+    fn file_source_picks_the_duckdb_reader_by_extension() {
+        let xlsx = SampleSource::duckdb_file("C:/data/2026 预算.xlsx", "预算表")
+            .expect("xlsx 应能识别");
+        assert_eq!(xlsx.conn_id(), None, "文件不需要源库连接");
+        assert_eq!(xlsx.label(), "预算表");
+        assert!(
+            xlsx.sql.contains("read_excel_auto('C:/data/2026 预算.xlsx')"),
+            "Excel 靠 excel 扩展读: {}",
+            xlsx.sql
+        );
+
+        let csv = SampleSource::duckdb_file("/tmp/a.csv", "a").expect("csv");
+        assert!(csv.sql.contains("read_csv_auto"), "{}", csv.sql);
+        let pq = SampleSource::duckdb_file("/tmp/a.parquet", "a").expect("parquet");
+        assert!(pq.sql.contains("read_parquet"), "{}", pq.sql);
+
+        // 路径里的单引号要转义（否则拼出来的 SQL 直接断在路径上）
+        let tricky = SampleSource::duckdb_file("/tmp/it's.csv", "a").expect("带引号的路径");
+        assert!(tricky.sql.contains("'/tmp/it''s.csv'"), "{}", tricky.sql);
+
+        // 不认识的格式：报「不支持」，不猜一个读取器
+        let err = SampleSource::duckdb_file("/tmp/a.docx", "a").expect_err("docx 不该被猜");
+        assert!(err.to_string().contains("还不能分析"), "{err}");
     }
 
     /// 面板「当前该分析哪张临时表」：源目标读解析出的样本表，其余读目标自带的。
