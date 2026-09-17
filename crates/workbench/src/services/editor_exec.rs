@@ -165,6 +165,37 @@ impl QueryRunner for EngineQueryRunner {
         Ok(data)
     }
 
+    /// 【B14】排序下发：按用户点的那一列重查（不 CAST——让源库按自己的列类型排）
+    fn run_sorted_down(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        column: &str,
+        descending: bool,
+    ) -> Result<QueryData, String> {
+        let rewritten = engine::sql::rewrite_with_order(sql, column, descending)?;
+        let timeout_ms = self.runtime.block_on(self.query_timeout_ms(connection));
+        let options = SqlExecuteOptions {
+            record_history: true,
+            timeout_ms,
+            ..Default::default()
+        };
+        let executed = self
+            .runtime
+            .block_on(self.service.execute(
+                connection.map(str::to_string),
+                &rewritten.sql,
+                options,
+            ));
+        editor::history::bump();
+        let executed = executed.map_err(|error| error.to_string())?;
+        let mut data = to_data(&executed.result, executed.elapsed_ms, executed.truncated);
+        data.notice = rewritten
+            .dropped_limit
+            .map(|limit| format!("已去掉原查询的 {limit}（排序下发要能排全部行）"));
+        Ok(data)
+    }
+
     /// 【B5b】取下一段：同一条原 SQL 的后一段（引擎套窗口取，见 `SqlService::execute_segment`）
     fn fetch_next(
         &self,

@@ -26,6 +26,6 @@ mod transpiler;
 
 pub use builder::QualifiedTable;
 pub use engine::{AlterOperation, ColumnDefInfo, DdlInfo, SqlDialect, SqlEngine, SqlStatementType};
-pub use filter::{FilterRewrite, rewrite_with_filter};
+pub use filter::{Rewrite, rewrite_with_filter, rewrite_with_order};
 pub use highlight::{highlight_spans, HighlightSpan, TokenClass};
 pub use split::{split_statements, SqlStatement};

@@ -3178,8 +3178,10 @@ fn export_follows_the_filter(cx: &mut TestAppContext) {
 
 /// 假执行器（B14）：记下发筛选收到的原料，并回一条**带提示**的结果
 struct PushdownRunner {
-    /// 每次下发收到的 `(原 SQL, 筛选词, 列名)`
+    /// 每次“下发筛选”收到的 `(原 SQL, 筛选词, 列名)`
     seen: std::sync::Arc<std::sync::Mutex<Vec<(String, String, Vec<String>)>>>,
+    /// 每次“排序下发”收到的 `(列名, 是否降序)`
+    sorted: std::sync::Arc<std::sync::Mutex<Vec<(String, bool)>>>,
 }
 
 impl QueryRunner for PushdownRunner {
@@ -3222,6 +3224,28 @@ impl QueryRunner for PushdownRunner {
             notice: Some("已去掉原查询的 LIMIT 10（下发筛选要能查到全部行）".to_string()),
         })
     }
+
+    fn run_sorted_down(
+        &self,
+        _connection: Option<&str>,
+        _sql: &str,
+        column: &str,
+        descending: bool,
+    ) -> Result<QueryData, String> {
+        self.sorted
+            .lock()
+            .expect("锁")
+            .push((column.to_string(), descending));
+        Ok(QueryData {
+            columns: vec!["id".to_string(), "name".to_string()],
+            rows: vec![vec!["2".to_string(), "orders_archive".to_string()]],
+            elapsed_ms: 11,
+            truncated: false,
+            affected_rows: None,
+            has_more: false,
+            notice: None,
+        })
+    }
 }
 
 /// 【B14】下发源库：开关打开且已有筛选词 → 立刻重查，结果落**新结果集**
@@ -3232,6 +3256,7 @@ fn pushdown_re_runs_on_the_source_as_a_new_result_set(cx: &mut TestAppContext) {
     let shared = EditorShared::new();
     shared.attach_runner(std::sync::Arc::new(PushdownRunner {
         seen: seen.clone(),
+        sorted: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
     let id = shared
         .open(OpenRequest::untitled("select 1", EditorMode::Sql))
@@ -3278,6 +3303,7 @@ fn local_filtering_does_not_touch_the_source(cx: &mut TestAppContext) {
     let shared = EditorShared::new();
     shared.attach_runner(std::sync::Arc::new(PushdownRunner {
         seen: seen.clone(),
+        sorted: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     }));
     let id = shared
         .open(OpenRequest::untitled("select 1", EditorMode::Sql))
@@ -3294,6 +3320,47 @@ fn local_filtering_does_not_touch_the_source(cx: &mut TestAppContext) {
         "没开下发就不该重查源库"
     );
     assert_eq!(shared.results().set_count(&id), 1, "本地筛选不产生新结果集");
+}
+
+/// 【B14】排序下发：按用户点的那一列重查，结果落新结果集
+#[gpui_kit::test]
+fn sorting_down_re_runs_on_the_source(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sorted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(PushdownRunner {
+        seen: seen.clone(),
+        sorted: sorted.clone(),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("select 1", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+    assert!(
+        cx.update(|_window, cx| grid.read(cx).delegate().has_sort_down_hook()),
+        "面板要把「排序下发」的钩子接上（右键菜单才有这两项）"
+    );
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.sort_down("name", true, cx))
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert_eq!(
+        sorted.lock().expect("锁").clone(),
+        [("name".to_string(), true)],
+        "列名与方向原样给执行器（改写是它的事）"
+    );
+    assert_eq!(
+        shared.results().set_count(&id),
+        2,
+        "排序下发也产生新结果集，原结果保留"
+    );
 }
 
 /// 【B14】执行器不支持下发：留一句可读原因（不静默）

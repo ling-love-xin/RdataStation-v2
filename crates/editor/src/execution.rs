@@ -70,6 +70,15 @@ pub enum ExecTarget {
         filter: String,
         columns: Vec<String>,
     },
+    /// 【B14】排序下发：按用户点的那一列重查（结果落**新结果集**）
+    ///
+    /// 与筛选下发同构：编辑器只发意图，改写与方言差异都在执行器那边。
+    /// `column` 用的是**结果集的列名**（原查询的输出列），不是列下标。
+    SortedDown {
+        sql: String,
+        column: String,
+        descending: bool,
+    },
 }
 
 /// 分段抓取的一段多少行（B5b；计划口径：固定 1000 行/段）
@@ -81,7 +90,9 @@ impl ExecTarget {
         match self {
             Self::Empty | Self::Batch(_) => None,
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => Some(sql),
-            Self::Segment { sql, .. } | Self::Filtered { sql, .. } => Some(sql),
+            Self::Segment { sql, .. } | Self::Filtered { sql, .. } | Self::SortedDown { sql, .. } => {
+                Some(sql)
+            }
         }
     }
 
@@ -91,7 +102,9 @@ impl ExecTarget {
             Self::Empty => Vec::new(),
             Self::Selection(sql) | Self::Statement(sql) | Self::All(sql) => vec![sql.clone()],
             Self::Batch(list) => list.clone(),
-            Self::Segment { sql, .. } | Self::Filtered { sql, .. } => vec![sql.clone()],
+            Self::Segment { sql, .. } | Self::Filtered { sql, .. } | Self::SortedDown { sql, .. } => {
+                vec![sql.clone()]
+            }
         }
     }
 
@@ -115,6 +128,18 @@ impl ExecTarget {
         }
     }
 
+    /// 【B14】排序下发要的原料：`(原 SQL, 列名, 是否降序)`
+    pub fn sorted_down(&self) -> Option<(&str, &str, bool)> {
+        match self {
+            Self::SortedDown {
+                sql,
+                column,
+                descending,
+            } => Some((sql, column, *descending)),
+            _ => None,
+        }
+    }
+
     /// 目标标签（状态栏 / 结果区标题用；与原型 §5.1 用词一致）
     pub fn label(&self) -> &'static str {
         match self {
@@ -125,6 +150,7 @@ impl ExecTarget {
             Self::Batch(_) => "批量",
             Self::Segment { .. } => "取下一段",
             Self::Filtered { .. } => "下发筛选",
+            Self::SortedDown { .. } => "排序下发",
         }
     }
 }
@@ -435,6 +461,20 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持下发筛选".to_string())
     }
 
+    /// 【B14】排序下发：按某一列（结果集的列名）重查
+    ///
+    /// 默认实现与 [`Self::run_filtered`] 同口径：不支持就说出来。
+    fn run_sorted_down(
+        &self,
+        _connection: Option<&str>,
+        _sql: &str,
+        _column: &str,
+        _descending: bool,
+    ) -> Result<QueryData, String> {
+        Err("当前执行器不支持排序下发".to_string())
+    }
+
+
     /// 【B5b】取下一段：`sql` 是**原 SQL**（不是上一段套了窗口的那句），
     /// `offset` = 已经拿到的行数
     ///
@@ -472,6 +512,8 @@ struct ExecJob {
     segment: Option<(usize, usize)>,
     /// 【B14】下发源库的筛选词与列名；`Some` 时走 `run_filtered`
     filtered: Option<(String, Vec<String>)>,
+    /// 【B14】排序下发的列名与方向；`Some` 时走 `run_sorted_down`
+    sorted_down: Option<(String, bool)>,
 }
 
 /// 一次执行的结论（回到主线程）：**一条语句一条结论**
@@ -584,6 +626,14 @@ impl ExecChannel {
                                 filter,
                                 columns,
                             )
+                        } else if let Some((column, descending)) = job.sorted_down.as_ref() {
+                            // 【B14】排序下发：同上，改写与方言差异都在执行器
+                            worker_runner.run_sorted_down(
+                                job.connection.as_deref(),
+                                &sql,
+                                column,
+                                *descending,
+                            )
                         } else {
                             // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
                             worker_runner.run(job.connection.as_deref(), &sql, job.options)
@@ -661,6 +711,10 @@ impl ExecChannel {
                 filtered: target
                     .filtered()
                     .map(|(_, filter, columns)| (filter.to_string(), columns.to_vec())),
+                // 【B14】排序下发同此
+                sorted_down: target
+                    .sorted_down()
+                    .map(|(_, column, descending)| (column.to_string(), descending)),
             })
             .is_err()
         {

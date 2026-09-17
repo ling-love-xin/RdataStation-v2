@@ -866,13 +866,41 @@ fn the_editor_execution_port_runs_a_query_on_every_configured_database() {
         );
         // 「已去掉 LIMIT」的提示在编辑器侧（随执行结论进状态栏），面板测试已盯；
         // 这里只钉“去掉之后真能筛到”。
+        // 排序下发：按点的列重查（不 CAST——让源库按自己的列类型排）
+        let sorted_down = run_through_editor(
+            &shared,
+            document.clone(),
+            &ExecTarget::SortedDown {
+                sql: format!("SELECT n, tag FROM {push_table}"),
+                column: "tag".to_string(),
+                descending: true,
+            },
+            ResultPlacement::NewSet,
+            1,
+        );
+        assert!(
+            sorted_down[0].error.is_none(),
+            "{}：排序下发失败 —— {:?}",
+            target.driver,
+            sorted_down[0].error
+        );
+        assert_eq!(
+            sorted_down[0]
+                .rows
+                .iter()
+                .map(|row| row[1].clone())
+                .collect::<Vec<_>>(),
+            ["gamma", "beta", "alpha"],
+            "{}：降序下发要由源库按 tag 排",
+            target.driver
+        );
         run_one(
             &shared,
             document.clone(),
             &format!("DROP TABLE {push_table}"),
         );
         eprintln!(
-            "✅ {}：下发源库 —— 筛选词拼 WHERE 重查（命中 1 行；带 LIMIT 的原查询也能筛到全部）",
+            "✅ {}：下发源库 —— 筛选词拼 WHERE 重查（命中 1 行；带 LIMIT 的原查询也能筛到全部）· 排序下发按列重查",
             target.driver
         );
 

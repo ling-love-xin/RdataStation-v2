@@ -18,21 +18,27 @@
 //!
 //! - **包一层子查询**：筛选命中的是**结果集的列**（原查询的输出列），只有包起来才引用得到；
 //! - **去掉 LIMIT**：留着的话“筛选”只在被截断的那几行里找，那就不叫下发了；去掉这件事要在
-//!   界面上说明（返回 [`FilterRewrite::dropped_limit`]，场景 34）；
+//!   界面上说明（返回 [`Rewrite::dropped_limit`]，场景 34）；
 //! - **ORDER BY 提到外层**：子查询里的 ORDER BY 在外层**不保证顺序**，提到外层才是真的有序；
 //! - **CAST 成字符串**再 `LIKE`：数字 / 日期列也要能按文本筛（与本地筛选同语义）；
 //!   目标类型由调用方按方言给（MySQL 没有 `TEXT` 这个 CAST 目标，用 `CHAR`）；
 //! - **`ESCAPE '!'`**：`%` / `_` 要能被当普通字符搜（用户输入的 `100%` 不该变成通配符），
 //!   而转义符用 `!` 是为了避开 MySQL 字符串里反斜杠的语义（`'\\'` 在那边不是标准写法）。
 //!
+//! ## 排序下发（`rewrite_with_order`）
+//!
+//! 同一条路子：`SELECT * FROM (<原查询去掉顶层 LIMIT 与 ORDER BY>) AS rds_sorted
+//! ORDER BY <列> [DESC]`。**不 CAST**：让源库按它自己的列类型排（数字列自然按数值，比我们
+//! 猜类型靠谱）。原 ORDER BY 要去掉——用户点的那一列才是他要的顺序。
+//!
 //! 顶层子句的定位走 sqlglot 的 **tokenizer**（与语法高亮同一个入口）：字符串字面量或注释里的
 //! `limit` / `order by` 不算子句——词法扫描最容易错的正是这件事。
 
 use sqlglot_rust::tokens::{TokenType, Tokenizer};
 
-/// 改写结果
+/// 改写结果（筛选下发与排序下发共用）
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FilterRewrite {
+pub struct Rewrite {
     /// 能直接发给源库的 SQL
     pub sql: String,
     /// 被去掉的 LIMIT 原文（`Some` 时界面要提示“将去掉 LIMIT”）
@@ -47,7 +53,7 @@ pub fn rewrite_with_filter(
     columns: &[String],
     needle: &str,
     cast_type: &str,
-) -> Result<FilterRewrite, String> {
+) -> Result<Rewrite, String> {
     let needle = needle.trim();
     if original.trim().is_empty() {
         return Err("没有可下发的查询".to_string());
@@ -84,7 +90,37 @@ pub fn rewrite_with_filter(
         sql.push_str(&order);
     }
 
-    Ok(FilterRewrite { sql, dropped_limit })
+    Ok(Rewrite { sql, dropped_limit })
+}
+
+/// 排序下发：把「按某一列排序」拼成一条重查语句
+///
+/// 返回的 SQL 形状见模块文档；`column` 是**结果集的列名**（原查询的输出列），
+/// `dropped_limit` 与筛选下发同口径（去掉的 LIMIT 要在界面上说明）。
+pub fn rewrite_with_order(
+    original: &str,
+    column: &str,
+    descending: bool,
+) -> Result<Rewrite, String> {
+    if original.trim().is_empty() {
+        return Err("没有可下发的查询".to_string());
+    }
+    if column.trim().is_empty() {
+        return Err("没有可排序的列".to_string());
+    }
+
+    let clauses = top_level_clauses(original);
+    let body_end = clauses.body_end(original.len());
+    let body = original[..body_end].trim_end();
+    let dropped_limit = clauses.limit_text(original);
+
+    let direction = if descending { " DESC" } else { "" };
+    let sql = format!(
+        "SELECT * FROM (\n{body}\n) AS rds_sorted\nORDER BY {}{direction}",
+        quote_ident(column)
+    );
+
+    Ok(Rewrite { sql, dropped_limit })
 }
 
 /// 顶层（括号外）子句的位置
@@ -223,7 +259,7 @@ fn quote_ident(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{rewrite_with_filter, top_level_clauses};
+    use super::{rewrite_with_filter, rewrite_with_order, top_level_clauses};
 
     fn columns() -> Vec<String> {
         vec!["id".to_string(), "name".to_string()]
@@ -328,6 +364,51 @@ mod tests {
         assert!(
             rewritten.sql.contains("LIKE '%o''brien%'"),
             "单引号要双写：{}",
+            rewritten.sql
+        );
+    }
+
+    #[test]
+    fn ordering_replaces_the_original_order_by() {
+        // 用户点的那一列才是他要的顺序：原 ORDER BY 不留
+        let rewritten = rewrite_with_order(
+            "SELECT n, tag FROM t ORDER BY n LIMIT 5",
+            "tag",
+            true,
+        )
+        .expect("能改写");
+        assert!(
+            rewritten.sql.contains("ORDER BY tag DESC"),
+            "按点的列降序：{}",
+            rewritten.sql
+        );
+        assert_eq!(
+            rewritten.sql.matches("ORDER BY").count(),
+            1,
+            "原 ORDER BY 要替换掉，不是叠一层：{}",
+            rewritten.sql
+        );
+        assert!(!rewritten.sql.contains("LIMIT"), "{}", rewritten.sql);
+        assert_eq!(rewritten.dropped_limit.as_deref(), Some("LIMIT 5"));
+    }
+
+    #[test]
+    fn ordering_works_without_an_existing_order_by() {
+        let rewritten = rewrite_with_order("SELECT n FROM t", "n", false).expect("能改写");
+        assert!(
+            rewritten.sql.ends_with("ORDER BY n"),
+            "升序不带 DESC：{}",
+            rewritten.sql
+        );
+        assert_eq!(rewritten.dropped_limit, None);
+    }
+
+    #[test]
+    fn ordering_quotes_awkward_columns() {
+        let rewritten = rewrite_with_order("SELECT 1 AS x", "weird name", false).expect("能改写");
+        assert!(
+            rewritten.sql.ends_with("ORDER BY \"weird name\""),
+            "{}",
             rewritten.sql
         );
     }

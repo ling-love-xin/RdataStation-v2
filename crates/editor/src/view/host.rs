@@ -248,6 +248,7 @@ impl EditorHostPanel {
         {
             let load_weak = cx.entity().downgrade();
             let filter_weak = cx.entity().downgrade();
+            let sort_weak = cx.entity().downgrade();
             grid.update(cx, |state, _cx| {
                 state.delegate_mut().set_load_more_hook(std::rc::Rc::new(
                     move |app: &mut App| {
@@ -259,6 +260,15 @@ impl EditorHostPanel {
                         let value = value.to_string();
                         _ = filter_weak
                             .update(app, |panel, cx| panel.apply_filter_value(&value, cx));
+                    },
+                ));
+                let sort_weak = sort_weak;
+                state.delegate_mut().set_sort_down_hook(std::rc::Rc::new(
+                    move |column: &str, descending: bool, app: &mut App| {
+                        let column = column.to_string();
+                        _ = sort_weak.update(app, |panel, cx| {
+                            panel.sort_down(&column, descending, cx)
+                        });
                     },
                 ));
             });
@@ -1699,6 +1709,28 @@ impl EditorHostPanel {
             input.update(app, |state, cx| state.set_value(text, window, cx));
         });
         self.apply_filter(cx);
+    }
+
+    /// 【B14】排序下发（右键菜单来的）：按这一列重查源库，结果落**新结果集**
+    pub(crate) fn sort_down(&mut self, column: &str, descending: bool, cx: &mut Context<Self>) {
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            self.set_message(Some("没有可下发的结果集".to_string()), cx);
+            return;
+        };
+        self.execute(
+            ExecTarget::SortedDown {
+                sql: entry.sql.clone(),
+                column: column.to_string(),
+                descending,
+            },
+            // 与筛选下发同口径：**产生新结果集**，原结果保留
+            ResultPlacement::NewSet,
+            cx,
+        );
     }
 
     /// 【B14】开关切换：打开时若已有筛选词就立刻下发一次（“打开后把条件拼为 WHERE 重查”）

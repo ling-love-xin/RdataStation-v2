@@ -36,6 +36,9 @@ pub type LoadMoreHook = Rc<dyn Fn(&mut App)>;
 /// 【B14】「按值筛选」的钩子（面板注入：把值写进筛选框并立刻生效）
 pub type FilterValueHook = Rc<dyn Fn(&str, &mut App)>;
 
+/// 【B14】「排序下发」的钩子（面板注入：按列名重查源库；入参 = （列名，是否降序））
+pub type SortDownHook = Rc<dyn Fn(&str, bool, &mut App)>;
+
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
@@ -45,6 +48,8 @@ pub enum ContextAction {
     CopyValue(String),
     /// 冻结 / 取消冻结这一**数据列**
     ToggleFreeze(usize),
+    /// 按这一列（列名）排序并**下发重查**
+    SortDown { column: String, descending: bool },
 }
 
 /// 右键菜单里的一项
@@ -79,13 +84,29 @@ pub fn context_menu_items(
             separator_before: false,
         },
         ContextMenuItem {
+            label: format!("按「{column_name}」升序（下发源库）"),
+            action: ContextAction::SortDown {
+                column: column_name.to_string(),
+                descending: false,
+            },
+            separator_before: true,
+        },
+        ContextMenuItem {
+            label: format!("按「{column_name}」降序（下发源库）"),
+            action: ContextAction::SortDown {
+                column: column_name.to_string(),
+                descending: true,
+            },
+            separator_before: false,
+        },
+        ContextMenuItem {
             label: if frozen {
                 "取消冻结此列".to_string()
             } else {
                 format!("冻结「{column_name}」")
             },
             action: ContextAction::ToggleFreeze(column),
-            separator_before: true,
+            separator_before: false,
         },
     ]
 }
@@ -114,6 +135,8 @@ pub struct ResultGridDelegate {
     frozen: Vec<usize>,
     /// 【B14】按值筛选的钩子（面板注入）
     on_filter_value: Option<FilterValueHook>,
+    /// 【B14】排序下发的钩子（面板注入）
+    on_sort_down: Option<SortDownHook>,
     /// 【B15】视图行序：当前看着的这一串行，元素是 `rows` 里的下标
     ///
     /// 筛选与排序都只改这个映射，**数据行一行不动**（所以清除筛选能原样恢复，
@@ -162,6 +185,11 @@ impl ResultGridDelegate {
     /// 【B14】注入「按值筛选」钩子（面板构造时一次）
     pub fn set_filter_value_hook(&mut self, hook: FilterValueHook) {
         self.on_filter_value = Some(hook);
+    }
+
+    /// 【B14】注入「排序下发」钩子（面板构造时一次）
+    pub fn set_sort_down_hook(&mut self, hook: SortDownHook) {
+        self.on_sort_down = Some(hook);
     }
 
     /// 【B15】这一数据列冻结了吗
@@ -274,10 +302,16 @@ impl ResultGridDelegate {
         self.has_more && !self.loading_more && self.on_load_more.is_some()
     }
 
-    /// 测试用：按值筛选的钩子接上了吗（接线正确性；真点击在窗口里驱动）
+    /// 测试用：右键菜单的两个钩子接上了吗（接线正确性；真点击在窗口里驱动）
     #[cfg(test)]
     pub fn has_filter_value_hook(&self) -> bool {
         self.on_filter_value.is_some()
+    }
+
+    /// 测试用：见上
+    #[cfg(test)]
+    pub fn has_sort_down_hook(&self) -> bool {
+        self.on_sort_down.is_some()
     }
 
     /// 网格里的列名（供测试断言；不复制行数据）
@@ -528,6 +562,14 @@ impl TableDelegate for ResultGridDelegate {
                     if let Some(hook) = self.on_filter_value.clone() {
                         menu = menu.item(PopupMenuItem::new(item.label).on_click(
                             move |_, _window, app| hook(&needle, app),
+                        ));
+                    }
+                }
+                ContextAction::SortDown { column, descending } => {
+                    // 与「按值筛选」同口径：没接钩子就不摆这一项
+                    if let Some(hook) = self.on_sort_down.clone() {
+                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                            move |_, _window, app| hook(&column, descending, app),
                         ));
                     }
                 }
@@ -897,18 +939,45 @@ mod tests {
     fn context_menu_offers_filter_copy_and_freeze() {
         let items = context_menu_items("orders", "name", 1, false);
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
-        assert_eq!(labels, ["按值筛选「orders」", "复制此值", "冻结「name」"]);
+        assert_eq!(
+            labels,
+            [
+                "按值筛选「orders」",
+                "复制此值",
+                "按「name」升序（下发源库）",
+                "按「name」降序（下发源库）",
+                "冻结「name」",
+            ]
+        );
         assert_eq!(
             items[0].action,
             ContextAction::FilterByValue("orders".to_string()),
             "值原样给面板（预览只管显示）"
         );
         assert_eq!(items[1].action, ContextAction::CopyValue("orders".to_string()));
-        assert_eq!(items[2].action, ContextAction::ToggleFreeze(1));
-        assert!(items[2].separator_before, "冻结那项前面要有分隔线");
+        assert_eq!(
+            items[2].action,
+            ContextAction::SortDown {
+                column: "name".to_string(),
+                descending: false
+            }
+        );
+        assert_eq!(
+            items[3].action,
+            ContextAction::SortDown {
+                column: "name".to_string(),
+                descending: true
+            }
+        );
+        assert!(
+            items[2].separator_before,
+            "“对整份结果的操作”那组前面要有分隔线"
+        );
+        assert!(!items[4].separator_before, "冻结与排序同组");
+        assert_eq!(items[4].action, ContextAction::ToggleFreeze(1));
 
         let frozen = context_menu_items("orders", "name", 1, true);
-        assert_eq!(frozen[2].label, "取消冻结此列", "已冻结时给的是反向动作");
+        assert_eq!(frozen[4].label, "取消冻结此列", "已冻结时给的是反向动作");
     }
 
     /// 值预览：空白折叠 + 截断（长值不该把菜单撑开）
