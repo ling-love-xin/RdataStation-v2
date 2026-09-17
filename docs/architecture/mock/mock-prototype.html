@@ -8,7 +8,8 @@
   本文件是 v2 原生交互稿（RDS Light/Dark 双主题 + 可切场景），**不是** v1 文件的搬运：
   设计参考 v1 `prototype/mock-data-generator.html`（表名输入 / 行数·种子·语言 / 可增删列 / 生成器选择 /
   ⚙ 高级抽屉 / 预览表 / 四个导出 / 保存草稿 / 持久化），按 v2 口径重画：
-  右 Dock 280px 只放「配置 + 出口」，字段表与预览表格落**中央「Mock 数据」tab**（280px 放不下宽表）。
+  右 Dock 280px 只放「配置 + 出口」，字段表与预览表格落**中央 tab**（280px 放不下宽表）；
+  **一张结果表一个 tab**（标题 = 表名 · 行数），右侧面板是这些 tab 的管理入口（切 / 落库）。
   语义与状态矩阵见 mock-prototype-design.md，尺寸与取色见 theme / ui 规范。
 -->
 <style>
@@ -126,6 +127,7 @@ button{font-family:inherit;cursor:pointer;}
 .inp.num{width:80px;}
 .inp.search{width:100%;}
 .line{display:flex;align-items:center;gap:6px;width:100%;}
+.line.sel{background:var(--accent);border-radius:5px;} /* 结果表清单：当前 tab 那一行 */
 .line .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .hint{font-size:11px;color:var(--muted);}
 .ok{font-size:11px;color:var(--success);}
@@ -186,7 +188,7 @@ button{font-family:inherit;cursor:pointer;}
 .menu-item .tag{margin-left:auto;color:var(--muted);font-size:10.5px;}
 .menu-sep{height:1px;background:var(--border);margin:3px 4px;}
 
-/* ── 场景模板（C1）：「生成」行右挂的下拉 + 多结果时的「当前表」 ── */
+/* ── 场景模板（C1）：「生成」行右挂的下拉 + 多结果的一张表一个 tab ── */
 .rel{position:relative;}
 .popover.scn{min-width:232px;}
 [data-scn="scenario"] .popover.scn{display:flex;}
@@ -298,7 +300,7 @@ button{font-family:inherit;cursor:pointer;}
     <div class="logo">R</div>
     <div>
       <h1>Mock 数据生成（M7）· 原型</h1>
-      <div class="sub">右 Dock 280px（配置 + 出口）+ 中央「Mock 数据」tab（字段表 + 预览）</div>
+      <div class="sub">右 Dock 280px（配置 + 出口）+ 中央一张结果表一个 tab（表名 · 行数 + 字段 + 预览）</div>
     </div>
   </div>
   <div class="head-actions">
@@ -322,7 +324,7 @@ button{font-family:inherit;cursor:pointer;}
   <button class="scn" data-go="scenario-copy" onclick="setScene('scenario-copy')">场景工作副本（调关系）</button>
   <button class="scn" data-go="relation" onclick="setScene('relation')">加关系对话框</button>
   <button class="scn" data-go="edit-table" onclick="setScene('edit-table')">编辑表对话框</button>
-  <button class="scn" data-go="scenario-result" onclick="setScene('scenario-result')">场景结果（多表 + 当前表）</button>
+  <button class="scn" data-go="scenario-result" onclick="setScene('scenario-result')">场景结果（多表 → 多 tab）</button>
 </div>
 <div class="scn-hint">场景切换只改变 Mock 面板 / 中央 tab / 对话框的呈现；窗口壳（标题栏 / 活动栏 / 左右边栏）为 v2 五段布局的简化示意。</div>
 
@@ -369,14 +371,19 @@ button{font-family:inherit;cursor:pointer;}
     <div class="center">
       <div class="tabs">
         <div class="tab">工作台</div>
-        <div class="tab on">Mock · mock_orders <span class="x">✕</span></div>
+        <div class="tab on scn-single">Mock · mock_orders <span class="x">✕</span></div>
+        <!-- 场景结果：**一张结果表一个 tab**（标题就是表名 + 行数）；右 Dock 的本次生成清单负责切/管 -->
+        <div class="tab on only-scenario-result">Mock · orders（5,000 行） <span class="x">✕</span></div>
+        <div class="tab only-scenario-result">Mock · order_items（15,000 行） <span class="x">✕</span></div>
+        <div class="tab only-scenario-result">Mock · users（1,000 行） <span class="x">✕</span></div>
+        <div class="tab only-scenario-result">Mock · products（500 行） <span class="x">✕</span></div>
       </div>
       <div class="center-body">
         <div class="detail-head">
-          <span class="grow">字段（5）· 目标表 mock_orders · 1000 行 · 种子 随机 · 简体中文</span>
-          <!-- 场景结果：标题栏也有「当前表」（预览作用于它；与右 Dock 那个是同一状态） -->
-          <button class="btn sm only-scenario-result" style="flex:none;">orders ▾</button>
-          <button class="btn primary sm">生成</button>
+          <span class="grow scn-single">字段（5）· 目标表 mock_orders · 1000 行 · 种子 随机 · 简体中文</span>
+          <!-- 场景结果：当前 tab 就是那张表，标题栏不再需要「当前表」下拉 -->
+          <span class="grow only-scenario-result">表 orders · 5,000 行 · 来自场景模板「电商系统」</span>
+          <button class="btn primary sm scn-hide">生成</button>
         </div>
 
         <!-- 中央 tab：生成中（摘要行尾带进度，预览保留旧结果或空态） -->
@@ -445,7 +452,7 @@ button{font-family:inherit;cursor:pointer;}
           <!-- 预览表（生成后就绪） -->
           <div class="hint only-generated scn-single">预览（前 3 行）· 临时表 <span class="mono">temp_mock_mock_orders</span> · 本次 1000 行 · 12 ms</div>
           <div class="hint only-scenario-result">预览（前 3 行）· orders · 临时表 <span class="mono">temp_mock_orders</span> · 本次 5,000 行 · 18 ms</div>
-          <div class="hint only-scenario-result">预览来自场景模板「电商系统」，与上面的草稿列无关；要看别的表用标题栏的下拉切换</div>
+          <div class="hint only-scenario-result">每张表一个 tab（标题 = 表名 · 行数）：切 tab 就是切表；右 Dock「本次生成」里点一行也能切过来</div>
           <div class="hint preview-empty">预览（前 10 行）· 尚无结果——点右上「生成」</div>
           <div class="prev-wrap only-generated scn-single" style="flex-direction:column;">
             <table class="prev-table">
@@ -457,7 +464,7 @@ button{font-family:inherit;cursor:pointer;}
               <tr><td class="idx">3</td><td>3</td><td>wang@example.net</td><td>10500.75</td><td>paid</td><td>2022-06-30 07:12:45</td></tr>
             </table>
           </div>
-          <!-- 场景结果：预览换成「当前表」（orders，模板里的列）——草稿列不参与场景生成 -->
+          <!-- 场景结果：这个 tab 就是 orders（模板里的列）——草稿列不参与场景生成 -->
           <div class="prev-wrap only-scenario-result" style="flex-direction:column;">
             <table class="prev-table">
               <tr>
@@ -569,23 +576,16 @@ button{font-family:inherit;cursor:pointer;}
             <div class="hint">场景生成不记入生成历史（历史是单表配置的重放来源）</div>
           </div>
 
-          <!-- 场景结果：模板一次产出多张表 → 先选「当前表」，出口 / 详情 / 预览都看它 -->
+          <!-- 场景结果：每张结果表都有自己的中央 tab；这里列出来点一行就切到它的 tab -->
           <div class="only-scenario-result" style="flex-direction:column;gap:6px;">
-            <div class="line">
-              <span class="hint grow">结果表（4 张）</span>
-              <span class="rel" style="flex:none;">
-                <button class="btn sm">orders ▾</button>
-                <div class="popover" style="right:0;top:calc(100% + 4px);min-width:184px;">
-                  <div class="menu">
-                    <div class="menu-item">users<span class="tag">1,000 行</span></div>
-                    <div class="menu-item">products<span class="tag">500 行</span></div>
-                    <div class="menu-item on">orders<span class="tag">5,000 行</span></div>
-                    <div class="menu-item">order_items<span class="tag">15,000 行</span></div>
-                  </div>
-                </div>
-              </span>
+            <div class="line"><span class="hint grow">结果表（4 张）· 点一行切到它的 tab</span></div>
+            <div class="hist-row">
+              <div class="line"><span class="name grow">users</span><span class="hint">1,000 行</span><span class="hint">tab 未开</span></div>
+              <div class="line"><span class="name grow">products</span><span class="hint">500 行</span><span class="hint">tab 未开</span></div>
+              <div class="line sel"><span class="name grow">orders</span><span class="hint">5,000 行</span><span class="hint">当前 tab</span></div>
+              <div class="line"><span class="name grow">order_items</span><span class="hint">15,000 行</span><span class="hint">tab 未开</span></div>
             </div>
-            <div class="hint">来自场景模板「电商系统」：出口只作用于当前选中的那张表</div>
+            <div class="hint">来自场景模板「电商系统」：出口作用于**当前 tab 那张表**——切 tab 就是切表，不必再去选一次</div>
             <div class="mono-line">orders · 临时表 temp_mock_orders · 5,000 行 · 18 ms</div>
             <div class="warn">引用了 user_id → users.id：只落这张表，被引用的表不会跟着落库；被 order_items.order_id 引用：只落这张表，引用它的一方会落空</div>
             <div class="line"><span class="warn grow">关系里还有 2 张没落库：items、users</span><button class="btn sm">落库这 2 张</button></div>
@@ -779,12 +779,12 @@ button{font-family:inherit;cursor:pointer;}
 <div class="note">
   <div><b>与 v1 原型的对应关系</b>（v1 文件：<code>v1/prototype/mock-data-generator.html</code>，本稿为参考重画而非搬运）：</div>
   <div>· v1 右面板「配置区（表名输入 / 行数 / 种子 / 语言 / 重置）」→ 本稿同样以<b>目标表名输入框</b>为起点（造新表），保留行数 / 种子 / 语言三项；v1 的「重置」并入字段行的「智能」与列编辑的「恢复智能默认」。</div>
-  <div>· v1 的字段表（可增删列、列名与类型可改、生成器下拉、空值率、唯一、⚙ 高级抽屉）→ 本稿因右 Dock 只有 280px，整体移到<b>中央「Mock 数据」tab</b>：字段卡片两行（名称 / 类型 / 置信度 + 生成器 ▾ / 编辑 / 智能 / 删除 + 参数摘要）。</div>
+  <div>· v1 的字段表（可增删列、列名与类型可改、生成器下拉、空值率、唯一、⚙ 高级抽屉）→ 本稿因右 Dock 只有 280px，整体移到<b>中央 tab</b>（单表态那张 tab）：字段卡片两行（名称 / 类型 / 置信度 + 生成器 ▾ / 编辑 / 智能 / 删除 + 参数摘要）。</div>
   <div>· v1 的「生成器下拉（137 项平铺）」→ 本稿按<b>分类子菜单</b>收口；v1 的「⚙ 高级抽屉」→ <b>列编辑对话框</b>（列名 / 类型 / 生成器只读 / 参数 / 空值率 / 唯一 / 恢复智能默认）。</div>
   <div>· v1 的「生成 → 预览表 → 导出 CSV·XLSX·Parquet·SQL / 保存草稿 / 持久化」→ 本稿：生成仍只产<b>内存临时表 + 预览</b>（不写库），四个出口收在右 Dock「出口」按钮组，预览表在中央 tab。</div>
   <div>· v1 的「导入结构弹窗」→ 本稿「导入结构」对话框（连接 / 库 / schema / 表名，读源库结构）；v1 <b>没有</b>的「追加到既有表」是 v2 的<b>显式</b>出口（选表后主键自增接续表内行数），不与「持久化」混为一路。</div>
   <div>· v1 的「历史段」→ 本稿**已画**：右 Dock 底部「生成历史」（最近 20 条，时间倒序 + 重放 / 删除 / 刷新），生成一次自动落一条，失败行显示原因；v1 的「保存模板」→ 本稿**已画**「用户模板」段（「保存为模板…」对话框只问名字 + 每行「应用 / 删除」）。</div>
-  <div>· v1 的「场景模板」→ 本稿**已画**（两个场景：「场景模板」= 下拉选 6 套内置模板；「场景结果」= 一次产多张表 + 「当前表」切换）。<b>与 v1 的形态差异是有意的</b>：v1 的模板对话框是「选一个模板 → 把列定义填进草稿」，一次只服务一张表；v2 是「选一套模板 → 后台一次生成模板里的**全部表**（不写库）」，结果表是一组（`results`），出口作用于「当前表」。场景任务与批量落库的进度量纲是**张表**（`2 / 4 张表` / `1 / 3 张表`），不是批次 / 行——面板按任务种类切文案。</div>
+  <div>· v1 的「场景模板」→ 本稿**已画**（两个场景：「场景模板」= 下拉选 6 套内置模板；「场景结果」= 一次产多张表，<b>一张表一个中央 tab</b>，右 Dock「本次生成」清单是管理入口）。<b>与 v1 的形态差异是有意的</b>：v1 的模板对话框是「选一个模板 → 把列定义填进草稿」，一次只服务一张表；v2 是「选一套模板 → 后台一次生成模板里的**全部表**（不写库）」，结果表是一组（`results`），每张结果表对应一个 tab、标题就是表名 + 行数。场景任务与批量落库的进度量纲是**张表**（`2 / 4 张表` / `1 / 3 张表`），不是批次 / 行——面板按任务种类切文案。</div>
   <div>· 场景表之间的**引用关系**已从「手写约定」升级为**模型化引用**（§9-I11 已落实）：关系声明在子表的列上（`ColumnDependency::foreign_key`），取值域由父列自增参数 + 父表行数**算出**（不读已落地数据）；内置 6 套模板的 24 处引用都改成声明，blog 顺带补上原本缺失的父表 `users`。面板上就是「表间关系」段 + 「＋ 加关系」对话框，关系行尾的 `1..1,000` 就是算出来的域。</div>
 </div>
 
