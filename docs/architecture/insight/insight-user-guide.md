@@ -263,7 +263,7 @@ display_order = 0                # 可选，展示排序
 | `bool?` | `Option<bool>` | 布尔，可空 |
 | `usize` | 经 `i64` 中转的 `usize` | 计数类 |
 
-> ⚠️ **写错 `value_type` 不会报「未知类型」，而是走兜底分支按 `String` 读**——数值列会被报成「Failed to get String value」这类难以归因的错误。请严格从上表取值。（内置规则 `quality-score` 用了 `"str"` 靠兜底侥幸工作，属历史遗留，不要照抄。）
+> ✅ **写错 `value_type` 会在解析期直接报错**（列出不支持的取值与可用取值清单），不会再靠兜底分支按 `String` 读。历史遗留的 `"str"` 请改成 `String` / `String?`——内置规则里那 8 处已在 2026-09-17 全部改正（K12）。
 
 ### 4.5 质量门控怎么判
 
@@ -277,9 +277,11 @@ display_order = 0                # 可选，展示排序
 | **只设 `max`，实际值为 `null`** | **通过**（当前实现不判失败） |
 | 所有 `[[quality]]` 均通过 | `QualityReport.passed = true` |
 
-> ⚠️ 两个已知坑（见 `insight-architecture.md` K11 / Q6）：
-> 1. `field` 必须是本规则 `[[output]]` 里真实存在的 `json_name`，否则取值为 `null`——**若只设了 `max`，门控会静默通过**（内置 `null-check` 就是这种情况：它检查 `null_rate`，但输出里没有这个字段）。
-> 2. 建议显式设 `min`，或在必要时把 `field` 与输出对齐后再依赖门控。
+> ✅ **`field` 必须是本规则 `[[output]]` 里真实存在的 `json_name`**——解析期会校验（K11 / Q6 已定：早失败优于静默错），写错时直接报错并列出该规则已有的输出字段。
+>
+> 以前不校验：字段不存在时取值为 `null`，而「只设 `max`」的判定对 `null` 是**通过**——门控形同虚设（内置 `null-check` 就踩了这个）。现在 `null-check` 的 `null_rate` 已由 SQL 真算出来。
+>
+> 仍需自己判断的一处：值合法地是 `null`（如空表算不出空值率）时，「只设 `max`」仍然通过——那是刻意的（没有数据就不该判数据有问题），要令它在 `null` 时也失败就加一个 `min`。
 
 ### 4.6 完整可照抄的示例
 
@@ -413,6 +415,8 @@ value_type = "i64"
 | `table-quality-overview` | table | Any | list | table |
 
 > 其中 `numeric-stats` / `histogram` / `text-*` / `datetime-*` / `boolean-ratio` 同时是**列画像基础统计的实现**——覆盖或禁用它们会连带影响列画像本身（`insight-architecture.md` K10）。
+>
+> 另一半（`null-check` / `quality-score` / 四条 `table-*`）**没有任何代码按 id 执行**——它们是规则库里的可复用条目，不是面板当前会跑的东西（`quality-score` 尤其如此：它的自述就写着真实评分在 `quality_scorer.rs`）；其中 `quality-score` 与 `table-quality-overview` 自身还有问题待决策（K3 / K15）。
 > `table-quality-overview` 的 SQL 引用了当前**不存在的表**，执行会失败（K3，待决策）。
 
 ## 5. FAQ 与排查

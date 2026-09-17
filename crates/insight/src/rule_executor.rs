@@ -651,6 +651,53 @@ mod tests {
         Ok(())
     }
 
+    /// K11 回归：内置的 `null-check` 门控要**真的能触发**。
+    ///
+    /// 以前它指向一个不存在的 `null_rate`，而「只设 `max`」的判定在 `actual` 为 `None`
+    /// 时静默通过——门控形同虚设。现在 `null_rate` 由 SQL 真算出来，这里用真表钉住两侧：
+    /// 50% 空值必须失败、空表不得误报（空表没有空值率可言，NULL 不算违规）。
+    ///
+    /// 直接解析**二进制里那一条**（不是测试里另写一份）：验的就是发出去的那个版本。
+    #[test]
+    fn test_builtin_null_check_gate_actually_fires() -> Result<(), CoreError> {
+        let content = crate::BUILTIN_RULES_DIR
+            .get_file("column/null-check.rule.toml")
+            .and_then(|file| file.contents_utf8())
+            .expect("内置规则应在二进制里");
+        let rule = crate::parse_rule_toml(content)?;
+
+        let mut params = HashMap::new();
+        params.insert("table".to_string(), "t_rule_null_check".to_string());
+        params.insert("col".to_string(), "amount".to_string());
+
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE t_rule_null_check (amount INTEGER);
+             INSERT INTO t_rule_null_check VALUES (1), (2), (NULL), (NULL);",
+        )?;
+        let result = RuleExecutor::execute_qualified(&rule, &conn, &params)?;
+        assert_eq!(result.data["total_count"], json!(4));
+        assert_eq!(result.data["null_rate"], json!(0.5));
+        let quality = result
+            .quality
+            .expect("这条规则带门控，必须给出报告");
+        assert!(
+            !quality.passed,
+            "50% 空值率应当触发 max=0.1 的门控（K11 就是不触发）"
+        );
+        assert_eq!(quality.checks[0].actual, Some(0.5));
+
+        // 空表：NULLIF 给出 NULL → 不算违规（总行数为 0 时没有空值率可言）
+        conn.execute_batch("DELETE FROM t_rule_null_check;")?;
+        let result = RuleExecutor::execute_qualified(&rule, &conn, &params)?;
+        assert_eq!(result.data["null_rate"], Value::Null);
+        assert!(
+            result.quality.expect("仍有报告").passed,
+            "空表不该误报空值率问题"
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_execute_qualified_with_quality_rules_passing() -> Result<(), CoreError> {
         let conn = Connection::open_in_memory()?;

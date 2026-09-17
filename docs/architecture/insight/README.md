@@ -3,7 +3,7 @@
 > **一句话**：把数据变成**结论**——「这份数据长什么样」（库 / 表 / 列画像）与「它能不能用」（四维质量评分），并把「新增一种洞察」从改 Rust 降级为**加一个 TOML 规则文件**（内置 18 条，用户可扩展）。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**Phase 5 三批已落地**（2026-09-17）——Phase 0–5 全部完成；Phase 5：快照历史（保存入口 + 版本列表 + 存储用量）· 版本对比（点更早的一版 → `旧 → 新 (±Δ)` 四档标记）· 存储清理（确认框 + 成对删 + 回执）。测试 **199 项 + 集成 13 项**全绿。下一步：**宿主侧欠账**（表入口 `Shared::open_insight_table` + 导航右键「查看统计」、Schema 导出按钮与下钻）与保留天数拍板（Q4/Q5）。逐项进度见 `insight-dev-plan.md` §0。
+> 状态：**Phase 5 完成 + 规则校验补强已落地**（2026-09-17）——Phase 0–5 全部完成（快照历史 · 版本对比 · 存储清理）；Q6/Q7 落地（`value_type` 白名单与门控字段校验，K11/K12 结案）。测试 **202 项 + 集成 13 项**全绿。下一步：**宿主侧欠账**（表入口 `Shared::open_insight_table` + 导航右键「查看统计」、Schema 导出按钮与下钻）与几个待拍板项（Q1 规则 SQL 沙箱 · Q3/Q15 残留规则处置 · Q4/Q5 保留期与双写补偿）。逐项进度见 `insight-dev-plan.md` §0。
 >
 > **边界**：本模块拥有**画像 / 评分 / 规则 / 报告 / 快照历史**。SQL 执行与结果集属 M5 编辑器；对象树与元数据内省属 M4；连接与运行态属 M3；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接，只经服务/命令与它们协作。
 
@@ -62,7 +62,7 @@
 | 规则类型 / 作用域 | `crates/insight/src/rule_types.rs`、`rule.rs`（现状：✅ 三层作用域已落地） |
 | 规则加载 / 覆盖语义 | `crates/insight/src/rule_registry.rs`（现状：✅ 已迁移，`by_category` 有覆盖缺陷，见开发方案 §2） |
 | 规则执行（SQL 模板 → 结果） | `crates/insight/src/rule_executor.rs`（现状：✅ 已迁移） |
-| 规则索引同步 / 目录监听 | `crates/insight/src/service/indexer.rs`、`service/watcher.rs`（现状：✅ 已实现） |
+| 规则索引同步 / 目录监听 | `crates/insight/src/service/indexer.rs`、`service/watcher.rs`（现状：✅ 已实现；**解析失败的原文同时含语义校验**：`value_type` 白名单 + 门控字段存在，D48/D49） |
 | 列画像计算（统计 / 样本 / 直方图） | `crates/insight/src/insight_engine.rs`（现状：✅ 已迁移；内部接缝 `*_internal` 待提 `pub`） |
 | 质量评分（四维 + 等级） | `crates/insight/src/quality_scorer.rs`（现状：✅ 已迁移） |
 | 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
@@ -118,7 +118,7 @@ cargo check --workspace --all-targets -j 2
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **199 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10（Schema 视图模型与导出 9 + 结构 Tab 1）；Phase 5 三批新增 15（历史：视图模型 3 + 历史 Tab 实体 2 + 保存接缝 1；对比：视图模型 4 + 视图实体 2；清理：存储层 1 + 回执 1 + 视图 1）），另有**集成测试 13 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** → 视图模型），**新增功能不得减少**。
+- **基线**：`cargo test -p rds-insight` 当前 **202 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3（白名单 1 + 门控字段 1 + K11 回归 1）），另有**集成测试 13 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** → 视图模型），**新增功能不得减少**。
 
 ## 6. 文档地图
 
@@ -146,4 +146,4 @@ cargo check --workspace --all-targets -j 2
 | Phase 3（已落地） | 表探查视图 + 列名下钻 · 多列分析（真实列清单 + 规则执行 + 结果渲染）；⬜ 宿主侧入口（`Shared::open_insight_table` 与导航右键「查看统计」） |
 | Phase 4（进行中） | ✅ 门面 · 报告视图 · 导出函数 · 下钻事件；⬜ 导出按钮与下钻的宿主侧接线（选路径 / 登记临时表） |
 | Phase 5（已完成） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（方向固定为「选中 → 最新」）· ✅ 存储清理（确认框 · 成对删 · 回执）；⬜ 保留天数取值待拍板（Q4/Q5） |
-| 待确认 | **规则 SQL 安全边界（架构 §12 Q1）** · 存储清理默认天数 · `table-quality-overview` 规则处置 |
+| 待确认 | **规则 SQL 安全边界（架构 §12 Q1）** · 存储清理保留天数与双写补偿（Q4/Q5）· 残留规则处置（Q3 / Q15：`table-quality-overview` 与 `quality-score`） |

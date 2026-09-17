@@ -23,6 +23,22 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — 规则校验补强：Q6 / Q7 落地（K11 / K12 结案）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **202 项** + 集成 **13 项**全绿；本批文件 `cargo clippy --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| `value_type` 白名单（Q7 → **D48**） | 解析期校验；报错写清「哪个输出字段用了什么值 + 可用取值清单」。白名单常量与执行器的 `match` 分支一一对应（`f64` / `f64?` / `i64` / `i64?` / `String` / `string` / `String?` / `string?` / `bool` / `bool?` / `usize`） | `rule_registry.rs`（`VALUE_TYPES`） |
+| 门控字段必须存在（Q6 → **D49**） | 解析期校验 `[[quality]] field` ∈ `[[output]] json_name`，报错列出该规则已有的输出字段。**值合法地为 `null`（空表算不出空值率）仍算通过**——那是刻意的，要它在 `null` 时也失败就加 `min` | `rule_registry.rs`（`validate_rule`） |
+| 校验挂点 | 两条都加在 `parse_rule_toml` 里：注册表 / 索引器 / 测试共用这一个入口，所以**索引里显示的错误原文就是这些文案**（用户能照着改） | `rule_registry.rs` |
+| 内置规则改正 | `null-check` 的 SQL 真算出 `null_rate`（`ROUND((COUNT(*) - COUNT(col)) * 1.0 / NULLIF(COUNT(*), 0), 4)`，空表给 NULL → 声明 `f64?`）；全仓 **8 处** `value_type = "str"` 全部改正（`quality-score` 3 × `String?`、`table-column-overview` 4 × `String`、`table-null-overview` 1 × `String`） | `insight-rules/**` |
+| 测试 | 解析期 2（白名单外的值 / 门控字段不存在，都断言报错文案含可用取值与规则 id）+ **K11 回归 1**：直接解析**二进制里那一条** `null-check`，在真 DuckDB 临时表上跑——50% 空值必须失败、空表不误报 | `rule_registry.rs` + `rule_executor.rs` |
+| 顺带的发现 | 内置 18 条里有 **10 条没有任何代码按 id 执行**（`null-check` / `quality-score` / 四条 `table-*` 等）：它们是规则库条目，不是面板会跑的东西。其中 `quality-score` 另记 **K15**（残留规则 + SQL 对文本列跑不通），与 K3 同类待决 | 架构 §11 |
+
+**对用户规则的破坏性变更（有意）**：`value_type = "str"` 现在会让规则变**无效**（规则管理里一行红字 + 明确文案）。这正是 Q7 的本意（早失败优于静默错）；迁移就是把 `str` 改成 `String` / `String?`。
+
+
 ### 2026-09-17 — Phase 5 三批：存储清理（5.4 收尾）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **199 项** + 集成 **13 项**全绿；本批文件 `cargo clippy --all-targets` 零告警）

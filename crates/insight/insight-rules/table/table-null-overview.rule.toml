@@ -23,7 +23,7 @@ result_type = "list"
 [[output]]
 sql_name = "column_name"
 json_name = "column_name"
-value_type = "str"
+value_type = "String"
 
 [[output]]
 sql_name = "total_count"

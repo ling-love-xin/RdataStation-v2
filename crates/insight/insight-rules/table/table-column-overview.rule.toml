@@ -24,22 +24,22 @@ result_type = "list"
 [[output]]
 sql_name = "column_name"
 json_name = "column_name"
-value_type = "str"
+value_type = "String"
 
 [[output]]
 sql_name = "data_type"
 json_name = "data_type"
-value_type = "str"
+value_type = "String"
 
 [[output]]
 sql_name = "is_nullable"
 json_name = "is_nullable"
-value_type = "str"
+value_type = "String"
 
 [[output]]
 sql_name = "column_default"
 json_name = "column_default"
-value_type = "str"
+value_type = "String"
 
 [render]
 component = "ColumnOverviewTable"

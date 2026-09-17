@@ -302,6 +302,8 @@ RulesWatcher（后台线程，drop 即停）：
 | D45 | 删除类动作**过确认框**，且确认框在**本 crate 内**开（`window.open_dialog`） | 快照删除不可撤销，误点是真丢数据；而弹框是纯视图行为，没有理由把它推给宿主（规则对话框已跑通这条路径，宿主零配合） | 危险按钮（danger 变体）+ 写清删什么、留多少、当前多少 |
 | D46 | 清理的**天数只允许有一个来源**（`model::SNAPSHOT_RETENTION_DAYS`），事件不带天数 | 界面写「30 天」而实际按别的天数删，是这类功能最坏的不一致（且无法从界面看出来）；把数字放在事件里，多一个入口就多一个可能写错的数 | 接缝持有策略（取常量），服务收参数（可测），视图只负责把同一常量写在话里 |
 | D47 | 清理回执**两侧条数分开报**，对不上就报警 | 正文与元数据成对写入（D16），删的时候也必须成对；只报一个「清理成功」会把半写残留（一边删多了一边没删）盖住 | 两侧不等时行内提示转 danger，并把两个数都写出来 |
+| D48 | `value_type` 走**白名单校验**（解析期，2026-09-17 定案 = Q7） | 以前白名单外的值靠 `match` 的兜底分支当 `String` 读：把 DOUBLE 列当字符串读，报出来的是一句与「类型名写错了」毫无关系的读值错误（K12） | 白名单常量 `rule_registry::VALUE_TYPES` 与执行器分支一一对应；报错直接列出可用取值 |
+| D49 | 质量门控的 `field` 必须在 `[[output]]` 里真实存在（解析期，2026-09-17 定案 = Q6） | 字段不存在时取值为 `None`，而「只设 `max`」的判定对 `None` 是**通过**——门控形同虚设而界面看不出来（K11：内置的 `null-check` 就指着不存在的 `null_rate`） | 与 `deny_unknown_fields` 同一立场（早失败优于静默错）；**值合法地为 `null`**（如空表算不出空值率）仍算通过——那是刻意的 |
 
 ## 7. 并发与资源
 
@@ -348,7 +350,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **199 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 13 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **202 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 13 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -384,6 +386,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D38～D42 快照历史 | `model.rs`（`HistoryView` / `HistoryEntryView` / `StorageStatsView` / `HISTORY_PAGE_SIZE`）、`insight_view.rs`（`render_history` + `history_entry_row` / `history_chip` / `set_history_notice` / `history_saving` / `emit_request_for_tab` 的状态落点）、`jobs.rs`（`SnapshotSaveRequested` / `HistoryRequested` → `request_snapshot_save` / `request_history`）、`service/mod.rs`（`save_column_snapshot` / `column_history_view` / `read_history`） |
 | D43/D44 版本对比 | `model.rs`（`VersionDiffView` / `DiffRowView` / `DeltaView` / `VersionDiffView::between` + `display_number` / `CANONICAL_LABELS`）、`insight_view.rs`（`render_version_diff` / `diff_row_value` / `toggle_compare_version` / `dismiss_diff` / `set_compare_notice` / `is_latest_version`）、`jobs.rs`（`VersionCompareRequested` → `request_version_compare`）、`service/mod.rs`（`compare_column_snapshots` / `history_entries`）、`ui.rs`（`INSIGHT_DIFF_LABEL_WIDTH`） |
 | D45～D47 存储清理 | `model.rs`（`SNAPSHOT_RETENTION_DAYS` / `CleanupOutcome` / `HistoryView.cleanup`）、`insight_view.rs`（`begin_cleanup` 的确认框 / `request_cleanup` / `history_busy_ready` / 回执行）、`jobs.rs`（`SnapshotCleanupRequested` → `request_cleanup`）、`service/mod.rs`（`cleanup_old_snapshots`）、`store/body.rs` + `store/meta.rs`（`cleanup_older_than`） |
+| D48/D49 规则语义校验（早失败） | `rule_registry.rs`（`VALUE_TYPES` / `validate_rule` / `parse_rule_toml` 的校验挂点；索引器与注册表共用这一个入口）、`insight-rules/{column/null-check,quality/column-quality-score,table/table-column-overview,table/table-null-overview}.rule.toml`（内置规则内容改正）、`rule_executor.rs`（K11 回归：拿二进制里的规则跑真表） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
@@ -408,10 +411,11 @@ RulesWatcher（后台线程，drop 即停）：
 | K8 | ~~视图归属待拍板（D21）~~ **已定案**（D21 = 方案 A，2026-09-16） | 已消除：`insight` 依赖 gpui-kit，视图落 `insight/src/insight_view.rs` + `ui.rs`；`panels/` 只负责装配与发命令 | ✅ 已定案 |
 | K9 | `get_column_insight_full` 并发超限时的**用户重试**由 UI 承担 | 批量场景体验 | ✅ 已修（Phase 2 / 2.2）：「评估全表」串行逐列，不会超限；进度逐列回填（D30） |
 | K10 | 内置规则的**基础统计耦合**（覆盖 `numeric-stats` 会连带影响列画像） | 用户误以为只影响「那条规则」 | 文档说明（本文件 §5.3 + 使用手册） |
-| K11 | `null-check` 规则的 `[[quality]] field = "null_rate"` 指向**不存在的输出字段**（其 `[[output]]` 只有 `total_count` / `non_null_count` / `unique_count`）→ `actual == None`，而 `evaluate_quality` 在**只设 `max` 且 actual 为 None** 时不判定失败 → 该质量门控**永不触发**（静默通过） | 中：用户以为有门控，实际没有 | 待决策：补 `null_rate` 输出字段 / 改 `field` / 让「字段不存在」报错而不是静默通过（倾向后者） |
-| K12 | `quality-score` 规则用 `value_type = "str"`，该值**不在支持列表**中，靠 `match` 的兜底分支当成 `String` 处理而侥幸工作 | 中：`value_type` 写错时不会报「未知类型」，而是在读取时报出难以归因的错误（如把 DOUBLE 列当 String 读） | 待决策：解析期校验 `value_type` 白名单（与 `deny_unknown_fields` 同一立场：早失败优于静默错） |
+| K11 | ~~`null-check` 规则的 `[[quality]] field = "null_rate"` 指向**不存在的输出字段**~~ | — | ✅ 已修（2026-09-17）：① 解析期新增「门控 `field` 必须存在于 `[[output]]`」（D49），② `null-check` 的 SQL 真算出 `null_rate`（`f64?`，空表给 NULL 不误报），③ 回归用例直接拿**二进制里那一条**跑真表，钉住「50% 空值必失败 / 空表不误报」 |
+| K12 | ~~`quality-score` 用 `value_type = "str"`，不在支持列表里，靠兜底当 `String` 读~~ | — | ✅ 已修（2026-09-17）：① 解析期新增 `value_type` 白名单（D48），② 内置规则里**共 8 处** `"str"` 全部改正（`quality-score` 3 × `String?`、`table-column-overview` 4 × `String`、`table-null-overview` 1 × `String`） |
 | K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15）；`engine/tests/transaction_affinity.rs` 的 `as_i64` 编译错误也已修（`Value` 只有 `as_int`，随 `b838ea0` 提交） |
 | K14 | 清理旧快照后，**存活版本的 `parent_version_id` 可能指向已被删的父版**（链的起段被剪掉） | 低（外观级）：今天只用它打「首版」标记——被剪过的那一版会得不到标记；对比不沿链走（直接拿两行比），分析结论不受影响 | 待决：清理时一并把断链头部标成首版 / 或在界面改成「这一版之前的历史已清理」。要么就维持现状（不清就不存在这个问题） |
+| K15 | `quality-score` 是**残留规则**：没有任何代码按 id 执行它（其自述也说真实评分在 `quality_scorer.rs`），而且它的 SQL 对文本列根本跑不通（`AVG(VARCHAR)` 是绑定错误）、`min/max/avg` 三列对数值列也不是字符串——类型声明只能是权宜（已改成 `String?` 以过白名单） | 低：当前无人执行；哪天有人启用它，会得到一句指向字段的错误，不会静默出错 | 待决（与 K3 同一类问题）：下线 / 按列类型拆成三条 / 改 SQL（`CAST` + `TRY_CAST`）后真正启用 |
 
 ## 12. 待确认
 
@@ -422,5 +426,5 @@ RulesWatcher（后台线程，drop 即停）：
 | Q3 | `table-quality-overview` 的处置（K3） | 建表 / 改 SQL / 下线 |
 | Q4 | 快照保留上限与清理默认值 | 每列 `MAX_VERSIONS_PER_COLUMN`；清理默认 30 天（v1 硬编码） |
 | Q5 | 快照双写失败的补偿策略（D16） | 重试 / 标记待清理 / 放任（Phase 5 决定） |
-| Q6 | 质量门控的「字段不存在」应报错还是静默通过（K11） | 倾向报错（与 `deny_unknown_fields` 同一立场） |
-| Q7 | `value_type` 是否在解析期做白名单校验（K12） | 倾向做（否则写错表现为难以归因的读值错误） |
+| Q6 | 质量门控的「字段不存在」应报错还是静默通过（K11） | **已定（2026-09-17）：解析期报错**（D49，产物 = K11 已修）——与 `deny_unknown_fields` 同一立场 |
+| Q7 | `value_type` 是否在解析期做白名单校验（K12） | **已定（2026-09-17）：做**（D48，产物 = K12 已修）——写错时应在解析期就指明「哪个值不合法 + 可用取值」 |

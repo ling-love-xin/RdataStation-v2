@@ -273,13 +273,75 @@ impl RuleRegistry {
 }
 
 /// 解析单条规则的 TOML 正文。
+/// `value_type` 的合法取值——与 `RuleExecutor::extract_field_value` 的分支一一对应。
+///
+/// 写成白名单而不是「不认识的当 String 读」：写错类型名时用户看到的会是运行期一句
+/// 「Failed to get String value」（把 DOUBLE 列当字符串读），与「类型名写错了」这件事
+/// 毫无关系，根本没法归因（K12 / 架构 §12 Q7）。
+///
+/// `String` 与 `string` 两种写法都收：执行器两侧分支都有，历史规则两种都在用。
+pub const VALUE_TYPES: [&str; 11] = [
+    "f64", "f64?", "i64", "i64?", "String", "string", "String?", "string?", "bool", "bool?",
+    "usize",
+];
+
+/// TOML → 规则，并做**语义校验**（TOML 语法合法不等于规则可用）。
 ///
 /// 独立成自由函数而非注册表方法：**索引器需要它**——索引要覆盖「解析失败的规则文件」
 /// （这正是索引存在的意义：把静默跳过的规则变成可见的错误），所以不能只依赖注册表。
 pub fn parse_rule_toml(content: &str) -> Result<RuleFile, CoreError> {
-    toml::from_str::<RuleFile>(content).map_err(|e| {
+    let rule: RuleFile = toml::from_str(content).map_err(|e| {
         CoreError::common(CommonError::General(format!("TOML parse error: {}", e)))
-    })
+    })?;
+    validate_rule(&rule)?;
+    Ok(rule)
+}
+
+/// 解析之后的语义校验。
+///
+/// 两条都属「早失败优于静默错」（Q6 / Q7 已定）：
+///
+/// 1. **`value_type` 必须在白名单里**——否则写错类型名只会在运行期变成一句难以归因的
+///    读值错误（把 DOUBLE 列当字符串读）；
+/// 2. **质量门控的 `field` 必须真的存在**——否则「只设 `max`」的判定会**静默通过**
+///    （`evaluate_quality` 里 `actual` 为 `None` 时只有 `min` 判失败），用户以为有门控
+///    其实没有（K11 就是这种：内置的 `null-check` 指着不存在的 `null_rate`）。
+///
+/// 报错文案要让用户能自己改：直接写出可用取值与当前已有的输出字段。
+fn validate_rule(rule: &RuleFile) -> Result<(), CoreError> {
+    let id = &rule.meta.id;
+
+    for field in &rule.output {
+        if !VALUE_TYPES.contains(&field.value_type.as_str()) {
+            return Err(CoreError::common(CommonError::General(format!(
+                "规则「{id}」的输出字段「{}」用了不支持的 value_type「{}」；可用取值：{}",
+                field.json_name,
+                field.value_type,
+                VALUE_TYPES.join(" / ")
+            ))));
+        }
+    }
+
+    let available: Vec<&str> = rule
+        .output
+        .iter()
+        .map(|field| field.json_name.as_str())
+        .collect();
+    for check in rule.quality.iter().flatten() {
+        if !available.contains(&check.field.as_str()) {
+            let hint = if available.is_empty() {
+                "该规则没有声明任何输出字段".to_string()
+            } else {
+                format!("该规则的输出字段：{}", available.join(" / "))
+            };
+            return Err(CoreError::common(CommonError::General(format!(
+                "规则「{id}」的质量门控指向不存在的字段「{}」；{hint}",
+                check.field
+            ))));
+        }
+    }
+
+    Ok(())
 }
 
 /// 项目级规则目录：`{项目}/.RSmeta/insight-rules/`。
@@ -329,6 +391,59 @@ json_name = "result"
 sql_name = "col"
 value_type = "f64"
 "#
+    }
+
+    /// 写错的 `value_type` 必须在**解析期**就报错（Q7 / K12）。
+    ///
+    /// 以前它靠 `match` 的兜底分支当 String 读：把 DOUBLE 列当字符串读，报出来的
+    /// 是一句与「类型名写错了」毫无关系的读值错误。报错文案要把可用取值写全。
+    #[test]
+    fn test_unknown_value_type_fails_at_parse_time() {
+        let toml = sample_toml().replace("value_type = \"f64\"", "value_type = \"str\"");
+        let err = parse_rule_toml(&toml).expect_err("str 不在白名单里，应当报错");
+        let text = err.to_string();
+        assert!(text.contains("str"), "要点出写错的那个值：{text}");
+        assert!(
+            text.contains("f64") && text.contains("String"),
+            "要把可用取值列出来，否则用户只能猜：{text}"
+        );
+        assert!(text.contains("test-rule-1"), "要指认是哪条规则：{text}");
+    }
+
+    /// 质量门控指向不存在的字段也必须在解析期报错（Q6 / K11）。
+    ///
+    /// 运行时它是**静默通过**：`evaluate_quality` 在 `actual` 为 `None` 时只有 `min`
+    /// 判失败，「只设 max」的门控因此永不触发——用户以为有门控。
+    #[test]
+    fn test_quality_gate_must_reference_an_output_field() {
+        let toml = format!(
+            r#"
+{}
+[[quality]]
+field = "null_rate"
+max = 0.1
+"#,
+            sample_toml()
+        );
+        let err = parse_rule_toml(&toml).expect_err("门控字段不存在，应当报错");
+        let text = err.to_string();
+        assert!(text.contains("null_rate"), "要点出写错的字段：{text}");
+        assert!(
+            text.contains("result"),
+            "要把该规则已有的输出字段列出来：{text}"
+        );
+
+        // 指向真实字段就过（门控本身合法，只是值在运行期才知道）
+        let ok = format!(
+            r#"
+{}
+[[quality]]
+field = "result"
+max = 0.1
+"#,
+            sample_toml()
+        );
+        assert!(parse_rule_toml(&ok).is_ok());
     }
 
     #[test]

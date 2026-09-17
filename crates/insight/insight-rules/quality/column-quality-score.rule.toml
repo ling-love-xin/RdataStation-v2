@@ -62,14 +62,14 @@ value_type = "f64"
 [[output]]
 sql_name = "min_val"
 json_name = "min_val"
-value_type = "str"
+value_type = "String?"
 
 [[output]]
 sql_name = "max_val"
 json_name = "max_val"
-value_type = "str"
+value_type = "String?"
 
 [[output]]
 sql_name = "avg_val"
 json_name = "avg_val"
-value_type = "str"
+value_type = "String?"

@@ -12,7 +12,8 @@ template = """
 SELECT
     COUNT(*) AS total,
     COUNT("{col}") AS non_null,
-    COUNT(DISTINCT "{col}") AS unique_cnt
+    COUNT(DISTINCT "{col}") AS unique_cnt,
+    ROUND((COUNT(*) - COUNT("{col}")) * 1.0 / NULLIF(COUNT(*), 0), 4) AS null_rate
 FROM "{table}"
 """
 parameters = ["table", "col"]
@@ -31,6 +32,14 @@ value_type = "i64"
 sql_name = "unique_cnt"
 json_name = "unique_count"
 value_type = "i64"
+
+# 门控读的就是这个字段：以前它只出现在 [[quality]] 里、SQL 不算它，
+# 导致门控「字段不存在→ actual 为 None → 只设 max 时静默通过」（K11）。
+# 表为空时 NULLIF 给出 NULL（空表没有空值率可言），所以是 `f64?`。
+[[output]]
+sql_name = "null_rate"
+json_name = "null_rate"
+value_type = "f64?"
 
 [[quality]]
 field = "null_rate"
