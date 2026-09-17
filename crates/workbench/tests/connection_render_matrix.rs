@@ -137,10 +137,24 @@ fn dialog_state_matrix_renders_on_degraded_path(cx: &mut TestAppContext) {
         "清空后引导条应复现"
     );
 
-    // 4) 五个 Tab 逐一渲染（类型 / 驱动 / 引用目录均为空的降级分支）。
+    // 4) 五个 Tab 逐一渲染（类型 / 驱动 / 引用目录均为空的降级分支），
+    //    并断言 Tab 内容区高度锁定：切 Tab 不得改变对话框高度（布局不跳动）。
+    let mut body_height = None;
     for tab in 0..5 {
         dialog.active_tab.set(tab);
         cx.update(|window, cx| window.draw(cx).clear(cx));
+        let height = cx
+            .debug_bounds("conn-tab-body")
+            .expect("Tab 内容区应已渲染")
+            .size
+            .height;
+        match body_height {
+            None => body_height = Some(height),
+            Some(first) => assert_eq!(
+                height, first,
+                "Tab {tab} 的内容区高度应与首个 Tab 一致（固定高度 + 内部滚动）"
+            ),
+        }
     }
 
     // 5) 作用域三态：切换后各渲染一帧。
@@ -170,6 +184,18 @@ fn dialog_state_matrix_renders_on_degraded_path(cx: &mut TestAppContext) {
             "结果行级别应为 {level:?}"
         );
     }
+    // 7) 两列等高：侧栏与 Tab 内容区同高（行高确定），降级路径（目录为空）同样成立。
+    let side = cx
+        .debug_bounds("conn-side-panel")
+        .expect("侧栏应已渲染")
+        .size
+        .height;
+    let body = cx
+        .debug_bounds("conn-tab-body")
+        .expect("Tab 内容区应已渲染")
+        .size
+        .height;
+    assert_eq!(side, body, "侧栏与 Tab 内容区应等高（两列同行高）");
 }
 
 /// 暂存区固定高度：草稿累加不得拉长区域（用户实测过该回归）。

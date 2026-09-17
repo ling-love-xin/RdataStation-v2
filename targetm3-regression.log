@@ -1,111 +1,23 @@
     Blocking waiting for file lock on build directory
-warning: method `jump_to_error_site_in` is never used
-    --> crates\editor\src\view\host.rs:1277:19
-     |
- 112 | impl EditorHostPanel {
-     | -------------------- method in this implementation
-...
-1277 |     pub(crate) fn jump_to_error_site_in(&mut self, window: &mut Window, cx: &mut Context<...
-     |                   ^^^^^^^^^^^^^^^^^^^^^
-     |
-     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: `rds-editor` (lib) generated 1 warning
+   Compiling rds-scratchpad v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\scratchpad)
+   Compiling rds-mock v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\mock)
+   Compiling rds-database v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\database)
+   Compiling rds-insight v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\insight)
+   Compiling rds-editor v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\editor)
+   Compiling rds-project v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\project)
+   Compiling rds-analytics-resource v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\analytics_resource)
    Compiling rds-workbench v0.1.0 (D:\RdataStation\RDS\RdataStation-v2\crates\workbench)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 45s
-     Running unittests src\lib.rs (target\debug\deps\rds_workbench-74dc867e3b109679.exe)
+error[E0422]: cannot find struct, variant or union type `OpenInEditorRequest` in this scope
+   --> crates\workbench\src\panels\shared.rs:473:18
+    |
+473 |             Some(OpenInEditorRequest {
+    |                  ^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+431 +     use crate::panels::shared::OpenInEditorRequest;
+    |
 
-running 64 tests
-................................................................
-test result: ok. 64 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
-
-     Running tests\connection_dialog_ui.rs (target\debug\deps\connection_dialog_ui-93cbb383c54207fe.exe)
-
-running 4 tests
-....
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
-
-     Running tests\connection_drafts_persist.rs (target\debug\deps\connection_drafts_persist-d58e28164614edd0.exe)
-
-running 1 test
-.
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
-
-     Running tests\connection_multi_save.rs (target\debug\deps\connection_multi_save-026ebac349c2d2eb.exe)
-
-running 3 tests
-...
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
-
-     Running tests\connection_project_picker.rs (target\debug\deps\connection_project_picker-a7453269c7f87785.exe)
-
-running 7 tests
-.......
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
-
-     Running tests\connection_scope_and_state.rs (target\debug\deps\connection_scope_and_state-18976d421da71191.exe)
-
-running 2 tests
-..
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
-
-     Running tests\connection_staging.rs (target\debug\deps\connection_staging-e24636644a96d144.exe)
-
-running 6 tests
-......
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
-
-     Running tests\connection_template.rs (target\debug\deps\connection_template-5f23926f829bbc9d.exe)
-
-running 2 tests
-..
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
-
-     Running tests\connection_tunnel_cleanup.rs (target\debug\deps\connection_tunnel_cleanup-bcb1780302f2deee.exe)
-
-running 1 test
-.
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
-
-     Running tests\connection_type_driver.rs (target\debug\deps\connection_type_driver-74335843c615489f.exe)
-
-running 7 tests
-.......
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
-
-     Running tests\data_source_lifecycle.rs (target\debug\deps\data_source_lifecycle-b54f7cfadd47a30a.exe)
-
-running 28 tests
-............................
-test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.64s
-
-     Running tests\db_navigator.rs (target\debug\deps\db_navigator-ebb4a34608f4c2fe.exe)
-
-running 2 tests
-..
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
-
-     Running tests\dialog_host_layer.rs (target\debug\deps\dialog_host_layer-b56a1376c29a96ab.exe)
-
-running 4 tests
-....
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
-
-     Running tests\global_service_singleton.rs (target\debug\deps\global_service_singleton-7fd33e545f813c8c.exe)
-
-running 2 tests
-..
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
-
-     Running tests\real_connections.rs (target\debug\deps\real_connections-109b6b9089336dec.exe)
-
-running 5 tests
-.....
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
-
-     Running tests\ui_contract.rs (target\debug\deps\ui_contract-cb1acafa057391a2.exe)
-
-running 7 tests
-.......
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
+For more information about this error, try `rustc --explain E0422`.
+error: could not compile `rds-workbench` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

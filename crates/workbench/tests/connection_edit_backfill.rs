@@ -214,4 +214,22 @@ fn editing_saved_connection_backfills_form(cx: &mut TestAppContext) {
         cx.update(|_, _cx| dialog.drafts.borrow().iter().all(|d| d.saved_id.is_none())),
         "编辑既有连接不应把已保存条目录入暂存区"
     );
+
+    // 6) 两列等高：目录就绪（类型树有内容）时，侧栏不得把对话框撑高。
+    dialog.active_tab.set(0);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let side = cx
+        .debug_bounds("conn-side-panel")
+        .expect("侧栏应已渲染")
+        .size
+        .height;
+    let body = cx
+        .debug_bounds("conn-tab-body")
+        .expect("Tab 内容区应已渲染")
+        .size
+        .height;
+    assert_eq!(
+        side, body,
+        "侧栏与 Tab 内容区应等高（目录 / 类型树不得把对话框撑高）"
+    );
 }
