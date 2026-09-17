@@ -85,7 +85,7 @@
 | `src/helpers.rs` | 时间双格式解析（RFC3339 / SQLite `CURRENT_TIMESTAMP`） | ✅ |
 | `src/tests.rs` | 存储层回归（t001–t016，测试库跑齐 007 + 020） | ✅ 16 项 |
 | `src/commands.rs` | Action 声明（`RequestArchive` / `OpenSelected` / `CheckoutSelected` / `DeleteSelected` / `FocusSearch` / `ClearSearch`，面板均已接处理器）；快捷键在 app 层绑到 `analytics-resource` context（`Ctrl+F` / `Esc` / `Delete`） | ✅ Phase 1 |
-| `src/resource_view.rs` | 左 Dock 面板：面板头 / **工具栏（搜索·筛选·排序）** / 提示行 / **行列表（`list::List`：虚拟化 + 组件化 hover·选中·键盘漫游，选中以面板的行 id 为准；行首带 kind 图标）** / **行右键菜单（打开·取回·复制路径·在系统中显示·移入回收站）** / **加载态（3 行骨架 + 状态行前缀）** / **归档撤销栏（状态行上方，5 秒窗口）** / 状态行 / **两种空态（空库 vs 无匹配）**；快照带逐行详情（`selected_detail()`，右栏「存档详情」取它）；宿主动作经 `ResourcesHost` | ✅ Phase 1 七刀（批量多选待下一批） |
+| `src/resource_view.rs` | 左 Dock 面板：**面板头（标题图标 + `＋ ▾` 归档入口 + `⋯` 四项：重建索引… / 打开资源目录 / 回收站… / 刷新）** / **工具栏（搜索·筛选·排序）** / 提示行 / **行列表（`list::List`：虚拟化 + 组件化 hover·选中·键盘漫游，选中以面板的行 id 为准；行首带 kind 图标）** / **行右键菜单（打开·取回·复制路径·在系统中显示·移入回收站）** / **加载态（3 行骨架 + 状态行前缀）** / **归档撤销栏（状态行上方，5 秒窗口）** / 状态行 / **两种空态（空库 vs 无匹配）**；快照带逐行详情（`selected_detail()`，右栏「存档详情」取它）；宿主动作经 `ResourcesHost`（菜单动作抽成 `HeaderMenuAction` + `dispatch_header_action`，弹层点不到也能测） | ✅ Phase 1 八刀（批量多选待下一批） |
 | `src/filter.rs` | 工具栏**数据层**（纯函数，零 GPUI 依赖）：`ResourcesFilter`（关键字 / 种类 / 只看异常；`toggle_kind` 把"全选"规范化为不限）+ `SortField`/`SortOrder`（`label` / `arrow` / `flipped`）+ `apply_view`（筛选→排序，同键名称兜底且不随方向翻转）；`is_empty()` 决定面板显示哪一种空态 | ✅ Phase 1 |
 | `src/detail_view.rs` | 详情面板内容层：`ArchiveDetail` 快照 + `detail_rows`（基本信息 / 来源 / 版本 / 组织）+ `alert_line`（只在需处理时出现）+ `render_detail`（只读信息区 + **动作区：打开（只读）/ 取回（检出）…**） | ✅ Phase 1（动作接线经 `DetailActions` 注入；内容预览随对话框批） |
 | `src/dialogs/archive.rs` / `src/dialogs/checkout.rs` / `src/dialogs/pick.rs` | 归档确认 / 取回（检出）/ **草稿多选**对话框：种子（宿主备好的来源与只读信息）+ 表单（名称 / 标签 / 保留份数；文件名 / 是否打开；勾选列表）+ 校验与解析（纯函数）+ `open_*_dialog` | ✅ Phase 1（执行由宿主注入的 `on_submit` 接手） |
@@ -110,7 +110,7 @@
 | --- | --- |
 | **归档 / 取回 / 再归档闭环**【Phase 0】`ArchiveService`：本体 move + 登记 + 指纹版本 + 事件；索引失败回滚本体；取回产出可写工作副本 | 五个对话框与动作真实现（Phase 1 对话框批） |
 | **索引修复**【Phase 0】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；"从回收站还原"待 P0.8 | 版本保留策略接入设置项 |
-| **面板**【Phase 1】`ResourcesPanel`：面板头 / 工具栏（搜索·筛选·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | 批量多选、五个对话框与动作真实现 |
+| **面板**【Phase 1】`ResourcesPanel`：面板头（标题图标 + `＋ ▾` / `⋯` 四项）/ 工具栏（搜索·筛选·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | 批量多选、标题点击折叠（需与 M4/M5 面板头一起做）、五个对话框与动作真实现 |
 | **详情面板**【Phase 1】`detail_view.rs` 只读信息区（基本信息 / 来源 / 版本 / 组织 + 需处理提示条）+ 动作区（打开（只读）/ 取回）；右 Dock 转发渲染与空态；版本数由存储层一次查完 | 内容预览、危险区（随各自批次） |
 | **只读三重守卫**【Phase 1】①应用守卫（写入 `resources/` 直接拒，Phase 0）②**编辑器只读打开**（`editor::persist::open_file_read_only`，经 `OpenInEditorRequest` 带只读维度）③文件系统只读属性（辅助，失败只警告） | 本体异常时的修复入口（随索引修复对话框） |
 | **归档 / 取回**【Phase 1】`dialogs/{archive,checkout,pick}.rs`：对话框 + 校验 + 冲突提示（`resources/x-2.sql`）；workbench 侧真执行（`resource_host` + `resource_jobs` 的 `Archive` / `Checkout` 作业 + 重名避让 + 回执 + 顺手打开）；**草稿箱入口**（面板头 `＋ ▾` + 草稿多选，来源连接与出处自动带出）；**归档可撤销**（`undo_archive` + 5 秒撤销栏） | 草稿箱右键入口、分组 / 别名字段（Phase 2）、`Ctrl+Z` |
@@ -123,5 +123,5 @@
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
-- 验证：`cargo test -p rds-analytics-resource -j 2` → **78 项单测**（16 存储 + 5 领域 + 12 本体 + 9 归档服务 + 7 索引修复 + 6 筛选/排序 + 5 面板 + 5 详情 + 7 呈现 + 6 对话框）+ `tests/panel_window.rs` **10 项面板窗口测试** + `tests/dialog_window.rs` **4 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
+- 验证：`cargo test -p rds-analytics-resource -j 2` → **79 项单测**（16 存储 + 5 领域 + 12 本体 + 9 归档服务 + 7 索引修复 + 6 筛选/排序 + 6 面板 + 5 详情 + 7 呈现 + 6 对话框）+ `tests/panel_window.rs` **11 项面板窗口测试** + `tests/dialog_window.rs` **4 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

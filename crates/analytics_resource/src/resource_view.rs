@@ -209,8 +209,74 @@ pub trait ResourcesHost: 'static {
     fn request_undo_archive(&self, undo: &ArchiveUndo, window: &mut Window, cx: &mut App);
     /// 移入回收站。
     fn request_delete(&self, resource_id: &str, window: &mut Window, cx: &mut App);
-    /// 索引修复入口（状态行异常段）。
+    /// 索引修复入口（状态行异常段的「修复…」与面板头「⋯ → 重建索引…」共用）。
     fn request_index_repair(&self, window: &mut Window, cx: &mut App);
+    /// 用系统文件管理器打开受管内容根（面板头「⋯ → 打开资源目录」）。
+    ///
+    /// 开的是**目录**（与行的「在系统中显示」不同：那条要选中某个本体文件）。
+    fn request_open_payload_dir(&self, window: &mut Window, cx: &mut App);
+    /// 打开资源回收站（面板头「⋯ → 回收站…」）。
+    ///
+    /// 回收站只有一套（模块硬约束 5）：入口先留着，等 `ProjectTrash` 上提后接上。
+    fn request_open_trash(&self, window: &mut Window, cx: &mut App);
+    /// 重新取数（面板头「⋯ → 刷新」）。
+    ///
+    /// 与「打开 / 切换项目」同一条取数路径；不做局部刷新——列表是一整份快照。
+    fn request_refresh(&self, window: &mut Window, cx: &mut App);
+}
+
+/// 面板头「⋯」菜单的动作（原型 §2.1 四项；顺序即菜单顺序）。
+///
+/// 单独成枚举而不是散在渲染闭包里：菜单项文案、顺序与去向可以被单测钉住
+/// ——弹层点击在窗口测试里模拟不了，这是那份测试的入口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderMenuAction {
+    /// 重建索引…（三类孤儿的人工确认入口，与状态行「修复…」同一条路）。
+    RebuildIndex,
+    /// 打开资源目录（`{项目}/resources/`）。
+    OpenPayloadDir,
+    /// 回收站…
+    OpenTrash,
+    /// 刷新。
+    Refresh,
+}
+
+impl HeaderMenuAction {
+    /// 菜单顺序（原型 §2.1 自上而下：重建索引… / 打开资源目录 / 回收站… / 刷新）。
+    pub const ALL: [Self; 4] = [
+        Self::RebuildIndex,
+        Self::OpenPayloadDir,
+        Self::OpenTrash,
+        Self::Refresh,
+    ];
+
+    /// 菜单项文案（省略号表示它会开一个对话框/入口，而不是立即生效）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RebuildIndex => "重建索引…",
+            Self::OpenPayloadDir => "打开资源目录",
+            Self::OpenTrash => "回收站…",
+            Self::Refresh => "刷新",
+        }
+    }
+}
+
+/// 分发一个面板头菜单动作：面板不认识服务层，动作原样转给宿主。
+///
+/// 独立成函数（而不是写在菜单闭包里）是为了让窗口测试能走**生产入口**调用它：
+/// 弹层里的菜单项没法在测试里点到。
+pub fn dispatch_header_action(
+    host: &Rc<dyn ResourcesHost>,
+    action: HeaderMenuAction,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    match action {
+        HeaderMenuAction::RebuildIndex => host.request_index_repair(window, cx),
+        HeaderMenuAction::OpenPayloadDir => host.request_open_payload_dir(window, cx),
+        HeaderMenuAction::OpenTrash => host.request_open_trash(window, cx),
+        HeaderMenuAction::Refresh => host.request_refresh(window, cx),
+    }
 }
 
 // ==================== 列表委托 ====================
@@ -815,7 +881,10 @@ impl ResourcesPanel {
     // 返回 `impl IntoElement` 时它会借住 `cx`，连续调两个区域函数就变成"重复可变借用"。
 
     fn render_header(&self, cx: &mut Context<Self>) -> Div {
-        let border = cx.theme().colors.border;
+        let (border, muted, foreground) = {
+            let colors = cx.theme().colors;
+            (colors.border, colors.muted_foreground, colors.foreground)
+        };
         let read_only = self.snapshot.read_only;
         let host = self.host.clone();
 
@@ -824,40 +893,92 @@ impl ResourcesPanel {
             .flex_none()
             .h_flex()
             .justify_between()
+            .gap_2()
             .px_2()
             // 1px 固定描边：不随字号缩放（允许的 physical boundary 例外）。
             .border_b(px(1.0))
             .border_color(border)
             .child(
+                // 标题 = 前缀图标 + 文字（原型 §2.1）：图标形状与活动栏该面板的图标一致，
+                // 一眼就对得上"这里是资产库"。
                 div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("资产库"),
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .min_w_0()
+                    .child(
+                        Icon::default()
+                            .path("icons/chart-column.svg")
+                            .flex_none()
+                            .size_3p5()
+                            .text_color(muted),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(foreground)
+                            .child("资产库"),
+                    ),
             )
             .child(
-                // 原型 §2.1：`＋ ▾` 主操作，两项——**存档的本体必须来自某处**，
-                // 所以菜单里是两个来源，而不是"新建存档"。
-                Button::new("archive-add")
-                    .ghost()
-                    .label("＋ ▾")
-                    .disabled(read_only)
-                    .dropdown_menu({
-                        let host = host.clone();
-                        move |menu, _window, _cx| {
-                            let drafts_host = host.clone();
-                            let file_host = host.clone();
-                            menu.item(
-                                PopupMenuItem::new("从草稿箱归档…").on_click(move |_, window, cx| {
-                                    drafts_host.request_archive_from_drafts(window, cx)
-                                }),
-                            )
-                            .item(
-                                PopupMenuItem::new("从本地文件归档…").on_click(move |_, window, cx| {
-                                    file_host.request_archive_from_file(window, cx)
-                                }),
-                            )
-                        }
-                    }),
+                div()
+                    .flex_none()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        // 原型 §2.1：`＋ ▾` 主操作，两项——**存档的本体必须来自某处**，
+                        // 所以菜单里是两个来源，而不是"新建存档"。
+                        Button::new("archive-add")
+                            .ghost()
+                            .label("＋ ▾")
+                            .disabled(read_only)
+                            .dropdown_menu({
+                                let host = host.clone();
+                                move |menu, _window, _cx| {
+                                    let drafts_host = host.clone();
+                                    let file_host = host.clone();
+                                    menu.item(PopupMenuItem::new("从草稿箱归档…").on_click(
+                                        move |_, window, cx| {
+                                            drafts_host.request_archive_from_drafts(window, cx)
+                                        },
+                                    ))
+                                    .item(PopupMenuItem::new("从本地文件归档…").on_click(
+                                        move |_, window, cx| {
+                                            file_host.request_archive_from_file(window, cx)
+                                        },
+                                    ))
+                                }
+                            }),
+                    )
+                    .child(
+                        // 原型 §2.1：`⋯` 更多四项。写操作（重建索引）不单独置灰：
+                        // 菜单里三项与只读无关，置灰整个 `⋯` 反而把刷新也锁上了。
+                        Button::new("archive-more")
+                            .ghost()
+                            .label("⋯")
+                            .debug_selector(|| "archive-more".to_string())
+                            .dropdown_menu({
+                                let host = host.clone();
+                                move |menu, _window, _cx| {
+                                    let mut menu = menu;
+                                    for action in HeaderMenuAction::ALL {
+                                        let target = host.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(action.label()).on_click(
+                                                move |_, window, cx| {
+                                                    dispatch_header_action(&target, action, window, cx)
+                                                },
+                                            ),
+                                        );
+                                    }
+                                    menu
+                                }
+                            }),
+                    ),
             )
     }
 
@@ -1327,8 +1448,23 @@ impl Render for ResourcesPanel {
 #[cfg(test)]
 mod tests {
     // 安全模式：测试模块不通配导入（会与 `#[gpui_kit::test]` 展开的 `#[test]` 自相残杀）。
-    use super::{ArchiveCounts, BadgeTone, badge_tone, kind_icon, row_tail, strength_badge};
+    use super::{
+        ArchiveCounts, BadgeTone, HeaderMenuAction, badge_tone, kind_icon, row_tail,
+        strength_badge,
+    };
     use crate::model::{ArchiveKind, ArchiveStatus};
+
+    #[test]
+    fn header_menu_actions_follow_the_prototype_order() {
+        // 原型 §2.1 的 `⋯` 四项，自上而下：重建索引… / 打开资源目录 / 回收站… / 刷新。
+        // 顺序与文案都是用户可见的约定，改动要有意识地改这条测试。
+        let labels: Vec<&str> = HeaderMenuAction::ALL.iter().map(|a| a.label()).collect();
+        assert_eq!(
+            labels,
+            vec!["重建索引…", "打开资源目录", "回收站…", "刷新"]
+        );
+        assert_eq!(HeaderMenuAction::ALL.len(), 4);
+    }
 
     #[test]
     fn kind_icons_use_three_distinct_shapes() {

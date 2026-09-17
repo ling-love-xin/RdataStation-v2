@@ -20,7 +20,8 @@ use rds_analytics_resource::detail_view::ArchiveDetail;
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use rds_analytics_resource::resource_view::{
-    ArchiveCounts, ArchiveRow, ResourcesHost, ResourcesPanel, ResourcesSnapshot,
+    ArchiveCounts, ArchiveRow, HeaderMenuAction, ResourcesHost, ResourcesPanel, ResourcesSnapshot,
+    dispatch_header_action,
 };
 
 /// 宿主替身：只记录调用，不接真实服务（窗口测试不碰后端）。
@@ -68,6 +69,15 @@ impl ResourcesHost for RecordingHost {
     }
     fn request_index_repair(&self, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push("repair".to_string());
+    }
+    fn request_open_payload_dir(&self, _window: &mut Window, _cx: &mut App) {
+        self.calls.borrow_mut().push("open-dir".to_string());
+    }
+    fn request_open_trash(&self, _window: &mut Window, _cx: &mut App) {
+        self.calls.borrow_mut().push("trash".to_string());
+    }
+    fn request_refresh(&self, _window: &mut Window, _cx: &mut App) {
+        self.calls.borrow_mut().push("refresh".to_string());
     }
 }
 
@@ -673,4 +683,45 @@ fn no_match_state_renders_and_clear_filter_restores_rows(cx: &mut TestAppContext
         window.draw(cx).clear(cx);
     });
     assert!(host.calls().is_empty());
+}
+
+#[gpui_kit::test]
+fn header_more_button_sits_in_the_header_and_dispatches_host_actions(
+    cx: &mut TestAppContext,
+) {
+    // 原型 §2.1：面板头右侧是 `＋ ▾` 与 `⋯` 两个按钮。菜单里的项在窗口测试里点不到
+    // （弹层），所以这里钉住两件事：**按钮真在**、**四个动作各自到得了宿主**。
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (_panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("archive-more").is_some(), "`⋯` 按钮要在面板头里");
+
+    // 四个动作依次派发（顺序就是菜单顺序）：每个都要原样落到宿主端口。
+    let expected = [
+        (HeaderMenuAction::RebuildIndex, "repair"),
+        (HeaderMenuAction::OpenPayloadDir, "open-dir"),
+        (HeaderMenuAction::OpenTrash, "trash"),
+        (HeaderMenuAction::Refresh, "refresh"),
+    ];
+    cx.update(|window, cx| {
+        let dyn_host: Rc<dyn ResourcesHost> = host.clone();
+        for (action, _) in expected {
+            dispatch_header_action(&dyn_host, action, window, cx);
+        }
+    });
+    let calls = host.calls();
+    assert_eq!(
+        calls,
+        expected
+            .iter()
+            .map(|(_, call)| call.to_string())
+            .collect::<Vec<_>>()
+    );
 }

@@ -13,6 +13,8 @@
 //!   编辑器 `persist::open_file_read_only`）；路径由 `PayloadStore::resolve` 解析（守卫在那一层）。
 //! - **取回**：取回对话框 → 入队后台任务 → 回执与"顺手打开"由侧栏轮询印做。
 //! - **撤销归档**：撤销栏的凭据原样交给工作线程（本体移回原位 + 删登记行）。
+//! - 面板头「⋯」四项：**打开资源目录**（系统文件管理器开 `resources/`）与 **刷新**（同一条取数路径）
+//!   是真实现；**回收站…** 与 **重建索引…** 沿用下两条的明确回执（入口先摆出，点了要说清为什么没动）。
 //! - 移入回收站：一律走项目级 `ProjectTrash`，而上提尚未落地（P0.8）——**不做**先软删
 //!   再等回收站那条（会变成两套回收站，违反模块硬约束 5）；
 //! - 索引修复对话框：Phase 3（异常计数已在状态行可见）。
@@ -473,6 +475,41 @@ impl ResourcesHost for WorkbenchResourceHost {
             "（Phase 3；异常计数已在状态行显示）",
             cx,
         );
+    }
+
+    fn request_open_payload_dir(&self, _window: &mut Window, cx: &mut App) {
+        let Some(root) = self.require_project("无法打开资源目录", cx) else {
+            return;
+        };
+        let dir = PayloadStore::new(root).resources_dir();
+        // 目录由第一次归档创建：还没有存档时它不存在，**说清这一点**而不是报一个系统错误。
+        if !dir.exists() {
+            self.notice(
+                format!("资产库：资源目录还不存在（{}）——归档第一个存档时会创建", dir.display()),
+                cx,
+            );
+            return;
+        }
+        if let Err(error) = opener::open(&dir) {
+            self.notice(format!("资产库：打开资源目录失败（{error}）"), cx);
+        }
+    }
+
+    fn request_open_trash(&self, _window: &mut Window, cx: &mut App) {
+        self.pending(
+            "资源回收站尚未接入",
+            "（等项目级回收站上提，P0.8；不做两套回收站）",
+            cx,
+        );
+    }
+
+    fn request_refresh(&self, _window: &mut Window, cx: &mut App) {
+        // 刷新不写回执：状态行的「加载中…」就是它的回执，再叠一条只是噪声。
+        if self.shared.project_root().is_none() {
+            self.pending("无法刷新", "：还没有打开项目", cx);
+            return;
+        }
+        self.shared.refresh_resources(cx);
     }
 }
 
