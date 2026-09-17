@@ -301,4 +301,92 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }
+
+    /// 把快照的 `created_at` 统一推到 N 天前。
+    ///
+    /// 快照接口只会写「现在」，而「清理旧快照」的判据就是时间，所以测试得自己动手改时间。
+    /// 两侧都改：只改一边就测不出「成对删」了（而那正是这条用例要钉的东西）。
+    async fn backdate(db: &ProjectDatabaseManager, days: i64) {
+        {
+            let handle = db.duckdb_conn();
+            let handle = handle.acquire().await.expect("DuckDB 句柄");
+            let mut guard = handle.lock().await;
+            let conn = guard.as_mut().expect("DuckDB 连接");
+            conn.execute_batch(&format!(
+                "UPDATE insight_column_snapshots
+                 SET created_at = CURRENT_TIMESTAMP - INTERVAL {days} DAY"
+            ))
+            .expect("回填正文时间");
+        }
+        {
+            let pool = db.sqlite_pool();
+            let conn = pool.acquire().await.expect("SQLite 句柄");
+            conn.inner()
+                .expect("SQLite 连接")
+                .execute(
+                    &format!(
+                        "UPDATE insight_snapshots
+                         SET created_at = datetime('now', '-{days} days')"
+                    ),
+                    [],
+                )
+                .expect("回填元数据时间");
+        }
+    }
+
+    /// 清理旧快照：**正文与元数据必须成对删**（D16），两侧条数对不上就是半写。
+    ///
+    /// 这里将旧时间回填到两侧（接口只写「现在」），再用 30 天的档位删——判据不在
+    /// 测试里重写一遍，而是走两条真实的 `cleanup_older_than`。
+    #[tokio::test]
+    async fn test_cleanup_deletes_both_sides_in_pairs() -> Result<(), CoreError> {
+        let root = temp_project_dir("cleanup");
+        let db = ProjectDatabaseManager::open(&root, 2).await?;
+        let stores = ProjectInsightStores::from_project_db(&db);
+
+        stores
+            .save_column_snapshot(&sample_insight("amount"), None, None, None)
+            .await?;
+        stores
+            .save_column_snapshot(&sample_insight("amount"), None, None, None)
+            .await?;
+        backdate(&db, 40).await;
+
+        let (body, meta) =
+            crate::service::cleanup_old_insight_snapshots(30, &stores.storage, &stores.meta).await?;
+        assert_eq!((body, meta), (2, 2), "两侧删的条数必须一致（成对删）");
+        assert!(
+            stores
+                .storage
+                .columns
+                .get_history("amount", Some(10))
+                .await?
+                .is_empty(),
+            "旧快照应从历史里消失"
+        );
+        assert_eq!(
+            stores.storage.columns.get_storage_stats().await?.total_snapshots,
+            0
+        );
+
+        // 新写的版本不受 30 天档影响（闸是时间，不是条数）
+        stores
+            .save_column_snapshot(&sample_insight("amount"), None, None, None)
+            .await?;
+        let (body, meta) =
+            crate::service::cleanup_old_insight_snapshots(30, &stores.storage, &stores.meta).await?;
+        assert_eq!((body, meta), (0, 0), "刚存的快照不该被 30 天档删掉");
+        assert_eq!(
+            stores
+                .storage
+                .columns
+                .get_history("amount", Some(10))
+                .await?
+                .len(),
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
 }

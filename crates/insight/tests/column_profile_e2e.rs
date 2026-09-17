@@ -12,6 +12,8 @@
 //! 留到后续批次一起补，避免在这里用构造数据迁就实现。
 
 use rds_insight::insight_engine::get_or_create_duckdb;
+// 保留天数从 crate 里取（不是测试里写死的 30）：界面文案与实际切档共用那一个常量
+use rds_insight::model::SNAPSHOT_RETENTION_DAYS;
 use rds_insight::{ColumnKind, InsightService};
 
 /// 串行锁：本文件的用例共享**进程级 DuckDB 单例**与**进程级并发配额**（上限 4）。
@@ -310,6 +312,44 @@ fn snapshot_comparison_reads_both_stored_bodies() {
     assert!(
         InsightService::describe_error(&err).message.contains("已不在历史里"),
         "错误要指向「这一版没了」：{err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 清理：30 天档对刚存的快照是**空操作**，但回执要如实到面板（不是「报了个成功」）。
+///
+/// 真正的删除路径在 `store::tests::test_cleanup_deletes_both_sides_in_pairs` 里验
+/// （那里能把 `created_at` 回填成 40 天前；服务这一层只多一个「开库 → 取数 → 贴回执」）。
+#[test]
+fn cleanup_with_a_30_day_window_leaves_fresh_snapshots_alone() {
+    let _serial = serial();
+    let table = "t_insight_e2e_cleanup";
+    let root = temp_project_dir("cleanup");
+    seed(table, "amount DECIMAL(12,2)", "VALUES (1.5), (2.5)");
+
+    InsightService::save_column_snapshot(Some(&root), table, "amount").expect("保存一版");
+    let view = InsightService::cleanup_old_snapshots(Some(&root), "amount", SNAPSHOT_RETENTION_DAYS)
+        .expect("清理应成功");
+
+    let receipt = view.cleanup.as_ref().expect("回执应在载荷里");
+    assert_eq!(receipt.days, SNAPSHOT_RETENTION_DAYS);
+    assert_eq!(
+        (receipt.body_removed, receipt.meta_removed),
+        (0, 0),
+        "刚存的快照不该被 30 天档删掉"
+    );
+    assert!(receipt.is_balanced(), "两侧都没删，自然是对上的");
+    assert!(
+        receipt.summary().contains("没有"),
+        "空操作要说清楚，而不是报个成功：{}",
+        receipt.summary()
+    );
+    assert_eq!(view.entries.len(), 1, "列表不能被空操作动过");
+    assert!(
+        view.stats_line().is_some_and(|line| line.contains('1')),
+        "用量统计里仍是那一版：{:?}",
+        view.stats_line()
     );
 
     let _ = std::fs::remove_dir_all(&root);

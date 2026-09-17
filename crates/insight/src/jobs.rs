@@ -150,6 +150,9 @@ pub fn handle_event(
             column,
             version_id,
         } => request_version_compare(view, project_root, column.clone(), version_id.clone(), cx),
+        InsightEvent::SnapshotCleanupRequested { column } => {
+            request_cleanup(view, project_root, column.clone(), cx)
+        }
         InsightEvent::SnapshotSaveRequested {
             temp_table,
             column,
@@ -545,6 +548,36 @@ pub fn request_history(
             Err(err) => {
                 let info = InsightService::describe_error(&err);
                 panel.set_error(info.message, info.retryable, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// 清理旧快照（删除**不可撤销**，所以面板上的入口要先过一道确认框）。
+///
+/// 保留天数由这里持有（`SNAPSHOT_RETENTION_DAYS`）：面板文案与实际切档取自同一个常量，
+/// 且事件不带天数——否则哪天多一个入口，两边就可能各写一个数。
+///
+/// 失败只挂行内提示：列表与已有快照都还在，推整页错误态反而是吓人。
+pub fn request_cleanup(
+    view: &Entity<InsightView>,
+    project_root: Option<PathBuf>,
+    column: String,
+    cx: &mut App,
+) {
+    let days = crate::model::SNAPSHOT_RETENTION_DAYS;
+    let weak = view.downgrade();
+    let task = cx.background_executor().spawn(async move {
+        InsightService::cleanup_old_snapshots(project_root.as_deref(), &column, days)
+    });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = weak.update(cx, |panel, cx| match result {
+            Ok(history) => panel.set_history(history, cx),
+            Err(err) => {
+                let info = InsightService::describe_error(&err);
+                panel.set_history_notice(info.message, cx);
             }
         });
     })
@@ -1049,6 +1082,26 @@ mod tests {
             );
             let history = panel.data().as_history().expect("历史不得被失败清掉");
             assert_eq!(history.entries.len(), 2, "失败后旧版本照旧可见");
+        });
+
+        // 清理：30 天档对刚存的两版是空操作，但回执要一路回到面板（事件 → 接缝 → 载荷）
+        cx.update(|cx| panel.update(cx, |panel, cx| panel.request_cleanup(cx)));
+        assert!(
+            panel.read_with(cx, |panel, _| panel.history_cleaning()),
+            "确认后立即进入「清理中」"
+        );
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let panel = panel.read(cx);
+            assert!(!panel.history_cleaning(), "出数后「清理中」要落回");
+            let history = panel.data().as_history().expect("历史");
+            let receipt = history.cleanup.as_ref().expect("回执应随载荷回来");
+            assert_eq!(
+                (receipt.body_removed, receipt.meta_removed),
+                (0, 0),
+                "刚存的快照不该被 30 天档删掉"
+            );
+            assert_eq!(history.entries.len(), 2, "空操作不该动列表");
         });
 
         let _ = std::fs::remove_dir_all(&root);

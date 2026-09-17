@@ -195,6 +195,22 @@ ProjectInsightStores::save_column_snapshot(insight, entity_source, row_count, el
 
 无项目时**不发事件**也不摆骨架：看不了就说看不了（D39）。
 
+清理（Phase 5.3）走同一条链，多一道确认框：
+
+```text
+「清理」 ──► 确认框（本 crate 内开，D45；天数取 SNAPSHOT_RETENTION_DAYS，D46）
+          └─► 事件 SnapshotCleanupRequested { column }（不带天数）
+                 └─► InsightService::cleanup_old_snapshots(root, column, days)
+                       ① 开一次项目库（D41）
+                       ② 正文删（DuckDB）+ 元数据删（SQLite）——两侧条数都带回（D47）
+                       ③ 读回列表 + 贴回执（复用同一个句柄）
+                     ──► set_history（失败则 set_history_notice）
+```
+
+> 踩过的坑：`created_at < (CURRENT_TIMESTAMP - INTERVAL ? DAY)` 在 DuckDB 里**不合法**
+> （解析器不接受 `INTERVAL` 里的绑定参数）——那段代码自迁入后从未真被调用过。
+> 天数只能拼字串（类型是 `i64`，没有注入面）。
+
 对比（Phase 5.2）走的是同一条链，只是多读一版正文：
 
 ```text
@@ -283,6 +299,9 @@ RulesWatcher（后台线程，drop 即停）：
 | D42 | 快照的**正文重取不拼装**：保存时重跑一次领域画像，不把视图模型反拼回领域结构 | 视图模型是**渲染用的投影**（缺字段、带展示文案），反拼回去只能靠猜；而视图模型正是为了「改界面不像改契约」才与领域类型分开的 | 代价：保存多跑一次统计（与打开面板同量级的查询） |
 | D43 | 对比方向固定为**「选中版本 → 最新版本」**，且**对比结果也在载荷里**（`HistoryView.diff`） | 方向可选只是多一个状态（还要多一套「谁是基准」的文案），而这个 Tab 的问题永远是「和上次比变了什么」；对比结果与列表同属一个载荷，才能让「有没有对比」只认载荷——否则列表一刷新（保存 / ⟳），手里就留下一份指向旧「当前」的差值 | 选择位在出数时从载荷反推；刷新列表不自动续取对比；最新一版不给点击入口 |
 | D44 | 对比的**行集合与「列」Tab 同源**（同一个 `ColumnProfileView`），差值一律**按展示精度算** | 另立一套对比口径，迟早在两处对不上（如「空值」在 Tab 里是 `12（14.3%）` 一行、而对比必须拆成两个可对齐的数）；按展示精度算差值则避免了「显示 62 → 62 却 +0.4」这种自相矛盾 | 解不出数字的展示串（区间 / 带方向后缀 / 类型名）只说「已变」，不编差值 |
+| D45 | 删除类动作**过确认框**，且确认框在**本 crate 内**开（`window.open_dialog`） | 快照删除不可撤销，误点是真丢数据；而弹框是纯视图行为，没有理由把它推给宿主（规则对话框已跑通这条路径，宿主零配合） | 危险按钮（danger 变体）+ 写清删什么、留多少、当前多少 |
+| D46 | 清理的**天数只允许有一个来源**（`model::SNAPSHOT_RETENTION_DAYS`），事件不带天数 | 界面写「30 天」而实际按别的天数删，是这类功能最坏的不一致（且无法从界面看出来）；把数字放在事件里，多一个入口就多一个可能写错的数 | 接缝持有策略（取常量），服务收参数（可测），视图只负责把同一常量写在话里 |
+| D47 | 清理回执**两侧条数分开报**，对不上就报警 | 正文与元数据成对写入（D16），删的时候也必须成对；只报一个「清理成功」会把半写残留（一边删多了一边没删）盖住 | 两侧不等时行内提示转 danger，并把两个数都写出来 |
 
 ## 7. 并发与资源
 
@@ -329,7 +348,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **196 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 12 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **199 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 13 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -364,6 +383,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D36/D37 Schema 健康报告 | `schema_view.rs`（新：视图模型 + `to_json` / `to_markdown`）、`schema_analyzer.rs`（等级共用 `Grade`）、`service/mod.rs`（`schema_report_view`）、`insight_view.rs`（`render_schema_report` + 下钻热点）、`jobs.rs`（`SchemaReportRequested` / `TableDrilldownRequested`） |
 | D38～D42 快照历史 | `model.rs`（`HistoryView` / `HistoryEntryView` / `StorageStatsView` / `HISTORY_PAGE_SIZE`）、`insight_view.rs`（`render_history` + `history_entry_row` / `history_chip` / `set_history_notice` / `history_saving` / `emit_request_for_tab` 的状态落点）、`jobs.rs`（`SnapshotSaveRequested` / `HistoryRequested` → `request_snapshot_save` / `request_history`）、`service/mod.rs`（`save_column_snapshot` / `column_history_view` / `read_history`） |
 | D43/D44 版本对比 | `model.rs`（`VersionDiffView` / `DiffRowView` / `DeltaView` / `VersionDiffView::between` + `display_number` / `CANONICAL_LABELS`）、`insight_view.rs`（`render_version_diff` / `diff_row_value` / `toggle_compare_version` / `dismiss_diff` / `set_compare_notice` / `is_latest_version`）、`jobs.rs`（`VersionCompareRequested` → `request_version_compare`）、`service/mod.rs`（`compare_column_snapshots` / `history_entries`）、`ui.rs`（`INSIGHT_DIFF_LABEL_WIDTH`） |
+| D45～D47 存储清理 | `model.rs`（`SNAPSHOT_RETENTION_DAYS` / `CleanupOutcome` / `HistoryView.cleanup`）、`insight_view.rs`（`begin_cleanup` 的确认框 / `request_cleanup` / `history_busy_ready` / 回执行）、`jobs.rs`（`SnapshotCleanupRequested` → `request_cleanup`）、`service/mod.rs`（`cleanup_old_snapshots`）、`store/body.rs` + `store/meta.rs`（`cleanup_older_than`） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
@@ -391,6 +411,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K11 | `null-check` 规则的 `[[quality]] field = "null_rate"` 指向**不存在的输出字段**（其 `[[output]]` 只有 `total_count` / `non_null_count` / `unique_count`）→ `actual == None`，而 `evaluate_quality` 在**只设 `max` 且 actual 为 None** 时不判定失败 → 该质量门控**永不触发**（静默通过） | 中：用户以为有门控，实际没有 | 待决策：补 `null_rate` 输出字段 / 改 `field` / 让「字段不存在」报错而不是静默通过（倾向后者） |
 | K12 | `quality-score` 规则用 `value_type = "str"`，该值**不在支持列表**中，靠 `match` 的兜底分支当成 `String` 处理而侥幸工作 | 中：`value_type` 写错时不会报「未知类型」，而是在读取时报出难以归因的错误（如把 DOUBLE 列当 String 读） | 待决策：解析期校验 `value_type` 白名单（与 `deny_unknown_fields` 同一立场：早失败优于静默错） |
 | K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15）；`engine/tests/transaction_affinity.rs` 的 `as_i64` 编译错误也已修（`Value` 只有 `as_int`，随 `b838ea0` 提交） |
+| K14 | 清理旧快照后，**存活版本的 `parent_version_id` 可能指向已被删的父版**（链的起段被剪掉） | 低（外观级）：今天只用它打「首版」标记——被剪过的那一版会得不到标记；对比不沿链走（直接拿两行比），分析结论不受影响 | 待决：清理时一并把断链头部标成首版 / 或在界面改成「这一版之前的历史已清理」。要么就维持现状（不清就不存在这个问题） |
 
 ## 12. 待确认
 

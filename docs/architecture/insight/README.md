@@ -3,7 +3,7 @@
 > **一句话**：把数据变成**结论**——「这份数据长什么样」（库 / 表 / 列画像）与「它能不能用」（四维质量评分），并把「新增一种洞察」从改 Rust 降级为**加一个 TOML 规则文件**（内置 18 条，用户可扩展）。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**Phase 5 二批已落地**（2026-09-17）——Phase 0–4 全部完成；Phase 5 完成**快照历史**（保存入口 + 版本列表 + 存储用量）与**版本对比**（点更早的一版 → `旧 → 新 (±Δ)` 四档标记）；测试 **196 项 + 集成 12 项**全绿。下一批：**TTL 清理入口**（等 Q4/Q5 拍板保留天数与双写补偿）；宿主侧还欠**表入口**（`Shared::open_insight_table` + 导航右键「查看统计」）、Schema 导出按钮与下钻。逐项进度见 `insight-dev-plan.md` §0。
+> 状态：**Phase 5 三批已落地**（2026-09-17）——Phase 0–5 全部完成；Phase 5：快照历史（保存入口 + 版本列表 + 存储用量）· 版本对比（点更早的一版 → `旧 → 新 (±Δ)` 四档标记）· 存储清理（确认框 + 成对删 + 回执）。测试 **199 项 + 集成 13 项**全绿。下一步：**宿主侧欠账**（表入口 `Shared::open_insight_table` + 导航右键「查看统计」、Schema 导出按钮与下钻）与保留天数拍板（Q4/Q5）。逐项进度见 `insight-dev-plan.md` §0。
 >
 > **边界**：本模块拥有**画像 / 评分 / 规则 / 报告 / 快照历史**。SQL 执行与结果集属 M5 编辑器；对象树与元数据内省属 M4；连接与运行态属 M3；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接，只经服务/命令与它们协作。
 
@@ -70,7 +70,7 @@
 | 表探查 | `crates/insight/src/table_profile_service.rs`（源库内省）、`insight_engine.rs`（临时表内省 `get_temp_table_profile`）（现状：✅ Phase 3 一批） |
 | 结构洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（分析器）+ `schema_view.rs`（视图模型与导出）（现状：✅ Phase 4 一批；导出与下钻的宿主侧待接） |
 | 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：✅ 已归位） |
-| 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位；**同一进程对同一项目库不得重叠 open**，见架构 D41） |
+| 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位；**同一进程对同一项目库不得重叠 open**，见架构 D41；按天数清理已可用） |
 | 服务门面（画像 / 评分 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
 | 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（现状：✅ 五 Tab 全部落地——列画像 + 质量卡 · 表探查 + 评估全表 · 多列分析 · Schema 报告 · 快照历史与版本对比；不显示假数据） |
 | 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 二批） |
@@ -118,14 +118,14 @@ cargo check --workspace --all-targets -j 2
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **196 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10（Schema 视图模型与导出 9 + 结构 Tab 1）；Phase 5 两批新增 12（历史：视图模型 3 + 历史 Tab 实体 2 + 保存接缝 1；对比：视图模型 4 + 视图实体 2）），另有**集成测试 12 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史与版本对比（真项目目录）** → 视图模型），**新增功能不得减少**。
+- **基线**：`cargo test -p rds-insight` 当前 **199 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10（Schema 视图模型与导出 9 + 结构 Tab 1）；Phase 5 三批新增 15（历史：视图模型 3 + 历史 Tab 实体 2 + 保存接缝 1；对比：视图模型 4 + 视图实体 2；清理：存储层 1 + 回执 1 + 视图 1）），另有**集成测试 13 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** → 视图模型），**新增功能不得减少**。
 
 ## 6. 文档地图
 
 | 文档 | 什么时候读它 |
 | --- | --- |
 | `insight-prototype-design.md` | **长什么样 / 怎么交互**：核心语义与规则作用域 / 右 Dock 面板布局 / 四种目标视图分派 / 状态与空态矩阵 / 规则管理对话框 / 主题映射与尺寸常量 / GPUI 落点 / **§10 与 V1 的逐项对照** |
-| `insight-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型与八条不变式 / 分层与 crate 归属 / 状态所有权（单一写入者）/ 六条数据流 / **D1–D44 决策表** / 并发与资源 / 降级矩阵 / 测试策略 / 实现位置映射 / **§11 已知问题 K1–K12（权威）** / §12 待确认 Q1–Q7 |
+| `insight-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型与八条不变式 / 分层与 crate 归属 / 状态所有权（单一写入者）/ 六条数据流 / **D1–D47 决策表** / 并发与资源 / 降级矩阵 / 测试策略 / 实现位置映射 / **§11 已知问题 K1–K14（权威）** / §12 待确认 Q1–Q7 |
 | `insight-dev-plan.md` | **做什么、做到哪**：已确认决策 9 项 / **§0 进度记录** / 现状盘点 / **§2 五项实证缺陷** / 目标 crate 边界 / **§4 规则作用域与索引表设计** / Phase 0–5 任务 / 测试场景 T1–T14 / 风险 R1–R7 / 实现位置映射 / 验证命令 |
 | `insight-user-guide.md` | **怎么用**：入口 / 界面导览与怎么看数字 / 典型流程 / **§4 规则编写指南（对外契约：三层作用域 · 字段全表 · `value_type` 表 · 质量门控语义 · 可照抄示例 · 安全边界）** / **§4.8 内置规则 18 条一览** / FAQ 排查 / USIT 验收清单 |
 | `insight-prototype.html` | 可交互示意稿（明暗双主题；列画像 / 质量卡 / 表探查 / 规则管理含禁用与校验失败态） |
@@ -145,5 +145,5 @@ cargo check --workspace --all-targets -j 2
 | ✅ Phase 2 已落地 | 列级质量评分卡 · 规则管理对话框（三层分组 / 启停 / 校验错误行 / 新建规则）· K7 全局规则目录 · 表级评估全表 + 进度（逐项见开发方案 §0） |
 | Phase 3（已落地） | 表探查视图 + 列名下钻 · 多列分析（真实列清单 + 规则执行 + 结果渲染）；⬜ 宿主侧入口（`Shared::open_insight_table` 与导航右键「查看统计」） |
 | Phase 4（进行中） | ✅ 门面 · 报告视图 · 导出函数 · 下钻事件；⬜ 导出按钮与下钻的宿主侧接线（选路径 / 登记临时表） |
-| Phase 5（进行中） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（点更早的一版 → `旧 → 新 (±Δ)`，方向固定为「选中 → 最新」）；⬜ TTL 清理入口（等 Q4/Q5） |
+| Phase 5（已完成） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（方向固定为「选中 → 最新」）· ✅ 存储清理（确认框 · 成对删 · 回执）；⬜ 保留天数取值待拍板（Q4/Q5） |
 | 待确认 | **规则 SQL 安全边界（架构 §12 Q1）** · 存储清理默认天数 · `table-quality-overview` 规则处置 |

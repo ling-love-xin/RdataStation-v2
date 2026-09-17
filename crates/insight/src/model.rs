@@ -922,6 +922,15 @@ impl MultiColumnView {
 /// （与采样提示 D15 同一立场：别让人把截断的列表当成全部）。
 pub const HISTORY_PAGE_SIZE: usize = 10;
 
+/// 清理旧快照时默认保留的天数。
+///
+/// **界面文案与实际切档共用这一处**（对话框写「N 天前」、接缝按同一个 N 删），
+/// 否则会出现「说好清 30 天却按 7 天删」这类最坏的不一致。
+///
+/// 取值待拍板（架构 §12 **Q4**）：先按原型的 30 天落地——它只影响「多久算旧」，
+/// 与「每列最多留 N 版」（`store::body::MAX_VERSIONS_PER_COLUMN`）是两道独立的闸。
+pub const SNAPSHOT_RETENTION_DAYS: i64 = 30;
+
 /// 快照历史（「历史」Tab，Phase 5.1 / 5.2）
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoryView {
@@ -938,6 +947,44 @@ pub struct HistoryView {
     /// 对比结果也在**载荷**里而不在视图字段里：面板「有没有对比"只认载荷，
     /// 视图只管「用户点了哪一版」（与 D35「渲染以载荷为准」同一口径）。
     pub diff: Option<VersionDiffView>,
+    /// 上次清理的回执（Phase 5.3）：同样是载荷的一部分——下次刷新自然消失，
+    /// 正是「一次性动作结果」该有的寿命。
+    pub cleanup: Option<CleanupOutcome>,
+}
+
+/// 一次清理的结果（面板给一行回执）。
+///
+/// 两侧条数分开报：正文与元数据是**成对写入**的（D16），删的时候也必须成对——
+/// 两边对不上就是半写的信号，不能被一句「清理成功」盖过去。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CleanupOutcome {
+    /// 切档用的天数（界面写的就是这个数）
+    pub days: i64,
+    /// 正文删掉的条数（项目 DuckDB）
+    pub body_removed: usize,
+    /// 元数据删掉的条数（项目 SQLite）
+    pub meta_removed: usize,
+}
+
+impl CleanupOutcome {
+    /// 两侧对上了（没有半写残留）
+    pub fn is_balanced(&self) -> bool {
+        self.body_removed == self.meta_removed
+    }
+
+    /// 面板那行回执
+    pub fn summary(&self) -> String {
+        if self.body_removed == 0 && self.meta_removed == 0 {
+            return format!("没有 {} 天前的快照", self.days);
+        }
+        if !self.is_balanced() {
+            return format!(
+                "正文删了 {} 条、版本链删了 {} 条，两侧对不上（可能有一次半写）",
+                self.body_removed, self.meta_removed
+            );
+        }
+        format!("清理了 {} 条快照（{} 天前）", self.body_removed, self.days)
+    }
 }
 
 /// 一个版本（列表里的一行）
@@ -1246,6 +1293,7 @@ impl HistoryView {
                 .collect(),
             truncated: entries.len() >= HISTORY_PAGE_SIZE,
             diff: None,
+            cleanup: None,
             stats: stats.map(|stats| StorageStatsView {
                 total_snapshots: stats.total_snapshots,
                 unique_columns: stats.unique_columns,
@@ -1272,6 +1320,12 @@ impl HistoryView {
     /// 放下对比结果（用户点 ✕，或基准版已不在列表里）
     pub fn without_diff(mut self) -> Self {
         self.diff = None;
+        self
+    }
+
+    /// 挂上清理回执（服务删完再读回列表时调用）
+    pub fn with_cleanup(mut self, outcome: CleanupOutcome) -> Self {
+        self.cleanup = Some(outcome);
         self
     }
 }
@@ -2479,6 +2533,41 @@ mod tests {
         assert!(HistoryView::from_entries("amount", &full, None).truncated);
         let short = &full[..HISTORY_PAGE_SIZE - 1];
         assert!(!HistoryView::from_entries("amount", short, None).truncated);
+    }
+
+    #[test]
+    fn cleanup_receipt_states_what_it_actually_deleted() {
+        let none = CleanupOutcome {
+            days: SNAPSHOT_RETENTION_DAYS,
+            body_removed: 0,
+            meta_removed: 0,
+        };
+        assert!(none.is_balanced());
+        assert!(
+            none.summary().contains("没有 30 天前"),
+            "没东西可清时说清楚：{}",
+            none.summary()
+        );
+
+        let done = CleanupOutcome {
+            days: 30,
+            body_removed: 3,
+            meta_removed: 3,
+        };
+        assert_eq!(done.summary(), "清理了 3 条快照（30 天前）");
+
+        // 两侧对不上 = 半写信号（D16）：不能被一句「清理完成」盖过去
+        let uneven = CleanupOutcome {
+            days: 30,
+            body_removed: 3,
+            meta_removed: 2,
+        };
+        assert!(!uneven.is_balanced());
+        let text = uneven.summary();
+        assert!(
+            text.contains('3') && text.contains('2') && text.contains("对不上"),
+            "两侧条数都要写出来：{text}"
+        );
     }
 
     // ==================== 版本对比（Phase 5.2） ====================

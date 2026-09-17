@@ -289,6 +289,33 @@ impl InsightService {
         Ok(history_view_of(&stores, column, entries).with_diff(diff))
     }
 
+    /// 清理 `days` 天前的快照（Phase 5.3）：正文与元数据**成对删**，返回刷新后的历史。
+    ///
+    /// `days` 由调用方给（接缝传 `model::SNAPSHOT_RETENTION_DAYS`）：服务不持策略，
+    /// 但界面上写的天数与实际切档必须是同一个值（那个常量就是这层约定的落脚点）。
+    ///
+    /// 两侧条数都带回去：对不上是半写的信号（D16），不能只报一个数就说「清理完成」。
+    pub fn cleanup_old_snapshots(
+        project_root: Option<&Path>,
+        column: &str,
+        days: i64,
+    ) -> Result<HistoryView, CoreError> {
+        let root = project_root.ok_or_else(no_project)?;
+        let stores = block_on(crate::store::ProjectInsightStores::open(root))?;
+        let (body_removed, meta_removed) = block_on(cleanup_old_insight_snapshots(
+            days as i32,
+            &stores.storage,
+            &stores.meta,
+        ))?;
+        let outcome = crate::model::CleanupOutcome {
+            days,
+            body_removed: body_removed.max(0) as usize,
+            meta_removed,
+        };
+        // 读回列表同样**复用同一个库句柄**（D41：同进程对同一项目库不得重叠 open）
+        Ok(read_history(&stores, column)?.with_cleanup(outcome))
+    }
+
     /// 错误 → 面板可展示的语义（文案 + 是否可重试）。
     ///
     /// 识别方式是**按消息内容**匹配：引擎侧的 DuckDB 错误还没有结构化分类，

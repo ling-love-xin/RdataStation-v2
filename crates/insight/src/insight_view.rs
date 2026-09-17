@@ -20,14 +20,15 @@
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::accordion::Accordion;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::description_list::{DescriptionItem, DescriptionList, DescriptionText};
+use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::radio::Radio;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Size, Sizable as _, Theme, WindowExt as _};
 use gpui_kit::*;
 
 use crate::commands::InsightRefresh;
@@ -36,6 +37,7 @@ use crate::model::{
     HistoryEntryView, HistoryView, InsightPanelState, InsightTarget, MultiColumnView,
     MultiResultView, MultiRuleView, NoteLevel, PanelData, PanelTab, QualityNote, SampleCell, StatRow,
     TableColumnView, TableProfileView, VersionDiffView, HISTORY_PAGE_SIZE,
+    SNAPSHOT_RETENTION_DAYS,
 };
 use crate::quality_scorer::Grade;
 use crate::rule_view::RulesView;
@@ -97,6 +99,8 @@ pub enum InsightEvent {
     HistoryRequested { column: String },
     /// 请宿主对比某一版与最新一版（读两版正文，方向固定为「选中 → 最新」）
     VersionCompareRequested { column: String, version_id: String },
+    /// 请宿主清理旧快照（按保留天数删正文与版本链，成对删）
+    SnapshotCleanupRequested { column: String },
 }
 
 /// 列画像四区（顺序即渲染顺序）
@@ -161,6 +165,8 @@ pub struct InsightView {
     multi_notice: Option<String>,
     /// 快照保存中（按钮置灰；历史列表照旧可见）
     history_saving: bool,
+    /// 快照清理中（删除不可撤销，按钮同样要置灰防连点）
+    history_cleaning: bool,
     /// 历史 Tab 的对比基准（选中的那一版的 `version_id`）。
     ///
     /// 它与载荷里的 `diff` 说的是同一件事：出数时由载荷反推（[`Self::set_history`]），
@@ -195,6 +201,7 @@ impl InsightView {
             multi_running: false,
             multi_notice: None,
             history_saving: false,
+            history_cleaning: false,
             compare_target: None,
             history_notice: None,
             open_schema_sections: [true; SchemaSection::ALL.len()],
@@ -301,6 +308,7 @@ impl InsightView {
             .map(|diff| diff.baseline_version.clone());
         self.data = std::mem::take(&mut self.data).with_history(history);
         self.history_saving = false;
+        self.history_cleaning = false;
         self.history_notice = None;
         self.state = InsightPanelState::Data;
         cx.notify();
@@ -368,6 +376,82 @@ impl InsightView {
         }
     }
 
+    /// 历史 Tab 的「清理」：先弹确认框（删快照不可撤销），确认后才发请求。
+    ///
+    /// 天数取自 `SNAPSHOT_RETENTION_DAYS`（与接缝实际切档同一个常量）：
+    /// 对话框里写的数字必须就是真会执行的那个。
+    pub fn begin_cleanup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let days = SNAPSHOT_RETENTION_DAYS;
+        let current = self
+            .data
+            .as_history()
+            .and_then(|history| history.stats_line())
+            .unwrap_or_default();
+        let entity = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let theme = cx.theme();
+            let mut body = div()
+                .v_flex()
+                .w_full()
+                .gap_2()
+                .text_sm()
+                .child(
+                    div()
+                        .text_color(theme.colors.foreground)
+                        .child(format!("删除 {days} 天前的快照。")),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child("正文与版本链一并删除，不可撤销。"),
+                );
+            // 空的时候不摆一行「当前：」——那是没话找话
+            if !current.is_empty() {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.muted_foreground)
+                        .child(format!("当前：{current}")),
+                );
+            }
+            dialog
+                .title("清理旧快照")
+                .child(body)
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("清理")
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text("取消")
+                        .show_cancel(true),
+                )
+                .on_ok({
+                    let entity = entity.clone();
+                    move |_, _window, app| {
+                        entity.update(app, |view, cx| view.request_cleanup(cx));
+                        true
+                    }
+                })
+                .on_cancel(|_, _, _| true)
+        });
+    }
+
+    /// 确认后的发请求（清完的列表与回执由接缝回填）
+    pub fn request_cleanup(&mut self, cx: &mut Context<Self>) {
+        let Some(InsightTarget::Column { column, .. }) = self.target.clone() else {
+            return;
+        };
+        self.history_cleaning = true;
+        self.history_notice = None;
+        cx.emit(InsightEvent::SnapshotCleanupRequested { column });
+        cx.notify();
+    }
+
+    /// 快照是否正在清理（按钮置灰的依据；也供测试断言）
+    pub fn history_cleaning(&self) -> bool {
+        self.history_cleaning
+    }
+
     /// 历史 Tab 的「保存」：发请求（重取领域画像 + 双写都归接缝）
     pub fn request_snapshot_save(&mut self, cx: &mut Context<Self>) {
         let Some(InsightTarget::Column {
@@ -385,9 +469,10 @@ impl InsightView {
         cx.notify();
     }
 
-    /// 保存 / 读取历史失败：只挂一条行内提示（列表与目标头照旧可见）
+    /// 保存 / 读取历史 / 清理 失败：只挂一条行内提示（列表与目标头照旧可见）
     pub fn set_history_notice(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
         self.history_saving = false;
+        self.history_cleaning = false;
         self.history_notice = Some(message.into());
         cx.notify();
     }
@@ -1366,6 +1451,31 @@ impl InsightView {
                         .child(section_title("快照历史", theme)),
                 )
                 .child(
+                    Button::new("insight-history-cleanup")
+                        .ghost()
+                        .small()
+                        // 删快照不可撤销：没项目、没快照、或正在跑动作时不给入口
+                        .label(if self.history_cleaning {
+                            "清理中…"
+                        } else {
+                            "清理"
+                        })
+                        .disabled(!self.project_open || !self.history_busy_ready(history))
+                        .tooltip(if !self.project_open {
+                            "清理旧快照（需先打开项目）"
+                        } else if history.is_empty() {
+                            "还没有快照可清理"
+                        } else {
+                            "删掉 30 天前的快照（正文与版本链一并删，不可撤销）"
+                        })
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, window, app| {
+                                entity.update(app, |view, cx| view.begin_cleanup(window, cx))
+                            }
+                        }),
+                )
+                .child(
                     Button::new("insight-history-save")
                         .small()
                         .label(if self.history_saving {
@@ -1399,6 +1509,21 @@ impl InsightView {
                     .text_color(colors.danger)
                     .child(Icon::new(IconName::TriangleAlert).size(inline_icon))
                     .child(div().flex_1().min_w_0().child(notice.clone())),
+            );
+        }
+
+        // 清理回执（一次性动作的结果）：两侧条数对不上时转 danger——那是半写的信号
+        if let Some(outcome) = &history.cleanup {
+            body = body.child(
+                div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(if outcome.is_balanced() {
+                        colors.muted_foreground
+                    } else {
+                        colors.danger
+                    })
+                    .child(outcome.summary()),
             );
         }
 
@@ -1445,6 +1570,12 @@ impl InsightView {
         }
 
         body
+    }
+
+    /// 清理入口能不能点：项目开着、列表里有东西、且当前没有别的历史动作在跑
+    /// （保存与清理都在动同一批快照，不允许并行）
+    fn history_busy_ready(&self, history: &HistoryView) -> bool {
+        !history.is_empty() && !self.history_saving && !self.history_cleaning
     }
 
     /// 版本对比面板（Phase 5.2）：头行（与谁比 + 关掉）+ 逐字段 `旧 → 新` + 差值。
@@ -2511,12 +2642,16 @@ fn truncate(text: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{AppContext as _, TestAppContext};
+    use gpui_kit::{
+        div, AppContext as _, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, Window,
+    };
 
     use super::{truncate, InsightEvent, InsightView};
     use crate::model::{
         ColumnProfileView, HistoryView, InsightPanelState, InsightTarget, MultiColumnView,
         MultiResultView, MultiRuleView, PanelTab, TableProfileView, VersionDiffView,
+        SNAPSHOT_RETENTION_DAYS,
     };
     // 领域类型从 crate 根再导出引用（`model.rs` 里对 `types` 的 `use` 是私有的）
     use crate::{
@@ -3760,6 +3895,136 @@ mod tests {
             );
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+
+    /// 清理：入口要过确认框（删快照不可撤销），确认后才发请求，回执落在载荷里
+    #[gpui_kit::test]
+    fn cleanup_asks_first_and_reports_in_payload(cx: &mut TestAppContext) {
+        use gpui_kit::component::{Root, WindowExt as _};
+
+        use crate::model::CleanupOutcome;
+        use crate::store::InsightVersionEntry;
+
+        /// 窗口根必须是组件库的 `Root`（`open_dialog` / `render_dialog_layer` 依赖它）
+        struct Harness {
+            panel: Entity<InsightView>,
+        }
+
+        impl Render for Harness {
+            fn render(
+                &mut self,
+                window: &mut Window,
+                cx: &mut gpui_kit::Context<Self>,
+            ) -> impl IntoElement {
+                let mut root = div().size_full().child(self.panel.clone());
+                if let Some(layer) = Root::render_dialog_layer(window, cx) {
+                    root = root.child(layer);
+                }
+                root
+            }
+        }
+
+        cx.update(gpui_kit::init);
+        let panel = cx.new(InsightView::new);
+        let panel_in = panel.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let harness = cx.new(|_cx| Harness { panel: panel_in });
+            Root::new(harness, window, cx)
+        });
+
+        // 有项目 + 一版快照：入口才可用
+        cx.update(|_window, cx| {
+            panel.update(cx, |view, cx| {
+                view.set_project_open(true, cx);
+                view.set_target(column_target(), cx);
+                view.set_tab(PanelTab::History, cx);
+                view.set_history(
+                    HistoryView::from_entries(
+                        "amount",
+                        &[InsightVersionEntry {
+                            snapshot_id: "snap-1".into(),
+                            column_name: "amount".into(),
+                            data_type: Some("DOUBLE".into()),
+                            stats_json: "{}".into(),
+                            version_id: "aaaaaaaa-1111".into(),
+                            parent_version_id: None,
+                            checksum: "sum".into(),
+                            created_at: "2026-09-15 14:22".into(),
+                        }],
+                        None,
+                    ),
+                    cx,
+                );
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        panel.read_with(cx, |view, _| {
+            assert!(
+                view.history_busy_ready(view.data().as_history().expect("历史载荷")),
+                "有快照且无动作在跑时，清理入口应可用"
+            );
+        });
+
+        // 点入口：只弹确认框，**不发请求**（此时删库是不对的）
+        cx.update(|window, cx| {
+            panel.update(cx, |view, cx| view.begin_cleanup(window, cx));
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.update(|window, cx| window.has_active_dialog(cx)),
+            "清理必须过一道确认框"
+        );
+        assert!(!panel.read_with(cx, |view, _| view.history_cleaning()));
+
+        // 确认后才发请求（确认按钮的回调就是这个方法）
+        cx.update(|_window, cx| {
+            panel.update(cx, |view, cx| view.request_cleanup(cx))
+        });
+        assert!(
+            panel.read_with(cx, |view, _| view.history_cleaning()),
+            "确认后立即进入「清理中」（按钮置灰的依据）"
+        );
+        // 清理中不允许再点一次（保存与清理都在动同一批快照）
+        panel.read_with(cx, |view, _| {
+            assert!(!view.history_busy_ready(view.data().as_history().expect("历史载荷")))
+        });
+
+        // 出数：列表 + 回执一起回来（没东西可清也是一种结果，不是错误）
+        cx.update(|_window, cx| {
+            panel.update(cx, |view, cx| {
+                view.set_history(
+                    HistoryView::from_entries(
+                        "amount",
+                        &[InsightVersionEntry {
+                            snapshot_id: "snap-1".into(),
+                            column_name: "amount".into(),
+                            data_type: Some("DOUBLE".into()),
+                            stats_json: "{}".into(),
+                            version_id: "aaaaaaaa-1111".into(),
+                            parent_version_id: None,
+                            checksum: "sum".into(),
+                            created_at: "2026-09-15 14:22".into(),
+                        }],
+                        None,
+                    )
+                    .with_cleanup(CleanupOutcome {
+                        days: SNAPSHOT_RETENTION_DAYS,
+                        body_removed: 0,
+                        meta_removed: 0,
+                    }),
+                    cx,
+                );
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        panel.read_with(cx, |view, _| {
+            assert!(!view.history_cleaning(), "出数后「清理中」要落回");
+            assert_eq!(view.state(), &InsightPanelState::Data);
+            let history = view.data().as_history().expect("历史载荷");
+            let receipt = history.cleanup.as_ref().expect("回执应在载荷里");
+            assert!(receipt.is_balanced() && receipt.days == SNAPSHOT_RETENTION_DAYS);
+            assert_eq!(history.entries.len(), 1, "没东西可清：列表照旧");
+        });
     }
 
     #[test]

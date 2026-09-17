@@ -315,11 +315,17 @@ impl InsightColumnStore {
             ))
         })?;
 
+        // 天数直接拼进 SQL：**DuckDB 不允许在 `INTERVAL ? DAY` 里用绑定参数**
+        // （实测报 `Parser Error: syntax error at or near "?"`——这段代码自迁入以来
+        // 一次也没跑通过，是「清理旧快照」这条路径的首个真调用才发现）。
+        // 插入的只能是 `i64`（不是字符串），没有注入面。
         let deleted = conn
             .execute(
-                "DELETE FROM insight_column_snapshots
-             WHERE created_at < (CURRENT_TIMESTAMP - INTERVAL ? DAY)",
-                duckdb::params![days],
+                &format!(
+                    "DELETE FROM insight_column_snapshots
+                     WHERE created_at < (CURRENT_TIMESTAMP - INTERVAL {days} DAY)"
+                ),
+                [],
             )
             .map_err(|e| {
                 CoreError::storage(StorageError::Persistence {

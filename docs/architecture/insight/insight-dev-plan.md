@@ -23,6 +23,25 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Phase 5 三批：存储清理（5.4 收尾）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **199 项** + 集成 **13 项**全绿；本批文件 `cargo clippy --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 入口 | 历史 Tab 头行的「清理」：无项目 / 无快照 / 有动作在跑三种情况置灰，且**各自写明原因**（不是点了没反应） | `insight_view.rs`（`begin_cleanup` / `history_busy_ready`） |
+| 确认框 | `window.open_dialog` + `DialogButtonProps`（「清理」取 danger 变体）——**在 crate 内就能开**（规则对话框同款），不需要宿主配合；框内写明「删 30 天前的快照」「正文与版本链一并删除，不可撤销」与「当前：存储 … · N 个快照」 | `insight_view.rs` |
+| 天数口径 | `model::SNAPSHOT_RETENTION_DAYS = 30`：对话框写的数与实际切档取**同一个常量**（事件不带天数，避免多一个入口就多一个数） | `model.rs` + `jobs.rs` |
+| 回执 | `HistoryView.cleanup: Option<CleanupOutcome>`（载荷，下次刷新自然消失）；**两侧条数分开报**：对不上就是半写信号（D16），行内改 danger。没东西可清时说「没有 30 天前的快照」，不报假成功 | `model.rs` + `insight_view.rs` |
+| 接缝 | `SnapshotCleanupRequested` → `request_cleanup`（保留天数由接缝持有）；失败只挂行内提示（列表与快照都还在） | `jobs.rs` |
+| **修的真问题** | `InsightColumnStore::cleanup_older_than` 写的是 `created_at < (CURRENT_TIMESTAMP - INTERVAL ? DAY)`——**DuckDB 不接受 `INTERVAL` 里的绑定参数**（实测 `Parser Error: syntax error at or near "?"`），所以自迁入以来这条路径**一次也没跑通过**。现改为把天数（`i64`，无注入面）拼入 SQL。是新写的存储层用例第一次真调它才暂露出来 | `store/body.rs` |
+| 测试 | 存储层 1（把两侧 `created_at` 回填到 40 天前 → 30 天档两侧各删 2；刚存的不受影响）+ 模型 1（回执三态：空操作 / 正常 / 两侧对不上）+ 视图 1（Root 窗口根：点入口只弹框不发请求 → 确认后发请求且不允许重入 → 回执随载荷回来）+ 接缝与集成各 1（空操作也要有回执、列表不动） | 各文件测试模块 |
+
+**覆盖率说明（不做假定性的「已完全覆盖」）**：真正的删除路径只在存储层验（那里能把时间回填）；服务层与接缝验的是「开库 → 调存储 → 贴回执 → 回列表」以及空操作时的诚实文案。服务层用 `days = 0` 去造删除**不可行**：DuckDB 的时间戳带亚秒而 SQLite 只到秒，0 天档会出现一边删一边不删（那反而是个值得知道的细节，但不是本批要钉的东西）。
+
+**Phase 5 完成**：5.1 保存入口、5.2 历史列表、5.3 版本对比、5.4 用量与清理全部落地。剩下的是**宿主侧欠账**（表入口 / Schema 导出按钮 / 下钻登记临时表），都在并行改动的 `panels/` 里。
+
+
 ### 2026-09-17 — Phase 5 二批：版本对比（5.2 收尾 + 5.3）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **196 项** + 集成 **12 项**全绿；`cargo test -p rds-workbench --test insight_entry` 2 项全绿（需临时带 `--features opener/reveal`，同上批）；本批文件 `cargo clippy --all-targets` 零告警）
@@ -639,7 +658,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | 5.1 | 保存快照入口（含 `entity_source`：conn / db / schema / table） | `insight/src/insight_view.rs` | ✅ 一批（`entity_source` 现写 `temp_table=…`：面板手里只有临时表，就如实写） |
 | 5.2 | 历史列表（`created_at` + 类型 + 版本链）+ 版本详情 | 同上 | ✅ 二批（另加短版本号与分页提示） |
 | 5.3 | 版本对比面板：差异字段与 `old → new (+Δ)` 摘要；颜色分增 / 减 / 不变**三态**（v1 定义了 `.val-same` 却从未使用，此处修正） | 同上 | ✅ 二批（另加「变了但算不出数值」一档，方向用箭头而不用颜色暗示好坏） |
-| 5.4 | 存储用量（后端真实统计，**不用 v1 的 `history.length * 2` 前端估算**）+ 清理（默认 30 天，需确认） | 同上 | 用量 ✅ 一批 · 清理 ⬜（待 Q4/Q5 拍板） |
+| 5.4 | 存储用量（后端真实统计，**不用 v1 的 `history.length * 2` 前端估算**）+ 清理（默认 30 天，需确认） | 同上 | ✅ 用量（一批）· ✅ 清理（三批：确认框 + 回执 + 成对删；**天数取值仍待 Q4 拍板**） |
 
 ### Phase 6（候选，不在本期）
 
