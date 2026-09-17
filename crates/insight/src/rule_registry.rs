@@ -297,19 +297,198 @@ pub fn parse_rule_toml(content: &str) -> Result<RuleFile, CoreError> {
     Ok(rule)
 }
 
+/// 规则 SQL 的**关键字黑名单**：出现即拒（防呆，见 [`validate_rule_sql`]）。
+///
+/// 收的是「会碰外部世界或写库」的那一类，不是 SQL 全集——规则只该做只读聚合。
+/// 事务控制（`BEGIN`/`COMMIT`/`ROLLBACK`）也一并收：单条查询里写它们没有正当用途。
+const SQL_FORBIDDEN_KEYWORDS: [&str; 28] = [
+    "ATTACH", "DETACH", "COPY", "EXPORT", "IMPORT", "INSTALL", "LOAD", "UNLOAD", "PRAGMA",
+    "CALL", "SET", "CREATE", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
+    "REPLACE", "MERGE", "GRANT", "REVOKE", "VACUUM", "CHECKPOINT", "SECRET", "BEGIN",
+    "COMMIT", "ROLLBACK",
+];
+
+/// 校验规则 SQL：**只读聚合是唯一被允许的形态**（架构 D52 / K1）。
+///
+/// 定位是**防呆层，不是安全边界**——DuckDB 没有官方解析沙箱，黑名单天然有漏
+/// （见使用手册 §4.7）。它要挡的是「误写、或从别处抄来的规则顺手带了危险语句」，
+/// 把风险从「随手就能撞上」压到「得刻意构造」。
+///
+/// 四步判定（先剥字符串字面量 / 注释 / 双引号标识符，再打标记）：
+/// 1. 不能是多语句（只允许末尾一个分号）；
+/// 2. 首个关键字必须是 `SELECT` 或 `WITH`；
+/// 3. 不能出现 [`SQL_FORBIDDEN_KEYWORDS`]；
+/// 4. 不能调用会读文件 / 联网 / 附加外部库的表函数（[`is_forbidden_function`]）。
+///
+/// 剥掉双引号标识符是有意的：`"copy"` 是列名不是语句。所以**误报时的出口就是把名字
+/// 用双引号包起来**（报错文案会提示）——这也正是本模块一直建议的写法。
+fn validate_rule_sql(id: &str, template: &str) -> Result<(), CoreError> {
+    let normalized = strip_literals_and_comments(template);
+    // 末尾分号是手写习惯，放行；其余位置出现分号就是多语句
+    let body = normalized.trim_end().trim_end_matches(';').trim_end();
+    let hint = "规则只允许对临时表做只读查询";
+
+    if body.contains(';') {
+        return Err(CoreError::common(CommonError::General(format!(
+            "规则「{id}」的 SQL 只能是一条语句（分号只允许出现在末尾）；{hint}"
+        ))));
+    }
+
+    let tokens = sql_tokens(body);
+    let Some(first) = tokens.first() else {
+        return Err(CoreError::common(CommonError::General(format!(
+            "规则「{id}」的 SQL 是空的；{hint}"
+        ))));
+    };
+    if first != "SELECT" && first != "WITH" {
+        return Err(CoreError::common(CommonError::General(format!(
+            "规则「{id}」的 SQL 必须以 SELECT 或 WITH 开头（当前是「{first}」）；{hint}"
+        ))));
+    }
+
+    for token in &tokens {
+        if SQL_FORBIDDEN_KEYWORDS.contains(&token.as_str()) {
+            let msg = format!(
+                "规则「{id}」的 SQL 里不允许出现「{token}」；{hint}（列名 / 表名请加双引号）"
+            );
+            return Err(CoreError::common(CommonError::General(msg)));
+        }
+        if is_forbidden_function(token) {
+            let msg = format!(
+                "规则「{id}」不能调用表函数「{token}」（会读文件 / 联网 / 附加外部库）；{hint}"
+            );
+            return Err(CoreError::common(CommonError::General(msg)));
+        }
+    }
+
+    Ok(())
+}
+
+/// 会读文件 / 联网 / 附加外部库的表函数（对着 DuckDB 既有函数名写的）。
+///
+/// 前缀 / 后缀匹配而不是写全清单：这类函数由扩展提供，名字是开放集合
+/// （`read_*` 系、`*_scan` 系、`*_attach` 系、`*_query` 系），写全必漏。
+fn is_forbidden_function(token: &str) -> bool {
+    // read_csv / read_parquet / read_json / read_text / read_blob …
+    token.starts_with("READ_")
+        // parquet_scan / parquet_metadata / parquet_schema …
+        || token.starts_with("PARQUET_")
+        // sqlite_attach / postgres_attach …
+        || token.contains("_ATTACH")
+        // sqlite_scan / postgres_scan / delta_scan …
+        || token.ends_with("_SCAN")
+        // postgres_query / mysql_query …
+        || token.ends_with("_QUERY")
+        || matches!(token, "GLOB" | "SNIFF_CSV" | "QUERY" | "QUERY_TABLE")
+}
+
+/// 把字符串字面量、注释与双引号标识符替成空格，只留下会被当**语法**看的字符。
+///
+/// 不剥的话 `WHERE name = 'copy'` 里的字面量会撞黑名单——那是数据，不是语法。
+/// 替成空格而不是删掉：`SELECT"copy"FROM` 这种相邻写法不能把两个标记粘成一个。
+/// 未闭合的字面量原样收尾（真执行时 DuckDB 自己会报语法错，本函数不抢先报错）。
+fn strip_literals_and_comments(sql: &str) -> String {
+    enum State {
+        Normal,
+        Single,
+        Double,
+        Line,
+        Block,
+    }
+    let mut out = String::with_capacity(sql.len());
+    let mut state = State::Normal;
+    let mut chars = sql.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match state {
+            State::Normal => match c {
+                '\'' => {
+                    out.push(' ');
+                    state = State::Single;
+                }
+                '"' => {
+                    out.push(' ');
+                    state = State::Double;
+                }
+                '-' if chars.peek() == Some(&'-') => {
+                    chars.next();
+                    out.push(' ');
+                    state = State::Line;
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    out.push(' ');
+                    state = State::Block;
+                }
+                _ => out.push(c),
+            },
+            State::Single => {
+                if c == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        chars.next(); // '' 是转义，仍在字面量里
+                    } else {
+                        state = State::Normal;
+                        out.push(' ');
+                    }
+                }
+            }
+            State::Double => {
+                if c == '"' {
+                    if chars.peek() == Some(&'"') {
+                        chars.next(); // "" 是转义，仍在标识符里
+                    } else {
+                        state = State::Normal;
+                        out.push(' ');
+                    }
+                }
+            }
+            State::Line => {
+                if c == '\n' {
+                    state = State::Normal;
+                    out.push('\n');
+                }
+            }
+            State::Block => {
+                if c == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    state = State::Normal;
+                    out.push(' ');
+                }
+            }
+        }
+    }
+
+    out
+}
+
+/// 打标记：按「非字母数字下划线」切词并大写。
+///
+/// `{table}` 这类占位符也会切出一个标记（`TABLE`），且它不在黑名单里——占位符是
+/// 执行前才替换的，静态阶段只看得出它的名字。
+fn sql_tokens(sql: &str) -> Vec<String> {
+    sql.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_ascii_uppercase())
+        .collect()
+}
+
 /// 解析之后的语义校验。
 ///
-/// 两条都属「早失败优于静默错」（Q6 / Q7 已定）：
+/// 三条都属「早失败优于静默错」（Q6 / Q7 已定）：
 ///
-/// 1. **`value_type` 必须在白名单里**——否则写错类型名只会在运行期变成一句难以归因的
+/// 1. **规则 SQL 必须是单条只读查询**——模板原样交给 DuckDB 执行，而规则文件随项目
+///    走（能来自别人仓库），所以最便宜的防线是在解析期把「不是查询」的写法拒掉（D52）；
+/// 2. **`value_type` 必须在白名单里**——否则写错类型名只会在运行期变成一句难以归因的
 ///    读值错误（把 DOUBLE 列当字符串读）；
-/// 2. **质量门控的 `field` 必须真的存在**——否则「只设 `max`」的判定会**静默通过**
+/// 3. **质量门控的 `field` 必须真的存在**——否则「只设 `max`」的判定会**静默通过**
 ///    （`evaluate_quality` 里 `actual` 为 `None` 时只有 `min` 判失败），用户以为有门控
 ///    其实没有（K11 就是这种：内置的 `null-check` 指着不存在的 `null_rate`）。
 ///
 /// 报错文案要让用户能自己改：直接写出可用取值与当前已有的输出字段。
 fn validate_rule(rule: &RuleFile) -> Result<(), CoreError> {
     let id = &rule.meta.id;
+
+    validate_rule_sql(id, &rule.query.template)?;
 
     for field in &rule.output {
         if !VALUE_TYPES.contains(&field.value_type.as_str()) {
@@ -444,6 +623,68 @@ max = 0.1
             sample_toml()
         );
         assert!(parse_rule_toml(&ok).is_ok());
+    }
+
+    /// Q1 ① / D52：规则 SQL 的静态门只放行「单条只读查询」。
+    ///
+    /// 通过的一组里刻意放了两个**不该误报**的写法：字面量里的黑名单词（`'copy'`）
+    /// 与双引号引起来的名字（`"read_csv"`）——那是数据与标识符，不是语法。
+    #[test]
+    fn test_rule_sql_gate_accepts_read_only_queries() {
+        for sql in [
+            "SELECT COUNT(*) FROM {table}",
+            "WITH t AS (SELECT 1 AS x) SELECT * FROM t",
+            "SELECT COUNT(*) FROM {table} WHERE \"{col}\" IS NOT NULL;", // 末尾分号放行
+            "SELECT 'copy' AS label FROM {table}", // 字面量不算关键字
+            "SELECT \"read_csv\" FROM {table}",    // 双引号标识符不算表函数
+            "SELECT * FROM {table} -- 注释里写 DROP TABLE 也不算\n",
+            "SELECT /* ATTACH 藏在块注释里 */ COUNT(*) FROM {table}",
+        ] {
+            assert!(
+                validate_rule_sql("gate-ok", sql).is_ok(),
+                "应通过静态门: {sql}"
+            );
+        }
+    }
+
+    /// 被拒的一组：黑名单关键字 / 表函数 / 多语句 / 不是查询开头。
+    /// 每个用例都断言报错里点了名，否则用户不知道怎么改。
+    #[test]
+    fn test_rule_sql_gate_rejects_dangerous_forms() {
+        let cases: [(&str, &str); 7] = [
+            ("SELECT 1; DROP TABLE t", "只能是一条语句"),
+            ("DELETE FROM {table}", "必须以 SELECT 或 WITH 开头"),
+            ("ATTACH 'x.db' AS y", "必须以 SELECT 或 WITH 开头"),
+            (
+                "SELECT * FROM {table} WHERE 1 = 1; PRAGMA database_list",
+                "只能是一条语句",
+            ),
+            ("SELECT * FROM read_csv_auto('x.csv')", "READ_CSV_AUTO"),
+            ("SELECT * FROM sqlite_attach('x.db')", "SQLITE_ATTACH"),
+            ("SELECT * FROM {table} WHERE copy = 1 AND x = 2", "COPY"),
+        ];
+        for (sql, needle) in cases {
+            let err = validate_rule_sql("gate-bad", sql)
+                .expect_err(&format!("应被静态门拒掉: {sql}"));
+            let text = err.to_string();
+            assert!(text.contains(needle), "报错要点出原因（{needle}）: {text}");
+            assert!(text.contains("gate-bad"), "报错要点出规则 id: {text}");
+        }
+
+        // 空 SQL：不是「碰外部世界」，而是「什么也没写」
+        let err = validate_rule_sql("gate-bad", "  \n ").expect_err("空 SQL 应被拒");
+        assert!(err.to_string().contains("是空的"), "{err}");
+    }
+
+    /// 静态门接在 `parse_rule_toml` 上：用户看到的报错原文就是它给的（Q7 同一立场）。
+    #[test]
+    fn test_rule_sql_gate_hooked_into_parse() {
+        let toml = sample_toml().replace(
+            "template = \"SELECT {col} FROM {table}\"",
+            "template = \"SELECT * FROM read_parquet('x.parquet')\"",
+        );
+        let err = parse_rule_toml(&toml).expect_err("危险 SQL 应在解析期被拒");
+        assert!(err.to_string().contains("READ_PARQUET"), "{err}");
     }
 
     #[test]

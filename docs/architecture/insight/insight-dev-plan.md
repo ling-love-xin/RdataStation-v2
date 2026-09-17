@@ -23,6 +23,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — Q1 ① 落地：规则 SQL 静态门（D52）
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **205 项**（本批 +3）+ 集成 **13 项**全绿；16 条内置规则全过（`test_builtin_count_matches_constant` 的「内置规则必须全部可解析」就是回归网）；本批文件 clippy 零新增告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 四步判定 | ① 只能一条语句（仅末尾分号放行）；② 首个关键字必须是 `SELECT` / `WITH`；③ 关键字黑名单（`ATTACH`/`COPY`/`EXPORT`/`IMPORT`/`INSTALL`/`LOAD`/`UNLOAD`/`PRAGMA`/`CALL`/`SET`/`CREATE`/`INSERT`/`UPDATE`/`DELETE`/`DROP`/`ALTER`/`TRUNCATE`/`REPLACE`/`MERGE`/`GRANT`/`REVOKE`/`VACUUM`/`CHECKPOINT`/`SECRET`/`BEGIN`/`COMMIT`/`ROLLBACK`）；④ 表函数黑名单（`read_*` / `parquet_*` / `*_attach` / `*_scan` / `*_query` / `glob` / `sniff_csv` / `query` / `query_table`）——后两类按前缀 / 后缀匹配（这类函数由扩展提供，名字是开放集合，写全必漏） | `rule_registry.rs`（`validate_rule_sql` / `is_forbidden_function`） |
+| 防误报 | 校验前先剥**字符串字面量 / 注释 / 双引号标识符**（`strip_literals_and_comments`）：`WHERE name = 'copy'` 与 `"copy"` 都不算违规——字面量是数据、双引号是标识符。这也给了误报出口：**把名字用双引号包起来就能过**（报错文案直说） | 同上 |
+| 挂点 | 接在 `validate_rule` 第一条 → 注册表 / 索引器 / 测试共用 `parse_rule_toml` 一个入口，**用户在规则管理里看到的报错原文就是它给的** | 同上 |
+| 定位 | 防呆，**不是安全边界**（DuckDB 没有官方解析沙箱，黑名单天然有漏）。报错文案点出规则 id + 撞上的词 + 改法 | 架构 D52 / K1、手册 §4.7 |
+| 测试 | 通过组 7 例（含字面量 / 注释 / 双引号 / 末尾分号四个**不该误报**的）、拒绝组 7 例（多语句 / DML / DDL 开头 / `PRAGMA` / `read_csv_auto` / `sqlite_attach` / 未加引号的 `copy`）+ 空 SQL + **挂点回归**（把 `sample_toml` 的模板换成 `read_parquet(...)`，断言解析期报错） | `rule_registry.rs` 测试模块 |
+
+**对用户规则的破坏性变更（有意）**：写了多语句 / DDL / DML / 文件表函数的规则**现在会在解析期变无效**（规则管理里一行红字）。这是 Q1 ① 的全部目的——早失败优于「打开一个项目就执行了它带的 SQL」。下一档（真正的边界）是 **Q1 ③ 项目规则信任门**，需要先拍板产品语义。
+
 ### 2026-09-17 — K16 ③+④：内存闸与可观测（D51）
 
 **已完成并验证**（`cargo test -p rds-engine --lib` **357 项**全绿（本批新增 4：`manager` 3 + `temp_table` 1；总数里另有你在改的 `sql_service` / `history_store` 新增的用例）· `cargo test -p rds-insight --lib` **202 项** + 集成 **13 项**全绿；本批文件 clippy 零新增告警——`manager.rs` 那条 `collapsible_if` 是既有代码；workbench 侧因 `crates/editor` 在制品编译不过，**未跑** `insight_entry`）
