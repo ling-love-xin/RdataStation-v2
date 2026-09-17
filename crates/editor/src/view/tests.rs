@@ -3079,6 +3079,91 @@ fn a_finished_result_does_not_ask_for_more(cx: &mut TestAppContext) {
     assert!(!wants(cx), "第二段没拿满 → 到底了");
 }
 
+// ===== B15：本地筛选 / 排序 =====
+
+/// 【B15】筛选只作用于视图：网格里只剩命中的行，工具栏明示“已筛选 N / M 行”，清除后原样回来
+#[gpui_kit::test]
+fn filtering_hides_non_matching_rows_and_reports_it(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_sized_runner("select rows=3");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    assert_eq!(grid_rows(cx, &panel), 3, "三行都看得见");
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("1", cx)));
+    assert_eq!(grid_rows(cx, &panel), 1, "只剩命中的那行（值 = 1）");
+    let toolbar = cx
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .expect("有工具栏");
+    assert_eq!(
+        toolbar.filtered,
+        Some((1, 3)),
+        "工具栏要明示“已筛选 1 / 3 行”"
+    );
+    assert!(
+        toolbar.segments().iter().any(|segment| segment == "已筛选 1 / 3 行"),
+        "统计跟随筛选：{:?}",
+        toolbar.segments()
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-result-filter-clear"),
+        "有筛选词就摆 ✕（能一键回去）"
+    );
+
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("", cx)));
+    assert_eq!(grid_rows(cx, &panel), 3, "清除筛选：三行都回来");
+    let toolbar = cx
+        .update(|_window, cx| panel.read(cx).result_toolbar_for_test())
+        .expect("有工具栏");
+    assert_eq!(toolbar.filtered, None, "没筛选就不摆那一段");
+}
+
+/// 【B15】筛选是 300ms 防抖的（连打不会每敲一个字都重算）
+#[gpui_kit::test]
+fn filtering_waits_for_the_debounce(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_sized_runner("select rows=3");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.on_filter_input("1".to_string(), cx))
+    });
+    assert_eq!(grid_rows(cx, &panel), 3, "刚敲下去还没应用（防抖窗口内）");
+
+    // 测试里的 timer 是**虚拟时钟**：推进 400ms 越过防抖窗口，再让就绪的任务跑起来
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(400));
+    cx.run_until_parked();
+    assert_eq!(grid_rows(cx, &panel), 1, "防抖到点后筛选生效");
+}
+
+/// 【B15】导出跟随筛选（原型 §5.5：导出的就是当前筛选后的行集，并且要明示）
+#[gpui_kit::test]
+fn export_follows_the_filter(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_sized_runner("select rows=3");
+    let path = export_temp_path("filtered", "csv");
+    std::fs::remove_file(&path).ok();
+    attach_export_picker(&shared, Some(path.clone()));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(cx, &panel, "select rows=3", execution::ResultPlacement::Replace);
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.set_filter_for_test("1", cx)));
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.export_active_result(ExportFormat::Csv, cx));
+    });
+
+    let text = std::fs::read_to_string(&path).expect("要真的写出来");
+    assert_eq!(text, "n\n1", "导出的是筛选后的行（三行里只剩值 1 的那行）");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("导出回执");
+    assert!(message.contains("已筛选"), "回执要说明是筛选后的结果：{message}");
+    std::fs::remove_file(&path).ok();
+}
+
 // ===== B7：导出 =====
 
 /// 假导出路径选择器：记下（格式，默认文件名），返回给定路径（`None` = 用户取消）

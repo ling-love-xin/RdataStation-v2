@@ -128,13 +128,25 @@ const INSERT_ROWS_PER_STATEMENT: usize = 200;
 /// `table` 只在 [`ExportFormat::Insert`] 用（表名；调用方给 [`default_table_name`] 的结果）。
 /// 没有网格（失败 / 写语句）时返回空串——调用方该先看 [`ResultEntry::has_grid`]。
 pub fn encode(entry: &ResultEntry, format: ExportFormat, table: &str) -> String {
+    encode_rows(entry, format, table, &entry.rows)
+}
+
+/// 编码指定的行集（**本地筛选后导出**走这里：原型 §5.5 的口径是“导出的是当前筛选后的行集”）
+///
+/// 列名 / 表名 / 空判定仍按 `entry`（筛选只动“哪些行”，不动“哪些列”）。
+pub fn encode_rows(
+    entry: &ResultEntry,
+    format: ExportFormat,
+    table: &str,
+    rows: &[Vec<String>],
+) -> String {
     if !entry.has_grid() {
         return String::new();
     }
     match format {
-        ExportFormat::Csv => encode_csv(entry),
-        ExportFormat::Json => encode_json(entry),
-        ExportFormat::Insert => encode_insert(entry, table),
+        ExportFormat::Csv => encode_csv(&entry.columns, rows),
+        ExportFormat::Json => encode_json(&entry.columns, rows),
+        ExportFormat::Insert => encode_insert(entry, rows, table),
     }
 }
 
@@ -142,9 +154,9 @@ pub fn encode(entry: &ResultEntry, format: ExportFormat, table: &str) -> String 
 ///
 /// 行分隔用 `\n`（Excel 与各类命令行工具都认；CRLF 只在某些老旧 Excel 上更保险，不值得
 /// 让每次导出都多一批 `\r`）。
-fn encode_csv(entry: &ResultEntry) -> String {
-    let mut text = csv_row(&entry.columns);
-    for row in &entry.rows {
+fn encode_csv(columns: &[String], rows: &[Vec<String>]) -> String {
+    let mut text = csv_row(columns);
+    for row in rows {
         text.push('\n');
         text.push_str(&csv_row(row));
     }
@@ -171,14 +183,14 @@ fn csv_field(text: &str) -> String {
 ///
 /// `NULL` 给 JSON 的 `null`（与网格把 `NULL` 画成斜体同一个判据）；其余值都是**字符串**
 /// ——展示文本是什么就写什么，`1` 不会变数字（要类型化得有列类型，见模块说明）。
-fn encode_json(entry: &ResultEntry) -> String {
+fn encode_json(columns: &[String], rows: &[Vec<String>]) -> String {
     let mut text = String::from("[");
-    for (row_ix, row) in entry.rows.iter().enumerate() {
+    for (row_ix, row) in rows.iter().enumerate() {
         if row_ix > 0 {
             text.push(',');
         }
         text.push_str("\n  {");
-        for (col_ix, column) in entry.columns.iter().enumerate() {
+        for (col_ix, column) in columns.iter().enumerate() {
             if col_ix > 0 {
                 text.push(',');
             }
@@ -190,7 +202,7 @@ fn encode_json(entry: &ResultEntry) -> String {
         }
         text.push_str("\n  }");
     }
-    if entry.rows.is_empty() {
+    if rows.is_empty() {
         text.push(']');
     } else {
         text.push_str("\n]");
@@ -231,8 +243,8 @@ fn json_string(text: &str) -> String {
 /// （展示文本来自数字列时就是数字的样子）、其余一律单引号并双写内部单引号。
 /// 这条启发式与 DBeaver 的默认行为同类：**字符串列里存着 `123` 会被写成数字**——
 /// 按展示文本导出就必然有这个取舍。
-fn encode_insert(entry: &ResultEntry, table: &str) -> String {
-    if entry.rows.is_empty() {
+fn encode_insert(entry: &ResultEntry, rows: &[Vec<String>], table: &str) -> String {
+    if rows.is_empty() {
         return String::new();
     }
     let columns = entry
@@ -243,7 +255,7 @@ fn encode_insert(entry: &ResultEntry, table: &str) -> String {
         .join(", ");
     let target = quote_ident(table);
     let mut text = String::new();
-    for chunk in entry.rows.chunks(INSERT_ROWS_PER_STATEMENT) {
+    for chunk in rows.chunks(INSERT_ROWS_PER_STATEMENT) {
         if !text.is_empty() {
             text.push('\n');
         }

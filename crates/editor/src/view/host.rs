@@ -15,10 +15,11 @@ use gpui_kit::component::button::{Button, ButtonVariants as _, DropdownButton};
 use gpui_kit::component::dock::{
     BasePanel, DockArea, Panel as ComponentPanel, PanelEvent as BasePanelEvent, PanelId, TabGroup,
 };
-use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::Sizable as _;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
@@ -124,12 +125,22 @@ pub struct EditorHostPanel {
     pending_export: Option<PendingExport>,
     /// 【B5b】正在取下一段（滚动到底自动加载的防重入真值；同步给网格 delegate）
     fetching_more: bool,
+    /// 【B15】本地筛选框（原型 §5.5 的 `⌕ 筛选`；只作用于视图层，不重查）
+    filter_input: Entity<InputState>,
+    /// 【B15】筛选词的真值（输入框变化 → 防抖 300ms → 应用到网格）
+    filter_text: String,
+    /// 【B15】防抖版本号（连打时只让最后一次生效）
+    filter_version: u64,
+    /// 【B15】防抖任务句柄（仅持有；下一次输入会取代它）
+    filter_debounce: RefCell<Option<Task<()>>>,
     /// 结果轮询任务句柄（空闲即退出；句柄存活到下一次提交）
     exec_pump: RefCell<Option<Task<()>>>,
     /// 内容回写订阅：句柄即生命周期（释放即取消）
     _editor_sub: Option<Subscription>,
     /// 网格事件订阅（行选中 → 状态行的“已选第 N 行”要跟着变）
     _grid_sub: Option<Subscription>,
+    /// 【B15】筛选框订阅（输入 → 防抖）
+    _filter_sub: Option<Subscription>,
 }
 
 impl EditorHostPanel {
@@ -190,6 +201,23 @@ impl EditorHostPanel {
                 .find(&document)
                 .map(|doc| doc.content().to_string())
                 .unwrap_or_default(),
+        );
+
+        // 【B15】本地筛选框：输入变化走防抖（原型 §5.5 的 300ms），到点才重算视图行序
+        let filter_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_placeholder("筛选当前结果…", window, cx);
+            state
+        });
+        let filter_sub = cx.subscribe_in(
+            &filter_input,
+            window,
+            |this, state, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = state.read(cx).value().to_string();
+                    this.on_filter_input(text, cx);
+                }
+            },
         );
 
         // 结果网格：构造时一次建成，以后结果变化只 `refresh`（不重建，避免丢掉列宽 / 滚动位置）
@@ -253,9 +281,14 @@ impl EditorHostPanel {
             result_height: std::rc::Rc::new(std::cell::Cell::new(ui::RESULT_PANE_HEIGHT)),
             pending_export: None,
             fetching_more: false,
+            filter_input,
+            filter_text: String::new(),
+            filter_version: 0,
+            filter_debounce: RefCell::new(None),
             exec_pump: RefCell::new(None),
             _editor_sub: Some(sub),
             _grid_sub: Some(grid_sub),
+            _filter_sub: Some(filter_sub),
         }
     }
 
@@ -1150,10 +1183,12 @@ impl EditorHostPanel {
 
     /// 结果网格当前行数（供测试断言网格真的拿到了数据）
     pub fn grid_row_count_for_test(&self, cx: &App) -> usize {
-        self.grid.read(cx).delegate().row_count_for_test()
+        // 【B15】看的是**视图行数**：筛选生效时网格里就是命中那些行
+        self.grid.read(cx).delegate().visible_row_count()
     }
 
     /// 网格实体（测试用：滚动到底自动加载得真在表格上调 `load_more` 才算验到链路）
+    #[cfg(test)]
     pub(crate) fn grid_for_test(&self) -> Entity<TableState<ResultGridDelegate>> {
         self.grid.clone()
     }
@@ -1314,6 +1349,8 @@ impl EditorHostPanel {
                     failed: entry.failed(),
                     elapsed_ms: Some(entry.elapsed_ms),
                     connection: connection.clone(),
+                    // 【B15】筛选统计随后由 `refresh_filter_hint` 从网格真值填上
+                    filtered: None,
                 }),
                 // 【B5】状态行（⑦）：只有网格才给（写语句的“共 0 行”、失败时的“共 0 行”都是噪音）
                 entry.filter(|entry| entry.has_grid()).map(|entry| ResultStatus {
@@ -1343,6 +1380,8 @@ impl EditorHostPanel {
         let has_more = status.as_ref().is_some_and(|status| status.has_more);
         let loading_more = self.fetching_more;
         self.result_status = status;
+        // 【B15】筛选统计的真值在网格那边（视图行序是它算的）
+        self.refresh_filter_hint(cx);
         let (sql, can_copy) = extra.unwrap_or_default();
         self.result_sql = Some(sql).filter(|sql| !sql.trim().is_empty());
         self.result_can_copy = can_copy;
@@ -1532,6 +1571,75 @@ impl EditorHostPanel {
         grid.update(cx, |state, _cx| state.delegate_mut().set_loading_more(true));
     }
 
+    /// 【B15】筛选框输入（原型 §5.5：本地即时筛选、300ms 防抖、不重查）
+    ///
+    /// 防抖靠“版本号 + 定时任务”：连打时任务会被后来者取代，只有最后一次到点——
+    /// 否则每敲一个字都要重算整份视图行序（大结果集上能看见卡）。
+    pub(crate) fn on_filter_input(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.filter_text == text {
+            return;
+        }
+        self.filter_text = text;
+        self.filter_version = self.filter_version.wrapping_add(1);
+        let version = self.filter_version;
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| {
+            executor
+                .timer(std::time::Duration::from_millis(300))
+                .await;
+            _ = weak.update(cx, |panel, cx| {
+                if panel.filter_version == version {
+                    panel.apply_filter(cx);
+                }
+            });
+        });
+        *self.filter_debounce.borrow_mut() = Some(task);
+    }
+
+    /// 【B15】把当前筛选词应用到网格（事件路径：重算一次视图行序）
+    pub(crate) fn apply_filter(&mut self, cx: &mut Context<Self>) {
+        let filter = self.filter_text.clone();
+        let grid = self.grid.clone();
+        grid.update(cx, |state, cx| {
+            state.delegate_mut().set_filter(filter);
+            state.refresh(cx);
+        });
+        self.refresh_filter_hint(cx);
+        cx.notify();
+    }
+
+    /// 【B15】清除筛选（工具栏那个 ✕）：输入框清空也要走 change，所以直接一起做
+    pub(crate) fn clear_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter_text.clear();
+        self.filter_version = self.filter_version.wrapping_add(1);
+        self.filter_input
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.apply_filter(cx);
+    }
+
+    /// 【B15】测试用：直接应用筛选词（跳过 300ms 防抖，验“应用之后怎样”）
+    #[cfg(test)]
+    pub(crate) fn set_filter_for_test(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.filter_text = text.to_string();
+        self.apply_filter(cx);
+    }
+
+    /// 【B15】把“已筛选 N / M 行”写进结果工具栏（统计跟随筛选——原型 §5.5 的要求）
+    fn refresh_filter_hint(&mut self, cx: &mut Context<Self>) {
+        let (visible, total, filtering) = {
+            let delegate = self.grid.read(cx).delegate();
+            (
+                delegate.visible_row_count(),
+                delegate.data_row_count(),
+                !delegate.filter().trim().is_empty(),
+            )
+        };
+        if let Some(toolbar) = self.result_toolbar.as_mut() {
+            toolbar.filtered = filtering.then_some((visible, total));
+        }
+    }
+
     /// 切换结果集（结果集标签条点击）：选中项只有 `ResultStore` 能改，界面按它重画
     pub(crate) fn select_result_set(&mut self, index: usize, cx: &mut Context<Self>) {
         let changed = self
@@ -1625,22 +1733,35 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         let table = export::default_table_name(Some(&entry.sql), index);
-        let text = export::encode(entry, format, &table);
+        // 【B15】筛选中就导出筛后的行（原型 §5.5：导出的就是当前筛选后的行集，并且要明示）
+        let visible = {
+            let delegate = self.grid.read(cx).delegate();
+            (!delegate.filter().trim().is_empty()).then(|| delegate.visible_rows())
+        };
+        let text = match &visible {
+            Some(rows) => export::encode_rows(entry, format, &table, rows),
+            None => export::encode(entry, format, &table),
+        };
         // INSERT 对空结果给空串（没有行就没有语句）；CSV / JSON 空结果仍有表头 / `[]`
         if text.is_empty() {
             self.set_message(Some("这份结果没有可导出的行".to_string()), cx);
             return;
         }
         match std::fs::write(path, text) {
-            Ok(()) => self.set_message(
-                Some(format!(
-                    "已导出 {} 行（{}）→ {}",
-                    entry.row_count(),
-                    format.label(),
-                    path.display()
-                )),
-                cx,
-            ),
+            Ok(()) => {
+                let rows_text = match &visible {
+                    Some(rows) => format!("{} 行（已筛选）", rows.len()),
+                    None => format!("{} 行", entry.row_count()),
+                };
+                self.set_message(
+                    Some(format!(
+                        "已导出 {rows_text}（{}）→ {}",
+                        format.label(),
+                        path.display()
+                    )),
+                    cx,
+                )
+            }
             Err(error) => self.set_message(Some(format!("导出失败：{error}")), cx),
         }
     }
@@ -2284,6 +2405,30 @@ impl Render for EditorHostPanel {
                 )
                 .into_any_element()
             });
+            // 【B15】本地筛选框（原型 §5.5 的 `⌕ 筛选`）：只作用于视图层，不重查数据库；
+            // 输入走 300ms 防抖（`on_filter_input`），有词时给一个 ✕ 清除
+            let filter = div()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .w(rems(ui::RESULT_FILTER_WIDTH))
+                .debug_selector(|| "editor-result-filter".to_string())
+                .child(Input::new(&self.filter_input))
+                .when(!self.filter_text.trim().is_empty(), |row| {
+                    let entity = cx.entity();
+                    row.child(
+                        Button::new("editor-result-filter-clear")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-result-filter-clear".to_string())
+                            .label("✕")
+                            .on_click(move |_, window, app| {
+                                entity.update(app, |panel, cx| panel.clear_filter(window, cx));
+                            }),
+                    )
+                })
+                .into_any_element();
+
             // 动作：有网格才摆复制（没东西可复制就不摆）；有 SQL 就摆重跑（原位刷新）
             let copy = self.result_can_copy.then(|| {
                 let entity = cx.entity();
@@ -2425,6 +2570,7 @@ impl Render for EditorHostPanel {
                     toolbar,
                     status: self.result_status.clone(),
                     controls: result_grid::ResultControls {
+                        filter: Some(filter),
                         copy,
                         export,
                         refresh,

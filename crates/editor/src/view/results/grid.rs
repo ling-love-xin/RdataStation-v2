@@ -19,7 +19,7 @@ use std::rc::Rc;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableState};
+use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableState};
 use gpui_kit::*;
 
 use crate::ui;
@@ -45,6 +45,15 @@ pub struct ResultGridDelegate {
     loading_more: bool,
     /// 取下一段的回调（面板构造时注入）
     on_load_more: Option<LoadMoreHook>,
+    /// 【B15】本地筛选词（视图层：只影响看见与导出的行，**不重查数据库**）
+    filter: String,
+    /// 【B15】本地排序（列下标按**数据列**算，`0` = 第一数据列；`None` = 原顺序）
+    sort: Option<(usize, bool /* 降序 */)>,
+    /// 【B15】视图行序：当前看着的这一串行，元素是 `rows` 里的下标
+    ///
+    /// 筛选与排序都只改这个映射，**数据行一行不动**（所以清除筛选能原样恢复，
+    /// 也不会把“已抓到的窗口”搞乱）。行号列显示的是**视图行号**，不是数据行号。
+    view_rows: Vec<usize>,
 }
 
 impl ResultGridDelegate {
@@ -61,16 +70,94 @@ impl ResultGridDelegate {
         self.columns = columns;
         self.rows = rows;
         self.empty_text = "查询返回 0 行".to_string();
+        // 换了一份结果，旧的排序与筛选不该跟过来（列都可能不是同一批）
+        self.sort = None;
+        self.rebuild_view_rows();
     }
 
     /// 清空（切到无结果的模式 / 关闭文档时）
     pub fn clear(&mut self, text: impl Into<String>) {
         self.columns.clear();
         self.rows.clear();
+        self.view_rows.clear();
         self.empty_text = text.into();
         // 没有结果就没有“下一段”：留着会让滚动到底去取一份已经不存在的结果
         self.has_more = false;
         self.loading_more = false;
+    }
+
+    /// 【B15】设置本地筛选词（空 = 不筛）；只改视图行序，不重查
+    pub fn set_filter(&mut self, filter: impl Into<String>) {
+        self.filter = filter.into();
+        self.rebuild_view_rows();
+    }
+
+    /// 【B15】当前筛选词（面板与导出要用同一份真值）
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// 【B15】筛选后的行（导出跟随筛选：原型 §5.5 的口径）
+    pub fn visible_rows(&self) -> Vec<Vec<String>> {
+        self.view_rows
+            .iter()
+            .filter_map(|ix| self.rows.get(*ix).cloned())
+            .collect()
+    }
+
+    /// 【B15】当前排序（数据列下标，是否降序）
+    pub fn sort_state(&self) -> Option<(usize, bool)> {
+        self.sort
+    }
+
+    /// 【B15】应用本地排序（`None` = 回原顺序）；组件库的列头点击最终走到这里
+    pub fn apply_sort(&mut self, sort: Option<(usize, bool)>) {
+        self.sort = sort;
+        self.rebuild_view_rows();
+    }
+
+    /// 【B15】重算视图行序（筛选 → 排序；数据不动）
+    fn rebuild_view_rows(&mut self) {
+        let filter = self.filter.trim().to_lowercase();
+        let mut view: Vec<usize> = (0..self.rows.len())
+            .filter(|ix| filter.is_empty() || self.row_matches(*ix, &filter))
+            .collect();
+        if let Some((column, descending)) = self.sort {
+            // 稳定排序：同值时按原顺序（用数据行号做 tie-break，与快排的不稳定性无关）
+            view.sort_by(|left, right| {
+                let ordering = compare_cells(
+                    self.rows.get(*left).and_then(|row| row.get(column)),
+                    self.rows.get(*right).and_then(|row| row.get(column)),
+                );
+                let ordering = if descending { ordering.reverse() } else { ordering };
+                ordering.then(left.cmp(right))
+            });
+        }
+        self.view_rows = view;
+    }
+
+    /// 这一行有没有单元格命中筛选词（大小写不敏感的子串，与 DBeaver 的本地筛选同类）
+    fn row_matches(&self, row_ix: usize, needle: &str) -> bool {
+        self.rows.get(row_ix).is_some_and(|row| {
+            row.iter()
+                .any(|cell| cell.to_lowercase().contains(needle))
+        })
+    }
+
+    /// 【B15】该数据列在表头上的排序标记
+    ///
+    /// `Default` = 可排但未排（组件库画的是“上下箭头”图标）；当前排序列才给升/降。
+    fn sort_mark(&self, index: usize) -> ColumnSort {
+        match self.sort {
+            Some((column, true)) if column == index => ColumnSort::Descending,
+            Some((column, false)) if column == index => ColumnSort::Ascending,
+            _ => ColumnSort::Default,
+        }
+    }
+
+    /// 视图行号 → 数据行号
+    fn data_row(&self, row_ix: usize) -> Option<usize> {
+        self.view_rows.get(row_ix).copied()
     }
 
     /// 这份结果还能不能取下一段（面板在结果变化时同步；`true` 才启用滚动到底加载）
@@ -103,6 +190,16 @@ impl ResultGridDelegate {
         self.rows.len()
     }
 
+    /// 筛选后能看见多少行（视图行数）
+    pub fn visible_row_count(&self) -> usize {
+        self.view_rows.len()
+    }
+
+    /// 这份结果一共抓到多少行（数据行数，与筛选无关）
+    pub fn data_row_count(&self) -> usize {
+        self.rows.len()
+    }
+
     /// 第 `col_ix` 列是不是行号槽（首列；没有数据时不画它）
     fn is_row_number(col_ix: usize) -> bool {
         col_ix == 0
@@ -110,17 +207,41 @@ impl ResultGridDelegate {
 
     /// 单元格文案：首列是行号，其余按 `col_ix - 1` 取数据
     ///
+    /// 行号与数据都走**视图行序**（筛选/排序之后看着的那一行）；
     /// 缺列/缺行给空串而不是 panic（结果行由驱动给出，形状不可全信）。
     fn cell(&self, row_ix: usize, col_ix: usize) -> String {
         if Self::is_row_number(col_ix) {
             return (row_ix + 1).to_string();
         }
+        let Some(data_ix) = self.data_row(row_ix) else {
+            return String::new();
+        };
         self.rows
-            .get(row_ix)
+            .get(data_ix)
             .and_then(|row| row.get(col_ix - 1))
             .cloned()
             .unwrap_or_default()
     }
+}
+
+/// 两个单元格比大小（本地排序用）
+///
+/// 两边都像数字就按**数值**比（`1, 2, 10` 不该排成 `1, 10, 2`——展示文本是字符串，
+/// 但用户看的是数）；否则按字符串比。`None`（缺列）排在最后。
+fn compare_cells(left: Option<&String>, right: Option<&String>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (Some(left), Some(right)) = (left, right) else {
+        return match (left.is_some(), right.is_some()) {
+            (false, false) => Ordering::Equal,
+            (false, true) => Ordering::Greater,
+            (true, false) => Ordering::Less,
+            (true, true) => Ordering::Equal,
+        };
+    };
+    if let (Ok(left), Ok(right)) = (left.parse::<f64>(), right.parse::<f64>()) {
+        return left.partial_cmp(&right).unwrap_or(Ordering::Equal);
+    }
+    left.cmp(right)
 }
 
 impl TableDelegate for ResultGridDelegate {
@@ -134,7 +255,30 @@ impl TableDelegate for ResultGridDelegate {
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
-        self.rows.len()
+        self.view_rows.len()
+    }
+
+    /// 【B15】列头点击排序：组件库已在它那边循环 `Default → Descending → Ascending`，
+    /// 交到这里的已经是**新值**；本 delegate 只负责记住它并重算视图行序（本地排序，不重查）。
+    /// `col_ix` 是含行号槽的列下标，折算成数据列。
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        if Self::is_row_number(col_ix) {
+            return;
+        }
+        let column = col_ix - 1;
+        self.apply_sort(match sort {
+            ColumnSort::Default => None,
+            ColumnSort::Ascending => Some((column, false)),
+            ColumnSort::Descending => Some((column, true)),
+        });
+        // 视图行序变了，重画（表格自己也会 notify，但这里是真值变了）
+        cx.notify();
     }
 
     /// 滚动到底自动加载（B5b）：组件库在可见范围距末尾不足 `load_more_threshold` 行时
@@ -188,6 +332,9 @@ impl TableDelegate for ResultGridDelegate {
         Column::new(format!("col-{index}"), name)
             .width(ui::RESULT_COLUMN_WIDTH)
             .min_width(ui::RESULT_COLUMN_MIN_WIDTH)
+            // 【B15】可本地排序：组件库点列头时会在 Default → Descending → Ascending 里循环，
+            // 并回调 `perform_sort`（排序状态存在它那边，这里只把当前态回去，refresh 后指示器不丢）
+            .sort(self.sort_mark(index))
     }
 
     fn render_td(
@@ -260,6 +407,8 @@ pub struct ResultToolbar {
     pub elapsed_ms: Option<u64>,
     /// 来源连接文案（`●P·orders`；`None` = 当时未绑定 / 认不出）
     pub connection: Option<String>,
+    /// 【B15】本地筛选生效时的（视图行数，已抓总行数）——原型 §5.5 要求“统计跟随并明示已筛选”
+    pub filtered: Option<(usize, usize)>,
 }
 
 impl ResultToolbar {
@@ -270,6 +419,13 @@ impl ResultToolbar {
             parts.push(format!("影响 {} 行", thousands(affected as usize)));
         } else if let Some(rows) = self.rows {
             parts.push(format!("行数 {}", thousands(rows)));
+        }
+        if let Some((visible, total)) = self.filtered {
+            parts.push(format!(
+                "已筛选 {} / {} 行",
+                thousands(visible),
+                thousands(total)
+            ));
         }
         if self.failed {
             parts.push("失败".to_string());
@@ -319,6 +475,8 @@ pub fn status_segments(status: &ResultStatus) -> (String, String) {
 /// 与状态栏的 `StatusControls` 同口径：文案交给可穷举的纯函数，控件交给面板。
 #[derive(Default)]
 pub struct ResultControls {
+    /// 【B15】本地筛选框（原型 §5.5：只作用于视图层，不重查）
+    pub filter: Option<AnyElement>,
     /// 复制当前结果集（TSV）
     pub copy: Option<AnyElement>,
     /// 【B7】导出当前结果集（下拉：格式 × 仅已抓取 / 抓全量）
@@ -450,7 +608,8 @@ pub fn render(
                         .h_flex()
                         .items_center()
                         .gap_1()
-                        // 顺序照原型 §2.4 的右段：… 分析 ▾ · 导出 ▾ · ⟳ · 复制
+                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · … 分析 ▾ · 导出 ▾ · ⟳ · 复制
+                        .children(controls.filter)
                         .children(controls.export)
                         .children(controls.refresh)
                         .children(controls.copy),
@@ -515,11 +674,11 @@ pub fn render(
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ResultGridDelegate, ResultStatus, ResultToolbar, duration_text, status_segments, thousands,
-        truncated_hint,
+        ResultGridDelegate, ResultStatus, ResultToolbar, compare_cells, duration_text,
+        status_segments, thousands, truncated_hint,
     };
     use gpui_kit::App;
-    use gpui_kit::component::table::TableDelegate as _;
+    use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
 
     fn grid() -> ResultGridDelegate {
         let mut grid = ResultGridDelegate::empty("尚未执行");
@@ -531,6 +690,116 @@ mod tests {
             ],
         );
         grid
+    }
+
+    /// 造一份指定行的网格（B15 的筛选/排序测试用：列固定为 id / name）
+    fn grid_with(rows: &[&[&str]]) -> ResultGridDelegate {
+        let mut grid = ResultGridDelegate::empty("尚未执行");
+        grid.set_data(
+            vec!["id".to_string(), "name".to_string()],
+            rows.iter()
+                .map(|row| row.iter().map(|cell| cell.to_string()).collect())
+                .collect(),
+        );
+        grid
+    }
+
+    /// 【B15】筛选只改视图行序：命中那些行还在原位，行号跟的是视图
+    #[test]
+    fn filtering_keeps_matching_rows_in_place() {
+        let mut grid = grid_with(&[&["1", "orders"], &["2", "users"], &["3", "orders_archive"]]);
+        grid.set_filter("orders");
+        assert_eq!(grid.visible_row_count(), 2, "命中两行");
+        assert_eq!(grid.data_row_count(), 3, "数据一行没动（清掉筛选就能原样回来）");
+        assert_eq!(grid.cell(0, 1), "1", "首列显示的是视图行号");
+        assert_eq!(grid.cell(0, 2), "orders");
+        assert_eq!(grid.cell(1, 2), "orders_archive");
+        assert_eq!(grid.cell(2, 2), "", "越界的视图行给空串（不 panic）");
+
+        // 大小写不敏感（与 DBeaver 的本地筛选同类）
+        grid.set_filter("ORDERS");
+        assert_eq!(grid.visible_row_count(), 2);
+
+        // 清除筛选：全部回来，顺序不变
+        grid.set_filter("");
+        assert_eq!(grid.visible_row_count(), 3);
+        assert_eq!(grid.visible_rows()[0][1], "orders");
+        assert_eq!(grid.visible_rows()[2][1], "orders_archive");
+    }
+
+    /// 【B15】排序：数字按数值比（`1, 2, 10` 不该排成 `1, 10, 2`），字符串按字典序
+    #[test]
+    fn sorting_is_numeric_when_the_values_look_numeric() {
+        assert_eq!(
+            compare_cells(Some(&"2".to_string()), Some(&"10".to_string())),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_cells(Some(&"b".to_string()), Some(&"a".to_string())),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_cells(None, Some(&"1".to_string())),
+            std::cmp::Ordering::Greater,
+            "缺列排在最后"
+        );
+
+        let mut grid = grid_with(&[&["10", "b"], &["2", "c"], &["1", "a"]]);
+        grid.apply_sort(Some((0, false)));
+        assert_eq!(
+            grid.visible_rows()
+                .iter()
+                .map(|row| row[0].clone())
+                .collect::<Vec<_>>(),
+            ["1", "2", "10"],
+            "升序按数值"
+        );
+        grid.apply_sort(Some((1, true)));
+        assert_eq!(
+            grid.visible_rows()
+                .iter()
+                .map(|row| row[1].clone())
+                .collect::<Vec<_>>(),
+            ["c", "b", "a"],
+            "降序按字符串"
+        );
+        grid.apply_sort(None);
+        assert_eq!(
+            grid.visible_rows()
+                .iter()
+                .map(|row| row[0].clone())
+                .collect::<Vec<_>>(),
+            ["10", "2", "1"],
+            "取消排序回原顺序（不是部分退还）"
+        );
+    }
+
+    /// 【B15】筛选与排序叠在一起：先筛后排，两者都只动视图
+    #[test]
+    fn filter_and_sort_stack_on_the_same_view() {
+        let mut grid = grid_with(&[&["10", "orders"], &["2", "orders"], &["7", "users"]]);
+        grid.set_filter("orders");
+        grid.apply_sort(Some((0, false)));
+        assert_eq!(grid.visible_row_count(), 2);
+        assert_eq!(grid.visible_rows()[0][0], "2");
+        assert_eq!(grid.visible_rows()[1][0], "10");
+    }
+
+    /// 【B15】换一份结果：排序跟不过来（列都可能不是同一批），筛选词留着（用户还在找同样的东西）
+    #[test]
+    fn switching_data_clears_sort_but_keeps_the_filter() {
+        let mut grid = grid_with(&[&["2", "orders"], &["1", "users"]]);
+        grid.set_filter("orders");
+        grid.apply_sort(Some((0, true)));
+        assert_eq!(grid.sort_state(), Some((0, true)));
+
+        grid.set_data(
+            vec!["id".to_string(), "name".to_string()],
+            vec![vec!["5".to_string(), "orders".to_string()]],
+        );
+        assert_eq!(grid.sort_state(), None, "换结果不该继承旧的排序");
+        assert_eq!(grid.filter(), "orders", "筛选词留着");
+        assert_eq!(grid.visible_row_count(), 1);
     }
 
     #[test]
@@ -554,6 +823,27 @@ mod tests {
         grid.clear("执行失败：boom");
         assert_eq!(grid.row_count_for_test(), 0);
         assert!(grid.columns_for_test().is_empty());
+    }
+
+    /// 【B15】列头可排序：数据列给 `Some(Default)`（可排但未排），行号槽不给
+    ///
+    /// 组件库对 `sort: None` 的列**不响应点击**（`perform_sort` 里直接 return），
+    /// 所以这条钉的是“列头真的能点下去”。
+    #[gpui_kit::test]
+    fn data_columns_are_sortable_from_the_header(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let mut grid = grid();
+        cx.update(|cx: &mut App| {
+            assert_eq!(grid.column(0, cx).sort, None, "行号槽不是数据列");
+            assert_eq!(grid.column(1, cx).sort, Some(ColumnSort::Default));
+            assert_eq!(grid.column(2, cx).sort, Some(ColumnSort::Default));
+        });
+        // 排上以后指示器要回得去（组件库 refresh 后会重新问 column）
+        grid.apply_sort(Some((0, false)));
+        cx.update(|cx: &mut App| {
+            assert_eq!(grid.column(1, cx).sort, Some(ColumnSort::Ascending));
+            assert_eq!(grid.column(2, cx).sort, Some(ColumnSort::Default));
+        });
     }
 
     /// 列数与行数要和真实数据一致（delegate 是网格唯一的取数口）
@@ -605,6 +895,7 @@ mod tests {
             failed: false,
             elapsed_ms: Some(1_200),
             connection: Some("●P·orders".to_string()),
+            ..Default::default()
         };
         assert_eq!(
             full.segments(),
@@ -618,6 +909,7 @@ mod tests {
             failed: false,
             elapsed_ms: Some(35),
             connection: None,
+            ..Default::default()
         };
         assert_eq!(write.segments(), ["影响 3 行", "耗时 35 ms"]);
 

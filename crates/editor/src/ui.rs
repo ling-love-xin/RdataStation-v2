@@ -39,6 +39,9 @@ pub const RESULT_STATUS_BAR_HEIGHT: f32 = 1.5;
 /// 结果集标签条高（1.5rem = 24px，与状态行同档；TabBar 的 Small 档就是这个高）
 pub const RESULT_TABS_HEIGHT: f32 = 1.5;
 
+/// 结果工具栏的本地筛选框宽（11.25rem = 180px；原型 §5.5 的 `⌕ 筛选`，够放下十来个字符的词）
+pub const RESULT_FILTER_WIDTH: f32 = 11.25;
+
 /// 结果网格列宽（128px；`Column::width` 只收 `Pixels`，故这里不做 rem 换算）
 pub const RESULT_COLUMN_WIDTH: Pixels = px(128.);
 
