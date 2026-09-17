@@ -173,13 +173,25 @@ pub async fn profile_column_from_table(
         )));
     }
 
-    let temp_table =
-        engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(&columns, &rows)?;
-
-    // 基础统计由 TOML 规则驱动，故需按项目取规则集。
-    crate::with_rules(project_root, |registry| {
-        insight_engine::get_column_insight_full(registry, &temp_table, column_name)
-    })
+    // 样本表用**分析临时表**的姿势建：带 `tmp_i_` 前缀（TTL / 上限 / 按来源清理才认它），
+    // 并且算完就收掉——它是纯中间产物，留在内存库里只会越积越多（架构 K16）。
+    let duckdb = insight_engine::get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+    })?;
+    engine::duckdb::analysis::with_analysis_temp_table(
+        &conn,
+        &columns,
+        &rows,
+        "col_sample",
+        |temp_table| {
+            // 基础统计由 TOML 规则驱动，故需按项目取规则集。
+            // 用 `*_on`（已持有连接）：与建表同一把锁，避免 `std::sync::Mutex` 自重入。
+            crate::with_rules(project_root, |registry| {
+                insight_engine::get_column_insight_full_on(registry, &conn, temp_table, column_name)
+            })
+        },
+    )
 }
 
 pub async fn batch_evaluate_columns(
@@ -249,28 +261,44 @@ pub async fn batch_evaluate_columns(
         });
     }
 
-    let temp_table = engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
-        &col_names, &rows_data,
-    )?;
-
-    // 整表评估：规则集只取一次（不在逐列循环里重复加读锁）。
-    // 串行逐列是刻意的——洞察并发上限为 4 且快速失败，并行会把「部分列静默缺失」
-    // 变成常态；串行起步虽慢，但「哪些列没评上」是确定的（单列失败仍跳过并继续）。
-    crate::with_rules(project_root, |registry| {
-        let mut stats_list: Vec<ColumnInsightFull> = Vec::new();
-        for col_name in &col_names {
-            match insight_engine::get_column_insight_full(registry, &temp_table, col_name) {
-                Ok(stats) => stats_list.push(stats),
-                Err(e) => {
-                    tracing::warn!("Skipping column '{}' during batch evaluation: {}", col_name, e);
-                    continue;
+    // 同上：整表评估也是一次性的样本表（逐列串行跑完就收）
+    let duckdb = insight_engine::get_or_create_duckdb()?;
+    let conn = duckdb.lock().map_err(|e| {
+        CoreError::common(CommonError::General(format!("DuckDB lock error: {e}")))
+    })?;
+    engine::duckdb::analysis::with_analysis_temp_table(
+        &conn,
+        &col_names,
+        &rows_data,
+        "table_sample",
+        |temp_table| {
+            // 整表评估：规则集只取一次（不在逐列循环里重复加读锁）。
+            // 串行逐列是刻意的——洞察并发上限为 4 且快速失败，并行会把「部分列静默缺失」
+            // 变成常态；串行起步虽慢，但「哪些列没评上」是确定的（单列失败仍跳过并继续）。
+            crate::with_rules(project_root, |registry| {
+                let mut stats_list: Vec<ColumnInsightFull> = Vec::new();
+                for col_name in &col_names {
+                    let stats = insight_engine::get_column_insight_full_on(
+                        registry,
+                        &conn,
+                        temp_table,
+                        col_name,
+                    );
+                    match stats {
+                        Ok(stats) => stats_list.push(stats),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Skipping column '{}' during batch evaluation: {}",
+                                col_name,
+                                e
+                            );
+                            continue;
+                        }
+                    }
                 }
-            }
-        }
 
-        Ok(quality_scorer::compute_table_quality(
-            table,
-            &stats_list,
-        ))
-    })
+                Ok(quality_scorer::compute_table_quality(table, &stats_list))
+            })
+        },
+    )
 }

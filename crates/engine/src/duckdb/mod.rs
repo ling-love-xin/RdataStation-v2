@@ -15,6 +15,7 @@
 //! - `extensions.rs` - DuckDB扩展管理
 //! - `metrics.rs` - 性能监控与指标采集
 //! - `snapshot.rs` - 快照与备份管理
+//! - `analysis.rs` - 分析用临时表的生命周期（建 / 登记 / 用完即删 / 惰性清理）
 
 mod executor;
 mod explain;
@@ -27,6 +28,7 @@ mod metrics;
 mod plugin;
 mod snapshot;
 mod temp_table;
+pub mod analysis;
 pub mod row_to_arrow;
 pub mod value_text;
 

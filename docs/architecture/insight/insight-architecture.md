@@ -304,6 +304,7 @@ RulesWatcher（后台线程，drop 即停）：
 | D47 | 清理回执**两侧条数分开报**，对不上就报警 | 正文与元数据成对写入（D16），删的时候也必须成对；只报一个「清理成功」会把半写残留（一边删多了一边没删）盖住 | 两侧不等时行内提示转 danger，并把两个数都写出来 |
 | D48 | `value_type` 走**白名单校验**（解析期，2026-09-17 定案 = Q7） | 以前白名单外的值靠 `match` 的兜底分支当 `String` 读：把 DOUBLE 列当字符串读，报出来的是一句与「类型名写错了」毫无关系的读值错误（K12） | 白名单常量 `rule_registry::VALUE_TYPES` 与执行器分支一一对应；报错直接列出可用取值 |
 | D49 | 质量门控的 `field` 必须在 `[[output]]` 里真实存在（解析期，2026-09-17 定案 = Q6） | 字段不存在时取值为 `None`，而「只设 `max`」的判定对 `None` 是**通过**——门控形同虚设而界面看不出来（K11：内置的 `null-check` 就指着不存在的 `null_rate`） | 与 `deny_unknown_fields` 同一立场（早失败优于静默错）；**值合法地为 `null`**（如空表算不出空值率）仍算通过——那是刻意的 |
+| D50 | 分析用临时表**统一走 `engine::duckdb::analysis`**：名字带 `tmp_i_`（与 `TempTableSource::Insight` 对齐）、建表即登记、**用完即删**，惰性清理负责真正 DROP（2026-09-17） | 临时表的一切回收机制都靠**前缀**识别（TTL / 上限 / 按来源清理）；建表时另起一个名字（历史上的 `rs_<uuid>`）等于把所有回收机制关掉（K16）。而「只腾登记表不执行 DDL」会让表变成再也找不到的孤儿 | 中间产物用 `with_analysis_temp_table`（建 → 用 → 无论成败都收）；需要跨函数持有时用 create / drop 对；`drop` 只接受 `tmp_i_` 开头（防误删）。分析侧的 engine 支撑落在 `crates/engine/src/duckdb/`（新模块 `analysis.rs`） |
 
 ## 7. 并发与资源
 
@@ -311,8 +312,8 @@ RulesWatcher（后台线程，drop 即停）：
 | --- | --- | --- |
 | 洞察并发操作 | 4，**超出即返回可读错误**（不排队） | `INSIGHT_MAX_CONCURRENT` |
 | DuckDB 内存连接 | **进程级单例**，`Mutex` 全局串行 | `DuckDBManager::get_or_create_in_memory` |
-| 洞察中间表 | 前缀 `tmp_i_`，TTL 30 分钟，上限 100，惰性清理 | `engine::duckdb::temp_table`（⚠️ **生产代码里没有调用者**，实际建的表叫 `rs_<uuid>`，见 K16） |
-| 查询结果表 | 前缀 `tmp_q_`，无 TTL，项目关闭清理 | 同上 |
+| 洞察中间表 | 前缀 `tmp_i_`（**由 `duckdb::analysis` 统一产出，建表即登记**）；TTL 30 分钟 / 上限 100 由管理器判定，`cleanup_analysis_temp_tables` 真正 DROP | `engine::duckdb::{analysis, temp_table}` |
+| 查询结果表 | 前缀 `tmp_q_`（⚠️ 现状仍叫 `rs_<uuid>`，回收机制看不见它，见 K16）；无 TTL，项目关闭清理（**宿主还没接**） | `engine::duckdb::temp_table` |
 | 样本行数 | `DEFAULT_SAMPLE_SIZE = 5` | `insight_engine` |
 | 直方图最小行数 | `HISTOGRAM_MIN_ROWS = 10` | 同上 |
 | 每列保留版本数 | `MAX_VERSIONS_PER_COLUMN`（超出淘汰最旧） | `store::body` |
@@ -331,7 +332,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 规则文件被删 | 索引转 `missing`，规则不再生效 | 「规则文件不见了」提示 |
 | 内置规则被删（如 `numeric-stats` 被覆盖成坏规则） | 该列统计计算失败并向上抛 | 该列画像报错（**基础统计依赖规则，属已知耦合**） |
 | 并发超限 | 返回 `洞察分析任务过多，请稍候重试` | 行内提示 + 可重试 |
-| 临时表 TTL 过期（30 分钟） | 查询失败 | 「结果已过期，请重新执行查询」 |
+| 源表临时表被回收（宿主关结果集 / 会话结束） | 源表读不到 → 查询失败 | 「结果集已失效或已过期，请重新执行查询」（不给重试；洞察自身的样本表用完即删，无过期面；宿主侧回收时机见 K16 结果集侧） |
 | 源库连接断开（表探查 / Schema） | 错误向上抛 | 错误 + 重试按钮 |
 | 未打开项目 | 快照与规则管理不可用；临时表画像仍可算 | 面板提示「打开项目后可保存快照」 |
 | 全 NULL / BLOB / ARRAY 列 | `Unknown` 变体，只出计数 | 「类型未识别」，**不生成分布** |
@@ -386,7 +387,8 @@ RulesWatcher（后台线程，drop 即停）：
 | D38～D42 快照历史 | `model.rs`（`HistoryView` / `HistoryEntryView` / `StorageStatsView` / `HISTORY_PAGE_SIZE`）、`insight_view.rs`（`render_history` + `history_entry_row` / `history_chip` / `set_history_notice` / `history_saving` / `emit_request_for_tab` 的状态落点）、`jobs.rs`（`SnapshotSaveRequested` / `HistoryRequested` → `request_snapshot_save` / `request_history`）、`service/mod.rs`（`save_column_snapshot` / `column_history_view` / `read_history`） |
 | D43/D44 版本对比 | `model.rs`（`VersionDiffView` / `DiffRowView` / `DeltaView` / `VersionDiffView::between` + `display_number` / `CANONICAL_LABELS`）、`insight_view.rs`（`render_version_diff` / `diff_row_value` / `toggle_compare_version` / `dismiss_diff` / `set_compare_notice` / `is_latest_version`）、`jobs.rs`（`VersionCompareRequested` → `request_version_compare`）、`service/mod.rs`（`compare_column_snapshots` / `history_entries`）、`ui.rs`（`INSIGHT_DIFF_LABEL_WIDTH`） |
 | D45～D47 存储清理 | `model.rs`（`SNAPSHOT_RETENTION_DAYS` / `CleanupOutcome` / `HistoryView.cleanup`）、`insight_view.rs`（`begin_cleanup` 的确认框 / `request_cleanup` / `history_busy_ready` / 回执行）、`jobs.rs`（`SnapshotCleanupRequested` → `request_cleanup`）、`service/mod.rs`（`cleanup_old_snapshots`）、`store/body.rs` + `store/meta.rs`（`cleanup_older_than`） |
-| D48/D49 规则语义校验（早失败） | `rule_registry.rs`（`VALUE_TYPES` / `validate_rule` / `parse_rule_toml` 的校验挂点；索引器与注册表共用这一个入口）、`insight-rules/{column/null-check,quality/column-quality-score,table/table-column-overview,table/table-null-overview}.rule.toml`（内置规则内容改正）、`rule_executor.rs`（K11 回归：拿二进制里的规则跑真表） |
+| D48/D49 规则语义校验（早失败） | `rule_registry.rs`（`VALUE_TYPES` / `validate_rule` / `parse_rule_toml` 的校验挂点；索引器与注册表共用这一个入口）、`insight-rules/{column/null-check,table/table-column-overview,table/table-null-overview}.rule.toml`（内置规则内容改正）、`rule_executor.rs`（K11 回归：拿二进制里的规则跑真表） |
+| D50 分析临时表生命周期 | `crates/engine/src/duckdb/analysis.rs`（新：`ANALYSIS_TABLE_PREFIX` / `create_analysis_temp_table` / `drop_analysis_temp_table` / `with_analysis_temp_table` / `cleanup_analysis_temp_tables` / `analysis_temp_tables`）、`duckdb/manager.rs`（`temp_table_manager()` 访问器）、`duckdb/mod.rs`（挂模块）、`services/duckdb_service.rs`（`infer_type` / `json_to_duckdb_value` 改 `pub(crate)` 共用）、`crates/insight/src/service/persistence.rs`（两处样本表改用作用域封装） |
 | 类型族判定（唯一来源） | `crates/insight/src/model.rs`（`type_base` / `is_numeric_type` / `is_datetime_type` / `is_binary_type` / `is_array_type` + `ColumnKind::of_type_name`）；列画像与表探查共用 |
 | 面板头 ⚙ 入口 | `insight_view.rs`（`render_header`，无项目时禁用）、`InsightView::rules_view`（宿主接缝用） |
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
@@ -416,7 +418,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15）；`engine/tests/transaction_affinity.rs` 的 `as_i64` 编译错误也已修（`Value` 只有 `as_int`，随 `b838ea0` 提交） |
 | K14 | 清理旧快照后，**存活版本的 `parent_version_id` 可能指向已被删的父版**（链的起段被剪掉） | 低（外观级）：今天只用它打「首版」标记——被剪过的那一版会得不到标记；对比不沿链走（直接拿两行比），分析结论不受影响 | 待决：清理时一并把断链头部标成首版 / 或在界面改成「这一版之前的历史已清理」。要么就维持现状（不清就不存在这个问题） |
 | K15 | ~~`quality-score` 是残留规则（无代码按 id 执行；SQL 对文本列跑不通）~~ | — | ✅ 已处置（2026-09-17）：**下线**。它的自述就写着真实评分在 `quality_scorer.rs`——留着就是「同一能力两份口径」。规则文件已删，需要时从 git 历史取 |
-| K16 | **临时表的 TTL / 上限在生产里是死代码**：`TempTableManager`（TTL 30 分钟 / 上限 50 / 前缀 `tmp_q_`·`tmp_i_`）除测试与一个没人调用的 `list_by_source` 外**没有任何调用者**；而实际建表路径（`DuckDbService::create_duckdb_temp_table`）建的表叫 `rs_<uuid>`，既不登记也不带那两个前缀 | **中**：进程内的内存表**永不回收**（样本表每次洞察留一张、结果集表每跑一次查询留一张），长时间使用持续吃 RSS；而文档（§7 与使用手册）写的是「TTL 30 分钟」——**文档与运行行为不一致**比单纯泄漏更难查 | 待决（与 Q1 相邻）：建表时接回管理器（登记 + 认 `rs_`）· 洞察中间表用完即删 · 给 DuckDB 设 `memory_limit` 与 `temp_directory` |
+| K16 | **临时表的回收机制与建表命名对不上**：`create_duckdb_temp_table` / `create_temp_table_internal` 建的表叫 `rs_<uuid>`，而回收全靠前缀识别（`tmp_q_` / `tmp_i_` / `temp_mock_` / `tmp_p_`）——`list_by_source`、`drop_by_source`、`lazy_cleanup_insight_tables` 对这些表**全都看不见**，`register` 触发的惰性清理因此对它们无效；且 `drop_in_memory_temp_tables` 只有 mock 调过 | 中：结果集表与洞察样本表在进程内只增不减（内存库，吃 RSS）；而文档写的「TTL 30 分钟 / 项目关闭清理」对它们不成立——文档与运行行为不一致比单纯泄漏更难查 | **洞察侧已修**（2026-09-17，D50）：`duckdb::analysis` 统一按 `tmp_i_` 建表、用完即删、惰性清理真正 DROP；**结果集侧仍未接**：编辑器要求结果集活到用户不用为止，回收策略得与编辑器生命周期一起定（改前缀为 `tmp_q_` + 丢弃/关项目时 drop，mock 的 `clear_temp_tables` 就是范本） |
 
 ## 12. 待确认
 

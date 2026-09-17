@@ -631,11 +631,11 @@ button{font-family:inherit;cursor:pointer;}
   </div>
 
   <div class="state">
-    <h4>错误态（临时表已过期）</h4>
+    <h4>错误态（源表已失效）</h4>
     <div class="err">
-      结果已过期，请重新执行查询。<br>
-      <span style="opacity:.8">DuckDB 临时表 TTL 30 分钟，过期后不可再分析。</span>
-      <div class="acts"><button class="btn-s" style="border-color:currentColor;color:var(--danger);background:transparent">重试</button><button class="btn-s" style="border-color:currentColor;color:var(--danger);background:transparent">重新执行查询</button></div>
+      结果集已失效或已过期，请重新执行查询。<br>
+      <span style="opacity:.8">源表（结果集临时表）已被回收或会话已结束；洞察自身的样本表用完即删，不会过期。</span>
+      <div class="acts"><button class="btn-s" style="border-color:currentColor;color:var(--danger);background:transparent">重新执行查询</button></div>
     </div>
   </div>
 

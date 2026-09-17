@@ -23,6 +23,27 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-17 — 临时表一致化（K16 ①+②：洞察中间表改走 `duckdb::analysis`）
+
+**已完成并验证**（`cargo test -p rds-engine --lib` **345 项**（含新增 `duckdb::analysis` **6 项**）· `cargo test -p rds-insight --lib` **202 项** + 集成 **13 项** · `cargo test -p rds-workbench --test insight_entry` **2 项**全绿；本批文件 clippy 零告警，全仓 `cargo fmt --check` 本就不通过，未跑 fmt）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 分析侧新增 engine 支撑 | `engine::duckdb::analysis` 三个入口：① `with_analysis_temp_table`（**默认姿势**：建 → 用 → 无论成败都收）；② `create_analysis_temp_table` / `drop_analysis_temp_table`（跨函数持有时用；`drop` **只接受 `tmp_i_` 开头**，防误删别人建的表）；③ `cleanup_analysis_temp_tables`（惰性清理）。表名 `tmp_i_<描述>_<紧凑时间戳>_<8 位随机>`——末尾随机不是装饰：管理器的 `generate_name` 只到**秒**，同秒同描述必撞名（多列分析逐列建表就会撞） | `crates/engine/src/duckdb/analysis.rs`（新）+ `duckdb/mod.rs` 挂模块 |
+| 前缀 = 回收口 | `ANALYSIS_TABLE_PREFIX = "tmp_i_"` 与 `TempTableSource::Insight` 的前缀**必须一致**：TTL / 上限 / 按来源清理（`list_by_source` / `drop_by_source`）全靠它识别。建表即 `register` | 同上 |
+| 补「只腾登记表」的缺口 | `lazy_cleanup_*` 拿不到连接、执行不了 DDL（K16 的第二个事实）→ 真正 DROP 必须由持有连接处补，就是 `cleanup_analysis_temp_tables`。它放在建表**之前**调用：让 TTL / 上限落在「下一次建表」这个廉价时机上 | 同上 + `manager.rs`（新增 `temp_table_manager()` 访问器） |
+| 洞察两处样本表改姿势 | `profile_column_from_table` / `batch_evaluate_columns` 原先各自调 `create_duckdb_temp_table`（建 `rs_<uuid>`、不回收）→ 现改为 `with_analysis_temp_table` + `get_column_insight_full_on`（**已持连接**版本，与建表同一把锁，避开 std `Mutex` 自重入死锁） | `crates/insight/src/service/persistence.rs` |
+| 打型口径共用 | `infer_type` / `json_to_duckdb_value` 由 `pub` 收到 `pub(crate)`：`analysis` 与结果集那条建表路径**共用同一套 JSON → DuckDB 打型与值转换**，不另立第二份口径 | `services/duckdb_service.rs` |
+| 测试 | `analysis.rs` 6 项：前缀与登记 / 同秒不撞名 / 描述清洗 / `drop` 拒收外来名 / 清理只收过期的 / **`body` 报错也把表收掉**。洞察侧行为面沿用原有 202 + 13（不改断言） | `duckdb::analysis` 测试模块 |
+
+**K16 的准确边界（别再把①当全修）**
+
+- **①洞察侧已修**（本批）：洞察自己建的中间产物一律 `tmp_i_` + 用完即删，**不占内存库**。
+- **②登记与 DDL 的缺口已补**（本批）：惰性清理名单驱逐后由 `cleanup_analysis_temp_tables` 真正 DROP。
+- **③结果集侧（`tmp_q_`）仍未接**：编辑器要求结果集活到用户不用为止，回收策略得与编辑器生命周期一起定（改前缀为 `tmp_q_` + 结果集丢弃 / 项目关闭时 drop；`crates/mock/src/engine.rs` 的 `clear_temp_tables` 就是范本）。这是 K16 唯一剩下的部分。
+- **④内存闸与可观测未做**（`SET memory_limit` / `temp_directory` 钉 `.rds/tmp` / 临时表计数上报），等你拍板。
+- **诚实记档**：`profile_column_from_table` / `batch_evaluate_columns` 目前**没有宿主侧调用者**（表入口与导航右键欠账），所以这两个函数的行为变化**没有 live 测试能盖住**——集成测试走的是 DuckDB 内存临时表直建路径，engine 侧 6 项单测盖的是 `analysis.rs` 本身。没有写易碎的 live 集成测试来凑覆盖率。
+
 ### 2026-09-17 — 死副本与残留规则收口（Q2 / Q3 / K15 处置）
 
 **已完成并验证**（`cargo test -p rds-insight --lib` **202 项** + 集成 **13 项**全绿；本批只改常量与注释，无逻辑改动；clippy 零告警）

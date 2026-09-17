@@ -158,6 +158,15 @@ impl DuckDBManager {
         GLOBAL_TEMP_TABLE_MANAGER.get_or_init(|| TempTableManager::new(50))
     }
 
+    /// 全局临时表管理器（分析路径用它做登记 / 注销 / 惰性清理）。
+    ///
+    /// 公开它的理由：清理决策（TTL / 上限）在管理器里，而**真正的 DROP 只有持有连接
+    /// 的地方能执行**——两边必须能对上，否则会出现「登记摘掉了、表还在库里」的孤儿
+    /// （见 `duckdb::analysis` 与架构 K16）。
+    pub fn temp_table_manager() -> &'static TempTableManager {
+        Self::global_temp_table_manager()
+    }
+
     /// 注册临时表到全局管理器。
     ///
     /// # 参数

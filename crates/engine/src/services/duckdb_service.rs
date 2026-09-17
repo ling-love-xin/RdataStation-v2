@@ -235,7 +235,11 @@ pub fn extract_rows_from_serialized(
     rows
 }
 
-fn infer_type(rows: &[Vec<serde_json::Value>], col_idx: usize) -> &str {
+/// JSON 行 → DuckDB 列类型。
+///
+/// 同 crate 内公开：`duckdb::analysis`（分析临时表）灌样本时要与结果集那条路径
+/// **用同一套打型规则**，否则同一个 `serde_json` 值在两处会变成不同类型。
+pub(crate) fn infer_type(rows: &[Vec<serde_json::Value>], col_idx: usize) -> &str {
     for row in rows {
         if col_idx < row.len() {
             match &row[col_idx] {
@@ -251,7 +255,10 @@ fn infer_type(rows: &[Vec<serde_json::Value>], col_idx: usize) -> &str {
     "VARCHAR"
 }
 
-fn json_to_duckdb_value(v: &serde_json::Value) -> duckdb::types::Value {
+/// JSON 值 → DuckDB 值（插入参数）。
+///
+/// 同 `infer_type`：与 `duckdb::analysis` 共用一份转换。
+pub(crate) fn json_to_duckdb_value(v: &serde_json::Value) -> duckdb::types::Value {
     match v {
         serde_json::Value::Null => duckdb::types::Value::Null,
         serde_json::Value::Bool(b) => duckdb::types::Value::Boolean(*b),
