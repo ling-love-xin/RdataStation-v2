@@ -318,6 +318,9 @@ RulesWatcher（后台线程，drop 即停）：
 | D52 | 规则 SQL 走**解析期静态门**：只放行单条 `SELECT` / `WITH`，拒分号多语句、拒黑名单关键字（`ATTACH`/`COPY`/`INSTALL`/`SET`/`CREATE`/`DROP`…）与表函数（`read_*` / `*_scan` / `*_attach` / `*_query` / `glob` / `query_table`…）；**校验前先剥字符串字面量、注释与双引号标识符**（2026-09-17，Q1 ① 落地） | 规则文件随项目走（能来自别人仓库），而模板 SQL 原样交给 DuckDB 执行——最便宜的防线是在解析期就把「不是只读查询」的写法拒掉。**定位是防呆，不是安全边界**：DuckDB 没有官方解析沙箱，黑名单天然有漏（`SELECT` 里仍可能藏着未列入的函数），它做的是把风险从「随手就撞上」压到「得刻意构造」 | 报错文案点出规则 id + 撞上的词 + 改法（列名 / 表名加双引号即放行——剥掉双引号标识符是有意的，防误报）；真正的边界是「项目规则信任门」（Q1 ③） |
 | D53 | **项目规则信任门**：项目层规则在用户做出决定前**不装配、不执行**；决定（`trusted` / `declined`）记在**全局库** `insight_rule_trust`（键 = 规范化项目路径），默认无记录 = 未决定；首次在规则管理里遇到时**弹一次确认框**，之后由列表顶部的横幅改主意（2026-09-17，Q1 ③ 落地） | 静态门（D52）只挡「不是只读查询」的写法，挡不住一条**合法但恶意**的查询；而项目规则跟着仓库走——「克隆不信任的仓库 + 打开项目」是一个真实的攻击面。决定必须由人做，且必须记在**项目碰不到的地方**：存项目库等于让项目自己给自己发信任（自我授权） | `declined` 也落库：把「不加载」记成一次决定，才不会每次开项目都追问。**fail closed**：无记录 / 查库失败 / 值不认识，一律按未决定。已知取舍：信任绑定**路径**而非内容——用户自己改规则不会被反复打扰，代价是 `git pull` 带进来的新规则不会重新确认 |
 | D54 | **查询结果临时表**：命名统一走 `duckdb::generate_unique_name(Query, …)`（前缀 `tmp_q_` + 时间戳 + 8 位随机）、建完即登记；回收两个口——**定向** `drop_temp_table(conn, Query, name)`（结果集被丢弃 / 替换 / 关文档）与**清场** `DuckDBManager::drop_in_memory_temp_tables(Query)`（项目切换 / 关闭）（2026-09-17，K16 结果集侧） | 结果集表历史上叫 `rs_<uuid>`，不属于任何来源前缀 → TTL / 上限 / 按来源清理 / 关项目清场对它**全都看不见**（K16）。命名与回收口必须成对设计：只改名字不提供定向口，就只能「全清」而不能「丢一个」——那会把用户还在看的结果一起删掉 | 命名与删除都收在 `duckdb::temp_table`（与洞察中间表 / mock 共用一份实现）；**建表方负责回收**（宿主路径目前未接线，见 K16） |
+| D55 | 快照**双写失败时回滚已写入的那一半**（正文成了、元数据没成 → 删正文），错误文案里写清「已回滚」；回滚自身失败时同时报两件事（2026-09-17，Q5 定案） | D16 说「成对写入」，就得说得出成对失败怎么办。原实现只把错误往上抛，留下的是**界面上看不见、清理也配不上对**的孤儿正文——存储用量与真实历史从此对不上 | 回滚失败不掩盖原错误（原错 + 回滚失败 + 出路）；孤儿靠存储清理（按时间删正文）兜底 |
+| D56 | 快照**保留期固定 30 天**（`model::SNAPSHOT_RETENTION_DAYS`），**不做配置项**（2026-09-17，Q4 定案） | v1 就是 30 天；快照是轻量 JSON（几 KB 级），30 天足够回答「上周和现在有什么不同」。而每多一个配置项就多一处能写错的数——清理对话与执行取同一个常量，就没有「写的和删的不一致」的可能 | 要改就改常量（单一来源）；上限另有 `MAX_VERSIONS_PER_COLUMN` 兜底 |
+| D57 | 版本链被清理剪过的**头部**在界面上标「更早的版本已清理」（数据层**不改**）——只在列表未分页截断时判（2026-09-17，K14 定案） | 剪链是「删 30 天前」的必然副产物：存活版本的 `parent_version_id` 仍指着已删的父版，那它就不再满足「首版」条件（`parent = None`），界面会既不标首版也不解释。改数据（把头部 `parent` 置空）会丢掉「它前面还有历史」这个事实；改界面则只说真话 | 判据要三合一（最旧一版 + 父版不在列表 + 列表完整），否则分页会造成假阳性；对比不沿链走，所以不影响差值 |
 
 ## 7. 并发与资源
 
@@ -352,6 +355,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 源表临时表被回收（宿主关结果集 / 会话结束） | 源表读不到 → 查询失败 | 「结果集已失效或已过期，请重新执行查询」（不给重试；洞察自身的样本表用完即删，无过期面；宿主侧回收时机见 K16 结果集侧） |
 | 源库连接断开（表探查 / Schema） | 错误向上抛 | 错误 + 重试按钮 |
 | 未打开项目 | 快照与规则管理不可用；临时表画像仍可算 | 面板提示「打开项目后可保存快照」 |
+| 快照**双写失败**（正文成了、元数据没成） | **回滚正文**（要么都成、要么都不留），错误向上抛且写清已回滚（D55） | 「快照未保存：…（已回滚刚写入的正文，未留下半写快照）」 |
 | 全 NULL / BLOB / ARRAY 列 | `Unknown` 变体，只出计数 | 「类型未识别」，**不生成分布** |
 | 空表 | `TableQuality` 返回「表为空或无数据」 | 不产假分数 |
 | 规则目录为空（首次使用） | 只有 16 条内置规则 | 全局层需用户自行创建目录 |
@@ -368,7 +372,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 装配 | `registry_for` 缓存、启用禁用生效 | 用**不存在的项目根**避免碰真实项目；注意缓存是进程级静态量 | 已覆盖 |
 | 契约 | 零裸色 / 零裸 `px(` | `cargo test -p rds-workbench --test ui_contract` | 视图落地后纳入 |
 
-**基线**：`cargo test -p rds-insight` 当前 **202 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 13 项；新增功能不得减少。
+**基线**：`cargo test -p rds-insight` 当前 **218 项**（迁移基线 53 + Phase 0–5 新增），另有集成测试 13 项；新增功能不得减少。
 
 三条测试纪律（来自实际踩坑）：
 1. **进程级静态量（缓存）是测试隔离的敌人**：规则注册表缓存与禁用集合都是进程级静态量，「写入 → 断言」之间被另一个测试的清理动作插入就会间歇失败（实测约 1/5 概率）。对策两条：
@@ -391,6 +395,9 @@ RulesWatcher（后台线程，drop 即停）：
 | D13 DuckDB 单例 | `engine/src/duckdb/manager.rs`、`engine/src/services/duckdb_service.rs` |
 | D14 内部接缝 | `insight_engine.rs`（`get_column_insight_full_on` / `get_column_stats_internal` / `get_column_sample_internal` / `get_column_histogram_internal`） |
 | D16/D17/D18/D19 快照链路 | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（正文与元数据仓库 + 装配点 `ProjectInsightStores`） |
+| D55 双写失败回滚 | `crates/insight/src/store/mod.rs`（`rollback_snapshot_body`）、`service/persistence.rs`（`save_column_insight_snapshot` 的接入点） |
+| D56 保留期常量 | `crates/insight/src/model.rs`（`SNAPSHOT_RETENTION_DAYS`）、`jobs.rs` / `insight_view.rs`（确认框与执行取同一个常量） |
+| D57 剪链头部标注 | `crates/insight/src/model.rs`（`HistoryEntryView.chain_truncated` + `HISTORY_PAGE_SIZE` 判据）、`insight_view.rs`（`history_entry_row` 的三档标记） |
 | D1 目标分派 / D15 采样明示 | `crates/insight/src/insight_view.rs`（面板头 + 五 Tab + 四态 + 列画像四区）、`model.rs`（视图模型 `PanelTab` / `InsightTarget` / `InsightPanelState` / `ColumnProfileView`） |
 | D21 视图归属（方案 A） | `crates/insight/Cargo.toml`（`gpui-kit`）、`insight_view.rs`（视图）、`ui.rs`（M8 尺寸常量）、`commands.rs`（`OpenInsight` / `InsightRefresh` / `ReloadInsightRules`） |
 | D22/D23 目录监听与索引解耦 | `crates/insight/src/service/watcher.rs`（`RulesWatcher` / `rules_fingerprint` / `watch_dirs` / `set_watched_project_root` / `index_is_stale`）；接线在 `workbench/src/view.rs`（构造期启动）与 `workbench/src/components/project_host.rs`（项目切换告知） |
@@ -437,7 +444,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K11 | ~~`null-check` 规则的 `[[quality]] field = "null_rate"` 指向**不存在的输出字段**~~ | — | ✅ 已修（2026-09-17）：① 解析期新增「门控 `field` 必须存在于 `[[output]]`」（D49），② `null-check` 的 SQL 真算出 `null_rate`（`f64?`，空表给 NULL 不误报），③ 回归用例直接拿**二进制里那一条**跑真表，钉住「50% 空值必失败 / 空表不误报」 |
 | K12 | ~~`quality-score` 用 `value_type = "str"`，不在支持列表里，靠兜底当 `String` 读~~ | — | ✅ 已修（2026-09-17）：① 解析期新增 `value_type` 白名单（D48），② 内置规则里**共 8 处** `"str"` 全部改正（`quality-score` 3 × `String?`、`table-column-overview` 4 × `String`、`table-null-overview` 1 × `String`） |
 | K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15）；`engine/tests/transaction_affinity.rs` 的 `as_i64` 编译错误也已修（`Value` 只有 `as_int`，随 `b838ea0` 提交） |
-| K14 | 清理旧快照后，**存活版本的 `parent_version_id` 可能指向已被删的父版**（链的起段被剪掉） | 低（外观级）：今天只用它打「首版」标记——被剪过的那一版会得不到标记；对比不沿链走（直接拿两行比），分析结论不受影响 | 待决：清理时一并把断链头部标成首版 / 或在界面改成「这一版之前的历史已清理」。要么就维持现状（不清就不存在这个问题） |
+| K14 | ~~清理旧快照后，**存活版本的 `parent_version_id` 可能指向已被删的父版**（链的起段被剪掉）~~ | — | ✅ 已处置（2026-09-17，D57）：界面上把被剪过的头部标「更早的版本已清理」（数据层不改——置空 `parent` 会丢掉「它前面还有历史」这个事实）；判据要求「列表完整」以免分页造成假阳性 |
 | K15 | ~~`quality-score` 是残留规则（无代码按 id 执行；SQL 对文本列跑不通）~~ | — | ✅ 已处置（2026-09-17）：**下线**。它的自述就写着真实评分在 `quality_scorer.rs`——留着就是「同一能力两份口径」。规则文件已删，需要时从 git 历史取 |
 | K16 | **临时表的回收机制与建表命名对不上**：`create_duckdb_temp_table` / `create_temp_table_internal` 建的表叫 `rs_<uuid>`，而回收全靠前缀识别（`tmp_q_` / `tmp_i_` / `temp_mock_` / `tmp_p_`）——`list_by_source`、`drop_by_source`、`lazy_cleanup_insight_tables` 对这些表**全都看不见**，`register` 触发的惰性清理因此对它们无效；且 `drop_in_memory_temp_tables` 只有 mock 调过 | 中：结果集表与洞察样本表在进程内只增不减（内存库，吃 RSS）；而文档写的「TTL 30 分钟 / 项目关闭清理」对它们不成立——文档与运行行为不一致比单纯泄漏更难查 | **已收口（2026-09-17）**：① 洞察侧——`duckdb::analysis` 统一按 `tmp_i_` 建表、用完即删（D50）；② 内存闸与可观测——`memory_limit` / `temp_directory` / 登记概览（D51）；③ 结果集侧——命名改为 `tmp_q_` + 建表即登记，并备好定向 `drop_temp_table` 与清场 `drop_in_memory_temp_tables(Query)`（D54）。**唯一还没落的是宿主接线**：今天全仓没有任何调用者 `create_duckdb_temp_table` / `open_insight_column`（结果集 → 临时表 → 洞察这条路还没接），所以既没有活泄漏、也没有可回收的对象；接线时按 D54 的契约在丢弃点调 `drop_temp_table` |
 
@@ -448,7 +455,7 @@ RulesWatcher（后台线程，drop 即停）：
 | Q1 | **规则 SQL 的安全边界**（K1） | **已定案（2026-09-17）**：① **解析期静态门**——已落地（D52）；② **项目规则信任门**——已落地（D53，首次弹确认 + 决定入全局库）；③ **诚实声明**——规则文件仍是「可信本地文件」量级，但「不可信项目」这条路已经堵上（未信任不装配）。✖ 不采用 (b) 「禁用扩展 / 只读连接」：已核查会连带砸掉产品自身的 `ATTACH` / `read_csv` / `INSTALL`（同一内存单例）；✖ 不采用 (d) 沙箱执行（成本与收益不成比例）。**若将来要再严一档**：在 `insight_rule_trust` 上加一列规则集内容指纹，指纹变了重新确认 |
 | Q2 | 视图归属（K8） | 方案 A / B（开发方案 §3.1） |
 | Q3 | `table-quality-overview` 的处置（K3） | **已定（2026-09-17）：下线**（K3 已处置：静态 SQL 无法对每列算统计，能力已在「评估全表」） |
-| Q4 | 快照保留上限与清理默认值 | 每列 `MAX_VERSIONS_PER_COLUMN`；清理默认 30 天（v1 硬编码） |
-| Q5 | 快照双写失败的补偿策略（D16） | 重试 / 标记待清理 / 放任（Phase 5 决定） |
+| Q4 | 快照保留上限与清理默认值 | **已定（2026-09-17）：保留期固定 30 天（D56，单一常量、不做配置项）；每列上限另有 `MAX_VERSIONS_PER_COLUMN` 兜底** |
+| Q5 | 快照双写失败的补偿策略（D16） | **已定（2026-09-17）：回滚已写入的那一半**（D55）——重试会让用户看到「一次点击、两条快照」，标记待清理又多一个需要清理的状态 |
 | Q6 | 质量门控的「字段不存在」应报错还是静默通过（K11） | **已定（2026-09-17）：解析期报错**（D49，产物 = K11 已修）——与 `deny_unknown_fields` 同一立场 |
 | Q7 | `value_type` 是否在解析期做白名单校验（K12） | **已定（2026-09-17）：做**（D48，产物 = K12 已修）——写错时应在解析期就指明「哪个值不合法 + 可用取值」 |

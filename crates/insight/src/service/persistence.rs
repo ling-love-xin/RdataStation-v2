@@ -50,7 +50,9 @@ pub async fn save_column_insight_snapshot(
 
     let checksum = store::snapshot_checksum(insight)?;
 
-    meta_store
+    // Q5 / D55：元数据写失败时**回滚刚写入的正文**（要么都成、要么都不留），
+    // 不留下「界面上看不见、清理也配不上对」的孤儿。
+    if let Err(e) = meta_store
         .save_meta(
             "column",
             &insight.stats.column_name,
@@ -62,7 +64,12 @@ pub async fn save_column_insight_snapshot(
             parent_version_id.as_deref(),
             &checksum,
         )
-        .await?;
+        .await
+    {
+        return Err(
+            crate::store::rollback_snapshot_body(&insight_store.columns, &snapshot_id, e).await,
+        );
+    }
 
     Ok((snapshot_id, version_id))
 }

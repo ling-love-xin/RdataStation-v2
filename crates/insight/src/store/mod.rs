@@ -44,7 +44,7 @@ pub use meta::{InsightMetaStore, InsightSnapshotMeta};
 use std::path::Path;
 
 use engine::persistence::project_db::ProjectDatabaseManager;
-use shared::error::CoreError;
+use shared::error::{CommonError, CoreError};
 
 use crate::model::types::ColumnInsightFull;
 
@@ -113,8 +113,12 @@ impl ProjectInsightStores {
 
         // 正文写入成功后必须把元数据也写成功；任一失败都向上抛，
         // 由调用方决定是否重试（不做「只写一半也算成功」的静默降级）。
+        //
+        // Q5 / D55：抛之前先**回滚已写入的正文**——否则留下的是一份界面上看不见、
+        // 清理也配不上对的孤儿（D16 要求成对写入，就得说得出成对失败怎么办）。
         let checksum = checksum_of(insight)?;
-        self.meta
+        if let Err(e) = self
+            .meta
             .save_meta(
                 "column",
                 &column_name,
@@ -126,9 +130,34 @@ impl ProjectInsightStores {
                 parent_version_id.as_deref(),
                 &checksum,
             )
-            .await?;
+            .await
+        {
+            return Err(rollback_snapshot_body(&self.storage.columns, &snapshot_id, e).await);
+        }
 
         Ok((snapshot_id, version_id))
+    }
+}
+
+/// 双写失败时的**补偿**：把已经写进去的正文回滚掉（Q5 / D55）。
+///
+/// 语义是「要么都成，要么都不留」：元数据没写成，那份正文就永远不会被界面读到
+/// （列表读元数据、正文按 `snapshot_id` 取），留着只会让存储用量与真实历史对不上。
+///
+/// 回滚自身失败时**不掩盖原错误**：错误文案里同时说清两件事，并给出出路
+/// （存储清理按时间删正文，会把孤儿收走）。
+pub(crate) async fn rollback_snapshot_body(
+    columns: &crate::store::InsightColumnStore,
+    snapshot_id: &str,
+    cause: CoreError,
+) -> CoreError {
+    match columns.delete_snapshot(snapshot_id).await {
+        Ok(()) => CoreError::common(CommonError::General(format!(
+            "{cause}（已回滚刚写入的正文，未留下半写快照）"
+        ))),
+        Err(e) => CoreError::common(CommonError::General(format!(
+            "{cause}；且回滚正文失败：{e}（可能留下只有正文的孤儿，可用存储清理收走）"
+        ))),
     }
 }
 
@@ -384,6 +413,58 @@ mod tests {
                 .await?
                 .len(),
             1
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    /// Q5 / D55：双写失败时的**补偿**是回滚已写入的正文（要么都成、要么都不留）。
+    ///
+    /// 这里直接测补偿函数本身的契约：把一份只有正文（没有元数据）的快照收回去，
+    /// 并把原错误与「已回滚」一并写进返回的错误文案里。
+    #[tokio::test]
+    async fn test_dual_write_failure_rolls_back_the_body() -> Result<(), CoreError> {
+        let root = temp_project_dir("rollback");
+        let stores = ProjectInsightStores::open(&root).await?;
+
+        // 只写正文（模拟「正文成功、元数据失败」那一刻的库状态）
+        let (snapshot_id, _version_id) = stores
+            .storage
+            .columns
+            .save_snapshot(&sample_insight("amount"), None)
+            .await?;
+        assert_eq!(
+            stores
+                .storage
+                .columns
+                .get_history("amount", Some(10))
+                .await?
+                .len(),
+            1,
+            "先确认孤儿真的写进去了"
+        );
+
+        // 补偿：回滚正文
+        let cause = CoreError::common(CommonError::General("元数据写入失败".to_string()));
+        let reported = rollback_snapshot_body(&stores.storage.columns, &snapshot_id, cause).await;
+        let text = reported.to_string();
+        assert!(text.contains("元数据写入失败"), "不能盖掉原错误：{text}");
+        assert!(text.contains("已回滚"), "要说清做了补偿：{text}");
+
+        assert!(
+            stores
+                .storage
+                .columns
+                .get_history("amount", Some(10))
+                .await?
+                .is_empty(),
+            "孤儿正文应已收回去"
+        );
+        assert_eq!(
+            stores.storage.columns.get_storage_stats().await?.total_snapshots,
+            0,
+            "存储用量也该跟着回到原样"
         );
 
         let _ = std::fs::remove_dir_all(&root);

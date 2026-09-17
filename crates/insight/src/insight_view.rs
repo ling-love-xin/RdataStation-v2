@@ -2269,12 +2269,16 @@ fn history_entry_row(
                 ),
         );
 
-    // 标记只给「值得一眼看出」的两行：最新一版与首版。
+    // 标记只给「值得一眼看出」的几行：最新一版、首版、链被剪过的头部。
     // 其余行都挂在链上（有父版本），逐行打标只是噪声。
     if entry.is_latest {
         row = row.child(history_chip("当前", colors.primary, theme));
     } else if !entry.has_parent {
         row = row.child(history_chip("首版", colors.muted_foreground, theme));
+    } else if entry.chain_truncated {
+        // K14：清理剪掉了链的起段——**不谎称首版**，也不假装链是完整的。
+        // 数据层面不改（父版号是真的），只在界面上如实说明。
+        row = row.child(history_chip("更早的版本已清理", colors.muted_foreground, theme));
     }
 
     // 最新那行不给点击：方向固定为「选中 → 最新」，拿最新当基准无从比

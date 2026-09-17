@@ -997,6 +997,11 @@ pub struct HistoryEntryView {
     pub data_type: String,
     /// 父版本（首版为 `None`）：版本链靠它串起来
     pub has_parent: bool,
+    /// 【K14】有父版本、但父版**不在**这份列表里——链的起段被清理剪掉了。
+    ///
+    /// 只在列表**没被分页截断**时才判：截断时最后一页的最旧一版本来就看不到父版，
+    /// 那不是说「被清理了」。
+    pub chain_truncated: bool,
     /// 是否最新一版（列表里打「当前」标记）
     pub is_latest: bool,
 }
@@ -1288,6 +1293,20 @@ impl HistoryView {
                     created_at: entry.created_at.clone(),
                     data_type: entry.data_type.clone().unwrap_or_else(|| "—".to_string()),
                     has_parent: entry.parent_version_id.is_some(),
+                    chain_truncated: {
+                        // 三条件同时成立才能说链被剪过：「列表完整（未分页截断）」+
+                        // 「最旧一版」+「父版不在此列」——否则就是分页造成的假阳性（K14）
+                        let is_oldest = index + 1 == entries.len();
+                        let page_complete = entries.len() < HISTORY_PAGE_SIZE;
+                        is_oldest
+                            && page_complete
+                            && entry
+                                .parent_version_id
+                                .as_deref()
+                                .is_some_and(|parent| {
+                                    !entries.iter().any(|other| other.version_id == parent)
+                                })
+                    },
                     is_latest: index == 0,
                 })
                 .collect(),
@@ -2488,6 +2507,65 @@ mod tests {
         assert_eq!(view.entries[0].short_version, "aaaaaaaa");
         assert_eq!(view.entries[1].short_version, "bbbbbbbb");
         assert_eq!(view.entries[0].created_at, "2026-09-15 14:22");
+    }
+
+    /// K14：链的起段被清理剪掉时，最旧一版**不谎称首版**，而是标「更早的版本已清理」。
+    ///
+    /// 三个条件必须同时成立（否则就是假阳性）：最旧一版 / 有父版 / 父版不在此列表，
+    /// 且列表**未被分页截断**——截断时最旧一版的父版本来就看不到。
+    #[test]
+    fn history_flags_a_truncated_chain_only_on_a_complete_page() {
+        // 父版被清理（不在此列表） → 标上
+        let cleaned = vec![
+            version(
+                "aaaaaaaa-1111",
+                Some("deadbeef-9999"),
+                "2026-09-15 14:22",
+                "DOUBLE",
+            ),
+            version(
+                "bbbbbbbb-2222",
+                Some("deadbeef-9999"),
+                "2026-09-14 09:10",
+                "DOUBLE",
+            ),
+        ];
+        let view = HistoryView::from_entries("amount", &cleaned, None);
+        assert!(
+            !view.entries[0].chain_truncated,
+            "不是最旧一版，不标"
+        );
+        assert!(view.entries[1].chain_truncated, "最旧一版的父版不在列表里");
+
+        // 父版就在列表里（正常的链） → 不标
+        let intact = vec![
+            version(
+                "aaaaaaaa-1111",
+                Some("bbbbbbbb-2222"),
+                "2026-09-15 14:22",
+                "DOUBLE",
+            ),
+            version("bbbbbbbb-2222", None, "2026-09-14 09:10", "DOUBLE"),
+        ];
+        let view = HistoryView::from_entries("amount", &intact, None);
+        assert!(view.entries.iter().all(|e| !e.chain_truncated));
+
+        // 列表被分页截断（满页） → 不能断言「被清理」（父版可能在下一页）
+        let full_page: Vec<_> = (0..HISTORY_PAGE_SIZE)
+            .map(|i| {
+                version(
+                    &format!("{i:08}-page"),
+                    Some(&format!("{:08}-page", i + 1)),
+                    "2026-09-15 14:22",
+                    "DOUBLE",
+                )
+            })
+            .collect();
+        let view = HistoryView::from_entries("amount", &full_page, None);
+        assert!(
+            view.entries.iter().all(|e| !e.chain_truncated),
+            "满页时最旧一版的父版可能就在下一页，不得误报"
+        );
     }
 
     #[test]
