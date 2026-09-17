@@ -43,6 +43,8 @@ impl ConnectionsPort for WorkbenchConnections {
                 // 而查连接管理器（`nav_runtime::is_connected`）是 `block_on`，不能进帧。
                 // 建连成功后由下面的 `ensure_connected` 把这条记录改成已连接。
                 connected: c.connected,
+                // 【B10】驱动类型：编辑器据此选格式化 / 执行计划 / 转译的方言
+                db_type: c.driver.clone(),
             })
             .collect()
     }

@@ -16,7 +16,8 @@
 
 use analytics_resource::commands::{ClearSearch, DeleteSelected, FocusSearch};
 use editor::commands::{
-    CloseDocument, ExecuteAll, ExecuteSql, OpenDocument, SaveDocument, SaveDocumentAs, ToggleComment,
+    CloseDocument, ExecuteAll, ExecuteSql, FormatDocument, OpenDocument, SaveDocument,
+    SaveDocumentAs, ToggleComment,
 };
 use gpui_kit::component::{Root, Theme, ThemeRegistry, TitleBar};
 use gpui_kit::*;
@@ -149,6 +150,8 @@ fn run_app() {
                 // 这两个键内核没有占用（已核对 `input/base/state.rs` 的 `init`）。
                 KeyBinding::new("ctrl-enter", ExecuteSql, Some("editor")),
                 KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
+                // B10 格式化：`Ctrl+Shift+F`（A10 表里预留给它的键，已核对内核未占用）
+                KeyBinding::new("ctrl-shift-f", FormatDocument, Some("editor")),
                 // M8 洞察：`Ctrl+Shift+R` = 重算当前目标的画像。键位绑在 `insight` context 上
                 // （面板根元素的 `key_context`），只有焦点在洞察面板内才生效，
                 // 不抢其它面板的同名键。

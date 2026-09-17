@@ -24,6 +24,7 @@ actions!(
         SaveDocumentAs,
         OpenDocument,
         ToggleComment,
+        FormatDocument,
         CloseDocument,
         ExecuteSql,
         ExecuteAll

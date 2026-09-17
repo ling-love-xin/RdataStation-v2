@@ -193,8 +193,19 @@ impl SqlEngine {
     /// SQL 格式化（美化打印）
     ///
     /// 解析失败时返回原始 SQL（优雅降级）。
+    ///
+    /// **界面请用 [`Self::format_report`]**：它会告诉你“改了几条 / 哪几条没动”，
+    /// 而这里只有文本，用户看不到“按了没反应”的真实原因。
     pub fn format(sql: &str, dialect: SqlDialect) -> String {
         formatter::format(sql, dialect)
+    }
+
+    /// 【B10】逐条格式化（带报告：改了几条 / 哪几条因为解析不了而逐字保留）
+    ///
+    /// 与 [`Self::format`] 的差别：它是**语句为单位**的（P0.4 的词法切分拿到区间，逐条
+    /// 格式化再回填原位），所以脚本里有一句没写完，不影响其它语句被格式化。
+    pub fn format_report(sql: &str, dialect: SqlDialect) -> formatter::FormatReport {
+        formatter::format_with_report(sql, dialect)
     }
 
     /// 方言转换

@@ -24,11 +24,12 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::channel::{self, ExecChannel};
-use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
+use crate::commands::{ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment};
 use crate::diagnostics;
 use crate::edit;
 use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
 use crate::export::{self, ExportFormat, ExportScope};
+use crate::format;
 use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode};
 use crate::persist;
@@ -532,6 +533,11 @@ impl EditorHostPanel {
         self.editor_text(cx)
     }
 
+    /// 服务层记着的文档内容（供测试断言“内容真的写回了服务层”，不只是画在屏幕上）
+    pub fn document_content_for_test(&self) -> Option<String> {
+        self.with_document(|doc| doc.content().to_string())
+    }
+
     /// 编辑内核的焦点句柄（供测试把焦点交给内核，模拟真实打字场景）
     pub fn editor_focus_handle_for_test(&self, cx: &App) -> FocusHandle {
         self.editor.read(cx).focus_handle(cx)
@@ -564,7 +570,9 @@ impl EditorHostPanel {
     /// - 执行级：**执行 ▾**——主按钮 = 执行（选区优先 → 当前语句），下拉 = 执行族里已经能跑的
     ///   三项（当前语句 / 选区 / 全部）。**只在 SQL 模式出现**：文本模式按能力表不通信，
     ///   分析模式的执行属笔记级动作（1c 随单元落地）。
-    /// - 还没实现的（格式化 / 历史 / ⋯更多 / 执行位置 / 连接）**不放按钮**——
+    /// - 文档级：**⇤ 格式化**——整篇 / 选区，与 `Ctrl+Shift+F` 同一条路。同样只在
+    ///   SQL 模式出现（文本模式不解析 SQL；分析模式的格式化为笔记级动作）。
+    /// - 还没实现的（历史 / ⋯更多）**不放按钮**——
     ///   “只宣传不实现”是原型 §2.2 的明确排除项。
     fn render_toolbar(&self, mode: EditorMode, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().colors.border;
@@ -609,6 +617,8 @@ impl EditorHostPanel {
             // 只有 SQL 模式的执行是“对当前文档执行”：文本模式按能力表不通信，
             // 分析模式的执行是**笔记级**动作（单元级按钮 + Shift+Enter，1c 落地）
             toolbar = toolbar.child(self.render_exec_group(cx));
+            // 文档级：格式化（原型 §2.2：执行级之后是文档级）
+            toolbar = toolbar.child(self.render_format_button(cx));
             // 通道级 + 连接（右对齐）：原型 §2.2 两栏——“执行位置”在“连接”左边
             toolbar = toolbar.child(
                 div()
@@ -703,6 +713,91 @@ impl EditorHostPanel {
             .shared
             .channel_availability(self.bound_connection().as_deref());
         channel::menu_items(self.channel(), self.source_channel_ready(), &availability)
+    }
+
+    /// 【B10】格式化整篇 / 选区（`Ctrl+Shift+F`、工具栏「⇤ 格式化」）
+    ///
+    /// 计划（格式化哪一段 / 光标去哪 / 有几条没动）由纯函数 [`crate::format::plan`] 算；
+    /// 这里只做三件事：**只读拒绝**、落一次**可撤销**的替换（`replace_all` 保留撤销历史）、
+    /// 把结果如实说给用户（“改了 N 条” / “M 条解析不了，原样保留”）。
+    pub(crate) fn format_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor_read_only() {
+            self.set_message(Some("只读文档不能格式化".to_string()), cx);
+            return;
+        }
+        if !self.execution_allowed() {
+            // 文本模式是“记事本”：不解析、不上色，自然也不格式化（能力表说了算）
+            self.set_message(Some("文本模式不解析 SQL".to_string()), cx);
+            return;
+        }
+        let (text, selection) = self.editor_snapshot(cx);
+        let dialect = format::dialect_of(&self.connection_db_type());
+        let plan = format::plan(&text, selection, dialect);
+
+        if !plan.changes(&text) {
+            // 没改动也要说清楚是“本来就是格式化好的”还是“解析不了”——两者感受完全不同
+            let message = if plan.kept_verbatim > 0 {
+                format!(
+                    "{} 条语句解析不了（可能是还没写完），已原样保留；其余本来就是格式化好的",
+                    plan.kept_verbatim
+                )
+            } else {
+                "已经是格式化后的样子".to_string()
+            };
+            self.set_message(Some(message), cx);
+            return;
+        }
+
+        let new_text = plan.text.clone();
+        let cursor = plan.cursor;
+        let selection = plan.selection.clone();
+        self.editor.update(cx, |state, cx| {
+            // `replace_all` 会记进撤销历史（与 `set_value` 不同：后者清空历史）
+            state.replace_all(new_text, window, cx);
+            match selection.clone() {
+                Some(range) => state.set_selected_range(range, cx),
+                None => {
+                    // 光标按“第几条语句里的第几个字节”映射过去，并滑到可见区
+                    use gpui_kit::component::input::RopeExt as _;
+                    let position = state.text().offset_to_position(cursor);
+                    state.set_cursor_position(position, window, cx);
+                    state.set_selected_range(cursor..cursor, cx);
+                }
+            }
+        });
+        // 内核的 Change 事件会把内容写回服务层（脏状态跟着变），这里只补一句结果
+        let mut message = format!("已格式化 {} 条语句", plan.formatted);
+        if plan.kept_verbatim > 0 {
+            message.push_str(&format!(
+                "；{} 条解析不了，原样保留",
+                plan.kept_verbatim
+            ));
+        }
+        self.set_message(Some(message), cx);
+    }
+
+    /// 本文档绑定连接的驱动类型（`None` / 未绑定 → 空串 → 方言用 Ansi）
+    ///
+    /// 方言只能从**连接**来（同一个连接两种引擎时不能猜）；编辑器不知道驱动，
+    /// 是宿主填在 `ConnectionOption.db_type` 里的。
+    fn connection_db_type(&self) -> String {
+        let bound = self
+            .with_document(|doc| doc.connection().map(str::to_string))
+            .flatten();
+        bound
+            .and_then(|id| {
+                self.shared
+                    .connection_options()
+                    .into_iter()
+                    .find(|option| option.id == id)
+                    .map(|option| option.db_type)
+            })
+            .unwrap_or_default()
+    }
+
+    /// 本文档绑定连接的驱动类型（供测试断言方言选择）
+    pub fn connection_db_type_for_test(&self) -> String {
+        self.connection_db_type()
     }
 
     /// 【B13】重新挂载加速档的源库（表清单刷新）
@@ -937,6 +1032,19 @@ impl EditorHostPanel {
             })
     }
 
+    /// 【B10】文档级：格式化按钮（原型 §2.2 的「⇤ 格式化」，紧随执行级）
+    fn render_format_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        Button::new("editor-format")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-format".to_string())
+            .label("格式化")
+            .on_click(move |_, window, app| {
+                entity.update(app, |panel, cx| panel.format_document(window, cx));
+            })
+    }
+
     fn editor_read_only(&self) -> bool {
         self.with_document(|doc| !doc.read_only().can_edit())
             .unwrap_or(true)
@@ -992,6 +1100,19 @@ impl EditorHostPanel {
             }
             Err(error) => self.set_message(Some(error.to_string()), cx),
         }
+    }
+
+    /// `Ctrl+Shift+F`：格式化（整篇 / 选区）
+    ///
+    /// 动作本身极薄：格式化是**文档级**动作，真伪都由 [`Self::format_document`] 判定
+    /// （只读拒绝 / 文本模式拒绝 / 解析不了的语句原样保留）。
+    pub(crate) fn on_format(
+        &mut self,
+        _: &FormatDocument,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.format_document(window, cx);
     }
 
     /// `Ctrl+/`：行注释开关
@@ -1460,6 +1581,16 @@ impl EditorHostPanel {
     pub fn set_caret_for_test(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.editor
             .update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
+    }
+
+    /// 设置选区（供测试断言“有选区只格式化选区”；键位路径仍走真按键）
+    pub fn set_selection_for_test(
+        &mut self,
+        range: std::ops::Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .update(cx, |state, cx| state.set_selected_range(range, cx));
     }
 
     /// 启动结果轮询（已有存活任务时不重复启动）
@@ -2762,6 +2893,7 @@ impl Render for EditorHostPanel {
             .key_context("editor")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_save))
+            .on_action(cx.listener(Self::on_format))
             .on_action(cx.listener(Self::on_toggle_comment))
             .on_action(cx.listener(Self::on_execute_sql))
             .on_action(cx.listener(Self::on_execute_all));

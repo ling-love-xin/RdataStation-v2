@@ -43,6 +43,8 @@ MINE = [
     "crates/engine/src/services/sql_service.rs",
     "crates/engine/src/persistence/history_store.rs",
     "crates/engine/src/sql/filter.rs",
+    "crates/engine/src/sql/formatter.rs",
+    "crates/engine/src/sql/engine.rs",
     "crates/engine/src/sql/mod.rs",
     "crates/engine/src/connection_manager.rs",
     "crates/engine/src/duckdb/accel.rs",
@@ -58,6 +60,9 @@ MINE = [
     "crates/shared/src/error.rs",
     # 编辑器：结果区（B5）与错误回填（B6）
     "crates/editor/Cargo.toml",
+    "crates/editor/src/format.rs",
+    "crates/editor/src/commands.rs",
+    "crates/editor/src/connection.rs",
     "crates/editor/src/channel.rs",
     "crates/editor/src/diagnostics.rs",
     "crates/editor/src/execution.rs",
@@ -79,14 +84,15 @@ MINE = [
     "crates/editor/src/view/tests.rs",
     "crates/editor/src/view/widgets/mod.rs",
     "crates/editor/src/view/widgets/status_bar.rs",
-    # 宿主侧与真机探针
+    # 宿主侧与真机探针（view.rs 不搬：现在装着另一个会话的 quick_open 在途改动，副本回退 HEAD）
     "crates/workbench/src/services/editor_channels.rs",
+    "crates/workbench/src/services/editor_connections.rs",
     "crates/workbench/src/services/editor_exec.rs",
     "crates/workbench/src/services/editor_files.rs",
     "crates/workbench/src/services/editor_session.rs",
     "crates/workbench/src/services/mod.rs",
     "crates/workbench/src/panels/right.rs",
-    "crates/workbench/src/view.rs",
+    "crates/app/src/main.rs",
     "crates/workbench/tests/editor_exec_real.rs",
     "crates/workbench/tests/ui_contract.rs",
     # 文档
@@ -143,6 +149,10 @@ def main():
         assert "pub fn menu_items" in handle.read(), "副本里缺导出实现（MINE 没同步？）"
     with open(os.path.join(VERIFY, "crates/engine/src/services/sql_service.rs"), encoding="utf-8") as handle:
         assert "fn unwrap_segment_error" in handle.read(), "副本里缺包装错误的还原实现"
+    with open(os.path.join(VERIFY, "crates/editor/src/format.rs"), encoding="utf-8") as handle:
+        assert "pub fn plan" in handle.read(), "副本里缺格式化计划实现（MINE 没同步？）"
+    with open(os.path.join(VERIFY, "crates/engine/src/sql/formatter.rs"), encoding="utf-8") as handle:
+        assert "format_with_report" in handle.read(), "副本里缺格式化报告实现"
     print("自检通过：副本 = HEAD + 本次改动")
     print(f"下一步：cd {os.path.relpath(VERIFY)} && cargo check -p rds-workbench — **不要**设 CARGO_TARGET_DIR")
 

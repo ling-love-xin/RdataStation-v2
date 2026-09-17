@@ -431,7 +431,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 
 | # | 问题 | 证据 | 影响 | 修法 |
 | --- | --- | --- | --- | --- |
-| 1 | ~~**格式化输出是 Rust Debug 打印**~~ **已修（2026-09-15，P0.3）** | `engine/src/sql/formatter.rs` 改用 sqlglot-rust 的 `generate_pretty`（多语句走 `parse_statements_with_comments` 逐条生成 + `;\n\n` 拼接），**无新增依赖**；回归测试从“非空”升级为“不是 Debug 打印 / 结果可再次解析 / 多语句不丢句 / 解析失败原样返回 / 前导注释不丢” | — | 残留：行内 / 尾随注释可能丢失（生成器能力边界，见 §12 #3） |
+| 1 | ~~**格式化输出是 Rust Debug 打印**~~ **已修（2026-09-15，P0.3；2026-09-18 加区间回填）** | `engine/src/sql/formatter.rs` 改用 sqlglot-rust 的 `generate_pretty`（**B10 起 `format_with_report` 先拿 `sql/split.rs` 的语句区间、逐条格式化后回填原位**——区间外的注释 / 空行 / 半句一个字节不动），**无新增依赖**；回归测试从“非空”升级为“不是 Debug 打印 / 结果可再次解析 / 多语句不丢句 / 解析失败原样返回 / 前导注释不丢 / 报告口径” | — | 残留：含行内 / 尾随注释的语句**不被格式化**（原样返回，生成器能力边界，见 §12 #3）；编辑器侧已如实报“N 条解析不了，原样保留” |
 | 2 | ~~**语句切分朴素 `;` 切分**~~ **已修（2026-09-15，P0.4）** | 词法级状态机落在 `engine/src/sql/split.rs`（26 项表驱动测试）；`sql_parser_service::split_sql` 改为委托 | — | — |
 | 3 | **事务状态是桩**：`get_transaction_status` 恒 `false`；`begin/commit/rollback` 无会话跟踪 | `engine/src/services/sql_service.rs` | 事务 UI 无从驱动。**P0.2 三组探针已实证（2026-09-15）**：顺序执行下四库亲和 + `ROLLBACK` 均真实生效；**并发下 MySQL/PG 会换物理连接**（临时表“消失”）；MySQL 的 `BEGIN` 已改走文本协议可用 | 状态机 + **per-session 独占连接**一并做（并发是常态，不能靠池的顺序巧合）；否则事务在“后台执行 + 用户操作”并发时会静默失效 |
 | 4 | ~~**历史字段失真**~~ **已修（2026-09-15，P0.5）** | `SqlHistoryEntry` + `save_sql_history(_into)`：耗时/成功/失败原因/行数均真实，失败也留痕（4 项单测） | — | — |
@@ -503,7 +503,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | Dock 标签能力（脏点 / 关闭语义） | `crates/editor/src/view/host.rs`（`Panel::{title_suffix, closable}`；关闭语义见 §13 #15）+ `crates/workbench/src/view.rs`（中央区装配） |
 | 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs` + `engine/src/services/execution_service.rs`（`re_execute_with_filter` / `execute_duckdb_analysis`） |
 | D7 语句切分 | ~~`crates/editor/src/split.rs`~~ → **`crates/engine/src/sql/split.rs`**（✅ P0.4 已完成；`SqlEngine::split_statements` + `sql_parser_service::split_sql` 委托） |
-| D8 格式化 | `engine/src/sql/formatter.rs`（✅ P0.3 已改用 `generate_pretty` + 往返解析回归） |
+| D8 格式化 | `engine/src/sql/formatter.rs`（✅ P0.3 已改用 `generate_pretty` + 往返解析回归；✅ B10 起 `format_with_report` **按语句区间原位回填**、区间外字节不动）+ 编辑器侧计划 `crates/editor/src/format.rs`（选段优先 / 光标映射 / `changes` 口径） |
 | D9 历史字段 | `engine/src/persistence/history_store.rs::save_sql_history` + `engine/src/services/sql_service.rs::execute` |
 | D10 补全 | `crates/editor/src/completion.rs` + `database::MetadataService` |
 | D12 SQL 高亮 | ✅ `crates/engine/src/sql/highlight.rs`（tokenizer → 字节区间 + 类别）+ `crates/editor/src/view/`（按主题语法色板上色） |
@@ -523,7 +523,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | --- | --- | --- | --- | --- |
 | 1 | ✅ | ~~**Dock 标签条的关闭拦截钩子未查证**~~（**已查证，2026-09-15**）：`Panel::closable(cx)` 是唯一闸门（静态许可，不能问用户），`DockArea` 收到 `TabGroupEvent::ClosePanel` 后直接 `remove_panel_id`，没有“关闭前询问”钩子；另见 #23（**面板自己发起关闭会重入**）。结论：D13 成立（用 Dock 标签条 + `title_suffix` 脏点），未保存确认走“拦在动作层 + 状态栏说明”，需要弹窗时再上自定义标签条 | 已不影响 D13 成立 | — |
 | 2 | 🟡 | **事务会话亲和：顺序成立、并发不成立**（**已实证 2026-09-15，P0.2 / P0.2b / P0.2c**）：顺序执行下四库（MySQL/PG/SQLite/DuckDB）「临时表在事务内可见 + `ROLLBACK` 生效」全部成立；**并发执行下 MySQL/PG 的池会另开物理连接**（并发两侧之一报 `1146 表不存在` / `relation does not exist`），SQLite/DuckDB 为单句柄语义不受影响 | 事务 / 临时表**不能依赖池的巧合**：并发（后台执行 + 用户操作）会让 `BEGIN` 与后续语句落在不同物理连接 | 1b：**per-session 独占连接**（事务/会话期间 pin 住物理连接，或 `SqlService` 持有 `Box<dyn Transaction>`）；MySQL 的 `begin/commit/rollback` 已改走**文本协议**（`raw_sql`，已实证通过），不再报 1295 |
-| 3 | ✅→🟡 | ~~**格式化实现待定**~~（**已定，2026-09-15（P0.3）**：用 sqlglot-rust 自带 generator，不引新依赖）| 残留（**已实测，2026-09-15**）：**注释不会丢**——行内 / 尾随注记会让 sqlglot 解析失败，而解析失败即原样返回；代价是**含行内 / 尾随注释的语句不会被格式化**（用户看到原样文本）；另：非 MySQL 目标的 `#` 注记会被改写成 `--` | 1a 在状态栏/提示里明说“该语句含注释，已跳过格式化”（不让用户以为格式化失败了）；将来若真需要格式化这类语句，再评估自研缩进器 |
+| 3 | ✅→🟡 | ~~**格式化实现待定**~~（**已定，2026-09-15（P0.3）**：用 sqlglot-rust 自带 generator，不引新依赖；**2026-09-18 B10 起**：区间原位回填 + 编辑器侧回执）| 残留（**已实测，2026-09-15**）：**注释不会丢**——行内 / 尾随注记会让 sqlglot 解析失败，而解析失败即原样返回；代价是**含行内 / 尾随注释的语句不会被格式化**（用户看到原样文本）；另：非 MySQL 目标的 `#` 注记会被改写成 `--` | ✅ **已落实（2026-09-18）**：编辑器状态栏如实报“N 条解析不了（可能是还没写完），已原样保留”（`FormatReport.kept_verbatim` → `editor/src/format.rs` 的 `changes()` 分支），不再有“以为格式化失败”的误解；将来若真需要格式化这类语句，再评估自研缩进器 |
 | 4 | 🟡 | 现有 `EditorPanel` 的连接详情卡 / 导航树 / 属性面板宿主与编辑器耦在同一面板 | 收编时容易把 M3/M4 的职责带进 editor crate | 按 §3.3 表格逐项迁出，先迁"编辑器"部分，其余留 workbench |
 | 5 | 🟡 | 分析模式的语言集合（是否提前 Python） | 影响 Session 抽象与进程基建 | 用户拍板（§13 #5）；默认按 D18 只做 SQL + Markdown |
 | 6 | 🟡 | 尺寸常量落点：`editor` crate 自带 `ui.rs` 还是复用 workbench 的 | 影响依赖方向（editor 不应依赖 workbench） | editor 自带 `ui.rs`；跨模块共用常量上提到 `shared` 或由 gpui-kit 主题承担 |

@@ -32,6 +32,11 @@ pub struct ConnectionOption {
     pub name: String,
     /// 运行态：是否已建连（宿主维护的真实状态，不猜）
     pub connected: bool,
+    /// 【B10】驱动类型（`mysql_native` / `postgres_native` / `sqlite` / `duckdb` …）
+    ///
+    /// 编辑器用它决定**格式化 / 执行计划 / 转译用哪套方言**（同一个连接、两种引擎时，
+    /// 方言不能猜）。宿主填（它才知道连接是什么驱动）。
+    pub db_type: String,
 }
 
 /// 连接端口（宿主注入；未注入 = 没有可选项，且建连请求明确失败）
@@ -115,6 +120,7 @@ mod tests {
             short: if id.starts_with('G') { "G" } else { "P" }.to_string(),
             name: name.to_string(),
             connected,
+            db_type: "mysql_native".to_string(),
         }
     }
 

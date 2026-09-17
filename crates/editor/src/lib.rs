@@ -79,6 +79,7 @@ pub mod diagnostics;
 pub mod edit;
 pub mod execution;
 pub mod export;
+pub mod format;
 pub mod history;
 pub mod limits;
 pub mod mode;

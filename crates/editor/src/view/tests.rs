@@ -21,7 +21,7 @@ use gpui_kit::{
     Render, Styled as _, TestAppContext, VisualTestContext, Window,
 };
 
-use crate::commands::{ExecuteAll, ExecuteSql, SaveDocument, ToggleComment};
+use crate::commands::{ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment};
 use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
 use crate::connection::{ConnectionOption, ConnectionsPort};
 use crate::execution::{self, QueryData, QueryRunner};
@@ -72,6 +72,7 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
             KeyBinding::new("ctrl-/", ToggleComment, Some("editor")),
             KeyBinding::new("ctrl-enter", ExecuteSql, Some("editor")),
             KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
+            KeyBinding::new("ctrl-shift-f", FormatDocument, Some("editor")),
         ]);
     });
 }
@@ -2224,6 +2225,8 @@ fn option(id: &str, short: &str, name: &str) -> ConnectionOption {
         short: short.to_string(),
         name: name.to_string(),
         connected: false,
+        // B10：方言来自驱动；大多数用例用 MySQL，需要别的方言的用例自己改这一项
+        db_type: "mysql_native".to_string(),
     }
 }
 
@@ -2520,6 +2523,154 @@ fn the_toolbar_only_offers_execution_in_sql_mode(cx: &mut TestAppContext) {
     });
     cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
     assert!(!exec_present(cx), "分析模式的执行随单元落地（1c）");
+}
+
+// ===== B10：格式化（`Ctrl+Shift+F` / 工具栏「⇤ 格式化」）=====
+//
+// 分两扇：**能力**按模式分层（文本模式不解析 SQL 就不该有格式化），**行为**看真按键——
+// 格式化改的是用户手上的文本，所以“改哪、没改哪、为什么没改”都要有回执。
+
+/// 工具栏按能力分层：格式化只在 SQL 模式出现
+#[gpui_kit::test]
+fn the_toolbar_offers_format_only_in_sql_mode(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\format.sql", "select 1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    let format_present = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.debug_bounds("editor-format").is_some()
+    };
+    assert!(format_present(cx), "SQL 模式应当有「格式化」");
+
+    shared.update(|service| service.set_mode(&id, EditorMode::Text));
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.sync_mode(window, cx)));
+    assert!(!format_present(cx), "文本模式不解析 SQL，不得出现格式化");
+}
+
+/// `Ctrl+Shift+F`：真按键 → 文本真被排版、状态栏报“改了几条”
+#[gpui_kit::test]
+fn ctrl_shift_f_formats_the_document_and_reports_the_count(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id) = shared_with_document(r"D:\sql\format.sql", "select a,b from t where x=1;");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+    cx.simulate_keystrokes("ctrl-shift-f");
+
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert!(text.contains("FROM"), "关键字应当大写：{text:?}");
+    assert!(text.contains('\n'), "格式化后应当分行：{text:?}");
+    // 文档内容跟着走（否则保存下去的还是旧文本）
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).document_content_for_test()),
+        Some(text.clone()),
+        "服务层必须拿到格式化后的文本"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("格式化要有回执");
+    assert!(message.contains("已格式化 1 条语句"), "{message}");
+}
+
+/// 没写完的语句**原样保留**，并在状态栏里如实报出来（不是“失败”，也不是悄悄丢掉）
+#[gpui_kit::test]
+fn a_half_written_statement_is_kept_verbatim_and_reported(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    // 第二句缺右括号：解析不了——用户正打到一半就按了格式化
+    let (shared, id) = shared_with_document(r"D:\sql\half.sql", "select a,b from t;\nselect (1");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.format_document(window, cx)));
+
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert!(
+        text.ends_with("select (1"),
+        "解析不了的语句要一个字节不动：{text:?}"
+    );
+    assert!(text.contains("FROM"), "能格式化的那句照常排：{text:?}");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要说清楚哪条没动");
+    assert!(message.contains("解析不了"), "{message}");
+}
+
+/// 有选区只格式化选区：**选区外一个字节不动**（别顺手把用户的草稿也排了）
+#[gpui_kit::test]
+fn formatting_a_selection_leaves_the_rest_untouched(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let original = "select a,b from t;\n\n-- 下面是草稿\nselect   c   from   u";
+    let (shared, id) = shared_with_document(r"D:\sql\selection.sql", original);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 只选中第一句（含分号：`select a,b from t;` 共 18 字节）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_selection_for_test(0..18, cx));
+    });
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.format_document(window, cx)));
+
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert!(text.contains("SELECT"), "选中的那句要排版：{text:?}");
+    assert!(text.contains("FROM"), "选中的那句要排版：{text:?}");
+    assert!(text.contains("-- 下面是草稿"), "选区外的注释不得被动：{text:?}");
+    assert!(
+        text.contains("select   c   from   u"),
+        "选区外的语句要原样保留：{text:?}"
+    );
+    // 选区跟着结果走（继续改还能接着改选中的那段）
+    let range = cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx));
+    assert!(!range.is_empty(), "格式化后选区应当还在");
+}
+
+/// 只读文档拒绝格式化，并给出原因
+#[gpui_kit::test]
+fn formatting_a_readonly_document_is_refused(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    let id = shared
+        .open(
+            OpenRequest::untitled("select a,b from t", EditorMode::Sql)
+                .with_read_only(crate::model::ReadOnly::editor_only()),
+        )
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.format_document(window, cx)));
+
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).text_for_test(cx)),
+        "select a,b from t",
+        "只读文档不得被改"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("拒绝要留原因");
+    assert!(message.contains("只读"), "{message}");
+}
+
+/// 文本模式拒绝格式化（记事本不解析 SQL）
+#[gpui_kit::test]
+fn formatting_in_text_mode_is_refused(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document(r"D:\sql\notes.txt", "select a,b from t");
+    shared.update(|service| service.set_mode(&id, EditorMode::Text));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| panel.update(cx, |panel, cx| panel.format_document(window, cx)));
+
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).text_for_test(cx)),
+        "select a,b from t",
+        "文本模式不得被排版"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("拒绝要留原因");
+    assert!(message.contains("文本模式"), "{message}");
 }
 
 // ===== B5：结果工具栏（复制 / 刷新 / 影响行数 / 截断 / 分栏）=====
