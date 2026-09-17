@@ -23,7 +23,7 @@
 //!   （`ctrl-w` 的处理器在宿主 workbench：面板在自己的 `update` 里让 Dock 移除自己会重入）
 //!   · `ctrl-enter` 执行（选区 > 当前语句）· `ctrl-shift-enter` 执行全部
 //!   · `ctrl-o` 打开文件 · `ctrl-shift-s` 另存为（两者都弹系统文件对话框，宿主实现）
-//! - ✅ `execution` + `store` + `view/widgets/result_grid`：最小执行闭环（A14，真机四库实测通过）
+//! - ✅ `execution` + `store` + `view/results/grid`：最小执行闭环（A14，真机四库实测通过）
 //! - ✅ 查找 / 替换（A11）：**内核能力 + 组件库面板**（`Ctrl+F` / `Ctrl+H`），本 crate 零自建；
 //!   内核在 `Input` context 里先拿到按键且已注册 listener，外层再绑收不到（架构 §12 #24）
 //! - ✅ `session`：会话端口（光标 / 选区 / 模式落库；A12，宿主注入实现）
@@ -40,7 +40,7 @@
 //!   `ResultPlacement{Replace, NewSet}`（在新结果标签中执行 = 追加且**原结果集保持选中**）·
 //!   通道按 **job** 粒度执行（一条 job 多条语句顺序跑、逐条回填、**失败不中断**，忙标记覆盖整批）·
 //!   `ResultStore` 每文档一份**结果集列表 + 选中项**（上限 5，淘汰最旧的未选中项）·
-//!   结果集标签条 `view/widgets/result_sets.rs`（组件库 `TabBar::segmented`；两份以上才画）·
+//!   结果集标签条 `view/results/sets.rs`（组件库 `TabBar::segmented`；两份以上才画）·
 //!   结果区唯一读点 `EditorHostPanel::sync_result_view`
 //! - ✅ 中断与超时（B3）：入口 = 状态栏 `■ 中断`（原型 §5.1 给的就是状态栏 ■；
 //!   `Ctrl+Break` 在 GPUI / 本机键盘上不可得，「等价入口」就是它）+ 耗时累加 `执行中 3.4s…`；

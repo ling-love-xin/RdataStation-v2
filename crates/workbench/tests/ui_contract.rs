@@ -120,16 +120,16 @@ fn view_layer_has_no_raw_size_literals() {
             include_str!("../../editor/src/view/widgets/status_bar.rs"),
         ),
         (
-            "editor/view/widgets/error_card.rs",
-            include_str!("../../editor/src/view/widgets/error_card.rs"),
+            "editor/view/results/error_card.rs",
+            include_str!("../../editor/src/view/results/error_card.rs"),
         ),
         (
-            "editor/view/widgets/result_grid.rs",
-            include_str!("../../editor/src/view/widgets/result_grid.rs"),
+            "editor/view/results/grid.rs",
+            include_str!("../../editor/src/view/results/grid.rs"),
         ),
         (
-            "editor/view/widgets/result_sets.rs",
-            include_str!("../../editor/src/view/widgets/result_sets.rs"),
+            "editor/view/results/sets.rs",
+            include_str!("../../editor/src/view/results/sets.rs"),
         ),
         (
             "editor/view/highlight.rs",
@@ -212,16 +212,16 @@ fn ui_sources_have_no_raw_color_literals() {
             include_str!("../../editor/src/view/widgets/status_bar.rs"),
         ),
         (
-            "editor/view/widgets/error_card.rs",
-            include_str!("../../editor/src/view/widgets/error_card.rs"),
+            "editor/view/results/error_card.rs",
+            include_str!("../../editor/src/view/results/error_card.rs"),
         ),
         (
-            "editor/view/widgets/result_grid.rs",
-            include_str!("../../editor/src/view/widgets/result_grid.rs"),
+            "editor/view/results/grid.rs",
+            include_str!("../../editor/src/view/results/grid.rs"),
         ),
         (
-            "editor/view/widgets/result_sets.rs",
-            include_str!("../../editor/src/view/widgets/result_sets.rs"),
+            "editor/view/results/sets.rs",
+            include_str!("../../editor/src/view/results/sets.rs"),
         ),
         (
             "editor/view/highlight.rs",

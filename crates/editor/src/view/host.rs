@@ -35,11 +35,9 @@ use crate::store::ResultEntry;
 use crate::ui;
 use crate::view::dialogs;
 use crate::view::highlight;
-use crate::view::widgets::error_card::{self, ErrorCard};
-use crate::view::widgets::result_grid::{
-    self, ResultGridDelegate, ResultStatus, ResultToolbar,
-};
-use crate::view::widgets::result_sets::{self, ResultSetTab};
+use crate::view::results::error_card::{self, ErrorCard};
+use crate::view::results::grid::{self as result_grid, ResultGridDelegate, ResultStatus, ResultToolbar};
+use crate::view::results::sets::{self as result_sets, ResultSetTab};
 use crate::view::widgets::status_bar::{self, StatusInputs};
 
 /// 【B7】「抓全量后导出」的在途状态

@@ -6,6 +6,7 @@
 pub mod dialogs;
 pub mod highlight;
 pub mod host;
+pub mod results;
 pub mod widgets;
 
 #[cfg(test)]
