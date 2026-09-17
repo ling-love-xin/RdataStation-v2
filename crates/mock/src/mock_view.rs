@@ -7,7 +7,7 @@
 //!
 //! | 出口 | 语义 |
 //! | --- | --- |
-//! | 查看详情 | 中央「Mock 数据」tab：字段清单（可编辑）+ 预览表格 |
+//! | 打开这张表（右 Dock 清单点一行） | 中央「Mock · {表}」tab：列（草稿可编辑 / 结果只读）+ 预览表格 |
 //! | 持久化为项目分析库表 | 在**项目**分析库（`{项目}/.RSmeta/analytics.duckdb`）**新建**表（已存在则报错，引导改用「追加」） |
 //! | 追加到既有表 | **显式**选择既有表；主键自增起点接续表内行数 |
 //! | 保存到草稿箱 | `{项目}/mock/mock_*.{ext}`（时间戳命名，只读项目禁写） |
@@ -16,14 +16,16 @@
 //! **生成不写库**：`generate` 只产临时表 + 预览（内存 DuckDB），一切落库与落盘都由出口按钮触发。
 //! 这是与 v1 语义对齐的关键——「生成」不是「写入」。
 //!
-//! # 排版（方案①）
+//! # 排版（D18 / D38：管理表 vs 设计这张表）
 //!
-//! - **右 Dock（17.5rem，[`MockPanel`]）**：目标表名 / 行数·种子·语言 / 列来源（导入结构 · 手工加列）/
-//!   生成 / 出口按钮组 / 结果与错误 / **生成历史**（重放配置、删除记录）；
-//! - **中央 tab（[`MockDetailView`]）**：字段清单（编辑走对话框）+ 预览表格。
+//! - **右 Dock（17.5rem 起步，可拖拽调宽，[`MockPanel`]）**：表清单（唯一管理入口：状态点 + 表名 + 行数，
+//!   点一行切 / 开它的 tab；关系挂在子表行下）+ 集合动作（生成 N 张表 / 退出场景）+ 出口按钮组 + 出口反馈
+//!   + **折叠**的生成历史 / 用户模板；
+//! - **中央 tab（[`MockDetailView`]）**：这张表的设计与生成状态——表名 / 行数 / 种子 / 语言、生成、
+//!   进度与取消、失败原因与重试、列（编辑走对话框）、预览；结果表 tab 只读（列 + 预览 + 跨表后果）。
 //!
-//! 右 Dock 起步宽 17.5rem 且不可拖拽调宽（`ui::RIGHT_DOCK_WIDTH`），字段表与预览表格放不下，
-//! 故按「配置与出口在右、字段与预览在中」切分；两处状态同源（详情视图持有面板实体，单一权威）。
+//! **状态单点**：单表任务的进度 / 取消 / 失败在中央那张表的表头，集合任务（场景 N 张表）的在右 Dock
+//! 场景清单下（两者互斥）；清单行只给状态点与百分比。两处状态同源（详情视图持有面板实体，单一权威）。
 //!
 //! # 归属与边界
 //!
@@ -47,6 +49,7 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::collapsible::Collapsible;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::dock::{BasePanel, Panel as ComponentPanel, PanelEvent, TabGroup};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
@@ -1159,6 +1162,8 @@ pub struct MockPanel {
     history_error: Option<String>,
     /// 「保存为模板」对话框的名称输入框
     template_name: Option<Entity<InputState>>,
+    /// 底部折叠段（生成历史 / 用户模板）是否展开（默认收起：面板天天用的是上面那份清单）
+    fold_open: bool,
 }
 
 /// 进行中任务的视图侧状态（进度镜像 + 轮询泵句柄）。
@@ -1253,6 +1258,34 @@ impl ScenarioRelation {
     }
 }
 
+/// 进度行画在哪一处（D38 的「状态单点」）：单表任务在中央那张表的表头，
+/// 集合任务（场景 N 张表 / 批量落库）在右 Dock 的场景清单下——同一时刻只有一处。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobRowScope {
+    /// 单表任务（生成 / 追加 / 三个出口）
+    Single,
+    /// 集合任务（场景模板 / 批量落库）
+    Collection,
+}
+
+/// 清单行的状态点：三种落库状态 + 三种生成状态（两者不是一回事——生成的是临时表，
+/// 落库的才是项目库里的）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableStatus {
+    /// 已落库（本会话落过）
+    Persisted,
+    /// 有结果但还没落库
+    NotPersisted,
+    /// 它引用的父表还没落库（孩子那条路会落空）
+    DanglingParent,
+    /// 生成中（带百分比）
+    Generating,
+    /// 生成失败
+    Failed,
+    /// 还没生成
+    Idle,
+}
+
 /// 从模板里扫出全部表间关系（真身在列的 `dependency` 上，这里是派生）。
 fn relations_of(template: &ScenarioTemplate) -> Vec<ScenarioRelation> {
     template
@@ -1336,6 +1369,7 @@ impl MockPanel {
             history_loading: false,
             history_error: None,
             template_name: None,
+            fold_open: false,
         }
     }
 
@@ -1945,7 +1979,13 @@ impl MockPanel {
     /// 为何要给这句：**出口只作用于当前表**，而关系是跨表的——只落子表不落父表，
     /// 落地的数据就悬空了（而 mock 不改已落地的数据，也不会去替用户补）。
     pub fn current_relation_note(&self) -> Option<String> {
-        let current = self.current_info()?.table_name.clone();
+        let table = self.current_info()?.table_name.clone();
+        self.relation_note_for(&table)
+    }
+
+    /// 指定那张表的**跨表后果**（结果表 tab 的表头用：那张 tab 看的可能是别的表，见 D35）。
+    pub(crate) fn relation_note_for(&self, table: &str) -> Option<String> {
+        let current = table.to_string();
         let mut out: Vec<String> = Vec::new();
         let parents: Vec<String> = self
             .last_relations
@@ -3030,7 +3070,77 @@ impl MockPanel {
     // ==================== 渲染：配置面板 ====================
 
     /// 目标表名 + 行数 / 种子 / 语言。
-    fn render_target(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    /// 进行中任务的进度归属（`None` = 空闲）。
+    pub fn job_row_scope(&self) -> Option<JobRowScope> {
+        let job = self.job.as_ref()?;
+        Some(if job.kind.by_table() {
+            JobRowScope::Collection
+        } else {
+            JobRowScope::Single
+        })
+    }
+
+    /// 这张表引用的**出边关系**（清单里挂在它那一行下面的 `↳` 子行）。
+    ///
+    /// 真身在列上的 `dependency`；这里用生成时的关系快照（`last_relations`）——
+    /// 用户可能已经退出场景态，也可能改过工作副本。
+    pub fn outgoing_relations(&self, table: &str) -> Vec<ScenarioRelation> {
+        self.last_relations
+            .iter()
+            .filter(|relation| relation.child_table == table)
+            .cloned()
+            .collect()
+    }
+
+    /// 清单行的状态点（生成状态优先，其次是落库状态）：
+    /// 生成的是临时的，落库的才是项目库里的——两者不是一回事。
+    pub fn table_status(&self, table: &str) -> TableStatus {
+        if let Some(job) = self.job.as_ref() {
+            // 只有生成类才叫「生成中」：出口类（写入 / 导出）只动已有结果，不改生成状态
+            if !job.kind.by_table() && job.progress.phase.is_quantified() {
+                let target = self
+                    .results
+                    .first()
+                    .map(|info| info.table_name.as_str())
+                    .unwrap_or(self.draft.table_name.as_str());
+                if target == table {
+                    return TableStatus::Generating;
+                }
+            }
+        }
+        if self.results.iter().any(|info| info.table_name == table) {
+            // 悬空引用优先于「落了没」：它指的是可行动的事实（父表还没落，值会悬空），
+            // 而「已落库」只说明本表自己落了——落没落都不影响那句⚠还成不成立
+            if self.table_references_unlanded(table) {
+                return TableStatus::DanglingParent;
+            }
+            if self.landed_tables.iter().any(|landed| landed == table) {
+                return TableStatus::Persisted;
+            }
+            return TableStatus::NotPersisted;
+        }
+        if self.error.is_some() && self.draft.table_name == table {
+            return TableStatus::Failed;
+        }
+        TableStatus::Idle
+    }
+
+    /// 这张表引用的父表里，还有没落库的吗（`⚠ 引用的表未落库` 的数据来源）。
+    ///
+    /// 只看**本会话的**落库记录（`landed_tables`）：项目库里本来就有同名表不算它落过。
+    pub fn table_references_unlanded(&self, table: &str) -> bool {
+        self.outgoing_relations(table).iter().any(|relation| {
+            !self
+                .landed_tables
+                .iter()
+                .any(|landed| landed == &relation.parent_table)
+        })
+    }
+
+    /// 懒创建表头那几个输入（`InputState::new` 需要 window；事件路径置位的待写值也在这里落地）。
+    ///
+    /// 表头画在**中央 tab**，但输入状态归面板（单一权威）：面板出让的是渲染，不是状态。
+    fn ensure_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.table_input.is_none() {
             let initial = self.draft.table_name.clone();
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("目标表名"));
@@ -3051,9 +3161,10 @@ impl MockPanel {
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("随机种子"));
             self.seed_input = Some(state);
         }
+    }
 
-        let muted = cx.theme().colors.muted_foreground;
-
+    /// 表头第一行：表名 / 行数 / 种子 / 语言（草稿可改）。
+    fn render_target_rows(&self, cx: &mut Context<Self>) -> Div {
         let mut row = div().h_flex().items_center().gap_2().w_full();
         if let Some(input) = self.table_input.clone() {
             row = row.child(div().flex_1().min_w_0().child(Input::new(&input)));
@@ -3102,19 +3213,138 @@ impl MockPanel {
                     menu
                 })
         });
+        div().v_flex().gap_1().w_full().child(row).child(nums)
+    }
+
+    /// 表头第二行：单表生成（三态）+ 场景模板菜单；有结果时尾部带一行结果摘要。
+    ///
+    /// 三态是同一个动作的不同阶段：无结果 → 主按钮「生成」；有结果 → 收成小按钮「重新生成」
+    /// （避免“要不要重跑”的分歧）；进行中 → 禁用「生成中…」。
+    fn render_generate_row(&self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let running = self.is_running();
+        let generating = self.is_generating();
+        let has_result = self.has_result();
+
+        let generate = {
+            let entity = cx.entity();
+            let mut button = if has_result {
+                Button::new("mock-detail-generate")
+                    .secondary()
+                    .xsmall()
+                    .label("重新生成")
+            } else {
+                Button::new("mock-detail-generate")
+                    .primary()
+                    .label(if generating { "生成中…" } else { "生成" })
+            };
+            if !running {
+                button = button.on_click(move |_, _, app| {
+                    entity.update(app, |panel, cx| panel.run_generate(cx));
+                });
+            }
+            button
+        };
+
+        // 场景模板（内置 6 套多表）：同样是生成类任务，进行中一并禁用
+        let scenario = self.render_scenario_button("mock-detail-scenario", cx);
+
+        let summary = self.current_info().map(|info| {
+            format!(
+                "临时表 {} · {} 行 · {} ms",
+                info.temp_table_name,
+                with_thousands(u64::from(info.row_count)),
+                info.elapsed_ms
+            )
+        });
 
         div()
-            .v_flex()
-            .gap_1()
+            .h_flex()
+            .items_center()
+            .gap_2()
             .w_full()
-            .child(
+            .child(generate)
+            .child(scenario)
+            .children(summary.map(|text| {
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .text_xs()
                     .text_color(muted)
-                    .child("目标表名（新表；落库与文件名取此名）"),
-            )
-            .child(row)
-            .child(nums)
+                    .text_ellipsis()
+                    .child(text)
+            }))
+    }
+
+    /// 这张表的**设计与生成状态**（画在中央 tab 的表头，决策 D38）。
+    ///
+    /// 为何在中央：表名 / 行数 / 种子 / 语言与列定义同属「这张表怎么造」，进度 / 取消 / 失败
+    /// 与重试从属于同一次生成——它们属于这张表，不属于「有哪些表」那份清单（那是右 Dock 的事）。
+    pub(crate) fn render_design_head(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        self.ensure_inputs(window, cx);
+        let muted = cx.theme().colors.muted_foreground;
+        let danger = cx.theme().colors.danger;
+        let running = self.is_running();
+        let has_result = self.has_result();
+
+        let mut head = div()
+            .v_flex()
+            .gap_2()
+            .w_full()
+            .child(self.render_target_rows(cx));
+
+        if self.scenario.is_some() {
+            // 场景态：单表生成让位给「生成 N 张表」（在右 Dock），这里只说明草稿的用途
+            head =
+                head.child(div().text_xs().text_color(muted).child(
+                    "这是草稿：把表名 / 行数 / 列调好，再去右侧「＋ 加表」把它加进本次生成",
+                ));
+        } else {
+            head = head.child(self.render_generate_row(cx));
+        }
+
+        // 单表任务的进度与取消（集合任务的在右 Dock 场景清单下，见 D38）
+        head = head.child(self.render_job_row(JobRowScope::Single, cx));
+
+        // 失败原因就地给 + 重试：只认“没有结果”的失败（生成类）——出口类失败有结果，
+        // 属于出口按钮那段（反馈也就地给在那边）
+        if let Some(err) = self.error.clone().filter(|_| !has_result) {
+            let retry = {
+                let entity = cx.entity();
+                let mut button = Button::new("mock-detail-retry")
+                    .secondary()
+                    .xsmall()
+                    .label("重试");
+                if !running {
+                    button = button.on_click(move |_, _, app| {
+                        entity.update(app, |panel, cx| panel.run_generate(cx));
+                    });
+                }
+                button
+            };
+            head = head.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(danger)
+                            .text_ellipsis()
+                            .child(format!("生成失败：{err}")),
+                    )
+                    .child(retry),
+            );
+        }
+        head
     }
 
     /// 任务进行中的进度行：`Progress` 组件 + 阶段文案 + 取消按钮。
@@ -3124,19 +3354,24 @@ impl MockPanel {
     ///   不定量动画；也不给取消（强中断会留下半张表 / 半个文件）。
     ///
     /// 空闲时返回一个空占位（保持后续元素的排列稳定）。
-    fn render_job_row(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_job_row(&mut self, scope: JobRowScope, cx: &mut Context<Self>) -> Div {
+        if self.job_row_scope() != Some(scope) {
+            return div();
+        }
         let Some(job) = self.job.as_ref() else {
             return div();
         };
+        // 量纲即归属（D38）：集合任务（场景 / 批量落库）画在右 Dock 场景清单下，
+        // 单表任务（生成 / 追加 / 三个出口）画在中央这张表的表头。
         let progress = job.progress;
         let cancellable = job.kind.generates();
         let cancel_requested = job.cancel_requested;
-        let by_table = job.kind.by_table();
+        let by_table_detail = job.kind.by_table();
 
         let muted = cx.theme().colors.muted_foreground;
         let detail = match progress.phase {
             MockJobPhase::Generating if progress.batches_total == 0 => "准备中…".to_string(),
-            MockJobPhase::Generating if by_table => format!(
+            MockJobPhase::Generating if by_table_detail => format!(
                 "{} / {} 张表（每张表逐个处理）",
                 progress.batches_done, progress.batches_total
             ),
@@ -3147,7 +3382,7 @@ impl MockPanel {
                 with_thousands(progress.rows_done() as u64),
                 with_thousands(progress.rows_total as u64)
             ),
-            phase if by_table => format!(
+            phase if by_table_detail => format!(
                 "{}…（{} / {} 张表）",
                 phase.label(),
                 progress.batches_done,
@@ -3206,15 +3441,43 @@ impl MockPanel {
             )
     }
 
-    /// 列来源 + 生成 + 出口按钮组 + 结果。
-    fn render_actions(&mut self, cx: &mut Context<Self>) -> Div {
-        let muted = cx.theme().colors.muted_foreground;
-        let success = cx.theme().colors.success;
-        let danger = cx.theme().colors.danger;
-        let info = cx.theme().colors.info;
+    /// 场景模板菜单按钮（中央表头的生成行与空态卡片共用；`id` 分开是避免同帧撞 id）。
+    pub(crate) fn render_scenario_button(
+        &self,
+        id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let running = self.is_running();
+        let templates = self.scenario_templates.clone();
+        let entity = cx.entity();
+        Button::new(id)
+            .secondary()
+            .xsmall()
+            .label("场景模板 ▾")
+            .disabled(running)
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                if templates.is_empty() {
+                    return menu.item(PopupMenuItem::new("（没有可用的场景模板）").disabled(true));
+                }
+                for choice in templates.iter() {
+                    let id = choice.id.clone();
+                    let entity = entity.clone();
+                    menu = menu.item(PopupMenuItem::new(choice.menu_label()).on_click(
+                        move |_, _, app| {
+                            let id = id.clone();
+                            entity.update(app, |panel, cx| panel.open_scenario(&id, cx));
+                        },
+                    ));
+                }
+                menu
+            })
+            .into_any_element()
+    }
 
-        // 列来源：导入源库结构 / 手工加列
-        let import_btn = {
+    /// 列来源按钮（导入源库结构 / 手工加列）：它们属于「这张表的列」→ 画在中央 tab 的「列」段。
+    pub(crate) fn render_column_source_buttons(&self, cx: &mut Context<Self>) -> Div {
+        let import = {
             let entity = cx.entity();
             Button::new("mock-import-schema")
                 .secondary()
@@ -3226,7 +3489,7 @@ impl MockPanel {
                     });
                 })
         };
-        let add_btn = {
+        let add = {
             let entity = cx.entity();
             Button::new("mock-add-column")
                 .secondary()
@@ -3239,57 +3502,371 @@ impl MockPanel {
                     });
                 })
         };
+        div().h_flex().items_center().gap_2().child(import).child(add)
+    }
 
-        // 生成（后台任务：进行中时禁用，进度与取消另起一行）
+    /// 表清单：**唯一的管理入口**（D38）——单表 / 本次生成 / 结果表三态共用一个渲染器。
+    ///
+    /// 行 = 状态点 + 表名 + 行数；点一行 = 切 / 开那张表的中央 tab（选中行就是当前表）。
+    /// 关系挂在**子表**行下的 `↳` 子行（真身是列上的 `dependency`），不再单开一段。
+    fn render_table_list(&mut self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let success = cx.theme().colors.success;
+        let warning = cx.theme().colors.warning;
+        let primary = cx.theme().colors.primary;
+        let accent = cx.theme().colors.accent;
         let running = self.is_running();
-        let generating = self.is_generating();
-        let generate = {
-            let entity = cx.entity();
-            let mut button = Button::new("mock-generate")
-                .primary()
-                .label(if generating { "生成中…" } else { "生成" })
-                .w_full();
-            if !running {
-                button = button.on_click(move |_, _, app| {
-                    entity.update(app, |panel, cx| panel.run_generate(cx));
-                });
-            }
-            button
-        };
+        let radius = cx.theme().radius;
 
-        // 场景模板（内置 6 套多表一键生成）：同样是生成类任务，进行中一并禁用
-        let scenario = {
+        let mut list = div().v_flex().gap_1().w_full();
+
+        // ── 结果表：每张结果表一个中央 tab；状态点说「落了没 / 缺不缺父表」──
+        if !self.results.is_empty() {
+            let count = self.results.len();
+            let current_index = self.current.min(count.saturating_sub(1));
+            list = list.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("结果表（{count}）· 点一行切到它的 tab")),
+            );
+            for (index, info) in self.results.iter().enumerate() {
+                let selected = index == current_index;
+                let name = info.table_name.clone();
+                let (glyph, status, color) = match self.table_status(&name) {
+                    TableStatus::Persisted => ("✓", "已落库", success),
+                    TableStatus::NotPersisted => ("○", "未落库", muted),
+                    TableStatus::DanglingParent => ("⚠", "引用的表未落库", warning),
+                    TableStatus::Generating => ("◐", "生成中", primary),
+                    TableStatus::Failed => ("⚠", "生成失败", warning),
+                    TableStatus::Idle => ("○", "未生成", muted),
+                };
+                let open = {
+                    let entity = cx.entity();
+                    let click_name = name.clone();
+                    div()
+                        .id(ElementId::Name(SharedString::from(format!(
+                            "mock-result-open-{click_name}"
+                        ))))
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .font_weight(if selected {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .text_ellipsis()
+                        .cursor_pointer()
+                        .child(name.clone())
+                        .on_click(move |_, window, app| {
+                            let name = click_name.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.select_result(index, cx);
+                                panel.open_table_detail(&name, window, cx);
+                            });
+                        })
+                };
+                let mut row = div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .px_1()
+                    .py_0p5()
+                    .rounded(radius)
+                    .child(open)
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("{} 行", with_thousands(u64::from(info.row_count)))),
+                    )
+                    .child(render_status_cell(glyph, status, color));
+                if selected {
+                    row = row.bg(accent);
+                }
+                list = list.child(row);
+
+                // 关系挂在**子表**行下：`↳ user_id → users.id · 1..1,000`
+                for relation in self.outgoing_relations(&name).iter() {
+                    let range = self.relation_range(relation);
+                    list = list.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            .pl_4()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(div().flex_1().min_w_0().text_ellipsis().child(format!(
+                                "↳ {} → {}.{}",
+                                relation.child_column,
+                                relation.parent_table,
+                                relation.parent_column
+                            )))
+                            .children(range.map(|range| div().flex_none().child(range))),
+                    );
+                }
+            }
+            return list;
+        }
+
+        // ── 本次 Mock 表：场景工作副本（还没有结果）——行尾「编辑 / ✕」，关系挂子表行下 ──
+        if let Some(template) = self.scenario.clone() {
+            let total_rows: u32 = template.tables.iter().map(|table| table.row_count).sum();
+            list = list.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .text_ellipsis()
+                    .child(format!(
+                        "本次 Mock 表（{}）· {} · {} 行",
+                        template.tables.len(),
+                        template.name,
+                        with_thousands(u64::from(total_rows))
+                    )),
+            );
+            let relations = relations_of(&template);
+            for table in template.tables.iter() {
+                let name = table.name.clone();
+                let edit = {
+                    let entity = cx.entity();
+                    let click_name = name.clone();
+                    let mut button = Button::new(ElementId::Name(SharedString::from(format!(
+                        "mock-scenario-table-edit-{click_name}"
+                    ))))
+                    .ghost()
+                    .xsmall()
+                    .label("编辑")
+                    .disabled(running);
+                    if !running {
+                        button = button.on_click(move |_, window, app| {
+                            let name = click_name.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.open_table_dialog(&name, window, cx);
+                            });
+                        });
+                    }
+                    button
+                };
+                let remove = {
+                    let entity = cx.entity();
+                    let click_name = name.clone();
+                    let mut button = Button::new(ElementId::Name(SharedString::from(format!(
+                        "mock-scenario-table-remove-{click_name}"
+                    ))))
+                    .ghost()
+                    .xsmall()
+                    .label("✕")
+                    .disabled(running);
+                    if !running {
+                        button = button.on_click(move |_, _, app| {
+                            let name = click_name.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.remove_scenario_table(&name, cx);
+                            });
+                        });
+                    }
+                    button
+                };
+                list =
+                    list.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            .px_1()
+                            .py_0p5()
+                            .rounded(radius)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_ellipsis()
+                                    .child(name.clone()),
+                            )
+                            .child(div().flex_none().text_xs().text_color(muted).child(format!(
+                                "{} 行",
+                                with_thousands(u64::from(table.row_count))
+                            )))
+                            .child(render_status_cell("○", "待生成", muted))
+                            .child(edit)
+                            .child(remove),
+                    );
+
+                // 关系挂在**子表**行下（行尾 ✕ 删关系）
+                for relation in relations.iter().filter(|r| r.child_table == name) {
+                    let range = self.relation_range(relation);
+                    let remove_relation = {
+                        let entity = cx.entity();
+                        let child_table = relation.child_table.clone();
+                        let child_column = relation.child_column.clone();
+                        Button::new(ElementId::Name(SharedString::from(format!(
+                            "mock-relation-remove-{}-{}",
+                            child_table, child_column
+                        ))))
+                        .ghost()
+                        .xsmall()
+                        .label("✕")
+                        .on_click(move |_, _, app| {
+                            let child_table = child_table.clone();
+                            let child_column = child_column.clone();
+                            entity.update(app, |panel, cx| {
+                                panel.remove_relation(&child_table, &child_column, cx);
+                            });
+                        })
+                    };
+                    list = list.child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .w_full()
+                            .pl_4()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(div().flex_1().min_w_0().text_ellipsis().child(format!(
+                                "↳ {} → {}.{}",
+                                relation.child_column,
+                                relation.parent_table,
+                                relation.parent_column
+                            )))
+                            .children(range.map(|range| div().flex_none().child(range)))
+                            .child(remove_relation),
+                    );
+                }
+            }
+
+            // 自定义多表：把当前草稿加进来（导入结构 / 列编辑都在单表态里做完）
+            let add_table = {
+                let entity = cx.entity();
+                let mut button = Button::new("mock-scenario-table-add")
+                    .secondary()
+                    .xsmall()
+                    .label("＋ 加表（当前草稿）")
+                    .disabled(running);
+                if !running {
+                    button = button.on_click(move |_, _, app| {
+                        entity.update(app, |panel, cx| {
+                            panel.add_draft_to_scenario(cx);
+                        });
+                    });
+                }
+                button
+            };
+            let add_relation = {
+                let entity = cx.entity();
+                let mut button = Button::new("mock-add-relation")
+                    .secondary()
+                    .xsmall()
+                    .label("＋ 加关系")
+                    .disabled(running);
+                if !running {
+                    button = button.on_click(move |_, window, app| {
+                        entity.update(app, |panel, cx| {
+                            panel.open_relation_dialog(window, cx);
+                        });
+                    });
+                }
+                button
+            };
+            list = list
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .w_full()
+                        .child(add_table)
+                        .child(add_relation),
+                )
+                .child(div().text_xs().text_color(muted).child(
+                    "关系只在本次多表生成内成立（不读已落数据、不改已生成的表 / 文件）；行尾是取值域：父列自增参数 × 父表行数，改父表行数它跟着变。",
+                ))
+                .child(div().text_xs().text_color(muted).child(
+                    "加进来的表取草稿的表名 / 行数 / 列：先在中央那张草稿 tab 里调好，再加进本次生成。",
+                ));
+            return list;
+        }
+
+        // ── 单表态：草稿（与它的结果）就这一行 ──
+        let name = self.draft.table_name.clone();
+        let rows = with_thousands(self.draft.options.rows as u64);
+        let (glyph, status, color) = match self.table_status(&name) {
+            TableStatus::Generating => {
+                let percent = self
+                    .job
+                    .as_ref()
+                    .map(|job| job.progress.percent())
+                    .unwrap_or(0.0);
+                ("◐", format!("生成中 {percent:.0}%"), primary)
+            }
+            TableStatus::Persisted => ("✓", "已落库".to_string(), success),
+            TableStatus::NotPersisted => ("●", "已生成".to_string(), success),
+            TableStatus::DanglingParent => ("⚠", "引用的表未落库".to_string(), warning),
+            TableStatus::Failed => ("⚠", "生成失败".to_string(), warning),
+            TableStatus::Idle => ("○", "未生成".to_string(), muted),
+        };
+        let open = {
             let entity = cx.entity();
-            let templates = self.scenario_templates.clone();
-            Button::new("mock-scenario")
-                .secondary()
-                .label("场景模板 ▾")
-                .disabled(running)
-                .dropdown_menu(move |menu, _window, _cx| {
-                    let mut menu = menu;
-                    if templates.is_empty() {
-                        return menu
-                            .item(PopupMenuItem::new("（没有可用的场景模板）").disabled(true));
-                    }
-                    for choice in templates.iter() {
-                        let id = choice.id.clone();
-                        let entity = entity.clone();
-                        menu = menu.item(PopupMenuItem::new(choice.menu_label()).on_click(
-                            move |_, _, app| {
-                                let id = id.clone();
-                                entity.update(app, |panel, cx| panel.open_scenario(&id, cx));
-                            },
-                        ));
-                    }
-                    menu
+            div()
+                .id("mock-draft-open")
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_ellipsis()
+                .cursor_pointer()
+                .child(name.clone())
+                .on_click(move |_, window, app| {
+                    entity.update(app, |panel, cx| {
+                        panel.open_detail_for(DetailTarget::Draft, window, cx);
+                    });
                 })
         };
+        list.child(
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .w_full()
+                .px_1()
+                .py_0p5()
+                .rounded(radius)
+                .bg(accent)
+                .child(open)
+                .child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(format!("{rows} 行")),
+                )
+                .child(render_status_cell(glyph, &status, color)),
+        )
+    }
 
-        // 生成行：单表生成（主按钮，占满剩余宽度）+ 场景模板（多表一键生成）
-        //
-        // 场景态下换成「生成场景 / 退出」：两套「生成」同时摆在台上会让人分不清
-        // 到底是生单表还是生一批。
-        let generate_row = {
+    /// 这张表引用的父表里，还有没落库的吗（`⚠ 引用的表未落库` 的数据来源）。
+    ///
+    /// 只看**本会话的**落库记录（`landed_tables`）：项目库里本来就有同名表不算它落过。
+
+    /// 右 Dock 的面板主体：表清单 + 集合动作 + 出口 + 出口反馈（D38）。
+    fn render_actions(&mut self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let success = cx.theme().colors.success;
+        let danger = cx.theme().colors.danger;
+        let info = cx.theme().colors.info;
+
+        let running = self.is_running();
+        let generating = self.is_generating();
+
+        // 集合级动作：生成 N 张表 / 退出场景（它属于这一批，不属于某张表 → 留在管理侧，D38）
+        let scenario_actions = {
             let mut row = div().h_flex().items_center().gap_2().w_full();
             if let Some(template) = self.scenario.clone() {
                 let start = {
@@ -3325,232 +3902,71 @@ impl MockPanel {
                 row = row
                     .child(div().flex_1().min_w_0().child(start))
                     .child(div().flex_none().child(exit));
-            } else {
-                row = row
-                    .child(div().flex_1().min_w_0().child(generate))
-                    .child(scenario);
             }
             row
         };
 
-        // 场景态：本次要生成的表 + 表间关系（可增删）；单表态下整体为空
-        let scenario_block =
-            {
-                let fg = cx.theme().colors.foreground;
-                let mut block = div().v_flex().gap_1().w_full();
-                if let Some(template) = self.scenario.clone() {
-                    let total_rows: u32 = template.tables.iter().map(|t| t.row_count).sum();
-                    block = block.child(div().text_xs().text_color(muted).text_ellipsis().child(
-                        format!(
-                            "本次生成（{} 张表 · {} 行）· {}",
-                            template.tables.len(),
-                            with_thousands(total_rows as u64),
-                            template.name
-                        ),
-                    ));
-                    for table in template.tables.iter() {
-                        let edit = {
-                            let entity = cx.entity();
-                            let name = table.name.clone();
-                            let mut button = Button::new(ElementId::Name(SharedString::from(
-                                format!("mock-scenario-table-edit-{name}"),
-                            )))
-                            .ghost()
-                            .xsmall()
-                            .label("编辑")
-                            .disabled(running);
-                            if !running {
-                                button = button.on_click(move |_, window, app| {
-                                    let name = name.clone();
-                                    entity.update(app, |panel, cx| {
-                                        panel.open_table_dialog(&name, window, cx);
-                                    });
-                                });
-                            }
-                            button
-                        };
-                        let remove = {
-                            let entity = cx.entity();
-                            let name = table.name.clone();
-                            let mut button = Button::new(ElementId::Name(SharedString::from(
-                                format!("mock-scenario-table-remove-{name}"),
-                            )))
-                            .ghost()
-                            .xsmall()
-                            .label("删除")
-                            .disabled(running);
-                            if !running {
-                                button = button.on_click(move |_, _, app| {
-                                    let name = name.clone();
-                                    entity.update(app, |panel, cx| {
-                                        panel.remove_scenario_table(&name, cx);
-                                    });
-                                });
-                            }
-                            button
-                        };
-                        block = block.child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .w_full()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_xs()
-                                        .text_color(fg)
-                                        .text_ellipsis()
-                                        .child(table.name.clone()),
-                                )
-                                .child(div().flex_none().text_xs().text_color(muted).child(
-                                    format!("{} 行", with_thousands(u64::from(table.row_count))),
-                                ))
-                                .child(edit)
-                                .child(remove),
-                        );
+        // ① 表清单：唯一的管理入口（单表 / 本次生成 / 结果表三态共用一个渲染器）
+        let table_list = self.render_table_list(cx);
+
+        // 关系闭包里还没落库的：摆出来 + 一键依次落（免得漏落，留下悬空引用）
+        let pending_row = {
+            let pending = self.pending_relation_tables();
+            if pending.is_empty() {
+                div()
+            } else {
+                let button = {
+                    let entity = cx.entity();
+                    let mut button = Button::new("mock-persist-related")
+                        .secondary()
+                        .xsmall()
+                        .label(format!("落库这 {} 张", pending.len()))
+                        .disabled(running);
+                    if !running {
+                        button = button.on_click(move |_, _, app| {
+                            entity.update(app, |panel, cx| panel.persist_related(cx));
+                        });
                     }
-
-                    // 自定义多表：把当前草稿加进来（导入结构 / 列编辑都在单表态里做完）
-                    let add_table = {
-                        let entity = cx.entity();
-                        let mut button = Button::new("mock-scenario-table-add")
-                            .secondary()
-                            .xsmall()
-                            .label("＋ 加表（当前草稿）")
-                            .disabled(running);
-                        if !running {
-                            button = button.on_click(move |_, _, app| {
-                                entity.update(app, |panel, cx| {
-                                    panel.add_draft_to_scenario(cx);
-                                });
-                            });
-                        }
-                        button
-                    };
-                    block = block.child(add_table);
-
-                    let relations = self.scenario_relations();
-                    block = block.child(
+                    button
+                };
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .text_xs()
-                            .text_color(muted)
-                            .child(format!("表间关系（{} 条）", relations.len())),
-                    );
-                    if relations.is_empty() {
-                        block = block.child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("还没有关系：加一条，子表的列就从父表主键域取值"),
-                        );
-                    }
-                    for relation in relations {
-                        let range = self.relation_range(&relation);
-                        let remove = {
-                            let entity = cx.entity();
-                            let child_table = relation.child_table.clone();
-                            let child_column = relation.child_column.clone();
-                            Button::new(ElementId::Name(SharedString::from(format!(
-                                "mock-relation-remove-{}-{}",
-                                child_table, child_column
-                            ))))
-                            .ghost()
-                            .xsmall()
-                            .label("删除")
-                            .on_click(move |_, _, app| {
-                                let child_table = child_table.clone();
-                                let child_column = child_column.clone();
-                                entity.update(app, |panel, cx| {
-                                    panel.remove_relation(&child_table, &child_column, cx);
-                                });
-                            })
-                        };
-                        block = block.child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_2()
-                                .w_full()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_xs()
-                                        .text_color(fg)
-                                        .text_ellipsis()
-                                        .child(relation.label()),
-                                )
-                                .children(range.map(|range| {
-                                    div().flex_none().text_xs().text_color(muted).child(range)
-                                }))
-                                .child(remove),
-                        );
-                    }
-
-                    let add = {
-                        let entity = cx.entity();
-                        let mut button = Button::new("mock-add-relation")
-                            .secondary()
-                            .xsmall()
-                            .label("＋ 加关系")
-                            .disabled(running);
-                        if !running {
-                            button = button.on_click(move |_, window, app| {
-                                entity.update(app, |panel, cx| {
-                                    panel.open_relation_dialog(window, cx);
-                                });
-                            });
-                        }
-                        button
-                    };
-                    block = block
-                        .child(add)
-                        .child(div().text_xs().text_color(muted).child(
-                            "关系只在本次多表生成内成立：不读已有数据，也不改已生成的表 / 文件",
-                        ));
-                    block = block.child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child("场景生成不记入生成历史（历史是单表配置的重放来源）"),
-                    );
-                }
-                block
-            };
+                            .text_color(cx.theme().colors.warning)
+                            .text_ellipsis()
+                            .child(format!(
+                                "还有 {} 张没落库：{}",
+                                pending.len(),
+                                pending.join("、")
+                            )),
+                    )
+                    .child(button)
+            }
+        };
 
         // 任务进行中：进度条（组件，不手搓）+ 量纲文案 + 取消
-        let job_row = self.render_job_row(cx);
+        // 集合任务的进度与取消（单表任务的在中央表头，见 D38）
+        let job_row = self.render_job_row(JobRowScope::Collection, cx);
 
-        // 出口：详情 tab + 落库 + 追加 + 草稿箱 + 另存为（任务进行中全部禁用：一次只能跑一个）
+        // 出口：落库 + 追加 + 草稿箱 + 另存为（任务进行中全部禁用：一次只能跑一个）
         //
-        // 「查看详情」看的是**当前表**（结果表一个表一个 tab）：没结果时才回草稿。
-        let detail = {
-            let entity = cx.entity();
-            let has_result = self.has_result();
-            Button::new("mock-open-detail")
-                .secondary()
-                .label(if has_result {
-                    "查看详情（当前表）"
-                } else {
-                    "查看详情（字段与预览）"
-                })
-                .w_full()
-                .on_click(move |_, window, app| {
-                    entity.update(app, |panel, cx| {
-                        let target = panel.current_detail_target();
-                        panel.open_detail_for(target, window, cx);
-                    });
-                })
-        };
+        // 不再有「查看详情」按钮：清单点一行就是入口（D38），少一个按钮就少一份要同步的文案。
+        // 没有结果时也禁用（出口是「把结果落地」，没结果就没什么可落）：点了报错不如直接不可点。
+        let has_result = self.has_result();
         let persist = {
             let entity = cx.entity();
             Button::new("mock-persist")
                 .secondary()
                 .label("持久化到项目分析库")
                 .w_full()
-                .disabled(running)
+                .disabled(running || !has_result)
                 .on_click(move |_, _, app| {
                     entity.update(app, |panel, cx| panel.persist_table(cx));
                 })
@@ -3562,7 +3978,7 @@ impl MockPanel {
                 .secondary()
                 .label("追加到既有表 ▾")
                 .w_full()
-                .disabled(running)
+                .disabled(running || !has_result)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     if tables.is_empty() {
@@ -3588,7 +4004,7 @@ impl MockPanel {
                 .secondary()
                 .label("保存到草稿箱 ▾")
                 .w_full()
-                .disabled(running)
+                .disabled(running || !has_result)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     for (label, format) in FILE_FORMATS {
@@ -3606,7 +4022,7 @@ impl MockPanel {
                 .secondary()
                 .label("另存为 ▾")
                 .w_full()
-                .disabled(running)
+                .disabled(running || !has_result)
                 .dropdown_menu(move |menu, _window, _cx| {
                     let mut menu = menu;
                     for (label, format) in FILE_FORMATS {
@@ -3644,252 +4060,124 @@ impl MockPanel {
                 })
         };
 
-        let column_count = self.draft.columns.len();
         // 当前结果表（出口作用于它）；多张时上面给一个「当前表」选择器
-        let generated = self.current_info().cloned();
-        let result_count = self.results.len();
-        let current_index = self.current.min(result_count.saturating_sub(1));
         let outcome = self.outcome.clone();
         let error = self.error.clone();
         let landed = self.landed.clone();
         let read_only = self.host.read_only();
-        let has_result = self.has_result();
         let fg = cx.theme().colors.foreground;
 
-        let mut panel = div()
+        div()
             .v_flex()
             .gap_2()
             .w_full()
             .p_2()
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(muted)
-                            .text_ellipsis()
-                            .child(format!("列（{column_count}）")),
-                    )
-                    .child(import_btn)
-                    .child(add_btn),
-            )
-            .child(generate_row)
-            .child(scenario_block)
-            .child(job_row);
-
-        // 结果表：**一张表一个中央 tab**——这里列出每张表，点一行打开 / 切到它的 tab
-        // （当前表 = 出口作用的那张；与实际打开的 tab 同一状态：切 tab 也会改这里）
-        if result_count > 0 {
-            let mut list = div().v_flex().gap_1().w_full().child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(format!("结果表（{result_count} 张）· 点一行打开 / 切到它的 tab")),
-            );
-            for (index, info) in self.results.iter().enumerate() {
-                let current = index == current_index;
-                let name = info.table_name.clone();
-                let open = {
-                    let entity = cx.entity();
-                    let click_name = name.clone();
-                    div()
-                        .id(ElementId::Name(SharedString::from(format!(
-                            "mock-result-open-{click_name}"
-                        ))))
-                        .px_1()
-                        .py_0p5()
-                        .rounded(cx.theme().radius)
-                        .text_xs()
-                        .font_weight(if current {
-                            FontWeight::MEDIUM
-                        } else {
-                            FontWeight::NORMAL
-                        })
-                        .text_color(fg)
-                        .cursor_pointer()
-                        .child(name.clone())
-                        .on_click(move |_, window, app| {
-                            let name = click_name.clone();
-                            entity.update(app, |panel, cx| {
-                                panel.select_result(index, cx);
-                                panel.open_table_detail(&name, window, cx);
-                            });
-                        })
-                };
-                list = list.child(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .w_full()
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(if current { "●" } else { "○" }),
-                        )
-                        .child(open)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_xs()
-                                .text_color(muted)
-                                .text_ellipsis()
-                                .child(format!(
-                                    "{} 行",
-                                    with_thousands(u64::from(info.row_count))
-                                )),
-                        )
-                        .children(current.then(|| {
-                            div().flex_none().text_xs().text_color(muted).child("当前表")
-                        })),
-                );
-            }
-            let source = self.scenario_source.clone();
-            panel = panel.child(list.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .text_ellipsis()
-                    .child(match source {
-                        Some(name) => {
-                            format!("来自场景模板「{name}」：出口只作用于当前表——切 tab 就是切表")
-                        }
-                        None => "出口只作用于当前表——切 tab 就是切表".to_string(),
-                    }),
-            ));
-        }
-
-        if let Some(info) = generated.as_ref() {
-            panel = panel.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .text_ellipsis()
-                    .child(format!(
-                        "{} · 临时表 {} · {} 行 · {} ms",
-                        info.table_name,
-                        info.temp_table_name,
-                        with_thousands(info.row_count as u64),
-                        info.elapsed_ms
-                    )),
-            );
-        }
-        panel = panel
+            .child(table_list)
+            .child(pending_row)
+            // ② 集合级动作与它的进度：单表任务的在中央表头（D38）
+            .child(scenario_actions)
+            .child(job_row)
+            // ③ 出口：作用于当前 tab 那张表
             .child(
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("出口（生成后可用）"),
+                    .child("出口（作用于当前 tab 那张表；生成后可用）"),
             )
             .child(
                 div()
                     .v_flex()
                     .gap_1()
                     .w_full()
-                    .child(detail)
                     .child(persist)
                     .child(append)
                     .child(scratchpad)
                     .child(export),
             )
+            // ④ 出口反馈就地给（成功 / 失败 / 落库目标 / 只读）
+            .children(outcome.map(|text| div().text_xs().text_color(success).child(text)))
+            .children(error.map(|err| div().text_xs().text_color(danger).child(err)))
+            .children(landed.map(|table| {
+                div()
+                    .text_xs()
+                    .text_color(fg)
+                    .child(format!("落库目标：{table}"))
+            }))
+            .children(read_only.then(|| {
+                div()
+                    .text_xs()
+                    .text_color(info)
+                    .child("只读模式：不允许落库与写文件（仍可生成预览）")
+            }))
             .child(
                 div()
                     .text_xs()
                     .text_color(muted)
                     .child("数据只写入项目分析库（{项目}/.RSmeta/analytics.duckdb）与文件，不回传源库（M7）；要进全局分析库，用资产库存档或草稿箱升级"),
-            );
-
-        if let Some(text) = outcome {
-            panel = panel.child(div().text_xs().text_color(success).child(text));
-        }
-        if let Some(err) = error {
-            panel = panel.child(div().text_xs().text_color(danger).child(err));
-        }
-        if let Some(table) = landed {
-            panel = panel.child(
-                div()
-                    .text_xs()
-                    .text_color(fg)
-                    .child(format!("落库目标：{table}")),
-            );
-        }
-        if read_only {
-            panel = panel.child(
-                div()
-                    .text_xs()
-                    .text_color(info)
-                    .child("只读模式：不允许落库与写文件（仍可生成预览）"),
-            );
-        }
-        if has_result {
-            panel = panel.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("结果已就绪：点「查看详情」看字段与预览"),
-            );
-        }
-        // 关系是跨表的，而出口只作用于当前表：把「只落这张」的后果说清楚
-        if let Some(note) = self.current_relation_note() {
-            panel = panel.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().colors.warning)
-                    .child(note),
-            );
-        }
-        // 关系里还没落库的表：摆出来 + 一键依次落（免得用户漏落，留下悬空引用）
-        let pending_tables = self.pending_relation_tables();
-        if !pending_tables.is_empty() {
-            let button = {
-                let entity = cx.entity();
-                let mut button = Button::new("mock-persist-related")
-                    .secondary()
-                    .xsmall()
-                    .label(format!("落库这 {} 张", pending_tables.len()))
-                    .disabled(running);
-                if !running {
-                    button = button.on_click(move |_, _, app| {
-                        entity.update(app, |panel, cx| panel.persist_related(cx));
-                    });
-                }
-                button
-            };
-            panel = panel.child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(cx.theme().colors.warning)
-                            .text_ellipsis()
-                            .child(format!(
-                                "关系里还有 {} 张没落库：{}",
-                                pending_tables.len(),
-                                pending_tables.join("、")
-                            )),
-                    )
-                    .child(button),
-            );
-        }
-        panel
+            )
     }
 
     /// 打开「导入源库结构」对话框。
+    /// 底部折叠段：生成历史 + 用户模板（默认收起）。
+    ///
+    /// 为何收起来：面板天天用的是上面那份「有哪些表」清单，历史与模板是偶尔翻一次的落盘记录；
+    /// 展开状态存实体（不是每帧派生的），展开体走 `Collapsible`（不手搮揭示动画）。
+    fn render_folds(&mut self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().colors.muted_foreground;
+        let border = cx.theme().colors.border;
+        let open = self.fold_open;
+        let toggle = {
+            let entity = cx.entity();
+            let label = if self.history_loaded {
+                format!(
+                    "{} 生成历史（{}）· 用户模板（{}）",
+                    if open { "▾" } else { "▸" },
+                    self.history.len(),
+                    self.templates.len()
+                )
+            } else {
+                format!("{} 生成历史 · 用户模板", if open { "▾" } else { "▸" })
+            };
+            Button::new("mock-fold-toggle")
+                .ghost()
+                .xsmall()
+                .label(label)
+                .on_click(move |_, _, app| {
+                    entity.update(app, |panel, cx| {
+                        panel.fold_open = !panel.fold_open;
+                        cx.notify();
+                    });
+                })
+        };
+
+        let body = div()
+            .v_flex()
+            .gap_1()
+            .w_full()
+            .p_2()
+            .border_t_1()
+            .border_color(border)
+            .child(self.render_templates(cx))
+            // 历史口径：场景一次产 N 张表，记进去反而误导（`RunRecord::of` 对 Scenario 返回 None）
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("场景生成不记入生成历史（历史是单表配置的重放来源）"),
+            )
+            .child(self.render_history(cx));
+
+        div()
+            .v_flex()
+            .w_full()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(border)
+            // `Collapsible` 是「揭盖」容器：触发行是普通子元素，内容走 `content`（收起时不渲染）
+            .child(toggle)
+            .child(Collapsible::new().open(open).content(body))
+    }
+
     /// 用户模板段：把当前配置存下来 / 套用已有模板 / 删除。
     ///
     /// 与历史段共用同一次后台读（`HistorySnapshot`）；「保存」走对话框问名字，
@@ -4484,8 +4772,7 @@ fn complex_form_line(
 
 impl Render for MockPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let fg = cx.theme().colors.foreground;
-        let target = self.render_target(window, cx);
+        let _ = window;
         let actions = self.render_actions(cx);
         // 右 Dock 内容区自身可滚动（Dock 的 `#tab-content` 不产生滚动，见布局规格）
         div()
@@ -4504,17 +4791,10 @@ impl Render for MockPanel {
                             .v_flex()
                             .gap_2()
                             .w_full()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(fg)
-                                    .child("Mock 数据生成"),
-                            )
-                            .child(target)
+                            // Dock 的面板头已经写着「Mock 生成」：面板内不再重复一个标题，
+                            // 直接从「有哪些表」那份清单开始（D38）
                             .child(actions)
-                            .child(self.render_templates(cx))
-                            .child(self.render_history(cx)),
+                            .child(self.render_folds(cx)),
                     ),
             )
     }
@@ -5316,13 +5596,16 @@ impl MockDetailView {
 }
 
 impl Render for MockDetailView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let fg = cx.theme().colors.foreground;
         let muted = cx.theme().colors.muted_foreground;
-        let success = cx.theme().colors.success;
-        let danger = cx.theme().colors.danger;
-        // 一次取齐渲染要用的状态（读租约不能跨到 `cx` 的独占使用处）
-        let (draft, generated, outcome, error, landed, scenario_source, progress) = {
+        let warning = cx.theme().colors.warning;
+        let border = cx.theme().colors.border;
+        let is_draft = matches!(self.target, DetailTarget::Draft);
+
+        // 一次读齐渲染要用的状态：读租约不能跨到 `cx` 的独占使用处，而下面的
+        // `panel.update`（表头要懒创建输入、按钮要进面板）必须独占面板。
+        let (table, generated, scenario_source, relation_note, draft_columns, result_columns) = {
             let panel = self.panel.read(cx);
             // 本 tab 看哪张表：草稿 tab 看草稿目标表，结果表 tab 看它自己
             // （与面板的「当前表」无关——切 tab 就能对照两张表的预览）
@@ -5330,140 +5613,160 @@ impl Render for MockDetailView {
                 DetailTarget::Draft => panel.draft().table_name.clone(),
                 DetailTarget::Table(name) => name.clone(),
             };
+            let generated = panel
+                .results()
+                .iter()
+                .find(|info| info.table_name == table)
+                .cloned();
+            let relation_note = if is_draft {
+                None
+            } else {
+                panel.relation_note_for(&table)
+            };
+            let result_columns = generated
+                .as_ref()
+                .map(|info| info.columns.len())
+                .unwrap_or(0);
             (
-                panel.draft().clone(),
-                panel
-                    .results()
-                    .iter()
-                    .find(|info| info.table_name == table)
-                    .cloned(),
-                panel.outcome().map(|s| s.to_string()),
-                panel.error().map(|s| s.to_string()),
-                panel.landed().map(|s| s.to_string()),
+                table,
+                generated,
                 panel.scenario_source().map(|s| s.to_string()),
-                panel.job_progress(),
+                relation_note,
+                panel.draft().columns.len(),
+                result_columns,
             )
         };
 
-        let is_draft = matches!(self.target, DetailTarget::Draft);
-        // 生成按钮只属于草稿 tab：结果表 tab 上摆一个「生成」会让人以为能只重跑这一张
-        let generate = is_draft.then(|| {
-            let entity = self.panel.clone();
-            let running = self.panel.read(cx).is_running();
-            let generating = self.panel.read(cx).is_generating();
-            let mut button = Button::new("mock-detail-generate")
-                .primary()
-                .xsmall()
-                .label(if generating { "生成中…" } else { "生成" });
-            if !running {
-                button = button.on_click(move |_, _, app| {
-                    entity.update(app, |panel, cx| panel.run_generate(cx));
-                });
-            }
-            button
-        });
-        // 摘要行：草稿 tab 说草稿（含进行中的阶段），结果表 tab 说这张表自己
-        let summary = match &self.target {
-            DetailTarget::Draft => {
-                let seed = match draft.options.seed {
-                    Some(seed) => seed.to_string(),
-                    None => "随机".to_string(),
-                };
-                let base = format!(
-                    "字段（{}）· 目标表 {} · {} 行 · 种子 {seed} · {}",
-                    draft.columns.len(),
-                    draft.table_name,
-                    with_thousands(draft.options.rows as u64),
-                    locale_label(&draft.options.locale)
-                );
-                // 任务进行中：摘要行尾追加阶段（面板已有进度条与取消，这里只做一行文字同步）
-                match progress.as_ref() {
-                    Some(progress) if progress.phase.is_quantified() => {
-                        format!("{base} · {} {:.0}%", progress.phase.label(), progress.percent())
-                    }
-                    Some(progress) => format!("{base} · {}", progress.phase.label()),
-                    None => base,
-                }
-            }
-            DetailTarget::Table(name) => match generated.as_ref() {
-                Some(info) => {
-                    let rows = with_thousands(u64::from(info.row_count));
-                    match scenario_source.as_deref() {
-                        Some(source) => format!("表 {name} · {rows} 行 · 来自场景模板「{source}」"),
-                        None => format!("表 {name} · {rows} 行 · 本次生成"),
-                    }
-                }
-                None => format!("表 {name} · 这一轮没有它的结果（重新生成后再看）"),
-            },
-        };
-        let header = div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .w_full()
-            .child(
+        // ── 表头 ──
+        // 草稿 tab：这张表的设计与生成状态（表名 / 行数 / 种子 / 语言 + 生成 + 进度 + 失败重试）。
+        // 状态归面板（单一权威），画在中央——它属于这张表，不属于「有哪些表」那份清单。
+        // 结果表 tab：只读事实 + 跨表后果；不给「生成」，免得像能只重跑这一张。
+        let head = if is_draft {
+            self.panel
+                .update(cx, |panel, cx| panel.render_design_head(window, cx))
+        } else {
+            let facts = match generated.as_ref() {
+                Some(info) => format!(
+                    "{} · {} 行 · 已生成（临时表 {} · {} ms）",
+                    table,
+                    with_thousands(u64::from(info.row_count)),
+                    info.temp_table_name,
+                    info.elapsed_ms
+                ),
+                None => format!("{table} · 这一轮没有它的结果（重新生成后再看）"),
+            };
+            let mut head = div().v_flex().gap_1().w_full().child(
                 div()
-                    .flex_1()
-                    .min_w_0()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(fg)
                     .text_ellipsis()
-                    .child(summary),
-            )
-            .children(generate);
-
-        let mut body = div()
-            .v_flex()
-            .size_full()
-            .min_h_0()
-            .gap_2()
-            .p_3()
-            .child(header);
-
-        match &self.target {
-            DetailTarget::Draft => {
-                if draft.columns.is_empty() {
-                    body = body.child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child("暂无列：在右 Dock 面板导入源库结构或手工加列。"),
-                    );
-                } else {
-                    body = body.child(self.render_fields(cx));
-                }
+                    .child(facts),
+            );
+            if let Some(source) = scenario_source.clone() {
+                head = head.child(div().text_xs().text_color(muted).child(format!(
+                    "来自场景模板「{source}」：列与预览都属于它自己；看别的表切 tab（或在右 Dock 结果表清单点一行）"
+                )));
             }
-            // 结果表 tab：列只读（它们来自这次生成）；要改列就回草稿 tab 改，再重新生成
-            DetailTarget::Table(_) => {
-                body = body.child(self.render_result_columns(generated.as_ref(), cx));
+            if let Some(note) = relation_note.clone() {
+                head = head.child(div().text_xs().text_color(warning).child(note));
             }
+            head
+        };
+
+        let mut body = div().v_flex().size_full().min_h_0().gap_2().p_3().child(
+            div()
+                .v_flex()
+                .gap_1()
+                .w_full()
+                .pb_2()
+                .border_b_1()
+                .border_color(border)
+                .child(head),
+        );
+
+        // ── 列 ──
+        if is_draft && draft_columns == 0 {
+            // 空态：三种起手方式都摆在这张 tab 上（右 Dock 只管表与出口）
+            let card = div()
+                .v_flex()
+                .gap_2()
+                .w_full()
+                .p_3()
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(border)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("还没有列：先把这张表造起来"),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(self.panel.update(cx, |panel, cx| {
+                            panel.render_scenario_button("mock-detail-scenario-empty", cx)
+                        }))
+                        .child(self.panel.update(cx, |panel, cx| {
+                            panel.render_column_source_buttons(cx)
+                        })),
+                )
+                .child(div().text_xs().text_color(muted).child(
+                    "列定义、表名 / 行数、预览都在这张 tab 里改；右侧面板负责管理表（清单 / 出口 / 历史）。",
+                ));
+            body = body.child(card);
+        } else if is_draft {
+            body = body
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .w_full()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(format!("列（{draft_columns}）")),
+                        )
+                        .child(
+                            self.panel
+                                .update(cx, |panel, cx| panel.render_column_source_buttons(cx)),
+                        ),
+                )
+                .child(self.render_fields(cx));
+        } else {
+            body = body
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(format!("列（{result_columns}）· 来自这次生成（只读）")),
+                )
+                .child(self.render_result_columns(generated.as_ref(), cx));
         }
 
+        // ── 预览 ──
         let preview_title = match generated.as_ref() {
             Some(info) => format!(
                 "预览（前 {} 行）· {} · 临时表 {} · 本次 {} 行 · {} ms",
                 PREVIEW_ROWS.min(info.preview.rows.len()),
                 info.table_name,
                 info.temp_table_name,
-                with_thousands(info.row_count as u64),
+                with_thousands(u64::from(info.row_count)),
                 info.elapsed_ms
             ),
             None if is_draft => {
-                format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点右上「生成」")
+                format!("预览（前 {PREVIEW_ROWS} 行）· 尚无结果——点表头「生成」")
             }
             None => format!("预览（前 {PREVIEW_ROWS} 行）· 这一轮没有这张表的结果"),
         };
         body = body.child(div().text_xs().text_color(muted).child(preview_title));
-
-        // 场景表 tab：说清它的列与预览都是这张表自己的（看别的表切 tab，不再有下拉）
-        if matches!(self.target, DetailTarget::Table(_)) {
-            if let Some(name) = scenario_source.as_deref() {
-                body = body.child(div().text_xs().text_color(muted).child(format!(
-                    "来自场景模板「{name}」：这张表的列与预览都属于它自己；看别的表切 tab（或在右 Dock 结果区点一行）"
-                )));
-            }
-        }
 
         let preview = generated.as_ref().map(|info| info.preview.clone());
         match preview {
@@ -5483,22 +5786,17 @@ impl Render for MockDetailView {
             }
         }
 
-        if let Some(text) = outcome {
-            body = body.child(div().text_xs().text_color(success).child(text));
-        }
-        if let Some(err) = error {
-            body = body.child(div().text_xs().text_color(danger).child(err));
-        }
-        if let Some(table) = landed {
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(success)
-                    .child(format!("落库目标：{table}")),
-            );
-        }
         body
     }
+}
+
+/// 清单行右端的**状态点**：一个字符（不引图标资产）+ 一句话。
+fn render_status_cell(glyph: &str, text: &str, color: Hsla) -> Div {
+    div()
+        .flex_none()
+        .text_xs()
+        .text_color(color)
+        .child(format!("{glyph} {text}"))
 }
 
 /// 预览表格：表头 + 前 N 行（固定列宽 + 横向滚动，纵向占满剩余高度）。

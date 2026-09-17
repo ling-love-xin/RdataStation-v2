@@ -19,11 +19,11 @@ use gpui_kit::{
 };
 
 use super::{
-    DetailTarget, HistoryReply, MockColumnSpec, MockDetailView, MockDraft, MockGenInfo, MockHost,
-    MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState, MockPanel, MockPreview,
-    MockRunOptions, RelationPick, ScenarioRelation, SchemaRequest, SchemaSource, focus_detail_tab,
-    param_text, parse_percent_ratio, parse_rows, parse_seed, patch_param, search_generators,
-    summarize_params, validate_table_name,
+    DetailTarget, HistoryReply, JobRowScope, MockColumnSpec, MockDetailView, MockDraft,
+    MockGenInfo, MockHost, MockJobDone, MockJobKind, MockJobPhase, MockJobProgress, MockJobState,
+    MockPanel, MockPreview, MockRunOptions, RelationPick, ScenarioRelation, SchemaRequest,
+    SchemaSource, TableStatus, focus_detail_tab, param_text, parse_percent_ratio, parse_rows,
+    parse_seed, patch_param, search_generators, summarize_params, validate_table_name,
 };
 use crate::generator_catalog::{self, ParamKind};
 use crate::history;
@@ -3030,6 +3030,82 @@ fn the_panel_spells_out_what_landing_only_the_current_table_means(cx: &mut TestA
     panel.update(cx, |panel, _cx| {
         assert!(panel.last_relations().is_empty());
         assert!(panel.current_relation_note().is_none());
+    });
+}
+
+/// D38 的分权：**状态单点**（单表任务的进度在中央、集合任务的在右 Dock，同时刻只有一处）、
+/// 清单状态点（生成 / 落库两套口径）、关系挂在**子表**行下、历史 / 模板默认收起。
+#[gpui_kit::test]
+fn the_table_list_keeps_status_and_progress_in_one_place(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = recorder();
+    let (panel, _detail, cx) = open_harness(cx, test_host(&rec));
+
+    // 空闲：没有进度行；折叠段默认收起；草稿还没生成
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.job_row_scope(), None);
+        assert!(!panel.fold_open, "历史 / 模板默认收起");
+        assert_eq!(panel.table_status("mock_data"), TableStatus::Idle);
+    });
+
+    // 单表生成：进度归中央（`Single`）
+    panel.update(cx, |panel, cx| {
+        panel.add_column("id".to_string(), ColumnDataType::Integer, cx);
+        panel.run_generate(cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.job_row_scope(), Some(JobRowScope::Single));
+        assert_eq!(panel.table_status("mock_data"), TableStatus::Generating);
+    });
+    poll_job(cx, &panel);
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.job_row_scope(), None);
+        assert_eq!(panel.table_status("mock_data"), TableStatus::NotPersisted);
+    });
+
+    // 场景生成：进度归右 Dock（`Collection`），关系挂在**子表**行下
+    panel.update(cx, |panel, cx| {
+        panel.load_scenario(toy_scenario(), cx);
+        panel.run_scenario(cx);
+    });
+    panel.update(cx, |panel, _cx| {
+        assert_eq!(panel.job_row_scope(), Some(JobRowScope::Collection));
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+    panel.update(cx, |panel, _cx| {
+        let orders = panel.outgoing_relations("orders");
+        assert_eq!(orders.len(), 1, "orders 有一条出边（挂在它那一行下）");
+        assert_eq!(orders[0].parent_table, "users");
+        assert!(panel.outgoing_relations("users").is_empty(), "父表没有出边");
+        assert_eq!(
+            panel.table_status("orders"),
+            TableStatus::DanglingParent,
+            "它引用的 users 还没落库"
+        );
+        assert_eq!(
+            panel.table_status("items"),
+            TableStatus::DanglingParent,
+            "它引用的 orders 还没落库"
+        );
+    });
+
+    // 落库 users（被 orders 引用）：orders 的悬空提示消失，users 自己转「已落库」
+    panel.update(cx, |panel, cx| {
+        panel.select_result(2, cx);
+        panel.persist_table(cx);
+    });
+    poll_job(cx, &panel);
+    draw(cx);
+    panel.update(cx, |panel, _cx| {
+        assert!(panel.landed_tables().iter().any(|table| table == "users"));
+        assert_eq!(panel.table_status("users"), TableStatus::Persisted);
+        assert_eq!(panel.table_status("orders"), TableStatus::NotPersisted);
+        assert_eq!(
+            panel.table_status("items"),
+            TableStatus::DanglingParent,
+            "items 的父表 orders 还没落库"
+        );
     });
 }
 

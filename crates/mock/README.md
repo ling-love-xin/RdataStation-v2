@@ -56,9 +56,9 @@ DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table`
 - 内置 6 套多表模板（电商 / HR / 博客 / 金融 / 社交 / 企业通讯录），引擎 `generate_scenario` 逐表生成并按**表**回调进度；
 - 面板「场景模板 ▾」一键生成：任务种类 `MockJobKind::Scenario(工作副本)`，装配层 `generate_scenario_at(template)` 逐表补预览，
   面板持多张结果（`results` / `current` / `scenario_source`），**一张结果表一个中央 tab**（草稿另有自己的 tab）；
-  出口作用于当前表——**切 tab 就是切表**，右 Dock 的结果表清单是管理入口；
-- **选模板先载入工作副本**（不立即生成）：列出本次要生成的表 + 表间关系段（可删）+「＋ 加关系」，
-  改完再点「生成 N 张表」——关系是这次生成的一部分，生成完再补就只能去改已落地的数据了；
+  出口作用于当前表——**切 tab 就是切表**，右 Dock 的表清单是管理入口；
+- **选模板先载入工作副本**（不立即生成）：清单列出本次要生成的表（每行可编辑 / 删除）+ 关系子行（可删）
+  +「＋ 加表 / ＋ 加关系」，改完再点「生成 N 张表」——关系是这次生成的一部分，生成完再补就只能去改已落地的数据了；
 - **不写库**（与单表生成同一定律），且**草稿不参与**（目标表 / 列 / 行数全来自模板）；
 - **表间引用**：关系挂在列上（`ColumnDependency::foreign_key` 是唯一构造点），取值域由父表参数**算出**
   （父列自增 + 行数），因此 **O(1) 内存、不读任何已落地数据**，也不要求父表先于子表
@@ -69,13 +69,18 @@ DDL / DML / DQL 一律由 `engine::sql::SqlEngine` 构造（`build_create_table`
   6 套模板共 24 处；`*_id` 列要么声明引用、要么进 `NOT_A_REFERENCE` 白名单（目前只有 `companies.tax_id`），
   由 4 项自检盯住（声明可解析 / 生成器域 ⊆ 父域 / 覆盖完整 / 白名单无幽灵条目）。
 
-### 7. 视图随 crate（Feature 自持视图，方案①两处排版）
+### 7. 视图随 crate（Feature 自持视图，D38 排版：管理表 vs 设计这张表）
 
 Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 
-- `MockPanel`：右 Dock 280px——目标表名 / 行数·种子·语言 / 列来源 / 生成 / 出口按钮组 / 结果 / **用户模板**（保存为模板… + 应用 / 删除）/ **生成历史**（最近 20 条，可重放配置、可删除）；
-- `MockDetailView`：中央「Mock 数据」tab——字段卡片（生成器分类子菜单 + 编辑 / 智能 / 删除）+ 预览表格；
-- 详情 tab 只持 `Entity<MockPanel>`，字段与预览都从它读、编辑动作写回它（**状态单一权威**）；
+- `MockPanel`（**右 Dock**，17.5rem 起步、可拖拽调宽）**只管管理表**：表清单（唯一入口：状态点 + 表名 + 行数，
+  点一行切 / 开它的 tab；关系挂在子表行下）+ 集合动作（「生成 N 张表 / 退出场景」与它的进度，量纲 = 张表）
+  + 出口按钮组（生成前禁用）+ 出口反馈 + **折叠**的生成历史 / 用户模板；
+- `MockDetailView`（**中央 tab**，一个目标一个）**只管这张表的设计与生成状态**：表名 / 行数 / 种子 / 语言
+  + 生成三态 + 进度与取消 + 失败原因与重试 + 列（草稿可编辑 / 结果只读）+ 预览；
+- **状态单点**（`job_row_scope`）：单表任务的进度 / 取消 / 失败在中央表头，集合任务的在右 Dock 场景清单下，
+  同时刻只有一处；清单行只给状态点与百分比（`table_status`：已落库 / 未落库 / 引用的表未落库 / 生成中 / 失败）；
+- 详情 tab 只持 `Entity<MockPanel>`，输入状态、动作与状态都归它（**状态单一权威**），面板出让的只是渲染；
 - crate 依赖 `gpui-kit`（UI 基础设施），**不依赖 workbench**；
 - 宿主能力（生成 / 四个出口 / 列来源 / 既有表 / 只读 / 打开详情 / 重绘）由 `MockHost` 注入，
   workbench 侧实现见 `crates/workbench/src/components/mock_host.rs`；
@@ -99,7 +104,7 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 | `src/generators.rs` | `generate_cell`：137 变体 → 值（`fake` crate，接入 `StdRng`） |
 | `src/generator_catalog.rs` | 生成器目录（分类 / 中文标签 / 参数规格 / 默认构造）；由 `tools/gen_mock_generator_catalog.py` 生成，**不手改** |
 | `src/schema_map.rs` | `ColumnMapper`（列名规则表 + 置信度 + 示例值）+ `parse_data_type`（类型串唯一入口） |
-| `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock：场景模板菜单 + 结果表清单（带当前表标记））/ `MockDetailView`（中央 tab：一个目标一个）/ `MockHost` 契约 / 导入结构 + 列编辑 + 生成器搜索 + 加关系 + 编辑表对话框 |
+| `src/mock_view.rs` | **视图**：`MockPanel`（右 Dock：表清单 + 场景动作 + 出口 + 折叠历史 / 模板；输入状态与动作也归它）/ `MockDetailView`（中央 tab：一个目标一个，表头 + 列 + 预览）/ `MockHost` 契约 / 导入结构 + 列编辑 + 生成器搜索 + 加关系 + 编辑表对话框 |
 | `src/mock_view/tests.rs` | 视图测试（23 纯逻辑 + 55 项 GPUI headless 窗口测试；含测试宿主桥） |
 | `src/templates.rs` | 内置 6 套场景模板 |
 | `src/persistence.rs` | `MockGenerationStore`（SQLite 读写；读写两侧由真库往返测试验住） |
