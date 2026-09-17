@@ -46,7 +46,10 @@ pub use connection_draft_store::{ConnectionDraftRow, ConnectionDraftStore};
 pub use global_db::{
     GlobalDatabaseManager, GlobalDuckdbConnection, GlobalPooledConnection, GlobalSqlitePool,
 };
-pub use metadata_cache::{ConnectionType, MetadataCacheManager, MetadataCacheOps};
+pub use metadata_cache::{
+    ChunkResult, ConnectionType, IndexEntry, IndexSearchHit, MetadataCacheManager, MetadataCacheOps,
+    SchemaObjectCounts,
+};
 pub use metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
 pub use navigator_state::{NavState, NavigatorStateStore};
 pub use project_db::{ProjectDatabaseManager, ProjectDuckdbConnection, ProjectSqlitePool};

@@ -11,7 +11,7 @@
  * - 独立文件避免单文件过大，提高查询性能
  * - 跟随连接信息，简化项目迁移
  */
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
@@ -20,6 +20,7 @@ use std::io::{Read, Write};
 
 use shared::error::{CommonError, CoreError, StorageError};
 use crate::migration::{MigrationManager, MigrationType};
+use crate::persistence::metadata_cache_pool::{MetadataCachePool, PooledMetadataConnection};
 
 /// 连接类型枚举
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -174,8 +175,8 @@ impl MetadataCacheManager {
             })
         })?;
 
-        // 执行迁移
-        MigrationManager::new().migrate(&self.db_path, MigrationType::ConnectionMetadata)?;
+        // 执行迁移（幂等；与连接池创建路径共用同一实现）
+        ensure_schema_at(&self.db_path)?;
 
         Ok(conn)
     }
@@ -197,8 +198,11 @@ impl MetadataCacheManager {
 
     /// 删除元数据缓存文件
     ///
-    /// 当连接被删除时调用
+    /// 当连接被删除时调用。**先丢弃连接池**：池里握着该文件的打开句柄，
+    /// Windows 上带着句柄删文件会失败（缓存管理对话框的「删除」会没反应）。
     pub fn delete(&self) -> Result<(), CoreError> {
+        MetadataCachePool::drop_pool(&self.db_path);
+
         if self.db_path.exists() {
             std::fs::remove_file(&self.db_path).map_err(|e| {
                 CoreError::common(CommonError::General(format!(
@@ -227,14 +231,64 @@ impl MetadataCacheManager {
     }
 }
 
+/// 确保指定缓存文件的目录与表结构就绪（**幂等**）。
+///
+/// 单独暴露的原因：连接池创建时调一次，此后池化连接的取用都不必再校验表结构
+/// —— `MetadataCacheManager::open()` 里那次校验正是缓存热路径上的固定开销来源。
+pub fn ensure_schema_at(db_path: &Path) -> Result<(), CoreError> {
+    if let Some(parent) = db_path.parent() {
+        if parent.as_os_str() != "" {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                CoreError::common(CommonError::General(format!(
+                    "Failed to create metadata cache dir {:?}: {}",
+                    parent, e
+                )))
+            })?;
+        }
+    }
+
+    MigrationManager::new().migrate(db_path, MigrationType::ConnectionMetadata)?;
+    Ok(())
+}
+
 /// 元数据缓存操作封装
 ///
 /// 提供常用的元数据缓存读写操作
 #[allow(dead_code)]
 pub struct MetadataCacheOps {
-    conn: Connection,
+    conn: CacheConn,
     /// 是否启用压缩（默认对大于 1KB 的数据启用压缩）
     compression_threshold: usize,
+}
+
+/// 缓存库连接的两种来源。
+///
+/// 实现 `Deref` / `DerefMut` 到 `rusqlite::Connection`，因此既有的 ~90 个方法一个都不用改。
+enum CacheConn {
+    /// 自有连接（`MetadataCacheOps::new`；一次性打开）
+    Owned(Connection),
+    /// 池化连接（`MetadataCacheOps::from_pooled`；Drop 时自动归还）
+    Pooled(PooledMetadataConnection),
+}
+
+impl std::ops::Deref for CacheConn {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        match self {
+            Self::Owned(conn) => conn,
+            Self::Pooled(guard) => guard,
+        }
+    }
+}
+
+impl std::ops::DerefMut for CacheConn {
+    fn deref_mut(&mut self) -> &mut Connection {
+        match self {
+            Self::Owned(conn) => conn,
+            Self::Pooled(guard) => guard,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -242,7 +296,17 @@ impl MetadataCacheOps {
     /// 创建新的元数据缓存操作实例
     pub fn new(conn: Connection) -> Self {
         Self {
-            conn,
+            conn: CacheConn::Owned(conn),
+            compression_threshold: 1024, // 1KB 阈值
+        }
+    }
+
+    /// 用**池化连接**创建（推荐：把「开文件 + PRAGMA + 迁移校验」挪出热路径）。
+    ///
+    /// 守卫在 `self` 被丢弃时归还连接，因此调用方无需管归还。
+    pub fn from_pooled(guard: PooledMetadataConnection) -> Self {
+        Self {
+            conn: CacheConn::Pooled(guard),
             compression_threshold: 1024, // 1KB 阈值
         }
     }
@@ -250,7 +314,7 @@ impl MetadataCacheOps {
     /// 创建带压缩配置的元数据缓存操作实例
     pub fn with_compression(conn: Connection, compression_threshold: usize) -> Self {
         Self {
-            conn,
+            conn: CacheConn::Owned(conn),
             compression_threshold,
         }
     }
@@ -2825,6 +2889,23 @@ impl MetadataCacheOps {
                 })
             })?;
 
+        // 清 `metadata_index` 的对应行。
+        //
+        // 它**不在外键级联链上**（建表时 `schema_id` 只是普通列，没有 REFERENCES），
+        // 所以必须显式删：否则刷新/删除 schema 后，分页读与计数会读到已不存在的对象
+        // （测试 `rebuild_schema_index_powers_chunks_and_counts` 就抓到了这个孤儿）。
+        tx.execute(
+            "DELETE FROM metadata_index WHERE schema_id = ?1",
+            rusqlite::params![schema_id],
+        )
+        .map_err(|e| {
+            CoreError::storage(StorageError::Persistence {
+                store: "sqlite".to_string(),
+                operation: "delete_schema_index".to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+
         // 清理 FTS 索引
         tx.execute(
             "DELETE FROM metadata_fts WHERE schema_name = ?1",
@@ -2967,6 +3048,97 @@ impl MetadataCacheOps {
         })?;
 
         Ok(count)
+    }
+
+    /// 按已写入的 `tables` / `columns` 重建某 schema 的 `metadata_index` 行（幂等：先删后插）。
+    ///
+    /// **为什么需要**：`metadata_index` 是「大 schema 分页 / 计数 / 搜索」的数据源，
+    /// 但它的两个写入方（`build_metadata_index`、`save_index_entry`）此前零调用 → 表恒空 →
+    /// 分页读（`get_objects_chunk`）接了也是空。这里把写入侧挂到**缓存写入路径**上：
+    /// 冷启动内省一个 schema 后重建一次；命中路径只读不写，不触发重建。
+    ///
+    /// 粒度与 `schemata`/`tables`/`columns` 三层对齐（schema / table / view / column），
+    /// `path` 形如 `schema/table/column`（供虚拟树按路径定位）。
+    pub fn rebuild_schema_index(
+        &mut self,
+        connection_id: &str,
+        catalog: &str,
+        schema: &str,
+    ) -> Result<usize, CoreError> {
+        let Some(schema_id) = self.get_schema_id(catalog, schema)? else {
+            return Ok(0);
+        };
+
+        // 该 schema 已缓存的表 / 视图（含 id 与行数估算，不必逐对象再查）
+        let tables = self.list_tables_normalized(schema_id, None)?;
+
+        let mut entries: Vec<IndexEntryInput> = Vec::with_capacity(tables.len() + 1);
+        // 本次重建的统一时间戳（与 `save_index_entries_batch` 的写入语义对齐）
+        let synced_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        entries.push(IndexEntryInput {
+            connection_id: connection_id.to_string(),
+            schema_id: Some(schema_id),
+            object_type: "schema".to_string(),
+            object_name: schema.to_string(),
+            parent_name: None,
+            path: schema.to_string(),
+            introspect_level: 3,
+            row_count_estimate: None,
+            sort_weight: None,
+            last_sync: Some(synced_at),
+        });
+
+        for table in &tables {
+            let is_view = table.table_type == "VIEW";
+            entries.push(IndexEntryInput {
+                connection_id: connection_id.to_string(),
+                schema_id: Some(schema_id),
+                object_type: if is_view { "view" } else { "table" }.to_string(),
+                object_name: table.table_name.clone(),
+                parent_name: None,
+                path: format!("{schema}/{}", table.table_name),
+                introspect_level: 3,
+                row_count_estimate: table.row_count_estimate,
+                sort_weight: None,
+                last_sync: Some(synced_at),
+            });
+
+            for column in self.list_columns_normalized(table.id)? {
+                entries.push(IndexEntryInput {
+                    connection_id: connection_id.to_string(),
+                    schema_id: Some(schema_id),
+                    object_type: "column".to_string(),
+                    object_name: column.column_name.clone(),
+                    parent_name: Some(table.table_name.clone()),
+                    path: format!("{schema}/{}/{}", table.table_name, column.column_name),
+                    introspect_level: 3,
+                    row_count_estimate: None,
+                    sort_weight: None,
+                    last_sync: Some(synced_at),
+                });
+            }
+        }
+
+        // 先删后插：刷新后已不存在的对象不得留在索引里。
+        // （注：`metadata_index` 的 UNIQUE 含 `parent_name`，而顶层对象该列为 NULL ——
+        //  SQLite 视 NULL 为互不相同，所以**不能**依赖 OR REPLACE 去重，必须显式删。）
+        self.conn
+            .execute(
+                "DELETE FROM metadata_index WHERE connection_id = ?1 AND schema_id = ?2",
+                rusqlite::params![connection_id, schema_id],
+            )
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "clear_schema_index".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+
+        self.save_index_entries_batch(entries)
     }
 
     /// 分页获取索引条目（支持懒加载）
@@ -3570,63 +3742,77 @@ impl MetadataCacheOps {
         })
     }
 
-    /// 分块获取表名（避免 OOM）
+    /// 分块获取某类别的对象名（避免大 schema 一次物化整表 / OOM）。
+    ///
+    /// **为什么泛化**：原实现把 `object_type = 'table'` 写死在 SQL 里（`get_tables_chunk`），
+    /// 而导航树「视图」文件夹在视图数量很大的 schema 下同样需要分块读——两者除类别外
+    /// 查询完全一致，故合并为一个实现，由 `object_type` 参数区分。
+    ///
+    /// 排序固定为 `sort_weight DESC, object_name ASC`：当前没有写入方填 `sort_weight`
+    /// （全为 NULL，SQLite 的 DESC 把 NULL 排在最后），因此实际等价于**按名称升序**，
+    /// 与索引里的顺序稳定一致——这一点是分块读的前提（offset 翻页不能有随机顺序）。
     ///
     /// # 参数
     /// * `connection_id` - 连接 ID
-    /// * `schema_id` - Schema ID
+    /// * `schema_id` - Schema ID（`None` = 不限定 schema，跨 schema 取）
+    /// * `object_type` - 类别：`table` / `view`（取值受 `metadata_index` 的 CHECK 约束）
     /// * `offset` - 偏移量
     /// * `limit` - 每块大小
-    pub fn get_tables_chunk(
+    pub fn get_objects_chunk(
         &self,
         connection_id: &str,
         schema_id: Option<i64>,
+        object_type: &str,
         offset: i64,
         limit: i64,
     ) -> Result<ChunkResult<IndexEntry>, CoreError> {
         let (count_sql, query_sql) = match schema_id {
             Some(_sid) => (
-                "SELECT COUNT(*) FROM metadata_index WHERE connection_id = ?1 AND object_type = 'table' AND schema_id = ?2",
+                "SELECT COUNT(*) FROM metadata_index WHERE connection_id = ?1 AND object_type = ?2 AND schema_id = ?3",
                 "SELECT id, schema_id, object_type, object_name, parent_name, path,
                         introspect_level, is_loaded, last_sync, row_count_estimate, sort_weight
                  FROM metadata_index
-                 WHERE connection_id = ?1 AND object_type = 'table' AND schema_id = ?2
+                 WHERE connection_id = ?1 AND object_type = ?2 AND schema_id = ?3
                  ORDER BY sort_weight DESC, object_name ASC
-                 LIMIT ?3 OFFSET ?4",
+                 LIMIT ?4 OFFSET ?5",
             ),
             None => (
-                "SELECT COUNT(*) FROM metadata_index WHERE connection_id = ?1 AND object_type = 'table'",
+                "SELECT COUNT(*) FROM metadata_index WHERE connection_id = ?1 AND object_type = ?2",
                 "SELECT id, schema_id, object_type, object_name, parent_name, path,
                         introspect_level, is_loaded, last_sync, row_count_estimate, sort_weight
                  FROM metadata_index
-                 WHERE connection_id = ?1 AND object_type = 'table'
+                 WHERE connection_id = ?1 AND object_type = ?2
                  ORDER BY sort_weight DESC, object_name ASC
-                 LIMIT ?2 OFFSET ?3",
+                 LIMIT ?3 OFFSET ?4",
             ),
         };
 
         let total: i64 = match schema_id {
             Some(sid) => self
                 .conn
-                .query_row(count_sql, rusqlite::params![connection_id, sid], |row| {
-                    row.get(0)
-                })
+                .query_row(
+                    count_sql,
+                    rusqlite::params![connection_id, object_type, sid],
+                    |row| row.get(0),
+                )
                 .map_err(|e| {
                     CoreError::storage(StorageError::Persistence {
                         store: "sqlite".to_string(),
-                        operation: "count_tables_chunk".to_string(),
+                        operation: "count_objects_chunk".to_string(),
                         reason: e.to_string(),
                     })
                 })?,
             None => self
                 .conn
-                .query_row(count_sql, rusqlite::params![connection_id], |row| {
-                    row.get(0)
-                })
+                .query_row(
+                    count_sql,
+                    rusqlite::params![connection_id, object_type],
+                    |row| row.get(0),
+                )
                 .map_err(|e| {
                     CoreError::storage(StorageError::Persistence {
                         store: "sqlite".to_string(),
-                        operation: "count_tables_chunk".to_string(),
+                        operation: "count_objects_chunk".to_string(),
                         reason: e.to_string(),
                     })
                 })?,
@@ -3635,7 +3821,7 @@ impl MetadataCacheOps {
         let mut stmt = self.conn.prepare(query_sql).map_err(|e| {
             CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
-                operation: "get_tables_chunk".to_string(),
+                operation: "get_objects_chunk".to_string(),
                 reason: e.to_string(),
             })
         })?;
@@ -3643,25 +3829,25 @@ impl MetadataCacheOps {
         let entries = match schema_id {
             Some(sid) => stmt
                 .query_map(
-                    rusqlite::params![connection_id, sid, limit, offset],
+                    rusqlite::params![connection_id, object_type, sid, limit, offset],
                     IndexEntry::from_row,
                 )
                 .map_err(|e| {
                     CoreError::storage(StorageError::Persistence {
                         store: "sqlite".to_string(),
-                        operation: "query_tables_chunk".to_string(),
+                        operation: "query_objects_chunk".to_string(),
                         reason: e.to_string(),
                     })
                 })?,
             None => stmt
                 .query_map(
-                    rusqlite::params![connection_id, limit, offset],
+                    rusqlite::params![connection_id, object_type, limit, offset],
                     IndexEntry::from_row,
                 )
                 .map_err(|e| {
                     CoreError::storage(StorageError::Persistence {
                         store: "sqlite".to_string(),
-                        operation: "query_tables_chunk".to_string(),
+                        operation: "query_objects_chunk".to_string(),
                         reason: e.to_string(),
                     })
                 })?,
@@ -3672,7 +3858,7 @@ impl MetadataCacheOps {
             result.push(entry.map_err(|e| {
                 CoreError::storage(StorageError::Persistence {
                     store: "sqlite".to_string(),
-                    operation: "fetch_table_chunk".to_string(),
+                    operation: "fetch_object_chunk".to_string(),
                     reason: e.to_string(),
                 })
             })?);
@@ -3685,6 +3871,105 @@ impl MetadataCacheOps {
             limit: limit as usize,
             has_more: (offset + limit) < total,
         })
+    }
+
+    /// 转义 LIKE 的通配符（`%` `_`）与转义符自身，使用户输入按**字面量**匹配。
+    fn like_escape(needle: &str) -> String {
+        let mut out = String::with_capacity(needle.len());
+        for ch in needle.chars() {
+            if matches!(ch, '\\' | '%' | '_') {
+                out.push('\\');
+            }
+            out.push(ch);
+        }
+        out
+    }
+
+    /// 按名称模糊搜索索引（跨 schema；结果带定位所需的 catalog / schema / 父对象）。
+    ///
+    /// **为什么用 `metadata_index` 而不是 `metadata_fts`**（FTS5 表与 `search_fts` 都已存在）：
+    /// - 写侧：`metadata_index` 已接线（冷启动内省后重建），FTS 的 `sync_fts_index` 从未被调用；
+    /// - 用户要的是「按名字找对象」：敲 `ord` 应当命中 `order_items`（**中缀**匹配）。
+    ///   `metadata_index` + LIKE 天然支持；FTS5 默认 tokenizer 只做整词 / 前缀，
+    ///   要中缀得另换 trigram tokenizer（额外的建表与迁移成本）；
+    /// - FTS 的独有价值是**内容**（注释 / 数据类型 / 源码），属搜索的下一档：
+    ///   等“按名字找不到”成为真实抱怨时再补写入侧（查询侧那时可复用这套排序）。
+    ///
+    /// 排序：名称完全相等 → 前缀命中 → 其余；同档内按类别（表 / 视图 / schema / 列）、
+    /// 名称长度、名称。`limit` 是硬上限（搜索是交互操作，不应被超大 schema 拖死）。
+    pub fn search_index(
+        &self,
+        connection_id: &str,
+        needle: &str,
+        limit: i64,
+    ) -> Result<Vec<IndexSearchHit>, CoreError> {
+        let needle = needle.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
+        }
+        let escaped = Self::like_escape(&needle);
+        let contains = format!("%{escaped}%");
+        let prefix = format!("{escaped}%");
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT mi.object_type, mi.object_name, mi.parent_name,
+                        s.catalog_name, s.schema_name, mi.row_count_estimate
+                 FROM metadata_index mi
+                 LEFT JOIN schemata s ON s.id = mi.schema_id
+                 WHERE mi.connection_id = ?1 AND LOWER(mi.object_name) LIKE ?2 ESCAPE '\\'
+                 ORDER BY
+                   CASE WHEN LOWER(mi.object_name) = ?3 THEN 0
+                        WHEN LOWER(mi.object_name) LIKE ?4 ESCAPE '\\' THEN 1
+                        ELSE 2 END,
+                   CASE mi.object_type
+                        WHEN 'table' THEN 0 WHEN 'view' THEN 1 WHEN 'schema' THEN 2
+                        WHEN 'column' THEN 3 ELSE 4 END,
+                   LENGTH(mi.object_name), mi.object_name
+                 LIMIT ?5",
+            )
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "prepare_search_index".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![connection_id, contains, needle, prefix, limit],
+                |row| {
+                    Ok(IndexSearchHit {
+                        object_type: row.get(0)?,
+                        object_name: row.get(1)?,
+                        parent_name: row.get(2)?,
+                        catalog_name: row.get(3)?,
+                        schema_name: row.get(4)?,
+                        row_count_estimate: row.get(5)?,
+                    })
+                },
+            )
+            .map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "search_index".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| {
+                CoreError::storage(StorageError::Persistence {
+                    store: "sqlite".to_string(),
+                    operation: "read_search_index_hit".to_string(),
+                    reason: e.to_string(),
+                })
+            })?);
+        }
+        Ok(out)
     }
 
     // ==================== V6: 预热核心逻辑 ====================
@@ -3974,6 +4259,26 @@ impl IndexEntry {
             sort_weight: row.get(10)?,
         })
     }
+}
+
+/// 索引名称搜索的命中行（已联结 `schemata`，带定位所需的 catalog / schema）。
+///
+/// 与 [`IndexEntry`] 的区别：搜索是“给人看的”，故带上 schema 名与 catalog 名
+/// （索引表本身只存 `schema_id`），这样视图侧不必再为一行的定位多查一次。
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexSearchHit {
+    /// 类别：`table` / `view` / `schema` / `column`（取值受建表 CHECK 约束）。
+    pub object_type: String,
+    /// 对象名。
+    pub object_name: String,
+    /// 列命中时的所属表名；其余为 `None`。
+    pub parent_name: Option<String>,
+    /// 所属 catalog（`schemata.catalog_name`，可能为 NULL）。
+    pub catalog_name: Option<String>,
+    /// 所属 schema 名（`schema_id` 联结不到行时为 `None`）。
+    pub schema_name: Option<String>,
+    /// 行数估算（只有表上有值）。
+    pub row_count_estimate: Option<i64>,
 }
 
 /// V6: 分页索引结果
@@ -5186,6 +5491,129 @@ mod tests {
             .expect("code 列");
         assert!(code.is_primary_key, "code 应是主键");
         assert!(!code.is_identity, "code 不是自增列（旧实现会误报为自增）");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// 索引名称搜索：中缀命中、通配符按字面量、排序（相等 → 前缀 → 其余，同类再按名称）。
+    #[test]
+    fn search_index_matches_infix_and_escapes_wildcards() -> Result<(), CoreError> {
+        let (mut ops, _db_path, dir) = fresh_ops("index_search");
+        let conn_id = "P_search_conn";
+        let schema_id = ops.save_schema("main", "public", None, None)?;
+        for name in ["orders", "order_items", "customer_orders", "a%b"] {
+            ops.save_table(schema_id, name, "TABLE", None, None, None)?;
+        }
+        let v1 = ops.save_table(schema_id, "order_view", "VIEW", None, None, None)?;
+        ops.save_view(v1, "SELECT 1", None, None)?;
+        // 列名含 order：搜索不应漏掉列（列排在表 / 视图之后）
+        let t = ops.get_table_id(schema_id, "orders")?.expect("orders 表");
+        ops.save_column(t, "order_id", "INTEGER", 0, false, true, false, None, None)?;
+        ops.rebuild_schema_index(conn_id, "main", "public")?;
+
+        let hits = ops.search_index(conn_id, "order", 50)?;
+        let names: Vec<&str> = hits.iter().map(|h| h.object_name.as_str()).collect();
+        assert_eq!(
+            names.first().copied(),
+            Some("orders"),
+            "名称相等 / 前缀的排最前（得到：{names:?}）"
+        );
+        for want in ["order_items", "customer_orders", "order_view", "order_id"] {
+            assert!(names.contains(&want), "中缀命中不得漏 {want}（得到：{names:?}）");
+        }
+        // 表在前、列在后（类别权重）
+        let pos = |n: &str| names.iter().position(|x| x == &n).expect("应在结果里");
+        assert!(
+            pos("order_items") < pos("order_id"),
+            "表应排在列之前（得到：{names:?}）"
+        );
+        // 命中行带定位信息：表 → schema / catalog
+        let table_hit = hits.iter().find(|h| h.object_name == "orders").expect("表命中");
+        assert_eq!(table_hit.object_type, "table");
+        assert_eq!(table_hit.schema_name.as_deref(), Some("public"));
+        assert_eq!(table_hit.catalog_name.as_deref(), Some("main"));
+        assert_eq!(table_hit.parent_name, None);
+        // 列命中带所属表
+        let col_hit = hits.iter().find(|h| h.object_name == "order_id").expect("列命中");
+        assert_eq!(col_hit.object_type, "column");
+        assert_eq!(col_hit.parent_name.as_deref(), Some("orders"));
+
+        // 通配符按字面量：`a%b` 不得匹配 `aXXXb`（而真表名 a%b 必须命中）
+        let literal = ops.search_index(conn_id, "a%b", 50)?;
+        assert_eq!(
+            literal.iter().map(|h| h.object_name.as_str()).collect::<Vec<_>>(),
+            vec!["a%b"],
+            "% 应被转义为字面量"
+        );
+        let underscore = ops.search_index(conn_id, "a_", 50)?;
+        assert!(underscore.is_empty(), "`_` 是单字符通配符，必须转义");
+
+        // 大小写不敏感 + 空词不搜
+        assert!(!ops.search_index(conn_id, "ORDERS", 50)?.is_empty());
+        assert!(ops.search_index(conn_id, "   ", 50)?.is_empty());
+
+        // limit 是硬上限
+        assert_eq!(ops.search_index(conn_id, "order", 2)?.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// 索引写入侧：`rebuild_schema_index` 让 `metadata_index` 真正有数据，
+    /// 分页读（`get_objects_chunk`）与计数（`get_schema_object_counts`）才有意义。
+    #[test]
+    fn rebuild_schema_index_powers_chunks_and_counts() -> Result<(), CoreError> {
+        let (mut ops, _db_path, dir) = fresh_ops("index_rebuild");
+        let (catalog, schema) = ("main", "public");
+        let conn_id = "P_idx_conn";
+
+        let schema_id = ops.save_schema(catalog, schema, None, None)?;
+        let t1 = ops.save_table(schema_id, "t1", "TABLE", None, None, Some(100))?;
+        ops.save_column(t1, "id", "INTEGER", 0, false, true, true, None, None)?;
+        ops.save_column(t1, "name", "TEXT", 1, true, false, false, None, None)?;
+        let v1 = ops.save_table(schema_id, "v1", "VIEW", None, None, None)?;
+        ops.save_view(v1, "SELECT 1", None, None)?;
+
+        let written = ops.rebuild_schema_index(conn_id, catalog, schema)?;
+        // schema(1) + t1(1) + t1 的列(2) + v1(1) = 5
+        assert_eq!(written, 5, "索引行数应与缓存内容一致");
+
+        // 分页读：按类别分别取（表 / 视图各一条）
+        let chunk = ops.get_objects_chunk(conn_id, Some(schema_id), "table", 0, 10)?;
+        assert_eq!(chunk.total, 1, "索引里应有 1 张表");
+        assert_eq!(chunk.items.len(), 1);
+        assert_eq!(chunk.items[0].object_name, "t1");
+        assert_eq!(chunk.items[0].path, "public/t1");
+        assert_eq!(chunk.items[0].row_count_estimate, Some(100));
+        assert!(!chunk.has_more, "limit 大于总数时不应再报有余量");
+
+        let views = ops.get_objects_chunk(conn_id, Some(schema_id), "view", 0, 10)?;
+        assert_eq!(views.total, 1, "视图也要能分块读（原实现只查 table）");
+        assert_eq!(views.items[0].object_name, "v1");
+
+        // 翻页边界：offset 到达 total 时返回空块且无余量
+        let empty = ops.get_objects_chunk(conn_id, Some(schema_id), "table", 1, 10)?;
+        assert!(empty.items.is_empty());
+        assert!(!empty.has_more);
+
+        // 计数：表 1 / 视图 1 / 列 2
+        let counts = ops.get_schema_object_counts(conn_id, schema_id)?;
+        assert_eq!(
+            (counts.table_count, counts.view_count, counts.column_count),
+            (1, 1, 2)
+        );
+
+        // 幂等：重建两次不得产生重复行（UNIQUE 含 NULL 列，不能靠 OR REPLACE）
+        ops.rebuild_schema_index(conn_id, catalog, schema)?;
+        let again = ops.get_schema_object_counts(conn_id, schema_id)?;
+        assert_eq!(again.total, counts.total, "重建必须幂等");
+        assert_eq!(again.column_count, 2);
+
+        // 刷新后对象消失：索引必须跟着少行（先删后插的语义）
+        ops.delete_schema(schema_id)?;
+        let empty = ops.get_schema_object_counts(conn_id, schema_id)?;
+        assert_eq!(empty.total, 0, "级联删除后索引不应留孤儿");
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())

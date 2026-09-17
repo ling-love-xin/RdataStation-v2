@@ -14,9 +14,26 @@
 //! 缓存**永不自动删除**（设计 §5.2），清理只经「缓存管理」对话框。
 
 use engine::driver::traits::{ColumnDetail, SchemaObject, SchemaObjectKind};
-use engine::persistence::{ConnectionType, MetadataCacheManager, MetadataCacheOps};
+use engine::persistence::{
+    ChunkResult, ConnectionType, IndexEntry, IndexSearchHit, MetadataCacheManager, MetadataCacheOps,
+    MetadataCachePool, SchemaObjectCounts,
+};
 
 use crate::model::NavSource;
+
+/// 该连接是否已有**落盘**缓存（只查路径，不建文件）。
+///
+/// 跨连接搜索前用它过滤：搜索扫的是各连接自己的 L2 索引，但**不能因为用户敲了个字
+/// 就给从未内省过的连接建出缓存文件**（`NavCache::open` 会建库并跑迁移）。
+pub fn cache_file_exists(conn_id: &str, project_root: Option<&str>) -> bool {
+    let connection_type = match NavSource::from_conn_id(conn_id) {
+        NavSource::Global => ConnectionType::Global,
+        _ => ConnectionType::Project,
+    };
+    MetadataCacheManager::new(conn_id, connection_type, project_root)
+        .map(|manager| manager.db_path().exists())
+        .unwrap_or(false)
+}
 
 /// 缓存中表示「视图」的 `table_type`（与 [`NavCache::put_objects`] 的写入约定一致）。
 const TABLE_TYPE_VIEW: &str = "VIEW";
@@ -25,6 +42,8 @@ const TABLE_TYPE_BASE: &str = "TABLE";
 
 /// 连接级导航缓存句柄（持有一个缓存 SQLite 连接）。
 pub struct NavCache {
+    /// 归属连接（`metadata_index` 写入与 L1 回填需要）
+    conn_id: String,
     ops: MetadataCacheOps,
 }
 
@@ -37,10 +56,18 @@ impl NavCache {
             NavSource::Global => ConnectionType::Global,
             _ => ConnectionType::Project,
         };
+        // 路径仍由 `MetadataCacheManager` 唯一定义（布局知识不在本 crate 重写）。
         let manager = MetadataCacheManager::new(conn_id, connection_type, project_root).ok()?;
-        let conn = manager.open().ok()?;
+
+        // 池化取用：把「开文件 + 5 条 PRAGMA + 一次迁移校验」从**每次缓存访问**
+        // 挪到「每个缓存文件一次」。以前每次 `open()` 都要付这份固定开销，
+        // 与「L2 命中 <5ms」的设计目标相抵（L1 空时尤其明显）。
+        let pool = MetadataCachePool::get_or_create(manager.db_path().clone(), 2).ok()?;
+        let guard = pool.acquire().ok()?;
+
         Some(Self {
-            ops: MetadataCacheOps::new(conn),
+            conn_id: conn_id.to_string(),
+            ops: MetadataCacheOps::from_pooled(guard),
         })
     }
 
@@ -65,6 +92,24 @@ impl NavCache {
     /// 按名取 `schema_id`。
     pub fn schema_id(&self, catalog: &str, schema: &str) -> Option<i64> {
         self.ops.get_schema_id(catalog, schema).ok().flatten()
+    }
+
+    /// 重建该 schema 的 `metadata_index`（大 schema 分页 / 计数 / 搜索的数据源）。
+    ///
+    /// 只在**冷启动内省写入之后**调用（命中路径只读不写，不触发重建）。
+    /// 尽力而为：索引是加速设施，失败只告警——下次冷启动会重建。
+    pub fn rebuild_index(&mut self, catalog: &str, schema: &str) {
+        if let Err(e) = self
+            .ops
+            .rebuild_schema_index(&self.conn_id, catalog, schema)
+        {
+            tracing::warn!(
+                catalog,
+                schema,
+                error = %e,
+                "重建元数据索引失败（分页 / 计数退化为实时内省）"
+            );
+        }
     }
 
     /// 清理某 schema 的缓存行（刷新时先删后写；依赖外键级联删除表 / 列）。
@@ -102,6 +147,68 @@ impl NavCache {
             None
         } else {
             Some(out)
+        }
+    }
+
+    /// 该 schema 在 `metadata_index` 里的计数（分块读的前置判断）。
+    ///
+    /// 索引为空（冷启动、尚未重建）时返回 `Some(全 0)`——调用方**不能**把它当作
+    /// 「schema 里没有对象」，而要回落实时内省；故这里把「表/视图计数均为 0」视为不可用。
+    pub fn object_counts(&self, schema_id: i64) -> Option<SchemaObjectCounts> {
+        let counts = self
+            .ops
+            .get_schema_object_counts(&self.conn_id, schema_id)
+            .ok()?;
+        if counts.table_count == 0 && counts.view_count == 0 && counts.routine_count == 0 {
+            return None;
+        }
+        Some(counts)
+    }
+
+    /// 分块读取某 schema 下的表 / 视图名（`want_view` 区分类别）。
+    ///
+    /// 返回 `None` 表示「索引里没有这一类别」——两种情形：索引尚未重建（冷启动），
+    /// 或该类别真的为空。两者都应由调用方回落实时内省，以实时结果为准。
+    pub fn objects_chunk(
+        &self,
+        schema_id: i64,
+        want_view: bool,
+        offset: usize,
+        limit: usize,
+    ) -> Option<ChunkResult<IndexEntry>> {
+        let object_type = if want_view { "view" } else { "table" };
+        let chunk = self
+            .ops
+            .get_objects_chunk(
+                &self.conn_id,
+                Some(schema_id),
+                object_type,
+                offset as i64,
+                limit as i64,
+            )
+            .ok()?;
+        if chunk.total == 0 {
+            return None;
+        }
+        Some(chunk)
+    }
+
+    /// 按名称搜索该连接的索引（跨 schema 中缀匹配）。
+    ///
+    /// 失败 / 无命中都返回空表：搜索是尽力而为的交互操作，不该因为某条连接缓存损坏
+    /// 就整体报错（但要告警留痕，否则“搜不到”会被当成“库里没有”）。
+    pub fn search_index(&self, needle: &str, limit: usize) -> Vec<IndexSearchHit> {
+        match self.ops.search_index(&self.conn_id, needle, limit as i64) {
+            Ok(hits) => hits,
+            Err(e) => {
+                tracing::warn!(
+                    connection_id = %self.conn_id,
+                    needle,
+                    error = %e,
+                    "元数据索引搜索失败（本次无结果）"
+                );
+                Vec::new()
+            }
         }
     }
 
@@ -202,6 +309,67 @@ mod tests {
         }
     }
 
+    /// 搜索：`NavCache::search_index` 能搜到已重建索引的表 / 列（带 schema、所属表）。
+    ///
+    /// 顺便钉住“搜索不建文件”：无缓存的连接走 `cache_file_exists` 就应被跳过。
+    #[test]
+    fn search_index_reports_hits_and_missing_cache() {
+        let root = temp_root("search");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_conn_search";
+
+        // 尚未内省过的连接：不得因为有搜索就给它建出缓存文件
+        assert!(
+            !cache_file_exists(conn_id, Some(&root_s)),
+            "无缓存时 cache_file_exists 必须为 false（搜索不应建文件）"
+        );
+
+        let mut cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
+        cache.put_schemas("main", &["public".to_string()]);
+        let sid = cache.schema_id("main", "public").expect("schema_id");
+        cache.put_objects(
+            sid,
+            &[SchemaObject {
+                name: "order_items".to_string(),
+                kind: SchemaObjectKind::Table,
+                children: None,
+                comment: None,
+                table_name: None,
+                event: None,
+            }],
+        );
+        cache.put_columns(sid, "order_items", &[col("order_id", true)]);
+        cache.rebuild_index("main", "public");
+
+        assert!(
+            cache_file_exists(conn_id, Some(&root_s)),
+            "内省并落盘后应能看到缓存文件"
+        );
+
+        let hits = cache.search_index("order", 50);
+        let names: Vec<&str> = hits.iter().map(|h| h.object_name.as_str()).collect();
+        assert!(names.contains(&"order_items"), "表应命中（得到：{names:?}）");
+        assert!(names.contains(&"order_id"), "列也应命中（得到：{names:?}）");
+
+        let table = hits
+            .iter()
+            .find(|h| h.object_name == "order_items")
+            .expect("表命中");
+        assert_eq!(table.schema_name.as_deref(), Some("public"));
+        assert_eq!(table.catalog_name.as_deref(), Some("main"));
+        let column = hits
+            .iter()
+            .find(|h| h.object_name == "order_id")
+            .expect("列命中");
+        assert_eq!(column.parent_name.as_deref(), Some("order_items"));
+
+        // 无命中即空表（调用方据此显示“无命中”，不报错）
+        assert!(cache.search_index("zzz_不存在", 50).is_empty());
+
+        drop(cache);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// 项目连接：写入 schema / 表 / 列，重开后（新连接）仍可命中（已落盘）。
     #[test]
     fn roundtrip_schemas_tables_columns() {
@@ -285,6 +453,55 @@ mod tests {
         );
         assert!(cache.objects(sid, false).is_none(), "刷新后不应命中旧表");
         assert!(cache.columns(sid, "t_old").is_none(), "刷新后不应命中旧列");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod pool_wiring_tests {
+    //! `NavCache` 与连接池的接线证明。
+    //!
+    //! 手法：先自己占住池里的一个连接，再开 `NavCache` —— 若它确实从**同一个池**取连接，
+    //! 池的空闲数会降到 0。这样能区分「接了池」与「自己另开了一个连接/另一个池」。
+
+    use super::*;
+
+    /// 与 `NavCache::open` 同源的缓存文件路径（走 `MetadataCacheManager`，不硬编码布局）。
+    fn cache_db_path(conn_id: &str, root: &str) -> std::path::PathBuf {
+        MetadataCacheManager::new(conn_id, ConnectionType::Project, Some(root))
+            .expect("构造缓存管理器")
+            .db_path()
+            .clone()
+    }
+
+    #[test]
+    fn nav_cache_borrows_from_the_shared_pool() {
+        let root = std::env::temp_dir().join(format!("rds_navpool_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("建目录");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_conn_pool_wiring";
+
+        let db_path = cache_db_path(conn_id, &root_s);
+        let pool = MetadataCachePool::get_or_create(db_path, 2).expect("建池");
+        assert_eq!(pool.idle_count(), 2, "预热 2 个连接");
+
+        // 占住一个：池里只剩 1
+        let held = pool.acquire().expect("占住连接");
+        assert_eq!(pool.idle_count(), 1);
+
+        // NavCache 打开后应把最后一个也取走 —— 证明它走的是这个池
+        let cache = NavCache::open(conn_id, Some(&root_s)).expect("打开缓存");
+        assert_eq!(
+            pool.idle_count(),
+            0,
+            "NavCache 应从同一池取走连接（而不是自开文件或另建池）"
+        );
+
+        drop(held);
+        drop(cache);
+        assert_eq!(pool.idle_count(), 2, "两者释放后连接都应归还");
 
         let _ = std::fs::remove_dir_all(&root);
     }

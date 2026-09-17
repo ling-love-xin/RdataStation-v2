@@ -5,7 +5,8 @@
 //! 任务、轮询进度（原子量）并取回结果（结果队列），不参与阻塞。
 //!
 //! 任务类型：
-//! - `LoadChildren`：导航树懒加载（主线程 render 不再做 I/O）；
+//! - `LoadChildren`：导航树懒加载 / 分页加载（主线程 render 不再做 I/O）；
+//! - `SearchIndex`：搜索框的跨连接索引搜索（结果回填到树顶结果区）；
 //! - `LoadProperties`：属性面板对象加载；
 //! - `GenerateDml`：右键「生成 INSERT/UPDATE/DELETE」（先取列，再拼模板）；
 //! - `TestConnection`：右键「测试连接」（独立会话探测，不注册连接池）；
@@ -18,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, OnceLock};
 
-use crate::model::{NavNode, NavNodeKind, NavPath, PropertyRef};
+use crate::model::{NavNodeKind, NavPath, PropertyRef};
 use crate::nav_host::ConnectionProbe;
 use crate::property_panel::ObjectProperties;
 use crate::sql_gen::DmlKind;
@@ -37,7 +38,9 @@ pub struct LoadResult {
     pub conn_id: String,
     pub project_root: Option<String>,
     pub path: NavPath,
-    pub result: Result<Vec<NavNode>, String>,
+    /// 本块结果的起始下标（0 = 首屏；>0 = 「加载更多」追加页）。
+    pub offset: usize,
+    pub result: Result<crate::navigator_service::NavPage, String>,
 }
 
 /// 属性加载结果（回传主线程）。
@@ -62,6 +65,52 @@ pub struct TestConnResult {
 /// 单个类别文件夹一次最多预取的表数量（避免大 schema 触发长时间后台 IO）。
 pub const PREFETCH_BATCH: usize = 20;
 
+/// 一页导航对象数。
+///
+/// **为什么直接用 UI 的首批渲染常量**：分页的两侧必须同尺寸——取回一页、渲染窗口
+/// 就长一页；若各用各的常量，要么取回 200 条只能显示一半，要么“加载更多”永远按不完。
+pub const PAGE_SIZE: usize = workbench_shell::ui::NAV_FOLDER_PAGE_SIZE;
+
+/// 单个连接在一次搜索里最多返回多少条命中（跨连接累加前先各自封顶）。
+pub const SEARCH_LIMIT_PER_CONN: usize = 50;
+
+/// 一次搜索的总命中上限（多连接时防止“30 个连接 × 50 条”把结果区与渲染拖垮）。
+pub const SEARCH_MAX_HITS: usize = 300;
+
+/// 一次索引搜索的目标连接（宿主可见且通过 facet 筛选的连接）。
+#[derive(Clone, Debug)]
+pub struct SearchTarget {
+    pub conn_id: String,
+    /// 连接显示名（命中行要显示“是哪个连接”）。
+    pub label: String,
+    /// 驱动 id（命中行要开属性面板，需要它标注驱动）。
+    pub driver: String,
+}
+
+/// 一条搜索命中（已展开成视图可直接渲染的形状）。
+#[derive(Clone, Debug)]
+pub struct SearchHit {
+    pub conn_id: String,
+    pub conn_label: String,
+    pub driver: String,
+    /// 类别：`table` / `view` / `schema` / `column`。
+    pub object_type: String,
+    pub object_name: String,
+    /// 列命中时的所属表名。
+    pub parent_name: Option<String>,
+    pub catalog: Option<String>,
+    pub schema: Option<String>,
+}
+
+/// 一次搜索的完整结果（一个批次涵盖全部目标连接）。
+pub struct SearchResult {
+    /// 本次搜索词；回填方据此丢弃**过期批次**（用户已经把词改了）。
+    pub query: String,
+    /// 实际搜了的连接数（有缓存的那些；无缓存的连接不建文件、直接跳过）。
+    pub searched: usize,
+    pub hits: Vec<SearchHit>,
+}
+
 enum Job {
     LoadChildren {
         conn_id: String,
@@ -69,6 +118,10 @@ enum Job {
         key: String,
         path: NavPath,
         fresh: bool,
+        /// 分页起始下标（0 = 首屏；>0 = 「加载更多」）。
+        offset: usize,
+        /// 本页上限（[`PAGE_SIZE`]）。
+        limit: usize,
     },
     LoadProperties {
         key: String,
@@ -77,6 +130,12 @@ enum Job {
         driver: String,
         /// 数据库类型（`drivers.type_id`）；属性面板「数据库类型」行用。
         db_type: Option<String>,
+    },
+    /// 搜索框的跨连接索引搜索（Infix 名称匹配）。
+    SearchIndex {
+        query: String,
+        project_root: Option<String>,
+        targets: Vec<SearchTarget>,
     },
     Warm {
         conn_id: String,
@@ -124,10 +183,12 @@ struct Shared {
     pending_props: AtomicUsize,
     pending_sql: AtomicUsize,
     pending_test: AtomicUsize,
+    pending_search: AtomicUsize,
     load_results: Mutex<Vec<LoadResult>>,
     props_results: Mutex<Vec<PropsResult>>,
     sql_results: Mutex<Vec<SqlGenResult>>,
     test_results: Mutex<Vec<TestConnResult>>,
+    search_results: Mutex<Vec<SearchResult>>,
 }
 
 static JOBS: OnceLock<Shared> = OnceLock::new();
@@ -151,10 +212,12 @@ fn shared() -> &'static Shared {
             pending_props: AtomicUsize::new(0),
             pending_sql: AtomicUsize::new(0),
             pending_test: AtomicUsize::new(0),
+            pending_search: AtomicUsize::new(0),
             load_results: Mutex::new(Vec::new()),
             props_results: Mutex::new(Vec::new()),
             sql_results: Mutex::new(Vec::new()),
             test_results: Mutex::new(Vec::new()),
+            search_results: Mutex::new(Vec::new()),
         }
     })
 }
@@ -184,6 +247,8 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 key,
                 path,
                 fresh,
+                offset,
+                limit,
             } => {
                 let svc = crate::navigator_service::NavigatorService::with_context(
                     engine::get_connection_manager().clone(),
@@ -191,13 +256,14 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     fresh,
                 );
                 let result = rt
-                    .block_on(svc.load_children(&conn_id, &path))
+                    .block_on(svc.load_children_page(&conn_id, &path, offset, limit))
                     .map_err(|e| e.to_string());
                 lock(&shared().load_results).push(LoadResult {
                     key,
                     conn_id,
                     project_root,
                     path,
+                    offset,
                     result,
                 });
                 shared().pending_loads.fetch_sub(1, Ordering::SeqCst);
@@ -292,6 +358,48 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 lock(&shared().sql_results).push(SqlGenResult { key, result });
                 shared().pending_sql.fetch_sub(1, Ordering::SeqCst);
             }
+            Job::SearchIndex {
+                query,
+                project_root,
+                targets,
+            } => {
+                let mut hits = Vec::new();
+                let mut searched = 0usize;
+                for target in &targets {
+                    if hits.len() >= SEARCH_MAX_HITS {
+                        break;
+                    }
+                    // 没落盘缓存的连接直接跳过：搜索不建文件（见 `cache::cache_file_exists`）。
+                    if !crate::cache::cache_file_exists(&target.conn_id, project_root.as_deref()) {
+                        continue;
+                    }
+                    let Some(cache) =
+                        crate::cache::NavCache::open(&target.conn_id, project_root.as_deref())
+                    else {
+                        continue;
+                    };
+                    searched += 1;
+                    let room = SEARCH_MAX_HITS - hits.len();
+                    for hit in cache.search_index(&query, SEARCH_LIMIT_PER_CONN.min(room)) {
+                        hits.push(SearchHit {
+                            conn_id: target.conn_id.clone(),
+                            conn_label: target.label.clone(),
+                            driver: target.driver.clone(),
+                            object_type: hit.object_type,
+                            object_name: hit.object_name,
+                            parent_name: hit.parent_name,
+                            catalog: hit.catalog_name,
+                            schema: hit.schema_name,
+                        });
+                    }
+                }
+                lock(&shared().search_results).push(SearchResult {
+                    query,
+                    searched,
+                    hits,
+                });
+                shared().pending_search.fetch_sub(1, Ordering::SeqCst);
+            }
             Job::TestConnection {
                 conn_id,
                 project_root,
@@ -311,13 +419,27 @@ fn worker(rx: mpsc::Receiver<Job>) {
     }
 }
 
-/// 提交导航树懒加载。
+/// 提交导航树懒加载（首屏）。
 pub fn enqueue_load(
     conn_id: &str,
     project_root: Option<&str>,
     key: &str,
     path: NavPath,
     fresh: bool,
+) {
+    enqueue_load_page(conn_id, project_root, key, path, fresh, 0, PAGE_SIZE);
+}
+
+/// 提交导航树分页加载（`offset` = 已加载条数，即可「加载更多」）。
+#[allow(clippy::too_many_arguments)]
+pub fn enqueue_load_page(
+    conn_id: &str,
+    project_root: Option<&str>,
+    key: &str,
+    path: NavPath,
+    fresh: bool,
+    offset: usize,
+    limit: usize,
 ) {
     shared().pending_loads.fetch_add(1, Ordering::SeqCst);
     let _ = shared().tx.send(Job::LoadChildren {
@@ -326,6 +448,8 @@ pub fn enqueue_load(
         key: key.to_string(),
         path,
         fresh,
+        offset,
+        limit,
     });
 }
 
@@ -431,6 +555,24 @@ pub fn has_pending_test() -> bool {
     shared().pending_test.load(Ordering::SeqCst) > 0
 }
 
+/// 是否仍有未完成的索引搜索。
+pub fn has_pending_search() -> bool {
+    shared().pending_search.load(Ordering::SeqCst) > 0
+}
+
+/// 提交跨连接索引搜索。
+///
+/// 空目标（无可见连接）也走一趟：回传一个 `searched = 0` 的空结果，
+/// 让视图侧能把「搜索中…」收尾（否则结果区会一直转）。
+pub fn enqueue_search(query: &str, project_root: Option<&str>, targets: Vec<SearchTarget>) {
+    shared().pending_search.fetch_add(1, Ordering::SeqCst);
+    let _ = shared().tx.send(Job::SearchIndex {
+        query: query.to_string(),
+        project_root: project_root.map(|s| s.to_string()),
+        targets,
+    });
+}
+
 /// 取走已完成的树加载结果。
 pub fn drain_load_results() -> Vec<LoadResult> {
     std::mem::take(&mut *lock(&shared().load_results))
@@ -449,6 +591,11 @@ pub fn drain_sql_results() -> Vec<SqlGenResult> {
 /// 取走已完成的「测试连接」结果。
 pub fn drain_test_results() -> Vec<TestConnResult> {
     std::mem::take(&mut *lock(&shared().test_results))
+}
+
+/// 取走已完成的索引搜索结果。
+pub fn drain_search_results() -> Vec<SearchResult> {
+    std::mem::take(&mut *lock(&shared().search_results))
 }
 
 /// 当前是否有预热任务在跑。

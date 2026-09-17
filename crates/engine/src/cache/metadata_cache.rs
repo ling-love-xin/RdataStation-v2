@@ -113,6 +113,21 @@ impl MetadataCacheKey {
         }
     }
 
+    /// 创建视图列表缓存键
+    ///
+    /// 与表分开：导航侧一次实时内省同时拿到表与视图，分键存储才能各自单独命中。
+    pub fn views(
+        conn_id: impl Into<String>,
+        database: impl Into<String>,
+        schema: Option<String>,
+    ) -> Self {
+        Self::Views {
+            conn_id: conn_id.into(),
+            database: database.into(),
+            schema,
+        }
+    }
+
     /// 创建列列表缓存键
     pub fn columns(
         conn_id: impl Into<String>,
@@ -311,6 +326,20 @@ impl MetadataCache {
         })
     }
 
+    /// 获取视图列表
+    pub fn get_views(
+        &mut self,
+        conn_id: &str,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Option<Vec<SchemaObject>> {
+        let key = MetadataCacheKey::views(conn_id, database, schema.map(|s| s.to_string()));
+        self.cache.get(&key).and_then(|v| match v {
+            MetadataCacheValue::SchemaObjects(list) => Some(list),
+            _ => None,
+        })
+    }
+
     /// 获取列列表
     pub fn get_columns(
         &mut self,
@@ -498,6 +527,19 @@ impl MetadataCache {
     ) {
         let key = MetadataCacheKey::tables(conn_id, database, schema.map(|s| s.to_string()));
         let value = MetadataCacheValue::SchemaObjects(tables);
+        self.cache.put_with_ttl(key, value, Some(self.default_ttl));
+    }
+
+    /// 写入视图列表
+    pub fn set_views(
+        &mut self,
+        conn_id: &str,
+        database: &str,
+        schema: Option<&str>,
+        views: Vec<SchemaObject>,
+    ) {
+        let key = MetadataCacheKey::views(conn_id, database, schema.map(|s| s.to_string()));
+        let value = MetadataCacheValue::SchemaObjects(views);
         self.cache.put_with_ttl(key, value, Some(self.default_ttl));
     }
 

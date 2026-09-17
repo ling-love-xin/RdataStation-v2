@@ -33,6 +33,11 @@ impl Default for QueryCacheConfig {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct CacheEntry {
+    /// 归属连接。
+    ///
+    /// 缓存键是 `hash(conn_id + sql)`（见 `generate_key`），**无法从键反查归属**，
+    /// 所以条目自带连接 ID —— 这是 [`QueryCache::clear_by_connection`] 能定向清理的前提。
+    connection_id: Arc<str>,
     /// 查询结果
     result: QueryResult,
     /// 创建时间
@@ -45,9 +50,10 @@ struct CacheEntry {
 
 impl CacheEntry {
     /// 创建新的缓存条目
-    fn new(result: QueryResult, ttl: Duration) -> Self {
+    fn new(connection_id: &str, result: QueryResult, ttl: Duration) -> Self {
         let now = Instant::now();
         Self {
+            connection_id: Arc::from(connection_id),
             result,
             created_at: now,
             expires_at: now + ttl,
@@ -147,7 +153,7 @@ impl QueryCache {
         // 只缓存成功的查询结果
         let key = Self::generate_key(connection_id, sql);
         let ttl = ttl.unwrap_or(self.config.default_ttl);
-        let entry = CacheEntry::new(result, ttl);
+        let entry = CacheEntry::new(connection_id, result, ttl);
 
         let mut cache = self.cache.write().await;
         cache.put(key, entry);
@@ -194,26 +200,28 @@ impl QueryCache {
     }
 
     /// 清空特定连接的所有缓存
-    pub async fn clear_by_connection(&self, _connection_id: &str) -> Result<usize, CoreError> {
+    ///
+    /// 历史上这个函数把全部条目原样拷进新 map（参数名 `_connection_id`），
+    /// 结果 `removed` 恒为 0、一条都没清 —— 而调用链是活的
+    /// （`ConnectionManager` 断开连接时调它），于是断连后旧连接的查询结果仍可被命中。
+    pub async fn clear_by_connection(&self, connection_id: &str) -> Result<usize, CoreError> {
         let mut cache = self.cache.write().await;
-        let original_len = cache.len();
 
-        // 创建临时缓存，保留非目标连接的缓存
-        let max_entries = std::num::NonZero::new(self.config.max_entries)
-            .unwrap_or(std::num::NonZero::<usize>::MIN);
-        let mut new_cache = lru::LruCache::new(max_entries);
+        // 先收集待删键，再逐个 pop：避免“边遍历边改”的借用冲突。
+        let keys: Vec<u64> = cache
+            .iter()
+            .filter(|(_, entry)| entry.connection_id.as_ref() == connection_id)
+            .map(|(key, _)| *key)
+            .collect();
 
-        for (key, entry) in cache.iter() {
-            new_cache.put(*key, (*entry).clone());
+        for key in &keys {
+            cache.pop(key);
         }
 
-        let removed = original_len - new_cache.len();
-
-        // 替换旧缓存
-        *cache = new_cache;
+        let removed = keys.len();
 
         // 更新统计信息
-        if self.config.enable_stats {
+        if self.config.enable_stats && removed > 0 {
             let mut stats = self.stats.write().await;
             stats.removed += removed as u64;
         }
@@ -436,6 +444,38 @@ mod tests {
         assert_eq!(stats.expired, 0);
         assert_eq!(stats.removed, 0);
         assert_eq!(stats.hit_rate(), 0.5);
+        Ok(())
+    }
+
+    /// 定向清理：只清目标连接的条目，别的连接不受影响。
+    ///
+    /// 回归点：旧实现不按连接过滤（参数名 `_connection_id`），`removed` 恒为 0 ——
+    /// 而调用链是活的（`ConnectionManager` 断开连接时调它）。
+    #[tokio::test]
+    async fn test_clear_by_connection_only_targets_its_connection() -> Result<(), CoreError> {
+        let cache = QueryCache::new(None);
+        let (columns, batch) = make_id_only_batch();
+        let payload = || QueryResult {
+            columns: columns.clone(),
+            batches: vec![batch.clone()],
+            ..Default::default()
+        };
+
+        cache.set("conn-a", "SELECT 1", payload(), None).await?;
+        cache.set("conn-a", "SELECT 2", payload(), None).await?;
+        cache.set("conn-b", "SELECT 1", payload(), None).await?;
+        assert_eq!(cache.size().await, 3);
+
+        let removed = cache.clear_by_connection("conn-a").await?;
+        assert_eq!(removed, 2, "应只清掉 conn-a 的两条");
+        assert_eq!(cache.size().await, 1, "conn-b 的条目必须留下");
+        assert!(cache.get("conn-a", "SELECT 1").await.is_none());
+        assert!(cache.get("conn-a", "SELECT 2").await.is_none());
+        assert!(cache.get("conn-b", "SELECT 1").await.is_some());
+
+        // 不存在的连接：不应报错，也不应误删
+        assert_eq!(cache.clear_by_connection("conn-zzz").await?, 0);
+        assert_eq!(cache.size().await, 1);
         Ok(())
     }
 }

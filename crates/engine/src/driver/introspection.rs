@@ -85,3 +85,48 @@ pub fn remove_level(conn_id: &str) {
         map.remove(conn_id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+use super::*;
+
+/// 阈值对标 DataGrip：≤1000 全量（Level3）、≤3000 概要（Level2）、否则仅索引（Level1）。
+#[test]
+fn auto_level_by_object_count() {
+    assert_eq!(IntrospectionLevel::from_object_count(500), IntrospectionLevel::Level3);
+    assert_eq!(IntrospectionLevel::from_object_count(1000), IntrospectionLevel::Level3);
+    assert_eq!(IntrospectionLevel::from_object_count(1001), IntrospectionLevel::Level2);
+    assert_eq!(IntrospectionLevel::from_object_count(3000), IntrospectionLevel::Level2);
+    assert_eq!(IntrospectionLevel::from_object_count(3001), IntrospectionLevel::Level1);
+}
+
+/// 能力位：**仅 Level1 不加载列**（Level2/3 都加载）；源码只在 Level3。
+///
+/// 导航侧靠 `should_load_columns` 决定是否做 C2 邻接预取。
+#[test]
+fn capability_flags() {
+    assert!(IntrospectionLevel::Level3.should_load_columns());
+    assert!(IntrospectionLevel::Level2.should_load_columns());
+    assert!(!IntrospectionLevel::Level1.should_load_columns());
+
+    assert!(IntrospectionLevel::Level3.should_load_source());
+    assert!(!IntrospectionLevel::Level2.should_load_source());
+}
+
+/// 注册表往返：设置 / 读取 / 移除（未知连接保底 Level3）。
+#[test]
+fn registry_roundtrip() {
+    let conn = "P_introspection_test";
+    assert_eq!(
+        get_level("P_introspection_unknown"),
+        IntrospectionLevel::Level3,
+        "未知连接默认 Level3"
+    );
+
+    set_level(conn, IntrospectionLevel::Level1);
+    assert_eq!(get_level(conn), IntrospectionLevel::Level1);
+
+    remove_level(conn);
+    assert_eq!(get_level(conn), IntrospectionLevel::Level3, "移除后回默认");
+}
+}

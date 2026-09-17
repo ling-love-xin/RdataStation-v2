@@ -83,7 +83,20 @@ pub struct NavViewState {
     /// 连接 ID → **显式主组** ID（仅用户显式指定过的连接；缺省回退到分组排序推导）。
     primary_group: HashMap<String, String>,
     /// 类别文件夹节点 key → 已渲染条数上限（大 schema 客户端分页）。
+    ///
+    /// 与 [`Self::child_total`] 配合：`page_limit` 是「屏上允许出现多少条」的渲染窗口，
+    /// `child_total` 是「数据侧一共有多少条」；前者可以小于后者（分批拉取中）。
     page_limit: HashMap<String, usize>,
+    /// 节点 key → 该路径下的对象总数（来自 `metadata_index` 计数或全量结果长度）。
+    ///
+    /// 大 schema 只加载首屏时，仅靠 `children` 长度无法判断“还有没有”，必须由数据侧告知。
+    child_total: HashMap<String, usize>,
+    /// 已发给后台的索引搜索词（`None` = 当前无搜索；用于“查询词变了才重搜”）。
+    search_query: Option<String>,
+    /// 索引搜索命中（跨连接；结果区渲染在树顶）。
+    search_hits: Vec<nav_jobs::SearchHit>,
+    /// 上批结果实际搜了几个连接（有缓存的那些；用于结果区的“已搜 N 个连接”）。
+    search_searched: usize,
     /// 连接 ID → 标签列表（一次读库缓存，避免渲染期逐条查询）。
     tags: HashMap<String, Vec<String>>,
     /// 分组是否已加载。
@@ -544,6 +557,77 @@ fn nav_node_matches(
         Some(kids) => kids.iter().any(|c| nav_node_matches(children, c, filter)),
         None => false,
     }
+}
+
+/// 索引命中 → 属性面板定位（`None` = 该类别暂不支持属性定位）。
+///
+/// 列命中要带 `parent`（所属表）：属性面板靠它区分「哪张表的列」。
+fn nav_search_hit_property(hit: &nav_jobs::SearchHit) -> Option<PropertyRef> {
+    let kind = match hit.object_type.as_str() {
+        "table" => PropertyKind::Table,
+        "view" => PropertyKind::View,
+        "column" => PropertyKind::Column,
+        "schema" => PropertyKind::Schema,
+        _ => return None,
+    };
+    Some(PropertyRef {
+        conn_id: hit.conn_id.clone(),
+        source: NavSource::from_conn_id(&hit.conn_id),
+        catalog: hit.catalog.clone(),
+        schema: hit.schema.clone(),
+        parent: hit.parent_name.clone(),
+        name: hit.object_name.clone(),
+        kind,
+    })
+}
+
+/// 索引命中 → 合成节点类别（只为取图标颜色，不参与树挂载）。
+fn nav_search_hit_kind(hit: &nav_jobs::SearchHit) -> NavNodeKind {
+    match hit.object_type.as_str() {
+        "table" => NavNodeKind::Table { row_estimate: None },
+        "view" => NavNodeKind::View,
+        "column" => NavNodeKind::Column {
+            data_type: String::new(),
+            nullable: true,
+            primary: false,
+            foreign: false,
+        },
+        _ => NavNodeKind::Schema,
+    }
+}
+
+/// 命中行的类别短标签（表 / 视图 / 模式 / 列）。
+fn nav_object_type_label(object_type: &str) -> &'static str {
+    match object_type {
+        "table" => "表",
+        "view" => "视图",
+        "schema" => "模式",
+        "column" => "列",
+        "routine" => "例程",
+        _ => "对象",
+    }
+}
+
+/// 搜索词是否够格打一次索引搜索（太短时命中面过大，且首字符几乎必然还要改）。
+fn nav_search_query_ready(query: &str) -> bool {
+    query.trim().chars().count() >= 2
+}
+
+/// 把一页结果并入已加载列表，返回**新增**条数（去重后）。
+///
+/// 抽成纯函数是为了可测：索引翻页理论上不重叠，但刷新 / 结构变更后两次读可能交叠，
+/// 重复节点会在树上出现两次（key 相同 → 元素 id 冲突，删除 / 选中都会错位）。
+fn nav_merge_page(loaded: &mut Vec<NavNode>, page: Vec<NavNode>) -> usize {
+    // 用 owned key 集合（而非 `&str` 视图）：下面要把节点按值移入 `loaded`，
+    // 借 `loaded` 里的 key 会与 `push` 的可变借用冲突。每页一次克隆，代价可忽略。
+    let mut seen: HashSet<String> = loaded.iter().map(|n| n.key.clone()).collect();
+    let before = loaded.len();
+    for node in page {
+        if seen.insert(node.key.clone()) {
+            loaded.push(node);
+        }
+    }
+    loaded.len() - before
 }
 
 /// 搜索命中高亮：把 `name` 中与 `filter`（已小写）匹配的一段用命中底色标出。
@@ -1637,8 +1721,10 @@ impl NavView {
         let primary_gid =
             |conn_id: &str| nav_primary_scope(&membership, &primary_explicit, conn_id);
 
-        // 单条连接是否通过归属域 chips、附加 facet（类型 / 驱动 / 标签）与搜索词（连接名 / 标签）。
-        let passes = |conn: &ConnectionItem| -> bool {
+        // 连接级约束：归属域 chips + 附加 facet（类型 / 驱动 / 标签）。
+        // 索引搜索也吃这一套（它回答“在哪些连接里找”），**不吃**搜索词——
+        // 搜索词是**对象级**查询，若拿它去筛连接，搜表名时会因连接名不匹配而搜不到任何东西。
+        let passes_facets = |conn: &ConnectionItem| -> bool {
             if let Some(src) = source_filter {
                 if NavSource::from_conn_id(&conn.id) != src {
                     return false;
@@ -1699,6 +1785,15 @@ impl NavView {
                     return false;
                 }
             }
+            true
+        };
+
+        // 树里的连接行：在连接级约束之上，搜索词也顺手命中连接名 / 标签
+        // （否则搜连接名时整棵树会被清空，看起来像坏了）。
+        let passes = |conn: &ConnectionItem| -> bool {
+            if !passes_facets(conn) {
+                return false;
+            }
             if filter.is_empty() {
                 return true;
             }
@@ -1709,6 +1804,48 @@ impl NavView {
                 .map(|ts| ts.iter().any(|t| t.to_lowercase().contains(&filter)))
                 .unwrap_or(false)
         };
+
+        // ——— 索引搜索（树顶结果区）———
+        // 本地过滤命中的是**已加载**节点（零往返、即时）；索引搜索补的是「尚未展开到的那部分」。
+        // 只在查询词变化时排一次后台任务；过期批次在回填处丢弃。
+        //
+        // 方向（已拍板）：搜索 / 命令这类“先输入再选”的交互后续要**独立成一个 crate**
+        // （类 VS Code 的 Quick Open / 命令面板），导航面板只保留这个“够用”版本；
+        // 新特性不要再往这里加。
+        let search_started = {
+            let mut view = self.nav.borrow_mut();
+            let query = filter.trim().to_string();
+            if !nav_search_query_ready(&query) {
+                view.search_query = None;
+                view.search_hits.clear();
+                view.search_searched = 0;
+                None
+            } else if view.search_query.as_deref() == Some(query.as_str()) {
+                None
+            } else {
+                view.search_query = Some(query.clone());
+                view.search_hits.clear();
+                view.search_searched = 0;
+                Some(query)
+            }
+        };
+        if let Some(query) = search_started {
+            let targets: Vec<nav_jobs::SearchTarget> = conns
+                .iter()
+                .filter(|c| passes_facets(c))
+                .map(|c| nav_jobs::SearchTarget {
+                    conn_id: c.id.clone(),
+                    label: c.name.clone(),
+                    driver: c.driver.clone(),
+                })
+                .collect();
+            let root = self
+                .host
+                .project_root()
+                .map(|p| p.to_string_lossy().to_string());
+            nav_jobs::enqueue_search(&query, root.as_deref(), targets);
+            self.ensure_nav_pump(cx);
+        }
 
         let mut column = div()
             .v_flex()
@@ -1731,6 +1868,11 @@ impl NavView {
             set
         };
         let error_set: HashSet<String> = self.nav.borrow().errors.keys().cloned().collect();
+
+        // 搜索结果区（树顶）：索引里搜到的对象，含尚未展开到的 schema / 连接。
+        if let Some(section) = self.render_search_section(cx) {
+            column = column.child(section);
+        }
 
         for group in &groups {
             // 组内顺序以存储的手动排序为准（缺省无成员）。
@@ -1875,7 +2017,9 @@ impl NavView {
                                 }),
                         ),
                 );
-            } else {
+            } else if self.nav.borrow().search_hits.is_empty() {
+                // 有命中时不说这句：结果区在树顶已经给了答案，
+                // 同时出现“没有匹配的数据源”与一批命中会自相矛盾。
                 column = column.child(
                     div()
                         .w_full()
@@ -3347,13 +3491,23 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         }
         let (skip, expanded_eff, error, children) = {
             let view = self.nav.borrow();
-            let skip = !filter.is_empty() && !nav_node_matches(&view.children, node, &filter);
+            let children = view.children.get(&node.key).cloned().unwrap_or_default();
+            // 分页未拉完时，本地过滤只能覆盖**已加载**部分：此时不能因“已加载的都不匹配”
+            // 就把整支隐藏——那会让用户连「加载更多」都点不到，看上去像对象不存在。
+            let pending_more = view
+                .child_total
+                .get(&node.key)
+                .map(|total| *total > children.len())
+                .unwrap_or(false);
+            let skip = !filter.is_empty()
+                && !pending_more
+                && !nav_node_matches(&view.children, node, &filter);
             let expanded_now = view.expanded.contains(&node.key);
             (
                 skip,
                 expanded_now || !filter.is_empty(),
                 view.errors.get(&node.key).cloned(),
-                view.children.get(&node.key).cloned().unwrap_or_default(),
+                children,
             )
         };
         if skip {
@@ -3745,9 +3899,14 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             );
         }
         if expanded_eff {
-            // 类别文件夹客户端分页：万级对象时只渲染首批，其余用「加载更多」逐页展开。
+            // 类别文件夹分页：大 schema 只渲染首批，其余用「加载更多」逐页展开。
             let is_folder = matches!(&node.kind, NavNodeKind::Folder(_));
-            let total = children.len();
+            let loaded = children.len();
+            let total = if is_folder {
+                self.node_total(&node.key, loaded)
+            } else {
+                loaded
+            };
             let limit = if is_folder {
                 self.folder_limit(&node.key)
             } else {
@@ -3756,25 +3915,45 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             for child in children.iter().take(limit) {
                 block = block.child(self.render_nav_node(child, depth + 1, scope_key, cx));
             }
-            if is_folder && total > limit {
-                block = block.child(self.render_more_row(&node.key, total - limit, depth, cx));
+            // 两种「还有更多」：数据侧的（要取）与渲染窗口的（已到手，只放大窗口）。
+            if is_folder && (limit < loaded || loaded < total) {
+                block = block.child(self.render_more_row(node, loaded, total, limit, depth, cx));
             }
         }
         block
     }
 
-    /// 「加载更多」行（大 schema 客户端分页；点击追加一页，不重查远端）。
+    /// 「加载更多」/「显示更多」行（大 schema 分页）。
+    ///
+    /// 两种语义分开（用户点击的代价不同，必须区分）：
+    /// - `total > loaded`：数据侧还有没取的（索引分页）→ 点击**排队取下一页**；
+    /// - 否则：数据已到手，只是超出渲染窗口 → 点击**只放大窗口**，不重查也不排队。
     fn render_more_row(
         &self,
-        key: &str,
-        remaining: usize,
+        node: &NavNode,
+        loaded: usize,
+        total: usize,
+        window: usize,
         depth: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let pri = cx.theme().colors.primary;
         let indent = ui::TREE_BASE_PADDING + (depth as f32 + 1.0) * ui::TREE_INDENT;
         let entity = cx.entity();
-        let k = key.to_string();
+        let key = node.key.clone();
+        let to_fetch = total.saturating_sub(loaded);
+        let hidden = loaded.saturating_sub(window);
+        // 带筛选时，本地过滤只能命中**已加载**的那些：这一点必须说出口，
+        // 否则用户会以为“搜不到 = 库里没有”（索引/FTS 搜索尚未接，见文档 §4.5）。
+        let filtering = !self.nav.borrow().filter.is_empty();
+        let label = if to_fetch > 0 {
+            let scope = if filtering { "；筛选仅覆盖已加载" } else { "" };
+            format!("加载更多（余 {to_fetch} / 共 {total}{scope}）")
+        } else {
+            format!("显示更多（余 {hidden}）")
+        };
+        let conn_id = node.connection_id.clone();
+        let path = node.expand_path.clone();
         div()
             .id(format!("nav-more-{key}"))
             .h_flex()
@@ -3787,21 +3966,39 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .cursor_pointer()
             .text_xs()
             .text_color(pri)
-            .child(format!("加载更多（余 {remaining}）"))
+            .child(label)
             .on_click(move |_, _, app| {
-                let k = k.clone();
+                let k = key.clone();
+                let conn_id = conn_id.clone();
+                let path = path.clone();
                 entity.update(app, |this, cx| {
-                    let cur = {
-                        let view = this.nav.borrow();
+                    // 已在取数就别重复排队：后台任务是单线程串行的，重复点会叠成一串。
+                    if this.nav.borrow().loading.contains(&k) {
+                        return;
+                    }
+                    if to_fetch > 0 {
+                        let Some(path) = path.clone() else { return };
+                        let root = this
+                            .host
+                            .project_root()
+                            .map(|p| p.to_string_lossy().to_string());
+                        this.nav.borrow_mut().loading.insert(k.clone());
+                        nav_jobs::enqueue_load_page(
+                            &conn_id,
+                            root.as_deref(),
+                            &k,
+                            path,
+                            false,
+                            loaded,
+                            nav_jobs::PAGE_SIZE,
+                        );
+                        this.ensure_nav_pump(cx);
+                    } else {
+                        let mut view = this.nav.borrow_mut();
                         view.page_limit
-                            .get(&k)
-                            .copied()
-                            .unwrap_or(ui::NAV_FOLDER_PAGE_SIZE)
-                    };
-                    this.nav
-                        .borrow_mut()
-                        .page_limit
-                        .insert(k.clone(), cur + ui::NAV_FOLDER_PAGE_SIZE);
+                            .insert(k.clone(), window + ui::NAV_FOLDER_PAGE_SIZE);
+                        drop(view);
+                    }
                     cx.notify();
                 });
             })
@@ -3895,6 +4092,156 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         self.ensure_nav_pump(cx);
     }
 
+    /// 搜索结果区（树顶；有查询词时出现）。
+    ///
+    /// 与本地过滤的分工（两者同时生效，互不替代）：
+    /// - 本地过滤：命中**已加载**的节点（零往返、即时，改一个字就变）；
+    /// - 索引搜索：命中**索引里的全部对象**（含尚未展开到的 schema），跨连接。
+    fn render_search_section(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let (query, hits, searched) = {
+            let view = self.nav.borrow();
+            (
+                view.search_query.clone()?,
+                view.search_hits.clone(),
+                view.search_searched,
+            )
+        };
+        let pri = cx.theme().colors.primary;
+        let muted = cx.theme().colors.muted_foreground;
+        let max = ui::NAV_SEARCH_MAX_ROWS;
+
+        let title = if nav_jobs::has_pending_search() && hits.is_empty() {
+            format!("索引搜索：{query}（搜索中…）")
+        } else if hits.is_empty() {
+            format!("索引搜索：{query}（无命中；已搜 {searched} 个有缓存的连接）")
+        } else {
+            format!("索引搜索：{query}（{} 条，覆盖 {searched} 个连接）", hits.len())
+        };
+
+        let mut block = div().v_flex().w_full().gap_0p5().pb_1().child(
+            div()
+                .w_full()
+                .px_1()
+                .pb_0p5()
+                .text_xs()
+                .text_color(pri)
+                .child(title),
+        );
+        for hit in hits.iter().take(max) {
+            block = block.child(self.render_search_hit(hit, cx));
+        }
+        if hits.len() > max {
+            block = block.child(
+                div()
+                    .w_full()
+                    .px_1()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("仅显示前 {max} 条（缩小搜索词可看到更多）")),
+            );
+        }
+        Some(block)
+    }
+
+    /// 一条搜索命中行：色点 + 名称（高亮命中）+ 类别 / 归属（schema · 连接）。
+    ///
+    /// 单击 → 打开属性面板：搜索结果的价值就在「还没展开到那层时也能立刻看结构」。
+    fn render_search_hit(&self, hit: &nav_jobs::SearchHit, cx: &mut Context<Self>) -> impl IntoElement {
+        let fg = cx.theme().colors.foreground;
+        let muted = cx.theme().colors.muted_foreground;
+        let hover = cx.theme().colors.list_hover;
+        let match_bg = product_tokens::get(cx).search_match_background(cx.theme());
+        let tint = nav_kind_color(&nav_search_hit_kind(hit), cx.theme());
+        let filter = self.nav.borrow().filter.to_lowercase();
+
+        // 归属：`schema · 连接`（列再带上所属表）
+        let mut scope = Vec::new();
+        if let Some(parent) = &hit.parent_name {
+            scope.push(parent.clone());
+        }
+        if let Some(schema) = &hit.schema {
+            scope.push(schema.clone());
+        }
+        scope.push(hit.conn_label.clone());
+        let scope = scope.join(" · ");
+        let kind_label = nav_object_type_label(&hit.object_type);
+
+        let entity = cx.entity();
+        let property = nav_search_hit_property(hit);
+        let conn_label = hit.conn_label.clone();
+        let driver = hit.driver.clone();
+        let id = format!(
+            "nav-search-{}-{}-{}-{}-{}",
+            hit.conn_id,
+            hit.object_type,
+            hit.schema.clone().unwrap_or_default(),
+            hit.parent_name.clone().unwrap_or_default(),
+            hit.object_name
+        );
+
+        div()
+            .id(id)
+            .h_flex()
+            .items_center()
+            .gap_1p5()
+            .w_full()
+            .h(rems(1.375))
+            .px_1()
+            .rounded_md()
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover))
+            .child(div().size(rems(0.5)).rounded_full().bg(tint))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_color(fg)
+                    .child(nav_name_highlight(&hit.object_name, &filter, match_bg, fg)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("{kind_label} · {scope}")),
+            )
+            .on_click(move |_, _, app| {
+                let Some(property) = property.clone() else {
+                    return;
+                };
+                let req = PropertyRequest {
+                    property,
+                    conn_label: conn_label.clone(),
+                    driver: driver.clone(),
+                };
+                entity.update(app, |this, cx| {
+                    this.host.show_properties(req, cx);
+                    cx.notify();
+                });
+            })
+    }
+
+    /// 回填索引搜索结果（过期批次直接丢弃：用户在等待期间已经把词改了）。
+    fn apply_search_results(
+        &mut self,
+        results: Vec<nav_jobs::SearchResult>,
+        cx: &mut Context<Self>,
+    ) {
+        {
+            let mut view = self.nav.borrow_mut();
+            for r in results {
+                if view.search_query.as_deref() != Some(r.query.as_str()) {
+                    continue;
+                }
+                view.search_hits = r.hits;
+                view.search_searched = r.searched;
+            }
+        }
+        cx.notify();
+    }
+
     /// 启动加载结果轮询（已有存活任务时不重复启动）。
     fn ensure_nav_pump(&self, cx: &mut Context<Self>) {
         if let Some(task) = self.nav_pump.borrow().as_ref() {
@@ -3933,15 +4280,26 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 {
                     return;
                 }
+                // 搜索：同一轮询泵回填（搜索框的跨连接索引搜索）。
+                let search_results = nav_jobs::drain_search_results();
+                if !search_results.is_empty()
+                    && weak
+                        .update(cx, |this, cx| this.apply_search_results(search_results, cx))
+                        .is_err()
+                {
+                    return;
+                }
                 let idle = !nav_jobs::has_pending_loads()
                     && !nav_jobs::has_pending_sql()
-                    && !nav_jobs::has_pending_test();
+                    && !nav_jobs::has_pending_test()
+                    && !nav_jobs::has_pending_search();
                 if idle {
                     // 多等一拍确认没有新任务（render 可能刚入队）。
                     executor.timer(std::time::Duration::from_millis(120)).await;
                     if !nav_jobs::has_pending_loads()
                         && !nav_jobs::has_pending_sql()
                         && !nav_jobs::has_pending_test()
+                        && !nav_jobs::has_pending_search()
                     {
                         break;
                     }
@@ -3974,9 +4332,24 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 let mut view = self.nav.borrow_mut();
                 view.loading.remove(&key);
                 match r.result {
-                    Ok(children) => {
+                    Ok(page) => {
                         view.errors.remove(&key);
-                        view.children.insert(key.clone(), children);
+                        if r.offset == 0 {
+                            // 首屏：整体替换（刷新 / 重新展开都走这里）。
+                            view.children.insert(key.clone(), page.nodes);
+                            view.child_total.insert(key.clone(), page.total);
+                        } else {
+                            // 追加页：去重后并入（见 `nav_merge_page`）。
+                            let entry = view.children.entry(key.clone()).or_default();
+                            let appended = nav_merge_page(entry, page.nodes);
+                            let loaded = entry.len();
+                            // 索引计数与实际行数可能不一致（索引陈旧）：翻到底（空块）就收敛到
+                            // 实际已加载数，否则「加载更多」会永远挂在树上、点了没反应。
+                            let total = if appended == 0 { loaded } else { page.total };
+                            view.child_total.insert(key.clone(), total);
+                            // 追加页到位后把渲染窗口抬到已加载数，否则新到的行落在窗口外看不见。
+                            view.page_limit.insert(key.clone(), loaded);
+                        }
                     }
                     Err(e) => {
                         view.errors.insert(key.clone(), e);
@@ -4386,6 +4759,16 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             .unwrap_or(ui::NAV_FOLDER_PAGE_SIZE)
     }
 
+    /// 该节点的对象总数（数据侧）；未知时回落到已加载条数。
+    fn node_total(&self, key: &str, loaded: usize) -> usize {
+        self.nav
+            .borrow()
+            .child_total
+            .get(key)
+            .copied()
+            .unwrap_or(loaded)
+    }
+
     /// 生成不与现有分组重名的默认分组名。
     fn next_group_name(&self) -> String {
         let groups = self.nav.borrow().groups.clone();
@@ -4699,6 +5082,12 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 .retain(|k| k != key && !k.starts_with(&prefix));
             view.errors
                 .retain(|k, _| k != key && !k.starts_with(&prefix));
+            // 分页簿记也要清：孩子清了而总数留着的话，「加载更多」会按旧总数
+            // 报出已不存在的余量（甚至对着空列表显示“余 5000”）。
+            view.child_total
+                .retain(|k, _| k != key && !k.starts_with(&prefix));
+            view.page_limit
+                .retain(|k, _| k != key && !k.starts_with(&prefix));
         }
         if let Some(p) = path {
             self.ensure_nav_loaded(conn_id, key, p, true, cx);
@@ -4723,6 +5112,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             view.children.clear();
             view.attempted.clear();
             view.errors.clear();
+            view.child_total.clear();
+            view.page_limit.clear();
         }
         for cid in roots {
             self.ensure_nav_loaded(&cid, &cid, NavPath::Connection, true, cx);
@@ -4736,11 +5127,102 @@ this.host.open_right_panel(RightPanel::Insight, cx);
 mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
-    use super::{nav_order_members, nav_reorder, nav_step, nav_type_short_label, parse_nav_search};
-    use crate::model::NavSource;
+    use super::{
+        nav_merge_page, nav_object_type_label, nav_order_members, nav_reorder,
+        nav_search_hit_property, nav_search_query_ready, nav_step, nav_type_short_label,
+        parse_nav_search,
+    };
+    use crate::model::{NavNode, NavNodeKind, NavSource, PropertyKind};
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// 索引命中 → 属性定位：表带 catalog/schema，列带所属表（parent），未知类别不接。
+    #[test]
+    fn search_hit_maps_to_property_ref() {
+        let hit = |object_type: &str, name: &str, parent: Option<&str>| crate::nav_jobs::SearchHit {
+            conn_id: "P_conn_hit".to_string(),
+            conn_label: "本地库".to_string(),
+            driver: "duckdb".to_string(),
+            object_type: object_type.to_string(),
+            object_name: name.to_string(),
+            parent_name: parent.map(str::to_string),
+            catalog: Some("main".to_string()),
+            schema: Some("public".to_string()),
+        };
+
+        let table = nav_search_hit_property(&hit("table", "orders", None)).expect("表命中应可定位");
+        assert_eq!(table.kind, PropertyKind::Table);
+        assert_eq!(table.name, "orders");
+        assert_eq!(table.catalog.as_deref(), Some("main"));
+        assert_eq!(table.schema.as_deref(), Some("public"));
+        assert_eq!(table.parent, None);
+        assert_eq!(table.source, NavSource::from_conn_id("P_conn_hit"));
+
+        let col = nav_search_hit_property(&hit("column", "order_id", Some("orders")))
+            .expect("列命中应可定位");
+        assert_eq!(col.kind, PropertyKind::Column);
+        assert_eq!(
+            col.parent.as_deref(),
+            Some("orders"),
+            "列必须带所属表（属性面板靠它区分是哪张表的列）"
+        );
+
+        // 未知类别（如索引里可能出现的 index / routine）不提供属性定位
+        assert!(nav_search_hit_property(&hit("index", "idx_a", None)).is_none());
+    }
+
+    /// 搜索词门槛：≥ 2 个字符（含空白裁剪）；单字符不打搜索（命中面过大且几乎必然还要改）。
+    #[test]
+    fn search_query_requires_two_chars() {
+        assert!(!nav_search_query_ready(""));
+        assert!(!nav_search_query_ready("o"));
+        assert!(!nav_search_query_ready("  o  "));
+        assert!(nav_search_query_ready("or"));
+        assert!(nav_search_query_ready(" 订单 "));
+    }
+
+    /// 命中行的类别短标签（给用户看的中文；未知类别兜到「对象」）。
+    #[test]
+    fn object_type_labels_are_localized() {
+        assert_eq!(nav_object_type_label("table"), "表");
+        assert_eq!(nav_object_type_label("view"), "视图");
+        assert_eq!(nav_object_type_label("schema"), "模式");
+        assert_eq!(nav_object_type_label("column"), "列");
+        assert_eq!(
+            nav_object_type_label("whatever"),
+            "对象",
+            "未知类别不得显示成空白"
+        );
+    }
+
+    /// 分页追加：按 key 去重，并返回新增条数（追加方靠它判断“是否翻到底”）。
+    #[test]
+    fn merge_page_dedupes_by_key_and_reports_appended() {
+        let node = |key: &str| {
+            NavNode::new(
+                key.to_string(),
+                key.to_string(),
+                "P_conn_merge",
+                NavNodeKind::Table { row_estimate: None },
+                false,
+            )
+        };
+
+        let mut loaded = vec![node("a"), node("b")];
+        // 与已有重叠一条（b）+ 新的一条（c）
+        let appended = nav_merge_page(&mut loaded, vec![node("b"), node("c")]);
+        assert_eq!(appended, 1, "只有 c 是新增");
+        assert_eq!(
+            loaded.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"],
+            "顺序保持：已加载在前、新页在后"
+        );
+
+        // 整页重复（刷新后二次读交叠）：新增 0，长度不变
+        assert_eq!(nav_merge_page(&mut loaded, vec![node("a")]), 0);
+        assert_eq!(loaded.len(), 3, "重复节点不得再入列（元素 id 会冲突）");
     }
 
     #[test]

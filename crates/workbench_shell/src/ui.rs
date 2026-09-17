@@ -80,6 +80,8 @@ pub const TREE_INDENT: f32 = 0.875;
 pub const TREE_BASE_PADDING: f32 = 0.5;
 /// 导航树类别文件夹（表/视图等）首批渲染条数；超出时显示「加载更多」（非 rem 尺寸，是条目计数）。
 pub const NAV_FOLDER_PAGE_SIZE: usize = 200;
+/// 导航搜索结果区最多渲染多少条命中（超出只提示“缩小搜索词”）。
+pub const NAV_SEARCH_MAX_ROWS: usize = 100;
 /// 连接行徽标尺寸（1.125rem ≈ 18px；颜色=状态 / 形状=类型）。
 pub const NAV_BADGE_SIZE: f32 = 1.125;
 /// 连接行归属域列宽（短码模式；2.4rem ≈ 38px）。

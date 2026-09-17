@@ -275,7 +275,7 @@
 | C1 | 预热方案 C（仅 databases/schemas）+ 进度 + 取消 | `navigator_service.rs`（`build_metadata_index` / `is_syncing` / `get_sync_status` / `cancel_sync`） | 首连后台预热；进度可见可取消 |
 | C2 | 邻接节点预加载 | `navigator_service.rs` | 展开表后相邻预取，失败静默 |
 | C3 | 增量刷新接入（`detect_all_changes` / `incremental_sync` + 快照） | `navigator_service.rs` | 二次刷新只落变更 |
-| C4 | 大 schema 分页（`get_tables_chunk`）+ 虚拟列表 | `navigator_service.rs` + `database_nav_panel.rs` | 万级表不卡顿；「加载更多」 |
+| C4 | 大 schema 分页 + 虚拟列表 | `navigator_service.rs` + `nav_view.rs`（视图已下沉到 `crates/database`） | ⏳ **分页已接**（2026-09-18）：`get_objects_chunk` 索引分块 + `offset` 追加 + 「加载更多」；**虚拟列表未做**（今天靠分页限制条数，不是虚拟滚动） |
 | C5 | 主题 token：注册 `search.match.background`；明暗核对 | `assets/themes/rds-theme.json`、`app` | 两套主题对比度达标 |
 | C6 | 收敛遗留：移除 `panels/` 导航占位；`db_navigator.rs` 移出本模块 | `crates/workbench` | 无死代码残留 |
 | C7 | 快捷键与无障碍（↑↓/→←/Enter/F4/Ctrl+F） | `crates/workbench/src/commands.rs`、导航面板 | 键位走通 |

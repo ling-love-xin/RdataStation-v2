@@ -8,11 +8,17 @@
 //! 缓存并在重写前清理旧行（右键「刷新元数据」用）。
 //!
 //! 层次：Connection → Catalog → Schema → 类别文件夹 → 表/视图 → 列。
+//!
+//! 分页（C4）：类别文件夹支持按 `metadata_index` 分块加载（`load_children_page`）。
+//! 小 schema（≤ [`CHUNK_THRESHOLD`]）保持「一次拉全 + 进程内 L1」的既有路径，
+//! 大 schema 才走索引分块——两者行为差异只在阈值两侧，避免为了分页把热路径复杂化。
 
 use std::sync::Arc;
 
+use engine::cache::{CacheManager, MetadataCache};
 use engine::connection_manager::ConnectionManager;
 use engine::driver::traits::{ColumnDetail, SchemaObject, SchemaObjectKind};
+use engine::persistence::SchemaObjectCounts;
 use shared::error::CoreError;
 
 use crate::cache::NavCache;
@@ -23,6 +29,30 @@ use crate::model::{
 
 /// 无 Catalog 层级时的退化容器名（SQLite / DuckDB 等）。
 const FALLBACK_CONTAINER: &str = "main";
+
+/// 走索引分块而非一次拉全的对象数阈值（单类别，表 / 视图各自判断）。
+///
+/// 为什么取 500：UI 首批渲染 200 条（`workbench_shell::ui::NAV_FOLDER_PAGE_SIZE`），
+/// 500 以内一次拉全的代价（命中 L1 是内存拷贝）小于多一次后台往返；超过 500 后
+/// 首个屏的耗时与常驻内存都随对象数线性上长，才值得付出分页的复杂度。
+/// 同样重要的原因：阈值以下完全走旧路径 = 零回归风险。
+pub const CHUNK_THRESHOLD: usize = 500;
+
+/// 一页导航子节点（分块加载的返回值）。
+///
+/// 为什么需要 `total`：客户端分页要知道“还有多少没拉”。仅靠已加载条数推算不出——
+/// 大 schema 的已加载数永远停在首批上，于是「加载更多」要么不出现、要么无限出现。
+#[derive(Debug, Clone)]
+pub struct NavPage {
+    /// 本页节点。
+    pub nodes: Vec<NavNode>,
+    /// 该路径下的对象总数（大 schema 来自 `metadata_index` 计数，小 schema 来自全量结果长度）。
+    pub total: usize,
+    /// 本页起始下标（0 = 首屏）。
+    pub offset: usize,
+    /// 是否还有后续页。
+    pub has_more: bool,
+}
 
 /// 导航服务：按路径懒加载对象树（cache-aside）。
 pub struct NavigatorService {
@@ -61,12 +91,58 @@ impl NavigatorService {
         NavCache::open(conn_id, self.project_root.as_deref())
     }
 
+    // ==================== L1（进程内内存缓存） ====================
+    //
+    // 三级设计口径（`docs/architecture/database/README.md:32`）：
+    //   L1 进程内内存（<0.1ms） → L2 每连接 SQLite（<5ms） → L3 实时内省（10~500ms，**不是缓存**）
+    //
+    // 历史状态：L1 只被「连接断开时失效」调过一次，**从没有人写入** —— 因此恒空，
+    // 每次读都要付 `NavCache::open` 的固定开销（开文件 + 5 条 PRAGMA + 一次迁移校验）。
+    // 这里补齐读写：命中即返回；L2 命中与实时内省的结果都回填 L1。
+
+    /// L1 句柄（进程级单例；取不到时降级为不缓存，不影响主流程）。
+    fn l1() -> Option<Arc<std::sync::Mutex<MetadataCache>>> {
+        CacheManager::instance().lock().ok().map(|m| m.metadata_cache())
+    }
+
+    /// 读 L1。`fresh`（刷新）模式一律跳过：刷新以实时内省为准。
+    fn l1_read<T>(&self, read: impl FnOnce(&mut MetadataCache) -> Option<T>) -> Option<T> {
+        if self.fresh {
+            return None;
+        }
+        let cache = Self::l1()?;
+        let mut guard = cache.lock().ok()?;
+        read(&mut guard)
+    }
+
+    /// 写 L1（尽力而为；失败不影响主流程）。
+    fn l1_write(&self, write: impl FnOnce(&mut MetadataCache)) {
+        let Some(cache) = Self::l1() else { return };
+        if let Ok(mut guard) = cache.lock() {
+            write(&mut guard);
+        }
+    }
+
+    /// 刷新时清掉该连接的 L1（L2 由各路径按需重写）。
+    ///
+    /// 设计口径（原型 §刷新规则）：「手动刷新 → 清 L1；L2 标记 stale」。
+    fn l1_invalidate_connection(&self, conn_id: &str) {
+        if let Ok(manager) = CacheManager::instance().lock() {
+            manager.invalidate_connection(conn_id);
+        }
+    }
+
     /// 按展开路径加载子节点。
     pub async fn load_children(
         &self,
         conn_id: &str,
         path: &NavPath,
     ) -> Result<Vec<NavNode>, CoreError> {
+        // 刷新语义：以实时内省为准，先清该连接的 L1（L2 由各路径重写）。
+        if self.fresh {
+            self.l1_invalidate_connection(conn_id);
+        }
+
         match path {
             NavPath::Connection => self.load_catalogs(conn_id).await,
             NavPath::Catalog { catalog } => {
@@ -94,9 +170,145 @@ impl NavigatorService {
         }
     }
 
+    /// 按展开路径加载子节点（支持分页：`offset` / `limit` 对类别文件夹生效）。
+    ///
+    /// 非「类别文件夹」路径只有一个隐含的整页（忽略 `offset`、不裁 `limit`）：
+    /// catalog / schema / 列的数量级远小于表对象，分页收益不抵复杂度。
+    pub async fn load_children_page(
+        &self,
+        conn_id: &str,
+        path: &NavPath,
+        offset: usize,
+        limit: usize,
+    ) -> Result<NavPage, CoreError> {
+        match path {
+            NavPath::Folder {
+                catalog,
+                schema,
+                folder,
+            } => {
+                self.load_object_page(conn_id, catalog, schema, *folder, offset, limit)
+                    .await
+            }
+            _ => {
+                let nodes = self.load_children(conn_id, path).await?;
+                let total = nodes.len();
+                Ok(NavPage {
+                    nodes,
+                    total,
+                    offset: 0,
+                    has_more: false,
+                })
+            }
+        }
+    }
+
+    /// 类别文件夹 → 一页对象。
+    ///
+    /// 优先走 `metadata_index` 分块（仅大 schema）；否则回落既有全量路径
+    /// （L1 → L2 → 实时内省，并在写 L2 时重建索引）。
+    async fn load_object_page(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+        folder: NavFolder,
+        offset: usize,
+        limit: usize,
+    ) -> Result<NavPage, CoreError> {
+        if let Some(page) = self.index_page(conn_id, catalog, schema, folder, offset, limit) {
+            return Ok(page);
+        }
+
+        // 全量回退：索引不可用（冷启动 / 该类别为空）或对象数未超阈值。
+        // 这一趟会把实时结果写 L2 并在表文件夹这趟重建索引，下次展开即可分块。
+        let objects = self
+            .collect_objects(conn_id, catalog, schema, folder)
+            .await?;
+        let total = objects.len();
+        let nodes = Self::object_nodes(conn_id, catalog, schema, folder, objects);
+        Ok(NavPage {
+            nodes,
+            total,
+            offset: 0,
+            has_more: false,
+        })
+    }
+
+    /// 从 `metadata_index` 取一页（表 / 视图）。
+    ///
+    /// 返回 `None` 的四种情形（全部由调用方回退全量路径）：
+    /// 1. `fresh`（刷新）：必须看实时结果，索引是刷新前的旧数据；
+    /// 2. 缓存不可用 / 没有 `schema_id`（项目连接缺项目根等）；
+    /// 3. 索引尚未重建（冷启动：计数全 0）；
+    /// 4. 该类别未超 [`CHUNK_THRESHOLD`]（小 schema 走 L1 命中更快）。
+    fn index_page(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+        folder: NavFolder,
+        offset: usize,
+        limit: usize,
+    ) -> Option<NavPage> {
+        if self.fresh || !matches!(folder, NavFolder::Tables | NavFolder::Views) {
+            return None;
+        }
+        let want_view = folder == NavFolder::Views;
+        let cache = self.cache(conn_id)?;
+        let schema_id = cache.schema_id(catalog, schema)?;
+        let counts = cache.object_counts(schema_id)?;
+        let total = if want_view {
+            counts.view_count
+        } else {
+            counts.table_count
+        };
+        if total <= CHUNK_THRESHOLD {
+            return None;
+        }
+        let chunk = cache.objects_chunk(schema_id, want_view, offset, limit)?;
+
+        // 索引只有名字（没有注释列），故这里只映射名称与类别；
+        // 排序按索引的稳定顺序（名称升序）——分块翻页不能有随机顺序。
+        let objects: Vec<SchemaObject> = chunk
+            .items
+            .iter()
+            .map(|entry| SchemaObject {
+                name: entry.object_name.clone(),
+                kind: if want_view {
+                    SchemaObjectKind::View
+                } else {
+                    SchemaObjectKind::Table
+                },
+                children: None,
+                comment: None,
+                table_name: None,
+                event: None,
+            })
+            .collect();
+        let nodes = Self::object_nodes(conn_id, catalog, schema, folder, objects);
+        Some(NavPage {
+            nodes,
+            total: chunk.total,
+            offset: chunk.offset,
+            has_more: chunk.has_more,
+        })
+    }
+
     /// 连接根 → Catalog 列表；无 Catalog 时退化为单一 `main` 容器。
     async fn load_catalogs(&self, conn_id: &str) -> Result<Vec<NavNode>, CoreError> {
-        let catalogs = self.metadata.list_catalogs(conn_id).await?;
+        // L1 → L3（Catalogs 不在 L2 缓存范围内）
+        let catalogs = match self.l1_read(|c| c.get_catalogs(conn_id)) {
+            Some(names) => names,
+            None => {
+                let live = self.metadata.list_catalogs(conn_id).await?;
+                if !live.is_empty() {
+                    let backfill = live.clone();
+                    self.l1_write(move |c| c.set_catalogs(conn_id, backfill));
+                }
+                live
+            }
+        };
         let names = if catalogs.is_empty() {
             vec![FALLBACK_CONTAINER.to_string()]
         } else {
@@ -166,10 +378,18 @@ impl NavigatorService {
 
     /// schema 名称（cache-aside：非刷新时命中缓存直接返回；未命中内省并回写）。
     async fn schema_names(&self, conn_id: &str, catalog: &str) -> Result<Vec<String>, CoreError> {
+        // L1
+        if let Some(names) = self.l1_read(|c| c.get_schemas(conn_id, catalog)) {
+            return Ok(names);
+        }
+
         let cache = self.cache(conn_id);
         if !self.fresh {
             if let Some(c) = &cache {
                 if let Some(names) = c.schemas(catalog) {
+                    // 命中 L2 → 回填 L1（这是「L1 命中 <0.1ms」的来源）
+                    let backfill = names.clone();
+                    self.l1_write(move |l1| l1.set_schemas(conn_id, catalog, backfill));
                     return Ok(names);
                 }
             }
@@ -183,41 +403,94 @@ impl NavigatorService {
         if let Some(c) = &cache {
             c.put_schemas(catalog, &names);
         }
+        let store = names.clone();
+        self.l1_write(move |l1| l1.set_schemas(conn_id, catalog, store));
         Ok(names)
     }
 
     /// Schema → 类别文件夹（有对象的才显示，标题带计数）。
+    ///
+    /// 「表」的计数优先取 `metadata_index`（索引可用时）：这样展开 schema 这一层
+    /// **不必把整个表清单物化一遍**，只为了在标题里写个数字。
+    /// 其余类别仍走全量收集（见 [`Self::indexed_folder_count`] 的说明）。
     async fn load_folders(
         &self,
         conn_id: &str,
         catalog: &str,
         schema: &str,
     ) -> Result<Vec<NavNode>, CoreError> {
+        let indexed = self.indexed_counts(conn_id, catalog, schema);
         let mut nodes = Vec::new();
         for folder in NavFolder::ALL {
-            let objects = self
-                .collect_objects(conn_id, catalog, schema, folder)
-                .await?;
-            if objects.is_empty() {
+            let count = match Self::indexed_folder_count(folder, indexed.as_ref()) {
+                Some(count) => count,
+                None => {
+                    // 实时内省（或 L1 / L2 命中）；失败向上冒泡，不倒空文件夹。
+                    self.collect_objects(conn_id, catalog, schema, folder)
+                        .await?
+                        .len()
+                }
+            };
+            if count == 0 {
                 continue;
             }
-            let count = objects.len();
-            nodes.push(
-                NavNode::new(
-                    NavNode::child_key(conn_id, &[catalog, schema, folder.key()]),
-                    format!("{} ({})", folder.label(), count),
-                    conn_id,
-                    NavNodeKind::Folder(folder),
-                    true,
-                )
-                .with_expand_path(NavPath::Folder {
-                    catalog: catalog.to_string(),
-                    schema: schema.to_string(),
-                    folder,
-                }),
-            );
+            nodes.push(Self::folder_node(conn_id, catalog, schema, folder, count));
         }
         Ok(nodes)
+    }
+
+    /// 某类别的计数能否直接信索引；`None` = 必须全量收集。
+    ///
+    /// **只有「表」能信**（索引重建挂在表文件夹那趟：一次实时内省同时拿到表与视图，
+    /// 重建会覆盖两者）。而视图是**另一趟**才写进 L2 的（先展开表、以后再展开视图），
+    /// 那一趟不重建索引——此时索引里 `view_count = 0`，照它判定就会把**视图文件夹整支隐藏**。
+    /// 例程 / 序列 / 触发器根本不在索引里（不在缓存范围内），自然也不能信。
+    fn indexed_folder_count(
+        folder: NavFolder,
+        counts: Option<&SchemaObjectCounts>,
+    ) -> Option<usize> {
+        match (folder, counts) {
+            (NavFolder::Tables, Some(counts)) => Some(counts.table_count),
+            _ => None,
+        }
+    }
+
+    /// 索引里的对象计数（表 / 视图）；索引不可用或刷新模式返回 `None`。
+    fn indexed_counts(
+        &self,
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+    ) -> Option<SchemaObjectCounts> {
+        // 刷新必须看实时结果：索引（与 L2）都是刷新前的旧值。
+        if self.fresh {
+            return None;
+        }
+        let cache = self.cache(conn_id)?;
+        let schema_id = cache.schema_id(catalog, schema)?;
+        cache.object_counts(schema_id)
+    }
+
+    /// 类别文件夹节点（标题带计数）。
+    fn folder_node(
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+        folder: NavFolder,
+        count: usize,
+    ) -> NavNode {
+        NavNode::new(
+            NavNode::child_key(conn_id, &[catalog, schema, folder.key()]),
+            format!("{} ({})", folder.label(), count),
+            conn_id,
+            NavNodeKind::Folder(folder),
+            true,
+        )
+        .with_expand_path(NavPath::Folder {
+            catalog: catalog.to_string(),
+            schema: schema.to_string(),
+            folder,
+        })
     }
 
     /// 类别文件夹 → 具体对象。
@@ -231,7 +504,18 @@ impl NavigatorService {
         let objects = self
             .collect_objects(conn_id, catalog, schema, folder)
             .await?;
-        Ok(objects
+        Ok(Self::object_nodes(conn_id, catalog, schema, folder, objects))
+    }
+
+    /// 对象 → 导航节点（分页路径与全量路径共用，保证同一个对象在两路上长得一样）。
+    fn object_nodes(
+        conn_id: &str,
+        catalog: &str,
+        schema: &str,
+        folder: NavFolder,
+        objects: Vec<SchemaObject>,
+    ) -> Vec<NavNode> {
+        objects
             .into_iter()
             .map(|obj| {
                 let (kind, has_children) = match folder {
@@ -278,7 +562,7 @@ impl NavigatorService {
                     node
                 }
             })
-            .collect())
+            .collect()
     }
 
     /// 表 / 视图 → 列（cache-aside）。
@@ -289,11 +573,23 @@ impl NavigatorService {
         schema: &str,
         table: &str,
     ) -> Result<Vec<NavNode>, CoreError> {
+        // L1
+        if let Some(cols) =
+            self.l1_read(|c| c.get_columns_detail(conn_id, catalog, Some(schema), table))
+        {
+            return Ok(Self::column_nodes(conn_id, catalog, schema, table, cols));
+        }
+
         let cache = self.cache(conn_id);
         let schema_id = cache.as_ref().and_then(|c| c.schema_id(catalog, schema));
         if !self.fresh {
             if let (Some(c), Some(sid)) = (&cache, schema_id) {
                 if let Some(cols) = c.columns(sid, table) {
+                    // 命中 L2 → 回填 L1
+                    let backfill = cols.clone();
+                    self.l1_write(move |l1| {
+                        l1.set_columns_detail(conn_id, catalog, Some(schema), table, backfill)
+                    });
                     return Ok(Self::column_nodes(conn_id, catalog, schema, table, cols));
                 }
             }
@@ -305,6 +601,10 @@ impl NavigatorService {
         if let (Some(c), Some(sid)) = (&cache, schema_id) {
             c.put_columns(sid, table, &columns);
         }
+        let store = columns.clone();
+        self.l1_write(move |l1| {
+            l1.set_columns_detail(conn_id, catalog, Some(schema), table, store)
+        });
         Ok(Self::column_nodes(conn_id, catalog, schema, table, columns))
     }
 
@@ -358,12 +658,24 @@ impl NavigatorService {
         match folder {
             NavFolder::Tables | NavFolder::Views => {
                 let want_view = folder == NavFolder::Views;
+
+                // L1：表与视图分键（下面一次实时内省会两半都写进去）
+                if let Some(objs) = self.l1_read(|c| {
+                    if want_view {
+                        c.get_views(conn_id, catalog, Some(schema))
+                    } else {
+                        c.get_tables(conn_id, catalog, Some(schema))
+                    }
+                }) {
+                    return Ok(objs);
+                }
+
                 let mut cache = self.cache(conn_id);
                 let mut schema_id = cache.as_ref().and_then(|c| c.schema_id(catalog, schema));
                 if !self.fresh {
                     if let (Some(c), Some(sid)) = (&cache, schema_id) {
                         if let Some(rows) = c.objects(sid, want_view) {
-                            return Ok(rows
+                            let objs: Vec<SchemaObject> = rows
                                 .into_iter()
                                 .map(|(name, comment)| SchemaObject {
                                     name,
@@ -377,15 +689,51 @@ impl NavigatorService {
                                     table_name: None,
                                     event: None,
                                 })
-                                .collect());
+                                .collect();
+                            // 命中 L2 → 回填 L1
+                            // （大 schema 不回填：与下方实时路径同一条门禁）
+                            if objs.len() <= CHUNK_THRESHOLD {
+                                let backfill = objs.clone();
+                                self.l1_write(move |l1| {
+                                    if want_view {
+                                        l1.set_views(conn_id, catalog, Some(schema), backfill)
+                                    } else {
+                                        l1.set_tables(conn_id, catalog, Some(schema), backfill)
+                                    }
+                                });
+                            }
+                            return Ok(objs);
                         }
                     }
                 }
                 let objects = self.metadata.list_tables(conn_id, catalog, schema).await?;
-                let filtered: Vec<SchemaObject> = objects
+                let object_count = objects.len();
+                // 内省级别自适应（对标 DataGrip）：按**本 schema 的对象数**定级并登记到连接。
+                // 目前唯一的消费者是 C2 邻接预取（级别 <3 时不为大 schema 预取列）。
+                engine::driver::set_level(
+                    conn_id,
+                    engine::driver::IntrospectionLevel::from_object_count(object_count),
+                );
+                // 一次实时内省同时拿到表与视图：两半都进 L1，
+                // 下次展开另一半也是进程内命中（不用再跑这条 SQL）。
+                let (tables_half, views_half): (Vec<SchemaObject>, Vec<SchemaObject>) = objects
                     .into_iter()
-                    .filter(|o| (o.kind == SchemaObjectKind::View) == want_view)
-                    .collect();
+                    .partition(|o| o.kind != SchemaObjectKind::View);
+                let filtered: Vec<SchemaObject> = if want_view {
+                    views_half.clone()
+                } else {
+                    tables_half.clone()
+                };
+                // **大 schema 不进 L1**：L1 是进程内常驻，万级对象的 `Vec<SchemaObject>`
+                // 会一直占着内存；而这类 schema 的下一次展开会走索引分块（`index_page`），
+                // 本来就不读 L1，写了也白占。
+                // L2 照写不误（落到磁盘，按需分页读），只是不在内存里留整份。
+                if object_count <= CHUNK_THRESHOLD {
+                    self.l1_write(move |l1| {
+                        l1.set_tables(conn_id, catalog, Some(schema), tables_half);
+                        l1.set_views(conn_id, catalog, Some(schema), views_half);
+                    });
+                }
                 if let Some(c) = cache.as_mut() {
                     if self.fresh {
                         // 刷新：先清该 schema 旧行再整块重写，避免已删对象残留在缓存。
@@ -396,6 +744,12 @@ impl NavigatorService {
                     }
                     if let Some(sid) = schema_id {
                         c.put_objects(sid, &filtered);
+                    }
+                    // 索引写入侧：**只在表文件夹这一趟**做。
+                    // 一次实时内省同时拿到表与视图，重建会覆盖两者；
+                    // Views 那趟再重建一次就是白干（整表删+插）。
+                    if folder == NavFolder::Tables {
+                        c.rebuild_index(catalog, schema);
                     }
                 }
                 Ok(filtered)
@@ -467,6 +821,13 @@ impl NavigatorService {
         conn_id: &str,
         targets: &[(String, String, String)],
     ) -> usize {
+        // 大 schema 不预取列：级别降为 Level1（对象数 > 3000，见 `from_object_count`）时，
+        // “预先拉一遍所有列”的体验收益抵不过给源库加的负载与本地缓存膨胀；
+        // 列仍会在用户真正展开表时按需加载（L2/L1 缓存照常生效）。
+        if !engine::driver::get_level(conn_id).should_load_columns() {
+            return 0;
+        }
+
         let mut ok = 0usize;
         for (catalog, schema, table) in targets {
             if self
@@ -490,5 +851,471 @@ impl NavigatorService {
     ) -> Result<crate::property_panel::ObjectProperties, CoreError> {
         crate::property_panel::load_properties(&self.metadata, ref_, conn_label, driver, db_type)
             .await
+    }
+}
+
+#[cfg(test)]
+mod l1_tests {
+    //! L1（进程内元数据缓存）接线测试。
+    //!
+    //! 手法：给一个**空的**连接管理器 —— 任何走实时内省（L3）的路径都必然失败
+    //! （`CONN_NOT_FOUND`）。因此「L1 命中路径返回 Ok」本身就证明它没有往下走。
+    //!
+    //! 背景：L1 历史上只被「连接断开时失效」调用过、从没有写入方，恒空；
+    //! 本次补齐写入后，这些测试锁住三件事：命中、回填、刷新时跳过。
+
+    use std::sync::Arc;
+
+    use engine::cache::{CacheManager, MetadataCache};
+    use engine::connection_manager::ConnectionManager;
+
+    use super::*;
+
+    fn l1() -> Arc<std::sync::Mutex<MetadataCache>> {
+        CacheManager::instance()
+            .lock()
+            .expect("CacheManager 单例")
+            .metadata_cache()
+    }
+
+    /// 空连接管理器：任何实时内省都会失败。
+    fn offline_service(fresh: bool) -> NavigatorService {
+        NavigatorService::with_context(Arc::new(ConnectionManager::new()), None, fresh)
+    }
+
+    fn table(name: &str) -> SchemaObject {
+        SchemaObject {
+            name: name.to_string(),
+            kind: SchemaObjectKind::Table,
+            children: None,
+            comment: None,
+            table_name: None,
+            event: None,
+        }
+    }
+
+    fn column(name: &str) -> ColumnDetail {
+        ColumnDetail {
+            name: name.to_string(),
+            data_type: "INTEGER".to_string(),
+            nullable: false,
+            is_primary_key: true,
+            is_foreign_key: false,
+            default_value: None,
+            comment: None,
+            extra: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn catalogs_are_served_from_l1() {
+        let conn_id = "P_l1_test_catalogs";
+        {
+            let cache = l1();
+            let mut guard = cache.lock().expect("锁 L1");
+            guard.invalidate_connection(conn_id);
+            guard.set_catalogs(conn_id, vec!["main".to_string()]);
+        }
+
+        let svc = offline_service(false);
+        let nodes = svc
+            .load_children(conn_id, &NavPath::Connection)
+            .await
+            .expect("L1 命中应成功（无需真实连接）");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "main");
+
+        // 反证：同一服务下，没有 L1 条目的连接必须失败（否则上面的断言无意义）
+        assert!(svc
+            .load_children("P_l1_test_no_such_conn", &NavPath::Connection)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn tables_and_columns_are_served_from_l1() {
+        let conn_id = "P_l1_test_objects";
+        {
+            let cache = l1();
+            let mut guard = cache.lock().expect("锁 L1");
+            guard.invalidate_connection(conn_id);
+            guard.set_tables(conn_id, "main", Some("public"), vec![table("t1")]);
+            guard.set_views(conn_id, "main", Some("public"), vec![]);
+            guard.set_columns_detail(conn_id, "main", Some("public"), "t1", vec![column("id")]);
+        }
+
+        let svc = offline_service(false);
+
+        let folder = svc
+            .load_children(
+                conn_id,
+                &NavPath::Folder {
+                    catalog: "main".to_string(),
+                    schema: "public".to_string(),
+                    folder: NavFolder::Tables,
+                },
+            )
+            .await
+            .expect("表文件夹应从 L1 命中");
+        assert!(folder.iter().any(|n| n.name == "t1"), "应含 t1");
+
+        let cols = svc
+            .load_children(
+                conn_id,
+                &NavPath::Table {
+                    catalog: "main".to_string(),
+                    schema: "public".to_string(),
+                    table: "t1".to_string(),
+                },
+            )
+            .await
+            .expect("列应从 L1 命中");
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].name, "id");
+    }
+
+    /// 刷新语义：`fresh` 跳过 L1（以实时内省为准）。
+    #[tokio::test]
+    async fn fresh_mode_skips_l1() {
+        let conn_id = "P_l1_test_fresh";
+        {
+            let cache = l1();
+            let mut guard = cache.lock().expect("锁 L1");
+            guard.set_catalogs(conn_id, vec!["main".to_string()]);
+        }
+
+        let svc = offline_service(true);
+        assert!(
+            svc.load_children(conn_id, &NavPath::Connection)
+                .await
+                .is_err(),
+            "刷新模式不得吃 L1，应走实时内省（空连接管理器下必然失败）"
+        );
+    }
+
+    /// 刷新会清掉该连接的 L1 条目（设计口径：手动刷新 → 清 L1）。
+    #[tokio::test]
+    async fn refresh_invalidates_l1_for_that_connection() {
+        let conn_id = "P_l1_test_invalidate";
+        {
+            let cache = l1();
+            let mut guard = cache.lock().expect("锁 L1");
+            guard.set_catalogs(conn_id, vec!["main".to_string()]);
+        }
+
+        let svc = offline_service(true);
+        let _ = svc.load_children(conn_id, &NavPath::Connection).await;
+
+        let cache = l1();
+        let mut guard = cache.lock().expect("锁 L1");
+        assert!(
+            guard.get_catalogs(conn_id).is_none(),
+            "刷新后该连接的 L1 条目应被清掉"
+        );
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    //! 分页接线测试（C4）：大 schema 走 `metadata_index` 分块，小 schema 保持全量。
+    //!
+    //! 手法与 `l1_tests` 同理：连接管理器是**空的**，任何真正的实时内省都会失败。
+    //! 因此「分页返回 Ok」本身证明这一页是缓存（L2 索引 / 规范化表）里取的，没有回源库。
+
+    use std::sync::Arc;
+
+    use engine::connection_manager::ConnectionManager;
+    use engine::driver::traits::{SchemaObject, SchemaObjectKind};
+    use engine::persistence::{ConnectionType, MetadataCacheManager, MetadataCachePool};
+
+    use super::*;
+    use crate::cache::NavCache;
+
+    /// 大 schema 的对象数（> `CHUNK_THRESHOLD`）。
+    const BIG: usize = 600;
+    /// 一页的条数（与 UI 首批同量级）。
+    const PAGE: usize = 200;
+
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rds_navpage_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建临时项目根");
+        dir
+    }
+
+    fn object(name: String, kind: SchemaObjectKind) -> SchemaObject {
+        SchemaObject {
+            name,
+            kind,
+            children: None,
+            comment: None,
+            table_name: None,
+            event: None,
+        }
+    }
+
+    /// 在项目缓存里写入一个 schema 与 `count` 个对象（模拟冷启动内省之后的落盘状态）。
+    ///
+    /// `with_index` 控制是否重建 `metadata_index`：分页测试必须建（分页读的是索引），
+    /// 「大 schema 不进 L1」一例故意不建（逼它走 L2 全量回退分支）。
+    fn seed(
+        conn_id: &str,
+        root: &str,
+        schema: &str,
+        count: usize,
+        view: bool,
+        with_index: bool,
+    ) -> Vec<String> {
+        let kind = if view {
+            SchemaObjectKind::View
+        } else {
+            SchemaObjectKind::Table
+        };
+        let names: Vec<String> = (0..count).map(|i| format!("t{i:04}")).collect();
+        {
+            let mut cache = NavCache::open(conn_id, Some(root)).expect("打开缓存");
+            cache.put_schemas("main", &[schema.to_string()]);
+            let sid = cache.schema_id("main", schema).expect("schema_id");
+            let objects: Vec<SchemaObject> = names
+                .iter()
+                .map(|n| object(n.clone(), kind.clone()))
+                .collect();
+            cache.put_objects(sid, &objects);
+            if with_index {
+                cache.rebuild_index("main", schema);
+            }
+        }
+        names
+    }
+
+    fn service(root: &str, fresh: bool) -> NavigatorService {
+        NavigatorService::with_context(
+            Arc::new(ConnectionManager::new()),
+            Some(root.to_string()),
+            fresh,
+        )
+    }
+
+    fn folder(schema: &str, folder: NavFolder) -> NavPath {
+        NavPath::Folder {
+            catalog: "main".to_string(),
+            schema: schema.to_string(),
+            folder,
+        }
+    }
+
+    fn cleanup(root: &std::path::Path, conn_id: &str) {
+        // 先丢池（Windows 上句柄不释放就删不掉文件），再删临时根。
+        if let Ok(manager) = MetadataCacheManager::new(
+            conn_id,
+            ConnectionType::Project,
+            Some(root.to_string_lossy().as_ref()),
+        ) {
+            MetadataCachePool::drop_pool(manager.db_path());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 计数来源：只有「表」能信索引计数。
+    ///
+    /// 反例场景（曾经真会出错）：索引里只有表行、而 L2 里有视图
+    /// （先展开表、以后再展开视图——视图那趟不重建索引），
+    /// 此时若照索引的 `view_count = 0` 判定，视图文件夹会整支从树上消失。
+    #[test]
+    fn only_tables_trust_index_counts() {
+        let counts = SchemaObjectCounts {
+            table_count: 7,
+            view_count: 0,
+            column_count: 3,
+            routine_count: 0,
+            total: 10,
+        };
+        assert_eq!(
+            NavigatorService::indexed_folder_count(NavFolder::Tables, Some(&counts)),
+            Some(7)
+        );
+        assert_eq!(
+            NavigatorService::indexed_folder_count(NavFolder::Views, Some(&counts)),
+            None,
+            "视图不得照索引计数判定（索引缺 view 行时会把文件夹隐藏）"
+        );
+        for folder in [
+            NavFolder::Routines,
+            NavFolder::Sequences,
+            NavFolder::Triggers,
+        ] {
+            assert_eq!(
+                NavigatorService::indexed_folder_count(folder, Some(&counts)),
+                None,
+                "{folder:?} 不在索引里，必须全量收集"
+            );
+        }
+        // 索引不可用（冷启动）→ 一律回退全量
+        assert_eq!(
+            NavigatorService::indexed_folder_count(NavFolder::Tables, None),
+            None
+        );
+    }
+
+    /// 大 schema 首屏：只取一页，`total` 告知真实总数（客户端分页靠它才有“余量”）。
+    #[tokio::test]
+    async fn large_schema_first_page_comes_from_index() {
+        let root = temp_root("first_page");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_page_first";
+        seed(conn_id, &root_s, "public", BIG, false, true);
+
+        let page = service(&root_s, false)
+            .load_children_page(
+                conn_id,
+                &folder("public", NavFolder::Tables),
+                0,
+                PAGE,
+            )
+            .await
+            .expect("应从 L2 索引分页，不该回源库");
+        assert_eq!(page.nodes.len(), PAGE, "首屏只取一页");
+        assert_eq!(page.total, BIG, "总数来自索引计数");
+        assert!(page.has_more, "600 条取 200 条应报告还有后续");
+        assert_eq!(page.offset, 0);
+        // 索引顺序稳定（名称升序）：翻页不能有随机顺序
+        assert_eq!(page.nodes[0].name, "t0000");
+        assert_eq!(page.nodes[PAGE - 1].name, "t0199");
+
+        cleanup(&root, conn_id);
+    }
+
+    /// 第二页与首屏不重叠；翻到底后 `has_more` 归 false。
+    #[tokio::test]
+    async fn second_page_is_disjoint_and_last_page_reports_no_more() {
+        let root = temp_root("second_page");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_page_second";
+        seed(conn_id, &root_s, "public", BIG, false, true);
+        let svc = service(&root_s, false);
+
+        let first = svc
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE)
+            .await
+            .expect("首屏");
+        let second = svc
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), PAGE, PAGE)
+            .await
+            .expect("第二页");
+        assert_eq!(second.nodes.len(), PAGE);
+        assert_eq!(second.nodes[0].name, "t0200", "第二页应从第 200 条继续");
+        assert!(
+            second
+                .nodes
+                .iter()
+                .all(|n| !first.nodes.iter().any(|f| f.key == n.key)),
+            "两页不得重叠"
+        );
+
+        let last = svc
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 2 * PAGE, PAGE)
+            .await
+            .expect("末页");
+        assert_eq!(last.nodes.len(), BIG - 2 * PAGE);
+        assert!(!last.has_more, "最后一块不得再报告有余量");
+
+        cleanup(&root, conn_id);
+    }
+
+    /// 视图文件夹同样能分页（引擎侧原实现把 `object_type='table'` 写死，视图读不到）。
+    #[tokio::test]
+    async fn views_folder_pages_from_index() {
+        let root = temp_root("views");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_page_views";
+        seed(conn_id, &root_s, "public", BIG, true, true);
+
+        let page = service(&root_s, false)
+            .load_children_page(conn_id, &folder("public", NavFolder::Views), 0, PAGE)
+            .await
+            .expect("视图文件夹应能从索引分页");
+        assert_eq!(page.nodes.len(), PAGE);
+        assert_eq!(page.total, BIG);
+        assert!(page.has_more);
+        assert!(
+            page.nodes
+                .iter()
+                .all(|n| matches!(n.kind, NavNodeKind::View)),
+            "视图页的节点类型必须是视图"
+        );
+
+        cleanup(&root, conn_id);
+    }
+
+    /// 小 schema 不进入分块路径：页就是全量，也没有「加载更多」。
+    #[tokio::test]
+    async fn small_schema_returns_all_without_more() {
+        let root = temp_root("small");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_page_small";
+        seed(conn_id, &root_s, "public", 3, false, true);
+
+        let page = service(&root_s, false)
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE)
+            .await
+            .expect("小 schema 应从 L2 全量返回");
+        assert_eq!(page.nodes.len(), 3);
+        assert_eq!(page.total, 3);
+        assert!(!page.has_more);
+
+        cleanup(&root, conn_id);
+    }
+
+    /// 刷新（`fresh`）不得吃索引：索引是刷新前的旧数据，必须回源实时内省
+    /// （空连接管理器下必然失败——这正是本条要断言的）。
+    #[tokio::test]
+    async fn fresh_mode_ignores_index() {
+        let root = temp_root("fresh");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_page_fresh";
+        seed(conn_id, &root_s, "public", BIG, false, true);
+
+        assert!(
+            service(&root_s, true)
+                .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE)
+                .await
+                .is_err(),
+            "刷新模式必须以实时内省为准，不得直接返回索引里的旧列表"
+        );
+
+        cleanup(&root, conn_id);
+    }
+
+    /// 大 schema 不进 L1：L2 有 600 行、索引缺失时走全量回退，
+    /// 但结果**不得**写进进程内 L1（否则万级对象会常驻内存）。
+    #[tokio::test]
+    async fn large_schema_is_not_kept_in_l1() {
+        let root = temp_root("no_l1");
+        let root_s = root.to_string_lossy().to_string();
+        let conn_id = "P_page_no_l1";
+        // 故意不建索引：逼它走「L2 全量」回退分支（模拟索引尚未重建的窗口）。
+        seed(conn_id, &root_s, "public", BIG, false, false);
+
+        let svc = service(&root_s, false);
+        let page = svc
+            .load_children_page(conn_id, &folder("public", NavFolder::Tables), 0, PAGE)
+            .await
+            .expect("索引缺失时应回退 L2 全量（仍不应回源库）");
+        assert_eq!(page.total, BIG);
+        assert!(!page.has_more, "全量回退路径是一次拉全");
+
+        let l1 = engine::cache::CacheManager::instance()
+            .lock()
+            .expect("CacheManager 单例")
+            .metadata_cache();
+        let mut guard = l1.lock().expect("锁 L1");
+        assert!(
+            guard
+                .get_tables(conn_id, "main", Some("public"))
+                .is_none(),
+            "大 schema 不得驻留 L1（万级对象会一直占着内存）"
+        );
+
+        cleanup(&root, conn_id);
     }
 }

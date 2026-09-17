@@ -38,6 +38,7 @@
 | `database/database-navigator-prototype.html` | 数据源管理 / 数据库导航原型（交互稿） | RDS Light/Dark 双主题面板示意（双通道徽标 / 加载 / 搜索 / **可点「筛选 ▾」弹层** / 右键菜单 / 空态可切；含 **v5 → v7 密度对比**） |
 | `database/database-nav-dev-plan.md` | 数据库导航开发方案 | Phase A/B/C + **v6/v7 任务（V1–V10，逐项状态）** / 迁移与表 / 测试场景 / 风险 / 验证 / 映射 |
 | `database/database-navigator-user-guide.md` | 数据源管理 / 数据库导航**使用手册** | 入口 / 界面导览（**连接行怎么读 · 状态色 · 类型形状**）/ 典型流程 / 分组与标签分工 / 快捷键 / 显示开关 / FAQ 排查 / 验收清单 |
+| `database/metadata-cache-vs-dbeaver-datagrip.md` | 元数据缓存**与 DBeaver / DataGrip 深度对比** | 两款产品的缓存取向（会话内内存 vs 持久化+内省级别 vs 本仓的“每连接 SQLite + 可管理”）/ 10 维度对照表 / 本仓三条硬约束（为何不照抄）/ 本次补齐（L1 回填 · 连接池接线 · 表视图分键）/ 仍缺项按“对 10 万表体验贡献”排序并附**触发条件** |
 | `scratchpad/README.md` | 草稿箱**模块入口** | **先读这个**：一句话定位（项目私有的临时探索工作区）/ 特点提炼（产品行为 · 语义与数据 · 架构约束 · 工程与文档）/ 边界 / 代码地图 / 改前必守 10 条 / 测试与验证命令 / 文档地图 / 下一步 |
 | `scratchpad/scratchpad-prototype-design.md` | 草稿箱原型 | 根 = 项目目录 / 240px 左 Dock 面板 / 树与交互 / 主题映射 |
 | `scratchpad/scratchpad-prototype.html` | 草稿箱原型（交互稿） | RDS Light/Dark 项目工作区示意（可交互） |

@@ -1,3 +1,16 @@
+//! 表探查（源库内省）
+//!
+//! ⚠️ **方言假设尚未统一**：本模块的 SQL 面向**用户源库**（经 `SqlService`），写法是
+//! MySQL 形状——`information_schema.columns.column_key` 是 MySQL 扩展列（PostgreSQL 无此列）；
+//! 而 `fetch_all_tables`（在 `schema_analyzer`，同一批源库内省）的 `table_catalog` 过滤
+//! 则只在 PostgreSQL 语义下成立（MySQL 的 `table_catalog` 恒为 'def'），SQLite 连
+//! `information_schema` 都没有。多种假设并存 = 这条路径尚未在真实源库上跑通。
+//!
+//! ⚠️ **当前零调用**：面板的表目标走 DuckDB 临时表（见 `insight_engine::get_temp_table_profile`，
+//! 架构决策 D29「不走源库」），本模块属登记在册的欠账
+//! （`docs/architecture/insight/insight-dev-plan.md`）。接线前必须先按 `db_type` 分派方言，
+//! 或改走 `database::MetadataService`（其 `MetadataBrowser` 已按驱动内省）。
+
 use shared::error::{CommonError, CoreError};
 use engine::get_connection_manager;
 use crate::model::types::{TableColumnMeta, TableProfile};
