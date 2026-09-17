@@ -575,13 +575,13 @@ impl MockHost for TestHost {
                     .iter()
                     .flat_map(|t| {
                         t.columns.iter().filter_map(|c| {
-                            let dep = c.dependency.as_ref().filter(|d| d.is_foreign_key())?;
+                            let dep = c.dependency.as_ref()?;
                             Some(format!(
                                 "{}.{}→{}.{}",
                                 t.name,
                                 c.name,
-                                dep.ref_table.clone().unwrap_or_default(),
-                                dep.ref_column.clone().unwrap_or_default()
+                                dep.ref_table.clone(),
+                                dep.ref_column.clone()
                             ))
                         })
                     })
@@ -2854,8 +2854,8 @@ fn adding_a_relation_writes_it_onto_the_child_column(cx: &mut TestAppContext) {
             .and_then(|t| t.columns.iter().find(|c| c.name == "order_id"))
             .expect("子列");
         let dep = column.dependency.as_ref().expect("关系写在列上");
-        assert_eq!(dep.ref_table.as_deref(), Some("users"));
-        assert_eq!(dep.ref_column.as_deref(), Some("id"));
+        assert_eq!(dep.ref_table, "users");
+        assert_eq!(dep.ref_column, "id");
         // users 40 行、id 自增 1..40 → 生成器对齐到 1..40（单表生成也不能跑出父域）
         assert!(
             matches!(

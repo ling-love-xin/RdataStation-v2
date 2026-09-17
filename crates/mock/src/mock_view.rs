@@ -1342,14 +1342,11 @@ fn relations_of(template: &ScenarioTemplate) -> Vec<ScenarioRelation> {
         .flat_map(|table| {
             table.columns.iter().filter_map(move |col| {
                 let dep = col.dependency.as_ref()?;
-                if !dep.is_foreign_key() {
-                    return None;
-                }
                 Some(ScenarioRelation {
                     child_table: table.name.clone(),
                     child_column: col.name.clone(),
-                    parent_table: dep.ref_table.clone().unwrap_or_default(),
-                    parent_column: dep.ref_column.clone().unwrap_or_default(),
+                    parent_table: dep.ref_table.clone(),
+                    parent_column: dep.ref_column.clone(),
                 })
             })
         })
@@ -1901,9 +1898,10 @@ impl MockPanel {
         let mut dropped = 0usize;
         for child in template.tables.iter_mut() {
             for column in child.columns.iter_mut() {
-                let points_here = column.dependency.as_ref().is_some_and(|dep| {
-                    dep.is_foreign_key() && dep.ref_table.as_deref() == Some(table)
-                });
+                let points_here = column
+                    .dependency
+                    .as_ref()
+                    .is_some_and(|dep| dep.ref_table == table);
                 if points_here {
                     column.dependency = None;
                     dropped += 1;
@@ -2256,18 +2254,14 @@ impl MockPanel {
             // 改了名，指向它的引用必须跟着改——否则立即变成“指向模板里没有的表”
             for child in template.tables.iter_mut() {
                 for column in child.columns.iter_mut() {
-                    let points_here = column
-                        .dependency
-                        .as_mut()
-                        .filter(|dep| dep.is_foreign_key())
-                        .is_some_and(|dep| {
-                            if dep.ref_table.as_deref() == Some(original.as_str()) {
-                                dep.ref_table = Some(name.clone());
-                                true
-                            } else {
-                                false
-                            }
-                        });
+                    let points_here = column.dependency.as_mut().is_some_and(|dep| {
+                        if dep.ref_table == original.as_str() {
+                            dep.ref_table = name.clone();
+                            true
+                        } else {
+                            false
+                        }
+                    });
                     if points_here {
                         retargeted += 1;
                     }
@@ -5633,9 +5627,7 @@ impl MockDetailView {
             let reference = def
                 .dependency
                 .as_ref()
-                .filter(|dep| dep.is_foreign_key())
-                .and_then(|dep| dep.ref_table.clone().zip(dep.ref_column.clone()))
-                .map(|(table, column)| format!("引用 {table}.{column}"));
+                .map(|dep| format!("引用 {}.{}", dep.ref_table, dep.ref_column));
             block = block.child(
                 div()
                     .h_flex()

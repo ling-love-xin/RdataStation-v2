@@ -34,10 +34,10 @@ pub use generator_catalog::{
     spec_of, specs_in,
 };
 pub use models::{
-    ColumnDataType, ColumnDef, ColumnDependency, ColumnMappingResponse, DependencyType,
-    GeneratorConfig, Locale, MockConfig, MockExportFormat, MockExportInput, MockGenerateResult,
-    MockPersistAssetInput, MockPersistAssetResult, MockSaveToScratchpadInput, MockScenarioResult,
-    MockScenarioTableResult, ReferenceDomain, ScenarioTemplate, TemplateTable,
+    ColumnDataType, ColumnDef, ColumnDependency, ColumnMappingResponse, GeneratorConfig, Locale,
+    MockConfig, MockExportFormat, MockExportInput, MockGenerateResult, MockPersistAssetInput,
+    MockPersistAssetResult, MockSaveToScratchpadInput, MockScenarioResult, MockScenarioTableResult,
+    ReferenceDomain, ScenarioTemplate, TemplateTable,
 };
 pub use persistence::{
     MockGenerationColumn, MockGenerationDetail, MockGenerationStore, MockGenerationTask,

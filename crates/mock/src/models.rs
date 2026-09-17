@@ -504,66 +504,33 @@ pub struct MockScenarioTableResult {
 
 // ==================== 列依赖模型 ====================
 
-/// 列依赖类型
+/// 列间依赖：**跨表引用**（`orders.user_id → users.id`）。存在即引用。
 ///
-/// **当前只有 [`DependencyType::ForeignKey`] 是活的**：`dependency` 现在只承载**跨表引用**
-/// （`ColumnDependency::foreign_key` 是唯一构造点，引擎读它算取值域，见架构 D29 / §9-I11）。
-/// 其余四个变体是 v1 遗留的**空壳**：全仓无构造点也无读取点（`source_columns` / `expression` /
-/// `weights` 三个字段同理），而依赖表达式的旧代码（`resolve_dependencies` 拓扑排序、
-/// `eval_expression`）已按「本模块不解释依赖表达式」删除（§9-I6 / I25）。
-/// 要不要真做表达式是**待拍板项**（见 `mock-dev-plan.md` C3）；不做的话下次可以从模型里删掉。
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum DependencyType {
-    /// 计算表达式：引用其他列的计算（如 `price * quantity`）——**空壳，未接线**
-    Expression,
-    /// 外键引用：引用其他表的列（当前唯一在用的变体）
-    ForeignKey,
-    /// 模板引用：使用模板字符串拼接（如 `{first_name} {last_name}`）——**空壳，未接线**
-    Template,
-    /// 序列依赖：基于序列生成器——**空壳，未接线**
-    Sequence,
-    /// 加权依赖：基于加权随机选择——**空壳，未接线**
-    Weighted,
-}
-
-/// 列间依赖定义
+/// 为什么不带 `dep_type` / 表达式字段：v1 的 `DependencyType`（Expression / Template /
+/// Sequence / Weighted）两代都没被求值过，2026-09-18 连同一串空壳字段一起删除
+/// （`mock-dev-plan.md` C3）——模型里留着「看着能用、实际没人读」的字段，只会误导下一个人。
+/// 真要做模板 / 加权 / 算术求值，应当**带求值器一起进来**，而不是先把字段放回去。
+///
+/// 依赖的**取值域**由父列参数算出（父列自增 + 父表行数），不读任何已落地数据（架构 D29 / §9-I11）。
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnDependency {
-    /// 依赖类型
-    pub dep_type: DependencyType,
-    /// 依赖的源列名列表（**空壳字段**：只有表达式 / 模板类依赖会用到，当前零使用）
-    pub source_columns: Vec<String>,
-    /// 表达式/模板字符串（**空壳字段**，同上）
-    pub expression: Option<String>,
-    /// 外键引用的目标表名
-    pub ref_table: Option<String>,
-    /// 外键引用的目标列名
-    pub ref_column: Option<String>,
-    /// 权重配置（用于 Weighted 类型；**空壳字段**，同上）
-    pub weights: Option<Vec<(String, f64)>>,
+    /// 被引用的父表名
+    pub ref_table: String,
+    /// 被引用的父列名
+    pub ref_column: String,
 }
 
 impl ColumnDependency {
-    /// 跨表引用（`ref_table` / `ref_column`）——**唯一构造点**。
+    /// 跨表引用的**唯一构造点**。
     ///
     /// 内置模板、用户自定义关系、测试都走它，避免各处手写同一组字段
     /// （漏设一个字段就变成“看着像引用、实际没人读得懂”）。
     pub fn foreign_key(table: &str, column: &str) -> Self {
         Self {
-            dep_type: DependencyType::ForeignKey,
-            source_columns: Vec::new(),
-            expression: None,
-            ref_table: Some(table.to_string()),
-            ref_column: Some(column.to_string()),
-            weights: None,
+            ref_table: table.to_string(),
+            ref_column: column.to_string(),
         }
-    }
-
-    /// 是否是一条跨表引用。
-    pub fn is_foreign_key(&self) -> bool {
-        matches!(self.dep_type, DependencyType::ForeignKey)
     }
 }
 

@@ -40,7 +40,7 @@ use crate::generator_catalog;
 use crate::mock_view::{
     MockColumnSpec, MockDraft, MockJobDone, MockJobKind, default_generator_for,
 };
-use crate::models::{ColumnDef, DependencyType, GeneratorConfig, Locale};
+use crate::models::{ColumnDef, GeneratorConfig, Locale};
 use crate::persistence::{
     MockGenerationColumn, MockGenerationDetail, MockGenerationStore, MockGenerationTask,
     MockTemplateColumn, MockUserTemplate,
@@ -325,8 +325,8 @@ pub fn template_of_draft(
 /// 历史条目 + 列 → 草稿（重放）。
 ///
 /// 列 id 从 1 起编：面板拿到后按自己的 `next_id` 重新编号（id 只用于面板内部定位）。
-/// **列依赖不随重放恢复**：依赖是结构导入的产物（`import_columns` 目前恒为 `None`），
-/// 要它的人重新导入一次即可；硬塞一个空 `source_columns` 的依赖反而会在生成期出事。
+/// **列依赖不随重放恢复**：`dependency` 是场景模板 / 手加关系的产物，而历史存的是单表配置；
+/// 要它的人重新导入结构或加一次关系即可——凭空塞一个指向不存在父表的依赖，生成期必报错。
 pub fn draft_of_detail(detail: &MockGenerationDetail) -> MockDraft {
     let mut draft = draft_of_parts(
         detail.task.row_count,
@@ -491,10 +491,9 @@ impl ColumnFields {
             generator_params,
             null_ratio: spec.def.nullable_ratio,
             is_unique: spec.def.unique,
-            is_foreign_key: dependency
-                .is_some_and(|d| matches!(d.dep_type, DependencyType::ForeignKey)),
-            ref_table: dependency.and_then(|d| d.ref_table.clone()),
-            ref_column: dependency.and_then(|d| d.ref_column.clone()),
+            is_foreign_key: dependency.is_some(),
+            ref_table: dependency.map(|d| d.ref_table.clone()),
+            ref_column: dependency.map(|d| d.ref_column.clone()),
             confidence: Some(spec.confidence.clone()),
         }
     }

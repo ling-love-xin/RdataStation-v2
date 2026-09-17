@@ -1641,9 +1641,7 @@ mod tests {
 
     /// 列是否声明了跨表引用。
     fn is_reference(col: &ColumnDef) -> bool {
-        col.dependency
-            .as_ref()
-            .is_some_and(ColumnDependency::is_foreign_key)
+        col.dependency.is_some()
     }
 
     /// 模板里全部 `(子表, 列, 父表, 父列)` 引用声明。
@@ -1651,14 +1649,14 @@ mod tests {
         let mut out = Vec::new();
         for table in &template.tables {
             for col in &table.columns {
-                let Some(dep) = col.dependency.as_ref().filter(|_| is_reference(col)) else {
+                let Some(dep) = col.dependency.as_ref() else {
                     continue;
                 };
                 out.push((
                     table.name.as_str(),
                     col,
-                    dep.ref_table.as_deref().unwrap_or_default(),
-                    dep.ref_column.as_deref().unwrap_or_default(),
+                    dep.ref_table.as_str(),
+                    dep.ref_column.as_str(),
                 ));
             }
         }

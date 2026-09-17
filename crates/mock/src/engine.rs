@@ -15,8 +15,8 @@ use shared::models::QueryResult;
 use engine::sql::{ColumnDefInfo, QualifiedTable, SqlEngine};
 use crate::error::{MockError, MockResult};
 use crate::models::{
-    ColumnDef, ColumnDependency, ColumnMappingResponse, DependencyType, GeneratorConfig, Locale,
-    MockConfig, MockExportFormat, MockGenerateResult, MockScenarioResult, MockScenarioTableResult,
+    ColumnDef, ColumnDependency, ColumnMappingResponse, GeneratorConfig, Locale, MockConfig,
+    MockExportFormat, MockGenerateResult, MockScenarioResult, MockScenarioTableResult,
     ReferenceDomain, ScenarioTemplate,
 };
 use crate::schema_map::{ColumnMapper, parse_data_type};
@@ -206,7 +206,6 @@ impl MockEngine {
                     let domain = col
                         .dependency
                         .as_ref()
-                        .filter(|dep| matches!(dep.dep_type, DependencyType::ForeignKey))
                         .and_then(|dep| Self::domain_for(dep, domains));
                     let mut attempts = 0;
                     let value = loop {
@@ -939,11 +938,8 @@ impl MockEngine {
         for table in &template.tables {
             for col in &table.columns {
                 let Some(dep) = &col.dependency else { continue };
-                if !matches!(dep.dep_type, DependencyType::ForeignKey) {
-                    continue;
-                }
-                let parent_name = dep.ref_table.as_deref().unwrap_or_default();
-                let parent_column = dep.ref_column.as_deref().unwrap_or_default();
+                let parent_name = dep.ref_table.as_str();
+                let parent_column = dep.ref_column.as_str();
                 if parent_name.is_empty() || parent_column.is_empty() {
                     return Err(MockError::InvalidColumn(format!(
                         "表 '{}' 的列 '{}' 声明了引用但没写清父表 / 父列",
@@ -1003,8 +999,8 @@ impl MockEngine {
         dep: &ColumnDependency,
         domains: &'a [ReferenceDomain],
     ) -> Option<&'a ReferenceDomain> {
-        let table = dep.ref_table.as_deref()?;
-        let column = dep.ref_column.as_deref()?;
+        let table = dep.ref_table.as_str();
+        let column = dep.ref_column.as_str();
         domains
             .iter()
             .find(|d| d.table == table && d.column == column)
@@ -1014,7 +1010,7 @@ impl MockEngine {
     ///
     /// 根据场景模板（ScenarioTemplate）一次性生成所有关联表。
     /// 每张表独立生成，支持进度回调和取消检查。
-    /// 模板里声明了**表间引用**的列（`dependency.dep_type == ForeignKey`）从**父表主键域**取值，
+    /// 模板里声明了**表间引用**的列（列上带 `dependency`）从**父表主键域**取值，
     /// 域由父列的自增参数与行数算出——不读任何已落地的数据（见 [`Self::resolve_reference_domains`]）。
     /// 返回 `MockScenarioResult` 包含每张表的生成结果摘要。
     pub async fn generate_scenario(

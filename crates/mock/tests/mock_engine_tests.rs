@@ -18,9 +18,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use engine::sql::{ColumnDefInfo, SqlEngine};
 use rds_mock::{
-    ColumnDataType, ColumnDef, ColumnDependency, DependencyType, GeneratorConfig, Locale,
-    MockConfig, MockEngine, MockExportFormat, ScenarioTemplate, TempTableWriteMode, TemplateTable,
-    parse_data_type,
+    ColumnDataType, ColumnDef, ColumnDependency, GeneratorConfig, Locale, MockConfig, MockEngine,
+    MockExportFormat, ScenarioTemplate, TempTableWriteMode, TemplateTable, parse_data_type,
 };
 use shared::models::QueryResult;
 
@@ -815,14 +814,7 @@ async fn generate_scenario_generates_every_table_and_reports_progress() {
 
 /// 声明一条跨表引用（挂在列上，是本模块表达关系的唯一处）。
 fn reference(parent_table: &str, parent_column: &str) -> ColumnDependency {
-    ColumnDependency {
-        dep_type: DependencyType::ForeignKey,
-        source_columns: Vec::new(),
-        expression: None,
-        ref_table: Some(parent_table.to_string()),
-        ref_column: Some(parent_column.to_string()),
-        weights: None,
-    }
+    ColumnDependency::foreign_key(parent_table, parent_column)
 }
 
 /// 引用列：场景生成时值从父表主键域取；单表生成时按自己的生成器取值。
