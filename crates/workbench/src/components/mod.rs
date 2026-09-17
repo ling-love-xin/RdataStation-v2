@@ -4,6 +4,7 @@
 pub mod cache_dialog;
 pub mod connection_dialog;
 pub mod group_form_dialog;
+pub mod insight_actions;
 pub mod log_dialog;
 pub mod mock_host;
 pub mod nav_host;

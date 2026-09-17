@@ -100,7 +100,8 @@ pub use schema_analyzer::{
     TableColumnInfo, TypeMismatch, TypeMismatchEntry,
 };
 pub use schema_view::{
-    confidence_label, SchemaGroupView, SchemaReportView, SchemaRowView, SchemaSection, SchemaTone,
+    confidence_label, schema_export_file_stem, SchemaExportFormat, SchemaGroupView,
+    SchemaReportView, SchemaRowView, SchemaSection, SchemaTone,
 };
 
 pub const BUILTIN_RULES_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/insight-rules");

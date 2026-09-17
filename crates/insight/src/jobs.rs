@@ -190,6 +190,11 @@ pub fn handle_event(
         InsightEvent::TableDrilldownRequested { table, .. } => {
             tracing::info!("Schema 报告下钻请求（宿主未接）: {table}");
         }
+        // 导出同理：选路径与写文件都要窗口与系统对话框（工作台在
+        // `components::insight_actions` 订阅同一份事件落地）。
+        InsightEvent::SchemaExportRequested { format, .. } => {
+            tracing::info!("Schema 报告导出请求（宿主未接）: {}", format.label());
+        }
     }
 }
 

@@ -254,6 +254,59 @@ pub fn confidence_label(raw: &str) -> String {
 
 // ==================== 导出（纯函数） ====================
 
+/// 报告的导出格式（Phase 4.3）：编码函数在 [`SchemaReportView`] 上——
+/// 导出的是「用户看到的这份结论」（D36），所以面板侧算内容、宿主只选路径写文件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaExportFormat {
+    Json,
+    Markdown,
+}
+
+impl SchemaExportFormat {
+    /// 菜单顺序
+    pub const ALL: [Self; 2] = [Self::Json, Self::Markdown];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Json => "JSON",
+            Self::Markdown => "Markdown",
+        }
+    }
+
+    /// 文件扩展名（不带点）
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Markdown => "md",
+        }
+    }
+}
+
+/// 导出文件的默认主名（`schema-<名字>`）。
+///
+/// 名字来自数据库（`public` / `dbo`），但也可能是中文；这里只挡**文件名非法字符**
+/// （路径分隔符与控制字符与 Windows 保留字符）——ASCII 化会把中文名变成一串横线，
+/// 而这个名字用户要在保存对话框里看得懂。空名与全是非法字符时兜底为 `schema`。
+pub fn schema_export_file_stem(schema_name: &str) -> String {
+    let cleaned: String = schema_name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_control() || "\\/:*?\"<>|".contains(c) {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches(|c: char| c == ' ' || c == '-' || c == '.');
+    if cleaned.is_empty() {
+        "schema".to_string()
+    } else {
+        format!("schema-{cleaned}")
+    }
+}
+
 impl SchemaReportView {
     /// 导出 JSON（稳定结构：分组键取英文常量，便于比对与二次处理）
     pub fn to_json(&self) -> String {
@@ -344,7 +397,8 @@ fn md_escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SchemaReportView, SchemaSection, SchemaTone, confidence_label,
+        SchemaExportFormat, SchemaReportView, SchemaSection, SchemaTone, confidence_label,
+        schema_export_file_stem,
     };
     use crate::quality_scorer::Grade;
     use crate::schema_analyzer::{
@@ -536,5 +590,30 @@ mod tests {
         assert_eq!(confidence_label("medium"), "中置信");
         assert_eq!(confidence_label("low"), "低置信");
         assert_eq!(confidence_label("very-high"), "very-high", "加了新档也不至于空白");
+    }
+
+    /// 导出格式的标签与扩展名：菜单与保存对话框共用一处口径。
+    #[test]
+    fn export_formats_carry_label_and_extension() {
+        assert_eq!(SchemaExportFormat::ALL.len(), 2);
+        assert_eq!(SchemaExportFormat::Json.label(), "JSON");
+        assert_eq!(SchemaExportFormat::Json.extension(), "json");
+        assert_eq!(SchemaExportFormat::Markdown.label(), "Markdown");
+        assert_eq!(SchemaExportFormat::Markdown.extension(), "md");
+    }
+
+    /// 导出默认文件名：挡非法字符、保留中文、空名兜底。
+    #[test]
+    fn export_file_stem_keeps_readable_names() {
+        assert_eq!(schema_export_file_stem("public"), "schema-public");
+        assert_eq!(schema_export_file_stem("  dbo  "), "schema-dbo");
+        assert_eq!(
+            schema_export_file_stem("订单库"),
+            "schema-订单库",
+            "中文照留（ASCII 化会变成一串横线）"
+        );
+        assert_eq!(schema_export_file_stem("a/b:c"), "schema-a-b-c");
+        assert_eq!(schema_export_file_stem("   "), "schema", "空名兜底");
+        assert_eq!(schema_export_file_stem("///"), "schema", "全是非法字符也兜底");
     }
 }

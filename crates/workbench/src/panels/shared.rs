@@ -415,6 +415,15 @@ impl Shared {
         }
     }
 
+    /// 状态栏回执（一次性动作的结果）：写入 `notice` 并请求宿主重绘。
+    ///
+    /// 动作结果统一从这里说出口（资产库 / 草稿箱 / 洞察的宿主侧动作）——
+    /// 各处各写一次 `notice + notify_host` 时，「写了提示但忘了重绘」是最常见的漏。
+    pub fn say(&self, message: impl Into<String>, cx: &mut App) {
+        *self.notice.borrow_mut() = Some(message.into());
+        self.notify_host(cx);
+    }
+
     /// 展开右 Dock 并切到指定面板。
     ///
     /// 与导航面板「查看洞察」同一口径（现走 `NavHost::open_right_panel`）：只改状态，布局同步由宿主 render

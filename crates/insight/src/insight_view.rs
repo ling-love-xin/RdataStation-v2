@@ -25,6 +25,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::description_list::{DescriptionItem, DescriptionList, DescriptionText};
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::list::ListItem;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::radio::Radio;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -41,7 +42,7 @@ use crate::model::{
 };
 use crate::quality_scorer::Grade;
 use crate::rule_view::RulesView;
-use crate::schema_view::{SchemaReportView, SchemaSection, SchemaTone};
+use crate::schema_view::{SchemaExportFormat, SchemaReportView, SchemaSection, SchemaTone};
 use crate::ui;
 
 /// 面板向宿主发出的请求。
@@ -104,6 +105,16 @@ pub enum InsightEvent {
     VersionCompareRequested { column: String, version_id: String },
     /// 请宿主清理旧快照（按保留天数删正文与版本链，成对删）
     SnapshotCleanupRequested { column: String },
+    /// 请宿主把结构报告存成文件（Phase 4.3：选路径 + 写文件）。
+    ///
+    /// `content` 由面板算好（导出的是「用户看到的这份结论」，D36）——宿主只选路径与写文件，
+    /// 不必知道 JSON 的分组键或 Markdown 的转义规则。
+    SchemaExportRequested {
+        format: SchemaExportFormat,
+        /// 默认文件名主名（不含扩展名，已净化）
+        file_stem: String,
+        content: String,
+    },
 }
 
 /// 列画像四区（顺序即渲染顺序）
@@ -300,6 +311,24 @@ impl InsightView {
             database,
             schema: schema.unwrap_or_default(),
             table: table.into(),
+        });
+    }
+
+    /// 结构 Tab 的导出请求（Phase 4.3：导出 JSON / Markdown）。
+    ///
+    /// 内容在这里算好（与界面同源的视图模型，D36）；没有报告时不发事件——
+    /// 导出按钮只在有报告时渲染，这里是兼底。
+    pub fn request_schema_export(&mut self, format: SchemaExportFormat, cx: &mut Context<Self>) {
+        let Some(report) = self.data.schema.as_ref() else {
+            return;
+        };
+        cx.emit(InsightEvent::SchemaExportRequested {
+            format,
+            file_stem: crate::schema_view::schema_export_file_stem(&report.schema_name),
+            content: match format {
+                SchemaExportFormat::Json => report.to_json(),
+                SchemaExportFormat::Markdown => report.to_markdown(),
+            },
         });
     }
 
@@ -1434,7 +1463,34 @@ impl InsightView {
                                 report.total_columns,
                                 report.issue_count()
                             ),
-                        )),
+                        ))
+                        // 导出入口：没报告时不渲染（结构 Tab 只在有报告时走到这）
+                        .child(
+                            Button::new("insight-schema-export")
+                                .ghost()
+                                .xsmall()
+                                .label("导出 ▾")
+                                .tooltip("把这份报告存成文件（导出的是你看到的这份结论）")
+                                .dropdown_menu({
+                                    let entity = entity.clone();
+                                    move |menu, _window, _cx| {
+                                        let mut menu = menu;
+                                        for format in SchemaExportFormat::ALL {
+                                            let entity = entity.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(format.label()).on_click(
+                                                    move |_, _, app| {
+                                                        entity.update(app, |view, cx| {
+                                                            view.request_schema_export(format, cx)
+                                                        })
+                                                    },
+                                                ),
+                                            );
+                                        }
+                                        menu
+                                    }
+                                }),
+                        ),
                 )
                 .child(
                     div()
@@ -2712,7 +2768,7 @@ mod tests {
     use crate::{
         BooleanStats, ColumnInsightFull, ColumnQualityEntry, ColumnStats, ColumnStatsDetail,
         DateTimeStats, DistributionBin, KeyValueRow, NoteLevel, NumericStats, QualityNote,
-        TableColumnMeta, TableProfile, TableQuality, TextFrequency, TextStats,
+        SchemaExportFormat, TableColumnMeta, TableProfile, TableQuality, TextFrequency, TextStats,
     };
 
     /// 结构报告的典型形态：四区各一行（外键候选 / critical 不一致 / 孤立表 / 冗余列）
@@ -3594,6 +3650,83 @@ mod tests {
                 Some(4)
             );
         });
+    }
+
+    /// 结构 Tab 的导出：内容与文件名都在面板侧算好（导出与界面同源，D36），
+    /// 没有报告时不发事件（不发无人处理的请求）。
+    #[gpui_kit::test]
+    fn schema_export_carries_encoded_content_and_a_safe_name(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| InsightView::new(cx));
+        let events = crate::test_support::event_sink(&view, cx);
+
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.set_target(
+                    InsightTarget::Schema {
+                        conn_id: "G_pg".into(),
+                        database: "shop".into(),
+                        schema: Some("订单库".into()),
+                    },
+                    cx,
+                );
+            });
+        });
+        events.take();
+
+        // 报告还没回来：导出请求发不出去（按钮此时也不渲染）
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.request_schema_export(SchemaExportFormat::Json, cx)
+            });
+        });
+        assert!(events.borrow().is_empty(), "没有报告就不该发导出请求");
+
+        // 回填报告：JSON 带真内容与保留中文的文件名
+        let mut report = schema_report();
+        report.schema_name = "订单库".into();
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| view.set_schema_report(report, cx))
+        });
+        events.take();
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.request_schema_export(SchemaExportFormat::Json, cx)
+            });
+        });
+        let json = events
+            .borrow()
+            .iter()
+            .find_map(|e| match e {
+                InsightEvent::SchemaExportRequested {
+                    format,
+                    file_stem,
+                    content,
+                } if *format == SchemaExportFormat::Json => {
+                    Some((file_stem.clone(), content.clone()))
+                }
+                _ => None,
+            })
+            .expect("应发出 JSON 导出请求");
+        assert_eq!(json.0, "schema-订单库", "文件名保留中文（只挡非法字符）");
+        assert!(json.1.contains("\"health_score\""), "内容应是真报告：{}", json.1);
+
+        // Markdown 走同一个事件、不同编码
+        events.take();
+        cx.update(|_window, cx| {
+            view.update(cx, |view, cx| {
+                view.request_schema_export(SchemaExportFormat::Markdown, cx)
+            });
+        });
+        assert!(
+            events.borrow().iter().any(|e| matches!(
+                e,
+                InsightEvent::SchemaExportRequested { content, .. }
+                    if content.starts_with("# Schema 健康报告")
+            )),
+            "Markdown 应是同一个事件的不同编码：{:?}",
+            events.borrow()
+        );
     }
 
     /// 历史 Tab：保存入口发事件、切过去才取数、无项目时既不取数也不摆骨架
