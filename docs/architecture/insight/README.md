@@ -75,7 +75,7 @@
 | 服务门面（画像 / 评分 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
 | 源取样通道（入口统一契约） | `crates/insight/src/model.rs`（`SampleSource::{new, on_duckdb, duckdb_file}` / `InsightTarget::{SourceColumn, SourceTable}`）、`service/persistence.rs`（`sample_source_to_analysis_table` 按 `conn_id` 分流：源库连接走引擎打型，`None` 走内存库 `CREATE TABLE … AS`） |
 | 文件类数据源的读取器口径 | `crates/engine/src/dbi/engine/duckdb_engine.rs`（`file_reader_function`：CSV / Parquet / Excel / JSON；`load_file_source` 与洞察**共用**它）、`crates/engine/src/duckdb/analysis.rs`（`create_analysis_temp_table_as`） |
-| 入口接线（三个右键「查看统计」） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`） |
+| 入口接线（三个右键「查看统计」 + 结果集「洞察此列」） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`）；**结果集**：`editor/src/shared.rs`（`InsightColumnPort`）+ `editor/src/view/results/grid.rs`（菜单项）+ `workbench/src/services/editor_insight.rs`（翻译成 `SampleSource`，**不物化**） |
 | 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（现状：✅ 五 Tab 全部落地——列画像 + 质量卡 · 表探查 + 评估全表 · 多列分析 · Schema 报告 · 快照历史与版本对比；不显示假数据） |
 | 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 二批） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：✅ Phase 4 一批 + **导出落地**（D60）：面板「导出 ▾」→ JSON / Markdown → 宿主选路径写文件） |
@@ -166,7 +166,7 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 | Phase 3（已完成） | 表探查视图 + 列名下钻 · 多列分析（真实列清单 + 规则执行 + 结果渲染）· ✅ 宿主侧入口（导航右键「查看统计」，D59 补齐） |
 | Phase 4（已完成） | ✅ 门面 · 报告视图 · 导出函数 · 下钻事件 · ✅ **导出与下钻的宿主接线**（导出：面板算内容 + 宿主选路径写文件 + 状态栏回执；下钻：源取样通道，不建临时表。D60） |
 | Phase 5（已完成） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（方向固定为「选中 → 最新」）· ✅ 存储清理（确认框 · 成对删 · 回执）· ✅ 保留天数定案固定 30 天（D56） |
-| 入口（D58/D59） | ✅ 源取样通道 · ✅ 导航树 / 分析存档 / 草稿箱三个右键「查看统计」· ✅ **文件类数据源**（CSV / Parquet / Excel / JSON，含 excel 扩展）；⬜ 编辑器结果集列头「洞察此列」（用户明确不着急）· ⬜ 分析表型存档（本体是 `analytics.duckdb` 库文件，要 ATTACH + 重建定义） |
+| 入口（D58/D59） | ✅ 源取样通道 · ✅ 导航树 / 分析存档 / 草稿箱三个右键「查看统计」· ✅ **文件类数据源**（CSV / Parquet / Excel / JSON，含 excel 扩展）· ✅ 编辑器结果集列头「洞察此列」（2026-09-18，不物化；未绑定连接按活动连接取样）· ✅ 结构洞察入口；⬜ 分析表型存档（本体是 `analytics.duckdb` 库文件，要 ATTACH + 重建定义） |
 | 待确认 | 规则安全边界若**再严一档**：`insight_rule_trust` 加规则集内容指纹（现绑定项目路径，见 D53 取舍）· 快照双写若要做故障注入测试（现只测补偿函数契约，见 D55） |
 | **收口清单（施工）** | **未接 / 预留项的逐项状态、接或删建议与量级 → 开发方案 §10**（唯一权威；含 K2 重复目录待删 · K6 表级快照待接 · K16 结果集定向回收待接 · 编辑器结果集入口待接；~~结构洞察入口~~ 与 ~~`RenderHint`~~ 已于 2026-09-18 结案） |
 | **实现手段** | **三层边界与扩展准入 = D61**：规则 → 内置 SQL → 扩展；扩展可换实现不可换语义、产物不许成为长期格式；调研记录与**可采取之处（10 条）** → `insight-extension-notes.md` |

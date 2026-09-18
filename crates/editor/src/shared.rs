@@ -36,6 +36,28 @@ pub type SavePathPicker =
 /// 与另存为分开：导出的过滤条件与默认名规则不同（格式决定扩展名），且导出**不改文档身份**。
 pub type ExportPathPicker = Rc<dyn Fn(crate::export::ExportFormat, String) -> Option<PathBuf>>;
 
+/// 【M8】结果集列头右键「洞察此列」交给**宿主**的请求。
+///
+/// 编辑器不依赖 `insight`（分层：洞察是另一个特性 crate）：它只说「这一列 + 产生它的
+/// SQL + 在哪条连接上跑出来的」，宿主自己翻译成 `SampleSource`。
+///
+/// **不物化结果集**（记录在案的决策）：洞察侧拿这段 SQL 重跑一句带 `LIMIT` 的取样。
+/// 所以这里不给行数据，也不需要在编辑器侧管临时表生命周期。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsightColumnRequest {
+    /// 点的那一列（列名）
+    pub column: String,
+    /// 产生这份结果的 SQL（洞察侧据此取样）
+    pub sql: String,
+    /// 这份结果跑在哪条连接上（取样要走源库；未绑定的结果不会给这个入口）
+    pub connection: String,
+    /// 展示用来源（面板副标题 / 快照来源），如「结果 2」
+    pub label: String,
+}
+
+/// 【M8】「洞察此列」端口（由宿主注入：workbench 接到右 Dock 洞察面板）
+pub type InsightColumnPort = Rc<dyn Fn(InsightColumnRequest, &mut gpui_kit::App)>;
+
 /// 一次执行完成后的**回执**（给宿主看，不给编辑区看）。
 ///
 /// 编辑器的结果归编辑区（`drain_exec`），回执只回答“哪份文档、用了哪个连接、成没成”——
@@ -66,6 +88,8 @@ pub struct EditorShared {
     save_path: Rc<RefCell<Option<SavePathPicker>>>,
     /// 导出落盘路径选择器：宿主注入后才有（无宿主 = 导出明确报“未接入”）
     export_path: Rc<RefCell<Option<ExportPathPicker>>>,
+    /// 【M8】「洞察此列」端口：宿主注入后才有（未接时列头右键不摆这一项）
+    insight_column: Rc<RefCell<Option<InsightColumnPort>>>,
     /// 连接列表 / 建连端口：宿主注入后才有（B1；无宿主 = 选择器说“未接入”）
     connections: Rc<RefCell<Option<ConnectionsHandle>>>,
     /// 【B13】通道门控端口：宿主注入后才有（无宿主 = 加速 / 联邦两档都不可用并给原因）
@@ -91,6 +115,7 @@ impl EditorShared {
             sessions: Rc::new(RefCell::new(None)),
             save_path: Rc::new(RefCell::new(None)),
             export_path: Rc::new(RefCell::new(None)),
+            insight_column: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
             channels: Rc::new(RefCell::new(None)),
             sources: Rc::new(RefCell::new(None)),
@@ -326,6 +351,22 @@ impl EditorShared {
     /// 注入导出路径选择器（**宿主调用一次**：workbench 接 `rfd`）
     pub fn attach_export_path_picker(&self, picker: ExportPathPicker) {
         *self.export_path.borrow_mut() = Some(picker);
+    }
+
+    /// 【M8】注入「洞察此列」端口（**宿主调用一次**：workbench 接到洞察面板）
+    pub fn attach_insight_column(&self, port: InsightColumnPort) {
+        *self.insight_column.borrow_mut() = Some(port);
+    }
+
+    /// 【M8】「洞察此列」端口（未注入时列头右键不摆这一项）
+    pub fn insight_column_port(&self) -> Option<InsightColumnPort> {
+        self.insight_column.borrow().clone()
+    }
+
+    /// 【M8】文档未绑定连接时执行会落到哪条连接上（口径在执行器：绑定优先 → 回退活动连接）
+    pub fn active_connection(&self) -> Option<String> {
+        let guard = self.exec.borrow();
+        guard.as_ref().and_then(|queue| queue.runner().active_connection())
     }
 
     /// 是否接了导出路径选择器（未接时导出要明确报原因）

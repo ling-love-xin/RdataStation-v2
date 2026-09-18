@@ -55,6 +55,27 @@ pub struct ResultEntry {
 }
 
 impl ResultEntry {
+    /// 这份结果能不能做「洞察此列」（列头右键的入口只在这时为真）
+    ///
+    /// 三条要满足：
+    /// - 成功（失败的结果没有可分析的列）
+    /// - 有列（写语句 / DDL 的结论是影响行数，没有列）
+    /// - SQL 是**只读查询**：口径与引擎一致（用 `SqlEngine` 的语句分类，不自写判断），
+    ///   避免把 INSERT / DDL 重放一遍
+    ///
+    /// **连接不在这里管**：文档可以未绑定（执行时跟随当前活动连接），而“活动连接是谁”
+    /// 只有执行器知道（`QueryRunner::active_connection`）——那一半由面板合起来判定。
+    pub fn can_insight_column(&self) -> bool {
+        self.error.is_none() && !self.columns.is_empty() && Self::is_read_only_query(&self.sql)
+    }
+
+    /// SQL 是不是只读查询（走引擎的语句分类：口径只此一处）
+    fn is_read_only_query(sql: &str) -> bool {
+        let (statement_type, _normalized) =
+            engine::SqlEngine::parse_and_route(sql, engine::SqlDialect::Ansi);
+        matches!(statement_type, engine::SqlStatementType::Select)
+    }
+
     /// 成功的执行结果
     pub fn success(
         document: DocumentId,
@@ -421,6 +442,56 @@ mod tests {
         store
             .active(&DocumentId::new(document))
             .map(|entry| entry.sql.clone())
+    }
+
+    /// 【M8】「洞察此列」的入场条件：四条全满足才给入口。
+    ///
+    /// 为什么写死到谓词级：这个入口会**重跑用户的 SQL**（带 LIMIT 取样），所以
+    /// “能不能重放”的判据不能各写一份——门店、菜单、面板三处读的都是它。
+    #[test]
+    fn can_insight_column_requires_success_columns_connection_and_a_select() {
+        let bound = |sql: &str| {
+            let mut entry = entry("doc-1", sql, 3);
+            entry.connection = Some("G_1".to_string());
+            entry
+        };
+
+        assert!(
+            bound("select id, amount from orders").can_insight_column(),
+            "成功 + 有列 + 绑连接 + 只读查询：给入口"
+        );
+        assert!(
+            bound("WITH t AS (SELECT 1 AS n) SELECT n FROM t").can_insight_column(),
+            "CTE 也是只读查询"
+        );
+
+        assert!(
+            !bound("insert into orders values (1)").can_insight_column(),
+            "写语句不给入口：不能把用户的写语句重放一遍"
+        );
+        assert!(
+            !bound("drop table orders").can_insight_column(),
+            "DDL 更不给"
+        );
+
+        let mut unbound = entry("doc-1", "select 1", 3);
+        unbound.connection = None;
+        assert!(
+            unbound.can_insight_column(),
+            "未绑定连接也可以（执行时跟随当前活动连接）——连接由面板/执行器合起来判定"
+        );
+        assert!(
+            !ResultEntry::is_read_only_query("update t set n = 1"),
+            "写语句依旧不给"
+        );
+
+        let mut failed = bound("select 1");
+        failed.error = Some("boom".to_string());
+        assert!(!failed.can_insight_column(), "失败的结果没有可分析的列");
+
+        let mut no_columns = bound("select 1");
+        no_columns.columns.clear();
+        assert!(!no_columns.can_insight_column(), "没有列就没有“此列”");
     }
 
     #[test]

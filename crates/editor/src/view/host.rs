@@ -35,7 +35,7 @@ use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode};
 use crate::persist;
 use crate::service::Document;
-use crate::shared::EditorShared;
+use crate::shared::{EditorShared, InsightColumnRequest};
 use crate::sources;
 use crate::store::ResultEntry;
 use crate::ui;
@@ -264,6 +264,9 @@ impl EditorHostPanel {
             let load_weak = cx.entity().downgrade();
             let filter_weak = cx.entity().downgrade();
             let sort_weak = cx.entity().downgrade();
+            let insight_weak = cx.entity().downgrade();
+            // 【M8】宿主没接「洞察此列」端口就不装钩子——菜单据此不摆那一项（能力没有就不给入口）
+            let insight_port = shared.insight_column_port();
             grid.update(cx, |state, _cx| {
                 state.delegate_mut().set_load_more_hook(std::rc::Rc::new(
                     move |app: &mut App| {
@@ -286,6 +289,16 @@ impl EditorHostPanel {
                         });
                     },
                 ));
+                if insight_port.is_some() {
+                    state.delegate_mut().set_insight_column_hook(std::rc::Rc::new(
+                        move |column: &str, app: &mut App| {
+                            let column = column.to_string();
+                            _ = insight_weak.update(app, |panel, cx| {
+                                panel.insight_column(&column, cx)
+                            });
+                        },
+                    ));
+                }
             });
         }
 
@@ -2070,7 +2083,7 @@ impl EditorHostPanel {
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
         let current_channel = self.channel();
-        let (tabs, active, grid_data, empty, toolbar, status, failure, extra, notice) = {
+        let (tabs, active, grid_data, empty, toolbar, status, failure, extra, notice, insight_available) = {
             let store = self.shared.results();
             let active = store.active_index(&self.document).unwrap_or(0);
             let entry = store.active(&self.document);
@@ -2123,6 +2136,8 @@ impl EditorHostPanel {
                 entry
                     .filter(|entry| entry.channel != current_channel)
                     .map(|entry| channel::stale_notice(entry.channel, current_channel)),
+                // 【M8】「洞察此列」能不能给：条目本身（成功 / 有列 / 只读）+ 连接解析得出来
+                entry.is_some_and(|entry| self.insight_available(entry)),
             )
         };
 
@@ -2144,6 +2159,8 @@ impl EditorHostPanel {
                 Some((columns, rows)) => state.delegate_mut().set_data(columns, rows),
                 None => state.delegate_mut().clear(empty),
             }
+            // 【M8】这份结果能不能洞察（菜单项据此出现 / 消失）
+            state.delegate_mut().set_insight_available(insight_available);
             // 【B5b】这份结果还能不能再取一段 / 是不是正在取
             state.delegate_mut().set_has_more(has_more);
             state.delegate_mut().set_loading_more(loading_more);
@@ -2433,6 +2450,67 @@ impl EditorHostPanel {
             ResultPlacement::NewSet,
             cx,
         );
+    }
+
+    /// 【M8】这份结果**实际**跑在哪条连接上：绑定优先，未绑定回退**当前活动连接**
+    ///
+    /// 口径与执行完全一致（`QueryRunner::active_connection` ⇒ 与 `resolve_conn_id` 同一处
+    /// 语义）：否则会出现「执行走了 A、洞察取样走了 B」这种最难查的偏差。
+    fn effective_connection(&self, entry: &ResultEntry) -> Option<String> {
+        entry
+            .connection
+            .clone()
+            .or_else(|| self.shared.active_connection())
+    }
+
+    /// 【M8】这份结果能不能给「洞察此列」入口（菜单项据此出现 / 消失）
+    fn insight_available(&self, entry: &ResultEntry) -> bool {
+        entry.can_insight_column() && self.effective_connection(entry).is_some()
+    }
+
+    /// 【M8】「洞察此列」（右键菜单来的）：把**列名 + 产生它的 SQL + 连接**交给宿主端口
+    ///
+    /// 不物化结果集（决策在案）：洞察侧拿这段 SQL 重跑一句带 `LIMIT` 的取样。
+    /// 拿不到当前结果 / 解析不出连接 / 宿主没接端口都只是**不动作**——入口本来就不该出现
+    /// （`insight_available` 已经挡住了），所以不需要再给用户弹一句话。
+    pub(crate) fn insight_column(&mut self, column: &str, cx: &mut Context<Self>) {
+        let Some(port) = self.shared.insight_column_port() else {
+            return;
+        };
+        let Some(entry) = self
+            .shared
+            .results_active(&self.document)
+            .filter(ResultEntry::has_grid)
+        else {
+            return;
+        };
+        let Some(connection) = self.effective_connection(&entry) else {
+            return;
+        };
+        let label = self.result_set_label();
+        port(
+            InsightColumnRequest {
+                column: column.to_string(),
+                sql: entry.sql.clone(),
+                connection,
+                label,
+            },
+            cx,
+        );
+    }
+
+    /// 当前结果集在界面上的名字（「洞察此列」的来源标签：面板副标题 / 快照来源用）
+    fn result_set_label(&self) -> String {
+        let index = self.result_active;
+        let titled = self
+            .shared
+            .results()
+            .active(&self.document)
+            .and_then(|entry| entry.title.clone());
+        match titled {
+            Some(title) => title,
+            None => format!("结果 {}", index + 1),
+        }
     }
 
     /// 【B14】开关切换：打开时若已有筛选词就立刻下发一次（“打开后把条件拼为 WHERE 重查”）

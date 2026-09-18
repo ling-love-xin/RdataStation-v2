@@ -23,6 +23,24 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — 编辑器结果集入口「洞察此列」（§10 #6）
+
+**背景**：施工单 #6（用户明确要这个批次做）。编辑器侧本来就有**钩子注入**的先例（`FilterValueHook` / `SortDownHook`：网格只说“用户点了谁”，面板接活），因此新入口照同一套做，**不物化结果集**（D58 决策在案：洞察侧重跑取样）。
+
+**已完成并验证**（`cargo test -p rds-editor --lib` **343 项**（本批 +2）· `rds-insight --lib` **227** · `column_profile_e2e` **14** · `rds-workbench --lib` **94** + `insight_entry` **2** + `ui_contract` **7** + 新增 `insight_editor_entry` **2**（含**真机**）全绿；`cargo check --workspace --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 端口（编辑器 ← 宿主） | `InsightColumnRequest { column, sql, connection, label }` + `InsightColumnPort`；`attach_insight_column` / `insight_column_port`（与 `attach_runner` / 选路径器同一套“宿主注入”范式）。编辑器**不依赖 insight** | `editor/src/shared.rs` |
+| 菜单与判据 | `ContextAction::InsightColumn` + 菜单项「洞察「列」这一列」；**没接端口 / 不能取样就不摆这一项**（与「按值筛选」同口径）。纯函数据此多一个 `insight` 形参 | `editor/src/view/results/grid.rs` |
+| 入场条件（条目级） | `ResultEntry::can_insight_column()`：成功 + 有列 + SQL 是**只读查询**（走 `SqlEngine` 的语句分类，口径与引擎一致）。**连接不在这里管**——见下一行 | `editor/src/store.rs` |
+| 「跟随活动连接」的口径 | 文档可以未绑定（执行时落到当前活动连接），而“活动连接是谁”只有执行器知道——新增 `QueryRunner::active_connection`（默认 `None`）+ `ExecQueue::runner()` + `EditorShared::active_connection()`；workbench 的实现**复用 `resolve_conn_id`**（绑定优先 → 回退活动连接），保证「执行走 A、洞察取样走 B」不会发生 | `editor/src/{execution,shared}.rs`、`editor/src/view/host.rs`（`effective_connection` / `insight_available`）、`workbench/src/services/editor_exec.rs` |
+| 宿主翻译 | 新端口实现：`SampleSource::new(connection, sql, label)` → `Shared::open_insight_source_column`（展开右 Dock + 递目标）。类型留空（编辑器只有字符串化的行）——取样后由洞察侧读出真类型；`InsightTarget::detail()` 对空类型只报来源，不摆空段 | `workbench/src/services/editor_insight.rs`（新）+ `view.rs` 一口气 + `insight/src/model.rs` |
+| **不物化 ⇒ #3 的定向回收不入本批** | 决策在案：编辑器入口不建 `tmp_q_*`（洞察侧重跑取样），所以没有“结果集被丢弃时回收临时表”可接。`drop_temp_table(Query)` 的定向口仍然无生产调用者——**清场口已接**（项目切换），它继续盖住将来真出现的结果集临时表 | §10 #3 已改口径 |
+| 真机验证 | `insight_editor_entry`：MySQL 真库 + 真执行器，**不绑定连接**跑一句（跟随活动连接）→ 执行器报出活动连接 → 端口 → 面板目标 → 洞察侧重跑取样（`tmp_i_` 样本表，3 行 / 0 空值 / Numeric）→ 收掉探针表 | `workbench/tests/insight_editor_entry.rs`（新） |
+
+**下一步**：§10 #7 分析表型存档（`kind = Analysis`）——需要 ATTACH `analytics.duckdb` + 用 `definition_sql` 重建定义，另批做。
+
 ### 2026-09-18 — K19 收口：门面自建 runtime 导致 PG 下条语句卡 30s；桥接驱动的空报告回执
 
 **背景**：上一批发现「PG 报告后第一条语句偶发卡 ~30s」。本批用**对照实验**把它查实了：同一段元数据取数交替跑两条路径——`A` 走门面（`InsightService::schema_report_view`，自建 runtime）、`B` 直调分析器（`runtime.block_on(SchemaAnalyzer::analyze)`，宿主 runtime）。
@@ -1033,17 +1051,17 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 
 | # | 项 | 现状证据 | 建议 | 量级 / 阻塞 |
 | --- | --- | --- | --- | --- |
-| 3 | 结果集临时表的**定向回收**（K16 收尾） | `drop_temp_table(TempTableSource::Query)` 零生产调用者；且建表侧（`create_duckdb_temp_table` / `ResultService` / `execute_duckdb_analysis`）**也零调用**——整条「结果集 → DuckDB 分析」链路未接 UI。**清场口已接**（2026-09-18：项目切换清 `tmp_q_*`） | **随 #6（编辑器结果集入口）一起接**：结果集被丢弃 / 替换 / 关文档三处按 D54 契约调 `drop_temp_table` | 小（但依赖 #6） |
+| 3 | 结果集临时表的**定向回收**（K16 收尾） | `drop_temp_table(TempTableSource::Query)` 零生产调用者；且建表侧（`create_duckdb_temp_table` / `ResultService` / `execute_duckdb_analysis`）**也零调用**——整条「结果集 → DuckDB 分析」链路未接 UI。**清场口已接**（2026-09-18：项目切换清 `tmp_q_*`） | **维持**：编辑器入口走**不物化**（洞察侧重跑取样，2026-09-18），所以没有可回收的临时表；定向口留着——将来真接「结果集 → DuckDB 分析」（物化）时再用 | 小（无阻塞） |
 | 4 | 表级 / Schema 报告快照（K6） | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | **接**（需产品点头：表级快照的比对语义与列级不同——行数、列清单都在变） | 中（store 方法已有，缺面板保存入口 + 历史视图 + 对比） |
-| 6 | 编辑器结果集「洞察此列」+ 临时表直连入口 | `open_insight_column` 零调用者；`InsightTarget::Column\|Table` 无人构造 | **留着**（用户明确说不急）；做时照 `FilterValueHook` 注入，**不需要执行期物化**；顺手接 #3 的定向回收 | 中 |
+| 6 | ~~编辑器结果集「洞察此列」~~ + 临时表直连入口 | 已于 2026-09-18 接线（见 §0）：菜单项 + 宿主端口 + 「跟随活动连接」口径 + 真机用例。`InsightTarget::Column\|Table`（临时表直连）仍无构造者——**留着**（面板内部与测试在用，且「结果集 → DuckDB 分析」真要物化时就是它） | — | 小 |
 | 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false | **等**：M6 二期有产生者 + 要 ATTACH `analytics.duckdb` + 用 `definition_sql` 重建 | 中 |
 | 9 | 源目标下「多列」Tab 在样本表解析前点击不发请求 | 已知小限制（样本表要等列 / 表目标先取过样） | **决定**：让它自己先取一次样，或维持并在 UI 提示 | 小 |
 | 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **可选加强**：解析级策略检查（解析能力 `engine/src/sql` 已有） | 中 |
 | 11 | `insight_view.rs` 体量（约 2500 行代码 + 900 行测试） | 新功能仍在往里加（导出按钮即在此） | **时机触发**：见 §11 规格 | 中 |
 
-> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）；#8 `RenderHint`（定案：保留 + 登记，2026-09-18，见架构 K18）。
+> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）；#8 `RenderHint`（定案：保留 + 登记，2026-09-18，见架构 K18）；#6 编辑器结果集「洞察此列」（2026-09-18，真机验证）。
 
-**建议顺序**（性价比）：6（编辑器结果集入口，顺带 #3）→ 4（要产品点头）→ 其余。
+**建议顺序**（性价比）：7（分析表型存档，要 ATTACH + 重建定义）→ 4（要产品点头）→ 其余。
 
 ## 11. `insight_view.rs` 按 Tab 位移（规格 · 待触发）
 

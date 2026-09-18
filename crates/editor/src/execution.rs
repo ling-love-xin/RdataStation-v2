@@ -453,6 +453,19 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持中断".to_string())
     }
 
+    /// 【M8】文档**未绑定连接**时，执行会落到哪条连接上（`None` = 也解析不出）
+    ///
+    /// 为什么放在这里：这层语义**已经属于执行器**（`resolve_conn_id`：绑定优先 →
+    /// 回退当前活动连接）。洞察入口要「产生这份结果的那条连接」时不能自己再猜一份，
+    /// 否则会出现“执行走 A、洞察取样走 B”。
+    ///
+    /// **同步**返回是刻意的：入口要在 UI 回调里立刻决定“能不能给”（菜单项得有/没有），
+    /// 而实现手里通常有一个现成的 runtime（真实现见 workbench 的 `EngineQueryRunner`）。
+    /// 默认实现 = 解析不出（宿主没接能力的真实状态）。
+    fn active_connection(&self) -> Option<String> {
+        None
+    }
+
     /// 【B14】下发源库：把筛选词拼成 `WHERE` 重查（**方言差异由实现负责**）
     ///
     /// `columns` 是结果集的列名（筛选命中的就是这些输出列）。默认实现 = 不支持下发
@@ -658,6 +671,11 @@ pub struct ExecQueue {
 }
 
 impl ExecQueue {
+    /// 执行器句柄（M8：洞察入口要问它“未绑定时执行会落到哪条连接上”，口径只此一处）
+    pub fn runner(&self) -> Arc<dyn QueryRunner> {
+        self.runner.clone()
+    }
+
     /// 用一个执行器起队列
     pub fn new(runner: Arc<dyn QueryRunner>) -> Self {
         let (tx, rx) = mpsc::channel::<ExecJob>();

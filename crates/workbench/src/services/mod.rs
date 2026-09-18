@@ -18,6 +18,7 @@ pub mod editor_channels;
 pub mod editor_connections;
 pub mod editor_exec;
 pub mod editor_files;
+pub mod editor_insight;
 pub mod editor_session;
 pub mod editor_sources;
 pub mod mock_generator;

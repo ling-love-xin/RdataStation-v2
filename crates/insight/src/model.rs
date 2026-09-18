@@ -241,7 +241,16 @@ impl InsightTarget {
             InsightTarget::Table { temp_table, .. } => Some(temp_table.clone()),
             InsightTarget::SourceColumn {
                 source, data_type, ..
-            } => Some(format!("{data_type} · 来源 {}", source.label())),
+            } => {
+                // 类型可能在取样前还不知道（如编辑器结果集入口：行数据只有字符串化后的值）——
+                // 那就只报来源，不摆一个空段
+                let data_type = data_type.trim();
+                if data_type.is_empty() {
+                    Some(format!("来源 {}", source.label()))
+                } else {
+                    Some(format!("{data_type} · 来源 {}", source.label()))
+                }
+            }
             InsightTarget::SourceTable { source, .. } => Some(format!("来源 {}", source.label())),
             InsightTarget::MultiColumn { temp_table, .. } => Some(temp_table.clone()),
             InsightTarget::Schema { conn_id, .. } => Some(conn_id.clone()),

@@ -572,6 +572,14 @@ impl QueryRunner for EngineQueryRunner {
         true
     }
 
+    /// 【M8】未绑定连接的文档会落到哪条连接上（洞察入口要「产生这份结果的那条连接」）
+    ///
+    /// 与 [`Self::resolve_conn_id`] **同一处口径**：否则会出现「执行走 A、洞察取样走 B」
+    /// 这种最难查的偏差。借执行器自己的 runtime 做一次内存读锁，代价可忽略。
+    fn active_connection(&self) -> Option<String> {
+        self.resolve_conn_id(None)
+    }
+
     /// 中断：源库档翻引擎的取消令牌；本地跑的两档叫 DuckDB 中断
     ///
     /// 三处都试是有意的：编辑器只知道“这条文档在执行”，不知道当前那次执行具体落在哪一边

@@ -39,6 +39,12 @@ pub type FilterValueHook = Rc<dyn Fn(&str, &mut App)>;
 /// 【B14】「排序下发」的钩子（面板注入：按列名重查源库；入参 = （列名，是否降序））
 pub type SortDownHook = Rc<dyn Fn(&str, bool, &mut App)>;
 
+/// 【M8】「洞察此列」的钩子（面板注入：把列名交给面板，面板再连同 SQL / 连接交给宿主）
+///
+/// 网格不知道结果集的 SQL 与连接（那是面板/存储的事），所以这里只传列名——
+/// 与「按值筛选」同一种分工：**网格只负责说“用户点了谁”**。
+pub type InsightColumnHook = Rc<dyn Fn(&str, &mut App)>;
+
 /// 右键菜单的动作（界面按它决定点击后干什么）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextAction {
@@ -50,6 +56,8 @@ pub enum ContextAction {
     ToggleFreeze(usize),
     /// 按这一列（列名）排序并**下发重查**
     SortDown { column: String, descending: bool },
+    /// 【M8】洞察这一列（列名；宿主据此取样 → 列画像）
+    InsightColumn { column: String },
 }
 
 /// 右键菜单里的一项
@@ -65,14 +73,18 @@ pub struct ContextMenuItem {
 ///
 /// 原型 §5.5 的右键入口：按值筛选（写进筛选框、默认本地）· 复制此值 ·
 /// 冻结 / 取消冻结（原生 `Column.fixed`）。
+///
+/// `insight` = 【M8】这份结果能不能洞察（宿主接了端口 + 这份结果可取样，见
+/// `ResultEntry::can_insight_column`）——**能力没有就不摆入口**。
 pub fn context_menu_items(
     value: &str,
     column_name: &str,
     column: usize,
     frozen: bool,
+    insight: bool,
 ) -> Vec<ContextMenuItem> {
     let preview = preview_of(value);
-    vec![
+    let mut items = vec![
         ContextMenuItem {
             label: format!("按值筛选「{preview}」"),
             action: ContextAction::FilterByValue(value.to_string()),
@@ -108,7 +120,17 @@ pub fn context_menu_items(
             action: ContextAction::ToggleFreeze(column),
             separator_before: false,
         },
-    ]
+    ];
+    if insight {
+        items.push(ContextMenuItem {
+            label: format!("洞察「{column_name}」这一列"),
+            action: ContextAction::InsightColumn {
+                column: column_name.to_string(),
+            },
+            separator_before: true,
+        });
+    }
+    items
 }
 
 /// 网格数据（表头 + 行）
@@ -137,6 +159,10 @@ pub struct ResultGridDelegate {
     on_filter_value: Option<FilterValueHook>,
     /// 【B14】排序下发的钩子（面板注入）
     on_sort_down: Option<SortDownHook>,
+    /// 【M8】「洞察此列」的钩子（宿主接端口时面板才注入）
+    on_insight_column: Option<InsightColumnHook>,
+    /// 【M8】这份结果能不能洞察（面板同步数据时算：见 `ResultEntry::can_insight_column`）
+    insight_available: bool,
     /// 【B15】视图行序：当前看着的这一串行，元素是 `rows` 里的下标
     ///
     /// 筛选与排序都只改这个映射，**数据行一行不动**（所以清除筛选能原样恢复，
@@ -185,6 +211,26 @@ impl ResultGridDelegate {
     /// 【B14】注入「按值筛选」钩子（面板构造时一次）
     pub fn set_filter_value_hook(&mut self, hook: FilterValueHook) {
         self.on_filter_value = Some(hook);
+    }
+
+    /// 【M8】注入「洞察此列」钩子（宿主接了端口时面板构造一次）
+    pub fn set_insight_column_hook(&mut self, hook: InsightColumnHook) {
+        self.on_insight_column = Some(hook);
+    }
+
+    /// 【M8】这份结果能不能洞察（面板每次同步结果时设；钩子没装也等于不能）
+    pub fn set_insight_available(&mut self, available: bool) {
+        self.insight_available = available;
+    }
+
+    /// 【M8】测试用：钩子装上了吗
+    pub fn has_insight_column_hook(&self) -> bool {
+        self.on_insight_column.is_some()
+    }
+
+    /// 【M8】测试用：入口现在该不该出现（钩子在 + 这份结果可洞察）
+    pub fn insight_available(&self) -> bool {
+        self.on_insight_column.is_some() && self.insight_available
     }
 
     /// 【B14】注入「排序下发」钩子（面板构造时一次）
@@ -552,7 +598,14 @@ impl TableDelegate for ResultGridDelegate {
             .unwrap_or_else(|| format!("列 {}", column + 1));
 
         let mut menu = menu;
-        for item in context_menu_items(&value, &column_name, column, self.is_frozen(column)) {
+        let insight_available = self.on_insight_column.is_some() && self.insight_available;
+        for item in context_menu_items(
+            &value,
+            &column_name,
+            column,
+            self.is_frozen(column),
+            insight_available,
+        ) {
             if item.separator_before {
                 menu = menu.separator();
             }
@@ -592,6 +645,14 @@ impl TableDelegate for ResultGridDelegate {
                             });
                         },
                     ));
+                }
+                ContextAction::InsightColumn { column } => {
+                    // 同「按值筛选」：没接钩子（宿主没接洞察端口）就不摆这一项
+                    if let Some(hook) = self.on_insight_column.clone() {
+                        menu = menu.item(PopupMenuItem::new(item.label).on_click(
+                            move |_, _window, app| hook(&column, app),
+                        ));
+                    }
                 }
             }
         }
@@ -960,7 +1021,7 @@ mod tests {
     /// 【B14】右键菜单的项：按值筛选 / 复制此值 / 冻结（文案随冻结状态变）
     #[test]
     fn context_menu_offers_filter_copy_and_freeze() {
-        let items = context_menu_items("orders", "name", 1, false);
+        let items = context_menu_items("orders", "name", 1, false, false);
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -999,8 +1060,32 @@ mod tests {
         assert!(!items[4].separator_before, "冻结与排序同组");
         assert_eq!(items[4].action, ContextAction::ToggleFreeze(1));
 
-        let frozen = context_menu_items("orders", "name", 1, true);
+        let frozen = context_menu_items("orders", "name", 1, true, false);
         assert_eq!(frozen[4].label, "取消冻结此列", "已冻结时给的是反向动作");
+    }
+
+    /// 【M8】「洞察此列」只在**能洞察**时出现（宿主接了端口 + 这份结果可取样）：
+    /// 不能洞察时连项都不摆（能力没有就不给入口，与「按值筛选」同口径）。
+    #[test]
+    fn context_menu_only_offers_insight_when_available() {
+        let without = context_menu_items("orders", "name", 1, false, false);
+        assert!(
+            !without
+                .iter()
+                .any(|item| matches!(item.action, ContextAction::InsightColumn { .. })),
+            "不能洞察时不该摆这一项：{without:?}"
+        );
+
+        let with = context_menu_items("orders", "name", 1, false, true);
+        let last = with.last().expect("至少有一项");
+        assert_eq!(last.label, "洞察「name」这一列");
+        assert_eq!(
+            last.action,
+            ContextAction::InsightColumn {
+                column: "name".to_string()
+            }
+        );
+        assert!(last.separator_before, "它自成一段，前面要有分隔线");
     }
 
     /// 值预览：空白折叠 + 截断（长值不该把菜单撑开）
@@ -1011,7 +1096,7 @@ mod tests {
         let preview = preview_of(&long);
         assert_eq!(preview.chars().count(), 25, "24 个字符 + 省略号");
         assert!(preview.ends_with('…'), "{preview}");
-        let items = context_menu_items(&long, "c", 0, false);
+        let items = context_menu_items(&long, "c", 0, false, false);
         assert!(items[0].label.contains('…'), "{}", items[0].label);
     }
 

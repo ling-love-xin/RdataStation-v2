@@ -3866,6 +3866,61 @@ fn filtering_by_value_from_the_menu_works(cx: &mut TestAppContext) {
     assert_eq!(toolbar.filtered, Some((1, 3)), "工具栏明示已筛选");
 }
 
+/// 【M8】「洞察此列」的钩子只在**宿主接了端口**时装上；结果不可取样时菜单项也不出现
+#[gpui_kit::test]
+fn insight_column_hook_follows_the_host_port_and_the_result(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    // ① 宿主没接端口：面板不装钩子（菜单里就没有这一项）
+    let (shared, id) = shared_with_sized_runner("select rows=3");
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+    assert!(
+        !cx.update(|_window, cx| grid.read(cx).delegate().has_insight_column_hook()),
+        "宿主没接端口时不该装钩子"
+    );
+
+    // ② 接了端口：装钩子；但这份结果没绑定连接 → 仍不给入口
+    let (shared, id) = shared_with_sized_runner("select rows=3");
+    shared.attach_insight_column(std::rc::Rc::new(
+        |_request: crate::shared::InsightColumnRequest, _cx: &mut gpui_kit::App| {},
+    ));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select rows=3",
+        execution::ResultPlacement::Replace,
+    );
+    let grid = cx.update(|_window, cx| panel.read(cx).grid_for_test());
+    assert!(
+        cx.update(|_window, cx| grid.read(cx).delegate().has_insight_column_hook()),
+        "宿主接了端口就要装钩子"
+    );
+    let entry = shared
+        .results_active(&id)
+        .expect("应有当前结果")
+        .clone();
+    assert!(
+        entry.connection.is_none(),
+        "这个假执行器不会绑定连接——用它验“跟随活动连接”那一档"
+    );
+    assert!(
+        entry.can_insight_column(),
+        "条目本身没问题（成功 / 有列 / 只读查询）"
+    );
+    assert!(
+        !cx.update(|_window, cx| grid.read(cx).delegate().insight_available()),
+        "但假执行器报不出活动连接 → 入口不该出现（取样得知道回哪条连接）"
+    );
+}
+
 /// 【B15】冻结列：原生 `Column.fixed` 真的落到列定义上（改完要重建列组）
 #[gpui_kit::test]
 fn freezing_a_column_pins_it_left(cx: &mut TestAppContext) {
