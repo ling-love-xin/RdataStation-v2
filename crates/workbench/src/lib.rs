@@ -13,6 +13,7 @@
 pub mod commands;
 pub mod components;
 pub mod panels;
+mod quick_open;
 pub mod services;
 // 尺寸常量已下沉 `rds-workbench-shell`（依赖键 `workbench_shell`，与本仓库其它内部 crate 同惯例）：
 // 这里重导保持 `crate::ui::*` / `rds_workbench::ui::*` 路径不变。

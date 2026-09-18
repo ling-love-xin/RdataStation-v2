@@ -35,6 +35,9 @@ fn ui_size_constants_match_design() {
         (QUICK_OPEN_ENTRY_WIDTH, 320.0, "Quick Open 入口宽"),
         (QUICK_OPEN_ENTRY_HEIGHT, 26.0, "Quick Open 入口高"),
         (QUICK_OPEN_PANEL_WIDTH, 560.0, "Quick Open 弹层宽"),
+        (QUICK_OPEN_LIST_MAX_HEIGHT, 340.0, "Quick Open 结果区最大高"),
+        (QUICK_OPEN_GROUP_HEADER_HEIGHT, 18.0, "Quick Open 分组头高"),
+        (QUICK_OPEN_HINT_HEIGHT, 24.0, "Quick Open 提示行高"),
         (ROW_HEIGHT, 24.0, "列表/树行高"),
         (TREE_INDENT, 14.0, "树缩进步长"),
         (PANEL_HEADER_HEIGHT, 36.0, "面板头高度"),
@@ -84,6 +87,11 @@ fn view_layer_has_no_raw_size_literals() {
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
+        // Quick Open（Phase 0：结果区换成 List 组件；后续改动不得回退）
+        (
+            "quick_open/delegate.rs",
+            include_str!("../src/quick_open/delegate.rs"),
+        ),
         // 连接对话框模块（M3，#14 已清零；后续改动不得回退）
         (
             "connection_dialog/render.rs",
@@ -176,6 +184,10 @@ fn ui_sources_have_no_raw_color_literals() {
         ),
         ("panels/editor.rs", include_str!("../src/panels/editor.rs")),
         ("panels/right.rs", include_str!("../src/panels/right.rs")),
+        (
+            "quick_open/delegate.rs",
+            include_str!("../src/quick_open/delegate.rs"),
+        ),
         (
             "connection_dialog/render.rs",
             include_str!("../src/components/connection_dialog/render.rs"),

@@ -15,11 +15,11 @@ use std::rc::Rc;
 use gpui_kit::base::{Selectable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
+use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, TitleBar};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Root, TitleBar};
 use gpui_kit::*;
 
 use crate::commands::{
@@ -28,6 +28,8 @@ use crate::commands::{
 use crate::panels::{
     EditorPanel, ProjectActionRequest, QueryRequest, RightSidebarPanel, Shared, SidebarPanel,
 };
+use crate::quick_open::delegate::QuickOpenDelegate;
+use crate::quick_open::model::{self, Action};
 use crate::ui;
 use mock::mock_view::{MockDetailView, focus_detail_tab};
 use settings::commands::{CloseSettings, OpenSettings};
@@ -51,6 +53,14 @@ pub struct WorkbenchView {
     right_sidebar: Option<Entity<RightSidebarPanel>>,
     /// Quick Open 输入状态（render 首次懒创建）。
     quick_open_input: Option<Entity<InputState>>,
+    /// Quick Open 结果列表（render 首次懒创建；行 / 选中 / 空态归 `List` 组件）。
+    quick_open_list: Option<Entity<ListState<QuickOpenDelegate>>>,
+    /// Quick Open 打开时「聚焦输入框」的待办标记（输入框可能上一帧才创建，先记后消费）。
+    quick_open_focus_pending: bool,
+    /// Quick Open 选中的行**业务键**（跨重算跟随的权威；组件的选中索引只是渲染锚点）。
+    quick_open_selected: Option<String>,
+    /// Quick Open 输入订阅（Change 重建结果 / PressEnter 三态确认）。
+    _quick_open_sub: Option<Subscription>,
     /// 设置页实体（首次打开时懒创建）。
     settings_page: Option<Entity<SettingsPage>>,
     /// M1 项目管理输入实体（懒创建）。
@@ -179,6 +189,10 @@ impl WorkbenchView {
             editor: None,
             right_sidebar: None,
             quick_open_input: None,
+            quick_open_list: None,
+            quick_open_focus_pending: false,
+            quick_open_selected: None,
+            _quick_open_sub: None,
             settings_page: None,
             project_inputs: None,
             project_host: Some(host),
@@ -909,7 +923,6 @@ impl WorkbenchView {
     fn render_title_bar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let pt = settings::product_tokens::get(cx);
-        let shared = self.shared.clone();
         let entity = cx.entity();
 
         // 软件图标（明亮版；暗黑版未设计，dark 主题先复用，见 theme-design.md）。
@@ -980,9 +993,8 @@ impl WorkbenchView {
             slot.into_any_element()
         };
 
-        // Quick Open 入口（点击唤起，Ctrl+P 见 commands.rs 绑定）。
-        // 320×26 居中；底色取 border 角色（dark #3C3C3C，与示意 v5 一致）。
-        let qo_shared = shared.clone();
+        // Quick Open 入口（点击唤起，Ctrl+P 见 commands.rs 绑定）：与快捷键同一入口——
+        // 打开、清空上次输入、聚焦输入框；真正输入在浮层里（单一权威输入）。
         let qo_entity = entity.clone();
         let quick_open = div()
             .id("quick-open-entry")
@@ -1000,7 +1012,7 @@ impl WorkbenchView {
                 div()
                     .text_xs()
                     .text_color(theme.colors.muted_foreground)
-                    .child("搜索或输入命令…"),
+                    .child("搜索连接、命令…"),
             )
             .child(
                 div()
@@ -1009,11 +1021,8 @@ impl WorkbenchView {
                     .text_color(theme.colors.muted_foreground)
                     .child("Ctrl+P"),
             )
-            .on_click(move |_, _, app| {
-                qo_shared.quick_open.set(true);
-                // 互斥：打开 Quick Open 时收起设置页
-                qo_shared.settings_open.set(false);
-                qo_entity.update(app, |_, cx| cx.notify());
+            .on_click(move |_, window, app| {
+                qo_entity.update(app, |this, cx| this.toggle_quick_open(window, cx));
             });
 
         // 三栏布局：左右 flex_1 占位对称，Quick Open 严格居中；
@@ -1274,27 +1283,281 @@ impl WorkbenchView {
         )
     }
 
-    // ===== Quick Open（搜索 + 命令融合） =====
+    // ===== Quick Open（统一检索 / 命令面板） =====
+    //
+    // 规格：`docs/architecture/quick_open/quick-open-prototype-design.md`。
+    // 本轮（Phase 0 第一刀）：结果区换成 `List` 组件（`QuickOpenDelegate`，行漫游 / hover /
+    // 空态归组件），键盘通道 ↑↓ / ↵（Shift+↵ 保留面板）/ Esc，打开即聚焦；
+    // 数据源仍是**本地两类**（连接 / 命令）——元数据（名称档 + 全文档）在第二刀接后台索引搜索。
 
-    fn render_quick_open(&self, cx: &mut Context<Self>) -> Option<Div> {
+    /// 打开 / 关闭 Quick Open（标题栏入口与 `Ctrl+P` 共用）。
+    ///
+    /// 打开时：清空上次输入、重置选中、置聚焦标记（输入框可能上一帧才创建）。
+    fn toggle_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = !self.shared.quick_open.get();
+        self.shared.quick_open.set(open);
+        // 互斥：Quick Open 与设置页不同时显示（两个 overlay 会互相压住）。
+        self.shared.settings_open.set(false);
+        if open {
+            self.quick_open_focus_pending = true;
+            self.quick_open_selected = None;
+            if let Some(input) = self.quick_open_input.clone() {
+                input.update(cx, |state, cx| state.set_value("", window, cx));
+            }
+            self.refresh_quick_open(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// 懒创建输入框与结果列表（render 首次调用；两者都需要 `&mut Window`）。
+    fn ensure_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quick_open_input.is_none() {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder("搜索连接、命令…（> 命令 · # 全文）")
+            });
+            self._quick_open_sub = Some(cx.subscribe_in(
+                &input,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => this.refresh_quick_open(window, cx),
+                    InputEvent::PressEnter { shift, .. } => {
+                        // ↵ 打开并关闭；Shift+↵ 保留面板。
+                        // Ctrl+↵（后台打开）待编辑器支持后接上，当前与 ↵ 同行为。
+                        this.quick_open_confirm(*shift, window, cx);
+                    }
+                    _ => {}
+                },
+            ));
+            self.quick_open_input = Some(input);
+        }
+        if self.quick_open_list.is_none() {
+            let host = cx.entity().downgrade();
+            let list = cx
+                .new(|cx| ListState::new(QuickOpenDelegate::new(host), window, cx).selectable(true));
+            self.quick_open_list = Some(list);
+        }
+    }
+
+    /// 重算结果并推给列表（输入变化 / 打开面板时调用）。
+    ///
+    /// 选中按**业务键**跟随：键还在就保留，否则落到第一行（异步回填不抢用户位置）。
+    fn refresh_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(list)) = (self.quick_open_input.clone(), self.quick_open_list.clone())
+        else {
+            return;
+        };
+        let raw = input.read(cx).value().to_string();
+        let query = model::parse(&raw);
+        let connections: Vec<(String, String)> = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .map(|c| (c.name.clone(), c.driver.clone()))
+            .collect();
+        let groups = model::build_groups(&query, &connections);
+        let selected = self
+            .quick_open_selected
+            .clone()
+            .filter(|key| {
+                groups
+                    .iter()
+                    .any(|group| group.rows.iter().any(|row| &row.key == key))
+            })
+            .or_else(|| {
+                groups
+                    .iter()
+                    .flat_map(|group| group.rows.iter())
+                    .map(|row| row.key.clone())
+                    .next()
+            });
+        self.quick_open_selected = selected.clone();
+        list.update(cx, |state, cx| {
+            state.delegate_mut().set_groups(
+                groups,
+                query.needle.clone(),
+                query.mode,
+                selected.clone(),
+                cx,
+            );
+            let target = selected
+                .as_deref()
+                .and_then(|key| state.delegate().index_of(key));
+            mirror_quick_open_selection(state, target, window, cx);
+        });
+        cx.notify();
+    }
+
+    /// ↑↓：在结果上漫游（组件只负责渲染；焦点在输入框，所以键盘由宿主接管）。
+    fn move_quick_open_selection(
+        &mut self,
+        delta: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(list) = self.quick_open_list.clone() else {
+            return;
+        };
+        let mut moved: Option<String> = None;
+        list.update(cx, |state, cx| {
+            let from = state
+                .selected_index()
+                .or_else(|| state.delegate().first_index());
+            let Some(from) = from else {
+                return;
+            };
+            let Some(target) = state.delegate().step_index(from, delta) else {
+                return;
+            };
+            state.delegate_mut().begin_host_sync();
+            state.set_selected_index(Some(target), window, cx);
+            state.delegate_mut().end_host_sync();
+            moved = state.delegate().selected_key();
+            state.scroll_to_selected_item(window, cx);
+        });
+        if let Some(key) = moved {
+            self.quick_open_selected = Some(key);
+            cx.notify();
+        }
+    }
+
+    /// ↵（输入框回车）：确认当前选中的行。
+    fn quick_open_confirm(&mut self, keep_open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(list) = self.quick_open_list.clone() else {
+            return;
+        };
+        let action = self
+            .quick_open_selected
+            .as_deref()
+            .and_then(|key| list.read(cx).delegate().action_of(key));
+        if let Some(action) = action {
+            self.execute_quick_open_row(action, keep_open, window, cx);
+        }
+    }
+
+    /// 宿主收到组件回传的选中变化（鼠标点击 / 组件内漫游）：以业务键为准。
+    pub(crate) fn set_quick_open_selection(&mut self, key: Option<String>, cx: &mut Context<Self>) {
+        if self.quick_open_selected == key {
+            return;
+        }
+        self.quick_open_selected = key;
+        cx.notify();
+    }
+
+    /// 执行一条结果——键盘 / 鼠标 / 组件确认三条路都汇到这里。
+    pub(crate) fn execute_quick_open_row(
+        &mut self,
+        action: Action,
+        keep_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            Action::NewDocument(mode) => self.new_editor_document(mode, window, cx),
+            Action::OpenLeftPanel(panel) => {
+                self.shared.active_left.set(panel);
+                self.shared.left_mode.set(SidebarMode::Expanded);
+                if panel == LeftPanel::Resources {
+                    // 与活动栏点击同一口径：激活即取一次列表（M6）。
+                    self.request_resources_refresh(cx);
+                }
+            }
+            Action::OpenRightPanel(panel) => {
+                self.shared.active_right.set(panel);
+                self.shared.right_mode.set(SidebarMode::Expanded);
+            }
+            Action::OpenSettings => {
+                self.shared.settings_open.set(true);
+            }
+            Action::HideSidebars => {
+                let s = &self.shared;
+                if s.left_mode.get() != SidebarMode::Hidden {
+                    s.left_mode_before_hidden.set(s.left_mode.get());
+                    s.left_mode.set(SidebarMode::Hidden);
+                }
+                if s.right_mode.get() != SidebarMode::Hidden {
+                    s.right_mode_before_hidden.set(s.right_mode.get());
+                    s.right_mode.set(SidebarMode::Hidden);
+                }
+            }
+            Action::RestoreSidebars => {
+                let s = &self.shared;
+                if s.left_mode.get() == SidebarMode::Hidden {
+                    s.left_mode
+                        .set(restore_snapshot(s.left_mode_before_hidden.get()));
+                }
+                if s.right_mode.get() == SidebarMode::Hidden {
+                    s.right_mode
+                        .set(restore_snapshot(s.right_mode_before_hidden.get()));
+                }
+            }
+            Action::SelectConnection(ix) => {
+                // 与侧边栏点击一致：清导航缓存，防止串数据；不自动连接。
+                self.shared.selected.set(Some(ix));
+                self.shared.invalidate_nav_cache();
+            }
+        }
+        if !keep_open {
+            self.shared.quick_open.set(false);
+        }
+        cx.notify();
+    }
+
+    fn render_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
         if !self.shared.quick_open.get() {
             return None;
         }
+        self.ensure_quick_open(window, cx);
+        // 打开即聚焦（标记在 `toggle_quick_open` 置位；输入框可能上一帧才创建）。
+        if self.quick_open_focus_pending {
+            self.quick_open_focus_pending = false;
+            if let Some(input) = self.quick_open_input.clone() {
+                let handle = input.read(cx).focus_handle(cx);
+                handle.focus(window, cx);
+            }
+        }
         let theme = cx.theme().clone();
-        let input = self.quick_open_input.clone().expect("lazy init");
-        let shared = self.shared.clone();
-        let entity = cx.entity();
-        let shared_close = shared.clone();
-        let entity_close = entity.clone();
+        let input = self
+            .quick_open_input
+            .clone()
+            .expect("quick open input lazy init");
+        let list = self
+            .quick_open_list
+            .clone()
+            .expect("quick open list lazy init");
+        let query = model::parse(&input.read(cx).value());
+        let rows = list.read(cx).delegate().row_count();
+        // 单字符门槛：元数据异步搜索至少 2 个字符（本地源不受限），此处只给提示；
+        // 元数据源本身在 Phase 1 接入（接入后这里就是“不发查询”的那道闸）。
+        let gate_hint = if !query.needle.is_empty() && !query.async_ready() {
+            "再输入 1 个字符开始搜索元数据"
+        } else {
+            ""
+        };
+        let mode_chip = match query.mode {
+            model::Mode::Command => Some((">", "命令")),
+            model::Mode::FullText => Some(("#", "元数据全文")),
+            model::Mode::Default => None,
+        };
 
-        // 分析库元数据树由编辑区自持（见 `panels-modules.md` §5 P0）：
-        // Quick Open 只取一份快照，不再直读别家的缓存字段。
-        let nav_tables = self
-            .editor
-            .as_ref()
-            .map(|editor| editor.read(cx).nav_table_names())
-            .unwrap_or_default();
-        let list = quick_open_results(&input, shared, entity, &nav_tables, cx);
+        let mut input_row = div().h_flex().items_center().gap_2();
+        input_row = input_row.child(div().flex_1().min_w_0().child(Input::new(&input)));
+        if let Some((glyph, label)) = mode_chip {
+            input_row = input_row.child(
+                div()
+                    .h_flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .rounded_sm()
+                    .bg(theme.colors.secondary)
+                    .text_xs()
+                    .text_color(theme.colors.foreground)
+                    .child(glyph)
+                    .child(label),
+            );
+        }
 
         Some(
             div()
@@ -1306,9 +1569,9 @@ impl WorkbenchView {
                 .child(
                     div()
                         // 示意 v5：面板水平居中、顶部距标题栏 42px。
-                        .mt(rems(2.625))
-                        .w(rems(35.))
-                        .max_h(rems(26.25))
+                        .mt(rems(ui::QUICK_OPEN_PANEL_TOP))
+                        .w(rems(ui::QUICK_OPEN_PANEL_WIDTH))
+                        .max_h(rems(ui::QUICK_OPEN_PANEL_MAX_HEIGHT))
                         .v_flex()
                         .gap_2()
                         .p_3()
@@ -1317,13 +1580,49 @@ impl WorkbenchView {
                         .border_color(theme.colors.border)
                         .bg(theme.colors.popover)
                         .shadow_lg()
-                        .child(Input::new(&input))
-                        .child(list.overflow_y_scrollbar()),
+                        .child(input_row)
+                        .child(
+                            List::new(&list)
+                                .max_h(rems(ui::QUICK_OPEN_LIST_MAX_HEIGHT)),
+                        )
+                        .child(
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .h(rems(ui::QUICK_OPEN_HINT_HEIGHT))
+                                .border_t_1()
+                                .border_color(theme.colors.border)
+                                .px_1()
+                                .text_xs()
+                                .text_color(theme.colors.muted_foreground)
+                                .child("↑↓ 选择 · ↵ 打开 · Shift+↵ 保留面板 · Esc 关闭")
+                                .child(if gate_hint.is_empty() {
+                                    div().ml_auto().child(format!("{rows} 条"))
+                                } else {
+                                    div().ml_auto().child(gate_hint)
+                                }),
+                        ),
                 )
-                .on_mouse_down(MouseButton::Left, move |_, _, app| {
-                    shared_close.quick_open.set(false);
-                    entity_close.update(app, |_, cx| cx.notify());
-                }),
+                .on_mouse_down(MouseButton::Left, {
+                    let shared = self.shared.clone();
+                    let entity = cx.entity();
+                    move |_, _, app| {
+                        shared.quick_open.set(false);
+                        entity.update(app, |_, cx| cx.notify());
+                    }
+                })
+                // 键盘：焦点在输入框里，单行 Input 不处理 ↑↓ / Esc（会 propagate），
+                // 因此这三个 Action 在浮层根上接住；Enter 由输入框事件给出（含 Shift 三态）。
+                .on_action(cx.listener(|this, _: &MoveUp, window, cx| {
+                    this.move_quick_open_selection(-1, window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &MoveDown, window, cx| {
+                    this.move_quick_open_selection(1, window, cx)
+                }))
+                .on_action(cx.listener(|this, _: &Escape, _window, cx| {
+                    this.shared.quick_open.set(false);
+                    cx.notify();
+                })),
         )
     }
 
@@ -1468,6 +1767,25 @@ fn restore_snapshot(mode: SidebarMode) -> SidebarMode {
     }
 }
 
+/// 把宿主的选中镜像进 Quick Open 列表（只在真的不一致时才动）。
+///
+/// 镜像期间组件回调**不回写**宿主（`begin_host_sync` / `end_host_sync` 守卫）：
+/// 镜像常发生在宿主渲染期，回写就是「更新正在被更新的实体」（GPUI 会 panic）。
+fn mirror_quick_open_selection(
+    state: &mut ListState<QuickOpenDelegate>,
+    target: Option<IndexPath>,
+    window: &mut Window,
+    cx: &mut Context<ListState<QuickOpenDelegate>>,
+) {
+    if state.selected_index() == target {
+        return;
+    }
+    state.delegate_mut().begin_host_sync();
+    state.set_selected_index(target, window, cx);
+    state.delegate_mut().end_host_sync();
+    state.scroll_to_selected_item(window, cx);
+}
+
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.area.is_none() {
@@ -1527,7 +1845,7 @@ impl Render for WorkbenchView {
         } else {
             None
         };
-        let quick_open = self.render_quick_open(cx);
+        let quick_open = self.render_quick_open(window, cx);
         let settings_panel = self.render_settings_panel(window, cx);
 
         // M1：无项目时以选择器覆盖中央区（保留五段外壳）。
@@ -1559,14 +1877,8 @@ impl Render for WorkbenchView {
             .key_context("workbench")
             .on_action({
                 let entity = cx.entity();
-                move |_: &ToggleQuickOpen, _window, cx| {
-                    entity.update(cx, |this, cx| {
-                        let open = this.shared.quick_open.get();
-                        this.shared.quick_open.set(!open);
-                        // 互斥：Quick Open 与设置页不同时显示（两个 overlay 会互相压住）
-                        this.shared.settings_open.set(false);
-                        cx.notify();
-                    });
+                move |_: &ToggleQuickOpen, window, cx| {
+                    entity.update(cx, |this, cx| this.toggle_quick_open(window, cx));
                 }
             })
             // M4：Ctrl+F 聚焦数据源导航搜索（先切到数据源面板并展开左侧 Dock）。
@@ -1707,296 +2019,4 @@ impl Render for WorkbenchView {
         }
         root
     }
-}
-
-/// Quick Open 结果列表：命令组 + 资源组（连接 / 分析表），按输入过滤。
-fn quick_open_results(
-    input: &Entity<InputState>,
-    shared: Shared,
-    entity: Entity<WorkbenchView>,
-    nav_tables: &[String],
-    cx: &mut App,
-) -> Div {
-    let theme = cx.theme();
-    let pt = settings::product_tokens::get(cx);
-    let query = input.read(cx).value().to_string();
-    let commands_only = query.trim_start().starts_with('>');
-    let needle = if commands_only {
-        query.trim_start_matches('>').trim().to_lowercase()
-    } else {
-        query.trim().to_lowercase()
-    };
-    let matches = |s: &str| needle.is_empty() || s.to_lowercase().contains(&needle);
-
-    let mut list = div().v_flex().gap_1().mt_0p5().max_h(rems(21.25));
-
-    // ---- 命令组 ----
-    let mut cmd_group = div().v_flex().gap_1();
-    cmd_group = cmd_group.child(
-        div()
-            .px_1()
-            .py_0p5()
-            .rounded_sm()
-            .bg(pt.quick_open_group_header(theme))
-            .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.colors.muted_foreground)
-            .child("命令"),
-    );
-    let commands: &[(&str, QuickOpenCommand)] = &[
-        // 新建入口放最前：Quick Open 是工作台的命令面（Ctrl+P），“新建”是最常敲的一条
-        ("新建查询", QuickOpenCommand::NewQuery),
-        ("新建笔记", QuickOpenCommand::NewNote),
-        ("新建文件", QuickOpenCommand::NewFile),
-        ("打开草稿箱", QuickOpenCommand::OpenDraft),
-        ("打开数据库导航", QuickOpenCommand::OpenDatabase),
-        ("打开资产库", QuickOpenCommand::OpenResources),
-        ("打开插件", QuickOpenCommand::OpenPlugin),
-        ("打开洞察", QuickOpenCommand::OpenInsight),
-        ("打开 Mock 生成", QuickOpenCommand::OpenMock),
-        ("打开历史", QuickOpenCommand::OpenHistory),
-        ("打开设置", QuickOpenCommand::OpenSettings),
-        ("完全隐藏侧边栏", QuickOpenCommand::HideSidebars),
-        ("恢复侧边栏", QuickOpenCommand::RestoreSidebars),
-    ];
-    let mut has_cmd = false;
-    for (label, cmd) in commands {
-        if !matches(label) {
-            continue;
-        }
-        has_cmd = true;
-        let shared = shared.clone();
-        let entity = entity.clone();
-        let cmd = *cmd;
-        cmd_group = cmd_group.child(
-            div()
-                .id(ElementId::Name(SharedString::from(format!(
-                    "qo-cmd-{label}"
-                ))))
-                .h_7()
-                .pl_2p5()
-                .pr_2p5()
-                .rounded_md()
-                .cursor_pointer()
-                .text_xs()
-                .text_color(theme.colors.foreground)
-                .on_mouse_down(MouseButton::Left, move |_, window, app| {
-                    run_quick_command(cmd, &shared, &entity, window, app);
-                })
-                .child(*label),
-        );
-    }
-    if has_cmd {
-        list = list.child(cmd_group);
-    }
-
-    // ---- 资源组：连接 + 分析表（仅非 > 前缀时展示） ----
-    if !commands_only {
-        let mut res_group = div().v_flex().gap_1();
-        res_group = res_group.child(
-            div()
-                .px_1()
-                .py_0p5()
-                .rounded_sm()
-                .bg(pt.quick_open_group_header(theme))
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.colors.muted_foreground)
-                .child("文件 / 表"),
-        );
-        let conns: Vec<(String, String)> = shared
-            .connections
-            .borrow()
-            .iter()
-            .map(|c| (c.name.clone(), c.driver.clone()))
-            .collect();
-        let mut has_res = false;
-        for (idx, (name, driver)) in conns.iter().enumerate() {
-            if !matches(name) {
-                continue;
-            }
-            has_res = true;
-            let shared = shared.clone();
-            let entity = entity.clone();
-            let name = name.clone();
-            let driver = driver.clone();
-            res_group = res_group.child(
-                div()
-                    .id(ElementId::Name(SharedString::from(format!(
-                        "qo-conn-{idx}"
-                    ))))
-                    .h_7()
-                    .pl_2p5()
-                    .pr_2p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(theme.colors.foreground)
-                    .on_mouse_down(MouseButton::Left, {
-                        let name = name.clone();
-                        let driver = driver.clone();
-                        let shared = shared.clone();
-                        let entity = entity.clone();
-                        move |_, _, app| {
-                            select_connection(idx, &name, &driver, &shared, &entity, app);
-                        }
-                    })
-                    .child(format!("{name}  ·  {driver}")),
-            );
-        }
-        let tables: Vec<String> = nav_tables.to_vec();
-        for t in tables {
-            if !matches(&t) {
-                continue;
-            }
-            has_res = true;
-            res_group = res_group.child(
-                div()
-                    .id(ElementId::Name(SharedString::from(format!("qo-table-{t}"))))
-                    .h_7()
-                    .pl_2p5()
-                    .pr_2p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child(format!("表：{t}")),
-            );
-        }
-        if has_res {
-            list = list.child(res_group);
-        }
-        if !has_res && !has_cmd {
-            list = list.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.muted_foreground)
-                    .child("无匹配结果"),
-            );
-        }
-    } else if !has_cmd {
-        list = list.child(
-            div()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .child("无匹配命令"),
-        );
-    }
-    list
-}
-
-/// Quick Open 命令集合。
-#[derive(Debug, Clone, Copy)]
-enum QuickOpenCommand {
-    NewQuery,
-    NewNote,
-    NewFile,
-    OpenDraft,
-    OpenDatabase,
-    OpenResources,
-    OpenPlugin,
-    OpenInsight,
-    OpenMock,
-    OpenHistory,
-    OpenSettings,
-    HideSidebars,
-    RestoreSidebars,
-}
-
-/// 执行 Quick Open 命令：更新 Shared 状态 + 关闭弹层 + notify（Dock 由 render 同步）。
-fn run_quick_command(
-    cmd: QuickOpenCommand,
-    shared: &Shared,
-    entity: &Entity<WorkbenchView>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    match cmd {
-        // 新建文档要 `window`（建面板），因此在命令这里直接落到宿主方法上
-        QuickOpenCommand::NewQuery => {
-            let mode = editor::model::EditorMode::Sql;
-            entity.update(cx, |this, cx| this.new_editor_document(mode, window, cx));
-        }
-        QuickOpenCommand::NewNote => {
-            let mode = editor::model::EditorMode::Analysis;
-            entity.update(cx, |this, cx| this.new_editor_document(mode, window, cx));
-        }
-        QuickOpenCommand::NewFile => {
-            let mode = editor::model::EditorMode::Text;
-            entity.update(cx, |this, cx| this.new_editor_document(mode, window, cx));
-        }
-        QuickOpenCommand::OpenDraft => {
-            shared.active_left.set(LeftPanel::Draft);
-            shared.left_mode.set(SidebarMode::Expanded);
-        }
-        QuickOpenCommand::OpenDatabase => {
-            shared.active_left.set(LeftPanel::Database);
-            shared.left_mode.set(SidebarMode::Expanded);
-        }
-        QuickOpenCommand::OpenResources => {
-            shared.active_left.set(LeftPanel::Resources);
-            shared.left_mode.set(SidebarMode::Expanded);
-            // M6：与活动栏点击同一口径——激活即取一次列表。
-            entity.update(cx, |this, cx| this.request_resources_refresh(cx));
-        }
-        QuickOpenCommand::OpenPlugin => {
-            shared.active_left.set(LeftPanel::Plugin);
-            shared.left_mode.set(SidebarMode::Expanded);
-        }
-        QuickOpenCommand::OpenInsight => {
-            shared.active_right.set(RightPanel::Insight);
-            shared.right_mode.set(SidebarMode::Expanded);
-        }
-        QuickOpenCommand::OpenMock => {
-            shared.active_right.set(RightPanel::Mock);
-            shared.right_mode.set(SidebarMode::Expanded);
-        }
-        QuickOpenCommand::OpenHistory => {
-            shared.active_right.set(RightPanel::History);
-            shared.right_mode.set(SidebarMode::Expanded);
-        }
-        QuickOpenCommand::OpenSettings => {
-            shared.settings_open.set(true);
-        }
-        QuickOpenCommand::HideSidebars => {
-            if shared.left_mode.get() != SidebarMode::Hidden {
-                shared.left_mode_before_hidden.set(shared.left_mode.get());
-                shared.left_mode.set(SidebarMode::Hidden);
-            }
-            if shared.right_mode.get() != SidebarMode::Hidden {
-                shared.right_mode_before_hidden.set(shared.right_mode.get());
-                shared.right_mode.set(SidebarMode::Hidden);
-            }
-        }
-        QuickOpenCommand::RestoreSidebars => {
-            if shared.left_mode.get() == SidebarMode::Hidden {
-                shared
-                    .left_mode
-                    .set(restore_snapshot(shared.left_mode_before_hidden.get()));
-            }
-            if shared.right_mode.get() == SidebarMode::Hidden {
-                shared
-                    .right_mode
-                    .set(restore_snapshot(shared.right_mode_before_hidden.get()));
-            }
-        }
-    }
-    shared.quick_open.set(false);
-    entity.update(cx, |_, cx| cx.notify());
-}
-
-/// Quick Open 选中连接：与侧边栏点击一致（清空导航缓存，防止串数据）。
-fn select_connection(
-    idx: usize,
-    _name: &str,
-    _driver: &str,
-    shared: &Shared,
-    entity: &Entity<WorkbenchView>,
-    cx: &mut App,
-) {
-    shared.selected.set(Some(idx));
-    shared.invalidate_nav_cache();
-    shared.invalidate_nav_cache();
-    shared.quick_open.set(false);
-    entity.update(cx, |_, cx| cx.notify());
 }

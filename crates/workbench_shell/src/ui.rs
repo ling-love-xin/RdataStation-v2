@@ -69,6 +69,16 @@ pub const QUICK_OPEN_PANEL_WIDTH: f32 = 35.0;
 pub const QUICK_OPEN_PANEL_TOP: f32 = 2.625;
 /// Quick Open 弹层最大高度（26.25rem ≈ 420px）
 pub const QUICK_OPEN_PANEL_MAX_HEIGHT: f32 = 26.25;
+/// Quick Open 结果区最大高度（21.25rem ≈ 340px）
+pub const QUICK_OPEN_LIST_MAX_HEIGHT: f32 = 21.25;
+/// Quick Open 分组头行高（1.125rem = 18px）
+pub const QUICK_OPEN_GROUP_HEADER_HEIGHT: f32 = 1.125;
+/// Quick Open 底部提示行高（1.5rem = 24px）
+pub const QUICK_OPEN_HINT_HEIGHT: f32 = 1.5;
+/// Quick Open 单组渲染上限（条；超出显示「还有 N 条」）。
+pub const QUICK_OPEN_MAX_ROWS_PER_GROUP: usize = 8;
+/// Quick Open 总渲染上限（条）。
+pub const QUICK_OPEN_MAX_ROWS: usize = 50;
 
 // ===== 列表与树（rem 基准） =====
 
