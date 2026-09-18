@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation · 草稿箱模块（一页看懂）</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
+  --card:#FFFFFF; --codebg:#F7F7F7; --shadow:0 10px 30px rgba(20,20,30,.10), 0 1px 3px rgba(20,20,30,.06);
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
+  --card:#232324; --codebg:#1A1A1B; --shadow:0 14px 40px rgba(0,0,0,.5), 0 1px 4px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);
+     font-size:13.5px;line-height:1.7;-webkit-font-smoothing:antialiased;padding:26px 18px 40px;}
+a{color:var(--primary);text-decoration:none;}
+a:hover{text-decoration:underline;}
+code,kbd{font-family:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;}
+code{background:var(--codebg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:12px;}
+kbd{border:1px solid var(--border);border-radius:4px;padding:0 5px;font-size:11px;color:var(--muted);background:var(--bg);}
+.wrap{max-width:1120px;margin:0 auto;}
+
+/* ── 顶栏 ── */
+.top{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
+.logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#F5A188,#C25B46);
+      display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;
+      box-shadow:0 2px 8px rgba(194,91,70,.35);}
+.top h1{font-size:15px;font-weight:700;letter-spacing:.2px;}
+.top .sub{color:var(--muted);font-size:11.5px;}
+.spacer{flex:1;}
+.toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;}
+.toggle:hover{background:var(--hover);border-color:var(--active-border);}
+
+/* ── 首屏 ── */
+.hero{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:30px 32px;box-shadow:var(--shadow);
+      position:relative;overflow:hidden;}
+.hero::after{content:"";position:absolute;right:-90px;top:-90px;width:260px;height:260px;border-radius:50%;
+      background:radial-gradient(circle at 30% 30%, rgba(194,91,70,.22), transparent 62%);}
+.hero .kicker{font-size:12px;color:var(--primary);font-weight:600;letter-spacing:.14em;text-transform:uppercase;}
+.hero h2{font-size:30px;line-height:1.3;margin:8px 0 10px;letter-spacing:-.2px;}
+.hero p.lead{color:var(--muted);max-width:74ch;font-size:14px;}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px;}
+.badge{border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:3px 11px;font-size:11.5px;color:var(--fg);}
+.badge.ok{border-color:var(--success);color:var(--success);}
+.badge.warn{border-color:var(--warning);color:var(--warning);}
+.badge.prim{border-color:var(--primary);color:var(--primary);}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:22px;}
+.kpi{background:var(--sidebar);border:1px solid var(--sidebar-border);border-radius:10px;padding:13px 15px;}
+.kpi .v{font-size:19px;font-weight:700;letter-spacing:-.2px;}
+.kpi .k{color:var(--muted);font-size:11.5px;margin-top:2px;}
+
+/* ── 区块 ── */
+section{margin-top:30px;}
+h3.sec{font-size:16px;font-weight:700;display:flex;align-items:center;gap:9px;margin-bottom:12px;}
+h3.sec::before{content:"";width:3px;height:16px;border-radius:2px;background:var(--primary);}
+.sec-note{color:var(--muted);font-size:12px;margin:-6px 0 12px 12px;}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:15px 16px;box-shadow:var(--shadow);}
+.card h4{font-size:13.5px;display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.card .ico{width:22px;height:22px;flex:none;border-radius:6px;background:var(--sidebar);border:1px solid var(--border);
+      display:flex;align-items:center;justify-content:center;font-size:12px;}
+.card p{color:var(--muted);font-size:12.4px;}
+.card .tagline{color:var(--fg);}
+
+/* ── 流程 ── */
+.flow{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:14px 16px;box-shadow:var(--shadow);}
+.flow + .flow{margin-top:10px;}
+.flow .fttl{font-size:13px;font-weight:600;margin-bottom:9px;display:flex;align-items:center;gap:8px;}
+.flow .fttl .dot{width:7px;height:7px;border-radius:50%;background:var(--primary);}
+.chips{display:flex;flex-wrap:wrap;align-items:center;gap:7px;}
+.chip{border:1px solid var(--border);background:var(--sidebar);border-radius:7px;padding:4px 10px;font-size:12px;}
+.chip.hot{border-color:var(--primary);color:var(--primary);}
+.chip.done{border-color:var(--success);color:var(--success);}
+.arrow{color:var(--muted);font-size:12px;}
+
+/* ── 表格 ── */
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:11px;overflow:hidden;box-shadow:var(--shadow);}
+th,td{text-align:left;padding:9px 13px;font-size:12.5px;border-bottom:1px solid var(--border);vertical-align:top;}
+th{background:var(--sidebar);font-weight:600;font-size:12px;color:var(--muted);}
+tr:last-child td{border-bottom:none;}
+td code{font-size:11.5px;}
+
+/* ── 架构图 ── */
+.arch{background:var(--card);border:1px solid var(--border);border-radius:11px;padding:18px;box-shadow:var(--shadow);}
+.layer{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.layer .name{width:150px;flex:none;font-size:12.5px;font-weight:600;}
+.layer .body{flex:1;display:flex;flex-wrap:wrap;gap:7px;}
+.box{border:1px solid var(--border);background:var(--sidebar);border-radius:7px;padding:4px 10px;font-size:12px;}
+.box.own{border-color:var(--primary);color:var(--primary);}
+.box.mid{border-color:var(--info);color:var(--info);}
+.vline{margin:2px 0 8px 150px;color:var(--muted);font-size:12px;}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+pre{background:var(--codebg);border:1px solid var(--border);border-radius:10px;padding:13px 15px;overflow:auto;font-size:12px;line-height:1.65;}
+.tip{color:var(--muted);font-size:12px;margin-top:8px;}
+.foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);color:var(--muted);font-size:11.5px;display:flex;flex-wrap:wrap;gap:14px;}
+@media (max-width:760px){ .split{grid-template-columns:1fr;} .layer .name{width:110px;} .hero h2{font-size:24px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <div class="logo">RDS</div>
+    <div>
+      <h1>草稿箱 · Scratchpad</h1>
+      <div class="sub">RdataStation v2 模块宣传页 · 一页看懂它做什么、怎么运转、做到哪了</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'">切换明暗</button>
+  </div>
+
+  <!-- ── 首屏 ── -->
+  <div class="hero">
+    <div class="kicker">项目即实例 · 草稿箱即项目的一部分</div>
+    <h2>每个项目自带的草稿区：<br>看得见、跟项目走、和编辑器与数据源打通</h2>
+    <p class="lead">
+      草稿箱不是应用级的临时回收站，而是<strong>项目目录里一个看得见的文件夹</strong>
+      （<code>{项目}/scratchpad/</code>）。随手写的 SQL、拉下来的测试数据、待整理的脚本都放这里：
+      它随项目一起备份、迁移、进版本库；内部元数据与回收站收在 <code>.RSmeta/</code> 里，
+      面板永远不必过滤自己的内部文件。
+    </p>
+    <div class="badges">
+      <span class="badge ok">Phase A/B 已落地</span>
+      <span class="badge prim">Phase C 5 / 6</span>
+      <span class="badge">36 项 crate 单测 · 217 项编辑器单测</span>
+      <span class="badge">渲染期零 I/O</span>
+      <span class="badge">主题零裸色值 · 尺寸零裸 px</span>
+      <span class="badge warn">提升为分析资源 = Phase D</span>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="v">1 个可见模块根</div><div class="k">草稿本体全在 <code>{项目}/scratchpad/</code>，二进制一样能放</div></div>
+      <div class="kpi"><div class="v">项目级回收站</div><div class="k">草稿与将来的资源删除共用一个回收站，条目带来源</div></div>
+      <div class="kpi"><div class="v">后台单工作线程</div><div class="k">加载 / 导入 / 搜索 / 替换 / 差异全在后台，序号防过期</div></div>
+      <div class="kpi"><div class="v">只存连接 ID</div><div class="k">草稿记「上次用哪个数据源」，凭据始终留在凭据库</div></div>
+    </div>
+  </div>
+
+  <!-- ── 核心特点 ── -->
+  <section>
+    <h3 class="sec">核心特点</h3>
+    <div class="sec-note">每一条都能在代码里指到落点（见文末文档索引）。</div>
+    <div class="grid">
+      <div class="card">
+        <h4><span class="ico">📁</span>可见的模块根</h4>
+        <p><span class="tagline">草稿就是项目里的普通文件。</span>内容在 <code>{项目}/scratchpad/</code>，
+        内部态（引用 + 文件元数据）在 <code>.RSmeta/scratchpad/config.json</code>，回收站在 <code>.RSmeta/trash/</code>；
+        旧版 <code>.scratchpad/</code> 一次性迁移（幂等、非破坏、同名不覆盖）。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⬇</span>导入 vs 🔗 引用：两种语义分得清</h4>
+        <p><strong>导入</strong>＝复制进草稿箱（计入项目体积、随项目迁移）；
+        <strong>引用</strong>＝只记绝对路径 + 别名（不复制、可能失效）。
+        失效项置灰并标「（丢失）」，可 <code>⟲</code> 重新指向、改名、在文件管理器里打开。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">🗑</span>项目级回收站 + 5 秒撤销</h4>
+        <p>删除进项目回收站（带来源模块与原始相对路径），还原只接受草稿箱自己的条目；
+        删除后底部出现撤销栏，5 秒后自动消失，点一下即还原。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">🔍</span>两种搜索：文件名 / 内容</h4>
+        <p>文件名模式实时过滤并自动展开命中子树；内容模式支持正则与大小写，
+        命中带前后各 2 行上下文、<strong>行内高亮</strong>，500 条截断、单文件 30 秒超时。
+        结果落在<strong>中央编辑区</strong>，侧栏只承载输入与开关。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">🛠</span>批量替换，原子写回</h4>
+        <p>结果面板内嵌替换栏：先给预览计数（「将替换 N 处 · M 个文件」），
+        再一次性「匹配 → 逐文件写回 → 重新搜索」，无命中不写盘，正则支持 <code>$1</code>，
+        字面量模式不解析 <code>$</code>；只读项目直接拒绝。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">📝</span>双击就进编辑器</h4>
+        <p>双击 / <kbd>Enter</kbd> / 右键「打开」→ 中央编辑器；<strong>同路径只激活不重读</strong>，
+        不会冲掉未保存的修改。打开时按草稿记过的连接<strong>预选数据源</strong>，
+        在编辑器里跑一次查询后，用过的连接会被回写记住。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">●</span>脏点回显</h4>
+        <p>编辑器里有未保存修改的草稿，树上行尾出现圆点（只有文件打点）；
+        <kbd>Ctrl+S</kbd> 存回后自动消失，最迟 1.2 秒内刷新——不用切面板也知道谁还没存。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⚖</span>冲突不靠猜：内容说了算</h4>
+        <p>磁盘被外部改了、而编辑器里还改着 → 侧栏出现<strong>冲突条</strong>：
+        「差异」把行级对比投到中央编辑区（左=磁盘 / 右=编辑器，行号 + 红绿），
+        「重载」照磁盘重来，「忽略」保留手头的改动。判据是<strong>内容</strong>不是时间戳——
+        外部改动其实已被写回时不会误报。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">🖱</span>拖进编辑器就插入</h4>
+        <p>抓住草稿文件名拖到编辑器文本区 → 文件内容<strong>插到光标处</strong>（有选区则替换）。
+        载荷只带路径，内容在落下那一刻才读——中途放弃不留负担。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⌨</span>键盘与右键都顺手</h4>
+        <p><kbd>Ctrl+A</kbd> 全选 · <kbd>F2</kbd> 重命名 · <kbd>Del</kbd> 删除（带撤销）·
+        <kbd>Ctrl+N</kbd> 新建 · <kbd>↑↓</kbd> 导航（自动滚入视口）· <kbd>Esc</kbd> 取消内联编辑 ·
+        右键菜单：打开 / 打开位置 / 重命名 / 剪切 / 复制 / 删除。多选支持 <kbd>Ctrl</kbd> 点选与 <kbd>Shift</kbd> 范围。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⚡</span>界面永不发卡</h4>
+        <p>渲染期<strong>零 I/O</strong>：加载、导入、粘贴、清空回收站、搜索、替换、差异计算全部入队到
+        单个后台工作线程（tokio 运行时），视图 60 ms 轮询回填，<strong>请求序号</strong>丢弃过期结果；
+        树用虚拟列表只画可视区行。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">🔒</span>安全与边界写死在代码里</h4>
+        <p>路径防护拒绝 <code>..</code> 穿越与点前缀内部路径；只读项目全禁写并给原因；
+        草稿只存连接 <strong>ID</strong>，凭据始终在凭据库（AES-256-GCM）；
+        颜色一律取主题 token，尺寸登记在 <code>workbench_shell/src/ui.rs</code>。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 三条主流程 ── -->
+  <section>
+    <h3 class="sec">三条主流程</h3>
+    <div class="sec-note">从左到右读；标绿的是已落地环节。</div>
+
+    <div class="flow">
+      <div class="fttl"><span class="dot"></span>① 草稿自身的闭环</div>
+      <div class="chips">
+        <span class="chip done">＋ 新建（模板：空白/SQL/Python/Markdown/JSON）</span><span class="arrow">→</span>
+        <span class="chip done">🗀 落点＝选中文件夹（否则模块根）</span><span class="arrow">→</span>
+        <span class="chip done">✂ ⧉ 📋 剪切 / 复制（文件夹递归）</span><span class="arrow">→</span>
+        <span class="chip done">🗑 删除 → 项目回收站 + 5s 撤销栏</span><span class="arrow">→</span>
+        <span class="chip done">↻ 还原 / 清空（只认草稿来源）</span>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="fttl"><span class="dot"></span>② 与编辑器 / 数据源联动</div>
+      <div class="chips">
+        <span class="chip done">双击打开（同路径只激活）</span><span class="arrow">→</span>
+        <span class="chip hot">按 file_meta 预选连接</span><span class="arrow">→</span>
+        <span class="chip done">执行查询</span><span class="arrow">→</span>
+        <span class="chip hot">回写「最近用的连接」</span><span class="arrow">→</span>
+        <span class="chip done">Ctrl+S 存回</span><span class="arrow">→</span>
+        <span class="chip done">脏点随存消失</span><span class="arrow">→</span>
+        <span class="chip done">外部改动 → 冲突条 → 差异 / 重载 / 忽略</span>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="fttl"><span class="dot"></span>③ 找东西与批量改</div>
+      <div class="chips">
+        <span class="chip done">文件名过滤（命中子树自动展开）</span><span class="arrow">或</span>
+        <span class="chip done">内容搜索（.* 正则 / Aa 大小写 / ⏎）</span><span class="arrow">→</span>
+        <span class="chip done">结果落中央编辑区（上下文 + 行内高亮）</span><span class="arrow">→</span>
+        <span class="chip hot">点命中标题打开该草稿</span><span class="arrow">→</span>
+        <span class="chip done">替换栏：预览计数 → 全部替换 → 自动刷新</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 架构 ── -->
+  <section>
+    <h3 class="sec">架构：依赖只向下，能力走端口</h3>
+    <div class="arch">
+      <div class="layer">
+        <div class="name">app（外壳 / 窗口）</div>
+        <div class="body"><span class="box">Root · 键位注册 · 主循环</span></div>
+      </div>
+      <div class="vline">▼ 依赖</div>
+      <div class="layer">
+        <div class="name">workbench（宿主）</div>
+        <div class="body">
+          <span class="box">WorkbenchView（打开草稿 → 编辑器 · 执行回写泵）</span>
+          <span class="box">SidebarPanel（转发渲染）</span>
+          <span class="box mid">ScratchpadHost 实现</span>
+        </div>
+      </div>
+      <div class="vline">▼ 依赖（反向不存在）</div>
+      <div class="layer">
+        <div class="name">scratchpad（本模块）</div>
+        <div class="body">
+          <span class="box own">ScratchpadView 面板视图</span>
+          <span class="box own">ScratchpadStore 文件语义</span>
+          <span class="box own">jobs 后台任务</span>
+          <span class="box own">trash 项目回收站</span>
+          <span class="box own">watch notify 监控</span>
+          <span class="box own">ScratchpadHost 端口定义</span>
+        </div>
+      </div>
+      <div class="vline">▼ 依赖</div>
+      <div class="layer">
+        <div class="name">底座</div>
+        <div class="body">
+          <span class="box">workbench_shell（尺寸常量 / 面板枚举）</span>
+          <span class="box">gpui-kit（UI 组件与主题）</span>
+          <span class="box">shared（跨 crate 载荷 / 错误）</span>
+        </div>
+      </div>
+      <div class="split" style="margin-top:14px">
+        <div>
+          <pre>crates/scratchpad/src/
+├─ scratchpad_view.rs   面板视图（工具栏/树/冲突条/Diff 面板）
+├─ host.rs              ScratchpadHost：宿主能力的唯一入口
+├─ jobs.rs              后台单工作线程（加载/导入/搜索/替换/差异）
+├─ store.rs             文件语义：CRUD/复制/搜索/替换/Diff/元数据/路径防护
+├─ trash.rs             项目级回收站（清单 + 来源 + 原路径）
+├─ watch.rs             notify 监控 → 变更标记（去抖重拉）
+├─ models.rs            域模型（含 FileMeta 预选口径）
+└─ commands.rs          键盘动作</pre>
+        </div>
+        <div>
+          <pre>{项目}/
+├─ scratchpad/           ← 草稿本体（可见、随项目走）
+│  ├─ 订单分析.sql
+│  └─ data/
+└─ .RSmeta/
+   ├─ scratchpad/
+   │  └─ config.json     ← 外部引用 + 文件元数据（连接 ID）
+   └─ trash/
+      └─ &lt;id&gt;/
+         ├─ payload/     ← 被删文件本体
+         └─ manifest.json ← 来源模块 + 原相对路径</pre>
+        </div>
+      </div>
+      <div class="tip">
+        铁律：<code>scratchpad</code> 不依赖 <code>workbench</code>（宿主能力经 <code>ScratchpadHost</code> 端口注入）·
+        <code>.RSmeta</code> 不经 API 读写（点前缀路径一律拒绝）· 状态不放进程单例（项目态挂在窗口）·
+        <code>render</code> 只读（I/O 走事件路径或后台任务）。
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 状态 ── -->
+  <section>
+    <h3 class="sec">做到哪了</h3>
+    <table>
+      <thead><tr><th style="width:150px">阶段</th><th>内容</th><th style="width:110px">状态</th></tr></thead>
+      <tbody>
+        <tr><td>Phase A · 地基</td><td>模块根 + 内部态隔离 + 旧布局迁移；路径防护；项目会话接线</td><td><span class="badge ok">已落地</span></td></tr>
+        <tr><td>Phase B · 面板闭环</td><td>新建（含模板）/重命名/删除撤销/移动/递归复制/多选/右键/键盘；导入与引用；内容搜索与替换；虚拟列表与空态；文件监控</td><td><span class="badge ok">已落地</span></td></tr>
+        <tr><td>Phase C · 编辑器联动</td><td>打开（同路径只激活）✅ · 连接预选 ✅ · 执行后回写 ✅ · 脏点 ✅ · 冲突 Diff ✅ · 拖入编辑器插入 ✅</td><td><span class="badge prim">5 / 6</span></td></tr>
+        <tr><td>Phase D · 生态</td><td>提升为分析资源（移动 + 只读存档）、取回（检出）、版本</td><td><span class="badge warn">依赖分析资源模块</span></td></tr>
+        <tr><td>待补（明确记录）</td><td>系统文件管理器拖文件进树导入（当前无 OS 拖放入口，先用工具栏 <code>⬇</code>）· 命中跳转到具体行 · 工具栏按钮 hover 提示</td><td><span class="badge">已知缺口</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ── 上手 ── -->
+  <section>
+    <h3 class="sec">3 分钟上手</h3>
+    <div class="grid">
+      <div class="card">
+        <h4><span class="ico">1</span>新建</h4>
+        <p>工具栏 <code>＋</code>，输名字、点模板 chip（自动补后缀），<kbd>Enter</kbd> 提交。
+        想放进某个文件夹就先选中它。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">2</span>写与跑</h4>
+        <p>双击打开 → 在中央编辑器里写 SQL → 执行（连接会自动预选上次那个）→ <kbd>Ctrl+S</kbd> 存回。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">3</span>找与改</h4>
+        <p>搜索行切到「内容」模式，开 <code>.*</code> 或 <code>Aa</code>，<kbd>⏎</kbd> 运行；
+        点命中标题跳到文件，或在替换栏一次改完。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">4</span>出事时</h4>
+        <p>删错了 → 撤销栏点一下；外部改了又冲突 → 冲突条看差异后选「重载」或「忽略」。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 验证 ── -->
+  <section>
+    <h3 class="sec">怎么验证它没坏</h3>
+    <pre># 类型检查（必须 -j 2：并发链接重型 crate 会耗尽内存）
+cargo check -p rds-scratchpad -p rds-workbench -p rds-app --all-targets -j 2
+
+# 模块单测：域逻辑 + 面板纯函数 + 后台任务（36 项）
+cargo test -p rds-scratchpad -j 2 --lib
+
+# 宿主侧联动（回执 → 相对路径映射、编辑器插入等）
+cargo test -p rds-workbench --lib -j 2
+cargo test -p rds-editor -j 2 --lib     # 217 项，含编辑器侧回归</pre>
+    <div class="tip">单测不覆盖窗口级交互（多选、剪贴板、虚拟列表、冲突条），那部分按使用手册 §9 的验收清单人工走。</div>
+  </section>
+
+  <div class="foot">
+    <span>文档索引：模块入口 <code>docs/architecture/scratchpad/README.md</code></span>
+    <span>架构与数据流 <code>scratchpad-architecture.md</code></span>
+    <span>原型 <code>scratchpad-prototype-design.md</code> · <code>scratchpad-prototype.html</code></span>
+    <span>进度 <code>scratchpad-dev-plan.md</code></span>
+    <span>使用手册 <code>scratchpad-user-guide.md</code></span>
+    <span>本页 = 宣传页（自包含 HTML，可直接分享）</span>
+  </div>
+</div>
+</body>
+</html>

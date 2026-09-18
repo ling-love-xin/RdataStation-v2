@@ -129,6 +129,7 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-wo
 | --- | --- |
 | `README.md`（本文） | 模块入口：**从哪开始读** |
 | `scratchpad-architecture.md` | **为什么这样设计 / 怎么运转**：不变式 / 概念模型 / 存储布局 / 回收站与元数据 / 数据流 / 决策表 / 降级 / 测试策略 / 已知问题（权威） |
+| `scratchpad-showcase.html` | **宣传页 / 一页看懂**（自包含 HTML，明暗可切）：定位与关键数字 / 12 个核心特点 / 三条主流程 / 分层架构与目录图 / 阶段状态 / 3 分钟上手 / 验证命令 |
 | `scratchpad-prototype-design.md` | **长什么样**：面板布局 / 树与分组 / 交互规格 / 主题映射 / 落点映射 |
 | `scratchpad-prototype.html` | 可交互原型（RDS Light/Dark，可切主题） |
 | `scratchpad-dev-plan.md` | **做什么、做到哪**：Phase 划分 / 逐轮进度记录 / 测试场景 / 风险 / 映射 |
@@ -139,8 +140,9 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-wo
 
 | 项 | 归属 | 说明 |
 | --- | --- | --- |
-| 双击打开 → 编辑器草稿模式（`Ctrl+S` 回存、`file_meta.last_connection_id` 恢复、脏点、冲突 Diff） | Phase C（依赖 `editor`） | 见 `scratchpad-dev-plan.md` §2 Phase C |
-| 拖放（外部文件导入 / 树节点拖入编辑区） | Phase C | 同上 |
-| 文件监控（`notify`）：外部修改/删除感知 | Phase A 余项 | `state.rs` 的 `watcher_active` 已预留 |
+| 系统文件拖入树导入 | Phase C 余项 | 仓库里目前无 OS 拖放入口（无 `FileDropEvent` / `ExternalPaths`）；先确认 gpui-kit 是否转发平台事件，之前用工具栏 `⬇` |
+| 命中跳转到具体行 | Phase C 余项 | 已能点命中打开文件；跳行要编辑器跳行端口（见 `scratchpad-dev-plan.md` “十九次”） |
+| 工具栏按钮 hover 提示 | 对齐原型 | 原型 HTML 用 `title=`；gpui-kit 有 `.tooltip()` 可接 |
 | 提升 / 存档只读 / 取回 / 版本；资源侧回收站统一展示 | Phase D（依赖 `analytics_resource`） | 架构 §9.3 |
+| 冲突改真模态对话框（可选） | 待拍板 | 现为“冲突条 + 中央 Diff 面板”（内容等价、形式不同）；改模态需挂宿主 `open_dialog` 层 |
 | 引用目录可展开浏览（当前只作入口） | 待拍板 | 依赖「引用目录是否计入树」的产品决定 |
