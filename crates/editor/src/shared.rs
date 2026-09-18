@@ -518,6 +518,14 @@ impl EditorShared {
         self.completion.borrow().is_some()
     }
 
+    /// 【B9 切片二】模板片段（菜单弹出时读；未接端口 = 空）
+    ///
+    /// 与 [`Self::completion_catalog`] 同一口径：端口实现必须是**内存读**。
+    pub fn completion_templates(&self) -> Vec<crate::completion::TemplateSnippet> {
+        let port = self.completion.borrow();
+        port.as_ref().map(|port| port.templates()).unwrap_or_default()
+    }
+
     /// 某文档当前的**候选目录**（**编辑路径可调**：实现必须是内存快照；未绑定连接 = 空目录）
     pub fn completion_catalog(&self, document: &DocumentId) -> Catalog {
         let (connection, channel) = {

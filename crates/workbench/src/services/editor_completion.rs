@@ -31,7 +31,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use editor::channel::ExecChannel;
-use editor::completion::{Candidate, CandidateKind, Catalog, CompletionPort};
+use editor::completion::{Candidate, CandidateKind, Catalog, CompletionPort, TemplateSnippet};
 
 use database::cache::NavCache;
 use engine::duckdb::federation::{registry::MountedSource, session as fed_session};
@@ -50,6 +50,8 @@ pub struct WorkbenchCompletion {
     loaded: Arc<Mutex<HashMap<String, Catalog>>>,
     /// 正在载的 conn_id（去重：同一连接同时只载一次）
     loading: Arc<Mutex<HashSet<String>>>,
+    /// 【B9 切片二】模板片段（启动时一次性预载；内存读——菜单弹出时会问它）
+    templates: Arc<Mutex<Vec<TemplateSnippet>>>,
 }
 
 impl WorkbenchCompletion {
@@ -58,7 +60,22 @@ impl WorkbenchCompletion {
             shared,
             loaded: Arc::new(Mutex::new(HashMap::new())),
             loading: Arc::new(Mutex::new(HashSet::new())),
+            templates: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// 模板的**一次性预载**（启动时调；读完就不再碰库）
+    ///
+    /// 为什么不懒加载：模板菜单弹出时读它，而菜单不能在渲染路径上做 I/O。一次读完最省事。
+    /// 读不到（全局库未就绪）就空着——菜单不摆那一项，不是报错。
+    fn schedule_template_load(&self) {
+        let templates = self.templates.clone();
+        std::thread::spawn(move || {
+            let loaded = load_templates();
+            if let Ok(mut slot) = templates.lock() {
+                *slot = loaded;
+            }
+        });
     }
 
     /// 原始目录（命中即给；未命中就安排一次后台预载，本次给空）
@@ -121,6 +138,14 @@ impl CompletionPort for WorkbenchCompletion {
             add_federated_source(&self, entry, &mut catalog);
         }
         catalog
+    }
+
+    /// 【B9 切片二】模板片段（内存读：启动时那份预载；没载好就是空）
+    fn templates(&self) -> Vec<TemplateSnippet> {
+        self.templates
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -190,9 +215,38 @@ fn load_raw_catalog(conn_id: &str, project_root: Option<&str>) -> Catalog {
     catalog
 }
 
+/// 【B9 切片二】把模板片段从库里读出来（**后台线程里跑**：这里允许 I/O）
+///
+/// 读不到（全局库未就绪 / 查询失败）就返回空：菜单不摆那一项，而不是报一个用户看不懂的错。
+fn load_templates() -> Vec<TemplateSnippet> {
+    let Some(manager) = engine::migration::get_global_db_manager() else {
+        return Vec::new();
+    };
+    let Ok(store) = manager.get_sql_template_store() else {
+        return Vec::new();
+    };
+    let Ok(rows) = store.get_all() else {
+        return Vec::new();
+    };
+    rows.into_iter().map(to_snippet).collect()
+}
+
+/// 库里的行 → 编辑器的片段（只留名字 / 内容 / 说明）
+fn to_snippet(template: engine::persistence::sql_template_store::SqlTemplate) -> TemplateSnippet {
+    TemplateSnippet {
+        id: template.id,
+        name: template.name,
+        content: template.content,
+        description: template.description.filter(|text| !text.is_empty()),
+    }
+}
+
 /// 把补全端口接到编辑器共享状态上（**启动装配调用一次**）
 pub fn attach(shared: &editor::shared::EditorShared, workbench: &Shared) {
-    shared.attach_completion(Rc::new(WorkbenchCompletion::new(workbench.clone())));
+    let port = WorkbenchCompletion::new(workbench.clone());
+    // 模板预载一次（内存读给菜单用；读不到就空着）
+    port.schedule_template_load();
+    shared.attach_completion(Rc::new(port));
 }
 
 #[cfg(test)]
@@ -283,6 +337,27 @@ mod tests {
         assert!(load_raw_catalog("P_completion_raw", None).is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 【B9 切片二】库里的行 → 编辑器片段：只留名字 / 内容 / 说明，空说明当“无”
+    #[test]
+    fn a_template_row_becomes_a_snippet_without_the_storage_fields() {
+        let row = engine::persistence::sql_template_store::SqlTemplate {
+            id: "builtin_select_all".to_string(),
+            name: "查询所有记录".to_string(),
+            content: "SELECT * FROM {table};".to_string(),
+            db_type: None,
+            category: "查询".to_string(),
+            description: Some(String::new()),
+            tags: None,
+            is_builtin: true,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        let snippet = super::to_snippet(row);
+        assert_eq!(snippet.name, "查询所有记录");
+        assert_eq!(snippet.content, "SELECT * FROM {table};");
+        assert_eq!(snippet.description, None, "空说明不该摆一个空字符串");
     }
 
     /// 端口：未绑定连接给空；未载过时先给空并安排预载（这一拍不阻塞）

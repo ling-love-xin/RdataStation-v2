@@ -1348,6 +1348,11 @@ impl EditorHostPanel {
             Ok(source) => translate::targets_for(source),
             Err(_) => translate::TARGETS.to_vec(),
         };
+        // 【B9 切片二】模板片段（内存读：菜单弹出时读一次；没模板 / 没接端口就不摆这项）
+        let templates = {
+            let items = self.shared.completion_templates();
+            (!items.is_empty()).then_some(items)
+        };
 
         Button::new("editor-more")
             .ghost()
@@ -1380,6 +1385,26 @@ impl EditorHostPanel {
                         }
                         sub
                     }
+                })
+                // 【B9 切片二】插入模板（来自 `sql_template_store`；没模板就不摆这一项）
+                .when_some(templates.clone(), |menu, templates| {
+                    menu.submenu("插入模板", window, cx, {
+                        let entity = entity.clone();
+                        move |sub, _window, _cx| {
+                            let mut sub = sub;
+                            for (index, template) in templates.iter().enumerate() {
+                                let entity = entity.clone();
+                                sub = sub.item(PopupMenuItem::new(template.name.clone()).on_click(
+                                    move |_, window, app| {
+                                        entity.update(app, |panel, cx| {
+                                            panel.insert_template(index, window, cx);
+                                        });
+                                    },
+                                ));
+                            }
+                            sub
+                        }
+                    })
                 })
             })
     }
@@ -1466,6 +1491,92 @@ impl EditorHostPanel {
         cx: &mut Context<Self>,
     ) {
         self.format_document(window, cx);
+    }
+
+    /// `Ctrl+Space`：手动请一次补全（B9 切片二）
+    ///
+    /// 打字触发那条路由内核管（`is_completion_trigger`）；这条是**用户明确要候选**——
+    /// 所以候选与打字那条**同一份**（`view/completion.rs::items_at`），只是替换范围改由
+    /// 我们算（光标前的标识符）。拒绝的理由要说出来（文本模式 / 只读 / 没候选）。
+    pub(crate) fn on_trigger_completion(
+        &mut self,
+        _: &crate::commands::TriggerCompletion,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.trigger_completion(cx);
+    }
+
+    /// 手动补全的落地（动作与测试都走它）
+    pub(crate) fn trigger_completion(&mut self, cx: &mut Context<Self>) {
+        if !self.shared.completion_enabled(&self.document) {
+            // 三档拒绝理由分开说：文本模式 / 只读 / 大文件档位——“按了没反应”是不允许的
+            let reason = self
+                .with_document(|doc| {
+                    if doc.mode() != EditorMode::Sql {
+                        Some("文本模式不解析 SQL（补全是 SQL 模式的能力）".to_string())
+                    } else if !doc.read_only().can_edit() {
+                        Some("文档只读，无法补全".to_string())
+                    } else if doc.tier().disables_completion() {
+                        Some("文件太大（超大文件档位关掉了补全）".to_string())
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
+                .unwrap_or_else(|| "当前不可补全".to_string());
+            self.set_message(Some(reason), cx);
+            return;
+        }
+        let (text, offset) = {
+            let state = self.editor.read(cx);
+            (state.value().to_string(), state.cursor())
+        };
+        let (start, query, items) = completion::items_at(&self.shared, &self.document, &text, offset);
+        if items.is_empty() {
+            self.set_message(
+                Some("没有可补的候选（元数据可能还没载好，或光标处认不出上下文）".to_string()),
+                cx,
+            );
+            return;
+        }
+        self.editor.update(cx, |state, cx| {
+            state.present_completion_items(start, query, items, cx);
+        });
+        self.set_message(None, cx);
+    }
+
+    /// 【B9 切片二】插入一条模板片段（「⋯ 更多 ▾ ▸ 插入模板」调用）
+    ///
+    /// 插入后**选中 `{table}` 占位符**：用户接着敲表名就把它覆写了。
+    /// 只读与文本模式在这里就拒（与其它写文本的动作同口径）。
+    pub(crate) fn insert_template(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor_read_only() {
+            self.set_message(Some("文档只读，无法插入模板".to_string()), cx);
+            return;
+        }
+        let templates = self.shared.completion_templates();
+        let Some(template) = templates.get(index) else {
+            return;
+        };
+        let content = template.content.clone();
+        let name = template.name.clone();
+        let start = {
+            let state = self.editor.read(cx);
+            state.cursor()
+        };
+        self.editor
+            .update(cx, |state, cx| state.insert(content.clone(), window, cx));
+        if let Some((from, to)) = crate::completion::placeholder_range(&content) {
+            self.editor
+                .update(cx, |state, cx| state.set_selected_range(start + from..start + to, cx));
+        }
+        self.set_message(Some(format!("已插入模板「{name}」")), cx);
     }
 
     /// `Ctrl+/`：行注释开关
@@ -1950,6 +2061,20 @@ impl EditorHostPanel {
     /// 当前选中结果集的可重跑 SQL / 可复制（供测试断言按钮显隐）
     pub fn result_actions_for_test(&self) -> (Option<String>, bool) {
         (self.result_sql.clone(), self.result_can_copy)
+    }
+
+    /// 【B9 切片二】补全弹层状态（供测试断言“真的弹了”、查询词与候选）
+    ///
+    /// 读的是内核的 `completion_menu_state()`（`#[doc(hidden)] pub`）——**不是我们的副本**：
+    /// 断言的就是内核眼里“弹层开着”这件事。
+    pub fn completion_menu_for_test(&self, cx: &App) -> (bool, String, Vec<String>) {
+        let state = self.editor.read(cx);
+        let menu = state.completion_menu_state();
+        (
+            menu.open,
+            menu.query.clone(),
+            menu.items.iter().map(|item| item.label.clone()).collect(),
+        )
     }
 
     /// 【B6】错误卡片的内容（供测试断言摘要与定位文案）
@@ -3550,6 +3675,7 @@ impl Render for EditorHostPanel {
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_format))
             .on_action(cx.listener(Self::on_toggle_comment))
+            .on_action(cx.listener(Self::on_trigger_completion))
             .on_action(cx.listener(Self::on_execute_sql))
             .on_action(cx.listener(Self::on_execute_all));
         // 工具栏（②）：模式指示器在这里，模式不再是只能从状态栏读到的短标签

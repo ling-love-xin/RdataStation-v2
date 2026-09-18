@@ -27,6 +27,7 @@ actions!(
         FormatDocument,
         CloseDocument,
         ExecuteSql,
-        ExecuteAll
+        ExecuteAll,
+        TriggerCompletion
     ]
 );

@@ -21,7 +21,10 @@ use gpui_kit::{
     Render, Styled as _, TestAppContext, VisualTestContext, Window,
 };
 
-use crate::commands::{ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment};
+use crate::commands::{
+    ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment, TriggerCompletion,
+};
+use crate::completion::{Candidate, CandidateKind, Catalog};
 use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
 use crate::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
 use crate::connection::{ConnectionOption, ConnectionsPort};
@@ -75,6 +78,7 @@ fn bind_editor_keys(cx: &mut TestAppContext) {
             KeyBinding::new("ctrl-enter", ExecuteSql, Some("editor")),
             KeyBinding::new("ctrl-shift-enter", ExecuteAll, Some("editor")),
             KeyBinding::new("ctrl-shift-f", FormatDocument, Some("editor")),
+            KeyBinding::new("ctrl-space", TriggerCompletion, Some("editor")),
         ]);
     });
 }
@@ -4926,6 +4930,155 @@ fn the_session_snapshot_carries_the_connection_binding(cx: &mut TestAppContext) 
         .update(|_window, cx| panel.read(cx).session_snapshot(cx))
         .expect("有路径就该存会话");
     assert_eq!(snapshot.connection.as_deref(), Some("P_orders"));
+}
+
+/// 【B9 切片二】保补全端口的假实现：一份目录 + 一批模板（都是内存读）
+struct FakeCompletion {
+    catalog: Catalog,
+    templates: Vec<crate::completion::TemplateSnippet>,
+}
+
+impl crate::completion::CompletionPort for FakeCompletion {
+    fn catalog(&self, conn_id: Option<&str>, _channel: ExecChannel) -> Catalog {
+        // 与真实实现同一口径：未绑定连接不给候选
+        match conn_id {
+            Some(_) => self.catalog.clone(),
+            None => Catalog::default(),
+        }
+    }
+
+    fn templates(&self) -> Vec<crate::completion::TemplateSnippet> {
+        self.templates.clone()
+    }
+}
+
+fn snippet(name: &str, content: &str) -> crate::completion::TemplateSnippet {
+    crate::completion::TemplateSnippet {
+        id: format!("builtin_{name}"),
+        name: name.to_string(),
+        content: content.to_string(),
+        description: None,
+    }
+}
+
+/// 【B9 切片二】`Ctrl+Space` 手动补全：候选真的弹出来（走真按键路径）
+#[gpui_kit::test]
+fn ctrl_space_presents_the_completion_menu(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select * from ord", EditorMode::Sql);
+    // 端口只在**绑定了连接**时给候选（未绑定 = 不猜是哪条连接）——所以这里先绑一条
+    shared.update(|service| service.set_connection(&id, Some("P_orders".to_string())));
+    shared.attach_completion(Rc::new(FakeCompletion {
+        catalog: Catalog {
+            objects: vec![Candidate::new("public.orders", CandidateKind::Table)],
+            columns: vec![(
+                "public.orders".to_string(),
+                "total".to_string(),
+                Some("numeric".to_string()),
+            )],
+            truncated: false,
+        },
+        templates: vec![] as Vec<crate::completion::TemplateSnippet>,
+    }));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    // 光标停在句尾（新开的文档光标默认在 0；手动补全是**在光标处**算上下文的）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_caret_for_test(17, cx));
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+
+    cx.simulate_keystrokes("ctrl-space");
+
+    let (open, query, labels) = cx.update(|_window, cx| panel.read(cx).completion_menu_for_test(cx));
+    let message = cx.update(|_window, cx| panel.read(cx).message.clone());
+    assert!(open, "快捷键要真的把候选弹出来（message={message:?}）");
+    assert_eq!(query, "ord", "要替换的是光标前那个词");
+    assert!(
+        labels.contains(&"public.orders".to_string()),
+        "表位的候选里要有那张表：{labels:?}"
+    );
+}
+
+/// 【B9 切片二】手动补全的拒绝要说清原因（文本模式 / 只读；不静静地什么都不发生）
+#[gpui_kit::test]
+fn ctrl_space_refuses_with_a_reason_outside_sql_mode(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    bind_editor_keys(cx);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("hello", EditorMode::Text);
+    shared.attach_completion(Rc::new(FakeCompletion {
+        catalog: Catalog::default(),
+        templates: vec![] as Vec<crate::completion::TemplateSnippet>,
+    }));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let handle = cx.update(|_window, cx| panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&handle, cx));
+
+    cx.simulate_keystrokes("ctrl-space");
+
+    let (open, _, _) = cx.update(|_window, cx| panel.read(cx).completion_menu_for_test(cx));
+    assert!(!open, "文本模式不解析 SQL：不该弹补全");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留一句为什么");
+    assert!(message.contains("文本模式"), "{message}");
+}
+
+/// 【B9 切片二】插入模板：内容落进文本，且 `{table}` 被选中（接着敲就直接覆写）
+#[gpui_kit::test]
+fn inserting_a_template_writes_it_and_selects_the_placeholder(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("", EditorMode::Sql);
+    shared.attach_completion(Rc::new(FakeCompletion {
+        catalog: Catalog::default(),
+        templates: vec![snippet("查询所有记录", "SELECT * FROM {table};")],
+    }));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.insert_template(0, window, cx))
+    });
+
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert_eq!(text, "SELECT * FROM {table};", "模板内容原样插进光标处");
+    let selection = cx.update(|_window, cx| panel.read(cx).selected_range_for_test(cx));
+    assert_eq!(
+        &text[selection.start..selection.end], "{table}",
+        "占位符要被选中（用户接着敲表名就覆写它）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("插入要有回执");
+    assert!(message.contains("查询所有记录"), "{message}");
+}
+
+/// 只读文档插模板：拒绝并说明（与其它写文本的动作同一口径）
+#[gpui_kit::test]
+fn inserting_a_template_into_a_readonly_document_is_refused(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("", EditorMode::Sql);
+    shared.attach_completion(Rc::new(FakeCompletion {
+        catalog: Catalog::default(),
+        templates: vec![snippet("查询所有记录", "SELECT * FROM {table};")],
+    }));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    shared.update(|service| {
+        service.set_read_only(&id, crate::model::ReadOnly::editor_only())
+    });
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.insert_template(0, window, cx))
+    });
+
+    let text = cx.update(|_window, cx| panel.read(cx).text_for_test(cx));
+    assert!(text.is_empty(), "只读文档不该被写进去");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留原因");
+    assert!(message.contains("只读"), "{message}");
 }
 
 /// 写语句 / 失败没有网格：导出要回绝得可读（不能抓一个空网格去写文件）

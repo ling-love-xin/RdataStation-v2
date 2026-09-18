@@ -92,6 +92,28 @@ fn to_item(candidate: completion::Candidate) -> CompletionItem {
     }
 }
 
+/// 【B9 切片二】给一个偏移算出：替换范围的起点 + 查询词 + 候选（LSP 项）
+///
+/// 打字触发的路径由内核自己算这三样（`handle_completion_trigger`），然后调 [`CompletionProvider`]；
+/// **手动触发**（`Ctrl+Space`）没有内核帮忙，所以在这里算好再 `present_completion_items`——
+/// 两条路用**同一份**候选逻辑（否则手动补出来的东西会和打字补的不一样）。
+pub(crate) fn items_at(
+    shared: &EditorShared,
+    document: &DocumentId,
+    text: &str,
+    offset: usize,
+) -> (usize, String, Vec<CompletionItem>) {
+    let start = completion::word_start(text, offset);
+    let query = text.get(start..offset).unwrap_or_default().to_string();
+    let request = completion::request_at(text, offset);
+    let catalog = shared.completion_catalog(document);
+    let items = completion::candidates(&catalog, &request, MAX_ITEMS)
+        .into_iter()
+        .map(to_item)
+        .collect();
+    (start, query, items)
+}
+
 /// 装到某个文档的编辑内核上（`EditorState::lsp_mut`）
 pub fn install(state: &mut EditorState, shared: EditorShared, document: DocumentId) {
     state.lsp_mut().completion_provider = Some(Rc::new(SqlCompletionProvider { shared, document }));

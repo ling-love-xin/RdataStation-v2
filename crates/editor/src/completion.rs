@@ -107,10 +107,64 @@ pub trait CompletionPort: 'static {
     /// 实现必须**同步 + 内存**：这是编辑路径（每次按键）。真实元数据由宿主在后台预载，
     /// 没载好就返回空——**宁可这次不补，也不在按键里做 I/O**。
     fn catalog(&self, conn_id: Option<&str>, channel: ExecChannel) -> Catalog;
+
+    /// 【B9 切片二】模板片段（宿主从 `sql_template_store` 读；未接 = 空）
+    ///
+    /// 与 [`Self::catalog`] 同样要求**同步 + 内存**：菜单弹出时会读它，所以实现在启动时
+    /// 一次性预载好（见 `workbench/src/services/editor_completion.rs`）。
+    /// 默认实现给空：不接模板的宿主照样能用补全其余部分。
+    fn templates(&self) -> Vec<TemplateSnippet> {
+        Vec::new()
+    }
 }
 
 /// 共享句柄
 pub type CompletionHandle = Rc<dyn CompletionPort>;
+
+/// 【B9 切片二】一条模板片段（内容里的 `{table}` 是占位符，插入后会**被选中**）
+///
+/// 为什么模板不带「按方言过滤」：`sql_template_store` 里的 `db_type` 是**可空**的，而库里
+/// 那 6 条内置全是通用写法——按方言挑剔反而会让用户在 MySQL 连接上看不到模板。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateSnippet {
+    pub id: String,
+    pub name: String,
+    pub content: String,
+    /// 列表里的说明（可为空）
+    pub description: Option<String>,
+}
+
+/// 模板内容里第一个 `{table}` 占位符的**字节区间**（相对内容起点）
+///
+/// 插入之后按它选中那一小段：用户接着敲表名就把它覆写了，不用先去找到那 7 个字符。
+pub fn placeholder_range(content: &str) -> Option<(usize, usize)> {
+    const MARK: &str = "{table}";
+    content
+        .find(MARK)
+        .map(|start| (start, start + MARK.len()))
+}
+
+/// 【B9 切片二】光标前那段标识符的起点（手动触发 `Ctrl+Space` 时的替换范围）
+///
+/// 只吃标识符字符（**不含 `.`**）：`public.ord` 上按快捷键该补的是 `ord`，
+/// 替换掉 `ord` 而留住 `public.`——点了 `public.orders` 之后就得到 `public.orders`。
+/// 光标前不是标识符（空格 / 括号 / 行首）就给光标本身（此时是“从光标处开始插”）。
+pub fn word_start(text: &str, offset: usize) -> usize {
+    let offset = offset.min(text.len());
+    if !text.is_char_boundary(offset) {
+        return offset;
+    }
+    let mut start = offset;
+    while start > 0 {
+        let ch = text[..start].chars().next_back().expect("非空");
+        if ch.is_alphanumeric() || ch == '_' || ch == '$' {
+            start -= ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    start
+}
 
 /// 光标处要补什么
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -463,7 +517,10 @@ fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{Candidate, CandidateKind, Catalog, Request, candidates, request_at};
+    use super::{
+        Candidate, CandidateKind, Catalog, Request, candidates, placeholder_range, request_at,
+        word_start,
+    };
 
     /// 光标放在句尾：`request_at(&format!("{sql}|"), sql.len())` 的简写
     fn at(sql: &str) -> Request {
@@ -643,5 +700,36 @@ mod tests {
 
         let capped = candidates(&catalog(), &Request::Any { prefix: String::new() }, 3);
         assert_eq!(capped.len(), 3, "上限生效");
+    }
+
+    /// 【B9 切片二】手动触发时替换哪一段：光标前的标识符（**不含 `.`**）
+    #[test]
+    fn the_word_start_marks_what_manual_completion_should_replace() {
+        let text = "select id, total from public.ord";
+        assert_eq!(word_start(text, text.len()), text.len() - 3, "`ord`");
+        assert_eq!(word_start(text, 29), 29, "`public.` 之后就空了（`.` 不算标识符）");
+        // 光标在 `public` 里面：整个词都算进去（它才是当前在敲的那个词）
+        assert_eq!(word_start(text, 28), 22, "`public` 从 22 开始");
+        let spaced = "select * from ";
+        assert_eq!(word_start(spaced, spaced.len()), spaced.len(), "空格后就从光标开始插");
+        assert_eq!(word_start("", 0), 0);
+        assert_eq!(word_start("select 1", 999), 7, "越界钳到文本末尾，词是 `1`");
+        // 中文标识符（可当列名用）不该被切坏
+        let cjk = "select 名字 from t";
+        assert_eq!(word_start(cjk, 10), 7, "`名字` 6 字节，从 7 开始");
+        // 落在多字节字符中间：不动它（宁可把替换范围放光标处）
+        assert_eq!(word_start(cjk, 8), 8);
+    }
+
+    /// 【B9 切片二】模板里的 `{table}` 要能被选中（没占位符就不选）
+    #[test]
+    fn the_table_placeholder_is_located_within_the_template() {
+        assert_eq!(
+            placeholder_range("SELECT * FROM {table};"),
+            Some((14, 21))
+        );
+        assert_eq!(placeholder_range("SELECT 1;"), None);
+        // 只认第一个：替换一个就够，剩下的交给用户
+        assert_eq!(placeholder_range("{table} {table}"), Some((0, 7)));
     }
 }
