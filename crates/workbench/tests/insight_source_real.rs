@@ -15,11 +15,16 @@
 //! $env:RDS_TEST_PG_URL="postgres://postgres:postgresql@192.168.3.138:5432/postgres"
 //! $env:RDS_TEST_SQLITE_PATH="D:\FossilT\T.fossil"
 //! $env:RDS_TEST_DUCKDB_PATH="D:\data\123"
+//! $env:RDS_TEST_ORACLE_URL="oracle://devuser:***@192.168.3.138:1521/XEPDB1"
 //! ```
 //!
 //! **sh / bash 下一律加单引号**（`D:\…` 的反斜杠会被吃掉 → 驱动在工作目录建空库 → 假通过）。
 //!
-//! 真库上会建一张 `rds_probe_source_*` 探针表（3 行，含一个 NULL），跑完清理（DROP）。
+//! 真库上会建 `rds_probe_source_*` 探针表（3 行，含一个 NULL），跑完清理（DROP）。
+//!
+//! 第二个用例是**扩展提供的源**：Oracle 经 community 扩展 `oracle_scanner`（表函数）读进来，
+//! 同样能取样并出列画像 / 表探查——它是 D59 边界「凡 DuckDB 能分析的资源都能洞察」的实证。
+//! 那条需要 `RDS_TEST_ORACLE_URL`，并会在 Oracle 侧建自己的 `RDS_PROBE_SOURCE_ORA`（跑完 DROP）。
 
 use engine::services::sql_service::{SqlExecuteOptions, SqlService};
 use engine::{AutoDriverRegistrar, DriverConnectionConfig};
@@ -222,4 +227,135 @@ fn source_sampling_reaches_a_column_profile_on_every_configured_database() {
         "真机源取样失败：\n{}",
         failures.join("\n")
     );
+}
+
+// ==================== 扩展提供的源（Oracle via `oracle_scanner`）====================
+
+/// Oracle 连接串的几段（只解析本用例需要的形状）
+struct OracleParts {
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    service: String,
+}
+
+fn parse_oracle_url(url: &str) -> OracleParts {
+    let rest = url.split("://").nth(1).expect("URL 要有 scheme");
+    let (cred, host_part) = rest.split_once('@').expect("URL 要带凭据");
+    let (user, password) = cred.split_once(':').expect("凭据要有 user:pass");
+    let (host_port, service) = host_part.split_once('/').expect("URL 要有 service name");
+    let (host, port) = host_port.split_once(':').expect("要有端口");
+    OracleParts {
+        host: host.to_string(),
+        port: port.parse().expect("端口是数字"),
+        user: user.to_string(),
+        password: password.to_string(),
+        service: service.to_string(),
+    }
+}
+
+/// 扩展提供的源同样能洞察：Oracle（community 扩展 `oracle_scanner`）→ 取样 → 列画像 / 表探查。
+///
+/// 实证的是 D59 的边界原话——**凡 DuckDB 能分析的资源都能洞察**：洞察侧只认「一段能在它
+/// 自己的内存库里跑的只读 SQL」，至于数据怎么进来的（文件读取器 / `ATTACH` / community
+/// 扩展的表函数）是调用方的事。这里特意选了最像「扩展」的一条：Oracle 表函数。
+///
+/// 只在设了 `RDS_TEST_ORACLE_URL` 时跑（未设自动跳过）；凭据只从环境变量读、只建**会话级**
+/// Secret（不落盘）。会在 Oracle 建自己的探针表并在跑完 DROP（不碰用户对象）。
+#[test]
+fn extension_provided_source_is_analyzable() {
+    let Ok(url) = std::env::var("RDS_TEST_ORACLE_URL") else {
+        eprintln!("⏭️  未设 RDS_TEST_ORACLE_URL，跳过扩展源用例");
+        return;
+    };
+    let parts = parse_oracle_url(&url);
+    const SECRET: &str = "rds_insight_ora";
+    const TABLE: &str = "RDS_PROBE_SOURCE_ORA";
+
+    // 1) 在**洞察自己的内存库**上装扩展 + 建会话级 Secret。
+    //    扩展目录固定到仓库 scratch（与 `engine/tests/oracle_probe.rs` 同一处）：
+    //    跑过一次就有缓存，也不碰产品目录。
+    let ext = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/duckdb-ext-scratch");
+    std::fs::create_dir_all(&ext).expect("建扩展目录");
+    {
+        let duckdb = insight::insight_engine::get_or_create_duckdb().expect("内存库");
+        let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
+        conn.execute_batch(&format!(
+            "SET extension_directory = '{}';\
+             SET autoinstall_known_extensions = false;\
+             SET autoload_known_extensions = true;",
+            ext.to_string_lossy().replace('\\', "/")
+        ))
+        .expect("设置扩展目录");
+        conn.execute_batch("INSTALL oracle_scanner FROM community; LOAD oracle_scanner")
+            .expect("装 / 载 oracle_scanner（需要网络；失败先看扩展仓库是否可达）");
+        conn.execute_batch(&format!(
+            "CREATE OR REPLACE SECRET {SECRET} (TYPE ORACLE, HOST '{}', PORT {}, \
+             USER '{}', PASSWORD '{}', SERVICE_NAME '{}')",
+            parts.host, parts.port, parts.user, parts.password, parts.service
+        ))
+        .expect("建 Oracle Secret");
+    }
+
+    // 在洞察的内存库上跑一句（DDL 在 Oracle 侧要经 `DBMS_UTILITY.EXEC_DDL_STATEMENT`）
+    let on_duckdb = |batch: String| {
+        let duckdb = insight::insight_engine::get_or_create_duckdb().expect("内存库");
+        let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
+        conn.execute_batch(&batch)
+    };
+    let ddl = |sql: &str| -> String {
+        format!(
+            "SELECT * FROM oracle_call_auto('{SECRET}', 'DBMS_UTILITY.EXEC_DDL_STATEMENT', ['{sql}'])"
+        )
+    };
+
+    // 2) 在 Oracle 侧建探针表（先试探着删一次：上次失败可能留下过）
+    let _ = on_duckdb(ddl(&format!("DROP TABLE {TABLE}")));
+    on_duckdb(ddl(&format!(
+        "CREATE TABLE {TABLE} (id NUMBER(10), amount NUMBER(10,2), note VARCHAR2(20))"
+    )))
+    .expect("建 Oracle 探针表");
+    for (id, amount, note) in [(1, "10.50", "a"), (2, "20.25", "b"), (3, "30.75", "c")] {
+        on_duckdb(format!(
+            "SELECT * FROM oracle_execute('{SECRET}', \
+             'INSERT INTO {TABLE} VALUES ({id}, {amount}, ''{note}'')')"
+        ))
+        .expect("插 Oracle 探针行");
+    }
+
+    // 3) 洞察只看到「一段能在内存库里跑的 SQL」——扩展读进来的数据与其他源同路
+    let source = SampleSource::on_duckdb(
+        format!("SELECT * FROM oracle_query('{SECRET}', 'SELECT id, amount, note FROM {TABLE}')"),
+        format!("oracle.{TABLE}"),
+    );
+
+    let outcome = InsightService::profile_source_column(None, &source, "amount");
+    // 凭据 / 网络问题要看得到原因，不要变成一个光秃秃的 panic
+    let (temp_table, view) = match outcome {
+        Ok(pair) => pair,
+        Err(error) => panic!("Oracle 列画像失败（扩展源）：{error}"),
+    };
+    eprintln!(
+        "✅ oracle(扩展)：样本表 {temp_table} · amount 计数={} 空值={} 类型={:?}",
+        view.total_count, view.null_count, view.kind
+    );
+    assert!(
+        temp_table.starts_with("tmp_i_"),
+        "样本表要带洞察前缀，实际 {temp_table}"
+    );
+    assert_eq!(view.total_count, 3, "三行应全部落到样本表");
+    assert_eq!(view.null_count, 0);
+    assert_eq!(view.kind, ColumnKind::Numeric, "NUMBER(10,2) 应判数值列");
+
+    let (_, table_view) =
+        InsightService::profile_source_table(&source, TABLE).expect("Oracle 表探查");
+    assert_eq!(table_view.row_count, 3);
+    assert_eq!(table_view.columns.len(), 3, "id / amount / note 三列");
+
+    // 4) 清理（Oracle 侧不留探针表）
+    if let Err(error) = on_duckdb(ddl(&format!("DROP TABLE {TABLE}"))) {
+        eprintln!("⚠️  清理 Oracle 探针表失败：{error}");
+    }
 }

@@ -23,6 +23,18 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — D59 边界实证：**扩展**提供的源（Oracle）也能洞察
+
+**背景**：D59 的产品口径是「凡 DuckDB 能分析的资源都能洞察」。到本批为止，这条只被**文件类**（CSV / Parquet / Excel，DuckDB 自己的读取器）验过；经 **community 扩展**读进来的源（表函数 / `ATTACH`）没有实证。
+
+**已完成并验证**（`cargo test -p rds-workbench --test insight_source_real -j 2`：新用例 + 原四库用例**同进程全绿**；`cargo check --workspace --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 新用例 `extension_provided_source_is_analyzable` | 在**洞察自己的内存库**上装 `oracle_scanner`（community）+ 建**会话级** Secret → 在 Oracle 建探针表 / 插 3 行 → `SampleSource::on_duckdb("SELECT * FROM oracle_query(...)")` → 列画像（3 行 / 0 空值 / Numeric）+ 表探查（3 行 3 列）→ 收掉探针表 | `workbench/tests/insight_source_real.rs` |
+| 证明的是边界而不是入口 | 洞察侧只认「一段能在它自己的内存库里跑的只读 SQL」；数据怎么进来的（文件读取器 / `ATTACH` / 扩展表函数）是调用方的事——所以扩展**可换实现不可换语义**（D61）在这里成立 | 同上 |
+| 环境要求 | `RDS_TEST_ORACLE_URL`（未设自动跳过）；扩展需要网络（**只装一次**，缓存在 `target/duckdb-ext-scratch`——与 `engine/tests/oracle_probe.rs` 同一处，不碰产品目录） | 同上 |
+
 ### 2026-09-18 — 6.1 `SUMMARIZE` 交叉校验 + `RenderHint` 处置（定案：保留并登记）
 
 **背景**：施工单剩下的两项。#6.1 是「让画像里的数字可被外部实现校验」；`RenderHint`（原 §10 #8）是「预留字段零消费」要拍板。
@@ -961,11 +973,20 @@ export RDS_TEST_PG_URL='postgres://postgres:postgresql@192.168.3.138:5432/postgr
 export RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil'
 export RDS_TEST_DUCKDB_PATH='D:\data\123'
 
+```sh
 # 结构洞察：information_schema 方言 + 报告（真库建 rds_probe_schema_*，跑完 DROP）
 cargo test -p rds-workbench --test insight_schema_real -j 2 -- --nocapture --test-threads=1
 
 # 源取样 → 列画像 / 表探查（真库建 rds_probe_source_*，跑完 DROP）
 cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --test-threads=1
+```
+
+`insight_source_real` 里还有一条**扩展源**腿（D59 边界实证）：
+
+```sh
+# Oracle 经 community 扩展 oracle_scanner 读进来，同样能洞察（未设则跳过）
+export RDS_TEST_ORACLE_URL='oracle://devuser:***@192.168.3.138:1521/XEPDB1'
+cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --test-threads=1 extension_provided
 ```
 
 > `cargo` 命令固定 `-j 2`：并发链接重型 crate 会 OOM（DuckDB 已改动态链接）（见 `project-dev-plan.md` §0 工程配置）。

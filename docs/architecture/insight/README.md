@@ -122,19 +122,20 @@ cargo test -p rds-workbench --test ui_contract -j 2
 cargo check --workspace --all-targets -j 2
 ```
 
-**真机（四库）**：两个用例都按环境变量自跳过（未设不算失败）；**sh / bash 下一律加单引号**
+**真机（四库 + 扩展源）**：用例都按环境变量自跳过（未设不算失败）；**sh / bash 下一律加单引号**
 （`D:\…` 的反斜杠会被吃掉 → 驱动在工作目录建空库 → 假通过）。变量名与 `editor_exec_real.rs` 同一套：
-`RDS_TEST_{MYSQL_URL, PG_URL, SQLITE_PATH, DUCKDB_PATH}`。
+`RDS_TEST_{MYSQL_URL, PG_URL, SQLITE_PATH, DUCKDB_PATH}`，另加 `RDS_TEST_ORACLE_URL`。
 
 ```sh
 # 结构洞察：information_schema 方言 + 报告（真库建 rds_probe_schema_*，跑完 DROP）
 cargo test -p rds-workbench --test insight_schema_real -j 2 -- --nocapture --test-threads=1
 
 # 源取样 → 列画像 / 表探查（真库建 rds_probe_source_*，跑完 DROP）
+# 同一文件里还有扩展源那条腿（Oracle via community 扩展 oracle_scanner，未设则跳过）
 cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --test-threads=1
 ```
 
-- 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
+- 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB（+ 扩展源 Oracle）× 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
 - **基线**：`cargo test -p rds-insight` 当前 **229 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3；文件类数据源新增 1；Schema 导出与下钻新增 3；**结构洞察方言 3 + 取数回归 1**），另有**集成测试 14 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** / **与内置 `SUMMARIZE` 交叉校验** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处（`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`），其中 `duckdb::analysis` 现 **8 项**（含 CTAS 2 项）。引擎单测总量当前 **428 项**（`cargo test -p rds-engine --lib`）。
 
