@@ -329,6 +329,11 @@ pub trait ResourcesHost: 'static {
     /// 宿主把它写回设置（`resources.default_sort`）——“默认排序”在这里就是“上次用的那个”，
     /// 不另给一个“默认排序”菜单（两处各存一份就会不一致）。面板不知道 settings 的存在。
     fn remember_sort(&self, field: SortField, order: SortOrder, cx: &mut App);
+    /// 记住分组折叠状态（点一次分组头就调一次）。
+    ///
+    /// 宿主按项目分桶写设置（`resources.collapsed_groups`）；传的是**当前全集**而不是增量：
+    /// 增量写入在“面板换了项目 / 分组被删”这些场景下容易和旧值叠出幽灵记录。
+    fn remember_collapsed(&self, collapsed_keys: &[String], cx: &mut App);
     /// 打开资源回收站（面板头「⋯ → 回收站…」）。
     ///
     /// 回收站是**项目级**的（与草稿箱共用一处，模块硬约束 5）：对话框只列本模块的条目，
@@ -1217,26 +1222,45 @@ impl ResourcesPanel {
         self.collapsed.retain(|key| {
             key == filter::GROUP_ALL || key == filter::GROUP_UNGROUPED || alive.contains(&key.as_str())
         });
-        self.view_items = filter::build_visible_items(
-            &self.view_rows,
-            &self.snapshot.groups,
-            &self.collapsed,
-        );
-        self.push_rows_to_list(cx);
+        self.refresh_view_items(cx);
     }
 
     /// 折叠 / 展开一个分组（分组头点击；`GROUP_ALL` / `GROUP_UNGROUPED` 也是合法的 key）。
+    ///
+    /// 折叠态不是纯视图状态：它要被记住（见 `remember_collapsed`），否则每次打开项目
+    /// 都得重新折一遍。
     pub fn toggle_group_collapse(&mut self, key: &str, cx: &mut Context<Self>) {
         if !self.collapsed.insert(key.to_string()) {
             self.collapsed.remove(key);
         }
+        self.refresh_view_items(cx);
+        let keys = self.collapsed_keys();
+        self.host.remember_collapsed(&keys, cx);
+        cx.notify();
+    }
+
+    /// 折叠集合（**排序后**的：写进设置里的东西不该每次换个顺序）。
+    pub fn collapsed_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.collapsed.iter().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// 注入折叠集合（宿主在构造期从设置里读出来；不回调宿主——否则默认值会被当成用户动作回写）。
+    pub fn set_collapsed(&mut self, keys: &[String], cx: &mut Context<Self>) {
+        self.collapsed = keys.iter().cloned().collect();
+        self.refresh_view_items(cx);
+        cx.notify();
+    }
+
+    /// 重建可见项（分组头 + 行）。折叠 / 展开与注入都走它，免得两处各抄一遍参数。
+    fn refresh_view_items(&mut self, cx: &mut Context<Self>) {
         self.view_items = filter::build_visible_items(
             &self.view_rows,
             &self.snapshot.groups,
             &self.collapsed,
         );
         self.push_rows_to_list(cx);
-        cx.notify();
     }
 
     /// 把可见行推给列表委托。

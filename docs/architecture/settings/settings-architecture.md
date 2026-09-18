@@ -58,6 +58,7 @@
 
 > 依据：M4 §6.4 的选型结论（"结构化状态进 SQLite；UI 偏好进 `settings.json`；不新增独立 K-V 文件"）在此提升为**设置模块的通用判据**。
 > 边界示例：`navigator.filters`（facet 筛选）目前落 `settings.json`，但它有"当前视图状态"的味道——登记在案、**不上设置页**；是否改为项目级见 §14 Q1。
+> 第二个同类例子（2026-09-18）：`resources.collapsed_groups`（资产库分组折叠态）——它的状态是**项目专属**的，严格说属项目级；但它只有一屏的展开形状，进项目库要新迁移 + 后台往返，代价不抵收益，因此也暂住 `settings.json`（**按项目根分桶**，避免跨项目互相抹掉），并同样登记为待确认（§14 Q7）。
 
 ### 2.3 登记 ≠ 上页
 
@@ -138,6 +139,7 @@ graph TD
 | `connection_defaults.lan_disable_tls` | 连接默认值 | bool | `true` | 下次操作 | `connection_service.rs::apply_lan_tls_default` | 设置页 | ✅ 已落地 |
 | `resources.keep_versions` | 资产库 | i64（份数；`-1` = 全留、`0` = 只留元数据） | `5` | 下次操作 | `workbench/src/components/resource_host.rs` + `panels/resources.rs`（主线程读→`KeepVersions::from_setting`）→ `services/resource_jobs.rs::open_service` → `analytics_resource::ArchiveService::with_keep_versions` | 设置页 | ✅ 已落地（2026-09-18）|
 | `resources.default_sort` | 资产库 | enum `name`/`archived_at`/`updated_at`/`size`/`version` | `name` | 下次操作 | `components/resource_host.rs::remember_sort`（写）+ `panels/resources.rs::build_resources_panel`（读，注入 `ResourcesPanel::set_sort`） | 两者 | ✅ 已落地（2026-09-18）|
+| `resources.collapsed_groups` | 资产库 | 复合值：`{项目根: [分组 key]}` | `{}` | 下次操作 | `components/resource_host.rs::remember_collapsed`（写）+ `panels/resources.rs::build_resources_panel`（读，注入 `ResourcesPanel::set_collapsed`） | 模块内（不上页） | ✅ 已落地（2026-09-18；作用域见 §14 Q7） |
 | `logging.min_level` | 日志 | enum `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR` | `INFO` | 即时 | `crates/app/src/main.rs`（启动取值）；运行时经装配层注册的 sink → `engine::logging::reload_log_level` | 设置页（另有「查看日志…」/「打开日志目录」两个动作行） | ✅ 已落地（2026-09-16） |
 | `resources.keep_versions` | 分析资产 | i32（`0` = 只留元数据；`-1` = 全留） | `5` | 下次归档 | `analytics_resource/src/service.rs`（现为常量 `DEFAULT_KEEP_VERSIONS`） | 设置页 | ⬜ 待 M6 P2.4 接线 |
 
@@ -264,3 +266,4 @@ graph TD
 | Q4 | 界面缩放的落点？ | A：主题资产字号倍率（需 gpui-kit 支持）· B：复活 `appearance.font_size` 作为倍率 · 影响 D12 与主题层 |
 | Q5 | 行级校验放哪一侧？ | A：写入侧（`set_*` 返回 `Result`，页面显示原因）· B：读取侧兜底（现状）——A 更符合"失败可见" |
 | Q6 | 是否需要"设置变更审计"（谁在什么时候改了哪项）？ | 当前无多用户，价值低；若将来有团队配置同步再议 |
+| Q7 | `resources.collapsed_groups`（与 `navigator.filters`、`navigator.property_panel_width` 同类）该住哪？ | A：保持 `settings.json`（现状；按项目分桶，代价是绝对路径进配置文件、换项目路径即重置）· B：迁项目库（符合 §2.2 判据，但要新迁移 + 面板取数 / 写回走后台作业）——与 Q1 一同拍板 |

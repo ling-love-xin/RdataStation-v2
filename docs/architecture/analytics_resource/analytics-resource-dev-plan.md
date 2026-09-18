@@ -1,12 +1,28 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前六刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、历史保留与默认排序两个设置项均可用，**124 单测 + 26 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前七刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项（历史保留 / 默认排序 / 分组折叠）均可用，**124 单测 + 27 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-18 — Phase 2 第七刀（P2.4 收口）：分组折叠态持久化
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 设置项 ✅ | `resources.collapsed_groups`（复合值：**项目根路径 → 折叠的分组 key 列表**，`entry = Module`、不上页）。按项目分桶的理由：分组 id 是每项目自己生成的，平铺一份列表会在“打开另一个项目”时被“丢掉不认识的 id”那一步（清已删分组的标记）抹掉别的项目的记录。空列表 = 删掉该项目的记录，不留空壳 | `crates/settings/src/{model,registry,lib}.rs` |
+| 面板 ✅ | 新增 `ResourcesPanel::{set_collapsed, collapsed_keys}` + 私有 `refresh_view_items`（折叠 / 注入 / 快照推送三处不再各抄一遍 `build_visible_items`）；`toggle_group_collapse` 把**当前全集**（排序后）交回宿主——增量写入在切项目 / 分组被删时会与旧值叠出幽灵记录 | `src/resource_view.rs` |
+| 宿主接线 ✅ | 新端口 `ResourcesHost::remember_collapsed`（写：按项目分桶，没项目时不写）；构造期读设置注入（与默认排序同一位置） | `crates/workbench/src/{components/resource_host.rs,panels/resources.rs}` |
+| 验证 | `cargo test -p rds-analytics-resource -j 1` → **124 单测 + 18 面板窗口 + 9 对话框窗口全绿**（+1 面板窗口：注入折叠态当场生效且不回写；折叠旧用例增断言：两次切换交出 `[af_1]` → `[]`）；`cargo test -p rds-settings -j 1` **21 项全绿**（登记表契约测试自动覆盖：复合值不上页 / 无标量读写路径） | — |
+
+**两处刻意的取舍**：
+
+1. **折叠态落 `settings.json` 而不是项目库**：按 `settings-architecture.md` §2.2 的判据它是“项目级结构化状态”，严格说该进 `project.db`；但它只服务一屏的展开形状，而进项目库要新迁移 + 后台往返（加载经过作业线程、写回再走一遍），代价与收益不匹配。位置与 `navigator.filters` 同类（那个也有“当前视图状态”的味道），已在设置架构 §14 登记为待确认项（Q7），将来若随 Q1 一起迁往项目库，M6 跟随；
+2. **存的是 key 全集而不是增量**：增量在“切项目 / 分组被删 / 面板重建”这些路径上要靠宿主自己合并旧值，合并逻辑一旦漏一处就是幽灵记录（折叠一个不存在的分组）；全集的代价只是每次多写几十字节。
+
+**未落地**：拖拽到分组头、默认分组（P2.4 剩下的那项，需先想清“默认分组的语义：新建分组还是归档落点”）、搜索匹配别名 / 标签 / 来源表（P2.3 余项）、批量打标签 / 批量移动（P2.5）、`F2` 重命名。
 
 ### 2026-09-18 — Phase 2 第六刀（P2.4 中段）：默认排序接设置项（“记住上次”）
 
@@ -571,9 +587,9 @@
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，第一 / 三刀）**：存储层四项 + `dialogs/tag.rs`（勾选 / 新建并打上 / 行内 ⋯：重命名 / 删除）+ 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板、筛选菜单与这个对话框里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
-| P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **存储层、分区渲染与管理入口已落**（第二 / 三刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键；**余**：拖拽 | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单已落） | 折叠状态持久化（待 P2.4 设置项）；空分组可见（已满足：头恒在） |
+| P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **存储层、分区渲染、管理入口与折叠持久化均已落**（第二 / 三 / 七刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键 + 折叠态记住（`resources.collapsed_groups`，按项目分桶）；**余**：拖拽 | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单已落） | 空分组可见（已满足：头恒在） |
 | P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本）—— **排序已落全五个键**（第四刀，含归档时登记体积）；**余**：搜索匹配别名 / 标签 / 来源表 | `src/resource.rs`、`src/resource_view.rs`、`src/filter.rs`（排序） | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
-| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1）—— **`keep_versions` 与 `default_sort` 已落**（第五 / 六刀）；**余**：默认分组、分组折叠态（后者按 `settings-architecture.md` §2.2 属项目级结构化状态，不进 `settings.json`） | `crates/settings`、`src/service.rs` | 重启后保持 |
+| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1）—— **`keep_versions` / `default_sort` / `collapsed_groups` 已落**（第五 / 六 / 七刀）；**余**：默认分组 | `crates/settings`、`src/service.rs` | 重启后保持 |
 | P2.5 | 多选与批量：批量打标签 / 批量移动 / 批量删除（含数量提示） | `src/resource_view.rs`、`src/commands.rs` | 多选态菜单按数量自适应（v1 的缺陷） |
 
 ## 5. Phase 3 — 版本与恢复

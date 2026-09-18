@@ -147,6 +147,11 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("sort:{}:{}", field.key(), order.arrow()));
     }
+    fn remember_collapsed(&self, keys: &[String], _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("collapsed:{}", keys.join(",")));
+    }
 }
 
 fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> ArchiveRow {
@@ -1050,6 +1055,54 @@ fn group_section_headers_render_and_collapsing_hides_rows(cx: &mut TestAppContex
         panel.update(cx, |panel, cx| panel.toggle_group_collapse("af_1", cx));
     });
     assert_eq!(cx.update(|_window, cx| panel.read(cx).view_items().len()), 5);
+
+    // 折叠态不是纯视图状态：每次切换都把**当前全集**交给宿主（按项目分桶写设置；
+    // 空集也要交一次——“一条都不折”同样是用户的现状，不交就等于永远恢复不了）。
+    assert_eq!(
+        host.calls(),
+        vec!["collapsed:af_1".to_string(), "collapsed:".to_string()]
+    );
+}
+
+/// 注入折叠态（设置里读回来的）：行当场就是折的，且**不回写宿主**（注入不是用户动作）。
+#[gpui_kit::test]
+fn injected_collapsed_state_folds_rows_without_echoing_back(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let mut grouped = row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    grouped.folder_id = Some("af_1".to_string());
+    let mut snapshot = snapshot(vec![grouped], false);
+    snapshot.groups = vec![GroupOption {
+        id: "af_1".to_string(),
+        name: "月报".to_string(),
+    }];
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_snapshot(snapshot, cx));
+    });
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_collapsed(&["af_1".to_string()], cx)
+        });
+    });
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).view_items().len()),
+        3,
+        "三个头，月报那一行被折掉"
+    );
+    assert_eq!(
+        cx.update(|_window, cx| panel.read(cx).collapsed_keys()),
+        vec!["af_1".to_string()]
+    );
+    assert!(
+        host.calls().is_empty(),
+        "注入折叠态是宿主的动作，不是用户动作：不写回"
+    );
 }
 
 /// 标签筛选维：勾上就窄，标签被删后条件自动抹掉（否则列表“什么都没匹配”而勾还在）。

@@ -41,6 +41,12 @@ impl SidebarPanel {
         let field = SortField::from_key(&settings::SettingsService::default_resource_sort(cx))
             .unwrap_or_default();
         panel.update(cx, |panel, cx| panel.set_sort(field, field.default_order(), cx));
+        // 折叠态（设置项 `resources.collapsed_groups`，按项目分桶）：同样构造期注入；
+        // 点分组头时面板把当前全集交回宿主写回（设置里的死 key 会在下一次快照推送时被面板丢掉）。
+        if let Some(root) = shared.project_root() {
+            let keys = settings::SettingsService::collapsed_groups(&root.to_string_lossy(), cx);
+            panel.update(cx, |panel, cx| panel.set_collapsed(&keys, cx));
+        }
         // 登记弱句柄：右侧「存档详情」要拿它的选中项（宿主级弱句柄，与 mock / insight 同例）。
         *shared.resources_panel.borrow_mut() = Some(panel.downgrade());
         panel

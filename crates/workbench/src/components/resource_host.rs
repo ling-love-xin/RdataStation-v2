@@ -766,6 +766,22 @@ impl ResourcesHost for WorkbenchResourceHost {
         settings::SettingsService::set_default_resource_sort(field.key(), cx);
     }
 
+    /// 记住分组折叠状态：按项目分桶写设置（`resources.collapsed_groups`）。
+    ///
+    /// 写的是**当前全集**（不是增量）：增量写入在“切项目 / 分组被删”这些场景下
+    /// 容易和旧值叠出幽灵记录。空集会把该项目的记录删掉，不留空壳。
+    fn remember_collapsed(&self, collapsed_keys: &[String], cx: &mut App) {
+        // 没有项目时没什么可记的（面板也在空态，不会有折叠动作）。
+        let Some(root) = self.shared.project_root() else {
+            return;
+        };
+        settings::SettingsService::set_collapsed_groups(
+            &root.to_string_lossy(),
+            collapsed_keys,
+            cx,
+        );
+    }
+
     fn request_open_trash(&self, _window: &mut Window, cx: &mut App) {
         let Some(root) = self.require_project("无法打开回收站", cx) else {
             return;

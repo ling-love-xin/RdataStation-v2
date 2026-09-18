@@ -112,6 +112,7 @@ pub enum Slot {
     NavigatorFilters,
     ResourcesKeepVersions,
     ResourcesDefaultSort,
+    ResourcesCollapsedGroups,
     ConnectTimeoutMs,
     LanDisableTls,
     ProjectSortMode,
@@ -129,6 +130,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "navigator.filters" => Slot::NavigatorFilters,
         "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "resources.default_sort" => Slot::ResourcesDefaultSort,
+        "resources.collapsed_groups" => Slot::ResourcesCollapsedGroups,
         "connection_defaults.connect_timeout_ms" => Slot::ConnectTimeoutMs,
         "connection_defaults.lan_disable_tls" => Slot::LanDisableTls,
         "projects.sort_mode" => Slot::ProjectSortMode,
@@ -147,6 +149,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         // 保留份数是有符号数：`-1` = 全留（哨兵值，不是"少一份"）。
         Slot::ResourcesKeepVersions => KindTag::Number,
         Slot::ResourcesDefaultSort => KindTag::Enum,
+        // 复合值（项目根 → 折叠的分组 key）：没有页面写入路径，与 `navigator.filters` 同类。
+        Slot::ResourcesCollapsedGroups => KindTag::Composite,
         Slot::NavigatorFilters => KindTag::Composite,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
@@ -156,7 +160,7 @@ pub fn slot_kind(slot: Slot) -> KindTag {
 
 /// 槽位是否可表达为标量值（复合值不可：它没有页面写入路径）。
 pub fn slot_is_scalar(slot: Slot) -> bool {
-    slot != Slot::NavigatorFilters
+    !matches!(slot, Slot::NavigatorFilters | Slot::ResourcesCollapsedGroups)
 }
 
 /// 生效方式（页面的说明行必须讲清楚，禁止"改了不知道生效没"）。
@@ -353,6 +357,20 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Both,
         consumer: "workbench/src/components/resource_host.rs::remember_sort（写）+ panels/resources.rs::build_resources_panel（读）→ analytics_resource::ResourcesPanel::set_sort",
         composite: false,
+    },
+    SettingSpec {
+        key: "resources.collapsed_groups",
+        section: "resources",
+        section_label: "资产库",
+        label: "分组折叠状态",
+        hint: "每个项目里折叠了哪些分组（面板内点击即记；按项目分开存，换项目各归各的）",
+        kind: SettingKind::Composite,
+        presets: &[],
+        default_json: "{}",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Module,
+        consumer: "workbench/src/components/resource_host.rs::remember_collapsed（写）+ panels/resources.rs::build_resources_panel（读）→ analytics_resource::ResourcesPanel::set_collapsed",
+        composite: true,
     },
     SettingSpec {
         key: "connection_defaults.connect_timeout_ms",

@@ -5,7 +5,7 @@
 //! - `connection_defaults`：连接默认值（建连超时、LAN 直连 TLS）
 //! - `projects`：项目列表偏好（排序方式）
 //! - `navigator`：数据源导航（来源标识、显示开关、属性面板宽度、facet 筛选）
-//! - `resources`：资产库（历史内容保留策略）
+//! - `resources`：资产库（历史内容保留、默认排序、分组折叠状态）
 //! - `logging`：日志最低级别
 //!
 //! 主题模式直接复用 `gpui_kit::component::ThemeMode`（已派生
@@ -19,6 +19,8 @@
 //! `registry::tests::every_model_leaf_is_registered` 直接失败。被裁掉的 7 个
 //! "有字段、有界面行，但没有消费方"的字段见
 //! `docs/architecture/settings/settings-architecture.md` §7.2；新增字段的判定标准见 §7.1。
+
+use std::collections::BTreeMap;
 
 use gpui_kit::component::ThemeMode;
 use serde::{Deserialize, Serialize};
@@ -171,6 +173,13 @@ pub struct Resources {
     /// 由字段惯例给（名称升序，时间 / 大小 / 版本降序）。
     #[serde(default = "default_resource_sort")]
     pub default_sort: String,
+    /// 分组折叠状态：**项目根路径 → 该项目里折叠的分组 key 列表**。
+    ///
+    /// 为什么要按项目分桶：分组 id 是每个项目自己生成的，平铺一份列表会在“打开另一个项目”
+    /// 时被“清掉不认识的 id”那一步（面板会丢掉已删分组的折叠标记）抹掉别的项目的记录。
+    /// 路径换名 / 移动后这一项会重新从空开始（视图状态，不值得为它做路径重写）。
+    #[serde(default)]
+    pub collapsed_groups: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Resources {
@@ -178,6 +187,7 @@ impl Default for Resources {
         Self {
             keep_versions: default_keep_versions(),
             default_sort: default_resource_sort(),
+            collapsed_groups: BTreeMap::new(),
         }
     }
 }

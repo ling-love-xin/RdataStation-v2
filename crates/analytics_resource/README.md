@@ -119,9 +119,10 @@
 | **归档 / 取回**【Phase 1】`dialogs/{archive,checkout,pick}.rs`：对话框 + 校验 + 冲突提示（`resources/x-2.sql`）；workbench 侧真执行（`resource_host` + `resource_jobs` 的 `Archive` / `Checkout` 作业 + 重名避让 + 回执 + 顺手打开）；**草稿箱入口**（面板头 `＋ ▾` + 草稿多选，来源连接与出处自动带出）；**归档可撤销**（`undo_archive` + 5 秒撤销栏） | 草稿箱右键入口、分组 / 别名字段（Phase 2）、`Ctrl+Z` |
 | **工具栏数据层**【Phase 1 + Phase 2 第一 / 四 / 六刀】`filter.rs`：搜索（名称 + 尾部，大小写不敏感）/ 种类多选（全选 = 不限）/ **标签多选（id、并集，带用量）** / 只看需处理 / **五个排序键**（名称 / 归档时间 / 更新时间 / 大小 / 版本：同键翻转方向、同键名称兜底、**缺值两个方向都排最后**；比的是原始时间戳与字节数，不是格式化尾巴）；**选过的排序会被记住**（`resources.default_sort`：面板点排序 → 宿主写设置 → 下次构造期注入） | 搜索匹配别名 / 标签 / 来源表（新字段进 `ArchiveRow`，P2.3 余项） |
 | **标签**【Phase 2 第一 / 三刀】`tag.rs`（改名 / 删除补齐 + 批量查询）+ 打标 / 去标 + **标签对话框**（勾选 + 新建并打上 + 差集提交 + 行内 **⋯：重命名 / 删除**）+ 详情面板 chips（× 即去标）+ **筛选菜单的标签维**，标签字典随快照下发（不另查库） | 标签颜色（现不使用用户填的 hex；颜色一律 token）、按标签排序、批量打标签（多选态） |
-| **分组折叠区 + 管理**【Phase 2 第二 / 三刀】`folder.rs`（建 / 改名 / 删 + 移动语义）+ **列表按分组分区渲染**（全部分组 → 未分组 → 各分组，头带 2px 色条与计数）+ **折叠 / 展开**（会话级）+ **管理入口**：行菜单「移动到分组 ›」（多选也走这条）+ 分组头右键（重命名 / 删除 / 新建）；计数从**当前可见行**现算 | **拖拽到分组头**（单独一刀，沿用 M5 行拖拽）、折叠状态持久化（P2.4 设置项） |
+| **分组折叠区 + 管理**【Phase 2 第二 / 三 / 七刀】`folder.rs`（建 / 改名 / 删 + 移动语义）+ **列表按分组分区渲染**（全部分组 → 未分组 → 各分组，头带 2px 色条与计数）+ **折叠 / 展开**（**记忆到设置**：`resources.collapsed_groups` 按项目分桶；点一次写回全集）+ **管理入口**：行菜单「移动到分组 ›」（多选也走这条）+ 分组头右键（重命名 / 删除 / 新建）；计数从**当前可见行**现算 | **拖拽到分组头**（单独一刀，沿用 M5 行拖拽） |
 | 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / 只读 / 指纹 / 历史副本与裁剪 / 遍历） | — |
 | **历史内容保留**【P2.4】`KeepVersions`（全留 / 只留元数据 / 保留最近 n 份）：设置页「资产库 › 历史内容保留」（`resources.keep_versions`，含 `-1` = 全部保留）+ 归档对话框本次覆盖（同样接 `-1`）；宿主主线程读设置 → 转领域类型 → 随归档 / 版本还原作业带入 | 目前只有这两条路径会裁剪；将来新增写副本的路径必须同样接上 |
+| **默认排序 + 分组折叠记忆**【P2.4】`resources.default_sort`（面板里点排序即写回；“默认排序” = 上次用的那个）与 `resources.collapsed_groups`（折叠态，按项目分桶）；两者都是构造期注入 + 用户动作写回（注入不写，避免回声） | 默认分组（语义待拍板）；两项的位置都在设置架构 §14（Q7）的待确认视野里 |
 | 回收站语义（项目级一套 + `origin` 归属；软删登记行保归属，永久删除连关联一起清） | 回收站的自动清理策略（按时间 / 容量） |
 | 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤的**存储层**入口（面板已能按 kind 筛可见行） |
 | 行映射从 v1 的 4 份收敛为 1 份；测试库跑齐 007 + 020 | — |
@@ -130,5 +131,5 @@
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
-- 验证：`cargo test -p rds-analytics-resource -j 2` → **124 项单测**（16 存储 + 5 领域 + 13 本体 + 18 归档服务 + 7 索引修复 + 16 筛选/排序/分区 + 9 面板 + 5 详情 + 14 呈现 + 8 对话框（归档 5 / 取回 2 / 草稿多选 1）+ 3 版本对话框 + 3 索引修复对话框 + 3 回收站对话框 + 3 标签对话框 + 1 分组对话框）+ `tests/panel_window.rs` **17 项面板窗口测试** + `tests/dialog_window.rs` **9 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-workbench --all-targets -j 2`、`cargo check -p rds-app -j 2` 与 `cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
+- 验证：`cargo test -p rds-analytics-resource -j 2` → **124 项单测**（16 存储 + 5 领域 + 13 本体 + 18 归档服务 + 7 索引修复 + 16 筛选/排序/分区 + 9 面板 + 5 详情 + 14 呈现 + 8 对话框（归档 5 / 取回 2 / 草稿多选 1）+ 3 版本对话框 + 3 索引修复对话框 + 3 回收站对话框 + 3 标签对话框 + 1 分组对话框）+ `tests/panel_window.rs` **18 项面板窗口测试** + `tests/dialog_window.rs` **9 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-workbench --all-targets -j 2`、`cargo check -p rds-app -j 2` 与 `cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

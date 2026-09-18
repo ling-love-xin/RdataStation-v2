@@ -193,6 +193,8 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResourcesDefaultSort => {
             SettingValue::Text(settings.resources.default_sort.clone())
         }
+        // 复合值（折叠状态）：读写走资产库面板自己的入口。
+        Slot::ResourcesCollapsedGroups => return None,
         Slot::ConnectTimeoutMs => {
             SettingValue::Number(settings.connection_defaults.connect_timeout_ms as f64)
         }
@@ -269,6 +271,8 @@ impl SettingsService {
                 };
                 Self::set_default_resource_sort(text, cx);
             }
+            // 复合值没有标量写入路径：拒绝而不是"猜一半"。
+            Slot::ResourcesCollapsedGroups => return false,
             Slot::ConnectTimeoutMs => {
                 let Some(ms) = value.as_number() else { return false };
                 Self::set_connect_timeout_ms(ms.max(0.) as u64, cx);
@@ -453,6 +457,36 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.resources.default_sort = key.to_string();
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+    }
+
+    /// 某个项目里折叠的分组 key 列表（空 = 没有折叠项）。
+    ///
+    /// `project_root` 用绝对路径的字符串形式（与 `Shared::project_root` 同一来源）；
+    /// 哪些 key 还算数由资产库自己判（面板会丢掉已删分组的标记）。
+    pub fn collapsed_groups(project_root: &str, cx: &App) -> Vec<String> {
+        cx.global::<Settings>()
+            .resources
+            .collapsed_groups
+            .get(project_root)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// 覆盖某个项目的折叠分组列表（空列表 = 删掉该项目的记录，不留空壳）。
+    pub fn set_collapsed_groups(project_root: &str, keys: &[String], cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            if keys.is_empty() {
+                settings.resources.collapsed_groups.remove(project_root);
+            } else {
+                settings
+                    .resources
+                    .collapsed_groups
+                    .insert(project_root.to_string(), keys.to_vec());
+            }
         }
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
