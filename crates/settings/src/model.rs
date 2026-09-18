@@ -165,12 +165,19 @@ pub struct Resources {
     /// （`docs/architecture/analytics_resource/analytics-resource-architecture.md` §5.2）。
     #[serde(default = "default_keep_versions")]
     pub keep_versions: i64,
+    /// 资产库列表的默认排序字段（`name` / `archived_at` / `updated_at` / `size` / `version`）。
+    ///
+    /// 面板里点一次排序就会写回这里（“默认排序” = 上次用的那个）——方向不入库，
+    /// 由字段惯例给（名称升序，时间 / 大小 / 版本降序）。
+    #[serde(default = "default_resource_sort")]
+    pub default_sort: String,
 }
 
 impl Default for Resources {
     fn default() -> Self {
         Self {
             keep_versions: default_keep_versions(),
+            default_sort: default_resource_sort(),
         }
     }
 }
@@ -253,6 +260,9 @@ fn default_property_width() -> f32 {
 }
 fn default_keep_versions() -> i64 {
     5
+}
+fn default_resource_sort() -> String {
+    "name".to_string()
 }
 
 #[cfg(test)]

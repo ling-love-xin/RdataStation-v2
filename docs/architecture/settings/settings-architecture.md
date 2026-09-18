@@ -137,6 +137,7 @@ graph TD
 | `connection_defaults.connect_timeout_ms` | 连接默认值 | u64（ms） | `15000` | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` | 设置页 | ✅ 已落地 |
 | `connection_defaults.lan_disable_tls` | 连接默认值 | bool | `true` | 下次操作 | `connection_service.rs::apply_lan_tls_default` | 设置页 | ✅ 已落地 |
 | `resources.keep_versions` | 资产库 | i64（份数；`-1` = 全留、`0` = 只留元数据） | `5` | 下次操作 | `workbench/src/components/resource_host.rs` + `panels/resources.rs`（主线程读→`KeepVersions::from_setting`）→ `services/resource_jobs.rs::open_service` → `analytics_resource::ArchiveService::with_keep_versions` | 设置页 | ✅ 已落地（2026-09-18）|
+| `resources.default_sort` | 资产库 | enum `name`/`archived_at`/`updated_at`/`size`/`version` | `name` | 下次操作 | `components/resource_host.rs::remember_sort`（写）+ `panels/resources.rs::build_resources_panel`（读，注入 `ResourcesPanel::set_sort`） | 两者 | ✅ 已落地（2026-09-18）|
 | `logging.min_level` | 日志 | enum `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR` | `INFO` | 即时 | `crates/app/src/main.rs`（启动取值）；运行时经装配层注册的 sink → `engine::logging::reload_log_level` | 设置页（另有「查看日志…」/「打开日志目录」两个动作行） | ✅ 已落地（2026-09-16） |
 | `resources.keep_versions` | 分析资产 | i32（`0` = 只留元数据；`-1` = 全留） | `5` | 下次归档 | `analytics_resource/src/service.rs`（现为常量 `DEFAULT_KEEP_VERSIONS`） | 设置页 | ⬜ 待 M6 P2.4 接线 |
 

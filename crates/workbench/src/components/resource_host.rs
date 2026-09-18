@@ -48,6 +48,7 @@ use analytics_resource::model::{
 };
 use analytics_resource::payload::{PayloadStore, RESOURCES_DIR_NAME};
 use analytics_resource::resource_view::ResourcesHost;
+use analytics_resource::filter::{SortField, SortOrder};
 
 use crate::panels::Shared;
 use crate::services::resource_jobs;
@@ -755,6 +756,14 @@ impl ResourcesHost for WorkbenchResourceHost {
         );
         self.shared.refresh_resources(cx);
         self.notice(format!("资产库：正在把{scope}移到「{target}」…"), cx);
+    }
+
+    /// 记住列表排序：写回设置（`resources.default_sort`）。
+    ///
+    /// 只存**字段**不存方向：方向由 `SortField::default_order` 给（名称升序，时间 / 大小 / 版本降序）
+    /// ——同名字段两个方向存成两个 key 反而让设置页多出一堆只能二选一的行。
+    fn remember_sort(&self, field: SortField, _order: SortOrder, cx: &mut App) {
+        settings::SettingsService::set_default_resource_sort(field.key(), cx);
     }
 
     fn request_open_trash(&self, _window: &mut Window, cx: &mut App) {

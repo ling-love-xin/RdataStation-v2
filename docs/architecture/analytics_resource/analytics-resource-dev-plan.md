@@ -1,12 +1,29 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前五刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键与历史保留设置项均可用，**124 单测 + 25 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前六刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、历史保留与默认排序两个设置项均可用，**124 单测 + 26 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-18 — Phase 2 第六刀（P2.4 中段）：默认排序接设置项（“记住上次”）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 落盘 key ✅ | `SortField::{key, from_key, default_order}`：key（`name` / `archived_at` / `updated_at` / `size` / `version`）与菜单文案**分家**（文案会改，key 不会）；未知 key 返回 `None`（不猜，调用方回退默认）；每列的默认方向（名称升序，时间 / 大小 / 版本**降序**——点这几列的人想看的是“最新 / 最大”） | `src/filter.rs` |
+| 面板 ✅ | 新增 `ResourcesPanel::set_sort(field, order)`（**注入用，不回调宿主**——否则注入的默认值会被当成用户动作原样写回）；`choose_sort` 在算完新排序后调一次新端口 `ResourcesHost::remember_sort`（用户动作才写） | `src/resource_view.rs` |
+| 设置项 ✅ | `resources.default_sort`（Enum 五列，默认 `name`，入口 = 设置页 + 模块内，生效 = 下次操作）：设置页「资产库」节第二行 | `crates/settings/src/{model,registry,lib}.rs` |
+| 宿主接线 ✅ | 构造期读设置 → `SortField::from_key` → 注入面板；面板点排序 → `remember_sort` → 写回设置（**“默认排序” = 上次用的那个**，不另给一份设置） | `crates/workbench/src/{components/resource_host.rs,panels/resources.rs}` |
+| 验证 | `cargo test -p rds-analytics-resource -j 1` → **124 单测 + 17 面板窗口 + 9 对话框窗口全绿**（+1 面板窗口：注入默认排序只重排不回写；两个排序旧用例改断言写入序列）；`cargo test -p rds-settings -j 1` **21 项全绿**；`cargo test -p rds-workbench -j 1 --lib --test ui_contract` 100 + 7 全绿 | — |
+
+**两处刻意的取舍**：
+
+1. **只存字段不存方向**：把（字段 + 方向）存成两个 key 会让设置页多出一堆只能二选一的行；方向交给字段惯例（名称升序、时间 / 大小 / 版本降序），用户在面板里当次的翻转不被记住；
+2. **没有单独的“默认排序”菜单**：面板里点排序就是改默认——两处各存一份（“默认”与实际）必然会不一致。
+
+**未落地**：分组折叠状态持久化（P2.4 余项；它是**项目级结构化 UI 状态**，按 `settings-architecture.md` §2.2 的判据不进 `settings.json`，需单开一刀）、拖拽到分组头、批量打标签（P2.5）、`F2` 重命名。
 
 ### 2026-09-18 — Phase 2 第五刀（P2.4 前半）：历史内容保留接设置项
 
@@ -556,7 +573,7 @@
 | P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，第一 / 三刀）**：存储层四项 + `dialogs/tag.rs`（勾选 / 新建并打上 / 行内 ⋯：重命名 / 删除）+ 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板、筛选菜单与这个对话框里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
 | P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **存储层、分区渲染与管理入口已落**（第二 / 三刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键；**余**：拖拽 | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单已落） | 折叠状态持久化（待 P2.4 设置项）；空分组可见（已满足：头恒在） |
 | P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本）—— **排序已落全五个键**（第四刀，含归档时登记体积）；**余**：搜索匹配别名 / 标签 / 来源表 | `src/resource.rs`、`src/resource_view.rs`、`src/filter.rs`（排序） | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
-| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1）—— **`keep_versions` 已落**（第五刀：设置页新增「资产库」节，含 `-1` = 全部保留；归档 / 版本还原两条路径都接）；**余**：默认排序与分组折叠态（需先过设置层准入五条） | `crates/settings`、`src/service.rs` | 重启后保持 |
+| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1）—— **`keep_versions` 与 `default_sort` 已落**（第五 / 六刀）；**余**：默认分组、分组折叠态（后者按 `settings-architecture.md` §2.2 属项目级结构化状态，不进 `settings.json`） | `crates/settings`、`src/service.rs` | 重启后保持 |
 | P2.5 | 多选与批量：批量打标签 / 批量移动 / 批量删除（含数量提示） | `src/resource_view.rs`、`src/commands.rs` | 多选态菜单按数量自适应（v1 的缺陷） |
 
 ## 5. Phase 3 — 版本与恢复

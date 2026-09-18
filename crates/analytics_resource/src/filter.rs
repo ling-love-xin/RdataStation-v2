@@ -156,6 +156,31 @@ impl SortField {
         }
     }
 
+    /// 落盘 key（设置项 `resources.default_sort` 的取值；与菜单文案分家——文案会改，key 不会）。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::ArchivedAt => "archived_at",
+            Self::UpdatedAt => "updated_at",
+            Self::Size => "size",
+            Self::Version => "version",
+        }
+    }
+
+    /// 解析落盘 key；未知值返回 `None`（**不猜**，由调用方回退到默认）。
+    pub fn from_key(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|field| field.key() == text)
+    }
+
+    /// 该字段的默认方向：名称升序（A→Z 是直觉），时间 / 大小 / 版本**降序**
+    /// （用户点这几列想看的是"最新 / 最大"，不是"最早 / 最小"）。
+    pub fn default_order(self) -> SortOrder {
+        match self {
+            Self::Name => SortOrder::Asc,
+            Self::ArchivedAt | Self::UpdatedAt | Self::Size | Self::Version => SortOrder::Desc,
+        }
+    }
+
     /// 工具栏按钮上的短文案。
     ///
     /// 按钮要跟着搜索框抢 240px 面板的宽度：四个字的「归档时间」会把搜索框挤到没法用
@@ -573,6 +598,17 @@ mod tests {
             SortField::ALL.map(SortField::short_label),
             ["名称", "归档", "更新", "大小", "版本"]
         );
+        // 落盘 key 与菜单文案分家：文案改文案、key 不改（设置项 `resources.default_sort` 存它）。
+        assert_eq!(
+            SortField::ALL.map(SortField::key),
+            ["name", "archived_at", "updated_at", "size", "version"]
+        );
+        for field in SortField::ALL {
+            assert_eq!(SortField::from_key(field.key()), Some(field));
+        }
+        assert_eq!(SortField::from_key("看不见的列"), None, "未知 key 不猜");
+        assert_eq!(SortField::Name.default_order(), SortOrder::Asc);
+        assert_eq!(SortField::UpdatedAt.default_order(), SortOrder::Desc);
         assert_eq!(SortOrder::Asc.arrow(), "↑");
         assert_eq!(SortOrder::Desc.arrow(), "↓");
     }

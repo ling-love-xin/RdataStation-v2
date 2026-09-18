@@ -21,6 +21,7 @@ use analytics_resource::dialogs::index_repair::RepairAction;
 use analytics_resource::dialogs::tag::TagDialogEvent;
 use analytics_resource::dialogs::trash::TrashAction;
 use analytics_resource::dialogs::version::VersionAction;
+use analytics_resource::filter::SortField;
 use analytics_resource::resource_view::{ResourcesPanel, ResourcesSnapshot};
 use analytics_resource::KeepVersions;
 
@@ -35,6 +36,11 @@ impl SidebarPanel {
     ) -> Entity<ResourcesPanel> {
         let host = crate::components::resource_host::build_host(shared);
         let panel = cx.new(|cx| ResourcesPanel::new(host, cx));
+        // 默认排序（设置项 `resources.default_sort`）：构造期注入一次，之后面板自己记住
+        // 用户的每次点击（`choose_sort` → 宿主写回）。方向按字段惯例给，不另存一份。
+        let field = SortField::from_key(&settings::SettingsService::default_resource_sort(cx))
+            .unwrap_or_default();
+        panel.update(cx, |panel, cx| panel.set_sort(field, field.default_order(), cx));
         // 登记弱句柄：右侧「存档详情」要拿它的选中项（宿主级弱句柄，与 mock / insight 同例）。
         *shared.resources_panel.borrow_mut() = Some(panel.downgrade());
         panel

@@ -190,6 +190,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         Slot::ResourcesKeepVersions => {
             SettingValue::Number(settings.resources.keep_versions as f64)
         }
+        Slot::ResourcesDefaultSort => {
+            SettingValue::Text(settings.resources.default_sort.clone())
+        }
         Slot::ConnectTimeoutMs => {
             SettingValue::Number(settings.connection_defaults.connect_timeout_ms as f64)
         }
@@ -259,6 +262,12 @@ impl SettingsService {
                 };
                 // 页面上只给预设档（含 `-1` = 全留），取整后写入。
                 Self::set_keep_versions(value.round() as i64, cx);
+            }
+            Slot::ResourcesDefaultSort => {
+                let Some(text) = value.as_text() else {
+                    return false;
+                };
+                Self::set_default_resource_sort(text, cx);
             }
             Slot::ConnectTimeoutMs => {
                 let Some(ms) = value.as_number() else { return false };
@@ -427,6 +436,23 @@ impl SettingsService {
         {
             let settings = cx.global_mut::<Settings>();
             settings.resources.keep_versions = value;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
+    }
+
+    /// 资产库列表的默认排序字段（落盘 key 形如 `name` / `archived_at`）。
+    ///
+    /// 返回原始文本：**认不认得出这个 key 是 M6 的事**（设置层不认识 `SortField`）。
+    pub fn default_resource_sort(cx: &App) -> String {
+        cx.global::<Settings>().resources.default_sort.clone()
+    }
+
+    /// 设置并持久化资产库列表的默认排序字段。
+    pub fn set_default_resource_sort(key: &str, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.resources.default_sort = key.to_string();
         }
         let settings = cx.global::<Settings>().clone();
         persist(&settings);

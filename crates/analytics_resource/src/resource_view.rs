@@ -324,6 +324,11 @@ pub trait ResourcesHost: 'static {
     ///
     /// 开的是**目录**（与行的「在系统中显示」不同：那条要选中某个本体文件）。
     fn request_open_payload_dir(&self, window: &mut Window, cx: &mut App);
+    /// 记住列表排序（工具栏点选排序后调用）。
+    ///
+    /// 宿主把它写回设置（`resources.default_sort`）——“默认排序”在这里就是“上次用的那个”，
+    /// 不另给一个“默认排序”菜单（两处各存一份就会不一致）。面板不知道 settings 的存在。
+    fn remember_sort(&self, field: SortField, order: SortOrder, cx: &mut App);
     /// 打开资源回收站（面板头「⋯ → 回收站…」）。
     ///
     /// 回收站是**项目级**的（与草稿箱共用一处，模块硬约束 5）：对话框只列本模块的条目，
@@ -1303,12 +1308,28 @@ impl ResourcesPanel {
 
     /// 选排序字段：同一字段再点一次翻转方向；换字段保持当前方向
     /// （沿用 M4 与 v1 `use-pagination` 的语义——用户刚调完方向再换字段，不该被重置）。
+    ///
+    /// 选完把（字段 + 方向）告诉宿主——它会把**字段**写进设置（`resources.default_sort`），
+    /// 下次打开面板就还是这一列。
     pub fn choose_sort(&mut self, field: SortField, cx: &mut Context<Self>) {
         if field == self.sort_field {
             self.sort_order = self.sort_order.flipped();
         } else {
             self.sort_field = field;
         }
+        self.host
+            .remember_sort(self.sort_field, self.sort_order, cx);
+        self.refresh_view_rows(cx);
+        cx.notify();
+    }
+
+    /// 直接设排序（宿主在构造期注入设置项里的默认排序）。
+    ///
+    /// 与 [`choose_sort`](Self::choose_sort) 分开：这一条**不回调宿主**——否则注入的默认值
+    /// 会被原样写回去，看不出写回到底是用户的动作还是自己的回声。
+    pub fn set_sort(&mut self, field: SortField, order: SortOrder, cx: &mut Context<Self>) {
+        self.sort_field = field;
+        self.sort_order = order;
         self.refresh_view_rows(cx);
         cx.notify();
     }

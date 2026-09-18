@@ -123,6 +123,7 @@
 | 连接默认值 | 建连超时 | `connection_defaults.connect_timeout_ms` | segmented 5/15/30/60s | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` |
 | 连接默认值 | LAN 直连 TLS | `connection_defaults.lan_disable_tls` | segmented 关 TLS / 保留 TLS | 下次操作 | `connection_service.rs::apply_lan_tls_default` |
 | 资产库 | 历史内容保留 | `resources.keep_versions` | segmented 只留元数据 / 5 / 10 / 20 / 全部保留（**含 `-1` 哨兵**） | 下次操作 | `workbench/src/components/resource_host.rs` + `panels/resources.rs`（读设置 → `KeepVersions::from_setting`）→ `services/resource_jobs.rs::open_service` → `analytics_resource::ArchiveService::with_keep_versions` |
+| 资产库 | 默认排序 | `resources.default_sort` | segmented 名称 / 归档时间 / 更新时间 / 大小 / 版本号 | 下次操作 | `components/resource_host.rs::remember_sort`（写）+ `panels/resources.rs::build_resources_panel`（读）→ `analytics_resource::ResourcesPanel::set_sort`；面板内点排序 = 同一写入路径 |
 | 项目 | 列表排序 | `projects.sort_mode` | segmented 最近 / 名称 / 创建 | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写，双入口：选择器内循环按钮） |
 | 日志 | 日志级别 | `logging.min_level` | segmented 全部 / TRACE / DEBUG / INFO / WARN / ERROR | 即时 | `crates/app/src/main.rs`（启动取值）+ 装配层 sink → `engine::logging::reload_log_level` |
 | 日志 | 查看日志… | —（动作行） | `Button` | — | 宿主回调 → `components/log_dialog.rs`；说明行写「打开日志查看对话框」 |

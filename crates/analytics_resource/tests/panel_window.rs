@@ -142,6 +142,11 @@ impl ResourcesHost for RecordingHost {
     fn request_refresh(&self, _window: &mut Window, _cx: &mut App) {
         self.calls.borrow_mut().push("refresh".to_string());
     }
+    fn remember_sort(&self, field: SortField, order: SortOrder, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("sort:{}:{}", field.key(), order.arrow()));
+    }
 }
 
 fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> ArchiveRow {
@@ -748,7 +753,16 @@ fn sort_click_flips_direction_and_keeps_it_across_fields(cx: &mut TestAppContext
             .collect::<Vec<_>>()
     });
     assert_eq!(versions, vec![1, 2, 8]);
-    assert!(host.calls().is_empty());
+    // 排序是“记住上次”的入口：每次都把（字段 + 方向）告诉宿主（宿主写 `resources.default_sort`），
+    // 但**不碰**取数（没有任何 refresh / 服务调用）。
+    assert_eq!(
+        host.calls(),
+        vec![
+            "sort:name:↓".to_string(),
+            "sort:version:↓".to_string(),
+            "sort:version:↑".to_string(),
+        ]
+    );
 }
 
 #[gpui_kit::test]
@@ -831,7 +845,58 @@ fn sort_by_time_and_size_uses_raw_values(cx: &mut TestAppContext) {
             .collect::<Vec<_>>()
     });
     assert_eq!(order, vec!["ar_big".to_string(), "ar_small".to_string()]);
-    assert!(host.calls().is_empty(), "排序是纯视图动作，不该惊动宿主");
+    assert_eq!(
+        host.calls(),
+        vec![
+            "sort:updated_at:↑".to_string(),
+            "sort:size:↑".to_string(),
+            "sort:size:↓".to_string(),
+        ],
+        "排序只惊动“记住排序”这一个口，不触发取数"
+    );
+}
+
+#[gpui_kit::test]
+fn injected_default_sort_reorders_without_echoing_back(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let mut big = row("ar_big", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    big.size_bytes = Some(4_096);
+    let mut small = row("ar_small", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    small.size_bytes = Some(900);
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_snapshot(snapshot(vec![big, small], false), cx);
+        });
+    });
+
+    // 宿主注入设置项里的默认排序（大小降序）：行重排，但**不回写宿主**——
+    // 否则注入的默认值会被当成用户动作原样写回去。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.set_sort(SortField::Size, SortOrder::Desc, cx)
+        });
+    });
+    let order = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .view_rows()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(order, vec!["ar_big".to_string(), "ar_small".to_string()]);
+    assert_eq!(panel.read_with(cx, |panel, _| panel.sort()), (SortField::Size, SortOrder::Desc));
+    assert!(
+        host.calls().is_empty(),
+        "注入默认值是宿主的动作，不是用户动作：不写回、不取数"
+    );
 }
 
 #[gpui_kit::test]
