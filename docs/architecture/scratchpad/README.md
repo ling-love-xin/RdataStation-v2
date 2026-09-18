@@ -2,6 +2,8 @@
 
 > **一句话**：草稿箱是**单个项目私有的临时探索工作区**——面板根 = 项目下的可见目录 `{项目}/scratchpad/`，随项目迁移、不进任何数据库、不跨项目共享。它回答的是「**我正在做什么**」（M4 是"我能看到什么数据"，M6 是"我留下了什么"）。
 >
+> **宣传页（一页看懂）**：[`scratchpad-showcase.html`](scratchpad-showcase.html)（视觉版，明暗双主题、离线可开、吸顶导航）· [`scratchpad-showcase.md`](scratchpad-showcase.md)（可贴版，适合贴进 PR / wiki）
+>
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节指向本目录内文档，**不复制设计**。
 > 状态：**面板与存储闭环已落地**（2026-09-15）——Phase A/B 全部完成，Phase C（编辑器联动）与 Phase D（提升为分析资源）待续。
 
@@ -129,7 +131,7 @@ env RUSTC="<toolchain>/bin/rustc.exe" "<toolchain>/bin/cargo.exe" test -p rds-wo
 | --- | --- |
 | `README.md`（本文） | 模块入口：**从哪开始读** |
 | `scratchpad-architecture.md` | **为什么这样设计 / 怎么运转**：不变式 / 概念模型 / 存储布局 / 回收站与元数据 / 数据流 / 决策表 / 降级 / 测试策略 / 已知问题（权威） |
-| `scratchpad-showcase.html` | **宣传页 / 一页看懂**（自包含 HTML，明暗可切）：定位与关键数字 / 12 个核心特点 / 三条主流程 / 分层架构与目录图 / 阶段状态 / 3 分钟上手 / 验证命令 |
+| `scratchpad-showcase.md` / `scratchpad-showcase.html` | **宣传页（一页看懂）**：一句话 + 它替你做到的事 / 为什么它不是一个「临时文件夹」（V1 逐条对照）/ 三个高光 / 四个剧本 / 一次「找 + 改」全流程 / 与编辑器联动闭环 / 内容与内部态分离 / 渲染期零 I/O / 架构（依赖只向下 + 端口清单 + 两条纪律）/ 质量与证据 / 边界与待办 / 文档地图；**可贴版**适合 PR 与 wiki，**视觉版**（吸顶导航滚动高亮 + 首屏关键数字 + 卡片排版）自包含、离线可开 |
 | `scratchpad-prototype-design.md` | **长什么样**：面板布局 / 树与分组 / 交互规格 / 主题映射 / 落点映射 |
 | `scratchpad-prototype.html` | 可交互原型（RDS Light/Dark，可切主题） |
 | `scratchpad-dev-plan.md` | **做什么、做到哪**：Phase 划分 / 逐轮进度记录 / 测试场景 / 风险 / 映射 |
