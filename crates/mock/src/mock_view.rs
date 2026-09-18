@@ -822,22 +822,33 @@ pub(crate) fn summarize_params(config: &GeneratorConfig) -> String {
         return String::new();
     };
     let mut parts = Vec::new();
-    // 工作日历一上就是 5 个参数：只在「仅工作日」开着时才展开，「关着的开关」与「空列表」
+    // 工作日历一上就是 7 个参数：只在开关打开时才展开，「关着的开关」与「空列表」
     // 不占摘要位置——否则字段卡片那一行会被「工作周 … · 跳过日期 0 项 · 上班日期 0 项」撑爆
     let calendar_on = payload
         .get("workdays_only")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let hours_on = payload
+        .get("work_hours_only")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     for field in spec.params {
         let Some(raw) = payload.get(field.key) else {
             continue;
         };
-        if matches!(field.key, "workdays_only" | "work_hours_only")
-            && raw.as_bool() != Some(true)
-        {
+        if matches!(field.key, "workdays_only" | "work_hours_only") && raw.as_bool() != Some(true) {
             continue;
         }
         if matches!(field.key, "work_week" | "skip_dates" | "work_dates") && !calendar_on {
+            continue;
+        }
+        if matches!(field.key, "work_hour_start" | "work_hour_end") && !hours_on {
+            continue;
+        }
+        // 窗口是默认值时不重复占位：开关的标签已经写着「仅工作时段」
+        if (field.key == "work_hour_start" && raw.as_str() == Some("09:00"))
+            || (field.key == "work_hour_end" && raw.as_str() == Some("18:00"))
+        {
             continue;
         }
         if matches!(field.key, "skip_dates" | "work_dates")

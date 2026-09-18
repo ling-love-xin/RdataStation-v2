@@ -246,7 +246,9 @@ PARAM_LABEL = {
     "amplitude": "周期振幅",
     "noise": "噪声强度",
     "workdays_only": "仅工作日",
-    "work_hours_only": "仅工作时段（09:00~18:00）",
+    "work_hours_only": "仅工作时段",
+    "work_hour_start": "工作时段起（HH:MM）",
+    "work_hour_end": "工作时段止（HH:MM）",
     "work_week": "工作周（周一~周日，1 上班）",
     "skip_dates": "跳过日期（节假日）",
     "work_dates": "上班日期（调休）",
@@ -276,8 +278,10 @@ STRING_DEFAULTS = {
     "pattern": '"\\\\d{3}-\\\\d{4}".to_string()',
     "template": '"{value}".to_string()',
     "fmt": '"000".to_string()',
-    # 工作日历的工作周掩码：默认周一~周五上班（缺省留空会被生成前护栏拦住）
+    # 工作日历：工作周掩码与工作时段窗口（缺省留空会被生成前护栏拦住）
     "work_week": '"1111100".to_string()',
+    "work_hour_start": '"09:00".to_string()',
+    "work_hour_end": '"18:00".to_string()',
 }
 
 

@@ -9,6 +9,7 @@ use fake::rand::SeedableRng;
 use fake::Fake;
 
 use super::generators::generate_cell;
+use crate::generators::parse_hour_minutes;
 use engine::duckdb::row_to_arrow::duckdb_rows_to_arrow;
 use engine::duckdb::{DuckDBManager, TempTableSource};
 use shared::models::QueryResult;
@@ -794,19 +795,69 @@ fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
             ))
         }
 
-        // ===== 日期时间类：fake 按「分钟差」取随机偏移，差 ≤ 0 就是空区间 =====
-        GeneratorConfig::DateTime { min, max } => datetime_range_problem(min, max),
-        GeneratorConfig::Date { min, max } => date_range_problem(min, max),
-
-        // ===== 工作日历（列级参数）：勾了「仅工作日」才校验，没勾时留个值不该拦住生成 =====
-        // 必须排在下面那条全匹配的 `DateTimeBetween { .. }` 之前，否则永远走不到
-        GeneratorConfig::DateTimeBetween {
+        // ===== 日期时间类：区间（fake 按「分钟差」取偏移，差 ≤ 0 就是空区间）→ 工作时段 → 工作日历 =====
+        // 三个开关各自独立：未勾选的那一项不校验（留着旧值不该拦住生成），一次只报一个问题。
+        GeneratorConfig::DateTime {
+            min,
+            max,
+            workdays_only,
+            work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => datetime_range_problem(min, max)
+            .or_else(|| work_hours_problem(*work_hours_only, work_hour_start, work_hour_end))
+            .or_else(|| work_calendar_problem(*workdays_only, work_week, skip_dates, work_dates)),
+        GeneratorConfig::DateTimeBefore {
+            before,
+            workdays_only,
+            work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => datetime_range_problem(crate::generators::DEFAULT_DATETIME_MIN, before)
+            .or_else(|| work_hours_problem(*work_hours_only, work_hour_start, work_hour_end))
+            .or_else(|| work_calendar_problem(*workdays_only, work_week, skip_dates, work_dates)),
+        GeneratorConfig::DateTimeAfter {
+            after,
+            workdays_only,
+            work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => datetime_range_problem(after, crate::generators::DEFAULT_DATETIME_MAX)
+            .or_else(|| work_hours_problem(*work_hours_only, work_hour_start, work_hour_end))
+            .or_else(|| work_calendar_problem(*workdays_only, work_week, skip_dates, work_dates)),
+        GeneratorConfig::Date {
+            min,
+            max,
             workdays_only,
             work_week,
             skip_dates,
             work_dates,
-            ..
-        } if *workdays_only => work_calendar_problem(work_week, skip_dates, work_dates),
+        } => date_range_problem(min, max)
+            .or_else(|| work_calendar_problem(*workdays_only, work_week, skip_dates, work_dates)),
+        GeneratorConfig::DateTimeBetween {
+            start: min,
+            end: max,
+            workdays_only,
+            work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => datetime_range_problem(min, max)
+            .or_else(|| work_hours_problem(*work_hours_only, work_hour_start, work_hour_end))
+            .or_else(|| work_calendar_problem(*workdays_only, work_week, skip_dates, work_dates)),
+
+        // ===== 顺序日期的工作日历：步长须是整天，其余同上一组 =====
         GeneratorConfig::SequentialDate {
             workdays_only,
             step_seconds,
@@ -815,7 +866,7 @@ fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
             work_dates,
             ..
         } if *workdays_only => work_days_step_problem(*step_seconds)
-            .or_else(|| work_calendar_problem(work_week, skip_dates, work_dates)),
+            .or_else(|| work_calendar_problem(*workdays_only, work_week, skip_dates, work_dates)),
         GeneratorConfig::SequentialDateWithGaps {
             workdays_only,
             step_seconds,
@@ -824,12 +875,7 @@ fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
             work_dates,
             ..
         } if *workdays_only => work_days_step_problem(*step_seconds)
-            .or_else(|| work_calendar_problem(work_week, skip_dates, work_dates)),
-        GeneratorConfig::DateTimeBetween {
-            start: min,
-            end: max,
-            ..
-        } => datetime_range_problem(min, max),
+            .or_else(|| work_calendar_problem(*workdays_only, work_week, skip_dates, work_dates)),
 
         _ => None,
     }
@@ -841,15 +887,50 @@ fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
 /// 列表越长逐行判定越久（一年节假日 ≈ 20 条，366 条已是一年逐日列满的量级）。
 const MAX_CALENDAR_DATES: usize = 366;
 
+/// 工作时段窗口的合法性：两个时刻要能解析，且不能是零长窗口。
+///
+/// 起 > 止 是**合法**的（跨零点 / 夜班，如 `22:00~06:00`），所以只拦「相等」；
+/// 未勾选「仅工作时段」时不校验（字段里留着旧值不该拦住生成）。
+fn work_hours_problem(work_hours_only: bool, start: &str, end: &str) -> Option<String> {
+    if !work_hours_only {
+        return None;
+    }
+    let Some(start_minutes) = parse_hour_minutes(start) else {
+        return Some(format!(
+            "的「工作时段起（HH:MM）」里的「{start}」不是时刻：需要 24 小时制的 `HH:MM`，如 09:00"
+        ));
+    };
+    let Some(end_minutes) = parse_hour_minutes(end) else {
+        return Some(format!(
+            "的「工作时段止（HH:MM）」里的「{end}」不是时刻：需要 24 小时制的 `HH:MM`，如 18:00"
+        ));
+    };
+    if start_minutes >= 1440 {
+        return Some(format!(
+            "的「工作时段起（HH:MM）」需早于 24:00（当前「{start}」）：24:00 只能当结束时刻"
+        ));
+    }
+    if start_minutes == end_minutes {
+        return Some(format!(
+            "的工作时段是零长窗口（起止都是「{start}」）：起 > 止 会按跨零点（夜班）理解，起 = 止 则无值可放"
+        ));
+    }
+    None
+}
+
 /// 工作日历（工作周掩码 + 跳过日期 + 上班日期）的合法性。
 ///
-/// 三个日期生成器共用同一套规则；非法值必须拦在生成前——掩码非法会让日历静默退到周一~周五，
+/// 七个日期生成器共用同一套规则；非法值必须拦在生成前——掩码非法会让日历静默退到周一~周五，
 /// 日期串写错会让那一天静默不生效，两者用户都看不出来。
 fn work_calendar_problem(
+    workdays_only: bool,
     work_week: &str,
     skip_dates: &[String],
     work_dates: &[String],
 ) -> Option<String> {
+    if !workdays_only {
+        return None;
+    }
     let bytes = work_week.as_bytes();
     if bytes.len() != 7 || !bytes.iter().all(|b| *b == b'0' || *b == b'1') {
         return Some(format!(
@@ -1220,6 +1301,48 @@ mod tests {
     use crate::models::{ColumnDataType, GeneratorConfig};
     use crate::models::Locale;
 
+    /// 日历字段全默认的 `DateTime`（测试里多数用例只关心区间）。
+    fn plain_date_time(min: &str, max: &str) -> GeneratorConfig {
+        GeneratorConfig::DateTime {
+            min: min.to_string(),
+            max: max.to_string(),
+            workdays_only: false,
+            work_hours_only: false,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        }
+    }
+
+    /// 日历字段全默认的 `Date`。
+    fn plain_date(min: &str, max: &str) -> GeneratorConfig {
+        GeneratorConfig::Date {
+            min: min.to_string(),
+            max: max.to_string(),
+            workdays_only: false,
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        }
+    }
+
+    /// 只开「仅工作时段」的 `DateTimeBetween`（用给定窗口）。
+    fn hour_window(min: &str, start: &str, end: &str) -> GeneratorConfig {
+        GeneratorConfig::DateTimeBetween {
+            start: min.to_string(),
+            end: "2024-12-31T23:59:59Z".to_string(),
+            workdays_only: false,
+            work_hours_only: true,
+            work_hour_start: start.to_string(),
+            work_hour_end: end.to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        }
+    }
+
     #[test]
     fn test_sanitize_table_name_alphanumeric() {
         assert_eq!(sanitize_table_name("hello_world"), "hello_world");
@@ -1287,10 +1410,7 @@ mod tests {
             ColumnDef {
                 name: "Order Date".to_string(),
                 data_type: ColumnDataType::Date,
-                generator: GeneratorConfig::Date {
-                    min: "2024-01-01".to_string(),
-                    max: "2024-12-31".to_string(),
-                },
+                generator: plain_date("2024-01-01", "2024-12-31"),
                 nullable_ratio: 0.0,
                 unique: false,
                 dependency: None,
@@ -1427,18 +1547,26 @@ mod tests {
         );
         // 时间区间不足一分钟：fake 走 `(0..分钟差)`，差 ≤ 0 即空区间
         assert!(
-            generator_param_problem(&GeneratorConfig::DateTime {
-                min: "2024-01-01T00:00:00Z".to_string(),
-                max: "2024-01-01T00:00:30Z".to_string(),
-            })
+            generator_param_problem(&plain_date_time(
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:30Z",
+            ))
             .is_some()
         );
+        assert!(generator_param_problem(&plain_date("2024-12-31", "2024-01-01")).is_some());
+        // 工作时段窗口：解析不了 / 零长窗口都拦
         assert!(
-            generator_param_problem(&GeneratorConfig::Date {
-                min: "2024-12-31".to_string(),
-                max: "2024-01-01".to_string(),
-            })
-            .is_some()
+            generator_param_problem(&hour_window("2024-01-01T00:00:00Z", "9点半", "18:00"))
+                .is_some()
+        );
+        assert!(
+            generator_param_problem(&hour_window("2024-01-01T00:00:00Z", "09:00", "09:00"))
+                .is_some()
+        );
+        // 24:00 只能当结束时刻
+        assert!(
+            generator_param_problem(&hour_window("2024-01-01T00:00:00Z", "24:00", "18:00"))
+                .is_some()
         );
         // 分布族：参数越界会让抽样退化成常量 / NaN（λ ≤ 0、α ≤ 0、p 越界）
         assert!(generator_param_problem(&GeneratorConfig::Poisson { lambda: 0.0 }).is_some());
@@ -1529,6 +1657,8 @@ mod tests {
                 end: "2024-12-31T23:59:59Z".to_string(),
                 workdays_only: true,
                 work_hours_only: true,
+                work_hour_start: "09:00".to_string(),
+                work_hour_end: "18:00".to_string(),
                 work_week: "1111100".to_string(),
                 skip_dates: too_many,
                 work_dates: Vec::new(),
@@ -1553,20 +1683,11 @@ mod tests {
             GeneratorConfig::Weighted {
                 choices: vec![("a".to_string(), 1.0), ("b".to_string(), 2.0)],
             },
-            GeneratorConfig::DateTime {
-                min: "2020-01-01T00:00:00Z".to_string(),
-                max: "2025-12-31T23:59:59Z".to_string(),
-            },
+            plain_date_time("2020-01-01T00:00:00Z", "2025-12-31T23:59:59Z"),
             // 同一天的日期区间合法（下界 00:00:00 ~ 上界 23:59:59）
-            GeneratorConfig::Date {
-                min: "2024-01-01".to_string(),
-                max: "2024-01-01".to_string(),
-            },
+            plain_date("2024-01-01", "2024-01-01"),
             // 解析不出来的时间串不由这里拦：生成器自己会回退到默认窗口
-            GeneratorConfig::DateTime {
-                min: "2024-01-01".to_string(),
-                max: "2024-12-31".to_string(),
-            },
+            plain_date_time("2024-01-01", "2024-12-31"),
             GeneratorConfig::AutoIncrement { start: 1, step: 1 },
             // 分布族边界：λ / α / p 取到端点值都合法
             GeneratorConfig::Poisson { lambda: 0.5 },
@@ -1620,8 +1741,25 @@ mod tests {
                 end: "2024-12-31T23:59:59Z".to_string(),
                 workdays_only: false,
                 work_hours_only: false,
+                work_hour_start: "9点半".to_string(),
+                work_hour_end: "18:00".to_string(),
                 work_week: "111100".to_string(),
                 skip_dates: vec!["2026-1-1".to_string()],
+                work_dates: Vec::new(),
+            },
+            // 工作时段窗口：正常窗口、夜间跨零点、24:00 当结束都合法
+            hour_window("2024-01-01T00:00:00Z", "10:30", "12:00"),
+            hour_window("2024-01-01T00:00:00Z", "22:00", "06:00"),
+            hour_window("2024-01-01T00:00:00Z", "08:00", "24:00"),
+            // 只勾「仅工作时段」不勾「仅工作日」也合法（两者互不依赖）
+            hour_window("2024-01-01T00:00:00Z", "09:00", "17:00"),
+            // 日期列也可以只要工作日（没有工作时段这两个字段）
+            GeneratorConfig::Date {
+                min: "2024-01-01".to_string(),
+                max: "2024-12-31".to_string(),
+                workdays_only: true,
+                work_week: "1111100".to_string(),
+                skip_dates: vec!["2024-10-01".to_string()],
                 work_dates: Vec::new(),
             },
         ] {

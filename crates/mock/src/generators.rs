@@ -329,30 +329,122 @@ pub(super) fn generate_cell(
         }
 
         // ========== 日期时间 ==========
-        GeneratorConfig::DateTime { min, max } => datetime_between(min, max, rng),
+        GeneratorConfig::DateTime {
+            min,
+            max,
+            workdays_only,
+            work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => datetime_with_calendar(
+            min,
+            max,
+            CalendarArgs::new(
+                *workdays_only,
+                *work_hours_only,
+                work_hour_start,
+                work_hour_end,
+                work_week,
+                skip_dates,
+                work_dates,
+            ),
+            rng,
+        ),
+        GeneratorConfig::DateTimeBefore {
+            before,
+            workdays_only,
+            work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => datetime_with_calendar(
+            DEFAULT_DATETIME_MIN,
+            before,
+            CalendarArgs::new(
+                *workdays_only,
+                *work_hours_only,
+                work_hour_start,
+                work_hour_end,
+                work_week,
+                skip_dates,
+                work_dates,
+            ),
+            rng,
+        ),
+        GeneratorConfig::DateTimeAfter {
+            after,
+            workdays_only,
+            work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => datetime_with_calendar(
+            after,
+            DEFAULT_DATETIME_MAX,
+            CalendarArgs::new(
+                *workdays_only,
+                *work_hours_only,
+                work_hour_start,
+                work_hour_end,
+                work_week,
+                skip_dates,
+                work_dates,
+            ),
+            rng,
+        ),
         GeneratorConfig::DateTimeBetween {
             start: min,
             end: max,
             workdays_only,
             work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => datetime_with_calendar(
+            min,
+            max,
+            CalendarArgs::new(
+                *workdays_only,
+                *work_hours_only,
+                work_hour_start,
+                work_hour_end,
+                work_week,
+                skip_dates,
+                work_dates,
+            ),
+            rng,
+        ),
+        GeneratorConfig::Date {
+            min,
+            max,
+            workdays_only,
             work_week,
             skip_dates,
             work_dates,
         } => {
-            let calendar =
-                workdays_only.then(|| WorkCalendar::new(work_week, skip_dates, work_dates));
-            datetime_between_with_calendar(min, max, calendar.as_ref(), *work_hours_only, rng)
-        }
-        GeneratorConfig::DateTimeBefore { before } => {
-            let min = "2020-01-01T00:00:00Z";
-            datetime_between(min, before, rng)
-        }
-        GeneratorConfig::DateTimeAfter { after } => {
-            let max = "2030-12-31T23:59:59Z";
-            datetime_between(after, max, rng)
-        }
-        GeneratorConfig::Date { min, max } => {
             use fake::faker::chrono::en::{Date, DateTimeBetween};
+            if *workdays_only {
+                // 日历开启时用日期时间的采样器（重抽 + 顺延 + 夹回区间），只取日期部分
+                let lower = format!("{}T00:00:00Z", min.trim());
+                let upper = format!("{}T23:59:59Z", max.trim());
+                let value = datetime_between_with_calendar(
+                    &lower,
+                    &upper,
+                    Some(&WorkCalendar::new(work_week, skip_dates, work_dates)),
+                    None,
+                    rng,
+                );
+                return value.split(' ').next().unwrap_or_default().to_string();
+            }
             let s = parse_date(min);
             let e = parse_date(max);
             if let (Some(start), Some(end)) = (
@@ -863,33 +955,124 @@ fn parse_date(s: &str) -> chrono::NaiveDate {
         })
 }
 
-fn datetime_between(min: &str, max: &str, rng: &mut StdRng) -> String {
-    use chrono::{DateTime, Utc};
-    use fake::faker::chrono::en::DateTimeBetween;
+/// `DateTimeBefore` / `DateTimeAfter` 的另半边默认窗口（与旧的写死值一致）。
+pub(super) const DEFAULT_DATETIME_MIN: &str = "2020-01-01T00:00:00Z";
+pub(super) const DEFAULT_DATETIME_MAX: &str = "2030-12-31T23:59:59Z";
 
-    let default_start = DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
-        .map(|d| d.to_utc())
-        .unwrap_or_default();
-    let default_end = DateTime::parse_from_rfc3339("2030-12-31T23:59:59Z")
-        .map(|d| d.to_utc())
-        .unwrap_or_default();
-
-    let s = DateTime::parse_from_rfc3339(min)
-        .map(|d| d.to_utc())
-        .unwrap_or(default_start);
-    let e = DateTime::parse_from_rfc3339(max)
-        .map(|d| d.to_utc())
-        .unwrap_or(default_end);
-
-    DateTimeBetween(s, e)
-        .fake_with_rng::<DateTime<Utc>, _>(rng)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
+/// 工作时段窗口（当日分钟数）。
+///
+/// `start > end` 表示**跨零点**（夜班，如 `22:00~06:00`）；长度为零时退到默认窗口。
+#[derive(Debug, Clone, Copy)]
+struct WorkHours {
+    start: u32,
+    end: u32,
 }
 
-/// 工作时段（仅工作时段开关的固定窗口，与参数标签写法一致）。
-const WORK_HOUR_START: u32 = 9;
-const WORK_HOUR_END: u32 = 18;
+impl WorkHours {
+    fn parse(start_text: &str, end_text: &str) -> Self {
+        // // 默认值与目录脚本的 `STRING_DEFAULTS`（09:00 / 18:00）一致；这里再兵一次是为了
+        // 护栏被绕开时（旧记录 / 手改 JSON）仍然有一个可用窗口，而不是 panic 或零长窗口。
+        let start = parse_hour_minutes(start_text).unwrap_or(9 * 60);
+        let end = parse_hour_minutes(end_text).unwrap_or(18 * 60);
+        if start > 1440 || end > 1440 || start == end {
+            tracing::warn!(
+                "Mock: 工作时段「{}~{}」不是一个可用窗口，回退到 09:00~18:00",
+                start_text,
+                end_text
+            );
+            return Self {
+                start: 9 * 60,
+                end: 18 * 60,
+            };
+        }
+        Self { start, end }
+    }
+
+    /// 在窗口里均匀取一个日内时刻（跨零点时两段按长度加权）。
+    fn sample(&self, rng: &mut StdRng) -> chrono::NaiveTime {
+        let minutes = if self.end > self.start {
+            (self.start..self.end).fake_with_rng::<u32, _>(rng)
+        } else {
+            let before_midnight = 1440 - self.start;
+            let total = before_midnight + self.end;
+            if total == 0 {
+                0
+            } else if (0..total).fake_with_rng::<u32, _>(rng) < before_midnight {
+                (self.start..1440).fake_with_rng::<u32, _>(rng)
+            } else {
+                (0..self.end).fake_with_rng::<u32, _>(rng)
+            }
+        };
+        chrono::NaiveTime::from_num_seconds_from_midnight_opt(minutes * 60, 0).unwrap_or_default()
+    }
+}
+
+/// `HH:MM`（或单个 `HH`）→ 当日分钟数；`24:00` 是合法上界。
+pub(super) fn parse_hour_minutes(text: &str) -> Option<u32> {
+    let trimmed = text.trim();
+    let (hour_text, minute_text) = match trimmed.split_once(':') {
+        Some((h, m)) => (h.trim(), m.trim()),
+        None => (trimmed, "0"),
+    };
+    let hour: u32 = hour_text.parse().ok()?;
+    let minute: u32 = minute_text.parse().ok()?;
+    (hour <= 24 && minute < 60).then(|| hour * 60 + minute)
+}
+
+/// 日期时间类四个变体共用的日历参数（列级，7 个字段一包）。
+struct CalendarArgs<'a> {
+    workdays_only: bool,
+    work_hours_only: bool,
+    work_hour_start: &'a str,
+    work_hour_end: &'a str,
+    work_week: &'a str,
+    skip_dates: &'a [String],
+    work_dates: &'a [String],
+}
+
+impl<'a> CalendarArgs<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        workdays_only: bool,
+        work_hours_only: bool,
+        work_hour_start: &'a str,
+        work_hour_end: &'a str,
+        work_week: &'a str,
+        skip_dates: &'a [String],
+        work_dates: &'a [String],
+    ) -> Self {
+        Self {
+            workdays_only,
+            work_hours_only,
+            work_hour_start,
+            work_hour_end,
+            work_week,
+            skip_dates,
+            work_dates,
+        }
+    }
+
+    fn calendar(&self) -> Option<WorkCalendar<'a>> {
+        self.workdays_only
+            .then(|| WorkCalendar::new(self.work_week, self.skip_dates, self.work_dates))
+    }
+
+    fn hours(&self) -> Option<WorkHours> {
+        self.work_hours_only
+            .then(|| WorkHours::parse(self.work_hour_start, self.work_hour_end))
+    }
+}
+
+/// 区间随机时刻 + 列级日历参数（四个日期时间变体共用）。
+fn datetime_with_calendar(
+    min: &str,
+    max: &str,
+    args: CalendarArgs<'_>,
+    rng: &mut StdRng,
+) -> String {
+    let calendar = args.calendar();
+    datetime_between_with_calendar(min, max, calendar.as_ref(), args.hours(), rng)
+}
 
 /// 解析起始时刻：`YYYY-MM-DD HH:MM:SS`，只给日期时按当天 00:00:00；
 /// 解析不了就回退到 epoch（与旧行为一致，`warn` 带上生成器名便于定位列）。
@@ -926,27 +1109,27 @@ fn advance_work_days(
     }
 }
 
-/// 区间随机时刻 + 可选的工作日历约束（列级参数，见 `WorkCalendar`）。
+/// 区间随机时刻 + 可选的工作日历约束（列级参数，见 `WorkCalendar` / `WorkHours`）。
 ///
 /// 落点规则：
 /// 1. 先在 `[min, max]` 里均匀取一个时刻；
 /// 2. 「仅工作日」：落在休息日就重抽（最多 30 次），仍不行就顺延到下一个工作日；
-/// 3. 「仅工作时段」：把日内时刻改到 09:00~18:00；
+/// 3. 「仅工作时段」：把日内时刻改到给定窗口（默认 09:00~18:00，可跨零点）；
 /// 4. 最后夹回 `[min, max]`——区间端点优先于日历约束（窗口比日历窄时至少不越界）。
 fn datetime_between_with_calendar(
     min: &str,
     max: &str,
     calendar: Option<&WorkCalendar<'_>>,
-    work_hours_only: bool,
+    hours: Option<WorkHours>,
     rng: &mut StdRng,
 ) -> String {
     use chrono::{DateTime, Utc};
     use fake::faker::chrono::en::DateTimeBetween;
 
-    let default_start = DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+    let default_start = DateTime::parse_from_rfc3339(DEFAULT_DATETIME_MIN)
         .map(|d| d.to_utc())
         .unwrap_or_default();
-    let default_end = DateTime::parse_from_rfc3339("2030-12-31T23:59:59Z")
+    let default_end = DateTime::parse_from_rfc3339(DEFAULT_DATETIME_MAX)
         .map(|d| d.to_utc())
         .unwrap_or_default();
     let s = DateTime::parse_from_rfc3339(min)
@@ -975,11 +1158,8 @@ fn datetime_between_with_calendar(
                 chrono::NaiveDateTime::new(calendar.snap_forward(picked.date()), picked.time());
         }
     }
-    if work_hours_only {
-        let minutes = (WORK_HOUR_START * 60..WORK_HOUR_END * 60).fake_with_rng::<u32, _>(rng);
-        if let Some(time) = chrono::NaiveTime::from_num_seconds_from_midnight_opt(minutes * 60, 0) {
-            picked = chrono::NaiveDateTime::new(picked.date(), time);
-        }
+    if let Some(hours) = hours {
+        picked = chrono::NaiveDateTime::new(picked.date(), hours.sample(rng));
     }
     // 夹回区间：顺延与工作时段都可能把时刻推出窗口，端点优先
     // （不用 `clamp`：区间上下界反了它会 panic，而这里是热路径，不能把会话带走）
@@ -1531,10 +1711,7 @@ mod tests {
 
     #[test]
     fn test_datetime_format() {
-        let generator = GeneratorConfig::DateTime {
-            min: "2020-01-01".to_string(),
-            max: "2025-12-31".to_string(),
-        };
+        let generator = GeneratorConfig::date_time("2020-01-01", "2025-12-31");
         for _ in 0..10 {
             let val = generate_cell(&generator, &mut rng(), 0, &Locale::ZhCn);
             assert!(
@@ -1868,6 +2045,8 @@ mod tests {
             end: "2024-03-31T23:59:59Z".to_string(),
             workdays_only: true,
             work_hours_only: false,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
             work_week: "1111100".to_string(),
             skip_dates: vec!["2024-01-02".to_string()],
             work_dates: vec!["2024-01-06".to_string()],
@@ -1921,6 +2100,8 @@ mod tests {
             end: "2024-12-31T23:59:59Z".to_string(),
             workdays_only: false,
             work_hours_only: true,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
             work_week: "1111100".to_string(),
             skip_dates: Vec::new(),
             work_dates: Vec::new(),
@@ -1937,6 +2118,148 @@ mod tests {
                 ("09:00:00".."18:00:00").contains(&time.as_str()),
                 "工作时段外不该出现：{value}"
             );
+        }
+    }
+
+    /// 工作时段窗口可以自定义：时刻落在给定两段之间。
+    #[test]
+    fn test_datetime_between_custom_work_hours_window() {
+        let generator = GeneratorConfig::DateTimeBetween {
+            start: "2024-01-01T00:00:00Z".to_string(),
+            end: "2024-12-31T23:59:59Z".to_string(),
+            workdays_only: false,
+            work_hours_only: true,
+            work_hour_start: "10:30".to_string(),
+            work_hour_end: "12:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        };
+        let mut rng = rng();
+        for i in 0..200 {
+            let value = generate_cell(&generator, &mut rng, i, &Locale::ZhCn);
+            let time = value.split(' ').nth(1).expect("两段").to_string();
+            assert!(
+                ("10:30:00".."12:00:00").contains(&time.as_str()),
+                "应落在自定义窗口内：{value}"
+            );
+        }
+    }
+
+    /// 起 > 止 按跨零点（夜班）理解：`22:00~06:00` 的两段都要被采到。
+    #[test]
+    fn test_datetime_between_overnight_work_hours_window() {
+        let generator = GeneratorConfig::DateTimeBetween {
+            start: "2024-01-01T00:00:00Z".to_string(),
+            end: "2024-12-31T23:59:59Z".to_string(),
+            workdays_only: false,
+            work_hours_only: true,
+            work_hour_start: "22:00".to_string(),
+            work_hour_end: "06:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        };
+        let mut rng = rng();
+        let (mut before_midnight, mut after_midnight) = (0, 0);
+        for i in 0..400 {
+            let value = generate_cell(&generator, &mut rng, i, &Locale::ZhCn);
+            let time = value.split(' ').nth(1).expect("两段").to_string();
+            if ("22:00:00".."24:00:00").contains(&time.as_str()) {
+                before_midnight += 1;
+            } else if ("00:00:00".."06:00:00").contains(&time.as_str()) {
+                after_midnight += 1;
+            } else {
+                panic!("夜班窗口外的时刻：{value}");
+            }
+        }
+        assert!(
+            before_midnight > 0 && after_midnight > 0,
+            "跨零点的两段都该被采到：{before_midnight} / {after_midnight}"
+        );
+    }
+
+    /// 日期列（只到天）+ 仅工作日：只出工作日、跳过列表生效、不越出区间。
+    #[test]
+    fn test_date_calendar_lands_on_work_days() {
+        use chrono::{Datelike, NaiveDate, Weekday};
+        let generator = GeneratorConfig::Date {
+            min: "2024-01-01".to_string(),
+            max: "2024-03-31".to_string(),
+            workdays_only: true,
+            work_week: "1111100".to_string(),
+            skip_dates: vec!["2024-01-02".to_string(), "2024-02-12".to_string()],
+            work_dates: Vec::new(),
+        };
+        let (min_date, max_date) = (
+            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 3, 31).unwrap(),
+        );
+        let mut rng = rng();
+        for i in 0..300 {
+            let value = generate_cell(&generator, &mut rng, i, &Locale::ZhCn);
+            let date = NaiveDate::parse_from_str(&value, "%Y-%m-%d").expect("应是日期文本");
+            assert!(date >= min_date && date <= max_date, "越出区间：{value}");
+            assert!(
+                !matches!(date.weekday(), Weekday::Sat | Weekday::Sun),
+                "周末不该出现：{value}"
+            );
+            assert_ne!(
+                date,
+                NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                "跳过日期不该出现：{value}"
+            );
+        }
+    }
+
+    /// `date_time`与`datetime_before` 也接了同一套日历（同一实现路径，只验开关关不关）。
+    #[test]
+    fn test_other_datetime_generators_accept_the_calendar() {
+        use chrono::{Datelike, NaiveDateTime, Weekday};
+        let generators = [
+            GeneratorConfig::DateTime {
+                min: "2024-01-01T00:00:00Z".to_string(),
+                max: "2024-01-31T23:59:59Z".to_string(),
+                workdays_only: true,
+                work_hours_only: false,
+                work_hour_start: "09:00".to_string(),
+                work_hour_end: "18:00".to_string(),
+                work_week: "1111100".to_string(),
+                skip_dates: Vec::new(),
+                work_dates: Vec::new(),
+            },
+            GeneratorConfig::DateTimeBefore {
+                before: "2024-01-31T23:59:59Z".to_string(),
+                workdays_only: true,
+                work_hours_only: true,
+                work_hour_start: "09:00".to_string(),
+                work_hour_end: "18:00".to_string(),
+                work_week: "1111100".to_string(),
+                skip_dates: Vec::new(),
+                work_dates: Vec::new(),
+            },
+            GeneratorConfig::DateTimeAfter {
+                after: "2024-01-01T00:00:00Z".to_string(),
+                workdays_only: true,
+                work_hours_only: false,
+                work_hour_start: "09:00".to_string(),
+                work_hour_end: "18:00".to_string(),
+                work_week: "1111100".to_string(),
+                skip_dates: Vec::new(),
+                work_dates: Vec::new(),
+            },
+        ];
+        let mut rng = rng();
+        for generator in &generators {
+            for i in 0..50 {
+                let value = generate_cell(generator, &mut rng, i, &Locale::ZhCn);
+                let dt = NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S")
+                    .expect("应是标准时刻文本");
+                assert!(
+                    !matches!(dt.date().weekday(), Weekday::Sat | Weekday::Sun),
+                    "周末不该出现：{value}"
+                );
+            }
         }
     }
 }

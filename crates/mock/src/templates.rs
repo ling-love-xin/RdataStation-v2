@@ -87,19 +87,13 @@ macro_rules! rnd_float {
 
 macro_rules! dt {
     ($min:expr, $max:expr) => {
-        GeneratorConfig::DateTime {
-            min: $min.to_string(),
-            max: $max.to_string(),
-        }
+        GeneratorConfig::date_time($min, $max)
     };
 }
 
 macro_rules! d {
     ($min:expr, $max:expr) => {
-        GeneratorConfig::Date {
-            min: $min.to_string(),
-            max: $max.to_string(),
-        }
+        GeneratorConfig::date($min, $max)
     };
 }
 

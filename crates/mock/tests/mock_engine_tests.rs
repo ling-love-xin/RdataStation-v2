@@ -1147,18 +1147,12 @@ async fn temporal_and_decimal_columns_survive_preview_and_sql_export() {
             col(
                 "created_at",
                 ColumnDataType::DateTime,
-                GeneratorConfig::DateTime {
-                    min: "2024-01-01T00:00:00Z".to_string(),
-                    max: "2024-12-31T23:59:59Z".to_string(),
-                },
+                GeneratorConfig::date_time("2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"),
             ),
             col(
                 "birth_date",
                 ColumnDataType::Date,
-                GeneratorConfig::Date {
-                    min: "1980-01-01".to_string(),
-                    max: "2000-12-31".to_string(),
-                },
+                GeneratorConfig::date("1980-01-01", "2000-12-31"),
             ),
             col(
                 "amount",
@@ -1272,6 +1266,8 @@ async fn workday_calendar_columns_generate_through_the_pipeline() {
             end: "2024-03-31T23:59:59Z".to_string(),
             workdays_only: true,
             work_hours_only: true,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
             work_week: "1111100".to_string(),
             skip_dates: Vec::new(),
             work_dates: Vec::new(),
@@ -1358,4 +1354,76 @@ async fn workday_calendar_rejects_bad_dates_before_generating() {
         .to_string();
     assert!(reason.contains("YYYY-MM-DD"), "错误要说清格式：{reason}");
     assert!(reason.contains("biz_date"), "错误要点出是哪一列：{reason}");
+}
+
+/// 日期列的「仅工作日」与自定义工作时段窗口也能走完整条链路。
+#[tokio::test]
+async fn custom_work_hours_and_date_calendar_generate_through_the_pipeline() {
+    use chrono::{Datelike, NaiveDate, Weekday};
+
+    let hire_date = col(
+        "hire_date",
+        ColumnDataType::Date,
+        GeneratorConfig::Date {
+            min: "2024-01-01".to_string(),
+            max: "2024-03-31".to_string(),
+            workdays_only: true,
+            work_week: "1111100".to_string(),
+            skip_dates: vec!["2024-01-02".to_string()],
+            work_dates: Vec::new(),
+        },
+    );
+    // 夜班：起 > 止 按跨零点理解
+    let shift_start = col(
+        "shift_start",
+        ColumnDataType::Timestamp,
+        GeneratorConfig::DateTimeBetween {
+            start: "2024-01-01T00:00:00Z".to_string(),
+            end: "2024-01-31T23:59:59Z".to_string(),
+            workdays_only: false,
+            work_hours_only: true,
+            work_hour_start: "22:00".to_string(),
+            work_hour_end: "06:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        },
+    );
+    let config = MockConfig {
+        table_name: "t_custom_hours".to_string(),
+        row_count: 8,
+        seed: Some(11),
+        locale: Locale::ZhCn,
+        columns: vec![auto_increment("id"), hire_date, shift_start],
+    };
+
+    let result = MockEngine::generate(config).await.expect("生成应当成功");
+    let rows = rows_of(&result);
+    assert_eq!(rows.len(), 8);
+
+    let (min_date, max_date) = (
+        NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        NaiveDate::from_ymd_opt(2024, 3, 31).unwrap(),
+    );
+    for row in &rows {
+        let date_text = row[1].as_text().unwrap_or_default();
+        let date = NaiveDate::parse_from_str(&date_text, "%Y-%m-%d").expect("日期可解析");
+        assert!(date >= min_date && date <= max_date, "越界：{date_text}");
+        assert!(
+            !matches!(date.weekday(), Weekday::Sat | Weekday::Sun),
+            "工作日列不该出现周末：{date_text}"
+        );
+        assert_ne!(
+            date,
+            NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+            "跳过的日期不该出现：{date_text}"
+        );
+
+        let stamp = row[2].as_text().unwrap_or_default();
+        let time = &stamp[11..];
+        assert!(
+            ("22:00:00".."24:00:00").contains(&time) || ("00:00:00".."06:00:00").contains(&time),
+            "夜班窗口外不该出现：{stamp}"
+        );
+    }
 }

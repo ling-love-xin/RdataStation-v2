@@ -505,28 +505,23 @@ impl ColumnMapper {
             },
             ColumnMappingRule {
                 patterns: &["created_at", "create_time", "create_date"],
-                generator: || GeneratorConfig::DateTime {
-                    min: "2024-01-01T00:00:00Z".to_string(),
-                    max: "2025-12-31T23:59:59Z".to_string(),
+                generator: || {
+                    GeneratorConfig::date_time("2024-01-01T00:00:00Z", "2025-12-31T23:59:59Z")
                 },
                 confidence: "high",
                 sample_value: "2024-06-15 08:30:00",
             },
             ColumnMappingRule {
                 patterns: &["updated_at", "update_time", "modified_at"],
-                generator: || GeneratorConfig::DateTime {
-                    min: "2024-01-01T00:00:00Z".to_string(),
-                    max: "2025-12-31T23:59:59Z".to_string(),
+                generator: || {
+                    GeneratorConfig::date_time("2024-01-01T00:00:00Z", "2025-12-31T23:59:59Z")
                 },
                 confidence: "high",
                 sample_value: "2024-12-01 14:45:00",
             },
             ColumnMappingRule {
                 patterns: &["birth_date", "dob", "birthday"],
-                generator: || GeneratorConfig::Date {
-                    min: "1950-01-01".to_string(),
-                    max: "2005-12-31".to_string(),
-                },
+                generator: || GeneratorConfig::date("1950-01-01", "2005-12-31"),
                 confidence: "high",
                 sample_value: "1990-05-20",
             },
@@ -702,18 +697,14 @@ impl ColumnMapper {
             },
             ColumnDataType::Date => ColumnMappingRule {
                 patterns: &[],
-                generator: || GeneratorConfig::Date {
-                    min: "2020-01-01".to_string(),
-                    max: "2025-12-31".to_string(),
-                },
+                generator: || GeneratorConfig::date("2020-01-01", "2025-12-31"),
                 confidence: "low",
                 sample_value: "2024-01-15",
             },
             ColumnDataType::DateTime | ColumnDataType::Timestamp => ColumnMappingRule {
                 patterns: &[],
-                generator: || GeneratorConfig::DateTime {
-                    min: "2020-01-01T00:00:00Z".to_string(),
-                    max: "2025-12-31T23:59:59Z".to_string(),
+                generator: || {
+                    GeneratorConfig::date_time("2020-01-01T00:00:00Z", "2025-12-31T23:59:59Z")
                 },
                 confidence: "low",
                 sample_value: "2024-01-15 08:30:00",

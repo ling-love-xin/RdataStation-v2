@@ -937,6 +937,41 @@ static SPEC_DATE_TIME: GeneratorSpec = GeneratorSpec {
             label: "最大值",
             kind: ParamKind::Text,
         },
+        ParamField {
+            key: "workdays_only",
+            label: "仅工作日",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_hours_only",
+            label: "仅工作时段",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_hour_start",
+            label: "工作时段起（HH:MM）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "work_hour_end",
+            label: "工作时段止（HH:MM）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "work_week",
+            label: "工作周（周一~周日，1 上班）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "skip_dates",
+            label: "跳过日期（节假日）",
+            kind: ParamKind::Complex,
+        },
+        ParamField {
+            key: "work_dates",
+            label: "上班日期（调休）",
+            kind: ParamKind::Complex,
+        },
     ],
 };
 
@@ -945,11 +980,48 @@ static SPEC_DATE_TIME_BEFORE: GeneratorSpec = GeneratorSpec {
     name: "date_time_before",
     label: "某时间之前",
     category: GeneratorCategory::DateTime,
-    params: &[ParamField {
-        key: "before",
-        label: "早于",
-        kind: ParamKind::Text,
-    }],
+    params: &[
+        ParamField {
+            key: "before",
+            label: "早于",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "workdays_only",
+            label: "仅工作日",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_hours_only",
+            label: "仅工作时段",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_hour_start",
+            label: "工作时段起（HH:MM）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "work_hour_end",
+            label: "工作时段止（HH:MM）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "work_week",
+            label: "工作周（周一~周日，1 上班）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "skip_dates",
+            label: "跳过日期（节假日）",
+            kind: ParamKind::Complex,
+        },
+        ParamField {
+            key: "work_dates",
+            label: "上班日期（调休）",
+            kind: ParamKind::Complex,
+        },
+    ],
 };
 
 /// `DateTimeAfter`
@@ -957,11 +1029,48 @@ static SPEC_DATE_TIME_AFTER: GeneratorSpec = GeneratorSpec {
     name: "date_time_after",
     label: "某时间之后",
     category: GeneratorCategory::DateTime,
-    params: &[ParamField {
-        key: "after",
-        label: "晚于",
-        kind: ParamKind::Text,
-    }],
+    params: &[
+        ParamField {
+            key: "after",
+            label: "晚于",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "workdays_only",
+            label: "仅工作日",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_hours_only",
+            label: "仅工作时段",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_hour_start",
+            label: "工作时段起（HH:MM）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "work_hour_end",
+            label: "工作时段止（HH:MM）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "work_week",
+            label: "工作周（周一~周日，1 上班）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "skip_dates",
+            label: "跳过日期（节假日）",
+            kind: ParamKind::Complex,
+        },
+        ParamField {
+            key: "work_dates",
+            label: "上班日期（调休）",
+            kind: ParamKind::Complex,
+        },
+    ],
 };
 
 /// `DateTimeBetween`
@@ -987,8 +1096,18 @@ static SPEC_DATE_TIME_BETWEEN: GeneratorSpec = GeneratorSpec {
         },
         ParamField {
             key: "work_hours_only",
-            label: "仅工作时段（09:00~18:00）",
+            label: "仅工作时段",
             kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_hour_start",
+            label: "工作时段起（HH:MM）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "work_hour_end",
+            label: "工作时段止（HH:MM）",
+            kind: ParamKind::Text,
         },
         ParamField {
             key: "work_week",
@@ -1023,6 +1142,26 @@ static SPEC_DATE: GeneratorSpec = GeneratorSpec {
             key: "max",
             label: "最大值",
             kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "workdays_only",
+            label: "仅工作日",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_week",
+            label: "工作周（周一~周日，1 上班）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "skip_dates",
+            label: "跳过日期（节假日）",
+            kind: ParamKind::Complex,
+        },
+        ParamField {
+            key: "work_dates",
+            label: "上班日期（调休）",
+            kind: ParamKind::Complex,
         },
     ],
 };
@@ -2161,18 +2300,41 @@ pub fn default_of(name: &str) -> Option<GeneratorConfig> {
         "date_time" => GeneratorConfig::DateTime {
             min: "2020-01-01".to_string(),
             max: "2025-12-31".to_string(),
+            workdays_only: false,
+            work_hours_only: false,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
         },
         "date_time_before" => GeneratorConfig::DateTimeBefore {
             before: "2020-01-01".to_string(),
+            workdays_only: false,
+            work_hours_only: false,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
         },
         "date_time_after" => GeneratorConfig::DateTimeAfter {
             after: "2020-01-01".to_string(),
+            workdays_only: false,
+            work_hours_only: false,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
         },
         "date_time_between" => GeneratorConfig::DateTimeBetween {
             start: "".to_string(),
             end: "2025-12-31".to_string(),
             workdays_only: false,
             work_hours_only: false,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
             work_week: "1111100".to_string(),
             skip_dates: Vec::new(),
             work_dates: Vec::new(),
@@ -2180,6 +2342,10 @@ pub fn default_of(name: &str) -> Option<GeneratorConfig> {
         "date" => GeneratorConfig::Date {
             min: "2020-01-01".to_string(),
             max: "2025-12-31".to_string(),
+            workdays_only: false,
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
         },
         "time" => GeneratorConfig::Time,
         "duration" => GeneratorConfig::Duration,

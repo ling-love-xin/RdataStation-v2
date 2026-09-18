@@ -103,10 +103,7 @@ fn patch_param_rewrites_scalar_fields() {
 
 #[test]
 fn patch_param_handles_strings_floats_and_options() {
-    let date = GeneratorConfig::DateTime {
-        min: "2020-01-01".to_string(),
-        max: "2025-12-31".to_string(),
-    };
+    let date = GeneratorConfig::date_time("2020-01-01", "2025-12-31");
     let patched = patch_param(&date, "min", "2019-06-01", ParamKind::Text).expect("补丁应成功");
     match patched {
         GeneratorConfig::DateTime { min, .. } => assert_eq!(min, "2019-06-01"),
@@ -233,6 +230,29 @@ fn calendar_params_stay_out_of_the_summary_until_they_are_used() {
     );
     assert!(text.contains("跳过日期（节假日） 1 项"), "{text}");
     assert!(!text.contains("上班日期（调休）"), "空列表不占位置：{text}");
+}
+
+/// 工作时段窗口：只在勾了开关 / 不是默认窗口时才进摘要。
+#[test]
+fn work_hours_window_shows_up_only_when_it_matters() {
+    let base = generator_catalog::default_of("date_time_between").expect("默认配置");
+    assert!(
+        !super::summarize_params(&base).contains("工作时段"),
+        "未启用时不该占位置"
+    );
+
+    let on = super::patch_param_value(&base, "work_hours_only", serde_json::Value::from(true))
+        .expect("写回");
+    assert!(super::summarize_params(&on).contains("仅工作时段 是"));
+    assert!(
+        !super::summarize_params(&on).contains("工作时段起"),
+        "默认窗口不重复占位（开关标签已说明）"
+    );
+
+    let custom = super::patch_param_value(&on, "work_hour_end", serde_json::Value::from("22:30"))
+        .expect("写回");
+    let text = super::summarize_params(&custom);
+    assert!(text.contains("工作时段止（HH:MM） 22:30"), "{text}");
 }
 
 // ==================== 生成器搜索（纯逻辑） ====================

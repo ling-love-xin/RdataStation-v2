@@ -245,20 +245,66 @@ pub enum GeneratorConfig {
     DateTime {
         min: String,
         max: String,
+        /// 仅工作日：落在休息日就重抽（重抽不成时顺延到下一个工作日）
+        workdays_only: bool,
+        /// 仅工作时段：日内时刻落在下面的窗口里
+        work_hours_only: bool,
+        /// 工作时段起（`HH:MM`，默认 09:00）；起 > 止 时按**跨零点**（夜班）理解
+        work_hour_start: String,
+        /// 工作时段止（`HH:MM`，默认 18:00）
+        work_hour_end: String,
+        /// 工作周掩码：7 位（周一~周日），`1` 上班 / `0` 休息，如 `1111100`
+        work_week: String,
+        /// 跳过日期（节假日）：`YYYY-MM-DD` 一行一个
+        skip_dates: Vec<String>,
+        /// 上班日期（调休）：优先于工作周与跳过日期
+        work_dates: Vec<String>,
     },
     DateTimeBefore {
         before: String,
+        /// 仅工作日：落在休息日就重抽（重抽不成时顺延到下一个工作日）
+        workdays_only: bool,
+        /// 仅工作时段：日内时刻落在下面的窗口里
+        work_hours_only: bool,
+        /// 工作时段起（`HH:MM`，默认 09:00）；起 > 止 时按**跨零点**（夜班）理解
+        work_hour_start: String,
+        /// 工作时段止（`HH:MM`，默认 18:00）
+        work_hour_end: String,
+        /// 工作周掩码：7 位（周一~周日），`1` 上班 / `0` 休息，如 `1111100`
+        work_week: String,
+        /// 跳过日期（节假日）：`YYYY-MM-DD` 一行一个
+        skip_dates: Vec<String>,
+        /// 上班日期（调休）：优先于工作周与跳过日期
+        work_dates: Vec<String>,
     },
     DateTimeAfter {
         after: String,
+        /// 仅工作日：落在休息日就重抽（重抽不成时顺延到下一个工作日）
+        workdays_only: bool,
+        /// 仅工作时段：日内时刻落在下面的窗口里
+        work_hours_only: bool,
+        /// 工作时段起（`HH:MM`，默认 09:00）；起 > 止 时按**跨零点**（夜班）理解
+        work_hour_start: String,
+        /// 工作时段止（`HH:MM`，默认 18:00）
+        work_hour_end: String,
+        /// 工作周掩码：7 位（周一~周日），`1` 上班 / `0` 休息，如 `1111100`
+        work_week: String,
+        /// 跳过日期（节假日）：`YYYY-MM-DD` 一行一个
+        skip_dates: Vec<String>,
+        /// 上班日期（调休）：优先于工作周与跳过日期
+        work_dates: Vec<String>,
     },
     DateTimeBetween {
         start: String,
         end: String,
         /// 仅工作日：落在休息日就重抽（重抽不成时顺延到下一个工作日）
         workdays_only: bool,
-        /// 仅工作时段：日内时刻落在 09:00~18:00
+        /// 仅工作时段：日内时刻落在下面的窗口里
         work_hours_only: bool,
+        /// 工作时段起（`HH:MM`，默认 09:00）；起 > 止 时按**跨零点**（夜班）理解
+        work_hour_start: String,
+        /// 工作时段止（`HH:MM`，默认 18:00）
+        work_hour_end: String,
         /// 工作周掩码：7 位（周一~周日），`1` 上班 / `0` 休息，如 `1111100`
         work_week: String,
         /// 跳过日期（节假日）：`YYYY-MM-DD` 一行一个
@@ -269,6 +315,14 @@ pub enum GeneratorConfig {
     Date {
         min: String,
         max: String,
+        /// 仅工作日：落在休息日就重抽（重抽不成时顺延到下一个工作日）
+        workdays_only: bool,
+        /// 工作周掩码：7 位（周一~周日），`1` 上班 / `0` 休息，如 `1111100`
+        work_week: String,
+        /// 跳过日期（节假日）：`YYYY-MM-DD` 一行一个
+        skip_dates: Vec<String>,
+        /// 上班日期（调休）：优先于工作周与跳过日期
+        work_dates: Vec<String>,
     },
     Time,
     Duration,
@@ -404,6 +458,53 @@ pub enum GeneratorConfig {
     Weighted {
         choices: Vec<(String, f64)>,
     },
+}
+
+impl GeneratorConfig {
+    /// 日期时间（区间随机）：**日历字段取「全关」默认值**。
+    ///
+    /// 日历（仅工作日 / 仅工作时段）是用户按列勾的能力，智能映射与内置模板
+    /// 不该替用户打开它；列编辑对话框里的参数表单会把这个默认值原样展开展示。
+    pub fn date_time(min: &str, max: &str) -> Self {
+        Self::DateTime {
+            min: min.to_string(),
+            max: max.to_string(),
+            workdays_only: false,
+            work_hours_only: false,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        }
+    }
+
+    /// 日期（区间随机，只到天）：日历字段取「全关」默认值（同上）。
+    pub fn date(min: &str, max: &str) -> Self {
+        Self::Date {
+            min: min.to_string(),
+            max: max.to_string(),
+            workdays_only: false,
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        }
+    }
+
+    /// 日期时间（区间随机，跨列引用与场景模板用）：日历字段取「全关」默认值（同上）。
+    pub fn date_time_between(start: &str, end: &str) -> Self {
+        Self::DateTimeBetween {
+            start: start.to_string(),
+            end: end.to_string(),
+            workdays_only: false,
+            work_hours_only: false,
+            work_hour_start: "09:00".to_string(),
+            work_hour_end: "18:00".to_string(),
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        }
+    }
 }
 
 // ==================== 语言/地区 ====================
