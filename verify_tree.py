@@ -52,6 +52,12 @@ MINE = [
     "crates/engine/src/sql/mod.rs",
     "crates/engine/src/connection_manager.rs",
     "crates/engine/src/duckdb/accel.rs",
+    "crates/engine/src/duckdb/mod.rs",
+    "crates/engine/src/duckdb/federation/mod.rs",
+    "crates/engine/src/duckdb/federation/legacy.rs",
+    "crates/engine/src/duckdb/federation/registry.rs",
+    "crates/engine/src/duckdb/federation/session.rs",
+    "crates/engine/src/duckdb/federation/bridge.rs",
     "crates/engine/src/duckdb/manager.rs",
     "crates/engine/src/duckdb/mod.rs",
     "crates/engine/src/persistence/workbench_context_store.rs",
@@ -107,6 +113,11 @@ MINE = [
     "docs/architecture/editor/editor-architecture.md",
     "docs/architecture/editor/editor-dev-plan.md",
     "docs/architecture/editor/editor-prototype-design.md",
+    # 联邦（设计定稿 + 目录落位）
+    "docs/architecture/federation/README.md",
+    "docs/architecture/federation/federation-architecture.md",
+    "docs/architecture/federation/federation-prototype-design.md",
+    "docs/architecture/federation/federation-dev-plan.md",
 ]
 
 # 编译需要的路径（不搬 docs / v1，省时间与空间）
@@ -164,6 +175,8 @@ def main():
         assert "pub fn targets_for" in handle.read(), "副本里缺转译目标表（MINE 没同步？）"
     with open(os.path.join(VERIFY, "crates/engine/src/sql/explain.rs"), encoding="utf-8") as handle:
         assert "pub fn explain_sql" in handle.read(), "副本里缺执行计划前缀实现"
+    with open(os.path.join(VERIFY, "crates/engine/src/duckdb/federation/mod.rs"), encoding="utf-8") as handle:
+        assert "pub mod session;" in handle.read(), "副本里缺联邦目录骨架（MINE 没同步？）"
     print("自检通过：副本 = HEAD + 本次改动")
     print(f"下一步：cd {os.path.relpath(VERIFY)} && cargo check -p rds-workbench — **不要**设 CARGO_TARGET_DIR")
 

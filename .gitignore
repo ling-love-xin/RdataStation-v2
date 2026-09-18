@@ -1,6 +1,8 @@
 # DuckDB 预编译库（tools/fetch-duckdb.sh 取；设计见 docs/architecture/dependencies/duckdb-linking.md）
 /third_party/duckdb/*/
-/target
+# 构建产物：根与**任意成员目录**下的 target 都不入库（cargo test 的工作目录是包根，
+# 相对路径的产物会落在 crates/<成员>/target 里—— 探针踩过一次，268 MB）
+target/
 **/*.rs.bk
 node_modules/
 v1/frontend/node_modules/

@@ -1,3 +1,16 @@
+//! **旧实现**（迁移前就在的仓库底）：四类源（duckdb / mysql / postgres / sqlite）、
+//! 进程内 `HashMap` 记录已挂源、ATTACH 语句由本模块自己拼。
+//!
+//! 它与新设计的三处不符，正被 [`super::session`] 的多源会话取代：
+//!
+//! 1. **没有只读保证**：网络源拼的是 `ATTACH '<url>' AS 别名`，没有 `(READ_ONLY)`；
+//! 2. **没有凭据加密与生命周期**：连接串直接进 SQL，且状态只在进程内（不持久化）；
+//! 3. **单会话单用途**：与 `accel.rs` 那套“一源一条专用连接 + `USE` + 旁路回执”
+//!    不是一个模型（那里才是执行侧真正在用的）。
+//!
+//! 保留原因：它还有调用方与测试（`generate_attach_global_sql` / 物化语句生成等），
+//! 按仓库习惯**标“已被取代”而不静默删**；等 `session.rs` 覆盖完四类源与物化路径后一并退役。
+
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -7,7 +7,7 @@
 //! - `manager.rs` - 连接池管理
 //! - `executor.rs` - 统一SQL执行接口
 //! - `temp_table.rs` - 临时表管理
-//! - `federation.rs` - 联邦查询
+//! - `federation/` - 联邦查询（多源挂载 / 只读跨源查询；目录见 `docs/architecture/federation/`）
 //! - `import_export.rs` - 数据导入导出
 //! - `fts.rs` - 全文搜索
 //! - `explain.rs` - 查询计划分析
@@ -20,7 +20,6 @@
 mod executor;
 mod explain;
 mod extensions;
-mod federation;
 mod fts;
 mod import_export;
 mod manager;
@@ -30,6 +29,7 @@ mod snapshot;
 mod temp_table;
 pub mod analysis;
 pub mod accel;
+pub mod federation;
 pub mod row_to_arrow;
 pub mod value_text;
 

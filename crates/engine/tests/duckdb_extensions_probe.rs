@@ -18,10 +18,15 @@
 
 use duckdb::Connection;
 
-/// 探针自己的扩展目录（不污染 `~/.duckdb`；`target/` 已在忽略规则里）
+/// 探针自己的扩展目录（不污染 `~/.duckdb`；工作区 `target/` 已在忽略规则里）
+///
+/// **不能用相对路径**：`cargo test` 的工作目录是**包根**（`crates/engine`），
+/// `target/...` 会建到包目录里（实测 268 MB 留在 `crates/engine/target/`）。
+/// 用 `CARGO_MANIFEST_DIR` 拼回工作区根的 `target/`。
 fn probe_dir() -> std::path::PathBuf {
-    let dir = std::path::Path::new("target")
-        .join("duckdb-extension-probe")
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("target/duckdb-extension-probe")
         .join(std::process::id().to_string());
     std::fs::create_dir_all(&dir).expect("建探针扩展目录");
     dir
