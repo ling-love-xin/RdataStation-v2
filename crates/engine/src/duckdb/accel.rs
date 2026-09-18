@@ -123,9 +123,15 @@ pub struct AccelSource {
 impl AccelSource {
     /// 从宿主的连接信息组装
     ///
-    /// `url` 是连接管理器里那条连接的 URL（`ConnectionInfo.url`）。文件型的 URL 可能是
-    /// `sqlite://D:\x.db` 这种带 scheme 的写法，而 DuckDB 要的是裸路径——这里剥掉 scheme
-    /// （`sqlite://` / `duckdb://` / `file://`）并去掉 Windows 路径前误加的前导 `/`。
+    /// `url` 是这条连接的**运行时连接串**（含凭据：`mysql://user:pass@host:port/db`）。
+    /// 为什么必须带凭据而不是连接管理器里的脱敏 URL（`user:******@`）：
+    /// **DuckDB 1.5.5 的 mysql / postgres 扫描器不认 Secret**（实测见
+    /// `tests/federation_credentials_probe.rs`：会话级 / 持久化、带 scope / 不带、`ATTACH ''`
+    /// 各种写法都拿不到凭据），所以凭据只能随连接串进 `ATTACH`；
+    /// 代价是**任何离开引擎的文本都要脱敏**（[`scrub_credentials`]）。
+    ///
+    /// 文件型的 URL 可能是 `sqlite://D:\x.db` 这种带 scheme 的写法，而 DuckDB 要的是裸路径——
+    /// 这里剥掉 scheme（`sqlite://` / `duckdb://` / `file://`）并去掉 Windows 路径前误加的前导 `/`。
     pub fn new(conn_id: &str, db_type: &str, url: &str) -> Result<Self, String> {
         let kind = AccelKind::from_db_type(db_type)?;
         let connection_string = match kind {
@@ -187,12 +193,45 @@ pub(crate) fn quote_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+/// 把文本里可能出现的连接凭据抹掉（**留给任何要离开引擎的文本**）
+///
+/// 为什么需要它：凭据随 `ATTACH` 串进 DuckDB，而 DuckDB 报错会把参数**原样回显**
+/// （真机原话：`Failed to connect to MySQL database with parameters "mysql://root:***@…"`），
+/// 这些文本会进结果区、失败卡片与历史（还会落盘）。两条规则：
+///
+/// 1. 整串替换成脱敏版（`user:******@host/…`）——报错回显的就是整串；
+/// 2. `user:password` 片段替换（同一串被拼接 / 截断时仍兜得住）。
+///
+/// 没有凭据的连接串（文件型）原样返回。
+pub(crate) fn scrub_credentials(connection_string: &str, text: &str) -> String {
+    if connection_string.trim().is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    if out.contains(connection_string) {
+        out = out.replace(
+            connection_string,
+            &connection::url::mask_password_in_url(connection_string),
+        );
+    }
+    let (user, password) = connection::url::extract_credentials_from_url(connection_string);
+    if let (Some(user), Some(password)) = (user, password)
+        && !user.is_empty()
+        && !password.is_empty()
+    {
+        out = out.replace(&format!("{user}:{password}"), &format!("{user}:******"));
+    }
+    out
+}
+
 /// 一条加速会话（一个源一条专用 DuckDB 连接）
 pub struct AccelSession {
     conn: Mutex<Connection>,
     kind: AccelKind,
-    /// 挂载语句（`refresh` 用同一份口径重建）
+    /// 挂载语句（`refresh` 用同一份口径重建；**里面有凭据**，只在本进程里用）
     source_attach: String,
+    /// 源连接串（脱敏用：错误文本要把里面的口令抹掉才能离开引擎）
+    connection_string: String,
     /// 中断句柄（**建会话时就取出来**：真正跑查询时连接锁被占着，那时再取就晚了）
     interrupt: Arc<duckdb::InterruptHandle>,
     /// 现在有没有语句在跑（中断的“有没有可中断的”靠它，不凭猜）
@@ -264,9 +303,11 @@ pub(crate) fn run_sql_on(
 
 impl AccelSession {
     /// 在**这条会话**上执行一句（读语句出 Arrow 批，写语句出影响行数）
+    ///
+    /// 错误文本先脱敏再往外走：驱动报错里可能带着建连参数（见 [`scrub_credentials`]）。
     pub fn run(&self, sql: &str) -> Result<QueryResult, CoreError> {
         let conn = self.lock()?;
-        run_sql_on(&conn, &self.running, sql)
+        run_sql_on(&conn, &self.running, sql).map_err(|error| scrub_error(&self.connection_string, error))
     }
 
     /// 重新挂载：源库侧**新建的表**要这样才看得见（数据本来就是实时的）
@@ -275,9 +316,10 @@ impl AccelSession {
     pub fn refresh(&self) -> Result<(), CoreError> {
         let conn = self.lock()?;
         conn.execute_batch(&format!("USE memory; DETACH {SOURCE_ALIAS}"))
-            .map_err(|error| attach_error("DETACH", &error))?;
+            .map_err(|error| scrub_error(&self.connection_string, attach_error("DETACH", &error)))?;
         let attach = self.source_attach.clone();
         run_attach_steps(&conn, &attach)
+            .map_err(|error| scrub_error(&self.connection_string, error))
     }
 
     /// 中断这条会话上正在跑的语句
@@ -377,7 +419,8 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
     }
 
     let attach = source.attach_sql();
-    run_attach_steps(&conn, &attach).map_err(|error| error.to_string())?;
+    run_attach_steps(&conn, &attach)
+        .map_err(|error| scrub_credentials(&source.connection_string, &error.to_string()))?;
     // 扩展这一关过了：清掉旧的失败记录（否则菜单会一直说“不可用”）
     if let Ok(mut failures) = EXTENSION_FAILURES.lock() {
         failures.remove(&source.kind);
@@ -388,6 +431,7 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
         conn: Mutex::new(conn),
         kind: source.kind,
         source_attach: attach,
+        connection_string: source.connection_string.clone(),
         running: std::sync::atomic::AtomicBool::new(false),
         attached_at: std::time::SystemTime::now(),
     });
@@ -457,6 +501,18 @@ pub fn cancel(conn_id: &str) -> Option<Result<bool, String>> {
 
 fn query_error(sql: &str, error: &duckdb::Error) -> CoreError {
     CoreError::database(shared::error::DatabaseError::query(sql, error.to_string()))
+}
+
+/// 错误文本脱敏（把 `connection_string` 里的口令抹掉）
+///
+/// `CoreError` 是各档共用的错误类型，这里按种类还原成同一种形状（只改文本）。
+fn scrub_error(connection_string: &str, error: CoreError) -> CoreError {
+    let text = error.to_string();
+    let scrubbed = scrub_credentials(connection_string, &text);
+    if scrubbed == text {
+        return error;
+    }
+    CoreError::common(CommonError::General(scrubbed))
 }
 
 fn attach_error(step: &str, error: &duckdb::Error) -> CoreError {
@@ -700,5 +756,32 @@ mod tests {
         assert!(ensure_session(&source).is_err(), "挂不上的源要报错");
         // 失败不写进“扩展失败”表（那是另一个维度：挂载失败由执行路径每次如实报）
         assert!(extension_state(AccelKind::DuckDb).is_ok());
+    }
+
+    /// 凭据脱敏：DuckDB 的报错会把 `ATTACH` 参数原样回显，口令不能跟着出去
+    #[test]
+    fn error_text_never_carries_the_password() {
+        let url = "mysql://root:s3cr3t@192.168.3.138:3306/shop";
+        // 真机现场的形状：整串被回显
+        let echoed = format!(
+            "IO Error: Failed to connect to MySQL database with parameters \"{url}\": Access denied"
+        );
+        let scrubbed = super::scrub_credentials(url, &echoed);
+        assert!(!scrubbed.contains("s3cr3t"), "口令不得出现：{scrubbed}");
+        assert!(scrubbed.contains("root:******@192.168.3.138"), "{scrubbed}");
+        assert!(scrubbed.contains("Access denied"), "原因要留着：{scrubbed}");
+
+        // 片段形式（串被拼接 / 截断）也兜得住
+        let fragment = "connect failed for root:s3cr3t at host";
+        assert!(!super::scrub_credentials(url, fragment).contains("s3cr3t"));
+
+        // 没有凭据的文件型：原样返回
+        let file = "D:/data/x.db";
+        assert_eq!(
+            super::scrub_credentials(file, "Catalog Error: table not found"),
+            "Catalog Error: table not found"
+        );
+        // 空串不做事（也不 panic）
+        assert_eq!(super::scrub_credentials("", "boom"), "boom");
     }
 }

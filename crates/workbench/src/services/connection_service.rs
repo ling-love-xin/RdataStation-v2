@@ -293,6 +293,7 @@ impl ConnectionService {
                             driver_properties: driver_properties.clone(),
                             advanced_options: advanced_options.clone(),
                             description: description.clone(),
+                            use_duckdb_fed: conn_info.use_duckdb_fed,
                             created_at: std::time::Instant::now(),
                         };
                         // 重连配置沿用权威连接（其 url_override 保留明文用于重连）。
@@ -466,6 +467,7 @@ impl ConnectionService {
             driver_properties: driver_properties.clone(),
             advanced_options: advanced_options.clone(),
             description: description.clone(),
+            use_duckdb_fed: use_duckdb_fed.unwrap_or(false),
             created_at: std::time::Instant::now(),
         };
 
@@ -1166,6 +1168,8 @@ impl ConnectionService {
             driver_properties: old_info.driver_properties.clone(),
             advanced_options: old_info.advanced_options.clone(),
             description: old_info.description.clone(),
+            // 作用域转换不改“能不能被 DuckDB 直连”这件事
+            use_duckdb_fed: old_info.use_duckdb_fed,
             created_at: old_info.created_at,
         };
 
@@ -1262,6 +1266,7 @@ impl ConnectionService {
             driver_properties: old_info.driver_properties.clone(),
             advanced_options: old_info.advanced_options.clone(),
             description: old_info.description.clone(),
+            use_duckdb_fed: old_info.use_duckdb_fed,
             created_at: old_info.created_at,
         };
 

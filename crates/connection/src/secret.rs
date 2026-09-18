@@ -124,11 +124,12 @@ impl SecretManager {
     pub fn register(&self, cred: &DatabaseCredential) -> SecretResult<()> {
         let sql = format!(
             "CREATE OR REPLACE PERSISTENT SECRET {name} (TYPE {ty}, HOST '{host}', PORT {port}, \
-             USERNAME '{user}', PASSWORD '{pass}', DATABASE '{db}')",
+             {user_keyword} '{user}', PASSWORD '{pass}', DATABASE '{db}')",
             name = cred.name,
             ty = cred.secret_type,
             host = escape_sql(cred.host.as_str()),
             port = cred.port,
+            user_keyword = user_keyword(&cred.secret_type),
             user = escape_sql(cred.username.as_str()),
             pass = escape_sql(cred.password.as_str()),
             db = escape_sql(cred.database.as_str()),
@@ -178,6 +179,18 @@ impl SecretManager {
 /// SQL 字符串转义（单引号加倍），防注入
 fn escape_sql(s: &str) -> String {
     s.replace('\'', "''")
+}
+
+/// 「用户名」在各类 Secret 里的参数名（DuckDB 的参数名是**类型相关**的）
+///
+/// 真机实测（DuckDB 1.5.5）：`TYPE MYSQL` 只认 `USER`——写 `USERNAME` 会直接报
+/// `Binder Error: Unknown parameter 'username' for secret type 'mysql'`（于是连接的
+/// Secret 注册静默失败，日志里只有一条 warning）；`TYPE POSTGRES` 认 `USERNAME`。
+fn user_keyword(secret_type: &str) -> &'static str {
+    match secret_type.to_ascii_uppercase().as_str() {
+        "MYSQL" => "USER",
+        _ => "USERNAME",
+    }
 }
 
 /// 路径转义：反斜杠转正斜杠（SQL 字面量中 Windows 路径安全），单引号加倍。
@@ -254,6 +267,27 @@ mod tests {
         mgr.register(&b).unwrap();
         assert_eq!(mgr.list().unwrap().len(), 1, "同名 Secret 应覆盖");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_mysql_secret_uses_the_user_keyword() {
+        // 回归：MYSQL 类型只认 `USER`，写 `USERNAME` 会直接报
+        // `Unknown parameter 'username' for secret type 'mysql'`（注册静默失败）
+        let (mgr, dir) = isolated("mysql_keyword");
+        let mysql = DatabaseCredential {
+            name: "conn_mysql".to_string(),
+            secret_type: "MYSQL".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 3306,
+            username: "root".to_string(),
+            password: "pw".to_string(),
+            database: "shop".to_string(),
+        };
+        mgr.register(&mysql).expect("MYSQL Secret 该能注册");
+        assert_eq!(mgr.list().unwrap().len(), 1);
+        assert_eq!(user_keyword("mysql"), "USER");
+        assert_eq!(user_keyword("Postgres"), "USERNAME");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

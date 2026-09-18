@@ -16,8 +16,8 @@ pub mod schema;
 pub use executor::MigrationExecutor;
 pub use global_init::{
     get_global_data_dir, get_global_db_manager, get_global_db_path, get_global_duckdb_path,
-    get_global_metadata_dir, get_system_dir, initialize_global_system, install_global_db_manager,
-    shutdown_global_system,
+    get_global_metadata_dir, get_secrets_dir, get_system_dir, initialize_global_system,
+    install_global_db_manager, shutdown_global_system,
 };
 pub use manager::{MigrationManager, MigrationType};
 pub use schema::{SchemaTracker, SchemaVersion};

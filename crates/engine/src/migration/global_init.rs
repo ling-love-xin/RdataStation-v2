@@ -23,6 +23,9 @@ const GLOBAL_SQLITE_NAME: &str = "global.db";
 /// 全局 DuckDB 数据库文件名
 const GLOBAL_DUCKDB_NAME: &str = "analytics.duckdb";
 
+/// Secret 存储目录名（`system/secrets`）
+const SECRETS_DIR_NAME: &str = "secrets";
+
 /// 全局系统数据库管理器实例
 ///
 /// 使用 OnceLock 确保只初始化一次
@@ -60,6 +63,23 @@ pub fn get_system_dir() -> Result<PathBuf, CoreError> {
     })?;
 
     Ok(system_dir)
+}
+
+/// DuckDB Secret 存储目录（`<RDS_HOME>/data/system/secrets`，不存在则建）
+///
+/// **两处必须用同一个目录**：凭据注册（`workbench::services::secret_integration`）与
+/// 会话读取（[`crate::duckdb::manager::DuckDBManager::configure_connection`] 的
+/// `secret_directory`）。否则会出现“注册成功、挂载却说找不到凭据”，在真机上表现为
+/// 网络源认证失败（`ATTACH` 里的口令是脱敏的 `******`，只能靠 Secret 补）。
+pub fn get_secrets_dir() -> Result<PathBuf, CoreError> {
+    let dir = get_system_dir()?.join(SECRETS_DIR_NAME);
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        CoreError::common(CommonError::General(format!(
+            "Failed to create secrets directory: {}",
+            e
+        )))
+    })?;
+    Ok(dir)
 }
 
 /// 获取全局 SQLite 数据库路径

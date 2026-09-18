@@ -37,9 +37,10 @@
 //!
 //! # 现状
 //!
-//! 目录已落位（本文件 + `legacy` / `registry` / `session` / `bridge`）；实现在
-//! `docs/architecture/federation/federation-dev-plan.md` 的分期里推进——
-//! `registry` / `session` / `bridge` 目前只有职责说明与接口草案，**没有实现**。
+//! 目录已落位（本文件 + `legacy` / `registry` / `session` / `bridge`）。
+//! **第一期已经能用**：`registry`（源描述 / 别名 / 快照）与 `session`（多源只读挂载 +
+//! 进程内会话缓存）已落地，执行路径在 `workbench/services/editor_exec.rs` 的联邦分支上；
+//! `bridge`（L3 桥接）仍只有接口草案，见 `docs/architecture/federation/federation-dev-plan.md`。
 
 pub mod bridge;
 pub mod legacy;

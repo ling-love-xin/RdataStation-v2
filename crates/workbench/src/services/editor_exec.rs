@@ -28,6 +28,8 @@ use editor::channel::ExecChannel;
 use editor::execution::{QueryData, QueryRunner};
 use editor::shared::EditorShared;
 use engine::duckdb::accel;
+use engine::duckdb::federation::registry::{self as fed_registry, FederatedSource, MountState};
+use engine::duckdb::federation::session as fed_session;
 use engine::persistence::history_store::{self, SqlHistoryEntry};
 use engine::services::sql_service::{SqlExecuteOptions, SqlService, window_sql};
 use shared::models::{QueryResult, Value};
@@ -85,7 +87,27 @@ impl EngineQueryRunner {
         })
     }
 
-    /// 加速档的源：宿主侧的连接信息（`db_type` + 带凭据的 URL）→ 引擎的 [`accel::AccelSource`]
+    /// 一条连接的**运行时连接串**（含凭据）——只有执行路径才拿它
+    ///
+    /// 为什么不用 `ConnectionInfo.url`：那是**脱敏**的（`user:******@`），`ATTACH` 拿它只会
+    /// 认证失败（真机现场：`Access denied for user 'root'@…`）。为什么不用 Secret：实测
+    /// **DuckDB 1.5.5 的 mysql / postgres 扫描器不认 Secret**（见
+    /// `crates/engine/tests/federation_credentials_probe.rs` 的台账），凭据只能随连接串进 `ATTACH`
+    /// ——代价是离开引擎的文本必须脱敏（引擎侧已收口：`accel::scrub_credentials`）。
+    ///
+    /// 取的是连接管理器里的 `DriverConnectionConfig.url_override`（重连用的那份，带凭据）；
+    /// 拿不到时回退到 `ConnectionInfo.url`（会在认证上如实失败，不会静静挂错库）。
+    fn runtime_connection_string(&self, conn_id: &str) -> Option<String> {
+        let manager = engine::connection_manager::get_connection_manager();
+        let config = self
+            .runtime
+            .block_on(manager.get_connection_config(&conn_id.to_string()));
+        config
+            .and_then(|config| config.url_override)
+            .filter(|url| !url.trim().is_empty())
+    }
+
+    /// 加速档的源：宿主侧的连接信息（`db_type` + **带凭据的**运行时连接串）→ 引擎的 [`accel::AccelSource`]
     ///
     /// 引擎不读连接库、也不解密口令：这里把两样它需要的东西递过去。
     fn accel_source(&self, connection: Option<&str>) -> Result<accel::AccelSource, String> {
@@ -97,7 +119,10 @@ impl EngineQueryRunner {
             .runtime
             .block_on(manager.get_connection_info(&conn_id))
             .ok_or_else(|| format!("拿不到连接 {conn_id} 的信息，无法在本地挂载它"))?;
-        accel::AccelSource::new(&conn_id, &info.db_type, &info.url)
+        let url = self
+            .runtime_connection_string(&conn_id)
+            .unwrap_or_else(|| info.url.clone());
+        accel::AccelSource::new(&conn_id, &info.db_type, &url)
     }
 
     /// 加速档执行（B13）：在 DuckDB 上跑，源库以**只读**方式挂着
@@ -167,6 +192,115 @@ impl EngineQueryRunner {
         data.notice = rewritten.dropped_limit.as_deref().map(notice);
         Ok(data)
     }
+
+    // ===== 联邦档（B13 第一期后半） =====
+
+    /// 组装本次联邦的源清单（**宿主组装**：引擎不读连接库、也不解密口令）
+    ///
+    /// 口径（写进 `docs/architecture/federation/federation-dev-plan.md` 的 T1.2 条目）：
+    ///
+    /// - 候选 = **已连接**（只有连上才拿得到连接串）且开了「DuckDB 本地加速」的连接
+    ///   （`use_duckdb_fed`，连接对话框里写着“联邦查询直连源库”，凭据也是在这时注册成
+    ///   DuckDB Secret 的）；驱动能不能挂由 [`accel::AccelKind`] 回答，认不出就如实记一句；
+    /// - **连接串剥掉 userinfo**：连接管理器里的 URL 是脱敏的（`user:******@`），原样
+    ///   `ATTACH` 会拿 `******` 去认证；剥掉后由 DuckDB 用已注册的 Secret 补凭据；
+    /// - **别名**由连接名生成（`sanitize_alias` + 重名再排），按连接 id 排序保证稳定；
+    /// - **主源** = 本文档绑定的那条连接（它不在清单里时由引擎选第一个可用源，并留下回退说明）。
+    fn federated_plan(&self, connection: Option<&str>) -> Result<FederatedPlan, String> {
+        let manager = engine::connection_manager::get_connection_manager();
+        let owner = self.resolve_conn_id(connection).ok_or_else(|| {
+            "联邦查询需要一个连接：先绑定一个，或在导航里选中它".to_string()
+        })?;
+        let infos = self.runtime.block_on(manager.get_all_connection_info());
+        // 凭据在 `url_override` 里（每连接一份，带口令）；拿不到就退回脱敏 URL（认证会如实失败）
+        let runtime_urls: Vec<(String, Option<String>)> = infos
+            .iter()
+            .map(|info| (info.id.clone(), self.runtime_connection_string(&info.id)))
+            .collect();
+        let lookup = |conn_id: &str| -> Option<String> {
+            runtime_urls
+                .iter()
+                .find(|(id, _)| id == conn_id)
+                .and_then(|(_, url)| url.clone())
+        };
+        plan_from_infos(&infos, &lookup, &owner)
+    }
+
+    /// 联邦档执行：在联邦会话上跑（源清单为空/全挂不上都会提前给可读原因）
+    fn run_on_federation(&self, connection: Option<&str>, sql: &str) -> Result<QueryData, String> {
+        let (plan, session) = self.federated_session(connection)?;
+        // 与另两档同口径：查询只取**第一段**（套窗口），写语句原样交给引擎
+        let (to_run, segmented) = match window_sql(sql, editor::execution::SEGMENT_ROWS, 0) {
+            Some(wrapped) => (wrapped, true),
+            None => (sql.to_string(), false),
+        };
+        let started = std::time::Instant::now();
+        let outcome = session.run(&to_run);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
+        editor::history::bump();
+        let result = outcome
+            .map_err(|error| explain_federation_error(&session, error.to_string()))?;
+        let mut data = to_data(&result, elapsed_ms, false);
+        data.has_more = segmented
+            && !data.columns.is_empty()
+            && data.rows.len() == editor::execution::SEGMENT_ROWS;
+        data.notice = federation_notice(&plan, &session);
+        Ok(data)
+    }
+
+    /// 联邦档的「取下一段」（同一套窗口包装，见 `sql_service::window_sql`）
+    fn fetch_next_on_federation(
+        &self,
+        connection: Option<&str>,
+        sql: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<QueryData, String> {
+        let (plan, session) = self.federated_session(connection)?;
+        let wrapped = window_sql(sql, limit, offset)
+            .ok_or_else(|| "这份结果没有可再取的部分".to_string())?;
+        let started = std::time::Instant::now();
+        let outcome = session.run(&wrapped);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        record_federation_history(&plan, &session, sql, elapsed_ms, &outcome);
+        editor::history::bump();
+        let result = outcome
+            .map_err(|error| explain_federation_error(&session, error.to_string()))?;
+        let mut data = to_data(&result, elapsed_ms, false);
+        data.has_more = data.rows.len() == limit;
+        Ok(data)
+    }
+
+    /// 联邦档的下发（筛选 / 排序）：改写之后照跑（`notice` 由调用方给）
+    fn run_rewritten_on_federation(
+        &self,
+        connection: Option<&str>,
+        rewritten: &engine::sql::Rewrite,
+        notice: impl FnOnce(&str) -> String,
+    ) -> Result<QueryData, String> {
+        let (plan, session) = self.federated_session(connection)?;
+        let started = std::time::Instant::now();
+        let outcome = session.run(&rewritten.sql);
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        record_federation_history(&plan, &session, &rewritten.sql, elapsed_ms, &outcome);
+        editor::history::bump();
+        let result = outcome
+            .map_err(|error| explain_federation_error(&session, error.to_string()))?;
+        let mut data = to_data(&result, elapsed_ms, false);
+        data.notice = rewritten.dropped_limit.as_deref().map(notice);
+        Ok(data)
+    }
+
+    /// 组装源清单 + 取（必要时建立）会话（两件事总是一起做，收口在这里）
+    fn federated_session(
+        &self,
+        connection: Option<&str>,
+    ) -> Result<(FederatedPlan, Arc<fed_session::FederatedSession>), String> {
+        let plan = self.federated_plan(connection)?;
+        let session = fed_session::ensure_session(&plan.owner, &plan.sources, plan.primary.as_deref())?;
+        Ok((plan, session))
+    }
 }
 
 impl QueryRunner for EngineQueryRunner {
@@ -177,7 +311,10 @@ impl QueryRunner for EngineQueryRunner {
         sql: &str,
         run_options: editor::execution::RunOptions,
     ) -> Result<QueryData, String> {
-        // 【B13】加速档不走源库驱动：这条语句在 DuckDB 上跑（源库只读挂载）
+        // 【B13】本地跑的两档不走源库驱动：这条语句在 DuckDB 上跑（源库只读挂载）
+        if channel == ExecChannel::Federated {
+            return self.run_on_federation(connection, sql);
+        }
         if channel != ExecChannel::Source {
             return self.run_on_accel(connection, sql);
         }
@@ -246,7 +383,12 @@ impl QueryRunner for EngineQueryRunner {
             _ => "TEXT",
         };
         let rewritten = engine::sql::rewrite_with_filter(sql, columns, filter, cast_type)?;
-        // 【B13】加速档：改写照样做，但语句在 DuckDB 上跑（不是发回源库）
+        // 【B13】本地跑的两档：改写照样做，但语句在 DuckDB 上跑（不是发回源库）
+        if channel == ExecChannel::Federated {
+            return self.run_rewritten_on_federation(connection, &rewritten, |limit| {
+                format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）")
+            });
+        }
         if channel != ExecChannel::Source {
             return self.run_rewritten_on_accel(connection, &rewritten, |limit| {
                 format!("已去掉原查询的 {limit}（下发筛选要能查到全部行）")
@@ -287,7 +429,12 @@ impl QueryRunner for EngineQueryRunner {
         descending: bool,
     ) -> Result<QueryData, String> {
         let rewritten = engine::sql::rewrite_with_order(sql, column, descending)?;
-        // 【B13】加速档：同上——改写服从“在哪儿跑”
+        // 【B13】本地跑的两档：同上——改写服从“在哪儿跑”
+        if channel == ExecChannel::Federated {
+            return self.run_rewritten_on_federation(connection, &rewritten, |limit| {
+                format!("已去掉原查询的 {limit}（排序下发要能排全部行）")
+            });
+        }
         if channel != ExecChannel::Source {
             return self.run_rewritten_on_accel(connection, &rewritten, |limit| {
                 format!("已去掉原查询的 {limit}（排序下发要能排全部行）")
@@ -325,7 +472,10 @@ impl QueryRunner for EngineQueryRunner {
         offset: usize,
         limit: usize,
     ) -> Result<QueryData, String> {
-        // 【B13】加速档的分段：同一套窗口包装，但在 DuckDB 上取数
+        // 【B13】本地跑的两档的分段：同一套窗口包装，但在 DuckDB 上取数
+        if channel == ExecChannel::Federated {
+            return self.fetch_next_on_federation(connection, sql, offset, limit);
+        }
         if channel != ExecChannel::Source {
             return self.fetch_next_on_accel(connection, sql, offset, limit);
         }
@@ -392,19 +542,20 @@ impl QueryRunner for EngineQueryRunner {
         Ok(())
     }
 
-    /// 中断：源库档翻引擎的取消令牌；加速档叫 DuckDB 中断
+    /// 中断：源库档翻引擎的取消令牌；本地跑的两档叫 DuckDB 中断
     ///
-    /// 两处都试是有意的：编辑器只知道“这条文档在执行”，不知道当前那次执行具体落在哪一边
-    /// （状态在引擎侧），而两边各自的中断都是幂等的（没在跑就是 noop / `false`）。
+    /// 三处都试是有意的：编辑器只知道“这条文档在执行”，不知道当前那次执行具体落在哪一边
+    /// （状态在引擎侧），而每一边的中断都是幂等的（没在跑就是 noop / `false`）。
     fn cancel(&self, connection: Option<&str>) -> Result<bool, String> {
         let mut cancelled = false;
         let mut reason: Option<String> = None;
         if let Some(conn_id) = self.resolve_conn_id(connection) {
-            match accel::cancel(&conn_id) {
-                Some(Ok(true)) => cancelled = true,
-                Some(Ok(false)) => {}
-                Some(Err(error)) => reason = Some(error),
-                None => {}
+            for outcome in [accel::cancel(&conn_id), fed_session::cancel(&conn_id)] {
+                match outcome {
+                    Some(Ok(true)) => cancelled = true,
+                    Some(Ok(false)) | None => {}
+                    Some(Err(error)) => reason = Some(error),
+                }
             }
         }
         match self
@@ -448,6 +599,7 @@ fn record_accel_history(
             rows_returned: Some(result.total_rows() as u64),
             rows_affected: None,
             channel: Some(editor::channel::ExecChannel::Accelerated.code().to_string()),
+            sources: None,
         },
         Err(error) => SqlHistoryEntry {
             conn_id: Some(source.conn_id.clone()),
@@ -458,11 +610,203 @@ fn record_accel_history(
             rows_returned: None,
             rows_affected: None,
             channel: Some(editor::channel::ExecChannel::Accelerated.code().to_string()),
+            sources: None,
         },
     };
     if let Err(error) = history_store::save_sql_history(sql, &entry) {
         tracing::error!(error = %error, "本地加速的执行未记入历史");
     }
+}
+
+/// 联邦执行的一次组装结果（源清单 + 主源请求 + 组装时的实话）
+///
+/// 为什么要留住 `notes`：源清单浮层（T1.6）之前，用户看不到“为什么某个连接没进来”，
+/// 不能让它静默——结果区那行小字得能说出来。
+#[derive(Debug)]
+struct FederatedPlan {
+    /// 会话主人（按它缓存会话；= 本文档绑定的连接 id）
+    owner: String,
+    sources: Vec<FederatedSource>,
+    /// 请求的主源别名（`None` = 本文档的连接没参与，由引擎选第一个可用源）
+    primary: Option<String>,
+    /// 组装时的说明（跳过的连接 / 本文档连接未参与）
+    notes: Vec<String>,
+}
+
+/// 从连接信息组装源清单（**纯函数**：不碰连接管理器，便于逐条断言）
+///
+/// 口径见 [`EngineQueryRunner::federated_plan`]；这里只管“拿到的这些连接怎么变成源”。
+/// `runtime_url` 回答“这条连接的带凭据连接串是什么”（拿不到就退回 `info.url`）。
+fn plan_from_infos(
+    infos: &[engine::ConnectionInfo],
+    runtime_url: &dyn Fn(&str) -> Option<String>,
+    owner: &str,
+) -> Result<FederatedPlan, String> {
+    // 连接管理器里的顺序不稳定（哈希表）；按 id 排序 → 同一份清单每次组装出同样的别名
+    let mut ordered: Vec<&engine::ConnectionInfo> = infos.iter().collect();
+    ordered.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut notes: Vec<String> = Vec::new();
+    let mut taken: Vec<String> = Vec::new();
+    let mut sources: Vec<FederatedSource> = Vec::new();
+    let mut primary: Option<String> = None;
+    let mut owner_seen = false;
+
+    for info in ordered {
+        if info.id == owner {
+            owner_seen = true;
+        }
+        if !info.use_duckdb_fed {
+            continue;
+        }
+        if let Err(reason) = accel::AccelKind::from_db_type(&info.db_type) {
+            notes.push(format!("连接 {} 没参与：{reason}", info.name));
+            continue;
+        }
+        let alias = fed_registry::unique_alias(&fed_registry::sanitize_alias(&info.name), &taken);
+        taken.push(alias.clone());
+        // 凭据随连接串进 ATTACH（DuckDB 的扫描器不认 Secret，见 `accel::AccelSource::new`）
+        let url = runtime_url(&info.id).unwrap_or_else(|| info.url.clone());
+        let source = FederatedSource::new(&info.id, &alias, &info.db_type, &url)?;
+        if info.id == owner {
+            primary = Some(alias);
+        }
+        sources.push(source);
+    }
+
+    if sources.is_empty() {
+        return Err(
+            "还没有可用作联邦源的连接：在连接对话框里开启「DuckDB 本地加速」并连接它".to_string(),
+        );
+    }
+    // 联邦与本地加速的区别就是“跨源”：只有一个源时两者是同一件事（门控也是这么挡的）
+    if sources.len() < 2 {
+        return Err(format!(
+            "联邦查询至少需要两个源（现在只有 {}）：把另一个连接也开启「DuckDB 本地加速」并连上它",
+            sources[0].alias
+        ));
+    }
+    if !owner_seen {
+        notes.push("本文档的连接当前未连接，没有作为联邦源参与".to_string());
+    } else if primary.is_none() {
+        notes.push(format!(
+            "本文档的连接（{owner}）未开启「DuckDB 本地加速」，没有作为联邦源参与"
+        ));
+    }
+
+    Ok(FederatedPlan {
+        owner: owner.to_string(),
+        sources,
+        primary,
+        notes,
+    })
+}
+
+/// 联邦档的执行也进同一条历史流水（与另两档一致）
+///
+/// `db_type` 取**主源**的库类型（历史面板据此拼出 `MYSQL·联邦`）、`sources` 取本次
+/// **真正挂上**的源别名：用户重看这条历史时要能对上是哪几个源。
+fn record_federation_history(
+    plan: &FederatedPlan,
+    session: &fed_session::FederatedSession,
+    sql: &str,
+    elapsed_ms: u64,
+    outcome: &Result<QueryResult, shared::error::CoreError>,
+) {
+    let snapshot = session.snapshot();
+    let ready: Vec<String> = snapshot
+        .sources
+        .iter()
+        .filter(|entry| entry.is_ready())
+        .map(|entry| entry.alias().to_string())
+        .collect();
+    let sources = (!ready.is_empty()).then(|| ready.join(", "));
+    let db_type = snapshot
+        .primary
+        .as_deref()
+        .and_then(|primary| plan.sources.iter().find(|source| source.alias == primary))
+        .map(|source| source.kind.label().to_string());
+
+    let entry = match outcome {
+        Ok(result) => SqlHistoryEntry {
+            conn_id: Some(plan.owner.clone()),
+            db_type,
+            elapsed_ms,
+            success: true,
+            error_message: None,
+            rows_returned: Some(result.total_rows() as u64),
+            rows_affected: None,
+            channel: Some(ExecChannel::Federated.code().to_string()),
+            sources,
+        },
+        Err(error) => SqlHistoryEntry {
+            conn_id: Some(plan.owner.clone()),
+            db_type,
+            elapsed_ms,
+            success: false,
+            error_message: Some(error.to_string()),
+            rows_returned: None,
+            rows_affected: None,
+            channel: Some(ExecChannel::Federated.code().to_string()),
+            sources,
+        },
+    };
+    if let Err(error) = history_store::save_sql_history(sql, &entry) {
+        tracing::error!(error = %error, "联邦执行未记入历史");
+    }
+}
+
+/// 结果区那行小字（联邦档专属）：挂了哪些源 + 写法提示 + 没挂上的原因
+///
+/// “写法提示”是**临时的**：源清单浮层（T1.6）上线后它收进浮层底部，这里只留状态。
+fn federation_notice(plan: &FederatedPlan, session: &fed_session::FederatedSession) -> Option<String> {
+    let snapshot = session.snapshot();
+    let ready: Vec<String> = snapshot
+        .sources
+        .iter()
+        .filter(|entry| entry.is_ready())
+        .map(|entry| entry.alias().to_string())
+        .collect();
+
+    let mut parts: Vec<String> = Vec::new();
+    if !ready.is_empty() {
+        parts.push(format!("联邦源 {}", ready.join("、")));
+    }
+    parts.push("跨源请写 别名.schema.表".to_string());
+    parts.extend(plan.notes.iter().cloned());
+    for entry in &snapshot.sources {
+        if let MountState::Failed(reason) = &entry.state {
+            parts.push(format!("源 {} 未挂上：{reason}", entry.alias()));
+        }
+    }
+    if let Some(note) = &snapshot.primary_note {
+        parts.push(note.clone());
+    }
+    Some(parts.join(" · "))
+}
+
+/// 联邦档的失败原因：点得到源就点名源（D6：错误归属）
+///
+/// 典型场景：用户写了 `mysql_src.…` 而这个源根本没挂上，DuckDB 只会说
+/// “Catalog \"mysql_src\" does not exist”；把挂载失败的原因缀在后面，用户才知道去哪儿修。
+///
+/// 只认两种提法（引号里的 catalog 名 / `别名.` 限定引用）：纯子串匹配会在 `odbc` 里
+/// 匹到别名 `db`，把一句无关的话缀在错误后面——错误归属宁可少说也不能说错。
+fn explain_federation_error(
+    session: &fed_session::FederatedSession,
+    error: String,
+) -> String {
+    let snapshot = session.snapshot();
+    for entry in &snapshot.sources {
+        if let MountState::Failed(reason) = &entry.state {
+            let quoted = format!("\"{}\"", entry.alias());
+            let qualified = format!("{}.", entry.alias());
+            if error.contains(&quoted) || error.contains(&qualified) {
+                return format!("{error}（源 {} 未挂上：{reason}）", entry.alias());
+            }
+        }
+    }
+    error
 }
 
 /// 把执行器接到编辑器共享状态上（**启动装配调用一次**）
@@ -528,8 +872,39 @@ fn cell_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::{cell_text, column_names};
+    use super::{cell_text, column_names, plan_from_infos};
+    use engine::ConnectionInfo;
+    use engine::duckdb::accel::AccelKind;
     use shared::models::{QueryResult, Value};
+
+    /// 造一条连接信息（`ConnectionInfo` 的字段全部是 pub，测试直接构）
+    fn info(
+        id: &str,
+        name: &str,
+        db_type: &str,
+        url: &str,
+        fed: bool,
+    ) -> ConnectionInfo {
+        ConnectionInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            db_type: db_type.to_string(),
+            url: url.to_string(),
+            server_version: None,
+            connection_type: engine::connection_manager::ConnectionType::Global,
+            project_id: None,
+            driver_id: None,
+            environment_id: None,
+            auth_config_id: None,
+            auth_method: None,
+            network_config_id: None,
+            driver_properties: None,
+            advanced_options: None,
+            description: None,
+            use_duckdb_fed: fed,
+            created_at: std::time::Instant::now(),
+        }
+    }
 
     #[test]
     fn driver_columns_win_over_the_schema() {
@@ -551,5 +926,90 @@ mod tests {
         assert_eq!(cell_text(&Value::Float(1.5)), "1.5");
         assert_eq!(cell_text(&Value::Bool(true)), "true");
         assert_eq!(cell_text(&Value::Text("中文".to_string())), "中文");
+    }
+
+    /// 组装源清单：别名稳定、凭据随连接串带上、主源是本文档的连接
+    #[test]
+    fn the_federated_plan_names_sources_and_points_at_the_primary() {
+        // 故意把顺序打乱：组装结果不该跟着连接管理器的哈希顺序漂
+        let infos = vec![
+            info("G_2", "仓库", "postgres", "postgres://u:******@h:5432/w", true),
+            info(
+                "G_1",
+                "订单库",
+                "mysql_native",
+                "mysql://root:******@h:3306/shop",
+                true,
+            ),
+        ];
+        // 运行时连接串（含凭据）——连接管理器里存的那一份
+        let runtime = |conn_id: &str| -> Option<String> {
+            Some(match conn_id {
+                "G_1" => "mysql://root:real@h:3306/shop".to_string(),
+                _ => "postgres://u:real@h:5432/w".to_string(),
+            })
+        };
+        let plan = plan_from_infos(&infos, &runtime, "G_1").expect("组装");
+
+        assert_eq!(plan.owner, "G_1");
+        assert_eq!(plan.sources.len(), 2);
+        // 中文连接名整串变成 `db`，第二个重名就排到 `db_2`（顺序按连接 id）
+        assert_eq!(plan.sources[0].alias, "db", "G_1 先（按 id 排序）");
+        assert_eq!(plan.sources[1].alias, "db_2");
+        assert_eq!(plan.primary.as_deref(), Some("db"), "主源 = 本文档的连接");
+        assert!(plan.notes.is_empty(), "没出问题就别制造说明：{:?}", plan.notes);
+        // 凭据随连接串进 `ATTACH`（DuckDB 扫描器不认 Secret，见 accel::AccelSource::new）
+        assert_eq!(plan.sources[0].connection_string, "mysql://root:real@h:3306/shop");
+        assert_eq!(plan.sources[1].connection_string, "postgres://u:real@h:5432/w");
+        assert_eq!(plan.sources[0].kind, AccelKind::MySql);
+        assert_eq!(plan.sources[1].kind, AccelKind::PostgreSql);
+
+        // 拿不到运行时串（连接刚断开之类）：退回连接信息里那份（脱敏）——认证会如实失败
+        let plan = plan_from_infos(&infos, &|_| None, "G_1").expect("组装");
+        assert_eq!(plan.sources[0].connection_string, "mysql://root:******@h:3306/shop");
+    }
+
+    /// 没开开关 / 驱动不支持 / 连接没参与：三种情况各自如实地说
+    #[test]
+    fn the_plan_says_what_it_left_out() {
+        // 本文档的连接没开开关：源清单里只有别人，说明里点名
+        let infos = vec![
+            info("G_1", "订单库", "mysql_native", "mysql://h:3306/a", false),
+            info("G_2", "仓库", "postgres", "postgres://h:5432/w", true),
+            info("G_3", "分析库", "duckdb", "D:/data/a.duckdb", true),
+        ];
+        let plan = plan_from_infos(&infos, &|_| None, "G_1").expect("组装");
+        assert_eq!(plan.primary, None, "主源不是它，只能由引擎选第一个可用源");
+        assert!(
+            plan.notes.iter().any(|note| note.contains("G_1")),
+            "要说清本文档的连接为什么没参与：{:?}",
+            plan.notes
+        );
+
+        // 认不出的驱动：不因为一个连接不可用就整份失败，但要说出来
+        let infos = vec![
+            info("G_1", "订单库", "mysql_native", "mysql://h:3306/a", true),
+            info("G_2", "仓库", "postgres", "postgres://h:5432/w", true),
+            info("G_3", "文档库", "clickhouse", "http://h:8123", true),
+        ];
+        let plan = plan_from_infos(&infos, &|_| None, "G_1").expect("组装");
+        assert_eq!(plan.sources.len(), 2, "驱动不支持的连接不占位");
+        assert!(
+            plan.notes.iter().any(|note| note.contains("文档库")),
+            "要说清哪个连接没参与：{:?}",
+            plan.notes
+        );
+    }
+
+    /// 不够两个源 / 一个都没有：入口就把话说清楚（与门控同一口径）
+    #[test]
+    fn the_plan_refuses_before_the_session_is_built() {
+        let one = vec![info("G_1", "订单库", "mysql_native", "mysql://h:3306/a", true)];
+        let error = plan_from_infos(&one, &|_| None, "G_1").expect_err("一个源该拒");
+        assert!(error.contains("至少需要两个源"), "{error}");
+
+        let none = vec![info("G_1", "订单库", "mysql_native", "mysql://h:3306/a", false)];
+        let error = plan_from_infos(&none, &|_| None, "G_1").expect_err("没有源该拒");
+        assert!(error.contains("本地加速"), "{error}");
     }
 }

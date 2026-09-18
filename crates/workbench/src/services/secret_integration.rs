@@ -1,7 +1,14 @@
 //! DuckDB Secret 集成（M3 本地加速闭环）
 //!
-//! 连接生命周期 → Secret 注册：连接建立成功后，将源库凭据注册为 DuckDB Secret，
-//! 使分析引擎可直接联邦查询源库（Postgres/MySQL），"一次注册、到处可用"。
+//! 连接生命周期 → Secret 注册：连接建立成功后，将源库凭据注册为 DuckDB Secret。
+//!
+//! ## 实测结论（别把 Secret 当成挂载凭据的唯一来源）
+//!
+//! **DuckDB 1.5.5 的 mysql / postgres 扫描器都不认 Secret**（会话级、持久化、带 scope、
+//! `ATTACH ''` 各种写法都试过，见 `crates/engine/tests/federation_credentials_probe.rs`）：
+//! 加速 / 联邦真正靠的是**运行时连接串里的凭据**，引擎侧再把离开它的文本脱敏
+//! （`accel::scrub_credentials`）。保留这里的注册是为了凭据集中管理（以及将来可能支持的场景），
+//! **不是**挂载路径的前提。
 //!
 //! 依赖方向：workbench → connection（SecretManager）/ engine / shared。
 
@@ -152,8 +159,9 @@ fn analysis_db_path() -> Option<std::path::PathBuf> {
 /// 解析 Secret 目标：`(数据库文件, Secret 落盘目录)`。
 ///
 /// 默认（`None`）：全局分析库 + `{system}/secrets`（应用可控目录，不写用户主目录
-/// `~/.duckdb`）；`Some(db)`：以该库所在目录的 `secrets/` 子目录为 Secret 目录
-/// （测试/多环境隔离）。
+/// `~/.duckdb`；DuckDB 会话的 `secret_directory` 也指向同一处，见
+/// `DuckDBManager::configure_connection`）；`Some(db)`：以该库所在目录的 `secrets/` 子目录为
+/// Secret 目录（测试/多环境隔离）。
 fn resolve_target(
     target: Option<&std::path::Path>,
 ) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
@@ -167,7 +175,7 @@ fn resolve_target(
         }
         None => {
             let db = analysis_db_path()?;
-            let dir = engine::migration::get_system_dir().ok()?.join("secrets");
+            let dir = engine::migration::get_secrets_dir().ok()?;
             Some((db, dir))
         }
     }

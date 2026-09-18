@@ -366,6 +366,9 @@ pub fn history_meta(item: &HistoryItem) -> String {
     if let Some(source) = &item.source_text {
         parts.push(source.clone());
     }
+    if let Some(sources) = &item.sources_text {
+        parts.push(sources.clone());
+    }
     if let Some(error) = &item.error {
         parts.push(error.clone());
     }
@@ -391,6 +394,7 @@ mod tests {
             duration_text: "12 ms".to_string(),
             rows_text: Some("返回 1 行".to_string()),
             source_text: Some("MYSQL".to_string()),
+            sources_text: None,
             error: None,
             conn_id: None,
         }
@@ -461,6 +465,15 @@ mod tests {
         bare.rows_text = None;
         bare.source_text = None;
         assert_eq!(history_meta(&bare), "3 分钟前 · 12 ms");
+
+        // 【联邦】参与源跟在来源之后（不是联邦档 / 没记源就不显示）
+        let mut federated = item("rec-2", "SELECT 1");
+        federated.source_text = Some("MYSQL·联邦".to_string());
+        federated.sources_text = Some("源 mysql_src, pg_warehouse".to_string());
+        assert_eq!(
+            history_meta(&federated),
+            "3 分钟前 · 12 ms · 返回 1 行 · MYSQL·联邦 · 源 mysql_src, pg_warehouse"
+        );
     }
 
     /// 列表 → 搜索 → 重放 → 删除 → 清空：每一步都真的到了端口

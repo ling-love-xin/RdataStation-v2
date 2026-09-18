@@ -88,6 +88,11 @@ pub struct ConnectionInfo {
     pub driver_properties: Option<String>,
     pub advanced_options: Option<String>,
     pub description: Option<String>,
+    /// 开了「DuckDB 本地加速」吗（连接对话框里的开关；联邦源清单据此组装）
+    ///
+    /// 语义：**这条连接可以被 DuckDB 直连**（凭据已注册为 Secret）。本地加速档用它做门控，
+    /// 联邦档用它决定“哪些连接参与跨源查询”。
+    pub use_duckdb_fed: bool,
     pub created_at: std::time::Instant,
 }
 
@@ -228,6 +233,8 @@ impl ConnectionManager {
             driver_properties: None,
             advanced_options: None,
             description: None,
+            // 这条路径（按驱动配置直接建连）不走连接对话框的开关：默认不参与联邦源清单
+            use_duckdb_fed: false,
             created_at: std::time::Instant::now(),
         };
 

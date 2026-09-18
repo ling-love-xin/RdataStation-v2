@@ -764,7 +764,7 @@ impl ConnectionDialogState {
                             .gap(rems(GAP_SM))
                             .child(hint_line(
                                 theme,
-                                "仅网络数据库可用 · 凭据注册为 DuckDB Secret · 不落明文",
+                                "仅网络数据库可用 · 挂载时凭据只在内存里传递（不写进 URL 与日志）",
                             ))
                             .child(form_row(
                                 theme,
@@ -786,7 +786,7 @@ impl ConnectionDialogState {
                                 .child(form_row(theme, "缓存路径", Input::new(&cache_path)))
                                 .child(hint_line(
                                     theme,
-                                    "已开启：凭据注册为 DuckDB Secret（不落明文），分析引擎可直接联邦查询；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理",
+                                    "已开启：分析引擎可以只读挂载本连接做跨源查询（凭据只在内存里传递，不写进 URL 与日志）；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理",
                                 ));
                         } else {
                             accel_body =

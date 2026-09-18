@@ -54,6 +54,8 @@ pub struct HistoryItem {
     pub rows_text: Option<String>,
     /// 来源文案（库类型；没有就不显示）
     pub source_text: Option<String>,
+    /// 【联邦】参与源文案（`源 mysql_src, pg_warehouse`；不是联邦档就没有这一项）
+    pub sources_text: Option<String>,
     /// 失败原因（成功为 `None`）
     pub error: Option<String>,
     /// 当时绑定的连接（重放时带过去；`None` = 跟随当前连接）
@@ -102,6 +104,7 @@ pub fn item_from(record: &SqlHistoryRecord, now: DateTime<Utc>) -> HistoryItem {
         duration_text: duration_text(record.duration_ms.unwrap_or(0)),
         rows_text: rows_text(record.rows_returned, record.rows_affected),
         source_text: source_text(record.db_type.as_deref(), record.channel.as_deref()),
+        sources_text: sources_text(record.channel.as_deref(), record.sources.as_deref()),
         error: record.error_message.clone(),
         conn_id: record.conn_id.clone(),
     }
@@ -198,6 +201,23 @@ fn channel_mark(channel: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// 【联邦】参与源文案（`源 mysql_src, pg_warehouse`）
+///
+/// 三个“不显示”的理由，各自都是真话：
+/// - 不是联邦档（单一源库 / 本地加速没有“参与源”这回事）；
+/// - 老记录没有这一项（不编一个）；
+/// - 记了但是空的（没意义的标签不如不给）。
+pub fn sources_text(channel: Option<&str>, sources: Option<&str>) -> Option<String> {
+    if crate::channel::ExecChannel::from_code(channel?) != crate::channel::ExecChannel::Federated {
+        return None;
+    }
+    let aliases = sources?.trim();
+    if aliases.is_empty() {
+        return None;
+    }
+    Some(format!("源 {aliases}"))
+}
+
 /// 千分位（与结果区的数字写法一致）
 pub fn thousands(value: usize) -> String {
     let digits = value.to_string();
@@ -214,7 +234,8 @@ pub fn thousands(value: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        HistoryItem, duration_text, item_from, preview_text, rows_text, source_text, time_text,
+        HistoryItem, duration_text, item_from, preview_text, rows_text, source_text, sources_text,
+        time_text,
     };
     use chrono::{Duration, TimeZone as _, Utc};
     use engine::persistence::history_store::SqlHistoryRecord;
@@ -226,6 +247,7 @@ mod tests {
             conn_id: Some("conn-1".to_string()),
             db_type: Some("mysql".to_string()),
             channel: None,
+            sources: None,
             executed_at: Utc.with_ymd_and_hms(2026, 9, 17, 6, 0, 0).unwrap(),
             duration_ms: Some(12),
             success: Some(true),
@@ -233,6 +255,21 @@ mod tests {
             rows_affected: None,
             rows_returned: Some(1204),
         }
+    }
+
+    /// 【联邦】参与源文案：只在联邦档上出现，且只在真的记了源的时候
+    #[test]
+    fn sources_text_only_speaks_for_the_federated_channel() {
+        let aliases = Some("mysql_src, pg_warehouse");
+        assert_eq!(
+            sources_text(Some("federated"), aliases).as_deref(),
+            Some("源 mysql_src, pg_warehouse")
+        );
+        assert_eq!(sources_text(Some("accelerated"), aliases), None, "加速只有一条源");
+        assert_eq!(sources_text(Some("source"), aliases), None);
+        assert_eq!(sources_text(Some("federated"), None), None, "老记录不编一个");
+        assert_eq!(sources_text(Some("federated"), Some("   ")), None);
+        assert_eq!(sources_text(None, aliases), None);
     }
 
     #[test]

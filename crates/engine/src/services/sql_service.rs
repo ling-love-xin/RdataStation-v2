@@ -243,6 +243,8 @@ impl SqlService {
             rows_returned,
             rows_affected,
             channel: channel.map(str::to_string),
+            // 源库档没有“参与源清单”（那是联邦档的事；联邦不走这条路径）
+            sources: None,
         };
         if let Err(e) = history_store::save_sql_history(sql, &entry) {
             tracing::error!(error = %e, "Failed to save SQL history");

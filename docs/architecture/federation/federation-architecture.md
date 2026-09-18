@@ -60,6 +60,9 @@
 | D8 | **一致性如实声明**：跨源查询标“非事务一致快照”；桥接数据标“拉取于 HH:MM” | 各源各自时刻的数据，说成“一致”就是骗人 | 一段文案与一个悬停提示的成本 |
 | D9 | **不新建 crate**，在 `engine/duckdb/` 下独立成目录 | 无独立状态与生命周期、使用方只有 editor（经 engine）→ 不满足建 crate 判定 | 目录边界要靠文档与 mod.rs 的硬约束维持 |
 | D10 | **L2 未真机验收前不算可用** | 装得上 ≠ 连得上、下推好不好（我们没有 Oracle / MSSQL 端点） | 代码可以先写，验收口径写死“待真机” |
+| D11 | **凭据随连接串进 `ATTACH`，出引擎前脱敏** | 真机实测（`tests/federation_credentials_probe.rs`）：DuckDB 1.5.5 的 **mysql / postgres 扫描器都不认 Secret**——会话级 / 持久化 / 带 scope / `ATTACH ''` 全试过；脱敏 URL（`user:******@`）只会认证失败。所以挂载必须用**运行时连接串**（`DriverConnectionConfig.url_override`） | 口令会随 `ATTACH` 进 DuckDB 内存与报错文本：引擎侧一律过 `accel::scrub_credentials`（错误 / 挂载失败原因 / 历史里的原因）；连接对话框文案也跟着改成实话 |
+| D12 | **会话按源清单指纹缓存** | 同一个连接上的多份文档共享一条联邦会话（临时对象也共享）；**换主源不重建**（只是 `USE`），源清单变了才重建 | 改参与源 = 丢本地临时对象（日志里写一条，界面靠源清单告知）；两期后可优化成增量 `DETACH`/`ATTACH` |
+| D13 | **联邦档要求 ≥ 2 个源** | 联邦与本地加速的区别就是“跨源”；只有一个源时两者是同一件事，摆两个入口只会让人猜 | 门控与执行路径同一口径，各自行尾把“还差哪个源”说出来（未连上 / 未开开关 / 驱动不支持） |
 
 ## 5. 表名解析与写作规范
 
@@ -106,18 +109,25 @@
 | 8 | ⚪ | **取消对 scanner 的传播深度未验** | 源库里可能还在跑 | 验收用例：联邦档跑慢查询 → 中断 → 看源库侧是否停 |
 | 9 | ⚪ | **与 1c 分析会话的连接归属**（D2） | 影响临时对象共享 | 1c 开工时一并定，第一期留切换点 |
 | 10 | ⚪ | **旧 `legacy.rs` 的退役** | 两套并存易误用 | `session.rs` 覆盖四类源与物化后一并退役（标“已被取代”不静默删） |
+| 11 | 🟡 | **扫描器不认 Secret**（D11 的实测）：凭据只能随 `ATTACH` 串进 DuckDB | 企业内网可能不接受“口令进内存”（虽然不落库、不进日志） | 界面与文档如实说明；若将来扫描器支持 Secret，再改成 Secret 优先（探针已留台账） |
+| 12 | 🟡 | **SSH / 代理后面的源**：DuckDB 自己发起到源库的连接，走不到应用内的隧道 | 这类连接当下只能走源库档（或将来 L3 桥接：应用侧拉数） | 门控/源清单里如实报“挂不上：连接超时”；L3 桥接是它真正的归宿 |
 
 ## 9. 实现位置映射（设计决策 → 代码）
 
 | 决策 | 落点 |
 | --- | --- |
 | 模块入口与硬约束 | `crates/engine/src/duckdb/federation/mod.rs` |
-| D1 只读 / D3 主源 / D5 资源 / D6 部分可用 | `.../federation/session.rs`（🟡 第一期） |
-| D3 别名与重名检测 / 源清单快照 | `.../federation/registry.rs`（🟡 第一期） |
+| D1 只读 / D3 主源 / D5 资源 / D6 部分可用 | `.../federation/session.rs`（✅ 第一期） |
+| D3 别名与重名检测 / 源清单快照 | `.../federation/registry.rs`（✅ 第一期） |
+| D12 会话缓存 / 指纹 / 按源刷新 | `.../federation/session.rs`（✅ `ensure_session` / `refresh_all` / `set_primary`） |
+| D11 凭据与脱敏 | `crates/engine/src/duckdb/accel.rs`（`AccelSource::new` / `scrub_credentials`）+ `crates/engine/tests/federation_credentials_probe.rs` |
+| D13 门控口径 | `crates/workbench/src/services/editor_channels.rs`（`federated_availability`） |
+| 联邦档执行路径 / 源清单组装 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `run_on_federation`） |
+| 历史带参与源 | `crates/engine/src/persistence/history_store.rs`（`sources`）+ `crates/editor/src/history.rs`（`sources_text`） |
 | D7 下推与上限 / L3 | `.../federation/bridge.rs`（🟡 第二期） |
 | D4 扩展显式管理 | `crates/engine/src/duckdb/extensions.rs` + 探针 `tests/duckdb_extensions_probe.rs` |
 | 复用对象（会话 / 回执 / `MOUNT_LOCK`） | `crates/engine/src/duckdb/accel.rs` |
+| Secret 目录对齐（注册与 `secret_directory` 同一处） | `crates/engine/src/migration/global_init.rs`（`get_secrets_dir`）+ `DuckDBManager::configure_connection` |
 | 临时表生命周期 | `crates/engine/src/duckdb/{analysis.rs, temp_table.rs}` |
 | 通道档位与门控 | `crates/editor/src/channel.rs` + `crates/workbench/src/services/editor_channels.rs` |
-| 历史带参与源（D7 衍生） | `crates/engine/src/persistence/history_store.rs`（🟡 第一期） |
 | 旧实现（待退役） | `.../federation/legacy.rs` |

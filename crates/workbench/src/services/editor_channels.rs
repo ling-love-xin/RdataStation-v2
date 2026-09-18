@@ -17,10 +17,14 @@
 //! | 通道 | 条件 |
 //! | --- | --- |
 //! | 本地加速 | 连接存在 · **开启了 DuckDB 联邦**（`use_duckdb_fed`）· 驱动类型可加速（mysql / postgres / sqlite / duckdb）· **扩展可用**（试过且失败才拦，见 `accel::extension_state`） |
-//! | 联邦 | 尚未接入（切片三：外部源注册入口） |
+//! | 联邦 | **两个以上**已连接、开启加速且驱动可挂的连接（一个作主源、其余作外部源；见 [`federated_availability`]） |
 //!
 //! 判据的顺序 = **谁能先改**：连接开关（用户自己就能改）→ 驱动类型（换连接）→ 扩展
 //! （联网装一次 / 放离线包）。行尾给的原因就是第一条过不去的。
+//!
+//! **联邦为什么要求两个源**：联邦与本地加速的区别就是“跨源”。只有一个源时两者是同一件事，
+//! 摆两个入口只会让人猜“这俩差在哪”——与其给个看着能用、实则复制的选项，不如把差的那一个源
+//! 说出来。
 //!
 //! **扩展为什么是“试过才拦”**：安装扩展要联网（首次）也真的会失败，但菜单每帧都要画，
 //! 不能在这里做 I/O。所以没试过就不拦（让用户能选、执行时在**工作线程**上真装一次），
@@ -35,6 +39,7 @@ use std::rc::Rc;
 
 use editor::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort};
 use editor::shared::EditorShared;
+use workbench_shell::model::ConnectionItem;
 
 use crate::panels::Shared;
 
@@ -77,11 +82,65 @@ impl ChannelsPort for WorkbenchChannels {
         };
 
         ChannelAvailabilitySet {
-            // 联邦查询的入口（注册外部源）还没接：与其给个“看着能用”的选项，不如如实说
-            federated: ChannelAvailability::blocked("联邦查询尚未接入（外部源注册入口）"),
+            federated: federated_availability(&self.shared.connections.borrow()),
             accelerated,
         }
     }
+}
+
+/// 联邦档的可用性（**纯函数**，只看连接快照：渲染路径可调）
+///
+/// 可用 = **两个以上**已连接、开启「DuckDB 本地加速」且驱动能挂的连接（主源 + 外部源）。
+/// 不可用时把“还差什么”说出来：没开开关 / 没连上 / 驱动不支持——三种原因占三种修法。
+fn federated_availability(connections: &[ConnectionItem]) -> ChannelAvailability {
+    let mut enabled = 0usize;
+    let mut unsupported: Vec<String> = Vec::new();
+    let mut offline: Vec<String> = Vec::new();
+    let mut ready: Vec<String> = Vec::new();
+
+    for item in connections {
+        if !item.use_duckdb_fed {
+            continue;
+        }
+        enabled += 1;
+        if engine::duckdb::accel::AccelKind::from_db_type(&item.driver).is_err() {
+            unsupported.push(item.name.clone());
+            continue;
+        }
+        if item.connected {
+            ready.push(item.name.clone());
+        } else {
+            offline.push(item.name.clone());
+        }
+    }
+
+    if enabled == 0 {
+        return ChannelAvailability::blocked(
+            "还没有开启「DuckDB 本地加速」的连接（连接对话框 → 高级）",
+        );
+    }
+    if ready.len() >= 2 {
+        return ChannelAvailability::ok();
+    }
+
+    // 还差什么就说什么：没连上、不够两个、驱动不支持，三种情况各自给可操作的下一步
+    let mut reasons: Vec<String> = Vec::new();
+    if let Some(name) = ready.first() {
+        reasons.push(format!("现在只有 {name} 一个已连接的源"));
+    }
+    if !offline.is_empty() {
+        reasons.push(format!("{} 还没连上（先在导航里连接它）", offline.join("、")));
+    }
+    if !unsupported.is_empty() {
+        reasons.push(format!(
+            "{} 的驱动还不能做联邦源",
+            unsupported.join("、")
+        ));
+    }
+    ChannelAvailability::blocked(format!(
+        "联邦查询至少需要两个已连接且开启「DuckDB 本地加速」的连接（{}）",
+        reasons.join("；")
+    ))
 }
 
 /// 把通道端口接到编辑器共享状态上（**启动装配调用一次**）
@@ -145,10 +204,48 @@ mod tests {
             "开关开了、扩展没试过、驱动能加速 → 可造：{:?}",
             gate.reason
         );
-        // 联邦的入口还没接：必须挂在“尚未接入”上，而不是模模糊糊的“不可用”
+        // 联邦：只有一个源（就是它自己）→ 不可用，且原因说清“至少两个”
         let federated = availability.for_channel(ExecChannel::Federated);
         assert!(!federated.available);
-        assert!(federated.reason.unwrap_or_default().contains("尚未接入"));
+        let reason = federated.reason.unwrap_or_default();
+        assert!(reason.contains("至少需要两个"), "{reason}");
+        assert!(reason.contains("P_a"), "原因要点到还差哪一个：{reason}");
+    }
+
+    /// 联邦：两个已连接且开了开关的连接 → 可用；没连上的那个在原因里被点名
+    #[test]
+    fn the_federated_channel_needs_two_connected_sources() {
+        let mut second = connection("P_b", true);
+        second.name = "仓库".to_string();
+        second.connected = false;
+
+        // 一个连上、一个没连上 → 挡着，并说明是谁没连上
+        let availability =
+            port(vec![connection("P_a", true), second.clone()]).availability(Some("P_a"));
+        let gate = availability.for_channel(ExecChannel::Federated);
+        assert!(!gate.available);
+        let reason = gate.reason.unwrap_or_default();
+        assert!(reason.contains("仓库"), "{reason}");
+        assert!(reason.contains("还没连上"), "{reason}");
+
+        // 两个都连上 → 可用
+        let mut connected_second = second;
+        connected_second.connected = true;
+        let availability = port(vec![connection("P_a", true), connected_second])
+            .availability(Some("P_a"));
+        assert!(
+            availability.for_channel(ExecChannel::Federated).available,
+            "两个源都就绪就该给选：{:?}",
+            availability.for_channel(ExecChannel::Federated).reason
+        );
+
+        // 一个都没开开关 → 原因指到那个开关
+        let availability = port(vec![connection("P_a", false)]).availability(Some("P_a"));
+        let reason = availability
+            .for_channel(ExecChannel::Federated)
+            .reason
+            .unwrap_or_default();
+        assert!(reason.contains("本地加速"), "{reason}");
     }
 
     /// 驱动类型不能加速（比如将来接的 ClickHouse）→ 原因说在类型上，不报“开关没开”

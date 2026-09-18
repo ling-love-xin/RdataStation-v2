@@ -434,6 +434,18 @@ impl DuckDBManager {
             "SET autoload_known_extensions = true".to_string(),
         ];
 
+        // Secret 目录：凭据由 `workbench::services::secret_integration` 注册到
+        // `{system}/secrets`，会话必须指向同一个目录才看得到它们。
+        // **不设的后果**：挂网络源时连接串里的口令是脱敏的（`user:******@`），
+        // DuckDB 拿 `******` 去认证 → 真机上表现为“加速 / 联邦挂不上源库”，
+        // 而错误信息只说认证失败，看不出是目录没对上。
+        match crate::migration::get_secrets_dir() {
+            Ok(dir) => settings.push(format!("SET secret_directory = '{}'", dir.display())),
+            Err(e) => tracing::warn!(
+                "[duckdb] Secret 目录不可用（{e}）：本地加速 / 联邦的网络源可能认证失败"
+            ),
+        }
+
         // 临时目录：建不出来就跳过溢写设置（退回 DuckDB 默认），不挡启动
         let temp_dir = paths::temp_dir();
         match std::fs::create_dir_all(&temp_dir) {
@@ -756,6 +768,17 @@ mod tests {
             "extension_directory 应指向 paths::extensions_dir()"
         );
         assert!(paths::extensions_dir().exists(), "扩展目录应已建出来");
+
+        // Secret 目录钉在 `{system}/secrets`（与凭据注册同一处；不设就见不到已注册的凭据）
+        assert_eq!(
+            PathBuf::from(setting("secret_directory")?),
+            crate::migration::get_secrets_dir()?,
+            "secret_directory 应指向 get_secrets_dir()"
+        );
+        assert!(
+            crate::migration::get_secrets_dir()?.exists(),
+            "Secret 目录应已建出来"
+        );
         // 不静默联网；已装的自动加载保住日常体验（`allow_community_extensions` 改不了，
         // 它默认就是 true——真要关得在建库前用 `DBConfig`，见上面注释）
         // 注：布尔设置的 `current_setting` 回出来就是 BOOLEAN 类型（不能按 String 读）
