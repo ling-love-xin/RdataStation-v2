@@ -23,6 +23,22 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — 结构洞察改走驱动元数据（D62）+ 边界口径修正
+
+**背景**：用户提出两点——① 数据源早就抽象了（`MetadataBrowser`），为什么结构洞察还按库写方言 SQL；② 洞察主要用 DuckDB，结构洞察却是唯一绕开它、直连源库的例外。核查确认：**六个内置驱动都已实现元数据接口**（导航树 / 属性面板在用），洞察侧那 150 行方言 SQL + 3 个方言用例是**重复实现**（上一批真机踩坑时，我只在原地加方言分支，没回头用已有抽象——已改）。
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **226 项**（方言 6 项 → 新 3 项）· `column_profile_e2e` **14 项** · `rds-workbench --lib` **94 项** · `ui_contract` **7 项** · 真机四库 + 负例全绿；`cargo check --workspace --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **D62** 元数据只走驱动接口 | 删 `SchemaDialect` / `schema_filter` / `display_name` / `fetch_all_*` 的方言 SQL（连带 `escape_sql_string`）→ `ensure_target_exists`（库 / schema 名写错 → 可读回执，不拿「零张表」冒充结论）+ `fetch_metadata`（表清单 → 逐表列；单表失败只记账并在报告摘要里说明）+ `TableColumnInfo::from_detail`（`ColumnDetail` → 报告行：`is_primary_key`→`PRI`、`is_foreign_key`→`MUL`、序数取列表下标） | `insight/src/schema_analyzer.rs` |
+| **SQLite 结构洞察自动可用** | 原来被「没有 information_schema」硬回绝；驱动侧本来就写着 `PRAGMA table_info` → 真机：27 表 / 125 列 / 34 项需关注 | 同上 + `insight_schema_real` |
+| 超时口径 | 驱动接口没有逐条超时形参（不走 `SqlService`）→ 整段 **30s 上界**（`METADATA_TIMEOUT`） | 同上 |
+| **边界口径**（按用户修正） | 洞察的边界 = **导航树所见**（有真正驱动 + 活连接）+ **草稿箱 / 分析存档两块文件**；只能靠 `ATTACH` / 三方扩展到达的远程库**不在边界内**（扩展是「文件读取器」的实现手段，不是把无驱动库拉进来的通道）。已写进架构 §1.1，并把上一批的 Oracle 用例改标为**机制回归**（不是边界判据） | 架构 §1.1 / §10 / D59 行；手册 §1 |
+| 顺手修 | `project_switch_clears_result_temp_tables` 并行跑时偶发失败：清场口是**非阻塞**的（拿不到内存库锁就留给下一次切项目），用例按生产语义改为**重试几拍** | `workbench/src/components/project_host.rs` |
+
+**真机数字**（元数据段耗时）：MySQL 47 表 / 318 列 ≈0.45s · PG 25 / 144 ≈0.4s · SQLite 27 / 125 ≈3ms · DuckDB 10 / 27 ≈50ms——N+1 在真实库上可接受（将来大 schema 可在驱动接口加批量方法）。**新发现**：PG 偶发「报告后第一条语句卡 ~30s」（架构 **K19**，未修，已排除慢查询与服务端锁，给了排查方向：洞察门面每次调用新建 runtime × 宿主 sqlx 池）。
+
 ### 2026-09-18 — D59 边界实证：**扩展**提供的源（Oracle）也能洞察
 
 **背景**：D59 的产品口径是「凡 DuckDB 能分析的资源都能洞察」。到本批为止，这条只被**文件类**（CSV / Parquet / Excel，DuckDB 自己的读取器）验过；经 **community 扩展**读进来的源（表函数 / `ATTACH`）没有实证。
@@ -63,6 +79,8 @@
 | 真机验证（新增两个用例） | `insight_schema_real`（MySQL 47 表 / 318 列 · PG 25 / 144 · DuckDB 10 / 27 · SQLite **明确回绝**）、`insight_source_real`（四库源取样 → 列画像 3 行 / 空值率 / 表探查 3 列；样本表带 `tmp_i_` 前缀）——未设环境变量自动跳过 | `workbench/tests/{insight_schema_real,insight_source_real}.rs` |
 
 **真机口径**（照 `editor_exec_real.rs`）：`RDS_TEST_{MYSQL_URL,PG_URL,SQLITE_PATH,DUCKDB_PATH}`；**sh / bash 下一律加单引号**（`D:\…` 的反斜杠会被吃掉 → 驱动在工作目录建空库 → 假通过）。`insight_source_real` 会在真库建 `rds_probe_source_*`、`insight_schema_real` 建 `rds_probe_schema_*`，跑完 DROP。
+
+> **后续修正（同日，最新一条进度）**：本批的 `SchemaDialect`（以及 SQLite 的「明确回绝」）已由 **D62** 删除——结构洞察改走驱动元数据接口，SQLite 因此可用。本表保留当时的原貌，只作历史记录。
 
 ### 2026-09-18 — 收口（一）：删源库内省路径 + 接结果集清场口
 

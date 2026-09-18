@@ -3,7 +3,7 @@
 > **一句话**：把数据变成**结论**——「这份数据长什么样」（库 / 表 / 列画像）与「它能不能用」（四维质量评分），并把「新增一种洞察」从改 Rust 降级为**加一个 TOML 规则文件**（内置 16 条，用户可扩展）。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**Phase 5 完成 + 规则侧收口 + 临时表一致化（K16 收口）+ 规则安全边界（Q1 全落地）+ 快照收尾（Q4/Q5/K14 定案）+ 入口统一（D58 源取样通道）+ 四个入口全部接线（D59/D60）+ **结构洞察入口（K17 修根 + 真机四库验证）**（2026-09-18）——Phase 0–5 全部完成；内置规则 **16 条**；**临时表** D50 · D51 · D54；**规则边界** D52 + D53；**快照** D55 · D56 · D57；**入口** D58（导航树 / 存档 / 草稿箱 / 结果集统一成「取样 → `tmp_i_` → 画像」）。测试 **229 项 + 集成 13 项**全绿，另有**真机四库**两个用例（`insight_schema_real` / `insight_source_real`）。下一步：**编辑器结果集入口**（顺带 K16 的定向回收），见 `insight-dev-plan.md` §10。
+> 状态：**Phase 5 完成 + 规则侧收口 + 临时表一致化（K16 收口）+ 规则安全边界（Q1 全落地）+ 快照收尾（Q4/Q5/K14 定案）+ 入口统一（D58 源取样通道）+ 四个入口全部接线（D59/D60）+ 结构洞察改走驱动元数据（D62，SQLite 可用）**（2026-09-18）——Phase 0–5 全部完成；内置规则 **16 条**；**临时表** D50 · D51 · D54；**规则边界** D52 + D53；**快照** D55 · D56 · D57；**入口** D58；**结构洞察取数** D62；**边界口径**见架构 §1.1（导航树所见 + 草稿箱/分析存档两块文件）。测试 **226 项 + 集成 14 项**全绿，另有**真机四库**两个用例（`insight_schema_real` / `insight_source_real`）。下一步：**编辑器结果集入口**（顺带 K16 的定向回收），见 `insight-dev-plan.md` §10。
 >
 > **边界**：本模块拥有**画像 / 评分 / 规则 / 报告 / 快照历史**。SQL 执行与结果集属 M5 编辑器；对象树与元数据内省属 M4；连接与运行态属 M3；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接，只经服务/命令与它们协作。
 
@@ -69,7 +69,7 @@
 | 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
 | 异常值检测 | `crates/insight/src/insight_engine.rs`（`detect_extremes`；现状：✅ 已归位，自 `engine/services/duckdb_service.rs`） |
 | 表探查 | `crates/insight/src/insight_engine.rs`（`get_temp_table_profile`：DuckDB 临时表内省 `DESCRIBE`，面板走这条）（现状：✅ Phase 3 一批；源库内省的 `table_profile_service.rs` 已于 2026-09-18 **删除**——零调用且未在真机跑通，源库表先取样再探查，D58/D59） |
-| 结构洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（分析器，含 `SchemaDialect`）+ `schema_view.rs`（视图模型与导出）（现状：✅ Phase 4 一批；导出与下钻已接（D60）；✅ **入口已接**（2026-09-18）：导航树「结构洞察」→ `SchemaRef` → `NavHost::open_insight_schema`，真机四库验证） |
+| 结构洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（分析器；元数据走**驱动接口**，无方言 SQL，D62）+ `schema_view.rs`（视图模型与导出）（现状：✅ Phase 4 一批；导出与下钻已接（D60）；✅ **入口已接**（2026-09-18）：导航树「结构洞察」→ `SchemaRef`；✅ **取数改走驱动元数据**（D62）：SQLite 也因此可用；真机四库验证） |
 | 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：✅ 已归位） |
 | 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位；**同一进程对同一项目库不得重叠 open**，见架构 D41；按天数清理已可用） |
 | 服务门面（画像 / 评分 / 规则 / 快照编排） | `crates/insight/src/service/{mod.rs, persistence.rs}`（现状：✅ 已归位）；结果集半边留在 `crates/workbench/src/services/result_service.rs` |
@@ -137,14 +137,14 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB（+ 扩展源 Oracle）× 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **229 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3；文件类数据源新增 1；Schema 导出与下钻新增 3；**结构洞察方言 3 + 取数回归 1**），另有**集成测试 14 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** / **与内置 `SUMMARIZE` 交叉校验** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处（`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`），其中 `duckdb::analysis` 现 **8 项**（含 CTAS 2 项）。引擎单测总量当前 **428 项**（`cargo test -p rds-engine --lib`）。
+- **基线**：`cargo test -p rds-insight` 当前 **226 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3；文件类数据源新增 1；Schema 导出与下钻新增 3；**取数回归 1；**结构洞察改走驱动元数据（方言 6 项 → 新 3 项）****），另有**集成测试 14 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** / **与内置 `SUMMARIZE` 交叉校验** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处（`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`），其中 `duckdb::analysis` 现 **8 项**（含 CTAS 2 项）。引擎单测总量当前 **428 项**（`cargo test -p rds-engine --lib`）。
 
 ## 6. 文档地图
 
 | 文档 | 什么时候读它 |
 | --- | --- |
 | `insight-prototype-design.md` | **长什么样 / 怎么交互**：核心语义与规则作用域 / 右 Dock 面板布局 / 四种目标视图分派 / 状态与空态矩阵 / 规则管理对话框 / 主题映射与尺寸常量 / GPUI 落点 / **§10 与 V1 的逐项对照** |
-| `insight-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型与**九条不变式** / 分层与 crate 归属 / 状态所有权（单一写入者）/ 六条数据流 / **D1–D61 决策表** / 并发与资源 / 降级矩阵 / 测试策略 / 实现位置映射 / **§11 已知问题 K1–K18（K1 / K14 / K16 / K17 已处置；K18 定案保留）** / §12 待确认 Q1–Q7（**Q1 / Q3 / Q4 / Q5 / Q6 / Q7 已定案**） |
+| `insight-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型与**九条不变式** / 分层与 crate 归属 / 状态所有权（单一写入者）/ 六条数据流 / **D1–D62 决策表** / 并发与资源 / 降级矩阵 / 测试策略 / 实现位置映射 / **§11 已知问题 K1–K19（K1 / K14 / K16 / K17 已处置；K18 定案保留；K19 待查）** / §12 待确认 Q1–Q7（**Q1 / Q3 / Q4 / Q5 / Q6 / Q7 已定案**） |
 | `insight-dev-plan.md` | **做什么、做到哪**：已确认决策 9 项 / **§0 进度记录** / 现状盘点 / **§2 五项实证缺陷** / 目标 crate 边界 / **§4 规则作用域与索引表设计** / Phase 0–5 任务 / 测试场景 T1–T14 / 风险 R1–R7 / 实现位置映射 / 验证命令 / **§10 未接与预留项（收口清单 · 权威）** / **§11 `insight_view.rs` 按 Tab 位移规格（待触发）** |
 | `insight-extension-notes.md` | **实现手段与第三方扩展的调研记录**（讨论稿）：现状约束（外部编译库 / 单例 / 已有扩展机制）/ 边界（三层实现 · 扩展可换实现不可换语义 · 准入四件套）/ 候选扩展逐项评估（`dq` / `stats_duck` / `datasketches` / `stochastic` + 顺带发现）/ 可参考的扩展设计（GE / Deequ / dbt / Soda / gatekeeper …）/ **§6 可采取之处（不引扩展也能拿的 10 条）** / 探针口径 |
 | `insight-user-guide.md` | **怎么用**：入口 / 界面导览与怎么看数字 / 典型流程 / **§4 规则编写指南（对外契约：三层作用域 · 字段全表 · `value_type` 表 · 质量门控语义 · 可照抄示例 · 安全边界）** / **§4.8 内置规则 16 条一览** / FAQ 排查 / USIT 验收清单 |
