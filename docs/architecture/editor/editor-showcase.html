@@ -147,6 +147,15 @@ code,.mono{font-family:Consolas,'SFMono-Regular','Cascadia Mono',monospace;font-
 .mode-strip .ms-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:700;margin-bottom:8px;}
 .mode-strip .ms-head .hint{font-size:11.8px;font-weight:400;color:var(--muted);}
 
+/* ── 右键菜单还原 ── */
+.ctxwrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(292px,1fr));gap:12px;}
+.ctxmenu{border:1px solid var(--border);border-radius:10px;background:var(--float);box-shadow:var(--shadow);padding:4px;font-size:12.3px;align-self:start;}
+.ctxmenu .mi{display:flex;align-items:center;gap:8px;padding:4px 10px;border-radius:6px;}
+.ctxmenu .mi:hover{background:var(--sidebar);}
+.ctxmenu .mi .tag{margin-left:auto;font-size:10.5px;color:var(--muted);white-space:nowrap;}
+.ctxmenu .sep{height:1px;background:var(--border);margin:3px 6px;}
+.ctxmenu .cap{padding:4px 10px 6px;font-size:11px;color:var(--muted);}
+
 /* ── 通用区块 ── */
 section{margin:34px 0 0;scroll-margin-top:64px;}
 .sec-head{display:flex;align-items:center;gap:10px;margin-bottom:5px;}
@@ -257,14 +266,15 @@ td .mono{font-size:11.6px;color:var(--muted);}
     <a href="#s4">一次执行的全流程</a>
     <a href="#s5">三档执行通道</a>
     <a href="#s6">结果区</a>
-    <a href="#s7">本地分析</a>
-    <a href="#s8">编辑体验</a>
-    <a href="#s9">报错与定位</a>
-    <a href="#s10">历史 · 会话 · 闸门</a>
-    <a href="#s11">架构</a>
-    <a href="#s12">质量与证据</a>
-    <a href="#s13">边界</a>
-    <a href="#s14">文档地图</a>
+    <a href="#s7">结果集的七条出口</a>
+    <a href="#s8">本地分析</a>
+    <a href="#s9">编辑体验</a>
+    <a href="#s10">报错与定位</a>
+    <a href="#s11">历史 · 会话 · 闸门</a>
+    <a href="#s12">架构</a>
+    <a href="#s13">质量与证据</a>
+    <a href="#s14">边界</a>
+    <a href="#s15">文档地图</a>
   </nav>
 
   <!-- ══ 英雄区 ══ -->
@@ -279,6 +289,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
         </p>
         <div class="chips">
           <span class="chip hot">六条驱动路径真机验证</span>
+          <span class="chip hot">结果集有七条出口</span>
           <span class="chip">0 静默联网</span>
           <span class="chip">1,000 行/段自动续取</span>
           <span class="chip">Parquet / Excel 导出</span>
@@ -286,7 +297,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
         </div>
         <div class="cta">
           <a class="pri" href="#s3">看四个剧本 ↓</a>
-          <a href="#s11">看架构</a>
+          <a href="#s12">看架构</a>
           <a href="editor-prototype.html">打开交互稿</a>
         </div>
       </div>
@@ -461,8 +472,9 @@ td .mono{font-size:11.6px;color:var(--muted);}
         <div class="idx">HIGHLIGHT 2</div>
         <h4>结果不是终点，是可以继续算的一张表</h4>
         <p>本地筛选（只动视图）、下发源库重查（拼 WHERE 去 LIMIT）、排序下发、右键按值筛选、
-          丢给本地 DuckDB 做聚合、导出成 Parquet / Excel——每一步都产生<b>新结果集</b>，原结果一行不动。</p>
-        <div class="kv"><span>筛选 300ms 防抖</span><span>分析上限 20,000 行并如实说明</span><span>导出跟随筛选</span></div>
+          丢给本地 DuckDB 做聚合、右键<b>洞察此列</b>、导出成 Parquet / Excel——每一步都产生<b>新结果集</b>或落到别的面板，原结果一行不动。</p>
+        <div class="kv"><span>筛选 300ms 防抖</span><span>分析上限 20,000 行并如实说明</span><span>导出跟随筛选</span><span>洞察不物化结果集</span></div>
+        <div class="kv"><a href="#s7" style="font-size:11.5px">看七条出口 ↓</a></div>
       </div>
       <div class="big">
         <div class="idx">HIGHLIGHT 3</div>
@@ -668,9 +680,60 @@ td .mono{font-size:11.6px;color:var(--muted);}
     </div>
   </section>
 
-  <!-- ══ 7. 本地分析 ══ -->
+  <!-- ══ 7. 结果集产线 ══ -->
   <section id="s7">
-    <div class="sec-head"><span class="no">07</span><h3>本地 DuckDB 分析</h3><span class="tag">「查询后分析」这条主线的入口</span></div>
+    <div class="sec-head"><span class="no">07</span><h3>结果集是一条产线 · 七条出口</h3><span class="tag">除了看，它还能被继续用——每条出口都落成新结果集或别的面板</span></div>
+    <p class="sec-sub">结果集不是“查询的尾巴”，而是编辑器里的<b>一等公民</b>：有标签条、有通道徽标、有来源摘要、有上限淘汰。
+      它的状态就是文档状态的一部分——所以这些衍生能力全部长在同一个 crate 里，不跨 crate 传两遍。</p>
+
+    <div class="ctxwrap" style="margin-bottom:12px">
+      <div class="ctxmenu">
+        <div class="cap">在结果网格里右键一个单元格——菜单长这样</div>
+        <div class="mi">按值筛选「Ada」<span class="tag">本地 · 只动视图</span></div>
+        <div class="mi">复制此值</div>
+        <div class="sep"></div>
+        <div class="mi">按「customer」升序（下发源库）<span class="tag">会重查</span></div>
+        <div class="mi">按「customer」降序（下发源库）<span class="tag">会重查</span></div>
+        <div class="mi">冻结「customer」</div>
+        <div class="sep"></div>
+        <div class="mi">洞察「customer」这一列<span class="tag">进洞察面板</span></div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">☰</span>菜单是纯函数算出来的</h4>
+        <p><span class="mono">context_menu_items(值, 列名, 列序, 是否冻结, 能否洞察)</span> 返回该摆哪几项、每项叫什么、点下去干什么——
+          <b>界面只负责画</b>，所以每一项都能单独断言。</p>
+        <ul>
+          <li><b>短预览就地折叠</b>：空白折叠 + 超 24 字截断，长值不把菜单撑开</li>
+          <li><b>升 / 降序标注了“下发源库”</b>——它真的会重查，而不是改本地顺序</li>
+          <li><b>能力没有就不摆入口</b>：「洞察此列」只在能洞察时出现，与「按值筛选」同口径</li>
+        </ul>
+        <div class="foot">纯函数在 <span class="mono">view/results/grid.rs</span>；网格只负责说“用户点了谁”，SQL 与连接是面板与宿主的事</div>
+      </div>
+    </div>
+
+    <table>
+      <tr><th style="width:118px">出口</th><th>你做什么</th><th>落到哪</th></tr>
+      <tr><td><b>① 看</b></td><td>虚拟滚动 · 列宽 / 列序 · 冻结列 · 单元格 / 行 / 列选择 · NULL 斜体</td><td>组件库原生，零手搓</td></tr>
+      <tr><td><b>② 筛</b></td><td>工具栏筛选框，任一列命中即可；300ms 防抖，<b>只动视图</b></td><td>同一份结果，行号列改显视图行号</td></tr>
+      <tr><td><b>③ 排</b></td><td>点列头（本地三态循环）· 右键升 / 降序（<b>下发源库</b>，不 CAST）</td><td>本地排序原地；下发排序落新结果集</td></tr>
+      <tr><td><b>④ 回源库再问一遍</b></td><td><span class="mono">▢ 下发源库</span> 打开后应用筛选：拼 <span class="mono">WHERE</span> 重查（去掉原 <span class="mono">LIMIT</span> 并提示）</td><td><b>新结果集</b>，原结果一行不动</td></tr>
+      <tr><td><b>⑤ 二次分析</b></td><td><span class="mono">⚗ 分析 ▾</span>：计数 / 按列分组（最多 8 列）/ 自定义聚合 SQL（<span class="mono">{table}</span> 指这份数据）</td><td>本地 DuckDB → <b>新结果集</b>（见下一节）</td></tr>
+      <tr><td><b>⑥ 洞察</b></td><td>右键「洞察「列」这一列」：把列交给洞察面板做画像</td><td>洞察面板（<b>不物化结果集</b>，见下）</td></tr>
+      <tr><td><b>⑦ 带走</b></td><td><span class="mono">⤓ 导出 ▾</span>：CSV · JSON · INSERT · Parquet · XLSX；两档范围</td><td>落盘（后台写 + 回执），<b>跟随筛选</b></td></tr>
+    </table>
+
+    <div class="gate" style="margin-top:12px"><b>洞察为什么“不物化结果集”</b>：洞察拿到的不是这份结果的数据副本，而是
+      「<b>这一列 + 产生它的 SQL + 在哪条连接上</b>」，由洞察侧重跑一句带 <span class="mono">LIMIT 500</span> 的取样落到自己的临时表里。
+      这样就不需要建 <span class="mono">tmp_q_*</span> 表、也就没有“结果集被丢弃时回收临时表”那套生命周期。
+      <span class="no">代价写在案上：列类型不在这里猜（编辑器手里只有字符串化的行）——目标头在数据回来前只显示来源，不显示类型；编一个“看起来像真的”类型更糟。</span></div>
+    <div class="gate"><b>值查看 · 今天的形态</b>：值在菜单里<b>就地短预览</b>（折叠 + 截断）+「复制此值」；
+      完整的<b>值预览弹层</b>与<b>值编辑</b>还没做——台账写在 <span class="mono">view/results/mod.rs</span>：
+      组件库没有原生 filter / 值预览 / 值编辑，这三件（连同洞察入口）属于业务语义，各有计划步骤，落地时加新文件而不是往 <span class="mono">grid.rs</span> 里堆。</div>
+  </section>
+
+  <!-- ══ 8. 本地分析 ══ -->
+  <section id="s8">
+    <div class="sec-head"><span class="no">08</span><h3>本地 DuckDB 分析</h3><span class="tag">「查询后分析」这条主线的入口</span></div>
     <div class="flow">
       <div class="step2"><div class="idx">① 选</div><div class="t">预置菜单</div><div class="d">计数行数 · 按「列」分组计数（最多 8 列）</div><div class="who">analysis::menu_items</div></div>
       <div class="step2"><div class="idx">② 或自己写</div><div class="t">自定义分析 SQL</div><div class="d">弹输入框，预填能跑的模板；<span class="mono">{table}</span> 指桥接出来的临时表；空白当场拒</div><div class="who">dialogs::open_analysis_sql</div></div>
@@ -681,8 +744,8 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <!-- ══ 8. 编辑体验 ══ -->
-  <section id="s8">
-    <div class="sec-head"><span class="no">08</span><h3>编辑体验</h3><span class="tag">能借组件库与内核的一律不手搓；自己写的部分都是纯函数 + 可逐条断言</span></div>
+  <section id="s9">
+    <div class="sec-head"><span class="no">09</span><h3>编辑体验</h3><span class="tag">能借组件库与内核的一律不手搓；自己写的部分都是纯函数 + 可逐条断言</span></div>
     <table>
       <tr><th style="width:132px">能力</th><th>关键点</th></tr>
       <tr><td><b>高亮</b></td><td>sqlglot tokenizer → 字节区间 → 主题语法色；<b>写不完的 SQL 也能着色</b>（语法树会失败，词法不会）</td></tr>
@@ -698,8 +761,8 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <!-- ══ 9. 报错与定位 ══ -->
-  <section id="s9">
-    <div class="sec-head"><span class="no">09</span><h3>报错与定位</h3><span class="tag">诊断 · 定位 · 聚焦，三件事分开做</span></div>
+  <section id="s10">
+    <div class="sec-head"><span class="no">10</span><h3>报错与定位</h3><span class="tag">诊断 · 定位 · 聚焦，三件事分开做</span></div>
     <div class="grid g2">
       <div class="card">
         <h4><span class="ico">⌖</span>位置从哪来</h4>
@@ -721,8 +784,8 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <!-- ══ 10. 历史 · 会话 · 闸门 ══ -->
-  <section id="s10">
-    <div class="sec-head"><span class="no">10</span><h3>历史 · 会话 · 闸门</h3><span class="tag">三件「跨时间」的事</span></div>
+  <section id="s11">
+    <div class="sec-head"><span class="no">11</span><h3>历史 · 会话 · 闸门</h3><span class="tag">三件「跨时间」的事</span></div>
     <div class="grid g3">
       <div class="card">
         <h4><span class="ico">⟲</span>历史面板（右 Dock）</h4>
@@ -753,8 +816,8 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <!-- ══ 11. 架构 ══ -->
-  <section id="s11">
-    <div class="sec-head"><span class="no">11</span><h3>架构 · 依赖只向下</h3><span class="tag">编辑器不认识「项目 / 连接 / 文件对话框」——一律走端口注入</span></div>
+  <section id="s12">
+    <div class="sec-head"><span class="no">12</span><h3>架构 · 依赖只向下</h3><span class="tag">编辑器不认识「项目 / 连接 / 文件对话框」——一律走端口注入</span></div>
     <div class="layers">
       <div class="layer"><div class="tag">应用层</div><div class="body"><b>rds-app</b>：窗口 · 主题 · <b>键位注册</b>（九条编辑快捷键都在这）</div></div>
       <div class="layer"><div class="tag">宿主（工作台）</div><div class="body"><b>rds-workbench</b>：把端口接到真实世界——执行器 · 连接列表与建连 · 通道门控 · 补全目录 · 项目锁 · 会话存储 · 系统文件对话框（<span class="mono">rfd</span> 只在这）</div></div>
@@ -794,8 +857,8 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <!-- ══ 12. 质量与证据 ══ -->
-  <section id="s12">
-    <div class="sec-head"><span class="no">12</span><h3>质量与证据</h3><span class="tag">每个功能都指得出「哪些测试在守它」与「真机上跑通没有」</span></div>
+  <section id="s13">
+    <div class="sec-head"><span class="no">13</span><h3>质量与证据</h3><span class="tag">每个功能都指得出「哪些测试在守它」与「真机上跑通没有」</span></div>
     <table>
       <tr><th>套件</th><th style="width:88px">数量</th><th>守什么</th></tr>
       <tr><td>编辑器单测（<span class="mono">cargo test -p rds-editor --lib</span>）</td><td><b>377</b></td><td>执行族与落位 · 分段抓取 · 事务 · 中断 · 结果区 · 导出编码 · 分析桥接 · 补全 · 诊断解析 · 会话恢复 · 模式矩阵 · 通道闸</td></tr>
@@ -832,8 +895,8 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <!-- ══ 13. 边界 ══ -->
-  <section id="s13">
-    <div class="sec-head"><span class="no">13</span><h3>边界 · 这些事它不做</h3><span class="tag">把话说在前面，比事后解释便宜</span></div>
+  <section id="s14">
+    <div class="sec-head"><span class="no">14</span><h3>边界 · 这些事它不做</h3><span class="tag">把话说在前面，比事后解释便宜</span></div>
     <div class="grid g2">
       <div class="card">
         <h4><span class="ico">✕</span>明确不做</h4>
@@ -859,8 +922,8 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <!-- ══ 14. 文档地图 ══ -->
-  <section id="s14">
-    <div class="sec-head"><span class="no">14</span><h3>文档地图</h3><span class="tag">宣传页只负责「一页看懂」，口径以模块文档为准</span></div>
+  <section id="s15">
+    <div class="sec-head"><span class="no">15</span><h3>文档地图</h3><span class="tag">宣传页只负责「一页看懂」，口径以模块文档为准</span></div>
     <table>
       <tr><th style="width:34%">文档</th><th>什么时候读</th></tr>
       <tr><td><a href="README.md">README.md</a></td><td>模块入口：一句话定位 · 边界 · 代码地图 · 硬约束 · 1b 进度</td></tr>
