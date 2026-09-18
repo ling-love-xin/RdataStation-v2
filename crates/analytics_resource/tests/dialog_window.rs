@@ -32,6 +32,9 @@ use rds_analytics_resource::dialogs::index_repair::{
 use rds_analytics_resource::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
 };
+use rds_analytics_resource::dialogs::group::{
+    GroupNameEvent, GroupNameKind, open_group_name_dialog,
+};
 use rds_analytics_resource::dialogs::tag::{
     TagChoice, TagDialogSeed, TagDialogState, open_tag_dialog,
 };
@@ -597,4 +600,56 @@ fn tag_dialog_lists_choices_and_keeps_the_create_path_gated(cx: &mut TestAppCont
         cx.update(|window, cx| window.has_active_dialog(cx)),
         "换行不该把对话框关掉"
     );
+}
+
+#[gpui_kit::test]
+fn group_name_dialog_opens_in_both_shapes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let events: Rc<RefCell<Vec<GroupNameEvent>>> = Rc::new(RefCell::new(Vec::new()));
+
+    // 新建：标题与按钮文案、两个按钮都在。
+    {
+        let events = events.clone();
+        cx.update(|window, cx| {
+            let input = cx.new(|cx| {
+                gpui_kit::component::input::InputState::new(window, cx).placeholder("分组名")
+            });
+            open_group_name_dialog(
+                window,
+                cx,
+                GroupNameKind::Create,
+                input,
+                move |event, _window, _cx| events.borrow_mut().push(event),
+            );
+        });
+    }
+    draw(cx);
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(cx.debug_bounds("group-name-ok").is_some());
+    assert!(cx.debug_bounds("group-name-cancel").is_some());
+    assert!(events.borrow().is_empty(), "没提交就不该有事件");
+
+    // 重命名：同一个对话框的另一种形态（提交事件带 id；这里只验证它能开、不报错）。
+    {
+        let events = events.clone();
+        cx.update(|window, cx| {
+            window.close_dialog(cx);
+            let input = cx.new(|cx| {
+                gpui_kit::component::input::InputState::new(window, cx).placeholder("分组名")
+            });
+            open_group_name_dialog(
+                window,
+                cx,
+                GroupNameKind::Rename {
+                    id: "af_1".to_string(),
+                },
+                input,
+                move |event, _window, _cx| events.borrow_mut().push(event),
+            );
+        });
+    }
+    draw(cx);
+    assert!(cx.debug_bounds("group-name-ok").is_some());
+    assert!(events.borrow().is_empty(), "没提交就不该有事件");
 }

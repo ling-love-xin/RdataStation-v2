@@ -15,8 +15,9 @@ use std::rc::Rc;
 
 use gpui_kit::base::{Disableable as _, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::dialog::{DialogButtonProps, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -51,6 +52,10 @@ pub enum TagDialogEvent {
     Apply { add: Vec<String>, remove: Vec<String> },
     /// 新建一个标签并**直接打上**（一次动作做完，不必先建再去勾）。
     CreateAndTag { name: String },
+    /// 重命名一个标签（**补 v1 缺失的能力**；只改显示名，不动它的关联）。
+    RenameTag { id: String, name: String },
+    /// 删除一个标签（关联一并清掉——服务层同一事务里做）。
+    DeleteTag { id: String },
 }
 
 /// 对话框状态：**宿主也持一份克隆**（动作完成后换行与收放忙态）。
@@ -252,6 +257,104 @@ pub fn open_tag_dialog(
                     window.refresh();
                 }
             };
+            // 行尾的「⋯」：改名 / 删除（v1 缺的两项，入口就在它们的词典里）。
+            let menu = {
+                let state = state.clone();
+                let on_action = on_action.clone();
+                let tag_id = option.id.clone();
+                let tag_name = option.name.clone();
+                let can_edit = can_edit;
+                // `dropdown_menu` 的回调拿的是 `Context<PopupMenu>`（不是 `App`），签名要照着写。
+                move |menu: PopupMenu, _window: &mut Window, _cx: &mut Context<PopupMenu>| {
+                    let rename_dispatch = {
+                        let state = state.clone();
+                        let on_action = on_action.clone();
+                        let tag_id = tag_id.clone();
+                        let tag_name = tag_name.clone();
+                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                            if !can_edit {
+                                return;
+                            }
+                            // 输入实体在开窗前建好（builder 是 `Fn`，见模块头注释）。
+                            let input = cx.new(|cx| {
+                                InputState::new(window, cx).placeholder("标签名")
+                            });
+                            let value = tag_name.clone();
+                            input.update(cx, |input, cx| input.set_value(value, window, cx));
+                            let state = state.clone();
+                            let on_action = on_action.clone();
+                            let tag_id = tag_id.clone();
+                            open_tag_rename_dialog(
+                                window,
+                                cx,
+                                tag_id,
+                                input,
+                                move |id, name, window, cx| {
+                                    state.set_busy(true);
+                                    state.set_note(Some("正在重命名…".to_string()));
+                                    on_action(TagDialogEvent::RenameTag { id, name }, window, cx);
+                                },
+                            );
+                        }
+                    };
+                    let delete_dispatch = {
+                        let state = state.clone();
+                        let on_action = on_action.clone();
+                        let tag_id = tag_id.clone();
+                        let tag_name = tag_name.clone();
+                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                            if !can_edit {
+                                return;
+                            }
+                            let state = state.clone();
+                            let on_action = on_action.clone();
+                            let tag_id = tag_id.clone();
+                            let name = tag_name.clone();
+                            window.open_alert_dialog(cx, move |alert, _window, _cx| {
+                                let state = state.clone();
+                                let on_action = on_action.clone();
+                                let tag_id = tag_id.clone();
+                                alert
+                                    .confirm()
+                                    .title(format!("删除标签「{name}」？"))
+                                    .description(
+                                        "标签会从所有存档上摘掉（关联一并清除），但存档本身不受影响。",
+                                    )
+                                    .button_props(
+                                        DialogButtonProps::default()
+                                            .ok_text("删除")
+                                            .ok_variant(ButtonVariant::Danger)
+                                            .show_cancel(true),
+                                    )
+                                    .on_ok(move |_, window, cx| {
+                                        state.set_busy(true);
+                                        state.set_note(Some("正在删除标签…".to_string()));
+                                        on_action(
+                                            TagDialogEvent::DeleteTag { id: tag_id.clone() },
+                                            window,
+                                            cx,
+                                        );
+                                        true
+                                    })
+                            });
+                        }
+                    };
+                    let mut menu = menu;
+                    if can_edit {
+                        menu = menu.item(
+                            PopupMenuItem::new("重命名…")
+                                .disabled(!can_edit)
+                                .on_click(rename_dispatch),
+                        );
+                        menu = menu.item(
+                            PopupMenuItem::new("删除")
+                                .disabled(!can_edit)
+                                .on_click(delete_dispatch),
+                        );
+                    }
+                    menu
+                }
+            };
             list = list.child(
                 div()
                     .id(SharedString::from(format!("tag-choice-{}", option.id)))
@@ -299,6 +402,18 @@ pub fn open_tag_dialog(
                             .text_xs()
                             .text_color(theme.colors.muted_foreground)
                             .child(format!("{}", option.count)),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("tag-more-{}", option.id)))
+                            .ghost()
+                            .xsmall()
+                            .debug_selector({
+                                let id = option.id.clone();
+                                move || format!("tag-more-{id}")
+                            })
+                            .label("⋯")
+                            .disabled(!can_edit)
+                            .dropdown_menu(menu),
                     ),
             );
             let _ = index;
@@ -420,6 +535,92 @@ pub fn open_tag_dialog(
                     dispatch_apply(window, cx);
                     true
                 }
+            })
+            .on_cancel(|_, _, _| true)
+    });
+}
+
+/// 打开「重命名标签」小对话框（从标签对话框的行菜单来）。
+///
+/// `name_input` 由调用方**在开窗前**建好并预填当前名字（同一条纪律，见模块头注释）。
+/// `on_confirm(id, name, …)` 只在名字真的改了且不空时回调；回调后关窗。
+pub fn open_tag_rename_dialog(
+    window: &mut Window,
+    cx: &mut App,
+    tag_id: String,
+    name_input: Entity<InputState>,
+    on_confirm: impl Fn(String, String, &mut Window, &mut App) + 'static,
+) {
+    let on_confirm: Rc<dyn Fn(String, String, &mut Window, &mut App)> = Rc::new(on_confirm);
+    let id_for_ok = tag_id.clone();
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let theme = cx.theme();
+        let value = name_input.read(cx).value().trim().to_string();
+        let hint = if value.is_empty() {
+            Some("标签名不能为空")
+        } else {
+            None
+        };
+        let can_save = hint.is_none();
+
+        let confirm_for_button = {
+            let on_confirm = on_confirm.clone();
+            let input = name_input.clone();
+            let id = id_for_ok.clone();
+            move |window: &mut Window, cx: &mut App| {
+                let name = input.read(cx).value().trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                on_confirm(id.clone(), name, window, cx);
+            }
+        };
+        let confirm_for_ok = confirm_for_button.clone();
+
+        let mut body = div().v_flex().w_full().gap_2().child(Input::new(&name_input));
+        body = body.child(
+            div()
+                .w_full()
+                .text_xs()
+                .text_color(if hint.is_some() {
+                    theme.colors.warning
+                } else {
+                    theme.colors.muted_foreground
+                })
+                .child(hint.unwrap_or("只改显示名：已打了这个标签的存档不动")),
+        );
+
+        dialog
+            .title("重命名标签")
+            .w(cx.theme().font_size * ui::TAG_DIALOG_WIDTH)
+            .child(body)
+            .footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("tag-rename-cancel")
+                            .with_variant(ButtonVariant::Secondary)
+                            .small()
+                            .debug_selector(|| "tag-rename-cancel".to_string())
+                            .label("取消")
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        Button::new("tag-rename-save")
+                            .with_variant(ButtonVariant::Primary)
+                            .small()
+                            .debug_selector(|| "tag-rename-save".to_string())
+                            .label("保存")
+                            .disabled(!can_save)
+                            .on_click(move |_, window, cx| {
+                                confirm_for_button(window, cx);
+                                window.close_dialog(cx);
+                            }),
+                    ),
+            )
+            .on_ok(move |_, window, cx| {
+                confirm_for_ok(window, cx);
+                true
             })
             .on_cancel(|_, _, _| true)
     });

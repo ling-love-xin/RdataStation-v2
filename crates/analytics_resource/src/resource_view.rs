@@ -284,6 +284,22 @@ pub trait ResourcesHost: 'static {
     /// 收切片而不是单个 id：多选批量与单选走同一条路（批量时确认框与回执要带数量）；
     /// 批量中途失败的错误里会带“本批已移入 N 项”，**不做预回滚**（部分成功就部分成功）。
     fn request_delete(&self, resource_ids: &[String], window: &mut Window, cx: &mut App);
+    /// 移动到分组（`None` = 移回未分组）：右键菜单「移动到分组」。
+    ///
+    /// 收切片而不是单个 id：多选也走这一条（批量移动是原型里多选解锁的动作之一）。
+    fn request_move_to_group(
+        &self,
+        resource_ids: &[String],
+        folder_id: Option<&str>,
+        window: &mut Window,
+        cx: &mut App,
+    );
+    /// 新建分组（行菜单 / 分组头菜单共用）。
+    fn request_create_group(&self, window: &mut Window, cx: &mut App);
+    /// 重命名分组（分组头右键）。
+    fn request_rename_group(&self, folder_id: &str, window: &mut Window, cx: &mut App);
+    /// 删除分组（分组头右键；**成员回未分组**，存档本身不受影响）。
+    fn request_delete_group(&self, folder_id: &str, window: &mut Window, cx: &mut App);
     /// 打开「标签」对话框（详情面板「＋ 标签」）：勾选/取消标签、顺带新建。
     ///
     /// 只收 id 与显示名：对话框的数据由宿主在取数线程上查库得到（与 `request_version_history`
@@ -476,6 +492,8 @@ struct ArchiveListDelegate {
     items: Vec<VisibleItem>,
     /// 行 id → 详情：右键菜单发起取回时要用整条详情（`render_item` 里读不了面板，只能提前拷一份）。
     details: std::collections::HashMap<String, ArchiveDetail>,
+    /// 分组字典：行菜单的「移动到分组」子菜单与分组头菜单要用它（`render_item` 里读不了面板）。
+    groups: Vec<GroupOption>,
     /// 选中的行 id（面板是语义权威，这里是渲染与漫游的锚点）。
     selected_id: Option<String>,
     /// 多选集合（**含焦点行**）：行背景与右键菜单的“多选态”靠它；
@@ -496,6 +514,7 @@ impl ArchiveListDelegate {
         &mut self,
         items: Vec<VisibleItem>,
         details: std::collections::HashMap<String, ArchiveDetail>,
+        groups: Vec<GroupOption>,
         selected_id: Option<String>,
         multi_ids: std::collections::HashSet<String>,
         read_only: bool,
@@ -503,6 +522,7 @@ impl ArchiveListDelegate {
     ) {
         self.items = items;
         self.details = details;
+        self.groups = groups;
         self.selected_id = selected_id;
         self.multi_ids = multi_ids;
         self.read_only = read_only;
@@ -530,7 +550,9 @@ impl ArchiveListDelegate {
         }
     }
 
-    /// 分组头（原型 §2.4）：色条 + 折叠三角 + 名称 + 计数；点整行折叠 / 展开。
+    /// 分组头（原型 §2.4）：色条 + 折叠三角 + 名称 + 计数；点整行折叠 / 展开，
+    /// 右键是分组自身的动作（重命名 / 删除 / 新建）——「全部分组」与「未分组」是虚拟分组，
+    /// 没有可改的东西，所以不给菜单。
     fn render_group_header(
         &self,
         key: &str,
@@ -549,46 +571,78 @@ impl ArchiveListDelegate {
         let chevron = if collapsed { "▸" } else { "▾" };
         let list_id = format!("archive-group-{key}");
         let debug_id = list_id.clone();
-        ListItem::new(SharedString::from(list_id.clone())).child(
-            div()
-                .id(SharedString::from(format!("{list_id}-row")))
-                .debug_selector(move || debug_id.clone())
-                .w_full()
-                .h(rems(ui::ROW_HEIGHT))
-                .h_flex()
-                .items_center()
-                .gap_2()
-                .when(depth > 0, |row| row.pl_2())
-                .cursor_pointer()
-                .on_click(move |_, _window, cx| {
-                    // 头不是行：不参与选中（面板的选中永远指向一条存档）。
-                    cx.stop_propagation();
-                    let key = key_owned.clone();
-                    let _ = panel.update(cx, |panel, cx| panel.toggle_group_collapse(&key, cx));
-                })
-                .child(
-                    // 2px 色条：`list_active_border`（原型 §6——不用 `sidebar_accent`：
-                    // 那个角色在浅色下与面板底几乎同色）。
-                    div().w(rems(ui::GROUP_BAR_WIDTH)).h(rems(1.0)).flex_none().bg(bar),
+        let host = self.host.clone();
+        let is_real_group = key != crate::filter::GROUP_ALL && key != crate::filter::GROUP_UNGROUPED;
+
+        let head = div()
+            .id(SharedString::from(format!("{list_id}-row")))
+            .debug_selector(move || debug_id.clone())
+            .w_full()
+            .h(rems(ui::ROW_HEIGHT))
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .when(depth > 0, |row| row.pl_2())
+            .cursor_pointer()
+            .on_click(move |_, _window, cx| {
+                // 头不是行：不参与选中（面板的选中永远指向一条存档）。
+                cx.stop_propagation();
+                let key = key_owned.clone();
+                let _ = panel.update(cx, |panel, cx| panel.toggle_group_collapse(&key, cx));
+            })
+            .child(
+                // 2px 色条：`list_active_border`（原型 §6——不用 `sidebar_accent`：
+                // 那个角色在浅色下与面板底几乎同色）。
+                div().w(rems(ui::GROUP_BAR_WIDTH)).h(rems(1.0)).flex_none().bg(bar),
+            )
+            .child(div().flex_none().text_xs().text_color(muted).child(chevron))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_ellipsis()
+                    .text_color(if depth == 0 { fg } else { muted })
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("{count}")),
+            );
+        // 右键菜单只给真分组（「全部分组」与「未分组」是虚拟分组，没有可改的东西）。
+        // `context_menu` 包一层（`ContextMenu<..>` 不是 `Div`）→ 两条分支各自转 `AnyElement` 后再拼。
+        let head: AnyElement = if is_real_group {
+            let folder_id = key.to_string();
+            head.context_menu(move |menu, _window, _cx| {
+                menu.item(
+                    PopupMenuItem::new("重命名…").on_click({
+                        let host = host.clone();
+                        let folder_id = folder_id.clone();
+                        move |_, window, cx| host.request_rename_group(&folder_id, window, cx)
+                    }),
                 )
-                .child(div().flex_none().text_xs().text_color(muted).child(chevron))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_ellipsis()
-                        .text_color(if depth == 0 { fg } else { muted })
-                        .child(label.to_string()),
+                .item(
+                    PopupMenuItem::new("删除分组").on_click({
+                        let host = host.clone();
+                        let folder_id = folder_id.clone();
+                        move |_, window, cx| host.request_delete_group(&folder_id, window, cx)
+                    }),
                 )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(format!("{count}")),
-                ),
-        )
+                .separator()
+                .item(PopupMenuItem::new("新建分组…").on_click({
+                    let host = host.clone();
+                    move |_, window, cx| host.request_create_group(window, cx)
+                }))
+            })
+            .into_any_element()
+        } else {
+            head.into_any_element()
+        };
+
+        ListItem::new(SharedString::from(list_id.clone())).child(head)
     }
 }
 
@@ -745,6 +799,9 @@ impl ListDelegate for ArchiveListDelegate {
             }
         };
 
+        // 行菜单的子菜单要分组字典：**在闭包之外**拷一份（闭包是 `'static`，捕获 `self` 借用会逃逸）。
+        let groups_for_menu = self.groups.clone();
+
         Some(
             ListItem::new(SharedString::from(format!("archive-row-{}", row.id))).child(
                 // 行的动作入口是右键菜单（原型 §3.2）：行本身只承载信息——240px 面板里
@@ -839,6 +896,62 @@ impl ListDelegate for ArchiveListDelegate {
                                     }
                                 }),
                         );
+                        // 「移动到分组 ›」：子菜单列出各分组 + 未分组 + 新建（原型 §2.4：
+                        // 拖拽之外的等价入口；多选也用这一条，批量移动是原型里多选解锁的动作）。
+                        let move_ids: Vec<String> = if multi_selected {
+                            multi_delete_ids.clone()
+                        } else {
+                            vec![row.id.clone()]
+                        };
+                        menu = menu.submenu("移动到分组", _window, _cx, {
+                            let host = host.clone();
+                            let move_ids = move_ids.clone();
+                            let groups = groups_for_menu.clone();
+                            let current = row.folder_id.clone();
+                            move |menu, _window, _cx| {
+                                let mut menu = menu;
+                                // 「未分组」：当前已在未分组时置灰（点了也是白点）。
+                                menu = menu.item(
+                                    PopupMenuItem::new("未分组")
+                                        .checked(current.is_none())
+                                        .disabled(current.is_none())
+                                        .on_click({
+                                            let host = host.clone();
+                                            let ids = move_ids.clone();
+                                            move |_, window, cx| {
+                                                host.request_move_to_group(&ids, None, window, cx)
+                                            }
+                                        }),
+                                );
+                                for group in &groups {
+                                    let is_current = current.as_deref() == Some(group.id.as_str());
+                                    menu = menu.item(
+                                        PopupMenuItem::new(group.name.clone())
+                                            .checked(is_current)
+                                            .disabled(is_current)
+                                            .on_click({
+                                                let host = host.clone();
+                                                let ids = move_ids.clone();
+                                                let folder_id = group.id.clone();
+                                                move |_, window, cx| {
+                                                    host.request_move_to_group(
+                                                        &ids,
+                                                        Some(&folder_id),
+                                                        window,
+                                                        cx,
+                                                    )
+                                                }
+                                            }),
+                                    );
+                                }
+                                menu.separator().item(
+                                    PopupMenuItem::new("新建分组…").on_click({
+                                        let host = host.clone();
+                                        move |_, window, cx| host.request_create_group(window, cx)
+                                    }),
+                                )
+                            }
+                        });
                         // 删除是**唯一**多选可用的项（原型 §3.2）：多选时带上数量。
                         let delete_ids = multi_delete_ids.clone();
                         let delete_label = if multi_count > 1 {
@@ -1024,6 +1137,7 @@ impl ResourcesPanel {
             panel: cx.entity().downgrade(),
             items: self.view_items.clone(),
             details: self.snapshot.details.clone(),
+            groups: self.snapshot.groups.clone(),
             selected_id: self.selected.clone(),
             multi_ids: self.multi.iter().cloned().collect(),
             syncing_from_panel: false,
@@ -1121,13 +1235,14 @@ impl ResourcesPanel {
         };
         let items = self.view_items.clone();
         let details = self.snapshot.details.clone();
+        let groups = self.snapshot.groups.clone();
         let selected = self.selected.clone();
         let multi = self.multi.iter().cloned().collect();
         let read_only = self.snapshot.read_only;
         list.update(cx, |state, cx| {
             state
                 .delegate_mut()
-                .set_rows(items, details, selected, multi, read_only, cx);
+                .set_rows(items, details, groups, selected, multi, read_only, cx);
         });
     }
 

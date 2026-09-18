@@ -133,6 +133,10 @@ pub enum TagJobAction {
     Apply { add: Vec<String>, remove: Vec<String> },
     /// 新建一个标签并直接打上。
     CreateAndTag { name: String },
+    /// 重命名一个标签（只改显示名）。
+    RenameTag { id: String, name: String },
+    /// 删除一个标签（关联一并清除）。
+    DeleteTag { id: String },
     /// 去掉一个标签（详情面板 chip 上的 ×）。
     RemoveOne { tag_id: String },
 }
@@ -144,6 +148,26 @@ struct TagActionJob {
     resource_id: String,
     resource_name: String,
     action: TagJobAction,
+}
+
+/// 分组动作（建 / 改名 / 删 / 移动）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupJobAction {
+    Create { name: String },
+    Rename { id: String, name: String },
+    Delete { id: String },
+    /// 移动（`folder_id = None` = 移回未分组）；`resource_ids` 收切片，多选也走这一条。
+    Move {
+        resource_ids: Vec<String>,
+        folder_id: Option<String>,
+    },
+}
+
+/// 一次分组动作任务（不需要对话框取数：分组字典随主快照下发）。
+struct GroupActionJob {
+    project_root: PathBuf,
+    read_only: bool,
+    action: GroupJobAction,
 }
 
 /// 版本历史取数结果（宿主据此开窗，或刷新已经开着的那个窗）。
@@ -182,6 +206,7 @@ enum Job {
     TrashAction(TrashActionJob),
     TagList(TagListJob),
     TagAction(TagActionJob),
+    GroupAction(GroupActionJob),
 }
 
 /// 动作回执（工作线程 → 事件路径）。
@@ -216,6 +241,8 @@ pub enum OpOutcome {
     TrashDone { note: String },
     /// 标签动作完成（打标 / 去标 / 新建，`note` 已是一句有信息量的话）。
     TagDone { note: String },
+    /// 分组动作完成（建 / 改名 / 删 / 移动，`note` 已是一句有信息量的话）。
+    GroupDone { note: String },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed { action: &'static str, reason: String },
 }
@@ -356,6 +383,12 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     resource_name: job.resource_name.clone(),
                 }));
                 *lock(&jobs().tag_rows) = Some(result);
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
+            Job::GroupAction(job) => {
+                let outcome = rt.block_on(run_group_action(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 分组改的是分区与行的归属：重取主列表就够了（字典也在快照里）。
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
         }
@@ -913,6 +946,24 @@ async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
                 },
             }
         }
+        TagJobAction::RenameTag { id, name } => match store.rename_tag(id, name).await {
+            Ok(tag) => OpOutcome::TagDone {
+                note: format!("已把标签改名为「{}」", tag.name),
+            },
+            Err(error) => OpOutcome::Failed {
+                action: "重命名标签",
+                reason: error.to_string(),
+            },
+        },
+        TagJobAction::DeleteTag { id } => match store.delete_tag(id).await {
+            Ok(unlinked) => OpOutcome::TagDone {
+                note: format!("已删除该标签（从 {unlinked} 条存档上摘掉）"),
+            },
+            Err(error) => OpOutcome::Failed {
+                action: "删除标签",
+                reason: error.to_string(),
+            },
+        },
         TagJobAction::RemoveOne { tag_id } => {
             match store.remove_tag_from_resource(&job.resource_id, tag_id).await {
                 Ok(()) => OpOutcome::TagDone {
@@ -921,6 +972,92 @@ async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
                 Err(error) => OpOutcome::Failed {
                     action: "去标签",
                     reason: error.to_string(),
+                },
+            }
+        }
+    }
+}
+
+/// 执行一次分组动作（工作线程上执行）。
+async fn run_group_action(job: &GroupActionJob) -> OpOutcome {
+    let manager = match ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE).await {
+        Ok(manager) => manager,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "分组",
+                reason: format!("打开项目库失败：{reason}"),
+            };
+        }
+    };
+    let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+
+    match &job.action {
+        GroupJobAction::Create { name } => {
+            match store
+                .create_folder(analytics_resource::models::CreateFolderRequest {
+                    name: name.clone(),
+                    scope: "project".to_string(),
+                    // 单层分组（架构 D8）：父分组恒为空。
+                    parent_folder_id: None,
+                    color: None,
+                    icon: None,
+                })
+                .await
+            {
+                Ok(folder) => OpOutcome::GroupDone {
+                    note: format!("已新建分组「{}」", folder.name),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "新建分组",
+                    reason: error.to_string(),
+                },
+            }
+        }
+        GroupJobAction::Rename { id, name } => match store.rename_folder(id, name).await {
+            Ok(folder) => OpOutcome::GroupDone {
+                note: format!("已把分组改名为「{}」", folder.name),
+            },
+            Err(error) => OpOutcome::Failed {
+                action: "重命名分组",
+                reason: error.to_string(),
+            },
+        },
+        GroupJobAction::Delete { id } => match store.delete_folder(id).await {
+            Ok(0) => OpOutcome::GroupDone {
+                note: "分组已删除（里面没有存档）".to_string(),
+            },
+            Ok(ungrouped) => OpOutcome::GroupDone {
+                note: format!("分组已删除，{ungrouped} 条存档回到未分组"),
+            },
+            Err(error) => OpOutcome::Failed {
+                action: "删除分组",
+                reason: error.to_string(),
+            },
+        },
+        GroupJobAction::Move {
+            resource_ids,
+            folder_id,
+        } => {
+            // 移动到同一分组是无意义操作但不算错；逐条走，中途失败不做预回滚
+            // （与移入回收站同一取舍），错误里说清做到哪一条。
+            let mut done = 0usize;
+            for resource_id in resource_ids {
+                let result = match folder_id.as_deref() {
+                    Some(folder) => store.add_resource_to_folder(resource_id, folder).await,
+                    None => store.clear_resource_folder(resource_id).await,
+                };
+                if let Err(error) = result {
+                    return OpOutcome::Failed {
+                        action: "移动到分组",
+                        reason: format!("{error}（已移动 {done} 条）"),
+                    };
+                }
+                done += 1;
+            }
+            OpOutcome::GroupDone {
+                note: match folder_id.as_deref() {
+                    Some(_) => format!("已移动 {done} 条存档到分组"),
+                    None => format!("已把 {done} 条存档移回未分组"),
                 },
             }
         }
@@ -1174,6 +1311,16 @@ pub fn enqueue_trash_list(project_root: PathBuf) {
 pub fn enqueue_trash_action(project_root: PathBuf, read_only: bool, action: TrashAction) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::TrashAction(TrashActionJob {
+        project_root,
+        read_only,
+        action,
+    }));
+}
+
+/// 提交一次分组动作（**事件路径**调用：行菜单「移动到分组」、分组头菜单与分组名对话框）。
+pub fn enqueue_group_action(project_root: PathBuf, read_only: bool, action: GroupJobAction) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::GroupAction(GroupActionJob {
         project_root,
         read_only,
         action,

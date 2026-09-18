@@ -13,6 +13,7 @@
 
 pub mod archive;
 pub mod checkout;
+pub mod group;
 pub mod index_repair;
 pub mod pick;
 pub mod tag;

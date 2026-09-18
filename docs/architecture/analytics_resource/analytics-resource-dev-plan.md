@@ -8,6 +8,22 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — Phase 2 第三刀：组织方式的管理入口（标签改名 / 删除 + 分组建 / 改 / 删 / 移动）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 标签管理 ✅ | 标签对话框每行加 **⋯ 菜单**（重命名… / 删除）；重命名开一个单输入小对话框（预填当前名，空名拒绝，幂等与同名拒绝在存储层）；删除走 `AlertDialog` 确认 + **说清“从 N 条存档上摘掉”**；两个动作都走已有的 `Job::TagAction`（`RenameTag` / `DeleteTag` 新增两个分支） | `src/dialogs/tag.rs`、`crates/workbench/src/services/resource_jobs.rs` |
+| 分组管理 ✅ | 新对话框 `dialogs/group.rs`（**一个文件两个形态**：新建 / 重命名，共用一个输入 + 校验）；**行右键菜单「移动到分组 ›」子菜单**（未分组 + 各分组 + 新建分组…，当前所在项置灰）——多选也用这一条（批量移动是原型里多选解锁的动作）；**分组头右键**：重命名… / 删除分组 / 新建分组…（虚拟分组「全部分组 / 未分组」不给菜单） | `src/dialogs/group.rs`、`src/resource_view.rs`、`src/ui.rs`（+1 常量） |
+| 宿主接线 ✅ | `ResourcesHost` +4 个端口（`request_move_to_group` / `request_create_group` / `request_rename_group` / `request_delete_group`）；`Job::GroupAction`（`Create` / `Rename` / `Delete` / `Move`，改完重取主列表——分区与归属都在快照里）；分组显示名从**面板快照的分组字典**取（事件路径不开库） | `crates/workbench/src/{services/resource_jobs.rs,components/resource_host.rs,panels/resources.rs}` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **118 单测 + 15 面板窗口 + 9 对话框窗口全绿**（+1 分组对话框；+1 对话框窗口：新建 / 重命名两种形态都开得出、没提交就不发事件）；`cargo check -p rds-workbench --lib -j 2` 零告警 | — |
+
+**两处刻意的取舍**：
+
+1. **「移动到分组」不进对话框**：行菜单里直接列分组，一次点击完成（多一级对话框反而多两步）；
+2. **删除分组不删存档**：确认框里明说“组里的存档会回到未分组”（分组是组织方式）。
+
+**未落地**：拖拽行到分组头（沿用 M5 行拖拽，单独一刀）、折叠状态持久化（P2.4）、批量打标签（P2.5）、`F2` 重命名。
+
 ### 2026-09-18 — Phase 2 第二刀：分组折叠区（存储层补齐 + 分区渲染 + 折叠）
 
 | 项 | 内容 | 落点 |
@@ -500,8 +516,8 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，Phase 2 第一刀）**：`rename_tag` / `delete_tag`（清关联）/ `tags_by_resource` / `tag_usage_counts` + `dialogs/tag.rs` + 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板与筛选菜单里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
-| P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **存储层与分区渲染已落**（2026-09-18，第二刀）；**余**：管理 UI（建 / 改名 / 删除入口）、「移动到分组」菜单、拖拽 | `src/folder.rs`（已落）、`src/resource_view.rs`（分区已落） | 折叠状态持久化（待 P2.4 设置项）；空分组可见（已满足：头恒在） |
+| P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，第一 / 三刀）**：存储层四项 + `dialogs/tag.rs`（勾选 / 新建并打上 / 行内 ⋯：重命名 / 删除）+ 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板、筛选菜单与这个对话框里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
+| P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **存储层、分区渲染与管理入口已落**（第二 / 三刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键；**余**：拖拽 | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单已落） | 折叠状态持久化（待 P2.4 设置项）；空分组可见（已满足：头恒在） |
 | P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本） | `src/resource.rs`、`src/resource_view.rs` | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
 | P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1） | `crates/settings`、`src/service.rs` | 重启后保持 |
 | P2.5 | 多选与批量：批量打标签 / 批量移动 / 批量删除（含数量提示） | `src/resource_view.rs`、`src/commands.rs` | 多选态菜单按数量自适应（v1 的缺陷） |

@@ -99,6 +99,32 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("untag:{}:{tag_id}", detail.id));
     }
+    fn request_move_to_group(
+        &self,
+        resource_ids: &[String],
+        folder_id: Option<&str>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+        self.calls.borrow_mut().push(format!(
+            "move-to-group:{}:{}",
+            resource_ids.join(","),
+            folder_id.unwrap_or("__ungrouped__")
+        ));
+    }
+    fn request_create_group(&self, _window: &mut Window, _cx: &mut App) {
+        self.calls.borrow_mut().push("create-group".to_string());
+    }
+    fn request_rename_group(&self, folder_id: &str, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("rename-group:{folder_id}"));
+    }
+    fn request_delete_group(&self, folder_id: &str, _window: &mut Window, _cx: &mut App) {
+        self.calls
+            .borrow_mut()
+            .push(format!("delete-group:{folder_id}"));
+    }
     fn request_undo_archive(&self, undo: &ArchiveUndo, _window: &mut Window, _cx: &mut App) {
         self.calls
             .borrow_mut()

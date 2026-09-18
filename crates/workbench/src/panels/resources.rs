@@ -146,6 +146,8 @@ impl SidebarPanel {
         let action = match event {
             TagDialogEvent::Apply { add, remove } => TagJobAction::Apply { add, remove },
             TagDialogEvent::CreateAndTag { name } => TagJobAction::CreateAndTag { name },
+            TagDialogEvent::RenameTag { id, name } => TagJobAction::RenameTag { id, name },
+            TagDialogEvent::DeleteTag { id } => TagJobAction::DeleteTag { id },
         };
         resource_jobs::enqueue_tag_action(
             root,
@@ -502,6 +504,8 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::TrashDone { note } => format!("资产库：{note}"),
             // 标签动作（打标 / 去标 / 新建）：同上。
             resource_jobs::OpOutcome::TagDone { note } => format!("资产库：{note}"),
+            // 分组动作（建 / 改名 / 删 / 移动）：同上。
+            resource_jobs::OpOutcome::GroupDone { note } => format!("资产库：{note}"),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
             }

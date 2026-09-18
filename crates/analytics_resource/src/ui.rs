@@ -72,5 +72,7 @@ pub const TRASH_COL_ACTION: f32 = 9.0;
 pub const GROUP_BAR_WIDTH: f32 = 0.125;
 /// 标签对话框宽（26.0rem = 416px；表单型小对话框：列表 + 一个输入行）。
 pub const TAG_DIALOG_WIDTH: f32 = 26.0;
+/// 分组名对话框宽（24.0rem = 384px；只有一个输入框）。
+pub const GROUP_DIALOG_WIDTH: f32 = 24.0;
 /// 标签列表最大高度（16.0rem = 256px）：标签可能几十个，靠滚动而不是加高对话框。
 pub const TAG_LIST_MAX_HEIGHT: f32 = 16.0;
