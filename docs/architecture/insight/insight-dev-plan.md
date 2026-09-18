@@ -23,6 +23,18 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — 收口（一）：删源库内省路径 + 接结果集清场口
+
+**背景**：按 §10 收口清单的建议顺序做「纯减法 + 一项接线」。清单 #1（`crates/engine/insight-rules/` 重复副本）已由 `e3684d67`（洞察规则收敛）删除，不在本批。
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **225 项不变** + 集成 **13 项** · `rds-workbench --lib` **94 项**（本批 +1：结果集临时表清场）· `insight_entry` **2** + `ui_contract` **7** 全绿；`cargo check --workspace --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 删源库内省表探查（§10 #2） | `table_profile_service.rs` 与 `InsightService::get_table_profile` **零调用者**（面板走 `insight_engine::get_temp_table_profile`；源库表先取样再探查，D58/D59）→ 整体删除；`TableProfile` 类型保留（临时表内省仍在用） | 删 `crates/insight/src/table_profile_service.rs`；`lib.rs` / `service/mod.rs` 去声明与门面；`insight_engine` 的注释改口径 |
+| 接结果集**清场口**（D54 契约的另一半） | 项目切换 / 关闭时清 `TempTableSource::Query`（`tmp_q_*`）：**非阻塞**（`try_drop_in_memory_temp_tables`，照 mock 先例）——拿不到内存库锁就留给下一次切项目 | `workbench/src/components/project_host.rs`（`clear_result_temp_tables` + `refresh_after_open` 调用 + 用例） |
+| 澄清（已写回 §10） | **建表侧也零调用者**：`create_duckdb_temp_table` / `ResultService` / `execute_duckdb_analysis` 全链无 UI 调用点 → 「结果集 → DuckDB 分析」整条链路未接；所以**定向回收口**（`drop_temp_table(Query)`）现在无处可接，随「编辑器结果集入口」（§10 #6）一起做 | §10 #3 / #6 |
+
 ### 2026-09-18 — Phase 4 收尾：Schema 报告的导出与下钻（D60）
 
 **背景**：Phase 4 一批把门面 / 视图 / 导出函数 / 下钻事件做完了，但两处**宿主动作**悬着——导出按钮「等宿主提供选路径 + 写文件后再画」、下钻「等宿主登记临时表」。本批把这两条断头路补齐（并在 D58 之后把下钻改成源取样，不再建临时表）。
@@ -923,19 +935,19 @@ cargo test -p rds-workbench --test ui_contract -j 2
 
 | # | 项 | 现状证据 | 建议 | 量级 / 阻塞 |
 | --- | --- | --- | --- | --- |
-| 1 | `crates/engine/insight-rules/` 重复副本（K2） | 全仓零代码引用 | **删** | 分钟级（仅需确认） |
-| 2 | 源库内省的表探查：`table_profile_service.rs` + `InsightService::get_table_profile` | 零调用者（面板走 `insight_engine::get_temp_table_profile`）；且未在真机跑通 | **删**（面板已有取样路径，功能等价；留 git 历史） | 分钟级 |
-| 3 | 结果集临时表回收（K16 唯一剩余） | `drop_temp_table(TempTableSource::Query)` / `drop_in_memory_temp_tables(Query)` 零生产调用者；建表侧已有（`create_duckdb_temp_table`） | **接**：编辑器丢弃结果集 / 关闭文档 / 项目切换三处按 D54 契约调 | 小；先定「谁负责回收」（编辑器 vs 宿主） |
+| 3 | 结果集临时表的**定向回收**（K16 收尾） | `drop_temp_table(TempTableSource::Query)` 零生产调用者；且建表侧（`create_duckdb_temp_table` / `ResultService` / `execute_duckdb_analysis`）**也零调用**——整条「结果集 → DuckDB 分析」链路未接 UI。**清场口已接**（2026-09-18：项目切换清 `tmp_q_*`） | **随 #6（编辑器结果集入口）一起接**：结果集被丢弃 / 替换 / 关文档三处按 D54 契约调 `drop_temp_table` | 小（但依赖 #6） |
 | 4 | 表级 / Schema 报告快照（K6） | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | **接**（需产品点头：表级快照的比对语义与列级不同——行数、列清单都在变） | 中（store 方法已有，缺面板保存入口 + 历史视图 + 对比） |
 | 5 | 结构洞察入口（导航右键 → `InsightTarget::Schema`） | 宿主侧零构造（该目标只出现在 insight 内部与测试） | **接**：`NavHost` 加一个方法 + 导航菜单一项（照「查看统计」） | 小 |
-| 6 | 编辑器结果集「洞察此列」+ 临时表直连入口 | `open_insight_column` 零调用者；`InsightTarget::Column\|Table` 无人构造 | **留着**（用户明确说不急）；做时照 `FilterValueHook` 注入，**不需要执行期物化** | 中 |
+| 6 | 编辑器结果集「洞察此列」+ 临时表直连入口 | `open_insight_column` 零调用者；`InsightTarget::Column\|Table` 无人构造 | **留着**（用户明确说不急）；做时照 `FilterValueHook` 注入，**不需要执行期物化**；顺手接 #3 的定向回收 | 中 |
 | 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false | **等**：M6 二期有产生者 + 要 ATTACH `analytics.duckdb` + 用 `definition_sql` 重建 | 中 |
 | 8 | `RenderHint`（规则的渲染提示）零消费 | 只在 `lib.rs` re-export | **决定**：做图表契约（映射 `RenderHint` → 渲染方）或删；不做图表就删 | 小（删）/ 中（消费） |
 | 9 | 源目标下「多列」Tab 在样本表解析前点击不发请求 | 已知小限制（样本表要等列 / 表目标先取过样） | **决定**：让它自己先取一次样，或维持并在 UI 提示 | 小 |
 | 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **可选加强**：解析级策略检查（解析能力 `engine/src/sql` 已有） | 中 |
 | 11 | `insight_view.rs` 体量（约 2500 行代码 + 900 行测试） | 新功能仍在往里加（导出按钮即在此） | **时机触发**：见 §11 规格 | 中 |
 
-**建议顺序**（性价比）：1 → 2（纯减法，立刻消除完成度错觉）→ 3（唯一有资源影响）→ 5（一个小入口开一个完整 Tab）→ 4（要产品点头）→ 其余。
+> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）。
+
+**建议顺序**（性价比）：3（依赖 #6）→ 5（一个小入口开一个完整 Tab）→ 4（要产品点头）→ 其余。
 
 ## 11. `insight_view.rs` 按 Tab 位移（规格 · 待触发）
 

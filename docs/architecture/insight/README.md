@@ -68,7 +68,7 @@
 | 质量评分（四维 + 等级） | `crates/insight/src/quality_scorer.rs`（现状：✅ 已迁移） |
 | 规则管理对话框（三层分组 / 启停 / 错误原文 / 新建） | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 / 2.3，入口为面板头 ⚙） |
 | 异常值检测 | `crates/insight/src/insight_engine.rs`（`detect_extremes`；现状：✅ 已归位，自 `engine/services/duckdb_service.rs`） |
-| 表探查 | `crates/insight/src/table_profile_service.rs`（源库内省，**现状：零调用**——面板只探查 DuckDB 临时表，源库表走取样；这条路径也未在真机跑通）、`insight_engine.rs`（临时表内省 `get_temp_table_profile`，面板走这条）（现状：✅ Phase 3 一批） |
+| 表探查 | `crates/insight/src/insight_engine.rs`（`get_temp_table_profile`：DuckDB 临时表内省 `DESCRIBE`，面板走这条）（现状：✅ Phase 3 一批；源库内省的 `table_profile_service.rs` 已于 2026-09-18 **删除**——零调用且未在真机跑通，源库表先取样再探查，D58/D59） |
 | 结构洞察（外键推断 / 类型不一致 / 孤立表 / 冗余列 / 健康分） | `crates/insight/src/schema_analyzer.rs`（分析器）+ `schema_view.rs`（视图模型与导出）（现状：✅ Phase 4 一批；导出与下钻已接（D60）；⬜ **入口未接**——导航树没有「结构洞察」菜单项，宿主侧无一处构造 `InsightTarget::Schema`） |
 | 领域类型（16 个 `pub struct/enum`） | `crates/insight/src/model/types.rs`（现状：✅ 已归位） |
 | 快照存储（列 / 表 / Schema 三类 + 元数据） | `crates/insight/src/store/{mod.rs, body.rs, meta.rs}`（现状：✅ 已归位；**同一进程对同一项目库不得重叠 open**，见架构 D41；按天数清理已可用） |

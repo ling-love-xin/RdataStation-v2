@@ -4,8 +4,8 @@
 //!
 //! | 内容 | 位置 | 说明 |
 //! | --- | --- | --- |
-//! | 统计算法 | `crate::insight_engine` / `quality_scorer` / `schema_analyzer` / `table_profile_service` | 纯计算，只吃显式连接与规则集 |
-//! | **服务门面** | 本文件 [`InsightService`] | 把「取规则集 + 调用算法」合成一步，供视图层直接使用 |
+//! | 统计算法 | `crate::insight_engine` / `quality_scorer` / `schema_analyzer` | 纯计算 |
+//! | **服务门面** | 本文件 [`InsightService`] | 把「取规则集 + 调用算法」合成一步，供视图层使用 |
 //! | 规则索引同步 | [`indexer`] | 扫描磁盘 → 合并 → 写库 → 应用启停 |
 //! | 快照持久化编排 | [`persistence`] | 快照保存 / 历史 / 清理 / 存储统计 / 表级评估 |
 //! | 目录监听 | [`watcher`] | 内容哈希轮询触发重载 |
@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use engine::persistence::ProjectDatabaseManager;
 use shared::error::{CommonError, CoreError};
 
-use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableProfile, TableQuality};
+use crate::model::types::{ColumnInsightFull, ColumnStats, QualityScore, TableQuality};
 use crate::model::{
     ColumnProfileView, HistoryView, MultiColumnView, MultiResultView, MultiRuleView, QualityNote,
     TableProfileView, HISTORY_PAGE_SIZE,
@@ -422,20 +422,6 @@ impl InsightService {
 
     pub fn compute_table_quality(table_name: &str, stats_list: &[ColumnInsightFull]) -> TableQuality {
         crate::quality_scorer::compute_table_quality(table_name, stats_list)
-    }
-
-    // ==================== 表探查 ====================
-
-    /// 表画像（列元数据 + 行数）。走源库内省，不依赖规则集。
-    pub async fn get_table_profile(
-        conn_id: String,
-        db_type: String,
-        database: &str,
-        schema: &str,
-        table: &str,
-    ) -> Result<TableProfile, CoreError> {
-        crate::table_profile_service::get_table_profile(conn_id, db_type, database, schema, table)
-            .await
     }
 
     // ==================== 规则 ====================

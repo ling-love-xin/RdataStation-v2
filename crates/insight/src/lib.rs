@@ -2,7 +2,7 @@
 //!
 //! 承载 M8 洞察模块：
 //! - 规则引擎（`rule_*`，自 v1 `core/insight`）：内置/用户规则执行、注册表、热加载
-//! - 分析服务（`insight_engine` / `quality_scorer` / `table_profile_service`，自 v1 `core/services`）
+//! - 分析服务（`insight_engine` / `quality_scorer` / `schema_analyzer`，自 v1 `core/services`）
 //! - 内置规则资产 `insight-rules/`（include_dir 编译时嵌入）
 //!
 //! 依赖方向：insight → engine → shared（不依赖任何业务 Feature crate）。
@@ -34,7 +34,6 @@ pub mod schema_analyzer;
 pub mod schema_view;
 pub mod service;
 pub mod store;
-pub mod table_profile_service;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod ui;

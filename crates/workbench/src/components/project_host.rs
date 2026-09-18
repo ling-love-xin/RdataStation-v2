@@ -149,6 +149,27 @@ fn clear_mock_temp_tables(shared: &Shared, cx: &mut App) {
     }
 }
 
+/// 项目切换时的**结果集临时表**清理（D54 契约的清场口）。
+///
+/// `tmp_q_*` 与 mock 的临时表同病：建在**进程级内存库**里，切项目不释放。
+/// 结果集 → DuckDB 分析这条链路目前还没接 UI（建表方零调用者），所以现在是**幂等空操作**——
+/// 但清场口是 D54 契约的一半，先接上：链路接线后不必回头补，也盖住将来别处建出的
+/// Query 来源表。
+///
+/// **非阻塞**（与 [`clear_mock_temp_tables`] 同一理由）：结果集相关任务在后台持锁且不可取消，
+/// UI 线程不排队等锁；拿不到锁就留给下一次切项目再试。
+fn clear_result_temp_tables() {
+    match engine::duckdb::DuckDBManager::try_drop_in_memory_temp_tables(
+        engine::duckdb::TempTableSource::Query,
+    ) {
+        Ok(Some(cleared)) if !cleared.is_empty() => {
+            tracing::info!("[project] 切项目清掉 {} 张结果集临时表", cleared.len());
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!("[project] 清理结果集临时表失败: {error}"),
+    }
+}
+
 /// 打开项目后的宿主刷新：连接列表、选中项、导航缓存与结果归属都归零，
 /// 避免残留上一项目的数据。
 fn refresh_after_open(shared: &Shared, cx: &mut App) {
@@ -161,6 +182,9 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
 
     // M7：清掉上一项目的 mock 临时表（进程级内存库不会随项目切换释放）。
     clear_mock_temp_tables(shared, cx);
+
+    // D54 清场口：结果集临时表（`tmp_q_`）同一理由清掉（链路未接时是空操作）。
+    clear_result_temp_tables();
 
     let (conns, notice) =
         crate::services::workspace_loader::load_connections_for_scope(root.as_deref());
@@ -175,7 +199,7 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
 mod tests {
     // 显式列举依赖（不要 `use super::*`：父模块的 `use gpui_kit::*` 会跟着进来，
     // `#[gpui_kit::test]` 展开出的裸 `#[test]` 会解析到它自己，无限递归）
-    use super::{clear_mock_temp_tables, Shared};
+    use super::{clear_mock_temp_tables, clear_result_temp_tables, Shared};
     use gpui_kit::TestAppContext;
     use mock::mock_view::{MockColumnSpec, MockDraft, MockRunOptions};
     use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};
@@ -223,6 +247,35 @@ mod tests {
                 .expect("列临时表")
                 .contains(&info.temp_table_name),
             "切项目后不应再有上一项目的临时表"
+        );
+    }
+
+    /// 内存库里现存的 Query 来源临时表名（测试用）。
+    fn live_query_temp_tables() -> Vec<String> {
+        engine::duckdb::DuckDBManager::in_memory_temp_tables(engine::duckdb::TempTableSource::Query)
+            .expect("列临时表")
+    }
+
+    /// 项目切换：清掉本进程的结果集临时表（D54 的清场口；只断言**自己那张表**——
+    /// 内存库是进程级的，别的用例可能同时也在建表）。
+    #[gpui_kit::test]
+    fn project_switch_clears_result_temp_tables(_cx: &mut TestAppContext) {
+        let table = engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
+            &["id".to_string()],
+            &[],
+        )
+        .expect("建表");
+        assert!(table.starts_with("tmp_q_"), "命名口径（D54）：{table}");
+        assert!(
+            live_query_temp_tables().contains(&table),
+            "前置条件：临时表应当已建好"
+        );
+
+        clear_result_temp_tables();
+
+        assert!(
+            !live_query_temp_tables().contains(&table),
+            "切项目后不应再有结果集临时表（D54 清场口）"
         );
     }
 }

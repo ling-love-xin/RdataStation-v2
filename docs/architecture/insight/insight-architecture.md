@@ -430,7 +430,7 @@ RulesWatcher（后台线程，drop 即停）：
 | 质量评分四维与**等级**（`Grade`；列级与表级共用阈值/文案） | `crates/insight/src/quality_scorer.rs` |
 | 评分卡视图模型（`ScoreView` / `DimensionView`；全空列不产分） | `crates/insight/src/model.rs`（`ColumnProfileView::score`） |
 | 评分卡渲染（钉在滚动区之外；四维细条） | `crates/insight/src/insight_view.rs`（`render_score_card` / `dimension_row` / `ratio_bar`） |
-| 表探查 | `crates/insight/src/table_profile_service.rs` |
+| 表探查 | `crates/insight/src/insight_engine.rs`（`get_temp_table_profile`；源库内省路径已于 2026-09-18 **删除**——零调用且未跑通） |
 | Schema 洞察 | `crates/insight/src/schema_analyzer.rs` |
 | 规则资产（16 条） | `crates/insight/insight-rules/` |
 | 服务层统一入口 | `crates/insight/src/service/mod.rs`（`with_rules` 契约） |
@@ -456,7 +456,7 @@ RulesWatcher（后台线程，drop 即停）：
 | K13 | ~~`workbench` 依赖 `mock` 而 `mock` 编译不过~~ | — | ✅ 已解除（2026-09-15）；`engine/tests/transaction_affinity.rs` 的 `as_i64` 编译错误也已修（`Value` 只有 `as_int`，随 `b838ea0` 提交） |
 | K14 | ~~清理旧快照后，**存活版本的 `parent_version_id` 可能指向已被删的父版**（链的起段被剪掉）~~ | — | ✅ 已处置（2026-09-17，D57）：界面上把被剪过的头部标「更早的版本已清理」（数据层不改——置空 `parent` 会丢掉「它前面还有历史」这个事实）；判据要求「列表完整」以免分页造成假阳性 |
 | K15 | ~~`quality-score` 是残留规则（无代码按 id 执行；SQL 对文本列跑不通）~~ | — | ✅ 已处置（2026-09-17）：**下线**。它的自述就写着真实评分在 `quality_scorer.rs`——留着就是「同一能力两份口径」。规则文件已删，需要时从 git 历史取 |
-| K16 | **临时表的回收机制与建表命名对不上**：`create_duckdb_temp_table` / `create_temp_table_internal` 建的表叫 `rs_<uuid>`，而回收全靠前缀识别（`tmp_q_` / `tmp_i_` / `temp_mock_` / `tmp_p_`）——`list_by_source`、`drop_by_source`、`lazy_cleanup_insight_tables` 对这些表**全都看不见**，`register` 触发的惰性清理因此对它们无效；且 `drop_in_memory_temp_tables` 只有 mock 调过 | 中：结果集表与洞察样本表在进程内只增不减（内存库，吃 RSS）；而文档写的「TTL 30 分钟 / 项目关闭清理」对它们不成立——文档与运行行为不一致比单纯泄漏更难查 | **已收口（2026-09-17）**：① 洞察侧——`duckdb::analysis` 统一按 `tmp_i_` 建表、用完即删（D50）；② 内存闸与可观测——`memory_limit` / `temp_directory` / 登记概览（D51）；③ 结果集侧——命名改为 `tmp_q_` + 建表即登记，并备好定向 `drop_temp_table` 与清场 `drop_in_memory_temp_tables(Query)`（D54）。**唯一还没落的是宿主接线（2026-09-18 复核）**：结果集侧**建表**已有调用者（编辑器执行 → `create_duckdb_temp_table`，命名与登记走 D54），但 `drop_temp_table(TempTableSource::Query)` 与 `drop_in_memory_temp_tables(Query)` **仍无生产调用者**——结果集被丢弃 / 关文档时没人回收（项目切换清场那条也还没接），内存库里因此只增不减。接线时按 D54 的契约在丢弃点调 `drop_temp_table` |
+| K16 | **临时表的回收机制与建表命名对不上**：`create_duckdb_temp_table` / `create_temp_table_internal` 建的表叫 `rs_<uuid>`，而回收全靠前缀识别（`tmp_q_` / `tmp_i_` / `temp_mock_` / `tmp_p_`）——`list_by_source`、`drop_by_source`、`lazy_cleanup_insight_tables` 对这些表**全都看不见**，`register` 触发的惰性清理因此对它们无效；且 `drop_in_memory_temp_tables` 只有 mock 调过 | 中：结果集表与洞察样本表在进程内只增不减（内存库，吃 RSS）；而文档写的「TTL 30 分钟 / 项目关闭清理」对它们不成立——文档与运行行为不一致比单纯泄漏更难查 | **已收口（2026-09-17）**：① 洞察侧——`duckdb::analysis` 统一按 `tmp_i_` 建表、用完即删（D50）；② 内存闸与可观测——`memory_limit` / `temp_directory` / 登记概览（D51）；③ 结果集侧——命名改为 `tmp_q_` + 建表即登记，并备好定向 `drop_temp_table` 与清场 `drop_in_memory_temp_tables(Query)`（D54）。**唯一还没落的是宿主接线（2026-09-18 更新）**：**清场口已接**——项目切换 / 关闭时清 `TempTableSource::Query`（`workbench/components/project_host.rs::clear_result_temp_tables`，非阻塞）；**定向口** `drop_temp_table(Query)` 仍无生产调用者（建表侧 `create_duckdb_temp_table` / `ResultService` / `execute_duckdb_analysis` 也零调用，整条链路未接 UI），随「编辑器结果集入口」一起接（施工单见 `insight-dev-plan.md` §10 #3 / #6） |
 
 ## 12. 待确认
 

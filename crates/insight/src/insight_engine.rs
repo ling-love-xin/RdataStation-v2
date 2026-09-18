@@ -104,8 +104,8 @@ pub fn get_column_insight_full_on(
 
 /// 临时表画像（表探查（Tab「表」）的数据源）：DuckDB 内省列元数据 + 行数。
 ///
-/// 与 [`crate::table_profile_service::get_table_profile`]（源库内省，走 `SqlService`）分工不同：
-/// 面板的表目标指向的是 **DuckDB 临时表**（`t_result_N`），源库连接信息在这里既没有也不需要。
+/// 面板的表目标指向的是 **DuckDB 临时表**（结果集表 / `tmp_i_` 样本表）——
+/// 源库表先取样再探查（D58/D59），所以这里既没有也不需要源库连接信息。
 ///
 /// 走 `DESCRIBE` 而不是 `information_schema`：前者对临时表 / 视图 / CTE 一视同仁，
 /// 也不需要自己按 `table_catalog = 'memory'` 过滤（`ATTACH` 进来的文件库表不该混进来）。
