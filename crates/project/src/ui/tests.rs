@@ -25,11 +25,12 @@ use gpui_kit::{
 
 use super::{
     OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs, ProjectSort,
-    ProjectUiHost, ProjectUiNotifier, ProjectUiState, StatusFilter, advance_pending,
-    build_project_menu, confirm_delete, cycle_sort, more_menu, open_create_dialog,
-    open_delete_dialog, open_folder_dialog, open_lock_busy_dialog, pick_directory, prepare_unsaved,
-    project_card, project_menu_entries, render_picker, render_settings, request_close,
-    request_create_project, request_open, request_open_folder, save_project_info, submit_create,
+    ProjectUiHost, ProjectUiNotifier, ProjectUiState, SettingsSnapshot, StatusFilter,
+    advance_pending, build_project_menu, card_description, confirm_delete, cycle_sort,
+    load_settings_snapshot, meta_tree_rows, more_menu, open_create_dialog, open_delete_dialog,
+    open_folder_dialog, open_lock_busy_dialog, pick_directory, prepare_unsaved, project_card,
+    project_menu_entries, render_picker, render_settings, request_close, request_create_project,
+    request_open, request_open_folder, save_project_info, snapshot_description, submit_create,
     submit_open_folder, visible_items,
 };
 use crate::service::ProjectSummary;
@@ -593,6 +594,113 @@ fn read_only_blocks_project_info_save(cx: &mut TestAppContext) {
 
     // 只读是「不许写」，不是「不许看」：设置面板照样开得起来（写控件已置灰）。
     assert!(cx.update(|_, cx| render_settings(&host, &inputs, cx).is_some()));
+}
+
+// ==================== B2/B3：描述展示与 `.RSmeta` 结构树 ====================
+
+/// B3：描述展示的两个口（卡片行 / 概览文案）都只认「非空描述」。
+#[test]
+fn description_shows_only_when_present() {
+    let mut item = summary("p-desc", "带描述的项目", "active");
+    assert_eq!(card_description(&item), None, "没写描述 → 不占卡片行");
+    item.description = Some("   ".to_string());
+    assert_eq!(card_description(&item), None, "纯空白视作没写");
+    item.description = Some("  风控看板  ".to_string());
+    assert_eq!(
+        card_description(&item),
+        Some("风控看板".to_string()),
+        "两端空白去掉"
+    );
+
+    let mut snapshot = SettingsSnapshot::default();
+    assert_eq!(snapshot_description(&snapshot), "—", "未取快照不当成有描述");
+    snapshot.description = Some("  ".to_string());
+    assert_eq!(snapshot_description(&snapshot), "—");
+    snapshot.description = Some("风控看板".to_string());
+    assert_eq!(snapshot_description(&snapshot), "风控看板");
+}
+
+/// B2：结构树 = 目录在前 + 同级按名 + 深度优先；目录不给大小。
+#[test]
+fn meta_tree_rows_lists_dirs_first_then_files() {
+    let root = temp_root("meta-tree");
+    let meta = root.join(crate::service::RS_META_DIR_NAME);
+    let _ = std::fs::remove_dir_all(&meta);
+    std::fs::create_dir_all(meta.join("config")).expect("建 config");
+    std::fs::create_dir_all(meta.join("queries")).expect("建 queries");
+    std::fs::write(meta.join("project.db"), b"0123456789").expect("写 project.db");
+    std::fs::write(meta.join("config").join("settings.json"), b"{}").expect("写 settings.json");
+
+    let rows = meta_tree_rows(&meta);
+    let shape: Vec<(usize, &str, bool)> = rows
+        .iter()
+        .map(|r| (r.depth, r.name.as_str(), r.is_dir))
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            (0, "config", true),
+            (1, "settings.json", false),
+            (0, "queries", true),
+            (0, "project.db", false),
+        ],
+        "目录在前（同级按名）、子项紧跟父目录"
+    );
+    let project_db = rows
+        .iter()
+        .find(|r| r.name == "project.db")
+        .expect("project.db");
+    assert_eq!(project_db.size, Some(10), "文件给字节数");
+    assert_eq!(
+        project_db.path,
+        meta.join("project.db"),
+        "行带完整路径（复制路径用）"
+    );
+    assert!(
+        rows.iter().filter(|r| r.is_dir).all(|r| r.size.is_none()),
+        "目录不给大小（不递归求和，免得掩盖哪个文件大）"
+    );
+
+    // 目录不存在 / 为空：返回空表，不 panic（排障视图要能照常画）
+    assert!(meta_tree_rows(&root.join("不存在的目录")).is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// B2：设置面板的存储段读**快照**（事件路径填充），窗口里画得出来。
+#[gpui_kit::test]
+fn settings_meta_tree_comes_from_snapshot(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let root = temp_root("settings-meta");
+    let meta = root.join(crate::service::RS_META_DIR_NAME);
+    let _ = std::fs::remove_dir_all(&meta);
+    std::fs::create_dir_all(meta.join("config")).expect("建 .RSmeta");
+    std::fs::write(meta.join("project.db"), b"meta").expect("写 project.db");
+    host.set_current(Some(OpenProject::new(root.clone(), "结构树项目")));
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    // 与菜单「项目设置…」同一条路：事件路径取快照
+    cx.update(|_, cx| load_settings_snapshot(&host, cx));
+    {
+        let state = host.state.borrow();
+        assert!(state.settings.loaded, "快照应标为已取");
+        let names: Vec<&str> = state
+            .settings
+            .meta_rows
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"config") && names.contains(&"project.db"),
+            "结构树应来自磁盘，实际：{names:?}"
+        );
+    }
+
+    host.state.borrow_mut().settings_open = true;
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.update(|_, cx| render_settings(&host, &inputs, cx).is_some()));
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 // ==================== B1/C4：菜单规格与键盘可达 ====================

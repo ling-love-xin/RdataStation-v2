@@ -105,7 +105,7 @@ graph LR
 
 ## 6. 窗口测试方案
 
-位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），20 项测试（17 项 GPUI headless 窗口测试 + 3 项纯函数测试）。
+位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），23 项测试（18 项 GPUI headless 窗口测试 + 5 项纯函数测试）。
 
 ### 骨架
 
@@ -140,6 +140,9 @@ graph LR
 | `visible_items_filters_by_status_and_needle` | 4 / R4：搜索子串 ∩ 状态筛选（纯函数） |
 | `menu_spec_greys_out_write_commands_in_read_only` | C1：只读置灰清单（写命令置灰、读命令与出口可用） |
 | `menu_spec_keeps_escape_hatches_without_leading_separator` | C1 / B1：分隔线位置与「逃生口不被藏住」 |
+| `description_shows_only_when_present` | B3：描述展示的两个口（卡片行 / 概览文案）只认非空描述（纯函数） |
+| `meta_tree_rows_lists_dirs_first_then_files` | B2：结构树序号 / 层级 / 大小 / 不存在目录（纯函数，只读临时目录） |
+| `settings_meta_tree_comes_from_snapshot` | B2：设置面板读快照（事件路径取一次）+ 窗口里画得出来 |
 
 不覆盖：真实建库与迁移（`crates/project/tests/project_store.rs` 集成测试）、双实例并发（手动清单）、主题视觉（`theme-preview.html` 基准）。
 
@@ -162,6 +165,7 @@ graph LR
 | 菜单规格（顺序 / 文案 / 可用性） | `crates/project/src/ui.rs`（`project_menu_entries` 纯函数 + `attach_project_menu_handler`） |
 | 窗口测试 | `crates/project/src/ui/tests.rs` |
 | 视图测试规范 | `.agents/skills/gpui-kit-dev/SKILL.md`（「窗口测试」一节） |
+| 设置面板的磁盘 / 名册快照 | `crates/project/src/ui.rs`（`SettingsSnapshot` / `load_settings_snapshot` / `meta_tree_rows`；事件路径填充，render 纯读） |
 | 位置字段（系统目录选择器 / 目标预览） | `crates/project/src/ui.rs`（`pick_directory` / `directory_row` / `target_preview`） |
 
 ## 8. 验证方式
@@ -169,7 +173,7 @@ graph LR
 ```bash
 cargo check --workspace --all-targets          # 零告警
 cargo test --workspace -j 2                    # 全量（-j 2 硬性要求）
-cargo test -p rds-project --lib -j 2           # 只跑项目 crate（34 项，迭代快）
+cargo test -p rds-project --lib -j 2           # 只跑项目 crate（37 项，迭代快）
 cargo build -p rds-app -j 2                    # codegen 验证（check ≠ 能出机器码）
 ```
 

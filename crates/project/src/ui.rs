@@ -360,6 +360,8 @@ pub struct ProjectUiState {
     /// 项目世代：切换/关闭后自增，供各面板订阅重载。
     pub epoch: u64,
     pub notice: Option<String>,
+    /// 设置面板的磁盘 / 名册快照（B2 / B3；事件路径填充，render 纯读）。
+    pub settings: SettingsSnapshot,
 }
 
 impl Default for ProjectUiState {
@@ -372,6 +374,7 @@ impl Default for ProjectUiState {
             read_only: false,
             epoch: 0,
             notice: None,
+            settings: SettingsSnapshot::default(),
         }
     }
 }
@@ -1503,8 +1506,9 @@ pub fn save_project_info(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut 
         }
         Err(e) => host.state.borrow_mut().notice = Some(e),
     }
-    // 名册改名 / 描述变更后刷新列表与卡片（内含重绘）。
+    // 名册改名 / 描述变更后刷新列表与卡片，并更新设置面板快照（概览要显示新描述）。
     refresh_picker(host, cx);
+    load_settings_snapshot(host, cx);
 }
 
 /// 归档 / 取消归档当前项目。
@@ -1524,6 +1528,129 @@ pub fn toggle_archive(host: &ProjectUiHost, cx: &mut App) {
             if archived { "取消归档" } else { "归档" }
         ));
     }
+    host.notify(cx);
+}
+
+// ==================== 设置面板的磁盘 / 名册快照（B2 / B3） ====================
+
+/// `.RSmeta` 结构树的一行（排障用：只读，不写）。
+///
+/// 树在渲染前展平成行，渲染只按 `depth` 缩进——这样树的**内容**可以由纯函数给出
+/// （`meta_tree_rows`），窗口测试直接对着临时目录断言，不必经过窗口。
+pub struct MetaTreeRow {
+    /// 相对 `.RSmeta` 的层级（根下的文件 / 目录为 0）。
+    pub depth: usize,
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
+    /// 目录不给大小（不递归求和，避免把「哪个文件大」掩盖掉）；`None` 渲染成「—」。
+    pub size: Option<u64>,
+}
+
+/// 结构树上限：排障视图，异常目录（巨大 / 循环）不该把界面拖死。
+const META_TREE_MAX_DEPTH: usize = 3;
+const META_TREE_MAX_ROWS: usize = 200;
+
+/// 枚举 `.RSmeta` 结构：目录在前、同级按名称排序、深度优先。
+///
+/// 只读文件系统的纯函数（不碰 UI / 名册），因此测试直接给临时目录就能断言。
+pub fn meta_tree_rows(meta_dir: &std::path::Path) -> Vec<MetaTreeRow> {
+    fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<MetaTreeRow>) {
+        if depth >= META_TREE_MAX_DEPTH || out.len() >= META_TREE_MAX_ROWS {
+            return;
+        }
+        let Ok(read_dir) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<(bool, std::ffi::OsString, PathBuf)> = Vec::new();
+        // 读不了的项直接丢掉：排障视图不该因为一条杂项崩掉。
+        for entry in read_dir.filter_map(Result::ok) {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            // 符号链接等其他类型跳过：`.RSmeta` 里不该有，排障时也不追。
+            if file_type.is_dir() || file_type.is_file() {
+                entries.push((file_type.is_dir(), entry.file_name(), entry.path()));
+            }
+        }
+        // 目录在前、同级按名称排序：行的位置只跟磁盘结构走，不断跳动才好排障。
+        entries.sort_by(|a, b| (!a.0, &a.1).cmp(&(!b.0, &b.1)));
+        for (is_dir, name, path) in entries {
+            if out.len() >= META_TREE_MAX_ROWS {
+                return;
+            }
+            let name = name.to_string_lossy().to_string();
+            if is_dir {
+                out.push(MetaTreeRow {
+                    depth,
+                    name,
+                    path: path.clone(),
+                    is_dir: true,
+                    size: None,
+                });
+                walk(&path, depth + 1, out);
+            } else {
+                out.push(MetaTreeRow {
+                    depth,
+                    name,
+                    size: std::fs::metadata(&path).ok().map(|m| m.len()),
+                    path,
+                    is_dir: false,
+                });
+            }
+        }
+    }
+
+    let mut rows = Vec::new();
+    walk(meta_dir, 0, &mut rows);
+    rows
+}
+
+/// 人类可读大小（存储树 / 概览共用）。
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024. && unit + 1 < UNITS.len() {
+        value /= 1024.;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// 设置面板的「磁盘 + 名册」快照。
+///
+/// 在**事件路径**（打开设置 / 点刷新）一次性取，render 只纯读：`.RSmeta` 目录遍历与名册
+/// 查询都不该每帧做（与「render 不做 I/O」的约定一致）。
+#[derive(Default)]
+pub struct SettingsSnapshot {
+    pub meta_rows: Vec<MetaTreeRow>,
+    /// 名册里的描述（概览显示；编辑后由保存路径刷新）。
+    pub description: Option<String>,
+    pub missing_drivers: Vec<String>,
+    /// 是否取过（未取时显示「—」，不当成「没有」）。
+    pub loaded: bool,
+}
+
+/// 重新取设置面板快照（打开设置 / 点「刷新列表」时调）。
+pub fn load_settings_snapshot(host: &ProjectUiHost, cx: &mut App) {
+    let Some(root) = host.root() else {
+        return;
+    };
+    let summary = project_service::list_all()
+        .ok()
+        .and_then(|items| items.into_iter().find(|p| p.path == root));
+    let snapshot = SettingsSnapshot {
+        meta_rows: meta_tree_rows(&root.join(project_service::RS_META_DIR_NAME)),
+        description: summary.as_ref().and_then(|p| p.description.clone()),
+        missing_drivers: summary.map(|p| p.missing_drivers).unwrap_or_default(),
+        loaded: true,
+    };
+    host.state.borrow_mut().settings = snapshot;
     host.notify(cx);
 }
 
@@ -1788,6 +1915,16 @@ fn project_card(
                 .text_color(theme.colors.muted_foreground)
                 .child(item.path.to_string_lossy().to_string()),
         )
+        // R7：描述属于卡片元信息（有就显示，空 / 纯空白视作没有）
+        .when_some(card_description(item), |d, description| {
+            d.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.muted_foreground)
+                    .text_ellipsis()
+                    .child(description),
+            )
+        })
         .child(
             div()
                 .text_xs()
@@ -1926,6 +2063,15 @@ fn more_menu(
             }
             menu
         })
+}
+
+/// 卡片里的描述行（R7 元信息包含描述）：空串 / 纯空白视作「没写描述」，不占位。
+pub fn card_description(item: &ProjectSummary) -> Option<String> {
+    item.description
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(str::to_string)
 }
 
 fn meta_line(item: &ProjectSummary) -> String {
@@ -2111,7 +2257,8 @@ fn attach_project_menu_handler(
                     .description
                     .update(app, |s, cx| s.set_value(description, window, cx));
                 host.state.borrow_mut().settings_open = true;
-                host.notify(app);
+                // 设置面板要显示磁盘结构树与描述：在事件路径取快照（render 不做 I/O）。
+                load_settings_snapshot(&host, app);
             })
         }
         "reveal" => {
@@ -2148,37 +2295,43 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
         }
     };
     let theme = cx.theme();
-    let read_only = host.state.borrow().read_only;
+    // 快照在事件路径填充（打开设置 / 刷新 / 保存），render 只读：`.RSmeta` 目录遍历与
+    // 名册查询都不在这里做。
+    let ui = host.state.borrow();
+    let read_only = ui.read_only;
 
-    // 元数据文件大小
-    let meta = root.join(project_service::RS_META_DIR_NAME);
-    let mut files = div().v_flex().gap_1().text_xs();
-    for entry in [
-        "project.db",
-        "analytics.duckdb",
-        "project.json",
-        "project.lock",
-    ] {
-        let p = meta.join(entry);
-        let size = std::fs::metadata(&p)
-            .map(|m| format!("{} B", m.len()))
-            .unwrap_or_else(|_| "—".to_string());
-        files = files.child(
-            div()
-                .h_flex()
-                .gap_2()
-                .child(
-                    div()
-                        .text_color(theme.colors.foreground)
-                        .child(entry.to_string()),
-                )
-                .child(
-                    div()
-                        .ml_auto()
-                        .text_color(theme.colors.muted_foreground)
-                        .child(size),
-                ),
-        );
+    // 概览：描述来自名册快照（R7：元信息包含描述）
+    let description = snapshot_description(&ui.settings);
+    // 存储（B2）：`.RSmeta` 结构树 + 合计，只读排障视图
+    let (meta_rows, meta_total) = (
+        &ui.settings.meta_rows,
+        ui.settings.meta_rows.iter().filter_map(|r| r.size).sum(),
+    );
+    let mut tree = div().v_flex().gap_1().text_xs();
+    if meta_rows.is_empty() {
+        tree = tree.child(div().text_color(theme.colors.muted_foreground).child(
+            if ui.settings.loaded {
+                "（目录为空或不可读）"
+            } else {
+                "正在读取…"
+            },
+        ));
+    } else {
+        tree = tree
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.colors.foreground)
+                    .child(format!(
+                        "{}/ · 合计 {}",
+                        project_service::RS_META_DIR_NAME,
+                        human_size(meta_total)
+                    )),
+            )
+            .children(meta_rows.iter().map(|row| meta_tree_row(row, theme)));
     }
 
     let host_close = host.clone();
@@ -2193,23 +2346,24 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
     let host_delete = host.clone();
     let inputs_delete = inputs.clone();
 
-    let deps = {
-        let missing = project_service::list_recent(12)
-            .ok()
-            .and_then(|v| v.into_iter().find(|p| p.path == root))
-            .map(|p| p.missing_drivers)
-            .unwrap_or_default();
-        if missing.is_empty() {
-            div()
-                .text_xs()
-                .text_color(theme.colors.success)
-                .child("依赖自检：未发现缺失驱动")
-        } else {
-            div()
-                .text_xs()
-                .text_color(theme.colors.warning)
-                .child(format!("⚠ 缺失驱动：{}", missing.join("、")))
-        }
+    let deps = if !ui.settings.loaded {
+        div()
+            .text_xs()
+            .text_color(theme.colors.muted_foreground)
+            .child("依赖自检：正在读取…")
+    } else if ui.settings.missing_drivers.is_empty() {
+        div()
+            .text_xs()
+            .text_color(theme.colors.success)
+            .child("依赖自检：未发现缺失驱动")
+    } else {
+        div()
+            .text_xs()
+            .text_color(theme.colors.warning)
+            .child(format!(
+                "⚠ 缺失驱动：{}",
+                ui.settings.missing_drivers.join("、")
+            ))
     };
 
     Some(
@@ -2259,6 +2413,10 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                     .v_flex()
                     .gap_3()
                     .p_4()
+                    // 结构树 / 版本列表可以很长：滚动区在自己身上（不要拖到整个面板）
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
                     .child(section(theme, "概览"))
                     .child(
                         div()
@@ -2267,6 +2425,7 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                             .text_xs()
                             .child(kv(theme, "名称", &name))
                             .child(kv(theme, "路径", &root.to_string_lossy()))
+                            .child(kv(theme, "描述", &description))
                             .child(kv(theme, "状态", if read_only { "只读" } else { "可写" })),
                     )
                     .child(section(theme, "基本信息"))
@@ -2284,7 +2443,15 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                             }),
                     )
                     .child(section(theme, "存储（.RSmeta）"))
-                    .child(files)
+                    .child(tree)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.muted_foreground)
+                            .child(
+                                "只读的结构视图；用系统文件管理器打开会暴露内部结构（仅排障用）。",
+                            ),
+                    )
                     .child(
                         Button::new("proj-open-meta")
                             .secondary()
@@ -2353,13 +2520,86 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                     .child(
                         Button::new("proj-reload")
                             .secondary()
-                            .label("刷新列表")
+                            .label("刷新列表与结构树")
                             .on_click(move |_, _, app| {
                                 refresh_picker(&host_reload, app);
+                                load_settings_snapshot(&host_reload, app);
                             }),
                     ),
             ),
     )
+}
+
+/// 概览里的描述文案：未写描述 / 未取快照都显示「—」（不显示成空行）。
+fn snapshot_description(snapshot: &SettingsSnapshot) -> String {
+    snapshot
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .unwrap_or("—")
+        .to_string()
+}
+
+/// 结构树的一行：缩进 + 图标 + 名称 + 大小 + 「复制路径」。
+///
+/// 目录不给大小（渲染成「目录」）；复制路径用 toast 反馈（面板本身没有 notice 行）。
+fn meta_tree_row(row: &MetaTreeRow, theme: &gpui_kit::component::Theme) -> Div {
+    let path_copy = row.path.to_string_lossy().to_string();
+    let size = match row.size {
+        Some(size) => human_size(size),
+        None if row.is_dir => "目录".to_string(),
+        None => "—".to_string(),
+    };
+    div()
+        .h_flex()
+        .items_center()
+        .gap_2()
+        // 根目录自身占一级缩进（子项从 1 级起）
+        .pl(rems((row.depth + 1) as f32))
+        .child(
+            Icon::new(if row.is_dir {
+                IconName::FolderOpen
+            } else {
+                IconName::FileText
+            })
+            .size_3p5()
+            .text_color(theme.colors.muted_foreground),
+        )
+        .child(
+            div()
+                .text_color(if row.is_dir {
+                    theme.colors.foreground
+                } else {
+                    theme.colors.muted_foreground
+                })
+                .child(row.name.clone()),
+        )
+        .child(
+            div()
+                .ml_auto()
+                .text_color(theme.colors.muted_foreground)
+                .child(size),
+        )
+        .child(
+            // id 用路径：同一帧内唯一，且不随列表顺序变（行间不会串焦点）
+            Button::new(ElementId::Name(SharedString::from(format!(
+                "meta-copy-{}",
+                row.path.display()
+            ))))
+            .ghost()
+            .xsmall()
+            .icon(IconName::Copy)
+            .on_click(move |_, window, app| {
+                app.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path_copy.clone()));
+                window.push_notification(
+                    gpui_kit::component::notification::Notification::info(format!(
+                        "已复制路径：{path_copy}"
+                    )),
+                    app,
+                );
+            }),
+        )
 }
 
 fn section(theme: &gpui_kit::component::Theme, title: &str) -> Div {

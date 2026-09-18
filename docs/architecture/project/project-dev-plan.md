@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 规范补齐）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 34 lib（含 17 项窗口测试 + 3 项纯函数）+ 1 名册集成 + 3 存储集成全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 37 lib（含 18 项窗口测试 + 5 项纯函数）+ 1 名册集成 + 3 存储集成全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -24,6 +24,18 @@
 | 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-19（二）— B2 `.RSmeta` 结构树 + B3 描述展示
+
+按 §8 建议顺序的第二组（纯 UI、无后端依赖）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| B2 结构树 | 存储段从「4 个固定文件名 + 大小」改为**树形**：`meta_tree_rows` 递归枚举 `.RSmeta`（目录在前、同级按名、深度优先，上限 3 层 / 200 行），每行缩进 + 图标 + 名称 + 大小（目录不给大小），行尾「复制路径」按钮（写剪贴板 + toast 反馈）；目录头显示「`.RSmeta/` · 合计 N」；保留「打开 `.RSmeta`」排障入口并标明会暴露内部结构 | `crates/project/src/ui.rs` |
+| B3 描述展示 | 卡片路径行下方多一行描述（空 / 纯空白不占位，`card_description` 纯函数）；设置·概览新增「描述」行（`snapshot_description`，未取快照 / 未写显示「—」） | 同上 |
+| 快照（顺手清债） | 设置面板的磁盘遍历 + 名册查询从 **render 每帧**移到事件路径：新增 `SettingsSnapshot`（`ProjectUiState::settings`）+ `load_settings_snapshot`，在打开设置 / 点「刷新列表与结构树」/ 保存项目信息时取；依赖自检也改读快照（原来每帧 `list_recent(12)`） | 同上 |
+| 布局 | 设置面板正文加滚动（`flex_1().min_h_0().overflow_y_scrollbar()`）：「刷新列表」改名「刷新列表与结构树」；结构树可以很长，之前内容超长会溢出面板 | 同上 |
+| 测试 | lib 34 → 37：`description_shows_only_when_present`（卡片行 / 概览文案两端空白）、`meta_tree_rows_lists_dirs_first_then_files`（序号 / 层级 / 大小 / 不存在目录）、`settings_meta_tree_comes_from_snapshot`（事件路径取快照 + 窗口渲染） | `crates/project/src/ui/tests.rs` |
 
 ### 2026-09-19 — C1 只读禁用态 + C4 键盘可达 + B1 危险区入口（§8 首组）
 
@@ -284,7 +296,7 @@
 
 - 每阶段：`cargo check -p rds-project -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试
   （`crates/project/tests/` 集成测试 + `crates/project/src/ui/tests.rs` 窗口测试）
-- 常用：`cargo test -p rds-project -j 2`（lib 34 + 名册集成 1 + 存储集成 3）
+- 常用：`cargo test -p rds-project -j 2`（lib 37 + 名册集成 1 + 存储集成 3）
 - 迁移：`cargo test -p rds-engine`（迁移套件）+ 手工核对旧库升级
 - UI：`cargo run -p rds-app` 手动走通 §4 清单（先用 `RDS_PROJECT_PATH` 验证有项目态，再清空验证选择器）
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
@@ -304,8 +316,7 @@
 
 | # | 项 | 原型要求 | 现状 |
 | --- | --- | --- | --- |
-| B2 | `.RSmeta` 结构树 | 树形 + 大小 + 复制路径（原型 §7） | 平铺四个固定文件 + 大小；无树、无复制路径 |
-| B3 | 描述展示 | R7 元信息包含描述 | 仅可编辑；卡片与设置概览都不显示描述 |
+| — | （本组已清空：B1 / B2 / B3 均已完成，见 §0） | — | — |
 
 ### C. 体验 / 规范（对照 GPUI-kit 指南）
 
@@ -329,7 +340,7 @@
 
 ### 建议顺序
 
-1. ~~**C1 + C4**~~、~~**B1**~~：已完成（2026-09-19），见 §0；
-2. **B3 + B2**（描述展示、`.RSmeta` 结构树；纯 UI，无后端依赖）；
-3. **A1**（默认连接，需先补 `ProjectConfig` 读写）；
-4. **C2 / C3 / E1 / E3 / E4**（体验与覆盖，可随其他任务带走）。
+1. ~~**C1 + C4**~~、~~**B1**~~（2026-09-19）、~~**B2 + B3**~~（2026-09-19 二）：已完成，见 §0；
+2. **A1**（默认连接，需先补 `ProjectConfig` 读写——目前唯一阻塞 UI 的后端缺口）；
+3. **C3**（卡片右键菜单，指南建议）→ **C2**（菜单快捷键，等组件支持 shortcut 槽位）；
+4. **E1 / E3 / E4**（覆盖与健壮性，可随其他任务带走）。

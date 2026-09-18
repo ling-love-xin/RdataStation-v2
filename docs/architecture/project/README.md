@@ -12,7 +12,7 @@
 | `project-prototype.html` | 可交互原型（RDS 明暗双主题） | 视觉 / 文案对齐 |
 | `project-dev-plan.md` | 任务划分（P0/A/B/C）、进度记录、测试场景清单、风险与对策、实现映射表 | 查历史决策与待办 |
 | `project-view-architecture.md` | 宿主桥 `ProjectUiHost` 契约、状态所有权、对话框栈语义、窗口测试方案与坑 | 改 `ui.rs`、写视图测试 |
-| `project-user-guide.md` | 使用手册：入口 / 界面导览 / 典型流程 / 状态速览 / 快捷键 / 数据与安全 / FAQ / 验收清单 | 自己用或写验收用例 |
+| `project-user-guide.md` | 使用手册：入口 / 界面导览 / 典型流程 / 状态速览 / 快捷键与键盘操作 / 数据与安全 / FAQ / 验收清单 | 自己用或写验收用例 |
 
 ## 特点速览
 
@@ -24,11 +24,12 @@
 
 ## 代码落点
 
-`crates/project/src/`：`models.rs`（域模型）、`store.rs`（`.RSmeta`）、`lock.rs`（实例锁）、`service.rs`（编排）、`ui.rs` + `ui/tests.rs`（视图与 20 项测试：17 窗口 + 3 纯函数）。职责表见 crate README。
+`crates/project/src/`：`models.rs`（域模型）、`store.rs`（`.RSmeta`）、`lock.rs`（实例锁）、`service.rs`（编排）、`ui.rs` + `ui/tests.rs`（视图与 23 项测试：18 窗口 + 5 纯函数）。职责表见 crate README。
 
 ## 状态
 
 - 主线完成（2026-09-14）：CRUD / 生命周期 / 实例锁 / 选择器（搜索 ∩ 状态筛选）/ 项目设置（名称 + 描述）/ 系统目录选择器 / 空目录询问。
-- 规范补齐（2026-09-19）：只读禁用态（写命令可见但置灰，拦截层兜底）/ 选择器键盘可达（Tab + Enter 真能操作）/ 设置·危险区三件套（归档 / 移出列表 / 删除数据）/ 标题栏菜单改 `Button::dropdown_menu`（规格抽纯函数可断言）。测试：lib 34 + 名册集成 1 + 存储集成 3。
+- 规范补齐（2026-09-19）：只读禁用态（写命令可见但置灰，拦截层兜底）/ 选择器键盘可达（Tab + Enter 真能操作）/ 设置·危险区三件套（归档 / 移出列表 / 删除数据）/ 标题栏菜单改 `Button::dropdown_menu`（规格抽纯函数可断言）。
+- 信息补齐（2026-09-19 二）：`.RSmeta` 结构树（目录在前 + 大小 + 复制路径 + 合计）/ 描述上卡片与概览 / 设置面板的磁盘与名册读取改**快照**（事件路径取一次，render 不做 I/O）。测试：lib 37 + 名册集成 1 + 存储集成 3。
 - 范围外（原型 §12）：提升 / 引用（promote / snapshot）、移动或另存项目目录、DuckLake 远程项目（`ProjectPath::Remote` 仅模型层预留）。
-- 待办见 `project-dev-plan.md` **§8 未开发清单**：默认连接（U3，需先补后端 `ProjectConfig` 读写）、描述展示（B3）、`.RSmeta` 结构树（B2）、卡片右键菜单（C3）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）。
+- 待办见 `project-dev-plan.md` **§8 未开发清单**：默认连接（U3，需先补后端 `ProjectConfig` 读写）、卡片右键菜单（C3）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）。
