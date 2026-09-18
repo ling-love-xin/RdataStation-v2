@@ -15,7 +15,8 @@
 
 use engine::driver::traits::{ColumnDetail, SchemaObject, SchemaObjectKind};
 use engine::persistence::{
-    ChunkResult, ConnectionType, IndexEntry, IndexSearchHit, MetadataCacheManager, MetadataCacheOps,
+    ChunkResult, ConnectionType, FtsSearchResult, IndexEntry, IndexSearchHit, MetadataCacheManager,
+    MetadataCacheOps,
     MetadataCachePool, SchemaObjectCounts,
 };
 
@@ -225,6 +226,28 @@ impl NavCache {
                     needle,
                     error = %e,
                     "元数据索引搜索失败（本次无结果）"
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// 按内容搜索该连接的 FTS 索引（注释 / 数据类型；跨 schema 子串匹配）。
+    ///
+    /// 与名称档同一口径：失败 / 无命中都返回空表（搜索是尽力而为的交互操作），
+    /// 但告警留痕，否则「搜不到」会被当成「库里没有」。
+    ///
+    /// 门槛：trigram 分词器下**少于 3 个字符必然无命中**（不足一个 trigram）——
+    /// 调用方应先拦住过短的词（Quick Open 的 `#` 档按 3 字提示）。
+    pub fn search_fts(&self, needle: &str, limit: usize) -> Vec<FtsSearchResult> {
+        match self.ops.search_fts(needle, None) {
+            Ok(hits) => hits.into_iter().take(limit).collect(),
+            Err(e) => {
+                tracing::warn!(
+                    connection_id = %self.conn_id,
+                    needle,
+                    error = %e,
+                    "元数据全文搜索失败（本次无结果）"
                 );
                 Vec::new()
             }

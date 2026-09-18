@@ -23,6 +23,7 @@ use crate::model::{NavNodeKind, NavPath, PropertyRef};
 use crate::nav_host::ConnectionProbe;
 use crate::property_panel::ObjectProperties;
 use crate::sql_gen::DmlKind;
+use engine::persistence::FtsSearchResult;
 
 /// 预取目标（catalog / schema / 表或视图名）。
 #[derive(Clone, Debug)]
@@ -87,19 +88,33 @@ pub struct SearchTarget {
     pub driver: String,
 }
 
+/// 搜索档：名称（`metadata_index` 中缀）与内容（FTS5，注释 / 数据类型）。
+///
+/// 两档不是同一种结果形态：名称档给短名字列表，内容档要让用户看到**为什么命中**
+/// （`snippet` 带命中标记），因此 `#` 前缀单独一档。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchKind {
+    /// 名称档：`metadata_index` + LIKE 中缀（不受长度限制）。
+    Name,
+    /// 内容档：`metadata_fts`（trigram，**至少 3 个字符**，不足必无命中）。
+    FullText,
+}
+
 /// 一条搜索命中（已展开成视图可直接渲染的形状）。
 #[derive(Clone, Debug)]
 pub struct SearchHit {
     pub conn_id: String,
     pub conn_label: String,
     pub driver: String,
-    /// 类别：`table` / `view` / `schema` / `column`。
+    /// 类别：`table` / `view` / `schema` / `column` / `routine`。
     pub object_type: String,
     pub object_name: String,
     /// 列命中时的所属表名。
     pub parent_name: Option<String>,
     pub catalog: Option<String>,
     pub schema: Option<String>,
+    /// 内容档命中片段（带 `<mark>` 标记）；名称档为 `None`。
+    pub snippet: Option<String>,
 }
 
 /// 一次搜索的完整结果（一个批次涵盖全部目标连接）。
@@ -157,9 +172,10 @@ enum Job {
         /// 数据库类型（`drivers.type_id`）；属性面板「数据库类型」行用。
         db_type: Option<String>,
     },
-    /// 搜索框的跨连接索引搜索（Infix 名称匹配）。
+    /// 搜索框的跨连接索引搜索（名称档中缀 / 内容档 FTS5）。
     SearchIndex {
         consumer: SearchConsumer,
+        kind: SearchKind,
         query: String,
         project_root: Option<String>,
         targets: Vec<SearchTarget>,
@@ -399,6 +415,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
             }
             Job::SearchIndex {
                 consumer,
+                kind,
                 query,
                 project_root,
                 targets,
@@ -420,17 +437,28 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     };
                     searched += 1;
                     let room = SEARCH_MAX_HITS - hits.len();
-                    for hit in cache.search_index(&query, SEARCH_LIMIT_PER_CONN.min(room)) {
-                        hits.push(SearchHit {
-                            conn_id: target.conn_id.clone(),
-                            conn_label: target.label.clone(),
-                            driver: target.driver.clone(),
-                            object_type: hit.object_type,
-                            object_name: hit.object_name,
-                            parent_name: hit.parent_name,
-                            catalog: hit.catalog_name,
-                            schema: hit.schema_name,
-                        });
+                    let limit = SEARCH_LIMIT_PER_CONN.min(room);
+                    match kind {
+                        SearchKind::Name => {
+                            for hit in cache.search_index(&query, limit) {
+                                hits.push(SearchHit {
+                                    conn_id: target.conn_id.clone(),
+                                    conn_label: target.label.clone(),
+                                    driver: target.driver.clone(),
+                                    object_type: hit.object_type,
+                                    object_name: hit.object_name,
+                                    parent_name: hit.parent_name,
+                                    catalog: hit.catalog_name,
+                                    schema: hit.schema_name,
+                                    snippet: None,
+                                });
+                            }
+                        }
+                        SearchKind::FullText => {
+                            for hit in cache.search_fts(&query, limit) {
+                                hits.push(fts_hit_to_search_hit(target, hit));
+                            }
+                        }
                     }
                 }
                 shared().push_search_result(
@@ -599,6 +627,26 @@ pub fn has_pending_test() -> bool {
     shared().pending_test.load(Ordering::SeqCst) > 0
 }
 
+/// FTS 命中 → 统一命中形状（纯映射，便于单测）。
+///
+/// 两处不对称要当心：
+/// - FTS 行的 `schema_name` / `parent_name` 是**空串**（不是 NULL），转成 `Option` 时要过滤；
+/// - FTS 表里没有 catalog（名称档靠 JOIN `schemata` 拿），所以内容档的 `catalog` 为 `None`。
+fn fts_hit_to_search_hit(target: &SearchTarget, hit: FtsSearchResult) -> SearchHit {
+    let non_empty = |s: String| if s.is_empty() { None } else { Some(s) };
+    SearchHit {
+        conn_id: target.conn_id.clone(),
+        conn_label: target.label.clone(),
+        driver: target.driver.clone(),
+        object_type: hit.search_type,
+        object_name: hit.object_name,
+        parent_name: non_empty(hit.parent_name),
+        catalog: None,
+        schema: non_empty(hit.schema_name),
+        snippet: Some(hit.snippet),
+    }
+}
+
 /// 某消费方是否仍有未完成的索引搜索。
 pub fn has_pending_search(consumer: SearchConsumer) -> bool {
     shared().pending_search[consumer.ix()].load(Ordering::SeqCst) > 0
@@ -610,6 +658,7 @@ pub fn has_pending_search(consumer: SearchConsumer) -> bool {
 /// 让视图侧能把「搜索中…」收尾（否则结果区会一直转）。
 pub fn enqueue_search(
     consumer: SearchConsumer,
+    kind: SearchKind,
     query: &str,
     project_root: Option<&str>,
     targets: Vec<SearchTarget>,
@@ -617,6 +666,7 @@ pub fn enqueue_search(
     shared().pending_search[consumer.ix()].fetch_add(1, Ordering::SeqCst);
     let _ = shared().tx.send(Job::SearchIndex {
         consumer,
+        kind,
         query: query.to_string(),
         project_root: project_root.map(|s| s.to_string()),
         targets,
@@ -734,6 +784,36 @@ mod tests {
             shared
                 .take_search_results(SearchConsumer::Navigator)
                 .is_empty()
+        );
+    }
+
+    /// 内容档映射：空串转 `None`、catalog 缺位、snippet 带上。
+    #[test]
+    fn fts_hit_maps_empty_strings_and_keeps_snippet() {
+        let target = SearchTarget {
+            conn_id: "P_conn".to_string(),
+            label: "营销分析".to_string(),
+            driver: "postgres".to_string(),
+        };
+        let mapped = fts_hit_to_search_hit(
+            &target,
+            FtsSearchResult {
+                search_type: "column".to_string(),
+                schema_name: "public".to_string(),
+                object_name: "channel_code".to_string(),
+                parent_name: String::new(), // FTS 行里的“无父对象”是空串
+                snippet: "…下单<mark>渠道</mark>…".to_string(),
+            },
+        );
+        assert_eq!(mapped.conn_id, "P_conn");
+        assert_eq!(mapped.object_type, "column");
+        assert_eq!(mapped.object_name, "channel_code");
+        assert_eq!(mapped.parent_name, None, "空串不能当父对象名");
+        assert_eq!(mapped.schema.as_deref(), Some("public"));
+        assert_eq!(mapped.catalog, None, "FTS 表里没有 catalog");
+        assert!(
+            mapped.snippet.as_deref().unwrap_or_default().contains("<mark>"),
+            "内容档要把 snippet 带出去（UI 靠它显示“为什么命中”）"
         );
     }
 

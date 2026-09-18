@@ -20,6 +20,8 @@ pub(crate) struct MetaObject {
     /// 行主文本：`schema.name`（表 / 视图 / 模式）或 `parent.column`（列）。
     pub title: String,
     pub kind: RowKind,
+    /// 内容档的命中片段（FTS5 `snippet()` 产出，含 `<mark>` 标记）；名称档为 `None`。
+    pub snippet: Option<String>,
 }
 
 /// 搜索模式：由输入的首字符决定（对齐 VSCode 的 Quick Open / Command Palette）。
@@ -33,8 +35,10 @@ pub(crate) enum Mode {
     FullText,
 }
 
-/// 异步元数据搜索的最小词长（本地源不受限；对齐导航搜索框的口径）。
+/// 名称档最小词长（本地源不受限；对齐导航搜索框的口径）。
 pub(crate) const MIN_NEEDLE_LEN: usize = 2;
+/// 内容档最小词长：trigram 分词器下不足 **3** 字（一个 trigram）必然无命中。
+pub(crate) const MIN_FULLTEXT_LEN: usize = 3;
 
 /// 解析后的查询。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,9 +49,20 @@ pub(crate) struct Query {
 }
 
 impl Query {
-    /// 词长是否够发异步元数据搜索（本地源始终可搜）。
+    /// 本档最小词长（内容档比名称档高：trigram ≥ 3）。
+    pub(crate) fn min_len(&self) -> usize {
+        match self.mode {
+            Mode::FullText => MIN_FULLTEXT_LEN,
+            _ => MIN_NEEDLE_LEN,
+        }
+    }
+
+    /// 词长是否够发一次搜索（命令档不发；本地源始终可搜）。
     pub(crate) fn async_ready(&self) -> bool {
-        self.mode != Mode::Command && self.needle.chars().count() >= MIN_NEEDLE_LEN
+        if self.mode == Mode::Command {
+            return false;
+        }
+        self.needle.chars().count() >= self.min_len()
     }
 }
 
@@ -128,6 +143,10 @@ pub(crate) struct Row {
     pub title: String,
     /// 右侧次级信息（连接：驱动；命令：快捷键）。
     pub secondary: String,
+    /// 内容档的命中片段（含 `<mark>` 标记）；名称档为 `None`。
+    pub snippet: Option<String>,
+    /// 「为什么命中」标签（内容档才填：名称命中 / 内容命中——名称是名称档的默认，不标）。
+    pub why: Option<&'static str>,
     pub action: Action,
 }
 
@@ -152,6 +171,8 @@ pub(crate) fn command_rows() -> Vec<Row> {
             kind: RowKind::Command,
             title: label.to_string(),
             secondary: shortcut.to_string(),
+            snippet: None,
+            why: None,
             action,
         });
     };
@@ -186,8 +207,18 @@ pub(crate) fn build_groups(
         Mode::Command => non_empty("命令", filter_ranked(command_rows(), &q.needle), "")
             .into_iter()
             .collect(),
-        // Phase 1：`metadata_fts` 接线后填全文档命中（注释 / 类型 / 定义 + snippet）。
-        Mode::FullText => Vec::new(),
+        // Phase 1：内容档（FTS）——引擎侧已完成匹配与排序，这里**不再按标题过滤**：
+        // 否则「只在注释里命中」的行会被「标题不含该词」误杀。`why` 标签区分两者。
+        Mode::FullText => {
+            let note = if meta_searching && q.async_ready() {
+                "搜索中…"
+            } else {
+                ""
+            };
+            non_empty("元数据全文（注释 / 定义）", fulltext_rows(meta, &q.needle), note)
+                .into_iter()
+                .collect()
+        }
         Mode::Default => {
             let mut groups = Vec::new();
             let note = if meta_searching && q.async_ready() {
@@ -231,9 +262,61 @@ fn meta_rows(meta: &[MetaObject]) -> Vec<Row> {
             kind: m.kind,
             title: m.title.clone(),
             secondary: format!("{} · {}", m.request.conn_label, m.request.driver),
+            snippet: None,
+            why: None,
             action: Action::ShowProperties(Box::new(m.request.clone())),
         })
         .collect()
+}
+
+/// 内容档行：多带 snippet（含命中标记）与「为什么命中」标签。
+///
+/// 不按标题过滤：引擎已经把「注释 / 数据类型命中」的对象排好了，标题过滤会把它们错杀。
+fn fulltext_rows(meta: &[MetaObject], needle: &str) -> Vec<Row> {
+    let needle_lower = needle.to_lowercase();
+    meta.iter()
+        .map(|m| {
+            let matched_name = !needle_lower.is_empty()
+                && m.title.to_lowercase().contains(&needle_lower);
+            Row {
+                key: meta_key(&m.request),
+                kind: m.kind,
+                title: m.title.clone(),
+                secondary: format!("{} · {}", m.request.conn_label, m.request.driver),
+                snippet: m.snippet.clone(),
+                why: Some(if matched_name { "名称" } else { "内容" }),
+                action: Action::ShowProperties(Box::new(m.request.clone())),
+            }
+        })
+        .collect()
+}
+
+/// 把 FTS5 `snippet()` 的 `<mark>…</mark>` 标记切成「普通 / 命中」段（纯函数，可单测）。
+///
+/// 不闭会的标记退化为普通文本（引擎不该产出这种，但别让 UI panic）。
+pub(crate) fn markup_segments(markup: &str) -> Vec<(String, bool)> {
+    const OPEN: &str = "<mark>";
+    const CLOSE: &str = "</mark>";
+    let mut out = Vec::new();
+    let mut rest = markup;
+    loop {
+        let Some(start) = rest.find(OPEN) else {
+            if !rest.is_empty() {
+                out.push((rest.to_string(), false));
+            }
+            return out;
+        };
+        if start > 0 {
+            out.push((rest[..start].to_string(), false));
+        }
+        let after = &rest[start + OPEN.len()..];
+        let Some(end) = after.find(CLOSE) else {
+            out.push((after.to_string(), false));
+            return out;
+        };
+        out.push((after[..end].to_string(), true));
+        rest = &after[end + CLOSE.len()..];
+    }
 }
 
 /// 元数据行的业务键：连接 + 种类 + 父对象 + 名称（列有父表，不能用裸名）。
@@ -287,6 +370,7 @@ pub(crate) fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObj
         },
         title,
         kind,
+        snippet: hit.snippet.clone(),
     })
 }
 
@@ -300,6 +384,8 @@ fn connection_rows(connections: &[(String, String)]) -> Vec<Row> {
             kind: RowKind::Connection,
             title: name.clone(),
             secondary: driver.clone(),
+            snippet: None,
+            why: None,
             action: Action::SelectConnection(ix),
         })
         .collect()
@@ -422,15 +508,21 @@ mod tests {
     }
 
     #[test]
-    fn async_ready_requires_two_chars_and_non_command_mode() {
+    fn async_ready_threshold_depends_on_mode() {
+        // 名称档（默认）：≥ 2 字（中文按字符计数，不按字节）
         assert!(!parse("o").async_ready());
         assert!(parse("or").async_ready());
+        assert!(parse("订单").async_ready());
+        // 内容档（`#`）：trigram 下 ≥ 3 字（2 字不足一个 trigram，必无命中）
         assert!(!parse("#渠").async_ready());
-        assert!(parse("#渠道").async_ready());
+        assert!(!parse("#渠道").async_ready());
+        assert!(parse("#渠道与").async_ready());
+        // 命令档不发元数据搜索
         assert!(!parse(">新建").async_ready());
         assert!(!parse(">").async_ready());
-        // 中文按字符计数，不按字节
-        assert!(parse("订单").async_ready());
+        // 门槛自描述（UI 用它算“还差几个字”）
+        assert_eq!(parse("o").min_len(), 2);
+        assert_eq!(parse("#渠").min_len(), 3);
     }
 
     #[test]
@@ -455,6 +547,8 @@ mod tests {
                         kind: RowKind::Command,
                         title: (*t).to_string(),
                         secondary: String::new(),
+                        snippet: None,
+                        why: None,
                         action: Action::OpenSettings,
                     })
                     .collect(),
@@ -492,6 +586,7 @@ mod tests {
             parent_name: parent.map(|p| p.to_string()),
             catalog: Some("main".to_string()),
             schema: Some("public".to_string()),
+            snippet: None,
         }
     }
 
@@ -510,8 +605,8 @@ mod tests {
         assert_eq!(hit_conn[0].title, "连接");
         assert_eq!(hit_conn[0].rows[0].action, Action::SelectConnection(1));
 
-        // `#` 全文档：Phase 1 前恒为空（渲染走空态说明）
-        assert!(build_groups(&parse("#渠道"), &conns, &[], false).is_empty());
+        // `#` 内容档：没有回填命中时为空（空态由委托给说明文案）
+        assert!(build_groups(&parse("#渠道与"), &conns, &[], false).is_empty());
 
         // 无匹配：一个组都没有
         assert!(build_groups(&parse("zzzz"), &conns, &[], false).is_empty());
@@ -567,6 +662,50 @@ mod tests {
         // 单字符（未达门槛）→ 不发搜索，也不显示搜索中
         let short = build_groups(&parse("o"), &conns, &objects, true);
         assert!(short.iter().all(|g| g.note.is_empty()));
+    }
+
+    /// 内容档行：只在注释里命中的对象**不被标题过滤误杀**，并标「内容」/「名称」。
+    #[test]
+    fn fulltext_rows_keep_content_hits_and_tag_the_reason() {
+        let mut content_hit = hit("table", "orders", None);
+        content_hit.snippet = Some("…含<mark>渠道</mark>与优惠…".to_string());
+        let content = meta_object(&content_hit).expect("表命中");
+        let rows = build_groups(&parse("#含渠道"), &conns(), &[content], false);
+        assert_eq!(rows[0].title, "元数据全文（注释 / 定义）");
+        let row = &rows[0].rows[0];
+        assert_eq!(row.title, "public.orders");
+        assert!(
+            row.snippet.as_deref().unwrap_or_default().contains("<mark>"),
+            "snippet 要带命中标记（UI 靠它上色）"
+        );
+        assert_eq!(row.why, Some("内容"), "标题不含词 → 内容命中");
+
+        // 标题也含词 → 标「名称」
+        let mut name_hit = hit("table", "orders", None);
+        name_hit.snippet = Some("<mark>ord</mark>ers".to_string());
+        let name = meta_object(&name_hit).expect("表命中");
+        let rows = build_groups(&parse("#ord"), &conns(), &[name], false);
+        assert_eq!(rows[0].rows[0].why, Some("名称"));
+    }
+
+    #[test]
+    fn markup_segments_splits_highlight_marks() {
+        assert_eq!(
+            markup_segments("a<mark>渠道</mark>b"),
+            vec![
+                ("a".to_string(), false),
+                ("渠道".to_string(), true),
+                ("b".to_string(), false)
+            ]
+        );
+        assert_eq!(markup_segments("plain"), vec![("plain".to_string(), false)]);
+        assert_eq!(markup_segments("<mark>x</mark>"), vec![("x".to_string(), true)]);
+        assert!(markup_segments("").is_empty());
+        // 不闭会的标记退化为普通文本（不 panic）
+        assert_eq!(
+            markup_segments("a<mark>b"),
+            vec![("a".to_string(), false), ("b".to_string(), false)]
+        );
     }
 
     #[test]

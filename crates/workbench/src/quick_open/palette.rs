@@ -254,6 +254,11 @@ impl QuickOpenPalette {
             .project_root()
             .map(|p| p.to_string_lossy().to_string());
         let needle = query.needle.clone();
+        // 档位：`#` 走内容档（FTS，注释 / 数据类型），其余走名称档（中缀 LIKE）。
+        let kind = match query.mode {
+            model::Mode::FullText => database::nav_jobs::SearchKind::FullText,
+            _ => database::nav_jobs::SearchKind::Name,
+        };
         self.sent_query = Some(needle.clone());
         self.searching = true;
         let executor = cx.background_executor().clone();
@@ -266,6 +271,7 @@ impl QuickOpenPalette {
             let _ = weak.update(cx, |_this, _cx| {
                 database::nav_jobs::enqueue_search(
                     database::nav_jobs::SearchConsumer::QuickOpen,
+                    kind,
                     &needle,
                     project_root.as_deref(),
                     targets,
@@ -425,9 +431,10 @@ impl Render for QuickOpenPalette {
         let list = self.list.clone().expect("list lazy init");
         let query = model::parse(&input.read(cx).value());
         let rows = list.read(cx).delegate().row_count();
-        // 单字符门槛：元数据异步搜索至少 2 个字符（真正的闸在 `schedule_search`）。
+        // 词长达不到本档门槛：本地源照常，这里给还差几个字的提示。
         let hint_right = if !query.needle.is_empty() && !query.async_ready() {
-            "再输入 1 个字符开始搜索元数据".to_string()
+            let short = query.min_len().saturating_sub(query.needle.chars().count());
+            format!("再输入 {short} 个字符开始搜索元数据")
         } else if self.searching {
             "元数据搜索中…".to_string()
         } else {

@@ -38,6 +38,7 @@ fn ui_size_constants_match_design() {
         (QUICK_OPEN_LIST_MAX_HEIGHT, 340.0, "Quick Open 结果区最大高"),
         (QUICK_OPEN_GROUP_HEADER_HEIGHT, 18.0, "Quick Open 分组头高"),
         (QUICK_OPEN_HINT_HEIGHT, 24.0, "Quick Open 提示行高"),
+        (QUICK_OPEN_ROW_HEIGHT_FULLTEXT, 44.0, "Quick Open 内容档行高"),
         (ROW_HEIGHT, 24.0, "列表/树行高"),
         (TREE_INDENT, 14.0, "树缩进步长"),
         (PANEL_HEADER_HEIGHT, 36.0, "面板头高度"),

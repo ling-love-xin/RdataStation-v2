@@ -1,6 +1,6 @@
 # Quick Open · 开发方案（Phase 0–2）
 
-> 状态：**Phase 0 第一刀已落地（2026-09-18）**；第二刀（元数据名称档）待开工
+> 状态：**Phase 1 第一刀已落地（2026-09-19）**；第二刀（草稿箱文件源 / 命令注册）待开工
 > 关联：`quick-open-prototype-design.md`（原型设计 = 权威规格）、`quick-open-prototype.html`（交互稿）、`../layout/layout-design.md` §2.1/§3.3（入口承诺）
 > 技术栈：gpui-kit 0.6.1；组件只从组件库取（禁止手搓）；取色零裸 hex；结构尺寸只引用 `crates/workbench_shell/src/ui.rs`
 > 说明：本文件记录**做什么、做到哪**；「长什么样」看原型设计，「为什么这样设计」待 `quick-open-architecture.md`
@@ -16,11 +16,14 @@
 | P1.2 | 修复历史缺陷②：表原是 **contentless**（`content=''`）——实测 MATCH 能命中，但 `SELECT` 回来的 `search_type` / `object_name` **全为 NULL**（`Invalid column type Null at index: 0`），snippet 也无从生成 → 整条读路径其实不可用；迁移 011 改为**存内容 + trigram** | `crates/engine/migrations/connection_metadata/011_fts_content_and_trigram.sql` | ✅ |
 | P1.3 | 查询词清洗：`fts_match_query`（拆词 → 逐词加引号 → 末词前缀）；`"` `*` `(` `NEAR` `-` 全部按字面处理（实测不报错、不改变语义） | 同上 | ✅ |
 | P1.4 | 单测 3 项：写侧（分域 + 幂等 + 删 schema 不留孤儿）、读侧（对象身份 + `<mark>` snippet + 中文 ≥3 字命中 / 2 字无命中 + 操作符输入不报错）、查询词拆解 | 同上 | ✅ 全绿 |
-| 验证 | `cargo test -p rds-engine --lib -j 2` → **440 项全绿**（23 ignored 为存量）；`-p rds-database --lib` → **41 项全绿** | — | ✅ |
+| P1.5 | database 侧全文通道：`SearchKind{Name, FullText}`（与消费方并列的档位）+ `NavCache::search_fts` 包装（失败告警留痕）+ `SearchHit.snippet`；FTS 命中映射（**空串→None**、catalog 缺位） | `crates/database/src/{nav_jobs,cache}.rs`、`engine::persistence` 重导 `FtsSearchResult` | ✅ |
+| P1.6 | 浮层 `#` 档 UI：内容档**整档切两行高**（`List` 要求同行同高）、snippet 按 `<mark>` 切段上色（`markup_segments`）、「为什么命中」标签（名称 / 内容）、门槛提示按档自适应（名称 2 字 / 全文 3 字） | `quick_open/{model,delegate}.rs`、`workbench_shell/src/ui.rs`、`tests/ui_contract.rs` | ✅ |
+| P1.7 | 单测：数据库侧 FTS 映射 1 项；workbench 侧内容档行（不被标题过滤误杀 + 标签）/ `<mark>` 切段 / 档位感知门槛 | — | ✅ 全绿 |
+| 验证 | `cargo test -p rds-engine --lib -j 2` → **440 项全绿**；`-p rds-database --lib` → **42 项**；`-p rds-workbench --lib` → **106 项**；`--test ui_contract` → 7 项 | — | ✅ |
 
 **实测结论（已写进迁移与原型设计 §6.3）**：trigram 下中文**≥3 字**才命中（2 字不足一个 trigram）→ `#` 档门槛按 **3 字**；名称档继续走 `metadata_index`（LIKE 中缀，不受 3 字限制）；索引体积约为文本 3 倍量级。
 
-**本刀未完（下一步）**：database 侧全文搜索通道（复用消费方分槽 + `SearchHit.snippet`）+ 浮层 `#` 档 UI（snippet 行 + 「为什么命中」标签 + 3 字门槛提示）。
+**下一步（Phase 1 第二刀）**：草稿箱文件源（需扁平清单通道）、命令注册（跟 crate 登记）、截断提示与「还有 N 条」、`#` 档的最近使用/空态建议；另见原型设计 §18.2 的规模优化（前缀/中缀两段式、并发打开缓存上限、结果短时缓存）。
 
 ### 2026-09-18 — Phase 0 第三刀：浮层抽成独立视图实体 + 窗口测试
 

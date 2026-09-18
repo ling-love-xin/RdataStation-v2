@@ -1873,6 +1873,7 @@ impl NavView {
                 .map(|p| p.to_string_lossy().to_string());
             nav_jobs::enqueue_search(
                 nav_jobs::SearchConsumer::Navigator,
+                nav_jobs::SearchKind::Name,
                 &query,
                 root.as_deref(),
                 targets,
@@ -5255,6 +5256,7 @@ mod tests {
             parent_name: parent.map(str::to_string),
             catalog: Some("main".to_string()),
             schema: Some("public".to_string()),
+            snippet: None,
         };
 
         let table = nav_search_hit_property(&hit("table", "orders", None)).expect("表命中应可定位");

@@ -79,6 +79,10 @@ pub const QUICK_OPEN_HINT_HEIGHT: f32 = 1.5;
 pub const QUICK_OPEN_MAX_ROWS_PER_GROUP: usize = 8;
 /// Quick Open 总渲染上限（条）。
 pub const QUICK_OPEN_MAX_ROWS: usize = 50;
+/// Quick Open 内容档（`#`）的行高：两行式（标题行 + snippet 行；2.75rem = 44px）。
+///
+/// 高度按档切而不是按行：`List` 只量一个样本行并要求同行同高。
+pub const QUICK_OPEN_ROW_HEIGHT_FULLTEXT: f32 = 2.75;
 /// Quick Open 异步元数据搜索的防抖窗口（毫秒）。
 pub const QUICK_OPEN_SEARCH_DEBOUNCE_MS: u64 = 150;
 

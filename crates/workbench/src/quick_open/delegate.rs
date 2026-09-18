@@ -11,7 +11,7 @@ use gpui_kit::component::list::{ListDelegate, ListItem, ListState};
 use gpui_kit::component::{ActiveTheme, IndexPath, Theme};
 use gpui_kit::*;
 
-use crate::quick_open::model::{Action, Group, Mode, Row, match_span};
+use crate::quick_open::model::{Action, Group, Mode, Row, match_span, markup_segments};
 use crate::quick_open::palette::QuickOpenPalette;
 use crate::ui;
 
@@ -134,7 +134,11 @@ impl QuickOpenDelegate {
         self.groups.get(ix.section)?.rows.get(ix.row)
     }
 
-    /// 行元素：类型标签 + 主文本（命中高亮）+ 右侧次级信息。
+    /// 行元素：类型标签 + 标题（命中高亮）+ 「为什么命中」（内容档）+ 右侧归属；
+    /// 内容档多一行 snippet（含命中标记）。
+    ///
+    /// 高度按**档**取（不是按行）：`List` 只量一个样本行、要求同行同高；
+    /// 内容档全部行都带 snippet，整档切两行高。
     fn row_element(
         &self,
         row: &Row,
@@ -142,7 +146,65 @@ impl QuickOpenDelegate {
         pt: &settings::product_tokens::ProductTokens,
     ) -> ListItem {
         let muted = theme.colors.muted_foreground;
+        let two_line = self.mode == Mode::FullText;
+        let height = if two_line {
+            ui::QUICK_OPEN_ROW_HEIGHT_FULLTEXT
+        } else {
+            ui::ROW_HEIGHT
+        };
 
+        let mut first = div().h_flex().items_center().w_full().min_w_0().gap_2();
+        first = first.child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(muted)
+                .child(row.kind.label()),
+        );
+        first = first.child(self.title_element(row, theme, pt));
+        if let Some(why) = row.why {
+            first = first.child(
+                div()
+                    .flex_none()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .px_1()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(why),
+            );
+        }
+        first = first.child(
+            div()
+                .ml_auto()
+                .flex_none()
+                .text_xs()
+                .text_color(muted)
+                .child(row.secondary.clone()),
+        );
+
+        let mut content = div().v_flex().w_full().min_w_0().gap_1().child(first);
+        if two_line {
+            content = content.child(self.snippet_element(row, theme, pt, muted));
+        }
+
+        ListItem::new(SharedString::from(format!("qo-row-{}", row.key)))
+            .h(rems(height))
+            .py_0()
+            .px_2p5()
+            .gap_2()
+            .text_xs()
+            .child(content)
+    }
+
+    /// 标题（含命中高亮）。
+    fn title_element(
+        &self,
+        row: &Row,
+        theme: &Theme,
+        pt: &settings::product_tokens::ProductTokens,
+    ) -> Div {
         let mut title = div()
             .h_flex()
             .items_center()
@@ -164,37 +226,39 @@ impl QuickOpenDelegate {
             }
             _ => title = title.child(row.title.clone()),
         }
+        title
+    }
 
-        ListItem::new(SharedString::from(format!("qo-row-{}", row.key)))
-            .h(rems(ui::ROW_HEIGHT))
-            .py_0()
-            .px_2p5()
-            .gap_2()
+    /// 第二行：snippet（`<mark>` 切段上色；名称档没有这一行）。
+    fn snippet_element(
+        &self,
+        row: &Row,
+        theme: &Theme,
+        pt: &settings::product_tokens::ProductTokens,
+        muted: Hsla,
+    ) -> Div {
+        let mut line = div()
+            .h_flex()
+            .items_center()
+            .min_w_0()
+            .overflow_hidden()
             .text_xs()
-            .child(
-                div()
-                    .h_flex()
-                    .items_center()
-                    .w_full()
-                    .min_w_0()
-                    .gap_2()
-                    .child(
+            .text_color(muted);
+        if let Some(markup) = row.snippet.as_deref() {
+            for (text, hit) in markup_segments(markup) {
+                line = if hit {
+                    line.child(
                         div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(row.kind.label()),
+                            .rounded_sm()
+                            .bg(pt.search_match_background(theme))
+                            .child(text),
                     )
-                    .child(title)
-                    .child(
-                        div()
-                            .ml_auto()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(row.secondary.clone()),
-                    ),
-            )
+                } else {
+                    line.child(text)
+                };
+            }
+        }
+        line
     }
 }
 
