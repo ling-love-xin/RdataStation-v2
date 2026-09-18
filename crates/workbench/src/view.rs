@@ -145,6 +145,8 @@ impl WorkbenchView {
         crate::services::editor_sources::attach(&editor_service);
         // M8：把「洞察此列」端口接上（结果集列头右键 → 右 Dock 洞察面板；未接时不摆这一项）
         crate::services::editor_insight::attach(&editor_service, &shared);
+        // 项目锁：把项目态端口接上（项目只读时，写源库对象的语句在提交前就被拒）
+        crate::services::editor_project::attach(&editor_service, &shared);
         // M1：排序偏好与首屏项目列表（无项目时）都在构造期完成，避免在 `render` 里做 I/O
         //（GPUI-kit 编码指南：副作用不得放在 render）。偏好走 `SettingsService`（唯一读路径），
         // 不直读 `settings.json`：`app` 已在开窗前 `SettingsService::init`（K1）。

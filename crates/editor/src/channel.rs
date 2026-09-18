@@ -259,6 +259,24 @@ pub fn refresh_item_label(current: ExecChannel) -> Option<&'static str> {
     current.runs_locally().then_some("重新挂载源库（刷新表清单）")
 }
 
+/// 这条语句作用在**源库对象**上吗（写语句 / DDL）
+///
+/// 两道闸门共用这一个判据：通道闸（加速 / 联邦对源库是只读挂载）与**项目只读闸**
+/// （[`crate::project`]）——判据只写一处，改了就两边都改。
+///
+/// 用引擎的语句类型（`SqlEngine::parse_and_route`，Ansi 方言足够区分 DML/DDL）；
+/// **认不出类型就放行**——那是驱动该报的错，编辑器不越位。
+pub fn writes_source_object(sql: &str) -> bool {
+    let (kind, _) = SqlEngine::parse_and_route(sql, SqlDialect::Ansi);
+    matches!(
+        kind,
+        SqlStatementType::Insert
+            | SqlStatementType::Update
+            | SqlStatementType::Delete
+            | SqlStatementType::Ddl
+    )
+}
+
 /// 这条语句在指定通道上允许执行吗（不允许就给**可读原因**）
 ///
 /// 判定用引擎的语句类型（`SqlEngine::parse_and_route`，Ansi 方言足够区分 DML/DDL）：
@@ -268,21 +286,17 @@ pub fn statement_allowed(channel: ExecChannel, sql: &str) -> Result<(), String> 
     if channel.allows_source_writes() {
         return Ok(());
     }
-    let (kind, _) = SqlEngine::parse_and_route(sql, SqlDialect::Ansi);
-    match kind {
-        SqlStatementType::Insert
-        | SqlStatementType::Update
-        | SqlStatementType::Delete
-        | SqlStatementType::Ddl => Err(channel.write_refusal_reason()),
-        _ => Ok(()),
+    if writes_source_object(sql) {
+        return Err(channel.write_refusal_reason());
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         ChannelAvailability, ChannelAvailabilitySet, ExecChannel, menu_items, refresh_item_label,
-        stale_notice, statement_allowed, status_text,
+        stale_notice, statement_allowed, status_text, writes_source_object,
     };
 
     #[test]
@@ -307,6 +321,35 @@ mod tests {
         assert_eq!(ExecChannel::from_code("nonsense"), ExecChannel::Source);
         assert_eq!(ExecChannel::Accelerated.badge(), "加速");
         assert_eq!(ExecChannel::Federated.badge(), "联邦");
+    }
+
+    /// 写源库对象的判据（通道闸与项目只读闸共用；**认不出就放行**）
+    #[test]
+    fn source_object_writes_are_recognized_by_the_engine() {
+        for sql in [
+            "INSERT INTO t VALUES (1)",
+            "insert into t values (1)",
+            "UPDATE t SET a = 1",
+            "DELETE FROM t",
+            "CREATE TABLE t (n INT)",
+            "DROP TABLE t",
+            "ALTER TABLE t ADD COLUMN b INT",
+            "TRUNCATE TABLE t",
+            "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x",
+        ] {
+            assert!(writes_source_object(sql), "该认作写：{sql}");
+        }
+        for sql in [
+            "SELECT * FROM t",
+            "select 1",
+            "WITH x AS (SELECT 1 AS n) SELECT n FROM x",
+            "SELECT * FROM t WHERE a = 'delete'",
+            "EXPLAIN SELECT 1",
+            // 认不出的类型放行（那是驱动该报的错，编辑器不越位）
+            "SOME FUTURE STATEMENT",
+        ] {
+            assert!(!writes_source_object(sql), "不该认作写：{sql}");
+        }
     }
 
     #[test]

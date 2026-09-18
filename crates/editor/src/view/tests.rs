@@ -29,6 +29,7 @@ use crate::execution::{self, QueryData, QueryRunner};
 use crate::export::{self, ExportFormat, ExportScope};
 use crate::mode::CellGranularity;
 use crate::model::{DocumentId, EditorMode};
+use crate::project::{ProjectPort, ProjectState};
 use crate::service::OpenRequest;
 use crate::shared::EditorShared;
 use crate::view::host::{
@@ -4601,6 +4602,82 @@ fn the_snapshot_channel_refuses_source_writes_with_a_reason(cx: &mut TestAppCont
     // 读语句照跑（加速档就是用来跑分析的）
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
     assert_eq!(seen.lock().expect("锁").len(), 1);
+}
+
+/// 项目只读端口（测试用：固定值——锁是宿主的真值，端口只负责递过来）
+struct FakeProject {
+    read_only: bool,
+}
+
+impl ProjectPort for FakeProject {
+    fn state(&self) -> ProjectState {
+        ProjectState {
+            read_only: self.read_only,
+        }
+    }
+}
+
+/// 项目为只读模式：写语句在提交前就被拒（不打扰执行器），读语句照跑；状态栏说「连接只读」
+#[gpui_kit::test]
+fn a_read_only_project_refuses_writes_but_not_reads(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, seen, _seen_conn) = shared_with_runner("update t set a = 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_channels(Rc::new(FakeChannels::open()));
+    // 项目锁（标题栏那个）：写源库对象的语句一律拒
+    shared.attach_project(Rc::new(FakeProject { read_only: true }));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    let submitted = cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.execute(
+                execution::ExecTarget::Statement("update t set a = 1".to_string()),
+                execution::ResultPlacement::Replace,
+                cx,
+            )
+        })
+    });
+    assert!(!submitted, "项目只读时写语句不该被提交");
+    assert!(
+        seen.lock().expect("锁").is_empty(),
+        "被拒的语句不许打扰执行器（更不能跑一半）"
+    );
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留原因");
+    assert!(message.contains("项目为只读模式"), "{message}");
+
+    // 状态栏：项目锁落在「连接只读」那一维；「编辑器只读」那一维不受影响（两维互不蕴含）
+    let flags = cx.update(|_window, cx| panel.read(cx).read_only_flags());
+    assert!(flags.connection, "项目锁 = 连接只读维度");
+    assert!(!flags.editor, "项目锁不影响能不能改文本");
+
+    // 读语句照跑：项目只读不是“不能分析”，只是“不能改数据”
+    run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
+    assert_eq!(seen.lock().expect("锁").len(), 1, "SELECT 该发出去");
+}
+
+/// 没接项目端口（宿主不关心项目态）：不拦——与 1b 之前的行为一致，不假装锁着
+#[gpui_kit::test]
+fn without_the_project_port_writes_are_not_blocked(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, seen, _seen_conn) = shared_with_runner("update t set a = 1;", EditorMode::Sql);
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "update t set a = 1",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(
+        seen.lock().expect("锁").len(),
+        1,
+        "未接端口 = 不拦（与现状一致）"
+    );
+    let flags = cx.update(|_window, cx| panel.read(cx).read_only_flags());
+    assert!(!flags.connection, "没锁就不该说“连接只读”");
 }
 
 /// 【B13】通道不可用时就算被程序叫到也不切（菜单置灰之外的**第二道闸**）

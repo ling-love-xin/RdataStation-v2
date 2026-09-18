@@ -20,6 +20,7 @@ use crate::channel::{ChannelAvailabilitySet, ChannelsHandle};
 use crate::sources::SourcesHandle;
 use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_text};
 use crate::execution::{ExecQueue, QueryRunner};
+use crate::project::{ProjectHandle, ProjectState};
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
 use crate::session::{SavedSession, SessionStore};
 use crate::store::ResultStore;
@@ -96,6 +97,8 @@ pub struct EditorShared {
     channels: Rc<RefCell<Option<ChannelsHandle>>>,
     /// 【B13/T1.6】源清单端口：宿主注入后才有（无宿主 = 「源清单 ▾」没有内容）
     sources: Rc<RefCell<Option<SourcesHandle>>>,
+    /// 项目态端口：宿主注入后才有（无宿主 = 不读只；项目锁是宿主的事实）
+    project: Rc<RefCell<Option<ProjectHandle>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
 }
@@ -119,6 +122,7 @@ impl EditorShared {
             connections: Rc::new(RefCell::new(None)),
             channels: Rc::new(RefCell::new(None)),
             sources: Rc::new(RefCell::new(None)),
+            project: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -455,5 +459,24 @@ impl EditorShared {
     pub fn sources_snapshot(&self, conn_id: &str) -> Option<crate::sources::SourcesSnapshot> {
         let guard = self.sources.borrow();
         guard.as_ref()?.snapshot(conn_id)
+    }
+
+    /// 注入项目态端口（**宿主调用一次**：workbench 读项目锁）
+    pub fn attach_project(&self, port: ProjectHandle) {
+        *self.project.borrow_mut() = Some(port);
+    }
+
+    /// 项目态（**渲染路径可调**：实现必须是内存读；未接端口 = 不读只）
+    pub fn project_state(&self) -> ProjectState {
+        let guard = self.project.borrow();
+        match guard.as_ref() {
+            Some(port) => port.state(),
+            None => ProjectState::default(),
+        }
+    }
+
+    /// 项目现在是不是只读（闸门用的就是它）
+    pub fn project_read_only(&self) -> bool {
+        self.project_state().read_only
     }
 }

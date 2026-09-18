@@ -515,6 +515,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | `.rdsnote` 读写 | `crates/editor/src/persist.rs`（第二期接入项目版本链） |
 | 宿主装配（中央区 / 对话框层 / 属性面板） | `crates/workbench/src/view.rs`（`init_workspace` 中央区改装配 editor 宿主）+ `components/project_host.rs`（桥不变） |
 | Action 与快捷键 | `crates/editor/src/commands.rs` + `crates/app/src/main.rs`（`bind_keys`，key_context `editor` / `editor-sql` / `editor-notebook`） |
+| 项目只读闸（强只读那一档） | `crates/editor/src/project.rs`（端口）+ `view/host.rs::project_write_check` + `crates/workbench/src/services/editor_project.rs`（宿主实现，✅ 2026-09-18） |
 | 尺寸常量 | `crates/editor/src/ui.rs`（现状自持；`crates/workbench_shell/src/ui.rs` 已可被任何特性 crate 依赖，合并仍开放——见 §13 #6） |
 
 ---
@@ -568,7 +569,8 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | 6 | 编辑器独立 crate | 独立 `crates/editor` / 先留在 workbench | **独立**（§3.2 判定四条成立） | Phase 0 结构 |
 | 7 | 大文件分块加载 | 纳入 1a / 推到 1b 后 | 推到 1b 后 | 1a 范围 |
 | 8 | 面包屑 | 保留（V1 有） / 去掉 | **去掉**，路径进状态栏 | 1a UI |
-| 9 | 只读拦截强度 | 写语句一律拒绝 / 可确认放行 | **默认确认放行，强只读模式拒绝**（两档可在连接策略里选） | 1b 语义 |
+| 9 | 🟡→✅ | 只读拦截强度 | 写语句一律拒绝 / 可确认放行 | **默认确认放行，强只读模式拒绝**（两档可在连接策略里选） | 1b 语义 |
+| 9b | ✅ | **落地的那一档（2026-09-18）**：**项目锁 = 强只读** → `INSERT` / `UPDATE` / `DELETE` / DDL 在提交前就被拒（`ProjectPort` + `view/host.rs::project_write_check`，判据与通道闸共用 `channel::writes_source_object`），读语句照跑；“提醒后放行”那档随连接策略（B1 余项）一起做 | `editor/src/project.rs` + `workbench/src/services/editor_project.rs` | 单测 346 / 96（✅） |
 | 10 | 崩溃恢复默认行为 | 自动恢复 / 询问后恢复 | **询问后恢复**（V1 有横幅的传统） | 1b 收尾 |
 | 11 | 加速 / 联邦通道遇写语句 | 直接拒绝 / 允许但仅落本地副本 | **直接拒绝源库写**（INSERT / UPDATE / DELETE / 作用源表的 DDL）+ 提示切回源库；**允许本地临时对象**（`CREATE TEMP TABLE` / 临时视图 = 会话变量，不落源库） | 1b 语义、结果徽标与历史标记 |
 | 12 | 执行通道默认值 | 总是源库 / 记忆上次 | **记忆上次**（随文档绑定持久化） | 1b 持久化字段 |

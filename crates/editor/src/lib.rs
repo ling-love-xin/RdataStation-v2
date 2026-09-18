@@ -65,11 +65,12 @@
 //!   转译的**源方言只从连接来**（未绑定就不猜，面板拒绝并说明）。两者都走引擎的
 //!   “切分 → 逐条改写 → 原位回填”骨架（`engine::sql::script`）
 //!   ——转译尤其需要：sqlglot 的整篇 `transpile` 对脚本会**静默丢语句**（架构 §12 #19）
-//! - ⬜ 1b 待做：`completion`（B9）· 执行计划（B10 切片三）· 结果区分栏可拖拽（B5）·
-//!   结果工具栏与标签的通道徽标 / 血缘摘要（B5，依赖 B13/B14/B15）· 导出（B7：CSV / JSON / INSERT 已做，
-//!   Parquet / XLSX 待 DuckDB 扩展）
-//!   · 绑定随会话持久化（B1 余项）· 执行位置三通道（B13）
-//!   · **项目只读模式对执行的拦截**（旧路径有，1b 删除时有遗失，需在新执行入口补回）
+//! - ✅ 项目只读对执行的拦截（旧路径在 B12 遗失，已补回）：宿主注入 `ProjectPort`
+//!   （项目锁），写源库对象的语句在**提交前**被拒、原因可读；读语句照跑，判据与通道闸同一份
+//!   （`channel::writes_source_object`）
+//! - ⬜ 1b 待做：`completion`（B9）· B15 DuckDB 分析入口 · 结果区分栏可拖拽（B5）·
+//!   标签的血缘摘要（B5 余项，通道徽标已有）· 导出 Parquet / XLSX（B7 切片二，待 DuckDB 扩展）
+//!   · 绑定随会话持久化（B1 余项）· 值预览弹层（B14 余项）
 //!   · 事务内的语句暂不可取消 / 无超时（驱动 `Transaction` trait 没有取消入口）
 //! - ⬜ 1c：`session` / `notebook`（Cell / Output / Session）
 //!
@@ -90,6 +91,7 @@ pub mod limits;
 pub mod mode;
 pub mod model;
 pub mod persist;
+pub mod project;
 pub mod service;
 pub mod session;
 pub mod shared;

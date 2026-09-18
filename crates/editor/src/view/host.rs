@@ -32,7 +32,7 @@ use crate::export::{self, ExportFormat, ExportScope};
 use crate::format;
 use crate::translate;
 use crate::mode::{self, CellGranularity};
-use crate::model::{DocumentId, EditorMode};
+use crate::model::{DocumentId, EditorMode, ReadOnly};
 use crate::persist;
 use crate::service::Document;
 use crate::shared::{EditorShared, InsightColumnRequest};
@@ -1070,6 +1070,38 @@ impl EditorHostPanel {
         Ok(())
     }
 
+    /// 项目只读闸（原型 §1.4 的“连接只读”维度）：写源库对象的语句一律拒
+    ///
+    /// 与通道闸**互不替代**：通道闸管“在哪儿跑”（本地两档对源库是只读挂载，永远不能写），
+    /// 这里管“项目锁着的时候能不能写库”（解锁后就能写）。读语句一律不受影响。
+    ///
+    /// **强度**：项目锁（另一实例占用 / 归档项目）就属架构 §13 #9 里的“**强只读**”那一档 →
+    /// 直接拒；连接策略里的“提醒后放行”那档随连接策略（B1 余项）一起做，现在不假装有。
+    /// 判据与通道闸同一份（[`channel::writes_source_object`]）：宁可多拒一句，不能放过去真写。
+    pub(crate) fn project_write_check(&self, target: &ExecTarget) -> Result<(), String> {
+        if !self.shared.project_read_only() {
+            return Ok(());
+        }
+        for sql in target.statements() {
+            if channel::writes_source_object(&sql) {
+                return Err("项目为只读模式：写语句被拒（要改数据先解锁项目）".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    /// 状态栏用的只读两维度：文档自身的那一维 + **项目锁**（连接只读那一维的真值）
+    ///
+    /// 合成在这里而不写回文档：项目锁是窗口级状态，写进 `Document` 会留下“解锁了但文档还
+    /// 写着只读”的陈旧值。
+    pub(crate) fn read_only_flags(&self) -> ReadOnly {
+        let document = self.with_document(|doc| doc.read_only()).unwrap_or_default();
+        ReadOnly {
+            editor: document.editor,
+            connection: document.connection || self.shared.project_read_only(),
+        }
+    }
+
     /// 【B13】通道现在能不能执行（不可用就给可读原因）
     fn channel_ready(&self) -> Result<(), String> {
         let channel = self.channel();
@@ -1623,6 +1655,11 @@ impl EditorHostPanel {
         // “本地副本只读”这种事等驱动报一个谁也不懂的错）
         if let Err(reason) = self.channel_ready().and_then(|()| self.channel_write_check(&target))
         {
+            self.set_message(Some(reason), cx);
+            return false;
+        }
+        // 项目只读（标题栏的锁）：写语句同样在**提交之前**拒（旧 SQL 面板有这道闸，B12 遗失）
+        if let Err(reason) = self.project_write_check(&target) {
             self.set_message(Some(reason), cx);
             return false;
         }
@@ -3204,9 +3241,7 @@ impl Render for EditorHostPanel {
         let status = StatusInputs {
             mode: self.with_document(|doc| doc.mode()).unwrap_or(EditorMode::Text),
             dirty: self.is_dirty(),
-            read_only: self
-                .with_document(|doc| doc.read_only())
-                .unwrap_or_default(),
+            read_only: self.read_only_flags(),
             statements: self.statements,
             line,
             column,
