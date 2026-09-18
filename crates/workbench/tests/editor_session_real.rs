@@ -226,3 +226,91 @@ fn a_saved_document_produces_a_session_keyed_by_its_path(cx: &mut TestAppContext
 
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// 【B1 余项】连接绑定跟会话一起跨重启：真 SQLite 写进 `editor_contexts.connection_id` 再读回来
+///
+/// 这里**不接连接端口**，走的正是“未接端口不校验也不丢”那一条（校验分支由 editor 的
+/// 窗口用例带假端口覆盖）：真库往返 + 恢复时写回文档，两件事都在本用例里。
+#[gpui_kit::test]
+fn the_connection_binding_survives_a_restart(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (dir, store) = temp_store("binding");
+    let store = Rc::new(WorkbenchSessionStore::over(store));
+
+    // ===== 第一次运行：打开 → 绑定连接 → 关（落会话）=====
+    let first = EditorShared::new();
+    first.attach_session_store(store.clone());
+    let path = dir.join("bind.sql");
+    std::fs::write(&path, "select 1;").expect("写盘");
+    let document = first
+        .open(OpenRequest::file(&path, "select 1;", EditorMode::Sql))
+        .id()
+        .clone();
+    first.update(|service| service.set_connection(&document, Some("P_orders".to_string())));
+
+    let (harness, cx) = {
+        let first = first.clone();
+        let document = document.clone();
+        cx.add_window_view(move |window, cx| {
+            let (area, _skin) = DockSkin::dock_area("editor-session", Some(1), window, cx);
+            let panel = cx.new(|cx| EditorHostPanel::new(first.clone(), document, window, cx));
+            let handle = panel.clone();
+            area.update(cx, |area, cx| {
+                area.add_panel(handle, DockPlacement::Center, None, window, cx);
+            });
+            Harness {
+                area,
+                panels: vec![panel],
+            }
+        })
+    };
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let (area, panel) = cx.update(|_window, cx| {
+        (
+            harness.read(cx).area.clone(),
+            harness.read(cx).panels[0].clone(),
+        )
+    });
+    assert!(
+        cx.update(|window, cx| close_document_in_dock(&area, panel, window, cx)),
+        "干净文档应当被关掉（关闭时落会话）"
+    );
+
+    // ===== 第二次运行：读会话 → 绑定回来 =====
+    let second = EditorShared::new();
+    second.attach_session_store(store.clone());
+    let session = second
+        .load_latest_session()
+        .expect("读会话")
+        .expect("应当有可恢复的会话");
+    assert_eq!(
+        session.connection.as_deref(),
+        Some("P_orders"),
+        "绑定要跨重启保留（不然用户以为还连着原来那个库）"
+    );
+
+    let reopened = second
+        .open(OpenRequest::file(
+            std::path::PathBuf::from(session.path.clone().expect("有路径")),
+            session.content.clone(),
+            session.mode,
+        ))
+        .id()
+        .clone();
+    let (panel2, cx) = {
+        let second = second.clone();
+        let reopened = reopened.clone();
+        cx.add_window_view(move |window, cx| EditorHostPanel::new(second, reopened, window, cx))
+    };
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        panel2.update(cx, |panel, cx| panel.restore_session(&session, window, cx));
+    });
+    assert_eq!(
+        second.service().connection_for(&reopened).as_deref(),
+        Some("P_orders"),
+        "恢复会话时绑定要真的写回文档"
+    );
+
+    let _ = std::fs::remove_dir_all(dir);
+}

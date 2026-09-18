@@ -1123,6 +1123,7 @@ fn cell_text(value: &Value) -> String {
     value.to_string()
 }
 
+#[cfg(test)]
 mod analysis_tests {
     // 安全模式：**不通配导入**
     use super::EngineQueryRunner;
@@ -1174,6 +1175,7 @@ mod analysis_tests {
     }
 }
 
+#[cfg(test)]
 mod export_tests {
     // 安全模式：**不通配导入**
     use super::EngineQueryRunner;

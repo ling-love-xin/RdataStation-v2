@@ -56,8 +56,8 @@ impl WorkbenchSessionStore {
     fn to_context(session: &SavedSession) -> EditorContext {
         EditorContext {
             id: session.id.clone(),
-            // 1a 还没有连接绑定（架构 §12 #26）：先留空，1b 接连接绑定后写真实 conn_id
-            connection_id: String::new(),
+            // 【B1】连接绑定：`None`（跟随当前连接）在库里就是空串
+            connection_id: session.connection.clone().unwrap_or_default(),
             mode: session.mode.as_key().to_string(),
             // 【B13】通道是文档属性（源库 / 加速 / 联邦）：存短码，重启后认回来
             channel: session.channel.code().to_string(),
@@ -77,6 +77,8 @@ impl WorkbenchSessionStore {
             mode: EditorMode::from_key(&context.mode),
             // 认不出的通道码回源库档（`from_code` 的零值语义）：不假装记住了别的
             channel: editor::channel::ExecChannel::from_code(&context.channel),
+            // 空串 = 没绑（跟随当前连接）；绑定的 id 原样回来（校验在恢复那一侧做）
+            connection: (!context.connection_id.is_empty()).then_some(context.connection_id),
             content: context.content,
             cursor: context.cursor_position,
             selection: match (context.selection_start, context.selection_end) {
@@ -132,10 +134,32 @@ mod tests {
             path: Some("D:/sql/A.sql".to_string()),
             mode: EditorMode::Analysis,
             channel: ExecChannel::Source,
+            connection: None,
             content: "select 1;".to_string(),
             cursor: 7,
             selection: Some((1, 3)),
         }
+    }
+
+    /// 【B1】连接绑定存在 `connection_id` 列上（空串 = 没绑）；两种情形都要能往返
+    #[test]
+    fn the_connection_binding_travels_through_the_row() {
+        let mut bound = session();
+        bound.connection = Some("P_orders".to_string());
+        let row = WorkbenchSessionStore::to_context(&bound);
+        assert_eq!(row.connection_id, "P_orders");
+        assert_eq!(
+            WorkbenchSessionStore::to_session(row).connection.as_deref(),
+            Some("P_orders")
+        );
+
+        let row = WorkbenchSessionStore::to_context(&session());
+        assert_eq!(row.connection_id, "", "没绑就是空串（列是 NOT NULL）");
+        assert_eq!(
+            WorkbenchSessionStore::to_session(row).connection,
+            None,
+            "空串回来是“跟随当前连接”，不是一条空 id 的绑定"
+        );
     }
 
     #[test]

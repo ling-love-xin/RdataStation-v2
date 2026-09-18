@@ -467,9 +467,9 @@ impl EditorHostPanel {
     ///
     /// 未命名文档没有稳定标识，返回 `None`（不存——重启后无法把它认回来）。
     pub fn session_snapshot(&self, cx: &App) -> Option<crate::session::SavedSession> {
-        let (path, mode, channel) = self.with_document(|doc| {
+        let (path, mode, channel, connection) = self.with_document(|doc| {
             let path = doc.path()?.to_string_lossy().into_owned();
-            Some((path, doc.mode(), doc.channel()))
+            Some((path, doc.mode(), doc.channel(), doc.connection().map(str::to_string)))
         })??;
         let id = crate::session::session_id_for_path(std::path::Path::new(&path));
 
@@ -485,6 +485,7 @@ impl EditorHostPanel {
             path: Some(path),
             mode,
             channel,
+            connection,
             content: self.editor_text(cx),
             cursor,
             selection,
@@ -530,7 +531,44 @@ impl EditorHostPanel {
         // 【B13】通道也随会话回来；**已失效就回退源库并说清原因**（原型 §5.7：绑定过但
         // 现已失效——比如之后再打开时那个连接没开本地加速——不能静静地接着用它）
         self.restore_channel(session.channel, cx);
+        // 【B1】连接绑定同理：那条连接可能已经被删了 / 不在当前项目
+        self.restore_connection(session.connection.as_deref(), cx);
         cx.notify();
+    }
+
+    /// 【B1 余项】把会话里的**连接绑定**写回文档
+    ///
+    /// 判据用宿主给的连接列表快照：列表里没有 = 连接被删 / 换了项目 → **回退到「跟随当前连接」
+    /// 并把原因说出来**（留一个指向不存在连接的绑定，会让用户执行时才发现发错了地方）。
+    /// 端口未接 = **不校验也不丢**（测试与嵌入场景；宁可不猜也不把用户的绑定抹掉）。
+    /// 不主动建连：启动恢复不该拨号，执行时由执行器按绑定去建/去用。
+    fn restore_connection(&mut self, connection: Option<&str>, cx: &mut Context<Self>) {
+        let Some(conn_id) = connection else {
+            return;
+        };
+        if !self.shared.has_connections() {
+            self.shared.update(|service| {
+                service.set_connection(&self.document, Some(conn_id.to_string()))
+            });
+            return;
+        }
+        if self
+            .shared
+            .connection_options()
+            .iter()
+            .any(|option| option.id == conn_id)
+        {
+            self.shared.update(|service| {
+                service.set_connection(&self.document, Some(conn_id.to_string()))
+            });
+            return;
+        }
+        self.set_message(
+            Some(format!(
+                "连接 {conn_id} 不在当前连接列表：已回退到「跟随当前连接」"
+            )),
+            cx,
+        );
     }
 
     /// 【B13】把会话里的通道写回文档（不可用 → 留源库档 + 状态栏给原因）

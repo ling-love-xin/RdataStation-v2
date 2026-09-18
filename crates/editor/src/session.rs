@@ -31,6 +31,12 @@ pub struct SavedSession {
     pub mode: EditorMode,
     /// 【B13】执行通道（文档级属性，与模式同类：重启后不能丢）
     pub channel: ExecChannel,
+    /// 【B1】绑定的连接 id（`None` = 跟随当前连接）
+    ///
+    /// 与模式 / 通道同类：它是**这份文档发到哪**的答案，重启后不能默默变成“跟随当前连接”——
+    /// 那会让用户以为还在往原来那个库写。恢复时**要校验它还在不在列表里**（不在就回退并说原因，
+    /// 见 `view/host.rs::restore_connection`）。
+    pub connection: Option<String>,
     pub content: String,
     /// 光标（字节偏移）
     pub cursor: usize,
@@ -133,6 +139,7 @@ mod tests {
             path: Some(id.to_string()),
             mode,
             channel: ExecChannel::default(),
+            connection: None,
             content: content.to_string(),
             cursor: 7,
             selection: Some((1, 3)),
@@ -152,6 +159,25 @@ mod tests {
         assert_eq!(loaded.cursor, 7);
         assert_eq!(loaded.selection, Some((1, 3)));
         assert_eq!(store.len(), 1);
+    }
+
+    /// 【B1】连接绑定也是文档属性：与模式 / 通道一样得跟着会话回来
+    #[test]
+    fn the_connection_binding_rides_along_with_the_session() {
+        let store = MemorySessionStore::new();
+        let mut with_connection = session("d:/sql/b.sql", "select 1;", EditorMode::Sql);
+        with_connection.connection = Some("P_orders".to_string());
+        store.save(&with_connection).expect("save");
+
+        let loaded = store.load("d:/sql/b.sql").expect("load").expect("有");
+        assert_eq!(loaded.connection.as_deref(), Some("P_orders"));
+
+        // 未绑定（跟随当前连接）也要能原样存回来：`None` 不等同于“忘记存了”
+        store
+            .save(&session("d:/sql/c.sql", "select 2;", EditorMode::Sql))
+            .expect("save");
+        let unbound = store.load("d:/sql/c.sql").expect("load").expect("有");
+        assert_eq!(unbound.connection, None);
     }
 
     /// 【B13】通道是文档属性，与模式一样得跟着会话回来（否则重启都回源库档）

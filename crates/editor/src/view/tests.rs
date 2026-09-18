@@ -4765,6 +4765,7 @@ fn the_channel_comes_back_with_the_session_or_falls_back_with_a_reason(cx: &mut 
         path: Some("D:/sql/a.sql".to_string()),
         mode: EditorMode::Sql,
         channel: ExecChannel::Accelerated,
+        connection: None,
         content: "select 1;".to_string(),
         cursor: 0,
         selection: None,
@@ -4829,6 +4830,102 @@ fn the_session_snapshot_carries_the_channel(cx: &mut TestAppContext) {
         .expect("有路径就该存会话");
     assert_eq!(snapshot.channel, ExecChannel::Accelerated);
     assert_eq!(snapshot.channel.code(), "accelerated");
+}
+
+/// 【B1 余项】连接绑定随会话回来：还在列表里就恢复；**不在就回退并说原因**
+#[gpui_kit::test]
+fn the_connection_binding_comes_back_with_the_session(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+
+    let session = |connection: Option<&str>| crate::session::SavedSession {
+        id: "d:/sql/a.sql".to_string(),
+        path: Some("D:/sql/a.sql".to_string()),
+        mode: EditorMode::Sql,
+        channel: ExecChannel::Source,
+        connection: connection.map(str::to_string),
+        content: "select 1;".to_string(),
+        cursor: 0,
+        selection: None,
+    };
+
+    // ① 连接还在列表里 → 绑定真的写回文档
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.restore_session(&session(Some("P_orders")), window, cx)
+        });
+    });
+    assert_eq!(
+        shared.service().connection_for(&id).as_deref(),
+        Some("P_orders"),
+        "重启后应该还连着原来那条连接（而不是默默变成“跟随当前连接”）"
+    );
+
+    // ② 连接已被删 / 不在当前项目 → 回退未绑定 + 可读原因
+    let (shared2, id2, _seen2, _seen_conn2) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared2.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    let (panel2, cx) = open_panel(cx, &shared2, &id2);
+    cx.update(|window, cx| {
+        panel2.update(cx, |panel, cx| {
+            panel.restore_session(&session(Some("P_gone")), window, cx)
+        });
+    });
+    assert_eq!(
+        shared2.service().connection_for(&id2),
+        None,
+        "不存在的绑定不能留着（否则执行时才发现发错了地方）"
+    );
+    let message = cx
+        .update(|_window, cx| panel2.read(cx).message.clone())
+        .expect("回退要留痕");
+    assert!(message.contains("P_gone"), "{message}");
+    assert!(message.contains("跟随当前连接"), "{message}");
+
+    // ③ 没接连接端口（测试与嵌入场景）→ **不校验也不丢**（宁可不猜，也不抹掉用户的绑定）
+    let (shared3, id3, _seen3, _seen_conn3) = shared_with_runner("select 1;", EditorMode::Sql);
+    let (panel3, cx) = open_panel(cx, &shared3, &id3);
+    cx.update(|window, cx| {
+        panel3.update(cx, |panel, cx| {
+            panel.restore_session(&session(Some("P_orders")), window, cx)
+        });
+    });
+    assert_eq!(
+        shared3.service().connection_for(&id3).as_deref(),
+        Some("P_orders")
+    );
+}
+
+/// 【B1 余项】会话快照要带上连接绑定（存进 `editor_contexts.connection_id`）
+#[gpui_kit::test]
+fn the_session_snapshot_carries_the_connection_binding(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id) = shared_with_document("D:/sql/bind.sql", "select 1;");
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 没绑就是 None（“跟随当前连接”也是一个**真值**，不能被当成“忘了存”）
+    let snapshot = cx
+        .update(|_window, cx| panel.read(cx).session_snapshot(cx))
+        .expect("有路径就该存会话");
+    assert_eq!(snapshot.connection, None);
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.bind_connection(Some("P_orders".to_string()), cx)
+        })
+    });
+    let snapshot = cx
+        .update(|_window, cx| panel.read(cx).session_snapshot(cx))
+        .expect("有路径就该存会话");
+    assert_eq!(snapshot.connection.as_deref(), Some("P_orders"));
 }
 
 /// 写语句 / 失败没有网格：导出要回绝得可读（不能抓一个空网格去写文件）
