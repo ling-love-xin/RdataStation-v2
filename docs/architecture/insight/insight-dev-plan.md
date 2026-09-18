@@ -23,6 +23,18 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — 6.1 `SUMMARIZE` 交叉校验 + `RenderHint` 处置（定案：保留并登记）
+
+**背景**：施工单剩下的两项。#6.1 是「让画像里的数字可被外部实现校验」；`RenderHint`（原 §10 #8）是「预留字段零消费」要拍板。
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **229 项** · `column_profile_e2e` **14 项**（本批 +1）· `rds-engine --lib` **428 项** · `rds-workbench --lib` **94 项** · `cargo check --workspace --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 6.1 交叉校验 | 新增用例 `stats_agree_with_duckdb_summarize`：同一张表分别过**我们的规则管道**与 DuckDB 内置 `SUMMARIZE`，逐项对表（类型 / 总行数 / 空值率 / 极值 / 均值 / 标准差） | `crates/insight/tests/column_profile_e2e.rs` |
+| 实测得到的两条口径（写进用例注释） | ① `SUMMARIZE.count` 是**总行数**而非非空计数；② `approx_unique` 是 HLL **近似**，小表上会偏（本用例精确 18 → 报 20）→ 唯一值改用 DuckDB 的**精确** `COUNT(DISTINCT)` 对表，近似列只做**量级**参照 | 同上 |
+| `RenderHint`（原 §10 #8） | **决定：保留 + 登记为「解析后无人消费」**，不删。理由：规则 schema 是 `deny_unknown_fields`，删字段会让**已有带 `[render]` 的用户规则整体加载失败**（静默消失，比多一个不生效字段贵得多）；留着只需在**写规则的人能看到的地方**说清它不生效——手册 §4.2 已加说明（含“不要靠它排序”）。若将来明确不做图表，再删并**同时**加迁移（把 `[render]` 当可忽略段，而不是解析失败） | `insight-user-guide.md` §4.2 + 架构 K18 |
+
 ### 2026-09-18 — 收口（二）：结构洞察入口接线 + 源取样取数根因修复（真机四库验证）
 
 **背景**：施工单 §10 #5（导航右键「结构洞察」→ `InsightTarget::Schema`）。做真机验证时先撞上一个**静默失败**：洞察侧取数照 v1 的 JSON 形态读引擎结果（`json["batches"][0]["rows"]`），而 v2 的 `QueryResult` 契约序列化**不含 `batches`**（只输出 `columns` / `rows` / …），native 驱动却只填 `batches`、`rows` 恒空 —— 于是「取数」恒得「有列名、零行」。受影响的不只是结构洞察：**源取样**（导航树 / 存档 / 草稿箱「查看统计」、结构报告下钻）全走同一处，此前会报「取样没有拿到列」。
@@ -972,12 +984,11 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 | 4 | 表级 / Schema 报告快照（K6） | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | **接**（需产品点头：表级快照的比对语义与列级不同——行数、列清单都在变） | 中（store 方法已有，缺面板保存入口 + 历史视图 + 对比） |
 | 6 | 编辑器结果集「洞察此列」+ 临时表直连入口 | `open_insight_column` 零调用者；`InsightTarget::Column\|Table` 无人构造 | **留着**（用户明确说不急）；做时照 `FilterValueHook` 注入，**不需要执行期物化**；顺手接 #3 的定向回收 | 中 |
 | 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false | **等**：M6 二期有产生者 + 要 ATTACH `analytics.duckdb` + 用 `definition_sql` 重建 | 中 |
-| 8 | `RenderHint`（规则的渲染提示）零消费 | 只在 `lib.rs` re-export | **决定**：做图表契约（映射 `RenderHint` → 渲染方）或删；不做图表就删 | 小（删）/ 中（消费） |
 | 9 | 源目标下「多列」Tab 在样本表解析前点击不发请求 | 已知小限制（样本表要等列 / 表目标先取过样） | **决定**：让它自己先取一次样，或维持并在 UI 提示 | 小 |
 | 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **可选加强**：解析级策略检查（解析能力 `engine/src/sql` 已有） | 中 |
 | 11 | `insight_view.rs` 体量（约 2500 行代码 + 900 行测试） | 新功能仍在往里加（导出按钮即在此） | **时机触发**：见 §11 规格 | 中 |
 
-> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）。
+> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）；#8 `RenderHint`（定案：保留 + 登记，2026-09-18，见架构 K18）。
 
 **建议顺序**（性价比）：6（编辑器结果集入口，顺带 #3）→ 4（要产品点头）→ 其余。
 

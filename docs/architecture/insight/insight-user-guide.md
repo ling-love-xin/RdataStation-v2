@@ -246,12 +246,14 @@ max         = 100000             # 可选，上界
 severity    = "warning"          # 可选，默认 warning
 message     = "计数偏低"          # 可选，默认 "Quality check for {field}"
 
-[render]                         # 可选，渲染提示
+[render]                         # 可选，**预留字段：解析后无人消费**（见下方说明）
 component     = "NullCheckInfo"  # 可选，推荐组件名
 display_order = 0                # 可选，展示排序
 ```
 
 > **严格 schema**：所有表都拒绝未知字段。多写一个字段（哪怕拼错）都会导致**整条规则加载失败**。字段放错表也一样（例如把 `result_type` 写进 `[meta]`——内置规则里就有一条因此长期缺席，见 `insight-architecture.md` K 区）。
+>
+> **`[render]` 是预留字段**：它能被解析、能被校验，但**当前没有任何渲染方消费它**（面板按**数据形态**渲染规则结果，不看组件名）。写它不会出错，也不会改变界面；什么时候会生效要看图表可视化那条线（不在洞察模块）。**也不要靠它排序**——规则列表的顺序不取 `display_order`。
 
 ### 4.3 `applies_to` 取值
 

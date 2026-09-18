@@ -136,14 +136,14 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 
 - 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
 - 逐阶段验收场景见 `insight-dev-plan.md` §6（T1–T14）。
-- **基线**：`cargo test -p rds-insight` 当前 **229 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3；文件类数据源新增 1；Schema 导出与下钻新增 3；**结构洞察方言 3 + 取数回归 1**），另有**集成测试 13 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处（`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`），其中 `duckdb::analysis` 现 **8 项**（含 CTAS 2 项）。引擎单测总量当前 **428 项**（`cargo test -p rds-engine --lib`）。
+- **基线**：`cargo test -p rds-insight` 当前 **229 项**全绿（迁移基线 53：`rule_executor` 13 / `schema_analyzer` 16 / `insight_engine` 10 / `quality_scorer` 7 / `rule_registry` 7；Phase 0 新增 38；Phase 1 两批新增 29；Phase 2 两批新增 23；Phase 3 三批新增 31；Phase 4 一批新增 10；Phase 5 三批新增 15；规则校验补强新增 3；规则 SQL 静态门新增 3；项目规则信任门新增 11；快照收尾新增 2；源取样入口新增 3；文件类数据源新增 1；Schema 导出与下钻新增 3；**结构洞察方言 3 + 取数回归 1**），另有**集成测试 14 项**（`cargo test -p rds-insight --test column_profile_e2e`：真实 DuckDB 临时表 → 规则统计 / 表探查 / 评估全表 / 多列规则 / **快照历史 · 版本对比 · 清理（真项目目录）** / **与内置 `SUMMARIZE` 交叉校验** → 视图模型），**新增功能不得减少**。临时表一致化（D50/D51/D54）与文件类数据源（D59）的 engine 支撑在 `duckdb::analysis` / `duckdb::manager` / `duckdb::temp_table` / `duckdb_service` 四处（`cargo test -p rds-engine --lib -- duckdb::analysis duckdb::manager duckdb::temp_table duckdb_service`），其中 `duckdb::analysis` 现 **8 项**（含 CTAS 2 项）。引擎单测总量当前 **428 项**（`cargo test -p rds-engine --lib`）。
 
 ## 6. 文档地图
 
 | 文档 | 什么时候读它 |
 | --- | --- |
 | `insight-prototype-design.md` | **长什么样 / 怎么交互**：核心语义与规则作用域 / 右 Dock 面板布局 / 四种目标视图分派 / 状态与空态矩阵 / 规则管理对话框 / 主题映射与尺寸常量 / GPUI 落点 / **§10 与 V1 的逐项对照** |
-| `insight-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型与**九条不变式** / 分层与 crate 归属 / 状态所有权（单一写入者）/ 六条数据流 / **D1–D61 决策表** / 并发与资源 / 降级矩阵 / 测试策略 / 实现位置映射 / **§11 已知问题 K1–K17（K1 / K14 / K16 / K17 均已处置）** / §12 待确认 Q1–Q7（**Q1 / Q3 / Q4 / Q5 / Q6 / Q7 已定案**） |
+| `insight-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型与**九条不变式** / 分层与 crate 归属 / 状态所有权（单一写入者）/ 六条数据流 / **D1–D61 决策表** / 并发与资源 / 降级矩阵 / 测试策略 / 实现位置映射 / **§11 已知问题 K1–K18（K1 / K14 / K16 / K17 已处置；K18 定案保留）** / §12 待确认 Q1–Q7（**Q1 / Q3 / Q4 / Q5 / Q6 / Q7 已定案**） |
 | `insight-dev-plan.md` | **做什么、做到哪**：已确认决策 9 项 / **§0 进度记录** / 现状盘点 / **§2 五项实证缺陷** / 目标 crate 边界 / **§4 规则作用域与索引表设计** / Phase 0–5 任务 / 测试场景 T1–T14 / 风险 R1–R7 / 实现位置映射 / 验证命令 / **§10 未接与预留项（收口清单 · 权威）** / **§11 `insight_view.rs` 按 Tab 位移规格（待触发）** |
 | `insight-extension-notes.md` | **实现手段与第三方扩展的调研记录**（讨论稿）：现状约束（外部编译库 / 单例 / 已有扩展机制）/ 边界（三层实现 · 扩展可换实现不可换语义 · 准入四件套）/ 候选扩展逐项评估（`dq` / `stats_duck` / `datasketches` / `stochastic` + 顺带发现）/ 可参考的扩展设计（GE / Deequ / dbt / Soda / gatekeeper …）/ **§6 可采取之处（不引扩展也能拿的 10 条）** / 探针口径 |
 | `insight-user-guide.md` | **怎么用**：入口 / 界面导览与怎么看数字 / 典型流程 / **§4 规则编写指南（对外契约：三层作用域 · 字段全表 · `value_type` 表 · 质量门控语义 · 可照抄示例 · 安全边界）** / **§4.8 内置规则 16 条一览** / FAQ 排查 / USIT 验收清单 |
@@ -167,5 +167,5 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 | Phase 5（已完成） | ✅ 快照历史（保存入口 · 版本列表 · 存储用量）· ✅ 版本对比（方向固定为「选中 → 最新」）· ✅ 存储清理（确认框 · 成对删 · 回执）· ✅ 保留天数定案固定 30 天（D56） |
 | 入口（D58/D59） | ✅ 源取样通道 · ✅ 导航树 / 分析存档 / 草稿箱三个右键「查看统计」· ✅ **文件类数据源**（CSV / Parquet / Excel / JSON，含 excel 扩展）；⬜ 编辑器结果集列头「洞察此列」（用户明确不着急）· ⬜ 分析表型存档（本体是 `analytics.duckdb` 库文件，要 ATTACH + 重建定义） |
 | 待确认 | 规则安全边界若**再严一档**：`insight_rule_trust` 加规则集内容指纹（现绑定项目路径，见 D53 取舍）· 快照双写若要做故障注入测试（现只测补偿函数契约，见 D55） |
-| **收口清单（施工）** | **未接 / 预留项的逐项状态、接或删建议与量级 → 开发方案 §10**（唯一权威；含 K2 重复目录待删 · K6 表级快照待接 · K16 结果集定向回收待接 · 编辑器结果集入口待接；~~结构洞察入口~~ 已于 2026-09-18 接线） |
+| **收口清单（施工）** | **未接 / 预留项的逐项状态、接或删建议与量级 → 开发方案 §10**（唯一权威；含 K2 重复目录待删 · K6 表级快照待接 · K16 结果集定向回收待接 · 编辑器结果集入口待接；~~结构洞察入口~~ 与 ~~`RenderHint`~~ 已于 2026-09-18 结案） |
 | **实现手段** | **三层边界与扩展准入 = D61**：规则 → 内置 SQL → 扩展；扩展可换实现不可换语义、产物不许成为长期格式；调研记录与**可采取之处（10 条）** → `insight-extension-notes.md` |

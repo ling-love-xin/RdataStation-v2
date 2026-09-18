@@ -544,3 +544,221 @@ fn table_evaluation_scores_every_column() {
     );
     assert_eq!(summary.grade, rds_insight::Grade::of(summary.overall));
 }
+
+// ==================== 6.1 交叉校验：内置 `SUMMARIZE` ====================
+
+/// DuckDB `SUMMARIZE` 的一行（只要我们用得上的字段；其余不取）
+#[derive(Debug, Default, Clone)]
+struct SummaryRow {
+    column_type: String,
+    count: Option<String>,
+    null_percentage: Option<String>,
+    approx_unique: Option<String>,
+    avg: Option<String>,
+    std: Option<String>,
+    min: Option<String>,
+    max: Option<String>,
+}
+
+impl SummaryRow {
+    fn f64_of(field: &Option<String>) -> Option<f64> {
+        field.as_deref().and_then(|v| v.parse::<f64>().ok())
+    }
+}
+
+/// 跑 `SUMMARIZE` 并把每列摘要取成字符串（外层 CAST 到 VARCHAR：避开驱动类型解码差异）。
+///
+/// 两条 DuckDB 语义要记住（实测 1.5.5，真机发现）：
+/// - `count` 是**总行数**，不是非空计数（空值数用 `null_percentage × count` 反推）
+/// - `approx_unique` 是 HLL **近似**，小表上会明显高估（本用例 18 → 报 20）
+fn summarize(table: &str) -> std::collections::HashMap<String, SummaryRow> {
+    let duckdb = get_or_create_duckdb().expect("应能拿到内存 DuckDB 连接");
+    let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
+    // `SUMMARIZE` 是语句级的表函数：包一层子查询就能挑字段
+    let sql = format!(
+        "SELECT column_name, CAST(column_type AS VARCHAR), CAST(\"count\" AS VARCHAR), \
+         CAST(null_percentage AS VARCHAR), CAST(approx_unique AS VARCHAR), \
+         CAST(avg AS VARCHAR), CAST(std AS VARCHAR), \
+         CAST(min AS VARCHAR), CAST(max AS VARCHAR) \
+         FROM (SUMMARIZE \"{table}\")"
+    );
+    let mut stmt = conn.prepare(&sql).expect("SUMMARIZE 应可 prepare");
+    let mut rows = stmt.query([]).expect("SUMMARIZE 应可执行");
+
+    let mut out = std::collections::HashMap::new();
+    while let Some(row) = rows.next().expect("取摘要行") {
+        let name: String = row.get(0).expect("column_name");
+        out.insert(
+            name,
+            SummaryRow {
+                column_type: row.get(1).unwrap_or_default(),
+                count: row.get(2).ok(),
+                null_percentage: row.get(3).ok(),
+                approx_unique: row.get(4).ok(),
+                avg: row.get(5).ok(),
+                std: row.get(6).ok(),
+                min: row.get(7).ok(),
+                max: row.get(8).ok(),
+            },
+        );
+    }
+    out
+}
+
+/// DuckDB 侧**精确**去重计数（`approx_unique` 小表上不可当精确值，实测会高估）
+fn exact_distinct(table: &str, column: &str) -> f64 {
+    let duckdb = get_or_create_duckdb().expect("应能拿到内存 DuckDB 连接");
+    let conn = duckdb.lock().expect("DuckDB 锁不应中毒");
+    let sql = format!("SELECT CAST(COUNT(DISTINCT \"{column}\") AS VARCHAR) FROM \"{table}\"");
+    let mut stmt = conn.prepare(&sql).expect("COUNT(DISTINCT) 应可 prepare");
+    let mut rows = stmt.query([]).expect("COUNT(DISTINCT) 应可执行");
+    let row = rows.next().expect("取一行").expect("有行");
+    let text: String = row.get(0).expect("取值");
+    text.parse::<f64>().expect("计数应是数字")
+}
+
+/// 面板里的「基础统计」行（按标签取）
+fn basic(view: &rds_insight::ColumnProfileView, label: &str) -> f64 {
+    view.basics
+        .iter()
+        .find(|r| r.label == label)
+        .unwrap_or_else(|| {
+            panic!(
+                "列 {} 的基础统计里应有「{label}」行，实际：{:?}",
+                view.column,
+                view.basics.iter().map(|r| r.label).collect::<Vec<_>>()
+            )
+        })
+        .value
+        .parse::<f64>()
+        .unwrap_or_else(|e| panic!("「{label}」应是数字：{e}"))
+}
+
+/// 6.1：我们的列统计（18 条 TOML 规则拼出的 SQL + 映射）vs DuckDB 内置 `SUMMARIZE`。
+///
+/// 为什么值得：画像里的数字最终要让用户相信，而它们是我们自己算的；`SUMMARIZE` 是
+/// DuckDB 自己的整表摘要（同一份数据、另一套实现）。两边在**类型 / 总行数 / 空值率 /
+/// 极值 / 均值 / 标准差**上必须得出同一结论——不一致就是规则 SQL 或映射出了问题，
+/// 而不是「显示格式不同」。
+///
+/// 口径说明（实测得出，不是照搬文档）：
+/// - 「唯一值」不拿 `approx_unique` 当真值——它是 HLL 近似，小表上会偏
+///   （本用例：精确 18，`SUMMARIZE` 报 20）→ 用 DuckDB 的**精确** `COUNT(DISTINCT)` 对表，
+///   近似那列只做量级参照
+/// - 标准差给 5% 相对容差（样本 / 总体在小表上有差）；其余精确量给 1e-6 / 1e-9
+#[test]
+fn stats_agree_with_duckdb_summarize() {
+    let _serial = serial();
+    let table = "t_insight_e2e_summarize";
+    // 20 行：`amount` 18 个非空值 + 2 个空值（空值率 10%）；`tag` 有重复值
+    let mut rows: Vec<String> = (1..=18)
+        .map(|i| format!("({i}, 'v{}')", i % 3))
+        .collect();
+    rows.push("(NULL, 'v0')".into());
+    rows.push("(NULL, NULL)".into());
+    seed(
+        table,
+        "amount INTEGER, tag VARCHAR",
+        &format!("VALUES {}", rows.join(",")),
+    );
+
+    let summary = summarize(table);
+    // 数值列：逐项对表
+    let amount = summary.get("amount").expect("SUMMARIZE 应有 amount 行");
+    let view = InsightService::profile_column_view(None, table, "amount").expect("列画像");
+    eprintln!(
+        "amount 摘要={amount:?}\n   画像：行数={} 空值={} 唯一={} 均={} 标准={} 最小={} 最大={}",
+        view.total_count,
+        view.null_count,
+        basic(&view, "唯一值"),
+        basic(&view, "平均"),
+        basic(&view, "标准差"),
+        basic(&view, "最小"),
+        basic(&view, "最大"),
+    );
+
+    assert_eq!(view.kind, ColumnKind::Numeric, "INTEGER 应分派到数值族");
+    assert_eq!(view.total_count, 20);
+    assert_eq!(view.null_count, 2);
+    // 类型：两边说的是同一个类型名（不是展示别名）
+    assert_eq!(
+        view.data_type.to_ascii_uppercase(),
+        amount.column_type,
+        "列类型应与 SUMMARIZE 同源"
+    );
+    // 总行数与空值率：精确量，逐位对得上
+    assert_eq!(
+        SummaryRow::f64_of(&amount.count),
+        Some(view.total_count as f64),
+        "总行数（DuckDB 的 `count` 是全行数，不是非空计数）"
+    );
+    let null_pct = SummaryRow::f64_of(&amount.null_percentage).expect("null_percentage");
+    assert!(
+        (null_pct - view.null_rate * 100.0).abs() < 1e-6,
+        "空值率应一致：摘要 {null_pct}% vs 画像 {}%",
+        view.null_rate * 100.0
+    );
+    assert_eq!(
+        (null_pct / 100.0 * view.total_count as f64).round() as u32,
+        view.null_count,
+        "由空值率反推的空值数应等于画像里的空值数"
+    );
+    // 唯一值：与 DuckDB 的**精确**计数一致（近似那一列另作参照）
+    let exact = basic(&view, "唯一值");
+    assert_eq!(
+        exact,
+        exact_distinct(table, "amount"),
+        "唯一值应与 COUNT(DISTINCT …) 一致"
+    );
+    // `approx_unique` 只做**量级**参照：HLL 在小表上会偏（本用例精确 18 → 报 20），
+    // 所以不拿它当真值（真值用上面的精确计数），也不断言它总偏高
+    let approx = SummaryRow::f64_of(&amount.approx_unique).expect("approx_unique");
+    assert!(
+        (approx - exact).abs() <= exact.max(1.0) * 0.25,
+        "HLL 近似应与精确值同量级：近似 {approx} vs 精确 {exact}"
+    );
+    // 均值 / 极值：同一份数据，应当逐位一致（给 1e-9 只抵浮点表示）
+    let avg = SummaryRow::f64_of(&amount.avg).expect("avg");
+    assert!((avg - basic(&view, "平均")).abs() < 1e-9, "均值不一致：{avg}");
+    let min = SummaryRow::f64_of(&amount.min).expect("min");
+    assert!((min - basic(&view, "最小")).abs() < 1e-9, "最小值不一致：{min}");
+    let max = SummaryRow::f64_of(&amount.max).expect("max");
+    assert!((max - basic(&view, "最大")).abs() < 1e-9, "最大值不一致：{max}");
+    // 标准差：样本 / 总体在小表上有差 → 相对容差 5%
+    if let Some(std) = SummaryRow::f64_of(&amount.std) {
+        let ours = basic(&view, "标准差");
+        assert!(
+            (std - ours).abs() <= std.abs() * 0.05,
+            "标准差应接近（样本/总体差）：摘要 {std} vs 画像 {ours}"
+        );
+    }
+
+    // 文本列：类型 / 计数 / 空值 / 极值同样对得上
+    let tag = summary.get("tag").expect("SUMMARIZE 应有 tag 行");
+    let text_view = InsightService::profile_column_view(None, table, "tag").expect("文本列画像");
+    eprintln!(
+        "tag 摘要={tag:?}\n   画像：行数={} 空值={} 唯一={}",
+        text_view.total_count,
+        text_view.null_count,
+        basic(&text_view, "唯一值")
+    );
+    assert_eq!(text_view.kind, ColumnKind::Text, "VARCHAR 应分派到文本族");
+    assert_eq!(
+        text_view.data_type.to_ascii_uppercase(),
+        tag.column_type,
+        "文本列类型应与 SUMMARIZE 同源"
+    );
+    assert_eq!(
+        SummaryRow::f64_of(&tag.count),
+        Some(text_view.total_count as f64),
+        "文本列总行数"
+    );
+    assert_eq!(text_view.null_count, 1, "tag 有一个 NULL");
+    assert_eq!(
+        basic(&text_view, "唯一值"),
+        exact_distinct(table, "tag"),
+        "文本唯一值应与 COUNT(DISTINCT …) 一致"
+    );
+    assert_eq!(tag.min.as_deref(), Some("v0"), "文本最小值");
+    assert_eq!(tag.max.as_deref(), Some("v2"), "文本最大值");
+}
