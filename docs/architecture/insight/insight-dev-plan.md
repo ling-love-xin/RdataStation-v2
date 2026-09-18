@@ -23,6 +23,23 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — 收口（二）：结构洞察入口接线 + 源取样取数根因修复（真机四库验证）
+
+**背景**：施工单 §10 #5（导航右键「结构洞察」→ `InsightTarget::Schema`）。做真机验证时先撞上一个**静默失败**：洞察侧取数照 v1 的 JSON 形态读引擎结果（`json["batches"][0]["rows"]`），而 v2 的 `QueryResult` 契约序列化**不含 `batches`**（只输出 `columns` / `rows` / …），native 驱动却只填 `batches`、`rows` 恒空 —— 于是「取数」恒得「有列名、零行」。受影响的不只是结构洞察：**源取样**（导航树 / 存档 / 草稿箱「查看统计」、结构报告下钻）全走同一处，此前会报「取样没有拿到列」。
+
+**已完成并验证**（`cargo test -p rds-engine --lib` **428 项**（本批 +1：无符号声明类型仍算数值族）· `rds-insight --lib` **229 项**（本批 +4：方言 3 + 取数回归 1）· `column_profile_e2e` **13 项** · `rds-workbench --lib` **94 项** · `insight_entry` **2** + `ui_contract` **7** 全绿；`cargo check --workspace --all-targets` 零告警；**真机四库**（MySQL / PostgreSQL / SQLite / DuckDB）两个新用例全绿）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **取数根因**（本批最大发现） | 契约序列化是**给跨进程看的**（`batches` 不参与），进程内必须直读 `columns` + `to_rows()`。新增单一口径 `service::result_columns_and_rows`（含 `Value → serde_json::Value` 转换），四处调用点全部改走它 | `insight/src/service/mod.rs`（helper + 回归用例）、`schema_analyzer.rs`（表 / 列两条查询）、`service/persistence.rs`（源取样 / 表列画像 / 批量评估三处） |
+| **结构洞察入口**（§10 #5） | 导航右键新增「结构洞察」：表 / 视图 → 其所在 schema，schema 节点 → 自己（列 / catalog 不给这一项）；`SchemaRef { conn_id, catalog, schema }` → `NavHost::open_insight_schema` → `Shared::open_insight_schema`（展开右 Dock + `InsightTarget::Schema`） | `database/src/{model,nav_host,nav_view}.rs`、`workbench/src/components/nav_host.rs`、`workbench/src/panels/shared.rs` |
+| 方言（前批未提交的一并收） | `SchemaDialect { Mysql, PostgresLike, Unsupported }`：MySQL 用 `table_schema`、PG / DuckDB 用 `table_schema + table_catalog`；`column_key` 仅 MySQL 取（其余给 `''`）；SQLite 明确回绝（可读回执，不是「零张表」） | `insight/src/schema_analyzer.rs` |
+| 元数据列名**大小写** | MySQL 的 `information_schema` 结果列名是**全大写**（`TABLE_NAME` / `DATA_TYPE`）：按列名取值的比较改大小写不敏感（否则整张表被过滤成空集） | 同上 |
+| 驱动（顺手修的根） | 无符号列在协议层带 `UNSIGNED` 后缀（`BIGINT UNSIGNED`），`declared_numeric_rank` 没剥 → 落进 `try_get::<bool>` 盲探，0/1 值的无符号列被判成布尔（真机：`ordinal_position` → `true`） | `engine/src/driver/native/mysql.rs`（+1 用例） |
+| 真机验证（新增两个用例） | `insight_schema_real`（MySQL 47 表 / 318 列 · PG 25 / 144 · DuckDB 10 / 27 · SQLite **明确回绝**）、`insight_source_real`（四库源取样 → 列画像 3 行 / 空值率 / 表探查 3 列；样本表带 `tmp_i_` 前缀）——未设环境变量自动跳过 | `workbench/tests/{insight_schema_real,insight_source_real}.rs` |
+
+**真机口径**（照 `editor_exec_real.rs`）：`RDS_TEST_{MYSQL_URL,PG_URL,SQLITE_PATH,DUCKDB_PATH}`；**sh / bash 下一律加单引号**（`D:\…` 的反斜杠会被吃掉 → 驱动在工作目录建空库 → 假通过）。`insight_source_real` 会在真库建 `rds_probe_source_*`、`insight_schema_real` 建 `rds_probe_schema_*`，跑完 DROP。
+
 ### 2026-09-18 — 收口（一）：删源库内省路径 + 接结果集清场口
 
 **背景**：按 §10 收口清单的建议顺序做「纯减法 + 一项接线」。清单 #1（`crates/engine/insight-rules/` 重复副本）已由 `e3684d67`（洞察规则收敛）删除，不在本批。
@@ -842,7 +859,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | 4.2 | 报告视图：健康评分条 + 四个折叠区（外键候选 / 类型不一致 / 孤立表 / 冗余列），置信度与严重度分级取色 | `insight/src/schema_view.rs`（新文件） | ✅ Phase 4 一批 |
 | 4.3 | 导出 JSON / Markdown | 同上 | ✅ 一批（函数）+ **收尾（D60）**：面板侧编码 + 宿主选路径写文件 + 状态栏回执 |
 | 4.4 | 下钻联动：类型不一致的受影响表 → 表探查 | 同上 | ✅ 一批（事件）+ **收尾（D60）**：宿主走源取样（不建临时表） |
-| 4.5 | **入口**：导航树「结构洞察」→ `InsightTarget::Schema` | `database/src/nav_view.rs` + `workbench/src/components/nav_host.rs` | ⬜ **未接**（宿主侧无一处构造 `InsightTarget::Schema`，界面打不开「结构」Tab） |
+| 4.5 | **入口**：导航树「结构洞察」→ `InsightTarget::Schema` | `database/src/nav_view.rs` + `workbench/src/components/nav_host.rs` | ✅ 收口（二）：表 / 视图 → 所在 schema、schema 节点 → 自己；实现映射见架构 §10 |
 
 ### Phase 5 — 快照历史与版本对比
 
@@ -923,6 +940,22 @@ cargo check --workspace --all-targets -j 2
 cargo test -p rds-workbench --test ui_contract -j 2
 ```
 
+**真机（四库）**：两个用例都按环境变量自跳过，未设不算失败；**sh / bash 下一律加单引号**
+（`D:\…` 的反斜杠会被吃掉 → 驱动在工作目录建空库 → 假通过）。
+
+```sh
+export RDS_TEST_MYSQL_URL='mysql://root:root@192.168.3.138:3306/mysql'
+export RDS_TEST_PG_URL='postgres://postgres:postgresql@192.168.3.138:5432/postgres'
+export RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil'
+export RDS_TEST_DUCKDB_PATH='D:\data\123'
+
+# 结构洞察：information_schema 方言 + 报告（真库建 rds_probe_schema_*，跑完 DROP）
+cargo test -p rds-workbench --test insight_schema_real -j 2 -- --nocapture --test-threads=1
+
+# 源取样 → 列画像 / 表探查（真库建 rds_probe_source_*，跑完 DROP）
+cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --test-threads=1
+```
+
 > `cargo` 命令固定 `-j 2`：并发链接重型 crate 会 OOM（DuckDB 已改动态链接）（见 `project-dev-plan.md` §0 工程配置）。
 
 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
@@ -937,7 +970,6 @@ cargo test -p rds-workbench --test ui_contract -j 2
 | --- | --- | --- | --- | --- |
 | 3 | 结果集临时表的**定向回收**（K16 收尾） | `drop_temp_table(TempTableSource::Query)` 零生产调用者；且建表侧（`create_duckdb_temp_table` / `ResultService` / `execute_duckdb_analysis`）**也零调用**——整条「结果集 → DuckDB 分析」链路未接 UI。**清场口已接**（2026-09-18：项目切换清 `tmp_q_*`） | **随 #6（编辑器结果集入口）一起接**：结果集被丢弃 / 替换 / 关文档三处按 D54 契约调 `drop_temp_table` | 小（但依赖 #6） |
 | 4 | 表级 / Schema 报告快照（K6） | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | **接**（需产品点头：表级快照的比对语义与列级不同——行数、列清单都在变） | 中（store 方法已有，缺面板保存入口 + 历史视图 + 对比） |
-| 5 | 结构洞察入口（导航右键 → `InsightTarget::Schema`） | 宿主侧零构造（该目标只出现在 insight 内部与测试） | **接**：`NavHost` 加一个方法 + 导航菜单一项（照「查看统计」） | 小 |
 | 6 | 编辑器结果集「洞察此列」+ 临时表直连入口 | `open_insight_column` 零调用者；`InsightTarget::Column\|Table` 无人构造 | **留着**（用户明确说不急）；做时照 `FilterValueHook` 注入，**不需要执行期物化**；顺手接 #3 的定向回收 | 中 |
 | 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false | **等**：M6 二期有产生者 + 要 ATTACH `analytics.duckdb` + 用 `definition_sql` 重建 | 中 |
 | 8 | `RenderHint`（规则的渲染提示）零消费 | 只在 `lib.rs` re-export | **决定**：做图表契约（映射 `RenderHint` → 渲染方）或删；不做图表就删 | 小（删）/ 中（消费） |
@@ -945,9 +977,9 @@ cargo test -p rds-workbench --test ui_contract -j 2
 | 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **可选加强**：解析级策略检查（解析能力 `engine/src/sql` 已有） | 中 |
 | 11 | `insight_view.rs` 体量（约 2500 行代码 + 900 行测试） | 新功能仍在往里加（导出按钮即在此） | **时机触发**：见 §11 规格 | 中 |
 
-> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）。
+> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）。
 
-**建议顺序**（性价比）：3（依赖 #6）→ 5（一个小入口开一个完整 Tab）→ 4（要产品点头）→ 其余。
+**建议顺序**（性价比）：6（编辑器结果集入口，顺带 #3）→ 4（要产品点头）→ 其余。
 
 ## 11. `insight_view.rs` 按 Tab 位移（规格 · 待触发）
 
