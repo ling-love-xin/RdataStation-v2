@@ -19,7 +19,7 @@
 | 层 | 覆盖 | 实测结论 |
 | --- | --- | --- |
 | **L1 官方 scanner** | `mysql` · `postgres` · `sqlite` · `parquet` · `json` · `httpfs` | ✅ INSTALL + LOAD 全过 |
-| **L2 社区 scanner** | `mssql`（native TDS，无需 ODBC/FreeTDS）· `oracle_scanner`（无需 Oracle client）· `firebird` · `snowflake` · `bigquery` · `mongo` … | ✅ 前四个 + `firebird` 全部 INSTALL + LOAD 成功（社区扩展由 DuckDB 官方签名托管，`INSTALL … FROM community`） |
+| **L2 社区 scanner** | `mssql`（native TDS，无需 ODBC/FreeTDS）· `oracle_scanner`（无需 Oracle client）· `firebird` · `snowflake` · `bigquery` · `mongo` … | ✅ 前四个 + `firebird` 全部 INSTALL + LOAD 成功（社区扩展由 DuckDB 官方签名托管，`INSTALL … FROM community`）。**`oracle_scanner` 真机验收完成（2026-09-18，v0.2.2）**：见 §2.1 |
 | **L3 桥接兜底** | 任何我们有驱动的源（国产库 / 私有协议 / 受限环境） | 依赖自家驱动与 Arrow 批（已有），**不依赖 DuckDB 扩展** |
 
 **为什么 L2 不是“唯一路径”**：早期判断是“Oracle / SQL Server 只能拉数”，实测推翻了它——
@@ -34,6 +34,27 @@
 **为什么 ADBC 只是可选层**：`adbc` / `adbc_scanner` 扩展现成（Arrow 原生、零转换），但它要求用户
 机器上有**具体库的 ADBC 驱动**；对 Windows 桌面应用这是分发与运维负担。等出现“两种 scanner
 都没有、但有 ADBC 驱动”的库时再接。
+
+### 2.1 Oracle 真机验收（`oracle_scanner` 0.2.2，2026-09-18）
+
+探针：`crates/engine/tests/oracle_probe.rs`（跑法：`RDS_TEST_ORACLE_URL='oracle://user:pass@host:1521/XEPDB1'`）。
+实例：`192.168.3.138:1521` · service name **`XEPDB1`** · 普通开发账号（无 DBA 权限）。
+
+| 问题 | 结论 |
+| --- | --- |
+| 凭据怎么给 | **只能走 Secret**：`oracle_query('<secret>', …)` / `ATTACH '<secret>' AS x` 的第一参数是 **secret 名**（不是连接串）；`CREATE SECRET (TYPE ORACLE, HOST/PORT/USER/PASSWORD/SERVICE_NAME)`，**会话级即可**（不必落盘） |
+| 服务名 | `XEPDB1`（写成 `XE` 报 `ORA-01017`，其它名字报监听器 redirect——界面上要如实把原话给出） |
+| 挂载形态 | ✅ `ATTACH '<secret>' AS <别名> (TYPE oracle_scanner)`，表挂在 **`main`** schema → **两段名 `<别名>.<表>`**；`duckdb_tables()` / `duckdb_columns()` 能看到表与列；表清单**在 ATTACH 时定型**；只列**当前账号自己的**表（账号没表时目录看着是空的） |
+| 表函数 | ✅ `oracle_query('<secret>', '<Oracle SQL>')`（可读任意有权访问的对象，含 SYS 视图） |
+| 只读 | ❌ **不支持 `READ_ONLY`**（扩展原话：*Oracle ATTACH does not accept option 'read_only' yet*）→ 引擎侧那道写保护**对它不成立** |
+| 写 / DDL | `oracle_execute` **只接受 INSERT / UPDATE / DELETE**；DDL 要走 `oracle_call_auto(secret, 'DBMS_UTILITY.EXEC_DDL_STATEMENT', ['…'])`（探针靠它建/删自己的表） |
+| 并行扫描 | `oracle_scan_parallel(secret, '<表名>', '<分片键列>', shards := N)`：**需要 `SYS.DBMS_FLASHBACK` 的 EXECUTE + 表上的 FLASHBACK 权限**——普通账号跑不了，默认路径用 `oracle_query` / 目录 |
+| 过滤下推 | ⚠️ **过滤不推**（列投影会推）：`EXPLAIN` 里 `FILTER` 在扫描节点之上，要快得把谓词写进 Oracle SQL |
+| 类型映射 | ⚠️ 无精度 `NUMBER` → **VARCHAR**；`NUMBER(10,2)` → `DECIMAL(10,2)`——跨源比较容易踩（`id = '2'` 才是对的） |
+
+**对设计的影响**（落点见 §9）：L2 源的挂载与 L1 **不完全同形**——① 目标名是 Secret（引擎不拿明文口令，**Secret 在会话里建，不落盘**）；
+② 不能带 `READ_ONLY`，写拒绝要靠编辑器闸门 + 只读账号（引擎侧补一道“写 L2 源”的判定）；
+③ 限定名是**两段**（`<别名>.<表>`），提示语要按源类型区分。
 
 ## 3. 与邻居的关系
 
@@ -63,6 +84,7 @@
 | D11 | **凭据随连接串进 `ATTACH`，出引擎前脱敏** | 真机实测（`tests/federation_credentials_probe.rs`）：DuckDB 1.5.5 的 **mysql / postgres 扫描器都不认 Secret**——会话级 / 持久化 / 带 scope / `ATTACH ''` 全试过；脱敏 URL（`user:******@`）只会认证失败。所以挂载必须用**运行时连接串**（`DriverConnectionConfig.url_override`） | 口令会随 `ATTACH` 进 DuckDB 内存与报错文本：引擎侧一律过 `accel::scrub_credentials`（错误 / 挂载失败原因 / 历史里的原因）；连接对话框文案也跟着改成实话 |
 | D12 | **会话按源清单指纹缓存** | 同一个连接上的多份文档共享一条联邦会话（临时对象也共享）；**换主源不重建**（只是 `USE`），源清单变了才重建 | 改参与源 = 丢本地临时对象（日志里写一条，界面靠源清单告知）；两期后可优化成增量 `DETACH`/`ATTACH` |
 | D13 | **联邦档要求 ≥ 2 个源** | 联邦与本地加速的区别就是“跨源”；只有一个源时两者是同一件事，摆两个入口只会让人猜 | 门控与执行路径同一口径，各自行尾把“还差哪个源”说出来（未连上 / 未开开关 / 驱动不支持） |
+| D14 | **L2 源走专用挂载路径**（与 L1 不同形） | 真机验收（§2.1）：Oracle 的凭据**只能走 Secret**（`ATTACH '<secret>'`），且**不支持 `READ_ONLY`**，限定名是**两段**（`<别名>.<表>`） | 会话里建**会话级** Secret（不落盘）；写拒绝靠编辑器闸门 + 只读账号（引擎侧补判定）；提示语 / 文档按源类型给不同写法 |
 
 ## 5. 表名解析与写作规范
 
@@ -99,8 +121,8 @@
 
 | # | 级别 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
-| 1 | 🟡 | **L2 的社区 scanner 是否支持 `READ_ONLY` 参数未验**（L1 已验） | 只读第二道防线（引擎侧）可能不生效 | 保留会话层写拒绝（已有）+ 只读账号；真机验收时逐库确认 |
-| 2 | 🟡 | **`oracle_scanner` 的用法形态未验**：函数列表以 `oracle_query` / `oracle_scan_parallel` 等表函数为主，而 `oracle_filter_pushdown` 的描述提到 "attached Oracle table" | 接线方式（ATTACH catalog 还是表函数）会影响 `session.rs` 的形状 | 真机验收时先确认用法，再决定要不要为它写一条特殊挂载路径 |
+| 1 | ✅ | **L2 的社区 scanner 是否支持 `READ_ONLY` 未验** → **已验（2026-09-18）：Oracle 不支持**（`oracle_scanner` 0.2.2 原话：*does not accept option 'read_only' yet*；MSSQL 待验） | 只读第二道防线（引擎侧）对 L2 不生效 | 靠编辑器闸门 + 只读账号；引擎侧补一道“写 L2 源就被拒”的判定（T3.2） |
+| 2 | ✅ | **`oracle_scanner` 的用法形态未验** → **已验（2026-09-18）**：两条路都通——`ATTACH '<secret>' AS x (TYPE oracle_scanner)`（表挂 `main`，**两段名**）与表函数 `oracle_query('<secret>', '<sql>')`；凭据**只能走 Secret**（会话级，不落盘）；服务名写成 `XEPDB1` | 接线方式影响 `session.rs` 的形状 | 为 L2 写一条**专用挂载路径**：会话内建 Secret → 不带 `READ_ONLY` 的 `ATTACH`（T3.2） |
 | 3 | 🟡 | **跨源查询的扫描量不可见**（DuckDB 侧怎么拿：`EXPLAIN ANALYZE` 还是 `query_progress`） | “这次查询读了 5000 万行”这种事用户看不到 | 第一期先做资源上限，扫描量随第二期一起给 |
 | 4 | 🟡 | **跨源无快照一致**（D8） | 结果可能是各源不同时刻的混合 | 界面如实声明；要一致就得物化（L3） |
 | 5 | 🟡 | **扩展版本与内核版本绑定**：扩展落在 `<目录>/v<内核版本>/`，升 DuckDB 要重下 | 离线预置包要跟内核版本走 | 预置脚本与内核升级流程绑在一起（`tools/`） |
@@ -121,6 +143,7 @@
 | D3 别名与重名检测 / 源清单快照 | `.../federation/registry.rs`（✅ 第一期） |
 | D12 会话缓存 / 指纹 / 按源刷新 | `.../federation/session.rs`（✅ `ensure_session` / `refresh_all` / `set_primary`） |
 | D11 凭据与脱敏 | `crates/engine/src/duckdb/accel.rs`（`AccelSource::new` / `scrub_credentials`）+ `crates/engine/tests/federation_credentials_probe.rs` |
+| D14 L2 挂载差异（Secret / 无只读 / 两段名） | `.../federation/session.rs`（🟡 T3.2）+ 真机台账 `crates/engine/tests/oracle_probe.rs`（✅） |
 | D13 门控口径 | `crates/workbench/src/services/editor_channels.rs`（`federated_availability`） |
 | 联邦档执行路径 / 源清单组装 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `run_on_federation`） |
 | 历史带参与源 | `crates/engine/src/persistence/history_store.rs`（`sources`）+ `crates/editor/src/history.rs`（`sources_text`） |

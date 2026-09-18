@@ -70,9 +70,12 @@
 | --- | --- |
 | `orders` | 只在主源（`mysql_src`）里找 |
 | `mysql_src.orders_db.orders` | 限定到 `mysql_src`（推荐写法，**跨源必须**） |
+| `ora.ORDERS`（L2 源） | **两段名**：Oracle 的表挂在附加源的 `main` schema 下（真机实测：三段名会报 schema 不存在） |
 | `duckdb` 本地表 / 临时表 | 不受影响（本地对象优先，与 DuckDB 一致） |
 
 提示语只出现两处（不做常驻说教）：源清单底部一行、以及同名冲突的错误卡片里。
+**按源类型给写法**：L1 源（MySQL / PG / SQLite / DuckDB）三段名，L2 源（Oracle 这类）两段名——
+写错时的报错原话里会带 `schema "X" does not exist`，源清单底部那行按已挂源的类型分别列。
 
 ## 5. 结果区：代价与一致性
 

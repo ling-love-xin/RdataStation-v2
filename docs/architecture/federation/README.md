@@ -58,6 +58,7 @@
 | 联邦档执行路径 | `crates/workbench/src/services/editor_exec.rs`（✅ 源清单组装 + 三档分流 + 历史带参与源） |
 | 联邦档门控 | `crates/workbench/src/services/editor_channels.rs`（✅ 真值；源清单浮层待做） |
 | 凭据台账与脱敏 | `crates/engine/tests/federation_credentials_probe.rs`（✅）+ `accel::scrub_credentials` |
+| L2（Oracle）真机台账 | `crates/engine/tests/oracle_probe.rs`（✅ 装/载 · Secret · 目录两段名 · 表函数 · 跨源 · **只读不可用**） |
 | L3 桥接（拉数 → 临时表） | `.../federation/bridge.rs`（🟡 第二期） |
 | 单源加速会话（复用对象） | `crates/engine/src/duckdb/accel.rs`（✅） |
 | 扩展安装与状态 | `crates/engine/src/duckdb/extensions.rs`（✅） |
@@ -77,10 +78,12 @@
 6. **取消要传到源库**：DuckDB `InterruptHandle` + 各源驱动 `cancel`，只断一边就是假象。
 7. **凭据只在内存里传，出错就脱敏**：`ATTACH` 串**带凭据**（扫描器不认 Secret）；
    错误文本出引擎前过 `accel::scrub_credentials`；`ConnectionInfo.url`（脱敏）**不能**喂给 `ATTACH`。
-8. **状态如实、命名如实**：徽标写“联邦”不写“快照”；桥接数据标“拉取于 HH:MM 的副本”。
-9. **零裸值**（视图层）：颜色走主题 token、尺寸进 `ui.rs`（契约测试会拦）。
-10. 注释与文档用简体中文，说明意图与取舍（不复述代码）。
-11. `cargo` 命令固定 `-j 2`。
+8. **L2 源与 L1 不同形**（架构 D14）：凭据走**会话级 Secret**（`ATTACH '<secret>'`）、**没有 `READ_ONLY`**、
+   限定名是**两段**（`<别名>.<表>`）。只读那一道靠编辑器闸门 + 只读账号。
+9. **状态如实、命名如实**：徽标写“联邦”不写“快照”；桥接数据标“拉取于 HH:MM 的副本”。
+10. **零裸值**（视图层）：颜色走主题 token、尺寸进 `ui.rs`（契约测试会拦）。
+11. 注释与文档用简体中文，说明意图与取舍（不复述代码）。
+12. `cargo` 命令固定 `-j 2`。
 
 ## 5. 测试与验证
 
@@ -99,6 +102,11 @@ RDS_TEST_MYSQL_URL='mysql://root:root@192.168.3.138:3306/mysql' \
 RDS_TEST_MYSQL_URL='…' RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil' \
   cargo test -p rds-engine -j 2 --test federation_probe -- --nocapture --test-threads=1
 
+# L2 真机：Oracle（建/删自己的探针表，不碰用户对象）
+RDS_TEST_ORACLE_URL='oracle://devuser:***@192.168.3.138:1521/XEPDB1' \
+  RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil' \
+  cargo test -p rds-engine -j 2 --test oracle_probe -- --nocapture --test-threads=1
+
 # 联邦档执行路径（工作台侧：组装 / 门控）
 cargo test -p rds-workbench -j 2 --lib -- services::editor
 ```
@@ -116,4 +124,6 @@ cargo test -p rds-workbench -j 2 --lib -- services::editor
 
 第一期剩余：**「用作联邦源」标记的存储**（现在按“已连接 + 开启本地加速 + 驱动可挂”组装源清单，
 见 dev-plan T1.2）+ **源清单浮层**（`源清单 ▾`：失败行带原因、按源重挂、设为主源）。
+第三期：**L2 挂载路径**（`T3.2`：Oracle 的会话级 Secret + 不带 `READ_ONLY` 的 `ATTACH` +
+引擎侧写拒绝 + 两段名提示；形态已有真机台账，见架构 §2.1），以及 SQL Server 的真机验收（等用户通知）。
 第二期（L3 桥接）任务清单见 `federation-dev-plan.md` §2。
