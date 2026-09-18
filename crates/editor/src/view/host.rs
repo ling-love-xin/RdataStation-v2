@@ -2189,6 +2189,11 @@ impl EditorHostPanel {
                     failed: entry.failed(),
                     elapsed_ms: Some(entry.elapsed_ms),
                     connection: connection.clone(),
+                    // 【B15】来源摘要：有自定义标题的（执行计划 / 分析）用标题，其余用血缘
+                    lineage: entry
+                        .title
+                        .clone()
+                        .or_else(|| entry.lineage.clone()),
                     // 【B15】筛选统计随后由 `refresh_filter_hint` 从网格真值填上
                     filtered: None,
                 }),
@@ -2913,6 +2918,8 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
     let connection = outcome.connection.clone();
     // 【B13】通道也随结论回来：标签星徽标与“切通道后标灰”靠它
     let channel = outcome.channel;
+    // 【B15】血缘：失败也照样带（“这句话是下发筛选发出去的”对排查同样有用）
+    let lineage = outcome.lineage;
     match outcome.result {
         Ok(data) => ResultEntry::success(
             outcome.document,
@@ -2926,10 +2933,12 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
         .with_has_more(data.has_more)
         .with_connection(connection)
         .with_channel(channel)
-        .with_analysis(outcome.analysis),
+        .with_analysis(outcome.analysis)
+        .with_lineage(lineage),
         Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0)
             .with_connection(connection)
-            .with_channel(channel),
+            .with_channel(channel)
+            .with_lineage(lineage),
     }
 }
 

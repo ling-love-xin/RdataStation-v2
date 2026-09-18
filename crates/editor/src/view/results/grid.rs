@@ -698,6 +698,8 @@ pub struct ResultToolbar {
     pub elapsed_ms: Option<u64>,
     /// 来源连接文案（`●P·orders`；`None` = 当时未绑定 / 认不出）
     pub connection: Option<String>,
+    /// 【B15】来源摘要（血缘）：`原查询` / `下发筛选` / `排序下发` / `取下一段` / 标题（执行计划 / 分析）
+    pub lineage: Option<String>,
     /// 【B15】本地筛选生效时的（视图行数，已抓总行数）——原型 §5.5 要求“统计跟随并明示已筛选”
     pub filtered: Option<(usize, usize)>,
 }
@@ -723,6 +725,11 @@ impl ResultToolbar {
         }
         if let Some(elapsed_ms) = self.elapsed_ms {
             parts.push(format!("耗时 {}", duration_text(elapsed_ms)));
+        }
+        // 【B15】血缘（原型 §2.4：结果集要带来源摘要）——排在连接之前：
+        // “这份是怎么来的”比“从哪条连接来”更常被问
+        if let Some(lineage) = &self.lineage {
+            parts.push(lineage.clone());
         }
         if let Some(connection) = &self.connection {
             parts.push(connection.clone());
@@ -1303,7 +1310,7 @@ mod tests {
         assert_eq!(truncated_hint(10_000), "已截断至 10,000 行");
     }
 
-    /// 工具栏左段：`行数 N` │ `耗时 1.2s` │ `连接名`，没有的东西不占位
+    /// 工具栏左段：`行数 N` │ `耗时 1.2s` │ `来源摘要` │ `连接名`，没有的东西不占位
     #[test]
     fn toolbar_segments_follow_the_prototype_order() {
         let full = ResultToolbar {
@@ -1311,12 +1318,14 @@ mod tests {
             affected_rows: None,
             failed: false,
             elapsed_ms: Some(1_200),
+            // 【B15】血缘排在连接之前（“这份是怎么来的”比“从哪条连接来”更常被问）
+            lineage: Some("下发筛选".to_string()),
             connection: Some("●P·orders".to_string()),
             ..Default::default()
         };
         assert_eq!(
             full.segments(),
-            ["行数 1,204", "耗时 1.2s", "●P·orders"]
+            ["行数 1,204", "耗时 1.2s", "下发筛选", "●P·orders"]
         );
 
         // 写语句：报影响行数，没有行数段

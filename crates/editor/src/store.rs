@@ -51,6 +51,11 @@ pub struct ResultEntry {
     /// 为什么要有这个标记：分析结果基于**当时那份已抓到的行**，重跑它的 SQL 没有意义
     /// （临时表早就不在了）——界面据此**不摆「⟳ 刷新」**，而不是摆一个点了就错的按钮。
     pub analysis: bool,
+    /// 【B15】血缘摘要：这份数据是**怎么来的**（原查询 / 下发筛选 / 排序下发 / 取下一段 / 本地分析）
+    ///
+    /// 原型 §2.4 要求结果集携带来源摘要：进到第三份结果后，用户得能看出哪份是重查、
+    /// 哪份是本地分析（只靠标签序号是看不出来的）。界面在有自定义标题时用标题（执行计划 / 分析）。
+    pub lineage: Option<String>,
     /// 列名（失败时为空）
     pub columns: Vec<String>,
     /// 行数据（已字符串化；失败时为空）
@@ -103,6 +108,7 @@ impl ResultEntry {
             has_more: truncated,
             title: None,
             analysis: false,
+            lineage: None,
             columns,
             rows,
             error: None,
@@ -139,6 +145,12 @@ impl ResultEntry {
         self
     }
 
+    /// 【B15】贴血缘摘要（“原查询” / “下发筛选” / …；工具栏的来源段读它）
+    pub fn with_lineage(mut self, lineage: impl Into<String>) -> Self {
+        self.lineage = Some(lineage.into());
+        self
+    }
+
     /// 【B10】给结果集贴一个标题（如「执行计划」；不贴就是“结果 N”）
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -158,6 +170,7 @@ impl ResultEntry {
             has_more: false,
             title: None,
             analysis: false,
+            lineage: None,
             columns: Vec::new(),
             rows: Vec::new(),
             error: Some(error),

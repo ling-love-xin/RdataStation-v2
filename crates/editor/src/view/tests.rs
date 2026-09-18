@@ -960,7 +960,11 @@ select boom;",
             .result_summary_for_test()
             .map(|text| text.to_string())
     });
-    assert_eq!(summary.as_deref(), Some("行数 2 · 耗时 5 ms"));
+    // 【B15】工具栏左段最后跟来源摘要（血缘）：普通执行就是「原查询」
+    assert_eq!(
+        summary.as_deref(),
+        Some("行数 2 · 耗时 5 ms · 原查询")
+    );
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).grid_row_count_for_test(cx)),
         2,
@@ -1150,7 +1154,7 @@ fn running_into_a_new_set_keeps_the_previous_one_selected(cx: &mut TestAppContex
     );
     assert_eq!(
         cx.update(|_window, cx| panel.read(cx).result_summary_for_test()),
-        Some("行数 5 · 耗时 3 ms".to_string()),
+        Some("行数 5 · 耗时 3 ms · 原查询".to_string()),
         "状态行跟着选中的结果集走"
     );
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -3740,6 +3744,15 @@ fn pushdown_re_runs_on_the_source_as_a_new_result_set(cx: &mut TestAppContext) {
         2,
         "下发产生新结果集，原结果保留（原型 §5.5）"
     );
+    // 【B15】血缘：这份是“下发筛选”来的（工具栏的来源段读它；与“原查询”分得开）
+    assert_eq!(
+        shared
+            .results()
+            .sets(&id)
+            .last()
+            .and_then(|entry| entry.lineage.as_deref()),
+        Some("下发筛选")
+    );
     let message = cx
         .update(|_window, cx| panel.read(cx).message.clone())
         .expect("执行器带的说明要显示出来");
@@ -4962,6 +4975,11 @@ fn analysis_sends_the_sql_and_the_grabbed_rows(cx: &mut TestAppContext) {
         "标签上直接写“分析”"
     );
     assert_eq!(entry.columns, vec!["行数".to_string()]);
+    assert_eq!(
+        entry.lineage.as_deref(),
+        Some("本地分析"),
+        "血缘要说清这份不是原查询（工具栏的来源段）"
+    );
     assert_eq!(store.active_index(&id), Some(0), "原结果仍被选中（可回看）");
     let message = cx
         .update(|_window, cx| panel.read(cx).message.clone())

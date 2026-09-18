@@ -174,6 +174,24 @@ impl ExecTarget {
             Self::Analysis(_) => "本地分析",
         }
     }
+
+    /// 【B15】血缘摘要：这份结果是**怎么来的**（结果工具栏的来源段；原型 §2.4）
+    ///
+    /// 与 [`Self::label`] 分开：标签说的是“用户点的是哪个动作”（当前语句 / 选区 / 批量），
+    /// 血缘说的是“这份数据由什么产生”——四个下发动作各自有名，其余都归「原查询」。
+    /// 有自定义标题的结果（执行计划 / 分析）在界面上用标题当来源，不在这里猜。
+    pub fn lineage(&self) -> &'static str {
+        match self {
+            Self::Segment { .. } => "取下一段",
+            Self::Filtered { .. } => "下发筛选",
+            Self::SortedDown { .. } => "排序下发",
+            Self::Analysis(_) => "本地分析",
+            // 普通执行（含选区 / 全部 / 批量）：结果就是那句查询的原始输出
+            Self::Empty | Self::Selection(_) | Self::Statement(_) | Self::All(_) | Self::Batch(_) => {
+                "原查询"
+            }
+        }
+    }
 }
 
 /// 结果落到哪里（B2）：执行族里「批量执行」与「在新结果标签中执行」的差别只在这一维
@@ -592,6 +610,8 @@ struct ExecJob {
     sorted_down: Option<(String, bool)>,
     /// 【B15】本地分析的载荷；`Some` 时走 `analyze`（且**只一条**）
     analysis: Option<crate::analysis::AnalysisRequest>,
+    /// 【B15】血缘摘要（回填时写到结果条目上；工具栏的来源段）
+    lineage: &'static str,
 }
 
 /// 【B13】源清单上的一个动作（旁路线程执行；不产结果集）
@@ -644,6 +664,8 @@ pub struct ExecOutcome {
     pub transaction: TxSnapshot,
     /// 【B15】这份结论是不是本地分析的产物（结果集要据此不摆“刷新”）
     pub analysis: bool,
+    /// 【B15】血缘摘要（“原查询” / “下发筛选” / “排序下发” / “取下一段” / “本地分析”）
+    pub lineage: &'static str,
     pub result: Result<QueryData, String>,
 }
 
@@ -783,6 +805,7 @@ impl ExecQueue {
                                 channel: job.channel,
                                 transaction,
                                 analysis: job.analysis.is_some(),
+                                lineage: job.lineage,
                                 result,
                             });
                         }
@@ -856,6 +879,8 @@ impl ExecQueue {
                     .map(|(_, column, descending)| (column.to_string(), descending)),
                 // 【B15】本地分析：载荷原样带过去（工作线程据此走 `analyze`）
                 analysis: target.analysis().cloned(),
+                // 【B15】血缘：结果回填时贴到条目上（工具栏显示“这份是怎么来的”）
+                lineage: target.lineage(),
             })
             .is_err()
         {
@@ -1275,9 +1300,60 @@ mod tests {
         assert_eq!(target.statements(), ["select n from t".to_string()]);
         assert_eq!(target.sql(), Some("select n from t"));
         assert_eq!(target.label(), "取下一段");
+        assert_eq!(target.lineage(), "取下一段");
 
         // 其它目标没有分段语义（不会误走 fetch_next）
         assert_eq!(all_target("select 1").segment(), None);
+    }
+
+    /// 【B15】血缘摘要：四个下发动作各自有名，普通执行归「原查询」
+    ///
+    /// 与 `label()` 分开的理由写在这里：标签说的是“用户点了哪个动作”（当前语句 / 选区 / 批量），
+    /// 血缘说的是“这份数据由什么产生”——两者在普通执行上恰好不同。
+    #[test]
+    fn lineage_names_where_a_result_came_from() {
+        let plain = |target: ExecTarget| target.lineage();
+        assert_eq!(plain(all_target("select 1")), "原查询", "全部也是原查询");
+        assert_eq!(plain(statement_target("select 1", 0)), "原查询");
+        assert_eq!(plain(batch_target("select 1;select 2")), "原查询");
+
+        assert_eq!(
+            ExecTarget::Filtered {
+                sql: "select 1".to_string(),
+                filter: "a".to_string(),
+                columns: vec!["c".to_string()],
+            }
+            .lineage(),
+            "下发筛选"
+        );
+        assert_eq!(
+            ExecTarget::SortedDown {
+                sql: "select 1".to_string(),
+                column: "c".to_string(),
+                descending: false,
+            }
+            .lineage(),
+            "排序下发"
+        );
+        assert_eq!(
+            ExecTarget::Segment {
+                sql: "select 1".to_string(),
+                offset: 0,
+                limit: SEGMENT_ROWS,
+            }
+            .lineage(),
+            "取下一段"
+        );
+        assert_eq!(
+            ExecTarget::Analysis(crate::analysis::AnalysisRequest {
+                sql: "select count(*) from {table}".to_string(),
+                columns: vec!["c".to_string()],
+                rows: vec![vec!["1".to_string()]],
+                dropped_rows: 0,
+            })
+            .lineage(),
+            "本地分析"
+        );
     }
 
     // ===== 执行通道 =====
