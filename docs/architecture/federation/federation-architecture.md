@@ -83,6 +83,8 @@
 | D10 | **L2 未真机验收前不算可用** | 装得上 ≠ 连得上、下推好不好（我们没有 Oracle / MSSQL 端点） | 代码可以先写，验收口径写死“待真机” |
 | D11 | **凭据随连接串进 `ATTACH`，出引擎前脱敏** | 真机实测（`tests/federation_credentials_probe.rs`）：DuckDB 1.5.5 的 **mysql / postgres 扫描器都不认 Secret**——会话级 / 持久化 / 带 scope / `ATTACH ''` 全试过；脱敏 URL（`user:******@`）只会认证失败。所以挂载必须用**运行时连接串**（`DriverConnectionConfig.url_override`） | 口令会随 `ATTACH` 进 DuckDB 内存与报错文本：引擎侧一律过 `accel::scrub_credentials`（错误 / 挂载失败原因 / 历史里的原因）；连接对话框文案也跟着改成实话 |
 | D12 | **会话按源清单指纹缓存** | 同一个连接上的多份文档共享一条联邦会话（临时对象也共享）；**换主源不重建**（只是 `USE`），源清单变了才重建 | 改参与源 = 丢本地临时对象（日志里写一条，界面靠源清单告知）；两期后可优化成增量 `DETACH`/`ATTACH` |
+| D15 | **源登记复用 `use_duckdb_fed`，不另开一列**（原 T1.2 计划是加一列「用作联邦源」） | 实现时确认：这个开关的语义就是“**允许 DuckDB 直连本连接**”（对话框文案原本就写着“联邦查询直连源库”），且**项目侧表里也有这一列**；再开一个近乎同义的开关只会让人猜“两个开关差在哪” | 开关同时控制本地加速与联邦源参与；文案要同时说清两件事（已改）。若将来真需要分开，再加列不迟 |
+| D16 | **源从「连接记录」组装，不要求已连接** | 源是 DuckDB 自己 `ATTACH` 的（不需要应用先建连）；这正是**没有原生驱动的库**（Oracle 这类）能参与的唯一入口——应用连不上它，但 DuckDB 的 scanner 能 | 组装时现拼连接串（解密口令）；已建连的（含项目作用域 `P_`）作为第二来源补充，同一个 conn_id 只算一次 |
 | D13 | **联邦档要求 ≥ 2 个源** | 联邦与本地加速的区别就是“跨源”；只有一个源时两者是同一件事，摆两个入口只会让人猜 | 门控与执行路径同一口径，各自行尾把“还差哪个源”说出来（未连上 / 未开开关 / 驱动不支持） |
 | D14 | **L2 源走专用挂载路径**（与 L1 不同形） | 真机验收（§2.1）：Oracle 的凭据**只能走 Secret**（`ATTACH '<secret>'`），且**不支持 `READ_ONLY`**，限定名是**两段**（`<别名>.<表>`） | 会话里建**会话级** Secret（不落盘）；写拒绝靠编辑器闸门 + 只读账号（引擎侧补判定）；提示语 / 文档按源类型给不同写法 |
 
@@ -133,6 +135,7 @@
 | 10 | ⚪ | **旧 `legacy.rs` 的退役** | 两套并存易误用 | `session.rs` 覆盖四类源与物化后一并退役（标“已被取代”不静默删） |
 | 11 | 🟡 | **扫描器不认 Secret**（D11 的实测）：凭据只能随 `ATTACH` 串进 DuckDB | 企业内网可能不接受“口令进内存”（虽然不落库、不进日志） | 界面与文档如实说明；若将来扫描器支持 Secret，再改成 Secret 优先（探针已留台账） |
 | 12 | 🟡 | **SSH / 代理后面的源**：DuckDB 自己发起到源库的连接，走不到应用内的隧道 | 这类连接当下只能走源库档（或将来 L3 桥接：应用侧拉数） | 门控/源清单里如实报“挂不上：连接超时”；L3 桥接是它真正的归宿 |
+| 13 | ⚪ | **项目作用域的标记源靠运行态补充**（D16）：连接记录的全局表里没有 `P_`，所以 `P_` 连接要先在应用里建连才进得了源清单 | 项目专属连接（项目本地 sqlite 等）多一步 | 要彻底解决得把「当前项目根」交给执行器；第一期先靠运行态兜住 |
 
 ## 9. 实现位置映射（设计决策 → 代码）
 
@@ -145,6 +148,8 @@
 | D11 凭据与脱敏 | `crates/engine/src/duckdb/accel.rs`（`AccelSource::new` / `scrub_credentials`）+ `crates/engine/tests/federation_credentials_probe.rs` |
 | D14 L2 挂载差异（Secret / 无只读 / 两段名） | `.../federation/session.rs`（🟡 T3.2）+ 真机台账 `crates/engine/tests/oracle_probe.rs`（✅） |
 | D13 门控口径 | `crates/workbench/src/services/editor_channels.rs`（`federated_availability`） |
+| D15 源登记（复用开关） | `crates/workbench/src/components/connection_dialog/render.rs`（「DuckDB 直连（本地加速 / 用作联邦源）」分组） |
+| D16 从记录组装源 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `plan_from_records`）+ `accel::normalize_scheme`（驱动 id → 扫描器 scheme） |
 | 联邦档执行路径 / 源清单组装 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `run_on_federation`） |
 | 历史带参与源 | `crates/engine/src/persistence/history_store.rs`（`sources`）+ `crates/editor/src/history.rs`（`sources_text`） |
 | D7 下推与上限 / L3 | `.../federation/bridge.rs`（🟡 第二期） |

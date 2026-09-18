@@ -17,7 +17,7 @@
 //! 挂载与执行在 [`super::session`]；连接与凭据在连接体系；持久化的"哪些连接用作联邦源"
 //! 是宿主侧的事（第一期后半接）。
 
-use super::super::accel::{AccelKind, normalize_file_path, quote_literal};
+use super::super::accel::{AccelKind, normalize_file_path, normalize_scheme, quote_literal};
 
 /// 别名里不能用的名字：DuckDB 自己的 catalog、加速档的固定别名，以及**最容易被当成
 /// 连接名的 SQL 关键字**（`left` / `order` / `table` …——真机踩到过：`ATTACH … AS left`
@@ -129,7 +129,8 @@ impl FederatedSource {
                 if trimmed.is_empty() {
                     return Err("这个连接没有可用的连接串".to_string());
                 }
-                trimmed.to_string()
+                // 驱动 id 不能当 scheme 用（`mysql_native://` DuckDB 不认）——换成扫描器那份
+                normalize_scheme(kind, trimmed)
             }
         };
         Ok(Self {
@@ -334,5 +335,30 @@ mod tests {
         // 认不出的驱动如实说
         let err = FederatedSource::new("c1", "x", "clickhouse", "http://x").unwrap_err();
         assert!(err.contains("clickhouse"), "{err}");
+    }
+
+    /// 网络源：驱动 id（`mysql_native`）不能当 scheme，交给 DuckDB 前要换成扫描器那份
+    #[test]
+    fn a_network_source_gets_the_scanners_scheme() {
+        let source = FederatedSource::new(
+            "c1",
+            "orders",
+            "mysql_native",
+            "mysql_native://root:pw@h:3306/db",
+        )
+        .expect("网络源");
+        assert_eq!(source.connection_string, "mysql://root:pw@h:3306/db");
+        assert!(source.attach_sql().contains("TYPE mysql"), "{}", source.attach_sql());
+        assert!(source.attach_sql().contains("READ_ONLY"));
+
+        let pg = FederatedSource::new(
+            "c2",
+            "wh",
+            "postgres_native",
+            "postgres_native://u:p@h:5432/w",
+        )
+        .expect("网络源");
+        assert_eq!(pg.connection_string, "postgres://u:p@h:5432/w");
+        assert!(pg.attach_sql().contains("TYPE postgres"));
     }
 }

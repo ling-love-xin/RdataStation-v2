@@ -17,6 +17,7 @@
 | **三层策略** | L1 官方 scanner（mysql/pg/sqlite）→ L2 社区 scanner（mssql/oracle_scanner…）→ L3 桥接兜底（拉数 → 临时表） | 架构 §2 |
 | **扩展显式管理** | 关掉 DuckDB 的自动安装/自动加载（实测默认全开，会静默联网）；装到应用目录、可离线预置 | 架构 D4 |
 | **凭据随连接串进 `ATTACH`** | 扫描器**不认** Secret（真机实测）；口令只在内存里传，出引擎前一律脱敏（`accel::scrub_credentials`） | 架构 D11 |
+| **源 = 开了「DuckDB 直连」的连接** | 一个开关管“本地加速 + 联邦源”（不另设开关）；源从**连接记录**组装，**不要求已连接**——无原生驱动的库（Oracle）也靠这条进来 | 架构 D15 / D16 |
 | **会话按源清单缓存** | 同一个连接上的文档共享一条联邦会话；换主源不重建，源清单变了才重建 | 架构 D12 |
 | **状态如实** | 挂不上的源留在清单里并带原因；一致性（非事务快照）与代价（扫描 / 拉取行数）都能看见 | 架构 D8、原型 §5 |
 | **部分可用好过整体失败** | 一个源挂不上，其余源照常可用；查询用到它时给带源名的可读错误 | 架构 D6 |
@@ -80,10 +81,12 @@
    错误文本出引擎前过 `accel::scrub_credentials`；`ConnectionInfo.url`（脱敏）**不能**喂给 `ATTACH`。
 8. **L2 源与 L1 不同形**（架构 D14）：凭据走**会话级 Secret**（`ATTACH '<secret>'`）、**没有 `READ_ONLY`**、
    限定名是**两段**（`<别名>.<表>`）。只读那一道靠编辑器闸门 + 只读账号。
-9. **状态如实、命名如实**：徽标写“联邦”不写“快照”；桥接数据标“拉取于 HH:MM 的副本”。
-10. **零裸值**（视图层）：颜色走主题 token、尺寸进 `ui.rs`（契约测试会拦）。
-11. 注释与文档用简体中文，说明意图与取舍（不复述代码）。
-12. `cargo` 命令固定 `-j 2`。
+9. **源从记录组装**（架构 D16）：`federated_plan` 读连接记录 + 运行态，交给 DuckDB 前把 scheme 归一
+   （`accel::normalize_scheme`：`mysql_native://` → `mysql://`）；驱动 id 不能当 scheme 用。
+10. **状态如实、命名如实**：徽标写“联邦”不写“快照”；桥接数据标“拉取于 HH:MM 的副本”。
+11. **零裸值**（视图层）：颜色走主题 token、尺寸进 `ui.rs`（契约测试会拦）。
+12. 注释与文档用简体中文，说明意图与取舍（不复述代码）。
+13. `cargo` 命令固定 `-j 2`。
 
 ## 5. 测试与验证
 
@@ -109,6 +112,10 @@ RDS_TEST_ORACLE_URL='oracle://devuser:***@192.168.3.138:1521/XEPDB1' \
 
 # 联邦档执行路径（工作台侧：组装 / 门控）
 cargo test -p rds-workbench -j 2 --lib -- services::editor
+
+# 真机：标记连接 → 跨源 → 撤标记拒绝（不需要应用先建连）
+RDS_TEST_MYSQL_URL='…' RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil' \
+  cargo test -p rds-workbench -j 2 --test federation_sources -- --nocapture --test-threads=1
 ```
 
 ## 6. 文档地图

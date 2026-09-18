@@ -744,8 +744,9 @@ impl ConnectionDialogState {
                         "安全策略（覆盖环境默认）",
                         div().w_full().v_flex().gap(rems(GAP_SM)).child(sec_rows),
                     ));
-                    // 分组③ DuckDB 本地加速（仅网络型库可见）：warning 色标题，开关 + 参数行均在分组内。
-                    if is_network_db {
+                    // 分组③ DuckDB 直连（**所有类型都摆**）：网络库用于本地加速 + 跨源，
+                    // 文件库（sqlite / duckdb）不需要加速，但可以作**联邦源**参与跨源查询。
+                    {
                         // DuckDB 加速开关：gpui-component `Switch`（决策 #84；默认尺寸 36×20，与原型 HTML 一致）。
                         let toggle = Switch::new("duckdb-fed")
                             .checked(duckdb_fed.get())
@@ -764,7 +765,11 @@ impl ConnectionDialogState {
                             .gap(rems(GAP_SM))
                             .child(hint_line(
                                 theme,
-                                "仅网络数据库可用 · 挂载时凭据只在内存里传递（不写进 URL 与日志）",
+                                if is_network_db {
+                                    "开启后：分析引擎可只读挂载本连接 —— 本地加速与跨源（联邦）查询都用它；凭据只在内存里传递（不写进 URL 与日志）"
+                                } else {
+                                    "开启后：本文件库可作为**联邦源**参与跨源查询（本地文件不需要本地加速）；凭据只在内存里传递"
+                                },
                             ))
                             .child(form_row(
                                 theme,
@@ -782,21 +787,25 @@ impl ConnectionDialogState {
                                     ),
                             ));
                         if duckdb_fed.get() {
-                            accel_body = accel_body
-                                .child(form_row(theme, "缓存路径", Input::new(&cache_path)))
-                                .child(hint_line(
-                                    theme,
-                                    "已开启：分析引擎可以只读挂载本连接做跨源查询（凭据只在内存里传递，不写进 URL 与日志）；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理",
-                                ));
+                            if is_network_db {
+                                accel_body = accel_body
+                                    .child(form_row(theme, "缓存路径", Input::new(&cache_path)));
+                            }
+                            accel_body = accel_body.child(hint_line(
+                                theme,
+                                "已开启：本连接会出现在联邦源清单里（跨源查询写 别名.schema.表；文件库写 别名.schema.表 同样适用）；缓存上限 / 自动刷新 / 压缩由分析引擎默认策略管理",
+                            ));
                         } else {
-                            accel_body =
-                                accel_body.child(hint_line(theme, "关闭：联邦查询不可用"));
+                            accel_body = accel_body.child(hint_line(
+                                theme,
+                                "关闭：本地加速与联邦查询都不用本连接",
+                            ));
                         }
                         content = content.child(make_section(
                             "accel",
                             lucide("icons/database-zap.svg"),
                             theme.colors.warning,
-                            "DuckDB 本地加速（联邦查询直连源库）",
+                            "DuckDB 直连（本地加速 / 用作联邦源）",
                             accel_body,
                         ));
                     }

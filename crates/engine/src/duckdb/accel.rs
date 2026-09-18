@@ -108,6 +108,21 @@ impl AccelKind {
             Self::DuckDb => None,
         }
     }
+
+    /// **扫描器认的** URL scheme——**不是**应用的驱动 id
+    ///
+    /// 应用里 `db_type` 可能是原生驱动的 id（`mysql_native` / `postgres_native`），而 DuckDB
+    /// 的 scanner 只认 `mysql://` / `postgres://`：直接把驱动 id 当 scheme 递过去，会得到
+    /// `Invalid dsn "mysql_native://…" - expected key=value pairs separated by spaces`
+    /// （真机踩到）。所以连接串在交给 DuckDB 前要把 scheme 换成这一份。
+    pub(crate) fn scheme(self) -> &'static str {
+        match self {
+            Self::MySql => "mysql",
+            Self::PostgreSql => "postgres",
+            Self::Sqlite => "sqlite",
+            Self::DuckDb => "duckdb",
+        }
+    }
 }
 
 /// 一个加速源（**宿主组装**：引擎不读连接库，也不解密口令）
@@ -136,13 +151,7 @@ impl AccelSource {
         let kind = AccelKind::from_db_type(db_type)?;
         let connection_string = match kind {
             AccelKind::Sqlite | AccelKind::DuckDb => normalize_file_path(url)?,
-            _ => {
-                let trimmed = url.trim();
-                if trimmed.is_empty() {
-                    return Err("这个连接没有可用的连接串".to_string());
-                }
-                trimmed.to_string()
-            }
+            _ => normalize_scheme(kind, url),
         };
         Ok(Self {
             conn_id: conn_id.to_string(),
@@ -184,6 +193,19 @@ pub(crate) fn normalize_file_path(url: &str) -> Result<String, String> {
         return Err("这个连接没有可用的文件路径".to_string());
     }
     Ok(cleaned.to_string())
+}
+
+/// 网络型连接串：把 scheme 换成**扫描器认的**那个（`mysql_native://…` → `mysql://…`）
+///
+/// 其余部分（凭据 / 主机 / 库名 / 查询串）原样保留：应用里 `db_type` 是驱动 id，
+/// 而 DuckDB 的 scanner 只认 `mysql` / `postgres` 这类 scheme（见 [`AccelKind::scheme`]）。
+/// 空串如实报错；认不出 scheme 的写法（没有 `://`）原样返回，让 DuckDB 自己报。
+pub(crate) fn normalize_scheme(kind: AccelKind, url: &str) -> String {
+    let trimmed = url.trim();
+    match trimmed.split_once("://") {
+        Some((_, rest)) => format!("{}://{rest}", kind.scheme()),
+        None => trimmed.to_string(),
+    }
 }
 
 /// SQL 字符串字面量（单引号翻倍）
@@ -783,5 +805,38 @@ mod tests {
         );
         // 空串不做事（也不 panic）
         assert_eq!(super::scrub_credentials("", "boom"), "boom");
+    }
+
+    /// 驱动 id ≠ 扫描器 scheme：交结 DuckDB 前要把 scheme 换掉（真机踩到）
+    #[test]
+    fn the_scheme_handed_to_duckdb_is_the_scanners_one() {
+        // 原生驱动的 id 不能直接当 scheme（DuckDB 报 Invalid dsn）
+        let source = AccelSource::new(
+            "C_native",
+            "mysql_native",
+            "mysql_native://root:pw@h:3306/db",
+        )
+        .expect("组装源");
+        assert_eq!(source.connection_string, "mysql://root:pw@h:3306/db");
+        assert!(source.attach_sql().contains("TYPE mysql"), "{}", source.attach_sql());
+
+        let pg = AccelSource::new(
+            "C_pg",
+            "postgres_native",
+            "postgres_native://u:p@h:5432/db?sslmode=require",
+        )
+        .expect("组装源");
+        assert_eq!(
+            pg.connection_string,
+            "postgres://u:p@h:5432/db?sslmode=require",
+            "查询串要原样留着"
+        );
+
+        // 已经是扫描器 scheme 的：保持不变（幂等）
+        let same = AccelSource::new("C_same", "mysql", "mysql://root:pw@h:3306/db").expect("组装");
+        assert_eq!(same.connection_string, "mysql://root:pw@h:3306/db");
+
+        // 没有 scheme 的写法：原样留着（让 DuckDB 自己报错，不猜）
+        assert_eq!(super::normalize_scheme(AccelKind::MySql, "h:3306/db"), "h:3306/db");
     }
 }
