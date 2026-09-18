@@ -137,6 +137,18 @@ impl SchemaAnalyzer {
             available.join(" / ")
         )))
     }
+
+    /// 「空表」有两种含义，得分开（都不能装成「结构完美」）：
+    ///
+    /// - 驱动**压根不会内省**（没有 `MetadataBrowser`，连库清单都答不出——桥接驱动 / 只有
+    ///   查询能力的 JDBC 就是这种）→ 结构洞察**做不到**，给明确回执；
+    /// - 驱动有接口、只是这个 schema 里确实没表 → 是真的空 schema，照实出报告。
+    ///
+    /// 判据要两个信号都缺：只看「没有 MetadataBrowser」会误伤那些只实现了 `Database::list_*`
+    /// 的自定义驱动；「库清单也答不出」才是真没能力。
+    fn blank_report_is_a_missing_capability(has_browser: bool, catalogs_answered: bool) -> bool {
+        !has_browser && !catalogs_answered
+    }
     pub async fn analyze(
         conn_id: String,
         database: &str,
@@ -149,9 +161,12 @@ impl SchemaAnalyzer {
             .ok_or_else(|| CoreError::connection(ConnectionError::not_found(&conn_id)))?;
 
         // 元数据取数（含「名写错了」的早失败）整段给一个上界
+        let has_browser = db.as_metadata_browser().is_some();
         let metadata = tokio::time::timeout(METADATA_TIMEOUT, async {
-            Self::ensure_target_exists(&db, database, schema).await?;
-            Self::fetch_metadata(&db, database, schema).await
+            let catalogs_answered = Self::ensure_target_exists(&db, database, schema).await?;
+            let (tables, columns, unreadable) =
+                Self::fetch_metadata(&db, database, schema).await?;
+            Ok::<_, CoreError>((tables, columns, unreadable, catalogs_answered))
         })
         .await
         .map_err(|_| {
@@ -161,7 +176,15 @@ impl SchemaAnalyzer {
             )))
         })??;
 
-        let (tables, all_columns, unreadable) = metadata;
+        let (tables, all_columns, unreadable, catalogs_answered) = metadata;
+        // 驱动不会内省时，别拿空报告冒充结论（见函数的文档）
+        if tables.is_empty()
+            && Self::blank_report_is_a_missing_capability(has_browser, catalogs_answered)
+        {
+            return Err(CoreError::common(CommonError::General(
+                "这个驱动还没有提供元数据内省（结构洞察不可用）；数据画像不受影响".to_string(),
+            )));
+        }
         let table_count = tables.len() as u32;
         let total_columns = all_columns.len() as u32;
 
@@ -206,11 +229,14 @@ impl SchemaAnalyzer {
     /// 「结构完美、其实什么都没看」的报告。有独立 Schema 层的驱动才校 schema：
     /// MySQL / SQLite / DuckDB 的 schema 是导航侧用 catalog 顶上的合成值
     /// （`has_schema_level` = false），拿它去比没有意义。
+    ///
+    /// 返回「驱动答出了库清单吗」：空报告是不是「没这个能力」靠它一起判定
+    /// （见 [`Self::blank_report_is_a_missing_capability`]）。
     async fn ensure_target_exists(
         db: &DynDatabase,
         database: &str,
         schema: &str,
-    ) -> Result<(), CoreError> {
+    ) -> Result<bool, CoreError> {
         let (catalogs, schema_level) = match db.as_metadata_browser() {
             Some(browser) => (
                 browser
@@ -241,7 +267,7 @@ impl SchemaAnalyzer {
                 return Err(Self::unknown_target_error("schema", schema, &schemas));
             }
         }
-        Ok(())
+        Ok(!catalogs.is_empty())
     }
 
     /// 表清单 → 逐表列（元数据只经过驱动接口这一条）。
@@ -853,6 +879,19 @@ mod tests {
         assert_eq!(plain.column_key, "");
         assert_eq!(plain.ordinal_position, 3);
         assert_eq!(plain.table_name, "orders");
+    }
+
+    /// 空报告要分清「驱动没这个能力」与「真的是空 schema」——桥接驱动（JDBC 那类）
+    /// 只实现查询时，前者必须给回执而不是一张空报告。
+    #[test]
+    fn an_empty_report_is_not_a_missing_capability_when_the_driver_answers() {
+        // 有 MetadataBrowser：空就是真空（这个 schema 里确实没表）
+        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(true, false));
+        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(true, true));
+        // 没 browser 但库清单答得出：只实现了 `Database::list_*` 的自定义驱动，不误伤
+        assert!(!SchemaAnalyzer::blank_report_is_a_missing_capability(false, true));
+        // 两个信号都缺：真没内省能力（桥接驱动的典型形态）
+        assert!(SchemaAnalyzer::blank_report_is_a_missing_capability(false, false));
     }
 
     /// 「名写错了」的文案：要把可见取值列出来，用户才知道该填什么。

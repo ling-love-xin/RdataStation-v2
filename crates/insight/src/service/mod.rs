@@ -643,13 +643,33 @@ impl IndexStores {
 ///
 /// 服务门面是**同步**的（与 `profile_column_view` 一致：调用方负责放后台），
 /// 而库访问是异步的；这里只做这一件转换。
+///
+/// **runtime 是进程级单例，不是每次调用新建**（K19 的修根）：门面驱动的是**宿主建的
+/// 连接池**，而池里连接的 I/O 任务与创建它的 runtime 绑定。临时 runtime 一 drop，
+/// 那条连接的后台任务可能一并被杀，而池还以为它是好的——下一条语句在「僵尸连接」
+/// 上一直等到超时才重建。真机实测（PostgreSQL，交替对照）：每次新建时门面路径下一条
+/// 语句稳定等 **30.2s**，直调分析器（宿主 runtime）只要 ~110ms。改成进程级单例后两边
+/// 都是一百毫秒级。
+///
+/// 用多线程 runtime 而不是 current_thread：池的空闲回收 / 连接保活是后台任务，
+/// 只在 `block_on` 期间推进是不够的。两条 worker 线程常驻，代价可接受。
 fn block_on<T>(
     future: impl std::future::Future<Output = Result<T, CoreError>>,
 ) -> Result<T, CoreError> {
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| {
-        CoreError::common(CommonError::General(format!("创建异步运行时失败：{e}")))
-    })?;
-    runtime.block_on(future)
+    static RUNTIME: std::sync::OnceLock<Result<tokio::runtime::Runtime, String>> =
+        std::sync::OnceLock::new();
+    let runtime = RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("rds-insight-block-on")
+            .enable_all()
+            .build()
+            .map_err(|e| format!("创建异步运行时失败：{e}"))
+    });
+    match runtime {
+        Ok(runtime) => runtime.block_on(future),
+        Err(message) => Err(CoreError::common(CommonError::General(message.clone()))),
+    }
 }
 
 /// 需要项目目录的操作（快照落 `{项目}/.RSmeta/project.db` + `analysis.duckdb`）
