@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation Quick Open（统一检索 / 命令面板）· 交互原型</title>
+<style>
+/* ===== 色值：只取 assets/themes/rds-theme.json 的 RDS Light / Dark 两套，不自创颜色 =====
+   --pagebg=工作台底 --titlebar=title_bar.background --popover=popover.background --fg=foreground
+   --border=border --secondary=sidebar.background（次级底 / 组头回退） --hover=list.hover.background
+   --active=list.active.background --muted=muted.foreground --primary=primary.background（coral）
+   --mark=search.match.background --scrim=overlay */
+:root{
+  --pagebg:#ECECEC; --titlebar:#F8F8F8; --popover:#FFFFFF; --fg:#333333; --border:#D4D4D4;
+  --secondary:#F3F3F3; --hover:#F0F0F0; --active:#E4E4E4; --muted:#8E8E8E;
+  --primary:#C25B46; --on-primary:#FFFFFF; --mark:#F6D9B8; --scrim:#00000033;
+  --editor:#FFFFFF; --statusbar:#C25B46;
+}
+[data-theme="dark"]{
+  --pagebg:#1E1E1E; --titlebar:#252526; --popover:#252526; --fg:#CCCCCC; --border:#3C3C3C;
+  --secondary:#333333; --hover:#2A2D2E; --active:#37373D; --muted:#8A8A8A;
+  --primary:#E8846F; --on-primary:#1E1E1E; --mark:#5A4632; --scrim:#00000080;
+  --editor:#1E1E1E; --statusbar:#E8846F;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--pagebg);color:var(--fg);font-size:13px;padding:24px 20px 36px;-webkit-font-smoothing:antialiased;}
+button{font-family:inherit;cursor:pointer;}
+code{font-family:Consolas,'SFMono-Regular',monospace;font-size:11.5px;background:var(--secondary);border:1px solid var(--border);border-radius:4px;padding:0 4px;}
+
+/* ── 页头 ── */
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;max-width:1180px;margin:0 auto 12px;}
+.brand{display:flex;gap:10px;}
+.logo{width:26px;height:26px;border-radius:7px;background:var(--primary);color:var(--on-primary);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.sub{color:var(--muted);font-size:12px;line-height:1.7;margin-top:2px;}
+.theme-toggle{flex:none;display:flex;align-items:center;gap:6px;height:30px;padding:0 14px;border:1px solid var(--border);border-radius:8px;background:var(--popover);color:var(--fg);font-size:12px;}
+.theme-toggle:hover{background:var(--hover);}
+
+/* ── 场景切换 ── */
+.scenes{display:flex;flex-wrap:wrap;align-items:center;gap:6px;max-width:1180px;margin:0 auto 14px;}
+.scenes-label{font-size:11.5px;color:var(--muted);margin-right:2px;}
+.s-btn{height:26px;padding:0 12px;border:1px solid var(--border);border-radius:6px;background:var(--popover);color:var(--fg);font-size:12px;}
+.s-btn:hover{background:var(--hover);}
+.s-btn.on{background:var(--primary);border-color:var(--primary);color:var(--on-primary);font-weight:600;}
+
+/* ── 画布：模拟工作台窗口（标题栏 36px + 五段 + 状态栏），Quick Open 浮在其上 ── */
+.canvas{display:flex;justify-content:center;overflow-x:auto;padding:4px 16px 8px;}
+.win{position:relative;flex:none;width:1080px;height:600px;background:var(--editor);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 18px 50px var(--scrim),0 2px 8px var(--scrim);display:flex;flex-direction:column;}
+
+/* 标题栏 36px：logo + 项目挖空槽 + 居中入口（20rem×1.625rem）+ 窗口控制 */
+.tbar{display:flex;align-items:center;height:36px;padding-left:10px;background:var(--titlebar);border-bottom:1px solid var(--border);flex:none;}
+.tbar-logo{width:20px;height:20px;border-radius:5px;background:var(--primary);color:var(--on-primary);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex:none;margin-right:8px;}
+.slot{display:flex;align-items:center;gap:8px;height:26px;padding:0 14px;border-radius:6px;background:var(--secondary);font-size:11.5px;color:var(--fg);white-space:nowrap;}
+.slot b{font-weight:600;}
+.slot i{font-style:normal;color:var(--muted);}
+.entry{margin-left:auto;margin-right:auto;transform:translateX(-32px);display:flex;align-items:center;gap:8px;width:320px;height:26px;padding:0 10px;border-radius:4px;background:var(--border);color:var(--muted);font-size:11.5px;flex:none;}
+.entry .k{margin-left:auto;}
+.wctrl{display:flex;flex:none;margin-left:auto;}
+.wctrl span{width:44px;height:36px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11px;}
+
+/* 五段主体 */
+.body{flex:1;min-height:0;display:flex;}
+.abars{width:48px;flex:none;background:var(--secondary);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;gap:10px;padding-top:10px;color:var(--muted);}
+.abars .a{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;}
+.abars .a.on{background:var(--active);color:var(--fg);}
+.side{width:240px;flex:none;background:var(--secondary);border-right:1px solid var(--border);padding:10px 10px;color:var(--muted);font-size:12px;}
+.side .ph{font-size:11.5px;color:var(--muted);margin-bottom:8px;}
+.side .ln{height:20px;border-radius:4px;background:var(--hover);margin-bottom:6px;}
+.side .ln.w70{width:70%;} .side .ln.w55{width:55%;} .side .ln.w80{width:80%;}
+.center{flex:1;min-width:0;padding:12px 14px;color:var(--muted);font-size:12px;}
+.center .tab{display:inline-flex;align-items:center;height:26px;padding:0 12px;border:1px solid var(--border);border-radius:6px 6px 0 0;background:var(--popover);color:var(--fg);font-size:12px;}
+.statusbar{flex:none;height:28px;display:flex;align-items:center;gap:12px;padding:0 12px;background:var(--statusbar);color:var(--on-primary);font-size:11.5px;}
+
+/* ── 浮层（遮罩 + 面板 35rem，距顶 42px） ── */
+.overlay{position:absolute;inset:0;background:var(--scrim);display:flex;justify-content:center;}
+.palette{margin-top:42px;width:560px;max-height:420px;display:flex;flex-direction:column;background:var(--popover);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 24px 60px var(--scrim),0 2px 10px var(--scrim);}
+.p-in{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;border-bottom:1px solid var(--border);flex:none;}
+.p-in .ic{color:var(--muted);flex:none;display:flex;}
+.p-in input{flex:1;min-width:0;height:28px;border:none;background:transparent;color:var(--fg);font-size:13.5px;outline:none;}
+.p-in input::placeholder{color:var(--muted);}
+.p-mode{flex:none;height:20px;padding:0 8px;border-radius:4px;background:var(--active);color:var(--fg);font-size:11px;display:flex;align-items:center;gap:4px;}
+.p-mode.hide{display:none;}
+.p-list{flex:1;min-height:0;overflow-y:auto;padding:6px 6px 4px;}
+.g-head{display:flex;align-items:center;gap:6px;height:26px;padding:0 8px;margin-top:2px;border-radius:4px;background:var(--secondary);font-size:11px;font-weight:600;color:var(--muted);}
+.g-head .sp{margin-left:auto;font-weight:400;}
+.g-head .dot{width:5px;height:5px;border-radius:50%;background:var(--muted);}
+.row{position:relative;display:flex;align-items:flex-start;gap:8px;min-height:24px;padding:3px 8px 3px 12px;border-radius:5px;cursor:pointer;}
+.row:hover{background:var(--hover);}
+.row.on{background:var(--active);}
+.row.on::before{content:"";position:absolute;left:2px;top:3px;bottom:3px;width:2px;border-radius:1px;background:var(--primary);}
+.row .ric{width:16px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--muted);padding-top:1px;}
+.row .txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.row .t1{display:flex;align-items:center;gap:6px;min-width:0;}
+.row .t1 .nm{font-size:12.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.row .why{flex:none;height:15px;padding:0 4px;border:1px solid var(--border);border-radius:3px;font-size:10px;line-height:13px;color:var(--muted);}
+.row .t2{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.row .crumb{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.row .meta{flex:none;max-width:42%;padding-top:1px;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.row .kbd{flex:none;font-size:11px;color:var(--muted);padding-top:1px;}
+mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px;font-weight:600;}
+.hint-row{padding:4px 8px 4px 12px;font-size:11px;color:var(--muted);}
+.more{padding:2px 8px 4px 28px;font-size:11px;color:var(--muted);}
+.more button{border:none;background:transparent;color:var(--primary);font-size:11px;padding:0 2px;text-decoration:underline;}
+.p-hint{display:flex;align-items:center;gap:8px;height:24px;padding:0 12px;border-top:1px solid var(--border);background:var(--secondary);color:var(--muted);font-size:11px;flex:none;white-space:nowrap;overflow:hidden;}
+.p-hint .scope{margin-left:auto;color:var(--muted);}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:36px 0 32px;color:var(--muted);}
+.empty .e1{font-size:12.5px;color:var(--fg);}
+.empty .e2{font-size:11px;}
+.empty-acts{display:flex;gap:8px;margin-top:2px;}
+.empty-acts button{height:24px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--popover);color:var(--fg);font-size:11.5px;}
+.empty-acts button:hover{background:var(--hover);}
+.flash{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:var(--popover);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:11.5px;color:var(--fg);opacity:0;transition:opacity .18s;pointer-events:none;max-width:70%;}
+.flash.show{opacity:1;}
+
+/* ── 页脚说明 ── */
+.foot{max-width:1180px;margin:16px auto 0;font-size:11.5px;color:var(--muted);line-height:1.9;}
+.foot b{color:var(--fg);}
+.foot .card{background:var(--popover);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-top:10px;line-height:1.9;}
+.foot .card h3{font-size:12.5px;color:var(--fg);margin-bottom:4px;}
+.foot .two{display:flex;gap:14px;flex-wrap:wrap;}
+.foot .two>div{flex:1;min-width:320px;}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <div class="brand">
+    <div class="logo">RDS</div>
+    <div>
+      <h1>Quick Open（统一检索 / 命令面板）· 交互原型</h1>
+      <div class="sub">
+        核心 = <b>元数据搜索</b>（名称档 + 全文档）。示意稿，非权威；规格以
+        <code>quick-open-prototype-design.md</code> 为准。输入框里可直接试前缀：<code>&gt;</code> 命令、<code>#</code> 元数据全文。
+      </div>
+    </div>
+  </div>
+  <button class="theme-toggle" id="themeBtn">切换为深色</button>
+</div>
+
+<div class="scenes">
+  <span class="scenes-label">场景：</span>
+  <button class="s-btn on" data-scene="name">元数据 · 名称</button>
+  <button class="s-btn" data-scene="fts">元数据 · 全文</button>
+  <button class="s-btn" data-scene="dupe">同名消歧</button>
+  <button class="s-btn" data-scene="default">默认混排</button>
+  <button class="s-btn" data-scene="cmd">&gt; 命令模式</button>
+  <button class="s-btn" data-scene="short">单字符（门槛）</button>
+  <button class="s-btn" data-scene="loading">搜索中（异步）</button>
+  <button class="s-btn" data-scene="empty">无匹配</button>
+  <button class="s-btn" data-scene="noproj">未打开项目</button>
+</div>
+
+<div class="canvas">
+  <div class="win">
+    <!-- 标题栏 -->
+    <div class="tbar">
+      <div class="tbar-logo">R</div>
+      <div class="slot"><i>项目</i><b id="projName">营销分析</b></div>
+      <div class="entry">
+        <span class="ic"></span>
+        <span id="entryText">搜索对象、文件、命令…</span>
+        <span class="k">Ctrl+P</span>
+      </div>
+      <div class="wctrl"><span>─</span><span>□</span><span>✕</span></div>
+    </div>
+
+    <!-- 五段主体（示意，被遮罩压暗） -->
+    <div class="body">
+      <div class="abars"><div class="a">▤</div><div class="a on">◆</div><div class="a">▦</div><div class="a">✦</div></div>
+      <div class="side">
+        <div class="ph">数据库导航</div>
+        <div class="ln w80"></div><div class="ln w55"></div><div class="ln w70"></div><div class="ln w55"></div>
+      </div>
+      <div class="center"><span class="tab">查询 1</span></div>
+    </div>
+
+    <div class="statusbar"><span>« 完全隐藏</span><span>数据库导航</span><span style="margin-left:auto">连接：营销分析（生产）</span><span>DuckDB 就绪</span><span>UTF-8</span></div>
+
+    <!-- 浮层 -->
+    <div class="overlay">
+      <div class="palette" id="palette">
+        <div class="p-in">
+          <span class="ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></span>
+          <input id="q" type="text" placeholder="搜索对象、文件、命令…" autocomplete="off" spellcheck="false">
+          <div class="p-mode hide" id="modeChip"><span id="modeGlyph">#</span><span id="modeText">元数据全文</span></div>
+        </div>
+        <div class="p-list" id="list"></div>
+        <div class="p-hint" id="hint"></div>
+      </div>
+    </div>
+
+    <div class="flash" id="flash"></div>
+  </div>
+</div>
+
+<div class="foot">
+  <div class="card">
+    <h3>这份原型在说什么（本轮新增项已标 ★）</h3>
+    <div class="two">
+      <div>
+        1. <b>核心是元数据搜索</b>：默认模式以「表 / 视图 / 列」为主角（名称档，中缀，沿用已接线的 <code>metadata_index</code>）；<code>#</code> 进全文档（注释 / 类型 / 将来可含定义），走已存在但<b>从未接线</b>的 <code>metadata_fts</code>（FTS5）。<br>
+        2. <b>为什么命中</b> ★：行内小标签（释 / 型 / 义；名称命中是默认，不额外标）—— 尤其 <code>#</code> 全文档，一眼看出是注释还是定义命中的。<br>
+        3. <b>面包屑归属</b> ★：第二行给 <code>连接 › schema › 表</code>，多连接 / 多 schema 同名对象一眼消歧（专设「同名消歧」场景）。<br>
+        4. <b>单字符门槛</b> ★：<code>1</code> 个字符只过滤本地源（命令 / 连接 / 文件），元数据组显示「再输入 1 个字符开始搜索」——避免单字符全库扫。<br>
+        5. <b>截断不静默</b> ★：组内「还有 N 条…」，底部常显搜索范围（已搜 / 跳过几个连接）。
+      </div>
+      <div>
+        6. <b>异步不抢选中</b> ★：批次回填按业务键跟随选中行，列表更新不夺走用户当前位置（原型看不出，但要写进实现约束）。<br>
+        7. <b>无结果的转移入口</b> ★：直接给「在数据库导航中搜索 / 在草稿箱中搜索内容」两个去向，不做死胡同。<br>
+        8. <b>键盘三态</b>：<code>↵</code> 打开并关闭 · <code>Ctrl+↵</code> 后台打开 · <code>Shift+↵</code> 保留面板；<code>Ctrl+Shift+P</code> 直达命令模式（原型里按 <code>↵</code> 可看当前三态提示）。<br>
+        9. <b>原型未模拟</b>：真实防抖（150ms）、IME 组合态期间不发异步查询、FTS5 查询词清洗（用户输入 <code>"</code> <code>*</code> <code>NEAR</code> 会破坏 MATCH 语法）、Esc 后的焦点恢复、权限与只读差异、中文分词取舍（见文档 Q8）。<br>
+        10. <b>范围与上限（设计值）</b>：单组 8 条 / 总计 50 条；后台单连接 50 / 总计 300；FTS 引擎侧 <code>LIMIT 50</code>；搜索不建缓存。
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // ===== 数据：示意行 =====
+  // why = 为什么命中（名/释/型/义）；crumb = 面包屑归属；snip = 片段（全文档档）；match = 本地过滤用纯文本
+  var META = [
+    {type:'table',  why:'名', label:'public.<mark>ord</mark>ers', match:'public.orders 订单主表',
+     crumb:'营销分析（生产） › public › orders', meta:'营销分析（生产） · postgres', act:'打开属性面板'},
+    {type:'table',  why:'名', label:'public.<mark>ord</mark>er_items', match:'public.order_items 订单明细',
+     crumb:'营销分析（生产） › public › order_items', meta:'营销分析（生产） · postgres', act:'打开属性面板'},
+    {type:'column', why:'名', label:'<mark>ord</mark>ers.customer_id', match:'orders.customer_id 客户 外键',
+     crumb:'营销分析（生产） › public › orders › customer_id', meta:'列 · bigint · 外键', act:'属性面板定位到列'},
+    {type:'view',   why:'名', label:'analytics.v_<mark>ord</mark>er_daily', match:'v_order_daily 视图 每日订单',
+     crumb:'营销分析（生产） › analytics › v_order_daily', meta:'营销分析（生产） · postgres', act:'打开属性面板'},
+    {type:'table',  why:'名', label:'main.<mark>ord</mark>er_snapshot', match:'main.order_snapshot 分析库 快照',
+     crumb:'分析库 › main › order_snapshot', meta:'分析库 · duckdb', act:'打开属性面板'}
+  ];
+  var FTS = [
+    {type:'table',  why:'释', label:'public.orders', match:'orders 订单 渠道 优惠',
+     snip:'…<b>订单</b>主表，含<b>渠道</b>与<b>优惠</b>信息…', meta:'营销分析（生产） · 注释命中', act:'打开属性面板'},
+    {type:'column', why:'释', label:'orders.channel_code', match:'channel_code 下单渠道 APP 小程序',
+     snip:'…<b>下单渠道</b>：APP / 小程序 / H5 / 门店…', meta:'表 orders · 营销分析（生产） · 注释命中', act:'属性面板定位到列'},
+    {type:'view',   why:'义', label:'analytics.v_order_daily', match:'v_order_daily 定义 SELECT orders 渠道',
+     snip:'…SELECT date_trunc(\'day\', created_at) AS d, 渠道 … FROM orders…', meta:'视图定义命中 · 营销分析（生产）', act:'打开属性面板'}
+  ];
+  var DUPE = [
+    {type:'table', why:'名', label:'public.<mark>orders</mark>', match:'public.orders 营销分析',
+     crumb:'营销分析（生产） › public › orders', meta:'项目连接 · postgres · P', act:'打开属性面板'},
+    {type:'table', why:'名', label:'public.<mark>orders</mark>', match:'public.orders 本地开发',
+     crumb:'本地开发（SQLite） › public › orders', meta:'项目连接 · sqlite · P', act:'打开属性面板'},
+    {type:'table', why:'名', label:'main.<mark>orders</mark>', match:'main.orders 分析库',
+     crumb:'分析库 › main › orders', meta:'全局连接 · duckdb · G', act:'打开属性面板'}
+  ];
+  var FILES = [
+    {type:'file', label:'订单口径核对.sql', match:'订单口径核对 sql 草稿箱 分析脚本',
+     crumb:'草稿箱 · 营销分析/分析脚本/订单口径核对.sql', act:'编辑器打开'},
+    {type:'file', label:'渠道映射表.csv', match:'渠道映射表 csv 导入 数据',
+     crumb:'草稿箱 · 营销分析/数据/渠道映射表.csv', act:'编辑器打开'}
+  ];
+  var CONNS = [
+    {type:'conn', label:'营销分析（生产）', match:'营销分析 生产 postgres', crumb:'postgres · 项目连接', meta:'P', act:'切到导航并选中'},
+    {type:'conn', label:'分析库', match:'分析库 duckdb 本地 duckdb', crumb:'duckdb · 全局连接', meta:'G', act:'切到导航并选中'}
+  ];
+  var CMDS = [
+    {type:'cmd', label:'新建查询', match:'新建查询 new query', crumb:'', meta:'Ctrl+N', act:'执行命令'},
+    {type:'cmd', label:'打开数据库导航', match:'打开数据库导航 database nav', crumb:'', meta:'', act:'执行命令'},
+    {type:'cmd', label:'打开资产库', match:'打开资产库 resources', crumb:'', meta:'', act:'执行命令'},
+    {type:'cmd', label:'打开设置', match:'打开设置 settings', crumb:'', meta:'Ctrl+,', act:'执行命令'},
+    {type:'cmd', label:'完全隐藏侧边栏', match:'完全隐藏侧边栏 hide sidebars', crumb:'', meta:'', act:'执行命令'}
+  ];
+
+  var ICONS = {
+    table:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg>',
+    column:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h7"/></svg>',
+    view:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>',
+    file:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>',
+    conn:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg>',
+    cmd:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7l5 5-5 5M13 17h6"/></svg>'
+  };
+  var GROUP_TITLE = {meta:'元数据（表 · 视图 · 列）', fts:'元数据全文（注释 / 定义）', file:'文件', conn:'连接', cmd:'命令'};
+  var MIN_QUERY = 2;   // 元数据异步搜索的最小字符数（本地源不受限）
+
+  // ===== 状态 =====
+  var state = {q:'', sel:0, scene:'name', loading:false, noProject:false, forceEmpty:false, dupe:false};
+  var listEl = document.getElementById('list');
+  var hintEl = document.getElementById('hint');
+  var inputEl = document.getElementById('q');
+  var entryText = document.getElementById('entryText');
+  var projName = document.getElementById('projName');
+  var modeChip = document.getElementById('modeChip');
+  var modeGlyph = document.getElementById('modeGlyph');
+  var modeText = document.getElementById('modeText');
+  var flashEl = document.getElementById('flash');
+
+  function flash(msg){
+    flashEl.textContent = msg; flashEl.classList.add('show');
+    clearTimeout(flashEl._t); flashEl._t = setTimeout(function(){ flashEl.classList.remove('show'); }, 2400);
+  }
+  function stripTags(s){ return String(s).replace(/<[^>]*>/g,''); }
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function parseMode(raw){
+    var t = raw.replace(/^\s+/,'');
+    if(t.charAt(0) === '>') return {mode:'cmd', needle:t.slice(1).trim().toLowerCase()};
+    if(t.charAt(0) === '#') return {mode:'fts', needle:t.slice(1).trim().toLowerCase()};
+    return {mode:'default', needle:t.trim().toLowerCase()};
+  }
+
+  // ===== 组装结果 =====
+  function build(){
+    var p = parseMode(state.q);
+    var needle = p.needle;
+    var hit = function(r){ return !needle || r.match.toLowerCase().indexOf(needle) >= 0; };
+    var out = [];
+    var push = function(key, rows, note, more, hint){
+      var rs = rows.filter(hit);
+      if(rs.length || hint) out.push({key:key, note:note||'', rows:rs, more:more||'', hint:hint||''});
+    };
+    if(p.mode === 'cmd'){
+      push('cmd', CMDS);
+    } else if(p.mode === 'fts'){
+      push('fts', FTS);
+    } else if(state.dupe){
+      push('meta', DUPE);
+    } else if(needle.length > 0 && needle.length < MIN_QUERY){
+      // 单字符门槛：本地源照常，元数据组只给提示
+      push('meta', [], '', '', '再输入 1 个字符开始搜索元数据（避免全库扫描）');
+      if(!state.noProject) push('file', FILES);
+      push('conn', CONNS);
+      push('cmd', CMDS);
+    } else {
+      push('meta', META, state.loading ? '搜索中…' : '', '还有 42 条', '');
+      if(!state.noProject) push('file', FILES);
+      push('conn', CONNS);
+      push('cmd', CMDS);
+    }
+    return {mode:p.mode, groups:out};
+  }
+
+  function rowHtml(r, gi, ri){
+    var two = r.snip ? '<div class="t2">' + r.snip + '</div>'
+            : (r.crumb ? '<div class="crumb">' + esc(r.crumb) + '</div>' : '');
+    var why = (r.why && r.why !== '名') ? '<span class="why">' + r.why + '</span>' : '';
+    var right = (r.type === 'cmd')
+      ? (r.meta ? '<span class="kbd">' + esc(r.meta) + '</span>' : '')
+      : (r.meta && r.meta !== '—' ? '<span class="meta">' + esc(r.meta) + '</span>' : '');
+    return '<div class="row" data-act="' + esc(r.act) + '" data-label="' + esc(stripTags(r.label)) + '">' +
+      '<span class="ric">' + (ICONS[r.type]||'') + '</span>' +
+      '<span class="txt"><span class="t1"><span class="nm">' + r.label + '</span>' + why + '</span>' + two + '</span>' +
+      right + '</div>';
+  }
+
+  function render(){
+    var built = build();
+    if(state.forceEmpty){ built.groups = []; }
+
+    if(built.mode === 'cmd'){ modeChip.classList.remove('hide'); modeGlyph.textContent='>'; modeText.textContent='命令'; }
+    else if(built.mode === 'fts'){ modeChip.classList.remove('hide'); modeGlyph.textContent='#'; modeText.textContent='元数据全文'; }
+    else { modeChip.classList.add('hide'); }
+
+    if(!built.groups.length){
+      var isCmd = built.mode === 'cmd';
+      listEl.innerHTML = '<div class="empty">' +
+        '<div class="e1">' + (isCmd ? '无匹配命令' : '无匹配结果') + '</div>' +
+        '<div class="e2">' + (isCmd ? '删掉 > 前缀回到默认搜索' : '换个词，或直接去别处找') + '</div>' +
+        (isCmd ? '' : '<div class="empty-acts">' +
+          '<button data-goto="nav">在数据库导航中搜索</button>' +
+          '<button data-goto="pad">在草稿箱中搜索内容</button></div>') +
+        '</div>';
+    } else {
+      var html = '';
+      built.groups.forEach(function(g, gi){
+        html += '<div class="g-head"><span>' + GROUP_TITLE[g.key] + '</span>' +
+          (g.note ? '<span class="dot"></span><span class="sp">' + g.note + '</span>' : '') +
+          '<span class="sp">' + (g.hint ? '未搜索' : g.rows.length + ' 条') + '</span></div>';
+        if(g.hint){ html += '<div class="hint-row">' + g.hint + '</div>'; }
+        g.rows.forEach(function(r, ri){ html += rowHtml(r, gi, ri); });
+        if(g.more){ html += '<div class="more">' + g.more + ' <button data-more="1">显示更多</button></div>'; }
+      });
+      listEl.innerHTML = html;
+    }
+
+    var rows = listEl.querySelectorAll('.row');
+    if(state.sel >= rows.length) state.sel = 0;
+    rows.forEach(function(el, i){ el.classList.toggle('on', i === state.sel); });
+
+    var scope = state.noProject ? '未打开项目 · 文件组不可用'
+      : (state.dupe ? '已搜 3 个连接'
+      : (state.loading ? '已搜 4 个连接 · 2 个未内省被跳过' : '已搜 6 个连接 · 2 个未内省被跳过'));
+    hintEl.innerHTML = '↑↓ 选择 · ↵ 打开 · Ctrl+↵ 后台 · Esc 关闭 · > 命令 · # 全文' +
+      '<span class="scope">' + scope + '</span>';
+
+    entryText.textContent = state.noProject ? '搜索文件、命令…' : '搜索对象、文件、命令…';
+    projName.textContent = state.noProject ? '未打开项目' : '营销分析';
+  }
+
+  // ===== 交互 =====
+  inputEl.addEventListener('input', function(){
+    state.q = inputEl.value; state.sel = 0; state.forceEmpty = false; state.dupe = false;
+    markCustom(); render();
+  });
+  document.addEventListener('keydown', function(e){
+    var rows = listEl.querySelectorAll('.row');
+    if(e.key === 'ArrowDown'){ e.preventDefault(); if(rows.length){ state.sel = (state.sel + 1) % rows.length; render(); } }
+    else if(e.key === 'ArrowUp'){ e.preventDefault(); if(rows.length){ state.sel = (state.sel - 1 + rows.length) % rows.length; render(); } }
+    else if(e.key === 'Enter'){
+      var cur = listEl.querySelectorAll('.row')[state.sel];
+      var how = e.ctrlKey ? 'Ctrl+↵ 后台打开（不切焦点）' : (e.shiftKey ? 'Shift+↵ 打开并保留面板' : '↵ 打开并关闭面板');
+      if(cur) flash(how + '：' + cur.getAttribute('data-label') + ' → ' + cur.getAttribute('data-act'));
+    } else if(e.key === 'Escape'){
+      flash('Esc：关闭面板并把焦点还给打开前的元素（原型不关闭）');
+    }
+  });
+  listEl.addEventListener('click', function(e){
+    var goto = e.target.closest('[data-goto]');
+    if(goto){
+      flash(goto.getAttribute('data-goto') === 'nav'
+        ? '转移：落到数据库导航搜索框（同一条索引，结果留在导航里）'
+        : '转移：落到草稿箱内容搜索（M5 已有能力，结果落中央编辑区）');
+      return;
+    }
+    if(e.target.closest('[data-more]')){ flash('继续输入即可缩小范围（或滚到底部自动加载下一批）'); return; }
+    var row = e.target.closest('.row');
+    if(!row) return;
+    var rows = Array.prototype.slice.call(listEl.querySelectorAll('.row'));
+    state.sel = rows.indexOf(row); render();
+    flash('单击选中：' + row.getAttribute('data-label') + '（↵ ' + row.getAttribute('data-act') + '）');
+  });
+  listEl.addEventListener('dblclick', function(e){
+    var row = e.target.closest('.row');
+    if(row) flash('↵ 打开：' + row.getAttribute('data-label') + ' → ' + row.getAttribute('data-act'));
+  });
+  document.getElementById('palette').addEventListener('click', function(e){ e.stopPropagation(); inputEl.focus(); });
+
+  function markCustom(){ document.querySelectorAll('.s-btn').forEach(function(b){ b.classList.remove('on'); }); }
+
+  // ===== 场景 =====
+  function setTheme(dark){
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    document.getElementById('themeBtn').textContent = dark ? '切换为浅色' : '切换为深色';
+  }
+  document.getElementById('themeBtn').addEventListener('click', function(){
+    setTheme(document.documentElement.getAttribute('data-theme') !== 'dark');
+  });
+
+  function applyScene(name){
+    state.scene = name; state.loading = false; state.noProject = false; state.forceEmpty = false; state.dupe = false;
+    if(name === 'name'){ inputEl.value = 'ord'; state.q = 'ord'; }
+    if(name === 'fts'){ inputEl.value = '#渠道'; state.q = '#渠道'; }
+    if(name === 'dupe'){ inputEl.value = 'orders'; state.q = 'orders'; state.dupe = true; }
+    if(name === 'default'){ inputEl.value = '订单'; state.q = '订单'; }
+    if(name === 'cmd'){ inputEl.value = '>'; state.q = '>'; }
+    if(name === 'short'){ inputEl.value = 's'; state.q = 's'; }
+    if(name === 'loading'){ inputEl.value = 'order'; state.q = 'order'; state.loading = true; }
+    if(name === 'empty'){ inputEl.value = 'zzz'; state.q = 'zzz'; state.forceEmpty = true; }
+    if(name === 'noproj'){ inputEl.value = '订单'; state.q = '订单'; state.noProject = true; }
+    state.sel = 0;
+    document.querySelectorAll('.s-btn').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-scene') === name); });
+    render();
+    inputEl.focus();
+  }
+  document.querySelectorAll('.s-btn').forEach(function(b){
+    b.addEventListener('click', function(){ applyScene(b.getAttribute('data-scene')); });
+  });
+
+  applyScene('name');
+})();
+</script>
+</body>
+</html>

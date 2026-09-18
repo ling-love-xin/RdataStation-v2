@@ -11,6 +11,9 @@
 | `crate-ownership-proposal.html` | crate 归属 | app / workbench / settings / Feature / shared / 资产 归属示意 |
 | `layout/layout-proposal.html` | 布局示意（v5） | 五段布局最终共识的可视化示意 |
 | `layout/layout-design.md` | 布局方案 | 五段结构 / 三模式交互 / Quick Open / 改动清单 / 实施步骤 |
+| `quick_open/quick-open-prototype-design.md` | Quick Open（统一检索 / 命令面板）**原型设计** | 定位（**核心 = 元数据搜索**）与三入口分工 / 面板解剖 / 模式与前缀（`>` `#` `@`）/ **元数据两档：名称（`metadata_index`，已接线）与全文档（`metadata_fts`，已存在但零调用）** + 中文分词取舍 A/B/C / 行规格（面包屑 · 为什么命中标签 · 片段行）/ 匹配排序与上限（单字符门槛 · 异步不抢选中 · 跨档去重）/ 状态机与异步 / 空态矩阵（含转移入口 · 范围常显）/ 尺寸与主题 / GPUI 落点 / **与现状差异清单 15 条（P0–P2）** / 分期 / 测试点 / crate 归属判定 / 未决项 Q1–Q10 / **§18 优化建议清单（正确性与安全 · 规模与资源 · 体验 · 工程与回归四类）** |
+| `quick_open/quick-open-prototype.html` | Quick Open 原型（交互稿） | RDS Light/Dark 双主题；**9 场景可切**（名称 / 全文 / 同名消歧 / 默认混排 / `>` 命令 / 单字符门槛 / 搜索中 / 无匹配 / 未打开项目）；输入框可直接试前缀、↑↓ 选中、↵（含 Ctrl/Shift 三态）执行提示；展示面包屑归属 · 「为什么命中」标签 · 「还有 N 条」· 搜索范围常显 · 无结果转移入口（**示意稿，非权威**） |
+| `quick_open/quick-open-dev-plan.md` | Quick Open **开发方案** | 进度记录（**Phase 0 第一刀已落地**：模块骨架 / `List` 化 / 键盘三态 / 打开即聚焦 / 命中高亮 / 单字符门槛 / 契约登记 / 6 项单测全绿）/ 现状盘点 / 5 条决策（LIKE 转义不重复实现 · FTS 清洗归 engine · 键盘不新增全局绑定 · 业务键选中 · 双消费方分流前置）/ 第二刀任务表（元数据名称档）/ Phase 1–2 概要 / T1–T9 测试场景 / R1–R5 风险 / 验证命令（含 shim 损坏绕行）/ 实现位置映射 |
 | `theme/theme-preview.html` | 配色预览 | 明暗色卡对比 |
 | `theme/theme-design.md` | 主题方案 | 明暗 token / 产品语义角色 / 落地方式 |
 | `theme/ui-constraints.md` | UI 约束规范 | 字体阶梯 / 图标三档 / 间距阶梯 / 控件规格 / 区域固定尺寸 / 按钮与自绘控件 / 交互态 / 检查清单与迁移计划 |
@@ -78,7 +81,7 @@
 
 ## 阅读顺序建议
 
-1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/` / `editor/` / `insight/` / `analytics_resource/` / `mock/`
+1. `overview.md` → 2. `crate-ownership-proposal.html` → 3. 按需进入 `layout/` / `quick_open/` / `theme/` / `settings/` / `connection/` / `database/` / `project/` / `scratchpad/` / `editor/` / `insight/` / `analytics_resource/` / `mock/`
 
 ## 模块文档集约定（每模块应具备的类型）
 
