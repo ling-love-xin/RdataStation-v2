@@ -2582,10 +2582,20 @@ impl MetadataCacheOps {
         })
     }
 
-    /// 同步 FTS5 索引
+    /// 重建某 schema 的 FTS5 索引（幂等：先删该 schema 行，再按规范化表重插）。
     ///
-    /// 将规范化表的数据同步到 FTS5 虚拟表，支持增量更新
-    pub fn sync_fts_index(&mut self, sync_type: Option<&str>) -> Result<(), CoreError> {
+    /// **为什么按 schema 而不是全库**：写入侧挂在冷启动内省上（一次一个 schema），
+    /// 全库重建会让每次内省都付出整库代价。删除按 `schema_name` 定位——`metadata_fts`
+    /// 没有 schema_id，与 `delete_schema` 的口径一致。
+    ///
+    /// 语料：schema 名 / 对象名 / 注释（列另加数据类型、例程另加类型）；
+    /// **不含视图定义与例程源码**（那是按需加载的详情层）。
+    ///
+    /// 历史缺陷（本函数取代的 `sync_fts_index`）：尾部两个 INSERT 写的是
+    /// `FROM views v` / `FROM v_routines`，而规范化模型里**没有这两张表**
+    /// （视图是 `tables.table_type='VIEW'`，例程在 `routines`）——语句报错、整个同步
+    /// 永远跑不通，这也是它一直零调用的真因。
+    pub fn rebuild_fts_schema(&mut self, schema: &str) -> Result<usize, CoreError> {
         let tx = self.conn.transaction().map_err(|e| {
             CoreError::storage(StorageError::Persistence {
                 store: "sqlite".to_string(),
@@ -2594,113 +2604,76 @@ impl MetadataCacheOps {
             })
         })?;
 
-        // 清理旧的 FTS 数据
-        let _ = match sync_type {
-            Some(t) => match t {
-                "schema" => tx.execute("DELETE FROM metadata_fts WHERE search_type = 'schema'", []),
-                "table" => tx.execute("DELETE FROM metadata_fts WHERE search_type = 'table'", []),
-                "column" => tx.execute("DELETE FROM metadata_fts WHERE search_type = 'column'", []),
-                "view" => tx.execute("DELETE FROM metadata_fts WHERE search_type = 'view'", []),
-                "routine" => {
-                    tx.execute("DELETE FROM metadata_fts WHERE search_type = 'routine'", [])
-                }
-                _ => tx.execute("DELETE FROM metadata_fts", []),
-            },
-            None => tx.execute("DELETE FROM metadata_fts", []),
-        };
+        // 先删后插：刷新后已不存在的对象不得留在索引里
+        tx.execute(
+            "DELETE FROM metadata_fts WHERE schema_name = ?1",
+            rusqlite::params![schema],
+        )
+        .map_err(|e| fts_err("clear_fts_schema", e))?;
 
-        // 同步 schemas
-        if sync_type.is_none() || sync_type == Some("schema") {
-            tx.execute(
+        let mut inserted = 0usize;
+
+        // schema
+        inserted += tx
+            .execute(
                 "INSERT INTO metadata_fts (search_type, schema_name, object_name, parent_name, search_content)
                  SELECT 'schema', schema_name, schema_name, '', schema_name
-                 FROM schemata WHERE is_loaded = 1",
-                [],
-            ).map_err(|e| CoreError::storage(
-                StorageError::Persistence {
-                    store: "sqlite".to_string(),
-                    operation: "sync_fts_schema".to_string(),
-                    reason: e.to_string(),
-                }
-            ))?;
-        }
+                 FROM schemata WHERE schema_name = ?1 AND is_loaded = 1",
+                rusqlite::params![schema],
+            )
+            .map_err(|e| fts_err("sync_fts_schema", e))?;
 
-        // 同步 tables
-        if sync_type.is_none() || sync_type == Some("table") {
-            tx.execute(
+        // 表（排除视图：视图单独一类，与导航树的分类一致）
+        inserted += tx
+            .execute(
                 "INSERT INTO metadata_fts (search_type, schema_name, object_name, parent_name, search_content)
                  SELECT 'table', s.schema_name, t.table_name, s.schema_name,
                         s.schema_name || ' ' || t.table_name || ' ' || COALESCE(t.table_comment, '')
-                 FROM tables t
-                 INNER JOIN schemata s ON t.schema_id = s.id
-                 WHERE t.is_loaded = 1",
-                [],
-            ).map_err(|e| CoreError::storage(
-                StorageError::Persistence {
-                    store: "sqlite".to_string(),
-                    operation: "sync_fts_table".to_string(),
-                    reason: e.to_string(),
-                }
-            ))?;
-        }
+                 FROM tables t INNER JOIN schemata s ON t.schema_id = s.id
+                 WHERE s.schema_name = ?1 AND t.is_loaded = 1 AND t.table_type <> 'VIEW'",
+                rusqlite::params![schema],
+            )
+            .map_err(|e| fts_err("sync_fts_table", e))?;
 
-        // 同步 columns
-        if sync_type.is_none() || sync_type == Some("column") {
-            tx.execute(
+        // 视图（视图是 `tables` 里 table_type='VIEW' 的行；注释在 `table_comment`）
+        inserted += tx
+            .execute(
+                "INSERT INTO metadata_fts (search_type, schema_name, object_name, parent_name, search_content)
+                 SELECT 'view', s.schema_name, t.table_name, s.schema_name,
+                        s.schema_name || ' ' || t.table_name || ' ' || COALESCE(t.table_comment, '')
+                 FROM tables t INNER JOIN schemata s ON t.schema_id = s.id
+                 WHERE s.schema_name = ?1 AND t.is_loaded = 1 AND t.table_type = 'VIEW'",
+                rusqlite::params![schema],
+            )
+            .map_err(|e| fts_err("sync_fts_view", e))?;
+
+        // 列（多带上数据类型与列注释：全文档档里“按类型找列”是高频用法）
+        inserted += tx
+            .execute(
                 "INSERT INTO metadata_fts (search_type, schema_name, object_name, parent_name, search_content)
                  SELECT 'column', s.schema_name, c.column_name, t.table_name,
-                        s.schema_name || ' ' || t.table_name || ' ' || c.column_name || ' ' || c.data_type || ' ' || COALESCE(c.column_comment, '')
+                        s.schema_name || ' ' || t.table_name || ' ' || c.column_name || ' '
+                        || COALESCE(c.data_type, '') || ' ' || COALESCE(c.column_comment, '')
                  FROM columns c
                  INNER JOIN tables t ON c.table_id = t.id
                  INNER JOIN schemata s ON t.schema_id = s.id
-                 WHERE c.is_loaded = 1",
-                [],
-            ).map_err(|e| CoreError::storage(
-                StorageError::Persistence {
-                    store: "sqlite".to_string(),
-                    operation: "sync_fts_column".to_string(),
-                    reason: e.to_string(),
-                }
-            ))?;
-        }
+                 WHERE s.schema_name = ?1 AND c.is_loaded = 1",
+                rusqlite::params![schema],
+            )
+            .map_err(|e| fts_err("sync_fts_column", e))?;
 
-        // 同步 views
-        if sync_type.is_none() || sync_type == Some("view") {
-            tx.execute(
-                "INSERT INTO metadata_fts (search_type, schema_name, object_name, parent_name, search_content)
-                 SELECT 'view', s.schema_name, v.view_name, s.schema_name,
-                        s.schema_name || ' ' || v.view_name || ' ' || COALESCE(v.view_comment, '')
-                 FROM views v
-                 INNER JOIN schemata s ON v.schema_id = s.id
-                 WHERE v.is_loaded = 1",
-                [],
-            ).map_err(|e| CoreError::storage(
-                StorageError::Persistence {
-                    store: "sqlite".to_string(),
-                    operation: "sync_fts_view".to_string(),
-                    reason: e.to_string(),
-                }
-            ))?;
-        }
-
-        // 同步 routines
-        if sync_type.is_none() || sync_type == Some("routine") {
-            tx.execute(
+        // 例程
+        inserted += tx
+            .execute(
                 "INSERT INTO metadata_fts (search_type, schema_name, object_name, parent_name, search_content)
                  SELECT 'routine', s.schema_name, r.routine_name, s.schema_name,
-                        s.schema_name || ' ' || r.routine_name || ' ' || r.routine_type || ' ' || COALESCE(r.routine_comment, '')
-                 FROM routines r
-                 INNER JOIN schemata s ON r.schema_id = s.id
-                 WHERE r.is_loaded = 1",
-                [],
-            ).map_err(|e| CoreError::storage(
-                StorageError::Persistence {
-                    store: "sqlite".to_string(),
-                    operation: "sync_fts_routine".to_string(),
-                    reason: e.to_string(),
-                }
-            ))?;
-        }
+                        s.schema_name || ' ' || r.routine_name || ' ' || COALESCE(r.routine_type, '') || ' '
+                        || COALESCE(r.routine_comment, '')
+                 FROM routines r INNER JOIN schemata s ON r.schema_id = s.id
+                 WHERE s.schema_name = ?1 AND r.is_loaded = 1",
+                rusqlite::params![schema],
+            )
+            .map_err(|e| fts_err("sync_fts_routine", e))?;
 
         tx.commit().map_err(|e| {
             CoreError::storage(StorageError::Persistence {
@@ -2709,8 +2682,7 @@ impl MetadataCacheOps {
                 reason: e.to_string(),
             })
         })?;
-
-        Ok(())
+        Ok(inserted)
     }
 
     /// FTS5 全文搜索
@@ -2723,7 +2695,11 @@ impl MetadataCacheOps {
         query: &str,
         search_type: Option<&str>,
     ) -> Result<Vec<FtsSearchResult>, CoreError> {
-        let search_pattern = format!("{}*", query);
+        // 查询词清洗：裸拼 `format!("{}*", query)` 会被用户输入里的 `"` `*` `(` `NEAR` `-`
+        // 破坏 MATCH 语法（报错或语义反转）——拆词后逐词加引号、末词保留前缀，见 `fts_match_query`。
+        let Some(search_pattern) = fts_match_query(query) else {
+            return Ok(Vec::new());
+        };
 
         let sql = match search_type {
             Some(_t) => {
@@ -3138,7 +3114,14 @@ impl MetadataCacheOps {
                 })
             })?;
 
-        self.save_index_entries_batch(entries)
+        let indexed = self.save_index_entries_batch(entries)?;
+        // FTS 写侧与索引**同批**（内省一个 schema → 两个索引一起更新）：
+        // 搜索路径只读；FTS 失败不该拖垮导航赖以分页 / 计数的 `metadata_index`，
+        // 因此只告警留痕（搜索侧拿不到结果时会回落到名称档）。
+        if let Err(e) = self.rebuild_fts_schema(schema) {
+            tracing::warn!(schema, error = %e, "FTS 索引重建失败（本次仅有名称档可用）");
+        }
+        Ok(indexed)
     }
 
     /// 分页获取索引条目（支持懒加载）
@@ -3887,13 +3870,16 @@ impl MetadataCacheOps {
 
     /// 按名称模糊搜索索引（跨 schema；结果带定位所需的 catalog / schema / 父对象）。
     ///
-    /// **为什么用 `metadata_index` 而不是 `metadata_fts`**（FTS5 表与 `search_fts` 都已存在）：
-    /// - 写侧：`metadata_index` 已接线（冷启动内省后重建），FTS 的 `sync_fts_index` 从未被调用；
+    /// **为什么名称档用 `metadata_index` 而不是 `metadata_fts`**：
     /// - 用户要的是「按名字找对象」：敲 `ord` 应当命中 `order_items`（**中缀**匹配）。
-    ///   `metadata_index` + LIKE 天然支持；FTS5 默认 tokenizer 只做整词 / 前缀，
-    ///   要中缀得另换 trigram tokenizer（额外的建表与迁移成本）；
-    /// - FTS 的独有价值是**内容**（注释 / 数据类型 / 源码），属搜索的下一档：
-    ///   等“按名字找不到”成为真实抱怨时再补写入侧（查询侧那时可复用这套排序）。
+    ///   `metadata_index` + LIKE 天然支持；trigram 的 FTS 虽是子串匹配，但 **< 3 字查不到**
+    ///   （不足一个 trigram），而名称档恰恰经常只敲一两个字；
+    /// - 名称档还要给「完全相等→前缀」的稳定排序与类别权重（见下），LIKE 一次性算完。
+    ///
+    /// FTS 的独有价值是**内容**（注释 / 数据类型）：写入侧已接线
+    /// （`rebuild_fts_schema` 跟内省同批，见 `rebuild_schema_index`），读侧 `search_fts`
+    /// 用于 Quick Open 的 `#` 全文档档；重建后由 `fts_rebuild_is_schema_scoped_and_idempotent`
+    /// 与 `search_fts_returns_identity_snippet_and_survives_operator_input` 两项测试钉住。
     ///
     /// 排序：名称完全相等 → 前缀命中 → 其余；同档内按类别（表 / 视图 / schema / 列）、
     /// 名称长度、名称。`limit` 是硬上限（搜索是交互操作，不应被超大 schema 拖死）。
@@ -5346,6 +5332,49 @@ impl RoutineParameterInfo {
     }
 }
 
+/// FTS 写入失败的统一错误（`store` / `operation` 口径与文件内其它算子一致）。
+fn fts_err(operation: &str, e: rusqlite::Error) -> CoreError {
+    CoreError::storage(StorageError::Persistence {
+        store: "sqlite".to_string(),
+        operation: operation.to_string(),
+        reason: e.to_string(),
+    })
+}
+
+/// 用户输入 → FTS5 `MATCH` 查询串（`None` = 没有可用词，调用方直接返回空结果）。
+///
+/// 语义：按「非字母数字 / 非下划线」拆词 → 逐词加双引号 → 末词附 `*` 做前缀匹配。
+///
+/// **为什么不整串加引号**：整串加引号会变成一个短语，敲 `order` 就再也命不中
+/// `order_items`；拆开后每词是独立短语（隐式 AND），末词前缀又能让「敲一半」也命中。
+///
+/// 安全：双引号本身是**分隔符**（`a"b` 拆成 `a` 与 `b`），因此词里不可能再带引号；
+/// 剩下 `*` `(` `NEAR` `-` 等全部被引号包住、按字面处理，不再有语法注入面。
+fn fts_match_query(raw: &str) -> Option<String> {
+    let tokens: Vec<&str> = raw
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    let last = tokens.len() - 1;
+    for (ix, token) in tokens.iter().enumerate() {
+        if ix > 0 {
+            out.push(' ');
+        }
+        out.push('"');
+        out.push_str(token);
+        out.push('"');
+        if ix == last {
+            // 前缀：`"abc"*`（末词敲一半也能命中）
+            out.push('*');
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5617,5 +5646,147 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
+    }
+
+    /// FTS 写侧：跟 `rebuild_schema_index` 同批、按 schema 分域、幂等。
+    ///
+    /// 回归自两个真实缺陷：① `sync_fts_index` 尾部写的是 `FROM views` /
+    /// `FROM v_routines`，而规范化模型没有这两张表 → 整条同步永远跑不通（也是它一直零调用的真因）；
+    /// ② 旧表 contentless，SELECT 回来的对象身份全是 NULL。
+    #[test]
+    fn fts_rebuild_is_schema_scoped_and_idempotent() -> Result<(), CoreError> {
+        let (mut ops, _db_path, dir) = fresh_ops("fts_sync");
+        let public = ops.save_schema("main", "public", None, None)?;
+        let other = ops.save_schema("main", "other", None, None)?;
+        ops.save_table(
+            public,
+            "orders",
+            "TABLE",
+            Some("订单主表，含渠道与优惠信息"),
+            None,
+            None,
+        )?;
+        ops.save_table(public, "v_daily", "VIEW", Some("每日汇总视图"), None, None)?;
+        let t = ops.get_table_id(public, "orders")?.expect("表 id");
+        ops.save_column(
+            t,
+            "channel_code",
+            "VARCHAR",
+            0,
+            true,
+            false,
+            false,
+            None,
+            Some("下单渠道"),
+        )?;
+        ops.save_table(other, "keep_me", "TABLE", Some("另一个 schema 的表"), None, None)?;
+
+        let fts_count = |ops: &MetadataCacheOps, schema: &str| -> Result<i64, CoreError> {
+            ops.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM metadata_fts WHERE schema_name = ?1",
+                    rusqlite::params![schema],
+                    |r| r.get(0),
+                )
+                .map_err(|e| fts_err("count_fts", e))
+        };
+
+        ops.rebuild_schema_index("P_conn", "main", "public")?;
+        let before = fts_count(&ops, "public")?;
+        assert_eq!(before, 4, "schema / 表 / 视图 / 列 各一行");
+        assert_eq!(fts_count(&ops, "other")?, 0, "只重建 public，不得顺手写 other");
+
+        // 幂等：先删后插，重复重建不得翻倍
+        ops.rebuild_schema_index("P_conn", "main", "public")?;
+        assert_eq!(fts_count(&ops, "public")?, before, "重建必须幂等");
+
+        // 级联：删 schema 后 FTS 不留孤儿
+        ops.delete_schema(public)?;
+        assert_eq!(fts_count(&ops, "public")?, 0, "删 schema 后不得留孤儿");
+        assert_eq!(fts_count(&ops, "other")?, 0, "另一个 schema 本来就没索引");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// FTS 读侧：取回对象身份与 snippet；操作符输入按字面处理不报错；中文 ≥3 字命中注释。
+    #[test]
+    fn search_fts_returns_identity_snippet_and_survives_operator_input() -> Result<(), CoreError> {
+        let (mut ops, _db_path, dir) = fresh_ops("fts_read");
+        let sid = ops.save_schema("main", "public", None, None)?;
+        ops.save_table(
+            sid,
+            "orders",
+            "TABLE",
+            Some("订单主表，含渠道与优惠信息"),
+            None,
+            None,
+        )?;
+        let t = ops.get_table_id(sid, "orders")?.expect("表 id");
+        ops.save_column(
+            t,
+            "channel_code",
+            "VARCHAR",
+            0,
+            true,
+            false,
+            false,
+            None,
+            Some("下单渠道"),
+        )?;
+        ops.rebuild_schema_index("P_conn", "main", "public")?;
+
+        // 名称前缀（ASCII）：能取回对象身份（旧 contentless 表这里直接报 Invalid column type Null）
+        let hits = ops.search_fts("ord", None)?;
+        assert!(
+            hits.iter()
+                .any(|h| h.object_name == "orders" && h.search_type == "table"),
+            "`ord` 应命中 orders：{hits:?}"
+        );
+
+        // 中文注释：trigram 下 3 字命中，2 字不足一个 trigram（UI 门槛按 3 字）
+        let hit = ops
+            .search_fts("含渠道", None)?
+            .into_iter()
+            .find(|h| h.object_name == "orders")
+            .expect("3 字中文子串应命中注释");
+        assert!(
+            hit.snippet.contains("<mark>"),
+            "snippet 应带命中标记：{}",
+            hit.snippet
+        );
+        assert!(
+            ops.search_fts("渠道", None)?.is_empty(),
+            "2 字不足一个 trigram：应无命中"
+        );
+
+        // 操作符输入：清洗后全部按字面处理，不得报错
+        for probe in ["\"", "*", "NEAR", "(", "-", "ord OR x", "a\"b"] {
+            let _ = ops.search_fts(probe, None)?;
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// 查询词拆解：逐词加引号、末词前缀；纯操作符输入无可用词。
+    #[test]
+    fn fts_match_query_quotes_tokens_and_prefixes_the_last() {
+        assert_eq!(fts_match_query("ord").as_deref(), Some("\"ord\"*"));
+        assert_eq!(
+            fts_match_query("order items").as_deref(),
+            Some("\"order\" \"items\"*")
+        );
+        assert_eq!(fts_match_query("含渠道").as_deref(), Some("\"含渠道\"*"));
+        // 引号是分隔符：`a"b` 拆成两个词，词里不会再带引号
+        assert_eq!(fts_match_query("a\"b").as_deref(), Some("\"a\" \"b\"*"));
+        // NEAR / OR 只是普通词，不会被当成语法
+        assert_eq!(
+            fts_match_query("NEAR OR x").as_deref(),
+            Some("\"NEAR\" \"OR\" \"x\"*")
+        );
+        // 没有可用词 → None（调用方直接返回空结果）
+        assert_eq!(fts_match_query("\"*()"), None);
+        assert_eq!(fts_match_query("   "), None);
     }
 }

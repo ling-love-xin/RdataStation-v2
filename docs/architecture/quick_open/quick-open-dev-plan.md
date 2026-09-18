@@ -7,6 +7,21 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-19 — Phase 1 第一刀：引擎侧 FTS 接线（写侧 + 清洗 + 迁移）
+
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| P1.1 | FTS 写侧接线：新增 `rebuild_fts_schema(schema)`（按 schema 先删后插），由 `rebuild_schema_index` **同批**调用；FTS 失败只告警（不拖垮导航赖以分页 / 计数的 `metadata_index`） | `crates/engine/src/persistence/metadata_cache.rs` | ✅ |
+| P1.1a | 修复历史缺陷①：原 `sync_fts_index` 尾部引用了**不存在的表**（`FROM views` / 规范模型里视图是 `tables.table_type='VIEW'`）→ 整条同步永远跑不通（也是它长期零调用的**真因**）；新实现按规范表取数，删除旧函数 | 同上 | ✅ |
+| P1.2 | 修复历史缺陷②：表原是 **contentless**（`content=''`）——实测 MATCH 能命中，但 `SELECT` 回来的 `search_type` / `object_name` **全为 NULL**（`Invalid column type Null at index: 0`），snippet 也无从生成 → 整条读路径其实不可用；迁移 011 改为**存内容 + trigram** | `crates/engine/migrations/connection_metadata/011_fts_content_and_trigram.sql` | ✅ |
+| P1.3 | 查询词清洗：`fts_match_query`（拆词 → 逐词加引号 → 末词前缀）；`"` `*` `(` `NEAR` `-` 全部按字面处理（实测不报错、不改变语义） | 同上 | ✅ |
+| P1.4 | 单测 3 项：写侧（分域 + 幂等 + 删 schema 不留孤儿）、读侧（对象身份 + `<mark>` snippet + 中文 ≥3 字命中 / 2 字无命中 + 操作符输入不报错）、查询词拆解 | 同上 | ✅ 全绿 |
+| 验证 | `cargo test -p rds-engine --lib -j 2` → **440 项全绿**（23 ignored 为存量）；`-p rds-database --lib` → **41 项全绿** | — | ✅ |
+
+**实测结论（已写进迁移与原型设计 §6.3）**：trigram 下中文**≥3 字**才命中（2 字不足一个 trigram）→ `#` 档门槛按 **3 字**；名称档继续走 `metadata_index`（LIKE 中缀，不受 3 字限制）；索引体积约为文本 3 倍量级。
+
+**本刀未完（下一步）**：database 侧全文搜索通道（复用消费方分槽 + `SearchHit.snippet`）+ 浮层 `#` 档 UI（snippet 行 + 「为什么命中」标签 + 3 字门槛提示）。
+
 ### 2026-09-18 — Phase 0 第三刀：浮层抽成独立视图实体 + 窗口测试
 
 | # | 任务 | 落点 | 状态 |

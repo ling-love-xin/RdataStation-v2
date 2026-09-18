@@ -128,24 +128,26 @@ VSCode 语义：**前缀只认输入的第一个字符**，切换「搜索域」
 | --- | --- |
 | 数据源 | `metadata_fts`（FTS5 虚拟表，与 `metadata_index` 同在每连接的缓存库里） |
 | 表结构 | `search_type` / `schema_name` / `object_name` / `parent_name` / `search_content`（**无连接列**，连接由「打开了哪份缓存」隐含） |
-| 写侧 | `sync_fts_index(Option<&str>)` —— **已存在但从未被调用**（`metadata_index` 的重建已接线，FTS 的同步没接） |
+| 写侧 | `rebuild_fts_schema(schema)` —— **已接线**（与 `rebuild_schema_index` 同批，冷启动内省一个 schema 就刷新一次；失败只告警） |
 | 现有语料 | schema 名；表 = schema + 表名 + **表注释**；列 = schema + 表名 + 列名 + **数据类型** + **列注释**；视图 = schema + 视图名 + 视图注释；例程 = schema + 例程名 + 例程类型 + 例程注释 |
 | 暂无语料 | 视图定义（`view_definitions.view_definition`）与例程源码（`routines.routine_definition`）**已落在缓存里但没进 FTS**；是否纳入见 Q8 |
-| 匹配 | `search_content MATCH 'needle*'`（FTS5，**前缀 / 整词**；`ORDER BY rank LIMIT 50`） |
-| 返回 | 类型 + schema + 对象名 + 父对象 + **snippet**（SQLite `snippet()` 生成，带 `<mark>` / `</mark>` 标记，可直接转高亮） |
-| 现状 | 引擎侧 `search_fts` 可调用，但**无任何调用方**；跨连接实现可复用名称档那条路（遍历有缓存的连接，各自查） |
+| 匹配 | `MATCH` + `fts_match_query` 清洗（拆词 → 逐词加引号 → 末词前缀）；`ORDER BY rank LIMIT 50` |
+| 返回 | 类型 + schema + 对象名 + 父对象 + **snippet**（SQLite `snippet()` 生成，带 `<mark>` / `</mark>`，可直接转高亮） |
+| 现状 | 写侧 + 读侧（引擎）均已可用（2026-09-19 实测钉住）；跨连接执行可复用名称档那条路（遍历有缓存的连接，各自查）；**database 侧通道与 `#` 档 UI 待接** |
 
-### 6.3 中文与分词语义（必须写清的取舍）
+### 6.3 分词与长度门槛（**已实测定案 2026-09-19**）
 
-FTS5 默认 `unicode61` 分词器把**连续中文当作一个 token**，只有「前缀命中」才搜得到（搜 `渠道` 能命中以「渠道」开头的注释片段，命中不了注释中间的「……下单渠道……」）。三种处置：
+实测（引擎侧单测，见 `quick-open-dev-plan.md` §0）：
 
-| 方案 | 效果 | 代价 |
-| --- | --- | --- |
-| **A 默认 unicode61（先上）** | 前缀 / 整词命中；中文注释的中间词搜不到 | 零成本；但中文场景体验一般 |
-| B `trigram` 分词器 | 中文任意子串可命中（trigram 天然支持中缀） | 索引体积明显变大（约为文本 3 倍量级）；需重建 FTS 表（迁移） |
-| C 名称档兜底 | 全文搜不到时，提示「试试名称搜索」并自动回落到 `metadata_index` 中缀匹配 | 语义分档要在 UI 上讲清楚 |
+| 事实 | 实测值 |
+| --- | --- |
+| 旧表是 contentless（`content=''`） | MATCH 能命中，但 `SELECT search_type / object_name` **全为 NULL**、snippet 不可用 → 读路径其实不成立 |
+| `unicode61`（默认）对中文 | 连续中文是**一个 token**：注释里搜`渠道`** 0 命中（只能命中以该词开头的片段） |
+| `trigram` 对中文 | `含渠道`（**3 字**）命中注释；`渠道`（2 字）**0 命中**（不足一个 trigram） |
+| `trigram` 对 ASCII | `order` / `items`（≥ 3 字）子串命中 |
+| 操作符输入（`"` `*` `(` `NEAR` `-`） | 经 `fts_match_query` 清洗后按字面处理，**不报错** |
 
-**原型与文档建议：先 A + C（可上线且可解释），把 B 作为「中文注释检索效果不达标」时的升级项**（决策记录留 `quick-open-architecture.md`）。
+**定案**：全文档档用 **存内容 + `trigram`**（迁移 011），**查询门槛 3 个字符**（不足一个 trigram 必然无命中）；名称档继续走 `metadata_index` 的 LIKE 中缀（**不受 3 字限制**，且保留「完全相等 → 前缀」的稳定排序）。代价：索引体积约为文本 3 倍量级（元数据文本本就短，可接受）。
 
 ### 6.4 结果行（元数据两档的差别）
 
