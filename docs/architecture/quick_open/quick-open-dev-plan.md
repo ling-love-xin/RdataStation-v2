@@ -7,6 +7,19 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — Phase 0 第二刀：元数据名称档接线（Quick Open 的核心）
+
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| P0.11b | 防抖 150ms（`QUICK_OPEN_SEARCH_DEBOUNCE_MS`；句柄替换即取消）+ 「只在词变时发」+ 按 `SearchResult.query` **丢弃过期批次** | `view.rs::schedule_quick_open_search` / `pump_quick_open` | ✅ |
+| P0.11b-2 | 宿主结果泵：60ms（开着）/ 400ms（关着）空转，视图销毁即退出；回填**不碰 UI**，只置脏标记，重建成行放 render（泵线程拿不到 `Window`） | `view.rs::ensure_quick_open_pump` | ✅ |
+| P0.11c | 元数据行：`SearchHit → MetaObject`（表 / 视图 / 列 / 模式，列带父表；例程暂不接）+ 标题 `schema.name` / `表.列` + 次级信息「连接名 · 驱动」；组头带「搜索中…」 | `quick_open/model.rs::{meta_object, build_groups}`、`delegate.rs` | ✅ |
+| P0.11d | 命中动作：`Action::ShowProperties(Box<PropertyRequest>)` → `Shared::show_properties`（与导航搜索结果同一去向，映射口径一致） | `quick_open/model.rs`、`view.rs::execute_quick_open_row` | ✅ |
+| 单测 | +2 项：元数据组排首位且携带属性请求（列键含父表、例程被过滤）、「搜索中」只在词长达门槛时显示 | `quick_open/model.rs` | ✅ |
+| 验证 | `cargo check -p rds-workbench -j 2` 零告警；`cargo test -p rds-workbench --lib -j 2` → **82 项全绿**；`--test ui_contract` → **7 项全绿** | — | ✅ |
+
+**未做的部分（留待下一刀）**：面包屑单独一行（`List` 要求同行同高，单行次级信息暂以「连接名 · 驱动」代替）；「为什么命中」标签（属 `#` 全文档档）；元数据行的类型图标（先用文本标签）。
+
 ### 2026-09-18 — Phase 0 第二刀前置：搜索通道按消费方分流
 
 | # | 任务 | 落点 | 状态 |
@@ -66,10 +79,10 @@
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | P0.11a | `nav_jobs` 增消费方维度（`consumer` 或独立结果槽），导航侧同步改 | `crates/database/src/nav_jobs.rs`、`nav_view.rs` | ✅ 已落地（见 §0） |
-| P0.11b | 宿主泵：防抖 150ms（`QUICK_OPEN_SEARCH_DEBOUNCE_MS`）、只在词变时发、按 `SearchResult.query` 丢弃过期批次 | `view.rs` / `quick_open/` | 连打 10 个字符只发 1–2 次后台搜索 |
-| P0.11c | 元数据行（表 / 视图 / 列 / schema）+ 面包屑归属 + 「为什么命中」标签 | `quick_open/model.rs`、`delegate.rs` | 搜 `ord` 能命中并打开属性面板 |
-| P0.11d | 命中动作接属性面板（复用 `nav_search_hit_property` 的映射口径） | `view.rs` | ↵ 打开属性面板并定位对象 |
-| P0.12 | 窗口测试补 P0.10 | `crates/workbench/tests/quick_open_window.rs` | 4 个场景全绿 |
+| P0.11b | 宿主泵：防抖 150ms（`QUICK_OPEN_SEARCH_DEBOUNCE_MS`）、只在词变时发、按 `SearchResult.query` 丢弃过期批次 | `view.rs` / `quick_open/` | ✅ 已落地（见 §0） |
+| P0.11c | 元数据行（表 / 视图 / 列 / schema）+ 面包屑归属 + 「为什么命中」标签 | `quick_open/model.rs`、`delegate.rs` | ✅ 行与归属已落地；面包屑单独一行与「为什么命中」标签待做（见 §0） |
+| P0.11d | 命中动作接属性面板（复用 `nav_search_hit_property` 的映射口径） | `view.rs` | ✅ 已落地（映射口径对齐，见 §0） |
+| P0.12 | 窗口测试补 P0.10 | `crates/workbench/tests/quick_open_window.rs` | ⬜ 待补 |
 
 ## 4. Phase 1 / Phase 2 概要
 
@@ -84,8 +97,8 @@
 | T2 | ↑↓ 改变选中，↵ 执行 → 断言副作用 | ⬜ 窗口测试 |
 | T3 | Esc 关闭；点击遮罩关闭 | ⬜ 窗口测试 |
 | T4 | `>` 只出命令；删掉前缀回默认 | ✅ 单测（`build_groups`）+ ⬜ 窗口 |
-| T5 | 元数据异步：旧 `query` 批次被丢弃 | ⬜ 第二刀 |
-| T6 | 无内省缓存的连接不建缓存文件 | ⬜ 第二刀（沿用导航的门） |
+| T5 | 元数据异步：旧 `query` 批次被丢弃 | ✅ 实现（`pump_quick_open` 按 `query` 比较）+ ⬜ 窗口测试 |
+| T6 | 无内省缓存的连接不建缓存文件 | ✅ 沿用导航的门（`cache_file_exists`）+ ⬜ 窗口测试 |
 | T7 | 无匹配文案随模式（`无匹配命令` / 无匹配全文 …） | ✅ 实现（delegate `render_empty`） |
 | T8 | 单字符门槛：1 字符不发元数据搜索、给提示 | ✅ 单测（`async_ready`）+ 提示层 |
 | T9 | 命令键唯一且稳定（选中跟随依赖它） | ✅ 单测 |

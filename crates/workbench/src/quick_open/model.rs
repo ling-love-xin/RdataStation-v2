@@ -10,6 +10,18 @@ use editor::model::EditorMode;
 
 use crate::view::{LeftPanel, RightPanel};
 
+/// 元数据命中（跨连接索引搜索的一行；由 `database::nav_jobs::SearchHit` 映射而来）。
+///
+/// 行里带上**可直接发给属性面板的请求**：执行侧就不需要再认识 `SearchHit`，
+/// 映射口径与导航搜索结果一致（`nav_view::nav_search_hit_property`）。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MetaObject {
+    pub request: database::model::PropertyRequest,
+    /// 行主文本：`schema.name`（表 / 视图 / 模式）或 `parent.column`（列）。
+    pub title: String,
+    pub kind: RowKind,
+}
+
 /// 搜索模式：由输入的首字符决定（对齐 VSCode 的 Quick Open / Command Palette）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -63,6 +75,10 @@ pub(crate) fn parse(raw: &str) -> Query {
 /// 行类别（决定类型标签；图标集不在第一批扩，缺则用文本标签）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RowKind {
+    Table,
+    View,
+    Column,
+    Schema,
     Connection,
     Command,
 }
@@ -71,6 +87,10 @@ impl RowKind {
     /// 行首的类型短标签（类型双通道：文本 + 位置，不只靠颜色）。
     pub(crate) fn label(self) -> &'static str {
         match self {
+            RowKind::Table => "表",
+            RowKind::View => "视图",
+            RowKind::Column => "列",
+            RowKind::Schema => "模式",
             RowKind::Connection => "连接",
             RowKind::Command => "命令",
         }
@@ -78,10 +98,12 @@ impl RowKind {
 }
 
 /// 行被确认（↵ / 点击 / Ctrl+↵）时要执行的动作。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Action {
     /// 新建编辑器文档（查询 / 笔记 / 文件）。
     NewDocument(EditorMode),
+    /// 打开属性面板并定位对象（元数据命中；请求已就绪，执行侧不再拼字段）。
+    ShowProperties(Box<database::model::PropertyRequest>),
     /// 打开左侧面板。
     OpenLeftPanel(LeftPanel),
     /// 打开右侧面板。
@@ -113,6 +135,8 @@ pub(crate) struct Row {
 #[derive(Debug, Clone)]
 pub(crate) struct Group {
     pub title: &'static str,
+    /// 组头右侧的补充（如「搜索中…」；空则不显示）。
+    pub note: String,
     pub rows: Vec<Row>,
 }
 
@@ -150,31 +174,120 @@ pub(crate) fn command_rows() -> Vec<Row> {
 
 /// 组装结果分组：**空组不出现**（组头也不渲染）。
 ///
-/// 元数据（跨连接名称档）与文件源在 Phase 1 接入——接的是后台索引搜索，
-/// 本函数是纯函数，不做 I/O。
-pub(crate) fn build_groups(q: &Query, connections: &[(String, String)]) -> Vec<Group> {
+/// 元数据（跨连接名称档）由宿主从后台回填后以 `meta` 传入；本函数是纯函数，不做 I/O。
+/// 元数据是核心：搜索中也要出组头（否则「搜不到」与「还在搜」分不清）。
+pub(crate) fn build_groups(
+    q: &Query,
+    connections: &[(String, String)],
+    meta: &[MetaObject],
+    meta_searching: bool,
+) -> Vec<Group> {
     match q.mode {
-        Mode::Command => non_empty("命令", filter_ranked(command_rows(), &q.needle)).into_iter().collect(),
+        Mode::Command => non_empty("命令", filter_ranked(command_rows(), &q.needle), "")
+            .into_iter()
+            .collect(),
         // Phase 1：`metadata_fts` 接线后填全文档命中（注释 / 类型 / 定义 + snippet）。
         Mode::FullText => Vec::new(),
         Mode::Default => {
             let mut groups = Vec::new();
+            let note = if meta_searching && q.async_ready() {
+                "搜索中…"
+            } else {
+                ""
+            };
+            groups.extend(non_empty(
+                "元数据（表 · 视图 · 列）",
+                filter_ranked(meta_rows(meta), &q.needle),
+                note,
+            ));
             groups.extend(non_empty(
                 "连接",
                 filter_ranked(connection_rows(connections), &q.needle),
+                "",
             ));
-            groups.extend(non_empty("命令", filter_ranked(command_rows(), &q.needle)));
+            groups.extend(non_empty("命令", filter_ranked(command_rows(), &q.needle), ""));
             groups
         }
     }
 }
 
-fn non_empty(title: &'static str, rows: Vec<Row>) -> Option<Group> {
+fn non_empty(title: &'static str, rows: Vec<Row>, note: &str) -> Option<Group> {
     if rows.is_empty() {
         None
     } else {
-        Some(Group { title, rows })
+        Some(Group {
+            title,
+            note: note.to_string(),
+            rows,
+        })
     }
+}
+
+/// 元数据行（次级信息 = 连接名 · 驱动）。
+fn meta_rows(meta: &[MetaObject]) -> Vec<Row> {
+    meta.iter()
+        .map(|m| Row {
+            key: meta_key(&m.request),
+            kind: m.kind,
+            title: m.title.clone(),
+            secondary: format!("{} · {}", m.request.conn_label, m.request.driver),
+            action: Action::ShowProperties(Box::new(m.request.clone())),
+        })
+        .collect()
+}
+
+/// 元数据行的业务键：连接 + 种类 + 父对象 + 名称（列有父表，不能用裸名）。
+fn meta_key(request: &database::model::PropertyRequest) -> String {
+    let p = &request.property;
+    format!(
+        "meta:{}:{:?}:{}:{}",
+        p.conn_id,
+        p.kind,
+        p.parent.clone().unwrap_or_default(),
+        p.name
+    )
+}
+
+/// 索引命中 → 元数据对象（`None` = 该类别暂无定位能力，如例程）。
+///
+/// 映射口径与导航搜索结果一致（`nav_view::nav_search_hit_property`）：
+/// 列命中要带 `parent`（所属表），否则属性面板分不清是哪张表的列。
+pub(crate) fn meta_object(hit: &database::nav_jobs::SearchHit) -> Option<MetaObject> {
+    use database::model::{NavSource, PropertyKind, PropertyRef};
+    let (kind, property_kind) = match hit.object_type.as_str() {
+        "table" => (RowKind::Table, PropertyKind::Table),
+        "view" => (RowKind::View, PropertyKind::View),
+        "column" => (RowKind::Column, PropertyKind::Column),
+        "schema" => (RowKind::Schema, PropertyKind::Schema),
+        _ => return None,
+    };
+    let title = match kind {
+        RowKind::Column => match hit.parent_name.as_deref() {
+            Some(parent) if !parent.is_empty() => format!("{parent}.{}", hit.object_name),
+            _ => hit.object_name.clone(),
+        },
+        _ => match hit.schema.as_deref() {
+            Some(schema) if !schema.is_empty() => format!("{schema}.{}", hit.object_name),
+            _ => hit.object_name.clone(),
+        },
+    };
+    Some(MetaObject {
+        request: database::model::PropertyRequest {
+            property: PropertyRef {
+                conn_id: hit.conn_id.clone(),
+                source: NavSource::from_conn_id(&hit.conn_id),
+                catalog: hit.catalog.clone(),
+                schema: hit.schema.clone(),
+                parent: hit.parent_name.clone(),
+                name: hit.object_name.clone(),
+                kind: property_kind,
+            },
+            conn_label: hit.conn_label.clone(),
+            driver: hit.driver.clone(),
+        },
+        title,
+        kind,
+    })
 }
 
 /// 连接行（下标即 `Shared::selected` 的位置）。
@@ -361,29 +474,99 @@ mod tests {
         assert_eq!(ranked("").len(), 4);
     }
 
-    #[test]
-    fn build_groups_filters_and_drops_empty_groups() {
-        let conns = vec![
+    fn conns() -> Vec<(String, String)> {
+        vec![
             ("营销分析（生产）".to_string(), "postgres".to_string()),
             ("分析库".to_string(), "duckdb".to_string()),
-        ];
+        ]
+    }
+
+    /// 造一条索引命中（真实形状：`database::nav_jobs::SearchHit`）。
+    fn hit(object_type: &str, name: &str, parent: Option<&str>) -> database::nav_jobs::SearchHit {
+        database::nav_jobs::SearchHit {
+            conn_id: "P_conn".to_string(),
+            conn_label: "营销分析（生产）".to_string(),
+            driver: "postgres".to_string(),
+            object_type: object_type.to_string(),
+            object_name: name.to_string(),
+            parent_name: parent.map(|p| p.to_string()),
+            catalog: Some("main".to_string()),
+            schema: Some("public".to_string()),
+        }
+    }
+
+    #[test]
+    fn build_groups_filters_and_drops_empty_groups() {
+        let conns = conns();
         // 命令模式：只有命令组
-        let cmd = build_groups(&parse(">设置"), &conns);
+        let cmd = build_groups(&parse(">设置"), &conns, &[], false);
         assert_eq!(cmd.len(), 1);
         assert_eq!(cmd[0].title, "命令");
         assert!(cmd[0].rows.iter().all(|r| r.title.contains("设置")));
 
         // 默认模式：命中连接则不出现命令组
-        let hit_conn = build_groups(&parse("分析库"), &conns);
+        let hit_conn = build_groups(&parse("分析库"), &conns, &[], false);
         assert_eq!(hit_conn.len(), 1);
         assert_eq!(hit_conn[0].title, "连接");
         assert_eq!(hit_conn[0].rows[0].action, Action::SelectConnection(1));
 
         // `#` 全文档：Phase 1 前恒为空（渲染走空态说明）
-        assert!(build_groups(&parse("#渠道"), &conns).is_empty());
+        assert!(build_groups(&parse("#渠道"), &conns, &[], false).is_empty());
 
         // 无匹配：一个组都没有
-        assert!(build_groups(&parse("zzzz"), &conns).is_empty());
+        assert!(build_groups(&parse("zzzz"), &conns, &[], false).is_empty());
+    }
+
+    #[test]
+    fn meta_rows_come_first_and_carry_properties_request() {
+        let conns = conns();
+        let objects: Vec<MetaObject> = [
+            hit("table", "orders", None),
+            hit("column", "order_id", Some("orders")),
+            hit("routine", "fn_x", None), // 例程暂无定位能力 → 不进行集
+        ]
+        .iter()
+        .filter_map(meta_object)
+        .collect();
+        assert_eq!(objects.len(), 2, "例程应被过滤掉");
+
+        let groups = build_groups(&parse("order"), &conns, &objects, false);
+        // 元数据排在连接 / 命令之前
+        assert_eq!(groups[0].title, "元数据（表 · 视图 · 列）");
+        assert_eq!(groups[0].rows.len(), 2);
+        // 表行标题是 `schema.name`，列行是 `父表.列`
+        assert!(groups[0].rows.iter().any(|r| r.title == "public.orders"));
+        assert!(groups[0].rows.iter().any(|r| r.title == "orders.order_id"));
+        // 列行的业务键带父表（否则同名列会撞键）
+        let col = groups[0]
+            .rows
+            .iter()
+            .find(|r| r.kind == RowKind::Column)
+            .expect("列行");
+        assert!(col.key.contains("orders"), "列键要含父表：{}", col.key);
+        match &col.action {
+            Action::ShowProperties(request) => {
+                assert_eq!(request.property.parent.as_deref(), Some("orders"));
+                assert_eq!(request.property.conn_id, "P_conn");
+                assert_eq!(request.conn_label, "营销分析（生产）");
+            }
+            other => panic!("列行动作应是属性面板，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn searching_note_shows_only_when_query_is_ready() {
+        let conns = conns();
+        let objects: Vec<MetaObject> = [hit("table", "orders", None)]
+            .iter()
+            .filter_map(meta_object)
+            .collect();
+        // 搜索中 + 词长够 → 组头带「搜索中…」
+        let busy = build_groups(&parse("or"), &conns, &objects, true);
+        assert_eq!(busy[0].note, "搜索中…");
+        // 单字符（未达门槛）→ 不发搜索，也不显示搜索中
+        let short = build_groups(&parse("o"), &conns, &objects, true);
+        assert!(short.iter().all(|g| g.note.is_empty()));
     }
 
     #[test]

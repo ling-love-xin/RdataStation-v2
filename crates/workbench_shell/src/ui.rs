@@ -79,6 +79,8 @@ pub const QUICK_OPEN_HINT_HEIGHT: f32 = 1.5;
 pub const QUICK_OPEN_MAX_ROWS_PER_GROUP: usize = 8;
 /// Quick Open 总渲染上限（条）。
 pub const QUICK_OPEN_MAX_ROWS: usize = 50;
+/// Quick Open 异步元数据搜索的防抖窗口（毫秒）。
+pub const QUICK_OPEN_SEARCH_DEBOUNCE_MS: u64 = 150;
 
 // ===== 列表与树（rem 基准） =====
 

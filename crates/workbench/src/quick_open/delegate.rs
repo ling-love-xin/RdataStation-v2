@@ -231,22 +231,26 @@ impl ListDelegate for QuickOpenDelegate {
         let group = self.groups.get(section)?;
         let theme = cx.theme();
         let pt = settings::product_tokens::get(cx);
+        let mut head = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .h(rems(ui::QUICK_OPEN_GROUP_HEADER_HEIGHT))
+            .px_2()
+            .text_xs()
+            .text_color(theme.colors.muted_foreground)
+            .bg(pt.quick_open_group_header(theme))
+            .child(group.title);
+        // 「搜索中…」等补充：与计数区分开色（info），一眼看出“还没搜完”而不是“没结果”
+        if !group.note.is_empty() {
+            head = head.child(div().text_color(theme.colors.info).child(group.note.clone()));
+        }
         Some(
-            div()
-                .h_flex()
-                .items_center()
-                .h(rems(ui::QUICK_OPEN_GROUP_HEADER_HEIGHT))
-                .px_2()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .bg(pt.quick_open_group_header(theme))
-                .child(group.title)
-                .child(
-                    div()
-                        .ml_auto()
-                        .child(format!("{} 条", group.rows.len())),
-                )
-                .into_any_element(),
+            head.child(
+                div()
+                    .ml_auto()
+                    .child(format!("{} 条", group.rows.len())),
+            ),
         )
     }
 

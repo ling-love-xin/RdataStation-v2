@@ -61,6 +61,18 @@ pub struct WorkbenchView {
     quick_open_selected: Option<String>,
     /// Quick Open 输入订阅（Change 重建结果 / PressEnter 三态确认）。
     _quick_open_sub: Option<Subscription>,
+    /// Quick Open 元数据命中（宿主缓存；后台回填后在 render 重建成行）。
+    quick_open_meta: Vec<model::MetaObject>,
+    /// 已发给后台的搜索词（**只在词变时发**；回填时据此丢弃过期批次）。
+    quick_open_sent_query: Option<String>,
+    /// 元数据搜索中（组头显示「搜索中…」）。
+    quick_open_searching: bool,
+    /// 回填后有新数据、待 render 重建行（泵线程拿不到 `Window`）。
+    quick_open_rows_dirty: bool,
+    /// 防抖任务句柄（替换即取消上一枚；输入连打只发最后一次）。
+    quick_open_debounce: Option<Task<()>>,
+    /// 结果回填泵（首次打开时启动；关闭期间降频空转）。
+    quick_open_pump: Option<Task<()>>,
     /// 设置页实体（首次打开时懒创建）。
     settings_page: Option<Entity<SettingsPage>>,
     /// M1 项目管理输入实体（懒创建）。
@@ -193,6 +205,12 @@ impl WorkbenchView {
             quick_open_focus_pending: false,
             quick_open_selected: None,
             _quick_open_sub: None,
+            quick_open_meta: Vec::new(),
+            quick_open_sent_query: None,
+            quick_open_searching: false,
+            quick_open_rows_dirty: false,
+            quick_open_debounce: None,
+            quick_open_pump: None,
             settings_page: None,
             project_inputs: None,
             project_host: Some(host),
@@ -1336,6 +1354,60 @@ impl WorkbenchView {
                 .new(|cx| ListState::new(QuickOpenDelegate::new(host), window, cx).selectable(true));
             self.quick_open_list = Some(list);
         }
+        self.ensure_quick_open_pump(cx);
+    }
+
+    /// 启动 Quick Open 结果泵（首次打开时；关闭期间降频空转，视图销毁即退出）。
+    fn ensure_quick_open_pump(&mut self, cx: &mut Context<Self>) {
+        if self.quick_open_pump.is_some() {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        let executor = cx.background_executor().clone();
+        let task = cx.spawn(async move |_this, cx| loop {
+            match weak.update(cx, |this, _| this.shared.quick_open.get()) {
+                Ok(open) => {
+                    // 开着时勤取（元数据在后台正在回填），关着时降频空转
+                    let wait = if open { 60 } else { 400 };
+                    executor.timer(std::time::Duration::from_millis(wait)).await;
+                    if open {
+                        let _ = weak.update(cx, |this, cx| this.pump_quick_open(cx));
+                    }
+                }
+                // 视图已销毁：退出任务（否则会永远空转）
+                Err(_) => return,
+            }
+        });
+        self.quick_open_pump = Some(task);
+    }
+
+    /// 取走 Quick Open 的元数据搜索结果（过期批次丢弃；不碰 UI，只置脏标记）。
+    fn pump_quick_open(&mut self, cx: &mut Context<Self>) {
+        let results = database::nav_jobs::drain_search_results(
+            database::nav_jobs::SearchConsumer::QuickOpen,
+        );
+        if results.is_empty() {
+            return;
+        }
+        let current = self
+            .quick_open_input
+            .as_ref()
+            .map(|input| model::parse(&input.read(cx).value()).needle)
+            .unwrap_or_default();
+        let mut changed = false;
+        for result in results {
+            // 过期批次：词已经被改了（收尾交给当前词的那一批）
+            if result.query != current {
+                continue;
+            }
+            self.quick_open_searching = false;
+            self.quick_open_meta = result.hits.iter().filter_map(model::meta_object).collect();
+            changed = true;
+        }
+        if changed {
+            self.quick_open_rows_dirty = true;
+            cx.notify();
+        }
     }
 
     /// 重算结果并推给列表（输入变化 / 打开面板时调用）。
@@ -1355,7 +1427,12 @@ impl WorkbenchView {
             .iter()
             .map(|c| (c.name.clone(), c.driver.clone()))
             .collect();
-        let groups = model::build_groups(&query, &connections);
+        let groups = model::build_groups(
+            &query,
+            &connections,
+            &self.quick_open_meta,
+            self.quick_open_searching,
+        );
         let selected = self
             .quick_open_selected
             .clone()
@@ -1385,7 +1462,56 @@ impl WorkbenchView {
                 .and_then(|key| state.delegate().index_of(key));
             mirror_quick_open_selection(state, target, window, cx);
         });
+        // 元数据：词变了才防抖发一次（"连打字只发最后一次"的第一道是防抖，第二道是这里）
+        self.schedule_quick_open_search(&query, cx);
         cx.notify();
+    }
+
+    /// 给后台排一次跨连接索引搜索（防抖；单字符不发）。
+    fn schedule_quick_open_search(&mut self, query: &model::Query, cx: &mut Context<Self>) {
+        if !query.async_ready() {
+            return;
+        }
+        if self.quick_open_sent_query.as_deref() == Some(query.needle.as_str()) {
+            return;
+        }
+        let targets: Vec<database::nav_jobs::SearchTarget> = self
+            .shared
+            .connections
+            .borrow()
+            .iter()
+            .map(|c| database::nav_jobs::SearchTarget {
+                conn_id: c.id.clone(),
+                label: c.name.clone(),
+                driver: c.driver.clone(),
+            })
+            .collect();
+        let project_root = self
+            .shared
+            .project_root()
+            .map(|p| p.to_string_lossy().to_string());
+        let needle = query.needle.clone();
+        self.quick_open_sent_query = Some(needle.clone());
+        self.quick_open_searching = true;
+        let executor = cx.background_executor().clone();
+        let weak = cx.entity().downgrade();
+        // 防抖：句柄被下一枚替换即取消（`Task` drop = 取消）
+        let task = cx.spawn(async move |_this, cx| {
+            executor
+                .timer(std::time::Duration::from_millis(
+                    ui::QUICK_OPEN_SEARCH_DEBOUNCE_MS,
+                ))
+                .await;
+            let _ = weak.update(cx, |_this, _cx| {
+                database::nav_jobs::enqueue_search(
+                    database::nav_jobs::SearchConsumer::QuickOpen,
+                    &needle,
+                    project_root.as_deref(),
+                    targets,
+                );
+            });
+        });
+        self.quick_open_debounce = Some(task);
     }
 
     /// ↑↓：在结果上漫游（组件只负责渲染；焦点在输入框，所以键盘由宿主接管）。
@@ -1454,6 +1580,10 @@ impl WorkbenchView {
     ) {
         match action {
             Action::NewDocument(mode) => self.new_editor_document(mode, window, cx),
+            Action::ShowProperties(request) => {
+                // 与导航搜索结果同一去向：编辑区右侧属性面板（请求已带全定位信息）。
+                self.shared.show_properties(*request, cx);
+            }
             Action::OpenLeftPanel(panel) => {
                 self.shared.active_left.set(panel);
                 self.shared.left_mode.set(SidebarMode::Expanded);
@@ -1526,13 +1656,20 @@ impl WorkbenchView {
             .clone()
             .expect("quick open list lazy init");
         let query = model::parse(&input.read(cx).value());
+        // 后台回填过的标志：泵线程拿不到 `Window`，重建成行（需 `Window`）放在这里消费。
+        if self.quick_open_rows_dirty {
+            self.quick_open_rows_dirty = false;
+            self.refresh_quick_open(window, cx);
+        }
         let rows = list.read(cx).delegate().row_count();
         // 单字符门槛：元数据异步搜索至少 2 个字符（本地源不受限），此处只给提示；
-        // 元数据源本身在 Phase 1 接入（接入后这里就是“不发查询”的那道闸）。
-        let gate_hint = if !query.needle.is_empty() && !query.async_ready() {
-            "再输入 1 个字符开始搜索元数据"
+        // 真正的闸在 `schedule_quick_open_search` 里。
+        let hint_right = if !query.needle.is_empty() && !query.async_ready() {
+            "再输入 1 个字符开始搜索元数据".to_string()
+        } else if self.quick_open_searching {
+            "元数据搜索中…".to_string()
         } else {
-            ""
+            format!("{rows} 条")
         };
         let mode_chip = match query.mode {
             model::Mode::Command => Some((">", "命令")),
@@ -1596,11 +1733,7 @@ impl WorkbenchView {
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
                                 .child("↑↓ 选择 · ↵ 打开 · Shift+↵ 保留面板 · Esc 关闭")
-                                .child(if gate_hint.is_empty() {
-                                    div().ml_auto().child(format!("{rows} 条"))
-                                } else {
-                                    div().ml_auto().child(gate_hint)
-                                }),
+                                .child(div().ml_auto().child(hint_right)),
                         ),
                 )
                 .on_mouse_down(MouseButton::Left, {
