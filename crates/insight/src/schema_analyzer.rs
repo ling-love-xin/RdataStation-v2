@@ -1,7 +1,6 @@
-use shared::error::CommonError;
-use shared::error::CoreError;
+use engine::driver::{ColumnDetail, DynDatabase};
 use engine::get_connection_manager;
-use engine::services::sql_service::{SqlExecuteOptions, SqlService};
+use shared::error::{CommonError, ConnectionError, CoreError};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -27,6 +26,33 @@ pub struct TableColumnInfo {
     pub is_nullable: String,
     pub column_key: String,
     pub ordinal_position: i32,
+}
+
+impl TableColumnInfo {
+    /// 驱动元数据（[`ColumnDetail`]）→ 报告用的列信息。
+    ///
+    /// 两处映射要知道：
+    /// - `column_key` 不再是 MySQL 的 `COLUMN_KEY` 文本列，而是驱动算好的
+    ///   **主键 / 外键标志**（`PRI` / `MUL`——保留这两个取值，下游的外键置信度分档不变）；
+    /// - `ordinal_position` 取**列表下标**：驱动侧都按序数排好
+    ///   （MySQL / PG 的查询带 `ORDER BY ordinal_position`，SQLite 的 `PRAGMA table_info` 本就按 `cid`）。
+    pub fn from_detail(table: &str, index: usize, detail: &ColumnDetail) -> Self {
+        let column_key = if detail.is_primary_key {
+            "PRI"
+        } else if detail.is_foreign_key {
+            "MUL"
+        } else {
+            ""
+        };
+        Self {
+            table_name: table.to_string(),
+            column_name: detail.name.clone(),
+            data_type: detail.data_type.clone(),
+            is_nullable: if detail.nullable { "YES" } else { "NO" }.to_string(),
+            column_key: column_key.to_string(),
+            ordinal_position: (index + 1) as i32,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -67,67 +93,49 @@ pub struct RedundantColumn {
     pub suggestion: String,
 }
 
-fn escape_sql_string(s: &str) -> String {
-    s.replace('\'', "''").replace('\\', "\\\\")
-}
-
-/// 源库方言（结构洞察只依赖 `information_schema`，但三家写法不同）。
+/// 结构洞察（M8）：从**驱动元数据**读 schema 结构，再算外键候选 / 类型不一致 / 孤立表 / 冗余列。
 ///
-/// 为什么需要：`information_schema` 的**列集与语义各家不一样**——
-/// MySQL 没有 `table_catalog`（恒为 `def`，拿它过滤会得空集）、库名在 `table_schema`，
-/// 而 `column_key` 是 MySQL 专有列（PG / DuckDB 没这个列，直接查会报列不存在）；
-/// SQLite 连 `information_schema` 都没有。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SchemaDialect {
-    /// MySQL / MariaDB
-    Mysql,
-    /// PostgreSQL / DuckDB（`table_catalog` = 库、`table_schema` = schema）
-    PostgresLike,
-    /// 没有 `information_schema`的库：给可读回执，不当“零张表”静默返回
-    Unsupported(&'static str),
-}
-
-impl SchemaDialect {
-    /// 按连接的 `db_type` 判方言；不认识的按 [`SchemaDialect::PostgresLike`]
-    /// （`information_schema` 是 SQL 标准，PG 写法最接近标准）。
-    fn of(db_type: &str) -> Self {
-        let t = db_type.to_ascii_lowercase();
-        if t.contains("mysql") || t.contains("maria") {
-            Self::Mysql
-        } else if t.contains("sqlite") {
-            Self::Unsupported("SQLite 没有 information_schema，暂不支持结构洞察（可看点表看数据统计）")
-        } else {
-            Self::PostgresLike
-        }
-    }
-}
-
+/// # 元数据只有一个来源
+///
+/// `information_schema` 的表 / 列写法各家不同（MySQL 用 `table_schema`、PG 用 catalog + schema、
+/// SQLite 走 `PRAGMA table_info`、DuckDB 走 `duckdb_*`），但这些**已经写在各自驱动里**
+/// （`MetadataBrowser`），左侧导航树 / 属性面板用的是同一套接口。洞察再抄一份方言 SQL，
+/// 代价是三样：两套实现在同一边界上慢慢走偏（报告里的表 / 列数可能与树里不一致）、
+/// 每个驱动特有的坑（MySQL 元数据列名全大写、`column_key` 是私有列）每个消费方各踩一遍、
+/// 新驱动（或旧驱动的修复）两边都要改。
+///
+/// 所以本模块的边界与导航树一致：**能被导航树看见的对象**（有真正驱动 + 活连接）
+/// 才能做结构洞察；草稿箱 / 分析存档那类文件源只做**数据**画像
+/// （[`crate::SampleSource::on_duckdb`]），它们没有可报告的 schema 结构。
 pub struct SchemaAnalyzer;
 
+/// 元数据整段超时（导航树那种量级的库几十毫秒就回来；真卡住时不能让后台作业永远转圈）。
+///
+/// 逐条超时做不到：驱动接口（`get_tables` / `get_table_detail`）不走 `SqlService`，
+/// 没有超时形参。
+const METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl SchemaAnalyzer {
-    /// `information_schema` 的**过滤条件体**（不带 `WHERE`）：方言差异只在这一处。
-    ///
-    /// MySQL 用库名过滤（`schema` 为空时反正用库名——导航侧 MySQL 的 schema 可能为空）；
-    /// PG / DuckDB 用 schema + catalog 双条件。
-    fn schema_filter(dialect: SchemaDialect, database: &str, schema: &str) -> String {
-        let database = escape_sql_string(database);
-        let schema = escape_sql_string(schema);
-        match dialect {
-            SchemaDialect::Mysql => {
-                let db = if schema.is_empty() { database } else { schema };
-                format!("table_schema = '{db}'")
-            }
-            _ => format!("table_schema = '{schema}' AND table_catalog = '{database}'"),
+    /// 报告标题：导航树给的 schema 优先（无独立 Schema 层的驱动会用 catalog 顶上），
+    /// 两边都空的极端情况才退回一个占位串——不显示空标题。
+    fn report_title(database: &str, schema: &str) -> String {
+        let schema = schema.trim();
+        let database = database.trim();
+        if !schema.is_empty() {
+            schema.to_string()
+        } else if !database.is_empty() {
+            database.to_string()
+        } else {
+            "（未命名）".to_string()
         }
     }
 
-    /// 报告标题用的 schema 名：MySQL 下 schema 常为空，用库名顶上（不显示成空标题）。
-    fn display_name(dialect: SchemaDialect, database: &str, schema: &str) -> String {
-        if schema.is_empty() && dialect == SchemaDialect::Mysql {
-            database.to_string()
-        } else {
-            schema.to_string()
-        }
+    /// 「名写错了」的统一文案：把可见取值一并列出，用户才知道该填什么
+    fn unknown_target_error(kind: &str, name: &str, available: &[String]) -> CoreError {
+        CoreError::common(CommonError::General(format!(
+            "连接上看不到{kind} `{name}`（可见：{}）",
+            available.join(" / ")
+        )))
     }
     pub async fn analyze(
         conn_id: String,
@@ -135,43 +143,51 @@ impl SchemaAnalyzer {
         schema: &str,
     ) -> Result<SchemaInsightReport, CoreError> {
         let manager = get_connection_manager().clone();
-        // 方言从**连接信息**现读（不猜）：`db_type` 决定 information_schema 怎么查
-        let db_type = manager
-            .get_connection_info(&conn_id)
+        let db = manager
+            .get_connection(&conn_id)
             .await
-            .map(|info| info.db_type)
-            .unwrap_or_default();
-        let dialect = SchemaDialect::of(&db_type);
-        if let SchemaDialect::Unsupported(reason) = dialect {
-            return Err(CoreError::common(CommonError::General(reason.to_string())));
-        }
-        let service = SqlService::new(manager);
+            .ok_or_else(|| CoreError::connection(ConnectionError::not_found(&conn_id)))?;
 
-        let all_columns =
-            Self::fetch_all_columns(&service, Some(conn_id.clone()), database, schema, dialect)
-                .await?;
-        let all_tables =
-            Self::fetch_all_tables(&service, Some(conn_id.clone()), database, schema, dialect)
-                .await?;
+        // 元数据取数（含「名写错了」的早失败）整段给一个上界
+        let metadata = tokio::time::timeout(METADATA_TIMEOUT, async {
+            Self::ensure_target_exists(&db, database, schema).await?;
+            Self::fetch_metadata(&db, database, schema).await
+        })
+        .await
+        .map_err(|_| {
+            CoreError::common(CommonError::General(format!(
+                "读取元数据超时（{} 秒）：连接无响应，可稍后重试",
+                METADATA_TIMEOUT.as_secs()
+            )))
+        })??;
 
-        let table_count = all_tables.len() as u32;
+        let (tables, all_columns, unreadable) = metadata;
+        let table_count = tables.len() as u32;
         let total_columns = all_columns.len() as u32;
 
-        let fk_candidates = Self::infer_foreign_keys(&all_columns, &all_tables);
+        let fk_candidates = Self::infer_foreign_keys(&all_columns, &tables);
         let type_mismatches = Self::detect_type_mismatches(&all_columns);
-        let orphan_tables = Self::detect_orphan_tables(&all_tables, &all_columns);
+        let orphan_tables = Self::detect_orphan_tables(&tables, &all_columns);
         let redundant_columns = Self::detect_redundant_columns(&all_columns);
 
-        let (health_score, health_level, summary) = Self::compute_health(
+        let (health_score, health_level, mut summary) = Self::compute_health(
             table_count,
             total_columns,
             &fk_candidates,
             &type_mismatches,
             &orphan_tables,
         );
+        // 单表读列失败不毁整份报告，但也不能不说——否则用户看到的是一张「干净的」报告
+        if !unreadable.is_empty() {
+            summary.push_str(&format!(
+                "；{} 张表未能读取列（不计入本报告）：{}",
+                unreadable.len(),
+                unreadable.join("、")
+            ));
+        }
 
         Ok(SchemaInsightReport {
-            schema_name: Self::display_name(dialect, database, schema),
+            schema_name: Self::report_title(database, schema),
             table_count,
             total_columns,
             fk_candidates,
@@ -184,111 +200,99 @@ impl SchemaAnalyzer {
         })
     }
 
-    async fn fetch_all_tables(
-        service: &SqlService,
-        conn_id: Option<String>,
+    /// 认不认得这个（库, schema）：**早失败**，而不是拿「零张表」冒充结论。
+    ///
+    /// 为什么需要：驱动层是按名过滤，名写错了不报错、只返回空列表——那会变成一张
+    /// 「结构完美、其实什么都没看」的报告。有独立 Schema 层的驱动才校 schema：
+    /// MySQL / SQLite / DuckDB 的 schema 是导航侧用 catalog 顶上的合成值
+    /// （`has_schema_level` = false），拿它去比没有意义。
+    async fn ensure_target_exists(
+        db: &DynDatabase,
         database: &str,
         schema: &str,
-        dialect: SchemaDialect,
-    ) -> Result<Vec<String>, CoreError> {
-        let filter = Self::schema_filter(dialect, database, schema);
-        let sql = format!(
-            "SELECT table_name FROM information_schema.tables \
-             WHERE {filter} ORDER BY table_name"
-        );
-
-        let opts = SqlExecuteOptions {
-            channel: None,
-            record_history: false,
-            use_transaction: false,
-            timeout_ms: Some(10000),
-            use_cache: false,
+    ) -> Result<(), CoreError> {
+        let (catalogs, schema_level) = match db.as_metadata_browser() {
+            Some(browser) => (
+                browser
+                    .get_catalogs()
+                    .await?
+                    .into_iter()
+                    .map(|node| node.name)
+                    .collect::<Vec<String>>(),
+                browser.has_schema_level(),
+            ),
+            None => (db.list_catalogs().await?, true),
         };
+        if !catalogs.is_empty() && !catalogs.iter().any(|c| c.eq_ignore_ascii_case(database)) {
+            return Err(Self::unknown_target_error("库", database, &catalogs));
+        }
 
-        let result = service.execute(conn_id, &sql, opts).await?;
-        // 进程内直读（不能走 JSON 契约序列化：它不含 `batches`，会永远是空行）
-        let (_, rows) = crate::service::result_columns_and_rows(&result.result);
-
-        let tables = rows
-            .iter()
-            .filter_map(|row| row.first().and_then(|v| v.as_str()).map(String::from))
-            .collect();
-
-        Ok(tables)
+        if schema_level && !schema.trim().is_empty() {
+            let schemas: Vec<String> = match db.as_metadata_browser() {
+                Some(browser) => browser
+                    .get_schemas(database)
+                    .await?
+                    .into_iter()
+                    .map(|node| node.name)
+                    .collect(),
+                None => db.list_schemas(database).await?,
+            };
+            if !schemas.is_empty() && !schemas.iter().any(|s| s.eq_ignore_ascii_case(schema)) {
+                return Err(Self::unknown_target_error("schema", schema, &schemas));
+            }
+        }
+        Ok(())
     }
 
-    async fn fetch_all_columns(
-        service: &SqlService,
-        conn_id: Option<String>,
+    /// 表清单 → 逐表列（元数据只经过驱动接口这一条）。
+    ///
+    /// 第三项是**读不到列的表**：单张表报错（视图依赖缺失、权限不够、并发 DDL）不该把
+    /// 整份报告弄没，但也不能静默咽下去。
+    async fn fetch_metadata(
+        db: &DynDatabase,
         database: &str,
         schema: &str,
-        dialect: SchemaDialect,
-    ) -> Result<Vec<TableColumnInfo>, CoreError> {
-        // `column_key` 是 MySQL 专有列（PG / DuckDB 查它会直接报列不存在）：
-        // 那边给空串——PK 角标缺失，但报告的主要结论（外键 / 类型 / 孤立 / 冗余）不靠它
-        let key_expr = match dialect {
-            SchemaDialect::Mysql => "COALESCE(column_key, '') AS column_key",
-            _ => "'' AS column_key",
-        };
-        let filter = Self::schema_filter(dialect, database, schema);
-        let sql = format!(
-            "SELECT table_name, column_name, data_type, is_nullable, \
-             {key_expr}, ordinal_position \
-             FROM information_schema.columns \
-             WHERE {filter} \
-             ORDER BY table_name, ordinal_position"
-        );
-
-        let opts = SqlExecuteOptions {
-            channel: None,
-            record_history: false,
-            use_transaction: false,
-            timeout_ms: Some(15000),
-            use_cache: false,
+    ) -> Result<(Vec<String>, Vec<TableColumnInfo>, Vec<String>), CoreError> {
+        let browser = db.as_metadata_browser();
+        let tables: Vec<String> = match browser {
+            Some(browser) => browser
+                .get_tables(database, schema)
+                .await?
+                .into_iter()
+                .map(|node| node.name)
+                .collect(),
+            None => db
+                .list_tables(database, Some(schema))
+                .await?
+                .into_iter()
+                .map(|object| object.name)
+                .collect(),
         };
 
-        let result = service.execute(conn_id, &sql, opts).await?;
-        // 同上：进程内直读 `columns` / `to_rows()`
-        let (col_names, rows) = crate::service::result_columns_and_rows(&result.result);
-        // 列名按**大小写不敏感**匹配：MySQL 的 `information_schema` 元数据列名是全大写
-        // （`TABLE_NAME` / `DATA_TYPE`…），其余家是小写——写死小写会让整张表被过滤成空集。
-        let col_idx = |name: &str| -> Option<usize> {
-            col_names.iter().position(|c| c.eq_ignore_ascii_case(name))
-        };
-
-        let columns: Vec<TableColumnInfo> = rows
-            .iter()
-            .filter_map(|row| {
-                let table = row.get(col_idx("table_name")?)?.as_str()?.to_string();
-                let column = row.get(col_idx("column_name")?)?.as_str()?.to_string();
-                let dtype = row.get(col_idx("data_type")?)?.as_str()?.to_string();
-                let nullable = row
-                    .get(col_idx("is_nullable")?)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("YES")
-                    .to_string();
-                let key = row
-                    .get(col_idx("column_key")?)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let ord = row
-                    .get(col_idx("ordinal_position")?)
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0) as i32;
-
-                Some(TableColumnInfo {
-                    table_name: table,
-                    column_name: column,
-                    data_type: dtype,
-                    is_nullable: nullable,
-                    column_key: key,
-                    ordinal_position: ord,
-                })
-            })
-            .collect();
-
-        Ok(columns)
+        let mut columns: Vec<TableColumnInfo> = Vec::new();
+        let mut unreadable: Vec<String> = Vec::new();
+        for table in &tables {
+            let details = match browser {
+                Some(browser) => browser
+                    .get_table_detail(database, schema, table)
+                    .await
+                    .map(|detail| detail.columns),
+                None => db.list_columns(database, Some(schema), table).await,
+            };
+            match details {
+                Ok(details) => columns.extend(
+                    details
+                        .iter()
+                        .enumerate()
+                        .map(|(index, detail)| TableColumnInfo::from_detail(table, index, detail)),
+                ),
+                Err(error) => {
+                    tracing::warn!("[schema] 读取表 {table} 的列失败：{error}");
+                    unreadable.push(table.clone());
+                }
+            }
+        }
+        Ok((tables, columns, unreadable))
     }
 
     fn find_compound_fk_target(
@@ -803,74 +807,64 @@ mod tests {
         );
     }
 
-    /// 方言判定：`information_schema` 的列集各家不同，猜错就直接报“列不存在”。
+    /// 报告标题：导航树给的 schema 优先，schema 为空时用库名顶上（不显示空标题）。
     #[test]
-    fn dialect_picks_the_right_information_schema_flavour() {
-        assert_eq!(SchemaDialect::of("mysql"), SchemaDialect::Mysql);
-        assert_eq!(SchemaDialect::of("mysql_native"), SchemaDialect::Mysql);
-        assert_eq!(SchemaDialect::of("MariaDB"), SchemaDialect::Mysql);
-        assert_eq!(SchemaDialect::of("postgres"), SchemaDialect::PostgresLike);
-        assert_eq!(SchemaDialect::of("postgres_native"), SchemaDialect::PostgresLike);
-        assert_eq!(SchemaDialect::of("duckdb"), SchemaDialect::PostgresLike);
-        assert_eq!(SchemaDialect::of(""), SchemaDialect::PostgresLike, "不认识的按标准写法");
-        assert!(
-            matches!(SchemaDialect::of("sqlite"), SchemaDialect::Unsupported(_)),
-            "SQLite 没有 information_schema：不能猜、要明确回绝"
+    fn report_title_prefers_the_schema_then_the_database() {
+        assert_eq!(SchemaAnalyzer::report_title("shop", "public"), "public");
+        assert_eq!(
+            SchemaAnalyzer::report_title("shop", ""),
+            "shop",
+            "无独立 Schema 层的驱动（MySQL / SQLite / DuckDB）会传空，用库名顶上"
         );
+        assert_eq!(
+            SchemaAnalyzer::report_title("shop", "shop"),
+            "shop",
+            "导航侧无层驱动会把 catalog 当 schema 传（同一个名字）"
+        );
+        assert_eq!(SchemaAnalyzer::report_title("", ""), "（未命名）");
     }
 
-    /// 过滤条件体：MySQL 用库名（那边没有 `table_catalog`），PG / DuckDB 用双条件。
+    /// 驱动元数据 → 报告列信息：类型 / 可空 / 主键外键角标 / 序数（取列表下标）。
     #[test]
-    fn schema_filter_follows_the_dialect() {
-        assert_eq!(
-            SchemaAnalyzer::schema_filter(SchemaDialect::Mysql, "shop", "shop"),
-            "table_schema = 'shop'"
-        );
-        assert_eq!(
-            SchemaAnalyzer::schema_filter(SchemaDialect::Mysql, "shop", ""),
-            "table_schema = 'shop'",
-            "MySQL 侧 schema 为空时用库名兜底"
-        );
-        assert_eq!(
-            SchemaAnalyzer::schema_filter(SchemaDialect::PostgresLike, "shop", "public"),
-            "table_schema = 'public' AND table_catalog = 'shop'"
-        );
-        assert_eq!(
-            SchemaAnalyzer::schema_filter(SchemaDialect::PostgresLike, "sh'op", "public"),
-            "table_schema = 'public' AND table_catalog = 'sh''op'",
-            "库名里的单引号要双写"
-        );
+    fn column_detail_maps_to_the_report_row() {
+        let detail = |name: &str, dtype: &str, nullable: bool, pk: bool, fk: bool| ColumnDetail {
+            name: name.into(),
+            data_type: dtype.into(),
+            nullable,
+            is_primary_key: pk,
+            is_foreign_key: fk,
+            default_value: None,
+            comment: None,
+            extra: std::collections::HashMap::new(),
+        };
+
+        let pk = TableColumnInfo::from_detail("orders", 0, &detail("id", "int", false, true, false));
+        assert_eq!(pk.column_name, "id");
+        assert_eq!(pk.data_type, "int");
+        assert_eq!(pk.is_nullable, "NO");
+        assert_eq!(pk.column_key, "PRI", "主键角标（原来是 MySQL COLUMN_KEY）");
+        assert_eq!(pk.ordinal_position, 1, "序数取列表下标 + 1");
+
+        let fk = TableColumnInfo::from_detail("orders", 1, &detail("user_id", "int", true, false, true));
+        assert_eq!(fk.column_key, "MUL", "外键给 MUL：外键置信度用它分档");
+        assert_eq!(fk.is_nullable, "YES");
+
+        let plain = TableColumnInfo::from_detail("orders", 2, &detail("note", "text", true, false, false));
+        assert_eq!(plain.column_key, "");
+        assert_eq!(plain.ordinal_position, 3);
+        assert_eq!(plain.table_name, "orders");
     }
 
-    /// 报告标题：MySQL 侧 schema 常为空，用库名顶上（不显示成空标题）。
+    /// 「名写错了」的文案：要把可见取值列出来，用户才知道该填什么。
     #[test]
-    fn display_name_falls_back_to_the_database_on_mysql() {
-        assert_eq!(
-            SchemaAnalyzer::display_name(SchemaDialect::Mysql, "shop", ""),
-            "shop"
+    fn unknown_target_names_the_available_ones() {
+        let error = SchemaAnalyzer::unknown_target_error(
+            "schema",
+            "pubilc",
+            &["public".to_string(), "information_schema".to_string()],
         );
-        assert_eq!(
-            SchemaAnalyzer::display_name(SchemaDialect::Mysql, "shop", "shop"),
-            "shop"
-        );
-        assert_eq!(
-            SchemaAnalyzer::display_name(SchemaDialect::PostgresLike, "shop", "public"),
-            "public"
-        );
-    }
-
-    #[test]
-    fn test_escape_sql_string_no_change() {
-        assert_eq!(escape_sql_string("my_schema"), "my_schema");
-    }
-
-    #[test]
-    fn test_escape_sql_string_with_quote() {
-        assert_eq!(escape_sql_string("it's_data"), "it''s_data");
-    }
-
-    #[test]
-    fn test_escape_sql_string_with_backslash() {
-        assert_eq!(escape_sql_string("path\\name"), "path\\\\name");
+        let text = error.to_string();
+        assert!(text.contains("pubilc"), "点出写错的那个名字：{text}");
+        assert!(text.contains("public"), "列出可见取值：{text}");
     }
 }

@@ -258,6 +258,10 @@ mod tests {
 
     /// 项目切换：清掉本进程的结果集临时表（D54 的清场口；只断言**自己那张表**——
     /// 内存库是进程级的，别的用例可能同时也在建表）。
+    ///
+    /// 清理是**非阻塞**的（拿不到内存库锁就留给下一次切项目，见 `clear_result_temp_tables`），
+    /// 所以这里按生产语义**重试几拍**：并行跑用例时锁常被别的用例占着，
+    /// 一次不成就断言失败的话，测的是锁竞争而不是清场口。
     #[gpui_kit::test]
     fn project_switch_clears_result_temp_tables(_cx: &mut TestAppContext) {
         let table = engine::services::duckdb_service::DuckDbService::create_duckdb_temp_table(
@@ -271,11 +275,18 @@ mod tests {
             "前置条件：临时表应当已建好"
         );
 
-        clear_result_temp_tables();
-
+        let mut cleared = false;
+        for _ in 0..100 {
+            clear_result_temp_tables();
+            if !live_query_temp_tables().contains(&table) {
+                cleared = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert!(
-            !live_query_temp_tables().contains(&table),
-            "切项目后不应再有结果集临时表（D54 清场口）"
+            cleared,
+            "切项目后不应再有结果集临时表（D54 清场口）：{table}"
         );
     }
 }

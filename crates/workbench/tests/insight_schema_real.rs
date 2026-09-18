@@ -1,8 +1,13 @@
-//! 结构洞察的**真机**验证（M8 收口：导航右键「结构洞察」的取数侧）。
+//! 结构洞察的**真机**验证（M8：导航右键「结构洞察」的取数侧）。
 //!
 //! 链路：`InsightService::schema_report_view(conn_id, database, schema)`
-//!   → `SchemaAnalyzer::analyze`（按连接的 `db_type` 选 `information_schema` 方言）
+//!   → `SchemaAnalyzer::analyze`（**走驱动元数据接口**：`MetadataBrowser` / `Database::list_*`）
 //!   → 真驱动 → `SchemaReportView`。
+//!
+//! 为什么强调「走驱动元数据接口」：洞察**不再自己写 `information_schema` 方言 SQL**
+//! （MySQL 用 `table_schema`、PG 用 catalog + schema、SQLite 走 `PRAGMA table_info`、
+//! DuckDB 走 `duckdb_*`——这些差异已经在各自驱动里）。本文件的判据因此变成
+//! 「与导航树同源」：结构洞察的边界就是**能被导航树看见的对象**。
 //!
 //! 环境变量（未设的库自动跳过，不算失败）与 `editor_exec_real.rs` 同一套：
 //!
@@ -13,12 +18,15 @@
 //! $env:RDS_TEST_DUCKDB_PATH="D:\data\123"
 //! ```
 //!
-//! 四个库各自的验证重点（这正是这条路径此前没跑通的原因）：
-//! - **MySQL**：`information_schema.tables` **没有 `table_catalog`**（拿它过滤会报列不存在）、
-//!   库名在 `table_schema`；`column_key` 是 MySQL 专有列（能工作）
-//! - **PostgreSQL / DuckDB**：**没有 `column_key`**（要 `'' AS column_key`）；
-//!   `table_catalog` = 库名、`table_schema` = schema（双条件过滤）
-//! - **SQLite**：没有 `information_schema` → 必须给**可读回执**，不能报「零张表」
+//! **sh / bash 下一律加单引号**（`D:\…` 的反斜杠会被吃掉 → 驱动在工作目录建空库 → 假通过）。
+//!
+//! 四个库各自的验证重点：
+//! - **MySQL**：库名即 schema（`has_schema_level` = false，导航侧把 catalog 当 schema 传）；
+//!   主键角标来自驱动算好的 `is_primary_key`（不再读 MySQL 私有的 `COLUMN_KEY`）
+//! - **PostgreSQL**：真实 schema 层（`public`），有独立的（库, schema）校验
+//! - **SQLite / DuckDB**：单库（导航树用 `main`）；SQLite 此前被「没有 information_schema」
+//!   挡掉，改走驱动接口后**可用**——这正是本轮改动的收获之一
+//! - **名写错了必须报错**（而不是给一张「零张表」的干净报告）
 //!
 //! 真库上会建两张 `rds_probe_schema_*` 探针表（`status` 一表 INT 一表 VARCHAR，
 //! 用来验证「类型不一致」能检出），跑完**清理**（DROP）。
@@ -36,8 +44,14 @@ struct Target {
     env: &'static str,
     /// 文件型库走 `file_path`
     file: bool,
-    /// 没有 `information_schema`：走「可读回执」断言
-    unsupported: bool,
+    /// 导航树口径的（库, schema）。
+    ///
+    /// `None` = 向库自己要（MySQL 的 `DATABASE()`、PG 的 `current_database()` /
+    /// `current_schema()`）；`Some` = 固定值：单库驱动（SQLite / DuckDB）跳过 Schema 层，
+    /// 导航树把 catalog（`main`）当 schema 传下去——洞察侧接的就是那对值。
+    nav_target: Option<(&'static str, &'static str)>,
+    /// 该驱动有独立的 schema 层吗（PG = true）——决定要不要验「schema 写错」这一负例
+    schema_level: bool,
 }
 
 const TARGETS: [Target; 4] = [
@@ -45,25 +59,29 @@ const TARGETS: [Target; 4] = [
         driver: "mysql",
         env: "RDS_TEST_MYSQL_URL",
         file: false,
-        unsupported: false,
+        nav_target: None,
+        schema_level: false,
     },
     Target {
         driver: "postgres",
         env: "RDS_TEST_PG_URL",
         file: false,
-        unsupported: false,
+        nav_target: None,
+        schema_level: true,
     },
     Target {
         driver: "sqlite",
         env: "RDS_TEST_SQLITE_PATH",
         file: true,
-        unsupported: true,
+        nav_target: Some(("main", "main")),
+        schema_level: false,
     },
     Target {
         driver: "duckdb",
         env: "RDS_TEST_DUCKDB_PATH",
         file: true,
-        unsupported: false,
+        nav_target: Some(("main", "main")),
+        schema_level: false,
     },
 ];
 
@@ -142,36 +160,22 @@ fn schema_insight_runs_on_every_configured_database() {
     let mut failures: Vec<String> = Vec::new();
 
     for target in TARGETS {
+        let target_started = std::time::Instant::now();
         let Ok(value) = std::env::var(target.env) else {
             eprintln!("⏭️  {}：未设 {}，跳过", target.driver, target.env);
             continue;
         };
         checked += 1;
 
-        let Some(conn_id) = runtime.block_on(connect(&manager, &target, &value)) else {
+        let Some(conn_id) = runtime.block_on(async {
+            let started = std::time::Instant::now();
+            let id = connect(&manager, &target, &value).await;
+            eprintln!("⏱️  {}：建连耗时 {:.1?}", target.driver, started.elapsed());
+            id
+        }) else {
             failures.push(format!("{}：建连失败", target.driver));
             continue;
         };
-
-        if target.unsupported {
-            // SQLite：没有 information_schema，必须**明确回绝**（不是空报告）
-            match InsightService::schema_report_view(conn_id, "", "") {
-                Ok(view) => failures.push(format!(
-                    "{}：该方言没有 information_schema，却返回了报告（{} 表）",
-                    target.driver, view.table_count
-                )),
-                Err(error) => {
-                    let text = error.to_string();
-                    assert!(
-                        text.contains("information_schema") || text.contains("不支持"),
-                        "{}：回执要可读（说明为什么不支持），实际：{text}",
-                        target.driver
-                    );
-                    eprintln!("✅ {}：按预期明确回绝 —— {text}", target.driver);
-                }
-            }
-            continue;
-        }
 
         // 建两张探针表：`status` 一表 INT 一表 VARCHAR → 类型不一致应被检出
         let t1 = format!("{PREFIX}orders");
@@ -198,38 +202,41 @@ fn schema_insight_runs_on_every_configured_database() {
             continue;
         }
 
-        // 当前库 / schema：向库自己要（不解析 URL——猜错了报告就查错地方）
-        let is_mysql = target.driver.starts_with("mysql");
-        // 探针：分清「驱动对所有查询都空」与「只是 DATABASE() 取不到」
-        runtime.block_on(scalar(&conn_id, "SELECT 1 AS n"));
-        runtime.block_on(scalar(
-            &conn_id,
-            "SELECT COUNT(*) AS c FROM information_schema.tables",
-        ));
-        let db_sql = if is_mysql {
-            "SELECT DATABASE()"
-        } else {
-            "SELECT current_database()"
+        // 导航树口径的（库, schema）：单库驱动用固定 `main`，其余向库自己要
+        let (database, schema) = match target.nav_target {
+            Some(pair) => (pair.0.to_string(), pair.1.to_string()),
+            None => {
+                let is_mysql = target.driver.starts_with("mysql");
+                let db_sql = if is_mysql {
+                    "SELECT DATABASE()"
+                } else {
+                    "SELECT current_database()"
+                };
+                let database = runtime
+                    .block_on(scalar(&conn_id, db_sql))
+                    .unwrap_or_default();
+                // MySQL 没有独立 Schema 层：导航树把 catalog 当 schema 传
+                let schema = if is_mysql {
+                    database.clone()
+                } else {
+                    runtime
+                        .block_on(scalar(&conn_id, "SELECT current_schema()"))
+                        .unwrap_or_default()
+                };
+                (database, schema)
+            }
         };
-        let sch_sql = if is_mysql {
-            "SELECT DATABASE()"
-        } else {
-            "SELECT current_schema()"
-        };
-        let database = runtime
-            .block_on(scalar(&conn_id, db_sql))
-            .unwrap_or_default();
-        let schema = runtime
-            .block_on(scalar(&conn_id, sch_sql))
-            .unwrap_or_default();
         assert!(
             !database.is_empty(),
-            "{}：读不到当前库名（{db_sql}）",
-            target.driver
+            "{}：读不到当前库名（nav_target = {:?}）",
+            target.driver,
+            target.nav_target
         );
 
         // 结构报告（真机）
+        let started = std::time::Instant::now();
         let outcome = InsightService::schema_report_view(conn_id.clone(), &database, &schema);
+        let elapsed = started.elapsed();
         let view = match outcome {
             Ok(view) => view,
             Err(error) => {
@@ -246,12 +253,13 @@ fn schema_insight_runs_on_every_configured_database() {
             .map(|group| group.rows.iter().any(|row| row.title.contains("status")))
             .unwrap_or(false);
         eprintln!(
-            "✅ {}：schema_name={:?} 表 {} 列 {} 需关注 {} 项（类型不一致含 status = {mismatch}）",
+            "✅ {}：库={database} schema={schema} → 标题={:?} 表 {} 列 {} 需关注 {} 项（类型不一致含 status = {mismatch}，耗时 {:.1?}）",
             target.driver,
             view.schema_name,
             view.table_count,
             view.total_columns,
-            view.issue_count()
+            view.issue_count(),
+            elapsed
         );
 
         assert!(
@@ -279,12 +287,67 @@ fn schema_insight_runs_on_every_configured_database() {
                 .map(|group| group.rows.iter().map(|row| row.title.clone()).collect::<Vec<_>>())
         );
 
+        // 负例：**名写错了要报错**，而不是给一张「零张表」的干净报告
+        let bogus_db = InsightService::schema_report_view(
+            conn_id.clone(),
+            "rds_no_such_database_xyz",
+            &schema,
+        );
+        match bogus_db {
+            Ok(view) => failures.push(format!(
+                "{}：库名不存在却返回了报告（{} 表）——零张表不能冒充结论",
+                target.driver, view.table_count
+            )),
+            Err(error) => {
+                let text = error.to_string();
+                if !text.contains("rds_no_such_database_xyz") {
+                    failures.push(format!(
+                        "{}：报错要把写错的名字带上，实际：{text}",
+                        target.driver
+                    ));
+                } else {
+                    eprintln!("✅ {}：库名写错 → 可读回执", target.driver);
+                }
+            }
+        }
+        if target.schema_level {
+            let bogus_schema = InsightService::schema_report_view(
+                conn_id.clone(),
+                &database,
+                "rds_no_such_schema_xyz",
+            );
+            match bogus_schema {
+                Ok(view) => failures.push(format!(
+                    "{}：schema 不存在却返回了报告（{} 表）",
+                    target.driver, view.table_count
+                )),
+                Err(error) => {
+                    let text = error.to_string();
+                    if !text.contains("rds_no_such_schema_xyz") {
+                        failures.push(format!(
+                            "{}：schema 报错要把名字带上，实际：{text}",
+                            target.driver
+                        ));
+                    } else {
+                        eprintln!("✅ {}：schema 写错 → 可读回执", target.driver);
+                    }
+                }
+            }
+        }
+
         // 清理（真库不留探针表）
+        let cleanup_started = std::time::Instant::now();
         for t in [&t1, &t2] {
             if let Err(error) = runtime.block_on(exec(&conn_id, &format!("DROP TABLE IF EXISTS {t}"))) {
                 eprintln!("⚠️  {}：清理 {t} 失败 —— {error}", target.driver);
             }
         }
+        eprintln!(
+            "⏱️  {}：本目标合计 {:.1?}（清理 {:.1?}）",
+            target.driver,
+            target_started.elapsed(),
+            cleanup_started.elapsed()
+        );
     }
 
     if checked == 0 {
