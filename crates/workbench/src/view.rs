@@ -147,6 +147,8 @@ impl WorkbenchView {
         crate::services::editor_insight::attach(&editor_service, &shared);
         // 项目锁：把项目态端口接上（项目只读时，写源库对象的语句在提交前就被拒）
         crate::services::editor_project::attach(&editor_service, &shared);
+        // B9：把补全端口接上（连接级元数据缓存 → 候选目录；未接时只有关键字与函数）
+        crate::services::editor_completion::attach(&editor_service, &shared);
         // M1：排序偏好与首屏项目列表（无项目时）都在构造期完成，避免在 `render` 里做 I/O
         //（GPUI-kit 编码指南：副作用不得放在 render）。偏好走 `SettingsService`（唯一读路径），
         // 不直读 `settings.json`：`app` 已在开窗前 `SettingsService::init`（K1）。

@@ -507,7 +507,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | D8b 方言转译 | `engine/src/sql/transpiler.rs`（✅ B10：`transpile_with_report` **先切分再逐条转译**——整篇接口会静默丢语句）+ `engine/src/sql/script.rs`（格式化与转译共用的脚本骨架）+ `crates/editor/src/translate.rs`（目标表 / `targets_for` / 选区优先的 `plan`） |
 | D8c 执行计划 | `engine/src/sql/explain.rs`（✅ B10：`explain_sql` 按方言生成前缀；SQL Server / Oracle 如实返回 `None`）+ `EditorHostPanel::explain_current`（**按通道取方言**：源库档源库的、加速 / 联邦档 DuckDB 的；结果落新结果集并贴「执行计划」标题） |
 | D9 历史字段 | `engine/src/persistence/history_store.rs::save_sql_history` + `engine/src/services/sql_service.rs::execute` |
-| D10 补全 | `crates/editor/src/completion.rs` + `database::MetadataService` |
+| D10 补全 | ✅ 切片一（2026-09-18）：`crates/editor/src/completion.rs`（上下文判定 + 候选挑排，纯函数）+ `crates/editor/src/view/completion.rs`（`CompletionProvider` 适配，**只给 `label`**）+ 宿主端口 `workbench/src/services/editor_completion.rs`（读 `database::cache::NavCache`，后台预载 + 内存读；按通道给限定名）；⬜ 余：`Ctrl+Space` · 模板片段 · 实时内省回稳 |
 | D12 SQL 高亮 | ✅ `crates/engine/src/sql/highlight.rs`（tokenizer → 字节区间 + 类别）+ `crates/editor/src/view/`（按主题语法色板上色） |
 | D13 多文档标签 | `crates/editor/src/view/host.rs`（优先 `dock` 的 `Panel::{title,title_suffix,closable}`） |
 | D14/D15/D18 会话与单元 | `crates/editor/src/{session.rs, notebook.rs}` + `view/notebook_view.rs` |

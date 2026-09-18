@@ -68,7 +68,12 @@
 //! - ✅ 项目只读对执行的拦截（旧路径在 B12 遗失，已补回）：宿主注入 `ProjectPort`
 //!   （项目锁），写源库对象的语句在**提交前**被拒、原因可读；读语句照跑，判据与通道闸同一份
 //!   （`channel::writes_source_object`）
-//! - ⬜ 1b 待做：`completion`（B9）· B15 DuckDB 分析入口 · 结果区分栏可拖拽（B5）·
+//! - 🟡 B9 补全（切片一）：`completion.rs` 纯函数（上下文判定 + 候选挑排）+ 内建
+//!   `CompletionProvider` 适配（**只给 `label`**，否则内核会“光标处插入”而不是替换已敲的词）；
+//!   候选来自宿主端口（`workbench` 侧读导航缓存，后台预载 + 内存读，按通道给限定名）；
+//!   触发 = 打字；⬜ 余：`Ctrl+Space` 手动触发（内核有 `present_completion_items`，未接）、
+//!   模板片段、实时内省回填
+//! - ⬜ 1b 待做：B15 DuckDB 分析入口 · 结果区分栏可拖拽（B5）·
 //!   标签的血缘摘要（B5 余项，通道徽标已有）· 导出 Parquet / XLSX（B7 切片二，待 DuckDB 扩展）
 //!   · 绑定随会话持久化（B1 余项）· 值预览弹层（B14 余项）
 //!   · 事务内的语句暂不可取消 / 无超时（驱动 `Transaction` trait 没有取消入口）
@@ -80,6 +85,7 @@
 
 pub mod channel;
 pub mod commands;
+pub mod completion;
 pub mod connection;
 pub mod diagnostics;
 pub mod edit;

@@ -151,6 +151,10 @@ fn view_layer_has_no_raw_size_literals() {
             "editor/view/highlight.rs",
             include_str!("../../editor/src/view/highlight.rs"),
         ),
+        (
+            "editor/view/completion.rs",
+            include_str!("../../editor/src/view/completion.rs"),
+        ),
         // 设置页（应用级；P1.6 后旧 `settings_view.rs` 已退役）
         (
             "settings/settings_page.rs",
@@ -254,6 +258,10 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "editor/view/highlight.rs",
             include_str!("../../editor/src/view/highlight.rs"),
+        ),
+        (
+            "editor/view/completion.rs",
+            include_str!("../../editor/src/view/completion.rs"),
         ),
     ];
 

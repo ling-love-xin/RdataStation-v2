@@ -31,6 +31,7 @@ use crate::execution::{self, ExecMenuKind, ExecTarget, ResultPlacement};
 use crate::export::{self, ExportFormat, ExportScope};
 use crate::format;
 use crate::translate;
+use crate::view::completion;
 use crate::mode::{self, CellGranularity};
 use crate::model::{DocumentId, EditorMode, ReadOnly};
 use crate::persist;
@@ -193,6 +194,10 @@ impl EditorHostPanel {
             // A4：SQL 语义着色（文本模式是纯记事本，不解析不上色；分析模式留 1c 逐单元处理）
             if highlight::is_enabled(mode) {
                 highlight::install(&mut state);
+            }
+            // B9：SQL 补全（候选来自宿主端口；文本模式 / 大文件档位不装）
+            if shared.completion_enabled(&document) {
+                completion::install(&mut state, shared.clone(), document.clone());
             }
             state
         });
@@ -1345,8 +1350,22 @@ impl EditorHostPanel {
                 // 非 SQL 模式去掉着色（已缓存的 token 会随内容变化失效）
                 state.lsp_mut().semantic_tokens_provider = None;
             }
+            // B9：补全按能力表装 / 摘（文本模式不接，分析模式留 1c 逐单元）
+            self.sync_completion_provider(state);
         });
         cx.notify();
+    }
+
+    /// 按当前文档的能力与档位装 / 摘补全 provider（**唯一开关处**：新建与切模式都走它）
+    ///
+    /// 真值在 `EditorShared::completion_enabled`（能力表 + 编辑器只读 + 大文件档位）——
+    /// 这里只把那个判断落到内核上，不另写一套判据。
+    fn sync_completion_provider(&self, state: &mut gpui_kit::component::input::EditorState) {
+        if self.shared.completion_enabled(&self.document) {
+            completion::install(state, self.shared.clone(), self.document.clone());
+        } else {
+            completion::uninstall(state);
+        }
     }
 
     /// 把文档内容推回内核（另存为 / 外部修改后重新加载时调用）

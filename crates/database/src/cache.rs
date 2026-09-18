@@ -82,6 +82,25 @@ impl NavCache {
         Some(rows.into_iter().map(|s| s.schema_name).collect())
     }
 
+    /// 读**全部** schema（含 catalog 与 `schema_id`）——给“一次把候选目录装进内存”的调用方用
+    ///
+    /// 与 [`Self::schemas`] 的区别：不按 catalog 过滤、带 `id`（后续 `objects` / `columns` 都要它），
+    /// 且**空结果就是空**（不是“未命中”）——调用方是自己决定要不要回落实时内省的。
+    /// 目前唯一使用方是 SQL 补全的候选预载（`editor/src/completion.rs` 的对端）。
+    pub fn all_schemas(&self) -> Vec<(String, String, i64)> {
+        match self.ops.list_schemas(None) {
+            Ok(rows) => rows
+                .into_iter()
+                // catalog 名在缓存里可空（部分驱动不报）——候选用不上它，空串即可
+                .map(|s| (s.catalog_name.unwrap_or_default(), s.schema_name, s.id))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(connection_id = %self.conn_id, error = %e, "读取全部 schema 失败（候选目录本次为空）");
+                Vec::new()
+            }
+        }
+    }
+
     /// 回写 schema 名（须先于对象写入，后续按名取 `schema_id`）。
     pub fn put_schemas(&self, catalog: &str, names: &[String]) {
         for name in names {

@@ -17,9 +17,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::channel::{ChannelAvailabilitySet, ChannelsHandle};
+use crate::completion::{Catalog, CompletionHandle};
 use crate::sources::SourcesHandle;
 use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_text};
 use crate::execution::{ExecQueue, QueryRunner};
+use crate::model::DocumentId;
 use crate::project::{ProjectHandle, ProjectState};
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
 use crate::session::{SavedSession, SessionStore};
@@ -99,6 +101,8 @@ pub struct EditorShared {
     sources: Rc<RefCell<Option<SourcesHandle>>>,
     /// 项目态端口：宿主注入后才有（无宿主 = 不读只；项目锁是宿主的事实）
     project: Rc<RefCell<Option<ProjectHandle>>>,
+    /// 补全端口：宿主注入后才有（无宿主 = 只给关键字与函数，不给元数据候选）
+    completion: Rc<RefCell<Option<CompletionHandle>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
 }
@@ -123,6 +127,7 @@ impl EditorShared {
             channels: Rc::new(RefCell::new(None)),
             sources: Rc::new(RefCell::new(None)),
             project: Rc::new(RefCell::new(None)),
+            completion: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -478,5 +483,45 @@ impl EditorShared {
     /// 项目现在是不是只读（闸门用的就是它）
     pub fn project_read_only(&self) -> bool {
         self.project_state().read_only
+    }
+
+    /// 注入补全端口（**宿主调用一次**：workbench 接连接级元数据缓存）
+    pub fn attach_completion(&self, port: CompletionHandle) {
+        *self.completion.borrow_mut() = Some(port);
+    }
+
+    /// 是否接了补全端口（未接 = 只给关键字与函数）
+    pub fn has_completion(&self) -> bool {
+        self.completion.borrow().is_some()
+    }
+
+    /// 某文档当前的**候选目录**（**编辑路径可调**：实现必须是内存快照；未绑定连接 = 空目录）
+    pub fn completion_catalog(&self, document: &DocumentId) -> Catalog {
+        let (connection, channel) = {
+            let service = self.service.borrow();
+            match service.find(document) {
+                Some(doc) => (
+                    doc.connection().map(str::to_string),
+                    doc.channel(),
+                ),
+                None => return Catalog::default(),
+            }
+        };
+        let port = self.completion.borrow();
+        match port.as_ref() {
+            Some(port) => port.catalog(connection.as_deref(), channel),
+            None => Catalog::default(),
+        }
+    }
+
+    /// 补全开不开：能力表（文本模式 / 分析模式的每单元由能力表回答）+ 编辑器只读 + 文件档位
+    ///
+    /// 大文件档位（>50MB）关重能力是 A13 的硬口径——**这里是那条口径的运行时落地**。
+    pub fn completion_enabled(&self, document: &DocumentId) -> bool {
+        let service = self.service.borrow();
+        let Some(doc) = service.find(document) else {
+            return false;
+        };
+        doc.capabilities().completion && doc.read_only().can_edit() && !doc.tier().disables_completion()
     }
 }

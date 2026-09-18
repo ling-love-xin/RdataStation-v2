@@ -4,6 +4,7 @@
 //! 不自绘标签条。每个面板只负责三件事——标题（文档名）、`title_suffix`（脏点）、正文（编辑内核）。
 
 pub mod dialogs;
+pub mod completion;
 pub mod highlight;
 pub mod history;
 pub mod host;

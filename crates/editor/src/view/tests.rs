@@ -4680,6 +4680,29 @@ fn without_the_project_port_writes_are_not_blocked(cx: &mut TestAppContext) {
     assert!(!flags.connection, "没锁就不该说“连接只读”");
 }
 
+/// 补全的门控：SQL 模式开、文本模式关（能力表说了算）；未接端口时目录空但**关键字仍在**
+#[gpui_kit::test]
+fn completion_is_gated_by_mode_and_falls_back_to_keywords(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (sql_shared, sql_id, _seen, _seen_conn) =
+        shared_with_runner("select * from ord", EditorMode::Sql);
+    assert!(
+        sql_shared.completion_enabled(&sql_id),
+        "SQL 模式该开补全（候选端口没接 = 只给关键字）"
+    );
+    assert!(
+        sql_shared.completion_catalog(&sql_id).is_empty(),
+        "未接端口 → 没有元数据候选（如实，不假装有）"
+    );
+
+    let (text_shared, text_id, _seen, _seen_conn) =
+        shared_with_runner("hello", EditorMode::Text);
+    assert!(
+        !text_shared.completion_enabled(&text_id),
+        "文本模式不与数据库通信，也不该补全"
+    );
+}
+
 /// 【B13】通道不可用时就算被程序叫到也不切（菜单置灰之外的**第二道闸**）
 #[gpui_kit::test]
 fn an_unavailable_channel_cannot_be_switched_to(cx: &mut TestAppContext) {

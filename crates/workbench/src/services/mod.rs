@@ -15,6 +15,7 @@ pub mod data_source_service;
 pub mod db_navigator;
 pub mod driver_service;
 pub mod editor_channels;
+pub mod editor_completion;
 pub mod editor_connections;
 pub mod editor_exec;
 pub mod editor_files;
