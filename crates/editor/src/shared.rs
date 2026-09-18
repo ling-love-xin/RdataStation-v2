@@ -227,6 +227,29 @@ impl EditorShared {
             .unwrap_or_default()
     }
 
+    /// 【B7 切片二】请一次 DuckDB 导出（Parquet / XLSX）
+    ///
+    /// 与 [`Self::request_source_action`] 同一口径：没有执行器就直说（不静默失败）。
+    pub fn request_duckdb_export(
+        &self,
+        request: crate::execution::DuckDbExportRequest,
+    ) -> Result<(), String> {
+        let guard = self.exec.borrow();
+        let Some(queue) = guard.as_ref() else {
+            return Err("当前未接入执行".to_string());
+        };
+        queue.request_duckdb_export(request)
+    }
+
+    /// 【B7 切片二】DuckDB 导出的回执（面板轮询取走）
+    pub fn drain_export_notes(&self) -> Vec<crate::execution::ExportNote> {
+        let guard = self.exec.borrow();
+        guard
+            .as_ref()
+            .map(|queue| queue.drain_export_notes())
+            .unwrap_or_default()
+    }
+
     /// 结果队列里已完成但尚未取走的执行（轮询泵调用）
     ///
     /// **顺带留一份回执**（[`ExecReceipt`]）：结果归编辑区，回执给宿主。

@@ -46,6 +46,18 @@ impl ResultService {
         engine::services::execution_service::execute_duckdb_analysis(temp_table, sql, columns, rows)
     }
 
+    /// 【B7 切片二】结果行 → Parquet / XLSX（DuckDB `COPY … TO …`）
+    ///
+    /// 同步阻塞（XLSX 首次装扩展要联网几秒）：调用方在**一次性线程**上跑它。
+    pub fn export_rows_via_duckdb(
+        columns: &[String],
+        rows: &[Vec<serde_json::Value>],
+        path: &std::path::Path,
+        format: engine::services::execution_service::DuckDbExportFormat,
+    ) -> Result<engine::services::execution_service::ExportStats, CoreError> {
+        engine::services::execution_service::export_rows_via_duckdb(columns, rows, path, format)
+    }
+
     pub fn get_or_create_duckdb(
     ) -> Result<std::sync::Arc<std::sync::Mutex<duckdb::Connection>>, CoreError> {
         engine::services::duckdb_service::DuckDbService::get_or_create_duckdb()

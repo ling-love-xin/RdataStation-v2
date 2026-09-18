@@ -26,12 +26,14 @@ use std::sync::Arc;
 
 use editor::analysis::AnalysisRequest;
 use editor::channel::ExecChannel;
-use editor::execution::{QueryData, QueryRunner};
+use editor::execution::{DuckDbExportRequest, QueryData, QueryRunner};
+use editor::export::ExportFormat;
 use editor::shared::EditorShared;
 use engine::duckdb::accel;
 use engine::duckdb::federation::registry::{self as fed_registry, FederatedSource, MountState};
 use engine::duckdb::federation::session as fed_session;
 use engine::persistence::history_store::{self, SqlHistoryEntry};
+use engine::services::execution_service::DuckDbExportFormat;
 use engine::services::sql_service::{SqlExecuteOptions, SqlService, window_sql};
 use shared::models::{QueryResult, Value};
 
@@ -655,6 +657,40 @@ impl QueryRunner for EngineQueryRunner {
         })
     }
 
+    /// 【B7 切片二】经 DuckDB 落盘（Parquet / XLSX）
+    ///
+    /// 行按**展示文本**桥接（与本地分析同一口径：`"NULL"` → 真 null，其余按字符串；
+    /// 引擎按整列推断类型——所以数字列在 Parquet / XLSX 里就是数）。
+    /// 同步阻塞（XLSX 首次装扩展要联网几秒）：调用方把它放在一次性线程上。
+    fn export_via_duckdb(&self, request: &DuckDbExportRequest) -> Result<usize, String> {
+        let format = match request.format {
+            ExportFormat::Parquet => DuckDbExportFormat::Parquet,
+            ExportFormat::Xlsx => DuckDbExportFormat::Xlsx,
+            other => {
+                return Err(format!("{} 不走 DuckDB 导出（它在编辑侧编码）", other.label()));
+            }
+        };
+        let rows: Vec<Vec<serde_json::Value>> = request
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
+            .collect();
+        let stats = crate::services::result_service::ResultService::export_rows_via_duckdb(
+            &request.columns,
+            &rows,
+            &request.path,
+            format,
+        )
+        .map_err(|error| error.to_string())?;
+        tracing::info!(
+            format = request.format.label(),
+            rows = stats.rows,
+            path = %request.path.display(),
+            "结果集已导出（经 DuckDB COPY）"
+        );
+        Ok(stats.rows)
+    }
+
     /// 【B13/T1.6】重新挂载源（表清单刷新；加速档那一条 / 联邦档某一源或全挂）
     fn refresh_sources(
         &self,
@@ -1135,6 +1171,88 @@ mod analysis_tests {
         };
         let error = runner.analyze(&request).expect_err("该报错");
         assert!(!error.is_empty(), "错误要说清原因：{error}");
+    }
+}
+
+mod export_tests {
+    // 安全模式：**不通配导入**
+    use super::EngineQueryRunner;
+    use editor::execution::{DuckDbExportRequest, QueryRunner as _};
+    use editor::export::ExportFormat;
+    use editor::model::DocumentId;
+
+    fn request(format: ExportFormat, path: std::path::PathBuf) -> DuckDbExportRequest {
+        DuckDbExportRequest {
+            document: DocumentId::new("doc"),
+            set: 1,
+            format,
+            path,
+            columns: vec!["id".to_string(), "tag".to_string()],
+            // 展示文本那一层：`NULL` 是字面量（与网格一致）
+            rows: vec![
+                vec!["1".to_string(), "alpha".to_string()],
+                vec!["2".to_string(), "NULL".to_string()],
+            ],
+            filtered: false,
+        }
+    }
+
+    /// 【B7 切片二】Parquet 导出：真写文件，且引擎能读回来（`NULL` 要是真 NULL）
+    ///
+    /// **不需要任何服务器**（Parquet 是 DuckDB 内核自带的），所以这条可以离线跑。
+    #[test]
+    fn parquet_export_writes_a_file_the_engine_reads_back() {
+        let Some(runner) = EngineQueryRunner::new() else {
+            eprintln!("⏭️ 建不出执行器 runtime，跳过导出探针");
+            return;
+        };
+        let path = std::env::temp_dir().join(format!(
+            "rds_editor_export_{}.parquet",
+            std::process::id()
+        ));
+        std::fs::remove_file(&path).ok();
+
+        let rows = runner
+            .export_via_duckdb(&request(ExportFormat::Parquet, path.clone()))
+            .expect("Parquet 导出该跑通");
+        assert_eq!(rows, 2);
+        assert!(
+            std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false),
+            "Parquet 文件要真写出来"
+        );
+
+        // 读回来：数字是数字、`NULL` 字面量在盘上是真 NULL
+        let duckdb = engine::services::duckdb_service::DuckDbService::get_or_create_duckdb()
+            .expect("内存库");
+        let mut conn = duckdb.lock().expect("锁");
+        let file = path.to_string_lossy().replace('\\', "/");
+        let (cols, got) = engine::services::duckdb_service::DuckDbService::query_duckdb(
+            &mut conn,
+            &format!("SELECT * FROM read_parquet('{file}') ORDER BY id"),
+        )
+        .expect("读回 Parquet");
+        assert_eq!(cols, vec!["id".to_string(), "tag".to_string()]);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1][1], serde_json::Value::Null, "NULL 要真是 NULL");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 文本三档不该走这条路（它们是编辑侧编码；叫错要**如实回绝**而不是写个空文件）
+    #[test]
+    fn a_text_format_is_refused_by_the_duckdb_port() {
+        let Some(runner) = EngineQueryRunner::new() else {
+            return;
+        };
+        let path = std::env::temp_dir().join(format!(
+            "rds_editor_export_{}.csv",
+            std::process::id()
+        ));
+        let error = runner
+            .export_via_duckdb(&request(ExportFormat::Csv, path.clone()))
+            .expect_err("CSV 不该走 DuckDB");
+        assert!(error.contains("不走 DuckDB"), "{error}");
+        assert!(!path.exists(), "回绝时不该留下文件");
     }
 }
 

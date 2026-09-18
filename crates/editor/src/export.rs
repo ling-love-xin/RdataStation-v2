@@ -1,16 +1,17 @@
-//! 结果集导出（B7 切片一：CSV / JSON / INSERT）
+//! 结果集导出（B7：CSV / JSON / INSERT 走文本编码；Parquet / XLSX 经 DuckDB）
 //!
-//! ## 三条口径
+//! ## 四条口径
 //!
 //! - **值按展示文本导出**：`ResultEntry` 里的值就是网格里那些字符串，`NULL` 也是字面 `NULL`
 //!   （B5 定的字符串化口径）。所以 CSV 里 NULL 与字符串 `"NULL"` 同形、JSON 里给 `null`
 //!   （与网格的斜体判据同源）——要类型化得先有列类型，那是另一笔工作（计划 B7 余项）。
 //! - **只导出已抓到的行**：分段抓取只把窗口里的行拿回来（`ExportScope::Fetched`）；「抓全量后
 //!   导出」是另一档，取数由面板循环取段（`fetch_next`），本模块只管编码与命名。
+//! - **两条落盘路径**：CSV / JSON / INSERT 是**纯文本编码**（本模块的纯函数 + `fs::write`）；
+//!   Parquet / XLSX 不是“拼字符串”写得出来的（前者是带 schema 的列式格式，后者是 OOXML 包），
+//!   交给 DuckDB 的 `COPY … TO …`——那条路要把行围成临时表，属 I/O，所以走**后台线程**
+//!   （见 `execution::DuckDbExportRequest`）。
 //! - **纯函数**：编码、默认表名、默认文件名都在这里，写成能逐条断言的形状；落盘在面板里。
-//!
-//! Parquet / XLSX 属切片二：它们要经 DuckDB（`COPY … TO … (FORMAT …)`）与对应扩展，
-//! 没实现就不在菜单里摆（与「没实现就不摆按钮」同一口径）。
 
 use crate::store::ResultEntry;
 
@@ -23,17 +24,23 @@ pub enum ExportFormat {
     Json,
     /// `INSERT INTO … VALUES (…);`（每 200 行一条语句）
     Insert,
+    /// 【B7 切片二】列式二进制（DuckDB `COPY … (FORMAT parquet)`；内核自带，离线可用）
+    Parquet,
+    /// 【B7 切片二】Excel 工作簿（DuckDB `COPY … (FORMAT xlsx)`；要 `excel` 扩展）
+    Xlsx,
 }
 
 impl ExportFormat {
-    /// 菜单里的顺序（也是 `ALL` 的顺序）
-    pub const ALL: [ExportFormat; 3] = [Self::Csv, Self::Json, Self::Insert];
+    /// 菜单里的顺序（也是 `ALL` 的顺序；文本三档在前，DuckDB 两档在后）
+    pub const ALL: [ExportFormat; 5] = [Self::Csv, Self::Json, Self::Insert, Self::Parquet, Self::Xlsx];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Csv => "CSV",
             Self::Json => "JSON",
             Self::Insert => "INSERT",
+            Self::Parquet => "Parquet",
+            Self::Xlsx => "XLSX",
         }
     }
 
@@ -42,16 +49,25 @@ impl ExportFormat {
             Self::Csv => "csv",
             Self::Json => "json",
             Self::Insert => "sql",
+            Self::Parquet => "parquet",
+            Self::Xlsx => "xlsx",
         }
     }
 
-    /// 给文件对话框用的扩展名（与 `label` 不同：这里要小写、不带点）
+    /// 给文件对话框用的说明（与 `label` 不同：这里说清“导出来的是什么”）
     pub fn detail(self) -> &'static str {
         match self {
             Self::Csv => "逗号分隔文本",
             Self::Json => "对象数组（值按展示文本；NULL 是 null）",
             Self::Insert => "INSERT 语句（每 200 行一条）",
+            Self::Parquet => "Parquet（列式，数字列保留数值类型）",
+            Self::Xlsx => "Excel 工作簿（要 excel 扩展，首次装一次）",
         }
+    }
+
+    /// 这一档是不是**走 DuckDB** 落盘（文本三档不是）：面板据此选“同步写文件”还是“后台 COPY”
+    pub fn is_duckdb_backed(self) -> bool {
+        matches!(self, Self::Parquet | Self::Xlsx)
     }
 }
 
@@ -147,6 +163,9 @@ pub fn encode_rows(
         ExportFormat::Csv => encode_csv(&entry.columns, rows),
         ExportFormat::Json => encode_json(&entry.columns, rows),
         ExportFormat::Insert => encode_insert(entry, rows, table),
+        // 走 DuckDB 的两档不在这里编码（空串 = “本地没有可写的文本”，
+        // 调用方应当先看 `is_duckdb_backed`；给空串比给一份错的文本好）
+        ExportFormat::Parquet | ExportFormat::Xlsx => String::new(),
     }
 }
 
@@ -632,8 +651,10 @@ mod tests {
                 ("CSV".to_string(), Some((ExportFormat::Csv, ExportScope::Fetched))),
                 ("JSON".to_string(), Some((ExportFormat::Json, ExportScope::Fetched))),
                 ("INSERT".to_string(), Some((ExportFormat::Insert, ExportScope::Fetched))),
+                ("Parquet".to_string(), Some((ExportFormat::Parquet, ExportScope::Fetched))),
+                ("XLSX".to_string(), Some((ExportFormat::Xlsx, ExportScope::Fetched))),
             ],
-            "已经抓完时只给“仅已抓取”三项（不摆一个多余的重跑入口）"
+            "已经抓完时只给“仅已抓取”五项（不摆一个多余的重跑入口）"
         );
 
         let items = menu_items(true, "1,000");
@@ -645,23 +666,27 @@ mod tests {
                 "CSV",
                 "JSON",
                 "INSERT",
+                "Parquet",
+                "XLSX",
                 "抓全量后导出（会重跑查询）",
                 "CSV",
                 "JSON",
                 "INSERT",
+                "Parquet",
+                "XLSX",
             ],
             "还有下一段时：先说清已抓多少，再给两档范围"
         );
         assert!(
-            items[4].separator_before,
+            items[6].separator_before,
             "“抓全量”那一组前面要有分隔线"
         );
         assert!(
-            items[0].action.is_none() && items[4].action.is_none(),
+            items[0].action.is_none() && items[6].action.is_none(),
             "两个分组标题不可点"
         );
         assert_eq!(
-            items[5].action,
+            items[7].action,
             Some((ExportFormat::Csv, ExportScope::All)),
             "第二组指向“抓全量”"
         );
@@ -670,10 +695,33 @@ mod tests {
     #[test]
     fn format_metadata_is_complete() {
         let labels: Vec<&str> = ExportFormat::ALL.iter().map(|f| f.label()).collect();
-        assert_eq!(labels, ["CSV", "JSON", "INSERT"]);
+        assert_eq!(labels, ["CSV", "JSON", "INSERT", "Parquet", "XLSX"]);
         let extensions: Vec<&str> = ExportFormat::ALL.iter().map(|f| f.extension()).collect();
-        assert_eq!(extensions, ["csv", "json", "sql"]);
+        assert_eq!(extensions, ["csv", "json", "sql", "parquet", "xlsx"]);
         assert_eq!(ExportScope::Fetched.label(), "仅已抓取");
         assert_eq!(ExportScope::All.label(), "抓全量后导出");
+    }
+
+    /// 【B7 切片二】走 DuckDB 的两档：本地不编码（空串），并在菜单里**与文本三档并列**
+    #[test]
+    fn duckdb_formats_are_marked_and_not_encoded_locally() {
+        let entry = entry(&["id"], &[&["1"]]);
+        for format in [ExportFormat::Parquet, ExportFormat::Xlsx] {
+            assert!(format.is_duckdb_backed(), "{} 要走 DuckDB", format.label());
+            assert!(
+                encode(&entry, format, "orders").is_empty(),
+                "{} 不该在本地编码（空串 = 没东西可写）",
+                format.label()
+            );
+            assert_eq!(
+                default_file_name(Some("SELECT * FROM orders"), 1, format),
+                format!("orders.{}", format.extension()),
+                "默认文件名要跟着扩展名走"
+            );
+            assert!(!format.detail().is_empty(), "文件对话框说明不能空着");
+        }
+        for format in [ExportFormat::Csv, ExportFormat::Json, ExportFormat::Insert] {
+            assert!(!format.is_duckdb_backed(), "{} 是本地编码", format.label());
+        }
     }
 }

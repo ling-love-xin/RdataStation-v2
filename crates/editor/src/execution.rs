@@ -581,6 +581,14 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn analyze(&self, _request: &crate::analysis::AnalysisRequest) -> Result<QueryData, String> {
         Err("当前执行器不支持 DuckDB 分析".to_string())
     }
+
+    /// 【B7 切片二】经 DuckDB 把行落成 Parquet / XLSX（`COPY … TO …`）
+    ///
+    /// 返回写出去的行数。默认实现 = 不支持（宿主没接 DuckDB 导出的真实状态）。
+    /// 这里**允许阻塞**：它在一次性线程上跑（XLSX 首次装扩展要联网几秒），UI 不等。
+    fn export_via_duckdb(&self, _request: &DuckDbExportRequest) -> Result<usize, String> {
+        Err("当前执行器不支持导出 Parquet / XLSX".to_string())
+    }
 }
 
 // ===== 跑完放哪 =====
@@ -646,6 +654,38 @@ pub struct SourceNote {
     pub action: SourceAction,
     /// `Ok` = 那句可读的“做到了什么”（如“已重挂 mysql_src（42 张表）”）；`Err` = 失败原因
     pub result: Result<String, String>,
+}
+
+/// 【B7 切片二】经 DuckDB 落盘的一次导出（Parquet / XLSX）
+///
+/// 为什么不与 CSV / JSON / INSERT 一样在事件路径上同步写完：这条路要 DuckDB 的 `COPY`，
+/// 而 XLSX 首次要 `INSTALL excel`（联网一次；探针实测本机 3–11 秒）——在 UI 线程上等它
+/// 就是界面假死。所以走**一次性线程 + 回执队列**（与源动作同一套），**不占执行位**
+/// （它不产结果集，也不该把“执行中”灯点亮）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuckDbExportRequest {
+    pub document: DocumentId,
+    /// 结果集序号（1 基；回执用「结果 N」指代，与标签同口径）
+    pub set: usize,
+    pub format: crate::export::ExportFormat,
+    pub path: std::path::PathBuf,
+    pub columns: Vec<String>,
+    /// 行（已字符串化，与网格一致：`NULL` 是字面量；桥接成 JSON 在执行器里做）
+    pub rows: Vec<Vec<String>>,
+    /// 这次导的是**筛后的行集**（回执按 B7 的口径要明示）
+    pub filtered: bool,
+}
+
+/// 【B7 切片二】一次 DuckDB 导出的回执
+#[derive(Debug, Clone)]
+pub struct ExportNote {
+    pub document: DocumentId,
+    pub format: crate::export::ExportFormat,
+    pub path: std::path::PathBuf,
+    /// 这次导的是筛后的行集（回执要按 B7 的口径明示）
+    pub filtered: bool,
+    /// 成功时是写出去的行数，失败时是原因
+    pub result: Result<usize, String>,
 }
 
 /// 一次执行的结论（回到主线程）：**一条语句一条结论**
@@ -719,6 +759,8 @@ pub struct ExecQueue {
     tx_notes: Arc<Mutex<VecDeque<TxNote>>>,
     /// 【B13】重新挂载加速源的回执（主线程轮询取走）
     source_notes: Arc<Mutex<VecDeque<SourceNote>>>,
+    /// 【B7 切片二】DuckDB 导出（Parquet / XLSX）的回执（主线程轮询取走）
+    export_notes: Arc<Mutex<VecDeque<ExportNote>>>,
     /// 执行器句柄：`run` 在工作线程上、`cancel` 在一次性线程上，两处都要拿它
     runner: Arc<dyn QueryRunner>,
 }
@@ -740,6 +782,7 @@ impl ExecQueue {
         let tx_notes: Arc<Mutex<VecDeque<TxNote>>> = Arc::new(Mutex::new(VecDeque::new()));
         let source_notes: Arc<Mutex<VecDeque<SourceNote>>> =
             Arc::new(Mutex::new(VecDeque::new()));
+        let export_notes: Arc<Mutex<VecDeque<ExportNote>>> = Arc::new(Mutex::new(VecDeque::new()));
 
         let worker_done = done.clone();
         let worker_busy = busy.clone();
@@ -825,6 +868,7 @@ impl ExecQueue {
             cancel_notes,
             tx_notes,
             source_notes,
+            export_notes,
             runner,
         }
     }
@@ -972,6 +1016,40 @@ impl ExecQueue {
     /// 【B13】源动作的回执（主线程轮询；取走即清空）
     pub fn drain_source_notes(&self) -> Vec<SourceNote> {
         let mut queue = match self.source_notes.lock() {
+            Ok(queue) => queue,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        queue.drain(..).collect()
+    }
+
+    /// 【B7 切片二】请一次 DuckDB 导出（Parquet / XLSX）
+    ///
+    /// 与 [`Self::request_source_action`] 同一套：请求在一次性线程上做（可能要联网装扩展），
+    /// 回执经 [`Self::drain_export_notes`] 取回；**不占执行位**。
+    pub fn request_duckdb_export(&self, request: DuckDbExportRequest) -> Result<(), String> {
+        let runner = self.runner.clone();
+        let notes = self.export_notes.clone();
+        std::thread::Builder::new()
+            .name("rds-editor-export".to_string())
+            .spawn(move || {
+                let result = runner.export_via_duckdb(&request);
+                if let Ok(mut queue) = notes.lock() {
+                    queue.push_back(ExportNote {
+                        document: request.document.clone(),
+                        format: request.format,
+                        path: request.path.clone(),
+                        filtered: request.filtered,
+                        result,
+                    });
+                }
+            })
+            .map_err(|e| format!("起导出线程失败：{e}"))?;
+        Ok(())
+    }
+
+    /// 【B7 切片二】DuckDB 导出的回执（主线程轮询；取走即清空）
+    pub fn drain_export_notes(&self) -> Vec<ExportNote> {
+        let mut queue = match self.export_notes.lock() {
             Ok(queue) => queue,
             Err(poisoned) => poisoned.into_inner(),
         };

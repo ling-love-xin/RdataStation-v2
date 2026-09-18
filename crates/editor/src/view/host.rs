@@ -95,6 +95,8 @@ pub struct EditorHostPanel {
     tx_pending: usize,
     /// 【B13】已请出、尚未回执的“重新挂载加速源”数（同上）
     refresh_pending: usize,
+    /// 【B7 切片二】已请出、尚未回执的 DuckDB 导出（Parquet / XLSX）数（同上）
+    export_pending: usize,
     /// 【B10】在途结果集的**自定义标题**队列（按提交顺序回填；`None` = 就是“结果 N”）
     ///
     /// 为什么要队列：执行是**一条语句一个结论**地回到界面的（批量更是好几条），
@@ -326,6 +328,7 @@ impl EditorHostPanel {
             tx_since: None,
             tx_pending: 0,
             refresh_pending: 0,
+            export_pending: 0,
             pending_labels: std::collections::VecDeque::new(),
             result_toolbar: None,
             result_status: None,
@@ -1028,6 +1031,11 @@ impl EditorHostPanel {
     /// 【B13】还没回执的重新挂载数（供测试断言）
     pub fn refresh_pending_for_test(&self) -> usize {
         self.refresh_pending
+    }
+
+    /// 【B7 切片二】还没回执的 DuckDB 导出数（供测试断言）
+    pub fn export_pending_for_test(&self) -> usize {
+        self.export_pending
     }
 
     /// 【B13】切换执行通道（「执行位置 ▾」调用）
@@ -1995,10 +2003,11 @@ impl EditorHostPanel {
                         if this.pending > 0 || this.tx_pending > 0 || this.refresh_pending > 0 {
                             cx.notify();
                         }
-                        // 事务动作 / 重新挂载的回执还没到也要继续轮询（它们不在“执行忙”里）
+                        // 事务动作 / 重新挂载 / DuckDB 导出的回执还没到也要继续轮询（它们不在“执行忙”里）
                         this.shared.is_executing()
                             || this.tx_pending > 0
                             || this.refresh_pending > 0
+                            || this.export_pending > 0
                     })
                     .unwrap_or(false);
                 if !keep_going {
@@ -2047,6 +2056,29 @@ impl EditorHostPanel {
             match note.result {
                 Ok(done) => self.set_message(Some(done), cx),
                 Err(reason) => self.set_message(Some(format!("{label}失败：{reason}")), cx),
+            }
+        }
+
+        // 【B7 切片二】DuckDB 导出（Parquet / XLSX）的回执：文案与同步那条同口径
+        for note in self.shared.drain_export_notes() {
+            self.export_pending = self.export_pending.saturating_sub(1);
+            if note.document != self.document {
+                continue;
+            }
+            match note.result {
+                Ok(rows) => {
+                    // “（已筛选）”照 B7 的口径明示（导的是筛后的行集）
+                    let filtered = if note.filtered { "（已筛选）" } else { "" };
+                    self.set_message(
+                        Some(format!(
+                            "已导出 {rows} 行{filtered}（{}）→ {}",
+                            note.format.label(),
+                            note.path.display()
+                        )),
+                        cx,
+                    )
+                }
+                Err(reason) => self.set_message(Some(format!("导出失败：{reason}")), cx),
             }
         }
 
@@ -2778,7 +2810,58 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【B7】筛选中时导出的是**筛后的行集**（原型 §5.5）；没筛选就是 `None`（导全部已抓行）
+    fn visible_rows_for_export(&self, cx: &mut Context<Self>) -> Option<Vec<Vec<String>>> {
+        let delegate = self.grid.read(cx).delegate();
+        (!delegate.filter().trim().is_empty()).then(|| delegate.visible_rows())
+    }
+
+    /// 【B7 切片二】把行交给 DuckDB 落成 Parquet / XLSX（**后台线程**，不占执行位）
+    ///
+    /// 为什么不在这里同步写：XLSX 首次要 `INSTALL excel`（联网，探针实测本机 3–11 秒），
+    /// 在 UI 线程上等它就是界面假死；回执走 [`Self::drain_exec_results`] 的同一条轮询泵。
+    fn start_duckdb_export(
+        &mut self,
+        entry: &ResultEntry,
+        format: ExportFormat,
+        index: usize,
+        path: &std::path::Path,
+        visible: Option<Vec<Vec<String>>>,
+        cx: &mut Context<Self>,
+    ) {
+        let rows = match visible {
+            Some(rows) => rows,
+            None => entry.rows.clone(),
+        };
+        // 筛选中导出的是**筛后的行集**（原型 §5.5）：这个事实要跟着请求走，回执里要明示
+        let filtered = !self.grid.read(cx).delegate().filter().trim().is_empty();
+        let request = execution::DuckDbExportRequest {
+            document: self.document.clone(),
+            set: index,
+            format,
+            path: path.to_path_buf(),
+            columns: entry.columns.clone(),
+            rows,
+            filtered,
+        };
+        match self.shared.request_duckdb_export(request) {
+            // 说一句“在跑”：导出可能几秒（首次装扩展），不能点完什么都不说
+            Ok(()) => {
+                self.export_pending += 1;
+                self.set_message(
+                    Some(format!("正在导出 {}（首次装 excel 扩展可能要几秒）…", format.label())),
+                    cx,
+                );
+                self.ensure_exec_pump(cx);
+            }
+            Err(reason) => self.set_message(Some(format!("导出未提交：{reason}")), cx),
+        }
+    }
+
     /// 编码并落盘（事件路径上同步写：与另存为同一口径）
+    ///
+    /// 【B7 切片二】**Parquet / XLSX 不走这里**：它们要 DuckDB `COPY`（XLSX 首次还要联网装扩展），
+    /// 交给 [`Self::start_duckdb_export`] 到后台线程上做。
     fn write_export(
         &mut self,
         entry: &ResultEntry,
@@ -2787,12 +2870,13 @@ impl EditorHostPanel {
         path: &std::path::Path,
         cx: &mut Context<Self>,
     ) {
+        // 【B7 切片二】筛选中就导出筛后的行（原型 §5.5：导出的就是当前筛选后的行集，并且要明示）
+        let visible = self.visible_rows_for_export(cx);
+        if format.is_duckdb_backed() {
+            self.start_duckdb_export(entry, format, index, path, visible, cx);
+            return;
+        }
         let table = export::default_table_name(Some(&entry.sql), index);
-        // 【B15】筛选中就导出筛后的行（原型 §5.5：导出的就是当前筛选后的行集，并且要明示）
-        let visible = {
-            let delegate = self.grid.read(cx).delegate();
-            (!delegate.filter().trim().is_empty()).then(|| delegate.visible_rows())
-        };
         let text = match &visible {
             Some(rows) => export::encode_rows(entry, format, &table, rows),
             None => export::encode(entry, format, &table),

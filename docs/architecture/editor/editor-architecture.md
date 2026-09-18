@@ -375,6 +375,26 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 
 > **定位**：分析不是“过滤的第三种模式”（V1 如此），而是**派生新数据集**。它是“查询后分析”这条产品主线的入口：从结果区快捷发起，在分析模式下沉淀为可重跑、可引用的单元。
 
+### 5.11 导出（两条路：编辑器编码 / DuckDB COPY）
+
+```
+结果工具栏「⤓ 导出 ▾」→ 选格式与范围（仅已抓取 / 抓全量）→ 选路径（宿主的 rfd 端口）
+  文本三档（CSV / JSON / INSERT，切片一）：
+     面板在事件路径上同步编码 → fs::write → “已导出 N 行（CSV）→ 路径”
+  两档二进制（Parquet / XLSX，切片二）：
+     request_duckdb_export（一次性线程；不占执行位）
+       → engine::services::execution_service::export_rows_via_duckdb
+            create_temp_table_internal（与分析同一套行桥接）
+            COPY (SELECT * FROM <表>) TO '<路径>' (FORMAT parquet | xlsx, HEADER true)
+            **无论成败都 DROP 临时表**
+       → ExportNote 回执 → 轮询泵取回 → “已导出 N 行（Parquet）→ 路径”
+  XLSX 缺扩展时：LOAD excel → INSTALL excel; LOAD excel → 失败原因带扩展目录
+```
+
+- **为什么不在 UI 线程上同步做**：XLSX 首次要联网装 `excel` 扩展（探针实测 3–11 s）；提交时状态栏就说“正在导出…”，回执到了再改口。
+- **表头**：XLSX 必须显式 `HEADER true`（否则首行数据会被 `read_xlsx(header = true)` 当成列名——探针第一版就摔在这里）；Parquet 的列名自带在 schema 里。
+- **类型**：行仍按展示文本桥接（`"NULL"` → 真 null），列类型由引擎按整列推断——数字列在 Parquet / XLSX 里就是数；代价是 `007` 这类前导零会按数字落。
+
 ---
 
 ## 6. 关键设计决策
@@ -405,6 +425,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | D22 | **结果集带通道徽标 + 血缘**，重查与分析**产生新结果集**（不就地替换） | V1 就地替换 `columns/rows`，用户丢失“原始查的是什么”；通道不明导致无法判断数据新鲜度 | 结果集数量增长（受上限 5 与淘汰约束）；需定义标签展示方式 |
 | D23 | **结果集只读**；行内编辑与写回源库归 M4 表格能力 | V1 把表编辑塞进结果区，导致语义纠缠与脏状态双轨（`dirtyRows` / `dirtyCells`） | 用户若想在结果区改数据需走 SQL（DML）或去 M4 表格 |
 | D24 | **结果集分段抓取**（已确认 2026-09-15）：数据源暴露「已抓取窗口 + 取下一段」，未知总数显示 `N+` | DBeaver 的大表体验基线；一次抓取 + 上限截断在亿行级表上不可用；且接口形状一旦定型难改 | 多一层窗口状态；导出需区分「仅已抓取」与「抓全量」两种语义 |
+| D25 | **导出分两条路**（✅ B7 切片二）：CSV / JSON / INSERT 在编辑器里**同步编码**（纯函数、即时）；**Parquet / XLSX 经 DuckDB `COPY … TO …` 且在一次性线程上跑**（多一条 `ExportNote` 回执，不占执行位） | 前三种是字符串拼装，拼错了看得见；后两种是带 schema 的二进制 / OOXML 包，手写编码器几乎必然产出别人读不了的文件；而 XLSX 首次要 `INSTALL excel`（联网几秒，探针实测 3–11 s），放在事件路径上就是界面假死 | 多一层分叉判据（`ExportFormat::is_duckdb_backed`）与一条回执队列；文本档与 DuckDB 档的行数回执文案要各自成文（都已断言） |
 
 ---
 
@@ -519,6 +540,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | D24 分段抓取 | `crates/editor/src/store.rs`（结果集窗口状态）+ `view/widgets/grid/`（“取下一段”入口与 `N+` 展示） |
 | Dock 标签能力（脏点 / 关闭语义） | `crates/editor/src/view/host.rs`（`Panel::{title_suffix, closable}`；关闭语义见 §13 #15）+ `crates/workbench/src/view.rs`（中央区装配） |
 | 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs`（`ExecTarget::{Filtered,Analysis}`）+ `engine/src/services/execution_service.rs`（`re_execute_with_filter` / `execute_duckdb_analysis`）；分析侧另见 ✅ B15：`crates/editor/src/analysis.rs`（纯模型 + 预置菜单 + 桥接口径）+ `view/host.rs::{run_analysis,request_custom_analysis}` + `view/dialogs.rs::open_analysis_sql`（自定义 SQL）+ `view/results/grid.rs`（工具栏入口）+ `workbench/src/services/editor_exec.rs::analyze` |
+| 导出（D25） | ✅ B7：文本三档 `crates/editor/src/export.rs`（纯函数编码）+ `view/host.rs::write_export`（同步写）；**Parquet / XLSX** 走 `export::ExportFormat::is_duckdb_backed` → `execution::{DuckDbExportRequest,ExportNote}` + `ExecQueue::{request_duckdb_export,drain_export_notes}`（**一次性线程 + 回执**，不占执行位）→ `workbench/src/services/editor_exec.rs::export_via_duckdb` → `engine::services::execution_service::export_rows_via_duckdb`（临时表 → `COPY … TO …` → 必收）；真机台账 `engine/tests/duckdb_export_probe.rs` |
 | D7 语句切分 | ~~`crates/editor/src/split.rs`~~ → **`crates/engine/src/sql/split.rs`**（✅ P0.4 已完成；`SqlEngine::split_statements` + `sql_parser_service::split_sql` 委托） |
 | D8 格式化 | `engine/src/sql/formatter.rs`（✅ P0.3 已改用 `generate_pretty` + 往返解析回归；✅ B10 起 `format_with_report` **按语句区间原位回填**、区间外字节不动）+ 编辑器侧计划 `crates/editor/src/format.rs`（选段优先 / 光标映射 / `changes` 口径） |
 | D8b 方言转译 | `engine/src/sql/transpiler.rs`（✅ B10：`transpile_with_report` **先切分再逐条转译**——整篇接口会静默丢语句）+ `engine/src/sql/script.rs`（格式化与转译共用的脚本骨架）+ `crates/editor/src/translate.rs`（目标表 / `targets_for` / 选区优先的 `plan`） |

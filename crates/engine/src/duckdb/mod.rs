@@ -48,3 +48,5 @@ pub use temp_table::{
     drop_temp_table, generate_unique_name, TempTableConfig, TempTableManager, TempTableSource,
     TempTableStats,
 };
+// 标识符加引号的**唯一规则**在临时表模块（B7 切片二的导出 COPY 也要用）
+pub(crate) use temp_table::quote_ident;
