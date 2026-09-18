@@ -226,6 +226,8 @@ pub enum OpOutcome {
         rel_path: String,
         /// 撤销凭据（**只有首次归档才给**：再归档的"撤销"是版本回退，不在这条路上）。
         undo: Option<ArchiveUndo>,
+        /// 附属项（标签 / 分组）未落上的说明（空 = 全部落上；归档本身已成功）。
+        notes: Vec<String>,
     },
     /// 已取回：落地路径 / 存档版本 / 是否要顺手打开。
     CheckedOut {
@@ -454,6 +456,7 @@ async fn run_archive(job: &ArchiveJob) -> OpOutcome {
                 version: outcome.version,
                 rel_path: outcome.file_rel_path,
                 undo,
+                notes: outcome.notes,
             }
         }
         Err(error) => OpOutcome::Failed {

@@ -484,7 +484,17 @@ impl SidebarPanel {
                 version,
                 rel_path,
                 undo: _,
-            } => format!("资产库：已归档「{name}」v{version} → {rel_path}"),
+                notes,
+            } => {
+                let base = format!("资产库：已归档「{name}」v{version} → {rel_path}");
+                // 附属项（标签 / 分组）没落上时写进同一句回执：归档成功了，但用户得知道
+                // 那两项没生效（都能在面板上补做，所以不单独弹窗）。
+                if notes.is_empty() {
+                    base
+                } else {
+                    format!("{base}（{}）", notes.join("；"))
+                }
+            }
             resource_jobs::OpOutcome::CheckedOut {
                 dest,
                 version,

@@ -23,6 +23,7 @@ use rds_analytics_resource::dialogs::archive::{
     open_archive_dialog_with, submit_archive,
 };
 use rds_analytics_resource::KeepVersions;
+use rds_analytics_resource::resource_view::GroupOption;
 use rds_analytics_resource::dialogs::checkout::{
     CheckoutDialogResult, CheckoutDialogSeed, build_inputs as build_checkout_inputs,
     open_checkout_dialog_with, submit_checkout, suggest_work_copy_name,
@@ -77,6 +78,18 @@ fn archive_seed(conflict: Option<ArchiveConflict>) -> ArchiveDialogSeed {
         name: "月报".to_string(),
         source_connection: Some("conn_demo".to_string()),
         conflict,
+        // 两个分组 + 未分组：下拉的候选就是它们（建组入口在面板，不在这里）。
+        groups: vec![
+            GroupOption {
+                id: "af_month".to_string(),
+                name: "月报".to_string(),
+            },
+            GroupOption {
+                id: "af_year".to_string(),
+                name: "年报".to_string(),
+            },
+        ],
+        group_id: None,
     }
 }
 
@@ -212,24 +225,44 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
     );
     assert!(submitted.borrow().is_empty(), "校验不过时宿主不该被通知");
 
-    // 填好：拿到解析后的结果（标签去空去重、保留份数解析成数字）。
+    // 填好：拿到解析后的结果（标签去空去重、保留份数解析成数字、分组选项落成 id）。
     cx.update(|window, cx| {
         inputs_for_submit
             .name
             .update(cx, |state, cx| state.set_value("月报 2026", window, cx));
+        inputs_for_submit
+            .alias
+            .update(cx, |state, cx| state.set_value(" 日报 ", window, cx));
         inputs_for_submit.tags.update(cx, |state, cx| {
             state.set_value(" 报表, 月度 ，报表 ", window, cx)
         });
         inputs_for_submit
             .keep_versions
             .update(cx, |state, cx| state.set_value("3", window, cx));
+        // 分组选择走下拉菜单（headless 下程序性写单元格，与渲染共用同一份状态）。
+        *inputs_for_submit.group_id.borrow_mut() = Some("af_month".to_string());
     });
     let result = cx
         .update(|_window, cx| submit_archive(&inputs_for_submit, cx))
         .expect("填好后应通过校验");
     assert_eq!(result.name, "月报 2026");
+    assert_eq!(result.alias.as_deref(), Some("日报"), "别名去空白后入结果");
     assert_eq!(result.tags, vec!["报表", "月度"], "去空、去重、保序");
+    assert_eq!(result.group_id.as_deref(), Some("af_month"), "选中的分组 id");
     assert_eq!(result.keep_versions, Some(KeepVersions::Keep(3)));
+
+    // 别名留空 = 不设（空串入库会让详情面板多一个空行）。
+    cx.update(|window, cx| {
+        inputs_for_submit
+            .alias
+            .update(cx, |state, cx| state.set_value("   ", window, cx));
+    });
+    assert_eq!(
+        cx.update(|_window, cx| submit_archive(&inputs_for_submit, cx))
+            .expect("空白别名不影响通过")
+            .alias,
+        None
+    );
 
     // 非法保留份数：挡住提交（提示由渲染期从同一个解析函数推出，不会两处不一致）。
     cx.update(|window, cx| {

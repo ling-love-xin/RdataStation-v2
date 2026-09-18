@@ -67,9 +67,9 @@
 
 | 想改 | 去哪 |
 | --- | --- |
-| 领域类型（`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / 归档与取回请求） | `crates/analytics_resource/src/model.rs`（现状：✅ Phase 0 已实现） |
+| 领域类型（`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / 归档与取回请求） | `crates/analytics_resource/src/model.rs`（现状：✅ Phase 0 已实现；`ArchiveOutcome.notes` 带附属项说明，见第八刀） |
 | 本体层（`resources/` 定位、越界拒绝、move、只读、指纹、历史副本与裁剪、版本副本的查 / 用 / 删） | `crates/analytics_resource/src/payload.rs`（现状：✅ Phase 0 + Phase 3 第一刀，`PayloadStore`；`rel_path_taken` / `free_rel_path` 提供重名避让） |
-| 归档服务（归档 / 取回 / 再归档 / 撤销 / **还原到历史版本** + 变更事件） | `crates/analytics_resource/src/service.rs`（现状：✅ Phase 0 + Phase 3 第一刀，`ArchiveService`；`undo_archive` 提供 5 秒反悔窗口；`restore_version` / `checkout_version` 供版本历史） |
+| 归档服务（归档 / 取回 / 再归档 / 撤销 / **还原到历史版本** + 变更事件） | `crates/analytics_resource/src/service.rs`（现状：✅ Phase 0 + Phase 3 第一刀，`ArchiveService`；`undo_archive` 提供 5 秒反悔窗口；`restore_version` / `checkout_version` 供版本历史；**归档时把请求里的标签 / 分组 / 别名真的落上**（`apply_labels` / `link_tags`，第八刀）） |
 | 索引修复（三类孤儿检测与修复） | `crates/analytics_resource/src/indexer.rs`（现状：✅ Phase 0 已实现 `IndexRepair`） |
 | 登记 CRUD / 分页 / 搜索 / 排序 | `crates/analytics_resource/src/resource.rs`（现状：✅ 搬运 + 边界修复：统一行映射、分页夹紧、`LIKE` 转义、事务化更新；`hard_delete_row` 供撤销与索引修复；归档写入**指纹与体积同批落**（第四刀），写入前夹紧到 `i32` 上限） |
 | 分组（单层） | `crates/analytics_resource/src/folder.rs`（现状：✅ 搬运，含树字段待去掉） |
@@ -81,7 +81,7 @@
 | 左 Dock 面板（列表 / 工具栏 / 状态行） | `crates/analytics_resource/src/resource_view.rs`（现状：✅ Phase 1 九刀；`list::List` 虚拟化 + kind 图标 + **行点击归位（单击选中 / `Ctrl` / `Shift` / 双击打开）+ 多选与 `Ctrl+A`** + 行右键菜单（含复制路径 / 在系统中显示 / 版本历史… / 查看统计）已落；**加载态（骨架 + 状态行前缀）**已落；**面板头（标题图标 + `＋ ▾` + `⋯` 四项）**已落；`F2` 重命名待重命名入口） |
 | 工具栏规则（搜索 / 筛选 / 排序） | `crates/analytics_resource/src/filter.rs`（现状：✅ 纯函数 + 单测；**五个排序键已落**（第四刀，比原始时间戳 / 字节数、缺值排最后；`key` / `from_key` / `default_order` 供设置项）；标签维 ✅ Phase 2；搜索范围待扩到别名 / 标签 / 来源表） |
 | 详情属性面板（内容层） | `crates/analytics_resource/src/detail_view.rs`（现状：✅ 只读信息区 + **版本区的「查看全部…」** + **动作区（打开（只读）/ 取回…）** + **危险区（移入回收站）**；内容预览随后续批次） |
-| 归档 / 取回 / 草稿选择 / 版本历史 / 索引修复 / 回收站 / 标签 / 分组对话框 | `crates/analytics_resource/src/dialogs/{archive,checkout,pick,version,index_repair,trash,tag,group}.rs`（现状：✅ 表单 / 列表 / 版本表格 / 三分组修复行 / 回收站行 / 标签勾选 + 行内 ⋯ / 分组名单输入 + 校验 + 冲突提示；执行由宿主注入的 `on_submit` / `on_action` 接手；后五者的行可被宿主换掉） |
+| 归档 / 取回 / 草稿选择 / 版本历史 / 索引修复 / 回收站 / 标签 / 分组对话框 | `crates/analytics_resource/src/dialogs/{archive,checkout,pick,version,index_repair,trash,tag,group}.rs`（现状：✅ 表单（归档：显示名 / 别名 / 分组下拉 / 标签 / 保留份数 + 校验）/ 列表 / 版本表格 / 三分组修复行 / 回收站行 / 标签勾选 + 行内 ⋯ / 分组名单输入 + 校验 + 冲突提示；执行由宿主注入的 `on_submit` / `on_action` 接手；后五者的行可被宿主换掉） |
 | 详情面板的落点（右 Dock 档位） | `crates/workbench/src/panels/right.rs`（`RightPanel::Archive`：转发渲染 + 空态）、`crates/workbench/src/view.rs`（观察资产库面板 → 唤醒右栏） |
 | 呈现层（索引行 → 面板快照） | `crates/analytics_resource/src/present.rs`（现状：✅ Phase 1 + Phase 3 + Phase 2 第一刀；含 `to_detail` / `format_timestamp` / **`build_version_rows`** / **`tag_chips` / `tag_options`**——宿主桥只需“取数 → 调它 → 推快照”） |
 | 回收站 / 分组 / 标签对话框 | 回收站：✅ `src/dialogs/trash.rs`（P0.8；v1 的 `recycle_bin_dialog.rs` 占位已删）；分组 / 标签视图待 Phase 2 |
@@ -130,7 +130,7 @@ cargo test -p rds-workbench --test ui_contract -j 2
 cargo check --workspace --all-targets -j 2
 ```
 
-- **当前基线（2026-09-18）**：`124 单测 + 9 对话框窗口测试 + 18 面板窗口测试`全绿（`cargo check --all-targets` 零告警）；编辑器侧 `cargo test -p rds-editor --lib` **217 项**（含只读打开）。
+- **当前基线（2026-09-18）**：`125 单测 + 9 对话框窗口测试 + 18 面板窗口测试`全绿（`cargo check --all-targets` 零告警）；编辑器侧 `cargo test -p rds-editor --lib` **217 项**（含只读打开）。
 - 测试场景 T1–T16 见 `analytics-resource-dev-plan.md` §9（归档回滚 / 指纹未变不增版本 / 历史裁剪 / 跨模块还原被拒 / 三类孤儿 / 越界写入 / 跨设备 move 等）。
 - **基线**：v1 的 15 个存储用例改造后全绿且不得减少。
 - 真机矩阵：明暗主题 × 三类 kind × 异常三态；平台矩阵：Windows（只读属性最弱）/ macOS / Linux（大小写敏感）。
@@ -160,7 +160,7 @@ cargo check --workspace --all-targets -j 2
 | Phase 0（先做，无 UI） | ✅ 已落地（crate 内）：crate 入口文档 · workspace 别名 · 迁移 020 + 新列接入 · 领域类型 · 本体层 · **归档/取回/再归档闭环 + 变更事件** · **索引修复（三类孤儿）** · 行映射 4 份→1 份 · 9 项继承缺陷修复 · `mod tests` 接线（此前未编译）｜⬜ 待续（需跨 crate 或后续阶段）：engine 连接池修复（`busy_timeout` / `acquire` 超时）· `.RSmeta` 常量去重 · **版本保留策略接入设置项 ✅（P2.4 前半，见 Phase 2 行）** · 测试改走 `engine::migration`（详单见开发方案 §0） |
 | Phase 1 | ✅ 面板骨架 · ✅ 行渲染（含 **kind 图标**）· ✅ 工具栏（搜索 / 筛选 / 排序）· ✅ 两种空态 · ✅ **列表虚拟化（`list::List`）+ 行右键菜单** · ✅ 详情面板内容层 · ✅ 呈现层 · ✅ 术语收尾（`f93d560`）· ✅ **workbench 接线（面板挂载 + 快照桥）** · ✅ **Action 与快捷键（`Ctrl+F` / `Esc` / `Delete` / `Ctrl+A`）** · ✅ **存档详情接入右栏（`RightPanel::Archive` + 选中联动）** · ✅ **归档 / 取回对话框与真执行（含重名避让与回执）** · ✅ **归档撤销栏（`undo_archive`，5 秒窗口）** · ✅ **只读三重守卫（编辑器只读打开，P1.6）** · ✅ **面板头 `＋ ▾` 双入口 + 从草稿箱归档（草稿多选对话框）** · ✅ **面板头 `⋯` 四项 + 标题图标** · ✅ **批量多选（行点击归位 + `Ctrl+A`，含“单击不再打开”的修正）**；⬜ 草稿箱**右键**侧入口 · ⬜ 标题点击折叠（随“自绘面板头统一”批） · ⬜ `F2` 重命名（随重命名入口） |
 | Phase 2 | 标签（补改名/删除）+ 单层分组 + 搜索筛选排序 + 设置项 + 多选批量 |
-| Phase 2 | ✅ **标签（存储层补齐改名 / 删除 + 打标 / 去标 + 标签对话框 + 行内改名 / 删除 + 筛选维）** · ✅ **分组（折叠区 + 建 / 改名 / 删 + 移动到分组 + 分组头右键）** · ✅ **排序五键（名称 / 归档时间 / 更新时间 / 大小 / 版本号，含归档登记体积）** · ✅ **三个设置项（`resources.{keep_versions, default_sort, collapsed_groups}`）**；⬜ 拖拽到分组头 · 搜索匹配别名 / 标签 / 来源表（P2.3 余项）· 默认分组 · 批量打标签 / 批量移动（P2.5）· `F2` 重命名 |
+| Phase 2 | ✅ **标签（存储层补齐改名 / 删除 + 打标 / 去标 + 标签对话框 + 行内改名 / 删除 + 筛选维）** · ✅ **分组（折叠区 + 建 / 改名 / 删 + 移动到分组 + 分组头右键）** · ✅ **排序五键（名称 / 归档时间 / 更新时间 / 大小 / 版本号，含归档登记体积）** · ✅ **三个设置项（`resources.{keep_versions, default_sort, collapsed_groups}`）** · ✅ **归档的别名 / 分组 / 标签真的落地（修一处静默丢弃）**；⬜ 拖拽到分组头 · 搜索匹配别名 / 标签 / 来源表（P2.3 余项）· 默认分组 · 批量打标签 / 批量移动（P2.5）· `F2` 重命名 |
 | Phase 3 | ✅ **版本历史对话框（含还原 / 取回该版本 / 删副本三个真动作）** · ✅ **索引修复对话框（三分组 + 补登 / 删记录 / 接受当前内容 / 打开版本历史 / 从回收站还原）** · ✅ **回收站对话框（移入 / 还原 / 永久删除 / 清空；P0.8 上提后落地）**；⬜ 历史内容保留策略接设置项 · 异常态呈现 |
 | Phase 4 | `analysis` 档（DuckDB 表）+ M7 Mock 产物 / M5 编辑器结果两处上游接入 |
 | Phase 5（不承诺） | `table_ref` 档 · M1 系统级提升衔接 · 依赖追踪 · FTS5 |

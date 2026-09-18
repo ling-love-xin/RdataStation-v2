@@ -47,7 +47,7 @@ use analytics_resource::model::{
     ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions,
 };
 use analytics_resource::payload::{PayloadStore, RESOURCES_DIR_NAME};
-use analytics_resource::resource_view::ResourcesHost;
+use analytics_resource::resource_view::{GroupOption, ResourcesHost};
 use analytics_resource::filter::{SortField, SortOrder};
 
 use crate::panels::Shared;
@@ -65,12 +65,15 @@ fn say(shared: &Shared, message: impl Into<String>, cx: &mut App) {
 /// 归档种子（原型 §4.1）：来源标签 / 目标位置（含重名避让）/ 默认显示名 / 来源连接 / 冲突预探。
 ///
 /// 返回种子与**已避让的目标相对路径**：提交时要用同一个值，两处各算一次就会不一致。
+/// 分组名单与预选由调用方给（名单来自面板快照的字典，预选来自默认分组设置）。
 fn archive_seed(
     root: &Path,
     source_label: String,
     rel_path: &str,
     display_name: &str,
     source_connection: Option<String>,
+    groups: Vec<GroupOption>,
+    group_id: Option<String>,
 ) -> (ArchiveDialogSeed, String) {
     let resolved = PayloadStore::new(root.to_path_buf()).free_rel_path(rel_path);
     let conflict = (resolved != rel_path).then(|| ArchiveConflict {
@@ -83,6 +86,8 @@ fn archive_seed(
         name: display_name.to_string(),
         source_connection,
         conflict,
+        groups,
+        group_id,
     };
     (seed, resolved)
 }
@@ -209,6 +214,20 @@ impl WorkbenchResourceHost {
     ///
     /// 不给“直接查库”的选择：分组字典每次刷新都在快照里，而查库要开项目库（异步 + I/O），
     /// 事件路径上不该出现。
+    /// 分组名单（面板快照里的字典）：归档对话框的「分组」下拉用它。
+    ///
+    /// 不另查库——面板的字典就是这一屏真实可见的分组（同一次取数产物）；快照还没到时
+    /// 给空名单（对话框只摆「未分组」）。
+    fn known_groups(&self, cx: &App) -> Vec<GroupOption> {
+        self.shared
+            .resources_panel
+            .borrow()
+            .as_ref()
+            .and_then(|panel| panel.upgrade())
+            .map(|panel| panel.read(cx).snapshot().groups.clone())
+            .unwrap_or_default()
+    }
+
     fn group_name(&self, folder_id: &str, cx: &App) -> Option<String> {
         let entity = self
             .shared
@@ -266,6 +285,8 @@ impl ResourcesHost for WorkbenchResourceHost {
 
         let shared = self.shared.clone();
         let read_only = self.read_only();
+        // 分组名单在事件路径上取一份（来自面板快照的字典，不查库）；闭包里只能拿副本。
+        let known_groups = self.known_groups(cx);
         open_draft_pick_dialog(
             window,
             cx,
@@ -280,6 +301,8 @@ impl ResourcesHost for WorkbenchResourceHost {
                         &draft.rel_path,
                         &draft.display_name,
                         draft.connection_id.clone(),
+                        known_groups.clone(),
+                        None,
                     );
                     let shared = shared.clone();
                     let draft = draft.clone();
@@ -291,7 +314,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                             source_path: draft.abs_path.clone(),
                             rel_path: resolved_rel.clone(),
                             name: result.name,
-                            alias: None,
+                            alias: result.alias,
                             kind: ArchiveKind::File,
                             binding: ArchiveBinding {
                                 // 归档凭证的"出处"：草稿相对路径（带模块前缀，与文档口径一致）
@@ -395,6 +418,8 @@ impl ResourcesHost for WorkbenchResourceHost {
             &default_name,
             // 本地文件没有"来源草稿的连接"可带出：**不猜**当前活动连接（那不一定是它的来路）。
             None,
+            self.known_groups(cx),
+            None,
         );
 
         let shared = self.shared.clone();
@@ -404,8 +429,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                 source_path: source.clone(),
                 rel_path: resolved_rel.clone(),
                 name: result.name,
-                // 别名留空：原型 §4.1 没有这一格，改别名走 Phase 2 的重命名入口。
-                alias: None,
+                alias: result.alias,
                 kind: ArchiveKind::File,
                 binding: ArchiveBinding {
                     promoted_from: None,
@@ -413,7 +437,7 @@ impl ResourcesHost for WorkbenchResourceHost {
                     source_table: None,
                 },
                 tags: result.tags,
-                group_id: None,
+                group_id: result.group_id,
                 keep_versions: result.keep_versions,
                 existing_resource_id: None,
             };

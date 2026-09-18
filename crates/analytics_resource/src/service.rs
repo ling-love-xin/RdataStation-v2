@@ -72,6 +72,89 @@ impl ArchiveService {
         }
     }
 
+    /// 归档后把「标签 / 分组」落到位（归档对话框里用户填的那两项）。
+    ///
+    /// 顺序与失败语义：本体与登记行是**主操作**（此刻已完成，不因附属项失败回滚——
+    /// 那会把用户刚归档好的文件再搬回去）；标签与分组是**附属项**（都能在面板上补做），
+    /// 失败把原因记进 [`ArchiveOutcome::notes`]，由宿主写进回执——**不静默吞掉**。
+    ///
+    /// 空值 = 不动：再归档时调用方不给这两项，不能把已有的标签 / 归属清掉。
+    async fn apply_labels(
+        &self,
+        resource_id: &str,
+        tags: &[String],
+        group_id: Option<&str>,
+    ) -> Vec<String> {
+        let mut notes = Vec::new();
+
+        if !tags.is_empty() {
+            match self.link_tags(resource_id, tags).await {
+                Ok(tag_notes) => notes.extend(tag_notes),
+                // 连标签表都读不到（库异常）：整批说明一句，而不是逐条重复同一个原因。
+                Err(error) => notes.push(format!("标签未打上：{error}")),
+            }
+        }
+
+        if let Some(folder_id) = group_id {
+            if let Err(error) = self.store.add_resource_to_folder(resource_id, folder_id).await {
+                notes.push(format!("分组未归入：{error}"));
+            }
+        }
+
+        notes
+    }
+
+    /// 按名字把标签挂到存档上：库里没有的**就地新建**（同名复用，不重复建）。
+    ///
+    /// 单个标签失败不牵连其余：返回逐条失败说明（空 = 全成功）。名字按 `trim` 后**区分大小写**
+    /// 比对——与存储层「同名（未删）拒绝」同口径，不然会出现“看起来建了、其实复用了另一个”。
+    ///
+    /// 名字 → id 的映射同时充当**本批缓存**：同一批里出现两次同一个名字（对话框会去重，
+    /// 但服务层不能靠调用方）时第二次直接复用刚建的那条，而不是再建一次撞唯一索引。
+    async fn link_tags(&self, resource_id: &str, names: &[String]) -> Result<Vec<String>, CoreError> {
+        let existing = self.store.list_tags(None).await?;
+        let mut by_name: std::collections::HashMap<String, String> = existing
+            .into_iter()
+            .map(|tag| (tag.name, tag.id))
+            .collect();
+        let mut notes = Vec::new();
+
+        for name in names {
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let tag_id = match by_name.get(name) {
+                Some(id) => id.clone(),
+                None => match self
+                    .store
+                    .create_tag(crate::models::CreateTagRequest {
+                        name: name.to_string(),
+                        color: None,
+                        icon: None,
+                        // 作用域与存档同口径（数据住项目库 → project，架构 §4.3）。
+                        scope: "project".to_string(),
+                    })
+                    .await
+                {
+                    Ok(tag) => {
+                        by_name.insert(tag.name.clone(), tag.id.clone());
+                        tag.id
+                    }
+                    Err(error) => {
+                        notes.push(format!("标签「{name}」未建立：{error}"));
+                        continue;
+                    }
+                },
+            };
+            if let Err(error) = self.store.add_tag_to_resource(resource_id, &tag_id).await {
+                notes.push(format!("标签「{name}」未打上：{error}"));
+            }
+        }
+
+        Ok(notes)
+    }
+
     /// 订阅变更事件（面板挂载时订阅一次）。
     pub fn subscribe(&self) -> broadcast::Receiver<ResourcesChanged> {
         self.events.subscribe()
@@ -159,6 +242,9 @@ impl ArchiveService {
             }
         };
 
+        let notes = self
+            .apply_labels(&resource.id, &req.tags, req.group_id.as_deref())
+            .await;
         self.emit(ChangeReason::Archived, Some(resource.id.clone()));
 
         Ok(ArchiveOutcome {
@@ -167,6 +253,7 @@ impl ArchiveService {
             content_hash,
             file_rel_path: req.rel_path,
             created_new_version: true,
+            notes,
         })
     }
 
@@ -193,12 +280,17 @@ impl ArchiveService {
         let current_hash = current.content_hash.clone().unwrap_or_default();
         if current_hash == content_hash {
             // 幂等：内容与当前版本相同 → 不覆盖本体、不增版本，保留调用方的工作副本。
+            // 附属项照旧落：指纹没变不代表用户这次填的标签 / 分组不算数。
+            let notes = self
+                .apply_labels(&current.id, &req.tags, req.group_id.as_deref())
+                .await;
             return Ok(ArchiveOutcome {
                 resource_id: current.id,
                 version: current.version,
                 content_hash,
                 file_rel_path: rel_path,
                 created_new_version: false,
+                notes,
             });
         }
 
@@ -228,6 +320,9 @@ impl ArchiveService {
 
         self.prune_copies(resource_id, req.keep_versions).await;
 
+        let notes = self
+            .apply_labels(&updated.id, &req.tags, req.group_id.as_deref())
+            .await;
         self.emit(ChangeReason::Updated, Some(resource_id.to_string()));
 
         Ok(ArchiveOutcome {
@@ -236,6 +331,7 @@ impl ArchiveService {
             content_hash,
             file_rel_path: rel_path,
             created_new_version: true,
+            notes,
         })
     }
 
@@ -307,6 +403,7 @@ impl ArchiveService {
                 content_hash: copy_hash,
                 file_rel_path: rel_path,
                 created_new_version: false,
+                notes: Vec::new(),
             });
         }
 
@@ -352,6 +449,8 @@ impl ArchiveService {
             content_hash: copy_hash,
             file_rel_path: rel_path,
             created_new_version: true,
+            // 还原不带标签 / 分组：那两项是归档入口的事。
+            notes: Vec::new(),
         })
     }
 
@@ -1067,6 +1166,85 @@ mod tests {
             );
             let _ = fs::remove_dir_all(&dir).await;
         }
+    }
+
+    /// 归档时填的**标签与分组真的落上**（之前 `ArchiveRequest` 的这两项没人消费，填了等于白填）：
+    /// 标签按名字找 / 找不到就建（同名复用），分组就是移动语义；不存在的分组只给回执说明、
+    /// **不回滚归档本身**（文件已经归档好了，分组是能在面板上补做的附属项）。
+    #[tokio::test]
+    async fn t131_archive_applies_tags_and_group() {
+        let (service, dir) = test_service(DEFAULT_KEEP_VERSIONS).await;
+        let folder = service
+            .store()
+            .create_folder(crate::models::CreateFolderRequest {
+                name: "月报".to_string(),
+                scope: "project".to_string(),
+                parent_folder_id: None,
+                color: None,
+                icon: None,
+            })
+            .await
+            .expect("create folder");
+
+        let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+        let mut req = archive_req(&draft, "dau.sql", None);
+        req.alias = Some("日报".to_string());
+        req.tags = vec!["报表".to_string(), "月度".to_string(), "报表".to_string()];
+        req.group_id = Some(folder.id.clone());
+
+        let outcome = service.archive(req).await.expect("archive");
+        assert!(outcome.notes.is_empty(), "全落上时不该有说明：{:?}", outcome.notes);
+
+        let row = service
+            .store()
+            .get_resource_by_id(&outcome.resource_id)
+            .await
+            .expect("row");
+        assert_eq!(row.alias.as_deref(), Some("日报"), "别名应写进登记行");
+
+        let tags = service
+            .store()
+            .get_tags_for_resource(&outcome.resource_id)
+            .await
+            .expect("tags");
+        let mut names: Vec<&str> = tags.iter().map(|tag| tag.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["报表", "月度"], "两个标签都建好并挂上（重复名只算一次）");
+
+        assert_eq!(
+            service
+                .store()
+                .folders_by_resource()
+                .await
+                .expect("folders"),
+            std::collections::HashMap::from([(outcome.resource_id.clone(), folder.id.clone())]),
+            "分组归属应落到关联表"
+        );
+
+        // 再归档另一份：同名标签**复用**，不另建一个。
+        let second = write_draft(&dir, "dau2.sql", b"select 2;").await;
+        let mut req = archive_req(&second, "dau2.sql", None);
+        req.tags = vec!["报表".to_string()];
+        service.archive(req).await.expect("archive 2");
+        assert_eq!(
+            service.store().list_tags(None).await.expect("tags").len(),
+            2,
+            "同名标签复用，不是每个存档建一个"
+        );
+
+        // 分组不存在（悬空 id）：归档仍然成功，但要在回执里说清。
+        let third = write_draft(&dir, "dau3.sql", b"select 3;").await;
+        let mut req = archive_req(&third, "dau3.sql", None);
+        req.group_id = Some("af_不存在".to_string());
+        let outcome = service.archive(req).await.expect("archive 3");
+        assert_eq!(outcome.notes.len(), 1, "应有一条说明：{:?}", outcome.notes);
+        assert!(
+            outcome.notes[0].starts_with("分组未归入："),
+            "说明要说清是哪一项没落上：{:?}",
+            outcome.notes[0]
+        );
+
+        let _ = fs::remove_dir_all(&dir).await;
     }
 
     #[tokio::test]

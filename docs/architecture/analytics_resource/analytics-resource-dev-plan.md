@@ -1,12 +1,29 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前七刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项（历史保留 / 默认排序 / 分组折叠）均可用，**124 单测 + 27 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前八刀已落地**——归档/取回/再归档闭环（**含标签 / 分组 / 别名真的落上**）+ 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键、三个设置项均可用，**125 单测 + 27 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-18 — Phase 2 第八刀：归档的「标签 / 分组 / 别名」真的落地（修一处静默丢弃）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **修静默丢弃** ✅ | 发现：`ArchiveRequest.{tags, group_id}` **全链路没人消费** —— 归档对话框里填的标签填了等于白填（本体与登记行落好了，附属项没有）。现在归档（首次 / 再归档 / 幂等分支）都会把这两项落到位：标签**按名找、找不到就建**（同名复用，本批内也缓存），分组走移动语义 | `src/service.rs`（`apply_labels` / `link_tags`） |
+| 失败语义 ✅ | 本体 + 登记行是**主操作**（不因附属项失败回滚——那会把刚归档好的文件再搬回去）；标签 / 分组是**附属项**（都能在面板上补做），失败原因进 `ArchiveOutcome.notes`，由宿主写进同一句回执——**不静默**（如悬空分组 id → “已归档「x」v1 → …（分组未归入：…）”） | `src/model.rs`、`crates/workbench/src/{services/resource_jobs.rs,panels/resources.rs}` |
+| 对话框 ✅ | 新增**别名**输入与**分组**下拉（未分组 / 各分组，当前项打勾）；分组选择住在 `Rc<RefCell<_>>`（下拉不是输入框，而 builder 是 `Fn`），选完 `window.refresh()` 让按钮文案跟上；**不做「新建分组…」子项**（那要“先建组再归档”的两步提交，而面板已有建组入口） | `src/dialogs/archive.rs` |
+| 名单来源 ✅ | 宿主的 `known_groups` 从**面板快照的分组字典**取（同一次取数产物，不另查库；快照未到时只给「未分组」） | `crates/workbench/src/components/resource_host.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 1` → **125 单测 + 18 面板窗口 + 9 对话框窗口全绿**（+1 服务：标签与分组真的落上 / 同名标签复用 / 悬空分组只给说明不回滚 / 别名入库；对话框旧用例增断言：别名去空白、分组落成 id）；`cargo test -p rds-workbench -j 1 --lib --test ui_contract` 102 + 7 全绿 | — |
+
+**两处刻意的取舍**：
+
+1. **不改“附属项失败即回滚归档”**：文件已经进了 `resources/`、登记行也写好了，为“标签没打上”搬回去等于把主操作的成果赔进去；而这两项在面板上都能补做；
+2. **标签仍是文本输入（逗号分隔）+ 不存在即新建**：归档对话框已经有五个字段，再塞一个可滚动勾选列表就把主流程变成第二个标签管理界面；“打错一个字就多一个标签”的代价由标签对话框的行内删除承担。
+
+**未落地**：默认分组（P2.4 最后一项，语义待拍板：设置页预设 vs 记住上次）、拖拽到分组头、搜索匹配别名 / 标签 / 来源表（P2.3 余项）、批量标签 / 移动（P2.5）、`F2` 重命名。
 
 ### 2026-09-18 — Phase 2 第七刀（P2.4 收口）：分组折叠态持久化
 
