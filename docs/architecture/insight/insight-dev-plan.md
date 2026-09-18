@@ -1052,9 +1052,9 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 | # | 项 | 现状证据 | 建议 | 量级 / 阻塞 |
 | --- | --- | --- | --- | --- |
 | 3 | 结果集临时表的**定向回收**（K16 收尾） | `drop_temp_table(TempTableSource::Query)` 零生产调用者；且建表侧（`create_duckdb_temp_table` / `ResultService` / `execute_duckdb_analysis`）**也零调用**——整条「结果集 → DuckDB 分析」链路未接 UI。**清场口已接**（2026-09-18：项目切换清 `tmp_q_*`） | **维持**：编辑器入口走**不物化**（洞察侧重跑取样，2026-09-18），所以没有可回收的临时表；定向口留着——将来真接「结果集 → DuckDB 分析」（物化）时再用 | 小（无阻塞） |
-| 4 | 表级 / Schema 报告快照（K6） | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | **接**（需产品点头：表级快照的比对语义与列级不同——行数、列清单都在变） | 中（store 方法已有，缺面板保存入口 + 历史视图 + 对比） |
+| 4 | 表级 / Schema 报告快照（K6） | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | **定为二期，且 UI / 资产模型归 M6（分析归档）**（2026-09-18 用户拍板：快照对比属二期；洞察是“对此刻的库表给结论”，把某一刻存下来再比较是**资产管理**的语义）。**但 diff 不拄第二份**：差异计算与展示口径继续用洞察的 `VersionDiffView::between`，存储（正文+元数据成对写 / 版本链 / 清理）用洞察 `store` —— 归档调它，将来若要搬就连同那套一起搬 | 中（一期不动） |
 | 6 | ~~编辑器结果集「洞察此列」~~ + 临时表直连入口 | 已于 2026-09-18 接线（见 §0）：菜单项 + 宿主端口 + 「跟随活动连接」口径 + 真机用例。`InsightTarget::Column\|Table`（临时表直连）仍无构造者——**留着**（面板内部与测试在用，且「结果集 → DuckDB 分析」真要物化时就是它） | — | 小 |
-| 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false | **等**：M6 二期有产生者 + 要 ATTACH `analytics.duckdb` + 用 `definition_sql` 重建 | 中 |
+| 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false；**且全仓没有产生者**（`ArchiveKind::Analysis` 只出现在展示与测试里，没有把表写进 `analytics.duckdb` 再落一行存档的代码） | **待确认**：是等 M6 二期有产生者再做（否则现场无数据可点，只能靠测试造行），还是现在就做“能力”（ATTACH `analytics.duckdb` + `SampleSource::on_duckdb` + 测试级存档行） | 中 |
 | 9 | 源目标下「多列」Tab 在样本表解析前点击不发请求 | 已知小限制（样本表要等列 / 表目标先取过样） | **决定**：让它自己先取一次样，或维持并在 UI 提示 | 小 |
 | 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **可选加强**：解析级策略检查（解析能力 `engine/src/sql` 已有） | 中 |
 | 11 | `insight_view.rs` 体量（约 2500 行代码 + 900 行测试） | 新功能仍在往里加（导出按钮即在此） | **时机触发**：见 §11 规格 | 中 |
