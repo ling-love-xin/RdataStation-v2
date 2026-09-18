@@ -88,7 +88,9 @@ impl AccelKind {
     }
 
     /// 需要的 DuckDB 扩展（DuckDB 文件源不需要，是内核自带能力）
-    fn extension(self) -> Option<&'static str> {
+    ///
+    /// `pub(crate)`：联邦会话要拿同一份清单去装上（别在两处各写一张表）
+    pub(crate) fn extension(self) -> Option<&'static str> {
         match self {
             Self::MySql => Some("mysql"),
             Self::PostgreSql => Some("postgres"),
@@ -98,7 +100,7 @@ impl AccelKind {
     }
 
     /// `ATTACH … (TYPE …)` 里的类型名（DuckDB 文件源不写 TYPE）
-    fn attach_type(self) -> Option<&'static str> {
+    pub(crate) fn attach_type(self) -> Option<&'static str> {
         match self {
             Self::MySql => Some("mysql"),
             Self::PostgreSql => Some("postgres"),
@@ -154,7 +156,9 @@ impl AccelSource {
 }
 
 /// 文件型 URL → 裸路径（剥 scheme、修 `sqlite:///C:/x.db` 的多余前导斜杠）
-fn normalize_file_path(url: &str) -> Result<String, String> {
+///
+/// `pub(crate)`：联邦源组装要剥同一套 scheme（否则文件源挂不上）
+pub(crate) fn normalize_file_path(url: &str) -> Result<String, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("这个连接没有可用的文件路径".to_string());
@@ -177,7 +181,9 @@ fn normalize_file_path(url: &str) -> Result<String, String> {
 }
 
 /// SQL 字符串字面量（单引号翻倍）
-fn quote_literal(value: &str) -> String {
+///
+/// `pub(crate)`：联邦源的 `ATTACH` 也在这里拼
+pub(crate) fn quote_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
@@ -204,53 +210,63 @@ impl Drop for RunningGuard<'_> {
     }
 }
 
-impl AccelSession {
-    /// 在**这条会话**上执行一句（读语句出 Arrow 批，写语句出影响行数）
-    ///
-    /// 读写判定与源库驱动**同一套判据**（`driver::utils::returns_rows`）：两个通道对
-    /// “这句是不是查询”的回答必须一致，否则同一句在两边会得到不同形状的结果。
-    pub fn run(&self, sql: &str) -> Result<QueryResult, CoreError> {
-        self.running
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let _guard = RunningGuard(&self.running);
-        let conn = self.lock()?;
-        if !crate::driver::utils::returns_rows(sql) {
-            let affected = conn.execute(sql, []).map_err(|error| query_error(sql, &error))?;
-            return Ok(crate::driver::utils::affected_rows_result(affected as u64));
-        }
+/// 在一条 DuckDB 连接上跑一句（读语句出 Arrow 批，写语句出影响行数）
+///
+/// **加速档与联邦档共用这一份**：两个通道对“这句是不是查询”的回答必须一致
+/// （判据与源库驱动同一套：`driver::utils::returns_rows`），否则同一句在两个档上
+/// 会得到不同形状的结果。
+pub(crate) fn run_sql_on(
+    conn: &Connection,
+    running: &std::sync::atomic::AtomicBool,
+    sql: &str,
+) -> Result<QueryResult, CoreError> {
+    running
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let _guard = RunningGuard(running);
+    if !crate::driver::utils::returns_rows(sql) {
+        let affected = conn.execute(sql, []).map_err(|error| query_error(sql, &error))?;
+        return Ok(crate::driver::utils::affected_rows_result(affected as u64));
+    }
 
-        let mut stmt = conn.prepare(sql).map_err(|error| query_error(sql, &error))?;
-        let mut rows = stmt.query([]).map_err(|error| query_error(sql, &error))?;
-        let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
-        while let Some(row) = rows.next().map_err(|error| query_error(sql, &error))? {
-            let mut values: Vec<duckdb::types::Value> = Vec::new();
-            for index in 0.. {
-                match row.get::<usize, duckdb::types::Value>(index) {
-                    Ok(value) => values.push(value),
-                    Err(_) => break,
-                }
+    let mut stmt = conn.prepare(sql).map_err(|error| query_error(sql, &error))?;
+    let mut rows = stmt.query([]).map_err(|error| query_error(sql, &error))?;
+    let mut data: Vec<Vec<duckdb::types::Value>> = Vec::new();
+    while let Some(row) = rows.next().map_err(|error| query_error(sql, &error))? {
+        let mut values: Vec<duckdb::types::Value> = Vec::new();
+        for index in 0.. {
+            match row.get::<usize, duckdb::types::Value>(index) {
+                Ok(value) => values.push(value),
+                Err(_) => break,
             }
-            data.push(values);
         }
-        // duckdb-rs：列元数据要等语句真的跑过之后才可读
-        let columns: Vec<String> = (0..stmt.column_count())
-            .map(|index| stmt.column_name(index).map_or("unknown", |name| name).to_string())
-            .collect();
+        data.push(values);
+    }
+    // duckdb-rs：列元数据要等语句真的跑过之后才可读
+    let columns: Vec<String> = (0..stmt.column_count())
+        .map(|index| stmt.column_name(index).map_or("unknown", |name| name).to_string())
+        .collect();
 
-        if data.is_empty() {
-            return Ok(QueryResult {
-                columns,
-                is_read_only: Some(true),
-                ..QueryResult::empty()
-            });
-        }
-        let batch = crate::duckdb::row_to_arrow::duckdb_rows_to_arrow(&columns, &data)?;
-        Ok(QueryResult {
+    if data.is_empty() {
+        return Ok(QueryResult {
             columns,
-            batches: vec![batch],
             is_read_only: Some(true),
             ..QueryResult::empty()
-        })
+        });
+    }
+    let batch = crate::duckdb::row_to_arrow::duckdb_rows_to_arrow(&columns, &data)?;
+    Ok(QueryResult {
+        columns,
+        batches: vec![batch],
+        is_read_only: Some(true),
+        ..QueryResult::empty()
+    })
+}
+
+impl AccelSession {
+    /// 在**这条会话**上执行一句（读语句出 Arrow 批，写语句出影响行数）
+    pub fn run(&self, sql: &str) -> Result<QueryResult, CoreError> {
+        let conn = self.lock()?;
+        run_sql_on(&conn, &self.running, sql)
     }
 
     /// 重新挂载：源库侧**新建的表**要这样才看得见（数据本来就是实时的）
@@ -308,6 +324,13 @@ static SESSIONS: Lazy<Mutex<HashMap<String, Arc<AccelSession>>>> =
 /// （基本串行），但“重新挂载”走旁路线程、以后也可能有第二个执行者——这里兜住。
 static MOUNT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+/// 联邦会话也用它把"装扩展 + 一批 ATTACH"串起来（同一个进程级资源）
+pub(crate) fn mount_lock() -> std::sync::MutexGuard<'static, ()> {
+    MOUNT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 扩展状态（按种类）：试过、失败了才拦；没试过不拦
 static EXTENSION_FAILURES: Lazy<Mutex<HashMap<AccelKind, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -332,10 +355,8 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
     if let Some(session) = session_for(&source.conn_id) {
         return Ok(session);
     }
-    // 挂载这一步串行（见 `MOUNT_LOCK`）；查询不受它影响
-    let _mount = MOUNT_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // 挂载这一步串行（见 `mount_lock`）；查询不受它影响
+    let _mount = mount_lock();
     // 拿锁期间可能已被别人建好了
     if let Some(session) = session_for(&source.conn_id) {
         return Ok(session);

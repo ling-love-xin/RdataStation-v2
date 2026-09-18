@@ -122,8 +122,12 @@ install（installer / PluginService + global.sqlite 注册）
 `global.sqlite`：
 
 - `plugin_store`：插件注册（现有）；
-- **新增** `engine_extensions`（建议）：引擎扩展的安装记录——`name` / `kernel_version` /
-  `source`（official / community）/ `installed_at` / `status`。门控与“哪些能离线用”读它。
+- **不建引擎扩展的镜像表**（2026-09-18 修正）：扩展“装没装 / 加载没加载”的**真值就在
+  DuckDB 自己身上**（`duckdb_extensions()` 的 `installed` / `loaded` 列）——再维护一张表
+  只会产生“表说已装、实际没有”的偏差（单一权威）。我们只保留两样东西：
+  ① **动作与失败原因**（进程内；跨重启重试本来就合理——环境可能变了）；
+  ② **官方 / 社区清单**（常量，用于界面标注与安装入口）。
+  “项目引用了哪些扩展”仍归下面 `project_resources`（三期）。
 
 `project.sqlite`（新增，参考 V1 的 `project_used_plugins` + `project_plugin_config`）：
 
@@ -170,7 +174,7 @@ V1 的六条命令（`project_plugin_enable/disable/remove/list/set_config/get_c
 | 项目命令 | `project_plugin_*` 六条 | `ProjectResourceService` 六个方法 + `kind` 参数 |
 | 插件访问 DuckDB | `PluginPermissionLevel{ReadOnly,ReadWrite,Admin}` + `PluginConnection` 沙箱（只有 Admin 能联邦） | **三期再定**；若做，沿用“只读 / 受限镜像”的思路（V1 三档里我们只需要 ReadOnly 与“本地临时对象”两级） |
 | 路径 | 无统一根（`./plugins` + `~/.rdatastation`） | `paths::*` 单根 + 离线预置（§6 与本节 7.1） |
-| 引擎扩展 | `core/duckdb/plugin.rs` 管的是“插件访问 DuckDB 的权限”，扩展本身无登记 | `engine_extensions` 登记安装 + 项目可引用 + 门控如实 |
+| 引擎扩展 | `core/duckdb/plugin.rs` 管的是“插件访问 DuckDB 的权限”，扩展本身无登记 | 状态读 DuckDB 真值（`duckdb_extensions()`）+ 内存失败态；项目引用随 `project_resources`（**不建镜像表**） |
 
 ## 8. 已知缺口与待定问题
 
@@ -183,7 +187,7 @@ V1 的六条命令（`project_plugin_enable/disable/remove/list/set_config/get_c
 | 端口/进程回收 | stdout 自报端口，无段位约束 | 见 §6 |
 | 安全边界 | 权限模型有结构与授权状态，但缺少"插件能碰哪些宿主 API"的完整清单 | 三期做：宿主函数 / JSON-RPC 方法的权限映射表 |
 | **项目引用** | **V2 无**：只有全局 `plugin_store`（V1 有 `project_used_plugins` + `project_plugin_config` + 六条命令） | 三期做：`project_resources` + `ProjectResourceService`（见 §7） |
-| **引擎扩展登记** | DuckDB 扩展只进连接配置（`extension_directory`），**无安装记录表**，项目也无法声明需要哪些扩展 | 三期做：`engine_extensions` + 项目引用（见 §7.2） |
+| **引擎扩展与项目的关系** | 扩展状态只有 DuckDB 的真值（`duckdb_extensions()`）与内存失败态；项目无法声明“需要哪些扩展” | 三期做：`project_resources` 里的 `kind = 'engine_extension'`（**不建镜像表**，见 §7.2） |
 
 ## 9. 三期计划骨架（不实施，仅排布）
 
@@ -195,7 +199,7 @@ V1 的六条命令（`project_plugin_enable/disable/remove/list/set_config/get_c
 | P3-d | 前端扩展：面板注册表 + wasm 侧栏渲染契约 | P3-b |
 | P3-e | 热加载与健康检查收敛（wasm 热重载 / sidecar 崩溃重启与端口回收） | P3-a |
 | P3-f | **项目资源引用**：`project_resources` + `ProjectResourceService` + 未装降级与安装入口（§7） | P3-a、P3-b |
-| P3-g | **引擎扩展登记与引用**：`engine_extensions` + 显式安装 / 状态 + 离线预置（§7.2） | P3-a |
+| P3-g | **引擎扩展的项目引用**：`project_resources(kind='engine_extension')` + 显式安装入口 + 离线预置（**不建镜像表**：状态读 `duckdb_extensions()`，§7.2） | P3-a |
 
 ## 10. 实现位置映射表
 
