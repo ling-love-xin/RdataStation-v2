@@ -23,6 +23,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — K19 收口：门面自建 runtime 导致 PG 下条语句卡 30s；桥接驱动的空报告回执
+
+**背景**：上一批发现「PG 报告后第一条语句偶发卡 ~30s」。本批用**对照实验**把它查实了：同一段元数据取数交替跑两条路径——`A` 走门面（`InsightService::schema_report_view`，自建 runtime）、`B` 直调分析器（`runtime.block_on(SchemaAnalyzer::analyze)`，宿主 runtime）。
+
+**已完成并验证**（`cargo test -p rds-insight --lib` **227 项**（本批 +1：空报告是不是「没这个能力」的判据）· `column_profile_e2e` **14 项** · `rds-workbench --lib` **94 项** · `ui_contract` **7 项** · 真机四库 + 源取样（含 Oracle 扩展腿）全绿）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **K19 根因** | 门面 `block_on` **每次调用新建 Tokio runtime**，而它驱动的是**宿主建的 sqlx 池**：池里连接的 I/O 任务绑在创建时的 runtime 上，临时 runtime 一 drop，那条连接的后台任务被干掉、池还以为它是好的——下一条语句在「僵尸连接」上等到超时才重建（≈ sqlx `acquire_timeout`，语句**最终成功**，所以看着诡异） | 对照数据：`A ping = 30.2s / 30.2s`，`B ping = 104ms / 123ms` |
+| **修法** | `block_on` 改用**进程级单例 runtime**（惰性建、永不 drop，两条 worker 线程）：寿命与宿主池一致。修后 `A ping = 16ms / 11ms`，四库真机用例总时长 **32.4s → 2.39s**（PG 腿 31.3s → 1.2s） | `insight/src/service/mod.rs` |
+| 桥接驱动的空报告回执 | 驱动**只有查询能力、未实现元数据接口**时（JDBC 那类桥接驱动的典型形态），结构洞察之前会得到一张空报告；现在两个信号都缺（无 `MetadataBrowser` 且库清单也答不出）→ 报「这个驱动还没有提供元数据内省（结构洞察不可用）；数据画像不受影响」。只看「无 `MetadataBrowser`」会误伤只实现了 `Database::list_*` 的自定义驱动，所以判据要两个信号 | `insight/src/schema_analyzer.rs` + 用例 |
+
+> 诊断探针（`insight_schema_k19_probe`）完成使命后已删：结论与对照数据记在本条与架构 K19；行为回归由 `insight_schema_real`（四库）覆盖。
+
 ### 2026-09-18 — 结构洞察改走驱动元数据（D62）+ 边界口径修正
 
 **背景**：用户提出两点——① 数据源早就抽象了（`MetadataBrowser`），为什么结构洞察还按库写方言 SQL；② 洞察主要用 DuckDB，结构洞察却是唯一绕开它、直连源库的例外。核查确认：**六个内置驱动都已实现元数据接口**（导航树 / 属性面板在用），洞察侧那 150 行方言 SQL + 3 个方言用例是**重复实现**（上一批真机踩坑时，我只在原地加方言分支，没回头用已有抽象——已改）。
