@@ -74,24 +74,24 @@
 | `src/model.rs` | 领域语义类型：`ArchiveKind` / `ReproductionStrength` / `ArchiveStatus` / `ArchiveBinding` / `ArchiveRequest` / `CheckoutRequest` | ✅ Phase 0 |
 | `src/payload.rs` | 本体层：`resolve` 守卫、归档搬运（跨设备兜底）、只读标记、sha256 指纹、历史副本与裁剪（`store_version_copy` / `prune_version_copies`）、**版本副本查询与使用**（`version_copies` / `version_copy_file` / `delete_version_copy` / `copy_version_out` / `restore_version_copy`）、`replace_payload` / `move_payload_out`、`rel_path_taken` / `free_rel_path`（重名避让，命名规则只此一处） | ✅ Phase 0 + Phase 3 第一刀 |
 | `src/models.rs` | 持久层行模型（v1 搬运 + 迁移 020 的 9 个新列） | ✅ |
-| `src/service.rs` | 归档服务：归档（首次）/ 再归档（指纹未变即幂等、变了才增版本）/ 取回（检出）/ **还原到历史版本**（用旧内容生成新版本；无副本拒、指纹相同幂等）/ **取回历史版本** / **撤销归档**（本体移回 + 硬删行）编排 + `ResourcesChanged` 广播 | ✅ Phase 0 + Phase 3 第一刀 |
+| `src/service.rs` | 归档服务：归档（首次）/ 再归档（指纹未变即幂等、变了才增版本）/ 取回（检出）/ **还原到历史版本**（用旧内容生成新版本；无副本拒、指纹相同幂等）/ **取回历史版本** / **撤销归档**（本体移回 + 硬删行）/ **移入回收站**（批量，本体进 `ProjectTrash` + 登记行软删）/ **从回收站还原**（`origin` 校验 + 同名避让后登记行跟改）/ **按原相对路径还原**（索引修复那条）/ **永久删除与清空**（只动本模块的条目）编排 + `ResourcesChanged` 广播 | ✅ Phase 0 + Phase 3 + P0.8 |
 | `src/indexer.rs` | 索引修复：`IndexRepair::{scan, adopt_file, accept_current_content, remove_orphan_record}`（扫描只报告、修复靠人工确认） | ✅ Phase 0（UI 已接：`dialogs/index_repair.rs`） |
-| `src/resource.rs` | 登记 CRUD / 分页 / 搜索 / 排序（统一行映射 `map_resource_row` + 事务化 `update_resource`）+ 归档专用写入（`insert_archive` / `update_archive_content` / `find_archive_by_rel_path`）+ `hard_delete_row`（撤销归档与索引修复共用） | ✅ 搬运 + 边界修复 + 新列接入 |
+| `src/resource.rs` | 登记 CRUD / 分页 / 搜索 / 排序（统一行映射 `map_resource_row` + 事务化 `update_resource`）+ 归档专用写入（`insert_archive` / `update_archive_content` / `find_archive_by_rel_path`）+ 回收站索引侧（`soft_delete_archive` / `undelete_archive` / `find_deleted_archive_by_rel_path` / `purge_deleted_row` / `purge_all_deleted`）+ `hard_delete_row`（撤销归档与索引修复共用；两者都**连标签与分组关联一起删**——外键无 CASCADE，不清就删不掉） | ✅ 搬运 + 边界修复 + 新列接入 + P0.8 |
 | `src/folder.rs` | 分组（v1 为自引用文件夹，按设计**降级为单层分组**） | ✅ 搬运（改名/删除待补） |
 | `src/tag.rs` | 标签 CRUD + 双向查询 | ✅ 搬运（改名/删除待补） |
 | `src/version.rs` | 版本历史；`save_resource_version_on` 支持在调用方事务内写快照；`version_counts()` 一次查完各存档的历史版本数（详情面板用）；`get_resource_versions()` 给版本历史对话框 | ⚠️ 仍为写前快照语义（指纹版本重写见 P0.9） |
-| `src/recycle.rs` | v1 回收站（软删除 / 恢复 / 永久删除） | ⚠️ **待废弃**：改走 `ProjectTrash`（P0.8）。已知缺陷：`permanent_delete` 只删回收站行、主表与版本行永久残留 |
 | `src/models.rs` | 持久层行模型（v1 搬运；逐步并入 `model.rs`） | ✅ |
 | `src/helpers.rs` | 时间双格式解析（RFC3339 / SQLite `CURRENT_TIMESTAMP`） | ✅ |
 | `src/tests.rs` | 存储层回归（t001–t016，测试库跑齐 007 + 020） | ✅ 16 项 |
 | `src/commands.rs` | Action 声明（`RequestArchive` / `OpenSelected` / `CheckoutSelected` / `DeleteSelected` / `SelectAllRows` / `FocusSearch` / `ClearSearch`，面板均已接处理器）；快捷键在 app 层绑到 `analytics-resource` context（`Ctrl+F` / `Esc` / `Delete` / `Ctrl+A`） | ✅ Phase 1 |
 | `src/resource_view.rs` | 左 Dock 面板：**面板头（标题图标 + `＋ ▾` 归档入口 + `⋯` 四项：重建索引… / 打开资源目录 / 回收站… / 刷新）** / **工具栏（搜索·筛选·排序）** / 提示行 / **行列表（`list::List`：虚拟化 + 组件化 hover/选中/漫游；行自己接管点击：单击选中、`Ctrl` 切换、`Shift` 区间、双击打开——`classify_row_click`；`Ctrl+A` 全选、多选高亮自绘）** / **行右键菜单（打开·查看统计·取回·版本历史·复制路径·在系统中显示·移入回收站；多选时单选项置灰、删除项带数量）** / **加载态（3 行骨架 + 状态行前缀）** / **归档撤销栏（状态行上方，5 秒窗口）** / 状态行 / **两种空态（空库 vs 无匹配）**；快照带逐行详情（`selected_detail()`，右栏「存档详情」取它）；宿主动作经 `ResourcesHost`（菜单动作抽成 `HeaderMenuAction` + `dispatch_header_action`，弹层点不到也能测） | ✅ Phase 1 九刀（`F2` 重命名待重命名入口） |
 | `src/filter.rs` | 工具栏**数据层**（纯函数，零 GPUI 依赖）：`ResourcesFilter`（关键字 / 种类 / 只看异常；`toggle_kind` 把"全选"规范化为不限）+ `SortField`/`SortOrder`（`label` / `arrow` / `flipped`）+ `apply_view`（筛选→排序，同键名称兜底且不随方向翻转）；`is_empty()` 决定面板显示哪一种空态 | ✅ Phase 1 |
-| `src/detail_view.rs` | 详情面板内容层：`ArchiveDetail` 快照 + `detail_rows`（基本信息 / 来源 / **版本（分区总是出现）** / 组织）+ `alert_line`（只在需处理时出现）+ `render_detail`（只读信息区 + **版本区的「查看全部…」入口** + **动作区：打开（只读）/ 取回（检出）…**） | ✅ Phase 1 + Phase 3 第一刀（动作接线经 `DetailActions` 注入；内容预览随后续批次） |
-| `src/dialogs/archive.rs` / `checkout.rs` / `pick.rs` / **`version.rs`** / **`index_repair.rs`** | 归档确认 / 取回（检出）/ 草稿多选 / **版本历史** / **索引修复**对话框：种子（宿主备好的来源与只读信息）+ 表单（名称 / 标签 / 保留份数；文件名 / 是否打开；勾选列表；版本表格 + 选中后动作栏；三分组 + 行内动作）+ 校验与解析（纯函数）+ `open_*_dialog`；后两者的状态可被宿主换行（`set_rows`）与收放忙态 | ✅ Phase 1 + Phase 3 前两刀（执行由宿主注入的 `on_submit` / `on_action` 接手） |
-| `src/present.rs` | 呈现层（纯函数，零 I/O 零 GPUI）：`format_size` / `format_scale` / `format_relative_time` / `format_timestamp` / `tail_for` / `to_row` / **`to_detail`** / **`build_version_rows`**（当前版本 + 历史版本合成行、相邻版本差异）/ **`build_repair_rows`**（扫描报告 → 三分组修复行）/ `build_snapshot`——索引行 → 面板快照（含字段优先级尾巴、逐行详情与计数口径） | ✅ Phase 1 + Phase 3 前两刀 |
-| `src/ui.rs` | 视图尺寸常量（与 `workbench/ui.rs` 同源同值，但**在本 crate 声明**：依赖方向不允许反向读 workbench） | ✅ 8 项 |
-| `src/recycle_bin_dialog.rs` | 回收站对话框 | ⬜ 占位（Phase 3） |
+| `src/detail_view.rs` | 详情面板内容层：`ArchiveDetail` 快照 + `detail_rows`（基本信息 / 来源 / **版本（分区总是出现）** / 组织）+ `alert_line`（只在需处理时出现）+ `render_detail`（只读信息区 + **版本区的「查看全部…」入口** + **动作区：打开（只读）/ 取回（检出）…** + **危险区：移入回收站**） | ✅ Phase 1 + Phase 3 第一刀 + P0.8（内容预览随后续批次） |
+| `src/dialogs/archive.rs` / `checkout.rs` / `pick.rs` / **`version.rs`** / **`index_repair.rs`** / **`trash.rs`** | 归档确认 / 取回（检出）/ 草稿多选 / **版本历史** / **索引修复** / **回收站**对话框：种子（宿主备好的来源与只读信息）+ 表单（名称 / 标签 / 保留份数；文件名 / 是否打开；勾选列表；版本表格 + 选中后动作栏；三分组 + 行内动作；条目表格 + 行内动作 + 清空）+ 校验与解析（纯函数）+ `open_*_dialog`；后四者的状态可被宿主换行（`set_rows`）与收放忙态。回收站对话框**只列 `origin = "resources"` 的条目**，别人的只给一句说明 | ✅ Phase 1 + Phase 3 + P0.8（执行由宿主注入的 `on_submit` / `on_action` 接手） |
+| `src/present.rs` | 呈现层（纯函数，零 I/O 零 GPUI）：`format_size` / `format_scale` / `format_relative_time` / `format_timestamp` / `tail_for` / `to_row` / **`to_detail`** / **`build_version_rows`**（当前版本 + 历史版本合成行、相邻版本差异）/ **`build_repair_rows`**（扫描报告 → 三分组修复行）/ **`build_trash_snapshot`**（回收站条目 → 本模块行 + 别人条目的统计）/ `build_snapshot`——索引行 → 面板快照（含字段优先级尾巴、逐行详情与计数口径） | ✅ Phase 1 + Phase 3 + P0.8 |
+| `src/ui.rs` | 视图尺寸常量（与 `workbench/ui.rs` 同源同值，但**在本 crate 声明**：依赖方向不允许反向读 workbench） | ✅ 12 项 |
+
+> v1 的 `src/recycle.rs`（软删除表）与 `src/recycle_bin_dialog.rs`（占位）**已随 P0.8 删除**：回收站统一走项目级 `engine::persistence::trash::ProjectTrash`（一套回收站，模块硬约束 5）。
 
 依赖方向：`analytics_resource → engine, shared`（视图层另依赖 `gpui-kit`；上游是 `scratchpad → analytics_resource`）。视图归属（**入本 crate**）以 `docs/architecture/analytics_resource/analytics-resource-architecture.md` §8.2 为准。
 
@@ -109,14 +109,16 @@
 | 已实现 | 待补 |
 | --- | --- |
 | **归档 / 取回 / 再归档闭环**【Phase 0】`ArchiveService`：本体 move + 登记 + 指纹版本 + 事件；索引失败回滚本体；取回产出可写工作副本 | 五个对话框与动作真实现（Phase 1 对话框批） |
-| **索引修复**【Phase 0 + Phase 3 第二刀】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；**对话框已接**（`dialogs/index_repair.rs` + `present::build_repair_rows` + 宿主接线）：三分组、行内动作（补登固定文件型 / 删记录走确认 / 接受当前内容 / 打开版本历史），修完自动重扫换行；"从回收站还原"置灰等 P0.8 | 按目录批量补登、版本保留策略接入设置项 |
+| **索引修复**【Phase 0 + Phase 3 第二刀 + P0.8】`IndexRepair`：三类孤儿（有文件无记录 / 有记录无本体 / 指纹不匹配）的扫描与人工确认修复；**对话框已接**（`dialogs/index_repair.rs` + `present::build_repair_rows` + 宿主接线）：三分组、行内动作（补登固定文件型 / **从回收站还原**（按原相对路径找条目）/ 删记录走确认 / 接受当前内容 / 打开版本历史），修完自动重扫换行 | 按目录批量补登、版本保留策略接入设置项 |
 | **版本历史**【Phase 3 第一刀】`dialogs/version.rs` + `present::build_version_rows` + 宿主接线：当前版本与历史行同列（副本缺失行露出来）；**还原 = 生成新版本**（不原地回滚）、**取回该版本为草稿**、**删除内容副本**（`AlertDialog` 确认）；动作后宿主换行，不关窗 | 详情面板的"最近 3 条"明细（需批量取数）、版本保留策略接入设置项 |
-| **面板**【Phase 1】`ResourcesPanel`：面板头（标题图标 + `＋ ▾` / `⋯` 四项）/ 工具栏（搜索·筛选·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / **批量多选（单击 / `Ctrl` / `Shift` / 双击手势 + `Ctrl+A`，多选时单选项置灰、删除带数量）** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | `F2` 重命名（待重命名入口）、标题点击折叠（需与 M4/M5 面板头一起做）、批量删除的真执行（等 P0.8） |
-| **详情面板**【Phase 1】`detail_view.rs` 只读信息区（基本信息 / 来源 / 版本 / 组织 + 需处理提示条）+ 动作区（打开（只读）/ 取回）；右 Dock 转发渲染与空态；版本数由存储层一次查完 | 内容预览、危险区（随各自批次） |
+| **回收站**【P0.8】`engine::persistence::trash::ProjectTrash`（上提 + 中性化：来源是字符串 `origin`、不返回 M5 类型）+ `dialogs/trash.rs` + 宿主接线：移入回收站（单选 / 多选批量，本体进 `.RSmeta/trash`、登记行**软删**——还原能恢复别名 / 标签 / 指纹）/ 还原（`origin` 校验、同名避让并同步登记路径）/ 永久删除 / 清空（`empty_origin`，**只动本模块的条目**）；索引修复的「从回收站还原」走 `restore_archive_by_rel_path` | 保留策略与回收站的联动（例如按时间自动清）；回收站的“打开原位置”入口 |
+| **面板**【Phase 1】`ResourcesPanel`：面板头（标题图标 + `＋ ▾` / `⋯` 四项）/ 工具栏（搜索·筛选·排序）/ **`List` 虚拟化行（kind 图标 + 强度徽标 + 尾部字段）+ 右键菜单** / **批量多选（单击 / `Ctrl` / `Shift` / 双击手势 + `Ctrl+A`，多选时单选项置灰、删除带数量）** / 状态行 / 两种空态；`present.rs` 把索引行转成快照（含逐行详情）；**workbench 接线已落**（`panels/resources.rs` 装配 + `services/resource_jobs.rs` 后台取数 + `components/resource_host.rs` 端口）；**右栏「存档详情」已接**（`RightPanel::Archive`，宿主观察面板实体做选中联动） | `F2` 重命名（待重命名入口）、标题点击折叠（需与 M4/M5 面板头一起做） |
+| **详情面板**【Phase 1 + P0.8】`detail_view.rs` 只读信息区（基本信息 / 来源 / 版本 / 组织 + 需处理提示条）+ 动作区（打开（只读）/ 取回）+ **危险区（移入回收站）**；右 Dock 转发渲染与空态；版本数由存储层一次查完 | 内容预览、头部可编辑（改显示名 / 别名） |
 | **只读三重守卫**【Phase 1】①应用守卫（写入 `resources/` 直接拒，Phase 0）②**编辑器只读打开**（`editor::persist::open_file_read_only`，经 `OpenInEditorRequest` 带只读维度）③文件系统只读属性（辅助，失败只警告） | 本体异常时的修复入口（随索引修复对话框） |
 | **归档 / 取回**【Phase 1】`dialogs/{archive,checkout,pick}.rs`：对话框 + 校验 + 冲突提示（`resources/x-2.sql`）；workbench 侧真执行（`resource_host` + `resource_jobs` 的 `Archive` / `Checkout` 作业 + 重名避让 + 回执 + 顺手打开）；**草稿箱入口**（面板头 `＋ ▾` + 草稿多选，来源连接与出处自动带出）；**归档可撤销**（`undo_archive` + 5 秒撤销栏） | 草稿箱右键入口、分组 / 别名字段（Phase 2）、`Ctrl+Z` |
 | **工具栏数据层**【Phase 1】`filter.rs`：搜索（名称 + 尾部，大小写不敏感）/ 种类多选（全选 = 不限）/ 只看需处理 / 两种排序键（同键翻转方向、同键名称兜底） | 标签维与更多排序键（需 `ArchiveRow` 带原始值，Phase 2） |
-| 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / 只读 / 指纹 / 历史副本与裁剪 / 遍历） | 废弃 `recycle.rs` → `ProjectTrash`（P0.8，跨 crate） |
+| 领域类型（kind / 强度 / 状态 / 归档凭证）与本体层（守卫 / 搬运 / 只读 / 指纹 / 历史副本与裁剪 / 遍历） | 版本保留策略接入设置项 |
+| 回收站语义（项目级一套 + `origin` 归属；软删登记行保归属，永久删除连关联一起清） | 回收站的自动清理策略（按时间 / 容量） |
 | 迁移 020 + 新列接入（写入 + 读取 + 按本体路径查重） | `kind` 过滤的**存储层**入口（面板已能按 kind 筛可见行） |
 | 行映射从 v1 的 4 份收敛为 1 份；测试库跑齐 007 + 020 | — |
 | 继承缺陷修复：分页除零与负数、`LIKE` 转义、连接嵌套、更新无事务、影响 0 行不报错、`parent_version_id` 语义、JSON 解析双策略、乱码副本名 | — |
@@ -124,5 +126,5 @@
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/analytics_resource/` —— `README.md`（模块入口）· `analytics-resource-architecture.md`（语义裁决与数据流）· `analytics-resource-prototype-design.md` + `analytics-resource-prototype.html`（原型）· `analytics-resource-dev-plan.md`（进度与任务）· `analytics-resource-user-guide.md`（使用手册）。
-- 验证：`cargo test -p rds-analytics-resource -j 2` → **95 项单测**（16 存储 + 5 领域 + 13 本体 + 11 归档服务 + 7 索引修复 + 6 筛选/排序 + 9 面板 + 5 详情 + 11 呈现 + 6 对话框 + 3 版本对话框 + 3 索引修复对话框）+ `tests/panel_window.rs` **12 项面板窗口测试** + `tests/dialog_window.rs` **6 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-workbench --all-targets -j 2`、`cargo check -p rds-app -j 2` 与 `cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
+- 验证：`cargo test -p rds-analytics-resource -j 2` → **104 项单测**（14 存储 + 5 领域 + 13 本体 + 17 归档服务 + 7 索引修复 + 6 筛选/排序 + 9 面板 + 5 详情 + 13 呈现 + 6 对话框（归档/取回/草稿多选）+ 3 版本对话框 + 3 索引修复对话框 + 3 回收站对话框）+ `tests/panel_window.rs` **12 项面板窗口测试** + `tests/dialog_window.rs` **7 项对话框窗口测试**；编辑器侧 `cargo test -p rds-editor --lib -j 2` **217 项**（含 `persist` 的只读打开用例）；`cargo check -p rds-workbench --all-targets -j 2`、`cargo check -p rds-app -j 2` 与 `cargo check -p rds-analytics-resource --all-targets -j 2` 零告警。
 - **命令约定**：全量编译/测试必须限制并发（`cargo test-all` / `cargo check-all` 别名，含 `-j 2` 与 `RUST_MIN_STACK`）——并发链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

@@ -16,6 +16,7 @@ use mock::mock_view::{DetailTarget, MockDetailView, MockPanel, SchemaRequest};
 use scratchpad::ScratchpadStore;
 
 use analytics_resource::dialogs::index_repair::RepairDialogState;
+use analytics_resource::dialogs::trash::TrashDialogState;
 use analytics_resource::dialogs::version::VersionDialogState;
 use analytics_resource::resource_view::ResourcesPanel;
 
@@ -127,6 +128,22 @@ pub struct RepairDialogFlow {
     pub session: Option<RepairDialogSession>,
 }
 
+/// M6：回收站对话框的一次会话（行集合可被宿主换掉，与索引修复同一形态）。
+pub struct TrashDialogSession {
+    pub state: TrashDialogState,
+}
+
+/// M6：回收站对话框的流转状态（待开 → 已开 → 关闭）。
+///
+/// 回收站是整个项目一个，不存在“打开的是谁的”那层判断（与索引修复同理）。
+#[derive(Default)]
+pub struct TrashDialogFlow {
+    /// 待开的取数结果（取数回来时置位，侧栏 render 消费开窗）。
+    pub pending: Option<analytics_resource::dialogs::trash::TrashDialogSeed>,
+    /// 已开的会话（`None` = 没开；关窗时清掉）。
+    pub session: Option<TrashDialogSession>,
+}
+
 /// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。
 ///
 /// 原先在 `nav.rs`（`nav_draft_append`），现在由导航菜单、拖拽与宿主打开查询共用，
@@ -207,6 +224,8 @@ pub struct Shared {
     pub version_dialog: Rc<RefCell<VersionDialogFlow>>,
     /// M6：索引修复对话框的流转（扫描 → 开窗 → 修复后重扫换行；见 `RepairDialogFlow`）。
     pub repair_dialog: Rc<RefCell<RepairDialogFlow>>,
+    /// M6：回收站对话框的流转（取数 → 开窗 → 动作后重取换行；见 `TrashDialogFlow`）。
+    pub trash_dialog: Rc<RefCell<TrashDialogFlow>>,
     /// M7：打开某个 Mock 详情 tab 的宿主命令（面板「查看详情」与结果表清单调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(DetailTarget, &mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
@@ -251,6 +270,7 @@ impl Shared {
             resources_bridge: Rc::new(RefCell::new(None)),
             version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
             repair_dialog: Rc::new(RefCell::new(RepairDialogFlow::default())),
+            trash_dialog: Rc::new(RefCell::new(TrashDialogFlow::default())),
             mock_details: Rc::new(RefCell::new(HashMap::new())),
             open_mock_detail: Rc::new(RefCell::new(None)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),

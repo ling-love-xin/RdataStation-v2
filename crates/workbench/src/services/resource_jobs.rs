@@ -26,9 +26,12 @@ use chrono::Utc;
 use engine::persistence::project_db::ProjectDatabaseManager;
 
 use analytics_resource::dialogs::index_repair::{RepairAction, RepairRow};
+use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed};
 use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
 use analytics_resource::payload::PayloadStore;
-use analytics_resource::present::{ArchiveStatuses, build_repair_rows, build_snapshot, build_version_rows};
+use analytics_resource::present::{
+    ArchiveStatuses, build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
+};
 use analytics_resource::resource_view::ResourcesSnapshot;
 use analytics_resource::{
     AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService, ArchiveStatus, ArchiveUndo,
@@ -67,6 +70,13 @@ struct UndoJob {
     undo: ArchiveUndo,
 }
 
+/// 一次移入回收站任务（面板多选可以一次提交多条）。
+struct TrashJob {
+    project_root: PathBuf,
+    read_only: bool,
+    resource_ids: Vec<String>,
+}
+
 /// 一次版本历史取数任务。
 struct VersionsJob {
     project_root: PathBuf,
@@ -95,6 +105,18 @@ struct IndexRepairActionJob {
     action: RepairAction,
 }
 
+/// 一次回收站取数任务（条目 + 别人条目的统计）。
+struct TrashListJob {
+    project_root: PathBuf,
+}
+
+/// 一次回收站动作任务（还原 / 永久删除 / 清空自己名下的）。
+struct TrashActionJob {
+    project_root: PathBuf,
+    read_only: bool,
+    action: TrashAction,
+}
+
 /// 版本历史取数结果（宿主据此开窗，或刷新已经开着的那个窗）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionRows {
@@ -114,10 +136,13 @@ enum Job {
     Archive(ArchiveJob),
     Checkout(CheckoutJob),
     Undo(UndoJob),
+    Trash(TrashJob),
     Versions(VersionsJob),
     VersionAction(VersionActionJob),
     IndexScan(IndexScanJob),
     IndexRepairAction(IndexRepairActionJob),
+    TrashList(TrashListJob),
+    TrashAction(TrashActionJob),
 }
 
 /// 动作回执（工作线程 → 事件路径）。
@@ -142,10 +167,14 @@ pub enum OpOutcome {
     },
     /// 已撤销归档：显示名（本体已回原位）。
     Undone { name: String },
+    /// 已移入回收站：显示名列表（多条时文案只说数量）。
+    Trashed { names: Vec<String> },
     /// 版本历史动作完成（`note` 已是一句有信息量的话，事件路径直接印）。
     VersionActionDone { note: String },
     /// 索引修复动作完成（同上）。
     RepairDone { note: String },
+    /// 回收站动作完成（还原 / 永久删除 / 清空，`note` 已是一句有信息量的话）。
+    TrashDone { note: String },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed { action: &'static str, reason: String },
 }
@@ -162,6 +191,8 @@ struct Jobs {
     versions: Mutex<Option<Result<VersionRows, String>>>,
     /// 索引扫描槽：只留最新一份（索引修复对话框一次只开一个）。
     index_scan: Mutex<Option<Result<IndexScanRows, String>>>,
+    /// 回收站槽：只留最新一份（回收站对话框一次只开一个）。
+    trash_rows: Mutex<Option<Result<TrashDialogSeed, String>>>,
 }
 
 static JOBS: OnceLock<Jobs> = OnceLock::new();
@@ -180,6 +211,7 @@ fn jobs() -> &'static Jobs {
             op_result: Mutex::new(None),
             versions: Mutex::new(None),
             index_scan: Mutex::new(None),
+            trash_rows: Mutex::new(None),
         }
     })
 }
@@ -215,6 +247,12 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 *lock(&jobs().op_result) = Some(outcome);
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
+            Job::Trash(job) => {
+                let outcome = rt.block_on(run_trash(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 本体走了、登记行软删了：列表与计数都要重取（回收站对话框是下一批）。
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
             Job::Versions(job) => {
                 let result = rt.block_on(load_versions(&job));
                 *lock(&jobs().versions) = Some(result);
@@ -242,6 +280,21 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     project_root: job.project_root.clone(),
                 }));
                 *lock(&jobs().index_scan) = Some(result);
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
+            Job::TrashList(job) => {
+                let result = rt.block_on(load_trash(&job));
+                *lock(&jobs().trash_rows) = Some(result);
+            }
+            Job::TrashAction(job) => {
+                let outcome = rt.block_on(run_trash_action(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 三件事都会改变回收站自己（还原少一条、删除少一条、清空全没）：
+                // 既重取列表，也重取主列表（还原会把行带回列表）。
+                let result = rt.block_on(load_trash(&TrashListJob {
+                    project_root: job.project_root.clone(),
+                }));
+                *lock(&jobs().trash_rows) = Some(result);
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
         }
@@ -350,6 +403,31 @@ async fn run_undo(job: &UndoJob) -> OpOutcome {
         },
         Err(error) => OpOutcome::Failed {
             action: "撤销归档",
+            reason: error.to_string(),
+        },
+    }
+}
+
+/// 执行一次移入回收站（批量）。
+///
+/// 逐条走服务层；服务层不做预回滚（部分成功就部分成功），所以错误文案里会带“已移入 N 项”
+/// ——宿主只需原样转述，不要自己算进度。
+async fn run_trash(job: &TrashJob) -> OpOutcome {
+    let service = match open_service(job.project_root.clone()).await {
+        Ok(service) => service,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "移入回收站",
+                reason,
+            };
+        }
+    };
+    match service.move_to_trash(&job.resource_ids).await {
+        Ok(entries) => OpOutcome::Trashed {
+            names: entries.into_iter().map(|entry| entry.name).collect(),
+        },
+        Err(error) => OpOutcome::Failed {
+            action: "移入回收站",
             reason: error.to_string(),
         },
     }
@@ -567,9 +645,102 @@ async fn run_repair_action(job: &IndexRepairActionJob) -> OpOutcome {
                 },
             }
         }
+        RepairAction::RestoreFromTrash { rel_path } => {
+            match service.restore_archive_by_rel_path(&rel_path).await {
+                Ok(resource) => OpOutcome::RepairDone {
+                    note: format!("已从回收站还原「{}」（resources/{rel_path}）", resource.name),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "从回收站还原",
+                    reason: error.to_string(),
+                },
+            }
+        }
         // 跳转类动作由宿主在事件路径拦截（不入这个作业）；真走到这里只给一句话。
         RepairAction::OpenVersions { .. } => OpOutcome::RepairDone {
             note: "版本历史已打开".to_string(),
+        },
+    }
+}
+
+/// 取回收站条目 → 对话框种子（工作线程上执行）。
+///
+/// 只需本体层：回收站是文件系统上的目录（`ProjectTrash`），不碰项目库——
+/// 这也是“回收站不依赖索引”的另一面（本体是权威）。
+async fn load_trash(job: &TrashListJob) -> Result<TrashDialogSeed, String> {
+    let entries = PayloadStore::new(job.project_root.clone())
+        .trash()
+        .list()
+        .await
+        .map_err(|e| format!("读取回收站失败：{e}"))?;
+    let snapshot = build_trash_snapshot(&entries);
+    Ok(TrashDialogSeed {
+        rows: snapshot.rows,
+        foreign: snapshot
+            .foreign
+            .into_iter()
+            .map(|(origin, count)| ForeignTrash {
+                module_label: module_label(&origin),
+                count,
+            })
+            .collect(),
+    })
+}
+
+/// 回收站条目来源 → 模块显示名。
+///
+/// 回收站是项目级的：说清“这条在谁那儿”比单给一个内部代号有用；
+/// 认不出的代号原样显示（宁可见生，不可编一个名字）。
+fn module_label(origin: &str) -> String {
+    match origin {
+        scratchpad::ORIGIN_SCRATCHPAD => "草稿箱".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 执行一次回收站动作（工作线程上执行）。
+async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
+    let service = match open_service(job.project_root.clone()).await {
+        Ok(service) => service,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "回收站",
+                reason,
+            };
+        }
+    };
+    match &job.action {
+        TrashAction::Restore { trash_id } => {
+            match service.restore_archive_from_trash(trash_id).await {
+                Ok(resource) => OpOutcome::TrashDone {
+                    note: format!("已从回收站还原「{}」", resource.name),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "从回收站还原",
+                    reason: error.to_string(),
+                },
+            }
+        }
+        TrashAction::Purge { trash_id } => match service.purge_archive(trash_id).await {
+            Ok(()) => OpOutcome::TrashDone {
+                note: "已永久删除该条目（本体不再保留）".to_string(),
+            },
+            Err(error) => OpOutcome::Failed {
+                action: "永久删除",
+                reason: error.to_string(),
+            },
+        },
+        TrashAction::Empty => match service.empty_trash().await {
+            Ok(0) => OpOutcome::TrashDone {
+                note: "回收站里没有资产库的条目".to_string(),
+            },
+            Ok(count) => OpOutcome::TrashDone {
+                note: format!("已清空资产库的回收站（{count} 项，本体不再保留）"),
+            },
+            Err(error) => OpOutcome::Failed {
+                action: "清空回收站",
+                reason: error.to_string(),
+            },
         },
     }
 }
@@ -701,6 +872,16 @@ pub fn enqueue_undo(project_root: PathBuf, read_only: bool, undo: ArchiveUndo) {
     }));
 }
 
+/// 提交一次移入回收站（**事件路径**调用：详情危险区 / 多选动作栏）。
+pub fn enqueue_trash(project_root: PathBuf, read_only: bool, resource_ids: Vec<String>) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::Trash(TrashJob {
+        project_root,
+        read_only,
+        resource_ids,
+    }));
+}
+
 /// 提交一次版本历史取数（**事件路径**调用：右键「版本历史…」/ 详情「查看全部…」）。
 pub fn enqueue_versions(project_root: PathBuf, resource_id: String) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
@@ -766,6 +947,27 @@ pub fn enqueue_index_repair_action(
         read_only,
         action,
     }));
+}
+
+/// 提交一次回收站取数（**事件路径**调用：面板头「⋯ → 回收站…」）。
+pub fn enqueue_trash_list(project_root: PathBuf) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::TrashList(TrashListJob { project_root }));
+}
+
+/// 提交一次回收站动作（**事件路径**调用：回收站对话框的行内动作与「清空」）。
+pub fn enqueue_trash_action(project_root: PathBuf, read_only: bool, action: TrashAction) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::TrashAction(TrashActionJob {
+        project_root,
+        read_only,
+        action,
+    }));
+}
+
+/// 取走最新回收站取数结果（未就绪时 `None`）。
+pub fn drain_trash_rows() -> Option<Result<TrashDialogSeed, String>> {
+    lock(&jobs().trash_rows).take()
 }
 
 /// 取走最新索引扫描结果（未就绪时 `None`）。

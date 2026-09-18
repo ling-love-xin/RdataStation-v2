@@ -373,6 +373,7 @@ fn shared_fields_are_whitelisted() {
         "scratchpad_bridge",
         "selected",
         "settings_open",
+        "trash_dialog",
         "version_dialog",
     ];
     assert_eq!(

@@ -1,7 +1,7 @@
 # 资产库 / 分析存档模块（M6）· 设计理念与架构
 
-> 状态：**设计定稿（2026-09-15）；Phase 0 两批已落地（仅 crate 内）**。已可用：领域类型（`model.rs`）、本体层（`payload.rs`）、迁移 020 + 新列接入、**归档 → 取回 → 再归档（指纹版本）闭环 + 变更事件**（`service.rs`，37 项测试全绿）；逐项证据见 `analytics-resource-dev-plan.md` §0。
-> 仍为占位：`commands.rs` / `resource_view.rs` / `recycle_bin_dialog.rs`（视图与 Action，Phase 1）；`indexer.rs`（索引修复）未创建；`recycle.rs` 待废弃（P0.8）；视图落点仍是 `crates/workbench/src/panels/mod.rs::render_resources_placeholder`。
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体已落地**——领域类型、本体层、迁移 020 + 新列接入、归档→取回→再归档闭环 + 变更事件、索引修复、面板与详情、五个对话框（含回收站）、项目级回收站（P0.8 已上提中性化）均可用；104 单测 + 19 窗口测试全绿，逐项证据见 `analytics-resource-dev-plan.md` §0。
+> 仍待：`F2` 重命名（等重命名入口）、批量标签 / 分组（Phase 2）、内容预览、头部可编辑、版本保留策略接设置项、`analytics_recycle_bin` 表的物理删除（现为“弃用 + 空置”）。
 > 前置：v1 蓝本 `v1/backend/src/core/persistence/analytics_resource_store/` + `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v2 现状见 `analytics-resource-dev-plan.md` §1。
 > 关联：`analytics-resource-prototype-design.md`（长什么样）、`analytics-resource-prototype.html`（交互稿）、`analytics-resource-dev-plan.md`（做什么）、`../overview.md`（M6 定位）、`../scratchpad/scratchpad-dev-plan.md` Phase D（上游）。
 >
@@ -253,7 +253,7 @@ scratchpad ──► analytics_resource ──► engine, shared
 
 | 事件 | 载荷 | 消费方 |
 | --- | --- | --- |
-| `ResourcesChanged` | `{ reason: Archived / Updated / CheckedOut / Undone / Restored, resource_id }`（**当前已实现这五个**；`Deleted` / `IndexRebuilt` 随回收站与索引修复对话框落地） | 资产库面板（刷新列表）、草稿箱面板（刷新树）、编辑器（只读态/标签失效） |
+| `ResourcesChanged` | `{ reason: Archived / Updated / CheckedOut / Undone / Restored / Trashed / Untrashed, resource_id }`（**当前已实现这七个**；`IndexRebuilt` 随索引修复的批量重建落地） | 资产库面板（刷新列表）、草稿箱面板（刷新树）、编辑器（只读态/标签失效） |
 
 - v1 的 `analytics-resource-changed` 是 Tauri `app.emit`，**前端零监听**（链路是断的）。v2 没有 Tauri 事件总线，改用**服务上的可观察状态 + 订阅**（`watch` 通道或共享 `Entity`），并且**发/收两端同时落地**才有意义。
 - 事件必须带 `reason`：面板据此决定"局部更新"还是"整表刷新"（v1 只有无载荷的"变了"）。
@@ -292,16 +292,13 @@ scratchpad ──► analytics_resource ──► engine, shared
 | --- | --- |
 | 载体 | `ProjectTrash`（`{project}/.RSmeta/trash/`，自包含目录：`payload` + `manifest.json`） |
 | 来源标记 | `origin = "resources"` |
-| 删除语义 | 本体 move 进回收站 + 索引行删除（或标记 `缺失`）——**两者必须一起**，否则重现 v1"回收站有条目、主表还在"的不一致 |
-| 还原 | 只接受 `origin == "resources"` 的条目（跨模块还原必须被拒绝，沿用 M5 `restore_from_trash` 的校验） |
-| 永久删除 | `purge` 真删 payload（v1 只删回收站行，主表与版本行永久残留） |
+| 删除语义 | 本体 move 进回收站 + **索引行软删**（`deleted_at`，靠过滤隐藏而不是删行）——两者必须一起，否则重现 v1“回收站有条目、主表还在”的不一致。软删而非硬删的理由：标签 / 分组是资源 id 上的关联，硬删会留下孤儿归属（缺陷 #6），软删才能把别名 / 指纹 / 标签一起还原 |
+| 还原 | 只接受 `origin == "resources"` 的条目（跨模块还原必须被拒绝）；同名不覆盖——回收站层避让改名，登记行的本体路径**跟着改** |
+| 永久删除 | `purge` 真删 payload + 删登记行与其标签 / 分组关联（v1 只删回收站行，主表与版本行永久残留）；「清空」走 `empty_origin("resources")`——**只清自己的**，共用一处仓库不等于可以替对方清空 |
 
-**复用成本（必须计入）**：`ProjectTrash` 现在住在 `crates/scratchpad/src/trash.rs`，并且有两处 M5 类型泄漏——`restore()` 返回 `ScratchpadEntry`、`manifest.kind` 用 `ScratchpadEntryKind`。上提前需要：
+> **落地现状（2026-09-18，P0.8 已落）**：`ProjectTrash` 已上提到 `engine::persistence::trash`（中性化完成，见下文“复用成本”已消解）；删除 / 还原 / 永久删除 / 清空四个动作在 `ArchiveService`，回收站对话框在 `dialogs/trash.rs`（只列 `origin = "resources"` 的条目，别人的只给一句说明）。
 
-1. 中性化类型：`ScratchpadEntryKind` → `TrashEntryKind`（`File` / `Folder`）；
-2. `restore` 返回值改为中性结构（或返回 `PathBuf` + 元数据）；
-3. `restore` 按 `origin` 决定落哪个模块根（现在只收一个 `dest_root`）；
-4. 归属上提：该文件自己的注释已写明"待 M6 落地后按 ≥2 使用方规则上提到 `shared`/`engine`"（`crates/scratchpad/src/trash.rs:10-12`）——**M6 是第二个使用方，条件成立**，建议上提到 `engine`（它需要落点常量与 `CoreError`，不需要业务类型）。
+**复用成本（已消解，2026-09-18）**：上述四处上提前的改造已于 P0.8 完成——中性类型 `TrashKind`、`restore` 返回 `TrashRestoreOutcome`（不再返回 M5 类型）、`origin` 由字符串携带（落哪个根由调用方给 `dest_root`，**校验也是调用方的纪律**）、归属落在 `engine::persistence::trash`。原计划的第 3 项（`restore` 内部按 `origin` 分派目标根）**刻意没做**：中性层不知道也不该知道各模块的根在哪里，分派留在两个调用方（`scratchpad` 给模块根、M6 给 `resources/`）。
 
 ### 7.2 索引修复（孤儿处理，v1 完全没有的能力）
 
@@ -321,13 +318,13 @@ scratchpad ──► analytics_resource ──► engine, shared
 | --- | --- | --- |
 | `model.rs` | 领域类型（`Archive` / `ArchiveKind` / `ArchiveSource` / `ArchiveStatus` / 请求响应） | 3 行占位 |
 | `models.rs` | 持久层行模型（v1 遗留，逐步并入 `model.rs`） | ✅ 已迁移 |
-| `store/` | 索引读写（`resource` / `folder` / `tag` / `version`），只管 `project.db` | ✅ 已迁移（`recycle.rs` 待废） |
+| `store/` | 索引读写（`resource` / `folder` / `tag` / `version`），只管 `project.db` | ✅ 已迁移（`recycle.rs` 已删，回收站走 `ProjectTrash` + `deleted_at` 软删） |
 | `payload.rs` | 本体层：`resources/` 文件操作、只读设置、hash、历史副本 | 未创建 |
 | `service.rs` | 门面：归档 / 取回 / 检索 / 修复 编排 + 事件 | 未创建 |
 | `indexer.rs` | 索引修复（扫描 / 孤儿检测 / 重建） | 未创建 |
 | `resource_view.rs` | 左 Dock 面板（列表 + 工具栏 + 状态行） | 3 行占位 |
 | `detail_view.rs` | 右侧详情属性面板 | 未创建 |
-| `version_view.rs` / `recycle_view.rs` / `folder_view.rs` / `tag_view.rs` | 对话框 | 3 行占位（`recycle_bin_dialog.rs`） |
+| `version_view.rs` / `recycle_view.rs` / `folder_view.rs` / `tag_view.rs` | 对话框 | 版本与回收站已落（`dialogs/{version,trash}.rs`）；分组 / 标签视图待 Phase 2 |
 | `commands.rs` | Action 与快捷键 | 3 行占位 |
 
 ### 8.2 视图归属（对齐 `../overview.md`）
@@ -397,7 +394,7 @@ scratchpad ──► analytics_resource ──► engine, shared
 | `service.rs` 门面 | 不存在 | 新写 |
 | `indexer.rs` 修复 | 不存在 | 新写 |
 | `store/*` 索引层 | ✅ 逐字搬运（约 1300 行可用） | 改造：加列、换版本语义、废 `recycle.rs` |
-| `recycle.rs` 回收站 | ✅ 419 行 | **整体作废**，改调 `ProjectTrash` |
+| `recycle.rs` 回收站 | ✅ 419 行 | **已整体作废**（P0.8 删文件）：改走 `ProjectTrash` + 登记行软删 |
 | `version.rs` | ✅ 83 行 | 重写为内容指纹版本 |
 | `resource.rs` 分页/搜索/排序 | ✅ 462 行 | 保留骨架，修边界（除零/负数/转义），加 kind 过滤 |
 | `folder.rs` / `tag.rs` | ✅ 511 行 | 保留；文件夹去掉 `parent_folder_id` 用法 |
@@ -415,12 +412,12 @@ scratchpad ──► analytics_resource ──► engine, shared
 
 | # | 问题 | 位置 | 状态 |
 | --- | --- | --- | --- |
-| 1 | `permanent_delete` 只删回收站行，主表与版本行永久残留 | `crates/analytics_resource/src/recycle.rs:399-418` | ⬜（随 P0.8 废弃该文件） |
+| 1 | `permanent_delete` 只删回收站行，主表与版本行永久残留 | `crates/analytics_resource/src/recycle.rs:399-418`（文件已删） | ✅ 随 P0.8 消解：`purge_deleted_row` / `purge_all_deleted` 删本体 + 登记行 + 关联 |
 | 2 | `total_pages` 在 `page_size == 0` 时整数除零 panic；`page_size < 0` 使 SQLite `LIMIT -N` 变"无上限" | `resource.rs:448-452` | ✅ `normalize_pagination` 夹紧到 [1, 500] |
-| 3 | `delete_resource` 4 条语句无事务，可留中间态 | `recycle.rs:7-88` | ⬜ |
+| 3 | `delete_resource` 4 条语句无事务，可留中间态 | `recycle.rs:7-88`（文件已删） | ✅ 随 P0.8 消解：删除路径（`delete_row_with_links` / `purge_all_deleted`）均在 `BEGIN IMMEDIATE` 事务内 |
 | 4 | `update_resource` 连接嵌套（一次操作占 2 条连接，池只有 3 条） | `resource.rs:53-94` + `:96` + `version.rs:60` | ✅ 新增 `get_resource_by_id_on`（单连接） |
 | 5 | `parent_version_id` 恒等于自身 `id` | `resource.rs:83` 附近 | ✅ 改为指向本次写入的快照行 id |
-| 6 | 恢复只还原主行，标签/分组归属丢失 | `recycle.rs:296-397` | ⬜ |
+| 6 | 恢复只还原主行，标签/分组归属丢失 | `recycle.rs:296-397`（文件已删） | ✅ 随 P0.8 消解：软删保留整行（含标签与分组归属），还原只清 `deleted_at` |
 | 7 | JSON 解析策略不一致（列表宽容 / 单行硬报错） | `resource.rs` 多处 | ✅ 统一为宽容 + warn（单一 `map_resource_row`） |
 | 8 | 搜索 `LIKE` 未转义 `%` / `_`；计数与取页非同快照 | `resource.rs:337-342`、`:350-405` | 🟡 转义已补（`ESCAPE '\'`）；同快照待做 |
 | 9 | 剪辑副本默认名乱码 `(鍓湰)`（应为"副本"） | `resource.rs:261` | ✅ 改为「（副本）」 |

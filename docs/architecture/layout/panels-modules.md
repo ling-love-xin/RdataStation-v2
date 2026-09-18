@@ -64,7 +64,7 @@
 > "宿主转发渲染 / 取面板选中项"（例：M6 的存档详情读左栏选中项）。新增同类句柄只需更新
 > `ui_contract.rs` 的白名单，不必改本表。
 >
-> 同类还有 M6 的两个对话框流转字段（`version_dialog` / `repair_dialog`）：它们不跨模块——轮询写、
+> 同类还有 M6 的三个对话框流转字段（`version_dialog` / `repair_dialog` / `trash_dialog`）：它们不跨模块——轮询写、
 > 侧栏 render 消费与清会话，crate 拿到的只是对话框状态的克隆——但它们是
 > “取数在后台、开窗在 render”的**两段式**例子：轮询里没有 `Window`，所以只置 `pending`。
 >

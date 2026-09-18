@@ -326,7 +326,7 @@
 | 项 | 内容 | 落点 | 验证 |
 | --- | --- | --- | --- |
 | 根语义定稿 | `ScratchpadStore::new` 改为 `root = {project}/scratchpad`（可见模块目录），`meta = {project}/.RSmeta/scratchpad`；`ensure_dir` 建模块根/meta/回收站 | `crates/scratchpad/src/store.rs` | 单测 `module_root_and_meta_isolated` |
-| 项目级回收站 | 新增 `ProjectTrash`：`.RSmeta/trash/<id>/{payload,manifest.json}`，条目携带 `origin` + `original_rel_path` + `kind/size/deleted_at`；restore 按原相对路径重建、同名自动改名；跨模块条目拒绝在草稿箱还原 | `crates/scratchpad/src/trash.rs` | 单测 `trash_is_project_level_with_origin`、`restore_refuses_other_module_entries` |
+| 项目级回收站 | 新增 `ProjectTrash`：`.RSmeta/trash/<id>/{payload,manifest.json}`，条目携带 `origin` + `original_rel_path` + `kind/size/deleted_at`；restore 按原相对路径重建、同名自动改名；跨模块条目拒绝在草稿箱还原。**P0.8（2026-09-18）已上提到 `crates/engine/src/persistence/trash.rs`**（中性化：`TrashKind` / `TrashRestoreOutcome` / `empty_origin`），草稿箱侧的列表与清空按 `origin` 过滤 | `crates/engine/src/persistence/trash.rs`（原 `crates/scratchpad/src/trash.rs`） | 单测 `trash_is_project_level_with_origin`、`restore_refuses_other_module_entries`、`empty_origin_leaves_other_modules_alone` |
 | 旧数据迁移 | `.scratchpad/` 内容 → `scratchpad/`；旧 `.scratchpad.json` → `config.json`；旧 `.trash/` 与上一版 `{meta}/.trash` 均并入项目级回收站；空壳清理；幂等 | `store.rs`（`migrate_legacy_layout`） | 单测 `legacy_layout_is_migrated` |
 | 数据源引用 | `FileMeta` 新增 `bound_connections`；新增 `ScratchpadStore::bind_connections`（只存连接 ID） | `models.rs` / `store.rs` | 单测 `bound_connections_roundtrip` |
 | 外部引用可用性 | 新增 `ExternalReferenceStatus` + `external_reference_status()`（加载时探测路径是否存在） | `models.rs` / `store.rs` | 单测 `external_reference_persists_and_reports_status` |
@@ -476,7 +476,7 @@
 | 设计决策 | 代码文件 |
 | --- | --- |
 | 模块根 = `{project}/scratchpad/`；内部元数据 `.RSmeta/scratchpad/` | `crates/scratchpad/src/store.rs`（`ScratchpadStore::new` / `ensure_dir` / `scan_dir_tree` / `resolve_path_impl`） |
-| 项目级回收站（含来源/原路径） | `crates/scratchpad/src/trash.rs`（`ProjectTrash` / `TrashEntry` / `TrashManifest`） |
+| 项目级回收站（含来源/原路径） | `crates/engine/src/persistence/trash.rs`（`ProjectTrash` / `TrashEntry` / `TrashManifest` / `TrashKind` / `TrashRestoreOutcome`；**P0.8 已从 `crates/scratchpad/src/trash.rs` 上提中性化**，草稿箱侧只重导出） |
 | 文件元数据 / 数据源绑定 / 外部引用可用性 | `crates/scratchpad/src/models.rs`（`FileMeta::bound_connections` / `FileMeta::preferred_connection` / `ExternalReferenceStatus`）、`store.rs`（`file_meta` / `bind_connections` / `update_file_meta` / `external_reference_status`） |
 | 旧 `.scratchpad/` 迁移（→ 模块根/元数据/项目回收站） | `crates/scratchpad/src/store.rs`（`migrate_legacy_layout` / `move_dir_contents` / `ingest_trash_dir`） |
 | 文件监控 | `crates/scratchpad/src/state.rs`（`notify`）+ 事件推送 |

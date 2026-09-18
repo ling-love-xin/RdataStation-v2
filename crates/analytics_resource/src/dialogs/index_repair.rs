@@ -54,7 +54,7 @@ impl RepairGroup {
     pub fn hint(self) -> &'static str {
         match self {
             Self::Untracked => "本体在 resources/ 里但登记表不认识它；补登后就是一个正常存档",
-            Self::Missing => "本体不在了：删掉记录，或等回收站上提后从回收站还原",
+            Self::Missing => "本体不在了：从回收站还原（若当初进了回收站），或删掉记录",
             Self::Changed => "本体被绕过只读改过：接受当前内容（生成新版本），或到版本历史里挑一版还原",
         }
     }
@@ -151,6 +151,11 @@ pub enum RepairAction {
     DeleteRecord { resource_id: String },
     /// 接受当前内容：指纹换成实际值、版本 +1（旧内容不可得，那一版历史只留元数据）。
     AcceptContent { resource_id: String },
+    /// 从回收站还原：本体被删过（进了项目级回收站），把它搬回期望位置并复活登记行。
+    ///
+    /// 手上只有**期望相对路径**（这一组行就是“登记在、本体不在”），由服务层去回收站里
+    /// 按 `original_rel_path` 找条目——找不到就直说只能删记录。
+    RestoreFromTrash { rel_path: String },
     /// 打开版本历史（挑一版还原）。
     OpenVersions { resource_id: String },
 }
@@ -403,15 +408,32 @@ fn repair_line(
         }
         RepairGroup::Missing => {
             let resource_id = row.resource_id.clone().unwrap_or_default();
-            // 「从回收站还原」要等 `ProjectTrash` 上提（P0.8）：摆出来并说明，而不是藏起来
-            // ——藏起来用户会以为"没有这个能力"，摆出来能说清"为什么现在没有"。
+            // 「从回收站还原」：本体当初进了项目级回收站的话，这就是正规的路（不用手搬文件）。
+            // 还原的成败与“为什么不行”都在服务层说（找不到条目会直说只能删记录）。
+            let restore = {
+                let state = state.clone();
+                let on_action = on_action.clone();
+                let rel_path = row.rel_path.clone();
+                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                    state.set_busy(true);
+                    state.set_note(Some("正在从回收站还原…".to_string()));
+                    on_action(
+                        RepairAction::RestoreFromTrash {
+                            rel_path: rel_path.clone(),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            };
             line = line.child(
                 Button::new(("repair-restore", index))
                     .ghost()
                     .small()
-                    .disabled(true)
+                    .debug_selector(move || format!("repair-restore-{index}"))
                     .label("从回收站还原")
-                    .tooltip("等项目级回收站上提（P0.8）后才可用"),
+                    .disabled(!can_write)
+                    .on_click(restore),
             );
             let dispatch = {
                 let state = state.clone();

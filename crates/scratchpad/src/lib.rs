@@ -19,7 +19,6 @@ pub mod models;
 pub mod scratchpad_view;
 pub mod state;
 pub mod store;
-pub mod trash;
 pub mod watch;
 
 pub use host::ScratchpadHost;
@@ -33,5 +32,9 @@ pub use models::{
 pub use jobs::{DirResult, LoadResult, SearchPayload};
 pub use state::ScratchpadState;
 pub use store::{ScratchpadStore, MODULE_DIR_NAME, ORIGIN_SCRATCHPAD};
-pub use trash::{ProjectTrash, TrashEntry, TrashManifest};
+// 回收站已上提到 engine（中性化：不再返回 `ScratchpadEntry`，来源是字符串标记）。
+// 这里重导出保持 `scratchpad::ProjectTrash` 等旧路径可用。
+pub use engine::persistence::trash::{
+    ProjectTrash, TrashEntry, TrashKind, TrashManifest, TrashRestoreOutcome,
+};
 pub use watch::{ChangeFlag, ScratchpadWatcher};

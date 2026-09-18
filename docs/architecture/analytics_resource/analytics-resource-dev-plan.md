@@ -1,12 +1,32 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0 三批 + Phase 1 三刀已落地（仅 crate 内）**——归档/取回/再归档闭环 + 变更事件 + 索引修复已可用，**66 单测 + 5 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站三个对话框均可用，**104 单测 + 19 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-18 — P0.8 + Phase 3 第三刀：项目级回收站（上提中性化 → 移入 / 还原 / 永久删除 / 清空 + 对话框）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| **回收站上提 + 中性化** ✅ | `ProjectTrash` 从 `scratchpad` 搬到 `engine::persistence::trash`：来源是字符串 `origin`，类型是 `TrashKind{File,Folder}`，还原返回 `TrashRestoreOutcome`（**不再返回 `ScratchpadEntry`**）；`unique_path` 内联（并报告是否改名）；**不做 origin 校验**（那是调用方纪律）。`scratchpad` 侧改重导出，旧路径仍可用 | `crates/engine/src/persistence/{mod,trash}.rs`、`crates/scratchpad/src/{lib,store}.rs`、`crates/scratchpad/Cargo.toml` |
+| **按来源清空** ✅ | `ProjectTrash::empty_origin(origin)`：整仓 `empty()` 会把别的模块的条目一起删掉——共用一处仓库不等于可以替对方清空；M5 的列表与「清空」也改成按来源过滤（`list_trash` / `empty_trash`），跨模块条目不再出现在草稿箱列表里 | 同上 |
+| 索引侧软删 ✅ | 新增 `soft_delete_archive` / `undelete_archive`（可同步改本体路径）/ `find_deleted_archive_by_rel_path` / `purge_deleted_row` / `purge_all_deleted`；`hard_delete_row` 与两个 purge 都**连标签与分组关联一起删**（关联表是 `resource_id` 上的外键且无 `ON DELETE CASCADE`，而项目库开了 `foreign_keys=ON`——不清关联会直接删不掉） | `src/resource.rs` |
+| 四个服务动作 ✅ | `move_to_trash`（批量；先移本体、再软删行、失败回滚本体；**不做预回滚**，中途失败时错误里带“本批已移入 N 项”）、`restore_archive_from_trash`（三条守卫：origin / 登记行还在 / 同名不覆盖并同步登记路径）、`restore_archive_by_rel_path`（索引修复那条；找不到就指向“只能删记录”）、`purge_archive` + `empty_trash`（都只动本模块的条目）；事件 `Trashed` / `Untrashed` | `src/service.rs`、`src/model.rs`（`ORIGIN_RESOURCES` / `TrashArchiveEntry`） |
+| 对话框 ✅ | `dialogs/trash.rs`：条目表格（名称+类型 / 原位置 / 删除时间 / 大小）+ 行内动作（还原、永久删除走 `AlertDialog`）+ 页脚「清空回收站」（只清本模块的，确认文案里说清）+ **别人的条目只给一句说明不列行**（列出来等于摆一个必然被拒的还原）；行数据可被宿主换行 | 同上、`src/ui.rs`（+6 常量）、`src/present.rs`（`build_trash_snapshot`） |
+| 宿主接线 ✅ | `Job::Trash`（批量移入）/ `Job::TrashList` + `Job::TrashAction`（取数 / 还原 / 永久删除 / 清空；动作后重取回收站列表与主列表）；`Shared::trash_dialog`（pending → 侧栏 render 开窗 → session → 关窗清掉）；详情面板加**危险区**（移入回收站；引用型与本体缺失时置灰并给出口）；索引修复的「从回收站还原」**开闸**（原来摆着置灰） | `crates/workbench/src/{services/resource_jobs.rs,panels/{shared,resources,mod}.rs,components/resource_host.rs}`、`src/detail_view.rs`、`src/dialogs/index_repair.rs` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **104 单测 + 12 面板窗口 + 7 对话框窗口全绿**（+6 服务：软删与本体入站 / 还原与跨模块拒绝 / 同名避让与本体缺失拒移 / 部分成功 / 只动自己的永久删除与清空 / 按路径还原；+2 呈现；+3 回收站对话框；+1 对话框窗口测试）；`cargo test -p rds-engine --lib -j 2 trash` 4 项（含 `empty_origin` 只删自己名下的）；`cargo test -p rds-scratchpad --lib -j 2` 36 项全绿；`cargo test -p rds-workbench --lib -j 2` 95 项 + `--test ui_contract` 7 项全绿（`Shared` 白名单 +`trash_dialog`） | — |
+
+**三处刻意的取舍**：
+
+1. **软删登记行而不是硬删**：标签与分组是资源 id 上的关联，硬删会留下孤儿归属（v1“还原丢归属”就是这么来的）——行留在表里、靠 `deleted_at IS NULL` 过滤，还原才能把别名 / 指纹 / 标签一起带回；
+2. **不做预回滚**：批量移入中途失败时已进回收站的**不回退**（部分成功就部分成功），但错误里要交代“本批已移入 N 项”——回退会让状态更难读；
+3. **别人的条目只给说明**：项目级回收站里看得见别人的东西，但还原与删除都只做自己名下的（跨模块还原 = 把对方的数据搬进 `resources/`，那是越权）。
+
+**未落地**：回收站的自动清理策略（按时间 / 容量）；回收站条目的“在原位置打开”；`F2` 重命名与批量标签 / 分组（Phase 2）。
 
 ### 2026-09-17 — Phase 1 第十四刀：批量多选与行点击归位（原型 §2.3 / §3.2 / §9）
 
@@ -419,7 +439,7 @@
 | P0.5 | 领域类型：`ArchiveKind` / `ArchiveSource` / `ArchiveStatus`（正常/缺失/内容已变）/ 请求响应结构 | `crates/analytics_resource/src/model.rs` | 单测：kind 与状态序列化稳定 |
 | P0.6 | 本体层 `payload.rs`：`resources/` 定位与越界拒绝（含 `.RSmeta` 与点前缀）、move 与跨设备 copy 兜底、只读设置、`sha256` 指纹、历史副本读写 | `crates/analytics_resource/src/payload.rs` | 单测：越界路径全部被拒；只读设置失败只警告；指纹对同一内容稳定 |
 | P0.7 | store 改造：加列读写、kind 过滤、**修 12 项继承缺陷**（尤其 `total_pages` 除零、`page_size ≤ 0`、`LIKE` 转义、事务化、连接不再嵌套、`created_by`/乱码） | `src/{resource,folder,tag}.rs` | v1 的 15 个用例全绿（改为走迁移系统）；新增边界用例 |
-| P0.8 | **`ProjectTrash` 上提 + 中性化**：类型去 M5 化（`TrashEntryKind`）、`restore` 按 `origin` 分派目标根、归属移到 `engine`（第二个使用方已成立） | `crates/scratchpad/src/trash.rs` → `crates/engine/src/…` | M5 现有回收站测试全绿；M6 可删除→还原往返 |
+| P0.8 ✅ | **`ProjectTrash` 上提 + 中性化**（2026-09-18 落）：类型去 M5 化（`TrashKind`，还原返回 `TrashRestoreOutcome`）、来源是字符串 `origin`（校验交给调用方）、按来源清空的窄口 `empty_origin`、归属移到 `engine::persistence::trash`；`scratchpad/src/trash.rs` 删除并重导旧路径；M6 侧接入移入 / 还原 / 永久删除 / 清空 + 回收站对话框 | `crates/engine/src/persistence/trash.rs` ← `crates/scratchpad/src/trash.rs` | M5 现有回收站测试全绿（36 项）；M6 删除→还原往返（t124/t125）+ 跨模块拒绝（t125/t128）+ 按来源清空（engine 用例）全绿 |
 | P0.9 | 版本重写：`content_hash` 触发、`parent_version_id` 语义修正（或删列）、历史内容按 `keepVersions` 保留/裁剪 | `src/version.rs` | 单测：**hash 未变不产生新版本**；hash 变则 +1 且旧内容仍在 |
 | P0.10 | 服务门面 `service.rs`：归档/取回/检索/修复编排 + `ResourcesChanged` 事件（含 `reason`） | `src/service.rs` | 单测：归档全链路含回滚；事件载荷正确 |
 | P0.11 | 索引修复 `indexer.rs`：三类孤儿检测与**人工确认**后的修复动作 | `src/indexer.rs` | 单测：有文件无记录 / 有记录无文件 / 指纹不匹配 三态各一用例 |

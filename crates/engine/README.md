@@ -66,7 +66,7 @@ commands ──► services ──► dbi ──► driver ──► native
 | `src/driver/` | `traits.rs` + `registry` / `router.rs` / `factory.rs`（注册与构造）、`smart_pool` / `standard_pool`（连接池）、`introspection.rs` / `metadata.rs`（元数据）、`native/`（duckdb · mysql · postgres · sqlite，各带连接池）、`jdbc/` `wasm/` `missing_driver.rs` |
 | `src/duckdb/` | 分析引擎封装：连接池、临时表、联邦查询、导入导出、FTS、计划分析（`explain.rs`）、扩展与插件接口、`snapshot.rs`、`metrics.rs` |
 | `src/sql/` | SQL 原语（**sqlglot 唯一接入点**）：`engine.rs`（`SqlEngine` 门面）、`parser.rs`、`split.rs`（自研切分）、`highlight.rs`、`builder.rs`、`formatter.rs`、`transpiler.rs` |
-| `src/persistence/` | 元数据持久化（SQLite）：连接 / 历史 / 日志 / 驱动 / 插件 / 网络档案（凭据加密）/ 环境变量 / SQL 模板 / 项目库与全局库（模块头记有本模块的 SQL 安全约定） |
+| `src/persistence/` | 元数据持久化（SQLite）：连接 / 历史 / 日志 / 驱动 / 插件 / 网络档案（凭据加密）/ 环境变量 / SQL 模板 / 项目库与全局库（模块头记有本模块的 SQL 安全约定）+ **项目级回收站**（`trash.rs`：`ProjectTrash`，与具体模块无关，来源是 `origin` 字符串；M5 草稿箱与 M6 资产库共用，各模块界面按来源取用） |
 | `src/cache/` | 多级缓存：LRU、查询缓存、元数据缓存、内存护栏、minicatalogs |
 | `src/migration/` | 迁移系统 + `global_init`（系统目录 / 全局库路径 / 启动装配） |
 | `src/logging/` | 统一日志：配置、记录、查询分页、统计 |

@@ -6,6 +6,9 @@ description = "M5 草稿箱：类 VS Code 文件管理的草稿工作区"
 
 [dependencies]
 shared.workspace = true
+# 项目级回收站（`engine::persistence::trash`）：原来的 `src/trash.rs` 只有本模块一个使用方，
+# M6 资产库也要用它，于是按 rds-architecture 的「≥ 2 使用方上提」规则搬到 engine 并中性化。
+engine.workspace = true
 
 # ===== GPUI-kit 视图层 =====
 # 草稿箱视图自带（下沉后本 crate 就是它的家）：要取 `cx.theme()`、要命名 `App`。

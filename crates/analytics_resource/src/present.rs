@@ -9,10 +9,14 @@
 
 use chrono::{DateTime, Utc};
 
+use engine::persistence::trash::{TrashEntry, TrashKind};
+
 use crate::detail_view::ArchiveDetail;
 use crate::dialogs::index_repair::{RepairGroup, RepairRow};
+use crate::dialogs::trash::TrashRow;
 use crate::dialogs::version::VersionRow;
-use crate::model::{ArchiveKind, ArchiveStatus};
+use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
+use crate::payload::RESOURCES_DIR_NAME;
 use crate::resource_view::{ArchiveCounts, ArchiveRow, ResourcesSnapshot};
 use crate::AnalyticsResource;
 
@@ -113,6 +117,58 @@ pub fn tail_for(resource: &AnalyticsResource, kind: ArchiveKind, now: DateTime<U
     };
     let modified = format_relative_time(now, resource.updated_at);
     crate::resource_view::row_tail(&detail, &modified, resource.version)
+}
+
+/// 回收站快照（宿主工作线程用）：本模块的条目 + 别人条目的统计。
+///
+/// “别人的条目”只给 `origin` 与条数：显示名是宿主的事（crate 不认识别的模块叫什么）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashSnapshot {
+    pub rows: Vec<TrashRow>,
+    /// `origin` → 条数（不含本模块）。
+    pub foreign: Vec<(String, usize)>,
+}
+
+/// 回收站条目 → 对话框行（**只收本模块的**：别人的条目在这里没有可做的动作）。
+///
+/// 排序沿用 `ProjectTrash::list` 的口径（删除时间倒序），这里不再排一次——两处各排一次，
+/// 将来口径一变就会打架。
+pub fn build_trash_snapshot(entries: &[TrashEntry]) -> TrashSnapshot {
+    let mut rows = Vec::new();
+    let mut foreign: Vec<(String, usize)> = Vec::new();
+    for entry in entries {
+        let manifest = &entry.manifest;
+        if manifest.origin != ORIGIN_RESOURCES {
+            match foreign.iter_mut().find(|(origin, _)| origin == &manifest.origin) {
+                Some((_, count)) => *count += 1,
+                None => foreign.push((manifest.origin.clone(), 1)),
+            }
+            continue;
+        }
+        // “原位置”回答的是“还原到哪”：rel_path 为空（极端旧条目）时退回到文件名。
+        let original_label = if manifest.original_rel_path.trim().is_empty() {
+            manifest.name.clone()
+        } else {
+            format!("{RESOURCES_DIR_NAME}/{}", manifest.original_rel_path)
+        };
+        rows.push(TrashRow {
+            trash_id: manifest.id.clone(),
+            name: manifest.name.clone(),
+            original_label,
+            kind_label: match manifest.kind {
+                TrashKind::File => "文件".to_string(),
+                TrashKind::Folder => "目录".to_string(),
+            },
+            // 绝对时间：回收站是查凭证的地方（行上用相对时间的口径不适用于对话框）。
+            time_label: format_timestamp(manifest.deleted_at),
+            size_label: match manifest.kind {
+                TrashKind::File => format_size(Some(manifest.size.min(i32::MAX as u64) as i32)),
+                // 目录的“大小”没意义（要递归统计才有值），留空而不是写 0。
+                TrashKind::Folder => String::new(),
+            },
+        });
+    }
+    TrashSnapshot { rows, foreign }
 }
 
 /// 单行转换（状态缺省 `Normal`）。
@@ -399,14 +455,16 @@ pub fn build_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveStatuses, VersionCounts, build_repair_rows, build_snapshot, build_version_rows,
-        format_relative_time, format_scale, format_size, format_timestamp, tail_for,
+        ArchiveStatuses, VersionCounts, build_repair_rows, build_snapshot, build_trash_snapshot,
+        build_version_rows, format_relative_time, format_scale, format_size, format_timestamp,
+        tail_for,
     };
     use crate::dialogs::index_repair::RepairGroup;
-    use crate::model::{ArchiveKind, ArchiveStatus};
+    use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
     use crate::models::{AnalyticsResource, ResourceVersion};
     use crate::{IndexIssue, IndexScanReport};
     use chrono::{DateTime, Duration, Utc};
+    use engine::persistence::trash::{TrashEntry, TrashKind};
     use serde_json::Value;
 
     fn row_model(id: &str, kind: &str, file_size: Option<i32>) -> AnalyticsResource {
@@ -439,6 +497,62 @@ mod tests {
             definition_sql: None,
             archived_at: Some(now),
         }
+    }
+
+    fn trash_entry(
+        id: &str,
+        name: &str,
+        origin: &str,
+        rel_path: &str,
+        kind: TrashKind,
+        size: u64,
+    ) -> TrashEntry {
+        TrashEntry {
+            manifest: engine::persistence::trash::TrashManifest {
+                id: id.to_string(),
+                name: name.to_string(),
+                origin: origin.to_string(),
+                original_rel_path: rel_path.to_string(),
+                kind,
+                deleted_at: Utc::now(),
+                size,
+            },
+        }
+    }
+
+    /// 回收站快照只收本模块的条目；别人的只给“谁的、几条”（不混进行列表）。
+    #[test]
+    fn trash_snapshot_keeps_own_entries_and_counts_foreign() {
+        let entries = vec![
+            trash_entry("t1", "dau.sql", ORIGIN_RESOURCES, "reports/dau.sql", TrashKind::File, 2048),
+            trash_entry("t2", "draft.sql", "scratchpad", "draft.sql", TrashKind::File, 10),
+            trash_entry("t3", "reports", "scratchpad", "reports", TrashKind::Folder, 0),
+        ];
+
+        let snapshot = build_trash_snapshot(&entries);
+        assert_eq!(snapshot.rows.len(), 1, "别人的条目不能混进行列表");
+        assert_eq!(snapshot.rows[0].trash_id, "t1");
+        assert_eq!(snapshot.rows[0].original_label, "resources/reports/dau.sql");
+        assert_eq!(snapshot.rows[0].kind_label, "文件");
+        assert_eq!(snapshot.rows[0].size_label, "2.0 KB");
+        assert_eq!(snapshot.foreign, vec![("scratchpad".to_string(), 2)]);
+    }
+
+    /// 目录条目不给大小（要递归统计才有值，写 0 会被当成“空目录”）。
+    #[test]
+    fn trash_snapshot_leaves_folder_size_empty() {
+        let entries = vec![trash_entry(
+            "t1",
+            "reports",
+            ORIGIN_RESOURCES,
+            "reports",
+            TrashKind::Folder,
+            0,
+        )];
+        let snapshot = build_trash_snapshot(&entries);
+        assert_eq!(snapshot.rows[0].kind_label, "目录");
+        assert!(snapshot.rows[0].size_label.is_empty());
+        assert!(snapshot.foreign.is_empty());
     }
 
     #[test]

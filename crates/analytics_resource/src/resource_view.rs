@@ -249,8 +249,8 @@ pub trait ResourcesHost: 'static {
     fn request_undo_archive(&self, undo: &ArchiveUndo, window: &mut Window, cx: &mut App);
     /// 移入回收站（单选一行或多选 N 行）。
     ///
-    /// 收切片而不是单个 id：多选批量与单选走同一条路（批量时确认框与回执要带数量）。
-    /// 回收站只有一套（模块硬约束 5）：入口先留着，等 `ProjectTrash` 上提后接上。
+    /// 收切片而不是单个 id：多选批量与单选走同一条路（批量时确认框与回执要带数量）；
+    /// 批量中途失败的错误里会带“本批已移入 N 项”，**不做预回滚**（部分成功就部分成功）。
     fn request_delete(&self, resource_ids: &[String], window: &mut Window, cx: &mut App);
     /// 索引修复入口（状态行异常段的「修复…」与面板头「⋯ → 重建索引…」共用）。
     fn request_index_repair(&self, window: &mut Window, cx: &mut App);
@@ -260,7 +260,8 @@ pub trait ResourcesHost: 'static {
     fn request_open_payload_dir(&self, window: &mut Window, cx: &mut App);
     /// 打开资源回收站（面板头「⋯ → 回收站…」）。
     ///
-    /// 回收站只有一套（模块硬约束 5）：入口先留着，等 `ProjectTrash` 上提后接上。
+    /// 回收站是**项目级**的（与草稿箱共用一处，模块硬约束 5）：对话框只列本模块的条目，
+    /// 别人的只给一句说明（还原归它自己的模块）。
     fn request_open_trash(&self, window: &mut Window, cx: &mut App);
     /// 重新取数（面板头「⋯ → 刷新」）。
     ///

@@ -13,13 +13,16 @@
 //!   编辑器 `persist::open_file_read_only`）；路径由 `PayloadStore::resolve` 解析（守卫在那一层）。
 //! - **取回**：取回对话框 → 入队后台任务 → 回执与"顺手打开"由侧栏轮询印做。
 //! - **撤销归档**：撤销栏的凭据原样交给工作线程（本体移回原位 + 删登记行）。
+//! - **移入回收站**：单选与多选都是真实现——一次提交整批给工作线程，本体进项目级
+//!   `ProjectTrash`、登记行软删（还原能恢复别名 / 标签 / 指纹，回收站 manifest 里没有这些）。
+//! - **回收站…**：取数（后台线程读条目 manifest）→ 回收站对话框（还原 / 永久删除 / 清空）。
+//!   对话框只列**本模块的**条目（`origin = "resources"`），别人的只给一句说明——
+//!   共用一处回收站不代表可以在对方的界面里动对方的东西。
 //! - 面板头「⋯」四项：**打开资源目录**（系统文件管理器开 `resources/`）、**刷新**（同一条取数路径）
-//!   与 **重建索引…**（扫描 → 索引修复对话框）是真实现；**回收站…** 沿用下一条的明确回执
-//!   ——入口先摆出来，点了说清为什么没动，而不是给一个点不动的按钮。
-//! - 移入回收站：一律走项目级 `ProjectTrash`，而上提尚未落地（P0.8）——**不做**先软删
-//!   再等回收站那条（会变成两套回收站，违反模块硬约束 5）；
+//!   与 **重建索引…**（扫描 → 索引修复对话框）、**回收站…** 都是真实现。
 //! - 索引修复：扫描（后台线程，逐个本体算 sha256）→ 对话框三分组 → 行内动作
-//!   （补登 / 删记录 / 接受当前内容 / 打开版本历史）；“从回收站还原”摆着但置灰（等 P0.8）。
+//!   （补登 / 删记录 / 接受当前内容 / 打开版本历史）；「从回收站还原」走
+//!   `restore_archive_by_rel_path`（那一组行只有登记记录，手上没有回收站条目 id）。
 //!
 //! 回执而不是空操作：面板上的按钮是既有入口，点了没反应比"明确说还没接入"更难排查。
 
@@ -485,17 +488,25 @@ impl ResourcesHost for WorkbenchResourceHost {
     }
 
     fn request_delete(&self, resource_ids: &[String], _window: &mut Window, cx: &mut App) {
-        // 多选批量与单选同一条路：批量时把数量说清楚（回执是当前唯一的反馈）。
-        let scope = match resource_ids.len() {
+        let Some(root) = self.require_project("无法移入回收站", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能移入回收站", cx);
+            return;
+        }
+        // 多选批量与单选同一条路：一次提交整批（服务层逐条走，部分成功会在错误里交代）。
+        let ids = resource_ids.to_vec();
+        let scope = match ids.len() {
             0 => return,
             1 => String::new(),
             count => format!("（已选 {count} 项）"),
         };
-        self.pending(
-            &format!("移入回收站尚未接入{scope}"),
-            "（等项目级回收站上提，P0.8；不做两套回收站）",
-            cx,
-        );
+        // 回收站是**项目级**的（与草稿箱共用 `.RSmeta/trash`）：搬本体与软删登记行
+        // 都在服务层一次完成，宿主不自己拼回收站路径（不做两套回收站）。
+        resource_jobs::enqueue_trash(root, self.read_only(), ids);
+        self.shared.refresh_resources(cx);
+        self.notice(format!("资产库：正在移入回收站{scope}…"), cx);
     }
 
     fn request_reveal(&self, detail: &ArchiveDetail, _window: &mut Window, cx: &mut App) {
@@ -561,11 +572,13 @@ impl ResourcesHost for WorkbenchResourceHost {
     }
 
     fn request_open_trash(&self, _window: &mut Window, cx: &mut App) {
-        self.pending(
-            "资源回收站尚未接入",
-            "（等项目级回收站上提，P0.8；不做两套回收站）",
-            cx,
-        );
+        let Some(root) = self.require_project("无法打开回收站", cx) else {
+            return;
+        };
+        // 取数在后台线程（读 `.RSmeta/trash` 里每个条目的 manifest）；
+        // 回来之后由侧栏轮询开窗（开窗要 `Window`，轮询任务里没有）。
+        resource_jobs::enqueue_trash_list(root);
+        self.notice("资产库：正在读取回收站…", cx);
     }
 
     fn request_refresh(&self, _window: &mut Window, cx: &mut App) {

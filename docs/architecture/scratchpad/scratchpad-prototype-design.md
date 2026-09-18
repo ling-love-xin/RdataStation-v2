@@ -313,7 +313,7 @@ flowchart TD
 - 还原按 `origin + original_rel_path` 放回；同名自动改名（`_1`），不覆盖。
 - 草稿箱的还原入口只接受 `origin == scratchpad` 的条目；其他来源报错并提示在其模块中还原。
 - 旧 `.scratchpad/.trash` 与上一版 `.RSmeta/scratchpad/.trash` 均一次性并入。
-- 代码：`crates/scratchpad/src/trash.rs`（`ProjectTrash` / `TrashEntry` / `TrashManifest`）。
+- 代码：`crates/engine/src/persistence/trash.rs`（`ProjectTrash` / `TrashEntry` / `TrashManifest`；P0.8 上提中性化）。
 
 ### 9.2 文件元数据 / 数据源引用 / 外部引用路径
 

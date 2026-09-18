@@ -55,3 +55,15 @@ pub const VERSION_COL_COPY: f32 = 5.0;
 pub const REPAIR_DIALOG_WIDTH: f32 = 54.0;
 /// 修复列表最大高度（24.0rem = 384px）：未登记文件可能一次报出几十条，靠滚动。
 pub const REPAIR_LIST_MAX_HEIGHT: f32 = 24.0;
+/// 回收站对话框宽（40.0rem = 640px；原型 §7.1——列表 + 操作列）。
+pub const TRASH_DIALOG_WIDTH: f32 = 40.0;
+/// 回收站列表最大高度（20.0rem = 320px）：条目只增不减，靠滚动而不是加高对话框。
+pub const TRASH_LIST_MAX_HEIGHT: f32 = 20.0;
+/// 回收站表格的列宽（rem）：固定宽 + 原位置列弹性，避免长短路径抽动列位。
+pub const TRASH_COL_NAME: f32 = 9.0;
+/// 见 [`TRASH_COL_NAME`]。
+pub const TRASH_COL_TIME: f32 = 7.5;
+/// 见 [`TRASH_COL_NAME`]。
+pub const TRASH_COL_SIZE: f32 = 4.0;
+/// 见 [`TRASH_COL_NAME`]（两个小按钮：还原 / 永久删除）。
+pub const TRASH_COL_ACTION: f32 = 9.0;

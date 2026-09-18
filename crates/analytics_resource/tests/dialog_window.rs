@@ -32,6 +32,9 @@ use rds_analytics_resource::dialogs::index_repair::{
 use rds_analytics_resource::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
 };
+use rds_analytics_resource::dialogs::trash::{
+    ForeignTrash, TrashDialogSeed, TrashDialogState, TrashRow, open_trash_dialog_with,
+};
 use rds_analytics_resource::dialogs::version::{
     VersionDialogSeed, VersionDialogState, VersionRow, open_version_dialog_with,
 };
@@ -460,4 +463,68 @@ fn index_repair_dialog_groups_rows_and_shows_inline_actions(cx: &mut TestAppCont
         "修复不该把对话框关掉"
     );
     assert_eq!(closed.get(), 0);
+}
+
+fn trash_row(id: &str) -> TrashRow {
+    TrashRow {
+        trash_id: id.to_string(),
+        name: format!("dau_{id}.sql"),
+        original_label: format!("resources/dau_{id}.sql"),
+        kind_label: "文件".to_string(),
+        time_label: "2026-09-18 10:00".to_string(),
+        size_label: "1.2 KB".to_string(),
+    }
+}
+
+#[gpui_kit::test]
+fn trash_dialog_lists_own_rows_and_keeps_the_shared_store_visible(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let state = TrashDialogState::new();
+    let seed = TrashDialogSeed {
+        rows: vec![trash_row("t1")],
+        // 别人的条目：只出一句说明，不进行列表（所以没有 trash-restore-1 这种行）。
+        foreign: vec![ForeignTrash {
+            module_label: "草稿箱".to_string(),
+            count: 2,
+        }],
+    };
+    {
+        cx.update(|window, cx| {
+            open_trash_dialog_with(
+                window,
+                cx,
+                seed,
+                state.clone(),
+                move |_action, _window, _cx| {},
+                move |_cx| {},
+            );
+        });
+    }
+    draw(cx);
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "回收站对话框应打开"
+    );
+    assert!(cx.debug_bounds("trash-close").is_some());
+    assert!(cx.debug_bounds("trash-empty").is_some(), "清空是常态入口");
+    assert!(
+        cx.debug_bounds("trash-restore-0").is_some(),
+        "自己的条目给还原"
+    );
+    assert!(cx.debug_bounds("trash-purge-0").is_some());
+    assert!(
+        cx.debug_bounds("trash-restore-1").is_none(),
+        "别人的条目不能出现在行列表里"
+    );
+
+    // 宿主换空行（刚清空 / 刚全还原）：行消失，对话框不关掉。
+    state.set_rows(Vec::new());
+    draw(cx);
+    assert!(cx.debug_bounds("trash-restore-0").is_none());
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "换行不该把对话框关掉"
+    );
 }

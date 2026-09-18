@@ -520,7 +520,7 @@ multi-root 会把三件事的复杂度抬高一个量级：项目会话（一个
 
 | 设计点 | 代码落点 |
 | --- | --- |
-| 根 / 元数据 / 回收站路径 | `crates/scratchpad/src/store.rs::{new, ensure_dir, META_DIR_NAME, MODULE_DIR_NAME}`、`trash.rs::ProjectTrash::new` |
+| 根 / 元数据 / 回收站路径 | `crates/scratchpad/src/store.rs::{new, ensure_dir, META_DIR_NAME, MODULE_DIR_NAME}`；回收站已上提到 `crates/engine/src/persistence/trash.rs`（`ProjectTrash::new`，P0.8；`scratchpad` 仅重导出） |
 | 旧布局迁移 | `store.rs::migrate_legacy_layout` |
 | 路径防护 | `store.rs::{resolve_path_impl, validate_name, relative_path_of}`（`relative_path_of` = 反向：绝对路径 → 模块内相对路径，供「这个路径是不是草稿」的判定） |
 | 列表 / 懒加载 | `store.rs::{list_local_entries, list_directory_entries, scan_dir_tree}` |

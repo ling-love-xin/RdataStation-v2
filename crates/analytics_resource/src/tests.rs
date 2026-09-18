@@ -146,41 +146,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn t004_soft_delete_and_restore() {
-        let (store, dir) = create_test_store().await;
-        let created = store
-            .create_resource(CreateResourceRequest {
-                resource_type: "table".to_string(),
-                name: "to_delete".to_string(),
-                config: serde_json::json!({}),
-                scope: "project".to_string(),
-                alias: None,
-                source_query: None,
-                column_count: None,
-                file_size: None,
-                row_count: None,
-                parent_resource_id: None,
-            })
-            .await
-            .expect("create");
-
-        store.delete_resource(&created.id).await.expect("delete");
-
-        let remaining = store.list_resources(None, None, None).await.expect("list");
-        assert_eq!(remaining.len(), 0);
-
-        let recycle = store.get_recycle_items().await.expect("recycle");
-        assert_eq!(recycle.len(), 1);
-
-        let restored = store
-            .restore_from_recycle(&recycle[0].id)
-            .await
-            .expect("restore");
-        assert_eq!(restored.name, "to_delete");
-        cleanup(dir);
-    }
-
-    #[tokio::test]
     async fn t005_resource_not_found() {
         let (store, dir) = create_test_store().await;
         let result = store.get_resource_by_id("nonexistent").await;
@@ -468,23 +433,6 @@ mod tests {
             )
             .await;
         assert!(result.is_err(), "update non-existent should fail");
-
-        let result = store.delete_resource("nonexistent-id").await;
-        assert!(result.is_err(), "delete non-existent should fail");
-
-        drop(store);
-        cleanup(dir);
-    }
-
-    #[tokio::test]
-    async fn t014_restore_nonexistent_recycle() {
-        let (store, dir) = create_test_store().await;
-
-        let result = store.restore_from_recycle("nonexistent-recycle-id").await;
-        assert!(
-            result.is_err(),
-            "restore from non-existent recycle should fail"
-        );
 
         drop(store);
         cleanup(dir);

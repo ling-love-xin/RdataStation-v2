@@ -3,12 +3,11 @@
 //! 与面板同一纪律：**纯渲染 + 纯数据**——取值全部来自宿主推来的 [`ArchiveDetail`]（已格式化），
 //! render 期零 I/O、零计算。
 //!
-//! 本批只做**只读信息区**（头部 / 基本信息 / 来源 / 版本 / 标签与分组）。危险区与
-//! 版本历史等**动作按钮**随对话框批接入（需要宿主回调，见开发方案 Phase 1）；此处不摆按钮，
-//! 避免出现"点了没反应"的入口。
+//! 本批做**只读信息区**（头部 / 基本信息 / 来源 / 版本 / 标签与分组）+ **动作区**（打开（只读）/ 取回（检出）…）
+//! + **危险区**（移入回收站）。动作按钮一律经宿主端口（`DetailActions`），crate 不认识服务层。
 
 use gpui_kit::base::{Disableable as _, StyledExt};
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable as _};
 use gpui_kit::*;
 
@@ -333,13 +332,16 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
     }
 
     // 动作区：只读存档的两个真动作（打开（只读）/ 取回（检出）…）——
-    // 取回是**唯一的编辑入口**。其余动作各自被挡着（移入回收站 = P0.8、
-    // 标签 / 版本历史 = Phase 2/3），**不提前摆点不动的入口**。
+    // 取回是**唯一的编辑入口**；其余动作各自有各自的批（标签 / 重命名 = Phase 2）。
     if let Some(actions) = actions {
         let missing = detail.status == ArchiveStatus::Missing;
         let changed = detail.status == ArchiveStatus::ContentChanged;
         let can_open = !missing && detail.payload_rel_path.is_some();
         let can_checkout = !missing && !changed && !actions.read_only;
+        // 危险区（原型 §3.1）：与日常动作隔开（分隔线 + danger 文字按钮）。
+        // 引用型没有本体，回收站里没有它的东西；本体缺失的该去索引修复（服务层也会拒）。
+        let has_payload = detail.payload_rel_path.is_some();
+        let can_delete = !missing && has_payload && !actions.read_only;
         // 禁用时给的理由要**指向出口**（去哪儿处理），不是一句"不可用"。
         let hint = if missing {
             "本体缺失，先在状态行「修复…」处理"
@@ -350,10 +352,20 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
         } else {
             "打开 = 只读查看本体；取回 = 复制一份可写的工作副本（本体不动）"
         };
+        let delete_hint = if missing {
+            "本体缺失：先走索引修复（回收站里没有它的本体）"
+        } else if !has_payload {
+            "引用型没有本体，没有可移入回收站的东西"
+        } else if actions.read_only {
+            "项目处于只读模式"
+        } else {
+            "本体与登记记录一起进项目级回收站，之后可从面板头「⋯ → 回收站…」还原"
+        };
         let host = actions.host.clone();
         // 闭包是 `Fn`（每帧重建），且它比 `detail` 活得久——拷一份带走。
         let detail_for_open = detail.clone();
         let detail_for_checkout = detail.clone();
+        let detail_for_delete = detail.clone();
         body = body.child(
             div()
                 .v_flex()
@@ -392,7 +404,38 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
                                 }),
                         ),
                 )
-                .child(div().text_xs().text_color(muted).child(hint)),
+                .child(div().text_xs().text_color(muted).child(hint))
+                .child(
+                    div()
+                        .v_flex()
+                        .w_full()
+                        .gap_1()
+                        .mt_2()
+                        .pt_2()
+                        .border_t(px(1.0))
+                        .border_color(border)
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(tone_color.danger)
+                                .child("危险区"),
+                        )
+                        .child(
+                            Button::new("archive-detail-delete")
+                                .with_variant(ButtonVariant::Danger)
+                                .label("移入回收站")
+                                .disabled(!can_delete)
+                                .on_click({
+                                    let host = host.clone();
+                                    let detail = detail_for_delete.clone();
+                                    move |_, window, cx| {
+                                        host.request_delete(&[detail.id.clone()], window, cx)
+                                    }
+                                }),
+                        )
+                        .child(div().text_xs().text_color(muted).child(delete_hint)),
+                ),
         );
     }
 

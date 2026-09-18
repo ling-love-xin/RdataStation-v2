@@ -193,6 +193,23 @@ pub struct CheckoutOutcome {
     pub dest_path: PathBuf,
 }
 
+/// 回收站条目的来源标记：本模块（原型 §4.7）。
+///
+/// 与 `scratchpad::ORIGIN_SCRATCHPAD` 对位：回收站层只如实记录来源，
+/// “跨模块还原必须被拒”的校验在各自的服务层。值取本体目录名——
+/// 两者概念上是同一个东西，不要各写一份字面量。
+pub const ORIGIN_RESOURCES: &str = crate::payload::RESOURCES_DIR_NAME;
+
+/// 移入回收站的结果（一条存档一项；顺序与入参一致）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashArchiveEntry {
+    pub resource_id: String,
+    /// 存档显示名（回执文案用）。
+    pub name: String,
+    /// 回收站条目 id（还原要用它）。
+    pub trash_id: String,
+}
+
 /// 变更原因：事件必须带原因，面板据此决定局部更新还是整表刷新（架构 §6.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeReason {
@@ -206,6 +223,10 @@ pub enum ChangeReason {
     Undone,
     /// 从版本历史还原（旧内容 → 生成新版本，与 `Updated` 的区别在发起方与文案）。
     Restored,
+    /// 移入项目级回收站（本体进 `.RSmeta/trash` + 登记行软删）。
+    Trashed,
+    /// 从项目级回收站还原（本体回原位 + 登记行复活）。
+    Untrashed,
 }
 
 /// 资产库变更事件。

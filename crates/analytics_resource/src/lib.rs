@@ -9,7 +9,9 @@
 //! - `models`：持久层行模型（v1 搬运，逐步并入 `model`）
 //! - `resource` / `folder` / `tag` / `version`：索引层（`project.db`）
 //! - `resource_view` / `detail_view` / `dialogs`：视图层（面板 / 详情 / 对话框；都不自己取数）
-//! - `recycle`：v1 回收站实现（**待废弃**：改走项目级 `ProjectTrash`，见开发方案 P0.8）
+//!
+//! 回收站：v1 的 `recycle.rs`（软删除表）已随 P0.8 废弃，统一走项目级
+//! `engine::persistence::trash::ProjectTrash`（`origin = "resources"`）。
 //!
 //! 依赖方向：analytics_resource → engine（persistence::project_db）→ shared。
 //! 设计权威：`docs/architecture/analytics_resource/`。
@@ -36,7 +38,6 @@ pub mod service;
 pub mod ui;
 
 pub mod folder;
-pub mod recycle;
 pub mod resource;
 pub mod tag;
 pub mod version;

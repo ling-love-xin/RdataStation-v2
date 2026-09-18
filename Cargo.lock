@@ -8097,6 +8097,7 @@ dependencies = [
  "gpui-kit",
  "notify",
  "opener",
+ "rds-engine",
  "rds-paths",
  "rds-shared",
  "rds-workbench-shell",

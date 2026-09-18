@@ -11,7 +11,7 @@ use crate::models::{
     FileMeta, ReplaceResult, ScratchpadConfig, ScratchpadEntry, ScratchpadEntryKind,
     ScratchpadResponse, SearchMatch, SearchResult,
 };
-use crate::trash::{ProjectTrash, TrashEntry};
+use engine::persistence::trash::{ProjectTrash, TrashEntry, TrashKind};
 use shared::error::{CoreError, StorageError};
 
 const MAX_DEPTH: u32 = 4;
@@ -505,12 +505,24 @@ impl ScratchpadStore {
         Ok(())
     }
 
-    /// 列出项目级回收站条目（含来源模块，便于面板统一展示）。
+    /// 列出**草稿箱的**回收站条目。
+    ///
+    /// 回收站是项目级的（与资产库共用一处）：这里按来源过滤——别的模块的条目该在它自己的
+    /// 界面里还原 / 删除，摆到草稿箱的列表里再拒一次还原只是噪声。
     pub async fn list_trash(&self) -> Result<Vec<TrashEntry>, CoreError> {
-        self.trash.list().await
+        Ok(self
+            .trash
+            .list()
+            .await?
+            .into_iter()
+            .filter(|entry| entry.manifest.origin == ORIGIN_SCRATCHPAD)
+            .collect())
     }
 
     /// 从回收站还原到草稿箱；条目属于其他模块时报错（应在其模块中还原）。
+    ///
+    /// 回收站层不做 origin 校验（它只是如实记录来源）——“跨模块还原必须被拒”是调用方
+    /// 的纪律，就在这里。
     pub async fn restore_from_trash(&self, trash_id: &str) -> Result<ScratchpadEntry, CoreError> {
         let entry = self.trash.get(trash_id).await?;
         if entry.manifest.origin != ORIGIN_SCRATCHPAD {
@@ -523,11 +535,28 @@ impl ScratchpadStore {
                 ),
             ));
         }
-        self.trash.restore(trash_id, &self.scratchpad_dir).await
+        let restored = self.trash.restore(trash_id, &self.scratchpad_dir).await?;
+        // 中性结果 → 草稿箱条目：这一层转换本来就是调用方的活。
+        Ok(ScratchpadEntry {
+            name: restored.name,
+            path: restored.path,
+            kind: match restored.kind {
+                TrashKind::Folder => ScratchpadEntryKind::Folder,
+                TrashKind::File => ScratchpadEntryKind::File,
+            },
+            size: restored.size,
+            modified_at: Some(Utc::now().to_rfc3339()),
+            children: (restored.kind == TrashKind::Folder).then(Vec::new),
+        })
     }
 
+    /// 清空**草稿箱的**回收站条目。
+    ///
+    /// 不走 `ProjectTrash::empty`（那是整仓）：仓库是共用的，把资产库的条目一起删掉不是“清空”，
+    /// 是越权（模块硬约束 5 的另一面：只有一套回收站，但每个模块只能动自己的）。
     pub async fn empty_trash(&self) -> Result<(), CoreError> {
-        self.trash.empty().await
+        self.trash.empty_origin(ORIGIN_SCRATCHPAD).await?;
+        Ok(())
     }
 
     pub async fn rename_entry(

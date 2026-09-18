@@ -28,8 +28,8 @@
 
 - 位置 `.RSmeta/trash/`；条目为 `trash/<id>/{payload, manifest.json}`。
 - `manifest` 记录 `origin`（来源模块）+ `original_rel_path`（原相对路径）+ `kind/size/deleted_at`，因此还原能回到原模块、原路径（同名自动改名，不覆盖）。
-- 草稿箱的还原入口**只接受 `origin == "scratchpad"`**，其他来源报错提示在其模块中还原。
-- API 按模块无关设计：待 M6 落地后若确认为稳定共用能力，再按「≥2 使用方」规则上提到 `shared`/`engine`。
+- 草稿箱的还原入口**只接受 `origin == "scratchpad"`**，其他来源报错提示在其模块中还原；列表与「清空」也**按来源过滤**（`list_trash` / `empty_trash`）——共用一处仓库，但每个模块只能动自己的东西。
+- 类型已按「≥2 使用方」规则**上提到 `engine::persistence::trash`**（P0.8，中性化：来源是字符串 `origin`、还原不再返回 M5 类型、`empty_origin(origin)` 按来源清空）；`scratchpad` 侧保留重导出，旧路径仍可用。
 
 ### 3. 隔离边界：窗口 = 项目
 
@@ -58,8 +58,8 @@
 | 文件 | 职责 |
 | --- | --- |
 | `src/models.rs` | 域模型：`ScratchpadEntry` / `FileMeta`（+ `preferred_connection()`：显式绑定优先、其次最近执行） / `ExternalReference` / `ExternalReferenceStatus` / 搜索 / Diff / 替换 |
-| `src/store.rs` | `ScratchpadStore`：列表（懒加载按目录）、CRUD、**递归复制**、回收站入口、内容搜索（子串/正则/大小写 + **命中区间**）、替换（正则/字面量 + 大小写）、Diff、外部引用（含**重新定位**）、可分析文件、路径防护（含反向的 `relative_path_of`）、旧布局迁移、文件元数据读写（`file_meta` / `bind_connections` / `update_file_meta`） |
-| `src/trash.rs` | `ProjectTrash`：项目级回收站（`TrashManifest` / `TrashEntry`，含来源与原路径） |
+| `src/store.rs` | `ScratchpadStore`：列表（懒加载按目录）、CRUD、**递归复制**、回收站入口（按来源过滤的列表 / 还原 / 清空）、内容搜索（子串/正则/大小写 + **命中区间**）、替换（正则/字面量 + 大小写）、Diff、外部引用（含**重新定位**）、可分析文件、路径防护（含反向的 `relative_path_of`）、旧布局迁移、文件元数据读写（`file_meta` / `bind_connections` / `update_file_meta`） |
+| ~~`src/trash.rs`~~ | 已上提到 `engine::persistence::trash`（`ProjectTrash` / `TrashManifest` / `TrashEntry` / `TrashKind` / `TrashRestoreOutcome`；P0.8）——`crate::lib.rs` 重导出保持旧路径可用 |
 | `src/watch.rs` | `ScratchpadWatcher` / `ChangeFlag`：模块目录文件监控（**外部改动 → 变更标记**，视图侧去抖重拉；只监听内容目录，`.RSmeta` 不在范围内） |
 | `src/state.rs` | `ScratchpadState`：按项目初始化 store + watcher 标志（**当前无生产调用方**；监控器已自持生命周期，接入时须按窗口持有） |
 | `src/jobs.rs` | 后台任务：单工作线程 + tokio 运行时执行加载与重操作（导入 / 粘贴 / 清空回收站 / 搜索 / 替换 / **冲突 Diff**），结果队列 + 请求序号防过期（视图只入队 / 轮询 / 回填） |
@@ -67,14 +67,14 @@
 | `src/host.rs` | `ScratchpadHost` 端口（**本 crate 定义、宿主实现**）：项目根 / 只读判定 / 状态栏提示 / 宿主重绘 / 搜索结果投递 / 在编辑器打开文件 / 脏文档集合（`dirty_files`）/ 缓冲区读写（`draft_content` / `reload_draft`）/ 冲突 Diff 投递（`show_diff`） |
 | `src/commands.rs` | 面板键盘动作（`Scratchpad*` 系列 Action） |
 
-- 依赖方向：`scratchpad → workbench_shell / gpui-kit / shared`（**不依赖 workbench**；宿主能力经 `ScratchpadHost` 端口注入，实现在 `workbench/src/components/scratchpad_host.rs`）。模板：`[dev-dependencies]` 必须打开 `paths/test-support`（测试数据根隔离，见 `docs/architecture/runtime/data-paths.md` §5）。
+- 依赖方向：`scratchpad → workbench_shell / gpui-kit / shared / engine`（**不依赖 workbench**；宿主能力经 `ScratchpadHost` 端口注入，实现在 `workbench/src/components/scratchpad_host.rs`）。依赖 `engine` 的理由只一条：回收站已上提到 `engine::persistence::trash`（P0.8）。模板：`[dev-dependencies]` 必须打开 `paths/test-support`（测试数据根隔离，见 `docs/architecture/runtime/data-paths.md` §5）。
 
 ## 能力状态
 
 | 已实现 | 待补 |
 | --- | --- |
 | 模块根 + 内部态隔离 + 旧布局迁移 | 系统文件拖入树导入（无 OS 拖放入口，暂用工具栏 `⬇`） |
-| 项目级回收站（来源/原路径/还原/清空） | 拖放导入 / 拖入编辑器（Phase C） |
+| 项目级回收站（来源/原路径/还原/清空，均按来源过滤） | 拖放导入 / 拖入编辑器（Phase C） |
 | 列表/新建（含模板）/重命名/删除/移动/复制（文件与**文件夹递归**） | — |
 | 打开草稿到编辑器 + 按 `file_meta` 预选连接 + **执行后回写**最近连接 | — |
 | **冲突 Diff**（外部改动 + 编辑器有未保存修改 → 冲突条：差异 / 重载 / 忽略；差异行级落中央编辑区） | — |

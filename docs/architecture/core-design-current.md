@@ -266,8 +266,8 @@ NavView → nav_jobs（后台线程 + 独立 tokio 运行时）→ NavigatorServ
 | **M2 engine** | 双引擎基础设施 + 统一数据访问层 | `SqlService` / `ConnectionManager` / `DuckDBManager` / `MetadataCacheManager` | 活的 11 个缓存方法 + 6 个 Manager 方法；~150 项零调用 |
 | **M3 connection** | 传输层：协议链 + URL + DuckDB Secret | `chain::apply_network_method` / `TunnelRegistry` / `SecretManager` | 编排在 workbench；SSH 主机密钥默认放行、Secret 无门控不清理 |
 | **M4 database** | 元数据导航 + 属性面板 | `MetadataService` / `NavigatorService` / `NavCache` | 最健康；`delete_schema` / `prune_schema` 已修 |
-| **M5 scratchpad** | 文件语义草稿区 + 项目级回收站 | `ScratchpadStore` / `jobs` / `ScratchpadHost` | 活；`config.json` 非原子写、删除/改名不查编辑器脏状态 |
-| **M6 analytics_resource** | 只读、有版本、带来源的正式存档 | `ArchiveService` / `PayloadStore` / `IndexRepair` / `ResourcesHost` | 闭环完整 + 92 单测；`ProjectTrash` 仍住 scratchpad（P0.8 未做） |
+| **M5 scratchpad** | 文件语义草稿区 + 项目级回收站（按来源只看自己的） | `ScratchpadStore` / `jobs` / `ScratchpadHost` | 活；`config.json` 非原子写、删除/改名不查编辑器脏状态；回收站类型已上提到 `engine::persistence::trash`（P0.8） |
+| **M6 analytics_resource** | 只读、有版本、带来源的正式存档 | `ArchiveService` / `PayloadStore` / `IndexRepair` / `ResourcesHost` | 闭环完整 + 104 单测；回收站（移入 / 还原 / 永久删除 / 清空 + 对话框）已落，共用 `engine::persistence::trash` |
 | **M7 mock** | 输入列定义 → 输出可信测试数据（不读真实数据） | `MockEngine` / `MockHost` | 生成/预览/落库活；策略层在 workbench（与 `mock/history.rs` 口径相反） |
 | **M8 insight** | DuckDB 为中心的画像 + TOML 规则引擎 | `InsightService` / `InsightView` | 面板路径按 D29 只用 DuckDB 临时表；源库侧 3 函数是登记在册欠账（已留痕） |
 | **M9 plugin** | WASM / Sidecar 宿主 | 无 | ❌ 整包无调用方；两个 0 字节模块；`SidecarClient` 判据反了 |

@@ -36,6 +36,7 @@ pub mod project_connection_store;
 pub mod project_db;
 pub mod project_store;
 pub mod sql_template_store;
+pub mod trash;
 pub mod workbench_context_store;
 
 pub use cache_version_migration::{CacheVersionManager, CURRENT_CACHE_VERSION};
@@ -58,6 +59,7 @@ pub use workbench_context_store::{EditorContext, WorkbenchContextStore, Workbenc
 
 pub use driver_catalog::{DriverMeta, load as load_driver_catalog};
 pub use log_store::LogStore;
+pub use trash::{ProjectTrash, TrashEntry, TrashKind, TrashManifest, TrashRestoreOutcome};
 
 use shared::error::{CoreError, StorageError};
 use std::path::Path;

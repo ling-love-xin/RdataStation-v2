@@ -22,6 +22,7 @@ use gpui_kit::*;
 use crate::view::LeftPanel;
 
 use analytics_resource::dialogs::index_repair::{RepairDialogState, open_index_repair_dialog};
+use analytics_resource::dialogs::trash::{TrashDialogState, open_trash_dialog};
 use analytics_resource::dialogs::version::{VersionDialogState, open_version_dialog};
 use analytics_resource::resource_view::ResourcesPanel;
 use database::nav_view::NavView;
@@ -194,6 +195,40 @@ impl SidebarPanel {
         );
     }
 
+    /// 消费「待开的回收站对话框」（M6）：与索引修复同一形态（见 `ensure_repair_dialog`）。
+    ///
+    /// 项目级回收站一个项目只有一处，同样一次只开一个：关窗就把会话清掉
+    /// （下次取数回来重新开，拿到的是当时的最新条目）。
+    fn ensure_trash_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(seed) = self.shared.trash_dialog.borrow_mut().pending.take() else {
+            return;
+        };
+        let read_only = self.shared.project_ui.borrow().read_only;
+        let state = TrashDialogState::new();
+        state.set_read_only(read_only);
+        state.set_rows(seed.rows.clone());
+        state.set_foreign(seed.foreign.clone());
+        {
+            let mut flow = self.shared.trash_dialog.borrow_mut();
+            flow.session = Some(shared::TrashDialogSession { state: state.clone() });
+        }
+
+        let entity = cx.entity();
+        let shared_for_close = self.shared.clone();
+        open_trash_dialog(
+            window,
+            cx,
+            seed,
+            state,
+            move |action, _window, cx| {
+                entity.update(cx, |this, cx| this.request_trash_action(action, cx));
+            },
+            move |_cx| {
+                shared_for_close.trash_dialog.borrow_mut().session = None;
+            },
+        );
+    }
+
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
         div()
             .v_flex()
@@ -235,9 +270,10 @@ impl Focusable for SidebarPanel {
 
 impl Render for SidebarPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // M6：版本历史对话框与索引修复对话框的待开数据都在这一帧消费（开窗要 `Window`）。
+        // M6：版本历史 / 索引修复 / 回收站三个对话框的待开数据都在这一帧消费（开窗要 `Window`）。
         self.ensure_version_dialog(window, cx);
         self.ensure_repair_dialog(window, cx);
+        self.ensure_trash_dialog(window, cx);
         let bg = cx.theme().colors.background;
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();

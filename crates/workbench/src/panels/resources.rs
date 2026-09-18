@@ -18,6 +18,7 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
 use analytics_resource::dialogs::index_repair::RepairAction;
+use analytics_resource::dialogs::trash::TrashAction;
 use analytics_resource::dialogs::version::VersionAction;
 use analytics_resource::resource_view::{ResourcesPanel, ResourcesSnapshot};
 
@@ -105,6 +106,37 @@ impl SidebarPanel {
         self.ensure_resources_pump(cx);
     }
 
+    /// 执行一个回收站动作（回收站对话框的行内动作与「清空」经此入队）。
+    ///
+    /// 忙态由对话框自己置上（按钮立即置灰），这里只负责校验与送作业。
+    pub(crate) fn request_trash_action(&self, action: TrashAction, cx: &mut Context<Self>) {
+        let read_only = self.shared.project_ui.borrow().read_only;
+        let Some(root) = self.shared.project_root() else {
+            self.finish_trash_action("还没有打开项目".to_string(), cx);
+            return;
+        };
+        if read_only {
+            self.finish_trash_action("项目为只读模式，不能改回收站".to_string(), cx);
+            return;
+        }
+        resource_jobs::enqueue_trash_action(root, read_only, action);
+        self.ensure_resources_pump(cx);
+    }
+
+    /// 收掉回收站对话框的忙态并给状态栏回执（入队被挡、取数 / 动作失败都走它）。
+    fn finish_trash_action(&self, message: String, cx: &mut Context<Self>) {
+        {
+            let flow = self.shared.trash_dialog.borrow();
+            if let Some(session) = flow.session.as_ref() {
+                session.state.set_busy(false);
+                session.state.set_note(Some(message.clone()));
+            }
+        }
+        *self.shared.notice.borrow_mut() = Some(format!("资产库：{message}"));
+        self.shared.notify_host(cx);
+        cx.notify();
+    }
+
     /// 收掉修复对话框的忙态并给状态栏回执（入队被挡、扫描 / 动作失败都走它）。
     fn finish_repair_action(&self, message: String, cx: &mut Context<Self>) {
         {
@@ -174,6 +206,14 @@ impl SidebarPanel {
                 if let Some(result) = resource_jobs::drain_index_scan() {
                     if weak
                         .update(cx, |this, cx| this.apply_index_scan(result, cx))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                if let Some(result) = resource_jobs::drain_trash_rows() {
+                    if weak
+                        .update(cx, |this, cx| this.apply_trash_rows(result, cx))
                         .is_err()
                     {
                         return;
@@ -279,6 +319,39 @@ impl SidebarPanel {
         }
     }
 
+    /// 回填一份回收站取数结果（开窗 / 换行都由它驱动，与 `apply_index_scan` 同形）。
+    fn apply_trash_rows(
+        &mut self,
+        result: Result<analytics_resource::dialogs::trash::TrashDialogSeed, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(seed) => {
+                let mut opened = false;
+                {
+                    let mut flow = self.shared.trash_dialog.borrow_mut();
+                    if let Some(session) = flow.session.as_ref() {
+                        session.state.set_busy(false);
+                        session.state.set_note(None);
+                        session.state.set_rows(seed.rows.clone());
+                        session.state.set_foreign(seed.foreign.clone());
+                        opened = true;
+                    }
+                    if !opened {
+                        flow.pending = Some(seed);
+                    }
+                }
+                if !opened {
+                    self.shared.notify_host(cx);
+                    cx.notify();
+                }
+            }
+            Err(err) => {
+                self.finish_trash_action(format!("读取回收站失败：{err}"), cx);
+            }
+        }
+    }
+
     /// 动作回执：状态栏文案 +（取回时）顺手打开 + 失败原样转述。
     ///
     /// 文案在**这里**组装（不在工作线程）：换算相对路径要项目根，写状态栏要 `Shared`——
@@ -323,8 +396,15 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::Undone { name } => {
                 format!("资产库：已撤销归档「{name}」（本体已回到原位置）")
             }
+            // 回收站是项目级的：回执里把“去哪儿找回来”说清，比只说“已移入”有用。
+            resource_jobs::OpOutcome::Trashed { names } => match names.as_slice() {
+                [only] => format!("资产库：已把「{only}」移入回收站（面板头「⋯ → 回收站…」）"),
+                many => format!("资产库：已把 {} 项移入回收站", many.len()),
+            },
             resource_jobs::OpOutcome::VersionActionDone { note } => format!("资产库：{note}"),
             resource_jobs::OpOutcome::RepairDone { note } => format!("资产库：{note}"),
+            // 回收站动作（还原 / 永久删除 / 清空）：对话框自己会换行，状态栏只把话说清。
+            resource_jobs::OpOutcome::TrashDone { note } => format!("资产库：{note}"),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
             }

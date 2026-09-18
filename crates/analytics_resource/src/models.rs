@@ -70,17 +70,6 @@ pub struct AnalyticsTag {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct AnalyticsRecycleItem {
-    pub id: String,
-    pub resource_id: String,
-    pub resource_type: String,
-    pub resource_name: String,
-    pub resource_data: Value,
-    pub deleted_by: Option<String>,
-    pub deleted_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ResourceVersion {
     pub id: String,
     pub resource_id: String,
