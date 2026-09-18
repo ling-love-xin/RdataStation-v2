@@ -3,7 +3,7 @@
 > **一句话**：把数据变成**结论**——「这份数据长什么样」（库 / 表 / 列画像）与「它能不能用」（四维质量评分），并把「新增一种洞察」从改 Rust 降级为**加一个 TOML 规则文件**（内置 16 条，用户可扩展）。
 >
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**Phase 5 完成 + 规则侧收口 + 临时表一致化（K16 收口）+ 规则安全边界（Q1 全落地）+ 快照收尾（Q4/Q5/K14 定案）+ 入口统一（D58 源取样通道）+ 四个入口全部接线（D59/D60）+ 结构洞察改走驱动元数据（D62，SQLite 可用）**（2026-09-18）——Phase 0–5 全部完成；内置规则 **16 条**；**临时表** D50 · D51 · D54；**规则边界** D52 + D53；**快照** D55 · D56 · D57；**入口** D58；**结构洞察取数** D62；**边界口径**见架构 §1.1（导航树所见 + 草稿箱/分析存档两块文件）。测试 **227 项 + 集成 14 项**全绿，另有**真机四库**两个用例（`insight_schema_real` / `insight_source_real`）。下一步：**编辑器结果集入口**（顺带 K16 的定向回收），见 `insight-dev-plan.md` §10。
+> 状态：**Phase 5 完成 + 规则侧收口 + 临时表一致化（K16 收口）+ 规则安全边界（Q1 全落地）+ 快照收尾（Q4/Q5/K14 定案）+ 入口统一（D58 源取样通道）+ 四个入口全部接线（D59/D60）+ 结构洞察改走驱动元数据（D62，SQLite 可用）+ 面板视图按 Tab 位移（§11，状态宿主与渲染分开）**（2026-09-18）——Phase 0–5 全部完成；内置规则 **16 条**；**临时表** D50 · D51 · D54；**规则边界** D52 + D53；**快照** D55 · D56 · D57；**入口** D58；**结构洞察取数** D62；**边界口径**见架构 §1.1（导航树所见 + 草稿箱/分析存档两块文件）。测试 **227 项 + 集成 14 项**全绿，另有**真机四库**两个用例（`insight_schema_real` / `insight_source_real`）。下一步：**分析表型存档入口**（等 M6 Phase 4 本体层）与 §10 余项，见 `insight-dev-plan.md` §10。
 >
 > **边界**：本模块拥有**画像 / 评分 / 规则 / 报告 / 快照历史**。SQL 执行与结果集属 M5 编辑器；对象树与元数据内省属 M4；连接与运行态属 M3；Mock 属 M7；资源目录属 M6。洞察**不自己取数**——数据来自 M5 建立的 DuckDB 临时表或 M3 的连接，只经服务/命令与它们协作。
 
@@ -76,7 +76,7 @@
 | 源取样通道（入口统一契约） | `crates/insight/src/model.rs`（`SampleSource::{new, on_duckdb, duckdb_file}` / `InsightTarget::{SourceColumn, SourceTable}`）、`service/persistence.rs`（`sample_source_to_analysis_table` 按 `conn_id` 分流：源库连接走引擎打型，`None` 走内存库 `CREATE TABLE … AS`） |
 | 文件类数据源的读取器口径 | `crates/engine/src/dbi/engine/duckdb_engine.rs`（`file_reader_function`：CSV / Parquet / Excel / JSON；`load_file_source` 与洞察**共用**它）、`crates/engine/src/duckdb/analysis.rs`（`create_analysis_temp_table_as`） |
 | 入口接线（三个右键「查看统计」 + 结果集「洞察此列」） | 导航树 `crates/database/src/nav_view.rs`；分析存档 `crates/analytics_resource/src/resource_view.rs`（`can_view_stats` + `ResourcesHost::request_view_stats`）；草稿箱 `crates/scratchpad/src/{host,scratchpad_view}.rs`（`can_view_stats` / `view_stats` 走端口）；宿主实现 `workbench/src/components/{nav_host,resource_host,scratchpad_host}.rs` 与 `panels/shared.rs`（`insight_sample_sql` + `open_insight_source_*`）；**结果集**：`editor/src/shared.rs`（`InsightColumnPort`）+ `editor/src/view/results/grid.rs`（菜单项）+ `workbench/src/services/editor_insight.rs`（翻译成 `SampleSource`，**不物化**） |
-| 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（现状：✅ 五 Tab 全部落地——列画像 + 质量卡 · 表探查 + 评估全表 · 多列分析 · Schema 报告 · 快照历史与版本对比；不显示假数据） |
+| 洞察面板（五 Tab） | `crates/insight/src/insight_view.rs`（**状态宿主**：目标 / 五态 / 各 Tab 载荷 / 选择与折叠；Render 转发）+ `crates/insight/src/view/{mod,header,column,table,multi,schema,history}.rs`（渲染片段，按 Tab 分，2026-09-18 位移）· `insight_view/tests.rs`（窗口级测试）（现状：✅ 五 Tab 全部落地——列画像 + 质量卡 · 表探查 + 评估全表 · 多列分析 · Schema 报告 · 快照历史与版本对比；不显示假数据） |
 | 规则管理对话框 | `crates/insight/src/rule_view.rs`（现状：✅ Phase 2 二批） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs`（现状：✅ Phase 4 一批 + **导出落地**（D60）：面板「导出 ▾」→ JSON / Markdown → 宿主选路径写文件） |
 | 视图模型 | `crates/insight/src/model.rs`（现状：✅ 已落地 `PanelTab` / `InsightTarget` / `InsightPanelState` / `PanelData` / `ColumnProfileView` / `TableProfileView` / `MultiColumnView` / `HistoryView`；阈值与文案是纯函数） |
@@ -145,7 +145,7 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 | --- | --- |
 | `insight-prototype-design.md` | **长什么样 / 怎么交互**：核心语义与规则作用域 / 右 Dock 面板布局 / 四种目标视图分派 / 状态与空态矩阵 / 规则管理对话框 / 主题映射与尺寸常量 / GPUI 落点 / **§10 与 V1 的逐项对照** |
 | `insight-architecture.md` | **为什么这样设计 / 怎么运转**：概念模型与**九条不变式** / 分层与 crate 归属 / 状态所有权（单一写入者）/ 六条数据流 / **D1–D62 决策表** / 并发与资源 / 降级矩阵 / 测试策略 / 实现位置映射 / **§11 已知问题 K1–K19（K1 / K14 / K16 / K17 / K19 已处置；K18 定案保留）** / §12 待确认 Q1–Q7（**Q1 / Q3 / Q4 / Q5 / Q6 / Q7 已定案**） |
-| `insight-dev-plan.md` | **做什么、做到哪**：已确认决策 9 项 / **§0 进度记录** / 现状盘点 / **§2 五项实证缺陷** / 目标 crate 边界 / **§4 规则作用域与索引表设计** / Phase 0–5 任务 / 测试场景 T1–T14 / 风险 R1–R7 / 实现位置映射 / 验证命令 / **§10 未接与预留项（收口清单 · 权威）** / **§11 `insight_view.rs` 按 Tab 位移规格（待触发）** |
+| `insight-dev-plan.md` | **做什么、做到哪**：已确认决策 9 项 / **§0 进度记录** / 现状盘点 / **§2 五项实证缺陷** / 目标 crate 边界 / **§4 规则作用域与索引表设计** / Phase 0–5 任务 / 测试场景 T1–T14 / 风险 R1–R7 / 实现位置映射 / 验证命令 / **§10 未接与预留项（收口清单 · 权威）** / **§11 `insight_view.rs` 按 Tab 位移（已完成 2026-09-18）** |
 | `insight-extension-notes.md` | **实现手段与第三方扩展的调研记录**（讨论稿）：现状约束（外部编译库 / 单例 / 已有扩展机制）/ 边界（三层实现 · 扩展可换实现不可换语义 · 准入四件套）/ 候选扩展逐项评估（`dq` / `stats_duck` / `datasketches` / `stochastic` + 顺带发现）/ 可参考的扩展设计（GE / Deequ / dbt / Soda / gatekeeper …）/ **§6 可采取之处（不引扩展也能拿的 10 条）** / 探针口径 |
 | `insight-user-guide.md` | **怎么用**：入口 / 界面导览与怎么看数字 / 典型流程 / **§4 规则编写指南（对外契约：三层作用域 · 字段全表 · `value_type` 表 · 质量门控语义 · 可照抄示例 · 安全边界）** / **§4.8 内置规则 16 条一览** / FAQ 排查 / USIT 验收清单 |
 | `insight-prototype.html` | 可交互示意稿（明暗双主题；列画像 / 质量卡 / 表探查 / 规则管理含禁用与校验失败态） |

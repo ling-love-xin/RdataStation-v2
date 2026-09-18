@@ -37,6 +37,8 @@ pub mod store;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod ui;
+/// 洞察面板的渲染片段（按 Tab 分文件；状态宿主在 [`insight_view`]）
+mod view;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

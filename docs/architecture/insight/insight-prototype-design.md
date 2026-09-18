@@ -432,7 +432,7 @@ v1 把洞察拆成「右栏轻量统计 + 底部四 Tab 容器」两处（`Colum
 | 设计决策 | 代码落点 |
 | --- | --- |
 | 右 Dock 装配（仅协议：`BasePanel` + `Panel`） | `crates/workbench/src/panels/`（`RightSidebarPanel`） |
-| 面板内容（五 Tab + 目标分派） | `crates/insight/src/insight_view.rs` |
+| 面板内容（五 Tab + 目标分派） | `crates/insight/src/insight_view.rs`（状态宿主）+ `crates/insight/src/view/`（按 Tab 分的渲染片段，见 `insight-dev-plan.md` §11） |
 | 规则管理对话框 | `crates/insight/src/rule_view.rs` |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs` |
 | 视图模型（`InsightPanelState` / `SelectedTarget` / `PanelTab`） | `crates/insight/src/model.rs` |

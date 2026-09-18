@@ -23,6 +23,20 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — §10 #11 `insight_view.rs` 按 Tab 位移（收口）
+
+**背景**：`insight_view.rs` 4225 行（含约 1470 行测试）里挤着状态宿主、Tab 条、五路 Tab 渲染与十余个片段助手，新功能仍在往里加（导出按钮即在此）；§11 的触发条件到了，本批按规格做**纯位移**（不改语义、不改 UI、不动 `ui.rs` 常量、不拆 crate）。
+
+**已完成并验证**（`rds-insight --lib` **227 项不变** · `column_profile_e2e` **14 不变** · `ui_contract` **7 不变** · `cargo check --workspace --all-targets` 零告警）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 状态宿主 | 只留 `InsightEvent` / `ColumnSection` / `InsightView`（字段、`new`、各状态回填、`set_tab` / `emit_request_for_tab` / `ensure_data_for_tab`、`Render` 转发）——**4225 → 915 行** | `insight_view.rs` |
+| 渲染片段 | 按 Tab 分文件：头部三件（`render_header` / `render_project_hint` / `render_target_head`）· Tab 条与内容分派（`render_tab_bar` / `render_body` / `empty_hint`）+ 九个共用助手 · 列画像（评分卡 + 四区）· 表探查 · 多列 · 结构 · 历史 | `view/{header,mod,column,table,multi,schema,history}.rs` |
+| 测试 | 整块搬到宿主的子模块（照 `mock_view/tests.rs` 先例，仍是 `crate::insight_view::tests`）：只动了 `truncate` 的引入路径（`crate::view::column::truncate`），**其余一行未改** | `insight_view/tests.rs`（1481 行） |
+| 可见性口径（写进 `view/mod.rs` 的台账） | 片段入口 `pub(crate)`（宿主 `impl Render` 转发要调）· 只在本目录内用的 `pub(in crate::view)` · Tab 内部助手模块私有（子模块 `use super::…`）· 字段 `pub(crate)`（片段与宿主不同模块，读字段必须如此） | `view/mod.rs` |
+| 引用面零改动 | `lib.rs` 的 re-export、`jobs.rs` / `test_support.rs` / `workbench` 的 `insight_view::` 引用一字未动；新增的模块声明是 crate 私有的 `mod view;`（**不进公共 API**） | `lib.rs` |
+
 ### 2026-09-18 — 编辑器结果集入口「洞察此列」（§10 #6）
 
 **背景**：施工单 #6（用户明确要这个批次做）。编辑器侧本来就有**钩子注入**的先例（`FilterValueHook` / `SortDownHook`：网格只说“用户点了谁”，面板接活），因此新入口照同一套做，**不物化结果集**（D58 决策在案：洞察侧重跑取样）。
@@ -993,7 +1007,7 @@ pub fn registry_for(project_root: Option<&Path>) -> Arc<RwLock<RuleRegistry>>;
 | 快照存储归位 | `crates/insight/src/store/{column_store.rs,table_store.rs,schema_store.rs,meta_store.rs}` |
 | 异常值检测归位 | `crates/insight/src/engine/stats.rs`（自 `engine/services/duckdb_service.rs::detect_extremes`） |
 | 洞察服务门面 | `crates/insight/src/service/mod.rs`（自 `workbench/services/{result,persistence}_service.rs` 的洞察部分） |
-| 列画像 / 质量卡 / 表探查 | `crates/insight/src/insight_view.rs` |
+| 列画像 / 质量卡 / 表探查 | `crates/insight/src/insight_view.rs`（状态）+ `crates/insight/src/view/{column,table}.rs`（渲染，按 Tab 位移见 §11） |
 | Schema 报告与导出 | `crates/insight/src/schema_view.rs` |
 | Action 与快捷键 | `crates/insight/src/commands.rs`、`crates/app/src/main.rs` |
 | 右 Dock 装配（仅协议） | `crates/workbench/src/{view.rs,panels/}`（`RightSidebarPanel`） |
@@ -1057,13 +1071,18 @@ cargo test -p rds-workbench --test insight_source_real -j 2 -- --nocapture --tes
 | 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false；本体层与四条上游都在 M6（`analytics-resource-dev-plan.md` §6 **Phase 4**：P4.1 本体层 · P4.2 Mock · P4.3 编辑器结果 · **P4.5 草稿箱数据文件** · **P4.6 导航表**），代码均未做 | **等 M6 P4.1**：本体命名 / 存在性 / `definition_sql` 定了，洞察侧就很小（放开 `can_view_stats` + 宿主 ATTACH `analytics.duckdb` + `SampleSource::on_duckdb` 取样）。**储存口径已建议不复制**（存配方 + 指纹）——那样洞察取样就是 DuckDB 直接读本体文件，连 ATTACH 都省了 | 小（依赖 M6 P4.1） |
 | 9 | 源目标下「多列」Tab 在样本表解析前点击不发请求 | 已知小限制（样本表要等列 / 表目标先取过样） | **决定**：让它自己先取一次样，或维持并在 UI 提示 | 小 |
 | 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **可选加强**：解析级策略检查（解析能力 `engine/src/sql` 已有） | 中 |
-| 11 | `insight_view.rs` 体量（约 2500 行代码 + 900 行测试） | 新功能仍在往里加（导出按钮即在此） | **时机触发**：见 §11 规格 | 中 |
 
-> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）；#8 `RenderHint`（定案：保留 + 登记，2026-09-18，见架构 K18）；#6 编辑器结果集「洞察此列」（2026-09-18，真机验证）。
+> **已移出本表**（完成后从施工单删行，记录见 §0）：#1 删 `crates/engine/insight-rules/` 重复副本（`e3684d67`）；#2 删源库内省路径（`table_profile_service.rs` + 门面，2026-09-18）；#5 结构洞察入口（`SchemaRef` + `NavHost::open_insight_schema`，2026-09-18，真机四库验证）；#8 `RenderHint`（定案：保留 + 登记，2026-09-18，见架构 K18）；#6 编辑器结果集「洞察此列」（2026-09-18，真机验证）；#11 `insight_view.rs` 按 Tab 位移（2026-09-18，纯位移，验收三项计数不变）。
 
 **建议顺序**（性价比）：7（分析表型存档，**等 M6 P4.1 本体层**）→ 4（二期，UI 归 M6）→ 其余。
 
-## 11. `insight_view.rs` 按 Tab 位移（规格 · 待触发）
+## 11. `insight_view.rs` 按 Tab 位移（规格 · **已完成 2026-09-18**）
+
+> **结果**：`insight_view.rs` **4225 → 915 行**（只剩状态宿主）；片段在 `view/{mod,header,column,table,multi,schema,history}.rs`（288 / 160 / 338 / 285 / 343 / 213 / 368 行）；测试整块搬到 `insight_view/tests.rs`（1481 行，照 `mock_view/tests.rs` 先例，仍是宿主的子模块，所以状态入口**没有**为了测试放宽可见性）。
+> **实际可见性口径**（比下方规格多出的两条，已写进 `view/mod.rs` 台账）：片段入口（`render_header` / `render_tab_bar` / `render_body` / `render_score_card`）是 `pub(crate)`——宿主的 `impl Render` 要调；`InsightView` 的字段是 `pub(crate)`——片段与宿主不同模块，读字段必须如此（**对外 API 与引用面零改动**）。
+> **验证**：`rds-insight --lib` **227** · `column_profile_e2e` **14** · `ui_contract` **7** · `cargo check --workspace --all-targets` 零告警 · `grep -rn "insight_view::" crates/` 的宿主引用零改动。
+>
+> 下方为规格原文（保留作判据记录）。
 
 > **触发条件**：下一次要**较大地**动结构 Tab / 历史 Tab，或新增一个 Tab 时**顺手做**；不单独开批（纯位移没有产品收益，单独占一批只是多付一次验证成本）。
 
