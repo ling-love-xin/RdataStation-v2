@@ -292,6 +292,8 @@ pub struct ProjectUiHost {
     pub save_sort: Rc<dyn Fn(ProjectSort, &mut App)>,
     /// 打开项目后的宿主刷新（连接列表 / 导航缓存 / 结果归属）。
     pub on_opened: Rc<dyn Fn(&mut App)>,
+    /// 默认连接的候选来源（U3）：宿主接连接列表，project crate 只读结果。
+    pub connections: Rc<dyn Fn(&App) -> Vec<ConnectionOption>>,
 }
 
 impl ProjectUiHost {
@@ -308,6 +310,7 @@ impl ProjectUiHost {
             editor: Rc::new(()),
             save_sort: Rc::new(|_, _| {}),
             on_opened: Rc::new(|_| {}),
+            connections: Rc::new(|_| Vec::new()),
         }
     }
 
@@ -323,6 +326,15 @@ impl ProjectUiHost {
 
     pub fn with_on_opened(mut self, on_opened: Rc<dyn Fn(&mut App)>) -> Self {
         self.on_opened = on_opened;
+        self
+    }
+
+    /// 注入默认连接候选来源（U3）；不注入时下拉里只有「不设默认」。
+    pub fn with_connections(
+        mut self,
+        connections: Rc<dyn Fn(&App) -> Vec<ConnectionOption>>,
+    ) -> Self {
+        self.connections = connections;
         self
     }
 
@@ -345,6 +357,16 @@ impl ProjectUiHost {
     pub fn root(&self) -> Option<PathBuf> {
         self.session.borrow().as_ref().map(|s| s.root.clone())
     }
+}
+
+/// 默认连接的候选项（U3）：宿主把系统级 / 项目级连接列表投影成这一层最小信息。
+///
+/// `project` crate 不依赖 database / workbench，所以只认识 id + 名称；名字是给用户看的，
+/// id 才是写回 `settings.json` 的值（重名连接靠 id 区分）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionOption {
+    pub id: String,
+    pub name: String,
 }
 
 /// 项目 UI 状态（挂在宿主共享状态与 [`ProjectUiHost`] 上）。
@@ -1531,6 +1553,27 @@ pub fn toggle_archive(host: &ProjectUiHost, cx: &mut App) {
     host.notify(cx);
 }
 
+/// 设置默认连接（U3）：`None` = 清除默认。
+///
+/// 只动项目本体的 `settings.json`；不写名册（默认连接是项目内偏好）。
+pub fn set_default_connection(host: &ProjectUiHost, connection_id: Option<String>, cx: &mut App) {
+    if read_only_blocked(host, cx, "修改默认连接") {
+        return;
+    }
+    let Some(root) = host.root() else {
+        return;
+    };
+    match project_service::save_default_connection(&root, connection_id.as_deref()) {
+        Ok(()) => {
+            let mut state = host.state.borrow_mut();
+            state.settings.default_connection = connection_id;
+            state.notice = Some("已更新默认连接".to_string());
+        }
+        Err(e) => host.state.borrow_mut().notice = Some(e),
+    }
+    host.notify(cx);
+}
+
 // ==================== 设置面板的磁盘 / 名册快照（B2 / B3） ====================
 
 /// `.RSmeta` 结构树的一行（排障用：只读，不写）。
@@ -1632,6 +1675,10 @@ pub struct SettingsSnapshot {
     /// 名册里的描述（概览显示；编辑后由保存路径刷新）。
     pub description: Option<String>,
     pub missing_drivers: Vec<String>,
+    /// 默认连接（U3）：`None` = 不设默认。
+    pub default_connection: Option<String>,
+    /// 默认连接候选（同一快照取一次，render 里不再问宿主）。
+    pub connection_options: Vec<ConnectionOption>,
     /// 是否取过（未取时显示「—」，不当成「没有」）。
     pub loaded: bool,
 }
@@ -1648,6 +1695,10 @@ pub fn load_settings_snapshot(host: &ProjectUiHost, cx: &mut App) {
         meta_rows: meta_tree_rows(&root.join(project_service::RS_META_DIR_NAME)),
         description: summary.as_ref().and_then(|p| p.description.clone()),
         missing_drivers: summary.map(|p| p.missing_drivers).unwrap_or_default(),
+        default_connection: project_service::load_default_connection(&root)
+            .ok()
+            .flatten(),
+        connection_options: (host.connections)(cx),
         loaded: true,
     };
     host.state.borrow_mut().settings = snapshot;
@@ -2442,6 +2493,22 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                                 save_project_info(&host_rename, &inputs_rename, app)
                             }),
                     )
+                    .child(section(theme, "默认项"))
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(default_connection_picker(&ui.settings, host, read_only))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.muted_foreground)
+                                    .child(
+                                        "新建查询 / 打开项目时的预选连接；不设则用系统当前连接。",
+                                    ),
+                            ),
+                    )
                     .child(section(theme, "存储（.RSmeta）"))
                     .child(tree)
                     .child(
@@ -2600,6 +2667,80 @@ fn meta_tree_row(row: &MetaTreeRow, theme: &gpui_kit::component::Theme) -> Div {
                 );
             }),
         )
+}
+
+/// 默认连接按钮文案（纯函数，可断言）。
+///
+/// 记录值指向已不在候选里的连接（比如它被删了）时**如实显示 id**并标「已不可用」，
+/// 不静默变成「未设置」——那会让用户以为默认没丢。
+pub fn default_connection_label(snapshot: &SettingsSnapshot) -> String {
+    match snapshot.default_connection.as_ref() {
+        None => "默认连接：未设置".to_string(),
+        Some(id) => match snapshot.connection_options.iter().find(|c| &c.id == id) {
+            Some(option) => format!("默认连接：{}", option.name),
+            None => format!("默认连接：{id}（已不可用）"),
+        },
+    }
+}
+
+/// 默认连接选择（U3）：`Button::dropdown_menu` + 勾选项，空 = 不设默认。
+fn default_connection_picker(
+    snapshot: &SettingsSnapshot,
+    host: &ProjectUiHost,
+    read_only: bool,
+) -> impl IntoElement {
+    let current = snapshot.default_connection.clone();
+    let label = default_connection_label(snapshot);
+    let missing_current = current
+        .as_ref()
+        .is_some_and(|id| !snapshot.connection_options.iter().any(|c| &c.id == id));
+    let options = snapshot.connection_options.clone();
+    let current_for_menu = current.clone();
+    // 显式 UFCS：`host` 是引用，`host.clone()` 会解析到 `&T: Clone`（拿到引用，进不了
+    // `'static` 回调），这里要的是宿主的拥有型副本。
+    let host_clear = ProjectUiHost::clone(host);
+    let host_items = ProjectUiHost::clone(host);
+    let current_id = current.clone();
+
+    Button::new("proj-default-connection")
+        .secondary()
+        .disabled(read_only)
+        .label(format!("{label} ▾"))
+        .dropdown_menu(move |menu, _window, _cx| {
+            let mut menu = menu.item(
+                PopupMenuItem::new("（不设默认）")
+                    .checked(current_for_menu.is_none())
+                    .disabled(current_for_menu.is_none())
+                    .on_click({
+                        let host = host_clear.clone();
+                        move |_, _, app| set_default_connection(&host, None, app)
+                    }),
+            );
+            // 记录值已不在候选里：摆一项“当前记录”并置灰，让用户看得见默认还在
+            if missing_current {
+                let id = current_id.clone().unwrap_or_default();
+                menu = menu.item(
+                    PopupMenuItem::new(format!("{id}（已不可用）"))
+                        .checked(true)
+                        .disabled(true),
+                );
+            }
+            for option in options.iter() {
+                let host = ProjectUiHost::clone(&host_items);
+                let id = option.id.clone();
+                let is_current = Some(id.clone()) == current_id;
+                menu = menu.item(
+                    PopupMenuItem::new(option.name.clone())
+                        .icon(IconName::HardDrive)
+                        .checked(is_current)
+                        .disabled(is_current)
+                        .on_click(move |_, _, app| {
+                            set_default_connection(&host, Some(id.clone()), app)
+                        }),
+                );
+            }
+            menu
+        })
 }
 
 fn section(theme: &gpui_kit::component::Theme, title: &str) -> Div {

@@ -65,15 +65,18 @@ impl project::ui::ProjectEditorBridge for EditorBridge {
                 .map(|(_, sql)| sql.clone())
                 .or_else(|| drafts.first().map(|(_, sql)| sql.clone()))
                 .unwrap_or_default(),
-            None => drafts.first().map(|(_, sql)| sql.clone()).unwrap_or_default(),
+            None => drafts
+                .first()
+                .map(|(_, sql)| sql.clone())
+                .unwrap_or_default(),
         }
     }
 
     fn clear(&self, window: &mut Window, cx: &mut App) {
         // 关掉未命名文档 = 草稿已处理（已另存到项目根 / 用户选择丢弃）
-        let _ = self
-            .host
-            .update(cx, |view, cx| view.close_untitled_editor_documents(window, cx));
+        let _ = self.host.update(cx, |view, cx| {
+            view.close_untitled_editor_documents(window, cx)
+        });
     }
 
     /// `clear` 之后草稿已不存在（未命名文档已关）——不需要另一个“清脏”动作
@@ -113,6 +116,26 @@ pub fn build_host(
     }))
     .with_sort_saver(save_sort)
     .with_on_opened(on_opened)
+    .with_connections(default_connection_options(shared))
+}
+
+/// 默认连接的候选来源（U3）：把工作台当前的连接列表（全局 + 当前项目）投影成
+/// `project` crate 认得的 `ConnectionOption`（只 id + 名称，不揣连接详情）。
+fn default_connection_options(
+    shared: &Shared,
+) -> Rc<dyn Fn(&App) -> Vec<project::ui::ConnectionOption>> {
+    let shared = shared.clone();
+    Rc::new(move |_cx: &App| {
+        shared
+            .connections
+            .borrow()
+            .iter()
+            .map(|conn| project::ui::ConnectionOption {
+                id: conn.id.clone(),
+                name: conn.name.clone(),
+            })
+            .collect()
+    })
 }
 
 /// 项目切换时的 mock 临时表清理。
@@ -199,7 +222,7 @@ fn refresh_after_open(shared: &Shared, cx: &mut App) {
 mod tests {
     // 显式列举依赖（不要 `use super::*`：父模块的 `use gpui_kit::*` 会跟着进来，
     // `#[gpui_kit::test]` 展开出的裸 `#[test]` 会解析到它自己，无限递归）
-    use super::{clear_mock_temp_tables, clear_result_temp_tables, Shared};
+    use super::{Shared, clear_mock_temp_tables, clear_result_temp_tables};
     use gpui_kit::TestAppContext;
     use mock::mock_view::{MockColumnSpec, MockDraft, MockRunOptions};
     use mock::models::{ColumnDataType, ColumnDef, GeneratorConfig, Locale};

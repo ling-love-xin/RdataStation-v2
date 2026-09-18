@@ -374,6 +374,20 @@ impl ProjectStore {
         Ok(config)
     }
 
+    /// 就地改配置并落盘（U3 默认连接等）。
+    ///
+    /// 「读 → 改 → 写」一次完成，避免调用方分成三步时漏掉缓存同步——`save_config`
+    /// 序列化的是**缓存**（`self.config`），不是磁盘。
+    pub fn update_config(
+        &mut self,
+        update: impl FnOnce(&mut ProjectConfig),
+    ) -> Result<(), CoreError> {
+        let mut config = self.load_config()?;
+        update(&mut config);
+        self.config = Some(config);
+        self.save_config()
+    }
+
     /// 保存配置
     pub fn save_config(&self) -> Result<(), CoreError> {
         let config = self.config.as_ref().ok_or_else(|| {
@@ -858,14 +872,18 @@ mod tests {
 
         assert_eq!(store.info().name, "Test Project");
         assert!(project_path.join(RS_META_DIR_NAME).exists());
-        assert!(project_path
-            .join(RS_META_DIR_NAME)
-            .join(PROJECT_METADATA_DIR_NAME)
-            .exists());
-        assert!(project_path
-            .join(RS_META_DIR_NAME)
-            .join(ANALYTICS_DB_NAME)
-            .exists());
+        assert!(
+            project_path
+                .join(RS_META_DIR_NAME)
+                .join(PROJECT_METADATA_DIR_NAME)
+                .exists()
+        );
+        assert!(
+            project_path
+                .join(RS_META_DIR_NAME)
+                .join(ANALYTICS_DB_NAME)
+                .exists()
+        );
         assert!(project_path.join(RS_META_DIR_NAME).join("config").exists());
         assert!(project_path.join(RS_META_DIR_NAME).join("queries").exists());
         Ok(())

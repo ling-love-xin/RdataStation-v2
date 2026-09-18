@@ -455,6 +455,33 @@ pub fn set_archived(id: &str, root: &Path, archived: bool) -> Result<(), String>
     Ok(())
 }
 
+// ==================== 默认连接（U3） ====================
+
+/// 读取项目默认连接：`.RSmeta/config/settings.json` 的 `default_connection_id`。
+///
+/// `None` = 不设默认（新建项目的初始态，不是错误）。
+pub fn load_default_connection(root: &Path) -> Result<Option<String>, String> {
+    if !is_valid_project(root) {
+        return Ok(None);
+    }
+    let mut store = ProjectStore::load(root).map_err(|e| format!("加载项目配置失败: {e}"))?;
+    let config = store
+        .load_config()
+        .map_err(|e| format!("读取项目配置失败: {e}"))?;
+    Ok(config.default_connection_id)
+}
+
+/// 写入项目默认连接（U3）：空值 = 不设默认（写回 `null`）。
+///
+/// 只动项目本体的 `settings.json`；不在名册上记账（默认连接是项目内部偏好，不参与列表）。
+pub fn save_default_connection(root: &Path, connection_id: Option<&str>) -> Result<(), String> {
+    let mut store = ProjectStore::load(root).map_err(|e| format!("加载项目失败: {e}"))?;
+    let connection_id = connection_id.map(str::to_string);
+    store
+        .update_config(|config| config.default_connection_id = connection_id)
+        .map_err(|e| format!("保存默认连接失败: {e}"))
+}
+
 // ==================== Delete ====================
 
 /// 软删：移出名册（磁盘保留，可经 `restore` 找回）。

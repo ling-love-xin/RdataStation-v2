@@ -24,13 +24,14 @@ use gpui_kit::{
 };
 
 use super::{
-    OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs, ProjectSort,
-    ProjectUiHost, ProjectUiNotifier, ProjectUiState, SettingsSnapshot, StatusFilter,
+    ConnectionOption, OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs,
+    ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState, SettingsSnapshot, StatusFilter,
     advance_pending, build_project_menu, card_description, confirm_delete, cycle_sort,
-    load_settings_snapshot, meta_tree_rows, more_menu, open_create_dialog, open_delete_dialog,
-    open_folder_dialog, open_lock_busy_dialog, pick_directory, prepare_unsaved, project_card,
-    project_menu_entries, render_picker, render_settings, request_close, request_create_project,
-    request_open, request_open_folder, save_project_info, snapshot_description, submit_create,
+    default_connection_label, load_settings_snapshot, meta_tree_rows, more_menu,
+    open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
+    pick_directory, prepare_unsaved, project_card, project_menu_entries, render_picker,
+    render_settings, request_close, request_create_project, request_open, request_open_folder,
+    save_project_info, set_default_connection, snapshot_description, submit_create,
     submit_open_folder, visible_items,
 };
 use crate::service::ProjectSummary;
@@ -700,6 +701,107 @@ fn settings_meta_tree_comes_from_snapshot(cx: &mut TestAppContext) {
     host.state.borrow_mut().settings_open = true;
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(cx.update(|_, cx| render_settings(&host, &inputs, cx).is_some()));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ==================== A1：默认连接（U3） ====================
+
+/// U3：按钮文案三种状态都如实显示（记录值指向已删除的连接时不能静默变「未设置」）。
+#[test]
+fn default_connection_label_reports_missing_option() {
+    let mut snapshot = SettingsSnapshot::default();
+    assert_eq!(default_connection_label(&snapshot), "默认连接：未设置");
+
+    snapshot.connection_options = vec![
+        ConnectionOption {
+            id: "G_a".to_string(),
+            name: "分析库".to_string(),
+        },
+        ConnectionOption {
+            id: "G_b".to_string(),
+            name: "业务库".to_string(),
+        },
+    ];
+    snapshot.default_connection = Some("G_b".to_string());
+    assert_eq!(default_connection_label(&snapshot), "默认连接：业务库");
+
+    snapshot.default_connection = Some("G_gone".to_string());
+    assert_eq!(
+        default_connection_label(&snapshot),
+        "默认连接：G_gone（已不可用）"
+    );
+}
+
+/// U3：写默认连接走服务落盘，只读模式被拦（置灰是第一道，拦截是第二道）。
+#[gpui_kit::test]
+fn default_connection_write_respects_read_only(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    // 真项目目录：写默认连接要落到 `.RSmeta/config/settings.json`
+    let root = temp_root("default-conn");
+    let _ = std::fs::remove_dir_all(&root);
+    crate::ProjectStore::create("默认连接项目", &root).expect("建项目");
+    host.set_current(Some(OpenProject::new(root.clone(), "默认连接项目")));
+    let (host, _inputs, cx) = open_harness(cx, host);
+
+    // 快照：新项目 = 不设默认
+    cx.update(|_, cx| load_settings_snapshot(&host, cx));
+    {
+        let state = host.state.borrow();
+        assert!(state.settings.loaded);
+        assert_eq!(state.settings.default_connection, None);
+    }
+    // 候选由宿主注入（测试里直接给）
+    host.state.borrow_mut().settings.connection_options = vec![ConnectionOption {
+        id: "G_a".to_string(),
+        name: "分析库".to_string(),
+    }];
+
+    cx.update(|_, cx| set_default_connection(&host, Some("G_a".to_string()), cx));
+    assert_eq!(
+        crate::service::load_default_connection(&root).expect("读磁盘"),
+        Some("G_a".to_string()),
+        "默认连接应已落盘"
+    );
+    {
+        let state = host.state.borrow();
+        assert_eq!(state.settings.default_connection.as_deref(), Some("G_a"));
+        assert_eq!(
+            default_connection_label(&state.settings),
+            "默认连接：分析库"
+        );
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("默认连接")),
+            "实际：{:?}",
+            state.notice
+        );
+    }
+
+    // 面板（含选择器）在窗口里画得出来
+    host.state.borrow_mut().settings_open = true;
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    // 只读：拦下、给提示、不动磁盘
+    host.state.borrow_mut().read_only = true;
+    cx.update(|_, cx| set_default_connection(&host, Some("G_b".to_string()), cx));
+    assert!(
+        host.state
+            .borrow()
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("只读模式")),
+        "只读应被拦截"
+    );
+    assert_eq!(
+        crate::service::load_default_connection(&root).expect("读磁盘"),
+        Some("G_a".to_string()),
+        "只读不该改磁盘"
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }
 

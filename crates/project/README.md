@@ -47,6 +47,7 @@
 - 软删（`removed_at`）+「已移除」Tab + 恢复入口；失效路径可「重新定位」，也可只移出列表。
 - 名称与描述就地编辑（名册 + 项目本体双写，磁盘目录名不变）；描述同时出现在**卡片元信息**与设置·概览（空 / 纯空白不占位）；空目录打开时**询问式创建**。
 - 设置·存储段是 `.RSmeta` **结构树**（目录在前 / 同级按名 / 深度优先，带大小与「复制路径」），只读排障用；「打开 `.RSmeta`」用系统文件管理器打开该目录（会暴露内部结构，已在界面注明）。
+- 设置「默认项」记项目**默认连接**（U3）：写项目本体 `ProjectConfig.default_connection_id`（`.RSmeta/config/settings.json`），空值 = 不设默认；候选由宿主注入（全局 + 当前项目连接），记录值指向已删连接时如实显示 id。
 - 固定置顶（`project_info.is_pinned`）与排序方式（`settings.projects.sort_mode`）跨会话保留；状态筛选（R4）为临时视图状态不落库。
 - 内置「从示例项目开始」：无网络即可得到一个可用项目。
 
@@ -60,20 +61,20 @@
 
 ### 尚未开发（待办）
 
-剩余项集中在 `docs/architecture/project/project-dev-plan.md` §8：默认连接（U3，需先补后端 `ProjectConfig` 读写）、卡片右键菜单（C3）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）、搜索 facet 语法（C5）。
+剩余项集中在 `docs/architecture/project/project-dev-plan.md` §8：卡片右键菜单（C3）、搜索 facet 语法（C5）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）。
 
 ## 代码落点
 
 | 文件 | 职责 |
 | --- | --- |
 | `src/models.rs` | 域模型：`Project` / `ProjectInfo` / `ProjectPath` / `Versioned<T>` |
-| `src/store.rs` | `.RSmeta` 创建 / 加载 / 迁移；`ProjectManager`；依赖自检 |
+| `src/store.rs` | `.RSmeta` 创建 / 加载 / 迁移；`ProjectManager`；配置就地读写（`update_config`）；依赖自检 |
 | `src/lock.rs` | 实例锁：OS 文件锁 + `project.lock.owner` 占用者信息 |
-| `src/service.rs` | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 版本台账 |
+| `src/service.rs` | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 默认连接读写 / 版本台账 |
 | `src/ui.rs` | 视图：选择器、标题栏菜单内容、项目设置、语义对话框、`ProjectUiHost` 宿主桥 |
-| `src/ui/tests.rs` | 23 项 `ui` 测试（18 项 GPUI headless 窗口测试 + 5 项纯函数测试：选择器 / 状态筛选 / 设置快照与结构树 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 菜单规格 / 只读拦截 / 键盘激活） |
+| `src/ui/tests.rs` | 24 项 `ui` 测试（19 项 GPUI headless 窗口测试 + 5 项纯函数测试：选择器 / 状态筛选 / 设置快照与结构树 / 默认连接 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片与描述 / 菜单规格 / 只读拦截 / 键盘激活） |
 | `tests/project_registry.rs` | 名册端到端集成：创建登记 → 固定置顶 → 软删隐藏（磁盘保留）→ 已移除找回（注入临时全局库） |
-| `tests/project_store.rs` | 磁盘 `.RSmeta` 与实例锁集成 |
+| `tests/project_store.rs` | 磁盘 `.RSmeta` / 实例锁 / 默认连接（U3）集成 |
 
 ## 文档
 
@@ -89,7 +90,7 @@
 ## 约定
 
 ```bash
-cargo test -p rds-project -j 2          # lib（37，含 18 项窗口测试）+ 集成（1 名册 + 3 存储）
+cargo test -p rds-project -j 2          # lib（39，含 19 项窗口测试）+ 集成（1 名册 + 4 存储）
 ```
 
 - 全量测试**必须** `cargo test --workspace -j 2`：并行链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

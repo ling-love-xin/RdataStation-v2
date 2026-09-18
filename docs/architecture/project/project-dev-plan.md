@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 37 lib（含 18 项窗口测试 + 5 项纯函数）+ 1 名册集成 + 3 存储集成全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 39 lib（含 19 项窗口测试 + 5 项纯函数）+ 1 名册集成 + 4 存储集成全绿；workbench lib 110 全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -24,6 +24,18 @@
 | 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-19（三）— A1 默认连接（U3）
+
+§8 里**唯一阻塞 UI 的后端缺口**，本次连后端一起补上：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 后端 | `ProjectStore::update_config`（读 → 改 → 写一次，避免调用方分三步时漏掉缓存同步——`save_config` 序列化的是缓存）；`service::load_default_connection` / `save_default_connection`（空值 = 不设默认；非项目目录读回 `None`、写报错） | `crates/project/src/{store.rs,service.rs}` |
+| 宿主桥 | `ProjectUiHost::connections`（`Rc<dyn Fn(&App) -> Vec<ConnectionOption>>`）+ `with_connections`；`ConnectionOption` 只带 id + 名称（`project` crate 不依赖 database / workbench）；workbench 在 `build_host` 里接当前连接列表（全局 + 当前项目） | `crates/project/src/ui.rs`、`crates/workbench/src/components/project_host.rs` |
+| UI | 设置面板新增「默认项」段：`Button::dropdown_menu` + 勾选项（「（不设默认）」+ 候选连接）；已选中的项置灰（幂等）；记录值指向已删除的连接时**如实显示 id 并标「已不可用」**（不静默变「未设置」）；只读置灰 + 拦截双保险 | `crates/project/src/ui.rs` |
+| 快照 | 默认连接值 + 候选都进 `SettingsSnapshot`（事件路径取一次，render 纯读） | 同上 |
+| 测试 | lib 37 → 39：`default_connection_label_reports_missing_option`（文案三态）、`default_connection_write_respects_read_only`（落盘 / 快照 / 拦截）；集成 +1：`default_connection_roundtrip`（写摸 `settings.json` / 清除 / 非项目目录） | `crates/project/src/ui/tests.rs`、`crates/project/tests/project_store.rs` |
 
 ### 2026-09-19（二）— B2 `.RSmeta` 结构树 + B3 描述展示
 
@@ -285,7 +297,8 @@
 | 命令 / Action | `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`；project crate 不再有 commands 文件） |
 | 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单规格 / 内容由 `project::ui::project_menu_entries` / `build_project_menu` 提供） |
 | 会话共享与刷新信号 | `crates/workbench/src/panels/`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
-| 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs` / `models.rs` |
+| 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs`（`update_config` 配置就地读写）/ `models.rs` |
+| 默认连接（U3，项目内偏好） | `crates/project/src/{store.rs,service.rs,ui.rs}`（`update_config` → `save_default_connection` → 设置·默认项）；`crates/workbench/src/components/project_host.rs`（候选来源） |
 | 示例项目 | 运行时生成到 `{data_dir}/RdataStation/samples/示例项目`（含 `welcome.sql`） |
 | 依赖接线 | 根 `Cargo.toml`、`crates/workbench/Cargo.toml` |
 | 主题 token（如需补） | `assets/themes/rds-theme.json` |
@@ -296,7 +309,7 @@
 
 - 每阶段：`cargo check -p rds-project -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试
   （`crates/project/tests/` 集成测试 + `crates/project/src/ui/tests.rs` 窗口测试）
-- 常用：`cargo test -p rds-project -j 2`（lib 37 + 名册集成 1 + 存储集成 3）
+- 常用：`cargo test -p rds-project -j 2`（lib 39 + 名册集成 1 + 存储集成 4）
 - 迁移：`cargo test -p rds-engine`（迁移套件）+ 手工核对旧库升级
 - UI：`cargo run -p rds-app` 手动走通 §4 清单（先用 `RDS_PROJECT_PATH` 验证有项目态，再清空验证选择器）
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
@@ -308,9 +321,11 @@
 
 ### A. 后端能力缺失（阻塞 UI）
 
+（本组已清空：A1 已实现，见 §0。）
+
 | # | 项 | 现状 | 需要做什么 |
 | --- | --- | --- | --- |
-| A1 | **默认连接（U3）** | 原型 §2.3/§7 列为设置项；`service` 层**没有** `ProjectConfig` 读写，`ProjectStore` 也无 config 存取 API | 先补 `store::update_config` + `service::{load_config, save_config}`，再做下拉（候选来源系统级连接）；空值 = 不设默认 |
+| — | — | — | — |
 
 ### B. 原型已列、实现缺失或入口不符
 
@@ -340,7 +355,7 @@
 
 ### 建议顺序
 
-1. ~~**C1 + C4**~~、~~**B1**~~（2026-09-19）、~~**B2 + B3**~~（2026-09-19 二）：已完成，见 §0；
-2. **A1**（默认连接，需先补 `ProjectConfig` 读写——目前唯一阻塞 UI 的后端缺口）；
-3. **C3**（卡片右键菜单，指南建议）→ **C2**（菜单快捷键，等组件支持 shortcut 槽位）；
+1. ~~**C1 + C4**~~、~~**B1**~~（2026-09-19）、~~**B2 + B3**~~（2026-09-19 二）、~~**A1**~~（2026-09-19 三）：已完成，见 §0；
+2. **C3**（卡片右键菜单，指南建议）→ **C5**（搜索 facet 语法，参照 database 模块）；
+3. **C2**（菜单快捷键，等组件支持 shortcut 槽位）；
 4. **E1 / E3 / E4**（覆盖与健壮性，可随其他任务带走）。

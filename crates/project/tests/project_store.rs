@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use rds_project::service::{load_default_connection, save_default_connection};
 use rds_project::{AcquireOutcome, ProjectLock, ProjectManager, ProjectStore};
 
 /// 独立临时目录（按用例名 + pid 隔离，运行前清理）。
@@ -57,6 +58,38 @@ fn manager_tracks_current_and_recent() {
     assert!(manager.current_project().is_none());
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// U3 默认连接：写在**项目本体**（`.RSmeta/config/settings.json`），空值 = 不设默认。
+#[test]
+fn default_connection_roundtrip() {
+    let root = temp_dir("default_conn");
+    ProjectStore::create("默认连接项目", &root).expect("create");
+
+    // 初始态：不设默认（不是错误）
+    assert_eq!(load_default_connection(&root).expect("读"), None);
+
+    save_default_connection(&root, Some("G_analytics")).expect("写");
+    assert_eq!(
+        load_default_connection(&root).expect("读"),
+        Some("G_analytics".to_string())
+    );
+    // 落在项目本体，不进名册
+    let raw = std::fs::read_to_string(root.join(".RSmeta").join("config").join("settings.json"))
+        .expect("读 settings.json");
+    assert!(raw.contains("G_analytics"), "实际：{raw}");
+
+    // 清除默认：写回 null
+    save_default_connection(&root, None).expect("清除");
+    assert_eq!(load_default_connection(&root).expect("读"), None);
+
+    // 非项目目录：读回 None（当没设默认），写失败（不假装成功）
+    let plain = temp_dir("default_conn_plain");
+    assert_eq!(load_default_connection(&plain).expect("读"), None);
+    assert!(save_default_connection(&plain, Some("G_x")).is_err());
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&plain);
 }
 
 #[test]
