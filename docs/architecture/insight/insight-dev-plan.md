@@ -914,3 +914,65 @@ cargo test -p rds-workbench --test ui_contract -j 2
 > `cargo` 命令固定 `-j 2`：并发链接重型 crate 会 OOM（DuckDB 已改动态链接）（见 `project-dev-plan.md` §0 工程配置）。
 
 真机回归矩阵：MySQL / PostgreSQL / SQLite / DuckDB × 列类型（数值 / 文本 / 日期 / 布尔 / 全 NULL）× 明暗主题。
+
+## 10. 未接与预留项（收口清单 · 权威）
+
+> **定位**：本表是「接口状态」的**唯一权威**——哪些东西写好了但**没有入口 / 没有调用者**、哪些是预留、每项的「接 / 删 / 等」建议与量级。架构 §11 的 K 表是**问题视角**（缺陷与取舍），本表是**施工视角**（接口与入口）；两表互相引用，不重复。
+> **使用约定**：做完一项 → 在 §0 加一条进度记录 → **从本表删掉该行**（本表只列还没做的）；新增预留接口时同步加行，否则会出现「看起来有、实际没有」的错觉。
+> **最近核对**：2026-09-18（逐项用 grep 核实调用者 / 构造点）。
+
+| # | 项 | 现状证据 | 建议 | 量级 / 阻塞 |
+| --- | --- | --- | --- | --- |
+| 1 | `crates/engine/insight-rules/` 重复副本（K2） | 全仓零代码引用 | **删** | 分钟级（仅需确认） |
+| 2 | 源库内省的表探查：`table_profile_service.rs` + `InsightService::get_table_profile` | 零调用者（面板走 `insight_engine::get_temp_table_profile`）；且未在真机跑通 | **删**（面板已有取样路径，功能等价；留 git 历史） | 分钟级 |
+| 3 | 结果集临时表回收（K16 唯一剩余） | `drop_temp_table(TempTableSource::Query)` / `drop_in_memory_temp_tables(Query)` 零生产调用者；建表侧已有（`create_duckdb_temp_table`） | **接**：编辑器丢弃结果集 / 关闭文档 / 项目切换三处按 D54 契约调 | 小；先定「谁负责回收」（编辑器 vs 宿主） |
+| 4 | 表级 / Schema 报告快照（K6） | 两表零写入者；`save_table_quality` / `save_schema_insight` 零调用者 | **接**（需产品点头：表级快照的比对语义与列级不同——行数、列清单都在变） | 中（store 方法已有，缺面板保存入口 + 历史视图 + 对比） |
+| 5 | 结构洞察入口（导航右键 → `InsightTarget::Schema`） | 宿主侧零构造（该目标只出现在 insight 内部与测试） | **接**：`NavHost` 加一个方法 + 导航菜单一项（照「查看统计」） | 小 |
+| 6 | 编辑器结果集「洞察此列」+ 临时表直连入口 | `open_insight_column` 零调用者；`InsightTarget::Column\|Table` 无人构造 | **留着**（用户明确说不急）；做时照 `FilterValueHook` 注入，**不需要执行期物化** | 中 |
+| 7 | 分析表型存档的洞察（`kind = Analysis`） | `can_view_stats` 对该 kind 返回 false | **等**：M6 二期有产生者 + 要 ATTACH `analytics.duckdb` + 用 `definition_sql` 重建 | 中 |
+| 8 | `RenderHint`（规则的渲染提示）零消费 | 只在 `lib.rs` re-export | **决定**：做图表契约（映射 `RenderHint` → 渲染方）或删；不做图表就删 | 小（删）/ 中（消费） |
+| 9 | 源目标下「多列」Tab 在样本表解析前点击不发请求 | 已知小限制（样本表要等列 / 表目标先取过样） | **决定**：让它自己先取一次样，或维持并在 UI 提示 | 小 |
+| 10 | 静态门（D52）是关键字黑名单 | 设计记录（见 `insight-extension-notes.md` §6.4） | **可选加强**：解析级策略检查（解析能力 `engine/src/sql` 已有） | 中 |
+| 11 | `insight_view.rs` 体量（约 2500 行代码 + 900 行测试） | 新功能仍在往里加（导出按钮即在此） | **时机触发**：见 §11 规格 | 中 |
+
+**建议顺序**（性价比）：1 → 2（纯减法，立刻消除完成度错觉）→ 3（唯一有资源影响）→ 5（一个小入口开一个完整 Tab）→ 4（要产品点头）→ 其余。
+
+## 11. `insight_view.rs` 按 Tab 位移（规格 · 待触发）
+
+> **触发条件**：下一次要**较大地**动结构 Tab / 历史 Tab，或新增一个 Tab 时**顺手做**；不单独开批（纯位移没有产品收益，单独占一批只是多付一次验证成本）。
+
+### 为什么
+
+`insight_view.rs` 现约 2500 行代码（另有约 900 行测试），内含：状态宿主、头部、Tab 条、五路 Tab 渲染、评分卡与十余个片段函数——新功能仍在往里加，继续下去会成为第二个 5000+ 行视图文件。
+
+### 目标结构（照 editor `view/results/` 那次位移）
+
+```
+crates/insight/src/
+├── insight_view.rs   # 只留：InsightView 结构体与字段、new、set_target 与各状态回填、
+│                     #      emit_request_for_tab / ensure_data_for_tab、Render 转发
+└── view/
+    ├── mod.rs        # 结构与台账（哪个函数在哪 / 为什么不拆 crate；照 editor results/mod.rs 的写法）
+    ├── header.rs     # 头部（目标名 + 类型徐标 + ⚙ 规则管理 + ⟳ 重算）
+    ├── column.rs     # 列画像四区 + 评分卡（render_score_card / dimension_row / ratio_bar）
+    ├── table.rs      # 表探查 + 评估进度 + 列名下钻热点
+    ├── multi.rs      # 多列表单 + 结果渲染 + 字段中文映射
+    ├── schema.rs     # 结构报告（健康条 + 四区 + 下钻热点 + 导出菜单）
+    └── history.rs    # 历史列表 + 对比面板 + 清理 + 存储用量
+```
+
+**命名取舍**：保留 `insight_view.rs` 作为状态宿主（而不是整体搬去 `view/host.rs`）——因为 `InsightView` / `InsightEvent` 是对宿主的 `pub` 面（`workbench` / `jobs` / 测试都在用），搬家会让 `lib.rs` 的 re-export 与引用面全动；本次位移的验收条件就是**引用面零改动**。
+
+### 不做什么
+
+- 不改语义、不改 UI、不加功能、不动 `ui.rs` 常量（纯位移）
+- **不拆 crate**：状态（target / state / data / tab）就是一个面板实例的状态，拆出去要跳 crate 传两遍（与 editor 那次判定同口径）
+- 测试可以整块移到 `view/tests.rs`，也可以先留在原处——一次只做一件事
+
+### 验收（纯位移的判据）
+
+- `cargo test -p rds-insight --lib` **225 项不变** · `--test column_profile_e2e` **13 项不变**
+- `cargo check --workspace --all-targets` 零告警（含 `rds-workbench`）
+- `cargo test -p rds-workbench --test ui_contract` **7 项不变**
+- `grep -rn "insight_view::" crates/` 的宿主引用**零改动**；`lib.rs` 的 re-export 不变
+- `view/mod.rs` 写清结构与台账（不留“这个函数为什么在这里”的疑问）
