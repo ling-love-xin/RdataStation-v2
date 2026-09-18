@@ -1,8 +1,9 @@
 # 联邦查询模块 · 模块入口
 
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**第一期已能真机使用（2026-09-18）**——`registry` / `session` 已落地，执行路径（联邦档）
-> 与门控已接；源清单浮层（`源清单 ▾`）与「用作联邦源」标记/存储待做。
+> 状态：**第一期（T1.1～T1.6）已完成（2026-09-18）**——编辑器里选「执行位置：联邦」能跑跨源 join、
+> 「源清单 ▾」能看到并维护源（重挂 · 换主源）；Oracle（L2）的真机形态已知（架构 §2.1），
+> 等 T3.2 接进会话（会话级 Secret + 不带 `READ_ONLY` 的 `ATTACH` + 两段名）。
 > 进度与验收见 `federation-dev-plan.md`；凭据与 Secret 的实测台账见架构 §8。
 
 ## 1. 模块特点
@@ -57,7 +58,9 @@
 | 源登记与状态快照 | `.../federation/registry.rs`（✅ 别名三件套 / 挂载状态 / 会话快照） |
 | 多源会话与挂载 | `.../federation/session.rs`（✅ 多源只读挂载 + 进程内会话缓存 + 按源刷新） |
 | 联邦档执行路径 | `crates/workbench/src/services/editor_exec.rs`（✅ 源清单组装 + 三档分流 + 历史带参与源） |
-| 联邦档门控 | `crates/workbench/src/services/editor_channels.rs`（✅ 真值；源清单浮层待做） |
+| 源清单（数据 / 菜单模型） | `crates/editor/src/sources.rs`（✅；`SourcesPort` + 纯函数 `menu_entries`） |
+| 源清单（快照翻译 / 视图 / 动作） | `workbench/src/services/editor_sources.rs`（✅）+ `editor/view/host.rs`（✅ `render_sources_picker`）+ `editor/src/execution.rs`（✅ `SourceAction` / `SourceNote`） |
+| 联邦档门控 | `crates/workbench/src/services/editor_channels.rs`（✅ 真值：≥ 2 个开了开关且可挂的连接） |
 | 凭据台账与脱敏 | `crates/engine/tests/federation_credentials_probe.rs`（✅）+ `accel::scrub_credentials` |
 | L2（Oracle）真机台账 | `crates/engine/tests/oracle_probe.rs`（✅ 装/载 · Secret · 目录两段名 · 表函数 · 跨源 · **只读不可用**） |
 | L3 桥接（拉数 → 临时表） | `.../federation/bridge.rs`（🟡 第二期） |
@@ -129,8 +132,6 @@ RDS_TEST_MYSQL_URL='…' RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil' \
 
 ## 7. 下一步
 
-第一期剩余：**「用作联邦源」标记的存储**（现在按“已连接 + 开启本地加速 + 驱动可挂”组装源清单，
-见 dev-plan T1.2）+ **源清单浮层**（`源清单 ▾`：失败行带原因、按源重挂、设为主源）。
-第三期：**L2 挂载路径**（`T3.2`：Oracle 的会话级 Secret + 不带 `READ_ONLY` 的 `ATTACH` +
+第一期已收圆。接下来：**L2 挂载路径**（`T3.2`：Oracle 的会话级 Secret + 不带 `READ_ONLY` 的 `ATTACH` +
 引擎侧写拒绝 + 两段名提示；形态已有真机台账，见架构 §2.1），以及 SQL Server 的真机验收（等用户通知）。
 第二期（L3 桥接）任务清单见 `federation-dev-plan.md` §2。

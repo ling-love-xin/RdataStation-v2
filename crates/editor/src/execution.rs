@@ -499,16 +499,29 @@ pub trait QueryRunner: Send + Sync + 'static {
         Err("当前执行器不支持分段抓取".to_string())
     }
 
-    /// 【B13】重新挂载加速档的源库（**表清单刷新**）
+    /// 【B13】重新挂载源（**表清单刷新**）：源库新建的表要重挂才看得见
     ///
-    /// 为什么需要它：加速档的数据是实时的，但在 `ATTACH` 时定型的**表清单**是静态的——
-    /// 源库后来新建的表在旧会话里根本不存在（真机实测）。重新挂载只改表清单，不影响已有
-    /// 结果集（那些行已经取回来了）。
+    /// - 加速档：`alias` 忽略（就那一条源），重挂它；
+    /// - 联邦档：`alias` 给了就重挂那一条（源清单里的行级动作），`None` 就逐源全挂。
     ///
     /// 与 [`Self::run`] 一样在**旁路线程**上调用（`ATTACH` 是 I/O）。
+    /// `Ok(说明)` 的那句话会显示在状态栏——它要说清“挂了哪个源 / 几张表”。
     /// 默认实现 = 不支持（没接本地加速的执行器）。
-    fn refresh_accelerated_source(&self, _connection: Option<&str>) -> Result<(), String> {
+    fn refresh_sources(
+        &self,
+        _connection: Option<&str>,
+        _channel: crate::channel::ExecChannel,
+        _alias: Option<&str>,
+    ) -> Result<String, String> {
         Err("当前执行器未接入本地加速".to_string())
+    }
+
+    /// 【联邦】切换主源（未限定名从此在它里面解析）
+    ///
+    /// 源清单里的「设为主源」走它；与重挂一样在旁路线程上调用。
+    /// 默认实现 = 不支持（没接联邦的执行器）。
+    fn set_federated_primary(&self, _connection: Option<&str>, _alias: &str) -> Result<String, String> {
+        Err("当前执行器未接入联邦查询".to_string())
     }
 }
 
@@ -539,15 +552,38 @@ struct ExecJob {
     sorted_down: Option<(String, bool)>,
 }
 
-/// 【B13】一次“重新挂载加速源”的回执
+/// 【B13】源清单上的一个动作（旁路线程执行；不产结果集）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceAction {
+    /// 重挂**全部**源（加速档就是那一条；联邦档是逐源重挂）
+    RefreshAll,
+    /// 重挂某一个源（表清单刷新）
+    RefreshSource { alias: String },
+    /// 换主源（未限定名从此在它里面解析）
+    SetPrimary { alias: String },
+}
+
+impl SourceAction {
+    /// 动作名（状态栏文案 / 测试断言共用）
+    pub fn label(&self) -> String {
+        match self {
+            Self::RefreshAll => "重新挂载源".to_string(),
+            Self::RefreshSource { alias } => format!("重新挂载源 {alias}"),
+            Self::SetPrimary { alias } => format!("把 {alias} 设为主源"),
+        }
+    }
+}
+
+/// 【B13】一次源动作的回执
 ///
 /// 它**不产结果集**（是挂载维护，不是查询），所以走与事务动作同一条“一次性线程 + 回执”
 /// 的旁路，而不是执行队列。
 #[derive(Debug, Clone)]
 pub struct SourceNote {
     pub document: DocumentId,
-    /// `Ok` = 已重新挂载（表清单刷新）；`Err` = 失败原因
-    pub result: Result<(), String>,
+    pub action: SourceAction,
+    /// `Ok` = 那句可读的“做到了什么”（如“已重挂 mysql_src（42 张表）”）；`Err` = 失败原因
+    pub result: Result<String, String>,
 }
 
 /// 一次执行的结论（回到主线程）：**一条语句一条结论**
@@ -816,31 +852,44 @@ impl ExecQueue {
         queue.drain(..).collect()
     }
 
-    /// 【B13】请一次“重新挂载加速源”（表清单刷新：源库新建的表要重挂才看得见）
+    /// 【B13】请一个源动作（重挂 / 换主源；源清单与「重新挂载源库」菜单都走它）
     ///
     /// 与 [`Self::request_transaction`] 同一套：同步只做“能不能做”的判断，动作在一次性
     /// 线程上做（`ATTACH` 是 I/O，UI 不等），回执经 [`Self::drain_source_notes`] 取回。
     /// **不占执行位**：它不产结果集，也不该把“执行中”灯点亮。
-    pub fn request_source_refresh(
+    pub fn request_source_action(
         &self,
         document: DocumentId,
         connection: Option<String>,
+        channel: crate::channel::ExecChannel,
+        action: SourceAction,
     ) -> Result<(), String> {
         let runner = self.runner.clone();
         let notes = self.source_notes.clone();
         std::thread::Builder::new()
-            .name("rds-editor-refresh-source".to_string())
+            .name("rds-editor-source-action".to_string())
             .spawn(move || {
-                let result = runner.refresh_accelerated_source(connection.as_deref());
+                let conn = connection.as_deref();
+                let result = match &action {
+                    SourceAction::RefreshAll => runner.refresh_sources(conn, channel, None),
+                    SourceAction::RefreshSource { alias } => {
+                        runner.refresh_sources(conn, channel, Some(alias))
+                    }
+                    SourceAction::SetPrimary { alias } => runner.set_federated_primary(conn, alias),
+                };
                 if let Ok(mut queue) = notes.lock() {
-                    queue.push_back(SourceNote { document, result });
+                    queue.push_back(SourceNote {
+                        document,
+                        action,
+                        result,
+                    });
                 }
             })
-            .expect("failed to spawn editor source refresh worker");
+            .expect("failed to spawn editor source action worker");
         Ok(())
     }
 
-    /// 【B13】重新挂载的回执（主线程轮询；取走即清空）
+    /// 【B13】源动作的回执（主线程轮询；取走即清空）
     pub fn drain_source_notes(&self) -> Vec<SourceNote> {
         let mut queue = match self.source_notes.lock() {
             Ok(queue) => queue,
@@ -933,8 +982,8 @@ mod tests {
     // 安全模式：**不通配导入**
     use super::{
         ExecQueue, ExecMenuKind, ExecTarget, QueryData, QueryRunner, ResultPlacement, RunOptions,
-        SEGMENT_ROWS, SubmitError, TxAction, TxNote, TxSnapshot, all_target, batch_target,
-        resolve_target, statement_target, target_for_menu,
+        SEGMENT_ROWS, SourceAction, SubmitError, TxAction, TxNote, TxSnapshot, all_target,
+        batch_target, resolve_target, statement_target, target_for_menu,
     };
     use crate::channel::ExecChannel;
     use crate::model::DocumentId;
@@ -1622,9 +1671,9 @@ mod tests {
     /// 【B13】重新挂载加速源：走旁路线程，回执从队列取（**不占执行位**）
     #[test]
     fn a_source_refresh_runs_off_the_execution_queue() {
-        /// 假执行器：记录被要求重新挂载的连接，并给一个结果
+        /// 假执行器：记录被要求重新挂载的连接（附带别名），并给一个结果
         struct RefreshRunner {
-            seen: Arc<Mutex<Vec<Option<String>>>>,
+            seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>>,
             fail_with: Option<String>,
         }
 
@@ -1639,25 +1688,36 @@ mod tests {
                 Ok(QueryData::default())
             }
 
-            fn refresh_accelerated_source(&self, connection: Option<&str>) -> Result<(), String> {
-                self.seen
-                    .lock()
-                    .expect("锁")
-                    .push(connection.map(str::to_string));
+            fn refresh_sources(
+                &self,
+                connection: Option<&str>,
+                channel: ExecChannel,
+                alias: Option<&str>,
+            ) -> Result<String, String> {
+                self.seen.lock().expect("锁").push(
+                    connection.map(str::to_string)
+                        .map(|conn| (conn, alias.map(str::to_string))),
+                );
+                let _ = channel;
                 match &self.fail_with {
                     Some(reason) => Err(reason.clone()),
-                    None => Ok(()),
+                    None => Ok("已重新挂载源库".to_string()),
                 }
             }
         }
 
-        let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>> = Arc::new(Mutex::new(Vec::new()));
         let channel = ExecQueue::new(Arc::new(RefreshRunner {
             seen: seen.clone(),
             fail_with: None,
         }));
         channel
-            .request_source_refresh(DocumentId::new("doc-refresh"), Some("P_orders".to_string()))
+            .request_source_action(
+                DocumentId::new("doc-refresh"),
+                Some("P_orders".to_string()),
+                ExecChannel::Accelerated,
+                SourceAction::RefreshAll,
+            )
             .expect("请一次重新挂载");
         assert!(!channel.is_busy(), "重新挂载不该把“执行中”灯点亮");
         let note = wait_for_source_note(&channel);
@@ -1665,8 +1725,8 @@ mod tests {
         assert_eq!(note.document.as_str(), "doc-refresh");
         assert_eq!(
             seen.lock().expect("锁").as_slice(),
-            [Some("P_orders".to_string())],
-            "绑定/活动连接要原样传下去"
+            [Some(("P_orders".to_string(), None))],
+            "绑定/活动连接要原样传下去（全挂时 alias 为空）"
         );
 
         // 失败也要如实回一条（不能只有成功才留痕）
@@ -1675,10 +1735,72 @@ mod tests {
             fail_with: Some("挂不上".to_string()),
         }));
         channel
-            .request_source_refresh(DocumentId::new("doc-refresh-2"), None)
+            .request_source_action(
+                DocumentId::new("doc-refresh-2"),
+                None,
+                ExecChannel::Federated,
+                SourceAction::RefreshSource {
+                    alias: "mysql_src".to_string(),
+                },
+            )
             .expect("请一次");
         let note = wait_for_source_note(&channel);
+        assert_eq!(note.action.label(), "重新挂载源 mysql_src");
         assert_eq!(note.result.expect_err("应当失败"), "挂不上");
+    }
+
+    /// 【T1.6】换主源：动作原样送到执行器（别名带着走），回执带回那句话
+    #[test]
+    fn setting_a_federated_primary_reaches_the_runner() {
+        let seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>> = Arc::new(Mutex::new(Vec::new()));
+
+        struct PrimaryRunner {
+            seen: Arc<Mutex<Vec<Option<(String, Option<String>)>>>>,
+        }
+
+        impl QueryRunner for PrimaryRunner {
+            fn run(
+                &self,
+                _connection: Option<&str>,
+                _channel: ExecChannel,
+                _sql: &str,
+                _options: RunOptions,
+            ) -> Result<QueryData, String> {
+                Ok(QueryData::default())
+            }
+
+            fn set_federated_primary(
+                &self,
+                connection: Option<&str>,
+                alias: &str,
+            ) -> Result<String, String> {
+                self.seen
+                    .lock()
+                    .expect("锁")
+                    .push(connection.map(|c| (c.to_string(), Some(alias.to_string()))));
+                Ok(format!("主源已切到 {alias}"))
+            }
+        }
+
+        let channel = ExecQueue::new(Arc::new(PrimaryRunner { seen: seen.clone() }));
+        channel
+            .request_source_action(
+                DocumentId::new("doc-primary"),
+                Some("P_fed".to_string()),
+                ExecChannel::Federated,
+                SourceAction::SetPrimary {
+                    alias: "pg_warehouse".to_string(),
+                },
+            )
+            .expect("请一次换主源");
+        let note = wait_for_source_note(&channel);
+        assert_eq!(note.action.label(), "把 pg_warehouse 设为主源");
+        assert_eq!(note.result.expect("该成功"), "主源已切到 pg_warehouse");
+        assert_eq!(
+            seen.lock().expect("锁").as_slice(),
+            [Some(("P_fed".to_string(), Some("pg_warehouse".to_string())))],
+            "连接与别名都要原样送到执行器"
+        );
     }
 
     /// 事务动作：真的送到执行器（带着作业的连接），回执带回新状态

@@ -36,6 +36,7 @@ use crate::model::{DocumentId, EditorMode};
 use crate::persist;
 use crate::service::Document;
 use crate::shared::EditorShared;
+use crate::sources;
 use crate::store::ResultEntry;
 use crate::ui;
 use crate::view::dialogs;
@@ -584,6 +585,7 @@ impl EditorHostPanel {
     fn render_toolbar(&self, mode: EditorMode, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().colors.border;
         let entity = cx.entity();
+        let current_channel = self.channel();
 
         let mut toolbar = div()
             .h_flex()
@@ -635,6 +637,9 @@ impl EditorHostPanel {
                     .h_flex()
                     .items_center()
                     .gap_1()
+                    .when(current_channel == ExecChannel::Federated, |row| {
+                        row.child(self.render_sources_picker(cx))
+                    })
                     .child(self.render_channel_picker(cx))
                     .child(self.render_connection_picker(cx)),
             );
@@ -902,10 +907,92 @@ impl EditorHostPanel {
         self.connection_db_type()
     }
 
-    /// 【B13】重新挂载加速档的源库（表清单刷新）
+    /// 【T1.6】源清单选择器（工具栏右侧，**只在联邦档出现**）
     ///
-    /// 只对**本地跑**的通道有意义（源库档没有“挂载”这回事）；不在那两档时直说原因，
-    /// 不要让一个“按了没反应”的菜单项存在。动作在旁路线程上做，回执由轮询泵取回。
+    /// 内容是 [`crate::sources::menu_entries`] 算的（纯函数）：汇总 + 逐行源（失败行带原话）
+    /// + 动作（重挂全部 / 设为主源 / 逐源重挂）。快照是**宿主注入的内存读**；动作走旁路
+    /// 线程（`SourceAction`），回执回到状态栏。
+    fn render_sources_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let snapshot = self.sources_snapshot();
+        let entries = sources::menu_entries(snapshot.as_ref());
+        let label = sources::button_label(snapshot.as_ref());
+
+        Button::new("editor-sources")
+            .ghost()
+            .small()
+            .debug_selector(|| "editor-sources".to_string())
+            .label(label)
+            .dropdown_menu(move |menu, _window, _cx| {
+                let mut menu = menu;
+                for entry in entries.iter() {
+                    let entity = entity.clone();
+                    menu = match entry {
+                        // 信息行与源行都是“看”的：不可点（禁用态在菜单里就是灰字）
+                        sources::SourceMenuEntry::Info(text) => {
+                            menu.item(PopupMenuItem::new(text.clone()).disabled(true))
+                        }
+                        sources::SourceMenuEntry::Source(row) => {
+                            menu.item(PopupMenuItem::new(row.text()).disabled(true))
+                        }
+                        sources::SourceMenuEntry::Action { label, action } => {
+                            let action = action.clone();
+                            menu.item(PopupMenuItem::new(label.clone()).on_click(
+                                move |_, _window, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.run_source_action(action.clone(), cx);
+                                    });
+                                },
+                            ))
+                        }
+                    };
+                }
+                menu
+            })
+    }
+
+    /// 这个文档的联邦源清单快照（**渲染路径可调**：宿主给的是内存读）
+    pub fn sources_snapshot(&self) -> Option<sources::SourcesSnapshot> {
+        let conn_id = self.bound_connection()?;
+        self.shared.sources_snapshot(&conn_id)
+    }
+
+    /// 【T1.6】源清单里的动作（重挂 / 换主源）
+    ///
+    /// 与「重新挂载源库」同一条路：旁路线程 + 回执（不占执行位）。没绑连接时直说原因。
+    pub(crate) fn run_source_action(
+        &mut self,
+        action: crate::execution::SourceAction,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.channel().runs_locally() {
+            self.set_message(
+                Some("现在不是本地跑的那两档，源清单动作没意义".to_string()),
+                cx,
+            );
+            return;
+        }
+        let channel = self.channel();
+        let action_label = action.label();
+        match self.shared.request_source_action(
+            self.document.clone(),
+            self.bound_connection(),
+            channel,
+            action,
+        ) {
+            Ok(()) => {
+                self.refresh_pending += 1;
+                self.set_message(Some(format!("正在{action_label}…")), cx);
+                self.ensure_exec_pump(cx);
+            }
+            Err(reason) => self.set_message(Some(reason), cx),
+        }
+    }
+
+    /// 【B13】重新挂载源（表清单刷新）
+    ///
+    /// 加速档重挂那一条源；联邦档逐源全挂（源清单里的是行级动作）。动作在旁路线程上做，
+    /// 回执由轮询泵取回。
     pub(crate) fn refresh_source(&mut self, cx: &mut Context<Self>) {
         if !self.channel().runs_locally() {
             self.set_message(
@@ -914,14 +1001,7 @@ impl EditorHostPanel {
             );
             return;
         }
-        match self.shared.request_source_refresh(self.document.clone()) {
-            Ok(()) => {
-                self.refresh_pending += 1;
-                self.set_message(Some("正在重新挂载源库…".to_string()), cx);
-                self.ensure_exec_pump(cx);
-            }
-            Err(reason) => self.set_message(Some(reason), cx),
-        }
+        self.run_source_action(crate::execution::SourceAction::RefreshAll, cx);
     }
 
     /// 【B13】还没回执的重新挂载数（供测试断言）
@@ -1877,15 +1957,16 @@ impl EditorHostPanel {
             }
         }
 
-        // 【B13】重新挂载加速源的回执（成败都要说出来：它是用户按的一个动作）
+        // 【B13/T1.6】源动作的回执（成败都要说出来：它是用户按的一个动作）
         for note in self.shared.drain_source_notes() {
             self.refresh_pending = self.refresh_pending.saturating_sub(1);
             if note.document != self.document {
                 continue;
             }
+            let label = note.action.label();
             match note.result {
-                Ok(()) => self.set_message(Some("已重新挂载源库（新表可见了）".to_string()), cx),
-                Err(reason) => self.set_message(Some(format!("重新挂载失败：{reason}")), cx),
+                Ok(done) => self.set_message(Some(done), cx),
+                Err(reason) => self.set_message(Some(format!("{label}失败：{reason}")), cx),
             }
         }
 

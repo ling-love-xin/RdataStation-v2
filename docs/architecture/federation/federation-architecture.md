@@ -136,6 +136,7 @@
 | 11 | 🟡 | **扫描器不认 Secret**（D11 的实测）：凭据只能随 `ATTACH` 串进 DuckDB | 企业内网可能不接受“口令进内存”（虽然不落库、不进日志） | 界面与文档如实说明；若将来扫描器支持 Secret，再改成 Secret 优先（探针已留台账） |
 | 12 | 🟡 | **SSH / 代理后面的源**：DuckDB 自己发起到源库的连接，走不到应用内的隧道 | 这类连接当下只能走源库档（或将来 L3 桥接：应用侧拉数） | 门控/源清单里如实报“挂不上：连接超时”；L3 桥接是它真正的归宿 |
 | 13 | ⚪ | **项目作用域的标记源靠运行态补充**（D16）：连接记录的全局表里没有 `P_`，所以 `P_` 连接要先在应用里建连才进得了源清单 | 项目专属连接（项目本地 sqlite 等）多一步 | 要彻底解决得把「当前项目根」交给执行器；第一期先靠运行态兜住 |
+| 14 | ⚪ | **“未限定名只在主源解析”对 L1 的实际含义是「主源 catalog + 默认 schema」**：DuckDB 文件源（`main`）不写限定名能用，而 SQLite / MySQL 源的 schema 不是默认那个（真机：`SELECT … FROM blob` 报 `Table with name blob does not exist`，`sqlite_src.main.blob` 才行） | 用户可能以为“主源里所有表都能不写限定名” | 结果区那行小字与源清单底部提示都写“跨源请写 `别名.schema.表`”；L2 两段名的差异另见 §2.1 |
 
 ## 9. 实现位置映射（设计决策 → 代码）
 
@@ -150,6 +151,7 @@
 | D13 门控口径 | `crates/workbench/src/services/editor_channels.rs`（`federated_availability`） |
 | D15 源登记（复用开关） | `crates/workbench/src/components/connection_dialog/render.rs`（「DuckDB 直连（本地加速 / 用作联邦源）」分组） |
 | D16 从记录组装源 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `plan_from_records`）+ `accel::normalize_scheme`（驱动 id → 扫描器 scheme） |
+| 源清单（数据 / 菜单模型 / 视图 / 动作） | `crates/editor/src/sources.rs` + `editor/view/host.rs`（`render_sources_picker`）+ `workbench/src/services/editor_sources.rs` + `editor/src/execution.rs`（`SourceAction` / `SourceNote`） |
 | 联邦档执行路径 / 源清单组装 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `run_on_federation`） |
 | 历史带参与源 | `crates/engine/src/persistence/history_store.rs`（`sources`）+ `crates/editor/src/history.rs`（`sources_text`） |
 | D7 下推与上限 / L3 | `.../federation/bridge.rs`（🟡 第二期） |

@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::channel::{ChannelAvailabilitySet, ChannelsHandle};
+use crate::sources::SourcesHandle;
 use crate::connection::{ConnectionOption, ConnectionsHandle, chip_for, status_text};
 use crate::execution::{ExecQueue, QueryRunner};
 use crate::service::{EditorService, OpenOutcome, OpenRequest};
@@ -69,6 +70,8 @@ pub struct EditorShared {
     connections: Rc<RefCell<Option<ConnectionsHandle>>>,
     /// 【B13】通道门控端口：宿主注入后才有（无宿主 = 加速 / 联邦两档都不可用并给原因）
     channels: Rc<RefCell<Option<ChannelsHandle>>>,
+    /// 【B13/T1.6】源清单端口：宿主注入后才有（无宿主 = 「源清单 ▾」没有内容）
+    sources: Rc<RefCell<Option<SourcesHandle>>>,
     /// 执行回执队列（宿主轮询取走；见 [`ExecReceipt`]）
     receipts: Rc<RefCell<Vec<ExecReceipt>>>,
 }
@@ -90,6 +93,7 @@ impl EditorShared {
             export_path: Rc::new(RefCell::new(None)),
             connections: Rc::new(RefCell::new(None)),
             channels: Rc::new(RefCell::new(None)),
+            sources: Rc::new(RefCell::new(None)),
             receipts: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -163,22 +167,24 @@ impl EditorShared {
         channel_queue.submit(document, target, connection, placement, options, channel)
     }
 
-    /// 【B13】请一次“重新挂载加速源”（表清单刷新）
+    /// 【B13】请一个源动作（重挂 / 换主源）
     ///
     /// 与 [`Self::submit`] 同一口径：连接从**服务层**取（调用方不需要知道绑定在哪）。
-    pub fn request_source_refresh(
+    pub fn request_source_action(
         &self,
         document: crate::model::DocumentId,
+        connection: Option<String>,
+        channel: crate::channel::ExecChannel,
+        action: crate::execution::SourceAction,
     ) -> Result<(), String> {
-        let connection = self.service.borrow().connection_for(&document);
         let guard = self.exec.borrow();
         let Some(queue) = guard.as_ref() else {
             return Err("当前未接入执行".to_string());
         };
-        queue.request_source_refresh(document, connection)
+        queue.request_source_action(document, connection, channel, action)
     }
 
-    /// 【B13】重新挂载的回执（面板轮询取走）
+    /// 【B13】源动作的回执（面板轮询取走）
     pub fn drain_source_notes(&self) -> Vec<crate::execution::SourceNote> {
         let guard = self.exec.borrow();
         guard
@@ -392,5 +398,21 @@ impl EditorShared {
             Some(port) => port.availability(conn_id),
             None => ChannelAvailabilitySet::blocked("尚未接入通道能力"),
         }
+    }
+
+    /// 【T1.6】注入源清单端口（**宿主调用一次**：workbench 读引擎的联邦会话快照）
+    pub fn attach_sources(&self, port: SourcesHandle) {
+        *self.sources.borrow_mut() = Some(port);
+    }
+
+    /// 是否接了源清单端口
+    pub fn has_sources(&self) -> bool {
+        self.sources.borrow().is_some()
+    }
+
+    /// 某连接上的联邦源清单（**渲染路径可调**：实现必须是内存快照；`None` = 还没会话）
+    pub fn sources_snapshot(&self, conn_id: &str) -> Option<crate::sources::SourcesSnapshot> {
+        let guard = self.sources.borrow();
+        guard.as_ref()?.snapshot(conn_id)
     }
 }

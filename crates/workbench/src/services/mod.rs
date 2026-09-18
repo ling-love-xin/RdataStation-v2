@@ -19,6 +19,7 @@ pub mod editor_connections;
 pub mod editor_exec;
 pub mod editor_files;
 pub mod editor_session;
+pub mod editor_sources;
 pub mod mock_generator;
 pub mod mock_jobs;
 pub mod nav_runtime;

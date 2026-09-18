@@ -93,6 +93,8 @@ pub mod persist;
 pub mod service;
 pub mod session;
 pub mod shared;
+/// 【T1.6】联邦源清单（「源清单 ▾」浮层的数据侧与纯函数模型）
+pub mod sources;
 pub mod store;
 pub mod translate;
 pub mod ui;

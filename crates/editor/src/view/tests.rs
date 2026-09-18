@@ -23,6 +23,7 @@ use gpui_kit::{
 
 use crate::commands::{ExecuteAll, ExecuteSql, FormatDocument, SaveDocument, ToggleComment};
 use crate::channel::{ChannelAvailability, ChannelAvailabilitySet, ChannelsPort, ExecChannel};
+use crate::sources::{SourceRow, SourceState, SourcesPort, SourcesSnapshot};
 use crate::connection::{ConnectionOption, ConnectionsPort};
 use crate::execution::{self, QueryData, QueryRunner};
 use crate::export::{self, ExportFormat, ExportScope};
@@ -4181,6 +4182,83 @@ fn channel_menu_rows(
     })
 }
 
+/// 【T1.6】源清单：「源清单 ▾」只在联邦档出现，内容来自宿主端口（快照 → 行/动作）
+#[gpui_kit::test]
+fn the_sources_picker_shows_up_in_the_federated_channel(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (shared, id, _seen, _seen_conn) = shared_with_runner("select 1;", EditorMode::Sql);
+    shared.attach_connections(Rc::new(FakeConnections::new(vec![option(
+        "P_orders", "P", "orders",
+    )])));
+    shared.attach_channels(Rc::new(FakeChannels::open()));
+    shared.attach_sources(Rc::new(FakeSources));
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    // 绑定连接（源清单属于“这个连接上的联邦会话”）
+    cx.update(|_window, cx| panel.update(cx, |panel, cx| panel.bind_connection(Some("P_orders".to_string()), cx)));
+
+    // 「源清单 ▾」只在联邦档出现（源库档没有挂载这回事，不摆按了没用的入口）
+    let picker_present = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.debug_bounds("editor-sources").is_some()
+    };
+    assert!(!picker_present(cx), "源库档不该有「源清单 ▾」");
+
+    // 切到联邦：清单能读出来（两行 + 主源 + 回退说明）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_channel(ExecChannel::Federated, cx));
+    });
+    let snapshot = cx
+        .update(|_window, cx| panel.read(cx).sources_snapshot())
+        .expect("联邦档该有清单");
+    assert_eq!(snapshot.sources.len(), 2, "{snapshot:?}");
+    assert_eq!(snapshot.primary.as_deref(), Some("mysql_src"));
+    assert!(snapshot.note.is_some(), "回退说明要带过来");
+    assert!(picker_present(cx), "联邦档该有「源清单 ▾」");
+
+    // 动作：换主源要留痕（旁路线程 + 回执；回执由泵取回，这里先看“正在…”那句）
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.run_source_action(
+                execution::SourceAction::SetPrimary {
+                    alias: "pg_warehouse".to_string(),
+                },
+                cx,
+            );
+        });
+    });
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("动作要留痕");
+    assert!(message.contains("pg_warehouse"), "{message}");
+}
+
+/// 假源清单端口：一份固定的快照（不改也不动）
+struct FakeSources;
+
+impl SourcesPort for FakeSources {
+    fn snapshot(&self, _conn_id: &str) -> Option<SourcesSnapshot> {
+        Some(SourcesSnapshot {
+            sources: vec![
+                SourceRow {
+                    alias: "mysql_src".to_string(),
+                    kind_label: "MySQL".to_string(),
+                    state: SourceState::Ready { tables: 42 },
+                    primary: true,
+                },
+                SourceRow {
+                    alias: "pg_warehouse".to_string(),
+                    kind_label: "PostgreSQL".to_string(),
+                    state: SourceState::Ready { tables: 7 },
+                    primary: false,
+                },
+            ],
+            primary: Some("mysql_src".to_string()),
+            note: Some("主源 oracle_prod 不可用，已改用 mysql_src".to_string()),
+        })
+    }
+}
+
 /// 菜单门控：不可用项**保留形态 + 行尾给原因**，当前项打勾（原型 §2.2 / §5.7）
 #[gpui_kit::test]
 fn the_channel_menu_greys_out_with_reasons(cx: &mut TestAppContext) {
@@ -4359,9 +4437,14 @@ fn refreshing_the_source_reports_back_from_the_side_thread(cx: &mut TestAppConte
             Ok(QueryData::default())
         }
 
-        fn refresh_accelerated_source(&self, _connection: Option<&str>) -> Result<(), String> {
+        fn refresh_sources(
+            &self,
+            _connection: Option<&str>,
+            _channel: ExecChannel,
+            _alias: Option<&str>,
+        ) -> Result<String, String> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+            Ok("已重新挂载源库（新表可见了）".to_string())
         }
     }
 

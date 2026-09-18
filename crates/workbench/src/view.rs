@@ -141,6 +141,8 @@ impl WorkbenchView {
         crate::services::editor_connections::attach(&editor_service, &editor_shared_for_conn);
         // B13：把执行通道端口接上（源库 / 本地加速 / 联邦 的门控；未接时后两档都不可选并给原因）
         crate::services::editor_channels::attach(&editor_service, &editor_shared_for_conn);
+        // T1.6：把源清单端口接上（联邦会话快照 → 「源清单 ▾」浮层；未接时浮层只有空态说明）
+        crate::services::editor_sources::attach(&editor_service);
         // M1：排序偏好与首屏项目列表（无项目时）都在构造期完成，避免在 `render` 里做 I/O
         //（GPUI-kit 编码指南：副作用不得放在 render）。偏好走 `SettingsService`（唯一读路径），
         // 不直读 `settings.json`：`app` 已在开窗前 `SettingsService::init`（K1）。

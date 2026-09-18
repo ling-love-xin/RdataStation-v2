@@ -1204,7 +1204,12 @@ fn check_accelerated_channel(
     );
     // 菜单上的「重新挂载源库」走的就是这一条（旁路线程 + 回执）
     shared
-        .request_source_refresh(document.clone())
+        .request_source_action(
+            document.clone(),
+            None,
+            editor::channel::ExecChannel::Accelerated,
+            editor::execution::SourceAction::RefreshAll,
+        )
         .expect("请一次重新挂载");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

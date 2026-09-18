@@ -572,17 +572,6 @@ impl QueryRunner for EngineQueryRunner {
         true
     }
 
-    /// 【B13】重新挂载加速档的源库（表清单刷新：源库新建的表要重挂才看得见）
-    ///
-    /// 已在旁路线程上调用（`ATTACH` 是 I/O）。没有会话就建一条（等价于“先挂一次”）。
-    fn refresh_accelerated_source(&self, connection: Option<&str>) -> Result<(), String> {
-        let source = self.accel_source(connection)?;
-        let session = accel::ensure_session(&source)?;
-        session.refresh().map_err(|error| error.to_string())?;
-        tracing::info!(source = %source.conn_id, "本地加速源已重新挂载（表清单已刷新）");
-        Ok(())
-    }
-
     /// 中断：源库档翻引擎的取消令牌；本地跑的两档叫 DuckDB 中断
     ///
     /// 三处都试是有意的：编辑器只知道“这条文档在执行”，不知道当前那次执行具体落在哪一边
@@ -617,6 +606,79 @@ impl QueryRunner for EngineQueryRunner {
             (false, Some(reason)) => Err(reason),
             (false, None) => Ok(false),
         }
+    }
+
+    /// 【B13/T1.6】重新挂载源（表清单刷新；加速档那一条 / 联邦档某一源或全挂）
+    fn refresh_sources(
+        &self,
+        connection: Option<&str>,
+        channel: ExecChannel,
+        alias: Option<&str>,
+    ) -> Result<String, String> {
+        // 加速档：`alias` 无意义（就那一条源）
+        if channel != ExecChannel::Federated {
+            let source = self.accel_source(connection)?;
+            let session = accel::ensure_session(&source)?;
+            session.refresh().map_err(|error| error.to_string())?;
+            tracing::info!(source = %source.conn_id, "本地加速源已重新挂载（表清单已刷新）");
+            return Ok("已重新挂载源库（新表可见了）".to_string());
+        }
+
+        // 联邦档：会话已经建好（源清单就是按同一套口径组装的），这里只重挂
+        let owner = self.resolve_conn_id(connection).ok_or_else(|| {
+            "联邦源需要一个连接：先绑定一个，或在导航里选中它".to_string()
+        })?;
+        match alias {
+            Some(alias) => {
+                fed_session::refresh_source(&owner, alias)?;
+                // 重挂之后状态就是结论：失败要说原因（不能只报“重挂完了”）
+                let state = fed_session::snapshot_for(&owner).and_then(|snapshot| {
+                    snapshot
+                        .sources
+                        .iter()
+                        .find(|entry| entry.alias() == alias)
+                        .map(|entry| entry.state.clone())
+                });
+                match state {
+                    Some(MountState::Ready { tables }) => {
+                        Ok(format!("已重新挂载 {alias}（{tables} 张表）"))
+                    }
+                    Some(MountState::Failed(reason)) => Err(format!("源 {alias} 仍挂不上：{reason}")),
+                    None => Ok(format!("已重新挂载 {alias}")),
+                }
+            }
+            None => {
+                let results = fed_session::refresh_all(&owner)?;
+                let failed: Vec<String> = results
+                    .iter()
+                    .filter_map(|(alias, outcome)| {
+                        outcome
+                            .as_ref()
+                            .err()
+                            .map(|reason| format!("{alias}：{reason}"))
+                    })
+                    .collect();
+                if failed.is_empty() {
+                    Ok(format!("已重新挂载 {} 个源（新表可见了）", results.len()))
+                } else {
+                    Err(format!(
+                        "{} 个源重挂成功，{} 个失败：{}",
+                        results.len() - failed.len(),
+                        failed.len(),
+                        failed.join("；")
+                    ))
+                }
+            }
+        }
+    }
+
+    /// 【T1.6】换主源（未限定名从此在它里面解析）
+    fn set_federated_primary(&self, connection: Option<&str>, alias: &str) -> Result<String, String> {
+        let owner = self.resolve_conn_id(connection).ok_or_else(|| {
+            "联邦源需要一个连接：先绑定一个，或在导航里选中它".to_string()
+        })?;
+        fed_session::set_primary(&owner, alias)?;
+        Ok(format!("主源已切到 {alias}（未限定名的解析者）"))
     }
 }
 

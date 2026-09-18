@@ -124,6 +124,42 @@ fn marked_connections_become_federated_sources() {
     );
     eprintln!("✅ 跨源（不需要应用先建连）：{count} 行 · {notice}");
 
+    // 【T1.6】换主源：引擎侧的真值要跟着换（未限定名的解析者）
+    //
+    // 注：DuckDB 里“未限定名”是按**主源 catalog + 默认 schema** 解析的；SQLite / MySQL 源的
+    // schema 不是默认那个，所以跨源查询要写全限定名（结果区那行小字一直在这么说）。
+    let switch = runner
+        .set_federated_primary(Some(&mysql_id), "sqlite_src")
+        .expect("换主源该成功");
+    assert!(switch.contains("sqlite_src"), "{switch}");
+    let snapshot = engine::duckdb::federation::session::snapshot_for(&mysql_id)
+        .expect("会话该还在");
+    assert_eq!(snapshot.primary.as_deref(), Some("sqlite_src"), "{snapshot:?}");
+    // 换完之后跨源查询照常（全限定名不受主源影响）
+    let after = runner
+        .run(
+            Some(&mysql_id),
+            ExecChannel::Federated,
+            "SELECT count(*) AS n FROM sqlite_src.main.blob",
+            RunOptions {
+                use_transaction: false,
+            },
+        )
+        .expect("换主源后该照常能查");
+    assert_eq!(after.rows.len(), 1, "{:?}", after.rows);
+    eprintln!("✅ 换主源：{switch} · 全限定名照常（blob → {} 行）", after.rows[0][0]);
+
+    // 【T1.6】重挂：单源（源清单里的行级动作）与全挂（菜单里的那项）
+    let one = runner
+        .refresh_sources(Some(&mysql_id), ExecChannel::Federated, Some("mysql_src"))
+        .expect("重挂单个源");
+    assert!(one.contains("mysql_src"), "{one}");
+    let all = runner
+        .refresh_sources(Some(&mysql_id), ExecChannel::Federated, None)
+        .expect("全挂");
+    assert!(all.contains("2 个源"), "{all}");
+    eprintln!("✅ 重挂：{one} · {all}");
+
     // 撤掉 SQLite 的标记 → 只剩一个源：入口就拒，且说清还差什么
     rt.block_on(service.update(
         &sqlite_id,
