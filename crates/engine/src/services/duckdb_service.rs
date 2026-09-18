@@ -169,33 +169,32 @@ impl DuckDbService {
                 e
             )))
         })?;
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| {
-                stmt.column_name(i)
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|_| format!("c{}", i))
-            })
-            .collect();
 
-        let rows_result = stmt
-            .query_map([], |row| {
-                (0..col_count)
-                    .map(|i| {
-                        let v: duckdb::types::Value = row.get(i)?;
-                        Ok(duckdb_value_to_json(&v))
-                    })
-                    .collect::<Result<Vec<serde_json::Value>, duckdb::Error>>()
-            })
-            .map_err(|e| {
-                CoreError::common(CommonError::General(format!("DuckDB query failed: {}", e)))
-            })?;
+        // 顺序不能反：duckdb-rs 1.10505 的 `Statement::column_names()` / `schema()` 读的是
+        // **执行结果**（`raw_statement.rs` 的 `executed()`），prepare 之后、执行之前调会直接
+        // panic（`The statement was not executed yet`）。所以先 `query` 把语句跑起来，再从
+        // `Rows::as_ref()` 取回那条已执行的语句读列名——这也是 duckdb-rs 文档推荐的写法。
+        let mut query_rows = stmt.query([]).map_err(|e| {
+            CoreError::common(CommonError::General(format!("DuckDB query failed: {}", e)))
+        })?;
+        let col_names = query_rows
+            .as_ref()
+            .map(|statement| statement.column_names())
+            .unwrap_or_default();
+        let col_count = col_names.len();
 
         let mut rows = Vec::new();
-        for r in rows_result {
-            rows.push(r.map_err(|e| {
-                CoreError::common(CommonError::General(format!("DuckDB row error: {}", e)))
-            })?);
+        while let Some(row) = query_rows.next().map_err(|e| {
+            CoreError::common(CommonError::General(format!("DuckDB row error: {}", e)))
+        })? {
+            let mut values = Vec::with_capacity(col_count);
+            for i in 0..col_count {
+                let v: duckdb::types::Value = row.get(i).map_err(|e| {
+                    CoreError::common(CommonError::General(format!("DuckDB cell error: {}", e)))
+                })?;
+                values.push(duckdb_value_to_json(&v));
+            }
+            rows.push(values);
         }
 
         Ok((col_names, rows))

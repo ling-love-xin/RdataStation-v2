@@ -83,6 +83,7 @@
 //! 状态的 SQL 文本原语，属 engine（`core/sql` 是 sqlglot 的唯一接入点），editor 直接消费，
 //! 不在本 crate 重复实现。
 
+pub mod analysis;
 pub mod channel;
 pub mod commands;
 pub mod completion;

@@ -227,6 +227,9 @@ mod tests {
     /// 项目切换：清掉本进程的 mock 临时表（上一项目的试算结果不该继续占内存）。
     ///
     /// 只断言**自己那张表**：内存库是进程级的，别的 lib 用例可能同时也在建表。
+    /// 清理又是**非阻塞**的（拿不到内存库锁就留给下一次切项目，见 `clear_mock_temp_tables`），
+    /// 所以按生产语义**重试几拍**——B15 的分析用例会在同一进程里持锁跑 DuckDB，
+    /// 一次不成就断言失败的话，测的是锁竞争而不是清场口（与结果集那条同一口径）。
     #[gpui_kit::test]
     fn project_switch_clears_mock_temp_tables(cx: &mut TestAppContext) {
         let shared = Shared::with_connections(Vec::new(), None);
@@ -240,13 +243,23 @@ mod tests {
             "前置条件：临时表应当已建好"
         );
 
-        cx.update(|cx| clear_mock_temp_tables(&shared, cx));
+        let mut cleared = false;
+        for _ in 0..100 {
+            cx.update(|cx| clear_mock_temp_tables(&shared, cx));
+            if !mock::MockEngine::temp_tables()
+                .expect("列临时表")
+                .contains(&info.temp_table_name)
+            {
+                cleared = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         assert!(
-            !mock::MockEngine::temp_tables()
-                .expect("列临时表")
-                .contains(&info.temp_table_name),
-            "切项目后不应再有上一项目的临时表"
+            cleared,
+            "切项目后不应再有上一项目的临时表：{}",
+            info.temp_table_name
         );
     }
 

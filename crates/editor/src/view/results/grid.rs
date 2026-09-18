@@ -768,6 +768,8 @@ pub fn status_segments(status: &ResultStatus) -> (String, String) {
 pub struct ResultControls {
     /// 【B15】本地筛选框（原型 §5.5：只作用于视图层，不重查）
     pub filter: Option<AnyElement>,
+    /// 【B15】本地分析（下拉：计数 / 逐列分组计数；数据是桥接过来的行）
+    pub analysis: Option<AnyElement>,
     /// 复制当前结果集（TSV）
     pub copy: Option<AnyElement>,
     /// 【B7】导出当前结果集（下拉：格式 × 仅已抓取 / 抓全量）
@@ -922,8 +924,9 @@ pub fn render(
                         .h_flex()
                         .items_center()
                         .gap_1()
-                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · … 分析 ▾ · 导出 ▾ · ⟳ · 复制
+                        // 顺序照原型 §2.4 的右段：⌕ 筛选 · ⚗ 分析 ▾ · ⤓ 导出 ▾ · ⟳ · 复制
                         .children(controls.filter)
+                        .children(controls.analysis)
                         .children(controls.export)
                         .children(controls.refresh)
                         .children(controls.copy),

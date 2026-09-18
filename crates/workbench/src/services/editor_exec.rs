@@ -24,6 +24,7 @@
 
 use std::sync::Arc;
 
+use editor::analysis::AnalysisRequest;
 use editor::channel::ExecChannel;
 use editor::execution::{QueryData, QueryRunner};
 use editor::shared::EditorShared;
@@ -616,6 +617,44 @@ impl QueryRunner for EngineQueryRunner {
         }
     }
 
+    /// 【B15】本地分析：把桥接过来的行建成 DuckDB 临时表，再跑分析 SQL（**不碰源库**）
+    ///
+    /// 引擎侧 `execute_duckdb_analysis` 已经在内存 DuckDB 上跑（`DuckDBManager::get_or_create_in_memory`），
+    /// 临时表由 `TempTableManager` 登记（上限 / TTL / 关项目清场都走那一套）。
+    /// `{table}` 占位符由引擎替换成真正的临时表名。
+    ///
+    /// 值的类型：`NULL` 字面量→真 NULL，其余按**展示文本**进库（与 B7 导出同一口径）；
+    /// 数字列会被引擎按整列推断成数值，要按原样比较就在分析 SQL 里 `CAST(... AS VARCHAR)`。
+    fn analyze(&self, request: &AnalysisRequest) -> Result<QueryData, String> {
+        let rows: Vec<Vec<serde_json::Value>> = request
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell_json(cell)).collect())
+            .collect();
+        let result = crate::services::result_service::ResultService::execute_duckdb_analysis(
+            "",
+            &request.sql,
+            Some(request.columns.clone()),
+            Some(rows),
+        )
+        .map_err(|error| error.to_string())?;
+
+        Ok(QueryData {
+            columns: result.columns,
+            rows: result
+                .rows
+                .iter()
+                .map(|row| row.iter().map(json_cell_text).collect())
+                .collect(),
+            elapsed_ms: result.elapsed_ms as u64,
+            truncated: false,
+            affected_rows: None,
+            // 分析结果没有“下一段”可言（它一次算完）
+            has_more: false,
+            notice: Some(request.notice()),
+        })
+    }
+
     /// 【B13/T1.6】重新挂载源（表清单刷新；加速档那一条 / 联邦档某一源或全挂）
     fn refresh_sources(
         &self,
@@ -687,6 +726,26 @@ impl QueryRunner for EngineQueryRunner {
         })?;
         fed_session::set_primary(&owner, alias)?;
         Ok(format!("主源已切到 {alias}（未限定名的解析者）"))
+    }
+}
+
+/// 网格里的一个字符串 → JSON 值（桥接给 DuckDB 用）
+///
+/// `NULL` 是**字面量**（网格与导出同一个判据）→ 真 `null`；其余都是字符串。
+fn cell_json(cell: &str) -> serde_json::Value {
+    if cell == "NULL" {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(cell.to_string())
+    }
+}
+
+/// DuckDB 回来的一个 JSON 值 → 网格里的字符串（与 `NULL` 字面量口径一致）
+fn json_cell_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_string(),
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -1026,6 +1085,57 @@ fn column_names(result: &QueryResult) -> Vec<String> {
 /// “NULL”与字符串 “NULL”（1b 的类型化网格），改这里一处并补测试。
 fn cell_text(value: &Value) -> String {
     value.to_string()
+}
+
+mod analysis_tests {
+    // 安全模式：**不通配导入**
+    use super::EngineQueryRunner;
+    use editor::analysis::AnalysisRequest;
+    use editor::execution::QueryRunner as _;
+
+    /// 桥接的行真能落到内存 DuckDB 上跑出结果（**不需要任何服务器**）
+    ///
+    /// 这条把三件事一起钉住：`{table}` 占位符被替换、行被逐行写进临时表、
+    /// `NULL` 字面量当真 NULL（否则 `count(id)` 会把那一行也算上）。
+    #[test]
+    fn bridged_rows_run_on_the_in_memory_duckdb() {
+        let Some(runner) = EngineQueryRunner::new() else {
+            eprintln!("⏭️ 建不出执行器 runtime，跳过本地分析探针");
+            return;
+        };
+        let request = AnalysisRequest {
+            sql: "SELECT count(*) AS \"总\", count(\"id\") AS \"非空\" FROM {table}".to_string(),
+            columns: vec!["id".to_string()],
+            rows: vec![vec!["1".to_string()], vec!["NULL".to_string()]],
+            dropped_rows: 0,
+        };
+        let data = runner.analyze(&request).expect("本地分析该跑通");
+        assert_eq!(data.columns, vec!["总".to_string(), "非空".to_string()]);
+        assert_eq!(
+            data.rows,
+            vec![vec!["2".to_string(), "1".to_string()]],
+            "两行都进表；NULL 是真 NULL（非空计数只算 1）"
+        );
+        assert!(!data.has_more, "分析一次算完，没有下一段");
+        let notice = data.notice.clone().unwrap_or_default();
+        assert!(notice.contains("基于已抓取的 2 行"), "{notice}");
+    }
+
+    /// 分析 SQL 写错：如实报错（不静默出空网格）
+    #[test]
+    fn a_broken_analysis_sql_reports_the_reason() {
+        let Some(runner) = EngineQueryRunner::new() else {
+            return;
+        };
+        let request = AnalysisRequest {
+            sql: "SELECT nope FROM {table}".to_string(),
+            columns: vec!["id".to_string()],
+            rows: vec![vec!["1".to_string()]],
+            dropped_rows: 0,
+        };
+        let error = runner.analyze(&request).expect_err("该报错");
+        assert!(!error.is_empty(), "错误要说清原因：{error}");
+    }
 }
 
 #[cfg(test)]

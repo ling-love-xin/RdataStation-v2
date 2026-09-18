@@ -43,9 +43,14 @@ pub struct ResultEntry {
     pub has_more: bool,
     /// 【B10】结果集标签的自定义标题（`None` = 界面按序号给“结果 N”）
     ///
-    /// 用在“这份结果横竖不是普通查询输出”的场合（今天只有**执行计划**）——
+    /// 用在“这份结果横竖不是普通查询输出”的场合（执行计划 / **分析**）——
     /// 用户看到标签就知道自己在看什么，而不用去悬停摘要里找。
     pub title: Option<String>,
+    /// 【B15】这份结果是**本地 DuckDB 分析**的产物
+    ///
+    /// 为什么要有这个标记：分析结果基于**当时那份已抓到的行**，重跑它的 SQL 没有意义
+    /// （临时表早就不在了）——界面据此**不摆「⟳ 刷新」**，而不是摆一个点了就错的按钮。
+    pub analysis: bool,
     /// 列名（失败时为空）
     pub columns: Vec<String>,
     /// 行数据（已字符串化；失败时为空）
@@ -97,6 +102,7 @@ impl ResultEntry {
             // 一次拿完的路径（非分段）没有“下一段”可言；分段抓取由 `has_more` 另行标
             has_more: truncated,
             title: None,
+            analysis: false,
             columns,
             rows,
             error: None,
@@ -127,6 +133,12 @@ impl ResultEntry {
         self
     }
 
+    /// 【B15】标记为分析结果（本地 DuckDB 产物；界面据此不摆“刷新”）
+    pub fn with_analysis(mut self, analysis: bool) -> Self {
+        self.analysis = analysis;
+        self
+    }
+
     /// 【B10】给结果集贴一个标题（如「执行计划」；不贴就是“结果 N”）
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -145,6 +157,7 @@ impl ResultEntry {
             channel: ExecChannel::default(),
             has_more: false,
             title: None,
+            analysis: false,
             columns: Vec::new(),
             rows: Vec::new(),
             error: Some(error),

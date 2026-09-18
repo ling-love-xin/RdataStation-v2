@@ -80,6 +80,21 @@ pub enum ExecTarget {
         column: String,
         descending: bool,
     },
+    /// 【B15】本地 DuckDB 分析：对**选中那份结果的已抓行**跑一条聚合 SQL（落**新结果集**）
+    ///
+    /// 与另两个下发都不同：它**不碰源库**（数据是桥接过来的行），所以通道闸 / 项目只读闸
+    /// 对它一律放行（那两道管的是“写源库对象”）。
+    Analysis(crate::analysis::AnalysisRequest),
+}
+
+impl ExecTarget {
+    /// 【B15】分析目标带的载荷（其他目标为 `None`）
+    pub fn analysis(&self) -> Option<&crate::analysis::AnalysisRequest> {
+        match self {
+            Self::Analysis(request) => Some(request),
+            _ => None,
+        }
+    }
 }
 
 /// 分段抓取的一段多少行（B5b；计划口径：固定 1000 行/段）
@@ -94,6 +109,8 @@ impl ExecTarget {
             Self::Segment { sql, .. } | Self::Filtered { sql, .. } | Self::SortedDown { sql, .. } => {
                 Some(sql)
             }
+            // 分析 SQL 不发给源库驱动（它在本地 DuckDB 上跑，见 `analysis`）
+            Self::Analysis(_) => None,
         }
     }
 
@@ -106,6 +123,8 @@ impl ExecTarget {
             Self::Segment { sql, .. } | Self::Filtered { sql, .. } | Self::SortedDown { sql, .. } => {
                 vec![sql.clone()]
             }
+            // 分析 SQL 走同一条“一句一条结论”的路（它不经过通道闸，见 `analysis`）
+            Self::Analysis(request) => vec![request.sql.clone()],
         }
     }
 
@@ -152,6 +171,7 @@ impl ExecTarget {
             Self::Segment { .. } => "取下一段",
             Self::Filtered { .. } => "下发筛选",
             Self::SortedDown { .. } => "排序下发",
+            Self::Analysis(_) => "本地分析",
         }
     }
 }
@@ -536,6 +556,13 @@ pub trait QueryRunner: Send + Sync + 'static {
     fn set_federated_primary(&self, _connection: Option<&str>, _alias: &str) -> Result<String, String> {
         Err("当前执行器未接入联邦查询".to_string())
     }
+
+    /// 【B15】本地 DuckDB 分析：对桥接过来的行跑一条聚合 SQL（**不碰源库**）
+    ///
+    /// 默认实现 = 不支持（宿主没接分析能力的真实状态，不是静默失败）。
+    fn analyze(&self, _request: &crate::analysis::AnalysisRequest) -> Result<QueryData, String> {
+        Err("当前执行器不支持 DuckDB 分析".to_string())
+    }
 }
 
 // ===== 跑完放哪 =====
@@ -563,6 +590,8 @@ struct ExecJob {
     filtered: Option<(String, Vec<String>)>,
     /// 【B14】排序下发的列名与方向；`Some` 时走 `run_sorted_down`
     sorted_down: Option<(String, bool)>,
+    /// 【B15】本地分析的载荷；`Some` 时走 `analyze`（且**只一条**）
+    analysis: Option<crate::analysis::AnalysisRequest>,
 }
 
 /// 【B13】源清单上的一个动作（旁路线程执行；不产结果集）
@@ -613,6 +642,8 @@ pub struct ExecOutcome {
     pub placement: ResultPlacement,
     /// 执行之后这个连接上的事务状态（B4）
     pub transaction: TxSnapshot,
+    /// 【B15】这份结论是不是本地分析的产物（结果集要据此不摆“刷新”）
+    pub analysis: bool,
     pub result: Result<QueryData, String>,
 }
 
@@ -734,6 +765,9 @@ impl ExecQueue {
                                 column,
                                 *descending,
                             )
+                        } else if let Some(request) = job.analysis.as_ref() {
+                            // 【B15】本地分析：桥接的行 + 分析 SQL 一起交给执行器（不碰源库）
+                            worker_runner.analyze(request)
                         } else {
                             // 连接透传给执行器（B1）：`None` = 未绑定 → 执行器自己决定回退口径
                             worker_runner.run(job.connection.as_deref(), job.channel, &sql, job.options)
@@ -748,6 +782,7 @@ impl ExecQueue {
                                 placement: job.placement,
                                 channel: job.channel,
                                 transaction,
+                                analysis: job.analysis.is_some(),
                                 result,
                             });
                         }
@@ -819,6 +854,8 @@ impl ExecQueue {
                 sorted_down: target
                     .sorted_down()
                     .map(|(_, column, descending)| (column.to_string(), descending)),
+                // 【B15】本地分析：载荷原样带过去（工作线程据此走 `analyze`）
+                analysis: target.analysis().cloned(),
             })
             .is_err()
         {

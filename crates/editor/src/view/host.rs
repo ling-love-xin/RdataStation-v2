@@ -113,6 +113,8 @@ pub struct EditorHostPanel {
     result_active: usize,
     /// 【B5】当前选中结果集的 SQL（工具栏「刷新」重跑它；`None` = 无可重跑的东西）
     result_sql: Option<String>,
+    /// 【B15】当前选中结果是**本地分析**的产物（不摆“刷新”：重跑它没有意义）
+    result_is_analysis: bool,
     /// 【B5】当前选中结果集有没有可复制的东西（没有网格就不摆复制按钮）
     result_can_copy: bool,
     /// 【B6】错误卡片的内容（失败时才有；`None` = 这次成功）
@@ -330,6 +332,7 @@ impl EditorHostPanel {
             result_tabs: Vec::new(),
             result_active: 0,
             result_sql: None,
+            result_is_analysis: false,
             result_can_copy: false,
             result_error_card: None,
             error_site: None,
@@ -1065,6 +1068,10 @@ impl EditorHostPanel {
 
     /// 【B13】当前通道能不能跑写语句（本地加速档对源库是**只读挂载**，写语句直接拒）
     fn channel_write_check(&self, target: &ExecTarget) -> Result<(), String> {
+        // 【B15】本地分析不碰源库（数据是桥接过来的行）——通道闸管的是“写源库对象”，放行
+        if matches!(target, ExecTarget::Analysis(_)) {
+            return Ok(());
+        }
         let channel = self.channel();
         if channel.allows_source_writes() {
             return Ok(());
@@ -1084,6 +1091,10 @@ impl EditorHostPanel {
     /// 直接拒；连接策略里的“提醒后放行”那档随连接策略（B1 余项）一起做，现在不假装有。
     /// 判据与通道闸同一份（[`channel::writes_source_object`]）：宁可多拒一句，不能放过去真写。
     pub(crate) fn project_write_check(&self, target: &ExecTarget) -> Result<(), String> {
+        // 【B15】本地分析同上：它在本地 DuckDB 上建临时表，与项目锁无关
+        if matches!(target, ExecTarget::Analysis(_)) {
+            return Ok(());
+        }
         if !self.shared.project_read_only() {
             return Ok(());
         }
@@ -2139,7 +2150,19 @@ impl EditorHostPanel {
     fn sync_result_view(&mut self, cx: &mut Context<Self>) {
         // 先把要用的数据从权威存储里拷出来（不把 `Ref` 带进下面的 `grid.update`）
         let current_channel = self.channel();
-        let (tabs, active, grid_data, empty, toolbar, status, failure, extra, notice, insight_available) = {
+        let (
+            tabs,
+            active,
+            grid_data,
+            empty,
+            toolbar,
+            status,
+            failure,
+            extra,
+            extra_analysis,
+            notice,
+            insight_available,
+        ) = {
             let store = self.shared.results();
             let active = store.active_index(&self.document).unwrap_or(0);
             let entry = store.active(&self.document);
@@ -2187,6 +2210,8 @@ impl EditorHostPanel {
                         .map(|error| (entry.sql.clone(), error.clone()))
                 }),
                 entry.map(|entry| (entry.sql.clone(), entry.has_grid())),
+                // 【B15】这份是不是本地分析的产物（工具栏据此不摆“刷新”）
+                entry.is_some_and(|entry| entry.analysis),
                 // 【B13】选中这份来自别的通道 → 顶部一行说清“旧结果来自 X”（原型 §5.7 规则 2）；
                 // 同一档就不提示（切换本身已经写在工具栏与状态栏上了）
                 entry
@@ -2210,6 +2235,7 @@ impl EditorHostPanel {
         let (sql, can_copy) = extra.unwrap_or_default();
         self.result_sql = Some(sql).filter(|sql| !sql.trim().is_empty());
         self.result_can_copy = can_copy;
+        self.result_is_analysis = extra_analysis;
         self.grid.update(cx, |state, cx| {
             match grid_data {
                 Some((columns, rows)) => state.delegate_mut().set_data(columns, rows),
@@ -2619,6 +2645,27 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【B15】本地分析：对**选中那份结果的已抓行**跑一条聚合 SQL（落新结果集）
+    ///
+    /// 三条口径：
+    /// - 数据是桥接过来的行（把当前结果集已抓到的行建成本地 DuckDB 临时表），**不碰源库**——
+    ///   所以不走通道闸 / 项目只读闸（那两道管的是“写源库对象”）；
+    /// - 结果落**新结果集**并贴「分析」标题（原结果一行不动）；
+    /// - 基于多少行、有没有被上限截掉，由执行器写进结果的说明（`analysis::notice`）。
+    pub(crate) fn run_analysis(&mut self, sql: String, cx: &mut Context<Self>) {
+        let Some(entry) = self.shared.results_active(&self.document) else {
+            self.set_message(Some("当前没有可分析的结果".to_string()), cx);
+            return;
+        };
+        let request = crate::analysis::request_for(&entry, sql);
+        self.execute_labeled(
+            ExecTarget::Analysis(request),
+            ResultPlacement::NewSet,
+            Some(crate::analysis::ANALYSIS_TITLE.to_string()),
+            cx,
+        );
+    }
+
     /// 【B7】导出选中结果集（**仅已抓取的行**，不发新查询）
     pub(crate) fn export_active_result(
         &mut self,
@@ -2844,7 +2891,8 @@ fn entry_from(outcome: execution::ExecOutcome) -> ResultEntry {
         .with_affected_rows(data.affected_rows)
         .with_has_more(data.has_more)
         .with_connection(connection)
-        .with_channel(channel),
+        .with_channel(channel)
+        .with_analysis(outcome.analysis),
         Err(error) => ResultEntry::failure(outcome.document, outcome.sql, error, 0)
             .with_connection(connection)
             .with_channel(channel),
@@ -3435,7 +3483,7 @@ impl Render for EditorHostPanel {
                     })
                     .into_any_element()
             });
-            let refresh = self.result_sql.is_some().then(|| {
+            let refresh = (self.result_sql.is_some() && !self.result_is_analysis).then(|| {
                 let entity = cx.entity();
                 Button::new("editor-result-refresh")
                     .ghost()
@@ -3517,6 +3565,42 @@ impl Render for EditorHostPanel {
                     .into_any_element()
             });
 
+            // 【B15】分析：对选中那份结果的**已抓行**跑聚合 SQL（本地 DuckDB，不碰源库）。
+            // 菜单项由 `analysis::menu_items` 给（纯函数，可逐项断言）；没网格就不摆。
+            let analysis_items = self
+                .shared
+                .results_active(&self.document)
+                .map(|entry| crate::analysis::menu_items(&entry))
+                .unwrap_or_default();
+            let analysis = (!analysis_items.is_empty()).then(|| {
+                let entity = cx.entity();
+                let items = analysis_items.clone();
+                DropdownButton::new("editor-result-analysis")
+                    .small()
+                    .button(
+                        Button::new("editor-result-analysis-btn")
+                            .ghost()
+                            .small()
+                            .debug_selector(|| "editor-result-analysis".to_string())
+                            .label("⚗ 分析"),
+                    )
+                    .dropdown_menu(move |menu, _window, _cx| {
+                        let mut menu = menu;
+                        for item in items.iter() {
+                            let entity = entity.clone();
+                            let sql = item.sql.clone();
+                            menu = menu.item(PopupMenuItem::new(item.label.clone()).on_click(
+                                move |_, _window, app| {
+                                    let sql = sql.clone();
+                                    entity.update(app, |panel, cx| panel.run_analysis(sql, cx));
+                                },
+                            ));
+                        }
+                        menu
+                    })
+                    .into_any_element()
+            });
+
             // 错误卡片（B6，原型 §2.4）：失败时替掉网格；两个按钮都是真的能按的
             let card = self.result_error_card.clone().map(|card| {
                 let locate = card.location.as_ref().map(|location| {
@@ -3564,6 +3648,7 @@ impl Render for EditorHostPanel {
                     status: self.result_status.clone(),
                     controls: result_grid::ResultControls {
                         filter: Some(filter),
+                        analysis,
                         copy,
                         export,
                         refresh,
