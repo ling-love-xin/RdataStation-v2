@@ -62,6 +62,15 @@ impl DuckDbDatabase {
                 source: e.to_string(),
             })
         })?;
+        // 与其它 DuckDB 连接同一套纪律（扩展目录 / 内存闸 / 溢写口 / 不静默联网）：
+        // 不配的话，用户 SQL 里的 `read_parquet` 会把扩展静默下到 `~/.duckdb`（C 盘）
+        crate::duckdb::DuckDBManager::configure_connection(&conn).map_err(|error| {
+            CoreError::database(DatabaseError::Driver {
+                db_type: "duckdb".to_string(),
+                operation: "configure".to_string(),
+                source: error.to_string(),
+            })
+        })?;
         let server_version = conn
             .query_row("PRAGMA version", [], |row| row.get::<_, String>(0))
             .ok();

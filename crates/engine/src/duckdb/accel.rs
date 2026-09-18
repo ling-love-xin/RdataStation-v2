@@ -344,15 +344,10 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
     let conn = Connection::open_in_memory().map_err(|error| {
         format!("开本地分析连接失败：{error}")
     })?;
-    let dir = paths::extensions_dir();
-    if let Err(error) = std::fs::create_dir_all(&dir) {
-        return Err(format!("建扩展目录失败（{}）：{error}", dir.display()));
-    }
-    conn.execute_batch(&format!(
-        "SET extension_directory = {}",
-        quote_literal(&dir.to_string_lossy())
-    ))
-    .map_err(|error| format!("设置 DuckDB 扩展目录失败：{error}"))?;
+    // 统一配置（扩展目录 / 内存闸 / 溢写口 / 不静默联网）——别再在这里自己拼 SET：
+    // 会话是个长期存活的连接，绕开 `configure_connection` 就会漏掉其中某几项（审计抓到过）
+    super::manager::DuckDBManager::configure_connection(&conn)
+        .map_err(|error| format!("配置本地分析连接失败：{error}"))?;
 
     if let Some(extension) = source.kind.extension()
         && let Err(reason) = install_and_load(&conn, source.kind, extension)

@@ -383,11 +383,21 @@ impl DuckDBManager {
 
     /// 配置 DuckDB 连接的默认参数。
     ///
-    /// 三件事：
-    /// 1. **扩展目录**：所有实例（全局 / 项目）都从 `<RDS_HOME>/extensions` 取扩展。
-    /// 2. **内存闸**：`memory_limit` 把进程级内存库的占用量钉在可预期范围（DuckDB 默认
-    ///    是物理内存的 80%——桌面应用不该把机器吃光）。
-    /// 3. **溢写口**：`temp_directory` 钉到数据根的 `tmp/`（到顶时溢写到这里，而不是系统
+    /// **所有长期存活的 DuckDB 连接都要过这里**（全局 / 项目 / 读取池 / 加速会话 / duckdb 驱动）。
+    /// 绕过它就等于绕过资源闸与扩展策略——审计时抳到过两次：`accel` 自己拼扩展目录
+    /// （漏了内存闸与溢写口），duckdb 驱动干脆什么都不设（用户 SQL 里出现 `read_parquet`
+    /// 这类函数时，扩展会被**静默下到 `~/.duckdb`**，写用户 C 盘）。
+    ///
+    /// 五件事：
+    /// 1. **扩展目录**：一律 `<RDS_HOME>/extensions`（应用目录内，可离线预置）；
+    /// 2. **不静默联网**：`autoinstall_known_extensions = false`——SQL 里出现未安装的扩展
+    ///    函数时**报错**而不是偷偷下载（企业内网里那是“莫名卡住”）；`INSTALL` 一律由我们
+    ///    显式做（见 `duckdb/extensions.rs` 与联邦的扩展门控）；
+    /// 3. **已装的自动加载**：`autoload_known_extensions = true`——它只加载**本地已装**的
+    ///    扩展，无网络副作用，保住日常体验（关掉它会让“之前能用”的查询突然报未加载）；
+    ///    同时显式允许社区扩展（联邦要用 `mssql` / `oracle_scanner`，它们都是社区扩展）；
+    /// 4. **内存闸**：`memory_limit`（DuckDB 默认是物理内存的 80%——桌面应用不该把机器吃光）；
+    /// 5. **溢写口**：`temp_directory` 钉到数据根的 `tmp/`（到顶时溢写到这里，而不是系统
     ///    临时目录；那是用户清理不到的角落），并给溢写总量上也一把限。
     ///
     /// 两个大小值都可用环境变量覆盖（见 [`ENV_MEMORY_LIMIT`] / [`ENV_TEMP_SIZE_LIMIT`]）；
@@ -400,12 +410,29 @@ impl DuckDBManager {
     /// # 返回
     /// - `Ok(())`: 配置成功
     /// - `Err(CoreError)`: 配置失败
-    fn configure_connection(conn: &Connection) -> Result<(), CoreError> {
+    pub(crate) fn configure_connection(conn: &Connection) -> Result<(), CoreError> {
+        // 扩展目录：尽量先建出来（`INSTALL` 与离线预置都需要它）
+        let extensions_dir = Self::extensions_dir();
+        if let Err(e) = std::fs::create_dir_all(&extensions_dir) {
+            tracing::warn!(
+                "[duckdb] 扩展目录 {} 建不出来（{e}）：安装扩展时可能失败",
+                extensions_dir.display()
+            );
+        }
+
         // 逐条收集再拼成一条 batch（`execute_batch` 仍按分号拆语句，换行不算分隔符）
-        let mut settings = vec![format!(
-            "SET extension_directory = '{}'",
-            Self::extensions_dir().display()
-        )];
+        //
+        // 注意 **不设 `allow_community_extensions`**：实测它在库跑起来之后不能改
+        // （`Cannot change allow_community_extensions setting while database is running`），
+        // 而它的默认值就是 `true`（联邦要用的 `mssql` / `oracle_scanner` 都是社区扩展）——
+        // 要改它必须在建库前用 `DBConfig`，我们没这个需求，就不把它写进这里。
+        let mut settings = vec![
+            format!("SET extension_directory = '{}'", extensions_dir.display()),
+            // 不静默联网（未装的扩展直接报错；装上是我们的事）
+            "SET autoinstall_known_extensions = false".to_string(),
+            // 已装的自动加载（无网络副作用）
+            "SET autoload_known_extensions = true".to_string(),
+        ];
 
         // 临时目录：建不出来就跳过溢写设置（退回 DuckDB 默认），不挡启动
         let temp_dir = paths::temp_dir();
@@ -721,6 +748,27 @@ mod tests {
         assert!(!setting("max_temp_directory_size")?.is_empty());
         // 溢写目录已经建出来了（否则 SET temp_directory 本身就会失败）
         assert!(paths::temp_dir().exists());
+
+        // 扩展目录钉在数据根（“不碰 C 盘”与离线预置都靠它）；目录要已建出来
+        assert_eq!(
+            PathBuf::from(setting("extension_directory")?),
+            paths::extensions_dir(),
+            "extension_directory 应指向 paths::extensions_dir()"
+        );
+        assert!(paths::extensions_dir().exists(), "扩展目录应已建出来");
+        // 不静默联网；已装的自动加载保住日常体验（`allow_community_extensions` 改不了，
+        // 它默认就是 true——真要关得在建库前用 `DBConfig`，见上面注释）
+        // 注：布尔设置的 `current_setting` 回出来就是 BOOLEAN 类型（不能按 String 读）
+        let bool_setting = |name: &str| -> Result<bool, CoreError> {
+            conn.query_row(&format!("SELECT current_setting('{name}')"), [], |row| {
+                row.get::<_, bool>(0)
+            })
+            .map_err(|e| {
+                CoreError::common(CommonError::General(format!("读 {name} 失败: {e}")))
+            })
+        };
+        assert!(!bool_setting("autoinstall_known_extensions")?);
+        assert!(bool_setting("autoload_known_extensions")?);
 
         Ok(())
     }
