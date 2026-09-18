@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RdataStation 项目管理 · 一页看懂</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0; --card:#FFFFFF;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3;
+  --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
+  --track:#E7E7E7; --code-bg:#FAFAFA; --float:#FFFFFF;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+  --shadow-sm:0 1px 2px rgba(20,20,30,.06);
+  --glow:0 10px 30px rgba(194,91,70,.18);
+}
+html[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E; --card:#1E1E1E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526;
+  --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
+  --track:#3C3C3C; --code-bg:#191919; --float:#252526;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+  --glow:0 10px 30px rgba(232,132,111,.16);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--pagebg);color:var(--fg);font-size:14px;line-height:1.72;
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;}
+a{color:var(--primary);text-decoration:none;}
+a:hover{text-decoration:underline;}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 22px 60px;}
+h1,h2,h3,h4{margin:0;line-height:1.35;}
+code,pre,.mono{font-family:Consolas,'SFMono-Regular',ui-monospace,monospace;}
+.grow{flex:1;}
+.dim{color:var(--muted);}
+
+/* ── 页头 ── */
+.page-head{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
+.brand{display:flex;align-items:center;gap:11px;}
+.logo{width:38px;height:38px;border-radius:10px;background:var(--primary);color:var(--primary-fg);
+  display:grid;place-items:center;font-weight:800;font-size:19px;box-shadow:var(--glow);flex:none;}
+.page-head h1{font-size:17.5px;font-weight:700;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:1px;}
+.head-actions{margin-left:auto;}
+.theme-toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;box-shadow:var(--shadow-sm);transition:all .15s;font-family:inherit;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+
+/* ── 吸顶导航 ── */
+.nav{position:sticky;top:0;z-index:20;display:flex;gap:4px;align-items:center;overflow-x:auto;
+  padding:7px 9px;margin:0 -4px 16px;border:1px solid var(--border);border-radius:12px;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);box-shadow:var(--shadow-sm);scrollbar-width:none;}
+.nav a{white-space:nowrap;font-size:12px;border:1px solid transparent;border-radius:999px;padding:3px 11px;color:var(--muted);transition:all .15s;}
+.nav a:hover{color:var(--primary);background:var(--hover);text-decoration:none;}
+.nav a.on{color:var(--primary);border-color:var(--active-border);background:var(--sidebar);font-weight:600;}
+
+/* ── 英雄区 ── */
+.hero{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:16px;background:var(--bg);box-shadow:var(--shadow);padding:30px 30px 26px;margin-bottom:18px;}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,412px);gap:26px;align-items:start;}
+@media (max-width:920px){.hero-grid{grid-template-columns:1fr;}}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:3px 12px;margin-bottom:14px;}
+.eyebrow b{color:var(--primary);font-weight:600;}
+.hero h2{font-size:27px;font-weight:750;letter-spacing:.2px;}
+.hero h2 em{font-style:normal;color:var(--primary);}
+.hero .lead{margin-top:12px;font-size:13.6px;}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px;}
+.chip{font-size:11.5px;border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:2px 10px;color:var(--fg);}
+.chip.hot{border-color:var(--active-border);color:var(--primary);box-shadow:var(--glow);}
+.cta{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px;}
+.cta a,.cta button{font-size:12.5px;border-radius:9px;padding:8px 16px;border:1px solid var(--border);background:var(--card);box-shadow:var(--shadow-sm);transition:all .15s;color:var(--fg);cursor:pointer;font-family:inherit;}
+.cta a.pri{background:var(--primary);color:var(--primary-fg);border-color:var(--primary);font-weight:600;}
+.cta a:hover,.cta button:hover{border-color:var(--primary);color:var(--primary);text-decoration:none;transform:translateY(-1px);}
+.cta a.pri:hover{color:var(--primary-fg);background:var(--primary-hover);}
+
+/* ── 应用窗口线框 ── */
+.win{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);position:relative;}
+.win .tbar{display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:var(--titlebar);font-size:11.5px;color:var(--muted);}
+.win .tbar .mark{width:11px;height:11px;border-radius:3px;background:var(--primary);flex:none;}
+.win .tbar .tname{color:var(--fg);font-weight:600;}
+.win .tbar .wbtns{margin-left:auto;display:flex;gap:10px;font-size:11px;}
+.win .slot{display:flex;align-items:center;gap:6px;padding:2px 9px;background:var(--sidebar);border:1px dashed transparent;border-radius:6px;cursor:pointer;}
+.win .slot:hover{border-color:var(--active-border);}
+.win .slot .lbl{font-size:10px;color:var(--muted);}
+.win .slot .nm{font-size:11.5px;font-weight:600;color:var(--fg);}
+.win .pane{display:none;min-height:332px;}
+.win .pane.on{display:block;}
+.win .hd{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--card);}
+.win .hd .ttl{font-size:12.5px;font-weight:700;}
+.win .hd .ro{font-size:10.5px;color:var(--warning);border:1px solid var(--warning);border-radius:999px;padding:0 8px;}
+.win .hd .ib{margin-left:auto;font-size:11px;border:1px solid var(--border);border-radius:6px;padding:2px 9px;color:var(--muted);background:var(--bg);}
+/* 选择器：三栏 */
+.win .picker{display:grid;grid-template-columns:1fr 132px;}
+.win .pmain{padding:9px 11px;min-width:0;}
+.win .tabs{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);}
+.win .tab{border:1px solid transparent;border-radius:999px;padding:1px 10px;cursor:pointer;font-size:11px;font-family:inherit;background:transparent;color:var(--muted);}
+.win .tab.on{border-color:var(--active-border);color:var(--primary);background:var(--sidebar);font-weight:600;}
+.win .cnt{margin-left:auto;font-size:10.5px;color:var(--muted);}
+.win .srow{display:flex;align-items:center;gap:6px;margin-top:8px;}
+.win .search{flex:1;min-width:0;display:flex;align-items:center;gap:6px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:3px 8px;font-size:11px;}
+.win .search .ph{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);}
+.win .search .ph.has{color:var(--fg);}
+.win .btn2{font-size:10.5px;border:1px solid var(--border);border-radius:6px;padding:3px 8px;background:var(--bg);color:var(--muted);cursor:pointer;font-family:inherit;white-space:nowrap;}
+.win .btn2.acc{border-color:var(--active-border);color:var(--primary);}
+.win .fchips{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;}
+.win .fchip{font-size:10.5px;border:1px dashed var(--border);border-radius:999px;padding:0 9px;color:var(--muted);background:var(--bg);cursor:pointer;font-family:inherit;}
+.win .fchip:hover{color:var(--primary);border-color:var(--active-border);}
+/* 卡片 */
+.win .card2{position:relative;border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:7px 9px;margin-top:7px;}
+.win .card2.bad{border-color:var(--warning);}
+.win .card2 .r1{display:flex;align-items:center;gap:7px;}
+.win .card2 .nm{font-size:12px;font-weight:600;}
+.win .card2 .st{font-size:10px;}
+.win .card2 .st.active{color:var(--success);}
+.win .card2 .st.archived{color:var(--muted);}
+.win .card2 .st.offline{color:var(--warning);}
+.win .card2 .ops{margin-left:auto;display:flex;gap:5px;}
+.win .card2 .go{font-size:10.5px;border:1px solid var(--primary);background:var(--primary);color:var(--primary-fg);border-radius:6px;padding:2px 10px;cursor:pointer;font-family:inherit;}
+.win .card2 .dots{font-size:10.5px;border:1px solid var(--border);border-radius:6px;padding:2px 8px;background:var(--bg);color:var(--muted);cursor:pointer;font-family:inherit;}
+.win .card2 .line{font-size:10.5px;color:var(--muted);margin-top:2px;}
+.win .card2 .warn{font-size:10.5px;color:var(--warning);margin-top:2px;}
+.win .card2 .lock{font-size:10.5px;color:var(--info);margin-top:2px;}
+.win .rail{border-left:1px solid var(--border);background:var(--sidebar);padding:9px 8px;font-size:10.5px;color:var(--muted);}
+.win .rail .b{display:block;text-align:center;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);padding:4px 0;margin-bottom:6px;font-size:11px;}
+.win .rail .b.pri{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:600;}
+.win .rail .h5{font-weight:600;color:var(--fg);margin-top:8px;}
+/* 设置面板 */
+.win .set{padding:10px 12px;font-size:11.5px;}
+.win .sec3{font-size:11px;font-weight:700;color:var(--muted);margin:9px 0 5px;}
+.win .kv{display:flex;gap:8px;font-size:11px;color:var(--muted);}
+.win .kv b{color:var(--fg);font-weight:600;min-width:52px;display:inline-block;}
+.win .inp{border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:3px 8px;font-size:11px;color:var(--fg);}
+.win .inp.dis{opacity:.5;}
+.win .rowf{display:flex;gap:6px;align-items:center;margin-top:6px;}
+.win .b3{font-size:10.5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);padding:3px 10px;cursor:pointer;font-family:inherit;}
+.win .b3.pri{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:600;}
+.win .b3.danger{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600;}
+.win .b3.dis{opacity:.45;cursor:not-allowed;}
+.win .tree{font-size:11px;}
+.win .trow{display:flex;align-items:center;gap:6px;padding:1px 0;}
+.win .trow .sz{margin-left:auto;color:var(--muted);font-size:10.5px;font-family:Consolas,monospace;}
+.win .trow .cp{color:var(--muted);font-size:10.5px;border:1px solid transparent;border-radius:4px;background:transparent;cursor:pointer;font-family:inherit;}
+.win .trow .cp:hover{border-color:var(--border);color:var(--primary);}
+.win .trow.dir b{color:var(--fg);}
+/* 对话框 */
+.win .dim2{position:absolute;inset:0;background:rgba(20,20,30,.35);display:flex;align-items:center;justify-content:center;padding:16px;}
+.win .dlg{border:1px solid var(--border);border-radius:12px;background:var(--float);box-shadow:var(--shadow);width:100%;max-width:378px;padding:14px 16px;}
+.win .dlg .dh{display:flex;gap:9px;align-items:flex-start;}
+.win .dlg .ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;background:var(--sidebar);color:var(--warning);flex:none;font-size:12px;}
+.win .dlg h5{font-size:13px;font-weight:700;}
+.win .dlg p{font-size:11.5px;color:var(--muted);margin-top:6px;}
+.win .dlg .ft{display:flex;gap:7px;justify-content:flex-end;margin-top:12px;}
+/* 卡片菜单浮层 */
+.win .menu3{position:absolute;border:1px solid var(--border);border-radius:9px;background:var(--float);box-shadow:var(--shadow);padding:3px;font-size:11.5px;min-width:186px;display:none;}
+.win .menu3.on{display:block;}
+.win .menu3 .mi{display:flex;align-items:center;gap:7px;padding:3px 9px;border-radius:6px;color:var(--fg);}
+.win .menu3 .mi:hover{background:var(--sidebar);}
+.win .menu3 .mi.dis{opacity:.42;}
+.win .menu3 .sep{height:1px;background:var(--border);margin:3px 6px;}
+.win .menu3 .cap{padding:3px 9px 5px;font-size:10.5px;color:var(--muted);}
+.hidden{display:none !important;}
+
+/* ── 线框切换 ── */
+.seg2{display:flex;gap:6px;margin:0 0 10px;}
+.seg2 button{flex:1;font-size:11.5px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--muted);padding:5px 0;cursor:pointer;font-family:inherit;transition:all .15s;}
+.seg2 button:hover{border-color:var(--active-border);color:var(--primary);}
+.seg2 button.on{background:var(--primary);border-color:var(--primary);color:var(--primary-fg);font-weight:600;}
+
+/* ── KPI ── */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px;margin-top:22px;}
+.kpi{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);transition:all .15s;}
+.kpi:hover{border-color:var(--active-border);transform:translateY(-2px);box-shadow:var(--glow);}
+.kpi .n{font-size:25px;font-weight:700;letter-spacing:.5px;color:var(--primary);line-height:1.15;}
+.kpi .n small{font-size:13px;font-weight:600;color:var(--fg);opacity:.85;margin-left:2px;}
+.kpi .l{font-size:12.2px;color:var(--fg);margin-top:4px;font-weight:600;}
+.kpi .d{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.55;}
+
+/* ── 通用区块 ── */
+section{margin:34px 0 0;scroll-margin-top:64px;}
+.sec-head{display:flex;align-items:center;gap:10px;margin-bottom:5px;flex-wrap:wrap;}
+.sec-head .no{font-size:11.5px;font-weight:700;color:var(--primary);border:1px solid var(--active-border);border-radius:6px;padding:1px 7px;flex:none;}
+.sec-head h3{font-size:19px;font-weight:700;letter-spacing:.2px;}
+.sec-head .tag{margin-left:auto;font-size:11px;color:var(--muted);}
+.sec-sub{color:var(--muted);font-size:12.5px;margin:0 0 15px 0;}
+.sec-sub b{color:var(--fg);}
+.grid{display:grid;gap:12px;}
+.g2{grid-template-columns:repeat(auto-fit,minmax(310px,1fr));}
+.g3{grid-template-columns:repeat(auto-fit,minmax(238px,1fr));}
+.card{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px 18px;box-shadow:var(--shadow-sm);}
+.card h4{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.card h4 .ico{width:22px;height:22px;border-radius:6px;background:var(--sidebar);border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--primary);flex:none;}
+.card p{font-size:12.8px;margin-top:8px;opacity:.94;}
+.card ul{margin:8px 0 0 0;padding-left:0;list-style:none;font-size:12.6px;}
+.card li{position:relative;padding-left:15px;margin-top:4px;opacity:.94;}
+.card li::before{content:"";position:absolute;left:2px;top:.66em;width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.75;}
+.card .foot{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--muted);}
+pre{border:1px solid var(--border);border-radius:10px;background:var(--code-bg);padding:12px 14px;font-size:11.8px;line-height:1.75;overflow-x:auto;margin-top:10px;color:var(--fg);}
+
+/* ── 高光 ── */
+.hl{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
+.hl .big{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--card);padding:18px 19px;box-shadow:var(--shadow-sm);}
+.hl .big::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary);opacity:.85;}
+.hl .big .idx{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--primary);}
+.hl .big h4{font-size:15.5px;font-weight:700;margin-top:6px;line-height:1.5;}
+.hl .big p{font-size:12.6px;margin-top:8px;opacity:.94;}
+.hl .big .kv{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;}
+.hl .big .kv span{font-size:11px;border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:1px 8px;color:var(--muted);}
+
+/* ── 剧本 ── */
+.script{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm);overflow:hidden;margin-bottom:12px;}
+.script .sh{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--sidebar);border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.script .sh .who{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 7px;background:var(--card);}
+.script .sh h4{font-size:14.5px;font-weight:700;}
+.script .sh .gain{margin-left:auto;font-size:11.5px;color:var(--success);font-weight:600;}
+.script .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));}
+.script .st{padding:14px 16px;border-right:1px solid var(--border);}
+.script .st:last-child{border-right:none;}
+.script .st .n{font-size:10.5px;font-weight:700;color:var(--primary);letter-spacing:.8px;}
+.script .st .act{font-size:13px;font-weight:600;margin-top:4px;}
+.script .st .how{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.65;}
+.script .st .ui{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;}
+.script .st .ui span{font-size:10.5px;border:1px solid var(--border);background:var(--bg);border-radius:5px;padding:0 6px;font-family:Consolas,monospace;color:var(--fg);}
+
+/* ── 流程条 ── */
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:var(--shadow-sm);}
+.step2{padding:14px 15px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);}
+.step2 .idx{font-size:10.5px;font-weight:700;color:var(--primary);letter-spacing:1px;}
+.step2 .t{font-size:13.2px;font-weight:700;margin-top:4px;}
+.step2 .d{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.62;}
+.step2 .who{font-size:10.5px;color:var(--muted);margin-top:7px;font-family:Consolas,monospace;}
+.gate{margin-top:10px;border:1px dashed var(--border);border-left:3px solid var(--primary);border-radius:10px;background:var(--card);padding:11px 15px;font-size:12.5px;box-shadow:var(--shadow-sm);}
+.gate b{color:var(--primary);}
+
+/* ── 三道门 ── */
+.gates{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:12px;}
+.gatecard{position:relative;border:1px solid var(--border);border-radius:14px;background:var(--card);padding:16px 17px 15px;box-shadow:var(--shadow-sm);}
+.gatecard .no{font-size:11px;font-weight:700;color:var(--primary);border:1px solid var(--active-border);border-radius:6px;padding:1px 7px;display:inline-block;}
+.gatecard h4{font-size:14.5px;margin-top:9px;font-weight:700;}
+.gatecard p{font-size:12.4px;color:var(--muted);margin-top:7px;}
+.gatecard .stops{margin-top:10px;font-size:11.5px;color:var(--fg);}
+.gatecard .stops code{background:var(--sidebar);border:1px solid var(--border);border-radius:5px;padding:0 6px;font-size:11px;}
+
+/* ── 分层 ── */
+.layers{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);}
+.layer{display:grid;grid-template-columns:158px 1fr;gap:12px;padding:9px 0;border-bottom:1px dashed var(--border);}
+.layer:last-child{border-bottom:none;}
+.layer .tg{font-size:11.5px;font-weight:700;color:var(--primary);}
+.layer .body{font-size:12.5px;}
+.dep{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--muted);}
+.dep code{border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:2px 8px;color:var(--fg);}
+
+/* ── 表格 ── */
+table{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);font-size:12.7px;box-shadow:var(--shadow-sm);}
+th{background:var(--sidebar);text-align:left;font-size:11.5px;color:var(--muted);font-weight:600;padding:9px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
+td{padding:9px 13px;border-bottom:1px solid var(--border);vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+td .mono{font-size:11.6px;color:var(--muted);}
+.badge{display:inline-block;font-size:11px;border-radius:5px;padding:1px 7px;border:1px solid var(--border);background:var(--sidebar);}
+.badge.ok{color:var(--success);border-color:var(--success);}
+.badge.mid{color:var(--warning);border-color:var(--warning);}
+.badge.plan{color:var(--muted);}
+.yes{color:var(--success);font-weight:700;}
+.no{color:var(--muted);}
+kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--border);background:var(--sidebar);border-radius:5px;padding:1px 6px;white-space:nowrap;}
+
+/* ── 结尾 ── */
+.foot{margin-top:36px;border-top:1px solid var(--border);padding-top:16px;font-size:12px;color:var(--muted);line-height:1.95;}
+.foot b{color:var(--fg);}
+@media print{.theme-toggle,.nav,.seg2{display:none;}body{background:#fff;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ══ 页头 ══ -->
+  <div class="page-head">
+    <div class="brand">
+      <div class="logo">R</div>
+      <div>
+        <h1>RdataStation · 项目管理</h1>
+        <div class="sub">一页看懂：它替你解决什么 · 怎么用 · 怎么运转（快照 2026-09-19）</div>
+      </div>
+    </div>
+    <div class="head-actions">
+      <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+    </div>
+  </div>
+
+  <!-- ══ 吸顶导航 ══ -->
+  <nav class="nav" id="nav">
+    <a href="#s1">为什么不是一个按钮</a>
+    <a href="#s2">两处记录</a>
+    <a href="#s3">三个高光</a>
+    <a href="#s4">四个剧本</a>
+    <a href="#s5">一次打开的全流程</a>
+    <a href="#s6">危险区三道门</a>
+    <a href="#s7">卡片解剖</a>
+    <a href="#s8">搜索与筛选</a>
+    <a href="#s9">只读两道防线</a>
+    <a href="#s10">键盘 · 右键 · 菜单</a>
+    <a href="#s11">架构</a>
+    <a href="#s12">质量与证据</a>
+    <a href="#s13">边界</a>
+    <a href="#s14">文档地图</a>
+  </nav>
+
+  <!-- ══ 英雄区 ══ -->
+  <div class="hero">
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow">工作台入口 · 一实例一项目 · <b>名册与本体分离</b> · 危险操作三道门</div>
+        <h2>一个窗口只装一个项目，<em>打开就是拿到写锁</em>——<br>删得掉、找得回、改不坏。</h2>
+        <p class="lead">
+          它不是一个「打开文件夹…」按钮：项目要<b>登记</b>，写锁要<b>独占</b>，删数据要<b>点名</b>，
+          草稿在切换前必须<b>有交代</b>。<span class="dim">只做项目的名册与生命周期——SQL、连接、Mock、洞察各自归各自的模块。</span>
+        </p>
+        <div class="chips">
+          <span class="chip hot">只读两道防线</span>
+          <span class="chip hot">未保存草稿拦截</span>
+          <span class="chip">搜索 facet 语法</span>
+          <span class="chip">命令只有一份口径</span>
+          <span class="chip">render 期零 I/O</span>
+          <span class="chip">示例项目离线可开工</span>
+        </div>
+        <div class="cta">
+          <a class="pri" href="#s4">看四个剧本 ↓</a>
+          <a class="cta-l" href="#s11">看架构</a>
+          <a class="cta-l" href="#s12">看质量与证据</a>
+          <a class="cta-l" href="project-prototype.html">打开交互稿</a>
+        </div>
+      </div>
+
+      <!-- 首屏线框：选择器 / 项目设置 / 逃生口 -->
+      <div>
+        <div class="seg2" id="seg">
+          <button class="on" data-pane="picker">选择器</button>
+          <button data-pane="settings">项目设置</button>
+          <button data-pane="escape">逃生口</button>
+        </div>
+        <div class="win">
+          <div class="tbar">
+            <span class="mark"></span><span class="tname">RdataStation</span><span>· 工作台</span>
+            <span class="slot" id="slot"><span class="lbl">项目</span><span class="nm" id="slotName">风控看板</span><span>▾</span></span>
+            <span class="wbtns">— ▢ ✕</span>
+          </div>
+
+          <!-- 面板 1：选择器 -->
+          <div class="pane on" data-pane="picker">
+            <div class="picker">
+              <div class="pmain">
+                <div class="tabs">
+                  <span>项目</span>
+                  <button class="tab on" data-tab="recent">最近</button>
+                  <button class="tab" data-tab="all">全部</button>
+                  <button class="tab" data-tab="removed">已移除</button>
+                  <span class="cnt" id="cnt">4 个项目</span>
+                </div>
+                <div class="srow">
+                  <div class="search"><span>⌕</span><span class="ph" id="qbox">搜索名称 / 描述 / 路径（可用 状态: 固定: 锁:）</span></div>
+                  <button class="btn2" id="stBtn">状态：全部</button>
+                  <button class="btn2">排序：最近打开</button>
+                </div>
+                <div class="fchips" id="fchips">
+                  <button class="fchip" data-f="状态:archived">状态:archived</button>
+                  <button class="fchip" data-f="固定:是">固定:是</button>
+                  <button class="fchip" data-f="锁:否">锁:否</button>
+                  <button class="fchip" data-f="">清空</button>
+                </div>
+                <div id="cards">
+                  <div class="card2" data-tab="recent" data-status="active" data-pinned="1" data-locked="0">
+                    <div class="r1"><span class="nm">风控看板</span><span class="st active">active</span><span title="固定">★</span>
+                      <span class="ops"><button class="go">打开</button><button class="dots" data-menu="1">⋯</button></span></div>
+                    <div class="line">月末对账用的项目</div>
+                    <div class="line">最后打开：2026-09-19 10:12 · 状态：active</div>
+                  </div>
+                  <div class="card2" data-tab="recent" data-status="active" data-pinned="0" data-locked="1">
+                    <div class="r1"><span class="nm">订单库</span><span class="st active">active</span>
+                      <span class="ops"><button class="go">打开</button><button class="dots" data-menu="1">⋯</button></span></div>
+                    <div class="line">最后打开：2026-09-18 16:40 · 状态：active</div>
+                    <div class="lock">● 已在另一实例打开</div>
+                  </div>
+                  <div class="card2 bad" data-tab="recent" data-status="offline" data-pinned="0" data-locked="0">
+                    <div class="r1"><span class="nm">旧报表库</span><span class="st offline">offline</span>
+                      <span class="ops"><button class="go">打开</button><button class="dots" data-menu="1">⋯</button></span></div>
+                    <div class="line">最后打开：2026-08-30 09:05 · 状态：offline</div>
+                    <div class="warn">⚠ 路径已失效，可能已移动或删除</div>
+                  </div>
+                  <div class="card2" data-tab="removed" data-status="archived" data-pinned="0" data-locked="0">
+                    <div class="r1"><span class="nm">实验沙箱</span><span class="st archived">archived</span>
+                      <span class="ops"><button class="go">打开</button><button class="dots" data-menu="1">⋯</button></span></div>
+                    <div class="line">最后打开：2026-08-11 14:20 · 状态：archived</div>
+                  </div>
+                </div>
+              </div>
+              <div class="rail">
+                <span class="b pri">＋ 新建项目</span>
+                <span class="b">🗀 打开文件夹…</span>
+                <span class="b">▦ 从示例项目开始</span>
+                <div class="h5">快速开始</div>
+                <div>· 新建空项目</div>
+                <div>· 从示例项目开始</div>
+                <div>· 打开现有目录（.RSmeta）</div>
+              </div>
+            </div>
+
+            <!-- 卡片 ⋯ 菜单（与右键同源） -->
+            <div class="menu3" id="cardMenu" style="right:126px;top:150px">
+              <div class="cap">卡片命令 · 与右键同一份</div>
+              <div class="mi">🗀 打开</div>
+              <div class="mi">★ 固定 / 取消固定</div>
+              <div class="mi">↗ 在资源管理器中显示</div>
+              <div class="sep"></div>
+              <div class="mi">⊘ 移出列表</div>
+              <div class="mi">🗑 删除数据…</div>
+            </div>
+
+            <!-- 标题栏项目菜单 -->
+            <div class="menu3" id="slotMenu" style="left:96px;top:34px">
+              <div class="cap" id="slotCap">项目菜单 · 写命令可用</div>
+              <div class="mi">← 切换项目…</div>
+              <div class="mi">⚙ 项目设置…</div>
+              <div class="mi wr">✎ 重命名…</div>
+              <div class="mi">↗ 在资源管理器中显示</div>
+              <div class="sep"></div>
+              <div class="mi wr">▤ 归档 / 取消归档</div>
+              <div class="sep"></div>
+              <div class="mi">✕ 关闭项目</div>
+            </div>
+          </div>
+
+          <!-- 面板 2：项目设置 -->
+          <div class="pane" data-pane="settings">
+            <div class="hd">
+              <span class="ttl">项目设置 · 风控看板</span>
+              <span class="ro hidden" data-ro>只读（写操作已禁用）</span>
+              <span class="ib">关闭</span>
+            </div>
+            <div class="set">
+              <div class="sec3">概览</div>
+              <div class="kv"><b>名称</b><span>风控看板</span></div>
+              <div class="kv"><b>路径</b><span class="mono">D:\work\风控看板</span></div>
+              <div class="kv"><b>描述</b><span>月末对账用的项目</span></div>
+              <div class="kv"><b>状态</b><span>可写</span></div>
+
+              <div class="sec3">基本信息</div>
+              <div class="rowf"><span class="inp" data-ro-dis>风控看板</span></div>
+              <div class="rowf"><span class="inp" data-ro-dis>月末对账用的项目</span></div>
+              <div class="rowf"><button class="b3 pri" data-ro-dis>保存项目信息</button></div>
+
+              <div class="sec3">默认项 · 默认连接</div>
+              <div class="rowf"><button class="b3" data-ro-dis>默认连接：分析库 ▾</button>
+                <span class="dim" style="font-size:10.5px">写项目本体 settings.json，空 = 不设默认</span></div>
+
+              <div class="sec3">存储（.RSmeta） · 只读结构树</div>
+              <div class="tree">
+                <div class="trow dir"><b>.RSmeta/</b><span class="sz">合计 3.4 MB</span></div>
+                <div class="trow dir" style="padding-left:12px"><span>📂</span><b>config</b><span class="sz">目录</span></div>
+                <div class="trow" style="padding-left:26px"><span>📄</span>settings.json<span class="sz">412 B</span><button class="cp">⧉</button></div>
+                <div class="trow" style="padding-left:12px"><span>📂</span><b>queries</b><span class="sz">目录</span></div>
+                <div class="trow" style="padding-left:26px"><span>📄</span>welcome.sql<span class="sz">1.1 KB</span><button class="cp">⧉</button></div>
+                <div class="trow" style="padding-left:12px"><span>📄</span>project.db<span class="sz">96.0 KB</span><button class="cp">⧉</button></div>
+                <div class="trow" style="padding-left:12px"><span>📄</span>analytics.duckdb<span class="sz">3.2 MB</span><button class="cp">⧉</button></div>
+                <div class="trow" style="padding-left:12px"><span>📄</span>project.json<span class="sz">1.4 KB</span><button class="cp">⧉</button></div>
+                <div class="trow" style="padding-left:12px"><span>📄</span>project.lock<span class="sz">0 B</span><button class="cp">⧉</button></div>
+              </div>
+              <div class="rowf"><button class="b3">🗀 打开 .RSmeta</button>
+                <span class="dim" style="font-size:10.5px">排障用；会暴露内部结构</span></div>
+
+              <div class="sec3">依赖 · 版本</div>
+              <div class="kv"><span style="color:var(--success)">依赖自检：未发现缺失驱动</span></div>
+              <div class="rowf"><span class="inp">版本说明</span><button class="b3" data-ro-dis>创建版本快照</button></div>
+
+              <div class="sec3">危险区</div>
+              <div class="rowf">
+                <button class="b3" data-ro-dis>归档 / 取消归档</button>
+                <button class="b3" data-ro-dis>移出列表</button>
+                <button class="b3 danger" id="delBtn" data-ro-dis>删除数据…</button>
+              </div>
+            </div>
+
+            <!-- 删除确认（三道门的第二道） -->
+            <div class="dim2 hidden" id="delDlg">
+              <div class="dlg">
+                <div class="dh"><span class="ic">⚠</span>
+                  <div>
+                    <h5>删除项目「风控看板」的磁盘数据？</h5>
+                    <p>只删 <code>.RSmeta</code>（项目元数据与内部库）；项目根下的用户文件（scratchpad、*.sql）保留。
+                       为确认，请输入项目名：</p>
+                  </div>
+                </div>
+                <div class="rowf"><input class="inp" id="delInput" placeholder="输入项目名" style="min-width:170px"></div>
+                <div class="ft"><button class="b3">取消</button><button class="b3 danger dis" id="delOk">删除数据</button></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 面板 3：逃生口 -->
+          <div class="pane" data-pane="escape">
+            <div class="picker" style="filter:blur(1px);opacity:.55">
+              <div class="pmain">
+                <div class="tabs"><span>项目</span><button class="tab on">最近</button><button class="tab">全部</button><button class="tab">已移除</button><span class="cnt">4 个项目</span></div>
+                <div class="srow"><div class="search"><span>⌕</span><span class="ph">搜索名称 / 描述 / 路径</span></div></div>
+                <div class="card2"><div class="r1"><span class="nm">风控看板</span><span class="st active">active</span><span class="ops"><button class="go">打开</button><button class="dots">⋯</button></span></div></div>
+                <div class="card2"><div class="r1"><span class="nm">订单库</span><span class="st active">active</span><span class="ops"><button class="go">打开</button><button class="dots">⋯</button></span></div></div>
+              </div>
+              <div class="rail"><span class="b pri">＋ 新建项目</span><span class="b">🗀 打开文件夹…</span></div>
+            </div>
+            <div class="dim2">
+              <div class="dlg">
+                <div class="dh"><span class="ic">⚠</span>
+                  <div>
+                    <h5>项目「风控看板」已在另一实例打开</h5>
+                    <p>另一进程（pid 4242）持有写锁。可只读打开；仅在确认对方已退出时，才选择「仍要打开」。
+                       若该进程已经退出（崩溃 / 断电留下的陈旧锁），锁会被系统自动释放，此时选「仍要打开」即可接管。</p>
+                  </div>
+                </div>
+                <div class="ft">
+                  <button class="b3">取消</button>
+                  <button class="b3">仍要打开</button>
+                  <button class="b3 pri" id="roGo">只读打开</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="gate" style="margin-top:10px">
+          <b>可点着试</b>：切「选择器 / 项目设置 / 逃生口」；切 Tab、点 facet chips 看列表收窄；
+          点卡片 <code>⋯</code> 出菜单；点「只读打开」看写命令如何整片置灰；点「删除数据…」看第二道门。
+        </div>
+      </div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="n">1<small> 个项目</small></div><div class="l">一实例一项目</div><div class="d">打开即取 OS 文件锁；切换 = 关闭当前 + 回选择器，避免两个窗口各写各的</div></div>
+      <div class="kpi"><div class="n">3<small> 道门</small></div><div class="l">危险操作</div><div class="d">可见性门（只读置灰）→ 确认门（输入项目名）→ 范围门（只删 .RSmeta）</div></div>
+      <div class="kpi"><div class="n">2<small> 处记录</small></div><div class="l">名册与本体分离</div><div class="d">全局库管「找得到」，.RSmeta 管「用得对」；改名不动磁盘目录名</div></div>
+      <div class="kpi"><div class="n">0<small> 次 I/O</small></div><div class="l">render 期纪律</div><div class="d">结构树 / 描述 / 缺失驱动 / 默认连接在事件路径取一次存快照，渲染只读快照</div></div>
+      <div class="kpi"><div class="n">43<small> 项</small></div><div class="l">模块测试</div><div class="d">20 项窗口测试 + 9 项纯函数 + 名册端到端 1 + 磁盘与锁 4；workbench 侧 110 全绿</div></div>
+    </div>
+  </div>
+
+  <!-- ══ 1 ══ -->
+  <section id="s1">
+    <div class="sec-head"><span class="no">01</span><h3>为什么它不是一个「打开文件夹…」按钮</h3><span class="tag">四处「看着能做、其实没兜住」的做法</span></div>
+    <table>
+      <tr><th style="width:44%">常见做法</th><th>现在</th></tr>
+      <tr><td>随手打开一个目录就算项目：下次靠记忆找路径，换机器就失联</td>
+        <td><b>名册 + 本体两层</b>：全局库记「有哪些项目、最近打开、是否固定、是否移除」，<span class="mono">.RSmeta</span> 记「这个项目自己怎么跑」</td></tr>
+      <tr><td>同一个项目开两个窗口，各自写各自的库，最后不知道谁对</td>
+        <td><b>一个实例一个项目</b>：打开 = 取 OS 文件锁；占用时<b>不硬拒</b>——「只读打开 / 仍要打开 / 取消」三选一，陈旧锁会被系统自动释放</td></tr>
+      <tr><td>删项目 = <span class="mono">rm -rf</span>，用户文件一起没了，也无法后悔</td>
+        <td><b>软删可找回</b>（移出列表）+ <b>硬删要点名</b>（输入项目名，红色危险按钮），且只删 <span class="mono">.RSmeta</span></td></tr>
+      <tr><td>有草稿时点「切换项目」直接丢内容</td>
+        <td><b>未保存拦截</b>三态确认；「保存并继续」先把草稿另存为项目草稿（重名自动加序号），确认后<b>直达</b>目标动作</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 2 ══ -->
+  <section id="s2">
+    <div class="sec-head"><span class="no">02</span><h3>一个项目，两处记录</h3><span class="tag">两处记录各回答一个问题，谁也不许越界</span></div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">▤</span>名册 · 全局库 <span class="mono dim">project_info</span></h4>
+        <p>回答：我<b>有哪些项目</b>、最近打开、固定 / 已移除、显示名与描述。</p>
+        <ul>
+          <li>跨项目共享，随工作台启动即用</li>
+          <li>固定置顶（<span class="mono">is_pinned</span>）与软删（<span class="mono">removed_at</span>）记在这里</li>
+          <li>可写者：项目管理自己（创建 / 改名 / 固定 / 软删 / 恢复）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">◱</span>本体 · <span class="mono dim">{项目}/.RSmeta/</span></h4>
+        <p>回答：这个项目<b>自己怎么跑</b>——配置、连接引用、分析库、版本台账、写锁。</p>
+        <ul>
+          <li>随项目目录走，拷走项目 = 拷走全部内部状态</li>
+          <li>项目偏好（默认连接）写在 <span class="mono">config/settings.json</span></li>
+          <li>可写者：项目视图 + 各功能模块（Query / Mock / 洞察都写这里）</li>
+        </ul>
+      </div>
+    </div>
+    <pre>{项目}/                     ← 用户文件与内部元数据同处一个目录，但删数据只动后者
+├── scratchpad/  *.sql      ← 用户文件：任何操作都不碰
+└── .RSmeta/                ← 本体（设置里的结构树就是它）
+    ├── project.json        ← 项目信息：名称 / 描述 / 路径 / 版本
+    ├── project.db          ← 项目级元数据（SQLite）
+    ├── analytics.duckdb    ← 项目分析库
+    ├── project.lock        ← 写锁（OS 文件锁，进程退出自动释放）
+    ├── config/settings.json← 项目偏好：默认连接（U3）在这里
+    └── queries/  project_metadata/</pre>
+    <div class="gate"><b>两条不变量</b>：① 名册是「找得到」的权威、本体是「用得对」的权威——改名只改显示名与两处记录，<b>磁盘目录名永不变</b>；② <b>删除只动 .RSmeta</b>，名册记账与用户文件是两条命。</div>
+  </section>
+
+  <!-- ══ 3 ══ -->
+  <section id="s3">
+    <div class="sec-head"><span class="no">03</span><h3>三个高光</h3><span class="tag">每一条都能在界面上指出来</span></div>
+    <div class="hl">
+      <div class="big">
+        <div class="idx">HIGHLIGHT 1</div>
+        <h4>一个实例一个项目，<br>但不把人堵死</h4>
+        <p>写锁是 <b>OS 文件锁</b>：进程退出 / 崩溃自动释放，不会留下「打不开的项目」。锁被占用时不是一句拒绝，而是三选一逃生口，占用者 pid 与陈旧锁的处理方式都写在对话框里。</p>
+        <div class="kv"><span>只读打开</span><span>仍要打开</span><span>取消</span><span>pid 可见</span></div>
+      </div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 2</div>
+        <h4>危险操作三道门，<br>每道都能单独拦住手滑</h4>
+        <p>① 只读模式写命令<b>全部置灰</b>（点不动且看得出原因）；② 删除数据要<b>输入项目名</b>；③ 只删 <span class="mono">.RSmeta</span>——用户文件原地不动。软删与硬删分成两个命令。</p>
+        <div class="kv"><span>置灰</span><span>输入项目名</span><span>只删 .RSmeta</span><span>可找回</span></div>
+      </div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 3</div>
+        <h4>每一类命令<br>只有一份口径</h4>
+        <p>标题栏菜单与卡片菜单各是一份<b>纯函数规格</b>（顺序 / 文案 / 图标 / 可用性），渲染只按 id 挂事件：<span class="mono">⋯</span> 下拉 = 右键菜单，选择器 Tab 就是键盘可达的按钮。只读置灰策略也只有一处。</p>
+        <div class="kv"><span>规格可断言</span><span>下拉 = 右键</span><span>Tab 可达</span><span>固定 id</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 4 ══ -->
+  <section id="s4">
+    <div class="sec-head"><span class="no">04</span><h3>四个剧本 · 它替你做什么</h3><span class="tag">从「我要开工」到「我不要了」，每条都有兜底</span></div>
+
+    <div class="script">
+      <div class="sh"><span class="who">剧本 A</span><h4>从零到一个能写 SQL 的项目</h4><span class="gain">省下手抄路径与踩空目录</span></div>
+      <div class="steps">
+        <div class="st"><div class="n">STEP 1</div><div class="act">新建</div><div class="how">名称校验：非空 / ≤ 64 字 / 不含 <span class="mono">\ / : * ? &quot; &lt; &gt; |</span>；位置点「浏览…」用系统目录选择器（只允许选目录、单选），下方实时显示目标预览。</div><div class="ui"><span>＋ 新建项目</span><span>浏览…</span><span>目标预览</span></div></div>
+        <div class="st"><div class="n">STEP 2</div><div class="act">或打开现有的</div><div class="how">指向含 <span class="mono">.RSmeta</span> 的目录即可；<b>空目录</b>先问一句「在空目录创建项目？」，<b>非空且非项目</b>才拒绝。</div><div class="ui"><span>打开文件夹…</span><span>空目录询问</span></div></div>
+        <div class="st"><div class="n">STEP 3</div><div class="act">或什么都不建</div><div class="how">「从示例项目开始」在系统数据目录生成带示例草稿的项目——无网络也能开工。</div><div class="ui"><span>示例项目</span><span>welcome.sql</span></div></div>
+      </div>
+    </div>
+
+    <div class="script">
+      <div class="sh"><span class="who">剧本 B</span><h4>项目被别的实例占着，但我只想看一眼</h4><span class="gain">不动写锁也能进</span></div>
+      <div class="steps">
+        <div class="st"><div class="n">STEP 1</div><div class="act">看提示</div><div class="how">打开时弹逃生口，写清占用者 pid 与三个选项，并说明陈旧锁可以接管。</div><div class="ui"><span>逃生口</span><span>pid</span></div></div>
+        <div class="st"><div class="n">STEP 2</div><div class="act">选「只读打开」</div><div class="how">卡片菜单 / 标题栏菜单 / 设置里的写命令<b>全部置灰</b>，输入框禁用；真绕过 UI 触发也会有第二道拦截层给提示。</div><div class="ui"><span>只读（写操作已禁用）</span></div></div>
+        <div class="st"><div class="n">STEP 3</div><div class="act">看够了就退</div><div class="how">只读<b>不禁看、不禁走</b>：切项目、关闭项目、在资源管理器中显示照常可用。</div><div class="ui"><span>切换项目…</span><span>关闭项目</span></div></div>
+      </div>
+    </div>
+
+    <div class="script">
+      <div class="sh"><span class="who">剧本 C</span><h4>手上有草稿，但要切项目</h4><span class="gain">内容不丢，也不用走回头路</span></div>
+      <div class="steps">
+        <div class="st"><div class="n">STEP 1</div><div class="act">点切换 / 关闭</div><div class="how">编辑区有未保存草稿时先出拦截对话框，而不是先丢掉。</div><div class="ui"><span>未保存拦截</span></div></div>
+        <div class="st"><div class="n">STEP 2</div><div class="act">选一条路</div><div class="how"><b>保存并继续</b>（草稿落成 <span class="mono">未命名.sql</span>，重名自动加序号）/ <b>放弃更改并继续</b> / <b>取消</b>。</div><div class="ui"><span>保存并继续</span><span>放弃更改并继续</span></div></div>
+        <div class="st"><div class="n">STEP 3</div><div class="act">继续往下走</div><div class="how">确认后<b>直达</b>原本要去的对话框（新建项目 / 打开目录），不必回选择器再点一次——被拦一次之后最容易招骂的地方。</div><div class="ui"><span>PendingAction</span><span>直达目标</span></div></div>
+      </div>
+    </div>
+
+    <div class="script">
+      <div class="sh"><span class="who">剧本 D</span><h4>磁盘上的项目我不要了</h4><span class="gain">分两步，能后悔</span></div>
+      <div class="steps">
+        <div class="st"><div class="n">STEP 1</div><div class="act">先轻</div><div class="how">只想让它从列表消失：卡片 <span class="mono">⋯</span> →「移出列表」（软删；磁盘不动）。</div><div class="ui"><span>移出列表</span><span>软删</span></div></div>
+        <div class="st"><div class="n">STEP 2</div><div class="act">要找回</div><div class="how">选择器「已移除」Tab → <span class="mono">⋯</span> →「恢复」。</div><div class="ui"><span>已移除</span><span>恢复</span></div></div>
+        <div class="st"><div class="n">STEP 3</div><div class="act">真要清掉</div><div class="how">卡片 <span class="mono">⋯</span> →「删除数据…」（红色）→ 输入项目名 → 确认；只删 <span class="mono">.RSmeta</span>。设置·危险区是同一批命令的第二个入口。</div><div class="ui"><span>输入项目名</span><span>只删 .RSmeta</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 5 ══ -->
+  <section id="s5">
+    <div class="sec-head"><span class="no">05</span><h3>一次打开的全流程</h3><span class="tag">三道岔路，各有兜底</span></div>
+    <div class="flow">
+      <div class="step2"><div class="idx">STEP 1</div><div class="t">入口</div><div class="d">卡片「打开」/ 菜单「切换项目」/ 快捷键 / 启动恢复最近项目。</div><div class="who">request_open · switch_project</div></div>
+      <div class="step2"><div class="idx">STEP 2</div><div class="t">草稿检查</div><div class="d">编辑区有草稿 → 三态确认；「保存并继续」把草稿落成项目草稿。</div><div class="who">ProjectEditorBridge</div></div>
+      <div class="step2"><div class="idx">STEP 3</div><div class="t">目录状态</div><div class="d">含 .RSmeta → 继续；空目录 → 询问是否就地创建；非空非项目 / 不存在 → 拒绝并说明。</div><div class="who">inspect_target</div></div>
+      <div class="step2"><div class="idx">STEP 4</div><div class="t">写锁探测</div><div class="d">空闲 → 取锁；被占用 → 逃生口（只读 / 仍要 / 取消）。</div><div class="who">ProjectLock::acquire</div></div>
+      <div class="step2"><div class="idx">STEP 5</div><div class="t">应用会话</div><div class="d">写会话、世代 +1、登记「最近打开」，通知宿主刷新。</div><div class="who">apply_opened · epoch</div></div>
+      <div class="step2"><div class="idx">STEP 6</div><div class="t">宿主跟随</div><div class="d">标题栏 / 草稿箱 / 连接列表 / 导航缓存 / 结果归属全部切到新项目。</div><div class="who">on_opened</div></div>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th style="width:22%">岔路</th><th>兜底</th></tr>
+      <tr><td><b>草稿</b></td><td>三态确认；「保存并继续」把草稿落成项目草稿（重名自动加序号）；确认后<b>直达</b>目标动作，不丢用户意图</td></tr>
+      <tr><td><b>空目录</b></td><td>不擅自当项目打开，也不直接拒绝——先问「在空目录创建项目？」，确认后以目录名为项目名创建并打开</td></tr>
+      <tr><td><b>锁占用</b></td><td>不硬拒：只读打开（推荐）/ 仍要打开（清陈旧锁后重抢）/ 取消；对话框写明 pid 与陈旧锁语义</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 6 ══ -->
+  <section id="s6">
+    <div class="sec-head"><span class="no">06</span><h3>危险区 · 三道门</h3><span class="tag">归档 / 移出 / 删除数据，三处入口同一批命令</span></div>
+    <div class="gates">
+      <div class="gatecard">
+        <span class="no">① 可见性门</span>
+        <h4>只读模式：写命令整片置灰</h4>
+        <p>点不动，且一眼看得出为什么——设置面板里「只读（写操作已禁用）」常显。</p>
+        <div class="stops">拦截层 <code>read_only_blocked</code> 兜底任何绕过 UI 的调用</div>
+      </div>
+      <div class="gatecard">
+        <span class="no">② 确认门</span>
+        <h4>删除数据：输入项目名</h4>
+        <p>把「我要删的是这个」从一次点击变成一次输入；不匹配就保持打开并给提示。</p>
+        <div class="stops">按钮 <code>danger</code> 变体；与卡片菜单同一动作函数</div>
+      </div>
+      <div class="gatecard">
+        <span class="no">③ 范围门</span>
+        <h4>只删 <span class="mono">.RSmeta</span></h4>
+        <p>用户文件（<span class="mono">scratchpad/</span>、<span class="mono">*.sql</span>）原地不动；想连文件一起删请去系统文件管理器。</p>
+        <div class="stops">软删可找回 → 硬删才不可逆，两个命令分开</div>
+      </div>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th style="width:22%">命令</th><th style="width:48%">语义</th><th>能后悔吗</th></tr>
+      <tr><td>归档 / 取消归档</td><td>状态 <span class="mono">active ⇄ archived</span>，仍在名册（可筛 <span class="mono">状态:archived</span>）</td><td class="yes">随时反向操作</td></tr>
+      <tr><td>移出列表</td><td>软删：从最近 / 全部隐藏，磁盘不动</td><td class="yes">「已移除」Tab → 恢复</td></tr>
+      <tr><td>删除数据</td><td>硬删：删 <span class="mono">.RSmeta</span> 并从名册移除</td><td class="no">不能（所以要点名）</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 7 ══ -->
+  <section id="s7">
+    <div class="sec-head"><span class="no">07</span><h3>卡片解剖</h3><span class="tag">一张卡片只说必要的事，问题状态才占位</span></div>
+    <pre>┌──────────────────────────────────────────────────────────────────┐
+│ 风控看板        active   ★                      [打开]  [⋯]      │  ← 显示名 · 状态 · 固定 · 主操作 · 更多
+│ D:\work\风控看板                                                  │  ← 完整路径
+│ 月末对账用的项目（描述，有才显示）                                  │  ← R7：描述属于元信息
+│ 最后打开：2026-09-19 10:12 · 状态：active                          │
+│ ⚠ 路径已失效，可能已移动或删除        ● 已在另一实例打开            │  ← 只在有问题时出现
+└──────────────────────────────────────────────────────────────────┘</pre>
+    <table style="margin-top:12px">
+      <tr><th style="width:20%">位置</th><th style="width:30%">元素</th><th>规则</th></tr>
+      <tr><td>主操作</td><td>「打开」按钮</td><td>常显；与右键 / 菜单里的「打开」同一入口（同样过未保存拦截）</td></tr>
+      <tr><td>次要命令</td><td><span class="mono">⋯</span> 下拉 / 右键菜单</td><td>同源规格：打开 · 固定 · 在资源管理器中显示 · 移出列表 · 删除数据…（路径失效时换成重新定位…）</td></tr>
+      <tr><td>状态</td><td>文本 + 颜色</td><td><span class="mono">active</span> 绿 / <span class="mono">archived</span> 灰 / <span class="mono">offline</span> 黄 / <span class="mono">syncing</span> 蓝；<b>不靠颜色单独表意</b></td></tr>
+      <tr><td>固定</td><td>★</td><td>固定项置顶，跨会话保留（写名册 <span class="mono">is_pinned</span>）</td></tr>
+      <tr><td>只读</td><td>菜单项置灰</td><td>写命令置灰；读命令（打开 / 显示位置）保留</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 8 ══ -->
+  <section id="s8">
+    <div class="sec-head"><span class="no">08</span><h3>搜索与筛选</h3><span class="tag">自由文本 + facet，与筛选按钮取交集</span></div>
+    <table>
+      <tr><th style="width:34%">写法</th><th>含义</th></tr>
+      <tr><td><span class="mono">风控</span></td><td>自由文本：匹配名称 / 描述 / 路径（大小写不敏感）</td></tr>
+      <tr><td><span class="mono">状态:archived</span></td><td>按状态收窄：<span class="mono">active</span> / <span class="mono">archived</span> / <span class="mono">offline</span> / <span class="mono">syncing</span>；<span class="mono">状态:全部</span> 解除约束</td></tr>
+      <tr><td><span class="mono">固定:是</span></td><td>只看固定项（也认 <span class="mono">true / yes / 1</span>；<span class="mono">固定:否</span> 反之）</td></tr>
+      <tr><td><span class="mono">锁:是</span></td><td>只看已被另一实例占用的项目（<span class="mono">锁:否</span> 反之）</td></tr>
+      <tr><td><span class="mono">状态:offline 对账</span></td><td>facet 与自由文本<b>叠加（AND）</b></td></tr>
+    </table>
+    <div class="gate"><b>认不出的 token 一律回落自由文本</b>（<span class="mono">描述:报表</span>、<span class="mono">状态:离</span>、<span class="mono">C:\data</span>）——口径与 database 导航面板一致：光标还在输入框里，列表不该被一个半成品 token 清空。facet 生效时计数旁标注「已按 facet 收窄」。</div>
+  </section>
+
+  <!-- ══ 9 ══ -->
+  <section id="s9">
+    <div class="sec-head"><span class="no">09</span><h3>只读模式 · 两道防线</h3><span class="tag">置灰是「点不动」，拦截是「点了也没用」</span></div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">①</span>可见性：写命令置灰</h4>
+        <ul>
+          <li>卡片菜单 6 项按分支置灰；标题栏菜单顶部插一条置灰说明「只读模式：写操作不可用」</li>
+          <li>设置面板：名称 / 描述输入框、保存、默认连接、创建版本快照、危险区三件套全部禁用</li>
+          <li>头部常显「只读（写操作已禁用）」</li>
+        </ul>
+        <div class="foot">读命令保留：打开 · 在资源管理器中显示 · 切项目 · 关闭项目</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">②</span>拦截层：守卫 + 提示</h4>
+        <ul>
+          <li>写入口先过 <span class="mono">read_only_blocked</span>：被拦下就写提示并重绘</li>
+          <li>覆盖：保存项目信息 · 归档 · 创建版本 · 默认连接 · 以及任何绕过 UI 的调用路径</li>
+          <li>窗口测试固定这条语义（写 notice、不改会话、不动磁盘）</li>
+        </ul>
+        <div class="foot">只读是「不许写」，不是「不许看、不许走」——用户永远能退出去</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 10 ══ -->
+  <section id="s10">
+    <div class="sec-head"><span class="no">10</span><h3>键盘 · 右键 · 菜单</h3><span class="tag">命令入口三处，规格一份</span></div>
+    <table>
+      <tr><th style="width:30%">操作</th><th>入口</th></tr>
+      <tr><td><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd></td><td>搜索框 → 最近 / 全部 / 已移除 → 状态 → 排序 → 卡片上的「打开」/ <span class="mono">⋯</span>；全部是语义 <span class="mono">Button</span>，自带焦点环与 tab 停靠</td></tr>
+      <tr><td><kbd>Enter</kbd> / <kbd>Space</kbd></td><td>激活当前聚焦控件（切 Tab、换状态筛选、切换排序、开菜单）——gpui 元素在 <b>KeyUp</b> 上派发键盘点击</td></tr>
+      <tr><td><kbd>↑</kbd><kbd>↓</kbd> / <kbd>Enter</kbd> / <kbd>Esc</kbd></td><td>下拉菜单内导航 / 选中 / 关闭（组件自带）</td></tr>
+      <tr><td>右键卡片</td><td>调出该卡片命令菜单（与 <span class="mono">⋯</span> 同源）</td></tr>
+      <tr><td><kbd>Ctrl+Shift+P</kbd> / <kbd>Ctrl+Shift+W</kbd></td><td>切换项目 / 关闭项目（工作台命令）</td></tr>
+    </table>
+    <div class="gate">命令入口三处、规格一份：<b>标题栏菜单</b>（<span class="mono">project_menu_entries</span>）· <b>卡片 ⋯ 与右键</b>（<span class="mono">card_menu_entries</span>）。需要键盘焦点的元素不用会变的 id（状态筛选按钮固定为 <span class="mono">picker-status</span>，否则一换筛选就丢焦点）。</div>
+  </section>
+
+  <!-- ══ 11 ══ -->
+  <section id="s11">
+    <div class="sec-head"><span class="no">11</span><h3>架构 · 视图自带，能力靠宿主注入</h3><span class="tag">依赖只向下，视图可独立演进与测试</span></div>
+    <div class="layers">
+      <div class="layer"><div class="tg">crates/app</div><div class="body">装配与命令绑定：切项目 / 关项目的快捷键，窗口生命周期</div></div>
+      <div class="layer"><div class="tg">crates/workbench</div><div class="body">工作台视图与<b>宿主桥</b>：实现 <span class="mono">ProjectUiHost</span>，把重绘、编辑区、排序偏好、打开后刷新、连接候选注入给项目视图</div></div>
+      <div class="layer"><div class="tg">crates/project</div><div class="body"><b>模型 / 存储 / 服务 / 视图同 crate</b>：选择器、标题栏菜单、卡片与菜单规格、设置面板、语义对话框</div></div>
+      <div class="layer"><div class="tg">crates/engine · shared</div><div class="body">全局库（名册）与迁移、错误与通用类型</div></div>
+    </div>
+    <div class="dep">
+      <code>app ▸ workbench ▸ project ▸ engine ▸ shared</code>
+      <code>project ▸ gpui-kit</code>
+      <span>project <b>不</b>依赖 workbench 与 settings——宿主能力全部经端口注入</span>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th style="width:32%">注入点</th><th>宿主给什么</th></tr>
+      <tr><td><span class="mono">state / session</span></td><td>项目 UI 状态（选择器 / 设置 / 只读 / 世代）与当前会话（根 + 名）</td></tr>
+      <tr><td><span class="mono">ProjectUiNotifier</span></td><td>重绘桥（弱引用，避免宿主与视图成环）</td></tr>
+      <tr><td><span class="mono">ProjectEditorBridge</span></td><td>编辑区桥：草稿是否脏 / 取草稿内容 / 清空 / 标记已保存</td></tr>
+      <tr><td><span class="mono">save_sort</span></td><td>排序偏好持久化（写设置服务）</td></tr>
+      <tr><td><span class="mono">on_opened</span></td><td>打开后刷新宿主：连接列表 / 导航缓存 / 结果归属 / mock 临时表清场</td></tr>
+      <tr><td><span class="mono">connections</span></td><td>默认连接候选（全局 + 项目作用域连接，投影成 id + 名称）</td></tr>
+    </table>
+    <pre>代码地图（crates/project/src）
+  models.rs   域模型：Project / ProjectInfo / ProjectConfig / ProjectPath / Version
+  store.rs    .RSmeta 创建·加载·迁移 + 配置就地读写 + 依赖自检
+  lock.rs     实例锁：OS 文件锁 + project.lock.owner 占用者信息
+  service.rs  编排：列表 / 创建 / 打开（含只读）/ 关闭 / 改名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 重定位 / 默认连接 / 版本
+  ui.rs       视图：选择器 · 标题栏菜单 · 卡片与菜单规格 · 设置 · 语义对话框 · 宿主桥
+  ui/tests.rs 窗口测试与纯函数测试</pre>
+    <div class="gate"><b>render 是纯读路径</b>：需要磁盘或名册的显示内容（<span class="mono">.RSmeta</span> 结构树、描述、缺失驱动、默认连接值）在<b>事件路径</b>取一次存进快照（<span class="mono">SettingsSnapshot</span>），渲染只读快照——不在每帧遍历目录或查库。</div>
+  </section>
+
+  <!-- ══ 12 ══ -->
+  <section id="s12">
+    <div class="sec-head"><span class="no">12</span><h3>质量与证据</h3><span class="tag">每条结论都能跑到</span></div>
+    <table>
+      <tr><th style="width:22%">维度</th><th>做法</th></tr>
+      <tr><td><b>窗口测试</b></td><td>真窗口 + headless 跑视图：选择器渲染 / 对话框开关 / 未保存拦截 / 排序持久化 / 浏览目录 / 空目录询问 / 只读拦截 / 键盘激活（<kbd>Tab</kbd> 停靠 + <kbd>Enter</kbd> 真改状态，按 KeyUp 语义发键）</td></tr>
+      <tr><td><b>纯函数优先</b></td><td>可判定的都拍成纯函数：facet 解析 · 可见条目筛选 · 菜单规格 · 结构树枚举 · 卡片描述 · 默认连接文案——逐项断言，不依赖窗口</td></tr>
+      <tr><td><b>契约与规范</b></td><td>视图零裸色值（一律 <span class="mono">cx.theme().colors.*</span>）；尺寸走 rem 常量；不用通配导入（会撞 gpui 的 <span class="mono">test</span> 宏）；对话框按栈语义关闭</td></tr>
+      <tr><td><b>跨模块回归</b></td><td>名册端到端（创建登记 → 固定置顶 → 软删隐藏 → 已移除找回）与磁盘集成（<span class="mono">.RSmeta</span> / 实例锁 / 默认连接）各有一组集成测试</td></tr>
+    </table>
+    <pre>cargo test -p rds-project -j 2
+  lib                 43 通过（20 项窗口测试 + 9 项纯函数 + 存储 / 锁 / 模型内部用例）
+  project_registry     1 通过（名册端到端）
+  project_store        4 通过（磁盘 .RSmeta · 实例锁 · 默认连接）
+cargo test -p rds-workbench --lib -j 2   → 110 通过
+cargo check --workspace --all-targets    → 零告警</pre>
+  </section>
+
+  <!-- ══ 13 ══ -->
+  <section id="s13">
+    <div class="sec-head"><span class="no">13</span><h3>边界 · 这些事它不做</h3><span class="tag">越界比缺功能更贵</span></div>
+    <table>
+      <tr><th style="width:50%">做</th><th>不做</th></tr>
+      <tr><td>项目的<b>生命周期与名册</b>：创建 / 打开 / 只读 / 切换 / 关闭 / 改名 / 描述 / 默认连接 / 归档 / 移出 / 找回 / 硬删 / 重定位</td>
+        <td><b>连接的新建与编辑</b>（连接对话框属连接模块，这里只记「默认连接」这一个偏好）</td></tr>
+      <tr><td>选择器：最近 / 全部 / 已移除 · 搜索 facet · 状态筛选 · 排序 · 固定</td>
+        <td><b>SQL 执行 / Mock 生成 / 洞察本体</b>（各自模块；这里只提供入口与项目归属）</td></tr>
+      <tr><td>项目设置：概览 / 基本信息 / 默认项 / .RSmeta 结构树 / 依赖自检 / 版本快照 / 危险区</td>
+        <td><b>移动或另存项目目录</b>（改名不动目录，移动不在本期）</td></tr>
+      <tr><td>未保存草稿拦截、实例锁与逃生口、示例项目</td>
+        <td><b>版本恢复与对比</b>（只做快照台账）、<b>DuckLake 远程项目</b>（模型层预留，UI 不接受 URL）</td></tr>
+    </table>
+    <table style="margin-top:12px">
+      <tr><th style="width:34%">已知待办</th><th>说明</th></tr>
+      <tr><td>窗口退出路径的草稿兜底</td><td>点 ✕ / <kbd>Alt+F4</kbd> 时整个窗口退出的行为未定义，需与 editor / app 对齐 <span class="badge mid">E3</span></td></tr>
+      <tr><td>执行 SQL 的只读拦截测试</td><td>项目侧只读拦截已有窗口测试；editor 侧执行路径未测 <span class="badge plan">E5</span></td></tr>
+      <tr><td>菜单快捷键展示</td><td><span class="mono">PopupMenuItem</span> / <span class="mono">DropdownButton</span> 在 gpui-kit 0.6.1 没有 shortcut 槽位，等组件支持 <span class="badge plan">C2</span></td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 14 ══ -->
+  <section id="s14">
+    <div class="sec-head"><span class="no">14</span><h3>文档地图</h3><span class="tag">按你想知道的问题挑一篇</span></div>
+    <table>
+      <tr><th style="width:38%">文档</th><th>什么时候读它</th></tr>
+      <tr><td><a href="README.md">README.md</a></td><td>模块入口：一句话 / 文档索引 / 特点速览 / 状态（本页是它的宣传版）</td></tr>
+      <tr><td><a href="project-prototype-design.md">project-prototype-design.md</a></td><td><b>交互语义与范围</b>：9 条决策、CRUD 全表、状态机、主题映射、范围外清单（权威）</td></tr>
+      <tr><td><a href="project-prototype.html">project-prototype.html</a></td><td><b>长什么样</b>：选择器 / 项目菜单 / 新建 / 设置 / 拦截与锁弹层的可交互原型</td></tr>
+      <tr><td><a href="project-dev-plan.md">project-dev-plan.md</a></td><td><b>怎么分工做的</b>：任务划分、进度记录（含每轮补齐）、测试场景、风险、实现位置映射、未开发清单</td></tr>
+      <tr><td><a href="project-view-architecture.md">project-view-architecture.md</a></td><td><b>视图怎么接宿主</b>：宿主桥契约、状态所有权、对话框栈语义、窗口测试方案与三个坑</td></tr>
+      <tr><td><a href="project-user-guide.md">project-user-guide.md</a></td><td><b>怎么用</b>：界面导览、典型流程、状态与提示速览、键盘操作、数据与安全、FAQ、验收清单</td></tr>
+      <tr><td><a href="project-showcase.md">project-showcase.md</a></td><td>本页的<b>可贴版</b>（纯文本 + 表格 + mermaid），适合贴进 PR / wiki / 聊天</td></tr>
+      <tr><td><a href="../../../crates/project/README.md">crates/project/README.md</a></td><td>crate 入口：模块特点提炼、代码落点、约定（改代码前先读它）</td></tr>
+    </table>
+  </section>
+
+  <div class="foot">
+    <b>快照</b>：2026-09-19 · 对应 <span class="mono">cargo test -p rds-project -j 2</span> 全绿（lib 43 / 集成 5）与
+    <span class="mono">cargo check --workspace --all-targets</span> 零告警。<br>
+    数字会过期，口径在测试与文档里：<a href="project-dev-plan.md">开发方案</a> ·
+    <a href="project-view-architecture.md">视图架构</a> ·
+    <a href="project-user-guide.md">使用手册</a> ·
+    <a href="project-showcase.md">可贴版</a>
+  </div>
+</div>
+
+<script>
+/* 主题：light ⇄ dark，默认跟随系统一次（首帧即按系统定色）。 */
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('rds-showcase-theme', t); } catch (e) {}
+}
+function toggleTheme(){
+  var cur = document.documentElement.getAttribute('data-theme');
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+}
+(function initTheme(){
+  var saved = null;
+  try { saved = localStorage.getItem('rds-showcase-theme'); } catch (e) {}
+  if (saved) { applyTheme(saved); return; }
+  var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+})();
+
+/* 线框：三个面板切换。 */
+(function wirePanes(){
+  var seg = document.getElementById('seg');
+  seg.addEventListener('click', function(e){
+    var btn = e.target.closest('button[data-pane]');
+    if (!btn) return;
+    seg.querySelectorAll('button').forEach(function(b){ b.classList.toggle('on', b === btn); });
+    document.querySelectorAll('.win .pane').forEach(function(p){
+      p.classList.toggle('on', p.dataset.pane === btn.dataset.pane);
+    });
+    hideMenus();
+  });
+})();
+
+/* 选择器：Tab 切换 + facet chips + 计数（示意：读的是一组固定卡片）。 */
+(function wirePicker(){
+  var cards = Array.prototype.slice.call(document.querySelectorAll('#cards .card2'));
+  var cnt = document.getElementById('cnt');
+  var qbox = document.getElementById('qbox');
+  var stBtn = document.getElementById('stBtn');
+  var STEPS = ['全部', 'Active', 'Archived', 'Offline'];
+  var stIdx = 0;
+  var tab = 'recent';
+  var facet = '';
+  var ro = false;
+
+  function visible(card){
+    if (card.dataset.tab === 'removed') return tab === 'removed';
+    if (tab === 'removed') return false;
+    if (STEPS[stIdx] !== '全部' && card.dataset.status !== STEPS[stIdx].toLowerCase()) return false;
+    if (facet === '') return true;
+    if (facet === '状态:archived') return card.dataset.status === 'archived';
+    if (facet === '固定:是') return card.dataset.pinned === '1';
+    if (facet === '锁:否') return card.dataset.locked === '0';
+    return true;
+  }
+  function render(){
+    var n = 0;
+    cards.forEach(function(c){
+      var on = visible(c);
+      c.classList.toggle('hidden', !on);
+      if (on) n++;
+    });
+    cnt.textContent = n + ' 个项目' + (facet ? ' · 已按 facet 收窄' : '');
+    stBtn.textContent = '状态：' + STEPS[stIdx];
+    stBtn.classList.toggle('acc', stIdx !== 0);
+    qbox.classList.toggle('has', !!facet);
+    qbox.textContent = facet || '搜索名称 / 描述 / 路径（可用 状态: 固定: 锁:）';
+  }
+
+  /* 状态按钮：与 facet 取交集（对应真实里「筛选按钮 ∩ facet」） */
+  stBtn.addEventListener('click', function(){
+    stIdx = (stIdx + 1) % STEPS.length;
+    render();
+  });
+
+  document.querySelectorAll('.win .tab').forEach(function(b){
+    b.addEventListener('click', function(){
+      if (!b.dataset.tab) return;
+      tab = b.dataset.tab;
+      document.querySelectorAll('.win .tab').forEach(function(x){ x.classList.toggle('on', x === b); });
+      render();
+    });
+  });
+  document.getElementById('fchips').addEventListener('click', function(e){
+    var b = e.target.closest('.fchip');
+    if (!b) return;
+    facet = b.dataset.f;
+    render();
+  });
+
+  /* ⋯ 菜单：点开 / 点别处收起；只读时写命令置灰 */
+  var cardMenu = document.getElementById('cardMenu');
+  document.getElementById('cards').addEventListener('click', function(e){
+    var d = e.target.closest('.dots');
+    if (!d) return;
+    var wasOn = cardMenu.classList.contains('on');
+    hideMenus();
+    if (wasOn) return;
+    var box = d.getBoundingClientRect();
+    var host = document.querySelector('.win').getBoundingClientRect();
+    cardMenu.style.left = Math.max(8, box.left - host.left - 150) + 'px';
+    cardMenu.style.top = (box.bottom - host.top + 4) + 'px';
+    cardMenu.style.right = 'auto';
+    cardMenu.classList.add('on');
+  });
+
+  /* 标题栏项目菜单 */
+  var slotMenu = document.getElementById('slotMenu');
+  document.getElementById('slot').addEventListener('click', function(e){
+    e.stopPropagation();
+    var wasOn = slotMenu.classList.contains('on');
+    hideMenus();
+    if (!wasOn) slotMenu.classList.add('on');
+  });
+
+  /* 只读模式：写命令整片置灰（第二道防线由真程序拦，这里只演示第一道） */
+  document.getElementById('roGo').addEventListener('click', function(){
+    if (ro) return;
+    ro = true;
+    document.getElementById('seg').querySelector('button[data-pane="picker"]').click();
+    document.querySelectorAll('[data-ro]').forEach(function(x){ x.classList.remove('hidden'); });
+    document.querySelectorAll('[data-ro-dis]').forEach(function(x){ x.classList.add('dis'); });
+    document.querySelectorAll('#cardMenu .mi').forEach(function(m, i){ if (i >= 1) m.classList.add('dis'); });
+    document.querySelectorAll('#slotMenu .mi').forEach(function(m){ if (m.classList.contains('wr')) m.classList.add('dis'); });
+    document.getElementById('slotCap').textContent = '项目菜单 · 只读：写命令已置灰';
+    slotMenu.insertAdjacentHTML('afterbegin', '<div class="mi dis">ℹ 只读模式：写操作不可用</div><div class="sep"></div>');
+    if (facet === '锁:否') facet = '';
+    render();
+  });
+
+  /* 删除确认：第二道门——输入项目名才放行 */
+  var delDlg = document.getElementById('delDlg');
+  var delInput = document.getElementById('delInput');
+  var delOk = document.getElementById('delOk');
+  document.getElementById('delBtn').addEventListener('click', function(){
+    if (ro) return;
+    delDlg.classList.remove('hidden');
+    delInput.value = '';
+    delOk.classList.add('dis');
+  });
+  delInput.addEventListener('input', function(){
+    var ok = delInput.value.trim() === '风控看板';
+    delOk.classList.toggle('dis', !ok);
+  });
+  delOk.addEventListener('click', function(){
+    if (delOk.classList.contains('dis')) return;
+    delDlg.classList.add('hidden');
+    delOk.textContent = '已删除（示意）';
+  });
+
+  document.addEventListener('click', function(e){
+    if (!e.target.closest('.menu3') && !e.target.closest('.dots') && !e.target.closest('#slot')) hideMenus();
+  });
+  function hideMenus(){
+    document.querySelectorAll('.menu3').forEach(function(m){ m.classList.remove('on'); });
+  }
+  window.hideMenus = hideMenus;
+  render();
+})();
+
+/* 结构树行：复制路径（示意，不碰真实剪贴板）。 */
+(function wireCopy(){
+  document.querySelectorAll('.win .cp').forEach(function(b){
+    b.addEventListener('click', function(){
+      var old = b.textContent;
+      b.textContent = '已复制';
+      setTimeout(function(){ b.textContent = old; }, 900);
+    });
+  });
+})();
+
+/* 吸顶导航：高亮当前章节 */
+(function wireNav(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  var targets = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function onScroll(){
+    var y = window.scrollY + 90, idx = 0;
+    targets.forEach(function(t, i){ if (t && t.offsetTop <= y) idx = i; });
+    links.forEach(function(a, i){ a.classList.toggle('on', i === idx); });
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+})();
+</script>
+</body>
+</html>

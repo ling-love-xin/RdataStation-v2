@@ -28,6 +28,8 @@
 | `project/project-dev-plan.md` | 项目管理开发方案 | P0/A/B/C 任务（CRUD 主线 + 名册迁移 019）/ 文件落点 / 测试场景 / 风险 / 映射 |
 | `project/project-view-architecture.md` | 项目视图架构（A3） | 宿主桥 `ProjectUiHost` 契约与状态所有权 / 对话框栈语义 / 窗口测试方案（含 `#[test]` 宏遮蔽坑）/ 实现映射 |
 | `project/project-user-guide.md` | 项目管理**使用手册** | 入口 / 界面导览（选择器·卡片菜单·设置）/ 典型流程（新建含目录选择·空目录询问·拦截·重定位·删除找回）/ 状态速览 / 快捷键 / 数据与安全 / FAQ / 验收清单 |
+| `project/project-showcase.md` | 项目管理**一页看懂（可贴版）** | 14 节：一句话 + 它替你做到的事 / 为什么它不是一个「打开文件夹…」按钮 / 一个项目两处记录（名册与本体分离 + 目录树）/ 三个高光 / 四个剧本 / 一次打开的全流程与三道岔路（mermaid）/ 危险区三道门（mermaid）/ 卡片解剖 / 搜索 facet / 只读两道防线 / 键盘与右键 / 架构（依赖只向下 + 六个注入点）/ 质量与证据 / 边界与待办 / 文档地图；适合贴进 PR、wiki 与聊天 |
+| `project/project-showcase.html` | 项目管理**一页看懂（视觉版）** | 首屏工作台线框可切「选择器 / 项目设置 / 逃生口」，并能点着试 Tab 切换 · facet 收窄 · 卡片 `⋯` 菜单 · 只读置灰 · 删除输入项目名；吸顶导航滚动高亮 + KPI / 高光 / 剧本 / 流程 / 三道门 / 分层排版；自包含可离线打开，与编辑器 / 导航 / 洞察宣传页同一套设计语言 |
 | `connection/README.md` | 连接模块**入口** | **先读这个**：特点提炼（产品行为 / 数据与安全 / 架构约束 / 工程与文档）/ 边界 / 代码地图 / 改前必守约束 / 测试与验证命令 / 文档地图 / 下一步 |
 | `connection/connection-prototype-design.md` | 连接模块原型 | 新增连接对话框布局（v5 对齐）/ 五 Tab / 交互 / 主题映射 |
 | `connection/connection-dialog-prototype.html` | 连接模块原型（交互稿） | RDS Light/Dark 双主题新增连接对话框示意（可交互） |

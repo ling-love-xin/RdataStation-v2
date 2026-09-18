@@ -91,6 +91,8 @@
 | `docs/architecture/project/project-dev-plan.md` | 任务划分 / 进度记录 / 测试场景 / 风险 / 映射表 |
 | `docs/architecture/project/project-view-architecture.md` | 宿主桥契约、对话框栈语义、窗口测试方案与坑 |
 | `docs/architecture/project/project-user-guide.md` | 使用手册（入口 / 导览 / 流程 / FAQ / 验收清单） |
+| `docs/architecture/project/project-showcase.md` | **一页看懂（可贴版）**：特点 / 四个剧本 / 流程 / 三道门 / 只读两道防线 / 架构 / 质量与证据 / 边界 |
+| `docs/architecture/project/project-showcase.html` | **一页看懂（视觉版）**：可切三个线框、可点着试 facet 与只读置灰；明暗双主题、离线可开 |
 
 ## 约定
 
