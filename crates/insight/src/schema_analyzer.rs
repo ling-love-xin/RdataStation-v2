@@ -71,20 +71,88 @@ fn escape_sql_string(s: &str) -> String {
     s.replace('\'', "''").replace('\\', "\\\\")
 }
 
+/// 源库方言（结构洞察只依赖 `information_schema`，但三家写法不同）。
+///
+/// 为什么需要：`information_schema` 的**列集与语义各家不一样**——
+/// MySQL 没有 `table_catalog`（恒为 `def`，拿它过滤会得空集）、库名在 `table_schema`，
+/// 而 `column_key` 是 MySQL 专有列（PG / DuckDB 没这个列，直接查会报列不存在）；
+/// SQLite 连 `information_schema` 都没有。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SchemaDialect {
+    /// MySQL / MariaDB
+    Mysql,
+    /// PostgreSQL / DuckDB（`table_catalog` = 库、`table_schema` = schema）
+    PostgresLike,
+    /// 没有 `information_schema`的库：给可读回执，不当“零张表”静默返回
+    Unsupported(&'static str),
+}
+
+impl SchemaDialect {
+    /// 按连接的 `db_type` 判方言；不认识的按 [`SchemaDialect::PostgresLike`]
+    /// （`information_schema` 是 SQL 标准，PG 写法最接近标准）。
+    fn of(db_type: &str) -> Self {
+        let t = db_type.to_ascii_lowercase();
+        if t.contains("mysql") || t.contains("maria") {
+            Self::Mysql
+        } else if t.contains("sqlite") {
+            Self::Unsupported("SQLite 没有 information_schema，暂不支持结构洞察（可看点表看数据统计）")
+        } else {
+            Self::PostgresLike
+        }
+    }
+}
+
 pub struct SchemaAnalyzer;
 
 impl SchemaAnalyzer {
+    /// `information_schema` 的**过滤条件体**（不带 `WHERE`）：方言差异只在这一处。
+    ///
+    /// MySQL 用库名过滤（`schema` 为空时反正用库名——导航侧 MySQL 的 schema 可能为空）；
+    /// PG / DuckDB 用 schema + catalog 双条件。
+    fn schema_filter(dialect: SchemaDialect, database: &str, schema: &str) -> String {
+        let database = escape_sql_string(database);
+        let schema = escape_sql_string(schema);
+        match dialect {
+            SchemaDialect::Mysql => {
+                let db = if schema.is_empty() { database } else { schema };
+                format!("table_schema = '{db}'")
+            }
+            _ => format!("table_schema = '{schema}' AND table_catalog = '{database}'"),
+        }
+    }
+
+    /// 报告标题用的 schema 名：MySQL 下 schema 常为空，用库名顶上（不显示成空标题）。
+    fn display_name(dialect: SchemaDialect, database: &str, schema: &str) -> String {
+        if schema.is_empty() && dialect == SchemaDialect::Mysql {
+            database.to_string()
+        } else {
+            schema.to_string()
+        }
+    }
     pub async fn analyze(
         conn_id: String,
         database: &str,
         schema: &str,
     ) -> Result<SchemaInsightReport, CoreError> {
         let manager = get_connection_manager().clone();
+        // 方言从**连接信息**现读（不猜）：`db_type` 决定 information_schema 怎么查
+        let db_type = manager
+            .get_connection_info(&conn_id)
+            .await
+            .map(|info| info.db_type)
+            .unwrap_or_default();
+        let dialect = SchemaDialect::of(&db_type);
+        if let SchemaDialect::Unsupported(reason) = dialect {
+            return Err(CoreError::common(CommonError::General(reason.to_string())));
+        }
         let service = SqlService::new(manager);
 
-        let all_columns = Self::fetch_all_columns(&service, Some(conn_id.clone()), schema).await?;
+        let all_columns =
+            Self::fetch_all_columns(&service, Some(conn_id.clone()), database, schema, dialect)
+                .await?;
         let all_tables =
-            Self::fetch_all_tables(&service, Some(conn_id.clone()), database, schema).await?;
+            Self::fetch_all_tables(&service, Some(conn_id.clone()), database, schema, dialect)
+                .await?;
 
         let table_count = all_tables.len() as u32;
         let total_columns = all_columns.len() as u32;
@@ -103,7 +171,7 @@ impl SchemaAnalyzer {
         );
 
         Ok(SchemaInsightReport {
-            schema_name: schema.to_string(),
+            schema_name: Self::display_name(dialect, database, schema),
             table_count,
             total_columns,
             fk_candidates,
@@ -121,14 +189,12 @@ impl SchemaAnalyzer {
         conn_id: Option<String>,
         database: &str,
         schema: &str,
+        dialect: SchemaDialect,
     ) -> Result<Vec<String>, CoreError> {
-        let escaped_schema = escape_sql_string(schema);
-        let escaped_database = escape_sql_string(database);
+        let filter = Self::schema_filter(dialect, database, schema);
         let sql = format!(
             "SELECT table_name FROM information_schema.tables \
-             WHERE table_schema = '{}' AND table_catalog = '{}' \
-             ORDER BY table_name",
-            escaped_schema, escaped_database
+             WHERE {filter} ORDER BY table_name"
         );
 
         let opts = SqlExecuteOptions {
@@ -140,22 +206,13 @@ impl SchemaAnalyzer {
         };
 
         let result = service.execute(conn_id, &sql, opts).await?;
-        let json = serde_json::to_value(&result.result).map_err(|e| {
-            CoreError::common(CommonError::General(format!("Serialize error: {}", e)))
-        })?;
+        // 进程内直读（不能走 JSON 契约序列化：它不含 `batches`，会永远是空行）
+        let (_, rows) = crate::service::result_columns_and_rows(&result.result);
 
-        let tables = Self::get_batch_rows(&json)
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(|row| {
-                        row.as_array()
-                            .and_then(|arr| arr.first())
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let tables = rows
+            .iter()
+            .filter_map(|row| row.first().and_then(|v| v.as_str()).map(String::from))
+            .collect();
 
         Ok(tables)
     }
@@ -163,16 +220,23 @@ impl SchemaAnalyzer {
     async fn fetch_all_columns(
         service: &SqlService,
         conn_id: Option<String>,
+        database: &str,
         schema: &str,
+        dialect: SchemaDialect,
     ) -> Result<Vec<TableColumnInfo>, CoreError> {
-        let escaped_schema = escape_sql_string(schema);
+        // `column_key` 是 MySQL 专有列（PG / DuckDB 查它会直接报列不存在）：
+        // 那边给空串——PK 角标缺失，但报告的主要结论（外键 / 类型 / 孤立 / 冗余）不靠它
+        let key_expr = match dialect {
+            SchemaDialect::Mysql => "COALESCE(column_key, '') AS column_key",
+            _ => "'' AS column_key",
+        };
+        let filter = Self::schema_filter(dialect, database, schema);
         let sql = format!(
             "SELECT table_name, column_name, data_type, is_nullable, \
-             COALESCE(column_key, '') as column_key, ordinal_position \
+             {key_expr}, ordinal_position \
              FROM information_schema.columns \
-             WHERE table_schema = '{}' \
-             ORDER BY table_name, ordinal_position",
-            escaped_schema
+             WHERE {filter} \
+             ORDER BY table_name, ordinal_position"
         );
 
         let opts = SqlExecuteOptions {
@@ -184,12 +248,13 @@ impl SchemaAnalyzer {
         };
 
         let result = service.execute(conn_id, &sql, opts).await?;
-        let json = serde_json::to_value(&result.result).map_err(|e| {
-            CoreError::common(CommonError::General(format!("Serialize error: {}", e)))
-        })?;
-
-        let (col_names, rows) = Self::parse_batch_schema(&json);
-        let col_idx = |name: &str| -> Option<usize> { col_names.iter().position(|c| c == name) };
+        // 同上：进程内直读 `columns` / `to_rows()`
+        let (col_names, rows) = crate::service::result_columns_and_rows(&result.result);
+        // 列名按**大小写不敏感**匹配：MySQL 的 `information_schema` 元数据列名是全大写
+        // （`TABLE_NAME` / `DATA_TYPE`…），其余家是小写——写死小写会让整张表被过滤成空集。
+        let col_idx = |name: &str| -> Option<usize> {
+            col_names.iter().position(|c| c.eq_ignore_ascii_case(name))
+        };
 
         let columns: Vec<TableColumnInfo> = rows
             .iter()
@@ -536,40 +601,6 @@ impl SchemaAnalyzer {
 
         (score, level.into(), summary)
     }
-
-    fn get_batch_rows(json: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-        json["batches"]
-            .as_array()
-            .and_then(|batches| batches.first())
-            .and_then(|batch| batch["rows"].as_array())
-    }
-
-    fn parse_batch_schema(json: &serde_json::Value) -> (Vec<String>, Vec<Vec<serde_json::Value>>) {
-        match json["batches"].as_array().and_then(|b| b.first()) {
-            Some(batch) => {
-                let cols: Vec<String> = batch["columns"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|c| c.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let rows: Vec<Vec<serde_json::Value>> = batch["rows"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .map(|row| row.as_array().cloned().unwrap_or_default())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                (cols, rows)
-            }
-            None => (vec![], vec![]),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -769,6 +800,62 @@ mod tests {
             score < 70.0,
             "Expected score < 70 with many orphans, got {}",
             score
+        );
+    }
+
+    /// 方言判定：`information_schema` 的列集各家不同，猜错就直接报“列不存在”。
+    #[test]
+    fn dialect_picks_the_right_information_schema_flavour() {
+        assert_eq!(SchemaDialect::of("mysql"), SchemaDialect::Mysql);
+        assert_eq!(SchemaDialect::of("mysql_native"), SchemaDialect::Mysql);
+        assert_eq!(SchemaDialect::of("MariaDB"), SchemaDialect::Mysql);
+        assert_eq!(SchemaDialect::of("postgres"), SchemaDialect::PostgresLike);
+        assert_eq!(SchemaDialect::of("postgres_native"), SchemaDialect::PostgresLike);
+        assert_eq!(SchemaDialect::of("duckdb"), SchemaDialect::PostgresLike);
+        assert_eq!(SchemaDialect::of(""), SchemaDialect::PostgresLike, "不认识的按标准写法");
+        assert!(
+            matches!(SchemaDialect::of("sqlite"), SchemaDialect::Unsupported(_)),
+            "SQLite 没有 information_schema：不能猜、要明确回绝"
+        );
+    }
+
+    /// 过滤条件体：MySQL 用库名（那边没有 `table_catalog`），PG / DuckDB 用双条件。
+    #[test]
+    fn schema_filter_follows_the_dialect() {
+        assert_eq!(
+            SchemaAnalyzer::schema_filter(SchemaDialect::Mysql, "shop", "shop"),
+            "table_schema = 'shop'"
+        );
+        assert_eq!(
+            SchemaAnalyzer::schema_filter(SchemaDialect::Mysql, "shop", ""),
+            "table_schema = 'shop'",
+            "MySQL 侧 schema 为空时用库名兜底"
+        );
+        assert_eq!(
+            SchemaAnalyzer::schema_filter(SchemaDialect::PostgresLike, "shop", "public"),
+            "table_schema = 'public' AND table_catalog = 'shop'"
+        );
+        assert_eq!(
+            SchemaAnalyzer::schema_filter(SchemaDialect::PostgresLike, "sh'op", "public"),
+            "table_schema = 'public' AND table_catalog = 'sh''op'",
+            "库名里的单引号要双写"
+        );
+    }
+
+    /// 报告标题：MySQL 侧 schema 常为空，用库名顶上（不显示成空标题）。
+    #[test]
+    fn display_name_falls_back_to_the_database_on_mysql() {
+        assert_eq!(
+            SchemaAnalyzer::display_name(SchemaDialect::Mysql, "shop", ""),
+            "shop"
+        );
+        assert_eq!(
+            SchemaAnalyzer::display_name(SchemaDialect::Mysql, "shop", "shop"),
+            "shop"
+        );
+        assert_eq!(
+            SchemaAnalyzer::display_name(SchemaDialect::PostgresLike, "shop", "public"),
+            "public"
         );
     }
 

@@ -318,6 +318,19 @@ pub struct TableRef {
     pub table: String,
 }
 
+/// Schema 定位（M8 结构洞察用）：连接 + catalog + schema。
+///
+/// 与 [`TableRef`] 同形但停在 schema 层：结构报告是 **schema 级**的
+/// （外键候选 / 类型不一致 / 孤立表 / 冗余列按 schema 汇总）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaRef {
+    pub conn_id: String,
+    /// Catalog / 数据库（MySQL 里就是库名）
+    pub catalog: String,
+    /// Schema（MySQL 侧可能为空——那边库即 schema）
+    pub schema: String,
+}
+
 /// 导航状态（展开态 / 选中 / 过滤），持久化到 `navigator_state`。
 ///
 /// 定义在 `engine::persistence`（与存储同处一层），此处重导旧路径，导航侧引用不变。

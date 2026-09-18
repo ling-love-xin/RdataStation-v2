@@ -62,10 +62,8 @@ async fn sample_from_connection(
     let result = service
         .execute(Some(conn_id.to_string()), sample_sql, opts)
         .await?;
-    let json = serde_json::to_value(&result.result)
-        .map_err(|e| CoreError::common(CommonError::General(format!("Serialize error: {e}"))))?;
-
-    let (columns, rows) = batch_columns_and_rows(&json);
+    // 进程内直读（不能走 JSON 契约序列化：它不含 `batches`，永远是空行）
+    let (columns, rows) = crate::service::result_columns_and_rows(&result.result);
     if columns.is_empty() {
         return Err(CoreError::common(CommonError::General(format!(
             "取样没有拿到列（来源：{label}）——查询可能没有结果集"
@@ -77,39 +75,6 @@ async fn sample_from_connection(
         .lock()
         .map_err(|e| CoreError::common(CommonError::General(format!("DuckDB lock error: {e}"))))?;
     engine::duckdb::analysis::create_analysis_temp_table(&conn, &columns, &rows, "source_sample")
-}
-
-/// 首个 batch 的列与行（引擎的执行结果 JSON → 可建表的两段）。
-fn batch_columns_and_rows(
-    json: &serde_json::Value,
-) -> (Vec<String>, Vec<Vec<serde_json::Value>>) {
-    match json["batches"]
-        .as_array()
-        .and_then(|batches| batches.first())
-    {
-        Some(batch) => {
-            let cols: Vec<String> = batch["columns"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|c| c.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let rows: Vec<Vec<serde_json::Value>> = batch["rows"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .map(|row| row.as_array().cloned().unwrap_or_default())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            (cols, rows)
-        }
-        None => (vec![], vec![]),
-    }
 }
 
 /// 源目标的列画像：取样 → 画像，返回**（样本表名, 视图）**。
@@ -290,10 +255,8 @@ pub async fn profile_column_from_table(
     let result = service
         .execute(Some(conn_id.clone()), &sample_sql, opts)
         .await?;
-    let json = serde_json::to_value(&result.result)
-        .map_err(|e| CoreError::common(CommonError::General(format!("Serialize error: {}", e))))?;
-
-    let (columns, rows) = batch_columns_and_rows(&json);
+    // 同上：进程内直读
+    let (columns, rows) = crate::service::result_columns_and_rows(&result.result);
 
     if columns.is_empty() {
         return Err(CoreError::common(CommonError::General(
@@ -353,33 +316,7 @@ pub async fn batch_evaluate_columns(
     };
 
     let result = service.execute(Some(conn_id), &sample_sql, opts).await?;
-    let json = serde_json::to_value(&result.result)
-        .map_err(|e| CoreError::common(CommonError::General(format!("Serialize error: {}", e))))?;
-
-    let (col_names, rows_data) = match json["batches"].as_array().and_then(|b| b.first()) {
-        Some(batch) => {
-            let cols: Vec<String> = batch["columns"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|c| c.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let rows: Vec<Vec<serde_json::Value>> = batch["rows"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .map(|row| row.as_array().cloned().unwrap_or_default())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            (cols, rows)
-        }
-        None => (vec![], vec![]),
-    };
+    let (col_names, rows_data) = crate::service::result_columns_and_rows(&result.result);
 
     if col_names.is_empty() {
         return Ok(crate::model::types::TableQuality {

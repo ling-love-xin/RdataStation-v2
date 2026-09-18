@@ -740,14 +740,88 @@ fn hits_any(haystack_lower: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| haystack_lower.contains(n))
 }
 
+// ==================== 引擎结果取数 ====================
+
+/// 引擎执行结果 → 「列名 + 行」（**进程内**直读，不经 JSON 契约序列化）。
+///
+/// 为什么不走 `serde_json::to_value(&QueryResult)`：那是**契约层**的扁平序列化
+/// （只输出 `columns` / `rows` / …，Arrow `batches` 不参与），而 native 驱动
+/// （MySQL / PostgreSQL / SQLite / DuckDB）只填 `batches`、`rows` 字段恒为空。
+/// 照 v1 的 `json["batches"][0]["rows"]` 读，拿到的永远是「有列名、零行」——
+/// 洞察取样本时会静默变成空表（真机踩过：结构洞察恒报 0 张表）。
+/// 进程内直读 `to_rows()` 才是权威。
+pub fn result_columns_and_rows(
+    result: &shared::models::QueryResult,
+) -> (Vec<String>, Vec<Vec<serde_json::Value>>) {
+    let columns = result.columns.clone();
+    let rows = result
+        .to_rows()
+        .into_iter()
+        .map(|row| row.into_iter().map(value_to_json).collect())
+        .collect();
+    (columns, rows)
+}
+
+/// 引擎的 [`shared::models::Value`] → 建 DuckDB 临时表用的 JSON 值。
+///
+/// `Bytes` 走有损 UTF-8：临时表要的是「能算的样本」，二进制列在洞察里只能当文本看
+/// （真二进制统计本就没有意义），比整列变 `NULL` 有用。
+fn value_to_json(value: shared::models::Value) -> serde_json::Value {
+    use shared::models::Value;
+    match value {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(v) => serde_json::Value::Bool(v),
+        Value::Int(v) => serde_json::Value::Number(v.into()),
+        Value::Float(v) => serde_json::Number::from_f64(v)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::Text(v) => serde_json::Value::String(v),
+        Value::Bytes(v) => serde_json::Value::String(String::from_utf8_lossy(&v).to_string()),
+    }
+}
+
 // ==================== 测试 ====================
 
 #[cfg(test)]
 mod tests {
-    use super::{rule_params, strip_error_code, InsightService};
+    use super::{result_columns_and_rows, rule_params, strip_error_code, InsightService};
     use crate::insight_engine::ERR_TOO_MANY_CONCURRENT;
     use crate::service::rule_trust::RuleTrust;
     use shared::error::{CommonError, ConnectionError, CoreError, DatabaseError};
+    use shared::models::QueryResult;
+
+    /// 回归（真机踩过）：行在 Arrow `batches` 里（native 驱动就是这种形态）。
+    ///
+    /// 曾经走 `serde_json::to_value(&QueryResult)` 再读 `["batches"]` —— 契约序列化
+    /// 不含 `batches`，于是永远「有列名、零行」，结构洞察恒报 0 张表。
+    #[test]
+    fn rows_come_from_arrow_batches_without_a_json_round_trip() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec![Some("a"), None])),
+            ],
+        )
+        .expect("构造批");
+        let result = QueryResult::from_batches(vec!["id".into(), "name".into()], vec![batch]);
+
+        let (columns, rows) = result_columns_and_rows(&result);
+        assert_eq!(columns, vec!["id".to_string(), "name".to_string()]);
+        assert_eq!(rows.len(), 2, "行必须来自 batches（走 JSON 契约序列化会是 0 行）");
+        assert_eq!(rows[0][0], serde_json::json!(1));
+        assert_eq!(rows[0][1], serde_json::json!("a"));
+        assert_eq!(rows[1][1], serde_json::Value::Null, "NULL 要原样保留");
+    }
 
     /// 信任门需要项目根：无项目时给出可读错误，而不是去写一个不相干的记录。
     #[test]

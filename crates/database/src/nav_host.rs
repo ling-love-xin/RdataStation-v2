@@ -36,7 +36,7 @@ use std::rc::Rc;
 use gpui_kit::{App, Window};
 use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
 
-use crate::model::{PropertyRequest, TableRef};
+use crate::model::{PropertyRequest, SchemaRef, TableRef};
 
 /// 独立会话探测入口（连接 id + 项目根 → 可展示结果文案）。
 ///
@@ -175,4 +175,11 @@ pub trait NavHost: 'static {
     /// 取样 SQL 由**宿主**构造（只有它知道该驱动方言下的限定名写法），
     /// 洞察侧负责取样成临时表并出画像（架构 D58）。
     fn open_insight_table(&self, source: TableRef, cx: &mut App);
+
+    /// 【M8】在洞察面板里看这个 Schema 的**结构**（导航右键「结构洞察」）。
+    ///
+    /// 与 [`Self::open_insight_table`] 分工：那个看**数据**（取样 → 表探查），
+    /// 这个看**结构**（源库内省 `information_schema` → 外键候选 / 类型不一致 /
+    /// 孤立表 / 冗余列）——两套完全不同的取数，不共用通道。
+    fn open_insight_schema(&self, schema: SchemaRef, cx: &mut App);
 }

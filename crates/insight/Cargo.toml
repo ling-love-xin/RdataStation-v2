@@ -46,3 +46,5 @@ sha2.workspace = true
 paths = { workspace = true, features = ["test-support"] }
 # 窗口级测试：headless 窗口需要 gpui 的 test-support（仅在测试构建启用）
 gpui-kit = { workspace = true, features = ["test-support"] }
+# 回归测试要手工构造 Arrow 批（`QueryResult` 的行全在 `batches` 里，见 service::result_columns_and_rows）
+arrow.workspace = true

@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use gpui_kit::{App, Window};
 
-use database::model::{PropertyRequest, TableRef};
+use database::model::{PropertyRequest, SchemaRef, TableRef};
 use database::nav_host::{ConnectionProbe, NavFilters, NavHost};
 use workbench_shell::model::{ConnectionItem, GroupFormSeed, QueryRequest, RightPanel};
 
@@ -266,5 +266,9 @@ impl NavHost for WorkbenchNavHost {
         let sample = insight::SampleSource::new(source.conn_id.clone(), qualified_sql, label);
         self.shared
             .open_insight_source_table(sample, source.table, cx);
+    }
+
+    fn open_insight_schema(&self, schema: SchemaRef, cx: &mut App) {
+        self.shared.open_insight_schema(schema, cx);
     }
 }

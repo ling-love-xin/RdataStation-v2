@@ -36,7 +36,7 @@ use crate::commands::{
 };
 use crate::model::{
     NavFolder, NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, PropertyRef,
-    PropertyRequest, TableRef,
+    PropertyRequest, SchemaRef, TableRef,
 };
 use crate::nav_host::{NavFilters, NavHost};
 use crate::sql_gen::DmlKind;
@@ -377,6 +377,34 @@ fn nav_qualified_name(prop: &PropertyRef) -> String {
     }
     parts.push(prop.name.as_str());
     parts.join(".")
+}
+
+/// 「结构洞察」的靶（M8）：表 / 视图用它所在的 schema，schema 节点用自己；其余节点不给。
+///
+/// 为什么不给 catalog 节点：`table_schema` 的取值各家不同（MySQL 里就是库名、
+/// PG 里是 schema），catalog 级的「全部 schema」要拼一套跨方言语义——先不做，
+/// 需要时按方言补（施工单见 `insight-dev-plan.md` §10）。
+fn insight_schema_target(
+    kind: &NavNodeKind,
+    path: Option<&NavPath>,
+    conn_id: &str,
+) -> Option<SchemaRef> {
+    match (kind, path) {
+        (
+            NavNodeKind::Table { .. } | NavNodeKind::View,
+            Some(NavPath::Table { catalog, schema, .. }),
+        ) => Some(SchemaRef {
+            conn_id: conn_id.to_string(),
+            catalog: catalog.clone(),
+            schema: schema.clone(),
+        }),
+        (NavNodeKind::Schema, Some(NavPath::Schema { catalog, schema })) => Some(SchemaRef {
+            conn_id: conn_id.to_string(),
+            catalog: catalog.clone(),
+            schema: schema.clone(),
+        }),
+        _ => None,
+    }
 }
 
 /// 数据源导航 → 编辑区拖拽载荷（仅表 / 视图行携带）。
@@ -3700,6 +3728,8 @@ this.host.open_right_panel(RightPanel::Insight, cx);
             } else {
                 None
             };
+            // 结构洞察的靶要在闭包**外**算好（`node` 的借用活不过 `'static` 闭包）
+            let insight_schema = insight_schema_target(&node.kind, menu_path.as_ref(), &conn_id);
             move |menu, window, cx| {
                 let mut menu = menu;
                 if let Some(prop0) = menu_prop.clone() {
@@ -3870,6 +3900,17 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                             },
                         ));
                     }
+                }
+                // 【M8】结构洞察（Schema 级）：表 / 视图用它所在的 schema，schema 节点用自己。
+                // 与「查看统计」分工：那个看**数据**（取样），这个看**结构**（源库内省）。
+                if let Some(target) = insight_schema.clone() {
+                    let e = entity.clone();
+                    menu = menu.item(PopupMenuItem::new("结构洞察").on_click(
+                        move |_, _, app| {
+                            let target = target.clone();
+                            e.update(app, |this, cx| this.host.open_insight_schema(target, cx));
+                        },
+                    ));
                 }
                 menu = menu.item({
                     let e = entity.clone();
@@ -5133,14 +5174,73 @@ mod tests {
     // 注意：不通配导入（`use gpui_kit::*` 会把 gpui 的 `test` 宏带入作用域）。
     use super::nav_type_badge;
     use super::{
-        nav_merge_page, nav_object_type_label, nav_order_members, nav_reorder,
+        insight_schema_target, nav_merge_page, nav_object_type_label, nav_order_members, nav_reorder,
         nav_search_hit_property, nav_search_query_ready, nav_step, nav_type_short_label,
         parse_nav_search,
     };
-    use crate::model::{NavNode, NavNodeKind, NavSource, PropertyKind};
+    use crate::model::{NavNode, NavNodeKind, NavPath, NavSource, PropertyKind, SchemaRef};
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// 「结构洞察」的靶：表 / 视图用它所在的 schema，schema 节点用自己；列 / 例行与
+    /// catalog 节点不给（后者要跨方言的“全部 schema”语义，未定）。
+    #[test]
+    fn schema_insight_target_covers_tables_views_and_schemas() {
+        let table_path = NavPath::Table {
+            catalog: "shop".into(),
+            schema: "public".into(),
+            table: "orders".into(),
+        };
+        let expect = |target: Option<SchemaRef>| {
+            let t = target.expect("应当给靶");
+            assert_eq!(t.conn_id, "G_1");
+            assert_eq!(t.catalog, "shop");
+            assert_eq!(t.schema, "public");
+        };
+
+        expect(insight_schema_target(
+            &NavNodeKind::Table {
+                row_estimate: None,
+            },
+            Some(&table_path),
+            "G_1",
+        ));
+        expect(insight_schema_target(
+            &NavNodeKind::View,
+            Some(&table_path),
+            "G_1",
+        ));
+        expect(insight_schema_target(
+            &NavNodeKind::Schema,
+            Some(&NavPath::Schema {
+                catalog: "shop".into(),
+                schema: "public".into(),
+            }),
+            "G_1",
+        ));
+
+        // 列 / 例行（没有 schema 归属）/ catalog（跨方言语义未定）都不给
+        assert!(insight_schema_target(
+            &NavNodeKind::Column {
+                data_type: "int".into(),
+                nullable: false,
+                primary: false,
+                foreign: false,
+            },
+            None,
+            "G_1",
+        )
+        .is_none());
+        assert!(insight_schema_target(
+            &NavNodeKind::Catalog,
+            Some(&NavPath::Catalog {
+                catalog: "shop".into(),
+            }),
+            "G_1",
+        )
+        .is_none());
     }
 
     /// 索引命中 → 属性定位：表带 catalog/schema，列带所属表（parent），未知类别不接。

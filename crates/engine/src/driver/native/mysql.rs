@@ -669,7 +669,12 @@ fn bytes_are_text(bytes: &[u8]) -> bool {
 /// 因此数值族**一律按数值处理**——宁可把布尔显示成 `1`/`0`，也不能把计数、标志位列
 /// （如 `COUNT(*)`）显示成 `true`/`false`。
 fn declared_numeric_rank(name: &str) -> Option<u8> {
-    Some(match name {
+    // 无符号列在协议层报 `BIGINT UNSIGNED` 这类**带后缀**的名字（PG 侧则是前缀）：
+    // 不剭掉就会落进下面的 `try_get::<bool>` 盲探，值为 0/1 的无符号列（如 MySQL
+    // `information_schema` 的 `ordinal_position`）会被判成布尔——网格里显示 `true`，
+    // 洞察侧取序数也拿不到数字。
+    let base = name.replace("UNSIGNED", "");
+    Some(match base.trim() {
         "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" | "YEAR" => 2,
         "FLOAT" | "DOUBLE" | "REAL" | "DECIMAL" | "NUMERIC" => 3,
         _ => return None,
@@ -1048,6 +1053,25 @@ mod tests {
         // MySQL 把 TEXT 与 BLOB 都报成 `BLOB`：靠字节可否解码为 UTF-8 区分。
         assert!(bytes_are_text(b"BASE TABLE"));
         assert!(!bytes_are_text(&[0xff, 0xfe, 0x00]));
+    }
+
+    /// 无符号列在协议层带 `UNSIGNED` 后缀（`BIGINT UNSIGNED`）：要剥掉再判数值族，
+    /// 否则 0/1 值的列会被 `try_get::<bool>` 盲探判成布尔（真机：`ordinal_position` → `true`）。
+    #[test]
+    fn unsigned_declared_types_still_count_as_numeric() {
+        for (name, rank) in [
+            ("BIGINT UNSIGNED", 2),
+            ("INT UNSIGNED", 2),
+            ("UNSIGNED BIGINT", 2),
+            ("DECIMAL UNSIGNED", 3),
+            ("BIGINT", 2),
+            ("DOUBLE", 3),
+        ] {
+            assert_eq!(declared_numeric_rank(name), Some(rank), "{name}");
+        }
+        // 非数值族仍交给原探测
+        assert_eq!(declared_numeric_rank("VARCHAR"), None);
+        assert_eq!(declared_numeric_rank("BLOB"), None);
     }
     use crate::driver::Database;
 

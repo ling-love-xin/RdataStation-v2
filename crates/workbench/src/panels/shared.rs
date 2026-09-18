@@ -522,6 +522,28 @@ impl Shared {
         }
     }
 
+    /// M8：打开洞察面板并**指向一个 Schema**（导航树右键「结构洞察」）。
+    ///
+    /// 与 [`Self::open_insight_source_table`] 的区别：那个看**数据**（取样 → 表探查），
+    /// 这个看**结构**（源库内省 → 外键候选 / 类型不一致 / 孤立表 / 冗余列）——
+    /// 结构报告的取数在洞察侧的 `SchemaReportRequested`，这里只递目标。
+    pub fn open_insight_schema(&self, schema: database::model::SchemaRef, cx: &mut App) {
+        self.open_right_panel(RightPanel::Insight, cx);
+        let panel = self.insight_panel.borrow().clone();
+        if let Some(panel) = panel.and_then(|weak| weak.upgrade()) {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(
+                    InsightTarget::Schema {
+                        conn_id: schema.conn_id,
+                        database: schema.catalog,
+                        schema: Some(schema.schema),
+                    },
+                    cx,
+                );
+            });
+        }
+    }
+
     /// M8：打开洞察面板并**指向源数据里的一列**（结果集列头右键「洞察此列」等入口）。
     pub fn open_insight_source_column(
         &self,

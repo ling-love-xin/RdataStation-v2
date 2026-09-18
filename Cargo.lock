@@ -8001,6 +8001,7 @@ dependencies = [
 name = "rds-insight"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "duckdb",
  "gpui-kit",
  "include_dir",
