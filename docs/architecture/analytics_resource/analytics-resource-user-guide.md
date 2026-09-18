@@ -2,6 +2,7 @@
 
 > 读者：产品 / 测试 / 使用者。设计理念与原理见 `analytics-resource-architecture.md`；
 > 视觉与交互规格见 `analytics-resource-prototype-design.md`；任务与逐轮记录见 `analytics-resource-dev-plan.md`。
+> **第一次接触先看一页看懂**：`analytics-resource-showcase.html`（视觉版）/ `analytics-resource-showcase.md`（可贴版）。
 >
 > **状态说明**：本手册对应**设计定稿（2026-09-15）**。至 2026-09-18，Phase 0（领域类型 / 本体层 / 归档服务 / 索引修复）、Phase 1（面板本体 / 工具栏 / 行与右键菜单 / **多选** / 详情面板 / 归档与取回对话框 / 快捷键 / workbench 接线）、**Phase 3（版本历史 / 索引修复 / 回收站三个对话框）与 P0.8（项目级回收站上提）**、**Phase 2 前八刀（标签与分组及其管理入口与折叠持久化、五个排序键、三个设置项、归档的别名 / 分组 / 标签真的生效）** 已落地；**拖拽到分组头、搜索匹配别名 / 标签 / 来源表、默认分组、`F2` 重命名与批量打标签（P2.5）** 尚未落地（§4.4–§4.8 各节末尾的落地注写清了与规格的差异）。文中每条能力都标注了期次：**【一期】**= Phase 1–3 落地 · **【二期】**= Phase 4（DuckDB 分析表）· **【未定】**= Phase 5 不承诺。若 UI 与手册不一致，以手册为准并提 issue 修 UI。
 >

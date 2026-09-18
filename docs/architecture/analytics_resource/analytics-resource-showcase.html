@@ -1,9 +1,19 @@
 <!DOCTYPE html>
+<!--
+  RdataStation · 资产库 / 分析存档（M6）· 一页看懂（宣传 / 速览页）
+
+  分工：`analytics-resource-prototype.html` 是**交互稿**（12 个场景，验证交互细节与四态）；
+  本页是**概览页**（给不了解这个模块的人一页看懂：定位 · 闭环 · 特点 · 分层 · 能力清单）。
+  界面的权威口径在 `analytics-resource-prototype-design.md`，数字口径在 `analytics-resource-dev-plan.md` §0。
+
+  自包含：无任何外部依赖（零外链、无 CDN、无图片文件），明暗双主题与原型页同一套 token。
+  可贴版孪生：`analytics-resource-showcase.md`（带 mermaid，适合贴进 PR / wiki / 聊天）。
+-->
 <html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RdataStation 资产库 / 分析存档（M6）· 一页读懂</title>
+<title>RdataStation 资产库 / 分析存档（M6）· 一页看懂</title>
 <style>
 :root{
   --pagebg:#EDEFF2; --bg:#FFFFFF; --fg:#2B2F36; --fg-strong:#151A21; --border:#DCDEE3;
@@ -217,7 +227,7 @@ a{color:var(--primary);}
       <div class="logo">⛁</div>
       <div>
         <h1>资产库 / 分析存档</h1>
-        <div class="sub">RdataStation · 模块 M6 · 一页读懂</div>
+        <div class="sub">RdataStation · 模块 M6 · 一页看懂</div>
       </div>
     </div>
     <div class="head-actions">
@@ -560,6 +570,7 @@ a{color:var(--primary);}
           <li><code>analytics-resource-prototype-design.md</code> — 长什么样、怎么交互</li>
           <li><code>analytics-resource-user-guide.md</code> — 怎么用、怎么排障</li>
           <li><code>README.md</code> — 模块入口与代码地图</li>
+          <li><code>analytics-resource-showcase.md</code> — <b>本页的可贴版</b>（带 mermaid）</li>
         </ul>
       </div>
       <div>
@@ -571,7 +582,7 @@ cargo test -p rds-workbench --lib --test ui_contract
       </div>
     </div>
     <div>
-      本页是面向宣传与速览的单文件页（明暗两套 / 零外链）；能力状态以开发方案 §0 的进度记录为准，界面细节以原型设计为准。
+      本页是面向宣传与速览的单文件页（明暗两套 / 零外链）；能力状态以开发方案 §0 的进度记录为准，界面细节以原型设计为准。数字只为表达服务——改了实现请顺手核对本页的关键数字（125 / 18 / 9 · 102 / 7）。
     </div>
   </div>
 
