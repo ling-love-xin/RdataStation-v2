@@ -1,14 +1,19 @@
-//! Quick Open 的**纯逻辑**：查询解析（模式前缀）、命令目录、行匹配与评分、查询词转义。
+//! Quick Open 的**纯逻辑**：查询解析（模式前缀）、行匹配与评分、命中区间、结果分组与上限。
 //!
 //! 不依赖 GPUI / `Shared`，输入输出都是纯数据，因此可直接单测
 //! （`cargo test -p rds-workbench --lib quick_open`）。
-//! 渲染与副作用在 `quick_open/delegate.rs` 与 `view.rs`（宿主 render / 事件路径）。
+//! 渲染与副作用在 `quick_open/delegate.rs` 与 `view.rs`（宿主 render / 事件路径）；
+//! 命令目录在 `quick_open/commands.rs`（本模块只消费它的 `command_rows()`）。
 //!
 //! 规格：`docs/architecture/quick_open/quick-open-prototype-design.md`（§5 模式 / §6 元数据两档 / §8 匹配排序）。
 
 use editor::model::EditorMode;
 
 use crate::view::{LeftPanel, RightPanel};
+
+/// 命令目录转发：目录本体在 [`crate::quick_open::commands`]（那里有 id / keywords / 动作），
+/// 本模块只做「行 + 匹配」这一层（`filter_ranked` 要认识 `match_text`）。
+pub(crate) use crate::quick_open::commands::command_rows;
 
 /// 元数据命中（跨连接索引搜索的一行；由 `database::nav_jobs::SearchHit` 映射而来）。
 ///
@@ -141,6 +146,10 @@ pub(crate) struct Row {
     pub kind: RowKind,
     /// 主文本（不含高亮标记；高亮区间在渲染期按查询词现算）。
     pub title: String,
+    /// 参与**匹配**的文本（展示面之外的补充：命令的英文名 / 别名）。
+    ///
+    /// 匹配面可以比展示面宽，但高亮永远按 `title` 算——不把用户看不到的词标黄。
+    pub match_text: String,
     /// 右侧次级信息（连接：驱动；命令：快捷键）。
     pub secondary: String,
     /// 内容档的命中片段（含 `<mark>` 标记）；名称档为 `None`。
@@ -157,40 +166,8 @@ pub(crate) struct Group {
     /// 组头右侧的补充（如「搜索中…」；空则不显示）。
     pub note: String,
     pub rows: Vec<Row>,
-}
-
-/// 命令表：Quick Open 也是命令面（`>` 前缀只留这一组）。
-///
-/// 这是**当前唯一权威**的命令清单（原先硬编码在 `view.rs`）；Phase 1 迁到命令注册后，
-/// 各 Feature 通过宿主端口登记自己的命令。
-pub(crate) fn command_rows() -> Vec<Row> {
-    let mut out = Vec::new();
-    let mut push = |label: &str, shortcut: &str, action: Action| {
-        out.push(Row {
-            key: format!("cmd:{label}"),
-            kind: RowKind::Command,
-            title: label.to_string(),
-            secondary: shortcut.to_string(),
-            snippet: None,
-            why: None,
-            action,
-        });
-    };
-    // 新建入口放最前：Quick Open 是工作台的命令面（Ctrl+P），“新建”是最常敲的一条。
-    push("新建查询", "Ctrl+N", Action::NewDocument(EditorMode::Sql));
-    push("新建笔记", "", Action::NewDocument(EditorMode::Analysis));
-    push("新建文件", "", Action::NewDocument(EditorMode::Text));
-    push("打开草稿箱", "", Action::OpenLeftPanel(LeftPanel::Draft));
-    push("打开数据库导航", "", Action::OpenLeftPanel(LeftPanel::Database));
-    push("打开资产库", "", Action::OpenLeftPanel(LeftPanel::Resources));
-    push("打开插件", "", Action::OpenLeftPanel(LeftPanel::Plugin));
-    push("打开洞察", "", Action::OpenRightPanel(RightPanel::Insight));
-    push("打开 Mock 生成", "", Action::OpenRightPanel(RightPanel::Mock));
-    push("打开历史", "", Action::OpenRightPanel(RightPanel::History));
-    push("打开设置", "Ctrl+,", Action::OpenSettings);
-    push("完全隐藏侧边栏", "", Action::HideSidebars);
-    push("恢复侧边栏", "", Action::RestoreSidebars);
-    out
+    /// 被截掉的条数（超出单组 / 总量上限的部分；>0 时组尾显示「还有 N 条」）。
+    pub hidden: usize,
 }
 
 /// 组装结果分组：**空组不出现**（组头也不渲染）。
@@ -203,7 +180,7 @@ pub(crate) fn build_groups(
     meta: &[MetaObject],
     meta_searching: bool,
 ) -> Vec<Group> {
-    match q.mode {
+    let groups = match q.mode {
         Mode::Command => non_empty("命令", filter_ranked(command_rows(), &q.needle), "")
             .into_iter()
             .collect(),
@@ -239,7 +216,8 @@ pub(crate) fn build_groups(
             groups.extend(non_empty("命令", filter_ranked(command_rows(), &q.needle), ""));
             groups
         }
-    }
+    };
+    cap_groups(groups)
 }
 
 fn non_empty(title: &'static str, rows: Vec<Row>, note: &str) -> Option<Group> {
@@ -250,8 +228,26 @@ fn non_empty(title: &'static str, rows: Vec<Row>, note: &str) -> Option<Group> {
             title,
             note: note.to_string(),
             rows,
+            hidden: 0,
         })
     }
+}
+
+/// 施加渲染上限：单组 ≤ `QUICK_OPEN_MAX_ROWS_PER_GROUP`、总计 ≤ `QUICK_OPEN_MAX_ROWS`。
+///
+/// 被截的条数记在 `hidden` 上（组尾一行「还有 N 条」），**不静默丢**：
+/// 后台侧另有上限（单连接 50 / 总计 300），那是防止把渲染拖垮的硬闸，
+/// 这里是呈现层的闸，两者都不是「结果少」的借口。
+fn cap_groups(mut groups: Vec<Group>) -> Vec<Group> {
+    let mut budget = crate::ui::QUICK_OPEN_MAX_ROWS;
+    for group in &mut groups {
+        let per_group = crate::ui::QUICK_OPEN_MAX_ROWS_PER_GROUP;
+        let allowed = budget.min(per_group).min(group.rows.len());
+        group.hidden = group.rows.len() - allowed;
+        group.rows.truncate(allowed);
+        budget = budget.saturating_sub(allowed);
+    }
+    groups
 }
 
 /// 元数据行（次级信息 = 连接名 · 驱动）。
@@ -261,6 +257,7 @@ fn meta_rows(meta: &[MetaObject]) -> Vec<Row> {
             key: meta_key(&m.request),
             kind: m.kind,
             title: m.title.clone(),
+            match_text: m.title.clone(),
             secondary: format!("{} · {}", m.request.conn_label, m.request.driver),
             snippet: None,
             why: None,
@@ -282,6 +279,7 @@ fn fulltext_rows(meta: &[MetaObject], needle: &str) -> Vec<Row> {
                 key: meta_key(&m.request),
                 kind: m.kind,
                 title: m.title.clone(),
+                match_text: m.title.clone(),
                 secondary: format!("{} · {}", m.request.conn_label, m.request.driver),
                 snippet: m.snippet.clone(),
                 why: Some(if matched_name { "名称" } else { "内容" }),
@@ -383,6 +381,7 @@ fn connection_rows(connections: &[(String, String)]) -> Vec<Row> {
             key: format!("conn:{ix}:{name}"),
             kind: RowKind::Connection,
             title: name.clone(),
+            match_text: name.clone(),
             secondary: driver.clone(),
             snippet: None,
             why: None,
@@ -395,7 +394,7 @@ fn connection_rows(connections: &[(String, String)]) -> Vec<Row> {
 fn filter_ranked(rows: Vec<Row>, needle: &str) -> Vec<Row> {
     let mut hits: Vec<(Rank, Row)> = rows
         .into_iter()
-        .filter_map(|row| rank(&row.title, needle).map(|r| (r, row)))
+        .filter_map(|row| rank_row(&row, needle).map(|r| (r, row)))
         .collect();
     hits.sort_by(|(a, ra), (b, rb)| {
         a.tier
@@ -405,6 +404,24 @@ fn filter_ranked(rows: Vec<Row>, needle: &str) -> Vec<Row> {
             .then_with(|| ra.title.cmp(&rb.title))
     });
     hits.into_iter().map(|(_, row)| row).collect()
+}
+
+/// 行的匹配档：`title` 与 `match_text` 各算一次，取更优的那个。
+///
+/// 为什么两处都要算：命令的 `match_text` 是「展示名 + 关键词」的拼接串，
+/// 精确 / 前缀两档在拼接串上命中不了（`打开设置 settings` ≠ `打开设置`）；
+/// 只看拼接串，会把「输入完整展示名」的精确命中降级成子串命中。
+fn rank_row(row: &Row, needle: &str) -> Option<Rank> {
+    let title = rank(&row.title, needle);
+    // 补充匹配面要够长才算数：单字符对英文关键词是噪声（凡是关键词含 `s` 的命令都会命中），
+    // 而展示名照旧不受限（本地源支持单字符搜——那是「连接名第一个字母」这种真实用法）。
+    if needle.chars().count() < MIN_NEEDLE_LEN {
+        return title;
+    }
+    [title, rank(&row.match_text, needle)]
+        .into_iter()
+        .flatten()
+        .min_by_key(|r| (r.tier, r.span_len, r.span_start))
 }
 
 /// 匹配档（越小越优先）。
@@ -491,6 +508,7 @@ fn is_word_start(title: &str, pos: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::quick_open::commands::command_specs;
 
     #[test]
     fn parse_reads_mode_from_first_char_only() {
@@ -546,6 +564,7 @@ mod tests {
                         key: (*t).to_string(),
                         kind: RowKind::Command,
                         title: (*t).to_string(),
+                        match_text: (*t).to_string(),
                         secondary: String::new(),
                         snippet: None,
                         why: None,
@@ -708,14 +727,91 @@ mod tests {
         );
     }
 
+    /// 渲染上限：单组 ≤ 8 行、总计 ≤ 50 行；被截的条数落在 `hidden` 上（组尾显示）。
     #[test]
-    fn command_catalog_keys_are_stable_and_unique() {
+    fn groups_are_capped_and_report_what_was_hidden() {
+        let many: Vec<(String, String)> = (0..20)
+            .map(|i| (format!("conn{i:02}"), "postgres".to_string()))
+            .collect();
+        let groups = build_groups(&parse(""), &many, &[], false);
+        let conns = groups.iter().find(|g| g.title == "连接").expect("连接组");
+        assert_eq!(conns.rows.len(), 8, "单组上限 8 行");
+        assert_eq!(conns.hidden, 12, "被截的条数要记下来（组尾显示）");
+
+        // 总量上限：命令档只有一组，构造一个命中很多的词也超不过 50；
+        // 这里直接验证「总计不超过 50」这条不变量。
+        let total: usize = groups.iter().map(|g| g.rows.len()).sum();
+        assert!(total <= 50, "总渲染量不得超过 50 行：{total}");
+    }
+
+    /// 命令的英文别名（`keywords`）参与匹配，但高亮仍按展示名算。
+    ///
+    /// 这层是英文 / 拼音输入习惯的兼容：中文用户敲 `settings` / `database`
+    /// 也能找到对应条目（且命中不靠“给每条命令记英文展示名”）。
+    #[test]
+    fn command_keywords_match_without_painting_highlights_on_the_label() {
+        let groups = build_groups(&parse(">settings"), &[], &[], false);
+        assert_eq!(groups.len(), 1, "命令档只出命令组");
+        assert_eq!(groups[0].rows.len(), 1, "`settings` 只应命中打开设置");
+        let row = &groups[0].rows[0];
+        assert_eq!(row.title, "打开设置");
+        assert_eq!(row.key, "cmd:app.settings", "键跟着稳定 id 走");
+        // 展示名里没有 `settings` → 不该算出高亮区间（否则会标出莫名其妙的黄块）
+        assert!(match_span(&row.title, "settings").is_none());
+
+        let groups = build_groups(&parse(">database"), &[], &[], false);
+        let hit = groups[0]
+            .rows
+            .iter()
+            .find(|r| r.title == "打开数据库导航")
+            .expect("`database` 应命中数据库导航");
+        assert_eq!(hit.key, "cmd:panel.database");
+
+        // 中文输入照旧按展示名命中（关键词不抢展示名的主位）
+        let groups = build_groups(&parse(">设置"), &[], &[], false);
+        assert_eq!(groups[0].rows[0].title, "打开设置");
+
+        // 单字符不进关键词匹配面：否则 `s` 会把一半命令都捞出来（噪声）
+        let groups = build_groups(&parse(">s"), &[], &[], false);
+        assert!(
+            groups.is_empty(),
+            "单字符不应命中英文关键词：{:?}",
+            groups.iter().map(|g| g.title).collect::<Vec<_>>()
+        );
+    }
+
+    /// 命令目录的 id 与行键（`cmd:{id}`）都要稳定且唯一。
+    ///
+    /// `id` 是选中跟随的键，也是将来跨 crate 登记表的键：`label` 可以改、`id` 不能改
+    /// （改了会让「记住了上次选中的命令」这类能力失效）。
+    #[test]
+    fn command_ids_and_row_keys_are_stable_and_unique() {
+        let specs = command_specs();
+        let mut ids: Vec<&str> = specs.iter().map(|s| s.id).collect();
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "命令 id 必须唯一");
+
         let rows = command_rows();
+        assert_eq!(rows.len(), total, "每条命令都要出一行");
         let mut keys: Vec<&String> = rows.iter().map(|r| &r.key).collect();
-        let total = keys.len();
         keys.sort();
         keys.dedup();
         assert_eq!(keys.len(), total, "命令键必须唯一（选中跟随依赖它）");
         assert_eq!(rows[0].action, Action::NewDocument(EditorMode::Sql));
+        // 关键词不能漏在匹配面之外：目录里写了就必须能被搜到
+        for spec in specs {
+            assert!(
+                spec.keywords.trim().is_empty()
+                    || spec.keywords.split_whitespace().all(|kw| {
+                        filter_ranked(command_rows(), kw)
+                            .iter()
+                            .any(|r| r.key == format!("cmd:{}", spec.id))
+                    }),
+                "命令 {} 的 keywords 应当个个都能命中自己",
+                spec.id
+            );
+        }
     }
 }

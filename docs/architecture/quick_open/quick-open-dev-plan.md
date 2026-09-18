@@ -1,11 +1,24 @@
 # Quick Open · 开发方案（Phase 0–2）
 
-> 状态：**Phase 1 第一刀已落地（2026-09-19）**；第二刀（草稿箱文件源 / 命令注册）待开工
+> 状态：**Phase 1 第二刀（截断提示 + 命令目录）已落地（2026-09-19）**；下一刀：草稿箱文件源（需扁平清单通道）
 > 关联：`quick-open-prototype-design.md`（原型设计 = 权威规格）、`quick-open-prototype.html`（交互稿）、`../layout/layout-design.md` §2.1/§3.3（入口承诺）
 > 技术栈：gpui-kit 0.6.1；组件只从组件库取（禁止手搓）；取色零裸 hex；结构尺寸只引用 `crates/workbench_shell/src/ui.rs`
 > 说明：本文件记录**做什么、做到哪**；「长什么样」看原型设计，「为什么这样设计」待 `quick-open-architecture.md`
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-19 — Phase 1 第二刀（一）：截断不再静默 + 命令目录外提
+
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| P1.8 | 截断**不静默**：单组 ≤ 8 / 总计 ≤ 50（`QUICK_OPEN_MAX_ROWS_PER_GROUP` / `QUICK_OPEN_MAX_ROWS`），被截条数落在 `Group.hidden`，组尾一行「还有 N 条（继续输入缩小范围）」（`ListDelegate::render_section_footer`） | `quick_open/model.rs::cap_groups`、`quick_open/delegate.rs` | ✅ |
+| P1.9 | 命令目录外提：13 条命令搬进 `quick_open/commands.rs`，每条带**稳定 id**（`file.new_query` / `app.settings`）+ `keywords`（英文 / 别名）+ `label` / `shortcut` / `action`；`model.rs` 只重导 `command_rows()` | `quick_open/commands.rs`（新）、`model.rs`、`mod.rs` | ✅ |
+| P1.9a | `Row` 增 `match_text`（默认 = `title`；命令 = 展示名 + 关键词）：**匹配面可以比展示面宽，高亮仍按展示名算**（不把用户看不到的词标黄） | `quick_open/model.rs` | ✅ |
+| P1.9b | 单字符不进补充匹配面（< 2 字只按展示名匹配）——否则敲 `s` 会捞出半个命令表；`rank_row` 取「展示名 / 匹配面」两档里更优的那一个（只看拼接串会丢掉精确 / 前缀档） | 同上 | ✅ |
+| 单测 | +3 项：截断计数（单组 8 行、总计 ≤ 50）、英文关键词命中且不高亮展示名（`settings` / `database`）、命令 id 与行键唯一 **+ keywords 个个能搜到自己**（目录里写了就必须能命中） | `quick_open/model.rs` | ✅ 全绿 |
+| 验证 | `cargo test -p rds-workbench --lib` → **108 项全绿**（quick_open 16 项）；`--test ui_contract` → 7 项；`cargo check -p rds-app` 零告警 | — | ✅ |
+
+**为什么不在这一步做「跨 crate 命令登记」**：本仓的执行入口**全在宿主**（新建文档要 `&mut Window`、打开资产库要顺带刷新列表、选中连接要清导航缓存），特性 crate 手上没有宿主实体 → 只能登记一条点不动的命令。本轮先留 `id` / `keywords` 口子，等宿主端口设计定了一起做（`commands.rs` 顶部有记）。
 
 ### 2026-09-19 — Phase 1 第一刀：引擎侧 FTS 接线（写侧 + 清洗 + 迁移）
 
@@ -23,7 +36,7 @@
 
 **实测结论（已写进迁移与原型设计 §6.3）**：trigram 下中文**≥3 字**才命中（2 字不足一个 trigram）→ `#` 档门槛按 **3 字**；名称档继续走 `metadata_index`（LIKE 中缀，不受 3 字限制）；索引体积约为文本 3 倍量级。
 
-**下一步（Phase 1 第二刀）**：草稿箱文件源（需扁平清单通道）、命令注册（跟 crate 登记）、截断提示与「还有 N 条」、`#` 档的最近使用/空态建议；另见原型设计 §18.2 的规模优化（前缀/中缀两段式、并发打开缓存上限、结果短时缓存）。
+**当时列的下一步**（Phase 1 第二刀）：草稿箱文件源（需扁平清单通道）、命令注册（跟 crate 登记）、截断提示与「还有 N 条」、`#` 档的最近使用/空态建议；另见原型设计 §18.2 的规模优化（前缀/中缀两段式、并发打开缓存上限、结果短时缓存）。
 
 ### 2026-09-18 — Phase 0 第三刀：浮层抽成独立视图实体 + 窗口测试
 
@@ -131,6 +144,8 @@
 | T7 | 无匹配文案随模式（`无匹配命令` / 无匹配全文 …） | ✅ 实现（delegate `render_empty`） |
 | T8 | 单字符门槛：1 字符不发元数据搜索、给提示 | ✅ 单测（`async_ready`）+ 提示层 |
 | T9 | 命令键唯一且稳定（选中跟随依赖它） | ✅ 单测 |
+| T10 | 超出上限时组尾显示「还有 N 条」，条数与 `hidden` 一致 | ✅ 单测（`cap_groups`）+ ⬜ 窗口 |
+| T11 | 命令英文别名可搜（`settings` / `database`），且不高亮展示名 | ✅ 单测（`rank_row`）|
 
 ## 6. 风险
 
@@ -163,8 +178,9 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | 设计决策 | 落点 |
 | --- | --- |
 | 模式前缀解析（`>` / `#`）与最小词长门槛 | `crates/workbench/src/quick_open/model.rs::parse` / `Query::async_ready` |
-| 命令表（唯一权威） | `crates/workbench/src/quick_open/model.rs::command_rows` |
-| 匹配评分与命中区间 | `crates/workbench/src/quick_open/model.rs::{match_span, rank, filter_ranked}` |
+| 命令表（唯一权威） | `crates/workbench/src/quick_open/commands.rs::command_specs` / `command_rows`（稳定 id + keywords） |
+| 匹配评分与命中区间 | `crates/workbench/src/quick_open/model.rs::{match_span, rank, rank_row, filter_ranked}` |
+| 结果上限与「还有 N 条」 | `model.rs::cap_groups` + `delegate.rs::render_section_footer` |
 | 结果行 / 分组头 / 空态渲染 | `crates/workbench/src/quick_open/delegate.rs` |
 | 浮层本体（输入 / 结果 / 键盘通道 / 防抖 / 回填 / 关闭） | `crates/workbench/src/quick_open/palette.rs` |
 | 动作端口与宿主装配 | `palette.rs::QuickOpenHost` + `view.rs::WorkbenchQuickOpenHost` / `render_quick_open` / `execute_quick_open_action` |
@@ -174,4 +190,4 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs`（`QUICK_OPEN_*`） |
 | 契约登记 | `crates/workbench/tests/ui_contract.rs`（尺寸数值 + 两份扫描清单） |
 | 元数据名称档（第二刀） | `crates/database/src/nav_jobs.rs` + `crates/database/src/cache.rs::search_index` |
-| 元数据全文档（Phase 1） | `crates/engine/src/persistence/metadata_cache.rs::{sync_fts_index, search_fts}` |
+| 元数据全文档（Phase 1） | `crates/engine/src/persistence/metadata_cache.rs::{rebuild_fts_schema, search_fts}` |

@@ -318,6 +318,30 @@ impl ListDelegate for QuickOpenDelegate {
         )
     }
 
+    /// 组尾：被截掉的条数（**不静默丢**：告诉用户「还有，但没全显示」）。
+    fn render_section_footer(
+        &mut self,
+        section: usize,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        let group = self.groups.get(section)?;
+        if group.hidden == 0 {
+            return None;
+        }
+        let theme = cx.theme();
+        Some(
+            div()
+                .h_flex()
+                .items_center()
+                .h(rems(ui::QUICK_OPEN_GROUP_HEADER_HEIGHT))
+                .px_2()
+                .text_xs()
+                .text_color(theme.colors.muted_foreground)
+                .child(format!("还有 {} 条（继续输入缩小范围）", group.hidden)),
+        )
+    }
+
     fn render_empty(
         &mut self,
         _window: &mut Window,
