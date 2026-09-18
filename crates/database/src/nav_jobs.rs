@@ -104,11 +104,37 @@ pub struct SearchHit {
 
 /// 一次搜索的完整结果（一个批次涵盖全部目标连接）。
 pub struct SearchResult {
+    /// 本批次的消费方（诊断用；分发改由槽位承担，见 [`SearchConsumer`]）。
+    pub consumer: SearchConsumer,
     /// 本次搜索词；回填方据此丢弃**过期批次**（用户已经把词改了）。
     pub query: String,
     /// 实际搜了的连接数（有缓存的那些；无缓存的连接不建文件、直接跳过）。
     pub searched: usize,
     pub hits: Vec<SearchHit>,
+}
+
+/// 索引搜索的**消费方**：同一条后台通道被两个入口用（导航面板的树顶结果区、
+/// Quick Open 浮层），结果必须按消费方分发——`drain` 是「取走」语义，
+/// 不分流就是谁先取谁得，另一个入口会永远拿到空结果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchConsumer {
+    /// 数据源导航面板（树顶结果区）。
+    Navigator,
+    /// Quick Open 浮层。
+    QuickOpen,
+}
+
+impl SearchConsumer {
+    /// 槽位数量（`search_results` / `pending_search` 两张表共用）。
+    const COUNT: usize = 2;
+
+    /// 内部槽位下标。
+    fn ix(self) -> usize {
+        match self {
+            SearchConsumer::Navigator => 0,
+            SearchConsumer::QuickOpen => 1,
+        }
+    }
 }
 
 enum Job {
@@ -133,6 +159,7 @@ enum Job {
     },
     /// 搜索框的跨连接索引搜索（Infix 名称匹配）。
     SearchIndex {
+        consumer: SearchConsumer,
         query: String,
         project_root: Option<String>,
         targets: Vec<SearchTarget>,
@@ -183,12 +210,24 @@ struct Shared {
     pending_props: AtomicUsize,
     pending_sql: AtomicUsize,
     pending_test: AtomicUsize,
-    pending_search: AtomicUsize,
+    pending_search: [AtomicUsize; SearchConsumer::COUNT],
     load_results: Mutex<Vec<LoadResult>>,
     props_results: Mutex<Vec<PropsResult>>,
     sql_results: Mutex<Vec<SqlGenResult>>,
     test_results: Mutex<Vec<TestConnResult>>,
-    search_results: Mutex<Vec<SearchResult>>,
+    search_results: [Mutex<Vec<SearchResult>>; SearchConsumer::COUNT],
+}
+
+impl Shared {
+    /// 把一批搜索结果交给对应消费方（worker 与单测共用，保证「分发」只有一处）。
+    fn push_search_result(&self, consumer: SearchConsumer, result: SearchResult) {
+        lock(&self.search_results[consumer.ix()]).push(result);
+    }
+
+    /// 取走某消费方已完成的搜索结果。
+    fn take_search_results(&self, consumer: SearchConsumer) -> Vec<SearchResult> {
+        std::mem::take(&mut *lock(&self.search_results[consumer.ix()]))
+    }
 }
 
 static JOBS: OnceLock<Shared> = OnceLock::new();
@@ -212,12 +251,12 @@ fn shared() -> &'static Shared {
             pending_props: AtomicUsize::new(0),
             pending_sql: AtomicUsize::new(0),
             pending_test: AtomicUsize::new(0),
-            pending_search: AtomicUsize::new(0),
+            pending_search: std::array::from_fn(|_| AtomicUsize::new(0)),
             load_results: Mutex::new(Vec::new()),
             props_results: Mutex::new(Vec::new()),
             sql_results: Mutex::new(Vec::new()),
             test_results: Mutex::new(Vec::new()),
-            search_results: Mutex::new(Vec::new()),
+            search_results: std::array::from_fn(|_| Mutex::new(Vec::new())),
         }
     })
 }
@@ -359,6 +398,7 @@ fn worker(rx: mpsc::Receiver<Job>) {
                 shared().pending_sql.fetch_sub(1, Ordering::SeqCst);
             }
             Job::SearchIndex {
+                consumer,
                 query,
                 project_root,
                 targets,
@@ -393,12 +433,16 @@ fn worker(rx: mpsc::Receiver<Job>) {
                         });
                     }
                 }
-                lock(&shared().search_results).push(SearchResult {
-                    query,
-                    searched,
-                    hits,
-                });
-                shared().pending_search.fetch_sub(1, Ordering::SeqCst);
+                shared().push_search_result(
+                    consumer,
+                    SearchResult {
+                        consumer,
+                        query,
+                        searched,
+                        hits,
+                    },
+                );
+                shared().pending_search[consumer.ix()].fetch_sub(1, Ordering::SeqCst);
             }
             Job::TestConnection {
                 conn_id,
@@ -555,18 +599,24 @@ pub fn has_pending_test() -> bool {
     shared().pending_test.load(Ordering::SeqCst) > 0
 }
 
-/// 是否仍有未完成的索引搜索。
-pub fn has_pending_search() -> bool {
-    shared().pending_search.load(Ordering::SeqCst) > 0
+/// 某消费方是否仍有未完成的索引搜索。
+pub fn has_pending_search(consumer: SearchConsumer) -> bool {
+    shared().pending_search[consumer.ix()].load(Ordering::SeqCst) > 0
 }
 
-/// 提交跨连接索引搜索。
+/// 提交跨连接索引搜索（按消费方分槽）。
 ///
 /// 空目标（无可见连接）也走一趟：回传一个 `searched = 0` 的空结果，
 /// 让视图侧能把「搜索中…」收尾（否则结果区会一直转）。
-pub fn enqueue_search(query: &str, project_root: Option<&str>, targets: Vec<SearchTarget>) {
-    shared().pending_search.fetch_add(1, Ordering::SeqCst);
+pub fn enqueue_search(
+    consumer: SearchConsumer,
+    query: &str,
+    project_root: Option<&str>,
+    targets: Vec<SearchTarget>,
+) {
+    shared().pending_search[consumer.ix()].fetch_add(1, Ordering::SeqCst);
     let _ = shared().tx.send(Job::SearchIndex {
+        consumer,
         query: query.to_string(),
         project_root: project_root.map(|s| s.to_string()),
         targets,
@@ -593,9 +643,9 @@ pub fn drain_test_results() -> Vec<TestConnResult> {
     std::mem::take(&mut *lock(&shared().test_results))
 }
 
-/// 取走已完成的索引搜索结果。
-pub fn drain_search_results() -> Vec<SearchResult> {
-    std::mem::take(&mut *lock(&shared().search_results))
+/// 取走某消费方已完成的索引搜索结果（另一个消费方的批次不受影响）。
+pub fn drain_search_results(consumer: SearchConsumer) -> Vec<SearchResult> {
+    shared().take_search_results(consumer)
 }
 
 /// 当前是否有预热任务在跑。
@@ -615,4 +665,86 @@ pub fn warm_progress() -> (usize, usize) {
 /// 请求取消当前预热（在 catalog 之间生效）。
 pub fn cancel_warm() {
     shared().warm_cancel.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试用 `Shared`：不起 worker（不发 job），只验「分发 / 取走」两件事。
+    fn test_shared() -> Shared {
+        let (tx, _rx) = mpsc::channel::<Job>();
+        Shared {
+            tx,
+            warm_active: AtomicBool::new(false),
+            warm_done: AtomicUsize::new(0),
+            warm_total: AtomicUsize::new(0),
+            warm_cancel: AtomicBool::new(false),
+            pending_loads: AtomicUsize::new(0),
+            pending_props: AtomicUsize::new(0),
+            pending_sql: AtomicUsize::new(0),
+            pending_test: AtomicUsize::new(0),
+            pending_search: std::array::from_fn(|_| AtomicUsize::new(0)),
+            load_results: Mutex::new(Vec::new()),
+            props_results: Mutex::new(Vec::new()),
+            sql_results: Mutex::new(Vec::new()),
+            test_results: Mutex::new(Vec::new()),
+            search_results: std::array::from_fn(|_| Mutex::new(Vec::new())),
+        }
+    }
+
+    fn result(consumer: SearchConsumer, query: &str) -> SearchResult {
+        SearchResult {
+            consumer,
+            query: query.to_string(),
+            searched: 1,
+            hits: Vec::new(),
+        }
+    }
+
+    /// 两个消费方的槽互不可见：取走自己的批次不会动到对方（本仓曾经的“互抢”就是这里错的）。
+    #[test]
+    fn search_results_are_partitioned_by_consumer() {
+        let shared = test_shared();
+        shared.push_search_result(
+            SearchConsumer::Navigator,
+            result(SearchConsumer::Navigator, "nav"),
+        );
+        shared.push_search_result(
+            SearchConsumer::QuickOpen,
+            result(SearchConsumer::QuickOpen, "qo"),
+        );
+
+        let quick_open = shared.take_search_results(SearchConsumer::QuickOpen);
+        assert_eq!(quick_open.len(), 1);
+        assert_eq!(quick_open[0].query, "qo");
+
+        // Quick Open 取走自己的批次后，导航的批次仍在槽里
+        let nav = shared.take_search_results(SearchConsumer::Navigator);
+        assert_eq!(nav.len(), 1);
+        assert_eq!(nav[0].query, "nav");
+
+        // `take` 是取走语义：再取为空
+        assert!(
+            shared
+                .take_search_results(SearchConsumer::QuickOpen)
+                .is_empty()
+        );
+        assert!(
+            shared
+                .take_search_results(SearchConsumer::Navigator)
+                .is_empty()
+        );
+    }
+
+    /// 槽位下标两两不同且落在 `COUNT` 内（`ix()` 与 `COUNT` 的契约）。
+    #[test]
+    fn consumer_slots_are_distinct() {
+        assert_ne!(
+            SearchConsumer::Navigator.ix(),
+            SearchConsumer::QuickOpen.ix()
+        );
+        assert!(SearchConsumer::Navigator.ix() < SearchConsumer::COUNT);
+        assert!(SearchConsumer::QuickOpen.ix() < SearchConsumer::COUNT);
+    }
 }

@@ -1843,7 +1843,12 @@ impl NavView {
                 .host
                 .project_root()
                 .map(|p| p.to_string_lossy().to_string());
-            nav_jobs::enqueue_search(&query, root.as_deref(), targets);
+            nav_jobs::enqueue_search(
+                nav_jobs::SearchConsumer::Navigator,
+                &query,
+                root.as_deref(),
+                targets,
+            );
             self.ensure_nav_pump(cx);
         }
 
@@ -4110,7 +4115,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
         let muted = cx.theme().colors.muted_foreground;
         let max = ui::NAV_SEARCH_MAX_ROWS;
 
-        let title = if nav_jobs::has_pending_search() && hits.is_empty() {
+        let title = if nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator) && hits.is_empty() {
             format!("索引搜索：{query}（搜索中…）")
         } else if hits.is_empty() {
             format!("索引搜索：{query}（无命中；已搜 {searched} 个有缓存的连接）")
@@ -4281,7 +4286,7 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                     return;
                 }
                 // 搜索：同一轮询泵回填（搜索框的跨连接索引搜索）。
-                let search_results = nav_jobs::drain_search_results();
+                let search_results = nav_jobs::drain_search_results(nav_jobs::SearchConsumer::Navigator);
                 if !search_results.is_empty()
                     && weak
                         .update(cx, |this, cx| this.apply_search_results(search_results, cx))
@@ -4292,14 +4297,14 @@ this.host.open_right_panel(RightPanel::Insight, cx);
                 let idle = !nav_jobs::has_pending_loads()
                     && !nav_jobs::has_pending_sql()
                     && !nav_jobs::has_pending_test()
-                    && !nav_jobs::has_pending_search();
+                    && !nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator);
                 if idle {
                     // 多等一拍确认没有新任务（render 可能刚入队）。
                     executor.timer(std::time::Duration::from_millis(120)).await;
                     if !nav_jobs::has_pending_loads()
                         && !nav_jobs::has_pending_sql()
                         && !nav_jobs::has_pending_test()
-                        && !nav_jobs::has_pending_search()
+                        && !nav_jobs::has_pending_search(nav_jobs::SearchConsumer::Navigator)
                     {
                         break;
                     }

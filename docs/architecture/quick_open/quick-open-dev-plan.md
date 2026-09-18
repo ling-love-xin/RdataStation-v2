@@ -7,6 +7,15 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — Phase 0 第二刀前置：搜索通道按消费方分流
+
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| P0.11a | `nav_jobs` 增消费方维度：`SearchConsumer{Navigator, QuickOpen}`；`SearchResult` / `Job::SearchIndex` 带消费方；`pending_search` 与 `search_results` 改**按消费方分槽**（`[_; COUNT]`），`has_pending_search(c)` / `enqueue_search(c, ..)` / `drain_search_results(c)` 全部带消费方 | `crates/database/src/nav_jobs.rs` | ✅ |
+| P0.11a-2 | 导航侧调用点同步（1 处入队 / 1 处 drain / 3 处 pending 判定） | `crates/database/src/nav_view.rs` | ✅ |
+| P0.11a-3 | 单测 2 项：分区取走互不可见、槽位下标互异且在界内 | `nav_jobs.rs` 内 `tests` | ✅ 全绿 |
+| 验证 | `cargo check -p rds-database -j 2` 零告警；`cargo test -p rds-database --lib -j 2` → **40 项全绿** | — | ✅ |
+
 ### 2026-09-18 — Phase 0 第一刀：模块骨架 + `List` 化 + 键盘通道
 
 | # | 任务 | 落点 | 状态 |
@@ -56,7 +65,7 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| P0.11a | `nav_jobs` 增消费方维度（`consumer` 或独立结果槽），导航侧同步改 | `crates/database/src/nav_jobs.rs`、`nav_view.rs` | 两个入口同时搜，各自结果不串 |
+| P0.11a | `nav_jobs` 增消费方维度（`consumer` 或独立结果槽），导航侧同步改 | `crates/database/src/nav_jobs.rs`、`nav_view.rs` | ✅ 已落地（见 §0） |
 | P0.11b | 宿主泵：防抖 150ms（`QUICK_OPEN_SEARCH_DEBOUNCE_MS`）、只在词变时发、按 `SearchResult.query` 丢弃过期批次 | `view.rs` / `quick_open/` | 连打 10 个字符只发 1–2 次后台搜索 |
 | P0.11c | 元数据行（表 / 视图 / 列 / schema）+ 面包屑归属 + 「为什么命中」标签 | `quick_open/model.rs`、`delegate.rs` | 搜 `ord` 能命中并打开属性面板 |
 | P0.11d | 命中动作接属性面板（复用 `nav_search_hit_property` 的映射口径） | `view.rs` | ↵ 打开属性面板并定位对象 |
