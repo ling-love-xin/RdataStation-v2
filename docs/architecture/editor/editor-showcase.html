@@ -250,7 +250,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
       <div class="logo">R</div>
       <div>
         <h1>RdataStation · SQL 编辑器</h1>
-        <div class="sub">一页看懂：它替你解决什么 · 怎么用 · 怎么运转（快照 2026-09-18）</div>
+        <div class="sub">一页看懂：它替你解决什么 · 怎么用 · 怎么运转（快照 2026-09-19）</div>
       </div>
     </div>
     <div class="head-actions">
@@ -862,10 +862,10 @@ td .mono{font-size:11.6px;color:var(--muted);}
     <table>
       <tr><th>套件</th><th style="width:88px">数量</th><th>守什么</th></tr>
       <tr><td>编辑器单测（<span class="mono">cargo test -p rds-editor --lib</span>）</td><td><b>377</b></td><td>执行族与落位 · 分段抓取 · 事务 · 中断 · 结果区 · 导出编码 · 分析桥接 · 补全 · 诊断解析 · 会话恢复 · 模式矩阵 · 通道闸</td></tr>
-      <tr><td>工作台单测（<span class="mono">-p rds-workbench --lib</span>）</td><td><b>104</b></td><td>端口实现：门控真值 · 补全目录组装 · 会话落库 · DuckDB 分析 / 导出的真机级回归</td></tr>
+      <tr><td>工作台单测（<span class="mono">-p rds-workbench --lib</span>）</td><td><b>106</b></td><td>端口实现：门控真值 · 补全目录组装 · 会话落库 · DuckDB 分析 / 导出的真机级回归</td></tr>
       <tr><td>界面契约（<span class="mono">--test ui_contract</span>）</td><td><b>7</b></td><td>零裸尺寸 / 零裸色值 · 面板模块登记 · 共享字段白名单</td></tr>
       <tr><td>会话真机（真 SQLite）</td><td><b>4</b></td><td>关文档 → 重开：内容 / 光标 / 模式 / 通道 / 连接绑定都回来</td></tr>
-      <tr><td>引擎单测</td><td><b>437</b></td><td>驱动 · 事务 · 切分 / 格式化 / 转译 / 执行计划 · 历史 · 元数据</td></tr>
+      <tr><td>引擎单测</td><td><b>440</b></td><td>驱动 · 事务 · 切分 / 格式化 / 转译 / 执行计划 · 历史 · 元数据<span class="mono">（另 23 条需真机服务，默认 ignored）</span></td></tr>
     </table>
     <div class="grid g2" style="margin-top:12px">
       <div class="card">
@@ -935,7 +935,7 @@ td .mono{font-size:11.6px;color:var(--muted);}
   </section>
 
   <div class="foot">
-    <b>本页是宣传页（数字快照 2026-09-18；编辑器单测 377 于 2026-09-19 复跑通过）</b>——改了实现请顺手核对：377 / 104 / 7 / 4 / 437 与真机探针清单。<br>
+    <b>本页是宣传页（数字快照 2026-09-19，五套件当日复跑）</b>——改了实现请顺手核对：377 / 106 / 7 / 4 / 440 与真机探针清单。<br>
     代码地图：模型与纯函数 <span class="mono">crates/editor/src/*.rs</span>（24 个文件）· 视图 <span class="mono">crates/editor/src/view/</span> · 尺寸常量 <span class="mono">crates/editor/src/ui.rs</span> · 色值只存在于主题资产，代码零裸 hex。<br>
     交互稿里那三档模式的示意：<b>文本 / SQL 已实装；分析模式（单元 + 会话 + 内联输出）属 Phase 1c，尚未实装</b>——页面上的标记与这里是同一口径。
   </div>
