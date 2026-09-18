@@ -32,7 +32,8 @@
 ├── data/                       # global.sqlite / shared.duckdb / 密钥库
 ├── logs/app.log                # 日志（保留期清理不变）
 ├── tmp/                        # DuckDB spill / 联邦临时库 / 进程 scratch
-└── extensions/                 # duckdb 扩展
+└── extensions/                 # DuckDB 引擎扩展（内部再按内核版本分子目录，如 v1.5.5/；
+                              #   与应用插件的 plugins/ 不是一回事，见 §8.2 第 6 条）
 ```
 
 派生规则（`crates/paths`，唯一解析点）：
@@ -196,6 +197,11 @@ manifest、permission 四个子系统；驱动侧还有 `engine/src/driver/wasm/
 4. sidecar：`Command::current_dir(paths::sidecar_work_dir(id))`、stdout/stderr 落
    `plugin-cache/<id>/sidecar.log`、端口从**保留段**（建议 41000–41999）分配并在超时/子进程退出时回收。
 5. 卸载插件 = 删除 `plugins/<id>`；`plugin-data/<id>` 是否保留由 manifest 声明（默认保留）。
+6. **引擎扩展（DuckDB 扩展）与应用插件分开**：`extensions/` 是 **DuckDB 自己的**扩展目录
+   （`extension_directory`，内部再按内核版本分 `v<版本>/`，可离线预置），与应用插件的
+   `plugins/` 不同层；**心智统一（都是“全局装、项目引用”）、物理不混**，
+   详见 `../plugin/plugin-architecture.md` §7 与 §7.1。已接线：所有长期存活的 DuckDB 连接
+   统一过 `duckdb/manager.rs::configure_connection`（扩展目录 + 内存闸 + 溢写口 + 关掉静默联网）。
 
 ### 8.3 待补文档
 
