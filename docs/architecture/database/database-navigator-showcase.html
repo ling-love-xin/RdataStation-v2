@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RdataStation 数据源管理 / 数据库导航 · 一页看懂</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0; --card:#FFFFFF;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3;
+  --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
+  --track:#E7E7E7; --code-bg:#FAFAFA; --float:#FFFFFF;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+  --shadow-sm:0 1px 2px rgba(20,20,30,.06);
+  --glow:0 10px 30px rgba(194,91,70,.18);
+}
+html[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E; --card:#1E1E1E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526;
+  --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
+  --track:#3C3C3C; --code-bg:#191919; --float:#252526;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+  --glow:0 10px 30px rgba(232,132,111,.16);
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--pagebg);color:var(--fg);font-size:14px;line-height:1.72;
+  font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;}
+a{color:var(--primary);text-decoration:none;}
+a:hover{text-decoration:underline;}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 22px 60px;}
+h1,h2,h3,h4{margin:0;line-height:1.35;}
+.mono,code{font-family:Consolas,'SFMono-Regular',ui-monospace,monospace;}
+.grow{flex:1;}
+
+/* ── 页头 ── */
+.page-head{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
+.brand{display:flex;align-items:center;gap:11px;}
+.logo{width:38px;height:38px;border-radius:10px;background:var(--primary);color:var(--primary-fg);
+  display:grid;place-items:center;font-weight:800;font-size:19px;box-shadow:var(--glow);flex:none;}
+.page-head h1{font-size:17.5px;font-weight:700;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:1px;}
+.head-actions{margin-left:auto;}
+.theme-toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;box-shadow:var(--shadow-sm);transition:all .15s;font-family:inherit;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+
+/* ── 吸顶导航 ── */
+.nav{position:sticky;top:0;z-index:20;display:flex;gap:4px;align-items:center;overflow-x:auto;
+  padding:7px 9px;margin:0 -4px 16px;border:1px solid var(--border);border-radius:12px;
+  background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);box-shadow:var(--shadow-sm);scrollbar-width:none;}
+.nav a{white-space:nowrap;font-size:12px;border:1px solid transparent;border-radius:999px;padding:3px 11px;color:var(--muted);transition:all .15s;}
+.nav a:hover{color:var(--primary);background:var(--hover);text-decoration:none;}
+.nav a.on{color:var(--primary);border-color:var(--active-border);background:var(--sidebar);font-weight:600;}
+
+/* ── 英雄区 ── */
+.hero{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:16px;background:var(--bg);box-shadow:var(--shadow);padding:30px 30px 26px;margin-bottom:18px;}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,392px);gap:26px;align-items:start;}
+@media (max-width:900px){.hero-grid{grid-template-columns:1fr;}}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:3px 12px;margin-bottom:14px;}
+.eyebrow b{color:var(--primary);font-weight:600;}
+.hero h2{font-size:27px;font-weight:750;letter-spacing:.2px;}
+.hero h2 em{font-style:normal;color:var(--primary);}
+.hero .lead{margin-top:12px;font-size:13.6px;color:var(--fg);}
+.hero .lead .dim{color:var(--muted);}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px;}
+.chip{font-size:11.5px;border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:2px 10px;color:var(--fg);}
+.chip.hot{border-color:var(--active-border);color:var(--primary);box-shadow:var(--glow);}
+.cta{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px;}
+.cta a{font-size:12.5px;border-radius:9px;padding:8px 16px;border:1px solid var(--border);background:var(--card);box-shadow:var(--shadow-sm);transition:all .15s;}
+.cta a.pri{background:var(--primary);color:var(--primary-fg);border-color:var(--primary);font-weight:600;}
+.cta a:hover{border-color:var(--primary);color:var(--primary);text-decoration:none;transform:translateY(-1px);}
+.cta a.pri:hover{color:var(--primary-fg);background:var(--primary-hover);}
+
+/* ── 应用窗口线框 ── */
+.win{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.win .tbar{display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:var(--titlebar);font-size:11.5px;color:var(--muted);}
+.win .tbar .mark{width:11px;height:11px;border-radius:3px;background:var(--primary);flex:none;}
+.win .tbar .tname{color:var(--fg);font-weight:600;}
+.win .tbar .wbtns{margin-left:auto;display:flex;gap:10px;color:var(--muted);font-size:11px;}
+/* 左 Dock 面板头 */
+.win .hdr{display:flex;align-items:center;gap:6px;padding:6px 9px;background:var(--card);border-bottom:1px solid var(--border);font-size:11px;}
+.win .hdr .ttl{font-weight:600;color:var(--fg);font-size:11.5px;}
+.win .hdr .ib{width:20px;height:18px;border:1px solid var(--border);border-radius:5px;display:grid;place-items:center;color:var(--muted);background:var(--bg);font-size:10px;}
+.win .hdr .ib.acc{border-color:var(--active-border);color:var(--primary);}
+/* 筛选区 */
+.win .filters{padding:6px 9px 7px;border-bottom:1px solid var(--border);background:var(--card);}
+.win .search{display:flex;align-items:center;gap:6px;border:1px solid var(--input-border);border-radius:6px;background:var(--bg);padding:3px 7px;font-size:11px;color:var(--muted);}
+.win .search .ph{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.win .search .flt{border:1px solid var(--active-border);color:var(--primary);border-radius:999px;padding:0 7px;font-size:10.5px;}
+.win .facets{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;}
+.win .facet{font-size:10.5px;border:1px solid var(--border);border-radius:999px;padding:0 9px;color:var(--muted);background:var(--bg);cursor:pointer;font-family:inherit;transition:all .15s;}
+.win .facet:hover{color:var(--primary);border-color:var(--active-border);}
+.win .facet.on{background:var(--primary);color:var(--primary-fg);border-color:var(--primary);font-weight:600;}
+.win .opts{display:flex;gap:6px;margin-top:6px;font-size:10.5px;color:var(--muted);}
+.win .opts label{display:inline-flex;align-items:center;gap:4px;cursor:pointer;}
+.win .opts input{accent-color:var(--primary);}
+/* 树主体 */
+.win .body2{padding:5px 0 4px;font-size:11.5px;background:var(--bg);min-height:286px;}
+.win .ghead{display:flex;align-items:center;gap:6px;padding:3px 9px;color:var(--fg);font-weight:600;}
+.win .ghead .bar{width:3px;height:12px;border-radius:2px;background:var(--primary);flex:none;}
+.win .ghead .meta{margin-left:auto;font-size:10.5px;color:var(--muted);font-weight:400;}
+.win .ghead .fold{color:var(--muted);font-size:10.5px;}
+.win .crow{display:flex;align-items:center;gap:7px;padding:2px 9px 2px 20px;border-radius:5px;transition:background .12s;}
+.win .crow:hover{background:var(--hover);}
+.win .crow.sel{background:var(--sidebar);box-shadow:inset 2px 0 0 var(--primary);}
+.win .crow .bdg{width:17px;height:17px;border-radius:5px;background:var(--primary);color:var(--primary-fg);display:grid;place-items:center;font-size:8.5px;font-weight:700;flex:none;font-family:Consolas,monospace;}
+.win .crow .bdg.off{background:var(--muted);}
+.win .crow .nm{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.win .crow .sc{font-family:Consolas,monospace;font-size:10.5px;color:var(--muted);flex:none;}
+.win .crow .ops{color:var(--muted);font-size:10.5px;flex:none;opacity:0;transition:opacity .12s;}
+.win .crow:hover .ops,.win .crow.sel .ops{opacity:.65;}
+.win .crow .tags{display:flex;gap:4px;margin-left:44px;margin-bottom:2px;}
+.win .crow .tags .t{font-size:9.5px;border:1px solid var(--border);border-radius:4px;padding:0 5px;color:var(--muted);background:var(--sidebar);}
+.win .node{display:flex;align-items:center;gap:6px;padding:1px 9px;color:var(--muted);}
+.win .node b{color:var(--fg);font-weight:500;}
+.win .node .c{margin-left:auto;font-size:10px;color:var(--muted);}
+.win .node.pk{border-left:2px solid var(--info);}
+.win .node.fk{border-left:2px solid var(--warning);}
+.win .sbar2{display:flex;gap:12px;padding:4px 9px;background:var(--sidebar);border-top:1px solid var(--border);font-size:10.5px;color:var(--muted);}
+.win .sbar2 .on{color:var(--fg);}
+.hidden{display:none !important;}
+
+/* ── KPI ── */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px;margin-top:22px;}
+.kpi{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);transition:all .15s;}
+.kpi:hover{border-color:var(--active-border);transform:translateY(-2px);box-shadow:var(--glow);}
+.kpi .n{font-size:25px;font-weight:700;letter-spacing:.5px;color:var(--primary);line-height:1.15;}
+.kpi .n small{font-size:13px;font-weight:600;color:var(--fg);opacity:.85;margin-left:2px;}
+.kpi .l{font-size:12.2px;color:var(--fg);margin-top:4px;font-weight:600;}
+.kpi .d{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.55;}
+
+/* ── 连接行解剖 ── */
+.anat{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px 18px;box-shadow:var(--shadow-sm);}
+.anat .row{display:flex;align-items:center;gap:10px;min-width:520px;}
+.anat .row .bdg{width:20px;height:20px;border-radius:6px;background:var(--primary);color:var(--primary-fg);display:grid;place-items:center;font-size:9.5px;font-weight:700;flex:none;font-family:Consolas,monospace;}
+.anat .row .bdg.off{background:var(--muted);}
+.anat .row .nm{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12.5px;}
+.anat .row .sc{font-family:Consolas,monospace;font-size:11px;color:var(--muted);}
+.anat .row .ops{font-size:11px;color:var(--muted);opacity:.5;}
+.anat .marks{display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:10px;margin-top:14px;font-size:11.8px;color:var(--muted);}
+.anat .marks b{color:var(--fg);font-weight:600;}
+.scrollx{overflow-x:auto;}
+
+/* ── 通用区块 ── */
+section{margin:34px 0 0;scroll-margin-top:64px;}
+.sec-head{display:flex;align-items:center;gap:10px;margin-bottom:5px;}
+.sec-head .no{font-size:11.5px;font-weight:700;color:var(--primary);border:1px solid var(--active-border);border-radius:6px;padding:1px 7px;flex:none;}
+.sec-head h3{font-size:19px;font-weight:700;letter-spacing:.2px;}
+.sec-head .tag{margin-left:auto;font-size:11px;color:var(--muted);}
+.sec-sub{color:var(--muted);font-size:12.5px;margin:0 0 15px 0;}
+.sec-sub b{color:var(--fg);}
+.grid{display:grid;gap:12px;}
+.g2{grid-template-columns:repeat(auto-fit,minmax(310px,1fr));}
+.g3{grid-template-columns:repeat(auto-fit,minmax(238px,1fr));}
+.card{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px 18px;box-shadow:var(--shadow-sm);}
+.card h4{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.card h4 .ico{width:22px;height:22px;border-radius:6px;background:var(--sidebar);border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--primary);flex:none;}
+.card p{font-size:12.8px;margin-top:8px;opacity:.94;}
+.card ul{margin:8px 0 0 0;padding-left:0;list-style:none;font-size:12.6px;}
+.card li{position:relative;padding-left:15px;margin-top:4px;opacity:.94;}
+.card li::before{content:"";position:absolute;left:2px;top:.66em;width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.75;}
+.card .foot{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--muted);}
+
+/* ── 三条高光 ── */
+.hl{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
+.hl .big{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--card);padding:18px 19px;box-shadow:var(--shadow-sm);}
+.hl .big::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary);opacity:.85;}
+.hl .big .idx{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--primary);}
+.hl .big h4{font-size:15.5px;font-weight:700;margin-top:6px;line-height:1.5;}
+.hl .big p{font-size:12.6px;margin-top:8px;opacity:.94;}
+.hl .big .kv{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;}
+.hl .big .kv span{font-size:11px;border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:1px 8px;color:var(--muted);}
+
+/* ── 剧本 ── */
+.script{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm);overflow:hidden;}
+.script .sh{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--sidebar);border-bottom:1px solid var(--border);}
+.script .sh .who{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 7px;background:var(--card);}
+.script .sh h4{font-size:14.5px;font-weight:700;}
+.script .sh .gain{margin-left:auto;font-size:11.5px;color:var(--success);font-weight:600;}
+.script .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));}
+.script .st{padding:14px 16px;border-right:1px solid var(--border);}
+.script .st:last-child{border-right:none;}
+.script .st .n{font-size:10.5px;font-weight:700;color:var(--primary);letter-spacing:.8px;}
+.script .st .act{font-size:13px;font-weight:600;margin-top:4px;}
+.script .st .how{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.65;}
+.script .st .ui{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;}
+.script .st .ui span{font-size:10.5px;border:1px solid var(--border);background:var(--bg);border-radius:5px;padding:0 6px;font-family:Consolas,monospace;color:var(--fg);}
+
+/* ── 流程条 ── */
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:var(--shadow-sm);}
+.step2{padding:14px 15px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);}
+.step2 .idx{font-size:10.5px;font-weight:700;color:var(--primary);letter-spacing:1px;}
+.step2 .t{font-size:13.2px;font-weight:700;margin-top:4px;}
+.step2 .d{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.62;}
+.step2 .who{font-size:10.5px;color:var(--muted);margin-top:7px;font-family:Consolas,monospace;}
+.gate{margin-top:10px;border:1px dashed var(--border);border-left:3px solid var(--primary);border-radius:10px;background:var(--card);padding:11px 15px;font-size:12.5px;box-shadow:var(--shadow-sm);}
+.gate b{color:var(--primary);}
+
+/* ── 分层 ── */
+.layers{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);}
+.layer{display:grid;grid-template-columns:148px 1fr;gap:12px;padding:9px 0;border-bottom:1px dashed var(--border);}
+.layer:last-child{border-bottom:none;}
+.layer .tag{font-size:11.5px;font-weight:700;color:var(--primary);display:flex;align-items:center;}
+.layer .body{font-size:12.5px;}
+.dep{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--muted);}
+.dep code{border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:2px 8px;color:var(--fg);}
+
+/* ── 右键菜单还原 ── */
+.ctxwrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(292px,1fr));gap:12px;}
+.ctxmenu{border:1px solid var(--border);border-radius:10px;background:var(--float);box-shadow:var(--shadow);padding:4px;font-size:12.3px;align-self:start;}
+.ctxmenu .mi{display:flex;align-items:center;gap:8px;padding:4px 10px;border-radius:6px;}
+.ctxmenu .mi:hover{background:var(--sidebar);}
+.ctxmenu .mi .k{margin-left:auto;font-size:10.5px;color:var(--muted);white-space:nowrap;}
+.ctxmenu .sep{height:1px;background:var(--border);margin:3px 6px;}
+.ctxmenu .cap{padding:4px 10px 6px;font-size:11px;color:var(--muted);}
+
+/* ── 表格 ── */
+table{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);font-size:12.7px;box-shadow:var(--shadow-sm);}
+th{background:var(--sidebar);text-align:left;font-size:11.5px;color:var(--muted);font-weight:600;padding:9px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
+td{padding:9px 13px;border-bottom:1px solid var(--border);vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+td .mono{font-size:11.6px;color:var(--muted);}
+.badge{display:inline-block;font-size:11px;border-radius:5px;padding:1px 7px;border:1px solid var(--border);background:var(--sidebar);}
+.badge.ok{color:var(--success);border-color:var(--success);}
+.badge.mid{color:var(--warning);border-color:var(--warning);}
+.badge.plan{color:var(--muted);}
+.yes{color:var(--success);font-weight:700;}
+.no{color:var(--muted);}
+.par{color:var(--warning);font-weight:700;}
+kbd{font-family:Consolas,monospace;font-size:11.3px;border:1px solid var(--border);background:var(--sidebar);border-radius:5px;padding:1px 6px;white-space:nowrap;}
+
+/* ── 结尾 ── */
+.foot{margin-top:36px;border-top:1px solid var(--border);padding-top:16px;font-size:12px;color:var(--muted);line-height:1.95;}
+.foot b{color:var(--fg);}
+.foot .doclinks{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:8px;}
+@media print{.theme-toggle,.nav{display:none;}body{background:#fff;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ══ 页头 ══ -->
+  <div class="page-head">
+    <div class="brand">
+      <div class="logo">R</div>
+      <div>
+        <h1>RdataStation · 数据源管理 / 数据库导航</h1>
+        <div class="sub">一页看懂：它替你解决什么 · 怎么用 · 怎么运转（快照 2026-09-19）</div>
+      </div>
+    </div>
+    <div class="head-actions">
+      <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+    </div>
+  </div>
+
+  <!-- ══ 吸顶导航 ══ -->
+  <nav class="nav" id="nav">
+    <a href="#s1">为什么不是一个连接列表</a>
+    <a href="#s2">三条轴各归一地问</a>
+    <a href="#s3">三个高光</a>
+    <a href="#s4">四个剧本</a>
+    <a href="#s5">一次展开的全流程</a>
+    <a href="#s6">连接行解剖</a>
+    <a href="#s7">四级取数管线</a>
+    <a href="#s8">刷新 · 预热 · 预取</a>
+    <a href="#s9">属性面板</a>
+    <a href="#s10">键盘 · 右键 · 拖拽</a>
+    <a href="#s11">架构</a>
+    <a href="#s12">质量与证据</a>
+    <a href="#s13">边界</a>
+    <a href="#s14">文档地图</a>
+  </nav>
+
+  <!-- ══ 英雄区 ══ -->
+  <div class="hero">
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow">左侧 Dock · 一实例一项目 · <b>三归属域</b> · 分组 = 结构 / 标签 = 检索</div>
+        <h2>十几个库，<em>一眼找到那一个</em>——<br>展开就自动连上，双击就看细节。</h2>
+        <p class="lead">
+          它不是一个「连接列表」：组织（分组）、检索（标签 / 筛选）、事实（属性面板）各占一个位置，互不打架；
+          对象树逐级懒加载，元数据有缓存，展开连接时若未建连会<b>先自动建连</b>。
+          <span class="dim">只管理数据源与元数据——不越界去做对话框、分析资产或别的模块本体。</span>
+        </p>
+        <div class="chips">
+          <span class="chip hot">四类数据库真机回归</span>
+          <span class="chip hot">行内常驻 ≤ 3 个元素</span>
+          <span class="chip">render 期零 I/O</span>
+          <span class="chip">缓存只增不删</span>
+          <span class="chip">大 schema 分页 + 邻接预取</span>
+          <span class="chip">右键通用入口：SQL / 洞察</span>
+        </div>
+        <div class="cta">
+          <a class="pri" href="#s4">看四个剧本 ↓</a>
+          <a href="#s11">看架构</a>
+          <a href="database-navigator-prototype.html">打开交互稿</a>
+        </div>
+      </div>
+
+      <!-- 左 Dock 面板线框（可切归属域 / 开关两列） -->
+      <div class="win">
+        <div class="tbar"><span class="mark"></span><span class="tname">RdataStation</span><span>· 工作台</span>
+          <span class="wbtns">— ▢ ✕</span>
+        </div>
+        <div class="hdr">
+          <span class="ttl">数据源</span>
+          <span class="grow"></span>
+          <span class="ib" title="新建数据源">＋</span>
+          <span class="ib" title="新建分组">🗂</span>
+          <span class="ib" title="刷新选中连接">⟳</span>
+          <span class="ib" title="断开">⏻</span>
+          <span class="ib acc" title="更多">⋯</span>
+        </div>
+        <div class="filters">
+          <div class="search"><span>⌕</span><span class="ph" id="q">名称 / 标签 / type: / scope: / tag:</span><span class="flt" id="flt">筛选 ▾ 0</span></div>
+          <div class="facets" id="facets">
+            <button class="facet on" data-scope="all">全部</button>
+            <button class="facet" data-scope="P">项目</button>
+            <button class="facet" data-scope="G">全局</button>
+            <button class="facet" data-scope="GP">共享</button>
+          </div>
+          <div class="opts">
+            <label><input type="checkbox" id="optTags">显示标签</label>
+            <label><input type="checkbox" id="optScope" checked>显示归属域</label>
+          </div>
+        </div>
+        <div class="body2" id="tree">
+          <div class="ghead" data-group><span class="bar"></span>核心库<span class="meta">2/2 · 2</span><span class="fold">⇥</span></div>
+          <div class="crow sel" data-scope="GP">
+            <span class="bdg">PG</span><span class="nm">生产 PG</span>
+            <span class="sc scopecol">GP</span><span class="ops">+ ✎</span>
+          </div>
+          <div class="tags tagrow"><span class="t">prod</span><span class="t">core</span><span class="t">+1</span></div>
+          <div class="node" style="padding-left:34px">▾ 📁 <b>postgres</b></div>
+          <div class="node" style="padding-left:48px">▾ ▦ <b>表</b><span class="c">12</span></div>
+          <div class="node pk" style="padding-left:62px">▾ <b>orders</b><span class="c">1.2M</span></div>
+          <div class="node" style="padding-left:76px">order_id<span class="c">PK · bigint</span></div>
+          <div class="node fk" style="padding-left:76px">customer_id<span class="c">bigint · FK</span></div>
+          <div class="node" style="padding-left:48px">▸ 👁 <b>视图</b><span class="c">1</span></div>
+          <div class="crow" data-scope="P">
+            <span class="bdg off">MY</span><span class="nm">本地 MySQL</span>
+            <span class="sc scopecol">P</span><span class="ops">+ ✎</span>
+          </div>
+          <div class="tags tagrow"><span class="t">dev</span></div>
+          <div class="ghead" data-group><span class="bar"></span>报表<span class="meta">0/1 · 1 失败</span><span class="fold">⇥</span></div>
+          <div class="crow" data-scope="G">
+            <span class="bdg off">PG</span><span class="nm">报表 PG</span>
+            <span class="sc scopecol">G</span><span class="ops">+ ✎</span>
+          </div>
+          <div class="ghead" data-group><span class="bar"></span>未分组<span class="meta">1/1 · 1</span><span class="fold">⇥</span></div>
+          <div class="crow" data-scope="G">
+            <span class="bdg">SQ</span><span class="nm">测试 SQLite</span>
+            <span class="sc scopecol">G</span><span class="ops">+ ✎</span>
+          </div>
+          <div class="tags tagrow"><span class="t">sandbox</span></div>
+        </div>
+        <div class="sbar2">
+          <span class="on">2 已连接</span><span>2 离线</span><span>缓存 12 分钟前</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="n">3<small> 个元素</small></div><div class="l">行内常驻上限</div><div class="d">徽标（色 = 状态 · 形 = 类型）+ 名称 + 归属域列；行操作只在 hover / 选中时显</div></div>
+      <div class="kpi"><div class="n">3<small> 条轴</small></div><div class="l">结构 / 检索 / 事实</div><div class="d">分组 = 结构（占树一级）· 标签 = 检索（不进树）· 属性面板 = 事实（唯一权威位）</div></div>
+      <div class="kpi"><div class="n">L1+L2</div><div class="l">两级元数据缓存</div><div class="d">内存 + 每连接 SQLite，cache-aside；L3 实时内省不是缓存，命中即回写</div></div>
+      <div class="kpi"><div class="n">0<small> 次 I/O</small></div><div class="l">render 期纪律</div><div class="d">加载 / 属性 / 预热 / 预取全在后台工作线程，主线程只轮询回填</div></div>
+      <div class="kpi"><div class="n">4<small> 类库</small></div><div class="l">真机回归口径</div><div class="d">MySQL · PostgreSQL · SQLite · DuckDB × 项目 / 全局 / 共享，按树的实际层级核对</div></div>
+    </div>
+  </div>
+
+  <!-- ══ 1. 为什么 ══ -->
+  <section id="s1">
+    <div class="sec-head"><span class="no">01</span><h3>为什么它不是一个「连接列表」</h3><span class="tag">四处「看着有、其实是假」的底座，逐条换成了真东西</span></div>
+    <table>
+      <tr><th style="width:44%">旧样子（V1）</th><th>现在</th></tr>
+      <tr>
+        <td>平铺一张连接表：没有分组、没有标签，库一多只能靠名字硬扫</td>
+        <td><b>分组 = 结构</b>（可排序、多对多、主组全亮）+ <b>标签 = 检索</b>（多值、不进树）+ 归属域 facet + 搜索语法 <span class="mono">type: / scope: / tag: / driver:</span></td>
+      </tr>
+      <tr>
+        <td>「来源 / 作用域」被做成标签页分区，与行内标记重复表达同一件事</td>
+        <td>归属域回归<b>事实属性</b>：行内右对齐固定列（可关）+ 筛选；一级结构位让给用户自己的分组</td>
+      </tr>
+      <tr>
+        <td>展开对象树现查现拉，卡住界面；挂了只看到一句 <span class="mono">CONN_NOT_FOUND</span></td>
+        <td><b>展开即建连</b>；加载走后台线程 + 结果队列；失败带<b>可读原因与重试入口</b>，不静默吞错</td>
+      </tr>
+      <tr>
+        <td>刷新即清、断开即删缓存文件：「看起来更快」，代价是每次重扫</td>
+        <td><b>缓存只增不删</b>：刷新只重建该范围；唯一删除入口是显式「缓存管理…」——这是从 v1 教训换来的规则</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ══ 2. 三条轴 ══ -->
+  <section id="s2">
+    <div class="sec-head"><span class="no">02</span><h3>三条轴各归一地问</h3><span class="tag">裁决「信息放哪」的三条边界规则</span></div>
+    <p class="sec-sub">一问一主：三个问题各有且仅有一个承载位；任何信息<b>不许同时占两位</b>。</p>
+    <table>
+      <tr><th>你问</th><th>谁回答</th><th>表达位</th><th>禁止</th></tr>
+      <tr><td>我的库放在哪</td><td><b>分组</b>（结构容器，多对多）</td><td>树一级（唯一结构轴）</td><td>不做自动分类</td></tr>
+      <tr><td>和什么相关的库</td><td><b>标签</b>（横切检索键，多值）</td><td>筛选 + 搜索；行内可选显示</td><td>不进树、不排序</td></tr>
+      <tr><td>这一条记录存在哪</td><td><b>归属域</b>（<span class="mono">P</span> / <span class="mono">G</span> / <span class="mono">GP</span>）</td><td>行内右对齐固定列 + 筛选</td><td>不参与组织</td></tr>
+      <tr><td>这是什么库 / 能不能用</td><td><b>类型</b>（形状）+ <b>状态</b>（颜色）</td><td>同一个徽标的两个通道</td><td>不靠颜色表达类型、不常显全名</td></tr>
+      <tr><td>这一个的细节</td><td><b>属性面板</b>（事实唯一权威位）</td><td>编辑区右侧停靠面板</td><td>导航行不重复这些细节</td></tr>
+    </table>
+    <div class="gate" style="margin-top:12px">
+      <b>心智模型：</b>导航栏的职责 = 定位 + 连接 + 浏览；<b>配置归对话框，详情归属性面板</b>。
+      结构靠分组，检索靠筛选，细节靠面板。<b>事实只读，组织可写。</b>
+    </div>
+  </section>
+
+  <!-- ══ 3. 三个高光 ══ -->
+  <section id="s3">
+    <div class="sec-head"><span class="no">03</span><h3>三个高光</h3><span class="tag">如果只记三件事</span></div>
+    <div class="hl">
+      <div class="big">
+        <div class="idx">HIGHLIGHT 1</div>
+        <h4>一行只说三件事，且一个元素能说两件</h4>
+        <p>常驻只有「徽标 + 名称 + 归属域列」，且归属域<b>右对齐成列</b>，长名不会挤走它。
+          徽标本身是<b>双通道</b>：颜色 = 状态（灰 = 不可用 / 彩 = 可用），形状 + 内叠 2 字母 = 数据库类型。
+          行尾 <span class="mono">+</span>（加标签）与 <span class="mono">✎</span>（编辑）只在 hover / 选中时出现。</p>
+        <div class="kv"><span>密度预算 ≤ 3</span><span>长名截断不挤压</span><span>连接 / 断开只走右键</span><span>hover 卡 300ms 补全事实</span></div>
+      </div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 2</div>
+        <h4>事实只读，组织可写</h4>
+        <p>类型、驱动、归属域、地址、状态是<b>系统事实</b>，只做展示与筛选；分组与标签是<b>用户心智</b>，才是可写组织。
+          所以信息永不「同时占两位」：在哪 = 分组，符合什么条件 = 筛选，这一个的细节 = 属性面板。</p>
+        <div class="kv"><span>分组多对多 · 主组全亮</span><span>其余组以引用行出现，点击跳回</span><span>标签永不进树</span></div>
+        <div class="kv"><a href="#s2" style="font-size:11.5px">看三条边界规则 ↑</a></div>
+      </div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 3</div>
+        <h4>展开不卡，错了有原因</h4>
+        <p>树加载、属性、预热、预取全部进<b>单一后台工作线程 + 结果队列</b>；渲染期不做 I/O。
+          大 schema 靠类别文件夹分页顶住，首次展开表文件夹后还会<b>顺手预取前 20 张表的列</b>。
+          连不上就说清差在哪，并给重试入口。</p>
+        <div class="kv"><span>首批 200 条 + 加载更多</span><span>预热可取消 · 有进度</span><span>节点级失败可读原因 + 重试</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 4. 四个剧本 ══ -->
+  <section id="s4">
+    <div class="sec-head"><span class="no">04</span><h3>四个剧本 · 它替你做什么</h3><span class="tag">每步都用现有按钮，能照着做</span></div>
+    <div class="grid g2">
+      <div class="script">
+        <div class="sh"><span class="who">剧本 A</span><h4>这条连接到底还能不能用</h4><span class="gain">省下开对话框</span></div>
+        <div class="steps">
+          <div class="st"><div class="n">STEP 1</div><div class="act">先看颜色</div>
+            <div class="how">徽标彩色 = 运行时可连，灰色 = 当前不可用；鼠标停一下看类型 / 状态 / 驱动。</div>
+            <div class="ui"><span>徽标</span><span>hover 卡</span></div></div>
+          <div class="st"><div class="n">STEP 2</div><div class="act">要确认就实测</div>
+            <div class="how">右键 → <b>测试连接</b>：独立会话探测，<b>不注册连接池、不写库</b>，结果落面板提示。</div>
+            <div class="ui"><span>右键</span><span>测试连接</span></div></div>
+          <div class="st"><div class="n">STEP 3</div><div class="act">真要用就展开</div>
+            <div class="how">展开连接根：未建连会先自动建连，再逐级加载——不用先手动去连一次。</div>
+            <div class="ui"><span>▸ 展开</span><span>自动建连</span></div></div>
+        </div>
+      </div>
+
+      <div class="script">
+        <div class="sh"><span class="who">剧本 B</span><h4>库太多，找不着东西</h4><span class="gain">少翻树</span></div>
+        <div class="steps">
+          <div class="st"><div class="n">STEP 1</div><div class="act">先收窄</div>
+            <div class="how">顶部归属域 chips（全部 / 项目 / 全局 / 共享）一击收窄；行尾「筛选 ▾ N」叠加类型 / 驱动 / 标签。</div>
+            <div class="ui"><span>归属域 chips</span><span>筛选 ▾</span></div></div>
+          <div class="st"><div class="n">STEP 2</div><div class="act">再精确</div>
+            <div class="how">搜索框支持 facet 语法，和 chips 互补：<span class="mono">type:postgres</span> · <span class="mono">scope:global</span> · <span class="mono">tag:prod</span>。</div>
+            <div class="ui"><span>type:</span><span>scope:</span><span>tag:</span></div></div>
+          <div class="st"><div class="n">STEP 3</div><div class="act">把常用固定下来</div>
+            <div class="how">拖连接行到<b>分组头</b>即归组；拖到「未分组」头 = 移出全部；分组头之间拖 = 调分组顺序。</div>
+            <div class="ui"><span>拖到分组头</span><span>Alt+↑↓</span></div></div>
+        </div>
+      </div>
+
+      <div class="script">
+        <div class="sh"><span class="who">剧本 C</span><h4>只想看一眼这张表长什么样</h4><span class="gain">不动 SQL</span></div>
+        <div class="steps">
+          <div class="st"><div class="n">STEP 1</div><div class="act">看事实</div>
+            <div class="how">双击任意对象或按 <kbd>Enter</kbd> / <kbd>F4</kbd>：右侧属性面板给出 DBeaver 式属性网格。</div>
+            <div class="ui"><span>双击</span><span>Enter / F4</span></div></div>
+          <div class="st"><div class="n">STEP 2</div><div class="act">看数据</div>
+            <div class="how">右键表 / 视图 → <b>查看数据</b>：注入一条 <span class="mono">SELECT * … LIMIT 200</span> 到 SQL 编辑器。</div>
+            <div class="ui"><span>查看数据</span><span>LIMIT 200</span></div></div>
+          <div class="st"><div class="n">STEP 3</div><div class="act">要写就生成</div>
+            <div class="how">右键 → <b>生成 SQL ▸</b>（INSERT / UPDATE / DELETE 模板）。列由后台任务取、命中缓存不发查询，<b>只注入不执行</b>。</div>
+            <div class="ui"><span>生成 SQL ▸</span><span>不自动执行</span></div></div>
+        </div>
+      </div>
+
+      <div class="script">
+        <div class="sh"><span class="who">剧本 D</span><h4>把表结构拖进 SQL 里</h4><span class="gain">不手抄</span></div>
+        <div class="steps">
+          <div class="st"><div class="n">STEP 1</div><div class="act">抓住那一行</div>
+            <div class="how">展开到表 / 视图，按住拖动——载荷只带限定名与短名。</div>
+            <div class="ui"><span>▦ 表</span><span>拖拽</span></div></div>
+          <div class="st"><div class="n">STEP 2</div><div class="act">丢到 SQL 区</div>
+            <div class="how">落到 SQL 编辑区即插入限定名；两处（导航 / 结果）都能作起点，落点都聚焦 SQL 区。</div>
+            <div class="ui"><span>落到 SQL 区</span><span>插入限定名</span></div></div>
+          <div class="st"><div class="n">STEP 3</div><div class="act">接着往下</div>
+            <div class="how">要造数据就右键 → <b>生成 Mock 数据</b>（仅表 / 视图）；要看分布就 <b>查看洞察</b>。</div>
+            <div class="ui"><span>生成 Mock 数据</span><span>查看洞察</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 5. 流程 ══ -->
+  <section id="s5">
+    <div class="sec-head"><span class="no">05</span><h3>一次展开的全流程</h3><span class="tag">从点到一根枝，每一步都有明确归属</span></div>
+    <div class="flow">
+      <div class="step2"><div class="idx">STEP 1</div><div class="t">面板就绪</div>
+        <div class="d">归属域 chips + 筛选 + 搜索常驻；分组与标签这类本地小读走 <span class="mono">defer_in</span> 回填。</div>
+        <div class="who">NavView</div></div>
+      <div class="step2"><div class="idx">STEP 2</div><div class="t">展开连接根</div>
+        <div class="d">未建连先<b>自动建连</b>；建连失败只给可读原因与重试，不排加载。</div>
+        <div class="who">NavHost ▸ 连接服务</div></div>
+      <div class="step2"><div class="idx">STEP 3</div><div class="t">请求下一级</div>
+        <div class="d">只提交路径（连接 / 库 / schema / 表…），不阻塞 UI。</div>
+        <div class="who">nav_jobs 入队</div></div>
+      <div class="step2"><div class="idx">STEP 4</div><div class="t">L1 内存</div>
+        <div class="d">本会话取过的节点直接命中。</div>
+        <div class="who">NavigatorService</div></div>
+      <div class="step2"><div class="idx">STEP 5</div><div class="t">L2 每连接 SQLite</div>
+        <div class="d">跨重启的元数据缓存；命中即渲染，不必碰数据库。</div>
+        <div class="who">cache-aside 回写</div></div>
+      <div class="step2"><div class="idx">STEP 6</div><div class="t">L3 实时内省</div>
+        <div class="d">驱动按能力位内省（有没有独立 Schema 层由驱动声明）；结果回写 L2。</div>
+        <div class="who">MetadataService ▸ MetadataBrowser</div></div>
+      <div class="step2"><div class="idx">STEP 7</div><div class="t">回填渲染</div>
+        <div class="d">后台线程产出结果，主线程轮询取回；类别文件夹首批 200 条 + 「加载更多」。</div>
+        <div class="who">结果队列</div></div>
+      <div class="step2"><div class="idx">STEP 8</div><div class="t">顺手备好下一层</div>
+        <div class="d">表文件夹首次展开后，后台预取前 20 张表的列；连接成功后可提交预热（可取消、有进度）。</div>
+        <div class="who">预取 / 预热</div></div>
+    </div>
+    <div class="gate">
+      <b>三条纪律：</b>① render 期零 I/O（加载一律入队 + 回填）；② 缓存只增不删（清理只经显式「缓存管理」）；
+      ③ 层级的数据库差异只在服务层与驱动能力位，节点模型与渲染层不为类型分叉。
+    </div>
+  </section>
+
+  <!-- ══ 6. 连接行解剖 ══ -->
+  <section id="s6">
+    <div class="sec-head"><span class="no">06</span><h3>连接行解剖</h3><span class="tag">密度预算：常驻 ≤ 3 个元素</span></div>
+    <div class="anat scrollx">
+      <div class="row">
+        <span class="bdg">PG</span><span class="nm">生产 PG</span><span class="sc">GP</span><span class="ops">+ ✎</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span class="bdg off">MY</span><span class="nm">本地 MySQL</span><span class="sc">P</span><span class="ops">+ ✎</span>
+      </div>
+      <div class="marks">
+        <div><b>徽标颜色</b>：彩色 = 运行时可连；灰色 = 当前不可用</div>
+        <div><b>徽标形状 + 2 字母</b>：数据库类型（PG / MY / SQ / DK…）</div>
+        <div><b>名称</b>：<span class="mono">flex_1 + text_ellipsis</span>，长名截断不挤压</div>
+        <div><b>归属域列</b>：<span class="mono">P / G / GP</span>，右对齐成列，可在 ⋯ 关闭</div>
+        <div><b>行尾操作</b>：<span class="mono">+</span> 加标签 · <span class="mono">✎</span> 编辑，仅 hover / 选中显</div>
+        <div><b>标签</b>：默认不显示；开启后落在<b>名称下一行</b>，最多 2 个小 chip + <span class="mono">+N</span></div>
+      </div>
+    </div>
+    <p class="sec-sub" style="margin-top:12px">
+      面板头常驻五个动作：<span class="mono">＋</span> 新建数据源 · <span class="mono">🗂＋</span> 新建分组 · <span class="mono">⟳</span> 刷新选中连接 ·
+      <span class="mono">断开</span> · <span class="mono">⋯</span> 更多（刷新全部元数据 / 缓存管理… / 显示标签 / 显示归属域）。
+      分组头另给读数：色条 + 名称 + <b>健康度（已连 / 总数）</b> + 计数 + 一键全折叠。
+    </p>
+  </section>
+
+  <!-- ══ 7. 管线 ══ -->
+  <section id="s7">
+    <div class="sec-head"><span class="no">07</span><h3>四级取数管线</h3><span class="tag">cache-aside：命中即渲染，未命中才内省</span></div>
+    <div class="flow">
+      <div class="step2"><div class="idx">L1</div><div class="t">内存</div>
+        <div class="d">本会话已取过的节点；命中即返回，零磁盘零网络。</div>
+        <div class="who">会话级</div></div>
+      <div class="step2"><div class="idx">L2</div><div class="t">每连接 SQLite</div>
+        <div class="d">跨重启的元数据缓存，按存储域分区：项目 / 共享连接落 <span class="mono">project.db</span>，全局连接落 <span class="mono">global.db</span>。</div>
+        <div class="who">可迁移 · 带版本</div></div>
+      <div class="step2"><div class="idx">L3</div><div class="t">实时内省</div>
+        <div class="d">驱动 <span class="mono">MetadataBrowser</span> 直连目标库；<b>它不是缓存</b>，结果按 cache-aside 回写 L2。</div>
+        <div class="who">驱动能力位</div></div>
+      <div class="step2"><div class="idx">LAYER</div><div class="t">层级随类型</div>
+        <div class="d">有没有独立 Schema 层由驱动声明：MySQL / SQLite / DuckDB 无（Catalog 直接挂类别），PostgreSQL 有。</div>
+        <div class="who">渲染层不分叉</div></div>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th>数据库</th><th>树的实际层级</th><th>备注</th></tr>
+      <tr><td>MySQL</td><td class="mono">catalog → 表 / 视图 / 存储过程·函数 → 列</td><td>无独立 Schema 层</td></tr>
+      <tr><td>PostgreSQL</td><td class="mono">catalog（当前库） → schema → 表 / 视图 → 列</td><td>有独立 Schema 层</td></tr>
+      <tr><td>SQLite</td><td class="mono">main → 表 → 列</td><td>同 URL 多逻辑连接<b>共享同一物理连接</b>（别名）</td></tr>
+      <tr><td>DuckDB</td><td class="mono">main → 表 → 列</td><td>同上；分析资产归 M6，不在本模块</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 8. 刷新 · 预热 · 预取 ══ -->
+  <section id="s8">
+    <div class="sec-head"><span class="no">08</span><h3>刷新 · 预热 · 预取</h3><span class="tag">让「常用路径」先备好，同时一个字节都不删</span></div>
+    <div class="grid g3">
+      <div class="card">
+        <h4><span class="ico">⟳</span>刷新粒度</h4>
+        <ul>
+          <li><span class="mono">⟳</span>：刷新当前选中连接</li>
+          <li><span class="mono">⋯ → 刷新全部元数据</span>：清掉已加载子节点后重载仍展开的连接根</li>
+          <li>节点右键 → 刷新元数据：只重建该范围</li>
+          <li><b>保留展开态</b>，重新渲染时按需再懒加载</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">≋</span>预热（连接成功后）</h4>
+        <ul>
+          <li>提交后台内省 catalogs / schemas 写入 L2</li>
+          <li>进度可见：面板头显示「预热 n/m」，可<b>取消</b></li>
+          <li>不阻塞 UI：进度是原子量，主线程轮询重绘</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">▤</span>邻接预取</h4>
+        <ul>
+          <li>表 / 视图文件夹首次展开后，后台预取<b>前 20 张表</b>的列</li>
+          <li>失败静默——预取是加成，不是前置条件</li>
+          <li>大 schema 另有 200 条分页 + 「加载更多」兜底</li>
+        </ul>
+        <div class="foot">缓存只增不删：唯一删除入口是 <span class="mono">⋯ → 缓存管理…</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 9. 属性面板 ══ -->
+  <section id="s9">
+    <div class="sec-head"><span class="no">09</span><h3>属性面板：事实的唯一权威位</h3><span class="tag">DBeaver 对标，停靠编辑区右侧</span></div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">▤</span>怎么打开</h4>
+        <ul>
+          <li>双击任意对象（连接 / 库 / schema / 表 / 视图 / 列 / 例程…）</li>
+          <li>或按 <kbd>Enter</kbd> / <kbd>F4</kbd></li>
+          <li>面板填充编辑区<b>右侧</b>：分隔条可拖拽、<b>宽度记忆</b></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">≡</span>为什么放这里</h4>
+        <ul>
+          <li>行内已经排满三个事实位，细节不该再挤进树</li>
+          <li>配置类信息归对话框，事实类信息归面板——一问一主</li>
+          <li>驱动名、完整类型、地址这些都在这，行内只用形状与颜色示意</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 10. 键盘 / 右键 / 拖拽 ══ -->
+  <section id="s10">
+    <div class="sec-head"><span class="no">10</span><h3>键盘 · 右键 · 拖拽</h3><span class="tag">键盘能走完，右键都给到</span></div>
+    <div class="grid g2" style="margin-bottom:12px">
+      <div class="card">
+        <h4><span class="ico">⌨</span>快捷键（焦点在面板内）</h4>
+        <table style="box-shadow:none;border:none;background:transparent">
+          <tr><td style="padding-left:0"><kbd>Ctrl</kbd> + <kbd>F</kbd></td><td>聚焦导航搜索框（会自动切到本面板）</td></tr>
+          <tr><td style="padding-left:0"><kbd>↑</kbd> / <kbd>↓</kbd></td><td>在可见节点间移动<b>光标</b></td></tr>
+          <tr><td style="padding-left:0"><kbd>→</kbd> / <kbd>←</kbd></td><td>展开 / 折叠当前节点</td></tr>
+          <tr><td style="padding-left:0"><kbd>Enter</kbd> / <kbd>F4</kbd></td><td>打开当前节点的属性面板</td></tr>
+          <tr><td style="padding-left:0"><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd></td><td>把选中<b>连接</b>在所属容器内上移 / 下移一位</td></tr>
+          <tr><td style="padding-left:0"><kbd>Esc</kbd></td><td>清空搜索（在搜索框内时）</td></tr>
+        </table>
+        <div class="foot">连接行单击即自动聚焦面板；<kbd>Alt+↑↓</kbd> 只对连接行生效——对象顺序由后端内省给出，不能重排。</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⇢</span>拖拽即组织</h4>
+        <ul>
+          <li>连接行 → <b>分组头</b>：归组；拖到「未分组」头 = 移出全部分组</li>
+          <li>连接行 → <b>另一连接行</b>：插到该行之前（组内外同理）</li>
+          <li>分组头 → <b>分组头</b>：调整分组顺序</li>
+          <li>表 / 视图 → <b>SQL 编辑区</b>：插入限定名并聚焦</li>
+        </ul>
+        <div class="foot">每次落库都是「整容器一次性写 <span class="mono">0..n</span>」，保证序号完整、与屏上顺序一致。</div>
+      </div>
+    </div>
+
+    <div class="ctxwrap">
+      <div class="ctxmenu">
+        <div class="cap">右键 · 连接节点</div>
+        <div class="mi">连接 / 断开</div>
+        <div class="mi">测试连接<span class="k">独立会话 · 不写库</span></div>
+        <div class="mi">编辑连接…</div>
+        <div class="mi">查看属性</div>
+        <div class="sep"></div>
+        <div class="mi">移动到分组…</div>
+        <div class="mi">设为主组 ▸</div>
+        <div class="sep"></div>
+        <div class="mi">复制连接（模板）…<span class="k">不含密码</span></div>
+        <div class="mi">共享至项目<span class="k">仅 G_</span></div>
+        <div class="mi">取消共享<span class="k">仅 GP_</span></div>
+        <div class="mi">删除连接<span class="k">二次确认</span></div>
+        <div class="sep"></div>
+        <div class="mi">复制名称</div>
+        <div class="mi">刷新元数据</div>
+      </div>
+
+      <div class="ctxmenu">
+        <div class="cap">右键 · 通用模块入口（所有节点都有）</div>
+        <div class="mi">在 SQL 编辑器中打开<span class="k">选中该连接 + 聚焦编辑区</span></div>
+        <div class="mi">查看洞察<span class="k">右 Dock 切到 Insight</span></div>
+        <div class="sep"></div>
+        <div class="cap">右键 · 表 / 视图专属</div>
+        <div class="mi">查看数据<span class="k">SELECT * … LIMIT 200</span></div>
+        <div class="mi">生成 SQL ▸<span class="k">INSERT / UPDATE / DELETE 模板</span></div>
+        <div class="mi">生成 Mock 数据<span class="k">右 Dock 切到 Mock</span></div>
+        <div class="mi">复制名称 / 限定名</div>
+      </div>
+
+      <div class="ctxmenu">
+        <div class="cap">右键 · 分组节点</div>
+        <div class="mi">新建分组<span class="k">表单：名称 + 描述</span></div>
+        <div class="mi">重命名分组<span class="k">行内</span></div>
+        <div class="mi">编辑分组…<span class="k">表单：名称 + 描述</span></div>
+        <div class="mi">上移分组 / 下移分组<span class="k">边界置灰</span></div>
+        <div class="sep"></div>
+        <div class="mi">删除分组<span class="k">不删成员连接与缓存</span></div>
+        <div class="mi">在此新建连接</div>
+        <div class="mi">折叠 · 折叠其他</div>
+        <div class="foot" style="padding:6px 10px 2px;font-size:11px;color:var(--muted)">「未分组」只给「新建分组」。</div>
+      </div>
+    </div>
+    <div class="gate" style="margin-top:12px">
+      <b>只注入不执行：</b>「查看数据」与「生成 SQL ▸」都只把 SQL 放进编辑区草稿；写语句更不该替用户跑。
+      表 / 视图的列由后台任务取，命中 L2 就不发查询。
+    </div>
+  </section>
+
+  <!-- ══ 11. 架构 ══ -->
+  <section id="s11">
+    <div class="sec-head"><span class="no">11</span><h3>架构 · 视图自带，能力靠端口</h3><span class="tag">依赖只向下，面板不反向依赖工作台</span></div>
+    <div class="layers">
+      <div class="layer"><div class="tag">数据链路</div><div class="body">
+        浏览一个对象：<span class="mono">NavView → nav_jobs（工作线程）→ NavigatorService → MetadataService → 驱动 MetadataBrowser → 目标库</span>
+      </div></div>
+      <div class="layer"><div class="tag">组织数据</div><div class="body">
+        <span class="mono">NavView → nav_store → ConnectionOrgStore → project.db / global.db</span>；
+        分组（含 <span class="mono">is_primary</span>）与标签是独立表，按存储域分区
+      </div></div>
+      <div class="layer"><div class="tag">视图状态</div><div class="body">
+        展开 / 选中 / 过滤存 <span class="mono">navigator_state</span>：项目 / 共享连接落 <span class="mono">project.db</span>，全局连接落 <span class="mono">global.db</span>；
+        跨重启保留，运行时连接<b>不</b>保留
+      </div></div>
+      <div class="layer"><div class="tag">徽标来源</div><div class="body">
+        <span class="mono">engine::persistence::driver_catalog</span> 读 <span class="mono">drivers</span> 表 → 类型形状与驱动显示名（一次性加载，渲染期零 I/O）
+      </div></div>
+      <div class="layer"><div class="tag">无中间层</div><div class="body">
+        进程内直连驱动，<b>无 HTTP / 无 IPC</b>；元数据走两级缓存，组织数据走 SQLite
+      </div></div>
+    </div>
+
+    <h3 style="font-size:15px;font-weight:700;margin:20px 0 8px">依赖方向（硬约束）</h3>
+    <div class="dep">
+      <code>app</code> ▸ <code>Feature crates</code> ▸ <code>engine</code> ▸ <code>shared</code>
+      <span>·</span><code>Feature ▸ gpui-kit</code>
+      <span>·</span><code>Feature ▸ workbench_shell</code>
+      <span>·</span><code>任何 crate ▸ paths</code>
+    </div>
+
+    <h3 style="font-size:15px;font-weight:700;margin:20px 0 8px">本模块：视图在 <span class="mono">crates/database</span> 内自带</h3>
+    <div class="layers">
+      <div class="layer"><div class="tag">nav_view.rs</div><div class="body">
+        <b>NavView</b> 实体：面板头 / 分组树 / 连接行 / 对象树 / 右键 / 拖拽 / 行内编辑
+      </div></div>
+      <div class="layer"><div class="tag">nav_host.rs</div><div class="body">
+        <b>NavHost</b> 端口（宿主实现）:连接清单与选中 · 项目根 · 提示与重绘 · 视图偏好 · 连接生命周期 · 需要窗口的对话框
+      </div></div>
+      <div class="layer"><div class="tag">nav_store.rs</div><div class="body">
+        标签 / 分组 / 排序 / 导航状态落库——只依 <span class="mono">engine</span> + 项目根，<b>不进端口</b>
+      </div></div>
+      <div class="layer"><div class="tag">nav_jobs.rs</div><div class="body">
+        后台任务：加载 / 预热 / 预取 / 生成 SQL / 测试连接（单一工作线程 + 结果队列 + 原子进度）
+      </div></div>
+      <div class="layer"><div class="tag">其余</div><div class="body">
+        <span class="mono">navigator_service</span> 层级与懒加载编排 · <span class="mono">metadata_service</span> 内省调用 ·
+        <span class="mono">model / cache</span> 节点模型与 L2 读写 · <span class="mono">property_panel</span> 属性投影 · <span class="mono">commands</span> 键盘动作
+      </div></div>
+    </div>
+
+    <div class="gate" style="margin-top:12px">
+      <b>为什么单独说这件事：</b>面板视图以前住在工作台里，要穿过共享状态与一堆工作台服务。
+      视图下沉后，它<b>只认一个自己定义的 trait</b>（<span class="mono">NavHost</span>）：落库、驱动目录、对象树元数据这些「只依引擎」的能力不进端口，直接调。
+      于是依赖单向、面板可独立演进与测试，工作台侧只剩「持有实体 + 转发渲染」。
+    </div>
+  </section>
+
+  <!-- ══ 12. 质量与证据 ══ -->
+  <section id="s12">
+    <div class="sec-head"><span class="no">12</span><h3>质量与证据</h3><span class="tag">不靠自觉，靠契约与真机回归</span></div>
+    <div class="grid g3">
+      <div class="card">
+        <h4><span class="ico">✓</span>契约测试兜底</h4>
+        <ul>
+          <li>结构尺寸必须等于设计值，常量单一来源在 <span class="mono">workbench_shell::ui</span></li>
+          <li>视图源码<b>零裸色值、零裸 px</b>；下沉后仍登记在同一份扫描清单</li>
+          <li>共享状态字段白名单：新增必须显式登记</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">▦</span>纯函数优先</h4>
+        <ul>
+          <li>可测判定都拍成纯函数：搜索 facet 解析、类型徽标映射、限定名拼接、节点子键、归属域推导</li>
+          <li>导航模型与缓存往返都有单测（<span class="mono">model.rs</span> / <span class="mono">cache.rs</span>）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">◈</span>真机回归</h4>
+        <ul>
+          <li>四类数据库 × 项目 / 全局 / 共享，按<b>树的实际层级</b>逐条核对</li>
+          <li>每轮真实端点跑出的问题 → 结论 → 文档与测试同步（见开发方案逐轮记录）</li>
+        </ul>
+        <div class="foot">验收清单见使用手册 §9。</div>
+      </div>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th>数据库</th><th>真机树形（回归样例）</th></tr>
+      <tr><td>MySQL</td><td class="mono">mall_business → 表 (7) / 存储过程·函数 (4) → order → 16 列</td></tr>
+      <tr><td>PostgreSQL</td><td class="mono">postgres → public → 表 (12) / 视图 (1) → inventory_ledger → 7 列</td></tr>
+      <tr><td>SQLite</td><td class="mono">main → 表 (25) → attachment → 8 列</td></tr>
+      <tr><td>DuckDB</td><td class="mono">main → 表 (8) → cities → 列</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 13. 边界 ══ -->
+  <section id="s13">
+    <div class="sec-head"><span class="no">13</span><h3>边界 · 这些事它不做</h3><span class="tag">越界会把导航变成第二个入口中心</span></div>
+    <table>
+      <tr><th style="width:30%">做</th><th>不做</th></tr>
+      <tr>
+        <td>数据源的<b>组织视图</b>（归属域 / 分组 / 标签 / 筛选 / 搜索）</td>
+        <td>连接<b>新建 / 编辑对话框本体</b> → M3 连接模块（本面板只给入口）</td>
+      </tr>
+      <tr>
+        <td>对象树<b>懒加载与两级缓存</b>、刷新、预热、预取</td>
+        <td>SQL 编辑器 / Mock / 洞察的<b>本体</b> → 各自模块（本面板只给右键入口）</td>
+      </tr>
+      <tr>
+        <td>连接 / 断开、缓存管理、<b>属性面板</b></td>
+        <td>DuckDB <b>分析表与分析资产</b> → M6 资产库</td>
+      </tr>
+      <tr>
+        <td>常驻的模块入口（在 SQL 编辑器中打开 · 查看洞察 · 生成 Mock 数据）</td>
+        <td>分析资产 <code>use_duckdb_fed</code> 联邦开关等 <b>M6/M7 的领域开关</b>（仅作展示）</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ══ 14. 文档地图 ══ -->
+  <section id="s14">
+    <div class="sec-head"><span class="no">14</span><h3>文档地图</h3><span class="tag">想深入哪一块，从这里进</span></div>
+    <table>
+      <tr><th>文档</th><th>什么时候读它</th></tr>
+      <tr><td><a href="README.md">模块入口 README</a></td><td>先看特点 / 边界 / 硬约束 / 代码地图（本文是它的宣传版）</td></tr>
+      <tr><td><a href="database-navigator-architecture.md">架构</a></td><td><b>为什么这样设计 / 怎么运转</b>：心智模型、分层与 render 零 I/O、五条数据流、降级容错、已知问题（权威）</td></tr>
+      <tr><td><a href="database-navigator-prototype-design.md">原型设计</a></td><td><b>长什么样</b>：面板布局、连接行解剖、双通道徽标、树模型、三级管线、右键菜单、主题映射</td></tr>
+      <tr><td><a href="database-navigator-prototype.html">交互示意稿</a></td><td>可点击的明暗双主题原型</td></tr>
+      <tr><td><a href="database-navigator-user-guide.md">使用手册</a></td><td><b>怎么用</b>：界面导览、典型流程、快捷键、显示开关、FAQ、验收清单</td></tr>
+      <tr><td><a href="database-nav-dev-plan.md">开发方案</a></td><td><b>做到哪了</b>：任务逐项状态、逐轮实现记录与踩坑、迁移与表、测试场景</td></tr>
+      <tr><td><a href="../connection/README.md">M3 连接模块</a></td><td>上游：连接的新建 / 编辑与作用域路由</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 页脚 ══ -->
+  <div class="foot">
+    <div class="doclinks">
+      <a href="database-navigator-showcase.md">可贴版（Markdown）</a>
+      <a href="database-navigator-prototype.html">交互稿</a>
+      <a href="README.md">模块入口</a>
+    </div>
+    <b>RdataStation v2 · M4 数据源管理 / 数据库导航</b>——本页是<b>宣传向速览</b>（自包含、离线可开、明暗双主题），
+    章节与 <a href="database-navigator-showcase.md">可贴版</a> 一一对应。
+    权威口径以架构文档与原型设计为准；配色取自产品主题（coral 主色 + 灰度分层）。
+  </div>
+
+</div>
+
+<script>
+/* 主题：light ⇄ dark，默认跟随系统一次（首帧即按系统定色）。 */
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('rds-showcase-theme', t); } catch (e) {}
+}
+function toggleTheme(){
+  var cur = document.documentElement.getAttribute('data-theme');
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+}
+(function initTheme(){
+  var saved = null;
+  try { saved = localStorage.getItem('rds-showcase-theme'); } catch (e) {}
+  if (saved) { applyTheme(saved); return; }
+  var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+})();
+
+/* 首屏线框：归属域 chips 过滤连接行 + 两个显示开关（对应面板 ⋯ 里的「显示标签 / 显示归属域」）。 */
+(function wireMock(){
+  var facets = document.getElementById('facets');
+  var tree = document.getElementById('tree');
+  var rows = tree.querySelectorAll('.crow');
+  var groups = tree.querySelectorAll('[data-group]');
+
+  facets.addEventListener('click', function(e){
+    var btn = e.target.closest('.facet');
+    if (!btn) return;
+    facets.querySelectorAll('.facet').forEach(function(b){ b.classList.remove('on'); });
+    btn.classList.add('on');
+    var want = btn.dataset.scope;
+    rows.forEach(function(r){
+      r.classList.toggle('hidden', want !== 'all' && r.dataset.scope !== want);
+    });
+    // 分组头在过滤时一并隐藏（示意：真实面板里空分组会保留但计数为 0）
+    groups.forEach(function(g){ g.classList.toggle('hidden', want !== 'all'); });
+  });
+
+  document.getElementById('optTags').addEventListener('change', function(e){
+    tree.querySelectorAll('.tagrow').forEach(function(t){ t.classList.toggle('hidden', !e.target.checked); });
+  });
+  document.getElementById('optScope').addEventListener('change', function(e){
+    tree.querySelectorAll('.scopecol').forEach(function(s){ s.classList.toggle('hidden', !e.target.checked); });
+  });
+
+  /* 标签行默认隐藏（与真实默认一致：⋯ → 显示标签 关闭） */
+  tree.querySelectorAll('.tagrow').forEach(function(t){ t.classList.add('hidden'); });
+})();
+
+/* 吸顶导航：高亮当前章节 */
+(function wireNav(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  var targets = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function onScroll(){
+    var y = window.scrollY + 90, idx = 0;
+    targets.forEach(function(t, i){ if (t && t.offsetTop <= y) idx = i; });
+    links.forEach(function(a, i){ a.classList.toggle('on', i === idx); });
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+})();
+</script>
+</body>
+</html>

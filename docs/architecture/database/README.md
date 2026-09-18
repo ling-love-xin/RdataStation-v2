@@ -5,6 +5,9 @@
 > 本文只提炼**特点 / 边界 / 硬约束 / 地图**；细节一律指向下方文档（本目录内），**不复制设计**。
 > 状态：Phase A/B/C + v6/v7 主线完成（2026-09-14）。已知缺口与排期**唯一权威**是架构文档 §11。
 >
+> **想快速了解这个模块**：先看宣传版 [`database-navigator-showcase.html`](database-navigator-showcase.html)（视觉版，离线可开、明暗双主题、首屏可切归属域）
+> 或 [`database-navigator-showcase.md`](database-navigator-showcase.md)（可贴版）——它们与本文是同一套事实的不同讲法。
+>
 > **边界**：本模块只管理**数据源与元数据**。连接的新建/编辑对话框属 M3 连接模块；SQL 编辑器 / Mock / 洞察只在本面板提供**入口**，本体属各自模块；DuckDB 分析表与分析资产归 M6。
 
 ## 1. 模块特点
@@ -51,8 +54,8 @@
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
 | **纯函数优先** | 可测判定拍成纯函数：`parse_nav_search` / `nav_type_badge` / `nav_type_short_label` / `nav_qualified_name` / `NavNode::child_key` / `NavSource::{from_conn_id,from_key}` | 架构 §9 |
-| **一段一职责** | 面板状态（`DatabaseNavView`）/ 后台任务（`nav_jobs`）/ 运行时入口（`nav_runtime`）/ 视图状态持久化（`nav_store`）各归其位 | 架构 §10 |
-| **文档六件套** | README（本文）+ 架构 + 原型 + 交互稿 + 开发方案 + 使用手册 | `../README.md` |
+| **一段一职责** | 面板实体（`nav_view`）/ 宿主端口（`nav_host`）/ 后台任务（`nav_jobs`）/ 存储门面（`nav_store`）/ 键盘动作（`commands`）各归其位 | 架构 §10 |
+| **文档齐全** | README（本文）+ 架构 + 原型 + 交互稿 + 开发方案 + 使用手册 + **宣传页两版**（`*-showcase.html` / `.md`） | `../README.md` |
 | **真机反馈成文** | 每轮用真实端点（4 类数据库 × P/G/GP）回归，问题 → 结论 → 文档与测试同步 | dev-plan §0 |
 
 ## 2. 边界
@@ -64,21 +67,25 @@
 
 | 想改 | 去哪 |
 | --- | --- |
-| 面板布局 / 连接行 / 树渲染 / 右键菜单 | `crates/workbench/src/panels/`（`SidebarPanel::{render_database_nav, render_nav_tree, render_connection_row, render_nav_node}`） |
+| 面板布局 / 连接行 / 树渲染 / 右键菜单 | `crates/database/src/nav_view.rs`（`NavView::{render_nav, render_nav_tree, render_connection_row, render_nav_node}`） |
+| 宿主编排（连接清单 / 选中 / 提示 / 偏好 / 对话框） | 端口定义 `crates/database/src/nav_host.rs` + 宿主实现 `crates/workbench/src/components/nav_host.rs` |
 | 属性面板渲染 | `crates/workbench/src/panels/editor.rs::EditorPanel::render_property_panel` + `crates/database/src/property_panel.rs` |
-| 左 / 右 Dock 装配、面板事件订阅 | `crates/workbench/src/view.rs`（`LeftPanel` / `RightPanel` / `init_workspace`） |
-| 后台加载 / 预热 / 预取队列 | `crates/workbench/src/services/nav_jobs.rs` |
-| 连接 / 断开 / 标签 / 分组入口 | `crates/workbench/src/services/nav_runtime.rs` |
-| 展开态 / 选中 / 过滤持久化 | `crates/workbench/src/services/nav_store.rs` |
+| 左 / 右 Dock 装配、面板实体持有 | `crates/workbench/src/view.rs` + `crates/workbench/src/panels/mod.rs`（只转发渲染） |
+| 后台加载 / 预热 / 预取队列 | `crates/database/src/nav_jobs.rs` |
+| 连接 / 断开 / 隔离探测（桥接实现） | `crates/workbench/src/services/nav_runtime.rs`（经 `NavHost` 调用） |
+| 标签 / 分组 / 排序入口 | `crates/database/src/nav_store.rs` → `crates/engine/src/persistence/connection_org_store.rs` |
+| 展开态 / 选中 / 过滤持久化 | `crates/database/src/nav_store.rs` → `crates/engine/src/persistence/navigator_state.rs` |
+| 驱动目录（徽标形状 / 驱动名） | `crates/engine/src/persistence/driver_catalog.rs` |
 | 树层级 / 懒加载 / 刷新粒度 | `crates/database/src/navigator_service.rs` |
-| 树节点模型 / 来源短码 / 路径 | `crates/database/src/model.rs` |
+| 树节点模型 / 归属域短码 / 路径 | `crates/database/src/model.rs` |
 | L2 缓存读写 | `crates/database/src/cache.rs` |
 | 内省调用（catalog/schema/table/column…） | `crates/database/src/metadata_service.rs` |
 | 各数据库内省实现 / 能力位 | `crates/engine/src/driver/native/{mysql,postgres,sqlite,duckdb}.rs`（`MetadataBrowser`） |
-| 分组 / 标签表与读写 | `crates/engine/src/persistence/connection_org_store.rs` |
+| 键盘动作（↑↓ / F4 / Alt+↑↓） | `crates/database/src/commands.rs` |
 | 尺寸常量 | `crates/workbench_shell/src/ui.rs` |
 
-数据链路：`SidebarPanel（导航面板）→ nav_jobs（后台工作线程）→ NavigatorService → MetadataService → 驱动 MetadataBrowser → 目标数据库`；组织数据（分组 / 标签）走 `ConnectionOrgStore → project.db / global.db`。**无 HTTP / IPC 层**。
+数据链路：`NavView（导航面板）→ nav_jobs（后台工作线程）→ NavigatorService → MetadataService → 驱动 MetadataBrowser → 目标数据库`；
+组织数据（分组 / 标签）走 `nav_store → ConnectionOrgStore → project.db / global.db`；视图状态走 `nav_store → navigator_state`。**无 HTTP / IPC 层**。
 
 ## 4. 改这个模块前必须遵守
 
@@ -104,7 +111,7 @@ cargo test -p rds-workbench --test ui_contract -j 2
 cargo check --workspace --all-targets -j 2
 ```
 
-- 基准（2026-09-14 实测）：`rds-engine --lib` 249 / `rds-database --lib` 6 / `rds-workbench --lib` 52 全绿；`check --workspace --all-targets -j 2` 零错误。
+- 快照（2026-09-19）：`rds-database --lib` 20 / `rds-workbench --lib` 70 全绿；`ui_contract` 7/7（含尺寸与颜色两份清单，已覆盖下沉后的 `crates/database/src/nav_view.rs`）。数字随迭代变化，跑一次即准。
 - 导航模型单测在 `crates/database/src/{model.rs,cache.rs}`（来源短码、`child_key`、schema 缓存往返）。
 - **真机回归**（4 类数据库 × 项目 / 全局 / 共享，均按树的实际层级核对）：
 
@@ -126,6 +133,8 @@ cargo check --workspace --all-targets -j 2
 | `database-navigator-user-guide.md` | **怎么用**：入口 / 界面导览（连接行怎么读 · 状态色 · 类型形状 · 层级）/ 典型流程 / 快捷键 / 显示开关 / FAQ / 验收清单 |
 | `database-nav-dev-plan.md` | **做到哪了**：Phase A/B/C 与 v6/v7 任务逐项状态、逐轮实现记录与踩坑、迁移与表、测试场景、风险 |
 | `database-navigator-prototype.html` | 可交互示意稿（明暗双主题；密度对比） |
+| `database-navigator-showcase.html` | **宣传版（视觉）**：一页看懂特点 / 剧本 / 流程 / 架构；自包含、离线可开、首屏可在归属域 facet 间切换 |
+| `database-navigator-showcase.md` | **宣传版（可贴）**：同上内容的纯文本版，章节一一对应，适合贴 PR / wiki |
 | `../connection/README.md` | 上游：连接的新建 / 编辑与作用域路由（M3） |
 
 ## 7. 下一步（摘要，权威见架构 §11）
