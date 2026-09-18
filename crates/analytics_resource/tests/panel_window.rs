@@ -23,8 +23,8 @@ use rds_analytics_resource::detail_view::{ArchiveDetail, ArchiveTagChip, DetailA
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use rds_analytics_resource::resource_view::{
-    ArchiveCounts, ArchiveRow, HeaderMenuAction, ResourcesHost, ResourcesPanel, ResourcesSnapshot,
-    RowClick, TagOption, dispatch_header_action,
+    ArchiveCounts, ArchiveRow, GroupOption, HeaderMenuAction, ResourcesHost, ResourcesPanel,
+    ResourcesSnapshot, RowClick, TagOption, dispatch_header_action,
 };
 
 /// 宿主替身：只记录调用，不接真实服务（窗口测试不碰后端）。
@@ -127,6 +127,7 @@ fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> Arch
         status,
         tail: "1.2 KB · 3 天前".to_string(),
         tag_ids: Vec::new(),
+        folder_id: None,
     }
 }
 
@@ -155,6 +156,7 @@ fn snapshot(rows: Vec<ArchiveRow>, read_only: bool) -> ResourcesSnapshot {
         read_only,
         details,
         tags: Vec::new(),
+        groups: Vec::new(),
     }
 }
 
@@ -825,6 +827,52 @@ fn header_more_button_sits_in_the_header_and_dispatches_host_actions(
             .map(|(_, call)| call.to_string())
             .collect::<Vec<_>>()
     );
+}
+
+/// 分组折叠区（原型 §2.4）：分区渲染 + 折叠只影响行的出场。
+#[gpui_kit::test]
+fn group_section_headers_render_and_collapsing_hides_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let mut grouped = row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    grouped.folder_id = Some("af_1".to_string());
+    let loose = row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    let mut snapshot = snapshot(vec![grouped, loose], false);
+    snapshot.groups = vec![GroupOption {
+        id: "af_1".to_string(),
+        name: "月报".to_string(),
+    }];
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_snapshot(snapshot, cx));
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+
+    assert!(cx.debug_bounds("archive-group-__all__").is_some());
+    assert!(cx.debug_bounds("archive-group-__ungrouped__").is_some());
+    assert!(cx.debug_bounds("archive-group-af_1").is_some());
+
+    // 折叠「月报」：它的行从列表里消失，但行集合（`view_rows`）不变——
+    // 折叠是呈现层的事，不能把行从筛选结果里删掉（否则选中 / 多选会被误清）。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.toggle_group_collapse("af_1", cx));
+    });
+    assert_eq!(cx.update(|_window, cx| panel.read(cx).view_rows().len()), 2);
+    let items = cx.update(|_window, cx| panel.read(cx).view_items().len());
+    assert_eq!(items, 4, "三个头 + 未分组那一行（月报那一行被折掉）");
+    assert!(cx.debug_bounds("archive-group-af_1").is_some(), "头还在（否则展不开）");
+
+    // 再展开回去。
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.toggle_group_collapse("af_1", cx));
+    });
+    assert_eq!(cx.update(|_window, cx| panel.read(cx).view_items().len()), 5);
 }
 
 /// 标签筛选维：勾上就窄，标签被删后条件自动抹掉（否则列表“什么都没匹配”而勾还在）。

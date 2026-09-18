@@ -67,6 +67,9 @@ pub const TRASH_COL_TIME: f32 = 7.5;
 pub const TRASH_COL_SIZE: f32 = 4.0;
 /// 见 [`TRASH_COL_NAME`]（两个小按钮：还原 / 永久删除）。
 pub const TRASH_COL_ACTION: f32 = 9.0;
+/// 分组头色条宽（2px；与 `workbench_shell::ui::NAV_GROUP_BAR_WIDTH` 同值，
+/// 但常量在本 crate 声明——视图随能力同 crate，与 `ui.rs` 其余常量的口径一致）。
+pub const GROUP_BAR_WIDTH: f32 = 0.125;
 /// 标签对话框宽（26.0rem = 416px；表单型小对话框：列表 + 一个输入行）。
 pub const TAG_DIALOG_WIDTH: f32 = 26.0;
 /// 标签列表最大高度（16.0rem = 256px）：标签可能几十个，靠滚动而不是加高对话框。

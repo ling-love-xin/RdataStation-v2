@@ -44,7 +44,7 @@ use gpui_kit::assets::IconName as CatalogIcon;
 
 use crate::commands;
 use crate::detail_view::ArchiveDetail;
-use crate::filter::{self, ResourcesFilter, SortField, SortOrder};
+use crate::filter::{self, ResourcesFilter, SortField, SortOrder, VisibleItem};
 use crate::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use crate::ui;
 
@@ -62,6 +62,21 @@ pub struct ArchiveRow {
     pub tail: String,
     /// 这行挂的标签 id（筛选的标签维用它；名字会改，所以比的是 id）。
     pub tag_ids: Vec<String>,
+    /// 这行归属的分组（`None` = 未分组）。
+    ///
+    /// 单层分组（架构 D8）：最多一个，所以是 `Option` 而不是集合——类型上就把
+    /// “一个资源同时属于两个分组”这种不存在的状态挡掉。
+    pub folder_id: Option<String>,
+}
+
+/// 分组字典项（分组折叠区与「移动到分组」菜单共用）。
+///
+/// 不带成员数：计数在渲染前从**当前可见行**现算（见 `filter::build_visible_items`），
+/// 这样筛选后头里的数就是眼前的行数，不会出现“头说 5 行、列表里只有 2 行”。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupOption {
+    pub id: String,
+    pub name: String,
 }
 
 /// 标签字典项（筛选菜单与打标对话框共用）。
@@ -133,6 +148,8 @@ pub struct ResourcesSnapshot {
     pub details: std::collections::HashMap<String, ArchiveDetail>,
     /// 标签字典（全部存活标签 + 用量）：筛选菜单与打标对话框共用，快照里带一份就不必再查库。
     pub tags: Vec<TagOption>,
+    /// 分组字典（全部存活分组 + 成员数，按名字升序）：分组折叠区与「移动到分组」菜单共用。
+    pub groups: Vec<GroupOption>,
 }
 
 /// 复现强度徽标文案（原型 §3.2：**行内唯一的颜色信号**）。
@@ -455,7 +472,8 @@ struct ArchiveListDelegate {
     host: Rc<dyn ResourcesHost>,
     /// 面板句柄（选中变化回传；面板已销毁时静默丢弃）。
     panel: WeakEntity<ResourcesPanel>,
-    rows: Vec<ArchiveRow>,
+    /// 可见项（分组头 + 行）：分区渲染后列表的“行”就是它们。
+    items: Vec<VisibleItem>,
     /// 行 id → 详情：右键菜单发起取回时要用整条详情（`render_item` 里读不了面板，只能提前拷一份）。
     details: std::collections::HashMap<String, ArchiveDetail>,
     /// 选中的行 id（面板是语义权威，这里是渲染与漫游的锚点）。
@@ -473,17 +491,17 @@ struct ArchiveListDelegate {
 }
 
 impl ArchiveListDelegate {
-    /// 面板推送可见行（快照 / 筛选 / 排序变化时调用）。
+    /// 面板推送可见项（快照 / 筛选 / 排序 / 折叠变化时调用）。
     fn set_rows(
         &mut self,
-        rows: Vec<ArchiveRow>,
+        items: Vec<VisibleItem>,
         details: std::collections::HashMap<String, ArchiveDetail>,
         selected_id: Option<String>,
         multi_ids: std::collections::HashSet<String>,
         read_only: bool,
         cx: &mut Context<ListState<Self>>,
     ) {
-        self.rows = rows;
+        self.items = items;
         self.details = details;
         self.selected_id = selected_id;
         self.multi_ids = multi_ids;
@@ -496,9 +514,81 @@ impl ArchiveListDelegate {
         self.multi_ids.len() > 1 && self.multi_ids.contains(id)
     }
 
-    /// 索引 → 行（越界返回 `None`：行集合刚变的那一帧可能还拿着旧索引）。
+    /// 可见行（跳过分组头）：选择集顺序、行内菜单都按它算。
+    fn visible_rows(&self) -> impl Iterator<Item = &ArchiveRow> {
+        self.items.iter().filter_map(|item| match item {
+            VisibleItem::Row(row) => Some(row),
+            VisibleItem::GroupHeader { .. } => None,
+        })
+    }
+
+    /// 索引 → 行（越界或落在分组头上则 `None`：行集合刚变的那一帧可能还拿着旧索引）。
     fn row_at(&self, ix: IndexPath) -> Option<&ArchiveRow> {
-        self.rows.get(ix.row)
+        match self.items.get(ix.row) {
+            Some(VisibleItem::Row(row)) => Some(row),
+            _ => None,
+        }
+    }
+
+    /// 分组头（原型 §2.4）：色条 + 折叠三角 + 名称 + 计数；点整行折叠 / 展开。
+    fn render_group_header(
+        &self,
+        key: &str,
+        label: &str,
+        count: usize,
+        depth: u8,
+        collapsed: bool,
+        cx: &mut Context<ListState<Self>>,
+    ) -> ListItem {
+        let (bar, muted, fg) = {
+            let colors = cx.theme().colors;
+            (colors.list_active_border, colors.muted_foreground, colors.foreground)
+        };
+        let panel = self.panel.clone();
+        let key_owned = key.to_string();
+        let chevron = if collapsed { "▸" } else { "▾" };
+        let list_id = format!("archive-group-{key}");
+        let debug_id = list_id.clone();
+        ListItem::new(SharedString::from(list_id.clone())).child(
+            div()
+                .id(SharedString::from(format!("{list_id}-row")))
+                .debug_selector(move || debug_id.clone())
+                .w_full()
+                .h(rems(ui::ROW_HEIGHT))
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .when(depth > 0, |row| row.pl_2())
+                .cursor_pointer()
+                .on_click(move |_, _window, cx| {
+                    // 头不是行：不参与选中（面板的选中永远指向一条存档）。
+                    cx.stop_propagation();
+                    let key = key_owned.clone();
+                    let _ = panel.update(cx, |panel, cx| panel.toggle_group_collapse(&key, cx));
+                })
+                .child(
+                    // 2px 色条：`list_active_border`（原型 §6——不用 `sidebar_accent`：
+                    // 那个角色在浅色下与面板底几乎同色）。
+                    div().w(rems(ui::GROUP_BAR_WIDTH)).h(rems(1.0)).flex_none().bg(bar),
+                )
+                .child(div().flex_none().text_xs().text_color(muted).child(chevron))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_ellipsis()
+                        .text_color(if depth == 0 { fg } else { muted })
+                        .child(label.to_string()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(format!("{count}")),
+                ),
+        )
     }
 }
 
@@ -506,7 +596,7 @@ impl ListDelegate for ArchiveListDelegate {
     type Item = ListItem;
 
     fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.rows.len()
+        self.items.len()
     }
 
     fn render_item(
@@ -515,6 +605,17 @@ impl ListDelegate for ArchiveListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
+        // 分组头：与行同一套虚拟化（它是列表的一项，不是另画的一层）。
+        if let Some(VisibleItem::GroupHeader {
+            key,
+            label,
+            count,
+            depth,
+            collapsed,
+        }) = self.items.get(ix.row).cloned()
+        {
+            return Some(self.render_group_header(&key, &label, count, depth, collapsed, cx));
+        }
         let row = self.row_at(ix)?.clone();
         let (foreground, muted, success, info, warning, danger) = {
             let colors = cx.theme().colors;
@@ -548,8 +649,7 @@ impl ListDelegate for ArchiveListDelegate {
         let multi_selected = self.multi_selected(&row.id);
         let multi_delete_ids: Vec<String> = if multi_selected {
             // 按可见行顺序过滤（HashSet 迭代序不定）：回执与测试都要确定性。
-            self.rows
-                .iter()
+            self.visible_rows()
                 .filter(|candidate| self.multi_ids.contains(&candidate.id))
                 .map(|candidate| candidate.id.clone())
                 .collect()
@@ -810,6 +910,16 @@ pub struct ResourcesPanel {
     /// **事件路径维护**（快照推送 / 条件变更时重算），render 只读：每帧重算会在
     /// 滚动时持续分配（行集合克隆），且把"规则"搬回渲染路径。
     view_rows: Vec<ArchiveRow>,
+    /// 可见项（分组头 + 行，见 `filter::build_visible_items`）：列表委托渲染的就是它。
+    ///
+    /// 与 `view_rows` 的关系：`view_rows` 是“筛选 + 排序后的行”（选中 / 多选 / 测试读它），
+    /// `view_items` 是“再按分组分区与折叠状态展开后的列表项”。
+    view_items: Vec<VisibleItem>,
+    /// 已折叠的分组 key（含 `GROUP_ALL` / `GROUP_UNGROUPED`）。
+    ///
+    /// 会话级（面板内）：原型要求“折叠状态持久化”，而设置项（`settings.json`）
+    /// 属 P2.4——在那之前不假装持久化，重开项目回到展开态。
+    collapsed: std::collections::HashSet<String>,
     /// 工具栏条件（搜索词 / 种类 / 只看需处理）。
     filter: ResourcesFilter,
     sort_field: SortField,
@@ -854,6 +964,8 @@ impl ResourcesPanel {
             host,
             snapshot: ResourcesSnapshot::default(),
             view_rows: Vec::new(),
+            view_items: Vec::new(),
+            collapsed: std::collections::HashSet::new(),
             filter: ResourcesFilter::default(),
             sort_field: SortField::default(),
             sort_order: SortOrder::default(),
@@ -910,7 +1022,7 @@ impl ResourcesPanel {
         let delegate = ArchiveListDelegate {
             host: self.host.clone(),
             panel: cx.entity().downgrade(),
-            rows: self.view_rows.clone(),
+            items: self.view_items.clone(),
             details: self.snapshot.details.clone(),
             selected_id: self.selected.clone(),
             multi_ids: self.multi.iter().cloned().collect(),
@@ -932,7 +1044,12 @@ impl ResourcesPanel {
         let target = self
             .selected
             .as_deref()
-            .and_then(|id| self.view_rows.iter().position(|row| row.id == id))
+            .and_then(|id| {
+                // 列表的“行”含分组头：索引必须按 `view_items` 数（不能用 `view_rows` 的位置）。
+                self.view_items.iter().position(
+                    |item| matches!(item, VisibleItem::Row(row) if row.id == id),
+                )
+            })
             .map(IndexPath::new);
         list.update(cx, |state, cx| {
             if state.selected_index() != target {
@@ -968,7 +1085,31 @@ impl ResourcesPanel {
             // 只剩一条 = 回到单选态：焦点行就是它（不然详情面板与列表会各指一个）。
             self.selected = self.multi.first().cloned();
         }
+        // 分组被删后同样清掉它的折叠标记（不然那条 key 永远留着）。
+        let alive: Vec<&str> = self.snapshot.groups.iter().map(|g| g.id.as_str()).collect();
+        self.collapsed.retain(|key| {
+            key == filter::GROUP_ALL || key == filter::GROUP_UNGROUPED || alive.contains(&key.as_str())
+        });
+        self.view_items = filter::build_visible_items(
+            &self.view_rows,
+            &self.snapshot.groups,
+            &self.collapsed,
+        );
         self.push_rows_to_list(cx);
+    }
+
+    /// 折叠 / 展开一个分组（分组头点击；`GROUP_ALL` / `GROUP_UNGROUPED` 也是合法的 key）。
+    pub fn toggle_group_collapse(&mut self, key: &str, cx: &mut Context<Self>) {
+        if !self.collapsed.insert(key.to_string()) {
+            self.collapsed.remove(key);
+        }
+        self.view_items = filter::build_visible_items(
+            &self.view_rows,
+            &self.snapshot.groups,
+            &self.collapsed,
+        );
+        self.push_rows_to_list(cx);
+        cx.notify();
     }
 
     /// 把可见行推给列表委托。
@@ -978,7 +1119,7 @@ impl ResourcesPanel {
         let Some(list) = self.list.clone() else {
             return;
         };
-        let rows = self.view_rows.clone();
+        let items = self.view_items.clone();
         let details = self.snapshot.details.clone();
         let selected = self.selected.clone();
         let multi = self.multi.iter().cloned().collect();
@@ -986,7 +1127,7 @@ impl ResourcesPanel {
         list.update(cx, |state, cx| {
             state
                 .delegate_mut()
-                .set_rows(rows, details, selected, multi, read_only, cx);
+                .set_rows(items, details, selected, multi, read_only, cx);
         });
     }
 
@@ -1115,6 +1256,11 @@ impl ResourcesPanel {
     /// 可见行（筛选 + 排序后）：render 与测试都读它。
     pub fn view_rows(&self) -> &[ArchiveRow] {
         &self.view_rows
+    }
+
+    /// 可见项（分组头 + 行）：列表委托渲染的就是它（测试用它验证折叠与分区）。
+    pub fn view_items(&self) -> &[VisibleItem] {
+        &self.view_items
     }
 
     /// 当前筛选条件。

@@ -7,7 +7,119 @@
 //! **空筛选 + 无行 = "还没有任何存档"**（引导归档）；**非空筛选 + 无行 = "没有匹配的存档"**（引导清筛选）。
 
 use crate::model::{ArchiveKind, ArchiveStatus};
-use crate::resource_view::ArchiveRow;
+use crate::resource_view::{ArchiveRow, GroupOption};
+
+/// 「全部分组」头的 key（分组折叠区最上面那行）。
+pub const GROUP_ALL: &str = "__all__";
+/// 「未分组」头的 key（没有分组归属的行的区）。
+pub const GROUP_UNGROUPED: &str = "__ungrouped__";
+
+/// 列表里的一项：分组头或存档行。
+///
+/// 分组头也是列表的一项（而不是另画一套）：虚拟化 / 漫游 / 滚动的行为只维护一份，
+/// 否则分区渲染要重写一遍列表已经解决过的事。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisibleItem {
+    GroupHeader {
+        /// [`GROUP_ALL`] / [`GROUP_UNGROUPED`] / 分组 id（折叠状态按它记）。
+        key: String,
+        label: String,
+        count: usize,
+        /// 层级：0 = 「全部分组」，1 = 「未分组」与各分组（只用于缩进）。
+        depth: u8,
+        collapsed: bool,
+    },
+    Row(ArchiveRow),
+}
+
+/// 行的分组归属，**只认字典里还活着的分组**（认不出的一律当未分组：行不能丢）。
+fn known_folder_of<'r>(
+    row: &'r ArchiveRow,
+    known: &std::collections::HashSet<&str>,
+) -> Option<&'r str> {
+    row.folder_id
+        .as_deref()
+        .filter(|folder| known.contains(folder))
+}
+
+/// 分组折叠区的分区（原型 §2.4：全部分组 → 未分组 → 各分组）。
+///
+/// 三条规则：
+/// 1. **一个分组都没有时不出头**（空库与“全部未分组”的常见情形不该多两行噪声）；
+/// 2. 折叠只影响行的出场，头自己总在（否则折了就再也展不开）；
+/// 3. **计数从当前可见行现算**：筛选后数的是“筛出来的那几行”，与用户眼前的列表一致；
+///    认不出的分组归属（分组被删而关联还在的脏数据）算进未分组，而不是把行丢掉。
+pub fn build_visible_items(
+    rows: &[ArchiveRow],
+    groups: &[GroupOption],
+    collapsed: &std::collections::HashSet<String>,
+) -> Vec<VisibleItem> {
+    if groups.is_empty() {
+        return rows.iter().cloned().map(VisibleItem::Row).collect();
+    }
+
+    let known: std::collections::HashSet<&str> = groups.iter().map(|g| g.id.as_str()).collect();
+    // 不用闭包：闭包写不出“返回值借用第一个参数”的签名（生周期会报错）。
+    let count_in = |folder: &str| {
+        rows.iter()
+            .filter(|row| known_folder_of(row, &known) == Some(folder))
+            .count()
+    };
+    let ungrouped_count = rows
+        .iter()
+        .filter(|row| known_folder_of(row, &known).is_none())
+        .count();
+
+    let mut items = Vec::with_capacity(rows.len() + groups.len() + 2);
+    items.push(VisibleItem::GroupHeader {
+        key: GROUP_ALL.to_string(),
+        label: "全部分组".to_string(),
+        count: rows.len(),
+        depth: 0,
+        collapsed: collapsed.contains(GROUP_ALL),
+    });
+    if collapsed.contains(GROUP_ALL) {
+        return items;
+    }
+
+    let ungrouped_collapsed = collapsed.contains(GROUP_UNGROUPED);
+    items.push(VisibleItem::GroupHeader {
+        key: GROUP_UNGROUPED.to_string(),
+        label: "未分组".to_string(),
+        count: ungrouped_count,
+        depth: 1,
+        collapsed: ungrouped_collapsed,
+    });
+    if !ungrouped_collapsed {
+        items.extend(
+            rows.iter()
+                .filter(|row| known_folder_of(row, &known).is_none())
+                .cloned()
+                .map(VisibleItem::Row),
+        );
+    }
+
+    for group in groups {
+        let is_collapsed = collapsed.contains(&group.id);
+        items.push(VisibleItem::GroupHeader {
+            key: group.id.clone(),
+            label: group.name.clone(),
+            count: count_in(&group.id),
+            depth: 1,
+            collapsed: is_collapsed,
+        });
+        if is_collapsed {
+            continue;
+        }
+        items.extend(
+            rows.iter()
+                .filter(|row| known_folder_of(row, &known) == Some(group.id.as_str()))
+                .cloned()
+                .map(VisibleItem::Row),
+        );
+    }
+    items
+}
 
 /// 排序字段。
 ///
@@ -217,6 +329,7 @@ mod tests {
             status,
             tail: tail.to_string(),
             tag_ids: Vec::new(),
+            folder_id: None,
         }
     }
 
@@ -390,5 +503,127 @@ mod tests {
         filter.drop_tag("at_a");
         assert!(filter.is_empty());
         assert_eq!(filter.menu_dims(), 0);
+    }
+
+    // ==================== 分组折叠区 ====================
+
+    use super::{GROUP_ALL, GROUP_UNGROUPED, VisibleItem, build_visible_items};
+    use crate::resource_view::GroupOption;
+
+    fn row_in(id: &str, folder: Option<&str>) -> ArchiveRow {
+        ArchiveRow {
+            folder_id: folder.map(str::to_string),
+            ..row(id, id, ArchiveKind::File, ArchiveStatus::Normal, 1, "")
+        }
+    }
+
+    fn group(id: &str, name: &str, count: usize) -> GroupOption {
+        let _ = count;
+        GroupOption {
+            id: id.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    fn keys(items: &[VisibleItem]) -> Vec<String> {
+        items
+            .iter()
+            .map(|item| match item {
+                VisibleItem::GroupHeader { key, .. } => key.clone(),
+                VisibleItem::Row(row) => row.id.clone(),
+            })
+            .collect()
+    }
+
+    /// 没有分组就不出头：空库与“全部未分组”不该多两行噪声。
+    #[test]
+    fn no_groups_means_no_headers() {
+        let rows = vec![row_in("ar_1", None), row_in("ar_2", None)];
+        let items = build_visible_items(&rows, &[], &Default::default());
+        assert_eq!(keys(&items), vec!["ar_1", "ar_2"]);
+    }
+
+    /// 三层结构：全部分组 → 未分组 → 各分组；计数来自行集合，不另查库。
+    #[test]
+    fn groups_partition_rows_with_counts() {
+        let rows = vec![
+            row_in("ar_1", Some("af_1")),
+            row_in("ar_2", None),
+            row_in("ar_3", Some("af_1")),
+            row_in("ar_4", Some("af_2")),
+        ];
+        let groups = vec![group("af_1", "月报", 0), group("af_2", "周报", 0)];
+        let items = build_visible_items(&rows, &groups, &Default::default());
+        assert_eq!(
+            keys(&items),
+            vec![
+                GROUP_ALL,
+                GROUP_UNGROUPED,
+                "ar_2",
+                "af_1",
+                "ar_1",
+                "ar_3",
+                "af_2",
+                "ar_4",
+            ]
+        );
+        let total = items
+            .iter()
+            .find_map(|item| match item {
+                VisibleItem::GroupHeader { key, count, .. } if key == GROUP_ALL => Some(*count),
+                _ => None,
+            })
+            .expect("全部分组头");
+        assert_eq!(total, 4, "“全部分组”数的是可见行总数");
+    }
+
+    /// 折叠：头还在（否则展不开），行不出场；折“全部分组”就只剩那一行。
+    #[test]
+    fn collapsing_hides_rows_but_keeps_headers() {
+        let rows = vec![row_in("ar_1", Some("af_1")), row_in("ar_2", None)];
+        let groups = vec![group("af_1", "月报", 1)];
+
+        let collapsed: std::collections::HashSet<String> =
+            ["af_1".to_string()].into_iter().collect();
+        let items = build_visible_items(&rows, &groups, &collapsed);
+        assert_eq!(
+            keys(&items),
+            vec![GROUP_ALL, GROUP_UNGROUPED, "ar_2", "af_1"],
+            "折叠的分组只出头不出行"
+        );
+
+        let all_collapsed: std::collections::HashSet<String> =
+            [GROUP_ALL.to_string()].into_iter().collect();
+        let items = build_visible_items(&rows, &groups, &all_collapsed);
+        assert_eq!(keys(&items), vec![GROUP_ALL], "折全部 = 只剩一行");
+    }
+
+    /// 计数按**当前可见行**现算：筛选后头里的数就是眼前的行数。
+    #[test]
+    fn header_counts_follow_the_visible_rows() {
+        let groups = vec![group("af_1", "月报", 99)];
+        let rows = vec![row_in("ar_1", Some("af_1")), row_in("ar_2", Some("af_1"))];
+        let items = build_visible_items(&rows, &groups, &Default::default());
+        let counts: Vec<usize> = items
+            .iter()
+            .filter_map(|item| match item {
+                VisibleItem::GroupHeader { count, .. } => Some(*count),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(counts, vec![2, 0, 2], "全部分组 / 未分组 / 月报");
+    }
+
+    /// 脏数据（分组被删而关联还在）：归属认不出就算未分组，不能把行吞掉。
+    #[test]
+    fn unknown_folders_fall_back_to_ungrouped() {
+        let groups = vec![group("af_1", "月报", 0)];
+        let rows = vec![row_in("ar_1", Some("af_gone")), row_in("ar_2", Some("af_1"))];
+        let items = build_visible_items(&rows, &groups, &Default::default());
+        assert_eq!(
+            keys(&items),
+            vec![GROUP_ALL, GROUP_UNGROUPED, "ar_1", "af_1", "ar_2"],
+            "认不出的分组归属算未分组（行不丢）"
+        );
     }
 }

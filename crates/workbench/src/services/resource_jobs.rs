@@ -31,9 +31,10 @@ use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogS
 use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
 use analytics_resource::payload::PayloadStore;
 use analytics_resource::present::{
-    ArchiveStatuses, build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
+    ArchiveStatuses, SnapshotInputs, build_repair_rows, build_snapshot, build_trash_snapshot,
+    build_version_rows,
 };
-use analytics_resource::resource_view::ResourcesSnapshot;
+use analytics_resource::resource_view::{GroupOption, ResourcesSnapshot};
 use analytics_resource::{
     AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService, ArchiveStatus, ArchiveUndo,
     CheckoutRequest, IndexIssue, IndexRepair,
@@ -958,6 +959,21 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         let counts = store.tag_usage_counts().await.unwrap_or_default();
         analytics_resource::present::tag_options(&tags, &counts)
     };
+    // 分组同理（一次查完）：按行的映射给分区渲染，字典给分组头与「移动到分组」菜单。
+    let folders_by_resource = store
+        .folders_by_resource()
+        .await
+        .map_err(|e| format!("读取存档分组失败：{e}"))?;
+    let group_dictionary: Vec<GroupOption> = store
+        .list_folders(Some("project"), None)
+        .await
+        .map_err(|e| format!("读取分组失败：{e}"))?
+        .into_iter()
+        .map(|folder| GroupOption {
+            id: folder.id,
+            name: folder.name,
+        })
+        .collect();
     // 扫描只报告、不改状态（`IndexRepair` 的硬原则），可安全地反复调用。
     let report = IndexRepair::new(&payload, &store)
         .scan()
@@ -981,15 +997,17 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         statuses.insert(id.to_string(), status);
     }
 
-    Ok(build_snapshot(
-        &rows,
-        &statuses,
-        &history_counts,
-        &tags_by_resource,
+    Ok(build_snapshot(SnapshotInputs {
+        resources: &rows,
+        statuses: &statuses,
+        history_counts: &history_counts,
+        tags: &tags_by_resource,
         tag_dictionary,
-        job.read_only,
-        Utc::now(),
-    ))
+        folders: &folders_by_resource,
+        group_dictionary,
+        read_only: job.read_only,
+        now: Utc::now(),
+    }))
 }
 
 /// 重名避让后的文件名：主名加 `-2` / `-3`… 后缀（原型 §4.2：重复取回自动改名，不静默覆盖）。

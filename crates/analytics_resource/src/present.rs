@@ -17,7 +17,7 @@ use crate::dialogs::trash::TrashRow;
 use crate::dialogs::version::VersionRow;
 use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
 use crate::payload::RESOURCES_DIR_NAME;
-use crate::resource_view::{ArchiveCounts, ArchiveRow, ResourcesSnapshot, TagOption};
+use crate::resource_view::{ArchiveCounts, ArchiveRow, GroupOption, ResourcesSnapshot, TagOption};
 use crate::AnalyticsResource;
 
 /// 按资源的标签映射：`resource_id → 标签行`（来自 `AnalyticsResourceStore::tags_by_resource`，
@@ -175,11 +175,32 @@ pub fn build_trash_snapshot(entries: &[TrashEntry]) -> TrashSnapshot {
     TrashSnapshot { rows, foreign }
 }
 
-/// 单行转换（状态缺省 `Normal`；标签 id 从 `tags` 映射取，缺即无标签）。
+/// 按资源的分组映射：`resource_id → folder_id`（来自 `folders_by_resource`，一次查完；
+/// 单层分组下最多一条，所以是 `Option` 语义的映射而不是列表）。
+pub type FolderMemberships = std::collections::HashMap<String, String>;
+
+/// 快照的取数输入：宿主在工作线程上备好的一切（字典与映射都是一次查完的结果）。
+///
+/// 用结构体而不是位置参数：这里的字段会随 Phase 2/3 继续长（标签、分组已各占两份），
+/// 位置参数到七八个时调用点就没人看得懂了。
+pub struct SnapshotInputs<'a> {
+    pub resources: &'a [AnalyticsResource],
+    pub statuses: &'a ArchiveStatuses,
+    pub history_counts: &'a VersionCounts,
+    pub tags: &'a ResourceTags,
+    pub tag_dictionary: Vec<TagOption>,
+    pub folders: &'a FolderMemberships,
+    pub group_dictionary: Vec<GroupOption>,
+    pub read_only: bool,
+    pub now: DateTime<Utc>,
+}
+
+/// 单行转换（状态缺省 `Normal`；标签 id 与分组从映射取，缺即无）。
 pub fn to_row(
     resource: &AnalyticsResource,
     statuses: &ArchiveStatuses,
     tags: &ResourceTags,
+    folders: &FolderMemberships,
     now: DateTime<Utc>,
 ) -> ArchiveRow {
     let kind = ArchiveKind::from_db_str(&resource.kind);
@@ -199,6 +220,7 @@ pub fn to_row(
             .get(&resource.id)
             .map(|list| list.iter().map(|tag| tag.id.clone()).collect())
             .unwrap_or_default(),
+        folder_id: folders.get(&resource.id).cloned(),
     }
 }
 
@@ -447,15 +469,18 @@ fn file_name_of(rel_path: &str) -> String {
 ///
 /// 计数口径与状态行文案一一对应：`缺失` 与 `索引异常`（内容已变）各自计数，
 /// 因为它们在上是两个不同的可点入口（都进索引修复，但处理方式不同）。
-pub fn build_snapshot(
-    resources: &[AnalyticsResource],
-    statuses: &ArchiveStatuses,
-    history_counts: &VersionCounts,
-    tags_by_resource: &ResourceTags,
-    tag_dictionary: Vec<TagOption>,
-    read_only: bool,
-    now: DateTime<Utc>,
-) -> ResourcesSnapshot {
+pub fn build_snapshot(inputs: SnapshotInputs<'_>) -> ResourcesSnapshot {
+    let SnapshotInputs {
+        resources,
+        statuses,
+        history_counts,
+        tags: tags_by_resource,
+        tag_dictionary,
+        folders: folders_by_resource,
+        group_dictionary,
+        read_only,
+        now,
+    } = inputs;
     let mut counts = ArchiveCounts {
         total: resources.len(),
         ..ArchiveCounts::default()
@@ -464,7 +489,7 @@ pub fn build_snapshot(
     let mut details = std::collections::HashMap::with_capacity(resources.len());
 
     for resource in resources {
-        let row = to_row(resource, statuses, tags_by_resource, now);
+        let row = to_row(resource, statuses, tags_by_resource, folders_by_resource, now);
         match row.status {
             ArchiveStatus::Missing => counts.missing += 1,
             ArchiveStatus::ContentChanged => counts.drifted += 1,
@@ -492,15 +517,16 @@ pub fn build_snapshot(
         read_only,
         details,
         tags: tag_dictionary,
+        groups: group_dictionary,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveStatuses, ResourceTags, VersionCounts, build_repair_rows, build_snapshot,
-        build_trash_snapshot, build_version_rows, format_relative_time, format_scale, format_size,
-        format_timestamp, tail_for,
+        ArchiveStatuses, FolderMemberships, ResourceTags, SnapshotInputs, VersionCounts,
+        build_repair_rows, build_snapshot, build_trash_snapshot, build_version_rows,
+        format_relative_time, format_scale, format_size, format_timestamp, tail_for,
     };
     use crate::dialogs::index_repair::RepairGroup;
     use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
@@ -510,6 +536,17 @@ mod tests {
     use chrono::{DateTime, Duration, Utc};
     use engine::persistence::trash::{TrashEntry, TrashKind};
     use serde_json::Value;
+
+    /// 空的标签 / 分组映射：测试里反复要，做成静态的（借用的生周期才够长）。
+    fn empty_tags() -> &'static ResourceTags {
+        static EMPTY: std::sync::OnceLock<ResourceTags> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(ResourceTags::new)
+    }
+
+    fn empty_folders() -> &'static FolderMemberships {
+        static EMPTY: std::sync::OnceLock<FolderMemberships> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(FolderMemberships::new)
+    }
 
     fn row_model(id: &str, kind: &str, file_size: Option<i32>) -> AnalyticsResource {
         let now = Utc::now();
@@ -739,15 +776,17 @@ mod tests {
         let mut counts = VersionCounts::new();
         counts.insert("ar_analysis".to_string(), 3);
 
-        let snapshot = build_snapshot(
-            &resources,
-            &ArchiveStatuses::new(),
-            &counts,
-            &ResourceTags::new(),
-            Vec::new(),
-            false,
+        let snapshot = build_snapshot(SnapshotInputs {
+            resources: &resources,
+            statuses: &ArchiveStatuses::new(),
+            history_counts: &counts,
+            tags: empty_tags(),
+            tag_dictionary: Vec::new(),
+            folders: empty_folders(),
+            group_dictionary: Vec::new(),
+            read_only: false,
             now,
-        );
+        });
 
         let file = snapshot.details.get("ar_file").expect("文件型详情");
         assert_eq!(file.size_label, "1.2 KB", "文件型给体积");
@@ -792,15 +831,17 @@ mod tests {
             count: 1,
         }];
 
-        let snapshot = build_snapshot(
-            &resources,
-            &ArchiveStatuses::new(),
-            &VersionCounts::new(),
-            &tags,
-            dictionary,
-            false,
+        let snapshot = build_snapshot(SnapshotInputs {
+            resources: &resources,
+            statuses: &ArchiveStatuses::new(),
+            history_counts: &VersionCounts::new(),
+            tags: &tags,
+            tag_dictionary: dictionary,
+            folders: empty_folders(),
+            group_dictionary: Vec::new(),
+            read_only: false,
             now,
-        );
+        });
 
         assert_eq!(snapshot.rows[0].tag_ids, vec!["at_1".to_string()]);
         assert!(snapshot.rows[1].tag_ids.is_empty(), "没挂标签的行是空集，不是缺字段");
@@ -832,15 +873,17 @@ mod tests {
         statuses.insert("ar_4".to_string(), ArchiveStatus::Missing);
         statuses.insert("ar_5".to_string(), ArchiveStatus::ContentChanged);
 
-        let snapshot = build_snapshot(
-            &resources,
-            &statuses,
-            &VersionCounts::new(),
-            &ResourceTags::new(),
-            Vec::new(),
-            true,
+        let snapshot = build_snapshot(SnapshotInputs {
+            resources: &resources,
+            statuses: &statuses,
+            history_counts: &VersionCounts::new(),
+            tags: empty_tags(),
+            tag_dictionary: Vec::new(),
+            folders: empty_folders(),
+            group_dictionary: Vec::new(),
+            read_only: true,
             now,
-        );
+        });
 
         assert_eq!(snapshot.rows.len(), 5);
         assert_eq!(snapshot.counts.total, 5);
