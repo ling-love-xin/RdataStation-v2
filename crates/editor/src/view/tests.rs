@@ -4595,7 +4595,8 @@ fn the_snapshot_channel_refuses_source_writes_with_a_reason(cx: &mut TestAppCont
         .expect("要留原因");
     assert!(message.contains("不能写源库"), "{message}");
     assert!(message.contains("请切回源库"), "{message}");
-    assert!(message.contains("只读挂载"), "理由要说清是只读挂载：{message}");
+    // 文案只说“外部源只读”，不说机制（L2 源没有 `READ_ONLY`，说得太具体就成了假话）
+    assert!(message.contains("外部源只读"), "{message}");
 
     // 读语句照跑（加速档就是用来跑分析的）
     run_statement(cx, &panel, "select 1", execution::ResultPlacement::Replace);
