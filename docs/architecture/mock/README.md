@@ -132,7 +132,8 @@ cargo test  -p rds-workbench --test mock_job_cancel -j 2        # 取消 1 项�
 | `mock-architecture.md` | 为什么这样设计：九条不变式 I1–I9 / 概念模型 / 分层与状态所有权 / 数据流 / **D1–D42 决策表** / 降级矩阵 / 已知问题 |
 | `mock-dev-plan.md` | 做什么、做到哪：现状盘点 / **Phase A–G 任务与落点**（已标完成态）/ 测试场景 T1–T35 / 验收与风险 / 进度记录 |
 | `mock-user-guide.md` | 怎么用：入口 / 界面导览 / 典型流程九条 / 只读与安全 / FAQ / USIT 验收清单 |
-| `mock-showcase.html` | 宣传 / 概览页（一页看懂：特点 · 架构 · 流程 · 目录 · 质量数据） |
+| `mock-showcase.md` | **一页看懂（可贴版）**：关键数字 / 三个高光 / 四个剧本 / 六阶段与四条出口（mermaid）· 目录 143 / 两处排版 / 关系 / 工作日历 / 边界 / 架构（mermaid）/ 质量与证据 |
+| `mock-showcase.html` | **一页看懂（视觉版）**：同一套内容的卡片化排版 + 首屏窗口线框（单表 / 多表场景可切）+ 明暗双主题；自包含可离线打开，与原型页同一套设计语言 |
 | `crates/mock/README.md` | crate 级入口（特点与代码结构，不复述本目录设计） |
 
 v1 素材（暂存区，删除前请先提炼）：`v1/docs/frontend/mock/mock-data-generator-design.md`（2957 行）、
