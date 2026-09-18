@@ -15,11 +15,9 @@ use std::rc::Rc;
 use gpui_kit::base::{Selectable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
-use gpui_kit::component::input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
-use gpui_kit::component::list::{List, ListState};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Root, TitleBar};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, TitleBar};
 use gpui_kit::*;
 
 use crate::commands::{
@@ -28,8 +26,8 @@ use crate::commands::{
 use crate::panels::{
     EditorPanel, ProjectActionRequest, QueryRequest, RightSidebarPanel, Shared, SidebarPanel,
 };
-use crate::quick_open::delegate::QuickOpenDelegate;
-use crate::quick_open::model::{self, Action};
+use crate::quick_open::model::Action;
+use crate::quick_open::palette::{QuickOpenHost, QuickOpenPalette};
 use crate::ui;
 use mock::mock_view::{MockDetailView, focus_detail_tab};
 use settings::commands::{CloseSettings, OpenSettings};
@@ -51,28 +49,10 @@ pub struct WorkbenchView {
     sidebar: Option<Entity<SidebarPanel>>,
     editor: Option<Entity<EditorPanel>>,
     right_sidebar: Option<Entity<RightSidebarPanel>>,
-    /// Quick Open 输入状态（render 首次懒创建）。
-    quick_open_input: Option<Entity<InputState>>,
-    /// Quick Open 结果列表（render 首次懒创建；行 / 选中 / 空态归 `List` 组件）。
-    quick_open_list: Option<Entity<ListState<QuickOpenDelegate>>>,
-    /// Quick Open 打开时「聚焦输入框」的待办标记（输入框可能上一帧才创建，先记后消费）。
-    quick_open_focus_pending: bool,
-    /// Quick Open 选中的行**业务键**（跨重算跟随的权威；组件的选中索引只是渲染锚点）。
-    quick_open_selected: Option<String>,
-    /// Quick Open 输入订阅（Change 重建结果 / PressEnter 三态确认）。
-    _quick_open_sub: Option<Subscription>,
-    /// Quick Open 元数据命中（宿主缓存；后台回填后在 render 重建成行）。
-    quick_open_meta: Vec<model::MetaObject>,
-    /// 已发给后台的搜索词（**只在词变时发**；回填时据此丢弃过期批次）。
-    quick_open_sent_query: Option<String>,
-    /// 元数据搜索中（组头显示「搜索中…」）。
-    quick_open_searching: bool,
-    /// 回填后有新数据、待 render 重建行（泵线程拿不到 `Window`）。
-    quick_open_rows_dirty: bool,
-    /// 防抖任务句柄（替换即取消上一枚；输入连打只发最后一次）。
-    quick_open_debounce: Option<Task<()>>,
-    /// 结果回填泵（首次打开时启动；关闭期间降频空转）。
-    quick_open_pump: Option<Task<()>>,
+    /// Quick Open 浮层实体（首帧渲染时懒创建）；浮层自持输入 / 结果 / 键盘通道。
+    quick_open_palette: Option<Entity<QuickOpenPalette>>,
+    /// 打开后待办：通知浮层去清输入 / 落选中 / 聚焦（浮层可能上一帧才创建）。
+    quick_open_open_pending: bool,
     /// 设置页实体（首次打开时懒创建）。
     settings_page: Option<Entity<SettingsPage>>,
     /// M1 项目管理输入实体（懒创建）。
@@ -200,17 +180,8 @@ impl WorkbenchView {
             sidebar: None,
             editor: None,
             right_sidebar: None,
-            quick_open_input: None,
-            quick_open_list: None,
-            quick_open_focus_pending: false,
-            quick_open_selected: None,
-            _quick_open_sub: None,
-            quick_open_meta: Vec::new(),
-            quick_open_sent_query: None,
-            quick_open_searching: false,
-            quick_open_rows_dirty: false,
-            quick_open_debounce: None,
-            quick_open_pump: None,
+            quick_open_palette: None,
+            quick_open_open_pending: false,
             settings_page: None,
             project_inputs: None,
             project_host: Some(host),
@@ -1040,7 +1011,10 @@ impl WorkbenchView {
                     .child("Ctrl+P"),
             )
             .on_click(move |_, window, app| {
-                qo_entity.update(app, |this, cx| this.toggle_quick_open(window, cx));
+                qo_entity.update(app, |this, cx| {
+                    let _ = window;
+                    this.toggle_quick_open(cx)
+                });
             });
 
         // 三栏布局：左右 flex_1 占位对称，Quick Open 严格居中；
@@ -1301,277 +1275,53 @@ impl WorkbenchView {
         )
     }
 
-    // ===== Quick Open（统一检索 / 命令面板） =====
+    // ===== Quick Open（统一检索 / 命令面板）宿主装配 =====
     //
+    // 浮层本体（输入 / 结果 / 键盘通道 / 防抖与回填）在 `quick_open::palette`；
+    // 这里只负责：懒创建、挂 overlay、注入动作端口、开关（`Shared::quick_open` 是全应用一份的权威）。
     // 规格：`docs/architecture/quick_open/quick-open-prototype-design.md`。
-    // 本轮（Phase 0 第一刀）：结果区换成 `List` 组件（`QuickOpenDelegate`，行漫游 / hover /
-    // 空态归组件），键盘通道 ↑↓ / ↵（Shift+↵ 保留面板）/ Esc，打开即聚焦；
-    // 数据源仍是**本地两类**（连接 / 命令）——元数据（名称档 + 全文档）在第二刀接后台索引搜索。
 
     /// 打开 / 关闭 Quick Open（标题栏入口与 `Ctrl+P` 共用）。
-    ///
-    /// 打开时：清空上次输入、重置选中、置聚焦标记（输入框可能上一帧才创建）。
-    fn toggle_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_quick_open(&mut self, cx: &mut Context<Self>) {
         let open = !self.shared.quick_open.get();
         self.shared.quick_open.set(open);
         // 互斥：Quick Open 与设置页不同时显示（两个 overlay 会互相压住）。
         self.shared.settings_open.set(false);
         if open {
-            self.quick_open_focus_pending = true;
-            self.quick_open_selected = None;
-            if let Some(input) = self.quick_open_input.clone() {
-                input.update(cx, |state, cx| state.set_value("", window, cx));
-            }
-            self.refresh_quick_open(window, cx);
+            self.quick_open_open_pending = true;
         }
         cx.notify();
     }
 
-    /// 懒创建输入框与结果列表（render 首次调用；两者都需要 `&mut Window`）。
-    fn ensure_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.quick_open_input.is_none() {
-            let input = cx.new(|cx| {
-                InputState::new(window, cx).placeholder("搜索连接、命令…（> 命令 · # 全文）")
-            });
-            self._quick_open_sub = Some(cx.subscribe_in(
-                &input,
-                window,
-                |this, _, event: &InputEvent, window, cx| match event {
-                    InputEvent::Change => this.refresh_quick_open(window, cx),
-                    InputEvent::PressEnter { shift, .. } => {
-                        // ↵ 打开并关闭；Shift+↵ 保留面板。
-                        // Ctrl+↵（后台打开）待编辑器支持后接上，当前与 ↵ 同行为。
-                        this.quick_open_confirm(*shift, window, cx);
-                    }
-                    _ => {}
-                },
-            ));
-            self.quick_open_input = Some(input);
+    /// 懒创建浮层（首帧渲染；输入框与结果列表由浮层自己按需创建）。
+    fn ensure_quick_open_palette(&mut self, cx: &mut Context<Self>) -> Entity<QuickOpenPalette> {
+        if let Some(palette) = self.quick_open_palette.clone() {
+            return palette;
         }
-        if self.quick_open_list.is_none() {
-            let host = cx.entity().downgrade();
-            let list = cx
-                .new(|cx| ListState::new(QuickOpenDelegate::new(host), window, cx).selectable(true));
-            self.quick_open_list = Some(list);
-        }
-        self.ensure_quick_open_pump(cx);
-    }
-
-    /// 启动 Quick Open 结果泵（首次打开时；关闭期间降频空转，视图销毁即退出）。
-    fn ensure_quick_open_pump(&mut self, cx: &mut Context<Self>) {
-        if self.quick_open_pump.is_some() {
-            return;
-        }
-        let weak = cx.entity().downgrade();
-        let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| loop {
-            match weak.update(cx, |this, _| this.shared.quick_open.get()) {
-                Ok(open) => {
-                    // 开着时勤取（元数据在后台正在回填），关着时降频空转
-                    let wait = if open { 60 } else { 400 };
-                    executor.timer(std::time::Duration::from_millis(wait)).await;
-                    if open {
-                        let _ = weak.update(cx, |this, cx| this.pump_quick_open(cx));
-                    }
-                }
-                // 视图已销毁：退出任务（否则会永远空转）
-                Err(_) => return,
-            }
+        let host: Rc<dyn QuickOpenHost> = Rc::new(WorkbenchQuickOpenHost {
+            view: cx.entity().downgrade(),
         });
-        self.quick_open_pump = Some(task);
+        let shared = self.shared.clone();
+        let palette = cx.new(|cx| QuickOpenPalette::new(shared, host, cx));
+        self.quick_open_palette = Some(palette.clone());
+        palette
     }
 
-    /// 取走 Quick Open 的元数据搜索结果（过期批次丢弃；不碰 UI，只置脏标记）。
-    fn pump_quick_open(&mut self, cx: &mut Context<Self>) {
-        let results = database::nav_jobs::drain_search_results(
-            database::nav_jobs::SearchConsumer::QuickOpen,
-        );
-        if results.is_empty() {
-            return;
+    /// 挂载浮层（未打开时返回 `None`，overlay 不进元素树）。
+    fn render_quick_open(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.shared.quick_open.get() {
+            return None;
         }
-        let current = self
-            .quick_open_input
-            .as_ref()
-            .map(|input| model::parse(&input.read(cx).value()).needle)
-            .unwrap_or_default();
-        let mut changed = false;
-        for result in results {
-            // 过期批次：词已经被改了（收尾交给当前词的那一批）
-            if result.query != current {
-                continue;
-            }
-            self.quick_open_searching = false;
-            self.quick_open_meta = result.hits.iter().filter_map(model::meta_object).collect();
-            changed = true;
+        let palette = self.ensure_quick_open_palette(cx);
+        if self.quick_open_open_pending {
+            self.quick_open_open_pending = false;
+            palette.update(cx, |palette, cx| palette.on_opened(cx));
         }
-        if changed {
-            self.quick_open_rows_dirty = true;
-            cx.notify();
-        }
+        Some(palette.into_any_element())
     }
 
-    /// 重算结果并推给列表（输入变化 / 打开面板时调用）。
-    ///
-    /// 选中按**业务键**跟随：键还在就保留，否则落到第一行（异步回填不抢用户位置）。
-    fn refresh_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(input), Some(list)) = (self.quick_open_input.clone(), self.quick_open_list.clone())
-        else {
-            return;
-        };
-        let raw = input.read(cx).value().to_string();
-        let query = model::parse(&raw);
-        let connections: Vec<(String, String)> = self
-            .shared
-            .connections
-            .borrow()
-            .iter()
-            .map(|c| (c.name.clone(), c.driver.clone()))
-            .collect();
-        let groups = model::build_groups(
-            &query,
-            &connections,
-            &self.quick_open_meta,
-            self.quick_open_searching,
-        );
-        let selected = self
-            .quick_open_selected
-            .clone()
-            .filter(|key| {
-                groups
-                    .iter()
-                    .any(|group| group.rows.iter().any(|row| &row.key == key))
-            })
-            .or_else(|| {
-                groups
-                    .iter()
-                    .flat_map(|group| group.rows.iter())
-                    .map(|row| row.key.clone())
-                    .next()
-            });
-        self.quick_open_selected = selected.clone();
-        list.update(cx, |state, cx| {
-            state.delegate_mut().set_groups(
-                groups,
-                query.needle.clone(),
-                query.mode,
-                selected.clone(),
-                cx,
-            );
-            let target = selected
-                .as_deref()
-                .and_then(|key| state.delegate().index_of(key));
-            mirror_quick_open_selection(state, target, window, cx);
-        });
-        // 元数据：词变了才防抖发一次（"连打字只发最后一次"的第一道是防抖，第二道是这里）
-        self.schedule_quick_open_search(&query, cx);
-        cx.notify();
-    }
-
-    /// 给后台排一次跨连接索引搜索（防抖；单字符不发）。
-    fn schedule_quick_open_search(&mut self, query: &model::Query, cx: &mut Context<Self>) {
-        if !query.async_ready() {
-            return;
-        }
-        if self.quick_open_sent_query.as_deref() == Some(query.needle.as_str()) {
-            return;
-        }
-        let targets: Vec<database::nav_jobs::SearchTarget> = self
-            .shared
-            .connections
-            .borrow()
-            .iter()
-            .map(|c| database::nav_jobs::SearchTarget {
-                conn_id: c.id.clone(),
-                label: c.name.clone(),
-                driver: c.driver.clone(),
-            })
-            .collect();
-        let project_root = self
-            .shared
-            .project_root()
-            .map(|p| p.to_string_lossy().to_string());
-        let needle = query.needle.clone();
-        self.quick_open_sent_query = Some(needle.clone());
-        self.quick_open_searching = true;
-        let executor = cx.background_executor().clone();
-        let weak = cx.entity().downgrade();
-        // 防抖：句柄被下一枚替换即取消（`Task` drop = 取消）
-        let task = cx.spawn(async move |_this, cx| {
-            executor
-                .timer(std::time::Duration::from_millis(
-                    ui::QUICK_OPEN_SEARCH_DEBOUNCE_MS,
-                ))
-                .await;
-            let _ = weak.update(cx, |_this, _cx| {
-                database::nav_jobs::enqueue_search(
-                    database::nav_jobs::SearchConsumer::QuickOpen,
-                    &needle,
-                    project_root.as_deref(),
-                    targets,
-                );
-            });
-        });
-        self.quick_open_debounce = Some(task);
-    }
-
-    /// ↑↓：在结果上漫游（组件只负责渲染；焦点在输入框，所以键盘由宿主接管）。
-    fn move_quick_open_selection(
-        &mut self,
-        delta: isize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(list) = self.quick_open_list.clone() else {
-            return;
-        };
-        let mut moved: Option<String> = None;
-        list.update(cx, |state, cx| {
-            let from = state
-                .selected_index()
-                .or_else(|| state.delegate().first_index());
-            let Some(from) = from else {
-                return;
-            };
-            let Some(target) = state.delegate().step_index(from, delta) else {
-                return;
-            };
-            state.delegate_mut().begin_host_sync();
-            state.set_selected_index(Some(target), window, cx);
-            state.delegate_mut().end_host_sync();
-            moved = state.delegate().selected_key();
-            state.scroll_to_selected_item(window, cx);
-        });
-        if let Some(key) = moved {
-            self.quick_open_selected = Some(key);
-            cx.notify();
-        }
-    }
-
-    /// ↵（输入框回车）：确认当前选中的行。
-    fn quick_open_confirm(&mut self, keep_open: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(list) = self.quick_open_list.clone() else {
-            return;
-        };
-        let action = self
-            .quick_open_selected
-            .as_deref()
-            .and_then(|key| list.read(cx).delegate().action_of(key));
-        if let Some(action) = action {
-            self.execute_quick_open_row(action, keep_open, window, cx);
-        }
-    }
-
-    /// 宿主收到组件回传的选中变化（鼠标点击 / 组件内漫游）：以业务键为准。
-    pub(crate) fn set_quick_open_selection(&mut self, key: Option<String>, cx: &mut Context<Self>) {
-        if self.quick_open_selected == key {
-            return;
-        }
-        self.quick_open_selected = key;
-        cx.notify();
-    }
-
-    /// 执行一条结果——键盘 / 鼠标 / 组件确认三条路都汇到这里。
-    pub(crate) fn execute_quick_open_row(
+    /// 执行一条结果（浮层经宿主端口回传；动作语义只在这里实现）。
+    pub(crate) fn execute_quick_open_action(
         &mut self,
         action: Action,
         keep_open: bool,
@@ -1631,132 +1381,6 @@ impl WorkbenchView {
             self.shared.quick_open.set(false);
         }
         cx.notify();
-    }
-
-    fn render_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
-        if !self.shared.quick_open.get() {
-            return None;
-        }
-        self.ensure_quick_open(window, cx);
-        // 打开即聚焦（标记在 `toggle_quick_open` 置位；输入框可能上一帧才创建）。
-        if self.quick_open_focus_pending {
-            self.quick_open_focus_pending = false;
-            if let Some(input) = self.quick_open_input.clone() {
-                let handle = input.read(cx).focus_handle(cx);
-                handle.focus(window, cx);
-            }
-        }
-        let theme = cx.theme().clone();
-        let input = self
-            .quick_open_input
-            .clone()
-            .expect("quick open input lazy init");
-        let list = self
-            .quick_open_list
-            .clone()
-            .expect("quick open list lazy init");
-        let query = model::parse(&input.read(cx).value());
-        // 后台回填过的标志：泵线程拿不到 `Window`，重建成行（需 `Window`）放在这里消费。
-        if self.quick_open_rows_dirty {
-            self.quick_open_rows_dirty = false;
-            self.refresh_quick_open(window, cx);
-        }
-        let rows = list.read(cx).delegate().row_count();
-        // 单字符门槛：元数据异步搜索至少 2 个字符（本地源不受限），此处只给提示；
-        // 真正的闸在 `schedule_quick_open_search` 里。
-        let hint_right = if !query.needle.is_empty() && !query.async_ready() {
-            "再输入 1 个字符开始搜索元数据".to_string()
-        } else if self.quick_open_searching {
-            "元数据搜索中…".to_string()
-        } else {
-            format!("{rows} 条")
-        };
-        let mode_chip = match query.mode {
-            model::Mode::Command => Some((">", "命令")),
-            model::Mode::FullText => Some(("#", "元数据全文")),
-            model::Mode::Default => None,
-        };
-
-        let mut input_row = div().h_flex().items_center().gap_2();
-        input_row = input_row.child(div().flex_1().min_w_0().child(Input::new(&input)));
-        if let Some((glyph, label)) = mode_chip {
-            input_row = input_row.child(
-                div()
-                    .h_flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .rounded_sm()
-                    .bg(theme.colors.secondary)
-                    .text_xs()
-                    .text_color(theme.colors.foreground)
-                    .child(glyph)
-                    .child(label),
-            );
-        }
-
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .justify_center()
-                .bg(theme.colors.overlay)
-                .child(
-                    div()
-                        // 示意 v5：面板水平居中、顶部距标题栏 42px。
-                        .mt(rems(ui::QUICK_OPEN_PANEL_TOP))
-                        .w(rems(ui::QUICK_OPEN_PANEL_WIDTH))
-                        .max_h(rems(ui::QUICK_OPEN_PANEL_MAX_HEIGHT))
-                        .v_flex()
-                        .gap_2()
-                        .p_3()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme.colors.border)
-                        .bg(theme.colors.popover)
-                        .shadow_lg()
-                        .child(input_row)
-                        .child(
-                            List::new(&list)
-                                .max_h(rems(ui::QUICK_OPEN_LIST_MAX_HEIGHT)),
-                        )
-                        .child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .h(rems(ui::QUICK_OPEN_HINT_HEIGHT))
-                                .border_t_1()
-                                .border_color(theme.colors.border)
-                                .px_1()
-                                .text_xs()
-                                .text_color(theme.colors.muted_foreground)
-                                .child("↑↓ 选择 · ↵ 打开 · Shift+↵ 保留面板 · Esc 关闭")
-                                .child(div().ml_auto().child(hint_right)),
-                        ),
-                )
-                .on_mouse_down(MouseButton::Left, {
-                    let shared = self.shared.clone();
-                    let entity = cx.entity();
-                    move |_, _, app| {
-                        shared.quick_open.set(false);
-                        entity.update(app, |_, cx| cx.notify());
-                    }
-                })
-                // 键盘：焦点在输入框里，单行 Input 不处理 ↑↓ / Esc（会 propagate），
-                // 因此这三个 Action 在浮层根上接住；Enter 由输入框事件给出（含 Shift 三态）。
-                .on_action(cx.listener(|this, _: &MoveUp, window, cx| {
-                    this.move_quick_open_selection(-1, window, cx)
-                }))
-                .on_action(cx.listener(|this, _: &MoveDown, window, cx| {
-                    this.move_quick_open_selection(1, window, cx)
-                }))
-                .on_action(cx.listener(|this, _: &Escape, _window, cx| {
-                    this.shared.quick_open.set(false);
-                    cx.notify();
-                })),
-        )
     }
 
     // ===== 状态栏 =====
@@ -1874,6 +1498,26 @@ pub fn toggle_hidden_mode(mode: SidebarMode, snapshot: SidebarMode) -> (SidebarM
 
 /// 切换单侧「完全隐藏」：隐藏前记录当前模式快照，恢复时按快照还原，
 /// 保证「收起」等状态在完全隐藏 / 恢复往返后不丢失。
+/// Quick Open 的宿主端口：把浮层的动作落回工作台。
+///
+/// 只有工作台知道这些副作用怎么做（新建文档要 `Window`、资产库要顺带刷新、
+/// 连接选中要清导航缓存）；浮层因此不依赖 `WorkbenchView`，可在窗口测试里用哑宿主驱动。
+struct WorkbenchQuickOpenHost {
+    /// 宿主体（浮层与工作台同生命周期；升级失败 = 视图已销毁，动作静默丢弃）。
+    view: WeakEntity<WorkbenchView>,
+}
+
+impl QuickOpenHost for WorkbenchQuickOpenHost {
+    fn execute(&self, action: Action, keep_open: bool, window: &mut Window, cx: &mut App) {
+        let Some(view) = self.view.upgrade() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.execute_quick_open_action(action, keep_open, window, cx)
+        });
+    }
+}
+
 fn toggle_sidebar_hidden(
     shared: &Shared,
     entity: &Entity<WorkbenchView>,
@@ -1900,32 +1544,10 @@ fn restore_snapshot(mode: SidebarMode) -> SidebarMode {
     }
 }
 
-/// 把宿主的选中镜像进 Quick Open 列表（只在真的不一致时才动）。
-///
-/// 镜像期间组件回调**不回写**宿主（`begin_host_sync` / `end_host_sync` 守卫）：
-/// 镜像常发生在宿主渲染期，回写就是「更新正在被更新的实体」（GPUI 会 panic）。
-fn mirror_quick_open_selection(
-    state: &mut ListState<QuickOpenDelegate>,
-    target: Option<IndexPath>,
-    window: &mut Window,
-    cx: &mut Context<ListState<QuickOpenDelegate>>,
-) {
-    if state.selected_index() == target {
-        return;
-    }
-    state.delegate_mut().begin_host_sync();
-    state.set_selected_index(target, window, cx);
-    state.delegate_mut().end_host_sync();
-    state.scroll_to_selected_item(window, cx);
-}
-
 impl Render for WorkbenchView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.area.is_none() {
             self.init_workspace(window, cx);
-        }
-        if self.quick_open_input.is_none() {
-            self.quick_open_input = Some(cx.new(|cx| InputState::new(window, cx)));
         }
         // M1：项目输入实体懒创建（选择器搜索 / 新建 / 删除确认）。
         if self.project_inputs.is_none() {
@@ -1978,7 +1600,7 @@ impl Render for WorkbenchView {
         } else {
             None
         };
-        let quick_open = self.render_quick_open(window, cx);
+        let quick_open = self.render_quick_open(cx);
         let settings_panel = self.render_settings_panel(window, cx);
 
         // M1：无项目时以选择器覆盖中央区（保留五段外壳）。
@@ -2010,8 +1632,8 @@ impl Render for WorkbenchView {
             .key_context("workbench")
             .on_action({
                 let entity = cx.entity();
-                move |_: &ToggleQuickOpen, window, cx| {
-                    entity.update(cx, |this, cx| this.toggle_quick_open(window, cx));
+                move |_: &ToggleQuickOpen, _window, cx| {
+                    entity.update(cx, |this, cx| this.toggle_quick_open(cx));
                 }
             })
             // M4：Ctrl+F 聚焦数据源导航搜索（先切到数据源面板并展开左侧 Dock）。

@@ -7,6 +7,17 @@
 
 ## 0. 进度记录（最近在前）
 
+### 2026-09-18 — Phase 0 第三刀：浮层抽成独立视图实体 + 窗口测试
+
+| # | 任务 | 落点 | 状态 |
+| --- | --- | --- | --- |
+| P0.13a | 浮层本体抽成独立视图实体 `QuickOpenPalette`（输入 / 结果 / 键盘 / 防抖 / 回填全在它身上），宿主侧只留：懒创建、挂 overlay、注入动作端口、置开关 | `quick_open/palette.rs`（新）、`view.rs`（删 ~460 行，只留装配） | ✅ |
+| P0.13b | 动作端口 `QuickOpenHost`（只一个方法：执行一条结果）——`WorkbenchView` 用 `WorkbenchQuickOpenHost` 实现；浮层因此不依赖工作台视图 | `palette.rs`、`view.rs` | ✅ |
+| P0.13c | 「执行后关面板」收归浮层（与 Esc / 点遮罩同一组收尾），不再依赖宿主实现——否则哑宿主下行为不完整 | `palette.rs::confirm` | ✅ |
+| P0.10/P0.12 | **窗口测试 4 项**（简化宿主 + 哑端口 + 真按键）：打开即聚焦（按键进输入框）/ ↑↓ 漫游 + ↵ 经端口执行并关面板 / Esc 关闭 / 单字符门槛（1 字符不发搜索） | `quick_open/tests.rs`（新） | ✅ 全绿 |
+| P0.14 | 契约登记：`quick_open/palette.rs` 纳入尺寸 + 颜色两份扫描清单 | `crates/workbench/tests/ui_contract.rs` | ✅ |
+| 验证 | `cargo check -p rds-workbench` / `-p rds-app` 零告警；`cargo test -p rds-workbench --lib` → **86 项全绿**（含 4 项新窗口测试）；`--test ui_contract` → 7 项全绿 | — | ✅ |
+
 ### 2026-09-18 — Phase 0 第二刀：元数据名称档接线（Quick Open 的核心）
 
 | # | 任务 | 落点 | 状态 |
@@ -42,7 +53,7 @@
 | P0.7 | 命令表从 `view.rs` 硬编码搬进模型（`command_rows()`，带快捷键） | `quick_open/model.rs` | ✅ |
 | P0.8 | 纯逻辑单测 6 项（前缀解析 / 词长门槛 / 命中区间 / 评分分档 / 分组过滤 / 命令键唯一） | `quick_open/model.rs` 内 `tests` | ✅ 全绿 |
 | P0.9 | 契约登记：新常量进尺寸契约、`quick_open/delegate.rs` 纳入尺寸 + 颜色两份扫描清单 | `crates/workbench/tests/ui_contract.rs`、`workbench_shell/src/ui.rs` | ✅（待跑测试确认） |
-| P0.10 | 窗口测试（打开即聚焦 / ↑↓ 改选中 / ↵ 副作用 / Esc 关闭） | `crates/workbench/tests/` | ⬜ 待补 |
+| P0.10 | 窗口测试（打开即聚焦 / ↑↓ 改选中 / ↵ 副作用 / Esc 关闭） | `crates/workbench/tests/` | ✅ 已落地（4 项，见 §0；随浮层抽实体后落在 `quick_open/tests.rs`） |
 | P0.11 | 元数据名称档（跨连接索引，异步 + 防抖 + 过期丢弃） | `database::nav_jobs` + 宿主泵 | ⬜ 第二刀 |
 | P0.12 | 后台搜索**双消费方分流**（导航与 Quick Open 不再互抢结果） | `crates/database/src/nav_jobs.rs`（`consumer` 维度） | ⬜ 第二刀前置 |
 
@@ -82,7 +93,7 @@
 | P0.11b | 宿主泵：防抖 150ms（`QUICK_OPEN_SEARCH_DEBOUNCE_MS`）、只在词变时发、按 `SearchResult.query` 丢弃过期批次 | `view.rs` / `quick_open/` | ✅ 已落地（见 §0） |
 | P0.11c | 元数据行（表 / 视图 / 列 / schema）+ 面包屑归属 + 「为什么命中」标签 | `quick_open/model.rs`、`delegate.rs` | ✅ 行与归属已落地；面包屑单独一行与「为什么命中」标签待做（见 §0） |
 | P0.11d | 命中动作接属性面板（复用 `nav_search_hit_property` 的映射口径） | `view.rs` | ✅ 已落地（映射口径对齐，见 §0） |
-| P0.12 | 窗口测试补 P0.10 | `crates/workbench/tests/quick_open_window.rs` | ⬜ 待补 |
+| P0.12 | 窗口测试补 P0.10 | `crates/workbench/tests/quick_open_window.rs` | ✅ 已落地（4 项，见 §0） |
 
 ## 4. Phase 1 / Phase 2 概要
 
@@ -137,6 +148,8 @@ RUSTC=<toolchain>/bin/rustc.exe RUSTDOC=<toolchain>/bin/rustdoc.exe <toolchain>/
 | 命令表（唯一权威） | `crates/workbench/src/quick_open/model.rs::command_rows` |
 | 匹配评分与命中区间 | `crates/workbench/src/quick_open/model.rs::{match_span, rank, filter_ranked}` |
 | 结果行 / 分组头 / 空态渲染 | `crates/workbench/src/quick_open/delegate.rs` |
+| 浮层本体（输入 / 结果 / 键盘通道 / 防抖 / 回填 / 关闭） | `crates/workbench/src/quick_open/palette.rs` |
+| 动作端口与宿主装配 | `palette.rs::QuickOpenHost` + `view.rs::WorkbenchQuickOpenHost` / `render_quick_open` / `execute_quick_open_action` |
 | 选中锚点（业务键）与镜像守卫 | `delegate.rs`（`selected_key` / `begin_host_sync`）+ `view.rs::mirror_quick_open_selection` |
 | 打开 / 关闭 / 聚焦 / 输入订阅 / 键盘 | `crates/workbench/src/view.rs`（`toggle_quick_open` / `ensure_quick_open` / `refresh_quick_open` / `move_quick_open_selection` / `quick_open_confirm` / `render_quick_open`） |
 | 动作执行（含关面板语义） | `crates/workbench/src/view.rs::execute_quick_open_row` |

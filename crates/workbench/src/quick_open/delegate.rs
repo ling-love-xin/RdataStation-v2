@@ -12,8 +12,8 @@ use gpui_kit::component::{ActiveTheme, IndexPath, Theme};
 use gpui_kit::*;
 
 use crate::quick_open::model::{Action, Group, Mode, Row, match_span};
+use crate::quick_open::palette::QuickOpenPalette;
 use crate::ui;
-use crate::view::WorkbenchView;
 
 /// 行快照 + 选中锚点。
 pub(crate) struct QuickOpenDelegate {
@@ -25,12 +25,12 @@ pub(crate) struct QuickOpenDelegate {
     selected_key: Option<String>,
     /// 宿主正在把选中镜像进列表：此间组件回调的 `set_selected_index` 不再回写。
     syncing_from_host: bool,
-    /// 宿主动作入口（确认时交回宿主执行；宿主已销毁则静默丢弃）。
-    host: WeakEntity<WorkbenchView>,
+    /// 宿主动作入口（确认时交回浮层；浮层再转给工作台端口）。
+    host: WeakEntity<QuickOpenPalette>,
 }
 
 impl QuickOpenDelegate {
-    pub(crate) fn new(host: WeakEntity<WorkbenchView>) -> Self {
+    pub(crate) fn new(host: WeakEntity<QuickOpenPalette>) -> Self {
         Self {
             groups: Vec::new(),
             needle: String::new(),
@@ -299,34 +299,20 @@ impl ListDelegate for QuickOpenDelegate {
         self.selected_key = key.clone();
         let _ = self
             .host
-            .update(cx, |view, cx| view.set_quick_open_selection(key, cx));
+            .update(cx, |palette, cx| palette.set_selection(key, cx));
     }
 
-    /// ↵ / 点击：交回宿主执行（关面板与副作用都在宿主侧）。
+    /// ↵ / 点击：交回浮层执行（浮层按自己的选中锚点取动作，它就是权威）。
     fn confirm(
         &mut self,
         secondary: bool,
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
-        let Some(row) = self
-            .selected_key
-            .as_deref()
-            .and_then(|key| {
-                self.groups
-                    .iter()
-                    .flat_map(|g| g.rows.iter())
-                    .find(|r| r.key == key)
-            })
-            .cloned()
-        else {
-            return;
-        };
-        let action: Action = row.action;
-        let _ = self.host.update(cx, |view, cx| {
-            // 确认时保留面板：输入框的 Shift+↵，或列表里的 Ctrl+点击。
-            // （Ctrl+↵ 的「后台打开」待编辑器支持后与 Shift 细分。）
-            view.execute_quick_open_row(action, secondary, window, cx)
-        });
+        // 确认时保留面板：输入框的 Shift+↵，或列表里的 Ctrl+点击。
+        // （Ctrl+↵ 的「后台打开」待编辑器支持后与 Shift 细分。）
+        let _ = self
+            .host
+            .update(cx, |palette, cx| palette.confirm(secondary, window, cx));
     }
 }

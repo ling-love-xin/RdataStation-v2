@@ -92,6 +92,10 @@ fn view_layer_has_no_raw_size_literals() {
             "quick_open/delegate.rs",
             include_str!("../src/quick_open/delegate.rs"),
         ),
+        (
+            "quick_open/palette.rs",
+            include_str!("../src/quick_open/palette.rs"),
+        ),
         // 连接对话框模块（M3，#14 已清零；后续改动不得回退）
         (
             "connection_dialog/render.rs",
@@ -187,6 +191,10 @@ fn ui_sources_have_no_raw_color_literals() {
         (
             "quick_open/delegate.rs",
             include_str!("../src/quick_open/delegate.rs"),
+        ),
+        (
+            "quick_open/palette.rs",
+            include_str!("../src/quick_open/palette.rs"),
         ),
         (
             "connection_dialog/render.rs",
