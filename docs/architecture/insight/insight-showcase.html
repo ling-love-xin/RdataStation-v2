@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RdataStation 洞察模块（M8）· 一页看懂</title>
+<title>RdataStation 洞察（M8）· 一页看懂</title>
 <style>
 :root{
   --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
@@ -11,9 +11,10 @@
   --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
   --titlebar:#DDDDDD; --tabbar:#F3F3F3;
   --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
-  --track:#E7E7E7; --code-bg:#FAFAFA;
+  --track:#E7E7E7; --code-bg:#FAFAFA; --float:#FFFFFF;
   --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
   --shadow-sm:0 1px 2px rgba(20,20,30,.06);
+  --glow:0 10px 30px rgba(194,91,70,.18);
 }
 [data-theme="dark"]{
   --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
@@ -21,113 +22,191 @@
   --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
   --titlebar:#323233; --tabbar:#252526;
   --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
-  --track:#3C3C3C; --code-bg:#191919;
+  --track:#3C3C3C; --code-bg:#191919; --float:#252526;
   --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
   --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+  --glow:0 10px 30px rgba(232,132,111,.16);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{
   font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;
   background:var(--pagebg);color:var(--fg);font-size:14px;line-height:1.72;
-  -webkit-font-smoothing:antialiased;padding:28px 20px 40px;
+  -webkit-font-smoothing:antialiased;padding:24px 20px 44px;
 }
 a{color:var(--primary);text-decoration:none;}
 a:hover{text-decoration:underline;}
 code,.mono{font-family:Consolas,'SFMono-Regular','Cascadia Mono',monospace;font-size:.92em;}
-.wrap{max-width:1120px;margin:0 auto;}
+.wrap{max-width:1160px;margin:0 auto;}
 
 /* ── 页头 ── */
-.page-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding:0 4px;}
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:12px;padding:0 4px;}
 .brand{display:flex;align-items:center;gap:11px;}
 .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(194,91,70,.35);color:#fff;font-weight:700;font-size:13px;}
 .page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
 .page-head .sub{color:var(--muted);font-size:12px;margin-top:1px;}
+.head-actions{display:flex;gap:8px;align-items:center;}
 .theme-toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;box-shadow:var(--shadow-sm);transition:all .15s;font-family:inherit;}
 .theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
 
-/* ── 英雄区 ── */
-.hero{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--bg);box-shadow:var(--shadow);padding:34px 34px 28px;margin-bottom:22px;}
+/* ── 吸顶导航（滚动高亮） ── */
+.nav{position:sticky;top:10px;z-index:30;display:flex;gap:6px;overflow-x:auto;padding:7px 9px;margin-bottom:16px;
+  border:1px solid var(--border);border-radius:12px;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(8px);box-shadow:var(--shadow-sm);scrollbar-width:none;}
+.nav::-webkit-scrollbar{display:none;}
+.nav a{white-space:nowrap;font-size:12px;border:1px solid transparent;border-radius:999px;padding:3px 11px;color:var(--muted);transition:all .15s;}
+.nav a:hover{color:var(--primary);background:var(--hover);text-decoration:none;}
+.nav a.on{color:var(--primary);border-color:var(--active-border);background:var(--sidebar);font-weight:600;}
+
+/* ── 英雄区：左文右图 ── */
+.hero{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:16px;background:var(--bg);box-shadow:var(--shadow);padding:30px 30px 26px;margin-bottom:18px;}
 .hero::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:linear-gradient(90deg,#F5A188,#C25B46 45%,#8E4A3A);}
-.hero::after{content:"";position:absolute;right:-120px;top:-140px;width:380px;height:380px;border-radius:50%;background:radial-gradient(circle,rgba(194,91,70,.16),transparent 68%);pointer-events:none;}
-.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:3px 12px;margin-bottom:16px;}
+.hero::after{content:"";position:absolute;right:-140px;top:-160px;width:420px;height:420px;border-radius:50%;background:radial-gradient(circle,rgba(194,91,70,.15),transparent 68%);pointer-events:none;}
+.hero-grid{position:relative;display:grid;grid-template-columns:1fr;gap:22px;align-items:start;}
+@media(min-width:1000px){.hero-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.08fr);gap:26px;}}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:3px 12px;margin-bottom:14px;}
 .eyebrow b{color:var(--primary);font-weight:600;}
-.hero h2{font-size:30px;line-height:1.34;font-weight:700;letter-spacing:.4px;max-width:760px;}
+.hero h2{font-size:30px;line-height:1.34;font-weight:700;letter-spacing:.3px;}
 .hero h2 em{font-style:normal;color:var(--primary);}
-.hero .lead{margin-top:14px;font-size:15px;color:var(--fg);max-width:720px;opacity:.92;}
+.hero .lead{margin-top:12px;font-size:14.5px;opacity:.94;}
 .hero .lead .dim{color:var(--muted);}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-top:26px;}
-.kpi{border:1px solid var(--border);border-radius:11px;background:var(--sidebar);padding:14px 16px;}
-.kpi .n{font-size:23px;font-weight:700;letter-spacing:.5px;color:var(--primary);line-height:1.2;}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px;}
+.chip{font-size:11.5px;border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:2px 10px;color:var(--fg);}
+.chip.hot{border-color:var(--active-border);color:var(--primary);box-shadow:var(--glow);}
+.cta{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap;}
+.cta a{font-size:12.5px;border-radius:9px;padding:8px 16px;border:1px solid var(--border);background:var(--card);box-shadow:var(--shadow-sm);transition:all .15s;}
+.cta a.pri{background:var(--primary);color:var(--primary-fg);border-color:var(--primary);font-weight:600;}
+.cta a:hover{border-color:var(--primary);color:var(--primary);text-decoration:none;transform:translateY(-1px);}
+.cta a.pri:hover{color:var(--primary-fg);background:var(--primary-hover);}
+
+/* ── 窗口线框（英雄区右：工作台 + 右 Dock 洞察面板） ── */
+.win{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:var(--shadow);}
+.win .tbar{display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;background:var(--titlebar);font-size:11.5px;color:var(--muted);}
+.win .tbar .mark{width:16px;height:16px;border-radius:5px;background:linear-gradient(135deg,#F5A188,#C25B46);}
+.win .tbar .tname{color:var(--fg);font-weight:600;}
+.win .tbar .wbtns{margin-left:auto;display:flex;gap:10px;color:var(--muted);font-size:11px;}
+.win-body{display:grid;grid-template-columns:28px minmax(0,1fr) minmax(0,246px);min-height:322px;}
+@media(max-width:640px){.win-body{grid-template-columns:28px minmax(0,1fr);}.win .dock{display:none;}}
+.win .rail{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;gap:11px;padding-top:9px;font-size:11px;color:var(--muted);}
+.win .rail .on{color:var(--primary);}
+.win .center{background:var(--bg);border-right:1px solid var(--border);padding:10px 11px;display:grid;gap:8px;align-content:start;}
+.win .center .chead{font-size:11.5px;color:var(--muted);}
+.win .center .cbox{border:1px solid var(--border);border-radius:8px;background:var(--card);overflow:hidden;}
+.win .center .cbox .ch{padding:5px 9px;background:var(--sidebar);border-bottom:1px solid var(--border);font-size:10.5px;color:var(--muted);}
+.win .center .cbox .cb{padding:7px 9px;font-size:11.5px;overflow:hidden;}
+.win .center .grid2{width:100%;border:1px solid var(--border);border-radius:8px;overflow:hidden;border-collapse:collapse;font-size:11px;background:var(--card);box-shadow:none;}
+.win .center .grid2 th{background:transparent;color:var(--muted);font-weight:600;text-align:left;padding:4px 9px;border-bottom:1px solid var(--border);white-space:nowrap;}
+.win .center .grid2 td{padding:3px 9px;border-bottom:1px solid var(--border);font-family:Consolas,monospace;}
+.win .center .grid2 tr:last-child td{border-bottom:none;}
+.win .dock{background:var(--sidebar);display:flex;flex-direction:column;font-size:11.5px;}
+.win .dhead{display:flex;align-items:center;gap:7px;height:30px;padding:0 10px;background:var(--titlebar);border-bottom:1px solid var(--border);font-weight:600;font-size:12px;}
+.win .dhead .act{margin-left:auto;color:var(--muted);font-size:11px;letter-spacing:2px;}
+.win .dstrip{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 10px;background:var(--card);border-bottom:1px solid var(--border);}
+.win .dstrip .name{font-weight:600;}
+.win .dstrip .null{color:var(--muted);margin-left:auto;font-size:10.5px;}
+.win .dtabs{display:flex;gap:13px;padding:6px 10px;background:var(--tabbar);border-bottom:1px solid var(--border);color:var(--muted);}
+.win .dtabs .ptab{cursor:pointer;font-size:11.5px;}
+.win .dtabs .ptab.on{color:var(--fg);font-weight:600;position:relative;}
+.win .dtabs .ptab.on::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:2px;background:var(--primary);}
+.win .dbody{flex:1;display:flex;flex-direction:column;}
+.win .pane{display:none;padding:9px 10px;gap:7px;flex-direction:column;}
+.win .pane.on{display:flex;}
+.win .zone{border:1px solid var(--border);border-radius:7px;background:var(--card);padding:6px 8px;}
+.win .zone .zt{font-size:11px;font-weight:600;display:flex;align-items:center;gap:6px;}
+.win .zone .zt .chev{margin-left:auto;color:var(--muted);}
+.win .zone .zc{font-size:10.5px;color:var(--muted);margin-top:4px;line-height:1.6;}
+.win .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;font-size:10.5px;margin-top:3px;}
+.win .kv .k{color:var(--muted);}
+.win .barfill{height:5px;border-radius:4px;background:var(--track);overflow:hidden;margin-top:3px;}
+.win .barfill i{display:block;height:100%;background:var(--primary);}
+.win .hintline{font-size:10.5px;color:var(--muted);}
+.win .ok{color:var(--success);}
+.win .warn{color:var(--warning);}
+.win .scorecard{border-top:1px solid var(--border);background:var(--card);padding:7px 10px;display:flex;gap:10px;align-items:center;}
+.win .scorecard .num{font-size:20px;font-weight:700;color:var(--success);line-height:1;}
+.win .scorecard .dims{font-size:10.5px;color:var(--muted);}
+.win .dtip{padding:5px 10px;border-top:1px solid var(--border);background:var(--sidebar);color:var(--muted);font-size:10.5px;}
+
+/* ── KPI ── */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px;margin-top:22px;}
+.kpi{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);transition:all .15s;}
+.kpi:hover{border-color:var(--active-border);transform:translateY(-2px);box-shadow:var(--glow);}
+.kpi .n{font-size:25px;font-weight:700;letter-spacing:.5px;color:var(--primary);line-height:1.15;}
 .kpi .n small{font-size:13px;font-weight:600;color:var(--fg);opacity:.85;margin-left:2px;}
-.kpi .l{font-size:12px;color:var(--fg);margin-top:4px;font-weight:600;}
-.kpi .d{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.5;}
+.kpi .l{font-size:12.2px;color:var(--fg);margin-top:4px;font-weight:600;}
+.kpi .d{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.55;}
+
+/* ── 首屏：五 Tab 条 ── */
+.mode-strip{margin-top:20px;}
+.mode-strip .ms-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:700;margin-bottom:8px;}
+.mode-strip .ms-head .hint{font-size:11.8px;font-weight:400;color:var(--muted);}
 
 /* ── 通用区块 ── */
-section{margin:30px 0 0;}
-.sec-head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;}
-.sec-head h3{font-size:18px;font-weight:700;letter-spacing:.2px;}
-.sec-head .no{font-size:12px;font-weight:700;color:var(--primary);border:1px solid var(--active-border);border-radius:6px;padding:1px 7px;}
-.sec-sub{color:var(--muted);font-size:12.5px;margin-bottom:16px;}
-
+section{margin:34px 0 0;scroll-margin-top:64px;}
+.sec-head{display:flex;align-items:center;gap:10px;margin-bottom:5px;}
+.sec-head .no{font-size:11.5px;font-weight:700;color:var(--primary);border:1px solid var(--active-border);border-radius:6px;padding:1px 7px;flex:none;}
+.sec-head h3{font-size:19px;font-weight:700;letter-spacing:.2px;}
+.sec-head .tag{margin-left:auto;font-size:11px;color:var(--muted);}
+.sec-sub{color:var(--muted);font-size:12.5px;margin:0 0 15px 0;}
+.sec-sub b{color:var(--fg);}
 .grid{display:grid;gap:12px;}
-.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));}
-.g3{grid-template-columns:repeat(auto-fit,minmax(232px,1fr));}
-.g5{grid-template-columns:repeat(auto-fit,minmax(196px,1fr));}
+.g2{grid-template-columns:repeat(auto-fit,minmax(310px,1fr));}
+.g3{grid-template-columns:repeat(auto-fit,minmax(238px,1fr));}
 .card{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px 18px;box-shadow:var(--shadow-sm);}
 .card h4{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;}
 .card h4 .ico{width:22px;height:22px;border-radius:6px;background:var(--sidebar);border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--primary);flex:none;}
-.card p{font-size:12.8px;margin-top:8px;color:var(--fg);opacity:.94;}
+.card p{font-size:12.8px;margin-top:8px;opacity:.94;}
 .card ul{margin:8px 0 0 0;padding-left:0;list-style:none;font-size:12.6px;}
-.card li{position:relative;padding-left:15px;margin-top:4px;color:var(--fg);opacity:.94;}
+.card li{position:relative;padding-left:15px;margin-top:4px;opacity:.94;}
 .card li::before{content:"";position:absolute;left:2px;top:.66em;width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.75;}
 .card .foot{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--muted);}
-.pill{display:inline-block;font-size:11px;border-radius:999px;padding:1px 8px;border:1px solid var(--border);background:var(--sidebar);color:var(--muted);margin-right:5px;}
 
-/* ── 目录与一句话 ── */
-.toc{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0;}
-.toc a{font-size:12px;border:1px solid var(--border);background:var(--card);border-radius:999px;padding:3px 12px;color:var(--fg);box-shadow:var(--shadow-sm);transition:all .15s;}
-.toc a:hover{border-color:var(--active-border);color:var(--primary);text-decoration:none;}
-.oneline{margin:16px 0 0;border:1px dashed var(--border);border-left:3px solid var(--primary);border-radius:10px;background:var(--card);padding:11px 15px;font-size:13px;box-shadow:var(--shadow-sm);}
-.oneline b{color:var(--primary);}
+/* ── 三条高光（大卡） ── */
+.hl{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;}
+.hl .big{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--card);padding:18px 19px;box-shadow:var(--shadow-sm);}
+.hl .big::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary);opacity:.85;}
+.hl .big .idx{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--primary);}
+.hl .big h4{font-size:15.5px;font-weight:700;margin-top:6px;line-height:1.5;}
+.hl .big p{font-size:12.6px;margin-top:8px;opacity:.94;}
+.hl .big .kv{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;}
+.hl .big .kv span{font-size:11px;border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:1px 8px;color:var(--muted);}
 
-/* ── 痛点 → 回答 ── */
-.qa{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;}
-.qa .row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);}
-.qa .q{font-size:12.6px;color:var(--muted);}
-.qa .a{font-size:12.8px;font-weight:600;}
-.qa .arw{color:var(--primary);font-size:15px;}
+/* ── 剧本 ── */
+.script{border:1px solid var(--border);border-radius:14px;background:var(--card);box-shadow:var(--shadow-sm);overflow:hidden;}
+.script .sh{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--sidebar);border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.script .sh .who{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:0 7px;background:var(--card);}
+.script .sh h4{font-size:14.5px;font-weight:700;}
+.script .sh .gain{margin-left:auto;font-size:11.5px;color:var(--success);font-weight:600;}
+.script .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));}
+.script .st{padding:14px 16px;border-right:1px solid var(--border);}
+.script .st:last-child{border-right:none;}
+.script .st .n{font-size:10.5px;font-weight:700;color:var(--primary);letter-spacing:.8px;}
+.script .st .act{font-size:13px;font-weight:600;margin-top:4px;}
+.script .st .how{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.65;}
+.script .st .ui{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;}
+.script .st .ui span{font-size:10.5px;border:1px solid var(--border);background:var(--bg);border-radius:5px;padding:0 6px;font-family:Consolas,monospace;color:var(--fg);}
 
-/* ── 流程 ── */
-.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:var(--shadow-sm);}
-.step{padding:15px 16px 16px;position:relative;border-right:1px solid var(--border);}
-.step:last-child{border-right:none;}
-.step .idx{font-size:11px;font-weight:700;color:var(--primary);letter-spacing:1px;}
-.step .t{font-size:13.5px;font-weight:700;margin-top:5px;}
-.step .d{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.6;}
-.step .who{font-size:11px;color:var(--fg);opacity:.7;margin-top:8px;font-family:Consolas,monospace;}
-.step::after{content:"›";position:absolute;right:-1px;top:50%;transform:translateY(-50%);background:var(--card);color:var(--muted);font-size:16px;padding:0 3px;display:none;}
-@media(min-width:900px){.step::after{display:none;}}
+/* ── 流程条与门 ── */
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:var(--shadow-sm);}
+.step2{padding:14px 15px;border-right:1px solid var(--border);}
+.step2:last-child{border-right:none;}
+.step2 .idx{font-size:10.5px;font-weight:700;color:var(--primary);letter-spacing:1px;}
+.step2 .t{font-size:13.2px;font-weight:700;margin-top:4px;}
+.step2 .d{font-size:11.8px;color:var(--muted);margin-top:5px;line-height:1.62;}
+.step2 .who{font-size:10.5px;color:var(--muted);margin-top:7px;font-family:Consolas,monospace;}
+.gate{margin-top:10px;border:1px dashed var(--border);border-left:3px solid var(--primary);border-radius:10px;background:var(--card);padding:11px 15px;font-size:12.5px;box-shadow:var(--shadow-sm);}
+.gate b{color:var(--primary);}
 
-/* ── 分层架构 ── */
-.layers{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px;box-shadow:var(--shadow-sm);}
-.layer{display:grid;grid-template-columns:130px 1fr;gap:12px;align-items:stretch;padding:9px 0;border-bottom:1px dashed var(--border);}
+/* ── 分层 ── */
+.layers{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);}
+.layer{display:grid;grid-template-columns:132px 1fr;gap:12px;padding:9px 0;border-bottom:1px dashed var(--border);}
 .layer:last-child{border-bottom:none;}
 .layer .tag{font-size:11.5px;font-weight:700;color:var(--primary);display:flex;align-items:center;}
-.layer .body{font-size:12.6px;}
-.layer .body b{font-weight:600;}
-.layer .body .mono{color:var(--fg);opacity:.9;}
+.layer .body{font-size:12.5px;}
 .dep{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--muted);}
 .dep code{border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:2px 8px;color:var(--fg);}
 
-/* ── 代码块 ── */
-pre{border:1px solid var(--border);border-radius:11px;background:var(--code-bg);padding:14px 16px;overflow:auto;font-size:12.2px;line-height:1.65;font-family:Consolas,'SFMono-Regular',monospace;}
-pre .k{color:var(--info);}
-pre .s{color:var(--success);}
-pre .c{color:var(--muted);}
-pre .n{color:var(--warning);}
-
 /* ── 表格 ── */
-table{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);font-size:12.8px;}
+table{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);font-size:12.7px;box-shadow:var(--shadow-sm);}
 th{background:var(--sidebar);text-align:left;font-size:11.5px;color:var(--muted);font-weight:600;padding:9px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
 td{padding:9px 13px;border-bottom:1px solid var(--border);vertical-align:top;}
 tr:last-child td{border-bottom:none;}
@@ -136,29 +215,21 @@ td .mono{font-size:11.6px;color:var(--muted);}
 .badge.ok{color:var(--success);border-color:var(--success);}
 .badge.mid{color:var(--warning);border-color:var(--warning);}
 .badge.plan{color:var(--muted);}
+.yes{color:var(--success);font-weight:700;}
+.no{color:var(--muted);}
 
-/* ── 线框图 ── */
-.wire{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--border);border-radius:12px;overflow:hidden;box-shadow:var(--shadow-sm);background:var(--bg);}
-.wire .bar{display:flex;align-items:center;gap:8px;padding:9px 13px;font-size:12px;border-bottom:1px solid var(--border);}
-.wire .bar.head{background:var(--titlebar);font-weight:600;}
-.wire .bar.target{background:var(--sidebar);}
-.wire .bar.tabs{background:var(--tabbar);gap:14px;color:var(--muted);}
-.wire .bar.tabs .on{color:var(--fg);font-weight:600;position:relative;}
-.wire .bar.tabs .on::after{content:"";position:absolute;left:0;right:0;bottom:-10px;height:2px;background:var(--primary);}
-.wire .body{padding:14px;font-size:12.4px;display:grid;gap:10px;background:var(--bg);}
-.wire .score{margin-top:auto;border-top:1px solid var(--border);background:var(--sidebar);padding:11px 13px;display:flex;align-items:center;gap:12px;font-size:12.4px;}
-.wire .score .num{font-size:22px;font-weight:700;color:var(--success);line-height:1;}
-.wire .score .dims{color:var(--muted);font-size:11.5px;}
-.wire .zone{border:1px solid var(--border);border-radius:8px;padding:8px 11px;font-size:12px;background:var(--card);}
-.wire .zone .zt{font-weight:600;}
-.wire .zone .zt .chev{color:var(--muted);margin-left:6px;}
-.bar-fill{height:6px;border-radius:4px;background:var(--track);overflow:hidden;}
-.bar-fill i{display:block;height:100%;background:var(--primary);}
+/* ── 代码块 ── */
+pre{border:1px solid var(--border);border-radius:11px;background:var(--code-bg);padding:14px 16px;overflow:auto;
+  font-size:12.2px;line-height:1.7;font-family:Consolas,'SFMono-Regular',monospace;box-shadow:var(--shadow-sm);}
+pre .k{color:var(--info);}
+pre .s{color:var(--success);}
+pre .c{color:var(--muted);}
+pre .n{color:var(--warning);}
 
 /* ── 结尾 ── */
-.foot{margin-top:34px;border-top:1px solid var(--border);padding-top:16px;font-size:12px;color:var(--muted);line-height:1.9;}
+.foot{margin-top:36px;border-top:1px solid var(--border);padding-top:16px;font-size:12px;color:var(--muted);line-height:1.95;}
 .foot b{color:var(--fg);}
-@media print{.theme-toggle{display:none;}body{background:#fff;}}
+@media print{.theme-toggle,.nav{display:none;}body{background:#fff;}}
 </style>
 </head>
 <body>
@@ -169,304 +240,487 @@ td .mono{font-size:11.6px;color:var(--muted);}
     <div class="brand">
       <div class="logo">R</div>
       <div>
-        <h1>RdataStation · 洞察模块（M8）</h1>
-        <div class="sub">一页看懂：它是什么、能做什么、怎么运转</div>
+        <h1>RdataStation · 洞察（M8）</h1>
+        <div class="sub">一页看懂：它替你解决什么 · 怎么用 · 怎么运转（数字快照 2026-09-18）</div>
       </div>
     </div>
-    <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+    <div class="head-actions">
+      <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+    </div>
   </div>
+
+  <!-- ══ 吸顶导航 ══ -->
+  <nav class="nav" id="nav">
+    <a href="#s1">为什么不是一个统计面板</a>
+    <a href="#s2">三个高光</a>
+    <a href="#s3">四个剧本</a>
+    <a href="#s4">一次洞察的旅程</a>
+    <a href="#s5">列画像</a>
+    <a href="#s6">表探查</a>
+    <a href="#s7">多列分析</a>
+    <a href="#s8">结构报告</a>
+    <a href="#s9">快照与对比</a>
+    <a href="#s10">规则 · 写 TOML</a>
+    <a href="#s11">从哪儿进</a>
+    <a href="#s12">架构</a>
+    <a href="#s13">质量与证据</a>
+    <a href="#s14">边界</a>
+    <a href="#s15">文档地图</a>
+  </nav>
 
   <!-- ══ 英雄区 ══ -->
   <div class="hero">
-    <div class="eyebrow">右 Dock 洞察面板 · <b>五 Tab</b> · 规则可扩展 · 结论可带走</div>
-    <h2>把数据变成<em>结论</em>——<br>这份数据长什么样，它能不能用。</h2>
-    <p class="lead">
-      点一下表、某一列、一份草稿文件——洞察面板立刻给出画像、评分与结构报告；
-      再把结论存成快照，下次一对比就知道数据变了什么。
-      <span class="dim">整个过程不搬数据、不猜类型、不摆假数字。</span>
-    </p>
+    <div class="hero-grid">
+      <div>
+        <div class="eyebrow">右 Dock · <b>五个 Tab</b> · 16 条规则 · 四维评分 · 一条五步的闭环</div>
+        <h2>右键一张表——<em>画像、评分、结构健康</em>就在右边；<br>存一版，下次就知道数据变了什么。</h2>
+        <p class="lead">
+          它不是一个「看一眼数据」的侧边栏：取样、算分、出报告、留档、对比，是一条完整的闭环。
+          <span class="dim">每个数字都说得出出处——说不出的就不摆。</span>
+        </p>
+        <div class="chips">
+          <span class="chip hot">五 Tab：列 · 表 · 多列 · 结构 · 历史</span>
+          <span class="chip hot">16 条内置规则，加 TOML 即扩展</span>
+          <span class="chip">四维评分 × 五档等级</span>
+          <span class="chip">不产假分数 / 假分布</span>
+          <span class="chip">快照 30 天保留 · 一键清理</span>
+          <span class="chip">内存闸 2 GB · 临时表用完即删</span>
+        </div>
+        <div class="cta">
+          <a class="pri" href="#s3">看四个剧本 ↓</a>
+          <a href="#s12">看架构</a>
+          <a href="#s10">写一条规则</a>
+        </div>
+      </div>
+
+      <!-- 面板线框：点 Tab 看五个视角（右侧可切） -->
+      <div class="win">
+        <div class="tbar"><span class="mark"></span><span class="tname">RdataStation</span><span>— 工作台</span><span class="wbtns"><span>—</span><span>▢</span><span>✕</span></span></div>
+        <div class="win-body">
+          <div class="rail"><span>◧</span><span class="on">◫</span><span>⌕</span><span>⚙</span></div>
+          <div class="center">
+            <div class="chead">中央 Dock · SQL 编辑器与结果集（M5）</div>
+            <div class="cbox">
+              <div class="ch">结果集 · 列头右键</div>
+              <div class="cb">「洞察此列」——不物化结果集，重跑一次 LIMIT 取样</div>
+            </div>
+            <div class="cbox">
+              <div class="ch">左侧导航 · 右键</div>
+              <div class="cb">「查看统计」（库 / 表 / 列）·「结构洞察」（库）</div>
+            </div>
+            <table class="grid2">
+              <tr><th>amount</th><th>region</th></tr>
+              <tr><td>128.50</td><td>华东</td></tr>
+              <tr><td>42.00</td><td>华南</td></tr>
+            </table>
+          </div>
+          <div class="dock">
+            <div class="dhead">洞察<span class="act">⚙ ⟳</span></div>
+            <div class="dstrip"><span class="name">orders.amount</span><span class="badge">Numeric</span><span class="null">空值率 2.4%</span></div>
+            <div class="dtabs">
+              <span class="ptab on" data-tab="col" onclick="setTab('col')">列</span>
+              <span class="ptab" data-tab="table" onclick="setTab('table')">表</span>
+              <span class="ptab" data-tab="multi" onclick="setTab('multi')">多列</span>
+              <span class="ptab" data-tab="schema" onclick="setTab('schema')">结构</span>
+              <span class="ptab" data-tab="history" onclick="setTab('history')">历史</span>
+            </div>
+            <div class="dbody">
+              <div class="pane on" data-pane="col">
+                <div class="zone"><div class="zt">基础统计<span class="chev">▾</span></div>
+                  <div class="kv"><span class="k">总行数</span><span>12,480</span><span class="k">非空</span><span>12,180</span><span class="k">去重</span><span>1,024</span></div>
+                </div>
+                <div class="zone"><div class="zt">数据分布<span class="chev">▾</span></div>
+                  <div class="zc">0 – 1k · 42%</div><div class="barfill"><i style="width:42%"></i></div>
+                  <div class="zc">1k – 5k · 33%</div><div class="barfill"><i style="width:33%"></i></div>
+                </div>
+                <div class="zone"><div class="zt">数据质量<span class="chev">▸</span></div>
+                  <div class="zc"><span class="warn">⚠</span> 空值率 2.4%（规则阈值 10%，通过）</div>
+                </div>
+                <div class="zone"><div class="zt">样本数据<span class="chev">▸</span></div>
+                  <div class="zc">前 5 行 · 超长值按 200 字符截断</div>
+                </div>
+                <div class="scorecard"><div class="num">86</div><div><div style="font-weight:600">良好</div><div class="dims">完整性 82 · 唯一性 100 · 类型一致 95 · 分布均匀 68</div></div></div>
+              </div>
+              <div class="pane" data-pane="table">
+                <div class="zone"><div class="zt">评估全表</div>
+                  <div class="zc">正在评估 7/23 列…</div><div class="barfill"><i style="width:30%"></i></div>
+                </div>
+                <div class="zone"><div class="zt">列清单</div>
+                  <div class="kv"><span class="k">id</span><span>BIGINT · PK · 质量 98</span><span class="k">amount</span><span>DECIMAL · 质量 82</span><span class="k">region</span><span>VARCHAR · 质量 91</span></div>
+                </div>
+                <div class="zone"><div class="zt">表级质量</div><div class="zc">86 · 良好 · 2 列需关注</div></div>
+              </div>
+              <div class="pane" data-pane="multi">
+                <div class="zone"><div class="zt">选择列（顺序即参数顺序）</div>
+                  <div class="zc">① amount　② discount　③ region</div>
+                </div>
+                <div class="zone"><div class="zt">选择规则</div>
+                  <div class="zc"><span class="ok">◉</span> Pearson 相关系数（Numeric, Numeric）<br><span class="no">◯</span> 分组统计（置灰：类型不相容）</div>
+                </div>
+                <div class="zone"><div class="zt">结果</div><div class="kv"><span class="k">correlation</span><span>0.812</span><span class="k">sample_size</span><span>12,180</span></div></div>
+              </div>
+              <div class="pane" data-pane="schema">
+                <div class="zone"><div class="zt">健康分</div><div class="kv"><span class="k">68</span><span>一般 · 4 表 · 21 列 · 需关注 3 项</span></div></div>
+                <div class="zone"><div class="zt">外键候选 (1)</div><div class="zc">orders.user_id → users.id（high）</div></div>
+                <div class="zone"><div class="zt">类型不一致 (1)</div><div class="zc">status：orders = VARCHAR · users = INTEGER（critical）</div></div>
+                <div class="zone"><div class="zt">孤立表 / 冗余列</div><div class="zc">logs（无关联）· created_at（3 表重复）</div></div>
+                <div class="hintline">表名可点 → 下钻到表探查；右上「导出 ▾」存 JSON / Markdown</div>
+              </div>
+              <div class="pane" data-pane="history">
+                <div class="zone"><div class="zt">快照历史<span class="chev">保存 · 清理</span></div>
+                  <div class="kv"><span class="k">09-18 14:22</span><span>a1c9f3 · DECIMAL · 当前</span><span class="k">09-11 09:04</span><span>7be204 · DECIMAL · 首版</span></div>
+                </div>
+                <div class="zone"><div class="zt">与 09-11 09:04 对比</div>
+                  <div class="zc">空值率 3.1% → 2.4%　▼ 0.7　|　唯一值 980 → 1,024　▲ 44</div>
+                </div>
+                <div class="zc">存储用量 1.2 MB · 保留 30 天 · 正文与版本链成对删</div>
+              </div>
+            </div>
+            <div class="dtip" id="tab-tip">点上面的 Tab 可切换视角 —— 列画像：四区 + 评分卡（评分卡钉在滚动区之外）</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="kpis">
       <div class="kpi">
         <div class="n">5<small> 个 Tab</small></div>
         <div class="l">列 · 表 · 多列 · 结构 · 历史</div>
-        <div class="d">一屏看完一列、一张表、一次跨列分析、一个库的结构健康</div>
+        <div class="d">一屏看完一列、一张表、一次跨列关系、一个库的结构健康与一列的变化史</div>
       </div>
       <div class="kpi">
         <div class="n">16<small> 条内置规则</small></div>
         <div class="l">加一个 TOML 就多一种洞察</div>
-        <div class="d">列级 9 · 多列 4 · 表级 3，用户可全局/项目级扩展</div>
+        <div class="d">列级 9 · 多列 4 · 表级 3；三层作用域（内置 → 全局 → 项目），目录一改即热加载</div>
       </div>
       <div class="kpi">
         <div class="n">4<small> 维评分</small></div>
         <div class="l">完整性 · 唯一性 · 类型一致 · 分布均匀</div>
-        <div class="d">五档等级，列级与表级同一套阈值——分数说得清出处</div>
+        <div class="d">五档等级；列级与表级共用同一套阈值——总分算等级，不是各写一份</div>
       </div>
       <div class="kpi">
-        <div class="n">4<small> 类数据来源</small></div>
-        <div class="l">导航树（含结构洞察）· 草稿箱 · 分析存档 · 编辑器结果集</div>
-        <div class="d">凡是导航树上看得见、或草稿箱 / 分析存档里的文件，都能直接洞察</div>
+        <div class="n">5<small> 个入口</small></div>
+        <div class="l">导航树 ×2 · 草稿箱 · 分析存档 · 结果集</div>
+        <div class="d">能出现在导航树上的对象都能洞察；文件类数据源（CSV / Parquet / Excel / JSON）同样支持</div>
+      </div>
+      <div class="kpi">
+        <div class="n">0<small> 假数字</small></div>
+        <div class="l">说不出的就不摆</div>
+        <div class="d">全空列不产分 · 分布画不出说明原因 · 存储用量拿不到就不显示（不编 0）</div>
+      </div>
+    </div>
+
+    <div class="mode-strip">
+      <div class="ms-head">五个 Tab · 一个目标模型
+        <span class="hint">同一套目标与四态（空 / 加载 / 错误 / 数据）；Tab 只决定看哪一份载荷——载荷按 Tab 分开存，切回来还是上次那份结果</span>
+      </div>
+      <div class="flow">
+        <div class="step2"><div class="idx">列</div><div class="t">四区画像 + 评分卡</div>
+          <div class="d">基础统计 / 数据分布 / 数据质量 / 样本数据；评分卡钉在滚动区之外</div>
+          <div class="who">已实装 · 入口最常用</div></div>
+        <div class="step2"><div class="idx">表</div><div class="t">列清单 + 评估全表</div>
+          <div class="d">列清单（主键 / 类型 / 可空 / 质量分）· 逐列串行出分、进度回填 · 点列名下钻</div>
+          <div class="who">已实装</div></div>
+        <div class="step2"><div class="idx">多列</div><div class="t">规则驱动的跨列结论</div>
+          <div class="d">勾选顺序 = 参数顺序；规则按类型族判可用性；结果与门控提示同屏</div>
+          <div class="who">已实装</div></div>
+        <div class="step2"><div class="idx">结构</div><div class="t">健康分 + 四区</div>
+          <div class="d">外键候选 / 类型不一致 / 孤立表 / 冗余列；空区照常渲染，表名可下钻，可导出</div>
+          <div class="who">已实装 · 零方言 SQL</div></div>
+        <div class="step2"><div class="idx">历史</div><div class="t">快照与对比</div>
+          <div class="d">保存 / 版本链 / 固定方向对比 / 30 天剪链清理 / 存储用量</div>
+          <div class="who">已实装</div></div>
       </div>
     </div>
   </div>
 
-  <!-- ══ 目录与一句话 ══ -->
-  <div class="oneline"><b>一句话版本：</b>「洞察」给库表与文件一句能落地的结论——五 Tab 看完画像与结构健康，四维评分说清为什么，快照对比看变化；规则写 TOML 即可扩展，报告能导出带走。</div>
-  <nav class="toc">
-    <a href="#s1">它回答什么</a><a href="#s2">面板骨架</a><a href="#s3">五个 Tab</a>
-    <a href="#s4">五步旅程</a><a href="#s5">架构</a><a href="#s6">八个特点</a>
-    <a href="#s7">规则示例</a><a href="#s8">入口矩阵</a><a href="#s9">质量验证</a><a href="#s10">二期路线</a>
-  </nav>
-
-  <!-- ══ 1. 它回答什么问题 ══ -->
+  <!-- ══ 1. 为什么它不是一个「统计面板」 ══ -->
   <section id="s1">
-    <div class="sec-head"><span class="no">01</span><h3>它回答三个问题</h3></div>
-    <div class="sec-sub">不是再做一个「看数据」的界面，而是把「看一眼就有判断」固定成流程。</div>
-    <div class="qa">
-      <div class="row">
-        <div class="q">这列能不能用？空值多不多、有没有异常值？</div>
-        <div class="arw">→</div>
-        <div class="a">列画像四区 + 四维评分卡：基础统计 / 数据分布 / 数据质量 / 样本数据</div>
+    <div class="sec-head"><span class="no">01</span><h3>为什么它不是一个「统计面板」</h3><span class="tag">七处「看着有、实际是假」的地方，逐条换成了真东西</span></div>
+    <table>
+      <tr><th style="width:44%">旧样子（V1）</th><th>现在</th></tr>
+      <tr>
+        <td>底部四个 Tab 容器，多个面板<b>压根没挂载</b>——点进去是空的</td>
+        <td>右 Dock <b>五 Tab</b> + 一个目标模型（列 / 表 / 多列 / 结构 / 历史）；每个 Tab 都取得到数，取不到就说清为什么</td>
+      </tr>
+      <tr>
+        <td>质量评分卡：组件在、<b>数据恒空</b></td>
+        <td>四维评分真算，列级与表级<b>共用同一套阈值</b>；<b>全空列不产分</b>——没有依据就不给分</td>
+      </tr>
+      <tr>
+        <td>历史能看、<b>没有保存入口</b>（v1 的保存函数前端不可达）</td>
+        <td>保存入口就在历史 Tab 顶部（无项目时置灰并写明原因）；双写成对，失败<b>回滚已写入的那一半</b></td>
+      </tr>
+      <tr>
+        <td>多列分析<b>从未跑通</b></td>
+        <td>重新设计：列序即参数序 + 类型族过滤 + 结果与门控提示同屏，失败不冲掉表单</td>
+      </tr>
+      <tr>
+        <td>存储用量是<b>前端估算</b></td>
+        <td>后端真实统计；拿不到就<b>整行不显示</b>（编一个 0 会让人以为历史被清了）</td>
+      </tr>
+      <tr>
+        <td>导出 / 规则热加载 / 适用规则标签<b>都没有入口</b></td>
+        <td>结构报告导出 JSON / Markdown；规则走<b>目录监听热加载</b>，⚙ 对话框里可启停、可新建</td>
+      </tr>
+      <tr>
+        <td><span class="mono">filterByValue</span>（按值筛选）语义错误</td>
+        <td>删除——洞察只做「结论」；交互式筛选属编辑器（M5），不在这里重造</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ══ 2. 三个高光 ══ -->
+  <section id="s2">
+    <div class="sec-head"><span class="no">02</span><h3>三个高光</h3><span class="tag">如果只记三件事</span></div>
+    <div class="hl">
+      <div class="big">
+        <div class="idx">HIGHLIGHT 1</div>
+        <h4>每个数字都说得出出处</h4>
+        <p>四维评分算总分、总分定等级，同一套阈值列级与表级共用；类型族来自<b>真实元数据</b>（驱动接口，不靠名字猜）。
+          该没有的数字就真的没有：全空列不给分、分布画不出说明原因、历史读不到就不显示用量。</p>
+        <div class="kv"><span>采样口径常驻写明</span><span>类型族不猜</span><span>与 DuckDB SUMMARIZE 交叉校验（测试级）</span></div>
       </div>
-      <div class="row">
-        <div class="q">这张表值不值得信？哪几列有问题？</div>
-        <div class="arw">→</div>
-        <div class="a">表探查：列清单（主键 / 类型 / 可空 / 质量）+「评估全表」逐列串行出分</div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 2</div>
+        <h4>边界诚实，说不做的就真不做</h4>
+        <p>能洞察的只有<b>能出现在导航树上的对象</b>（真驱动 + 活连接）与草稿箱 / 分析存档两块文件；
+          只靠 ATTACH 或三方扩展到达的远程库不在承诺范围内。每一句「做不到」都带着原因。</p>
+        <div class="kv"><span>无项目：规则管理与快照置灰并写明</span><span>历史 Tab 无项目时说“先打开项目”</span><span>没实现就不摆按钮</span></div>
       </div>
-      <div class="row">
-        <div class="q">整个库结构有没有坑？</div>
-        <div class="arw">→</div>
-        <div class="a">结构报告：健康分 + 四区结论（外键候选 / 类型不一致 / 孤立表 / 冗余列）</div>
-      </div>
-      <div class="row">
-        <div class="q">上个月和现在比，变好了还是变差了？</div>
-        <div class="arw">→</div>
-        <div class="a">快照历史：存一版、再存一版，固定方向对比（选中 → 最新）</div>
+      <div class="big">
+        <div class="idx">HIGHLIGHT 3</div>
+        <h4>规则即文件，扩展不用改 Rust</h4>
+        <p>16 条内置规则 + 三层作用域（内置 → 全局 → 项目）+ 目录监听热加载：写一个
+          <span class="mono">*.rule.toml</span> 就多一种洞察。两道安全门：规则 SQL 过解析期静态门，项目规则过信任门。</p>
+        <div class="kv"><span>解析期校验（value_type / 门控字段）</span><span>一条被拒就是整条不加载</span><span>正文以文件为唯一真相源</span></div>
+        <div class="kv"><a href="#s10" style="font-size:11.5px">看完整规则示例 ↓</a></div>
       </div>
     </div>
   </section>
 
-  <!-- ══ 2. 面板长什么样 ══ -->
-  <section id="s2">
-    <div class="sec-head"><span class="no">02</span><h3>面板长什么样</h3></div>
-    <div class="sec-sub">右 Dock 17.5rem 起步：面板头 · 目标头 · Tab 条 · 内容区；评分卡钉在滚动区之外——它是这一列的头号结论，不该滚走。（下图为示意数据）</div>
-    <div class="wire">
-      <div class="bar head">◧ 洞察<span style="margin-left:auto;color:var(--muted)">⚙ 规则管理 · ⟳ 重算</span></div>
-      <div class="bar target">orders.amount <span class="badge">Numeric</span><span style="margin-left:auto;color:var(--muted)">空值率 2.4%</span></div>
-      <div class="bar tabs"><span class="on">列</span><span>表</span><span>多列</span><span>结构</span><span>历史</span></div>
-      <div class="body">
-        <div class="zone"><div class="zt">基础统计<span class="chev">▾</span></div>
-          <div class="dims" style="margin-top:6px">总行数 12,480 · 非空 12,180 · 去重 1,024 · 最小 0.01 · 最大 9,999.00</div>
-        </div>
-        <div class="zone"><div class="zt">数据分布<span class="chev">▾</span></div>
-          <div style="display:grid;gap:7px;margin-top:8px">
-            <div><div class="dims">0 – 1k · 42%</div><div class="bar-fill"><i style="width:42%"></i></div></div>
-            <div><div class="dims">1k – 5k · 33%</div><div class="bar-fill"><i style="width:33%"></i></div></div>
-            <div><div class="dims">5k – 10k · 25%</div><div class="bar-fill"><i style="width:25%"></i></div></div>
+  <!-- ══ 3. 四个剧本 ══ -->
+  <section id="s3">
+    <div class="sec-head"><span class="no">03</span><h3>四个剧本 · 它替你做什么</h3><span class="tag">每步都用现有按钮，能照着做</span></div>
+    <div class="grid g2">
+      <div class="script">
+        <div class="sh"><span class="who">剧本 A</span><h4>拿到一张没见过的表</h4><span class="gain">先摸清它</span></div>
+        <div class="steps">
+          <div class="st">
+            <div class="n">STEP 1</div><div class="act">一眼看完这张表</div>
+            <div class="how">导航树表节点右键 <b>查看统计</b> → 「表」Tab：列清单（序号 / 列名（PK）/ 类型 / 可空 / 质量分）。</div>
+            <div class="ui"><span>查看统计</span><span>表</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 2</div><div class="act">让全部列都出分</div>
+            <div class="how">点 <b>评估全表</b>：逐列串行（不撞并发上限），进度行写「正在评估 7/23 列…」；已算出的分数不会被清空。</div>
+            <div class="ui"><span>评估全表</span><span>7/23</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 3</div><div class="act">挑一列细看</div>
+            <div class="how">点列名即<b>下钻</b> → 「列」Tab：四区 + 评分卡；目标头显示列名、类型徽标与空值率。</div>
+            <div class="ui"><span>列名下钻</span><span>评分卡</span></div>
           </div>
         </div>
-        <div class="zone"><div class="zt">数据质量<span class="chev">▸</span></div>
-          <div class="dims" style="margin-top:6px">⚠ 空值率 2.4%（规则阈值 10%，通过）</div>
-        </div>
-        <div class="zone"><div class="zt">样本数据<span class="chev">▸</span></div>
-          <div class="dims" style="margin-top:6px">前 5 行 · 超长值按 200 字符截断</div>
+      </div>
+
+      <div class="script">
+        <div class="sh"><span class="who">剧本 B</span><h4>想知道两列的关系</h4><span class="gain">不用写 SQL</span></div>
+        <div class="steps">
+          <div class="st">
+            <div class="n">STEP 1</div><div class="act">按顺序勾列</div>
+            <div class="how">切「多列」Tab：勾选列<b>带序号</b>——顺序就是参数顺序（<span class="mono">col1</span> / <span class="mono">col2</span>）；方向性规则不对称，序号必须露出来。</div>
+            <div class="ui"><span>多列</span><span>① amount</span><span>② discount</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 2</div><div class="act">选规则</div>
+            <div class="how">规则按<b>类型族</b>自动判可用性：不相容的规则行置灰，可用的直接点。</div>
+            <div class="ui"><span>Pearson 相关系数</span><span>分组统计</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 3</div><div class="act">执行</div>
+            <div class="how">点 <b>执行分析</b>：结果与质量门控提示同屏；失败只挂一条提示，表单与已有结果都还在。</div>
+            <div class="ui"><span>执行分析</span><span>correlation 0.812</span></div>
+          </div>
         </div>
       </div>
-      <div class="score">
-        <div class="num">86</div>
-        <div>
-          <div style="font-weight:600">良好</div>
-          <div class="dims">完整性 82 · 唯一性 100 · 类型一致 95 · 分布均匀 68</div>
+
+      <div class="script">
+        <div class="sh"><span class="who">剧本 C</span><h4>接手一个不熟的库</h4><span class="gain">先看结构有没有坑</span></div>
+        <div class="steps">
+          <div class="st">
+            <div class="n">STEP 1</div><div class="act">从库上取报告</div>
+            <div class="how">导航树库 / schema 节点右键 <b>结构洞察</b> → 「结构」Tab。取数走驱动元数据接口，<b>零方言 SQL</b>——SQLite 也支持。</div>
+            <div class="ui"><span>结构洞察</span><span>结构</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 2</div><div class="act">看结论</div>
+            <div class="how">健康条（分数 + 等级 + 规模 + 需关注项数）+ 四区：外键候选 / 类型不一致 / 孤立表 / 冗余列；<b>空区照常渲染</b>——空 = 检查过、没问题。</div>
+            <div class="ui"><span>健康分 68 一般</span><span>需关注 3 项</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 3</div><div class="act">顺着表名往下看</div>
+            <div class="how">报告里的表名最多摆 4 个热点，点一下切到该表的表探查。</div>
+            <div class="ui"><span>orders</span><span>users</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 4</div><div class="act">交给同事</div>
+            <div class="how"><b>导出 ▾</b> → JSON / Markdown（导出的是你屏幕上这份结论），宿主只负责选路径写文件。</div>
+            <div class="ui"><span>导出 ▾</span><span>Markdown</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="script">
+        <div class="sh"><span class="who">剧本 D</span><h4>数据变了要交差</h4><span class="gain">变化看得见</span></div>
+        <div class="steps">
+          <div class="st">
+            <div class="n">STEP 1</div><div class="act">留一版</div>
+            <div class="how">「历史」Tab → <b>保存</b>：正文进项目 DuckDB、版本链进项目 SQLite；无项目时按钮置灰并写明原因。</div>
+            <div class="ui"><span>历史</span><span>保存</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 2</div><div class="act">数据更新后再留一版</div>
+            <div class="how">回「列」Tab 点 ⟳ 重算看新结论，再回「历史」保存第二版。</div>
+            <div class="ui"><span>⟳ 重算</span><span>保存</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 3</div><div class="act">看变在哪</div>
+            <div class="how">点更早的一版 → 对比面板：方向固定<b>「选中 → 最新」</b>，逐字段 <span class="mono">旧 → 新</span> + 差值；方向用中性色，不预设好坏。</div>
+            <div class="ui"><span>对比</span><span>2.4% ▼ 0.7</span></div>
+          </div>
+          <div class="st">
+            <div class="n">STEP 4</div><div class="act">到期清理</div>
+            <div class="how"><b>清理</b> → 确认框（写清删几天前、不可撤销）→ 回执；正文与版本链<b>成对删</b>，两侧条数对不上就转红。</div>
+            <div class="ui"><span>清理</span><span>30 天</span></div>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ══ 3. 五个 Tab ══ -->
-  <section id="s3">
-    <div class="sec-head"><span class="no">03</span><h3>五个 Tab，各自给一句结论</h3></div>
-    <div class="sec-sub">每个 Tab 都遵守同一条纪律：<b>没有数据就不摆数字</b>——不产假分数、不画假分布、不编造历史。</div>
-    <div class="grid g5">
-      <div class="card">
-        <h4><span class="ico">列</span>列画像</h4>
-        <ul>
-          <li>四区：基础统计 / 数据分布 / 数据质量 / 样本数据</li>
-          <li>评分卡四维 + 五档等级</li>
-          <li>NULL 显式呈现，分布画不出就说原因</li>
-        </ul>
-        <div class="foot">入口：结果表列头右键 · 导航树列节点</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">表</span>表探查</h4>
-        <ul>
-          <li>列清单：序号 / 列名（PK）/ 类型 / 可空 / 质量分</li>
-          <li>「评估全表」逐列串行，进度一列列回填</li>
-          <li>点列名即下钻到该列的画像</li>
-        </ul>
-        <div class="foot">串行是为了不撞后端并发上限</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">多列</span>多列分析</h4>
-        <ul>
-          <li>选择顺序 = 参数顺序（col1 / col2 …）</li>
-          <li>规则按类型族自动过滤可用性</li>
-          <li>结果与失败提示同屏，表单不丢</li>
-        </ul>
-        <div class="foot">相关系数这类规则是有方向的</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">结构</span>结构报告</h4>
-        <ul>
-          <li>健康分 + 四区：外键候选 / 类型不一致 / 孤立表 / 冗余列</li>
-          <li>表名可点，直接下钻看表探查</li>
-          <li>导出 JSON / Markdown（导出你看到的这份结论）</li>
-        </ul>
-        <div class="foot">空区照常渲染：空 = 检查过、没问题</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">历史</span>快照与对比</h4>
-        <ul>
-          <li>保存当前画像，形成版本链</li>
-          <li>对比方向固定「选中 → 最新」，差值标方向不评好坏</li>
-          <li>30 天前的快照一键清理，正文与版本链成对删</li>
-        </ul>
-        <div class="foot">存储用量行拿不到就不显示</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ══ 4. 流程 ══ -->
+  <!-- ══ 4. 一次洞察的旅程 ══ -->
   <section id="s4">
-    <div class="sec-head"><span class="no">04</span><h3>一次洞察的旅程</h3></div>
-    <div class="sec-sub">五步一条线：入口只发意图，取数在接缝，面板渲染零副作用。</div>
+    <div class="sec-head"><span class="no">04</span><h3>一次洞察的旅程</h3><span class="tag">五步各有归属——这也是它能被测试、被回放的原因</span></div>
     <div class="flow">
-      <div class="step">
-        <div class="idx">STEP 1</div>
-        <div class="t">选目标</div>
-        <div class="d">导航树 / 草稿箱 / 分析存档右键「查看统计」，或结果集列头「洞察此列」。</div>
-        <div class="who">M4 导航 · M5 编辑器</div>
-      </div>
-      <div class="step">
-        <div class="idx">STEP 2</div>
-        <div class="t">取样</div>
-        <div class="d">连源或读文件 → DuckDB 临时表（<span class="mono">tmp_i_*</span>），按源取样；编辑器入口连表都不建，直接重跑 LIMIT 取样。</div>
-        <div class="who">insight/service · engine</div>
-      </div>
-      <div class="step">
-        <div class="idx">STEP 3</div>
-        <div class="t">算结论</div>
-        <div class="d">列画像 / 四维评分 / 表探查 / 多列规则 / 结构分析，全部在 DuckDB 上完成。</div>
-        <div class="who">insight_engine · quality_scorer · schema_analyzer</div>
-      </div>
-      <div class="step">
-        <div class="idx">STEP 4</div>
-        <div class="t">看结论</div>
-        <div class="d">面板按 Tab 分栏渲染，四态（空 / 加载 / 错误 / 数据）各有说法；错误可重试。</div>
-        <div class="who">insight_view · view/</div>
-      </div>
-      <div class="step">
-        <div class="idx">STEP 5</div>
-        <div class="t">留档 / 带走</div>
-        <div class="d">存快照（正文进项目 DuckDB、版本链进项目 SQLite）或导出结构报告；下次对比即知变化。</div>
-        <div class="who">insight/store · 宿主写文件</div>
-      </div>
+      <div class="step2"><div class="idx">STEP 1</div><div class="t">选目标</div><div class="d">导航树 / 草稿箱 / 分析存档右键，或结果集列头「洞察此列」；<b>只发意图</b>（事件），面板不自己取数</div><div class="who">view · 宿主装配</div></div>
+      <div class="step2"><div class="idx">STEP 2</div><div class="t">取样</div><div class="d">连源经引擎打型；文件类直接读（CSV / Parquet / Excel / JSON）→ DuckDB 临时表 <span class="mono">tmp_i_*</span></div><div class="who">service · engine</div></div>
+      <div class="step2"><div class="idx">STEP 3</div><div class="t">算结论</div><div class="d">列画像 / 四维评分 / 表探查 / 多列规则 / 结构分析，全在 DuckDB 上完成</div><div class="who">insight_engine · quality_scorer · schema_analyzer</div></div>
+      <div class="step2"><div class="idx">STEP 4</div><div class="t">看结论</div><div class="d">面板按 Tab 分栏渲染；四态各有说法，错误可重试，加载是骨架而不是空白</div><div class="who">insight_view · view/</div></div>
+      <div class="step2"><div class="idx">STEP 5</div><div class="t">留档 / 带走</div><div class="d">存快照（正文 + 版本链双写）或导出结构报告；下次对比即知变化</div><div class="who">store · 宿主写文件</div></div>
     </div>
+    <div class="gate"><b>渲染路径零 I/O</b>：点击只改面板自身状态并发事件，取数在接缝（<span class="mono">jobs</span> / <span class="mono">service</span>）里做——所以不会出现「渲染一次发一次请求」。</div>
+    <div class="gate"><b>编辑器入口不物化</b>：结果集做洞察时不建临时表，直接重跑一次 LIMIT 取样；<span class="mono">tmp_i_*</span> 分析临时表带前缀、用完即删，DuckDB 连接上有内存闸 2 GB、溢写进 <span class="mono">&lt;RDS_HOME&gt;/tmp</span>。</div>
   </section>
 
-  <!-- ══ 5. 架构 ══ -->
+  <!-- ══ 5. 列画像 ══ -->
   <section id="s5">
-    <div class="sec-head"><span class="no">05</span><h3>架构：一屏看清谁负责什么</h3></div>
-    <div class="sec-sub">依赖只向下：<code>insight → engine → shared</code>。洞察不依赖任何业务 Feature crate，工作台只做装配。</div>
-    <div class="layers">
-      <div class="layer">
-        <div class="tag">入口 · 装配</div>
-        <div class="body"><b>workbench</b>：右 Dock 面板装配、订阅面板事件、把「下钻 / 导出 / 取样」翻译成宿主动作。<span class="mono">components/{nav_host,resource_host,scratchpad_host}.rs · services/editor_insight.rs</span></div>
+    <div class="sec-head"><span class="no">05</span><h3>列画像 · 四区与评分卡</h3><span class="tag">分数是这一列的头号结论，不该滚走</span></div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">▤</span>四个折叠区</h4>
+        <ul>
+          <li><b>基础统计</b>：总行数 / 非空 / 去重 / 极值等——行数与质量分基于<b>全量统计</b></li>
+          <li><b>数据分布</b>：数值直方图 / 布尔占比；样本不足或类型未识别时<b>说明原因</b>，不造假分布</li>
+          <li><b>数据质量</b>：提示列表（Info / Warning）；没有问题就说「未发现需要提示的质量问题」</li>
+          <li><b>样本数据</b>：前 5 行，<span class="mono">NULL</span> 显式呈现；超长值按 200 字符截断</li>
+        </ul>
+        <div class="foot">面板宽 17.5rem 起步（右 Dock）· 折叠态属用户偏好：⟳ 重算与切 Tab 都不会清空</div>
       </div>
-      <div class="layer">
-        <div class="tag">视图 · 面板</div>
-        <div class="body"><b>insight_view.rs</b> 状态宿主（目标 / 五态 / 各 Tab 载荷 / 选择与折叠）+ <b>view/</b> 按 Tab 分的渲染片段（header · column · table · multi · schema · history）。渲染零 I/O、零副作用，点击只改状态并发事件。</div>
+      <div class="card">
+        <h4><span class="ico">★</span>评分卡（钉在滚动区之外）</h4>
+        <ul>
+          <li>总分 + 五档等级（优秀 / 良好 / 一般 / 较差 / 差）</li>
+          <li>四维细条：完整性 · 唯一性 · 类型一致 · 分布均匀——每根条子按<b>该维自己的等级</b>取色，短板一眼可见</li>
+          <li>全空列<b>不产分</b>；维度分数与总分同源，不会互相矛盾</li>
+        </ul>
+        <div class="foot">列级与表级共用同一套阈值与文案（<span class="mono">quality_scorer.rs</span>）</div>
       </div>
-      <div class="layer">
-        <div class="tag">接缝 · 服务</div>
-        <div class="body"><b>jobs.rs</b> 把事件变成后台任务并回填；<b>service/</b> 是同步门面（列 / 表 / 多列 / 结构 / 快照 / 清理）。面板不自己取数——这是「谁在写状态」只有一处的原因。</div>
-      </div>
-      <div class="layer">
-        <div class="tag">分析 · 规则</div>
-        <div class="body"><b>insight_engine / quality_scorer / schema_analyzer</b> 出结论；<b>rule_* </b> 负责规则解析、校验（解析期静态门）、执行与注册表（三层作用域）。</div>
-      </div>
-      <div class="layer">
-        <div class="tag">存储</div>
-        <div class="body"><b>store/</b> 快照双写：正文进项目 DuckDB、版本链与元数据进项目 SQLite；写失败成对回滚，清理成对删。</div>
-      </div>
-      <div class="layer">
-        <div class="tag">引擎 · 数据</div>
-        <div class="body"><b>engine</b>：DuckDB 连接与分析临时表（<span class="mono">duckdb/analysis.rs</span>，内存闸 2 GB / 溢写 10 GB）、驱动元数据接口（结构洞察不写方言 SQL）。</div>
-      </div>
-    </div>
-    <div class="dep">
-      <span>依赖方向：</span><code>insight → engine → shared</code>
-      <span>·</span><code>workbench → insight</code>
-      <span>·</span><span>面板不直接碰驱动连接</span>
     </div>
   </section>
 
-  <!-- ══ 6. 特点 ══ -->
+  <!-- ══ 6. 表探查 ══ -->
   <section id="s6">
-    <div class="sec-head"><span class="no">06</span><h3>八个值得说的特点</h3></div>
-    <div class="sec-sub">每一条都是实现里守住的取舍，不是口号。</div>
+    <div class="sec-head"><span class="no">06</span><h3>表探查 · 列清单与评估全表</h3><span class="tag">表 → 列是用户最常走的下一步</span></div>
+    <table>
+      <tr><th style="width:22%">件</th><th>它做什么</th><th style="width:30%">一条口径</th></tr>
+      <tr><td><b>列清单</b></td><td>序号 / 列名（主键角标）/ 类型 / 可空 / 质量分；列名是下钻热点</td><td>类型族由真实元数据判定，不从名字猜</td></tr>
+      <tr><td><b>评估全表</b></td><td>逐列串行评分，进度行「正在评估 N/M 列…」+ 进度条</td><td>串行是为了不撞后端并发上限；评估中按钮置灰</td></tr>
+      <tr><td><b>表级质量</b></td><td>总分 + 等级 + 「N 列需关注 / 无问题列」+ 摘要</td><td>评估完才有；没评估就是没有，不是 0 分</td></tr>
+      <tr><td><b>重算</b></td><td>⟳ 按<b>当前 Tab</b> 重发请求（不把你拽回列画像）</td><td>不清空已算出的列分数（清空会让面板闪一下空白）</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 7. 多列分析 ══ -->
+  <section id="s7">
+    <div class="sec-head"><span class="no">07</span><h3>多列分析 · 列序就是参数序</h3><span class="tag">相关性这类规则是有方向的</span></div>
     <div class="grid g3">
       <div class="card">
-        <h4><span class="ico">⚙</span>规则即文件</h4>
-        <p>三层作用域：内置（编译期内嵌 16 条）→ 全局 → 项目，后者覆盖前者。正文以文件为唯一真相源，进 git、可 diff、目录一改即热加载。</p>
-        <div class="foot">项目规则随仓库走 ⇒ 有信任门把关</div>
+        <h4><span class="ico">1</span>勾列</h4>
+        <p>勾选顺序 = 参数顺序（<span class="mono">col1</span> / <span class="mono">col2</span> …），所以选中的列<b>带序号</b>；再点一次取消勾选。</p>
       </div>
       <div class="card">
-        <h4><span class="ico">★</span>结论可解释</h4>
-        <p>四维评分（完整性 / 唯一性 / 类型一致 / 分布均匀）× 五档等级；列级与表级共用同一套阈值与文案，分数与等级是「总分算出来的」，不是各写一份。</p>
-        <div class="foot">全空列不产分——没有依据就不给分</div>
+        <h4><span class="ico">2</span>选规则</h4>
+        <p>规则按<b>类型族</b>判定可用性：不相容的规则行置灰，原因写在规则行的类型提示里。</p>
       </div>
       <div class="card">
-        <h4><span class="ico">◧</span>类型不靠猜</h4>
-        <p>类型族来自真实元数据（驱动接口），不是名字里猜出来的；结构洞察因此零方言 SQL——换成 SQLite 也照样能用。</p>
-        <div class="foot">方言差异留在驱动层消化</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">⇥</span>不搬数据</h4>
-        <p>取样在 DuckDB 上做，中间临时表带 <span class="mono">tmp_i_</span> 前缀、用完即删；编辑器入口干脆不物化——重跑一次 LIMIT 取样。</p>
-        <div class="foot">内存闸 2 GB、溢写进 <span class="mono">&lt;RDS_HOME&gt;/tmp</span></div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">⧗</span>快照可追溯</h4>
-        <p>一列一条版本链，方向固定「选中 → 最新」；清理按 30 天保留期，正文与版本链成对删，两侧条数对不上就转红报警。</p>
-        <div class="foot">对比失败会放掉选中位，不留死状态</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">◌</span>边界诚实</h4>
-        <p>能洞察的是「能出现在数据库导航树上的对象」（真驱动 + 活连接）与草稿箱 / 分析存档两块文件；只靠 ATTACH 或三方扩展到达的远程库，不在承诺范围内。</p>
-        <div class="foot">宁可说清不做什么，也不给假入口</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">⛨</span>安全两道门</h4>
-        <p>规则 SQL 先过解析期静态门（只放行单条 SELECT / WITH，拒 DDL、多语句、文件与远端表函数）；项目规则再过一个信任门，未决定前不装配、不执行。</p>
-        <div class="foot">如实声明：静态门是防呆，不是沙箱</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">⤓</span>结论可带走</h4>
-        <p>结构报告导出 JSON / Markdown（导出的是你屏幕上这份结论）；报告里的表名可点，一键下钻回表探查。</p>
-        <div class="foot">宿主只负责选路径与写文件</div>
+        <h4><span class="ico">3</span>执行与结果</h4>
+        <p>结果可以是单值 KV 或表格；<b>质量门控提示只在未过时出现</b>。失败只挂一行提示，表单与已有结果照旧可见。</p>
       </div>
     </div>
   </section>
 
-  <!-- ══ 7. 规则示例 ══ -->
-  <section id="s7">
-    <div class="sec-head"><span class="no">07</span><h3>加一条规则 = 新增一种洞察</h3></div>
-    <div class="sec-sub">不用改 Rust：写一个 <span class="mono">*.rule.toml</span>，声明 SQL 模板、输出映射与质量门控即可（下面这条就是内置的「空值率检查」，节选）。</div>
+  <!-- ══ 8. 结构报告 ══ -->
+  <section id="s8">
+    <div class="sec-head"><span class="no">08</span><h3>结构报告 · 四区与下钻</h3><span class="tag">空区照常渲染：空 = 检查过、没问题</span></div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">◫</span>报告长什么样</h4>
+        <ul>
+          <li><b>健康条</b>：分数 + 等级 + 「N 表 · M 列 · 需关注 K 项」+ 摘要</li>
+          <li><b>四区</b>：外键候选 · 类型不一致 · 孤立表 · 冗余列</li>
+          <li><b>下钻</b>：表名热点最多 4 个（长清单会把面板变成一条链接列表）</li>
+          <li><b>导出 ▾</b>：JSON / Markdown，导出的是你屏幕上这份结论</li>
+        </ul>
+        <div class="foot">内容在面板侧算好（与界面同源的视图模型），宿主只选路径与写文件</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⌖</span>为什么 SQLite 也能用</h4>
+        <p>结构取数只走 <b>驱动元数据接口</b>（列表 / 列 / 主键 / 外键），<b>没有方言分支、没有手写 SQL</b>——
+          方言差异留在驱动层。真机四库因此全绿，也顺手把「按小写列名找 MySQL 元数据」这类坑堵在驱动侧。</p>
+        <div class="foot">真机数字见第 12 节的「质量与证据」</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 9. 快照与对比 ══ -->
+  <section id="s9">
+    <div class="sec-head"><span class="no">09</span><h3>快照与对比 · 变化看得见</h3><span class="tag">一列一条版本链，方向固定「选中 → 最新」</span></div>
+    <table>
+      <tr><th style="width:18%">件</th><th>它做什么</th><th style="width:32%">一条口径</th></tr>
+      <tr><td><b>保存</b></td><td>把当前列的画像存一份（正文 + 版本链 + 存储用量刷新）</td><td>双写失败<b>回滚已写入的那一半</b>，错误文案写清「已回滚」</td></tr>
+      <tr><td><b>列表</b></td><td>按时间的版本列表：时间 · 短版本号 · 类型 · 当前 / 首版标记</td><td>顺序只由存储层 <span class="mono">ORDER BY</span> 决定；链被剪过的头部如实标「更早的版本已清理」</td></tr>
+      <tr><td><b>对比</b></td><td>逐字段 <span class="mono">旧 → 新</span> + 差值，方向标记不评好坏</td><td>最新一版不可点；对比失败会<b>放掉选中位</b>（不留「选中亮着、面板没出来」）</td></tr>
+      <tr><td><b>清理</b></td><td>删 30 天前的快照：确认框 → 执行 → 回执</td><td>正文与版本链<b>成对删</b>，条数对不上转红；无项目 / 无快照 / 有动作在跑时置灰</td></tr>
+      <tr><td><b>存储用量</b></td><td>一行小字：条数与占用</td><td>拿不到就<b>整行不显示</b></td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 10. 规则 ══ -->
+  <section id="s10">
+    <div class="sec-head"><span class="no">10</span><h3>规则 · 加一个 TOML 就多一种洞察</h3><span class="tag">16 条内置：列 9 · 多列 4 · 表 3</span></div>
+    <div class="flow" style="margin-bottom:12px">
+      <div class="step2"><div class="idx">作用域 1</div><div class="t">内置</div><div class="d">编译期内嵌的 16 条；可被禁用（禁用记在索引里，不改文件）</div><div class="who">insight-rules/</div></div>
+      <div class="step2"><div class="idx">作用域 2</div><div class="t">全局</div><div class="d">用户级，跨项目生效</div><div class="who">{系统数据目录}/insight-rules/</div></div>
+      <div class="step2"><div class="idx">作用域 3</div><div class="t">项目</div><div class="d">随仓库走、可 diff、可评审；<b>未信任前不装配不执行</b></div><div class="who">{项目}/.RSmeta/insight-rules/</div></div>
+      <div class="step2"><div class="idx">生效方式</div><div class="t">目录监听</div><div class="d">目录一改即热加载（不设「重新加载」按钮作唯一入口）</div><div class="who">service/watcher.rs</div></div>
+    </div>
     <pre><span class="c"># {项目}/.RSmeta/insight-rules/column/null-check.rule.toml</span>
 [<span class="k">meta</span>]
 id = <span class="s">"null-check"</span>
 name = <span class="s">"空值率检查"</span>
 category = <span class="s">"column"</span>
-applies_to = [<span class="s">"Any"</span>]        <span class="c"># 任意类型都能跑</span>
+applies_to = [<span class="s">"Any"</span>]            <span class="c"># 任意类型都能跑</span>
 
 [<span class="k">query</span>]
 template = <span class="s">"""
@@ -477,168 +731,209 @@ FROM "{table}"
 """</span>
 parameters = [<span class="s">"table"</span>, <span class="s">"col"</span>]
 
-[[<span class="k">output</span>]]                              <span class="c"># SQL 列 → 界面字段 + 值类型（解析期校验）</span>
+[[<span class="k">output</span>]]                      <span class="c"># SQL 列 → 界面字段 + 值类型（解析期校验）</span>
 sql_name = <span class="s">"null_rate"</span>
 json_name = <span class="s">"null_rate"</span>
-value_type = <span class="s">"f64?"</span>          <span class="c"># 空表时 NULL：没有空值率可言</span>
+value_type = <span class="s">"f64?"</span>             <span class="c"># 空表时 NULL：没有空值率可言</span>
 
-[[<span class="k">quality</span>]]                             <span class="c"># 质量门控：读的就是上面的输出字段</span>
+[[<span class="k">quality</span>]]                     <span class="c"># 质量门控：读的就是上面的输出字段</span>
 field = <span class="s">"null_rate"</span>
 max = <span class="n">0.1</span>
 severity = <span class="s">"warning"</span>
 message = <span class="s">"空值率超过 10%"</span></pre>
     <div class="grid g3" style="margin-top:12px">
       <div class="card">
-        <h4><span class="ico">1</span>模板</h4>
-        <p><span class="mono">{col}</span> / <span class="mono">{table}</span> 是参数占位，其余是纯 SQL——在 DuckDB 上跑。</p>
+        <h4><span class="ico">⚑</span>校验早失败</h4>
+        <ul>
+          <li><span class="mono">value_type</span> 在白名单里（报错说清哪个输出字段用了什么值 + 可用取值）</li>
+          <li>门控字段必须真实存在（报错列出该规则已有的输出字段）</li>
+          <li>一条规则被拒就是<b>整条不加载</b>，不会「部分生效」</li>
+        </ul>
       </div>
       <div class="card">
-        <h4><span class="ico">2</span>输出映射</h4>
-        <p>声明每个输出字段的名字与值类型；解析期就校验，写错会在规则列表里当场报错并列出可用取值。</p>
+        <h4><span class="ico">⛨</span>门 1 · 解析期静态门</h4>
+        <p>只放行单条 <span class="mono">SELECT</span> / <span class="mono">WITH</span>；拒分号多语句、DDL 与
+          <span class="mono">ATTACH</span> / <span class="mono">COPY</span> 等、<span class="mono">read_*</span> 等表函数（校验前先剥字符串与注释）。</p>
+        <div class="foot"><b>定位是防呆</b>，不是安全边界——DuckDB 没有官方解析沙箱</div>
       </div>
       <div class="card">
-        <h4><span class="ico">3</span>质量门控</h4>
-        <p>给字段设阈值与提示语；字段必须真实存在（否则拒绝加载），空值算「算不出来」而不是「通过」。</p>
+        <h4><span class="ico">⛨</span>门 2 · 项目规则信任门</h4>
+        <p>项目层规则在用户做出决定前<b>不装配、不执行</b>；决定记在<b>全局库</b>（项目碰不到的地方），首次遇到时弹一次确认框，之后可在横幅改主意。</p>
+        <div class="foot">无记录 / 查库失败一律按未决定（fail closed）；已知取舍：信任绑路径而非内容</div>
       </div>
     </div>
   </section>
 
-  <!-- ══ 8. 入口矩阵 ══ -->
-  <section id="s8">
-    <div class="sec-head"><span class="no">08</span><h3>从哪儿进，能洞察什么</h3></div>
-    <div class="sec-sub">凡是导航树上看得见的（真驱动 + 活连接）都能进；文件类数据源按格式直接读。</div>
+  <!-- ══ 11. 从哪儿进 ══ -->
+  <section id="s11">
+    <div class="sec-head"><span class="no">11</span><h3>从哪儿进，能洞察什么</h3><span class="tag">导航树上看得见的都能进；文件类数据源按格式直接读</span></div>
     <table>
-      <thead>
-        <tr><th>入口</th><th>目标</th><th>取样口径</th><th>状态</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>导航树右键「查看统计」</td>
-          <td>库 / 表 / 列</td>
-          <td class="mono">连接 → DuckDB 临时表（source 取样）</td>
-          <td><span class="badge ok">已接</span></td>
-        </tr>
-        <tr>
-          <td>导航树右键「结构洞察」</td>
-          <td>库（schema）</td>
-          <td class="mono">驱动元数据接口（零方言 SQL）</td>
-          <td><span class="badge ok">已接</span></td>
-        </tr>
-        <tr>
-          <td>草稿箱行菜单</td>
-          <td>数据文件</td>
-          <td class="mono">CSV / Parquet / Excel / JSON 直接读</td>
-          <td><span class="badge ok">已接</span></td>
-        </tr>
-        <tr>
-          <td>分析存档行菜单</td>
-          <td>已归档资源</td>
-          <td class="mono">经源取样通道（与导航树同口径）</td>
-          <td><span class="badge ok">已接</span></td>
-        </tr>
-        <tr>
-          <td>编辑器结果集列头「洞察此列」</td>
-          <td>结果集的某一列</td>
-          <td class="mono">不物化：重跑 LIMIT 取样，跟随活动连接</td>
-          <td><span class="badge ok">已接</span></td>
-        </tr>
-        <tr>
-          <td>结构报告「导出 ▾」</td>
-          <td>当前报告</td>
-          <td class="mono">JSON / Markdown，宿主选路径写文件</td>
-          <td><span class="badge ok">已接</span></td>
-        </tr>
-        <tr>
-          <td>分析表型存档（M6 本体层）</td>
-          <td>分析产出的表</td>
-          <td class="mono">DuckDB 直接读本体文件</td>
-          <td><span class="badge plan">等 M6 P4.1</span></td>
-        </tr>
-      </tbody>
+      <tr><th style="width:28%">入口</th><th style="width:18%">目标</th><th>取样口径</th><th style="width:12%">状态</th></tr>
+      <tr><td>导航树右键「查看统计」</td><td>库 / 表 / 列</td><td>连接 → DuckDB 临时表（源取样通道）</td><td><span class="badge ok">已接</span></td></tr>
+      <tr><td>导航树右键「结构洞察」</td><td>库（schema）</td><td>驱动元数据接口（零方言 SQL）</td><td><span class="badge ok">已接</span></td></tr>
+      <tr><td>草稿箱行菜单</td><td>数据文件</td><td>CSV / Parquet / Excel / JSON 直接读</td><td><span class="badge ok">已接</span></td></tr>
+      <tr><td>分析存档行菜单</td><td>已归档资源</td><td>经源取样通道（与导航树同口径）</td><td><span class="badge ok">已接</span></td></tr>
+      <tr><td>编辑器结果集列头「洞察此列」</td><td>结果集的某一列</td><td>不物化：重跑 LIMIT 取样，跟随活动连接</td><td><span class="badge ok">已接</span></td></tr>
+      <tr><td>结构报告「导出 ▾」</td><td>当前报告</td><td>JSON / Markdown，宿主选路径写文件</td><td><span class="badge ok">已接</span></td></tr>
+      <tr><td>分析表型存档（M6 本体层）</td><td>分析产出的表</td><td>DuckDB 直接读本体文件（存储口径建议不复制）</td><td><span class="badge plan">等 M6 P4.1</span></td></tr>
     </table>
   </section>
 
-  <!-- ══ 9. 质量 ══ -->
-  <section id="s9">
-    <div class="sec-head"><span class="no">09</span><h3>质量与验证</h3></div>
-    <div class="sec-sub">结论可信之前，先让实现可信——每批改动都跑同一套基线。</div>
-    <div class="grid g3">
+  <!-- ══ 12. 架构 ══ -->
+  <section id="s12">
+    <div class="sec-head"><span class="no">12</span><h3>架构 · 依赖只向下</h3><span class="tag">状态只有一个写入者；渲染路径零 I/O</span></div>
+    <div class="layers">
+      <div class="layer"><div class="tag">入口 · 装配</div>
+        <div class="body"><b>workbench</b>：右 Dock 面板装配、订阅面板事件、把「下钻 / 导出 / 取样」翻译成宿主动作。<span class="mono">components/{nav_host,resource_host,scratchpad_host}.rs · services/editor_insight.rs</span></div></div>
+      <div class="layer"><div class="tag">视图 · 面板</div>
+        <div class="body"><b>insight_view.rs</b> 状态宿主（目标 / 五态 / 各 Tab 载荷 / 选择与折叠）+ <b>view/</b> 按 Tab 分的渲染片段（header · column · table · multi · schema · history）。点击只改状态并发事件。</div></div>
+      <div class="layer"><div class="tag">接缝 · 服务</div>
+        <div class="body"><b>jobs.rs</b> 把事件变成后台任务并回填；<b>service/</b> 是同步门面（列 / 表 / 多列 / 结构 / 快照 / 清理）。面板不自己取数——这是「谁在写状态」只有一处的原因。</div></div>
+      <div class="layer"><div class="tag">分析 · 规则</div>
+        <div class="body"><b>insight_engine / quality_scorer / schema_analyzer</b> 出结论；<b>rule_*</b> 负责规则解析、校验（解析期静态门）、执行与注册表（三层作用域）。</div></div>
+      <div class="layer"><div class="tag">存储</div>
+        <div class="body"><b>store/</b> 快照双写：正文进项目 DuckDB、版本链与元数据进项目 SQLite；写失败成对回滚，清理成对删。</div></div>
+      <div class="layer"><div class="tag">引擎 · 数据</div>
+        <div class="body"><b>engine</b>：DuckDB 连接与分析临时表（<span class="mono">duckdb/analysis.rs</span>，内存闸 2 GB / 溢写 10 GB）、驱动元数据接口（结构洞察不写方言 SQL）。</div></div>
+    </div>
+    <div class="dep">
+      <span>依赖方向：</span><code>insight → engine → shared</code>
+      <span>·</span><code>workbench → insight</code>
+      <span>·</span><span>面板不直接碰驱动连接</span>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th style="width:42%">关注点</th><th>落点</th></tr>
+      <tr><td>状态宿主（目标 / 五态 / 各 Tab 载荷）</td><td><span class="mono">crates/insight/src/insight_view.rs</span></td></tr>
+      <tr><td>渲染片段（按 Tab 分七个文件）</td><td><span class="mono">crates/insight/src/view/</span></td></tr>
+      <tr><td>规则对话框 · 结构报告视图</td><td><span class="mono">crates/insight/src/{rule_view,schema_view}.rs</span></td></tr>
+      <tr><td>快照存储（双写成对回滚）</td><td><span class="mono">crates/insight/src/store/</span></td></tr>
+      <tr><td>分析临时表生命周期 · 内存闸</td><td><span class="mono">crates/engine/src/duckdb/{analysis,temp_table}.rs</span></td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 13. 质量与证据 ══ -->
+  <section id="s13">
+    <div class="sec-head"><span class="no">13</span><h3>质量与证据</h3><span class="tag">每个结论都指得出「哪些测试在守它」与「真机上跑通没有」</span></div>
+    <table>
+      <tr><th>套件</th><th style="width:80px">数量</th><th>守什么</th></tr>
+      <tr><td>洞察单测（<span class="mono">cargo test -p rds-insight --lib</span>）</td><td><b>227</b></td><td>规则解析与校验 · 五 Tab 状态机与事件契约 · 渲染冒烟 · 快照存储与版本链 · 结构分析</td></tr>
+      <tr><td>端到端集成（<span class="mono">--test column_profile_e2e</span>）</td><td><b>14</b></td><td>真 DuckDB 上的列画像 · 表探查评估 · 与 <span class="mono">SUMMARIZE</span> 的交叉校验</td></tr>
+      <tr><td>界面契约（<span class="mono">--test ui_contract</span>）</td><td><b>7</b></td><td>零裸尺寸 / 零裸色值 · 面板模块登记 · 共享字段白名单</td></tr>
+      <tr><td>全仓编译（<span class="mono">cargo check --workspace --all-targets</span>）</td><td><b>0</b></td><td>零告警</td></tr>
+    </table>
+    <div class="grid g2" style="margin-top:12px">
       <div class="card">
-        <h4><span class="ico">✓</span>测试基线</h4>
+        <h4><span class="ico">◈</span>真机（需要环境变量，缺了就跳过）</h4>
         <ul>
-          <li>洞察模块：单测 <b>227</b> · 端到端集成 <b>14</b></li>
-          <li>界面契约 <b>7</b>（尺寸 / 颜色 / 面板登记）</li>
-          <li>全仓 <span class="mono">cargo check --workspace --all-targets</span> 零告警</li>
+          <li><span class="mono">insight_schema_real</span>：结构洞察四库全绿——MySQL <b>47 表 / 318 列</b> · PostgreSQL <b>25 / 144</b> · SQLite <b>27 / 125</b> · DuckDB <b>10 / 27</b></li>
+          <li><span class="mono">insight_source_real</span>：源取样四库 + <b>扩展源</b>（Oracle 经扫描器）的机制回归</li>
+          <li><span class="mono">insight_editor_entry</span>：编辑器结果集入口端到端（含真机腿）</li>
         </ul>
-        <div class="foot">2026-09-18 实测；每个 crate 另有自己的基线</div>
+        <div class="foot">扩展源那条是<b>机制回归</b>，不是边界判据——边界口径见第 14 节</div>
       </div>
       <div class="card">
-        <h4><span class="ico">▤</span>真机四库</h4>
+        <h4><span class="ico">⌖</span>真机抓出来的真缺陷（都已修 / 结案）</h4>
         <ul>
-          <li>MySQL 47 表 / 318 列 · PostgreSQL 25 / 144</li>
-          <li>SQLite 27 / 125 · DuckDB 10 / 27</li>
-          <li>另有扩展源（Oracle 经扫描器）的机制回归</li>
+          <li>洞察取数照 JSON 契约读引擎结果 → <b>恒得空行</b>（改为进程内直读列与行）</li>
+          <li>门面自建一次性 runtime × 宿主 sqlx 池 → PostgreSQL 下一条语句卡 <b>30 s</b>（改进程级单例 runtime 后 <b>30.2 s → 16 ms</b>）</li>
+          <li>MySQL <span class="mono">information_schema</span> 的元数据<b>列名全大写</b>，按小写找列一个都读不到</li>
+          <li>类型族判定没剥 <span class="mono">UNSIGNED</span> → 数值列被判成未知</li>
         </ul>
-        <div class="foot">结构洞察与源取样各有真机用例</div>
-      </div>
-      <div class="card">
-        <h4><span class="ico">◫</span>界面契约</h4>
-        <ul>
-          <li>尺寸只走 ui.rs 常量，视图不出现裸 <span class="mono">px()</span></li>
-          <li>颜色只走主题 token，代码零裸 hex</li>
-          <li>明暗双主题对照检查（对比度 ≥ 4.5:1）</li>
-        </ul>
-        <div class="foot">契约测试守在工作台侧，回退即失败</div>
+        <div class="foot">每条都写进「已知问题」清单，带着现象与修法</div>
       </div>
     </div>
   </section>
 
-  <!-- ══ 10. 路线 ══ -->
-  <section id="s10">
-    <div class="sec-head"><span class="no">10</span><h3>正在路上</h3></div>
-    <div class="sec-sub">一期已收口，下面这些是二期与依赖项。</div>
+  <!-- ══ 14. 边界 ══ -->
+  <section id="s14">
+    <div class="sec-head"><span class="no">14</span><h3>边界 · 这些事它不做</h3><span class="tag">把话说在前面，比事后解释便宜</span></div>
     <div class="grid g2">
       <div class="card">
-        <h4><span class="ico">◷</span>表级 / Schema 快照对比</h4>
-        <p>把某一刻的库表结构存下来再比较——语义属<b>资产管理</b>，界面与资产模型归 M6；差异计算与存储继续用洞察这一套。</p>
+        <h4><span class="ico">✕</span>明确不做（交给对应模块）</h4>
+        <ul>
+          <li><b>不做 SQL 执行与结果集</b>（M5 编辑器）：不画网格、不做交互式筛选</li>
+          <li><b>不做对象树与元数据内省</b>（M4）：导航树上有什么，取决于导航模块</li>
+          <li><b>不做连接与运行态</b>（M3）：连不上如实报原因，不自己重连或换库</li>
+          <li><b>不物化结果集</b>：编辑器入口重跑取样，因此「结果集临时表」的定向回收口维持空转</li>
+          <li><b>不做表级 / Schema 快照与快照对比</b>（二期）：语义属资产管理，界面与资产模型归 M6</li>
+        </ul>
       </div>
       <div class="card">
-        <h4><span class="ico">◷</span>分析表型存档洞察</h4>
-        <p>等 M6 Phase 4 的本体层（表命名 / 存在性 / 定义 SQL）定案；存储口径倾向<b>不复制</b>（存配方 + 指纹），洞察直接读本体文件。</p>
-      </div>
-      <div class="card">
-        <h4><span class="ico">◷</span>静态门升级为解析级</h4>
-        <p>现在是关键字黑名单 + 字面量剥离；下一步用引擎已有的解析能力做策略检查，把「防呆」再收紧一档。</p>
-      </div>
-      <div class="card">
-        <h4><span class="ico">◷</span>多列 Tab 预取样</h4>
-        <p>源目标下若样本表还没解析出来，「多列」Tab 会自己先取一次样，而不是点了没反应。</p>
+        <h4><span class="ico">◷</span>如实声明与还没做的（都记在册）</h4>
+        <ul>
+          <li>解析期静态门是<b>防呆</b>不是沙箱；信任门绑定项目<b>路径</b>而非内容（<span class="mono">git pull</span> 带进来的新规则不会重新确认）</li>
+          <li>只能靠 <span class="mono">ATTACH</span> 或三方扩展到达的远程库<b>不在</b>承诺范围内</li>
+          <li>静态门升级为解析级策略检查 · 源目标下「多列」Tab 预取样</li>
+          <li>表级 / Schema 快照 · 分析表型存档入口（等 M6 Phase 4 本体层）</li>
+        </ul>
       </div>
     </div>
   </section>
 
-  <!-- ══ 文档地图 ══ -->
+  <!-- ══ 15. 文档地图 ══ -->
+  <section id="s15">
+    <div class="sec-head"><span class="no">15</span><h3>文档地图</h3><span class="tag">宣传页只负责「一页看懂」，口径以模块文档为准</span></div>
+    <table>
+      <tr><th style="width:36%">文档</th><th>什么时候读</th></tr>
+      <tr><td><a href="README.md">README.md</a></td><td>模块入口：一句话定位 · 边界 · 代码地图 · 硬约束 · 文档地图</td></tr>
+      <tr><td><a href="insight-architecture.md">insight-architecture.md</a></td><td>为什么这样设计：九条不变式 · 状态所有权 · 数据流 · <b>D1–D62 决策表</b> · 已知问题 K1–K19</td></tr>
+      <tr><td><a href="insight-dev-plan.md">insight-dev-plan.md</a></td><td>做什么、做到哪：<b>§0 进度记录</b>（逐批带验证数字）· Phase 0–5 任务与落点 · <b>§10 收口清单（权威）</b> · §11 视图位移</td></tr>
+      <tr><td><a href="insight-user-guide.md">insight-user-guide.md</a></td><td>怎么用：入口 · 界面导览与怎么看数字 · 典型流程 · <b>§4 规则编写指南（对外契约）</b> · FAQ</td></tr>
+      <tr><td><a href="insight-prototype-design.md">insight-prototype-design.md</a> / <a href="insight-prototype.html">insight-prototype.html</a></td><td>长什么样、怎么交互（含<b>与 V1 的逐项对照</b>）；交互稿可点开来看</td></tr>
+      <tr><td><a href="insight-showcase.md">insight-showcase.md</a></td><td>本页的<b>可贴版</b>（纯文本 + 流程图，适合贴进 PR / wiki）</td></tr>
+      <tr><td><a href="insight-extension-notes.md">insight-extension-notes.md</a></td><td>实现手段与第三方扩展调研（含不引扩展也能拿的 10 条）</td></tr>
+    </table>
+  </section>
+
   <div class="foot">
-    <b>本页是宣传页（快照日期 2026-09-18）</b>；可贴版（带流程图，适合贴进 PR / wiki）：<a href="insight-showcase.md">insight-showcase.md</a>。数字与口径以模块文档为准，改代码时请同步这几份：<br>
-    模块入口与代码地图 <a href="README.md">README.md</a> ·
-    设计理念与决策表（D1–D62）<a href="insight-architecture.md">insight-architecture.md</a> ·
-    开发方案与收口清单 <a href="insight-dev-plan.md">insight-dev-plan.md</a> ·
-    使用手册（含规则编写指南）<a href="insight-user-guide.md">insight-user-guide.md</a> ·
-    原型与交互稿 <a href="insight-prototype-design.md">insight-prototype-design.md</a> / <a href="insight-prototype.html">insight-prototype.html</a> ·
-    实现手段与第三方扩展调研 <a href="insight-extension-notes.md">insight-extension-notes.md</a><br>
-    面板结构：状态宿主 <span class="mono">crates/insight/src/insight_view.rs</span> + 渲染片段 <span class="mono">crates/insight/src/view/</span>（按 Tab 分七个文件）· 规则与报告视图 <span class="mono">rule_view.rs</span> / <span class="mono">schema_view.rs</span> · 尺寸常量 <span class="mono">crates/workbench_shell/src/ui.rs</span>「洞察（M8）专用尺寸」节 · 色值只存在于主题资产（<span class="mono">assets/themes/</span>），代码零裸 hex。
+    <b>本页是宣传页（数字快照 2026-09-18）</b>——改了实现请顺手核对：<b>5</b> 个 Tab · <b>16</b> 条内置规则（列 9 / 多列 4 / 表 3）· <b>4</b> 维评分 · 测试基线 <b>227 / 14 / 7</b> 与真机四库数字。<br>
+    代码地图：状态宿主 <span class="mono">crates/insight/src/insight_view.rs</span> · 渲染片段 <span class="mono">crates/insight/src/view/</span>（7 个文件）· 规则与报告视图 <span class="mono">rule_view.rs</span> / <span class="mono">schema_view.rs</span> · 尺寸常量 <span class="mono">crates/insight/src/ui.rs</span> · 色值只存在于主题资产（<span class="mono">assets/themes/</span>），代码零裸 hex。<br>
+    首屏面板线框里的数字是<b>示意数据</b>；五个 Tab 的形态与真实界面一致（可点着切）。
   </div>
 </div>
 
 <script>
+/* 主题切换 */
 function toggleTheme(){
   var h = document.documentElement;
   h.setAttribute('data-theme', h.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
 }
-var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-if (prefersDark) {
+if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
   document.documentElement.setAttribute('data-theme', 'dark');
 }
+
+/* 首屏面板线框：五个 Tab 切换（与真实面板同一个分栏口径） */
+var TAB_TIPS = {
+  col: '列画像：四区 + 评分卡（评分卡钉在滚动区之外，分数不随滚动跑掉）',
+  table: '表探查：列清单 + 评估全表（逐列串行，进度一列列回填）',
+  multi: '多列分析：勾选顺序 = 参数顺序，规则按类型族判可用性',
+  schema: '结构报告：健康分 + 四区；取数走驱动元数据，零方言 SQL',
+  history: '快照历史：版本链 + 固定方向对比 + 30 天剪链清理'
+};
+function setTab(tab){
+  document.querySelectorAll('.win .pane').forEach(function(p){
+    p.classList.toggle('on', p.getAttribute('data-pane') === tab);
+  });
+  document.querySelectorAll('.win .ptab').forEach(function(b){
+    b.classList.toggle('on', b.getAttribute('data-tab') === tab);
+  });
+  var tip = document.getElementById('tab-tip');
+  if (tip) tip.textContent = TAB_TIPS[tab] || '';
+}
+
+/* 吸顶导航：滚动高亮当前章节 */
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  var targets = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function sync(){
+    var y = window.scrollY + 120, best = 0;
+    targets.forEach(function(t, i){ if (t && t.offsetTop <= y) best = i; });
+    links.forEach(function(a, i){ a.classList.toggle('on', i === best); });
+  }
+  window.addEventListener('scroll', sync, {passive:true});
+  window.addEventListener('resize', sync);
+  sync();
+})();
 </script>
 </body>
 </html>
