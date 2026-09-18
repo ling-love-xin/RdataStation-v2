@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation 资产库 / 分析存档（M6）· 一页读懂</title>
+<style>
+:root{
+  --pagebg:#EDEFF2; --bg:#FFFFFF; --fg:#2B2F36; --fg-strong:#151A21; --border:#DCDEE3;
+  --muted:#6C737E; --card:#FFFFFF; --card-border:#E4E6EA; --hover:#F4F5F7;
+  --code-bg:#F6F7F9; --code-fg:#3A3F47;
+  --primary:#C25B46; --primary-2:#E8846F; --primary-soft:rgba(194,91,70,.10);
+  --success:#16A34A; --success-soft:rgba(22,163,74,.12);
+  --warning:#B45309; --warning-soft:rgba(180,83,9,.12);
+  --info:#2563EB; --info-soft:rgba(37,99,235,.10);
+  --danger:#DC2626; --danger-soft:rgba(220,38,38,.10);
+  --shadow-sm:0 1px 2px rgba(20,24,32,.06);
+  --shadow:0 14px 34px rgba(20,24,32,.10);
+  --mono:Consolas,'SFMono-Regular','Menlo',monospace;
+}
+[data-theme="dark"]{
+  --pagebg:#111317; --bg:#1A1D22; --fg:#C9CED6; --fg-strong:#F2F4F7; --border:#2E333A;
+  --muted:#8B929C; --card:#1E2228; --card-border:#2C3138; --hover:#23282F;
+  --code-bg:#15181D; --code-fg:#C3C9D2;
+  --primary:#E8846F; --primary-2:#F5A188; --primary-soft:rgba(232,132,111,.14);
+  --success:#7DD18A; --success-soft:rgba(125,209,138,.14);
+  --warning:#D8A657; --warning-soft:rgba(216,166,87,.14);
+  --info:#6BA8FF; --info-soft:rgba(107,168,255,.14);
+  --danger:#F0716C; --danger-soft:rgba(240,113,108,.14);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow:0 16px 40px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{
+  font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;
+  background:var(--pagebg);color:var(--fg);font-size:14px;line-height:1.7;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:26px 22px 60px;}
+code,.mono{font-family:var(--mono);font-size:.92em;}
+code{background:var(--code-bg);color:var(--code-fg);border:1px solid var(--card-border);
+  border-radius:5px;padding:1px 5px;white-space:nowrap;}
+a{color:var(--primary);}
+
+/* ============ 页头 ============ */
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px;}
+.brand{display:flex;align-items:center;gap:11px;}
+.logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--primary-2),var(--primary));
+  display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;font-weight:700;
+  box-shadow:0 3px 10px rgba(194,91,70,.35);}
+.brand h1{font-size:16px;font-weight:700;letter-spacing:.2px;color:var(--fg-strong);}
+.brand .sub{font-size:12px;color:var(--muted);}
+.head-actions{display:flex;align-items:center;gap:10px;}
+.badge-draft{font-size:11px;color:var(--muted);border:1px dashed var(--border);border-radius:999px;padding:4px 11px;}
+.theme-toggle{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--bg);
+  color:var(--fg);border-radius:9px;padding:6px 14px;font-size:12px;font-family:inherit;
+  box-shadow:var(--shadow-sm);transition:all .15s;cursor:pointer;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--primary);color:var(--fg-strong);}
+
+/* ============ Hero ============ */
+.hero{position:relative;overflow:hidden;background:var(--card);border:1px solid var(--card-border);
+  border-radius:20px;padding:40px 38px 34px;box-shadow:var(--shadow);}
+.hero::after{content:"";position:absolute;right:-120px;top:-140px;width:380px;height:380px;border-radius:50%;
+  background:radial-gradient(circle at 30% 30%, var(--primary-soft), transparent 68%);}
+.hero .kicker{font-size:11px;letter-spacing:.18em;color:var(--primary);font-weight:700;}
+.hero h2{font-size:31px;line-height:1.32;color:var(--fg-strong);margin:12px 0 10px;font-weight:750;letter-spacing:.2px;}
+.hero h2 em{font-style:normal;color:var(--primary);}
+.hero .lead{font-size:15px;color:var(--muted);max-width:74ch;}
+.hero .quote{margin-top:20px;padding:14px 18px;border-left:3px solid var(--primary);
+  background:var(--primary-soft);border-radius:0 12px 12px 0;font-size:14.5px;color:var(--fg-strong);}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin-top:26px;position:relative;}
+.stat{background:var(--code-bg);border:1px solid var(--card-border);border-radius:13px;padding:13px 15px;}
+.stat b{display:block;font-size:20px;color:var(--fg-strong);letter-spacing:.3px;}
+.stat span{font-size:12px;color:var(--muted);}
+
+/* ============ 小节 ============ */
+.sec-head{display:flex;align-items:baseline;gap:11px;margin:44px 0 16px;}
+.sec-head .kicker{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--primary);font-weight:700;}
+.sec-head h3{font-size:19px;color:var(--fg-strong);font-weight:700;}
+.sec-head .note{margin-left:auto;font-size:12px;color:var(--muted);}
+.sec-lead{color:var(--muted);margin:-6px 0 18px;max-width:78ch;}
+
+/* ============ 卡片 ============ */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(252px,1fr));gap:14px;}
+.card{background:var(--card);border:1px solid var(--card-border);border-radius:15px;padding:18px 19px;
+  box-shadow:var(--shadow-sm);transition:transform .15s,box-shadow .15s;}
+.card:hover{transform:translateY(-2px);box-shadow:var(--shadow);}
+.card .ico{width:30px;height:30px;border-radius:9px;background:var(--primary-soft);color:var(--primary);
+  display:flex;align-items:center;justify-content:center;font-size:15px;margin-bottom:11px;}
+.card h4{font-size:14.5px;color:var(--fg-strong);margin-bottom:6px;}
+.card p{font-size:13px;color:var(--muted);}
+.card p + p{margin-top:8px;}
+.card .why{font-size:12px;color:var(--muted);border-top:1px dashed var(--card-border);padding-top:8px;margin-top:10px;}
+.card .why b{color:var(--primary);font-weight:600;}
+
+/* ============ 流程 ============ */
+.flow{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;}
+.step{flex:1 1 176px;background:var(--card);border:1px solid var(--card-border);border-radius:15px;
+  padding:15px 16px;box-shadow:var(--shadow-sm);position:relative;min-width:0;}
+.step .no{font-size:11px;font-weight:700;color:var(--primary);letter-spacing:.1em;}
+.step h4{font-size:14px;color:var(--fg-strong);margin:5px 0 6px;}
+.step p{font-size:12.5px;color:var(--muted);}
+.step .tagline{display:inline-block;margin-top:9px;font-size:11px;border-radius:999px;padding:2px 9px;
+  background:var(--code-bg);border:1px solid var(--card-border);color:var(--muted);}
+.arrow{align-self:center;color:var(--primary);font-size:17px;opacity:.7;flex:none;}
+.loop-note{margin-top:14px;display:flex;gap:12px;flex-wrap:wrap;}
+.pill{font-size:12px;border-radius:999px;padding:6px 13px;border:1px solid var(--card-border);background:var(--card);}
+.pill.ok{background:var(--success-soft);border-color:transparent;color:var(--fg-strong);}
+.pill.warn{background:var(--warning-soft);border-color:transparent;color:var(--fg-strong);}
+.pill.info{background:var(--info-soft);border-color:transparent;color:var(--fg-strong);}
+
+/* ============ 架构分层 ============ */
+.layers{display:flex;flex-direction:column;gap:10px;}
+.layer{display:flex;gap:16px;background:var(--card);border:1px solid var(--card-border);border-radius:15px;
+  padding:16px 18px;box-shadow:var(--shadow-sm);}
+.layer .tag{flex:none;width:118px;font-size:12px;font-weight:700;color:var(--primary);letter-spacing:.04em;}
+.layer .body{min-width:0;}
+.layer h4{font-size:14px;color:var(--fg-strong);margin-bottom:5px;}
+.layer p{font-size:12.5px;color:var(--muted);}
+.layer .code-line{margin-top:8px;font-family:var(--mono);font-size:12px;color:var(--code-fg);
+  background:var(--code-bg);border:1px solid var(--card-border);border-radius:8px;padding:7px 10px;
+  display:block;white-space:normal;overflow-wrap:anywhere;}
+.deps{margin-top:12px;font-size:12.5px;color:var(--muted);}
+
+/* ============ 目录树 ============ */
+.tree{font-family:var(--mono);font-size:12.5px;line-height:1.75;background:var(--code-bg);
+  border:1px solid var(--card-border);border-radius:15px;padding:18px 20px;color:var(--code-fg);
+  overflow-x:auto;white-space:pre;}
+.tree .c{color:var(--muted);}
+.tree .k{color:var(--primary);font-weight:600;}
+
+/* ============ 能力清单 ============ */
+.caps{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;}
+.cap-box{background:var(--card);border:1px solid var(--card-border);border-radius:15px;padding:16px 18px;box-shadow:var(--shadow-sm);}
+.cap-box h4{font-size:13.5px;color:var(--fg-strong);margin-bottom:10px;display:flex;align-items:center;gap:8px;}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;}
+.dot.g{background:var(--success);}
+.dot.y{background:var(--warning);}
+.cap-box ul{list-style:none;}
+.cap-box li{font-size:12.8px;color:var(--muted);padding:5px 0 5px 22px;position:relative;border-bottom:1px dashed var(--card-border);}
+.cap-box li:last-child{border-bottom:none;}
+.cap-box li::before{content:"✓";position:absolute;left:2px;color:var(--success);font-weight:700;}
+.cap-box li.todo::before{content:"○";color:var(--warning);}
+.cap-box li b{color:var(--fg-strong);font-weight:600;}
+
+/* ============ 界面速览 ============ */
+.ui{display:grid;grid-template-columns:minmax(280px,1fr) minmax(260px,1fr);gap:16px;}
+.panel-mock,.detail-mock{background:var(--card);border:1px solid var(--card-border);border-radius:15px;
+  overflow:hidden;box-shadow:var(--shadow-sm);font-size:12.5px;}
+.mock-head{background:var(--code-bg);border-bottom:1px solid var(--card-border);padding:9px 13px;
+  display:flex;align-items:center;gap:8px;color:var(--fg-strong);font-weight:600;}
+.mock-head .spacer{margin-left:auto;color:var(--muted);font-weight:400;}
+.mock-tools{display:flex;gap:6px;padding:9px 13px;border-bottom:1px solid var(--card-border);}
+.mock-input{flex:1;background:var(--code-bg);border:1px solid var(--card-border);border-radius:6px;
+  padding:3px 9px;color:var(--muted);}
+.mock-btn{border:1px solid var(--card-border);border-radius:6px;padding:3px 9px;color:var(--muted);background:var(--card);}
+.mock-row{display:flex;align-items:center;gap:8px;padding:6px 13px;color:var(--fg);}
+.mock-row.on{background:var(--primary-soft);box-shadow:inset 2px 0 0 var(--primary);}
+.mock-row .v{color:var(--muted);font-size:11.5px;}
+.mock-row .tail{margin-left:auto;color:var(--muted);font-size:11.5px;}
+.mock-group{padding:7px 13px;background:var(--code-bg);border-top:1px solid var(--card-border);
+  border-bottom:1px solid var(--card-border);color:var(--fg-strong);font-weight:600;display:flex;gap:8px;}
+.mock-group .n{margin-left:auto;color:var(--muted);font-weight:400;}
+.mock-status{padding:8px 13px;border-top:1px solid var(--card-border);color:var(--muted);font-size:11.5px;
+  display:flex;gap:10px;align-items:center;}
+.mock-status .fix{margin-left:auto;color:var(--primary);}
+.mock-sec{padding:11px 14px;border-bottom:1px solid var(--card-border);}
+.mock-sec:last-child{border-bottom:none;}
+.mock-sec h5{font-size:12.5px;color:var(--fg-strong);margin-bottom:7px;}
+.mock-kv{display:flex;gap:10px;font-size:12px;padding:2.5px 0;}
+.mock-kv .k{flex:none;width:74px;color:var(--muted);}
+.mock-chip{display:inline-block;font-size:11.5px;border:1px solid var(--card-border);border-radius:999px;
+  padding:1px 9px;margin:2px 4px 2px 0;color:var(--fg);background:var(--code-bg);}
+.mock-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.mock-actions .b{border:1px solid var(--card-border);border-radius:7px;padding:3px 11px;background:var(--code-bg);}
+.mock-actions .b.primary{background:var(--primary);border-color:var(--primary);color:#fff;}
+.mock-actions .b.danger{color:var(--danger);}
+
+/* ============ 表格 ============ */
+.tbl{width:100%;border-collapse:separate;border-spacing:0;background:var(--card);
+  border:1px solid var(--card-border);border-radius:15px;overflow:hidden;font-size:13px;box-shadow:var(--shadow-sm);}
+.tbl th,.tbl td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--card-border);vertical-align:top;}
+.tbl th{background:var(--code-bg);color:var(--fg-strong);font-size:12px;font-weight:700;letter-spacing:.02em;}
+.tbl tr:last-child td{border-bottom:none;}
+.tbl td:first-child{white-space:nowrap;color:var(--fg-strong);font-weight:600;}
+.tbl .todo{color:var(--warning);font-weight:600;}
+
+/* ============ 页脚 ============ */
+.foot{margin-top:52px;padding-top:20px;border-top:1px solid var(--border);color:var(--muted);font-size:12.5px;}
+.foot .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-bottom:16px;}
+.foot h5{font-size:12px;color:var(--fg-strong);margin-bottom:6px;letter-spacing:.03em;}
+.foot ul{list-style:none;}
+.foot li{padding:2.5px 0;}
+.foot .verify{background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:12px 14px;
+  font-family:var(--mono);font-size:12px;color:var(--code-fg);overflow-x:auto;}
+
+@media (max-width:760px){
+  .ui{grid-template-columns:1fr;}
+  .layer{flex-direction:column;gap:6px;}
+  .layer .tag{width:auto;}
+  .hero{padding:30px 22px 26px;}
+  .hero h2{font-size:24px;}
+}
+@media print{
+  body{background:#fff;}
+  .theme-toggle,.head-actions .badge-draft{display:none;}
+  .card,.step,.layer,.cap-box,.tbl{break-inside:avoid;}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ===== 页头 ===== -->
+  <div class="page-head">
+    <div class="brand">
+      <div class="logo">⛁</div>
+      <div>
+        <h1>资产库 / 分析存档</h1>
+        <div class="sub">RdataStation · 模块 M6 · 一页读懂</div>
+      </div>
+    </div>
+    <div class="head-actions">
+      <span class="badge-draft">速览页（权威口径见架构与开发方案）</span>
+      <button class="theme-toggle" id="themeBtn">◐ <span id="themeTxt">切换暗色</span></button>
+    </div>
+  </div>
+
+  <!-- ===== Hero ===== -->
+  <div class="hero">
+    <div class="kicker">归档 · 取回 · 版本 · 组织 · 检索</div>
+    <h2>把「这次结论是怎么来的」<br>连同文件一起<em>冻结</em>下来</h2>
+    <p class="lead">
+      资产库不是文件管理器，而是<b>分析存档</b>：每一次归档都留下三件套——<b>来源</b>、<b>代码</b>、<b>内容指纹</b>。
+      本体一旦归档即只读，要改就「取回」一份工作副本；改完再归档，只有内容真的变了才产生新版本。
+    </p>
+    <div class="quote">
+      草稿箱回答「我正在干什么」，资产库回答「我留下了什么、它当时长什么样」。
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b>3 种</b><span>存档类型（文件 / 分析表 / 引用）</span></div>
+      <div class="stat"><b>sha256</b><span>内容指纹驱动版本</span></div>
+      <div class="stat"><b>5 秒</b><span>归档撤销窗口</span></div>
+      <div class="stat"><b>三重</b><span>只读守卫</span></div>
+      <div class="stat"><b>125</b><span>模块单测全绿</span></div>
+      <div class="stat"><b>零</b><span>渲染期 I/O</span></div>
+    </div>
+  </div>
+
+  <!-- ===== 解决什么问题 ===== -->
+  <div class="sec-head">
+    <span class="kicker">Why</span>
+    <h3>它替用户挡住的三件事</h3>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <div class="ico">🗂</div>
+      <h4>「哪一版才是当时那份？」</h4>
+      <p>文件改到第 8 版，报告早就发出去了，却说不清当时用的是哪份、和现在差在哪。</p>
+      <div class="why"><b>做法：</b>归档案等于当时的字节快照 + 指纹；历史版本可按策略保留，还原永远生成新版本，不覆盖历史。</div>
+    </div>
+    <div class="card">
+      <div class="ico">🔎</div>
+      <h4>「这个结论是用什么数据算的？」</h4>
+      <p>表格躺在某处，SQL 在聊天记录里，连接早就改了名——复盘时全靠回忆。</p>
+      <div class="why"><b>做法：</b>归档凭证三件套随存档一起留：来源连接 / 来源草稿路径 / 来源表 + 定义 SQL + 内容指纹。</div>
+    </div>
+    <div class="card">
+      <div class="ico">🔒</div>
+      <h4>「借出去改乱了原件。」</h4>
+      <p>把归档文件直接打开编辑，指纹失效、版本失去意义，谁也说不清原件长什么样。</p>
+      <div class="why"><b>做法：</b>只读是常态。修改走「取回（检出）」——复制一份工作副本到草稿箱，本体永远不动。</div>
+    </div>
+  </div>
+
+  <!-- ===== 核心闭环 ===== -->
+  <div class="sec-head">
+    <span class="kicker">Flow</span>
+    <h3>核心闭环：归档 → 取回 → 再归档</h3>
+    <span class="note">与 git「签出 → 改 → 提交」同构</span>
+  </div>
+  <p class="sec-lead">下面这条链路是一期能力的主体；左侧入口（草稿箱 / 本地文件）与右侧出口（回收站）都可撤回。</p>
+  <div class="flow">
+    <div class="step">
+      <div class="no">01 · 发起</div>
+      <h4>从草稿箱或本地文件</h4>
+      <p>面板头 <code>＋ ▾</code> 两个入口；草稿来源会自动带出连接与出处。</p>
+      <span class="tagline">填写项：显示名 · 别名 · 分组 · 标签 · 保留份数</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="no">02 · 归档</div>
+      <h4>本体搬进 <code>resources/</code> 并只读</h4>
+      <p>先算指纹、再搬文件、最后写索引；索引失败会把本体移回原处。</p>
+      <span class="tagline">登记 v1 · 凭证三件套 · 5 秒内可撤销</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="no">03 · 取回</div>
+      <h4>复制一份可写工作副本</h4>
+      <p>工作副本落在草稿箱，本体保持只读；同名自动避让，不覆盖。</p>
+      <span class="tagline">本体不动</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="no">04 · 再归档</div>
+      <h4>指纹变了才 +1 版本</h4>
+      <p>旧内容留成历史副本；指纹没变则幂等返回，不产生假版本。</p>
+      <span class="tagline">版本 = 内容，不是「改过名」</span>
+    </div>
+  </div>
+  <div class="loop-note">
+    <span class="pill ok">撤销归档：本体移回 + 删登记行（5 秒窗口）</span>
+    <span class="pill info">历史版本可「还原」或「取回为草稿」</span>
+    <span class="pill info">版本行永久保留，内容副本按 <code>keepVersions</code>（默认 5 份，可设全留 / 只留元数据）</span>
+    <span class="pill warn">不用了：移入项目级回收站 → 可还原 / 永久删除</span>
+  </div>
+
+  <!-- ===== 特点 ===== -->
+  <div class="sec-head">
+    <span class="kicker">Features</span>
+    <h3>七个特点</h3>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <div class="ico">📌</div>
+      <h4>版本由内容说了算</h4>
+      <p>版本号只跟 <code>content_hash</code> 走：改显示名、打标签、归组都不涨版本。</p>
+      <div class="why"><b>为什么：</b>否则版本化的是「改过名字」而不是「内容」，历史就没有证据价值。</div>
+    </div>
+    <div class="card">
+      <div class="ico">🧾</div>
+      <h4>自带凭证</h4>
+      <p>来源连接 / 来源草稿路径 / 来源表 + 定义 SQL + 内容指纹，随存档一起留。</p>
+      <div class="why"><b>为什么：</b>复盘的第一个问题是「它从哪来」，凭证缺一项就得靠回忆。</div>
+    </div>
+    <div class="card">
+      <div class="ico">🔐</div>
+      <h4>只读三重守卫</h4>
+      <p>应用层拒绝写入 + 编辑器以只读打开 + 文件系统只读属性（辅助）。</p>
+      <div class="why"><b>为什么：</b>单靠文件属性在 Windows / 网络盘并不可靠，硬约束必须留在应用层。</div>
+    </div>
+    <div class="card">
+      <div class="ico">🏷</div>
+      <h4>标签为主，分组为辅</h4>
+      <p>标签多值、跨类型通用，可改名 / 删除（删标签不动存档）；分组是单层的，折叠状态会被记住。</p>
+      <div class="why"><b>为什么：</b>旧版的多级文件夹树从没做完（无改名 / 删除 / 移动），投入产出比差。</div>
+    </div>
+    <div class="card">
+      <div class="ico">🧭</div>
+      <h4>检索与排序</h4>
+      <p>搜索 + 类型 / 标签 / 只看需处理筛选；五个排序键，缺值的行总是排在最后。</p>
+      <div class="why"><b>为什么：</b>排序比的是原始字节数与时间戳，不是格式化后的 <code>1.2 KB</code>。</div>
+    </div>
+    <div class="card">
+      <div class="ico">🧰</div>
+      <h4>坏了自己能修</h4>
+      <p>索引修复覆盖三类差异：有文件无记录 / 有记录无本体 / 指纹不匹配——全部人工确认后执行。</p>
+      <div class="why"><b>为什么：</b>静默导入或删除会让「存档」变成用户没同意过的东西。</div>
+    </div>
+    <div class="card">
+      <div class="ico">♻️</div>
+      <h4>回收站是项目级的</h4>
+      <p>与草稿箱共用一套回收站，按来源隔离：只列、只清自己名下的条目。</p>
+      <div class="why"><b>为什么：</b>共用一处仓库不等于可以替对方清空。</div>
+    </div>
+  </div>
+
+  <!-- ===== 架构 ===== -->
+  <div class="sec-head">
+    <span class="kicker">Architecture</span>
+    <h3>分层与真相源</h3>
+    <span class="note">文件系统是本体权威，登记表只是可重建的索引</span>
+  </div>
+  <div class="layers">
+    <div class="layer">
+      <div class="tag">上游 · M5</div>
+      <div class="body">
+        <h4>草稿箱 / 本地文件</h4>
+        <p>归档的发起方。M6 只收「路径 + 元数据」，不认识草稿箱的内部结构。</p>
+        <span class="code-line">依赖方向：scratchpad → analytics_resource（单向，M6 不反向依赖 M5）</span>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="tag">宿主 · 工作台</div>
+      <div class="body">
+        <h4>面板装配 · 端口实现 · 后台作业 · 设置读写</h4>
+        <p>取数、搬文件、算指纹都在单工作线程上跑，结果回填给面板；渲染期零 I/O。</p>
+        <span class="code-line">workbench：面板挂载 + 宿主端口 + 作业线程（结果槽）+ SettingsService 唯一读写路径</span>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="tag">模块 · M6</div>
+      <div class="body">
+        <h4>编排 · 本体 · 索引 · 视图</h4>
+        <p>服务层编排五条动作链；本体层管文件守卫与指纹；索引层管登记、版本、标签、分组；视图层只读快照。</p>
+        <span class="code-line">service（编排 + 事件）· payload（守卫 / move / sha256 / 副本裁剪）· store（登记 / 版本 / 组织）· indexer（修复）</span>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="tag">磁盘</div>
+      <div class="body">
+        <h4>本体 + 索引 + 回收站</h4>
+        <p>本体可视、只读、可被编辑器打开；索引删了也能从本体重建。</p>
+        <span class="code-line">{项目}/resources/ ← 本体（权威）　{项目}/.RSmeta/project.db ← 索引　{项目}/.RSmeta/trash/ ← 回收站</span>
+      </div>
+    </div>
+  </div>
+  <p class="deps">
+    <b>数据链路：</b>
+    <code>面板（发起）→ 服务（编排）→ 本体层（resources/）+ 索引层（project.db）</code>；
+    删除走项目级回收站。没有 HTTP / IPC 层，全部在本进程内完成。
+  </p>
+
+  <!-- ===== 存储布局 ===== -->
+  <div class="sec-head">
+    <span class="kicker">Layout</span>
+    <h3>磁盘上长什么样</h3>
+  </div>
+  <div class="tree">{项目}/
+├── <span class="k">resources/</span>                         <span class="c">← 本体：受管文件，可见、只读、可被编辑器打开</span>
+│   ├── reports/dau_report.sql
+│   └── data/sample.parquet
+├── scratchpad/                        <span class="c">← 草稿箱（可写）+ 取回的工作副本</span>
+└── .RSmeta/                           <span class="c">← 项目内部元数据（隐藏）</span>
+    ├── project.db                     <span class="c">← 索引：登记行 / 版本 / 标签 / 分组</span>
+    ├── analytics.duckdb               <span class="c">← 分析表型存档的本体（Phase 4）</span>
+    ├── resources/versions/&lt;id&gt;/&lt;v&gt;/  <span class="c">← 历史内容副本（按 keepVersions 裁剪）</span>
+    └── trash/                         <span class="c">← 项目级回收站（与草稿箱共用，按来源隔离）</span></div>
+
+  <!-- ===== 界面速览 ===== -->
+  <div class="sec-head">
+    <span class="kicker">UI</span>
+    <h3>界面速览</h3>
+    <span class="note">左侧资产库面板 · 右侧存档详情</span>
+  </div>
+  <div class="ui">
+    <div class="panel-mock">
+      <div class="mock-head">⛁ 资产库 <span class="spacer">＋ ▾　⋯</span></div>
+      <div class="mock-tools">
+        <span class="mock-input">⌕ 搜索存档</span>
+        <span class="mock-btn">筛选 ▾</span>
+        <span class="mock-btn">更新 ↓ ▾</span>
+      </div>
+      <div class="mock-group">▾ 全部分组 <span class="n">12 项</span></div>
+      <div class="mock-row">▤ dau_report.sql <span class="v">v3</span><span class="tail">1.2 KB · 3 天前</span></div>
+      <div class="mock-row on">▤ 临时订单分析.sql <span class="v">v1</span><span class="tail">12 KB · 3 小时前</span></div>
+      <div class="mock-group" style="padding-left:26px">▾ 未分组</div>
+      <div class="mock-row" style="padding-left:30px">▤ monthly.md <span class="v">v2</span><span class="tail">4 KB · 昨天</span></div>
+      <div class="mock-group" style="padding-left:26px">▸ 报表 <span class="n">3 项</span></div>
+      <div class="mock-status">12 项 · 已归档 10 · 分析表 1 · 缺失 1 <span class="fix">修复…</span></div>
+    </div>
+    <div class="detail-mock">
+      <div class="mock-head">存档详情 <span class="spacer">只读</span></div>
+      <div class="mock-sec">
+        <h5>基本信息</h5>
+        <div class="mock-kv"><span class="k">显示名</span><span>dau_report.sql</span></div>
+        <div class="mock-kv"><span class="k">类型</span><span>文件 · 已归档 v3</span></div>
+        <div class="mock-kv"><span class="k">指纹</span><span class="mono">9f2a1c…7b40</span></div>
+      </div>
+      <div class="mock-sec">
+        <h5>来源</h5>
+        <div class="mock-kv"><span class="k">来源连接</span><span>本地 DuckDB（生产）</span></div>
+        <div class="mock-kv"><span class="k">来源草稿</span><span class="mono">scratchpad/reports/dau.sql</span></div>
+      </div>
+      <div class="mock-sec">
+        <h5>标签</h5>
+        <span class="mock-chip">报表 ×</span><span class="mock-chip">月度 ×</span><span class="mock-chip">＋ 标签</span>
+      </div>
+      <div class="mock-sec">
+        <h5>版本</h5>
+        <div class="mock-kv"><span class="k">历史</span><span>3 个版本 · 查看全部…</span></div>
+      </div>
+      <div class="mock-sec">
+        <h5>动作</h5>
+        <div class="mock-actions">
+          <span class="b primary">打开（只读）</span>
+          <span class="b">取回（检出）…</span>
+          <span class="b danger">移入回收站</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 能力清单 ===== -->
+  <div class="sec-head">
+    <span class="kicker">Status</span>
+    <h3>能力清单（诚实版）</h3>
+    <span class="note">✅ 已落地 · ○ 规划中</span>
+  </div>
+  <div class="caps">
+    <div class="cap-box">
+      <h4><span class="dot g"></span>已经能用的</h4>
+      <ul>
+        <li><b>归档闭环</b>：草稿箱 / 本地文件两条入口，表单含显示名 · 别名 · 分组 · 标签 · 保留份数（都真的生效）</li>
+        <li><b>撤销与版本</b>：5 秒撤销条；版本历史对话框可还原 / 取回该版本 / 删除内容副本</li>
+        <li><b>组织</b>：标签（打 / 去标、改名、删除）+ 单层分组（建 / 改名 / 删 / 移动、折叠态记忆）</li>
+        <li><b>检索</b>：搜索、三维筛选、五个排序键（记住上次选择）</li>
+        <li><b>面板</b>：虚拟化列表、多选（<code>Ctrl</code> / <code>Shift</code> / <code>Ctrl+A</code>）、右键菜单、加载骨架、两种空态</li>
+        <li><b>详情面板</b>：只读信息区 + 标签 chips + 版本区 + 动作区 + 危险区</li>
+        <li><b>回收站</b>：移入 / 还原 / 永久删除 / 清空（只动自己名下的条目）</li>
+        <li><b>索引修复</b>：三类差异 + 补登 / 删记录 / 接受当前内容 / 从回收站还原</li>
+        <li><b>只读三重守卫</b>：应用守卫 + 编辑器只读打开 + 文件系统属性</li>
+        <li><b>设置项</b>：历史内容保留 · 默认排序 · 分组折叠记忆</li>
+      </ul>
+    </div>
+    <div class="cap-box">
+      <h4><span class="dot y"></span>正在路上</h4>
+      <ul>
+        <li class="todo"><b>分析表档</b>（本体 = DuckDB 表）与 Mock / 编辑器结果两处上游接入 —— Phase 4</li>
+        <li class="todo"><b>引用档</b>（远端表的可校验指针）+ 系统级提升衔接 —— Phase 5（不承诺）</li>
+        <li class="todo"><b>拖拽到分组头</b>（目前用行右键「移动到分组 ›」等价替代）</li>
+        <li class="todo"><b>搜索匹配别名 / 标签 / 来源表</b>（目前匹配显示名与尾部字段）</li>
+        <li class="todo"><b>默认分组</b> · <b><code>F2</code> 重命名</b> · <b>批量打标签 / 批量移动</b></li>
+        <li class="todo"><b>详情内容预览</b>与头部可编辑</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ===== 快捷键 ===== -->
+  <div class="sec-head">
+    <span class="kicker">Keys</span>
+    <h3>键鼠速查</h3>
+  </div>
+  <table class="tbl">
+    <tr><th style="width:22%">操作</th><th style="width:30%">键 / 手势</th><th>说明</th></tr>
+    <tr><td>聚焦搜索</td><td><code>Ctrl</code> + <code>F</code></td><td>光标进搜索框</td></tr>
+    <tr><td>清空 / 收手</td><td><code>Esc</code></td><td>清搜索词；菜单打开时先关菜单</td></tr>
+    <tr><td>选中与多选</td><td>单击 · <code>Ctrl</code> + 单击 · <code>Shift</code> + 单击</td><td>单选 / 加入选择集 / 区间选择</td></tr>
+    <tr><td>全选可见行</td><td><code>Ctrl</code> + <code>A</code></td><td>筛选与排序后的可见行</td></tr>
+    <tr><td>打开（只读）</td><td>双击 · <code>Enter</code></td><td>文件进编辑器只读模式</td></tr>
+    <tr><td>漫游</td><td><code>↑</code> / <code>↓</code></td><td>跨过分组头继续走</td></tr>
+    <tr><td>移入回收站</td><td><code>Delete</code></td><td>对整个选择集生效，可还原</td></tr>
+    <tr><td>重命名显示名</td><td class="todo"><code>F2</code>（规划中）</td><td>只改显示名，不动文件名</td></tr>
+  </table>
+
+  <!-- ===== 约束 ===== -->
+  <div class="sec-head">
+    <span class="kicker">Rules</span>
+    <h3>写进代码的硬约束</h3>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="ico">🧱</div><h4>本体权威，索引可重建</h4><p>文件系统有什么就是有什么；登记表坏了可以重建，本体不可重建。</p></div>
+    <div class="card"><div class="ico">🚚</div><h4>先本体、后索引</h4><p>顺序固定：move 本体 → 写索引；索引失败回滚本体，绝不留半成品。</p></div>
+    <div class="card"><div class="ico">🖥</div><h4>渲染期零 I/O</h4><p>取数、扫描、搬文件都在后台线程；面板只读自己持有的快照。</p></div>
+    <div class="card"><div class="ico">↔️</div><h4>依赖只向下</h4><p>模块不反向依赖上游与宿主；设置项由宿主读好后作为参数传入。</p></div>
+    <div class="card"><div class="ico">🎨</div><h4>零裸值</h4><p>颜色一律走主题 token，尺寸常量单一来源——深色主题与缩放不靠猜。</p></div>
+    <div class="card"><div class="ico">🔕</div><h4>不静默</h4><p>失败要么拒绝、要么写进回执：附属项（标签 / 分组）没落上也会说明。</p></div>
+  </div>
+
+  <!-- ===== 页脚 ===== -->
+  <div class="foot">
+    <div class="grid">
+      <div>
+        <h5>想深入读</h5>
+        <ul>
+          <li><code>analytics-resource-architecture.md</code> — 语义裁决与数据流</li>
+          <li><code>analytics-resource-dev-plan.md</code> — 做到哪、为什么这么做</li>
+          <li><code>analytics-resource-prototype-design.md</code> — 长什么样、怎么交互</li>
+          <li><code>analytics-resource-user-guide.md</code> — 怎么用、怎么排障</li>
+          <li><code>README.md</code> — 模块入口与代码地图</li>
+        </ul>
+      </div>
+      <div>
+        <h5>验证基线（2026-09-18）</h5>
+        <div class="verify">cargo test -p rds-analytics-resource -j 2
+  → 125 单测 + 18 面板窗口 + 9 对话框窗口
+cargo test -p rds-workbench --lib --test ui_contract
+  → 102 + 7　（cargo check --all-targets 零告警）</div>
+      </div>
+    </div>
+    <div>
+      本页是面向宣传与速览的单文件页（明暗两套 / 零外链）；能力状态以开发方案 §0 的进度记录为准，界面细节以原型设计为准。
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* 明暗切换：与模块原型页同一做法，不引任何外部资源 */
+var root = document.documentElement;
+var themeBtn = document.getElementById('themeBtn');
+var themeTxt = document.getElementById('themeTxt');
+themeBtn.addEventListener('click', function () {
+  var dark = root.getAttribute('data-theme') === 'dark';
+  root.setAttribute('data-theme', dark ? 'light' : 'dark');
+  themeTxt.textContent = dark ? '切换暗色' : '切换亮色';
+});
+</script>
+</body>
+</html>
