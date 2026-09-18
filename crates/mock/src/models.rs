@@ -255,6 +255,16 @@ pub enum GeneratorConfig {
     DateTimeBetween {
         start: String,
         end: String,
+        /// 仅工作日：落在休息日就重抽（重抽不成时顺延到下一个工作日）
+        workdays_only: bool,
+        /// 仅工作时段：日内时刻落在 09:00~18:00
+        work_hours_only: bool,
+        /// 工作周掩码：7 位（周一~周日），`1` 上班 / `0` 休息，如 `1111100`
+        work_week: String,
+        /// 跳过日期（节假日）：`YYYY-MM-DD` 一行一个
+        skip_dates: Vec<String>,
+        /// 上班日期（调休）：优先于工作周与跳过日期
+        work_dates: Vec<String>,
     },
     Date {
         min: String,
@@ -265,11 +275,27 @@ pub enum GeneratorConfig {
     SequentialDate {
         start: String,
         step_seconds: i32,
+        /// 仅工作日：按**工作日数**推进（步长须为整天），序列只落在工作日上
+        workdays_only: bool,
+        /// 工作周掩码：7 位（周一~周日），`1` 上班 / `0` 休息，如 `1111100`
+        work_week: String,
+        /// 跳过日期（节假日）：`YYYY-MM-DD` 一行一个
+        skip_dates: Vec<String>,
+        /// 上班日期（调休）：优先于工作周与跳过日期
+        work_dates: Vec<String>,
     },
     SequentialDateWithGaps {
         start: String,
         step_seconds: i32,
         miss_probability: f64,
+        /// 仅工作日：按**工作日数**推进（步长须为整天），序列只落在工作日上
+        workdays_only: bool,
+        /// 工作周掩码：7 位（周一~周日），`1` 上班 / `0` 休息，如 `1111100`
+        work_week: String,
+        /// 跳过日期（节假日）：`YYYY-MM-DD` 一行一个
+        skip_dates: Vec<String>,
+        /// 上班日期（调休）：优先于工作周与跳过日期
+        work_dates: Vec<String>,
     },
 
     // 商业类

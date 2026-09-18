@@ -980,6 +980,31 @@ static SPEC_DATE_TIME_BETWEEN: GeneratorSpec = GeneratorSpec {
             label: "结束",
             kind: ParamKind::Text,
         },
+        ParamField {
+            key: "workdays_only",
+            label: "仅工作日",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_hours_only",
+            label: "仅工作时段（09:00~18:00）",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_week",
+            label: "工作周（周一~周日，1 上班）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "skip_dates",
+            label: "跳过日期（节假日）",
+            kind: ParamKind::Complex,
+        },
+        ParamField {
+            key: "work_dates",
+            label: "上班日期（调休）",
+            kind: ParamKind::Complex,
+        },
     ],
 };
 
@@ -1034,6 +1059,26 @@ static SPEC_SEQUENTIAL_DATE: GeneratorSpec = GeneratorSpec {
             label: "步长（秒）",
             kind: ParamKind::Int,
         },
+        ParamField {
+            key: "workdays_only",
+            label: "仅工作日",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_week",
+            label: "工作周（周一~周日，1 上班）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "skip_dates",
+            label: "跳过日期（节假日）",
+            kind: ParamKind::Complex,
+        },
+        ParamField {
+            key: "work_dates",
+            label: "上班日期（调休）",
+            kind: ParamKind::Complex,
+        },
     ],
 };
 
@@ -1057,6 +1102,26 @@ static SPEC_SEQUENTIAL_DATE_WITH_GAPS: GeneratorSpec = GeneratorSpec {
             key: "miss_probability",
             label: "缺失概率",
             kind: ParamKind::Float,
+        },
+        ParamField {
+            key: "workdays_only",
+            label: "仅工作日",
+            kind: ParamKind::Bool,
+        },
+        ParamField {
+            key: "work_week",
+            label: "工作周（周一~周日，1 上班）",
+            kind: ParamKind::Text,
+        },
+        ParamField {
+            key: "skip_dates",
+            label: "跳过日期（节假日）",
+            kind: ParamKind::Complex,
+        },
+        ParamField {
+            key: "work_dates",
+            label: "上班日期（调休）",
+            kind: ParamKind::Complex,
         },
     ],
 };
@@ -2106,6 +2171,11 @@ pub fn default_of(name: &str) -> Option<GeneratorConfig> {
         "date_time_between" => GeneratorConfig::DateTimeBetween {
             start: "".to_string(),
             end: "2025-12-31".to_string(),
+            workdays_only: false,
+            work_hours_only: false,
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
         },
         "date" => GeneratorConfig::Date {
             min: "2020-01-01".to_string(),
@@ -2116,11 +2186,19 @@ pub fn default_of(name: &str) -> Option<GeneratorConfig> {
         "sequential_date" => GeneratorConfig::SequentialDate {
             start: "".to_string(),
             step_seconds: 86400,
+            workdays_only: false,
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
         },
         "sequential_date_with_gaps" => GeneratorConfig::SequentialDateWithGaps {
             start: "".to_string(),
             step_seconds: 86400,
             miss_probability: 0.1,
+            workdays_only: false,
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
         },
         "company_name" => GeneratorConfig::CompanyName,
         "company_suffix" => GeneratorConfig::CompanySuffix,

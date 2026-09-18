@@ -795,15 +795,106 @@ fn generator_param_problem(generator: &GeneratorConfig) -> Option<String> {
         }
 
         // ===== 日期时间类：fake 按「分钟差」取随机偏移，差 ≤ 0 就是空区间 =====
-        GeneratorConfig::DateTime { min, max }
-        | GeneratorConfig::DateTimeBetween {
+        GeneratorConfig::DateTime { min, max } => datetime_range_problem(min, max),
+        GeneratorConfig::Date { min, max } => date_range_problem(min, max),
+
+        // ===== 工作日历（列级参数）：勾了「仅工作日」才校验，没勾时留个值不该拦住生成 =====
+        // 必须排在下面那条全匹配的 `DateTimeBetween { .. }` 之前，否则永远走不到
+        GeneratorConfig::DateTimeBetween {
+            workdays_only,
+            work_week,
+            skip_dates,
+            work_dates,
+            ..
+        } if *workdays_only => work_calendar_problem(work_week, skip_dates, work_dates),
+        GeneratorConfig::SequentialDate {
+            workdays_only,
+            step_seconds,
+            work_week,
+            skip_dates,
+            work_dates,
+            ..
+        } if *workdays_only => work_days_step_problem(*step_seconds)
+            .or_else(|| work_calendar_problem(work_week, skip_dates, work_dates)),
+        GeneratorConfig::SequentialDateWithGaps {
+            workdays_only,
+            step_seconds,
+            work_week,
+            skip_dates,
+            work_dates,
+            ..
+        } if *workdays_only => work_days_step_problem(*step_seconds)
+            .or_else(|| work_calendar_problem(work_week, skip_dates, work_dates)),
+        GeneratorConfig::DateTimeBetween {
             start: min,
             end: max,
+            ..
         } => datetime_range_problem(min, max),
-        GeneratorConfig::Date { min, max } => date_range_problem(min, max),
 
         _ => None,
     }
+}
+
+/// 工作日历里两个日期列表各自最多多少条。
+///
+/// 不是存储限制而是**生成期预算**：「按工作日推进」要对每个值数一遍区间内的工作日，
+/// 列表越长逐行判定越久（一年节假日 ≈ 20 条，366 条已是一年逐日列满的量级）。
+const MAX_CALENDAR_DATES: usize = 366;
+
+/// 工作日历（工作周掩码 + 跳过日期 + 上班日期）的合法性。
+///
+/// 三个日期生成器共用同一套规则；非法值必须拦在生成前——掩码非法会让日历静默退到周一~周五，
+/// 日期串写错会让那一天静默不生效，两者用户都看不出来。
+fn work_calendar_problem(
+    work_week: &str,
+    skip_dates: &[String],
+    work_dates: &[String],
+) -> Option<String> {
+    let bytes = work_week.as_bytes();
+    if bytes.len() != 7 || !bytes.iter().all(|b| *b == b'0' || *b == b'1') {
+        return Some(format!(
+            "的「工作周（周一~周日，1 上班）」需是 7 位 0/1（当前「{work_week}」）：如 1111100 = 周一~周五上班"
+        ));
+    }
+    if !bytes.iter().any(|b| *b == b'1') {
+        return Some(
+            "的「工作周（周一~周日，1 上班）」全为 0：至少要让一天上班，否则整列无值可放"
+                .to_string(),
+        );
+    }
+    for (label, list) in [
+        ("跳过日期（节假日）", skip_dates),
+        ("上班日期（调休）", work_dates),
+    ] {
+        if list.len() > MAX_CALENDAR_DATES {
+            return Some(format!(
+                "的「{label}」最多 {MAX_CALENDAR_DATES} 条（当前 {} 条）：一年 20 条上下就够",
+                list.len()
+            ));
+        }
+        // 日期必须是**规范 10 位**：`2026-1-1` 也能被 chrono 解析，但与生成侧按字节比较的
+        // 日历列表对不上，会静默失效——所以要求「解析回来与输入逐字相同」
+        if let Some(bad) = list.iter().find(|d| {
+            chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                .map(|parsed| parsed.format("%Y-%m-%d").to_string() != **d)
+                .unwrap_or(true)
+        }) {
+            return Some(format!(
+                "的「{label}」里「{bad}」不是日期：需要 10 位的 `YYYY-MM-DD`（一行一个）"
+            ));
+        }
+    }
+    None
+}
+
+/// 「按工作日推进」要求步长是**整整天的正数**：半天 / 负数在「工作日」这个刻度上没有意义。
+fn work_days_step_problem(step_seconds: i32) -> Option<String> {
+    if step_seconds < 86_400 || step_seconds % 86_400 != 0 {
+        return Some(format!(
+            "的「步长（秒）」勾选「仅工作日」时需是不小于 86400 的整天数（当前 {step_seconds} 秒）：如 86400 = 每个工作日一行"
+        ));
+    }
+    None
 }
 
 /// `DateTime` / `DateTimeBetween` 的区间问题：解析得出的两界差值必须**至少一分钟**。
@@ -1400,6 +1491,50 @@ mod tests {
             })
             .is_some()
         );
+        // 工作日历：掩码不是 7 位 0/1、全 0、日期串不规范、步长不是整天
+        let calendar =
+            |work_week: &str, skip: &[&str], work: &[&str]| GeneratorConfig::SequentialDate {
+                start: "2024-01-01 00:00:00".to_string(),
+                step_seconds: 86_400,
+                workdays_only: true,
+                work_week: work_week.to_string(),
+                skip_dates: skip.iter().map(|d| (*d).to_string()).collect(),
+                work_dates: work.iter().map(|d| (*d).to_string()).collect(),
+            };
+        assert!(generator_param_problem(&calendar("111100", &[], &[])).is_some());
+        assert!(generator_param_problem(&calendar("1111a00", &[], &[])).is_some());
+        assert!(generator_param_problem(&calendar("0000000", &[], &[])).is_some());
+        // `2026-1-1` 能被 chrono 解析，但与生成侧的字节比较对不上，必须拦
+        assert!(generator_param_problem(&calendar("1111100", &["2026-1-1"], &[])).is_some());
+        assert!(generator_param_problem(&calendar("1111100", &[], &["2026-13-01"])).is_some());
+        // 步长不是整天（半天 / 负数）在「工作日」刻度上没意义
+        assert!(
+            generator_param_problem(&GeneratorConfig::SequentialDate {
+                start: "2024-01-01 00:00:00".to_string(),
+                step_seconds: 43_200,
+                workdays_only: true,
+                work_week: "1111100".to_string(),
+                skip_dates: Vec::new(),
+                work_dates: Vec::new(),
+            })
+            .is_some()
+        );
+        // 日历列表超长（生成期预算）
+        let too_many: Vec<String> = (0..400)
+            .map(|i| format!("2026-01-{:02}", (i % 28) + 1))
+            .collect();
+        assert!(
+            generator_param_problem(&GeneratorConfig::DateTimeBetween {
+                start: "2024-01-01T00:00:00Z".to_string(),
+                end: "2024-12-31T23:59:59Z".to_string(),
+                workdays_only: true,
+                work_hours_only: true,
+                work_week: "1111100".to_string(),
+                skip_dates: too_many,
+                work_dates: Vec::new(),
+            })
+            .is_some()
+        );
     }
 
     /// 合法参数不能被误拦：护栏过宽会让正常配置也生不出来。
@@ -1459,6 +1594,35 @@ mod tests {
                 period: 0,
                 amplitude: 0.0,
                 noise: 0.0,
+            },
+            // 工作日历：合法掩码（含单休、自定义工作周）+ 合法日期列表
+            GeneratorConfig::SequentialDate {
+                start: "2024-01-01 00:00:00".to_string(),
+                step_seconds: 86_400,
+                workdays_only: true,
+                work_week: "1111100".to_string(),
+                skip_dates: vec!["2024-10-01".to_string()],
+                work_dates: vec!["2024-10-12".to_string()],
+            },
+            // 单休（周一~周六）也合法
+            GeneratorConfig::SequentialDateWithGaps {
+                start: "2024-01-01 00:00:00".to_string(),
+                step_seconds: 172_800,
+                miss_probability: 0.1,
+                workdays_only: true,
+                work_week: "1111110".to_string(),
+                skip_dates: Vec::new(),
+                work_dates: Vec::new(),
+            },
+            // 没勾「仅工作日」时，日历字段里留着旧值不该拦住生成
+            GeneratorConfig::DateTimeBetween {
+                start: "2024-01-01T00:00:00Z".to_string(),
+                end: "2024-12-31T23:59:59Z".to_string(),
+                workdays_only: false,
+                work_hours_only: false,
+                work_week: "111100".to_string(),
+                skip_dates: vec!["2026-1-1".to_string()],
+                work_dates: Vec::new(),
             },
         ] {
             assert!(generator_param_problem(&generator).is_none(), "{generator:?}");

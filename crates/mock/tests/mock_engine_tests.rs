@@ -1243,3 +1243,119 @@ async fn unsamplable_generator_params_are_rejected_before_generation() {
         .expect("拦截之后照常能生成");
     assert_eq!(ok.row_count, 50);
 }
+
+// ==================== 工作日历（列级参数） ====================
+
+/// 工作日历参数能走完整条生成链路：顺序日期只落工作日、跳过指定日期，
+/// 随机时刻只落工作日与工作时段。
+#[tokio::test]
+async fn workday_calendar_columns_generate_through_the_pipeline() {
+    use chrono::{Datelike, Weekday};
+
+    let sequential = col(
+        "biz_stamp",
+        ColumnDataType::Timestamp,
+        GeneratorConfig::SequentialDate {
+            start: "2024-01-01 09:30:00".to_string(),
+            step_seconds: 86_400,
+            workdays_only: true,
+            work_week: "1111100".to_string(),
+            skip_dates: vec!["2024-01-02".to_string()],
+            work_dates: Vec::new(),
+        },
+    );
+    let stamp = col(
+        "created_at",
+        ColumnDataType::Timestamp,
+        GeneratorConfig::DateTimeBetween {
+            start: "2024-01-01T00:00:00Z".to_string(),
+            end: "2024-03-31T23:59:59Z".to_string(),
+            workdays_only: true,
+            work_hours_only: true,
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        },
+    );
+    let config = MockConfig {
+        table_name: "t_work_calendar".to_string(),
+        row_count: 6,
+        seed: Some(7),
+        locale: Locale::ZhCn,
+        columns: vec![auto_increment("id"), sequential, stamp],
+    };
+
+    let result = MockEngine::generate(config).await.expect("生成应当成功");
+    let rows = rows_of(&result);
+    assert_eq!(rows.len(), 6);
+
+    // 顺序日期列：日内时刻保持 09:30，周末与跳过日期都不出现
+    let dates: Vec<String> = rows
+        .iter()
+        .map(|r| r[1].as_text().unwrap_or_default())
+        .collect();
+    assert!(
+        dates.iter().all(|d| d.ends_with("09:30:00")),
+        "日内时刻应保持起始值：{dates:?}"
+    );
+    assert!(
+        !dates.iter().any(|d| d.contains("2024-01-02")),
+        "跳过的日期不该出现：{dates:?}"
+    );
+    for value in &dates {
+        let date = chrono::NaiveDate::parse_from_str(&value[..10], "%Y-%m-%d").expect("日期可解析");
+        assert!(
+            !matches!(date.weekday(), Weekday::Sat | Weekday::Sun),
+            "周末不该出现：{value}"
+        );
+    }
+
+    // 随机时刻列：落在工作日（且非跳过日期）与 09:00~18:00 内
+    let stamps: Vec<String> = rows
+        .iter()
+        .map(|r| r[2].as_text().unwrap_or_default())
+        .collect();
+    for value in &stamps {
+        let date = chrono::NaiveDate::parse_from_str(&value[..10], "%Y-%m-%d").expect("日期可解析");
+        assert!(
+            !matches!(date.weekday(), Weekday::Sat | Weekday::Sun),
+            "随机时刻也不该落在周末：{value}"
+        );
+        let time = &value[11..];
+        assert!(
+            ("09:00:00".."18:00:00").contains(&time),
+            "随机时刻应落在工作时段：{value}"
+        );
+    }
+}
+
+/// 日历参数写错时在**生成前**拦住，且错误说清格式要求。
+#[tokio::test]
+async fn workday_calendar_rejects_bad_dates_before_generating() {
+    let column = col(
+        "biz_date",
+        ColumnDataType::Date,
+        GeneratorConfig::SequentialDate {
+            start: "2024-01-01 00:00:00".to_string(),
+            step_seconds: 86_400,
+            workdays_only: true,
+            work_week: "1111100".to_string(),
+            // 少了补零：chrono 能解，但与生成侧的字节比较对不上，必须拦
+            skip_dates: vec!["2024-1-2".to_string()],
+            work_dates: Vec::new(),
+        },
+    );
+    let config = MockConfig {
+        table_name: "t_work_calendar_bad".to_string(),
+        row_count: 3,
+        seed: None,
+        locale: Locale::ZhCn,
+        columns: vec![column],
+    };
+    let reason = MockEngine::generate(config)
+        .await
+        .expect_err("非规范日期串必须被拦")
+        .to_string();
+    assert!(reason.contains("YYYY-MM-DD"), "错误要说清格式：{reason}");
+    assert!(reason.contains("biz_date"), "错误要点出是哪一列：{reason}");
+}

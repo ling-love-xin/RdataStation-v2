@@ -618,7 +618,8 @@ pub(crate) fn parse_complex_param(key: &str, text: &str) -> Result<serde_json::V
         .map(|(index, line)| (index + 1, line.trim()))
         .filter(|(_, line)| !line.is_empty())
         .collect();
-    if lines.is_empty() {
+    // 日历列表允许清空（“今年没有额外假日”是合法配置）；取值集合不允许——空集合抽不出值
+    if lines.is_empty() && !matches!(key, "skip_dates" | "work_dates") {
         return Err("至少要有一个值".to_string());
     }
     if lines.len() > MAX_COMPLEX_ITEMS {
@@ -629,6 +630,13 @@ pub(crate) fn parse_complex_param(key: &str, text: &str) -> Result<serde_json::V
     }
 
     match key {
+        // 工作日历的两个日期列表：允许留空（空 = 没有例外日子），不在“至少一个值”之列
+        "skip_dates" | "work_dates" => Ok(serde_json::Value::Array(
+            lines
+                .iter()
+                .map(|(_, line)| serde_json::Value::from((*line).to_string()))
+                .collect(),
+        )),
         "values" => Ok(serde_json::Value::Array(
             lines
                 .iter()
@@ -705,6 +713,11 @@ pub(crate) fn complex_param_text(config: &GeneratorConfig, key: &str) -> String 
 pub(crate) fn complex_param_hint(key: &str) -> &'static str {
     match key {
         "choices" => "每行「值, 权重」，如「北京, 3」；权重越大越容易被选中",
+        // 日历列表允许留空（空 = 没有例外日子），提示里写明格式
+        "skip_dates" => {
+            "每行一个日期，如「2026-10-01」；这些日子不算工作日（留空则只按工作周判定）"
+        }
+        "work_dates" => "每行一个日期，如「2026-10-10」；调休上班的日子，优先于工作周与跳过日期",
         _ => "每行一个值，如「已发货」",
     }
 }
@@ -759,6 +772,47 @@ fn payload_of(config: &GeneratorConfig) -> Option<serde_json::Map<String, serde_
 }
 
 /// 生成器参数摘要（一行说清：`最小值 1 · 最大值 100`）。
+/// 工作周掩码（7 位，周一~周日）翻成人话：`1111100` → 「周一~周五」。
+///
+/// 只用于展示：掩码非法时原样返回（生成前的护栏会拦住非法值并给出原因）。
+pub(crate) fn work_week_text(mask: &str) -> String {
+    const NAMES: [&str; 7] = ["一", "二", "三", "四", "五", "六", "日"];
+    let bytes = mask.as_bytes();
+    if bytes.len() != 7 || !bytes.iter().all(|b| *b == b'0' || *b == b'1') {
+        return mask.to_string();
+    }
+    let work: Vec<&str> = bytes
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| **b == b'1')
+        .map(|(i, _)| NAMES[i])
+        .collect();
+    match work.len() {
+        0 => "（无上班日）".to_string(),
+        7 => "每天".to_string(),
+        _ => {
+            // 从第一个上班日往后数连续上班天数：等于总数就是一段区间（含跨周日的环）
+            let start = bytes.iter().position(|b| *b == b'1').unwrap_or(0);
+            let run = (0..7)
+                .take_while(|i| bytes[(start + i) % 7] == b'1')
+                .count();
+            if run == work.len() {
+                let end = (start + work.len() - 1) % 7;
+                if work.len() == 1 {
+                    format!("周{}", NAMES[start])
+                } else {
+                    format!("周{}~周{}", NAMES[start], NAMES[end])
+                }
+            } else {
+                work.iter()
+                    .map(|day| format!("周{day}"))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            }
+        }
+    }
+}
+
 pub(crate) fn summarize_params(config: &GeneratorConfig) -> String {
     let spec = generator_catalog::spec_of(config);
     if spec.params.is_empty() {
@@ -768,10 +822,29 @@ pub(crate) fn summarize_params(config: &GeneratorConfig) -> String {
         return String::new();
     };
     let mut parts = Vec::new();
+    // 工作日历一上就是 5 个参数：只在「仅工作日」开着时才展开，「关着的开关」与「空列表」
+    // 不占摘要位置——否则字段卡片那一行会被「工作周 … · 跳过日期 0 项 · 上班日期 0 项」撑爆
+    let calendar_on = payload
+        .get("workdays_only")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     for field in spec.params {
         let Some(raw) = payload.get(field.key) else {
             continue;
         };
+        if matches!(field.key, "workdays_only" | "work_hours_only")
+            && raw.as_bool() != Some(true)
+        {
+            continue;
+        }
+        if matches!(field.key, "work_week" | "skip_dates" | "work_dates") && !calendar_on {
+            continue;
+        }
+        if matches!(field.key, "skip_dates" | "work_dates")
+            && raw.as_array().map(|items| items.is_empty()).unwrap_or(true)
+        {
+            continue;
+        }
         let text = match field.kind {
             ParamKind::Complex => {
                 let count = raw.as_array().map(|items| items.len()).unwrap_or(0);
@@ -783,6 +856,10 @@ pub(crate) fn summarize_params(config: &GeneratorConfig) -> String {
                 "否"
             }
             .to_string(),
+            // 工作周掩码：`1111100` 这种人看不懂，翻成「周一~周五」
+            ParamKind::Text if field.key == "work_week" => {
+                work_week_text(raw.as_str().unwrap_or_default())
+            }
             _ => match raw {
                 serde_json::Value::Null => "未设".to_string(),
                 serde_json::Value::String(s) => s.clone(),

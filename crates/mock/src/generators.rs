@@ -329,11 +329,20 @@ pub(super) fn generate_cell(
         }
 
         // ========== 日期时间 ==========
-        GeneratorConfig::DateTime { min, max }
-        | GeneratorConfig::DateTimeBetween {
+        GeneratorConfig::DateTime { min, max } => datetime_between(min, max, rng),
+        GeneratorConfig::DateTimeBetween {
             start: min,
             end: max,
-        } => datetime_between(min, max, rng),
+            workdays_only,
+            work_hours_only,
+            work_week,
+            skip_dates,
+            work_dates,
+        } => {
+            let calendar =
+                workdays_only.then(|| WorkCalendar::new(work_week, skip_dates, work_dates));
+            datetime_between_with_calendar(min, max, calendar.as_ref(), *work_hours_only, rng)
+        }
         GeneratorConfig::DateTimeBefore { before } => {
             let min = "2020-01-01T00:00:00Z";
             datetime_between(min, before, rng)
@@ -376,50 +385,41 @@ pub(super) fn generate_cell(
         GeneratorConfig::SequentialDate {
             start,
             step_seconds,
+            workdays_only,
+            work_week,
+            skip_dates,
+            work_dates,
         } => {
-            let dt = chrono::NaiveDateTime::parse_from_str(start, "%Y-%m-%d %H:%M:%S")
-                .unwrap_or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(
-                        &format!("{} 00:00:00", start),
-                        "%Y-%m-%d %H:%M:%S",
-                    )
-                    .inspect_err(|e| {
-                        tracing::warn!(
-                            "SequentialDate: invalid start date '{}', falling back to epoch: {}",
-                            start,
-                            e
-                        )
-                    })
-                    .unwrap_or_default()
-                });
-            let new_dt = dt + chrono::Duration::seconds(*step_seconds as i64 * row_index as i64);
+            let dt = parse_start_datetime("SequentialDate", start);
+            let new_dt = if *workdays_only {
+                let calendar = WorkCalendar::new(work_week, skip_dates, work_dates);
+                advance_work_days(&calendar, dt, row_index as i64, *step_seconds)
+            } else {
+                dt + chrono::Duration::seconds(*step_seconds as i64 * row_index as i64)
+            };
             new_dt.format("%Y-%m-%d %H:%M:%S").to_string()
         }
         GeneratorConfig::SequentialDateWithGaps {
             start,
             step_seconds,
             miss_probability,
+            workdays_only,
+            work_week,
+            skip_dates,
+            work_dates,
         } => {
             let roll: f64 = rng.random();
             if roll < *miss_probability {
                 return String::new();
             }
-            let dt = chrono::NaiveDateTime::parse_from_str(start, "%Y-%m-%d %H:%M:%S")
-                .unwrap_or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(
-                        &format!("{} 00:00:00", start),
-                        "%Y-%m-%d %H:%M:%S",
-                    )
-                    .inspect_err(|e| {
-                        tracing::warn!(
-                            "SequentialDateWithGaps: invalid start date '{}', falling back to epoch: {}",
-                            start, e
-                        )
-                    })
-                    .unwrap_or_default()
-                });
+            let dt = parse_start_datetime("SequentialDateWithGaps", start);
             let total_steps = (row_index as f64 * (1.0 - *miss_probability)).max(0.0) as i64;
-            let new_dt = dt + chrono::Duration::seconds(*step_seconds as i64 * total_steps);
+            let new_dt = if *workdays_only {
+                let calendar = WorkCalendar::new(work_week, skip_dates, work_dates);
+                advance_work_days(&calendar, dt, total_steps, *step_seconds)
+            } else {
+                dt + chrono::Duration::seconds(*step_seconds as i64 * total_steps)
+            };
             new_dt.format("%Y-%m-%d %H:%M:%S").to_string()
         }
 
@@ -885,6 +885,281 @@ fn datetime_between(min: &str, max: &str, rng: &mut StdRng) -> String {
         .fake_with_rng::<DateTime<Utc>, _>(rng)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string()
+}
+
+/// 工作时段（仅工作时段开关的固定窗口，与参数标签写法一致）。
+const WORK_HOUR_START: u32 = 9;
+const WORK_HOUR_END: u32 = 18;
+
+/// 解析起始时刻：`YYYY-MM-DD HH:MM:SS`，只给日期时按当天 00:00:00；
+/// 解析不了就回退到 epoch（与旧行为一致，`warn` 带上生成器名便于定位列）。
+fn parse_start_datetime(label: &str, text: &str) -> chrono::NaiveDateTime {
+    let trimmed = text.trim();
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
+        return dt;
+    }
+    chrono::NaiveDateTime::parse_from_str(&format!("{} 00:00:00", trimmed), "%Y-%m-%d %H:%M:%S")
+        .inspect_err(|e| {
+            tracing::warn!(
+                "{label}: invalid start date '{}', falling back to epoch: {}",
+                text,
+                e
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// 按**工作日数**推进：第 `row_index` 行取从 `start` 起第 `row_index × 每天几个工作日` 个工作日，
+/// 日内时刻保持起始时刻（护栏保证步长是整天）。
+fn advance_work_days(
+    calendar: &WorkCalendar<'_>,
+    start: chrono::NaiveDateTime,
+    steps: i64,
+    step_seconds: i32,
+) -> chrono::NaiveDateTime {
+    let per_step = (step_seconds as i64 / 86_400).max(1);
+    let work_days = steps * per_step;
+    match calendar.nth_work_day(start.date(), work_days) {
+        Some(date) => chrono::NaiveDateTime::new(date, start.time()),
+        // 日历算不下去（理论上不会）：退回自然日推进，至少不中断生成
+        None => start + chrono::Duration::days(work_days),
+    }
+}
+
+/// 区间随机时刻 + 可选的工作日历约束（列级参数，见 `WorkCalendar`）。
+///
+/// 落点规则：
+/// 1. 先在 `[min, max]` 里均匀取一个时刻；
+/// 2. 「仅工作日」：落在休息日就重抽（最多 30 次），仍不行就顺延到下一个工作日；
+/// 3. 「仅工作时段」：把日内时刻改到 09:00~18:00；
+/// 4. 最后夹回 `[min, max]`——区间端点优先于日历约束（窗口比日历窄时至少不越界）。
+fn datetime_between_with_calendar(
+    min: &str,
+    max: &str,
+    calendar: Option<&WorkCalendar<'_>>,
+    work_hours_only: bool,
+    rng: &mut StdRng,
+) -> String {
+    use chrono::{DateTime, Utc};
+    use fake::faker::chrono::en::DateTimeBetween;
+
+    let default_start = DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+        .map(|d| d.to_utc())
+        .unwrap_or_default();
+    let default_end = DateTime::parse_from_rfc3339("2030-12-31T23:59:59Z")
+        .map(|d| d.to_utc())
+        .unwrap_or_default();
+    let s = DateTime::parse_from_rfc3339(min)
+        .map(|d| d.to_utc())
+        .unwrap_or(default_start);
+    let e = DateTime::parse_from_rfc3339(max)
+        .map(|d| d.to_utc())
+        .unwrap_or(default_end);
+    let lower = s.naive_utc();
+    let upper = e.naive_utc();
+
+    let mut picked = DateTimeBetween(s, e)
+        .fake_with_rng::<DateTime<Utc>, _>(rng)
+        .naive_utc();
+    if let Some(calendar) = calendar {
+        for _ in 0..30 {
+            if calendar.is_work_day(picked.date()) {
+                break;
+            }
+            picked = DateTimeBetween(s, e)
+                .fake_with_rng::<DateTime<Utc>, _>(rng)
+                .naive_utc();
+        }
+        if !calendar.is_work_day(picked.date()) {
+            picked =
+                chrono::NaiveDateTime::new(calendar.snap_forward(picked.date()), picked.time());
+        }
+    }
+    if work_hours_only {
+        let minutes = (WORK_HOUR_START * 60..WORK_HOUR_END * 60).fake_with_rng::<u32, _>(rng);
+        if let Some(time) = chrono::NaiveTime::from_num_seconds_from_midnight_opt(minutes * 60, 0) {
+            picked = chrono::NaiveDateTime::new(picked.date(), time);
+        }
+    }
+    // 夹回区间：顺延与工作时段都可能把时刻推出窗口，端点优先
+    // （不用 `clamp`：区间上下界反了它会 panic，而这里是热路径，不能把会话带走）
+    picked = if picked < lower {
+        lower
+    } else if picked > upper {
+        upper
+    } else {
+        picked
+    };
+    picked.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// 从 ISO 串（`YYYY-MM-DD`）取出日期；列表项与区间比较都走字节，不做完整解析。
+fn key_to_date(bytes: &[u8]) -> Option<chrono::NaiveDate> {
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let digit = |i: usize| -> Option<u32> {
+        bytes[i]
+            .is_ascii_digit()
+            .then(|| u32::from(bytes[i] - b'0'))
+    };
+    let year = digit(0)? * 1000 + digit(1)? * 100 + digit(2)? * 10 + digit(3)?;
+    let month = digit(5)? * 10 + digit(6)?;
+    let day = digit(8)? * 10 + digit(9)?;
+    chrono::NaiveDate::from_ymd_opt(year as i32, month, day)
+}
+
+/// 日期的 ISO 键（`YYYY-MM-DD` 的字节形式）：与列表项按字节比较，免解析、免分配。
+fn iso_key(date: chrono::NaiveDate) -> [u8; 10] {
+    use chrono::Datelike;
+    let (year, month, day) = (date.year(), date.month(), date.day());
+    let mut key = [b'0'; 10];
+    for (i, digit) in [year / 1000, (year / 100) % 10, (year / 10) % 10, year % 10]
+        .iter()
+        .enumerate()
+    {
+        key[i] = b'0' + (*digit as u8);
+    }
+    key[4] = b'-';
+    key[5] = b'0' + (month / 10) as u8;
+    key[6] = b'0' + (month % 10) as u8;
+    key[7] = b'-';
+    key[8] = b'0' + (day / 10) as u8;
+    key[9] = b'0' + (day % 10) as u8;
+    key
+}
+
+/// **列级工作日历**（参数就在列自己的生成器上，不与别的列共享）。
+///
+/// 判定顺序：**上班日期（调休）优先 → 跳过日期（节假日）→ 工作周掩码**。
+/// 列表项按 ISO 串的字节序比较（`YYYY-MM-DD` 的字典序就是时间序），不建 `NaiveDate`。
+struct WorkCalendar<'a> {
+    /// 周一~周日，`true` = 上班
+    week: [bool; 7],
+    skip_dates: &'a [String],
+    work_dates: &'a [String],
+}
+
+impl<'a> WorkCalendar<'a> {
+    /// 从生成器字段构造。掩码非法时退到周一~周五（生成前护栏会拦住非法值，这里是兜底）。
+    fn new(work_week: &str, skip_dates: &'a [String], work_dates: &'a [String]) -> Self {
+        let bytes = work_week.as_bytes();
+        let mut week = [true, true, true, true, true, false, false];
+        if bytes.len() == 7 && bytes.iter().all(|b| *b == b'0' || *b == b'1') {
+            for (i, b) in bytes.iter().enumerate() {
+                week[i] = *b == b'1';
+            }
+        }
+        Self {
+            week,
+            skip_dates,
+            work_dates,
+        }
+    }
+
+    /// 两个列表都空且掩码是整周形状时，判定退化成纯算术（常见情况的快路径）。
+    fn lists_empty(&self) -> bool {
+        self.skip_dates.is_empty() && self.work_dates.is_empty()
+    }
+
+    fn list_has(list: &[String], key: &[u8]) -> bool {
+        list.iter().any(|item| item.as_bytes() == key)
+    }
+
+    fn is_work_day(&self, date: chrono::NaiveDate) -> bool {
+        use chrono::Datelike;
+        let key = iso_key(date);
+        if Self::list_has(self.work_dates, &key) {
+            return true;
+        }
+        if Self::list_has(self.skip_dates, &key) {
+            return false;
+        }
+        self.week[date.weekday().num_days_from_monday() as usize]
+    }
+
+    /// 顺延到 `date` 及其之后的第一个工作日；扫到一年还没有就放弃（返回原值）。
+    fn snap_forward(&self, date: chrono::NaiveDate) -> chrono::NaiveDate {
+        let mut probe = date;
+        for _ in 0..366 {
+            if self.is_work_day(probe) {
+                return probe;
+            }
+            match probe.succ_opt() {
+                Some(next) => probe = next,
+                None => break,
+            }
+        }
+        tracing::warn!("Mock: 工作日历里没有可用工作日，回退到自然日推进");
+        date
+    }
+
+    /// `[start, end)` 里的工作日数：掩码段用算术（整周 + 余数），列表段用线性扫。
+    fn work_days_between(&self, start: chrono::NaiveDate, end: chrono::NaiveDate) -> i64 {
+        use chrono::Datelike;
+        let total = (end - start).num_days();
+        if total <= 0 {
+            return 0;
+        }
+        let per_week = self.week.iter().filter(|w| **w).count() as i64;
+        let start_wd = start.weekday().num_days_from_monday() as usize;
+        let mut rest = (total / 7) * (7 - per_week);
+        for i in 0..(total % 7) as usize {
+            if !self.week[(start_wd + i) % 7] {
+                rest += 1;
+            }
+        }
+        if !self.lists_empty() {
+            let (start_key, end_key) = (iso_key(start), iso_key(end));
+            let in_range =
+                |bytes: &[u8]| bytes.len() == 10 && bytes >= &start_key[..] && bytes < &end_key[..];
+            // 掩码说上班、但被列进跳过日期 → 变成休息日（白名单优先，不重复算）
+            for entry in self.skip_dates {
+                let bytes = entry.as_bytes();
+                if !in_range(bytes) || Self::list_has(self.work_dates, bytes) {
+                    continue;
+                }
+                if let Some(date) = key_to_date(bytes) {
+                    if self.week[date.weekday().num_days_from_monday() as usize] {
+                        rest += 1;
+                    }
+                }
+            }
+            // 掩码说休息、但被列进上班日期（调休）→ 变成工作日
+            for entry in self.work_dates {
+                let bytes = entry.as_bytes();
+                if !in_range(bytes) {
+                    continue;
+                }
+                if let Some(date) = key_to_date(bytes) {
+                    if !self.week[date.weekday().num_days_from_monday() as usize] {
+                        rest -= 1;
+                    }
+                }
+            }
+        }
+        total - rest
+    }
+
+    /// 从 `start` 起往后第 `k` 个工作日（`k = 0` 就是 `start` 或它的下一个工作日）。
+    ///
+    /// 先按“每周若干天”估一个自然日跨度，再用实际工作日数纠正（每天至多差 1，收敛很快）。
+    fn nth_work_day(&self, start: chrono::NaiveDate, k: i64) -> Option<chrono::NaiveDate> {
+        let mut span = k + 2 * (k / 5 + 1);
+        for _ in 0..64 {
+            let candidate = start.checked_add_signed(chrono::Duration::days(span))?;
+            let counted = self.work_days_between(start, candidate);
+            if counted == k {
+                return Some(self.snap_forward(candidate));
+            }
+            span += k - counted;
+            if span < 0 {
+                span = 0;
+            }
+        }
+        tracing::warn!("Mock: 工作日推进未收敛，回退到自然日推进");
+        None
+    }
 }
 
 /// 从正则表达式生成随机字符串（支持常见模式）
@@ -1463,5 +1738,205 @@ mod tests {
             samples.iter().any(|v| *v < 100.0) && samples.iter().any(|v| *v > 100.0),
             "正态分布应同时产生均值两侧的取值"
         );
+    }
+
+    // ===== 工作日历（列级参数）：工作周掩码 + 跳过日期 + 上班日期 =====
+
+    /// 造一个顺序日期生成器（默认工作周 = 周一~周五）。
+    fn sequential(
+        start: &str,
+        step_seconds: i32,
+        workdays_only: bool,
+        skip_dates: &[&str],
+        work_dates: &[&str],
+    ) -> GeneratorConfig {
+        GeneratorConfig::SequentialDate {
+            start: start.to_string(),
+            step_seconds,
+            workdays_only,
+            work_week: "1111100".to_string(),
+            skip_dates: skip_dates.iter().map(|d| (*d).to_string()).collect(),
+            work_dates: work_dates.iter().map(|d| (*d).to_string()).collect(),
+        }
+    }
+
+    /// 取某列连续几行的值（顺序日期是确定性的，同 seed 不影响结果）。
+    fn sequential_column(generator: &GeneratorConfig, rows: usize) -> Vec<String> {
+        let mut rng = rng();
+        (0..rows)
+            .map(|i| generate_cell(generator, &mut rng, i, &Locale::ZhCn))
+            .collect()
+    }
+
+    /// 2024-01-01 是周一：按工作日推进时周末两天不占行，自动跳到周一。
+    #[test]
+    fn test_sequential_date_skips_weekends() {
+        let generator = sequential("2024-01-01 09:00:00", 86_400, true, &[], &[]);
+        let values = sequential_column(&generator, 8);
+        assert_eq!(
+            values,
+            vec![
+                "2024-01-01 09:00:00", // 周一
+                "2024-01-02 09:00:00",
+                "2024-01-03 09:00:00",
+                "2024-01-04 09:00:00",
+                "2024-01-05 09:00:00", // 周五
+                "2024-01-08 09:00:00", // 跳过 1/6、1/7 周末
+                "2024-01-09 09:00:00",
+                "2024-01-10 09:00:00",
+            ]
+        );
+    }
+
+    /// 关掉开关就回到旧行为：周末照出（步长固定）。
+    #[test]
+    fn test_sequential_date_without_calendar_keeps_fixed_steps() {
+        let generator = sequential("2024-01-05 00:00:00", 86_400, false, &[], &[]);
+        let values = sequential_column(&generator, 3);
+        assert_eq!(
+            values,
+            vec![
+                "2024-01-05 00:00:00",
+                "2024-01-06 00:00:00", // 周六照出
+                "2024-01-07 00:00:00",
+            ]
+        );
+    }
+
+    /// 跨年 + 黑名单（节假日）+ 白名单（调休上班）。
+    #[test]
+    fn test_sequential_date_calendar_lists_and_year_boundary() {
+        // 不加列表：2023-12-29（周五）之后直接跳元旦（1/1 周一）
+        let plain = sequential("2023-12-29 00:00:00", 86_400, true, &[], &[]);
+        assert_eq!(
+            sequential_column(&plain, 4),
+            vec![
+                "2023-12-29 00:00:00",
+                "2024-01-01 00:00:00",
+                "2024-01-02 00:00:00",
+                "2024-01-03 00:00:00",
+            ]
+        );
+        // 跳过 1/1（元旦）→ 下一行应该是 1/2
+        let skipped = sequential("2023-12-29 00:00:00", 86_400, true, &["2024-01-01"], &[]);
+        assert_eq!(
+            sequential_column(&skipped, 3),
+            vec![
+                "2023-12-29 00:00:00",
+                "2024-01-02 00:00:00",
+                "2024-01-03 00:00:00",
+            ]
+        );
+        // 调休：12/30（周六）上班 → 它要出现在序列里
+        let extra = sequential("2023-12-29 00:00:00", 86_400, true, &[], &["2023-12-30"]);
+        assert_eq!(
+            sequential_column(&extra, 4),
+            vec![
+                "2023-12-29 00:00:00",
+                "2023-12-30 00:00:00",
+                "2024-01-01 00:00:00",
+                "2024-01-02 00:00:00",
+            ]
+        );
+    }
+
+    /// 步长可以是多个工作日；起始日落在休息日时从下一个工作日起步。
+    #[test]
+    fn test_sequential_date_supports_multi_day_steps_and_rest_start() {
+        let every_two = sequential("2024-01-01 00:00:00", 172_800, true, &[], &[]);
+        assert_eq!(
+            sequential_column(&every_two, 3),
+            vec![
+                "2024-01-01 00:00:00",
+                "2024-01-03 00:00:00",
+                "2024-01-05 00:00:00",
+            ]
+        );
+        // 起始是周六（2024-01-06）→ 第 0 行就是下一个工作日周一
+        let from_saturday = sequential("2024-01-06 08:30:00", 86_400, true, &[], &[]);
+        let values = sequential_column(&from_saturday, 2);
+        assert_eq!(values[0], "2024-01-08 08:30:00");
+        assert_eq!(values[1], "2024-01-09 08:30:00");
+    }
+
+    /// `date_time_between` + 仅工作日：采样只落在工作日上，且不越出给定区间。
+    #[test]
+    fn test_datetime_between_workdays_only_lands_on_work_days() {
+        use chrono::Datelike;
+        let generator = GeneratorConfig::DateTimeBetween {
+            start: "2024-01-01T00:00:00Z".to_string(),
+            end: "2024-03-31T23:59:59Z".to_string(),
+            workdays_only: true,
+            work_hours_only: false,
+            work_week: "1111100".to_string(),
+            skip_dates: vec!["2024-01-02".to_string()],
+            work_dates: vec!["2024-01-06".to_string()],
+        };
+        let mut rng = rng();
+        let mut saturday_hits = 0;
+        // 1000 次：周六（调休）在 65 个可用工作日里占 1 个，命中一次的把握足够
+        for i in 0..1000 {
+            let value = generate_cell(&generator, &mut rng, i, &Locale::ZhCn);
+            let dt = chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S")
+                .expect("应是标准时刻文本");
+            assert!(
+                dt >= chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    && dt
+                        <= chrono::NaiveDate::from_ymd_opt(2024, 3, 31)
+                            .unwrap()
+                            .and_hms_opt(23, 59, 59)
+                            .unwrap(),
+                "取值不能越出给定区间：{value}"
+            );
+            let date = dt.date();
+            assert_ne!(
+                date,
+                chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+                "跳过日期不应出现：{value}"
+            );
+            let weekday = date.weekday();
+            if date == chrono::NaiveDate::from_ymd_opt(2024, 1, 6).unwrap() {
+                saturday_hits += 1; // 调休的周六：允许（而且是唯一允许的周六）
+                continue;
+            }
+            assert!(
+                !matches!(weekday, chrono::Weekday::Sat | chrono::Weekday::Sun),
+                "周末不应出现：{value}"
+            );
+        }
+        assert!(
+            saturday_hits > 0,
+            "调休的周六也应被采到（1000 次采样一次都没中说明抽样有偏）"
+        );
+    }
+
+    /// `date_time_between` + 仅工作时段：日内时刻落在 09:00~18:00。
+    #[test]
+    fn test_datetime_between_work_hours_only() {
+        let generator = GeneratorConfig::DateTimeBetween {
+            start: "2024-01-01T00:00:00Z".to_string(),
+            end: "2024-12-31T23:59:59Z".to_string(),
+            workdays_only: false,
+            work_hours_only: true,
+            work_week: "1111100".to_string(),
+            skip_dates: Vec::new(),
+            work_dates: Vec::new(),
+        };
+        let mut rng = rng();
+        for i in 0..100 {
+            let value = generate_cell(&generator, &mut rng, i, &Locale::ZhCn);
+            let time = value
+                .split(' ')
+                .nth(1)
+                .expect("应是「日期 时刻」两段")
+                .to_string();
+            assert!(
+                ("09:00:00".."18:00:00").contains(&time.as_str()),
+                "工作时段外不该出现：{value}"
+            );
+        }
     }
 }

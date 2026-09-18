@@ -191,6 +191,50 @@ fn column_type_labels_are_complete() {
     );
 }
 
+// ==================== 工作日历展示（纯逻辑） ====================
+
+/// 工作周掩码翻成人话：连续区间写成「周一~周五」，离散的逐天列出。
+#[test]
+fn work_week_mask_reads_as_plain_chinese() {
+    assert_eq!(super::work_week_text("1111100"), "周一~周五");
+    assert_eq!(super::work_week_text("1111110"), "周一~周六");
+    assert_eq!(super::work_week_text("0111111"), "周二~周日");
+    assert_eq!(super::work_week_text("1111111"), "每天");
+    assert_eq!(super::work_week_text("1000000"), "周一");
+    // 周一 + 周日不相邻（跨了整周），不能写成「周一~周日」
+    assert_eq!(super::work_week_text("1000001"), "周一、周日");
+    assert_eq!(super::work_week_text("1010100"), "周一、周三、周五");
+    assert_eq!(super::work_week_text("0000000"), "（无上班日）");
+    // 非法掩码原样返回（原因由生成前护栏给出）
+    assert_eq!(super::work_week_text("111100"), "111100");
+}
+
+/// 字段卡片摘要在日历参数上不能失控：开关关着 / 列表为空时都不占位置。
+#[test]
+fn calendar_params_stay_out_of_the_summary_until_they_are_used() {
+    let off = generator_catalog::default_of("sequential_date").expect("默认配置");
+    let text = super::summarize_params(&off);
+    assert!(!text.contains("工作周"), "未启用时不该占位置：{text}");
+    assert!(!text.contains("仅工作日"), "关着的开关不该占位置：{text}");
+
+    let on = super::patch_param_value(&off, "workdays_only", serde_json::Value::from(true))
+        .expect("写回");
+    let on = super::patch_param_value(
+        &on,
+        "skip_dates",
+        serde_json::Value::Array(vec![serde_json::Value::from("2026-10-01")]),
+    )
+    .expect("写回");
+    let text = super::summarize_params(&on);
+    assert!(text.contains("仅工作日 是"), "{text}");
+    assert!(
+        text.contains("工作周（周一~周日，1 上班） 周一~周五"),
+        "掩码应翻成人话：{text}"
+    );
+    assert!(text.contains("跳过日期（节假日） 1 项"), "{text}");
+    assert!(!text.contains("上班日期（调休）"), "空列表不占位置：{text}");
+}
+
 // ==================== 生成器搜索（纯逻辑） ====================
 
 /// 空查询＝全量目录（对话框初态），顺序与目录一致。
@@ -337,6 +381,23 @@ fn complex_param_errors_are_readable() {
             .unwrap_err()
             .contains("最多"),
         "应有项数上限"
+    );
+}
+
+/// 工作日历的两个日期列表：**允许清空**（“今年没有额外假日”是合法配置），
+/// 并且能原样回填到多行文本框里。
+#[test]
+fn calendar_date_lists_round_trip_and_allow_empty() {
+    let empty = super::parse_complex_param("skip_dates", " \n\n").expect("日历列表允许清空");
+    assert_eq!(empty, serde_json::Value::Array(Vec::new()));
+
+    let parsed =
+        super::parse_complex_param("work_dates", "2026-10-10\n\n 2026-10-11 ").expect("解析");
+    let mut config = generator_catalog::default_of("sequential_date").expect("默认配置");
+    config = super::patch_param_value(&config, "work_dates", parsed).expect("写回");
+    assert_eq!(
+        super::complex_param_text(&config, "work_dates"),
+        "2026-10-10\n2026-10-11"
     );
 }
 
