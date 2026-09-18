@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RdataStation SQL 编辑器 · 一页看懂</title>
+<style>
+:root{
+  --pagebg:#ECECEC; --bg:#FFFFFF; --fg:#333333; --border:#D4D4D4; --input-border:#C9C9C9;
+  --sidebar:#F3F3F3; --sidebar-border:#E7E7E7; --accent:#E4E4E4; --hover:#F0F0F0; --card:#FFFFFF;
+  --active-border:#C25B46; --muted:#8E8E8E; --primary:#C25B46; --primary-fg:#FFFFFF; --primary-hover:#A84A38;
+  --titlebar:#DDDDDD; --tabbar:#F3F3F3;
+  --success:#16A34A; --warning:#B45309; --info:#2563EB; --danger:#DC2626;
+  --track:#E7E7E7; --code-bg:#FAFAFA;
+  --shadow:0 18px 50px rgba(20,20,30,.16), 0 2px 8px rgba(20,20,30,.08);
+  --shadow-sm:0 1px 2px rgba(20,20,30,.06);
+}
+[data-theme="dark"]{
+  --pagebg:#141414; --bg:#1E1E1E; --fg:#CCCCCC; --border:#3C3C3C; --input-border:#4A4A4A;
+  --sidebar:#252526; --sidebar-border:#333333; --accent:#37373D; --hover:#2A2D2E; --card:#1E1E1E;
+  --active-border:#E8846F; --muted:#8A8A8A; --primary:#E8846F; --primary-fg:#1E1E1E; --primary-hover:#F5A188;
+  --titlebar:#323233; --tabbar:#252526;
+  --success:#89D185; --warning:#CCA700; --info:#3794FF; --danger:#F14C4C;
+  --track:#3C3C3C; --code-bg:#191919;
+  --shadow:0 20px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{
+  font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;
+  background:var(--pagebg);color:var(--fg);font-size:14px;line-height:1.72;
+  -webkit-font-smoothing:antialiased;padding:28px 20px 40px;
+}
+a{color:var(--primary);text-decoration:none;}
+a:hover{text-decoration:underline;}
+code,.mono{font-family:Consolas,'SFMono-Regular','Cascadia Mono',monospace;font-size:.92em;}
+.wrap{max-width:1120px;margin:0 auto;}
+
+/* ── 页头 ── */
+.page-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding:0 4px;}
+.brand{display:flex;align-items:center;gap:11px;}
+.logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#F5A188,#C25B46);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(194,91,70,.35);color:#fff;font-weight:700;font-size:13px;}
+.page-head h1{font-size:16px;font-weight:700;letter-spacing:.2px;}
+.page-head .sub{color:var(--muted);font-size:12px;margin-top:1px;}
+.theme-toggle{border:1px solid var(--border);background:var(--bg);color:var(--fg);border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;box-shadow:var(--shadow-sm);transition:all .15s;font-family:inherit;}
+.theme-toggle:hover{background:var(--hover);border-color:var(--active-border);}
+
+/* ── 英雄区 ── */
+.hero{position:relative;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--bg);box-shadow:var(--shadow);padding:34px 34px 28px;margin-bottom:22px;}
+.hero::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:linear-gradient(90deg,#F5A188,#C25B46 45%,#8E4A3A);}
+.hero::after{content:"";position:absolute;right:-120px;top:-140px;width:380px;height:380px;border-radius:50%;background:radial-gradient(circle,rgba(194,91,70,.16),transparent 68%);pointer-events:none;}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);border:1px solid var(--border);background:var(--sidebar);border-radius:999px;padding:3px 12px;margin-bottom:16px;}
+.eyebrow b{color:var(--primary);font-weight:600;}
+.hero h2{font-size:30px;line-height:1.34;font-weight:700;letter-spacing:.4px;max-width:780px;}
+.hero h2 em{font-style:normal;color:var(--primary);}
+.hero .lead{margin-top:14px;font-size:15px;color:var(--fg);max-width:740px;opacity:.92;}
+.hero .lead .dim{color:var(--muted);}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin-top:26px;}
+.kpi{border:1px solid var(--border);border-radius:11px;background:var(--sidebar);padding:14px 16px;}
+.kpi .n{font-size:23px;font-weight:700;letter-spacing:.5px;color:var(--primary);line-height:1.2;}
+.kpi .n small{font-size:13px;font-weight:600;color:var(--fg);opacity:.85;margin-left:2px;}
+.kpi .l{font-size:12px;color:var(--fg);margin-top:4px;font-weight:600;}
+.kpi .d{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.5;}
+
+/* ── 通用区块 ── */
+section{margin:30px 0 0;}
+.sec-head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px;}
+.sec-head h3{font-size:18px;font-weight:700;letter-spacing:.2px;}
+.sec-head .no{font-size:12px;font-weight:700;color:var(--primary);border:1px solid var(--active-border);border-radius:6px;padding:1px 7px;}
+.sec-sub{color:var(--muted);font-size:12.5px;margin-bottom:16px;}
+
+.grid{display:grid;gap:12px;}
+.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr));}
+.g3{grid-template-columns:repeat(auto-fit,minmax(232px,1fr));}
+.card{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px 18px;box-shadow:var(--shadow-sm);}
+.card h4{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.card h4 .ico{width:22px;height:22px;border-radius:6px;background:var(--sidebar);border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--primary);flex:none;}
+.card p{font-size:12.8px;margin-top:8px;color:var(--fg);opacity:.94;}
+.card ul{margin:8px 0 0 0;padding-left:0;list-style:none;font-size:12.6px;}
+.card li{position:relative;padding-left:15px;margin-top:4px;color:var(--fg);opacity:.94;}
+.card li::before{content:"";position:absolute;left:2px;top:.66em;width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.75;}
+.card .foot{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--muted);}
+.pill{display:inline-block;font-size:11px;border-radius:999px;padding:1px 8px;border:1px solid var(--border);background:var(--sidebar);color:var(--muted);margin-right:5px;}
+
+/* ── 目录与一句话 ── */
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0;}
+.toc a{font-size:12px;border:1px solid var(--border);background:var(--card);border-radius:999px;padding:3px 12px;color:var(--fg);box-shadow:var(--shadow-sm);transition:all .15s;}
+.toc a:hover{border-color:var(--active-border);color:var(--primary);text-decoration:none;}
+.oneline{margin:16px 0 0;border:1px dashed var(--border);border-left:3px solid var(--primary);border-radius:10px;background:var(--card);padding:11px 15px;font-size:13px;box-shadow:var(--shadow-sm);}
+.oneline b{color:var(--primary);}
+
+/* ── 痛点 → 回答 ── */
+.qa{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;}
+.qa .row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px 16px;box-shadow:var(--shadow-sm);}
+.qa .q{font-size:12.6px;color:var(--muted);}
+.qa .a{font-size:12.8px;font-weight:600;}
+.qa .arw{color:var(--primary);font-size:15px;}
+
+/* ── 流程 ── */
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);box-shadow:var(--shadow-sm);}
+.step{padding:15px 16px 16px;position:relative;border-right:1px solid var(--border);}
+.step:last-child{border-right:none;}
+.step .idx{font-size:11px;font-weight:700;color:var(--primary);letter-spacing:1px;}
+.step .t{font-size:13.5px;font-weight:700;margin-top:5px;}
+.step .d{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.6;}
+.step .who{font-size:11px;color:var(--fg);opacity:.7;margin-top:8px;font-family:Consolas,monospace;}
+
+/* ── 分层架构 ── */
+.layers{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px;box-shadow:var(--shadow-sm);}
+.layer{display:grid;grid-template-columns:150px 1fr;gap:12px;align-items:stretch;padding:9px 0;border-bottom:1px dashed var(--border);}
+.layer:last-child{border-bottom:none;}
+.layer .tag{font-size:11.5px;font-weight:700;color:var(--primary);display:flex;align-items:center;}
+.layer .body{font-size:12.6px;}
+.layer .body b{font-weight:600;}
+.layer .body .mono{color:var(--fg);opacity:.9;}
+.dep{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--muted);}
+.dep code{border:1px solid var(--border);background:var(--sidebar);border-radius:6px;padding:2px 8px;color:var(--fg);}
+
+/* ── 代码块 ── */
+pre{border:1px solid var(--border);border-radius:11px;background:var(--code-bg);padding:14px 16px;overflow:auto;font-size:12.2px;line-height:1.65;font-family:Consolas,'SFMono-Regular',monospace;}
+pre .k{color:var(--info);}
+pre .s{color:var(--success);}
+pre .c{color:var(--muted);}
+pre .n{color:var(--warning);}
+
+/* ── 表格 ── */
+table{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card);font-size:12.8px;}
+th{background:var(--sidebar);text-align:left;font-size:11.5px;color:var(--muted);font-weight:600;padding:9px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
+td{padding:9px 13px;border-bottom:1px solid var(--border);vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+td .mono{font-size:11.6px;color:var(--muted);}
+.badge{display:inline-block;font-size:11px;border-radius:5px;padding:1px 7px;border:1px solid var(--border);background:var(--sidebar);}
+.badge.ok{color:var(--success);border-color:var(--success);}
+.badge.mid{color:var(--warning);border-color:var(--warning);}
+.badge.plan{color:var(--muted);}
+
+/* ── 编辑器线框图 ── */
+.wire{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--border);border-radius:12px;overflow:hidden;box-shadow:var(--shadow-sm);background:var(--bg);}
+.wire .bar{display:flex;align-items:center;gap:8px;padding:9px 13px;font-size:12px;border-bottom:1px solid var(--border);}
+.wire .bar.head{background:var(--titlebar);font-weight:600;}
+.wire .bar.toolbar{background:var(--sidebar);gap:14px;flex-wrap:wrap;}
+.wire .bar.toolbar .bt{border:1px solid var(--border);border-radius:6px;padding:1px 9px;background:var(--card);font-size:11.5px;}
+.wire .bar.toolbar .bt.on{border-color:var(--active-border);color:var(--primary);font-weight:600;}
+.wire .bar.toolbar .sp{flex:1;}
+.wire .editor{padding:14px;font-family:Consolas,'SFMono-Regular',monospace;font-size:12.4px;line-height:1.85;background:var(--bg);}
+.wire .editor .ln{color:var(--muted);user-select:none;margin-right:10px;}
+.wire .editor .kw{color:var(--info);font-weight:600;}
+.wire .editor .fn{color:var(--warning);}
+.wire .editor .st{color:var(--success);}
+.wire .editor .cm{color:var(--muted);}
+.wire .tabs{display:flex;gap:14px;padding:7px 13px;font-size:11.8px;background:var(--tabbar);border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
+.wire .tabs .on{font-weight:600;position:relative;color:var(--fg);}
+.wire .tabs .on::after{content:"";position:absolute;left:0;right:0;bottom:-8px;height:2px;background:var(--primary);}
+.wire .tabs .off{color:var(--muted);}
+.wire .tabs .badge{font-size:10.5px;}
+.wire .rtoolbar{display:flex;align-items:center;gap:12px;padding:7px 13px;font-size:11.8px;background:var(--sidebar);border-bottom:1px solid var(--border);}
+.wire .rtoolbar .seg{border-right:1px solid var(--border);padding-right:12px;}
+.wire .rtoolbar .seg:last-child{border-right:none;}
+.wire .rtoolbar .sp{flex:1;}
+.wire .grid-table{padding:0 13px 13px;font-size:12.2px;background:var(--bg);}
+.wire .grid-table table{font-size:12px;}
+.wire .grid-table th{white-space:nowrap;padding:7px 11px;}
+.wire .grid-table td{padding:6px 11px;font-family:Consolas,monospace;}
+.wire .nulls{color:var(--muted);font-style:italic;}
+.wire .status{display:flex;gap:16px;padding:7px 13px;font-size:11.5px;color:var(--muted);background:var(--sidebar);border-top:1px solid var(--border);}
+
+/* ── 结尾 ── */
+.foot{margin-top:34px;border-top:1px solid var(--border);padding-top:16px;font-size:12px;color:var(--muted);line-height:1.9;}
+.foot b{color:var(--fg);}
+@media print{.theme-toggle{display:none;}body{background:#fff;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ══ 页头 ══ -->
+  <div class="page-head">
+    <div class="brand">
+      <div class="logo">R</div>
+      <div>
+        <h1>RdataStation · SQL 编辑器</h1>
+        <div class="sub">一页看懂：它是什么、能做什么、怎么运转</div>
+      </div>
+    </div>
+    <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+  </div>
+
+  <!-- ══ 英雄区 ══ -->
+  <div class="hero">
+    <div class="eyebrow">中央 Dock · 一个内核 <b>三档模式</b> · 三档执行通道 · 五种导出</div>
+    <h2>从一句话到<em>一份结果</em>，<br>再顺手接着分析——中间每一环都在这。</h2>
+    <p class="lead">
+      写 SQL、按住 <span class="mono">Ctrl+Enter</span> 就跑；结果能筛、能排、能下发源库重查、能丢给本地 DuckDB 做聚合、能导出成 CSV / Parquet / Excel。
+      连错在哪儿、这句发到哪个库、这份结果怎么来的，都在界面上说清楚。
+      <span class="dim">编辑器不再是面板里一个嵌进去的 Textarea，而是一整块可测、可回放的执行闭环。</span>
+    </p>
+    <div class="kpis">
+      <div class="kpi">
+        <div class="n">377<small> 项单测</small></div>
+        <div class="l">编辑器 crate 自己的测试</div>
+        <div class="d">另有工作台侧 104 · 界面契约 7 · 真机会话 4</div>
+      </div>
+      <div class="kpi">
+        <div class="n">3<small> 档模式</small></div>
+        <div class="l">文本 ⊂ SQL ⊂ 分析</div>
+        <div class="d">同一个内核，能力严格递进；不是三个编辑器</div>
+      </div>
+      <div class="kpi">
+        <div class="n">3<small> 档执行通道</small></div>
+        <div class="l">源库 · 本地加速 · 联邦</div>
+        <div class="d">互斥、随文档持久化，能力差异写在菜单行尾</div>
+      </div>
+      <div class="kpi">
+        <div class="n">5<small> 种导出</small></div>
+        <div class="l">CSV · JSON · INSERT · Parquet · XLSX</div>
+        <div class="d">后两种经 DuckDB <span class="mono">COPY</span>，后台跑不堵界面</div>
+      </div>
+      <div class="kpi">
+        <div class="n">1,000<small> 行/段</small></div>
+        <div class="l">分段抓取</div>
+        <div class="d">滚到底自动取下一段；未知总数就写 <span class="mono">N+</span></div>
+      </div>
+    </div>
+    <div class="toc">
+      <a href="#s1">① 它解决什么</a>
+      <a href="#s2">② 三档模式</a>
+      <a href="#s3">③ 一次执行的全流程</a>
+      <a href="#s4">④ 三档执行通道</a>
+      <a href="#s5">⑤ 结果区</a>
+      <a href="#s6">⑥ 本地 DuckDB 分析</a>
+      <a href="#s7">⑦ 编辑体验</a>
+      <a href="#s8">⑧ 报错与定位</a>
+      <a href="#s9">⑨ 历史 · 会话 · 闸门</a>
+      <a href="#s10">⑩ 架构</a>
+      <a href="#s11">⑪ 质量与证据</a>
+      <a href="#s12">⑫ 边界</a>
+      <a href="#s13">⑬ 文档地图</a>
+    </div>
+  </div>
+
+  <!-- ══ 1. 痛点 → 回答 ══ -->
+  <section id="s1">
+    <div class="sec-head"><span class="no">01</span><h3>它解决什么</h3></div>
+    <div class="sec-sub">V1 留下的四处「看着有、实际是假」的底座，这一版逐条换成了真东西。</div>
+    <div class="qa">
+      <div class="row">
+        <div class="q">旧 SQL 框只有一个 <span class="mono">Textarea</span>：没高亮、没补全、没多文档</div>
+        <div class="arw">→</div>
+        <div class="a">组件库编辑内核 + 语义高亮 + 补全 + 多标签面板，性能档位（超大文件关重能力）也在</div>
+      </div>
+      <div class="row">
+        <div class="q">执行内联在 <span class="mono">render</span> 闭包里，同步直连全局分析库文件</div>
+        <div class="arw">→</div>
+        <div class="a">后台工作线程 + 主线程轮询回填；<b>渲染零 I/O</b>，执行走驱动与连接</div>
+      </div>
+      <div class="row">
+        <div class="q">一次抓取 + 上限截断：亿行级表上没法用</div>
+        <div class="arw">→</div>
+        <div class="a">分段抓取（1,000 行/段）+ 滚到底自动取 + 导出区分「仅已抓取 / 抓全量」</div>
+      </div>
+      <div class="row">
+        <div class="q">格式化是 <span class="mono">format!("{:?}", stmt)</span>——输出不是 SQL</div>
+        <div class="arw">→</div>
+        <div class="a">sqlglot generator + 按语句区间原位回填：注释、空行、没写完的半句一个字节不动</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 2. 三档模式 ══ -->
+  <section id="s2">
+    <div class="sec-head"><span class="no">02</span><h3>三档模式 · 一个内核</h3></div>
+    <div class="sec-sub">同一份文档状态、同一个编辑内核；模式只决定「挂哪些能力、显示哪些 chrome、结果去哪」。</div>
+    <table>
+      <tr>
+        <th>模式</th><th>编辑</th><th>语言智能</th><th>执行与结果</th><th>状态</th>
+      </tr>
+      <tr>
+        <td><b>文本</b></td>
+        <td>读写、只读、行注释、保存</td>
+        <td>无（记事本语义，不解析不上色）</td>
+        <td>不与数据库通信（按能力表拒绝并说明）</td>
+        <td><span class="badge ok">已实装</span></td>
+      </tr>
+      <tr>
+        <td><b>SQL</b></td>
+        <td>+ 高亮 · 补全 · 格式化 · 转译 · 模板</td>
+        <td>语义着色 · 补全 · 执行计划 · 诊断定位</td>
+        <td>执行族五项 · 分段抓取 · 事务 · 结果区 · 历史 · 导出</td>
+        <td><span class="badge ok">已实装</span></td>
+      </tr>
+      <tr>
+        <td><b>分析</b></td>
+        <td>单元（Cell）模型 · 会话 · 内联输出</td>
+        <td>逐单元（与 SQL 模式同源）</td>
+        <td>单元级执行 + 输出，可沉淀为可重跑的单元</td>
+        <td><span class="badge mid">门已就位 · 笔记本视图属 1c</span></td>
+      </tr>
+    </table>
+    <div class="oneline">
+      <b>诚实标注</b>：模式矩阵（切换代价分级 + 内容变换）、能力表、单元模型与会话字段都已经在代码里；
+      <b>分析模式的笔记本界面按计划搁置</b>——不摆一个点不动的按钮。今天它的两处落地是实打实的：
+      结果集能「在本地 DuckDB 上分析」，以及 SQL → 分析的内容变换规则已经在测。
+    </div>
+  </section>
+
+  <!-- ══ 3. 一次执行的全流程 ══ -->
+  <section id="s3">
+    <div class="sec-head"><span class="no">03</span><h3>一次执行的全流程</h3></div>
+    <div class="sec-sub">从按键到结果落地，六步各有各的归属——这也是它能被测试、能被回放的原因。</div>
+    <div class="flow">
+      <div class="step">
+        <div class="idx">STEP 1</div>
+        <div class="t">解析目标</div>
+        <div class="d">选区优先 → 光标所在语句 → 全部；批量按<b>词法级切分</b>（字符串/注释/$$ 块里的分号不算）</div>
+        <div class="who">editor::execution</div>
+      </div>
+      <div class="step">
+        <div class="idx">STEP 2</div>
+        <div class="t">提交前两道闸</div>
+        <div class="d">通道闸（加速/联邦拒写源库）· 项目只读闸（强只读直接拒写）——<b>不打扰执行器</b></div>
+        <div class="who">view/host.rs</div>
+      </div>
+      <div class="step">
+        <div class="idx">STEP 3</div>
+        <div class="t">工作线程执行</div>
+        <div class="d">一条 job 可带多条语句，逐条独立；超时按连接的设置，中断走一次性线程</div>
+        <div class="who">rds-editor-exec</div>
+      </div>
+      <div class="step">
+        <div class="idx">STEP 4</div>
+        <div class="t">结果落位</div>
+        <div class="d">替换当前 / 追加新结果集（不抢用户在看的那份）/ 追加到选中那份（取下一段）</div>
+        <div class="who">ResultPlacement</div>
+      </div>
+      <div class="step">
+        <div class="idx">STEP 5</div>
+        <div class="t">回填</div>
+        <div class="d">网格 + 工具栏分段 + 状态行 + 血缘 + 历史一条（耗时/成败/行数/通道都是真值）</div>
+        <div class="who">drain_exec_results</div>
+      </div>
+      <div class="step">
+        <div class="idx">STEP 6</div>
+        <div class="t">接着做什么</div>
+        <div class="d">刷新 · 取下一段 · 本地筛选 / 下发重查 · 排序 · 分析 · 导出 · 洞察此列</div>
+        <div class="who">结果区</div>
+      </div>
+    </div>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="card">
+        <h4><span class="ico">⏹</span>中断与超时</h4>
+        <p>状态栏 <span class="mono">■ 中断</span> + 耗时累加；批量里剩余语句标「已取消」且<b>不再发给驱动</b>。超时按连接的 <span class="mono">query_timeout</span>，没配就是没有超时（不造默认值）。</p>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⇄</span>事务</h4>
+        <p>事务是真的会话状态（驱动 API，不是拼 <span class="mono">BEGIN</span> 字符串）：状态栏 TX 区显示开启时长 + 提交 / 回滚 + 自动提交开关；状态随执行结论一起回来。</p>
+        <div class="foot">事务内的语句暂不可取消 / 无超时——驱动 <span class="mono">Transaction</span> trait 没给入口，如实记在案</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⇥</span>分段抓取</h4>
+        <p>首段 1,000 行；拿满就显示 <span class="mono">1,000+</span> 并允许取下一段（滚到底自动取）。每段重跑查询，所以 <span class="mono">ORDER BY</span> 不稳的查询会重复/跳行——这条取舍写在文档里。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 4. 三档执行通道 ══ -->
+  <section id="s4">
+    <div class="sec-head"><span class="no">04</span><h3>三档执行通道</h3></div>
+    <div class="sec-sub">「这条 SQL 发到哪」是文档属性：互斥、可持久化、能力边界写在界面上，不靠用户猜。</div>
+    <table>
+      <tr><th>通道</th><th>怎么跑</th><th>能力边界</th><th>界面上看得见的部分</th></tr>
+      <tr>
+        <td><b>源库</b></td>
+        <td>直连驱动（四类库 · 六个驱动路径）</td>
+        <td>可写 · 有事务 · 数据实时</td>
+        <td>状态栏连接段 <span class="mono">●P·orders</span> · 结果集徽标「源库」</td>
+      </tr>
+      <tr>
+        <td><b>本地加速</b></td>
+        <td>DuckDB <span class="mono">ATTACH … READ_ONLY</span> + <span class="mono">USE</span>，不写限定名也能查</td>
+        <td>只读 · 无事务 · 改写语义（本地临时对象可用）· 表清单在 ATTACH 时定型</td>
+        <td>菜单行尾写清不可用原因 · 「重新挂载源库」刷新表清单 · 写语句被双保险拒掉</td>
+      </tr>
+      <tr>
+        <td><b>联邦</b></td>
+        <td>一台 DuckDB 挂多个源，跨源查询写 <span class="mono">别名.schema.表</span></td>
+        <td>只读 · 无事务 · 只给已挂上的源</td>
+        <td>补全按别名限定 · 历史带参与源 · 挂不上的源点名给原因</td>
+      </tr>
+    </table>
+    <div class="oneline">
+      <b>门控是真值</b>：连接开关 → 驱动类型 → 扩展可用性 → 运行时就绪，<b>按“谁能先改”的顺序只报第一条过不去的</b>；
+      扩展没试过不拦（首次执行时在工作线程装一次），试过且失败就把原话记下来显示在菜单行尾。
+    </div>
+  </section>
+
+  <!-- ══ 5. 结果区 ══ -->
+  <section id="s5">
+    <div class="sec-head"><span class="no">05</span><h3>结果区 · 编辑器的下半屏</h3></div>
+    <div class="sec-sub">网格是组件库的原生能力，我们只补它没有的那几件——补之前先核过源码。</div>
+    <div class="wire">
+      <div class="bar head">结果 1〔源库〕 ▾ &nbsp;│&nbsp; 结果 2〔源库·下发筛选〕 &nbsp;│&nbsp; 分析</div>
+      <div class="rtoolbar">
+        <span class="seg">行数 1,204</span>
+        <span class="seg">耗时 1.2s</span>
+        <span class="seg">下发筛选</span>
+        <span class="seg">●P·orders</span>
+        <span class="sp"></span>
+        <span class="mono">⌕ 筛选</span>
+        <span class="mono">▢ 下发源库</span>
+        <span class="mono">⚗ 分析 ▾</span>
+        <span class="mono">⤓ 导出 ▾</span>
+        <span class="mono">⟳</span>
+        <span class="mono">复制</span>
+      </div>
+      <div class="grid-table">
+        <table>
+          <tr><th>#</th><th>id</th><th>customer</th><th>total</th><th>created_at</th></tr>
+          <tr><td>1</td><td>10001</td><td>Ada</td><td>1,280.00</td><td>2026-09-01 10:20:00</td></tr>
+          <tr><td>2</td><td>10002</td><td><span class="nulls">NULL</span></td><td>96.50</td><td>2026-09-02 08:05:11</td></tr>
+        </table>
+      </div>
+      <div class="status">
+        <span>共 1,204 行</span><span>已选第 2 行</span><span>已筛选 12 / 1,204 行</span><span class="mono">取下一段</span>
+      </div>
+    </div>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="card">
+        <h4><span class="ico">◇</span>原生就有（不手搓）</h4>
+        <ul>
+          <li>虚拟滚动 · 行/列/单元格选择</li>
+          <li>列宽拖拽 · 列序移动 · <b>冻结列</b></li>
+          <li>点列头排序（三态循环）</li>
+          <li>滚动到底自动加载（<span class="mono">has_more</span> / <span class="mono">load_more</span>）</li>
+          <li>右键菜单 · 单元格自定义渲染</li>
+        </ul>
+        <div class="foot">能力台账写在 view/results/mod.rs，避免后人再手搓一遍</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">＋</span>我们补的三件</h4>
+        <ul>
+          <li><b>本地筛选</b>：任一单元格子串命中，300ms 防抖，只动视图层（数据一行不动）</li>
+          <li><b>下发源库</b>：拼 WHERE 重查 → 新结果集，去掉原 LIMIT 并提示</li>
+          <li><b>排序下发</b>：按点的那一列到源库排（不 CAST，让源库按自己的类型排）</li>
+        </ul>
+        <div class="foot">筛选与排序都只改「视图行序」；换结果集时排序不继承、筛选词留着</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⌘</span>右键菜单</h4>
+        <ul>
+          <li>按值筛选（写进筛选框并立即生效）</li>
+          <li>复制此值</li>
+          <li>按此列升序 / 降序（下发源库）</li>
+          <li>冻结此列 / 取消冻结</li>
+          <li>洞察此列（交给 M8 取样，不物化结果集）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⤓</span>导出五档</h4>
+        <ul>
+          <li>CSV（RFC 4180）· JSON · INSERT（每 200 行一条）</li>
+          <li><b>Parquet / XLSX</b>：经 DuckDB <span class="mono">COPY</span>，一次性线程 + 回执，不占执行位</li>
+          <li>两档范围：仅已抓取 / 抓全量后导出（多轮取段，失败不落半截文件）</li>
+          <li>筛选中导出的是<b>筛后的行集</b>，并在回执里明示</li>
+        </ul>
+        <div class="foot">Parquet 离线可用（内核自带）；XLSX 首次要装 excel 扩展（联网几秒，后台跑）</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">◈</span>结果集本身</h4>
+        <ul>
+          <li>上限 5 份，淘汰最旧的未选中项（正在看的那份不会被挤掉）</li>
+          <li>标签带通道徽标；切通道后旧结果标灰 + 顶部一行提醒</li>
+          <li>失败带红点；错误卡片给「定位到第 N 行」与复制</li>
+          <li>工具栏左段带<b>来源摘要</b>：<span class="mono">原查询 / 下发筛选 / 排序下发 / 取下一段 / 分析 / 执行计划</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">↕</span>编辑区 / 结果区</h4>
+        <ul>
+          <li>可拖拽分栏（组件库 <span class="mono">v_resizable</span>，不手搓拖动条）</li>
+          <li>下限 112px、上限 768px：不会把编辑区压成 0</li>
+          <li>没有结果时结果区不占位</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 6. 本地 DuckDB 分析 ══ -->
+  <section id="s6">
+    <div class="sec-head"><span class="no">06</span><h3>本地 DuckDB 分析</h3></div>
+    <div class="sec-sub">「查询后分析」这条主线的入口：结果集点一下，就在本地分析库上算，<b>不重跑源库</b>。</div>
+    <div class="flow">
+      <div class="step">
+        <div class="idx">① 选</div>
+        <div class="t">预置菜单</div>
+        <div class="d">计数行数 · 按「列」分组计数（最多 8 列）</div>
+        <div class="who">analysis::menu_items</div>
+      </div>
+      <div class="step">
+        <div class="idx">② 或自己写</div>
+        <div class="t">自定义分析 SQL</div>
+        <div class="d">弹输入框，预填能跑的模板；<span class="mono">{table}</span> 指桥接出来的临时表；空白当场拒</div>
+        <div class="who">dialogs::open_analysis_sql</div>
+      </div>
+      <div class="step">
+        <div class="idx">③ 桥接</div>
+        <div class="t">已抓到的行</div>
+        <div class="d">上限 20,000 行，超了截断并如实说明；<span class="mono">"NULL"</span> 进库是真 NULL</div>
+        <div class="who">analysis::request_for</div>
+      </div>
+      <div class="step">
+        <div class="idx">④ 落</div>
+        <div class="t">新结果集</div>
+        <div class="d">原结果一行不动、也不抢选中；分析结果<b>不摆「刷新」</b>（重跑没有意义）</div>
+        <div class="who">ResultPlacement::NewSet</div>
+      </div>
+    </div>
+    <div class="oneline">
+      <b>三条口径</b>：① 分析的对象<b>就是眼前这份数据</b>——源库断了、慢查询不想再跑，照样能分析；
+      ② 值按展示文本进库，列类型由引擎按整列推断（<b>数字列在 Parquet / XLSX 里就是数</b>），代价是 <span class="mono">007</span> 这类前导零会按数字落；
+      ③ 临时表由 <span class="mono">TempTableManager</span> 登记（上限 / TTL / 切项目清场），不泄漏。
+    </div>
+  </section>
+
+  <!-- ══ 7. 编辑体验 ══ -->
+  <section id="s7">
+    <div class="sec-head"><span class="no">07</span><h3>编辑体验</h3></div>
+    <div class="sec-sub">能借组件库与内核的一律不手搓；自己写的部分都是<b>纯函数 + 可逐条断言</b>。</div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">✎</span>高亮与补全</h4>
+        <ul>
+          <li>高亮走 sqlglot tokenizer → 字节区间 → 主题语法色；<b>写不完的 SQL 也能着色</b>（语法树会失败，词法不会）</li>
+          <li>补全打字即触发（标识符与 <span class="mono">.</span>），候选来自导航侧 L2 缓存（后台预载、内存读）</li>
+          <li><span class="mono">Ctrl+Space</span> 手动请一次：<b>与打字那条完全同一份候选</b></li>
+          <li>按通道给限定名：源库/加速 <span class="mono">schema.表</span>，联邦 <span class="mono">别名.schema.表</span>，未绑定连接<b>不给候选</b>（不猜）</li>
+          <li>模板片段：6 条内置，插到光标处并<b>选中 <span class="mono">{table}</span> 占位符</b></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⇤</span>格式化 · 转译 · 执行计划</h4>
+        <ul>
+          <li>格式化：<span class="mono">Ctrl+Shift+F</span>，选区优先；<b>区间原位回填</b>——注释 / 空行 / 没写完的半句一个字节不动</li>
+          <li>转译：10 个目标（PG / MySQL / SQLite / DuckDB / SQL Server / Oracle / Snowflake / BigQuery / Redshift / 标准 SQL）；<b>先切分再逐条</b>，脚本一条不丢</li>
+          <li>执行计划：按<b>通道</b>取方言（加速/联邦用 DuckDB 的），落新结果集贴「执行计划」标题；SQL Server / Oracle 如实回绝（不硬拼一条跑不通的语句）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⌨</span>九条已注册的快捷键</h4>
+        <ul>
+          <li><span class="mono">Ctrl+S</span> 保存 · <span class="mono">Ctrl+O</span> 打开 · <span class="mono">Ctrl+Shift+S</span> 另存为</li>
+          <li><span class="mono">Ctrl+Enter</span> 执行（选区优先）· <span class="mono">Ctrl+Shift+Enter</span> 执行全部</li>
+          <li><span class="mono">Ctrl+Space</span> 补全 · <span class="mono">Ctrl+/</span> 行注释 · <span class="mono">Ctrl+Shift+F</span> 格式化</li>
+          <li><span class="mono">Ctrl+W</span> 关闭（脏则三态确认）</li>
+        </ul>
+        <div class="foot">查找 / 替换、撤销 / 重做、复制粘贴一律不重绑——内核已绑并有 listener，重绑只会「看着注册了、实际被吃掉」</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">▤</span>工具栏按模式分层</h4>
+        <ul>
+          <li>最左：模式指示器（文本 / SQL / 分析）</li>
+          <li>执行 ▾（分体按钮：主按钮 + 菜单五项）· 格式化 · ⋯ 更多 ▾（执行计划 / 转译 / 插入模板）</li>
+          <li>右对齐：执行位置 ▾（三档）与 连接 ▾（P/G/GP 短码 + 运行态点）</li>
+          <li>文本模式不摆执行类按钮；分析模式的执行属单元级动作（1c）</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 8. 报错与定位 ══ -->
+  <section id="s8">
+    <div class="sec-head"><span class="no">08</span><h3>报错与定位</h3></div>
+    <div class="sec-sub">「报错只说一句话」是最费时间的体验债，这里把它拆成三件事：诊断 · 定位 · 聚焦。</div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">⌖</span>位置从哪来</h4>
+        <ul>
+          <li>PG 两条驱动路径的结构化 <span class="mono">position</span>（1 基字符 → 字节偏移，越界返回 None 而不是钳到末尾）</li>
+          <li>DuckDB 的 <span class="mono">LINE n:</span> + 插入符 · SQLite 的 <span class="mono">at offset N</span> · MySQL 的引号词</li>
+          <li>共覆盖 10 类真实错误文本；<b>认不出就不给位置</b>——定位错比不定位更糟</li>
+          <li>包装查询（分段抓取的 <span class="mono">LIMIT/OFFSET</span> 外壳）在报错里被还原成用户原句</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">▣</span>界面三件事</h4>
+        <ul>
+          <li>诊断：在出错词上打 danger 标记（内核 native 诊断）</li>
+          <li>定位：选中那个词；状态栏追加「第 3 行 第 17 列」</li>
+          <li>聚焦：回填发生在没有窗口的轮询里也能把焦点送回去</li>
+          <li>失败不再是灰字，而是错误卡片 + 「定位到第 N 行」+ 复制驱动原文</li>
+          <li>下一次成功自动清掉旧诊断</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 9. 历史 · 会话 · 闸门 ══ -->
+  <section id="s9">
+    <div class="sec-head"><span class="no">09</span><h3>历史 · 会话 · 闸门</h3></div>
+    <div class="sec-sub">三件「跨时间」的事：跑过什么、上次看到哪儿、以及什么情况下不许写。</div>
+    <div class="grid g3">
+      <div class="card">
+        <h4><span class="ico">⟲</span>历史面板（右 Dock）</h4>
+        <ul>
+          <li>字段是真的：耗时 · 成功/失败 · 失败原因 · 返回与影响行数 · 绑定连接 · <b>执行通道与参与源</b></li>
+          <li>搜索 / 重放（在编辑器打开，不替用户执行）/ 删除 / 清空</li>
+          <li>刷新靠版本号：执行完摇一下，面板只在这时读盘（渲染路径零 I/O）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">◷</span>会话持久化</h4>
+        <ul>
+          <li>内容 · 光标 · 选区 · 模式 · <b>执行通道</b> · <b>连接绑定</b></li>
+          <li>未命名文档不存（重启认不回来）；存的是内容，不重读磁盘（上次可能没保存）</li>
+          <li>通道失效 → 回退源库并说原因；连接不在列表 → 回退「跟随当前连接」并点名</li>
+        </ul>
+        <div class="foot">真 SQLite 上跑通：关文档 → 重开 → 六项都回来</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">🔒</span>写入闸门</h4>
+        <ul>
+          <li>项目只读：写语句在<b>提交前</b>就被拒（要改数据先解锁项目）；SELECT 照跑</li>
+          <li>加速 / 联邦通道：拒写源库，但允许本地临时对象（会话变量）</li>
+          <li>编辑器只读与连接只读是<b>两个独立维度</b>，状态栏分开写</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 10. 架构 ══ -->
+  <section id="s10">
+    <div class="sec-head"><span class="no">10</span><h3>架构 · 依赖只向下</h3></div>
+    <div class="sec-sub">编辑器不认识「项目 / 连接 / 文件对话框」——这些能力一律走<b>端口注入</b>，所以它可测、可嵌、可换宿主。</div>
+    <div class="layers">
+      <div class="layer">
+        <div class="tag">应用层</div>
+        <div class="body"><b>rds-app</b>：窗口 · 主题 · <b>键位注册</b>（九条编辑快捷键都在这）· 全局快捷键表</div>
+      </div>
+      <div class="layer">
+        <div class="tag">宿主（工作台）</div>
+        <div class="body"><b>rds-workbench</b>：把端口接到真实世界——执行器（<span class="mono">editor_exec</span>）· 连接列表与建连（<span class="mono">editor_connections</span>）· 通道门控（<span class="mono">editor_channels</span>）· 补全目录（<span class="mono">editor_completion</span>）· 项目锁（<span class="mono">editor_project</span>）· 会话存储（<span class="mono">editor_session</span>）· 系统文件对话框（<span class="mono">editor_files</span>，<span class="mono">rfd</span> 只在这）</div>
+      </div>
+      <div class="layer">
+        <div class="tag">编辑器 crate</div>
+        <div class="body"><b>rds-editor</b>：模型与纯函数（<span class="mono">completion · analysis · export · format · translate · edit · diagnostics · history · channel · limits · mode</span>）+ 视图（<span class="mono">view/host.rs</span> 宿主面板 · <span class="mono">view/results/</span> 结果区 · <span class="mono">view/dialogs.rs</span> 对话框 · <span class="mono">view/completion.rs</span> 补全适配 · <span class="mono">widgets/status_bar.rs</span>）</div>
+      </div>
+      <div class="layer">
+        <div class="tag">引擎 / 数据</div>
+        <div class="body"><b>rds-engine</b>：驱动与会话 · 事务 · 取消与超时 · DuckDB（本地分析 / 加速 / 联邦 / 扩展目录）· 历史与模板库 · 元数据缓存 · sqlglot 原语（切分 / 格式化 / 转译 / 执行计划 / 高亮）</div>
+      </div>
+      <div class="layer">
+        <div class="tag">基础</div>
+        <div class="body"><b>gpui-kit</b>（视图唯一依赖）· <span class="mono">shared</span> · <span class="mono">paths</span>（数据根 / 扩展目录）· <span class="mono">database</span>（导航缓存）</div>
+      </div>
+    </div>
+    <div class="dep">
+      <b>依赖方向</b>
+      <code>app → workbench → editor → engine → shared/paths</code>
+      <span>· editor <b>不依赖</b> workbench（能力走端口）</span>
+    </div>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="card">
+        <h4><span class="ico">◎</span>端口注入</h4>
+        <ul>
+          <li><span class="mono">QueryRunner</span> 执行 / 中断 / 分析 / DuckDB 导出</li>
+          <li><span class="mono">ConnectionsPort</span> 连接列表与自动建连</li>
+          <li><span class="mono">ChannelsPort</span> 通道可用性（内存快照）</li>
+          <li><span class="mono">CompletionPort</span> 目录 + 模板</li>
+          <li><span class="mono">SessionStore</span> 会话存储</li>
+          <li><span class="mono">ProjectPort</span> 项目只读 · <span class="mono">HistoryPort</span> · 路径选择器</li>
+        </ul>
+        <div class="foot">未接端口一律<b>如实报“未接入”</b>，而不是静默失败或假装可用</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">◑</span>两条纪律</h4>
+        <ul>
+          <li><b>渲染零 I/O</b>：渲染路径只读内存快照；加载 / 执行 / 内省全在后台线程 + 轮询回填</li>
+          <li><b>纯函数优先</b>：候选挑排、编码、血缘、诊断解析、格式化计划……全是纯函数，逐条断言</li>
+          <li>视图不出现裸 <span class="mono">px()</span>（尺寸进 <span class="mono">ui.rs</span> 常量）、不出现裸色值（取主题 token）——契约测试守着</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">▦</span>为什么是独立 crate</h4>
+        <ul>
+          <li>编辑器有自己的状态（文档集合 / 结果集 / 会话）与生命周期，独立才谈得上「无宿主可测」</li>
+          <li>结果区不另建 crate：它的状态就是文档状态的一部分，拆出去只会跨 crate 传两遍</li>
+          <li>三个 crate 的判定标准写在架构文档里（有状态 / 有视图 / 依赖方向）</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 11. 质量与证据 ══ -->
+  <section id="s11">
+    <div class="sec-head"><span class="no">11</span><h3>质量与证据</h3></div>
+    <div class="sec-sub">每个功能都指得出「哪些测试在守它」与「真机上跑通没有」。</div>
+    <table>
+      <tr><th>套件</th><th>数量</th><th>守什么</th></tr>
+      <tr><td>编辑器单测（<span class="mono">cargo test -p rds-editor --lib</span>）</td><td><b>377</b></td><td>执行族与落位 · 分段抓取 · 事务 · 中断 · 结果区 · 导出编码 · 分析桥接 · 补全 · 诊断解析 · 会话恢复 · 模式矩阵 · 通道闸</td></tr>
+      <tr><td>工作台单测（<span class="mono">-p rds-workbench --lib</span>）</td><td><b>104</b></td><td>端口实现：门控真值 · 补全目录组装 · 会话落库 · DuckDB 分析 / 导出的真机级回归</td></tr>
+      <tr><td>界面契约（<span class="mono">--test ui_contract</span>）</td><td><b>7</b></td><td>零裸尺寸 / 零裸色值 · 面板模块登记 · 共享字段白名单</td></tr>
+      <tr><td>会话真机（真 SQLite）</td><td><b>4</b></td><td>关文档 → 重开：内容 / 光标 / 模式 / 通道 / 连接绑定都回来</td></tr>
+      <tr><td>引擎单测</td><td><b>437</b></td><td>驱动 · 事务 · 切分 / 格式化 / 转译 / 执行计划 · 历史 · 元数据</td></tr>
+    </table>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="card">
+        <h4><span class="ico">◈</span>真机探针（需要环境变量，缺了就跳过）</h4>
+        <ul>
+          <li><span class="mono">editor_exec_real</span>：六条驱动路径（mysql / mysql_native / postgres / postgres_native / sqlite / duckdb）的取数、影响行数、错误定位、执行计划</li>
+          <li><span class="mono">duckdb_accel_probe</span>：只读挂载 · 未限定名 · 实时性 · 写拒绝</li>
+          <li><span class="mono">duckdb_export_probe</span>：Parquet 往返（离线必过）· XLSX 写出 + 读回</li>
+          <li><span class="mono">federation_probe</span> / <span class="mono">federation_credentials_probe</span>：跨源查询与凭据脱敏</li>
+          <li><span class="mono">sqlglot_capabilities</span>：十项能力台账（含「transpile 对脚本静默截断」这条把缺陷钉住的对照）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">⌖</span>真机抓出来的真缺陷（都已修）</h4>
+        <ul>
+          <li>PG 的结构化位置是相对<b>包装查询</b>的 → 光标偏 16 字节（还原成原句）</li>
+          <li><span class="mono">EXPLAIN</span> 被分段窗口包进子查询 → MySQL 1064（元信息语句不包装）</li>
+          <li>duckdb-rs 的 <span class="mono">column_name</span> 在 prepare 后调用直接 panic（改成先执行再读）</li>
+          <li>XLSX 不传 <span class="mono">HEADER</span> 就不写表头（首行数据会被当成列名）</li>
+          <li>PG <span class="mono">COMMIT</span> 永远等不到响应（sqlx runtime 被挂在只在 block_on 期间驱动的线程上）</li>
+        </ul>
+        <div class="foot">每条都写进了「已知问题」清单，带着现象与修法</div>
+      </div>
+      <div class="card">
+        <h4><span class="ico">▤</span>文档同步</h4>
+        <ul>
+          <li><span class="mono">README.md</span> 模块入口与代码地图</li>
+          <li><span class="mono">editor-architecture.md</span> 为什么这样设计（含 D1–D25 决策表与已知问题 #1–#32）</li>
+          <li><span class="mono">editor-dev-plan.md</span> 做到哪了（§0 进度记录逐条带验证数字）</li>
+          <li><span class="mono">editor-prototype-design.md</span> / <span class="mono">.html</span> 长什么样、怎么交互</li>
+        </ul>
+        <div class="foot">每完成一片就同步四处：进度行 · 落点 · 交互 · 剩余项</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 12. 边界 ══ -->
+  <section id="s12">
+    <div class="sec-head"><span class="no">12</span><h3>边界 · 这些事它<b>不</b>做</h3></div>
+    <div class="sec-sub">把话说在前面，比事后解释便宜。</div>
+    <div class="grid g2">
+      <div class="card">
+        <h4><span class="ico">✕</span>不做的</h4>
+        <ul>
+          <li><b>结果集不内联编辑</b>：行内改值 + 写回源库属表格能力（M4），避免「结果集」与「表数据」语义纠缠</li>
+          <li><b>不替用户执行历史里的语句</b>：重放只打开到编辑器</li>
+          <li><b>不做 SQL 语义分析型补全</b>：前缀 + 上下文判据，不猜「你想写什么」（解析留给格式化 / 转译 / 诊断）</li>
+          <li><b>不静默联网</b>：DuckDB 连接建起时就关掉自动安装扩展，装扩展只在明确的动作里发生</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="ico">◷</span>还没做的（都记在册）</h4>
+        <ul>
+          <li>值预览弹层（超长文本放大看）· 值编辑（要行标识）</li>
+          <li>只读锁 ⓘ（连接侧写策略；「提醒后放行」那一档）</li>
+          <li>列类型化输出：CSV / JSON 仍是展示文本</li>
+          <li>结果血缘落库（现在只在内存，重启后回看不到）</li>
+          <li>候选取 60 条截断（翻页待做）</li>
+          <li>分析模式笔记本视图（Phase 1c）</li>
+          <li>SQL Server 真机探针（等环境）</li>
+          <li>事务内语句取消 / 超时——驱动 <span class="mono">Transaction</span> trait 没给入口</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 13. 文档地图 ══ -->
+  <section id="s13">
+    <div class="sec-head"><span class="no">13</span><h3>文档地图</h3></div>
+    <div class="sec-sub">宣传页只负责「一页看懂」，口径以模块文档为准。</div>
+    <table>
+      <tr><th>文档</th><th>什么时候读</th></tr>
+      <tr><td><a href="README.md">README.md</a></td><td>模块入口：一句话定位 · 边界 · 代码地图 · 硬约束 · 文档地图 · 1b 进度</td></tr>
+      <tr><td><a href="editor-architecture.md">editor-architecture.md</a></td><td>为什么这样设计：分层与归属 · 数据流（§5）· <b>D1–D25 决策表</b> · 已知问题 #1–#32 · 待确认项</td></tr>
+      <tr><td><a href="editor-dev-plan.md">editor-dev-plan.md</a></td><td>做什么、做到哪：§0 进度记录（逐条带验证数字）· Phase 0/1a/1b/1c 任务表 · 测试场景清单</td></tr>
+      <tr><td><a href="editor-prototype-design.md">editor-prototype-design.md</a> / <a href="editor-prototype.html">editor-prototype.html</a></td><td>长什么样、怎么交互（含与 V1 的逐项对照与 DBeaver 对标差距清单）</td></tr>
+      <tr><td><a href="editor-showcase.md">editor-showcase.md</a></td><td>本页的<b>可贴版</b>（纯文本 + 流程图，适合贴进 PR / wiki）</td></tr>
+    </table>
+  </section>
+
+  <!-- ══ 结尾 ══ -->
+  <div class="foot">
+    <b>本页是宣传页（快照日期 2026-09-18）</b>——数字来自当天的实测输出，改了实现请顺手核对：377 / 104 / 7 / 4 / 437 与 §11 的真机探针清单。<br>
+    代码地图：模型与纯函数 <span class="mono">crates/editor/src/*.rs</span>（24 个文件）· 视图 <span class="mono">crates/editor/src/view/</span>（宿主面板 / 结果区 / 对话框 / 补全适配 / 状态栏）· 尺寸常量 <span class="mono">crates/editor/src/ui.rs</span> · 色值只存在于主题资产，代码零裸 hex。<br>
+    <span class="pill">一个内核</span><span class="pill">端口注入</span><span class="pill">渲染零 I/O</span><span class="pill">纯函数优先</span><span class="pill">真机探针</span><span class="pill">文档同步</span>
+  </div>
+</div>
+
+<script>
+function toggleTheme(){
+  var h = document.documentElement;
+  h.setAttribute('data-theme', h.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+}
+var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+if (prefersDark) {
+  document.documentElement.setAttribute('data-theme', 'dark');
+}
+</script>
+</body>
+</html>
