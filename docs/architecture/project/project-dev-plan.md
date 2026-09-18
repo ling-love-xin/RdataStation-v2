@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 39 lib（含 19 项窗口测试 + 5 项纯函数）+ 1 名册集成 + 4 存储集成全绿；workbench lib 110 全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 + B2/B3 + A1 + C3/C5 + E1/E4）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 43 lib（含 20 项窗口测试 + 9 项纯函数）+ 1 名册集成 + 4 存储集成全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -24,6 +24,18 @@
 | 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-19（四）— C3 卡片右键菜单 + C5 搜索 facet + E1/E4
+
+§8 剩下的“体验与覆盖”项（C2 等组件支持，见下）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| C3 右键菜单 | 卡片命令抽成 `card_menu_entries`（规格）+ `card_menu`（渲染）+ `attach_card_menu_handler`（挂事件），`⋯` 下拉与 `.context_menu` **同源**（同一对象不该有两套命令口径）；卡片本体加稳定 `ElementId`（右键菜单开关状态按 id 记，不按下标）；菜单首项补「打开」——右键一张卡片最想做的就是打开它 | `crates/project/src/ui.rs` |
+| C5facet 语法 | 搜索框支持 `状态:` / `固定:` / `锁:`（值见 `parse_search`；「全部」= 解除约束），与自由文本（名称 / 描述 / 路径）及状态筛选按钮**叠加（AND）**；未知键 / 空值 / 半截值一律回落自由文本（与 database 导航面板同一口径，不让输到一半就把列表清空）；输入框加占位提示，facet 生效时计数旁标「已按 facet 收窄」 | 同上 |
+| E1 只读覆盖 | 补窗口测试：只读下归档 / 创建版本快照都被拦下并给提示，且磁盘不多出版本记录 | `crates/project/src/ui/tests.rs` |
+| E4 陈旧锁提示 | 逃生口对话框补一句：若占用进程已退出（崩溃 / 断电留下的陈旧锁），选「仍要打开」即可接管 | `crates/project/src/ui.rs` |
+| 测试 | lib 39 → 43：卡片菜单规格（分支 + 只读置灰）、facet 解析（未知键 / 半截值 / 盘符冒号）、facet ∩ 自由文本 ∩ 筛选按钮、只读拦截两条新路径 | 同上 |
 
 ### 2026-09-19（三）— A1 默认连接（U3）
 
@@ -309,7 +321,7 @@
 
 - 每阶段：`cargo check -p rds-project -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试
   （`crates/project/tests/` 集成测试 + `crates/project/src/ui/tests.rs` 窗口测试）
-- 常用：`cargo test -p rds-project -j 2`（lib 39 + 名册集成 1 + 存储集成 4）
+- 常用：`cargo test -p rds-project -j 2`（lib 43 + 名册集成 1 + 存储集成 4）
 - 迁移：`cargo test -p rds-engine`（迁移套件）+ 手工核对旧库升级
 - UI：`cargo run -p rds-app` 手动走通 §4 清单（先用 `RDS_PROJECT_PATH` 验证有项目态，再清空验证选择器）
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
@@ -338,8 +350,6 @@
 | # | 项 | 说明 |
 | --- | --- | --- |
 | C2 | 菜单快捷键展示 | **暂缓**：`PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 无 shortcut 槽位（0.6.1 源码已查证）；仅能在文档里说明快捷键 |
-| C3 | 卡片右键菜单 | 指南建议作用于指针下对象的命令同时提供 `ContextMenu`；当前只有 `⋯` 下拉 |
-| C5 | 搜索语法 | 仅名称 / 路径子串；database 模块已有 facet 语法（`类型:` / `标签:`）可参照 |
 
 ### D. 范围外（原型 §12，已确认不做）
 
@@ -349,13 +359,12 @@
 
 | # | 项 | 说明 |
 | --- | --- | --- |
-| E1 | 只读拒绝路径覆盖不足 | 已有 `read_only_blocks_project_info_save`（2026-09-19）；归档 / 创建版本 / SQL 执行的只读拦截仍无自动化用例 |
 | E3 | 窗口退出路径的草稿兜底 | 点 ✕ / `Alt+F4` 退出时无拦截（`app` 未注册 `should_close` 钩子）；editor 侧有「关闭标签前确认」与草稿兜底，但**整个窗口**退出未定义行为——属 editor 模块，需与项目拦截语义对齐 |
-| E4 | 陈旧锁提示 | `project.lock.owner` 里的 pid 可能已退出（OS 锁已释放）；可在逃生口对话框补一句「若该进程已退出，选『仍要打开』」 |
+| E5 | 只读拦截仍有未覆盖路径 | 已有 `read_only_blocks_project_info_save` / `read_only_blocks_archive_and_version_snapshot`（2026-09-19）；**执行 SQL** 的只读拦截在 editor 侧，未测 |
 
 ### 建议顺序
 
-1. ~~**C1 + C4**~~、~~**B1**~~（2026-09-19）、~~**B2 + B3**~~（2026-09-19 二）、~~**A1**~~（2026-09-19 三）：已完成，见 §0；
-2. **C3**（卡片右键菜单，指南建议）→ **C5**（搜索 facet 语法，参照 database 模块）；
-3. **C2**（菜单快捷键，等组件支持 shortcut 槽位）；
-4. **E1 / E3 / E4**（覆盖与健壮性，可随其他任务带走）。
+1. ~~**C1 + C4**~~、~~**B1**~~、~~**B2 + B3**~~、~~**A1**~~、~~**C3 + C5**~~、~~**E1 / E4**~~：已完成（2026-09-19 各批次），见 §0；
+2. **E3**（窗口退出路径的草稿兜底——需与 editor / app 模块对齐，跨 crate）；
+3. **E5**（执行 SQL 的只读拦截测试）；
+4. **C2**（菜单快捷键，等 gpui-kit 支持 shortcut 槽位）。

@@ -20,7 +20,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -157,7 +157,79 @@ impl StatusFilter {
     }
 }
 
-/// 选择器可见条目：搜索子串（名称 / 路径，大小写不敏感）+ 状态筛选。
+/// 选择器搜索的 facet 解析结果（`状态:` / `固定:` / `锁:`）。
+///
+/// 与搜索框旁边的状态筛选按钮**叠加（AND）**：facet 只做额外约束，不写回筛选按钮
+/// （避免“输入框回写 → 重解析”的反馈环与光标跳动）；口径对齐 database 导航面板。
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct SearchQuery {
+    /// 自由文本（去掉 facet token 后的剩余）：匹配名称 / 描述 / 路径子串。
+    pub free: String,
+    /// `状态:active|archived|offline|syncing`；「全部」/「all」= 不约束。
+    pub status: Option<String>,
+    /// `固定:是|否`。
+    pub pinned: Option<bool>,
+    /// `锁:是|否`（已被另一实例占用）。
+    pub locked: Option<bool>,
+}
+
+impl SearchQuery {
+    /// 是否含 facet（选择器可用来提示「已按 facet 收窄」）。
+    pub fn has_facet(&self) -> bool {
+        self.status.is_some() || self.pinned.is_some() || self.locked.is_some()
+    }
+}
+
+/// 解析选择器搜索文本：只有**已知键 + 可识别值**才算 facet。
+///
+/// 认不出的 token（包括正在输入中的半截如 `状态:离`）**原样留在自由文本**里，与
+/// database 导航面板同一口径——否则光标还在输入框里，列表就会被一个半成品 token 清空。
+/// 注：Windows 路径里的 `C:` 不会被误当 facet（键不在已知集合里）。
+pub fn parse_search(raw: &str) -> SearchQuery {
+    fn boolean(value: &str) -> Option<bool> {
+        match value.to_ascii_lowercase().as_str() {
+            "是" | "true" | "yes" | "1" => Some(true),
+            "否" | "false" | "no" | "0" => Some(false),
+            _ => None,
+        }
+    }
+
+    let mut query = SearchQuery::default();
+    let mut free: Vec<&str> = Vec::new();
+    for token in raw.split_whitespace() {
+        let Some((key, value)) = token.split_once(':') else {
+            free.push(token);
+            continue;
+        };
+        if value.is_empty() {
+            free.push(token);
+            continue;
+        }
+        match key {
+            "状态" => match value.to_ascii_lowercase().as_str() {
+                "全部" | "all" => query.status = None,
+                status @ ("active" | "archived" | "offline" | "syncing") => {
+                    query.status = Some(status.to_string());
+                }
+                _ => free.push(token),
+            },
+            "固定" => match boolean(value) {
+                Some(pinned) => query.pinned = Some(pinned),
+                None => free.push(token),
+            },
+            "锁" => match boolean(value) {
+                Some(locked) => query.locked = Some(locked),
+                None => free.push(token),
+            },
+            _ => free.push(token),
+        }
+    }
+    query.free = free.join(" ").trim().to_string();
+    query
+}
+
+/// 选择器可见条目：facet 约束（`状态:` / `固定:` / `锁:`）+ 自由文本子串
+/// （名称 / 描述 / 路径，大小写不敏感）+ 状态筛选按钮。
 ///
 /// 抽成纯函数以便单测；渲染时直接调用（避免每次输入都重查数据库）。
 fn visible_items(
@@ -165,14 +237,20 @@ fn visible_items(
     needle: &str,
     status: StatusFilter,
 ) -> Vec<ProjectSummary> {
-    let needle = needle.trim().to_lowercase();
+    let query = parse_search(needle);
+    let text = query.free.to_lowercase();
     items
         .iter()
         .filter(|p| {
+            let description = p.description.as_deref().unwrap_or_default().to_lowercase();
             status.matches(&p.status)
-                && (needle.is_empty()
-                    || p.name.to_lowercase().contains(&needle)
-                    || p.path.to_string_lossy().to_lowercase().contains(&needle))
+                && query.status.as_deref().is_none_or(|s| p.status == s)
+                && query.pinned.is_none_or(|pinned| p.is_pinned == pinned)
+                && query.locked.is_none_or(|locked| p.lock.is_some() == locked)
+                && (text.is_empty()
+                    || p.name.to_lowercase().contains(&text)
+                    || description.contains(&text)
+                    || p.path.to_string_lossy().to_lowercase().contains(&text))
         })
         .cloned()
         .collect()
@@ -421,7 +499,10 @@ pub struct ProjectInputs {
 impl ProjectInputs {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
         Self {
-            search: cx.new(|cx| InputState::new(window, cx)),
+            search: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("搜索名称 / 描述 / 路径（可用 状态:archived 固定:是 锁:否）")
+            }),
             create_name: cx.new(|cx| InputState::new(window, cx)),
             create_location: cx.new(|cx| InputState::new(window, cx)),
             create_desc: cx.new(|cx| InputState::new(window, cx)),
@@ -980,7 +1061,8 @@ pub fn open_lock_busy_dialog(
             .icon(Icon::new(IconName::TriangleAlert).text_color(theme.colors.warning))
             .title(format!("项目「{name}」已在另一实例打开"))
             .description(format!(
-                "另一进程（pid {pid}）持有写锁。可只读打开；仅在确认对方已退出时，才选择「仍要打开」。"
+                "另一进程（pid {pid}）持有写锁。可只读打开；仅在确认对方已退出时，才选择「仍要打开」。\n\
+                 若该进程已经退出（比如上次崩溃 / 断电留下的陈旧锁），锁会被系统自动释放，此时选「仍要打开」即可接管。"
             ))
             .footer(dialog_footer_three(
                 "lock-cancel",
@@ -1717,6 +1799,8 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
     let needle = inputs.search.read(cx).value().to_string();
     let items = visible_items(&picker.items, &needle, picker.status_filter);
     let count = items.len();
+    // facet 生效时在计数旁说明——否则用户会以为「搜不到东西」是数据没了
+    let facet_hint = parse_search(&needle).has_facet();
 
     // ---- 顶部：标题 + Tab ----
     // 语义 `Button`（而非可点 div）：自动获得 track_focus + tab_stop，键盘可达、Enter/Space 可激活。
@@ -1875,7 +1959,11 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
                                 .ml_auto()
                                 .text_xs()
                                 .text_color(theme.colors.muted_foreground)
-                                .child(format!("{count} 个项目")),
+                                .child(if facet_hint {
+                                    format!("{count} 个项目 · 已按 facet 收窄")
+                                } else {
+                                    format!("{count} 个项目")
+                                }),
                         ),
                 )
                 .child(search_row)
@@ -1884,7 +1972,8 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
         .child(rail)
 }
 
-/// 项目卡片：一个可见主操作（打开）+ 次要命令收进 `DropdownMenu`。
+/// 项目卡片：一个可见主操作（打开）+ 次要命令收进 `DropdownMenu`；同一批命令另有
+/// **右键菜单**（指南：作用于指针下对象的命令应当同时提供 `ContextMenu`）。
 ///
 /// 设计指南不允许列表行铺一排 hover 才可见的图标命令：主操作常显，其余命令由
 /// 带可见触发按钮的菜单承载（方向键、dismiss、焦点恢复由组件负责）。
@@ -1894,7 +1983,7 @@ fn project_card(
     item: &ProjectSummary,
     tab: PickerTab,
     theme: &gpui_kit::component::Theme,
-) -> Div {
+) -> impl IntoElement {
     let host_open = host.clone();
     let path_open = item.path.clone();
 
@@ -1917,6 +2006,11 @@ fn project_card(
     let more = more_menu(host, inputs, item, tab);
 
     let mut card = div()
+        // 右键菜单的开关状态按 id 记：id 要稳（按项目 id，不按下标）
+        .id(ElementId::Name(SharedString::from(format!(
+            "project-card-{}",
+            item.id
+        ))))
         .v_flex()
         .gap_1()
         .p_3()
@@ -2006,12 +2100,187 @@ fn project_card(
                 .child("● 已在另一实例打开"),
         );
     }
-    card
+    // 右键菜单与 `⋯` 下拉同源（`card_menu_entries`）：右键一张卡片也能打开 / 固定 / 删除
+    card.context_menu({
+        let host = ProjectUiHost::clone(host);
+        let inputs = inputs.clone();
+        let item = item.clone();
+        move |menu, _window, _cx| card_menu(menu, &host, &inputs, &item, tab)
+    })
+}
+
+/// 卡片命令菜单的规格：`⋯` 下拉与**右键菜单**共用一份（同一对象上的命令不该有两套口径）。
+///
+/// 「打开」也列进来：卡片上它是可见主操作，右键菜单里则必须有——右键一张卡片最想做的事
+/// 就是打开它，而右键菜单没有别的地方能提供这个命令。
+pub fn card_menu_entries(
+    item: &ProjectSummary,
+    tab: PickerTab,
+    read_only: bool,
+) -> Vec<ProjectMenuEntry> {
+    let mut entries = vec![ProjectMenuEntry {
+        id: "open",
+        label: "打开",
+        icon: IconName::FolderOpen,
+        enabled: true,
+        separator_before: false,
+    }];
+    entries.push(ProjectMenuEntry {
+        id: "pin",
+        label: if item.is_pinned {
+            "取消固定"
+        } else {
+            "固定"
+        },
+        icon: if item.is_pinned {
+            IconName::StarOff
+        } else {
+            IconName::Star
+        },
+        enabled: !read_only,
+        separator_before: true,
+    });
+
+    // 已移除视图：只有「恢复」一条路（磁盘不在名册里，没什么可管理）
+    if tab == PickerTab::Removed {
+        entries.push(ProjectMenuEntry {
+            id: "restore",
+            label: "恢复",
+            icon: IconName::RotateCw,
+            enabled: !read_only,
+            separator_before: true,
+        });
+        return entries;
+    }
+
+    if item.path_exists {
+        entries.push(ProjectMenuEntry {
+            id: "reveal",
+            label: "在资源管理器中显示",
+            icon: IconName::ExternalLink,
+            enabled: true,
+            separator_before: true,
+        });
+        // 路径正常：软删（名册上留痕，可在「已移除」找回）
+        entries.push(ProjectMenuEntry {
+            id: "remove",
+            label: "移出列表",
+            icon: IconName::Close,
+            enabled: !read_only,
+            separator_before: false,
+        });
+        entries.push(ProjectMenuEntry {
+            id: "delete",
+            label: "删除数据…",
+            icon: IconName::Delete,
+            enabled: !read_only,
+            separator_before: true,
+        });
+    } else {
+        entries.push(ProjectMenuEntry {
+            id: "relocate",
+            label: "重新定位…",
+            icon: IconName::RotateCw,
+            enabled: !read_only,
+            separator_before: true,
+        });
+        // 路径已失效：没什么可重定位的目标，移出 = 清掉名册记录（`forget`）
+        entries.push(ProjectMenuEntry {
+            id: "remove",
+            label: "移出列表",
+            icon: IconName::Close,
+            enabled: !read_only,
+            separator_before: false,
+        });
+    }
+    entries
+}
+
+/// 卡片命令菜单内容（`⋯` 下拉与右键菜单同一个构造器）。
+fn card_menu(
+    menu: PopupMenu,
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    item: &ProjectSummary,
+    tab: PickerTab,
+) -> PopupMenu {
+    let read_only = host.state.borrow().read_only;
+    let mut menu = menu;
+    for (ix, entry) in card_menu_entries(item, tab, read_only)
+        .into_iter()
+        .enumerate()
+    {
+        if ix > 0 && entry.separator_before {
+            menu = menu.separator();
+        }
+        let menu_item = PopupMenuItem::new(entry.label)
+            .icon(entry.icon)
+            .disabled(!entry.enabled);
+        menu = menu.item(attach_card_menu_handler(
+            menu_item, entry.id, host, inputs, item,
+        ));
+    }
+    menu
+}
+
+/// 按规格 id 给卡片菜单项挂事件（同一个 id 在两种「移出」语义下挂不同函数）。
+fn attach_card_menu_handler(
+    menu_item: PopupMenuItem,
+    id: &'static str,
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    item: &ProjectSummary,
+) -> PopupMenuItem {
+    let item_id = item.id.clone();
+    let path = item.path.clone();
+    match id {
+        "open" => {
+            let host = ProjectUiHost::clone(host);
+            menu_item.on_click(move |_, window, app| request_open(&host, &path, window, app))
+        }
+        "pin" => {
+            let host = ProjectUiHost::clone(host);
+            let item = item.clone();
+            menu_item.on_click(move |_, _, app| toggle_pin(&host, &item, app))
+        }
+        "restore" => {
+            let host = ProjectUiHost::clone(host);
+            menu_item.on_click(move |_, _, app| restore(&host, &item_id, app))
+        }
+        "reveal" => menu_item.on_click(move |_, _, _| reveal_in_explorer(&path)),
+        // 路径失效时「移出列表」是 forget（清名册记录），否则是 soft_remove（可找回）
+        "remove" if !item.path_exists => {
+            let host = ProjectUiHost::clone(host);
+            menu_item.on_click(move |_, _, app| forget(&host, &item_id, app))
+        }
+        "remove" => {
+            let host = ProjectUiHost::clone(host);
+            menu_item.on_click(move |_, _, app| soft_remove(&host, &item_id, app))
+        }
+        "delete" => {
+            let host = ProjectUiHost::clone(host);
+            let inputs = inputs.clone();
+            let item = item.clone();
+            menu_item.on_click(move |_, window, app| {
+                open_delete_dialog(&host, &inputs, &item, window, app)
+            })
+        }
+        "relocate" => {
+            let host = ProjectUiHost::clone(host);
+            let inputs = inputs.clone();
+            let item = item.clone();
+            menu_item.on_click(move |_, window, app| {
+                open_relocate_dialog(&host, &inputs, &item, window, app)
+            })
+        }
+        _ => menu_item,
+    }
 }
 
 /// 卡片「更多」菜单：主操作之外的次要命令。
 ///
-/// 破坏性命令用分隔线与普通命令分开，名称带「…」表示会再开对话框。
+/// 破坏性命令用分隔线与普通命令分开，名称带「…」表示会再开对话框；内容与右键菜单同源
+/// （[`card_menu_entries`]），不各写一套。
 fn more_menu(
     host: &ProjectUiHost,
     inputs: &ProjectInputs,
@@ -2020,100 +2289,14 @@ fn more_menu(
 ) -> impl IntoElement {
     let item = item.clone();
     let inputs = inputs.clone();
-    let host = host.clone();
-    // 只读模式下卡片命令全是写操作（固定 / 移出 / 恢复 / 重定位 / 删数据），统一置禁用。
-    let read_only = host.state.borrow().read_only;
+    let host = ProjectUiHost::clone(host);
     let menu_id = SharedString::from(format!("more-{}", item.id));
 
     Button::new(ElementId::Name(menu_id))
         .ghost()
         .small()
         .icon(IconName::Ellipsis)
-        .dropdown_menu(move |menu, _window, _cx| {
-            let pinned = item.is_pinned;
-            let mut menu = menu.item(
-                PopupMenuItem::new(if pinned { "取消固定" } else { "固定" })
-                    .icon(if pinned {
-                        IconName::StarOff
-                    } else {
-                        IconName::Star
-                    })
-                    .disabled(read_only)
-                    .on_click({
-                        let host = host.clone();
-                        let item = item.clone();
-                        move |_, _, app| toggle_pin(&host, &item, app)
-                    }),
-            );
-
-            if tab == PickerTab::Removed {
-                let id = item.id.clone();
-                menu = menu.separator().item(
-                    PopupMenuItem::new("恢复")
-                        .icon(IconName::RotateCw)
-                        .disabled(read_only)
-                        .on_click({
-                            let host = host.clone();
-                            move |_, _, app| restore(&host, &id, app)
-                        }),
-                );
-            } else if item.path_exists {
-                let path = item.path.clone();
-                menu = menu
-                    .separator()
-                    .item(
-                        PopupMenuItem::new("在资源管理器中显示")
-                            .icon(IconName::ExternalLink)
-                            .on_click(move |_, _, _| reveal_in_explorer(&path)),
-                    )
-                    .item(
-                        PopupMenuItem::new("移出列表")
-                            .disabled(read_only)
-                            .on_click({
-                                let host = host.clone();
-                                let id = item.id.clone();
-                                move |_, _, app| soft_remove(&host, &id, app)
-                            }),
-                    );
-                let item_del = item.clone();
-                let inputs_del = inputs.clone();
-                menu = menu.separator().item(
-                    PopupMenuItem::new("删除数据…")
-                        .icon(IconName::Delete)
-                        .disabled(read_only)
-                        .on_click({
-                            let host = host.clone();
-                            move |_, window, app| {
-                                open_delete_dialog(&host, &inputs_del, &item_del, window, app)
-                            }
-                        }),
-                );
-            } else {
-                let item_rl = item.clone();
-                let inputs_rl = inputs.clone();
-                menu = menu.separator().item(
-                    PopupMenuItem::new("重新定位…")
-                        .icon(IconName::FolderOpen)
-                        .disabled(read_only)
-                        .on_click({
-                            let host = host.clone();
-                            move |_, window, app| {
-                                open_relocate_dialog(&host, &inputs_rl, &item_rl, window, app)
-                            }
-                        }),
-                );
-                let id = item.id.clone();
-                menu = menu.item(
-                    PopupMenuItem::new("移出列表")
-                        .disabled(read_only)
-                        .on_click({
-                            let host = host.clone();
-                            move |_, _, app| forget(&host, &id, app)
-                        }),
-                );
-            }
-            menu
-        })
+        .dropdown_menu(move |menu, _window, _cx| card_menu(menu, &host, &inputs, &item, tab))
 }
 
 /// 卡片里的描述行（R7 元信息包含描述）：空串 / 纯空白视作「没写描述」，不占位。

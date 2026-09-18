@@ -105,7 +105,7 @@ graph LR
 
 ## 6. 窗口测试方案
 
-位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），24 项测试（19 项 GPUI headless 窗口测试 + 5 项纯函数测试）。
+位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），29 项测试（20 项 GPUI headless 窗口测试 + 9 项纯函数测试）。
 
 ### 骨架
 
@@ -145,6 +145,10 @@ graph LR
 | `settings_meta_tree_comes_from_snapshot` | B2：设置面板读快照（事件路径取一次）+ 窗口里画得出来 |
 | `default_connection_label_reports_missing_option` | A1：默认连接按钮文案三态（含记录值失效如实显示 id） |
 | `default_connection_write_respects_read_only` | A1：写默认连接落盘 + 快照跟上；只读模式下被拦且不动磁盘 |
+| `read_only_blocks_archive_and_version_snapshot` | E1：只读拦截的另两条路径（归档 / 创建版本），且不写版本台账 |
+| `card_menu_spec_branches_and_gates_read_only` | C3：卡片菜单规格（`⋯` 与右键同源）按视图 / 路径状态分支 + 只读置灰 |
+| `search_facets_parse_known_keys_only` | C5：facet 解析（未知键 / 空值 / 半截值 / 盘符冒号都回落自由文本） |
+| `search_facets_narrow_the_list_with_and_semantics` | C5：facet ∩ 自由文本 ∩ 筛选按钮（AND 语义） |
 
 不覆盖：真实建库与迁移（`crates/project/tests/project_store.rs` 集成测试）、双实例并发（手动清单）、主题视觉（`theme-preview.html` 基准）。
 
@@ -168,6 +172,8 @@ graph LR
 | 窗口测试 | `crates/project/src/ui/tests.rs` |
 | 视图测试规范 | `.agents/skills/gpui-kit-dev/SKILL.md`（「窗口测试」一节） |
 | 设置面板的磁盘 / 名册 / 默认连接快照 | `crates/project/src/ui.rs`（`SettingsSnapshot` / `load_settings_snapshot` / `meta_tree_rows` / `set_default_connection`；事件路径填充，render 纯读） |
+| 卡片命令（`⋯` 下拉与右键菜单） | `crates/project/src/ui.rs`（`card_menu_entries` 规格 + `card_menu` 渲染 + `attach_card_menu_handler`） |
+| 搜索 facet（`状态:` / `固定:` / `锁:`） | `crates/project/src/ui.rs`（`parse_search` → `visible_items`；口径对齐 database 导航面板） |
 | 默认连接候选来源（全局 + 项目连接） | `crates/workbench/src/components/project_host.rs`（`default_connection_options` → `with_connections`） |
 | 位置字段（系统目录选择器 / 目标预览） | `crates/project/src/ui.rs`（`pick_directory` / `directory_row` / `target_preview`） |
 
@@ -176,7 +182,7 @@ graph LR
 ```bash
 cargo check --workspace --all-targets          # 零告警
 cargo test --workspace -j 2                    # 全量（-j 2 硬性要求）
-cargo test -p rds-project --lib -j 2           # 只跑项目 crate（39 项，迭代快）
+cargo test -p rds-project --lib -j 2           # 只跑项目 crate（43 项，迭代快）
 cargo build -p rds-app -j 2                    # codegen 验证（check ≠ 能出机器码）
 ```
 

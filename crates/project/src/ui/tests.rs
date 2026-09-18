@@ -25,14 +25,15 @@ use gpui_kit::{
 
 use super::{
     ConnectionOption, OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs,
-    ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState, SettingsSnapshot, StatusFilter,
-    advance_pending, build_project_menu, card_description, confirm_delete, cycle_sort,
-    default_connection_label, load_settings_snapshot, meta_tree_rows, more_menu,
-    open_create_dialog, open_delete_dialog, open_folder_dialog, open_lock_busy_dialog,
-    pick_directory, prepare_unsaved, project_card, project_menu_entries, render_picker,
-    render_settings, request_close, request_create_project, request_open, request_open_folder,
-    save_project_info, set_default_connection, snapshot_description, submit_create,
-    submit_open_folder, visible_items,
+    ProjectMenuEntry, ProjectSort, ProjectUiHost, ProjectUiNotifier, ProjectUiState,
+    SettingsSnapshot, StatusFilter, advance_pending, build_project_menu, card_description,
+    card_menu_entries, confirm_delete, create_version_action, cycle_sort, default_connection_label,
+    load_settings_snapshot, meta_tree_rows, more_menu, open_create_dialog, open_delete_dialog,
+    open_folder_dialog, open_lock_busy_dialog, parse_search, pick_directory, prepare_unsaved,
+    project_card, project_menu_entries, render_picker, render_settings, request_close,
+    request_create_project, request_open, request_open_folder, save_project_info,
+    set_default_connection, snapshot_description, submit_create, submit_open_folder,
+    toggle_archive, visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -801,6 +802,207 @@ fn default_connection_write_respects_read_only(cx: &mut TestAppContext) {
         Some("G_a".to_string()),
         "只读不该改磁盘"
     );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ==================== C5：搜索 facet 语法 ====================
+
+/// C5：facet 解析——未知键 / 空值 / 半截值一律回落到自由文本（不失字、不清列表）。
+#[test]
+fn search_facets_parse_known_keys_only() {
+    let query = parse_search("风控 状态:offline 固定:是 锁:否");
+    assert_eq!(query.free, "风控");
+    assert_eq!(query.status.as_deref(), Some("offline"));
+    assert_eq!(query.pinned, Some(true));
+    assert_eq!(query.locked, Some(false));
+    assert!(query.has_facet());
+
+    // 「全部」= 解除状态约束；其余键不认就当日志文本
+    assert_eq!(parse_search("状态:全部").status, None);
+    assert_eq!(
+        parse_search("状态:离").free,
+        "状态:离",
+        "半截值不该清空列表"
+    );
+    assert_eq!(parse_search("状态:").free, "状态:", "只有键没有值也回落");
+    assert_eq!(
+        parse_search("描述:报表").free,
+        "描述:报表",
+        "未知键不装 facet"
+    );
+
+    // 盘符 / URL 里的冒号不会被误当 facet
+    assert_eq!(parse_search("C:\\data").free, "C:\\data");
+    assert!(!parse_search("C:\\data").has_facet());
+    assert!(!parse_search("").has_facet());
+
+    // 布尔值多写法
+    assert_eq!(parse_search("固定:true").pinned, Some(true));
+    assert_eq!(parse_search("固定:0").pinned, Some(false));
+    assert_eq!(parse_search("固定:maybe").free, "固定:maybe");
+}
+
+/// C5：facet 与自由文本 / 状态筛选按钮**叠加（AND）**。
+#[test]
+fn search_facets_narrow_the_list_with_and_semantics() {
+    let mut offline = summary("p-off", "风控离线库", "offline");
+    offline.description = Some("月末对账用的".to_string());
+    let mut pinned = summary("p-pin", "置顶的报表库", "active");
+    pinned.is_pinned = true;
+    let mut locked = summary("p-lock", "被占用的库", "active");
+    locked.lock = Some(crate::LockInfo {
+        pid: 4242,
+        acquired_at: chrono::Utc::now(),
+    });
+    let items = vec![
+        offline,
+        pinned,
+        locked,
+        summary("p-plain", "普通库", "active"),
+    ];
+
+    // facet 单独生效
+    assert_eq!(
+        visible_items(&items, "状态:offline", StatusFilter::All).len(),
+        1
+    );
+    assert_eq!(visible_items(&items, "固定:是", StatusFilter::All).len(), 1);
+    assert_eq!(visible_items(&items, "锁:是", StatusFilter::All).len(), 1);
+    assert_eq!(visible_items(&items, "锁:否", StatusFilter::All).len(), 3);
+
+    // facet ∩ 自由文本（描述也参与匹配）
+    assert_eq!(
+        visible_items(&items, "状态:offline 对账", StatusFilter::All).len(),
+        1
+    );
+    assert_eq!(
+        visible_items(&items, "状态:offline 报表", StatusFilter::All).len(),
+        0,
+        "自由文本仍是约束"
+    );
+
+    // facet ∩ 状态筛选按钮（两边都要过）
+    assert_eq!(
+        visible_items(&items, "固定:是", StatusFilter::Active).len(),
+        1
+    );
+    assert_eq!(
+        visible_items(&items, "固定:是", StatusFilter::Offline).len(),
+        0,
+        "筛选按钮与 facet 取交集"
+    );
+}
+
+// ==================== C3：卡片菜单（`⋯` 下拉与右键菜单同源） ====================
+
+/// C3：卡片命令集按**视图 / 路径状态**分支，只读时写命令全置灰、读命令保留。
+#[test]
+fn card_menu_spec_branches_and_gates_read_only() {
+    let shape = |entries: Vec<ProjectMenuEntry>| -> Vec<(&'static str, bool)> {
+        entries.into_iter().map(|e| (e.label, e.enabled)).collect()
+    };
+    let active = summary("p-card", "活跃项目", "active");
+
+    // 可写 · 路径正常：打开 / 固定 / 显示位置 / 移出（软删）/ 删数据
+    assert_eq!(
+        shape(card_menu_entries(&active, PickerTab::Recent, false)),
+        vec![
+            ("打开", true),
+            ("固定", true),
+            ("在资源管理器中显示", true),
+            ("移出列表", true),
+            ("删除数据…", true),
+        ]
+    );
+
+    // 已固定：文案翻转（同一个 id，动作相反）
+    let mut pinned = active.clone();
+    pinned.is_pinned = true;
+    assert_eq!(
+        card_menu_entries(&pinned, PickerTab::Recent, false)[1].label,
+        "取消固定"
+    );
+
+    // 只读：写命令全灰，读命令（打开 / 显示位置）保留
+    assert_eq!(
+        shape(card_menu_entries(&active, PickerTab::Recent, true)),
+        vec![
+            ("打开", true),
+            ("固定", false),
+            ("在资源管理器中显示", true),
+            ("移出列表", false),
+            ("删除数据…", false),
+        ],
+        "只读只挡写命令"
+    );
+
+    // 路径失效：重新定位 + 移出（无显示位置 / 删数据）；不能去资源管理器里显示一个不存在的目录
+    let mut invalid = active.clone();
+    invalid.path_exists = false;
+    assert_eq!(
+        shape(card_menu_entries(&invalid, PickerTab::Recent, false)),
+        vec![
+            ("打开", true),
+            ("固定", true),
+            ("重新定位…", true),
+            ("移出列表", true),
+        ]
+    );
+
+    // 已移除视图：只剩恢复
+    assert_eq!(
+        shape(card_menu_entries(&active, PickerTab::Removed, false)),
+        vec![("打开", true), ("固定", true), ("恢复", true)]
+    );
+}
+
+// ==================== E1：只读拦截的其他路径 ====================
+
+/// E1：只读不止挡「改项目信息」——归档与创建版本快照同样被拦（各自给提示）。
+#[gpui_kit::test]
+fn read_only_blocks_archive_and_version_snapshot(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let root = temp_root("read-only-more");
+    let _ = std::fs::remove_dir_all(&root);
+    crate::ProjectStore::create("只读项目", &root).expect("建项目");
+    host.set_current(Some(OpenProject::new(root.clone(), "只读项目")));
+    host.state.borrow_mut().read_only = true;
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    // 归档
+    cx.update(|_, cx| toggle_archive(&host, cx));
+    assert!(
+        host.state
+            .borrow()
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("只读模式")),
+        "归档应被只读拦下，实际：{:?}",
+        host.state.borrow().notice
+    );
+
+    // 创建版本快照
+    cx.update(|window, cx| {
+        inputs
+            .version_msg
+            .update(cx, |s, cx| s.set_value("只读下的快照尝试", window, cx));
+    });
+    cx.update(|_, cx| create_version_action(&host, &inputs, cx));
+    assert!(
+        host.state
+            .borrow()
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("只读模式")),
+        "创建版本应被只读拦下"
+    );
+
+    // 磁盘上不该多出版本记录（名册/本体都没被碰）
+    let versions = crate::service::list_versions(&root).expect("列版本");
+    assert!(versions.is_empty(), "只读不该写版本台账");
 
     let _ = std::fs::remove_dir_all(&root);
 }
