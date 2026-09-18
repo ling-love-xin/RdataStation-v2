@@ -154,7 +154,8 @@ Mock 的**两处**视图都在本 crate（`mock_view.rs`）：
 ## 设计与验证
 
 - 设计（权威）：`docs/architecture/mock/README.md`（入口）、`mock-architecture.md`（理念与数据流）、
-  `mock-prototype-design.md`（两处排版与对话框）、`mock-dev-plan.md`（阶段任务）、`mock-prototype.html`（交互稿）。
+  `mock-prototype-design.md`（两处排版与对话框）、`mock-dev-plan.md`（阶段任务）、`mock-prototype.html`（交互稿）、
+  `mock-user-guide.md`（**使用手册**：入口 / 导览 / 典型流程 / 只读与安全 / FAQ / USIT）。
 - 装配与宿主桥：`crates/workbench/src/services/mock_generator.rs`（生成 / 场景模板 / 落库 / 追加 / 导出 / 结构导入；出口只认结果）、
   `crates/workbench/src/services/mock_jobs.rs`（后台任务：进度 + 取消）、
   `crates/workbench/src/components/mock_host.rs`（`MockHost` 的宿主实现）、

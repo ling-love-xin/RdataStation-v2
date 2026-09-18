@@ -5507,7 +5507,7 @@ impl MockDetailView {
             return div()
                 .text_xs()
                 .text_color(muted)
-                .child("暂无列：在右 Dock「Mock 数据生成」面板点「导入结构」或「＋ 加列」。")
+                .child("暂无列：在这张 tab 里点「导入结构」或「＋ 加列」开始造表。")
                 .into_any_element();
         }
 

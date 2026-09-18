@@ -70,6 +70,7 @@
 | `mock/mock-prototype.html` | Mock 数据生成原型（交互稿） | v2 原生（RDS Light/Dark 双主题 · **18 场景可切**：空态 · 导入结构 · 已生成·出口就绪 · 生成中 · 写入/导出中 · 落库反馈 · 生成失败 · 只读 · 生成器分类子菜单 · 生成器搜索 · 列编辑 · 约束类参数 · 场景模板 · 场景工作副本 · 场景生成中 · 加关系 · 编辑表 · 场景结果（多表多 tab））；由 v1 原型（`v1/prototype/mock-data-generator.html`）**参考重画**，非搬运 |
 | `mock/mock-architecture.md` | Mock 数据生成**设计理念与架构** | **九条不变式 I1–I9**（含只进分析引擎 · 生成不写库 · 出口不覆盖 · 输出项目级 · 只取结构不取数据）/ 概念模型（配置 · 列 · 临时表 · 出口）/ 分层与 crate 归属（**视图随 crate，宿主经 `MockHost` 注入**）/ 状态所有权与副作用边界 / 数据流（含生成不写库与 cache-aside 取列）/ **D1–D42 决策表**（含生成器自建分布 · 列级工作日历）/ 降级矩阵 / 性能与可观测 / **§9 已知问题（含 v1 迁移实证与锁重入死锁教训）** / 测试策略 / 实现位置映射 |
 | `mock/mock-dev-plan.md` | Mock 数据生成开发方案 | 现状盘点（迁移完整度对照）/ **Phase A–G 任务与落点（已标完成态：A1–A17 / B1–B8 / C1–C5 / D1–D6 / E1–E5 / F1–F6 / G1–G6）** / 测试场景 T1–T35 / 风险 R1–R8 / 验证命令 / 进度记录（逐轮） |
+| `mock/mock-user-guide.md` | Mock 数据生成**使用手册** | 能力与不该用的场景 / 入口（含导航右键定向导入）/ **两处排版导览**（右 Dock 管理表 · 中央 tab 设计这张表 · 结果表只读 · 六个对话框）/ 典型流程九条（源库导入落库 · 手工建表 · 场景模板 · 自建多表与关系 · 追加 · 导出与草稿箱 · 历史与模板 · **工作日历** · **分布族与时序**）/ 一次操作落到哪 / 快捷键 / 只读与数据安全（三条硬边界 · 生成前护栏 · 取消与并发 · 跨表落地完整性）/ FAQ 排查 17 条 / USIT 验收清单 / 相关文档 |
 | `dependencies/dependency-strategy.md` | 依赖治理 | 版本唯一入口 / 升级流程 / 编译时间手段 / 跨大版本待办 |
 | `dependencies/duckdb-linking.md` | DuckDB 内核动态链接 | 为什么不再 `bundled`（编译时间 / 内存 / 体积）/ 库的落位（`third_party/duckdb/<版本>`，gitignore）/ 取库脚本 / 运行时 dll 拷贝 / 升级步骤与排错 / **§9 `target/` 体积治理（60 GB 提醒 + `--clean`）** |
 
@@ -105,7 +106,7 @@
 | `editor/` | ✅ | ✅ | ✅ `editor-architecture.md` | ✅（方案待确认） | ⬜ 缺使用手册（实现后补） |
 | `insight/` | ✅ | ✅ | ✅ `insight-architecture.md` | ✅ | ✅ `insight-user-guide.md`（规则格式属对外契约，已补） |
 | `analytics_resource/` | ✅ | ✅ | ✅ `analytics-resource-architecture.md`（本轮新增，兼语义裁决书） | ✅ | ✅ `analytics-resource-user-guide.md`（本轮新增） |
-| `mock/` | ✅（本轮新增） | ✅（自 v1 迁入） | ✅ `mock-architecture.md`（本轮新增） | ✅ `mock-dev-plan.md`（本轮新增） | ⬜ 缺使用手册（实现后补） |
+| `mock/` | ✅（本轮新增） | ✅（自 v1 迁入） | ✅ `mock-architecture.md`（本轮新增） | ✅ `mock-dev-plan.md`（本轮新增） | ✅ `mock-user-guide.md` |
 
 > `layout/` / `theme/` / `ui/` / `dependencies/` 属**规格类**（单文档即可，不强制五件套）。
 
