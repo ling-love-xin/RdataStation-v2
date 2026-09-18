@@ -42,6 +42,9 @@ pub const RESULT_TABS_HEIGHT: f32 = 1.5;
 /// 结果工具栏的本地筛选框宽（11.25rem = 180px；原型 §5.5 的 `⌕ 筛选`，够放下十来个字符的词）
 pub const RESULT_FILTER_WIDTH: f32 = 11.25;
 
+/// 自定义分析 SQL 输入框高（9rem = 144px：约八行，写一条聚合 SQL 够用）
+pub const ANALYSIS_SQL_HEIGHT: f32 = 9.0;
+
 /// 结果网格列宽（128px；`Column::width` 只收 `Pixels`，故这里不做 rem 换算）
 pub const RESULT_COLUMN_WIDTH: Pixels = px(128.);
 

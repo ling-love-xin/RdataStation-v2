@@ -71,6 +71,43 @@ pub const ANALYSIS_MAX_COLUMN_ITEMS: usize = 8;
 /// 结果集标题（B10 那套 `pending_labels` 用它，标签上直接写「分析」）
 pub const ANALYSIS_TITLE: &str = "分析";
 
+/// 「自定义分析 SQL…」的菜单标签（跟在预置项后面，中间隔一条分割线）
+pub const CUSTOM_LABEL: &str = "自定义分析 SQL…";
+
+/// 对话框标题（不带省略号——省略号是菜单项的事）
+pub const CUSTOM_TITLE: &str = "自定义分析 SQL";
+
+/// 自定义分析 SQL 的**初始模板**：点开就有一条能跑的东西，改着用比从空白开始强
+///
+/// 与「计数行数」同一条（都是 `{table}` 占位符；替换在执行器侧）。
+pub const CUSTOM_DEFAULT_SQL: &str = "SELECT count(*) AS \"行数\" FROM {table}";
+
+/// 输入框的占位提示（只在用户把模板清空后出现）
+pub const CUSTOM_PLACEHOLDER: &str = "SELECT ... FROM {table}";
+
+/// 自定义分析 SQL 的说明（数据从哪来、`{table}` 是什么、超上限的部分不参与）
+///
+/// 数字取自 [`request_for`] 已经算好的桥接口径（截断与计数只有一处），不在界面侧另算。
+pub fn custom_hint(bridged_rows: usize, dropped_rows: usize) -> String {
+    let base = format!(
+        "在本地 DuckDB 上跑，数据是当前结果集已抓到的 {bridged_rows} 行（不重跑源库）；\
+         SQL 里用 {{table}} 指代这张临时表。"
+    );
+    if dropped_rows == 0 {
+        base
+    } else {
+        format!("{base}另有 {dropped_rows} 行超出上限不参与。")
+    }
+}
+
+/// 这条分析 SQL 值不值得提交
+///
+/// 空白不值得：提交了只会拿到一句驱动报错（“Expected a statement”之类），
+/// 不如在本地就说清楚“没写东西”。
+pub fn is_runnable(sql: &str) -> bool {
+    !sql.trim().is_empty()
+}
+
 /// 菜单里的一项（纯数据：`sql` 已经带 `{table}` 占位符）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisItem {
@@ -87,7 +124,8 @@ pub fn menu_items(entry: &ResultEntry) -> Vec<AnalysisItem> {
     }
     let mut items = vec![AnalysisItem {
         label: "计数行数".to_string(),
-        sql: format!("SELECT count(*) AS \"行数\" FROM {{table}}"),
+        // 与自定义输入框的模板同一条（只有一处字面量，不会两边写歪）
+        sql: CUSTOM_DEFAULT_SQL.to_string(),
     }];
     for column in entry.columns.iter().take(ANALYSIS_MAX_COLUMN_ITEMS) {
         let quoted = quote_identifier(column);
@@ -149,7 +187,8 @@ fn quote_identifier(name: &str) -> String {
 mod tests {
     // 安全模式：**不通配导入**
     use super::{
-        ANALYSIS_TITLE, AnalysisItem, menu_items, request_for, request_for_item, result_entry,
+        ANALYSIS_TITLE, AnalysisItem, CUSTOM_DEFAULT_SQL, custom_hint, is_runnable, menu_items,
+        request_for, request_for_item, result_entry,
     };
     use crate::execution::QueryData;
     use crate::model::DocumentId;
@@ -246,6 +285,25 @@ mod tests {
         assert_eq!(capped.bridged_rows(), super::ANALYSIS_MAX_ROWS);
         assert_eq!(capped.dropped_rows, 5);
         assert!(capped.notice().contains("5 行超出上限未参与"), "{}", capped.notice());
+    }
+
+    #[test]
+    fn the_custom_entry_ships_a_runnable_template() {
+        // 模板必须是**能直接跑**的（带占位符，不是一句空话）
+        assert!(
+            CUSTOM_DEFAULT_SQL.contains("{table}"),
+            "模板要带占位符：{CUSTOM_DEFAULT_SQL}"
+        );
+        assert!(is_runnable(CUSTOM_DEFAULT_SQL));
+        assert!(!is_runnable("   \n\t "), "空白不值得提交");
+
+        // 说明里的数字来自桥接口径（截与不截两种说法）
+        let plain = custom_hint(1200, 0);
+        assert!(plain.contains("1200 行"), "{plain}");
+        assert!(plain.contains("{table}"), "要告诉用户占位符怎么说：{plain}");
+        assert!(!plain.contains("超出上限"), "没截就别提截断：{plain}");
+        let capped = custom_hint(super::ANALYSIS_MAX_ROWS, 7);
+        assert!(capped.contains("7 行超出上限"), "{capped}");
     }
 
     #[test]

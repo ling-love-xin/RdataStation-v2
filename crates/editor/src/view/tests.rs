@@ -4845,3 +4845,218 @@ fn exporting_without_a_grid_is_refused(cx: &mut TestAppContext) {
         "没有网格就不摆导出"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// 结果集本地分析（B15）
+// ═══════════════════════════════════════════════════════════════════════
+
+/// 假执行器（B15）：普通执行回一份**带两行**的结果（分析要桥接它），
+/// `analyze` 记下收到的请求并回一条按桥接行数算的聚合结果
+struct AnalysisRunner {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<crate::analysis::AnalysisRequest>>>,
+}
+
+impl QueryRunner for AnalysisRunner {
+    fn run(
+        &self,
+        _connection: Option<&str>,
+        _channel: ExecChannel,
+        _sql: &str,
+        _options: execution::RunOptions,
+    ) -> Result<QueryData, String> {
+        Ok(QueryData {
+            columns: vec!["id".to_string(), "tag".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "a".to_string()],
+                vec!["2".to_string(), "b".to_string()],
+            ],
+            elapsed_ms: 4,
+            truncated: false,
+            affected_rows: None,
+            has_more: false,
+            notice: None,
+        })
+    }
+
+    fn analyze(&self, request: &crate::analysis::AnalysisRequest) -> Result<QueryData, String> {
+        self.seen.lock().expect("锁").push(request.clone());
+        Ok(QueryData {
+            columns: vec!["行数".to_string()],
+            rows: vec![vec![request.bridged_rows().to_string()]],
+            elapsed_ms: 2,
+            truncated: false,
+            affected_rows: None,
+            has_more: false,
+            // 与宿主同一口径：说明由执行器带回来
+            notice: Some(request.notice()),
+        })
+    }
+}
+
+/// 【B15】分析：SQL 与**已抓到的行**原样到执行器，结果落新结果集并带分析标记
+#[gpui_kit::test]
+fn analysis_sends_the_sql_and_the_grabbed_rows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(AnalysisRunner { seen: seen.clone() }));
+    let id = shared
+        .open(OpenRequest::untitled("select id, tag from t", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+
+    run_statement(
+        cx,
+        &panel,
+        "select id, tag from t",
+        execution::ResultPlacement::Replace,
+    );
+    assert_eq!(shared.results().set_count(&id), 1, "先有一份结果才能分析");
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.run_analysis(
+                "SELECT count(*) AS \"行数\" FROM {table}".to_string(),
+                cx,
+            )
+        })
+    });
+    wait_for_all_pending(cx, &panel);
+
+    let seen = seen.lock().expect("锁").clone();
+    assert_eq!(seen.len(), 1, "预置项直接跑，不再问一遍");
+    assert!(
+        seen[0].sql.contains("{table}"),
+        "占位符留给执行器替换：{}",
+        seen[0].sql
+    );
+    assert_eq!(
+        seen[0].columns,
+        vec!["id".to_string(), "tag".to_string()],
+        "列名照搬结果集"
+    );
+    assert_eq!(
+        seen[0].rows,
+        vec![
+            vec!["1".to_string(), "a".to_string()],
+            vec!["2".to_string(), "b".to_string()],
+        ],
+        "桥接的是已抓到的行"
+    );
+    assert_eq!(seen[0].dropped_rows, 0);
+
+    assert_eq!(
+        shared.results().set_count(&id),
+        2,
+        "分析落新结果集（原结果一行不动）"
+    );
+    // 落位口径与 B2/B10 一致：新一份**追加在后面**，不抢用户正在看的那份（不就地替换）
+    let store = shared.results();
+    let sets = store.sets(&id);
+    let entry = sets.last().expect("分析结果应当在末尾");
+    assert!(entry.analysis, "分析结果要带标记（界面据此不摆“刷新”）");
+    assert_eq!(
+        entry.title.as_deref(),
+        Some(crate::analysis::ANALYSIS_TITLE),
+        "标签上直接写“分析”"
+    );
+    assert_eq!(entry.columns, vec!["行数".to_string()]);
+    assert_eq!(store.active_index(&id), Some(0), "原结果仍被选中（可回看）");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("说明要留一句“基于多少行”");
+    assert!(message.contains("基于已抓取的 2 行"), "{message}");
+}
+
+/// 【B15】空 SQL 不提交：本地就说清，不去打扰执行器
+#[gpui_kit::test]
+fn an_empty_analysis_sql_is_refused_locally(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(AnalysisRunner { seen: seen.clone() }));
+    let id = shared
+        .open(OpenRequest::untitled("select id, tag from t", EditorMode::Sql))
+        .id()
+        .clone();
+    let (panel, cx) = open_panel(cx, &shared, &id);
+    run_statement(
+        cx,
+        &panel,
+        "select id, tag from t",
+        execution::ResultPlacement::Replace,
+    );
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.run_analysis("   \n".to_string(), cx))
+    });
+    wait_for_all_pending(cx, &panel);
+
+    assert!(seen.lock().expect("锁").is_empty(), "没写东西就不该提交");
+    assert_eq!(shared.results().set_count(&id), 1, "不产生结果集");
+    let message = cx
+        .update(|_window, cx| panel.read(cx).message.clone())
+        .expect("要留一句可读的原因");
+    assert!(message.contains("为空"), "{message}");
+}
+
+/// 【B15 切片二】自定义分析 SQL：对话框真打开、输入框与运行按钮真在
+///
+/// 点击按架构 §12 #29 的口径不赌（headless 下对话框的坐标与命中测试对不上），
+/// 落地入口（带上 SQL 调 [`EditorHostPanel::run_analysis`]）由上一条用例盖住。
+#[gpui_kit::test]
+fn the_custom_analysis_dialog_opens_with_a_sql_box(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let shared = EditorShared::new();
+    shared.attach_runner(std::sync::Arc::new(AnalysisRunner {
+        seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    }));
+    let id = shared
+        .open(OpenRequest::untitled("select id, tag from t", EditorMode::Sql))
+        .id()
+        .clone();
+    let (harness, cx) = dialog_harness(cx, &shared, &id, "editor-analysis");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let panel = cx.update(|_window, cx| harness.read(cx).panels[0].clone());
+    run_statement(
+        cx,
+        &panel,
+        "select id, tag from t",
+        execution::ResultPlacement::Replace,
+    );
+
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.request_custom_analysis(window, cx))
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "自定义分析要先问一条 SQL"
+    );
+    assert!(
+        cx.debug_bounds("editor-analysis-sql").is_some(),
+        "输入框要真渲染（不是只有状态）"
+    );
+    assert!(
+        dialog_button_rendered(cx, "editor-dialog-editor-analysis-run"),
+        "运行按钮要真在"
+    );
+
+    // 没有结果集时不该弹框（没有行可桥接）：换成一份干净文档验证
+    let empty_id = shared
+        .open(OpenRequest::untitled("select 1", EditorMode::Sql))
+        .id()
+        .clone();
+    let empty_panel = cx.update(|window, cx| {
+        cx.new(|cx| EditorHostPanel::new(shared.clone(), empty_id, window, cx))
+    });
+    cx.update(|window, cx| {
+        empty_panel.update(cx, |panel, cx| panel.request_custom_analysis(window, cx))
+    });
+    let message = cx
+        .update(|_window, cx| empty_panel.read(cx).message.clone())
+        .expect("要留一句可读的原因");
+    assert!(message.contains("没有可分析的结果"), "{message}");
+}

@@ -2645,6 +2645,35 @@ impl EditorHostPanel {
         }
     }
 
+    /// 【B15 切片二】自定义分析 SQL：先问一条 SQL，再把选中那份结果的已抓行桥接过去跑
+    ///
+    /// 与预置菜单同一个落点（[`Self::run_analysis`]），只是 SQL 由用户给。
+    /// 说明里的行数取自 `request_for` 的桥接口径（截断与计数只有那处），不在界面侧另算。
+    pub(crate) fn request_custom_analysis(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.shared.results_active(&self.document) else {
+            self.set_message(Some("当前没有可分析的结果".to_string()), cx);
+            return;
+        };
+        if !entry.has_grid() || entry.columns.is_empty() {
+            // 与菜单同一判据：没有网格就没有行可桥接
+            self.set_message(Some("这份结果没有行可分析".to_string()), cx);
+            return;
+        }
+        // 用模板先算一遍桥接，只为把“多少行参与”说准（真的那次在 `run_analysis` 里重算）
+        let bridged =
+            crate::analysis::request_for(&entry, crate::analysis::CUSTOM_DEFAULT_SQL.to_string());
+        let entity = cx.entity();
+        dialogs::open_analysis_sql(
+            window,
+            cx,
+            crate::analysis::custom_hint(bridged.bridged_rows(), bridged.dropped_rows),
+            crate::analysis::CUSTOM_DEFAULT_SQL,
+            move |sql, _window, cx| {
+                entity.update(cx, |panel, cx| panel.run_analysis(sql, cx));
+            },
+        );
+    }
+
     /// 【B15】本地分析：对**选中那份结果的已抓行**跑一条聚合 SQL（落新结果集）
     ///
     /// 三条口径：
@@ -2653,6 +2682,11 @@ impl EditorHostPanel {
     /// - 结果落**新结果集**并贴「分析」标题（原结果一行不动）；
     /// - 基于多少行、有没有被上限截掉，由执行器写进结果的说明（`analysis::notice`）。
     pub(crate) fn run_analysis(&mut self, sql: String, cx: &mut Context<Self>) {
+        // 空的不提交：提交了也只会拿到一句驱动报错（“没写东西”在本地就能说清）
+        if !crate::analysis::is_runnable(&sql) {
+            self.set_message(Some("分析 SQL 为空（写一条 SELECT 再运行）".to_string()), cx);
+            return;
+        }
         let Some(entry) = self.shared.results_active(&self.document) else {
             self.set_message(Some("当前没有可分析的结果".to_string()), cx);
             return;
@@ -3596,7 +3630,17 @@ impl Render for EditorHostPanel {
                                 },
                             ));
                         }
-                        menu
+                        // 【B15 切片二】预置项之外，自己写一条（弹输入框，模板预填）
+                        let entity = entity.clone();
+                        menu.separator().item(
+                            PopupMenuItem::new(crate::analysis::CUSTOM_LABEL).on_click(
+                                move |_, window, app| {
+                                    entity.update(app, |panel, cx| {
+                                        panel.request_custom_analysis(window, cx)
+                                    });
+                                },
+                            ),
+                        )
                     })
                     .into_any_element()
             });

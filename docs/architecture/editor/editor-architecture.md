@@ -351,12 +351,16 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 结果工具栏「⚗ 分析 ▾」（只对有网格的结果集出现）
   → 菜单项（纯函数 editor::analysis::menu_items）：
        计数行数 / 按「列」分组计数（最多 8 列）；SQL 里带 {table} 占位符
+       底部一条分割线后的「自定义分析 SQL…」→ 对话框（`dialogs::open_analysis_sql`）：
+         预填一条能跑的模板（与“计数行数”同一条），说明里写清“基于已抓到的 N 行、不重跑源库”
+         空白在本地就拒（`analysis::is_runnable`），不去打扰执行器
   → 桥接（纯函数 request_for）：取**当前已抓到的行**，上限 ANALYSIS_MAX_ROWS = 20000，超了截断
        值口径："NULL" 字面量 → 真 NULL，其余按**展示文本**进库
   → 后台任务：engine::services::execution_service::execute_duckdb_analysis("", sql, columns, rows)
        内存 DuckDB（DuckDBManager::get_or_create_in_memory）建临时表；{table} 由引擎换成真表名
        —— **不重跑源库查询**（连接断了/慢查询不想再跑都能分析，且对象就是眼前这份数据）
   → **产生新结果集**：lineage = { 源结果集, 分析 SQL, 通道=DuckDB }；原结果一行不动
+       落位口径与执行 / 重查一致（B2）：新一份**追加在后面**，不抢用户正在看的那份
        结果集带 analysis 标记 → **不摆「⟳ 刷新」**（刷新会重跑分析 SQL，那是另一件事）
        说明写在结果里：“本地 DuckDB 分析 · 基于已抓取的 N 行（另有 M 行超出上限未参与）”
   分析模式下：同一次分析可“沉淀为单元”——
@@ -364,7 +368,8 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 ```
 
 - **代价显式**：值按展示文本进库（数字列由引擎按整列推断成数值，但 `id = "007"` 这类前导零文本会按数字落库）——要按原样比较就在分析 SQL 里 `CAST(... AS VARCHAR)`。
-- **为什么只给预置菜单**：切片一只摆真能跑、结果可预期的项；写自己的聚合 SQL（自定义分析 SQL 输入）与**血缘摘要**属切片二。
+- **预置 + 自定义两层**：预置项只摆真能跑、结果可预期的（切片一），要算别的就自己写一条（切片二，`{table}` 指桥接出来的临时表）。
+- **对话框为什么要局部状态**：选择类对话框一律“动作按钮即选择”（`Rc<Cell<_>>` 改了不会重绘）；**输入类**则必须用 `TextareaState` 实体（它自己管重绘与键盘）——两套取舍都写在 `view/dialogs.rs` 头部。
 - **生命周期**：分析用的临时表由 `TempTableManager` 登记（上限 / TTL / 切项目清场），与 M7 的 mock 临时表同一套回收机制。
 
 > **定位**：分析不是“过滤的第三种模式”（V1 如此），而是**派生新数据集**。它是“查询后分析”这条产品主线的入口：从结果区快捷发起，在分析模式下沉淀为可重跑、可引用的单元。
@@ -512,7 +517,7 @@ Ctrl+S   → 写盘（文件型）或写 .rdsnote（笔记型）→ baseline 更
 | D23 结果集只读 / 网格归属与提炼 | `crates/editor/src/view/widgets/grid/`（trait `GridDataSource` / `GridEditSink`）+ 架构 §3.6 |
 | D24 分段抓取 | `crates/editor/src/store.rs`（结果集窗口状态）+ `view/widgets/grid/`（“取下一段”入口与 `N+` 展示） |
 | Dock 标签能力（脏点 / 关闭语义） | `crates/editor/src/view/host.rs`（`Panel::{title_suffix, closable}`；关闭语义见 §13 #15）+ `crates/workbench/src/view.rs`（中央区装配） |
-| 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs`（`ExecTarget::{Filtered,Analysis}`）+ `engine/src/services/execution_service.rs`（`re_execute_with_filter` / `execute_duckdb_analysis`）；分析侧另见 ✅ B15 切片一：`crates/editor/src/analysis.rs`（纯模型）+ `view/host.rs::run_analysis` + `view/results/grid.rs`（工具栏入口）+ `workbench/src/services/editor_exec.rs::analyze` |
+| 筛选下发 / DuckDB 分析 | `crates/editor/src/execution.rs`（`ExecTarget::{Filtered,Analysis}`）+ `engine/src/services/execution_service.rs`（`re_execute_with_filter` / `execute_duckdb_analysis`）；分析侧另见 ✅ B15：`crates/editor/src/analysis.rs`（纯模型 + 预置菜单 + 桥接口径）+ `view/host.rs::{run_analysis,request_custom_analysis}` + `view/dialogs.rs::open_analysis_sql`（自定义 SQL）+ `view/results/grid.rs`（工具栏入口）+ `workbench/src/services/editor_exec.rs::analyze` |
 | D7 语句切分 | ~~`crates/editor/src/split.rs`~~ → **`crates/engine/src/sql/split.rs`**（✅ P0.4 已完成；`SqlEngine::split_statements` + `sql_parser_service::split_sql` 委托） |
 | D8 格式化 | `engine/src/sql/formatter.rs`（✅ P0.3 已改用 `generate_pretty` + 往返解析回归；✅ B10 起 `format_with_report` **按语句区间原位回填**、区间外字节不动）+ 编辑器侧计划 `crates/editor/src/format.rs`（选段优先 / 光标映射 / `changes` 口径） |
 | D8b 方言转译 | `engine/src/sql/transpiler.rs`（✅ B10：`transpile_with_report` **先切分再逐条转译**——整篇接口会静默丢语句）+ `engine/src/sql/script.rs`（格式化与转译共用的脚本骨架）+ `crates/editor/src/translate.rs`（目标表 / `targets_for` / 选区优先的 `plan`） |
