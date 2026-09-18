@@ -32,6 +32,9 @@ use rds_analytics_resource::dialogs::index_repair::{
 use rds_analytics_resource::dialogs::pick::{
     DraftCandidate, PickDialogSeed, PickDialogState, open_draft_pick_dialog_with, submit_pick,
 };
+use rds_analytics_resource::dialogs::tag::{
+    TagChoice, TagDialogSeed, TagDialogState, open_tag_dialog,
+};
 use rds_analytics_resource::dialogs::trash::{
     ForeignTrash, TrashDialogSeed, TrashDialogState, TrashRow, open_trash_dialog_with,
 };
@@ -523,6 +526,73 @@ fn trash_dialog_lists_own_rows_and_keeps_the_shared_store_visible(cx: &mut TestA
     state.set_rows(Vec::new());
     draw(cx);
     assert!(cx.debug_bounds("trash-restore-0").is_none());
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "换行不该把对话框关掉"
+    );
+}
+
+#[gpui_kit::test]
+fn tag_dialog_lists_choices_and_keeps_the_create_path_gated(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let cx = harness(cx);
+    let state = TagDialogState::new(vec!["at_1".to_string()]);
+    let seed = TagDialogSeed {
+        resource_name: "月报".to_string(),
+        options: vec![
+            TagChoice {
+                id: "at_1".to_string(),
+                name: "重要".to_string(),
+                count: 3,
+            },
+            TagChoice {
+                id: "at_2".to_string(),
+                name: "待办".to_string(),
+                count: 0,
+            },
+        ],
+        selected: vec!["at_1".to_string()],
+    };
+    {
+        let cx: &mut VisualTestContext = cx;
+        cx.update(|window, cx| {
+            let input = cx.new(|cx| {
+                gpui_kit::component::input::InputState::new(window, cx).placeholder("新建标签")
+            });
+            open_tag_dialog(
+                window,
+                cx,
+                seed,
+                state.clone(),
+                input,
+                move |_event, _window, _cx| {},
+                move |_cx| {},
+            );
+        });
+    }
+    draw(cx);
+
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "标签对话框应打开"
+    );
+    assert!(cx.debug_bounds("tag-close").is_some());
+    assert!(cx.debug_bounds("tag-apply").is_some());
+    assert!(
+        cx.debug_bounds("tag-create").is_some(),
+        "新建路径恒在（名字为空时按钮置灰）"
+    );
+    assert!(cx.debug_bounds("tag-choice-at_1").is_some());
+    assert!(cx.debug_bounds("tag-choice-at_2").is_some());
+
+    // 词典被宿主换掉（标签被删）：行跟着换，对话框不关。
+    state.set_options(vec![TagChoice {
+        id: "at_2".to_string(),
+        name: "待办".to_string(),
+        count: 0,
+    }]);
+    draw(cx);
+    assert!(cx.debug_bounds("tag-choice-at_1").is_none());
     assert!(
         cx.update(|window, cx| window.has_active_dialog(cx)),
         "换行不该把对话框关掉"

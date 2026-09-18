@@ -55,8 +55,19 @@ pub struct ArchiveDetail {
     pub payload_rel_path: Option<String>,
     /// 版本历史摘要，如 "3 个历史版本 · 最近副本完整"。
     pub history_label: String,
-    pub tags: Vec<String>,
+    /// 这存档挂的标签（带 id：去标要用它）；名字已就绪，不在渲染期查库。
+    pub tags: Vec<ArchiveTagChip>,
     pub group: Option<String>,
+}
+
+/// 详情面板里的一枚标签 chip。
+///
+/// `color` 是标签自己的可选项（用户填的 hex），但**不拿它上色**：颜色一律走主题 token
+/// （原型 §6 的零裸色约束），标签颜色留给后续“按颜色分组”一类需求再谈。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveTagChip {
+    pub id: String,
+    pub name: String,
 }
 
 /// 指纹缩略：前 [`HASH_PREVIEW_LEN`] 位；无指纹（旧行 / `table_ref`）给破折号而不是空白。
@@ -121,11 +132,9 @@ pub fn detail_rows(detail: &ArchiveDetail) -> Vec<(String, Vec<(&'static str, St
     };
     sections.push((VERSION_SECTION_TITLE.to_string(), vec![("历史", history)]));
 
-    // 4) 组织（标签 / 分组只在有内容时出现）
+    // 4) 组织（**只有分组**：标签是可交互的 chips，在 `render_tag_section` 里单独渲染——
+    //    （标签, 值）两列是纯文本通道，装不下带 × 的控件）
     let mut org = Vec::new();
-    if !detail.tags.is_empty() {
-        org.push(("标签", detail.tags.join("、")));
-    }
     if let Some(group) = detail.group.as_deref() {
         org.push(("分组", group.to_string()));
     }
@@ -165,13 +174,105 @@ pub fn alert_line(detail: &ArchiveDetail) -> Option<String> {
 /// 详情面板的动作接线（`None` = 纯只读渲染：crate 单测与无宿主场景）。
 ///
 /// 动作一律经宿主端口（与列表右键菜单同一套）：面板不认识服务层，也不自己取数。
+#[derive(Clone)]
 pub struct DetailActions {
     pub host: std::rc::Rc<dyn ResourcesHost>,
     /// 项目只读：写类动作一律禁用（与右键菜单同一判据）。
     pub read_only: bool,
 }
 
-/// 渲染详情面板内容（只读信息区 + 动作区）。
+/// 标签分区：chips（每个带 ×）+ 「＋ 标签」。
+///
+/// `actions` 为 `None`（crate 单测 / 无宿主场景）或项目只读时，只摆 chips 不给动作——
+/// 与另两个动作区的口径一致。
+fn render_tag_section(
+    detail: &ArchiveDetail,
+    actions: Option<&DetailActions>,
+    cx: &App,
+) -> Div {
+    let (muted, border, foreground) = {
+        let colors = cx.theme().colors;
+        (colors.muted_foreground, colors.border, colors.foreground)
+    };
+    let read_only = actions.map(|a| a.read_only).unwrap_or(true);
+
+    let mut chips = div().h_flex().w_full().flex_wrap().items_center().gap_1();
+    if detail.tags.is_empty() {
+        chips = chips.child(div().text_xs().text_color(muted).child("（还没有标签）"));
+    }
+    for chip in &detail.tags {
+        let mut line = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .px_1p5()
+            .py_0p5()
+            .rounded_sm()
+            .border_1()
+            .border_color(border)
+            .text_xs()
+            .text_color(foreground)
+            .child(chip.name.clone());
+        if let Some(actions) = actions {
+            if !read_only {
+                // × = 去掉这个标签（不再要一次确认：重新打上只需两步）。
+                let host = actions.host.clone();
+                // 闭包是 `Fn` 且比 `detail` 活得久：每枚 chip 各拷一份带走。
+                let detail = detail.clone();
+                let tag_id = chip.id.clone();
+                let remove_id = format!("archive-tag-remove-{}", chip.id);
+                let debug_id = remove_id.clone();
+                let debug_id_for_selector = debug_id.clone();
+                line = line.child(
+                    div()
+                        .id(SharedString::from(remove_id))
+                        .debug_selector(move || debug_id_for_selector.clone())
+                        .cursor_pointer()
+                        .text_color(muted)
+                        .hover(move |style| style.text_color(foreground))
+                        .child("×")
+                        .on_click(move |_, window, cx| {
+                            host.request_remove_tag(&detail, &tag_id, window, cx)
+                        }),
+                );
+            }
+        }
+        chips = chips.child(line);
+    }
+
+    let mut section = div()
+        .v_flex()
+        .w_full()
+        .gap_1()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(muted)
+                .child("标签"),
+        )
+        .child(chips);
+
+    if let Some(actions) = actions {
+        let host = actions.host.clone();
+        let resource_id = detail.id.clone();
+        let resource_name = detail.name.clone();
+        section = section.child(
+            Button::new("archive-detail-add-tag")
+                .ghost()
+                .xsmall()
+                .debug_selector(|| "archive-detail-add-tag".to_string())
+                .label("＋ 标签")
+                .disabled(read_only)
+                .on_click(move |_, window, cx| {
+                    host.request_edit_tags(&resource_id, &resource_name, window, cx)
+                }),
+        );
+    }
+
+    section
+}
+/// 渲染详情面板内容（只读信息区 + 标签分区 + 动作区 + 危险区）。
 pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx: &App) -> Div {
     let (foreground, muted, border, tone_color) = {
         let colors = cx.theme().colors;
@@ -331,6 +432,9 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
         body = body.child(section);
     }
 
+    // 标签分区（原型 §3.1 的“标签与分组”里的标签那一半）：chips 可逐个去掉，「＋ 标签」开打标对话框。
+    body = body.child(render_tag_section(detail, actions.as_ref(), cx));
+
     // 动作区：只读存档的两个真动作（打开（只读）/ 取回（检出）…）——
     // 取回是**唯一的编辑入口**；其余动作各自有各自的批（标签 / 重命名 = Phase 2）。
     if let Some(actions) = actions {
@@ -452,7 +556,7 @@ pub fn render_detail(detail: &ArchiveDetail, actions: Option<DetailActions>, cx:
 #[cfg(test)]
 mod tests {
     // 安全模式：测试模块不通配导入。
-    use super::{ArchiveDetail, alert_line, detail_rows, kind_label, short_hash};
+    use super::{ArchiveDetail, ArchiveTagChip, alert_line, detail_rows, kind_label, short_hash};
     use crate::model::{ArchiveKind, ArchiveStatus};
 
     fn detail(status: ArchiveStatus, kind: ArchiveKind) -> ArchiveDetail {
@@ -500,19 +604,27 @@ mod tests {
     }
 
     #[test]
-    fn organization_section_is_hidden_when_empty() {
+    fn organization_section_keeps_only_the_group() {
         let rows = detail_rows(&detail(ArchiveStatus::Normal, ArchiveKind::File));
         assert!(
             !rows.iter().any(|(title, _)| title == "组织"),
-            "无标签无分组时不应出现空分区"
+            "无分组时不应出现空分区"
         );
 
-        let mut with_tags = detail(ArchiveStatus::Normal, ArchiveKind::File);
-        with_tags.tags = vec!["报表".to_string(), "月度".to_string()];
-        with_tags.group = Some("报表".to_string());
-        let rows = detail_rows(&with_tags);
+        let mut with_group = detail(ArchiveStatus::Normal, ArchiveKind::File);
+        // 标签不再走（标签, 值）两列（chips 可交互，在 `render_tag_section` 里渲染）。
+        with_group.tags = vec![ArchiveTagChip {
+            id: "at_1".to_string(),
+            name: "报表".to_string(),
+        }];
+        with_group.group = Some("报表".to_string());
+        let rows = detail_rows(&with_group);
         let org = rows.iter().find(|(title, _)| title == "组织").expect("组织");
-        assert!(org.1.iter().any(|(_, value)| value == "报表、月度"));
+        assert!(org.1.iter().any(|(label, value)| *label == "分组" && value == "报表"));
+        assert!(
+            !org.1.iter().any(|(label, _)| *label == "标签"),
+            "标签不进文本行"
+        );
     }
 
     #[test]

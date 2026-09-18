@@ -16,6 +16,7 @@ use mock::mock_view::{DetailTarget, MockDetailView, MockPanel, SchemaRequest};
 use scratchpad::ScratchpadStore;
 
 use analytics_resource::dialogs::index_repair::RepairDialogState;
+use analytics_resource::dialogs::tag::TagDialogState;
 use analytics_resource::dialogs::trash::TrashDialogState;
 use analytics_resource::dialogs::version::VersionDialogState;
 use analytics_resource::resource_view::ResourcesPanel;
@@ -144,6 +145,23 @@ pub struct TrashDialogFlow {
     pub session: Option<TrashDialogSession>,
 }
 
+/// M6：标签对话框的一次会话（行 = 全部标签 + 这存档的已选；可被动作后重取换掉）。
+///
+/// 带 `resource_id`：对话框是“针对某条存档”的（与版本历史同形），换一条存档要重开。
+pub struct TagDialogSession {
+    pub resource_id: String,
+    pub state: TagDialogState,
+}
+
+/// M6：标签对话框的流转状态（待开 → 已开 → 关闭）。
+#[derive(Default)]
+pub struct TagDialogFlow {
+    /// 待开的取数结果（取数回来时置位，侧栏 render 消费开窗）。
+    pub pending: Option<crate::services::resource_jobs::TagRows>,
+    /// 已开的会话（`None` = 没开；关窗时清掉）。
+    pub session: Option<TagDialogSession>,
+}
+
 /// 把一段 SQL 追加到草稿末尾（空草稿直接落片段）。
 ///
 /// 原先在 `nav.rs`（`nav_draft_append`），现在由导航菜单、拖拽与宿主打开查询共用，
@@ -226,6 +244,8 @@ pub struct Shared {
     pub repair_dialog: Rc<RefCell<RepairDialogFlow>>,
     /// M6：回收站对话框的流转（取数 → 开窗 → 动作后重取换行；见 `TrashDialogFlow`）。
     pub trash_dialog: Rc<RefCell<TrashDialogFlow>>,
+    /// M6：标签对话框的流转（取数 → 开窗 → 动作后重取换行；见 `TagDialogFlow`）。
+    pub tag_dialog: Rc<RefCell<TagDialogFlow>>,
     /// M7：打开某个 Mock 详情 tab 的宿主命令（面板「查看详情」与结果表清单调用；需要窗口，照 `editor_clear` 口径）。
     pub open_mock_detail: Rc<RefCell<Option<Rc<dyn Fn(DetailTarget, &mut Window, &mut App)>>>>,
     /// 驱动 id → 类型 / 显示名（徽标、hover 卡与属性面板共用；随组织数据一次性加载）。
@@ -271,6 +291,7 @@ impl Shared {
             version_dialog: Rc::new(RefCell::new(VersionDialogFlow::default())),
             repair_dialog: Rc::new(RefCell::new(RepairDialogFlow::default())),
             trash_dialog: Rc::new(RefCell::new(TrashDialogFlow::default())),
+            tag_dialog: Rc::new(RefCell::new(TagDialogFlow::default())),
             mock_details: Rc::new(RefCell::new(HashMap::new())),
             open_mock_detail: Rc::new(RefCell::new(None)),
             driver_catalog: Rc::new(RefCell::new(HashMap::new())),

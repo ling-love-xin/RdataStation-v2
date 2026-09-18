@@ -13,15 +13,18 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui_kit::{App, Focusable as _, TestAppContext, Window};
+use gpui_kit::{
+    App, Context, Focusable as _, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
+    Window, div,
+};
 
 use rds_analytics_resource::commands::{ClearSearch, DeleteSelected, OpenSelected, SelectAllRows};
-use rds_analytics_resource::detail_view::ArchiveDetail;
+use rds_analytics_resource::detail_view::{ArchiveDetail, ArchiveTagChip, DetailActions, render_detail};
 use rds_analytics_resource::filter::{SortField, SortOrder};
 use rds_analytics_resource::model::{ArchiveKind, ArchiveStatus, ArchiveUndo};
 use rds_analytics_resource::resource_view::{
     ArchiveCounts, ArchiveRow, HeaderMenuAction, ResourcesHost, ResourcesPanel, ResourcesSnapshot,
-    RowClick, dispatch_header_action,
+    RowClick, TagOption, dispatch_header_action,
 };
 
 /// 宿主替身：只记录调用，不接真实服务（窗口测试不碰后端）。
@@ -74,6 +77,28 @@ impl ResourcesHost for RecordingHost {
             .borrow_mut()
             .push(format!("delete:{}", resource_ids.join(",")));
     }
+    fn request_edit_tags(
+        &self,
+        resource_id: &str,
+        _resource_name: &str,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+        self.calls
+            .borrow_mut()
+            .push(format!("edit-tags:{resource_id}"));
+    }
+    fn request_remove_tag(
+        &self,
+        detail: &ArchiveDetail,
+        tag_id: &str,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+        self.calls
+            .borrow_mut()
+            .push(format!("untag:{}:{tag_id}", detail.id));
+    }
     fn request_undo_archive(&self, undo: &ArchiveUndo, _window: &mut Window, _cx: &mut App) {
         self.calls
             .borrow_mut()
@@ -101,6 +126,7 @@ fn row(id: &str, kind: ArchiveKind, status: ArchiveStatus, version: i32) -> Arch
         version,
         status,
         tail: "1.2 KB · 3 天前".to_string(),
+        tag_ids: Vec::new(),
     }
 }
 
@@ -128,6 +154,7 @@ fn snapshot(rows: Vec<ArchiveRow>, read_only: bool) -> ResourcesSnapshot {
         counts,
         read_only,
         details,
+        tags: Vec::new(),
     }
 }
 
@@ -508,7 +535,7 @@ fn multi_selection_and_select_all_reach_the_host_on_delete(cx: &mut TestAppConte
         vec!["ar_1", "ar_2", "ar_3"]
     );
 
-    // `Delete`：整批交给宿主（真删除等 P0.8，回执带数量）。
+    // `Delete`：整批交给宿主（真删除 = 回收站，见 P0.8）。
     cx.update(|window, cx| {
         window.dispatch_action(Box::new(DeleteSelected), cx);
     });
@@ -798,4 +825,125 @@ fn header_more_button_sits_in_the_header_and_dispatches_host_actions(
             .map(|(_, call)| call.to_string())
             .collect::<Vec<_>>()
     );
+}
+
+/// 标签筛选维：勾上就窄，标签被删后条件自动抹掉（否则列表“什么都没匹配”而勾还在）。
+#[gpui_kit::test]
+fn tag_filter_narrows_rows_and_drops_stale_conditions(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let (panel, cx) = cx.add_window_view({
+        let host = host.clone();
+        move |_window, cx| ResourcesPanel::new(host.clone(), cx)
+    });
+
+    let mut tagged = row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1);
+    tagged.tag_ids = vec!["at_1".to_string()];
+    let other = row("ar_2", ArchiveKind::File, ArchiveStatus::Normal, 2);
+    let mut initial = snapshot(vec![tagged, other.clone()], false);
+    initial.tags = vec![TagOption {
+        id: "at_1".to_string(),
+        name: "报表".to_string(),
+        count: 1,
+    }];
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_snapshot(initial, cx));
+    });
+    assert_eq!(cx.update(|_window, cx| panel.read(cx).view_rows().len()), 2);
+
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.toggle_tag("at_1", cx));
+    });
+    let visible = cx.update(|_window, cx| {
+        panel
+            .read(cx)
+            .view_rows()
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(visible, vec!["ar_1"]);
+    assert_eq!(cx.update(|_window, cx| panel.read(cx).filter().menu_dims()), 1);
+
+    // 标签被删（词典里没了）：新快照一到，悬空条件自己消失，列表回到两行。
+    let mut without_tag = snapshot(vec![other], false);
+    without_tag.tags = Vec::new();
+    cx.update(|_window, cx| {
+        panel.update(cx, |panel, cx| panel.set_snapshot(without_tag, cx));
+    });
+    assert!(cx.update(|_window, cx| panel.read(cx).filter().is_empty()));
+    assert_eq!(cx.update(|_window, cx| panel.read(cx).view_rows().len()), 1);
+}
+
+/// 详情面板的标签壳：详情视图不自持实体，窗口测试给它一个壳。
+struct DetailHarness {
+    detail: ArchiveDetail,
+    actions: Option<DetailActions>,
+}
+
+impl Render for DetailHarness {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(render_detail(
+            &self.detail,
+            self.actions.clone(),
+            cx,
+        ))
+    }
+}
+
+/// 详情面板的标签区：chips 与「×」在写态下都出场；只读项目下只留 chips。
+#[gpui_kit::test]
+fn detail_tag_chips_render_with_actions_only_when_writable(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let host = Rc::new(RecordingHost::default());
+    let mut detail = detail_for(&row("ar_1", ArchiveKind::File, ArchiveStatus::Normal, 1));
+    detail.tags = vec![ArchiveTagChip {
+        id: "at_1".to_string(),
+        name: "报表".to_string(),
+    }];
+    let (writable, cx) = cx.add_window_view({
+        let host = host.clone();
+        let detail = detail.clone();
+        move |_window, _cx| DetailHarness {
+            detail: detail.clone(),
+            actions: Some(DetailActions {
+                host: host.clone(),
+                read_only: false,
+            }),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-detail-add-tag").is_some(),
+        "有宿主时摆「＋ 标签」"
+    );
+    assert!(
+        cx.debug_bounds("archive-tag-remove-at_1").is_some(),
+        "chip 上的 × 要用 id 认出具体是哪个标签"
+    );
+
+    // 只读项目：× 不出场（＋ 标签 仍在，但置灰——置灰态靠 disabled 保证，这里只验“不摆 ×”）。
+    let (read_only, cx) = cx.add_window_view({
+        let host = host.clone();
+        let detail = detail.clone();
+        move |_window, _cx| DetailHarness {
+            detail: detail.clone(),
+            actions: Some(DetailActions {
+                host: host.clone(),
+                read_only: true,
+            }),
+        }
+    });
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        cx.debug_bounds("archive-tag-remove-at_1").is_none(),
+        "只读项目下不能去标签"
+    );
+    assert!(cx.debug_bounds("archive-detail-add-tag").is_some());
+    let _ = writable.read_with(cx, |_harness, _cx| ());
+    let _ = read_only.read_with(cx, |_harness, _cx| ());
 }

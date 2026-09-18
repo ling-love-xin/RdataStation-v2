@@ -1,12 +1,32 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站三个对话框均可用，**104 单测 + 19 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 第一刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签四个对话框均可用，**111 单测 + 22 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-18 — Phase 2 第一刀：标签（存储层补齐 + 打标 / 去标 + 筛选维）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 存储层补齐 ✅ | **补 v1 缺失的两项**：`rename_tag`（同名未删拒绝、改成自己幂等、`scope` 不可编辑）、`delete_tag`（**同一事务里软删标签行 + 清全部关联**，返回解除数）；`create_tag` 补空名与同名拒绝（库里有部分唯一索引兑底，但那条约束报的是英文 SQLite 原话）；新增 `tags_by_resource`（一次查完，避免 N+1）与 `tag_usage_counts`（筛选菜单的用量）；三处重复的行映射收敛为 `map_tag_row` | `src/tag.rs`、`src/tests.rs`（t017） |
+| 数据进快照 ✅ | `ArchiveRow` 加 `tag_ids`（筛选用 id：名字会改）、`ResourcesSnapshot` 加 `tags: Vec<TagOption>`（字典 + 用量）、`ArchiveDetail.tags` 从 `Vec<String>` 改为 `Vec<ArchiveTagChip>`（带 id）；`present::{tag_chips, tag_options, to_row, to_detail, build_snapshot}` 均接入 | `src/{resource_view,detail_view,present}.rs` |
+| 筛选维 ✅ | `ResourcesFilter.tags`（id 多选，**并集**：选中两个标签 = 这两个标签的存档都看）；`menu_dims` 计入标签数；快照推送时清悬空标签条件（标签被删后不能留下“什么都没匹配”而勾还在） | `src/filter.rs`、`src/resource_view.rs`（筛选菜单加标签组） |
+| 打标 / 去标 ✅ | 详情面板新增**标签分区**：chips（每枚带 ×，点了就去掉；不进确认框——重新打上只需两步）+ 「＋ 标签」开对话框；只读项目下两者都收起来 | `src/detail_view.rs` |
+| 标签对话框 ✅ | `dialogs/tag.rs`：全部标签勾选（带用量）+ 新建输入（「新建并打上」；**回车 = 应用**，与主按钮同路）+ 底栏差集提示（“本次改动：加 N · 去 M”）+ 取消 / 应用（**应用后关窗**；新建后不关窗，等宿主把新词典推回来）；状态可被宿主换行与对齐比较基准 | 同上、`src/ui.rs`（+2 常量） |
+| 宿主接线 ✅ | `Job::TagList` / `Job::TagAction`（`TagJobAction::{Apply, CreateAndTag, RemoveOne}`）；动作后**重取标签行 + 主列表**（行的 `tag_ids` 与详情 chips 都在快照里）；`Shared::tag_dialog`（pending → 侧栏 render 开窗 → session → 关窗清掉）；刷新时标签两件事都一次查完 | `crates/workbench/src/{services/resource_jobs.rs,panels/{shared,resources,mod}.rs,components/resource_host.rs}` |
+| 验证 | `cargo test -p rds-analytics-resource -j 2` → **111 单测 + 14 面板窗口 + 8 对话框窗口全绿**（+1 存储：改名/删除/批量/用量；+2 筛选；+1 呈现；+3 标签对话框；+1 面板窗口：标签筛选与悬空条件；+1 面板窗口：详情 chips 的 × 与只读态；+1 对话框窗口：词典换行不关窗）；`cargo test -p rds-workbench -j 1 --lib --test ui_contract` 95 + 7 全绿（`Shared` 白名单 +`tag_dialog`） | — |
+
+**三处刻意的取舍**：
+
+1. **标签颜色不上色**：`analytics_tags.color` 是用户填的 hex，而颜色一律走主题 token（原型 §6 零裸色）——先用“淡边 + 文字”的 chip，颜色留给后续“按颜色分组”一类需求再谈；
+2. **多选是并集**：“同时打两个标签”是更细的诉求，靠筛选器表达会多一个没人看得懂的语义；
+3. **× 不要确认**：去标签是可两步恢复的动作，弹确认框比误点代价还大。
+
+**未落地**：分组的建/改/删/移与面板的分组折叠区（P2.2）、`F2` 重命名（等重命名入口）、批量打标签（多选态，P2.5）、更多排序键（需 `ArchiveRow` 带原始值）、`keepVersions` 接设置项（P2.4）。
 
 ### 2026-09-18 — P0.8 + Phase 3 第三刀：项目级回收站（上提中性化 → 移入 / 还原 / 永久删除 / 清空 + 对话框）
 
@@ -462,7 +482,7 @@
 
 | # | 任务 | 落点 | 验收 |
 | --- | --- | --- | --- |
-| P2.1 | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 | `src/tag.rs`、`src/tag_view.rs` | 同名（未删）拒绝；删除标签清关联 |
+| P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，Phase 2 第一刀）**：`rename_tag` / `delete_tag`（清关联）/ `tags_by_resource` / `tag_usage_counts` + `dialogs/tag.rs` + 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板与筛选菜单里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
 | P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头） | `src/folder.rs`（语义为分组）、`src/folder_view.rs` | 折叠状态持久化；空分组可见 |
 | P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本） | `src/resource.rs`、`src/resource_view.rs` | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
 | P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1） | `crates/settings`、`src/service.rs` | 重启后保持 |

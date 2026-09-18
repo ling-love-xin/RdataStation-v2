@@ -26,6 +26,7 @@ use chrono::Utc;
 use engine::persistence::project_db::ProjectDatabaseManager;
 
 use analytics_resource::dialogs::index_repair::{RepairAction, RepairRow};
+use analytics_resource::dialogs::tag::{TagChoice, TagDialogSeed};
 use analytics_resource::dialogs::trash::{ForeignTrash, TrashAction, TrashDialogSeed};
 use analytics_resource::dialogs::version::{VersionAction, VersionDialogSeed};
 use analytics_resource::payload::PayloadStore;
@@ -117,6 +118,33 @@ struct TrashActionJob {
     action: TrashAction,
 }
 
+/// 一次标签取数任务（全部标签 + 这条存档已挂的）。
+struct TagListJob {
+    project_root: PathBuf,
+    resource_id: String,
+    resource_name: String,
+}
+
+/// 标签动作（作业侧的形态：对话框的 `TagDialogEvent` 多一种“去掉单个”）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TagJobAction {
+    /// 提交勾选差集。
+    Apply { add: Vec<String>, remove: Vec<String> },
+    /// 新建一个标签并直接打上。
+    CreateAndTag { name: String },
+    /// 去掉一个标签（详情面板 chip 上的 ×）。
+    RemoveOne { tag_id: String },
+}
+
+/// 一次标签动作任务。
+struct TagActionJob {
+    project_root: PathBuf,
+    read_only: bool,
+    resource_id: String,
+    resource_name: String,
+    action: TagJobAction,
+}
+
 /// 版本历史取数结果（宿主据此开窗，或刷新已经开着的那个窗）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionRows {
@@ -128,6 +156,14 @@ pub struct VersionRows {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexScanRows {
     pub rows: Vec<RepairRow>,
+}
+
+/// 标签对话框取数结果（宿主据此开窗，或刷新已经开着的那个窗）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagRows {
+    pub resource_id: String,
+    pub resource_name: String,
+    pub seed: TagDialogSeed,
 }
 
 /// 队列里的作业。
@@ -143,6 +179,8 @@ enum Job {
     IndexRepairAction(IndexRepairActionJob),
     TrashList(TrashListJob),
     TrashAction(TrashActionJob),
+    TagList(TagListJob),
+    TagAction(TagActionJob),
 }
 
 /// 动作回执（工作线程 → 事件路径）。
@@ -175,6 +213,8 @@ pub enum OpOutcome {
     RepairDone { note: String },
     /// 回收站动作完成（还原 / 永久删除 / 清空，`note` 已是一句有信息量的话）。
     TrashDone { note: String },
+    /// 标签动作完成（打标 / 去标 / 新建，`note` 已是一句有信息量的话）。
+    TagDone { note: String },
     /// 失败：动作名 + 原因（原因原样来自服务层，已含可操作信息）。
     Failed { action: &'static str, reason: String },
 }
@@ -193,6 +233,8 @@ struct Jobs {
     index_scan: Mutex<Option<Result<IndexScanRows, String>>>,
     /// 回收站槽：只留最新一份（回收站对话框一次只开一个）。
     trash_rows: Mutex<Option<Result<TrashDialogSeed, String>>>,
+    /// 标签槽：只留最新一份（标签对话框一次只开一个）。
+    tag_rows: Mutex<Option<Result<TagRows, String>>>,
 }
 
 static JOBS: OnceLock<Jobs> = OnceLock::new();
@@ -212,6 +254,7 @@ fn jobs() -> &'static Jobs {
             versions: Mutex::new(None),
             index_scan: Mutex::new(None),
             trash_rows: Mutex::new(None),
+            tag_rows: Mutex::new(None),
         }
     })
 }
@@ -295,6 +338,23 @@ fn worker(rx: mpsc::Receiver<Job>) {
                     project_root: job.project_root.clone(),
                 }));
                 *lock(&jobs().trash_rows) = Some(result);
+                refresh_after_op(&rt, job.project_root, job.read_only);
+            }
+            Job::TagList(job) => {
+                let result = rt.block_on(load_tag_rows(&job));
+                *lock(&jobs().tag_rows) = Some(result);
+            }
+            Job::TagAction(job) => {
+                let outcome = rt.block_on(run_tag_action(&job));
+                *lock(&jobs().op_result) = Some(outcome);
+                // 打标改的是关联与标签词典：既刷新已开的标签对话框，也重取主列表
+                // （行的 `tag_ids` 与详情的 chips 都在快照里）。
+                let result = rt.block_on(load_tag_rows(&TagListJob {
+                    project_root: job.project_root.clone(),
+                    resource_id: job.resource_id.clone(),
+                    resource_name: job.resource_name.clone(),
+                }));
+                *lock(&jobs().tag_rows) = Some(result);
                 refresh_after_op(&rt, job.project_root, job.read_only);
             }
         }
@@ -745,6 +805,127 @@ async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
     }
 }
 
+/// 取标签词典 + 这条存档已挂的标签 → 对话框取数结果（工作线程上执行）。
+async fn load_tag_rows(job: &TagListJob) -> Result<TagRows, String> {
+    let manager = ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE)
+        .await
+        .map_err(|e| format!("打开项目库失败：{e}"))?;
+    let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+
+    let tags = store
+        .list_tags(Some("project"))
+        .await
+        .map_err(|e| format!("读取标签失败：{e}"))?;
+    let counts = store.tag_usage_counts().await.unwrap_or_default();
+    let selected = store
+        .get_tags_for_resource(&job.resource_id)
+        .await
+        .map_err(|e| format!("读取存档标签失败：{e}"))?
+        .into_iter()
+        .map(|tag| tag.id)
+        .collect();
+
+    Ok(TagRows {
+        resource_id: job.resource_id.clone(),
+        resource_name: job.resource_name.clone(),
+        seed: TagDialogSeed {
+            resource_name: job.resource_name.clone(),
+            options: analytics_resource::present::tag_options(&tags, &counts)
+                .into_iter()
+                .map(|option| TagChoice {
+                    id: option.id,
+                    name: option.name,
+                    count: option.count,
+                })
+                .collect(),
+            selected,
+        },
+    })
+}
+
+/// 执行一次标签动作（工作线程上执行）。
+///
+/// 不静默降级：删一个不存在的标签、建一个重名标签都会报错（服务层的错误文案已可读）；
+/// 逐条打/去标**不做预回滚**（部分成功就部分成功，错误里说清做到哪一步）。
+async fn run_tag_action(job: &TagActionJob) -> OpOutcome {
+    let manager = match ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE).await {
+        Ok(manager) => manager,
+        Err(reason) => {
+            return OpOutcome::Failed {
+                action: "标签",
+                reason: format!("打开项目库失败：{reason}"),
+            };
+        }
+    };
+    let store = AnalyticsResourceStore::new(manager.sqlite_pool());
+
+    match &job.action {
+        TagJobAction::Apply { add, remove } => {
+            let mut done: Vec<String> = Vec::new();
+            for tag_id in remove {
+                if let Err(error) = store.remove_tag_from_resource(&job.resource_id, tag_id).await {
+                    return OpOutcome::Failed {
+                        action: "去标签",
+                        reason: format!("{error}（本次已改 {} 个）", done.len()),
+                    };
+                }
+                done.push(tag_id.clone());
+            }
+            for tag_id in add {
+                if let Err(error) = store.add_tag_to_resource(&job.resource_id, tag_id).await {
+                    return OpOutcome::Failed {
+                        action: "打标签",
+                        reason: format!("{error}（本次已改 {} 个）", done.len()),
+                    };
+                }
+                done.push(tag_id.clone());
+            }
+            OpOutcome::TagDone {
+                note: format!("已更新「{}」的标签（改了 {} 个）", job.resource_name, done.len()),
+            }
+        }
+        TagJobAction::CreateAndTag { name } => {
+            let tag = match store
+                .create_tag(analytics_resource::models::CreateTagRequest {
+                    name: name.clone(),
+                    scope: "project".to_string(),
+                    color: None,
+                    icon: None,
+                })
+                .await
+            {
+                Ok(tag) => tag,
+                Err(error) => {
+                    return OpOutcome::Failed {
+                        action: "新建标签",
+                        reason: error.to_string(),
+                    };
+                }
+            };
+            match store.add_tag_to_resource(&job.resource_id, &tag.id).await {
+                Ok(()) => OpOutcome::TagDone {
+                    note: format!("已新建标签「{}」并打上（{}）", tag.name, job.resource_name),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "打标签",
+                    reason: format!("标签「{}」已建好，但没打上：{error}", tag.name),
+                },
+            }
+        }
+        TagJobAction::RemoveOne { tag_id } => {
+            match store.remove_tag_from_resource(&job.resource_id, tag_id).await {
+                Ok(()) => OpOutcome::TagDone {
+                    note: format!("已去掉「{}」的一个标签", job.resource_name),
+                },
+                Err(error) => OpOutcome::Failed {
+                    action: "去标签",
+                    reason: error.to_string(),
+                },
+            }
+        }
+    }
+}
+
 /// 取行 → 扫描 → 组装快照（工作线程上执行）。
 async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
     let manager = ProjectDatabaseManager::open(&job.project_root, SQLITE_POOL_SIZE)
@@ -763,6 +944,20 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         .version_counts()
         .await
         .map_err(|e| format!("读取版本历史失败：{e}"))?;
+    // 标签两件事都**一次查完**（与版本数同理）：按行的映射给详情 chips 与筛选维，
+    // 词典给筛选菜单；两者都做成逐行查询就是 2N 次往返。
+    let tags_by_resource = store
+        .tags_by_resource()
+        .await
+        .map_err(|e| format!("读取存档标签失败：{e}"))?;
+    let tag_dictionary = {
+        let tags = store
+            .list_tags(Some("project"))
+            .await
+            .map_err(|e| format!("读取标签失败：{e}"))?;
+        let counts = store.tag_usage_counts().await.unwrap_or_default();
+        analytics_resource::present::tag_options(&tags, &counts)
+    };
     // 扫描只报告、不改状态（`IndexRepair` 的硬原则），可安全地反复调用。
     let report = IndexRepair::new(&payload, &store)
         .scan()
@@ -790,6 +985,8 @@ async fn refresh(job: &RefreshJob) -> Result<ResourcesSnapshot, String> {
         &rows,
         &statuses,
         &history_counts,
+        &tags_by_resource,
+        tag_dictionary,
         job.read_only,
         Utc::now(),
     ))
@@ -961,6 +1158,39 @@ pub fn enqueue_trash_action(project_root: PathBuf, read_only: bool, action: Tras
     let _ = jobs().tx.send(Job::TrashAction(TrashActionJob {
         project_root,
         read_only,
+        action,
+    }));
+}
+
+/// 取走最新标签取数结果（未就绪时 `None`）。
+pub fn drain_tag_rows() -> Option<Result<TagRows, String>> {
+    lock(&jobs().tag_rows).take()
+}
+
+/// 提交一次标签取数（**事件路径**调用：详情面板「＋ 标签」）。
+pub fn enqueue_tag_list(project_root: PathBuf, resource_id: String, resource_name: String) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::TagList(TagListJob {
+        project_root,
+        resource_id,
+        resource_name,
+    }));
+}
+
+/// 提交一次标签动作（**事件路径**调用：标签对话框的提交、详情 chip 的 ×）。
+pub fn enqueue_tag_action(
+    project_root: PathBuf,
+    read_only: bool,
+    resource_id: String,
+    resource_name: String,
+    action: TagJobAction,
+) {
+    jobs().pending.fetch_add(1, Ordering::SeqCst);
+    let _ = jobs().tx.send(Job::TagAction(TagActionJob {
+        project_root,
+        read_only,
+        resource_id,
+        resource_name,
         action,
     }));
 }

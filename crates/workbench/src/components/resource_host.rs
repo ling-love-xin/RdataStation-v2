@@ -581,6 +581,50 @@ impl ResourcesHost for WorkbenchResourceHost {
         self.notice("资产库：正在读取回收站…", cx);
     }
 
+    fn request_edit_tags(
+        &self,
+        resource_id: &str,
+        resource_name: &str,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(root) = self.require_project("无法编辑标签", cx) else {
+            return;
+        };
+        // 取数在后台线程（标签词典 + 这条存档已挂的）；回来之后由侧栏轮询开窗。
+        resource_jobs::enqueue_tag_list(root, resource_id.to_string(), resource_name.to_string());
+        self.notice("资产库：正在读取标签…", cx);
+    }
+
+    fn request_remove_tag(
+        &self,
+        detail: &ArchiveDetail,
+        tag_id: &str,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(root) = self.require_project("无法去标签", cx) else {
+            return;
+        };
+        if self.read_only() {
+            self.notice("资产库：项目为只读模式，不能改标签", cx);
+            return;
+        }
+        // 作业在侧栏跑（回执与刷新同一条路）：去标签会改快照里的 chips 与筛选维，
+        // 所以入队后立刻要一次刷新。
+        resource_jobs::enqueue_tag_action(
+            root,
+            self.read_only(),
+            detail.id.clone(),
+            detail.name.clone(),
+            resource_jobs::TagJobAction::RemoveOne {
+                tag_id: tag_id.to_string(),
+            },
+        );
+        self.shared.refresh_resources(cx);
+        self.notice(format!("资产库：正在去掉「{}」的一个标签…", detail.name), cx);
+    }
+
     fn request_refresh(&self, _window: &mut Window, cx: &mut App) {
         // 刷新不写回执：状态行的「加载中…」就是它的回执，再叠一条只是噪声。
         if self.shared.project_root().is_none() {

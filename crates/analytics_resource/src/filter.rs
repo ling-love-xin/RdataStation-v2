@@ -64,14 +64,22 @@ pub struct ResourcesFilter {
     pub query: String,
     /// 种类多选（空 = 不限）。
     pub kinds: Vec<ArchiveKind>,
-    /// 只看需要处理的异常（缺失 / 内容已变），对应状态行的"修复…"场景。
+    /// 标签多选（**存 id**：名字会改，id 不会；空 = 不限）。
+    ///
+    /// 多选是 **OR**：选中「重要」与「待办」意味着“这两个标签的存档都看”，
+    /// 而不是“同时打两个标签”——后者是更细的诉求，不靠筛选器表达（用户在列表里一眼能看出来）。
+    pub tags: Vec<String>,
+    /// 只看需要处理的异常（缺失 / 内容已变），对应状态行的“修复…”场景。
     pub only_issues: bool,
 }
 
 impl ResourcesFilter {
     /// 是否为空条件（决定面板显示哪一种空态，见模块头注释）。
     pub fn is_empty(&self) -> bool {
-        self.query.trim().is_empty() && self.kinds.is_empty() && !self.only_issues
+        self.query.trim().is_empty()
+            && self.kinds.is_empty()
+            && self.tags.is_empty()
+            && !self.only_issues
     }
 
     /// 勾选 / 取消一个种类（筛选菜单用）。
@@ -101,12 +109,34 @@ impl ResourcesFilter {
         self.kinds.contains(&kind)
     }
 
+    /// 勾选 / 取消一个标签（筛选菜单用）。
+    ///
+    /// 与 [`toggle_kind`](Self::toggle_kind) 不同：标签没有“全选 = 不限”的归一化（标签集合是
+    /// 开放的，全选它没有意义）——逐个勾/取就是它的全部语义。
+    pub fn toggle_tag(&mut self, tag_id: &str) {
+        match self.tags.iter().position(|id| id == tag_id) {
+            Some(index) => {
+                self.tags.remove(index);
+            }
+            None => self.tags.push(tag_id.to_string()),
+        }
+    }
+
+    pub fn has_tag(&self, tag_id: &str) -> bool {
+        self.tags.iter().any(|id| id == tag_id)
+    }
+
+    /// 抹掉一个不再存在的标签（标签被删后清悬空条件，与选择集的悬空清理同一个道理）。
+    pub fn drop_tag(&mut self, tag_id: &str) {
+        self.tags.retain(|id| id != tag_id);
+    }
+
     /// 菜单里设的条件个数（**不含搜索词**）。
     ///
     /// 搜索词在输入框里看得见，算进来会让"筛选 N"这个徽标口径混乱；它只负责数
     /// "必须开菜单才能看出来"的那几维。
     pub fn menu_dims(&self) -> usize {
-        self.kinds.len() + usize::from(self.only_issues)
+        self.kinds.len() + self.tags.len() + usize::from(self.only_issues)
     }
 
     /// 单行是否命中。
@@ -119,6 +149,9 @@ impl ResourcesFilter {
             }
         }
         if !self.kinds.is_empty() && !self.kinds.contains(&row.kind) {
+            return false;
+        }
+        if !self.tags.is_empty() && !row.tag_ids.iter().any(|id| self.tags.contains(id)) {
             return false;
         }
         if self.only_issues && row.status == ArchiveStatus::Normal {
@@ -183,6 +216,14 @@ mod tests {
             version,
             status,
             tail: tail.to_string(),
+            tag_ids: Vec::new(),
+        }
+    }
+
+    fn row_with_tags(id: &str, tags: &[&str]) -> ArchiveRow {
+        ArchiveRow {
+            tag_ids: tags.iter().map(|t| t.to_string()).collect(),
+            ..row(id, id, ArchiveKind::File, ArchiveStatus::Normal, 1, "")
         }
     }
 
@@ -305,5 +346,49 @@ mod tests {
         assert_eq!(filter.menu_dims(), 0);
         filter.only_issues = true;
         assert_eq!(filter.menu_dims(), 1);
+    }
+
+    /// 标签筛选：多选是 OR（“这两个标签的存档都看”），没有“全选 = 不限”的归一化。
+    #[test]
+    fn tag_filter_is_multi_select_or() {
+        let rows = vec![
+            row_with_tags("ar_1", &["at_a"]),
+            row_with_tags("ar_2", &["at_b"]),
+            row_with_tags("ar_3", &["at_a", "at_b"]),
+            row_with_tags("ar_4", &[]),
+        ];
+        let mut filter = ResourcesFilter::default();
+        assert_eq!(apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(), 4);
+
+        filter.toggle_tag("at_a");
+        assert!(filter.has_tag("at_a"));
+        assert!(!filter.is_empty(), "选了标签就是真筛选（空库不该显示“没有匹配”）");
+        assert_eq!(
+            apply_view(&rows, &filter, SortField::Name, SortOrder::Asc)
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ar_1", "ar_3"]
+        );
+
+        // 再选一个 = 并集（不是交集）。
+        filter.toggle_tag("at_b");
+        assert_eq!(apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(), 3);
+        assert_eq!(filter.menu_dims(), 2);
+
+        // 再点一次取消勾选。
+        filter.toggle_tag("at_a");
+        assert!(!filter.has_tag("at_a"));
+        assert_eq!(apply_view(&rows, &filter, SortField::Name, SortOrder::Asc).len(), 2);
+    }
+
+    /// 标签被删后要能抹掉悬空条件（否则列表会“什么都没匹配”，而菜单上的勾还在）。
+    #[test]
+    fn drop_tag_removes_a_stale_condition() {
+        let mut filter = ResourcesFilter::default();
+        filter.toggle_tag("at_a");
+        filter.drop_tag("at_a");
+        assert!(filter.is_empty());
+        assert_eq!(filter.menu_dims(), 0);
     }
 }

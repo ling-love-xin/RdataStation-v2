@@ -22,6 +22,7 @@ use gpui_kit::*;
 use crate::view::LeftPanel;
 
 use analytics_resource::dialogs::index_repair::{RepairDialogState, open_index_repair_dialog};
+use analytics_resource::dialogs::tag::{TagDialogState, open_tag_dialog};
 use analytics_resource::dialogs::trash::{TrashDialogState, open_trash_dialog};
 use analytics_resource::dialogs::version::{VersionDialogState, open_version_dialog};
 use analytics_resource::resource_view::ResourcesPanel;
@@ -229,6 +230,60 @@ impl SidebarPanel {
         );
     }
 
+    /// 消费「待开的标签对话框」（M6）：与版本历史同一形态（针对某条存档）。
+    ///
+    /// 输入实体在这里建（开窗要 `Window`，轮询任务里没有）；会话带 `resource_id`——
+    /// 换一条存档要重开（同一存档再要一次只是刷新行）。
+    fn ensure_tag_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(rows) = self.shared.tag_dialog.borrow_mut().pending.take() else {
+            return;
+        };
+        let read_only = self.shared.project_ui.borrow().read_only;
+        let state = TagDialogState::new(rows.seed.selected.clone());
+        state.set_read_only(read_only);
+        state.set_options(rows.seed.options.clone());
+        let name_input = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx).placeholder("新建标签")
+        });
+        {
+            let mut flow = self.shared.tag_dialog.borrow_mut();
+            flow.session = Some(shared::TagDialogSession {
+                resource_id: rows.resource_id.clone(),
+                state: state.clone(),
+            });
+        }
+
+        let entity = cx.entity();
+        let shared_for_close = self.shared.clone();
+        let resource_id = rows.resource_id.clone();
+        let resource_name = rows.resource_name.clone();
+        let seed = rows.seed.clone();
+        open_tag_dialog(
+            window,
+            cx,
+            seed,
+            state,
+            name_input,
+            move |event, _window, cx| {
+                entity.update(cx, |this, cx| {
+                    this.request_tag_action(&resource_id, &resource_name, event, cx)
+                });
+            },
+            move |_cx| {
+                let mut flow = shared_for_close.tag_dialog.borrow_mut();
+                // 只清“当前这一条”的会话：已经换成另一条存档时不动它（与版本历史同门口径）。
+                let same = flow
+                    .session
+                    .as_ref()
+                    .map(|session| session.resource_id.as_str())
+                    == Some(rows.resource_id.as_str());
+                if same {
+                    flow.session = None;
+                }
+            },
+        );
+    }
+
     fn render_plugin_placeholder(&self, fg: Hsla) -> Div {
         div()
             .v_flex()
@@ -270,10 +325,11 @@ impl Focusable for SidebarPanel {
 
 impl Render for SidebarPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // M6：版本历史 / 索引修复 / 回收站三个对话框的待开数据都在这一帧消费（开窗要 `Window`）。
+        // M6：版本历史 / 索引修复 / 回收站 / 标签四个对话框的待开数据都在这一帧消费（开窗要 `Window`）。
         self.ensure_version_dialog(window, cx);
         self.ensure_repair_dialog(window, cx);
         self.ensure_trash_dialog(window, cx);
+        self.ensure_tag_dialog(window, cx);
         let bg = cx.theme().colors.background;
         let fg = cx.theme().colors.foreground;
         let active = self.shared.active_left.get();

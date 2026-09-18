@@ -11,14 +11,18 @@ use chrono::{DateTime, Utc};
 
 use engine::persistence::trash::{TrashEntry, TrashKind};
 
-use crate::detail_view::ArchiveDetail;
+use crate::detail_view::{ArchiveDetail, ArchiveTagChip};
 use crate::dialogs::index_repair::{RepairGroup, RepairRow};
 use crate::dialogs::trash::TrashRow;
 use crate::dialogs::version::VersionRow;
 use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
 use crate::payload::RESOURCES_DIR_NAME;
-use crate::resource_view::{ArchiveCounts, ArchiveRow, ResourcesSnapshot};
+use crate::resource_view::{ArchiveCounts, ArchiveRow, ResourcesSnapshot, TagOption};
 use crate::AnalyticsResource;
+
+/// 按资源的标签映射：`resource_id → 标签行`（来自 `AnalyticsResourceStore::tags_by_resource`，
+/// 一次查完；逐行查会把一次刷新变成 N+1 次查询）。
+pub type ResourceTags = std::collections::HashMap<String, Vec<crate::models::AnalyticsTag>>;
 
 /// 单行状态映射：`resource_id → 状态`（来自 `IndexRepair::scan` 的结果）。
 pub type ArchiveStatuses = std::collections::HashMap<String, ArchiveStatus>;
@@ -171,10 +175,11 @@ pub fn build_trash_snapshot(entries: &[TrashEntry]) -> TrashSnapshot {
     TrashSnapshot { rows, foreign }
 }
 
-/// 单行转换（状态缺省 `Normal`）。
+/// 单行转换（状态缺省 `Normal`；标签 id 从 `tags` 映射取，缺即无标签）。
 pub fn to_row(
     resource: &AnalyticsResource,
     statuses: &ArchiveStatuses,
+    tags: &ResourceTags,
     now: DateTime<Utc>,
 ) -> ArchiveRow {
     let kind = ArchiveKind::from_db_str(&resource.kind);
@@ -189,7 +194,36 @@ pub fn to_row(
         version: resource.version,
         status,
         tail: tail_for(resource, kind, now),
+        // 筛标签维只比 id（名字会改）；详情里的 chip 名字另由 `to_detail` 给。
+        tag_ids: tags
+            .get(&resource.id)
+            .map(|list| list.iter().map(|tag| tag.id.clone()).collect())
+            .unwrap_or_default(),
     }
+}
+
+/// 标签行模型 → chip（视图只认 id + 名字，不关心 color / scope）。
+pub fn tag_chips(tags: &[crate::models::AnalyticsTag]) -> Vec<ArchiveTagChip> {
+    tags.iter()
+        .map(|tag| ArchiveTagChip {
+            id: tag.id.clone(),
+            name: tag.name.clone(),
+        })
+        .collect()
+}
+
+/// 标签字典 + 用量 → 视图层的选项（筛选菜单与打标对话框共用）。
+pub fn tag_options(
+    tags: &[crate::models::AnalyticsTag],
+    counts: &std::collections::HashMap<String, i64>,
+) -> Vec<TagOption> {
+    tags.iter()
+        .map(|tag| TagOption {
+            id: tag.id.clone(),
+            name: tag.name.clone(),
+            count: counts.get(&tag.id).copied().unwrap_or(0).max(0) as usize,
+        })
+        .collect()
 }
 
 /// 单行 → 详情快照（详情面板只读，格式化在这里做完）。
@@ -200,6 +234,7 @@ pub fn to_detail(
     resource: &AnalyticsResource,
     status: ArchiveStatus,
     history_count: i64,
+    tags: &[ArchiveTagChip],
 ) -> ArchiveDetail {
     let kind = ArchiveKind::from_db_str(&resource.kind);
     // 与行的尾巴同一口径：文件型给体积、分析表型给规模、引用型不给（不假装有值）。
@@ -230,8 +265,9 @@ pub fn to_detail(
         } else {
             String::new()
         },
-        // 标签与分组属 Phase 2（那时才有按行的标签数据与分组列），此处不编造。
-        tags: Vec::new(),
+        // 标签与分组：标签由调用方给的映射提供（`tags_by_resource`，一次查完）；
+        // 分组属 Phase 2 余下那一刀（需要 `analytics_resource_folder` 的按行查询），此处不编造。
+        tags: tags.to_vec(),
         group: None,
     }
 }
@@ -407,7 +443,7 @@ fn file_name_of(rel_path: &str) -> String {
         .to_string()
 }
 
-/// 组装面板快照：行（按状态与种类计分）+ 计数 + 只读标志。
+/// 组装面板快照：行（按状态与种类计分）+ 计数 + 只读标志 + 标签字典。
 ///
 /// 计数口径与状态行文案一一对应：`缺失` 与 `索引异常`（内容已变）各自计数，
 /// 因为它们在上是两个不同的可点入口（都进索引修复，但处理方式不同）。
@@ -415,6 +451,8 @@ pub fn build_snapshot(
     resources: &[AnalyticsResource],
     statuses: &ArchiveStatuses,
     history_counts: &VersionCounts,
+    tags_by_resource: &ResourceTags,
+    tag_dictionary: Vec<TagOption>,
     read_only: bool,
     now: DateTime<Utc>,
 ) -> ResourcesSnapshot {
@@ -426,7 +464,7 @@ pub fn build_snapshot(
     let mut details = std::collections::HashMap::with_capacity(resources.len());
 
     for resource in resources {
-        let row = to_row(resource, statuses, now);
+        let row = to_row(resource, statuses, tags_by_resource, now);
         match row.status {
             ArchiveStatus::Missing => counts.missing += 1,
             ArchiveStatus::ContentChanged => counts.drifted += 1,
@@ -437,9 +475,13 @@ pub fn build_snapshot(
             },
         }
         let history_count = history_counts.get(&resource.id).copied().unwrap_or(0);
+        let chips = tags_by_resource
+            .get(&resource.id)
+            .map(|tags| tag_chips(tags))
+            .unwrap_or_default();
         details.insert(
             resource.id.clone(),
-            to_detail(resource, row.status, history_count),
+            to_detail(resource, row.status, history_count, &chips),
         );
         rows.push(row);
     }
@@ -449,19 +491,21 @@ pub fn build_snapshot(
         counts,
         read_only,
         details,
+        tags: tag_dictionary,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveStatuses, VersionCounts, build_repair_rows, build_snapshot, build_trash_snapshot,
-        build_version_rows, format_relative_time, format_scale, format_size, format_timestamp,
-        tail_for,
+        ArchiveStatuses, ResourceTags, VersionCounts, build_repair_rows, build_snapshot,
+        build_trash_snapshot, build_version_rows, format_relative_time, format_scale, format_size,
+        format_timestamp, tail_for,
     };
     use crate::dialogs::index_repair::RepairGroup;
     use crate::model::{ArchiveKind, ArchiveStatus, ORIGIN_RESOURCES};
     use crate::models::{AnalyticsResource, ResourceVersion};
+    use crate::resource_view::TagOption;
     use crate::{IndexIssue, IndexScanReport};
     use chrono::{DateTime, Duration, Utc};
     use engine::persistence::trash::{TrashEntry, TrashKind};
@@ -695,7 +739,15 @@ mod tests {
         let mut counts = VersionCounts::new();
         counts.insert("ar_analysis".to_string(), 3);
 
-        let snapshot = build_snapshot(&resources, &ArchiveStatuses::new(), &counts, false, now);
+        let snapshot = build_snapshot(
+            &resources,
+            &ArchiveStatuses::new(),
+            &counts,
+            &ResourceTags::new(),
+            Vec::new(),
+            false,
+            now,
+        );
 
         let file = snapshot.details.get("ar_file").expect("文件型详情");
         assert_eq!(file.size_label, "1.2 KB", "文件型给体积");
@@ -711,6 +763,50 @@ mod tests {
 
         let table_ref = snapshot.details.get("ar_ref").expect("引用型详情");
         assert_eq!(table_ref.size_label, "", "引用型不给体积（不假装有值）");
+    }
+
+    /// 标签进快照：行带 id（筛选维用）、详情带 chip（显示用）、顶层带词典（筛选菜单用）。
+    #[test]
+    fn snapshot_carries_tags_for_rows_details_and_dictionary() {
+        let now = Utc::now();
+        let resources = vec![
+            row_model("ar_1", "file", Some(10)),
+            row_model("ar_2", "file", Some(10)),
+        ];
+        let mut tags = ResourceTags::new();
+        tags.insert(
+            "ar_1".to_string(),
+            vec![crate::models::AnalyticsTag {
+                id: "at_1".to_string(),
+                name: "报表".to_string(),
+                color: None,
+                icon: None,
+                scope: "project".to_string(),
+                created_at: now,
+                deleted_at: None,
+            }],
+        );
+        let dictionary = vec![TagOption {
+            id: "at_1".to_string(),
+            name: "报表".to_string(),
+            count: 1,
+        }];
+
+        let snapshot = build_snapshot(
+            &resources,
+            &ArchiveStatuses::new(),
+            &VersionCounts::new(),
+            &tags,
+            dictionary,
+            false,
+            now,
+        );
+
+        assert_eq!(snapshot.rows[0].tag_ids, vec!["at_1".to_string()]);
+        assert!(snapshot.rows[1].tag_ids.is_empty(), "没挂标签的行是空集，不是缺字段");
+        assert_eq!(snapshot.details["ar_1"].tags[0].name, "报表");
+        assert!(snapshot.details["ar_2"].tags.is_empty());
+        assert_eq!(snapshot.tags.len(), 1);
     }
 
     #[test]
@@ -736,7 +832,15 @@ mod tests {
         statuses.insert("ar_4".to_string(), ArchiveStatus::Missing);
         statuses.insert("ar_5".to_string(), ArchiveStatus::ContentChanged);
 
-        let snapshot = build_snapshot(&resources, &statuses, &VersionCounts::new(), true, now);
+        let snapshot = build_snapshot(
+            &resources,
+            &statuses,
+            &VersionCounts::new(),
+            &ResourceTags::new(),
+            Vec::new(),
+            true,
+            now,
+        );
 
         assert_eq!(snapshot.rows.len(), 5);
         assert_eq!(snapshot.counts.total, 5);

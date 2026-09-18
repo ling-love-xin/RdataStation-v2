@@ -18,12 +18,13 @@ use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
 use analytics_resource::dialogs::index_repair::RepairAction;
+use analytics_resource::dialogs::tag::TagDialogEvent;
 use analytics_resource::dialogs::trash::TrashAction;
 use analytics_resource::dialogs::version::VersionAction;
 use analytics_resource::resource_view::{ResourcesPanel, ResourcesSnapshot};
 
 use super::SidebarPanel;
-use crate::services::resource_jobs;
+use crate::services::resource_jobs::{self, TagJobAction};
 
 impl SidebarPanel {
     /// 创建资产库面板实体（在 `SidebarPanel::new` 里调用，无 I/O）。
@@ -123,6 +124,53 @@ impl SidebarPanel {
         self.ensure_resources_pump(cx);
     }
 
+    /// 执行一个标签动作（标签对话框的提交与详情 chip 的 × 经此入队）。
+    ///
+    /// 忙态由对话框 / 面板自己置上，这里只负责校验与送作业。
+    pub(crate) fn request_tag_action(
+        &self,
+        resource_id: &str,
+        resource_name: &str,
+        event: TagDialogEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let read_only = self.shared.project_ui.borrow().read_only;
+        let Some(root) = self.shared.project_root() else {
+            self.finish_tag_action("还没有打开项目".to_string(), cx);
+            return;
+        };
+        if read_only {
+            self.finish_tag_action("项目为只读模式，不能改标签".to_string(), cx);
+            return;
+        }
+        let action = match event {
+            TagDialogEvent::Apply { add, remove } => TagJobAction::Apply { add, remove },
+            TagDialogEvent::CreateAndTag { name } => TagJobAction::CreateAndTag { name },
+        };
+        resource_jobs::enqueue_tag_action(
+            root,
+            read_only,
+            resource_id.to_string(),
+            resource_name.to_string(),
+            action,
+        );
+        self.ensure_resources_pump(cx);
+    }
+
+    /// 收掉标签对话框的忙态并给状态栏回执（入队被挡、取数 / 动作失败都走它）。
+    fn finish_tag_action(&self, message: String, cx: &mut Context<Self>) {
+        {
+            let flow = self.shared.tag_dialog.borrow();
+            if let Some(session) = flow.session.as_ref() {
+                session.state.set_busy(false);
+                session.state.set_note(Some(message.clone()));
+            }
+        }
+        *self.shared.notice.borrow_mut() = Some(format!("资产库：{message}"));
+        self.shared.notify_host(cx);
+        cx.notify();
+    }
+
     /// 收掉回收站对话框的忙态并给状态栏回执（入队被挡、取数 / 动作失败都走它）。
     fn finish_trash_action(&self, message: String, cx: &mut Context<Self>) {
         {
@@ -214,6 +262,14 @@ impl SidebarPanel {
                 if let Some(result) = resource_jobs::drain_trash_rows() {
                     if weak
                         .update(cx, |this, cx| this.apply_trash_rows(result, cx))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                if let Some(result) = resource_jobs::drain_tag_rows() {
+                    if weak
+                        .update(cx, |this, cx| this.apply_tag_rows(result, cx))
                         .is_err()
                     {
                         return;
@@ -352,6 +408,45 @@ impl SidebarPanel {
         }
     }
 
+    /// 回填一份标签取数结果（开窗 / 换行都由它驱动，与 `apply_versions` 同形）。
+    ///
+    /// 会话带 `resource_id`：同一条存档才复用已开的窗（换行 + 对齐比较基准），
+    /// 不然就置 `pending` 重开一个新窗。
+    fn apply_tag_rows(
+        &mut self,
+        result: Result<resource_jobs::TagRows, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(rows) => {
+                let mut opened = false;
+                {
+                    let mut flow = self.shared.tag_dialog.borrow_mut();
+                    if let Some(session) = flow.session.as_ref() {
+                        if session.resource_id == rows.resource_id {
+                            session.state.set_busy(false);
+                            session.state.set_note(None);
+                            session.state.set_options(rows.seed.options.clone());
+                            // 新状态即新比较基准：不然刚打完就显示“本次改动：去 1 个”。
+                            session.state.reset_selection(rows.seed.selected.clone());
+                            opened = true;
+                        }
+                    }
+                    if !opened {
+                        flow.pending = Some(rows);
+                    }
+                }
+                if !opened {
+                    self.shared.notify_host(cx);
+                    cx.notify();
+                }
+            }
+            Err(err) => {
+                self.finish_tag_action(format!("读取标签失败：{err}"), cx);
+            }
+        }
+    }
+
     /// 动作回执：状态栏文案 +（取回时）顺手打开 + 失败原样转述。
     ///
     /// 文案在**这里**组装（不在工作线程）：换算相对路径要项目根，写状态栏要 `Shared`——
@@ -405,6 +500,8 @@ impl SidebarPanel {
             resource_jobs::OpOutcome::RepairDone { note } => format!("资产库：{note}"),
             // 回收站动作（还原 / 永久删除 / 清空）：对话框自己会换行，状态栏只把话说清。
             resource_jobs::OpOutcome::TrashDone { note } => format!("资产库：{note}"),
+            // 标签动作（打标 / 去标 / 新建）：同上。
+            resource_jobs::OpOutcome::TagDone { note } => format!("资产库：{note}"),
             resource_jobs::OpOutcome::Failed { action, reason } => {
                 format!("资产库：{action}失败：{reason}")
             }

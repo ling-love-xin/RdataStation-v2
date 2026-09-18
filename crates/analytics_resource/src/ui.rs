@@ -67,3 +67,7 @@ pub const TRASH_COL_TIME: f32 = 7.5;
 pub const TRASH_COL_SIZE: f32 = 4.0;
 /// 见 [`TRASH_COL_NAME`]（两个小按钮：还原 / 永久删除）。
 pub const TRASH_COL_ACTION: f32 = 9.0;
+/// 标签对话框宽（26.0rem = 416px；表单型小对话框：列表 + 一个输入行）。
+pub const TAG_DIALOG_WIDTH: f32 = 26.0;
+/// 标签列表最大高度（16.0rem = 256px）：标签可能几十个，靠滚动而不是加高对话框。
+pub const TAG_LIST_MAX_HEIGHT: f32 = 16.0;

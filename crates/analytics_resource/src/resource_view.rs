@@ -60,6 +60,19 @@ pub struct ArchiveRow {
     pub status: ArchiveStatus,
     /// 尾部字段（按字段优先级规则拼好，见 [`row_tail`]）。
     pub tail: String,
+    /// 这行挂的标签 id（筛选的标签维用它；名字会改，所以比的是 id）。
+    pub tag_ids: Vec<String>,
+}
+
+/// 标签字典项（筛选菜单与打标对话框共用）。
+///
+/// `count` = 有多少条**存活**存档在用这个标签（筛选菜单里给个量级；没有它用户不知道
+/// 勾了这个标签会不会得到空列表）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagOption {
+    pub id: String,
+    pub name: String,
+    pub count: usize,
 }
 
 /// 状态行计数。
@@ -118,6 +131,8 @@ pub struct ResourcesSnapshot {
     pub read_only: bool,
     /// 行 id → 详情快照（右侧详情面板用；与 `rows` 同一次取数产出，不在渲染期补取）。
     pub details: std::collections::HashMap<String, ArchiveDetail>,
+    /// 标签字典（全部存活标签 + 用量）：筛选菜单与打标对话框共用，快照里带一份就不必再查库。
+    pub tags: Vec<TagOption>,
 }
 
 /// 复现强度徽标文案（原型 §3.2：**行内唯一的颜色信号**）。
@@ -252,6 +267,16 @@ pub trait ResourcesHost: 'static {
     /// 收切片而不是单个 id：多选批量与单选走同一条路（批量时确认框与回执要带数量）；
     /// 批量中途失败的错误里会带“本批已移入 N 项”，**不做预回滚**（部分成功就部分成功）。
     fn request_delete(&self, resource_ids: &[String], window: &mut Window, cx: &mut App);
+    /// 打开「标签」对话框（详情面板「＋ 标签」）：勾选/取消标签、顺带新建。
+    ///
+    /// 只收 id 与显示名：对话框的数据由宿主在取数线程上查库得到（与 `request_version_history`
+    /// 同一口径——调用方不必为了一个 id 去克隆整条详情）。
+    fn request_edit_tags(&self, resource_id: &str, resource_name: &str, window: &mut Window, cx: &mut App);
+    /// 去掉一个标签（详情面板 chip 上的 ×）。
+    ///
+    /// 与其它动作同口径：收**面板已有的那条详情**（回执文案要显示名），不回头读面板选中态。
+    /// 不进对话框：点 × 就是“去掉它”，再要一次确认是多余的。
+    fn request_remove_tag(&self, detail: &ArchiveDetail, tag_id: &str, window: &mut Window, cx: &mut App);
     /// 索引修复入口（状态行异常段的「修复…」与面板头「⋯ → 重建索引…」共用）。
     fn request_index_repair(&self, window: &mut Window, cx: &mut App);
     /// 用系统文件管理器打开受管内容根（面板头「⋯ → 打开资源目录」）。
@@ -968,6 +993,10 @@ impl ResourcesPanel {
     /// 宿主推送数据（事件路径调用；面板不自己取数）。
     pub fn set_snapshot(&mut self, snapshot: ResourcesSnapshot, cx: &mut Context<Self>) {
         self.snapshot = snapshot;
+        // 标签被删后清掉悬空条件（否则列表会“什么都没匹配”，而菜单上的勾还在）——
+        // 与选中 / 多选的悬空清理同一个道理，但条件在筛选器里，所以在推送时先清。
+        let alive: Vec<String> = self.snapshot.tags.iter().map(|tag| tag.id.clone()).collect();
+        self.filter.tags.retain(|id| alive.contains(id));
         self.refresh_view_rows(cx);
         cx.notify();
     }
@@ -1000,7 +1029,12 @@ impl ResourcesPanel {
     pub fn toggle_only_issues(&mut self, cx: &mut Context<Self>) {
         self.filter.only_issues = !self.filter.only_issues;
         self.refresh_view_rows(cx);
-        cx.notify();
+    }
+
+    /// 勾选 / 取消一个标签（多选是并集，见 `ResourcesFilter::tags`）。
+    pub fn toggle_tag(&mut self, tag_id: &str, cx: &mut Context<Self>) {
+        self.filter.toggle_tag(tag_id);
+        self.refresh_view_rows(cx);
     }
 
     /// 选排序字段：同一字段再点一次翻转方向；换字段保持当前方向
@@ -1265,6 +1299,7 @@ impl ResourcesPanel {
         let border = cx.theme().colors.border;
         let panel = cx.entity();
         let kinds = self.filter.kinds.clone();
+        let tags = self.filter.tags.clone();
         let only_issues = self.filter.only_issues;
         // 菜单里设了几个条件就标在按钮上：搜索词不计数（它在输入框里看得见）。
         let filter_label = match self.filter.menu_dims() {
@@ -1280,6 +1315,7 @@ impl ResourcesPanel {
             .label(filter_label)
             .dropdown_menu({
                 let panel = panel.clone();
+                let dictionary = self.snapshot.tags.clone();
                 move |menu, _window, _cx| {
                     let mut menu = menu.item(PopupMenuItem::label("种类"));
                     for kind in ArchiveKind::ALL {
@@ -1292,6 +1328,26 @@ impl ResourcesPanel {
                                     target.update(app, |panel, cx| panel.toggle_kind(kind, cx));
                                 }),
                         );
+                    }
+                    // 标签组：一个标签都没有时不摆（空菜单节只会占地方）。
+                    if !dictionary.is_empty() {
+                        menu = menu.separator().item(PopupMenuItem::label("标签"));
+                        for option in &dictionary {
+                            let target = panel.clone();
+                            let is_checked = tags.iter().any(|id| id == &option.id);
+                            let label = format!("{}（{}）", option.name, option.count);
+                            let tag_id = option.id.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .checked(is_checked)
+                                    .on_click(move |_, _, app| {
+                                        let tag_id = tag_id.clone();
+                                        target.update(app, |panel, cx| {
+                                            panel.toggle_tag(&tag_id, cx)
+                                        });
+                                    }),
+                            );
+                        }
                     }
                     menu.separator().item(
                         PopupMenuItem::new("只看需处理")

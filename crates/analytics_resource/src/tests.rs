@@ -293,6 +293,115 @@ mod tests {
         cleanup(dir);
     }
 
+    /// 标签的新建 / 改名 / 删除（P2.1 补 v1 缺失的两项）：同名（未删）一律拒，
+    /// 删除必须连关联一起清（否则“重建同名标签”会把旧归属带回来）。
+    #[tokio::test]
+    async fn t017_tag_rename_and_delete_keep_names_and_links_clean() {
+        let (store, dir) = create_test_store().await;
+        let resource = store
+            .create_resource(CreateResourceRequest {
+                resource_type: "table".to_string(),
+                name: "tagged".to_string(),
+                config: serde_json::json!({}),
+                scope: "project".to_string(),
+                alias: None,
+                source_query: None,
+                column_count: None,
+                file_size: None,
+                row_count: None,
+                parent_resource_id: None,
+            })
+            .await
+            .expect("create");
+        let tag = store
+            .create_tag(CreateTagRequest {
+                name: "重要".to_string(),
+                scope: "project".to_string(),
+                color: None,
+                icon: None,
+            })
+            .await
+            .expect("create tag");
+
+        // 同名（未删）拒绝：错误要能读，而不是 SQLite 的英文原话。
+        let error = store
+            .create_tag(CreateTagRequest {
+                name: "重要".to_string(),
+                scope: "project".to_string(),
+                color: None,
+                icon: None,
+            })
+            .await
+            .expect_err("同名应被拒");
+        assert!(error.to_string().contains("已经有同名标签"), "{error}");
+        // 空名也拒（没有无名标签）。
+        assert!(store
+            .create_tag(CreateTagRequest {
+                name: "   ".to_string(),
+                scope: "project".to_string(),
+                color: None,
+                icon: None,
+            })
+            .await
+            .is_err());
+
+        // 改名：幂等（改成自己）与同名拒绝两条都走一遍。
+        let renamed = store.rename_tag(&tag.id, "重要").await.expect("幂等改名");
+        assert_eq!(renamed.name, "重要");
+        store
+            .create_tag(CreateTagRequest {
+                name: "待办".to_string(),
+                scope: "project".to_string(),
+                color: None,
+                icon: None,
+            })
+            .await
+            .expect("second tag");
+        let error = store
+            .rename_tag(&tag.id, "待办")
+            .await
+            .expect_err("改名撞名应被拒");
+        assert!(error.to_string().contains("已经有同名标签"), "{error}");
+        let renamed = store.rename_tag(&tag.id, "很重要").await.expect("rename");
+        assert_eq!(renamed.name, "很重要");
+
+        // 批量查询 + 用量计数（筛选菜单与详情面板各用一份）。
+        store
+            .add_tag_to_resource(&resource.id, &tag.id)
+            .await
+            .expect("tag");
+        let by_resource = store.tags_by_resource().await.expect("tags by resource");
+        assert_eq!(by_resource.get(&resource.id).map(Vec::len), Some(1));
+        assert_eq!(
+            by_resource[&resource.id][0].name, "很重要",
+            "同一资源的标签按名字升序且已改名"
+        );
+        let counts = store.tag_usage_counts().await.expect("counts");
+        assert_eq!(counts.get(&tag.id).copied(), Some(1));
+
+        // 删除：解除关联 + 标签从列表消失（再建同名不再撞旧行）。
+        let unlinked = store.delete_tag(&tag.id).await.expect("delete tag");
+        assert_eq!(unlinked, 1, "删除要报告解除了几条关联");
+        assert!(store
+            .get_tags_for_resource(&resource.id)
+            .await
+            .expect("get tags")
+            .is_empty());
+        assert!(store.tags_by_resource().await.expect("by resource").is_empty());
+        assert_eq!(store.list_tags(None).await.expect("list").len(), 1);
+        assert!(store.delete_tag(&tag.id).await.is_err(), "重复删除应报错");
+        store
+            .create_tag(CreateTagRequest {
+                name: "很重要".to_string(),
+                scope: "project".to_string(),
+                color: None,
+                icon: None,
+            })
+            .await
+            .expect("删掉后可以重建同名");
+        cleanup(dir);
+    }
+
     #[tokio::test]
     async fn t010_paginated_list() {
         let (store, dir) = create_test_store().await;
