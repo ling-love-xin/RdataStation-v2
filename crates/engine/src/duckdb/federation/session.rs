@@ -7,14 +7,17 @@
 //!
 //! 1. [`mount_lock`]（`INSTALL` / `LOAD` 是进程级资源，并发建会话会撞文件）；
 //! 2. [`run_sql_on`]（读写分流与 Arrow 转换与加速档**同一份**，同一句在两个档上形状一致）；
-//! 3. 写保护双保险（`ATTACH … (READ_ONLY)` 让 DuckDB 自己拒 + 编辑器侧提交前拒）。
+//! 3. 写保护双保险（`ATTACH … (READ_ONLY)` 让 DuckDB 自己拒 + 编辑器侧提交前拒）；
+//!    L2 没有第一道，改用会话层判定（见 [`FederatedSession::l2_write_refusal`]）。
 //!
 //! ## 三条会话内规则
 //!
 //! - **挂不上的源不阻断**：记下原话继续挂下一个（部分可用好过整体失败）；
 //! - **主源**：未限定名只在主源解析；请求的主源不可用 → 回退到第一个可用源，
 //!   并留下 `primary_note`（界面上要说出来，不能悄悄换）；
-//! - **只读**：源一律 `READ_ONLY` 挂载；本地临时对象（`CREATE TEMP TABLE`）照常允许。
+//! - **只读**：L1 源一律 `READ_ONLY` 挂载（DuckDB 自己拒写）；**L2 源不支持 `READ_ONLY`**
+//!   （真机台账 §2.1），那一路由会话层 [`FederatedSession::run`] 拒 + 编辑器闸门 + 只读账号；
+//!   本地临时对象（`CREATE TEMP TABLE`）照常允许。
 //!
 //! ## 会话生命周期（进程内缓存）
 //!
@@ -38,7 +41,7 @@ use once_cell::sync::Lazy;
 use shared::error::CoreError;
 use shared::models::QueryResult;
 
-use super::super::accel::{mount_lock, run_sql_on, scrub_credentials};
+use super::super::accel::{AccelKind, install_sql, mount_lock, run_sql_on, scrub_credentials};
 use super::super::manager::DuckDBManager;
 use super::registry::{FederatedSource, MountState, MountedSource, SessionSnapshot};
 
@@ -95,7 +98,7 @@ impl FederatedSession {
             if let Some(extension) = source.kind.extension()
                 && installed.insert(extension)
             {
-                install_and_load(&conn, extension)?;
+                install_and_load(&conn, source.kind, extension)?;
             }
         }
 
@@ -123,11 +126,31 @@ impl FederatedSession {
 
     /// 在本地库上执行一句（读语句出 Arrow 批，写语句出影响行数）
     ///
-    /// 源库对象的写在引擎侧就被 `READ_ONLY` 拒（这里不做第二套判定：判据只有一处）。
+    /// 源库对象的写在引擎侧就被 `READ_ONLY` 拒（这里不做第二套判定：判据只有一处）——
+    /// **除了 L2 源**：Oracle 的扩展不支持 `READ_ONLY`，对它的写只能由会话层拦（[`Self::l2_write_refusal`]）。
     /// 错误文本先脱敏：源连接串是带凭据的，驱动报错可能把它回显出来。
     pub fn run(&self, sql: &str) -> Result<QueryResult, CoreError> {
+        if let Some(reason) = self.l2_write_refusal(sql) {
+            return Err(CoreError::common(shared::error::CommonError::General(reason)));
+        }
         let conn = self.lock()?;
         run_sql_on(&conn, &self.running, sql).map_err(|error| self.scrub_error(error))
+    }
+
+    /// 写 L2 源的保护（**引擎侧第二道闸**；第一道是编辑器的语句闸门，第三道是只读账号）
+    ///
+    /// 为什么需要它：Oracle 的社区扩展**不支持 `READ_ONLY`**（真机原话 *does not accept option
+    /// 'read_only' yet*），所以 `ATTACH` 之后 DuckDB 未拦写——不补这一道，联邦档里一句
+    /// `INSERT INTO ora.…` 会真的落到源库（而界面上写着“本地跑的通道不能写源库”）。
+    ///
+    /// 判据取“**保守**”那一侧：写语句（判据与驱动层同一份 `returns_rows`）+ 提到该源的别名
+    /// （或它就是主源——未限定名会落在它上面）就拒，不做语义分析（宁可多拒一句，不能放过去真写）。
+    fn l2_write_refusal(&self, sql: &str) -> Option<String> {
+        let Ok(mounted) = self.mounted.lock() else {
+            return None; // 锁被污染：不在这里另报一个错（执行路径会给真实原因）
+        };
+        let primary = self.primary.lock().ok().and_then(|primary| primary.clone());
+        write_refusal(&mounted, primary.as_deref(), sql)
     }
 
     /// 把错误文本里可能出现的源凭据抹掉（每个源一条规则；命中即换，没命中就原样）
@@ -167,15 +190,8 @@ impl FederatedSession {
 
         conn.execute_batch(&format!("USE memory; DETACH {alias}"))
             .map_err(|error| scrub_error(&source.connection_string, format!("卸载 {alias} 失败：{error}")))?;
-        let state = match conn.execute_batch(&source.attach_sql()) {
-            Ok(()) => MountState::Ready {
-                tables: count_tables(&conn, alias).unwrap_or(0),
-            },
-            Err(error) => MountState::Failed(scrub_error(
-                &source.connection_string,
-                attach_error(alias, &error),
-            )),
-        };
+        // 重挂走与 `open` 同一条实现：L2 的 Secret 在这里重建（口令可能有变）
+        let state = attach_source(&conn, &source);
 
         if let Ok(mut mounted) = self.mounted.lock()
             && let Some(entry) = mounted.iter_mut().find(|entry| entry.alias() == alias)
@@ -264,6 +280,58 @@ impl FederatedSession {
     }
 }
 
+/// 写 L2 源的判据（**纯函数**：不碰连接，测试直接喂清单）
+///
+/// 为什么这么粗：写语句没有 AST 可用，而这一步是**最后一道**能拦住真写的地方（Oracle 的
+/// `ATTACH` 不接受 `READ_ONLY`，DuckDB 自己不拦）。所以宁可多拒一句（用户改用只读账号、
+/// 或去源库执行），也不能漏过去——判错的方向只能是“拒”，不能是“放”。
+fn write_refusal(mounted: &[MountedSource], primary: Option<&str>, sql: &str) -> Option<String> {
+    if crate::driver::utils::returns_rows(sql) {
+        return None;
+    }
+    for entry in mounted.iter() {
+        // 支持 `READ_ONLY` 的源由 DuckDB 自己拒（判据只有一处，不在这里重复）
+        if entry.source.kind.supports_read_only_attach() {
+            continue;
+        }
+        let alias = entry.alias();
+        if mentions_alias(sql, alias) || primary == Some(alias) {
+            return Some(format!(
+                "源 {alias} 不支持只读挂载（它的扫描器没有 READ_ONLY），对它的写被拦下了：\
+                 请在源库上执行，或改用只读账号"
+            ));
+        }
+    }
+    None
+}
+
+/// 语句里有没有把某个源当限定名前缀（`ora.表` / `"ora".表` / `` `ora`.表 ``）
+///
+/// 只看字面，不解析：前面紧挨着的字符是标识符字符时，说明那只是个更长的名字（`myora.`），
+/// 不算提到这个源。
+fn mentions_alias(sql: &str, alias: &str) -> bool {
+    let lowered = sql.to_ascii_lowercase();
+    for needle in [
+        format!("{alias}."),
+        format!("\"{alias}\"."),
+        format!("`{alias}`."),
+    ] {
+        let mut from = 0;
+        while let Some(offset) = lowered[from..].find(&needle) {
+            let start = from + offset;
+            let boundary = sql[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|ch| !(ch.is_alphanumeric() || ch == '_'));
+            if boundary {
+                return true;
+            }
+            from = start + 1;
+        }
+    }
+    false
+}
+
 /// 开一条按产品纪律配置好的内存连接（扩展目录 / 内存闸 / 溢写口 / 不静默联网）
 fn open_configured() -> Result<Connection, String> {
     let conn = Connection::open_in_memory().map_err(|error| format!("开联邦分析连接失败：{error}"))?;
@@ -272,9 +340,9 @@ fn open_configured() -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// 装 + 加载一个扩展（失败原因里带上“离线怎么办”）
-fn install_and_load(conn: &Connection, extension: &str) -> Result<(), String> {
-    conn.execute_batch(&format!("INSTALL {extension}; LOAD {extension}"))
+/// 装 + 加载一个扩展（失败原因里带上“离线怎么办”；L2 要从社区仓库装）
+fn install_and_load(conn: &Connection, kind: AccelKind, extension: &str) -> Result<(), String> {
+    conn.execute_batch(&install_sql(kind, extension))
         .map_err(|error| {
             format!(
                 "联邦需要 DuckDB 扩展 {extension}，安装失败：{error}（首次需要能访问 DuckDB 扩展源；离线时请先把扩展放进 {}）",
@@ -283,17 +351,44 @@ fn install_and_load(conn: &Connection, extension: &str) -> Result<(), String> {
         })
 }
 
-/// 挂一个源（**失败不抛**：状态就是结论）
-fn mount_one(conn: &Connection, source: &FederatedSource) -> MountedSource {
-    let state = match conn.execute_batch(&source.attach_sql()) {
+/// 挂载前把凭据建成本连接的 Secret（L2 的唯一入口；L1 没有 Secret，直接过）
+///
+/// **会话级**（`CREATE OR REPLACE SECRET` 不带 `IN PERSISTENT`）：口令不落盘，会话没了就没了。
+/// 幂等，所以 `open` 与 `refresh` 都走它（重挂时再建一次，不多存一份凭据）。
+fn ensure_secret(conn: &Connection, source: &FederatedSource) -> Result<(), String> {
+    let Some(secret) = &source.secret else {
+        return Ok(());
+    };
+    conn.execute_batch(&secret.create_sql).map_err(|error| {
+        scrub_error(
+            &source.connection_string,
+            format!("源 {}：建凭据（Secret）失败：{error}", source.alias),
+        )
+    })
+}
+
+/// 建凭据 + `ATTACH`（**挂载只有这一处实现**：`open` 与 `refresh` 共用，别在两处各挂一遍）
+///
+/// 失败不抛：状态就是结论（挂不上的源不该把整条会话带下去）。
+fn attach_source(conn: &Connection, source: &FederatedSource) -> MountState {
+    let outcome = ensure_secret(conn, source).and_then(|()| {
+        conn.execute_batch(&source.attach_sql())
+            .map_err(|error| attach_error(&source.alias, &error))
+    });
+    match outcome {
         Ok(()) => MountState::Ready {
             tables: count_tables(conn, &source.alias).unwrap_or(0),
         },
-        Err(error) => MountState::Failed(scrub_error(&source.connection_string, attach_error(&source.alias, &error))),
-    };
+        // 错误文本脱敏：凭据随 `ATTACH` 串进 DuckDB，报错会把参数回显出来
+        Err(reason) => MountState::Failed(scrub_error(&source.connection_string, reason)),
+    }
+}
+
+/// 挂一个源（**失败不抛**：状态就是结论）
+fn mount_one(conn: &Connection, source: &FederatedSource) -> MountedSource {
     MountedSource {
         source: source.clone(),
-        state,
+        state: attach_source(conn, source),
     }
 }
 
@@ -547,8 +642,8 @@ fn apply_requested_primary(session: &FederatedSession, requested: Option<&str>) 
 #[cfg(test)]
 mod tests {
     // 安全模式：**不通配导入**
-    use super::FederatedSession;
-    use crate::duckdb::federation::registry::{FederatedSource, MountState};
+    use super::{FederatedSession, write_refusal};
+    use crate::duckdb::federation::registry::{FederatedSource, MountState, MountedSource};
     use std::sync::Arc;
 
     /// 造一个 DuckDB 文件源（**离线可跑**：duckdb 文件挂载不需要任何扩展）
@@ -700,6 +795,56 @@ mod tests {
             .run("CREATE TEMP TABLE scratch AS SELECT 1 AS n")
             .expect("本地临时表可以建");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 写 L2 源被会话层拦（Oracle 没有 `READ_ONLY` 那道引擎闸）；读语句与 L1 源不受影响
+    #[test]
+    fn writing_to_an_l2_source_is_refused_by_the_session() {
+        let oracle = FederatedSource::new("c1", "ora", "oracle", "oracle://u:p@h:1521/XEPDB1")
+            .expect("L2 源（组装不连库）");
+        let pg = FederatedSource::new(
+            "c2",
+            "wh",
+            "postgres_native",
+            "postgres_native://u:p@h:5432/w",
+        )
+        .expect("L1 源（组装不连库）");
+        let mounted = vec![ready(oracle), ready(pg)];
+
+        // 写 L2：限定名 / 带引号 / 它就是主源（未限定名落在它上面），三种都得拒
+        for sql in [
+            "INSERT INTO ora.T VALUES (1)",
+            "UPDATE ora.T SET a = 1",
+            "DELETE FROM \"ora\".T",
+            "INSERT INTO T VALUES (1)",
+        ] {
+            let primary = if sql.contains("ora.") || sql.contains("\"ora\"") {
+                Some("wh")
+            } else {
+                Some("ora")
+            };
+            assert!(write_refusal(&mounted, primary, sql).is_some(), "该拒：{sql}");
+        }
+
+        // 放行的一侧：别名长得像但不是一个名字、写 L1（由 READ_ONLY 拦）、本地对象、读语句
+        for (primary, sql) in [
+            (Some("wh"), "INSERT INTO myora.T VALUES (1)"),
+            (Some("wh"), "INSERT INTO wh.t VALUES (1)"),
+            (Some("wh"), "CREATE TEMP TABLE t AS SELECT 1"),
+            (None, "INSERT INTO memory.t VALUES (1)"),
+            (Some("wh"), "SELECT * FROM ora.T"),
+            (Some("ora"), "WITH x AS (SELECT 1 AS n) SELECT n FROM x"),
+        ] {
+            assert!(write_refusal(&mounted, primary, sql).is_none(), "不该拦：{sql}");
+        }
+    }
+
+    /// 造一个“已挂上”的条目（只给判定用，不连任何库）
+    fn ready(source: FederatedSource) -> MountedSource {
+        MountedSource {
+            source,
+            state: MountState::Ready { tables: 0 },
+        }
     }
 
     /// 指纹只看源清单：主源换了不换指纹（换主源是同一条会话上的 `USE` 切换）

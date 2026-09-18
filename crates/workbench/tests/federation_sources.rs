@@ -2,7 +2,7 @@
 //!
 //! 验的是「L1 收尾」后的口径：**连接记录里开了「DuckDB 直连」的都可以当联邦源**，
 //! 不要求应用先建连（源是 DuckDB 自己 `ATTACH` 的）——这也正是没有原生驱动的库
-//! （Oracle 这类）能参与的前提。
+//! （Oracle 这类）能参与的前提（它单独在 `oracle_federation.rs` 里验，两个文件各自一份临时库）。
 //!
 //! ```text
 //! RDS_TEST_MYSQL_URL='mysql://root:root@192.168.3.138:3306/mysql' \

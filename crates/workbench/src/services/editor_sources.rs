@@ -70,6 +70,7 @@ mod tests {
                 alias: alias.to_string(),
                 kind: AccelKind::MySql,
                 connection_string: "mysql://root:pw@h:3306/db".to_string(),
+                secret: None,
             },
             state,
         }

@@ -49,18 +49,24 @@ use shared::models::QueryResult;
 pub const SOURCE_ALIAS: &str = "rds_src";
 
 /// 加速源的种类（决定要不要扩展、怎么挂）
+///
+/// 前四个是 **L1（官方 scanner）**：`ATTACH` 一个连接串、带 `READ_ONLY`；
+/// [`Self::Oracle`] 是 **L2（社区 scanner）**：凭据只能走**会话级 Secret**、
+/// **不支持 `READ_ONLY`**、限定名是两段（真机台账：`docs/architecture/federation/federation-architecture.md` §2.1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccelKind {
     MySql,
     PostgreSql,
     Sqlite,
     DuckDb,
+    /// Oracle（社区扩展 `oracle_scanner`；**只允许做联邦源**，不做本地加速）
+    Oracle,
 }
 
 impl AccelKind {
     /// 连接的 `db_type` → 加速源种类
     ///
-    /// `db_type` 来自驱动标识（`mysql_native` / `postgres_native` / `sqlite` / `duckdb`），
+    /// `db_type` 来自驱动标识（`mysql_native` / `postgres_native` / `sqlite` / `duckdb` / `oracle`），
     /// 认不出就说出来（**不猜**：猜错会把语句发到一个不相干的库上）。
     pub fn from_db_type(db_type: &str) -> Result<Self, String> {
         let normalized = db_type.trim().to_ascii_lowercase();
@@ -72,6 +78,8 @@ impl AccelKind {
             Ok(Self::Sqlite)
         } else if normalized.starts_with("duckdb") {
             Ok(Self::DuckDb)
+        } else if normalized.starts_with("oracle") || normalized.starts_with("ora") {
+            Ok(Self::Oracle)
         } else {
             Err(format!("这个驱动（{db_type}）暂时不能本地加速"))
         }
@@ -84,6 +92,7 @@ impl AccelKind {
             Self::PostgreSql => "PostgreSQL",
             Self::Sqlite => "SQLite",
             Self::DuckDb => "DuckDB",
+            Self::Oracle => "Oracle",
         }
     }
 
@@ -96,6 +105,15 @@ impl AccelKind {
             Self::PostgreSql => Some("postgres"),
             Self::Sqlite => Some("sqlite"),
             Self::DuckDb => None,
+            Self::Oracle => Some("oracle_scanner"),
+        }
+    }
+
+    /// 扩展从哪个仓库装（`None` = 官方仓库；L2 是社区扩展，必须 `INSTALL … FROM community`）
+    pub(crate) fn extension_repository(self) -> Option<&'static str> {
+        match self {
+            Self::Oracle => Some("community"),
+            _ => None,
         }
     }
 
@@ -106,6 +124,7 @@ impl AccelKind {
             Self::PostgreSql => Some("postgres"),
             Self::Sqlite => Some("sqlite"),
             Self::DuckDb => None,
+            Self::Oracle => Some("oracle_scanner"),
         }
     }
 
@@ -115,24 +134,71 @@ impl AccelKind {
     /// 的 scanner 只认 `mysql://` / `postgres://`：直接把驱动 id 当 scheme 递过去，会得到
     /// `Invalid dsn "mysql_native://…" - expected key=value pairs separated by spaces`
     /// （真机踩到）。所以连接串在交给 DuckDB 前要把 scheme 换成这一份。
+    ///
+    /// Oracle 这一项**不是给 DuckDB 的 URL**（它靠 Secret 挂载）：只是解析凭据时认前缀用。
     pub(crate) fn scheme(self) -> &'static str {
         match self {
             Self::MySql => "mysql",
             Self::PostgreSql => "postgres",
             Self::Sqlite => "sqlite",
             Self::DuckDb => "duckdb",
+            Self::Oracle => "oracle",
         }
+    }
+
+    /// 挂载时能不能带 `READ_ONLY`（写成“反过来说”是因为要默认安全：**默认支持**，例外显式声明）
+    ///
+    /// Oracle 的社区扩展当前不支持（原话：*Oracle ATTACH does not accept option 'read_only' yet*），
+    /// 所以那道引擎侧的写保护对它不成立——得靠会话层拒绝 + 编辑器闸门 + 只读账号（台账 §2.1）。
+    pub(crate) fn supports_read_only_attach(self) -> bool {
+        !matches!(self, Self::Oracle)
+    }
+
+    /// 挂载时是不是必须先把凭据建成本连接的 Secret（L2 的唯一入口）
+    ///
+    /// 公开给宿主：结果区那行小字要据此说清“这类源写在两段名上（`别名.表`）”。
+    pub fn needs_secret(self) -> bool {
+        matches!(self, Self::Oracle)
+    }
+
+    /// 这个种类能不能做**本地加速**（不能则给出原因：菜单行尾要显示的就是这句）
+    ///
+    /// 本地加速是“一条源一条连接、连接串直接进 `ATTACH`”：L2（Oracle）的凭据得先建成会话级
+    /// Secret（那是联邦会话干的事），所以它只能做联邦源。判据与理由都放在引擎侧一处，
+    /// 免得门控与组装各写一份、日后又说不一样的话。
+    pub fn local_accel_support(self) -> Result<(), String> {
+        if self.needs_secret() {
+            return Err(format!(
+                "{} 只能做联邦源（本地加速不支持）：它的凭据要走会话级 Secret",
+                self.label()
+            ));
+        }
+        Ok(())
     }
 }
 
 /// 一个加速源（**宿主组装**：引擎不读连接库，也不解密口令）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AccelSource {
     /// 源连接 id（会话按它缓存；结果集与历史也用它）
     pub conn_id: String,
     pub kind: AccelKind,
     /// 网络型 = 带凭据的 URL（`mysql://…` / `postgres://…`）；文件型 = **裸路径**
     pub connection_string: String,
+}
+
+impl std::fmt::Debug for AccelSource {
+    /// 手写 `Debug`：**连接串里有口令**，`{:?}` 不能把它原样印出来（日志 / 报错 / 测试失败信息）
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccelSource")
+            .field("conn_id", &self.conn_id)
+            .field("kind", &self.kind)
+            .field(
+                "connection_string",
+                &connection::url::mask_password_in_url(&self.connection_string),
+            )
+            .finish()
+    }
 }
 
 impl AccelSource {
@@ -149,6 +215,9 @@ impl AccelSource {
     /// 这里剥掉 scheme（`sqlite://` / `duckdb://` / `file://`）并去掉 Windows 路径前误加的前导 `/`。
     pub fn new(conn_id: &str, db_type: &str, url: &str) -> Result<Self, String> {
         let kind = AccelKind::from_db_type(db_type)?;
+        // 本地加速只支持 L1：Oracle 这类得先建会话级 Secret（联邦会话干的事），
+        // 与其在这里再写一份凭据逻辑，不如直接说不支持（与“不猜”同一口径）
+        kind.local_accel_support()?;
         let connection_string = match kind {
             AccelKind::Sqlite | AccelKind::DuckDb => normalize_file_path(url)?,
             _ => normalize_scheme(kind, url),
@@ -468,9 +537,9 @@ pub fn ensure_session(source: &AccelSource) -> Result<Arc<AccelSession>, String>
     Ok(session)
 }
 
-/// 首次安装 + 加载扩展；失败时**记下原因**给门控用
+/// 装 + 加载一个扩展（失败原因里带上“离线怎么办”）
 fn install_and_load(conn: &Connection, kind: AccelKind, extension: &str) -> Result<(), String> {
-    let reason = match conn.execute_batch(&format!("INSTALL {extension}; LOAD {extension}")) {
+    let reason = match conn.execute_batch(&install_sql(kind, extension)) {
         Ok(()) => return Ok(()),
         Err(error) => format!(
             "本地加速需要 DuckDB 扩展 {extension}，安装失败：{error}（首次需要能访问 DuckDB 扩展源；离线时请先把扩展放进 {}）",
@@ -482,6 +551,16 @@ fn install_and_load(conn: &Connection, kind: AccelKind, extension: &str) -> Resu
     }
     tracing::warn!(kind = kind.label(), "加速扩展不可用：{reason}");
     Err(reason)
+}
+
+/// 装扩展的 SQL（**L2 要从社区仓库装**：`INSTALL oracle_scanner FROM community`）
+///
+/// `pub(crate)`：联邦会话装同一批扩展（别在两处各写一份）
+pub(crate) fn install_sql(kind: AccelKind, extension: &str) -> String {
+    match kind.extension_repository() {
+        Some(repository) => format!("INSTALL {extension} FROM {repository}; LOAD {extension}"),
+        None => format!("INSTALL {extension}; LOAD {extension}"),
+    }
 }
 
 /// 挂载两步：`ATTACH` 再 `USE`（默认 catalog 指到源库，用户才能不写限定名）

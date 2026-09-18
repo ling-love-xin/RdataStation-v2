@@ -16,11 +16,11 @@
 //!
 //! | 通道 | 条件 |
 //! | --- | --- |
-//! | 本地加速 | 连接存在 · **开启了 DuckDB 联邦**（`use_duckdb_fed`）· 驱动类型可加速（mysql / postgres / sqlite / duckdb）· **扩展可用**（试过且失败才拦，见 `accel::extension_state`） |
-//! | 联邦 | **两个以上**开启了「DuckDB 本地加速」且驱动可挂的连接（不要求已连接；见 [`federated_availability`]） |
+//! | 本地加速 | 连接存在 · **开启了 DuckDB 联邦**（`use_duckdb_fed`）· 驱动类型可加速（mysql / postgres / sqlite / duckdb）· **该驱动本身支持本地加速**（Oracle 这类 L2 只做联邦源）· **扩展可用**（试过且失败才拦，见 `accel::extension_state`） |
+//! | 联邦 | **两个以上**开启了「DuckDB 本地加速」且驱动可挂的连接（含 Oracle 这类 L2；不要求已连接；见 [`federated_availability`]） |
 //!
-//! 判据的顺序 = **谁能先改**：连接开关（用户自己就能改）→ 驱动类型（换连接）→ 扩展
-//! （联网装一次 / 放离线包）。行尾给的原因就是第一条过不去的。
+//! 判据的顺序 = **谁能先改**：连接开关（用户自己就能改）→ 驱动类型（换连接）→ 本地加速支持
+//! （L2 换联邦档）→ 扩展（联网装一次 / 放离线包）。行尾给的原因就是第一条过不去的。
 //!
 //! **联邦为什么要求两个源**：联邦与本地加速的区别就是“跨源”。只有一个源时两者是同一件事，
 //! 摆两个入口只会让人猜“这俩差在哪”——与其给个看着能用、实则复制的选项，不如把差的那一个源
@@ -71,13 +71,14 @@ impl ChannelsPort for WorkbenchChannels {
         let accelerated = if !connection.use_duckdb_fed {
             ChannelAvailability::blocked("该连接未开启本地加速（连接设置里的 DuckDB 联邦）")
         } else {
-            match engine::duckdb::accel::AccelKind::from_db_type(&connection.driver) {
-                Err(reason) => ChannelAvailability::blocked(reason),
+            // 三条判据一条链：驱动类型 → 本地加速支持（L2 只做联邦源）→ 扩展
+            let gate = engine::duckdb::accel::AccelKind::from_db_type(&connection.driver)
+                .and_then(|kind| kind.local_accel_support().map(|()| kind))
                 // 扩展试过且失败 → 如实挡着（原因就是装扩展失败的原话）；没试过不拦
-                Ok(kind) => match engine::duckdb::accel::extension_state(kind) {
-                    Err(reason) => ChannelAvailability::blocked(reason),
-                    Ok(()) => ChannelAvailability::ok(),
-                },
+                .and_then(|kind| engine::duckdb::accel::extension_state(kind).map(|()| kind));
+            match gate {
+                Ok(_) => ChannelAvailability::ok(),
+                Err(reason) => ChannelAvailability::blocked(reason),
             }
         };
 
@@ -90,7 +91,8 @@ impl ChannelsPort for WorkbenchChannels {
 
 /// 联邦档的可用性（**纯函数**，只看连接快照：渲染路径可调）
 ///
-/// 可用 = **两个以上**开启「DuckDB 本地加速（联邦查询直连源库）」且驱动能挂的连接（主源 + 外部源）。
+/// 可用 = **两个以上**开启「DuckDB 本地加速（联邦查询直连源库）」且驱动能挂的连接（主源 + 外部源），
+/// **含 Oracle 这类 L2**（它不能本地加速，但联邦源能挂——扫描器读得到）。
 /// **不要求已连接**：源是从连接记录组装并 `ATTACH` 的（DuckDB 自己建连），没原生驱动的库
 /// （Oracle 这类）也是这样进来的——“连不上”不是“不能做源”。
 /// 不可用时把“还差什么”说出来：没开开关 / 不够两个 / 驱动不支持——三种原因占三种修法。
@@ -244,19 +246,40 @@ mod tests {
         assert!(reason.contains("本地加速"), "{reason}");
     }
 
-    /// 开了开关但驱动不能挂（T3.2 之前的 Oracle 就落在这里）：原因说在驱动上，不报“开关没开”
+    /// 开了开关但驱动不能挂（ClickHouse 这类还没接入的）：原因说在驱动上，不报“开关没开”
     #[test]
     fn the_federated_channel_reports_a_driver_it_cannot_mount() {
+        let mut clickhouse = connection("G_ch", true);
+        clickhouse.name = "归档库".to_string();
+        clickhouse.driver = "clickhouse".to_string();
+
+        let availability = port(vec![connection("P_a", true), clickhouse]).availability(Some("P_a"));
+        let gate = availability.for_channel(ExecChannel::Federated);
+        assert!(!gate.available, "只有 L1 那一个能挂，联邦还差一个");
+        let reason = gate.reason.unwrap_or_default();
+        assert!(reason.contains("归档库"), "{reason}");
+        assert!(reason.contains("驱动还不能做联邦源"), "{reason}");
+    }
+
+    /// L2（Oracle）算联邦源、**不算本地加速**：联邦档两开就可用，加速档如实挡着
+    #[test]
+    fn an_l2_source_counts_for_federation_but_not_for_acceleration() {
         let mut oracle = connection("G_ora", true);
         oracle.name = "老库".to_string();
         oracle.driver = "oracle".to_string();
 
-        let availability = port(vec![connection("P_a", true), oracle]).availability(Some("P_a"));
-        let gate = availability.for_channel(ExecChannel::Federated);
-        assert!(!gate.available, "只有 L1 那一个能挂，联邦还差一个");
+        let availability = port(vec![connection("P_a", true), oracle]).availability(Some("G_ora"));
+        assert!(
+            availability.for_channel(ExecChannel::Federated).available,
+            "Oracle 能做联邦源了：{:?}",
+            availability.for_channel(ExecChannel::Federated).reason
+        );
+
+        let gate = availability.for_channel(ExecChannel::Accelerated);
+        assert!(!gate.available, "L2 不能做本地加速");
         let reason = gate.reason.unwrap_or_default();
-        assert!(reason.contains("老库"), "{reason}");
-        assert!(reason.contains("驱动还不能做联邦源"), "{reason}");
+        assert!(reason.contains("Oracle"), "{reason}");
+        assert!(reason.contains("联邦源"), "原因要说清它能干什么：{reason}");
     }
 
     /// 驱动类型不能加速（比如将来接的 ClickHouse）→ 原因说在类型上，不报“开关没开”

@@ -1,8 +1,8 @@
 # 联邦查询 · 原型设计（只读跨源查询）
 
-> 交互稿的目标态；实现进度见 `federation-dev-plan.md`（**第一期执行路径已通；源清单浮层待做**）。
+> 交互稿的目标态；实现进度见 `federation-dev-plan.md`（**第一期已收圆；T3.2 L2 挂载路径已接**）。
 > 原则与编辑器一致：**不宣传未实现**、**状态如实**、**命名如实**。
-> 本文里**尚未上**的局部（源清单浮层）已在 §9 列明；已落的局部在实现里都有对应单测 / 真机探针。
+> 本文里**尚未上**的局部已在 §9 列明；已落的局部在实现里都有对应单测 / 真机探针。
 
 ## 1. 入口与总览
 
@@ -77,8 +77,29 @@
 | `duckdb` 本地表 / 临时表 | 不受影响（本地对象优先，与 DuckDB 一致） |
 
 提示语只出现两处（不做常驻说教）：源清单底部一行、以及同名冲突的错误卡片里。
-**按源类型给写法**：L1 源（MySQL / PG / SQLite / DuckDB）三段名，L2 源（Oracle 这类）两段名——
-写错时的报错原话里会带 `schema "X" does not exist`，源清单底部那行按已挂源的类型分别列。
+**按源类型给写法**（T3.2 已落）：L1 源（MySQL / PG / SQLite / DuckDB）三段名，L2 源（Oracle 这类）两段名——
+有 L2 源在池里时，结果区那行小字写成
+`跨源请写 别名.schema.表（oracle_src 写两段：别名.表，不写 schema）`（判据是 `kind.needs_secret()`）；
+写错时的报错原话里会带 `schema "X" does not exist`，源清单里该源的重挂入口就在下一行。
+
+### 4.1 L2 源的写保护（对用户可见的部分）
+
+L2 源（Oracle）的扫描器**不支持 `READ_ONLY`**（真机台账），所以对它写不是由 DuckDB 拒的，
+而是**会话层拦**——用户在联邦档里写 L2 源会看到：
+
+```
+┌─ 执行失败 ───────────────────────────────────────────────────────────────┐
+│ 源 oracle_src 不支持只读挂载（它的扫描器没有 READ_ONLY），对它的写被拦下了：    │
+│ 请在源库上执行，或改用只读账号                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+判据是**保守**的（不解析语义）：写语句（与驱动层同一份 `returns_rows`）只要提到该源的别名
+（`oracle_src.` / `"oracle_src".` / `` `oracle_src`. ``）或它正好是主源（未限定名落在它上面）就拒。
+宁可多拒一句（用户改去源库执行 / 换只读账号），也不能漏过去真写——**本地临时对象不受影响**。
+
+> L2 也**不做本地加速**（只做联邦源）：在加速档的门控里会看到“Oracle 只能做联邦源
+> （本地加速不支持）：它的凭据要走会话级 Secret”，而不是一个选了就失败的入口。
 
 ## 5. 结果区：代价与一致性
 
@@ -118,6 +139,9 @@
 | 全部源可用但查询为空 | 正常空网格（不特殊处理） | —— |
 | 结果被上限截断 | 状态行 `已拉 10,000 行（上限）` | 「提高上限 / 缩小筛选」 |
 | 源挂不上（认证 / 网络 / 扩展） | 其余源照常可用；结果区小字写出“源 X 未挂上：<原话>”（原话里的口令已脱敏） | 修好连接后重跑 / 重挂该源 |
+| 写 L2 源 | 会话层拒绝（见 §4.1；原话点名源 + 怎么办）；L1 源仍由 DuckDB 以 `read-only mode` 拒 | 在源库执行 / 换只读账号 / 改用只读连接 |
+| L2 连接串缺件（凭据 / 服务名） | 那个源不参与，结果区小字点名：“连接 X 没参与：Oracle 连接串缺少服务名（…）” | 连接对话框里补全（服务名不能猜：写 `XE` 会得到 `ORA-01017`） |
+| 把 L2 源选为本地加速 | 加速档直接档下（原因：“…只能做联邦源（本地加速不支持）…”），不给“选了就失败”的入口 | 改用联邦档 |
 
 ## 8. 主题映射
 
@@ -131,7 +155,8 @@
 - 源清单的**逐行时间戳**（“2 分钟前”）与表级下钻（当前只给表数量）；
 - 扫描行数（第二期，取决于 DuckDB 侧取法）；
 - 「导入到分析库」（L3 的持久化那半，第二期之后）；
-- ADBC 通道（按需）。
+- ADBC 通道（按需）；
+- 扩展的**显式安装动作与进度**（T3.1 后半）：现在仍是执行时装（L2 从 community 仓库），失败原因进状态门控。
 
 ## 10. 已落的局部（与本文的对应关系）
 
@@ -143,5 +168,9 @@
 | “联邦 · N 源”小字 | `editor_exec::federation_notice`（结果区 `notice`；源清单底部的提示行待并入） |
 | 失败行带原话（脱敏） | `federation::session::{mount_one, run}` 的错误先过 `accel::scrub_credentials` |
 | 错误点名源 | `editor_exec::explain_federation_error`（错文里提到没挂上的别名就缀原因） |
-| 门控矩阵 | `editor_channels::federated_availability` |
+| 门控矩阵 | `editor_channels::federated_availability`（联邦计数含 L2）+ `AccelKind::local_accel_support`（加速档对 L2 说原因） |
+| L2 挂载（Secret / 无 `READ_ONLY`） | `federation::registry::{SourceSecret, oracle_secret_from_url}` + `federation::session::{ensure_secret, attach_source}`；扩展从 community 装：`accel::install_sql` |
+| L2 写拒绝 | `federation::session::write_refusal`（纯函数）+ `run` 入口拦截 |
+| L2 两段名提示 | `editor_exec::federation_notice`（按 `kind.needs_secret()` 分支） |
+| L2 真机验收 | `crates/workbench/tests/oracle_federation.rs`（Oracle × MySQL：跨源 · 挂载 · 重挂 · 写拒绝 · 本地临时对象） |
 | 历史带参与源 | `history_store::SqlHistoryEntry.sources` + `editor::history::sources_text` |

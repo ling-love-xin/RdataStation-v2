@@ -208,8 +208,8 @@ impl EngineQueryRunner {
     /// 2. **运行态连接**（连接管理器里已建连的，含项目作用域 `P_`）：用重连用的
     ///    `url_override`（带凭据），按同样的开关过滤。
     ///
-    /// 驱动能不能挂由 [`accel::AccelKind`] 回答，认不出就如实记一句（L2 的 Oracle 在
-    /// T3.2 接进来之前就落在这一条上）；**别名**由连接名生成（`sanitize_alias` + 重名再排），
+    /// 驱动能不能挂由 [`accel::AccelKind`] 回答（L2 的 Oracle 也算：它只做联邦源、不做本地加速），
+    /// 认不出就如实记一句；**别名**由连接名生成（`sanitize_alias` + 重名再排），
     /// 按连接 id 排序保证稳定；**主源** = 本文档绑定的那条连接（它不在清单里时由引擎选
     /// 第一个可用源，并留下回退说明）。
     fn federated_plan(&self, connection: Option<&str>) -> Result<FederatedPlan, String> {
@@ -789,8 +789,18 @@ fn plan_from_records(
         }
         let alias = fed_registry::unique_alias(&fed_registry::sanitize_alias(&record.name), &taken);
         taken.push(alias.clone());
-        // 凭据随连接串进 ATTACH（DuckDB 的扫描器不认 Secret，见 `accel::AccelSource::new`）
-        let source = FederatedSource::new(&record.conn_id, &alias, &record.db_type, &record.url)?;
+        // 凭据随连接串进 `ATTACH`（DuckDB 的扫描器不认 Secret，见 `accel::AccelSource::new`）；
+        // L2 是拆成会话级 Secret（`registry::oracle_secret_from_url`）。
+        //
+        // 组装不出来的**不阻断整份清单**（与上面“认不出的驱动”同一口径）：一条连接的串缺件
+        // （凭据 / 服务名）不该把其余源一起拖下水；结果区那行小字会点名它是怎么回事。
+        let source = match FederatedSource::new(&record.conn_id, &alias, &record.db_type, &record.url) {
+            Ok(source) => source,
+            Err(reason) => {
+                notes.push(format!("连接 {} 没参与：{reason}", record.name));
+                continue;
+            }
+        };
         if record.conn_id == owner {
             primary = Some(alias);
         }
@@ -893,12 +903,26 @@ fn federation_notice(plan: &FederatedPlan, session: &fed_session::FederatedSessi
         .filter(|entry| entry.is_ready())
         .map(|entry| entry.alias().to_string())
         .collect();
+    // L2（凭据走 Secret 的那类，如 Oracle）的限定名是**两段**：`别名.表`
+    // （真机台账 §2.1：表挂在 `main` schema 上，写三段会报 schema 不存在）
+    let l2: Vec<String> = snapshot
+        .sources
+        .iter()
+        .filter(|entry| entry.is_ready() && entry.source.kind.needs_secret())
+        .map(|entry| entry.alias().to_string())
+        .collect();
 
     let mut parts: Vec<String> = Vec::new();
     if !ready.is_empty() {
         parts.push(format!("联邦源 {}", ready.join("、")));
     }
-    parts.push("跨源请写 别名.schema.表".to_string());
+    parts.push(match l2.is_empty() {
+        true => "跨源请写 别名.schema.表".to_string(),
+        false => format!(
+            "跨源请写 别名.schema.表（{} 写两段：别名.表，不写 schema）",
+            l2.join("、")
+        ),
+    });
     parts.extend(plan.notes.iter().cloned());
     for entry in &snapshot.sources {
         if let MountState::Failed(reason) = &entry.state {
@@ -1095,19 +1119,50 @@ mod tests {
             plan.notes
         );
 
-        // 认不出的驱动（T3.2 之前的 Oracle 就落在这里）：不因为一个连接不可用就整份失败
+        // 认不出的驱动（还没接入的库，如 ClickHouse）：不因为一个连接不可用就整份失败
+        let records = vec![
+            record("G_1", "订单库", "mysql_native", "mysql://h:3306/a"),
+            record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
+            record("G_3", "归档库", "clickhouse", "clickhouse://h:8123/db"),
+        ];
+        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        assert_eq!(plan.sources.len(), 2, "驱动不支持的连接不占位");
+        assert!(
+            plan.notes.iter().any(|note| note.contains("归档库")),
+            "要说清哪个连接没参与：{:?}",
+            plan.notes
+        );
+
+        // L2（Oracle）组装不出来时（连接串缺凭据 / 服务名）也不阻断：点名它，其余源照用
         let records = vec![
             record("G_1", "订单库", "mysql_native", "mysql://h:3306/a"),
             record("G_2", "仓库", "postgres", "postgres://h:5432/w"),
             record("G_3", "老库", "oracle", "oracle://h:1521/XEPDB1"),
         ];
         let plan = plan_from_records(&records, &[], "G_1").expect("组装");
-        assert_eq!(plan.sources.len(), 2, "驱动不支持的连接不占位");
+        assert_eq!(plan.sources.len(), 2, "L2 组装不出来的不占位");
         assert!(
-            plan.notes.iter().any(|note| note.contains("老库")),
-            "要说清哪个连接没参与：{:?}",
+            plan.notes
+                .iter()
+                .any(|note| note.contains("老库") && note.contains("凭据")),
+            "要说清它差什么（这是 L2 最常见的一种失败）：{:?}",
             plan.notes
         );
+
+        // L2 组装得出来就**真是参与**（不是只说一句）；凭据进会话级 Secret，类归联邦源
+        let records = vec![
+            record("G_1", "订单库", "mysql_native", "mysql://u:p@h:3306/a"),
+            record("G_2", "老库", "oracle", "oracle://u:p@h:1521/XEPDB1"),
+        ];
+        let plan = plan_from_records(&records, &[], "G_1").expect("组装");
+        assert_eq!(plan.sources.len(), 2, "L2 该占位：{:?}", plan.notes);
+        let oracle = plan
+            .sources
+            .iter()
+            .find(|source| source.kind.needs_secret())
+            .expect("Oracle 源该在清单里");
+        assert!(oracle.secret.is_some(), "L2 的凭据应该是 Secret");
+        assert!(!oracle.attach_sql().contains("READ_ONLY"), "L2 不带只读选项");
 
         // 组装时已经攒下的实话（读连接库失败 / 连接串组不出来）要带到结果区
         let carried = vec!["连接 甲 的连接串没能组装出来：解密失败".to_string()];

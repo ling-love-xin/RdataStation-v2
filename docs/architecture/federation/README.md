@@ -1,9 +1,10 @@
 # 联邦查询模块 · 模块入口
 
 > 本文只提炼**特点 / 边界 / 代码地图 / 硬约束**；细节一律指向本目录内文档，**不复制设计**。
-> 状态：**第一期（T1.1～T1.6）已完成（2026-09-18）**——编辑器里选「执行位置：联邦」能跑跨源 join、
-> 「源清单 ▾」能看到并维护源（重挂 · 换主源）；Oracle（L2）的真机形态已知（架构 §2.1），
-> 等 T3.2 接进会话（会话级 Secret + 不带 `READ_ONLY` 的 `ATTACH` + 两段名）。
+> 状态：**第一期（T1.1～T1.6）与 T3.2（L2 挂载路径）均已完成（2026-09-18）**——编辑器里选
+> 「执行位置：联邦」能跑跨源 join，**L1（MySQL / PG / SQLite / DuckDB）与 L2（Oracle）同池**，
+> 「源清单 ▾」能看到并维护源（重挂 · 换主源）。剩余：扩展的显式安装动作与进度（T3.1 后半）、
+> SQL Server 真机（T3.3 待通知）、第二期 L3 桥接。
 > 进度与验收见 `federation-dev-plan.md`；凭据与 Secret 的实测台账见架构 §8。
 
 ## 1. 模块特点
@@ -12,9 +13,10 @@
 
 | 特点 | 含义 | 出处 |
 | --- | --- | --- |
-| **只读是硬边界** | 外部源一律 `ATTACH … (READ_ONLY)`；本地临时对象（分析用的“变量”）照常允许 | 架构 D1 |
+| **只读是硬边界** | 外部源一律 `ATTACH … (READ_ONLY)`；本地临时对象（分析用的“变量”）照常允许。**L2 例外**：扫描器不接受 `READ_ONLY`，改由会话层拒写（保守判据）+ 编辑器闸门 + 只读账号 | 架构 D1、D14 |
 | **联邦 = 一条连接上的“挂载状态”** | 不是独立连接：连接的主人是分析会话（1c），临时对象因此天然共享 | 架构 D2 |
-| **主源语义** | 未限定表名**只在主源解析**；跨源写 `<别名>.<schema>.<表>`；两源同名时报错不猜 | 架构 D3、原型 §4 |
+| **主源语义** | 未限定表名**只在主源解析**；跨源写 `<别名>.<schema>.<表>`（**L2 源是两段：`<别名>.<表>`**）；两源同名时报错不猜 | 架构 D3、原型 §4 |
+| **L2（社区 scanner）与 L1 不同形** | Oracle 这类：凭据**只能走会话级 Secret**（不落盘，重挂时重建）、**不带 `READ_ONLY`**（写保护靠会话层 + 闸门 + 只读账号）、限定名**两段**；扩展从 **community 仓库**装；且**只做联邦源、不做本地加速** | 架构 D14 / §2.1 |
 | **三层策略** | L1 官方 scanner（mysql/pg/sqlite）→ L2 社区 scanner（mssql/oracle_scanner…）→ L3 桥接兜底（拉数 → 临时表） | 架构 §2 |
 | **扩展显式管理** | 关掉 DuckDB 的自动安装/自动加载（实测默认全开，会静默联网）；装到应用目录、可离线预置 | 架构 D4 |
 | **凭据随连接串进 `ATTACH`** | 扫描器**不认** Secret（真机实测）；口令只在内存里传，出引擎前一律脱敏（`accel::scrub_credentials`） | 架构 D11 |
@@ -56,13 +58,16 @@
 | 模块入口与硬约束 | `crates/engine/src/duckdb/federation/mod.rs`（✅） |
 | 旧实现（四类源 / 进程内状态） | `.../federation/legacy.rs`（✅ 迁入，标“已被取代”，待 `session.rs` 覆盖后退役） |
 | 源登记与状态快照 | `.../federation/registry.rs`（✅ 别名三件套 / 挂载状态 / 会话快照） |
-| 多源会话与挂载 | `.../federation/session.rs`（✅ 多源只读挂载 + 进程内会话缓存 + 按源刷新） |
+| 多源会话与挂载 | `.../federation/session.rs`（✅ 多源只读挂载 + 进程内会话缓存 + 按源刷新 + **L2：`ensure_secret` / `attach_source` / `write_refusal`**） |
+| L2 凭据（会话级 Secret） | `.../federation/registry.rs`（✅ `SourceSecret` + `oracle_secret_from_url`：`oracle://…/服务名` → `CREATE SECRET`） |
 | 联邦档执行路径 | `crates/workbench/src/services/editor_exec.rs`（✅ 源清单组装 + 三档分流 + 历史带参与源） |
 | 源清单（数据 / 菜单模型） | `crates/editor/src/sources.rs`（✅；`SourcesPort` + 纯函数 `menu_entries`） |
 | 源清单（快照翻译 / 视图 / 动作） | `workbench/src/services/editor_sources.rs`（✅）+ `editor/view/host.rs`（✅ `render_sources_picker`）+ `editor/src/execution.rs`（✅ `SourceAction` / `SourceNote`） |
 | 联邦档门控 | `crates/workbench/src/services/editor_channels.rs`（✅ 真值：≥ 2 个开了开关且可挂的连接） |
 | 凭据台账与脱敏 | `crates/engine/tests/federation_credentials_probe.rs`（✅）+ `accel::scrub_credentials` |
+| L2 装扩展（社区仓库） | `accel::{extension_repository, install_sql}`（✅ L2 带 `FROM community`） |
 | L2（Oracle）真机台账 | `crates/engine/tests/oracle_probe.rs`（✅ 装/载 · Secret · 目录两段名 · 表函数 · 跨源 · **只读不可用**） |
+| L2 联邦路径真机验收 | `crates/workbench/tests/oracle_federation.rs`（✅ Oracle × MySQL：跨源 · 挂载 · 重挂 · 写拒绝 · 本地临时对象） |
 | L3 桥接（拉数 → 临时表） | `.../federation/bridge.rs`（🟡 第二期） |
 | 单源加速会话（复用对象） | `crates/engine/src/duckdb/accel.rs`（✅） |
 | 扩展安装与状态 | `crates/engine/src/duckdb/extensions.rs`（✅） |
@@ -80,10 +85,11 @@
    `extension_directory` 钉在应用数据目录（`SET` 已实测生效，扩展落 `<目录>/v<内核版本>/`）。
 5. **资源边界**：会话设 `memory_limit` / `temp_directory` / `max_temp_directory_size`。
 6. **取消要传到源库**：DuckDB `InterruptHandle` + 各源驱动 `cancel`，只断一边就是假象。
-7. **凭据只在内存里传，出错就脱敏**：`ATTACH` 串**带凭据**（扫描器不认 Secret）；
+7. **凭据只在内存里传，出错就脱敏**：L1 的 `ATTACH` 串**带凭据**（扫描器不认 Secret）、L2 的凭据进**会话级 Secret**（不落盘）；
    错误文本出引擎前过 `accel::scrub_credentials`；`ConnectionInfo.url`（脱敏）**不能**喂给 `ATTACH`。
-8. **L2 源与 L1 不同形**（架构 D14）：凭据走**会话级 Secret**（`ATTACH '<secret>'`）、**没有 `READ_ONLY`**、
-   限定名是**两段**（`<别名>.<表>`）。只读那一道靠编辑器闸门 + 只读账号。
+8. **L2 源与 L1 不同形**（架构 D14）：凭据走**会话级 Secret**（`ATTACH '<secret>'`）、**没有 `READ_ONLY`**（→ 写拒绝靠
+   会话层 `write_refusal` + 编辑器闸门 + 只读账号；拒要**保守**：宁可多拒一句，不能漏真写）、限定名是**两段**
+   （`<别名>.<表>`）；装扩展要走 **community 仓库**；**L2 只做联邦源**（`local_accel_support` 拒绝本地加速）。
 9. **源从记录组装**（架构 D16）：`federated_plan` 读连接记录 + 运行态，交给 DuckDB 前把 scheme 归一
    （`accel::normalize_scheme`：`mysql_native://` → `mysql://`）；驱动 id 不能当 scheme 用。
 10. **状态如实、命名如实**：徽标写“联邦”不写“快照”；桥接数据标“拉取于 HH:MM 的副本”。
@@ -119,6 +125,10 @@ cargo test -p rds-workbench -j 2 --lib -- services::editor
 # 真机：标记连接 → 跨源 → 撤标记拒绝（不需要应用先建连）
 RDS_TEST_MYSQL_URL='…' RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil' \
   cargo test -p rds-workbench -j 2 --test federation_sources -- --nocapture --test-threads=1
+
+# 真机：L2（Oracle）× MySQL 走产品执行路径（跨源 · 挂载 · 重挂 · 写拒绝）
+RDS_TEST_MYSQL_URL='…' RDS_TEST_ORACLE_URL='oracle://user:pass@host:1521/XEPDB1' \
+  cargo test -p rds-workbench -j 2 --test oracle_federation -- --nocapture --test-threads=1
 ```
 
 ## 6. 文档地图
@@ -132,6 +142,8 @@ RDS_TEST_MYSQL_URL='…' RDS_TEST_SQLITE_PATH='D:\FossilT\T.fossil' \
 
 ## 7. 下一步
 
-第一期已收圆。接下来：**L2 挂载路径**（`T3.2`：Oracle 的会话级 Secret + 不带 `READ_ONLY` 的 `ATTACH` +
-引擎侧写拒绝 + 两段名提示；形态已有真机台账，见架构 §2.1），以及 SQL Server 的真机验收（等用户通知）。
-第二期（L3 桥接）任务清单见 `federation-dev-plan.md` §2。
+T3.2 已收圆（Oracle 能真的挂进联邦会话，真机验过）。接下来：
+
+1. **T3.1 后半**：扩展的显式安装动作 + 进度（现在仍是执行时装、失败原因入状态门控）；
+2. **SQL Server 真机验收**（T3.3，等用户通知驱动 / 端点——代码口径写死“待真机”）；
+3. **第二期 L3 桥接**（拉数 → DuckDB 临时表）：任务清单见 `federation-dev-plan.md` §2。

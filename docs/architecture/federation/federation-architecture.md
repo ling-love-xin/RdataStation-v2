@@ -53,8 +53,8 @@
 | 类型映射 | ⚠️ 无精度 `NUMBER` → **VARCHAR**；`NUMBER(10,2)` → `DECIMAL(10,2)`——跨源比较容易踩（`id = '2'` 才是对的） |
 
 **对设计的影响**（落点见 §9）：L2 源的挂载与 L1 **不完全同形**——① 目标名是 Secret（引擎不拿明文口令，**Secret 在会话里建，不落盘**）；
-② 不能带 `READ_ONLY`，写拒绝要靠编辑器闸门 + 只读账号（引擎侧补一道“写 L2 源”的判定）；
-③ 限定名是**两段**（`<别名>.<表>`），提示语要按源类型区分。
+② 不能带 `READ_ONLY`，写拒绝要靠编辑器闸门 + 只读账号 + **引擎侧会话层那一道**（T3.2 已落：`FederatedSession::write_refusal`）；
+③ 限定名是**两段**（`<别名>.<表>`），提示语要按源类型区分（T3.2 已落：`federation_notice` 按 `kind.needs_secret()` 分支）。
 
 ## 3. 与邻居的关系
 
@@ -71,7 +71,7 @@
 
 | # | 决策 | 理由 | 代价 / 取舍 |
 | --- | --- | --- | --- |
-| D1 | **一律只读**：外部源只 `ATTACH … (READ_ONLY)` | 跨源写的语义（哪个源、什么事务边界）没定义，开放就是埋雷 | 用户想“联邦结果落回源库”时要另走导出 / 复制（显式动作） |
+| D1 | **一律只读**：外部源只 `ATTACH … (READ_ONLY)` | 跨源写的语义（哪个源、什么事务边界）没定义，开放就是埋雷 | 用户想“联邦结果落回源库”时要另走导出 / 复制（显式动作）；**L2 源没有这个选项**（真机：Oracle 不接受 `READ_ONLY`）——靠会话层拒绝 + 编辑器闸门 + 只读账号（见 D14） |
 | D2 | **联邦不是独立连接**，是分析会话那条连接上的挂载状态 | 一条连接一套 `USE` / 临时表 / 会话变量；另起连接会让 1c 的单元看不到联邦建的表，还要再写一套共享机制 | 会话归属要与 1c 一起设计（1c 未开工，第一期先按“每文档一条”落地，留好切换点） |
 | D3 | **主源语义**：未限定名只在主源解析，跨源必须限定 | 否则同名表（两个库都有 `orders`）会解析成“随便一个”，出的是**静默发错** | 用户要记住“主源”这件事——用界面显示 + 同名表报错来兜 |
 | D4 | **扩展显式管理 + 离线预置** | 实测：`allow_community_extensions` / `autoinstall_known_extensions` / `autoload_known_extensions` **默认全为 `true`**——SQL 里一出现扩展函数名就**静默联网下载**；企业内网会表现为“莫名卡住” | 我们要自己写“装/查/失败原因”的最小流程；换来的是可控与可离线 |
@@ -86,7 +86,7 @@
 | D15 | **源登记复用 `use_duckdb_fed`，不另开一列**（原 T1.2 计划是加一列「用作联邦源」） | 实现时确认：这个开关的语义就是“**允许 DuckDB 直连本连接**”（对话框文案原本就写着“联邦查询直连源库”），且**项目侧表里也有这一列**；再开一个近乎同义的开关只会让人猜“两个开关差在哪” | 开关同时控制本地加速与联邦源参与；文案要同时说清两件事（已改）。若将来真需要分开，再加列不迟 |
 | D16 | **源从「连接记录」组装，不要求已连接** | 源是 DuckDB 自己 `ATTACH` 的（不需要应用先建连）；这正是**没有原生驱动的库**（Oracle 这类）能参与的唯一入口——应用连不上它，但 DuckDB 的 scanner 能 | 组装时现拼连接串（解密口令）；已建连的（含项目作用域 `P_`）作为第二来源补充，同一个 conn_id 只算一次 |
 | D13 | **联邦档要求 ≥ 2 个源** | 联邦与本地加速的区别就是“跨源”；只有一个源时两者是同一件事，摆两个入口只会让人猜 | 门控与执行路径同一口径，各自行尾把“还差哪个源”说出来（未连上 / 未开开关 / 驱动不支持） |
-| D14 | **L2 源走专用挂载路径**（与 L1 不同形） | 真机验收（§2.1）：Oracle 的凭据**只能走 Secret**（`ATTACH '<secret>'`），且**不支持 `READ_ONLY`**，限定名是**两段**（`<别名>.<表>`） | 会话里建**会话级** Secret（不落盘）；写拒绝靠编辑器闸门 + 只读账号（引擎侧补判定）；提示语 / 文档按源类型给不同写法 |
+| D14 | **L2 源走专用挂载路径**（与 L1 不同形） | 真机验收（§2.1）：Oracle 的凭据**只能走 Secret**（`ATTACH '<secret>'`），且**不支持 `READ_ONLY`**，限定名是**两段**（`<别名>.<表>`） | 会话里建**会话级** Secret（不落盘，`DETACH` 重挂时重建）；写拒绝：引擎侧会话层（`write_refusal`，判据保守）+ 编辑器闸门 + 只读账号；提示语按源类型给（L2 两段名）；**L2 只做联邦源、不做本地加速**（`AccelKind::local_accel_support` 直接说原因） |
 
 ## 5. 表名解析与写作规范
 
@@ -123,8 +123,8 @@
 
 | # | 级别 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- | --- |
-| 1 | ✅ | **L2 的社区 scanner 是否支持 `READ_ONLY` 未验** → **已验（2026-09-18）：Oracle 不支持**（`oracle_scanner` 0.2.2 原话：*does not accept option 'read_only' yet*；MSSQL 待验） | 只读第二道防线（引擎侧）对 L2 不生效 | 靠编辑器闸门 + 只读账号；引擎侧补一道“写 L2 源就被拒”的判定（T3.2） |
-| 2 | ✅ | **`oracle_scanner` 的用法形态未验** → **已验（2026-09-18）**：两条路都通——`ATTACH '<secret>' AS x (TYPE oracle_scanner)`（表挂 `main`，**两段名**）与表函数 `oracle_query('<secret>', '<sql>')`；凭据**只能走 Secret**（会话级，不落盘）；服务名写成 `XEPDB1` | 接线方式影响 `session.rs` 的形状 | 为 L2 写一条**专用挂载路径**：会话内建 Secret → 不带 `READ_ONLY` 的 `ATTACH`（T3.2） |
+| 1 | ✅ | **L2 的社区 scanner 是否支持 `READ_ONLY` 未验** → **已验（2026-09-18）：Oracle 不支持**（`oracle_scanner` 0.2.2 原话：*does not accept option 'read_only' yet*；MSSQL 待验） | 只读第二道防线（引擎侧）对 L2 不生效 | **已实现（T3.2）**：会话层 `write_refusal`（写语句 + 提到 L2 别名或其为主源就拒）+ 编辑器闸门 + 只读账号；真机验过（`oracle_federation.rs`） |
+| 2 | ✅ | **`oracle_scanner` 的用法形态未验** → **已验（2026-09-18）**：两条路都通——`ATTACH '<secret>' AS x (TYPE oracle_scanner)`（表挂 `main`，**两段名**）与表函数 `oracle_query('<secret>', '<sql>')`；凭据**只能走 Secret**（会话级，不落盘）；服务名写成 `XEPDB1` | 接线方式影响 `session.rs` 的形状 | **已实现（T3.2）**：`registry::oracle_secret_from_url`（URL → 会话级 Secret）+ `attach_source` 走 Secret 分支（不带 `READ_ONLY`）+ 扩展从 community 仓库装 |
 | 3 | 🟡 | **跨源查询的扫描量不可见**（DuckDB 侧怎么拿：`EXPLAIN ANALYZE` 还是 `query_progress`） | “这次查询读了 5000 万行”这种事用户看不到 | 第一期先做资源上限，扫描量随第二期一起给 |
 | 4 | 🟡 | **跨源无快照一致**（D8） | 结果可能是各源不同时刻的混合 | 界面如实声明；要一致就得物化（L3） |
 | 5 | 🟡 | **扩展版本与内核版本绑定**：扩展落在 `<目录>/v<内核版本>/`，升 DuckDB 要重下 | 离线预置包要跟内核版本走 | 预置脚本与内核升级流程绑在一起（`tools/`） |
@@ -147,7 +147,7 @@
 | D3 别名与重名检测 / 源清单快照 | `.../federation/registry.rs`（✅ 第一期） |
 | D12 会话缓存 / 指纹 / 按源刷新 | `.../federation/session.rs`（✅ `ensure_session` / `refresh_all` / `set_primary`） |
 | D11 凭据与脱敏 | `crates/engine/src/duckdb/accel.rs`（`AccelSource::new` / `scrub_credentials`）+ `crates/engine/tests/federation_credentials_probe.rs` |
-| D14 L2 挂载差异（Secret / 无只读 / 两段名） | `.../federation/session.rs`（🟡 T3.2）+ 真机台账 `crates/engine/tests/oracle_probe.rs`（✅） |
+| D14 L2 挂载差异（Secret / 无只读 / 两段名） | `.../federation/registry.rs`（`SourceSecret` + `oracle_secret_from_url`）+ `.../federation/session.rs`（`ensure_secret` / `attach_source` / `l2_write_refusal`，✅ T3.2）+ 扩展仓库选择 `accel::install_sql` + 真机验收 `crates/workbench/tests/oracle_federation.rs`（✅） |
 | D13 门控口径 | `crates/workbench/src/services/editor_channels.rs`（`federated_availability`） |
 | D15 源登记（复用开关） | `crates/workbench/src/components/connection_dialog/render.rs`（「DuckDB 直连（本地加速 / 用作联邦源）」分组） |
 | D16 从记录组装源 | `crates/workbench/src/services/editor_exec.rs`（`federated_plan` / `plan_from_records`）+ `accel::normalize_scheme`（驱动 id → 扫描器 scheme） |
