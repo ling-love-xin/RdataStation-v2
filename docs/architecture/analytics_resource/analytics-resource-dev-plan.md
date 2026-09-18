@@ -1,12 +1,31 @@
 # 资产库 / 分析存档模块（M6）· 开发方案（Phase 0–5）
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前四刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口均可用，**121 单测 + 25 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前五刀已落地**——归档/取回/再归档闭环 + 变更事件 + 索引修复 + 版本历史 / 索引修复 / 回收站 / 标签 / 分组五个对话框与组织入口、五个排序键与历史保留设置项均可用，**124 单测 + 25 窗口测试全绿**（详见 §0 进度记录） · 关联文件：`analytics-resource-architecture.md`（语义裁决与数据流）、`analytics-resource-prototype-design.md`（原型与交互规格）、`analytics-resource-prototype.html`（交互稿）、`README.md`（模块入口）
 > 前置：v1 行为蓝本 `v1/backend/src/core/persistence/analytics_resource_store/`（9 文件 2237 行）+ `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v1 前端 `v1/frontend/extensions/builtin/analytics-resource/`（**仅占位卡片列表**，见 `analytics-resource-prototype-design.md` §10）
 > 上游：`../scratchpad/scratchpad-dev-plan.md` Phase D（归档/取回 D1–D6，本方案是其落点的另一半）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：分析存档的归档/取回/登记/版本/组织/检索/回收站/索引修复。**不含**连接与内省（M3/M4）、工作区文件读写（M5）、DuckDB 计算（M2）、Mock 生成（M7）、洞察计算（M8）、项目级→系统级提升（M1）。
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-18 — Phase 2 第五刀（P2.4 前半）：历史内容保留接设置项
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 领域类型 ✅ | `KeepVersions::{All, MetadataOnly, Keep(n)}` + `from_setting` / `to_setting` / `limit` / `label`：把设置项里那个有符号数（`-1` 哨兵）收成一个类型——`All` 在裁剪那一步是 `None`（**不动作**），不是“保留 0 份”；`ArchiveRequest.keep_versions` 随之改收 `Option<KeepVersions>` | `src/model.rs` |
+| 服务层 ✅ | `ArchiveService.keep_versions: KeepVersions` + `with_keep_versions(KeepVersions)`；两处裁剪合并为 `prune_copies(resource_id, 本次覆盖)`：全留直接不动作，失败只记日志 | `src/service.rs` |
+| 对话框 ✅ | 「保留历史内容」接受 `-1`（仍拒其他负数：可能是手滑打错，不当全留静默吃掉）；填了 `-1` 时行下给一句“全部保留：不裁剪任何历史内容副本”，填了数字给“本次归档：保留最近 n 份”（哨兵值不说明就等于让用户猜） | `src/dialogs/archive.rs` |
+| 设置项 ✅ | 新节「资产库」+ `resources.keep_versions`（`i64`，默认 5；预设档：只留元数据 0 / 5 / 10 / 20 / **全部保留 -1**；生效方式 = 下次操作；消费方能点到符号） | `crates/settings/src/{model,registry,lib}.rs` |
+| 宿主接线 ✅ | 归档与版本还原两条会写副本的路径：主线程读设置 → `KeepVersions::from_setting`（设置层不依赖 M6，转换在宿主侧）→ 作业带值 → `open_service` 装配；其余作业不传（用默认 5 份） | `crates/workbench/src/{components/resource_host.rs,panels/resources.rs,services/resource_jobs.rs}` |
+| 验证 | `cargo test -p rds-analytics-resource -j 1` → **124 单测 + 16 面板窗口 + 9 对话框窗口全绿**（+3：对话框 `-1` 与设置值往返、服务两端策略：`All` 一份不裁 / `MetadataOnly` 副本全清，且两端都不动版本行）；`cargo test -p rds-settings -j 1` **21 项全绿**（登记表契约测试自动覆盖新项）；`cargo test -p rds-workbench -j 1 --lib --test ui_contract` 100 + 7 全绿 | — |
+
+**三处刻意的取舍**：
+
+1. **`-1` 而不是多一个 `keepAll` 开关**：两个会互相矛盾的键比一个稍宽的语义更难用，且 `-1` 是 v1 与架构 §5.2 已有的口径；
+2. **`All` 与 `MetadataOnly` 的区分放在 `limit()` 这一步**：`None` = 不裁剪、`Some(0)` = 裁到只剩元数据——两者都是“不保留内容”，但一个是“不动作”一个是“清干净”，合并成一个 0 会在出“全留却把副本删了”这种错时没人看得出来；
+3. **设置读取在主线程、随作业带入**：工作线程上拿不到 GPUI 的 global（与 `refresh` 里带 `read_only` 同理），也不在服务层反向读设置——`analytics_resource` 不依赖 settings crate（依赖方向是 `workbench → settings` 与 `workbench → analytics_resource`，两条都不反向）。
+
+**未落地**：默认排序与分组折叠态持久化（P2.4 后半，需先过设置层的准入五条）、拖拽到分组头、批量打标签（P2.5）、`F2` 重命名。
 
 ### 2026-09-18 — Phase 2 第四刀（P2.3 余项）：五个排序键（+ 归档登记体积）
 
@@ -537,7 +556,7 @@
 | P2.1 ✅ | 标签：新建/改名/删除（**补 v1 缺失的改名与删除**）、打标/去标、按标签检索、chips 渲染 —— **已落（2026-09-18，第一 / 三刀）**：存储层四项 + `dialogs/tag.rs`（勾选 / 新建并打上 / 行内 ⋯：重命名 / 删除）+ 详情 chips + 筛选菜单标签维（id 多选并集） | `src/tag.rs`（改名 / 删除 / 批量）、`src/dialogs/tag.rs`（未单独建 `tag_view.rs`：标签 UI 就藏在详情面板、筛选菜单与这个对话框里，没有独立视图） | 同名（未删）拒绝；删除标签清关联——t017 + `dialogs::tag` 三项单测钉住 |
 | P2.2 | 分组：单层分组的新建/改名/删除/移动（含批量移动与拖拽到分组头）—— **存储层、分区渲染与管理入口已落**（第二 / 三刀）：建/改/删 + 移动语义 + 折叠区 + 「移动到分组 ›」+ 分组头右键；**余**：拖拽 | `src/folder.rs`（已落）、`src/resource_view.rs`（分区 + 两个菜单已落） | 折叠状态持久化（待 P2.4 设置项）；空分组可见（已满足：头恒在） |
 | P2.3 | 搜索与筛选：名称 / 别名 / 标签 / 来源表；筛选三维（kind / 强度 / 标签）；排序（名称 / 归档时间 / 更新时间 / 大小 / 版本）—— **排序已落全五个键**（第四刀，含归档时登记体积）；**余**：搜索匹配别名 / 标签 / 来源表 | `src/resource.rs`、`src/resource_view.rs`、`src/filter.rs`（排序） | 转义 `%`/`_`；非法排序字段回退；`page_size ≤ 0` 不再 panic |
-| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1） | `crates/settings`、`src/service.rs` | 重启后保持 |
+| P2.4 | 设置项：`keepVersions` / 默认排序 / 默认分组 → `settings.json`（**不用 localStorage**，对照 v1）—— **`keep_versions` 已落**（第五刀：设置页新增「资产库」节，含 `-1` = 全部保留；归档 / 版本还原两条路径都接）；**余**：默认排序与分组折叠态（需先过设置层准入五条） | `crates/settings`、`src/service.rs` | 重启后保持 |
 | P2.5 | 多选与批量：批量打标签 / 批量移动 / 批量删除（含数量提示） | `src/resource_view.rs`、`src/commands.rs` | 多选态菜单按数量自适应（v1 的缺陷） |
 
 ## 5. Phase 3 — 版本与恢复

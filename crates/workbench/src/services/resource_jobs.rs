@@ -37,7 +37,7 @@ use analytics_resource::present::{
 use analytics_resource::resource_view::{GroupOption, ResourcesSnapshot};
 use analytics_resource::{
     AnalyticsResourceStore, ArchiveKind, ArchiveRequest, ArchiveService, ArchiveStatus, ArchiveUndo,
-    CheckoutRequest, IndexIssue, IndexRepair,
+    CheckoutRequest, IndexIssue, IndexRepair, KeepVersions,
 };
 
 /// 连接池大小：与其它项目库访问点一致（`data_source_service` / `workspace_loader` 同为 4）。
@@ -54,6 +54,8 @@ struct ArchiveJob {
     project_root: PathBuf,
     read_only: bool,
     request: ArchiveRequest,
+    /// 历史内容保留策略（设置项 `resources.keep_versions`，在入队时从主线程读好）。
+    keep_versions: KeepVersions,
 }
 
 /// 一次取回（检出）任务。
@@ -93,6 +95,8 @@ struct VersionActionJob {
     /// 存档显示名（回执文案用；事件路径不必再查库）。
     name: String,
     action: VersionAction,
+    /// 历史内容保留策略（还原会把当前内容留成副本，之后要按策略裁剪）。
+    keep_versions: KeepVersions,
 }
 
 /// 一次索引扫描任务（扫描不改任何状态，所以不带只读标志）。
@@ -406,18 +410,29 @@ fn refresh_after_op(rt: &tokio::runtime::Runtime, project_root: PathBuf, read_on
 }
 
 /// 开一条项目库连接并组装归档服务（工作线程上执行）。
-async fn open_service(project_root: PathBuf) -> Result<ArchiveService, String> {
+/// 打开项目库并装配归档服务。
+///
+/// `keep_versions` 为 `None` 时用服务自带的默认（5 份）：**只有会裁剪的作业**才需要把
+/// 设置项传进来（归档 / 版本还原），其余作业拿默认值就够。
+async fn open_service(
+    project_root: PathBuf,
+    keep_versions: Option<KeepVersions>,
+) -> Result<ArchiveService, String> {
     let manager = ProjectDatabaseManager::open(&project_root, SQLITE_POOL_SIZE)
         .await
         .map_err(|e| format!("打开项目库失败：{e}"))?;
     let store = AnalyticsResourceStore::new(manager.sqlite_pool());
-    Ok(ArchiveService::new(project_root, store))
+    let service = ArchiveService::new(project_root, store);
+    Ok(match keep_versions {
+        Some(keep) => service.with_keep_versions(keep),
+        None => service,
+    })
 }
 
 /// 执行一次归档。
 async fn run_archive(job: &ArchiveJob) -> OpOutcome {
     let name = job.request.name.clone();
-    let service = match open_service(job.project_root.clone()).await {
+    let service = match open_service(job.project_root.clone(), Some(job.keep_versions)).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -453,7 +468,7 @@ async fn run_archive(job: &ArchiveJob) -> OpOutcome {
 /// 落点在动文件**之前**定死（重名避让），回执里给的就是真实路径：用户看到"取回为 X"
 /// 之后去草稿箱找 X，必须找得到。
 async fn run_checkout(job: &CheckoutJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone()).await {
+    let service = match open_service(job.project_root.clone(), None).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -482,7 +497,7 @@ async fn run_checkout(job: &CheckoutJob) -> OpOutcome {
 
 /// 执行一次撤销归档。
 async fn run_undo(job: &UndoJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone()).await {
+    let service = match open_service(job.project_root.clone(), None).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -507,7 +522,7 @@ async fn run_undo(job: &UndoJob) -> OpOutcome {
 /// 逐条走服务层；服务层不做预回滚（部分成功就部分成功），所以错误文案里会带“已移入 N 项”
 /// ——宿主只需原样转述，不要自己算进度。
 async fn run_trash(job: &TrashJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone()).await {
+    let service = match open_service(job.project_root.clone(), None).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -532,7 +547,7 @@ async fn run_trash(job: &TrashJob) -> OpOutcome {
 /// “副本在不在”与“本体在不在”都要问文件系统（`.RSmeta` 与 `resources/`），
 /// 所以这一整套也在工作线程上——渲染期零 I/O 的纪律同样适用于对话框。
 async fn load_versions(job: &VersionsJob) -> Result<VersionRows, String> {
-    let service = open_service(job.project_root.clone()).await?;
+    let service = open_service(job.project_root.clone(), None).await?;
     let current = service
         .store()
         .get_resource_by_id(&job.resource_id)
@@ -572,7 +587,7 @@ async fn load_versions(job: &VersionsJob) -> Result<VersionRows, String> {
 
 /// 执行一次版本历史动作（工作线程上执行）。
 async fn run_version_action(job: &VersionActionJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone()).await {
+    let service = match open_service(job.project_root.clone(), Some(job.keep_versions)).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -690,7 +705,7 @@ async fn load_index_report(job: &IndexScanJob) -> Result<IndexScanRows, String> 
 
 /// 执行一次索引修复动作（工作线程上执行）。
 async fn run_repair_action(job: &IndexRepairActionJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone()).await {
+    let service = match open_service(job.project_root.clone(), None).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -794,7 +809,7 @@ fn module_label(origin: &str) -> String {
 
 /// 执行一次回收站动作（工作线程上执行）。
 async fn run_trash_action(job: &TrashActionJob) -> OpOutcome {
-    let service = match open_service(job.project_root.clone()).await {
+    let service = match open_service(job.project_root.clone(), None).await {
         Ok(service) => service,
         Err(reason) => {
             return OpOutcome::Failed {
@@ -1189,12 +1204,18 @@ pub fn enqueue_refresh(project_root: PathBuf, read_only: bool) {
 }
 
 /// 提交一次归档（**事件路径**调用：对话框确认之后）。
-pub fn enqueue_archive(project_root: PathBuf, read_only: bool, request: ArchiveRequest) {
+pub fn enqueue_archive(
+    project_root: PathBuf,
+    read_only: bool,
+    request: ArchiveRequest,
+    keep_versions: KeepVersions,
+) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::Archive(ArchiveJob {
         project_root,
         read_only,
         request,
+        keep_versions,
     }));
 }
 
@@ -1250,6 +1271,7 @@ pub fn enqueue_version_action(
     resource_id: String,
     name: String,
     action: VersionAction,
+    keep_versions: KeepVersions,
 ) {
     jobs().pending.fetch_add(1, Ordering::SeqCst);
     let _ = jobs().tx.send(Job::VersionAction(VersionActionJob {
@@ -1258,6 +1280,7 @@ pub fn enqueue_version_action(
         resource_id,
         name,
         action,
+        keep_versions,
     }));
 }
 

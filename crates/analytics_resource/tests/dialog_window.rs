@@ -22,6 +22,7 @@ use rds_analytics_resource::dialogs::archive::{
     ArchiveConflict, ArchiveDialogResult, ArchiveDialogSeed, build_inputs,
     open_archive_dialog_with, submit_archive,
 };
+use rds_analytics_resource::KeepVersions;
 use rds_analytics_resource::dialogs::checkout::{
     CheckoutDialogResult, CheckoutDialogSeed, build_inputs as build_checkout_inputs,
     open_checkout_dialog_with, submit_checkout, suggest_work_copy_name,
@@ -228,7 +229,7 @@ fn archive_dialog_opens_renders_and_validates(cx: &mut TestAppContext) {
         .expect("填好后应通过校验");
     assert_eq!(result.name, "月报 2026");
     assert_eq!(result.tags, vec!["报表", "月度"], "去空、去重、保序");
-    assert_eq!(result.keep_versions, Some(3));
+    assert_eq!(result.keep_versions, Some(KeepVersions::Keep(3)));
 
     // 非法保留份数：挡住提交（提示由渲染期从同一个解析函数推出，不会两处不一致）。
     cx.update(|window, cx| {

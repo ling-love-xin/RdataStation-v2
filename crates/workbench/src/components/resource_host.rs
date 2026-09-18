@@ -44,7 +44,7 @@ use analytics_resource::dialogs::group::{
 };
 use analytics_resource::dialogs::pick::{DraftCandidate, PickDialogSeed, open_draft_pick_dialog};
 use analytics_resource::model::{
-    ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest,
+    ArchiveBinding, ArchiveKind, ArchiveRequest, ArchiveUndo, CheckoutRequest, KeepVersions,
 };
 use analytics_resource::payload::{PayloadStore, RESOURCES_DIR_NAME};
 use analytics_resource::resource_view::ResourcesHost;
@@ -88,6 +88,8 @@ fn archive_seed(
 
 /// 提交一次归档（入队 + 立刻刷新 + 回执）：两条归档入口共用，
 /// 避免"一处记得刷新、另一处忘了"。
+///
+/// 保留策略在这里（主线程）读好随作业带入：工作线程上拿不到 GPUI 的 global 设置。
 fn submit_archive(
     root: &Path,
     read_only: bool,
@@ -95,7 +97,8 @@ fn submit_archive(
     shared: &Shared,
     cx: &mut App,
 ) {
-    resource_jobs::enqueue_archive(root.to_path_buf(), read_only, request);
+    let keep_versions = KeepVersions::from_setting(settings::SettingsService::keep_versions(cx));
+    resource_jobs::enqueue_archive(root.to_path_buf(), read_only, request, keep_versions);
     shared.refresh_resources(cx);
     say(shared, "资产库：正在归档…", cx);
 }
@@ -310,6 +313,9 @@ impl ResourcesHost for WorkbenchResourceHost {
                 // 选多个：默认名 + 各自来源，逐个入队（列表里没有位置让用户逐个改名）。
                 many => {
                     let payload = PayloadStore::new(root.clone());
+                    // 保留策略按设置批带入（多选路径没有逐个覆盖的输入框）。
+                    let keep_versions =
+                        KeepVersions::from_setting(settings::SettingsService::keep_versions(cx));
                     let mut renamed = 0usize;
                     for draft in many {
                         let resolved_rel = payload.free_rel_path(&draft.rel_path);
@@ -336,7 +342,12 @@ impl ResourcesHost for WorkbenchResourceHost {
                             keep_versions: None,
                             existing_resource_id: None,
                         };
-                        resource_jobs::enqueue_archive(root.clone(), read_only, request);
+                        resource_jobs::enqueue_archive(
+                            root.clone(),
+                            read_only,
+                            request,
+                            keep_versions,
+                        );
                     }
                     let mut message = format!("资产库：已提交 {} 个归档…", many.len());
                     if renamed > 0 {

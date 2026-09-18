@@ -5,6 +5,7 @@
 //! - `connection_defaults`：连接默认值（建连超时、LAN 直连 TLS）
 //! - `projects`：项目列表偏好（排序方式）
 //! - `navigator`：数据源导航（来源标识、显示开关、属性面板宽度、facet 筛选）
+//! - `resources`：资产库（历史内容保留策略）
 //! - `logging`：日志最低级别
 //!
 //! 主题模式直接复用 `gpui_kit::component::ThemeMode`（已派生
@@ -33,6 +34,8 @@ pub struct Settings {
     pub projects: Projects,
     #[serde(default)]
     pub navigator: Navigator,
+    #[serde(default)]
+    pub resources: Resources,
     #[serde(default)]
     pub logging: Logging,
 }
@@ -146,6 +149,32 @@ impl Default for Navigator {
     }
 }
 
+/// 资产库（M6）：分析存档策略。
+///
+/// 与导航那种"显示偏好"不同，这里的值**会改变服务行为**（配额裁剪），所以它同时是
+/// `ArchiveService` 的入参——设置 → 作业 → 服务一条线，转成领域类型的那一步在宿主侧
+/// （`KeepVersions::from_setting`，见 `analytics_resource::model`）。
+///
+/// 保留的是**历史内容副本**：版本行（元数据）永远不删，界面上表现为"副本缺失"（架构 §5.2）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resources {
+    /// 每份存档保留的历史内容副本份数：`-1` = 全部保留（不裁剪），`0` = 只留版本元数据，
+    /// `n ≥ 1` = 保留最近 n 份。默认 5。
+    ///
+    /// 用有符号数（而不是 `u32`）就是为了 `-1` 这个哨兵：它是 v1 与架构文档里已有的口径
+    /// （`docs/architecture/analytics_resource/analytics-resource-architecture.md` §5.2）。
+    #[serde(default = "default_keep_versions")]
+    pub keep_versions: i64,
+}
+
+impl Default for Resources {
+    fn default() -> Self {
+        Self {
+            keep_versions: default_keep_versions(),
+        }
+    }
+}
+
 /// 日志：写文件 / 落库的级别门槛。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Logging {
@@ -221,6 +250,9 @@ fn default_project_sort() -> String {
 }
 fn default_property_width() -> f32 {
     24.5
+}
+fn default_keep_versions() -> i64 {
+    5
 }
 
 #[cfg(test)]

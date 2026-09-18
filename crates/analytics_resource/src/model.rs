@@ -109,6 +109,60 @@ pub struct ArchiveBinding {
     pub source_table: Option<String>,
 }
 
+/// 历史内容副本的保留策略（设置项 `resources.keep_versions` 的领域口径，架构 §5.2）。
+///
+/// 保留的只是**内容副本**：版本行（元数据）永久保留，界面上以"副本缺失"标注。
+/// 设置项那边是有符号数（`-1` 是哨兵），转换成领域类型的那一步在宿主侧做——
+/// 设置层不依赖 M6，转换放在两边都看得见的地方（`from_setting` / `to_setting`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeepVersions {
+    /// 全部保留（设置项写 `-1`）：不裁剪任何副本。
+    All,
+    /// 只留版本元数据，不留内容副本（设置项写 `0`）。
+    MetadataOnly,
+    /// 保留最近 `n` 份内容副本（`n ≥ 1`）。
+    Keep(u32),
+}
+
+impl KeepVersions {
+    /// 设置项 → 领域口径（`-1` 及以下都是全留；正数封顶在 `u32`）。
+    pub fn from_setting(value: i64) -> Self {
+        match value {
+            n if n <= -1 => Self::All,
+            0 => Self::MetadataOnly,
+            n => Self::Keep(n.min(u32::MAX as i64) as u32),
+        }
+    }
+
+    /// 领域口径 → 设置项（页面与 JSON 里看到的就是这个数）。
+    pub fn to_setting(self) -> i64 {
+        match self {
+            Self::All => -1,
+            Self::MetadataOnly => 0,
+            Self::Keep(n) => i64::from(n),
+        }
+    }
+
+    /// 裁剪时的保留份数；`None` = 不裁剪（全留）。
+    pub fn limit(self) -> Option<u32> {
+        match self {
+            Self::All => None,
+            Self::MetadataOnly => Some(0),
+            // `Keep(0)` 与 `MetadataOnly` 同义（类型上仍可能出现，此处归一）。
+            Self::Keep(n) => Some(n),
+        }
+    }
+
+    /// 人读文案（对话框提示与回执用）。
+    pub fn label(self) -> String {
+        match self {
+            Self::All => "全部保留".to_string(),
+            Self::MetadataOnly => "只留版本元数据".to_string(),
+            Self::Keep(n) => format!("保留最近 {n} 份"),
+        }
+    }
+}
+
 /// 归档请求：上游（草稿箱 / 本地文件选择）发起，M6 只收**路径 + 元数据**。
 ///
 /// 刻意不接收 `ScratchpadStore` 之类的上游类型——依赖方向是 `scratchpad → analytics_resource`，
@@ -131,8 +185,8 @@ pub struct ArchiveRequest {
     pub tags: Vec<String>,
     /// 归入分组（可空）。
     pub group_id: Option<String>,
-    /// 历史内容保留份数；`None` = 跟随设置默认（架构 §5.2）。
-    pub keep_versions: Option<u32>,
+    /// 历史内容保留策略；`None` = 跟随设置默认（架构 §5.2）。
+    pub keep_versions: Option<KeepVersions>,
     /// 再归档时由上游带回的来源存档 id（取回后改完再归档，见架构 §6.4）。
     ///
     /// `None` = 首次归档（新存档）；`Some` 时命中已有存档：内容指纹未变则不产生新版本。

@@ -187,6 +187,9 @@ pub fn value_by_key(settings: &Settings, key: &str) -> Option<SettingValue> {
         }
         // 复合值（facet 筛选）没有标量形态：它的读写走导航面板自己的入口。
         Slot::NavigatorFilters => return None,
+        Slot::ResourcesKeepVersions => {
+            SettingValue::Number(settings.resources.keep_versions as f64)
+        }
         Slot::ConnectTimeoutMs => {
             SettingValue::Number(settings.connection_defaults.connect_timeout_ms as f64)
         }
@@ -250,6 +253,13 @@ impl SettingsService {
             }
             // 复合值没有标量写入路径：拒绝而不是"猜一半"。
             Slot::NavigatorFilters => return false,
+            Slot::ResourcesKeepVersions => {
+                let Some(value) = value.as_number() else {
+                    return false;
+                };
+                // 页面上只给预设档（含 `-1` = 全留），取整后写入。
+                Self::set_keep_versions(value.round() as i64, cx);
+            }
             Slot::ConnectTimeoutMs => {
                 let Some(ms) = value.as_number() else { return false };
                 Self::set_connect_timeout_ms(ms.max(0.) as u64, cx);
@@ -402,6 +412,24 @@ impl SettingsService {
         let settings = cx.global::<Settings>().clone();
         persist(&settings);
         cx.refresh_windows();
+    }
+
+    /// 每份存档保留的历史内容副本份数（`-1` = 全留，`0` = 只留元数据）。
+    ///
+    /// 返回的是**落盘口径的原始数**：转成领域类型的那一步在宿主侧做
+    /// （设置层不依赖 M6，见 `analytics_resource::model::KeepVersions::from_setting`）。
+    pub fn keep_versions(cx: &App) -> i64 {
+        cx.global::<Settings>().resources.keep_versions
+    }
+
+    /// 设置并持久化历史内容保留份数。
+    pub fn set_keep_versions(value: i64, cx: &mut App) {
+        {
+            let settings = cx.global_mut::<Settings>();
+            settings.resources.keep_versions = value;
+        }
+        let settings = cx.global::<Settings>().clone();
+        persist(&settings);
     }
 
     /// 建连超时（毫秒）。

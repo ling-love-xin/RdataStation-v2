@@ -21,12 +21,13 @@ use gpui_kit::component::{ActiveTheme, Sizable as _, Theme, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::model::KeepVersions;
 use crate::ui;
 
 /// 「保留历史内容」输入的上限。
 ///
 /// 100 份内容副本已是"基本不裁剪"；再加位数多半是手滑多打了一个 0，
-/// 而每多一份都是整份文件副本，不值得让它悄悄生效。
+/// 而每多一份都是整份文件副本，不值得让它悄悄生效（要真的全留就填 `-1`）。
 pub const KEEP_VERSIONS_MAX: u32 = 100;
 
 /// 打开归档对话框所需的全部信息（**宿主在事件路径备好**）。
@@ -63,8 +64,8 @@ pub struct ArchiveDialogResult {
     pub name: String,
     /// 逗号 / 空格分隔的标签（已去空、去重、保序）。
     pub tags: Vec<String>,
-    /// `None` = 跟随设置默认（输入框留空即此意）。
-    pub keep_versions: Option<u32>,
+    /// `None` = 跟随设置默认（输入框留空即此意；`-1` = 全部保留）。
+    pub keep_versions: Option<KeepVersions>,
 }
 
 /// 表单的输入实体（开窗前建好；测试可复核同一批实体）。
@@ -90,21 +91,29 @@ pub fn parse_tags(text: &str) -> Vec<String> {
     out
 }
 
-/// 「保留历史内容」解析：**空 = 跟随设置**（`None`），数字 = 本次覆盖。
+/// 「保留历史内容」解析：**空 = 跟随设置**（`None`），数字 = 本次覆盖，`-1` = 全部保留。
 ///
 /// 错误给的是**可直接当提示用**的一句话（校验与提示同源，不会出现"提示说非法、提交却过了"）。
-pub fn parse_keep_versions(text: &str) -> Result<Option<u32>, &'static str> {
+pub fn parse_keep_versions(text: &str) -> Result<Option<KeepVersions>, &'static str> {
     let text = text.trim();
     if text.is_empty() {
         return Ok(None);
     }
-    let Ok(value) = text.parse::<u32>() else {
+    let Ok(value) = text.parse::<i64>() else {
         return Err("请填数字（留空 = 跟随设置）");
     };
-    if value > KEEP_VERSIONS_MAX {
+    if value < 0 {
+        // 负数只有 `-1` 有意义（与设置项同一个哨兵）；其余负数（如 `-2`）是误敲，
+        // 不当作全留静默吃掉。
+        if value == -1 {
+            return Ok(Some(KeepVersions::All));
+        }
+        return Err("-1 = 全部保留（留空 = 跟随设置）");
+    }
+    if value > i64::from(KEEP_VERSIONS_MAX) {
         return Err("最多 100 份（留空 = 跟随设置）");
     }
-    Ok(Some(value))
+    Ok(Some(KeepVersions::from_setting(value)))
 }
 
 /// 显示名的校验提示（`None` = 合法）。
@@ -125,7 +134,7 @@ pub fn build_inputs(
     name.update(cx, |state, cx| state.set_value(name_value, window, cx));
 
     let tags = cx.new(|cx| InputState::new(window, cx).placeholder("标签，逗号分隔（可空）"));
-    let keep_versions = cx.new(|cx| InputState::new(window, cx).placeholder("跟随设置"));
+    let keep_versions = cx.new(|cx| InputState::new(window, cx).placeholder("跟随设置（-1 全留）"));
     ArchiveDialogInputs {
         name,
         tags,
@@ -208,7 +217,14 @@ pub fn open_archive_dialog_with(
         let theme = cx.theme();
         // 提示每帧从当前值推导：用户改回去，提示自然消失（无标志位可残留）。
         let name_hint = name_hint(&name.read(cx).value());
-        let keep_hint = parse_keep_versions(&keep_versions.read(cx).value()).err();
+        let keep = parse_keep_versions(&keep_versions.read(cx).value());
+        let keep_hint = keep.err();
+        // 写了 `-1` 时把它的含义摆出来：这是个哨兵值，不说明就等于让用户猜。
+        let keep_note = match keep {
+            Ok(Some(KeepVersions::All)) => Some("全部保留：不裁剪任何历史内容副本".to_string()),
+            Ok(Some(keep)) => Some(format!("本次归档：{}", keep.label())),
+            _ => None,
+        };
         // builder 是 `Fn`（每帧重建）：两条提交路径各拿一份**本帧的**副本——
         // 内层 `move` 闭包只能拿走副本，外层不能再持有它们（否则 builder 就不是 `Fn` 了）。
         let submit_for_button = submit.clone();
@@ -229,6 +245,9 @@ pub fn open_archive_dialog_with(
             .child(Input::new(&keep_versions))
             .when_some(keep_hint, |this, hint| {
                 this.child(hint_line(hint, theme.colors.danger))
+            })
+            .when_some(keep_note, |this, note| {
+                this.child(hint_line(&note, theme.colors.muted_foreground))
             });
 
         dialog
@@ -343,6 +362,7 @@ fn hint_line(text: &str, color: gpui_kit::Hsla) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{KEEP_VERSIONS_MAX, name_hint, parse_keep_versions, parse_tags};
+    use crate::model::KeepVersions;
 
     #[test]
     fn tags_split_on_commas_and_spaces_keeping_order() {
@@ -359,18 +379,46 @@ mod tests {
     fn keep_versions_empty_means_following_settings() {
         assert_eq!(parse_keep_versions(""), Ok(None));
         assert_eq!(parse_keep_versions("  "), Ok(None));
-        assert_eq!(parse_keep_versions("3"), Ok(Some(3)));
-        assert_eq!(parse_keep_versions("0"), Ok(Some(0)), "0 = 只留元数据");
+        assert_eq!(parse_keep_versions("3"), Ok(Some(KeepVersions::Keep(3))));
+        assert_eq!(
+            parse_keep_versions("0"),
+            Ok(Some(KeepVersions::MetadataOnly)),
+            "0 = 只留元数据"
+        );
         assert_eq!(
             parse_keep_versions(&KEEP_VERSIONS_MAX.to_string()),
-            Ok(Some(KEEP_VERSIONS_MAX))
+            Ok(Some(KeepVersions::Keep(KEEP_VERSIONS_MAX)))
         );
         assert!(parse_keep_versions("abc").is_err());
-        assert!(parse_keep_versions("-1").is_err());
         assert!(
             parse_keep_versions(&(KEEP_VERSIONS_MAX + 1).to_string()).is_err(),
             "超出上限挡在对话框，不留给服务层裁剪"
         );
+    }
+
+    /// `-1` = 全部保留（与设置项同一个哨兵）；其余负数不当全留静默吃掉。
+    #[test]
+    fn minus_one_means_keep_everything() {
+        assert_eq!(parse_keep_versions("-1"), Ok(Some(KeepVersions::All)));
+        assert!(parse_keep_versions("-2").is_err());
+        assert!(parse_keep_versions("-").is_err());
+    }
+
+    /// 设置项字面量 ↔ 领域口径的往返（宿主在两个 crate 之间就是靠这一对转的）。
+    #[test]
+    fn keep_versions_roundtrips_the_setting_value() {
+        for (setting, expected) in [
+            (-1, KeepVersions::All),
+            (0, KeepVersions::MetadataOnly),
+            (5, KeepVersions::Keep(5)),
+        ] {
+            let value = KeepVersions::from_setting(setting);
+            assert_eq!(value, expected);
+            assert_eq!(value.to_setting(), setting, "落盘值不能被改变");
+        }
+        // 全留 = 不裁剪（不是“保留 0 份”）；只留元数据 = 保留 0 份。
+        assert_eq!(KeepVersions::All.limit(), None);
+        assert_eq!(KeepVersions::MetadataOnly.limit(), Some(0));
     }
 
     #[test]

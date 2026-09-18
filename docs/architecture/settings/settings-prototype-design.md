@@ -107,6 +107,7 @@
 
 > **数值行一律用预设档，不做自由输入**：自由输入要成套的校验与单位处理，而目前没有这种需求（`navigator.property_panel_width` 由拖拽设置、不上页）。
 > 触发重评：出现无法穷举的数值项（如保留份数要支持任意值）时，补校验与单位后缀再上。契约测试 `page_rows_are_scalar_and_writable` 会拦住"数值行没给预设档"。
+> 保留份数的落点（2026-09-18）：在**归档对话框**里是自由输入（那里有逐次校验 + 上限 100，见 M6 原型 §4.1），在**设置页**仍是预设档（含 `-1` = 全部保留，且含默认值 5，契约测试照过）——"要支持任意值"这条重评触发条件因此**未被触发**。
 
 ## 5. 第一版内容清单
 
@@ -121,6 +122,7 @@
 | 数据源导航 | 缓存管理… | —（动作行） | `Button` | — | 宿主回调 → `components/cache_dialog.rs`；说明行写「打开缓存对话框，清理元数据缓存」 |
 | 连接默认值 | 建连超时 | `connection_defaults.connect_timeout_ms` | segmented 5/15/30/60s | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` |
 | 连接默认值 | LAN 直连 TLS | `connection_defaults.lan_disable_tls` | segmented 关 TLS / 保留 TLS | 下次操作 | `connection_service.rs::apply_lan_tls_default` |
+| 资产库 | 历史内容保留 | `resources.keep_versions` | segmented 只留元数据 / 5 / 10 / 20 / 全部保留（**含 `-1` 哨兵**） | 下次操作 | `workbench/src/components/resource_host.rs` + `panels/resources.rs`（读设置 → `KeepVersions::from_setting`）→ `services/resource_jobs.rs::open_service` → `analytics_resource::ArchiveService::with_keep_versions` |
 | 项目 | 列表排序 | `projects.sort_mode` | segmented 最近 / 名称 / 创建 | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写，双入口：选择器内循环按钮） |
 | 日志 | 日志级别 | `logging.min_level` | segmented 全部 / TRACE / DEBUG / INFO / WARN / ERROR | 即时 | `crates/app/src/main.rs`（启动取值）+ 装配层 sink → `engine::logging::reload_log_level` |
 | 日志 | 查看日志… | —（动作行） | `Button` | — | 宿主回调 → `components/log_dialog.rs`；说明行写「打开日志查看对话框」 |

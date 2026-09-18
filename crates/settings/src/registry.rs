@@ -110,6 +110,7 @@ pub enum Slot {
     NavigatorShowScope,
     NavigatorPropertyWidth,
     NavigatorFilters,
+    ResourcesKeepVersions,
     ConnectTimeoutMs,
     LanDisableTls,
     ProjectSortMode,
@@ -125,6 +126,7 @@ pub fn slot_for(key: &str) -> Option<Slot> {
         "navigator.show_scope" => Slot::NavigatorShowScope,
         "navigator.property_panel_width" => Slot::NavigatorPropertyWidth,
         "navigator.filters" => Slot::NavigatorFilters,
+        "resources.keep_versions" => Slot::ResourcesKeepVersions,
         "connection_defaults.connect_timeout_ms" => Slot::ConnectTimeoutMs,
         "connection_defaults.lan_disable_tls" => Slot::LanDisableTls,
         "projects.sort_mode" => Slot::ProjectSortMode,
@@ -140,6 +142,8 @@ pub fn slot_kind(slot: Slot) -> KindTag {
         Slot::NavigatorSourceShortCode => KindTag::BoolPair,
         Slot::NavigatorShowTags | Slot::NavigatorShowScope => KindTag::Bool,
         Slot::NavigatorPropertyWidth | Slot::ConnectTimeoutMs => KindTag::Number,
+        // 保留份数是有符号数：`-1` = 全留（哨兵值，不是"少一份"）。
+        Slot::ResourcesKeepVersions => KindTag::Number,
         Slot::NavigatorFilters => KindTag::Composite,
         Slot::LanDisableTls => KindTag::BoolPair,
         Slot::ProjectSortMode => KindTag::Enum,
@@ -224,7 +228,7 @@ impl SettingSpec {
 
 /// 设置项登记表（已落地项；顺序 = 页面上的顺序）。
 ///
-/// 节顺序：外观 → 数据源导航 → 连接默认值 → 项目 → 日志。
+/// 节顺序：外观 → 数据源导航 → 资产库 → 连接默认值 → 项目 → 日志。
 pub const REGISTRY: &[SettingSpec] = &[
     SettingSpec {
         key: "appearance.theme_mode",
@@ -312,6 +316,20 @@ pub const REGISTRY: &[SettingSpec] = &[
         entry: SettingEntry::Module,
         consumer: "workbench/src/panels/mod.rs::SidebarPanel::new + nav.rs::write_nav_filters",
         composite: true,
+    },
+    SettingSpec {
+        key: "resources.keep_versions",
+        section: "resources",
+        section_label: "资产库",
+        label: "历史内容保留",
+        hint: "每份存档保留几份历史内容副本（版本行永久保留，界面上以「副本缺失」标注）；对之后的归档 / 版本还原生效",
+        kind: SettingKind::Number,
+        presets: &[(0, "只留元数据"), (5, "5 份"), (10, "10 份"), (20, "20 份"), (-1, "全部保留")],
+        default_json: "5",
+        effect: SettingEffect::NextUse,
+        entry: SettingEntry::Page,
+        consumer: "workbench/src/services/resource_jobs.rs::open_service（归档 / 版本还原作业）",
+        composite: false,
     },
     SettingSpec {
         key: "connection_defaults.connect_timeout_ms",

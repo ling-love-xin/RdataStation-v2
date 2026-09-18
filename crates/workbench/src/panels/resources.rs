@@ -22,6 +22,7 @@ use analytics_resource::dialogs::tag::TagDialogEvent;
 use analytics_resource::dialogs::trash::TrashAction;
 use analytics_resource::dialogs::version::VersionAction;
 use analytics_resource::resource_view::{ResourcesPanel, ResourcesSnapshot};
+use analytics_resource::KeepVersions;
 
 use super::SidebarPanel;
 use crate::services::resource_jobs::{self, TagJobAction};
@@ -80,6 +81,8 @@ impl SidebarPanel {
             resource_id.to_string(),
             name.to_string(),
             action,
+            // 还原会把当前内容留成副本，之后按设置裁剪；保留策略在主线程读好。
+            KeepVersions::from_setting(settings::SettingsService::keep_versions(cx)),
         );
         self.ensure_resources_pump(cx);
     }

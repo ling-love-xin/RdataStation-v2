@@ -16,12 +16,13 @@ use shared::error::{CoreError, StorageError};
 
 use crate::model::{
     ArchiveKind, ArchiveOutcome, ArchiveRequest, ArchiveUndo, ChangeReason, CheckoutOutcome,
-    CheckoutRequest, NewArchiveInput, ORIGIN_RESOURCES, ResourcesChanged, TrashArchiveEntry,
+    CheckoutRequest, KeepVersions, NewArchiveInput, ORIGIN_RESOURCES, ResourcesChanged,
+    TrashArchiveEntry,
 };
 use crate::payload::PayloadStore;
 use crate::{AnalyticsResource, AnalyticsResourceStore};
 
-/// 历史内容副本默认保留份数（设置项 `keepVersions`，架构 §5.2）。
+/// 历史内容副本默认保留份数（设置项 `resources.keep_versions`，架构 §5.2）。
 pub const DEFAULT_KEEP_VERSIONS: u32 = 5;
 
 /// 事件广播容量：够覆盖面板重绘窗口即可，溢出由订阅方收到 `Lagged` 并整表刷新。
@@ -32,7 +33,7 @@ pub struct ArchiveService {
     payload: PayloadStore,
     store: AnalyticsResourceStore,
     events: broadcast::Sender<ResourcesChanged>,
-    keep_versions: u32,
+    keep_versions: KeepVersions,
 }
 
 impl ArchiveService {
@@ -42,14 +43,33 @@ impl ArchiveService {
             payload: PayloadStore::new(project_root),
             store,
             events,
-            keep_versions: DEFAULT_KEEP_VERSIONS,
+            keep_versions: KeepVersions::Keep(DEFAULT_KEEP_VERSIONS),
         }
     }
 
-    /// 覆盖历史内容保留份数（`0` = 只留版本元数据，不留内容副本）。
-    pub fn with_keep_versions(mut self, keep_versions: u32) -> Self {
+    /// 覆盖历史内容保留策略（设置项 `resources.keep_versions` → `KeepVersions`）。
+    ///
+    /// `KeepVersions::All` 表示**不裁剪**（不是"保留 0 份"）。
+    pub fn with_keep_versions(mut self, keep_versions: KeepVersions) -> Self {
         self.keep_versions = keep_versions;
         self
+    }
+
+    /// 本次操作生效的保留策略：请求里的覆盖优先，否则用装配时给的（设置项）。
+    fn effective_keep(&self, request_override: Option<KeepVersions>) -> KeepVersions {
+        request_override.unwrap_or(self.keep_versions)
+    }
+
+    /// 裁剪历史内容副本（全留 = 不动作）。
+    ///
+    /// 失败只记日志：历史副本多留几份不影响正确性（架构 §5.2）。
+    async fn prune_copies(&self, resource_id: &str, request_override: Option<KeepVersions>) {
+        let Some(keep) = self.effective_keep(request_override).limit() else {
+            return;
+        };
+        if let Err(e) = self.payload.prune_version_copies(resource_id, keep).await {
+            tracing::warn!(error = %e, resource_id, "裁剪历史内容副本失败");
+        }
     }
 
     /// 订阅变更事件（面板挂载时订阅一次）。
@@ -206,14 +226,7 @@ impl ArchiveService {
             .update_archive_content(resource_id, &content_hash, &snapshot_id, file_size)
             .await?;
 
-        if let Err(e) = self
-            .payload
-            .prune_version_copies(resource_id, req.keep_versions.unwrap_or(self.keep_versions))
-            .await
-        {
-            // 裁剪失败只记日志：历史副本多留几份不影响正确性。
-            tracing::warn!(error = %e, resource_id, "裁剪历史内容副本失败");
-        }
+        self.prune_copies(resource_id, req.keep_versions).await;
 
         self.emit(ChangeReason::Updated, Some(resource_id.to_string()));
 
@@ -329,13 +342,7 @@ impl ArchiveService {
             .update_archive_content(resource_id, &copy_hash, &snapshot_id, file_size)
             .await?;
 
-        if let Err(e) = self
-            .payload
-            .prune_version_copies(resource_id, self.keep_versions)
-            .await
-        {
-            tracing::warn!(error = %e, resource_id, "裁剪历史内容副本失败");
-        }
+        self.prune_copies(resource_id, None).await;
 
         self.emit(ChangeReason::Restored, Some(resource_id.to_string()));
 
@@ -712,7 +719,14 @@ mod tests {
     const ARCHIVE_MIGRATION_SQL: &str =
         include_str!("../../engine/migrations/project_meta/020_analytics_resource_archive.sql");
 
+    /// 测试服务：默认给「保留 n 份」（大多数用例只关心份数）。
+    ///
+    /// 需要全留 / 只留元数据这类策略的用例走 [`test_service_with`]。
     async fn test_service(keep_versions: u32) -> (ArchiveService, PathBuf) {
+        test_service_with(KeepVersions::Keep(keep_versions)).await
+    }
+
+    async fn test_service_with(keep_versions: KeepVersions) -> (ArchiveService, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "rds_archive_{}",
             uuid::Uuid::new_v4().simple()
@@ -1006,6 +1020,53 @@ mod tests {
         assert_eq!(event.reason, ChangeReason::Updated);
 
         let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    /// 保留策略的两端：`All`（设置项 `-1`）一份不裁，`MetadataOnly`（`0`）副本全清——
+    /// 两端都不动**版本行**（元数据永远保留，架构 §5.2）。
+    #[tokio::test]
+    async fn t130_keep_policy_ends_are_respected() {
+        for (policy, expected_copies) in [
+            (KeepVersions::All, vec![2, 1]),
+            (KeepVersions::MetadataOnly, Vec::new()),
+        ] {
+            let (service, dir) = test_service_with(policy).await;
+            let draft = write_draft(&dir, "dau.sql", b"select 1;").await;
+            let first = service
+                .archive(archive_req(&draft, "dau.sql", None))
+                .await
+                .expect("archive");
+
+            // 连着改两次内容：每次再归档都会把上一版留成一份内容副本。
+            for (name, body) in [("dau2.sql", &b"select 22;"[..]), ("dau3.sql", &b"select 333;"[..])] {
+                let next = write_draft(&dir, name, body).await;
+                service
+                    .archive(archive_req(&next, "dau.sql", Some(&first.resource_id)))
+                    .await
+                    .expect("re-archive");
+            }
+
+            assert_eq!(
+                service
+                    .payload()
+                    .version_copies(&first.resource_id)
+                    .await
+                    .expect("copies"),
+                expected_copies,
+                "{policy:?} 的副本保留结果"
+            );
+            assert_eq!(
+                service
+                    .store()
+                    .get_resource_versions(&first.resource_id)
+                    .await
+                    .expect("version rows")
+                    .len(),
+                2,
+                "裁剪只动副本：版本行两个（v1 / v2 写前快照）应全在"
+            );
+            let _ = fs::remove_dir_all(&dir).await;
+        }
     }
 
     #[tokio::test]

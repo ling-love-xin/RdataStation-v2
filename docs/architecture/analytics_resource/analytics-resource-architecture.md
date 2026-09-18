@@ -1,7 +1,7 @@
 # 资产库 / 分析存档模块（M6）· 设计理念与架构
 
-> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体已落地**——领域类型、本体层、迁移 020 + 新列接入、归档→取回→再归档闭环 + 变更事件、索引修复、面板与详情、五个对话框（含回收站）、项目级回收站（P0.8 已上提中性化）均可用；104 单测 + 19 窗口测试全绿，逐项证据见 `analytics-resource-dev-plan.md` §0。
-> 仍待：`F2` 重命名（等重命名入口）、批量标签 / 分组（Phase 2）、内容预览、头部可编辑、版本保留策略接设置项、`analytics_recycle_bin` 表的物理删除（现为“弃用 + 空置”）。
+> 状态：**设计定稿（2026-09-15）；Phase 0–3 主体与 Phase 2 前五刀已落地**——领域类型、本体层、迁移 020 + 新列接入、归档→取回→再归档闭环 + 变更事件、索引修复、面板与详情、五个对话框（含回收站）、项目级回收站（P0.8 已上提中性化）均可用；124 单测 + 25 窗口测试全绿，逐项证据见 `analytics-resource-dev-plan.md` §0。
+> 仍待：`F2` 重命名（等重命名入口）、批量标签 / 分组（Phase 2）、内容预览、头部可编辑、默认排序与分组折叠态接设置项、`analytics_recycle_bin` 表的物理删除（现为“弃用 + 空置”）。
 > 前置：v1 蓝本 `v1/backend/src/core/persistence/analytics_resource_store/` + `v1/docs/backend/ANALYTICS_RESOURCE_MANAGER_DESIGN.md`；v2 现状见 `analytics-resource-dev-plan.md` §1。
 > 关联：`analytics-resource-prototype-design.md`（长什么样）、`analytics-resource-prototype.html`（交互稿）、`analytics-resource-dev-plan.md`（做什么）、`../overview.md`（M6 定位）、`../scratchpad/scratchpad-dev-plan.md` Phase D（上游）。
 >
@@ -14,7 +14,7 @@
 | D1 | 资源是什么？ | **归档凭证**：来源 + 代码 + 内容指纹 三件套，而不是"一行元数据指向某处" | 全局 |
 | D2 | 本体存在哪？ | **按 kind 分本体**（C 模型）：`File` 落 `resources/`、`Analysis` 落 `analysis.duckdb`、`TableRef` 落远端 | §2.2、§3 |
 | D3 | 版本版本化什么？ | **内容指纹**（`content_hash`）变化才产生新版本；无 hash 不得递增版本 | §5 |
-| D4 | 历史内容保留吗？ | **默认保留最近 5 份内容**，超出只留元数据；设置可调（`0` = 只留元数据） | §5.2 |
+| D4 | 历史内容保留吗？ | **默认保留最近 5 份内容**，超出只留元数据；设置可调（`0` = 只留元数据，`-1` = 全留） | §5.2 |
 | D5 | 回收站走哪套？ | **统一走项目级 `ProjectTrash`**；v1 的 `analytics_recycle_bin` 表弃用 | §7 |
 | D6 | `scope`（global/project/session）？ | **改为派生只读量**（住哪个库 = 什么作用域），禁止手填 | §4.3 |
 | D7 | `config` JSON 万能袋？ | **降级为 kind 专属扩展位**；核心字段必须进独立列 | §4.2 |
@@ -224,7 +224,7 @@ sequenceDiagram
 | --- | --- |
 | 默认 | **保留最近 5 个版本的内容副本**（`.RSmeta/resources/versions/<resource_id>/<version>/`） |
 | 超出 | 只删**内容副本**，版本行（元数据 + hash）**永久保留** |
-| 可配置 | 设置项 `resources.keepVersions`（`0` = 只留元数据；`-1` = 全留），落 `settings.json` |
+| 可配置 | 设置项 `resources.keep_versions`（`0` = 只留元数据；`-1` = 全留；默认 5），落 `settings.json`——**已接**（2026-09-18）：主线程读设置 → `KeepVersions::from_setting` → 随归档 / 版本还原作业带入服务；归档对话框的「保留历史内容」可本次覆盖（同样接 `-1`） |
 | 为什么 | 只读锁定下内容只在"取回→改→再归档"时变化，副本增长可控；而对做报告/合规的场景，旧内容是刚需 |
 | 不做的 | 不做内容去重（同 hash 多版本共用副本的成本优化推迟）、不做自动过期清理（用户显式管理） |
 
@@ -368,7 +368,7 @@ scratchpad ──► analytics_resource ──► engine, shared
 | 只读属性设置失败（Windows / 网络盘） | 只警告；应用层守卫（`readonly` 列 + 打开路径拦截）仍是硬约束 |
 | 本体缺失 | 记录标 `缺失`，详情面板给出还原/删除动作；列表灰显不隐藏 |
 | hash 不匹配 | 标 `内容已变`，提供"接受当前内容"/"从历史还原" |
-| 历史内容被用户手工删除 | `keepVersions` 校验时发现副本缺失 → 版本行保留、副本标 `缺失`（不影响当前版本可用性） |
+| 历史内容被用户手工删除 | 版本行保留、副本标 `缺失`（不影响当前版本可用性） |
 | 回收站条目缺失（payload 被手工删） | 还原动作报错并保留条目（不静默删除） |
 | 索引库损坏 | 提供"重建索引"（从 `resources/` 反推）；标签/分组关系丢失（已在文档明示的代价） |
 | 磁盘满 / 权限拒绝 | 归档在第 4/6 步中止并回滚，不留下半成品（§6.3） |

@@ -136,10 +136,11 @@ graph TD
 | `projects.sort_mode` | 项目 | enum `last_opened`/`name`/`created` | `last_opened` | 下次操作 | `view.rs::WorkbenchView::new`（读）+ `components/project_host.rs`（写） | 两者 | ✅ 已落地（页面行待落地） |
 | `connection_defaults.connect_timeout_ms` | 连接默认值 | u64（ms） | `15000` | 下次操作 | `workbench/services/connection_service.rs::connect_with_type` | 设置页 | ✅ 已落地 |
 | `connection_defaults.lan_disable_tls` | 连接默认值 | bool | `true` | 下次操作 | `connection_service.rs::apply_lan_tls_default` | 设置页 | ✅ 已落地 |
+| `resources.keep_versions` | 资产库 | i64（份数；`-1` = 全留、`0` = 只留元数据） | `5` | 下次操作 | `workbench/src/components/resource_host.rs` + `panels/resources.rs`（主线程读→`KeepVersions::from_setting`）→ `services/resource_jobs.rs::open_service` → `analytics_resource::ArchiveService::with_keep_versions` | 设置页 | ✅ 已落地（2026-09-18）|
 | `logging.min_level` | 日志 | enum `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR` | `INFO` | 即时 | `crates/app/src/main.rs`（启动取值）；运行时经装配层注册的 sink → `engine::logging::reload_log_level` | 设置页（另有「查看日志…」/「打开日志目录」两个动作行） | ✅ 已落地（2026-09-16） |
 | `resources.keep_versions` | 分析资产 | i32（`0` = 只留元数据；`-1` = 全留） | `5` | 下次归档 | `analytics_resource/src/service.rs`（现为常量 `DEFAULT_KEEP_VERSIONS`） | 设置页 | ⬜ 待 M6 P2.4 接线 |
 
-> 命名约定：JSON 字段一律 **snake_case**（与现有 `theme_mode` / `source_short_code` / `sort_mode` 一致）。M6 文档里写的 `resources.keepVersions` 是同一项的早期命名，落地时以本表为准并同步 M6 文档。
+> 命名约定：JSON 字段一律 **snake_case**（与现有 `theme_mode` / `source_short_code` / `sort_mode` 一致）。M6 文档里写的 `resources.keepVersions` 是同一项的早期命名，**已于 2026-09-18 落地为 `resources.keep_versions`**（M6 侧同步改口）。
 > **设置层不依赖 `engine`**：`logging.min_level` 在设置侧是独立的 `LogMinLevel`（同词表），改级别后的“重载日志系统”由装配层（`crates/app`）注册的 sink 完成——反向依赖会把双引擎拖进设置层的依赖图。
 > `navigator.filters` 是**复合值**（4 个可选筛选项打包），登记为一项；若将来拆成多个独立开关，需重新过准入五条。
 > **代码侧权威是 `crates/settings/src/registry.rs`**（`SettingSpec` / `REGISTRY` / `sections()` / `page_rows()` + **`Slot` 分发表**（`slot_for` / `slot_kind` / `slot_is_scalar`）+ `presets` + 11 项契约测试）：本表与它必须逐项一致。改动顺序：**先改代码表 → 再改消费方 → 最后同步本表**。
@@ -178,7 +179,7 @@ graph TD
 | 项 | 现状 | 目标 |
 | --- | --- | --- |
 | 路径 | `<RDS_HOME>/config/settings.json`（2026-09-16 改：不再落 `%APPDATA%`） | 保持（`paths::config_dir()` 单一解析点，见 `../runtime/data-paths.md`） |
-| 结构 | 分节对象（`general` / `appearance` / `engine` / `connection_defaults` / `projects` / `navigator`） | 节随登记表增删，**节内字段名 = key 的后半段** |
+| 结构 | 分节对象（`appearance` / `navigator` / `resources` / `connection_defaults` / `projects` / `logging`） | 节随登记表增删，**节内字段名 = key 的后半段** |
 | 兼容 | 每个新字段必须 `#[serde(default)]`（已有内嵌测试：旧配置缺 `navigator` 节仍可解析） | 保持；字段删除也安全 |
 | 写盘 | **原子写**：临时文件 + rename；失败返回原因并记入进程级错误槽 | ✅ 已达成（2026-09-16） |
 | 版本号 | 无 | 暂不引入 `schema_version`；**触发条件**：出现"同名 key 语义变更"（需要值迁移而非默认回退）时引入 |

@@ -1,10 +1,26 @@
 # 设置（应用级）· 开发方案
 
-> 状态：**P0/P1a 已完成（2026-09-16），P1b 起待排**
+> 状态：**P0/P1a 已完成（2026-09-16），P1b 起待排；2026-09-18 接了 M6 的 `resources.keep_versions`（P4.1）**
 > 关联：`settings-architecture.md`（准入与作用域裁决）、`settings-prototype-design.md`（页面形态）、`settings-crate-design.md`（crate 沿革）
 > 基线：`cargo test -p rds-settings` → **10 项全绿、零告警**；`cargo check -p rds-workbench --all-targets` → 见 §5
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-18 — M6 接线：`resources.keep_versions` 落地（P4.1）
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| 新节 + 新项 | `Settings` 增 `resources` 节（`resources.keep_versions`，`i64`，默认 5）；设置页新增「资产库 › 历史内容保留」行（预设档：只留元数据 0 / 5 / 10 / 20 / **全部保留 -1**，生效方式 = 下次操作） | `src/{model,registry,lib}.rs` |
+| 有符号数的理由 | `-1` 是**已存在的口径**（v1 与 M6 架构 §5.2）：全留不是"保留 0 份"。契约测试按 Number 类走，预设档含默认值 5 | 同上 |
+| 消费方接线 | 归档 / 版本还原两条会把副本写进历史的路径：主线程读设置 → `KeepVersions::from_setting`（设置层不依赖 M6，转换在宿主侧）→ 作业带值 → `open_service` 装配 `with_keep_versions`；其余作业不传（用默认） | `workbench/src/{components/resource_host.rs,panels/resources.rs,services/resource_jobs.rs}` |
+| 验证 | `cargo test -p rds-settings -j 1` **21 项全绿**（登记表契约测试自动覆盖新项：模型叶子已登记 / 默认值一致 / 形态与槽位一致 / 默认快照无"已修改"行）；`cargo test -p rds-analytics-resource -j 1` **124 项全绿**（+3：对话框 `-1` 与往返 / 服务两端策略） | §5 |
+
+**两处刻意的取舍**：
+
+1. **不把设置项拆成两个档（如 `keepAll: bool` + `keepVersions: u32`）**：两个会互相矛盾的键比一个稍宽的语义更难用（同前例 `navigator.property_panel_width` 用 f32 而不是"宽/窄"枚举）；
+2. **`all` 不给单独的 `Slot` 变体**：页面上的预设档就是 `-1`，读写走同一个 Number 通道，不搞两套路径。
+
+**未落地**：默认排序与分组折叠态（那两项属 M6 的 P2.4 后半，届时按准入五条另审）。
 
 ### 2026-09-16（第四批）— 宿主替换 + 常量归位壳层 + 互斥与键位（P1.6 / P3.1–P3.4）
 
@@ -122,7 +138,7 @@
 
 | # | 任务 | 依赖 | 验收 |
 | --- | --- | --- | --- |
-| P4.1 | `resources.keep_versions` 落地（模型 + 登记 + 页面 `Input` 行 + 归档调用接线） | M6 dev-plan P2.4 | 改值后归档保留份数随之变化 |
+| P4.1 | `resources.keep_versions` 落地（模型 + 登记 + 页面行 + 归档调用接线） | M6 dev-plan P2.4 | ✅ **已落（2026-09-18）**：页面上是预设档行（含 `-1` = 全部保留），消费方是 M6 的归档 / 版本还原作业（宿主读设置→转领域类型→随作业带入）。**余**：M6 侧的"默认排序 / 分组折叠"两项还需过准入五条再登记 |
 | P4.2 | 项目列表排序行（页面） | P1b | 与选择器循环按钮同值（双入口一致性用例） |
 | P4.3 | 界面缩放（若选"复活字号倍率"路线） | 架构 §14 Q4 拍板 | 按拍板结论另立任务 |
 
