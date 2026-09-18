@@ -15,7 +15,7 @@ use std::rc::Rc;
 use gpui_kit::base::{Selectable, StyledExt};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, DockSkin, panel_handle};
-use gpui_kit::component::popover::Popover;
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Root, TitleBar};
 use gpui_kit::*;
@@ -399,7 +399,8 @@ impl WorkbenchView {
         cx: &mut Context<Self>,
     ) {
         // 已关闭的面板不参与复用（面板被 Dock 移除 = 文档已关，两者一一对应）
-        self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
+        self.editor_hosts
+            .retain(|panel| !panel.read(cx).is_closed());
 
         // 已有面板：不重建——**切换到它**（`TabGroup::select_tab`），否则用户看到的
         // 是“点了打开却没反应”：面板就在隔壁标签里，但不在前台。
@@ -418,9 +419,8 @@ impl WorkbenchView {
         // - 文档已在服务层但没有面板（`Activated`，例如将来由 Quick Open 直接开的文档）：
         //   补一个面板指向同一文档——内容只有一份（全在 `EditorService` 里），不会分身。
         let service = self.editor_service.clone();
-        let panel = cx.new(|cx| {
-            editor::view::host::EditorHostPanel::new(service, document, window, cx)
-        });
+        let panel =
+            cx.new(|cx| editor::view::host::EditorHostPanel::new(service, document, window, cx));
         self.editor_hosts.push(panel.clone());
 
         if let Some(area) = self.area.clone() {
@@ -493,7 +493,8 @@ impl WorkbenchView {
     /// 从面板自己的 `update` 里发起就是重入。宿主不在那个 `update` 中，可以安全地做。
     /// 脏文档由 [`Self::close_editor_document`] 弹三态确认（保存 / 不保存 / 取消）。
     pub fn close_active_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
+        self.editor_hosts
+            .retain(|panel| !panel.read(cx).is_closed());
         let Some(id) = self.editor_service.service().active_id().cloned() else {
             return;
         };
@@ -538,7 +539,8 @@ impl WorkbenchView {
     ///
     /// 未接入面板时在状态栏留原因，不静默。
     pub fn save_active_editor_as(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.editor_hosts.retain(|panel| !panel.read(cx).is_closed());
+        self.editor_hosts
+            .retain(|panel| !panel.read(cx).is_closed());
         let Some(id) = self.editor_service.service().active_id().cloned() else {
             return;
         };
@@ -623,19 +625,21 @@ impl WorkbenchView {
         }
         let weak = cx.entity().downgrade();
         let executor = cx.background_executor().clone();
-        let task = cx.spawn(async move |_this, cx| loop {
-            executor.timer(std::time::Duration::from_millis(1000)).await;
-            let alive = weak
-                .update(cx, |this, cx| {
-                    crate::services::scratchpad_meta::write_back(
-                        &this.shared,
-                        &this.editor_service,
-                        cx,
-                    )
-                })
-                .is_ok();
-            if !alive {
-                return;
+        let task = cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_millis(1000)).await;
+                let alive = weak
+                    .update(cx, |this, cx| {
+                        crate::services::scratchpad_meta::write_back(
+                            &this.shared,
+                            &this.editor_service,
+                            cx,
+                        )
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
             }
         });
         self.scratchpad_meta_pump = Some(task);
@@ -698,9 +702,8 @@ impl WorkbenchView {
                 .clone(),
         };
         let host_service = editor_service.clone();
-        let editor_host = cx.new(|cx| {
-            editor::view::host::EditorHostPanel::new(host_service, document, window, cx)
-        });
+        let editor_host = cx
+            .new(|cx| editor::view::host::EditorHostPanel::new(host_service, document, window, cx));
         self.editor_hosts.push(editor_host.clone());
 
         let editor_handle = panel_handle(editor.clone());
@@ -936,8 +939,7 @@ impl WorkbenchView {
             .as_ref()
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "未打开项目".to_string());
-        // 触发元素必须是语义控件（`Popover::trigger` 要求 `Selectable`），用 ghost Button
-        // 承载自定义外观，而非 clickable div。
+        // 触发器用语义控件（`Selectable` + 键盘可达由 `Button` 自带），不自己画可点 div。
         let slot = Button::new("project-slot")
             .ghost()
             .h(rems(1.625))
@@ -964,28 +966,19 @@ impl WorkbenchView {
                     ),
             );
 
-        // M1：有项目时用 `Popover` 承载项目菜单（焦点 / 键盘 / 点击外部关闭 / Escape 由组件负责，
-        // 不再自绘弹层）。项目视图由 `project` crate 提供，宿主只提供状态与重绘。
+        // M1：有项目时项目槽本身就是菜单触发器（`Button::dropdown_menu`）——方向键导航 /
+        // Enter / Escape / 点击外部关闭、焦点恢复都由语义组件负责，宿主不再持有 `menu_open`
+        // 之类的开关状态（组件内部状态才是权威）。菜单内容由 `project` crate 提供。
         let slot: AnyElement = if has_project {
             let host = self.project_host().clone();
-            let menu_open = host.state.borrow().menu_open;
-            let menu_inputs = self
+            let inputs = self
                 .project_inputs
                 .clone()
                 .expect("project inputs lazy init");
-            let menu_host = host.clone();
-            let open_host = host;
-            Popover::new("project-menu")
-                .open(menu_open)
-                .on_open_change(move |open, _window, app| {
-                    open_host.state.borrow_mut().menu_open = *open;
-                    open_host.notify(app);
-                })
-                .trigger(slot)
-                .content(move |_state, _window, cx| {
-                    project::ui::render_menu_content(&menu_host, &menu_inputs, cx)
-                })
-                .into_any_element()
+            slot.dropdown_menu(move |menu, _, _| {
+                project::ui::build_project_menu(menu, &host, &inputs)
+            })
+            .into_any_element()
         } else {
             slot.into_any_element()
         };
@@ -1270,7 +1263,10 @@ impl WorkbenchView {
             self.settings_page = Some(cx.new(|cx| SettingsPage::new(window, host, cx)));
         }
         let theme = cx.theme().clone();
-        let page = self.settings_page.clone().expect("settings page initialized");
+        let page = self
+            .settings_page
+            .clone()
+            .expect("settings page initialized");
         Some(
             div()
                 .absolute()

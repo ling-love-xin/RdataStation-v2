@@ -24,10 +24,11 @@
 
 ## 代码落点
 
-`crates/project/src/`：`models.rs`（域模型）、`store.rs`（`.RSmeta`）、`lock.rs`（实例锁）、`service.rs`（编排）、`ui.rs` + `ui/tests.rs`（视图与 12 项窗口测试）。职责表见 crate README。
+`crates/project/src/`：`models.rs`（域模型）、`store.rs`（`.RSmeta`）、`lock.rs`（实例锁）、`service.rs`（编排）、`ui.rs` + `ui/tests.rs`（视图与 20 项测试：17 窗口 + 3 纯函数）。职责表见 crate README。
 
 ## 状态
 
-- 主线完成（2026-09-14）：CRUD / 生命周期 / 实例锁 / 选择器（搜索 ∩ 状态筛选）/ 项目设置（名称 + 描述）/ 系统目录选择器 / 空目录询问；14 项窗口测试 + 1 项名册集成 + 3 项存储集成。
+- 主线完成（2026-09-14）：CRUD / 生命周期 / 实例锁 / 选择器（搜索 ∩ 状态筛选）/ 项目设置（名称 + 描述）/ 系统目录选择器 / 空目录询问。
+- 规范补齐（2026-09-19）：只读禁用态（写命令可见但置灰，拦截层兜底）/ 选择器键盘可达（Tab + Enter 真能操作）/ 设置·危险区三件套（归档 / 移出列表 / 删除数据）/ 标题栏菜单改 `Button::dropdown_menu`（规格抽纯函数可断言）。测试：lib 34 + 名册集成 1 + 存储集成 3。
 - 范围外（原型 §12）：提升 / 引用（promote / snapshot）、移动或另存项目目录、DuckLake 远程项目（`ProjectPath::Remote` 仅模型层预留）。
-- 待办见 `project-dev-plan.md` **§8 未开发清单**：默认连接（U3，需先补后端 `ProjectConfig` 读写）、设置·危险区入口对齐、只读禁用态、选择器键盘可达、卡片右键菜单、`​.RSmeta` 结构树等。
+- 待办见 `project-dev-plan.md` **§8 未开发清单**：默认连接（U3，需先补后端 `ProjectConfig` 读写）、描述展示（B3）、`.RSmeta` 结构树（B2）、卡片右键菜单（C3）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）。

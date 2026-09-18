@@ -26,8 +26,9 @@
 ### 并发与破坏性操作都设了护栏
 
 - **实例锁**用 OS 文件锁（进程退出 / 崩溃自动释放），`project.lock.owner` 记 pid 与获取时间供展示；「仍要打开」用于确认对方已退出后接管。
+- **只读态两道防线**：写命令**可见但置灰**（卡片 `⋯` 菜单、标题栏项目菜单、设置面板写控件）；同时保留拦截层（`read_only_blocked` 写 notice）——禁用态是「点不动」，拦截是「点了也没用」。只读只禁写，不禁看 / 不禁走：设置面板、切项目、关闭项目始终可用。
 - **未保存草稿拦截**：`request_open` / `request_close` / `request_create_project` / `request_open_folder` 统一进拦截对话框；确认后由 `PendingAction`（携带输入实体）**直达**目标对话框，不用回选择器再点一次。
-- **不可逆操作**（删磁盘数据）要求输入项目名二次确认，且按钮用 `danger` 变体。
+- **不可逆操作**（删磁盘数据）要求输入项目名二次确认，且按钮用 `danger` 变体；设置、项目菜单、卡片 `⋯` 三处入口共用同一批动作函数。
 
 ### 视图与 model / service 同 crate
 
@@ -35,7 +36,9 @@
 
 配套的既有约定：
 
-- 模态一律用语义组件：`Dialog` / `AlertDialog`；菜单用 `Popover` + `DropdownMenu`。
+- 模态一律用语义组件：`Dialog` / `AlertDialog`；菜单一律 `Button::dropdown_menu` + `PopupMenu`（方向键导航 / Escape / 焦点恢复由组件负责，不自绘弹层）。
+- 菜单「长什么样」与「点了做什么」分开：`project_menu_entries(read_only)` 是顺序 / 文案 / 图标 / 可用性的唯一权威来源（纯函数，逐项可断言），渲染只按 id 挂事件。
+- 可点控件一律用语义 `Button`（自带 `track_focus` + `tab_stop`，Enter/Space 可激活）；需要键盘焦点的元素**不用会变的 `ElementId`**。
 - 对话框按**栈语义**管理关闭时机（`on_ok` 返回 `false`，成功路径显式 `close_dialog`），避免被拦截动作另开对话框时 pop 错对象；校验错误走 `ProjectUiState::dialog_error` 槽。
 - 「位置」字段 = 系统目录选择器（仅目录 / 单选）+ 目标路径预览，不用手抄路径。
 
@@ -52,7 +55,7 @@
 
 ### 尚未开发（待办）
 
-剩余项集中在 `docs/architecture/project/project-dev-plan.md` §8：默认连接（U3，需先补后端）、设置·危险区入口对齐、只读禁用态、选择器键盘可达、卡片右键菜单等。
+剩余项集中在 `docs/architecture/project/project-dev-plan.md` §8：默认连接（U3，需先补后端 `ProjectConfig` 读写）、描述展示（B3）、`.RSmeta` 结构树（B2）、卡片右键菜单（C3）、菜单快捷键（C2，组件无 shortcut 槽位，暂缓）。
 
 ## 代码落点
 
@@ -63,7 +66,7 @@
 | `src/lock.rs` | 实例锁：OS 文件锁 + `project.lock.owner` 占用者信息 |
 | `src/service.rs` | 编排：列表 / 创建 / 打开（含只读）/ 关闭 / 重命名 / 固定 / 归档 / 软删 / 恢复 / 硬删 / 移出 / 重定位 / 版本台账 |
 | `src/ui.rs` | 视图：选择器、标题栏菜单内容、项目设置、语义对话框、`ProjectUiHost` 宿主桥 |
-| `src/ui/tests.rs` | 14 项 GPUI headless 窗口测试 + 1 项纯函数测试（选择器 / 状态筛选 / 设置 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片） |
+| `src/ui/tests.rs` | 20 项 `ui` 测试（17 项 GPUI headless 窗口测试 + 3 项纯函数测试：选择器 / 状态筛选 / 设置 / 对话框 / 拦截 / 排序 / 浏览目录 / 空目录询问 / 卡片 / 菜单规格 / 只读拦截 / 键盘激活） |
 | `tests/project_registry.rs` | 名册端到端集成：创建登记 → 固定置顶 → 软删隐藏（磁盘保留）→ 已移除找回（注入临时全局库） |
 | `tests/project_store.rs` | 磁盘 `.RSmeta` 与实例锁集成 |
 
@@ -81,7 +84,7 @@
 ## 约定
 
 ```bash
-cargo test -p rds-project -j 2          # lib（29）+ 集成（1 名册 + 3 存储）
+cargo test -p rds-project -j 2          # lib（34，含 17 项窗口测试）+ 集成（1 名册 + 3 存储）
 ```
 
 - 全量测试**必须** `cargo test --workspace -j 2`：并行链接重型 crate 会耗尽内存（DuckDB 已改动态链接）。

@@ -4,9 +4,10 @@
 //! 不依赖 workbench 与 settings——宿主（工作台）通过 [`ProjectUiHost`] 注入状态句柄、
 //! 重绘桥、编辑区桥、排序偏好与打开后回调。
 //!
-//! 选择器与项目设置由宿主渲染为受控叠加层（宿主 render 是权威同步点）；项目菜单用
-//! `Popover`，创建 / 打开 / 删除 / 重定位 / 锁占用 / 未保存拦截一律用语义组件
-//! `Dialog` / `AlertDialog`（焦点陷阱、Escape、点击遮罩关闭由组件负责）。
+//! 选择器与项目设置由宿主渲染为受控叠加层（宿主 render 是权威同步点）；标题栏项目菜单
+//! 用语义 `Button::dropdown_menu`（方向键导航 / Escape / 焦点恢复由组件负责），创建 /
+//! 打开 / 删除 / 重定位 / 锁占用 / 未保存拦截一律用语义组件 `Dialog` / `AlertDialog`
+//! （焦点陷阱、Escape、点击遮罩关闭由组件负责）。
 //!
 //! 语义见 `docs/architecture/project/project-prototype-design.md`。
 
@@ -14,14 +15,14 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui_kit::base::StyledExt;
+use gpui_kit::base::{Selectable as _, StyledExt};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{Icon, IconName, Sizable as _, WindowExt};
+use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -350,7 +351,6 @@ impl ProjectUiHost {
 #[non_exhaustive]
 pub struct ProjectUiState {
     pub picker: PickerState,
-    pub menu_open: bool,
     pub settings_open: bool,
     /// 当前对话框的校验错误：对话框 builder 每帧读取，提交失败时写入并重绘。
     pub dialog_error: Option<String>,
@@ -366,7 +366,6 @@ impl Default for ProjectUiState {
     fn default() -> Self {
         Self {
             picker: PickerState::default(),
-            menu_open: false,
             settings_open: false,
             dialog_error: None,
             lock: None,
@@ -1058,7 +1057,6 @@ fn apply_opened(host: &ProjectUiHost, opened: project_service::OpenedProject, cx
         ui.lock = lock;
         ui.read_only = read_only;
         ui.epoch += 1;
-        ui.menu_open = false;
         ui.settings_open = false;
         ui.dialog_error = None;
         ui.notice = read_only.then(|| "只读打开：该项目已被另一实例占用".to_string());
@@ -1128,7 +1126,6 @@ pub fn do_close(host: &ProjectUiHost, cx: &mut App) {
         let mut ui = host.state.borrow_mut();
         ui.read_only = false;
         ui.epoch += 1;
-        ui.menu_open = false;
         ui.settings_open = false;
         ui.dialog_error = None;
         ui.notice = None;
@@ -1435,6 +1432,28 @@ pub fn confirm_delete(
     }
 }
 
+/// 移出当前项目（软删）：名册反查 id 后调用 `soft_remove`
+///（设置面板的「危险区」与卡片菜单共用；避免在 render 里查名册）。
+fn soft_remove_current(host: &ProjectUiHost, cx: &mut App) {
+    let Some(item) = current_summary(host) else {
+        return;
+    };
+    soft_remove(host, &item.id, cx);
+}
+
+/// 打开当前项目的「删除数据」确认对话框（危险区入口）。
+fn open_delete_dialog_for_current(
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(item) = current_summary(host) else {
+        return;
+    };
+    open_delete_dialog(host, inputs, &item, window, cx);
+}
+
 /// 只读模式守卫：被拦截时写入提示并返回 `true`。
 fn read_only_blocked(host: &ProjectUiHost, cx: &mut App, action: &str) -> bool {
     if host.state.borrow().read_only {
@@ -1500,7 +1519,6 @@ pub fn toggle_archive(host: &ProjectUiHost, cx: &mut App) {
     if let Err(e) = project_service::set_archived(&item.id, &item.path, !archived) {
         host.state.borrow_mut().notice = Some(e);
     } else {
-        host.state.borrow_mut().menu_open = false;
         host.state.borrow_mut().notice = Some(format!(
             "已{}项目",
             if archived { "取消归档" } else { "归档" }
@@ -1523,36 +1541,25 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
     let count = items.len();
 
     // ---- 顶部：标题 + Tab ----
+    // 语义 `Button`（而非可点 div）：自动获得 track_focus + tab_stop，键盘可达、Enter/Space 可激活。
     let mut tabs = div().h_flex().items_center().gap_2();
     for tab in [PickerTab::Recent, PickerTab::All, PickerTab::Removed] {
         let on = picker.tab == tab;
         let host_t = host.clone();
         tabs = tabs.child(
-            div()
-                .id(ElementId::Name(SharedString::from(format!(
-                    "picker-tab-{}",
-                    tab.key()
-                ))))
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .text_sm()
-                .when(on, |d| {
-                    d.bg(theme.colors.sidebar_accent)
-                        .font_weight(FontWeight::MEDIUM)
-                })
-                .text_color(if on {
-                    theme.colors.foreground
-                } else {
-                    theme.colors.muted_foreground
-                })
-                .on_click(move |_, _, app| set_tab(&host_t, tab, app))
-                .child(tab.label()),
+            Button::new(ElementId::Name(SharedString::from(format!(
+                "picker-tab-{}",
+                tab.key()
+            ))))
+            .ghost()
+            .small()
+            .selected(on)
+            .label(tab.label())
+            .on_click(move |_, _, app| set_tab(&host_t, tab, app)),
         );
     }
 
-    // ---- 搜索 + 状态筛选 + 排序 ----
+    // ---- 搜索 + 状态筛选 + 排序（筛选/排序均为语义 Button，固定 id 以保住键盘焦点） ----
     let host_sort = host.clone();
     let host_status = host.clone();
     let search_row = div()
@@ -1561,43 +1568,19 @@ pub fn render_picker(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App)
         .gap_2()
         .child(div().flex_1().child(Input::new(&inputs.search)))
         .child(
-            div()
-                .id(ElementId::Name(SharedString::from(format!(
-                    "picker-status-{}",
-                    picker.status_filter.key()
-                ))))
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(if picker.status_filter == StatusFilter::All {
-                    theme.colors.border
-                } else {
-                    theme.colors.primary
-                })
-                .cursor_pointer()
-                .text_xs()
-                .text_color(if picker.status_filter == StatusFilter::All {
-                    theme.colors.muted_foreground
-                } else {
-                    theme.colors.foreground
-                })
-                .on_click(move |_, _, app| cycle_status_filter(&host_status, app))
-                .child(format!("状态：{}", picker.status_filter.label())),
+            Button::new("picker-status")
+                .ghost()
+                .small()
+                .selected(picker.status_filter != StatusFilter::All)
+                .label(format!("状态：{}", picker.status_filter.label()))
+                .on_click(move |_, _, app| cycle_status_filter(&host_status, app)),
         )
         .child(
-            div()
-                .id("picker-sort")
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.colors.border)
-                .cursor_pointer()
-                .text_xs()
-                .text_color(theme.colors.muted_foreground)
-                .on_click(move |_, _, app| cycle_sort(&host_sort, app))
-                .child(format!("排序：{}", picker.sort.label())),
+            Button::new("picker-sort")
+                .ghost()
+                .small()
+                .label(format!("排序：{}", picker.sort.label()))
+                .on_click(move |_, _, app| cycle_sort(&host_sort, app)),
         );
 
     // ---- 列表 ----
@@ -1850,6 +1833,8 @@ fn more_menu(
     let item = item.clone();
     let inputs = inputs.clone();
     let host = host.clone();
+    // 只读模式下卡片命令全是写操作（固定 / 移出 / 恢复 / 重定位 / 删数据），统一置禁用。
+    let read_only = host.state.borrow().read_only;
     let menu_id = SharedString::from(format!("more-{}", item.id));
 
     Button::new(ElementId::Name(menu_id))
@@ -1865,6 +1850,7 @@ fn more_menu(
                     } else {
                         IconName::Star
                     })
+                    .disabled(read_only)
                     .on_click({
                         let host = host.clone();
                         let item = item.clone();
@@ -1877,6 +1863,7 @@ fn more_menu(
                 menu = menu.separator().item(
                     PopupMenuItem::new("恢复")
                         .icon(IconName::RotateCw)
+                        .disabled(read_only)
                         .on_click({
                             let host = host.clone();
                             move |_, _, app| restore(&host, &id, app)
@@ -1891,16 +1878,21 @@ fn more_menu(
                             .icon(IconName::ExternalLink)
                             .on_click(move |_, _, _| reveal_in_explorer(&path)),
                     )
-                    .item(PopupMenuItem::new("移出列表").on_click({
-                        let host = host.clone();
-                        let id = item.id.clone();
-                        move |_, _, app| soft_remove(&host, &id, app)
-                    }));
+                    .item(
+                        PopupMenuItem::new("移出列表")
+                            .disabled(read_only)
+                            .on_click({
+                                let host = host.clone();
+                                let id = item.id.clone();
+                                move |_, _, app| soft_remove(&host, &id, app)
+                            }),
+                    );
                 let item_del = item.clone();
                 let inputs_del = inputs.clone();
                 menu = menu.separator().item(
                     PopupMenuItem::new("删除数据…")
                         .icon(IconName::Delete)
+                        .disabled(read_only)
                         .on_click({
                             let host = host.clone();
                             move |_, window, app| {
@@ -1914,6 +1906,7 @@ fn more_menu(
                 menu = menu.separator().item(
                     PopupMenuItem::new("重新定位…")
                         .icon(IconName::FolderOpen)
+                        .disabled(read_only)
                         .on_click({
                             let host = host.clone();
                             move |_, window, app| {
@@ -1922,10 +1915,14 @@ fn more_menu(
                         }),
                 );
                 let id = item.id.clone();
-                menu = menu.item(PopupMenuItem::new("移出列表").on_click({
-                    let host = host.clone();
-                    move |_, _, app| forget(&host, &id, app)
-                }));
+                menu = menu.item(
+                    PopupMenuItem::new("移出列表")
+                        .disabled(read_only)
+                        .on_click({
+                            let host = host.clone();
+                            move |_, _, app| forget(&host, &id, app)
+                        }),
+                );
             }
             menu
         })
@@ -1973,139 +1970,160 @@ fn error_line(message: &str, theme: &gpui_kit::component::Theme) -> Div {
 
 // ==================== 标题栏项目菜单 ====================
 
-/// 项目菜单内容（由宿主用 `Popover` 承载表面 / 焦点 / 点击外部关闭）。
+/// 项目菜单的一项**规格**：顺序 / 文案 / 图标 / 可用性。
 ///
-/// 不再自绘弹层——编码指南要求 menu/popup 使用语义组件，不要用 generic `div` 重做
-/// focus keyboard 与 dismissal。
-pub fn render_menu_content(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut App) -> Div {
-    let theme = cx.theme();
-    let (name, root, read_only) = {
-        let ui = host.state.borrow();
-        let p = host.session.borrow();
-        let name = p.as_ref().map(|s| s.name.clone()).unwrap_or_default();
-        let root = p.as_ref().map(|s| s.root.clone()).unwrap_or_default();
-        (name, root, ui.read_only)
-    };
+/// 与渲染分离：`PopupMenu` 不暴露内部项，不经过窗口就无法逐项断言；把「菜单长什么样」
+/// 收成纯函数（与 `editor` 的 `channel::menu_items` / `export::menu_items` 同一套路），
+/// 测试直接断言规格，渲染只负责按 id 挂事件。
+pub struct ProjectMenuEntry {
+    /// 事件分派的稳定标识（与文案解耦：文案会变，标识不变）。
+    pub id: &'static str,
+    pub label: &'static str,
+    pub icon: IconName,
+    /// 只读模式下写命令为 `false`（置灰），读命令保持可用。
+    pub enabled: bool,
+    /// 与上一项之间画分隔线（首项忽略）。
+    pub separator_before: bool,
+}
 
-    let inputs_settings = inputs.clone();
-    let inputs_rename = inputs.clone();
-    let host_close = host.clone();
-    let host_settings = host.clone();
-    let host_rename = host.clone();
-    let host_switch = host.clone();
-    let host_archive = host.clone();
-    let name_settings = name.clone();
-    let name_rename = name.clone();
-    let path = root.clone();
-
-    let mut menu = div()
-        .v_flex()
-        .child(menu_item(
-            "switch",
-            "切换项目…",
-            theme,
-            move |window, app| {
-                // 切换项目 = 关闭当前 + 回到选择器（一实例一项目）。
-                request_close(&host_switch, window, app);
-            },
-        ))
-        .child(menu_item(
-            "settings",
-            "项目设置…",
-            theme,
-            move |window, app| {
-                // 预填当前名称与描述（名册反查；事件上下文允许 I/O）。
-                let description = current_summary(&host_settings)
-                    .and_then(|s| s.description)
-                    .unwrap_or_default();
-                inputs_settings
-                    .rename
-                    .update(app, |s, cx| s.set_value(name_settings.clone(), window, cx));
-                inputs_settings
-                    .description
-                    .update(app, |s, cx| s.set_value(description, window, cx));
-                let mut ui = host_settings.state.borrow_mut();
-                ui.menu_open = false;
-                ui.settings_open = true;
-                drop(ui);
-                host_settings.notify(app);
-            },
-        ))
-        .child(menu_item(
-            "rename",
-            "重命名…",
-            theme,
-            move |window, app| {
-                let description = current_summary(&host_rename)
-                    .and_then(|s| s.description)
-                    .unwrap_or_default();
-                inputs_rename
-                    .rename
-                    .update(app, |s, cx| s.set_value(name_rename.clone(), window, cx));
-                inputs_rename
-                    .description
-                    .update(app, |s, cx| s.set_value(description, window, cx));
-                let mut ui = host_rename.state.borrow_mut();
-                ui.menu_open = false;
-                ui.settings_open = true;
-                drop(ui);
-                host_rename.notify(app);
-            },
-        ))
-        .child(menu_item("reveal", "在资源管理器中显示", theme, {
-            let path = path.clone();
-            move |_window, _app| reveal_in_explorer(&path)
-        }))
-        .child(div().h_px().my_1().bg(theme.colors.border))
-        .child(menu_item(
-            "archive",
-            "归档 / 取消归档",
-            theme,
-            move |_window, app| {
-                toggle_archive(&host_archive, app);
-            },
-        ))
-        .child(div().h_px().my_1().bg(theme.colors.border))
-        .child(menu_item(
-            "close",
-            "关闭项目",
-            theme,
-            move |window, app| {
-                host_close.state.borrow_mut().menu_open = false;
-                request_close(&host_close, window, app);
-            },
-        ));
-
+/// 标题栏项目槽下拉菜单的规格（原型 §2.4）。
+///
+/// 只读模式（写锁被另一实例持有）下：写命令（重命名 / 归档）置灰，并在顶部插一条说明
+/// 为什么点不动；切换项目 / 项目设置 / 显示位置 / 关闭项目保持可用——只读是「不许写」，
+/// 不是「不许看、不许走」，用户始终能退出去。
+pub fn project_menu_entries(read_only: bool) -> Vec<ProjectMenuEntry> {
+    let mut entries = Vec::with_capacity(7);
     if read_only {
-        menu = menu.child(
-            div()
-                .p_2()
-                .text_xs()
-                .text_color(theme.colors.warning)
-                .child("只读模式（另一实例持有写锁）"),
-        );
+        entries.push(ProjectMenuEntry {
+            id: "read-only",
+            label: "只读模式：写操作不可用",
+            icon: IconName::Info,
+            enabled: false,
+            separator_before: false,
+        });
     }
-    let _ = name;
+    entries.push(ProjectMenuEntry {
+        id: "switch",
+        label: "切换项目…",
+        icon: IconName::ArrowLeft,
+        enabled: true,
+        separator_before: read_only,
+    });
+    entries.push(ProjectMenuEntry {
+        id: "settings",
+        label: "项目设置…",
+        icon: IconName::Settings,
+        enabled: true,
+        separator_before: false,
+    });
+    entries.push(ProjectMenuEntry {
+        id: "rename",
+        label: "重命名…",
+        icon: IconName::FileText,
+        enabled: !read_only,
+        separator_before: false,
+    });
+    entries.push(ProjectMenuEntry {
+        id: "reveal",
+        label: "在资源管理器中显示",
+        icon: IconName::ExternalLink,
+        enabled: true,
+        separator_before: false,
+    });
+    entries.push(ProjectMenuEntry {
+        id: "archive",
+        label: "归档 / 取消归档",
+        icon: IconName::Inbox,
+        enabled: !read_only,
+        separator_before: true,
+    });
+    entries.push(ProjectMenuEntry {
+        id: "close",
+        label: "关闭项目",
+        icon: IconName::Close,
+        enabled: true,
+        separator_before: true,
+    });
+    entries
+}
+
+/// 标题栏项目菜单内容（宿主用 `Button::dropdown_menu` 承载表面 / 焦点 / 关闭）。
+///
+/// 用语义 `PopupMenu` / `PopupMenuItem`（而非自绘弹层）：方向键导航、Escape 关闭、
+/// 焦点恢复、禁用项与分隔线都由组件负责。顺序 / 文案 / 可用性来自
+/// [`project_menu_entries`]，这里只负责按 id 挂事件。
+pub fn build_project_menu(
+    menu: PopupMenu,
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+) -> PopupMenu {
+    // 菜单在宿主 render 里构造，状态在此一次性读完（逐项再读会把 `RefCell` 借用拖长）。
+    let (read_only, root) = (host.state.borrow().read_only, host.root());
+    let root = root.unwrap_or_default();
+    let mut menu = menu;
+    for (ix, entry) in project_menu_entries(read_only).into_iter().enumerate() {
+        if ix > 0 && entry.separator_before {
+            menu = menu.separator();
+        }
+        let item = PopupMenuItem::new(entry.label)
+            .icon(entry.icon)
+            .disabled(!entry.enabled);
+        menu = menu.item(attach_project_menu_handler(
+            item, entry.id, host, inputs, &root,
+        ));
+    }
     menu
 }
 
-fn menu_item(
-    key: &'static str,
-    label: &'static str,
-    theme: &gpui_kit::component::Theme,
-    on_click: impl Fn(&mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(ElementId::Name(SharedString::from(format!("menu-{key}"))))
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .cursor_pointer()
-        .text_xs()
-        .text_color(theme.colors.foreground)
-        .hover(|s| s.bg(theme.colors.list_hover))
-        .on_click(move |_, window, app| on_click(window, app))
-        .child(label)
+/// 按规格 id 给菜单项挂事件；规格里没有的 id（例如只读提示）保持不可点。
+fn attach_project_menu_handler(
+    item: PopupMenuItem,
+    id: &'static str,
+    host: &ProjectUiHost,
+    inputs: &ProjectInputs,
+    root: &std::path::Path,
+) -> PopupMenuItem {
+    match id {
+        // 一实例一项目：「切换项目」与「关闭项目」是同一条回头路（关当前 + 回选择器）。
+        "switch" | "close" => {
+            let host = host.clone();
+            item.on_click(move |_, window, app| request_close(&host, window, app))
+        }
+        // 「重命名…」是「项目设置…」的直达别名：同一个面板，焦点本来就落在改名输入上。
+        "settings" | "rename" => {
+            let host = host.clone();
+            let inputs = inputs.clone();
+            item.on_click(move |_, window, app| {
+                // 预填当前名称与描述（名册反查；事件上下文允许 I/O）。
+                let name = host
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                let description = current_summary(&host)
+                    .and_then(|s| s.description)
+                    .unwrap_or_default();
+                inputs
+                    .rename
+                    .update(app, |s, cx| s.set_value(name, window, cx));
+                inputs
+                    .description
+                    .update(app, |s, cx| s.set_value(description, window, cx));
+                host.state.borrow_mut().settings_open = true;
+                host.notify(app);
+            })
+        }
+        "reveal" => {
+            let path = root.to_path_buf();
+            item.on_click(move |_, _, _| reveal_in_explorer(&path))
+        }
+        "archive" => {
+            let host = host.clone();
+            item.on_click(move |_, _, app| toggle_archive(&host, app))
+        }
+        _ => item,
+    }
 }
 
 fn reveal_in_explorer(path: &std::path::Path) {
@@ -2170,6 +2188,10 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
     let host_rename = host.clone();
     let inputs_version = inputs.clone();
     let host_version = host.clone();
+    let host_archive = host.clone();
+    let host_remove = host.clone();
+    let host_delete = host.clone();
+    let inputs_delete = inputs.clone();
 
     let deps = {
         let missing = project_service::list_recent(12)
@@ -2216,21 +2238,20 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.warning)
-                                .child("只读"),
+                                .child("只读（写操作已禁用）"),
                         )
                     })
                     .child(
-                        div()
-                            .ml_auto()
-                            .id("proj-settings-close")
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(theme.colors.muted_foreground)
-                            .on_click(move |_, _, app| {
-                                host_close.state.borrow_mut().settings_open = false;
-                                host_close.notify(app);
-                            })
-                            .child("关闭"),
+                        div().ml_auto().child(
+                            Button::new("proj-settings-close")
+                                .ghost()
+                                .small()
+                                .label("关闭")
+                                .on_click(move |_, _, app| {
+                                    host_close.state.borrow_mut().settings_open = false;
+                                    host_close.notify(app);
+                                }),
+                        ),
                     ),
             )
             .child(
@@ -2250,12 +2271,13 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                     )
                     .child(section(theme, "基本信息"))
                     .child(label(theme, "名称（重命名，仅改显示名）"))
-                    .child(Input::new(&inputs.rename))
+                    .child(Input::new(&inputs.rename).disabled(read_only))
                     .child(label(theme, "描述"))
-                    .child(Input::new(&inputs.description))
+                    .child(Input::new(&inputs.description).disabled(read_only))
                     .child(
                         Button::new("proj-info-save")
                             .secondary()
+                            .disabled(read_only)
                             .label("保存项目信息")
                             .on_click(move |_, _, app| {
                                 save_project_info(&host_rename, &inputs_rename, app)
@@ -2277,10 +2299,15 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                         div()
                             .h_flex()
                             .gap_2()
-                            .child(div().flex_1().child(Input::new(&inputs.version_msg)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(&inputs.version_msg).disabled(read_only)),
+                            )
                             .child(
                                 Button::new("proj-version-add")
                                     .secondary()
+                                    .disabled(read_only)
                                     .label("创建版本快照")
                                     .on_click(move |_, _, app| {
                                         create_version_action(&host_version, &inputs_version, app)
@@ -2288,6 +2315,41 @@ pub fn render_settings(host: &ProjectUiHost, inputs: &ProjectInputs, cx: &mut Ap
                             ),
                     )
                     .child(section(theme, "危险区"))
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("proj-archive")
+                                    .secondary()
+                                    .disabled(read_only)
+                                    .label("归档 / 取消归档")
+                                    .on_click(move |_, _, app| toggle_archive(&host_archive, app)),
+                            )
+                            .child(
+                                Button::new("proj-remove")
+                                    .secondary()
+                                    .disabled(read_only)
+                                    .label("移出列表")
+                                    .on_click(move |_, _, app| {
+                                        soft_remove_current(&host_remove, app)
+                                    }),
+                            )
+                            .child(
+                                Button::new("proj-delete")
+                                    .danger()
+                                    .disabled(read_only)
+                                    .label("删除数据…")
+                                    .on_click(move |_, window, app| {
+                                        open_delete_dialog_for_current(
+                                            &host_delete,
+                                            &inputs_delete,
+                                            window,
+                                            app,
+                                        )
+                                    }),
+                            ),
+                    )
                     .child(
                         Button::new("proj-reload")
                             .secondary()

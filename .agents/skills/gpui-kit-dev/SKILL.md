@@ -61,6 +61,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 | 禁用态 | `gpui_kit::base::Disableable as _` 的 `.disabled(bool)`（Input 是本体方法） | 自绘控件漏掉 disabled（实例：对话框三个自绘开关未接 `form_disabled`） |
 
 > 已知反例（技术债，不要照抄）：`crates/workbench/src/components/connection_dialog/render.rs` 的 Tab 条 / 开关、`panels/` 的 `tool_btn` / 树展开字符 / 文本按钮。反向结论（“库没有 Tabs/Switch”）已作废。
+>
+> 补充事实（2026-09-19 查证 0.6.1 源码）：`PopupMenuItem` / `DropdownButton` **没有 shortcut 槽位**（菜单项显示不了 `Ctrl+Shift+P`，快捷键只能写在 `Kbd` 元素或文案里）；`PopupMenuItem::ready_for_use()` 之类探针不存在，`PopupMenu` 也不暴露菜单项（只有 `is_empty()`）。
+
+**可点元素都要键盘可达**：优先换成语义 `Button`（自带 `track_focus` + `tab_stop`，Enter/Space 在 **KeyUp** 上激活，见下）——选择器 Tab / 状态筛选 / 排序这种自绘可点 `div` 改 `Button` 后同时拿到 hover / 焦点 / 键盘。若确实要自绘，必须 `.track_focus(&handle).tab_stop(true)` 并自己处理键盘激活；且 **`ElementId` 不能随状态变化**（例：id 拼上筛选键 → 一换筛选就丢焦点）。
 
 ## 布局与滚动陷阱（项目内已验证）
 
@@ -104,6 +108,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 - **模态对话框**（`window.open_dialog` / `open_alert_dialog`）要求窗口根是 `gpui_kit::component::Root`：`cx.add_window_view(|window, cx| Root::new(view, window, cx))`；且宿主视图的 `render` 要自己挂 `Root::render_dialog_layer(window, cx)`，否则对话框不渲染。断言用 `window.has_active_dialog(cx)`
 - 图标资产未注册时静默渲染为空（不 panic），测试无需 `set_assets`
 - 测试里的其他依赖（存储 / 设置服务 / 后端口）用测试桥替身，只记录调用，不接真实宿主
+- **验证「键盘能操作」**：先 `window.draw(cx).clear(cx)`（Tab 顺序来自上一帧布局），再循环 `window.focus_next(cx)` 逐个停靠，最后发键。**激活发生在 `KeyUpEvent`**：gpui 的可点元素在 key up 上派发 `ClickEvent::Keyboard`，所以 `cx.simulate_keystrokes("enter")`（只发 KeyDown）不会触发点击，要 `cx.simulate_event(KeyDownEvent { .. })` + `cx.simulate_event(KeyUpEvent { .. })` 各发一次；断言**业务状态真的变了**而不是「焦点非空」。参考 `crates/project/src/ui/tests.rs` 的 `picker_controls_activate_from_the_keyboard`
+- **菜单断言不要指望读 `PopupMenu` 内部**（0.6.1 只暴露 `is_empty()`）：把「菜单长什么样」抽成纯函数（顺序 / 文案 / 图标 / 可用性），渲染只按 id 挂事件，测试断言纯函数。参考 `crates/project/src/ui.rs` 的 `project_menu_entries` + `tests.rs` 的 `menu_spec_*`
 - **宿主交互测试走生产入口**：不要直接调 `state.open(...)` 或自建一份状态，而是通过宿主面板的方法（如 `EditorPanel::request_new_connection`）驱动——否则订阅、宿主通知等副作用不会被覆盖（曾因此漏掉一个必现的重入 panic，仅 `dialog_host_layer` 这类走入口的测试能拦住）；断言需要内部状态时由宿主提供只读访问器（如 `dialog_state()`）
 
 ## 查 API（版本对齐，必读）

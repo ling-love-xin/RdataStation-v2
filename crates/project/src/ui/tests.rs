@@ -14,21 +14,23 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::{ActiveTheme as _, Root, WindowExt as _};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu};
+use gpui_kit::component::{ActiveTheme as _, Root, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, IntoElement, ParentElement, Render, Styled as _, TestAppContext,
-    VisualTestContext, Window, div,
+    App, AppContext as _, Context, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    ParentElement, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
 };
 
 use super::{
     OpenProject, PendingAction, PickerTab, ProjectEditorBridge, ProjectInputs, ProjectSort,
     ProjectUiHost, ProjectUiNotifier, ProjectUiState, StatusFilter, advance_pending,
-    confirm_delete, cycle_sort, more_menu, open_create_dialog, open_delete_dialog,
-    open_folder_dialog, open_lock_busy_dialog, pick_directory, prepare_unsaved, project_card,
-    render_menu_content, render_picker, render_settings, request_close, request_create_project,
-    request_open, request_open_folder, save_project_info, submit_create, submit_open_folder,
-    visible_items,
+    build_project_menu, confirm_delete, cycle_sort, more_menu, open_create_dialog,
+    open_delete_dialog, open_folder_dialog, open_lock_busy_dialog, pick_directory, prepare_unsaved,
+    project_card, project_menu_entries, render_picker, render_settings, request_close,
+    request_create_project, request_open, request_open_folder, save_project_info, submit_create,
+    submit_open_folder, visible_items,
 };
 use crate::service::ProjectSummary;
 
@@ -98,8 +100,19 @@ impl Render for Harness {
         if let Some(settings) = render_settings(&self.host, &self.inputs, cx) {
             body = body.child(settings);
         }
-        // 菜单内容平时由标题栏 `Popover` 承载，这里直接渲染以覆盖其构造路径。
-        body = body.child(render_menu_content(&self.host, &self.inputs, cx));
+        // 标题栏项目菜单现在由 `Button::dropdown_menu` 承载（`build_project_menu` 只产出
+        // `PopupMenu`），这里照样挂一个：菜单构造路径在窗口里跑一遍。
+        let menu_host = self.host.clone();
+        let menu_inputs = self.inputs.clone();
+        body = body.child(
+            Button::new("harness-project-menu")
+                .ghost()
+                .small()
+                .label("项目 ▾")
+                .dropdown_menu(move |menu, _, _| {
+                    build_project_menu(menu, &menu_host, &menu_inputs)
+                }),
+        );
         div()
             .size_full()
             .child(body)
@@ -540,4 +553,183 @@ fn browse_cancel_keeps_location(cx: &mut TestAppContext) {
     let after = cx.update(|_, cx| inputs.create_location.read(cx).value().to_string());
 
     assert_eq!(before, after);
+}
+
+// ==================== C1：只读禁用态 ====================
+
+/// 写命令即便被触发也要被拦截：禁用态只是「点不动」，拦截是「点了也没用」，两道都要有。
+#[gpui_kit::test]
+fn read_only_blocks_project_info_save(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    host.set_current(Some(OpenProject::new(temp_root("read-only"), "只读项目")));
+    {
+        let mut state = host.state.borrow_mut();
+        state.read_only = true;
+        state.settings_open = true;
+    }
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    cx.update(|window, cx| {
+        inputs
+            .rename
+            .update(cx, |s, cx| s.set_value("改名尝试", window, cx));
+    });
+    let notifies_before = rec.notifies.get();
+    cx.update(|_, cx| save_project_info(&host, &inputs, cx));
+
+    let notice = host.state.borrow().notice.clone();
+    assert!(
+        notice.as_deref().is_some_and(|n| n.contains("只读模式")),
+        "只读应被拦截并给出提示，实际：{notice:?}"
+    );
+    assert_eq!(
+        host.current().map(|p| p.name),
+        Some("只读项目".to_string()),
+        "拦截时不应改会话名"
+    );
+    assert!(rec.notifies.get() > notifies_before, "拦截也要给出可见反馈");
+
+    // 只读是「不许写」，不是「不许看」：设置面板照样开得起来（写控件已置灰）。
+    assert!(cx.update(|_, cx| render_settings(&host, &inputs, cx).is_some()));
+}
+
+// ==================== B1/C4：菜单规格与键盘可达 ====================
+
+/// 菜单规格是「菜单长什么样」的唯一权威来源（渲染只按 id 挂事件）。
+#[test]
+fn menu_spec_greys_out_write_commands_in_read_only() {
+    let writable: Vec<(&str, bool)> = project_menu_entries(false)
+        .iter()
+        .map(|e| (e.label, e.enabled))
+        .collect();
+    assert_eq!(
+        writable,
+        vec![
+            ("切换项目…", true),
+            ("项目设置…", true),
+            ("重命名…", true),
+            ("在资源管理器中显示", true),
+            ("归档 / 取消归档", true),
+            ("关闭项目", true),
+        ],
+        "可写模式：全部可用，且没有只读提示项"
+    );
+
+    let read_only: Vec<(&str, bool)> = project_menu_entries(true)
+        .iter()
+        .map(|e| (e.label, e.enabled))
+        .collect();
+    assert_eq!(
+        read_only,
+        vec![
+            ("只读模式：写操作不可用", false),
+            ("切换项目…", true),
+            ("项目设置…", true),
+            ("重命名…", false),
+            ("在资源管理器中显示", true),
+            ("归档 / 取消归档", false),
+            ("关闭项目", true),
+        ],
+        "只读模式：写命令置灰，读命令与出口保持可用"
+    );
+}
+
+/// 分隔线位置：只读提示与「切换项目」之间、列表尾部两项之前。
+#[test]
+fn menu_spec_keeps_escape_hatches_without_leading_separator() {
+    for read_only in [false, true] {
+        let entries = project_menu_entries(read_only);
+        assert!(
+            !entries[0].separator_before,
+            "首项上方不该有分隔线（read_only={read_only}）"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.id == "close" && e.separator_before),
+            "「关闭项目」应与上方命令分开"
+        );
+        // 只读提示与后续命令之间要有分隔线（提示项当时是首项，分隔线落在下一项上）。
+        let switch = entries
+            .iter()
+            .position(|e| e.id == "switch")
+            .expect("切换项目项");
+        assert_eq!(entries[switch].separator_before, read_only);
+    }
+}
+
+/// 两种模式的菜单都构造得出来（禁用项 / 分隔线 / 事件闭包类型全部跑一遍）。
+#[gpui_kit::test]
+fn title_bar_menu_builds_in_both_modes(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    host.set_current(Some(OpenProject::new(temp_root("menu"), "菜单项目")));
+    let (host, inputs, cx) = open_harness(cx, host);
+
+    for read_only in [false, true] {
+        host.state.borrow_mut().read_only = read_only;
+        let menu = cx.update(|window, cx| {
+            PopupMenu::build(window, cx, {
+                let host = host.clone();
+                let inputs = inputs.clone();
+                move |menu, _, _| build_project_menu(menu, &host, &inputs)
+            })
+        });
+        assert!(
+            !cx.update(|_, cx| menu.read(cx).is_empty()),
+            "菜单不应为空（read_only={read_only}）"
+        );
+    }
+}
+
+/// C4：Tab 停到控件上按 Enter 能真的改状态——即「键盘可达」不是靠自绘 div 装出来的。
+#[gpui_kit::test]
+fn picker_controls_activate_from_the_keyboard(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let rec = Rc::new(Recorder::default());
+    let host = test_host(&rec);
+    let (host, _inputs, cx) = open_harness(cx, host);
+
+    // 先画一帧（Tab 顺序来自上一帧布局），再点一下窗口把键盘事件交给它。
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_click(point(px(2.), px(2.)), Modifiers::default());
+
+    let signature = |host: &ProjectUiHost| {
+        let ui = host.state.borrow();
+        (ui.picker.tab, ui.picker.sort, ui.picker.status_filter)
+    };
+    let start = signature(&host);
+    let mut focused = 0usize;
+    let mut activated = false;
+    for _ in 0..12 {
+        cx.update(|window, cx| {
+            window.focus_next(cx);
+            window.draw(cx).clear(cx);
+        });
+        if cx.update(|window, cx| window.focused(cx)).is_some() {
+            focused += 1;
+        }
+        // 激活发生在 KeyUp：gpui 的元素在 key up 上派发 `ClickEvent::Keyboard`。
+        cx.simulate_event(KeyDownEvent {
+            keystroke: Keystroke::parse("enter").expect("enter"),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("enter"),
+        });
+        if signature(&host) != start {
+            activated = true;
+            break;
+        }
+    }
+
+    assert!(focused > 0, "Tab 应当能停到控件上（焦点句柄非空）");
+    assert!(
+        activated,
+        "Tab 停到控件上按 Enter 应当能激活它（Tab / 状态 / 排序），实际状态一直是 {start:?}"
+    );
 }

@@ -71,7 +71,7 @@ graph LR
 | 时点 | 发生什么 | 在哪 |
 | --- | --- | --- |
 | 构造（`WorkbenchView::new(cx)`） | 装配 host；直读 `settings.json` 取排序；无项目时加载首屏列表 | 构造期（不在 render） |
-| render | `render_picker` / `render_settings` / `render_menu_content` 只读 state 并返回元素 | `WorkbenchView::render` |
+| render | `render_picker` / `render_settings` 只读 state 并返回元素；标题栏菜单用 `build_project_menu` 产 `PopupMenu`（宿主 `Button::dropdown_menu` 只负责下拉宿主） | `WorkbenchView::render` |
 | 事件回调 | 动作函数（打开 / 关闭 / 增删改查 / 对话框提交）做 I/O 并 `host.notify` | 各处 `on_click` / `on_action` |
 | 对话框 | 由 `window.open_dialog` / `open_alert_dialog` 承载；关闭时机由提交结果决定 | 事件上下文 |
 
@@ -105,7 +105,7 @@ graph LR
 
 ## 6. 窗口测试方案
 
-位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），11 项 GPUI headless 窗口测试。
+位置：`crates/project/src/ui/tests.rs`（`#[cfg(test)] mod tests;`），20 项测试（17 项 GPUI headless 窗口测试 + 3 项纯函数测试）。
 
 ### 骨架
 
@@ -132,13 +132,22 @@ graph LR
 | `cards_and_menus_construct_for_all_states` | 8 / 6：卡片三分支（活跃 / 失效重定位 / 已移除恢复 + 固定）与更多菜单 |
 | `browse_fills_location_from_system_picker` | 1：浏览目录 → 回填位置输入框（并断言选择器选项为「仅目录 / 单选」） |
 | `browse_cancel_keeps_location` | 1：取消选择器 → 位置输入框保持原值 |
+| `empty_dir_prompts_create_in_place` | 2：空目录 → 询问式创建（不直接当项目打开） |
+| `save_project_info_rejects_invalid_name` | 5：改名校验（非法字符 / 空） |
+| `read_only_blocks_project_info_save` | 11 / C1：只读下写命令被拦（写 notice、不改会话）且设置面板仍可开 |
+| `title_bar_menu_builds_in_both_modes` | A4 / C1：两种模式的标题栏菜单都构造得出来（`PopupMenu::build` + `is_empty`） |
+| `picker_controls_activate_from_the_keyboard` | C4：`Tab` 能停靠 + `Enter` 能真的改状态（Tab / 状态筛选 / 排序） |
+| `visible_items_filters_by_status_and_needle` | 4 / R4：搜索子串 ∩ 状态筛选（纯函数） |
+| `menu_spec_greys_out_write_commands_in_read_only` | C1：只读置灰清单（写命令置灰、读命令与出口可用） |
+| `menu_spec_keeps_escape_hatches_without_leading_separator` | C1 / B1：分隔线位置与「逃生口不被藏住」 |
 
 不覆盖：真实建库与迁移（`crates/project/tests/project_store.rs` 集成测试）、双实例并发（手动清单）、主题视觉（`theme-preview.html` 基准）。
 
-### 两个必须知道的坑
+### 三个必须知道的坑
 
 1. **`#[test]` 自相残杀**：gpui 的 `test` 宏展开成裸 `#[test]`。测试模块若 `use gpui_kit::*`（或 `use super::*` 间接引入它），`#[test]` 会解析到 gpui 的宏自身，无限递归 —— 报错 `recursion limit reached while expanding #[test]`，且提高 `recursion_limit` 只会让需求跟着翻倍。解法：测试模块显式列举依赖（含 `AppContext as _` / `StyledExt as _` / `WindowExt as _` 等 trait）。
 2. **对话框要有 `Root`**：`window.open_dialog` 依赖窗口根为 `component::Root`；且宿主视图的 `render` 必须自己挂 `Root::render_dialog_layer(window, cx)`，否则对话框存在但不渲染。断言用 `window.has_active_dialog(cx)`。
+3. **键盘激活在 KeyUp，不在 KeyDown**：gpui 的可点元素在 `KeyUpEvent` 上派发 `ClickEvent::Keyboard`；`cx.simulate_keystrokes("enter")` 只发 KeyDown，验证「Enter 能点」时必须 `simulate_event(KeyDownEvent)` + `simulate_event(KeyUpEvent)` 各发一次（另：`Tab` 顺序来自上一帧布局，先 `window.draw(cx).clear(cx)` 再 `window.focus_next(cx)`）。
 
 ## 7. 实现位置映射
 
@@ -149,7 +158,8 @@ graph LR
 | workbench 侧桥接与装配 | `crates/workbench/src/components/project_host.rs` |
 | 会话类型与解析 | `crates/project/src/ui.rs`（`OpenProject`）、`crates/workbench/src/services/project_session.rs`（`resolve`） |
 | 共享状态字段 | `crates/workbench/src/panels/`（`Shared::{project, project_ui, editor_*}`） |
-| 标题栏项目槽 + 菜单 Popover | `crates/workbench/src/view.rs`（`render_title_bar`） |
+| 标题栏项目槽 + 菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；`Button::dropdown_menu` + `project::ui::build_project_menu`） |
+| 菜单规格（顺序 / 文案 / 可用性） | `crates/project/src/ui.rs`（`project_menu_entries` 纯函数 + `attach_project_menu_handler`） |
 | 窗口测试 | `crates/project/src/ui/tests.rs` |
 | 视图测试规范 | `.agents/skills/gpui-kit-dev/SKILL.md`（「窗口测试」一节） |
 | 位置字段（系统目录选择器 / 目标预览） | `crates/project/src/ui.rs`（`pick_directory` / `directory_row` / `target_preview`） |
@@ -158,8 +168,8 @@ graph LR
 
 ```bash
 cargo check --workspace --all-targets          # 零告警
-cargo test --workspace -j 2                    # 451 通过 / 0 失败（含 9 项窗口测试）
-cargo test -p rds-project --lib -j 2           # 只跑项目 crate（23 项，迭代快）
+cargo test --workspace -j 2                    # 全量（-j 2 硬性要求）
+cargo test -p rds-project --lib -j 2           # 只跑项目 crate（34 项，迭代快）
 cargo build -p rds-app -j 2                    # codegen 验证（check ≠ 能出机器码）
 ```
 

@@ -1,6 +1,6 @@
 # 项目管理模块 · 开发方案（P0 + Phase A/B/C）
 
-> 状态：**已实现（Phase A/B 主体 + Phase C1/C2）**（2026-09-14，`cargo check --workspace --all-targets` 零告警；project 29 lib（含 14 项窗口测试 + 1 项纯函数）+ 1 名册集成 + 3 存储集成全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
+> 状态：**已实现（Phase A/B 主体 + Phase C1/C2 + C1/C4/B1 规范补齐）**（2026-09-19，`cargo check -p rds-project -p rds-workbench --all-targets` 零告警；project 34 lib（含 17 项窗口测试 + 3 项纯函数）+ 1 名册集成 + 3 存储集成全绿） · 关联文件：`project-prototype-design.md`（原型）、`project-prototype.html`（可交互原型）、`project-view-architecture.md`（视图架构与测试）、`project-user-guide.md`（使用手册）
 > 前置：v1 行为蓝本 `v1/backend/src/commands/project_commands.rs`；v2 后端已迁移（`crates/project`：`store.rs` / `models.rs`；P0 会话 `workbench/src/services/project_session.rs`）
 > 复用 `connection-dev-plan.md` / `scratchpad-dev-plan.md` 的推进方式：Phase 划分 → 文件落点 → 验收 → 测试场景 → 风险
 > **范围**：项目**增删改查与生命周期**。**提升/引用（promote/snapshot）不在本模块**（另立设计，见原型 §12）。
@@ -24,6 +24,23 @@
 | 13 | 描述编辑（U2）与状态筛选（R4）纳入本期；**默认连接（U3）后端未实现**（`service` 无 config 读写），待另立 |
 
 ## 0. 进度记录（最近在前）
+
+### 2026-09-19 — C1 只读禁用态 + C4 键盘可达 + B1 危险区入口（§8 首组）
+
+按 §8 建议顺序清掉第一组（指南硬要求、无后端依赖）：
+
+| 项 | 内容 | 落点 |
+| --- | --- | --- |
+| C1 只读禁用态 | 只读打开时写命令**可见但置灰**（不再只靠点击后拒绝）：卡片 `⋯` 菜单 6 项按分支 `disabled`；设置面板的名称 / 描述输入、保存项目信息、创建版本快照、危险区三件套全部置灰；标题栏项目菜单顶部插一条置灰说明「只读模式：写操作不可用」。拦截层（`read_only_blocked`）保留——禁用态是「点不动」，拦截是「点了也没用」，两道都要有 | `crates/project/src/ui.rs` |
+| C4 键盘可达 | 选择器 Tab（最近 / 全部 / 已移除）、状态筛选、排序由自绘可点 div 改语义 `Button`（自带 `track_focus` + `tab_stop`，Enter/Space 可激活）；id 固定为 `picker-status` / `picker-sort`（不再拼筛选键，换 id 会丢焦点）；设置面板「关闭」同样改 `Button` | 同上 |
+| B1 危险区三件套 | 设置·危险区补「归档 / 取消归档」「移出列表」「删除数据…」（`danger` 变体 + 输入项目名二次确认），与菜单 / 卡片同一批动作函数（`toggle_archive` / `soft_remove_current` / `open_delete_dialog_for_current`） | 同上 |
+| 菜单改语义下拉 | 标题栏项目菜单从 `Popover` + 自绘内容改为 `Button::dropdown_menu`（方向键导航 / Escape / 焦点恢复由组件负责）；菜单**规格**抽成纯函数 `project_menu_entries(read_only)`，渲染只按 id 挂事件；删掉宿主里的 `menu_open` 状态（`ProjectUiState` 少一个可写字段，组件内部状态才是权威） | `crates/project/src/ui.rs`、`crates/workbench/src/view.rs` |
+| 测试 | lib 测试 29 → 34：新增菜单规格 2 项（只读置灰清单 / 分隔线与逃生口）、`title_bar_menu_builds_in_both_modes`、`read_only_blocks_project_info_save`（拦截不动会话且设置面板仍可开）、`picker_controls_activate_from_the_keyboard`（Tab 停靠 + Enter 激活并真的改状态） | `crates/project/src/ui/tests.rs` |
+| 文档 | 本文 §6 映射表 / §7 验证命令 / §8 清单同步；crate README 与使用手册补「危险区 / 只读禁用态 / 键盘操作」 | `docs/architecture/`、`crates/project/README.md` |
+
+> 键盘激活的坑：gpui 元素在 **KeyUp** 上派发 `ClickEvent::Keyboard`；窗口测试用 `simulate_keystrokes("enter")`（只发 KeyDown）不会触发点击，必须 `simulate_event(KeyDownEvent)` + `simulate_event(KeyUpEvent)` 各发一次。
+
+> C2（菜单快捷键展示）**暂缓**：`PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 没有 shortcut 槽位（`gpui-component-0.6.1/src/menu/popup_menu.rs` 无该字段 / 方法），自绘快捷键又违反「用语义组件」的指南，等组件支持再上。
 
 ### 2026-09-14 — 补齐模块缺口：描述编辑 / 状态筛选 / 空目录询问 / 清理 / 使用手册
 
@@ -247,14 +264,14 @@
 | --- | --- |
 | 项目服务编排（列表 / 创建 / 打开 / 关闭 / 更新 / 删除 / 找回 / 版本） | `crates/project/src/service.rs`（feature crate 内，符合 GPUI-kit 指南「model/service/view 同 crate」） |
 | 会话解析（env → 最近 → 空态） | `crates/workbench/src/services/project_session.rs`（返回 `project::ui::OpenProject`） |
-| 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（视图与 model / service 同 crate；选择器与设置由宿主渲染为受控 overlay，菜单为 `Popover` + 卡片 `DropdownMenu`，对话框为 `Dialog` / `AlertDialog`） |
+| 项目选择器 / 菜单 / 对话框 / 设置（UI） | `crates/project/src/ui.rs`（视图与 model / service 同 crate；选择器与设置由宿主渲染为受控 overlay，菜单为语义 `Button::dropdown_menu` + `PopupMenu`，对话框为 `Dialog` / `AlertDialog`） |
 | 项目视图 ↔ 宿主桥（重绘 / 编辑区 / 排序偏好 / 打开后刷新） | `crates/workbench/src/components/project_host.rs` |
 | 项目锁（OS 文件锁 + 占用者信息） | `crates/project/src/lock.rs`（`.RSmeta/project.lock` / `project.lock.owner`） |
 | 名册迁移（固定/软删字段） | `crates/engine/migrations/global/019_add_project_ui_state.sql`（新） |
 | 全局库项目 CRUD / 固定 / 已移除 | `crates/engine/src/persistence/global_db.rs` |
 | 排序方式偏好 | `crates/settings`（`projects.sort_mode`） |
 | 命令 / Action | `crates/workbench/src/commands.rs`（`SwitchProject` / `CloseProject`；project crate 不再有 commands 文件） |
-| 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单内容由 `project::ui::render_menu_content` 提供） |
+| 标题栏项目槽 + 项目菜单 | `crates/workbench/src/view.rs`（`render_title_bar`；菜单规格 / 内容由 `project::ui::project_menu_entries` / `build_project_menu` 提供） |
 | 会话共享与刷新信号 | `crates/workbench/src/panels/`（`Shared`；`project` 字段类型为 `project::ui::OpenProject`） |
 | 存储 / 模型（不改表，只加列） | `crates/project/src/store.rs` / `models.rs` |
 | 示例项目 | 运行时生成到 `{data_dir}/RdataStation/samples/示例项目`（含 `welcome.sql`） |
@@ -267,7 +284,7 @@
 
 - 每阶段：`cargo check -p rds-project -p rds-workbench -p rds-app --all-targets` 零告警 + 对应测试
   （`crates/project/tests/` 集成测试 + `crates/project/src/ui/tests.rs` 窗口测试）
-- 常用：`cargo test -p rds-project -j 2`（lib 29 + 名册集成 1 + 存储集成 3）
+- 常用：`cargo test -p rds-project -j 2`（lib 34 + 名册集成 1 + 存储集成 3）
 - 迁移：`cargo test -p rds-engine`（迁移套件）+ 手工核对旧库升级
 - UI：`cargo run -p rds-app` 手动走通 §4 清单（先用 `RDS_PROJECT_PATH` 验证有项目态，再清空验证选择器）
 - 主题：明暗切换核对 token（`docs/architecture/theme/theme-preview.html` 为基准）
@@ -287,7 +304,6 @@
 
 | # | 项 | 原型要求 | 现状 |
 | --- | --- | --- | --- |
-| B1 | 设置·危险区三件套 | 归档（U4）、移出名册（D1）、删除磁盘数据（D2）**都在设置·危险区** | 设置里只有「刷新列表」；三者分散在项目菜单与卡片 `⋯`（功能可用、入口不符） |
 | B2 | `.RSmeta` 结构树 | 树形 + 大小 + 复制路径（原型 §7） | 平铺四个固定文件 + 大小；无树、无复制路径 |
 | B3 | 描述展示 | R7 元信息包含描述 | 仅可编辑；卡片与设置概览都不显示描述 |
 
@@ -295,10 +311,8 @@
 
 | # | 项 | 说明 |
 | --- | --- | --- |
-| C1 | **只读模式禁用态** | 现在靠 `read_only_blocked` 点击后拒绝 + notice；指南要求禁用态**可见**（按钮 `disabled` + 原因） |
-| C2 | 菜单快捷键展示 | 项目菜单项未显示 `Ctrl+Shift+P` / `Ctrl+Shift+W`（`PopupMenuItem` 支持 shortcut 位） |
+| C2 | 菜单快捷键展示 | **暂缓**：`PopupMenuItem` / `DropdownButton` 在 gpui-kit 0.6.1 无 shortcut 槽位（0.6.1 源码已查证）；仅能在文档里说明快捷键 |
 | C3 | 卡片右键菜单 | 指南建议作用于指针下对象的命令同时提供 `ContextMenu`；当前只有 `⋯` 下拉 |
-| C4 | **选择器键盘可达** | 卡片 / Tab 无 `tab_stop`/`focus_handle`，只能鼠标操作（无障碍检查表要求「所有 action 都可键盘到达」） |
 | C5 | 搜索语法 | 仅名称 / 路径子串；database 模块已有 facet 语法（`类型:` / `标签:`）可参照 |
 
 ### D. 范围外（原型 §12，已确认不做）
@@ -309,14 +323,13 @@
 
 | # | 项 | 说明 |
 | --- | --- | --- |
-| E1 | 只读拒绝路径覆盖不足 | 仅 `save_project_info` 校验有测试；归档 / 创建版本 / SQL 执行的只读拦截无自动化用例 |
-| E2 | 键盘路径无测试 | C4 落地后需补窗口测试（`simulate_keystrokes`） |
+| E1 | 只读拒绝路径覆盖不足 | 已有 `read_only_blocks_project_info_save`（2026-09-19）；归档 / 创建版本 / SQL 执行的只读拦截仍无自动化用例 |
 | E3 | 窗口退出路径的草稿兜底 | 点 ✕ / `Alt+F4` 退出时无拦截（`app` 未注册 `should_close` 钩子）；editor 侧有「关闭标签前确认」与草稿兜底，但**整个窗口**退出未定义行为——属 editor 模块，需与项目拦截语义对齐 |
 | E4 | 陈旧锁提示 | `project.lock.owner` 里的 pid 可能已退出（OS 锁已释放）；可在逃生口对话框补一句「若该进程已退出，选『仍要打开』」 |
 
 ### 建议顺序
 
-1. **C1 + C4**（指南硬要求、成本低、无后端依赖）；
-2. **B1 + B3**（入口对齐与信息完整性，纯 UI）；
-3. **A1**（默认连接，需先补后端）；
-4. **C2 / C3 / B2 / E1 / E2**（体验与覆盖，可随其他任务带走）。
+1. ~~**C1 + C4**~~、~~**B1**~~：已完成（2026-09-19），见 §0；
+2. **B3 + B2**（描述展示、`.RSmeta` 结构树；纯 UI，无后端依赖）；
+3. **A1**（默认连接，需先补 `ProjectConfig` 读写）；
+4. **C2 / C3 / E1 / E3 / E4**（体验与覆盖，可随其他任务带走）。
